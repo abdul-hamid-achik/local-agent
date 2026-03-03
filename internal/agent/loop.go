@@ -21,6 +21,8 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 		if a.memoryStore != nil {
 			tools = append(tools, a.memoryBuiltinToolDefs()...)
 		}
+		// Merge built-in file tools (grep, read, write, glob, bash, ls, find).
+		tools = append(tools, a.toolsBuiltinToolDefs()...)
 	}
 
 	// ICE: index user message and assemble cross-session context.
@@ -132,6 +134,23 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 				out.ToolCallStart(tc.Name, tc.Arguments)
 				startTime := time.Now()
 				result, isErr := a.handleMemoryTool(tc)
+				duration := time.Since(startTime)
+				out.ToolCallResult(tc.Name, result, isErr, duration)
+				a.messages = append(a.messages, llm.Message{
+					Role:       "tool",
+					Content:    result,
+					ToolName:   tc.Name,
+					ToolCallID: tc.ID,
+				})
+				continue
+			}
+
+			// Check if this is a built-in tools tool (grep, read, write, glob, bash, ls, find).
+			// These go through the permission system.
+			if a.isToolsTool(tc.Name) {
+				out.ToolCallStart(tc.Name, tc.Arguments)
+				startTime := time.Now()
+				result, isErr := a.handleToolsTool(tc)
 				duration := time.Since(startTime)
 				out.ToolCallResult(tc.Name, result, isErr, duration)
 				a.messages = append(a.messages, llm.Message{
