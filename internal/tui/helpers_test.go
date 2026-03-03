@@ -10,13 +10,15 @@ import (
 )
 
 // newTestModel creates a Model with a real command.Registry and Agent, sends WindowSizeMsg to set ready=true.
+// Sets initializing=false so tests exercise normal (post-startup) behavior.
 func newTestModel(t *testing.T) *Model {
 	t.Helper()
 	reg := command.NewRegistry()
 	command.RegisterBuiltins(reg)
-	completer := NewCompleter(reg, []string{"model-a", "model-b"}, []string{"skill-a"}, []string{"agent-x"})
+	completer := NewCompleter(reg, []string{"model-a", "model-b"}, []string{"skill-a"}, []string{"agent-x"}, nil)
 	ag := agent.New(nil, nil, 0)
-	m := New(ag, reg, nil, completer)
+	m := New(ag, reg, nil, completer, nil, nil, nil)
+	m.initializing = false // skip startup phase for tests
 	// Send WindowSizeMsg to set ready=true
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	return updated.(*Model)
@@ -37,4 +39,8 @@ func charKey(r rune) tea.KeyPressMsg {
 
 func ctrlKey(r rune) tea.KeyPressMsg {
 	return tea.KeyPressMsg{Code: r, Mod: tea.ModCtrl}
+}
+
+func shiftTabKey() tea.KeyPressMsg {
+	return tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift}
 }

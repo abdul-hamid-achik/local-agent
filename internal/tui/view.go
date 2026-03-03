@@ -24,12 +24,30 @@ func (m *Model) View() tea.View {
 	vpContent := m.viewport.View()
 
 	// If overlay is active, render it on top of the viewport.
-	if m.overlay == OverlayHelp {
+	switch m.overlay {
+	case OverlayHelp:
 		helpOverlay := m.renderHelpOverlay(m.width)
 		vpContent = m.overlayOnContent(vpContent, helpOverlay)
-	} else if m.overlay == OverlayCompletion && m.completionActive {
-		completionModal := m.renderCompletionModal()
-		vpContent = m.overlayOnContent(vpContent, completionModal)
+	case OverlayCompletion:
+		if m.isCompletionActive() {
+			completionModal := m.renderCompletionModal()
+			vpContent = m.overlayOnContent(vpContent, completionModal)
+		}
+	case OverlayModelPicker:
+		if m.modelPickerState != nil {
+			pickerOverlay := m.renderModelPicker()
+			vpContent = m.overlayOnContent(vpContent, pickerOverlay)
+		}
+	case OverlayPlanForm:
+		if m.planFormState != nil {
+			formOverlay := m.renderPlanForm()
+			vpContent = m.overlayOnContent(vpContent, formOverlay)
+		}
+	case OverlaySessionsPicker:
+		if m.sessionsPickerState != nil {
+			sessionsOverlay := m.renderSessionsPicker()
+			vpContent = m.overlayOnContent(vpContent, sessionsOverlay)
+		}
 	}
 
 	b.WriteString(vpContent)
@@ -44,84 +62,155 @@ func (m *Model) View() tea.View {
 	b.WriteString("\n")
 
 	// Input or streaming hint
-	if m.state == StateIdle {
+	if m.initializing {
+		b.WriteString(m.styles.StreamHint.Render("  Starting up..."))
+	} else if m.state == StateIdle {
 		b.WriteString(m.input.View())
 	} else if m.state == StateWaiting {
-		b.WriteString(m.styles.StreamHint.Render("  " + m.spin.View() + " thinking... press Esc to cancel"))
+		b.WriteString(m.styles.StreamHint.Render("  " + m.scramble.View() + " thinking... press Esc to cancel"))
 	} else {
 		b.WriteString(m.styles.StreamHint.Render("  " + m.spin.View() + " streaming... press Esc to cancel"))
 	}
 
 	v := tea.NewView(b.String())
 	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion
+
+	// Terminal title progress.
+	switch m.state {
+	case StateWaiting:
+		v.WindowTitle = "local-agent \u00b7 thinking..."
+	case StateStreaming:
+		v.WindowTitle = "local-agent \u00b7 streaming..."
+	default:
+		if m.doneFlash {
+			v.WindowTitle = "local-agent \u00b7 done"
+		} else {
+			v.WindowTitle = "local-agent"
+		}
+	}
+
 	return v
 }
 
-func (m *Model) renderCompletionPopup() string {
-	var b strings.Builder
-
-	if len(m.completionItems) == 0 {
+func (m *Model) renderCompletionModal() string {
+	cs := m.completionState
+	if cs == nil {
 		return ""
 	}
 
-	maxItems := 5
-	if len(m.completionItems) < maxItems {
-		maxItems = len(m.completionItems)
-	}
+	var b strings.Builder
 
-	// Calculate width
-	maxWidth := 10 // minimum width
-	for i := 0; i < maxItems; i++ {
-		if len(m.completionItems[i].Label) > maxWidth {
-			maxWidth = len(m.completionItems[i].Label)
-		}
+	// Title
+	var title string
+	switch cs.Kind {
+	case "command":
+		title = "Commands"
+	case "attachments":
+		title = "Attach Files & Agents"
+	case "skills":
+		title = "Skills"
+	default:
+		title = "Complete"
 	}
-	maxWidth += 4
-
-	// Draw popup border
-	border := "┌" + strings.Repeat("─", maxWidth) + "┐"
-	b.WriteString(m.styles.CompletionBorder.Render(border))
+	b.WriteString(m.styles.OverlayTitle.Render(title))
 	b.WriteString("\n")
 
-	for i := 0; i < maxItems; i++ {
-		item := m.completionItems[i]
-		line := "│ "
+	// Filter input
+	b.WriteString(m.styles.CompletionFilter.Render("> " + cs.Filter.View()))
+	b.WriteString("\n")
 
-		if i == m.completionIndex {
-			line += "▶ "
-			line += m.styles.CompletionSelected.Render(truncate(item.Label, maxWidth-2))
-		} else {
-			line += "  "
-			line += item.Label
-		}
-
-		// Pad to max width (ensure non-negative)
-		padding := maxWidth - len(line) + 1
-		if padding < 0 {
-			padding = 0
-		}
-		line += strings.Repeat(" ", padding) + "│"
-
-		if i == m.completionIndex {
-			b.WriteString(m.styles.CompletionSelected.Render(line))
-		} else {
-			b.WriteString(m.styles.CompletionBorder.Render(line))
-		}
+	// Breadcrumb for @ file browsing
+	if cs.Kind == "attachments" && cs.CurrentPath != "" {
+		b.WriteString(m.styles.CompletionCategory.Render(cs.CurrentPath + "/"))
 		b.WriteString("\n")
 	}
 
-	border = "└" + strings.Repeat("─", maxWidth) + "┘"
-	b.WriteString(m.styles.CompletionBorder.Render(border))
+	// Divider
+	maxW := 40
+	if m.width-8 > maxW {
+		maxW = m.width - 8
+	}
+	if maxW > 60 {
+		maxW = 60
+	}
+	b.WriteString(m.styles.CompletionBorder.Render(strings.Repeat("─", maxW)))
+	b.WriteString("\n")
 
-	return b.String()
-}
+	// Scrollable items (max 10 visible)
+	maxVisible := 10
+	items := cs.FilteredItems
+	if len(items) == 0 {
+		b.WriteString(m.styles.CompletionCategory.Render("  (no matches)"))
+		b.WriteString("\n")
+	} else {
+		// Calculate scroll window
+		start := 0
+		if cs.Index >= maxVisible {
+			start = cs.Index - maxVisible + 1
+		}
+		end := start + maxVisible
+		if end > len(items) {
+			end = len(items)
+		}
 
-func (m *Model) renderCompletionModal() string {
-	if len(m.completionItems) == 0 {
-		return ""
+		for i := start; i < end; i++ {
+			item := items[i]
+			prefix := "  "
+			if i == cs.Index {
+				prefix = m.styles.CompletionCursor.Render("▸ ")
+			}
+
+			// Check if selected (for multi-select)
+			selectedMark := ""
+			if cs.Selected != nil {
+				// Find original index
+				for oi, orig := range cs.AllItems {
+					if orig.Label == item.Label && orig.Insert == item.Insert {
+						if cs.Selected[oi] {
+							selectedMark = " ✓"
+						}
+						break
+					}
+				}
+			}
+
+			label := item.Label
+			cat := m.styles.CompletionCategory.Render("  " + item.Category)
+
+			if i == cs.Index {
+				b.WriteString(prefix + m.styles.CompletionCursor.Render(label) + cat + selectedMark)
+			} else {
+				b.WriteString(prefix + label + cat + selectedMark)
+			}
+			b.WriteString("\n")
+		}
 	}
 
-	return m.listModel.View()
+	// Searching indicator
+	if cs.Searching {
+		b.WriteString(m.styles.CompletionSearching.Render("  searching..."))
+		b.WriteString("\n")
+	}
+
+	// Footer hints
+	hints := "Enter=select  Esc=cancel"
+	if cs.Kind == "attachments" && cs.CurrentPath != "" {
+		hints += "  ←=back"
+	}
+	if cs.Selected != nil {
+		hints += "  Tab=toggle"
+	}
+	b.WriteString(m.styles.CompletionFooter.Render(hints))
+
+	// Wrap in a box
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(m.styles.OverlayBorder).
+		Padding(1, 2).
+		Width(maxW + 4)
+
+	return box.Render(b.String())
 }
 
 // renderHeader builds:
@@ -146,6 +235,19 @@ func (m *Model) renderHeader() string {
 		if m.iceEnabled {
 			parts = append(parts, "ICE")
 		}
+		if m.promptTokens > 0 && m.numCtx > 0 {
+			pct := m.promptTokens * 100 / m.numCtx
+			var pctStyle lipgloss.Style
+			switch {
+			case pct > 85:
+				pctStyle = m.styles.ContextPctHigh
+			case pct > 60:
+				pctStyle = m.styles.ContextPctMid
+			default:
+				pctStyle = m.styles.ContextPctLow
+			}
+			parts = append(parts, pctStyle.Render(contextProgressBar(pct)))
+		}
 		infoStr = m.styles.HeaderInfo.Render(strings.Join(parts, " · "))
 	}
 
@@ -158,7 +260,7 @@ func (m *Model) renderHeader() string {
 	}
 
 	line := title + strings.Repeat(" ", gap) + infoStr
-	ruler := m.styles.HeaderRule.Render(thickRule(m.width))
+	ruler := m.styles.HeaderRule.Render(rule(m.width))
 
 	return line + "\n" + ruler
 }
@@ -179,7 +281,7 @@ func (m *Model) renderFooter() string {
 	if m.state == StateIdle {
 		b.WriteString(m.input.View())
 	} else if m.state == StateWaiting {
-		b.WriteString(m.styles.StreamHint.Render("  " + m.spin.View() + " thinking... press Esc to cancel"))
+		b.WriteString(m.styles.StreamHint.Render("  " + m.scramble.View() + " thinking... press Esc to cancel"))
 	} else {
 		b.WriteString(m.styles.StreamHint.Render("  " + m.spin.View() + " streaming... press Esc to cancel"))
 	}
@@ -189,6 +291,14 @@ func (m *Model) renderFooter() string {
 
 // renderStatusLine builds the status bar above the input/hint area.
 func (m *Model) renderStatusLine() string {
+	// Pending paste prompt overrides normal status.
+	if m.pendingPaste != "" {
+		lines := strings.Count(m.pendingPaste, "\n") + 1
+		return m.styles.StatusText.Render(
+			fmt.Sprintf("  Large paste (%d lines). Wrap as code block? [y/n/esc]", lines),
+		)
+	}
+
 	var parts []string
 
 	switch m.state {
@@ -206,6 +316,18 @@ func (m *Model) renderStatusLine() string {
 			))
 		}
 	case StateIdle:
+		// Mode badge.
+		cfg := m.modeConfigs[m.mode]
+		var modeStyle lipgloss.Style
+		switch m.mode {
+		case ModeAsk:
+			modeStyle = m.styles.ModeAsk
+		case ModePlan:
+			modeStyle = m.styles.ModePlan
+		case ModeBuild:
+			modeStyle = m.styles.ModeBuild
+		}
+		parts = append(parts, modeStyle.Render("[ "+cfg.Label+" ]"))
 		dot := m.styles.StatusDot.Render("○")
 		label := m.styles.StatusText.Render(" ready")
 		parts = append(parts, dot+label)
@@ -221,7 +343,10 @@ func (m *Model) renderStatusLine() string {
 		}
 	}
 
-	return strings.Join(parts, m.styles.StatusText.Render(" · "))
+	if len(parts) == 0 {
+		return ""
+	}
+	return " " + strings.Join(parts, m.styles.StatusText.Render(" · "))
 }
 
 // formatTokens formats a token count as "1.2k" or "8192".
@@ -233,15 +358,47 @@ func formatTokens(n int) string {
 }
 
 // renderEntries builds the full chat content for the viewport.
+// Uses an incremental cache: during streaming, only the streaming tail is
+// re-rendered while the entries prefix is reused from cache.
 func (m *Model) renderEntries() string {
-	var b strings.Builder
 	contentW := m.width - 4
+
+	// Startup progress screen.
+	if m.initializing {
+		var b strings.Builder
+		m.renderStartup(&b)
+		return b.String()
+	}
 
 	// Welcome message when empty.
 	if len(m.entries) == 0 && m.streamBuf.Len() == 0 {
+		var b strings.Builder
 		m.renderWelcome(&b)
 		return b.String()
 	}
+
+	// Fast path: if entry cache is valid and entry count matches, reuse
+	// the cached prefix and only re-render the streaming tail.
+	if m.entryCacheValid && len(m.entries) == m.cachedEntryCount {
+		m.toolEntryRows = m.cachedToolEntryRows
+		if m.streamBuf.Len() > 0 {
+			var b strings.Builder
+			b.WriteString(m.cachedEntriesRender)
+			if len(m.entries) > 0 {
+				last := m.entries[len(m.entries)-1]
+				if last.Kind != "tool_group" {
+					b.WriteString("\n")
+				}
+			}
+			m.renderStreamingMsg(&b, m.streamBuf.String(), contentW)
+			return b.String()
+		}
+		return m.cachedEntriesRender
+	}
+
+	// Full render: iterate all entries.
+	var b strings.Builder
+	m.toolEntryRows = make(map[int]int)
 
 	for i, entry := range m.entries {
 		switch entry.Kind {
@@ -250,6 +407,7 @@ func (m *Model) renderEntries() string {
 		case "assistant":
 			m.renderAssistantMsg(&b, entry, contentW)
 		case "tool_group":
+			m.toolEntryRows[entry.ToolIndex] = strings.Count(b.String(), "\n")
 			m.renderToolGroup(&b, entry.ToolIndex, i)
 		case "error":
 			b.WriteString(m.styles.ErrorText.Render("error: " + entry.Content))
@@ -276,6 +434,15 @@ func (m *Model) renderEntries() string {
 		}
 	}
 
+	// Cache the rendered entries prefix and toolEntryRows.
+	m.cachedEntriesRender = b.String()
+	m.cachedEntryCount = len(m.entries)
+	m.cachedToolEntryRows = make(map[int]int, len(m.toolEntryRows))
+	for k, v := range m.toolEntryRows {
+		m.cachedToolEntryRows[k] = v
+	}
+	m.entryCacheValid = true
+
 	// Render current streaming content (plain text, no Glamour).
 	if m.streamBuf.Len() > 0 {
 		if len(m.entries) > 0 {
@@ -295,7 +462,7 @@ func (m *Model) renderWelcome(b *strings.Builder) {
 	title := m.styles.HeaderTitle.Render("Welcome to local-agent")
 	b.WriteString("\n")
 	b.WriteString("  " + title)
-	b.WriteString("\n\n")
+	b.WriteString("\n")
 
 	var infoParts []string
 	if m.model != "" {
@@ -308,12 +475,13 @@ func (m *Model) renderWelcome(b *strings.Builder) {
 		infoParts = append(infoParts, fmt.Sprintf("%d servers", m.serverCount))
 	}
 	if len(infoParts) > 0 {
-		b.WriteString(m.styles.StatusText.Render("  Model: " + strings.Join(infoParts, " · ")))
-		b.WriteString("\n\n")
+		b.WriteString(m.styles.StatusText.Render("  " + strings.Join(infoParts, " · ")))
+		b.WriteString("\n")
 	}
 
-	b.WriteString(m.styles.SystemText.Render("  Type a message to start, or try:"))
 	b.WriteString("\n")
+	b.WriteString(m.styles.SystemText.Render("  Type a message to start, or try:"))
+	b.WriteString("\n\n")
 	b.WriteString(m.styles.WelcomeHint.Render("    /help    "))
 	b.WriteString(m.styles.SystemText.Render("— keyboard shortcuts & commands"))
 	b.WriteString("\n")
@@ -342,6 +510,13 @@ func (m *Model) renderUserMsg(b *strings.Builder, content string, contentW int) 
 // renderAssistantMsg renders a completed assistant message block.
 // Uses cached RenderedContent if available (snap-into-place pattern).
 func (m *Model) renderAssistantMsg(b *strings.Builder, entry ChatEntry, contentW int) {
+	// Render thinking box if present.
+	if entry.ThinkingContent != "" {
+		thinkBox := m.renderThinkingBox(entry.ThinkingContent, entry.ThinkingCollapsed)
+		b.WriteString(indentBlock(thinkBox, "  "))
+		b.WriteString("\n")
+	}
+
 	label := m.styles.AsstLabel.Render("assistant")
 	labelW := lipgloss.Width(label)
 	ruleW := m.width - labelW - 3
@@ -368,6 +543,15 @@ func (m *Model) renderAssistantMsg(b *strings.Builder, entry ChatEntry, contentW
 
 // renderStreamingMsg renders the in-progress assistant message (plain text).
 func (m *Model) renderStreamingMsg(b *strings.Builder, content string, contentW int) {
+	// Show thinking indicator during streaming.
+	if m.thinkBuf.Len() > 0 {
+		thinkHint := m.styles.ThinkingHeader.Render(
+			fmt.Sprintf("  thinking: %d chars...", m.thinkBuf.Len()),
+		)
+		b.WriteString(thinkHint)
+		b.WriteString("\n")
+	}
+
 	label := m.styles.AsstLabel.Render("assistant")
 	cursor := m.styles.StreamCursor.Render(" " + m.spin.View())
 	labelW := lipgloss.Width(label) + lipgloss.Width(cursor)
@@ -390,56 +574,73 @@ func (m *Model) renderToolGroup(b *strings.Builder, toolIdx, entryIdx int) {
 		return
 	}
 	te := m.toolEntries[toolIdx]
+	layout := m.currentLayout()
 
 	// Add spacing before the first tool_group in a sequence.
 	if entryIdx > 0 && m.entries[entryIdx-1].Kind != "tool_group" {
 		b.WriteString("\n")
 	}
 
+	tt := classifyTool(te.Name)
+
 	switch te.Status {
 	case ToolStatusRunning:
-		// Running: show spinner
-		icon := m.styles.ToolCallIcon.Render("⚙")
+		// Running: show spinner with type-specific icon
+		icon := m.styles.ToolCallIcon.Render(toolIcon(tt, te.Status))
 		spinView := m.spin.View()
 		text := m.styles.ToolCallText.Render(fmt.Sprintf(" %s ", te.Name))
 		hint := m.styles.ToolRunningText.Render(spinView + " running...")
 		b.WriteString(icon + text + hint)
+		// For running bash tools, show command inline
+		if tt == ToolTypeBash {
+			if summary := toolSummary(tt, te); summary != "" {
+				b.WriteString("\n")
+				b.WriteString(m.styles.ToolBashCmd.Render(layout.ToolIndent + "$ " + summary))
+			}
+		}
 		b.WriteString("\n")
 
 	case ToolStatusDone:
 		dur := formatDuration(te.Duration)
-		if m.toolsCollapsed {
-			// Collapsed: single dim line
-			icon := m.styles.ToolDoneIcon.Render("✓")
+		icon := m.styles.ToolDoneIcon.Render(toolIcon(tt, te.Status))
+		if te.Collapsed {
+			// Collapsed: single line with type-specific summary
 			text := m.styles.ToolDoneText.Render(fmt.Sprintf(" %s (%s)", te.Name, dur))
 			b.WriteString(icon + text)
+			if summary := toolSummary(tt, te); summary != "" {
+				summ := truncate(summary, layout.ToolSummaryMax)
+				b.WriteString(m.styles.ToolBashCmd.Render(" " + summ))
+			}
 			b.WriteString("\n")
 		} else {
-			// Expanded: show args + result
-			icon := m.styles.ToolDoneIcon.Render("✓")
+			// Expanded: show args + result (or diff for file writes)
 			text := m.styles.ToolDoneText.Render(fmt.Sprintf(" %s (%s)", te.Name, dur))
 			b.WriteString(icon + text)
 			b.WriteString("\n")
 			// Args
-			args := truncate(te.Args, 200)
-			b.WriteString(m.styles.ToolDetailText.Render("      args: " + args))
+			args := truncate(te.Args, layout.ArgsTruncMax)
+			b.WriteString(m.styles.ToolDetailText.Render(layout.ToolIndent + "args: " + args))
 			b.WriteString("\n")
-			// Result
-			result := truncate(te.Result, 300)
-			b.WriteString(m.styles.ToolDetailText.Render("      result: " + result))
-			b.WriteString("\n")
+			// Diff or result
+			if te.DiffLines != nil {
+				b.WriteString(renderDiff(te.DiffLines, m.styles, 30))
+			} else {
+				result := truncate(te.Result, layout.ResultTruncMax)
+				b.WriteString(m.styles.ToolDetailText.Render(layout.ToolIndent + "result: " + result))
+				b.WriteString("\n")
+			}
 		}
 
 	case ToolStatusError:
 		// Error: always expanded regardless of collapse state
 		dur := formatDuration(te.Duration)
-		icon := m.styles.ToolErrorIcon.Render("✗")
+		icon := m.styles.ToolErrorIcon.Render(toolIcon(tt, te.Status))
 		text := m.styles.ToolErrorText.Render(fmt.Sprintf(" %s (%s)", te.Name, dur))
 		b.WriteString(icon + text)
 		b.WriteString("\n")
 		// Error result always shown
-		result := truncate(te.Result, 300)
-		b.WriteString(m.styles.ToolErrorText.Render("      " + result))
+		result := truncate(te.Result, layout.ResultTruncMax)
+		b.WriteString(m.styles.ToolErrorText.Render(layout.ToolIndent + result))
 		b.WriteString("\n")
 	}
 

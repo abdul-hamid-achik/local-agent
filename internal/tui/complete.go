@@ -1,18 +1,22 @@
 package tui
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/abdulachik/local-agent/internal/command"
+	"github.com/abdulachik/local-agent/internal/mcp"
 )
 
 type Completion struct {
-	Label    string
-	Insert   string
-	Category string
-	Index    int
+	Label       string
+	Insert      string
+	Category    string
+	Description string
+	Index       int
 }
 
 type Completer struct {
@@ -21,9 +25,10 @@ type Completer struct {
 	skills   []string
 	agents   []string
 	workDir  string
+	registry *mcp.Registry
 }
 
-func NewCompleter(cmdReg *command.Registry, models, skills, agents []string) *Completer {
+func NewCompleter(cmdReg *command.Registry, models, skills, agents []string, registry *mcp.Registry) *Completer {
 	workDir, _ := os.Getwd()
 	return &Completer{
 		commands: cmdReg.All(),
@@ -31,6 +36,7 @@ func NewCompleter(cmdReg *command.Registry, models, skills, agents []string) *Co
 		skills:   skills,
 		agents:   agents,
 		workDir:  workDir,
+		registry: registry,
 	}
 }
 
@@ -86,7 +92,7 @@ func (c *Completer) completeAgentOrFile(input string) []Completion {
 	var completions []Completion
 	input = strings.TrimPrefix(input, "@")
 
-	// First try to match agents
+	// Always show agents first
 	for _, agent := range c.agents {
 		if strings.HasPrefix(agent, input) {
 			completions = append(completions, Completion{
@@ -97,10 +103,8 @@ func (c *Completer) completeAgentOrFile(input string) []Completion {
 		}
 	}
 
-	// If no agent matches, try to match files/folders
-	if len(completions) == 0 {
-		completions = c.completeFile(input)
-	}
+	// Always append file results (not just when no agents match)
+	completions = append(completions, c.completeFile(input)...)
 
 	return completions
 }
@@ -183,6 +187,50 @@ func (c *Completer) completeFile(input string) []Completion {
 	return completions
 }
 
+// CompleteFilePath lists directory contents at a given relative path.
+// Used for folder drill-down in the completion modal.
+func (c *Completer) CompleteFilePath(relPath string) []Completion {
+	var completions []Completion
+
+	dir := filepath.Join(c.workDir, relPath)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return completions
+	}
+
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
+
+		isDir := entry.IsDir()
+		displayName := name
+		insertPath := relPath
+		if insertPath != "" && !strings.HasSuffix(insertPath, "/") {
+			insertPath += "/"
+		}
+		insertPath += name
+
+		if isDir {
+			displayName += "/"
+		}
+
+		category := "file"
+		if isDir {
+			category = "folder"
+		}
+
+		completions = append(completions, Completion{
+			Label:    displayName,
+			Insert:   "@" + insertPath + " ",
+			Category: category,
+		})
+	}
+
+	return completions
+}
+
 func (c *Completer) completeSkill(input string) []Completion {
 	var completions []Completion
 	input = strings.TrimPrefix(input, "#")
@@ -198,6 +246,69 @@ func (c *Completer) completeSkill(input string) []Completion {
 	}
 
 	return completions
+}
+
+// FilterCompletions filters completions by case-insensitive substring match on Label.
+func FilterCompletions(items []Completion, query string) []Completion {
+	if query == "" {
+		return items
+	}
+	q := strings.ToLower(query)
+	var filtered []Completion
+	for _, item := range items {
+		if strings.Contains(strings.ToLower(item.Label), q) {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered
+}
+
+// SearchFiles performs an async vecgrep search via the MCP registry.
+func (c *Completer) SearchFiles(ctx context.Context, query string) []Completion {
+	if c.registry == nil || query == "" {
+		return nil
+	}
+
+	result, err := c.registry.CallTool(ctx, "vecgrep_search", map[string]any{
+		"query": query,
+		"limit": 10,
+	})
+	if err != nil {
+		return nil
+	}
+
+	var results []Completion
+	// Parse the result content as JSON array of file paths or objects
+	var searchResults []struct {
+		Path  string  `json:"path"`
+		Score float64 `json:"score"`
+	}
+	if err := json.Unmarshal([]byte(result.Content), &searchResults); err != nil {
+		// Try as simple string lines
+		for _, line := range strings.Split(result.Content, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			results = append(results, Completion{
+				Label:       "@" + line,
+				Insert:      "@" + line + " ",
+				Category:    "search_result",
+				Description: "vecgrep match",
+			})
+		}
+		return results
+	}
+
+	for _, sr := range searchResults {
+		results = append(results, Completion{
+			Label:       "@" + sr.Path,
+			Insert:      "@" + sr.Path + " ",
+			Category:    "search_result",
+			Description: "vecgrep match",
+		})
+	}
+	return results
 }
 
 func (c *Completer) UpdateModels(models []string) {

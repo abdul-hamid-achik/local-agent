@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+
 	"github.com/abdulachik/local-agent/internal/command"
 )
 
@@ -19,73 +20,44 @@ func (m *Model) renderHelpOverlay(contentWidth int) string {
 		maxW = 30
 	}
 
-	lightDark := lipgloss.LightDark(m.isDark)
-
-	borderColor := lightDark(
-		lipgloss.Color("#999999"),
-		lipgloss.Color("#616e88"),
-	)
-	titleColor := lightDark(
-		lipgloss.Color("#333333"),
-		lipgloss.Color("#88c0d0"),
-	)
-	keyColor := lightDark(
-		lipgloss.Color("#0066cc"),
-		lipgloss.Color("#81a1c1"),
-	)
-	descColor := lightDark(
-		lipgloss.Color("#555555"),
-		lipgloss.Color("#d8dee9"),
-	)
-	sectionColor := lightDark(
-		lipgloss.Color("#666666"),
-		lipgloss.Color("#d8dee9"),
-	)
-
-	titleStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(titleColor)
-	keyStyle := lipgloss.NewStyle().
-		Foreground(keyColor).
-		Bold(true)
-	descStyle := lipgloss.NewStyle().
-		Foreground(descColor)
-	sectionStyle := lipgloss.NewStyle().
-		Foreground(sectionColor).
-		Bold(true)
-
 	var b strings.Builder
 
 	// Title.
-	b.WriteString(titleStyle.Render("Help"))
+	b.WriteString(m.styles.OverlayTitle.Render("Help"))
 	b.WriteString("\n\n")
 
 	// Keyboard shortcuts section.
-	b.WriteString(sectionStyle.Render("Keyboard Shortcuts"))
+	b.WriteString(m.styles.OverlayAccent.Render("Keyboard Shortcuts"))
 	b.WriteString("\n")
 
 	shortcuts := []struct{ key, desc string }{
 		{"enter", "Send message"},
 		{"shift+enter", "New line in input"},
+		{"shift+tab", "Cycle mode (ASK/PLAN/BUILD)"},
+		{"ctrl+m", "Quick model switch"},
 		{"esc", "Cancel streaming / close overlay"},
 		{"ctrl+c", "Quit"},
 		{"ctrl+l", "Clear screen (keep history)"},
 		{"ctrl+n", "New conversation"},
 		{"?", "Toggle this help (when input empty)"},
-		{"t", "Expand/collapse tool details"},
+		{"t", "Expand/collapse all tools"},
+		{"space", "Toggle last tool details"},
+		{"y", "Copy last response"},
+		{"ctrl+t", "Toggle thinking display"},
+		{"↑/↓", "Browse input history"},
 		{"pgup/pgdown", "Scroll viewport"},
 		{"ctrl+u/d", "Half-page scroll"},
 	}
 
 	for _, s := range shortcuts {
 		fmt.Fprintf(&b, "  %s  %s\n",
-			keyStyle.Width(16).Render(s.key),
-			descStyle.Render(s.desc),
+			m.styles.OverlayAccent.Width(16).Render(s.key),
+			m.styles.OverlayDim.Render(s.desc),
 		)
 	}
 
 	b.WriteString("\n")
-	b.WriteString(sectionStyle.Render("Slash Commands"))
+	b.WriteString(m.styles.OverlayAccent.Render("Slash Commands"))
 	b.WriteString("\n")
 
 	// Slash commands.
@@ -96,20 +68,19 @@ func (m *Model) renderHelpOverlay(contentWidth int) string {
 				name += " (/" + strings.Join(cmd.Aliases, ", /") + ")"
 			}
 			fmt.Fprintf(&b, "  %s  %s\n",
-				keyStyle.Width(16).Render("/"+cmd.Name),
-				descStyle.Render(cmd.Description),
+				m.styles.OverlayAccent.Width(16).Render("/"+cmd.Name),
+				m.styles.OverlayDim.Render(cmd.Description),
 			)
 		}
 	}
 
 	b.WriteString("\n")
-	escStyle := lipgloss.NewStyle().Foreground(keyColor)
-	b.WriteString(escStyle.Render("Press Esc or q to close"))
+	b.WriteString(m.styles.OverlayDim.Render("Press Esc or q to close"))
 
 	// Wrap in a box.
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(borderColor).
+		BorderForeground(m.styles.OverlayBorder).
 		Padding(1, 2).
 		Width(maxW)
 

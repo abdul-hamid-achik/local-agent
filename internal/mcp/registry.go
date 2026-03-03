@@ -35,43 +35,50 @@ func NewRegistry() *Registry {
 // connectTimeout is the per-server connection timeout.
 const connectTimeout = 5 * time.Second
 
+// ConnectServer connects a single MCP server and registers its tools.
+// Returns the number of tools discovered, or an error.
+func (r *Registry) ConnectServer(ctx context.Context, srv config.ServerConfig) (int, error) {
+	connCtx, cancel := context.WithTimeout(ctx, connectTimeout)
+	defer cancel()
+
+	client, err := Connect(connCtx, srv.Name, srv.Command, srv.Args, srv.Env, srv.Transport, srv.URL)
+	if err != nil {
+		r.mu.Lock()
+		r.failedServers = append(r.failedServers, FailedServer{Name: srv.Name, Reason: err.Error()})
+		r.mu.Unlock()
+		return 0, fmt.Errorf("connect to %s: %w", srv.Name, err)
+	}
+
+	tools, err := client.ListTools(connCtx)
+	if err != nil {
+		client.Close()
+		r.mu.Lock()
+		r.failedServers = append(r.failedServers, FailedServer{Name: srv.Name, Reason: err.Error()})
+		r.mu.Unlock()
+		return 0, fmt.Errorf("%s tools: %w", srv.Name, err)
+	}
+
+	r.mu.Lock()
+	r.clients = append(r.clients, client)
+	for _, tool := range tools {
+		r.toolMap[tool.Name] = client
+		r.toolDefs = append(r.toolDefs, ToLLMToolDef(tool.Name, tool.Description, tool.InputSchema))
+	}
+	r.mu.Unlock()
+
+	return len(tools), nil
+}
+
 // ConnectAll spawns and connects to all configured MCP servers.
 // Servers that fail to connect are logged but don't prevent others.
 func (r *Registry) ConnectAll(ctx context.Context, servers []config.ServerConfig, logFn func(string)) {
 	for _, srv := range servers {
-		connCtx, cancel := context.WithTimeout(ctx, connectTimeout)
-		client, err := Connect(connCtx, srv.Name, srv.Command, srv.Args, srv.Env, srv.Transport, srv.URL)
+		toolCount, err := r.ConnectServer(ctx, srv)
 		if err != nil {
-			cancel()
-			reason := err.Error()
 			logFn(fmt.Sprintf("skip %s: %v", srv.Name, err))
-			r.mu.Lock()
-			r.failedServers = append(r.failedServers, FailedServer{Name: srv.Name, Reason: reason})
-			r.mu.Unlock()
 			continue
 		}
-
-		tools, err := client.ListTools(connCtx)
-		cancel()
-		if err != nil {
-			logFn(fmt.Sprintf("skip %s tools: %v", srv.Name, err))
-			client.Close()
-			r.mu.Lock()
-			r.failedServers = append(r.failedServers, FailedServer{Name: srv.Name, Reason: err.Error()})
-			r.mu.Unlock()
-			continue
-		}
-
-		r.mu.Lock()
-		r.clients = append(r.clients, client)
-		for _, tool := range tools {
-			name := tool.Name
-			r.toolMap[name] = client
-			r.toolDefs = append(r.toolDefs, ToLLMToolDef(name, tool.Description, tool.InputSchema))
-		}
-		r.mu.Unlock()
-
-		logFn(fmt.Sprintf("connected %s (%d tools)", srv.Name, len(tools)))
+		logFn(fmt.Sprintf("connected %s (%d tools)", srv.Name, toolCount))
 	}
 }
 

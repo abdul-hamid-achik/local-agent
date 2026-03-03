@@ -205,15 +205,15 @@ func TestToolCallResultMsg(t *testing.T) {
 			Status: ToolStatusRunning,
 		})
 
-		longResult := strings.Repeat("x", 600)
+		longResult := strings.Repeat("x", 2500)
 		updated, _ := m.Update(ToolCallResultMsg{
 			Name:   "read_file",
 			Result: longResult,
 		})
 		m = updated.(*Model)
 
-		if len(m.toolEntries[0].Result) != 500 {
-			t.Errorf("result should be truncated to 500, got %d", len(m.toolEntries[0].Result))
+		if len(m.toolEntries[0].Result) != 2000 {
+			t.Errorf("result should be truncated to 2000, got %d", len(m.toolEntries[0].Result))
 		}
 		if !strings.HasSuffix(m.toolEntries[0].Result, "...") {
 			t.Error("truncated result should end with '...'")

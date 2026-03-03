@@ -8,35 +8,83 @@ func TestOverlay_ESC_ClosesCompletion(t *testing.T) {
 	m := newTestModel(t)
 
 	// Set up active completion state.
-	m.completionActive = true
-	m.overlay = OverlayCompletion
-	m.completionItems = []Completion{
+	items := []Completion{
 		{Label: "/help", Insert: "/help ", Category: "command"},
 		{Label: "/clear", Insert: "/clear ", Category: "command"},
 		{Label: "/model", Insert: "/model ", Category: "command"},
 	}
-	m.completionIndex = 1
-	m.completionSelected = map[int]bool{0: true}
+	m.completionState = newCompletionState("command", items, true)
+	m.completionState.Index = 1
+	m.completionState.Selected[0] = true
+	m.overlay = OverlayCompletion
 
 	// Send ESC.
 	updated, _ := m.Update(escKey())
 	m = updated.(*Model)
 
-	// Verify ALL 5 fields reset.
-	if m.completionActive {
-		t.Error("completionActive should be false after ESC")
-	}
-	if m.completionItems != nil {
-		t.Errorf("completionItems should be nil, got %v", m.completionItems)
-	}
-	if m.completionIndex != 0 {
-		t.Errorf("completionIndex should be 0, got %d", m.completionIndex)
-	}
-	if m.completionSelected != nil {
-		t.Errorf("completionSelected should be nil, got %v", m.completionSelected)
+	// Verify completion state is nil.
+	if m.isCompletionActive() {
+		t.Error("completionState should be nil after ESC")
 	}
 	if m.overlay != OverlayNone {
 		t.Errorf("overlay should be OverlayNone, got %d", m.overlay)
+	}
+}
+
+func TestOverlay_ESC_ClearsInputToPreventRetrigger(t *testing.T) {
+	m := newTestModel(t)
+
+	// Simulate: user typed "/" which triggered completion, then presses ESC.
+	m.input.SetValue("/")
+	items := []Completion{
+		{Label: "/help", Insert: "/help ", Category: "command"},
+		{Label: "/clear", Insert: "/clear ", Category: "command"},
+	}
+	m.completionState = newCompletionState("command", items, false)
+	m.overlay = OverlayCompletion
+
+	// Press ESC to close.
+	updated, _ := m.Update(escKey())
+	m = updated.(*Model)
+
+	// Input must be cleared so auto-trigger doesn't reopen.
+	if m.input.Value() != "" {
+		t.Errorf("ESC should clear input, got %q", m.input.Value())
+	}
+	if m.isCompletionActive() {
+		t.Error("completion should be closed after ESC")
+	}
+	if m.overlay != OverlayNone {
+		t.Errorf("overlay should be OverlayNone, got %d", m.overlay)
+	}
+}
+
+func TestOverlay_ESC_NoRetriggerOnSubsequentUpdate(t *testing.T) {
+	m := newTestModel(t)
+
+	// Simulate: user typed "/" which triggered completion, then presses ESC.
+	m.input.SetValue("/")
+	items := []Completion{
+		{Label: "/help", Insert: "/help ", Category: "command"},
+	}
+	m.completionState = newCompletionState("command", items, false)
+	m.overlay = OverlayCompletion
+
+	// Press ESC.
+	updated, _ := m.Update(escKey())
+	m = updated.(*Model)
+
+	// Send another key event (e.g., a harmless key like 'a') to cycle through Update.
+	// This exercises the auto-trigger path at lines 968-972.
+	updated, _ = m.Update(charKey('a'))
+	m = updated.(*Model)
+
+	// Completion must NOT have re-opened.
+	if m.isCompletionActive() {
+		t.Error("completion should not re-trigger after ESC close")
+	}
+	if m.overlay != OverlayNone {
+		t.Errorf("overlay should still be OverlayNone, got %d", m.overlay)
 	}
 }
 
@@ -94,15 +142,13 @@ func TestOverlay_CompletionNavigation(t *testing.T) {
 	setup := func(t *testing.T) *Model {
 		t.Helper()
 		m := newTestModel(t)
-		m.completionActive = true
-		m.overlay = OverlayCompletion
-		m.completionItems = []Completion{
+		items := []Completion{
 			{Label: "/help", Insert: "/help "},
 			{Label: "/clear", Insert: "/clear "},
 			{Label: "/model", Insert: "/model "},
 		}
-		m.completionIndex = 0
-		m.initListModel("command", m.completionItems)
+		m.completionState = newCompletionState("command", items, false)
+		m.overlay = OverlayCompletion
 		return m
 	}
 
@@ -112,8 +158,8 @@ func TestOverlay_CompletionNavigation(t *testing.T) {
 		updated, _ := m.Update(downKey())
 		m = updated.(*Model)
 
-		if m.completionIndex != 1 {
-			t.Errorf("down from 0 should move to 1, got %d", m.completionIndex)
+		if m.completionState.Index != 1 {
+			t.Errorf("down from 0 should move to 1, got %d", m.completionState.Index)
 		}
 	})
 
@@ -123,102 +169,71 @@ func TestOverlay_CompletionNavigation(t *testing.T) {
 		updated, _ := m.Update(upKey())
 		m = updated.(*Model)
 
-		if m.completionIndex != 0 {
-			t.Errorf("up at 0 should stay at 0, got %d", m.completionIndex)
+		if m.completionState.Index != 0 {
+			t.Errorf("up at 0 should stay at 0, got %d", m.completionState.Index)
 		}
 	})
 
 	t.Run("down_clamped_at_end", func(t *testing.T) {
 		m := setup(t)
-		m.completionIndex = 2
+		m.completionState.Index = 2
 
 		updated, _ := m.Update(downKey())
 		m = updated.(*Model)
 
-		if m.completionIndex != 2 {
-			t.Errorf("down at last item should stay at 2, got %d", m.completionIndex)
-		}
-	})
-
-	t.Run("tab_cycles_with_wrap", func(t *testing.T) {
-		m := setup(t)
-		m.completionIndex = 2
-
-		updated, _ := m.Update(tabKey())
-		m = updated.(*Model)
-
-		if m.completionIndex != 0 {
-			t.Errorf("tab at 2 should wrap to 0, got %d", m.completionIndex)
-		}
-	})
-
-	t.Run("tab_increments", func(t *testing.T) {
-		m := setup(t)
-		m.completionIndex = 0
-
-		updated, _ := m.Update(tabKey())
-		m = updated.(*Model)
-
-		if m.completionIndex != 1 {
-			t.Errorf("tab from 0 should go to 1, got %d", m.completionIndex)
+		if m.completionState.Index != 2 {
+			t.Errorf("down at last item should stay at 2, got %d", m.completionState.Index)
 		}
 	})
 }
 
 func TestOverlay_CompletionToggle(t *testing.T) {
-	t.Run("space_toggles_selection_on", func(t *testing.T) {
+	t.Run("tab_toggles_selection_on", func(t *testing.T) {
 		m := newTestModel(t)
-		m.completionActive = true
-		m.overlay = OverlayCompletion
-		m.completionItems = []Completion{
+		items := []Completion{
 			{Label: "/a", Insert: "/a "},
 			{Label: "/b", Insert: "/b "},
 		}
-		m.completionIndex = 0
-		m.completionSelected = make(map[int]bool)
-		m.initListModel("attachments", m.completionItems)
+		m.completionState = newCompletionState("attachments", items, true)
+		m.overlay = OverlayCompletion
 
-		updated, _ := m.Update(spaceKey())
+		updated, _ := m.Update(tabKey())
 		m = updated.(*Model)
 
-		if !m.completionSelected[0] {
-			t.Error("space should toggle selection on for index 0")
+		if !m.completionState.Selected[0] {
+			t.Error("tab should toggle selection on for index 0")
 		}
 	})
 
-	t.Run("space_toggles_selection_off", func(t *testing.T) {
+	t.Run("tab_toggles_selection_off", func(t *testing.T) {
 		m := newTestModel(t)
-		m.completionActive = true
-		m.overlay = OverlayCompletion
-		m.completionItems = []Completion{
+		items := []Completion{
 			{Label: "/a", Insert: "/a "},
 			{Label: "/b", Insert: "/b "},
 		}
-		m.completionIndex = 0
-		m.completionSelected = map[int]bool{0: true}
-		m.initListModel("attachments", m.completionItems)
+		m.completionState = newCompletionState("attachments", items, true)
+		m.completionState.Selected[0] = true
+		m.overlay = OverlayCompletion
 
-		updated, _ := m.Update(spaceKey())
+		updated, _ := m.Update(tabKey())
 		m = updated.(*Model)
 
-		if m.completionSelected[0] {
-			t.Error("space should toggle selection off for index 0")
+		if m.completionState.Selected[0] {
+			t.Error("tab should toggle selection off for index 0")
 		}
 	})
 
 	t.Run("nil_selected_no_panic", func(t *testing.T) {
 		m := newTestModel(t)
-		m.completionActive = true
-		m.overlay = OverlayCompletion
-		m.completionItems = []Completion{
+		items := []Completion{
 			{Label: "/a", Insert: "/a "},
 		}
-		m.completionIndex = 0
-		m.completionSelected = nil // nil map
-		m.initListModel("command", m.completionItems)
+		m.completionState = newCompletionState("command", items, false)
+		// Selected is nil for single-select mode
+		m.overlay = OverlayCompletion
 
 		// Should not panic.
-		updated, _ := m.Update(spaceKey())
+		updated, _ := m.Update(tabKey())
 		_ = updated.(*Model)
 	})
 }
@@ -226,15 +241,13 @@ func TestOverlay_CompletionToggle(t *testing.T) {
 func TestOverlay_CompletionAccept(t *testing.T) {
 	t.Run("single_select", func(t *testing.T) {
 		m := newTestModel(t)
-		m.completionActive = true
-		m.overlay = OverlayCompletion
-		m.completionType = "command"
-		m.completionItems = []Completion{
+		items := []Completion{
 			{Label: "/help", Insert: "/help "},
 			{Label: "/clear", Insert: "/clear "},
 		}
-		m.completionIndex = 1
-		m.initListModel("command", m.completionItems)
+		m.completionState = newCompletionState("command", items, false)
+		m.completionState.Index = 1
+		m.overlay = OverlayCompletion
 
 		updated, _ := m.Update(enterKey())
 		m = updated.(*Model)
@@ -242,7 +255,7 @@ func TestOverlay_CompletionAccept(t *testing.T) {
 		if m.input.Value() != "/clear " {
 			t.Errorf("input should be '/clear ', got %q", m.input.Value())
 		}
-		if m.completionActive {
+		if m.isCompletionActive() {
 			t.Error("completion should be closed after accept")
 		}
 		if m.overlay != OverlayNone {
@@ -252,17 +265,15 @@ func TestOverlay_CompletionAccept(t *testing.T) {
 
 	t.Run("multi_select_with_selections", func(t *testing.T) {
 		m := newTestModel(t)
-		m.completionActive = true
-		m.overlay = OverlayCompletion
-		m.completionType = "attachments"
-		m.completionItems = []Completion{
+		items := []Completion{
 			{Label: "@file1", Insert: "@file1 "},
 			{Label: "@file2", Insert: "@file2 "},
 			{Label: "@file3", Insert: "@file3 "},
 		}
-		m.completionIndex = 0
-		m.completionSelected = map[int]bool{0: true, 2: true}
-		m.initListModel("attachments", m.completionItems)
+		m.completionState = newCompletionState("attachments", items, true)
+		m.completionState.Selected[0] = true
+		m.completionState.Selected[2] = true
+		m.overlay = OverlayCompletion
 
 		updated, _ := m.Update(enterKey())
 		m = updated.(*Model)
@@ -272,23 +283,20 @@ func TestOverlay_CompletionAccept(t *testing.T) {
 		if val == "" {
 			t.Error("input should not be empty with multi-select")
 		}
-		if m.completionActive {
+		if m.isCompletionActive() {
 			t.Error("completion should be closed after accept")
 		}
 	})
 
 	t.Run("multi_select_empty_fallback", func(t *testing.T) {
 		m := newTestModel(t)
-		m.completionActive = true
-		m.overlay = OverlayCompletion
-		m.completionType = "attachments"
-		m.completionItems = []Completion{
+		items := []Completion{
 			{Label: "@file1", Insert: "@file1 "},
 			{Label: "@file2", Insert: "@file2 "},
 		}
-		m.completionIndex = 1
-		m.completionSelected = map[int]bool{} // empty
-		m.initListModel("attachments", m.completionItems)
+		m.completionState = newCompletionState("attachments", items, true)
+		m.completionState.Index = 1
+		m.overlay = OverlayCompletion
 
 		updated, _ := m.Update(enterKey())
 		m = updated.(*Model)

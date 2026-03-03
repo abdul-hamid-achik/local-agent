@@ -73,11 +73,51 @@ type CommandResultMsg struct {
 	Text string
 }
 
-// MCPStatusMsg carries MCP connection results for display in the TUI.
-type MCPStatusMsg struct {
-	Connected     int
-	ToolCount     int
-	FailedServers []FailedServer
+// StartupStatusMsg reports progress of a single startup task (Ollama, MCP server, ICE).
+type StartupStatusMsg struct {
+	ID     string // unique key: "ollama", "mcp:<name>", "ice"
+	Label  string // display name: "Ollama (qwen3:8b)", "docker-gateway"
+	Status string // "connecting", "connected", "failed"
+	Detail string // e.g. "110 tools", error message
+}
+
+// CompletionSearchResultMsg delivers async vecgrep search results.
+type CompletionSearchResultMsg struct {
+	Tag     int
+	Results []Completion
+}
+
+// CompletionDebounceTickMsg fires after the debounce interval to trigger a search.
+type CompletionDebounceTickMsg struct {
+	Tag   int
+	Query string
+}
+
+// PlanFormCompletedMsg signals the plan form has been submitted with a structured prompt.
+type PlanFormCompletedMsg struct {
+	Prompt string
+}
+
+// DoneFlashExpiredMsg clears the "done" terminal title after a timeout.
+type DoneFlashExpiredMsg struct{}
+
+// SessionCreatedMsg signals a session note was created via noted.
+type SessionCreatedMsg struct {
+	NoteID int
+	Err    error
+}
+
+// SessionListMsg delivers the list of saved sessions from noted.
+type SessionListMsg struct {
+	Sessions []SessionListItem
+	Err      error
+}
+
+// SessionLoadedMsg delivers a loaded session's entries from noted.
+type SessionLoadedMsg struct {
+	Entries []ChatEntry
+	Title   string
+	Err     error
 }
 
 // sendMsg is a helper to send a tea.Msg to the program.

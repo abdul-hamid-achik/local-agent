@@ -10,25 +10,30 @@ import (
 type MarkdownRenderer struct {
 	renderer *glamour.TermRenderer
 	width    int
+	isDark   bool
 }
 
-func glamourStyle() string {
+func glamourStyle(isDark bool) string {
 	if noColor {
 		return "notty"
 	}
-	return "dark"
+	if isDark {
+		return "dark"
+	}
+	return "light"
 }
 
-// NewMarkdownRenderer creates a renderer for the given terminal width.
-func NewMarkdownRenderer(width int) *MarkdownRenderer {
+// NewMarkdownRenderer creates a renderer for the given terminal width and theme.
+func NewMarkdownRenderer(width int, isDark bool) *MarkdownRenderer {
 	r, _ := glamour.NewTermRenderer(
-		glamour.WithStandardStyle(glamourStyle()),
+		glamour.WithStandardStyle(glamourStyle(isDark)),
 		glamour.WithWordWrap(width-4),
 	)
 
 	return &MarkdownRenderer{
 		renderer: r,
 		width:    width,
+		isDark:   isDark,
 	}
 }
 
@@ -57,7 +62,7 @@ func (mr *MarkdownRenderer) RenderStreaming(content string) string {
 func (mr *MarkdownRenderer) SetWidth(width int) {
 	mr.width = width
 	r, err := glamour.NewTermRenderer(
-		glamour.WithStandardStyle(glamourStyle()),
+		glamour.WithStandardStyle(glamourStyle(mr.isDark)),
 		glamour.WithWordWrap(width-4),
 	)
 	if err == nil {

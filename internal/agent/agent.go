@@ -21,15 +21,18 @@ type Agent struct {
 	memoryStore  *memory.Store
 	iceEngine    *ice.Engine
 	router       *config.Router
-	currentModel string
+	modePrefix   string
+	toolsEnabled bool
+	workDir      string
 }
 
 // New creates a new Agent.
 func New(llmClient llm.Client, registry *mcp.Registry, numCtx int) *Agent {
 	return &Agent{
-		llmClient: llmClient,
-		registry:  registry,
-		numCtx:    numCtx,
+		llmClient:    llmClient,
+		registry:     registry,
+		numCtx:       numCtx,
+		toolsEnabled: true,
 	}
 }
 
@@ -38,9 +41,11 @@ func (a *Agent) SetRouter(router *config.Router) {
 	a.router = router
 }
 
-// SetCurrentModel sets the current model.
-func (a *Agent) SetCurrentModel(model string) {
-	a.currentModel = model
+// SetModeContext configures the mode prefix injected into the system prompt
+// and whether tools are available for the current turn.
+func (a *Agent) SetModeContext(prefix string, allowTools bool) {
+	a.modePrefix = prefix
+	a.toolsEnabled = allowTools
 }
 
 // AppendLoadedContext appends to the loaded context.
@@ -117,6 +122,11 @@ func (a *Agent) ServerCount() int {
 // ServerNames returns the names of connected MCP servers.
 func (a *Agent) ServerNames() []string {
 	return a.registry.ServerNames()
+}
+
+// SetWorkDir sets the working directory for environment context in the system prompt.
+func (a *Agent) SetWorkDir(dir string) {
+	a.workDir = dir
 }
 
 // SetICEEngine sets the ICE engine for cross-session context retrieval.

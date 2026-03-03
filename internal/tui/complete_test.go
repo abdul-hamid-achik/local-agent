@@ -9,7 +9,7 @@ import (
 func TestCompleter_Complete(t *testing.T) {
 	reg := command.NewRegistry()
 	command.RegisterBuiltins(reg)
-	c := NewCompleter(reg, []string{"model-a"}, []string{"skill-a", "skill-b"}, []string{"agent-x"})
+	c := NewCompleter(reg, []string{"model-a"}, []string{"skill-a", "skill-b"}, []string{"agent-x"}, nil)
 
 	t.Run("slash_dispatches_to_commands", func(t *testing.T) {
 		results := c.Complete("/h")
@@ -59,7 +59,7 @@ func TestCompleter_Complete(t *testing.T) {
 func TestCompleteCommand(t *testing.T) {
 	reg := command.NewRegistry()
 	command.RegisterBuiltins(reg)
-	c := NewCompleter(reg, nil, nil, nil)
+	c := NewCompleter(reg, nil, nil, nil, nil)
 
 	t.Run("prefix_matching", func(t *testing.T) {
 		results := c.Complete("/hel")
@@ -110,7 +110,7 @@ func TestCompleteCommand(t *testing.T) {
 
 func TestCompleteSkill(t *testing.T) {
 	reg := command.NewRegistry()
-	c := NewCompleter(reg, nil, []string{"coding", "writing", "debugging"}, nil)
+	c := NewCompleter(reg, nil, []string{"coding", "writing", "debugging"}, nil, nil)
 
 	t.Run("prefix_matching", func(t *testing.T) {
 		results := c.Complete("#cod")
@@ -142,7 +142,7 @@ func TestCompleteSkill(t *testing.T) {
 
 func TestCompleterUpdateModels(t *testing.T) {
 	reg := command.NewRegistry()
-	c := NewCompleter(reg, []string{"old-model"}, nil, nil)
+	c := NewCompleter(reg, []string{"old-model"}, nil, nil, nil)
 
 	c.UpdateModels([]string{"new-model-a", "new-model-b"})
 
@@ -156,7 +156,7 @@ func TestCompleterUpdateModels(t *testing.T) {
 
 func TestCompleterUpdateAgents(t *testing.T) {
 	reg := command.NewRegistry()
-	c := NewCompleter(reg, nil, nil, []string{"old-agent"})
+	c := NewCompleter(reg, nil, nil, []string{"old-agent"}, nil)
 
 	c.UpdateAgents([]string{"new-agent"})
 

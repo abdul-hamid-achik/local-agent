@@ -2,6 +2,8 @@ package agent
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -10,24 +12,28 @@ import (
 )
 
 const systemTemplate = `You are a helpful personal assistant running locally on the user's machine.
-You have access to tools via MCP servers. Use them when the user's request requires it.
-
+You have access to tools via MCP servers. You MUST use tools to accomplish tasks — do not guess or make up answers when a tool can provide the real information.
+%s
 Current date: %s
+%s
 %s%s%s
 ## Available Tools
 %s
 ## Guidelines
+- **ALWAYS use your tools** when the user asks you to read, explore, search, or modify files. You have filesystem tools — use them.
+- When the user says "read this codebase" or similar, use list/read tools starting from the working directory shown above.
 - Be concise and direct in your responses.
 - When a tool call fails, explain what happened and suggest alternatives.
 - For multi-step tasks, explain your plan briefly before executing.
 - Format responses in markdown when it improves readability.
 - If you're unsure about something, say so rather than guessing.
 - Never fabricate tool results — always call the actual tool.
+- Do NOT claim you cannot access files or the filesystem. You have tools for that — use them.
 %s`
 
 // buildSystemPrompt generates the system prompt with current tool info,
 // active skills, loaded context, memory, and optional ICE context.
-func buildSystemPrompt(tools []llm.ToolDef, skillContent, loadedContext string, memStore *memory.Store, iceContext string) string {
+func buildSystemPrompt(modePrefix string, tools []llm.ToolDef, skillContent, loadedContext string, memStore *memory.Store, iceContext, workDir string) string {
 	var toolList strings.Builder
 	if len(tools) == 0 {
 		toolList.WriteString("No tools currently available.\n")
@@ -36,6 +42,8 @@ func buildSystemPrompt(tools []llm.ToolDef, skillContent, loadedContext string, 
 			fmt.Fprintf(&toolList, "- **%s**: %s\n", t.Name, t.Description)
 		}
 	}
+
+	envSection := buildEnvironmentSection(workDir)
 
 	var skillSection string
 	if skillContent != "" {
@@ -67,14 +75,72 @@ func buildSystemPrompt(tools []llm.ToolDef, skillContent, loadedContext string, 
 `
 	}
 
+	var modePrefixSection string
+	if modePrefix != "" {
+		modePrefixSection = "\n" + modePrefix + "\n"
+	}
+
 	return fmt.Sprintf(systemTemplate,
+		modePrefixSection,
 		time.Now().Format("Monday, January 2, 2006"),
+		envSection,
 		skillSection,
 		ctxSection,
 		memorySection,
 		toolList.String(),
 		memoryGuidelines,
 	)
+}
+
+// buildEnvironmentSection creates the environment context section.
+func buildEnvironmentSection(workDir string) string {
+	if workDir == "" {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("\n## Environment\n")
+	b.WriteString(fmt.Sprintf("Working directory: %s\n", workDir))
+
+	// Auto-detect project type from marker files.
+	if info := detectProjectInfo(workDir); info != "" {
+		b.WriteString(info)
+	}
+
+	return b.String()
+}
+
+// detectProjectInfo looks for common project marker files and returns a brief description.
+func detectProjectInfo(workDir string) string {
+	markers := []struct {
+		file string
+		desc string
+	}{
+		{"go.mod", "Go module"},
+		{"package.json", "Node.js/JavaScript"},
+		{"Cargo.toml", "Rust"},
+		{"pyproject.toml", "Python"},
+		{"setup.py", "Python"},
+		{"Makefile", ""},
+		{"Taskfile.yml", ""},
+	}
+
+	var found []string
+	for _, m := range markers {
+		if _, err := os.Stat(filepath.Join(workDir, m.file)); err == nil {
+			if m.desc != "" {
+				found = append(found, fmt.Sprintf("%s (%s)", m.file, m.desc))
+			} else {
+				found = append(found, m.file)
+			}
+		}
+	}
+
+	if len(found) == 0 {
+		return ""
+	}
+
+	return fmt.Sprintf("Project markers: %s\n", strings.Join(found, ", "))
 }
 
 // buildMemorySection creates the remembered facts section from recent memories.

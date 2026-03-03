@@ -152,3 +152,49 @@ func TestIndentBlock(t *testing.T) {
 		}
 	})
 }
+
+func TestContextPctInHeader(t *testing.T) {
+	t.Run("no_pct_when_zero_tokens", func(t *testing.T) {
+		m := newTestModel(t)
+		m.model = "test-model"
+		m.promptTokens = 0
+		m.numCtx = 8192
+		header := m.renderHeader()
+		if strings.Contains(header, "%") {
+			t.Error("should not show percentage when promptTokens is 0")
+		}
+	})
+
+	t.Run("no_pct_when_zero_numCtx", func(t *testing.T) {
+		m := newTestModel(t)
+		m.model = "test-model"
+		m.promptTokens = 1000
+		m.numCtx = 0
+		header := m.renderHeader()
+		if strings.Contains(header, "%") {
+			t.Error("should not show percentage when numCtx is 0")
+		}
+	})
+
+	t.Run("correct_percentage", func(t *testing.T) {
+		m := newTestModel(t)
+		m.model = "test-model"
+		m.promptTokens = 4096
+		m.numCtx = 8192
+		header := m.renderHeader()
+		if !strings.Contains(header, "50%") {
+			t.Errorf("expected header to contain '50%%', got %q", header)
+		}
+	})
+
+	t.Run("high_percentage", func(t *testing.T) {
+		m := newTestModel(t)
+		m.model = "test-model"
+		m.promptTokens = 7500
+		m.numCtx = 8192
+		header := m.renderHeader()
+		if !strings.Contains(header, "91%") {
+			t.Errorf("expected header to contain '91%%', got %q", header)
+		}
+	})
+}

@@ -7,16 +7,16 @@ func TestTriggerCompletion(t *testing.T) {
 		m := newTestModel(t)
 		m.triggerCompletion("/")
 
-		if !m.completionActive {
+		if !m.isCompletionActive() {
 			t.Error("/ should activate completion")
 		}
-		if m.completionType != "command" {
-			t.Errorf("expected type 'command', got %q", m.completionType)
+		if m.completionState.Kind != "command" {
+			t.Errorf("expected kind 'command', got %q", m.completionState.Kind)
 		}
 		if m.overlay != OverlayCompletion {
 			t.Errorf("expected OverlayCompletion, got %d", m.overlay)
 		}
-		if len(m.completionItems) == 0 {
+		if len(m.completionState.AllItems) == 0 {
 			t.Error("should have completion items for /")
 		}
 	})
@@ -28,12 +28,12 @@ func TestTriggerCompletion(t *testing.T) {
 		// @ triggers agent/file completion.
 		// It may or may not find matches depending on agents + cwd.
 		// If agents exist, it should activate.
-		if m.completionActive {
-			if m.completionType != "attachments" {
-				t.Errorf("expected type 'attachments', got %q", m.completionType)
+		if m.isCompletionActive() {
+			if m.completionState.Kind != "attachments" {
+				t.Errorf("expected kind 'attachments', got %q", m.completionState.Kind)
 			}
-			if m.completionSelected == nil {
-				t.Error("attachments should initialize completionSelected map")
+			if m.completionState.Selected == nil {
+				t.Error("attachments should initialize Selected map")
 			}
 		}
 	})
@@ -42,14 +42,14 @@ func TestTriggerCompletion(t *testing.T) {
 		m := newTestModel(t)
 		m.triggerCompletion("#")
 
-		if !m.completionActive {
+		if !m.isCompletionActive() {
 			t.Error("# should activate completion for skills")
 		}
-		if m.completionType != "skills" {
-			t.Errorf("expected type 'skills', got %q", m.completionType)
+		if m.completionState.Kind != "skills" {
+			t.Errorf("expected kind 'skills', got %q", m.completionState.Kind)
 		}
-		if m.completionSelected == nil {
-			t.Error("skills should initialize completionSelected map")
+		if m.completionState.Selected == nil {
+			t.Error("skills should initialize Selected map")
 		}
 	})
 
@@ -57,7 +57,7 @@ func TestTriggerCompletion(t *testing.T) {
 		m := newTestModel(t)
 		m.triggerCompletion("/zzzznonexistent")
 
-		if m.completionActive {
+		if m.isCompletionActive() {
 			t.Error("should not activate with no matches")
 		}
 	})
@@ -66,7 +66,7 @@ func TestTriggerCompletion(t *testing.T) {
 		m := newTestModel(t)
 		m.triggerCompletion("hello")
 
-		if m.completionActive {
+		if m.isCompletionActive() {
 			t.Error("plain text should not trigger completion")
 		}
 	})
@@ -75,21 +75,20 @@ func TestTriggerCompletion(t *testing.T) {
 func TestAcceptCompletion(t *testing.T) {
 	t.Run("single_select", func(t *testing.T) {
 		m := newTestModel(t)
-		m.completionActive = true
-		m.completionType = "command"
-		m.completionItems = []Completion{
+		items := []Completion{
 			{Label: "/help", Insert: "/help "},
 			{Label: "/clear", Insert: "/clear "},
 		}
-		m.completionIndex = 0
-		m.initListModel("command", m.completionItems)
+		m.completionState = newCompletionState("command", items, false)
+		m.overlay = OverlayCompletion
+		m.completionState.Index = 0
 
 		m.acceptCompletion()
 
 		if m.input.Value() != "/help " {
 			t.Errorf("expected '/help ', got %q", m.input.Value())
 		}
-		if m.completionActive {
+		if m.isCompletionActive() {
 			t.Error("should be inactive after accept")
 		}
 		if m.overlay != OverlayNone {
@@ -99,38 +98,35 @@ func TestAcceptCompletion(t *testing.T) {
 
 	t.Run("multi_select_with_selections", func(t *testing.T) {
 		m := newTestModel(t)
-		m.completionActive = true
-		m.completionType = "attachments"
-		m.completionItems = []Completion{
+		items := []Completion{
 			{Label: "@a", Insert: "@a "},
 			{Label: "@b", Insert: "@b "},
 			{Label: "@c", Insert: "@c "},
 		}
-		m.completionIndex = 0
-		m.completionSelected = map[int]bool{1: true}
-		m.initListModel("attachments", m.completionItems)
+		m.completionState = newCompletionState("attachments", items, true)
+		m.overlay = OverlayCompletion
+		m.completionState.Index = 0
+		m.completionState.Selected[1] = true
 
 		m.acceptCompletion()
 
 		if m.input.Value() != "@b " {
 			t.Errorf("expected '@b ', got %q", m.input.Value())
 		}
-		if m.completionActive {
+		if m.isCompletionActive() {
 			t.Error("should be inactive after accept")
 		}
 	})
 
 	t.Run("multi_select_empty_fallback", func(t *testing.T) {
 		m := newTestModel(t)
-		m.completionActive = true
-		m.completionType = "attachments"
-		m.completionItems = []Completion{
+		items := []Completion{
 			{Label: "@x", Insert: "@x "},
 			{Label: "@y", Insert: "@y "},
 		}
-		m.completionIndex = 1
-		m.completionSelected = map[int]bool{}
-		m.initListModel("attachments", m.completionItems)
+		m.completionState = newCompletionState("attachments", items, true)
+		m.overlay = OverlayCompletion
+		m.completionState.Index = 1
 
 		m.acceptCompletion()
 
@@ -141,7 +137,7 @@ func TestAcceptCompletion(t *testing.T) {
 
 	t.Run("inactive_noop", func(t *testing.T) {
 		m := newTestModel(t)
-		m.completionActive = false
+		m.completionState = nil
 		m.input.SetValue("original")
 
 		m.acceptCompletion()
@@ -154,27 +150,54 @@ func TestAcceptCompletion(t *testing.T) {
 
 func TestCloseCompletion(t *testing.T) {
 	m := newTestModel(t)
-	m.completionActive = true
-	m.completionItems = []Completion{{Label: "test"}}
-	m.completionIndex = 5
-	m.completionSelected = map[int]bool{0: true}
+	items := []Completion{{Label: "test"}}
+	m.completionState = newCompletionState("command", items, true)
+	m.completionState.Index = 5
+	m.completionState.Selected[0] = true
 	m.overlay = OverlayCompletion
 
 	m.closeCompletion()
 
-	if m.completionActive {
-		t.Error("completionActive should be false")
-	}
-	if m.completionItems != nil {
-		t.Error("completionItems should be nil")
-	}
-	if m.completionIndex != 0 {
-		t.Errorf("completionIndex should be 0, got %d", m.completionIndex)
-	}
-	if m.completionSelected != nil {
-		t.Error("completionSelected should be nil")
+	if m.isCompletionActive() {
+		t.Error("completionState should be nil")
 	}
 	if m.overlay != OverlayNone {
 		t.Errorf("overlay should be OverlayNone, got %d", m.overlay)
 	}
+}
+
+func TestFilterCompletions(t *testing.T) {
+	items := []Completion{
+		{Label: "/help"},
+		{Label: "/clear"},
+		{Label: "/model"},
+	}
+
+	t.Run("empty_query_returns_all", func(t *testing.T) {
+		filtered := FilterCompletions(items, "")
+		if len(filtered) != 3 {
+			t.Errorf("expected 3, got %d", len(filtered))
+		}
+	})
+
+	t.Run("filters_by_substring", func(t *testing.T) {
+		filtered := FilterCompletions(items, "el")
+		if len(filtered) != 2 {
+			t.Errorf("expected 2 (help, model), got %d", len(filtered))
+		}
+	})
+
+	t.Run("case_insensitive", func(t *testing.T) {
+		filtered := FilterCompletions(items, "HELP")
+		if len(filtered) != 1 {
+			t.Errorf("expected 1, got %d", len(filtered))
+		}
+	})
+
+	t.Run("no_match", func(t *testing.T) {
+		filtered := FilterCompletions(items, "zzz")
+		if len(filtered) != 0 {
+			t.Errorf("expected 0, got %d", len(filtered))
+		}
+	})
 }

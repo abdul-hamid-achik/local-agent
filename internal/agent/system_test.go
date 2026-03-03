@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -53,7 +54,7 @@ func TestBuildSystemPrompt(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := buildSystemPrompt(tt.tools, tt.skillContent, tt.loadedCtx, tt.memStore, tt.iceContext)
+			result := buildSystemPrompt("", tt.tools, tt.skillContent, tt.loadedCtx, tt.memStore, tt.iceContext, "")
 			for _, want := range tt.contains {
 				if !strings.Contains(result, want) {
 					t.Errorf("buildSystemPrompt() missing %q", want)
@@ -71,7 +72,7 @@ func TestBuildSystemPrompt(t *testing.T) {
 	t.Run("with memory store entries", func(t *testing.T) {
 		store := memory.NewStore(filepath.Join(t.TempDir(), "test-memories.json"))
 		_, _ = store.Save("user prefers dark mode", []string{"preference"})
-		result := buildSystemPrompt(nil, "", "", store, "")
+		result := buildSystemPrompt("", nil, "", "", store, "", "")
 		if !strings.Contains(result, "Remembered Facts") {
 			t.Error("expected Remembered Facts section")
 		}
@@ -79,6 +80,44 @@ func TestBuildSystemPrompt(t *testing.T) {
 			t.Error("expected memory content in prompt")
 		}
 	})
+}
+
+func TestBuildSystemPrompt_WithWorkDir(t *testing.T) {
+	result := buildSystemPrompt("", nil, "", "", nil, "", "/home/user/myproject")
+	if !strings.Contains(result, "Working directory: /home/user/myproject") {
+		t.Error("expected working directory in prompt")
+	}
+	if !strings.Contains(result, "Environment") {
+		t.Error("expected Environment section header")
+	}
+}
+
+func TestBuildSystemPrompt_EmptyWorkDir(t *testing.T) {
+	result := buildSystemPrompt("", nil, "", "", nil, "", "")
+	if strings.Contains(result, "Working directory") {
+		t.Error("should not include working directory when empty")
+	}
+}
+
+func TestDetectProjectInfo_GoProject(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module test"), 0o644)
+
+	info := detectProjectInfo(dir)
+	if !strings.Contains(info, "go.mod") {
+		t.Errorf("expected go.mod in project info, got %q", info)
+	}
+	if !strings.Contains(info, "Go module") {
+		t.Errorf("expected 'Go module' in project info, got %q", info)
+	}
+}
+
+func TestDetectProjectInfo_EmptyDir(t *testing.T) {
+	dir := t.TempDir()
+	info := detectProjectInfo(dir)
+	if info != "" {
+		t.Errorf("expected empty for dir with no markers, got %q", info)
+	}
 }
 
 func TestBuildMemorySection(t *testing.T) {

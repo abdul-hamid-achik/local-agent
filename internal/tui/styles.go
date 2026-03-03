@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"image/color"
 	"os"
 	"strings"
 
@@ -51,6 +52,50 @@ type Styles struct {
 	// Completion popup
 	CompletionBorder   lipgloss.Style
 	CompletionSelected lipgloss.Style
+
+	// Completion modal
+	CompletionFilter    lipgloss.Style
+	CompletionCursor    lipgloss.Style
+	CompletionCategory  lipgloss.Style
+	CompletionFooter    lipgloss.Style
+	CompletionSearching lipgloss.Style
+
+	// Startup progress
+	StartupCheck  lipgloss.Style
+	StartupFail   lipgloss.Style
+	StartupLabel  lipgloss.Style
+	StartupDetail lipgloss.Style
+	StartupSpin   lipgloss.Style
+
+	// Mode badges
+	ModeAsk   lipgloss.Style
+	ModePlan  lipgloss.Style
+	ModeBuild lipgloss.Style
+
+	// Context percentage fuel gauge
+	ContextPctLow  lipgloss.Style
+	ContextPctMid  lipgloss.Style
+	ContextPctHigh lipgloss.Style
+
+	// Tool type rendering
+	ToolBashCmd lipgloss.Style
+
+	// Diff view
+	DiffAdded   lipgloss.Style
+	DiffRemoved lipgloss.Style
+	DiffContext lipgloss.Style
+	DiffHeader  lipgloss.Style
+
+	// Thinking display
+	ThinkingHeader  lipgloss.Style
+	ThinkingContent lipgloss.Style
+	ThinkingBorder  lipgloss.Style
+
+	// Shared overlay styles (used by help, model picker, sessions, plan form, completion)
+	OverlayTitle  lipgloss.Style
+	OverlayBorder color.Color
+	OverlayAccent lipgloss.Style
+	OverlayDim    lipgloss.Style
 }
 
 // NewStyles creates a Styles set based on the background color.
@@ -157,6 +202,84 @@ func adaptiveStyles(isDark bool) Styles {
 		CompletionSelected: lipgloss.NewStyle().
 			Foreground(colorAccent).
 			Bold(true),
+
+		CompletionFilter: lipgloss.NewStyle().
+			Foreground(colorText),
+		CompletionCursor: lipgloss.NewStyle().
+			Foreground(colorAccent).
+			Bold(true),
+		CompletionCategory: lipgloss.NewStyle().
+			Foreground(colorDim),
+		CompletionFooter: lipgloss.NewStyle().
+			Foreground(colorDim).
+			Italic(true),
+		CompletionSearching: lipgloss.NewStyle().
+			Foreground(colorSpecial).
+			Italic(true),
+
+		StartupCheck: lipgloss.NewStyle().
+			Foreground(colorSuccess),
+		StartupFail: lipgloss.NewStyle().
+			Foreground(colorError),
+		StartupLabel: lipgloss.NewStyle().
+			Foreground(colorText),
+		StartupDetail: lipgloss.NewStyle().
+			Foreground(colorDim),
+		StartupSpin: lipgloss.NewStyle().
+			Foreground(colorAccent),
+
+		ModeAsk: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(colorAccent2),
+		ModePlan: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(ld(lipgloss.Color("#bb8800"), lipgloss.Color("#ebcb8b"))),
+		ModeBuild: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(colorSuccess),
+
+		ContextPctLow: lipgloss.NewStyle().
+			Foreground(colorSuccess),
+		ContextPctMid: lipgloss.NewStyle().
+			Foreground(ld(lipgloss.Color("#bb8800"), lipgloss.Color("#ebcb8b"))),
+		ContextPctHigh: lipgloss.NewStyle().
+			Foreground(colorError),
+
+		ToolBashCmd: lipgloss.NewStyle().
+			Foreground(colorDim).
+			Italic(true),
+
+		DiffAdded: lipgloss.NewStyle().
+			Foreground(colorSuccess).
+			PaddingLeft(6),
+		DiffRemoved: lipgloss.NewStyle().
+			Foreground(colorError).
+			PaddingLeft(6),
+		DiffContext: lipgloss.NewStyle().
+			Foreground(colorDim).
+			PaddingLeft(6),
+		DiffHeader: lipgloss.NewStyle().
+			Foreground(colorAccent).
+			PaddingLeft(6),
+
+		ThinkingHeader: lipgloss.NewStyle().
+			Foreground(colorSpecial).
+			Italic(true),
+		ThinkingContent: lipgloss.NewStyle().
+			Foreground(colorDim).
+			PaddingLeft(4),
+		ThinkingBorder: lipgloss.NewStyle().
+			Foreground(colorMuted),
+
+		OverlayTitle: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(colorAccent),
+		OverlayBorder: ld(lipgloss.Color("#bbbbbb"), lipgloss.Color("#4c566a")),
+		OverlayAccent: lipgloss.NewStyle().
+			Foreground(colorAccent2).
+			Bold(true),
+		OverlayDim: lipgloss.NewStyle().
+			Foreground(colorDim),
 	}
 }
 
@@ -199,6 +322,42 @@ func plainStyles() Styles {
 
 		CompletionBorder:   p,
 		CompletionSelected: b,
+
+		CompletionFilter:    p,
+		CompletionCursor:    b,
+		CompletionCategory:  p,
+		CompletionFooter:    p.Italic(true),
+		CompletionSearching: p.Italic(true),
+
+		StartupCheck:  p,
+		StartupFail:   b,
+		StartupLabel:  p,
+		StartupDetail: p,
+		StartupSpin:   p,
+
+		ModeAsk:   b,
+		ModePlan:  b,
+		ModeBuild: b,
+
+		ContextPctLow:  p,
+		ContextPctMid:  p,
+		ContextPctHigh: p,
+
+		ToolBashCmd: p.Italic(true),
+
+		DiffAdded:   pl4,
+		DiffRemoved: pl4,
+		DiffContext:  pl4,
+		DiffHeader:  pl4,
+
+		ThinkingHeader:  p.Italic(true),
+		ThinkingContent: pl4,
+		ThinkingBorder:  p,
+
+		OverlayTitle:  b,
+		OverlayBorder: lipgloss.Color(""),
+		OverlayAccent: b,
+		OverlayDim:    p,
 	}
 }
 

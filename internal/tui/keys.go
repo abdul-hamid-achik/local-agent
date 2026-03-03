@@ -20,6 +20,14 @@ type KeyMap struct {
 	CompleteUp     key.Binding
 	CompleteDown   key.Binding
 	CompleteToggle key.Binding
+	CompleteSelect key.Binding
+	CopyLast       key.Binding
+	CycleMode      key.Binding
+	ModelPicker    key.Binding
+	HistoryUp          key.Binding
+	HistoryDown        key.Binding
+	ToggleFocusedTool  key.Binding
+	ToggleThinking     key.Binding
 }
 
 // DefaultKeyMap returns the default keybindings.
@@ -86,8 +94,40 @@ func DefaultKeyMap() KeyMap {
 			key.WithHelp("down", "next completion"),
 		),
 		CompleteToggle: key.NewBinding(
-			key.WithKeys("space"),
-			key.WithHelp("space", "toggle selection"),
+			key.WithKeys("tab", "ctrl+i"),
+			key.WithHelp("tab", "toggle selection"),
+		),
+		CompleteSelect: key.NewBinding(
+			key.WithKeys("enter"),
+			key.WithHelp("enter", "select item"),
+		),
+		CopyLast: key.NewBinding(
+			key.WithKeys("y"),
+			key.WithHelp("y", "copy last response"),
+		),
+		CycleMode: key.NewBinding(
+			key.WithKeys("shift+tab"),
+			key.WithHelp("shift+tab", "cycle mode (ASK/PLAN/BUILD)"),
+		),
+		ModelPicker: key.NewBinding(
+			key.WithKeys("ctrl+m"),
+			key.WithHelp("ctrl+m", "quick model switch"),
+		),
+		HistoryUp: key.NewBinding(
+			key.WithKeys("up"),
+			key.WithHelp("↑", "previous input"),
+		),
+		HistoryDown: key.NewBinding(
+			key.WithKeys("down"),
+			key.WithHelp("↓", "next input"),
+		),
+		ToggleFocusedTool: key.NewBinding(
+			key.WithKeys(" "),
+			key.WithHelp("space", "toggle last tool details"),
+		),
+		ToggleThinking: key.NewBinding(
+			key.WithKeys("ctrl+t"),
+			key.WithHelp("ctrl+t", "toggle thinking display"),
 		),
 	}
 }
@@ -101,7 +141,10 @@ func (k KeyMap) ShortHelp() []key.Binding {
 func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Send, k.NewLine, k.Cancel, k.Quit},
-		{k.ClearView, k.NewConvo, k.Help, k.ToggleTools},
+		{k.ClearView, k.NewConvo, k.Help, k.ToggleTools, k.CopyLast},
 		{k.PageUp, k.PageDown, k.HalfPageUp, k.HalfPageDn},
+		{k.CycleMode, k.ModelPicker},
+		{k.HistoryUp, k.HistoryDown},
+		{k.ToggleFocusedTool, k.ToggleThinking},
 	}
 }
