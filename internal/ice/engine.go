@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/abdulachik/local-agent/internal/llm"
-	"github.com/abdulachik/local-agent/internal/memory"
+	"github.com/abdul-hamid-achik/local-agent/internal/llm"
+	"github.com/abdul-hamid-achik/local-agent/internal/memory"
 )
 
 // EngineConfig holds the configuration needed to create an Engine.

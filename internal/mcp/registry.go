@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/abdulachik/local-agent/internal/config"
-	"github.com/abdulachik/local-agent/internal/llm"
+	"github.com/abdul-hamid-achik/local-agent/internal/config"
+	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 )
 
 // FailedServer records an MCP server that failed to connect.

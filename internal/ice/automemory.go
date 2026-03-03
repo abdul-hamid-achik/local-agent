@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/abdulachik/local-agent/internal/llm"
-	"github.com/abdulachik/local-agent/internal/memory"
+	"github.com/abdul-hamid-achik/local-agent/internal/llm"
+	"github.com/abdul-hamid-achik/local-agent/internal/memory"
 )
 
 var autoMemorySystemPrompt = "Extract any important facts, user preferences, decisions, or action items from this exchange.\n" +

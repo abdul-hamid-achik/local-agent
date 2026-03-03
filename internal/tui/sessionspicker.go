@@ -92,7 +92,7 @@ func (m *Model) renderSessionsPicker() string {
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(m.styles.OverlayBorder).
+		BorderForeground(m.styles.FocusIndicator.GetForeground()).
 		Padding(0, 1).
 		Width(maxW)
 

@@ -7,7 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/abdulachik/local-agent/internal/llm"
+	"github.com/abdul-hamid-achik/local-agent/internal/llm"
+	permissionPkg "github.com/abdul-hamid-achik/local-agent/internal/permission"
 )
 
 // Run executes the ReAct loop: query -> LLM -> tool calls -> observe -> repeat.
@@ -34,7 +35,7 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 		}
 	}
 
-	system := buildSystemPrompt(a.modePrefix, tools, a.skillContent, a.loadedCtx, a.memoryStore, iceContext, a.workDir)
+	system := buildSystemPrompt(a.modePrefix, tools, a.skillContent, a.loadedCtx, a.memoryStore, iceContext, a.workDir, a.ignoreContent)
 
 	const maxRetries = 2
 	var lastPromptTokens int
@@ -126,11 +127,10 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 
 		// Execute each tool call and feed results back.
 		for _, tc := range toolCalls {
-			out.ToolCallStart(tc.Name, tc.Arguments)
-			startTime := time.Now()
-
-			// Check if this is a built-in memory tool.
+			// Check if this is a built-in memory tool (no permission needed).
 			if a.memoryStore != nil && a.isMemoryTool(tc.Name) {
+				out.ToolCallStart(tc.Name, tc.Arguments)
+				startTime := time.Now()
 				result, isErr := a.handleMemoryTool(tc)
 				duration := time.Since(startTime)
 				out.ToolCallResult(tc.Name, result, isErr, duration)
@@ -142,6 +142,45 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 				})
 				continue
 			}
+
+			// Permission check for external tools.
+			if a.permChecker != nil {
+				switch a.permChecker.ToCheckResult(tc.Name) {
+				case permissionPkg.CheckDeny:
+					errMsg := "tool call blocked by permission policy"
+					out.ToolCallStart(tc.Name, tc.Arguments)
+					out.ToolCallResult(tc.Name, errMsg, true, 0)
+					a.messages = append(a.messages, llm.Message{
+						Role:       "tool",
+						Content:    errMsg,
+						ToolName:   tc.Name,
+						ToolCallID: tc.ID,
+					})
+					continue
+				case permissionPkg.CheckAsk:
+					if a.approvalCallback != nil {
+						allowed, always := permissionPkg.RequestApproval(tc.Name, tc.Arguments, a.approvalCallback)
+						if always {
+							a.permChecker.SetPolicy(tc.Name, permissionPkg.PolicyAllow)
+						}
+						if !allowed {
+							errMsg := "tool call denied by user"
+							out.ToolCallStart(tc.Name, tc.Arguments)
+							out.ToolCallResult(tc.Name, errMsg, true, 0)
+							a.messages = append(a.messages, llm.Message{
+								Role:       "tool",
+								Content:    errMsg,
+								ToolName:   tc.Name,
+								ToolCallID: tc.ID,
+							})
+							continue
+						}
+					}
+				}
+			}
+
+			out.ToolCallStart(tc.Name, tc.Arguments)
+			startTime := time.Now()
 
 			result, err := a.registry.CallTool(ctx, tc.Name, tc.Arguments)
 			duration := time.Since(startTime)
@@ -170,7 +209,7 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 		if a.shouldCompact(lastPromptTokens) {
 			if a.compact(ctx, out) {
 				// Rebuild system prompt after compaction (memory may have changed).
-				system = buildSystemPrompt(a.modePrefix, tools, a.skillContent, a.loadedCtx, a.memoryStore, iceContext, a.workDir)
+				system = buildSystemPrompt(a.modePrefix, tools, a.skillContent, a.loadedCtx, a.memoryStore, iceContext, a.workDir, a.ignoreContent)
 			}
 		}
 

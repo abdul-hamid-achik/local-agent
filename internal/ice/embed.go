@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/abdulachik/local-agent/internal/llm"
+	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 )
 
 const (

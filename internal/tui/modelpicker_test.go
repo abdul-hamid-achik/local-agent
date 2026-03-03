@@ -3,7 +3,7 @@ package tui
 import (
 	"testing"
 
-	"github.com/abdulachik/local-agent/internal/config"
+	"github.com/abdul-hamid-achik/local-agent/internal/config"
 )
 
 func TestModelPicker_OpenClose(t *testing.T) {

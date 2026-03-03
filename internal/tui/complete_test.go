@@ -3,7 +3,7 @@ package tui
 import (
 	"testing"
 
-	"github.com/abdulachik/local-agent/internal/command"
+	"github.com/abdul-hamid-achik/local-agent/internal/command"
 )
 
 func TestCompleter_Complete(t *testing.T) {

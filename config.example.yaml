@@ -2,12 +2,43 @@
 # Place at ~/.config/local-agent/config.yaml or ./local-agent.yaml
 
 ollama:
-  model: "qwen3:8b"
+  model: "qwen3.5:0.8b"
   base_url: "http://localhost:11434"
-  num_ctx: 32768
+  num_ctx: 262144
 
-# Skills directory (default: ~/.config/local-agent/skills/)
-# skills_dir: "/path/to/custom/skills"
+# Model routing suite (optional - for automatic model tier selection)
+# models:
+#   - name: "qwen3.5:0.8b"
+#     size: "0.8B"
+#     capability: "simple"
+#   - name: "qwen3.5:2b"
+#     size: "2B"
+#     capability: "medium"
+#   - name: "qwen3.5:4b"
+#     size: "4B"
+#     capability: "complex"
+#   - name: "qwen3.5:9b"
+#     size: "9B"
+#     capability: "advanced"
+
+# Embedding model for ICE (Infinite Context Engine)
+# embed_model: "nomic-embed-text"
+
+# UI Configuration (optional)
+# ui:
+#   # Theme: "dark", "light", or "auto" (default: auto - detects system theme)
+#   # The Nord theme will be applied automatically:
+#   # - Dark mode: Nord Polar Night (dark blues) + Frost (light text) + Aurora (colorful accents)
+#   # - Light mode: Nord Aurora Light (white background + same colorful accents)
+#   theme: "auto"
+#   # Syntax highlighting theme for code blocks (via Chroma)
+#   # Options: monokai, github, dracula, one-dark, solarized-dark, etc.
+#   # Default: monokai (dark), github (light)
+#   code_theme: "monokai"
+#   # Show line numbers in code blocks (default: false)
+#   code_line_numbers: false
+#   # Compact mode threshold (terminal width < this value triggers compact mode)
+#   compact_threshold: 80
 
 # MCP tool servers
 servers:

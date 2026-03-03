@@ -275,6 +275,59 @@ func RegisterBuiltins(r *Registry) {
 	})
 
 	r.Register(&Command{
+		Name:        "changes",
+		Description: "List files modified by the agent this session",
+		Handler: func(ctx *Context, _ []string) Result {
+			if len(ctx.FileChanges) == 0 {
+				return Result{Text: "No files modified this session."}
+			}
+			var b strings.Builder
+			fmt.Fprintf(&b, "Files modified (%d):\n", len(ctx.FileChanges))
+			for path, count := range ctx.FileChanges {
+				if count > 1 {
+					fmt.Fprintf(&b, "  ✎ %s (%dx)\n", path, count)
+				} else {
+					fmt.Fprintf(&b, "  ✎ %s\n", path)
+				}
+			}
+			return Result{Text: b.String()}
+		},
+	})
+
+	r.Register(&Command{
+		Name:        "commit",
+		Aliases:     []string{"ci"},
+		Description: "Generate commit message from staged changes and commit",
+		Handler: func(_ *Context, args []string) Result {
+			return Result{Action: ActionCommit, Data: strings.Join(args, " ")}
+		},
+	})
+
+	r.Register(&Command{
+		Name:        "stats",
+		Description: "Show token usage statistics for this session",
+		Handler: func(ctx *Context, _ []string) Result {
+			if ctx.SessionTurnCount == 0 {
+				return Result{Text: "No token usage recorded yet."}
+			}
+			var b strings.Builder
+			b.WriteString("Session Token Stats\n")
+			fmt.Fprintf(&b, "  Model:           %s\n", ctx.CurrentModel)
+			fmt.Fprintf(&b, "  Turns:           %d\n", ctx.SessionTurnCount)
+			fmt.Fprintf(&b, "  Output tokens:   %d\n", ctx.SessionEvalTotal)
+			fmt.Fprintf(&b, "  Prompt tokens:   %d (last turn)\n", ctx.SessionPromptTotal)
+			if ctx.NumCtx > 0 {
+				fmt.Fprintf(&b, "  Context window:  %d\n", ctx.NumCtx)
+				pct := ctx.SessionPromptTotal * 100 / ctx.NumCtx
+				fmt.Fprintf(&b, "  Context used:    %d%%\n", pct)
+			}
+			avgOut := ctx.SessionEvalTotal / ctx.SessionTurnCount
+			fmt.Fprintf(&b, "  Avg out/turn:    %d\n", avgOut)
+			return Result{Text: b.String()}
+		},
+	})
+
+	r.Register(&Command{
 		Name:        "exit",
 		Aliases:     []string{"quit", "q"},
 		Description: "Quit local-agent",

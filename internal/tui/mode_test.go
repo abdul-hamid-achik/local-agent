@@ -113,15 +113,15 @@ func TestDefaultModeConfigs(t *testing.T) {
 	if configs[ModeAsk].Label != "ASK" {
 		t.Errorf("ModeAsk label should be ASK, got %q", configs[ModeAsk].Label)
 	}
-	if configs[ModeAsk].AllowTools {
-		t.Error("ModeAsk should not allow tools")
+	if !configs[ModeAsk].AllowTools {
+		t.Error("ModeAsk should allow tools")
 	}
 
 	if configs[ModePlan].Label != "PLAN" {
 		t.Errorf("ModePlan label should be PLAN, got %q", configs[ModePlan].Label)
 	}
-	if configs[ModePlan].AllowTools {
-		t.Error("ModePlan should not allow tools")
+	if !configs[ModePlan].AllowTools {
+		t.Error("ModePlan should allow tools")
 	}
 
 	if configs[ModeBuild].Label != "BUILD" {

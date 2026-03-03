@@ -124,6 +124,22 @@ func (m *Model) updatePlanForm(msg tea.KeyPressMsg) (bool, bool) {
 			}
 			return false, false
 		}
+
+	case msg.Code == tea.KeyLeft:
+		if field.Kind == "select" {
+			if field.OptionIndex > 0 {
+				field.OptionIndex--
+			}
+			return false, false
+		}
+
+	case msg.Code == tea.KeyRight:
+		if field.Kind == "select" {
+			if field.OptionIndex < len(field.Options)-1 {
+				field.OptionIndex++
+			}
+			return false, false
+		}
 	}
 
 	// Forward other keys to active text field
@@ -169,7 +185,7 @@ func (m *Model) renderPlanForm() string {
 		return ""
 	}
 
-	activeStyle := m.styles.StartupCheck // reuse the success-colored style for active fields
+	activeStyle := m.styles.FocusIndicator // Use focus indicator style for active fields
 
 	var b strings.Builder
 	b.WriteString(m.styles.OverlayTitle.Render("Plan Task"))
@@ -188,7 +204,7 @@ func (m *Model) renderPlanForm() string {
 		switch field.Kind {
 		case "text":
 			if isActive {
-				b.WriteString("> " + field.Input.View())
+				b.WriteString(m.styles.FocusIndicator.Render("> ") + field.Input.View())
 			} else {
 				val := field.Input.Value()
 				if val == "" {
@@ -197,24 +213,32 @@ func (m *Model) renderPlanForm() string {
 				b.WriteString("  " + m.styles.OverlayDim.Render(val))
 			}
 		case "select":
-			var opts []string
 			for j, opt := range field.Options {
-				if j == field.OptionIndex {
-					if isActive {
-						opts = append(opts, activeStyle.Render("▸ "+opt))
-					} else {
-						opts = append(opts, opt)
-					}
-				} else {
-					opts = append(opts, m.styles.OverlayDim.Render(opt))
+				selected := j == field.OptionIndex
+				prefix := "  "
+				if selected && isActive {
+					prefix = m.styles.FocusIndicator.Render("▸ ")
+				} else if selected {
+					prefix = "● "
 				}
+				if selected && isActive {
+					b.WriteString("  " + activeStyle.Render(prefix+opt))
+				} else if selected {
+					b.WriteString("  " + prefix + opt)
+				} else {
+					b.WriteString("  " + m.styles.OverlayDim.Render(prefix+opt))
+				}
+				b.WriteString("\n")
 			}
-			b.WriteString("  " + strings.Join(opts, " / "))
 		}
 		b.WriteString("\n\n")
 	}
 
-	b.WriteString(m.styles.OverlayDim.Render("Tab=next  Enter=submit  Esc=cancel"))
+	if pf.Fields[pf.ActiveField].Kind == "select" {
+		b.WriteString(m.styles.OverlayDim.Render("↑↓←→=select  Tab/Enter=next  Esc=cancel"))
+	} else {
+		b.WriteString(m.styles.OverlayDim.Render("Tab=next field  Enter=submit  Esc=cancel"))
+	}
 
 	maxW := 50
 	if m.width-8 > maxW {
@@ -226,7 +250,7 @@ func (m *Model) renderPlanForm() string {
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(m.styles.OverlayBorder).
+		BorderForeground(lipgloss.Color(m.styles.OverlayBorder)).
 		Padding(1, 2).
 		Width(maxW)
 

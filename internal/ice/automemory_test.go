@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/abdulachik/local-agent/internal/memory"
+	"github.com/abdul-hamid-achik/local-agent/internal/memory"
 )
 
 func TestParseAndSave(t *testing.T) {

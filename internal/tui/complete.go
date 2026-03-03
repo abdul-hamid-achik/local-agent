@@ -7,8 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/abdulachik/local-agent/internal/command"
-	"github.com/abdulachik/local-agent/internal/mcp"
+	"github.com/abdul-hamid-achik/local-agent/internal/command"
+	"github.com/abdul-hamid-achik/local-agent/internal/config"
+	"github.com/abdul-hamid-achik/local-agent/internal/mcp"
 )
 
 type Completion struct {
@@ -20,12 +21,13 @@ type Completion struct {
 }
 
 type Completer struct {
-	commands []*command.Command
-	models   []string
-	skills   []string
-	agents   []string
-	workDir  string
-	registry *mcp.Registry
+	commands       []*command.Command
+	models         []string
+	skills         []string
+	agents         []string
+	workDir        string
+	registry       *mcp.Registry
+	ignorePatterns *config.IgnorePatterns
 }
 
 func NewCompleter(cmdReg *command.Registry, models, skills, agents []string, registry *mcp.Registry) *Completer {
@@ -143,6 +145,10 @@ func (c *Completer) completeFile(input string) []Completion {
 		if strings.HasPrefix(name, ".") && !strings.HasPrefix(prefix, ".") {
 			continue
 		}
+		// Skip entries matching ignore patterns.
+		if c.ignorePatterns.Match(name) {
+			continue
+		}
 
 		if strings.HasPrefix(name, prefix) {
 			isDir := entry.IsDir()
@@ -201,6 +207,10 @@ func (c *Completer) CompleteFilePath(relPath string) []Completion {
 	for _, entry := range entries {
 		name := entry.Name()
 		if strings.HasPrefix(name, ".") {
+			continue
+		}
+		// Skip entries matching ignore patterns.
+		if c.ignorePatterns.Match(name) {
 			continue
 		}
 
@@ -321,4 +331,9 @@ func (c *Completer) UpdateSkills(skills []string) {
 
 func (c *Completer) UpdateAgents(agents []string) {
 	c.agents = agents
+}
+
+// SetIgnorePatterns sets the ignore patterns used to filter file completions.
+func (c *Completer) SetIgnorePatterns(patterns *config.IgnorePatterns) {
+	c.ignorePatterns = patterns
 }

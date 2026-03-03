@@ -1,11 +1,12 @@
 package agent
 
 import (
-	"github.com/abdulachik/local-agent/internal/config"
-	"github.com/abdulachik/local-agent/internal/ice"
-	"github.com/abdulachik/local-agent/internal/llm"
-	"github.com/abdulachik/local-agent/internal/mcp"
-	"github.com/abdulachik/local-agent/internal/memory"
+	"github.com/abdul-hamid-achik/local-agent/internal/config"
+	"github.com/abdul-hamid-achik/local-agent/internal/ice"
+	"github.com/abdul-hamid-achik/local-agent/internal/llm"
+	"github.com/abdul-hamid-achik/local-agent/internal/mcp"
+	"github.com/abdul-hamid-achik/local-agent/internal/memory"
+	"github.com/abdul-hamid-achik/local-agent/internal/permission"
 )
 
 const maxIterations = 10
@@ -22,8 +23,11 @@ type Agent struct {
 	iceEngine    *ice.Engine
 	router       *config.Router
 	modePrefix   string
-	toolsEnabled bool
-	workDir      string
+	toolsEnabled      bool
+	workDir           string
+	ignoreContent     string
+	permChecker       *permission.Checker
+	approvalCallback  func(permission.ApprovalRequest)
 }
 
 // New creates a new Agent.
@@ -105,6 +109,11 @@ func (a *Agent) Model() string {
 	return a.llmClient.Model()
 }
 
+// LLMClient returns the underlying LLM client.
+func (a *Agent) LLMClient() llm.Client {
+	return a.llmClient
+}
+
 // ToolCount returns the number of available tools.
 func (a *Agent) ToolCount() int {
 	count := a.registry.ToolCount()
@@ -127,6 +136,21 @@ func (a *Agent) ServerNames() []string {
 // SetWorkDir sets the working directory for environment context in the system prompt.
 func (a *Agent) SetWorkDir(dir string) {
 	a.workDir = dir
+}
+
+// SetIgnoreContent sets the raw .agentignore content for injection into the system prompt.
+func (a *Agent) SetIgnoreContent(content string) {
+	a.ignoreContent = content
+}
+
+// SetPermissionChecker sets the permission checker for tool approval.
+func (a *Agent) SetPermissionChecker(checker *permission.Checker) {
+	a.permChecker = checker
+}
+
+// SetApprovalCallback sets the callback for requesting user approval.
+func (a *Agent) SetApprovalCallback(cb func(permission.ApprovalRequest)) {
+	a.approvalCallback = cb
 }
 
 // SetICEEngine sets the ICE engine for cross-session context retrieval.

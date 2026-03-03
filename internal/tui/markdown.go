@@ -25,6 +25,8 @@ func glamourStyle(isDark bool) string {
 
 // NewMarkdownRenderer creates a renderer for the given terminal width and theme.
 func NewMarkdownRenderer(width int, isDark bool) *MarkdownRenderer {
+	// Use standard glamour style with word wrapping
+	// Glamour automatically handles syntax highlighting via Chroma
 	r, _ := glamour.NewTermRenderer(
 		glamour.WithStandardStyle(glamourStyle(isDark)),
 		glamour.WithWordWrap(width-4),

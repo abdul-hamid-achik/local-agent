@@ -1,6 +1,6 @@
 package memory
 
-import "github.com/abdulachik/local-agent/internal/llm"
+import "github.com/abdul-hamid-achik/local-agent/internal/llm"
 
 // BuiltinToolDefs returns the tool definitions for memory_save and memory_recall.
 func BuiltinToolDefs() []llm.ToolDef {

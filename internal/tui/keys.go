@@ -28,6 +28,8 @@ type KeyMap struct {
 	HistoryDown        key.Binding
 	ToggleFocusedTool  key.Binding
 	ToggleThinking     key.Binding
+	CompactToggle      key.Binding
+	ExternalEditor     key.Binding
 }
 
 // DefaultKeyMap returns the default keybindings.
@@ -129,6 +131,14 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("ctrl+t"),
 			key.WithHelp("ctrl+t", "toggle thinking display"),
 		),
+		CompactToggle: key.NewBinding(
+			key.WithKeys("ctrl+k"),
+			key.WithHelp("ctrl+k", "toggle compact mode"),
+		),
+		ExternalEditor: key.NewBinding(
+			key.WithKeys("ctrl+e"),
+			key.WithHelp("ctrl+e", "open in $EDITOR"),
+		),
 	}
 }
 
@@ -145,6 +155,6 @@ func (k KeyMap) FullHelp() [][]key.Binding {
 		{k.PageUp, k.PageDown, k.HalfPageUp, k.HalfPageDn},
 		{k.CycleMode, k.ModelPicker},
 		{k.HistoryUp, k.HistoryDown},
-		{k.ToggleFocusedTool, k.ToggleThinking},
+		{k.ToggleFocusedTool, k.ToggleThinking, k.CompactToggle, k.ExternalEditor},
 	}
 }

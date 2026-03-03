@@ -116,7 +116,7 @@ func (m *Model) renderThinkingBox(content string, collapsed bool) string {
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(m.styles.OverlayBorder).
+		BorderForeground(lipgloss.Color(m.styles.OverlayBorder)).
 		Padding(0, 2).
 		Width(boxWidth)
 

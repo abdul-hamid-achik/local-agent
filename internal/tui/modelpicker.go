@@ -5,7 +5,7 @@ import (
 
 	"charm.land/bubbles/v2/list"
 	"charm.land/lipgloss/v2"
-	"github.com/abdulachik/local-agent/internal/config"
+	"github.com/abdul-hamid-achik/local-agent/internal/config"
 )
 
 // modelItem implements list.DefaultItem for the model picker.
@@ -97,7 +97,7 @@ func (m *Model) renderModelPicker() string {
 	const maxW = 50
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(m.styles.OverlayBorder).
+		BorderForeground(m.styles.FocusIndicator.GetForeground()).
 		Padding(0, 1).
 		Width(maxW)
 

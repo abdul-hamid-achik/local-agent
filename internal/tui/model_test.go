@@ -7,7 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/abdulachik/local-agent/internal/command"
+	"github.com/abdul-hamid-achik/local-agent/internal/command"
 )
 
 func TestSubmitInput_EmptyReturnsNil(t *testing.T) {

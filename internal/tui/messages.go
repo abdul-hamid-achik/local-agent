@@ -120,6 +120,25 @@ type SessionLoadedMsg struct {
 	Err     error
 }
 
+// ToolApprovalMsg asks the user to approve a tool call.
+type ToolApprovalMsg struct {
+	ToolName string
+	Args     map[string]any
+	Response chan<- ToolApprovalResponse
+}
+
+// ToolApprovalResponse is the user's response to a tool approval request.
+type ToolApprovalResponse struct {
+	Allowed bool
+	Always  bool // persist as "always allow"
+}
+
+// CommitResultMsg carries the result of an async /commit operation.
+type CommitResultMsg struct {
+	Message string // commit message used
+	Err     error
+}
+
 // sendMsg is a helper to send a tea.Msg to the program.
 func sendMsg(p *tea.Program, msg tea.Msg) {
 	if p != nil {

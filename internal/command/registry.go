@@ -29,6 +29,14 @@ type Context struct {
 	ICEEnabled       bool
 	ICEConversations int
 	ICESessionID     string
+	// Token stats
+	SessionEvalTotal   int
+	SessionPromptTotal int
+	SessionTurnCount   int
+	NumCtx             int
+	CurrentModel       string
+	// File changes
+	FileChanges map[string]int // path → modification count
 }
 
 // SkillInfo is a read-only view of a skill for command display.
@@ -62,6 +70,8 @@ const (
 	ActionSwitchAgent            // Switch agent profile (Data = agent name)
 	ActionShowSessions           // Open sessions picker
 	ActionShowModelPicker        // Open model picker overlay
+	ActionCommit                 // Generate commit message and commit
+	ActionSendPrompt             // Send Data as a message to the agent
 )
 
 // Registry holds all registered slash commands.

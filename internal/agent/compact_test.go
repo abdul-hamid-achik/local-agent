@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/abdulachik/local-agent/internal/llm"
-	"github.com/abdulachik/local-agent/internal/mcp"
+	"github.com/abdul-hamid-achik/local-agent/internal/llm"
+	"github.com/abdul-hamid-achik/local-agent/internal/mcp"
 )
 
 // mockOutput implements the Output interface for testing.

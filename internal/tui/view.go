@@ -7,6 +7,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+
+	"github.com/abdul-hamid-achik/local-agent/internal/agent"
 )
 
 func (m *Model) View() tea.View {
@@ -72,6 +74,16 @@ func (m *Model) View() tea.View {
 		b.WriteString(m.styles.StreamHint.Render("  " + m.spin.View() + " streaming... press Esc to cancel"))
 	}
 
+	// Toast notifications (bottom-right corner)
+	if m.toastMgr != nil && m.toastMgr.HasToasts() {
+		m.toastMgr.Update()
+		toastStr := m.toastMgr.Render(m.width)
+		if toastStr != "" {
+			b.WriteString("\n")
+			b.WriteString(toastStr)
+		}
+	}
+
 	v := tea.NewView(b.String())
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
@@ -134,7 +146,7 @@ func (m *Model) renderCompletionModal() string {
 	if maxW > 60 {
 		maxW = 60
 	}
-	b.WriteString(m.styles.CompletionBorder.Render(strings.Repeat("─", maxW)))
+	b.WriteString(m.styles.FocusIndicator.Render(strings.Repeat("─", maxW)))
 	b.WriteString("\n")
 
 	// Scrollable items (max 10 visible)
@@ -158,7 +170,7 @@ func (m *Model) renderCompletionModal() string {
 			item := items[i]
 			prefix := "  "
 			if i == cs.Index {
-				prefix = m.styles.CompletionCursor.Render("▸ ")
+				prefix = m.styles.FocusIndicator.Render("▸ ")
 			}
 
 			// Check if selected (for multi-select)
@@ -168,7 +180,7 @@ func (m *Model) renderCompletionModal() string {
 				for oi, orig := range cs.AllItems {
 					if orig.Label == item.Label && orig.Insert == item.Insert {
 						if cs.Selected[oi] {
-							selectedMark = " ✓"
+							selectedMark = m.styles.FocusIndicator.Render(" ✓")
 						}
 						break
 					}
@@ -179,7 +191,7 @@ func (m *Model) renderCompletionModal() string {
 			cat := m.styles.CompletionCategory.Render("  " + item.Category)
 
 			if i == cs.Index {
-				b.WriteString(prefix + m.styles.CompletionCursor.Render(label) + cat + selectedMark)
+				b.WriteString(prefix + m.styles.FocusIndicator.Render(label) + cat + selectedMark)
 			} else {
 				b.WriteString(prefix + label + cat + selectedMark)
 			}
@@ -206,7 +218,7 @@ func (m *Model) renderCompletionModal() string {
 	// Wrap in a box
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(m.styles.OverlayBorder).
+		BorderForeground(lipgloss.Color(m.styles.OverlayBorder)).
 		Padding(1, 2).
 		Width(maxW + 4)
 
@@ -291,6 +303,17 @@ func (m *Model) renderFooter() string {
 
 // renderStatusLine builds the status bar above the input/hint area.
 func (m *Model) renderStatusLine() string {
+	// Pending tool approval prompt overrides normal status.
+	if m.pendingApproval != nil {
+		args := agent.FormatToolArgs(m.pendingApproval.Args)
+		if len(args) > 60 {
+			args = args[:57] + "..."
+		}
+		return m.styles.StatusText.Render(
+			fmt.Sprintf("  Allow %s %s? [y]es / [n]o / [a]lways", m.pendingApproval.ToolName, args),
+		)
+	}
+
 	// Pending paste prompt overrides normal status.
 	if m.pendingPaste != "" {
 		lines := strings.Count(m.pendingPaste, "\n") + 1
@@ -336,9 +359,9 @@ func (m *Model) renderStatusLine() string {
 				fmt.Sprintf("~%s / %s ctx", formatTokens(m.promptTokens), formatTokens(m.numCtx)),
 			))
 		}
-		if m.evalCount > 0 {
+		if m.sessionEvalTotal > 0 {
 			parts = append(parts, m.styles.StatusText.Render(
-				fmt.Sprintf("%d tokens", m.evalCount),
+				fmt.Sprintf("%s out (%d turns)", formatTokens(m.sessionEvalTotal), m.sessionTurnCount),
 			))
 		}
 	}
@@ -625,8 +648,16 @@ func (m *Model) renderToolGroup(b *strings.Builder, toolIdx, entryIdx int) {
 			if te.DiffLines != nil {
 				b.WriteString(renderDiff(te.DiffLines, m.styles, 30))
 			} else {
-				result := truncate(te.Result, layout.ResultTruncMax)
-				b.WriteString(m.styles.ToolDetailText.Render(layout.ToolIndent + "result: " + result))
+				// Use smart result formatting with truncation
+				result := formatToolResult(te.Result, 20, layout.ResultTruncMax)
+				resultLines := strings.Count(result, "\n") + 1
+				if resultLines > 20 {
+					b.WriteString(m.styles.ToolDetailText.Render(layout.ToolIndent + "result (truncated, expand to see more):\n"))
+					b.WriteString(m.styles.ToolDetailText.Render(indentBlock(truncate(result, layout.ResultTruncMax), layout.ToolIndent)))
+				} else {
+					b.WriteString(m.styles.ToolDetailText.Render(layout.ToolIndent + "result:\n"))
+					b.WriteString(m.styles.ToolDetailText.Render(indentBlock(result, layout.ToolIndent)))
+				}
 				b.WriteString("\n")
 			}
 		}

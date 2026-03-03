@@ -15,9 +15,10 @@ type layoutConfig struct {
 	HeaderMode     string // "full" or "compact"
 }
 
-// currentLayout returns layout parameters adapted to the current terminal size.
+// currentLayout returns layout parameters adapted to the current terminal size
+// and user compact preference.
 func (m *Model) currentLayout() layoutConfig {
-	if m.width < 80 || m.height < 24 {
+	if m.forceCompact || m.width < 80 || m.height < 24 {
 		return layoutConfig{
 			ContentPad:     2,
 			ToolIndent:     "  ",

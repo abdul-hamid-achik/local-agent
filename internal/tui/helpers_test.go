@@ -5,8 +5,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/abdulachik/local-agent/internal/agent"
-	"github.com/abdulachik/local-agent/internal/command"
+	"github.com/abdul-hamid-achik/local-agent/internal/agent"
+	"github.com/abdul-hamid-achik/local-agent/internal/command"
 )
 
 // newTestModel creates a Model with a real command.Registry and Agent, sends WindowSizeMsg to set ready=true.
@@ -31,6 +31,8 @@ func enterKey() tea.KeyPressMsg { return tea.KeyPressMsg{Code: tea.KeyEnter} }
 func tabKey() tea.KeyPressMsg   { return tea.KeyPressMsg{Code: tea.KeyTab} }
 func upKey() tea.KeyPressMsg    { return tea.KeyPressMsg{Code: tea.KeyUp} }
 func downKey() tea.KeyPressMsg  { return tea.KeyPressMsg{Code: tea.KeyDown} }
+func leftKey() tea.KeyPressMsg  { return tea.KeyPressMsg{Code: tea.KeyLeft} }
+func rightKey() tea.KeyPressMsg { return tea.KeyPressMsg{Code: tea.KeyRight} }
 func spaceKey() tea.KeyPressMsg { return tea.KeyPressMsg{Code: tea.KeySpace} }
 
 func charKey(r rune) tea.KeyPressMsg {

@@ -146,6 +146,89 @@ func TestPlanForm_FieldNavigation(t *testing.T) {
 	}
 }
 
+func TestPlanForm_SelectFieldLeftRight(t *testing.T) {
+	m := newTestModel(t)
+	m.openPlanForm("task")
+
+	// Tab to scope field.
+	updated, _ := m.Update(tabKey())
+	m = updated.(*Model)
+
+	if m.planFormState.ActiveField != 1 {
+		t.Fatalf("expected field 1, got %d", m.planFormState.ActiveField)
+	}
+	if m.planFormState.Fields[1].OptionIndex != 0 {
+		t.Fatalf("expected option 0, got %d", m.planFormState.Fields[1].OptionIndex)
+	}
+
+	// Right should advance to option 1.
+	updated, _ = m.Update(rightKey())
+	m = updated.(*Model)
+
+	if m.planFormState.Fields[1].OptionIndex != 1 {
+		t.Errorf("expected option 1 after right, got %d", m.planFormState.Fields[1].OptionIndex)
+	}
+
+	// Left should go back to option 0.
+	updated, _ = m.Update(leftKey())
+	m = updated.(*Model)
+
+	if m.planFormState.Fields[1].OptionIndex != 0 {
+		t.Errorf("expected option 0 after left, got %d", m.planFormState.Fields[1].OptionIndex)
+	}
+}
+
+func TestPlanForm_SelectFieldBounds(t *testing.T) {
+	m := newTestModel(t)
+	m.openPlanForm("task")
+
+	// Tab to scope field.
+	updated, _ := m.Update(tabKey())
+	m = updated.(*Model)
+
+	// Up at 0 stays at 0.
+	updated, _ = m.Update(upKey())
+	m = updated.(*Model)
+
+	if m.planFormState.Fields[1].OptionIndex != 0 {
+		t.Errorf("expected option 0 after up at boundary, got %d", m.planFormState.Fields[1].OptionIndex)
+	}
+
+	// Left at 0 stays at 0.
+	updated, _ = m.Update(leftKey())
+	m = updated.(*Model)
+
+	if m.planFormState.Fields[1].OptionIndex != 0 {
+		t.Errorf("expected option 0 after left at boundary, got %d", m.planFormState.Fields[1].OptionIndex)
+	}
+
+	// Navigate to last option.
+	updated, _ = m.Update(downKey())
+	m = updated.(*Model)
+	updated, _ = m.Update(downKey())
+	m = updated.(*Model)
+
+	if m.planFormState.Fields[1].OptionIndex != 2 {
+		t.Fatalf("expected option 2, got %d", m.planFormState.Fields[1].OptionIndex)
+	}
+
+	// Down at last stays at last.
+	updated, _ = m.Update(downKey())
+	m = updated.(*Model)
+
+	if m.planFormState.Fields[1].OptionIndex != 2 {
+		t.Errorf("expected option 2 after down at boundary, got %d", m.planFormState.Fields[1].OptionIndex)
+	}
+
+	// Right at last stays at last.
+	updated, _ = m.Update(rightKey())
+	m = updated.(*Model)
+
+	if m.planFormState.Fields[1].OptionIndex != 2 {
+		t.Errorf("expected option 2 after right at boundary, got %d", m.planFormState.Fields[1].OptionIndex)
+	}
+}
+
 func TestPlanForm_SelectField(t *testing.T) {
 	m := newTestModel(t)
 	m.openPlanForm("task")

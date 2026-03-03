@@ -1,6 +1,6 @@
 package mcp
 
-import "github.com/abdulachik/local-agent/internal/llm"
+import "github.com/abdul-hamid-achik/local-agent/internal/llm"
 
 // ServerInfo holds metadata about a connected MCP server.
 type ServerInfo struct {

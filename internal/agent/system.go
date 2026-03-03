@@ -7,15 +7,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/abdulachik/local-agent/internal/llm"
-	"github.com/abdulachik/local-agent/internal/memory"
+	"github.com/abdul-hamid-achik/local-agent/internal/llm"
+	"github.com/abdul-hamid-achik/local-agent/internal/memory"
 )
 
 const systemTemplate = `You are a helpful personal assistant running locally on the user's machine.
 You have access to tools via MCP servers. You MUST use tools to accomplish tasks — do not guess or make up answers when a tool can provide the real information.
 %s
 Current date: %s
-%s
+%s%s
 %s%s%s
 ## Available Tools
 %s
@@ -32,8 +32,8 @@ Current date: %s
 %s`
 
 // buildSystemPrompt generates the system prompt with current tool info,
-// active skills, loaded context, memory, and optional ICE context.
-func buildSystemPrompt(modePrefix string, tools []llm.ToolDef, skillContent, loadedContext string, memStore *memory.Store, iceContext, workDir string) string {
+// active skills, loaded context, memory, optional ICE context, and ignore patterns.
+func buildSystemPrompt(modePrefix string, tools []llm.ToolDef, skillContent, loadedContext string, memStore *memory.Store, iceContext, workDir, ignoreContent string) string {
 	var toolList strings.Builder
 	if len(tools) == 0 {
 		toolList.WriteString("No tools currently available.\n")
@@ -75,6 +75,11 @@ func buildSystemPrompt(modePrefix string, tools []llm.ToolDef, skillContent, loa
 `
 	}
 
+	var ignoreSection string
+	if ignoreContent != "" {
+		ignoreSection = fmt.Sprintf("\n## Ignored Paths\nThe following paths/patterns should be excluded from file operations:\n%s\n", ignoreContent)
+	}
+
 	var modePrefixSection string
 	if modePrefix != "" {
 		modePrefixSection = "\n" + modePrefix + "\n"
@@ -84,6 +89,7 @@ func buildSystemPrompt(modePrefix string, tools []llm.ToolDef, skillContent, loa
 		modePrefixSection,
 		time.Now().Format("Monday, January 2, 2006"),
 		envSection,
+		ignoreSection,
 		skillSection,
 		ctxSection,
 		memorySection,

@@ -1,6 +1,6 @@
 package tui
 
-import "github.com/abdulachik/local-agent/internal/config"
+import "github.com/abdul-hamid-achik/local-agent/internal/config"
 
 // Mode represents the operational mode of the TUI.
 type Mode int
@@ -24,14 +24,14 @@ func DefaultModeConfigs() [3]ModeConfig {
 	return [3]ModeConfig{
 		{ // ModeAsk
 			Label:               "ASK",
-			SystemPromptPrefix:  "Provide direct, concise answers. Do not use tools.",
-			AllowTools:          false,
+			SystemPromptPrefix:  "Provide direct, concise answers. Use tools when the user asks about files or the codebase.",
+			AllowTools:          true,
 			PreferredCapability: config.CapabilitySimple,
 		},
 		{ // ModePlan
 			Label:               "PLAN",
-			SystemPromptPrefix:  "Help the user plan and design. Break down tasks into steps. Do not execute anything.",
-			AllowTools:          false,
+			SystemPromptPrefix:  "Help the user plan and design. Break down tasks into steps. Use tools to read and explore, but do not modify files.",
+			AllowTools:          true,
 			PreferredCapability: config.CapabilityComplex,
 		},
 		{ // ModeBuild

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/abdulachik/local-agent/internal/memory"
+	"github.com/abdul-hamid-achik/local-agent/internal/memory"
 )
 
 // Assembler retrieves context from multiple sources and assembles it

@@ -6,7 +6,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 
-	"github.com/abdulachik/local-agent/internal/command"
+	"github.com/abdul-hamid-achik/local-agent/internal/command"
 )
 
 // renderHelpOverlay builds a centered help modal showing keyboard shortcuts
@@ -44,14 +44,34 @@ func (m *Model) renderHelpOverlay(contentWidth int) string {
 		{"space", "Toggle last tool details"},
 		{"y", "Copy last response"},
 		{"ctrl+t", "Toggle thinking display"},
+		{"ctrl+k", "Toggle compact mode"},
+		{"ctrl+e", "Open input in $EDITOR"},
 		{"↑/↓", "Browse input history"},
 		{"pgup/pgdown", "Scroll viewport"},
 		{"ctrl+u/d", "Half-page scroll"},
+		{"tab", "Autocomplete (commands/files/skills)"},
 	}
 
 	for _, s := range shortcuts {
 		fmt.Fprintf(&b, "  %s  %s\n",
-			m.styles.OverlayAccent.Width(16).Render(s.key),
+			m.styles.FocusIndicator.Width(16).Render(s.key),
+			m.styles.OverlayDim.Render(s.desc),
+		)
+	}
+
+	b.WriteString("\n")
+	b.WriteString(m.styles.OverlayAccent.Render("Input Shortcuts"))
+	b.WriteString("\n")
+
+	inputShortcuts := []struct{ key, desc string }{
+		{"@file", "Attach file or agent"},
+		{"#skill", "Activate skill"},
+		{"/cmd", "Run slash command"},
+	}
+
+	for _, s := range inputShortcuts {
+		fmt.Fprintf(&b, "  %s  %s\n",
+			m.styles.FocusIndicator.Width(16).Render(s.key),
 			m.styles.OverlayDim.Render(s.desc),
 		)
 	}
@@ -68,7 +88,7 @@ func (m *Model) renderHelpOverlay(contentWidth int) string {
 				name += " (/" + strings.Join(cmd.Aliases, ", /") + ")"
 			}
 			fmt.Fprintf(&b, "  %s  %s\n",
-				m.styles.OverlayAccent.Width(16).Render("/"+cmd.Name),
+				m.styles.FocusIndicator.Width(16).Render("/"+cmd.Name),
 				m.styles.OverlayDim.Render(cmd.Description),
 			)
 		}
@@ -80,7 +100,7 @@ func (m *Model) renderHelpOverlay(contentWidth int) string {
 	// Wrap in a box.
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(m.styles.OverlayBorder).
+		BorderForeground(m.styles.FocusIndicator.GetForeground()).
 		Padding(1, 2).
 		Width(maxW)
 

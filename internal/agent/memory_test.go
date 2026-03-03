@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/abdulachik/local-agent/internal/llm"
-	"github.com/abdulachik/local-agent/internal/mcp"
-	"github.com/abdulachik/local-agent/internal/memory"
+	"github.com/abdul-hamid-achik/local-agent/internal/llm"
+	"github.com/abdul-hamid-achik/local-agent/internal/mcp"
+	"github.com/abdul-hamid-achik/local-agent/internal/memory"
 )
 
 func newTestAgentWithMemory(t *testing.T) *Agent {

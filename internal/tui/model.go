@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -17,11 +19,12 @@ import (
 	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/log"
 
-	"github.com/abdulachik/local-agent/internal/agent"
-	"github.com/abdulachik/local-agent/internal/command"
-	"github.com/abdulachik/local-agent/internal/config"
-	"github.com/abdulachik/local-agent/internal/llm"
-	"github.com/abdulachik/local-agent/internal/skill"
+	"github.com/abdul-hamid-achik/local-agent/internal/agent"
+	"github.com/abdul-hamid-achik/local-agent/internal/command"
+	"github.com/abdul-hamid-achik/local-agent/internal/config"
+	"github.com/abdul-hamid-achik/local-agent/internal/llm"
+	"github.com/abdul-hamid-achik/local-agent/internal/permission"
+	"github.com/abdul-hamid-achik/local-agent/internal/skill"
 )
 
 // State represents the TUI's two possible states.
@@ -167,8 +170,9 @@ type Model struct {
 	pendingPaste string
 
 	// Responsive layout
-	isCompact bool
-	isWide    bool
+	isCompact    bool
+	isWide       bool
+	forceCompact bool // user-toggled compact mode
 
 	// Mode system
 	mode        Mode
@@ -202,12 +206,27 @@ type Model struct {
 	toolCount     int
 	serverCount   int
 	numCtx        int
+
+	// Toast notifications
+	toastMgr *ToastManager
+	toastStyles ToastStyles
 	failedServers []FailedServer
 
 	// ICE
 	iceEnabled       bool
 	iceConversations int
 	iceSessionID     string
+
+	// Session token totals
+	sessionEvalTotal   int
+	sessionPromptTotal int
+	sessionTurnCount   int
+
+	// File change tracking
+	fileChanges map[string]int // path → number of modifications
+
+	// Tool approval prompt
+	pendingApproval *ToolApprovalMsg
 
 	// Prompt history
 	promptHistory []string // all submitted inputs
@@ -250,6 +269,8 @@ func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, com
 		skillMgr:       skillMgr,
 		completer:      completer,
 		historyIndex:   -1,
+		toastMgr:       NewToastManager(),
+		toastStyles:    DefaultToastStyles(true),
 	}
 }
 
@@ -309,6 +330,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Update spinner style for theme.
 		m.spin.Style = m.styles.StatusDot
 		m.scramble.SetDark(msg.IsDark())
+		// Update toast styles for theme.
+		m.toastStyles = DefaultToastStyles(m.isDark)
+		m.toastMgr.SetStyles(m.toastStyles)
 		// Recreate markdown renderer for new theme.
 		if m.width > 0 {
 			m.md = NewMarkdownRenderer(m.width-2, m.isDark)
@@ -332,7 +356,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		if !m.ready {
-			m.viewport = viewport.New(viewport.WithWidth(msg.Width), viewport.WithHeight(contentH))
+			m.viewport = viewport.New(
+				viewport.WithWidth(msg.Width-1), // Reserve 1 column for potential scrollbar
+				viewport.WithHeight(contentH),
+			)
 			// Override viewport KeyMap: keep only pgup/pgdown/ctrl+u/ctrl+d
 			// to avoid conflicts with text input (up/down/j/k) and other keys (space/f/b).
 			m.viewport.KeyMap.PageDown = key.NewBinding(key.WithKeys("pgdown"))
@@ -346,7 +373,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.SetContent(m.renderEntries())
 			m.ready = true
 		} else {
-			m.viewport.SetWidth(msg.Width)
+			m.viewport.SetWidth(msg.Width - 1)
 			m.viewport.SetHeight(contentH)
 			// Re-render cached entries for new width.
 			m.invalidateRenderedCache()
@@ -364,6 +391,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.initCancel()
 				}
 				return m, tea.Quit
+			}
+			return m, nil
+		}
+
+		// Pending tool approval intercept: y/n/a before anything else.
+		if m.pendingApproval != nil {
+			switch msg.String() {
+			case "y":
+				m.pendingApproval.Response <- ToolApprovalResponse{Allowed: true}
+				m.pendingApproval = nil
+			case "n":
+				m.pendingApproval.Response <- ToolApprovalResponse{Allowed: false}
+				m.pendingApproval = nil
+			case "a":
+				m.pendingApproval.Response <- ToolApprovalResponse{Allowed: true, Always: true}
+				m.pendingApproval = nil
 			}
 			return m, nil
 		}
@@ -579,6 +622,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
+		case key.Matches(msg, m.keys.CompactToggle):
+			if m.state == StateIdle {
+				m.forceCompact = !m.forceCompact
+				m.invalidateEntryCache()
+				m.viewport.SetContent(m.renderEntries())
+				return m, nil
+			}
+
 		case key.Matches(msg, m.keys.ToggleThinking):
 			// Toggle thinking collapsed for last assistant entry.
 			if m.state == StateIdle && strings.TrimSpace(m.input.Value()) == "" {
@@ -591,6 +642,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 				return m, nil
+			}
+
+		case key.Matches(msg, m.keys.ExternalEditor):
+			if m.state == StateIdle {
+				return m, m.openExternalEditor()
 			}
 
 		case key.Matches(msg, m.keys.CopyLast):
@@ -612,6 +668,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.agent.ClearHistory()
 				m.entries = nil
 				m.toolEntries = nil
+				m.sessionEvalTotal = 0
+				m.sessionPromptTotal = 0
+				m.sessionTurnCount = 0
+				m.fileChanges = nil
 				m.invalidateEntryCache()
 				m.entries = append(m.entries, ChatEntry{
 					Kind:    "system",
@@ -696,6 +756,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case StreamDoneMsg:
 		m.evalCount = msg.EvalCount
 		m.promptTokens = msg.PromptTokens
+		m.sessionEvalTotal += msg.EvalCount
+		m.sessionPromptTotal += msg.PromptTokens
+		m.sessionTurnCount++
 
 	case ToolCallStartMsg:
 		te := ToolEntry{
@@ -745,10 +808,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					m.toolEntries[i].Status = ToolStatusDone
 				}
-				// Compute diff for file writes.
+				// Compute diff for file writes and track file changes.
 				if classifyTool(m.toolEntries[i].Name) == ToolTypeFileWrite && !msg.IsError {
 					afterContent := readFileForDiff(m.toolEntries[i].RawArgs)
 					m.toolEntries[i].DiffLines = computeDiff(m.toolEntries[i].BeforeContent, afterContent)
+					if path := toolSummary(ToolTypeFileWrite, m.toolEntries[i]); path != "" {
+						if m.fileChanges == nil {
+							m.fileChanges = make(map[string]int)
+						}
+						m.fileChanges[path]++
+					}
 				}
 				break
 			}
@@ -905,6 +974,32 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Re-filter with current query
 			cs.FilteredItems = FilterCompletions(cs.AllItems, cs.Filter.Value())
 		}
+
+	case ToolApprovalMsg:
+		m.pendingApproval = &msg
+		// Status line will show the approval prompt.
+
+	case CommitResultMsg:
+		if msg.Err != nil {
+			m.entries = append(m.entries, ChatEntry{
+				Kind:    "error",
+				Content: fmt.Sprintf("Commit failed: %v", msg.Err),
+			})
+		} else {
+			m.entries = append(m.entries, ChatEntry{
+				Kind:    "system",
+				Content: fmt.Sprintf("Committed with message:\n%s", msg.Message),
+			})
+		}
+		m.invalidateEntryCache()
+		m.viewport.SetContent(m.renderEntries())
+		m.viewport.GotoBottom()
+
+	case editorReturnMsg:
+		m.input.SetValue(msg.Content)
+		m.input.CursorEnd()
+		m.syncInputHeight()
+		m.input.Focus()
 
 	case DoneFlashExpiredMsg:
 		m.doneFlash = false
@@ -1121,17 +1216,23 @@ func (m *Model) submitInput() tea.Cmd {
 // buildCommandContext creates a Context for slash command execution.
 func (m *Model) buildCommandContext() *command.Context {
 	ctx := &command.Context{
-		Model:            m.model,
-		ModelList:        m.modelList,
-		AgentProfile:     m.agentProfile,
-		AgentList:        m.agentList,
-		ToolCount:        m.toolCount,
-		ServerCount:      m.serverCount,
-		ServerNames:      m.agent.ServerNames(),
-		LoadedFile:       m.loadedFile,
-		ICEEnabled:       m.iceEnabled,
-		ICEConversations: m.iceConversations,
-		ICESessionID:     m.iceSessionID,
+		Model:              m.model,
+		ModelList:          m.modelList,
+		AgentProfile:       m.agentProfile,
+		AgentList:          m.agentList,
+		ToolCount:          m.toolCount,
+		ServerCount:        m.serverCount,
+		ServerNames:        m.agent.ServerNames(),
+		LoadedFile:         m.loadedFile,
+		ICEEnabled:         m.iceEnabled,
+		ICEConversations:   m.iceConversations,
+		ICESessionID:       m.iceSessionID,
+		SessionEvalTotal:   m.sessionEvalTotal,
+		SessionPromptTotal: m.sessionPromptTotal,
+		SessionTurnCount:   m.sessionTurnCount,
+		NumCtx:             m.numCtx,
+		CurrentModel:       m.model,
+		FileChanges:        m.fileChanges,
 	}
 
 	if m.skillMgr != nil {
@@ -1271,6 +1372,21 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 		m.openModelPicker()
 		return nil
 
+	case command.ActionSendPrompt:
+		if result.Text != "" {
+			m.entries = append(m.entries, ChatEntry{Kind: "system", Content: result.Text})
+		}
+		return m.sendToAgent(result.Data)
+
+	case command.ActionCommit:
+		m.entries = append(m.entries, ChatEntry{
+			Kind:    "system",
+			Content: "Generating commit message from staged changes...",
+		})
+		m.viewport.SetContent(m.renderEntries())
+		m.viewport.GotoBottom()
+		return runCommit(m.agent.LLMClient(), m.model, result.Data)
+
 	case command.ActionShowSessions:
 		return func() tea.Msg {
 			sessions, err := listSessions(20)
@@ -1380,6 +1496,75 @@ func (m *Model) checkAutoScroll() {
 	if m.viewport.AtBottom() {
 		m.userScrolledUp = false
 	}
+}
+
+// getVisibleEntryRange calculates which entries should be rendered based on
+// viewport position and content height. This optimizes rendering for long
+// conversations by only rendering visible content.
+func (m *Model) getVisibleEntryRange() (start, end int) {
+	if m.viewport.YOffset() == 0 {
+		// At top - render recent entries plus some history
+		end = len(m.entries)
+		start = max(0, end-100)
+		return start, end
+	}
+
+	// User has scrolled - estimate visible range
+	// Assuming average entry height of ~5 lines
+	avgEntryHeight := 5
+	viewportH := m.viewport.Height()
+	visibleEntries := viewportH / avgEntryHeight
+	buffer := visibleEntries / 2
+
+	scrollPos := m.viewport.YOffset()
+	estimatedStart := max(0, scrollPos/avgEntryHeight - buffer)
+	estimatedEnd := min(len(m.entries), estimatedStart + visibleEntries + buffer*2)
+
+	return estimatedStart, estimatedEnd
+}
+
+// openExternalEditor opens $EDITOR with the current input text, then replaces
+// the textarea content with whatever the user wrote.
+func (m *Model) openExternalEditor() tea.Cmd {
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		editor = "vi"
+	}
+
+	// Write current input to a temp file.
+	tmpFile, err := os.CreateTemp("", "local-agent-*.md")
+	if err != nil {
+		return func() tea.Msg {
+			return ErrorMsg{Msg: fmt.Sprintf("editor: %v", err)}
+		}
+	}
+	tmpPath := tmpFile.Name()
+	if current := m.input.Value(); current != "" {
+		tmpFile.WriteString(current)
+	}
+	tmpFile.Close()
+
+	c := exec.Command(editor, tmpPath)
+	return tea.ExecProcess(c, func(err error) tea.Msg {
+		defer os.Remove(tmpPath)
+		if err != nil {
+			return ErrorMsg{Msg: fmt.Sprintf("editor: %v", err)}
+		}
+		data, err := os.ReadFile(tmpPath)
+		if err != nil {
+			return ErrorMsg{Msg: fmt.Sprintf("editor: %v", err)}
+		}
+		content := strings.TrimRight(string(data), "\n")
+		if content == "" {
+			return nil
+		}
+		return editorReturnMsg{Content: content}
+	})
+}
+
+// editorReturnMsg is sent when the external editor closes.
+type editorReturnMsg struct {
+	Content string
 }
 
 // recalcViewportHeight updates the viewport height based on current footer size.
@@ -1599,6 +1784,22 @@ func (m *Model) sendToAgent(text string) tea.Cmd {
 	m.cancel = cancel
 
 	p := m.program
+
+	// Set up the approval callback so tool permission prompts go through the TUI.
+	m.agent.SetApprovalCallback(func(req permission.ApprovalRequest) {
+		respCh := make(chan ToolApprovalResponse, 1)
+		p.Send(ToolApprovalMsg{
+			ToolName: req.ToolName,
+			Args:     req.Args,
+			Response: respCh,
+		})
+		resp := <-respCh
+		req.Response <- permission.ApprovalResponse{
+			Allowed: resp.Allowed,
+			Always:  resp.Always,
+		}
+	})
+
 	runAgent := func() tea.Msg {
 		adapter := NewAdapter(p)
 		m.agent.Run(ctx, adapter)
@@ -1731,8 +1932,10 @@ func (m *Model) lastAssistantContent() string {
 func (m *Model) copyToClipboard(text string) tea.Cmd {
 	return func() tea.Msg {
 		if err := clipboard.WriteAll(text); err != nil {
-			return SystemMessageMsg{Msg: fmt.Sprintf("Clipboard error: %v", err)}
+			m.toastMgr.Error("Clipboard error: " + err.Error())
+			return SystemMessageMsg{Msg: "Clipboard error: " + err.Error()}
 		}
+		m.toastMgr.Success("Copied to clipboard")
 		return SystemMessageMsg{Msg: "Copied to clipboard."}
 	}
 }

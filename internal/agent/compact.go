@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/abdulachik/local-agent/internal/llm"
+	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 )
 
 const compactThreshold = 0.75 // Trigger compaction at 75% of context window
