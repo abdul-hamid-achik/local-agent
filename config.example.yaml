@@ -1,0 +1,37 @@
+# local-agent configuration
+# Place at ~/.config/local-agent/config.yaml or ./local-agent.yaml
+
+ollama:
+  model: "qwen3:8b"
+  base_url: "http://localhost:11434"
+  num_ctx: 32768
+
+# Skills directory (default: ~/.config/local-agent/skills/)
+# skills_dir: "/path/to/custom/skills"
+
+# MCP tool servers
+servers:
+  # STDIO transport (default)
+  - name: noted
+    command: noted
+    args: [mcp]
+
+  # tinyvault — requires `tvault init` before first use
+  # - name: tinyvault
+  #   command: tvault
+  #   args: [mcp-server]
+
+  # Docker MCP Gateway (requires Docker Desktop with MCP enabled)
+  # - name: docker-gateway
+  #   command: docker
+  #   args: ["mcp", "gateway", "run"]
+
+  # SSE transport
+  # - name: remote-server
+  #   transport: sse
+  #   url: "http://localhost:8811"
+
+  # Streamable HTTP transport
+  # - name: streamable-server
+  #   transport: streamable-http
+  #   url: "http://localhost:8812/mcp"
