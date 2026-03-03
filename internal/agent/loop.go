@@ -13,10 +13,13 @@ import (
 // Run executes the ReAct loop: query -> LLM -> tool calls -> observe -> repeat.
 // It streams output via the Output interface.
 func (a *Agent) Run(ctx context.Context, out Output) {
-	tools := a.registry.Tools()
-	// Merge memory built-in tools if available.
-	if a.memoryStore != nil {
-		tools = append(tools, a.memoryBuiltinToolDefs()...)
+	var tools []llm.ToolDef
+	if a.toolsEnabled {
+		tools = a.registry.Tools()
+		// Merge memory built-in tools if available.
+		if a.memoryStore != nil {
+			tools = append(tools, a.memoryBuiltinToolDefs()...)
+		}
 	}
 
 	// ICE: index user message and assemble cross-session context.
@@ -31,9 +34,11 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 		}
 	}
 
-	system := buildSystemPrompt(tools, a.skillContent, a.loadedCtx, a.memoryStore, iceContext)
+	system := buildSystemPrompt(a.modePrefix, tools, a.skillContent, a.loadedCtx, a.memoryStore, iceContext, a.workDir)
 
+	const maxRetries = 2
 	var lastPromptTokens int
+	var retryCount int
 
 	for i := range maxIterations {
 		select {
@@ -75,9 +80,18 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 			if ctx.Err() != nil {
 				return
 			}
+			// Retry on transient JSON parse errors from small models.
+			if retryCount < maxRetries && isRetryableError(err) {
+				retryCount++
+				out.Error(fmt.Sprintf("LLM produced malformed output, retrying (%d/%d)...", retryCount, maxRetries))
+				textBuf.Reset()
+				toolCalls = nil
+				continue
+			}
 			out.Error(fmt.Sprintf("LLM error: %v", err))
 			return
 		}
+		retryCount = 0 // reset on success
 
 		// Record assistant message in conversation history.
 		assistantMsg := llm.Message{
@@ -156,7 +170,7 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 		if a.shouldCompact(lastPromptTokens) {
 			if a.compact(ctx, out) {
 				// Rebuild system prompt after compaction (memory may have changed).
-				system = buildSystemPrompt(tools, a.skillContent, a.loadedCtx, a.memoryStore, iceContext)
+				system = buildSystemPrompt(a.modePrefix, tools, a.skillContent, a.loadedCtx, a.memoryStore, iceContext, a.workDir)
 			}
 		}
 
@@ -167,6 +181,13 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 	}
 
 	out.Error(fmt.Sprintf("reached max iterations (%d)", maxIterations))
+}
+
+// isRetryableError returns true for transient LLM errors that are worth retrying,
+// such as JSON parse failures from malformed tool call output.
+func isRetryableError(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "parse JSON") || strings.Contains(msg, "unexpected end of JSON")
 }
 
 // FormatToolArgs formats tool arguments as a compact JSON string for display.

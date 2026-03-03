@@ -48,7 +48,7 @@ func RegisterBuiltins(r *Registry) {
 		Usage:       "/model [name|list|fast|smart]",
 		Handler: func(ctx *Context, args []string) Result {
 			if len(args) == 0 {
-				return Result{Text: fmt.Sprintf("Current model: %s", ctx.Model)}
+				return Result{Action: ActionShowModelPicker}
 			}
 
 			switch args[0] {
@@ -104,19 +104,9 @@ func RegisterBuiltins(r *Registry) {
 	r.Register(&Command{
 		Name:        "models",
 		Aliases:     []string{"ml"},
-		Description: "List all available models",
-		Handler: func(ctx *Context, args []string) Result {
-			var b strings.Builder
-			b.WriteString("Available models:\n")
-			for _, m := range ctx.ModelList {
-				marker := "  "
-				if m == ctx.Model {
-					marker = "* "
-				}
-				fmt.Fprintf(&b, "  %s%s\n", marker, m)
-			}
-			b.WriteString("\n* = current")
-			return Result{Text: b.String()}
+		Description: "Open model picker",
+		Handler: func(_ *Context, _ []string) Result {
+			return Result{Action: ActionShowModelPicker}
 		},
 	})
 
@@ -272,6 +262,15 @@ func RegisterBuiltins(r *Registry) {
 			fmt.Fprintf(&b, "  Session ID:    %s\n", ctx.ICESessionID)
 			fmt.Fprintf(&b, "  Embed model:   nomic-embed-text\n")
 			return Result{Text: b.String()}
+		},
+	})
+
+	r.Register(&Command{
+		Name:        "sessions",
+		Aliases:     []string{"ss"},
+		Description: "Browse and restore saved sessions",
+		Handler: func(_ *Context, _ []string) Result {
+			return Result{Action: ActionShowSessions}
 		},
 	})
 

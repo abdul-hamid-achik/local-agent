@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -9,12 +10,17 @@ import (
 	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/atotto/clipboard"
+	"github.com/charmbracelet/log"
 
 	"github.com/abdulachik/local-agent/internal/agent"
 	"github.com/abdulachik/local-agent/internal/command"
+	"github.com/abdulachik/local-agent/internal/config"
+	"github.com/abdulachik/local-agent/internal/llm"
 	"github.com/abdulachik/local-agent/internal/skill"
 )
 
@@ -34,7 +40,24 @@ const (
 	OverlayNone OverlayKind = iota
 	OverlayHelp
 	OverlayCompletion
+	OverlayModelPicker
+	OverlayPlanForm
+	OverlaySessionsPicker
 )
+
+// CompletionState holds all state for the interactive completion modal.
+type CompletionState struct {
+	Kind          string          // "command", "attachments", "skills"
+	Filter        textinput.Model // inline filter field
+	AllItems      []Completion    // full unfiltered list
+	FilteredItems []Completion    // items matching current filter
+	Index         int             // cursor in FilteredItems
+	Selected      map[int]bool    // multi-select (keys = AllItems indices)
+	CurrentPath   string          // for @ file browsing: relative dir path
+	SearchResults []Completion    // async vecgrep results
+	Searching     bool            // true while vecgrep is in flight
+	DebounceTag   int             // cancel stale searches
+}
 
 // ToolStatus represents the state of a tool execution.
 type ToolStatus int
@@ -47,24 +70,37 @@ const (
 
 // ToolEntry tracks the lifecycle of a single tool call.
 type ToolEntry struct {
-	Name      string
-	Args      string         // formatted args string
-	RawArgs   map[string]any // original args
-	Result    string
-	IsError   bool
-	Status    ToolStatus
-	StartTime time.Time
-	Duration  time.Duration
+	Name          string
+	Args          string         // formatted args string
+	RawArgs       map[string]any // original args
+	Result        string
+	IsError       bool
+	Status        ToolStatus
+	StartTime     time.Time
+	Duration      time.Duration
+	Collapsed     bool       // per-entry collapse state
+	BeforeContent string     // snapshot before file write (for diff)
+	DiffLines     []DiffLine // computed diff (nil = not a file write)
 }
 
 // ChatEntry is a single item in the chat log.
 type ChatEntry struct {
-	Kind            string // "user", "assistant", "tool_group", "error", "system"
-	Content         string // raw content
-	RenderedContent string // cached Glamour output (set once on completion)
-	Name            string // tool name for tool entries
-	IsError         bool   // for tool_result
-	ToolIndex       int    // index into toolEntries for "tool_group" kind
+	Kind              string // "user", "assistant", "tool_group", "error", "system"
+	Content           string // raw content
+	RenderedContent   string // cached Glamour output (set once on completion)
+	Name              string // tool name for tool entries
+	IsError           bool   // for tool_result
+	ToolIndex         int    // index into toolEntries for "tool_group" kind
+	ThinkingContent   string // extracted <think> content
+	ThinkingCollapsed bool   // default: true
+}
+
+// startupItem tracks the progress of a single startup task.
+type startupItem struct {
+	ID     string
+	Label  string
+	Status string // "connecting", "connected", "failed"
+	Detail string
 }
 
 // Model is the BubbleTea model for the chat interface.
@@ -73,6 +109,7 @@ type Model struct {
 	viewport viewport.Model
 	input    textarea.Model
 	spin     spinner.Model
+	scramble ScrambleModel
 	styles   Styles
 	md       *MarkdownRenderer
 	keys     KeyMap
@@ -92,14 +129,13 @@ type Model struct {
 	inputLines     int
 	userScrolledUp bool
 
+	// Startup
+	initializing bool
+	startupItems []startupItem
+	initCancel   context.CancelFunc
+
 	// Completion modal
-	completionActive   bool
-	completionType     string // "command", "attachments", "skills"
-	completionItems    []Completion
-	completionIndex    int
-	completionSelected map[int]bool // for multi-select modes
-	completionSection  int          // which section is active
-	listModel          list.Model   // bubbles/list for rendering
+	completionState *CompletionState // nil when no overlay
 
 	// File attachments
 	attachments []string
@@ -107,6 +143,45 @@ type Model struct {
 	// Tool display
 	toolEntries    []ToolEntry
 	toolsCollapsed bool
+	toolEntryRows  map[int]int // toolIndex → starting row in viewport
+
+	// Incremental rendering cache
+	cachedEntriesRender string
+	cachedEntryCount    int
+	cachedToolEntryRows map[int]int
+	entryCacheValid     bool
+
+	// Thinking state
+	thinkBuf       strings.Builder
+	inThinking     bool
+	thinkSearchBuf string
+
+	// Terminal title
+	doneFlash bool
+
+	// Session persistence
+	sessionNoteID       int
+	sessionsPickerState *SessionsPickerState
+
+	// Paste detection
+	pendingPaste string
+
+	// Responsive layout
+	isCompact bool
+	isWide    bool
+
+	// Mode system
+	mode        Mode
+	modeConfigs [3]ModeConfig
+
+	// Model management
+	modelManager     *llm.ModelManager
+	router           *config.Router
+	modelPickerState *ModelPickerState
+	planFormState    *PlanFormState
+
+	// Logging
+	logger *log.Logger
 
 	// Features
 	agent       *agent.Agent
@@ -133,10 +208,15 @@ type Model struct {
 	iceEnabled       bool
 	iceConversations int
 	iceSessionID     string
+
+	// Prompt history
+	promptHistory []string // all submitted inputs
+	historyIndex  int      // -1 = not browsing, 0 = most recent
+	historySaved  string   // saved current input when entering history
 }
 
 // New creates a new TUI Model.
-func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, completer *Completer) *Model {
+func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, completer *Completer, modelManager *llm.ModelManager, router *config.Router, logger *log.Logger) *Model {
 	ta := textarea.New()
 	ta.Placeholder = "Ask anything... (Enter to send, ? for help)"
 	ta.Focus()
@@ -152,22 +232,63 @@ func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, com
 	return &Model{
 		input:          ta,
 		spin:           s,
+		scramble:       NewScrambleModel(true),
 		styles:         NewStyles(true),
 		keys:           DefaultKeyMap(),
 		state:          StateIdle,
 		isDark:         true,
 		inputLines:     1,
 		toolsCollapsed: true,
+		initializing:   true,
+		mode:           ModeBuild,
+		modeConfigs:    DefaultModeConfigs(),
+		modelManager:   modelManager,
+		router:         router,
+		logger:         logger,
 		agent:          ag,
 		cmdRegistry:    cmdReg,
 		skillMgr:       skillMgr,
 		completer:      completer,
+		historyIndex:   -1,
 	}
 }
 
 // SetProgram sets the tea.Program reference (must be called before Run).
 func (m *Model) SetProgram(p *tea.Program) {
 	m.program = p
+}
+
+// SetInitCancel stores the cancel function for the background init goroutine.
+func (m *Model) SetInitCancel(cancel context.CancelFunc) {
+	m.initCancel = cancel
+}
+
+// renderStartup renders the animated startup progress list.
+func (m *Model) renderStartup(b *strings.Builder) {
+	title := m.styles.HeaderTitle.Render("local-agent")
+	b.WriteString("\n  " + title + "\n\n")
+
+	for _, item := range m.startupItems {
+		switch item.Status {
+		case "connecting":
+			b.WriteString("  " + m.styles.StartupSpin.Render(m.spin.View()) + " ")
+			b.WriteString(m.styles.StartupLabel.Render(item.Label) + "...\n")
+		case "connected":
+			b.WriteString("  " + m.styles.StartupCheck.Render("✓") + " ")
+			b.WriteString(m.styles.StartupLabel.Render(item.Label))
+			if item.Detail != "" {
+				b.WriteString(" " + m.styles.StartupDetail.Render("("+item.Detail+")"))
+			}
+			b.WriteString("\n")
+		case "failed":
+			b.WriteString("  " + m.styles.StartupFail.Render("✗") + " ")
+			b.WriteString(m.styles.StartupLabel.Render(item.Label))
+			if item.Detail != "" {
+				b.WriteString(" " + m.styles.StartupDetail.Render(item.Detail))
+			}
+			b.WriteString("\n")
+		}
+	}
 }
 
 func (m *Model) Init() tea.Cmd {
@@ -187,6 +308,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.styles = NewStyles(m.isDark)
 		// Update spinner style for theme.
 		m.spin.Style = m.styles.StatusDot
+		m.scramble.SetDark(msg.IsDark())
+		// Recreate markdown renderer for new theme.
+		if m.width > 0 {
+			m.md = NewMarkdownRenderer(m.width-2, m.isDark)
+			m.invalidateRenderedCache()
+		}
 		if m.ready {
 			m.viewport.SetContent(m.renderEntries())
 		}
@@ -194,7 +321,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.md = NewMarkdownRenderer(msg.Width - 2)
+		m.isCompact = msg.Width < 80 || msg.Height < 24
+		m.isWide = msg.Width > 120
+		m.md = NewMarkdownRenderer(msg.Width-2, m.isDark)
 
 		headerH := 3 // title + thick rule + gap
 		contentH := msg.Height - headerH - m.footerHeight()
@@ -204,6 +333,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if !m.ready {
 			m.viewport = viewport.New(viewport.WithWidth(msg.Width), viewport.WithHeight(contentH))
+			// Override viewport KeyMap: keep only pgup/pgdown/ctrl+u/ctrl+d
+			// to avoid conflicts with text input (up/down/j/k) and other keys (space/f/b).
+			m.viewport.KeyMap.PageDown = key.NewBinding(key.WithKeys("pgdown"))
+			m.viewport.KeyMap.PageUp = key.NewBinding(key.WithKeys("pgup"))
+			m.viewport.KeyMap.HalfPageUp = key.NewBinding(key.WithKeys("ctrl+u"))
+			m.viewport.KeyMap.HalfPageDown = key.NewBinding(key.WithKeys("ctrl+d"))
+			m.viewport.KeyMap.Up = key.NewBinding(key.WithDisabled())
+			m.viewport.KeyMap.Down = key.NewBinding(key.WithDisabled())
+			m.viewport.KeyMap.Left = key.NewBinding(key.WithDisabled())
+			m.viewport.KeyMap.Right = key.NewBinding(key.WithDisabled())
 			m.viewport.SetContent(m.renderEntries())
 			m.ready = true
 		} else {
@@ -215,16 +354,61 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.input.SetWidth(msg.Width - 2)
+		m.syncInputHeight()
 
 	case tea.KeyPressMsg:
+		// During startup, only allow Ctrl+C to quit.
+		if m.initializing {
+			if key.Matches(msg, m.keys.Quit) {
+				if m.initCancel != nil {
+					m.initCancel()
+				}
+				return m, tea.Quit
+			}
+			return m, nil
+		}
+
+		// Pending paste intercept: y/n/esc before anything else.
+		if m.pendingPaste != "" {
+			switch {
+			case msg.String() == "y":
+				m.input.InsertString("```\n" + m.pendingPaste + "\n```")
+				m.pendingPaste = ""
+				m.syncInputHeight()
+			case msg.String() == "n":
+				m.input.InsertString(m.pendingPaste)
+				m.pendingPaste = ""
+				m.syncInputHeight()
+			case key.Matches(msg, m.keys.Cancel):
+				m.pendingPaste = ""
+			}
+			return m, nil
+		}
+
 		// Handle overlay keys first.
 		if m.overlay != OverlayNone {
 			// ESC always closes the current overlay.
 			if key.Matches(msg, m.keys.Cancel) {
-				if m.overlay == OverlayCompletion {
+				switch m.overlay {
+				case OverlayCompletion:
+					m.input.SetValue("")
 					m.closeCompletion()
-				} else {
+				case OverlayModelPicker:
+					m.closeModelPicker()
+				case OverlayPlanForm:
+					m.closePlanForm()
+				case OverlaySessionsPicker:
+					// If the list is filtering, let ESC clear the filter first.
+					if m.sessionsPickerState != nil && m.sessionsPickerState.List.FilterState() == list.Filtering {
+						var cmd tea.Cmd
+						m.sessionsPickerState.List, cmd = m.sessionsPickerState.List.Update(msg)
+						cmds = append(cmds, cmd)
+						return m, tea.Batch(cmds...)
+					}
+					m.closeSessionsPicker()
+				default:
 					m.overlay = OverlayNone
+					m.input.Focus()
 				}
 				return m, nil
 			}
@@ -233,33 +417,116 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.overlay == OverlayHelp {
 				if msg.String() == "?" || msg.String() == "q" {
 					m.overlay = OverlayNone
+					m.input.Focus()
 				}
 				return m, nil
 			}
 
-			// Completion overlay: handle navigation keys.
-			if m.overlay == OverlayCompletion && m.completionActive {
+			// Model picker overlay: forward keys to list, Enter selects.
+			if m.overlay == OverlayModelPicker && m.modelPickerState != nil {
+				if key.Matches(msg, m.keys.CompleteSelect) {
+					if item := m.modelPickerState.List.SelectedItem(); item != nil {
+						mi := item.(modelItem)
+						m.selectModel(mi.name)
+					}
+				} else {
+					var cmd tea.Cmd
+					m.modelPickerState.List, cmd = m.modelPickerState.List.Update(msg)
+					cmds = append(cmds, cmd)
+				}
+				return m, tea.Batch(cmds...)
+			}
+
+			// Plan form overlay.
+			if m.overlay == OverlayPlanForm && m.planFormState != nil {
+				submitted, cancelled := m.updatePlanForm(msg)
+				if cancelled {
+					m.closePlanForm()
+					return m, nil
+				}
+				if submitted {
+					prompt := m.planFormState.AssemblePrompt()
+					m.closePlanForm()
+					return m, m.submitPlanFormPrompt(prompt)
+				}
+				return m, nil
+			}
+
+			// Sessions picker overlay: forward keys to list, Enter loads.
+			if m.overlay == OverlaySessionsPicker && m.sessionsPickerState != nil {
+				if key.Matches(msg, m.keys.CompleteSelect) {
+					if item := m.sessionsPickerState.List.SelectedItem(); item != nil {
+						si := item.(sessionItem)
+						sessionID := si.id
+						sessionTitle := si.title
+						m.closeSessionsPicker()
+						return m, func() tea.Msg {
+							note, err := loadSession(sessionID)
+							if err != nil {
+								return SessionLoadedMsg{Err: err}
+							}
+							entries := deserializeEntries(note.Content)
+							return SessionLoadedMsg{Entries: entries, Title: sessionTitle}
+						}
+					}
+				} else {
+					var cmd tea.Cmd
+					m.sessionsPickerState.List, cmd = m.sessionsPickerState.List.Update(msg)
+					cmds = append(cmds, cmd)
+				}
+				return m, tea.Batch(cmds...)
+			}
+
+			// Completion overlay: handle navigation and filter keys.
+			if m.overlay == OverlayCompletion && m.isCompletionActive() {
+				cs := m.completionState
 				switch {
 				case key.Matches(msg, m.keys.CompleteUp):
-					if m.completionIndex > 0 {
-						m.completionIndex--
-						m.listModel.Select(m.completionIndex)
+					if cs.Index > 0 {
+						cs.Index--
 					}
 				case key.Matches(msg, m.keys.CompleteDown):
-					if m.completionIndex < len(m.completionItems)-1 {
-						m.completionIndex++
-						m.listModel.Select(m.completionIndex)
+					if cs.Index < len(cs.FilteredItems)-1 {
+						cs.Index++
+					}
+				case key.Matches(msg, m.keys.CompleteSelect):
+					// Enter: if item is a folder, drill into it; otherwise accept
+					if cs.Index < len(cs.FilteredItems) && cs.Kind == "attachments" && cs.FilteredItems[cs.Index].Category == "folder" {
+						m.drillIntoFolder()
+					} else {
+						m.acceptCompletion()
 					}
 				case key.Matches(msg, m.keys.CompleteToggle):
+					// Tab toggles multi-select
 					m.toggleCompletionSelection()
-				case key.Matches(msg, m.keys.Send):
-					m.acceptCompletion()
-				case key.Matches(msg, m.keys.Complete):
-					// Tab cycles to next item.
-					if len(m.completionItems) > 0 {
-						m.completionIndex = (m.completionIndex + 1) % len(m.completionItems)
-						m.listModel.Select(m.completionIndex)
+				default:
+					// Check for backspace on empty filter => go up directory for @ kind
+					if msg.Code == tea.KeyBackspace && cs.Filter.Value() == "" && cs.Kind == "attachments" && cs.CurrentPath != "" {
+						m.drillUpFolder()
+						return m, nil
 					}
+
+					// Forward all other keys to filter input
+					oldFilter := cs.Filter.Value()
+					var cmd tea.Cmd
+					cs.Filter, cmd = cs.Filter.Update(msg)
+
+					// Re-filter if text changed
+					if cs.Filter.Value() != oldFilter {
+						cs.FilteredItems = FilterCompletions(cs.AllItems, cs.Filter.Value())
+						cs.Index = 0
+
+						// Schedule debounced vecgrep search for @ kind
+						if cs.Kind == "attachments" && cs.Filter.Value() != "" {
+							cs.DebounceTag++
+							tag := cs.DebounceTag
+							query := cs.Filter.Value()
+							return m, tea.Batch(cmd, tea.Tick(300*time.Millisecond, func(time.Time) tea.Msg {
+								return CompletionDebounceTickMsg{Tag: tag, Query: query}
+							}))
+						}
+					}
+					return m, cmd
 				}
 				return m, nil
 			}
@@ -284,15 +551,53 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Only toggle help when input is empty.
 			if m.state == StateIdle && strings.TrimSpace(m.input.Value()) == "" {
 				m.overlay = OverlayHelp
+				m.input.Blur()
 				return m, nil
 			}
 
 		case key.Matches(msg, m.keys.ToggleTools):
-			// Only toggle tools when input is empty and idle.
+			// Batch-toggle all tools when input is empty and idle.
 			if m.state == StateIdle && strings.TrimSpace(m.input.Value()) == "" {
 				m.toolsCollapsed = !m.toolsCollapsed
+				for i := range m.toolEntries {
+					m.toolEntries[i].Collapsed = m.toolsCollapsed
+				}
+				m.invalidateEntryCache()
 				m.viewport.SetContent(m.renderEntries())
 				return m, nil
+			}
+
+		case key.Matches(msg, m.keys.ToggleFocusedTool):
+			// Toggle last tool entry only when input is empty.
+			if m.state == StateIdle && strings.TrimSpace(m.input.Value()) == "" {
+				if len(m.toolEntries) > 0 {
+					last := len(m.toolEntries) - 1
+					m.toolEntries[last].Collapsed = !m.toolEntries[last].Collapsed
+					m.invalidateEntryCache()
+					m.viewport.SetContent(m.renderEntries())
+				}
+				return m, nil
+			}
+
+		case key.Matches(msg, m.keys.ToggleThinking):
+			// Toggle thinking collapsed for last assistant entry.
+			if m.state == StateIdle && strings.TrimSpace(m.input.Value()) == "" {
+				for i := len(m.entries) - 1; i >= 0; i-- {
+					if m.entries[i].Kind == "assistant" && m.entries[i].ThinkingContent != "" {
+						m.entries[i].ThinkingCollapsed = !m.entries[i].ThinkingCollapsed
+						m.invalidateEntryCache()
+						m.viewport.SetContent(m.renderEntries())
+						break
+					}
+				}
+				return m, nil
+			}
+
+		case key.Matches(msg, m.keys.CopyLast):
+			if m.state == StateIdle && strings.TrimSpace(m.input.Value()) == "" {
+				if content := m.lastAssistantContent(); content != "" {
+					return m, m.copyToClipboard(content)
+				}
 			}
 
 		case key.Matches(msg, m.keys.ClearView):
@@ -307,12 +612,25 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.agent.ClearHistory()
 				m.entries = nil
 				m.toolEntries = nil
+				m.invalidateEntryCache()
 				m.entries = append(m.entries, ChatEntry{
 					Kind:    "system",
 					Content: "New conversation started.",
 				})
 				m.viewport.SetContent(m.renderEntries())
 				m.viewport.GotoBottom()
+				return m, nil
+			}
+
+		case key.Matches(msg, m.keys.CycleMode):
+			if m.state == StateIdle {
+				m.cycleMode()
+				return m, nil
+			}
+
+		case key.Matches(msg, m.keys.ModelPicker):
+			if m.state == StateIdle {
+				m.openModelPicker()
 				return m, nil
 			}
 
@@ -326,35 +644,98 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, m.keys.Send):
 			if m.state == StateIdle {
-				// If completion is active, accept it first
-				if m.completionActive && len(m.completionItems) > 0 {
-					m.acceptCompletion()
-					return m, nil
-				}
 				return m, m.submitInput()
 			}
 
 		case key.Matches(msg, m.keys.Complete):
 			// Tab key for autocomplete
-			if m.state == StateIdle && m.completer != nil {
-				input := m.input.Value()
-				if m.completionActive {
-					// Cycle to next completion
-					m.completionIndex = (m.completionIndex + 1) % len(m.completionItems)
-					m.listModel.Select(m.completionIndex)
-				} else {
-					// Start completion
-					m.triggerCompletion(input)
+			if m.state == StateIdle && m.completer != nil && !m.isCompletionActive() {
+				m.triggerCompletion(m.input.Value())
+			}
+
+		case key.Matches(msg, m.keys.HistoryUp):
+			if m.state == StateIdle && m.overlay == OverlayNone {
+				if strings.TrimSpace(m.input.Value()) == "" || m.historyIndex != -1 {
+					if m.navigateHistory(-1) {
+						return m, nil
+					}
+				}
+			}
+
+		case key.Matches(msg, m.keys.HistoryDown):
+			if m.state == StateIdle && m.overlay == OverlayNone {
+				if m.historyIndex != -1 {
+					if m.navigateHistory(1) {
+						return m, nil
+					}
 				}
 			}
 		}
 
+	case StreamTextMsg:
+		if m.state == StateWaiting {
+			m.state = StateStreaming
+		}
+		// Route through thinking tag parser.
+		mainText, thinkText, outInThinking, outSearchBuf := processStreamChunk(
+			msg.Text, m.inThinking, m.thinkSearchBuf,
+		)
+		m.inThinking = outInThinking
+		m.thinkSearchBuf = outSearchBuf
+		if mainText != "" {
+			m.streamBuf.WriteString(mainText)
+		}
+		if thinkText != "" {
+			m.thinkBuf.WriteString(thinkText)
+		}
+		m.viewport.SetContent(m.renderEntries())
+		if !m.userScrolledUp {
+			m.viewport.GotoBottom()
+		}
+
+	case StreamDoneMsg:
+		m.evalCount = msg.EvalCount
+		m.promptTokens = msg.PromptTokens
+
+	case ToolCallStartMsg:
+		te := ToolEntry{
+			Name:      msg.Name,
+			Args:      FormatToolArgs(msg.Args),
+			RawArgs:   msg.Args,
+			Status:    ToolStatusRunning,
+			StartTime: msg.StartTime,
+			Collapsed: m.toolsCollapsed,
+		}
+		// Snapshot file content before write for diff view.
+		if classifyTool(msg.Name) == ToolTypeFileWrite {
+			te.BeforeContent = readFileForDiff(msg.Args)
+		}
+		m.toolEntries = append(m.toolEntries, te)
+		m.toolsPending++
+		m.entries = append(m.entries, ChatEntry{
+			Kind:      "tool_group",
+			ToolIndex: len(m.toolEntries) - 1,
+		})
+		// Flush any accumulated stream text before tool display.
+		m.flushStream()
+		m.viewport.SetContent(m.renderEntries())
+		if !m.userScrolledUp {
+			m.viewport.GotoBottom()
+		}
+
+	case PlanFormCompletedMsg:
+		return m, m.submitPlanFormPrompt(msg.Prompt)
+
 	case ToolCallResultMsg:
+		m.invalidateEntryCache()
+		if m.logger != nil {
+			m.logger.Info("tool call", "name", msg.Name, "duration", msg.Duration, "error", msg.IsError)
+		}
 		for i := len(m.toolEntries) - 1; i >= 0; i-- {
 			if m.toolEntries[i].Name == msg.Name && m.toolEntries[i].Status == ToolStatusRunning {
 				result := msg.Result
-				if len(result) > 500 {
-					result = result[:497] + "..."
+				if len(result) > 2000 {
+					result = result[:1997] + "..."
 				}
 				m.toolEntries[i].Result = result
 				m.toolEntries[i].IsError = msg.IsError
@@ -363,6 +744,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.toolEntries[i].Status = ToolStatusError
 				} else {
 					m.toolEntries[i].Status = ToolStatusDone
+				}
+				// Compute diff for file writes.
+				if classifyTool(m.toolEntries[i].Name) == ToolTypeFileWrite && !msg.IsError {
+					afterContent := readFileForDiff(m.toolEntries[i].RawArgs)
+					m.toolEntries[i].DiffLines = computeDiff(m.toolEntries[i].BeforeContent, afterContent)
 				}
 				break
 			}
@@ -386,6 +772,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case ErrorMsg:
+		if m.logger != nil {
+			m.logger.Error("error", "msg", msg.Msg)
+		}
 		m.entries = append(m.entries, ChatEntry{
 			Kind:    "error",
 			Content: msg.Msg,
@@ -396,6 +785,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case AgentDoneMsg:
+		if m.logger != nil {
+			m.logger.Info("agent done", "eval_tokens", m.evalCount)
+		}
 		m.flushStream()
 		m.state = StateIdle
 		m.userScrolledUp = false
@@ -405,6 +797,39 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.recalcViewportHeight()
 		m.viewport.SetContent(m.renderEntries())
 		m.viewport.GotoBottom()
+		// Terminal title flash.
+		m.doneFlash = true
+		cmds = append(cmds, tea.Tick(2*time.Second, func(time.Time) tea.Msg {
+			return DoneFlashExpiredMsg{}
+		}))
+		// Update session note.
+		if m.sessionNoteID > 0 {
+			id := m.sessionNoteID
+			content := serializeEntries(m.entries)
+			cmds = append(cmds, func() tea.Msg {
+				_ = updateSessionNote(id, content)
+				return nil
+			})
+		}
+
+	case StartupStatusMsg:
+		found := false
+		for i, item := range m.startupItems {
+			if item.ID == msg.ID {
+				m.startupItems[i].Status = msg.Status
+				m.startupItems[i].Detail = msg.Detail
+				found = true
+				break
+			}
+		}
+		if !found {
+			m.startupItems = append(m.startupItems, startupItem{
+				ID: msg.ID, Label: msg.Label, Status: msg.Status, Detail: msg.Detail,
+			})
+		}
+		if m.ready {
+			m.viewport.SetContent(m.renderEntries())
+		}
 
 	case InitCompleteMsg:
 		m.model = msg.Model
@@ -434,6 +859,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Content: "Failed to connect: " + strings.Join(parts, ", "),
 			})
 		}
+
+		m.initializing = false
+		m.startupItems = nil
 		m.viewport.SetContent(m.renderEntries())
 
 	case CommandResultMsg:
@@ -445,6 +873,102 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.SetContent(m.renderEntries())
 			m.viewport.GotoBottom()
 		}
+
+	case CompletionDebounceTickMsg:
+		if m.isCompletionActive() && m.completionState.DebounceTag == msg.Tag {
+			cs := m.completionState
+			cs.Searching = true
+			query := msg.Query
+			tag := msg.Tag
+			return m, func() tea.Msg {
+				results := m.completer.SearchFiles(context.Background(), query)
+				return CompletionSearchResultMsg{Tag: tag, Results: results}
+			}
+		}
+
+	case CompletionSearchResultMsg:
+		if m.isCompletionActive() && m.completionState.DebounceTag == msg.Tag {
+			cs := m.completionState
+			cs.Searching = false
+			cs.SearchResults = msg.Results
+
+			// Merge search results into AllItems, deduplicating by Insert
+			existing := make(map[string]bool)
+			for _, item := range cs.AllItems {
+				existing[item.Insert] = true
+			}
+			for _, result := range msg.Results {
+				if !existing[result.Insert] {
+					cs.AllItems = append(cs.AllItems, result)
+				}
+			}
+			// Re-filter with current query
+			cs.FilteredItems = FilterCompletions(cs.AllItems, cs.Filter.Value())
+		}
+
+	case DoneFlashExpiredMsg:
+		m.doneFlash = false
+
+	case SessionCreatedMsg:
+		if msg.Err == nil && msg.NoteID > 0 {
+			m.sessionNoteID = msg.NoteID
+		}
+
+	case SessionListMsg:
+		if msg.Err != nil {
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("Sessions: %v", msg.Err)})
+			m.viewport.SetContent(m.renderEntries())
+			m.viewport.GotoBottom()
+		} else if len(msg.Sessions) == 0 {
+			m.entries = append(m.entries, ChatEntry{Kind: "system", Content: "No saved sessions found."})
+			m.viewport.SetContent(m.renderEntries())
+			m.viewport.GotoBottom()
+		} else {
+			m.sessionsPickerState = newSessionsPickerState(msg.Sessions, m.width, m.isDark)
+			m.overlay = OverlaySessionsPicker
+			m.input.Blur()
+		}
+
+	case SessionLoadedMsg:
+		m.invalidateEntryCache()
+		if msg.Err != nil {
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("Load session: %v", msg.Err)})
+		} else {
+			m.entries = msg.Entries
+			m.entries = append([]ChatEntry{{Kind: "system", Content: fmt.Sprintf("Restored session: %s", msg.Title)}}, m.entries...)
+		}
+		m.viewport.SetContent(m.renderEntries())
+		m.viewport.GotoBottom()
+
+	case tea.MouseWheelMsg:
+		var cmd tea.Cmd
+		m.viewport, cmd = m.viewport.Update(msg)
+		if msg.Button == tea.MouseWheelUp {
+			m.userScrolledUp = true
+		}
+		m.checkAutoScroll()
+		cmds = append(cmds, cmd)
+
+	case tea.MouseClickMsg:
+		if msg.Button == tea.MouseLeft {
+			m.handleMouseClick(msg.X, msg.Y)
+		}
+
+	case tea.PasteMsg:
+		lines := strings.Count(msg.Content, "\n") + 1
+		if lines > 10 && m.state == StateIdle {
+			m.pendingPaste = msg.Content
+		} else if m.state == StateIdle {
+			m.input.InsertString(msg.Content)
+			m.syncInputHeight()
+		}
+	}
+
+	// Update scramble animation.
+	if _, ok := msg.(ScrambleTickMsg); ok {
+		var cmd tea.Cmd
+		m.scramble, cmd = m.scramble.Update(msg)
+		cmds = append(cmds, cmd)
 	}
 
 	// Always update spinner so the tick chain doesn't break.
@@ -455,10 +979,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// Update sub-components.
-	if m.state == StateIdle && m.overlay == OverlayNone {
-		// Check input before update to detect trigger characters
-		oldInput := m.input.Value()
-
+	if m.state == StateIdle && m.overlay == OverlayNone && !m.initializing {
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		cmds = append(cmds, cmd)
@@ -468,29 +989,88 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Auto-trigger completion when user types /, @, or #
 		newInput := m.input.Value()
-		if m.completer != nil && !m.completionActive && len(newInput) > 0 {
-			// Check if we should trigger completion
-			shouldTrigger := false
-
-			if strings.HasPrefix(newInput, "/") && !strings.HasPrefix(oldInput, "/") {
-				shouldTrigger = true
-			} else if strings.HasPrefix(newInput, "@") && !strings.HasPrefix(oldInput, "@") {
-				shouldTrigger = true
-			} else if strings.HasPrefix(newInput, "#") && !strings.HasPrefix(oldInput, "#") {
-				shouldTrigger = true
-			}
-
-			if shouldTrigger {
+		if m.completer != nil && len(newInput) > 0 {
+			first := newInput[0]
+			if (first == '/' || first == '@' || first == '#') && !m.isCompletionActive() {
 				m.triggerCompletion(newInput)
 			}
 		}
+		// Auto-close if trigger char removed
+		if m.isCompletionActive() && (len(newInput) == 0 || (newInput[0] != '/' && newInput[0] != '@' && newInput[0] != '#')) {
+			m.closeCompletion()
+		}
 	}
 
+	wasAtBottom := m.viewport.AtBottom()
 	var cmd tea.Cmd
 	m.viewport, cmd = m.viewport.Update(msg)
 	cmds = append(cmds, cmd)
 
+	// Detect keyboard scroll during streaming: if we moved away from bottom, mark scrolled up.
+	if m.state == StateStreaming && wasAtBottom && !m.viewport.AtBottom() {
+		m.userScrolledUp = true
+	}
+	m.checkAutoScroll()
+
 	return m, tea.Batch(cmds...)
+}
+
+// pushHistory appends text to history, deduplicating consecutive entries, capping at 100.
+func (m *Model) pushHistory(text string) {
+	if text == "" {
+		return
+	}
+	// Dedup consecutive
+	if len(m.promptHistory) > 0 && m.promptHistory[len(m.promptHistory)-1] == text {
+		return
+	}
+	m.promptHistory = append(m.promptHistory, text)
+	if len(m.promptHistory) > 100 {
+		m.promptHistory = m.promptHistory[len(m.promptHistory)-100:]
+	}
+	m.historyIndex = -1
+}
+
+// navigateHistory moves through history. dir=-1 = older (up), dir=1 = newer (down).
+// Returns true if navigation happened.
+func (m *Model) navigateHistory(dir int) bool {
+	if len(m.promptHistory) == 0 {
+		return false
+	}
+
+	if dir == -1 { // Up - go to older
+		if m.historyIndex == -1 {
+			// First time pressing up: save current input and go to newest history
+			m.historySaved = m.input.Value()
+			m.historyIndex = len(m.promptHistory) - 1
+		} else if m.historyIndex > 0 {
+			m.historyIndex--
+		} else {
+			return false // already at oldest
+		}
+		m.input.SetValue(m.promptHistory[m.historyIndex])
+		m.input.CursorEnd()
+		return true
+	}
+
+	if dir == 1 { // Down - go to newer
+		if m.historyIndex == -1 {
+			return false // not browsing
+		}
+		if m.historyIndex < len(m.promptHistory)-1 {
+			m.historyIndex++
+			m.input.SetValue(m.promptHistory[m.historyIndex])
+			m.input.CursorEnd()
+		} else {
+			// Past newest: restore saved input
+			m.historyIndex = -1
+			m.input.SetValue(m.historySaved)
+			m.input.CursorEnd()
+		}
+		return true
+	}
+
+	return false
 }
 
 // submitInput takes the current input, handles slash commands, or starts the agent.
@@ -499,6 +1079,8 @@ func (m *Model) submitInput() tea.Cmd {
 	if text == "" {
 		return nil
 	}
+
+	m.pushHistory(text)
 
 	m.input.Reset()
 	m.input.SetHeight(1)
@@ -526,34 +1108,14 @@ func (m *Model) submitInput() tea.Cmd {
 		return m.handleCommandAction(result)
 	}
 
-	// Regular message — send to agent.
-	m.input.Blur()
-	m.state = StateWaiting
-	m.streamBuf.Reset()
-	m.evalCount = 0
-	m.promptTokens = 0
-
-	m.entries = append(m.entries, ChatEntry{
-		Kind:    "user",
-		Content: text,
-	})
-	m.viewport.SetContent(m.renderEntries())
-	m.viewport.GotoBottom()
-
-	m.agent.AddUserMessage(text)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	m.cancel = cancel
-
-	p := m.program
-	runAgent := func() tea.Msg {
-		adapter := NewAdapter(p)
-		m.agent.Run(ctx, adapter)
-		return AgentDoneMsg{}
+	// Plan mode: show the plan form instead of sending directly.
+	if m.mode == ModePlan {
+		m.openPlanForm(text)
+		return nil
 	}
 
-	// Restart spinner tick chain + run agent concurrently.
-	return tea.Batch(m.spin.Tick, runAgent)
+	// Regular message — send to agent.
+	return m.sendToAgent(text)
 }
 
 // buildCommandContext creates a Context for slash command execution.
@@ -596,6 +1158,7 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 		m.agent.ClearHistory()
 		m.entries = nil
 		m.toolEntries = nil
+		m.invalidateEntryCache()
 		if result.Text != "" {
 			m.entries = append(m.entries, ChatEntry{
 				Kind:    "system",
@@ -681,6 +1244,20 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 		return nil
 
 	case command.ActionSwitchModel:
+		if m.modelManager != nil {
+			if err := m.modelManager.SetCurrentModel(result.Data); err != nil {
+				m.entries = append(m.entries, ChatEntry{
+					Kind:    "error",
+					Content: fmt.Sprintf("Failed to switch model: %v", err),
+				})
+				m.viewport.SetContent(m.renderEntries())
+				m.viewport.GotoBottom()
+				return nil
+			}
+		}
+		if m.logger != nil {
+			m.logger.Info("model switched", "from", m.model, "to", result.Data)
+		}
 		m.model = result.Data
 		m.entries = append(m.entries, ChatEntry{
 			Kind:    "system",
@@ -689,6 +1266,16 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 		m.viewport.SetContent(m.renderEntries())
 		m.viewport.GotoBottom()
 		return nil
+
+	case command.ActionShowModelPicker:
+		m.openModelPicker()
+		return nil
+
+	case command.ActionShowSessions:
+		return func() tea.Msg {
+			sessions, err := listSessions(20)
+			return SessionListMsg{Sessions: sessions, Err: err}
+		}
 
 	case command.ActionSwitchAgent:
 		m.agentProfile = result.Data
@@ -716,18 +1303,28 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 
 // flushStream moves accumulated stream text into a chat entry with cached rendering.
 func (m *Model) flushStream() {
-	if m.streamBuf.Len() > 0 {
+	m.invalidateEntryCache()
+	if m.streamBuf.Len() > 0 || m.thinkBuf.Len() > 0 {
 		content := m.streamBuf.String()
 		var rendered string
-		if m.md != nil {
+		if m.md != nil && content != "" {
 			rendered = m.md.RenderFull(content)
 		}
-		m.entries = append(m.entries, ChatEntry{
+		entry := ChatEntry{
 			Kind:            "assistant",
 			Content:         content,
 			RenderedContent: rendered,
-		})
+		}
+		// Attach thinking content if present.
+		if m.thinkBuf.Len() > 0 {
+			entry.ThinkingContent = m.thinkBuf.String()
+			entry.ThinkingCollapsed = true
+		}
+		m.entries = append(m.entries, entry)
 		m.streamBuf.Reset()
+		m.thinkBuf.Reset()
+		m.inThinking = false
+		m.thinkSearchBuf = ""
 	}
 }
 
@@ -740,6 +1337,7 @@ func (m *Model) invalidateRenderedCache() {
 			}
 		}
 	}
+	m.invalidateEntryCache()
 }
 
 // footerHeight returns the total height of the footer area (divider + status + input/hint).
@@ -767,6 +1365,23 @@ func (m *Model) syncInputHeight() {
 	}
 }
 
+// invalidateEntryCache marks the incremental entry render cache as stale,
+// forcing a full re-render on the next renderEntries() call.
+func (m *Model) invalidateEntryCache() {
+	m.entryCacheValid = false
+	m.cachedEntriesRender = ""
+	m.cachedEntryCount = 0
+	m.cachedToolEntryRows = nil
+}
+
+// checkAutoScroll resets userScrolledUp when the viewport is at the bottom,
+// allowing auto-scroll to resume during streaming.
+func (m *Model) checkAutoScroll() {
+	if m.viewport.AtBottom() {
+		m.userScrolledUp = false
+	}
+}
+
 // recalcViewportHeight updates the viewport height based on current footer size.
 func (m *Model) recalcViewportHeight() {
 	if !m.ready || m.height == 0 {
@@ -785,164 +1400,359 @@ func FormatToolArgs(args map[string]any) string {
 	return agent.FormatToolArgs(args)
 }
 
-// completionItem implements list.Item for the completion modal
-type completionItem struct {
-	title       string
-	description string
-	insert      string
-	selected    bool
+// isCompletionActive returns true when the completion modal is open.
+func (m *Model) isCompletionActive() bool {
+	return m.completionState != nil
 }
 
-func (i completionItem) FilterValue() string { return i.title }
+// newCompletionState creates a CompletionState with the filter textinput initialized.
+func newCompletionState(kind string, items []Completion, multiSelect bool) *CompletionState {
+	ti := textinput.New()
+	ti.Placeholder = "type to filter..."
+	ti.Focus()
+	ti.CharLimit = 128
 
-func (i completionItem) Title() string { return i.title }
-
-func (i completionItem) Description() string { return i.description }
-
-func (i completionItem) Selected() bool { return i.selected }
-
-func (i completionItem) SetSelected(b bool) completionItem {
-	i.selected = b
-	return i
-}
-
-func (m *Model) initListModel(completionType string, items []Completion) {
-	// Create list items from completions
-	listItems := make([]list.Item, len(items))
-	for i, item := range items {
-		listItems[i] = completionItem{
-			title:       item.Label,
-			description: item.Category,
-			insert:      item.Insert,
-			selected:    false,
-		}
+	var sel map[int]bool
+	if multiSelect {
+		sel = make(map[int]bool)
 	}
 
-	// Determine title
-	var title string
-	switch completionType {
-	case "command":
-		title = "Commands"
-	case "attachments":
-		title = "Attach Files & Agents"
-	case "skill":
-		title = "Skills"
-	default:
-		title = "Complete"
+	return &CompletionState{
+		Kind:          kind,
+		Filter:        ti,
+		AllItems:      items,
+		FilteredItems: items,
+		Index:         0,
+		Selected:      sel,
 	}
-
-	// Create delegate with styling
-	delegate := list.NewDefaultDelegate()
-	delegate.ShowDescription = true
-
-	// Initialize list model
-	m.listModel = list.New(listItems, delegate, 50, 20)
-	m.listModel.Title = title
-	m.listModel.SetShowStatusBar(true)
-	m.listModel.SetFilteringEnabled(false)
-	m.listModel.Select(0)
 }
 
 func (m *Model) triggerCompletion(input string) {
-	// Check if input starts with / for commands
+	var kind string
+	var items []Completion
+	var multiSelect bool
+
 	if strings.HasPrefix(input, "/") {
-		m.completionType = "command"
-		m.completionItems = m.completer.Complete(input)
-		if len(m.completionItems) > 0 {
-			m.completionActive = true
-			m.completionIndex = 0
-			m.completionSelected = nil
-			m.overlay = OverlayCompletion
-			m.initListModel("command", m.completionItems)
-		}
+		kind = "command"
+		items = m.completer.Complete(input)
+	} else if strings.HasPrefix(input, "@") {
+		kind = "attachments"
+		items = m.completer.Complete(input)
+		multiSelect = true
+	} else if strings.HasPrefix(input, "#") {
+		kind = "skills"
+		items = m.completer.Complete(input)
+		multiSelect = true
+	}
+
+	if len(items) == 0 {
 		return
 	}
 
-	// Check if input starts with @ for agents/files
-	if strings.HasPrefix(input, "@") {
-		m.completionType = "attachments"
-		m.completionItems = m.completer.Complete(input)
-		if len(m.completionItems) > 0 {
-			m.completionActive = true
-			m.completionIndex = 0
-			m.completionSelected = make(map[int]bool)
-			m.overlay = OverlayCompletion
-			m.initListModel("attachments", m.completionItems)
-		}
-		return
-	}
-
-	// Check if input starts with # for skills
-	if strings.HasPrefix(input, "#") {
-		m.completionType = "skills"
-		m.completionItems = m.completer.Complete(input)
-		if len(m.completionItems) > 0 {
-			m.completionActive = true
-			m.completionIndex = 0
-			m.completionSelected = make(map[int]bool)
-			m.overlay = OverlayCompletion
-			m.initListModel("skills", m.completionItems)
-		}
-		return
-	}
+	m.completionState = newCompletionState(kind, items, multiSelect)
+	m.overlay = OverlayCompletion
+	m.input.Blur()
 }
 
 func (m *Model) acceptCompletion() {
-	if !m.completionActive || len(m.completionItems) == 0 {
+	cs := m.completionState
+	if cs == nil || len(cs.FilteredItems) == 0 {
 		return
 	}
 
-	isMultiSelect := m.completionType == "attachments" || m.completionType == "skills"
+	isMultiSelect := cs.Kind == "attachments" || cs.Kind == "skills"
 
 	if isMultiSelect {
-		// For multi-select modes, Enter means "done" - collect all selected items
+		// Collect all selected items (indices reference AllItems)
 		var selectedItems []string
-		for idx := range m.completionSelected {
-			if idx < len(m.completionItems) {
-				selectedItems = append(selectedItems, m.completionItems[idx].Insert)
+		for idx := range cs.Selected {
+			if idx < len(cs.AllItems) {
+				selectedItems = append(selectedItems, cs.AllItems[idx].Insert)
 			}
 		}
 
-		// If nothing selected, use current item
-		if len(selectedItems) == 0 && m.completionIndex < len(m.completionItems) {
-			selectedItems = append(selectedItems, m.completionItems[m.completionIndex].Insert)
+		// If nothing selected, use current filtered item
+		if len(selectedItems) == 0 && cs.Index < len(cs.FilteredItems) {
+			selectedItems = append(selectedItems, cs.FilteredItems[cs.Index].Insert)
 		}
 
-		// Build the input from selected items
 		m.input.SetValue(strings.Join(selectedItems, " "))
 		m.input.CursorEnd()
 	} else {
-		// Single select - just use the selected item
-		item := m.completionItems[m.completionIndex]
+		item := cs.FilteredItems[cs.Index]
 		m.input.SetValue(item.Insert)
 		m.input.CursorEnd()
 	}
 
-	// Close completion modal
-	m.completionActive = false
-	m.completionItems = nil
-	m.completionIndex = 0
-	m.completionSelected = nil
-	m.overlay = OverlayNone
+	m.closeCompletion()
 }
 
 func (m *Model) toggleCompletionSelection() {
-	if m.completionSelected == nil {
+	cs := m.completionState
+	if cs == nil || cs.Selected == nil || len(cs.FilteredItems) == 0 {
 		return
 	}
 
-	// Toggle current item selection
-	if m.completionSelected[m.completionIndex] {
-		delete(m.completionSelected, m.completionIndex)
-	} else {
-		m.completionSelected[m.completionIndex] = true
+	// Map the filtered index back to AllItems index
+	filteredItem := cs.FilteredItems[cs.Index]
+	for i, item := range cs.AllItems {
+		if item.Label == filteredItem.Label && item.Insert == filteredItem.Insert {
+			if cs.Selected[i] {
+				delete(cs.Selected, i)
+			} else {
+				cs.Selected[i] = true
+			}
+			break
+		}
 	}
 }
 
+// drillIntoFolder navigates into a subfolder in the @ completion modal.
+func (m *Model) drillIntoFolder() {
+	cs := m.completionState
+	if cs == nil || cs.Index >= len(cs.FilteredItems) {
+		return
+	}
+
+	item := cs.FilteredItems[cs.Index]
+	folderName := strings.TrimSuffix(item.Label, "/")
+
+	if cs.CurrentPath != "" {
+		cs.CurrentPath += "/" + folderName
+	} else {
+		cs.CurrentPath = folderName
+	}
+
+	// Get new directory contents
+	fileItems := m.completer.CompleteFilePath(cs.CurrentPath)
+	cs.AllItems = fileItems
+	cs.Filter.SetValue("")
+	cs.FilteredItems = fileItems
+	cs.Index = 0
+	cs.SearchResults = nil
+}
+
+// drillUpFolder navigates to the parent folder in the @ completion modal.
+func (m *Model) drillUpFolder() {
+	cs := m.completionState
+	if cs == nil || cs.CurrentPath == "" {
+		return
+	}
+
+	// Pop last segment
+	if idx := strings.LastIndex(cs.CurrentPath, "/"); idx >= 0 {
+		cs.CurrentPath = cs.CurrentPath[:idx]
+	} else {
+		cs.CurrentPath = ""
+	}
+
+	// Re-list
+	var items []Completion
+	if cs.CurrentPath == "" {
+		// Back to root — show agents + files
+		items = m.completer.Complete("@")
+	} else {
+		items = m.completer.CompleteFilePath(cs.CurrentPath)
+	}
+
+	cs.AllItems = items
+	cs.Filter.SetValue("")
+	cs.FilteredItems = items
+	cs.Index = 0
+	cs.SearchResults = nil
+}
+
 func (m *Model) closeCompletion() {
-	m.completionActive = false
-	m.completionItems = nil
-	m.completionIndex = 0
-	m.completionSelected = nil
+	m.completionState = nil
 	m.overlay = OverlayNone
+	m.input.Focus()
+}
+
+// sendToAgent sends a message to the agent, setting mode context first.
+func (m *Model) sendToAgent(text string) tea.Cmd {
+	if m.logger != nil {
+		cfg := m.modeConfigs[m.mode]
+		m.logger.Info("user message", "mode", cfg.Label, "length", len(text))
+	}
+
+	m.input.Blur()
+	m.state = StateWaiting
+	m.recalcViewportHeight()
+	m.streamBuf.Reset()
+	m.evalCount = 0
+	m.promptTokens = 0
+
+	m.entries = append(m.entries, ChatEntry{
+		Kind:    "user",
+		Content: text,
+	})
+	m.viewport.SetContent(m.renderEntries())
+	m.viewport.GotoBottom()
+
+	m.agent.AddUserMessage(text)
+
+	// Set mode context on the agent.
+	cfg := m.modeConfigs[m.mode]
+	m.agent.SetModeContext(cfg.SystemPromptPrefix, cfg.AllowTools)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancel = cancel
+
+	p := m.program
+	runAgent := func() tea.Msg {
+		adapter := NewAdapter(p)
+		m.agent.Run(ctx, adapter)
+		return AgentDoneMsg{}
+	}
+
+	m.scramble.Reset()
+
+	batchCmds := []tea.Cmd{m.spin.Tick, m.scramble.Tick(), runAgent}
+
+	// Create session note on first message.
+	if m.sessionNoteID == 0 && notedAvailable() {
+		batchCmds = append(batchCmds, func() tea.Msg {
+			ts := time.Now().Format("2006-01-02 15:04")
+			id, err := createSessionNote(ts)
+			return SessionCreatedMsg{NoteID: id, Err: err}
+		})
+	}
+
+	return tea.Batch(batchCmds...)
+}
+
+// cycleMode advances through ASK -> PLAN -> BUILD -> ASK.
+func (m *Model) cycleMode() {
+	m.mode = (m.mode + 1) % 3
+	cfg := m.modeConfigs[m.mode]
+
+	// Auto-select model via router.
+	if m.router != nil {
+		newModel := m.router.GetModelForCapability(cfg.PreferredCapability)
+		if newModel != "" && newModel != m.model {
+			if m.modelManager != nil {
+				if err := m.modelManager.SetCurrentModel(newModel); err == nil {
+					m.model = newModel
+				}
+			}
+		}
+	}
+
+	if m.logger != nil {
+		m.logger.Info("mode switched", "mode", cfg.Label, "model", m.model)
+	}
+
+	m.entries = append(m.entries, ChatEntry{
+		Kind:    "system",
+		Content: fmt.Sprintf("Mode: %s | Model: %s", cfg.Label, m.model),
+	})
+	m.viewport.SetContent(m.renderEntries())
+	m.viewport.GotoBottom()
+}
+
+// openModelPicker shows the model picker overlay.
+func (m *Model) openModelPicker() {
+	if m.router == nil {
+		return
+	}
+	models := m.router.ListModels()
+	if len(models) == 0 {
+		return
+	}
+
+	m.modelPickerState = newModelPickerState(models, m.model, m.isDark)
+	m.overlay = OverlayModelPicker
+	m.input.Blur()
+}
+
+// selectModel switches to the given model and closes the picker.
+func (m *Model) selectModel(name string) {
+	old := m.model
+	if m.modelManager != nil {
+		if err := m.modelManager.SetCurrentModel(name); err != nil {
+			m.entries = append(m.entries, ChatEntry{
+				Kind:    "error",
+				Content: fmt.Sprintf("Failed to switch model: %v", err),
+			})
+			m.closeModelPicker()
+			return
+		}
+	}
+	m.model = name
+	if m.logger != nil {
+		m.logger.Info("model switched", "from", old, "to", name)
+	}
+	m.entries = append(m.entries, ChatEntry{
+		Kind:    "system",
+		Content: fmt.Sprintf("Model: %s", name),
+	})
+	m.closeModelPicker()
+	m.viewport.SetContent(m.renderEntries())
+	m.viewport.GotoBottom()
+}
+
+// closeModelPicker dismisses the model picker overlay.
+func (m *Model) closeModelPicker() {
+	m.modelPickerState = nil
+	m.overlay = OverlayNone
+	m.input.Focus()
+}
+
+// openPlanForm shows the plan form pre-filled with the given task text.
+func (m *Model) openPlanForm(task string) {
+	m.planFormState = NewPlanFormState(task)
+	m.overlay = OverlayPlanForm
+	m.input.Blur()
+}
+
+// closePlanForm dismisses the plan form and returns focus to input.
+func (m *Model) closePlanForm() {
+	m.planFormState = nil
+	m.overlay = OverlayNone
+	m.input.Focus()
+}
+
+// submitPlanFormPrompt sends the assembled plan prompt to the agent.
+func (m *Model) submitPlanFormPrompt(prompt string) tea.Cmd {
+	return m.sendToAgent(prompt)
+}
+
+// lastAssistantContent scans entries backwards for the last assistant message.
+func (m *Model) lastAssistantContent() string {
+	for i := len(m.entries) - 1; i >= 0; i-- {
+		if m.entries[i].Kind == "assistant" {
+			return m.entries[i].Content
+		}
+	}
+	return ""
+}
+
+// copyToClipboard copies text to the system clipboard and returns a status message.
+func (m *Model) copyToClipboard(text string) tea.Cmd {
+	return func() tea.Msg {
+		if err := clipboard.WriteAll(text); err != nil {
+			return SystemMessageMsg{Msg: fmt.Sprintf("Clipboard error: %v", err)}
+		}
+		return SystemMessageMsg{Msg: "Copied to clipboard."}
+	}
+}
+
+// handleMouseClick hit-tests tool entries and toggles their collapsed state.
+func (m *Model) handleMouseClick(x, y int) {
+	// Convert screen Y to viewport-relative position.
+	vpY := y - 3 + m.viewport.YOffset() // 3 = header height
+	if m.toolEntryRows == nil {
+		return
+	}
+
+	for toolIdx, startRow := range m.toolEntryRows {
+		if vpY >= startRow && vpY < startRow+3 {
+			if toolIdx >= 0 && toolIdx < len(m.toolEntries) {
+				m.toolEntries[toolIdx].Collapsed = !m.toolEntries[toolIdx].Collapsed
+				m.invalidateEntryCache()
+				m.viewport.SetContent(m.renderEntries())
+			}
+			return
+		}
+	}
 }

@@ -60,6 +60,8 @@ const (
 	ActionDeactivateSkill        // Deactivate skill (Data = name)
 	ActionSwitchModel            // Switch model (Data = model name)
 	ActionSwitchAgent            // Switch agent profile (Data = agent name)
+	ActionShowSessions           // Open sessions picker
+	ActionShowModelPicker        // Open model picker overlay
 )
 
 // Registry holds all registered slash commands.

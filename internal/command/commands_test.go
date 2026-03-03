@@ -59,9 +59,9 @@ func TestBuiltin_Model(t *testing.T) {
 		checkText  string
 	}{
 		{
-			name:      "no args shows current",
-			args:      nil,
-			checkText: "Current model: qwen3.5:0.8b",
+			name:       "no args opens model picker",
+			args:       nil,
+			wantAction: ActionShowModelPicker,
 		},
 		{
 			name:      "list shows models",
@@ -126,8 +126,8 @@ func TestBuiltin_Models(t *testing.T) {
 		ModelList: []string{"qwen3.5:0.8b", "qwen3.5:2b"},
 	}
 	result := r.Execute(ctx, "models", nil)
-	if !strings.Contains(result.Text, "Available models") {
-		t.Errorf("expected models list, got %q", result.Text)
+	if result.Action != ActionShowModelPicker {
+		t.Errorf("expected ActionShowModelPicker, got %d", result.Action)
 	}
 }
 
