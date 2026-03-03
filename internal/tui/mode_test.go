@@ -59,8 +59,8 @@ func TestCycleMode(t *testing.T) {
 		if last.Kind != "system" {
 			t.Errorf("expected 'system' kind, got %q", last.Kind)
 		}
-		if !strings.Contains(last.Content, "Mode:") {
-			t.Errorf("expected mode info in content, got %q", last.Content)
+		if !strings.Contains(last.Content, "Mode switched to") {
+			t.Errorf("expected mode switch info in content, got %q", last.Content)
 		}
 	})
 

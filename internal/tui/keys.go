@@ -30,6 +30,7 @@ type KeyMap struct {
 	ToggleThinking     key.Binding
 	CompactToggle      key.Binding
 	ExternalEditor     key.Binding
+	ToggleSidePanel    key.Binding
 }
 
 // DefaultKeyMap returns the default keybindings.
@@ -104,8 +105,8 @@ func DefaultKeyMap() KeyMap {
 			key.WithHelp("enter", "select item"),
 		),
 		CopyLast: key.NewBinding(
-			key.WithKeys("y"),
-			key.WithHelp("y", "copy last response"),
+			key.WithKeys("ctrl+y"),
+			key.WithHelp("ctrl+y", "copy last response"),
 		),
 		CycleMode: key.NewBinding(
 			key.WithKeys("shift+tab"),
@@ -139,6 +140,10 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("ctrl+e"),
 			key.WithHelp("ctrl+e", "open in $EDITOR"),
 		),
+		ToggleSidePanel: key.NewBinding(
+			key.WithKeys("ctrl+b"),
+			key.WithHelp("ctrl+b", "toggle side panel"),
+		),
 	}
 }
 
@@ -153,7 +158,7 @@ func (k KeyMap) FullHelp() [][]key.Binding {
 		{k.Send, k.NewLine, k.Cancel, k.Quit},
 		{k.ClearView, k.NewConvo, k.Help, k.ToggleTools, k.CopyLast},
 		{k.PageUp, k.PageDown, k.HalfPageUp, k.HalfPageDn},
-		{k.CycleMode, k.ModelPicker},
+		{k.CycleMode, k.ModelPicker, k.ToggleSidePanel},
 		{k.HistoryUp, k.HistoryDown},
 		{k.ToggleFocusedTool, k.ToggleThinking, k.CompactToggle, k.ExternalEditor},
 	}

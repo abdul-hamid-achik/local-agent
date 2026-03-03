@@ -102,6 +102,15 @@ func (tm *ToastManager) Error(message string) int {
 	return tm.Add(ToastKindError, message, 5*time.Second)
 }
 
+// AddToast adds a toast with default duration based on kind.
+func (tm *ToastManager) AddToast(toast Toast) int {
+	duration := 3 * time.Second
+	if toast.Kind == ToastKindWarning || toast.Kind == ToastKindError {
+		duration = 5 * time.Second
+	}
+	return tm.Add(toast.Kind, toast.Message, duration)
+}
+
 // Update removes expired toasts.
 func (tm *ToastManager) Update() {
 	now := time.Now()

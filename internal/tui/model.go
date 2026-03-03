@@ -11,8 +11,8 @@ import (
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/spinner"
-	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -232,16 +232,40 @@ type Model struct {
 	promptHistory []string // all submitted inputs
 	historyIndex  int      // -1 = not browsing, 0 = most recent
 	historySaved  string   // saved current input when entering history
+
+	// Welcome animation
+	welcomeModel WelcomeModel
+
+	// Side panel
+	sidePanel SidePanelModel
+
+	// Animated logo for chat viewport
+	logoModel LogoModel
+
+	// Help overlay viewport (scrollable)
+	helpViewport viewport.Model
 }
 
 // New creates a new TUI Model.
 func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, completer *Completer, modelManager *llm.ModelManager, router *config.Router, logger *log.Logger) *Model {
 	ta := textarea.New()
-	ta.Placeholder = "Ask anything... (Enter to send, ? for help)"
+	ta.Placeholder = "Ask anything... (Enter to send, ctrl+b for sidebar)"
 	ta.Focus()
 	ta.CharLimit = 4096
 	ta.SetHeight(1)
 	ta.ShowLineNumbers = false
+	ta.Prompt = "❯ "
+	
+	// Remove background - make completely transparent like Crush
+	styles := textarea.DefaultDarkStyles()
+	styles.Focused.Base = lipgloss.NewStyle()  // No background
+	styles.Focused.CursorLine = lipgloss.NewStyle()  // No background on cursor line
+	styles.Blurred.Base = lipgloss.NewStyle()  // No background when blurred
+	ta.SetStyles(styles)
+	
+	// Set prompt color to match Nord theme (cyan)
+	styles.Focused.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color("#88c0d0"))
+	ta.SetStyles(styles)
 
 	s := spinner.New(
 		spinner.WithSpinner(spinner.MiniDot),
@@ -252,6 +276,9 @@ func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, com
 		input:          ta,
 		spin:           s,
 		scramble:       NewScrambleModel(true),
+		welcomeModel:   NewWelcomeModel(true),
+		sidePanel:      NewSidePanelModel(true),
+		logoModel:      NewLogoModel(true),
 		styles:         NewStyles(true),
 		keys:           DefaultKeyMap(),
 		state:          StateIdle,
@@ -284,32 +311,10 @@ func (m *Model) SetInitCancel(cancel context.CancelFunc) {
 	m.initCancel = cancel
 }
 
-// renderStartup renders the animated startup progress list.
+// renderStartup renders the logo welcome screen during initialization.
+// Startup progress is shown in the sidebar, so the main viewport shows the logo.
 func (m *Model) renderStartup(b *strings.Builder) {
-	title := m.styles.HeaderTitle.Render("local-agent")
-	b.WriteString("\n  " + title + "\n\n")
-
-	for _, item := range m.startupItems {
-		switch item.Status {
-		case "connecting":
-			b.WriteString("  " + m.styles.StartupSpin.Render(m.spin.View()) + " ")
-			b.WriteString(m.styles.StartupLabel.Render(item.Label) + "...\n")
-		case "connected":
-			b.WriteString("  " + m.styles.StartupCheck.Render("✓") + " ")
-			b.WriteString(m.styles.StartupLabel.Render(item.Label))
-			if item.Detail != "" {
-				b.WriteString(" " + m.styles.StartupDetail.Render("("+item.Detail+")"))
-			}
-			b.WriteString("\n")
-		case "failed":
-			b.WriteString("  " + m.styles.StartupFail.Render("✗") + " ")
-			b.WriteString(m.styles.StartupLabel.Render(item.Label))
-			if item.Detail != "" {
-				b.WriteString(" " + m.styles.StartupDetail.Render(item.Detail))
-			}
-			b.WriteString("\n")
-		}
-	}
+	m.renderWelcome(b)
 }
 
 func (m *Model) Init() tea.Cmd {
@@ -349,19 +354,39 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.isWide = msg.Width > 120
 		m.md = NewMarkdownRenderer(msg.Width-2, m.isDark)
 
-		headerH := 3 // title + thick rule + gap
-		contentH := msg.Height - headerH - m.footerHeight()
+		// Calculate panel width (30 chars or 25% of screen, min 25, max 40)
+		panelWidth := 30
+		if msg.Width < 100 {
+			panelWidth = 25
+		} else if msg.Width > 160 {
+			panelWidth = 40
+		}
+
+		// Always update side panel dimensions
+		m.sidePanel.SetWidth(panelWidth)
+		m.sidePanel.SetHeight(msg.Height - 2) // account for footer
+
+		// Calculate content width for the unified chat area (viewport + input)
+		// Subtract: panel width + 1 (separator line) + 1 (right padding)
+		contentWidth := msg.Width - 1
+		if m.sidePanel.IsVisible() {
+			contentWidth = msg.Width - panelWidth - 2 // panel + separator line
+		}
+		if contentWidth < 20 {
+			contentWidth = 20
+		}
+
+		contentH := msg.Height - 1 - m.footerHeight()
 		if contentH < 1 {
 			contentH = 1
 		}
 
 		if !m.ready {
 			m.viewport = viewport.New(
-				viewport.WithWidth(msg.Width-1), // Reserve 1 column for potential scrollbar
+				viewport.WithWidth(contentWidth),
 				viewport.WithHeight(contentH),
 			)
 			// Override viewport KeyMap: keep only pgup/pgdown/ctrl+u/ctrl+d
-			// to avoid conflicts with text input (up/down/j/k) and other keys (space/f/b).
 			m.viewport.KeyMap.PageDown = key.NewBinding(key.WithKeys("pgdown"))
 			m.viewport.KeyMap.PageUp = key.NewBinding(key.WithKeys("pgup"))
 			m.viewport.KeyMap.HalfPageUp = key.NewBinding(key.WithKeys("ctrl+u"))
@@ -373,14 +398,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.SetContent(m.renderEntries())
 			m.ready = true
 		} else {
-			m.viewport.SetWidth(msg.Width - 1)
+			m.viewport.SetWidth(contentWidth)
 			m.viewport.SetHeight(contentH)
 			// Re-render cached entries for new width.
 			m.invalidateRenderedCache()
 			m.viewport.SetContent(m.renderEntries())
 		}
 
-		m.input.SetWidth(msg.Width - 2)
+		// Resize help viewport if it's open.
+		if m.overlay == OverlayHelp {
+			m.initHelpViewport()
+		}
+
+		// Input width matches viewport exactly - they're one unified area
+		m.input.SetWidth(contentWidth)
 		m.syncInputHeight()
 
 	case tea.KeyPressMsg:
@@ -456,11 +487,28 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-			// Help overlay: ? or q to dismiss, swallow everything else.
+			// Help overlay: scroll keys forwarded to helpViewport, ? or q to dismiss.
 			if m.overlay == OverlayHelp {
-				if msg.String() == "?" || msg.String() == "q" {
+				switch msg.String() {
+				case "?", "q":
 					m.overlay = OverlayNone
 					m.input.Focus()
+				case "j", "down":
+					m.helpViewport.ScrollDown(1)
+				case "k", "up":
+					m.helpViewport.ScrollUp(1)
+				case "pgdown":
+					m.helpViewport.PageDown()
+				case "pgup":
+					m.helpViewport.PageUp()
+				case "d":
+					m.helpViewport.HalfPageDown()
+				case "u":
+					m.helpViewport.HalfPageUp()
+				case "g":
+					m.helpViewport.GotoTop()
+				case "G":
+					m.helpViewport.GotoBottom()
 				}
 				return m, nil
 			}
@@ -594,6 +642,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Only toggle help when input is empty.
 			if m.state == StateIdle && strings.TrimSpace(m.input.Value()) == "" {
 				m.overlay = OverlayHelp
+				m.initHelpViewport()
 				m.input.Blur()
 				return m, nil
 			}
@@ -729,6 +778,31 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return m, nil
 					}
 				}
+			}
+
+		case key.Matches(msg, m.keys.ToggleSidePanel):
+			if m.state == StateIdle {
+				m.sidePanel.Toggle()
+				// Recalculate viewport sizes
+				panelWidth := 30
+				if m.width < 100 {
+					panelWidth = 25
+				}
+				// Unified chat area width
+				contentWidth := m.width - 1
+				if m.sidePanel.IsVisible() {
+					m.sidePanel.SetWidth(panelWidth)
+					m.sidePanel.SetHeight(m.height - 2)
+					contentWidth = m.width - panelWidth - 2 // panel + separator
+				}
+				if contentWidth < 20 {
+					contentWidth = 20
+				}
+				m.viewport.SetWidth(contentWidth)
+				m.input.SetWidth(contentWidth) // Unified width
+				m.invalidateRenderedCache()
+				m.viewport.SetContent(m.renderEntries())
+				return m, nil
 			}
 		}
 
@@ -896,6 +970,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				ID: msg.ID, Label: msg.Label, Status: msg.Status, Detail: msg.Detail,
 			})
 		}
+		// Update sidebar startup items
+		sidePanelItems := make([]StartupItem, len(m.startupItems))
+		for i, item := range m.startupItems {
+			sidePanelItems[i] = StartupItem{
+				Label:  item.Label,
+				Status: item.Status,
+				Detail: item.Detail,
+			}
+		}
+		m.sidePanel.SetStartupItems(sidePanelItems)
 		if m.ready {
 			m.viewport.SetContent(m.renderEntries())
 		}
@@ -931,6 +1015,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.initializing = false
 		m.startupItems = nil
+
+		// Update side panel with initial data
+		m.sidePanel.UpdateSections(
+			m.model,
+			m.modelList,
+			m.serverCount,
+			m.toolCount,
+			m.iceEnabled,
+			m.iceConversations,
+		)
+
+		// Start logo animation in chat viewport
+		m.logoModel.Start()
+
 		m.viewport.SetContent(m.renderEntries())
 
 	case CommandResultMsg:
@@ -1063,6 +1161,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if _, ok := msg.(ScrambleTickMsg); ok {
 		var cmd tea.Cmd
 		m.scramble, cmd = m.scramble.Update(msg)
+		cmds = append(cmds, cmd)
+	}
+
+	// Update logo animation
+	if !m.logoModel.IsDone() {
+		var cmd tea.Cmd
+		m.logoModel, cmd = m.logoModel.Update(msg)
 		cmds = append(cmds, cmd)
 	}
 
@@ -1253,6 +1358,7 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 	switch result.Action {
 	case command.ActionShowHelp:
 		m.overlay = OverlayHelp
+		m.initHelpViewport()
 		return nil
 
 	case command.ActionClear:
@@ -1843,9 +1949,26 @@ func (m *Model) cycleMode() {
 		m.logger.Info("mode switched", "mode", cfg.Label, "model", m.model)
 	}
 
+	// Show enhanced mode switch notification with toast
+	modeColors := map[Mode]string{
+		ModeAsk:   "#81a1c1",
+		ModePlan:  "#ebcb8b",
+		ModeBuild: "#a3be8c",
+	}
+
+	_ = modeColors // reserved for future visual enhancements
+	toastMsg := fmt.Sprintf("⚡ Mode: %s • Model: %s", cfg.Label, m.model)
+	if m.toastMgr != nil {
+		m.toastMgr.AddToast(Toast{
+			Message: toastMsg,
+			Kind:    ToastKindInfo,
+		})
+	}
+
+	// Also show in chat log for persistence
 	m.entries = append(m.entries, ChatEntry{
 		Kind:    "system",
-		Content: fmt.Sprintf("Mode: %s | Model: %s", cfg.Label, m.model),
+		Content: fmt.Sprintf("Mode switched to %s (%s)", cfg.Label, m.model),
 	})
 	m.viewport.SetContent(m.renderEntries())
 	m.viewport.GotoBottom()

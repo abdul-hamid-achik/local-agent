@@ -61,7 +61,7 @@ func TestCopyLast_OnlyWhenIdleAndEmpty(t *testing.T) {
 		}
 		m.input.SetValue("")
 
-		_, cmd := m.Update(charKey('y'))
+		_, cmd := m.Update(ctrlKey('y'))
 		if cmd == nil {
 			t.Error("expected a command to be returned for copy")
 		}
@@ -75,8 +75,8 @@ func TestCopyLast_OnlyWhenIdleAndEmpty(t *testing.T) {
 		}
 		m.input.SetValue("some text")
 
-		_, cmd := m.Update(charKey('y'))
-		// When input is non-empty, 'y' is typed into the input, not a copy command.
+		_, cmd := m.Update(ctrlKey('y'))
+		// When input is non-empty, ctrl+y should not trigger copy.
 		// The cmd may be non-nil (textarea update), but no copy should occur.
 		// Verify no system message about clipboard appears.
 		if cmd != nil {
@@ -98,7 +98,7 @@ func TestCopyLast_OnlyWhenIdleAndEmpty(t *testing.T) {
 		m.input.SetValue("")
 
 		initialEntryCount := len(m.entries)
-		m.Update(charKey('y'))
+		m.Update(ctrlKey('y'))
 		// Should not add any system message about clipboard
 		if len(m.entries) > initialEntryCount {
 			t.Error("should not trigger copy when not idle")
@@ -113,7 +113,7 @@ func TestCopyLast_OnlyWhenIdleAndEmpty(t *testing.T) {
 		}
 		m.input.SetValue("")
 
-		_, cmd := m.Update(charKey('y'))
+		_, cmd := m.Update(ctrlKey('y'))
 		// Should not return a copy command when there's no assistant content
 		if cmd != nil {
 			msg := cmd()

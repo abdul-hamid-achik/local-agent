@@ -238,7 +238,7 @@ servers:
 | `t`             | Expand/collapse tool calls    |
 | `space`         | Toggle last tool details      |
 | `ctrl+t`        | Toggle thinking/CoT display   |
-| `y`             | Copy last response            |
+| `ctrl+y`        | Copy last response            |
 
 ### Control
 

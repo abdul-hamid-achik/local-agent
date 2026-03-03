@@ -16,63 +16,98 @@ func (m *Model) View() tea.View {
 		return tea.NewView("  initializing...")
 	}
 
-	var b strings.Builder
+	var content string
 
-	// Header bar
-	b.WriteString(m.renderHeader())
-	b.WriteString("\n")
+	// Build the right side: viewport + footer as one unit
+	var rightSide strings.Builder
+	rightSide.WriteString(m.viewport.View())
+	rightSide.WriteString("\n")
 
-	// Message viewport (scrollable)
-	vpContent := m.viewport.View()
-
-	// If overlay is active, render it on top of the viewport.
-	switch m.overlay {
-	case OverlayHelp:
-		helpOverlay := m.renderHelpOverlay(m.width)
-		vpContent = m.overlayOnContent(vpContent, helpOverlay)
-	case OverlayCompletion:
-		if m.isCompletionActive() {
-			completionModal := m.renderCompletionModal()
-			vpContent = m.overlayOnContent(vpContent, completionModal)
-		}
-	case OverlayModelPicker:
-		if m.modelPickerState != nil {
-			pickerOverlay := m.renderModelPicker()
-			vpContent = m.overlayOnContent(vpContent, pickerOverlay)
-		}
-	case OverlayPlanForm:
-		if m.planFormState != nil {
-			formOverlay := m.renderPlanForm()
-			vpContent = m.overlayOnContent(vpContent, formOverlay)
-		}
-	case OverlaySessionsPicker:
-		if m.sessionsPickerState != nil {
-			sessionsOverlay := m.renderSessionsPicker()
-			vpContent = m.overlayOnContent(vpContent, sessionsOverlay)
-		}
-	}
-
-	b.WriteString(vpContent)
-	b.WriteString("\n")
-
-	// Divider line.
-	b.WriteString(m.styles.Divider.Render(rule(m.width)))
-	b.WriteString("\n")
+	// Divider line (only in chat area, not under sidebar)
+	rightSide.WriteString(m.styles.Divider.Render(rule(m.width - m.sidePanel.width - 1)))
+	rightSide.WriteString("\n")
 
 	// Status line.
-	b.WriteString(m.renderStatusLine())
-	b.WriteString("\n")
+	rightSide.WriteString(m.renderStatusLine())
+	rightSide.WriteString("\n")
 
-	// Input or streaming hint
-	if m.initializing {
-		b.WriteString(m.styles.StreamHint.Render("  Starting up..."))
-	} else if m.state == StateIdle {
-		b.WriteString(m.input.View())
+	// Input or streaming hint - clean Crush-style
+	if m.state == StateIdle {
+		rightSide.WriteString(m.input.View())
 	} else if m.state == StateWaiting {
-		b.WriteString(m.styles.StreamHint.Render("  " + m.scramble.View() + " thinking... press Esc to cancel"))
+		rightSide.WriteString(m.styles.StreamHint.Render("  " + m.scramble.View() + " thinking... press Esc to cancel"))
 	} else {
-		b.WriteString(m.styles.StreamHint.Render("  " + m.spin.View() + " streaming... press Esc to cancel"))
+		rightSide.WriteString(m.styles.StreamHint.Render("  " + m.spin.View() + " streaming... press Esc to cancel"))
 	}
+
+	// Render side panel + right side horizontally using lipgloss
+	if m.sidePanel.IsVisible() {
+		panelView := m.sidePanel.View()
+		rightContent := rightSide.String()
+
+		// Calculate widths
+		panelW := m.sidePanel.width
+		rightW := m.width - panelW - 1 // -1 for separator
+
+		// Create left panel with fixed width and FULL HEIGHT
+		leftStyle := lipgloss.NewStyle().
+			Width(panelW).
+			Height(m.height)
+		left := leftStyle.Render(panelView)
+
+		// Create right side with fixed width
+		rightStyle := lipgloss.NewStyle().
+			Width(rightW).
+			Height(m.height)
+		right := rightStyle.Render(rightContent)
+
+		// Join horizontally with separator
+		// Create a full-height divider
+		dividerChars := ""
+		for i := 0; i < m.height; i++ {
+			dividerChars += "│\n"
+		}
+		divider := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#6c7a89")).
+			Render(dividerChars)
+		
+		content = lipgloss.JoinHorizontal(lipgloss.Top, left, divider, right)
+	} else {
+		// No panel - full width with footer
+		content = rightSide.String()
+	}
+
+	// Render overlays on top (centered modal) using overlayOnContent
+	if m.overlay != OverlayNone {
+		var overlay string
+		switch m.overlay {
+		case OverlayHelp:
+			overlay = m.renderHelpOverlay(m.width)
+		case OverlayCompletion:
+			if m.isCompletionActive() {
+				overlay = m.renderCompletionModal()
+			}
+		case OverlayModelPicker:
+			if m.modelPickerState != nil {
+				overlay = m.renderModelPicker()
+			}
+		case OverlayPlanForm:
+			if m.planFormState != nil {
+				overlay = m.renderPlanForm()
+			}
+		case OverlaySessionsPicker:
+			if m.sessionsPickerState != nil {
+				overlay = m.renderSessionsPicker()
+			}
+		}
+		if overlay != "" {
+			content = m.overlayOnContent(content, overlay)
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString(content)
+	b.WriteString("\n")
 
 	// Toast notifications (bottom-right corner)
 	if m.toastMgr != nil && m.toastMgr.HasToasts() {
@@ -91,14 +126,14 @@ func (m *Model) View() tea.View {
 	// Terminal title progress.
 	switch m.state {
 	case StateWaiting:
-		v.WindowTitle = "local-agent \u00b7 thinking..."
+		v.WindowTitle = "LOCAL AGENT \u00b7 thinking..."
 	case StateStreaming:
-		v.WindowTitle = "local-agent \u00b7 streaming..."
+		v.WindowTitle = "LOCAL AGENT \u00b7 streaming..."
 	default:
 		if m.doneFlash {
-			v.WindowTitle = "local-agent \u00b7 done"
+			v.WindowTitle = "LOCAL AGENT \u00b7 done"
 		} else {
-			v.WindowTitle = "local-agent"
+			v.WindowTitle = "LOCAL AGENT"
 		}
 	}
 
@@ -230,7 +265,7 @@ func (m *Model) renderCompletionModal() string {
 //	local-agent                        qwen3:8b · 5 tools
 //	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 func (m *Model) renderHeader() string {
-	title := m.styles.HeaderTitle.Render("local-agent")
+	title := m.styles.HeaderTitle.Render("LOCAL AGENT")
 
 	var infoStr string
 	if m.model != "" {
@@ -393,10 +428,27 @@ func (m *Model) renderEntries() string {
 		return b.String()
 	}
 
-	// Welcome message when empty.
-	if len(m.entries) == 0 && m.streamBuf.Len() == 0 {
+	// Welcome message when no user messages yet
+	hasUserMsg := false
+	for _, e := range m.entries {
+		if e.Kind == "user" || e.Kind == "assistant" {
+			hasUserMsg = true
+			break
+		}
+	}
+	if !hasUserMsg && m.streamBuf.Len() == 0 {
 		var b strings.Builder
 		m.renderWelcome(&b)
+		// Append any system entries (e.g. failed server notices) below welcome
+		for _, e := range m.entries {
+			if e.Kind == "system" {
+				b.WriteString(m.styles.SystemText.Render(e.Content))
+				b.WriteString("\n\n")
+			} else if e.Kind == "error" {
+				b.WriteString(m.styles.ErrorText.Render("error: " + e.Content))
+				b.WriteString("\n\n")
+			}
+		}
 		return b.String()
 	}
 
@@ -480,12 +532,27 @@ func (m *Model) renderEntries() string {
 	return b.String()
 }
 
-// renderWelcome renders the empty-state welcome message.
+// renderWelcome renders the empty-state welcome message, centered horizontally.
 func (m *Model) renderWelcome(b *strings.Builder) {
-	title := m.styles.HeaderTitle.Render("Welcome to local-agent")
-	b.WriteString("\n")
-	b.WriteString("  " + title)
-	b.WriteString("\n")
+	var wb strings.Builder
+
+	// ASCII art logo
+	for _, line := range logoLines() {
+		if line == "" {
+			wb.WriteString("\n")
+		} else {
+			wb.WriteString(lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#88c0d0")).
+				Bold(true).
+				Render(line))
+			wb.WriteString("\n")
+		}
+	}
+
+	// Show enhanced welcome
+	title := gradientText("Welcome to LOCAL AGENT", []string{"#88c0d0", "#81a1c1", "#b48ead"})
+	wb.WriteString("  " + m.styles.OverlayTitle.Render(title))
+	wb.WriteString("\n")
 
 	var infoParts []string
 	if m.model != "" {
@@ -498,22 +565,44 @@ func (m *Model) renderWelcome(b *strings.Builder) {
 		infoParts = append(infoParts, fmt.Sprintf("%d servers", m.serverCount))
 	}
 	if len(infoParts) > 0 {
-		b.WriteString(m.styles.StatusText.Render("  " + strings.Join(infoParts, " · ")))
-		b.WriteString("\n")
+		wb.WriteString(m.styles.StatusText.Render("  " + strings.Join(infoParts, " · ")))
+		wb.WriteString("\n")
 	}
 
-	b.WriteString("\n")
-	b.WriteString(m.styles.SystemText.Render("  Type a message to start, or try:"))
-	b.WriteString("\n\n")
-	b.WriteString(m.styles.WelcomeHint.Render("    /help    "))
-	b.WriteString(m.styles.SystemText.Render("— keyboard shortcuts & commands"))
-	b.WriteString("\n")
-	b.WriteString(m.styles.WelcomeHint.Render("    /servers "))
-	b.WriteString(m.styles.SystemText.Render("— list connected tools"))
-	b.WriteString("\n")
-	b.WriteString(m.styles.WelcomeHint.Render("    /load    "))
-	b.WriteString(m.styles.SystemText.Render("— add context from a file"))
-	b.WriteString("\n")
+	wb.WriteString("\n")
+
+	// Mode hints with icons
+	modes := []struct {
+		key   string
+		desc  string
+		color string
+	}{
+		{"ASK", "Quick answers", "#81a1c1"},
+		{"PLAN", "Design & reasoning", "#ebcb8b"},
+		{"BUILD", "Full execution", "#a3be8c"},
+	}
+
+	for _, mode := range modes {
+		modeStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(mode.color)).
+			Bold(true)
+		wb.WriteString("  ")
+		wb.WriteString(modeStyle.Render(mode.key))
+		wb.WriteString(m.styles.StatusText.Render(" — " + mode.desc))
+		wb.WriteString("\n")
+	}
+
+	wb.WriteString("\n")
+	wb.WriteString(m.styles.SystemText.Render("  Type a message to start · Press ? for help"))
+	wb.WriteString("\n")
+
+	// Center the welcome content horizontally in the available viewport width.
+	contentWidth := m.width
+	if m.sidePanel.IsVisible() {
+		contentWidth = m.width - m.sidePanel.width - 1
+	}
+	centered := lipgloss.PlaceHorizontal(contentWidth, lipgloss.Center, wb.String())
+	b.WriteString(centered)
 }
 
 // renderUserMsg renders a user message block.

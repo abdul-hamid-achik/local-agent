@@ -4,27 +4,37 @@ import (
 	"fmt"
 	"strings"
 
+	"charm.land/bubbles/v2/viewport"
 	"charm.land/lipgloss/v2"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/command"
 )
 
-// renderHelpOverlay builds a centered help modal showing keyboard shortcuts
-// and slash commands.
-func (m *Model) renderHelpOverlay(contentWidth int) string {
+// helpContentWidth returns the inner width for the help modal content.
+func (m *Model) helpContentWidth() int {
 	maxW := 60
-	if contentWidth < maxW+4 {
-		maxW = contentWidth - 4
+	if m.width < maxW+8 {
+		maxW = m.width - 8
 	}
 	if maxW < 30 {
 		maxW = 30
 	}
+	return maxW
+}
 
+// helpViewportHeight returns the viewport height for the help modal.
+func (m *Model) helpViewportHeight() int {
+	// Leave room for border (2), padding (2), title (2), footer (1)
+	h := m.height - 10
+	if h < 5 {
+		h = 5
+	}
+	return h
+}
+
+// buildHelpContent builds the raw help text (without border/viewport wrapper).
+func (m *Model) buildHelpContent(innerW int) string {
 	var b strings.Builder
-
-	// Title.
-	b.WriteString(m.styles.OverlayTitle.Render("Help"))
-	b.WriteString("\n\n")
 
 	// Keyboard shortcuts section.
 	b.WriteString(m.styles.OverlayAccent.Render("Keyboard Shortcuts"))
@@ -42,7 +52,7 @@ func (m *Model) renderHelpOverlay(contentWidth int) string {
 		{"?", "Toggle this help (when input empty)"},
 		{"t", "Expand/collapse all tools"},
 		{"space", "Toggle last tool details"},
-		{"y", "Copy last response"},
+		{"ctrl+y", "Copy last response"},
 		{"ctrl+t", "Toggle thinking display"},
 		{"ctrl+k", "Toggle compact mode"},
 		{"ctrl+e", "Open input in $EDITOR"},
@@ -83,10 +93,6 @@ func (m *Model) renderHelpOverlay(contentWidth int) string {
 	// Slash commands.
 	if m.cmdRegistry != nil {
 		for _, cmd := range m.cmdRegistry.All() {
-			name := "/" + cmd.Name
-			if len(cmd.Aliases) > 0 {
-				name += " (/" + strings.Join(cmd.Aliases, ", /") + ")"
-			}
 			fmt.Fprintf(&b, "  %s  %s\n",
 				m.styles.FocusIndicator.Width(16).Render("/"+cmd.Name),
 				m.styles.OverlayDim.Render(cmd.Description),
@@ -94,15 +100,62 @@ func (m *Model) renderHelpOverlay(contentWidth int) string {
 		}
 	}
 
+	return b.String()
+}
+
+// initHelpViewport creates and populates the help viewport for scrolling.
+func (m *Model) initHelpViewport() {
+	innerW := m.helpContentWidth()
+	vpH := m.helpViewportHeight()
+
+	m.helpViewport = viewport.New(
+		viewport.WithWidth(innerW),
+		viewport.WithHeight(vpH),
+	)
+	// Disable default arrow key bindings (we handle j/k/up/down ourselves via parent)
+	m.helpViewport.KeyMap.Up.SetEnabled(false)
+	m.helpViewport.KeyMap.Down.SetEnabled(false)
+	m.helpViewport.KeyMap.PageUp.SetEnabled(false)
+	m.helpViewport.KeyMap.PageDown.SetEnabled(false)
+	m.helpViewport.KeyMap.HalfPageUp.SetEnabled(false)
+	m.helpViewport.KeyMap.HalfPageDown.SetEnabled(false)
+
+	content := m.buildHelpContent(innerW)
+	m.helpViewport.SetContent(content)
+}
+
+// renderHelpOverlay builds a centered, scrollable help modal.
+func (m *Model) renderHelpOverlay(contentWidth int) string {
+	innerW := m.helpContentWidth()
+
+	var b strings.Builder
+
+	// Title.
+	b.WriteString(m.styles.OverlayTitle.Render("Help"))
+	b.WriteString("\n\n")
+
+	// Viewport content (scrollable).
+	b.WriteString(m.helpViewport.View())
 	b.WriteString("\n")
-	b.WriteString(m.styles.OverlayDim.Render("Press Esc or q to close"))
+
+	// Scroll indicator / footer.
+	pct := m.helpViewport.ScrollPercent()
+	var hint string
+	if pct <= 0 {
+		hint = "↓ scroll for more"
+	} else if pct >= 1.0 {
+		hint = "Esc or q to close"
+	} else {
+		hint = fmt.Sprintf("%.0f%% · j/k to scroll", pct*100)
+	}
+	b.WriteString(m.styles.OverlayDim.Render(hint))
 
 	// Wrap in a box.
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(m.styles.FocusIndicator.GetForeground()).
 		Padding(1, 2).
-		Width(maxW)
+		Width(innerW + 6) // +6 for padding (2*2) + border (2)
 
 	return box.Render(b.String())
 }
