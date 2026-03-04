@@ -609,7 +609,7 @@ func (m *Model) renderWelcome(b *strings.Builder) {
 func (m *Model) renderUserMsg(b *strings.Builder, content string, contentW int) {
 	label := m.styles.UserLabel.Render("you")
 	labelW := lipgloss.Width(label)
-	ruleW := m.width - labelW - 3
+	ruleW := contentW - labelW - 3
 	if ruleW < 4 {
 		ruleW = 4
 	}
@@ -631,7 +631,7 @@ func (m *Model) renderAssistantMsg(b *strings.Builder, entry ChatEntry, contentW
 
 	label := m.styles.AsstLabel.Render("assistant")
 	labelW := lipgloss.Width(label)
-	ruleW := m.width - labelW - 3
+	ruleW := contentW - labelW - 3
 	if ruleW < 4 {
 		ruleW = 4
 	}
@@ -667,7 +667,7 @@ func (m *Model) renderStreamingMsg(b *strings.Builder, content string, contentW 
 	label := m.styles.AsstLabel.Render("assistant")
 	cursor := m.styles.StreamCursor.Render(" " + m.spin.View())
 	labelW := lipgloss.Width(label) + lipgloss.Width(cursor)
-	ruleW := m.width - labelW - 3
+	ruleW := contentW - labelW - 3
 	if ruleW < 4 {
 		ruleW = 4
 	}
@@ -680,7 +680,7 @@ func (m *Model) renderStreamingMsg(b *strings.Builder, content string, contentW 
 	b.WriteString("\n")
 }
 
-// renderToolGroup renders a tool entry based on its status and collapse state.
+// renderToolGroup renders a tool entry using the fancy tool card component.
 func (m *Model) renderToolGroup(b *strings.Builder, toolIdx, entryIdx int) {
 	if toolIdx < 0 || toolIdx >= len(m.toolEntries) {
 		return
@@ -693,75 +693,91 @@ func (m *Model) renderToolGroup(b *strings.Builder, toolIdx, entryIdx int) {
 		b.WriteString("\n")
 	}
 
-	tt := classifyTool(te.Name)
-
-	switch te.Status {
-	case ToolStatusRunning:
-		// Running: show spinner with type-specific icon
-		icon := m.styles.ToolCallIcon.Render(toolIcon(tt, te.Status))
-		spinView := m.spin.View()
-		text := m.styles.ToolCallText.Render(fmt.Sprintf(" %s ", te.Name))
-		hint := m.styles.ToolRunningText.Render(spinView + " running...")
-		b.WriteString(icon + text + hint)
-		// For running bash tools, show command inline
-		if tt == ToolTypeBash {
-			if summary := toolSummary(tt, te); summary != "" {
-				b.WriteString("\n")
-				b.WriteString(m.styles.ToolBashCmd.Render(layout.ToolIndent + "$ " + summary))
-			}
+	// Find corresponding tool card
+	var card *ToolCard
+	for i := range m.toolCardMgr.Cards {
+		if m.toolCardMgr.Cards[i].Name == te.Name {
+			card = &m.toolCardMgr.Cards[i]
+			break
 		}
-		b.WriteString("\n")
+	}
 
-	case ToolStatusDone:
-		dur := formatDuration(te.Duration)
-		icon := m.styles.ToolDoneIcon.Render(toolIcon(tt, te.Status))
-		if te.Collapsed {
-			// Collapsed: single line with type-specific summary
-			text := m.styles.ToolDoneText.Render(fmt.Sprintf(" %s (%s)", te.Name, dur))
-			b.WriteString(icon + text)
-			if summary := toolSummary(tt, te); summary != "" {
-				summ := truncate(summary, layout.ToolSummaryMax)
-				b.WriteString(m.styles.ToolBashCmd.Render(" " + summ))
+	if card != nil {
+		// Use fancy tool card rendering
+		card.Expanded = !te.Collapsed
+		b.WriteString(card.View(m.width - 4))
+	} else {
+		// Fallback to basic rendering if no card exists
+		tt := classifyTool(te.Name)
+
+		switch te.Status {
+		case ToolStatusRunning:
+			// Running: show spinner with type-specific icon
+			icon := m.styles.ToolCallIcon.Render(toolIcon(tt, te.Status))
+			spinView := m.spin.View()
+			text := m.styles.ToolCallText.Render(fmt.Sprintf(" %s ", te.Name))
+			hint := m.styles.ToolRunningText.Render(spinView + " running...")
+			b.WriteString(icon + text + hint)
+			// For running bash tools, show command inline
+			if tt == ToolTypeBash {
+				if summary := toolSummary(tt, te); summary != "" {
+					b.WriteString("\n")
+					b.WriteString(m.styles.ToolBashCmd.Render(layout.ToolIndent + "$ " + summary))
+				}
 			}
 			b.WriteString("\n")
-		} else {
-			// Expanded: show args + result (or diff for file writes)
-			text := m.styles.ToolDoneText.Render(fmt.Sprintf(" %s (%s)", te.Name, dur))
-			b.WriteString(icon + text)
-			b.WriteString("\n")
-			// Args
-			args := truncate(te.Args, layout.ArgsTruncMax)
-			b.WriteString(m.styles.ToolDetailText.Render(layout.ToolIndent + "args: " + args))
-			b.WriteString("\n")
-			// Diff or result
-			if te.DiffLines != nil {
-				b.WriteString(renderDiff(te.DiffLines, m.styles, 30))
-			} else {
-				// Use smart result formatting with truncation
-				result := formatToolResult(te.Result, 20, layout.ResultTruncMax)
-				resultLines := strings.Count(result, "\n") + 1
-				if resultLines > 20 {
-					b.WriteString(m.styles.ToolDetailText.Render(layout.ToolIndent + "result (truncated, expand to see more):\n"))
-					b.WriteString(m.styles.ToolDetailText.Render(indentBlock(truncate(result, layout.ResultTruncMax), layout.ToolIndent)))
-				} else {
-					b.WriteString(m.styles.ToolDetailText.Render(layout.ToolIndent + "result:\n"))
-					b.WriteString(m.styles.ToolDetailText.Render(indentBlock(result, layout.ToolIndent)))
+
+		case ToolStatusDone:
+			dur := formatDuration(te.Duration)
+			icon := m.styles.ToolDoneIcon.Render(toolIcon(tt, te.Status))
+			if te.Collapsed {
+				// Collapsed: single line with type-specific summary
+				text := m.styles.ToolDoneText.Render(fmt.Sprintf(" %s (%s)", te.Name, dur))
+				b.WriteString(icon + text)
+				if summary := toolSummary(tt, te); summary != "" {
+					summ := truncate(summary, layout.ToolSummaryMax)
+					b.WriteString(m.styles.ToolBashCmd.Render(" " + summ))
 				}
 				b.WriteString("\n")
+			} else {
+				// Expanded: show args + result (or diff for file writes)
+				text := m.styles.ToolDoneText.Render(fmt.Sprintf(" %s (%s)", te.Name, dur))
+				b.WriteString(icon + text)
+				b.WriteString("\n")
+				// Args
+				args := truncate(te.Args, layout.ArgsTruncMax)
+				b.WriteString(m.styles.ToolDetailText.Render(layout.ToolIndent + "args: " + args))
+				b.WriteString("\n")
+				// Diff or result
+				if te.DiffLines != nil {
+					b.WriteString(renderDiff(te.DiffLines, m.styles, 30))
+				} else {
+					// Use smart result formatting with truncation
+					result := formatToolResult(te.Result, 20, layout.ResultTruncMax)
+					resultLines := strings.Count(result, "\n") + 1
+					if resultLines > 20 {
+						b.WriteString(m.styles.ToolDetailText.Render(layout.ToolIndent + "result (truncated, expand to see more):\n"))
+						b.WriteString(m.styles.ToolDetailText.Render(indentBlock(truncate(result, layout.ResultTruncMax), layout.ToolIndent)))
+					} else {
+						b.WriteString(m.styles.ToolDetailText.Render(layout.ToolIndent + "result:\n"))
+						b.WriteString(m.styles.ToolDetailText.Render(indentBlock(result, layout.ToolIndent)))
+					}
+					b.WriteString("\n")
+				}
 			}
-		}
 
-	case ToolStatusError:
-		// Error: always expanded regardless of collapse state
-		dur := formatDuration(te.Duration)
-		icon := m.styles.ToolErrorIcon.Render(toolIcon(tt, te.Status))
-		text := m.styles.ToolErrorText.Render(fmt.Sprintf(" %s (%s)", te.Name, dur))
-		b.WriteString(icon + text)
-		b.WriteString("\n")
-		// Error result always shown
-		result := truncate(te.Result, layout.ResultTruncMax)
-		b.WriteString(m.styles.ToolErrorText.Render(layout.ToolIndent + result))
-		b.WriteString("\n")
+		case ToolStatusError:
+			// Error: always expanded regardless of collapse state
+			dur := formatDuration(te.Duration)
+			icon := m.styles.ToolErrorIcon.Render(toolIcon(tt, te.Status))
+			text := m.styles.ToolErrorText.Render(fmt.Sprintf(" %s (%s)", te.Name, dur))
+			b.WriteString(icon + text)
+			b.WriteString("\n")
+			// Error result always shown
+			result := truncate(te.Result, layout.ResultTruncMax)
+			b.WriteString(m.styles.ToolErrorText.Render(layout.ToolIndent + result))
+			b.WriteString("\n")
+		}
 	}
 
 	// Add spacing after the last tool_group in a sequence.

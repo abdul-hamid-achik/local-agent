@@ -147,6 +147,7 @@ type Model struct {
 	toolEntries    []ToolEntry
 	toolsCollapsed bool
 	toolEntryRows  map[int]int // toolIndex → starting row in viewport
+	toolCardMgr    ToolCardManager
 
 	// Incremental rendering cache
 	cachedEntriesRender string
@@ -298,6 +299,7 @@ func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, com
 		historyIndex:   -1,
 		toastMgr:       NewToastManager(),
 		toastStyles:    DefaultToastStyles(true),
+		toolCardMgr:    NewToolCardManager(true),
 	}
 }
 
@@ -322,6 +324,10 @@ func (m *Model) Init() tea.Cmd {
 		textarea.Blink,
 		tea.RequestBackgroundColor,
 		m.spin.Tick,
+		// Start sidepanel spinner animation for initialization
+		func() tea.Msg {
+			return spinnerTickMsg{}
+		},
 	)
 }
 
@@ -338,6 +344,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Update toast styles for theme.
 		m.toastStyles = DefaultToastStyles(m.isDark)
 		m.toastMgr.SetStyles(m.toastStyles)
+		// Update tool card styles for theme.
+		m.toolCardMgr.SetDark(msg.IsDark())
 		// Recreate markdown renderer for new theme.
 		if m.width > 0 {
 			m.md = NewMarkdownRenderer(m.width-2, m.isDark)
@@ -849,6 +857,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.toolEntries = append(m.toolEntries, te)
 		m.toolsPending++
+
+		// Create tool card for fancy display
+		kind := ToolCardGeneric
+		switch classifyTool(msg.Name) {
+		case ToolTypeFileRead, ToolTypeFileWrite:
+			kind = ToolCardFile
+		case ToolTypeBash:
+			kind = ToolCardBash
+		default:
+			kind = ToolCardGeneric
+		}
+		m.toolCardMgr.AddCard(msg.Name, kind, msg.StartTime)
+
 		m.entries = append(m.entries, ChatEntry{
 			Kind:      "tool_group",
 			ToolIndex: len(m.toolEntries) - 1,
@@ -896,6 +917,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				break
 			}
 		}
+		// Update tool card
+		cardState := ToolCardSuccess
+		if msg.IsError {
+			cardState = ToolCardError
+		}
+		m.toolCardMgr.UpdateCard(msg.Name, cardState, msg.Result, msg.Duration)
+
 		if m.toolsPending > 0 {
 			m.toolsPending--
 		}
@@ -980,8 +1008,32 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.sidePanel.SetStartupItems(sidePanelItems)
+		// Tick the spinner for animation during initialization
+		m.sidePanel.SetSpinnerTick()
 		if m.ready {
 			m.viewport.SetContent(m.renderEntries())
+		}
+		// Continue animating spinner during initialization
+		return m, tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
+			return spinnerTickMsg{}
+		})
+
+	case spinnerTickMsg:
+		// Only tick if still initializing or tools are running
+		if m.initializing {
+			m.sidePanel.Tick()
+			// Continue the animation loop
+			return m, tea.Tick(80*time.Millisecond, func(time.Time) tea.Msg {
+				return spinnerTickMsg{}
+			})
+		}
+		// Tick tool card spinners if tools are running
+		if m.toolsPending > 0 {
+			m.toolCardMgr.Tick()
+			// Continue animating tool spinners
+			return m, tea.Tick(80*time.Millisecond, func(time.Time) tea.Msg {
+				return spinnerTickMsg{}
+			})
 		}
 
 	case InitCompleteMsg:

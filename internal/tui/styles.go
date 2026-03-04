@@ -87,11 +87,14 @@ type Styles struct {
 	ToolDetailText  lipgloss.Style
 
 	// Footer
-	Divider    lipgloss.Style
-	StatusDot  lipgloss.Style
-	StatusText lipgloss.Style
-	StreamHint lipgloss.Style
-	ErrorText  lipgloss.Style
+	Divider     lipgloss.Style
+	StatusDot   lipgloss.Style
+	StatusText  lipgloss.Style
+	StatusCheck lipgloss.Style
+	StatusError lipgloss.Style
+	StreamHint  lipgloss.Style
+	ErrorText   lipgloss.Style
+	Dimmed      lipgloss.Style
 
 	// System messages
 	SystemText  lipgloss.Style
@@ -266,6 +269,12 @@ func adaptiveStyles(isDark bool) Styles {
 			PaddingLeft(1),
 		StatusText: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(colorDim)),
+		StatusCheck: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(colorSuccess)).
+			PaddingLeft(1),
+		StatusError: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(colorError)).
+			PaddingLeft(1),
 		StreamHint: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(colorDim)).
 			Italic(true),
@@ -273,6 +282,8 @@ func adaptiveStyles(isDark bool) Styles {
 			Foreground(lipgloss.Color(colorError)).
 			Bold(true).
 			PaddingLeft(2),
+		Dimmed: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(colorDim)),
 
 		SystemText: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(colorText)).
@@ -403,8 +414,11 @@ func plainStyles() Styles {
 		Divider:    p,
 		StatusDot:  p.PaddingLeft(1),
 		StatusText: p,
+		StatusCheck: p.PaddingLeft(1),
+		StatusError: p.PaddingLeft(1),
 		StreamHint: p.Italic(true),
 		ErrorText:  b.PaddingLeft(2),
+		Dimmed:     p,
 
 		SystemText:  p.PaddingLeft(2).Italic(true),
 		WelcomeHint: b,

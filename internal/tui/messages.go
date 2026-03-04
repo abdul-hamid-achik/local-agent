@@ -93,6 +93,9 @@ type CompletionDebounceTickMsg struct {
 	Query string
 }
 
+// spinnerTickMsg advances the loading spinner animation.
+type spinnerTickMsg struct{}
+
 // PlanFormCompletedMsg signals the plan form has been submitted with a structured prompt.
 type PlanFormCompletedMsg struct {
 	Prompt string

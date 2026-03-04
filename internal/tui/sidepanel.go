@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
@@ -70,6 +71,7 @@ type SidePanelModel struct {
 	selected     int
 	isDark       bool
 	styles       SidePanelStyles
+	spinner      spinner.Model  // Loading spinner for initialization
 }
 
 // StartupItem represents a startup status item
@@ -113,12 +115,17 @@ func DefaultSidePanelStyles(isDark bool) SidePanelStyles {
 
 // NewSidePanelModel creates a new side panel
 func NewSidePanelModel(isDark bool) SidePanelModel {
+	s := spinner.New(
+		spinner.WithSpinner(spinner.MiniDot),
+		spinner.WithStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("#88c0d0"))),
+	)
 	return SidePanelModel{
 		visible:  true,  // Visible by default
 		isDark:   isDark,
 		styles:   DefaultSidePanelStyles(isDark),
 		cursor:   0,
 		selected: 0,
+		spinner:  s,
 	}
 }
 
@@ -126,6 +133,21 @@ func NewSidePanelModel(isDark bool) SidePanelModel {
 func (m *SidePanelModel) SetDark(isDark bool) {
 	m.isDark = isDark
 	m.styles = DefaultSidePanelStyles(isDark)
+}
+
+// SetSpinnerTick updates the spinner animation frame
+func (m *SidePanelModel) SetSpinnerTick() {
+	// No-op - spinner advances via Update with TickMsg
+}
+
+// TickSpinner returns a command that ticks the spinner
+func (m *SidePanelModel) TickSpinner() tea.Cmd {
+	return m.spinner.Tick
+}
+
+// Tick advances the spinner animation
+func (m *SidePanelModel) Tick() {
+	m.spinner.Tick()
 }
 
 // SetWidth sets the panel width
@@ -306,8 +328,27 @@ func (m SidePanelModel) View() string {
 	b.WriteString(m.styles.LogoTagline.Render("  100% local"))
 	b.WriteString("\n\n")
 
-	// Startup items (shown during initialization)
+	// Startup items (shown during initialization) - with loading indicator
 	if len(m.startupItems) > 0 {
+		// Check if any items are still connecting
+		var hasPending bool
+		for _, item := range m.startupItems {
+			if item.Status == "connecting" || item.Status == "pending" {
+				hasPending = true
+				break
+			}
+		}
+
+		// Show loading header with spinner
+		if hasPending {
+			b.WriteString(m.styles.Section.Render("  " + m.spinner.View() + " Connecting..."))
+			b.WriteString("\n\n")
+		} else {
+			b.WriteString(m.styles.Section.Render("  Initializing..."))
+			b.WriteString("\n\n")
+		}
+
+		// Connection status list
 		for _, item := range m.startupItems {
 			icon := "○"
 			iconStyle := m.styles.Item
