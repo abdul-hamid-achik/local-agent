@@ -287,7 +287,7 @@ func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, com
 		inputLines:     1,
 		toolsCollapsed: true,
 		initializing:   true,
-		mode:           ModeBuild,
+		mode:           ModeAsk,
 		modeConfigs:    DefaultModeConfigs(),
 		modelManager:   modelManager,
 		router:         router,
@@ -1503,6 +1503,24 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 		return nil
 
 	case command.ActionSwitchModel:
+		// Find last user query for learning
+		query := ""
+		currentInput := strings.TrimSpace(m.input.Value())
+		if currentInput != "" && !strings.HasPrefix(currentInput, "/") {
+			query = currentInput
+		} else {
+			// Find last user message in conversation
+			for i := len(m.entries) - 1; i >= 0; i-- {
+				if m.entries[i].Kind == "user" {
+					query = m.entries[i].Content
+					break
+				}
+			}
+		}
+		// Record the override for learning
+		if m.router != nil && query != "" {
+			m.router.RecordOverride(query, result.Data)
+		}
 		if m.modelManager != nil {
 			if err := m.modelManager.SetCurrentModel(result.Data); err != nil {
 				m.entries = append(m.entries, ChatEntry{
@@ -1557,6 +1575,69 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 			Kind:    "system",
 			Content: result.Text,
 		})
+		m.viewport.SetContent(m.renderEntries())
+		m.viewport.GotoBottom()
+		return nil
+
+	case command.ActionExport:
+		path := result.Data
+		if path == "" {
+			m.entries = append(m.entries, ChatEntry{
+				Kind:    "error",
+				Content: "export: no path specified",
+			})
+			m.viewport.SetContent(m.renderEntries())
+			m.viewport.GotoBottom()
+			return nil
+		}
+		content := m.formatConversationForExport()
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			m.entries = append(m.entries, ChatEntry{
+				Kind:    "error",
+				Content: fmt.Sprintf("export failed: %v", err),
+			})
+		} else {
+			m.entries = append(m.entries, ChatEntry{
+				Kind:    "system",
+				Content: fmt.Sprintf("Exported conversation to: %s", path),
+			})
+		}
+		m.viewport.SetContent(m.renderEntries())
+		m.viewport.GotoBottom()
+		return nil
+
+	case command.ActionImport:
+		path := result.Data
+		if path == "" {
+			m.entries = append(m.entries, ChatEntry{
+				Kind:    "error",
+				Content: "import: no path specified",
+			})
+			m.viewport.SetContent(m.renderEntries())
+			m.viewport.GotoBottom()
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			m.entries = append(m.entries, ChatEntry{
+				Kind:    "error",
+				Content: fmt.Sprintf("import failed: %v", err),
+			})
+			m.viewport.SetContent(m.renderEntries())
+			m.viewport.GotoBottom()
+			return nil
+		}
+		entries, err := m.parseImportedConversation(string(data))
+		if err != nil {
+			m.entries = append(m.entries, ChatEntry{
+				Kind:    "error",
+				Content: fmt.Sprintf("import parse error: %v", err),
+			})
+			m.viewport.SetContent(m.renderEntries())
+			m.viewport.GotoBottom()
+			return nil
+		}
+		m.entries = entries
 		m.viewport.SetContent(m.renderEntries())
 		m.viewport.GotoBottom()
 		return nil
@@ -2133,4 +2214,95 @@ func (m *Model) handleMouseClick(x, y int) {
 			return
 		}
 	}
+}
+
+// formatConversationForExport formats the current conversation as markdown.
+func (m *Model) formatConversationForExport() string {
+	var b strings.Builder
+	b.WriteString("# Conversation Export\n\n")
+	b.WriteString(fmt.Sprintf("**Date**: %s\n", time.Now().Format("2006-01-02 15:04")))
+	b.WriteString(fmt.Sprintf("**Model**: %s\n", m.model))
+	b.WriteString("---\n\n")
+
+	for _, entry := range m.entries {
+		switch entry.Kind {
+		case "user":
+			b.WriteString("## User\n\n")
+			b.WriteString(entry.Content)
+			b.WriteString("\n\n---\n\n")
+		case "assistant":
+			b.WriteString("## Assistant\n\n")
+			b.WriteString(entry.Content)
+			b.WriteString("\n\n---\n\n")
+		case "system":
+			b.WriteString("## System\n\n")
+			b.WriteString(entry.Content)
+			b.WriteString("\n\n---\n\n")
+		case "tool_group":
+			if entry.ToolIndex >= 0 && entry.ToolIndex < len(m.toolEntries) {
+				te := m.toolEntries[entry.ToolIndex]
+				b.WriteString(fmt.Sprintf("## Tool: %s\n\n", te.Name))
+				b.WriteString("```\n")
+				b.WriteString(te.Args)
+				b.WriteString("\n```\n\n")
+				if te.Result != "" {
+					b.WriteString("**Result**:\n\n")
+					b.WriteString("```\n")
+					b.WriteString(te.Result)
+					b.WriteString("\n```\n\n")
+				}
+				b.WriteString("---\n\n")
+			}
+		}
+	}
+
+	return b.String()
+}
+
+// parseImportedConversation parses a markdown export back into chat entries.
+func (m *Model) parseImportedConversation(data string) ([]ChatEntry, error) {
+	var entries []ChatEntry
+	lines := strings.Split(data, "\n")
+
+	var currentSection string
+	var currentContent strings.Builder
+
+	flushContent := func() {
+		if currentContent.Len() > 0 {
+			content := strings.TrimSpace(currentContent.String())
+			if content != "" {
+				entry := ChatEntry{Kind: currentSection, Content: content}
+				entries = append(entries, entry)
+			}
+			currentContent.Reset()
+		}
+	}
+
+	for _, line := range lines {
+		if strings.HasPrefix(line, "## ") {
+			flushContent()
+			section := strings.TrimPrefix(line, "## ")
+			switch section {
+			case "User":
+				currentSection = "user"
+			case "Assistant":
+				currentSection = "assistant"
+			case "System":
+				currentSection = "system"
+			default:
+				currentSection = "system"
+			}
+		} else if strings.HasPrefix(line, "---") {
+			// Skip separators
+		} else {
+			currentContent.WriteString(line)
+			currentContent.WriteString("\n")
+		}
+	}
+	flushContent()
+
+	// Reset tool entries since we don't import those
+	m.toolEntries = nil
+
+	return entries, nil
 }

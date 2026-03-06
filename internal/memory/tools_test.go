@@ -4,8 +4,8 @@ import "testing"
 
 func TestBuiltinToolDefs(t *testing.T) {
 	defs := BuiltinToolDefs()
-	if len(defs) != 2 {
-		t.Fatalf("BuiltinToolDefs() returned %d defs, want 2", len(defs))
+	if len(defs) != 5 {
+		t.Fatalf("BuiltinToolDefs() returned %d defs, want 5", len(defs))
 	}
 
 	names := map[string]bool{}
@@ -13,11 +13,11 @@ func TestBuiltinToolDefs(t *testing.T) {
 		names[d.Name] = true
 	}
 
-	if !names["memory_save"] {
-		t.Error("missing memory_save tool definition")
-	}
-	if !names["memory_recall"] {
-		t.Error("missing memory_recall tool definition")
+	expected := []string{"memory_save", "memory_recall", "memory_delete", "memory_update", "memory_list"}
+	for _, name := range expected {
+		if !names[name] {
+			t.Errorf("missing %s tool definition", name)
+		}
 	}
 }
 
@@ -29,6 +29,9 @@ func TestIsBuiltinTool(t *testing.T) {
 	}{
 		{name: "memory_save", tool: "memory_save", want: true},
 		{name: "memory_recall", tool: "memory_recall", want: true},
+		{name: "memory_delete", tool: "memory_delete", want: true},
+		{name: "memory_update", tool: "memory_update", want: true},
+		{name: "memory_list", tool: "memory_list", want: true},
 		{name: "unknown tool", tool: "unknown", want: false},
 		{name: "empty string", tool: "", want: false},
 		{name: "partial match", tool: "memory_", want: false},

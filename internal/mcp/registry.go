@@ -16,6 +16,14 @@ type FailedServer struct {
 	Reason string
 }
 
+// ServerStatus represents the health status of an MCP server.
+type ServerStatus struct {
+	Name      string
+	Connected bool
+	LastError string
+	LastPing  time.Time
+}
+
 // Registry manages multiple MCP server connections and routes tool calls.
 type Registry struct {
 	mu            sync.RWMutex
@@ -23,12 +31,14 @@ type Registry struct {
 	toolMap       map[string]*MCPClient // tool name -> owning client
 	toolDefs      []llm.ToolDef
 	failedServers []FailedServer
+	serverConfigs map[string]config.ServerConfig // name -> config for reconnection
 }
 
 // NewRegistry creates an empty Registry.
 func NewRegistry() *Registry {
 	return &Registry{
-		toolMap: make(map[string]*MCPClient),
+		toolMap:       make(map[string]*MCPClient),
+		serverConfigs: make(map[string]config.ServerConfig),
 	}
 }
 
@@ -64,6 +74,8 @@ func (r *Registry) ConnectServer(ctx context.Context, srv config.ServerConfig) (
 		r.toolMap[tool.Name] = client
 		r.toolDefs = append(r.toolDefs, ToLLMToolDef(tool.Name, tool.Description, tool.InputSchema))
 	}
+	// Store config for reconnection
+	r.serverConfigs[srv.Name] = srv
 	r.mu.Unlock()
 
 	return len(tools), nil
@@ -148,4 +160,136 @@ func (r *Registry) Close() {
 	r.clients = nil
 	r.toolMap = make(map[string]*MCPClient)
 	r.toolDefs = nil
+}
+
+// HealthCheck pings all servers and returns their status.
+func (r *Registry) HealthCheck(ctx context.Context) []ServerStatus {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var results []ServerStatus
+	for _, client := range r.clients {
+		status := ServerStatus{Name: client.Name()}
+
+		if client.IsConnected() {
+			pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			err := client.Ping(pingCtx)
+			cancel()
+
+			status.Connected = err == nil
+			if err != nil {
+				status.LastError = err.Error()
+			}
+			status.LastPing = time.Now()
+		}
+
+		results = append(results, status)
+	}
+
+	// Include failed servers
+	for _, failed := range r.failedServers {
+		results = append(results, ServerStatus{
+			Name:      failed.Name,
+			Connected: false,
+			LastError: failed.Reason,
+		})
+	}
+
+	return results
+}
+
+// ReconnectServer attempts to reconnect to a previously failed server.
+// Returns the number of tools reconnected, or an error.
+func (r *Registry) ReconnectServer(ctx context.Context, name string) (int, error) {
+	r.mu.RLock()
+	srv, ok := r.serverConfigs[name]
+	r.mu.RUnlock()
+
+	if !ok {
+		return 0, fmt.Errorf("no config found for server: %s", name)
+	}
+
+	// Remove from failed servers list
+	r.mu.Lock()
+	var remainingFailed []FailedServer
+	for _, f := range r.failedServers {
+		if f.Name != name {
+			remainingFailed = append(remainingFailed, f)
+		}
+	}
+	r.failedServers = remainingFailed
+	r.mu.Unlock()
+
+	return r.ConnectServer(ctx, srv)
+}
+
+// MonitorConfig holds configuration for the health monitor.
+type MonitorConfig struct {
+	Interval    time.Duration
+	MaxRetries  int
+	BackoffBase time.Duration
+}
+
+var defaultMonitorConfig = MonitorConfig{
+	Interval:    30 * time.Second,
+	MaxRetries:  3,
+	BackoffBase: 5 * time.Second,
+}
+
+// StartHealthMonitor begins background health checking.
+// Call cancel on the returned context to shut down.
+func (r *Registry) StartHealthMonitor(ctx context.Context, cfg MonitorConfig, logFn func(string)) context.CancelFunc {
+	if cfg.Interval == 0 {
+		cfg = defaultMonitorConfig
+	}
+
+	monitorCtx, cancel := context.WithCancel(ctx)
+
+	go func() {
+		ticker := time.NewTicker(cfg.Interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-monitorCtx.Done():
+				return
+			case <-ticker.C:
+				r.healthCheckRound(monitorCtx, cfg, logFn)
+			}
+		}
+	}()
+
+	return cancel
+}
+
+func (r *Registry) healthCheckRound(ctx context.Context, cfg MonitorConfig, logFn func(string)) {
+	statuses := r.HealthCheck(ctx)
+
+	for _, status := range statuses {
+		if status.Connected {
+			continue
+		}
+
+		// Server is down, try to reconnect
+		logFn(fmt.Sprintf("server %s unhealthy, attempting reconnect...", status.Name))
+
+		for attempt := 1; attempt <= cfg.MaxRetries; attempt++ {
+			backoff := cfg.BackoffBase * time.Duration(attempt)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
+
+			_, err := r.ReconnectServer(ctx, status.Name)
+			if err == nil {
+				logFn(fmt.Sprintf("server %s reconnected", status.Name))
+				break
+			}
+
+			if attempt == cfg.MaxRetries {
+				logFn(fmt.Sprintf("server %s reconnection failed after %d attempts: %v", status.Name, cfg.MaxRetries, err))
+			}
+		}
+	}
 }

@@ -328,6 +328,38 @@ func RegisterBuiltins(r *Registry) {
 	})
 
 	r.Register(&Command{
+		Name:        "export",
+		Description: "Export conversation to a markdown file",
+		Usage:       "/export [path]",
+		Handler: func(_ *Context, args []string) Result {
+			if len(args) < 1 || args[0] == "" {
+				return Result{Error: "usage: /export <filepath>"}
+			}
+			return Result{
+				Text:   fmt.Sprintf("Exporting conversation to: %s", args[0]),
+				Action: ActionExport,
+				Data:   args[0],
+			}
+		},
+	})
+
+	r.Register(&Command{
+		Name:        "import",
+		Description: "Import conversation from a markdown file",
+		Usage:       "/import [path]",
+		Handler: func(_ *Context, args []string) Result {
+			if len(args) < 1 || args[0] == "" {
+				return Result{Error: "usage: /import <filepath>"}
+			}
+			return Result{
+				Text:   fmt.Sprintf("Importing conversation from: %s", args[0]),
+				Action: ActionImport,
+				Data:   args[0],
+			}
+		},
+	})
+
+	r.Register(&Command{
 		Name:        "exit",
 		Aliases:     []string{"quit", "q"},
 		Description: "Quit local-agent",

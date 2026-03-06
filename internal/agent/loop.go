@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
@@ -30,14 +31,16 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 	if a.iceEngine != nil && len(a.messages) > 0 {
 		lastMsg := a.messages[len(a.messages)-1]
 		if lastMsg.Role == "user" {
-			_ = a.iceEngine.IndexMessage(ctx, "user", lastMsg.Content)
+			if err := a.iceEngine.IndexMessage(ctx, "user", lastMsg.Content); err != nil {
+				out.Error(fmt.Sprintf("ICE indexing failed: %v", err))
+			}
 			if assembled, err := a.iceEngine.AssembleContext(ctx, lastMsg.Content); err == nil {
 				iceContext = assembled
 			}
 		}
 	}
 
-	system := buildSystemPrompt(a.modePrefix, tools, a.skillContent, a.loadedCtx, a.memoryStore, iceContext, a.workDir, a.ignoreContent)
+	system := buildSystemPromptForModel(a.modePrefix, tools, a.skillContent, a.loadedCtx, a.memoryStore, iceContext, a.workDir, a.ignoreContent, a.llmClient.Model())
 
 	const maxRetries = 2
 	var lastPromptTokens int
@@ -106,7 +109,9 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 
 		// ICE: index assistant message.
 		if a.iceEngine != nil && assistantMsg.Content != "" {
-			_ = a.iceEngine.IndexMessage(ctx, "assistant", assistantMsg.Content)
+			if err := a.iceEngine.IndexMessage(ctx, "assistant", assistantMsg.Content); err != nil {
+				out.Error(fmt.Sprintf("ICE indexing failed: %v", err))
+			}
 		}
 
 		// If no tool calls, we're done.
@@ -128,26 +133,28 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 		}
 
 		// Execute each tool call and feed results back.
+		// We categorize tools: memory tools and MCP tools can run in parallel,
+		// but built-in file tools run sequentially to avoid filesystem conflicts.
+		
+		// First, collect all tool calls that need execution
+		type pendingTool struct {
+			tc           llm.ToolCall
+			isMemoryTool bool
+			isMCPTool    bool
+		}
+		
+		var pending []pendingTool
+		
 		for _, tc := range toolCalls {
-			// Check if this is a built-in memory tool (no permission needed).
+			// Check if this is a built-in memory tool.
 			if a.memoryStore != nil && a.isMemoryTool(tc.Name) {
-				out.ToolCallStart(tc.Name, tc.Arguments)
-				startTime := time.Now()
-				result, isErr := a.handleMemoryTool(tc)
-				duration := time.Since(startTime)
-				out.ToolCallResult(tc.Name, result, isErr, duration)
-				a.messages = append(a.messages, llm.Message{
-					Role:       "tool",
-					Content:    result,
-					ToolName:   tc.Name,
-					ToolCallID: tc.ID,
-				})
+				pending = append(pending, pendingTool{tc: tc, isMemoryTool: true})
 				continue
 			}
 
-			// Check if this is a built-in tools tool (grep, read, write, glob, bash, ls, find).
-			// These go through the permission system.
+			// Check if this is a built-in file tool.
 			if a.isToolsTool(tc.Name) {
+				// Execute built-in tools sequentially (file access safety).
 				out.ToolCallStart(tc.Name, tc.Arguments)
 				startTime := time.Now()
 				result, isErr := a.handleToolsTool(tc)
@@ -162,7 +169,7 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 				continue
 			}
 
-			// Permission check for external tools.
+			// External MCP tool - check permissions first.
 			if a.permChecker != nil {
 				switch a.permChecker.ToCheckResult(tc.Name) {
 				case permissionPkg.CheckDeny:
@@ -197,38 +204,70 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 					}
 				}
 			}
+			
+			pending = append(pending, pendingTool{tc: tc, isMCPTool: true})
+		}
 
-			out.ToolCallStart(tc.Name, tc.Arguments)
-			startTime := time.Now()
-
-			result, err := a.registry.CallTool(ctx, tc.Name, tc.Arguments)
-			duration := time.Since(startTime)
-			if err != nil {
-				errMsg := fmt.Sprintf("tool error: %v", err)
-				out.ToolCallResult(tc.Name, errMsg, true, duration)
-				a.messages = append(a.messages, llm.Message{
-					Role:       "tool",
-					Content:    errMsg,
-					ToolName:   tc.Name,
-					ToolCallID: tc.ID,
-				})
-				continue
+		// Execute memory tools and MCP tools in parallel.
+		if len(pending) > 0 {
+			var wg sync.WaitGroup
+			mu := sync.Mutex{}
+			results := make([]llm.Message, len(pending))
+			
+			for i, p := range pending {
+				wg.Add(1)
+				go func(idx int, tool pendingTool) {
+					defer wg.Done()
+					
+					tc := tool.tc
+					out.ToolCallStart(tc.Name, tc.Arguments)
+					startTime := time.Now()
+					
+					var result string
+					var isErr bool
+					
+					if tool.isMemoryTool {
+						result, isErr = a.handleMemoryTool(tc)
+					} else if tool.isMCPTool {
+						toolResult, err := a.registry.CallTool(ctx, tc.Name, tc.Arguments)
+						if err != nil {
+							result = fmt.Sprintf("tool error: %v", err)
+							isErr = true
+						} else {
+							result = toolResult.Content
+							isErr = toolResult.IsError
+						}
+					}
+					
+					duration := time.Since(startTime)
+					out.ToolCallResult(tc.Name, result, isErr, duration)
+					
+					mu.Lock()
+					results[idx] = llm.Message{
+						Role:       "tool",
+						Content:    result,
+						ToolName:   tc.Name,
+						ToolCallID: tc.ID,
+					}
+					mu.Unlock()
+				}(i, p)
 			}
-
-			out.ToolCallResult(tc.Name, result.Content, result.IsError, duration)
-			a.messages = append(a.messages, llm.Message{
-				Role:       "tool",
-				Content:    result.Content,
-				ToolName:   tc.Name,
-				ToolCallID: tc.ID,
-			})
+			
+			wg.Wait()
+			
+			// Append all results to messages.
+			for _, msg := range results {
+				if msg.ToolName != "" {
+					a.messages = append(a.messages, msg)
+				}
+			}
 		}
 
 		// Check if we should compact the conversation.
 		if a.shouldCompact(lastPromptTokens) {
 			if a.compact(ctx, out) {
 				// Rebuild system prompt after compaction (memory may have changed).
-				system = buildSystemPrompt(a.modePrefix, tools, a.skillContent, a.loadedCtx, a.memoryStore, iceContext, a.workDir, a.ignoreContent)
+				system = buildSystemPromptForModel(a.modePrefix, tools, a.skillContent, a.loadedCtx, a.memoryStore, iceContext, a.workDir, a.ignoreContent, a.llmClient.Model())
 			}
 		}
 

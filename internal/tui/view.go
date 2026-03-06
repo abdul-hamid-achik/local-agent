@@ -344,8 +344,8 @@ func (m *Model) renderStatusLine() string {
 		if len(args) > 60 {
 			args = args[:57] + "..."
 		}
-		return m.styles.StatusText.Render(
-			fmt.Sprintf("  Allow %s %s? [y]es / [n]o / [a]lways", m.pendingApproval.ToolName, args),
+		return m.styles.ApprovalPrompt.Render(
+			fmt.Sprintf("  ⚡ Allow %s %s? [y]es / [n]o / [a]lways", m.pendingApproval.ToolName, args),
 		)
 	}
 
@@ -502,8 +502,10 @@ func (m *Model) renderEntries() string {
 			if curr == "tool_group" && nextK == "tool_group" {
 				continue
 			}
-			// Extra spacing between different message groups.
-			if curr != nextK {
+			// Extra spacing after tool groups for visual separation.
+			if curr == "tool_group" {
+				b.WriteString("\n\n")
+			} else if curr != nextK {
 				b.WriteString("\n")
 			}
 		}
@@ -674,8 +676,14 @@ func (m *Model) renderStreamingMsg(b *strings.Builder, content string, contentW 
 	b.WriteString(label + cursor + " " + m.styles.RoleRule.Render(rule(ruleW)))
 	b.WriteString("\n")
 
-	// During streaming: plain text only (no Glamour) for zero jitter.
-	rendered := indentBlock(content, "  ")
+	// During streaming: wrap text to fit viewport, then indent for zero jitter.
+	// Account for the 2-char indent when calculating wrap width.
+	wrapWidth := contentW - 2
+	if wrapWidth < 10 {
+		wrapWidth = 10
+	}
+	wrapped := wrapText(content, wrapWidth)
+	rendered := indentBlock(wrapped, "  ")
 	b.WriteString(rendered)
 	b.WriteString("\n")
 }
@@ -801,36 +809,60 @@ func truncate(s string, max int) string {
 	return s[:max-3] + "..."
 }
 
-// wrapText wraps text to the given width.
+// wrapText wraps text to the given width, breaking long words if needed.
 func wrapText(s string, width int) string {
-	if width <= 0 || len(s) <= width {
+	if width <= 0 {
+		return s
+	}
+	// Fast path: if everything fits, return as-is
+	if len(s) <= width {
 		return s
 	}
 	var result strings.Builder
 	for _, line := range strings.Split(s, "\n") {
-		if len(line) <= width {
+		result.WriteString(wrapLine(line, width))
+		result.WriteString("\n")
+	}
+	// Trim trailing newline
+	return strings.TrimSuffix(result.String(), "\n")
+}
+
+// wrapLine wraps a single line to the given width, breaking long words if needed.
+func wrapLine(line string, width int) string {
+	if len(line) <= width {
+		return line
+	}
+	var result strings.Builder
+	words := strings.Fields(line)
+	current := ""
+	for _, w := range words {
+		if current == "" {
+			current = w
+		} else if len(current)+1+len(w) <= width {
+			current += " " + w
+		} else {
+			// Current word(s) would exceed width - write them and start new line
 			if result.Len() > 0 {
 				result.WriteString("\n")
 			}
-			result.WriteString(line)
-			continue
+			result.WriteString(current)
+			current = w
 		}
-		words := strings.Fields(line)
-		current := ""
-		for _, w := range words {
-			if current == "" {
-				current = w
-			} else if len(current)+1+len(w) <= width {
-				current += " " + w
-			} else {
-				if result.Len() > 0 {
-					result.WriteString("\n")
-				}
-				result.WriteString(current)
-				current = w
+	}
+	// Handle remaining content
+	if current != "" {
+		if result.Len() > 0 {
+			result.WriteString("\n")
+		}
+		// If the remaining word itself is longer than width, we need to break it
+		for len(current) > width {
+			if result.Len() > 0 {
+				result.WriteString("\n")
 			}
+			result.WriteString(current[:width])
+			current = current[width:]
 		}
-		if current != "" {
+		if len(current) > 0 {
 			if result.Len() > 0 {
 				result.WriteString("\n")
 			}

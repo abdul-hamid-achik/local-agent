@@ -72,6 +72,8 @@ const (
 	ActionShowModelPicker        // Open model picker overlay
 	ActionCommit                 // Generate commit message and commit
 	ActionSendPrompt             // Send Data as a message to the agent
+	ActionExport                 // Export conversation (Data = path)
+	ActionImport                 // Import conversation (Data = path)
 )
 
 // Registry holds all registered slash commands.

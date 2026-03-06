@@ -6,18 +6,18 @@ import (
 )
 
 func TestCycleMode(t *testing.T) {
-	t.Run("cycles_build_to_ask", func(t *testing.T) {
+	t.Run("cycles_ask_to_build", func(t *testing.T) {
 		m := newTestModel(t)
-		// Default mode is BUILD.
-		if m.mode != ModeBuild {
-			t.Fatalf("expected initial mode ModeBuild, got %d", m.mode)
+		// Default mode is ASK.
+		if m.mode != ModeAsk {
+			t.Fatalf("expected initial mode ModeAsk, got %d", m.mode)
 		}
 
 		updated, _ := m.Update(shiftTabKey())
 		m = updated.(*Model)
 
-		if m.mode != ModeAsk {
-			t.Errorf("expected ModeAsk after cycling from BUILD, got %d", m.mode)
+		if m.mode != ModePlan {
+			t.Errorf("expected ModePlan after cycling from ASK, got %d", m.mode)
 		}
 	})
 

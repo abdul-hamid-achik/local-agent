@@ -58,7 +58,9 @@ func (a *Agent) compact(ctx context.Context, out Output) bool {
 
 	// ICE: persist summary for cross-session retrieval.
 	if a.iceEngine != nil {
-		_ = a.iceEngine.IndexSummary(ctx, summaryText)
+		if err := a.iceEngine.IndexSummary(ctx, summaryText); err != nil {
+			out.Error(fmt.Sprintf("ICE summary indexing failed: %v", err))
+		}
 	}
 
 	// Replace messages with summary + recent.

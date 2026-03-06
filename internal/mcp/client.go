@@ -113,3 +113,20 @@ func (c *MCPClient) Close() error {
 	}
 	return nil
 }
+
+// IsConnected returns true if the client has an active session.
+func (c *MCPClient) IsConnected() bool {
+	return c.session != nil
+}
+
+// Ping checks if the server is still responsive.
+// Returns nil if the server responds, error otherwise.
+func (c *MCPClient) Ping(ctx context.Context) error {
+	if c.session == nil {
+		return fmt.Errorf("no session")
+	}
+
+	// Try listing tools as a health check
+	_, err := c.ListTools(ctx)
+	return err
+}

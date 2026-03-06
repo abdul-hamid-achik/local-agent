@@ -214,3 +214,168 @@ func TestStore_Persistence_RoundTrip(t *testing.T) {
 		t.Errorf("continued id = %d, want 3", id)
 	}
 }
+
+func TestStore_Delete(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "memories.json")
+	s := NewStore(path)
+
+	id, _ := s.Save("to be deleted", []string{"temp"})
+	if s.Count() != 1 {
+		t.Fatalf("expected 1 memory, got %d", s.Count())
+	}
+
+	deleted, err := s.Delete(id)
+	if err != nil {
+		t.Fatalf("Delete returned error: %v", err)
+	}
+	if !deleted {
+		t.Error("Delete returned false for existing memory")
+	}
+	if s.Count() != 0 {
+		t.Errorf("Count after delete = %d, want 0", s.Count())
+	}
+
+	// Try deleting non-existent.
+	deleted, err = s.Delete(999)
+	if err != nil {
+		t.Fatalf("Delete returned error: %v", err)
+	}
+	if deleted {
+		t.Error("Delete should return false for non-existent memory")
+	}
+}
+
+func TestStore_Update(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "memories.json")
+	s := NewStore(path)
+
+	id, _ := s.Save("original content", []string{"original"})
+
+	updated, err := s.Update(id, "updated content", []string{"updated"})
+	if err != nil {
+		t.Fatalf("Update returned error: %v", err)
+	}
+	if !updated {
+		t.Error("Update returned false for existing memory")
+	}
+
+	// Verify update.
+	mem, found := s.Get(id)
+	if !found {
+		t.Fatal("memory not found after update")
+	}
+	if mem.Content != "updated content" {
+		t.Errorf("Content = %q, want 'updated content'", mem.Content)
+	}
+	if len(mem.Tags) != 1 || mem.Tags[0] != "updated" {
+		t.Errorf("Tags = %v, want ['updated']", mem.Tags)
+	}
+
+	// Try updating non-existent.
+	updated, err = s.Update(999, "test", nil)
+	if err != nil {
+		t.Fatalf("Update returned error: %v", err)
+	}
+	if updated {
+		t.Error("Update should return false for non-existent memory")
+	}
+}
+
+func TestStore_DeleteByTag(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "memories.json")
+	s := NewStore(path)
+
+	s.Save("keep this 1", []string{"keep"})
+	s.Save("delete this", []string{"temp"})
+	s.Save("keep this 2", []string{"keep"})
+	s.Save("delete this too", []string{"temp"})
+	s.Save("also keep", []string{"permanent"})
+
+	deleted, err := s.DeleteByTag("temp")
+	if err != nil {
+		t.Fatalf("DeleteByTag returned error: %v", err)
+	}
+	if deleted != 2 {
+		t.Errorf("DeleteByTag deleted = %d, want 2", deleted)
+	}
+	if s.Count() != 3 {
+		t.Errorf("Count after delete = %d, want 3", s.Count())
+	}
+
+	// Verify only temp memories are gone.
+	results := s.Recall("keep", 10)
+	if len(results) != 3 {
+		t.Errorf("Recall returned %d, want 3", len(results))
+	}
+}
+
+func TestStore_Get(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "memories.json")
+	s := NewStore(path)
+
+	id, _ := s.Save("test memory", []string{"tag"})
+
+	mem, found := s.Get(id)
+	if !found {
+		t.Fatal("Get returned false for existing memory")
+	}
+	if mem.Content != "test memory" {
+		t.Errorf("Content = %q, want 'test memory'", mem.Content)
+	}
+	if len(mem.Tags) != 1 || mem.Tags[0] != "tag" {
+		t.Errorf("Tags = %v, want ['tag']", mem.Tags)
+	}
+
+	// Try getting non-existent.
+	_, found = s.Get(999)
+	if found {
+		t.Error("Get should return false for non-existent memory")
+	}
+}
+
+func TestStore_UpdatePartial(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "memories.json")
+	s := NewStore(path)
+
+	id, _ := s.Save("original content", []string{"original", "tags"})
+
+	// Update only content, keep tags.
+	updated, err := s.Update(id, "new content", nil)
+	if err != nil {
+		t.Fatalf("Update returned error: %v", err)
+	}
+	if !updated {
+		t.Error("Update returned false")
+	}
+
+	mem, _ := s.Get(id)
+	if mem.Content != "new content" {
+		t.Errorf("Content = %q, want 'new content'", mem.Content)
+	}
+	// Tags should remain unchanged when nil is passed.
+	if len(mem.Tags) != 2 {
+		t.Errorf("Tags = %v, want 2 tags", mem.Tags)
+	}
+
+	// Update only tags, keep content.
+	updated, err = s.Update(id, "", []string{"only", "tags"})
+	if err != nil {
+		t.Fatalf("Update returned error: %v", err)
+	}
+	if !updated {
+		t.Error("Update returned false")
+	}
+
+	mem, _ = s.Get(id)
+	if mem.Content != "new content" {
+		t.Errorf("Content changed unexpectedly to %q", mem.Content)
+	}
+	if len(mem.Tags) != 2 || mem.Tags[0] != "only" || mem.Tags[1] != "tags" {
+		t.Errorf("Tags = %v, want ['only', 'tags']", mem.Tags)
+	}
+}

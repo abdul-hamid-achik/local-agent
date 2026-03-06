@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -31,16 +32,50 @@ Current date: %s
 - Do NOT claim you cannot access files or the filesystem. You have tools for that — use them.
 %s`
 
+// smallModelTemplate is a more concise template for small models (0.8B, 2B).
+const smallModelTemplate = `You are a local AI assistant. Use tools to read/write files and run commands.
+%sDate: %s
+%s%s
+%s
+## Tools
+%s
+Guidelines: Be concise. Use tools when needed. Don't guess.
+%s`
+
+// isSmallModel returns true if the model name indicates a small model (<=2B parameters).
+func isSmallModel(modelName string) bool {
+	lower := strings.ToLower(modelName)
+	// Check for common small model patterns
+	if strings.Contains(lower, "0.8b") || strings.Contains(lower, "1b") || strings.Contains(lower, "2b") {
+		return true
+	}
+	return false
+}
+
 // buildSystemPrompt generates the system prompt with current tool info,
 // active skills, loaded context, memory, optional ICE context, and ignore patterns.
+// It optimizes for small models if isSmallModel is true.
 func buildSystemPrompt(modePrefix string, tools []llm.ToolDef, skillContent, loadedContext string, memStore *memory.Store, iceContext, workDir, ignoreContent string) string {
-	var toolList strings.Builder
+	return buildSystemPromptForModel(modePrefix, tools, skillContent, loadedContext, memStore, iceContext, workDir, ignoreContent, "")
+}
+
+// buildSystemPromptForModel generates the system prompt, optionally optimized for the given model name.
+func buildSystemPromptForModel(modePrefix string, tools []llm.ToolDef, skillContent, loadedContext string, memStore *memory.Store, iceContext, workDir, ignoreContent string, modelName string) string {
+	useSmallModel := isSmallModel(modelName)
+
+	var toolList string
 	if len(tools) == 0 {
-		toolList.WriteString("No tools currently available.\n")
+		toolList = "No tools currently available.\n"
+	} else if useSmallModel {
+		// Simplified tool list for small models
+		toolList = simplifyToolsForSmallModel(tools)
 	} else {
+		// Full tool list for larger models
+		var b strings.Builder
 		for _, t := range tools {
-			fmt.Fprintf(&toolList, "- **%s**: %s\n", t.Name, t.Description)
+			fmt.Fprintf(&b, "- **%s**: %s\n", t.Name, t.Description)
 		}
+		toolList = b.String()
 	}
 
 	envSection := buildEnvironmentSection(workDir)
@@ -57,7 +92,6 @@ func buildSystemPrompt(modePrefix string, tools []llm.ToolDef, skillContent, loa
 
 	var memorySection string
 	if iceContext != "" {
-		// ICE provides its own assembled context (past conversations + memories).
 		memorySection = iceContext
 	} else if memStore != nil {
 		memorySection = buildMemorySection(memStore)
@@ -85,17 +119,45 @@ func buildSystemPrompt(modePrefix string, tools []llm.ToolDef, skillContent, loa
 		modePrefixSection = "\n" + modePrefix + "\n"
 	}
 
+	dateStr := time.Now().Format("Monday, January 2, 2006")
+
+	if useSmallModel {
+		return fmt.Sprintf(smallModelTemplate,
+			modePrefixSection,
+			dateStr,
+			envSection,
+			ignoreSection,
+			skillSection,
+			toolList,
+			memoryGuidelines,
+		)
+	}
+
 	return fmt.Sprintf(systemTemplate,
 		modePrefixSection,
-		time.Now().Format("Monday, January 2, 2006"),
+		dateStr,
 		envSection,
 		ignoreSection,
 		skillSection,
 		ctxSection,
 		memorySection,
-		toolList.String(),
+		toolList,
 		memoryGuidelines,
 	)
+}
+
+// simplifyToolsForSmallModel creates a condensed tool list for small models.
+func simplifyToolsForSmallModel(tools []llm.ToolDef) string {
+	var b strings.Builder
+	for _, t := range tools {
+		// Truncate long descriptions
+		desc := t.Description
+		if len(desc) > 50 {
+			desc = desc[:47] + "..."
+		}
+		fmt.Fprintf(&b, "- %s: %s\n", t.Name, desc)
+	}
+	return b.String()
 }
 
 // buildEnvironmentSection creates the environment context section.
@@ -111,6 +173,11 @@ func buildEnvironmentSection(workDir string) string {
 	// Auto-detect project type from marker files.
 	if info := detectProjectInfo(workDir); info != "" {
 		b.WriteString(info)
+	}
+
+	// Git context
+	if gitInfo := detectGitInfo(workDir); gitInfo != "" {
+		b.WriteString(gitInfo)
 	}
 
 	return b.String()
@@ -147,6 +214,81 @@ func detectProjectInfo(workDir string) string {
 	}
 
 	return fmt.Sprintf("Project markers: %s\n", strings.Join(found, ", "))
+}
+
+// detectGitInfo returns git branch and status information for the working directory.
+func detectGitInfo(workDir string) string {
+	// Check if this is a git repo
+	gitDir := filepath.Join(workDir, ".git")
+	if _, err := os.Stat(gitDir); err != nil {
+		return ""
+	}
+
+	var b strings.Builder
+
+	// Get current branch
+	branch := runGitCommand(workDir, "rev-parse", "--abbrev-ref", "HEAD")
+	if branch != "" {
+		b.WriteString(fmt.Sprintf("Git branch: %s\n", branch))
+	}
+
+	// Get status (short format)
+	status := runGitCommand(workDir, "status", "--porcelain")
+	if status != "" {
+		lines := strings.Split(strings.TrimSpace(status), "\n")
+		var modified, added, deleted int
+		for _, line := range lines {
+			if len(line) >= 2 {
+				switch line[0] {
+				case 'M', 'm':
+					modified++
+				case 'A':
+					added++
+				case 'D':
+					deleted++
+				}
+			}
+		}
+		if modified > 0 || added > 0 || deleted > 0 {
+			statusParts := []string{}
+			if modified > 0 {
+				statusParts = append(statusParts, fmt.Sprintf("%d modified", modified))
+			}
+			if added > 0 {
+				statusParts = append(statusParts, fmt.Sprintf("%d added", added))
+			}
+			if deleted > 0 {
+				statusParts = append(statusParts, fmt.Sprintf("%d deleted", deleted))
+			}
+			b.WriteString(fmt.Sprintf("Git status: %s\n", strings.Join(statusParts, ", ")))
+		}
+	}
+
+	// Get recent commits (last 3)
+	recentLog := runGitCommand(workDir, "log", "-3", "--oneline")
+	if recentLog != "" {
+		b.WriteString(fmt.Sprintf("Recent commits:\n"))
+		for _, line := range strings.Split(strings.TrimSpace(recentLog), "\n") {
+			b.WriteString(fmt.Sprintf("  - %s\n", line))
+		}
+	}
+
+	if b.Len() == 0 {
+		return ""
+	}
+
+	return b.String()
+}
+
+// runGitCommand runs a git command and returns the output (trimmed).
+func runGitCommand(dir string, args ...string) string {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // buildMemorySection creates the remembered facts section from recent memories.
