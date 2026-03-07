@@ -1,6 +1,9 @@
 package agent
 
 import (
+	"sync"
+	"time"
+
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
 	"github.com/abdul-hamid-achik/local-agent/internal/ice"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
@@ -9,10 +12,9 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/permission"
 )
 
-const maxIterations = 10
-
 // Agent orchestrates the LLM and tools in a ReAct loop.
 type Agent struct {
+	mu          sync.RWMutex
 	llmClient    llm.Client
 	registry     *mcp.Registry
 	messages     []llm.Message
@@ -28,6 +30,7 @@ type Agent struct {
 	ignoreContent     string
 	permChecker       *permission.Checker
 	approvalCallback  func(permission.ApprovalRequest)
+	toolsConfig       config.ToolsConfig
 }
 
 // New creates a new Agent.
@@ -78,6 +81,8 @@ func (a *Agent) SetMemoryStore(store *memory.Store) {
 
 // AddUserMessage appends a user message to the conversation.
 func (a *Agent) AddUserMessage(content string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.messages = append(a.messages, llm.Message{
 		Role:    "user",
 		Content: content,
@@ -86,12 +91,30 @@ func (a *Agent) AddUserMessage(content string) {
 
 // Messages returns the conversation history.
 func (a *Agent) Messages() []llm.Message {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
 	return a.messages
 }
 
 // ClearHistory resets the conversation history.
 func (a *Agent) ClearHistory() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.messages = nil
+}
+
+// AppendMessage appends a message to the conversation history.
+func (a *Agent) AppendMessage(msg llm.Message) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.messages = append(a.messages, msg)
+}
+
+// ReplaceMessages replaces the entire conversation history.
+func (a *Agent) ReplaceMessages(msgs []llm.Message) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.messages = msgs
 }
 
 // SetSkillContent sets the combined content of active skills.
@@ -161,6 +184,37 @@ func (a *Agent) SetICEEngine(engine *ice.Engine) {
 // ICEEngine returns the ICE engine, or nil if not enabled.
 func (a *Agent) ICEEngine() *ice.Engine {
 	return a.iceEngine
+}
+
+// SetToolsConfig sets the tools configuration.
+func (a *Agent) SetToolsConfig(cfg config.ToolsConfig) {
+	a.toolsConfig = cfg
+}
+
+// MaxIterations returns the configured max iterations, or default if not set.
+func (a *Agent) MaxIterations() int {
+	if a.toolsConfig.MaxIterations > 0 {
+		return a.toolsConfig.MaxIterations
+	}
+	return 10
+}
+
+// ToolTimeout returns the configured tool timeout, or default if not set.
+func (a *Agent) ToolTimeout() time.Duration {
+	if a.toolsConfig.Timeout != "" {
+		if d, err := time.ParseDuration(a.toolsConfig.Timeout); err == nil {
+			return d
+		}
+	}
+	return 30 * time.Second
+}
+
+// MaxGrepResults returns the configured max grep results, or default if not set.
+func (a *Agent) MaxGrepResults() int {
+	if a.toolsConfig.MaxGrepResults > 0 {
+		return a.toolsConfig.MaxGrepResults
+	}
+	return 500
 }
 
 // Close cleans up resources.

@@ -245,6 +245,31 @@ type Model struct {
 
 	// Help overlay viewport (scrollable)
 	helpViewport viewport.Model
+
+	// Search functionality
+	searchState *SearchState
+
+	// Progress tracking
+	progressTracker *ProgressTracker
+
+	// Panel resize
+	resizer *PanelResizer
+
+	// Context menu
+	contextMenu *ContextMenuState
+
+	// Timestamps
+	timestampConfig TimestampConfig
+	timestampHelper *TimestampHelper
+
+	// Key hints
+	keyHints *KeyHints
+
+	// Accessibility
+	accessibility *AccessibilityHelper
+
+	// Table helper
+	tableHelper *TableHelper
 }
 
 // New creates a new TUI Model.
@@ -300,6 +325,15 @@ func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, com
 		toastMgr:       NewToastManager(),
 		toastStyles:    DefaultToastStyles(true),
 		toolCardMgr:    NewToolCardManager(true),
+		searchState:    NewSearchState(),
+		progressTracker: NewProgressTracker(true),
+		resizer:        NewPanelResizer(20, 60, true),
+		contextMenu:    &ContextMenuState{Active: false},
+		timestampConfig: DefaultTimestampConfig(),
+		timestampHelper: NewTimestampHelper(DefaultTimestampConfig(), true),
+		keyHints:       DefaultKeyHints(true),
+		accessibility:  NewAccessibilityHelper(true),
+		tableHelper:    NewTableHelper(true),
 	}
 }
 
@@ -346,6 +380,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.toastMgr.SetStyles(m.toastStyles)
 		// Update tool card styles for theme.
 		m.toolCardMgr.SetDark(msg.IsDark())
+		// Update new components for theme.
+		m.progressTracker.SetDark(msg.IsDark())
+		m.resizer.SetDark(msg.IsDark())
+		m.timestampHelper.SetDark(msg.IsDark())
+		m.keyHints.SetDark(msg.IsDark())
+		m.accessibility.SetDark(msg.IsDark())
+		m.tableHelper.SetDark(msg.IsDark())
 		// Recreate markdown renderer for new theme.
 		if m.width > 0 {
 			m.md = NewMarkdownRenderer(m.width-2, m.isDark)

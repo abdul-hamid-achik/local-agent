@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"gopkg.in/yaml.v3"
 )
@@ -16,11 +17,18 @@ type Config struct {
 	SkillsDir    string         `yaml:"skills_dir,omitempty"`
 	ICE          ICEConfig      `yaml:"ice,omitempty"`
 	AgentProfile string         `yaml:"agent_profile,omitempty"`
+	Tools        ToolsConfig    `yaml:"tools,omitempty"`
 }
 
 type AgentsConfig struct {
 	Dir      string `yaml:"dir,omitempty"`
 	AutoLoad bool   `yaml:"auto_load"`
+}
+
+type ToolsConfig struct {
+	Timeout      string `yaml:"timeout,omitempty"` // e.g., "30s", "2m"
+	MaxGrepResults int    `yaml:"max_grep_results,omitempty"`
+	MaxIterations int    `yaml:"max_iterations,omitempty"`
 }
 
 type ICEConfig struct {
@@ -56,6 +64,11 @@ func defaults() Config {
 		Agents: AgentsConfig{
 			Dir:      "",
 			AutoLoad: true,
+		},
+		Tools: ToolsConfig{
+			Timeout:       "30s",
+			MaxGrepResults: 500,
+			MaxIterations: 10,
 		},
 	}
 }
@@ -152,4 +165,23 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("LOCAL_AGENT_AGENTS_DIR"); v != "" {
 		cfg.Agents.Dir = v
 	}
+	if v := os.Getenv("LOCAL_AGENT_TOOLS_TIMEOUT"); v != "" {
+		cfg.Tools.Timeout = v
+	}
+	if v := os.Getenv("LOCAL_AGENT_TOOLS_MAX_GREP"); v != "" {
+		cfg.Tools.MaxGrepResults = parseEnvInt(v, cfg.Tools.MaxGrepResults)
+	}
+	if v := os.Getenv("LOCAL_AGENT_TOOLS_MAX_ITER"); v != "" {
+		cfg.Tools.MaxIterations = parseEnvInt(v, cfg.Tools.MaxIterations)
+	}
+	if v := os.Getenv("LOCAL_AGENT_ICE_EMBED_MODEL"); v != "" {
+		cfg.ICE.EmbedModel = v
+	}
+}
+
+func parseEnvInt(v string, defaultVal int) int {
+	if i, err := strconv.Atoi(v); err == nil {
+		return i
+	}
+	return defaultVal
 }

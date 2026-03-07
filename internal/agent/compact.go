@@ -22,13 +22,21 @@ func (a *Agent) shouldCompact(promptTokens int) bool {
 // compact summarizes older messages into a single recap, keeping the last
 // keepMessages intact. Returns true if compaction was performed.
 func (a *Agent) compact(ctx context.Context, out Output) bool {
-	if len(a.messages) <= keepMessages+1 {
+	a.mu.RLock()
+	msgCount := len(a.messages)
+	a.mu.RUnlock()
+
+	if msgCount <= keepMessages+1 {
 		return false // Not enough messages to compact.
 	}
 
-	splitAt := len(a.messages) - keepMessages
-	older := a.messages[:splitAt]
-	recent := a.messages[splitAt:]
+	a.mu.RLock()
+	splitAt := msgCount - keepMessages
+	older := make([]llm.Message, splitAt)
+	copy(older, a.messages[:splitAt])
+	recent := make([]llm.Message, keepMessages)
+	copy(recent, a.messages[splitAt:])
+	a.mu.RUnlock()
 
 	summary := summarizeMessages(older)
 
@@ -70,7 +78,7 @@ func (a *Agent) compact(ctx context.Context, out Output) bool {
 		Content: fmt.Sprintf("[Conversation summary: %s]", summaryText),
 	})
 	compacted = append(compacted, recent...)
-	a.messages = compacted
+	a.ReplaceMessages(compacted)
 
 	out.SystemMessage(fmt.Sprintf("Context compacted: %d messages summarized, %d kept", len(older), len(recent)))
 	return true

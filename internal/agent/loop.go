@@ -28,8 +28,15 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 
 	// ICE: index user message and assemble cross-session context.
 	var iceContext string
-	if a.iceEngine != nil && len(a.messages) > 0 {
-		lastMsg := a.messages[len(a.messages)-1]
+	a.mu.RLock()
+	hasMessages := len(a.messages) > 0
+	var lastMsg llm.Message
+	if hasMessages {
+		lastMsg = a.messages[len(a.messages)-1]
+	}
+	a.mu.RUnlock()
+
+	if a.iceEngine != nil && hasMessages {
 		if lastMsg.Role == "user" {
 			if err := a.iceEngine.IndexMessage(ctx, "user", lastMsg.Content); err != nil {
 				out.Error(fmt.Sprintf("ICE indexing failed: %v", err))
@@ -46,7 +53,9 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 	var lastPromptTokens int
 	var retryCount int
 
-	for i := range maxIterations {
+	maxIters := a.MaxIterations()
+
+	for i := 0; i < maxIters; i++ {
 		select {
 		case <-ctx.Done():
 			return
@@ -105,7 +114,7 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 			Content:   textBuf.String(),
 			ToolCalls: toolCalls,
 		}
-		a.messages = append(a.messages, assistantMsg)
+		a.AppendMessage(assistantMsg)
 
 		// ICE: index assistant message.
 		if a.iceEngine != nil && assistantMsg.Content != "" {
@@ -117,17 +126,21 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 		// If no tool calls, we're done.
 		if len(toolCalls) == 0 {
 			// ICE: detect auto-memories from the exchange.
-			if a.iceEngine != nil && len(a.messages) >= 2 {
-				userContent := ""
+			a.mu.RLock()
+			hasEnoughMessages := len(a.messages) >= 2
+			var userContent string
+			if hasEnoughMessages {
 				for idx := len(a.messages) - 2; idx >= 0; idx-- {
 					if a.messages[idx].Role == "user" {
 						userContent = a.messages[idx].Content
 						break
 					}
 				}
-				if userContent != "" {
-					a.iceEngine.DetectAutoMemory(ctx, userContent, assistantMsg.Content)
-				}
+			}
+			a.mu.RUnlock()
+
+			if a.iceEngine != nil && hasEnoughMessages && userContent != "" {
+				a.iceEngine.DetectAutoMemory(ctx, userContent, assistantMsg.Content)
 			}
 			return
 		}
@@ -160,7 +173,7 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 				result, isErr := a.handleToolsTool(tc)
 				duration := time.Since(startTime)
 				out.ToolCallResult(tc.Name, result, isErr, duration)
-				a.messages = append(a.messages, llm.Message{
+				a.AppendMessage(llm.Message{
 					Role:       "tool",
 					Content:    result,
 					ToolName:   tc.Name,
@@ -176,7 +189,7 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 					errMsg := "tool call blocked by permission policy"
 					out.ToolCallStart(tc.Name, tc.Arguments)
 					out.ToolCallResult(tc.Name, errMsg, true, 0)
-					a.messages = append(a.messages, llm.Message{
+					a.AppendMessage(llm.Message{
 						Role:       "tool",
 						Content:    errMsg,
 						ToolName:   tc.Name,
@@ -193,7 +206,7 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 							errMsg := "tool call denied by user"
 							out.ToolCallStart(tc.Name, tc.Arguments)
 							out.ToolCallResult(tc.Name, errMsg, true, 0)
-							a.messages = append(a.messages, llm.Message{
+							a.AppendMessage(llm.Message{
 								Role:       "tool",
 								Content:    errMsg,
 								ToolName:   tc.Name,
@@ -258,7 +271,7 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 			// Append all results to messages.
 			for _, msg := range results {
 				if msg.ToolName != "" {
-					a.messages = append(a.messages, msg)
+					a.AppendMessage(msg)
 				}
 			}
 		}
@@ -272,12 +285,12 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 		}
 
 		// Safety: warn if we're about to hit the iteration limit.
-		if i == maxIterations-2 {
-			out.Error(fmt.Sprintf("approaching iteration limit (%d/%d)", i+2, maxIterations))
+		if i == maxIters-2 {
+			out.Error(fmt.Sprintf("approaching iteration limit (%d/%d)", i+2, maxIters))
 		}
 	}
 
-	out.Error(fmt.Sprintf("reached max iterations (%d)", maxIterations))
+	out.Error(fmt.Sprintf("reached max iterations (%d)", maxIters))
 }
 
 // isRetryableError returns true for transient LLM errors that are worth retrying,

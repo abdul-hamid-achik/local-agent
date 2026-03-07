@@ -31,13 +31,13 @@ import (
 var version = "dev"
 
 func main() {
-	versionFlag := flag.Bool("version", false, "print version")
-	// Handle subcommands before flag parsing.
-	if len(os.Args) > 1 && os.Args[1] == "--version" {
-		fmt.Println(version)
-		return
+	// Handle --version flag before flag.Parse (which may fail)
+	for _, arg := range os.Args[1:] {
+		if arg == "--version" || arg == "-version" {
+			fmt.Println(version)
+			return
+		}
 	}
-	// Handle subcommands before flag parsing.
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "init":

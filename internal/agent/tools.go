@@ -17,9 +17,7 @@ import (
 )
 
 const (
-	defaultTimeout = 30 * time.Second
 	maxTimeout     = 120 * time.Second
-	maxGrepResults = 500
 )
 
 func (a *Agent) toolsBuiltinToolDefs() []llm.ToolDef {
@@ -74,6 +72,7 @@ func (a *Agent) handleGrep(args map[string]any) (string, bool) {
 	path := a.getArgString(args, "path", a.workDir)
 	include := a.getArgString(args, "include", "")
 	context := a.getArgInt(args, "context", 3)
+	maxResults := a.MaxGrepResults()
 
 	if _, err := os.Stat(path); err != nil {
 		return fmt.Sprintf("error: path does not exist: %s", path), true
@@ -131,21 +130,21 @@ func (a *Agent) handleGrep(args map[string]any) (string, bool) {
 
 				if context > 0 && ctxStart < i {
 					for j := ctxStart; j < i; j++ {
-						if len(results) < maxGrepResults {
+						if len(results) < maxResults {
 							results = append(results, fmt.Sprintf("  %d: %s", j+1, lines[j]))
 						}
 					}
 				}
 				if context > 0 && i+1 < ctxEnd {
 					for j := i + 1; j < ctxEnd; j++ {
-						if len(results) < maxGrepResults {
+						if len(results) < maxResults {
 							results = append(results, fmt.Sprintf("  %d: %s", j+1, lines[j]))
 						}
 					}
 				}
 
-				if len(results) >= maxGrepResults {
-					results = append(results, fmt.Sprintf("\n... (truncated, max %d results)", maxGrepResults))
+				if len(results) >= maxResults {
+					results = append(results, fmt.Sprintf("\n... (truncated, max %d results)", maxResults))
 					return filepath.SkipAll
 				}
 			}
@@ -263,9 +262,13 @@ func (a *Agent) handleBash(args map[string]any) (string, bool) {
 		return "error: command is required", true
 	}
 
-	timeout := a.getArgInt(args, "timeout", 30)
-	if timeout > 120 {
-		timeout = 120
+	timeout := a.getArgInt(args, "timeout", int(a.ToolTimeout().Seconds()))
+	maxTimeoutSecs := int(a.ToolTimeout().Seconds())
+	if maxTimeoutSecs > 120 {
+		maxTimeoutSecs = 120
+	}
+	if timeout > maxTimeoutSecs {
+		timeout = maxTimeoutSecs
 	}
 	if timeout < 1 {
 		timeout = 1
