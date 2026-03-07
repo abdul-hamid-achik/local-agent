@@ -37,6 +37,10 @@ func (a *Adapter) SystemMessage(msg string) {
 }
 
 func (a *Adapter) Error(msg string) {
+	// Log error for debugging
+	if len(msg) > 100 {
+		msg = msg[:97] + "..."
+	}
 	sendMsg(a.program, ErrorMsg{Msg: msg})
 }
 

@@ -131,6 +131,11 @@ type Model struct {
 	toolsPending   int
 	inputLines     int
 	userScrolledUp bool
+	
+	// Scroll anchor system - prevents jitter during streaming
+	scrollAnchor      int    // lines from bottom to maintain
+	anchorActive      bool   // true when user wants to stay at bottom
+	lastContentHeight int    // track content height changes for smooth scrolling
 
 	// Startup
 	initializing bool
@@ -420,12 +425,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		
 		// Calculate content width for markdown renderer and text wrapping
-		// This is narrower than viewport to account for padding/indentation
-		contentWidth := viewportWidth - 3
-		if contentWidth < 20 {
-			contentWidth = 20
+		// CRITICAL: Must be <= viewport width to prevent horizontal overflow
+		// Use conservative padding to account for margins, borders, and indentation
+		contentWidth := viewportWidth - 6
+		if contentWidth < 14 {
+			contentWidth = 14
 		}
-		
+
 		m.md = NewMarkdownRenderer(contentWidth, m.isDark)
 
 		// Always update side panel dimensions
@@ -454,12 +460,25 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.KeyMap.Right = key.NewBinding(key.WithDisabled())
 			m.viewport.SetContent(m.renderEntries())
 			m.ready = true
+			// Initialize scroll anchor system
+			m.scrollAnchor = 0
+			m.anchorActive = true
+			m.lastContentHeight = 0
+			// Initialize tool entry rows map
+			m.toolEntryRows = make(map[int]int, 8)
 		} else {
 			m.viewport.SetWidth(viewportWidth)
 			m.viewport.SetHeight(contentH)
-			// Re-render cached entries for new width.
-			m.invalidateRenderedCache()
+			// Only invalidate cache if significant width change (>5 chars)
+			widthDelta := abs(m.width - msg.Width)
+			if widthDelta > 5 {
+				m.invalidateRenderedCache()
+			}
 			m.viewport.SetContent(m.renderEntries())
+			// Maintain scroll position - if anchor is active, stay at bottom
+			if m.anchorActive {
+				m.viewport.GotoBottom()
+			}
 		}
 
 		// Resize help viewport if it's open.
@@ -880,7 +899,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.thinkBuf.WriteString(thinkText)
 		}
 		m.viewport.SetContent(m.renderEntries())
-		if !m.userScrolledUp {
+		
+		// Use scroll anchor system - only auto-scroll if anchor is active
+		if m.anchorActive {
 			m.viewport.GotoBottom()
 		}
 
@@ -926,7 +947,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Flush any accumulated stream text before tool display.
 		m.flushStream()
 		m.viewport.SetContent(m.renderEntries())
-		if !m.userScrolledUp {
+		// Use scroll anchor system
+		if m.anchorActive {
 			m.viewport.GotoBottom()
 		}
 
@@ -977,7 +999,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.toolsPending--
 		}
 		m.viewport.SetContent(m.renderEntries())
-		if !m.userScrolledUp {
+		// Use scroll anchor system
+		if m.anchorActive {
 			m.viewport.GotoBottom()
 		}
 
@@ -987,7 +1010,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Content: msg.Msg,
 		})
 		m.viewport.SetContent(m.renderEntries())
-		if !m.userScrolledUp {
+		// Use scroll anchor system
+		if m.anchorActive {
 			m.viewport.GotoBottom()
 		}
 
@@ -1000,7 +1024,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Content: msg.Msg,
 		})
 		m.viewport.SetContent(m.renderEntries())
-		if !m.userScrolledUp {
+		// Use scroll anchor system
+		if m.anchorActive {
 			m.viewport.GotoBottom()
 		}
 
@@ -1011,6 +1036,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.flushStream()
 		m.state = StateIdle
 		m.userScrolledUp = false
+		m.anchorActive = true
+		m.scrollAnchor = 0
 		m.input.Focus()
 		m.input.SetHeight(1)
 		m.inputLines = 1
@@ -1235,13 +1262,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.GotoBottom()
 
 	case tea.MouseWheelMsg:
-		var cmd tea.Cmd
-		m.viewport, cmd = m.viewport.Update(msg)
-		if msg.Button == tea.MouseWheelUp {
+		wasAtBottom := m.viewport.AtBottom()
+		m.viewport, _ = m.viewport.Update(msg)
+		
+		// Use AtBottom() to determine scroll anchor state
+		// If viewport was at bottom before scroll up, user is scrolling away
+		if msg.Button == tea.MouseWheelUp && wasAtBottom {
+			m.anchorActive = false
 			m.userScrolledUp = true
+			m.scrollAnchor = 5 // Default scroll offset
+		} else if m.viewport.AtBottom() {
+			// Scrolled back to bottom - re-enable anchor
+			m.anchorActive = true
+			m.userScrolledUp = false
+			m.scrollAnchor = 0
 		}
-		m.checkAutoScroll()
-		cmds = append(cmds, cmd)
 
 	case tea.MouseClickMsg:
 		if msg.Button == tea.MouseLeft {
@@ -1778,11 +1813,13 @@ func (m *Model) invalidateEntryCache() {
 	m.cachedToolEntryRows = nil
 }
 
-// checkAutoScroll resets userScrolledUp when the viewport is at the bottom,
+// checkAutoScroll resets scroll anchor when the viewport is at the bottom,
 // allowing auto-scroll to resume during streaming.
 func (m *Model) checkAutoScroll() {
 	if m.viewport.AtBottom() {
+		m.anchorActive = true
 		m.userScrolledUp = false
+		m.scrollAnchor = 0
 	}
 }
 
@@ -2354,4 +2391,16 @@ func (m *Model) parseImportedConversation(data string) ([]ChatEntry, error) {
 	m.toolEntries = nil
 
 	return entries, nil
+}
+
+// Ready returns true if the TUI is fully initialized.
+// Exported for testing.
+func (m *Model) Ready() bool {
+	return m.ready
+}
+
+// AnchorActive returns true if scroll anchor is active.
+// Exported for testing.
+func (m *Model) AnchorActive() bool {
+	return m.anchorActive
 }

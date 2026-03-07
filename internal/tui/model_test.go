@@ -247,6 +247,7 @@ func TestAgentDoneMsg(t *testing.T) {
 	m := newTestModel(t)
 	m.state = StateStreaming
 	m.userScrolledUp = true
+	m.anchorActive = false
 
 	updated, _ := m.Update(AgentDoneMsg{})
 	m = updated.(*Model)
@@ -256,6 +257,9 @@ func TestAgentDoneMsg(t *testing.T) {
 	}
 	if m.userScrolledUp {
 		t.Error("userScrolledUp should be reset to false")
+	}
+	if !m.anchorActive {
+		t.Error("anchorActive should be reset to true")
 	}
 }
 

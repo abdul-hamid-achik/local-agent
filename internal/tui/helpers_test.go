@@ -2,11 +2,18 @@ package tui
 
 import (
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/agent"
 	"github.com/abdul-hamid-achik/local-agent/internal/command"
+)
+
+// Test helpers for time values
+var (
+	testTime     = time.Now()
+	testDuration = 100 * time.Millisecond
 )
 
 // newTestModel creates a Model with a real command.Registry and Agent, sends WindowSizeMsg to set ready=true.

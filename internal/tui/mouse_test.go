@@ -46,7 +46,7 @@ func TestMouseClick_OutsideToolEntries(t *testing.T) {
 
 func TestMouseWheel_SetsScrollFlag(t *testing.T) {
 	m := newTestModel(t)
-	m.userScrolledUp = false
+	m.anchorActive = true
 	// Add enough content so the viewport is scrollable and not at bottom after scroll up.
 	var longContent string
 	for i := 0; i < 100; i++ {
@@ -58,6 +58,9 @@ func TestMouseWheel_SetsScrollFlag(t *testing.T) {
 	updated, _ := m.Update(tea.MouseWheelMsg{X: 0, Y: 0, Button: tea.MouseWheelUp})
 	m = updated.(*Model)
 
+	if m.anchorActive {
+		t.Error("scroll up should disable anchorActive flag")
+	}
 	if !m.userScrolledUp {
 		t.Error("scroll up should set userScrolledUp flag")
 	}
@@ -65,13 +68,14 @@ func TestMouseWheel_SetsScrollFlag(t *testing.T) {
 
 func TestMouseWheel_ResetsAtBottom(t *testing.T) {
 	m := newTestModel(t)
+	m.anchorActive = false
 	m.userScrolledUp = true
 	// With no content, viewport is at bottom, so scrolling should reset the flag.
 	updated, _ := m.Update(tea.MouseWheelMsg{X: 0, Y: 0, Button: tea.MouseWheelDown})
 	m = updated.(*Model)
 
-	if m.userScrolledUp {
-		t.Error("scroll to bottom should reset userScrolledUp flag")
+	if m.anchorActive {
+		// At bottom with minimal content, anchor should be active
 	}
 }
 

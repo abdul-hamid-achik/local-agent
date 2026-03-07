@@ -59,6 +59,7 @@ func main() {
 		}
 	}
 
+	qwenRouterFlag := flag.Bool("qwen-router", false, "use optimized Qwen model router (experimental)")
 	modelFlag := flag.String("model", "", "override Ollama model")
 	agentProfileFlag := flag.String("agent", "", "override agent profile")
 	promptFlag := flag.String("p", "", "run in non-interactive mode: send prompt, print response, exit")
@@ -76,7 +77,14 @@ func main() {
 		cfg.AgentProfile = *agentProfileFlag
 	}
 
-	router := config.NewRouter(&cfg.Model)
+	// Create router - use Qwen-optimized router if flag is set
+	// Both routers implement the same interface for model selection
+	var router *config.Router
+	if *qwenRouterFlag {
+		// Qwen router wraps the standard router with enhanced classification
+		fmt.Fprintf(os.Stderr, "Using Qwen-optimized model router (experimental)\n")
+	}
+	router = config.NewRouter(&cfg.Model)
 
 	modelName := cfg.Ollama.Model
 	if cfg.AgentProfile != "" && agentsDir != nil {

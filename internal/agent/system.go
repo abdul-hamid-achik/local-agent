@@ -39,7 +39,12 @@ const smallModelTemplate = `You are a local AI assistant. Use tools to read/writ
 %s
 ## Tools
 %s
-Guidelines: Be concise. Use tools when needed. Don't guess.
+Guidelines:
+- Be concise and direct
+- Use tools when needed to complete tasks
+- If a tool fails, continue with available information
+- Don't guess - use tools to verify
+- You can complete tasks even if some tools fail
 %s`
 
 // isSmallModel returns true if the model name indicates a small model (<=2B parameters).

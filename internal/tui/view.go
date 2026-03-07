@@ -431,13 +431,19 @@ func formatTokens(n int) string {
 // re-rendered while the entries prefix is reused from cache.
 func (m *Model) renderEntries() string {
 	// Calculate content width for text wrapping
-	// This matches the contentWidth calculated in WindowSizeMsg handler
-	contentW := m.width - 4
+	// CRITICAL: This must be <= viewport width to prevent horizontal overflow
+	viewportW := m.width - 1
 	if m.sidePanel.IsVisible() {
-		contentW = m.width - m.sidePanel.width - 5 // screen - panel - separator - padding
+		viewportW = m.width - m.sidePanel.width - 2
 	}
-	if contentW < 20 {
-		contentW = 20
+	if viewportW < 20 {
+		viewportW = 20
+	}
+	
+	// Content width is viewport width minus padding for margins/borders
+	contentW := viewportW - 6 // More conservative padding to prevent overflow
+	if contentW < 14 {
+		contentW = 14
 	}
 
 	// Startup progress screen.
@@ -517,13 +523,10 @@ func (m *Model) renderEntries() string {
 			curr := entry.Kind
 			nextK := next.Kind
 
-			// Tight grouping between consecutive tool_group entries.
-			if curr == "tool_group" && nextK == "tool_group" {
-				continue
-			}
-			// Extra spacing after tool groups for visual separation.
+			// Consistent spacing between all tool_group entries.
 			if curr == "tool_group" {
-				b.WriteString("\n\n")
+				// Already added spacing in renderToolGroup, skip here to avoid double spacing
+				continue
 			} else if curr != nextK {
 				b.WriteString("\n")
 			}
@@ -533,7 +536,11 @@ func (m *Model) renderEntries() string {
 	// Cache the rendered entries prefix and toolEntryRows.
 	m.cachedEntriesRender = b.String()
 	m.cachedEntryCount = len(m.entries)
-	m.cachedToolEntryRows = make(map[int]int, len(m.toolEntryRows))
+	if m.cachedToolEntryRows == nil {
+		m.cachedToolEntryRows = make(map[int]int, 8)
+	} else {
+		clear(m.cachedToolEntryRows)
+	}
 	for k, v := range m.toolEntryRows {
 		m.cachedToolEntryRows[k] = v
 	}
@@ -732,7 +739,19 @@ func (m *Model) renderToolGroup(b *strings.Builder, toolIdx, entryIdx int) {
 	if card != nil {
 		// Use fancy tool card rendering
 		card.Expanded = !te.Collapsed
-		b.WriteString(card.View(m.width - 4))
+		// Calculate available width: viewport width minus padding for borders and indentation
+		availableWidth := m.width - 8 // Account for borders, padding, and side panel if visible
+		if m.sidePanel.IsVisible() {
+			availableWidth = m.width - m.sidePanel.width - 10 // More conservative with side panel
+		}
+		if availableWidth < 30 {
+			availableWidth = 30 // Minimum usable width
+		}
+		cardView := card.View(availableWidth)
+		// Add left padding to align with message content
+		cardView = indentBlock(cardView, "  ")
+		b.WriteString(cardView)
+		b.WriteString("\n\n") // Add vertical spacing between tool cards
 	} else {
 		// Fallback to basic rendering if no card exists
 		tt := classifyTool(te.Name)

@@ -103,7 +103,10 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 				toolCalls = nil
 				continue
 			}
+			// Show error and provide a fallback response
 			out.Error(fmt.Sprintf("LLM error: %v", err))
+			// Send a system message explaining the error
+			out.SystemMessage(fmt.Sprintf("⚠️ Model response failed: %v\n\nYou can try:\n- Checking if Ollama is running (`ollama ps`)\n- Switching to a different model (ctrl+m)\n- Reducing context size\n\nTool results are still available above.", err))
 			return
 		}
 		retryCount = 0 // reset on success
@@ -244,7 +247,8 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 					} else if tool.isMCPTool {
 						toolResult, err := a.registry.CallTool(ctx, tc.Name, tc.Arguments)
 						if err != nil {
-							result = fmt.Sprintf("tool error: %v", err)
+							// Format error in a way the LLM can understand and recover from
+							result = fmt.Sprintf("ERROR: Tool '%s' failed: %v\nThis tool call failed but you can still complete the task with other available information.", tc.Name, err)
 							isErr = true
 						} else {
 							result = toolResult.Content
