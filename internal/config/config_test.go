@@ -10,7 +10,7 @@ func TestDefaults(t *testing.T) {
 		got  string
 		want string
 	}{
-		{name: "Ollama.Model", got: cfg.Ollama.Model, want: "qwen3.5:0.8b"},
+		{name: "Ollama.Model", got: cfg.Ollama.Model, want: "qwen3.5:2b"},
 		{name: "Ollama.BaseURL", got: cfg.Ollama.BaseURL, want: "http://localhost:11434"},
 	}
 

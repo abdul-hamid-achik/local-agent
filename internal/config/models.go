@@ -55,7 +55,7 @@ func DefaultModels() []Model {
 			Speed:       4.0,
 			UseCases:    []string{"quick_answers", "simple_tools", "single_file_edits"},
 			Description: "Fast, lightweight model for simple tasks and quick answers",
-			Default:     true,
+			Default:     false,
 		},
 		{
 			Name:        "qwen3.5:2b",
@@ -68,7 +68,7 @@ func DefaultModels() []Model {
 			Speed:       2.5,
 			UseCases:    []string{"code_completion", "simple_refactoring", "explanations"},
 			Description: "Balanced model for medium complexity tasks",
-			Default:     false,
+			Default:     true,
 		},
 		{
 			Name:        "qwen3.5:4b",
@@ -103,8 +103,8 @@ func DefaultModelConfig() ModelConfig {
 	models := DefaultModels()
 	return ModelConfig{
 		Models:        models,
-		DefaultModel:  "qwen3.5:0.8b",
-		FallbackChain: []string{"qwen3.5:0.8b", "qwen3.5:2b", "qwen3.5:4b", "qwen3.5:9b"},
+		DefaultModel:  "qwen3.5:2b",
+		FallbackChain: []string{"qwen3.5:2b", "qwen3.5:0.8b", "qwen3.5:4b", "qwen3.5:9b"},
 		AutoSelect:    true,
 		EmbedModel:    "nomic-embed-text",
 	}

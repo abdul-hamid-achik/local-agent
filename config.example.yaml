@@ -2,7 +2,7 @@
 # Place at ~/.config/local-agent/config.yaml or ./local-agent.yaml
 
 ollama:
-  model: "qwen3.5:0.8b"
+  model: "qwen3.5:2b"
   base_url: "http://localhost:11434"
   num_ctx: 262144
 

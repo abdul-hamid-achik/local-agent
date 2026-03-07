@@ -48,7 +48,7 @@ func defaults() Config {
 	modelCfg := DefaultModelConfig()
 	return Config{
 		Ollama: OllamaConfig{
-			Model:   "qwen3.5:0.8b",
+			Model:   "qwen3.5:2b",
 			BaseURL: "http://localhost:11434",
 			NumCtx:  262144,
 		},

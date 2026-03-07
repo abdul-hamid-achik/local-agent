@@ -9,6 +9,23 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
+// sanitizeDetail removes JSON-like content and limits detail length for display.
+func sanitizeDetail(detail string) string {
+	// If detail looks like JSON (starts with { or [), show a simplified message
+	detail = strings.TrimSpace(detail)
+	if len(detail) > 0 && (detail[0] == '{' || detail[0] == '[') {
+		return "error details available in logs"
+	}
+	// Remove newlines and normalize whitespace
+	detail = strings.ReplaceAll(detail, "\n", " ")
+	detail = strings.ReplaceAll(detail, "\r", " ")
+	// Collapse multiple spaces
+	for strings.Contains(detail, "  ") {
+		detail = strings.ReplaceAll(detail, "  ", " ")
+	}
+	return strings.TrimSpace(detail)
+}
+
 // SidePanelSectionKind represents the type of section
 type SidePanelSectionKind int
 
@@ -365,7 +382,7 @@ func (m SidePanelModel) View() string {
 			}
 			line := fmt.Sprintf("  %s %s", icon, item.Label)
 			if item.Detail != "" {
-				detail := item.Detail
+				detail := sanitizeDetail(item.Detail)
 				// Truncate detail if too long
 				maxDetail := m.width - 15
 				if len(detail) > maxDetail && maxDetail > 5 {

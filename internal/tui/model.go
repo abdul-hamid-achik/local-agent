@@ -360,8 +360,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.isCompact = msg.Width < 80 || msg.Height < 24
 		m.isWide = msg.Width > 120
-		m.md = NewMarkdownRenderer(msg.Width-2, m.isDark)
-
+		
 		// Calculate panel width (30 chars or 25% of screen, min 25, max 40)
 		panelWidth := 30
 		if msg.Width < 100 {
@@ -369,21 +368,30 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if msg.Width > 160 {
 			panelWidth = 40
 		}
+		
+		// Calculate viewport width (for viewport component)
+		viewportWidth := msg.Width - 1
+		if m.sidePanel.IsVisible() {
+			viewportWidth = msg.Width - panelWidth - 2 // panel + separator
+		}
+		if viewportWidth < 20 {
+			viewportWidth = 20
+		}
+		
+		// Calculate content width for markdown renderer and text wrapping
+		// This is narrower than viewport to account for padding/indentation
+		contentWidth := viewportWidth - 3
+		if contentWidth < 20 {
+			contentWidth = 20
+		}
+		
+		m.md = NewMarkdownRenderer(contentWidth, m.isDark)
 
 		// Always update side panel dimensions
 		m.sidePanel.SetWidth(panelWidth)
 		m.sidePanel.SetHeight(msg.Height - 2) // account for footer
 
-		// Calculate content width for the unified chat area (viewport + input)
-		// Subtract: panel width + 1 (separator line) + 1 (right padding)
-		contentWidth := msg.Width - 1
-		if m.sidePanel.IsVisible() {
-			contentWidth = msg.Width - panelWidth - 2 // panel + separator line
-		}
-		if contentWidth < 20 {
-			contentWidth = 20
-		}
-
+		// Recalculate content height
 		contentH := msg.Height - 1 - m.footerHeight()
 		if contentH < 1 {
 			contentH = 1
@@ -391,7 +399,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if !m.ready {
 			m.viewport = viewport.New(
-				viewport.WithWidth(contentWidth),
+				viewport.WithWidth(viewportWidth),
 				viewport.WithHeight(contentH),
 			)
 			// Override viewport KeyMap: keep only pgup/pgdown/ctrl+u/ctrl+d
@@ -406,7 +414,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.SetContent(m.renderEntries())
 			m.ready = true
 		} else {
-			m.viewport.SetWidth(contentWidth)
+			m.viewport.SetWidth(viewportWidth)
 			m.viewport.SetHeight(contentH)
 			// Re-render cached entries for new width.
 			m.invalidateRenderedCache()
@@ -419,7 +427,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Input width matches viewport exactly - they're one unified area
-		m.input.SetWidth(contentWidth)
+		m.input.SetWidth(viewportWidth)
 		m.syncInputHeight()
 
 	case tea.KeyPressMsg:

@@ -2,8 +2,8 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -287,18 +287,47 @@ func isRetryableError(err error) bool {
 	return strings.Contains(msg, "parse JSON") || strings.Contains(msg, "unexpected end of JSON")
 }
 
-// FormatToolArgs formats tool arguments as a compact JSON string for display.
+// FormatToolArgs formats tool arguments in a human-readable way for display.
+// Avoids showing raw JSON by presenting key=value pairs.
 func FormatToolArgs(args map[string]any) string {
 	if len(args) == 0 {
-		return "{}"
+		return ""
 	}
-	b, err := json.Marshal(args)
-	if err != nil {
-		return "{...}"
+	
+	var parts []string
+	for key, value := range args {
+		// Format value based on its type
+		var valStr string
+		switch v := value.(type) {
+		case string:
+			// Truncate long strings (account for quotes)
+			if len(v) > 47 {
+				valStr = `"` + v[:44] + `..."`
+			} else {
+				valStr = `"` + v + `"`
+			}
+		case int, float64, bool:
+			valStr = fmt.Sprintf("%v", v)
+		case []any:
+			// Show array length
+			valStr = fmt.Sprintf("[%d items]", len(v))
+		case map[string]any:
+			// Show object keys count
+			valStr = fmt.Sprintf("{%d fields}", len(v))
+		default:
+			valStr = fmt.Sprintf("%v", v)
+		}
+		parts = append(parts, fmt.Sprintf("%s=%s", key, valStr))
 	}
-	s := string(b)
-	if len(s) > 200 {
-		return s[:197] + "..."
+	
+	// Sort parts for consistent output
+	sort.Strings(parts)
+	
+	result := strings.Join(parts, " ")
+	
+	// Truncate if too long
+	if len(result) > 60 {
+		return result[:57] + "..."
 	}
-	return s
+	return result
 }

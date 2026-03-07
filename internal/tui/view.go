@@ -18,13 +18,19 @@ func (m *Model) View() tea.View {
 
 	var content string
 
+	// Calculate right side width to match viewport
+	rightWidth := m.width - 1
+	if m.sidePanel.IsVisible() {
+		rightWidth = m.width - m.sidePanel.width - 1 // -1 for separator
+	}
+	
 	// Build the right side: viewport + footer as one unit
 	var rightSide strings.Builder
 	rightSide.WriteString(m.viewport.View())
 	rightSide.WriteString("\n")
 
 	// Divider line (only in chat area, not under sidebar)
-	rightSide.WriteString(m.styles.Divider.Render(rule(m.width - m.sidePanel.width - 1)))
+	rightSide.WriteString(m.styles.Divider.Render(rule(rightWidth)))
 	rightSide.WriteString("\n")
 
 	// Status line.
@@ -47,7 +53,7 @@ func (m *Model) View() tea.View {
 
 		// Calculate widths
 		panelW := m.sidePanel.width
-		rightW := m.width - panelW - 1 // -1 for separator
+		rightW := rightWidth
 
 		// Create left panel with fixed width and FULL HEIGHT
 		leftStyle := lipgloss.NewStyle().
@@ -341,11 +347,16 @@ func (m *Model) renderStatusLine() string {
 	// Pending tool approval prompt overrides normal status.
 	if m.pendingApproval != nil {
 		args := agent.FormatToolArgs(m.pendingApproval.Args)
-		if len(args) > 60 {
-			args = args[:57] + "..."
+		promptText := m.pendingApproval.ToolName
+		if args != "" {
+			promptText += " " + args
+		}
+		// Truncate if too long
+		if len(promptText) > 60 {
+			promptText = promptText[:57] + "..."
 		}
 		return m.styles.ApprovalPrompt.Render(
-			fmt.Sprintf("  ⚡ Allow %s %s? [y]es / [n]o / [a]lways", m.pendingApproval.ToolName, args),
+			fmt.Sprintf("  ⚡ Allow %s? [y]es / [n]o / [a]lways", promptText),
 		)
 	}
 
@@ -419,7 +430,15 @@ func formatTokens(n int) string {
 // Uses an incremental cache: during streaming, only the streaming tail is
 // re-rendered while the entries prefix is reused from cache.
 func (m *Model) renderEntries() string {
+	// Calculate content width for text wrapping
+	// This matches the contentWidth calculated in WindowSizeMsg handler
 	contentW := m.width - 4
+	if m.sidePanel.IsVisible() {
+		contentW = m.width - m.sidePanel.width - 5 // screen - panel - separator - padding
+	}
+	if contentW < 20 {
+		contentW = 20
+	}
 
 	// Startup progress screen.
 	if m.initializing {

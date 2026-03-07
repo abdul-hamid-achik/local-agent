@@ -16,17 +16,32 @@ func TestFormatToolArgs(t *testing.T) {
 		{
 			name: "empty map",
 			args: map[string]any{},
-			want: "{}",
+			want: "",
 		},
 		{
 			name:     "simple map",
 			args:     map[string]any{"key": "value"},
-			contains: []string{"key", "value"},
+			contains: []string{"key=", `"value"`},
 		},
 		{
-			name:   "long args truncated at 200",
+			name:   "long args truncated at 60",
 			args:   map[string]any{"data": strings.Repeat("a", 300)},
-			maxLen: 200,
+			maxLen: 60,
+		},
+		{
+			name:     "multiple args",
+			args:     map[string]any{"path": "/tmp/test", "command": "ls"},
+			contains: []string{"path=", "command="},
+		},
+		{
+			name:     "numeric args",
+			args:     map[string]any{"count": 42, "ratio": 3.14},
+			contains: []string{"count=42", "ratio=3.14"},
+		},
+		{
+			name:     "array args",
+			args:     map[string]any{"items": []any{1, 2, 3}},
+			contains: []string{"items=", "[3 items]"},
 		},
 	}
 
@@ -48,8 +63,9 @@ func TestFormatToolArgs(t *testing.T) {
 				if len(got) > tt.maxLen {
 					t.Errorf("FormatToolArgs() len = %d, want <= %d", len(got), tt.maxLen)
 				}
-				if !strings.HasSuffix(got, "...") {
-					t.Errorf("FormatToolArgs() should end with '...' when truncated, got %q", got[len(got)-10:])
+				// Check for truncation indicator (either "..." in value or at end)
+				if !strings.Contains(got, "...") {
+					t.Errorf("FormatToolArgs() should contain '...' when truncated, got %q", got)
 				}
 			}
 		})

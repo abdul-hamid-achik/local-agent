@@ -42,7 +42,7 @@ A fully local AI coding agent for the terminal -- powered by Ollama and small mo
 Pull the required model, then install:
 
 ```bash
-ollama pull qwen3.5:0.8b
+ollama pull qwen3.5:2b
 
 go install github.com/abdul-hamid-achik/local-agent/cmd/local-agent@latest
 ```
@@ -50,7 +50,7 @@ go install github.com/abdul-hamid-achik/local-agent/cmd/local-agent@latest
 For the full model routing suite (optional):
 
 ```bash
-ollama pull qwen3.5:2b
+ollama pull qwen3.5:0.8b
 ollama pull qwen3.5:4b
 ollama pull qwen3.5:9b
 ollama pull nomic-embed-text   # for ICE vector embeddings
@@ -83,16 +83,15 @@ task dev
 
 ### Model Routing
 
-local-agent automatically selects the right model size for the task at hand. Simple questions go to the fast 0.8B model; complex multi-step reasoning escalates to the 9B model. The router analyzes query complexity using keyword heuristics and word count.
+local-agent automatically selects the right model size for the task at hand. Simple questions go to the fast 2B model; complex multi-step reasoning escalates to the 9B model. The router analyzes query complexity using keyword heuristics and word count.
 
 | Complexity | Model         | Speed  | Use Cases                                    |
 |------------|---------------|--------|----------------------------------------------|
-| Simple     | qwen3.5:0.8b  | 4.0x   | Quick answers, simple tool use, single edits |
-| Medium     | qwen3.5:2b    | 2.5x   | Code completion, refactoring, explanations   |
-| Complex    | qwen3.5:4b    | 1.5x   | Multi-step reasoning, debugging, code review |
-| Advanced   | qwen3.5:9b    | 1.0x   | Architecture, full-stack, advanced debugging |
+| Simple     | qwen3.5:2b    | 2.5x   | Quick answers, simple tool use, single edits |
+| Medium     | qwen3.5:4b    | 1.5x   | Code completion, refactoring, explanations   |
+| Complex    | qwen3.5:9b    | 1.0x   | Multi-step reasoning, debugging, code review |
 
-The fallback chain ensures graceful degradation if a model is not available: `0.8B -> 2B -> 4B -> 9B`.
+The fallback chain ensures graceful degradation if a model is not available: `2b -> 4b -> 9b`.
 
 ### Three Modes: ASK / PLAN / BUILD
 
@@ -169,7 +168,7 @@ Config is searched in order (first match wins):
 
 ```yaml
 ollama:
-  model: "qwen3.5:0.8b"              # Default model
+  model: "qwen3.5:2b"               # Default model
   base_url: "http://localhost:11434"  # Ollama API endpoint
   num_ctx: 262144                     # Context window size
 
