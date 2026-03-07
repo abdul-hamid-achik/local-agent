@@ -28,7 +28,15 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/tui"
 )
 
+var version = "dev"
+
 func main() {
+	versionFlag := flag.Bool("version", false, "print version")
+	// Handle subcommands before flag parsing.
+	if len(os.Args) > 1 && os.Args[1] == "--version" {
+		fmt.Println(version)
+		return
+	}
 	// Handle subcommands before flag parsing.
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
@@ -94,6 +102,7 @@ func main() {
 	defer registry.Close()
 
 	ag := agent.New(modelManager, registry, cfg.Ollama.NumCtx)
+	ag.SetToolsConfig(cfg.Tools)
 	ag.SetRouter(router)
 	if wd, err := os.Getwd(); err == nil {
 		ag.SetWorkDir(wd)
