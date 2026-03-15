@@ -1,6 +1,9 @@
 package tui
 
-import "github.com/abdul-hamid-achik/local-agent/internal/config"
+import (
+	"github.com/abdul-hamid-achik/local-agent/internal/agent"
+	"github.com/abdul-hamid-achik/local-agent/internal/config"
+)
 
 // Mode represents the operational mode of the TUI.
 type Mode int
@@ -15,8 +18,9 @@ const (
 type ModeConfig struct {
 	Label               string
 	SystemPromptPrefix  string
-	AllowTools          bool
+	ToolPolicy          agent.ToolPolicy
 	PreferredCapability config.ModelCapability
+	RouterMode          config.ModeContext
 }
 
 // DefaultModeConfigs returns the configuration for each mode.
@@ -25,20 +29,23 @@ func DefaultModeConfigs() [3]ModeConfig {
 		{ // ModeAsk
 			Label:               "ASK",
 			SystemPromptPrefix:  "Provide direct, concise answers. Use tools when the user asks about files or the codebase.",
-			AllowTools:          true,
+			ToolPolicy:          agent.AskToolPolicy(),
 			PreferredCapability: config.CapabilitySimple,
+			RouterMode:          config.ModeAskContext,
 		},
 		{ // ModePlan
 			Label:               "PLAN",
 			SystemPromptPrefix:  "Help the user plan and design. Break down tasks into steps. Use tools to read and explore, but do not modify files.",
-			AllowTools:          true,
+			ToolPolicy:          agent.PlanToolPolicy(),
 			PreferredCapability: config.CapabilityComplex,
+			RouterMode:          config.ModePlanContext,
 		},
 		{ // ModeBuild
 			Label:               "BUILD",
 			SystemPromptPrefix:  "Execute tasks using all available tools.",
-			AllowTools:          true,
+			ToolPolicy:          agent.BuildToolPolicy(),
 			PreferredCapability: config.CapabilityAdvanced,
+			RouterMode:          config.ModeBuildContext,
 		},
 	}
 }

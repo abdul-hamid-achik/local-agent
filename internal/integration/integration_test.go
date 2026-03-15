@@ -7,7 +7,6 @@
 package integration
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,16 +30,12 @@ func skipIfNoOllama(t *testing.T) {
 		os.Setenv("OLLAMA_HOST", "http://localhost:11434")
 	}
 
-	client := llm.NewClient(llm.Config{
-		BaseURL: os.Getenv("OLLAMA_HOST"),
-		Model:   "qwen3.5:2b",
-		NumCtx:  262144,
-	})
+	client := llm.NewModelManager(os.Getenv("OLLAMA_HOST"), 262144)
+	if err := client.SetCurrentModel("qwen3.5:2b"); err != nil {
+		t.Skipf("failed to initialize ollama client: %v", err)
+	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	if err := client.Ping(ctx); err != nil {
+	if err := client.Ping(); err != nil {
 		t.Skip("Ollama not available: skipping integration test")
 	}
 }
@@ -58,7 +53,7 @@ func TestTUI_Initialization(t *testing.T) {
 	modelManager := llm.NewModelManager("http://localhost:11434", 262144)
 	modelManager.SetCurrentModel("qwen3.5:2b")
 
-	ag := agent.New(modelManager, mcp.NewRegistry(), cfg.Ollama.NumCtx)
+	ag := agent.New(modelManager, mcp.NewRegistry(), 262144)
 	ag.SetRouter(router)
 
 	completer := tui.NewCompleter(reg, []string{"qwen3.5:2b"}, nil, nil, nil)
@@ -129,16 +124,16 @@ func TestTUI_OverlayRendering(t *testing.T) {
 	m = updated.(*tui.Model)
 
 	// Test help overlay
-	updated, _ = m.Update(tui.KeyPressMsg{Code: '?'})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: '?', Text: "?"})
 	m = updated.(*tui.Model)
 
 	view := m.View()
-	if view == nil {
-		t.Error("View should not be nil")
+	if view.Content == "" {
+		t.Error("View should not be empty")
 	}
 
 	// Close overlay
-	updated, _ = m.Update(tui.KeyPressMsg{Code: tea.KeyEscape})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	m = updated.(*tui.Model)
 }
 
@@ -181,8 +176,8 @@ func TestTUI_ToolCardRendering(t *testing.T) {
 
 	// Verify view renders without panic
 	view := m.View()
-	if view == nil {
-		t.Error("View should not be nil after tool execution")
+	if view.Content == "" {
+		t.Error("View should not be empty after tool execution")
 	}
 }
 
@@ -192,10 +187,10 @@ func TestQwenRouter_Integration(t *testing.T) {
 	router := config.NewQwenModelRouter(&cfg)
 
 	tests := []struct {
-		query          string
-		mode           config.ModeContext
-		expectSmaller  string // model should be this or smaller
-		expectLarger   string // model should be this or larger
+		query         string
+		mode          config.ModeContext
+		expectSmaller string // model should be this or smaller
+		expectLarger  string // model should be this or larger
 	}{
 		{"what is go?", config.ModeAskContext, "qwen3.5:2b", ""},
 		{"design architecture", config.ModeBuildContext, "", "qwen3.5:4b"},

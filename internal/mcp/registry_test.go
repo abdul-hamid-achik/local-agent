@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 )
 
 func TestNewRegistry(t *testing.T) {
@@ -69,5 +71,40 @@ func TestRegistry_HealthCheck_TracksFailedServers(t *testing.T) {
 	}
 	if status.LastError != "connection refused" {
 		t.Errorf("status.LastError = %q, want 'connection refused'", status.LastError)
+	}
+}
+
+func TestRegistry_RegisterConnectedServer_ReplacesExistingState(t *testing.T) {
+	r := NewRegistry()
+
+	first := &MCPClient{name: "demo"}
+	second := &MCPClient{name: "demo"}
+	firstDefs := []llm.ToolDef{{Name: "tool-a"}, {Name: "tool-b"}}
+	secondDefs := []llm.ToolDef{{Name: "tool-a"}}
+
+	r.mu.Lock()
+	r.failedServers = append(r.failedServers, FailedServer{Name: "demo", Reason: "old error"})
+	r.registerConnectedServerLocked("demo", first, firstDefs)
+	r.registerConnectedServerLocked("demo", second, secondDefs)
+	r.mu.Unlock()
+
+	if r.ServerCount() != 1 {
+		t.Fatalf("ServerCount() = %d, want 1", r.ServerCount())
+	}
+	if r.ToolCount() != 1 {
+		t.Fatalf("ToolCount() = %d, want 1", r.ToolCount())
+	}
+	tools := r.Tools()
+	if len(tools) != 1 || tools[0].Name != "tool-a" {
+		t.Fatalf("Tools() = %#v, want only tool-a", tools)
+	}
+	if client := r.toolMap["tool-a"]; client != second {
+		t.Fatalf("tool-a mapped to %p, want %p", client, second)
+	}
+	if _, ok := r.toolMap["tool-b"]; ok {
+		t.Fatal("tool-b should be removed when the server is replaced")
+	}
+	if len(r.FailedServers()) != 0 {
+		t.Fatalf("failed server entry should be cleared on successful registration, got %#v", r.FailedServers())
 	}
 }

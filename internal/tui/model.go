@@ -11,8 +11,8 @@ import (
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/spinner"
-	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -131,11 +131,11 @@ type Model struct {
 	toolsPending   int
 	inputLines     int
 	userScrolledUp bool
-	
+
 	// Scroll anchor system - prevents jitter during streaming
-	scrollAnchor      int    // lines from bottom to maintain
-	anchorActive      bool   // true when user wants to stay at bottom
-	lastContentHeight int    // track content height changes for smooth scrolling
+	scrollAnchor      int  // lines from bottom to maintain
+	anchorActive      bool // true when user wants to stay at bottom
+	lastContentHeight int  // track content height changes for smooth scrolling
 
 	// Startup
 	initializing bool
@@ -186,7 +186,7 @@ type Model struct {
 
 	// Model management
 	modelManager     *llm.ModelManager
-	router           *config.Router
+	router           config.ModelRouter
 	modelPickerState *ModelPickerState
 	planFormState    *PlanFormState
 
@@ -194,28 +194,32 @@ type Model struct {
 	logger *log.Logger
 
 	// Features
-	agent       *agent.Agent
-	cmdRegistry *command.Registry
-	skillMgr    *skill.Manager
-	completer   *Completer
-	loadedFile  string
+	agent               *agent.Agent
+	cmdRegistry         *command.Registry
+	skillMgr            *skill.Manager
+	completer           *Completer
+	loadedFile          string
+	agentsDir           *config.AgentsDir
+	baseLoadedContext   string
+	manualLoadedContext string
+	profileSkills       []string
 
 	// Runtime
 	program *tea.Program
 	cancel  context.CancelFunc
 
 	// Display info
-	model         string
-	modelList     []string
-	agentProfile  string
-	agentList     []string
-	toolCount     int
-	serverCount   int
-	numCtx        int
+	model        string
+	modelList    []string
+	agentProfile string
+	agentList    []string
+	toolCount    int
+	serverCount  int
+	numCtx       int
 
 	// Toast notifications
-	toastMgr *ToastManager
-	toastStyles ToastStyles
+	toastMgr      *ToastManager
+	toastStyles   ToastStyles
 	failedServers []FailedServer
 
 	// ICE
@@ -278,7 +282,7 @@ type Model struct {
 }
 
 // New creates a new TUI Model.
-func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, completer *Completer, modelManager *llm.ModelManager, router *config.Router, logger *log.Logger) *Model {
+func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, completer *Completer, modelManager *llm.ModelManager, router config.ModelRouter, logger *log.Logger) *Model {
 	ta := textarea.New()
 	ta.Placeholder = "Ask anything... (Enter to send, ctrl+b for sidebar)"
 	ta.Focus()
@@ -286,14 +290,14 @@ func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, com
 	ta.SetHeight(1)
 	ta.ShowLineNumbers = false
 	ta.Prompt = "❯ "
-	
+
 	// Remove background - make completely transparent like Crush
 	styles := textarea.DefaultDarkStyles()
-	styles.Focused.Base = lipgloss.NewStyle()  // No background
-	styles.Focused.CursorLine = lipgloss.NewStyle()  // No background on cursor line
-	styles.Blurred.Base = lipgloss.NewStyle()  // No background when blurred
+	styles.Focused.Base = lipgloss.NewStyle()       // No background
+	styles.Focused.CursorLine = lipgloss.NewStyle() // No background on cursor line
+	styles.Blurred.Base = lipgloss.NewStyle()       // No background when blurred
 	ta.SetStyles(styles)
-	
+
 	// Set prompt color to match Nord theme (cyan)
 	styles.Focused.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color("#88c0d0"))
 	ta.SetStyles(styles)
@@ -304,41 +308,41 @@ func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, com
 	)
 
 	return &Model{
-		input:          ta,
-		spin:           s,
-		scramble:       NewScrambleModel(true),
-		welcomeModel:   NewWelcomeModel(true),
-		sidePanel:      NewSidePanelModel(true),
-		logoModel:      NewLogoModel(true),
-		styles:         NewStyles(true),
-		keys:           DefaultKeyMap(),
-		state:          StateIdle,
-		isDark:         true,
-		inputLines:     1,
-		toolsCollapsed: true,
-		initializing:   true,
-		mode:           ModeAsk,
-		modeConfigs:    DefaultModeConfigs(),
-		modelManager:   modelManager,
-		router:         router,
-		logger:         logger,
-		agent:          ag,
-		cmdRegistry:    cmdReg,
-		skillMgr:       skillMgr,
-		completer:      completer,
-		historyIndex:   -1,
-		toastMgr:       NewToastManager(),
-		toastStyles:    DefaultToastStyles(true),
-		toolCardMgr:    NewToolCardManager(true),
-		searchState:    NewSearchState(),
+		input:           ta,
+		spin:            s,
+		scramble:        NewScrambleModel(true),
+		welcomeModel:    NewWelcomeModel(true),
+		sidePanel:       NewSidePanelModel(true),
+		logoModel:       NewLogoModel(true),
+		styles:          NewStyles(true),
+		keys:            DefaultKeyMap(),
+		state:           StateIdle,
+		isDark:          true,
+		inputLines:      1,
+		toolsCollapsed:  true,
+		initializing:    true,
+		mode:            ModeAsk,
+		modeConfigs:     DefaultModeConfigs(),
+		modelManager:    modelManager,
+		router:          router,
+		logger:          logger,
+		agent:           ag,
+		cmdRegistry:     cmdReg,
+		skillMgr:        skillMgr,
+		completer:       completer,
+		historyIndex:    -1,
+		toastMgr:        NewToastManager(),
+		toastStyles:     DefaultToastStyles(true),
+		toolCardMgr:     NewToolCardManager(true),
+		searchState:     NewSearchState(),
 		progressTracker: NewProgressTracker(true),
-		resizer:        NewPanelResizer(20, 60, true),
-		contextMenu:    &ContextMenuState{Active: false},
+		resizer:         NewPanelResizer(20, 60, true),
+		contextMenu:     &ContextMenuState{Active: false},
 		timestampConfig: DefaultTimestampConfig(),
 		timestampHelper: NewTimestampHelper(DefaultTimestampConfig(), true),
-		keyHints:       DefaultKeyHints(true),
-		accessibility:  NewAccessibilityHelper(true),
-		tableHelper:    NewTableHelper(true),
+		keyHints:        DefaultKeyHints(true),
+		accessibility:   NewAccessibilityHelper(true),
+		tableHelper:     NewTableHelper(true),
 	}
 }
 
@@ -406,7 +410,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.isCompact = msg.Width < 80 || msg.Height < 24
 		m.isWide = msg.Width > 120
-		
+
 		// Calculate panel width (30 chars or 25% of screen, min 25, max 40)
 		panelWidth := 30
 		if msg.Width < 100 {
@@ -414,7 +418,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if msg.Width > 160 {
 			panelWidth = 40
 		}
-		
+
 		// Calculate viewport width (for viewport component)
 		viewportWidth := msg.Width - 1
 		if m.sidePanel.IsVisible() {
@@ -423,7 +427,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if viewportWidth < 20 {
 			viewportWidth = 20
 		}
-		
+
 		// Calculate content width for markdown renderer and text wrapping
 		// CRITICAL: Must be <= viewport width to prevent horizontal overflow
 		// Use conservative padding to account for margins, borders, and indentation
@@ -899,7 +903,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.thinkBuf.WriteString(thinkText)
 		}
 		m.viewport.SetContent(m.renderEntries())
-		
+
 		// Use scroll anchor system - only auto-scroll if anchor is active
 		if m.anchorActive {
 			m.viewport.GotoBottom()
@@ -1264,7 +1268,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseWheelMsg:
 		wasAtBottom := m.viewport.AtBottom()
 		m.viewport, _ = m.viewport.Update(msg)
-		
+
 		// Use AtBottom() to determine scroll anchor state
 		// If viewport was at bottom before scroll up, user is scrolling away
 		if msg.Button == tea.MouseWheelUp && wasAtBottom {
@@ -1523,7 +1527,8 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 		parts := strings.SplitN(result.Data, "\x00", 2)
 		if len(parts) == 2 {
 			m.loadedFile = parts[0]
-			m.agent.SetLoadedContext(parts[1])
+			m.manualLoadedContext = parts[1]
+			m.syncLoadedContext()
 		}
 		if result.Text != "" {
 			m.entries = append(m.entries, ChatEntry{
@@ -1537,7 +1542,8 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 
 	case command.ActionUnloadContext:
 		m.loadedFile = ""
-		m.agent.SetLoadedContext("")
+		m.manualLoadedContext = ""
+		m.syncLoadedContext()
 		if result.Text != "" {
 			m.entries = append(m.entries, ChatEntry{
 				Kind:    "system",
@@ -1654,11 +1660,17 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 		}
 
 	case command.ActionSwitchAgent:
-		m.agentProfile = result.Data
-		m.entries = append(m.entries, ChatEntry{
-			Kind:    "system",
-			Content: result.Text,
-		})
+		if err := m.applyAgentProfile(result.Data); err != nil {
+			m.entries = append(m.entries, ChatEntry{
+				Kind:    "error",
+				Content: err.Error(),
+			})
+		} else {
+			m.entries = append(m.entries, ChatEntry{
+				Kind:    "system",
+				Content: result.Text,
+			})
+		}
 		m.viewport.SetContent(m.renderEntries())
 		m.viewport.GotoBottom()
 		return nil
@@ -1842,8 +1854,8 @@ func (m *Model) getVisibleEntryRange() (start, end int) {
 	buffer := visibleEntries / 2
 
 	scrollPos := m.viewport.YOffset()
-	estimatedStart := max(0, scrollPos/avgEntryHeight - buffer)
-	estimatedEnd := min(len(m.entries), estimatedStart + visibleEntries + buffer*2)
+	estimatedStart := max(0, scrollPos/avgEntryHeight-buffer)
+	estimatedEnd := min(len(m.entries), estimatedStart+visibleEntries+buffer*2)
 
 	return estimatedStart, estimatedEnd
 }
@@ -2099,11 +2111,25 @@ func (m *Model) sendToAgent(text string) tea.Cmd {
 	m.viewport.SetContent(m.renderEntries())
 	m.viewport.GotoBottom()
 
-	m.agent.AddUserMessage(text)
-
 	// Set mode context on the agent.
 	cfg := m.modeConfigs[m.mode]
-	m.agent.SetModeContext(cfg.SystemPromptPrefix, cfg.AllowTools)
+	m.setRouterMode(cfg.RouterMode)
+	if m.router != nil && m.modelManager != nil {
+		if newModel := m.router.SelectModelForMode(text, cfg.RouterMode); newModel != "" && newModel != m.model {
+			if err := m.modelManager.SetCurrentModel(newModel); err == nil {
+				m.model = newModel
+			} else {
+				m.entries = append(m.entries, ChatEntry{
+					Kind:    "error",
+					Content: fmt.Sprintf("Failed to switch routed model: %v", err),
+				})
+				m.viewport.SetContent(m.renderEntries())
+				m.viewport.GotoBottom()
+			}
+		}
+	}
+	m.agent.AddUserMessage(text)
+	m.agent.SetModeContext(cfg.SystemPromptPrefix, cfg.ToolPolicy)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
@@ -2151,6 +2177,7 @@ func (m *Model) sendToAgent(text string) tea.Cmd {
 func (m *Model) cycleMode() {
 	m.mode = (m.mode + 1) % 3
 	cfg := m.modeConfigs[m.mode]
+	m.setRouterMode(cfg.RouterMode)
 
 	// Auto-select model via router.
 	if m.router != nil {

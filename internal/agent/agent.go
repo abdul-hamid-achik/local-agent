@@ -14,45 +14,45 @@ import (
 
 // Agent orchestrates the LLM and tools in a ReAct loop.
 type Agent struct {
-	mu          sync.RWMutex
-	llmClient    llm.Client
-	registry     *mcp.Registry
-	messages     []llm.Message
-	skillContent string
-	loadedCtx    string
-	numCtx       int
-	memoryStore  *memory.Store
-	iceEngine    *ice.Engine
-	router       *config.Router
-	modePrefix   string
-	toolsEnabled      bool
-	workDir           string
-	ignoreContent     string
-	permChecker       *permission.Checker
-	approvalCallback  func(permission.ApprovalRequest)
-	toolsConfig       config.ToolsConfig
+	mu               sync.RWMutex
+	llmClient        llm.Client
+	registry         *mcp.Registry
+	messages         []llm.Message
+	skillContent     string
+	loadedCtx        string
+	numCtx           int
+	memoryStore      *memory.Store
+	iceEngine        *ice.Engine
+	router           config.ModelRouter
+	modePrefix       string
+	toolPolicy       ToolPolicy
+	workDir          string
+	ignoreContent    string
+	permChecker      *permission.Checker
+	approvalCallback func(permission.ApprovalRequest)
+	toolsConfig      config.ToolsConfig
 }
 
 // New creates a new Agent.
 func New(llmClient llm.Client, registry *mcp.Registry, numCtx int) *Agent {
 	return &Agent{
-		llmClient:    llmClient,
-		registry:     registry,
-		numCtx:       numCtx,
-		toolsEnabled: true,
+		llmClient:  llmClient,
+		registry:   registry,
+		numCtx:     numCtx,
+		toolPolicy: DefaultToolPolicy(),
 	}
 }
 
 // SetRouter sets the model router for auto-selection.
-func (a *Agent) SetRouter(router *config.Router) {
+func (a *Agent) SetRouter(router config.ModelRouter) {
 	a.router = router
 }
 
 // SetModeContext configures the mode prefix injected into the system prompt
-// and whether tools are available for the current turn.
-func (a *Agent) SetModeContext(prefix string, allowTools bool) {
+// and the tool policy for the current turn.
+func (a *Agent) SetModeContext(prefix string, policy ToolPolicy) {
 	a.modePrefix = prefix
-	a.toolsEnabled = allowTools
+	a.toolPolicy = policy
 }
 
 // AppendLoadedContext appends to the loaded context.
@@ -65,7 +65,7 @@ func (a *Agent) AppendLoadedContext(content string) {
 }
 
 // Router returns the model router.
-func (a *Agent) Router() *config.Router {
+func (a *Agent) Router() config.ModelRouter {
 	return a.router
 }
 
@@ -127,6 +127,16 @@ func (a *Agent) SetLoadedContext(content string) {
 	a.loadedCtx = content
 }
 
+// LoadedContext returns the currently assembled loaded context.
+func (a *Agent) LoadedContext() string {
+	return a.loadedCtx
+}
+
+// SkillContent returns the currently active skill prompt content.
+func (a *Agent) SkillContent() string {
+	return a.skillContent
+}
+
 // Model returns the LLM model name.
 func (a *Agent) Model() string {
 	return a.llmClient.Model()
@@ -139,20 +149,29 @@ func (a *Agent) LLMClient() llm.Client {
 
 // ToolCount returns the number of available tools.
 func (a *Agent) ToolCount() int {
-	count := a.registry.ToolCount()
+	count := len(a.toolPolicy.localTools)
 	if a.memoryStore != nil {
-		count += 2 // memory_save + memory_recall
+		count += len(a.toolPolicy.memoryTools)
+	}
+	if a.toolPolicy.AllowMCP && a.registry != nil {
+		count += a.registry.ToolCount()
 	}
 	return count
 }
 
 // ServerCount returns the number of connected MCP servers.
 func (a *Agent) ServerCount() int {
+	if a.registry == nil {
+		return 0
+	}
 	return a.registry.ServerCount()
 }
 
 // ServerNames returns the names of connected MCP servers.
 func (a *Agent) ServerNames() []string {
+	if a.registry == nil {
+		return nil
+	}
 	return a.registry.ServerNames()
 }
 
@@ -222,5 +241,7 @@ func (a *Agent) Close() {
 	if a.iceEngine != nil {
 		_ = a.iceEngine.Flush()
 	}
-	a.registry.Close()
+	if a.registry != nil {
+		a.registry.Close()
+	}
 }

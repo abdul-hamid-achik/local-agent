@@ -10,11 +10,13 @@ import (
 // QwenModelRouter is optimized for Qwen 3.5 variant selection (0.8B, 2B, 4B, 9B)
 // It uses improved heuristics for small model capabilities and mode-aware routing.
 type QwenModelRouter struct {
-	config        *ModelConfig
-	overrideLog   []ModelOverride
-	modeContext   ModeContext // Current operational mode (ASK/PLAN/BUILD)
-	mu            sync.RWMutex
+	config      *ModelConfig
+	overrideLog []ModelOverride
+	modeContext ModeContext // Current operational mode (ASK/PLAN/BUILD)
+	mu          sync.RWMutex
 }
+
+var _ ModelRouter = (*QwenModelRouter)(nil)
 
 // ModeContext represents the current operational mode
 type ModeContext int
@@ -23,16 +25,17 @@ const (
 	ModeAskContext ModeContext = iota
 	ModePlanContext
 	ModeBuildContext
+	ModeNeutralContext
 )
 
 // Qwen-specific complexity levels mapped to model sizes
 type QwenComplexity string
 
 const (
-	QwenTrivial    QwenComplexity = "trivial"     // 0.8B - simple facts, single operations
-	QwenSimple     QwenComplexity = "simple"      // 2B - basic reasoning, simple tools
-	QwenModerate   QwenComplexity = "moderate"    // 4B - multi-step, analysis
-	QwenAdvanced   QwenComplexity = "advanced"    // 9B - complex reasoning, architecture
+	QwenTrivial  QwenComplexity = "trivial"  // 0.8B - simple facts, single operations
+	QwenSimple   QwenComplexity = "simple"   // 2B - basic reasoning, simple tools
+	QwenModerate QwenComplexity = "moderate" // 4B - multi-step, analysis
+	QwenAdvanced QwenComplexity = "advanced" // 9B - complex reasoning, architecture
 )
 
 // Qwen-specific indicator lists with optimized patterns
@@ -81,30 +84,30 @@ var (
 	// Programming language-specific patterns
 	qwenCodePatterns = map[string]QwenComplexity{
 		// Simple patterns - 2B handles well
-		"variable":      QwenSimple,
-		"constant":      QwenSimple,
-		"function":      QwenSimple,
-		"loop":          QwenSimple,
-		"condition":     QwenSimple,
-		"array":         QwenSimple,
-		"slice":         QwenSimple,
-		"map":           QwenSimple,
+		"variable":  QwenSimple,
+		"constant":  QwenSimple,
+		"function":  QwenSimple,
+		"loop":      QwenSimple,
+		"condition": QwenSimple,
+		"array":     QwenSimple,
+		"slice":     QwenSimple,
+		"map":       QwenSimple,
 
 		// Moderate patterns - 4B recommended
-		"struct":        QwenModerate,
-		"interface":     QwenModerate,
-		"generics":      QwenModerate,
-		"concurrency":   QwenModerate,
-		"goroutine":     QwenModerate,
-		"channel":       QwenModerate,
-		"mutex":         QwenModerate,
+		"struct":      QwenModerate,
+		"interface":   QwenModerate,
+		"generics":    QwenModerate,
+		"concurrency": QwenModerate,
+		"goroutine":   QwenModerate,
+		"channel":     QwenModerate,
+		"mutex":       QwenModerate,
 
 		// Advanced patterns - 9B recommended
-		"architecture":  QwenAdvanced,
-		"pattern":       QwenAdvanced,
-		"microservice":  QwenAdvanced,
-		"distributed":   QwenAdvanced,
-		"kubernetes":    QwenAdvanced,
+		"architecture": QwenAdvanced,
+		"pattern":      QwenAdvanced,
+		"microservice": QwenAdvanced,
+		"distributed":  QwenAdvanced,
+		"kubernetes":   QwenAdvanced,
 	}
 )
 
@@ -131,79 +134,13 @@ func (r *QwenModelRouter) ClassifyTaskComplexity(query string) QwenComplexity {
 
 // SelectModel returns the optimal model for the query
 func (r *QwenModelRouter) SelectModel(query string) string {
-	complexity := r.ClassifyTaskComplexity(query)
+	complexity := classifyQwenTask(query, ModeNeutralContext)
 	return r.config.SelectModelForTask(string(complexity))
 }
 
 // SelectModelForMode returns the optimal model for the current mode and query
 func (r *QwenModelRouter) SelectModelForMode(query string, mode ModeContext) string {
-	// Mode-based overrides
-	switch mode {
-	case ModeAskContext:
-		// ASK mode: prefer smaller models for speed
-		return r.selectAskModel(query)
-	case ModePlanContext:
-		// PLAN mode: prefer 4B for reasoning
-		return r.selectPlanModel(query)
-	case ModeBuildContext:
-		// BUILD mode: prefer larger models for accuracy
-		return r.selectBuildModel(query)
-	}
-
-	// Default to mode-aware selection
-	return r.SelectModel(query)
-}
-
-// selectAskModel chooses models optimized for Q&A (faster, smaller)
-func (r *QwenModelRouter) selectAskModel(query string) string {
-	complexity := classifyQwenTask(query, ModeAskContext)
-
-	switch complexity {
-	case QwenTrivial, QwenSimple:
-		// For simple questions, try 0.8B first, then 2B
-		if r.isModelAvailable("qwen3.5:0.8b") {
-			return "qwen3.5:0.8b"
-		}
-		return "qwen3.5:2b"
-	case QwenModerate:
-		return "qwen3.5:2b"
-	case QwenAdvanced:
-		return "qwen3.5:4b"
-	default:
-		return "qwen3.5:2b"
-	}
-}
-
-// selectPlanModel chooses models optimized for planning (balanced)
-func (r *QwenModelRouter) selectPlanModel(query string) string {
-	complexity := classifyQwenTask(query, ModePlanContext)
-
-	switch complexity {
-	case QwenTrivial, QwenSimple:
-		return "qwen3.5:2b"
-	case QwenModerate:
-		return "qwen3.5:4b"
-	case QwenAdvanced:
-		return "qwen3.5:9b"
-	default:
-		return "qwen3.5:4b"
-	}
-}
-
-// selectBuildModel chooses models optimized for execution (more capable)
-func (r *QwenModelRouter) selectBuildModel(query string) string {
-	complexity := classifyQwenTask(query, ModeBuildContext)
-
-	switch complexity {
-	case QwenTrivial, QwenSimple:
-		return "qwen3.5:2b"
-	case QwenModerate:
-		return "qwen3.5:4b"
-	case QwenAdvanced:
-		return "qwen3.5:9b"
-	default:
-		return "qwen3.5:4b"
-	}
+	return PromoteModelForMode(r, r.SelectModel(query), mode)
 }
 
 // isModelAvailable checks if a model is in the configured models list
@@ -214,6 +151,19 @@ func (r *QwenModelRouter) isModelAvailable(name string) bool {
 		}
 	}
 	return false
+}
+
+func (r *QwenModelRouter) GetModelForCapability(capability ModelCapability) string {
+	for _, m := range r.config.Models {
+		if m.Capability == capability {
+			return m.Name
+		}
+	}
+	return r.config.DefaultModel
+}
+
+func (r *QwenModelRouter) ListModels() []Model {
+	return r.config.Models
 }
 
 // classifyQwenTask classifies a query using Qwen-optimized heuristics

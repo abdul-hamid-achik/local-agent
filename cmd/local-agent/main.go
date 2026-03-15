@@ -77,14 +77,12 @@ func main() {
 		cfg.AgentProfile = *agentProfileFlag
 	}
 
-	// Create router - use Qwen-optimized router if flag is set
-	// Both routers implement the same interface for model selection
-	var router *config.Router
+	// Create router - use Qwen-optimized router if flag is set.
+	var router config.ModelRouter
 	if *qwenRouterFlag {
-		// Qwen router wraps the standard router with enhanced classification
 		fmt.Fprintf(os.Stderr, "Using Qwen-optimized model router (experimental)\n")
 	}
-	router = config.NewRouter(&cfg.Model)
+	router = newModelRouter(&cfg.Model, *qwenRouterFlag)
 
 	modelName := cfg.Ollama.Model
 	if cfg.AgentProfile != "" && agentsDir != nil {
@@ -152,10 +150,25 @@ func main() {
 		}
 	}
 	_ = skillMgr.LoadAll()
+	baseLoadedContext := buildBaseLoadedContext(agentsDir)
 
 	// Non-interactive / pipe mode: run a single prompt and exit.
 	if *promptFlag != "" {
 		ctx := context.Background()
+		if err := applyInitialAgentProfile(ag, skillMgr, modelManager, agentsDir, baseLoadedContext, cfg.AgentProfile); err != nil {
+			fmt.Fprintf(os.Stderr, "agent profile: %v\n", err)
+		}
+		buildMode := tui.DefaultModeConfigs()[tui.ModeBuild]
+		if explicitRouter, ok := router.(interface{ SetModeContext(config.ModeContext) }); ok {
+			explicitRouter.SetModeContext(buildMode.RouterMode)
+		}
+		if *modelFlag == "" && router != nil {
+			modelName = router.SelectModelForMode(*promptFlag, buildMode.RouterMode)
+			if err := modelManager.SetCurrentModel(modelName); err != nil {
+				fmt.Fprintf(os.Stderr, "model routing failed: %v\n", err)
+				os.Exit(1)
+			}
+		}
 
 		// Ping Ollama synchronously.
 		fmt.Fprintf(os.Stderr, "connecting to Ollama (%s)...\n", modelName)
@@ -196,29 +209,8 @@ func main() {
 			}
 		}
 
-		// Load context and agent profile.
-		if agentsDir != nil && agentsDir.GetGlobalInstructions() != "" {
-			ag.SetLoadedContext(agentsDir.GetGlobalInstructions())
-		}
-		if data, err := os.ReadFile("AGENT.md"); err == nil {
-			ag.AppendLoadedContext("\n\n" + string(data))
-		}
-		if cfg.AgentProfile != "" && agentsDir != nil {
-			if profile := agentsDir.GetAgent(cfg.AgentProfile); profile != nil {
-				if profile.SystemPrompt != "" {
-					ag.AppendLoadedContext("\n\n" + profile.SystemPrompt)
-				}
-				for _, skillName := range profile.Skills {
-					skillMgr.Activate(skillName)
-				}
-				ag.SetSkillContent(skillMgr.ActiveContent())
-			}
-		}
-
-		// Set BUILD mode (tools enabled) for headless execution.
-		modes := tui.DefaultModeConfigs()
-		buildMode := modes[tui.ModeBuild]
-		ag.SetModeContext(buildMode.SystemPromptPrefix, buildMode.AllowTools)
+		// Set BUILD mode for headless execution.
+		ag.SetModeContext(buildMode.SystemPromptPrefix, buildMode.ToolPolicy)
 
 		// Run the agent synchronously.
 		out := agent.NewHeadlessOutput()
@@ -259,6 +251,7 @@ func main() {
 	}
 
 	m := tui.New(ag, cmdReg, skillMgr, completer, modelManager, router, logger)
+	m.SetAgentProfileSource(agentsDir, baseLoadedContext, cfg.AgentProfile)
 	p := tea.NewProgram(m)
 	m.SetProgram(p)
 
@@ -334,22 +327,8 @@ func main() {
 		}
 
 		// 4. Load context and agent profile.
-		if agentsDir != nil && agentsDir.GetGlobalInstructions() != "" {
-			ag.SetLoadedContext(agentsDir.GetGlobalInstructions())
-		}
-		if data, err := os.ReadFile("AGENT.md"); err == nil {
-			ag.AppendLoadedContext("\n\n" + string(data))
-		}
-		if cfg.AgentProfile != "" && agentsDir != nil {
-			if profile := agentsDir.GetAgent(cfg.AgentProfile); profile != nil {
-				if profile.SystemPrompt != "" {
-					ag.AppendLoadedContext("\n\n" + profile.SystemPrompt)
-				}
-				for _, skillName := range profile.Skills {
-					skillMgr.Activate(skillName)
-				}
-				ag.SetSkillContent(skillMgr.ActiveContent())
-			}
+		if err := applyInitialAgentProfile(ag, skillMgr, modelManager, agentsDir, baseLoadedContext, cfg.AgentProfile); err != nil {
+			p.Send(tui.ErrorMsg{Msg: fmt.Sprintf("agent profile: %v", err)})
 		}
 
 		// 5. Collect results and send InitCompleteMsg.

@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -27,9 +28,9 @@ type ServerStatus struct {
 // Registry manages multiple MCP server connections and routes tool calls.
 type Registry struct {
 	mu            sync.RWMutex
-	clients       []*MCPClient
+	clients       map[string]*MCPClient
 	toolMap       map[string]*MCPClient // tool name -> owning client
-	toolDefs      []llm.ToolDef
+	serverTools   map[string][]llm.ToolDef
 	failedServers []FailedServer
 	serverConfigs map[string]config.ServerConfig // name -> config for reconnection
 }
@@ -38,6 +39,8 @@ type Registry struct {
 func NewRegistry() *Registry {
 	return &Registry{
 		toolMap:       make(map[string]*MCPClient),
+		clients:       make(map[string]*MCPClient),
+		serverTools:   make(map[string][]llm.ToolDef),
 		serverConfigs: make(map[string]config.ServerConfig),
 	}
 }
@@ -48,34 +51,36 @@ const connectTimeout = 5 * time.Second
 // ConnectServer connects a single MCP server and registers its tools.
 // Returns the number of tools discovered, or an error.
 func (r *Registry) ConnectServer(ctx context.Context, srv config.ServerConfig) (int, error) {
+	r.mu.Lock()
+	r.serverConfigs[srv.Name] = srv
+	r.mu.Unlock()
+
 	connCtx, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
 
 	client, err := Connect(connCtx, srv.Name, srv.Command, srv.Args, srv.Env, srv.Transport, srv.URL)
 	if err != nil {
-		r.mu.Lock()
-		r.failedServers = append(r.failedServers, FailedServer{Name: srv.Name, Reason: err.Error()})
-		r.mu.Unlock()
+		r.setFailedServer(srv.Name, err.Error())
 		return 0, fmt.Errorf("connect to %s: %w", srv.Name, err)
 	}
 
 	tools, err := client.ListTools(connCtx)
 	if err != nil {
 		client.Close()
-		r.mu.Lock()
-		r.failedServers = append(r.failedServers, FailedServer{Name: srv.Name, Reason: err.Error()})
-		r.mu.Unlock()
+		r.setFailedServer(srv.Name, err.Error())
 		return 0, fmt.Errorf("%s tools: %w", srv.Name, err)
 	}
 
 	r.mu.Lock()
-	r.clients = append(r.clients, client)
-	for _, tool := range tools {
-		r.toolMap[tool.Name] = client
-		r.toolDefs = append(r.toolDefs, ToLLMToolDef(tool.Name, tool.Description, tool.InputSchema))
+	if existing := r.clients[srv.Name]; existing != nil {
+		r.removeServerLocked(srv.Name)
+		_ = existing.Close()
 	}
-	// Store config for reconnection
-	r.serverConfigs[srv.Name] = srv
+	serverDefs := make([]llm.ToolDef, 0, len(tools))
+	for _, tool := range tools {
+		serverDefs = append(serverDefs, ToLLMToolDef(tool.Name, tool.Description, tool.InputSchema))
+	}
+	r.registerConnectedServerLocked(srv.Name, client, serverDefs)
 	r.mu.Unlock()
 
 	return len(tools), nil
@@ -98,14 +103,28 @@ func (r *Registry) ConnectAll(ctx context.Context, servers []config.ServerConfig
 func (r *Registry) Tools() []llm.ToolDef {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.toolDefs
+	var serverNames []string
+	for name := range r.serverTools {
+		serverNames = append(serverNames, name)
+	}
+	sort.Strings(serverNames)
+
+	var toolDefs []llm.ToolDef
+	for _, name := range serverNames {
+		toolDefs = append(toolDefs, r.serverTools[name]...)
+	}
+	return toolDefs
 }
 
 // ToolCount returns the total number of registered tools.
 func (r *Registry) ToolCount() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return len(r.toolDefs)
+	count := 0
+	for _, defs := range r.serverTools {
+		count += len(defs)
+	}
+	return count
 }
 
 // ServerCount returns the number of connected servers.
@@ -119,10 +138,11 @@ func (r *Registry) ServerCount() int {
 func (r *Registry) ServerNames() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	names := make([]string, len(r.clients))
-	for i, c := range r.clients {
-		names[i] = c.Name()
+	names := make([]string, 0, len(r.clients))
+	for name := range r.clients {
+		names = append(names, name)
 	}
+	sort.Strings(names)
 	return names
 }
 
@@ -155,11 +175,11 @@ func (r *Registry) Close() {
 	defer r.mu.Unlock()
 
 	for _, c := range r.clients {
-		c.Close()
+		_ = c.Close()
 	}
-	r.clients = nil
+	r.clients = make(map[string]*MCPClient)
 	r.toolMap = make(map[string]*MCPClient)
-	r.toolDefs = nil
+	r.serverTools = make(map[string][]llm.ToolDef)
 }
 
 // HealthCheck pings all servers and returns their status.
@@ -168,8 +188,9 @@ func (r *Registry) HealthCheck(ctx context.Context) []ServerStatus {
 	defer r.mu.RUnlock()
 
 	var results []ServerStatus
-	for _, client := range r.clients {
-		status := ServerStatus{Name: client.Name()}
+	for _, name := range r.ServerNames() {
+		client := r.clients[name]
+		status := ServerStatus{Name: name}
 
 		if client.IsConnected() {
 			pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -208,19 +229,63 @@ func (r *Registry) ReconnectServer(ctx context.Context, name string) (int, error
 	if !ok {
 		return 0, fmt.Errorf("no config found for server: %s", name)
 	}
+	return r.ConnectServer(ctx, srv)
+}
 
-	// Remove from failed servers list
+func (r *Registry) setFailedServer(name, reason string) {
 	r.mu.Lock()
-	var remainingFailed []FailedServer
-	for _, f := range r.failedServers {
-		if f.Name != name {
-			remainingFailed = append(remainingFailed, f)
+	defer r.mu.Unlock()
+	r.setFailedServerLocked(name, reason)
+}
+
+func (r *Registry) setFailedServerLocked(name, reason string) {
+	for i := range r.failedServers {
+		if r.failedServers[i].Name == name {
+			r.failedServers[i].Reason = reason
+			return
 		}
 	}
-	r.failedServers = remainingFailed
-	r.mu.Unlock()
+	r.failedServers = append(r.failedServers, FailedServer{Name: name, Reason: reason})
+}
 
-	return r.ConnectServer(ctx, srv)
+func (r *Registry) clearFailedServerLocked(name string) {
+	var remaining []FailedServer
+	for _, failed := range r.failedServers {
+		if failed.Name != name {
+			remaining = append(remaining, failed)
+		}
+	}
+	r.failedServers = remaining
+}
+
+func (r *Registry) removeServerLocked(name string) {
+	delete(r.clients, name)
+	delete(r.serverTools, name)
+	r.rebuildToolMapLocked()
+}
+
+func (r *Registry) registerConnectedServerLocked(name string, client *MCPClient, defs []llm.ToolDef) {
+	r.clients[name] = client
+	r.serverTools[name] = defs
+	r.clearFailedServerLocked(name)
+	r.rebuildToolMapLocked()
+}
+
+func (r *Registry) rebuildToolMapLocked() {
+	toolMap := make(map[string]*MCPClient)
+	serverNames := make([]string, 0, len(r.clients))
+	for name := range r.clients {
+		serverNames = append(serverNames, name)
+	}
+	sort.Strings(serverNames)
+
+	for _, name := range serverNames {
+		client := r.clients[name]
+		for _, def := range r.serverTools[name] {
+			toolMap[def.Name] = client
+		}
+	}
+	r.toolMap = toolMap
 }
 
 // MonitorConfig holds configuration for the health monitor.

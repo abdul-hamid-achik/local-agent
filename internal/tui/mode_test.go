@@ -113,21 +113,21 @@ func TestDefaultModeConfigs(t *testing.T) {
 	if configs[ModeAsk].Label != "ASK" {
 		t.Errorf("ModeAsk label should be ASK, got %q", configs[ModeAsk].Label)
 	}
-	if !configs[ModeAsk].AllowTools {
-		t.Error("ModeAsk should allow tools")
+	if configs[ModeAsk].ToolPolicy.AllowMCP {
+		t.Error("ModeAsk should not allow MCP tools")
 	}
 
 	if configs[ModePlan].Label != "PLAN" {
 		t.Errorf("ModePlan label should be PLAN, got %q", configs[ModePlan].Label)
 	}
-	if !configs[ModePlan].AllowTools {
-		t.Error("ModePlan should allow tools")
+	if configs[ModePlan].ToolPolicy.AllowMCP {
+		t.Error("ModePlan should not allow MCP tools")
 	}
 
 	if configs[ModeBuild].Label != "BUILD" {
 		t.Errorf("ModeBuild label should be BUILD, got %q", configs[ModeBuild].Label)
 	}
-	if !configs[ModeBuild].AllowTools {
-		t.Error("ModeBuild should allow tools")
+	if !configs[ModeBuild].ToolPolicy.AllowMCP {
+		t.Error("ModeBuild should allow MCP tools")
 	}
 }

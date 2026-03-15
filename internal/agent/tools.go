@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -17,7 +18,7 @@ import (
 )
 
 const (
-	maxTimeout     = 120 * time.Second
+	maxTimeout = 120 * time.Second
 )
 
 func (a *Agent) toolsBuiltinToolDefs() []llm.ToolDef {
@@ -190,9 +191,10 @@ func (a *Agent) handleRead(args map[string]any) (string, bool) {
 	}
 
 	if limit > 0 && len(lines) > limit {
+		remaining := len(lines) - limit
 		lines = lines[:limit]
 		content := strings.Join(lines, "\n")
-		content += fmt.Sprintf("\n\n... (%d more lines)", len(lines)-limit)
+		content += fmt.Sprintf("\n\n... (%d more lines)", remaining)
 		return content, false
 	}
 
@@ -234,26 +236,43 @@ func (a *Agent) handleGlob(args map[string]any) (string, bool) {
 	}
 
 	basePattern := filepath.Join(path, pattern)
+	_ = basePattern
 
-	matches, err := filepath.Glob(basePattern)
+	matcher, err := regexp.Compile(globPatternToRegex(pattern))
 	if err != nil {
 		return fmt.Sprintf("error: invalid pattern: %v", err), true
+	}
+
+	var matches []string
+	err = filepath.Walk(path, func(filePath string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() && filePath != path && shouldSkipDir(info.Name()) {
+			return filepath.SkipDir
+		}
+
+		rel, err := filepath.Rel(path, filePath)
+		if err != nil || rel == "." {
+			return nil
+		}
+
+		rel = filepath.ToSlash(rel)
+		if matcher.MatchString(rel) {
+			matches = append(matches, rel)
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Sprintf("error walking directory: %v", err), true
 	}
 
 	if len(matches) == 0 {
 		return fmt.Sprintf("No files match pattern: %s", pattern), false
 	}
 
-	relMatches := make([]string, 0, len(matches))
-	for _, m := range matches {
-		rel, err := filepath.Rel(path, m)
-		if err != nil {
-			continue
-		}
-		relMatches = append(relMatches, rel)
-	}
-
-	return strings.Join(relMatches, "\n"), false
+	sort.Strings(matches)
+	return strings.Join(matches, "\n"), false
 }
 
 func (a *Agent) handleBash(args map[string]any) (string, bool) {
@@ -362,13 +381,15 @@ func (a *Agent) handleFind(args map[string]any) (string, bool) {
 		return fmt.Sprintf("error: path does not exist: %s", path), true
 	}
 
-	re, err := regexp.Compile("^" + strings.ReplaceAll(name, "*", ".*") + "$")
-	if err != nil {
+	matchesName := func(base string) (bool, error) {
+		return filepath.Match(name, base)
+	}
+	if _, err := matchesName("probe"); err != nil {
 		return fmt.Sprintf("error: invalid name pattern: %v", err), true
 	}
 
 	var results []string
-	err = filepath.Walk(path, func(filePath string, info os.FileInfo, err error) error {
+	err := filepath.Walk(path, func(filePath string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
 		}
@@ -388,7 +409,11 @@ func (a *Agent) handleFind(args map[string]any) (string, bool) {
 			return nil
 		}
 
-		if re.MatchString(info.Name()) {
+		matched, matchErr := matchesName(info.Name())
+		if matchErr != nil {
+			return matchErr
+		}
+		if matched {
 			relPath, _ := filepath.Rel(path, filePath)
 			if relPath != "." {
 				if isDir {
@@ -453,6 +478,38 @@ func shouldSkipDir(name string) bool {
 		return true
 	}
 	return strings.HasPrefix(name, ".")
+}
+
+func globPatternToRegex(pattern string) string {
+	pattern = filepath.ToSlash(pattern)
+
+	var b strings.Builder
+	b.WriteString("^")
+	for i := 0; i < len(pattern); i++ {
+		switch pattern[i] {
+		case '*':
+			if i+1 < len(pattern) && pattern[i+1] == '*' {
+				i++
+				if i+1 < len(pattern) && pattern[i+1] == '/' {
+					i++
+					b.WriteString("(?:.*/)?")
+				} else {
+					b.WriteString(".*")
+				}
+			} else {
+				b.WriteString(`[^/]*`)
+			}
+		case '?':
+			b.WriteString(`[^/]`)
+		case '.', '+', '(', ')', '|', '^', '$', '{', '}', '[', ']', '\\':
+			b.WriteByte('\\')
+			b.WriteByte(pattern[i])
+		default:
+			b.WriteByte(pattern[i])
+		}
+	}
+	b.WriteString("$")
+	return b.String()
 }
 
 func (a *Agent) handleDiff(args map[string]any) (string, bool) {

@@ -16,15 +16,15 @@ import (
 // It streams output via the Output interface.
 func (a *Agent) Run(ctx context.Context, out Output) {
 	var tools []llm.ToolDef
-	if a.toolsEnabled {
-		tools = a.registry.Tools()
-		// Merge memory built-in tools if available.
-		if a.memoryStore != nil {
-			tools = append(tools, a.memoryBuiltinToolDefs()...)
-		}
-		// Merge built-in file tools (grep, read, write, glob, bash, ls, find).
-		tools = append(tools, a.toolsBuiltinToolDefs()...)
+	if a.toolPolicy.AllowMCP && a.registry != nil {
+		tools = append(tools, a.registry.Tools()...)
 	}
+	// Merge memory built-in tools if available.
+	if a.memoryStore != nil {
+		tools = append(tools, filterToolDefsByName(a.memoryBuiltinToolDefs(), a.toolPolicy.memoryTools)...)
+	}
+	// Merge built-in file tools according to the active mode policy.
+	tools = append(tools, filterToolDefsByName(a.toolsBuiltinToolDefs(), a.toolPolicy.localTools)...)
 
 	// ICE: index user message and assemble cross-session context.
 	var iceContext string
@@ -151,25 +151,33 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 		// Execute each tool call and feed results back.
 		// We categorize tools: memory tools and MCP tools can run in parallel,
 		// but built-in file tools run sequentially to avoid filesystem conflicts.
-		
+
 		// First, collect all tool calls that need execution
 		type pendingTool struct {
 			tc           llm.ToolCall
 			isMemoryTool bool
 			isMCPTool    bool
 		}
-		
+
 		var pending []pendingTool
-		
+
 		for _, tc := range toolCalls {
 			// Check if this is a built-in memory tool.
 			if a.memoryStore != nil && a.isMemoryTool(tc.Name) {
+				if !a.toolPolicy.AllowsMemory(tc.Name) {
+					a.blockedToolCall(tc, out)
+					continue
+				}
 				pending = append(pending, pendingTool{tc: tc, isMemoryTool: true})
 				continue
 			}
 
 			// Check if this is a built-in file tool.
 			if a.isToolsTool(tc.Name) {
+				if !a.toolPolicy.AllowsBuiltin(tc.Name) {
+					a.blockedToolCall(tc, out)
+					continue
+				}
 				// Execute built-in tools sequentially (file access safety).
 				out.ToolCallStart(tc.Name, tc.Arguments)
 				startTime := time.Now()
@@ -186,6 +194,10 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 			}
 
 			// External MCP tool - check permissions first.
+			if !a.toolPolicy.AllowMCP {
+				a.blockedToolCall(tc, out)
+				continue
+			}
 			if a.permChecker != nil {
 				switch a.permChecker.ToCheckResult(tc.Name) {
 				case permissionPkg.CheckDeny:
@@ -220,7 +232,7 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 					}
 				}
 			}
-			
+
 			pending = append(pending, pendingTool{tc: tc, isMCPTool: true})
 		}
 
@@ -229,19 +241,19 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 			var wg sync.WaitGroup
 			mu := sync.Mutex{}
 			results := make([]llm.Message, len(pending))
-			
+
 			for i, p := range pending {
 				wg.Add(1)
 				go func(idx int, tool pendingTool) {
 					defer wg.Done()
-					
+
 					tc := tool.tc
 					out.ToolCallStart(tc.Name, tc.Arguments)
 					startTime := time.Now()
-					
+
 					var result string
 					var isErr bool
-					
+
 					if tool.isMemoryTool {
 						result, isErr = a.handleMemoryTool(tc)
 					} else if tool.isMCPTool {
@@ -255,10 +267,10 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 							isErr = toolResult.IsError
 						}
 					}
-					
+
 					duration := time.Since(startTime)
 					out.ToolCallResult(tc.Name, result, isErr, duration)
-					
+
 					mu.Lock()
 					results[idx] = llm.Message{
 						Role:       "tool",
@@ -269,9 +281,9 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 					mu.Unlock()
 				}(i, p)
 			}
-			
+
 			wg.Wait()
-			
+
 			// Append all results to messages.
 			for _, msg := range results {
 				if msg.ToolName != "" {
@@ -297,6 +309,32 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 	out.Error(fmt.Sprintf("reached max iterations (%d)", maxIters))
 }
 
+func filterToolDefsByName(defs []llm.ToolDef, allowed map[string]struct{}) []llm.ToolDef {
+	if len(allowed) == 0 {
+		return nil
+	}
+
+	filtered := make([]llm.ToolDef, 0, len(defs))
+	for _, def := range defs {
+		if _, ok := allowed[def.Name]; ok {
+			filtered = append(filtered, def)
+		}
+	}
+	return filtered
+}
+
+func (a *Agent) blockedToolCall(tc llm.ToolCall, out Output) {
+	errMsg := fmt.Sprintf("tool call blocked in current mode: %s", tc.Name)
+	out.ToolCallStart(tc.Name, tc.Arguments)
+	out.ToolCallResult(tc.Name, errMsg, true, 0)
+	a.AppendMessage(llm.Message{
+		Role:       "tool",
+		Content:    errMsg,
+		ToolName:   tc.Name,
+		ToolCallID: tc.ID,
+	})
+}
+
 // isRetryableError returns true for transient LLM errors that are worth retrying,
 // such as JSON parse failures from malformed tool call output.
 func isRetryableError(err error) bool {
@@ -310,7 +348,7 @@ func FormatToolArgs(args map[string]any) string {
 	if len(args) == 0 {
 		return ""
 	}
-	
+
 	var parts []string
 	for key, value := range args {
 		// Format value based on its type
@@ -336,12 +374,12 @@ func FormatToolArgs(args map[string]any) string {
 		}
 		parts = append(parts, fmt.Sprintf("%s=%s", key, valStr))
 	}
-	
+
 	// Sort parts for consistent output
 	sort.Strings(parts)
-	
+
 	result := strings.Join(parts, " ")
-	
+
 	// Truncate if too long
 	if len(result) > 60 {
 		return result[:57] + "..."

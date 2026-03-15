@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/command"
+	"github.com/abdul-hamid-achik/local-agent/internal/config"
 )
 
 func TestSubmitInput_EmptyReturnsNil(t *testing.T) {
@@ -268,13 +269,13 @@ func TestInitCompleteMsg(t *testing.T) {
 		m := newTestModel(t)
 
 		updated, _ := m.Update(InitCompleteMsg{
-			Model:       "llama3",
-			ModelList:   []string{"llama3", "qwen3"},
+			Model:        "llama3",
+			ModelList:    []string{"llama3", "qwen3"},
 			AgentProfile: "default",
-			AgentList:   []string{"default", "coder"},
-			ToolCount:   5,
-			ServerCount: 2,
-			NumCtx:      8192,
+			AgentList:    []string{"default", "coder"},
+			ToolCount:    5,
+			ServerCount:  2,
+			NumCtx:       8192,
 		})
 		m = updated.(*Model)
 
@@ -418,6 +419,13 @@ func TestHandleCommandAction(t *testing.T) {
 			// Pre-populate loadedFile for unload test.
 			if tt.result.Action == command.ActionUnloadContext {
 				m.loadedFile = "old.md"
+			}
+			if tt.result.Action == command.ActionSwitchAgent {
+				m.SetAgentProfileSource(&config.AgentsDir{
+					Agents: map[string]config.AgentProfile{
+						"coder": {Name: "coder"},
+					},
+				}, "", "")
 			}
 			cmd := m.handleCommandAction(tt.result)
 			tt.check(t, m, cmd)

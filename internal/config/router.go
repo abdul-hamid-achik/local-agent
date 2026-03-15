@@ -11,8 +11,8 @@ type TaskComplexity string
 
 const (
 	ComplexitySimple   TaskComplexity = "simple"
-	ComplexityMedium  TaskComplexity = "medium"
-	ComplexityComplex TaskComplexity = "complex"
+	ComplexityMedium   TaskComplexity = "medium"
+	ComplexityComplex  TaskComplexity = "complex"
 	ComplexityAdvanced TaskComplexity = "advanced"
 )
 
@@ -59,10 +59,12 @@ type ModelOverride struct {
 }
 
 type Router struct {
-	config        *ModelConfig
-	overrideLog   []ModelOverride
-	mu            sync.RWMutex
+	config      *ModelConfig
+	overrideLog []ModelOverride
+	mu          sync.RWMutex
 }
+
+var _ ModelRouter = (*Router)(nil)
 
 func NewRouter(cfg *ModelConfig) *Router {
 	return &Router{
@@ -107,6 +109,10 @@ func (r *Router) SelectModel(query string) string {
 	}
 
 	return r.config.SelectModelForTask(string(complexity))
+}
+
+func (r *Router) SelectModelForMode(query string, mode ModeContext) string {
+	return PromoteModelForMode(r, r.SelectModel(query), mode)
 }
 
 // RecordOverride logs when a user explicitly selects a model.
