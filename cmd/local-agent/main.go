@@ -95,7 +95,9 @@ func main() {
 
 	// Fast, non-blocking setup.
 	modelManager := llm.NewModelManager(cfg.Ollama.BaseURL, cfg.Ollama.NumCtx)
-	modelManager.SetCurrentModel(modelName)
+	if err := modelManager.SetCurrentModel(modelName); err != nil {
+		log.Fatalf("set current model: %v", err)
+	}
 
 	var servers []config.ServerConfig
 	if len(cfg.Servers) > 0 {
@@ -121,7 +123,11 @@ func main() {
 		log.Printf("warning: database: %v (permissions disabled)", err)
 	}
 	if dbStore != nil {
-		defer dbStore.Close()
+		defer func() {
+			if err := dbStore.Close(); err != nil {
+				log.Printf("warning: close database: %v", err)
+			}
+		}()
 	}
 
 	// Set up tool permission checker.
@@ -244,10 +250,14 @@ func main() {
 
 	logger, logFile, err := logging.NewSessionLogger()
 	if err != nil {
-		// Non-fatal; logging disabled.
+		log.Printf("warning: session logger: %v", err)
 	}
 	if logFile != nil {
-		defer logFile.Close()
+		defer func() {
+			if err := logFile.Close(); err != nil {
+				log.Printf("warning: close log file: %v", err)
+			}
+		}()
 	}
 
 	m := tui.New(ag, cmdReg, skillMgr, completer, modelManager, router, logger)

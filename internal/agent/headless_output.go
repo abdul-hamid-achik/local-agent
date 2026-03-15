@@ -33,17 +33,17 @@ func newHeadlessOutput(stdout, stderr io.Writer) *HeadlessOutput {
 
 // StreamText writes incremental text content to stdout.
 func (h *HeadlessOutput) StreamText(text string) {
-	fmt.Fprint(h.stdout, text)
+	_, _ = fmt.Fprint(h.stdout, text)
 }
 
 // StreamDone writes a trailing newline to ensure output is terminated.
 func (h *HeadlessOutput) StreamDone(evalCount, promptTokens int) {
-	fmt.Fprintln(h.stdout)
+	_, _ = fmt.Fprintln(h.stdout)
 }
 
 // ToolCallStart writes a brief tool invocation notice to stderr.
 func (h *HeadlessOutput) ToolCallStart(name string, args map[string]any) {
-	fmt.Fprintf(h.stderr, "→ %s %s\n", name, FormatToolArgs(args))
+	_, _ = fmt.Fprintf(h.stderr, "→ %s %s\n", name, FormatToolArgs(args))
 }
 
 // ToolCallResult writes the tool result summary to stderr.
@@ -57,15 +57,15 @@ func (h *HeadlessOutput) ToolCallResult(name string, result string, isError bool
 	if len(display) > 200 {
 		display = display[:197] + "..."
 	}
-	fmt.Fprintf(h.stderr, "← %s [%s %s] %s\n", name, status, duration.Round(time.Millisecond), display)
+	_, _ = fmt.Fprintf(h.stderr, "← %s [%s %s] %s\n", name, status, duration.Round(time.Millisecond), display)
 }
 
 // SystemMessage writes a system message to stderr.
 func (h *HeadlessOutput) SystemMessage(msg string) {
-	fmt.Fprintf(h.stderr, "[system] %s\n", msg)
+	_, _ = fmt.Fprintf(h.stderr, "[system] %s\n", msg)
 }
 
 // Error writes an error message to stderr.
 func (h *HeadlessOutput) Error(msg string) {
-	fmt.Fprintf(h.stderr, "[error] %s\n", msg)
+	_, _ = fmt.Fprintf(h.stderr, "[error] %s\n", msg)
 }

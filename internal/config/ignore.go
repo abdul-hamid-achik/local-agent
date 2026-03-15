@@ -21,7 +21,9 @@ func LoadIgnoreFile(dir string) *IgnorePatterns {
 	if err != nil {
 		return nil
 	}
-	defer f.Close()
+	defer func() {
+		_ = f.Close()
+	}()
 
 	var patterns []string
 	var rawLines []string

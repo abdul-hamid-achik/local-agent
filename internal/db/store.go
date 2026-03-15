@@ -44,7 +44,9 @@ func OpenPath(path string) (*Store, error) {
 
 	// Run migrations.
 	if err := runMigrations(conn); err != nil {
-		conn.Close()
+		if closeErr := conn.Close(); closeErr != nil {
+			return nil, fmt.Errorf("migrations: %w (close db: %v)", err, closeErr)
+		}
 		return nil, fmt.Errorf("migrations: %w", err)
 	}
 
