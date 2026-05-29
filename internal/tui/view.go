@@ -430,6 +430,10 @@ func formatTokens(n int) string {
 // renderEntries builds the full chat content for the viewport.
 // Uses an incremental cache: during streaming, only the streaming tail is
 // re-rendered while the entries prefix is reused from cache.
+// maxChatContentWidth caps how wide chat text wraps, so prose stays readable
+// on very wide terminals instead of spanning the whole screen.
+const maxChatContentWidth = 120
+
 // entriesFromMessages rebuilds the visible chat transcript from a restored
 // agent message history. User and assistant text become chat entries; tool
 // messages are omitted from the visual (they remain in the agent's context for
@@ -463,10 +467,14 @@ func (m *Model) renderEntries() string {
 		viewportW = 20
 	}
 
-	// Content width is viewport width minus padding for margins/borders
+	// Content width is viewport width minus padding for margins/borders,
+	// capped so lines stay readable on very wide terminals (Crush-style).
 	contentW := viewportW - 6 // More conservative padding to prevent overflow
 	if contentW < 14 {
 		contentW = 14
+	}
+	if contentW > maxChatContentWidth {
+		contentW = maxChatContentWidth
 	}
 
 	// Startup progress screen.

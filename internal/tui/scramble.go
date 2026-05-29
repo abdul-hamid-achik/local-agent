@@ -9,11 +9,13 @@ import (
 	"github.com/lucasb-eyer/go-colorful"
 )
 
-// scrambleChars is the character set for the scramble animation.
-const scrambleChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*"
+// scrambleChars is the character set for the scramble animation. Braille dot
+// patterns (single-width) shimmer like a "thinking" indicator instead of
+// looking like a random alphanumeric hash.
+const scrambleChars = "⠁⠂⠄⠆⠇⠋⠙⠸⠴⠦⠧⠏⠟⡇⡏⡗⣇⣧⣷⣿"
 
 // scrambleWidth is the number of characters in the animation.
-const scrambleWidth = 12
+const scrambleWidth = 10
 
 // ScrambleTickMsg triggers the next animation frame.
 type ScrambleTickMsg struct {

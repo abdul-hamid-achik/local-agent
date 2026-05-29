@@ -456,6 +456,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		if contentWidth < 14 {
 			contentWidth = 14
 		}
+		if contentWidth > maxChatContentWidth {
+			contentWidth = maxChatContentWidth
+		}
 
 		m.md = NewMarkdownRenderer(contentWidth, m.isDark)
 
@@ -494,11 +497,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		} else {
 			m.viewport.SetWidth(viewportWidth)
 			m.viewport.SetHeight(contentH)
-			// Only invalidate cache if significant width change (>5 chars)
-			widthDelta := abs(m.width - msg.Width)
-			if widthDelta > 5 {
-				m.invalidateRenderedCache()
-			}
+			// m.md was just recreated at the new width above; re-wrap cached
+			// message renders so they match (otherwise they overflow/clip).
+			m.invalidateRenderedCache()
 			m.viewport.SetContent(m.renderEntries())
 			// Maintain scroll position - if anchor is active, stay at bottom
 			if m.anchorActive {
@@ -901,6 +902,17 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 				}
 				m.viewport.SetWidth(contentWidth)
 				m.input.SetWidth(contentWidth) // Unified width
+				// Recreate the markdown renderer at the new width BEFORE
+				// re-wrapping; otherwise messages keep the old (wider) wrap and
+				// overflow/clip when the sidebar opens.
+				mdWidth := contentWidth - 6
+				if mdWidth < 14 {
+					mdWidth = 14
+				}
+				if mdWidth > maxChatContentWidth {
+					mdWidth = maxChatContentWidth
+				}
+				m.md = NewMarkdownRenderer(mdWidth, m.isDark)
 				m.invalidateRenderedCache()
 				m.viewport.SetContent(m.renderEntries())
 				return m, nil
