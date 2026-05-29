@@ -211,7 +211,7 @@ func (r *Router) GetFallbackChain(currentModel string) []string {
 
 func (r *Router) GetModelForCapability(capability ModelCapability) string {
 	for _, m := range r.config.Models {
-		if m.Capability == capability {
+		if m.Capability == capability && CheckModelMemorySafe(m.Name) == nil {
 			return m.Name
 		}
 	}

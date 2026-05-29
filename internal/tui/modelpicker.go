@@ -14,10 +14,14 @@ type modelItem struct {
 	size       string
 	capability string
 	isCurrent  bool
+	unsafe     bool // too large for this machine (e.g. Gemma on 16GB)
 }
 
 func (i modelItem) Title() string {
 	title := i.name
+	if i.unsafe {
+		return title + "  ⚠"
+	}
 	if i.isCurrent {
 		title += " ●"
 	}
@@ -25,6 +29,9 @@ func (i modelItem) Title() string {
 }
 
 func (i modelItem) Description() string {
+	if i.unsafe {
+		return fmt.Sprintf("%s · needs >16GB — unavailable", i.size)
+	}
 	return fmt.Sprintf("%s · %s", i.size, i.capability)
 }
 
@@ -57,6 +64,7 @@ func newModelPickerState(models []config.Model, currentModel string, isDark bool
 			size:       model.Size,
 			capability: capLabels[model.Capability],
 			isCurrent:  model.Name == currentModel,
+			unsafe:     config.CheckModelMemorySafe(model.Name) != nil,
 		}
 	}
 

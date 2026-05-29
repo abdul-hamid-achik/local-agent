@@ -7,6 +7,8 @@ import (
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+
+	"github.com/abdul-hamid-achik/local-agent/internal/config"
 )
 
 // sanitizeDetail removes JSON-like content and limits detail length for display.
@@ -282,6 +284,13 @@ func (m *SidePanelModel) UpdateSections(modelName string, modelList []string, se
 		if model == modelName {
 			item.Icon = "→"
 		}
+		// Models too large for this machine (e.g. Gemma on 16GB) are shown but
+		// flagged — selecting one is blocked by the memory-safety guard.
+		if config.CheckModelMemorySafe(model) != nil {
+			item.Icon = "⚠"
+			item.Subtitle = ">16GB"
+			item.Selectable = false
+		}
 		m.sections[1].Items = append(m.sections[1].Items, item)
 	}
 
@@ -465,11 +474,11 @@ func (m SidePanelModel) View() string {
 	b.WriteString("\n")
 	b.WriteString(m.styles.Dimmed.Render("  ────────────────────────"))
 	b.WriteString("\n")
-	b.WriteString(m.styles.Dimmed.Render("  ctrl+m  switch model"))
+	b.WriteString(m.styles.Dimmed.Render("  ctrl+m  model"))
 	b.WriteString("\n")
-	b.WriteString(m.styles.Dimmed.Render("  ctrl+b  toggle sidebar"))
+	b.WriteString(m.styles.Dimmed.Render("  ctrl+b  sidebar"))
 	b.WriteString("\n")
-	b.WriteString(m.styles.Dimmed.Render("  ?       help · / for commands"))
+	b.WriteString(m.styles.Dimmed.Render("  ?  help   /  commands"))
 
 	return b.String()
 }

@@ -155,7 +155,7 @@ func (r *QwenModelRouter) isModelAvailable(name string) bool {
 
 func (r *QwenModelRouter) GetModelForCapability(capability ModelCapability) string {
 	for _, m := range r.config.Models {
-		if m.Capability == capability {
+		if m.Capability == capability && CheckModelMemorySafe(m.Name) == nil {
 			return m.Name
 		}
 	}

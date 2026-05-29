@@ -84,12 +84,38 @@ func DefaultModels() []Model {
 			Description: "Capable model for complex reasoning and code analysis",
 			Default:     false,
 		},
-		// NOTE: qwen3.5:9b (~6.6GB) and the Gemma 4 local tiers (gemma4:e2b is
-		// ~7.2GB) are intentionally NOT in the default catalog. On a 16GB Mac,
-		// loading a ~7GB model alongside macOS + the agent + the ICE embed model
-		// exhausts memory and can crash the machine. The catalog is capped at the
-		// 4B tier so even several cached models stay within a safe footprint.
-		// Cloud models (e.g. gemma4:31b-cloud) are also excluded by design.
+		// Gemma 4 local tiers are listed for VISIBILITY but are memory-unsafe on
+		// 16GB (gemma4:e2b is ~7.2GB on disk despite its "2B" name — it OOM'd the
+		// machine). isMemoryRiskyModel() flags them: the router never auto-selects
+		// them, the picker shows them greyed with a reason, and switching to one
+		// is blocked unless LOCAL_AGENT_ALLOW_LARGE_MODELS=1. qwen3.5:9b (~6.6GB)
+		// and cloud models remain excluded entirely.
+		{
+			Name:        "gemma4:e2b",
+			Family:      FamilyGemma,
+			DisplayName: "Gemma 4 E2B",
+			Size:        "7.2GB",
+			Parameters:  "2B effective",
+			ContextSize: 131072,
+			Capability:  CapabilityMedium,
+			Speed:       2.2,
+			UseCases:    []string{"unavailable_16gb"},
+			Description: "Native tool calling, but ~7.2GB — unsafe on 16GB.",
+			Default:     false,
+		},
+		{
+			Name:        "gemma4:e4b",
+			Family:      FamilyGemma,
+			DisplayName: "Gemma 4 E4B",
+			Size:        "9.6GB",
+			Parameters:  "4B effective",
+			ContextSize: 131072,
+			Capability:  CapabilityComplex,
+			Speed:       1.3,
+			UseCases:    []string{"unavailable_16gb"},
+			Description: "Stronger Gemma, but ~9.6GB — unsafe on 16GB.",
+			Default:     false,
+		},
 	}
 }
 
@@ -140,29 +166,28 @@ func (mc *ModelConfig) SelectModelForTask(taskComplexity string) string {
 
 	switch taskComplexity {
 	case "simple":
-		return mc.Models[0].Name
+		return mc.firstSafe(CapabilitySimple, mc.Models[0].Name)
 	case "medium":
-		for _, m := range mc.Models {
-			if m.Capability == CapabilityMedium {
-				return m.Name
-			}
-		}
+		return mc.firstSafe(CapabilityMedium, mc.DefaultModel)
 	case "complex":
-		for _, m := range mc.Models {
-			if m.Capability == CapabilityComplex {
-				return m.Name
-			}
-		}
+		return mc.firstSafe(CapabilityComplex, mc.DefaultModel)
 	case "advanced":
 		// There is no safe local tier above 4B on 16GB (larger models OOM), so
 		// advanced tasks use the most capable SAFE model — the complex tier.
-		for _, m := range mc.Models {
-			if m.Capability == CapabilityComplex {
-				return m.Name
-			}
-		}
-		return mc.DefaultModel
+		return mc.firstSafe(CapabilityComplex, mc.DefaultModel)
 	}
 
 	return mc.DefaultModel
+}
+
+// firstSafe returns the first model at the given capability that is memory-safe
+// to auto-load (skips Gemma/large tiers so the router never OOMs the machine),
+// falling back to fallbackName if none match.
+func (mc *ModelConfig) firstSafe(cap ModelCapability, fallbackName string) string {
+	for _, m := range mc.Models {
+		if m.Capability == cap && CheckModelMemorySafe(m.Name) == nil {
+			return m.Name
+		}
+	}
+	return fallbackName
 }
