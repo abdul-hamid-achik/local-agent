@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"sync"
 	"syscall"
@@ -112,6 +113,9 @@ func main() {
 	ag := agent.New(modelManager, registry, cfg.Ollama.NumCtx)
 	ag.SetToolsConfig(cfg.Tools)
 	ag.SetRouter(router)
+	// Cap any single tool result so a runaway read/command can't blow the
+	// (small, local) context window. ~96KB is generous for code/output.
+	ag.AddToolHook(agent.NewSizeCapHook(96 * 1024))
 	if wd, err := os.Getwd(); err == nil {
 		ag.SetWorkDir(wd)
 	}
@@ -133,6 +137,11 @@ func main() {
 	// Set up tool permission checker.
 	permChecker := permission.NewChecker(dbStore, *yoloFlag)
 	ag.SetPermissionChecker(permChecker)
+
+	// Enable non-destructive compaction + manual checkpoints when the DB is up.
+	if dbStore != nil {
+		ag.SetCheckpointStore(dbStore, 0)
+	}
 
 	memStore := memory.NewStore("")
 	ag.SetMemoryStore(memStore)
@@ -260,10 +269,27 @@ func main() {
 		}()
 	}
 
+	if logger != nil {
+		ag.SetLogger(logger)
+	}
+
 	m := tui.New(ag, cmdReg, skillMgr, completer, modelManager, router, logger)
 	m.SetAgentProfileSource(agentsDir, baseLoadedContext, cfg.AgentProfile)
 	p := tea.NewProgram(m)
 	m.SetProgram(p)
+
+	// Graceful shutdown on SIGTERM (e.g. `kill`, orchestrator stop). BubbleTea
+	// already traps SIGINT/ctrl-c, so we only add SIGTERM here to avoid stealing
+	// its handler. Quitting the program lets p.Run() return so the deferred
+	// ag.Close()/registry.Close()/log flush all run instead of being skipped.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM)
+	go func() {
+		if _, ok := <-sigCh; ok {
+			p.Quit()
+		}
+	}()
+	defer signal.Stop(sigCh)
 
 	// Background initialization goroutine.
 	initCtx, initCancel := context.WithCancel(context.Background())
@@ -309,6 +335,15 @@ func main() {
 		if initCtx.Err() != nil {
 			return
 		}
+
+		// Start background health monitoring so a crashed MCP server is
+		// auto-reconnected instead of staying dead until restart. Bound to
+		// initCtx, so it stops cleanly when the TUI exits.
+		registry.StartHealthMonitor(initCtx, mcp.MonitorConfig{}, func(s string) {
+			if logger != nil {
+				logger.Info("mcp health", "detail", s)
+			}
+		})
 
 		// 3. ICE setup.
 		var iceEnabled bool

@@ -24,12 +24,13 @@ func PromoteModelForMode(router ModelRouter, selectedModel string, mode ModeCont
 		}
 	}
 
+	// Complex (the 4B tier) is the highest memory-safe capability on a 16GB
+	// Mac, so both PLAN and BUILD promote up to it — never beyond (larger
+	// local models OOM the machine).
 	minCapability := CapabilitySimple
 	switch mode {
-	case ModePlanContext:
+	case ModePlanContext, ModeBuildContext:
 		minCapability = CapabilityComplex
-	case ModeBuildContext:
-		minCapability = CapabilityAdvanced
 	}
 
 	if selectedCapability >= minCapability {

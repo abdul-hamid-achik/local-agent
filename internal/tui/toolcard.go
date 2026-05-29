@@ -48,48 +48,48 @@ type ToolCard struct {
 
 // ToolCardStyles holds styles for the tool card.
 type ToolCardStyles struct {
-	BorderRunning  lipgloss.Style
-	BorderSuccess  lipgloss.Style
-	BorderError    lipgloss.Style
-	TitleRunning   lipgloss.Style
-	TitleSuccess   lipgloss.Style
-	TitleError     lipgloss.Style
-	Args           lipgloss.Style
-	Result         lipgloss.Style
-	Error          lipgloss.Style
-	Dimmed         lipgloss.Style
-	Elapsed        lipgloss.Style
+	BorderRunning lipgloss.Style
+	BorderSuccess lipgloss.Style
+	BorderError   lipgloss.Style
+	TitleRunning  lipgloss.Style
+	TitleSuccess  lipgloss.Style
+	TitleError    lipgloss.Style
+	Args          lipgloss.Style
+	Result        lipgloss.Style
+	Error         lipgloss.Style
+	Dimmed        lipgloss.Style
+	Elapsed       lipgloss.Style
 }
 
 // NewToolCardStyles creates styles based on theme.
 func NewToolCardStyles(isDark bool) ToolCardStyles {
 	if isDark {
 		return ToolCardStyles{
-			BorderRunning:  lipgloss.NewStyle().Foreground(lipgloss.Color("#81a1c1")),
-			BorderSuccess:  lipgloss.NewStyle().Foreground(lipgloss.Color("#a3be8c")),
-			BorderError:    lipgloss.NewStyle().Foreground(lipgloss.Color("#bf616a")),
-			TitleRunning:   lipgloss.NewStyle().Foreground(lipgloss.Color("#88c0d0")).Bold(true),
-			TitleSuccess:   lipgloss.NewStyle().Foreground(lipgloss.Color("#a3be8c")).Bold(true),
-			TitleError:     lipgloss.NewStyle().Foreground(lipgloss.Color("#bf616a")).Bold(true),
-			Args:           lipgloss.NewStyle().Foreground(lipgloss.Color("#d8dee9")),
-			Result:         lipgloss.NewStyle().Foreground(lipgloss.Color("#d8dee9")),
-			Error:          lipgloss.NewStyle().Foreground(lipgloss.Color("#bf616a")),
-			Dimmed:         lipgloss.NewStyle().Foreground(lipgloss.Color("#4c566a")),
-			Elapsed:        lipgloss.NewStyle().Foreground(lipgloss.Color("#81a1c1")),
+			BorderRunning: lipgloss.NewStyle().Foreground(lipgloss.Color("#81a1c1")),
+			BorderSuccess: lipgloss.NewStyle().Foreground(lipgloss.Color("#a3be8c")),
+			BorderError:   lipgloss.NewStyle().Foreground(lipgloss.Color("#bf616a")),
+			TitleRunning:  lipgloss.NewStyle().Foreground(lipgloss.Color("#88c0d0")).Bold(true),
+			TitleSuccess:  lipgloss.NewStyle().Foreground(lipgloss.Color("#a3be8c")).Bold(true),
+			TitleError:    lipgloss.NewStyle().Foreground(lipgloss.Color("#bf616a")).Bold(true),
+			Args:          lipgloss.NewStyle().Foreground(lipgloss.Color("#d8dee9")),
+			Result:        lipgloss.NewStyle().Foreground(lipgloss.Color("#d8dee9")),
+			Error:         lipgloss.NewStyle().Foreground(lipgloss.Color("#bf616a")),
+			Dimmed:        lipgloss.NewStyle().Foreground(lipgloss.Color("#4c566a")),
+			Elapsed:       lipgloss.NewStyle().Foreground(lipgloss.Color("#81a1c1")),
 		}
 	}
 	return ToolCardStyles{
-		BorderRunning:  lipgloss.NewStyle().Foreground(lipgloss.Color("#5e81ac")),
-		BorderSuccess:  lipgloss.NewStyle().Foreground(lipgloss.Color("#4f8f38")),
-		BorderError:    lipgloss.NewStyle().Foreground(lipgloss.Color("#c94f4f")),
-		TitleRunning:   lipgloss.NewStyle().Foreground(lipgloss.Color("#4f8f8f")).Bold(true),
-		TitleSuccess:   lipgloss.NewStyle().Foreground(lipgloss.Color("#4f8f38")).Bold(true),
-		TitleError:     lipgloss.NewStyle().Foreground(lipgloss.Color("#c94f4f")).Bold(true),
-		Args:           lipgloss.NewStyle().Foreground(lipgloss.Color("#4c566a")),
-		Result:         lipgloss.NewStyle().Foreground(lipgloss.Color("#4c566a")),
-		Error:          lipgloss.NewStyle().Foreground(lipgloss.Color("#c94f4f")),
-		Dimmed:         lipgloss.NewStyle().Foreground(lipgloss.Color("#9ca0a8")),
-		Elapsed:        lipgloss.NewStyle().Foreground(lipgloss.Color("#5e81ac")),
+		BorderRunning: lipgloss.NewStyle().Foreground(lipgloss.Color("#5e81ac")),
+		BorderSuccess: lipgloss.NewStyle().Foreground(lipgloss.Color("#4f8f38")),
+		BorderError:   lipgloss.NewStyle().Foreground(lipgloss.Color("#c94f4f")),
+		TitleRunning:  lipgloss.NewStyle().Foreground(lipgloss.Color("#4f8f8f")).Bold(true),
+		TitleSuccess:  lipgloss.NewStyle().Foreground(lipgloss.Color("#4f8f38")).Bold(true),
+		TitleError:    lipgloss.NewStyle().Foreground(lipgloss.Color("#c94f4f")).Bold(true),
+		Args:          lipgloss.NewStyle().Foreground(lipgloss.Color("#4c566a")),
+		Result:        lipgloss.NewStyle().Foreground(lipgloss.Color("#4c566a")),
+		Error:         lipgloss.NewStyle().Foreground(lipgloss.Color("#c94f4f")),
+		Dimmed:        lipgloss.NewStyle().Foreground(lipgloss.Color("#9ca0a8")),
+		Elapsed:       lipgloss.NewStyle().Foreground(lipgloss.Color("#5e81ac")),
 	}
 }
 
@@ -127,63 +127,17 @@ func (c *ToolCard) UpdateElapsed() {
 	}
 }
 
-// getIcon returns the appropriate icon for the tool kind and state.
-func (c *ToolCard) getIcon() string {
-	switch c.Kind {
-	case ToolCardFile:
-		if c.State == ToolCardRunning {
-			return "📄"
-		}
-		if c.State == ToolCardSuccess {
-			return "✓"
-		}
-		return "✗"
-	case ToolCardBash:
-		if c.State == ToolCardRunning {
-			return "💻"
-		}
-		if c.State == ToolCardSuccess {
-			return "✓"
-		}
-		return "✗"
-	case ToolCardSearch:
-		if c.State == ToolCardRunning {
-			return "🔍"
-		}
-		if c.State == ToolCardSuccess {
-			return "✓"
-		}
-		return "✗"
-	case ToolCardGit:
-		if c.State == ToolCardRunning {
-			return "🌿"
-		}
-		if c.State == ToolCardSuccess {
-			return "✓"
-		}
-		return "✗"
-	default:
-		if c.State == ToolCardRunning {
-			return "◌"
-		}
-		if c.State == ToolCardSuccess {
-			return "✓"
-		}
-		return "✗"
-	}
-}
-
-// getStatusText returns the status text based on state.
-func (c *ToolCard) getStatusText() string {
+// statusGlyph returns a clean, single-width status glyph (no emoji — emoji are
+// double-width in some terminals and clash with the Nord aesthetic). For the
+// running state the animated spinner is used instead of a static glyph.
+func (c *ToolCard) statusGlyph() string {
 	switch c.State {
-	case ToolCardRunning:
-		return "running..."
 	case ToolCardSuccess:
-		return fmt.Sprintf("(%s)", formatDuration(c.Duration))
+		return "✓"
 	case ToolCardError:
-		return fmt.Sprintf("error (%s)", formatDuration(c.Duration))
+		return "✗"
 	default:
-		return ""
+		return "●"
 	}
 }
 
@@ -215,65 +169,67 @@ func (c *ToolCard) getTitleStyle() lipgloss.Style {
 	}
 }
 
-// View renders the tool card.
+// View renders the tool card as a clean left-gutter block (Crush-style) rather
+// than a heavy full border box: a colored vertical bar reflecting state, a
+// status glyph (or spinner), the tool name, and timing — with an indented,
+// width-truncated body when expanded.
 func (c *ToolCard) View(width int) string {
-	// Update elapsed time for running tools
 	c.UpdateElapsed()
-
-	// Build title line
-	icon := c.getIcon()
-	statusText := c.getStatusText()
-
-	var titleParts []string
-	titleParts = append(titleParts, icon)
-	titleParts = append(titleParts, c.Name)
-
-	if c.State == ToolCardRunning {
-		titleParts = append(titleParts, c.Spinner.View())
-		titleParts = append(titleParts, statusText)
-		// Show elapsed time for running tools
-		elapsedStr := fmt.Sprintf("%.1fs", c.Elapsed.Seconds())
-		titleParts = append(titleParts, c.Styles.Elapsed.Render(elapsedStr))
-	} else {
-		titleParts = append(titleParts, statusText)
+	if width < 12 {
+		width = 12
 	}
+	inner := width - 2 // gutter is "│ "
 
-	title := strings.Join(titleParts, " ")
 	titleStyle := c.getTitleStyle()
 
-	// Create bordered box
-	content := titleStyle.Render(title)
-
-	if c.Expanded && c.State != ToolCardRunning {
-		// Show args and result when expanded
-		var details strings.Builder
-
-		if c.Args != "" {
-			args := truncate(c.Args, 80)
-			details.WriteString(c.Styles.Args.Render("  args: " + args))
-			details.WriteString("\n")
-		}
-
-		if c.Result != "" {
-			if c.State == ToolCardError {
-				details.WriteString(c.Styles.Error.Render("  " + truncate(c.Result, 200)))
-			} else {
-				details.WriteString(c.Styles.Result.Render("  " + truncate(c.Result, 200)))
-			}
-			details.WriteString("\n")
-		}
-
-		content = lipgloss.JoinVertical(lipgloss.Left, content, details.String())
+	// Leading glyph (animated spinner while running) and trailing timing meta.
+	var glyph, meta string
+	if c.State == ToolCardRunning {
+		glyph = c.Spinner.View()
+		meta = c.Styles.Elapsed.Render(fmt.Sprintf("%.1fs", c.Elapsed.Seconds()))
+	} else {
+		glyph = titleStyle.Render(c.statusGlyph())
+		meta = c.Styles.Dimmed.Render("(" + formatDuration(c.Duration) + ")")
 	}
 
-	// Apply border
-	borderStyle := c.getBorderStyle()
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(borderStyle.GetForeground()).
-		Padding(0, 1)
+	// Truncate the name (plain) so the header fits within inner width.
+	nameBudget := inner - lipgloss.Width(glyph) - lipgloss.Width(meta) - 2
+	name := c.Name
+	if nameBudget > 1 && lipgloss.Width(name) > nameBudget {
+		name = truncate(name, nameBudget)
+	}
+	header := glyph + " " + titleStyle.Render(name)
+	if meta != "" {
+		header += " " + meta
+	}
 
-	return box.Render(content)
+	lines := []string{header}
+
+	if c.Expanded && c.State != ToolCardRunning {
+		if c.Args != "" {
+			lines = append(lines, c.Styles.Dimmed.Render(truncate("args: "+c.Args, inner)))
+		}
+		if c.Result != "" {
+			resultStyle := c.Styles.Result
+			if c.State == ToolCardError {
+				resultStyle = c.Styles.Error
+			}
+			for _, rl := range strings.Split(strings.TrimRight(c.Result, "\n"), "\n") {
+				lines = append(lines, resultStyle.Render(truncate(rl, inner)))
+			}
+		}
+	}
+
+	// Prefix every line with a state-colored gutter bar.
+	bar := c.getBorderStyle().Render("│")
+	var b strings.Builder
+	for i, ln := range lines {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(bar + " " + ln)
+	}
+	return b.String()
 }
 
 // ToolCardManager manages multiple tool cards with synchronized animations.

@@ -344,13 +344,13 @@ func (r *QwenModelRouter) GetLearnedPatterns() map[string]QwenComplexity {
 func (r *QwenModelRouter) SelectAvailableModelForTask(ctx context.Context, pinger ModelPinger, query string) string {
 	preferred := r.SelectModel(query)
 
-	// Qwen-optimized fallback chain
+	// Qwen-optimized fallback chain. Capped at the 4B tier: larger local
+	// models (9B, Gemma ~7GB) exhaust memory on a 16GB Mac and can crash it.
 	fallbackOrder := []string{
 		preferred,
 		"qwen3.5:2b",
 		"qwen3.5:0.8b",
 		"qwen3.5:4b",
-		"qwen3.5:9b",
 	}
 
 	for _, model := range fallbackOrder {
@@ -381,8 +381,9 @@ func (r *QwenModelRouter) GetRecommendedModel(query string) (model string, reaso
 		model = "qwen3.5:4b"
 		reason = "moderate complexity - multi-step reasoning"
 	case QwenAdvanced:
-		model = "qwen3.5:9b"
-		reason = "advanced task - complex reasoning required"
+		// Capped at 4B: 9B/Gemma exhaust memory on a 16GB Mac.
+		model = "qwen3.5:4b"
+		reason = "advanced task - largest memory-safe local model (4B)"
 	}
 
 	// Adjust for mode

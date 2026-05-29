@@ -142,7 +142,9 @@ func TestModelConfig_SelectModelForTask(t *testing.T) {
 		{name: "auto simple", complexity: "simple", autoSelect: true, want: "qwen3.5:0.8b"},
 		{name: "auto medium", complexity: "medium", autoSelect: true, want: "qwen3.5:2b"},
 		{name: "auto complex", complexity: "complex", autoSelect: true, want: "qwen3.5:4b"},
-		{name: "auto advanced", complexity: "advanced", autoSelect: true, want: cfg.DefaultModel},
+		// "advanced" maps to the highest memory-safe tier (4B complex), since
+		// no larger local model is allowed on 16GB.
+		{name: "auto advanced", complexity: "advanced", autoSelect: true, want: "qwen3.5:4b"},
 		{name: "no autoselect simple", complexity: "simple", autoSelect: false, want: cfg.DefaultModel},
 		{name: "no autoselect complex", complexity: "complex", autoSelect: false, want: cfg.DefaultModel},
 	}

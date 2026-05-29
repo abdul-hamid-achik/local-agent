@@ -33,6 +33,7 @@ type Registry struct {
 	serverTools   map[string][]llm.ToolDef
 	failedServers []FailedServer
 	serverConfigs map[string]config.ServerConfig // name -> config for reconnection
+	callTimeout   time.Duration                  // per tool-call timeout (0 = default)
 }
 
 // NewRegistry creates an empty Registry.
@@ -42,11 +43,27 @@ func NewRegistry() *Registry {
 		clients:       make(map[string]*MCPClient),
 		serverTools:   make(map[string][]llm.ToolDef),
 		serverConfigs: make(map[string]config.ServerConfig),
+		callTimeout:   defaultCallTimeout,
 	}
+}
+
+// SetCallTimeout overrides the per tool-call timeout. A non-positive value
+// resets it to the default.
+func (r *Registry) SetCallTimeout(d time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if d <= 0 {
+		d = defaultCallTimeout
+	}
+	r.callTimeout = d
 }
 
 // connectTimeout is the per-server connection timeout.
 const connectTimeout = 5 * time.Second
+
+// defaultCallTimeout bounds a single MCP tool call so a hung or slow server
+// cannot block the agent loop (and freeze the UI) indefinitely.
+const defaultCallTimeout = 60 * time.Second
 
 // ConnectServer connects a single MCP server and registers its tools.
 // Returns the number of tools discovered, or an error.
@@ -166,7 +183,17 @@ func (r *Registry) CallTool(ctx context.Context, name string, args map[string]an
 		}, nil
 	}
 
-	return client.CallTool(ctx, name, args)
+	r.mu.RLock()
+	timeout := r.callTimeout
+	r.mu.RUnlock()
+	if timeout <= 0 {
+		timeout = defaultCallTimeout
+	}
+
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	return client.CallTool(callCtx, name, args)
 }
 
 // Close shuts down all MCP server connections.
@@ -183,18 +210,38 @@ func (r *Registry) Close() {
 }
 
 // HealthCheck pings all servers and returns their status.
+//
+// Connections are snapshotted under the lock, then pinged with the lock
+// released: Ping performs blocking I/O, so holding the read lock across it
+// would stall every writer (e.g. ConnectServer) and risk a re-entrant RLock
+// deadlock when a writer is queued.
 func (r *Registry) HealthCheck(ctx context.Context) []ServerStatus {
+	type entry struct {
+		name   string
+		client *MCPClient
+	}
+
 	r.mu.RLock()
-	defer r.mu.RUnlock()
+	names := make([]string, 0, len(r.clients))
+	for name := range r.clients {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	snapshot := make([]entry, 0, len(names))
+	for _, name := range names {
+		snapshot = append(snapshot, entry{name: name, client: r.clients[name]})
+	}
+	failed := make([]FailedServer, len(r.failedServers))
+	copy(failed, r.failedServers)
+	r.mu.RUnlock()
 
 	var results []ServerStatus
-	for _, name := range r.ServerNames() {
-		client := r.clients[name]
-		status := ServerStatus{Name: name}
+	for _, e := range snapshot {
+		status := ServerStatus{Name: e.name}
 
-		if client.IsConnected() {
+		if e.client.IsConnected() {
 			pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			err := client.Ping(pingCtx)
+			err := e.client.Ping(pingCtx)
 			cancel()
 
 			status.Connected = err == nil
@@ -208,11 +255,11 @@ func (r *Registry) HealthCheck(ctx context.Context) []ServerStatus {
 	}
 
 	// Include failed servers
-	for _, failed := range r.failedServers {
+	for _, f := range failed {
 		results = append(results, ServerStatus{
-			Name:      failed.Name,
+			Name:      f.Name,
 			Connected: false,
-			LastError: failed.Reason,
+			LastError: f.Reason,
 		})
 	}
 

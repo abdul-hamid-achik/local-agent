@@ -74,6 +74,9 @@ const (
 	ActionSendPrompt             // Send Data as a message to the agent
 	ActionExport                 // Export conversation (Data = path)
 	ActionImport                 // Import conversation (Data = path)
+	ActionCheckpoint             // Save a conversation checkpoint (Data = optional label)
+	ActionListCheckpoints        // List saved checkpoints
+	ActionRestoreCheckpoint      // Restore a checkpoint (Data = id)
 )
 
 // Registry holds all registered slash commands.

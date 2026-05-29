@@ -2,26 +2,55 @@
 # Place at ~/.config/local-agent/config.yaml or ./local-agent.yaml
 
 ollama:
+  # Everyday agent model. qwen3.5:2b (~1.9GB) is the smallest that does usable
+  # tool calling and is the safe default for 16GB. You CAN switch to qwen3.5:4b
+  # (~3.4GB) for more reliable multi-step tool chains — still safe on 16GB.
+  #
+  # ⚠️ MEMORY SAFETY (16GB Mac): do NOT run models larger than the 4B tier
+  # locally. gemma4:e2b is ~7.2GB and gemma4:e4b ~9.6GB — loading one alongside
+  # macOS + the agent + the embed model exhausts RAM and can crash/shut down the
+  # machine (this happened in testing). qwen3.5:9b (~6.6GB) is likewise excluded.
+  # Cloud models (e.g. gemma4:31b-cloud) are also intentionally not used.
   model: "qwen3.5:2b"
   base_url: "http://localhost:11434"
-  num_ctx: 262144
+  # num_ctx is the KV-cache allocation (NOT the model's 256K max context). It
+  # scales linearly with RAM and competes with weights + the embed model.
+  # Tuned for a 16GB unified-memory Mac (e.g. M5/16GB):
+  #   8192  -> safe everywhere, even alongside a 9B model
+  #   16384 -> good default for the 2b/4b tiers (recommended)
+  #   32768 -> only on 0.8b/2b with nothing else running
+  # Do NOT set 262144 on 16GB: the cache alone would exceed available memory,
+  # forcing swap or an OOM kill.
+  num_ctx: 16384
 
-# Model routing suite (optional - for automatic model tier selection)
-# models:
-#   - name: "qwen3.5:0.8b"
-#     size: "0.8B"
-#     capability: "simple"
-#   - name: "qwen3.5:2b"
-#     size: "2B"
-#     capability: "medium"
-#   - name: "qwen3.5:4b"
-#     size: "4B"
-#     capability: "complex"
-#   - name: "qwen3.5:9b"
-#     size: "9B"
-#     capability: "advanced"
+# Model routing suite — SMALL, memory-safe Qwen tiers only, for a 16GB Mac.
+# The auto-router never selects anything larger than the 4B tier. Even if a few
+# tiers stay cached at once (0.8B + 2B + 4B + the tiny embed model ≈ 6.6GB) the
+# total footprint stays well within 16GB. Larger local models (qwen3.5:9b ~6.6GB,
+# gemma4:e2b ~7.2GB, gemma4:e4b ~9.6GB) are deliberately excluded — loading one
+# OOM'd and shut the machine down in testing. No cloud models either.
+model:
+  models:
+    - name: "qwen3.5:0.8b"   # trivial: routing/classification only — weak at tools
+      family: "qwen3.5"
+      size: "0.8B"
+      capability: "simple"
+    - name: "qwen3.5:2b"     # DEFAULT: smallest model with usable tool calling
+      family: "qwen3.5"
+      size: "2B"
+      capability: "medium"
+      default: true
+    - name: "qwen3.5:4b"     # largest memory-safe tier; reliable multi-step tools
+      family: "qwen3.5"
+      size: "4B"
+      capability: "complex"
+  default_model: "qwen3.5:2b"
+  fallback_chain: ["qwen3.5:2b", "qwen3.5:0.8b", "qwen3.5:4b"]
+  auto_select: true
+  embed_model: "nomic-embed-text"
 
-# Embedding model for ICE (Infinite Context Engine)
+# Embedding model for ICE (Infinite Context Engine).
+# ~137M params / ~0.27GB — co-resides with any chat model for free. Keep it.
 # embed_model: "nomic-embed-text"
 
 # UI Configuration (optional)

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime/debug"
+	"strconv"
 	"strings"
 	"time"
 
@@ -118,19 +120,20 @@ type Model struct {
 	keys     KeyMap
 
 	// State
-	state          State
-	overlay        OverlayKind
-	entries        []ChatEntry
-	streamBuf      strings.Builder
-	width          int
-	height         int
-	ready          bool
-	isDark         bool
-	evalCount      int
-	promptTokens   int
-	toolsPending   int
-	inputLines     int
-	userScrolledUp bool
+	state           State
+	overlay         OverlayKind
+	entries         []ChatEntry
+	streamBuf       strings.Builder
+	lastStreamPaint time.Time // throttles per-token re-renders during streaming
+	width           int
+	height          int
+	ready           bool
+	isDark          bool
+	evalCount       int
+	promptTokens    int
+	toolsPending    int
+	inputLines      int
+	userScrolledUp  bool
 
 	// Scroll anchor system - prevents jitter during streaming
 	scrollAnchor      int  // lines from bottom to maintain
@@ -374,7 +377,25 @@ func (m *Model) Init() tea.Cmd {
 	)
 }
 
-func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
+	// Never let a single message handler panic take down the whole UI and
+	// leave the terminal in a broken state. Recover, log the stack, surface
+	// the error in the chat, and keep running.
+	defer func() {
+		if r := recover(); r != nil {
+			if m.logger != nil {
+				m.logger.Error("panic recovered in Update", "panic", r, "stack", string(debug.Stack()))
+			}
+			m.entries = append(m.entries, ChatEntry{
+				Kind:    "error",
+				Content: fmt.Sprintf("internal error (recovered): %v", r),
+			})
+			m.viewport.SetContent(m.renderEntries())
+			retModel = m
+			retCmd = nil
+		}
+	}()
+
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
@@ -902,11 +923,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if thinkText != "" {
 			m.thinkBuf.WriteString(thinkText)
 		}
-		m.viewport.SetContent(m.renderEntries())
-
-		// Use scroll anchor system - only auto-scroll if anchor is active
-		if m.anchorActive {
-			m.viewport.GotoBottom()
+		// Coalesce repaints to ~30fps. Fast local models emit tokens faster
+		// than the terminal can usefully redraw; repainting every token wastes
+		// CPU and causes flicker. StreamDoneMsg always repaints, so the final
+		// partial is never dropped.
+		if now := time.Now(); now.Sub(m.lastStreamPaint) >= 33*time.Millisecond {
+			m.lastStreamPaint = now
+			m.viewport.SetContent(m.renderEntries())
+			// Use scroll anchor system - only auto-scroll if anchor is active
+			if m.anchorActive {
+				m.viewport.GotoBottom()
+			}
 		}
 
 	case StreamDoneMsg:
@@ -1147,16 +1174,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.initializing = false
 		m.startupItems = nil
+		// Clear the sidepanel's own startup list too, otherwise it keeps
+		// rendering the "connecting" list (and a stale "Initializing…" header)
+		// on top of the real sections after init finishes.
+		m.sidePanel.SetStartupItems(nil)
 
 		// Update side panel with initial data
-		m.sidePanel.UpdateSections(
-			m.model,
-			m.modelList,
-			m.serverCount,
-			m.toolCount,
-			m.iceEnabled,
-			m.iceConversations,
-		)
+		m.refreshSidebar()
 
 		// Start logo animation in chat viewport
 		m.logoModel.Start()
@@ -1611,6 +1635,12 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 		if m.router != nil && query != "" {
 			m.router.RecordOverride(query, result.Data)
 		}
+		if err := config.CheckModelMemorySafe(result.Data); err != nil {
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: err.Error()})
+			m.viewport.SetContent(m.renderEntries())
+			m.viewport.GotoBottom()
+			return nil
+		}
 		if m.modelManager != nil {
 			if err := m.modelManager.SetCurrentModel(result.Data); err != nil {
 				m.entries = append(m.entries, ChatEntry{
@@ -1626,6 +1656,7 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 			m.logger.Info("model switched", "from", m.model, "to", result.Data)
 		}
 		m.model = result.Data
+		m.refreshSidebar()
 		m.entries = append(m.entries, ChatEntry{
 			Kind:    "system",
 			Content: result.Text,
@@ -1734,6 +1765,74 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 			return nil
 		}
 		m.entries = entries
+		m.viewport.SetContent(m.renderEntries())
+		m.viewport.GotoBottom()
+		return nil
+
+	case command.ActionCheckpoint:
+		id, err := m.agent.CreateCheckpoint(context.Background(), result.Data, "manual")
+		var note string
+		if err != nil {
+			note = fmt.Sprintf("checkpoint failed: %v", err)
+		} else if id == 0 {
+			note = "checkpoints are unavailable (database not open)"
+		} else {
+			label := result.Data
+			if label != "" {
+				label = " \"" + label + "\""
+			}
+			note = fmt.Sprintf("saved checkpoint #%d%s — restore with /restore %d", id, label, id)
+		}
+		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: note})
+		m.viewport.SetContent(m.renderEntries())
+		m.viewport.GotoBottom()
+		return nil
+
+	case command.ActionListCheckpoints:
+		cps, err := m.agent.ListCheckpoints(context.Background())
+		var b strings.Builder
+		if err != nil {
+			b.WriteString(fmt.Sprintf("could not list checkpoints: %v", err))
+		} else if len(cps) == 0 {
+			b.WriteString("No checkpoints yet. Save one with /checkpoint [label].")
+		} else {
+			b.WriteString(fmt.Sprintf("Checkpoints (%d) — restore with /restore <id>:\n", len(cps)))
+			for _, c := range cps {
+				label := c.Label
+				if label == "" {
+					label = "(no label)"
+				}
+				fmt.Fprintf(&b, "  #%d  %s  ·  %s  ·  %d msgs  ·  %s\n", c.ID, label, c.Kind, c.MsgCount, c.CreatedAt)
+			}
+		}
+		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: strings.TrimRight(b.String(), "\n")})
+		m.viewport.SetContent(m.renderEntries())
+		m.viewport.GotoBottom()
+		return nil
+
+	case command.ActionRestoreCheckpoint:
+		id, perr := strconv.ParseInt(strings.TrimSpace(result.Data), 10, 64)
+		if perr != nil {
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("restore: %q is not a valid checkpoint id", result.Data)})
+			m.viewport.SetContent(m.renderEntries())
+			m.viewport.GotoBottom()
+			return nil
+		}
+		n, err := m.agent.RestoreCheckpoint(context.Background(), id)
+		if err != nil {
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("restore failed: %v", err)})
+			m.viewport.SetContent(m.renderEntries())
+			m.viewport.GotoBottom()
+			return nil
+		}
+		// Rebuild the visible transcript from the restored agent history.
+		m.entries = entriesFromMessages(m.agent.Messages())
+		m.toolEntries = nil
+		m.invalidateEntryCache()
+		m.entries = append(m.entries, ChatEntry{
+			Kind:    "system",
+			Content: fmt.Sprintf("restored checkpoint #%d — conversation rewound to %d messages", id, n),
+		})
 		m.viewport.SetContent(m.renderEntries())
 		m.viewport.GotoBottom()
 		return nil
@@ -2238,6 +2337,13 @@ func (m *Model) openModelPicker() {
 // selectModel switches to the given model and closes the picker.
 func (m *Model) selectModel(name string) {
 	old := m.model
+	if err := config.CheckModelMemorySafe(name); err != nil {
+		m.entries = append(m.entries, ChatEntry{Kind: "error", Content: err.Error()})
+		m.closeModelPicker()
+		m.viewport.SetContent(m.renderEntries())
+		m.viewport.GotoBottom()
+		return
+	}
 	if m.modelManager != nil {
 		if err := m.modelManager.SetCurrentModel(name); err != nil {
 			m.entries = append(m.entries, ChatEntry{
@@ -2249,6 +2355,7 @@ func (m *Model) selectModel(name string) {
 		}
 	}
 	m.model = name
+	m.refreshSidebar()
 	if m.logger != nil {
 		m.logger.Info("model switched", "from", old, "to", name)
 	}
@@ -2418,6 +2525,19 @@ func (m *Model) parseImportedConversation(data string) ([]ChatEntry, error) {
 	m.toolEntries = nil
 
 	return entries, nil
+}
+
+// refreshSidebar rebuilds the side panel from current model state so changes
+// (e.g. the active model) are reflected immediately.
+func (m *Model) refreshSidebar() {
+	m.sidePanel.UpdateSections(
+		m.model,
+		m.modelList,
+		m.serverCount,
+		m.toolCount,
+		m.iceEnabled,
+		m.iceConversations,
+	)
 }
 
 // Ready returns true if the TUI is fully initialized.

@@ -46,6 +46,11 @@ func (e *Embedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32,
 
 	var all [][]float32
 	for i := 0; i < len(texts); i += maxBatchSize {
+		// Respect cancellation between batches so a shutdown or aborted turn
+		// doesn't keep embedding work it no longer needs.
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		end := i + maxBatchSize
 		if end > len(texts) {
 			end = len(texts)

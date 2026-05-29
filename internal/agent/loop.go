@@ -51,9 +51,18 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 
 	const maxRetries = 2
 	var lastPromptTokens int
+	var lastEvalTokens int
 	var retryCount int
 
 	maxIters := a.MaxIterations()
+
+	// Per-turn correlation ID threads through every log line for this turn.
+	turnID := a.nextTurnID()
+	lg := a.logTurn(turnID)
+	turnStart := time.Now()
+	if lg != nil {
+		lg.Info("turn start", "model", a.llmClient.Model(), "tools", len(tools), "max_iters", maxIters)
+	}
 
 	for i := 0; i < maxIters; i++ {
 		select {
@@ -65,9 +74,18 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 		// Stream LLM response.
 		var textBuf strings.Builder
 		var toolCalls []llm.ToolCall
+		llmStart := time.Now()
+
+		// Snapshot the message history under the lock: ChatStream runs while
+		// other goroutines may AppendMessage, and passing the live slice would
+		// race on the backing array (and could realloc mid-stream).
+		a.mu.RLock()
+		msgsSnapshot := make([]llm.Message, len(a.messages))
+		copy(msgsSnapshot, a.messages)
+		a.mu.RUnlock()
 
 		err := a.llmClient.ChatStream(ctx, llm.ChatOptions{
-			Messages: a.messages,
+			Messages: msgsSnapshot,
 			Tools:    tools,
 			System:   system,
 		}, func(chunk llm.StreamChunk) error {
@@ -86,6 +104,7 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 			}
 			if chunk.Done {
 				lastPromptTokens = chunk.PromptEvalCount
+				lastEvalTokens = chunk.EvalCount
 				out.StreamDone(chunk.EvalCount, chunk.PromptEvalCount)
 			}
 			return nil
@@ -98,10 +117,16 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 			// Retry on transient JSON parse errors from small models.
 			if retryCount < maxRetries && isRetryableError(err) {
 				retryCount++
+				if lg != nil {
+					lg.Warn("llm retry", "iter", i, "attempt", retryCount, "err", err)
+				}
 				out.Error(fmt.Sprintf("LLM produced malformed output, retrying (%d/%d)...", retryCount, maxRetries))
 				textBuf.Reset()
 				toolCalls = nil
 				continue
+			}
+			if lg != nil {
+				lg.Error("llm error", "iter", i, "err", err)
 			}
 			// Show error and provide a fallback response
 			out.Error(fmt.Sprintf("LLM error: %v", err))
@@ -110,6 +135,10 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 			return
 		}
 		retryCount = 0 // reset on success
+		if lg != nil {
+			lg.Info("llm response", "iter", i, "ms", time.Since(llmStart).Milliseconds(),
+				"prompt_tokens", lastPromptTokens, "eval_tokens", lastEvalTokens, "tool_calls", len(toolCalls))
+		}
 
 		// Record assistant message in conversation history.
 		assistantMsg := llm.Message{
@@ -144,6 +173,9 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 
 			if a.iceEngine != nil && hasEnoughMessages && userContent != "" {
 				a.iceEngine.DetectAutoMemory(ctx, userContent, assistantMsg.Content)
+			}
+			if lg != nil {
+				lg.Info("turn end", "reason", "complete", "iters", i+1, "ms", time.Since(turnStart).Milliseconds())
 			}
 			return
 		}
@@ -181,8 +213,18 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 				// Execute built-in tools sequentially (file access safety).
 				out.ToolCallStart(tc.Name, tc.Arguments)
 				startTime := time.Now()
-				result, isErr := a.handleToolsTool(tc)
+				var result string
+				var isErr bool
+				if block, reason := a.runPreHooks(ctx, &tc); block {
+					result, isErr = reason, true
+				} else {
+					result, isErr = a.handleToolsTool(tc)
+					a.runPostHooks(ctx, tc, &result, isErr)
+				}
 				duration := time.Since(startTime)
+				if lg != nil {
+					lg.Debug("tool", "name", tc.Name, "kind", "builtin", "ms", duration.Milliseconds(), "error", isErr)
+				}
 				out.ToolCallResult(tc.Name, result, isErr, duration)
 				a.AppendMessage(llm.Message{
 					Role:       "tool",
@@ -254,8 +296,11 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 					var result string
 					var isErr bool
 
-					if tool.isMemoryTool {
+					if block, reason := a.runPreHooks(ctx, &tc); block {
+						result, isErr = reason, true
+					} else if tool.isMemoryTool {
 						result, isErr = a.handleMemoryTool(tc)
+						a.runPostHooks(ctx, tc, &result, isErr)
 					} else if tool.isMCPTool {
 						toolResult, err := a.registry.CallTool(ctx, tc.Name, tc.Arguments)
 						if err != nil {
@@ -266,9 +311,17 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 							result = toolResult.Content
 							isErr = toolResult.IsError
 						}
+						a.runPostHooks(ctx, tc, &result, isErr)
 					}
 
 					duration := time.Since(startTime)
+					if lg != nil {
+						kind := "mcp"
+						if tool.isMemoryTool {
+							kind = "memory"
+						}
+						lg.Debug("tool", "name", tc.Name, "kind", kind, "ms", duration.Milliseconds(), "error", isErr)
+					}
 					out.ToolCallResult(tc.Name, result, isErr, duration)
 
 					mu.Lock()
@@ -294,6 +347,9 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 
 		// Check if we should compact the conversation.
 		if a.shouldCompact(lastPromptTokens) {
+			if lg != nil {
+				lg.Info("compaction", "iter", i, "prompt_tokens", lastPromptTokens, "num_ctx", a.numCtx)
+			}
 			if a.compact(ctx, out) {
 				// Rebuild system prompt after compaction (memory may have changed).
 				system = buildSystemPromptForModel(a.modePrefix, tools, a.skillContent, a.loadedCtx, a.memoryStore, iceContext, a.workDir, a.ignoreContent, a.llmClient.Model())
@@ -306,6 +362,9 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 		}
 	}
 
+	if lg != nil {
+		lg.Warn("turn end", "reason", "max_iterations", "iters", maxIters, "ms", time.Since(turnStart).Milliseconds())
+	}
 	out.Error(fmt.Sprintf("reached max iterations (%d)", maxIters))
 }
 

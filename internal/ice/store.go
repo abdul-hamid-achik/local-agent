@@ -138,8 +138,31 @@ func (s *Store) persist() error {
 		return fmt.Errorf("marshal ice store: %w", err)
 	}
 
-	if err := os.WriteFile(s.path, data, 0o644); err != nil {
-		return fmt.Errorf("write ice store: %w", err)
+	// Atomic write: temp file + rename so a crash can't corrupt the live store.
+	tmp, err := os.CreateTemp(dir, ".ice-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp ice store: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op if rename succeeded
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write temp ice store: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("sync temp ice store: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp ice store: %w", err)
+	}
+	if err := os.Rename(tmpName, s.path); err != nil {
+		return fmt.Errorf("commit ice store: %w", err)
+	}
+	// fsync the directory so the rename survives a hard crash (best-effort).
+	if d, derr := os.Open(dir); derr == nil {
+		_ = d.Sync()
+		_ = d.Close()
 	}
 
 	s.dirty = false

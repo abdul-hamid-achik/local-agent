@@ -310,9 +310,38 @@ func (s *Store) persist() error {
 		return fmt.Errorf("marshal memories: %w", err)
 	}
 
-	if err := os.WriteFile(s.path, data, 0o644); err != nil {
-		return fmt.Errorf("write memories: %w", err)
+	// Atomic write: a crash mid-write must never corrupt the live file.
+	// Write to a temp file in the same dir, then rename over the target.
+	tmp, err := os.CreateTemp(dir, ".memories-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp memories file: %w", err)
 	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op if rename succeeded
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write temp memories: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("sync temp memories: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp memories: %w", err)
+	}
+	if err := os.Rename(tmpName, s.path); err != nil {
+		return fmt.Errorf("commit memories: %w", err)
+	}
+	syncDir(dir)
 
 	return nil
+}
+
+// syncDir fsyncs a directory so a rename into it survives a hard crash.
+// Best-effort: not all filesystems support directory fsync.
+func syncDir(dir string) {
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
 }

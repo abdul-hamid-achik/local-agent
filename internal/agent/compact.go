@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/abdul-hamid-achik/local-agent/internal/db"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 )
 
@@ -68,6 +69,15 @@ func (a *Agent) compact(ctx context.Context, out Output) bool {
 	if a.iceEngine != nil {
 		if err := a.iceEngine.IndexSummary(ctx, summaryText); err != nil {
 			out.Error(fmt.Sprintf("ICE summary indexing failed: %v", err))
+		}
+	}
+
+	// Snapshot the full pre-compaction history first so compaction is
+	// non-destructive: the original transcript can be restored from this
+	// checkpoint. Best-effort — a checkpoint failure must not abort the turn.
+	if a.checkpointStore != nil {
+		if _, err := a.CreateCheckpoint(ctx, "before compaction", db.CheckpointPreCompaction); err != nil && a.logger != nil {
+			a.logger.Warn("pre-compaction checkpoint failed", "err", err)
 		}
 	}
 

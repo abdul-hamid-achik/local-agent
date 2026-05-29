@@ -1,8 +1,12 @@
 package agent
 
 import (
+	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/charmbracelet/log"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
 	"github.com/abdul-hamid-achik/local-agent/internal/ice"
@@ -31,6 +35,31 @@ type Agent struct {
 	permChecker      *permission.Checker
 	approvalCallback func(permission.ApprovalRequest)
 	toolsConfig      config.ToolsConfig
+	logger           *log.Logger
+	turnCounter      atomic.Uint64
+	hooks            []ToolHook
+
+	checkpointStore     CheckpointStore
+	checkpointSessionID int64
+}
+
+// SetLogger sets the structured logger used for observability. Safe to leave
+// unset; all logging is nil-guarded.
+func (a *Agent) SetLogger(l *log.Logger) {
+	a.logger = l
+}
+
+// log returns a logger scoped to the given turn correlation ID, or nil.
+func (a *Agent) logTurn(turnID string) *log.Logger {
+	if a.logger == nil {
+		return nil
+	}
+	return a.logger.With("turn", turnID)
+}
+
+// nextTurnID returns a monotonically increasing per-process turn correlation ID.
+func (a *Agent) nextTurnID() string {
+	return "t" + strconv.FormatUint(a.turnCounter.Add(1), 10)
 }
 
 // New creates a new Agent.
@@ -89,11 +118,15 @@ func (a *Agent) AddUserMessage(content string) {
 	})
 }
 
-// Messages returns the conversation history.
+// Messages returns a copy of the conversation history. A copy (not the live
+// slice) is required because callers read it from other goroutines (e.g. the
+// TUI's checkpoint-restore path) while Run may be appending concurrently.
 func (a *Agent) Messages() []llm.Message {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	return a.messages
+	out := make([]llm.Message, len(a.messages))
+	copy(out, a.messages)
+	return out
 }
 
 // ClearHistory resets the conversation history.

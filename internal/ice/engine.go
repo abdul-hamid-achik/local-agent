@@ -109,12 +109,19 @@ func (e *Engine) IndexSummary(ctx context.Context, summary string) error {
 }
 
 // DetectAutoMemory runs auto-memory detection in a background goroutine.
+//
+// It deliberately does NOT inherit the caller's request context: that context
+// is typically cancelled the instant the turn ends (or the user sends the next
+// message), which would kill detection before it finishes. Instead it runs on
+// an independent context with its own timeout.
 func (e *Engine) DetectAutoMemory(ctx context.Context, userMsg, assistantMsg string) {
 	if e.autoMemory == nil {
 		return
 	}
 	go func() {
-		_ = e.autoMemory.Detect(ctx, userMsg, assistantMsg)
+		bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_ = e.autoMemory.Detect(bgCtx, userMsg, assistantMsg)
 	}()
 }
 

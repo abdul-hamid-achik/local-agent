@@ -7,6 +7,7 @@ type ModelFamily string
 const (
 	FamilyQwen3   ModelFamily = "qwen3"
 	FamilyQwen35  ModelFamily = "qwen3.5"
+	FamilyGemma   ModelFamily = "gemma"
 	FamilyLlama   ModelFamily = "llama"
 	FamilyMistral ModelFamily = "mistral"
 )
@@ -83,19 +84,12 @@ func DefaultModels() []Model {
 			Description: "Capable model for complex reasoning and code analysis",
 			Default:     false,
 		},
-		{
-			Name:        "qwen3.5:9b",
-			Family:      FamilyQwen35,
-			DisplayName: "Qwen 3.5 9B",
-			Size:        "9B",
-			Parameters:  "9 billion",
-			ContextSize: 262144,
-			Capability:  CapabilityAdvanced,
-			Speed:       1.0,
-			UseCases:    []string{"complex_reasoning", "architecture", "full_stack", "advanced_debugging"},
-			Description: "Full capability model for advanced tasks",
-			Default:     false,
-		},
+		// NOTE: qwen3.5:9b (~6.6GB) and the Gemma 4 local tiers (gemma4:e2b is
+		// ~7.2GB) are intentionally NOT in the default catalog. On a 16GB Mac,
+		// loading a ~7GB model alongside macOS + the agent + the ICE embed model
+		// exhausts memory and can crash the machine. The catalog is capped at the
+		// 4B tier so even several cached models stay within a safe footprint.
+		// Cloud models (e.g. gemma4:31b-cloud) are also excluded by design.
 	}
 }
 
@@ -104,7 +98,7 @@ func DefaultModelConfig() ModelConfig {
 	return ModelConfig{
 		Models:        models,
 		DefaultModel:  "qwen3.5:2b",
-		FallbackChain: []string{"qwen3.5:2b", "qwen3.5:0.8b", "qwen3.5:4b", "qwen3.5:9b"},
+		FallbackChain: []string{"qwen3.5:2b", "qwen3.5:0.8b", "qwen3.5:4b"},
 		AutoSelect:    true,
 		EmbedModel:    "nomic-embed-text",
 	}
@@ -140,7 +134,7 @@ func (mc *ModelConfig) GetDefaultModel() *Model {
 }
 
 func (mc *ModelConfig) SelectModelForTask(taskComplexity string) string {
-	if !mc.AutoSelect {
+	if !mc.AutoSelect || len(mc.Models) == 0 {
 		return mc.DefaultModel
 	}
 
@@ -160,6 +154,13 @@ func (mc *ModelConfig) SelectModelForTask(taskComplexity string) string {
 			}
 		}
 	case "advanced":
+		// There is no safe local tier above 4B on 16GB (larger models OOM), so
+		// advanced tasks use the most capable SAFE model — the complex tier.
+		for _, m := range mc.Models {
+			if m.Capability == CapabilityComplex {
+				return m.Name
+			}
+		}
 		return mc.DefaultModel
 	}
 

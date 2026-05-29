@@ -35,19 +35,19 @@ const (
 	SidePanelServers
 	SidePanelICE
 	SidePanelQuickActions
-	SidePanelStartup  // NEW: for startup status messages
+	SidePanelStartup // NEW: for startup status messages
 )
 
 // SidePanelItem represents an item in the side panel
 type SidePanelItem struct {
-	Title       string
-	Subtitle    string
-	Kind        SidePanelSectionKind
-	Icon        string
-	Status      string // "connected", "failed", "active", ""
-	Selectable  bool
-	ID          string // for models, servers, etc.
-	IsCurrent   bool   // is this the currently active item?
+	Title      string
+	Subtitle   string
+	Kind       SidePanelSectionKind
+	Icon       string
+	Status     string // "connected", "failed", "active", ""
+	Selectable bool
+	ID         string // for models, servers, etc.
+	IsCurrent  bool   // is this the currently active item?
 }
 
 func (i SidePanelItem) TitleText() string {
@@ -80,7 +80,7 @@ type SidePanelSection struct {
 // SidePanelModel holds the state for the side panel
 type SidePanelModel struct {
 	sections     []SidePanelSection
-	startupItems []StartupItem  // Startup status items
+	startupItems []StartupItem // Startup status items
 	width        int
 	height       int
 	visible      bool
@@ -88,7 +88,7 @@ type SidePanelModel struct {
 	selected     int
 	isDark       bool
 	styles       SidePanelStyles
-	spinner      spinner.Model  // Loading spinner for initialization
+	spinner      spinner.Model // Loading spinner for initialization
 }
 
 // StartupItem represents a startup status item
@@ -113,20 +113,35 @@ type SidePanelStyles struct {
 	LogoTagline lipgloss.Style
 }
 
-// DefaultSidePanelStyles returns default styles
+// DefaultSidePanelStyles returns Nord-themed styles for the side panel.
+//
+// "dim" text (subtitles, hints, tagline) uses a *readable* muted slate rather
+// than Nord3 (#4c566a) — Nord3 is a border/comment color and is nearly
+// invisible as body text on the dark background. Borders still use Nord3.
 func DefaultSidePanelStyles(isDark bool) SidePanelStyles {
+	// Readable muted foreground per theme (legible but clearly secondary).
+	dim := "#8b97ad" // dark theme: light slate, readable on Nord0/1
+	border := "#4c566a"
+	section := "#81a1c1"
+	item := "#d8dee9"
+	if !isDark {
+		dim = "#5b6779" // light theme: medium slate on light bg
+		border = "#d8dee9"
+		section = "#5e81ac"
+		item = "#3b4252"
+	}
 	return SidePanelStyles{
-		Border:      lipgloss.NewStyle().Foreground(lipgloss.Color("#4c566a")),
+		Border:      lipgloss.NewStyle().Foreground(lipgloss.Color(border)),
 		Title:       lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#88c0d0")),
-		Section:     lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#81a1c1")),
-		Item:        lipgloss.NewStyle().Foreground(lipgloss.Color("#d8dee9")),
+		Section:     lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(section)),
+		Item:        lipgloss.NewStyle().Foreground(lipgloss.Color(item)),
 		Selected:    lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#88c0d0")),
-		Current:     lipgloss.NewStyle().Foreground(lipgloss.Color("#a3be8c")),
+		Current:     lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#a3be8c")),
 		Connected:   lipgloss.NewStyle().Foreground(lipgloss.Color("#a3be8c")),
 		Failed:      lipgloss.NewStyle().Foreground(lipgloss.Color("#bf616a")),
-		Dimmed:      lipgloss.NewStyle().Foreground(lipgloss.Color("#4c566a")),
+		Dimmed:      lipgloss.NewStyle().Foreground(lipgloss.Color(dim)),
 		Logo:        lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#88c0d0")),
-		LogoTagline: lipgloss.NewStyle().Foreground(lipgloss.Color("#4c566a")),
+		LogoTagline: lipgloss.NewStyle().Foreground(lipgloss.Color(dim)),
 	}
 }
 
@@ -137,7 +152,7 @@ func NewSidePanelModel(isDark bool) SidePanelModel {
 		spinner.WithStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("#88c0d0"))),
 	)
 	return SidePanelModel{
-		visible:  true,  // Visible by default
+		visible:  true, // Visible by default
 		isDark:   isDark,
 		styles:   DefaultSidePanelStyles(isDark),
 		cursor:   0,
@@ -244,7 +259,7 @@ func (m *SidePanelModel) UpdateSections(modelName string, modelList []string, se
 		{
 			Title:    "Quick Actions",
 			Kind:     SidePanelQuickActions,
-			Expanded: true,  // Show by default
+			Expanded: true, // Show by default
 			Items: []SidePanelItem{
 				{Title: "Help", Subtitle: "Keyboard shortcuts", Kind: SidePanelQuickActions, Icon: "?", Selectable: true, ID: "help"},
 				{Title: "Servers", Subtitle: "List connected tools", Kind: SidePanelQuickActions, Icon: "◈", Selectable: true, ID: "servers"},
@@ -257,12 +272,12 @@ func (m *SidePanelModel) UpdateSections(modelName string, modelList []string, se
 	// Add models
 	for _, model := range modelList {
 		item := SidePanelItem{
-			Title:     model,
-			Kind:      SidePanelModels,
-			Icon:      "◦",
+			Title:      model,
+			Kind:       SidePanelModels,
+			Icon:       "◦",
 			Selectable: true,
-			ID:        model,
-			IsCurrent: model == modelName,
+			ID:         model,
+			IsCurrent:  model == modelName,
 		}
 		if model == modelName {
 			item.Icon = "→"
@@ -273,16 +288,16 @@ func (m *SidePanelModel) UpdateSections(modelName string, modelList []string, se
 	// Add servers placeholder
 	if serverCount > 0 {
 		m.sections[2].Items = append(m.sections[2].Items, SidePanelItem{
-			Title:     fmt.Sprintf("%d tools connected", toolCount),
-			Kind:      SidePanelServers,
-			Icon:      "✓",
+			Title:      fmt.Sprintf("%d tools connected", toolCount),
+			Kind:       SidePanelServers,
+			Icon:       "✓",
 			Selectable: false,
 		})
 	} else {
 		m.sections[2].Items = append(m.sections[2].Items, SidePanelItem{
-			Title:     "No servers connected",
-			Kind:      SidePanelServers,
-			Icon:      "○",
+			Title:      "No servers connected",
+			Kind:       SidePanelServers,
+			Icon:       "○",
 			Selectable: false,
 		})
 	}
@@ -290,18 +305,18 @@ func (m *SidePanelModel) UpdateSections(modelName string, modelList []string, se
 	// Add ICE info
 	if iceEnabled {
 		m.sections[3].Items = append(m.sections[3].Items, SidePanelItem{
-			Title:     fmt.Sprintf("%d conversations", iceConversations),
-			Subtitle:  "Cross-session memory active",
-			Kind:      SidePanelICE,
-			Icon:      "✓",
+			Title:      fmt.Sprintf("%d conversations", iceConversations),
+			Subtitle:   "Cross-session memory active",
+			Kind:       SidePanelICE,
+			Icon:       "✓",
 			Selectable: false,
 		})
 	} else {
 		m.sections[3].Items = append(m.sections[3].Items, SidePanelItem{
-			Title:     "ICE disabled",
-			Subtitle:  "Cross-session memory inactive",
-			Kind:      SidePanelICE,
-			Icon:      "○",
+			Title:      "ICE disabled",
+			Subtitle:   "Cross-session memory inactive",
+			Kind:       SidePanelICE,
+			Icon:       "○",
 			Selectable: false,
 		})
 	}
@@ -361,7 +376,7 @@ func (m SidePanelModel) View() string {
 			b.WriteString(m.styles.Section.Render("  " + m.spinner.View() + " Connecting..."))
 			b.WriteString("\n\n")
 		} else {
-			b.WriteString(m.styles.Section.Render("  Initializing..."))
+			b.WriteString(m.styles.Connected.Render("  ✓ Ready"))
 			b.WriteString("\n\n")
 		}
 
@@ -446,11 +461,15 @@ func (m SidePanelModel) View() string {
 		b.WriteString("\n")
 	}
 
-	// Footer hint
+	// Footer hints — keep these readable; they're how users discover actions.
 	b.WriteString("\n")
 	b.WriteString(m.styles.Dimmed.Render("  ────────────────────────"))
 	b.WriteString("\n")
-	b.WriteString(m.styles.Dimmed.Render("  ctrl+b: toggle"))
+	b.WriteString(m.styles.Dimmed.Render("  ctrl+m  switch model"))
+	b.WriteString("\n")
+	b.WriteString(m.styles.Dimmed.Render("  ctrl+b  toggle sidebar"))
+	b.WriteString("\n")
+	b.WriteString(m.styles.Dimmed.Render("  ?       help · / for commands"))
 
 	return b.String()
 }

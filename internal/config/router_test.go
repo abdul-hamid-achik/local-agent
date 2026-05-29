@@ -151,8 +151,8 @@ func TestRouter_SelectModel(t *testing.T) {
 		{name: "simple query selects first model", query: "what is Go", want: cfg.Models[0].Name},
 		// "debug" → complex → complex-capable model
 		{name: "complex query selects complex model", query: "debug", want: "qwen3.5:4b"},
-		// "implement a system" → advanced → DefaultModel
-		{name: "advanced query selects default model", query: "implement a full stack system", want: cfg.DefaultModel},
+		// "implement a system" → advanced → highest memory-safe tier (4B)
+		{name: "advanced query selects safe top tier", query: "implement a full stack system", want: "qwen3.5:4b"},
 	}
 
 	for _, tt := range tests {

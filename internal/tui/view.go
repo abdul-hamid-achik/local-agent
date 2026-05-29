@@ -9,6 +9,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/agent"
+	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 )
 
 func (m *Model) View() tea.View {
@@ -23,7 +24,7 @@ func (m *Model) View() tea.View {
 	if m.sidePanel.IsVisible() {
 		rightWidth = m.width - m.sidePanel.width - 1 // -1 for separator
 	}
-	
+
 	// Build the right side: viewport + footer as one unit
 	var rightSide strings.Builder
 	rightSide.WriteString(m.viewport.View())
@@ -76,7 +77,7 @@ func (m *Model) View() tea.View {
 		divider := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#6c7a89")).
 			Render(dividerChars)
-		
+
 		content = lipgloss.JoinHorizontal(lipgloss.Top, left, divider, right)
 	} else {
 		// No panel - full width with footer
@@ -429,6 +430,28 @@ func formatTokens(n int) string {
 // renderEntries builds the full chat content for the viewport.
 // Uses an incremental cache: during streaming, only the streaming tail is
 // re-rendered while the entries prefix is reused from cache.
+// entriesFromMessages rebuilds the visible chat transcript from a restored
+// agent message history. User and assistant text become chat entries; tool
+// messages are omitted from the visual (they remain in the agent's context for
+// the model) since re-rendering them as cards would need the tool-entry state
+// that the snapshot doesn't carry.
+func entriesFromMessages(msgs []llm.Message) []ChatEntry {
+	var entries []ChatEntry
+	for _, msg := range msgs {
+		switch msg.Role {
+		case "user":
+			if msg.Content != "" {
+				entries = append(entries, ChatEntry{Kind: "user", Content: msg.Content})
+			}
+		case "assistant":
+			if msg.Content != "" {
+				entries = append(entries, ChatEntry{Kind: "assistant", Content: msg.Content})
+			}
+		}
+	}
+	return entries
+}
+
 func (m *Model) renderEntries() string {
 	// Calculate content width for text wrapping
 	// CRITICAL: This must be <= viewport width to prevent horizontal overflow
@@ -439,7 +462,7 @@ func (m *Model) renderEntries() string {
 	if viewportW < 20 {
 		viewportW = 20
 	}
-	
+
 	// Content width is viewport width minus padding for margins/borders
 	contentW := viewportW - 6 // More conservative padding to prevent overflow
 	if contentW < 14 {
@@ -702,16 +725,30 @@ func (m *Model) renderStreamingMsg(b *strings.Builder, content string, contentW 
 	b.WriteString(label + cursor + " " + m.styles.RoleRule.Render(rule(ruleW)))
 	b.WriteString("\n")
 
-	// During streaming: wrap text to fit viewport, then indent for zero jitter.
-	// Account for the 2-char indent when calculating wrap width.
+	// During streaming: render the stable markdown prefix with Glamour (cached)
+	// and only the trailing partial paragraph as plain wrapped text. This shows
+	// formatted output live instead of popping into shape on completion, while
+	// avoiding the jitter of re-rendering incomplete markdown.
 	wrapWidth := contentW - 2
 	if wrapWidth < 10 {
 		wrapWidth = 10
 	}
-	wrapped := wrapText(content, wrapWidth)
-	rendered := indentBlock(wrapped, "  ")
-	b.WriteString(rendered)
-	b.WriteString("\n")
+
+	var formatted, tail string
+	if m.md != nil {
+		formatted, tail = m.md.RenderStreamingFormatted(content)
+	} else {
+		tail = content
+	}
+
+	if formatted != "" {
+		b.WriteString(indentBlock(strings.TrimRight(formatted, " \t\n"), "  "))
+		b.WriteString("\n")
+	}
+	if strings.TrimSpace(tail) != "" {
+		b.WriteString(indentBlock(wrapText(tail, wrapWidth), "  "))
+		b.WriteString("\n")
+	}
 }
 
 // renderToolGroup renders a tool entry using the fancy tool card component.

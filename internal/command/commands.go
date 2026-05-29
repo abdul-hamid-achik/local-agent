@@ -360,6 +360,36 @@ func RegisterBuiltins(r *Registry) {
 	})
 
 	r.Register(&Command{
+		Name:        "checkpoint",
+		Aliases:     []string{"cp"},
+		Description: "Save a checkpoint of the current conversation",
+		Usage:       "/checkpoint [label]",
+		Handler: func(_ *Context, args []string) Result {
+			return Result{Action: ActionCheckpoint, Data: strings.Join(args, " ")}
+		},
+	})
+
+	r.Register(&Command{
+		Name:        "checkpoints",
+		Description: "List saved checkpoints (use /restore <id> to rewind)",
+		Handler: func(_ *Context, _ []string) Result {
+			return Result{Action: ActionListCheckpoints}
+		},
+	})
+
+	r.Register(&Command{
+		Name:        "restore",
+		Description: "Restore the conversation to a saved checkpoint",
+		Usage:       "/restore <id>",
+		Handler: func(_ *Context, args []string) Result {
+			if len(args) < 1 || args[0] == "" {
+				return Result{Error: "usage: /restore <id> — see /checkpoints for ids"}
+			}
+			return Result{Action: ActionRestoreCheckpoint, Data: args[0]}
+		},
+	})
+
+	r.Register(&Command{
 		Name:        "exit",
 		Aliases:     []string{"quit", "q"},
 		Description: "Quit local-agent",

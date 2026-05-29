@@ -298,7 +298,11 @@ func (a *Agent) handleBash(args map[string]any) (string, bool) {
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Dir = a.workDir
-	cmd.Env = os.Environ()
+	// Do not leak the parent process environment (which may hold API keys,
+	// tokens, DB passwords) to LLM-generated shell commands. Pass only a
+	// curated allowlist of variables a shell legitimately needs.
+	cmd.Env = sanitizedEnv()
+	cmd.Stdin = nil
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -468,6 +472,30 @@ func (a *Agent) resolvePath(path string) string {
 		return path
 	}
 	return filepath.Join(a.workDir, path)
+}
+
+// envAllowlist names the environment variables a shell command legitimately
+// needs. Everything else (secrets, tokens, provider keys) is withheld from
+// LLM-generated commands.
+var envAllowlist = []string{
+	"PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE",
+	"TERM", "TMPDIR", "PWD", "TZ",
+	// Common toolchain roots that are paths, not secrets.
+	"GOPATH", "GOROOT", "GOCACHE", "GOMODCACHE",
+	"NVM_DIR", "PYENV_ROOT", "RBENV_ROOT", "CARGO_HOME", "RUSTUP_HOME",
+	"XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME",
+}
+
+// sanitizedEnv returns a minimal environment for subprocesses, copying only
+// the allowlisted variables that are actually set in the parent.
+func sanitizedEnv() []string {
+	env := make([]string, 0, len(envAllowlist))
+	for _, k := range envAllowlist {
+		if v, ok := os.LookupEnv(k); ok {
+			env = append(env, k+"="+v)
+		}
+	}
+	return env
 }
 
 func shouldSkipDir(name string) bool {

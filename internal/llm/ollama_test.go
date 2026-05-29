@@ -119,3 +119,34 @@ func TestStrFromMap(t *testing.T) {
 		})
 	}
 }
+
+func TestNormalizeOllamaURL(t *testing.T) {
+	cases := []struct {
+		in, wantHost, wantScheme string
+		wantErr                  bool
+	}{
+		{in: "0.0.0.0", wantHost: "0.0.0.0:11434", wantScheme: "http"},
+		{in: "localhost:11434", wantHost: "localhost:11434", wantScheme: "http"},
+		{in: "http://localhost", wantHost: "localhost:11434", wantScheme: "http"},
+		{in: "http://localhost:9999", wantHost: "localhost:9999", wantScheme: "http"},
+		{in: "https://remote.example.com", wantHost: "remote.example.com", wantScheme: "https"}, // must NOT get :11434
+		{in: "https://remote.example.com:8443", wantHost: "remote.example.com:8443", wantScheme: "https"},
+		{in: "not a url", wantErr: true},
+	}
+	for _, c := range cases {
+		u, err := normalizeOllamaURL(c.in)
+		if c.wantErr {
+			if err == nil {
+				t.Errorf("normalizeOllamaURL(%q): expected error, got %v", c.in, u)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("normalizeOllamaURL(%q): unexpected error %v", c.in, err)
+			continue
+		}
+		if u.Host != c.wantHost || u.Scheme != c.wantScheme {
+			t.Errorf("normalizeOllamaURL(%q) = scheme=%q host=%q; want scheme=%q host=%q", c.in, u.Scheme, u.Host, c.wantScheme, c.wantHost)
+		}
+	}
+}

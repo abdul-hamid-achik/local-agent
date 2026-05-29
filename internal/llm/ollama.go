@@ -3,35 +3,58 @@ package llm
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
+	"strings"
+	"time"
 
 	ollamaapi "github.com/ollama/ollama/api"
 )
 
+// pingTimeout bounds the startup/availability check so an unreachable or hung
+// Ollama server can never block application startup indefinitely.
+const pingTimeout = 10 * time.Second
+
 // OllamaClient implements Client using the official Ollama Go library.
 type OllamaClient struct {
-	client *ollamaapi.Client
-	model  string
-	numCtx int
+	client  *ollamaapi.Client
+	model   string
+	numCtx  int
+	baseURL string
 }
 
 // NewOllamaClient creates a new Ollama client.
+//
+// The base URL is passed directly to the client constructor rather than via
+// os.Setenv("OLLAMA_HOST", ...): mutating the global environment is not
+// thread-safe and races across concurrent client creation.
 func NewOllamaClient(baseURL, model string, numCtx int) (*OllamaClient, error) {
-	// The official client reads OLLAMA_HOST, but we want to support our config too.
+	var client *ollamaapi.Client
+	resolvedURL := baseURL
 	if baseURL != "" {
-		os.Setenv("OLLAMA_HOST", baseURL)
-	}
-
-	client, err := ollamaapi.ClientFromEnvironment()
-	if err != nil {
-		return nil, fmt.Errorf("create ollama client: %w", err)
+		u, err := normalizeOllamaURL(baseURL)
+		if err != nil {
+			return nil, fmt.Errorf("invalid ollama base url %q: %w", baseURL, err)
+		}
+		client = ollamaapi.NewClient(u, http.DefaultClient)
+		resolvedURL = u.String()
+	} else {
+		var err error
+		client, err = ollamaapi.ClientFromEnvironment()
+		if err != nil {
+			return nil, fmt.Errorf("create ollama client: %w", err)
+		}
+		if v := os.Getenv("OLLAMA_HOST"); v != "" {
+			resolvedURL = v
+		}
 	}
 
 	return &OllamaClient{
-		client: client,
-		model:  model,
-		numCtx: numCtx,
+		client:  client,
+		model:   model,
+		numCtx:  numCtx,
+		baseURL: resolvedURL,
 	}, nil
 }
 
@@ -39,7 +62,8 @@ func (o *OllamaClient) Model() string { return o.model }
 
 // Ping checks Ollama is running and the model exists.
 func (o *OllamaClient) Ping() error {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), pingTimeout)
+	defer cancel()
 
 	// Check the model is available by requesting a show.
 	req := &ollamaapi.ShowRequest{Model: o.model}
@@ -190,8 +214,8 @@ func strFromMap(m map[string]any, key string) string {
 
 // BaseURL returns the configured Ollama base URL for display.
 func (o *OllamaClient) BaseURL() string {
-	if v := os.Getenv("OLLAMA_HOST"); v != "" {
-		return v
+	if o.baseURL != "" {
+		return o.baseURL
 	}
 	return "http://localhost:11434"
 }
@@ -199,4 +223,27 @@ func (o *OllamaClient) BaseURL() string {
 // ParseBaseURL validates the Ollama URL.
 func ParseBaseURL(rawURL string) (*url.URL, error) {
 	return url.Parse(rawURL)
+}
+
+// normalizeOllamaURL accepts the same lenient forms the Ollama CLI does for
+// OLLAMA_HOST — a bare host ("0.0.0.0"), host:port ("localhost:11434"), or a
+// full URL — and returns a fully-qualified *url.URL. A missing scheme defaults
+// to http and a missing port to Ollama's default 11434.
+func normalizeOllamaURL(raw string) (*url.URL, error) {
+	if !strings.Contains(raw, "://") {
+		raw = "http://" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, err
+	}
+	if u.Host == "" {
+		return nil, fmt.Errorf("missing host")
+	}
+	// Default to Ollama's port only for plain http with no explicit port. Never
+	// force it onto https/remote endpoints (which almost always listen on 443).
+	if u.Scheme == "http" && u.Port() == "" {
+		u.Host = u.Host + ":11434"
+	}
+	return u, nil
 }
