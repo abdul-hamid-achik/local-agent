@@ -182,7 +182,11 @@ func (m *Model) overlayOnContent(base, overlay string) string {
 		if padLeft < 0 {
 			padLeft = 0
 		}
-		baseLines[row] = strings.Repeat(" ", padLeft) + ol
+		line := strings.Repeat(" ", padLeft) + ol
+		if lineW := lipgloss.Width(line); lineW < m.width {
+			line += strings.Repeat(" ", m.width-lineW)
+		}
+		baseLines[row] = line
 	}
 
 	return strings.Join(baseLines, "\n")

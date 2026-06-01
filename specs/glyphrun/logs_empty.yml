@@ -1,0 +1,44 @@
+version: 1
+name: local_agent_logs_empty
+
+intent: |
+  a user can run local-agent logs with an empty log directory and get a clear empty-state message.
+
+target:
+  cmd: ["./bin/local-agent", "logs"]
+  cwd: "."
+  env:
+    HOME: "${projectRoot}/.glyphrun/tmp/logs-home"
+
+preconditions:
+  commands:
+    - run: "rm -rf .glyphrun/tmp/logs-home && mkdir -p .glyphrun/tmp/logs-home && go build -o ./bin/local-agent ./cmd/local-agent"
+      cwd: "."
+      timeoutMs: 30000
+
+steps:
+  - wait:
+      screen:
+        contains: "No log files found"
+      timeoutMs: 2000
+  - wait:
+      process:
+        exitCode: 0
+      timeoutMs: 2000
+
+outcomes:
+  - id: empty_state_visible
+    description: the logs command explains that no log files exist
+    verify:
+      screen:
+        contains: "No log files found"
+  - id: log_directory_reported
+    description: the empty-state message includes the isolated log directory
+    verify:
+      screen:
+        contains: ".config/local-agent/logs"
+  - id: exits_zero
+    description: logs exits successfully for an existing empty log directory
+    verify:
+      process:
+        exitCode: 0

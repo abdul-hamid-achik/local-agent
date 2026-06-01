@@ -1,0 +1,37 @@
+version: 1
+name: local_agent_version
+
+intent: |
+  a user can run local-agent --version and the command exits successfully.
+
+target:
+  cmd: ["./bin/local-agent", "--version"]
+  cwd: "."
+
+preconditions:
+  commands:
+    - run: "go build -o ./bin/local-agent ./cmd/local-agent"
+      cwd: "."
+      timeoutMs: 30000
+
+steps:
+  - wait:
+      screen:
+        contains: "dev"
+      timeoutMs: 2000
+  - wait:
+      process:
+        exitCode: 0
+      timeoutMs: 2000
+
+outcomes:
+  - id: version_printed
+    description: the version command prints the development version
+    verify:
+      screen:
+        contains: "dev"
+  - id: exits_zero
+    description: the command exits successfully
+    verify:
+      process:
+        exitCode: 0

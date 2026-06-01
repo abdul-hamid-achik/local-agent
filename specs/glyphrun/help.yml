@@ -1,0 +1,47 @@
+version: 1
+name: local_agent_help
+
+intent: |
+  a user can run local-agent -h and discover the supported CLI flags.
+
+target:
+  cmd: ["./bin/local-agent", "-h"]
+  cwd: "."
+
+preconditions:
+  commands:
+    - run: "go build -o ./bin/local-agent ./cmd/local-agent"
+      cwd: "."
+      timeoutMs: 30000
+
+steps:
+  - wait:
+      screen:
+        contains: "Usage of ./bin/local-agent"
+      timeoutMs: 2000
+  - wait:
+      process:
+        exitCode: 0
+      timeoutMs: 2000
+
+outcomes:
+  - id: usage_visible
+    description: the help output shows usage text
+    verify:
+      screen:
+        contains: "Usage of ./bin/local-agent"
+  - id: prompt_flag_documented
+    description: the non-interactive prompt flag is documented
+    verify:
+      screen:
+        contains: "run in non-interactive mode"
+  - id: model_flag_documented
+    description: the model override flag is documented
+    verify:
+      screen:
+        contains: "override Ollama model"
+  - id: exits_zero
+    description: help exits successfully
+    verify:
+      process:
+        exitCode: 0

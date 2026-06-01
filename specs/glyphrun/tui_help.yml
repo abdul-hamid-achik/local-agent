@@ -1,0 +1,70 @@
+version: 1
+name: local_agent_tui_help
+
+intent: |
+  a user can open the local-agent TUI help overlay, see shortcut and slash-command guidance, close it, and quit.
+
+target:
+  cmd: ["./bin/local-agent"]
+  cwd: "."
+  env:
+    HOME: "${projectRoot}/.glyphrun/tmp/help-home"
+    LOCAL_AGENT_AGENTS_DIR: "${projectRoot}/.glyphrun/tmp/help-agents"
+
+preconditions:
+  commands:
+    - run: "mkdir -p .glyphrun/tmp/help-home .glyphrun/tmp/help-agents && go build -o ./bin/local-agent ./cmd/local-agent"
+      cwd: "."
+      timeoutMs: 30000
+
+steps:
+  - wait:
+      screen:
+        contains: "Welcome to LOCAL AGENT"
+      timeoutMs: 5000
+  - press: "?"
+  - wait:
+      screen:
+        contains: "Keyboard Shortcuts"
+      timeoutMs: 3000
+  - snapshot: help
+  - press: "pgdown"
+  - wait:
+      screen:
+        contains: "Slash Commands"
+      timeoutMs: 3000
+  - snapshot: help_commands
+  - press: "q"
+  - wait:
+      screen:
+        contains: "Welcome to LOCAL AGENT"
+      timeoutMs: 3000
+  - press: "ctrl+c"
+  - wait:
+      process:
+        exitCode: 0
+      timeoutMs: 3000
+
+outcomes:
+  - id: help_snapshot_stable
+    description: the help overlay content matches the committed terminal snapshot
+    verify:
+      snapshot:
+        name: help
+        mode: text
+  - id: slash_commands_snapshot_stable
+    description: scrolling help reveals slash-command guidance
+    verify:
+      snapshot:
+        name: help_commands
+        mode: text
+  - id: returned_home
+    description: closing help returns to the main welcome screen
+    verify:
+      screen:
+        contains: "Welcome to LOCAL AGENT"
+  - id: ctrl_c_quits
+    description: ctrl+c exits the TUI cleanly after help is closed
+    verify:
+      process:
+        exitCode: 0

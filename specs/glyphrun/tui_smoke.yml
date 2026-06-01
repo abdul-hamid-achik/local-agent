@@ -1,0 +1,47 @@
+version: 1
+name: local_agent_tui_smoke
+
+intent: |
+  a user can launch the local-agent TUI, see the initial screen, and quit with ctrl+c.
+
+target:
+  cmd: ["./bin/local-agent"]
+  cwd: "."
+  env:
+    HOME: "${projectRoot}/.glyphrun/tmp/home"
+    LOCAL_AGENT_AGENTS_DIR: "${projectRoot}/.glyphrun/tmp/agents"
+
+preconditions:
+  commands:
+    - run: "mkdir -p .glyphrun/tmp/home .glyphrun/tmp/agents && go build -o ./bin/local-agent ./cmd/local-agent"
+      cwd: "."
+      timeoutMs: 30000
+
+steps:
+  - wait:
+      screen:
+        contains: "Welcome to LOCAL AGENT"
+      timeoutMs: 5000
+  - snapshot: launch
+  - press: "ctrl+c"
+  - wait:
+      process:
+        exitCode: 0
+      timeoutMs: 3000
+
+outcomes:
+  - id: welcome_visible
+    description: the TUI renders its welcome screen
+    verify:
+      screen:
+        contains: "Welcome to LOCAL AGENT"
+  - id: prompt_visible
+    description: the prompt hint is visible
+    verify:
+      screen:
+        contains: "Ask anything"
+  - id: ctrl_c_quits
+    description: ctrl+c exits the TUI cleanly
+    verify:
+      process:
+        exitCode: 0

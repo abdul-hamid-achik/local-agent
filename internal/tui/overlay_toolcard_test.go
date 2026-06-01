@@ -12,14 +12,14 @@ func TestOverlayCentering_HelpOverlay(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 120
 	m.height = 40
-	
+
 	// Initialize help viewport
 	m.overlay = OverlayHelp
 	m.initHelpViewport()
-	
+
 	overlay := m.renderHelpOverlay(m.width)
 	overlayLines := strings.Split(overlay, "\n")
-	
+
 	// Check overlay width doesn't exceed screen
 	for _, line := range overlayLines {
 		lineWidth := lipgloss.Width(line)
@@ -34,16 +34,16 @@ func TestOverlayCentering_ModelPicker(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 100
 	m.height = 30
-	
+
 	// Initialize model picker state manually
 	m.openModelPicker()
-	
+
 	// Model picker requires modelManager to be set
 	if m.modelPickerState == nil {
 		// Test passes if it doesn't panic
 		t.Skip("model picker requires model manager")
 	}
-	
+
 	overlay := m.renderModelPicker()
 	if overlay == "" {
 		t.Log("model picker overlay empty (expected without model manager)")
@@ -55,16 +55,16 @@ func TestOverlayCentering_SmallScreen(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 60
 	m.height = 20
-	
+
 	m.overlay = OverlayHelp
 	m.initHelpViewport()
-	
+
 	overlay := m.renderHelpOverlay(m.width)
-	
+
 	if overlay == "" {
 		t.Error("overlay should render on small screen")
 	}
-	
+
 	// Should not panic or produce empty output
 	lines := strings.Count(overlay, "\n")
 	if lines < 5 {
@@ -77,12 +77,12 @@ func TestOverlayCentering_LargeScreen(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 200
 	m.height = 60
-	
+
 	m.overlay = OverlayHelp
 	m.initHelpViewport()
-	
+
 	overlay := m.renderHelpOverlay(m.width)
-	
+
 	// Overlay should not be excessively wide
 	overlayLines := strings.Split(overlay, "\n")
 	maxLineWidth := 0
@@ -92,7 +92,7 @@ func TestOverlayCentering_LargeScreen(t *testing.T) {
 			maxLineWidth = width
 		}
 	}
-	
+
 	// Overlay should be centered and not use full width
 	if maxLineWidth > m.width-10 {
 		t.Errorf("overlay too wide: %d (max should be ~%d)", maxLineWidth, m.width-10)
@@ -104,18 +104,43 @@ func TestOverlayOnContent_Positioning(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 100
 	m.height = 40
-	
+
 	base := strings.Repeat("base line\n", 40)
 	overlay := strings.Repeat("overlay line\n", 10)
-	
+
 	result := m.overlayOnContent(base, overlay)
-	
+
 	// Result should have same number of lines as base
 	baseLines := strings.Count(base, "\n")
 	resultLines := strings.Count(result, "\n")
-	
+
 	if resultLines < baseLines {
 		t.Errorf("result should have at least as many lines as base: got %d, want %d", resultLines, baseLines)
+	}
+}
+
+func TestOverlayOnContent_ClearsOverlayRows(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 40
+	m.height = 5
+
+	base := strings.Join([]string{
+		strings.Repeat("x", m.width),
+		strings.Repeat("x", m.width),
+		strings.Repeat("x", m.width),
+		strings.Repeat("x", m.width),
+		strings.Repeat("x", m.width),
+	}, "\n")
+	overlay := "modal"
+
+	result := m.overlayOnContent(base, overlay)
+	lines := strings.Split(result, "\n")
+	overlayRow := (len(lines) - 1) / 2
+	if got := lipgloss.Width(lines[overlayRow]); got != m.width {
+		t.Fatalf("overlay row width = %d, want %d", got, m.width)
+	}
+	if strings.Contains(lines[overlayRow], "x") {
+		t.Fatalf("overlay row should be padded with spaces, got %q", lines[overlayRow])
 	}
 }
 
@@ -131,19 +156,19 @@ func TestToolCard_WidthCalculation(t *testing.T) {
 		{"narrow screen", 40, "read_file", true},
 		{"very narrow", 30, "test", true},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			card := NewToolCard(tt.cardName, ToolCardFile, true)
 			card.State = ToolCardRunning
-			
+
 			view := card.View(tt.availableW)
-			
+
 			// Should render without panic
 			if view == "" {
 				t.Error("tool card should render")
 			}
-			
+
 			// Note: lipgloss.Width includes ANSI codes, so we just verify it renders
 			_ = lipgloss.Width(view)
 		})
@@ -157,15 +182,15 @@ func TestToolCard_LongArgsWrapping(t *testing.T) {
 	card.Expanded = true
 	card.Args = strings.Repeat("very_long_argument_that_should_be_wrapped_properly ", 10)
 	card.Result = "success"
-	
+
 	view := card.View(80)
 	viewLines := strings.Split(view, "\n")
-	
+
 	// Should render multiple lines
 	if len(viewLines) < 3 {
 		t.Errorf("tool card should have multiple lines, got %d", len(viewLines))
 	}
-	
+
 	// Verify it renders without panic
 	if view == "" {
 		t.Error("tool card view should not be empty")
@@ -175,22 +200,22 @@ func TestToolCard_LongArgsWrapping(t *testing.T) {
 // TestToolCard_ManagerRendering verifies multiple cards render correctly
 func TestToolCard_ManagerRendering(t *testing.T) {
 	mgr := NewToolCardManager(true)
-	
+
 	// Add multiple cards
 	mgr.AddCard("read_file", ToolCardFile, testTime)
 	mgr.AddCard("write_file", ToolCardFile, testTime)
 	mgr.AddCard("bash", ToolCardBash, testTime)
-	
+
 	// Update some cards
 	mgr.UpdateCard("read_file", ToolCardSuccess, "file content", testDuration)
 	mgr.UpdateCard("write_file", ToolCardRunning, "", 0)
-	
+
 	view := mgr.View(100)
-	
+
 	if view == "" {
 		t.Error("manager view should not be empty")
 	}
-	
+
 	// Should have multiple cards (separated by newlines)
 	lines := strings.Count(view, "\n")
 	if lines < 2 {
@@ -205,18 +230,18 @@ func TestToolCard_BorderAndPadding(t *testing.T) {
 	card.Expanded = true
 	card.Args = "test args"
 	card.Result = "test result"
-	
+
 	availableW := 60
 	view := card.View(availableW)
-	
+
 	// Account for border (2) + padding (2) = 4 chars
 	contentW := availableW - 4
-	
+
 	viewLines := strings.Split(view, "\n")
 	for i, line := range viewLines {
 		lineWidth := lipgloss.Width(line)
 		if lineWidth > availableW {
-			t.Errorf("line %d width %d exceeds available width %d (content should fit in %d)", 
+			t.Errorf("line %d width %d exceeds available width %d (content should fit in %d)",
 				i, lineWidth, availableW, contentW)
 		}
 	}
@@ -232,14 +257,14 @@ func TestToolCard_EmojiIcons(t *testing.T) {
 			t.Run(string(rune(kind))+string(rune(state)), func(t *testing.T) {
 				card := NewToolCard("test", kind, true)
 				card.State = state
-				
+
 				view := card.View(60)
-				
+
 				// Should render without panic
 				if view == "" {
 					t.Error("card view should not be empty")
 				}
-				
+
 				// Should not exceed width
 				viewWidth := lipgloss.Width(view)
 				if viewWidth > 60 {
@@ -254,7 +279,7 @@ func TestToolCard_EmojiIcons(t *testing.T) {
 func TestWrapText_LongWords(t *testing.T) {
 	longWord := strings.Repeat("a", 100)
 	result := wrapText(longWord, 40)
-	
+
 	lines := strings.Split(result, "\n")
 	for i, line := range lines {
 		if len(line) > 40 {
@@ -267,7 +292,7 @@ func TestWrapText_LongWords(t *testing.T) {
 func TestWrapText_MultipleWords(t *testing.T) {
 	text := "word1 word2 word3 word4 word5 word6 word7 word8 word9 word10"
 	result := wrapText(text, 20)
-	
+
 	lines := strings.Split(result, "\n")
 	for i, line := range lines {
 		if len(line) > 20 {
@@ -289,7 +314,7 @@ func TestWrapText_EmptyAndEdgeCases(t *testing.T) {
 		{"exact fit", "hello", 5, "hello"},
 		{"single char width", "hello world", 1, "h\ne\nl\nl\no\n \nw\no\nr\nl\nd"},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := wrapText(tt.input, tt.width)
@@ -304,7 +329,7 @@ func TestWrapText_EmptyAndEdgeCases(t *testing.T) {
 func TestIndentBlock_Multiline(t *testing.T) {
 	input := "line1\nline2\nline3"
 	result := indentBlock(input, "  ")
-	
+
 	expected := "  line1\n  line2\n  line3"
 	if result != expected {
 		t.Errorf("indentBlock failed: got %q, want %q", result, expected)
@@ -315,7 +340,7 @@ func TestIndentBlock_Multiline(t *testing.T) {
 func TestIndentBlock_EmptyLines(t *testing.T) {
 	input := "line1\n\nline3"
 	result := indentBlock(input, "  ")
-	
+
 	// Empty lines should remain empty
 	lines := strings.Split(result, "\n")
 	if len(lines) != 3 {
@@ -333,7 +358,7 @@ func BenchmarkOverlayRendering_Help(b *testing.B) {
 	m.height = 40
 	m.overlay = OverlayHelp
 	m.initHelpViewport()
-	
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = m.renderHelpOverlay(m.width)
@@ -347,7 +372,7 @@ func BenchmarkToolCardRendering(b *testing.B) {
 	card.Expanded = true
 	card.Args = strings.Repeat("arg ", 20)
 	card.Result = strings.Repeat("result line\n", 10)
-	
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = card.View(80)
@@ -357,7 +382,7 @@ func BenchmarkToolCardRendering(b *testing.B) {
 // BenchmarkWrapText benchmarks text wrapping
 func BenchmarkWrapText(b *testing.B) {
 	text := strings.Repeat("This is a test sentence with multiple words. ", 20)
-	
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = wrapText(text, 60)

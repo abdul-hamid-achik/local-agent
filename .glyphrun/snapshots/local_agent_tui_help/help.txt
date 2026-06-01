@@ -1,0 +1,36 @@
+                              │
+  LOCAL AGENT                 │                             ╦  ╔═╗╔═╗╔═╗╦    ╔═╗╔═╗╔═╗╔╗╔╔╦╗
+                           ╭────────────────────────────────────────────────────────────────╮
+                           │  │                             ╩═╝╚═╝╚═╝╩ ╩╩═╝  ╩ ╩╚═╝╚═╝╝╚╝ ╩ │
+                           │  Help                                                          │
+                           │  │                            100% local · Your data never leav│
+                           │  Keyboard Shortcuts                                            │
+                           │    enter             Send message   Welcome to LOCAL AGENT     │
+                           │    shift+enter       New line in inputwen3.5:2b · 18 tools     │
+                           │    shift+tab         Cycle mode (ASK/PLAN/BUILD)               │
+│                          │    ctrl+m            Quick model switchSK — Quick answers      │
+                           │    esc               Cancel streaming / close overlay          │
+                           │    ctrl+c            Quit           BUILD — Full execution     │
+                           │    ctrl+l            Clear screen (keep history)               │
+                           │    ctrl+n            New conversationsage to start · Press ? fo│
+                           │    ?                 Toggle this help (when input empty)       │
+│                          │    t                 Expand/collapse all tools                 │
+                           │    space             Toggle last tool details                  │
+                           │    ctrl+y            Copy last response                        │
+                           │    ctrl+t            Toggle thinking display                   │
+                           │    ctrl+k            Toggle compact mode                       │
+                           │    ctrl+e            Open input in $EDITOR                     │
+│                          │    ↑/↓               Browse input history                      │
+│                          │    pgup/pgdown       Scroll viewport                           │
+                           │    ctrl+u/d          Half-page scroll                          │
+                           │    tab               Autocomplete (commands/files/skills)      │
+                           │  │                                                             │
+                           │  Input Shortcuts                                               │
+│                          │    @file             Attach file or agent                      │
+│                          │    #skill            Activate skill                            │
+│                          │    /cmd              Run slash command                         │
+│                          │                                                                │
+│──────────────────────────│  ↓ scroll for more───────────────────────────────────────────  │
+                           │  │ [ ASK ] ·  ○ ready                                          │
+                           ╰────────────────────────────────────────────────────────────────╯
+                              │

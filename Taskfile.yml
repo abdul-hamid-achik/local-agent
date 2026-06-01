@@ -27,6 +27,16 @@ tasks:
     cmds:
       - go test ./...
 
+  glyphrun:
+    desc: Run terminal behavior specs with Glyphrun
+    cmds:
+      - glyph run specs/glyphrun/version.yml specs/glyphrun/tui_smoke.yml specs/glyphrun/help.yml specs/glyphrun/logs_empty.yml specs/glyphrun/init.yml specs/glyphrun/tui_help.yml --format md --progress auto --parallel 1
+
+  glyphrun-snapshots:
+    desc: Refresh committed Glyphrun terminal snapshots
+    cmds:
+      - glyph snapshot update specs/glyphrun/tui_help.yml --format md
+
   clean:
     desc: Clean build artifacts
     cmds:

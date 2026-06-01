@@ -1,0 +1,36 @@
+                              │
+  LOCAL AGENT                 │                             ╦  ╔═╗╔═╗╔═╗╦    ╔═╗╔═╗╔═╗╔╗╔╔╦╗
+                           ╭────────────────────────────────────────────────────────────────╮
+                           │  │                             ╩═╝╚═╝╚═╝╩ ╩╩═╝  ╩ ╩╚═╝╚═╝╝╚╝ ╩ │
+                           │  Help                                                          │
+                           │  │                            100% local · Your data never leav│
+                           │    #skill            Activate skill                            │
+                           │    /cmdr             Run slash commandlcome to LOCAL AGENT     │
+                           │    shift+enter       New line in inputwen3.5:2b · 18 tools     │
+Slash Commands             │    shift+tab         Cycle mode (ASK/PLAN/BUILD)               │
+│                          │    /help             Show help overlay with shortcuts and com  │
+                           │    /clear            Clear conversation history                │
+                           │    /new+c            Start a fresh conversationl execution     │
+                           │    /model            Show, switch, or list models              │
+                           │    /models           Open model pickerage to start · Press ? fo│
+                           │    /agent            Show or switch agent profile              │
+│                          │    /load             Load a markdown file as context           │
+                           │    /unload           Remove loaded context file                │
+                           │    /skill            Manage skills (list, activate, deactivat  │
+                           │    /servers          List connected MCP servers                │
+                           │    /ice+k            Show Infinite Context Engine status       │
+                           │    /sessions         Browse and restore saved sessions         │
+│                          │    /changes          List files modified by the agent this se  │
+│                          │    /commit           Generate commit message from staged chan  │
+                           │    /stats            Show token usage statistics for this ses  │
+                           │    /export           Export conversation to a markdown file    │
+                           │  │ /import           Import conversation from a markdown file  │
+                           │    /checkpoint       Save a checkpoint of the current convers  │
+│                          │    /checkpoints      List saved checkpoints (use /restore <id  │
+│                          │    /restore          Restore the conversation to a saved chec  │
+│                          │    /exit             Quit local-agent                          │
+│                          │                                                                │
+│──────────────────────────│  Esc or q to close───────────────────────────────────────────  │
+                           │  │ [ ASK ] ·  ○ ready                                          │
+                           ╰────────────────────────────────────────────────────────────────╯
+                              │

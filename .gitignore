@@ -28,6 +28,11 @@ Thumbs.db
 # Logs
 *.log
 
+# Glyphrun artifacts
+.glyphrun/runs/
+.glyphrun/tmp/
+.glyphrun/snapshots/**/*.json
+
 # Temporary files
 tmp/
 temp/

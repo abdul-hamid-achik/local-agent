@@ -71,9 +71,12 @@ func TestListLogs_EmptyDir(t *testing.T) {
 }
 
 func TestListLogs_MissingDir(t *testing.T) {
-	_, err := listLogsIn("/tmp/nonexistent-log-dir-test-xyz", 5)
-	if err == nil {
-		t.Fatal("expected error for missing dir")
+	logs, err := listLogsIn(filepath.Join(t.TempDir(), "missing"), 5)
+	if err != nil {
+		t.Fatalf("listLogsIn error: %v", err)
+	}
+	if len(logs) != 0 {
+		t.Fatalf("expected 0 entries, got %d", len(logs))
 	}
 }
 

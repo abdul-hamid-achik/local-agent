@@ -35,6 +35,9 @@ func ListLogs(n int) ([]LogEntry, error) {
 func listLogsIn(dir string, n int) ([]LogEntry, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return []LogEntry{}, nil
+		}
 		return nil, fmt.Errorf("read log dir: %w", err)
 	}
 

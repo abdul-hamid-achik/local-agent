@@ -358,6 +358,7 @@ task build       # Compile to bin/local-agent
 task run         # Build and run
 task dev         # Quick run via go run ./cmd/local-agent
 task test        # Run all tests: go test ./...
+task glyphrun    # Run terminal behavior specs
 task lint        # Run golangci-lint run ./...
 task clean       # Remove bin/ directory
 ```
@@ -366,6 +367,27 @@ Run a single test:
 
 ```bash
 go test ./internal/agent/ -run TestFunctionName
+```
+
+### Terminal Behavior Specs
+
+This repo includes [Glyphrun](https://github.com/abdul-hamid-achik/glyphrun) specs under `specs/glyphrun/` for terminal-level behavior:
+
+- CLI help and version output
+- `init --force` project bootstrapping
+- `logs` empty-state behavior
+- TUI launch, help overlay, scrolling, snapshots, and clean quit
+
+Run them with:
+
+```bash
+task glyphrun
+```
+
+Refresh committed TUI snapshots after intentional UI changes:
+
+```bash
+task glyphrun-snapshots
 ```
 
 ---
