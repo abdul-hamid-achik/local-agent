@@ -14,7 +14,7 @@ A local-first coding agent for the terminal, built in Go with Charm and powered 
 
 - A responsive terminal UI built with Bubble Tea v2, Bubbles v2, Lip Gloss v2, and Glamour.
 - Streaming chat through Ollama with an availability-aware local model router.
-- Qwen 3.5, Phi-4 Mini, and manually selected Gemma/Qwen exclusive profiles.
+- Qwen 3.5, Phi-4 Mini, and manually selected Ornith/Gemma/Qwen exclusive profiles.
 - Read, search, diff, validated patch, atomic write, file-management, and shell tools.
 - ASK, PLAN, and BUILD policies with approval prompts for risky operations.
 - STDIO, SSE, and Streamable HTTP MCP tool servers, including an MCPHub gateway.
@@ -82,6 +82,7 @@ Approximate artifact sizes vary by Ollama build and quantization:
 | `phi4-mini:latest` | 2.5 GB | Alternative compact reasoning/tool profile | Fallback eligible |
 | `qwen3.5:4b` | 3.4 GB | Preferred coding, debugging, review, and multi-step tools | Eligible |
 | `qwen3.5:9b` | 6.6 GB | Deep manual profile | No; exclusive |
+| `ornith:latest` | 5.6 GB | Agentic coding and independent deep verification | No; exclusive |
 | `gemma4:e2b` | 7.2 GB | Alternative manual reasoning/tool profile | No; exclusive |
 
 Pull whichever profiles you intend to use:
@@ -94,6 +95,7 @@ ollama pull phi4-mini:latest
 
 # Manual exclusive profiles on a 16 GB machine:
 ollama pull qwen3.5:9b
+ollama pull ornith:latest
 ollama pull gemma4:e2b
 
 # Required only when ICE is enabled:
@@ -105,7 +107,7 @@ ollama list
 The shipped memory guard is tuned for a 16 GB Apple-silicon machine:
 
 - `num_ctx: 16384` is the recommended 2B/4B default.
-- Qwen 9B and Gemma E2B are explicit profiles. Switching models asks Ollama to unload the previous active chat model first.
+- Qwen 9B, Ornith 9B, and Gemma E2B are explicit profiles. Switching models asks Ollama to unload the previous active chat model first.
 - Gemma E4B+, models tagged 10B or larger, and cloud tags are blocked by default.
 - `LOCAL_AGENT_ALLOW_LARGE_MODELS=1` bypasses the size guard. Use it only after measuring memory headroom; it does not add memory isolation.
 
@@ -278,6 +280,7 @@ See [`config.example.yaml`](config.example.yaml) for the configured model catalo
 | `LOCAL_AGENT_ICE_EMBED_MODEL` | Override the ICE embedding model |
 | `LOCAL_AGENT_LOCAL_ONLY` | Enable or disable loopback endpoint enforcement |
 | `LOCAL_AGENT_ALLOW_LARGE_MODELS` | Bypass the 16 GB-oriented model/context guard |
+| `LOCAL_AGENT_REDUCED_MOTION` | Replace TUI spinners and the waiting shimmer with static activity glyphs |
 
 ## Project instructions, skills, and profiles
 
@@ -427,12 +430,26 @@ required.
 
 Session snapshots preserve model-facing messages, tool-call IDs, tool cards, mode, model, profile, and counters. Loading one replaces both the visible transcript and the hidden model conversation. Checkpoints are validated against the active session.
 
+The terminal interface keeps the conversation full-width. Infrequent controls
+live in transient, keyboard-first overlays: press `ctrl+p` for session settings,
+or keep using direct shortcuts and slash commands. Settings open focused child
+overlays and `esc` returns to the settings root; overlays opened directly close
+back to the conversation. Runtime status is scrollable when its diagnostics do
+not fit on screen. At narrow or short sizes, Settings keeps one-line labels and
+one selected-detail row so all controls remain scannable. Slash completion
+shows canonical commands with descriptions while aliases remain searchable.
+Active work uses one phase-specific animation with elapsed time and a visible
+cancel affordance; live ToolCards own tool animation, and approval prompts pause
+background motion until answered. Completed turns briefly show a stable receipt.
+The supported minimum is 30 columns by 12 rows.
+
 ## Keyboard shortcuts
 
 | Key | Action |
 |---|---|
 | `enter`, `shift+enter` | Send / insert a newline |
 | `shift+tab` | Cycle ASK, PLAN, BUILD |
+| `ctrl+p` | Open session settings (model, profile, mode, sessions, layout, runtime) |
 | `ctrl+m` | Open model picker |
 | `tab` | Complete commands, files, and skills |
 | `up`, `down` | Browse input history |
@@ -441,7 +458,7 @@ Session snapshots preserve model-facing messages, tool-call IDs, tool cards, mod
 | `ctrl+t` | Toggle `<think>` tag display |
 | `ctrl+y` | Copy last response |
 | `ctrl+e` | Edit input with `$EDITOR` |
-| `ctrl+b`, `ctrl+k` | Toggle side panel / compact mode |
+| `ctrl+k` | Toggle compact mode |
 | `esc` | Cancel active generation or close overlay; deny an active approval |
 | `ctrl+n`, `ctrl+l` | New conversation / clear view |
 | `ctrl+c` | Quit |
@@ -478,7 +495,7 @@ internal/memory/    Persistent structured memory
 internal/db/        SQLite schema and queries
 internal/skill/     Skill discovery and activation
 internal/command/   Slash and custom commands
-internal/tui/       Charm terminal interface
+internal/ui/        Charm terminal interface
 internal/logging/   Per-run structured logs
 ```
 
@@ -521,7 +538,7 @@ go test ./internal/agent -run TestName
 go test -race ./...
 ```
 
-Glyphrun specs under `specs/glyphrun/` cover CLI help/version/init/log behavior plus TUI launch, narrow-terminal recovery, responsive help, and clean quit flows.
+Glyphrun specs under `specs/glyphrun/` cover CLI help/version/init/log behavior plus the normal-width launch, the 30×12 minimum, canonical command discovery, full-width narrow-terminal settings/help flow, and clean quits.
 
 With `qwen3.5:4b` installed in Ollama, run the opt-in live small-model/tool proof separately:
 

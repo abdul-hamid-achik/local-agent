@@ -204,6 +204,41 @@ func TestRouterUsesOnlyDiscoveredLocalModels(t *testing.T) {
 	}
 }
 
+func TestRouterNeverAutoSelectsInstalledExclusiveOrnith(t *testing.T) {
+	cfg := DefaultModelConfig()
+	r := NewRouter(&cfg)
+	r.SetAvailableModels([]string{"ornith:latest"})
+
+	for _, query := range []string{"what is Go", "implement a full stack system"} {
+		if got := r.SelectModelForMode(query, ModeBuildContext); got != "" {
+			t.Fatalf("auto-router selected exclusive Ornith for %q: %q", query, got)
+		}
+	}
+	if got := r.ResolveAvailableModel("ornith:latest"); got != "ornith:latest" {
+		t.Fatalf("explicit installed Ornith resolved to %q", got)
+	}
+}
+
+func TestRouterCustomExclusiveDefaultRequiresExplicitResolution(t *testing.T) {
+	cfg := ModelConfig{
+		AutoSelect:    true,
+		DefaultModel:  "ornith:latest",
+		FallbackChain: []string{"ornith:latest"},
+		Models: []Model{{
+			Name: "ornith:latest", Capability: CapabilitySimple, Exclusive: true,
+		}},
+	}
+	r := NewRouter(&cfg)
+	r.SetAvailableModels([]string{"ornith:latest"})
+
+	if got := r.SelectModel("what is Go"); got != "" {
+		t.Fatalf("custom auto-router selected exclusive default: %q", got)
+	}
+	if got := r.ResolveAvailableModel("ornith:latest"); got != "ornith:latest" {
+		t.Fatalf("explicit exclusive resolution = %q", got)
+	}
+}
+
 func TestRouterReturnsNoModelForKnownEmptyInventory(t *testing.T) {
 	cfg := DefaultModelConfig()
 	r := NewRouter(&cfg)

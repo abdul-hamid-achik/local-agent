@@ -2,7 +2,9 @@ version: 1
 name: local_agent_tui_narrow
 
 intent: |
-  a user can recover the local-agent TUI after narrowing the terminal, hide the sidebar, open responsive help, and quit cleanly.
+  a user can begin at the supported 30x12 minimum, then keep a full-width
+  conversation at 40 columns while navigating nested settings, completion,
+  runtime, and help modals before quitting cleanly.
 
 target:
   cmd: ["./bin/local-agent"]
@@ -28,21 +30,76 @@ steps:
         contains: "Ask, @mention files, or type /help"
       timeoutMs: 5000
   - resize:
+      cols: 30
+      rows: 12
+  - wait:
+      screen:
+        contains: "Ctrl+P settings"
+      timeoutMs: 2000
+  - snapshot: minimum_idle
+  - press: "ctrl+p"
+  - wait:
+      screen:
+        contains: "Settings"
+      timeoutMs: 2000
+  - snapshot: minimum_settings
+  - press: "esc"
+  - resize:
       cols: 40
       rows: 20
   - wait:
       screen:
-        contains: "Ctrl+B"
-      timeoutMs: 2000
-  - wait:
-      screen:
-        contains: "hide sidebar"
-      timeoutMs: 2000
-  - snapshot: narrow_recovery
-  - press: "ctrl+b"
-  - wait:
-      screen:
         contains: "LOCAL AGENT"
+      timeoutMs: 2000
+  - snapshot: narrow_compact
+  - press: "ctrl+p"
+  - wait:
+      screen:
+        contains: "Session Settings"
+      timeoutMs: 2000
+  - snapshot: narrow_settings
+  - press: "down"
+  - press: "down"
+  - press: "enter"
+  - wait:
+      screen:
+        contains: "Select Mode"
+      timeoutMs: 2000
+  - snapshot: narrow_mode
+  - press: "esc"
+  - wait:
+      screen:
+        contains: "Session Settings"
+      timeoutMs: 2000
+  - press: "down"
+  - press: "down"
+  - press: "down"
+  - press: "enter"
+  - wait:
+      screen:
+        contains: "Runtime Status"
+      timeoutMs: 2000
+  - snapshot: narrow_runtime
+  - press: "esc"
+  - wait:
+      screen:
+        contains: "Session Settings"
+      timeoutMs: 2000
+  - press: "esc"
+  - wait:
+      screen:
+        contains: "Ctrl+P settings"
+      timeoutMs: 2000
+  - press: "/"
+  - wait:
+      screen:
+        contains: "Commands"
+      timeoutMs: 2000
+  - snapshot: narrow_commands
+  - press: "esc"
+  - wait:
+      screen:
+        contains: "Ctrl+P settings"
       timeoutMs: 2000
   - press: "?"
   - wait:
@@ -58,14 +115,50 @@ steps:
       timeoutMs: 3000
 
 outcomes:
-  - id: narrow_recovery_is_discoverable
-    description: the narrow state explains how to recover the chat pane
+  - id: minimum_terminal_is_usable
+    description: the supported 30x12 terminal retains the primary prompt and settings path
     verify:
       snapshot:
-        name: narrow_recovery
+        name: minimum_idle
+        mode: text
+  - id: minimum_settings_are_bounded
+    description: settings remain navigable at the supported 30x12 minimum
+    verify:
+      snapshot:
+        name: minimum_settings
+        mode: text
+  - id: narrow_conversation_is_directly_usable
+    description: the conversation keeps the complete narrow terminal width without persistent chrome
+    verify:
+      snapshot:
+        name: narrow_compact
+        mode: text
+  - id: responsive_settings_open
+    description: session settings are reachable from the narrow composer
+    verify:
+      snapshot:
+        name: narrow_settings
+        mode: text
+  - id: nested_mode_returns_to_settings
+    description: a Settings child fits the narrow terminal and returns to the root palette
+    verify:
+      snapshot:
+        name: narrow_mode
+        mode: text
+  - id: responsive_runtime_status_opens
+    description: runtime status remains bounded and reachable from Settings
+    verify:
+      snapshot:
+        name: narrow_runtime
+        mode: text
+  - id: responsive_completion_opens
+    description: slash completion fits the supported 40-column terminal
+    verify:
+      snapshot:
+        name: narrow_commands
         mode: text
   - id: responsive_help_opens
-    description: help remains usable after the terminal is narrowed and the sidebar is hidden
+    description: help remains usable after the terminal is narrowed
     verify:
       snapshot:
         name: narrow_help

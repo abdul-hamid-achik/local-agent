@@ -20,7 +20,7 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 	"github.com/abdul-hamid-achik/local-agent/internal/mcp"
-	"github.com/abdul-hamid-achik/local-agent/internal/tui"
+	"github.com/abdul-hamid-achik/local-agent/internal/ui"
 )
 
 // skipIfNoOllama skips the test if Ollama is not running.
@@ -56,12 +56,12 @@ func TestTUI_Initialization(t *testing.T) {
 	ag := agent.New(modelManager, mcp.NewRegistry(), 262144)
 	ag.SetRouter(router)
 
-	completer := tui.NewCompleter(reg, []string{"qwen3.5:2b"}, nil, nil, nil)
-	m := tui.New(ag, reg, nil, completer, modelManager, router, nil)
+	completer := ui.NewCompleter(reg, []string{"qwen3.5:2b"}, nil, nil, nil)
+	m := ui.New(ag, reg, nil, completer, modelManager, router, nil)
 
 	// Simulate window size
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
-	m = updated.(*tui.Model)
+	m = updated.(*ui.Model)
 
 	if !m.Ready() {
 		t.Error("TUI should be ready after WindowSizeMsg")
@@ -82,12 +82,12 @@ func TestTUI_ScrollAnchorDuringStreaming(t *testing.T) {
 	ag := agent.New(modelManager, mcp.NewRegistry(), 262144)
 	ag.SetRouter(router)
 
-	completer := tui.NewCompleter(reg, []string{"qwen3.5:2b"}, nil, nil, nil)
-	m := tui.New(ag, reg, nil, completer, modelManager, router, nil)
+	completer := ui.NewCompleter(reg, []string{"qwen3.5:2b"}, nil, nil, nil)
+	m := ui.New(ag, reg, nil, completer, modelManager, router, nil)
 
 	// Initialize
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
-	m = updated.(*tui.Model)
+	m = updated.(*ui.Model)
 
 	// Verify anchor is active initially
 	if !m.AnchorActive() {
@@ -95,8 +95,8 @@ func TestTUI_ScrollAnchorDuringStreaming(t *testing.T) {
 	}
 
 	// Simulate streaming
-	updated, _ = m.Update(tui.StreamTextMsg{Text: "Hello"})
-	m = updated.(*tui.Model)
+	updated, _ = m.Update(ui.StreamTextMsg{Text: "Hello"})
+	m = updated.(*ui.Model)
 
 	// Anchor should still be active
 	if !m.AnchorActive() {
@@ -116,16 +116,16 @@ func TestTUI_OverlayRendering(t *testing.T) {
 	ag := agent.New(modelManager, mcp.NewRegistry(), 262144)
 	ag.SetRouter(router)
 
-	completer := tui.NewCompleter(reg, []string{"qwen3.5:2b"}, nil, nil, nil)
-	m := tui.New(ag, reg, nil, completer, modelManager, router, nil)
+	completer := ui.NewCompleter(reg, []string{"qwen3.5:2b"}, nil, nil, nil)
+	m := ui.New(ag, reg, nil, completer, modelManager, router, nil)
 
 	// Initialize
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
-	m = updated.(*tui.Model)
+	m = updated.(*ui.Model)
 
 	// Test help overlay
 	updated, _ = m.Update(tea.KeyPressMsg{Code: '?', Text: "?"})
-	m = updated.(*tui.Model)
+	m = updated.(*ui.Model)
 
 	view := m.View()
 	if view.Content == "" {
@@ -134,7 +134,7 @@ func TestTUI_OverlayRendering(t *testing.T) {
 
 	// Close overlay
 	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	m = updated.(*tui.Model)
+	m = updated.(*ui.Model)
 }
 
 // TestTUI_ToolCardRendering verifies tool cards render correctly
@@ -149,30 +149,30 @@ func TestTUI_ToolCardRendering(t *testing.T) {
 	ag := agent.New(modelManager, mcp.NewRegistry(), 262144)
 	ag.SetRouter(router)
 
-	completer := tui.NewCompleter(reg, []string{"qwen3.5:2b"}, nil, nil, nil)
-	m := tui.New(ag, reg, nil, completer, modelManager, router, nil)
+	completer := ui.NewCompleter(reg, []string{"qwen3.5:2b"}, nil, nil, nil)
+	m := ui.New(ag, reg, nil, completer, modelManager, router, nil)
 
 	// Initialize
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
-	m = updated.(*tui.Model)
+	m = updated.(*ui.Model)
 
 	// Simulate tool call
 	startTime := time.Now()
-	updated, _ = m.Update(tui.ToolCallStartMsg{
+	updated, _ = m.Update(ui.ToolCallStartMsg{
 		Name:      "read_file",
 		Args:      map[string]any{"path": "test.go"},
 		StartTime: startTime,
 	})
-	m = updated.(*tui.Model)
+	m = updated.(*ui.Model)
 
 	// Simulate tool result
-	updated, _ = m.Update(tui.ToolCallResultMsg{
+	updated, _ = m.Update(ui.ToolCallResultMsg{
 		Name:     "read_file",
 		Result:   "file content",
 		IsError:  false,
 		Duration: 100 * time.Millisecond,
 	})
-	m = updated.(*tui.Model)
+	m = updated.(*ui.Model)
 
 	// Verify view renders without panic
 	view := m.View()
@@ -270,12 +270,12 @@ func BenchmarkTUI_Render(b *testing.B) {
 	ag := agent.New(modelManager, mcp.NewRegistry(), 262144)
 	ag.SetRouter(router)
 
-	completer := tui.NewCompleter(reg, []string{"qwen3.5:2b"}, nil, nil, nil)
-	m := tui.New(ag, reg, nil, completer, modelManager, router, nil)
+	completer := ui.NewCompleter(reg, []string{"qwen3.5:2b"}, nil, nil, nil)
+	m := ui.New(ag, reg, nil, completer, modelManager, router, nil)
 
 	// Initialize
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
-	m = updated.(*tui.Model)
+	m = updated.(*ui.Model)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

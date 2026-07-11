@@ -35,6 +35,8 @@ tasks:
   glyphrun-snapshots:
     desc: Refresh committed Glyphrun terminal snapshots
     cmds:
+      - glyph snapshot update specs/glyphrun/tui_smoke.yml --format md
+      - glyph snapshot update specs/glyphrun/tui_narrow.yml --format md
       - glyph snapshot update specs/glyphrun/tui_help.yml --format md
 
   clean:

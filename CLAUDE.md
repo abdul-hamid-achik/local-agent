@@ -34,7 +34,7 @@ Go 1.25+ project implementing a local AI agent with a TUI chat interface, powere
 - **memory/** — Persistent key-value memory store (JSON-backed at `~/.config/local-agent/memories.json`). Tag-weighted search scoring (tags 3x content).
 - **skill/** — Discovers and loads `.md` skill files (with YAML frontmatter) from configurable directories. Skills inject instructions into the system prompt.
 - **command/** — Slash command registry (`/help`, `/clear`, `/model`, `/agent`, `/skill`, `/load`, `/context`, `/info`, `/quit`).
-- **tui/** — BubbleTea v2 terminal UI. State machine (Idle/Waiting/Streaming) with overlay system (None/Help/Completion). Renders markdown via Glamour.
+- **ui/** — Bubble Tea v2 terminal UI. State machine (Idle/Waiting/Streaming) with transient settings, model, profile, mode, session, runtime, help, and completion overlays. Renders markdown via Glamour.
 
 ### Request Flow
 

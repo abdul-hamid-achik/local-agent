@@ -109,7 +109,7 @@ func (r *Router) SelectModel(query string) string {
 		}
 	}
 
-	return r.ResolveAvailableModel(r.config.SelectModelForTask(string(complexity)))
+	return selectAvailableAutoModel(r.config.SelectModelForTask(string(complexity)), r.config, r.availableSnapshot())
 }
 
 func (r *Router) SelectModelForMode(query string, mode ModeContext) string {
@@ -225,7 +225,7 @@ func (r *Router) GetModelForCapability(capability ModelCapability) string {
 			}
 		}
 	}
-	return selectAvailableModel(r.config.DefaultModel, r.config, available)
+	return selectAvailableAutoModel(r.config.DefaultModel, r.config, available)
 }
 
 // SetAvailableModels installs the locally available Ollama model set used by

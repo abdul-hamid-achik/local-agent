@@ -1,0 +1,19 @@
+
+
+
+
+   ╭────────────────────────────────╮
+   │    Select Mode                 │
+   │                                │
+   │ │ ASK  ✓                       │
+   │ │ Read, search, and answer wi… │
+   │   PLAN                         │
+   │   Explore and design without … │
+   │   BUILD                        │
+   │   Edit, execute, and use appr… │
+   │ ↑/↓ · Enter · Esc back         │
+   ╰────────────────────────────────╯
+
+
+───────────────────────────────────────
+❯ Ask, @mention files, or type /help

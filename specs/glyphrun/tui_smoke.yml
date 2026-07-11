@@ -21,7 +21,7 @@ preconditions:
 steps:
   - wait:
       screen:
-        contains: "Welcome to LOCAL AGENT"
+        contains: "LOCAL AGENT"
       timeoutMs: 5000
   - snapshot: launch
   - press: "ctrl+c"
@@ -31,16 +31,17 @@ steps:
       timeoutMs: 3000
 
 outcomes:
+  - id: launch_snapshot_stable
+    description: the normal-width welcome uses the committed honest local-first copy
+    verify:
+      snapshot:
+        name: launch
+        mode: text
   - id: welcome_visible
     description: the TUI renders its welcome screen
     verify:
       screen:
-        contains: "Welcome to LOCAL AGENT"
-  - id: prompt_visible
-    description: the prompt hint is visible
-    verify:
-      screen:
-        contains: "Ask, @mention files, or type /help"
+        contains: "LOCAL AGENT"
   - id: ctrl_c_quits
     description: ctrl+c exits the TUI cleanly
     verify:

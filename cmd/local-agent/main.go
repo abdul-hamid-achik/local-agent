@@ -27,7 +27,7 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/memory"
 	"github.com/abdul-hamid-achik/local-agent/internal/permission"
 	"github.com/abdul-hamid-achik/local-agent/internal/skill"
-	"github.com/abdul-hamid-achik/local-agent/internal/tui"
+	"github.com/abdul-hamid-achik/local-agent/internal/ui"
 )
 
 var version = "dev"
@@ -283,7 +283,7 @@ func run() int {
 			fmt.Fprintf(os.Stderr, "agent profile: %v\n", err)
 			return 1
 		}
-		buildMode := tui.DefaultModeConfigs()[tui.ModeBuild]
+		buildMode := ui.DefaultModeConfigs()[ui.ModeBuild]
 		if explicitRouter, ok := router.(interface{ SetModeContext(config.ModeContext) }); ok {
 			explicitRouter.SetModeContext(buildMode.RouterMode)
 		}
@@ -377,7 +377,7 @@ func run() int {
 		}
 	}
 
-	completer := tui.NewCompleter(cmdReg, modelList, skillMgr.Names(), agentList, registry)
+	completer := ui.NewCompleter(cmdReg, modelList, skillMgr.Names(), agentList, registry)
 
 	logger, logFile, err := logging.NewSessionLogger()
 	if err != nil {
@@ -395,7 +395,7 @@ func run() int {
 		ag.SetLogger(logger)
 	}
 
-	m := tui.New(ag, cmdReg, skillMgr, completer, modelManager, router, logger)
+	m := ui.New(ag, cmdReg, skillMgr, completer, modelManager, router, logger)
 	m.SetModelPinned(modelPinned)
 	m.SetSessionStore(dbStore)
 	m.SetAgentProfileSource(agentsDir, baseLoadedContext, cfg.AgentProfile)
@@ -417,7 +417,7 @@ func run() int {
 			// kernel syscall or third-party transport defeats cancellation, a
 			// second signal remains an emergency termination path.
 			signal.Stop(sigCh)
-			p.Send(tui.ShutdownMsg{})
+			p.Send(ui.ShutdownMsg{})
 		case <-signalDone:
 		}
 	}()
@@ -430,17 +430,17 @@ func run() int {
 	go func() {
 		defer close(initDone)
 		if legacyMemoryNotice != "" {
-			p.Send(tui.StartupStatusMsg{ID: "legacy:memory", Label: "Legacy memory", Status: "failed", Detail: legacyMemoryNotice})
+			p.Send(ui.StartupStatusMsg{ID: "legacy:memory", Label: "Legacy memory", Status: "failed", Detail: legacyMemoryNotice})
 		}
 
 		// 1. Ping Ollama.
-		p.Send(tui.StartupStatusMsg{ID: "ollama", Label: "Ollama (" + modelName + ")", Status: "connecting"})
+		p.Send(ui.StartupStatusMsg{ID: "ollama", Label: "Ollama (" + modelName + ")", Status: "connecting"})
 		if err := modelManager.Ping(); err != nil {
-			p.Send(tui.StartupStatusMsg{ID: "ollama", Label: "Ollama (" + modelName + ")", Status: "failed", Detail: err.Error()})
-			p.Send(tui.ErrorMsg{Msg: fmt.Sprintf("ollama: %v\nhint: is `ollama serve` running? is %q pulled?", err, modelName)})
+			p.Send(ui.StartupStatusMsg{ID: "ollama", Label: "Ollama (" + modelName + ")", Status: "failed", Detail: err.Error()})
+			p.Send(ui.ErrorMsg{Msg: fmt.Sprintf("ollama: %v\nhint: is `ollama serve` running? is %q pulled?", err, modelName)})
 			// Continue — non-fatal for TUI, user can see the error.
 		} else {
-			p.Send(tui.StartupStatusMsg{ID: "ollama", Label: "Ollama (" + modelName + ")", Status: "connected"})
+			p.Send(ui.StartupStatusMsg{ID: "ollama", Label: "Ollama (" + modelName + ")", Status: "connected"})
 		}
 
 		// 2. Connect MCP servers in parallel.
@@ -452,15 +452,15 @@ func run() int {
 			wg.Add(1)
 			go func(s config.ServerConfig) {
 				defer wg.Done()
-				p.Send(tui.StartupStatusMsg{ID: "mcp:" + s.Name, Label: s.Name, Status: "connecting"})
+				p.Send(ui.StartupStatusMsg{ID: "mcp:" + s.Name, Label: s.Name, Status: "connecting"})
 				if initCtx.Err() != nil {
 					return
 				}
 				toolCount, err := registry.ConnectServer(initCtx, s)
 				if err != nil {
-					p.Send(tui.StartupStatusMsg{ID: "mcp:" + s.Name, Label: s.Name, Status: "failed", Detail: err.Error()})
+					p.Send(ui.StartupStatusMsg{ID: "mcp:" + s.Name, Label: s.Name, Status: "failed", Detail: err.Error()})
 				} else {
-					p.Send(tui.StartupStatusMsg{ID: "mcp:" + s.Name, Label: s.Name, Status: "connected", Detail: fmt.Sprintf("%d tools", toolCount)})
+					p.Send(ui.StartupStatusMsg{ID: "mcp:" + s.Name, Label: s.Name, Status: "connected", Detail: fmt.Sprintf("%d tools", toolCount)})
 				}
 			}(srv)
 		}
@@ -484,10 +484,10 @@ func run() int {
 		var iceConversations int
 		var iceSessionID string
 		if cfg.ICE.Enabled && workspace != "" {
-			p.Send(tui.StartupStatusMsg{ID: "ice", Label: "ICE", Status: "connecting"})
+			p.Send(ui.StartupStatusMsg{ID: "ice", Label: "ICE", Status: "connecting"})
 			iceEngine, err := ice.NewEngine(modelManager, memStore, resolvedICEEngineConfig(cfg, workspace, iceStorePath))
 			if err != nil {
-				p.Send(tui.StartupStatusMsg{ID: "ice", Label: "ICE", Status: "failed", Detail: err.Error()})
+				p.Send(ui.StartupStatusMsg{ID: "ice", Label: "ICE", Status: "failed", Detail: err.Error()})
 			} else {
 				ag.SetICEEngine(iceEngine)
 				iceEnabled = true
@@ -501,10 +501,10 @@ func run() int {
 				case !preview.AlreadyClaimed && preview.Count > 0:
 					detail += fmt.Sprintf("; %d legacy entries quarantined — /migrate-ice", preview.Count)
 				}
-				p.Send(tui.StartupStatusMsg{ID: "ice", Label: "ICE", Status: "connected", Detail: detail})
+				p.Send(ui.StartupStatusMsg{ID: "ice", Label: "ICE", Status: "connected", Detail: detail})
 			}
 		} else if cfg.ICE.Enabled {
-			p.Send(tui.StartupStatusMsg{ID: "ice", Label: "ICE", Status: "failed", Detail: "workspace identity unavailable; legacy retrieval disabled"})
+			p.Send(ui.StartupStatusMsg{ID: "ice", Label: "ICE", Status: "failed", Detail: "workspace identity unavailable; legacy retrieval disabled"})
 		}
 
 		// 4. Load context and agent profile.
@@ -512,19 +512,19 @@ func run() int {
 		if err := applyInitialAgentProfile(ag, skillMgr, modelManager, agentsDir, baseLoadedContext, cfg.AgentProfile); err != nil {
 			ag.DenyAllMCPTools()
 			activeAgentProfile = ""
-			p.Send(tui.ErrorMsg{Msg: fmt.Sprintf("agent profile: %v", err)})
+			p.Send(ui.ErrorMsg{Msg: fmt.Sprintf("agent profile: %v", err)})
 		}
 
 		// 5. Collect results and send InitCompleteMsg.
-		var failedServers []tui.FailedServer
+		var failedServers []ui.FailedServer
 		for _, fs := range registry.FailedServers() {
-			failedServers = append(failedServers, tui.FailedServer{
+			failedServers = append(failedServers, ui.FailedServer{
 				Name:   fs.Name,
 				Reason: fs.Reason,
 			})
 		}
 
-		p.Send(tui.InitCompleteMsg{
+		p.Send(ui.InitCompleteMsg{
 			Model:            modelName,
 			ModelList:        modelList,
 			AgentProfile:     activeAgentProfile,

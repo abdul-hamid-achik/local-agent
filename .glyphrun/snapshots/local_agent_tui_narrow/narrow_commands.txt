@@ -1,0 +1,19 @@
+
+   ╭────────────────────────────────╮
+   │ Commands                       │
+   │ > type to filter...            │
+   │ ────────────────────────────── │
+   │ ▸ /help · Show help overlay w… │
+   │   /clear · Clear conversation… │
+   │   /new · Start a fresh conver… │
+   │   /model · Show, switch, or l… │
+   │   /models · Open model picker  │
+   │   /agent · Show or switch age… │
+   │   /load · Load a markdown fil… │
+   │   /unload · Remove loaded con… │
+   │   /skill · Manage skills (lis… │
+   │   /servers · List connected M… │
+   │ Esc cancel · Enter select      │
+   ╰────────────────────────────────╯
+───────────────────────────────────────
+❯ /

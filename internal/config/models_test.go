@@ -123,6 +123,31 @@ func TestModelConfig_GetModel(t *testing.T) {
 	}
 }
 
+func TestDefaultModelsIncludeOrnithManualExclusiveProfile(t *testing.T) {
+	cfg := DefaultModelConfig()
+	model, err := cfg.GetModel("ornith:latest")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if model.Family != FamilyQwen35 {
+		t.Fatalf("family = %q, want %q", model.Family, FamilyQwen35)
+	}
+	if model.DisplayName != "Ornith 9B (exclusive)" || model.Size != "5.6GB Q4" || model.Parameters != "9 billion" {
+		t.Fatalf("identity metadata = %#v", model)
+	}
+	if model.ContextSize != 262144 || model.Capability != CapabilityAdvanced {
+		t.Fatalf("execution metadata = %#v", model)
+	}
+	if model.Default || !model.Exclusive {
+		t.Fatalf("manual-exclusive flags = default:%v exclusive:%v", model.Default, model.Exclusive)
+	}
+	wantUseCases := []string{"advanced_coding", "multi_file_edits", "architecture", "deep_review", "explicit_profile"}
+	if !reflect.DeepEqual(model.UseCases, wantUseCases) {
+		t.Fatalf("use cases = %#v, want %#v", model.UseCases, wantUseCases)
+	}
+}
+
 func TestModelConfig_GetDefaultModel(t *testing.T) {
 	tests := []struct {
 		name string
@@ -206,6 +231,29 @@ func TestModelConfig_SelectModelForTask(t *testing.T) {
 	}
 }
 
+func TestModelConfigAutoSelectNeverReturnsExclusiveFallback(t *testing.T) {
+	exclusiveOnly := ModelConfig{
+		AutoSelect:   true,
+		DefaultModel: "ornith:latest",
+		Models: []Model{{
+			Name: "ornith:latest", Capability: CapabilitySimple, Exclusive: true,
+		}},
+	}
+	for _, complexity := range []string{"simple", "unknown"} {
+		if got := exclusiveOnly.SelectModelForTask(complexity); got != "" {
+			t.Fatalf("exclusive-only %s routing selected %q", complexity, got)
+		}
+	}
+
+	withSafeFallback := exclusiveOnly
+	withSafeFallback.Models = append(withSafeFallback.Models, Model{
+		Name: "qwen3.5:2b", Capability: CapabilityMedium,
+	})
+	if got := withSafeFallback.SelectModelForTask("simple"); got != "qwen3.5:2b" {
+		t.Fatalf("safe fallback = %q, want qwen3.5:2b", got)
+	}
+}
+
 func TestAvailableLocalChatModelsUsesSafeCatalogOrder(t *testing.T) {
 	cfg := DefaultModelConfig()
 	discovered := []string{
@@ -214,6 +262,7 @@ func TestAvailableLocalChatModelsUsesSafeCatalogOrder(t *testing.T) {
 		"gemma4:e4b",
 		"gemma4:e2b",
 		"qwen3.5:9b",
+		"ornith:latest",
 		"qwen3.5:4b",
 		"qwen3.5:0.8b",
 		"qwen3.5:2b",
@@ -225,10 +274,21 @@ func TestAvailableLocalChatModelsUsesSafeCatalogOrder(t *testing.T) {
 		"qwen3.5:2b",
 		"qwen3.5:4b",
 		"qwen3.5:9b",
+		"ornith:latest",
 		"gemma4:e2b",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("chat models = %#v, want %#v", got, want)
+	}
+}
+
+func TestAvailableLocalChatModelsRequiresOrnithInstalled(t *testing.T) {
+	cfg := DefaultModelConfig()
+	if got := cfg.AvailableLocalChatModels([]string{"qwen3.5:2b"}); !reflect.DeepEqual(got, []string{"qwen3.5:2b"}) {
+		t.Fatalf("absent Ornith leaked into discovery: %#v", got)
+	}
+	if got := cfg.AvailableLocalChatModels([]string{"ornith:latest"}); !reflect.DeepEqual(got, []string{"ornith:latest"}) {
+		t.Fatalf("installed Ornith was not exposed for manual selection: %#v", got)
 	}
 }
 

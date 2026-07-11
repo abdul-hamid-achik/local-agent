@@ -190,6 +190,41 @@ func TestQwenRouterMapsComplexityAndAvailability(t *testing.T) {
 	}
 }
 
+func TestQwenRouterNeverAutoSelectsInstalledExclusiveOrnith(t *testing.T) {
+	cfg := DefaultModelConfig()
+	router := NewQwenModelRouter(&cfg)
+	router.SetAvailableModels([]string{"ornith:latest"})
+
+	for _, query := range []string{"what is Go", "implement a full stack system"} {
+		if got := router.SelectModelForMode(query, ModeBuildContext); got != "" {
+			t.Fatalf("Qwen auto-router selected exclusive Ornith for %q: %q", query, got)
+		}
+	}
+	if got := router.ResolveAvailableModel("ornith:latest"); got != "ornith:latest" {
+		t.Fatalf("explicit installed Ornith resolved to %q", got)
+	}
+}
+
+func TestQwenRouterCustomExclusiveDefaultRequiresExplicitResolution(t *testing.T) {
+	cfg := ModelConfig{
+		AutoSelect:    true,
+		DefaultModel:  "ornith:latest",
+		FallbackChain: []string{"ornith:latest"},
+		Models: []Model{{
+			Name: "ornith:latest", Capability: CapabilitySimple, Exclusive: true,
+		}},
+	}
+	router := NewQwenModelRouter(&cfg)
+	router.SetAvailableModels([]string{"ornith:latest"})
+
+	if got := router.SelectModel("what is Go"); got != "" {
+		t.Fatalf("custom Qwen auto-router selected exclusive default: %q", got)
+	}
+	if got := router.ResolveAvailableModel("ornith:latest"); got != "ornith:latest" {
+		t.Fatalf("explicit exclusive resolution = %q", got)
+	}
+}
+
 func TestQwenRouterReturnsNoModelForKnownEmptyInventory(t *testing.T) {
 	cfg := DefaultModelConfig()
 	router := NewQwenModelRouter(&cfg)

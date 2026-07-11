@@ -168,6 +168,20 @@ func DefaultModels() []Model {
 			Exclusive:   true,
 		},
 		{
+			Name:        "ornith:latest",
+			Family:      FamilyQwen35,
+			DisplayName: "Ornith 9B (exclusive)",
+			Size:        "5.6GB Q4",
+			Parameters:  "9 billion",
+			ContextSize: 262144,
+			Capability:  CapabilityAdvanced,
+			Speed:       0.8,
+			UseCases:    []string{"advanced_coding", "multi_file_edits", "architecture", "deep_review", "explicit_profile"},
+			Description: "Qwen 3.5-derived advanced coding model; manual exclusive profile with runtime context clamped by Ollama num_ctx",
+			Default:     false,
+			Exclusive:   true,
+		},
+		{
 			Name:        "gemma4:e2b",
 			Family:      FamilyGemma,
 			DisplayName: "Gemma 4 E2B",
@@ -257,8 +271,11 @@ func CanonicalModelName(name string) string {
 }
 
 func (mc *ModelConfig) SelectModelForTask(taskComplexity string) string {
-	if !mc.AutoSelect || len(mc.Models) == 0 {
+	if !mc.AutoSelect {
 		return mc.DefaultModel
+	}
+	if len(mc.Models) == 0 {
+		return ""
 	}
 
 	switch taskComplexity {
@@ -274,7 +291,7 @@ func (mc *ModelConfig) SelectModelForTask(taskComplexity string) string {
 		return mc.firstSafe(CapabilityComplex, mc.DefaultModel)
 	}
 
-	return mc.DefaultModel
+	return mc.autoSafeFallback(mc.DefaultModel)
 }
 
 // firstSafe returns the first model at the given capability that is memory-safe
@@ -286,7 +303,36 @@ func (mc *ModelConfig) firstSafe(cap ModelCapability, fallbackName string) strin
 			return m.Name
 		}
 	}
-	return fallbackName
+	return mc.autoSafeFallback(fallbackName)
+}
+
+// autoSafeFallback returns a configured, non-exclusive, memory-safe model.
+// Automatic routing must never inherit a manual-exclusive default from a
+// custom catalog merely because no exact capability tier was found.
+func (mc *ModelConfig) autoSafeFallback(preferred string) string {
+	wanted := CanonicalModelName(preferred)
+	known := false
+	for _, model := range mc.Models {
+		if CanonicalModelName(model.Name) == wanted {
+			known = true
+			if !model.Exclusive && CheckModelMemorySafe(model.Name) == nil {
+				return model.Name
+			}
+			break
+		}
+	}
+	// A custom default does not have exclusivity metadata when it is absent
+	// from the catalog. Preserve that existing extension point while retaining
+	// the global cloud/size guard.
+	if !known && preferred != "" && CheckModelMemorySafe(preferred) == nil {
+		return preferred
+	}
+	for _, model := range mc.Models {
+		if !model.Exclusive && CheckModelMemorySafe(model.Name) == nil {
+			return model.Name
+		}
+	}
+	return ""
 }
 
 // AvailableLocalChatModels intersects the configured chat catalog with the
@@ -371,6 +417,13 @@ func selectAvailableModel(preferred string, mc *ModelConfig, available map[strin
 		}
 	}
 	return ""
+}
+
+// selectAvailableAutoModel applies catalog safety before availability
+// fallback. Explicit resolution intentionally uses selectAvailableModel so a
+// user can still pin a locally installed manual-exclusive profile.
+func selectAvailableAutoModel(preferred string, mc *ModelConfig, available map[string]struct{}) string {
+	return selectAvailableModel(mc.autoSafeFallback(preferred), mc, available)
 }
 
 func (mc *ModelConfig) isExclusive(name string) bool {

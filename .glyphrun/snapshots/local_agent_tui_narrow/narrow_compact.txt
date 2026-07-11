@@ -1,0 +1,19 @@
+
+
+
+
+
+              LOCAL AGENT
+    Local-first · tool effects ask
+           ASK · qwen3.5:2b
+ Enter send · Ctrl+P settings · ? help
+    / commands · @ files · # skills
+
+
+
+
+
+
+
+───────────────────────────────────────
+❯ Ask, @mention files, or type /help

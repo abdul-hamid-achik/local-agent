@@ -21,7 +21,7 @@ preconditions:
 steps:
   - wait:
       screen:
-        contains: "Welcome to LOCAL AGENT"
+        contains: "LOCAL AGENT"
       timeoutMs: 5000
   - press: "?"
   - wait:
@@ -38,7 +38,7 @@ steps:
   - press: "q"
   - wait:
       screen:
-        contains: "Welcome to LOCAL AGENT"
+        contains: "LOCAL AGENT"
       timeoutMs: 3000
   - press: "ctrl+c"
   - wait:
@@ -59,11 +59,6 @@ outcomes:
       snapshot:
         name: help_commands
         mode: text
-  - id: returned_home
-    description: closing help returns to the main welcome screen
-    verify:
-      screen:
-        contains: "Welcome to LOCAL AGENT"
   - id: ctrl_c_quits
     description: ctrl+c exits the TUI cleanly after help is closed
     verify:

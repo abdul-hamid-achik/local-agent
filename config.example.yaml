@@ -6,9 +6,10 @@ ollama:
   # tool calling and is the safe default for 16GB. You CAN switch to qwen3.5:4b
   # (~3.4GB) for more reliable multi-step tool chains — still safe on 16GB.
   #
-  # On 16GB, qwen3.5:9b and gemma4:e2b are manual EXCLUSIVE profiles: the
-  # runtime unloads the prior chat model before switching and the router never
-  # auto-selects them. Gemma E4B+, >=10B tiers, and cloud models stay blocked.
+  # On 16GB, qwen3.5:9b, ornith:latest, and gemma4:e2b are manual EXCLUSIVE
+  # profiles: the runtime unloads the prior chat model before switching and the
+  # router never auto-selects them. Gemma E4B+, >=10B tiers, and cloud models
+  # stay blocked.
   model: "qwen3.5:2b"
   base_url: "http://localhost:11434"
   # num_ctx is the KV-cache allocation (NOT the model's 256K max context). It
@@ -26,8 +27,8 @@ ollama:
 privacy:
   local_only: true
 
-# Auto-routing uses installed, non-exclusive compact tiers only. Qwen 9B and
-# Gemma E2B remain available for an explicit deep-task profile.
+# Auto-routing uses installed, non-exclusive compact tiers only. Qwen 9B,
+# Ornith 9B, and Gemma E2B remain available for an explicit deep-task profile.
 model:
   models:
     - name: "qwen3.5:0.8b"   # trivial: routing/classification only — weak at tools
@@ -50,6 +51,13 @@ model:
     - name: "qwen3.5:9b"
       family: "qwen3.5"
       size: "6.6GB"
+      capability: "advanced"
+      exclusive: true
+    - name: "ornith:latest"  # Qwen 3.5-derived 9B coding model; observed Q4 weights
+      family: "qwen3.5"
+      size: "5.6GB Q4"
+      parameters: "9 billion"
+      context_size: 262144   # model max; runtime allocation remains ollama.num_ctx
       capability: "advanced"
       exclusive: true
     - name: "gemma4:e2b"

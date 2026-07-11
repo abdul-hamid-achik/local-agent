@@ -1,0 +1,81 @@
+package ui
+
+import (
+	"strings"
+	"testing"
+
+	tea "charm.land/bubbletea/v2"
+)
+
+func TestMultilineComposerCostsOneViewportRowPerLine(t *testing.T) {
+	for _, width := range []int{80, 60, 40} {
+		m := newTestModel(t)
+		updated, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: 20})
+		m = updated.(*Model)
+		initial := m.viewport.Height()
+
+		m.input.SetValue("one\ntwo\nthree")
+		m.syncInputHeight()
+		if got, want := m.viewport.Height(), initial-2; got != want {
+			t.Fatalf("width %d: three-line viewport height = %d, want %d", width, got, want)
+		}
+
+		m.input.SetValue("one")
+		m.syncInputHeight()
+		if got := m.viewport.Height(); got != initial {
+			t.Fatalf("width %d: collapsed composer height = %d, want %d", width, got, initial)
+		}
+	}
+}
+
+func TestHeightOnlyResizePreservesRenderedCaches(t *testing.T) {
+	m := newTestModel(t)
+	m.entries = []ChatEntry{{
+		Kind: "assistant", Content: "cached answer", RenderedContent: "cached answer",
+	}}
+	m.viewport.SetContent(m.renderEntries())
+	if !m.entryCacheValid {
+		t.Fatal("precondition: entry cache should be valid")
+	}
+	markdown := m.md
+	rendered := m.entries[0].RenderedContent
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: m.width, Height: m.height + 5})
+	m = updated.(*Model)
+
+	if m.md != markdown {
+		t.Fatal("height-only resize recreated the markdown renderer")
+	}
+	if m.entries[0].RenderedContent != rendered {
+		t.Fatal("height-only resize rebuilt completed assistant markdown")
+	}
+	if !m.entryCacheValid {
+		t.Fatal("height-only resize invalidated the transcript entry cache")
+	}
+}
+
+func TestMouseHitTestingStartsAtViewportRowZero(t *testing.T) {
+	m := newTestModel(t)
+	m.toolEntries = []ToolEntry{{Collapsed: true}}
+	m.toolEntryRows = map[int]int{0: 0}
+	m.handleMouseClick(0, 0)
+	if m.toolEntries[0].Collapsed {
+		t.Fatal("row-zero tool card was not toggled")
+	}
+
+	m.viewport.SetContent(strings.Repeat("line\n", 100))
+	m.viewport.SetYOffset(3)
+	m.toolEntries[0].Collapsed = true
+	m.toolEntryRows[0] = 3
+	m.handleMouseClick(0, 0)
+	if m.toolEntries[0].Collapsed {
+		t.Fatal("scrolled row-zero tool card was not toggled")
+	}
+}
+
+func TestModeReceiptDoesNotGrowViewBeyondTerminal(t *testing.T) {
+	m := newTestModel(t)
+	m.setMode(ModePlan)
+	view := m.View().Content
+	assertRenderedHeightFits(t, view, m.height)
+}

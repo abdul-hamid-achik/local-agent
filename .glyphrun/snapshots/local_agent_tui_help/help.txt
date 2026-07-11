@@ -1,5 +1,4 @@
-                              │
-  LOCAL AGENT                 │                            ╦  ╔═╗╔═╗╔═╗╦    ╔═╗╔═╗╔═╗╔╗╔╔╦╗
+
                            ╭────────────────────────────────────────────────────────────────╮
                            │                                                                │
                            │  Help                                                          │
@@ -8,14 +7,15 @@
                            │    enter             Send message                              │
                            │    shift+enter       New line in input                         │
                            │    shift+tab         Cycle mode (ASK/PLAN/BUILD)               │
+                           │    ctrl+p            Open session settings                     │
                            │    ctrl+m            Quick model switch                        │
                            │    esc               Cancel streaming / close overlay          │
                            │    ctrl+c            Quit                                      │
                            │    ctrl+l            Clear screen (keep history)               │
                            │    ctrl+n            New conversation                          │
                            │    ?                 Toggle this help (when input empty)       │
-                           │    t                 Expand/collapse all tools                 │
-                           │    space             Toggle last tool details                  │
+                           │    t                 Expand/collapse tools (input empty)       │
+                           │    space             Toggle last tool (input empty)            │
                            │    ctrl+y            Copy last response                        │
                            │    ctrl+t            Toggle thinking display                   │
                            │    ctrl+k            Toggle compact mode                       │
@@ -29,8 +29,7 @@
                            │    @file             Attach file or agent                      │
                            │    #skill            Activate skill                            │
                            │    /cmd              Run slash command                         │
-                           │                                                                │
-                           │  ↓ scroll for more                                             │
+                           │  Esc/q close · ↓ more                                          │
                            │                                                                │
                            ╰────────────────────────────────────────────────────────────────╯
-                              │
+❯ Ask, @mention files, or type /help

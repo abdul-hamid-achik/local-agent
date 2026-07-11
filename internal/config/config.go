@@ -242,10 +242,10 @@ func isLocalHost(host string) bool {
 }
 
 // CheckModelMemorySafe rejects cloud and clearly oversized local tiers. The
-// 9B Qwen and Gemma E2B profiles are allowed as explicit exclusive profiles;
-// the router never auto-selects them and ModelManager unloads the previous chat
-// model before switching. Override the remaining guard only for measured
-// hardware profiles with LOCAL_AGENT_ALLOW_LARGE_MODELS=1.
+// 9B Qwen/Ornith and Gemma E2B profiles are allowed as explicit exclusive
+// profiles; the router never auto-selects them and ModelManager unloads the
+// previous chat model before switching. Override the remaining guard only for
+// measured hardware profiles with LOCAL_AGENT_ALLOW_LARGE_MODELS=1.
 func CheckModelMemorySafe(model string) error {
 	// A hardware override may relax RAM limits, but it must never turn a cloud
 	// alias into an allowed model for this local-only harness.
@@ -255,7 +255,7 @@ func CheckModelMemorySafe(model string) error {
 	if largeModelsAllowed() || !isMemoryRiskyModel(model) {
 		return nil
 	}
-	return fmt.Errorf("model %q is not enabled for this local profile — cloud models and local tiers >=10B (including Gemma E4B+) can exhaust a 16GB machine. Use Qwen 0.8B/2B/4B, Phi-4 Mini, or an explicit exclusive Qwen 9B/Gemma E2B profile. To override after measuring headroom, set LOCAL_AGENT_ALLOW_LARGE_MODELS=1", model)
+	return fmt.Errorf("model %q is not enabled for this local profile — cloud models and local tiers >=10B (including Gemma E4B+) can exhaust a 16GB machine. Use Qwen 0.8B/2B/4B, Phi-4 Mini, or an explicit exclusive Qwen/Ornith 9B or Gemma E2B profile. To override after measuring headroom, set LOCAL_AGENT_ALLOW_LARGE_MODELS=1", model)
 }
 
 const maxDefaultLocalModelBytes int64 = 8 << 30
@@ -291,8 +291,8 @@ func largeModelsAllowed() bool {
 var paramBPattern = regexp.MustCompile(`(\d+(?:\.\d+)?)\s*b\b`)
 
 // isMemoryRiskyModel reports whether a model should remain blocked even from
-// ordinary manual selection on a 16GB profile. Qwen 9B and Gemma E2B are
-// handled as exclusive profiles; larger Gemma tiers and >=10B tags remain
+// ordinary manual selection on a 16GB profile. Qwen/Ornith 9B and Gemma E2B
+// are handled as exclusive profiles; larger Gemma tiers and >=10B tags remain
 // guarded, and cloud entries are always rejected in local-only mode.
 func isMemoryRiskyModel(model string) bool {
 	m := strings.ToLower(model)

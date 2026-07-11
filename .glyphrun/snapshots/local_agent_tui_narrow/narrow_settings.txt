@@ -1,0 +1,19 @@
+
+
+
+   ╭────────────────────────────────╮
+   │    Session Settings            │
+   │ │ Model  ·  Auto · qwen3.5:2b  │
+   │   Agent profile  ·  Default    │
+   │   Mode  ·  ASK                 │
+   │   Sessions  ·  Resume          │
+   │   Compact layout  ·  Auto      │
+   │   Runtime status  ·  0 server… │
+   │   Help  ·  Shortcuts           │
+   │                                │
+   │   Choose an installed local m… │
+   │ ↑/↓ · Enter · Esc close        │
+   ╰────────────────────────────────╯
+
+───────────────────────────────────────
+❯ Ask, @mention files, or type /help

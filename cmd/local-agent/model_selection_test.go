@@ -75,6 +75,20 @@ func TestResolveStartupModelAcceptsPinnedImplicitLatestTag(t *testing.T) {
 	}
 }
 
+func TestResolveStartupModelAcceptsPinnedOrnith(t *testing.T) {
+	cfg := config.DefaultModelConfig()
+	router := &selectionRouterStub{resolved: "qwen3.5:2b"}
+	selected, models, err := resolveStartupModel(
+		"ornith:latest", true, true, &cfg, []string{"ornith:latest"}, true, router,
+	)
+	if err != nil {
+		t.Fatalf("installed Ornith pin rejected: %v", err)
+	}
+	if selected != "ornith:latest" || !reflect.DeepEqual(models, []string{"ornith:latest"}) {
+		t.Fatalf("selection = %q, models=%#v", selected, models)
+	}
+}
+
 func TestResolveStartupModelEmptyInventoryAndOfflineDiagnostics(t *testing.T) {
 	cfg := config.DefaultModelConfig()
 	router := &selectionRouterStub{resolved: ""}

@@ -1,0 +1,19 @@
+
+
+
+
+   ╭────────────────────────────────╮
+   │ Runtime Status                 │
+   │                                │
+   │ Model  Auto · qwen3.5:2b       │
+   │ Profile  Default               │
+   │ Mode  ASK                      │
+   │ Tools  19 across 0 MCP servers │
+   │ ICE  disabled                  │
+   │ Esc/q back                     │
+   ╰────────────────────────────────╯
+
+
+
+───────────────────────────────────────
+❯ Ask, @mention files, or type /help

@@ -177,7 +177,7 @@ func TestMemoryRiskyModelGuard(t *testing.T) {
 			t.Errorf("expected %q to be flagged memory-risky", m)
 		}
 	}
-	safe := []string{"qwen3.5:0.8b", "qwen3.5:2b", "qwen3.5:4b", "qwen3.5:9b", "gemma4:e2b", "phi4-mini", "nomic-embed-text"}
+	safe := []string{"qwen3.5:0.8b", "qwen3.5:2b", "qwen3.5:4b", "qwen3.5:9b", "ornith:latest", "gemma4:e2b", "phi4-mini", "nomic-embed-text"}
 	for _, m := range safe {
 		if isMemoryRiskyModel(m) {
 			t.Errorf("expected %q to be safe", m)

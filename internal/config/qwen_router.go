@@ -150,7 +150,7 @@ func (r *QwenModelRouter) SelectModel(query string) string {
 	case QwenAdvanced:
 		genericComplexity = ComplexityAdvanced
 	}
-	return r.ResolveAvailableModel(r.config.SelectModelForTask(string(genericComplexity)))
+	return selectAvailableAutoModel(r.config.SelectModelForTask(string(genericComplexity)), r.config, r.availableSnapshot())
 }
 
 // SelectModelForMode returns the optimal model for the current mode and query
@@ -170,7 +170,7 @@ func (r *QwenModelRouter) GetModelForCapability(capability ModelCapability) stri
 			}
 		}
 	}
-	return selectAvailableModel(r.config.DefaultModel, r.config, available)
+	return selectAvailableAutoModel(r.config.DefaultModel, r.config, available)
 }
 
 func (r *QwenModelRouter) SetAvailableModels(models []string) {
@@ -386,7 +386,7 @@ func (r *QwenModelRouter) SelectAvailableModelForTask(ctx context.Context, pinge
 	preferred := r.SelectModel(query)
 
 	// Qwen-optimized fallback chain. Capped at the 4B tier: larger local
-	// models (9B, Gemma ~7GB) exhaust memory on a 16GB Mac and can crash it.
+	// profiles (Qwen/Ornith 9B, Gemma ~7GB) are manual-exclusive on 16GB.
 	fallbackOrder := []string{
 		preferred,
 		"qwen3.5:2b",
@@ -422,7 +422,7 @@ func (r *QwenModelRouter) GetRecommendedModel(query string) (model string, reaso
 		model = "qwen3.5:4b"
 		reason = "moderate complexity - multi-step reasoning"
 	case QwenAdvanced:
-		// Capped at 4B: 9B/Gemma exhaust memory on a 16GB Mac.
+		// Capped at 4B: Qwen/Ornith 9B and Gemma are manual-exclusive on 16GB.
 		model = "qwen3.5:4b"
 		reason = "advanced task - largest memory-safe local model (4B)"
 	}

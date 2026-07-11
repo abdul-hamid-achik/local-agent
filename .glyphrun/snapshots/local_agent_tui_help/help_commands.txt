@@ -1,8 +1,8 @@
-                              │
-  LOCAL AGENT                 │                            ╦  ╔═╗╔═╗╔═╗╦    ╔═╗╔═╗╔═╗╔╗╔╔╦╗
+
                            ╭────────────────────────────────────────────────────────────────╮
                            │                                                                │
                            │  Help                                                          │
+                           │                                                                │
                            │                                                                │
                            │  Slash Commands                                                │
                            │    /help             Show help overlay with shortcuts and      │
@@ -29,8 +29,7 @@
                            │                      v2 transcript                             │
                            │    /import           Import a typed v2 transcript into a       │
                            │                      fresh session                             │
-                           │    /checkpoint       Save a checkpoint of the current          │
-                           │  67% · j/k to scroll                                           │
+                           │  Esc/q close · 65% · j/k                                       │
                            │                                                                │
                            ╰────────────────────────────────────────────────────────────────╯
-                              │
+❯ Ask, @mention files, or type /help

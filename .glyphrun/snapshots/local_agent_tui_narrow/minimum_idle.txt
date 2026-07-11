@@ -1,0 +1,11 @@
+
+         LOCAL AGENT
+ Local-first · approvals on
+      ASK · qwen3.5:2b
+   Enter · Ctrl+P settings
+       ? help · / @ #
+
+
+
+─────────────────────────────
+❯ Ask or type / for commands

@@ -1,0 +1,11 @@
+   ╭──────────────────────╮
+   │    Settings ↑↓↵⎋     │
+   │ │ Model  ·  Auto · … │
+   │   Agent profile  · … │
+   │   Mode  ·  ASK       │
+   │   Sessions  ·  Resu… │
+   │   Compact layout  ·… │
+   │   Runtime status  ·… │
+   │   Help  ·  Shortcuts │
+   │   Choose an install… │
+   ╰──────────────────────╯
