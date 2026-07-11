@@ -44,7 +44,7 @@ func TestHeadlessOutput_ToolCallStart(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	out := newHeadlessOutput(&stdout, &stderr)
 
-	out.ToolCallStart("read_file", map[string]any{"path": "/tmp/test.go"})
+	out.ToolCallStart("call-1", "read_file", map[string]any{"path": "/tmp/test.go"})
 
 	if stdout.Len() != 0 {
 		t.Errorf("ToolCallStart: unexpected stdout output: %q", stdout.String())
@@ -62,7 +62,7 @@ func TestHeadlessOutput_ToolCallResult(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	out := newHeadlessOutput(&stdout, &stderr)
 
-	out.ToolCallResult("read_file", "file contents here", false, 150*time.Millisecond)
+	out.ToolCallResult("call-1", "read_file", "file contents here", false, 150*time.Millisecond)
 
 	if stdout.Len() != 0 {
 		t.Errorf("ToolCallResult: unexpected stdout output: %q", stdout.String())
@@ -83,7 +83,7 @@ func TestHeadlessOutput_ToolCallResult_Error(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	out := newHeadlessOutput(&stdout, &stderr)
 
-	out.ToolCallResult("write_file", "permission denied", true, 50*time.Millisecond)
+	out.ToolCallResult("call-1", "write_file", "permission denied", true, 50*time.Millisecond)
 
 	got := stderr.String()
 	if !strings.Contains(got, "ERROR") {
@@ -96,7 +96,7 @@ func TestHeadlessOutput_ToolCallResult_LongResult(t *testing.T) {
 	out := newHeadlessOutput(&stdout, &stderr)
 
 	longResult := strings.Repeat("x", 300)
-	out.ToolCallResult("search", longResult, false, 100*time.Millisecond)
+	out.ToolCallResult("call-1", "search", longResult, false, 100*time.Millisecond)
 
 	got := stderr.String()
 	if strings.Contains(got, strings.Repeat("x", 300)) {

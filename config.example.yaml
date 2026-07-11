@@ -2,15 +2,13 @@
 # Place at ~/.config/local-agent/config.yaml or ./local-agent.yaml
 
 ollama:
-  # Everyday agent model. qwen3.5:2b (~1.9GB) is the smallest that does usable
+  # Everyday agent model. qwen3.5:2b (~2.7GB) is the smallest that does usable
   # tool calling and is the safe default for 16GB. You CAN switch to qwen3.5:4b
   # (~3.4GB) for more reliable multi-step tool chains — still safe on 16GB.
   #
-  # ⚠️ MEMORY SAFETY (16GB Mac): do NOT run models larger than the 4B tier
-  # locally. gemma4:e2b is ~7.2GB and gemma4:e4b ~9.6GB — loading one alongside
-  # macOS + the agent + the embed model exhausts RAM and can crash/shut down the
-  # machine (this happened in testing). qwen3.5:9b (~6.6GB) is likewise excluded.
-  # Cloud models (e.g. gemma4:31b-cloud) are also intentionally not used.
+  # On 16GB, qwen3.5:9b and gemma4:e2b are manual EXCLUSIVE profiles: the
+  # runtime unloads the prior chat model before switching and the router never
+  # auto-selects them. Gemma E4B+, >=10B tiers, and cloud models stay blocked.
   model: "qwen3.5:2b"
   base_url: "http://localhost:11434"
   # num_ctx is the KV-cache allocation (NOT the model's 256K max context). It
@@ -23,12 +21,13 @@ ollama:
   # forcing swap or an OOM kill.
   num_ctx: 16384
 
-# Model routing suite — SMALL, memory-safe Qwen tiers only, for a 16GB Mac.
-# The auto-router never selects anything larger than the 4B tier. Even if a few
-# tiers stay cached at once (0.8B + 2B + 4B + the tiny embed model ≈ 6.6GB) the
-# total footprint stays well within 16GB. Larger local models (qwen3.5:9b ~6.6GB,
-# gemma4:e2b ~7.2GB, gemma4:e4b ~9.6GB) are deliberately excluded — loading one
-# OOM'd and shut the machine down in testing. No cloud models either.
+# Enforce loopback-only Ollama and remote MCP endpoints. Approved shell tools
+# remain an explicit network-capable boundary until OS sandboxing lands.
+privacy:
+  local_only: true
+
+# Auto-routing uses installed, non-exclusive compact tiers only. Qwen 9B and
+# Gemma E2B remain available for an explicit deep-task profile.
 model:
   models:
     - name: "qwen3.5:0.8b"   # trivial: routing/classification only — weak at tools
@@ -44,37 +43,48 @@ model:
       family: "qwen3.5"
       size: "4B"
       capability: "complex"
+    - name: "phi4-mini:latest"
+      family: "phi"
+      size: "2.5GB"
+      capability: "medium"
+    - name: "qwen3.5:9b"
+      family: "qwen3.5"
+      size: "6.6GB"
+      capability: "advanced"
+      exclusive: true
+    - name: "gemma4:e2b"
+      family: "gemma"
+      size: "7.2GB"
+      capability: "medium"
+      exclusive: true
   default_model: "qwen3.5:2b"
-  fallback_chain: ["qwen3.5:2b", "qwen3.5:0.8b", "qwen3.5:4b"]
+  fallback_chain: ["qwen3.5:2b", "phi4-mini:latest", "qwen3.5:0.8b", "qwen3.5:4b"]
   auto_select: true
   embed_model: "nomic-embed-text"
 
-# Embedding model for ICE (Infinite Context Engine).
-# ~137M params / ~0.27GB — co-resides with any chat model for free. Keep it.
-# embed_model: "nomic-embed-text"
-
-# UI Configuration (optional)
-# ui:
-#   # Theme: "dark", "light", or "auto" (default: auto - detects system theme)
-#   # The Nord theme will be applied automatically:
-#   # - Dark mode: Nord Polar Night (dark blues) + Frost (light text) + Aurora (colorful accents)
-#   # - Light mode: Nord Aurora Light (white background + same colorful accents)
-#   theme: "auto"
-#   # Syntax highlighting theme for code blocks (via Chroma)
-#   # Options: monokai, github, dracula, one-dark, solarized-dark, etc.
-#   # Default: monokai (dark), github (light)
-#   code_theme: "monokai"
-#   # Show line numbers in code blocks (default: false)
-#   code_line_numbers: false
-#   # Compact mode threshold (terminal width < this value triggers compact mode)
-#   compact_threshold: 80
+# ICE (Infinite Context Engine) is opt-in. An empty store_path uses the managed
+# ~/.config/local-agent/conversations.json default. A non-empty relative value
+# is rooted under ~/.config/local-agent/ice/<workspace-hash>; absolute paths
+# and `..` escapes are rejected so repository config cannot write elsewhere or
+# place private embeddings inside the Git worktree.
+ice:
+  enabled: false
+  # ~137M params / ~0.27GB — co-resides with any chat model for free. Keep it.
+  embed_model: "nomic-embed-text"
+  # store_path: "conversations.json"
 
 # MCP tool servers
 servers:
-  # STDIO transport (default)
-  - name: noted
-    command: noted
-    args: [mcp]
+  # Recommended: one lazy MCPHub gateway. It keeps specialist schemas out of
+  # small-model context until needed and lets Cortex orchestrate the stack.
+  - name: mcphub
+    command: mcphub
+    args: [mcp, serve, --agent, local-agent]
+
+  # Direct STDIO transport is also supported when MCPHub is not installed.
+  # - name: noted
+  #   command: noted
+  #   args: [mcp]
 
   # tinyvault — requires `tvault init` before first use
   # - name: tinyvault

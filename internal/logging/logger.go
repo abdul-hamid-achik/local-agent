@@ -18,12 +18,16 @@ func NewSessionLogger() (*log.Logger, *os.File, error) {
 	}
 
 	logDir := filepath.Join(home, ".config", "local-agent", "logs")
-	if err := os.MkdirAll(logDir, 0o755); err != nil {
+	if err := os.MkdirAll(logDir, 0o700); err != nil {
 		return nil, nil, fmt.Errorf("create log dir: %w", err)
 	}
+	if err := os.Chmod(logDir, 0o700); err != nil {
+		return nil, nil, fmt.Errorf("secure log dir: %w", err)
+	}
 
-	filename := time.Now().Format("2006-01-02_15-04-05") + ".log"
-	f, err := os.Create(filepath.Join(logDir, filename))
+	now := time.Now()
+	filename := fmt.Sprintf("%s_%06d.log", now.Format("2006-01-02_15-04-05"), now.Nanosecond()/1000)
+	f, err := os.OpenFile(filepath.Join(logDir, filename), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create log file: %w", err)
 	}

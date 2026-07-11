@@ -1,10 +1,13 @@
 package agent
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 	"github.com/abdul-hamid-achik/local-agent/internal/memory"
@@ -22,8 +25,8 @@ func TestBuildSystemPrompt(t *testing.T) {
 		notContains  []string
 	}{
 		{
-			name:       "no optional sections",
-			contains:   []string{"No tools currently available.", "Current date:"},
+			name:        "no optional sections",
+			contains:    []string{"No tools currently available.", "Current date:"},
 			notContains: []string{"Active Skills", "Loaded Context", "Remembered Facts"},
 		},
 		{
@@ -45,9 +48,9 @@ func TestBuildSystemPrompt(t *testing.T) {
 			contains:  []string{"Loaded Context", "some loaded context"},
 		},
 		{
-			name:       "ICE overrides memory",
-			iceContext: "ice assembled context",
-			contains:   []string{"ice assembled context"},
+			name:        "ICE overrides memory",
+			iceContext:  "ice assembled context",
+			contains:    []string{"ice assembled context"},
 			notContains: []string{"Remembered Facts"},
 		},
 	}
@@ -120,6 +123,61 @@ func TestBuildSystemPrompt_EmptyIgnoreContent(t *testing.T) {
 	}
 }
 
+func TestSmallModelPromptPreservesInstructionsAndMemory(t *testing.T) {
+	prompt := buildSystemPromptForModel(
+		"BUILD MODE",
+		nil,
+		"use the project skill",
+		"follow AGENTS.md",
+		nil,
+		"retrieved project memory",
+		"/tmp/project",
+		"secrets/**",
+		"qwen3.5:2b",
+	)
+
+	for _, want := range []string{
+		"BUILD MODE",
+		"use the project skill",
+		"follow AGENTS.md",
+		"retrieved project memory",
+		"secrets/**",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("small-model prompt missing %q", want)
+		}
+	}
+}
+
+func TestSystemPromptBoundsOptionalContext(t *testing.T) {
+	huge := "BEGIN\n" + strings.Repeat("project-context ", 20_000) + "\nEND"
+	prompt := buildSystemPromptForModelBudget(
+		"BUILD MODE", nil, huge, huge, nil, huge, "/tmp/project", huge, "qwen3.5:2b", 4096,
+	)
+	if len([]rune(prompt)) > 12_000 {
+		t.Fatalf("bounded system prompt is still excessive: %d characters", len([]rune(prompt)))
+	}
+	if !strings.Contains(prompt, "context characters omitted") {
+		t.Fatal("bounded system prompt did not disclose omitted context")
+	}
+	if !strings.Contains(prompt, "Guidelines:") {
+		t.Fatal("prompt truncation removed core guidelines")
+	}
+}
+
+func TestIsSmallModelDoesNotMisclassifyLargerTiers(t *testing.T) {
+	for _, model := range []string{"qwen3.5:0.8b", "qwen3.5:1.5b-instruct", "qwen3.5:2b"} {
+		if !isSmallModel(model) {
+			t.Errorf("isSmallModel(%q) = false, want true", model)
+		}
+	}
+	for _, model := range []string{"qwen3.5:12b", "qwen3.5:32b", "gemma4:e4b", "custom"} {
+		if isSmallModel(model) {
+			t.Errorf("isSmallModel(%q) = true, want false", model)
+		}
+	}
+}
+
 func TestDetectProjectInfo_GoProject(t *testing.T) {
 	dir := t.TempDir()
 	_ = os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module test"), 0o644)
@@ -141,11 +199,45 @@ func TestDetectProjectInfo_EmptyDir(t *testing.T) {
 	}
 }
 
+func TestGitEnvironmentProbeHonorsCancellation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture is Unix-specific")
+	}
+	binDir := t.TempDir()
+	gitPath := filepath.Join(binDir, "git")
+	if err := os.WriteFile(gitPath, []byte("#!/bin/sh\nsleep 10\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if got := runGitCommandContext(ctx, t.TempDir(), "status", "--porcelain"); got != "" {
+		t.Fatalf("cancelled git probe returned %q", got)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("cancelled git probe blocked shutdown for %s", elapsed)
+	}
+}
+
+func TestProjectMarkerProbeBusySlotFailsFast(t *testing.T) {
+	projectInfoProbeSlots <- struct{}{}
+	t.Cleanup(func() { <-projectInfoProbeSlots })
+	start := time.Now()
+	if got := detectProjectInfoContext(context.Background(), t.TempDir()); got != "" {
+		t.Fatalf("busy project marker probe returned %q", got)
+	}
+	if elapsed := time.Since(start); elapsed > 250*time.Millisecond {
+		t.Fatalf("busy project marker slot delayed a later turn for %s", elapsed)
+	}
+}
+
 func TestBuildMemorySection(t *testing.T) {
 	tests := []struct {
-		name     string
-		setup    func(s *memory.Store)
-		contains []string
+		name      string
+		setup     func(s *memory.Store)
+		contains  []string
 		wantEmpty bool
 	}{
 		{

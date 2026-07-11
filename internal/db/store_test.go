@@ -2,8 +2,10 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -32,6 +34,27 @@ func TestOpenAndMigrate(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatalf("expected 0 sessions, got %d", count)
+	}
+}
+
+func TestOpenPathUsesPrivateDatabasePermissions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "private.db")
+	store, err := OpenPath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("database mode = %04o, want 0600", got)
 	}
 }
 
@@ -253,14 +276,240 @@ func TestDoubleOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first open: %v", err)
 	}
-	defer s1.Close()
+	t.Cleanup(func() {
+		if err := s1.Close(); err != nil {
+			t.Errorf("close first store: %v", err)
+		}
+	})
 
 	// Running migrations again should be idempotent (IF NOT EXISTS).
 	s2, err := OpenPath(path)
 	if err != nil {
 		t.Fatalf("second open: %v", err)
 	}
-	defer s2.Close()
+	t.Cleanup(func() {
+		if err := s2.Close(); err != nil {
+			t.Errorf("close second store: %v", err)
+		}
+	})
+}
+
+func TestOpenPathMigratesLegacySessionWorkspaceIdempotently(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.db")
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = legacy.Exec(`
+		CREATE TABLE sessions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			title TEXT NOT NULL DEFAULT '',
+			model TEXT NOT NULL DEFAULT '',
+			mode TEXT NOT NULL DEFAULT 'BUILD',
+			created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+			updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+		);
+		INSERT INTO sessions (title, model, mode) VALUES ('legacy', 'qwen', 'BUILD');
+	`)
+	if err != nil {
+		_ = legacy.Close()
+		t.Fatalf("create legacy schema: %v", err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatalf("close legacy database: %v", err)
+	}
+
+	ctx := context.Background()
+	for openNumber := 1; openNumber <= 3; openNumber++ {
+		store, err := OpenPath(path)
+		if err != nil {
+			t.Fatalf("open migrated database #%d: %v", openNumber, err)
+		}
+
+		var workspaceColumns int
+		err = store.DB().QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'workspace_id'`,
+		).Scan(&workspaceColumns)
+		if err != nil {
+			_ = store.Close()
+			t.Fatalf("inspect workspace column #%d: %v", openNumber, err)
+		}
+		if workspaceColumns != 1 {
+			_ = store.Close()
+			t.Fatalf("workspace column count after open #%d = %d, want 1", openNumber, workspaceColumns)
+		}
+
+		var workspaceIndexes int
+		err = store.DB().QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_sessions_workspace_updated'`,
+		).Scan(&workspaceIndexes)
+		if err != nil {
+			_ = store.Close()
+			t.Fatalf("inspect workspace index #%d: %v", openNumber, err)
+		}
+		if workspaceIndexes != 1 {
+			_ = store.Close()
+			t.Fatalf("workspace index count after open #%d = %d, want 1", openNumber, workspaceIndexes)
+		}
+
+		legacySession, err := store.GetSession(ctx, 1)
+		if err != nil {
+			_ = store.Close()
+			t.Fatalf("read legacy session #%d: %v", openNumber, err)
+		}
+		if legacySession.WorkspaceID != "" {
+			_ = store.Close()
+			t.Fatalf("legacy session workspace after open #%d = %q, want empty", openNumber, legacySession.WorkspaceID)
+		}
+		if err := store.Close(); err != nil {
+			t.Fatalf("close migrated database #%d: %v", openNumber, err)
+		}
+	}
+}
+
+func TestOpenPathMigratesLegacyWorkspaceConcurrently(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-concurrent.db")
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = legacy.Exec(`
+		CREATE TABLE sessions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			title TEXT NOT NULL DEFAULT '',
+			model TEXT NOT NULL DEFAULT '',
+			mode TEXT NOT NULL DEFAULT 'BUILD',
+			created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+			updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+		);
+	`)
+	if err != nil {
+		_ = legacy.Close()
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	const openers = 8
+	start := make(chan struct{})
+	errs := make(chan error, openers)
+	var wg sync.WaitGroup
+	for range openers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			store, openErr := OpenPath(path)
+			if openErr == nil {
+				openErr = store.Close()
+			}
+			errs <- openErr
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent legacy open: %v", err)
+		}
+	}
+
+	store, err := OpenPath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	var columns int
+	if err := store.DB().QueryRow(`SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'workspace_id'`).Scan(&columns); err != nil {
+		t.Fatal(err)
+	}
+	if columns != 1 {
+		t.Fatalf("workspace columns = %d, want 1", columns)
+	}
+}
+
+func TestOpenPathMigratesLegacyCheckpointWorkspace(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-checkpoints.db")
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = legacy.Exec(`
+		CREATE TABLE checkpoints (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id INTEGER NOT NULL DEFAULT 0,
+			label TEXT NOT NULL DEFAULT '',
+			kind TEXT NOT NULL DEFAULT 'manual',
+			messages TEXT NOT NULL DEFAULT '[]',
+			msg_count INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+		);
+		INSERT INTO checkpoints (label) VALUES ('legacy');
+	`)
+	if err != nil {
+		_ = legacy.Close()
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	for openNumber := 1; openNumber <= 2; openNumber++ {
+		store, err := OpenPath(path)
+		if err != nil {
+			t.Fatalf("open #%d: %v", openNumber, err)
+		}
+		checkpoint, err := store.GetCheckpoint(context.Background(), 1)
+		if err != nil {
+			_ = store.Close()
+			t.Fatalf("read legacy checkpoint #%d: %v", openNumber, err)
+		}
+		if checkpoint.WorkspaceID != "" {
+			_ = store.Close()
+			t.Fatalf("legacy workspace = %q", checkpoint.WorkspaceID)
+		}
+		if err := store.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestListSessionsFiltersWorkspace(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	create := func(title, workspaceID string) int64 {
+		t.Helper()
+		session, err := store.CreateSession(ctx, CreateSessionParams{
+			Title:       title,
+			Model:       "qwen3.5:2b",
+			Mode:        "BUILD",
+			WorkspaceID: workspaceID,
+		})
+		if err != nil {
+			t.Fatalf("create %s: %v", title, err)
+		}
+		return session.ID
+	}
+
+	a1 := create("a-one", "/workspace/a")
+	a2 := create("a-two", "/workspace/a")
+	b1 := create("b-one", "/workspace/b")
+
+	sessions, err := store.ListSessions(ctx, ListSessionsParams{WorkspaceID: "/workspace/a", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 2 {
+		t.Fatalf("workspace A sessions = %#v, want two", sessions)
+	}
+	wantIDs := map[int64]bool{a1: true, a2: true}
+	for _, session := range sessions {
+		if session.WorkspaceID != "/workspace/a" || !wantIDs[session.ID] || session.ID == b1 {
+			t.Fatalf("cross-workspace session leaked into result: %#v", session)
+		}
+	}
 }
 
 func TestOpenDefault(t *testing.T) {
@@ -273,5 +522,7 @@ func TestOpenDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open default: %v", err)
 	}
-	s.Close()
+	if err := s.Close(); err != nil {
+		t.Fatalf("close default store: %v", err)
+	}
 }

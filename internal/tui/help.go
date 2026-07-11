@@ -6,28 +6,28 @@ import (
 
 	"charm.land/bubbles/v2/viewport"
 	"charm.land/lipgloss/v2"
-
-	"github.com/abdul-hamid-achik/local-agent/internal/command"
 )
+
+type helpRow struct {
+	key  string
+	desc string
+}
 
 // helpContentWidth returns the inner width for the help modal content.
 func (m *Model) helpContentWidth() int {
-	maxW := 60
-	if m.width < maxW+8 {
-		maxW = m.width - 8
+	w := min(60, m.width-8)
+	if w < 1 {
+		return 1
 	}
-	if maxW < 30 {
-		maxW = 30
-	}
-	return maxW
+	return w
 }
 
 // helpViewportHeight returns the viewport height for the help modal.
 func (m *Model) helpViewportHeight() int {
 	// Leave room for border (2), padding (2), title (2), footer (1)
 	h := m.height - 10
-	if h < 5 {
-		h = 5
+	if h < 1 {
+		h = 1
 	}
 	return h
 }
@@ -40,7 +40,7 @@ func (m *Model) buildHelpContent(innerW int) string {
 	b.WriteString(m.styles.OverlayAccent.Render("Keyboard Shortcuts"))
 	b.WriteString("\n")
 
-	shortcuts := []struct{ key, desc string }{
+	shortcuts := []helpRow{
 		{"enter", "Send message"},
 		{"shift+enter", "New line in input"},
 		{"shift+tab", "Cycle mode (ASK/PLAN/BUILD)"},
@@ -62,29 +62,19 @@ func (m *Model) buildHelpContent(innerW int) string {
 		{"tab", "Autocomplete (commands/files/skills)"},
 	}
 
-	for _, s := range shortcuts {
-		fmt.Fprintf(&b, "  %s  %s\n",
-			m.styles.FocusIndicator.Width(16).Render(s.key),
-			m.styles.OverlayDim.Render(s.desc),
-		)
-	}
+	m.writeHelpRows(&b, shortcuts, innerW)
 
 	b.WriteString("\n")
 	b.WriteString(m.styles.OverlayAccent.Render("Input Shortcuts"))
 	b.WriteString("\n")
 
-	inputShortcuts := []struct{ key, desc string }{
+	inputShortcuts := []helpRow{
 		{"@file", "Attach file or agent"},
 		{"#skill", "Activate skill"},
 		{"/cmd", "Run slash command"},
 	}
 
-	for _, s := range inputShortcuts {
-		fmt.Fprintf(&b, "  %s  %s\n",
-			m.styles.FocusIndicator.Width(16).Render(s.key),
-			m.styles.OverlayDim.Render(s.desc),
-		)
-	}
+	m.writeHelpRows(&b, inputShortcuts, innerW)
 
 	b.WriteString("\n")
 	b.WriteString(m.styles.OverlayAccent.Render("Slash Commands"))
@@ -92,15 +82,55 @@ func (m *Model) buildHelpContent(innerW int) string {
 
 	// Slash commands.
 	if m.cmdRegistry != nil {
+		commands := make([]helpRow, 0, len(m.cmdRegistry.All()))
 		for _, cmd := range m.cmdRegistry.All() {
-			fmt.Fprintf(&b, "  %s  %s\n",
-				m.styles.FocusIndicator.Width(16).Render("/"+cmd.Name),
-				m.styles.OverlayDim.Render(cmd.Description),
-			)
+			commands = append(commands, helpRow{key: "/" + cmd.Name, desc: cmd.Description})
 		}
+		m.writeHelpRows(&b, commands, innerW)
 	}
 
 	return b.String()
+}
+
+// writeHelpRows renders aligned rows on normal terminals and stacked rows on
+// narrow ones. Descriptions wrap instead of being silently clipped.
+func (m *Model) writeHelpRows(b *strings.Builder, rows []helpRow, innerW int) {
+	if innerW < 28 {
+		for _, row := range rows {
+			b.WriteString("  ")
+			b.WriteString(m.styles.FocusIndicator.Render(truncateDisplay(row.key, max(1, innerW-3))))
+			b.WriteString("\n")
+			for _, line := range strings.Split(wrapText(row.desc, max(1, innerW-5)), "\n") {
+				b.WriteString("    ")
+				b.WriteString(m.styles.OverlayDim.Render(line))
+				b.WriteString("\n")
+			}
+		}
+		return
+	}
+
+	keyW := 16
+	if innerW < 44 {
+		keyW = 10
+	}
+	// Leave the terminal's final cell unused. Writing exactly to the edge can
+	// trigger an implicit wrap before the explicit newline in some PTYs.
+	descW := max(1, innerW-keyW-5)
+	for _, row := range rows {
+		descLines := strings.Split(wrapText(row.desc, descW), "\n")
+		for i, line := range descLines {
+			if i == 0 {
+				fmt.Fprintf(b, "  %s  %s\n",
+					m.styles.FocusIndicator.Width(keyW).Render(truncateDisplay(row.key, keyW)),
+					m.styles.OverlayDim.Render(line),
+				)
+				continue
+			}
+			b.WriteString(strings.Repeat(" ", keyW+4))
+			b.WriteString(m.styles.OverlayDim.Render(line))
+			b.WriteString("\n")
+		}
+	}
 }
 
 // initHelpViewport creates and populates the help viewport for scrolling.
@@ -155,7 +185,7 @@ func (m *Model) renderHelpOverlay(contentWidth int) string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(m.styles.FocusIndicator.GetForeground()).
 		Padding(1, 2).
-		Width(innerW + 6) // +6 for padding (2*2) + border (2)
+		Width(innerW + 6) // outer box: inner viewport + padding (4) + border (2)
 
 	return box.Render(b.String())
 }
@@ -190,19 +220,4 @@ func (m *Model) overlayOnContent(base, overlay string) string {
 	}
 
 	return strings.Join(baseLines, "\n")
-}
-
-// commandHelpEntries extracts SkillInfo from commands for display.
-func commandHelpEntries(reg *command.Registry) []struct{ Name, Desc string } {
-	var entries []struct{ Name, Desc string }
-	if reg == nil {
-		return entries
-	}
-	for _, cmd := range reg.All() {
-		entries = append(entries, struct{ Name, Desc string }{
-			Name: "/" + cmd.Name,
-			Desc: cmd.Description,
-		})
-	}
-	return entries
 }

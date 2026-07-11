@@ -74,8 +74,8 @@ func TestMouseWheel_ResetsAtBottom(t *testing.T) {
 	updated, _ := m.Update(tea.MouseWheelMsg{X: 0, Y: 0, Button: tea.MouseWheelDown})
 	m = updated.(*Model)
 
-	if m.anchorActive {
-		// At bottom with minimal content, anchor should be active
+	if !m.anchorActive {
+		t.Error("scrolling to the bottom should restore anchorActive")
 	}
 }
 

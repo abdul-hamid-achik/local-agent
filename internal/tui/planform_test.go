@@ -233,32 +233,23 @@ func TestPlanForm_SelectField(t *testing.T) {
 	m := newTestModel(t)
 	m.openPlanForm("task")
 
-	// Navigate to scope field (index 1).
-	m.Update(tabKey())
+	// Tab to scope field.
 	updated, _ := m.Update(tabKey())
 	m = updated.(*Model)
 
-	// Oops, we need to re-get m after first tab. Let me redo:
-	m2 := newTestModel(t)
-	m2.openPlanForm("task")
-
-	// Tab to scope field.
-	updated, _ = m2.Update(tabKey())
-	m2 = updated.(*Model)
-
-	if m2.planFormState.ActiveField != 1 {
-		t.Fatalf("expected field 1, got %d", m2.planFormState.ActiveField)
+	if m.planFormState.ActiveField != 1 {
+		t.Fatalf("expected field 1, got %d", m.planFormState.ActiveField)
 	}
 
 	// Down should cycle scope option.
-	if m2.planFormState.Fields[1].OptionIndex != 0 {
-		t.Fatalf("expected option 0, got %d", m2.planFormState.Fields[1].OptionIndex)
+	if m.planFormState.Fields[1].OptionIndex != 0 {
+		t.Fatalf("expected option 0, got %d", m.planFormState.Fields[1].OptionIndex)
 	}
 
-	updated, _ = m2.Update(downKey())
-	m2 = updated.(*Model)
+	updated, _ = m.Update(downKey())
+	m = updated.(*Model)
 
-	if m2.planFormState.Fields[1].OptionIndex != 1 {
-		t.Errorf("expected option 1 after down, got %d", m2.planFormState.Fields[1].OptionIndex)
+	if m.planFormState.Fields[1].OptionIndex != 1 {
+		t.Errorf("expected option 1 after down, got %d", m.planFormState.Fields[1].OptionIndex)
 	}
 }

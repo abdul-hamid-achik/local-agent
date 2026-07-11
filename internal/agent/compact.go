@@ -24,22 +24,26 @@ func (a *Agent) shouldCompact(promptTokens int) bool {
 // keepMessages intact. Returns true if compaction was performed.
 func (a *Agent) compact(ctx context.Context, out Output) bool {
 	a.mu.RLock()
-	msgCount := len(a.messages)
+	messages := make([]llm.Message, len(a.messages))
+	copy(messages, a.messages)
 	a.mu.RUnlock()
+	msgCount := len(messages)
 
 	if msgCount <= keepMessages+1 {
 		return false // Not enough messages to compact.
 	}
 
-	a.mu.RLock()
-	splitAt := msgCount - keepMessages
-	older := make([]llm.Message, splitAt)
-	copy(older, a.messages[:splitAt])
-	recent := make([]llm.Message, keepMessages)
-	copy(recent, a.messages[splitAt:])
-	a.mu.RUnlock()
+	splitAt := recentConversationBoundary(messages, keepMessages)
+	if splitAt <= 0 {
+		return false
+	}
+	older := append([]llm.Message(nil), messages[:splitAt]...)
+	recent := append([]llm.Message(nil), messages[splitAt:]...)
 
 	summary := summarizeMessages(older)
+	if budget := optionalPromptBudget(a.numCtx); budget > 0 {
+		summary = boundPromptText(summary, budget)
+	}
 
 	// Ask LLM to produce a compact summary.
 	var summaryBuf strings.Builder
@@ -73,25 +77,57 @@ func (a *Agent) compact(ctx context.Context, out Output) bool {
 	}
 
 	// Snapshot the full pre-compaction history first so compaction is
-	// non-destructive: the original transcript can be restored from this
-	// checkpoint. Best-effort — a checkpoint failure must not abort the turn.
+	// non-destructive. If persistence was configured, replacing history without
+	// its recovery checkpoint would violate that contract, so fail closed.
 	if a.checkpointStore != nil {
-		if _, err := a.CreateCheckpoint(ctx, "before compaction", db.CheckpointPreCompaction); err != nil && a.logger != nil {
-			a.logger.Warn("pre-compaction checkpoint failed", "err", err)
+		checkpointID, err := a.CreateCheckpoint(ctx, "before compaction", db.CheckpointPreCompaction)
+		if err != nil || checkpointID == 0 {
+			if err == nil {
+				err = fmt.Errorf("checkpoint store returned no checkpoint id")
+			}
+			if a.logger != nil {
+				a.logger.Warn("pre-compaction checkpoint failed", "err", err)
+			}
+			out.Error(fmt.Sprintf("compaction preserved full history because its recovery checkpoint failed: %v", err))
+			return false
 		}
 	}
 
 	// Replace messages with summary + recent.
 	compacted := make([]llm.Message, 0, 1+len(recent))
 	compacted = append(compacted, llm.Message{
-		Role:    "user",
-		Content: fmt.Sprintf("[Conversation summary: %s]", summaryText),
+		Role:    "system",
+		Content: fmt.Sprintf("Conversation summary:\n%s", summaryText),
 	})
 	compacted = append(compacted, recent...)
 	a.ReplaceMessages(compacted)
 
 	out.SystemMessage(fmt.Sprintf("Context compacted: %d messages summarized, %d kept", len(older), len(recent)))
 	return true
+}
+
+// recentConversationBoundary chooses a user-turn boundary so an assistant
+// tool call is never separated from its tool result. Prefer the next user turn
+// after the raw keep-N split; otherwise retain the current turn in full.
+func recentConversationBoundary(messages []llm.Message, keep int) int {
+	if keep <= 0 || len(messages) <= keep {
+		return 0
+	}
+	tentative := len(messages) - keep
+	if messages[tentative].Role == "user" {
+		return tentative
+	}
+	for i := tentative + 1; i < len(messages); i++ {
+		if messages[i].Role == "user" {
+			return i
+		}
+	}
+	for i := tentative - 1; i > 0; i-- {
+		if messages[i].Role == "user" {
+			return i
+		}
+	}
+	return 0
 }
 
 // summarizeMessages formats a slice of messages into a human-readable transcript

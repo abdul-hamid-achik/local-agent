@@ -31,6 +31,7 @@ const (
 
 // ToolCard is a fancy tool execution display component.
 type ToolCard struct {
+	ID           string
 	Name         string
 	Kind         ToolCardKind
 	State        ToolCardState
@@ -63,41 +64,37 @@ type ToolCardStyles struct {
 
 // NewToolCardStyles creates styles based on theme.
 func NewToolCardStyles(isDark bool) ToolCardStyles {
-	if isDark {
-		return ToolCardStyles{
-			BorderRunning: lipgloss.NewStyle().Foreground(lipgloss.Color("#81a1c1")),
-			BorderSuccess: lipgloss.NewStyle().Foreground(lipgloss.Color("#a3be8c")),
-			BorderError:   lipgloss.NewStyle().Foreground(lipgloss.Color("#bf616a")),
-			TitleRunning:  lipgloss.NewStyle().Foreground(lipgloss.Color("#88c0d0")).Bold(true),
-			TitleSuccess:  lipgloss.NewStyle().Foreground(lipgloss.Color("#a3be8c")).Bold(true),
-			TitleError:    lipgloss.NewStyle().Foreground(lipgloss.Color("#bf616a")).Bold(true),
-			Args:          lipgloss.NewStyle().Foreground(lipgloss.Color("#d8dee9")),
-			Result:        lipgloss.NewStyle().Foreground(lipgloss.Color("#d8dee9")),
-			Error:         lipgloss.NewStyle().Foreground(lipgloss.Color("#bf616a")),
-			Dimmed:        lipgloss.NewStyle().Foreground(lipgloss.Color("#4c566a")),
-			Elapsed:       lipgloss.NewStyle().Foreground(lipgloss.Color("#81a1c1")),
-		}
-	}
+	ld := lipgloss.LightDark(isDark)
+	runningBorder := ld(lipgloss.Color("#5e81ac"), lipgloss.Color("#81a1c1"))
+	runningTitle := ld(lipgloss.Color("#4f8f8f"), lipgloss.Color("#88c0d0"))
+	success := ld(lipgloss.Color("#4f8f38"), lipgloss.Color("#a3be8c"))
+	failure := ld(lipgloss.Color("#c94f4f"), lipgloss.Color("#bf616a"))
+	body := ld(lipgloss.Color("#4c566a"), lipgloss.Color("#d8dee9"))
+	// Timing and labels are functional text, not decorative borders.
+	dimmed := ld(lipgloss.Color("#5b6779"), lipgloss.Color("#8b97ad"))
+	elapsed := ld(lipgloss.Color("#5e81ac"), lipgloss.Color("#81a1c1"))
+
 	return ToolCardStyles{
-		BorderRunning: lipgloss.NewStyle().Foreground(lipgloss.Color("#5e81ac")),
-		BorderSuccess: lipgloss.NewStyle().Foreground(lipgloss.Color("#4f8f38")),
-		BorderError:   lipgloss.NewStyle().Foreground(lipgloss.Color("#c94f4f")),
-		TitleRunning:  lipgloss.NewStyle().Foreground(lipgloss.Color("#4f8f8f")).Bold(true),
-		TitleSuccess:  lipgloss.NewStyle().Foreground(lipgloss.Color("#4f8f38")).Bold(true),
-		TitleError:    lipgloss.NewStyle().Foreground(lipgloss.Color("#c94f4f")).Bold(true),
-		Args:          lipgloss.NewStyle().Foreground(lipgloss.Color("#4c566a")),
-		Result:        lipgloss.NewStyle().Foreground(lipgloss.Color("#4c566a")),
-		Error:         lipgloss.NewStyle().Foreground(lipgloss.Color("#c94f4f")),
-		Dimmed:        lipgloss.NewStyle().Foreground(lipgloss.Color("#9ca0a8")),
-		Elapsed:       lipgloss.NewStyle().Foreground(lipgloss.Color("#5e81ac")),
+		BorderRunning: lipgloss.NewStyle().Foreground(runningBorder),
+		BorderSuccess: lipgloss.NewStyle().Foreground(success),
+		BorderError:   lipgloss.NewStyle().Foreground(failure),
+		TitleRunning:  lipgloss.NewStyle().Foreground(runningTitle).Bold(true),
+		TitleSuccess:  lipgloss.NewStyle().Foreground(success).Bold(true),
+		TitleError:    lipgloss.NewStyle().Foreground(failure).Bold(true),
+		Args:          lipgloss.NewStyle().Foreground(body),
+		Result:        lipgloss.NewStyle().Foreground(body),
+		Error:         lipgloss.NewStyle().Foreground(failure),
+		Dimmed:        lipgloss.NewStyle().Foreground(dimmed),
+		Elapsed:       lipgloss.NewStyle().Foreground(elapsed),
 	}
 }
 
 // NewToolCard creates a new tool card.
 func NewToolCard(name string, kind ToolCardKind, isDark bool) ToolCard {
+	styles := NewToolCardStyles(isDark)
 	s := spinner.New(
 		spinner.WithSpinner(spinner.MiniDot),
-		spinner.WithStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("#88c0d0"))),
+		spinner.WithStyle(styles.TitleRunning.UnsetBold()),
 	)
 	return ToolCard{
 		Name:    name,
@@ -105,7 +102,7 @@ func NewToolCard(name string, kind ToolCardKind, isDark bool) ToolCard {
 		State:   ToolCardRunning,
 		Spinner: s,
 		IsDark:  isDark,
-		Styles:  NewToolCardStyles(isDark),
+		Styles:  styles,
 	}
 }
 
@@ -113,6 +110,7 @@ func NewToolCard(name string, kind ToolCardKind, isDark bool) ToolCard {
 func (c *ToolCard) SetDark(isDark bool) {
 	c.IsDark = isDark
 	c.Styles = NewToolCardStyles(isDark)
+	c.Spinner.Style = c.Styles.TitleRunning.UnsetBold()
 }
 
 // Tick advances the spinner animation.
@@ -175,8 +173,8 @@ func (c *ToolCard) getTitleStyle() lipgloss.Style {
 // width-truncated body when expanded.
 func (c *ToolCard) View(width int) string {
 	c.UpdateElapsed()
-	if width < 12 {
-		width = 12
+	if width < 4 {
+		width = 4
 	}
 	inner := width - 2 // gutter is "│ "
 
@@ -192,13 +190,23 @@ func (c *ToolCard) View(width int) string {
 		meta = c.Styles.Dimmed.Render("(" + formatDuration(c.Duration) + ")")
 	}
 
-	// Truncate the name (plain) so the header fits within inner width.
-	nameBudget := inner - lipgloss.Width(glyph) - lipgloss.Width(meta) - 2
-	name := c.Name
-	if nameBudget > 1 && lipgloss.Width(name) > nameBudget {
-		name = truncate(name, nameBudget)
+	// Keep at least a small, readable name. Timing is useful metadata, but on a
+	// compact card it yields first to the operation identity.
+	glyphW := lipgloss.Width(glyph)
+	metaW := lipgloss.Width(meta)
+	if meta != "" && inner-glyphW-metaW-2 < 3 {
+		meta = ""
+		metaW = 0
 	}
-	header := glyph + " " + titleStyle.Render(name)
+	nameBudget := inner - glyphW - 1
+	if meta != "" {
+		nameBudget -= metaW + 1
+	}
+	name := truncateDisplay(c.Name, max(0, nameBudget))
+	header := glyph
+	if name != "" {
+		header += " " + titleStyle.Render(name)
+	}
 	if meta != "" {
 		header += " " + meta
 	}
@@ -207,7 +215,7 @@ func (c *ToolCard) View(width int) string {
 
 	if c.Expanded && c.State != ToolCardRunning {
 		if c.Args != "" {
-			lines = append(lines, c.Styles.Dimmed.Render(truncate("args: "+c.Args, inner)))
+			lines = append(lines, c.Styles.Dimmed.Render(truncateDisplay("args: "+c.Args, inner)))
 		}
 		if c.Result != "" {
 			resultStyle := c.Styles.Result
@@ -215,7 +223,7 @@ func (c *ToolCard) View(width int) string {
 				resultStyle = c.Styles.Error
 			}
 			for _, rl := range strings.Split(strings.TrimRight(c.Result, "\n"), "\n") {
-				lines = append(lines, resultStyle.Render(truncate(rl, inner)))
+				lines = append(lines, resultStyle.Render(truncateDisplay(rl, inner)))
 			}
 		}
 	}
@@ -248,21 +256,40 @@ func NewToolCardManager(isDark bool) ToolCardManager {
 
 // AddCard adds a new tool card.
 func (m *ToolCardManager) AddCard(name string, kind ToolCardKind, startTime time.Time) {
+	m.AddCardWithID("", name, kind, startTime)
+}
+
+// AddCardWithID adds a card correlated to one concrete tool invocation.
+func (m *ToolCardManager) AddCardWithID(id, name string, kind ToolCardKind, startTime time.Time) {
 	card := NewToolCard(name, kind, m.IsDark)
+	card.ID = id
 	card.StartTime = startTime
 	m.Cards = append(m.Cards, card)
 }
 
 // UpdateCard updates an existing card by name.
 func (m *ToolCardManager) UpdateCard(name string, state ToolCardState, result string, duration time.Duration) {
-	for i := range m.Cards {
-		if m.Cards[i].Name == name && m.Cards[i].State == ToolCardRunning {
+	m.UpdateCardWithID("", name, state, result, duration)
+}
+
+// UpdateCardWithID completes the exact invocation, even when multiple running
+// calls use the same tool name.
+func (m *ToolCardManager) UpdateCardWithID(id, name string, state ToolCardState, result string, duration time.Duration) {
+	for i := len(m.Cards) - 1; i >= 0; i-- {
+		if toolCallMatches(id, name, m.Cards[i].ID, m.Cards[i].Name) && m.Cards[i].State == ToolCardRunning {
 			m.Cards[i].State = state
 			m.Cards[i].Result = result
 			m.Cards[i].Duration = duration
 			break
 		}
 	}
+}
+
+func toolCallMatches(id, name, candidateID, candidateName string) bool {
+	if id != "" || candidateID != "" {
+		return id != "" && id == candidateID
+	}
+	return name == candidateName
 }
 
 // SetExpanded sets a card's expanded state.

@@ -2,10 +2,19 @@ package config
 
 import (
 	"bufio"
+	"bytes"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/abdul-hamid-achik/local-agent/internal/safeio"
 )
+
+const maxAgentIgnoreBytes int64 = 256 << 10
+
+var agentIgnoreReader = safeio.NewReader()
 
 // IgnorePatterns holds parsed .agentignore patterns.
 type IgnorePatterns struct {
@@ -16,19 +25,27 @@ type IgnorePatterns struct {
 // LoadIgnoreFile reads and parses an .agentignore file from the given directory.
 // Returns nil if no .agentignore file exists (not an error).
 func LoadIgnoreFile(dir string) *IgnorePatterns {
+	patterns, _ := LoadIgnoreFileWithError(dir)
+	return patterns
+}
+
+// LoadIgnoreFileWithError is the diagnostic form used at startup. Missing
+// files are not errors; unsafe, oversized, or timed-out inputs are rejected.
+func LoadIgnoreFileWithError(dir string) (*IgnorePatterns, error) {
 	path := filepath.Join(dir, ".agentignore")
-	f, err := os.Open(path)
+	data, err := agentIgnoreReader.ReadRegularFileNoFollow(path, maxAgentIgnoreBytes, safeio.StartupReadTimeout)
 	if err != nil {
-		return nil
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read .agentignore: %w", err)
 	}
-	defer func() {
-		_ = f.Close()
-	}()
 
 	var patterns []string
 	var rawLines []string
 
-	scanner := bufio.NewScanner(f)
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	scanner.Buffer(make([]byte, 4096), int(maxAgentIgnoreBytes)+1)
 	for scanner.Scan() {
 		line := scanner.Text()
 		rawLines = append(rawLines, line)
@@ -40,11 +57,14 @@ func LoadIgnoreFile(dir string) *IgnorePatterns {
 		}
 		patterns = append(patterns, trimmed)
 	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("parse .agentignore: %w", err)
+	}
 
 	return &IgnorePatterns{
 		patterns: patterns,
 		raw:      strings.Join(rawLines, "\n"),
-	}
+	}, nil
 }
 
 // Match returns true if the given path should be ignored.

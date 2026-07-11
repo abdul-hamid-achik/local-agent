@@ -1,8 +1,13 @@
 package tui
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestComputeDiff_Identical(t *testing.T) {
@@ -33,6 +38,13 @@ func TestComputeDiff_EmptyAfter(t *testing.T) {
 		if line.Kind != DiffRemoved {
 			t.Errorf("deleted file should have only removed lines, got kind %d", line.Kind)
 		}
+	}
+}
+
+func TestComputeDiffBoundsNewlineOnlyInput(t *testing.T) {
+	got := computeDiff(strings.Repeat("\n", 60_000), "")
+	if len(got) != 2 || !strings.Contains(got[0].Content, "large diff omitted") {
+		t.Fatalf("large newline-only diff was expanded: len=%d %#v", len(got), got)
 	}
 }
 
@@ -183,5 +195,40 @@ func TestReadFileForDiff_NonexistentFile(t *testing.T) {
 	result := readFileForDiff(map[string]any{"path": "/nonexistent/file/path"})
 	if result != "" {
 		t.Errorf("nonexistent file should return empty, got %q", result)
+	}
+}
+
+func TestReadFileForDiffRejectsWorkspaceEscape(t *testing.T) {
+	workspace := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(outside, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFileForDiffAt(map[string]any{"path": outside}, workspace); got != "" {
+		t.Fatalf("diff snapshot read outside workspace: %q", got)
+	}
+}
+
+func TestDeniedWriteDiffSnapshotRejectsFIFOWithoutBlockingUpdate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mkfifo fixture is Unix-specific")
+	}
+	workspace := t.TempDir()
+	fifo := filepath.Join(workspace, "blocked")
+	if err := exec.Command("mkfifo", fifo).Run(); err != nil {
+		t.Skipf("mkfifo unavailable: %v", err)
+	}
+	m := newTestModel(t)
+	m.agent.SetWorkDir(workspace)
+	start := time.Now()
+	updated, _ := m.Update(ToolCallStartMsg{
+		ID: "denied-write", Name: "write", Args: map[string]any{"path": "blocked"},
+	})
+	m = updated.(*Model)
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("denied write snapshot blocked Bubble Tea Update for %s", elapsed)
+	}
+	if len(m.toolEntries) != 1 || m.toolEntries[0].BeforeContent != "" {
+		t.Fatalf("FIFO snapshot retained content: %#v", m.toolEntries)
 	}
 }

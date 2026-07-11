@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
@@ -17,10 +19,11 @@ const maxAutoCheckpoints = 25
 // restore conversation snapshots. Kept as an interface so the agent has no hard
 // dependency on a concrete store (and tests can supply a fake).
 type CheckpointStore interface {
-	CreateCheckpoint(ctx context.Context, sessionID int64, label, kind, messagesJSON string, msgCount int64) (int64, error)
-	ListCheckpoints(ctx context.Context, sessionID int64) ([]db.Checkpoint, error)
+	CreateCheckpointForWorkspace(ctx context.Context, sessionID int64, workspaceID, label, kind, messagesJSON string, msgCount int64) (int64, error)
+	ListCheckpointsForWorkspace(ctx context.Context, sessionID int64, workspaceID string) ([]db.Checkpoint, error)
 	GetCheckpoint(ctx context.Context, id int64) (db.Checkpoint, error)
 	PruneCheckpoints(ctx context.Context, sessionID int64, keep int) error
+	PruneCheckpointsByKindForWorkspace(ctx context.Context, sessionID int64, workspaceID, kind string, keep int) error
 }
 
 // SetCheckpointStore wires a checkpoint store and the session it belongs to.
@@ -52,6 +55,25 @@ func (a *Agent) snapshotMessagesJSON() (string, int, error) {
 	return string(data), len(msgs), nil
 }
 
+func (a *Agent) checkpointWorkspaceID() (string, error) {
+	workDir := a.WorkDir()
+	if workDir == "" {
+		var err error
+		workDir, err = os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("resolve checkpoint workspace: %w", err)
+		}
+	}
+	absolute, err := filepath.Abs(workDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve checkpoint workspace: %w", err)
+	}
+	if resolved, resolveErr := filepath.EvalSymlinks(absolute); resolveErr == nil {
+		absolute = resolved
+	}
+	return filepath.Clean(absolute), nil
+}
+
 // CreateCheckpoint snapshots the current conversation. kind is typically
 // db.CheckpointManual or db.CheckpointPreCompaction. Returns the new id, or 0
 // if no checkpoint store is configured.
@@ -67,13 +89,20 @@ func (a *Agent) CreateCheckpoint(ctx context.Context, label, kind string) (int64
 	a.mu.RLock()
 	sid := a.checkpointSessionID
 	a.mu.RUnlock()
-
-	id, err := a.checkpointStore.CreateCheckpoint(ctx, sid, label, kind, msgsJSON, int64(count))
+	workspaceID, err := a.checkpointWorkspaceID()
 	if err != nil {
 		return 0, err
 	}
-	// Best-effort prune; failure to prune must not fail the checkpoint.
-	_ = a.checkpointStore.PruneCheckpoints(ctx, sid, maxAutoCheckpoints)
+
+	id, err := a.checkpointStore.CreateCheckpointForWorkspace(ctx, sid, workspaceID, label, kind, msgsJSON, int64(count))
+	if err != nil {
+		return 0, err
+	}
+	// Best-effort prune only automatic snapshots. Manual checkpoints are an
+	// explicit user artifact and must not disappear behind their back.
+	if kind == db.CheckpointPreCompaction {
+		_ = a.checkpointStore.PruneCheckpointsByKindForWorkspace(ctx, sid, workspaceID, kind, maxAutoCheckpoints)
+	}
 	if a.logger != nil {
 		a.logger.Info("checkpoint created", "id", id, "kind", kind, "messages", count)
 	}
@@ -88,7 +117,11 @@ func (a *Agent) ListCheckpoints(ctx context.Context) ([]db.Checkpoint, error) {
 	a.mu.RLock()
 	sid := a.checkpointSessionID
 	a.mu.RUnlock()
-	return a.checkpointStore.ListCheckpoints(ctx, sid)
+	workspaceID, err := a.checkpointWorkspaceID()
+	if err != nil {
+		return nil, err
+	}
+	return a.checkpointStore.ListCheckpointsForWorkspace(ctx, sid, workspaceID)
 }
 
 // RestoreCheckpoint replaces the live conversation with a stored snapshot and
@@ -100,6 +133,19 @@ func (a *Agent) RestoreCheckpoint(ctx context.Context, id int64) (int, error) {
 	cp, err := a.checkpointStore.GetCheckpoint(ctx, id)
 	if err != nil {
 		return 0, err
+	}
+	a.mu.RLock()
+	sid := a.checkpointSessionID
+	a.mu.RUnlock()
+	workspaceID, err := a.checkpointWorkspaceID()
+	if err != nil {
+		return 0, err
+	}
+	if cp.WorkspaceID != workspaceID {
+		return 0, fmt.Errorf("checkpoint %d belongs to a different workspace", id)
+	}
+	if cp.SessionID != sid {
+		return 0, fmt.Errorf("checkpoint %d belongs to session %d, not active session %d", id, cp.SessionID, sid)
 	}
 	var msgs []llm.Message
 	if err := json.Unmarshal([]byte(cp.Messages), &msgs); err != nil {

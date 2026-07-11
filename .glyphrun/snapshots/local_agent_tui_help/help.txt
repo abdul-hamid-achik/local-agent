@@ -1,36 +1,36 @@
                               │
-  LOCAL AGENT                 │                             ╦  ╔═╗╔═╗╔═╗╦    ╔═╗╔═╗╔═╗╔╗╔╔╦╗
+  LOCAL AGENT                 │                            ╦  ╔═╗╔═╗╔═╗╦    ╔═╗╔═╗╔═╗╔╗╔╔╦╗
                            ╭────────────────────────────────────────────────────────────────╮
-                           │  │                             ╩═╝╚═╝╚═╝╩ ╩╩═╝  ╩ ╩╚═╝╚═╝╝╚╝ ╩ │
+                           │                                                                │
                            │  Help                                                          │
-                           │  │                            100% local · Your data never leav│
+                           │                                                                │
                            │  Keyboard Shortcuts                                            │
-                           │    enter             Send message   Welcome to LOCAL AGENT     │
-                           │    shift+enter       New line in inputwen3.5:2b · 18 tools     │
+                           │    enter             Send message                              │
+                           │    shift+enter       New line in input                         │
                            │    shift+tab         Cycle mode (ASK/PLAN/BUILD)               │
-│                          │    ctrl+m            Quick model switchSK — Quick answers      │
+                           │    ctrl+m            Quick model switch                        │
                            │    esc               Cancel streaming / close overlay          │
-                           │    ctrl+c            Quit           BUILD — Full execution     │
+                           │    ctrl+c            Quit                                      │
                            │    ctrl+l            Clear screen (keep history)               │
-                           │    ctrl+n            New conversationsage to start · Press ? fo│
+                           │    ctrl+n            New conversation                          │
                            │    ?                 Toggle this help (when input empty)       │
-│                          │    t                 Expand/collapse all tools                 │
+                           │    t                 Expand/collapse all tools                 │
                            │    space             Toggle last tool details                  │
                            │    ctrl+y            Copy last response                        │
                            │    ctrl+t            Toggle thinking display                   │
                            │    ctrl+k            Toggle compact mode                       │
                            │    ctrl+e            Open input in $EDITOR                     │
-│                          │    ↑/↓               Browse input history                      │
-│                          │    pgup/pgdown       Scroll viewport                           │
+                           │    ↑/↓               Browse input history                      │
+                           │    pgup/pgdown       Scroll viewport                           │
                            │    ctrl+u/d          Half-page scroll                          │
                            │    tab               Autocomplete (commands/files/skills)      │
-                           │  │                                                             │
+                           │                                                                │
                            │  Input Shortcuts                                               │
-│                          │    @file             Attach file or agent                      │
-│                          │    #skill            Activate skill                            │
-│                          │    /cmd              Run slash command                         │
-│                          │                                                                │
-│──────────────────────────│  ↓ scroll for more───────────────────────────────────────────  │
-                           │  │ [ ASK ] ·  ○ ready                                          │
+                           │    @file             Attach file or agent                      │
+                           │    #skill            Activate skill                            │
+                           │    /cmd              Run slash command                         │
+                           │                                                                │
+                           │  ↓ scroll for more                                             │
+                           │                                                                │
                            ╰────────────────────────────────────────────────────────────────╯
                               │

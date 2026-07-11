@@ -1,7 +1,9 @@
 package initcmd
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -10,22 +12,22 @@ import (
 
 // projectMarker maps a marker file name to its detected project type.
 var projectMarkers = map[string]string{
-	"go.mod":           "Go",
-	"go.sum":           "Go",
-	"package.json":     "Node.js",
-	"Cargo.toml":       "Rust",
-	"pyproject.toml":   "Python",
-	"requirements.txt": "Python",
-	"setup.py":         "Python",
-	"Pipfile":          "Python",
-	"Gemfile":          "Ruby",
-	"pom.xml":          "Java (Maven)",
-	"build.gradle":     "Java (Gradle)",
-	"build.gradle.kts": "Kotlin (Gradle)",
-	"CMakeLists.txt":   "C/C++ (CMake)",
-	"Makefile":         "Make",
-	"Taskfile.yml":     "Taskfile",
-	"Taskfile.yaml":    "Taskfile",
+	"go.mod":              "Go",
+	"go.sum":              "Go",
+	"package.json":        "Node.js",
+	"Cargo.toml":          "Rust",
+	"pyproject.toml":      "Python",
+	"requirements.txt":    "Python",
+	"setup.py":            "Python",
+	"Pipfile":             "Python",
+	"Gemfile":             "Ruby",
+	"pom.xml":             "Java (Maven)",
+	"build.gradle":        "Java (Gradle)",
+	"build.gradle.kts":    "Kotlin (Gradle)",
+	"CMakeLists.txt":      "C/C++ (CMake)",
+	"Makefile":            "Make",
+	"Taskfile.yml":        "Taskfile",
+	"Taskfile.yaml":       "Taskfile",
 	"docker-compose.yml":  "Docker Compose",
 	"docker-compose.yaml": "Docker Compose",
 	"Dockerfile":          "Docker",
@@ -34,19 +36,21 @@ var projectMarkers = map[string]string{
 
 // Options configures the behaviour of Run.
 type Options struct {
-	// Force overwrites an existing AGENT.md.
+	// Force overwrites an existing AGENTS.md.
 	Force bool
 }
 
-// Run scans dir for project markers and generates an AGENT.md file.
-// It returns an error if AGENT.md already exists unless opts.Force is true.
+// Run scans dir for project markers and generates an AGENTS.md file.
+// It returns an error if AGENTS.md already exists unless opts.Force is true.
 func Run(dir string, opts Options) error {
-	agentPath := filepath.Join(dir, "AGENT.md")
+	agentPath := filepath.Join(dir, "AGENTS.md")
+	legacyAgentPath := filepath.Join(dir, "AGENT.md")
 
-	if !opts.Force {
-		if _, err := os.Stat(agentPath); err == nil {
-			return fmt.Errorf("AGENT.md already exists in %s (use --force to overwrite)", dir)
-		}
+	if err := validateAgentDestination(agentPath, opts.Force); err != nil {
+		return err
+	}
+	if err := rejectLegacyAgentShadow(agentPath, legacyAgentPath); err != nil {
+		return err
 	}
 
 	entries, err := os.ReadDir(dir)
@@ -60,13 +64,123 @@ func Run(dir string, opts Options) error {
 	// Build directory listing.
 	listing := buildDirectoryListing(dir, entries)
 
-	// Generate AGENT.md content.
+	// Generate AGENTS.md content.
 	content := generateAgentMD(detectedTypes, listing)
 
-	if err := os.WriteFile(agentPath, []byte(content), 0644); err != nil {
-		return fmt.Errorf("writing AGENT.md: %w", err)
+	if err := rejectLegacyAgentShadow(agentPath, legacyAgentPath); err != nil {
+		return err
+	}
+	if err := writeAgentFileAtomically(dir, agentPath, content, opts.Force); err != nil {
+		return fmt.Errorf("writing AGENTS.md: %w", err)
 	}
 
+	return nil
+}
+
+func rejectLegacyAgentShadow(agentPath, legacyPath string) error {
+	if _, err := os.Lstat(agentPath); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect AGENTS.md before legacy check: %w", err)
+	}
+
+	legacyInfo, err := os.Lstat(legacyPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect legacy AGENT.md: %w", err)
+	}
+	kind := "file"
+	if legacyInfo.Mode()&os.ModeSymlink != 0 {
+		kind = "symlink"
+	} else if !legacyInfo.Mode().IsRegular() {
+		kind = legacyInfo.Mode().Type().String()
+	}
+	return fmt.Errorf("legacy AGENT.md %s exists at %s; refusing to create AGENTS.md because it would shadow authored instructions—review it, then rename or migrate AGENT.md to AGENTS.md", kind, legacyPath)
+}
+
+func validateAgentDestination(path string, force bool) error {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect AGENTS.md: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing AGENTS.md symlink %s", path)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("refusing non-regular AGENTS.md destination %s (%s)", path, info.Mode().Type())
+	}
+	if !force {
+		return fmt.Errorf("AGENTS.md already exists in %s (use --force to overwrite)", filepath.Dir(path))
+	}
+	return nil
+}
+
+func writeAgentFileAtomically(dir, path, content string, force bool) error {
+	tmp, err := os.CreateTemp(dir, ".AGENTS.md-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temporary file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+	}()
+	if err := tmp.Chmod(0o644); err != nil {
+		return fmt.Errorf("set temporary file mode: %w", err)
+	}
+	if _, err := io.WriteString(tmp, content); err != nil {
+		return fmt.Errorf("write temporary file: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		return fmt.Errorf("sync temporary file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temporary file: %w", err)
+	}
+
+	if force {
+		// Recheck immediately before the atomic replacement. A symlink appearing
+		// after this check is still replaced as a directory entry by Rename; it is
+		// never followed, so its target cannot be modified.
+		if err := validateAgentDestination(path, true); err != nil {
+			return err
+		}
+		if err := os.Rename(tmpPath, path); err != nil {
+			return fmt.Errorf("replace destination: %w", err)
+		}
+	} else {
+		// A same-directory hard link atomically publishes the fully synced temp
+		// file without replacing anything that appeared after the initial check.
+		if err := os.Link(tmpPath, path); err != nil {
+			if destinationErr := validateAgentDestination(path, false); destinationErr != nil {
+				return destinationErr
+			}
+			return fmt.Errorf("publish destination: %w", err)
+		}
+		if err := os.Remove(tmpPath); err != nil {
+			return fmt.Errorf("remove temporary link: %w", err)
+		}
+	}
+	if err := syncAgentDirectory(dir); err != nil {
+		return err
+	}
+	return nil
+}
+
+func syncAgentDirectory(dir string) error {
+	directory, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("open destination directory for sync: %w", err)
+	}
+	defer func() { _ = directory.Close() }()
+	if err := directory.Sync(); err != nil {
+		return fmt.Errorf("sync destination directory: %w", err)
+	}
 	return nil
 }
 
@@ -147,11 +261,11 @@ func buildDirectoryListing(dir string, entries []os.DirEntry) string {
 	return b.String()
 }
 
-// generateAgentMD produces the Markdown content for the AGENT.md file.
+// generateAgentMD produces the Markdown content for the AGENTS.md file.
 func generateAgentMD(projectTypes []string, listing string) string {
 	var b strings.Builder
 
-	b.WriteString("# AGENT.md\n\n")
+	b.WriteString("# AGENTS.md\n\n")
 
 	// Project type section.
 	b.WriteString("## Project Type\n\n")

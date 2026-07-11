@@ -16,14 +16,14 @@ func (m *Model) View() tea.View {
 	if !m.ready {
 		return tea.NewView("  initializing...")
 	}
+	if hint := m.narrowTerminalHint(); hint != "" {
+		return m.renderNarrowTerminalView(hint)
+	}
 
 	var content string
 
 	// Calculate right side width to match viewport
-	rightWidth := m.width - 1
-	if m.sidePanel.IsVisible() {
-		rightWidth = m.width - m.sidePanel.width - 1 // -1 for separator
-	}
+	rightWidth := m.renderedRightPaneWidth()
 
 	// Build the right side: viewport + footer as one unit
 	var rightSide strings.Builder
@@ -39,12 +39,17 @@ func (m *Model) View() tea.View {
 	rightSide.WriteString("\n")
 
 	// Input or streaming hint - clean Crush-style
-	if m.state == StateIdle {
-		rightSide.WriteString(m.input.View())
-	} else if m.state == StateWaiting {
-		rightSide.WriteString(m.styles.StreamHint.Render("  " + m.scramble.View() + " thinking... press Esc to cancel"))
+	if m.sessionLoading {
+		rightSide.WriteString(m.styles.StreamHint.Render("  " + m.spin.View() + " loading session... press Esc to cancel"))
 	} else {
-		rightSide.WriteString(m.styles.StreamHint.Render("  " + m.spin.View() + " streaming... press Esc to cancel"))
+		switch m.state {
+		case StateIdle:
+			rightSide.WriteString(m.input.View())
+		case StateWaiting:
+			rightSide.WriteString(m.styles.StreamHint.Render("  " + m.scramble.View() + " thinking... press Esc to cancel"))
+		default:
+			rightSide.WriteString(m.styles.StreamHint.Render("  " + m.spin.View() + " streaming... press Esc to cancel"))
+		}
 	}
 
 	// Render side panel + right side horizontally using lipgloss
@@ -70,13 +75,8 @@ func (m *Model) View() tea.View {
 
 		// Join horizontally with separator
 		// Create a full-height divider
-		dividerChars := ""
-		for i := 0; i < m.height; i++ {
-			dividerChars += "│\n"
-		}
-		divider := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#6c7a89")).
-			Render(dividerChars)
+		dividerChars := strings.Repeat("│\n", max(0, m.height))
+		divider := m.styles.Divider.Render(dividerChars)
 
 		content = lipgloss.JoinHorizontal(lipgloss.Top, left, divider, right)
 	} else {
@@ -144,6 +144,36 @@ func (m *Model) View() tea.View {
 		}
 	}
 
+	return v
+}
+
+// renderNarrowTerminalView keeps tiny terminals recoverable. In particular,
+// users can hide the sidebar without having to guess why the chat pane vanished.
+func (m *Model) renderNarrowTerminalView(hint string) tea.View {
+	contentW := max(1, m.width-4)
+	title := truncateDisplay("TERMINAL TOO NARROW", contentW)
+	body := m.styles.OverlayTitle.Render(title) + "\n\n" +
+		m.styles.StatusText.Render(wrapText(hint, contentW))
+	if m.sidePanel.IsVisible() && m.width < minTerminalWidthWithSidebar {
+		keyHint := "Ctrl+B"
+		keyAction := "  hide sidebar"
+		if m.state != StateIdle {
+			keyHint = "Esc, then Ctrl+B"
+			keyAction = "  cancel and hide sidebar"
+		}
+		body += "\n\n" + m.styles.FocusIndicator.Render(keyHint) +
+			m.styles.StatusText.Render(keyAction)
+	}
+	content := lipgloss.PlaceHorizontal(max(1, m.width), lipgloss.Center, body)
+	lineCount := strings.Count(content, "\n") + 1
+	top := (m.height - lineCount) / 2
+	if top > 0 {
+		content = strings.Repeat("\n", top) + content
+	}
+
+	v := tea.NewView(content)
+	v.AltScreen = true
+	v.WindowTitle = "LOCAL AGENT · resize terminal"
 	return v
 }
 
@@ -319,32 +349,14 @@ func (m *Model) renderHeader() string {
 	return line + "\n" + ruler
 }
 
-// renderFooter builds the divider + status + input area.
-func (m *Model) renderFooter() string {
-	var b strings.Builder
-
-	// Divider line.
-	b.WriteString(m.styles.Divider.Render(rule(m.width)))
-	b.WriteString("\n")
-
-	// Status line.
-	b.WriteString(m.renderStatusLine())
-	b.WriteString("\n")
-
-	// Input or streaming hint.
-	if m.state == StateIdle {
-		b.WriteString(m.input.View())
-	} else if m.state == StateWaiting {
-		b.WriteString(m.styles.StreamHint.Render("  " + m.scramble.View() + " thinking... press Esc to cancel"))
-	} else {
-		b.WriteString(m.styles.StreamHint.Render("  " + m.spin.View() + " streaming... press Esc to cancel"))
-	}
-
-	return b.String()
-}
-
 // renderStatusLine builds the status bar above the input/hint area.
 func (m *Model) renderStatusLine() string {
+	paneW := m.chatPaneWidth()
+	if m.shuttingDown {
+		return m.styles.StatusText.Render(truncateDisplay(
+			"  Stopping safely… waiting for the active operation receipt", paneW,
+		))
+	}
 	// Pending tool approval prompt overrides normal status.
 	if m.pendingApproval != nil {
 		args := agent.FormatToolArgs(m.pendingApproval.Args)
@@ -352,21 +364,34 @@ func (m *Model) renderStatusLine() string {
 		if args != "" {
 			promptText += " " + args
 		}
-		// Truncate if too long
-		if len(promptText) > 60 {
-			promptText = promptText[:57] + "..."
+		actions := "? · [y] allow · [n] deny · [a] always · [esc] cancel"
+		switch {
+		case paneW < 34:
+			actions = "? · y/n/a"
+		case paneW < 52:
+			actions = "? · y/n/a · esc cancel"
+		case paneW < 80:
+			actions = "? · y allow · n deny · a always"
 		}
-		return m.styles.ApprovalPrompt.Render(
-			fmt.Sprintf("  ⚡ Allow %s? [y]es / [n]o / [a]lways", promptText),
-		)
+		fixed := "  ⚡ Allow " + actions
+		promptBudget := max(1, paneW-lipgloss.Width(fixed)-1)
+		promptText = truncateDisplay(promptText, promptBudget)
+		line := fmt.Sprintf("  ⚡ Allow %s%s", promptText, actions)
+		return m.styles.ApprovalPrompt.Render(truncateDisplay(line, paneW))
 	}
 
 	// Pending paste prompt overrides normal status.
 	if m.pendingPaste != "" {
 		lines := strings.Count(m.pendingPaste, "\n") + 1
-		return m.styles.StatusText.Render(
-			fmt.Sprintf("  Large paste (%d lines). Wrap as code block? [y/n/esc]", lines),
-		)
+		return m.styles.StatusText.Render(truncateDisplay(
+			fmt.Sprintf("  Large paste (%d lines). Wrap as code block? [y/n/esc]", lines), paneW,
+		))
+	}
+	if m.sessionLoading {
+		return m.styles.StatusText.Render(truncateDisplay("  Loading saved session…", paneW))
+	}
+	if m.sessionListing {
+		return m.styles.StatusText.Render(truncateDisplay("  Loading saved session list…", paneW))
 	}
 
 	var parts []string
@@ -416,7 +441,15 @@ func (m *Model) renderStatusLine() string {
 	if len(parts) == 0 {
 		return ""
 	}
-	return " " + strings.Join(parts, m.styles.StatusText.Render(" · "))
+	separator := m.styles.StatusText.Render(" · ")
+	line := " " + strings.Join(parts, separator)
+	// Optional telemetry drops from the right on compact panes; the mode and
+	// readiness state remain discoverable.
+	for lipgloss.Width(line) > paneW && len(parts) > 2 {
+		parts = parts[:len(parts)-1]
+		line = " " + strings.Join(parts, separator)
+	}
+	return line
 }
 
 // formatTokens formats a token count as "1.2k" or "8192".
@@ -459,19 +492,16 @@ func entriesFromMessages(msgs []llm.Message) []ChatEntry {
 func (m *Model) renderEntries() string {
 	// Calculate content width for text wrapping
 	// CRITICAL: This must be <= viewport width to prevent horizontal overflow
-	viewportW := m.width - 1
-	if m.sidePanel.IsVisible() {
-		viewportW = m.width - m.sidePanel.width - 2
-	}
-	if viewportW < 20 {
-		viewportW = 20
-	}
+	viewportW := m.chatPaneWidth()
 
 	// Content width is viewport width minus padding for margins/borders,
 	// capped so lines stay readable on very wide terminals (Crush-style).
 	contentW := viewportW - 6 // More conservative padding to prevent overflow
-	if contentW < 14 {
-		contentW = 14
+	if contentW < 8 {
+		contentW = 8
+	}
+	if maxAllowed := max(1, viewportW-4); contentW > maxAllowed {
+		contentW = maxAllowed
 	}
 	if contentW > maxChatContentWidth {
 		contentW = maxChatContentWidth
@@ -497,12 +527,12 @@ func (m *Model) renderEntries() string {
 		m.renderWelcome(&b)
 		// Append any system entries (e.g. failed server notices) below welcome
 		for _, e := range m.entries {
-			if e.Kind == "system" {
-				b.WriteString(m.styles.SystemText.Render(e.Content))
+			switch e.Kind {
+			case "system":
+				b.WriteString(m.styles.SystemText.Render(wrapText(e.Content, contentW)))
 				b.WriteString("\n\n")
-			} else if e.Kind == "error" {
-				b.WriteString(m.styles.ErrorText.Render("error: " + e.Content))
-				b.WriteString("\n\n")
+			case "error":
+				m.renderEntryError(&b, e.Content, contentW)
 			}
 		}
 		return b.String()
@@ -541,10 +571,9 @@ func (m *Model) renderEntries() string {
 			m.toolEntryRows[entry.ToolIndex] = strings.Count(b.String(), "\n")
 			m.renderToolGroup(&b, entry.ToolIndex, i)
 		case "error":
-			b.WriteString(m.styles.ErrorText.Render("error: " + entry.Content))
-			b.WriteString("\n\n")
+			m.renderEntryError(&b, entry.Content, contentW)
 		case "system":
-			b.WriteString(m.styles.SystemText.Render(entry.Content))
+			b.WriteString(m.styles.SystemText.Render(wrapText(entry.Content, contentW)))
 			b.WriteString("\n\n")
 		}
 
@@ -591,26 +620,43 @@ func (m *Model) renderEntries() string {
 	return b.String()
 }
 
+func (m *Model) renderEntryError(b *strings.Builder, content string, contentW int) {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		content = "The operation failed without an error message."
+	}
+	b.WriteString(m.styles.ErrorText.Render("✗ error"))
+	b.WriteString("\n")
+	b.WriteString(m.styles.ToolErrorText.Render(indentBlock(wrapText(content, max(1, contentW-2)), "  ")))
+	b.WriteString("\n\n")
+}
+
 // renderWelcome renders the empty-state welcome message, centered horizontally.
 func (m *Model) renderWelcome(b *strings.Builder) {
 	var wb strings.Builder
+	contentWidth := m.chatPaneWidth()
+	compact := m.currentLayout().HeaderMode == "compact" || contentWidth < 64
 
-	// ASCII art logo
-	for _, line := range logoLines() {
-		if line == "" {
-			wb.WriteString("\n")
-		} else {
-			wb.WriteString(lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#88c0d0")).
-				Bold(true).
-				Render(line))
+	if !compact {
+		for _, line := range logoLines() {
+			if line == "" {
+				wb.WriteString("\n")
+				continue
+			}
+			wb.WriteString(m.styles.OverlayTitle.Render(line))
 			wb.WriteString("\n")
 		}
 	}
 
-	// Show enhanced welcome
-	title := gradientText("Welcome to LOCAL AGENT", []string{"#88c0d0", "#81a1c1", "#b48ead"})
-	wb.WriteString("  " + m.styles.OverlayTitle.Render(title))
+	title := "Welcome to LOCAL AGENT"
+	if compact {
+		title = "LOCAL AGENT"
+	}
+	wb.WriteString(m.styles.OverlayTitle.Render(title))
+	wb.WriteString("\n")
+	wb.WriteString(m.styles.StatusText.Render(truncateDisplay(
+		"Local-first · Ollama · tool effects ask first", max(1, contentWidth-4),
+	)))
 	wb.WriteString("\n")
 
 	var infoParts []string
@@ -622,44 +668,63 @@ func (m *Model) renderWelcome(b *strings.Builder) {
 	}
 	if m.serverCount > 0 {
 		infoParts = append(infoParts, fmt.Sprintf("%d servers", m.serverCount))
+	} else {
+		infoParts = append(infoParts, "no MCP servers")
 	}
 	if len(infoParts) > 0 {
-		wb.WriteString(m.styles.StatusText.Render("  " + strings.Join(infoParts, " · ")))
+		wb.WriteString(m.styles.StatusText.Render(truncateDisplay(
+			strings.Join(infoParts, " · "), max(1, contentWidth-4),
+		)))
 		wb.WriteString("\n")
 	}
 
 	wb.WriteString("\n")
 
-	// Mode hints with icons
-	modes := []struct {
-		key   string
-		desc  string
-		color string
-	}{
-		{"ASK", "Quick answers", "#81a1c1"},
-		{"PLAN", "Design & reasoning", "#ebcb8b"},
-		{"BUILD", "Full execution", "#a3be8c"},
-	}
-
-	for _, mode := range modes {
-		modeStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color(mode.color)).
-			Bold(true)
-		wb.WriteString("  ")
-		wb.WriteString(modeStyle.Render(mode.key))
-		wb.WriteString(m.styles.StatusText.Render(" — " + mode.desc))
+	if compact {
+		modeLabel := m.modeConfigs[m.mode].Label
+		wb.WriteString(m.styles.StatusText.Render("Mode "))
+		switch m.mode {
+		case ModePlan:
+			wb.WriteString(m.styles.ModePlan.Render(modeLabel))
+		case ModeBuild:
+			wb.WriteString(m.styles.ModeBuild.Render(modeLabel))
+		default:
+			wb.WriteString(m.styles.ModeAsk.Render(modeLabel))
+		}
+		wb.WriteString("\n")
+	} else {
+		modes := []struct {
+			key   string
+			desc  string
+			style lipgloss.Style
+		}{
+			{"ASK", "Quick answers", m.styles.ModeAsk},
+			{"PLAN", "Design & reasoning", m.styles.ModePlan},
+			{"BUILD", "Full execution", m.styles.ModeBuild},
+		}
+		for _, mode := range modes {
+			wb.WriteString(mode.style.Render(mode.key))
+			wb.WriteString(m.styles.StatusText.Render(" — " + mode.desc))
+			wb.WriteString("\n")
+		}
 		wb.WriteString("\n")
 	}
 
-	wb.WriteString("\n")
-	wb.WriteString(m.styles.SystemText.Render("  Type a message to start · Press ? for help"))
-	wb.WriteString("\n")
+	if compact {
+		wb.WriteString(m.styles.WelcomeHint.Render("Enter send · ? help"))
+		wb.WriteString("\n")
+		wb.WriteString(m.styles.StatusText.Render("Shift+Tab mode · Ctrl+B panel"))
+		wb.WriteString("\n")
+		wb.WriteString(m.styles.StatusText.Render("/ commands · @ files · # skills"))
+		wb.WriteString("\n")
+	} else {
+		wb.WriteString(m.styles.WelcomeHint.Render("Enter send · Shift+Tab mode · ? help"))
+		wb.WriteString("\n")
+		wb.WriteString(m.styles.StatusText.Render("/ commands · @ files · # skills · Ctrl+B sidebar"))
+		wb.WriteString("\n")
+	}
 
 	// Center the welcome content horizontally in the available viewport width.
-	contentWidth := m.width
-	if m.sidePanel.IsVisible() {
-		contentWidth = m.width - m.sidePanel.width - 1
-	}
 	centered := lipgloss.PlaceHorizontal(contentWidth, lipgloss.Center, wb.String())
 	b.WriteString(centered)
 }
@@ -774,8 +839,8 @@ func (m *Model) renderToolGroup(b *strings.Builder, toolIdx, entryIdx int) {
 
 	// Find corresponding tool card
 	var card *ToolCard
-	for i := range m.toolCardMgr.Cards {
-		if m.toolCardMgr.Cards[i].Name == te.Name {
+	for i := len(m.toolCardMgr.Cards) - 1; i >= 0; i-- {
+		if toolCallMatches(te.ID, te.Name, m.toolCardMgr.Cards[i].ID, m.toolCardMgr.Cards[i].Name) {
 			card = &m.toolCardMgr.Cards[i]
 			break
 		}
@@ -784,15 +849,16 @@ func (m *Model) renderToolGroup(b *strings.Builder, toolIdx, entryIdx int) {
 	if card != nil {
 		// Use fancy tool card rendering
 		card.Expanded = !te.Collapsed
-		// Calculate available width: viewport width minus padding for borders and indentation
-		availableWidth := m.width - 8 // Account for borders, padding, and side panel if visible
-		if m.sidePanel.IsVisible() {
-			availableWidth = m.width - m.sidePanel.width - 10 // More conservative with side panel
-		}
-		if availableWidth < 30 {
-			availableWidth = 30 // Minimum usable width
-		}
+		// Keep the card inside the actual viewport; the two-column left indent is
+		// applied immediately below.
+		availableWidth := max(4, m.chatPaneWidth()-4)
 		cardView := card.View(availableWidth)
+		if card.Expanded && card.State != ToolCardRunning && len(te.DiffLines) > 0 {
+			diffView := strings.TrimRight(renderDiffAtWidth(te.DiffLines, m.styles, 30, availableWidth), "\n")
+			if diffView != "" {
+				cardView += "\n" + diffView
+			}
+		}
 		// Add left padding to align with message content
 		cardView = indentBlock(cardView, "  ")
 		b.WriteString(cardView)
@@ -841,7 +907,7 @@ func (m *Model) renderToolGroup(b *strings.Builder, toolIdx, entryIdx int) {
 				b.WriteString("\n")
 				// Diff or result
 				if te.DiffLines != nil {
-					b.WriteString(renderDiff(te.DiffLines, m.styles, 30))
+					b.WriteString(renderDiffAtWidth(te.DiffLines, m.styles, 30, max(1, m.chatPaneWidth()-4)))
 				} else {
 					// Use smart result formatting with truncation
 					result := formatToolResult(te.Result, 20, layout.ResultTruncMax)
@@ -892,13 +958,41 @@ func truncate(s string, max int) string {
 	return s[:max-3] + "..."
 }
 
+// truncateDisplay truncates plain text by terminal cell width instead of byte
+// count, so model names, paths, and tool output containing Unicode stay valid.
+func truncateDisplay(s string, maxWidth int) string {
+	if maxWidth <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) <= maxWidth {
+		return s
+	}
+	const ellipsis = "…"
+	if maxWidth <= lipgloss.Width(ellipsis) {
+		return ellipsis
+	}
+
+	budget := maxWidth - lipgloss.Width(ellipsis)
+	var b strings.Builder
+	used := 0
+	for _, r := range s {
+		rw := lipgloss.Width(string(r))
+		if used+rw > budget {
+			break
+		}
+		b.WriteRune(r)
+		used += rw
+	}
+	return b.String() + ellipsis
+}
+
 // wrapText wraps text to the given width, breaking long words if needed.
 func wrapText(s string, width int) string {
 	if width <= 0 {
 		return s
 	}
-	// Fast path: if everything fits, return as-is
-	if len(s) <= width {
+	// Fast path: if a single line fits in terminal cells, return as-is.
+	if !strings.Contains(s, "\n") && lipgloss.Width(s) <= width {
 		return s
 	}
 	var result strings.Builder
@@ -912,47 +1006,69 @@ func wrapText(s string, width int) string {
 
 // wrapLine wraps a single line to the given width, breaking long words if needed.
 func wrapLine(line string, width int) string {
-	if len(line) <= width {
+	if width <= 0 || lipgloss.Width(line) <= width {
 		return line
 	}
-	var result strings.Builder
 	words := strings.Fields(line)
+	if len(words) == 0 {
+		return ""
+	}
+
+	lines := make([]string, 0, len(words))
 	current := ""
 	for _, w := range words {
-		if current == "" {
-			current = w
-		} else if len(current)+1+len(w) <= width {
+		if current != "" && lipgloss.Width(current)+1+lipgloss.Width(w) <= width {
 			current += " " + w
-		} else {
-			// Current word(s) would exceed width - write them and start new line
-			if result.Len() > 0 {
-				result.WriteString("\n")
-			}
-			result.WriteString(current)
-			current = w
+			continue
 		}
+		if current != "" {
+			lines = append(lines, current)
+			current = ""
+		}
+
+		chunks := splitDisplayChunks(w, width)
+		if len(chunks) == 0 {
+			continue
+		}
+		if len(chunks) > 1 {
+			lines = append(lines, chunks[:len(chunks)-1]...)
+		}
+		current = chunks[len(chunks)-1]
 	}
-	// Handle remaining content
 	if current != "" {
-		if result.Len() > 0 {
-			result.WriteString("\n")
+		lines = append(lines, current)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// splitDisplayChunks splits one long word without slicing through UTF-8 and
+// measures terminal cells, which matters for CJK and emoji model output.
+func splitDisplayChunks(word string, width int) []string {
+	if word == "" || width <= 0 {
+		return nil
+	}
+	var chunks []string
+	var chunk strings.Builder
+	used := 0
+	for _, r := range word {
+		rw := lipgloss.Width(string(r))
+		if used > 0 && used+rw > width {
+			chunks = append(chunks, chunk.String())
+			chunk.Reset()
+			used = 0
 		}
-		// If the remaining word itself is longer than width, we need to break it
-		for len(current) > width {
-			if result.Len() > 0 {
-				result.WriteString("\n")
-			}
-			result.WriteString(current[:width])
-			current = current[width:]
-		}
-		if len(current) > 0 {
-			if result.Len() > 0 {
-				result.WriteString("\n")
-			}
-			result.WriteString(current)
+		chunk.WriteRune(r)
+		used += rw
+		if used >= width {
+			chunks = append(chunks, chunk.String())
+			chunk.Reset()
+			used = 0
 		}
 	}
-	return result.String()
+	if chunk.Len() > 0 {
+		chunks = append(chunks, chunk.String())
+	}
+	return chunks
 }
 
 // indentBlock adds a prefix to each line of a multi-line string.

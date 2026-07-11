@@ -10,10 +10,11 @@ target:
   env:
     HOME: "${projectRoot}/.glyphrun/tmp/help-home"
     LOCAL_AGENT_AGENTS_DIR: "${projectRoot}/.glyphrun/tmp/help-agents"
+    OLLAMA_HOST: "http://127.0.0.1:11434"
 
 preconditions:
   commands:
-    - run: "mkdir -p .glyphrun/tmp/help-home .glyphrun/tmp/help-agents && go build -o ./bin/local-agent ./cmd/local-agent"
+    - run: "rm -rf .glyphrun/tmp/help-home .glyphrun/tmp/help-agents && mkdir -p .glyphrun/tmp/help-home .glyphrun/tmp/help-agents && go build -o ./bin/local-agent ./cmd/local-agent"
       cwd: "."
       timeoutMs: 30000
 

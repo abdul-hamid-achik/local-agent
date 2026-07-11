@@ -7,14 +7,17 @@ type Output interface {
 	// StreamText sends incremental text content.
 	StreamText(text string)
 
+	// StreamReasoning sends provider-native thinking separately from answer text.
+	StreamReasoning(text string)
+
 	// StreamDone signals that the current response is complete.
 	StreamDone(evalCount, promptTokens int)
 
 	// ToolCallStart signals the beginning of a tool invocation.
-	ToolCallStart(name string, args map[string]any)
+	ToolCallStart(callID, name string, args map[string]any)
 
 	// ToolCallResult delivers the result of a tool invocation.
-	ToolCallResult(name string, result string, isError bool, duration time.Duration)
+	ToolCallResult(callID, name string, result string, isError bool, duration time.Duration)
 
 	// SystemMessage displays a system-level message to the user.
 	SystemMessage(msg string)

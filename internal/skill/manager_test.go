@@ -1,23 +1,49 @@
 package skill
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/abdul-hamid-achik/local-agent/internal/safeio"
 )
+
+func mustWriteFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+func mustLoadAll(t *testing.T, m *Manager) {
+	t.Helper()
+	if err := m.LoadAll(); err != nil {
+		t.Fatalf("LoadAll: %v", err)
+	}
+}
+
+func mustActivate(t *testing.T, m *Manager, name string) {
+	t.Helper()
+	if err := m.Activate(name); err != nil {
+		t.Fatalf("activate %s: %v", name, err)
+	}
+}
 
 func TestManager_LoadAll(t *testing.T) {
 	dir := t.TempDir()
 
 	// Create valid skill files.
-	os.WriteFile(filepath.Join(dir, "greeting.md"), []byte("---\nname: greeting\ndescription: Say hello\n---\nHello!"), 0o644)
-	os.WriteFile(filepath.Join(dir, "farewell.md"), []byte("---\nname: farewell\ndescription: Say bye\n---\nGoodbye!"), 0o644)
+	mustWriteFile(t, filepath.Join(dir, "greeting.md"), "---\nname: greeting\ndescription: Say hello\n---\nHello!")
+	mustWriteFile(t, filepath.Join(dir, "farewell.md"), "---\nname: farewell\ndescription: Say bye\n---\nGoodbye!")
 
 	// Create a non-.md file (should be skipped).
-	os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("not a skill"), 0o644)
+	mustWriteFile(t, filepath.Join(dir, "notes.txt"), "not a skill")
 
 	// Create a subdirectory (should be skipped).
-	os.MkdirAll(filepath.Join(dir, "subdir"), 0o755)
+	if err := os.MkdirAll(filepath.Join(dir, "subdir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	m := NewManager(dir)
 	if err := m.LoadAll(); err != nil {
@@ -45,7 +71,7 @@ func TestManager_LoadAll_NoFrontmatter(t *testing.T) {
 	dir := t.TempDir()
 
 	// File without frontmatter uses filename as name.
-	os.WriteFile(filepath.Join(dir, "plain.md"), []byte("Just content, no frontmatter"), 0o644)
+	mustWriteFile(t, filepath.Join(dir, "plain.md"), "Just content, no frontmatter")
 
 	m := NewManager(dir)
 	if err := m.LoadAll(); err != nil {
@@ -71,12 +97,39 @@ func TestManager_LoadAll_NonexistentDir(t *testing.T) {
 	}
 }
 
+func TestManagerLoadAllRejectsOversizedSkill(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "oversized.md")
+	if err := os.WriteFile(path, make([]byte, maxSkillFileBytes+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(dir)
+	if err := m.LoadAll(); !errors.Is(err, safeio.ErrTooLarge) {
+		t.Fatalf("oversized skill error = %v", err)
+	}
+}
+
+func TestManagerLoadAllRejectsSymlinkedSkill(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(outside, []byte("outside secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "linked.md")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	m := NewManager(dir)
+	if err := m.LoadAll(); !errors.Is(err, safeio.ErrSymlink) {
+		t.Fatalf("symlinked skill error = %v", err)
+	}
+}
+
 func TestManager_Activate_Deactivate(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "test.md"), []byte("---\nname: test\n---\nTest content"), 0o644)
+	mustWriteFile(t, filepath.Join(dir, "test.md"), "---\nname: test\n---\nTest content")
 
 	m := NewManager(dir)
-	m.LoadAll()
+	mustLoadAll(t, m)
 
 	t.Run("activate found", func(t *testing.T) {
 		err := m.Activate("test")
@@ -117,11 +170,11 @@ func TestManager_Activate_Deactivate(t *testing.T) {
 
 func TestManager_ActiveContent(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "alpha.md"), []byte("---\nname: alpha\n---\nAlpha content"), 0o644)
-	os.WriteFile(filepath.Join(dir, "beta.md"), []byte("---\nname: beta\n---\nBeta content"), 0o644)
+	mustWriteFile(t, filepath.Join(dir, "alpha.md"), "---\nname: alpha\n---\nAlpha content")
+	mustWriteFile(t, filepath.Join(dir, "beta.md"), "---\nname: beta\n---\nBeta content")
 
 	m := NewManager(dir)
-	m.LoadAll()
+	mustLoadAll(t, m)
 
 	t.Run("none active returns empty", func(t *testing.T) {
 		content := m.ActiveContent()
@@ -131,7 +184,7 @@ func TestManager_ActiveContent(t *testing.T) {
 	})
 
 	t.Run("one active returns its content", func(t *testing.T) {
-		m.Activate("alpha")
+		mustActivate(t, m, "alpha")
 		content := m.ActiveContent()
 		if content == "" {
 			t.Fatal("expected non-empty content")
@@ -142,12 +195,14 @@ func TestManager_ActiveContent(t *testing.T) {
 		if contains(content, "Beta content") {
 			t.Errorf("content should not contain inactive 'Beta content': %q", content)
 		}
-		m.Deactivate("alpha")
+		if err := m.Deactivate("alpha"); err != nil {
+			t.Fatal(err)
+		}
 	})
 
 	t.Run("multiple active returns combined", func(t *testing.T) {
-		m.Activate("alpha")
-		m.Activate("beta")
+		mustActivate(t, m, "alpha")
+		mustActivate(t, m, "beta")
 		content := m.ActiveContent()
 		if !contains(content, "Alpha content") || !contains(content, "Beta content") {
 			t.Errorf("combined content missing expected parts: %q", content)

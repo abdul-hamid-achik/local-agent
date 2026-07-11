@@ -14,49 +14,28 @@ var noColor = os.Getenv("NO_COLOR") != ""
 // Nord Dark (Polar Night + Frost)
 var (
 	// Polar Night (dark theme background/text)
-	nord0 = "#2E3440" // base background
-	nord1 = "#3B4252" // lighter background
-	nord2 = "#434C5E" // selection/background elements
 	nord3 = "#4C566A" // comments/borders
 
 	// Frost (dark theme foreground/text)
 	nord4 = "#D8DEE9" // primary text
 	nord5 = "#E5E9F0" // secondary text
-	nord6 = "#ECEFF4" // emphasized text
-
 	// Aurora (dark theme accents)
 	nord7  = "#BF616A" // red (errors/warnings)
-	nord8  = "#D08770" // orange (warnings)
 	nord9  = "#EBCB8B" // yellow (warnings/highlights)
 	nord10 = "#A3BE8C" // green (success)
 	nord11 = "#B48EAD" // purple (special)
 	nord12 = "#88C0D0" // cyan (primary accent)
 	nord13 = "#81A1C1" // blue (secondary accent)
-	nord14 = "#5E81AC" // dark blue (links/details)
 )
 
 // Nord Light (Aurora variant for light theme)
 var (
 	// Light background
-	nordLight0 = "#FFFFFF" // base background
-	nordLight1 = "#ECEFF4" // lighter background
-	nordLight2 = "#E5E9F0" // selection
 	nordLight3 = "#D8DEE9" // borders
 
 	// Light text
 	nordLight4 = "#4C566A" // primary text
 	nordLight5 = "#3B4252" // secondary text
-	nordLight6 = "#2E3440" // emphasized text
-
-	// Aurora accents (same as dark, work well on light)
-	nordLight7  = "#BF616A" // red
-	nordLight8  = "#D08770" // orange
-	nordLight9  = "#EBCB8B" // yellow
-	nordLight10 = "#A3BE8C" // green
-	nordLight11 = "#B48EAD" // purple
-	nordLight12 = "#88C0D0" // cyan
-	nordLight13 = "#81A1C1" // blue
-	nordLight14 = "#5E81AC" // dark blue
 )
 
 // Styles holds all pre-built lipgloss styles.
@@ -162,227 +141,200 @@ func NewStyles(isDark bool) Styles {
 }
 
 func adaptiveStyles(isDark bool) Styles {
-	// Select Nord palette based on theme
-	var (
-		colorDim     string
-		colorMuted   string
-		colorText    string
-		colorAccent  string
-		colorAccent2 string
-		colorError   string
-		colorSuccess string
-		colorSpecial string
-		colorBorder  string
-	)
-
+	// Body-muted colors must remain readable; border colors can be subtler.
+	// LightDark keeps every semantic token adaptive without hardcoded ANSI.
+	ld := lipgloss.LightDark(isDark)
+	colorDim := ld(lipgloss.Color("#5B6779"), lipgloss.Color("#8B97AD"))
+	colorMuted := ld(lipgloss.Color(nordLight4), lipgloss.Color(nord4))
+	colorText := ld(lipgloss.Color(nordLight5), lipgloss.Color(nord5))
+	colorAccent := ld(lipgloss.Color("#4F8F8F"), lipgloss.Color(nord12))
+	colorAccent2 := ld(lipgloss.Color("#5E81AC"), lipgloss.Color(nord13))
+	colorError := ld(lipgloss.Color("#C94F4F"), lipgloss.Color(nord7))
+	colorSuccess := ld(lipgloss.Color("#4F8F38"), lipgloss.Color(nord10))
+	colorSpecial := ld(lipgloss.Color("#7B5A83"), lipgloss.Color(nord11))
+	colorWarning := ld(lipgloss.Color("#8A6500"), lipgloss.Color(nord9))
+	colorBorder := ld(lipgloss.Color(nordLight3), lipgloss.Color(nord3))
+	overlayBorder := nordLight3
 	if isDark {
-		// Nord Dark Theme (Polar Night + Frost + Aurora)
-		colorDim = nord3      // #4C566A - comments/borders
-		colorMuted = nord4    // #D8DEE9 - primary text (muted)
-		colorText = nord5     // #E5E9F0 - secondary text
-		colorAccent = nord12  // #88C0D0 - cyan (primary accent)
-		colorAccent2 = nord13 // #81A1C1 - blue (secondary accent)
-		colorError = nord7    // #BF616A - red
-		colorSuccess = nord10 // #A3BE8C - green
-		colorSpecial = nord11 // #B48EAD - purple
-		colorBorder = nord3
-	} else {
-		// Nord Light Theme (Aurora)
-		colorDim = nordLight3      // #D8DEE9 - borders
-		colorMuted = nordLight4    // #4C566A - primary text (muted)
-		colorText = nordLight5     // #3B4252 - secondary text
-		colorAccent = nordLight12  // #88C0D0 - cyan
-		colorAccent2 = nordLight13 // #81A1C1 - blue
-		colorError = nordLight7    // #BF616A - red
-		colorSuccess = nordLight10 // #A3BE8C - green
-		colorSpecial = nordLight11 // #B48EAD - purple
-		colorBorder = nordLight3
-	}
-
-	// Helper for theme-specific colors
-	nordColor := func(dark, light string) string {
-		if isDark {
-			return dark
-		}
-		return light
+		overlayBorder = nord3
 	}
 
 	return Styles{
 		HeaderTitle: lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color(colorAccent)).
+			Foreground(colorAccent).
 			PaddingLeft(1),
 		HeaderInfo: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorDim)).
+			Foreground(colorDim).
 			PaddingRight(1),
 		HeaderRule: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorDim)),
+			Foreground(colorBorder),
 
 		UserLabel: lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color(colorAccent2)).
+			Foreground(colorAccent2).
 			PaddingLeft(2),
 		UserContent: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorText)).
+			Foreground(colorText).
 			PaddingLeft(2),
 		AsstLabel: lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color(colorSuccess)).
+			Foreground(colorSuccess).
 			PaddingLeft(2),
 		AsstContent: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorText)).
+			Foreground(colorText).
 			PaddingLeft(4),
 		RoleRule: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorDim)),
+			Foreground(colorBorder),
 		StreamCursor: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorAccent)).
+			Foreground(colorAccent).
 			Bold(true),
 
 		ToolCallIcon: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorSpecial)).
+			Foreground(colorSpecial).
 			PaddingLeft(4),
 		ToolCallText: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorSpecial)),
+			Foreground(colorSpecial),
 		ToolResultIcon: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorDim)).
+			Foreground(colorDim).
 			PaddingLeft(4),
 		ToolResultText: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorDim)),
+			Foreground(colorDim),
 		ToolErrorIcon: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorError)).
+			Foreground(colorError).
 			PaddingLeft(4),
 		ToolErrorText: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorError)),
+			Foreground(colorError),
 		ToolDoneIcon: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorSuccess)).
+			Foreground(colorSuccess).
 			PaddingLeft(4),
 		ToolDoneText: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorDim)),
+			Foreground(colorDim),
 		ToolRunningText: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorAccent)),
+			Foreground(colorAccent),
 		ToolDetailText: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorMuted)),
+			Foreground(colorMuted),
 
 		Divider: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorDim)),
+			Foreground(colorBorder),
 		StatusDot: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorAccent)).
+			Foreground(colorAccent).
 			PaddingLeft(1),
 		StatusText: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorDim)),
+			Foreground(colorDim),
 		StatusCheck: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorSuccess)).
+			Foreground(colorSuccess).
 			PaddingLeft(1),
 		StatusError: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorError)).
+			Foreground(colorError).
 			PaddingLeft(1),
 		ApprovalPrompt: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorAccent)).
+			Foreground(colorAccent).
 			Bold(true),
 		StreamHint: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorDim)).
+			Foreground(colorDim).
 			Italic(true),
 		ErrorText: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorError)).
+			Foreground(colorError).
 			Bold(true).
 			PaddingLeft(2),
 		Dimmed: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorDim)),
+			Foreground(colorDim),
 
 		SystemText: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorText)).
+			Foreground(colorText).
 			Italic(true).
 			PaddingLeft(2),
 		WelcomeHint: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorAccent2)).
+			Foreground(colorAccent2).
 			Bold(true),
 
 		CompletionBorder: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorDim)),
+			Foreground(colorBorder),
 		CompletionSelected: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorAccent)).
+			Foreground(colorAccent).
 			Bold(true),
 
 		CompletionFilter: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorText)),
+			Foreground(colorText),
 		CompletionCursor: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorAccent)).
+			Foreground(colorAccent).
 			Bold(true),
 		CompletionCategory: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorDim)),
+			Foreground(colorDim),
 		CompletionFooter: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorDim)).
+			Foreground(colorDim).
 			Italic(true),
 		CompletionSearching: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorSpecial)).
+			Foreground(colorSpecial).
 			Italic(true),
 
 		StartupCheck: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorSuccess)),
+			Foreground(colorSuccess),
 		StartupFail: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorError)),
+			Foreground(colorError),
 		StartupLabel: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorText)),
+			Foreground(colorText),
 		StartupDetail: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorDim)),
+			Foreground(colorDim),
 		StartupSpin: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorAccent)),
+			Foreground(colorAccent),
 
 		ModeAsk: lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color(colorAccent2)),
+			Foreground(colorAccent2),
 		ModePlan: lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color(nordColor(nord9, nordLight9))), // yellow
+			Foreground(colorWarning), // yellow
 		ModeBuild: lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color(colorSuccess)),
+			Foreground(colorSuccess),
 
 		ContextPctLow: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorSuccess)),
+			Foreground(colorSuccess),
 		ContextPctMid: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(nordColor(nord9, nordLight9))),
+			Foreground(colorWarning),
 		ContextPctHigh: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorError)),
+			Foreground(colorError),
 
 		ToolBashCmd: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorDim)).
+			Foreground(colorDim).
 			Italic(true),
 
 		DiffAdded: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorSuccess)).
+			Foreground(colorSuccess).
 			PaddingLeft(6),
 		DiffRemoved: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorError)).
+			Foreground(colorError).
 			PaddingLeft(6),
 		DiffContext: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorDim)).
+			Foreground(colorDim).
 			PaddingLeft(6),
 		DiffHeader: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorAccent)).
+			Foreground(colorAccent).
 			PaddingLeft(6),
 
 		ThinkingHeader: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorSpecial)).
+			Foreground(colorSpecial).
 			Italic(true),
 		ThinkingContent: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorDim)).
+			Foreground(colorDim).
 			PaddingLeft(4),
 		ThinkingBorder: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorDim)),
+			Foreground(colorBorder),
 
 		OverlayTitle: lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color(colorAccent)),
-		OverlayBorder: colorBorder,
+			Foreground(colorAccent),
+		OverlayBorder: overlayBorder,
 		OverlayAccent: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorAccent2)).
+			Foreground(colorAccent2).
 			Bold(true),
 		OverlayDim: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorDim)),
+			Foreground(colorDim),
 
 		FocusIndicator: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorAccent)).
+			Foreground(colorAccent).
 			Bold(true),
 	}
 }
@@ -422,8 +374,8 @@ func plainStyles() Styles {
 		StatusError:    p.PaddingLeft(1),
 		ApprovalPrompt: b,
 		StreamHint:     p.Italic(true),
-		ErrorText:  b.PaddingLeft(2),
-		Dimmed:     p,
+		ErrorText:      b.PaddingLeft(2),
+		Dimmed:         p,
 
 		SystemText:  p.PaddingLeft(2).Italic(true),
 		WelcomeHint: b,
@@ -477,12 +429,4 @@ func rule(width int) string {
 		return ""
 	}
 	return strings.Repeat("─", width)
-}
-
-// thickRule generates a horizontal line using a thick character.
-func thickRule(width int) string {
-	if width < 1 {
-		return ""
-	}
-	return strings.Repeat("━", width)
 }

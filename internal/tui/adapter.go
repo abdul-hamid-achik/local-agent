@@ -20,16 +20,20 @@ func (a *Adapter) StreamText(text string) {
 	sendMsg(a.program, StreamTextMsg{Text: text})
 }
 
+func (a *Adapter) StreamReasoning(text string) {
+	sendMsg(a.program, StreamThinkingMsg{Text: text})
+}
+
 func (a *Adapter) StreamDone(evalCount, promptTokens int) {
 	sendMsg(a.program, StreamDoneMsg{EvalCount: evalCount, PromptTokens: promptTokens})
 }
 
-func (a *Adapter) ToolCallStart(name string, args map[string]any) {
-	sendMsg(a.program, ToolCallStartMsg{Name: name, Args: args, StartTime: time.Now()})
+func (a *Adapter) ToolCallStart(callID, name string, args map[string]any) {
+	sendMsg(a.program, ToolCallStartMsg{ID: callID, Name: name, Args: args, StartTime: time.Now()})
 }
 
-func (a *Adapter) ToolCallResult(name string, result string, isError bool, duration time.Duration) {
-	sendMsg(a.program, ToolCallResultMsg{Name: name, Result: result, IsError: isError, Duration: duration})
+func (a *Adapter) ToolCallResult(callID, name string, result string, isError bool, duration time.Duration) {
+	sendMsg(a.program, ToolCallResultMsg{ID: callID, Name: name, Result: result, IsError: isError, Duration: duration})
 }
 
 func (a *Adapter) SystemMessage(msg string) {

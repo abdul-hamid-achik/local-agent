@@ -1,19 +1,18 @@
 package tui
 
 import (
-	"charm.land/lipgloss/v2"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // MouseHandler provides enhanced mouse interaction handling.
 type MouseHandler struct {
-	isDark        bool
-	styles        MouseHandlerStyles
-	resizer       *PanelResizer
-	lastClickX    int
-	lastClickY    int
-	lastClickTime int64
-	clickCount    int
+	isDark     bool
+	styles     MouseHandlerStyles
+	resizer    *PanelResizer
+	lastClickX int
+	lastClickY int
+	clickCount int
 }
 
 // MouseHandlerStyles holds styling.
@@ -42,9 +41,9 @@ func DefaultMouseHandlerStyles(isDark bool) MouseHandlerStyles {
 // NewMouseHandler creates a new mouse handler.
 func NewMouseHandler(isDark bool, panelMinWidth, panelMaxWidth int) *MouseHandler {
 	return &MouseHandler{
-		isDark:   isDark,
-		styles:   DefaultMouseHandlerStyles(isDark),
-		resizer:  NewPanelResizer(panelMinWidth, panelMaxWidth, isDark),
+		isDark:  isDark,
+		styles:  DefaultMouseHandlerStyles(isDark),
+		resizer: NewPanelResizer(panelMinWidth, panelMaxWidth, isDark),
 	}
 }
 

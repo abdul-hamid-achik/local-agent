@@ -1,6 +1,10 @@
 package tui
 
 import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/command"
@@ -54,6 +58,55 @@ func TestCompleter_Complete(t *testing.T) {
 			t.Errorf("expected no completions for plain text, got %d", len(results))
 		}
 	})
+}
+
+func TestSearchFilesIsBoundedToWorkspaceWithoutMCP(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"src/alpha_handler.go", "nested/alpha_test.go", "node_modules/alpha.js"} {
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("fixture"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c := &Completer{workDir: root}
+	results := c.SearchFiles(context.Background(), "alpha")
+	if len(results) != 2 {
+		t.Fatalf("SearchFiles returned %d results, want 2: %#v", len(results), results)
+	}
+	for _, result := range results {
+		if strings.Contains(result.Insert, "node_modules") {
+			t.Fatalf("heavy directory escaped completion filter: %#v", result)
+		}
+	}
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got := c.SearchFiles(cancelled, "alpha"); len(got) != 0 {
+		t.Fatalf("cancelled search returned results: %#v", got)
+	}
+}
+
+func TestSearchResultCompletionAcceptsOnlyWorkspaceFiles(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "src", "main.go"), []byte("package main"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := &Completer{workDir: root}
+	completion, ok := c.searchResultCompletion("src/main.go")
+	if !ok || completion.Insert != "@src/main.go " {
+		t.Fatalf("valid completion = %#v, %v", completion, ok)
+	}
+	for _, candidate := range []string{"Here are the results:", "```go", "../outside.go", "missing.go"} {
+		if completion, ok := c.searchResultCompletion(candidate); ok {
+			t.Fatalf("fake completion accepted for %q: %#v", candidate, completion)
+		}
+	}
 }
 
 func TestCompleteCommand(t *testing.T) {

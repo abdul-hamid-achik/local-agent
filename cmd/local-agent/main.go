@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sync"
 	"syscall"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -31,12 +32,21 @@ import (
 
 var version = "dev"
 
+type availabilityAwareRouter interface {
+	SetAvailableModels([]string)
+	ResolveAvailableModel(string) string
+}
+
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
 	// Handle --version flag before flag.Parse (which may fail)
 	for _, arg := range os.Args[1:] {
 		if arg == "--version" || arg == "-version" {
 			fmt.Println(version)
-			return
+			return 0
 		}
 	}
 	if len(os.Args) > 1 {
@@ -50,13 +60,12 @@ func main() {
 			}
 			if err := initcmd.Run(".", initcmd.Options{Force: force}); err != nil {
 				fmt.Fprintf(os.Stderr, "init: %v\n", err)
-				os.Exit(1)
+				return 1
 			}
-			fmt.Println("AGENT.md created successfully.")
-			return
+			fmt.Println("AGENTS.md created successfully.")
+			return 0
 		case "logs":
-			handleLogs(os.Args[2:])
-			return
+			return handleLogs(os.Args[2:])
 		}
 	}
 
@@ -69,7 +78,8 @@ func main() {
 
 	cfg, agentsDir, err := config.LoadWithAgentsDir()
 	if err != nil {
-		log.Fatalf("config: %v", err)
+		fmt.Fprintf(os.Stderr, "config: %v\n", err)
+		return 1
 	}
 	if *modelFlag != "" {
 		cfg.Ollama.Model = *modelFlag
@@ -86,18 +96,60 @@ func main() {
 	router = newModelRouter(&cfg.Model, *qwenRouterFlag)
 
 	modelName := cfg.Ollama.Model
+	modelPinned := shouldPinStartupModel(*modelFlag, cfg.Model.AutoSelect)
 	if cfg.AgentProfile != "" && agentsDir != nil {
 		if profile := agentsDir.GetAgent(cfg.AgentProfile); profile != nil {
 			if profile.Model != "" {
 				modelName = profile.Model
+				modelPinned = true
 			}
 		}
 	}
-
-	// Fast, non-blocking setup.
+	// Discover the actual local Ollama inventory once. Routing uses this set to
+	// degrade to an installed tier instead of selecting a missing 0.8B/4B model
+	// from the static catalog. Cloud entries are excluded and byte sizes are
+	// retained for central memory admission.
 	modelManager := llm.NewModelManager(cfg.Ollama.BaseURL, cfg.Ollama.NumCtx)
-	if err := modelManager.SetCurrentModel(modelName); err != nil {
-		log.Fatalf("set current model: %v", err)
+	defer modelManager.Close()
+	discoveryCtx, cancelDiscovery := context.WithTimeout(context.Background(), 2*time.Second)
+	localInventory, discoveryErr := modelManager.ListLocalModelInventory(discoveryCtx)
+	cancelDiscovery()
+	localModels := make([]string, len(localInventory))
+	for i, model := range localInventory {
+		localModels[i] = model.Name
+	}
+	modelManager.ConfigureLocalInventory(cfg.Privacy.LocalOnly, localInventory, discoveryErr == nil)
+	if discoveryErr != nil && cfg.Privacy.LocalOnly && *promptFlag != "" {
+		fmt.Fprintf(os.Stderr, "model: local-only mode could not verify Ollama local weights: %v\n", discoveryErr)
+		return 1
+	}
+	awareRouter, ok := router.(availabilityAwareRouter)
+	if !ok {
+		fmt.Fprintln(os.Stderr, "model router does not support local inventory")
+		return 1
+	}
+	modelName, modelList, err := resolveStartupModel(
+		modelName,
+		modelPinned,
+		cfg.Privacy.LocalOnly,
+		&cfg.Model,
+		localModels,
+		discoveryErr == nil,
+		awareRouter,
+	)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "model: %v\n", err)
+		return 1
+	}
+	if discoveryErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: local model discovery failed: %v\n", discoveryErr)
+	}
+
+	if discoveryErr == nil || !cfg.Privacy.LocalOnly {
+		if err := modelManager.SetCurrentModel(modelName); err != nil {
+			fmt.Fprintf(os.Stderr, "set current model: %v\n", err)
+			return 1
+		}
 	}
 
 	var servers []config.ServerConfig
@@ -118,6 +170,10 @@ func main() {
 	ag.AddToolHook(agent.NewSizeCapHook(96 * 1024))
 	if wd, err := os.Getwd(); err == nil {
 		ag.SetWorkDir(wd)
+		if err := applyWorkspaceIgnore(ag, wd); err != nil {
+			fmt.Fprintf(os.Stderr, "workspace policy: %v\n", err)
+			return 1
+		}
 	}
 	defer ag.Close()
 
@@ -143,8 +199,36 @@ func main() {
 		ag.SetCheckpointStore(dbStore, 0)
 	}
 
-	memStore := memory.NewStore("")
-	ag.SetMemoryStore(memStore)
+	workspace := currentWorkspace()
+	iceStorePath := ""
+	if cfg.ICE.Enabled {
+		iceStorePath, err = resolveICEStorePath(workspace, cfg.ICE.StorePath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "config: %v\n", err)
+			return 1
+		}
+	}
+	var memStore *memory.Store
+	var legacyMemoryNotice string
+	if workspace == "" {
+		log.Printf("warning: project memory disabled: workspace identity is unavailable")
+	} else {
+		legacyMemoryNotice = legacyMemoryQuarantineNotice(workspace)
+		if legacyMemoryNotice != "" {
+			if *promptFlag != "" {
+				fmt.Fprintln(os.Stderr, "memory:", legacyMemoryNotice)
+			} else {
+				log.Printf("memory: %s", legacyMemoryNotice)
+			}
+		}
+		memStore = memory.NewStore(memory.DefaultPathForWorkspace(workspace))
+		if err := memStore.Err(); err != nil {
+			log.Printf("warning: project memory disabled: %v", err)
+			memStore = nil
+		} else {
+			ag.SetMemoryStore(memStore)
+		}
+	}
 
 	skillDirs := []string{cfg.SkillsDir}
 	if agentsDir != nil && len(agentsDir.Skills) > 0 {
@@ -164,24 +248,61 @@ func main() {
 			skillMgr.AddSearchPath(dir)
 		}
 	}
-	_ = skillMgr.LoadAll()
-	baseLoadedContext := buildBaseLoadedContext(agentsDir)
+	if err := skillMgr.LoadAll(); err != nil {
+		fmt.Fprintf(os.Stderr, "skills: %v\n", err)
+		return 1
+	}
+	baseLoadedContext, err := buildBaseLoadedContext(agentsDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "project instructions: %v\n", err)
+		return 1
+	}
 
 	// Non-interactive / pipe mode: run a single prompt and exit.
 	if *promptFlag != "" {
-		ctx := context.Background()
+		ctx, cancelRun := context.WithCancel(context.Background())
+		defer cancelRun()
+		headlessSignals := make(chan os.Signal, 1)
+		headlessSignalDone := make(chan struct{})
+		signal.Notify(headlessSignals, os.Interrupt, syscall.SIGTERM)
+		go func() {
+			select {
+			case <-headlessSignals:
+				// One signal requests a graceful cancellation. Restore the OS
+				// default immediately so a wedged backend cannot swallow a second.
+				signal.Stop(headlessSignals)
+				cancelRun()
+			case <-headlessSignalDone:
+			}
+		}()
+		defer func() {
+			signal.Stop(headlessSignals)
+			close(headlessSignalDone)
+		}()
 		if err := applyInitialAgentProfile(ag, skillMgr, modelManager, agentsDir, baseLoadedContext, cfg.AgentProfile); err != nil {
 			fmt.Fprintf(os.Stderr, "agent profile: %v\n", err)
+			return 1
 		}
 		buildMode := tui.DefaultModeConfigs()[tui.ModeBuild]
 		if explicitRouter, ok := router.(interface{ SetModeContext(config.ModeContext) }); ok {
 			explicitRouter.SetModeContext(buildMode.RouterMode)
 		}
-		if *modelFlag == "" && router != nil {
-			modelName = router.SelectModelForMode(*promptFlag, buildMode.RouterMode)
+		routedModel := selectHeadlessModel(modelName, *promptFlag, modelPinned, router, buildMode.RouterMode)
+		if routedModel != modelName {
+			modelName = routedModel
+			if modelName == "" {
+				fmt.Fprintln(os.Stderr, "model routing failed: no compatible local chat model is installed")
+				return 1
+			}
+			if cfg.Privacy.LocalOnly && discoveryErr == nil {
+				if err := config.CheckModelAvailableLocally(modelName, localModels); err != nil {
+					fmt.Fprintf(os.Stderr, "model routing failed: %v\n", err)
+					return 1
+				}
+			}
 			if err := modelManager.SetCurrentModel(modelName); err != nil {
 				fmt.Fprintf(os.Stderr, "model routing failed: %v\n", err)
-				os.Exit(1)
+				return 1
 			}
 		}
 
@@ -189,7 +310,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "connecting to Ollama (%s)...\n", modelName)
 		if err := modelManager.Ping(); err != nil {
 			fmt.Fprintf(os.Stderr, "ollama: %v\nhint: is `ollama serve` running? is %q pulled?\n", err, modelName)
-			os.Exit(1)
+			return 1
 		}
 
 		// Connect MCP servers synchronously.
@@ -207,21 +328,22 @@ func main() {
 		wg.Wait()
 
 		// ICE setup.
-		if cfg.ICE.Enabled {
-			embedModel := cfg.ICE.EmbedModel
-			if embedModel == "" {
-				embedModel = cfg.Model.EmbedModel
-			}
-			iceEngine, err := ice.NewEngine(modelManager, memStore, ice.EngineConfig{
-				EmbedModel: embedModel,
-				StorePath:  cfg.ICE.StorePath,
-				NumCtx:     cfg.Ollama.NumCtx,
-			})
+		if cfg.ICE.Enabled && workspace != "" {
+			iceEngine, err := ice.NewEngine(modelManager, memStore, resolvedICEEngineConfig(cfg, workspace, iceStorePath))
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "ICE: %v\n", err)
 			} else {
 				ag.SetICEEngine(iceEngine)
+				preview, previewErr := iceEngine.PreviewLegacyEntries()
+				switch {
+				case previewErr != nil:
+					fmt.Fprintf(os.Stderr, "ICE: legacy history remains quarantined: %v\n", previewErr)
+				case !preview.AlreadyClaimed && preview.Count > 0:
+					fmt.Fprintf(os.Stderr, "ICE: %d provenance-free history entries quarantined; open the TUI and run /migrate-ice to explicitly attribute them\n", preview.Count)
+				}
 			}
+		} else if cfg.ICE.Enabled {
+			fmt.Fprintln(os.Stderr, "ICE: disabled because workspace identity is unavailable")
 		}
 
 		// Set BUILD mode for headless execution.
@@ -230,8 +352,11 @@ func main() {
 		// Run the agent synchronously.
 		out := agent.NewHeadlessOutput()
 		ag.AddUserMessage(*promptFlag)
-		ag.Run(ctx, out)
-		return
+		if err := ag.Run(ctx, out); err != nil {
+			fmt.Fprintf(os.Stderr, "local-agent: %v\n", err)
+			return 1
+		}
+		return 0
 	}
 
 	cmdReg := command.NewRegistry()
@@ -240,12 +365,9 @@ func main() {
 	// Load custom commands from ~/.config/local-agent/commands/
 	if home, err := os.UserHomeDir(); err == nil {
 		customDir := filepath.Join(home, ".config", "local-agent", "commands")
-		command.RegisterCustomCommands(cmdReg, customDir)
-	}
-
-	var modelList []string
-	for _, m := range cfg.Model.Models {
-		modelList = append(modelList, m.Name)
+		if err := command.RegisterCustomCommands(cmdReg, customDir); err != nil {
+			fmt.Fprintf(os.Stderr, "Custom commands: %v\n", err)
+		}
 	}
 
 	var agentList []string
@@ -274,22 +396,31 @@ func main() {
 	}
 
 	m := tui.New(ag, cmdReg, skillMgr, completer, modelManager, router, logger)
+	m.SetModelPinned(modelPinned)
+	m.SetSessionStore(dbStore)
 	m.SetAgentProfileSource(agentsDir, baseLoadedContext, cfg.AgentProfile)
-	p := tea.NewProgram(m)
+	// Bubble Tea's built-in signal handler exits before Model.Update sees the
+	// event. Own SIGINT/SIGTERM so every OS shutdown follows the same
+	// cancel/join/persist path as the in-app quit binding.
+	p := tea.NewProgram(m, tea.WithoutSignalHandler())
 	m.SetProgram(p)
 
-	// Graceful shutdown on SIGTERM (e.g. `kill`, orchestrator stop). BubbleTea
-	// already traps SIGINT/ctrl-c, so we only add SIGTERM here to avoid stealing
-	// its handler. Quitting the program lets p.Run() return so the deferred
-	// ag.Close()/registry.Close()/log flush all run instead of being skipped.
+	// Raw Ctrl+C remains a Bubble Tea key event; terminal-delivered SIGINT and
+	// orchestrator SIGTERM are converted to the graceful shutdown message.
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM)
+	signalDone := make(chan struct{})
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	go func() {
-		if _, ok := <-sigCh; ok {
-			p.Quit()
+		select {
+		case <-sigCh:
+			// Forward one graceful request, then restore the OS default. If a
+			// kernel syscall or third-party transport defeats cancellation, a
+			// second signal remains an emergency termination path.
+			signal.Stop(sigCh)
+			p.Send(tui.ShutdownMsg{})
+		case <-signalDone:
 		}
 	}()
-	defer signal.Stop(sigCh)
 
 	// Background initialization goroutine.
 	initCtx, initCancel := context.WithCancel(context.Background())
@@ -298,6 +429,9 @@ func main() {
 
 	go func() {
 		defer close(initDone)
+		if legacyMemoryNotice != "" {
+			p.Send(tui.StartupStatusMsg{ID: "legacy:memory", Label: "Legacy memory", Status: "failed", Detail: legacyMemoryNotice})
+		}
 
 		// 1. Ping Ollama.
 		p.Send(tui.StartupStatusMsg{ID: "ollama", Label: "Ollama (" + modelName + ")", Status: "connecting"})
@@ -349,30 +483,35 @@ func main() {
 		var iceEnabled bool
 		var iceConversations int
 		var iceSessionID string
-		if cfg.ICE.Enabled {
+		if cfg.ICE.Enabled && workspace != "" {
 			p.Send(tui.StartupStatusMsg{ID: "ice", Label: "ICE", Status: "connecting"})
-			embedModel := cfg.ICE.EmbedModel
-			if embedModel == "" {
-				embedModel = cfg.Model.EmbedModel
-			}
-			iceEngine, err := ice.NewEngine(modelManager, memStore, ice.EngineConfig{
-				EmbedModel: embedModel,
-				StorePath:  cfg.ICE.StorePath,
-				NumCtx:     cfg.Ollama.NumCtx,
-			})
+			iceEngine, err := ice.NewEngine(modelManager, memStore, resolvedICEEngineConfig(cfg, workspace, iceStorePath))
 			if err != nil {
 				p.Send(tui.StartupStatusMsg{ID: "ice", Label: "ICE", Status: "failed", Detail: err.Error()})
 			} else {
 				ag.SetICEEngine(iceEngine)
 				iceEnabled = true
-				iceConversations = iceEngine.Store().Count()
+				iceConversations = iceEngine.ScopedEntryCount()
 				iceSessionID = iceEngine.SessionID()
-				p.Send(tui.StartupStatusMsg{ID: "ice", Label: "ICE", Status: "connected", Detail: fmt.Sprintf("%d conversations", iceConversations)})
+				detail := fmt.Sprintf("%d scoped conversations", iceConversations)
+				preview, previewErr := iceEngine.PreviewLegacyEntries()
+				switch {
+				case previewErr != nil:
+					detail += "; legacy history quarantined: " + previewErr.Error()
+				case !preview.AlreadyClaimed && preview.Count > 0:
+					detail += fmt.Sprintf("; %d legacy entries quarantined — /migrate-ice", preview.Count)
+				}
+				p.Send(tui.StartupStatusMsg{ID: "ice", Label: "ICE", Status: "connected", Detail: detail})
 			}
+		} else if cfg.ICE.Enabled {
+			p.Send(tui.StartupStatusMsg{ID: "ice", Label: "ICE", Status: "failed", Detail: "workspace identity unavailable; legacy retrieval disabled"})
 		}
 
 		// 4. Load context and agent profile.
+		activeAgentProfile := cfg.AgentProfile
 		if err := applyInitialAgentProfile(ag, skillMgr, modelManager, agentsDir, baseLoadedContext, cfg.AgentProfile); err != nil {
+			ag.DenyAllMCPTools()
+			activeAgentProfile = ""
 			p.Send(tui.ErrorMsg{Msg: fmt.Sprintf("agent profile: %v", err)})
 		}
 
@@ -388,7 +527,7 @@ func main() {
 		p.Send(tui.InitCompleteMsg{
 			Model:            modelName,
 			ModelList:        modelList,
-			AgentProfile:     cfg.AgentProfile,
+			AgentProfile:     activeAgentProfile,
 			AgentList:        agentList,
 			ToolCount:        ag.ToolCount(),
 			ServerCount:      registry.ServerCount(),
@@ -400,17 +539,55 @@ func main() {
 		})
 	}()
 
-	if _, err := p.Run(); err != nil {
-		log.Fatalf("tui: %v", err)
-	}
-
+	_, runErr := p.Run()
+	signal.Stop(sigCh)
+	close(signalDone)
 	initCancel()
 	<-initDone
+	if runErr != nil {
+		fmt.Fprintf(os.Stderr, "tui: %v\n", runErr)
+		return 1
+	}
+	return 0
+}
+
+// currentWorkspace returns the process workspace used to scope local memory.
+func currentWorkspace() string {
+	workDir, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return workDir
+}
+
+func applyWorkspaceIgnore(ag *agent.Agent, workDir string) error {
+	ignore, err := config.LoadIgnoreFileWithError(workDir)
+	if err != nil {
+		return err
+	}
+	if ignore != nil && ag != nil {
+		ag.SetIgnoreContent(ignore.Raw())
+	}
+	return nil
+}
+
+// legacyMemoryQuarantineNotice performs read-only startup inventory. Startup,
+// including headless mode, must never assign provenance-free memory to the
+// first working directory that happens to launch local-agent.
+func legacyMemoryQuarantineNotice(workspace string) string {
+	preview, err := memory.PreviewDefaultLegacyForWorkspace(workspace)
+	if err != nil {
+		return fmt.Sprintf("legacy memory remains quarantined: %v", err)
+	}
+	if !preview.AlreadyClaimed && preview.Count > 0 {
+		return fmt.Sprintf("%d provenance-free memories quarantined; open the TUI and use /migrate-memory to preview explicit attribution", preview.Count)
+	}
+	return ""
 }
 
 // handleLogs implements the "logs" subcommand.
 // With -f it execs tail -f on the latest log file; otherwise it lists recent sessions.
-func handleLogs(args []string) {
+func handleLogs(args []string) int {
 	follow := false
 	for _, arg := range args {
 		if arg == "-f" {
@@ -422,31 +599,31 @@ func handleLogs(args []string) {
 		latest, err := logging.LatestLogPath()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "logs: %v\n", err)
-			os.Exit(1)
+			return 1
 		}
 		fmt.Fprintf(os.Stderr, "following %s\n", latest)
 		tailBin, err := exec.LookPath("tail")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "logs: tail not found: %v\n", err)
-			os.Exit(1)
+			return 1
 		}
 		// Replace the process with tail -f.
 		if err := syscall.Exec(tailBin, []string{"tail", "-f", latest}, os.Environ()); err != nil {
 			fmt.Fprintf(os.Stderr, "logs: exec tail: %v\n", err)
-			os.Exit(1)
+			return 1
 		}
-		return
+		return 0
 	}
 
 	// List recent log sessions.
 	entries, err := logging.ListLogs(20)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "logs: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 	if len(entries) == 0 {
 		fmt.Println("No log files found in", logging.LogDir())
-		return
+		return 0
 	}
 
 	fmt.Printf("Recent sessions (%s):\n\n", logging.LogDir())
@@ -456,4 +633,5 @@ func handleLogs(args []string) {
 		fmt.Printf("  %-30s  %s  %6.1f KB\n", name, e.ModTime.Format("2006-01-02 15:04:05"), sizeKB)
 	}
 	fmt.Printf("\nTip: run `local-agent logs -f` to follow the latest log.\n")
+	return 0
 }

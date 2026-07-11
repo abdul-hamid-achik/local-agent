@@ -1,6 +1,52 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"reflect"
+	"testing"
+
+	"gopkg.in/yaml.v3"
+)
+
+func TestModelCapabilityYAML(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		yaml string
+		want ModelCapability
+	}{
+		{name: "name", yaml: "capability: complex\n", want: CapabilityComplex},
+		{name: "legacy number", yaml: "capability: 1\n", want: CapabilityMedium},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var model Model
+			if err := yaml.Unmarshal([]byte(tc.yaml), &model); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if model.Capability != tc.want {
+				t.Fatalf("capability = %v, want %v", model.Capability, tc.want)
+			}
+		})
+	}
+
+	var model Model
+	if err := yaml.Unmarshal([]byte("capability: enormous\n"), &model); err == nil {
+		t.Fatal("expected invalid capability to fail")
+	}
+}
+
+func TestExampleConfigParsesAndValidates(t *testing.T) {
+	data, err := os.ReadFile("../../config.example.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := defaults()
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("config.example.yaml does not parse: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("config.example.yaml is invalid: %v", err)
+	}
+}
 
 func TestModel_IsSimpleTask(t *testing.T) {
 	tests := []struct {
@@ -157,5 +203,51 @@ func TestModelConfig_SelectModelForTask(t *testing.T) {
 				t.Errorf("SelectModelForTask(%q) = %q, want %q", tt.complexity, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestAvailableLocalChatModelsUsesSafeCatalogOrder(t *testing.T) {
+	cfg := DefaultModelConfig()
+	discovered := []string{
+		"unknown-local:latest",
+		"nomic-embed-text",
+		"gemma4:e4b",
+		"gemma4:e2b",
+		"qwen3.5:9b",
+		"qwen3.5:4b",
+		"qwen3.5:0.8b",
+		"qwen3.5:2b",
+	}
+
+	got := cfg.AvailableLocalChatModels(discovered)
+	want := []string{
+		"qwen3.5:0.8b",
+		"qwen3.5:2b",
+		"qwen3.5:4b",
+		"qwen3.5:9b",
+		"gemma4:e2b",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("chat models = %#v, want %#v", got, want)
+	}
+}
+
+func TestCheckModelAvailableLocally(t *testing.T) {
+	discovered := []string{"qwen3.5:2b", "gemma4:e2b", "llama3:latest"}
+	if err := CheckModelAvailableLocally("gemma4:e2b", discovered); err != nil {
+		t.Fatalf("installed model rejected: %v", err)
+	}
+	if err := CheckModelAvailableLocally("qwen3.5:cloud", discovered); err == nil {
+		t.Fatal("model absent from local inventory was accepted")
+	}
+	if err := CheckModelAvailableLocally("llama3", discovered); err != nil {
+		t.Fatalf("implicit :latest model rejected: %v", err)
+	}
+}
+
+func TestAvailableLocalChatModelsMatchesImplicitLatestTag(t *testing.T) {
+	cfg := ModelConfig{Models: []Model{{Name: "llama3", Family: FamilyLlama}}}
+	if got := cfg.AvailableLocalChatModels([]string{"llama3:latest"}); !reflect.DeepEqual(got, []string{"llama3"}) {
+		t.Fatalf("chat models = %#v, want implicit-tag catalog entry", got)
 	}
 }

@@ -92,7 +92,7 @@ func TailLog(path string, n int) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open log: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var lines []string
 	scanner := bufio.NewScanner(f)
@@ -101,6 +101,9 @@ func TailLog(path string, n int) ([]string, error) {
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("read log: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return nil, fmt.Errorf("close log: %w", err)
 	}
 
 	if n > 0 && n < len(lines) {

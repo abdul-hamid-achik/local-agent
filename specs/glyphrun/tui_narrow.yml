@@ -1,0 +1,77 @@
+version: 1
+name: local_agent_tui_narrow
+
+intent: |
+  a user can recover the local-agent TUI after narrowing the terminal, hide the sidebar, open responsive help, and quit cleanly.
+
+target:
+  cmd: ["./bin/local-agent"]
+  cwd: "."
+  env:
+    HOME: "${projectRoot}/.glyphrun/tmp/narrow-home"
+    LOCAL_AGENT_AGENTS_DIR: "${projectRoot}/.glyphrun/tmp/narrow-agents"
+    OLLAMA_HOST: "http://127.0.0.1:11434"
+
+terminal:
+  cols: 80
+  rows: 24
+
+preconditions:
+  commands:
+    - run: "rm -rf .glyphrun/tmp/narrow-home .glyphrun/tmp/narrow-agents && mkdir -p .glyphrun/tmp/narrow-home .glyphrun/tmp/narrow-agents && go build -o ./bin/local-agent ./cmd/local-agent"
+      cwd: "."
+      timeoutMs: 30000
+
+steps:
+  - wait:
+      screen:
+        contains: "Ask, @mention files, or type /help"
+      timeoutMs: 5000
+  - resize:
+      cols: 40
+      rows: 20
+  - wait:
+      screen:
+        contains: "Ctrl+B"
+      timeoutMs: 2000
+  - wait:
+      screen:
+        contains: "hide sidebar"
+      timeoutMs: 2000
+  - snapshot: narrow_recovery
+  - press: "ctrl+b"
+  - wait:
+      screen:
+        contains: "LOCAL AGENT"
+      timeoutMs: 2000
+  - press: "?"
+  - wait:
+      screen:
+        contains: "Keyboard Shortcuts"
+      timeoutMs: 2000
+  - snapshot: narrow_help
+  - press: "q"
+  - press: "ctrl+c"
+  - wait:
+      process:
+        exitCode: 0
+      timeoutMs: 3000
+
+outcomes:
+  - id: narrow_recovery_is_discoverable
+    description: the narrow state explains how to recover the chat pane
+    verify:
+      snapshot:
+        name: narrow_recovery
+        mode: text
+  - id: responsive_help_opens
+    description: help remains usable after the terminal is narrowed and the sidebar is hidden
+    verify:
+      snapshot:
+        name: narrow_help
+        mode: text
+  - id: narrow_tui_quits_cleanly
+    description: ctrl+c exits cleanly after the responsive flow
+    verify:
+      process:
+        exitCode: 0

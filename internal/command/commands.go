@@ -3,10 +3,9 @@ package command
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
-
-const maxContextFileSize = 32 * 1024 // 32KB
 
 // RegisterBuiltins adds all built-in slash commands to the registry.
 func RegisterBuiltins(r *Registry) {
@@ -45,13 +44,18 @@ func RegisterBuiltins(r *Registry) {
 		Name:        "model",
 		Aliases:     []string{"m"},
 		Description: "Show, switch, or list models",
-		Usage:       "/model [name|list|fast|smart]",
+		Usage:       "/model [name|list|fast|smart|auto]",
 		Handler: func(ctx *Context, args []string) Result {
 			if len(args) == 0 {
 				return Result{Action: ActionShowModelPicker}
 			}
 
 			switch args[0] {
+			case "auto":
+				return Result{
+					Text:   "Automatic model routing enabled",
+					Action: ActionEnableAutoModel,
+				}
 			case "list", "ls":
 				var b strings.Builder
 				b.WriteString("Available models:\n")
@@ -156,32 +160,11 @@ func RegisterBuiltins(r *Registry) {
 			if len(args) == 0 {
 				return Result{Error: "Usage: /load <path>"}
 			}
-			path := strings.Join(args, " ")
-
-			// Expand ~ to home directory.
-			if strings.HasPrefix(path, "~/") {
-				if home, err := os.UserHomeDir(); err == nil {
-					path = home + path[1:]
-				}
-			}
-
-			info, err := os.Stat(path)
-			if err != nil {
-				return Result{Error: fmt.Sprintf("Cannot access %s: %v", path, err)}
-			}
-			if info.Size() > maxContextFileSize {
-				return Result{Error: fmt.Sprintf("File too large (%d bytes, max %d)", info.Size(), maxContextFileSize)}
-			}
-
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return Result{Error: fmt.Sprintf("Cannot read %s: %v", path, err)}
-			}
-
+			path := expandHomePath(strings.TrimSpace(strings.Join(args, " ")))
 			return Result{
-				Text:   fmt.Sprintf("Loaded context: %s (%d bytes)", path, len(data)),
+				Text:   fmt.Sprintf("Loading context from: %s", path),
 				Action: ActionLoadContext,
-				Data:   path + "\x00" + string(data), // path\0content
+				Data:   path,
 			}
 		},
 	})
@@ -239,11 +222,11 @@ func RegisterBuiltins(r *Registry) {
 				return Result{Text: "No MCP servers connected."}
 			}
 			var b strings.Builder
-			b.WriteString(fmt.Sprintf("Connected servers (%d):\n", len(ctx.ServerNames)))
+			fmt.Fprintf(&b, "Connected servers (%d):\n", len(ctx.ServerNames))
 			for _, name := range ctx.ServerNames {
 				fmt.Fprintf(&b, "  - %s\n", name)
 			}
-			b.WriteString(fmt.Sprintf("\nTotal tools: %d", ctx.ToolCount))
+			fmt.Fprintf(&b, "\nTotal tools: %d", ctx.ToolCount)
 			return Result{Text: b.String()}
 		},
 	})
@@ -329,32 +312,39 @@ func RegisterBuiltins(r *Registry) {
 
 	r.Register(&Command{
 		Name:        "export",
-		Description: "Export conversation to a markdown file",
-		Usage:       "/export [path]",
+		Description: "Export readable Markdown with a typed v2 transcript",
+		Usage:       "/export [--force] <path>",
 		Handler: func(_ *Context, args []string) Result {
-			if len(args) < 1 || args[0] == "" {
-				return Result{Error: "usage: /export <filepath>"}
+			force := len(args) > 0 && args[0] == "--force"
+			if force {
+				args = args[1:]
+			}
+			path := expandHomePath(strings.TrimSpace(strings.Join(args, " ")))
+			if path == "" {
+				return Result{Error: "usage: /export [--force] <filepath>"}
 			}
 			return Result{
-				Text:   fmt.Sprintf("Exporting conversation to: %s", args[0]),
+				Text:   fmt.Sprintf("Exporting conversation to: %s", path),
 				Action: ActionExport,
-				Data:   args[0],
+				Data:   path,
+				Force:  force,
 			}
 		},
 	})
 
 	r.Register(&Command{
 		Name:        "import",
-		Description: "Import conversation from a markdown file",
+		Description: "Import a typed v2 transcript into a fresh session",
 		Usage:       "/import [path]",
 		Handler: func(_ *Context, args []string) Result {
-			if len(args) < 1 || args[0] == "" {
+			path := expandHomePath(strings.TrimSpace(strings.Join(args, " ")))
+			if path == "" {
 				return Result{Error: "usage: /import <filepath>"}
 			}
 			return Result{
-				Text:   fmt.Sprintf("Importing conversation from: %s", args[0]),
+				Text:   fmt.Sprintf("Importing conversation from: %s", path),
 				Action: ActionImport,
-				Data:   args[0],
+				Data:   path,
 			}
 		},
 	})
@@ -390,6 +380,28 @@ func RegisterBuiltins(r *Registry) {
 	})
 
 	r.Register(&Command{
+		Name:        "migrate-checkpoints",
+		Description: "Preview or explicitly claim unbound legacy checkpoints",
+		Usage:       "/migrate-checkpoints [confirm <preview-count>]",
+		Handler: func(_ *Context, args []string) Result {
+			if len(args) == 0 {
+				return Result{Action: ActionPreviewLegacyCheckpoints}
+			}
+			if len(args) != 2 || args[0] != "confirm" {
+				return Result{Error: "usage: /migrate-checkpoints [confirm <preview-count>]"}
+			}
+			count, err := strconv.ParseInt(args[1], 10, 64)
+			if err != nil || count <= 0 {
+				return Result{Error: "confirmation count must be the positive number shown by /migrate-checkpoints"}
+			}
+			return Result{Action: ActionClaimLegacyCheckpoints, Data: strconv.FormatInt(count, 10)}
+		},
+	})
+
+	registerCountConfirmedMigration(r, "migrate-memory", "Preview or explicitly claim quarantined legacy memory", ActionPreviewLegacyMemory, ActionClaimLegacyMemory)
+	registerCountConfirmedMigration(r, "migrate-ice", "Preview or explicitly claim quarantined legacy ICE history", ActionPreviewLegacyICE, ActionClaimLegacyICE)
+
+	r.Register(&Command{
 		Name:        "exit",
 		Aliases:     []string{"quit", "q"},
 		Description: "Quit local-agent",
@@ -399,12 +411,42 @@ func RegisterBuiltins(r *Registry) {
 	})
 }
 
+func expandHomePath(path string) string {
+	if strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return home + path[1:]
+		}
+	}
+	return path
+}
+
+func registerCountConfirmedMigration(r *Registry, name, description string, previewAction, claimAction Action) {
+	r.Register(&Command{
+		Name:        name,
+		Description: description,
+		Usage:       "/" + name + " [confirm <preview-count>]",
+		Handler: func(_ *Context, args []string) Result {
+			if len(args) == 0 {
+				return Result{Action: previewAction}
+			}
+			if len(args) != 2 || args[0] != "confirm" {
+				return Result{Error: "usage: /" + name + " [confirm <preview-count>]"}
+			}
+			count, err := strconv.ParseInt(args[1], 10, 64)
+			if err != nil || count <= 0 {
+				return Result{Error: "confirmation count must be the positive number shown by /" + name}
+			}
+			return Result{Action: claimAction, Data: strconv.FormatInt(count, 10)}
+		},
+	})
+}
+
 func skillList(ctx *Context) Result {
 	if len(ctx.Skills) == 0 {
 		return Result{Text: "No skills found. Add .md files to ~/.config/local-agent/skills/"}
 	}
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Skills (%d):\n", len(ctx.Skills)))
+	fmt.Fprintf(&b, "Skills (%d):\n", len(ctx.Skills))
 	for _, s := range ctx.Skills {
 		status := "  "
 		if s.Active {

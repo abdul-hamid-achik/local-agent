@@ -13,6 +13,7 @@ const (
 // ConversationEntry is a single stored message with its embedding.
 type ConversationEntry struct {
 	ID        int       `json:"id"`
+	ProjectID string    `json:"project_id,omitempty"`
 	SessionID string    `json:"session_id"`
 	Role      string    `json:"role"` // "user", "assistant", "summary"
 	Content   string    `json:"content"`

@@ -3,6 +3,7 @@ package command
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -108,7 +109,10 @@ Review: {{input}}`), 0o644)
 		t.Fatal(err)
 	}
 
-	cmds := LoadCustomCommands(dir)
+	cmds, err := LoadCustomCommands(dir)
+	if err == nil || !strings.Contains(err.Error(), "invalid.md") {
+		t.Fatalf("expected invalid-file warning, got %v", err)
+	}
 	if len(cmds) != 1 {
 		t.Fatalf("LoadCustomCommands() returned %d commands, want 1", len(cmds))
 	}
@@ -118,9 +122,34 @@ Review: {{input}}`), 0o644)
 }
 
 func TestLoadCustomCommands_MissingDir(t *testing.T) {
-	cmds := LoadCustomCommands("/nonexistent/path")
+	cmds, err := LoadCustomCommands("/nonexistent/path")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(cmds) != 0 {
 		t.Errorf("expected empty result for missing dir, got %d", len(cmds))
+	}
+}
+
+func TestLoadCustomCommandsReportsUnsafeFileAndKeepsValidCommands(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(outside, []byte("---\nname: stolen\n---\nsecret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "00-unsafe.md")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "01-valid.md"), []byte("---\nname: valid\n---\nDo it"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	commands, err := LoadCustomCommands(dir)
+	if err == nil || !strings.Contains(err.Error(), "00-unsafe.md") {
+		t.Fatalf("unsafe custom command warning = %v", err)
+	}
+	if len(commands) != 1 || commands[0].Name != "valid" {
+		t.Fatalf("valid commands were suppressed: %#v", commands)
 	}
 }
 
@@ -136,7 +165,9 @@ Do this: {{input}}`), 0o644)
 	}
 
 	reg := NewRegistry()
-	RegisterCustomCommands(reg, dir)
+	if err := RegisterCustomCommands(reg, dir); err != nil {
+		t.Fatal(err)
+	}
 
 	result := reg.Execute(&Context{}, "testcmd", []string{"hello", "world"})
 	if result.Action != ActionSendPrompt {

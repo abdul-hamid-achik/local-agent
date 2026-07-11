@@ -1,10 +1,18 @@
 package command
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/abdul-hamid-achik/local-agent/internal/safeio"
 )
+
+const maxCustomCommandBytes int64 = 1 << 20
+
+var customCommandReader = safeio.NewReader()
 
 // CustomCommand represents a user-defined command loaded from a markdown file.
 type CustomCommand struct {
@@ -21,26 +29,33 @@ type CustomCommand struct {
 //	description: Code review prompt
 //	---
 //	Review this code: {{input}}
-func LoadCustomCommands(dir string) []CustomCommand {
+func LoadCustomCommands(dir string) ([]CustomCommand, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read custom command directory %s: %w", dir, err)
 	}
 
 	var cmds []CustomCommand
+	var warnings []error
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		data, err := customCommandReader.ReadRegularFileNoFollow(filepath.Join(dir, entry.Name()), maxCustomCommandBytes, safeio.StartupReadTimeout)
 		if err != nil {
+			warnings = append(warnings, fmt.Errorf("load custom command %s: %w", entry.Name(), err))
 			continue
 		}
 		if cmd, ok := parseCustomCommand(string(data)); ok {
 			cmds = append(cmds, cmd)
+		} else {
+			warnings = append(warnings, fmt.Errorf("parse custom command %s: expected frontmatter name and non-empty template", entry.Name()))
 		}
 	}
-	return cmds
+	return cmds, errors.Join(warnings...)
 }
 
 // parseCustomCommand parses a markdown file with YAML frontmatter.
@@ -90,8 +105,8 @@ func parseCustomCommand(content string) (CustomCommand, bool) {
 }
 
 // RegisterCustomCommands loads and registers custom commands from the given directory.
-func RegisterCustomCommands(r *Registry, dir string) {
-	cmds := LoadCustomCommands(dir)
+func RegisterCustomCommands(r *Registry, dir string) error {
+	cmds, loadErr := LoadCustomCommands(dir)
 	for _, cc := range cmds {
 		// Capture for closure.
 		tmpl := cc.Template
@@ -113,4 +128,5 @@ func RegisterCustomCommands(r *Registry, dir string) {
 			},
 		})
 	}
+	return loadErr
 }

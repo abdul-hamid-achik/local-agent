@@ -1,11 +1,18 @@
 package skill
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/abdul-hamid-achik/local-agent/internal/safeio"
 )
+
+const maxSkillFileBytes int64 = 1 << 20
+
+var skillFileReader = safeio.NewReader()
 
 // Manager handles skill discovery, loading, and activation.
 type Manager struct {
@@ -75,9 +82,12 @@ func (m *Manager) loadFromDir(dir string) error {
 		}
 
 		path := filepath.Join(dir, entry.Name())
-		data, err := os.ReadFile(path)
+		data, err := skillFileReader.ReadRegularFileNoFollow(path, maxSkillFileBytes, safeio.StartupReadTimeout)
 		if err != nil {
-			continue
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return fmt.Errorf("read skill %s: %w", path, err)
 		}
 
 		skill, err := parseFrontmatter(string(data))
@@ -101,6 +111,16 @@ func (m *Manager) All() []*Skill {
 	return m.skills
 }
 
+// Has reports whether a skill name is available without changing activation.
+func (m *Manager) Has(name string) bool {
+	for _, skill := range m.skills {
+		if skill.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 // Activate enables a skill by name.
 func (m *Manager) Activate(name string) error {
 	for _, s := range m.skills {
@@ -121,6 +141,34 @@ func (m *Manager) Deactivate(name string) error {
 		}
 	}
 	return fmt.Errorf("skill not found: %s", name)
+}
+
+// UpdateActive atomically validates and then applies a profile skill change.
+// Skills outside remove/add are preserved, so manually activated skills are
+// not disturbed when a profile changes.
+func (m *Manager) UpdateActive(remove, add []string) error {
+	for _, name := range append(append([]string(nil), remove...), add...) {
+		if !m.Has(name) {
+			return fmt.Errorf("skill not found: %s", name)
+		}
+	}
+	removeSet := make(map[string]struct{}, len(remove))
+	addSet := make(map[string]struct{}, len(add))
+	for _, name := range remove {
+		removeSet[name] = struct{}{}
+	}
+	for _, name := range add {
+		addSet[name] = struct{}{}
+	}
+	for _, s := range m.skills {
+		if _, removeSkill := removeSet[s.Name]; removeSkill {
+			s.Active = false
+		}
+		if _, addSkill := addSet[s.Name]; addSkill {
+			s.Active = true
+		}
+	}
+	return nil
 }
 
 // ActiveContent returns the combined markdown content of all active skills.

@@ -1,7 +1,9 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -10,8 +12,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/abdul-hamid-achik/local-agent/internal/safeio"
 	"gopkg.in/yaml.v3"
 )
+
+const maxStartupConfigBytes int64 = 1 << 20
+
+var configFileReader = safeio.NewReader()
+var configFileReadTimeout = safeio.StartupReadTimeout
 
 type Config struct {
 	Ollama       OllamaConfig   `yaml:"ollama"`
@@ -22,6 +30,14 @@ type Config struct {
 	ICE          ICEConfig      `yaml:"ice,omitempty"`
 	AgentProfile string         `yaml:"agent_profile,omitempty"`
 	Tools        ToolsConfig    `yaml:"tools,omitempty"`
+	Privacy      PrivacyConfig  `yaml:"privacy,omitempty"`
+}
+
+type PrivacyConfig struct {
+	// LocalOnly rejects non-local Ollama and remote MCP endpoints. Approved
+	// subprocesses can still access the network; they are an explicit trust
+	// boundary surfaced by the tool permission UI.
+	LocalOnly bool `yaml:"local_only"`
 }
 
 type AgentsConfig struct {
@@ -79,18 +95,18 @@ func defaults() Config {
 			MaxGrepResults: 500,
 			MaxIterations:  10,
 		},
+		Privacy: PrivacyConfig{LocalOnly: true},
 	}
 }
 
 func Load() (*Config, error) {
 	cfg := defaults()
 
-	localPath := findConfigFile()
+	localPath, data, err := findAndReadConfigFile()
+	if err != nil {
+		return nil, err
+	}
 	if localPath != "" {
-		data, err := os.ReadFile(localPath)
-		if err != nil {
-			return nil, fmt.Errorf("read config %s: %w", localPath, err)
-		}
 		if err := yaml.Unmarshal(data, &cfg); err != nil {
 			return nil, fmt.Errorf("parse config %s: %w", localPath, err)
 		}
@@ -160,8 +176,12 @@ func (c *Config) Validate() error {
 		if !strings.Contains(raw, "://") {
 			raw = "http://" + raw
 		}
-		if u, err := url.Parse(raw); err != nil || u.Host == "" {
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" {
 			return fmt.Errorf("config: invalid ollama.base_url %q: must be like http://localhost:11434 or localhost:11434", c.Ollama.BaseURL)
+		}
+		if c.Privacy.LocalOnly && !isLocalHost(u.Hostname()) {
+			return fmt.Errorf("config: privacy.local_only rejects non-local ollama.base_url %q", c.Ollama.BaseURL)
 		}
 	}
 	if c.Ollama.NumCtx <= 0 {
@@ -174,14 +194,29 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("config: tools.timeout must be positive, got %s", c.Tools.Timeout)
 		}
 	}
+	serverNames := make(map[string]struct{}, len(c.Servers))
 	for i, s := range c.Servers {
 		if s.Name == "" {
 			return fmt.Errorf("config: servers[%d] has an empty name", i)
 		}
+		if strings.Contains(s.Name, "__") {
+			return fmt.Errorf("config: server %q contains reserved namespace delimiter __", s.Name)
+		}
+		if _, duplicate := serverNames[s.Name]; duplicate {
+			return fmt.Errorf("config: duplicate server name %q", s.Name)
+		}
+		serverNames[s.Name] = struct{}{}
 		switch s.Transport {
 		case "sse", "streamable-http":
 			if s.URL == "" {
 				return fmt.Errorf("config: server %q uses %s transport but has no url", s.Name, s.Transport)
+			}
+			u, err := url.Parse(s.URL)
+			if err != nil || u.Scheme == "" || u.Host == "" {
+				return fmt.Errorf("config: server %q has invalid url %q", s.Name, s.URL)
+			}
+			if c.Privacy.LocalOnly && !isLocalHost(u.Hostname()) {
+				return fmt.Errorf("config: privacy.local_only rejects non-local MCP server %q (%s)", s.Name, s.URL)
 			}
 		case "", "stdio":
 			if s.Command == "" {
@@ -194,15 +229,56 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// CheckModelMemorySafe returns an error if loading model locally would risk an
-// out-of-memory crash on a 16GB Mac (large local model or, by preference, a
-// cloud model). It is enforced both at config load and on runtime /model
-// switches. Override with LOCAL_AGENT_ALLOW_LARGE_MODELS=1.
+func isLocalHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	// Ollama commonly exports OLLAMA_HOST=0.0.0.0 (or ::) to describe its
+	// local listen address. Connecting to an unspecified address still targets
+	// this host, so it is safe for local-only client routing. Actual LAN/WAN
+	// addresses remain rejected.
+	return ip != nil && (ip.IsLoopback() || ip.IsUnspecified())
+}
+
+// CheckModelMemorySafe rejects cloud and clearly oversized local tiers. The
+// 9B Qwen and Gemma E2B profiles are allowed as explicit exclusive profiles;
+// the router never auto-selects them and ModelManager unloads the previous chat
+// model before switching. Override the remaining guard only for measured
+// hardware profiles with LOCAL_AGENT_ALLOW_LARGE_MODELS=1.
 func CheckModelMemorySafe(model string) error {
+	// A hardware override may relax RAM limits, but it must never turn a cloud
+	// alias into an allowed model for this local-only harness.
+	if isRemoteModelAlias(model) {
+		return fmt.Errorf("model %q is a cloud/remote alias and is not allowed by the local-only model policy", model)
+	}
 	if largeModelsAllowed() || !isMemoryRiskyModel(model) {
 		return nil
 	}
-	return fmt.Errorf("model %q is unsafe on a 16GB Mac — large local models (>=6B, Gemma's ~7GB tiers) can exhaust memory and crash the machine, and cloud models are disabled by preference. Use a small Qwen tier (qwen3.5:0.8b/2b/4b). To override anyway, set LOCAL_AGENT_ALLOW_LARGE_MODELS=1", model)
+	return fmt.Errorf("model %q is not enabled for this local profile — cloud models and local tiers >=10B (including Gemma E4B+) can exhaust a 16GB machine. Use Qwen 0.8B/2B/4B, Phi-4 Mini, or an explicit exclusive Qwen 9B/Gemma E2B profile. To override after measuring headroom, set LOCAL_AGENT_ALLOW_LARGE_MODELS=1", model)
+}
+
+const maxDefaultLocalModelBytes int64 = 8 << 30
+
+// CheckLocalModelSizeSafe enforces the 16GB profile from Ollama's actual
+// on-disk weight size. Names are only hints (for example 8x7b and custom tags
+// are ambiguous), so local-only admission must call this after discovery.
+func CheckLocalModelSizeSafe(model string, size int64) error {
+	if err := CheckModelMemorySafe(model); err != nil {
+		return err
+	}
+	if size <= 0 {
+		return fmt.Errorf("model %q has no verified local weight size", model)
+	}
+	if largeModelsAllowed() || size <= maxDefaultLocalModelBytes {
+		return nil
+	}
+	return fmt.Errorf("model %q uses %.1f GiB of local weights, above the %.0f GiB default budget for this 16GB profile; set LOCAL_AGENT_ALLOW_LARGE_MODELS=1 only after measuring memory headroom", model, float64(size)/(1<<30), float64(maxDefaultLocalModelBytes)/(1<<30))
+}
+
+func isRemoteModelAlias(model string) bool {
+	name := strings.ToLower(model)
+	return strings.Contains(name, "cloud") || strings.Contains(name, "remote")
 }
 
 // largeModelsAllowed reports whether the memory-safety guard is disabled.
@@ -214,23 +290,20 @@ func largeModelsAllowed() bool {
 // paramBPattern extracts a parameter count hint like ":9b" or ":0.8b" from a model tag.
 var paramBPattern = regexp.MustCompile(`(\d+(?:\.\d+)?)\s*b\b`)
 
-// isMemoryRiskyModel reports whether a model is unsafe to load locally on a
-// 16GB Mac. It flags cloud models (excluded by preference), Gemma local tiers
-// (gemma4:e2b is ~7.2GB despite its "2B effective" name), and any tag whose
-// parameter hint is >= 6B. The footprint floor for safe operation is the 4B
-// Qwen tier; everything above it risks an OOM crash.
+// isMemoryRiskyModel reports whether a model should remain blocked even from
+// ordinary manual selection on a 16GB profile. Qwen 9B and Gemma E2B are
+// handled as exclusive profiles; larger Gemma tiers and >=10B tags remain
+// guarded, and cloud entries are always rejected in local-only mode.
 func isMemoryRiskyModel(model string) bool {
 	m := strings.ToLower(model)
 	if strings.Contains(m, "cloud") {
 		return true
 	}
-	if strings.Contains(m, "gemma") {
-		// Gemma 4's smallest local tier (e2b) is ~7.2GB on disk; the "B" count
-		// in the tag understates the real footprint, so block the family.
+	if strings.Contains(m, "gemma") && !strings.Contains(m, ":e2b") {
 		return true
 	}
 	if mt := paramBPattern.FindStringSubmatch(m); mt != nil {
-		if b, err := strconv.ParseFloat(mt[1], 64); err == nil && b >= 6.0 {
+		if b, err := strconv.ParseFloat(mt[1], 64); err == nil && b >= 10.0 {
 			return true
 		}
 	}
@@ -256,7 +329,7 @@ func LoadWithAgentsDir() (*Config, *AgentsDir, error) {
 	return cfg, agents, nil
 }
 
-func findConfigFile() string {
+func findAndReadConfigFile() (string, []byte, error) {
 	candidates := []string{
 		"local-agent.yaml",
 		"local-agent.yml",
@@ -270,11 +343,16 @@ func findConfigFile() string {
 	}
 
 	for _, path := range candidates {
-		if _, err := os.Stat(path); err == nil {
-			return path
+		data, err := configFileReader.ReadRegularFileNoFollow(path, maxStartupConfigBytes, configFileReadTimeout)
+		if err == nil {
+			return path, data, nil
 		}
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		return "", nil, fmt.Errorf("read config %s: %w", path, err)
 	}
-	return ""
+	return "", nil, nil
 }
 
 func applyEnvOverrides(cfg *Config) {
@@ -298,6 +376,11 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("LOCAL_AGENT_ICE_EMBED_MODEL"); v != "" {
 		cfg.ICE.EmbedModel = v
+	}
+	if v := os.Getenv("LOCAL_AGENT_LOCAL_ONLY"); v != "" {
+		if localOnly, err := strconv.ParseBool(v); err == nil {
+			cfg.Privacy.LocalOnly = localOnly
+		}
 	}
 }
 

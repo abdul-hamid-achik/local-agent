@@ -2,6 +2,7 @@ package ice
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -9,12 +10,21 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/abdul-hamid-achik/local-agent/internal/safeio"
 )
 
 // timeNow is a variable for testing.
 var timeNow = time.Now
 
 const minSimilarityThreshold = 0.3
+
+const maxICEStoreBytes int64 = 256 << 20
+
+var iceStoreFileReader = safeio.NewReader()
+var iceStoreReadTimeout = 5 * time.Second
+var iceStoreLockTimeout = 5 * time.Second
+var iceStoreWriteLimit = maxICEStoreBytes
 
 // Store is a flat-file vector store for conversation history.
 // It holds all entries in memory and persists to a JSON file.
@@ -24,6 +34,7 @@ type Store struct {
 	entries []ConversationEntry
 	nextID  int
 	dirty   bool
+	loadErr error
 }
 
 // NewStore loads an existing store from path or creates an empty one.
@@ -35,37 +46,61 @@ func NewStore(path string) *Store {
 
 // Add appends a new conversation entry and returns its ID.
 func (s *Store) Add(sessionID, role, content string, embedding []float32, turnIndex int) (int, error) {
+	return s.AddScoped("", sessionID, role, content, embedding, turnIndex)
+}
+
+// AddScoped records an entry under a canonical workspace identity.
+func (s *Store) AddScoped(projectID, sessionID, role, content string, embedding []float32, turnIndex int) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.nextID++
-	entry := ConversationEntry{
-		ID:        s.nextID,
-		SessionID: sessionID,
-		Role:      role,
-		Content:   content,
-		Embedding: embedding,
-		TurnIndex: turnIndex,
+	if s.loadErr != nil {
+		return 0, fmt.Errorf("refusing to mutate unreadable ICE store: %w", s.loadErr)
 	}
-	// Use a zero-value check to set CreatedAt (avoids importing time in every call site).
-	entry.CreatedAt = timeNow()
-	s.entries = append(s.entries, entry)
-	s.dirty = true
-	return s.nextID, nil
+
+	var id int
+	err := s.mutateLocked(func() (bool, error) {
+		s.nextID++
+		entry := ConversationEntry{
+			ID:        s.nextID,
+			ProjectID: projectID,
+			SessionID: sessionID,
+			Role:      role,
+			Content:   content,
+			Embedding: append([]float32(nil), embedding...),
+			TurnIndex: turnIndex,
+			CreatedAt: timeNow(),
+		}
+		s.entries = append(s.entries, entry)
+		id = entry.ID
+		return true, nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return id, nil
 }
 
 // Search returns the top-K entries most similar to queryEmbedding.
 // Entries from excludeSession are skipped. Results are sorted by score descending.
 func (s *Store) Search(queryEmbedding []float32, excludeSession string, topK int) []ScoredEntry {
+	return s.SearchScoped(queryEmbedding, "", excludeSession, topK)
+}
+
+// SearchScoped returns candidates only from the same canonical workspace.
+func (s *Store) SearchScoped(queryEmbedding []float32, projectID, excludeSession string, topK int) []ScoredEntry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if len(queryEmbedding) == 0 || len(s.entries) == 0 {
+	if topK <= 0 || len(queryEmbedding) == 0 || !s.refreshLocked() || len(s.entries) == 0 {
 		return nil
 	}
 
 	var scored []ScoredEntry
 	for _, e := range s.entries {
+		if projectID != "" && e.ProjectID != projectID {
+			continue
+		}
 		if e.SessionID == excludeSession {
 			continue
 		}
@@ -74,7 +109,7 @@ func (s *Store) Search(queryEmbedding []float32, excludeSession string, topK int
 		}
 		sim := cosineSimilarity(queryEmbedding, e.Embedding)
 		if sim >= minSimilarityThreshold {
-			scored = append(scored, ScoredEntry{Entry: e, Score: sim})
+			scored = append(scored, ScoredEntry{Entry: cloneConversationEntry(e), Score: sim})
 		}
 	}
 
@@ -93,49 +128,224 @@ func (s *Store) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.loadErr != nil {
+		return fmt.Errorf("refusing to overwrite unreadable ICE store: %w", s.loadErr)
+	}
 	if !s.dirty {
 		return nil
 	}
-	return s.persist()
+	pending, _, _ := s.snapshot()
+	return s.mutateLocked(func() (bool, error) {
+		changed := false
+		for _, candidate := range pending {
+			matched := false
+			for _, durable := range s.entries {
+				if candidate.ID == durable.ID && conversationEntriesEqual(candidate, durable) {
+					matched = true
+					break
+				}
+			}
+			if matched {
+				continue
+			}
+			for _, durable := range s.entries {
+				if candidate.ID == durable.ID {
+					s.nextID++
+					candidate.ID = s.nextID
+					break
+				}
+			}
+			if candidate.ID > s.nextID {
+				s.nextID = candidate.ID
+			}
+			candidate.Embedding = append([]float32(nil), candidate.Embedding...)
+			s.entries = append(s.entries, candidate)
+			changed = true
+		}
+		return changed, nil
+	})
+}
+
+func conversationEntriesEqual(left, right ConversationEntry) bool {
+	if left.ID != right.ID || left.ProjectID != right.ProjectID || left.SessionID != right.SessionID || left.Role != right.Role || left.Content != right.Content || left.TurnIndex != right.TurnIndex || !left.CreatedAt.Equal(right.CreatedAt) || len(left.Embedding) != len(right.Embedding) {
+		return false
+	}
+	for i := range left.Embedding {
+		if left.Embedding[i] != right.Embedding[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// Err reports a load-time corruption/parse error, if any.
+func (s *Store) Err() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.loadErr
 }
 
 // Count returns the total number of stored entries.
 func (s *Store) Count() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.refreshLocked() {
+		return 0
+	}
 	return len(s.entries)
+}
+
+// CountScoped returns only entries owned by projectID. Provenance-free legacy
+// entries remain quarantined and are excluded.
+func (s *Store) CountScoped(projectID string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if projectID == "" {
+		return 0
+	}
+	if !s.refreshLocked() {
+		return 0
+	}
+	count := 0
+	for i := range s.entries {
+		if s.entries[i].ProjectID == projectID {
+			count++
+		}
+	}
+	return count
+}
+
+func (s *Store) snapshot() ([]ConversationEntry, int, bool) {
+	entries := make([]ConversationEntry, len(s.entries))
+	for i := range s.entries {
+		entries[i] = cloneConversationEntry(s.entries[i])
+	}
+	return entries, s.nextID, s.dirty
+}
+
+func cloneConversationEntry(entry ConversationEntry) ConversationEntry {
+	entry.Embedding = append([]float32(nil), entry.Embedding...)
+	return entry
+}
+
+func (s *Store) restore(entries []ConversationEntry, nextID int, dirty bool) {
+	s.entries = entries
+	s.nextID = nextID
+	s.dirty = dirty
+}
+
+// mutateLocked reloads the newest durable snapshot while holding a lock shared
+// by every process, applies mutate, and atomically commits it. s.mu must be
+// held. This makes IDs unique across multiple long-lived Store instances.
+func (s *Store) mutateLocked(mutate func() (bool, error)) error {
+	if s.loadErr != nil {
+		return fmt.Errorf("refusing to overwrite unreadable ICE store: %w", s.loadErr)
+	}
+	dir := filepath.Dir(s.path)
+	if err := safeio.ValidatePublishPath(s.path); err != nil {
+		return fmt.Errorf("validate ICE store path: %w", err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create ice store dir: %w", err)
+	}
+	if err := safeio.ValidatePublishPath(s.path); err != nil {
+		return fmt.Errorf("revalidate ICE store path: %w", err)
+	}
+
+	return safeio.WithExclusiveFileLock(s.path+".lock", iceStoreLockTimeout, func() error {
+		if err := s.reloadFromDisk(); err != nil {
+			return fmt.Errorf("reload ICE store before mutation: %w", err)
+		}
+		before, beforeNextID, beforeDirty := s.snapshot()
+		changed, err := mutate()
+		if err != nil {
+			s.restore(before, beforeNextID, beforeDirty)
+			return err
+		}
+		if !changed {
+			return nil
+		}
+		s.dirty = true
+		if err := s.persist(); err != nil {
+			s.restore(before, beforeNextID, beforeDirty)
+			return err
+		}
+		return nil
+	})
+}
+
+func (s *Store) refreshLocked() bool {
+	if s.loadErr != nil {
+		return false
+	}
+	if err := safeio.ValidatePublishPath(s.path); err != nil {
+		return false
+	}
+	if _, err := os.Stat(filepath.Dir(s.path)); errors.Is(err, os.ErrNotExist) {
+		return s.reloadFromDisk() == nil
+	} else if err != nil {
+		return false
+	}
+	return safeio.WithExclusiveFileLock(s.path+".lock", iceStoreLockTimeout, s.reloadFromDisk) == nil
 }
 
 // load reads entries from the JSON file.
 func (s *Store) load() {
-	data, err := os.ReadFile(s.path)
-	if err != nil {
-		return // File doesn't exist yet.
+	if err := s.reloadFromDisk(); err != nil {
+		s.loadErr = err
 	}
+}
 
+func (s *Store) reloadFromDisk() error {
+	if err := safeio.ValidatePublishPath(s.path); err != nil {
+		return fmt.Errorf("validate ICE store path: %w", err)
+	}
+	data, err := iceStoreFileReader.ReadPrivateRegularFileNoFollow(s.path, maxICEStoreBytes, iceStoreReadTimeout)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			s.entries = nil
+			s.nextID = 0
+			s.dirty = false
+			return nil
+		}
+		return fmt.Errorf("read %s: %w", s.path, err)
+	}
 	var entries []ConversationEntry
 	if err := json.Unmarshal(data, &entries); err != nil {
-		return // Corrupt file, start empty.
+		return fmt.Errorf("parse %s: %w", s.path, err)
 	}
 
 	s.entries = entries
+	s.nextID = 0
+	s.dirty = false
 	for _, e := range s.entries {
 		if e.ID > s.nextID {
 			s.nextID = e.ID
 		}
 	}
+	return nil
 }
 
 // persist writes all entries to the JSON file.
 func (s *Store) persist() error {
+	if s.loadErr != nil {
+		return fmt.Errorf("refusing to overwrite unreadable ICE store: %w", s.loadErr)
+	}
+
 	dir := filepath.Dir(s.path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := safeio.ValidatePublishPath(s.path); err != nil {
+		return fmt.Errorf("validate ICE publish path: %w", err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create ice store dir: %w", err)
 	}
 
 	data, err := json.Marshal(s.entries)
 	if err != nil {
 		return fmt.Errorf("marshal ice store: %w", err)
+	}
+	if int64(len(data)) > iceStoreWriteLimit {
+		return fmt.Errorf("%w: serialized ICE store is %d bytes (limit %d)", safeio.ErrTooLarge, len(data), iceStoreWriteLimit)
 	}
 
 	// Atomic write: temp file + rename so a crash can't corrupt the live store.
@@ -144,21 +354,32 @@ func (s *Store) persist() error {
 		return fmt.Errorf("create temp ice store: %w", err)
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op if rename succeeded
+	defer func() {
+		// Preserve the primary persistence error. The successful close is
+		// checked below; these are best-effort failure-path cleanup steps.
+		_ = tmp.Close()
+		_ = os.Remove(tmpName) // no-op after a successful rename
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		return fmt.Errorf("secure temp ice store: %w", err)
+	}
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
 		return fmt.Errorf("write temp ice store: %w", err)
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
 		return fmt.Errorf("sync temp ice store: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close temp ice store: %w", err)
 	}
+	if err := safeio.ValidatePublishPath(s.path); err != nil {
+		return fmt.Errorf("revalidate ICE publish path: %w", err)
+	}
 	if err := os.Rename(tmpName, s.path); err != nil {
 		return fmt.Errorf("commit ice store: %w", err)
 	}
+	// The committed inode was chmod'd through its temp-file descriptor before
+	// rename; do not re-open the path and risk following a swapped symlink.
 	// fsync the directory so the rename survives a hard crash (best-effort).
 	if d, derr := os.Open(dir); derr == nil {
 		_ = d.Sync()

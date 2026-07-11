@@ -74,3 +74,50 @@ func TestCheckpointDisabledWithoutStore(t *testing.T) {
 		t.Fatal("restore without store should error")
 	}
 }
+
+func TestRestoreCheckpointRejectsAnotherSession(t *testing.T) {
+	store, err := db.OpenPath(filepath.Join(t.TempDir(), "cp.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	id, err := store.CreateCheckpoint(context.Background(), 22, "foreign", db.CheckpointManual, `[]`, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ag := New(nil, nil, 8192)
+	ag.SetCheckpointStore(store, 11)
+	if _, err := ag.RestoreCheckpoint(context.Background(), id); err == nil {
+		t.Fatal("restored checkpoint from another session")
+	}
+}
+
+func TestRestoreCheckpointRejectsAnotherWorkspaceWithoutSession(t *testing.T) {
+	store, err := db.OpenPath(filepath.Join(t.TempDir(), "cp.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	workspaceA := t.TempDir()
+	creator := New(nil, nil, 8192)
+	creator.SetWorkDir(workspaceA)
+	creator.SetCheckpointStore(store, 0)
+	creator.AddUserMessage("workspace A secret")
+	id, err := creator.CreateCheckpoint(context.Background(), "foreign", db.CheckpointManual)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	consumer := New(nil, nil, 8192)
+	consumer.SetWorkDir(t.TempDir())
+	consumer.SetCheckpointStore(store, 0)
+	consumer.AddUserMessage("workspace B remains")
+	if _, err := consumer.RestoreCheckpoint(context.Background(), id); err == nil {
+		t.Fatal("fresh workspace restored a foreign checkpoint")
+	}
+	msgs := consumer.Messages()
+	if len(msgs) != 1 || msgs[0].Content != "workspace B remains" {
+		t.Fatalf("foreign restore changed transcript: %#v", msgs)
+	}
+}

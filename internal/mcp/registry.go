@@ -2,8 +2,10 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,25 +27,52 @@ type ServerStatus struct {
 	LastPing  time.Time
 }
 
+type toolRoute struct {
+	client     toolCaller
+	remoteName string
+}
+
+type toolCaller interface {
+	CallTool(context.Context, string, map[string]any) (*ToolResult, error)
+}
+
+// ErrRegistryClosed reports an operation attempted after shutdown began.
+var ErrRegistryClosed = errors.New("MCP registry is closed")
+
 // Registry manages multiple MCP server connections and routes tool calls.
 type Registry struct {
 	mu            sync.RWMutex
 	clients       map[string]*MCPClient
-	toolMap       map[string]*MCPClient // tool name -> owning client
+	toolMap       map[string]toolRoute // exposed tool name -> server and remote name
 	serverTools   map[string][]llm.ToolDef
 	failedServers []FailedServer
 	serverConfigs map[string]config.ServerConfig // name -> config for reconnection
 	callTimeout   time.Duration                  // per tool-call timeout (0 = default)
+	closed        bool
+	lifecycleCtx  context.Context
+	cancel        context.CancelFunc
+	lifecycleWG   sync.WaitGroup
+	closeOnce     sync.Once
+
+	// Test seams keep shutdown overlap tests deterministic without launching a
+	// real child process. Production always uses discoverServer/client.Close.
+	// A test connector must honor ctx cancellation, matching that production
+	// contract; the real STDIO lifecycle regression proves the production path.
+	testConnector   func(context.Context, config.ServerConfig) (*MCPClient, []llm.ToolDef, error)
+	testCloseClient func(*MCPClient) error
 }
 
 // NewRegistry creates an empty Registry.
 func NewRegistry() *Registry {
+	lifecycleCtx, cancel := context.WithCancel(context.Background())
 	return &Registry{
-		toolMap:       make(map[string]*MCPClient),
+		toolMap:       make(map[string]toolRoute),
 		clients:       make(map[string]*MCPClient),
 		serverTools:   make(map[string][]llm.ToolDef),
 		serverConfigs: make(map[string]config.ServerConfig),
 		callTimeout:   defaultCallTimeout,
+		lifecycleCtx:  lifecycleCtx,
+		cancel:        cancel,
 	}
 }
 
@@ -59,48 +88,133 @@ func (r *Registry) SetCallTimeout(d time.Duration) {
 }
 
 // connectTimeout is the per-server connection timeout.
-const connectTimeout = 5 * time.Second
+const connectTimeout = 15 * time.Second
 
 // defaultCallTimeout bounds a single MCP tool call so a hung or slow server
 // cannot block the agent loop (and freeze the UI) indefinitely.
 const defaultCallTimeout = 60 * time.Second
 
-// ConnectServer connects a single MCP server and registers its tools.
-// Returns the number of tools discovered, or an error.
-func (r *Registry) ConnectServer(ctx context.Context, srv config.ServerConfig) (int, error) {
+// beginLifecycleOperation prevents WaitGroup Add/Wait races by admitting new
+// work under the same mutex that Close uses to mark the registry closed.
+func (r *Registry) beginLifecycleOperation(ctx context.Context) (context.Context, func(), error) {
 	r.mu.Lock()
-	r.serverConfigs[srv.Name] = srv
+	if r.closed {
+		r.mu.Unlock()
+		return nil, nil, ErrRegistryClosed
+	}
+	opCtx, cancel := context.WithCancel(ctx)
+	stopLifecycleCancel := context.AfterFunc(r.lifecycleCtx, cancel)
+	r.lifecycleWG.Add(1)
 	r.mu.Unlock()
 
-	connCtx, cancel := context.WithTimeout(ctx, connectTimeout)
-	defer cancel()
+	finish := func() {
+		stopLifecycleCancel()
+		cancel()
+		r.lifecycleWG.Done()
+	}
+	return opCtx, finish, nil
+}
 
-	client, err := Connect(connCtx, srv.Name, srv.Command, srv.Args, srv.Env, srv.Transport, srv.URL)
+func (r *Registry) closeMCPClient(client *MCPClient) error {
+	if client == nil {
+		return nil
+	}
+	if r.testCloseClient != nil {
+		return r.testCloseClient(client)
+	}
+	return client.Close()
+}
+
+// discoverServer is the only production connector. Every blocking SDK call is
+// given ctx. STDIO Connect also links ctx to an owned process-group cancel, so
+// Registry.Close's lifecycleWG wait cannot be stranded by a hanging child.
+func (r *Registry) discoverServer(ctx context.Context, srv config.ServerConfig) (*MCPClient, []llm.ToolDef, error) {
+	client, err := Connect(ctx, srv.Name, srv.Command, srv.Args, srv.Env, srv.Transport, srv.URL)
 	if err != nil {
-		r.setFailedServer(srv.Name, err.Error())
-		return 0, fmt.Errorf("connect to %s: %w", srv.Name, err)
+		return nil, nil, err
 	}
 
-	tools, err := client.ListTools(connCtx)
+	tools, err := client.ListTools(ctx)
 	if err != nil {
-		client.Close()
-		r.setFailedServer(srv.Name, err.Error())
-		return 0, fmt.Errorf("%s tools: %w", srv.Name, err)
+		if closeErr := r.closeMCPClient(client); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close failed MCP connection: %w", closeErr))
+		}
+		return nil, nil, fmt.Errorf("%s tools: %w", srv.Name, err)
 	}
 
-	r.mu.Lock()
-	if existing := r.clients[srv.Name]; existing != nil {
-		r.removeServerLocked(srv.Name)
-		_ = existing.Close()
-	}
 	serverDefs := make([]llm.ToolDef, 0, len(tools))
 	for _, tool := range tools {
 		serverDefs = append(serverDefs, ToLLMToolDef(tool.Name, tool.Description, tool.InputSchema))
 	}
-	r.registerConnectedServerLocked(srv.Name, client, serverDefs)
+	return client, serverDefs, nil
+}
+
+// ConnectServer connects a single MCP server and registers its tools.
+// Returns the number of tools discovered, or an error.
+func (r *Registry) ConnectServer(ctx context.Context, srv config.ServerConfig) (int, error) {
+	opCtx, finish, err := r.beginLifecycleOperation(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer finish()
+
+	if strings.Contains(srv.Name, "__") {
+		return 0, fmt.Errorf("server %q contains reserved namespace delimiter __", srv.Name)
+	}
+	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		return 0, ErrRegistryClosed
+	}
+	r.serverConfigs[srv.Name] = srv
 	r.mu.Unlock()
 
-	return len(tools), nil
+	connCtx, cancel := context.WithTimeout(opCtx, connectTimeout)
+	defer cancel()
+
+	connector := r.testConnector
+	if connector == nil {
+		connector = r.discoverServer
+	}
+	client, serverDefs, err := connector(connCtx, srv)
+	if err != nil {
+		r.setFailedServer(srv.Name, err.Error())
+		return 0, fmt.Errorf("connect to %s: %w", srv.Name, err)
+	}
+	if ctxErr := connCtx.Err(); ctxErr != nil {
+		r.mu.RLock()
+		registryClosed := r.closed
+		r.mu.RUnlock()
+		if registryClosed {
+			ctxErr = ErrRegistryClosed
+		}
+		closeErr := r.closeMCPClient(client)
+		if closeErr != nil {
+			ctxErr = errors.Join(ctxErr, fmt.Errorf("close cancelled MCP connection: %w", closeErr))
+		}
+		return 0, fmt.Errorf("connect to %s cancelled before registration: %w", srv.Name, ctxErr)
+	}
+
+	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		closeErr := r.closeMCPClient(client)
+		if closeErr != nil {
+			return 0, errors.Join(ErrRegistryClosed, fmt.Errorf("close late MCP connection: %w", closeErr))
+		}
+		return 0, ErrRegistryClosed
+	}
+	existing := r.clients[srv.Name]
+	if existing != nil {
+		r.removeServerLocked(srv.Name)
+	}
+	r.registerConnectedServerLocked(srv.Name, client, serverDefs)
+	r.mu.Unlock()
+	if existing != nil {
+		_ = r.closeMCPClient(existing)
+	}
+
+	return len(serverDefs), nil
 }
 
 // ConnectAll spawns and connects to all configured MCP servers.
@@ -144,6 +258,29 @@ func (r *Registry) ToolCount() int {
 	return count
 }
 
+// ResolveToolName returns a unique exposed name for a remote MCP tool. It is
+// intended for host-side integrations that know a capability by its protocol
+// name while the model-facing registry remains fully namespaced.
+func (r *Registry) ResolveToolName(remoteName string) (string, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if _, exact := r.toolMap[remoteName]; exact {
+		return remoteName, true
+	}
+	suffix := "__" + remoteName
+	match := ""
+	for exposed, route := range r.toolMap {
+		if route.remoteName != remoteName && !strings.HasSuffix(exposed, suffix) {
+			continue
+		}
+		if match != "" {
+			return "", false
+		}
+		match = exposed
+	}
+	return match, match != ""
+}
+
 // ServerCount returns the number of connected servers.
 func (r *Registry) ServerCount() int {
 	r.mu.RLock()
@@ -167,13 +304,15 @@ func (r *Registry) ServerNames() []string {
 func (r *Registry) FailedServers() []FailedServer {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.failedServers
+	failed := make([]FailedServer, len(r.failedServers))
+	copy(failed, r.failedServers)
+	return failed
 }
 
 // CallTool routes a tool call to the correct MCP server.
 func (r *Registry) CallTool(ctx context.Context, name string, args map[string]any) (*ToolResult, error) {
 	r.mu.RLock()
-	client, ok := r.toolMap[name]
+	route, ok := r.toolMap[name]
 	r.mu.RUnlock()
 
 	if !ok {
@@ -193,20 +332,45 @@ func (r *Registry) CallTool(ctx context.Context, name string, args map[string]an
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	return client.CallTool(callCtx, name, args)
+	result, err := route.client.CallTool(callCtx, route.remoteName, args)
+	if err != nil && callCtx.Err() != nil {
+		// Preserve the local deadline/cancellation in the error chain. Callers
+		// must treat a dispatched MCP mutation as outcome-unknown, not retry it
+		// as though it definitely never ran.
+		return nil, fmt.Errorf("MCP tool %s ended without a receipt: %w", name, callCtx.Err())
+	}
+	return result, err
 }
 
 // Close shuts down all MCP server connections.
 func (r *Registry) Close() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.closeOnce.Do(func() {
+		// Closing admission and cancelling the lifecycle happen under one lock,
+		// so no goroutine can Add to lifecycleWG after Wait begins.
+		r.mu.Lock()
+		r.closed = true
+		r.cancel()
+		r.mu.Unlock()
 
-	for _, c := range r.clients {
-		_ = c.Close()
-	}
-	r.clients = make(map[string]*MCPClient)
-	r.toolMap = make(map[string]*MCPClient)
-	r.serverTools = make(map[string][]llm.ToolDef)
+		// Includes every health monitor and in-flight ConnectServer operation.
+		r.lifecycleWG.Wait()
+
+		r.mu.Lock()
+		clients := make([]*MCPClient, 0, len(r.clients))
+		for _, client := range r.clients {
+			clients = append(clients, client)
+		}
+		r.clients = make(map[string]*MCPClient)
+		r.toolMap = make(map[string]toolRoute)
+		r.serverTools = make(map[string][]llm.ToolDef)
+		r.failedServers = nil
+		r.serverConfigs = make(map[string]config.ServerConfig)
+		r.mu.Unlock()
+
+		for _, client := range clients {
+			_ = r.closeMCPClient(client)
+		}
+	})
 }
 
 // HealthCheck pings all servers and returns their status.
@@ -270,6 +434,10 @@ func (r *Registry) HealthCheck(ctx context.Context) []ServerStatus {
 // Returns the number of tools reconnected, or an error.
 func (r *Registry) ReconnectServer(ctx context.Context, name string) (int, error) {
 	r.mu.RLock()
+	if r.closed {
+		r.mu.RUnlock()
+		return 0, ErrRegistryClosed
+	}
 	srv, ok := r.serverConfigs[name]
 	r.mu.RUnlock()
 
@@ -282,6 +450,9 @@ func (r *Registry) ReconnectServer(ctx context.Context, name string) (int, error
 func (r *Registry) setFailedServer(name, reason string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.closed {
+		return
+	}
 	r.setFailedServerLocked(name, reason)
 }
 
@@ -311,15 +482,22 @@ func (r *Registry) removeServerLocked(name string) {
 	r.rebuildToolMapLocked()
 }
 
-func (r *Registry) registerConnectedServerLocked(name string, client *MCPClient, defs []llm.ToolDef) {
+func (r *Registry) registerConnectedServerLocked(name string, client *MCPClient, defs []llm.ToolDef) bool {
+	if r.closed {
+		return false
+	}
+	for i := range defs {
+		defs[i].Name = namespacedToolName(name, defs[i].Name)
+	}
 	r.clients[name] = client
 	r.serverTools[name] = defs
 	r.clearFailedServerLocked(name)
 	r.rebuildToolMapLocked()
+	return true
 }
 
 func (r *Registry) rebuildToolMapLocked() {
-	toolMap := make(map[string]*MCPClient)
+	toolMap := make(map[string]toolRoute)
 	serverNames := make([]string, 0, len(r.clients))
 	for name := range r.clients {
 		serverNames = append(serverNames, name)
@@ -329,10 +507,15 @@ func (r *Registry) rebuildToolMapLocked() {
 	for _, name := range serverNames {
 		client := r.clients[name]
 		for _, def := range r.serverTools[name] {
-			toolMap[def.Name] = client
+			remoteName := strings.TrimPrefix(def.Name, name+"__")
+			toolMap[def.Name] = toolRoute{client: client, remoteName: remoteName}
 		}
 	}
 	r.toolMap = toolMap
+}
+
+func namespacedToolName(server, tool string) string {
+	return server + "__" + tool
 }
 
 // MonitorConfig holds configuration for the health monitor.
@@ -348,16 +531,30 @@ var defaultMonitorConfig = MonitorConfig{
 	BackoffBase: 5 * time.Second,
 }
 
-// StartHealthMonitor begins background health checking.
-// Call cancel on the returned context to shut down.
+// StartHealthMonitor begins registry-owned background health checking. The
+// returned function cancels this monitor; Registry.Close cancels and joins it.
 func (r *Registry) StartHealthMonitor(ctx context.Context, cfg MonitorConfig, logFn func(string)) context.CancelFunc {
-	if cfg.Interval == 0 {
+	if cfg.Interval <= 0 {
 		cfg = defaultMonitorConfig
+	}
+	if logFn == nil {
+		logFn = func(string) {}
 	}
 
 	monitorCtx, cancel := context.WithCancel(ctx)
+	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		cancel()
+		return cancel
+	}
+	stopLifecycleCancel := context.AfterFunc(r.lifecycleCtx, cancel)
+	r.lifecycleWG.Add(1)
+	r.mu.Unlock()
 
 	go func() {
+		defer r.lifecycleWG.Done()
+		defer stopLifecycleCancel()
 		ticker := time.NewTicker(cfg.Interval)
 		defer ticker.Stop()
 

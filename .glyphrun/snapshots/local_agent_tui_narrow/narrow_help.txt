@@ -1,0 +1,19 @@
+              LOCAL AGENT
+ ╭────────────────────────────────────╮
+ │                                    │
+ │  Help                              │
+ │                                    │
+ │  Keyboard Shortcuts                │
+ │    enter       Send message        │
+ │    shift+ent…  New line in input   │
+ │    shift+tab   Cycle mode          │
+ │                (ASK/PLAN/BUILD)    │
+ │    ctrl+m      Quick model         │
+ │                switch              │
+ │    esc         Cancel streaming    │
+ │                / close overlay     │
+ │    ctrl+c      Quit                │
+ │  ↓ scroll for more                 │
+ │                                    │
+ ╰────────────────────────────────────╯
+❯ Ask, @mention files, or type /help

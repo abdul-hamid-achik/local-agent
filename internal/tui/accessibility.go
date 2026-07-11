@@ -9,9 +9,9 @@ import (
 
 // AccessibilityHelper provides accessibility features like screen reader support.
 type AccessibilityHelper struct {
-	isDark      bool
-	styles      AccessibilityStyles
-	speakFunc   func(string) // Function to speak text (for screen readers)
+	isDark       bool
+	styles       AccessibilityStyles
+	speakFunc    func(string) // Function to speak text (for screen readers)
 	announceFunc func(string) // Function to announce changes
 }
 
@@ -30,8 +30,8 @@ func DefaultAccessibilityStyles(isDark bool) AccessibilityStyles {
 // NewAccessibilityHelper creates a new accessibility helper.
 func NewAccessibilityHelper(isDark bool) *AccessibilityHelper {
 	return &AccessibilityHelper{
-		isDark:  isDark,
-		styles:  DefaultAccessibilityStyles(isDark),
+		isDark: isDark,
+		styles: DefaultAccessibilityStyles(isDark),
 	}
 }
 
@@ -232,9 +232,9 @@ func (fo *FocusOrder) CurrentItem() Focusable {
 func (fo *FocusOrder) focusCurrent() {
 	for i, item := range fo.Items {
 		if i == fo.Current {
-			item.Focus()
+			_ = item.Focus()
 		} else {
-			item.Blur()
+			_ = item.Blur()
 		}
 	}
 }

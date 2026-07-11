@@ -31,6 +31,9 @@ func TestDefaults(t *testing.T) {
 	if !cfg.Model.AutoSelect {
 		t.Error("Model.AutoSelect should be true by default")
 	}
+	if !cfg.Privacy.LocalOnly {
+		t.Error("Privacy.LocalOnly should be true by default")
+	}
 }
 
 func TestApplyEnvOverrides(t *testing.T) {
@@ -125,16 +128,56 @@ func TestValidate(t *testing.T) {
 	if err := c.Validate(); err != nil {
 		t.Errorf("valid stdio server should pass, got: %v", err)
 	}
+
+	c = base()
+	c.Servers = []ServerConfig{{Name: "a__b", Command: "tool"}}
+	if err := c.Validate(); err == nil {
+		t.Error("reserved namespace delimiter in server name should fail validation")
+	}
+
+	c = base()
+	c.Servers = []ServerConfig{{Name: "same", Command: "one"}, {Name: "same", Command: "two"}}
+	if err := c.Validate(); err == nil {
+		t.Error("duplicate server names should fail validation")
+	}
+
+	c = base()
+	c.Ollama.BaseURL = "https://ollama.example.com"
+	if err := c.Validate(); err == nil {
+		t.Error("local-only config should reject a remote Ollama endpoint")
+	}
+	c.Privacy.LocalOnly = false
+	if err := c.Validate(); err != nil {
+		t.Errorf("explicit local_only=false should allow remote Ollama, got: %v", err)
+	}
+
+	for _, localHost := range []string{"0.0.0.0", "http://0.0.0.0:11434", "http://[::]:11434"} {
+		c = base()
+		c.Ollama.BaseURL = localHost
+		if err := c.Validate(); err != nil {
+			t.Errorf("local-only config should accept unspecified local Ollama host %q, got: %v", localHost, err)
+		}
+	}
+
+	c = base()
+	c.Servers = []ServerConfig{{Name: "remote", Transport: "streamable-http", URL: "https://mcp.example.com/mcp"}}
+	if err := c.Validate(); err == nil {
+		t.Error("local-only config should reject a remote MCP endpoint")
+	}
+	c.Servers[0].URL = "https://127.0.0.1:27124/mcp/"
+	if err := c.Validate(); err != nil {
+		t.Errorf("loopback MCP endpoint should pass, got: %v", err)
+	}
 }
 
 func TestMemoryRiskyModelGuard(t *testing.T) {
-	risky := []string{"gemma4:e2b", "gemma4:e4b", "qwen3.5:9b", "llama3:70b", "gemma4:31b-cloud", "qwen3.5:cloud"}
+	risky := []string{"gemma4:e4b", "qwen3.5:12b", "llama3:70b", "gemma4:31b-cloud", "qwen3.5:cloud"}
 	for _, m := range risky {
 		if !isMemoryRiskyModel(m) {
 			t.Errorf("expected %q to be flagged memory-risky", m)
 		}
 	}
-	safe := []string{"qwen3.5:0.8b", "qwen3.5:2b", "qwen3.5:4b", "phi4-mini", "nomic-embed-text"}
+	safe := []string{"qwen3.5:0.8b", "qwen3.5:2b", "qwen3.5:4b", "qwen3.5:9b", "gemma4:e2b", "phi4-mini", "nomic-embed-text"}
 	for _, m := range safe {
 		if isMemoryRiskyModel(m) {
 			t.Errorf("expected %q to be safe", m)
@@ -143,13 +186,43 @@ func TestMemoryRiskyModelGuard(t *testing.T) {
 
 	// Validate must reject a risky model unless the override env is set.
 	c := defaults()
-	c.Ollama.Model = "gemma4:e2b"
+	c.Ollama.Model = "gemma4:e4b"
 	if err := c.Validate(); err == nil {
-		t.Error("Validate should reject gemma4:e2b on a 16GB profile")
+		t.Error("Validate should reject gemma4:e4b on a 16GB profile")
 	}
 	t.Setenv("LOCAL_AGENT_ALLOW_LARGE_MODELS", "1")
 	if err := c.Validate(); err != nil {
 		t.Errorf("override env should allow large model, got: %v", err)
+	}
+	c.Ollama.Model = "qwen3.5:cloud"
+	if err := c.Validate(); err == nil {
+		t.Error("large-model override must not allow a cloud alias")
+	}
+	c.Ollama.Model = "company-model:remote"
+	if err := c.Validate(); err == nil {
+		t.Error("large-model override must not allow a remote alias")
+	}
+}
+
+func TestLocalModelSizeGuardUsesInventoryBytes(t *testing.T) {
+	t.Setenv("LOCAL_AGENT_ALLOW_LARGE_MODELS", "")
+	for _, name := range []string{"mixtral:8x7b", "deepseek-r1:latest"} {
+		if err := CheckLocalModelSizeSafe(name, 10<<30); err == nil {
+			t.Fatalf("oversized ambiguous model %q was accepted", name)
+		}
+	}
+	if err := CheckLocalModelSizeSafe("custom:latest", 7<<30); err != nil {
+		t.Fatalf("safe measured model rejected: %v", err)
+	}
+	if err := CheckLocalModelSizeSafe("custom:latest", 0); err == nil {
+		t.Fatal("unverified model size was accepted")
+	}
+	t.Setenv("LOCAL_AGENT_ALLOW_LARGE_MODELS", "1")
+	if err := CheckLocalModelSizeSafe("deepseek-r1:latest", 10<<30); err != nil {
+		t.Fatalf("explicit measured-hardware override rejected: %v", err)
+	}
+	if err := CheckLocalModelSizeSafe("provider-cloud", 1<<30); err == nil {
+		t.Fatal("hardware override accepted a cloud alias")
 	}
 }
 

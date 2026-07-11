@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -152,6 +153,22 @@ func TestSystemMessageMsg_AppendsEntry(t *testing.T) {
 	}
 }
 
+func TestProviderNativeThinkingIsSeparatedFromAnswer(t *testing.T) {
+	m := newTestModel(t)
+	m.state = StateWaiting
+	updated, _ := m.Update(StreamThinkingMsg{Text: "inspect constraints"})
+	m = updated.(*Model)
+	updated, _ = m.Update(StreamTextMsg{Text: "final answer"})
+	m = updated.(*Model)
+	updated, _ = m.Update(AgentDoneMsg{})
+	m = updated.(*Model)
+
+	last := m.entries[len(m.entries)-1]
+	if last.Content != "final answer" || last.ThinkingContent != "inspect constraints" {
+		t.Fatalf("thinking/answer were not separated: %#v", last)
+	}
+}
+
 func TestErrorMsg_AppendsEntry(t *testing.T) {
 	m := newTestModel(t)
 	before := len(m.entries)
@@ -244,6 +261,26 @@ func TestToolCallResultMsg(t *testing.T) {
 	})
 }
 
+func TestToolCallResultsCorrelateDuplicateNamesByID(t *testing.T) {
+	m := newTestModel(t)
+	for _, id := range []string{"call-1", "call-2"} {
+		updated, _ := m.Update(ToolCallStartMsg{ID: id, Name: "read", StartTime: time.Now()})
+		m = updated.(*Model)
+	}
+
+	updated, _ := m.Update(ToolCallResultMsg{ID: "call-1", Name: "read", Result: "first"})
+	m = updated.(*Model)
+	updated, _ = m.Update(ToolCallResultMsg{ID: "call-2", Name: "read", Result: "second"})
+	m = updated.(*Model)
+
+	if m.toolEntries[0].Result != "first" || m.toolEntries[1].Result != "second" {
+		t.Fatalf("tool results were swapped: %#v", m.toolEntries)
+	}
+	if m.toolCardMgr.Cards[0].Result != "first" || m.toolCardMgr.Cards[1].Result != "second" {
+		t.Fatalf("tool cards were swapped: %#v", m.toolCardMgr.Cards)
+	}
+}
+
 func TestAgentDoneMsg(t *testing.T) {
 	m := newTestModel(t)
 	m.state = StateStreaming
@@ -261,6 +298,28 @@ func TestAgentDoneMsg(t *testing.T) {
 	}
 	if !m.anchorActive {
 		t.Error("anchorActive should be reset to true")
+	}
+}
+
+func TestShutdownWaitsForActiveTurnBeforeQuit(t *testing.T) {
+	m := newTestModel(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancel = cancel
+	m.state = StateStreaming
+	updated, cmd := m.Update(ShutdownMsg{})
+	m = updated.(*Model)
+	if cmd != nil {
+		t.Fatal("shutdown quit before active turn joined")
+	}
+	select {
+	case <-ctx.Done():
+	default:
+		t.Fatal("shutdown did not cancel active turn")
+	}
+	updated, cmd = m.Update(AgentDoneMsg{Err: context.Canceled})
+	m = updated.(*Model)
+	if cmd == nil || !m.shuttingDown {
+		t.Fatal("shutdown did not quit after active turn completed")
 	}
 }
 
@@ -357,10 +416,13 @@ func TestHandleCommandAction(t *testing.T) {
 		},
 		{
 			name:   "ActionLoadContext",
-			result: command.Result{Action: command.ActionLoadContext, Data: "test.md\x00# Hello", Text: "Loaded."},
+			result: command.Result{Action: command.ActionLoadContext, Data: "test.md", Text: "Loading."},
 			check: func(t *testing.T, m *Model, cmd tea.Cmd) {
-				if m.loadedFile != "test.md" {
-					t.Errorf("expected loadedFile='test.md', got %q", m.loadedFile)
+				if cmd == nil || !m.fileLoading {
+					t.Error("load context should start a tokened asynchronous read")
+				}
+				if m.loadedFile != "" {
+					t.Errorf("context changed before async read completed: %q", m.loadedFile)
 				}
 			},
 		},

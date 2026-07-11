@@ -37,6 +37,7 @@ type Message struct {
 // StreamChunk is a piece of a streaming response.
 type StreamChunk struct {
 	Text            string     // incremental text content
+	Reasoning       string     // provider-native thinking/reasoning delta
 	ToolCalls       []ToolCall // tool calls (usually in final chunk)
 	Done            bool       // true on the last chunk
 	EvalCount       int        // tokens generated (only on Done)

@@ -1,10 +1,13 @@
 package agent
 
 import (
+	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/abdul-hamid-achik/local-agent/internal/db"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 	"github.com/abdul-hamid-achik/local-agent/internal/mcp"
 )
@@ -16,12 +19,118 @@ type mockOutput struct {
 	sysMsgs []string
 }
 
-func (m *mockOutput) StreamText(text string)                                     { m.texts = append(m.texts, text) }
-func (m *mockOutput) StreamDone(_, _ int)                                        {}
-func (m *mockOutput) ToolCallStart(_ string, _ map[string]any)                   {}
-func (m *mockOutput) ToolCallResult(_ string, _ string, _ bool, _ time.Duration) {}
-func (m *mockOutput) SystemMessage(msg string)                                   { m.sysMsgs = append(m.sysMsgs, msg) }
-func (m *mockOutput) Error(msg string)                                           { m.errors = append(m.errors, msg) }
+func TestRecentConversationBoundaryKeepsToolPairsIntact(t *testing.T) {
+	messages := []llm.Message{
+		{Role: "user", Content: "first"},
+		{Role: "assistant", ToolCalls: []llm.ToolCall{{ID: "1", Name: "read"}}},
+		{Role: "tool", ToolCallID: "1", ToolName: "read", Content: "one"},
+		{Role: "assistant", Content: "done"},
+		{Role: "user", Content: "second"},
+		{Role: "assistant", ToolCalls: []llm.ToolCall{{ID: "2", Name: "read"}}},
+		{Role: "tool", ToolCallID: "2", ToolName: "read", Content: "two"},
+	}
+	if got := recentConversationBoundary(messages, 4); got != 4 {
+		t.Fatalf("boundary = %d, want start of second user turn at 4", got)
+	}
+}
+
+func TestCompactUsesSystemSummaryAndCompleteRecentTurn(t *testing.T) {
+	client := &scriptedClient{responses: [][]llm.StreamChunk{{{Text: "first turn recap", Done: true}}}}
+	ag := New(client, nil, 4096)
+	ag.ReplaceMessages([]llm.Message{
+		{Role: "user", Content: "first"},
+		{Role: "assistant", ToolCalls: []llm.ToolCall{{ID: "1", Name: "read"}}},
+		{Role: "tool", ToolCallID: "1", ToolName: "read", Content: "one"},
+		{Role: "assistant", Content: "done"},
+		{Role: "user", Content: "second"},
+		{Role: "assistant", ToolCalls: []llm.ToolCall{{ID: "2", Name: "read"}}},
+		{Role: "tool", ToolCallID: "2", ToolName: "read", Content: "two"},
+	})
+	out := &mockOutput{}
+	if !ag.compact(context.Background(), out) {
+		t.Fatal("expected compaction")
+	}
+
+	got := ag.Messages()
+	if got[0].Role != "system" || !strings.Contains(got[0].Content, "first turn recap") {
+		t.Fatalf("summary message = %#v", got[0])
+	}
+	if got[1].Role != "user" || got[1].Content != "second" {
+		t.Fatalf("recent history did not start at complete turn: %#v", got)
+	}
+	if got[2].ToolCalls[0].ID != got[3].ToolCallID {
+		t.Fatalf("tool call/result pair was broken: %#v", got)
+	}
+}
+
+func TestCompactPreservesHistoryWhenCheckpointFails(t *testing.T) {
+	store, err := db.OpenPath(filepath.Join(t.TempDir(), "closed.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	client := &scriptedClient{responses: [][]llm.StreamChunk{{{Text: "recap", Done: true}}}}
+	ag := New(client, nil, 4096)
+	ag.SetWorkDir(t.TempDir())
+	ag.SetCheckpointStore(store, 0)
+	original := []llm.Message{
+		{Role: "user", Content: "first"},
+		{Role: "assistant", Content: "answer"},
+		{Role: "user", Content: "second"},
+		{Role: "assistant", Content: "answer"},
+		{Role: "user", Content: "third"},
+		{Role: "assistant", Content: "answer"},
+	}
+	ag.ReplaceMessages(original)
+	out := &mockOutput{}
+	if ag.compact(context.Background(), out) {
+		t.Fatal("compaction succeeded without its recovery checkpoint")
+	}
+	got := ag.Messages()
+	if len(got) != len(original) || got[0].Content != original[0].Content {
+		t.Fatalf("history changed after checkpoint failure: %#v", got)
+	}
+	if len(out.errors) == 0 || !strings.Contains(out.errors[len(out.errors)-1], "preserved full history") {
+		t.Fatalf("missing fail-closed compaction receipt: %#v", out.errors)
+	}
+}
+
+func TestNoToolConversationCompactsAfterDirectResponse(t *testing.T) {
+	client := &scriptedClient{responses: [][]llm.StreamChunk{
+		{{Text: "answer one", PromptEvalCount: 80, Done: true}},
+		{{Text: "answer two", PromptEvalCount: 80, Done: true}},
+		{{Text: "answer three", PromptEvalCount: 80, Done: true}},
+		{{Text: "summary of the first turn", Done: true}},
+	}}
+	ag := New(client, nil, 100)
+	out := &mockOutput{}
+	for _, prompt := range []string{"question one", "question two", "question three"} {
+		ag.AddUserMessage(prompt)
+		if err := ag.Run(context.Background(), out); err != nil {
+			t.Fatalf("Run(%q): %v", prompt, err)
+		}
+	}
+	if client.calls != 4 {
+		t.Fatalf("provider calls = %d, want three answers plus compaction", client.calls)
+	}
+	messages := ag.Messages()
+	if len(messages) != 5 || messages[0].Role != "system" || !strings.Contains(messages[0].Content, "summary of the first turn") {
+		t.Fatalf("direct-answer history was not compacted: %#v", messages)
+	}
+	if len(out.sysMsgs) == 0 || !strings.Contains(out.sysMsgs[len(out.sysMsgs)-1], "Context compacted") {
+		t.Fatalf("missing compaction receipt: %#v", out.sysMsgs)
+	}
+}
+
+func (m *mockOutput) StreamText(text string)                                               { m.texts = append(m.texts, text) }
+func (m *mockOutput) StreamReasoning(_ string)                                             {}
+func (m *mockOutput) StreamDone(_, _ int)                                                  {}
+func (m *mockOutput) ToolCallStart(_ string, _ string, _ map[string]any)                   {}
+func (m *mockOutput) ToolCallResult(_ string, _ string, _ string, _ bool, _ time.Duration) {}
+func (m *mockOutput) SystemMessage(msg string)                                             { m.sysMsgs = append(m.sysMsgs, msg) }
+func (m *mockOutput) Error(msg string)                                                     { m.errors = append(m.errors, msg) }
 
 func TestShouldCompact(t *testing.T) {
 	tests := []struct {
@@ -49,6 +158,18 @@ func TestShouldCompact(t *testing.T) {
 					tt.promptTokens, tt.numCtx, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestEstimatePromptTokensCountsMessageContentOnce(t *testing.T) {
+	base := New(nil, nil, 4096)
+	base.ReplaceMessages([]llm.Message{{Role: "user"}})
+	withContent := New(nil, nil, 4096)
+	withContent.ReplaceMessages([]llm.Message{{Role: "user", Content: strings.Repeat("x", 400)}})
+
+	delta := withContent.estimatePromptTokens("system", nil) - base.estimatePromptTokens("system", nil)
+	if delta != 100 {
+		t.Fatalf("400 message characters changed estimate by %d tokens, want 100", delta)
 	}
 }
 

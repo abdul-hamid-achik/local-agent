@@ -5,6 +5,14 @@ import (
 	"strings"
 )
 
+const (
+	// The compact transcript remains usable at 30 columns when the sidebar is
+	// hidden. With the sidebar open, preserve at least 25 columns for chat.
+	minTerminalWidth            = 30
+	minTerminalHeight           = 12
+	minTerminalWidthWithSidebar = 52
+)
+
 // layoutConfig holds adaptive layout parameters based on terminal size.
 type layoutConfig struct {
 	ContentPad     int
@@ -46,6 +54,51 @@ func (m *Model) currentLayout() layoutConfig {
 		ResultTruncMax: 300,
 		HeaderMode:     "full",
 	}
+}
+
+// chatPaneWidth is the width owned by the viewport component. Keep this in one
+// place so welcome text, messages, tool cards, and diffs all obey the same
+// boundary as the smart parent model.
+func (m *Model) chatPaneWidth() int {
+	w := m.width - 1
+	if m.sidePanel.IsVisible() {
+		w = m.width - m.sidePanel.width - 2
+	}
+	if w < 1 {
+		return 1
+	}
+	return w
+}
+
+// renderedRightPaneWidth includes the extra column used by the footer/ruler
+// next to the viewport. It is deliberately separate from chatPaneWidth.
+func (m *Model) renderedRightPaneWidth() int {
+	w := m.width - 1
+	if m.sidePanel.IsVisible() {
+		w = m.width - m.sidePanel.width - 1
+	}
+	if w < 1 {
+		return 1
+	}
+	return w
+}
+
+// narrowTerminalHint returns a recovery-oriented empty state instead of
+// letting fixed-width components overflow or disappear.
+func (m *Model) narrowTerminalHint() string {
+	if m.height < minTerminalHeight {
+		return fmt.Sprintf("Resize the terminal to at least %d rows.", minTerminalHeight)
+	}
+	if m.sidePanel.IsVisible() && m.width < minTerminalWidthWithSidebar {
+		if m.state != StateIdle {
+			return "Press Esc to cancel active work, then Ctrl+B to hide the sidebar."
+		}
+		return "Press Ctrl+B to hide the sidebar, or widen the terminal."
+	}
+	if m.width < minTerminalWidth {
+		return fmt.Sprintf("Resize the terminal to at least %d columns.", minTerminalWidth)
+	}
+	return ""
 }
 
 // contextProgressBar renders a mini progress bar: █████░░░░░ 42%

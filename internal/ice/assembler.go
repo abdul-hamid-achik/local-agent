@@ -17,6 +17,7 @@ type Assembler struct {
 	memStore  *memory.Store
 	budgetCfg BudgetConfig
 	sessionID string
+	projectID string
 }
 
 // Assemble retrieves relevant past conversations and memories for the query,
@@ -77,7 +78,7 @@ func (a *Assembler) retrieveConversations(ctx context.Context, query string, tok
 		return nil, err
 	}
 
-	results := a.convStore.Search(queryEmb, a.sessionID, 20)
+	results := a.convStore.SearchScoped(queryEmb, a.projectID, a.sessionID, 20)
 
 	var chunks []ContextChunk
 	usedTokens := 0

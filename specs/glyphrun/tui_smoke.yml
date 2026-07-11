@@ -10,10 +10,11 @@ target:
   env:
     HOME: "${projectRoot}/.glyphrun/tmp/home"
     LOCAL_AGENT_AGENTS_DIR: "${projectRoot}/.glyphrun/tmp/agents"
+    OLLAMA_HOST: "http://127.0.0.1:11434"
 
 preconditions:
   commands:
-    - run: "mkdir -p .glyphrun/tmp/home .glyphrun/tmp/agents && go build -o ./bin/local-agent ./cmd/local-agent"
+    - run: "rm -rf .glyphrun/tmp/home .glyphrun/tmp/agents && mkdir -p .glyphrun/tmp/home .glyphrun/tmp/agents && go build -o ./bin/local-agent ./cmd/local-agent"
       cwd: "."
       timeoutMs: 30000
 
@@ -39,7 +40,7 @@ outcomes:
     description: the prompt hint is visible
     verify:
       screen:
-        contains: "Ask anything"
+        contains: "Ask, @mention files, or type /help"
   - id: ctrl_c_quits
     description: ctrl+c exits the TUI cleanly
     verify:

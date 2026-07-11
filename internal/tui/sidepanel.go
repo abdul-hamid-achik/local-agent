@@ -121,37 +121,35 @@ type SidePanelStyles struct {
 // than Nord3 (#4c566a) — Nord3 is a border/comment color and is nearly
 // invisible as body text on the dark background. Borders still use Nord3.
 func DefaultSidePanelStyles(isDark bool) SidePanelStyles {
-	// Readable muted foreground per theme (legible but clearly secondary).
-	dim := "#8b97ad" // dark theme: light slate, readable on Nord0/1
-	border := "#4c566a"
-	section := "#81a1c1"
-	item := "#d8dee9"
-	if !isDark {
-		dim = "#5b6779" // light theme: medium slate on light bg
-		border = "#d8dee9"
-		section = "#5e81ac"
-		item = "#3b4252"
-	}
+	ld := lipgloss.LightDark(isDark)
+	dim := ld(lipgloss.Color("#5b6779"), lipgloss.Color("#8b97ad"))
+	border := ld(lipgloss.Color("#d8dee9"), lipgloss.Color("#4c566a"))
+	section := ld(lipgloss.Color("#5e81ac"), lipgloss.Color("#81a1c1"))
+	item := ld(lipgloss.Color("#3b4252"), lipgloss.Color("#d8dee9"))
+	accent := ld(lipgloss.Color("#5e81ac"), lipgloss.Color("#88c0d0"))
+	success := ld(lipgloss.Color("#4f8f38"), lipgloss.Color("#a3be8c"))
+	failure := ld(lipgloss.Color("#c94f4f"), lipgloss.Color("#bf616a"))
 	return SidePanelStyles{
-		Border:      lipgloss.NewStyle().Foreground(lipgloss.Color(border)),
-		Title:       lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#88c0d0")),
-		Section:     lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(section)),
-		Item:        lipgloss.NewStyle().Foreground(lipgloss.Color(item)),
-		Selected:    lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#88c0d0")),
-		Current:     lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#a3be8c")),
-		Connected:   lipgloss.NewStyle().Foreground(lipgloss.Color("#a3be8c")),
-		Failed:      lipgloss.NewStyle().Foreground(lipgloss.Color("#bf616a")),
-		Dimmed:      lipgloss.NewStyle().Foreground(lipgloss.Color(dim)),
-		Logo:        lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#88c0d0")),
-		LogoTagline: lipgloss.NewStyle().Foreground(lipgloss.Color(dim)),
+		Border:      lipgloss.NewStyle().Foreground(border),
+		Title:       lipgloss.NewStyle().Bold(true).Foreground(accent),
+		Section:     lipgloss.NewStyle().Bold(true).Foreground(section),
+		Item:        lipgloss.NewStyle().Foreground(item),
+		Selected:    lipgloss.NewStyle().Bold(true).Foreground(accent),
+		Current:     lipgloss.NewStyle().Bold(true).Foreground(success),
+		Connected:   lipgloss.NewStyle().Foreground(success),
+		Failed:      lipgloss.NewStyle().Foreground(failure),
+		Dimmed:      lipgloss.NewStyle().Foreground(dim),
+		Logo:        lipgloss.NewStyle().Bold(true).Foreground(accent),
+		LogoTagline: lipgloss.NewStyle().Foreground(dim),
 	}
 }
 
 // NewSidePanelModel creates a new side panel
 func NewSidePanelModel(isDark bool) SidePanelModel {
+	ld := lipgloss.LightDark(isDark)
 	s := spinner.New(
 		spinner.WithSpinner(spinner.MiniDot),
-		spinner.WithStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("#88c0d0"))),
+		spinner.WithStyle(lipgloss.NewStyle().Foreground(ld(lipgloss.Color("#5e81ac"), lipgloss.Color("#88c0d0")))),
 	)
 	return SidePanelModel{
 		visible:  true, // Visible by default
@@ -220,7 +218,7 @@ func (m *SidePanelModel) IsVisible() bool {
 }
 
 // UpdateSections rebuilds the panel content
-func (m *SidePanelModel) UpdateSections(modelName string, modelList []string, serverCount int, toolCount int, iceEnabled bool, iceConversations int) {
+func (m *SidePanelModel) UpdateSections(modelName string, modelList, serverNames []string, toolCount int, iceEnabled bool, iceConversations int) {
 	m.sections = []SidePanelSection{
 		// Logo section - permanent, always shown
 		{
@@ -230,7 +228,7 @@ func (m *SidePanelModel) UpdateSections(modelName string, modelList []string, se
 			Items: []SidePanelItem{
 				{
 					Title:    "LOCAL AGENT",
-					Subtitle: "100% local · Your data never leaves",
+					Subtitle: "Local-first · effects require approval",
 					Kind:     SidePanelLogo,
 					Icon:     "⬡",
 				},
@@ -294,14 +292,14 @@ func (m *SidePanelModel) UpdateSections(modelName string, modelList []string, se
 		m.sections[1].Items = append(m.sections[1].Items, item)
 	}
 
-	// Add servers placeholder
-	if serverCount > 0 {
-		m.sections[2].Items = append(m.sections[2].Items, SidePanelItem{
-			Title:      fmt.Sprintf("%d tools connected", toolCount),
-			Kind:       SidePanelServers,
-			Icon:       "✓",
-			Selectable: false,
-		})
+	// Show the actual connected brokers, not an anonymous count.
+	if len(serverNames) > 0 {
+		for _, serverName := range serverNames {
+			m.sections[2].Items = append(m.sections[2].Items, SidePanelItem{
+				Title: serverName, Subtitle: fmt.Sprintf("connected · %d tools total", toolCount),
+				Kind: SidePanelServers, Icon: "✓", Status: "connected", Selectable: false,
+			})
+		}
 	} else {
 		m.sections[2].Items = append(m.sections[2].Items, SidePanelItem{
 			Title:      "No servers connected",
@@ -354,19 +352,13 @@ func (m SidePanelModel) View() string {
 		return ""
 	}
 
-	// Ensure we have a minimum width
-	width := m.width
-	if width < 25 {
-		width = 25
-	}
-
 	var b strings.Builder
 
 	// Logo section - ALWAYS shown at top - simple clean text
 	b.WriteString("\n")
 	b.WriteString(m.styles.Logo.Render("  LOCAL AGENT"))
 	b.WriteString("\n")
-	b.WriteString(m.styles.LogoTagline.Render("  100% local"))
+	b.WriteString(m.styles.LogoTagline.Render("  Local-first · Ollama"))
 	b.WriteString("\n\n")
 
 	// Startup items (shown during initialization) - with loading indicator

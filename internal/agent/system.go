@@ -1,10 +1,13 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -36,7 +39,7 @@ Current date: %s
 const smallModelTemplate = `You are a local AI assistant. Use tools to read/write files and run commands.
 %sDate: %s
 %s%s
-%s
+%s%s%s
 ## Tools
 %s
 Guidelines:
@@ -47,14 +50,21 @@ Guidelines:
 - You can complete tasks even if some tools fail
 %s`
 
+var modelSizePattern = regexp.MustCompile(`(?:^|[^0-9.])(\d+(?:\.\d+)?)b(?:$|[^a-z0-9])`)
+
+// A network-backed workspace can wedge an otherwise harmless metadata stat in
+// the kernel. Bound abandonment globally: one stuck probe may remain, while
+// every current and future turn still observes context cancellation.
+var projectInfoProbeSlots = make(chan struct{}, 1)
+
 // isSmallModel returns true if the model name indicates a small model (<=2B parameters).
 func isSmallModel(modelName string) bool {
-	lower := strings.ToLower(modelName)
-	// Check for common small model patterns
-	if strings.Contains(lower, "0.8b") || strings.Contains(lower, "1b") || strings.Contains(lower, "2b") {
-		return true
+	match := modelSizePattern.FindStringSubmatch(strings.ToLower(modelName))
+	if len(match) != 2 {
+		return false
 	}
-	return false
+	size, err := strconv.ParseFloat(match[1], 64)
+	return err == nil && size <= 2
 }
 
 // buildSystemPrompt generates the system prompt with current tool info,
@@ -66,7 +76,24 @@ func buildSystemPrompt(modePrefix string, tools []llm.ToolDef, skillContent, loa
 
 // buildSystemPromptForModel generates the system prompt, optionally optimized for the given model name.
 func buildSystemPromptForModel(modePrefix string, tools []llm.ToolDef, skillContent, loadedContext string, memStore *memory.Store, iceContext, workDir, ignoreContent string, modelName string) string {
+	return buildSystemPromptForModelBudget(modePrefix, tools, skillContent, loadedContext, memStore, iceContext, workDir, ignoreContent, modelName, 0)
+}
+
+// buildSystemPromptForModelBudget bounds optional context before prompt
+// assembly. The model still receives project instructions, skills, and memory,
+// but one oversized file or retrieval result cannot consume the entire window.
+func buildSystemPromptForModelBudget(modePrefix string, tools []llm.ToolDef, skillContent, loadedContext string, memStore *memory.Store, iceContext, workDir, ignoreContent string, modelName string, numCtx int) string {
+	return buildSystemPromptForModelBudgetContext(context.Background(), modePrefix, tools, skillContent, loadedContext, memStore, iceContext, workDir, ignoreContent, modelName, numCtx)
+}
+
+func buildSystemPromptForModelBudgetContext(ctx context.Context, modePrefix string, tools []llm.ToolDef, skillContent, loadedContext string, memStore *memory.Store, iceContext, workDir, ignoreContent string, modelName string, numCtx int) string {
 	useSmallModel := isSmallModel(modelName)
+	if budget := optionalPromptBudget(numCtx); budget > 0 {
+		loadedContext = boundPromptText(loadedContext, budget*50/100)
+		skillContent = boundPromptText(skillContent, budget*20/100)
+		iceContext = boundPromptText(iceContext, budget*25/100)
+		ignoreContent = boundPromptText(ignoreContent, budget*5/100)
+	}
 
 	var toolList string
 	if len(tools) == 0 {
@@ -83,7 +110,7 @@ func buildSystemPromptForModel(modePrefix string, tools []llm.ToolDef, skillCont
 		toolList = b.String()
 	}
 
-	envSection := buildEnvironmentSection(workDir)
+	envSection := buildEnvironmentSectionContext(ctx, workDir)
 
 	var skillSection string
 	if skillContent != "" {
@@ -100,6 +127,9 @@ func buildSystemPromptForModel(modePrefix string, tools []llm.ToolDef, skillCont
 		memorySection = iceContext
 	} else if memStore != nil {
 		memorySection = buildMemorySection(memStore)
+	}
+	if budget := optionalPromptBudget(numCtx); budget > 0 && iceContext == "" {
+		memorySection = boundPromptText(memorySection, budget*25/100)
 	}
 
 	var memoryGuidelines string
@@ -133,6 +163,8 @@ func buildSystemPromptForModel(modePrefix string, tools []llm.ToolDef, skillCont
 			envSection,
 			ignoreSection,
 			skillSection,
+			ctxSection,
+			memorySection,
 			toolList,
 			memoryGuidelines,
 		)
@@ -151,6 +183,41 @@ func buildSystemPromptForModel(modePrefix string, tools []llm.ToolDef, skillCont
 	)
 }
 
+// optionalPromptBudget reserves most of the context window for the tool
+// schemas, conversation, and generated answer. Four characters per token is a
+// rough English/code estimate; one third of that window is allocated here.
+func optionalPromptBudget(numCtx int) int {
+	if numCtx <= 0 {
+		return 0
+	}
+	budget := numCtx * 4 / 3
+	if budget < 4096 {
+		return 4096
+	}
+	if budget > 64*1024 {
+		return 64 * 1024
+	}
+	return budget
+}
+
+func boundPromptText(text string, maxRunes int) string {
+	if text == "" || maxRunes <= 0 {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) <= maxRunes {
+		return text
+	}
+	marker := []rune(fmt.Sprintf("\n... [%d context characters omitted] ...\n", len(runes)-maxRunes))
+	if len(marker) >= maxRunes {
+		return string(runes[:maxRunes])
+	}
+	available := maxRunes - len(marker)
+	head := available * 3 / 4
+	tail := available - head
+	return string(runes[:head]) + string(marker) + string(runes[len(runes)-tail:])
+}
+
 // simplifyToolsForSmallModel creates a condensed tool list for small models.
 func simplifyToolsForSmallModel(tools []llm.ToolDef) string {
 	var b strings.Builder
@@ -165,23 +232,23 @@ func simplifyToolsForSmallModel(tools []llm.ToolDef) string {
 	return b.String()
 }
 
-// buildEnvironmentSection creates the environment context section.
-func buildEnvironmentSection(workDir string) string {
+// buildEnvironmentSectionContext creates the cancellable environment section.
+func buildEnvironmentSectionContext(ctx context.Context, workDir string) string {
 	if workDir == "" {
 		return ""
 	}
 
 	var b strings.Builder
 	b.WriteString("\n## Environment\n")
-	b.WriteString(fmt.Sprintf("Working directory: %s\n", workDir))
+	fmt.Fprintf(&b, "Working directory: %s\n", workDir)
 
 	// Auto-detect project type from marker files.
-	if info := detectProjectInfo(workDir); info != "" {
+	if info := detectProjectInfoContext(ctx, workDir); info != "" {
 		b.WriteString(info)
 	}
 
 	// Git context
-	if gitInfo := detectGitInfo(workDir); gitInfo != "" {
+	if gitInfo := detectGitInfoContext(ctx, workDir); gitInfo != "" {
 		b.WriteString(gitInfo)
 	}
 
@@ -221,24 +288,47 @@ func detectProjectInfo(workDir string) string {
 	return fmt.Sprintf("Project markers: %s\n", strings.Join(found, ", "))
 }
 
-// detectGitInfo returns git branch and status information for the working directory.
-func detectGitInfo(workDir string) string {
-	// Check if this is a git repo
-	gitDir := filepath.Join(workDir, ".git")
-	if _, err := os.Stat(gitDir); err != nil {
+func detectProjectInfoContext(ctx context.Context, workDir string) string {
+	select {
+	case projectInfoProbeSlots <- struct{}{}:
+	case <-ctx.Done():
+		return ""
+	default:
+		// Metadata is optional. If a previous network-filesystem syscall is
+		// abandoned, do not make every later turn wait for its own cancellation.
+		return ""
+	}
+	done := make(chan string, 1)
+	go func() {
+		defer func() { <-projectInfoProbeSlots }()
+		done <- detectProjectInfo(workDir)
+	}()
+	select {
+	case info := <-done:
+		return info
+	case <-ctx.Done():
+		return ""
+	}
+}
+
+// detectGitInfoContext returns bounded git branch and status information.
+func detectGitInfoContext(ctx context.Context, workDir string) string {
+	probeCtx, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
+	defer cancel()
+	if runGitCommandContext(probeCtx, workDir, "rev-parse", "--is-inside-work-tree") != "true" {
 		return ""
 	}
 
 	var b strings.Builder
 
 	// Get current branch
-	branch := runGitCommand(workDir, "rev-parse", "--abbrev-ref", "HEAD")
+	branch := runGitCommandContext(probeCtx, workDir, "rev-parse", "--abbrev-ref", "HEAD")
 	if branch != "" {
-		b.WriteString(fmt.Sprintf("Git branch: %s\n", branch))
+		fmt.Fprintf(&b, "Git branch: %s\n", branch)
 	}
 
 	// Get status (short format)
-	status := runGitCommand(workDir, "status", "--porcelain")
+	status := runGitCommandContext(probeCtx, workDir, "status", "--porcelain")
 	if status != "" {
 		lines := strings.Split(strings.TrimSpace(status), "\n")
 		var modified, added, deleted int
@@ -265,16 +355,16 @@ func detectGitInfo(workDir string) string {
 			if deleted > 0 {
 				statusParts = append(statusParts, fmt.Sprintf("%d deleted", deleted))
 			}
-			b.WriteString(fmt.Sprintf("Git status: %s\n", strings.Join(statusParts, ", ")))
+			fmt.Fprintf(&b, "Git status: %s\n", strings.Join(statusParts, ", "))
 		}
 	}
 
 	// Get recent commits (last 3)
-	recentLog := runGitCommand(workDir, "log", "-3", "--oneline")
+	recentLog := runGitCommandContext(probeCtx, workDir, "log", "-3", "--oneline")
 	if recentLog != "" {
-		b.WriteString(fmt.Sprintf("Recent commits:\n"))
+		b.WriteString("Recent commits:\n")
 		for _, line := range strings.Split(strings.TrimSpace(recentLog), "\n") {
-			b.WriteString(fmt.Sprintf("  - %s\n", line))
+			fmt.Fprintf(&b, "  - %s\n", line)
 		}
 	}
 
@@ -285,9 +375,15 @@ func detectGitInfo(workDir string) string {
 	return b.String()
 }
 
-// runGitCommand runs a git command and returns the output (trimmed).
-func runGitCommand(dir string, args ...string) string {
-	cmd := exec.Command("git", args...)
+// runGitCommandContext runs a bounded git command and returns trimmed output.
+func runGitCommandContext(ctx context.Context, dir string, args ...string) string {
+	if err := ctx.Err(); err != nil {
+		return ""
+	}
+	commandCtx, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
+	defer cancel()
+	cmd := exec.CommandContext(commandCtx, "git", args...)
+	configureCommandProcessGroup(cmd)
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
@@ -310,9 +406,9 @@ func buildMemorySection(store *memory.Store) string {
 	var b strings.Builder
 	b.WriteString("\n## Remembered Facts\n")
 	for _, mem := range recent {
-		b.WriteString(fmt.Sprintf("- %s", mem.Content))
+		fmt.Fprintf(&b, "- %s", mem.Content)
 		if len(mem.Tags) > 0 {
-			b.WriteString(fmt.Sprintf(" [tags: %s]", strings.Join(mem.Tags, ", ")))
+			fmt.Fprintf(&b, " [tags: %s]", strings.Join(mem.Tags, ", "))
 		}
 		b.WriteString("\n")
 	}

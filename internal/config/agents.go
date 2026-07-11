@@ -2,10 +2,12 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 
+	"github.com/abdul-hamid-achik/local-agent/internal/safeio"
 	"gopkg.in/yaml.v3"
 )
 
@@ -44,6 +46,8 @@ type ModelsConfig struct {
 	AutoSelect    bool     `yaml:"auto_select,omitempty"`
 	EmbedModel    string   `yaml:"embed_model,omitempty"`
 }
+
+var agentsMetadataReader = safeio.NewReader()
 
 func FindAgentsDir() string {
 	home, err := os.UserHomeDir()
@@ -136,16 +140,21 @@ func (d *AgentsDir) loadAgents(path string) error {
 
 	for _, entry := range entries {
 		if entry.IsDir() {
-			agentPath := filepath.Join(agentsDir, entry.Name(), "agent.yaml")
-			if _, err := os.Stat(agentPath); err != nil {
-				agentPath = filepath.Join(agentsDir, entry.Name(), "agent.md")
+			var agentPath string
+			var data []byte
+			for _, name := range []string{"agent.yaml", "agent.md"} {
+				candidate := filepath.Join(agentsDir, entry.Name(), name)
+				candidateData, readErr := agentsMetadataReader.ReadRegularFileNoFollow(candidate, maxStartupConfigBytes, safeio.StartupReadTimeout)
+				if readErr == nil {
+					agentPath = candidate
+					data = candidateData
+					break
+				}
+				if !errors.Is(readErr, os.ErrNotExist) {
+					return fmt.Errorf("read agent profile %s: %w", candidate, readErr)
+				}
 			}
-			if _, err := os.Stat(agentPath); err != nil {
-				continue
-			}
-
-			data, err := os.ReadFile(agentPath)
-			if err != nil {
+			if agentPath == "" {
 				continue
 			}
 
@@ -167,9 +176,9 @@ func (d *AgentsDir) loadAgents(path string) error {
 
 func (d *AgentsDir) loadMCP(path string) error {
 	mcpPath := filepath.Join(path, "mcp.json")
-	data, err := os.ReadFile(mcpPath)
+	data, err := agentsMetadataReader.ReadRegularFileNoFollow(mcpPath, maxStartupConfigBytes, safeio.StartupReadTimeout)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
 		return err
@@ -191,10 +200,13 @@ func (d *AgentsDir) loadGlobalInstructions(path string) error {
 	}
 
 	for _, p := range paths {
-		data, err := os.ReadFile(p)
+		data, err := agentsMetadataReader.ReadRegularFileNoFollow(p, maxStartupConfigBytes, safeio.StartupReadTimeout)
 		if err == nil {
 			d.GlobalInstructions = string(data)
 			return nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("read global instructions %s: %w", p, err)
 		}
 	}
 
@@ -220,11 +232,17 @@ func (d *AgentsDir) loadSkills(path string) error {
 
 		// Try both SKILL.md and skill.md (case insensitive check)
 		skillPath := ""
+		var skillData []byte
 		for _, name := range []string{"SKILL.md", "skill.md"} {
-			path := filepath.Join(skillDir, name)
-			if info, err := os.Stat(path); err == nil && !info.IsDir() {
-				skillPath = path
+			candidate := filepath.Join(skillDir, name)
+			data, readErr := agentsMetadataReader.ReadRegularFileNoFollow(candidate, maxStartupConfigBytes, safeio.StartupReadTimeout)
+			if readErr == nil {
+				skillPath = candidate
+				skillData = data
 				break
+			}
+			if !errors.Is(readErr, os.ErrNotExist) {
+				return fmt.Errorf("read skill metadata %s: %w", candidate, readErr)
 			}
 		}
 
@@ -232,14 +250,9 @@ func (d *AgentsDir) loadSkills(path string) error {
 			continue
 		}
 
-		data, err := os.ReadFile(skillPath)
-		if err != nil {
-			continue
-		}
-
 		d.Skills = append(d.Skills, SkillDef{
 			Name:        entry.Name(),
-			Description: extractDescription(string(data)),
+			Description: extractDescription(string(skillData)),
 			Path:        skillPath,
 		})
 	}

@@ -3,6 +3,7 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestClassifyTask(t *testing.T) {
@@ -162,5 +163,72 @@ func TestRouter_SelectModel(t *testing.T) {
 				t.Errorf("SelectModel(%q) = %q, want %q", tt.query, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestRouter_RecordOverrideDoesNotDeadlock(t *testing.T) {
+	cfg := DefaultModelConfig()
+	r := NewRouter(&cfg)
+	done := make(chan struct{})
+
+	go func() {
+		r.RecordOverride("explain this function", "qwen3.5:4b")
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("RecordOverride deadlocked")
+	}
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if len(r.overrideLog) != 1 {
+		t.Fatalf("override log length = %d, want 1", len(r.overrideLog))
+	}
+}
+
+func TestRouterUsesOnlyDiscoveredLocalModels(t *testing.T) {
+	cfg := DefaultModelConfig()
+	r := NewRouter(&cfg)
+	r.SetAvailableModels([]string{"qwen3.5:2b"})
+
+	for _, query := range []string{"what is Go", "implement a full stack system"} {
+		if got := r.SelectModel(query); got != "qwen3.5:2b" {
+			t.Errorf("SelectModel(%q) = %q, want installed 2B fallback", query, got)
+		}
+	}
+	if got := r.SelectModelForMode("implement a system", ModeBuildContext); got != "qwen3.5:2b" {
+		t.Errorf("BUILD fallback = %q, want installed 2B", got)
+	}
+}
+
+func TestRouterReturnsNoModelForKnownEmptyInventory(t *testing.T) {
+	cfg := DefaultModelConfig()
+	r := NewRouter(&cfg)
+	r.SetAvailableModels([]string{})
+
+	if got := r.ResolveAvailableModel(cfg.DefaultModel); got != "" {
+		t.Fatalf("empty inventory resolved to %q, want no model", got)
+	}
+	if got := r.SelectModel("explain Go"); got != "" {
+		t.Fatalf("empty inventory selected %q, want no model", got)
+	}
+}
+
+func TestRouterCanonicalizesAvailableModelTags(t *testing.T) {
+	cfg := &ModelConfig{
+		Models:        []Model{{Name: "llama3", Capability: CapabilityMedium}},
+		DefaultModel:  "llama3",
+		FallbackChain: []string{"llama3"},
+	}
+	r := NewRouter(cfg)
+	r.SetAvailableModels([]string{"llama3:latest"})
+	if got := r.ResolveAvailableModel("llama3"); got != "llama3" {
+		t.Fatalf("canonical available model resolved to %q", got)
+	}
+	if got := r.GetModelForCapability(CapabilityMedium); got != "llama3" {
+		t.Fatalf("canonical capability model resolved to %q", got)
 	}
 }

@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     title      TEXT    NOT NULL DEFAULT '',
     model      TEXT    NOT NULL DEFAULT '',
     mode       TEXT    NOT NULL DEFAULT 'BUILD',
+    workspace_id TEXT  NOT NULL DEFAULT '',
     created_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );

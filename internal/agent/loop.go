@@ -2,22 +2,58 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
-	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 	permissionPkg "github.com/abdul-hamid-achik/local-agent/internal/permission"
 )
 
 // Run executes the ReAct loop: query -> LLM -> tool calls -> observe -> repeat.
-// It streams output via the Output interface.
-func (a *Agent) Run(ctx context.Context, out Output) {
+// It streams output via the Output interface and returns a terminal error for
+// headless callers and automation.
+func (a *Agent) Run(ctx context.Context, out Output) error {
+	a.turnMu.Lock()
+	if a.closed {
+		a.turnMu.Unlock()
+		err := fmt.Errorf("agent is closed")
+		out.Error(err.Error())
+		return err
+	}
+	if !a.turnRunning.CompareAndSwap(false, true) {
+		a.turnMu.Unlock()
+		err := fmt.Errorf("another agent turn is already running")
+		out.Error(err.Error())
+		return err
+	}
+	turnCtx, turnCancel := context.WithCancel(ctx)
+	turnDone := make(chan struct{})
+	a.turnCancel = turnCancel
+	a.turnDone = turnDone
+	a.turnMu.Unlock()
+	ctx = turnCtx
+	defer func() {
+		turnCancel()
+		close(turnDone)
+		a.turnMu.Lock()
+		if a.turnDone == turnDone {
+			a.turnCancel = nil
+			a.turnDone = nil
+		}
+		a.turnRunning.Store(false)
+		a.turnMu.Unlock()
+	}()
+	if a.iceEngine != nil {
+		a.iceEngine.CancelAutoMemory()
+	}
+
 	var tools []llm.ToolDef
 	if a.toolPolicy.AllowMCP && a.registry != nil {
-		tools = append(tools, a.registry.Tools()...)
+		tools = append(tools, a.mcpTools()...)
 	}
 	// Merge memory built-in tools if available.
 	if a.memoryStore != nil {
@@ -47,7 +83,7 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 		}
 	}
 
-	system := buildSystemPromptForModel(a.modePrefix, tools, a.skillContent, a.loadedCtx, a.memoryStore, iceContext, a.workDir, a.ignoreContent, a.llmClient.Model())
+	system := buildSystemPromptForModelBudgetContext(ctx, a.modePrefix, tools, a.skillContent, a.loadedCtx, a.memoryStore, iceContext, a.workDir, a.ignoreContent, a.llmClient.Model(), a.numCtx)
 
 	const maxRetries = 2
 	var lastPromptTokens int
@@ -64,10 +100,22 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 		lg.Info("turn start", "model", a.llmClient.Model(), "tools", len(tools), "max_iters", maxIters)
 	}
 
+	// Compact before the next provider request as well as after responses. This
+	// protects direct-answer conversations, which may never enter the tool loop,
+	// from submitting an already oversized history to Ollama.
+	if estimated := a.estimatePromptTokens(system, tools); a.shouldCompact(estimated) {
+		if lg != nil {
+			lg.Info("compaction", "phase", "before_request", "prompt_tokens", estimated, "num_ctx", a.numCtx)
+		}
+		if a.compact(ctx, out) {
+			system = buildSystemPromptForModelBudgetContext(ctx, a.modePrefix, tools, a.skillContent, a.loadedCtx, a.memoryStore, iceContext, a.workDir, a.ignoreContent, a.llmClient.Model(), a.numCtx)
+		}
+	}
+
 	for i := 0; i < maxIters; i++ {
 		select {
 		case <-ctx.Done():
-			return
+			return ctx.Err()
 		default:
 		}
 
@@ -99,6 +147,9 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 				textBuf.WriteString(chunk.Text)
 				out.StreamText(chunk.Text)
 			}
+			if chunk.Reasoning != "" {
+				out.StreamReasoning(chunk.Reasoning)
+			}
 			if len(chunk.ToolCalls) > 0 {
 				toolCalls = append(toolCalls, chunk.ToolCalls...)
 			}
@@ -112,7 +163,7 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 
 		if err != nil {
 			if ctx.Err() != nil {
-				return
+				return ctx.Err()
 			}
 			// Retry on transient JSON parse errors from small models.
 			if retryCount < maxRetries && isRetryableError(err) {
@@ -132,13 +183,14 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 			out.Error(fmt.Sprintf("LLM error: %v", err))
 			// Send a system message explaining the error
 			out.SystemMessage(fmt.Sprintf("⚠️ Model response failed: %v\n\nYou can try:\n- Checking if Ollama is running (`ollama ps`)\n- Switching to a different model (ctrl+m)\n- Reducing context size\n\nTool results are still available above.", err))
-			return
+			return fmt.Errorf("LLM response: %w", err)
 		}
 		retryCount = 0 // reset on success
 		if lg != nil {
 			lg.Info("llm response", "iter", i, "ms", time.Since(llmStart).Milliseconds(),
 				"prompt_tokens", lastPromptTokens, "eval_tokens", lastEvalTokens, "tool_calls", len(toolCalls))
 		}
+		a.ensureToolCallIDs(toolCalls, turnID, i+1)
 
 		// Record assistant message in conversation history.
 		assistantMsg := llm.Message{
@@ -174,185 +226,161 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 			if a.iceEngine != nil && hasEnoughMessages && userContent != "" {
 				a.iceEngine.DetectAutoMemory(ctx, userContent, assistantMsg.Content)
 			}
+			estimatedPromptTokens := a.estimatePromptTokens(system, tools)
+			if estimatedPromptTokens < lastPromptTokens {
+				estimatedPromptTokens = lastPromptTokens
+			}
+			if a.shouldCompact(estimatedPromptTokens) {
+				if lg != nil {
+					lg.Info("compaction", "phase", "direct_response", "prompt_tokens", estimatedPromptTokens, "num_ctx", a.numCtx)
+				}
+				a.compact(ctx, out)
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if lg != nil {
 				lg.Info("turn end", "reason", "complete", "iters", i+1, "ms", time.Since(turnStart).Milliseconds())
 			}
-			return
+			return nil
 		}
 
-		// Execute each tool call and feed results back.
-		// We categorize tools: memory tools and MCP tools can run in parallel,
-		// but built-in file tools run sequentially to avoid filesystem conflicts.
+		// Execute tool calls in provider order. Cancellation is a hard barrier:
+		// no new backend starts after cancellation, but a backend that already
+		// started always receives a durable result/unknown-outcome receipt.
+		for toolIndex, tc := range toolCalls {
+			if err := ctx.Err(); err != nil {
+				a.cancelUndispatchedToolCalls(toolCalls[toolIndex:], out, err)
+				return err
+			}
 
-		// First, collect all tool calls that need execution
-		type pendingTool struct {
-			tc           llm.ToolCall
-			isMemoryTool bool
-			isMCPTool    bool
-		}
+			kind := "mcp"
+			requiresApproval := true
 
-		var pending []pendingTool
-
-		for _, tc := range toolCalls {
-			// Check if this is a built-in memory tool.
+			// Classify policy/scope before hooks. Hooks may normalize arguments but
+			// may not change identity; final arguments are approved below.
 			if a.memoryStore != nil && a.isMemoryTool(tc.Name) {
 				if !a.toolPolicy.AllowsMemory(tc.Name) {
 					a.blockedToolCall(tc, out)
 					continue
 				}
-				pending = append(pending, pendingTool{tc: tc, isMemoryTool: true})
-				continue
-			}
-
-			// Check if this is a built-in file tool.
-			if a.isToolsTool(tc.Name) {
+				kind = "memory"
+				requiresApproval = memoryToolRequiresApproval(tc.Name)
+			} else if a.isToolsTool(tc.Name) {
 				if !a.toolPolicy.AllowsBuiltin(tc.Name) {
 					a.blockedToolCall(tc, out)
 					continue
 				}
-				// Execute built-in tools sequentially (file access safety).
-				out.ToolCallStart(tc.Name, tc.Arguments)
-				startTime := time.Now()
-				var result string
-				var isErr bool
-				if block, reason := a.runPreHooks(ctx, &tc); block {
-					result, isErr = reason, true
-				} else {
-					result, isErr = a.handleToolsTool(tc)
-					a.runPostHooks(ctx, tc, &result, isErr)
-				}
-				duration := time.Since(startTime)
-				if lg != nil {
-					lg.Debug("tool", "name", tc.Name, "kind", "builtin", "ms", duration.Milliseconds(), "error", isErr)
-				}
-				out.ToolCallResult(tc.Name, result, isErr, duration)
-				a.AppendMessage(llm.Message{
-					Role:       "tool",
-					Content:    result,
-					ToolName:   tc.Name,
-					ToolCallID: tc.ID,
-				})
-				continue
-			}
-
-			// External MCP tool - check permissions first.
-			if !a.toolPolicy.AllowMCP {
-				a.blockedToolCall(tc, out)
-				continue
-			}
-			if a.permChecker != nil {
-				switch a.permChecker.ToCheckResult(tc.Name) {
-				case permissionPkg.CheckDeny:
-					errMsg := "tool call blocked by permission policy"
-					out.ToolCallStart(tc.Name, tc.Arguments)
-					out.ToolCallResult(tc.Name, errMsg, true, 0)
-					a.AppendMessage(llm.Message{
-						Role:       "tool",
-						Content:    errMsg,
-						ToolName:   tc.Name,
-						ToolCallID: tc.ID,
-					})
+				kind = "builtin"
+				requiresApproval = builtinToolRequiresApproval(tc.Name)
+			} else {
+				if !a.toolPolicy.AllowMCP {
+					a.blockedToolCall(tc, out)
 					continue
-				case permissionPkg.CheckAsk:
-					if a.approvalCallback != nil {
-						allowed, always := permissionPkg.RequestApproval(tc.Name, tc.Arguments, a.approvalCallback)
-						if always {
-							a.permChecker.SetPolicy(tc.Name, permissionPkg.PolicyAllow)
-						}
-						if !allowed {
-							errMsg := "tool call denied by user"
-							out.ToolCallStart(tc.Name, tc.Arguments)
-							out.ToolCallResult(tc.Name, errMsg, true, 0)
-							a.AppendMessage(llm.Message{
-								Role:       "tool",
-								Content:    errMsg,
-								ToolName:   tc.Name,
-								ToolCallID: tc.ID,
-							})
-							continue
-						}
-					}
+				}
+				if !a.allowsMCPTool(tc.Name) {
+					a.deniedToolCall(tc, out, "tool call blocked by active agent profile MCP scope")
+					continue
 				}
 			}
 
-			pending = append(pending, pendingTool{tc: tc, isMCPTool: true})
+			originalID, originalName := tc.ID, tc.Name
+			block, reason := a.runPreHooks(ctx, &tc)
+			if tc.ID != originalID || tc.Name != originalName {
+				tc.ID, tc.Name = originalID, originalName
+				block = true
+				reason = "tool hook attempted to change approved tool identity"
+			}
+			if block {
+				out.ToolCallStart(tc.ID, tc.Name, tc.Arguments)
+				result := capToolResultForContext(reason, a.numCtx)
+				out.ToolCallResult(tc.ID, tc.Name, result, true, 0)
+				a.AppendMessage(llm.Message{Role: "tool", Content: result, ToolName: tc.Name, ToolCallID: tc.ID})
+				if err := ctx.Err(); err != nil {
+					a.cancelUndispatchedToolCalls(toolCalls[toolIndex+1:], out, err)
+					return err
+				}
+				continue
+			}
+			if err := ctx.Err(); err != nil {
+				a.cancelUndispatchedToolCalls(toolCalls[toolIndex:], out, err)
+				return err
+			}
+			if requiresApproval && !a.authorizeToolCall(ctx, tc, out) {
+				if err := ctx.Err(); err != nil {
+					a.cancelUndispatchedToolCalls(toolCalls[toolIndex:], out, err)
+					return err
+				}
+				continue
+			}
+			if err := ctx.Err(); err != nil {
+				a.cancelUndispatchedToolCalls(toolCalls[toolIndex:], out, err)
+				return err
+			}
+
+			out.ToolCallStart(tc.ID, tc.Name, tc.Arguments)
+			startTime := time.Now()
+
+			var result string
+			var isErr bool
+			switch kind {
+			case "builtin":
+				result, isErr = a.handleBuiltinToolWithCancellation(ctx, tc, requiresApproval)
+			case "memory":
+				result, isErr = a.handleMemoryTool(tc)
+			default:
+				toolResult, err := a.registry.CallTool(ctx, tc.Name, tc.Arguments)
+				if err != nil {
+					// Once an MCP request is dispatched, a transport error is never
+					// proof that a remote mutation did not commit. Do not invite retry.
+					result = mcpDispatchErrorReceipt(tc.Name, err)
+					isErr = true
+				} else if toolResult == nil {
+					result, isErr = "ERROR: MCP tool returned no result", true
+				} else {
+					result = toolResult.Content
+					isErr = toolResult.IsError
+				}
+			}
+			a.runPostHooks(ctx, tc, &result, isErr)
+			if isErr && toolCallMayHaveEffects(kind, tc.Name) && !strings.HasPrefix(result, "OUTCOME UNKNOWN:") {
+				result = dispatchedEffectErrorReceipt(tc.Name, result, ctx.Err())
+				isErr = true
+			}
+
+			duration := time.Since(startTime)
+			result = capToolResultForContext(result, a.numCtx)
+			if lg != nil {
+				lg.Debug("tool", "name", tc.Name, "kind", kind, "ms", duration.Milliseconds(), "error", isErr)
+			}
+			out.ToolCallResult(tc.ID, tc.Name, result, isErr, duration)
+			a.AppendMessage(llm.Message{
+				Role:       "tool",
+				Content:    result,
+				ToolName:   tc.Name,
+				ToolCallID: tc.ID,
+			})
+			if err := ctx.Err(); err != nil {
+				a.cancelUndispatchedToolCalls(toolCalls[toolIndex+1:], out, err)
+				return err
+			}
 		}
-
-		// Execute memory tools and MCP tools in parallel.
-		if len(pending) > 0 {
-			var wg sync.WaitGroup
-			mu := sync.Mutex{}
-			results := make([]llm.Message, len(pending))
-
-			for i, p := range pending {
-				wg.Add(1)
-				go func(idx int, tool pendingTool) {
-					defer wg.Done()
-
-					tc := tool.tc
-					out.ToolCallStart(tc.Name, tc.Arguments)
-					startTime := time.Now()
-
-					var result string
-					var isErr bool
-
-					if block, reason := a.runPreHooks(ctx, &tc); block {
-						result, isErr = reason, true
-					} else if tool.isMemoryTool {
-						result, isErr = a.handleMemoryTool(tc)
-						a.runPostHooks(ctx, tc, &result, isErr)
-					} else if tool.isMCPTool {
-						toolResult, err := a.registry.CallTool(ctx, tc.Name, tc.Arguments)
-						if err != nil {
-							// Format error in a way the LLM can understand and recover from
-							result = fmt.Sprintf("ERROR: Tool '%s' failed: %v\nThis tool call failed but you can still complete the task with other available information.", tc.Name, err)
-							isErr = true
-						} else {
-							result = toolResult.Content
-							isErr = toolResult.IsError
-						}
-						a.runPostHooks(ctx, tc, &result, isErr)
-					}
-
-					duration := time.Since(startTime)
-					if lg != nil {
-						kind := "mcp"
-						if tool.isMemoryTool {
-							kind = "memory"
-						}
-						lg.Debug("tool", "name", tc.Name, "kind", kind, "ms", duration.Milliseconds(), "error", isErr)
-					}
-					out.ToolCallResult(tc.Name, result, isErr, duration)
-
-					mu.Lock()
-					results[idx] = llm.Message{
-						Role:       "tool",
-						Content:    result,
-						ToolName:   tc.Name,
-						ToolCallID: tc.ID,
-					}
-					mu.Unlock()
-				}(i, p)
-			}
-
-			wg.Wait()
-
-			// Append all results to messages.
-			for _, msg := range results {
-				if msg.ToolName != "" {
-					a.AppendMessage(msg)
-				}
-			}
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 
 		// Check if we should compact the conversation.
-		if a.shouldCompact(lastPromptTokens) {
+		estimatedPromptTokens := a.estimatePromptTokens(system, tools)
+		if estimatedPromptTokens < lastPromptTokens {
+			estimatedPromptTokens = lastPromptTokens
+		}
+		if a.shouldCompact(estimatedPromptTokens) {
 			if lg != nil {
-				lg.Info("compaction", "iter", i, "prompt_tokens", lastPromptTokens, "num_ctx", a.numCtx)
+				lg.Info("compaction", "iter", i, "prompt_tokens", estimatedPromptTokens, "num_ctx", a.numCtx)
 			}
 			if a.compact(ctx, out) {
 				// Rebuild system prompt after compaction (memory may have changed).
-				system = buildSystemPromptForModel(a.modePrefix, tools, a.skillContent, a.loadedCtx, a.memoryStore, iceContext, a.workDir, a.ignoreContent, a.llmClient.Model())
+				system = buildSystemPromptForModelBudgetContext(ctx, a.modePrefix, tools, a.skillContent, a.loadedCtx, a.memoryStore, iceContext, a.workDir, a.ignoreContent, a.llmClient.Model(), a.numCtx)
 			}
 		}
 
@@ -365,7 +393,47 @@ func (a *Agent) Run(ctx context.Context, out Output) {
 	if lg != nil {
 		lg.Warn("turn end", "reason", "max_iterations", "iters", maxIters, "ms", time.Since(turnStart).Milliseconds())
 	}
-	out.Error(fmt.Sprintf("reached max iterations (%d)", maxIters))
+	err := fmt.Errorf("reached max iterations (%d)", maxIters)
+	out.Error(err.Error())
+	return err
+}
+
+func capToolResultForContext(result string, numCtx int) string {
+	if numCtx <= 0 {
+		return result
+	}
+	limit := numCtx
+	if limit < 2*1024 {
+		limit = 2 * 1024
+	}
+	if limit > 96*1024 {
+		limit = 96 * 1024
+	}
+	const marker = "\n... [tool result truncated to protect model context]"
+	if len(result) <= limit {
+		return result
+	}
+	cut := limit - len(marker)
+	for cut > 0 && !utf8.ValidString(result[:cut]) {
+		cut--
+	}
+	return result[:cut] + marker
+}
+
+func (a *Agent) estimatePromptTokens(system string, tools []llm.ToolDef) int {
+	characters := len(system)
+	if encoded, err := json.Marshal(tools); err == nil {
+		characters += len(encoded)
+	}
+	a.mu.RLock()
+	for _, message := range a.messages {
+		characters += len(message.Content) + len(message.ToolName) + len(message.ToolCallID) + 12
+		if encoded, err := json.Marshal(message.ToolCalls); err == nil {
+			characters += len(encoded)
+		}
+	}
+	a.mu.RUnlock()
+	return characters/4 + 1
 }
 
 func filterToolDefsByName(defs []llm.ToolDef, allowed map[string]struct{}) []llm.ToolDef {
@@ -384,8 +452,8 @@ func filterToolDefsByName(defs []llm.ToolDef, allowed map[string]struct{}) []llm
 
 func (a *Agent) blockedToolCall(tc llm.ToolCall, out Output) {
 	errMsg := fmt.Sprintf("tool call blocked in current mode: %s", tc.Name)
-	out.ToolCallStart(tc.Name, tc.Arguments)
-	out.ToolCallResult(tc.Name, errMsg, true, 0)
+	out.ToolCallStart(tc.ID, tc.Name, tc.Arguments)
+	out.ToolCallResult(tc.ID, tc.Name, errMsg, true, 0)
 	a.AppendMessage(llm.Message{
 		Role:       "tool",
 		Content:    errMsg,
@@ -394,11 +462,215 @@ func (a *Agent) blockedToolCall(tc llm.ToolCall, out Output) {
 	})
 }
 
+func builtinToolRequiresApproval(name string) bool {
+	switch name {
+	case "write", "edit", "bash", "mkdir", "remove", "copy", "move":
+		return true
+	default:
+		return false
+	}
+}
+
+func memoryToolRequiresApproval(name string) bool {
+	switch name {
+	case "memory_save", "memory_delete", "memory_update":
+		return true
+	default:
+		return false
+	}
+}
+
+func toolCallMayHaveEffects(kind, name string) bool {
+	switch kind {
+	case "mcp":
+		return true
+	case "builtin":
+		return builtinToolRequiresApproval(name)
+	case "memory":
+		return memoryToolRequiresApproval(name)
+	default:
+		return false
+	}
+}
+
+func mcpDispatchErrorReceipt(name string, err error) string {
+	return fmt.Sprintf("OUTCOME UNKNOWN: tool %q ended without a result receipt and may have taken effect: %v", name, err)
+}
+
+func dispatchedEffectErrorReceipt(name, backendResult string, contextErr error) string {
+	if contextErr != nil {
+		return fmt.Sprintf("OUTCOME UNKNOWN: tool %q was cancelled after dispatch and may have taken effect: %v\nBackend result: %s", name, contextErr, backendResult)
+	}
+	return fmt.Sprintf("OUTCOME UNKNOWN: tool %q returned an error after dispatch and may have partially taken effect. Do not retry automatically; inspect state first.\nBackend result: %s", name, backendResult)
+}
+
+type builtinToolResult struct {
+	content string
+	isErr   bool
+}
+
+func (a *Agent) handleBuiltinToolWithCancellation(ctx context.Context, tc llm.ToolCall, effectful bool) (string, bool) {
+	if effectful {
+		// Mutations must join so their final/unknown receipt reflects the real
+		// backend. Cooperative cancellation is threaded to bash.
+		return a.handleToolsTool(ctx, tc)
+	}
+	// Some filesystem syscalls cannot be interrupted by context (notably a
+	// network ReadDir). Read-only calls may be abandoned safely so shutdown
+	// remains bounded; the worker has no mutation authority. The slot bounds a
+	// permanently blocked syscall to one worker per Agent.
+	select {
+	case a.readOnlySlots <- struct{}{}:
+	case <-ctx.Done():
+		return fmt.Sprintf("error: read-only tool %q cancelled before dispatch: %v", tc.Name, ctx.Err()), true
+	}
+	done := make(chan builtinToolResult, 1)
+	go func() {
+		defer func() { <-a.readOnlySlots }()
+		content, isErr := a.handleToolsTool(ctx, tc)
+		done <- builtinToolResult{content: content, isErr: isErr}
+	}()
+	select {
+	case result := <-done:
+		return result.content, result.isErr
+	case <-ctx.Done():
+		return fmt.Sprintf("error: read-only tool %q cancelled before completion: %v", tc.Name, ctx.Err()), true
+	}
+}
+
+// authorizeToolCall applies one policy path to every risky built-in, memory,
+// and MCP operation. The CLI always installs a checker; nil remains an
+// explicit embedding opt-out for package users and unit tests.
+func (a *Agent) authorizeToolCall(ctx context.Context, tc llm.ToolCall, out Output) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	if a.permChecker == nil {
+		return ctx.Err() == nil
+	}
+
+	decision := a.permChecker.ToCheckResult(tc.Name)
+	if ctx.Err() != nil {
+		return false
+	}
+
+	switch decision {
+	case permissionPkg.CheckAllow:
+		// Persisted interactive approvals do not authorize non-interactive
+		// callers. Only the explicit yolo capability may execute a risky call
+		// without a live approval channel.
+		if !a.permChecker.IsYolo() && a.approvalCallback == nil {
+			a.deniedToolCall(tc, out, "tool call denied: interactive approval is unavailable; persisted allows do not apply to headless execution")
+			return false
+		}
+		// CheckAllow includes explicit yolo mode. Neither path may revive a
+		// cancelled turn.
+		return ctx.Err() == nil
+	case permissionPkg.CheckDeny:
+		a.deniedToolCall(tc, out, "tool call blocked by permission policy")
+		return false
+	case permissionPkg.CheckAsk:
+		allowed, always := permissionPkg.RequestApprovalContext(ctx, tc.Name, tc.Arguments, a.approvalCallback)
+		if ctx.Err() != nil {
+			return false
+		}
+		if always && allowed {
+			if err := a.permChecker.SetPolicy(tc.Name, permissionPkg.PolicyAllow); err != nil {
+				out.SystemMessage(fmt.Sprintf("warning: approval was granted, but could not be persisted: %v", err))
+			}
+		}
+		if !allowed {
+			a.deniedToolCall(tc, out, "tool call denied: explicit approval required")
+			return false
+		}
+		return true
+	default:
+		a.deniedToolCall(tc, out, "tool call denied by unknown permission state")
+		return false
+	}
+}
+
+func (a *Agent) deniedToolCall(tc llm.ToolCall, out Output, reason string) {
+	out.ToolCallStart(tc.ID, tc.Name, tc.Arguments)
+	out.ToolCallResult(tc.ID, tc.Name, reason, true, 0)
+	a.AppendMessage(llm.Message{
+		Role:       "tool",
+		Content:    reason,
+		ToolName:   tc.Name,
+		ToolCallID: tc.ID,
+	})
+}
+
+// cancelUndispatchedToolCalls closes every assistant tool-call edge that is
+// still queued when a turn is cancelled. These operations never reached a
+// backend, so the receipt deliberately distinguishes them from the
+// OUTCOME UNKNOWN receipt used after dispatch.
+func (a *Agent) cancelUndispatchedToolCalls(calls []llm.ToolCall, out Output, cause error) {
+	for _, tc := range calls {
+		result := fmt.Sprintf("CANCELLED — NOT DISPATCHED: tool %q did not start because the turn ended: %v", tc.Name, cause)
+		out.ToolCallStart(tc.ID, tc.Name, tc.Arguments)
+		out.ToolCallResult(tc.ID, tc.Name, result, true, 0)
+		a.AppendMessage(llm.Message{
+			Role:       "tool",
+			Content:    result,
+			ToolName:   tc.Name,
+			ToolCallID: tc.ID,
+		})
+	}
+}
+
 // isRetryableError returns true for transient LLM errors that are worth retrying,
 // such as JSON parse failures from malformed tool call output.
 func isRetryableError(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "parse JSON") || strings.Contains(msg, "unexpected end of JSON")
+}
+
+// ensureToolCallIDs gives every invocation a stable, unique correlation key.
+// Small local models occasionally omit IDs (or repeat one for a batch), while
+// the UI and provider transcript need an unambiguous result association.
+func ensureToolCallIDs(calls []llm.ToolCall, turnID string, iteration int) {
+	ensureToolCallIDsAgainst(calls, turnID, iteration, nil)
+}
+
+func (a *Agent) ensureToolCallIDs(calls []llm.ToolCall, turnID string, iteration int) {
+	reserved := make(map[string]struct{})
+	a.mu.RLock()
+	for _, message := range a.messages {
+		if id := strings.TrimSpace(message.ToolCallID); id != "" {
+			reserved[id] = struct{}{}
+		}
+		for _, call := range message.ToolCalls {
+			if id := strings.TrimSpace(call.ID); id != "" {
+				reserved[id] = struct{}{}
+			}
+		}
+	}
+	a.mu.RUnlock()
+	ensureToolCallIDsAgainst(calls, turnID, iteration, reserved)
+}
+
+func ensureToolCallIDsAgainst(calls []llm.ToolCall, turnID string, iteration int, reserved map[string]struct{}) {
+	seen := make(map[string]struct{}, len(reserved)+len(calls))
+	for id := range reserved {
+		seen[id] = struct{}{}
+	}
+	for i := range calls {
+		id := strings.TrimSpace(calls[i].ID)
+		_, duplicate := seen[id]
+		if id == "" || duplicate {
+			base := fmt.Sprintf("%s-tool-%d-%d", turnID, iteration, i+1)
+			id = base
+			for suffix := 2; ; suffix++ {
+				if _, exists := seen[id]; !exists {
+					break
+				}
+				id = fmt.Sprintf("%s-%d", base, suffix)
+			}
+		}
+		calls[i].ID = id
+		seen[id] = struct{}{}
+	}
 }
 
 // FormatToolArgs formats tool arguments in a human-readable way for display.

@@ -1,11 +1,26 @@
 package ice
 
 import (
+	"errors"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
+
+	"github.com/abdul-hamid-achik/local-agent/internal/safeio"
 )
+
+func mustAdd(t *testing.T, s *Store, sessionID, role, content string, embedding []float32, turnIndex int) int {
+	t.Helper()
+	id, err := s.Add(sessionID, role, content, embedding, turnIndex)
+	if err != nil {
+		t.Fatalf("add %q: %v", content, err)
+	}
+	return id
+}
 
 func TestCosineSimilarity(t *testing.T) {
 	tests := []struct {
@@ -120,10 +135,10 @@ func TestStore_Search(t *testing.T) {
 	s := NewStore(path)
 
 	// Add entries with known embeddings.
-	s.Add("sess1", "user", "entry A", []float32{1, 0, 0}, 0)
-	s.Add("sess1", "user", "entry B", []float32{0, 1, 0}, 1)
-	s.Add("sess2", "user", "entry C", []float32{0.9, 0.1, 0}, 0)
-	s.Add("sess2", "user", "entry D", []float32{0, 0, 1}, 1) // orthogonal to query
+	mustAdd(t, s, "sess1", "user", "entry A", []float32{1, 0, 0}, 0)
+	mustAdd(t, s, "sess1", "user", "entry B", []float32{0, 1, 0}, 1)
+	mustAdd(t, s, "sess2", "user", "entry C", []float32{0.9, 0.1, 0}, 0)
+	mustAdd(t, s, "sess2", "user", "entry D", []float32{0, 0, 1}, 1) // orthogonal to query
 
 	t.Run("similarity filtering and sorting", func(t *testing.T) {
 		// Query similar to entries A and C, exclude no session.
@@ -164,6 +179,20 @@ func TestStore_Search(t *testing.T) {
 		}
 	})
 
+	t.Run("workspace scope", func(t *testing.T) {
+		scoped := NewStore(filepath.Join(dir, "scoped.json"))
+		if _, err := scoped.AddScoped("project-a", "a", "user", "A", []float32{1, 0}, 0); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := scoped.AddScoped("project-b", "b", "user", "B", []float32{1, 0}, 0); err != nil {
+			t.Fatal(err)
+		}
+		results := scoped.SearchScoped([]float32{1, 0}, "project-a", "", 10)
+		if len(results) != 1 || results[0].Entry.Content != "A" {
+			t.Fatalf("cross-project retrieval leaked: %#v", results)
+		}
+	})
+
 	t.Run("empty store returns nil", func(t *testing.T) {
 		emptyPath := filepath.Join(dir, "empty.json")
 		empty := NewStore(emptyPath)
@@ -181,14 +210,42 @@ func TestStore_Search(t *testing.T) {
 	})
 }
 
+func TestStoreSearchResultsDoNotAliasEmbeddings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "conversations.json")
+	store := NewStore(path)
+	if _, err := store.AddScoped("project", "session", "user", "immutable result", []float32{1, 0}, 0); err != nil {
+		t.Fatal(err)
+	}
+	results := store.SearchScoped([]float32{1, 0}, "project", "", 1)
+	if len(results) != 1 || len(results[0].Entry.Embedding) != 2 {
+		t.Fatalf("search result = %#v", results)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			results[0].Entry.Embedding[0] = -1
+		}
+	}()
+	for i := 0; i < 1000; i++ {
+		current := store.SearchScoped([]float32{1, 0}, "project", "", 1)
+		if len(current) != 1 || current[0].Entry.Embedding[0] != 1 {
+			t.Fatalf("returned embedding mutated store state: %#v", current)
+		}
+	}
+	wg.Wait()
+}
+
 func TestStore_Flush_Persistence(t *testing.T) {
 	t.Run("round trip", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "store.json")
 
 		s1 := NewStore(path)
-		s1.Add("sess1", "user", "hello", []float32{1, 0}, 0)
-		s1.Add("sess1", "assistant", "world", []float32{0, 1}, 1)
+		mustAdd(t, s1, "sess1", "user", "hello", []float32{1, 0}, 0)
+		mustAdd(t, s1, "sess1", "assistant", "world", []float32{0, 1}, 1)
 
 		if err := s1.Flush(); err != nil {
 			t.Fatalf("Flush: %v", err)
@@ -201,16 +258,60 @@ func TestStore_Flush_Persistence(t *testing.T) {
 		}
 	})
 
-	t.Run("corrupt JSON recovery", func(t *testing.T) {
+	t.Run("corrupt JSON fails closed", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "store.json")
 
 		// Write corrupt JSON.
-		os.WriteFile(path, []byte("not valid json{{{"), 0o644)
+		if err := os.WriteFile(path, []byte("not valid json{{{"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 
 		s := NewStore(path)
 		if s.Count() != 0 {
 			t.Errorf("corrupt store Count = %d, want 0", s.Count())
+		}
+		if s.Err() == nil {
+			t.Fatal("corrupt store did not report its load error")
+		}
+		if got := s.Search([]float32{1}, "", 5); got != nil {
+			t.Fatalf("Search on corrupt store = %#v, want nil", got)
+		}
+		if _, err := s.Add("new", "user", "must not overwrite", []float32{1}, 0); err == nil {
+			t.Fatal("corrupt store accepted a new entry")
+		}
+		if _, err := s.AddScoped("project", "new", "user", "must not overwrite", []float32{1}, 0); err == nil {
+			t.Fatal("corrupt store accepted a new scoped entry")
+		}
+		if s.Count() != 0 {
+			t.Fatalf("rejected mutations changed corrupt store count to %d", s.Count())
+		}
+		if err := s.Flush(); err == nil {
+			t.Fatal("corrupt store was overwritten")
+		}
+		if err := s.persist(); err == nil {
+			t.Fatal("corrupt store bypassed persistence guard")
+		}
+		data, err := os.ReadFile(path)
+		if err != nil || string(data) != "not valid json{{{" {
+			t.Fatalf("corrupt source changed: %q, err=%v", data, err)
+		}
+	})
+
+	t.Run("private permissions", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "private")
+		path := filepath.Join(dir, "store.json")
+		s := NewStore(path)
+		mustAdd(t, s, "s", "user", "private", []float32{1}, 0)
+		if err := s.Flush(); err != nil {
+			t.Fatal(err)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Fatalf("store mode = %04o, want 0600", got)
 		}
 	})
 
@@ -219,14 +320,261 @@ func TestStore_Flush_Persistence(t *testing.T) {
 		path := filepath.Join(dir, "store.json")
 
 		s1 := NewStore(path)
-		s1.Add("sess1", "user", "first", []float32{1}, 0)
-		s1.Add("sess1", "user", "second", []float32{1}, 1)
-		s1.Flush()
+		mustAdd(t, s1, "sess1", "user", "first", []float32{1}, 0)
+		mustAdd(t, s1, "sess1", "user", "second", []float32{1}, 1)
+		if err := s1.Flush(); err != nil {
+			t.Fatal(err)
+		}
 
 		s2 := NewStore(path)
-		id, _ := s2.Add("sess1", "user", "third", []float32{1}, 2)
+		id := mustAdd(t, s2, "sess1", "user", "third", []float32{1}, 2)
 		if id != 3 {
 			t.Errorf("continued id = %d, want 3", id)
 		}
 	})
+}
+
+func TestStoreConcurrentInstancesMergeWritesWithUniqueIDs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "conversations.json")
+	stores := []*Store{NewStore(path), NewStore(path)}
+	const writesPerStore = 20
+
+	start := make(chan struct{})
+	ids := make(chan int, len(stores)*writesPerStore)
+	errs := make(chan error, len(stores)*writesPerStore)
+	var wg sync.WaitGroup
+	for storeIndex, store := range stores {
+		storeIndex, store := storeIndex, store
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for writeIndex := 0; writeIndex < writesPerStore; writeIndex++ {
+				id, err := store.AddScoped("project", fmt.Sprintf("session-%d", storeIndex), "user", fmt.Sprintf("entry-%d-%d", storeIndex, writeIndex), []float32{1, 0}, writeIndex)
+				if err != nil {
+					errs <- err
+					return
+				}
+				ids <- id
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	close(ids)
+	for err := range errs {
+		t.Fatalf("concurrent AddScoped: %v", err)
+	}
+
+	want := len(stores) * writesPerStore
+	gotIDs := make(map[int]bool, want)
+	for id := range ids {
+		if gotIDs[id] {
+			t.Fatalf("duplicate ID %d returned by concurrent stores", id)
+		}
+		gotIDs[id] = true
+	}
+	if len(gotIDs) != want {
+		t.Fatalf("unique IDs = %d, want %d", len(gotIDs), want)
+	}
+	reloaded := NewStore(path)
+	if err := reloaded.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if got := reloaded.Count(); got != want {
+		t.Fatalf("durable ICE entries = %d, want %d", got, want)
+	}
+	for id := 1; id <= want; id++ {
+		if !gotIDs[id] {
+			t.Fatalf("ID sequence is missing %d", id)
+		}
+	}
+}
+
+func TestStoreReadAPIsSeeWritesFromAnotherLongLivedInstance(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "conversations.json")
+	writer := NewStore(path)
+	reader := NewStore(path)
+	if _, err := writer.AddScoped("project", "session", "user", "visible across stores", []float32{1, 0}, 0); err != nil {
+		t.Fatal(err)
+	}
+	if got := reader.Count(); got != 1 {
+		t.Fatalf("stale Count = %d, want 1", got)
+	}
+	if got := reader.CountScoped("project"); got != 1 {
+		t.Fatalf("stale CountScoped = %d, want 1", got)
+	}
+	results := reader.SearchScoped([]float32{1, 0}, "project", "", 1)
+	if len(results) != 1 || results[0].Entry.Content != "visible across stores" {
+		t.Fatalf("stale SearchScoped = %#v", results)
+	}
+}
+
+func TestStoreDoesNotChangeExistingParentDirectoryMode(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "workspace-docs")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(filepath.Join(dir, "conversations.json"))
+	if _, err := store.AddScoped("project", "session", "user", "private entry", []float32{1}, 0); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o755 {
+		t.Fatalf("existing parent mode = %04o, want 0755", got)
+	}
+}
+
+func TestStoreRejectsMutationThatWouldExceedReloadLimit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "conversations.json")
+	store := NewStore(path)
+	if _, err := store.AddScoped("project", "session", "user", "durable", []float32{1}, 0); err != nil {
+		t.Fatal(err)
+	}
+	oldLimit := iceStoreWriteLimit
+	iceStoreWriteLimit = 512
+	t.Cleanup(func() { iceStoreWriteLimit = oldLimit })
+	if _, err := store.AddScoped("project", "session", "user", strings.Repeat("x", 1024), []float32{1}, 1); !errors.Is(err, safeio.ErrTooLarge) {
+		t.Fatalf("crossing mutation error = %v", err)
+	}
+	if got := NewStore(path).Count(); got != 1 {
+		t.Fatalf("oversized mutation changed durable count to %d", got)
+	}
+}
+
+func TestStoreReadFailureFailsClosed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "store.json")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewStore(path)
+	if store.Err() == nil {
+		t.Fatal("directory-backed ICE store did not report a read error")
+	}
+	if got := store.Search([]float32{1}, "", 5); got != nil {
+		t.Fatalf("Search on unreadable store = %#v, want nil", got)
+	}
+	if _, err := store.Add("session", "user", "overwrite", []float32{1}, 0); err == nil {
+		t.Fatal("unreadable ICE store accepted Add")
+	}
+	if _, err := store.AddScoped("project", "session", "user", "overwrite", []float32{1}, 0); err == nil {
+		t.Fatal("unreadable ICE store accepted AddScoped")
+	}
+	if err := store.Flush(); err == nil {
+		t.Fatal("unreadable ICE store accepted Flush")
+	}
+	if err := store.persist(); err == nil {
+		t.Fatal("unreadable ICE store bypassed persistence guard")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.IsDir() {
+		t.Fatal("failed read path was replaced by a regular file")
+	}
+}
+
+func TestStoreLoadRejectsOversizedFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "conversations.json")
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(path, maxICEStoreBytes+1); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(path)
+	if !errors.Is(store.Err(), safeio.ErrTooLarge) {
+		t.Fatalf("oversized store error = %v", store.Err())
+	}
+	if _, err := store.Add("session", "user", "must not overwrite", []float32{1}, 0); err == nil {
+		t.Fatal("oversized ICE store accepted mutation")
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Size() != maxICEStoreBytes+1 {
+		t.Fatalf("oversized source changed: info=%v err=%v", info, err)
+	}
+}
+
+func TestStoreLoadRejectsSymlinkWithoutTouchingVictim(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "conversations.json")
+	victim := filepath.Join(t.TempDir(), "victim.json")
+	victimData := []byte(`[{"id":99,"content":"outside secret"}]`)
+	if err := os.WriteFile(victim, victimData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(victim, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, path); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	store := NewStore(path)
+	if !errors.Is(store.Err(), safeio.ErrSymlink) {
+		t.Fatalf("symlink store error = %v", store.Err())
+	}
+	if _, err := store.Add("session", "user", "must not overwrite", []float32{1}, 0); err == nil {
+		t.Fatal("symlink ICE store accepted mutation")
+	}
+	data, err := os.ReadFile(victim)
+	if err != nil || string(data) != string(victimData) {
+		t.Fatalf("victim content changed: data=%q err=%v", data, err)
+	}
+	info, err := os.Stat(victim)
+	if err != nil || info.Mode().Perm() != 0o644 {
+		t.Fatalf("victim mode changed: info=%v err=%v", info, err)
+	}
+	if info, err := os.Lstat(path); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("store symlink changed: info=%v err=%v", info, err)
+	}
+}
+
+func TestStoreMutationRejectsParentSwappedToSymlink(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "managed")
+	if err := os.Mkdir(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(parent, "conversations.json")
+	store := NewStore(path)
+	parked := filepath.Join(root, "managed-original")
+	if err := os.Rename(parent, parked); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	if err := os.Symlink(outside, parent); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, err := store.AddScoped("project", "session", "user", "must stay confined", []float32{1}, 0); !errors.Is(err, safeio.ErrSymlink) {
+		t.Fatalf("swapped parent mutation error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "conversations.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("outside store was published: %v", err)
+	}
+}
+
+func TestStoreLoadSecuresVerifiedDescriptor(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "conversations.json")
+	if err := os.WriteFile(path, []byte("[]"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(path)
+	if err := store.Err(); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("loaded ICE store mode = %v, err=%v", info, err)
+	}
 }

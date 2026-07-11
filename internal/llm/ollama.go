@@ -1,61 +1,192 @@
 package llm
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
 	"time"
-
-	ollamaapi "github.com/ollama/ollama/api"
 )
 
-// pingTimeout bounds the startup/availability check so an unreachable or hung
-// Ollama server can never block application startup indefinitely.
-const pingTimeout = 10 * time.Second
+const (
+	// pingTimeout bounds the startup/availability check so an unreachable or
+	// hung Ollama server can never block application startup indefinitely.
+	pingTimeout = 10 * time.Second
 
-// OllamaClient implements Client using the official Ollama Go library.
+	// Ollama's own client uses an 8 MiB NDJSON token limit. Keep the same
+	// compatibility bound while ensuring a malformed local server cannot grow
+	// memory without limit. Non-streaming metadata has a separate total cap.
+	maxOllamaStreamRecordBytes = 8 << 20
+	maxOllamaResponseBytes     = 16 << 20
+	maxOllamaErrorBytes        = 1 << 20
+)
+
+// OllamaClient is a deliberately small HTTP adapter for the local Ollama API.
+// Keeping the wire client here avoids linking Ollama's server/runtime graph
+// (GPU runners, archives, SSH helpers, and registry code) into this CLI.
 type OllamaClient struct {
-	client  *ollamaapi.Client
-	model   string
-	numCtx  int
-	baseURL string
+	httpClient *http.Client
+	base       *url.URL
+	model      string
+	numCtx     int
+	baseURL    string
+	authHeader string
 }
 
-// NewOllamaClient creates a new Ollama client.
-//
-// The base URL is passed directly to the client constructor rather than via
-// os.Setenv("OLLAMA_HOST", ...): mutating the global environment is not
-// thread-safe and races across concurrent client creation.
+type ollamaMessage struct {
+	Role       string           `json:"role"`
+	Content    string           `json:"content"`
+	Thinking   string           `json:"thinking,omitempty"`
+	ToolCalls  []ollamaToolCall `json:"tool_calls,omitempty"`
+	ToolName   string           `json:"tool_name,omitempty"`
+	ToolCallID string           `json:"tool_call_id,omitempty"`
+}
+
+type ollamaToolCall struct {
+	ID       string                 `json:"id,omitempty"`
+	Function ollamaToolCallFunction `json:"function"`
+}
+
+type ollamaToolCallFunction struct {
+	Index     int            `json:"index"`
+	Name      string         `json:"name"`
+	Arguments map[string]any `json:"arguments"`
+}
+
+type ollamaTool struct {
+	Type     string             `json:"type"`
+	Function ollamaToolFunction `json:"function"`
+}
+
+type ollamaToolFunction struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	Parameters  map[string]any `json:"parameters"`
+}
+
+type ollamaChatRequest struct {
+	Model    string          `json:"model"`
+	Messages []ollamaMessage `json:"messages"`
+	Stream   bool            `json:"stream"`
+	Tools    []ollamaTool    `json:"tools,omitempty"`
+	Options  map[string]any  `json:"options"`
+}
+
+type ollamaChatResponse struct {
+	Message         ollamaMessage `json:"message"`
+	Done            bool          `json:"done"`
+	EvalCount       int           `json:"eval_count,omitempty"`
+	PromptEvalCount int           `json:"prompt_eval_count,omitempty"`
+	Error           string        `json:"error,omitempty"`
+}
+
+type ollamaListResponse struct {
+	Models []ollamaListModel `json:"models"`
+}
+
+type ollamaListModel struct {
+	Name        string `json:"name"`
+	Model       string `json:"model"`
+	RemoteModel string `json:"remote_model,omitempty"`
+	RemoteHost  string `json:"remote_host,omitempty"`
+	Size        int64  `json:"size"`
+}
+
+type ollamaEmbedResponse struct {
+	Embeddings [][]float32 `json:"embeddings"`
+}
+
+type ollamaErrorResponse struct {
+	Error string `json:"error"`
+}
+
+type ollamaHTTPError struct {
+	StatusCode int
+	Status     string
+	Message    string
+}
+
+func (e *ollamaHTTPError) Error() string {
+	if e.Message == "" {
+		return e.Status
+	}
+	return fmt.Sprintf("%s: %s", e.Status, e.Message)
+}
+
+// NewOllamaClient creates a new Ollama client without mutating process-wide
+// environment state. baseURL wins over OLLAMA_HOST; otherwise the loopback
+// default used by Ollama is selected.
 func NewOllamaClient(baseURL, model string, numCtx int) (*OllamaClient, error) {
-	var client *ollamaapi.Client
-	resolvedURL := baseURL
-	if baseURL != "" {
-		u, err := normalizeOllamaURL(baseURL)
-		if err != nil {
-			return nil, fmt.Errorf("invalid ollama base url %q: %w", baseURL, err)
-		}
-		client = ollamaapi.NewClient(u, http.DefaultClient)
-		resolvedURL = u.String()
-	} else {
-		var err error
-		client, err = ollamaapi.ClientFromEnvironment()
-		if err != nil {
-			return nil, fmt.Errorf("create ollama client: %w", err)
-		}
-		if v := os.Getenv("OLLAMA_HOST"); v != "" {
-			resolvedURL = v
-		}
+	resolved := strings.TrimSpace(baseURL)
+	if resolved == "" {
+		resolved = strings.TrimSpace(os.Getenv("OLLAMA_HOST"))
+	}
+	if resolved == "" {
+		resolved = "http://127.0.0.1:11434"
 	}
 
+	u, err := normalizeOllamaURL(resolved)
+	if err != nil {
+		return nil, fmt.Errorf("invalid ollama base url %q: %w", resolved, err)
+	}
+	client := newOllamaHTTPClient(u)
+	authHeader := ""
+	if u.Scheme == "https" && !isLocalOllamaHost(u.Hostname()) {
+		if apiKey := strings.TrimSpace(os.Getenv("OLLAMA_API_KEY")); apiKey != "" {
+			authHeader = "Bearer " + apiKey
+		}
+	}
 	return &OllamaClient{
-		client:  client,
-		model:   model,
-		numCtx:  numCtx,
-		baseURL: resolvedURL,
+		httpClient: client,
+		base:       u,
+		model:      model,
+		numCtx:     numCtx,
+		baseURL:    strings.TrimSuffix(u.String(), "/"),
+		authHeader: authHeader,
 	}, nil
+}
+
+func newOllamaHTTPClient(base *url.URL) *http.Client {
+	transport := &http.Transport{Proxy: http.ProxyFromEnvironment}
+	if defaultTransport, ok := http.DefaultTransport.(*http.Transport); ok {
+		transport = defaultTransport.Clone()
+	}
+	// A loopback inference request must not be handed to HTTP_PROXY. This is
+	// both faster and preserves the local-only boundary for localhost aliases.
+	if isLocalOllamaHost(base.Hostname()) {
+		transport.Proxy = nil
+	}
+
+	originScheme := strings.ToLower(base.Scheme)
+	originHost := strings.ToLower(base.Host)
+	return &http.Client{
+		Transport: transport,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.New("stopped after 10 redirects")
+			}
+			if strings.ToLower(req.URL.Scheme) != originScheme || strings.ToLower(req.URL.Host) != originHost {
+				return fmt.Errorf("refusing cross-origin Ollama redirect to %s", req.URL.Redacted())
+			}
+			return nil
+		},
+	}
+}
+
+func isLocalOllamaHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && (ip.IsLoopback() || ip.IsUnspecified())
 }
 
 func (o *OllamaClient) Model() string { return o.model }
@@ -64,172 +195,314 @@ func (o *OllamaClient) Model() string { return o.model }
 func (o *OllamaClient) Ping() error {
 	ctx, cancel := context.WithTimeout(context.Background(), pingTimeout)
 	defer cancel()
+	return o.PingContext(ctx)
+}
 
-	// Check the model is available by requesting a show.
-	req := &ollamaapi.ShowRequest{Model: o.model}
-	_, err := o.client.Show(ctx, req)
-	if err != nil {
+// PingContext checks model availability within the caller's cancellation and
+// deadline rather than creating an unrelated background operation.
+func (o *OllamaClient) PingContext(ctx context.Context) error {
+	var response struct{}
+	if err := o.doJSON(ctx, http.MethodPost, "/api/show", map[string]any{"model": o.model}, &response); err != nil {
 		return fmt.Errorf("model %q not available: %w", o.model, err)
 	}
 	return nil
 }
 
+// Unload asks Ollama to evict this model immediately. It is used before an
+// exclusive profile switch so two chat-model weight sets do not overlap in
+// unified memory.
+func (o *OllamaClient) Unload(ctx context.Context) error {
+	return o.doJSON(ctx, http.MethodPost, "/api/generate", map[string]any{
+		"model":      o.model,
+		"prompt":     "",
+		"stream":     false,
+		"keep_alive": "0s",
+	}, nil)
+}
+
 // ChatStream sends a chat request and streams the response via callback.
 func (o *OllamaClient) ChatStream(ctx context.Context, opts ChatOptions, fn func(StreamChunk) error) error {
-
-	messages := make([]ollamaapi.Message, 0, len(opts.Messages)+1)
-	if opts.System != "" {
-		messages = append(messages, ollamaapi.Message{
-			Role:    "system",
-			Content: opts.System,
-		})
+	if fn == nil {
+		return errors.New("ollama stream callback is nil")
 	}
-	for _, m := range opts.Messages {
-		msg := ollamaapi.Message{
-			Role:       m.Role,
-			Content:    m.Content,
-			ToolName:   m.ToolName,
-			ToolCallID: m.ToolCallID,
+
+	messages := make([]ollamaMessage, 0, len(opts.Messages)+1)
+	if opts.System != "" {
+		messages = append(messages, ollamaMessage{Role: "system", Content: opts.System})
+	}
+	for _, message := range opts.Messages {
+		converted := ollamaMessage{
+			Role:       message.Role,
+			Content:    message.Content,
+			ToolName:   message.ToolName,
+			ToolCallID: message.ToolCallID,
 		}
-		// Convert tool calls for assistant messages.
-		for _, tc := range m.ToolCalls {
-			args := ollamaapi.NewToolCallFunctionArguments()
-			for k, v := range tc.Arguments {
-				args.Set(k, v)
-			}
-			msg.ToolCalls = append(msg.ToolCalls, ollamaapi.ToolCall{
-				ID: tc.ID,
-				Function: ollamaapi.ToolCallFunction{
-					Name:      tc.Name,
-					Arguments: args,
+		for index, call := range message.ToolCalls {
+			converted.ToolCalls = append(converted.ToolCalls, ollamaToolCall{
+				ID: call.ID,
+				Function: ollamaToolCallFunction{
+					Index:     index,
+					Name:      call.Name,
+					Arguments: call.Arguments,
 				},
 			})
 		}
-		messages = append(messages, msg)
+		messages = append(messages, converted)
 	}
 
-	tools := convertTools(opts.Tools)
-	req := &ollamaapi.ChatRequest{
+	request := ollamaChatRequest{
 		Model:    o.model,
 		Messages: messages,
-		Tools:    tools,
-		Options: map[string]any{
-			"num_ctx": o.numCtx,
-		},
+		Stream:   true,
+		Tools:    convertTools(opts.Tools),
+		Options:  map[string]any{"num_ctx": o.numCtx},
 	}
 
-	return o.client.Chat(ctx, req, func(resp ollamaapi.ChatResponse) error {
+	sawDone := false
+	err := o.streamJSON(ctx, "/api/chat", request, func(record []byte) error {
+		var response ollamaChatResponse
+		if err := json.Unmarshal(record, &response); err != nil {
+			return fmt.Errorf("decode Ollama chat response: %w", err)
+		}
+		if response.Error != "" {
+			return errors.New(response.Error)
+		}
+		if response.Done {
+			sawDone = true
+		}
+
 		chunk := StreamChunk{
-			Text: resp.Message.Content,
-			Done: resp.Done,
+			Text:      response.Message.Content,
+			Reasoning: response.Message.Thinking,
+			Done:      response.Done,
 		}
-		if resp.Done {
-			chunk.EvalCount = resp.EvalCount
-			chunk.PromptEvalCount = resp.PromptEvalCount
+		if response.Done {
+			chunk.EvalCount = response.EvalCount
+			chunk.PromptEvalCount = response.PromptEvalCount
 		}
-		// Collect tool calls from the response.
-		for _, tc := range resp.Message.ToolCalls {
+		for _, call := range response.Message.ToolCalls {
 			chunk.ToolCalls = append(chunk.ToolCalls, ToolCall{
-				ID:        tc.ID,
-				Name:      tc.Function.Name,
-				Arguments: tc.Function.Arguments.ToMap(),
+				ID:        call.ID,
+				Name:      call.Function.Name,
+				Arguments: call.Function.Arguments,
 			})
 		}
 		return fn(chunk)
 	})
+	if err != nil {
+		return err
+	}
+	if !sawDone {
+		return fmt.Errorf("ollama chat stream ended before done: %w", io.ErrUnexpectedEOF)
+	}
+	return nil
 }
 
 // Embed generates embeddings for the given texts using the specified model.
 func (o *OllamaClient) Embed(ctx context.Context, model string, texts []string) ([][]float32, error) {
-	resp, err := o.client.Embed(ctx, &ollamaapi.EmbedRequest{
-		Model: model,
-		Input: texts,
-	})
-	if err != nil {
+	var response ollamaEmbedResponse
+	if err := o.doJSON(ctx, http.MethodPost, "/api/embed", map[string]any{
+		"model": model,
+		"input": texts,
+	}, &response); err != nil {
 		return nil, fmt.Errorf("embedding failed: %w", err)
 	}
-	return resp.Embeddings, nil
+	return response.Embeddings, nil
 }
 
-// convertTools transforms our ToolDef slice into Ollama's Tools format.
-func convertTools(defs []ToolDef) ollamaapi.Tools {
+func (o *OllamaClient) listModels(ctx context.Context) ([]ollamaListModel, error) {
+	var response ollamaListResponse
+	if err := o.doJSON(ctx, http.MethodGet, "/api/tags", nil, &response); err != nil {
+		return nil, err
+	}
+	return response.Models, nil
+}
+
+// convertTools transforms local tool definitions into Ollama's documented
+// JSON wire shape. Parameters stay as generic JSON Schema, preserving nested
+// items, anyOf, $defs, multi-type declarations, and future schema keywords.
+func convertTools(defs []ToolDef) []ollamaTool {
 	if len(defs) == 0 {
 		return nil
 	}
 
-	tools := make(ollamaapi.Tools, 0, len(defs))
-	for _, d := range defs {
-		props := ollamaapi.NewToolPropertiesMap()
-		var required []string
-
-		// Extract properties from JSON Schema.
-		if propsRaw, ok := d.Parameters["properties"].(map[string]any); ok {
-			for name, schema := range propsRaw {
-				schemaMap, _ := schema.(map[string]any)
-				prop := ollamaapi.ToolProperty{
-					Description: strFromMap(schemaMap, "description"),
-				}
-				if t, ok := schemaMap["type"].(string); ok {
-					prop.Type = ollamaapi.PropertyType{t}
-				}
-				if enumRaw, ok := schemaMap["enum"].([]any); ok {
-					prop.Enum = enumRaw
-				}
-				props.Set(name, prop)
-			}
-		}
-
-		// Extract required fields.
-		if reqRaw, ok := d.Parameters["required"].([]any); ok {
-			for _, r := range reqRaw {
-				if s, ok := r.(string); ok {
-					required = append(required, s)
-				}
-			}
-		}
-
-		tools = append(tools, ollamaapi.Tool{
+	tools := make([]ollamaTool, 0, len(defs))
+	for _, definition := range defs {
+		tools = append(tools, ollamaTool{
 			Type: "function",
-			Function: ollamaapi.ToolFunction{
-				Name:        d.Name,
-				Description: d.Description,
-				Parameters: ollamaapi.ToolFunctionParameters{
-					Type:       "object",
-					Properties: props,
-					Required:   required,
-				},
+			Function: ollamaToolFunction{
+				Name:        definition.Name,
+				Description: definition.Description,
+				Parameters:  convertToolParameters(definition.Parameters),
 			},
 		})
 	}
 	return tools
 }
 
-func strFromMap(m map[string]any, key string) string {
-	if m == nil {
-		return ""
+func convertToolParameters(schema map[string]any) map[string]any {
+	if schema == nil {
+		return map[string]any{"type": "object", "properties": map[string]any{}}
 	}
-	s, _ := m[key].(string)
-	return s
+	parameters := make(map[string]any, len(schema)+2)
+	for key, value := range schema {
+		parameters[key] = value
+	}
+	if value, ok := parameters["type"].(string); !ok || value == "" {
+		parameters["type"] = "object"
+	}
+	if _, ok := parameters["properties"]; !ok {
+		parameters["properties"] = map[string]any{}
+	}
+	return parameters
+}
+
+func (o *OllamaClient) doJSON(ctx context.Context, method, route string, payload, output any) error {
+	request, err := o.newRequest(ctx, method, route, payload, "application/json")
+	if err != nil {
+		return err
+	}
+	response, err := o.httpClient.Do(request)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		// The bounded read below determines the operation result. Closing a
+		// fully consumed response body cannot make that response unsuccessful.
+		_ = response.Body.Close()
+	}()
+
+	limit := int64(maxOllamaResponseBytes)
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		limit = maxOllamaErrorBytes
+	}
+	body, err := readBoundedBody(response.Body, limit)
+	if err != nil {
+		return fmt.Errorf("read Ollama response: %w", err)
+	}
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return ollamaStatusError(response, body)
+	}
+	if output == nil || len(bytes.TrimSpace(body)) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(body, output); err != nil {
+		return fmt.Errorf("decode Ollama response: %w", err)
+	}
+	return nil
+}
+
+func (o *OllamaClient) streamJSON(ctx context.Context, route string, payload any, fn func([]byte) error) error {
+	request, err := o.newRequest(ctx, http.MethodPost, route, payload, "application/x-ndjson")
+	if err != nil {
+		return err
+	}
+	response, err := o.httpClient.Do(request)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		// Stream completion/error is established while reading; a later close
+		// error carries no additional provider outcome information.
+		_ = response.Body.Close()
+	}()
+
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		body, readErr := readBoundedBody(response.Body, maxOllamaErrorBytes)
+		if readErr != nil {
+			return fmt.Errorf("read Ollama error response: %w", readErr)
+		}
+		return ollamaStatusError(response, body)
+	}
+
+	scanner := bufio.NewScanner(response.Body)
+	scanner.Buffer(make([]byte, 64<<10), maxOllamaStreamRecordBytes)
+	for scanner.Scan() {
+		record := bytes.TrimSpace(scanner.Bytes())
+		if len(record) == 0 {
+			continue
+		}
+		var errorEnvelope ollamaErrorResponse
+		if err := json.Unmarshal(record, &errorEnvelope); err != nil {
+			return fmt.Errorf("decode Ollama stream record: %w", err)
+		}
+		if errorEnvelope.Error != "" {
+			return errors.New(errorEnvelope.Error)
+		}
+		if err := fn(record); err != nil {
+			return err
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("read Ollama stream: %w", err)
+	}
+	return nil
+}
+
+func (o *OllamaClient) newRequest(ctx context.Context, method, route string, payload any, accept string) (*http.Request, error) {
+	var body io.Reader
+	if payload != nil {
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			return nil, fmt.Errorf("encode Ollama request: %w", err)
+		}
+		body = bytes.NewReader(encoded)
+	}
+
+	endpoint := o.base.ResolveReference(&url.URL{Path: route})
+	request, err := http.NewRequestWithContext(ctx, method, endpoint.String(), body)
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Accept", accept)
+	if payload != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	request.Header.Set("User-Agent", "local-agent/ollama-wire")
+	if o.authHeader != "" {
+		request.Header.Set("Authorization", o.authHeader)
+	}
+	return request, nil
+}
+
+func readBoundedBody(reader io.Reader, maxBytes int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(reader, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("response exceeds %d-byte limit", maxBytes)
+	}
+	return data, nil
+}
+
+func ollamaStatusError(response *http.Response, body []byte) error {
+	message := strings.TrimSpace(string(body))
+	var envelope ollamaErrorResponse
+	if json.Unmarshal(body, &envelope) == nil && envelope.Error != "" {
+		message = envelope.Error
+	}
+	return &ollamaHTTPError{
+		StatusCode: response.StatusCode,
+		Status:     response.Status,
+		Message:    message,
+	}
 }
 
 // BaseURL returns the configured Ollama base URL for display.
-func (o *OllamaClient) BaseURL() string {
-	if o.baseURL != "" {
-		return o.baseURL
-	}
-	return "http://localhost:11434"
-}
+func (o *OllamaClient) BaseURL() string { return o.baseURL }
 
-// ParseBaseURL validates the Ollama URL.
-func ParseBaseURL(rawURL string) (*url.URL, error) {
-	return url.Parse(rawURL)
-}
+// ParseBaseURL validates and normalizes an Ollama URL.
+func ParseBaseURL(rawURL string) (*url.URL, error) { return normalizeOllamaURL(rawURL) }
 
-// normalizeOllamaURL accepts the same lenient forms the Ollama CLI does for
-// OLLAMA_HOST — a bare host ("0.0.0.0"), host:port ("localhost:11434"), or a
-// full URL — and returns a fully-qualified *url.URL. A missing scheme defaults
-// to http and a missing port to Ollama's default 11434.
+// normalizeOllamaURL accepts the same lenient host forms as OLLAMA_HOST and
+// returns a simple HTTP(S) origin. A missing scheme defaults to HTTP and a
+// missing HTTP port to Ollama's default 11434.
 func normalizeOllamaURL(raw string) (*url.URL, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, errors.New("empty URL")
+	}
 	if !strings.Contains(raw, "://") {
 		raw = "http://" + raw
 	}
@@ -237,13 +510,24 @@ func normalizeOllamaURL(raw string) (*url.URL, error) {
 	if err != nil {
 		return nil, err
 	}
-	if u.Host == "" {
-		return nil, fmt.Errorf("missing host")
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return nil, fmt.Errorf("unsupported scheme %q", u.Scheme)
 	}
-	// Default to Ollama's port only for plain http with no explicit port. Never
-	// force it onto https/remote endpoints (which almost always listen on 443).
+	if u.Host == "" || u.Hostname() == "" {
+		return nil, errors.New("missing host")
+	}
+	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return nil, errors.New("userinfo, query strings, and fragments are not allowed")
+	}
+	if u.Path != "" && u.Path != "/" {
+		return nil, errors.New("base URL path is not allowed")
+	}
+	if strings.ContainsAny(u.Hostname(), " \t\r\n") {
+		return nil, errors.New("invalid host")
+	}
 	if u.Scheme == "http" && u.Port() == "" {
-		u.Host = u.Host + ":11434"
+		u.Host = net.JoinHostPort(u.Hostname(), "11434")
 	}
+	u.Path = ""
 	return u, nil
 }

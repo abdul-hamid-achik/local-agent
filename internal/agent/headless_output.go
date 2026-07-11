@@ -36,18 +36,22 @@ func (h *HeadlessOutput) StreamText(text string) {
 	_, _ = fmt.Fprint(h.stdout, text)
 }
 
+// StreamReasoning is intentionally omitted from pipe output; stdout remains a
+// clean final answer suitable for scripts.
+func (h *HeadlessOutput) StreamReasoning(string) {}
+
 // StreamDone writes a trailing newline to ensure output is terminated.
 func (h *HeadlessOutput) StreamDone(evalCount, promptTokens int) {
 	_, _ = fmt.Fprintln(h.stdout)
 }
 
 // ToolCallStart writes a brief tool invocation notice to stderr.
-func (h *HeadlessOutput) ToolCallStart(name string, args map[string]any) {
+func (h *HeadlessOutput) ToolCallStart(_ string, name string, args map[string]any) {
 	_, _ = fmt.Fprintf(h.stderr, "→ %s %s\n", name, FormatToolArgs(args))
 }
 
 // ToolCallResult writes the tool result summary to stderr.
-func (h *HeadlessOutput) ToolCallResult(name string, result string, isError bool, duration time.Duration) {
+func (h *HeadlessOutput) ToolCallResult(_ string, name string, result string, isError bool, duration time.Duration) {
 	status := "ok"
 	if isError {
 		status = "ERROR"

@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 )
 
@@ -98,56 +97,9 @@ func toolSummary(tt ToolType, te ToolEntry) string {
 	return ""
 }
 
-// codeBlockRegex matches markdown code blocks.
-var codeBlockRegex = regexp.MustCompile(`(?s)~~~(\w*)\n(.*?)~~~|` + "```(\\w*)\\n(.*?)```")
-
 // detectCodeBlocks checks if the result contains markdown code blocks.
 func detectCodeBlocks(text string) bool {
 	return strings.Contains(text, "```") || strings.Contains(text, "~~~")
-}
-
-// extractCodeBlocks extracts code blocks from text and returns them with their language.
-func extractCodeBlocks(text string) []struct {
-	Language string
-	Code     string
-} {
-	var blocks []struct {
-		Language string
-		Code     string
-	}
-
-	lines := strings.Split(text, "\n")
-	var inBlock bool
-	var currentLang string
-	var currentCode strings.Builder
-
-	for _, line := range lines {
-		if strings.HasPrefix(line, "```") || strings.HasPrefix(line, "~~~") {
-			if !inBlock {
-				// Start of code block
-				inBlock = true
-				currentLang = strings.TrimPrefix(line, "```")
-				currentLang = strings.TrimPrefix(currentLang, "~~~")
-				currentLang = strings.TrimSpace(currentLang)
-				currentCode.Reset()
-			} else {
-				// End of code block
-				inBlock = false
-				blocks = append(blocks, struct {
-					Language string
-					Code     string
-				}{
-					Language: currentLang,
-					Code:     strings.TrimRight(currentCode.String(), "\n"),
-				})
-			}
-		} else if inBlock {
-			currentCode.WriteString(line)
-			currentCode.WriteString("\n")
-		}
-	}
-
-	return blocks
 }
 
 // formatToolResult formats a tool result for display with smart truncation.
@@ -158,10 +110,10 @@ func formatToolResult(result string, maxLines int, maxWidth int) string {
 	}
 
 	lines := strings.Split(result, "\n")
-	
+
 	// Detect if result contains code blocks
 	hasCodeBlocks := detectCodeBlocks(result)
-	
+
 	// Truncate by lines if too long
 	if len(lines) > maxLines {
 		var b strings.Builder
@@ -179,7 +131,7 @@ func formatToolResult(result string, maxLines int, maxWidth int) string {
 		if hasCodeBlocks {
 			b.WriteString("(code blocks truncated)")
 		} else {
-			b.WriteString(fmt.Sprintf("%d", remaining))
+			fmt.Fprintf(&b, "%d", remaining)
 			b.WriteString(" more lines")
 		}
 		return b.String()
@@ -198,43 +150,4 @@ func formatToolResult(result string, maxLines int, maxWidth int) string {
 	}
 
 	return b.String()
-}
-
-// isLikelyJSON checks if a string looks like JSON.
-func isLikelyJSON(s string) bool {
-	s = strings.TrimSpace(s)
-	return strings.HasPrefix(s, "{") || strings.HasPrefix(s, "[")
-}
-
-// isLikelyXML checks if a string looks like XML.
-func isLikelyXML(s string) bool {
-	s = strings.TrimSpace(s)
-	return strings.HasPrefix(s, "<")
-}
-
-// detectLanguage tries to detect the language of a code snippet.
-func detectLanguage(code string) string {
-	if isLikelyJSON(code) {
-		return "json"
-	}
-	if isLikelyXML(code) {
-		return "xml"
-	}
-	// Check for common patterns
-	if strings.Contains(code, "func ") && strings.Contains(code, "{") {
-		return "go"
-	}
-	if strings.Contains(code, "import ") && strings.Contains(code, ";") {
-		return "java"
-	}
-	if strings.Contains(code, "def ") || strings.Contains(code, "import ") {
-		return "python"
-	}
-	if strings.Contains(code, "const ") || strings.Contains(code, "function") {
-		return "javascript"
-	}
-	if strings.Contains(code, "<div") || strings.Contains(code, "</") {
-		return "html"
-	}
-	return ""
 }

@@ -7,7 +7,7 @@ import (
 
 // sessionItem implements list.DefaultItem for the sessions picker.
 type sessionItem struct {
-	id        int
+	id        int64
 	title     string
 	createdAt string
 }

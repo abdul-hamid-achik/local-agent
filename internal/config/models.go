@@ -1,6 +1,12 @@
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"strconv"
+	"strings"
+
+	"gopkg.in/yaml.v3"
+)
 
 type ModelFamily string
 
@@ -10,6 +16,7 @@ const (
 	FamilyGemma   ModelFamily = "gemma"
 	FamilyLlama   ModelFamily = "llama"
 	FamilyMistral ModelFamily = "mistral"
+	FamilyPhi     ModelFamily = "phi"
 )
 
 type ModelCapability int
@@ -20,6 +27,52 @@ const (
 	CapabilityComplex
 	CapabilityAdvanced
 )
+
+func (c ModelCapability) String() string {
+	switch c {
+	case CapabilitySimple:
+		return "simple"
+	case CapabilityMedium:
+		return "medium"
+	case CapabilityComplex:
+		return "complex"
+	case CapabilityAdvanced:
+		return "advanced"
+	default:
+		return strconv.Itoa(int(c))
+	}
+}
+
+// UnmarshalYAML accepts the human-readable capability names used in the
+// shipped example config while remaining compatible with older numeric files.
+func (c *ModelCapability) UnmarshalYAML(node *yaml.Node) error {
+	value := strings.ToLower(strings.TrimSpace(node.Value))
+	switch value {
+	case "simple":
+		*c = CapabilitySimple
+		return nil
+	case "medium":
+		*c = CapabilityMedium
+		return nil
+	case "complex":
+		*c = CapabilityComplex
+		return nil
+	case "advanced":
+		*c = CapabilityAdvanced
+		return nil
+	}
+
+	n, err := strconv.Atoi(value)
+	if err != nil || n < int(CapabilitySimple) || n > int(CapabilityAdvanced) {
+		return fmt.Errorf("invalid model capability %q (want simple, medium, complex, advanced, or 0..3)", node.Value)
+	}
+	*c = ModelCapability(n)
+	return nil
+}
+
+func (c ModelCapability) MarshalYAML() (any, error) {
+	return c.String(), nil
+}
 
 type Model struct {
 	Name        string          `yaml:"name"`
@@ -33,6 +86,7 @@ type Model struct {
 	UseCases    []string        `yaml:"use_cases"`
 	Description string          `yaml:"description"`
 	Default     bool            `yaml:"default,omitempty"`
+	Exclusive   bool            `yaml:"exclusive,omitempty"` // manual profile; never auto-loaded
 }
 
 type ModelConfig struct {
@@ -84,12 +138,35 @@ func DefaultModels() []Model {
 			Description: "Capable model for complex reasoning and code analysis",
 			Default:     false,
 		},
-		// Gemma 4 local tiers are listed for VISIBILITY but are memory-unsafe on
-		// 16GB (gemma4:e2b is ~7.2GB on disk despite its "2B" name — it OOM'd the
-		// machine). isMemoryRiskyModel() flags them: the router never auto-selects
-		// them, the picker shows them greyed with a reason, and switching to one
-		// is blocked unless LOCAL_AGENT_ALLOW_LARGE_MODELS=1. qwen3.5:9b (~6.6GB)
-		// and cloud models remain excluded entirely.
+		{
+			Name:        "phi4-mini:latest",
+			Family:      FamilyPhi,
+			DisplayName: "Phi-4 Mini",
+			Size:        "2.5GB",
+			Parameters:  "3.8 billion",
+			ContextSize: 16384,
+			Capability:  CapabilityMedium,
+			Speed:       1.8,
+			UseCases:    []string{"alternate_reasoning", "tool_calling", "code_review"},
+			Description: "Alternative compact reasoning and tool-use profile",
+			Default:     false,
+		},
+		// These tiers fit only as exclusive profiles on a 16GB machine. They are
+		// visible and manually selectable, but the auto-router never loads them.
+		{
+			Name:        "qwen3.5:9b",
+			Family:      FamilyQwen35,
+			DisplayName: "Qwen 3.5 9B (exclusive)",
+			Size:        "6.6GB",
+			Parameters:  "9 billion",
+			ContextSize: 262144,
+			Capability:  CapabilityAdvanced,
+			Speed:       0.8,
+			UseCases:    []string{"architecture", "deep_review", "explicit_profile"},
+			Description: "High-capability manual profile; unloads the previous chat model",
+			Default:     false,
+			Exclusive:   true,
+		},
 		{
 			Name:        "gemma4:e2b",
 			Family:      FamilyGemma,
@@ -99,9 +176,10 @@ func DefaultModels() []Model {
 			ContextSize: 131072,
 			Capability:  CapabilityMedium,
 			Speed:       2.2,
-			UseCases:    []string{"unavailable_16gb"},
-			Description: "Native tool calling, but ~7.2GB — unsafe on 16GB.",
+			UseCases:    []string{"alternate_reasoning", "explicit_profile"},
+			Description: "Native tool calling; manual exclusive profile on 16GB",
 			Default:     false,
+			Exclusive:   true,
 		},
 		{
 			Name:        "gemma4:e4b",
@@ -115,6 +193,7 @@ func DefaultModels() []Model {
 			UseCases:    []string{"unavailable_16gb"},
 			Description: "Stronger Gemma, but ~9.6GB — unsafe on 16GB.",
 			Default:     false,
+			Exclusive:   true,
 		},
 	}
 }
@@ -124,7 +203,7 @@ func DefaultModelConfig() ModelConfig {
 	return ModelConfig{
 		Models:        models,
 		DefaultModel:  "qwen3.5:2b",
-		FallbackChain: []string{"qwen3.5:2b", "qwen3.5:0.8b", "qwen3.5:4b"},
+		FallbackChain: []string{"qwen3.5:2b", "phi4-mini:latest", "qwen3.5:0.8b", "qwen3.5:4b"},
 		AutoSelect:    true,
 		EmbedModel:    "nomic-embed-text",
 	}
@@ -159,6 +238,24 @@ func (mc *ModelConfig) GetDefaultModel() *Model {
 	return nil
 }
 
+// CanonicalModelName mirrors Ollama's implicit :latest tag. It is used only
+// for identity comparisons; callers may keep sending the user's configured
+// spelling to Ollama.
+func CanonicalModelName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	lastSegment := name
+	if slash := strings.LastIndexByte(name, '/'); slash >= 0 {
+		lastSegment = name[slash+1:]
+	}
+	if strings.Contains(lastSegment, ":") || strings.Contains(lastSegment, "@") {
+		return name
+	}
+	return name + ":latest"
+}
+
 func (mc *ModelConfig) SelectModelForTask(taskComplexity string) string {
 	if !mc.AutoSelect || len(mc.Models) == 0 {
 		return mc.DefaultModel
@@ -185,9 +282,102 @@ func (mc *ModelConfig) SelectModelForTask(taskComplexity string) string {
 // falling back to fallbackName if none match.
 func (mc *ModelConfig) firstSafe(cap ModelCapability, fallbackName string) string {
 	for _, m := range mc.Models {
-		if m.Capability == cap && CheckModelMemorySafe(m.Name) == nil {
+		if m.Capability == cap && !m.Exclusive && CheckModelMemorySafe(m.Name) == nil {
 			return m.Name
 		}
 	}
 	return fallbackName
+}
+
+// AvailableLocalChatModels intersects the configured chat catalog with the
+// models Ollama reported as having local weights. Safe automatic tiers come
+// first in catalog order; locally installed exclusive profiles follow for
+// explicit selection. Unknown models, the configured embedding model, and
+// intrinsically memory-blocked tiers are intentionally omitted.
+func (mc *ModelConfig) AvailableLocalChatModels(discovered []string) []string {
+	available := make(map[string]struct{}, len(discovered))
+	for _, name := range discovered {
+		available[CanonicalModelName(name)] = struct{}{}
+	}
+
+	result := make([]string, 0, len(mc.Models))
+	appendTier := func(exclusive bool) {
+		for _, model := range mc.Models {
+			if model.Exclusive != exclusive || model.Name == mc.EmbedModel || isMemoryRiskyModel(model.Name) {
+				continue
+			}
+			if _, ok := available[CanonicalModelName(model.Name)]; ok {
+				result = append(result, model.Name)
+			}
+		}
+	}
+	appendTier(false)
+	appendTier(true)
+	return result
+}
+
+// CatalogChatModels returns the configured chat catalog in the same safe-first
+// order used after discovery. It is suitable for an offline diagnostic UI,
+// where Ollama inventory lookup was unavailable and availability is unknown.
+func (mc *ModelConfig) CatalogChatModels() []string {
+	discovered := make([]string, 0, len(mc.Models))
+	for _, model := range mc.Models {
+		discovered = append(discovered, model.Name)
+	}
+	return mc.AvailableLocalChatModels(discovered)
+}
+
+// CheckModelAvailableLocally verifies a model identity against a successful
+// Ollama local-weight inventory, treating an omitted tag as Ollama's :latest.
+// Callers must not use it when discovery failed.
+func CheckModelAvailableLocally(model string, discovered []string) error {
+	wanted := CanonicalModelName(model)
+	for _, name := range discovered {
+		if CanonicalModelName(name) == wanted {
+			return nil
+		}
+	}
+	return fmt.Errorf("model %q is not installed with local Ollama weights", model)
+}
+
+// selectAvailableModel keeps routing within models that Ollama reported as
+// local. A nil set means discovery was unavailable, in which case legacy
+// behavior is preserved and the normal connection error remains visible.
+func selectAvailableModel(preferred string, mc *ModelConfig, available map[string]struct{}) string {
+	if available == nil {
+		return preferred
+	}
+	if _, ok := available[CanonicalModelName(preferred)]; ok {
+		return preferred
+	}
+
+	seen := map[string]struct{}{CanonicalModelName(preferred): {}}
+	candidates := make([]string, 0, len(mc.FallbackChain)+len(mc.Models))
+	candidates = append(candidates, mc.FallbackChain...)
+	for _, model := range mc.Models {
+		candidates = append(candidates, model.Name)
+	}
+	for _, candidate := range candidates {
+		canonical := CanonicalModelName(candidate)
+		if _, duplicate := seen[canonical]; duplicate {
+			continue
+		}
+		seen[canonical] = struct{}{}
+		if candidate != preferred && mc.isExclusive(candidate) {
+			continue
+		}
+		if _, ok := available[canonical]; ok {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func (mc *ModelConfig) isExclusive(name string) bool {
+	for _, model := range mc.Models {
+		if model.Name == name {
+			return model.Exclusive
+		}
+	}
+	return false
 }

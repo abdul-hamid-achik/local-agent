@@ -13,6 +13,7 @@ type QwenModelRouter struct {
 	config      *ModelConfig
 	overrideLog []ModelOverride
 	modeContext ModeContext // Current operational mode (ASK/PLAN/BUILD)
+	available   map[string]struct{}
 	mu          sync.RWMutex
 }
 
@@ -129,13 +130,27 @@ func (r *QwenModelRouter) SetModeContext(mode ModeContext) {
 
 // ClassifyTaskComplexity returns the complexity level for a query
 func (r *QwenModelRouter) ClassifyTaskComplexity(query string) QwenComplexity {
-	return classifyQwenTask(query, r.modeContext)
+	r.mu.RLock()
+	mode := r.modeContext
+	r.mu.RUnlock()
+	return classifyQwenTask(query, mode)
 }
 
 // SelectModel returns the optimal model for the query
 func (r *QwenModelRouter) SelectModel(query string) string {
 	complexity := classifyQwenTask(query, ModeNeutralContext)
-	return r.config.SelectModelForTask(string(complexity))
+	genericComplexity := ComplexityMedium
+	switch complexity {
+	case QwenTrivial:
+		genericComplexity = ComplexitySimple
+	case QwenSimple:
+		genericComplexity = ComplexityMedium
+	case QwenModerate:
+		genericComplexity = ComplexityComplex
+	case QwenAdvanced:
+		genericComplexity = ComplexityAdvanced
+	}
+	return r.ResolveAvailableModel(r.config.SelectModelForTask(string(genericComplexity)))
 }
 
 // SelectModelForMode returns the optimal model for the current mode and query
@@ -143,23 +158,49 @@ func (r *QwenModelRouter) SelectModelForMode(query string, mode ModeContext) str
 	return PromoteModelForMode(r, r.SelectModel(query), mode)
 }
 
-// isModelAvailable checks if a model is in the configured models list
-func (r *QwenModelRouter) isModelAvailable(name string) bool {
+func (r *QwenModelRouter) GetModelForCapability(capability ModelCapability) string {
+	available := r.availableSnapshot()
 	for _, m := range r.config.Models {
-		if m.Name == name {
-			return true
+		if m.Capability == capability && !m.Exclusive && CheckModelMemorySafe(m.Name) == nil {
+			if available == nil {
+				return m.Name
+			}
+			if _, ok := available[CanonicalModelName(m.Name)]; ok {
+				return m.Name
+			}
 		}
 	}
-	return false
+	return selectAvailableModel(r.config.DefaultModel, r.config, available)
 }
 
-func (r *QwenModelRouter) GetModelForCapability(capability ModelCapability) string {
-	for _, m := range r.config.Models {
-		if m.Capability == capability && CheckModelMemorySafe(m.Name) == nil {
-			return m.Name
-		}
+func (r *QwenModelRouter) SetAvailableModels(models []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if models == nil {
+		r.available = nil
+		return
 	}
-	return r.config.DefaultModel
+	r.available = make(map[string]struct{}, len(models))
+	for _, model := range models {
+		r.available[CanonicalModelName(model)] = struct{}{}
+	}
+}
+
+func (r *QwenModelRouter) ResolveAvailableModel(preferred string) string {
+	return selectAvailableModel(preferred, r.config, r.availableSnapshot())
+}
+
+func (r *QwenModelRouter) availableSnapshot() map[string]struct{} {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.available == nil {
+		return nil
+	}
+	result := make(map[string]struct{}, len(r.available))
+	for name := range r.available {
+		result[name] = struct{}{}
+	}
+	return result
 }
 
 func (r *QwenModelRouter) ListModels() []Model {
@@ -260,10 +301,10 @@ func classifyQwenTask(query string, mode ModeContext) QwenComplexity {
 
 // RecordOverride logs user model selection for learning
 func (r *QwenModelRouter) RecordOverride(query, userModel string) {
+	routerModel := r.SelectModel(query)
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
-	routerModel := r.SelectModel(query)
 
 	r.overrideLog = append(r.overrideLog, ModelOverride{
 		Query:       query,

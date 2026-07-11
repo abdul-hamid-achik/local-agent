@@ -4,6 +4,9 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/abdul-hamid-achik/local-agent/internal/llm"
+	"github.com/abdul-hamid-achik/local-agent/internal/permission"
 )
 
 // Message types for the BubbleTea update loop.
@@ -13,6 +16,9 @@ type StreamTextMsg struct {
 	Text string
 }
 
+// StreamThinkingMsg carries provider-native reasoning separately from answer text.
+type StreamThinkingMsg struct{ Text string }
+
 // StreamDoneMsg signals the LLM has finished responding.
 type StreamDoneMsg struct {
 	EvalCount    int
@@ -21,6 +27,7 @@ type StreamDoneMsg struct {
 
 // ToolCallStartMsg signals a tool invocation has begun.
 type ToolCallStartMsg struct {
+	ID        string
 	Name      string
 	Args      map[string]any
 	StartTime time.Time
@@ -28,6 +35,7 @@ type ToolCallStartMsg struct {
 
 // ToolCallResultMsg delivers the result of a tool call.
 type ToolCallResultMsg struct {
+	ID       string
 	Name     string
 	Result   string
 	IsError  bool
@@ -45,7 +53,11 @@ type SystemMessageMsg struct {
 }
 
 // AgentDoneMsg signals the agent loop has completed.
-type AgentDoneMsg struct{}
+type AgentDoneMsg struct{ Err error }
+
+// ShutdownMsg requests a graceful stop. Active turns are cancelled and joined
+// before BubbleTea exits so dispatched effects receive a final receipt.
+type ShutdownMsg struct{}
 
 // FailedServer records an MCP server that failed to connect.
 type FailedServer struct {
@@ -104,42 +116,62 @@ type PlanFormCompletedMsg struct {
 // DoneFlashExpiredMsg clears the "done" terminal title after a timeout.
 type DoneFlashExpiredMsg struct{}
 
-// SessionCreatedMsg signals a session note was created via noted.
-type SessionCreatedMsg struct {
-	NoteID int
-	Err    error
-}
-
-// SessionListMsg delivers the list of saved sessions from noted.
+// SessionListMsg delivers the list of saved SQLite sessions.
 type SessionListMsg struct {
-	Sessions []SessionListItem
-	Err      error
+	ListToken uint64
+	Sessions  []SessionListItem
+	Err       error
 }
 
 // SessionLoadedMsg delivers a loaded session's entries from noted.
 type SessionLoadedMsg struct {
-	Entries []ChatEntry
-	Title   string
-	Err     error
+	LoadToken uint64
+	SessionID int64
+	State     persistedSessionState
+	Title     string
+	Err       error
 }
 
 // ToolApprovalMsg asks the user to approve a tool call.
 type ToolApprovalMsg struct {
 	ToolName string
 	Args     map[string]any
-	Response chan<- ToolApprovalResponse
-}
-
-// ToolApprovalResponse is the user's response to a tool approval request.
-type ToolApprovalResponse struct {
-	Allowed bool
-	Always  bool // persist as "always allow"
+	Response chan<- permission.ApprovalResponse
 }
 
 // CommitResultMsg carries the result of an async /commit operation.
 type CommitResultMsg struct {
+	Token   uint64
 	Message string // commit message used
 	Err     error
+}
+
+// ContextLoadResultMsg completes a bounded asynchronous /load operation.
+type ContextLoadResultMsg struct {
+	Token uint64
+	Path  string
+	Data  string
+	Err   error
+}
+
+// ImportResultMsg completes a bounded asynchronous /import operation. Parsing
+// is done off the BubbleTea update loop so a large valid transcript cannot
+// freeze rendering.
+type ImportResultMsg struct {
+	Token          uint64
+	Path           string
+	Entries        []ChatEntry
+	Messages       []llm.Message
+	UIOnlySections int
+	ToolSections   int
+	Err            error
+}
+
+// ExportResultMsg reports the outcome of an atomic asynchronous /export.
+type ExportResultMsg struct {
+	Token uint64
+	Path  string
+	Err   error
 }
 
 // sendMsg is a helper to send a tea.Msg to the program.

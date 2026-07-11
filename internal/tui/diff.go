@@ -2,9 +2,17 @@ package tui
 
 import (
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 )
+
+const maxDiffSnapshotBytes = 2 * 1024 * 1024
+const maxDiffSnapshotWait = 50 * time.Millisecond
+
+var diffSnapshotSlots = make(chan struct{}, 1)
 
 // DiffLineKind represents the type of a diff line.
 type DiffLineKind int
@@ -23,10 +31,75 @@ type DiffLine struct {
 
 // readFileForDiff extracts a file path from tool args and reads its content.
 func readFileForDiff(rawArgs map[string]any) string {
+	workDir, _ := os.Getwd()
+	return readFileForDiffAt(rawArgs, workDir)
+}
+
+func readFileForDiffAt(rawArgs map[string]any, workDir string) string {
+	// Snapshotting is a UI enhancement, never a reason to block Bubble Tea's
+	// Update loop. One abandoned network-filesystem syscall is tolerated; later
+	// snapshots fail fast while that bounded slot remains occupied.
+	select {
+	case diffSnapshotSlots <- struct{}{}:
+	default:
+		return ""
+	}
+	done := make(chan string, 1)
+	go func() {
+		defer func() { <-diffSnapshotSlots }()
+		done <- readFileForDiffAtUnbounded(rawArgs, workDir)
+	}()
+	timer := time.NewTimer(maxDiffSnapshotWait)
+	defer timer.Stop()
+	select {
+	case content := <-done:
+		return content
+	case <-timer.C:
+		return ""
+	}
+}
+
+func readFileForDiffAtUnbounded(rawArgs map[string]any, workDir string) string {
 	for _, key := range []string{"path", "file_path", "filename", "file"} {
 		if p, ok := rawArgs[key].(string); ok {
-			data, err := os.ReadFile(p)
+			root, err := filepath.Abs(workDir)
 			if err != nil {
+				return ""
+			}
+			if resolved, resolveErr := filepath.EvalSymlinks(root); resolveErr == nil {
+				root = resolved
+			}
+			candidate := p
+			if !filepath.IsAbs(candidate) {
+				candidate = filepath.Join(root, candidate)
+			}
+			candidate, err = filepath.EvalSymlinks(candidate)
+			if err != nil {
+				return ""
+			}
+			rel, err := filepath.Rel(root, candidate)
+			if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				return ""
+			}
+			info, err := os.Stat(candidate)
+			if err != nil || !info.Mode().IsRegular() || info.Size() > maxDiffSnapshotBytes {
+				return ""
+			}
+			file, err := os.Open(candidate)
+			if err != nil {
+				return ""
+			}
+			openedInfo, statErr := file.Stat()
+			if statErr != nil || !openedInfo.Mode().IsRegular() || openedInfo.Size() > maxDiffSnapshotBytes {
+				_ = file.Close()
+				return ""
+			}
+			data, err := io.ReadAll(io.LimitReader(file, maxDiffSnapshotBytes+1))
+			closeErr := file.Close()
+			if err != nil {
+				return ""
+			}
+			if closeErr != nil || len(data) > maxDiffSnapshotBytes {
 				return ""
 			}
 			return string(data)
@@ -44,6 +117,20 @@ func computeDiff(before, after string) []DiffLine {
 
 	beforeLines := splitLines(before)
 	afterLines := splitLines(after)
+	const maxDiffInputLines = 50_000
+	if len(beforeLines)+len(afterLines) > maxDiffInputLines {
+		return []DiffLine{
+			{Kind: DiffRemoved, Content: fmt.Sprintf("[large diff omitted: %d lines before]", len(beforeLines))},
+			{Kind: DiffAdded, Content: fmt.Sprintf("[large diff omitted: %d lines after]", len(afterLines))},
+		}
+	}
+	const maxDiffCells = 4_000_000
+	if len(beforeLines) > 0 && len(afterLines) > maxDiffCells/len(beforeLines) {
+		return []DiffLine{
+			{Kind: DiffRemoved, Content: fmt.Sprintf("[large diff omitted: %d lines before]", len(beforeLines))},
+			{Kind: DiffAdded, Content: fmt.Sprintf("[large diff omitted: %d lines after]", len(afterLines))},
+		}
+	}
 
 	lcs := lcsLines(beforeLines, afterLines)
 
@@ -78,27 +165,49 @@ func computeDiff(before, after string) []DiffLine {
 
 // renderDiff renders diff lines with styles, capping output at maxLines.
 func renderDiff(lines []DiffLine, styles Styles, maxLines int) string {
+	return renderDiffAtWidth(lines, styles, maxLines, 0)
+}
+
+// renderDiffAtWidth renders a diff within a concrete terminal-cell boundary.
+// A zero width preserves the historical unbounded behavior used by callers
+// that do not own a viewport.
+func renderDiffAtWidth(lines []DiffLine, styles Styles, maxLines, width int) string {
 	if len(lines) == 0 {
 		return ""
 	}
 
 	var b strings.Builder
 	displayed := 0
+	indent := 6
+	if width > 0 && width < 48 {
+		indent = 2
+	}
+	if width > 0 && indent >= width {
+		indent = max(0, width-1)
+	}
+	fit := func(text string) string {
+		if width <= 0 {
+			return text
+		}
+		return truncateDisplay(text, max(1, width-indent))
+	}
 
 	for _, line := range lines {
 		if maxLines > 0 && displayed >= maxLines {
-			b.WriteString(styles.DiffHeader.Render(fmt.Sprintf("      ... %d more lines", len(lines)-displayed)))
+			b.WriteString(styles.DiffHeader.PaddingLeft(indent).Render(fit(
+				fmt.Sprintf("… %d more lines", len(lines)-displayed),
+			)))
 			b.WriteString("\n")
 			break
 		}
 
 		switch line.Kind {
 		case DiffAdded:
-			b.WriteString(styles.DiffAdded.Render("+ " + line.Content))
+			b.WriteString(styles.DiffAdded.PaddingLeft(indent).Render(fit("+ " + line.Content)))
 		case DiffRemoved:
-			b.WriteString(styles.DiffRemoved.Render("- " + line.Content))
+			b.WriteString(styles.DiffRemoved.PaddingLeft(indent).Render(fit("- " + line.Content)))
 		case DiffContext:
-			b.WriteString(styles.DiffContext.Render("  " + line.Content))
+			b.WriteString(styles.DiffContext.PaddingLeft(indent).Render(fit("  " + line.Content)))
 		}
 		b.WriteString("\n")
 		displayed++

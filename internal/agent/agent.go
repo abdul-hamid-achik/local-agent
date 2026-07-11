@@ -1,7 +1,10 @@
 package agent
 
 import (
+	"context"
+	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -37,7 +40,15 @@ type Agent struct {
 	toolsConfig      config.ToolsConfig
 	logger           *log.Logger
 	turnCounter      atomic.Uint64
+	turnRunning      atomic.Bool
+	turnMu           sync.Mutex
+	turnCancel       context.CancelFunc
+	turnDone         chan struct{}
+	closed           bool
+	readOnlySlots    chan struct{}
 	hooks            []ToolHook
+	mcpServerScope   map[string]struct{}
+	mcpScopeSet      bool
 
 	checkpointStore     CheckpointStore
 	checkpointSessionID int64
@@ -69,6 +80,10 @@ func New(llmClient llm.Client, registry *mcp.Registry, numCtx int) *Agent {
 		registry:   registry,
 		numCtx:     numCtx,
 		toolPolicy: DefaultToolPolicy(),
+		// Filesystem reads can enter OS syscalls that do not observe context
+		// cancellation. Allow at most one abandoned worker for the lifetime of
+		// an Agent; later reads wait on this slot and remain cancellable.
+		readOnlySlots: make(chan struct{}, 1),
 	}
 }
 
@@ -105,7 +120,16 @@ func (a *Agent) NumCtx() int {
 
 // SetMemoryStore sets the memory store for cross-session persistence.
 func (a *Agent) SetMemoryStore(store *memory.Store) {
+	a.mu.Lock()
 	a.memoryStore = store
+	a.mu.Unlock()
+}
+
+// MemoryStore returns the active project-scoped memory store.
+func (a *Agent) MemoryStore() *memory.Store {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.memoryStore
 }
 
 // AddUserMessage appends a user message to the conversation.
@@ -187,9 +211,90 @@ func (a *Agent) ToolCount() int {
 		count += len(a.toolPolicy.memoryTools)
 	}
 	if a.toolPolicy.AllowMCP && a.registry != nil {
-		count += a.registry.ToolCount()
+		count += len(a.mcpTools())
 	}
 	return count
+}
+
+// SetMCPServerScope restricts model-visible and executable MCP tools to the
+// named servers. An empty scope keeps the default of all configured servers.
+func (a *Agent) SetMCPServerScope(serverNames []string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if len(serverNames) == 0 {
+		a.mcpServerScope = nil
+		a.mcpScopeSet = false
+		return
+	}
+	a.mcpScopeSet = true
+	a.mcpServerScope = make(map[string]struct{}, len(serverNames))
+	for _, name := range serverNames {
+		if name = strings.TrimSpace(name); name != "" {
+			a.mcpServerScope[name] = struct{}{}
+		}
+	}
+}
+
+// DenyAllMCPTools installs an explicit empty scope. It is used when an
+// explicitly requested profile fails to load, preventing fallback to the
+// default all-server authority.
+func (a *Agent) DenyAllMCPTools() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.mcpScopeSet = true
+	a.mcpServerScope = make(map[string]struct{})
+}
+
+// MCPServerScope reports the explicit MCP allowlist. restricted=false means
+// the default all-server scope; restricted=true with no names means deny all.
+func (a *Agent) MCPServerScope() (names []string, restricted bool) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if !a.mcpScopeSet {
+		return nil, false
+	}
+	names = make([]string, 0, len(a.mcpServerScope))
+	for name := range a.mcpServerScope {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names, true
+}
+
+func (a *Agent) mcpTools() []llm.ToolDef {
+	if a.registry == nil {
+		return nil
+	}
+	tools := a.registry.Tools()
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if !a.mcpScopeSet {
+		return tools
+	}
+	filtered := make([]llm.ToolDef, 0, len(tools))
+	for _, tool := range tools {
+		server, _, namespaced := strings.Cut(tool.Name, "__")
+		if namespaced {
+			if _, allowed := a.mcpServerScope[server]; allowed {
+				filtered = append(filtered, tool)
+			}
+		}
+	}
+	return filtered
+}
+
+func (a *Agent) allowsMCPTool(toolName string) bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if !a.mcpScopeSet {
+		return true
+	}
+	server, _, namespaced := strings.Cut(toolName, "__")
+	if !namespaced {
+		return false
+	}
+	_, allowed := a.mcpServerScope[server]
+	return allowed
 }
 
 // ServerCount returns the number of connected MCP servers.
@@ -211,6 +316,11 @@ func (a *Agent) ServerNames() []string {
 // SetWorkDir sets the working directory for environment context in the system prompt.
 func (a *Agent) SetWorkDir(dir string) {
 	a.workDir = dir
+}
+
+// WorkDir returns the workspace boundary used by built-in tools.
+func (a *Agent) WorkDir() string {
+	return a.workDir
 }
 
 // SetIgnoreContent sets the raw .agentignore content for injection into the system prompt.
@@ -236,6 +346,14 @@ func (a *Agent) SetICEEngine(engine *ice.Engine) {
 // ICEEngine returns the ICE engine, or nil if not enabled.
 func (a *Agent) ICEEngine() *ice.Engine {
 	return a.iceEngine
+}
+
+// PrepareModelSwitch cancels and joins background ICE inference so the model
+// manager can unload/switch without racing a stream on the previous model.
+func (a *Agent) PrepareModelSwitch() {
+	if a.iceEngine != nil {
+		a.iceEngine.StopAutoMemory()
+	}
 }
 
 // SetToolsConfig sets the tools configuration.
@@ -271,8 +389,19 @@ func (a *Agent) MaxGrepResults() int {
 
 // Close cleans up resources.
 func (a *Agent) Close() {
+	a.turnMu.Lock()
+	a.closed = true
+	cancel := a.turnCancel
+	done := a.turnDone
+	a.turnMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if done != nil {
+		<-done
+	}
 	if a.iceEngine != nil {
-		_ = a.iceEngine.Flush()
+		_ = a.iceEngine.Close()
 	}
 	if a.registry != nil {
 		a.registry.Close()

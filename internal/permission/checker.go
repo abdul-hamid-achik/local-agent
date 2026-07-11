@@ -2,6 +2,7 @@ package permission
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
@@ -52,17 +53,20 @@ func (c *Checker) Check(toolName string) Policy {
 }
 
 // SetPolicy updates the policy for a tool and persists it.
-func (c *Checker) SetPolicy(toolName string, policy Policy) {
+func (c *Checker) SetPolicy(toolName string, policy Policy) error {
 	c.mu.Lock()
 	c.cache[toolName] = policy
 	c.mu.Unlock()
 
 	if c.store != nil {
-		c.store.UpsertToolPermission(context.Background(), db.UpsertToolPermissionParams{
+		if _, err := c.store.UpsertToolPermission(context.Background(), db.UpsertToolPermissionParams{
 			ToolName: toolName,
 			Policy:   string(policy),
-		})
+		}); err != nil {
+			return fmt.Errorf("persist permission for %s: %w", toolName, err)
+		}
 	}
+	return nil
 }
 
 // IsYolo returns true if the checker auto-approves all tools.
@@ -82,14 +86,17 @@ func (c *Checker) AllPolicies() map[string]Policy {
 }
 
 // Reset clears all stored permissions.
-func (c *Checker) Reset() {
+func (c *Checker) Reset() error {
 	c.mu.Lock()
 	c.cache = make(map[string]Policy)
 	c.mu.Unlock()
 
 	if c.store != nil {
-		c.store.ResetToolPermissions(context.Background())
+		if err := c.store.ResetToolPermissions(context.Background()); err != nil {
+			return fmt.Errorf("reset persisted permissions: %w", err)
+		}
 	}
+	return nil
 }
 
 func (c *Checker) loadFromDB() {
@@ -123,17 +130,32 @@ type ApprovalResponse struct {
 // RequestApproval sends an approval request through the callback and blocks for a response.
 // Returns (allowed, alwaysAllow).
 func RequestApproval(toolName string, args map[string]any, callback func(ApprovalRequest)) (bool, bool) {
+	return RequestApprovalContext(context.Background(), toolName, args, callback)
+}
+
+// RequestApprovalContext is the cancellable form used by an active agent
+// turn. Missing approval UI fails closed: callers must opt into yolo mode or
+// provide an explicit response before a risky tool may execute.
+func RequestApprovalContext(ctx context.Context, toolName string, args map[string]any, callback func(ApprovalRequest)) (bool, bool) {
 	if callback == nil {
-		return true, false
+		return false, false
 	}
 	ch := make(chan ApprovalResponse, 1)
-	callback(ApprovalRequest{
+	request := ApprovalRequest{
 		ToolName: toolName,
 		Args:     args,
 		Response: ch,
-	})
-	resp := <-ch
-	return resp.Allowed, resp.Always
+	}
+	// Dispatch cannot sit in front of the cancellation select: UI adapters or
+	// embedding callbacks may block while delivering the prompt. The buffered
+	// response channel lets a late answer finish after cancellation as well.
+	go callback(request)
+	select {
+	case resp := <-ch:
+		return resp.Allowed, resp.Always
+	case <-ctx.Done():
+		return false, false
+	}
 }
 
 // CheckResult represents the decision from checking a tool's permission.
@@ -165,8 +187,10 @@ func NilSafe(store *db.Store, yolo bool) *Checker {
 	return NewChecker(store, yolo)
 }
 
-// AlwaysAllow is a no-op permission check used by the agent for non-permission scenarios.
-var AlwaysAllow = func(_ ApprovalRequest) {}
+// AlwaysAllow is an explicit auto-approval callback for trusted callers.
+var AlwaysAllow = func(req ApprovalRequest) {
+	req.Response <- ApprovalResponse{Allowed: true}
+}
 
 // ErrDenied is returned when a tool call is denied by permissions.
 type ErrDenied struct {

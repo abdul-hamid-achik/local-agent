@@ -7,14 +7,26 @@ import (
 	"testing"
 )
 
+func cleanupLogFile(t *testing.T, f *os.File) {
+	t.Helper()
+	t.Cleanup(func() {
+		name := f.Name()
+		if err := f.Close(); err != nil {
+			t.Errorf("close log file: %v", err)
+		}
+		if err := os.Remove(name); err != nil && !os.IsNotExist(err) {
+			t.Errorf("remove log file: %v", err)
+		}
+	})
+}
+
 func TestNewSessionLogger(t *testing.T) {
 	logger, f, err := NewSessionLogger()
 	if err != nil {
 		t.Fatalf("NewSessionLogger() error: %v", err)
 	}
 	if f != nil {
-		defer f.Close()
-		defer os.Remove(f.Name())
+		cleanupLogFile(t, f)
 	}
 
 	if logger == nil {
@@ -24,6 +36,11 @@ func TestNewSessionLogger(t *testing.T) {
 	// Verify the file was created in the expected directory.
 	if f == nil {
 		t.Fatal("file should not be nil")
+	}
+	if info, err := f.Stat(); err != nil {
+		t.Fatal(err)
+	} else if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("log mode = %04o, want 0600", got)
 	}
 
 	dir := filepath.Dir(f.Name())
@@ -40,8 +57,7 @@ func TestNilLoggerNoPanic(t *testing.T) {
 	var called bool
 	logger, f, err := NewSessionLogger()
 	if err == nil && f != nil {
-		defer f.Close()
-		defer os.Remove(f.Name())
+		cleanupLogFile(t, f)
 		logger.Info("test")
 		called = true
 	}

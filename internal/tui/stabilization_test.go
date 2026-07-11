@@ -75,6 +75,29 @@ func TestSendToAgent_RoutesModelPerSend(t *testing.T) {
 	}
 }
 
+func TestSendToAgentKeepsPinnedModel(t *testing.T) {
+	m := newTestModel(t)
+	modelManager := llm.NewModelManager("http://localhost:11434", 4096)
+	if err := modelManager.SetCurrentModel("qwen3.5:2b"); err != nil {
+		t.Fatal(err)
+	}
+	router := &stubRouter{selected: "qwen3.5:4b"}
+	m.modelManager = modelManager
+	m.router = router
+	m.model = "qwen3.5:2b"
+	m.modelPinned = true
+
+	if cmd := m.sendToAgent("debug this issue"); cmd == nil {
+		t.Fatal("expected send command")
+	}
+	if m.model != "qwen3.5:2b" {
+		t.Fatalf("pinned model changed to %q", m.model)
+	}
+	if router.query != "" {
+		t.Fatalf("router ran for pinned model with query %q", router.query)
+	}
+}
+
 func TestHandleCommandAction_SwitchAgentReappliesProfile(t *testing.T) {
 	tmpDir := t.TempDir()
 	if err := osWriteFile(filepath.Join(tmpDir, "skill-a.md"), "---\nname: skill-a\n---\ncontent a\n"); err != nil {
@@ -154,6 +177,68 @@ func TestHandleCommandAction_SwitchAgentReappliesProfile(t *testing.T) {
 	}
 	if strings.Contains(skillContent, "### skill-a") {
 		t.Fatalf("old profile skill content should be removed, got %q", skillContent)
+	}
+}
+
+func TestRestoreUnprofiledSessionClearsProfileRuntime(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := osWriteFile(filepath.Join(tmpDir, "profile-only.md"), "---\nname: profile-only\n---\nprofile skill\n"); err != nil {
+		t.Fatal(err)
+	}
+	skillMgr := skill.NewManager(tmpDir)
+	if err := skillMgr.LoadAll(); err != nil {
+		t.Fatal(err)
+	}
+	ag := agent.New(nil, nil, 0)
+	m := New(ag, command.NewRegistry(), skillMgr, nil, nil, nil, nil)
+	m.SetAgentProfileSource(&config.AgentsDir{Agents: map[string]config.AgentProfile{
+		"scoped": {
+			Name: "scoped", Skills: []string{"profile-only"},
+			SystemPrompt: "profile-only prompt", MCPServers: []string{"private"},
+		},
+	}}, "base context", "")
+	if err := m.applyAgentProfile("scoped"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(ag.SkillContent(), "profile skill") || !strings.Contains(ag.LoadedContext(), "profile-only prompt") {
+		t.Fatal("profile runtime fixture was not activated")
+	}
+
+	if err := m.restoreSessionState(persistedSessionState{
+		Version: 1, Mode: ModeBuild, ModelPinned: false, AgentProfile: "",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if m.agentProfile != "" || len(m.profileSkills) != 0 {
+		t.Fatalf("profile identity survived restore: name=%q skills=%v", m.agentProfile, m.profileSkills)
+	}
+	if strings.Contains(ag.SkillContent(), "profile skill") || strings.Contains(ag.LoadedContext(), "profile-only prompt") {
+		t.Fatalf("profile authority leaked into unprofiled session: skill=%q context=%q", ag.SkillContent(), ag.LoadedContext())
+	}
+	if ag.LoadedContext() != "base context" || m.modelPinned {
+		t.Fatalf("base runtime not restored: context=%q pinned=%v", ag.LoadedContext(), m.modelPinned)
+	}
+}
+
+func TestReActIterationsCountAsOneUserTurn(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(StreamDoneMsg{EvalCount: 10, PromptTokens: 100})
+	m = updated.(*Model)
+	updated, _ = m.Update(StreamDoneMsg{EvalCount: 20, PromptTokens: 150})
+	m = updated.(*Model)
+	if m.sessionTurnCount != 0 {
+		t.Fatalf("iterations incremented turn count before completion: %d", m.sessionTurnCount)
+	}
+	updated, _ = m.Update(AgentDoneMsg{})
+	m = updated.(*Model)
+	if m.sessionTurnCount != 1 {
+		t.Fatalf("completed user turn count = %d, want 1", m.sessionTurnCount)
+	}
+	if m.turnEvalTotal != 30 || m.turnPromptTotal != 250 {
+		t.Fatalf("turn token totals = eval %d prompt %d", m.turnEvalTotal, m.turnPromptTotal)
+	}
+	if m.evalCount != 20 || m.promptTokens != 150 {
+		t.Fatalf("latest context metrics = eval %d prompt %d", m.evalCount, m.promptTokens)
 	}
 }
 

@@ -64,6 +64,11 @@ func TestBuiltin_Model(t *testing.T) {
 			wantAction: ActionShowModelPicker,
 		},
 		{
+			name:       "auto resumes routing",
+			args:       []string{"auto"},
+			wantAction: ActionEnableAutoModel,
+		},
+		{
 			name:      "list shows models",
 			args:      []string{"list"},
 			checkText: "Available models",
@@ -128,6 +133,56 @@ func TestBuiltin_Models(t *testing.T) {
 	result := r.Execute(ctx, "models", nil)
 	if result.Action != ActionShowModelPicker {
 		t.Errorf("expected ActionShowModelPicker, got %d", result.Action)
+	}
+}
+
+func TestBuiltin_MigrateCheckpointsRequiresExplicitCountConfirmation(t *testing.T) {
+	r := newTestRegistry()
+	preview := r.Execute(&Context{}, "migrate-checkpoints", nil)
+	if preview.Error != "" || preview.Action != ActionPreviewLegacyCheckpoints {
+		t.Fatalf("preview result = %#v", preview)
+	}
+
+	for _, args := range [][]string{{"confirm"}, {"yes", "2"}, {"confirm", "zero"}, {"confirm", "0"}} {
+		result := r.Execute(&Context{}, "migrate-checkpoints", args)
+		if result.Error == "" || result.Action != ActionNone {
+			t.Fatalf("invalid confirmation %v accepted: %#v", args, result)
+		}
+	}
+
+	confirmed := r.Execute(&Context{}, "migrate-checkpoints", []string{"confirm", "2"})
+	if confirmed.Error != "" || confirmed.Action != ActionClaimLegacyCheckpoints || confirmed.Data != "2" {
+		t.Fatalf("confirmation result = %#v", confirmed)
+	}
+}
+
+func TestBuiltin_LegacyStoresRequireExplicitCountConfirmation(t *testing.T) {
+	r := newTestRegistry()
+	tests := []struct {
+		name          string
+		previewAction Action
+		claimAction   Action
+	}{
+		{name: "migrate-memory", previewAction: ActionPreviewLegacyMemory, claimAction: ActionClaimLegacyMemory},
+		{name: "migrate-ice", previewAction: ActionPreviewLegacyICE, claimAction: ActionClaimLegacyICE},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			preview := r.Execute(&Context{}, tt.name, nil)
+			if preview.Error != "" || preview.Action != tt.previewAction {
+				t.Fatalf("preview result = %#v", preview)
+			}
+			for _, args := range [][]string{{"confirm"}, {"yes", "2"}, {"confirm", "zero"}, {"confirm", "0"}} {
+				result := r.Execute(&Context{}, tt.name, args)
+				if result.Error == "" || result.Action != ActionNone {
+					t.Fatalf("invalid confirmation %v accepted: %#v", args, result)
+				}
+			}
+			confirmed := r.Execute(&Context{}, tt.name, []string{"confirm", "2"})
+			if confirmed.Error != "" || confirmed.Action != tt.claimAction || confirmed.Data != "2" {
+				t.Fatalf("confirmation result = %#v", confirmed)
+			}
+		})
 	}
 }
 
@@ -201,20 +256,12 @@ func TestBuiltin_Load(t *testing.T) {
 		if result.Action != ActionLoadContext {
 			t.Errorf("action = %d, want %d", result.Action, ActionLoadContext)
 		}
-		// Data should be path\0content
-		parts := strings.SplitN(result.Data, "\x00", 2)
-		if len(parts) != 2 {
-			t.Fatalf("expected path\\0content, got %q", result.Data)
-		}
-		if parts[0] != path {
-			t.Errorf("data path = %q, want %q", parts[0], path)
-		}
-		if parts[1] != "# Hello" {
-			t.Errorf("data content = %q, want %q", parts[1], "# Hello")
+		if result.Data != path {
+			t.Errorf("data path = %q, want %q", result.Data, path)
 		}
 	})
 
-	t.Run("too large errors", func(t *testing.T) {
+	t.Run("filesystem validation is deferred to async TUI effect", func(t *testing.T) {
 		tmp := t.TempDir()
 		path := filepath.Join(tmp, "big.md")
 		data := make([]byte, 33*1024) // > 32KB
@@ -222,18 +269,15 @@ func TestBuiltin_Load(t *testing.T) {
 			t.Fatal(err)
 		}
 		result := r.Execute(&Context{}, "load", []string{path})
-		if result.Error == "" {
-			t.Error("expected error for oversized file")
-		}
-		if !strings.Contains(result.Error, "too large") {
-			t.Errorf("error = %q, want containing 'too large'", result.Error)
+		if result.Error != "" || result.Action != ActionLoadContext || result.Data != path {
+			t.Fatalf("load handler performed I/O instead of returning an effect: %#v", result)
 		}
 	})
 
-	t.Run("nonexistent errors", func(t *testing.T) {
+	t.Run("nonexistent path is also deferred", func(t *testing.T) {
 		result := r.Execute(&Context{}, "load", []string{"/nonexistent/file.md"})
-		if result.Error == "" {
-			t.Error("expected error for nonexistent file")
+		if result.Error != "" || result.Action != ActionLoadContext {
+			t.Fatalf("load handler performed synchronous path I/O: %#v", result)
 		}
 	})
 }

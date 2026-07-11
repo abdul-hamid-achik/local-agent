@@ -61,6 +61,7 @@ type ModelOverride struct {
 type Router struct {
 	config      *ModelConfig
 	overrideLog []ModelOverride
+	available   map[string]struct{}
 	mu          sync.RWMutex
 }
 
@@ -108,7 +109,7 @@ func (r *Router) SelectModel(query string) string {
 		}
 	}
 
-	return r.config.SelectModelForTask(string(complexity))
+	return r.ResolveAvailableModel(r.config.SelectModelForTask(string(complexity)))
 }
 
 func (r *Router) SelectModelForMode(query string, mode ModeContext) string {
@@ -118,10 +119,13 @@ func (r *Router) SelectModelForMode(query string, mode ModeContext) string {
 // RecordOverride logs when a user explicitly selects a model.
 // This helps the router learn from user preferences.
 func (r *Router) RecordOverride(query, userModel string) {
+	// SelectModel reads the learned-pattern state under r.mu. Compute the
+	// router choice before taking the write lock to avoid re-entering the same
+	// RWMutex and deadlocking the TUI's /model command.
+	routerModel := r.SelectModel(query)
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
-	routerModel := r.SelectModel(query)
 
 	r.overrideLog = append(r.overrideLog, ModelOverride{
 		Query:       query,
@@ -201,7 +205,7 @@ func (r *Router) GetFallbackChain(currentModel string) []string {
 	chain := r.config.FallbackChain
 
 	for i, model := range chain {
-		if model == currentModel {
+		if CanonicalModelName(model) == CanonicalModelName(currentModel) {
 			return chain[i:]
 		}
 	}
@@ -210,12 +214,50 @@ func (r *Router) GetFallbackChain(currentModel string) []string {
 }
 
 func (r *Router) GetModelForCapability(capability ModelCapability) string {
+	available := r.availableSnapshot()
 	for _, m := range r.config.Models {
-		if m.Capability == capability && CheckModelMemorySafe(m.Name) == nil {
-			return m.Name
+		if m.Capability == capability && !m.Exclusive && CheckModelMemorySafe(m.Name) == nil {
+			if available == nil {
+				return m.Name
+			}
+			if _, ok := available[CanonicalModelName(m.Name)]; ok {
+				return m.Name
+			}
 		}
 	}
-	return r.config.DefaultModel
+	return selectAvailableModel(r.config.DefaultModel, r.config, available)
+}
+
+// SetAvailableModels installs the locally available Ollama model set used by
+// future routing decisions. Passing nil restores unknown/legacy behavior.
+func (r *Router) SetAvailableModels(models []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if models == nil {
+		r.available = nil
+		return
+	}
+	r.available = make(map[string]struct{}, len(models))
+	for _, model := range models {
+		r.available[CanonicalModelName(model)] = struct{}{}
+	}
+}
+
+func (r *Router) ResolveAvailableModel(preferred string) string {
+	return selectAvailableModel(preferred, r.config, r.availableSnapshot())
+}
+
+func (r *Router) availableSnapshot() map[string]struct{} {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.available == nil {
+		return nil
+	}
+	result := make(map[string]struct{}, len(r.available))
+	for name := range r.available {
+		result[name] = struct{}{}
+	}
+	return result
 }
 
 // SelectAvailableModel returns the first available model from the fallback chain.

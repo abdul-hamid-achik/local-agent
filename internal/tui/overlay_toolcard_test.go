@@ -3,9 +3,28 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/lipgloss/v2"
 )
+
+func TestLiveToolCardRetainsInspectableArguments(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(ToolCallStartMsg{
+		ID: "call-1", Name: "write", Args: map[string]any{"path": "visible.txt"}, StartTime: time.Now(),
+	})
+	m = updated.(*Model)
+	updated, _ = m.Update(ToolCallResultMsg{ID: "call-1", Name: "write", Result: "done", Duration: time.Millisecond})
+	m = updated.(*Model)
+	if len(m.toolCardMgr.Cards) != 1 {
+		t.Fatalf("cards = %d", len(m.toolCardMgr.Cards))
+	}
+	card := &m.toolCardMgr.Cards[0]
+	card.Expanded = true
+	if view := card.View(100); !strings.Contains(view, "visible.txt") {
+		t.Fatalf("expanded live card hid arguments: %q", view)
+	}
+}
 
 // TestOverlayCentering_HelpOverlay verifies help overlay is centered
 func TestOverlayCentering_HelpOverlay(t *testing.T) {
@@ -223,6 +242,31 @@ func TestToolCard_ManagerRendering(t *testing.T) {
 	}
 }
 
+func TestDuplicateRestoredToolIDUsesNewestReceipt(t *testing.T) {
+	mgr := NewToolCardManager(true)
+	mgr.AddCardWithID("restored-id", "read", ToolCardFile, testTime)
+	mgr.Cards[0].State = ToolCardSuccess
+	mgr.Cards[0].Result = "OLD RECEIPT"
+	mgr.AddCardWithID("restored-id", "read", ToolCardFile, testTime.Add(time.Second))
+	mgr.UpdateCardWithID("restored-id", "read", ToolCardSuccess, "NEW RECEIPT", testDuration)
+	if mgr.Cards[0].Result != "OLD RECEIPT" || mgr.Cards[1].Result != "NEW RECEIPT" {
+		t.Fatalf("duplicate ID updated wrong card: %#v", mgr.Cards)
+	}
+
+	m := newTestModel(t)
+	m.toolCardMgr = mgr
+	m.toolEntries = []ToolEntry{{ID: "restored-id", Name: "read", Status: ToolStatusDone}}
+	m.entries = []ChatEntry{{Kind: "tool_group", ToolIndex: 0}}
+	m.ready = true
+	m.width, m.height = 100, 40
+	var renderedBuilder strings.Builder
+	m.renderToolGroup(&renderedBuilder, 0, 0)
+	rendered := renderedBuilder.String()
+	if !strings.Contains(rendered, "NEW RECEIPT") || strings.Contains(rendered, "OLD RECEIPT") {
+		t.Fatalf("tool entry rendered stale duplicate receipt:\n%s", rendered)
+	}
+}
+
 // TestToolCard_BorderAndPadding verifies border and padding are accounted for
 func TestToolCard_BorderAndPadding(t *testing.T) {
 	card := NewToolCard("test", ToolCardGeneric, true)
@@ -304,22 +348,26 @@ func TestWrapText_MultipleWords(t *testing.T) {
 // TestWrapText_EmptyAndEdgeCases verifies wrapText handles edge cases
 func TestWrapText_EmptyAndEdgeCases(t *testing.T) {
 	tests := []struct {
-		name   string
-		input  string
-		width  int
-		expect string
+		name       string
+		input      string
+		width      int
+		expect     string
+		exactMatch bool
 	}{
-		{"empty", "", 40, ""},
-		{"zero width", "hello", 0, "hello"},
-		{"exact fit", "hello", 5, "hello"},
-		{"single char width", "hello world", 1, "h\ne\nl\nl\no\n \nw\no\nr\nl\nd"},
+		{"empty", "", 40, "", true},
+		{"zero width", "hello", 0, "hello", true},
+		{"exact fit", "hello", 5, "hello", true},
+		{"single char width", "hello world", 1, "", false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := wrapText(tt.input, tt.width)
-			if tt.width > 0 && result != tt.expect {
-				// Just verify it doesn't panic and returns something reasonable
+			if tt.exactMatch && result != tt.expect {
+				t.Errorf("wrapText(%q, %d) = %q, want %q", tt.input, tt.width, result, tt.expect)
+			}
+			if tt.input != "" && result == "" {
+				t.Errorf("wrapText(%q, %d) returned empty output", tt.input, tt.width)
 			}
 		})
 	}

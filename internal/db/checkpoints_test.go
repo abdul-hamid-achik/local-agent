@@ -68,6 +68,25 @@ func TestCheckpointDefaults(t *testing.T) {
 	}
 }
 
+func TestCheckpointWorkspaceFiltering(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	id, err := s.CreateCheckpointForWorkspace(ctx, 0, "/workspace/a", "a", CheckpointManual, "[]", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateCheckpointForWorkspace(ctx, 0, "/workspace/b", "b", CheckpointManual, "[]", 0); err != nil {
+		t.Fatal(err)
+	}
+	checkpoints, err := s.ListCheckpointsForWorkspace(ctx, 0, "/workspace/a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(checkpoints) != 1 || checkpoints[0].ID != id || checkpoints[0].WorkspaceID != "/workspace/a" {
+		t.Fatalf("workspace checkpoint list leaked: %#v", checkpoints)
+	}
+}
+
 func TestPruneCheckpoints(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
@@ -105,5 +124,173 @@ func TestPruneCheckpoints(t *testing.T) {
 	}
 	if list, _ := s.ListCheckpoints(ctx, 7); len(list) != 2 {
 		t.Fatalf("prune(0) should be a no-op, got %d", len(list))
+	}
+}
+
+func TestPruneCheckpointsByKindPreservesManualSnapshots(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	manualID, err := s.CreateCheckpoint(ctx, 7, "manual", CheckpointManual, "[]", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := s.CreateCheckpoint(ctx, 7, "auto", CheckpointPreCompaction, "[]", 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.PruneCheckpointsByKind(ctx, 7, CheckpointPreCompaction, 1); err != nil {
+		t.Fatal(err)
+	}
+	checkpoints, err := s.ListCheckpoints(ctx, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(checkpoints) != 2 {
+		t.Fatalf("checkpoints after kind prune = %#v", checkpoints)
+	}
+	foundManual := false
+	for _, checkpoint := range checkpoints {
+		foundManual = foundManual || checkpoint.ID == manualID
+	}
+	if !foundManual {
+		t.Fatal("manual checkpoint was pruned")
+	}
+}
+
+func TestClaimLegacyCheckpointsRequiresBoundActiveSession(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	sessionA, err := store.CreateSession(ctx, CreateSessionParams{
+		Title: "A", Model: "qwen3.5:2b", Mode: "BUILD", WorkspaceID: "/workspace/a",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionB, err := store.CreateSession(ctx, CreateSessionParams{
+		Title: "B", Model: "qwen3.5:2b", Mode: "BUILD", WorkspaceID: "/workspace/b",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyA, err := store.CreateCheckpoint(ctx, sessionA.ID, "legacy-a", CheckpointManual, "[]", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyB, err := store.CreateCheckpoint(ctx, sessionB.ID, "legacy-b", CheckpointManual, "[]", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.ClaimLegacyCheckpointsForActiveSession(ctx, sessionA.ID, "/workspace/b"); err == nil {
+		t.Fatal("different workspace claimed session A checkpoints")
+	}
+	before, err := store.GetCheckpoint(ctx, legacyA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.WorkspaceID != "" {
+		t.Fatal("rejected claim mutated checkpoint")
+	}
+
+	claimed, err := store.ClaimLegacyCheckpointsForActiveSession(ctx, sessionA.ID, "/workspace/a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed != 1 {
+		t.Fatalf("claimed = %d, want 1", claimed)
+	}
+	checkpointA, err := store.GetCheckpoint(ctx, legacyA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpointB, err := store.GetCheckpoint(ctx, legacyB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checkpointA.WorkspaceID != "/workspace/a" || checkpointB.WorkspaceID != "" {
+		t.Fatalf("claim crossed session boundary: A=%#v B=%#v", checkpointA, checkpointB)
+	}
+
+	claimed, err = store.ClaimLegacyCheckpointsForActiveSession(ctx, sessionA.ID, "/workspace/a")
+	if err != nil || claimed != 0 {
+		t.Fatalf("repeat claim = %d, %v", claimed, err)
+	}
+	if _, err := store.ClaimLegacyCheckpointsForActiveSession(ctx, 0, "/workspace/a"); err == nil {
+		t.Fatal("unbound session zero was allowed to claim checkpoints")
+	}
+	if _, err := store.ClaimLegacyCheckpointsForActiveSession(ctx, 9999, "/workspace/a"); err == nil {
+		t.Fatal("missing active session was allowed to claim checkpoints")
+	}
+}
+
+func TestClaimUnboundLegacyCheckpointsRequiresPreviewAndCreatesReceipt(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	sessionA, err := store.CreateSession(ctx, CreateSessionParams{
+		Title: "A", Model: "qwen3.5:2b", Mode: "BUILD", WorkspaceID: "/workspace/a",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionB, err := store.CreateSession(ctx, CreateSessionParams{
+		Title: "B", Model: "qwen3.5:2b", Mode: "BUILD", WorkspaceID: "/workspace/b",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.CreateCheckpoint(ctx, 0, "legacy-one", CheckpointManual, "[]", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.CreateCheckpoint(ctx, 0, "legacy-two", CheckpointManual, "[]", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	preview, err := store.CountUnboundLegacyCheckpoints(ctx)
+	if err != nil || preview != 2 {
+		t.Fatalf("preview = %d, %v", preview, err)
+	}
+	if _, err := store.ClaimUnboundLegacyCheckpointsForActiveSession(ctx, sessionA.ID, "/workspace/a", preview-1); err == nil {
+		t.Fatal("stale/incorrect preview count was accepted")
+	}
+	if count, err := store.CountUnboundLegacyCheckpoints(ctx); err != nil || count != 2 {
+		t.Fatalf("failed claim mutated unbound set: %d, %v", count, err)
+	}
+
+	receipt, err := store.ClaimUnboundLegacyCheckpointsForActiveSession(ctx, sessionA.ID, "/workspace/a", preview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Claimed != 2 || receipt.AlreadyClaimed || receipt.SessionID != sessionA.ID || receipt.WorkspaceID != "/workspace/a" {
+		t.Fatalf("claim receipt = %#v", receipt)
+	}
+	for _, id := range []int64{first, second} {
+		checkpoint, err := store.GetCheckpoint(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if checkpoint.SessionID != sessionA.ID || checkpoint.WorkspaceID != "/workspace/a" {
+			t.Fatalf("checkpoint %d not rebound: %#v", id, checkpoint)
+		}
+	}
+	if count, err := store.CountUnboundLegacyCheckpoints(ctx); err != nil || count != 0 {
+		t.Fatalf("unbound count after claim = %d, %v", count, err)
+	}
+
+	repeat, err := store.ClaimUnboundLegacyCheckpointsForActiveSession(ctx, sessionA.ID, "/workspace/a", 0)
+	if err != nil || !repeat.AlreadyClaimed || repeat.Claimed != 2 {
+		t.Fatalf("repeat receipt = %#v, %v", repeat, err)
+	}
+	if _, err := store.ClaimUnboundLegacyCheckpointsForActiveSession(ctx, sessionB.ID, "/workspace/b", 0); !errors.Is(err, ErrUnboundLegacyCheckpointsAlreadyClaimed) {
+		t.Fatalf("second-workspace claim error = %v", err)
+	}
+
+	if _, err := store.CreateCheckpoint(ctx, 0, "late legacy", CheckpointManual, "[]", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ClaimUnboundLegacyCheckpointsForActiveSession(ctx, sessionA.ID, "/workspace/a", 1); err == nil {
+		t.Fatal("new unbound data was silently folded into the completed one-time claim")
 	}
 }

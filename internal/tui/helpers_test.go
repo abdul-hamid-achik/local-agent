@@ -40,7 +40,6 @@ func upKey() tea.KeyPressMsg    { return tea.KeyPressMsg{Code: tea.KeyUp} }
 func downKey() tea.KeyPressMsg  { return tea.KeyPressMsg{Code: tea.KeyDown} }
 func leftKey() tea.KeyPressMsg  { return tea.KeyPressMsg{Code: tea.KeyLeft} }
 func rightKey() tea.KeyPressMsg { return tea.KeyPressMsg{Code: tea.KeyRight} }
-func spaceKey() tea.KeyPressMsg { return tea.KeyPressMsg{Code: tea.KeySpace} }
 
 func charKey(r rune) tea.KeyPressMsg {
 	return tea.KeyPressMsg{Code: r, Text: string(r)}

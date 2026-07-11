@@ -52,31 +52,39 @@ type Result struct {
 	Action Action // Side effect for the TUI to execute
 	Data   string // Optional payload (e.g. file path, model name)
 	Error  string // Error text (takes priority over Text)
+	Force  bool   // Explicit confirmation for commands that replace existing data
 }
 
 // Action describes a side effect the TUI should perform.
 type Action int
 
 const (
-	ActionNone            Action = iota
-	ActionShowHelp               // Show help overlay
-	ActionClear                  // Clear conversation history
-	ActionQuit                   // Exit the application
-	ActionLoadContext            // Load markdown context (Data = path)
-	ActionUnloadContext          // Remove loaded context
-	ActionActivateSkill          // Activate skill (Data = name)
-	ActionDeactivateSkill        // Deactivate skill (Data = name)
-	ActionSwitchModel            // Switch model (Data = model name)
-	ActionSwitchAgent            // Switch agent profile (Data = agent name)
-	ActionShowSessions           // Open sessions picker
-	ActionShowModelPicker        // Open model picker overlay
-	ActionCommit                 // Generate commit message and commit
-	ActionSendPrompt             // Send Data as a message to the agent
-	ActionExport                 // Export conversation (Data = path)
-	ActionImport                 // Import conversation (Data = path)
-	ActionCheckpoint             // Save a conversation checkpoint (Data = optional label)
-	ActionListCheckpoints        // List saved checkpoints
-	ActionRestoreCheckpoint      // Restore a checkpoint (Data = id)
+	ActionNone                     Action = iota
+	ActionShowHelp                        // Show help overlay
+	ActionClear                           // Clear conversation history
+	ActionQuit                            // Exit the application
+	ActionLoadContext                     // Load markdown context (Data = path)
+	ActionUnloadContext                   // Remove loaded context
+	ActionActivateSkill                   // Activate skill (Data = name)
+	ActionDeactivateSkill                 // Deactivate skill (Data = name)
+	ActionSwitchModel                     // Switch model (Data = model name)
+	ActionEnableAutoModel                 // Resume availability-aware automatic routing
+	ActionSwitchAgent                     // Switch agent profile (Data = agent name)
+	ActionShowSessions                    // Open sessions picker
+	ActionShowModelPicker                 // Open model picker overlay
+	ActionCommit                          // Generate commit message and commit
+	ActionSendPrompt                      // Send Data as a message to the agent
+	ActionExport                          // Export conversation (Data = path)
+	ActionImport                          // Import conversation (Data = path)
+	ActionCheckpoint                      // Save a conversation checkpoint (Data = optional label)
+	ActionListCheckpoints                 // List saved checkpoints
+	ActionRestoreCheckpoint               // Restore a checkpoint (Data = id)
+	ActionPreviewLegacyCheckpoints        // Preview unbound legacy checkpoint adoption
+	ActionClaimLegacyCheckpoints          // Explicitly claim the exact previewed legacy set
+	ActionPreviewLegacyMemory             // Preview provenance-free global memory adoption
+	ActionClaimLegacyMemory               // Explicitly claim the exact previewed memory file
+	ActionPreviewLegacyICE                // Preview provenance-free ICE entry adoption
+	ActionClaimLegacyICE                  // Explicitly claim the exact previewed ICE set
 )
 
 // Registry holds all registered slash commands.

@@ -2,6 +2,8 @@ package tui
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -24,8 +26,10 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/agent"
 	"github.com/abdul-hamid-achik/local-agent/internal/command"
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
+	"github.com/abdul-hamid-achik/local-agent/internal/db"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 	"github.com/abdul-hamid-achik/local-agent/internal/permission"
+	"github.com/abdul-hamid-achik/local-agent/internal/safeio"
 	"github.com/abdul-hamid-achik/local-agent/internal/skill"
 )
 
@@ -75,16 +79,17 @@ const (
 
 // ToolEntry tracks the lifecycle of a single tool call.
 type ToolEntry struct {
+	ID            string
 	Name          string
 	Args          string         // formatted args string
-	RawArgs       map[string]any // original args
+	RawArgs       map[string]any `json:"-"` // ephemeral original args
 	Result        string
 	IsError       bool
 	Status        ToolStatus
 	StartTime     time.Time
 	Duration      time.Duration
 	Collapsed     bool       // per-entry collapse state
-	BeforeContent string     // snapshot before file write (for diff)
+	BeforeContent string     `json:"-"` // ephemeral snapshot before file write
 	DiffLines     []DiffLine // computed diff (nil = not a file write)
 }
 
@@ -131,6 +136,8 @@ type Model struct {
 	isDark          bool
 	evalCount       int
 	promptTokens    int
+	turnEvalTotal   int
+	turnPromptTotal int
 	toolsPending    int
 	inputLines      int
 	userScrolledUp  bool
@@ -147,9 +154,6 @@ type Model struct {
 
 	// Completion modal
 	completionState *CompletionState // nil when no overlay
-
-	// File attachments
-	attachments []string
 
 	// Tool display
 	toolEntries    []ToolEntry
@@ -172,8 +176,16 @@ type Model struct {
 	doneFlash bool
 
 	// Session persistence
-	sessionNoteID       int
-	sessionsPickerState *SessionsPickerState
+	sessionID               int64
+	sessionStore            *db.Store
+	sessionsPickerState     *SessionsPickerState
+	sessionLoadToken        uint64
+	sessionLoading          bool
+	sessionListToken        uint64
+	sessionListing          bool
+	legacyCheckpointPreview *legacyCheckpointPreview
+	legacyMemoryPreview     *legacyMemoryPreview
+	legacyICEPreview        *legacyICEPreview
 
 	// Paste detection
 	pendingPaste string
@@ -192,6 +204,7 @@ type Model struct {
 	router           config.ModelRouter
 	modelPickerState *ModelPickerState
 	planFormState    *PlanFormState
+	modelPinned      bool
 
 	// Logging
 	logger *log.Logger
@@ -205,11 +218,21 @@ type Model struct {
 	agentsDir           *config.AgentsDir
 	baseLoadedContext   string
 	manualLoadedContext string
+	manualSkills        []string
 	profileSkills       []string
 
 	// Runtime
-	program *tea.Program
-	cancel  context.CancelFunc
+	program       *tea.Program
+	cancel        context.CancelFunc
+	commitCancel  context.CancelFunc
+	commitRunner  commitEffectRunner
+	commitToken   uint64
+	commitRunning bool
+	fileOpToken   uint64
+	fileLoading   bool
+	exportToken   uint64
+	exportRunning bool
+	shuttingDown  bool
 
 	// Display info
 	model        string
@@ -287,27 +310,19 @@ type Model struct {
 // New creates a new TUI Model.
 func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, completer *Completer, modelManager *llm.ModelManager, router config.ModelRouter, logger *log.Logger) *Model {
 	ta := textarea.New()
-	ta.Placeholder = "Ask anything... (Enter to send, ctrl+b for sidebar)"
+	ta.Placeholder = "Ask, @mention files, or type /help"
 	ta.Focus()
-	ta.CharLimit = 4096
+	ta.CharLimit = 32 * 1024
 	ta.SetHeight(1)
 	ta.ShowLineNumbers = false
 	ta.Prompt = "❯ "
 
-	// Remove background - make completely transparent like Crush
-	styles := textarea.DefaultDarkStyles()
-	styles.Focused.Base = lipgloss.NewStyle()       // No background
-	styles.Focused.CursorLine = lipgloss.NewStyle() // No background on cursor line
-	styles.Blurred.Base = lipgloss.NewStyle()       // No background when blurred
-	ta.SetStyles(styles)
+	ta.SetStyles(agentTextareaStyles(true))
 
-	// Set prompt color to match Nord theme (cyan)
-	styles.Focused.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color("#88c0d0"))
-	ta.SetStyles(styles)
-
+	initialStyles := NewStyles(true)
 	s := spinner.New(
 		spinner.WithSpinner(spinner.MiniDot),
-		spinner.WithStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("#88c0d0"))),
+		spinner.WithStyle(initialStyles.StatusDot),
 	)
 
 	return &Model{
@@ -346,6 +361,7 @@ func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, com
 		keyHints:        DefaultKeyHints(true),
 		accessibility:   NewAccessibilityHelper(true),
 		tableHelper:     NewTableHelper(true),
+		commitRunner:    runCommit,
 	}
 }
 
@@ -354,9 +370,59 @@ func (m *Model) SetProgram(p *tea.Program) {
 	m.program = p
 }
 
+// SetModelPinned preserves an explicit CLI or agent-profile model selection.
+// Automatic routing remains available after the user runs /model auto.
+func (m *Model) SetModelPinned(pinned bool) {
+	m.modelPinned = pinned
+}
+
+// SetSessionStore enables private SQLite-backed, lossless session resume.
+func (m *Model) SetSessionStore(store *db.Store) {
+	m.sessionStore = store
+}
+
 // SetInitCancel stores the cancel function for the background init goroutine.
 func (m *Model) SetInitCancel(cancel context.CancelFunc) {
 	m.initCancel = cancel
+}
+
+func (m *Model) beginShutdown() tea.Cmd {
+	m.shuttingDown = true
+	m.fileOpToken++
+	m.fileLoading = false
+	if m.initCancel != nil {
+		m.initCancel()
+	}
+	if m.pendingApproval != nil {
+		m.pendingApproval.Response <- permission.ApprovalResponse{Allowed: false}
+		m.pendingApproval = nil
+	}
+	if m.sessionLoading {
+		m.cancelSessionLoad()
+	}
+	if m.sessionListing {
+		m.cancelSessionList()
+	}
+	if m.commitCancel != nil {
+		m.commitCancel()
+	}
+	if m.cancel != nil {
+		m.cancel()
+	}
+	if !m.shutdownReady() {
+		return nil
+	}
+	return tea.Quit
+}
+
+func (m *Model) shutdownReady() bool {
+	return m.cancel == nil && !m.commitRunning && !m.exportRunning
+}
+
+func (m *Model) appendShutdownQuit(commands *[]tea.Cmd) {
+	if m.shuttingDown && m.shutdownReady() {
+		*commands = append(*commands, tea.Quit)
+	}
 }
 
 // renderStartup renders the logo welcome screen during initialization.
@@ -404,6 +470,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		m.styles = NewStyles(m.isDark)
 		// Update spinner style for theme.
 		m.spin.Style = m.styles.StatusDot
+		m.input.SetStyles(agentTextareaStyles(m.isDark))
 		m.scramble.SetDark(msg.IsDark())
 		// Update toast styles for theme.
 		m.toastStyles = DefaultToastStyles(m.isDark)
@@ -516,29 +583,39 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		m.input.SetWidth(viewportWidth)
 		m.syncInputHeight()
 
+	case ShutdownMsg:
+		return m, m.beginShutdown()
+
 	case tea.KeyPressMsg:
 		// During startup, only allow Ctrl+C to quit.
 		if m.initializing {
 			if key.Matches(msg, m.keys.Quit) {
-				if m.initCancel != nil {
-					m.initCancel()
-				}
-				return m, tea.Quit
+				return m, m.beginShutdown()
 			}
 			return m, nil
 		}
 
 		// Pending tool approval intercept: y/n/a before anything else.
 		if m.pendingApproval != nil {
-			switch msg.String() {
-			case "y":
-				m.pendingApproval.Response <- ToolApprovalResponse{Allowed: true}
+			switch {
+			case key.Matches(msg, m.keys.Quit):
+				m.pendingApproval.Response <- permission.ApprovalResponse{Allowed: false}
 				m.pendingApproval = nil
-			case "n":
-				m.pendingApproval.Response <- ToolApprovalResponse{Allowed: false}
+				return m, m.beginShutdown()
+			case key.Matches(msg, m.keys.Cancel):
+				m.pendingApproval.Response <- permission.ApprovalResponse{Allowed: false}
 				m.pendingApproval = nil
-			case "a":
-				m.pendingApproval.Response <- ToolApprovalResponse{Allowed: true, Always: true}
+				if m.cancel != nil {
+					m.cancel()
+				}
+			case strings.EqualFold(msg.String(), "y"):
+				m.pendingApproval.Response <- permission.ApprovalResponse{Allowed: true}
+				m.pendingApproval = nil
+			case strings.EqualFold(msg.String(), "n"):
+				m.pendingApproval.Response <- permission.ApprovalResponse{Allowed: false}
+				m.pendingApproval = nil
+			case strings.EqualFold(msg.String(), "a"):
+				m.pendingApproval.Response <- permission.ApprovalResponse{Allowed: true, Always: true}
 				m.pendingApproval = nil
 			}
 			return m, nil
@@ -547,6 +624,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		// Pending paste intercept: y/n/esc before anything else.
 		if m.pendingPaste != "" {
 			switch {
+			case key.Matches(msg, m.keys.Quit):
+				m.pendingPaste = ""
+				return m, m.beginShutdown()
 			case msg.String() == "y":
 				m.input.InsertString("```\n" + m.pendingPaste + "\n```")
 				m.pendingPaste = ""
@@ -557,6 +637,70 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 				m.syncInputHeight()
 			case key.Matches(msg, m.keys.Cancel):
 				m.pendingPaste = ""
+			}
+			return m, nil
+		}
+
+		// Session restoration replaces the complete agent/UI runtime state. Keep
+		// input disabled while the DB read is in flight, and let Escape invalidate
+		// the generation so a late result cannot overwrite a newer conversation.
+		if m.sessionLoading {
+			switch {
+			case key.Matches(msg, m.keys.Quit):
+				m.cancelSessionLoad()
+				return m, m.beginShutdown()
+			case key.Matches(msg, m.keys.Cancel):
+				m.cancelSessionLoad()
+			}
+			return m, nil
+		}
+		if m.sessionListing {
+			switch {
+			case key.Matches(msg, m.keys.Quit):
+				m.cancelSessionList()
+				return m, m.beginShutdown()
+			case key.Matches(msg, m.keys.Cancel):
+				m.cancelSessionList()
+			}
+			return m, nil
+		}
+		// Context loads and transcript imports replace prompt authority. Keep
+		// input disabled until their tokened result arrives; Escape invalidates
+		// a late result without blocking the UI on filesystem cancellation.
+		if m.fileLoading {
+			switch {
+			case key.Matches(msg, m.keys.Quit):
+				return m, m.beginShutdown()
+			case key.Matches(msg, m.keys.Cancel):
+				m.fileOpToken++
+				m.fileLoading = false
+				m.input.Focus()
+				m.entries = append(m.entries, ChatEntry{Kind: "system", Content: "File operation cancelled; any late read result will be ignored."})
+				m.invalidateEntryCache()
+				m.viewport.SetContent(m.renderEntries())
+				m.viewport.GotoBottom()
+			}
+			return m, nil
+		}
+		// Export is an owned filesystem effect. Serialize input until its atomic
+		// publication receipt returns so a later turn/commit cannot overlap it.
+		if m.exportRunning {
+			if key.Matches(msg, m.keys.Quit) {
+				return m, m.beginShutdown()
+			}
+			return m, nil
+		}
+		// /commit owns a cancellable local-model + git transaction. Do not let a
+		// model switch or foreground turn race it; Escape cancels and waits for
+		// its tokened receipt, while quit follows the same cancel/join path.
+		if m.commitRunning {
+			switch {
+			case key.Matches(msg, m.keys.Quit):
+				return m, m.beginShutdown()
+			case key.Matches(msg, m.keys.Cancel):
+				if m.commitCancel != nil {
+					m.commitCancel()
+				}
 			}
 			return m, nil
 		}
@@ -653,13 +797,20 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 						sessionID := si.id
 						sessionTitle := si.title
 						m.closeSessionsPicker()
+						m.sessionLoadToken++
+						loadToken := m.sessionLoadToken
+						m.sessionLoading = true
+						m.input.Blur()
+						workspaceID, workspaceErr := canonicalWorkspaceID(m.agent.WorkDir())
 						return m, func() tea.Msg {
-							note, err := loadSession(sessionID)
-							if err != nil {
-								return SessionLoadedMsg{Err: err}
+							if workspaceErr != nil {
+								return SessionLoadedMsg{LoadToken: loadToken, Err: workspaceErr}
 							}
-							entries := deserializeEntries(note.Content)
-							return SessionLoadedMsg{Entries: entries, Title: sessionTitle}
+							session, state, err := loadPersistedSession(context.Background(), m.sessionStore, sessionID, workspaceID)
+							if err != nil {
+								return SessionLoadedMsg{LoadToken: loadToken, Err: err}
+							}
+							return SessionLoadedMsg{LoadToken: loadToken, SessionID: session.ID, State: state, Title: sessionTitle}
 						}
 					}
 				} else {
@@ -730,10 +881,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 
 		switch {
 		case key.Matches(msg, m.keys.Quit):
-			if m.cancel != nil {
-				m.cancel()
-			}
-			return m, tea.Quit
+			return m, m.beginShutdown()
 
 		case key.Matches(msg, m.keys.Cancel):
 			if (m.state == StateStreaming || m.state == StateWaiting) && m.cancel != nil {
@@ -819,10 +967,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 				m.agent.ClearHistory()
 				m.entries = nil
 				m.toolEntries = nil
-				m.sessionEvalTotal = 0
-				m.sessionPromptTotal = 0
-				m.sessionTurnCount = 0
-				m.fileChanges = nil
+				m.resetConversationSession()
 				m.invalidateEntryCache()
 				m.entries = append(m.entries, ChatEntry{
 					Kind:    "system",
@@ -948,15 +1093,30 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			}
 		}
 
+	case StreamThinkingMsg:
+		if m.state == StateWaiting {
+			m.state = StateStreaming
+		}
+		m.thinkBuf.WriteString(msg.Text)
+		if now := time.Now(); now.Sub(m.lastStreamPaint) >= 33*time.Millisecond {
+			m.lastStreamPaint = now
+			m.viewport.SetContent(m.renderEntries())
+			if m.anchorActive {
+				m.viewport.GotoBottom()
+			}
+		}
+
 	case StreamDoneMsg:
 		m.evalCount = msg.EvalCount
 		m.promptTokens = msg.PromptTokens
+		m.turnEvalTotal += msg.EvalCount
+		m.turnPromptTotal += msg.PromptTokens
 		m.sessionEvalTotal += msg.EvalCount
 		m.sessionPromptTotal += msg.PromptTokens
-		m.sessionTurnCount++
 
 	case ToolCallStartMsg:
 		te := ToolEntry{
+			ID:        msg.ID,
 			Name:      msg.Name,
 			Args:      FormatToolArgs(msg.Args),
 			RawArgs:   msg.Args,
@@ -966,7 +1126,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		}
 		// Snapshot file content before write for diff view.
 		if classifyTool(msg.Name) == ToolTypeFileWrite {
-			te.BeforeContent = readFileForDiff(msg.Args)
+			te.BeforeContent = readFileForDiffAt(msg.Args, m.agent.WorkDir())
 		}
 		m.toolEntries = append(m.toolEntries, te)
 		m.toolsPending++
@@ -978,10 +1138,11 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			kind = ToolCardFile
 		case ToolTypeBash:
 			kind = ToolCardBash
-		default:
-			kind = ToolCardGeneric
 		}
-		m.toolCardMgr.AddCard(msg.Name, kind, msg.StartTime)
+		m.toolCardMgr.AddCardWithID(msg.ID, msg.Name, kind, msg.StartTime)
+		if len(m.toolCardMgr.Cards) > 0 {
+			m.toolCardMgr.Cards[len(m.toolCardMgr.Cards)-1].Args = te.Args
+		}
 
 		m.entries = append(m.entries, ChatEntry{
 			Kind:      "tool_group",
@@ -1004,7 +1165,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			m.logger.Info("tool call", "name", msg.Name, "duration", msg.Duration, "error", msg.IsError)
 		}
 		for i := len(m.toolEntries) - 1; i >= 0; i-- {
-			if m.toolEntries[i].Name == msg.Name && m.toolEntries[i].Status == ToolStatusRunning {
+			if toolCallMatches(msg.ID, msg.Name, m.toolEntries[i].ID, m.toolEntries[i].Name) && m.toolEntries[i].Status == ToolStatusRunning {
 				result := msg.Result
 				if len(result) > 2000 {
 					result = result[:1997] + "..."
@@ -1019,7 +1180,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 				}
 				// Compute diff for file writes and track file changes.
 				if classifyTool(m.toolEntries[i].Name) == ToolTypeFileWrite && !msg.IsError {
-					afterContent := readFileForDiff(m.toolEntries[i].RawArgs)
+					afterContent := readFileForDiffAt(m.toolEntries[i].RawArgs, m.agent.WorkDir())
 					m.toolEntries[i].DiffLines = computeDiff(m.toolEntries[i].BeforeContent, afterContent)
 					if path := toolSummary(ToolTypeFileWrite, m.toolEntries[i]); path != "" {
 						if m.fileChanges == nil {
@@ -1028,6 +1189,10 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 						m.fileChanges[path]++
 					}
 				}
+				// Raw arguments and pre-write snapshots are needed only while the
+				// call is active. Do not retain them in memory or session state.
+				m.toolEntries[i].RawArgs = nil
+				m.toolEntries[i].BeforeContent = ""
 				break
 			}
 		}
@@ -1036,7 +1201,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		if msg.IsError {
 			cardState = ToolCardError
 		}
-		m.toolCardMgr.UpdateCard(msg.Name, cardState, msg.Result, msg.Duration)
+		m.toolCardMgr.UpdateCardWithID(msg.ID, msg.Name, cardState, msg.Result, msg.Duration)
 
 		if m.toolsPending > 0 {
 			m.toolsPending--
@@ -1077,6 +1242,11 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			m.logger.Info("agent done", "eval_tokens", m.evalCount)
 		}
 		m.flushStream()
+		m.sessionTurnCount++
+		if m.cancel != nil {
+			m.cancel()
+			m.cancel = nil
+		}
 		m.state = StateIdle
 		m.userScrolledUp = false
 		m.anchorActive = true
@@ -1092,15 +1262,27 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		cmds = append(cmds, tea.Tick(2*time.Second, func(time.Time) tea.Msg {
 			return DoneFlashExpiredMsg{}
 		}))
-		// Update session note.
-		if m.sessionNoteID > 0 {
-			id := m.sessionNoteID
-			content := serializeEntries(m.entries)
-			cmds = append(cmds, func() tea.Msg {
-				_ = updateSessionNote(id, content)
-				return nil
-			})
+		// Persist a lossless state snapshot after every completed turn.
+		if m.sessionID > 0 && m.sessionStore != nil {
+			stateJSON, err := encodeSessionState(m)
+			if err == nil {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				err = m.sessionStore.SaveSessionState(ctx, m.sessionID, stateJSON)
+				if err == nil {
+					_, err = m.sessionStore.RecordTokenUsage(ctx, db.RecordTokenUsageParams{
+						SessionID: m.sessionID, Turn: int64(m.sessionTurnCount), EvalCount: int64(m.turnEvalTotal),
+						PromptTokens: int64(m.turnPromptTotal), Model: m.model,
+					})
+				}
+				cancel()
+			}
+			if err != nil {
+				m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("Save session: %v", err)})
+				m.viewport.SetContent(m.renderEntries())
+				m.viewport.GotoBottom()
+			}
 		}
+		m.appendShutdownQuit(&cmds)
 
 	case StartupStatusMsg:
 		found := false
@@ -1113,9 +1295,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			}
 		}
 		if !found {
-			m.startupItems = append(m.startupItems, startupItem{
-				ID: msg.ID, Label: msg.Label, Status: msg.Status, Detail: msg.Detail,
-			})
+			m.startupItems = append(m.startupItems, startupItem(msg))
 		}
 		// Update sidebar startup items
 		sidePanelItems := make([]StartupItem, len(m.startupItems))
@@ -1158,7 +1338,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 	case InitCompleteMsg:
 		m.model = msg.Model
 		m.modelList = msg.ModelList
-		m.agentProfile = msg.AgentProfile
+		m.setActiveProfileMetadata(msg.AgentProfile)
 		m.agentList = msg.AgentList
 		m.toolCount = msg.ToolCount
 		m.serverCount = msg.ServerCount
@@ -1209,6 +1389,77 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			m.viewport.GotoBottom()
 		}
 
+	case ContextLoadResultMsg:
+		if !m.fileLoading || msg.Token != m.fileOpToken {
+			break
+		}
+		m.fileLoading = false
+		if !m.shuttingDown {
+			m.input.Focus()
+		}
+		if msg.Err != nil {
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("Load failed: %v", msg.Err)})
+		} else {
+			m.loadedFile = msg.Path
+			m.manualLoadedContext = msg.Data
+			m.syncLoadedContext()
+			m.entries = append(m.entries, ChatEntry{Kind: "system", Content: fmt.Sprintf("Loaded context: %s (%d bytes)", msg.Path, len(msg.Data))})
+		}
+		m.invalidateEntryCache()
+		m.viewport.SetContent(m.renderEntries())
+		m.viewport.GotoBottom()
+
+	case ImportResultMsg:
+		if !m.fileLoading || msg.Token != m.fileOpToken {
+			break
+		}
+		m.fileLoading = false
+		if !m.shuttingDown {
+			m.input.Focus()
+		}
+		if msg.Err != nil {
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("Import failed: %v", msg.Err)})
+			m.invalidateEntryCache()
+			m.viewport.SetContent(m.renderEntries())
+			m.viewport.GotoBottom()
+			break
+		}
+
+		// Commit the visible and model transcripts together, and detach from
+		// the previous persisted session. The typed export intentionally omits
+		// tool authority and hidden runtime state.
+		m.agent.ReplaceMessages(msg.Messages)
+		m.entries = msg.Entries
+		m.toolEntries = nil
+		m.resetConversationSession()
+		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: fmt.Sprintf(
+			"Imported %d user/assistant messages into a new session. %d display-only system sections were not sent to the model; %d tool sections were omitted because Markdown does not preserve safe tool-call state.",
+			len(msg.Messages), msg.UIOnlySections, msg.ToolSections,
+		)})
+		m.invalidateEntryCache()
+		m.viewport.SetContent(m.renderEntries())
+		m.viewport.GotoBottom()
+
+	case ExportResultMsg:
+		if !m.exportRunning || msg.Token != m.exportToken {
+			break
+		}
+		m.exportRunning = false
+		if !m.shuttingDown {
+			m.input.Focus()
+			if exportWasPublished(msg.Err) {
+				m.entries = append(m.entries, ChatEntry{Kind: "system", Content: fmt.Sprintf("Exported conversation to: %s. Durability warning (do not retry blindly): %v", msg.Path, msg.Err)})
+			} else if msg.Err != nil {
+				m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("Export failed: %v", msg.Err)})
+			} else {
+				m.entries = append(m.entries, ChatEntry{Kind: "system", Content: fmt.Sprintf("Exported conversation to: %s", msg.Path)})
+			}
+			m.invalidateEntryCache()
+			m.viewport.SetContent(m.renderEntries())
+			m.viewport.GotoBottom()
+		}
+		m.appendShutdownQuit(&cmds)
+
 	case CompletionDebounceTickMsg:
 		if m.isCompletionActive() && m.completionState.DebounceTag == msg.Tag {
 			cs := m.completionState
@@ -1242,10 +1493,36 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		}
 
 	case ToolApprovalMsg:
+		detail, inspectable := approvalDetail(msg.ToolName, msg.Args)
+		if !inspectable {
+			msg.Response <- permission.ApprovalResponse{Allowed: false}
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: detail})
+			m.invalidateRenderedCache()
+			m.viewport.SetContent(m.renderEntries())
+			m.viewport.GotoBottom()
+			break
+		}
 		m.pendingApproval = &msg
-		// Status line will show the approval prompt.
+		m.entries = append(m.entries, ChatEntry{
+			Kind:    "system",
+			Content: detail,
+		})
+		m.invalidateRenderedCache()
+		m.viewport.SetContent(m.renderEntries())
+		m.viewport.GotoBottom()
 
 	case CommitResultMsg:
+		if !m.commitRunning || msg.Token != m.commitToken {
+			break
+		}
+		m.commitRunning = false
+		if m.commitCancel != nil {
+			m.commitCancel()
+			m.commitCancel = nil
+		}
+		if !m.shuttingDown {
+			m.input.Focus()
+		}
 		if msg.Err != nil {
 			m.entries = append(m.entries, ChatEntry{
 				Kind:    "error",
@@ -1260,6 +1537,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		m.invalidateEntryCache()
 		m.viewport.SetContent(m.renderEntries())
 		m.viewport.GotoBottom()
+		m.appendShutdownQuit(&cmds)
 
 	case editorReturnMsg:
 		m.input.SetValue(msg.Content)
@@ -1270,12 +1548,15 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 	case DoneFlashExpiredMsg:
 		m.doneFlash = false
 
-	case SessionCreatedMsg:
-		if msg.Err == nil && msg.NoteID > 0 {
-			m.sessionNoteID = msg.NoteID
-		}
-
 	case SessionListMsg:
+		if !m.sessionListing || msg.ListToken != m.sessionListToken {
+			break
+		}
+		m.sessionListing = false
+		if m.state != StateIdle {
+			break
+		}
+		m.input.Focus()
 		if msg.Err != nil {
 			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("Sessions: %v", msg.Err)})
 			m.viewport.SetContent(m.renderEntries())
@@ -1291,12 +1572,26 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		}
 
 	case SessionLoadedMsg:
+		if !m.sessionLoading || msg.LoadToken != m.sessionLoadToken {
+			break
+		}
+		m.sessionLoading = false
+		if m.state != StateIdle {
+			break
+		}
+		m.input.Focus()
 		m.invalidateEntryCache()
 		if msg.Err != nil {
 			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("Load session: %v", msg.Err)})
 		} else {
-			m.entries = msg.Entries
-			m.entries = append([]ChatEntry{{Kind: "system", Content: fmt.Sprintf("Restored session: %s", msg.Title)}}, m.entries...)
+			if err := m.restoreSessionState(msg.State); err != nil {
+				m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("Load session: %v", err)})
+			} else {
+				m.sessionID = msg.SessionID
+				m.agent.SetCheckpointSessionID(msg.SessionID)
+				m.legacyCheckpointPreview = nil
+				m.entries = append(m.entries, ChatEntry{Kind: "system", Content: fmt.Sprintf("Restored session: %s", msg.Title)})
+			}
 		}
 		m.viewport.SetContent(m.renderEntries())
 		m.viewport.GotoBottom()
@@ -1391,6 +1686,21 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+func agentTextareaStyles(isDark bool) textarea.Styles {
+	styles := textarea.DefaultLightStyles()
+	if isDark {
+		styles = textarea.DefaultDarkStyles()
+	}
+	styles.Focused.Base = lipgloss.NewStyle()
+	styles.Focused.CursorLine = lipgloss.NewStyle()
+	styles.Blurred.Base = lipgloss.NewStyle()
+	ld := lipgloss.LightDark(isDark)
+	styles.Focused.Prompt = lipgloss.NewStyle().Foreground(
+		ld(lipgloss.Color("#5e81ac"), lipgloss.Color("#88c0d0")),
+	)
+	return styles
+}
+
 // pushHistory appends text to history, deduplicating consecutive entries, capping at 100.
 func (m *Model) pushHistory(text string) {
 	if text == "" {
@@ -1463,9 +1773,13 @@ func (m *Model) submitInput() tea.Cmd {
 
 	// Handle slash commands.
 	if strings.HasPrefix(text, "/") {
-		parts := strings.Fields(text)
-		name := strings.TrimPrefix(parts[0], "/")
-		args := parts[1:]
+		name, args, err := parseSlashCommandInput(text)
+		if err != nil {
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("command parse error: %v", err)})
+			m.viewport.SetContent(m.renderEntries())
+			m.viewport.GotoBottom()
+			return nil
+		}
 
 		ctx := m.buildCommandContext()
 		result := m.cmdRegistry.Execute(ctx, name, args)
@@ -1541,6 +1855,7 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 		m.agent.ClearHistory()
 		m.entries = nil
 		m.toolEntries = nil
+		m.resetConversationSession()
 		m.invalidateEntryCache()
 		if result.Text != "" {
 			m.entries = append(m.entries, ChatEntry{
@@ -1553,28 +1868,28 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 		return nil
 
 	case command.ActionQuit:
-		if m.cancel != nil {
-			m.cancel()
-		}
-		return tea.Quit
+		return m.beginShutdown()
 
 	case command.ActionLoadContext:
-		// Data format: path\0content
-		parts := strings.SplitN(result.Data, "\x00", 2)
-		if len(parts) == 2 {
-			m.loadedFile = parts[0]
-			m.manualLoadedContext = parts[1]
-			m.syncLoadedContext()
+		path := strings.TrimSpace(result.Data)
+		if path == "" {
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: "load: no path specified"})
+			m.viewport.SetContent(m.renderEntries())
+			m.viewport.GotoBottom()
+			return nil
 		}
-		if result.Text != "" {
-			m.entries = append(m.entries, ChatEntry{
-				Kind:    "system",
-				Content: result.Text,
-			})
-		}
+		m.fileOpToken++
+		token := m.fileOpToken
+		m.fileLoading = true
+		m.input.Blur()
+		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: fmt.Sprintf("Loading context from: %s (Esc cancels)", path)})
+		m.invalidateEntryCache()
 		m.viewport.SetContent(m.renderEntries())
 		m.viewport.GotoBottom()
-		return nil
+		return func() tea.Msg {
+			data, err := safeio.ReadRegularFileNoFollow(path, maxLoadedContextBytes, safeio.StartupReadTimeout)
+			return ContextLoadResultMsg{Token: token, Path: path, Data: string(data), Err: err}
+		}
 
 	case command.ActionUnloadContext:
 		m.loadedFile = ""
@@ -1592,13 +1907,12 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 
 	case command.ActionActivateSkill:
 		if m.skillMgr != nil {
-			if err := m.skillMgr.Activate(result.Data); err != nil {
+			if err := m.setManualSkill(result.Data, true); err != nil {
 				m.entries = append(m.entries, ChatEntry{
 					Kind:    "error",
 					Content: err.Error(),
 				})
 			} else {
-				m.agent.SetSkillContent(m.skillMgr.ActiveContent())
 				m.entries = append(m.entries, ChatEntry{
 					Kind:    "system",
 					Content: result.Text,
@@ -1611,13 +1925,12 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 
 	case command.ActionDeactivateSkill:
 		if m.skillMgr != nil {
-			if err := m.skillMgr.Deactivate(result.Data); err != nil {
+			if err := m.setManualSkill(result.Data, false); err != nil {
 				m.entries = append(m.entries, ChatEntry{
 					Kind:    "error",
 					Content: err.Error(),
 				})
 			} else {
-				m.agent.SetSkillContent(m.skillMgr.ActiveContent())
 				m.entries = append(m.entries, ChatEntry{
 					Kind:    "system",
 					Content: result.Text,
@@ -1654,6 +1967,7 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 			return nil
 		}
 		if m.modelManager != nil {
+			m.prepareModelSwitch()
 			if err := m.modelManager.SetCurrentModel(result.Data); err != nil {
 				m.entries = append(m.entries, ChatEntry{
 					Kind:    "error",
@@ -1668,11 +1982,19 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 			m.logger.Info("model switched", "from", m.model, "to", result.Data)
 		}
 		m.model = result.Data
+		m.modelPinned = true
 		m.refreshSidebar()
 		m.entries = append(m.entries, ChatEntry{
 			Kind:    "system",
 			Content: result.Text,
 		})
+		m.viewport.SetContent(m.renderEntries())
+		m.viewport.GotoBottom()
+		return nil
+
+	case command.ActionEnableAutoModel:
+		m.modelPinned = false
+		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: result.Text})
 		m.viewport.SetContent(m.renderEntries())
 		m.viewport.GotoBottom()
 		return nil
@@ -1688,18 +2010,44 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 		return m.sendToAgent(result.Data)
 
 	case command.ActionCommit:
+		if m.commitRunning {
+			m.entries = append(m.entries, ChatEntry{
+				Kind:    "error",
+				Content: "A commit is already in progress. Wait for it to finish before starting another.",
+			})
+			m.viewport.SetContent(m.renderEntries())
+			m.viewport.GotoBottom()
+			return nil
+		}
 		m.entries = append(m.entries, ChatEntry{
 			Kind:    "system",
-			Content: "Generating commit message from staged changes...",
+			Content: "Generating commit message from staged changes. Automated /commit disables Git hooks, signing, fsmonitor, and background maintenance.",
 		})
 		m.viewport.SetContent(m.renderEntries())
 		m.viewport.GotoBottom()
-		return runCommit(m.agent.LLMClient(), m.model, result.Data)
+		m.commitToken++
+		ctx, cancel := context.WithCancel(context.Background())
+		m.commitCancel = cancel
+		m.commitRunning = true
+		m.input.Blur()
+		runner := m.commitRunner
+		if runner == nil {
+			runner = runCommit
+		}
+		return runner(ctx, m.agent.LLMClient(), m.model, result.Data, m.agent.WorkDir(), m.commitToken)
 
 	case command.ActionShowSessions:
+		m.sessionListToken++
+		listToken := m.sessionListToken
+		m.sessionListing = true
+		m.input.Blur()
 		return func() tea.Msg {
-			sessions, err := listSessions(20)
-			return SessionListMsg{Sessions: sessions, Err: err}
+			workspaceID, err := canonicalWorkspaceID(m.agent.WorkDir())
+			if err != nil {
+				return SessionListMsg{ListToken: listToken, Err: err}
+			}
+			sessions, err := listPersistedSessions(context.Background(), m.sessionStore, workspaceID, 20)
+			return SessionListMsg{ListToken: listToken, Sessions: sessions, Err: err}
 		}
 
 	case command.ActionSwitchAgent:
@@ -1729,21 +2077,24 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 			m.viewport.GotoBottom()
 			return nil
 		}
-		content := m.formatConversationForExport()
-		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-			m.entries = append(m.entries, ChatEntry{
-				Kind:    "error",
-				Content: fmt.Sprintf("export failed: %v", err),
-			})
-		} else {
-			m.entries = append(m.entries, ChatEntry{
-				Kind:    "system",
-				Content: fmt.Sprintf("Exported conversation to: %s", path),
-			})
+		if m.exportRunning {
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: "An export is already in progress. Wait for its receipt before starting another."})
+			m.viewport.SetContent(m.renderEntries())
+			m.viewport.GotoBottom()
+			return nil
 		}
+		content := []byte(m.formatConversationForExport())
+		workDir := m.agent.WorkDir()
+		force := result.Force
+		m.exportToken++
+		token := m.exportToken
+		m.exportRunning = true
+		m.input.Blur()
+		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: fmt.Sprintf("Exporting conversation to: %s", path)})
+		m.invalidateEntryCache()
 		m.viewport.SetContent(m.renderEntries())
 		m.viewport.GotoBottom()
-		return nil
+		return exportConversationCmd(workDir, path, content, force, token)
 
 	case command.ActionImport:
 		path := result.Data
@@ -1756,30 +2107,38 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 			m.viewport.GotoBottom()
 			return nil
 		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			m.entries = append(m.entries, ChatEntry{
-				Kind:    "error",
-				Content: fmt.Sprintf("import failed: %v", err),
-			})
-			m.viewport.SetContent(m.renderEntries())
-			m.viewport.GotoBottom()
-			return nil
-		}
-		entries, err := m.parseImportedConversation(string(data))
-		if err != nil {
-			m.entries = append(m.entries, ChatEntry{
-				Kind:    "error",
-				Content: fmt.Sprintf("import parse error: %v", err),
-			})
-			m.viewport.SetContent(m.renderEntries())
-			m.viewport.GotoBottom()
-			return nil
-		}
-		m.entries = entries
+		m.fileOpToken++
+		token := m.fileOpToken
+		m.fileLoading = true
+		m.input.Blur()
+		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: fmt.Sprintf("Importing conversation from: %s (Esc cancels)", path)})
+		m.invalidateEntryCache()
 		m.viewport.SetContent(m.renderEntries())
 		m.viewport.GotoBottom()
-		return nil
+		return func() tea.Msg {
+			data, err := safeio.ReadRegularFile(path, maxImportBytes, safeio.StartupReadTimeout)
+			if err != nil {
+				return ImportResultMsg{Token: token, Path: path, Err: err}
+			}
+			entries, err := parseImportedConversationData(string(data))
+			if err != nil {
+				return ImportResultMsg{Token: token, Path: path, Err: fmt.Errorf("parse transcript: %w", err)}
+			}
+			messages, uiOnlySections, err := importedConversationMessages(entries)
+			if err != nil {
+				return ImportResultMsg{Token: token, Path: path, Err: fmt.Errorf("reject transcript: %w", err)}
+			}
+			toolSections := 0
+			for _, line := range strings.Split(string(data), "\n") {
+				if strings.HasPrefix(strings.TrimSpace(line), "## Tool:") {
+					toolSections++
+				}
+			}
+			return ImportResultMsg{
+				Token: token, Path: path, Entries: entries, Messages: messages,
+				UIOnlySections: uiOnlySections, ToolSections: toolSections,
+			}
+		}
 
 	case command.ActionCheckpoint:
 		id, err := m.agent.CreateCheckpoint(context.Background(), result.Data, "manual")
@@ -1804,11 +2163,11 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 		cps, err := m.agent.ListCheckpoints(context.Background())
 		var b strings.Builder
 		if err != nil {
-			b.WriteString(fmt.Sprintf("could not list checkpoints: %v", err))
+			fmt.Fprintf(&b, "could not list checkpoints: %v", err)
 		} else if len(cps) == 0 {
 			b.WriteString("No checkpoints yet. Save one with /checkpoint [label].")
 		} else {
-			b.WriteString(fmt.Sprintf("Checkpoints (%d) — restore with /restore <id>:\n", len(cps)))
+			fmt.Fprintf(&b, "Checkpoints (%d) — restore with /restore <id>:\n", len(cps))
 			for _, c := range cps {
 				label := c.Label
 				if label == "" {
@@ -1849,6 +2208,30 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 		m.viewport.GotoBottom()
 		return nil
 
+	case command.ActionPreviewLegacyCheckpoints:
+		m.previewLegacyCheckpoints()
+		return nil
+
+	case command.ActionClaimLegacyCheckpoints:
+		m.claimLegacyCheckpoints(result.Data)
+		return nil
+
+	case command.ActionPreviewLegacyMemory:
+		m.previewLegacyMemory()
+		return nil
+
+	case command.ActionClaimLegacyMemory:
+		m.claimLegacyMemory(result.Data)
+		return nil
+
+	case command.ActionPreviewLegacyICE:
+		m.previewLegacyICE()
+		return nil
+
+	case command.ActionClaimLegacyICE:
+		m.claimLegacyICE(result.Data)
+		return nil
+
 	default:
 		// ActionNone — just show text.
 		if result.Text != "" {
@@ -1860,6 +2243,44 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 			m.viewport.GotoBottom()
 		}
 		return nil
+	}
+}
+
+func (m *Model) resetConversationSession() {
+	m.cancelSessionLoad()
+	m.cancelSessionList()
+	m.sessionID = 0
+	m.legacyCheckpointPreview = nil
+	m.legacyMemoryPreview = nil
+	m.legacyICEPreview = nil
+	if m.agent != nil {
+		m.agent.SetCheckpointSessionID(0)
+	}
+	m.sessionEvalTotal = 0
+	m.sessionPromptTotal = 0
+	m.sessionTurnCount = 0
+	m.fileChanges = nil
+	m.toolsPending = 0
+	m.toolCardMgr.Cards = nil
+}
+
+func (m *Model) cancelSessionLoad() {
+	if m.sessionLoading {
+		m.sessionLoadToken++
+	}
+	m.sessionLoading = false
+	if !m.sessionListing {
+		m.input.Focus()
+	}
+}
+
+func (m *Model) cancelSessionList() {
+	if m.sessionListing {
+		m.sessionListToken++
+	}
+	m.sessionListing = false
+	if !m.sessionLoading {
+		m.input.Focus()
 	}
 }
 
@@ -1946,33 +2367,11 @@ func (m *Model) checkAutoScroll() {
 	}
 }
 
-// getVisibleEntryRange calculates which entries should be rendered based on
-// viewport position and content height. This optimizes rendering for long
-// conversations by only rendering visible content.
-func (m *Model) getVisibleEntryRange() (start, end int) {
-	if m.viewport.YOffset() == 0 {
-		// At top - render recent entries plus some history
-		end = len(m.entries)
-		start = max(0, end-100)
-		return start, end
-	}
-
-	// User has scrolled - estimate visible range
-	// Assuming average entry height of ~5 lines
-	avgEntryHeight := 5
-	viewportH := m.viewport.Height()
-	visibleEntries := viewportH / avgEntryHeight
-	buffer := visibleEntries / 2
-
-	scrollPos := m.viewport.YOffset()
-	estimatedStart := max(0, scrollPos/avgEntryHeight-buffer)
-	estimatedEnd := min(len(m.entries), estimatedStart+visibleEntries+buffer*2)
-
-	return estimatedStart, estimatedEnd
-}
-
 // openExternalEditor opens $EDITOR with the current input text, then replaces
-// the textarea content with whatever the user wrote.
+// the textarea content with whatever the user wrote. tea.ExecProcess owns this
+// interactive child synchronously: Bubble Tea cannot process a normal quit or
+// restore the terminal until the editor callback returns. Keep interactive
+// processes on this path rather than dispatching them as unjoined tea.Cmd work.
 func (m *Model) openExternalEditor() tea.Cmd {
 	editor := os.Getenv("EDITOR")
 	if editor == "" {
@@ -1988,13 +2387,24 @@ func (m *Model) openExternalEditor() tea.Cmd {
 	}
 	tmpPath := tmpFile.Name()
 	if current := m.input.Value(); current != "" {
-		tmpFile.WriteString(current)
+		if _, err := tmpFile.WriteString(current); err != nil {
+			_ = tmpFile.Close()
+			_ = os.Remove(tmpPath)
+			return func() tea.Msg {
+				return ErrorMsg{Msg: fmt.Sprintf("editor: %v", err)}
+			}
+		}
 	}
-	tmpFile.Close()
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return func() tea.Msg {
+			return ErrorMsg{Msg: fmt.Sprintf("editor: %v", err)}
+		}
+	}
 
 	c := exec.Command(editor, tmpPath)
 	return tea.ExecProcess(c, func(err error) tea.Msg {
-		defer os.Remove(tmpPath)
+		defer func() { _ = os.Remove(tmpPath) }()
 		if err != nil {
 			return ErrorMsg{Msg: fmt.Sprintf("editor: %v", err)}
 		}
@@ -2203,8 +2613,10 @@ func (m *Model) closeCompletion() {
 
 // sendToAgent sends a message to the agent, setting mode context first.
 func (m *Model) sendToAgent(text string) tea.Cmd {
+	m.cancelSessionLoad()
+	m.cancelSessionList()
+	cfg := m.modeConfigs[m.mode]
 	if m.logger != nil {
-		cfg := m.modeConfigs[m.mode]
 		m.logger.Info("user message", "mode", cfg.Label, "length", len(text))
 	}
 
@@ -2214,6 +2626,8 @@ func (m *Model) sendToAgent(text string) tea.Cmd {
 	m.streamBuf.Reset()
 	m.evalCount = 0
 	m.promptTokens = 0
+	m.turnEvalTotal = 0
+	m.turnPromptTotal = 0
 
 	m.entries = append(m.entries, ChatEntry{
 		Kind:    "user",
@@ -2222,11 +2636,30 @@ func (m *Model) sendToAgent(text string) tea.Cmd {
 	m.viewport.SetContent(m.renderEntries())
 	m.viewport.GotoBottom()
 
+	if m.sessionID == 0 && m.sessionStore != nil {
+		workspaceID, workspaceErr := canonicalWorkspaceID(m.agent.WorkDir())
+		var session db.Session
+		var err error
+		if workspaceErr != nil {
+			err = workspaceErr
+		} else {
+			session, err = m.sessionStore.CreateSession(context.Background(), db.CreateSessionParams{
+				Title: sessionTitle(text), Model: m.model, Mode: cfg.Label, WorkspaceID: workspaceID,
+			})
+		}
+		if err != nil {
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("Create session: %v", err)})
+		} else {
+			m.sessionID = session.ID
+			m.agent.SetCheckpointSessionID(session.ID)
+		}
+	}
+
 	// Set mode context on the agent.
-	cfg := m.modeConfigs[m.mode]
 	m.setRouterMode(cfg.RouterMode)
-	if m.router != nil && m.modelManager != nil {
+	if !m.modelPinned && m.router != nil && m.modelManager != nil {
 		if newModel := m.router.SelectModelForMode(text, cfg.RouterMode); newModel != "" && newModel != m.model {
+			m.prepareModelSwitch()
 			if err := m.modelManager.SetCurrentModel(newModel); err == nil {
 				m.model = newModel
 			} else {
@@ -2241,6 +2674,17 @@ func (m *Model) sendToAgent(text string) tea.Cmd {
 	}
 	m.agent.AddUserMessage(text)
 	m.agent.SetModeContext(cfg.SystemPromptPrefix, cfg.ToolPolicy)
+	if m.sessionID > 0 && m.sessionStore != nil {
+		stateJSON, err := encodeSessionState(m)
+		if err == nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			err = m.sessionStore.SaveSessionState(ctx, m.sessionID, stateJSON)
+			cancel()
+		}
+		if err != nil {
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("Save session: %v", err)})
+		}
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
@@ -2249,39 +2693,22 @@ func (m *Model) sendToAgent(text string) tea.Cmd {
 
 	// Set up the approval callback so tool permission prompts go through the TUI.
 	m.agent.SetApprovalCallback(func(req permission.ApprovalRequest) {
-		respCh := make(chan ToolApprovalResponse, 1)
 		p.Send(ToolApprovalMsg{
 			ToolName: req.ToolName,
 			Args:     req.Args,
-			Response: respCh,
+			Response: req.Response,
 		})
-		resp := <-respCh
-		req.Response <- permission.ApprovalResponse{
-			Allowed: resp.Allowed,
-			Always:  resp.Always,
-		}
 	})
 
 	runAgent := func() tea.Msg {
 		adapter := NewAdapter(p)
-		m.agent.Run(ctx, adapter)
-		return AgentDoneMsg{}
+		err := m.agent.Run(ctx, adapter)
+		return AgentDoneMsg{Err: err}
 	}
 
 	m.scramble.Reset()
 
-	batchCmds := []tea.Cmd{m.spin.Tick, m.scramble.Tick(), runAgent}
-
-	// Create session note on first message.
-	if m.sessionNoteID == 0 && notedAvailable() {
-		batchCmds = append(batchCmds, func() tea.Msg {
-			ts := time.Now().Format("2006-01-02 15:04")
-			id, err := createSessionNote(ts)
-			return SessionCreatedMsg{NoteID: id, Err: err}
-		})
-	}
-
-	return tea.Batch(batchCmds...)
+	return tea.Batch(m.spin.Tick, m.scramble.Tick(), runAgent)
 }
 
 // cycleMode advances through ASK -> PLAN -> BUILD -> ASK.
@@ -2291,10 +2718,11 @@ func (m *Model) cycleMode() {
 	m.setRouterMode(cfg.RouterMode)
 
 	// Auto-select model via router.
-	if m.router != nil {
+	if !m.modelPinned && m.router != nil {
 		newModel := m.router.GetModelForCapability(cfg.PreferredCapability)
 		if newModel != "" && newModel != m.model {
 			if m.modelManager != nil {
+				m.prepareModelSwitch()
 				if err := m.modelManager.SetCurrentModel(newModel); err == nil {
 					m.model = newModel
 				}
@@ -2306,14 +2734,7 @@ func (m *Model) cycleMode() {
 		m.logger.Info("mode switched", "mode", cfg.Label, "model", m.model)
 	}
 
-	// Show enhanced mode switch notification with toast
-	modeColors := map[Mode]string{
-		ModeAsk:   "#81a1c1",
-		ModePlan:  "#ebcb8b",
-		ModeBuild: "#a3be8c",
-	}
-
-	_ = modeColors // reserved for future visual enhancements
+	// Show enhanced mode switch notification with toast.
 	toastMsg := fmt.Sprintf("⚡ Mode: %s • Model: %s", cfg.Label, m.model)
 	if m.toastMgr != nil {
 		m.toastMgr.AddToast(Toast{
@@ -2336,7 +2757,24 @@ func (m *Model) openModelPicker() {
 	if m.router == nil {
 		return
 	}
-	models := m.router.ListModels()
+	catalog := m.router.ListModels()
+	byName := make(map[string]config.Model, len(catalog))
+	for _, model := range catalog {
+		byName[model.Name] = model
+	}
+	models := catalog
+	if len(m.modelList) > 0 {
+		models = make([]config.Model, 0, len(m.modelList))
+		for _, name := range m.modelList {
+			if model, ok := byName[name]; ok {
+				models = append(models, model)
+			} else {
+				models = append(models, config.Model{
+					Name: name, DisplayName: name, Size: "local", Capability: config.CapabilityMedium,
+				})
+			}
+		}
+	}
 	if len(models) == 0 {
 		return
 	}
@@ -2357,6 +2795,7 @@ func (m *Model) selectModel(name string) {
 		return
 	}
 	if m.modelManager != nil {
+		m.prepareModelSwitch()
 		if err := m.modelManager.SetCurrentModel(name); err != nil {
 			m.entries = append(m.entries, ChatEntry{
 				Kind:    "error",
@@ -2367,6 +2806,7 @@ func (m *Model) selectModel(name string) {
 		}
 	}
 	m.model = name
+	m.modelPinned = true
 	m.refreshSidebar()
 	if m.logger != nil {
 		m.logger.Info("model switched", "from", old, "to", name)
@@ -2452,8 +2892,20 @@ func (m *Model) handleMouseClick(x, y int) {
 func (m *Model) formatConversationForExport() string {
 	var b strings.Builder
 	b.WriteString("# Conversation Export\n\n")
-	b.WriteString(fmt.Sprintf("**Date**: %s\n", time.Now().Format("2006-01-02 15:04")))
-	b.WriteString(fmt.Sprintf("**Model**: %s\n", m.model))
+	fmt.Fprintf(&b, "**Date**: %s\n", time.Now().Format("2006-01-02 15:04"))
+	fmt.Fprintf(&b, "**Model**: %s\n", m.model)
+	portable := portableConversationExport{Version: 2}
+	for _, entry := range m.entries {
+		switch entry.Kind {
+		case "user", "assistant", "system":
+			portable.Entries = append(portable.Entries, portableConversationEntry{Kind: entry.Kind, Content: entry.Content})
+		}
+	}
+	if payload, err := json.Marshal(portable); err == nil {
+		b.WriteString("<!-- local-agent-export-v2:")
+		b.WriteString(base64.RawStdEncoding.EncodeToString(payload))
+		b.WriteString(" -->\n")
+	}
 	b.WriteString("---\n\n")
 
 	for _, entry := range m.entries {
@@ -2473,7 +2925,7 @@ func (m *Model) formatConversationForExport() string {
 		case "tool_group":
 			if entry.ToolIndex >= 0 && entry.ToolIndex < len(m.toolEntries) {
 				te := m.toolEntries[entry.ToolIndex]
-				b.WriteString(fmt.Sprintf("## Tool: %s\n\n", te.Name))
+				fmt.Fprintf(&b, "## Tool: %s\n\n", te.Name)
 				b.WriteString("```\n")
 				b.WriteString(te.Args)
 				b.WriteString("\n```\n\n")
@@ -2491,65 +2943,117 @@ func (m *Model) formatConversationForExport() string {
 	return b.String()
 }
 
-// parseImportedConversation parses a markdown export back into chat entries.
+type portableConversationExport struct {
+	Version int                         `json:"version"`
+	Entries []portableConversationEntry `json:"entries"`
+}
+
+type portableConversationEntry struct {
+	Kind    string `json:"kind"`
+	Content string `json:"content"`
+}
+
+const maxPortableConversationEntries = 10_000
+
+// parseImportedConversation reads only the typed v2 payload embedded in a
+// human-readable Markdown export. Legacy Markdown is inherently ambiguous:
+// model/tool content can contain role-looking headings, so guessing authority
+// from headings would enable a tool receipt to become a hidden user message.
 func (m *Model) parseImportedConversation(data string) ([]ChatEntry, error) {
-	var entries []ChatEntry
-	lines := strings.Split(data, "\n")
+	return parseImportedConversationData(data)
+}
 
-	var currentSection string
-	var currentContent strings.Builder
-
-	flushContent := func() {
-		if currentContent.Len() > 0 {
-			content := strings.TrimSpace(currentContent.String())
-			if content != "" {
-				entry := ChatEntry{Kind: currentSection, Content: content}
-				entries = append(entries, entry)
-			}
-			currentContent.Reset()
+func parseImportedConversationData(data string) ([]ChatEntry, error) {
+	const marker = "<!-- local-agent-export-v2:"
+	start := strings.Index(data, marker)
+	if start < 0 {
+		return nil, fmt.Errorf("legacy Markdown imports are disabled because role headings inside model/tool output are ambiguous; import a v2 file created by this release")
+	}
+	encoded := data[start+len(marker):]
+	end := strings.Index(encoded, " -->")
+	if end < 0 {
+		return nil, fmt.Errorf("v2 export payload is not terminated")
+	}
+	payload, err := base64.RawStdEncoding.DecodeString(strings.TrimSpace(encoded[:end]))
+	if err != nil {
+		return nil, fmt.Errorf("decode v2 export payload: %w", err)
+	}
+	var portable portableConversationExport
+	if err := json.Unmarshal(payload, &portable); err != nil {
+		return nil, fmt.Errorf("decode v2 conversation: %w", err)
+	}
+	if portable.Version != 2 {
+		return nil, fmt.Errorf("unsupported conversation export version %d", portable.Version)
+	}
+	if len(portable.Entries) == 0 || len(portable.Entries) > maxPortableConversationEntries {
+		return nil, fmt.Errorf("v2 conversation contains %d entries", len(portable.Entries))
+	}
+	entries := make([]ChatEntry, 0, len(portable.Entries))
+	for _, entry := range portable.Entries {
+		switch entry.Kind {
+		case "user", "assistant", "system":
+		default:
+			return nil, fmt.Errorf("v2 conversation contains unsupported entry kind %q", entry.Kind)
+		}
+		if strings.TrimSpace(entry.Content) != "" {
+			entries = append(entries, ChatEntry{Kind: entry.Kind, Content: entry.Content})
 		}
 	}
-
-	for _, line := range lines {
-		if strings.HasPrefix(line, "## ") {
-			flushContent()
-			section := strings.TrimPrefix(line, "## ")
-			switch section {
-			case "User":
-				currentSection = "user"
-			case "Assistant":
-				currentSection = "assistant"
-			case "System":
-				currentSection = "system"
-			default:
-				currentSection = "system"
-			}
-		} else if strings.HasPrefix(line, "---") {
-			// Skip separators
-		} else {
-			currentContent.WriteString(line)
-			currentContent.WriteString("\n")
-		}
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("v2 conversation contains no visible entries")
 	}
-	flushContent()
-
-	// Reset tool entries since we don't import those
-	m.toolEntries = nil
-
 	return entries, nil
+}
+
+func importedConversationMessages(entries []ChatEntry) ([]llm.Message, int, error) {
+	messages := make([]llm.Message, 0, len(entries))
+	uiOnlySections := 0
+	for _, entry := range entries {
+		switch entry.Kind {
+		case "user", "assistant":
+			if strings.TrimSpace(entry.Content) != "" {
+				messages = append(messages, llm.Message{Role: entry.Kind, Content: entry.Content})
+			}
+		case "system":
+			uiOnlySections++
+		default:
+			return nil, 0, fmt.Errorf("unsupported transcript section %q", entry.Kind)
+		}
+	}
+	if len(messages) == 0 {
+		return nil, 0, fmt.Errorf("no user or assistant messages were found")
+	}
+	return messages, uiOnlySections, nil
 }
 
 // refreshSidebar rebuilds the side panel from current model state so changes
 // (e.g. the active model) are reflected immediately.
 func (m *Model) refreshSidebar() {
+	var serverNames []string
+	if m.agent != nil {
+		serverNames = m.agent.ServerNames()
+	}
 	m.sidePanel.UpdateSections(
 		m.model,
 		m.modelList,
-		m.serverCount,
+		serverNames,
 		m.toolCount,
 		m.iceEnabled,
 		m.iceConversations,
 	)
+}
+
+const maxApprovalDetail = 4096
+
+func approvalDetail(toolName string, args map[string]any) (string, bool) {
+	encoded, err := json.MarshalIndent(args, "", "  ")
+	if err != nil {
+		return fmt.Sprintf("Refused `%s`: its exact arguments could not be encoded for inspection.", toolName), false
+	}
+	if len(encoded) > maxApprovalDetail {
+		return fmt.Sprintf("Refused `%s`: its exact arguments are %d bytes, above the %d-byte approval inspection limit. Split the operation into smaller calls so every consequential argument is visible before approval.", toolName, len(encoded), maxApprovalDetail), false
+	}
+	return fmt.Sprintf("Permission required for `%s`:\n```json\n%s\n```", toolName, encoded), true
 }
 
 // Ready returns true if the TUI is fully initialized.

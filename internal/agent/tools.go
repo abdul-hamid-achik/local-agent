@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,8 +19,42 @@ import (
 )
 
 const (
-	maxTimeout = 120 * time.Second
+	maxTimeout          = 120 * time.Second
+	maxToolCaptureBytes = 1024 * 1024
+	maxFileReadBytes    = 8 * 1024 * 1024
+	maxCopyBytes        = 64 * 1024 * 1024
 )
+
+type cappedBuffer struct {
+	buf       bytes.Buffer
+	limit     int
+	truncated bool
+}
+
+func (b *cappedBuffer) Write(p []byte) (int, error) {
+	written := len(p)
+	remaining := b.limit - b.buf.Len()
+	if remaining <= 0 {
+		b.truncated = true
+		return written, nil
+	}
+	if len(p) > remaining {
+		p = p[:remaining]
+		b.truncated = true
+	}
+	_, err := b.buf.Write(p)
+	return written, err
+}
+
+func (b *cappedBuffer) Len() int { return b.buf.Len() }
+
+func (b *cappedBuffer) String() string {
+	value := b.buf.String()
+	if b.truncated {
+		value += "\n... (subprocess output truncated by host)"
+	}
+	return value
+}
 
 func (a *Agent) toolsBuiltinToolDefs() []llm.ToolDef {
 	return tools.AllToolDefs()
@@ -29,24 +64,24 @@ func (a *Agent) isToolsTool(name string) bool {
 	return tools.IsBuiltinTool(name)
 }
 
-func (a *Agent) handleToolsTool(tc llm.ToolCall) (string, bool) {
+func (a *Agent) handleToolsTool(ctx context.Context, tc llm.ToolCall) (string, bool) {
 	switch tc.Name {
 	case "grep":
-		return a.handleGrep(tc.Arguments)
+		return a.handleGrep(ctx, tc.Arguments)
 	case "read":
 		return a.handleRead(tc.Arguments)
 	case "write":
 		return a.handleWrite(tc.Arguments)
 	case "glob":
-		return a.handleGlob(tc.Arguments)
+		return a.handleGlob(ctx, tc.Arguments)
 	case "bash":
-		return a.handleBash(tc.Arguments)
+		return a.handleBash(ctx, tc.Arguments)
 	case "ls":
-		return a.handleLs(tc.Arguments)
+		return a.handleLs(ctx, tc.Arguments)
 	case "find":
-		return a.handleFind(tc.Arguments)
+		return a.handleFind(ctx, tc.Arguments)
 	case "diff":
-		return a.handleDiff(tc.Arguments)
+		return a.handleDiff(ctx, tc.Arguments)
 	case "edit":
 		return a.handleEdit(tc.Arguments)
 	case "mkdir":
@@ -64,15 +99,28 @@ func (a *Agent) handleToolsTool(tc llm.ToolCall) (string, bool) {
 	}
 }
 
-func (a *Agent) handleGrep(args map[string]any) (string, bool) {
+func (a *Agent) handleGrep(ctx context.Context, args map[string]any) (string, bool) {
+	if err := ctx.Err(); err != nil {
+		return fmt.Sprintf("error: grep cancelled: %v", err), true
+	}
 	pattern, _ := args["pattern"].(string)
 	if pattern == "" {
 		return "error: pattern is required", true
 	}
 
 	path := a.getArgString(args, "path", a.workDir)
+	path, err := a.resolvePath(path)
+	if err != nil {
+		return fmt.Sprintf("error: %v", err), true
+	}
 	include := a.getArgString(args, "include", "")
 	context := a.getArgInt(args, "context", 3)
+	if context < 0 {
+		context = 0
+	}
+	if context > 20 {
+		context = 20
+	}
 	maxResults := a.MaxGrepResults()
 
 	if _, err := os.Stat(path); err != nil {
@@ -86,7 +134,19 @@ func (a *Agent) handleGrep(args map[string]any) (string, bool) {
 
 	var results []string
 	err = filepath.Walk(path, func(filePath string, info os.FileInfo, err error) error {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		if err != nil {
+			return nil
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return nil
+		}
+		if filePath != path && a.pathIgnoredResolved(filePath) {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 
@@ -108,13 +168,16 @@ func (a *Agent) handleGrep(args map[string]any) (string, bool) {
 			return nil
 		}
 
-		content, err := os.ReadFile(filePath)
+		content, err := readBoundedFile(filePath, maxFileReadBytes)
 		if err != nil {
 			return nil
 		}
 
 		lines := strings.Split(string(content), "\n")
 		for i, line := range lines {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
 			if re.MatchString(line) {
 				relPath, _ := filepath.Rel(path, filePath)
 
@@ -170,9 +233,12 @@ func (a *Agent) handleRead(args map[string]any) (string, bool) {
 		return "error: path is required", true
 	}
 
-	path = a.resolvePath(path)
+	path, err := a.resolvePath(path)
+	if err != nil {
+		return fmt.Sprintf("error: %v", err), true
+	}
 
-	data, err := os.ReadFile(path)
+	data, err := readBoundedFile(path, maxFileReadBytes)
 	if err != nil {
 		return fmt.Sprintf("error reading file: %v", err), true
 	}
@@ -209,27 +275,41 @@ func (a *Agent) handleWrite(args map[string]any) (string, bool) {
 		return "error: path is required", true
 	}
 
-	path = a.resolvePath(path)
+	path, err := a.resolvePath(path)
+	if err != nil {
+		return fmt.Sprintf("error: %v", err), true
+	}
 
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Sprintf("error creating directory: %v", err), true
 	}
 
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	mode := os.FileMode(0o644)
+	if info, statErr := os.Stat(path); statErr == nil {
+		mode = info.Mode().Perm()
+	}
+	if err := atomicWriteFile(path, []byte(content), mode); err != nil {
 		return fmt.Sprintf("error writing file: %v", err), true
 	}
 
 	return fmt.Sprintf("Written to %s (%d bytes)", path, len(content)), false
 }
 
-func (a *Agent) handleGlob(args map[string]any) (string, bool) {
+func (a *Agent) handleGlob(ctx context.Context, args map[string]any) (string, bool) {
+	if err := ctx.Err(); err != nil {
+		return fmt.Sprintf("error: glob cancelled: %v", err), true
+	}
 	pattern, _ := args["pattern"].(string)
 	if pattern == "" {
 		return "error: pattern is required", true
 	}
 
 	path := a.getArgString(args, "path", a.workDir)
+	path, err := a.resolvePath(path)
+	if err != nil {
+		return fmt.Sprintf("error: %v", err), true
+	}
 
 	if _, err := os.Stat(path); err != nil {
 		return fmt.Sprintf("error: path does not exist: %s", path), true
@@ -245,7 +325,16 @@ func (a *Agent) handleGlob(args map[string]any) (string, bool) {
 
 	var matches []string
 	err = filepath.Walk(path, func(filePath string, info os.FileInfo, err error) error {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		if err != nil {
+			return nil
+		}
+		if filePath != path && a.pathIgnoredResolved(filePath) {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if info.IsDir() && filePath != path && shouldSkipDir(info.Name()) {
@@ -260,6 +349,9 @@ func (a *Agent) handleGlob(args map[string]any) (string, bool) {
 		rel = filepath.ToSlash(rel)
 		if matcher.MatchString(rel) {
 			matches = append(matches, rel)
+			if len(matches) >= a.MaxGrepResults() {
+				return filepath.SkipAll
+			}
 		}
 		return nil
 	})
@@ -275,7 +367,7 @@ func (a *Agent) handleGlob(args map[string]any) (string, bool) {
 	return strings.Join(matches, "\n"), false
 }
 
-func (a *Agent) handleBash(args map[string]any) (string, bool) {
+func (a *Agent) handleBash(parent context.Context, args map[string]any) (string, bool) {
 	command, _ := args["command"].(string)
 	if command == "" {
 		return "error: command is required", true
@@ -293,10 +385,12 @@ func (a *Agent) handleBash(args map[string]any) (string, bool) {
 		timeout = 1
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
+	ctx, cancel := context.WithTimeout(parent, time.Duration(timeout)*time.Second)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	configureCommandProcessGroup(cmd)
+	cmd.WaitDelay = 2 * time.Second
 	cmd.Dir = a.workDir
 	// Do not leak the parent process environment (which may hold API keys,
 	// tokens, DB passwords) to LLM-generated shell commands. Pass only a
@@ -304,7 +398,8 @@ func (a *Agent) handleBash(args map[string]any) (string, bool) {
 	cmd.Env = sanitizedEnv()
 	cmd.Stdin = nil
 
-	var stdout, stderr bytes.Buffer
+	stdout := cappedBuffer{limit: maxToolCaptureBytes}
+	stderr := cappedBuffer{limit: maxToolCaptureBytes}
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
@@ -319,7 +414,10 @@ func (a *Agent) handleBash(args map[string]any) (string, bool) {
 	}
 
 	if ctx.Err() == context.DeadlineExceeded {
-		return fmt.Sprintf("error: command timed out after %d seconds", timeout), true
+		return fmt.Sprintf("OUTCOME UNKNOWN: command timed out after %d seconds; its process group was terminated, but effects completed before termination may have occurred", timeout), true
+	}
+	if ctx.Err() == context.Canceled {
+		return "OUTCOME UNKNOWN: command was cancelled after dispatch; its process group was terminated, but effects completed before termination may have occurred", true
 	}
 
 	if err != nil {
@@ -336,13 +434,22 @@ func (a *Agent) handleBash(args map[string]any) (string, bool) {
 	return output, false
 }
 
-func (a *Agent) handleLs(args map[string]any) (string, bool) {
+func (a *Agent) handleLs(ctx context.Context, args map[string]any) (string, bool) {
+	if err := ctx.Err(); err != nil {
+		return fmt.Sprintf("error: ls cancelled: %v", err), true
+	}
 	path := a.getArgString(args, "path", a.workDir)
-	path = a.resolvePath(path)
+	path, err := a.resolvePath(path)
+	if err != nil {
+		return fmt.Sprintf("error: %v", err), true
+	}
 
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		return fmt.Sprintf("error reading directory: %v", err), true
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Sprintf("error: ls cancelled: %v", err), true
 	}
 
 	if len(entries) == 0 {
@@ -353,11 +460,20 @@ func (a *Agent) handleLs(args map[string]any) (string, bool) {
 	var files []string
 
 	for _, e := range entries {
+		if err := ctx.Err(); err != nil {
+			return fmt.Sprintf("error: ls cancelled: %v", err), true
+		}
 		name := e.Name()
+		if a.pathIgnoredResolved(filepath.Join(path, name)) {
+			continue
+		}
 		if e.IsDir() {
 			dirs = append(dirs, name+"/")
 		} else {
 			files = append(files, name)
+		}
+		if len(dirs)+len(files) >= a.MaxGrepResults() {
+			break
 		}
 	}
 
@@ -372,13 +488,20 @@ func (a *Agent) handleLs(args map[string]any) (string, bool) {
 	return result.String(), false
 }
 
-func (a *Agent) handleFind(args map[string]any) (string, bool) {
+func (a *Agent) handleFind(ctx context.Context, args map[string]any) (string, bool) {
+	if err := ctx.Err(); err != nil {
+		return fmt.Sprintf("error: find cancelled: %v", err), true
+	}
 	name, _ := args["name"].(string)
 	if name == "" {
 		return "error: name is required", true
 	}
 
 	path := a.getArgString(args, "path", a.workDir)
+	path, err := a.resolvePath(path)
+	if err != nil {
+		return fmt.Sprintf("error: %v", err), true
+	}
 	fileType := a.getArgString(args, "type", "")
 
 	if _, err := os.Stat(path); err != nil {
@@ -393,8 +516,17 @@ func (a *Agent) handleFind(args map[string]any) (string, bool) {
 	}
 
 	var results []string
-	err := filepath.Walk(path, func(filePath string, info os.FileInfo, err error) error {
+	err = filepath.Walk(path, func(filePath string, info os.FileInfo, err error) error {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		if err != nil {
+			return nil
+		}
+		if filePath != path && a.pathIgnoredResolved(filePath) {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 
@@ -425,6 +557,9 @@ func (a *Agent) handleFind(args map[string]any) (string, bool) {
 				} else {
 					results = append(results, relPath)
 				}
+			}
+			if len(results) >= a.MaxGrepResults() {
+				return filepath.SkipAll
 			}
 		}
 		return nil
@@ -467,11 +602,265 @@ func (a *Agent) getArgInt(args map[string]any, key string, defaultValue int) int
 	return defaultValue
 }
 
-func (a *Agent) resolvePath(path string) string {
-	if filepath.IsAbs(path) {
-		return path
+func (a *Agent) resolvePath(path string) (string, error) {
+	lexicalRoot := a.workDir
+	if lexicalRoot == "" {
+		var err error
+		lexicalRoot, err = os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("resolve workspace: %w", err)
+		}
 	}
-	return filepath.Join(a.workDir, path)
+
+	lexicalRoot, err := filepath.Abs(lexicalRoot)
+	if err != nil {
+		return "", fmt.Errorf("resolve workspace: %w", err)
+	}
+	root := lexicalRoot
+	if resolved, resolveErr := filepath.EvalSymlinks(root); resolveErr == nil {
+		root = resolved
+	}
+
+	candidate := path
+	requestedAbsolute := filepath.IsAbs(candidate)
+	if !requestedAbsolute {
+		candidate = filepath.Join(lexicalRoot, candidate)
+	}
+	candidate, err = filepath.Abs(candidate)
+	if err != nil {
+		return "", fmt.Errorf("resolve path %q: %w", path, err)
+	}
+	lexicalRel, lexicalInside, err := workspaceRelative(lexicalRoot, candidate)
+	if err != nil {
+		return "", fmt.Errorf("resolve lexical path %q: %w", path, err)
+	}
+	if !lexicalInside && !requestedAbsolute {
+		return "", fmt.Errorf("path %q escapes workspace %q", path, root)
+	}
+	if lexicalInside && a.pathIgnored(lexicalRel) {
+		return "", fmt.Errorf("path %q is excluded by .agentignore", path)
+	}
+	candidate, err = resolveExistingAncestor(candidate)
+	if err != nil {
+		return "", fmt.Errorf("resolve path %q: %w", path, err)
+	}
+
+	rel, inside, err := workspaceRelative(root, candidate)
+	if err != nil {
+		return "", fmt.Errorf("resolve path %q: %w", path, err)
+	}
+	if !inside {
+		return "", fmt.Errorf("path %q escapes workspace %q", path, root)
+	}
+	if a.pathIgnored(rel) {
+		return "", fmt.Errorf("path %q is excluded by .agentignore", path)
+	}
+	return candidate, nil
+}
+
+// resolveDestructivePath confines a remove/rename operand by canonicalizing
+// its parent while deliberately preserving the final path component. This
+// makes approval match the visible object: removing or moving `link` acts on
+// the symlink itself, not on the file or directory it points to.
+func (a *Agent) resolveDestructivePath(path string) (string, error) {
+	lexicalRoot := a.workDir
+	if lexicalRoot == "" {
+		var err error
+		lexicalRoot, err = os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("resolve workspace: %w", err)
+		}
+	}
+	lexicalRoot, err := filepath.Abs(lexicalRoot)
+	if err != nil {
+		return "", fmt.Errorf("resolve workspace: %w", err)
+	}
+	root := lexicalRoot
+	if resolved, resolveErr := filepath.EvalSymlinks(root); resolveErr == nil {
+		root = resolved
+	}
+
+	candidate := path
+	requestedAbsolute := filepath.IsAbs(candidate)
+	if !requestedAbsolute {
+		candidate = filepath.Join(lexicalRoot, candidate)
+	}
+	candidate, err = filepath.Abs(candidate)
+	if err != nil {
+		return "", fmt.Errorf("resolve path %q: %w", path, err)
+	}
+	lexicalRel, lexicalInside, err := workspaceRelative(lexicalRoot, candidate)
+	if err != nil {
+		return "", fmt.Errorf("resolve lexical path %q: %w", path, err)
+	}
+	if !lexicalInside && !requestedAbsolute {
+		return "", fmt.Errorf("path %q escapes workspace %q", path, root)
+	}
+	if lexicalInside && a.pathIgnored(lexicalRel) {
+		return "", fmt.Errorf("path %q is excluded by .agentignore", path)
+	}
+	parent, err := resolveExistingAncestor(filepath.Dir(candidate))
+	if err != nil {
+		return "", fmt.Errorf("resolve parent for %q: %w", path, err)
+	}
+	candidate = filepath.Join(parent, filepath.Base(candidate))
+	rel, inside, err := workspaceRelative(root, candidate)
+	if err != nil {
+		return "", fmt.Errorf("resolve path %q: %w", path, err)
+	}
+	if !inside {
+		return "", fmt.Errorf("path %q escapes workspace %q", path, root)
+	}
+	if a.pathIgnored(rel) {
+		return "", fmt.Errorf("path %q is excluded by .agentignore", path)
+	}
+	return filepath.Clean(candidate), nil
+}
+
+func workspaceRelative(root, candidate string) (string, bool, error) {
+	rel, err := filepath.Rel(root, candidate)
+	if err != nil {
+		return "", false, err
+	}
+	inside := rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	return rel, inside, nil
+}
+
+// resolveExistingAncestor canonicalizes symlinks even for a path that does
+// not exist yet by resolving its closest existing ancestor first.
+func resolveExistingAncestor(path string) (string, error) {
+	current := filepath.Clean(path)
+	var missing []string
+	for {
+		_, err := os.Lstat(current)
+		if err == nil {
+			resolved, err := filepath.EvalSymlinks(current)
+			if err != nil {
+				return "", err
+			}
+			for i := len(missing) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, missing[i])
+			}
+			return filepath.Clean(resolved), nil
+		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", err
+		}
+		missing = append(missing, filepath.Base(current))
+		current = parent
+	}
+}
+
+func (a *Agent) pathIgnored(path string) bool {
+	if strings.TrimSpace(a.ignoreContent) == "" {
+		return false
+	}
+	cleanPath := strings.TrimSuffix(filepath.ToSlash(filepath.Clean(path)), "/")
+	ancestors := []string{cleanPath}
+	for parent := filepath.ToSlash(filepath.Dir(cleanPath)); parent != "." && parent != "/" && parent != ""; parent = filepath.ToSlash(filepath.Dir(parent)) {
+		ancestors = append(ancestors, parent)
+	}
+	ignored := false
+	for _, line := range strings.Split(a.ignoreContent, "\n") {
+		pattern := strings.TrimSpace(line)
+		if pattern == "" || strings.HasPrefix(pattern, "#") {
+			continue
+		}
+		negated := strings.HasPrefix(pattern, "!")
+		pattern = strings.TrimSpace(strings.TrimPrefix(pattern, "!"))
+		pattern = strings.TrimPrefix(strings.TrimSuffix(filepath.ToSlash(pattern), "/"), "/")
+		if pattern == "" {
+			continue
+		}
+		for _, candidate := range ancestors {
+			if ignorePatternMatches(pattern, candidate) {
+				ignored = !negated
+				break
+			}
+		}
+	}
+	return ignored
+}
+
+func (a *Agent) pathIgnoredResolved(path string) bool {
+	root := a.workDir
+	if root == "" {
+		root, _ = os.Getwd()
+	}
+	root, rootErr := filepath.Abs(root)
+	path, pathErr := filepath.Abs(path)
+	if rootErr != nil || pathErr != nil {
+		return true
+	}
+	// Walk callbacks receive the canonical path returned by resolvePath. Keep
+	// the comparison in that same namespace: on macOS, for example, /var is a
+	// symlink to /private/var and comparing one spelling to the other makes an
+	// in-workspace child look like an escape.
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	if resolved, err := resolveExistingAncestor(path); err == nil {
+		path = resolved
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return true
+	}
+	return a.pathIgnored(rel)
+}
+
+func readBoundedFile(path string, limit int64) ([]byte, error) {
+	if limit <= 0 {
+		return nil, fmt.Errorf("invalid read limit %d", limit)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("path is not a regular file (%s)", info.Mode().Type())
+	}
+	if info.Size() > limit {
+		return nil, fmt.Errorf("file is %d bytes; limit is %d bytes", info.Size(), limit)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	data, readErr := io.ReadAll(io.LimitReader(file, limit+1))
+	closeErr := file.Close()
+	if readErr != nil {
+		return nil, readErr
+	}
+	if closeErr != nil {
+		return nil, fmt.Errorf("close file after reading: %w", closeErr)
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("file grew beyond %d-byte limit while reading", limit)
+	}
+	return data, nil
+}
+
+func ignorePatternMatches(pattern, cleanPath string) bool {
+	if cleanPath == pattern || strings.HasPrefix(cleanPath, pattern+"/") {
+		return true
+	}
+	if re, err := regexp.Compile(globPatternToRegex(pattern)); err == nil && re.MatchString(cleanPath) {
+		return true
+	}
+	if strings.Contains(pattern, "/") {
+		return false
+	}
+	for _, part := range strings.Split(cleanPath, "/") {
+		if matched, _ := filepath.Match(pattern, part); matched {
+			return true
+		}
+	}
+	return false
 }
 
 // envAllowlist names the environment variables a shell command legitimately
@@ -540,7 +929,10 @@ func globPatternToRegex(pattern string) string {
 	return b.String()
 }
 
-func (a *Agent) handleDiff(args map[string]any) (string, bool) {
+func (a *Agent) handleDiff(ctx context.Context, args map[string]any) (string, bool) {
+	if err := ctx.Err(); err != nil {
+		return fmt.Sprintf("error: diff cancelled: %v", err), true
+	}
 	path, _ := args["path"].(string)
 	newContent, _ := args["new_content"].(string)
 
@@ -551,19 +943,29 @@ func (a *Agent) handleDiff(args map[string]any) (string, bool) {
 		return "error: new_content is required", true
 	}
 
-	path = a.resolvePath(path)
+	path, err := a.resolvePath(path)
+	if err != nil {
+		return fmt.Sprintf("error: %v", err), true
+	}
 
 	// Read current content
-	oldContent, err := os.ReadFile(path)
+	oldContent, err := readBoundedFile(path, maxFileReadBytes)
 	if err != nil {
 		return fmt.Sprintf("error reading file: %v", err), true
 	}
 
 	oldLines := strings.Split(string(oldContent), "\n")
 	newLines := strings.Split(newContent, "\n")
+	const maxDiffCells = 4_000_000
+	if len(newLines) > 0 && len(oldLines) > maxDiffCells/len(newLines) {
+		return fmt.Sprintf("error: diff is too large (%d x %d lines); compare a narrower region or use an approved git diff command", len(oldLines), len(newLines)), true
+	}
 
 	// Compute diff using simple line-by-line comparison
-	diff := computeDiff(oldLines, newLines)
+	diff, err := computeDiff(ctx, oldLines, newLines)
+	if err != nil {
+		return fmt.Sprintf("error: diff cancelled: %v", err), true
+	}
 
 	if diff == "" {
 		return "No changes (files are identical)", false
@@ -573,34 +975,40 @@ func (a *Agent) handleDiff(args map[string]any) (string, bool) {
 }
 
 // computeDiff produces a unified diff-like output between old and new lines.
-func computeDiff(oldLines, newLines []string) string {
+func computeDiff(ctx context.Context, oldLines, newLines []string) (string, error) {
 	var result strings.Builder
 
 	oldLen := len(oldLines)
 	newLen := len(newLines)
 
 	// Simple diff algorithm: find longest common subsequence
-	lcs := longestCommonSubsequence(oldLines, newLines)
+	lcs, err := longestCommonSubsequence(ctx, oldLines, newLines)
+	if err != nil {
+		return "", err
+	}
 
 	oldIdx := 0
 	newIdx := 0
 	lcsIdx := 0
 
 	for oldIdx < oldLen || newIdx < newLen {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		if lcsIdx < len(lcs) {
 			// Print removed lines from old
 			for oldIdx < oldLen && oldLines[oldIdx] != lcs[lcsIdx] {
-				result.WriteString(fmt.Sprintf("-%s\n", oldLines[oldIdx]))
+				fmt.Fprintf(&result, "-%s\n", oldLines[oldIdx])
 				oldIdx++
 			}
 			// Print added lines from new
 			for newIdx < newLen && newLines[newIdx] != lcs[lcsIdx] {
-				result.WriteString(fmt.Sprintf("+%s\n", newLines[newIdx]))
+				fmt.Fprintf(&result, "+%s\n", newLines[newIdx])
 				newIdx++
 			}
 			// Print common line
 			if oldIdx < oldLen && newIdx < newLen {
-				result.WriteString(fmt.Sprintf(" %s\n", lcs[lcsIdx]))
+				fmt.Fprintf(&result, " %s\n", lcs[lcsIdx])
 				oldIdx++
 				newIdx++
 				lcsIdx++
@@ -608,29 +1016,35 @@ func computeDiff(oldLines, newLines []string) string {
 		} else {
 			// No more LCS - print remaining lines
 			for oldIdx < oldLen {
-				result.WriteString(fmt.Sprintf("-%s\n", oldLines[oldIdx]))
+				fmt.Fprintf(&result, "-%s\n", oldLines[oldIdx])
 				oldIdx++
 			}
 			for newIdx < newLen {
-				result.WriteString(fmt.Sprintf("+%s\n", newLines[newIdx]))
+				fmt.Fprintf(&result, "+%s\n", newLines[newIdx])
 				newIdx++
 			}
 		}
 	}
 
-	return result.String()
+	return result.String(), nil
 }
 
 // longestCommonSubsequence finds the LCS of two string slices.
-func longestCommonSubsequence(a, b []string) []string {
+func longestCommonSubsequence(ctx context.Context, a, b []string) ([]string, error) {
 	m, n := len(a), len(b)
 	// DP table
 	dp := make([][]int, m+1)
 	for i := range dp {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		dp[i] = make([]int, n+1)
 	}
 
 	for i := 1; i <= m; i++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		for j := 1; j <= n; j++ {
 			if a[i-1] == b[j-1] {
 				dp[i][j] = dp[i-1][j-1] + 1
@@ -648,6 +1062,9 @@ func longestCommonSubsequence(a, b []string) []string {
 	var lcs []string
 	i, j := m, n
 	for i > 0 && j > 0 {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if a[i-1] == b[j-1] {
 			lcs = append([]string{a[i-1]}, lcs...)
 			i--
@@ -659,7 +1076,7 @@ func longestCommonSubsequence(a, b []string) []string {
 		}
 	}
 
-	return lcs
+	return lcs, nil
 }
 
 func (a *Agent) handleEdit(args map[string]any) (string, bool) {
@@ -673,10 +1090,13 @@ func (a *Agent) handleEdit(args map[string]any) (string, bool) {
 		return "error: patch is required", true
 	}
 
-	path = a.resolvePath(path)
+	path, err := a.resolvePath(path)
+	if err != nil {
+		return fmt.Sprintf("error: %v", err), true
+	}
 
 	// Read current content
-	oldContent, err := os.ReadFile(path)
+	oldContent, err := readBoundedFile(path, maxFileReadBytes)
 	if err != nil {
 		return fmt.Sprintf("error reading file: %v", err), true
 	}
@@ -687,8 +1107,8 @@ func (a *Agent) handleEdit(args map[string]any) (string, bool) {
 		return fmt.Sprintf("error applying patch: %v", err), true
 	}
 
-	// Write the updated content
-	if err := os.WriteFile(path, []byte(newContent), 0644); err != nil {
+	mode := oldContentMode(path)
+	if err := atomicWriteFile(path, []byte(newContent), mode); err != nil {
 		return fmt.Sprintf("error writing file: %v", err), true
 	}
 
@@ -701,7 +1121,10 @@ func (a *Agent) handleMkdir(args map[string]any) (string, bool) {
 		return "error: path is required", true
 	}
 
-	path = a.resolvePath(path)
+	path, err := a.resolvePath(path)
+	if err != nil {
+		return fmt.Sprintf("error: %v", err), true
+	}
 
 	if err := os.MkdirAll(path, 0755); err != nil {
 		return fmt.Sprintf("error creating directory: %v", err), true
@@ -716,12 +1139,18 @@ func (a *Agent) handleRemove(args map[string]any) (string, bool) {
 		return "error: path is required", true
 	}
 
-	path = a.resolvePath(path)
+	path, err := a.resolveDestructivePath(path)
+	if err != nil {
+		return fmt.Sprintf("error: %v", err), true
+	}
+	if root, rootErr := a.resolvePath("."); rootErr == nil && path == root {
+		return "error: refusing to remove the workspace root", true
+	}
 
 	recursive := a.getArgBool(args, "recursive", false)
 	force := a.getArgBool(args, "force", false)
 
-	info, err := os.Stat(path)
+	info, err := os.Lstat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			if force {
@@ -756,8 +1185,15 @@ func (a *Agent) handleCopy(args map[string]any) (string, bool) {
 		return "error: source and destination are required", true
 	}
 
-	source = a.resolvePath(source)
-	destination = a.resolvePath(destination)
+	var err error
+	source, err = a.resolvePath(source)
+	if err != nil {
+		return fmt.Sprintf("error: source: %v", err), true
+	}
+	destination, err = a.resolvePath(destination)
+	if err != nil {
+		return fmt.Sprintf("error: destination: %v", err), true
+	}
 
 	info, err := os.Stat(source)
 	if err != nil {
@@ -768,7 +1204,7 @@ func (a *Agent) handleCopy(args map[string]any) (string, bool) {
 		return "error: copying directories not supported (use bash with cp -r)", true
 	}
 
-	srcData, err := os.ReadFile(source)
+	srcData, err := readBoundedFile(source, maxCopyBytes)
 	if err != nil {
 		return fmt.Sprintf("error reading source: %v", err), true
 	}
@@ -779,7 +1215,7 @@ func (a *Agent) handleCopy(args map[string]any) (string, bool) {
 		return fmt.Sprintf("error creating destination directory: %v", err), true
 	}
 
-	err = os.WriteFile(destination, srcData, info.Mode())
+	err = atomicWriteFile(destination, srcData, info.Mode().Perm())
 	if err != nil {
 		return fmt.Sprintf("error writing destination: %v", err), true
 	}
@@ -795,8 +1231,18 @@ func (a *Agent) handleMove(args map[string]any) (string, bool) {
 		return "error: source and destination are required", true
 	}
 
-	source = a.resolvePath(source)
-	destination = a.resolvePath(destination)
+	var err error
+	source, err = a.resolveDestructivePath(source)
+	if err != nil {
+		return fmt.Sprintf("error: source: %v", err), true
+	}
+	if root, rootErr := a.resolvePath("."); rootErr == nil && source == root {
+		return "error: refusing to move the workspace root", true
+	}
+	destination, err = a.resolveDestructivePath(destination)
+	if err != nil {
+		return fmt.Sprintf("error: destination: %v", err), true
+	}
 
 	// Create parent directory if needed
 	dir := filepath.Dir(destination)
@@ -804,7 +1250,7 @@ func (a *Agent) handleMove(args map[string]any) (string, bool) {
 		return fmt.Sprintf("error creating destination directory: %v", err), true
 	}
 
-	err := os.Rename(source, destination)
+	err = os.Rename(source, destination)
 	if err != nil {
 		return fmt.Sprintf("error moving: %v", err), true
 	}
@@ -818,7 +1264,10 @@ func (a *Agent) handleExists(args map[string]any) (string, bool) {
 		return "error: path is required", true
 	}
 
-	path = a.resolvePath(path)
+	path, err := a.resolvePath(path)
+	if err != nil {
+		return fmt.Sprintf("error: %v", err), true
+	}
 
 	info, err := os.Stat(path)
 	if os.IsNotExist(err) {
@@ -843,78 +1292,126 @@ func (a *Agent) getArgBool(args map[string]any, key string, defaultValue bool) b
 	return defaultValue
 }
 
-// applyPatch applies a unified-diff style patch to the content.
+var hunkHeaderPattern = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@`)
+
+// applyPatch applies validated unified-diff hunks while preserving every
+// untouched prefix and suffix. Context and removed lines must match exactly;
+// a stale model-generated patch therefore fails instead of corrupting a file.
 func applyPatch(content, patch string) (string, error) {
-	lines := strings.Split(content, "\n")
+	source := strings.Split(content, "\n")
 	patchLines := strings.Split(patch, "\n")
+	result := make([]string, 0, len(source))
+	sourcePos := 0
+	applied := false
 
-	var result []string
-	i := 0
-
-	for i < len(patchLines) {
-		line := patchLines[i]
-
-		// Look for hunk header: @@ -start,count +new_start,new_count @@
-		if strings.HasPrefix(line, "@@") {
-			// Parse hunk header
-			parts := strings.Fields(line)
-			if len(parts) < 4 {
-				return "", fmt.Errorf("invalid hunk header: %s", line)
-			}
-			// Parse old start,count from "-start,count"
-			oldSpec := strings.TrimPrefix(parts[1], "-")
-			oldParts := strings.Split(oldSpec, ",")
-			oldStart, _ := strconv.Atoi(oldParts[0])
-
-			// Parse new start,count from "+new_start,new_count"
-			newSpec := strings.TrimPrefix(parts[2], "+")
-			newParts := strings.Split(newSpec, ",")
-			newStart, _ := strconv.Atoi(newParts[0])
-
-			// Convert to 0-based indices
-			oldIdx := oldStart - 1
-			newIdx := newStart - 1
-
+	for i := 0; i < len(patchLines); {
+		match := hunkHeaderPattern.FindStringSubmatch(patchLines[i])
+		if match == nil {
 			i++
-
-			// Process hunk content
-			for i < len(patchLines) && !strings.HasPrefix(patchLines[i], "@@") {
-				patchLine := patchLines[i]
-
-				if strings.HasPrefix(patchLine, "-") {
-					// Remove line
-					if oldIdx < len(lines) {
-						_ = lines[oldIdx] // consume but don't add
-						oldIdx++
-					}
-				} else if strings.HasPrefix(patchLine, "+") {
-					// Add line
-					content := strings.TrimPrefix(patchLine, "+")
-					result = append(result, content)
-					newIdx++
-				} else if strings.HasPrefix(patchLine, " ") || patchLine == "" {
-					// Context line - keep from original
-					if oldIdx < len(lines) {
-						result = append(result, lines[oldIdx])
-						oldIdx++
-					}
-				} else {
-					// Unknown line type, treat as context
-					result = append(result, patchLine)
-				}
-				i++
-			}
 			continue
 		}
+		applied = true
+		oldStart, _ := strconv.Atoi(match[1])
+		oldCount := 1
+		if match[2] != "" {
+			oldCount, _ = strconv.Atoi(match[2])
+		}
+		newCount := 1
+		if match[4] != "" {
+			newCount, _ = strconv.Atoi(match[4])
+		}
 
-		// Regular line (not in a hunk) - skip
+		hunkStart := oldStart
+		if hunkStart > 0 {
+			hunkStart--
+		}
+		if hunkStart < sourcePos || hunkStart > len(source) {
+			return "", fmt.Errorf("invalid or overlapping hunk at old line %d", oldStart)
+		}
+		result = append(result, source[sourcePos:hunkStart]...)
+		sourcePos = hunkStart
 		i++
+
+		oldSeen, newSeen := 0, 0
+		for i < len(patchLines) && hunkHeaderPattern.FindStringSubmatch(patchLines[i]) == nil {
+			line := patchLines[i]
+			if strings.HasPrefix(line, "\\ No newline at end of file") {
+				i++
+				continue
+			}
+			if line == "" && i == len(patchLines)-1 {
+				break
+			}
+			if line == "" {
+				return "", fmt.Errorf("invalid empty patch line in hunk")
+			}
+
+			body := line[1:]
+			switch line[0] {
+			case ' ':
+				if sourcePos >= len(source) || source[sourcePos] != body {
+					return "", fmt.Errorf("patch context mismatch at old line %d", sourcePos+1)
+				}
+				result = append(result, body)
+				sourcePos++
+				oldSeen++
+				newSeen++
+			case '-':
+				if sourcePos >= len(source) || source[sourcePos] != body {
+					return "", fmt.Errorf("patch removal mismatch at old line %d", sourcePos+1)
+				}
+				sourcePos++
+				oldSeen++
+			case '+':
+				result = append(result, body)
+				newSeen++
+			default:
+				return "", fmt.Errorf("invalid patch line %q", line)
+			}
+			i++
+		}
+		if oldSeen != oldCount || newSeen != newCount {
+			return "", fmt.Errorf("hunk count mismatch: saw -%d/+%d, header declares -%d/+%d", oldSeen, newSeen, oldCount, newCount)
+		}
 	}
 
-	// If no patches applied, return original
-	if len(result) == 0 {
-		return content, nil
+	if !applied {
+		return "", fmt.Errorf("patch contains no hunks")
 	}
-
+	result = append(result, source[sourcePos:]...)
 	return strings.Join(result, "\n"), nil
+}
+
+func oldContentMode(path string) os.FileMode {
+	if info, err := os.Stat(path); err == nil {
+		return info.Mode().Perm()
+	}
+	return 0o644
+}
+
+func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".local-agent-write-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+
+	if err := tmp.Chmod(mode.Perm()); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }

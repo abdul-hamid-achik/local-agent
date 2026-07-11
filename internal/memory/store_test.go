@@ -1,10 +1,26 @@
 package memory
 
 import (
+	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/abdul-hamid-achik/local-agent/internal/safeio"
 )
+
+func mustSave(t *testing.T, s *Store, content string, tags []string) int {
+	t.Helper()
+	id, err := s.Save(content, tags)
+	if err != nil {
+		t.Fatalf("save %q: %v", content, err)
+	}
+	return id
+}
 
 func TestStore_Save_And_Count(t *testing.T) {
 	dir := t.TempDir()
@@ -43,9 +59,9 @@ func TestStore_Recall(t *testing.T) {
 	path := filepath.Join(dir, "memories.json")
 	s := NewStore(path)
 
-	s.Save("the user prefers Go language", []string{"preference", "golang"})
-	s.Save("project uses PostgreSQL database", []string{"tech", "database"})
-	s.Save("user name is Alice", []string{"name"})
+	mustSave(t, s, "the user prefers Go language", []string{"preference", "golang"})
+	mustSave(t, s, "project uses PostgreSQL database", []string{"tech", "database"})
+	mustSave(t, s, "user name is Alice", []string{"name"})
 
 	t.Run("content match", func(t *testing.T) {
 		results := s.Recall("Go", 10)
@@ -124,10 +140,10 @@ func TestStore_Recall_TieBreakByRecency(t *testing.T) {
 	s := NewStore(path)
 
 	// Save two memories with the same scoring potential.
-	s.Save("alpha topic info", []string{"info"})
+	mustSave(t, s, "alpha topic info", []string{"info"})
 	// Small delay so LastUsed differs.
 	time.Sleep(10 * time.Millisecond)
-	s.Save("beta topic info", []string{"info"})
+	mustSave(t, s, "beta topic info", []string{"info"})
 
 	results := s.Recall("info", 10)
 	if len(results) < 2 {
@@ -144,9 +160,9 @@ func TestStore_Recent(t *testing.T) {
 	path := filepath.Join(dir, "memories.json")
 	s := NewStore(path)
 
-	s.Save("old memory", nil)
+	mustSave(t, s, "old memory", nil)
 	time.Sleep(10 * time.Millisecond)
-	s.Save("new memory", nil)
+	mustSave(t, s, "new memory", nil)
 
 	t.Run("ordering by LastUsed", func(t *testing.T) {
 		recent := s.Recent(2)
@@ -176,6 +192,187 @@ func TestStore_Recent(t *testing.T) {
 			t.Errorf("empty Recent should return nil, got %v", recent)
 		}
 	})
+
+	t.Run("non-positive limit", func(t *testing.T) {
+		if recent := s.Recent(-1); recent != nil {
+			t.Fatalf("Recent(-1) = %#v, want nil", recent)
+		}
+	})
+}
+
+func TestStorePrivateAndCorruptionSafe(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "private", "memories.json")
+	store := NewStore(path)
+	if _, err := store.Save("secret project fact", nil); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("memory mode = %04o, want 0600", got)
+	}
+
+	corruptPath := filepath.Join(t.TempDir(), "corrupt.json")
+	if err := os.WriteFile(corruptPath, []byte("not-json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	corrupt := NewStore(corruptPath)
+	if corrupt.Err() == nil {
+		t.Fatal("corrupt memory store did not fail closed")
+	}
+	if got := corrupt.Recall("anything", 5); got != nil {
+		t.Fatalf("Recall on corrupt store = %#v, want nil", got)
+	}
+	mutations := []struct {
+		name string
+		run  func() error
+	}{
+		{name: "save", run: func() error { _, err := corrupt.Save("overwrite", nil); return err }},
+		{name: "delete", run: func() error { _, err := corrupt.Delete(1); return err }},
+		{name: "delete by tag", run: func() error { _, err := corrupt.DeleteByTag("tag"); return err }},
+		{name: "update", run: func() error { _, err := corrupt.Update(1, "overwrite", nil); return err }},
+		{name: "prune", run: func() error { _, err := corrupt.Prune(time.Hour); return err }},
+		{name: "persist", run: corrupt.persist},
+	}
+	for _, mutation := range mutations {
+		t.Run("corrupt "+mutation.name, func(t *testing.T) {
+			if err := mutation.run(); err == nil {
+				t.Fatalf("corrupt memory store accepted %s", mutation.name)
+			}
+		})
+	}
+	data, err := os.ReadFile(corruptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "not-json" {
+		t.Fatalf("corrupt memory store was overwritten: %q", data)
+	}
+}
+
+func TestStoreReadFailureFailsClosed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memories.json")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewStore(path)
+	if store.Err() == nil {
+		t.Fatal("directory-backed memory store did not report a read error")
+	}
+	if got := store.Recall("anything", 5); got != nil {
+		t.Fatalf("Recall on unreadable store = %#v, want nil", got)
+	}
+	mutations := []struct {
+		name string
+		run  func() error
+	}{
+		{name: "save", run: func() error { _, err := store.Save("overwrite", nil); return err }},
+		{name: "delete", run: func() error { _, err := store.Delete(1); return err }},
+		{name: "delete by tag", run: func() error { _, err := store.DeleteByTag("tag"); return err }},
+		{name: "update", run: func() error { _, err := store.Update(1, "overwrite", nil); return err }},
+		{name: "prune", run: func() error { _, err := store.Prune(time.Hour); return err }},
+		{name: "persist", run: store.persist},
+	}
+	for _, mutation := range mutations {
+		t.Run(mutation.name, func(t *testing.T) {
+			if err := mutation.run(); err == nil {
+				t.Fatalf("unreadable memory store accepted %s", mutation.name)
+			}
+		})
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.IsDir() {
+		t.Fatal("failed read path was replaced by a regular file")
+	}
+}
+
+func TestStoreLoadRejectsOversizedFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memories.json")
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(path, maxMemoryStoreBytes+1); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(path)
+	if !errors.Is(store.Err(), safeio.ErrTooLarge) {
+		t.Fatalf("oversized store error = %v", store.Err())
+	}
+	if _, err := store.Save("must not overwrite", nil); err == nil {
+		t.Fatal("oversized store accepted mutation")
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Size() != maxMemoryStoreBytes+1 {
+		t.Fatalf("oversized source changed: info=%v err=%v", info, err)
+	}
+}
+
+func TestStoreLoadRejectsSymlinkWithoutTouchingVictim(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memories.json")
+	victim := filepath.Join(t.TempDir(), "victim.json")
+	victimData := []byte(`[{"id":99,"content":"outside secret"}]`)
+	if err := os.WriteFile(victim, victimData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(victim, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, path); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	store := NewStore(path)
+	if !errors.Is(store.Err(), safeio.ErrSymlink) {
+		t.Fatalf("symlink store error = %v", store.Err())
+	}
+	if _, err := store.Save("must not overwrite", nil); err == nil {
+		t.Fatal("symlink store accepted mutation")
+	}
+	data, err := os.ReadFile(victim)
+	if err != nil || string(data) != string(victimData) {
+		t.Fatalf("victim content changed: data=%q err=%v", data, err)
+	}
+	info, err := os.Stat(victim)
+	if err != nil || info.Mode().Perm() != 0o644 {
+		t.Fatalf("victim mode changed: info=%v err=%v", info, err)
+	}
+	if info, err := os.Lstat(path); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("store symlink changed: info=%v err=%v", info, err)
+	}
+}
+
+func TestStoreLoadSecuresVerifiedDescriptor(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memories.json")
+	if err := os.WriteFile(path, []byte("[]"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(path)
+	if err := store.Err(); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("loaded store mode = %v, err=%v", info, err)
+	}
+}
+
+func TestDefaultPathForWorkspaceIsScoped(t *testing.T) {
+	first := DefaultPathForWorkspace(t.TempDir())
+	second := DefaultPathForWorkspace(t.TempDir())
+	if first == second {
+		t.Fatalf("different workspaces share memory path %q", first)
+	}
+	if filepath.Dir(first) != filepath.Dir(second) {
+		t.Fatalf("workspace stores should share a managed parent: %q, %q", first, second)
+	}
 }
 
 func TestStore_Persistence_RoundTrip(t *testing.T) {
@@ -183,8 +380,8 @@ func TestStore_Persistence_RoundTrip(t *testing.T) {
 	path := filepath.Join(dir, "memories.json")
 
 	s1 := NewStore(path)
-	s1.Save("persistent memory", []string{"test"})
-	s1.Save("another memory", []string{"test2"})
+	mustSave(t, s1, "persistent memory", []string{"test"})
+	mustSave(t, s1, "another memory", []string{"test2"})
 
 	// Create new store from same path.
 	s2 := NewStore(path)
@@ -215,12 +412,166 @@ func TestStore_Persistence_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestStoreConcurrentInstancesMergeWritesWithUniqueIDs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memories.json")
+	stores := []*Store{NewStore(path), NewStore(path)}
+	const writesPerStore = 20
+
+	start := make(chan struct{})
+	ids := make(chan int, len(stores)*writesPerStore)
+	errs := make(chan error, len(stores)*writesPerStore)
+	var wg sync.WaitGroup
+	for storeIndex, store := range stores {
+		storeIndex, store := storeIndex, store
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for writeIndex := 0; writeIndex < writesPerStore; writeIndex++ {
+				id, err := store.Save(fmt.Sprintf("store-%d-memory-%d", storeIndex, writeIndex), nil)
+				if err != nil {
+					errs <- err
+					return
+				}
+				ids <- id
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	close(ids)
+	for err := range errs {
+		t.Fatalf("concurrent Save: %v", err)
+	}
+
+	want := len(stores) * writesPerStore
+	gotIDs := make(map[int]bool, want)
+	for id := range ids {
+		if gotIDs[id] {
+			t.Fatalf("duplicate ID %d returned by concurrent stores", id)
+		}
+		gotIDs[id] = true
+	}
+	if len(gotIDs) != want {
+		t.Fatalf("unique IDs = %d, want %d", len(gotIDs), want)
+	}
+	reloaded := NewStore(path)
+	if err := reloaded.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if got := reloaded.Count(); got != want {
+		t.Fatalf("durable memories = %d, want %d", got, want)
+	}
+	for id := 1; id <= want; id++ {
+		if !gotIDs[id] {
+			t.Fatalf("ID sequence is missing %d", id)
+		}
+	}
+}
+
+func TestStoreRecallReloadsBeforePersistingAlongsideAnotherWriter(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memories.json")
+	recaller := NewStore(path)
+	writer := NewStore(path)
+	seed := NewStore(path)
+	if _, err := seed.Save("alpha shared fact", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	var recalled []Memory
+	var saveErr error
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		recalled = recaller.Recall("alpha", 5)
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		_, saveErr = writer.Save("concurrent second fact", nil)
+	}()
+	close(start)
+	wg.Wait()
+	if saveErr != nil {
+		t.Fatal(saveErr)
+	}
+	if len(recalled) != 1 || recalled[0].Content != "alpha shared fact" {
+		t.Fatalf("stale recaller did not reload seed: %#v", recalled)
+	}
+	if got := NewStore(path).Count(); got != 2 {
+		t.Fatalf("Recall stale-overwrote concurrent Save: durable count = %d, want 2", got)
+	}
+}
+
+func TestStoreReadAPIsSeeWritesFromAnotherLongLivedInstance(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memories.json")
+	writer := NewStore(path)
+	reader := NewStore(path)
+	id, err := writer.Save("visible across stores", []string{"shared"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reader.Count(); got != 1 {
+		t.Fatalf("stale Count = %d, want 1", got)
+	}
+	recent := reader.Recent(1)
+	if len(recent) != 1 || recent[0].ID != id {
+		t.Fatalf("stale Recent = %#v", recent)
+	}
+	got, found := reader.Get(id)
+	if !found || got.Content != "visible across stores" {
+		t.Fatalf("stale Get = %#v, found=%v", got, found)
+	}
+}
+
+func TestStoreDoesNotChangeExistingParentDirectoryMode(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "workspace-docs")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(filepath.Join(dir, "memories.json"))
+	if _, err := store.Save("private file in shared directory", nil); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o755 {
+		t.Fatalf("existing parent mode = %04o, want 0755", got)
+	}
+}
+
+func TestStoreRejectsMutationThatWouldExceedReloadLimit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memories.json")
+	store := NewStore(path)
+	if _, err := store.Save("durable", nil); err != nil {
+		t.Fatal(err)
+	}
+	oldLimit := memoryStoreWriteLimit
+	memoryStoreWriteLimit = 512
+	t.Cleanup(func() { memoryStoreWriteLimit = oldLimit })
+	if _, err := store.Save(strings.Repeat("x", 1024), nil); !errors.Is(err, safeio.ErrTooLarge) {
+		t.Fatalf("crossing mutation error = %v", err)
+	}
+	if got := NewStore(path).Count(); got != 1 {
+		t.Fatalf("oversized mutation changed durable count to %d", got)
+	}
+}
+
 func TestStore_Delete(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "memories.json")
 	s := NewStore(path)
 
-	id, _ := s.Save("to be deleted", []string{"temp"})
+	id := mustSave(t, s, "to be deleted", []string{"temp"})
 	if s.Count() != 1 {
 		t.Fatalf("expected 1 memory, got %d", s.Count())
 	}
@@ -251,7 +602,7 @@ func TestStore_Update(t *testing.T) {
 	path := filepath.Join(dir, "memories.json")
 	s := NewStore(path)
 
-	id, _ := s.Save("original content", []string{"original"})
+	id := mustSave(t, s, "original content", []string{"original"})
 
 	updated, err := s.Update(id, "updated content", []string{"updated"})
 	if err != nil {
@@ -288,11 +639,11 @@ func TestStore_DeleteByTag(t *testing.T) {
 	path := filepath.Join(dir, "memories.json")
 	s := NewStore(path)
 
-	s.Save("keep this 1", []string{"keep"})
-	s.Save("delete this", []string{"temp"})
-	s.Save("keep this 2", []string{"keep"})
-	s.Save("delete this too", []string{"temp"})
-	s.Save("also keep", []string{"permanent"})
+	mustSave(t, s, "keep this 1", []string{"keep"})
+	mustSave(t, s, "delete this", []string{"temp"})
+	mustSave(t, s, "keep this 2", []string{"keep"})
+	mustSave(t, s, "delete this too", []string{"temp"})
+	mustSave(t, s, "also keep", []string{"permanent"})
 
 	deleted, err := s.DeleteByTag("temp")
 	if err != nil {
@@ -317,7 +668,7 @@ func TestStore_Get(t *testing.T) {
 	path := filepath.Join(dir, "memories.json")
 	s := NewStore(path)
 
-	id, _ := s.Save("test memory", []string{"tag"})
+	id := mustSave(t, s, "test memory", []string{"tag"})
 
 	mem, found := s.Get(id)
 	if !found {
@@ -337,12 +688,45 @@ func TestStore_Get(t *testing.T) {
 	}
 }
 
+func TestStoreReadResultsDoNotAliasNestedTags(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memories.json")
+	store := NewStore(path)
+	id := mustSave(t, store, "immutable result", []string{"original"})
+
+	recent := store.Recent(1)
+	got, found := store.Get(id)
+	if len(recent) != 1 || !found {
+		t.Fatal("saved memory unavailable")
+	}
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			recent[0].Tags[0] = "mutated-recent"
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			got.Tags[0] = "mutated-get"
+		}
+	}()
+	for i := 0; i < 1000; i++ {
+		current, ok := store.Get(id)
+		if !ok || len(current.Tags) != 1 || current.Tags[0] != "original" {
+			t.Fatalf("returned tags mutated store state: %#v", current)
+		}
+	}
+	wg.Wait()
+}
+
 func TestStore_UpdatePartial(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "memories.json")
 	s := NewStore(path)
 
-	id, _ := s.Save("original content", []string{"original", "tags"})
+	id := mustSave(t, s, "original content", []string{"original", "tags"})
 
 	// Update only content, keep tags.
 	updated, err := s.Update(id, "new content", nil)

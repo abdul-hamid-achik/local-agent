@@ -1,397 +1,530 @@
 # local-agent
 
-A fully local AI coding agent for the terminal -- powered by Ollama and small models, with intelligent routing, cross-session memory, and MCP tool integration.
+A local-first coding agent for the terminal, built in Go with Charm and powered by local Ollama models.
 
-```
-  ╭──────────────────────────────────────────╮
-  │  local-agent                             │
-  │  100% local. Your data never leaves.     │
-  │                                          │
-  │  ASK  --  PLAN  --  BUILD                │
-  │  0.8B    4B        9B                    │
-  ╰──────────────────────────────────────────╯
+> **Status: alpha.** `local-agent` can inspect a repository, edit files, run commands, use MCP tools, and retain optional cross-session memory. Run it in a clean Git worktree, read every approval request, and review the resulting diff. The current safety layer is useful, but it is not an operating-system sandbox.
+
+```text
+  ASK  -> read and explain
+  PLAN -> inspect and design
+  BUILD -> edit, execute, and use MCP with approval
 ```
 
----
+## What works today
 
-## What is local-agent?
+- A responsive terminal UI built with Bubble Tea v2, Bubbles v2, Lip Gloss v2, and Glamour.
+- Streaming chat through Ollama with an availability-aware local model router.
+- Qwen 3.5, Phi-4 Mini, and manually selected Gemma/Qwen exclusive profiles.
+- Read, search, diff, validated patch, atomic write, file-management, and shell tools.
+- ASK, PLAN, and BUILD policies with approval prompts for risky operations.
+- STDIO, SSE, and Streamable HTTP MCP tool servers, including an MCPHub gateway.
+- Project instructions from `AGENTS.md` with legacy `AGENT.md` fallback.
+- Lossless SQLite session resume, native reasoning display, skills, agent profiles, optional ICE retrieval, checkpoints, logs, and terminal behavior tests.
 
-- **100% local** -- runs entirely on your machine via Ollama. No API keys, no cloud, no data leaving your device.
-- **Small model optimized** -- intelligent routing across Qwen 3.5 variants (0.8B / 2B / 4B / 9B) based on task complexity.
-- **Three operational modes** -- ASK for quick answers, PLAN for design and reasoning, BUILD for full execution with tools.
-- **MCP native** -- first-class Model Context Protocol support (STDIO, SSE, Streamable HTTP) for extensible tool integration.
-- **Beautiful TUI** -- built with Charm's BubbleTea v2, Lip Gloss v2, and Glamour for rich markdown rendering in the terminal.
-- **Infinite Context Engine (ICE)** -- cross-session vector retrieval that surfaces relevant past conversations automatically.
-- **Auto-Memory Detection** -- the LLM extracts facts, decisions, preferences, and TODOs from conversations and persists them.
-- **Thinking/CoT extraction** -- chain-of-thought reasoning is captured and displayed in collapsible blocks.
-- **Skills system** -- load `.md` skill files with YAML frontmatter to inject domain-specific instructions into the system prompt.
-- **Agent profiles** -- configure per-project agents with custom system prompts, skills, and MCP servers.
-
----
-
-## Quick Start
+## Quick start
 
 ### Prerequisites
 
 - [Go 1.25+](https://go.dev/dl/)
-- [Ollama](https://ollama.ai/) running locally
-- [Task](https://taskfile.dev/) (optional, for build commands)
+- [Ollama](https://ollama.com/) running on the same machine
+- [Task](https://taskfile.dev/) for repository development commands (optional)
+- MCPHub, Cortex, Obsidian, or other MCP servers only if you want those tools
 
-### Install
+Release binaries target macOS and Linux. Windows is not published yet because
+graceful cancellation must terminate complete subprocess trees, which requires
+a Job Object implementation rather than Go's direct-process fallback.
 
-Pull the required model, then install:
+Start Ollama in one terminal:
+
+```bash
+ollama serve
+```
+
+Pull the default model. The 4B tier is optional but recommended for BUILD work:
 
 ```bash
 ollama pull qwen3.5:2b
-
-go install github.com/abdul-hamid-achik/local-agent/cmd/local-agent@latest
+ollama pull qwen3.5:4b
 ```
 
-For the full model routing suite (optional):
+Install and launch:
 
 ```bash
-ollama pull qwen3.5:0.8b
-ollama pull qwen3.5:4b
-ollama pull qwen3.5:9b
-ollama pull nomic-embed-text   # for ICE vector embeddings
+go install github.com/abdul-hamid-achik/local-agent/cmd/local-agent@latest
+local-agent
 ```
 
-### Configure
+Or run this checkout directly:
 
-Create a config file (optional -- defaults work out of the box):
+```bash
+go run ./cmd/local-agent
+```
+
+No configuration file is required for the basic Ollama-only experience. To start from the annotated configuration:
 
 ```bash
 mkdir -p ~/.config/local-agent
 cp config.example.yaml ~/.config/local-agent/config.yaml
 ```
 
-### Run
+The example enables an `mcphub` command. Comment out that server entry if MCPHub is not installed.
+
+## Local model setup
+
+`local-agent` asks Ollama for its locally installed inventory at startup. Cloud entries are excluded. Automatic routing chooses only installed, configured, non-exclusive models; if a preferred tier is missing, it follows the configured fallback chain.
+
+Approximate artifact sizes vary by Ollama build and quantization:
+
+| Model | Approx. size | Intended role | Automatic routing |
+|---|---:|---|---|
+| `qwen3.5:0.8b` | 1.0 GB | Very short answers and lightweight classification; weak autonomous tool use | Eligible |
+| `qwen3.5:2b` | 2.7 GB | Default ASK model and modest tool chains | Eligible |
+| `phi4-mini:latest` | 2.5 GB | Alternative compact reasoning/tool profile | Fallback eligible |
+| `qwen3.5:4b` | 3.4 GB | Preferred coding, debugging, review, and multi-step tools | Eligible |
+| `qwen3.5:9b` | 6.6 GB | Deep manual profile | No; exclusive |
+| `gemma4:e2b` | 7.2 GB | Alternative manual reasoning/tool profile | No; exclusive |
+
+Pull whichever profiles you intend to use:
 
 ```bash
-local-agent
+ollama pull qwen3.5:0.8b
+ollama pull qwen3.5:2b
+ollama pull qwen3.5:4b
+ollama pull phi4-mini:latest
+
+# Manual exclusive profiles on a 16 GB machine:
+ollama pull qwen3.5:9b
+ollama pull gemma4:e2b
+
+# Required only when ICE is enabled:
+ollama pull nomic-embed-text
+
+ollama list
 ```
 
-Or from source:
+The shipped memory guard is tuned for a 16 GB Apple-silicon machine:
 
-```bash
-task dev
+- `num_ctx: 16384` is the recommended 2B/4B default.
+- Qwen 9B and Gemma E2B are explicit profiles. Switching models asks Ollama to unload the previous active chat model first.
+- Gemma E4B+, models tagged 10B or larger, and cloud tags are blocked by default.
+- `LOCAL_AGENT_ALLOW_LARGE_MODELS=1` bypasses the size guard. Use it only after measuring memory headroom; it does not add memory isolation.
+
+### Automatic and pinned models
+
+The interactive TUI starts with automatic routing. Choosing a model or agent profile inside the TUI pins that model; `/model auto` releases the pin. Startup `--model` and profile model selections remain pinned in the TUI too.
+
+```text
+/model                     open the picker
+/model list                list configured model names
+/model qwen3.5:4b          switch and pin this model
+/model auto                release the pin and resume automatic routing
 ```
 
----
+Selecting a model in the picker also pins it. The picker is filtered to Ollama's discovered local inventory. `/model list` still shows the configured catalog; use `ollama list` as the source of truth. `/model fast` and `/model smart` remain experimental shortcuts, so explicit model names are safer.
 
-## Features
+The `--qwen-router` CLI flag enables a more detailed Qwen-specific heuristic router and remains experimental.
 
-### Model Routing
+## Operating modes
 
-local-agent automatically selects the right model size for the task at hand. Simple questions go to the fast 2B model; complex multi-step reasoning escalates to the 9B model. The router analyzes query complexity using keyword heuristics and word count.
+Cycle modes with `shift+tab`.
 
-| Complexity | Model         | Speed  | Use Cases                                    |
-|------------|---------------|--------|----------------------------------------------|
-| Simple     | qwen3.5:2b    | 2.5x   | Quick answers, simple tool use, single edits |
-| Medium     | qwen3.5:4b    | 1.5x   | Code completion, refactoring, explanations   |
-| Complex    | qwen3.5:9b    | 1.0x   | Multi-step reasoning, debugging, code review |
+| Mode | Model behavior | Available tools |
+|---|---|---|
+| ASK | Prefers fast answers | Workspace reads, search, listing, diff, existence checks, and memory recall |
+| PLAN | Promotes toward the complex installed tier and opens a structured plan form | Same read-only workspace tools as ASK |
+| BUILD | Promotes toward the complex installed tier | Read tools, writes, validated edits, shell, memory mutation, and MCP |
 
-The fallback chain ensures graceful degradation if a model is not available: `2b -> 4b -> 9b`.
+The mode policy is enforced by the host, not just by a prompt. A model-generated write call in ASK or PLAN is returned as blocked.
 
-### Three Modes: ASK / PLAN / BUILD
+## Safety and privacy boundaries
 
-Cycle between modes with `shift+tab`. Each mode configures a different system prompt and preferred model tier.
+The default configuration sets:
 
-- **ASK** -- Direct, concise answers. Routes to the fastest available model. Tools available for file reads and searches.
-- **PLAN** -- Design and planning. Breaks tasks into steps. Reads and explores with tools but does not modify files.
-- **BUILD** -- Full execution mode. Uses the most capable model. All tools enabled including writes and modifications.
-
-### MCP Tool Integration
-
-Connect any MCP-compatible tool server. Supports all three transport protocols:
-
-- **STDIO** -- Launch tools as subprocesses (default).
-- **SSE** -- Connect to Server-Sent Events endpoints.
-- **Streamable HTTP** -- Connect to HTTP-based MCP servers.
-
-Tool calls execute in parallel when possible. The registry handles graceful failure if a server becomes unavailable.
-
-### Infinite Context Engine (ICE)
-
-ICE embeds each conversation turn using `nomic-embed-text` and stores them persistently. On every new message, it retrieves the most relevant past conversations via cosine similarity and injects them into the system prompt -- giving the agent memory that spans across sessions.
-
-### Auto-Memory Detection
-
-After each conversation turn, a background process analyzes the exchange and extracts structured memories:
-
-- **FACT** -- objective information the user shared
-- **DECISION** -- choices made during the conversation
-- **PREFERENCE** -- user preferences and working styles
-- **TODO** -- action items and follow-ups
-
-Memories are stored in `~/.config/local-agent/memories.json` with tag-weighted search scoring (tags weighted 3x over content).
-
-### Thinking/CoT Display
-
-When the model produces chain-of-thought reasoning, local-agent captures it and renders it in collapsible blocks. Toggle the display with `ctrl+t`.
-
-### Skills System
-
-Drop `.md` files with YAML frontmatter into the skills directory to inject domain-specific instructions:
-
-```
-~/.config/local-agent/skills/
+```yaml
+privacy:
+  local_only: true
 ```
 
-Manage active skills with `/skill list`, `/skill activate <name>`, and `/skill deactivate <name>`.
+With that setting, `local-agent`:
 
-### Agent Profiles
+- Rejects non-loopback Ollama URLs.
+- Rejects non-loopback SSE and Streamable HTTP MCP URLs.
+- Excludes Ollama cloud entries from local model discovery.
+- Canonicalizes built-in file paths, resolves symlinks, and rejects paths outside the startup workspace.
+- Applies `.agentignore` to built-in file operations.
+- Removes most parent-process environment variables before running the built-in shell tool.
+- Starts STDIO MCP servers with a minimal environment and deterministic local executable lookup.
 
-Create per-project or per-domain agent profiles:
+### Approval policy
 
+The following operations require approval by default:
+
+- `write`, `edit`, `bash`, `mkdir`, `remove`, `copy`, and `move`
+- `memory_save`, `memory_update`, and `memory_delete`
+- Every MCP tool call
+
+The TUI shows the tool name and arguments. Respond with:
+
+- `y` to allow once
+- `n` to deny
+- `a` to always allow that tool name; the policy is persisted in SQLite
+- `esc` to deny and cancel the active turn
+
+Read/search tools stay inside the workspace but do not prompt. “Always allow” is currently stored per tool name, not per path or argument pattern.
+
+### What local-only does not guarantee
+
+`privacy.local_only` validates configured network endpoints; it is not an egress firewall:
+
+- An approved `bash` command can use absolute paths, leave the workspace, start subprocesses, or access the network.
+- A trusted STDIO MCP server, including MCPHub or Cortex, is a separate process and may read files or contact services according to its own configuration.
+- MCP tools can have side effects outside the repository.
+
+Do not describe the current alpha as “data can never leave the machine” unless the agent and every approved subprocess are also running inside an OS/container network sandbox.
+
+`--yolo` bypasses all approval prompts. In non-interactive `-p` mode, risky and MCP calls fail closed because there is no approval UI; add `--yolo` only for a trusted prompt in a disposable or well-versioned workspace.
+
+## MCPHub, Cortex, and other MCP tools
+
+`local-agent` is a generic MCP client. The recommended intelligence-stack setup is to expose Cortex, Obsidian, and other specialist servers through one local MCPHub process:
+
+```yaml
+servers:
+  - name: mcphub
+    command: mcphub
+    args: [mcp, serve, --agent, local-agent]
 ```
-~/.agents/<name>/
-  AGENT.md       # System prompt additions
-  SKILL.md       # Agent-specific skills
-  mcp.yaml       # Agent-specific MCP servers
+
+Configure Cortex, Obsidian, and the rest of your catalog inside MCPHub using their own installation instructions. Then:
+
+1. Start `local-agent`.
+2. Check startup status or run `/servers`.
+3. Enter BUILD mode when the task needs MCP.
+4. Review and approve each MCP call.
+
+`local-agent` intentionally keeps Cortex orchestration behind MCPHub instead of embedding a second intelligence stack. Cortex analysis, investigation, and delegation appear as namespaced MCP tools. MCPHub owns lazy discovery, authentication, and downstream policy; local-agent owns the final user approval and transcript.
+
+Every exposed MCP tool is namespaced as `<server>__<tool>`, results retain structured JSON, and media/resource blocks become bounded receipts instead of silently disappearing or flooding a small model with base64.
+
+You can also configure direct servers:
+
+```yaml
+servers:
+  - name: local-tools
+    command: /absolute/path/to/mcp-server
+    args: [serve]
+
+  - name: local-http-tools
+    transport: streamable-http
+    url: http://127.0.0.1:8812/mcp
 ```
 
-Switch profiles with `/agent <name>` or `/agent list`.
-
----
+Supported transports are STDIO (default), SSE, and Streamable HTTP. Servers connect concurrently at startup; failed servers do not prevent the TUI from opening, and a background health monitor attempts reconnection.
 
 ## Configuration
 
-### File Locations
+Configuration is loaded from the first matching file:
 
-Config is searched in order (first match wins):
+1. `./local-agent.yaml`
+2. `./local-agent.yml`
+3. `~/.config/local-agent/config.yaml`
+4. `~/.config/local-agent/config.yml`
 
-1. `./local-agent.yaml` (project-local)
-2. `~/.config/local-agent/config.yaml` (user-global)
-
-### Annotated Example
+A compact configuration is:
 
 ```yaml
 ollama:
-  model: "qwen3.5:2b"               # Default model
-  base_url: "http://localhost:11434"  # Ollama API endpoint
-  num_ctx: 262144                     # Context window size
+  model: qwen3.5:2b
+  base_url: http://localhost:11434
+  num_ctx: 16384
 
-# Skills directory (default: ~/.config/local-agent/skills/)
-# skills_dir: "/path/to/custom/skills"
+privacy:
+  local_only: true
 
-# MCP tool servers
-servers:
-  # STDIO transport (default)
-  - name: noted
-    command: noted
-    args: [mcp]
+model:
+  default_model: qwen3.5:2b
+  fallback_chain:
+    - qwen3.5:2b
+    - phi4-mini:latest
+    - qwen3.5:0.8b
+    - qwen3.5:4b
+  auto_select: true
+  embed_model: nomic-embed-text
 
-  # SSE transport
-  # - name: remote-server
-  #   transport: sse
-  #   url: "http://localhost:8811"
+tools:
+  timeout: 30s
+  max_grep_results: 500
+  max_iterations: 10
 
-  # Streamable HTTP transport
-  # - name: streamable-server
-  #   transport: streamable-http
-  #   url: "http://localhost:8812/mcp"
+# Disabled by default. Pull nomic-embed-text before enabling.
+ice:
+  enabled: false
 
-# ICE configuration
-# ice:
-#   enabled: true
-#   embed_model: "nomic-embed-text"
-#   store_path: "~/.config/local-agent/conversations.json"
+servers: []
 ```
 
-### Environment Variables
+See [`config.example.yaml`](config.example.yaml) for the configured model catalog and MCP examples.
 
-| Variable                 | Description                  | Overrides            |
-|--------------------------|------------------------------|----------------------|
-| `OLLAMA_HOST`            | Ollama API base URL          | `ollama.base_url`    |
-| `LOCAL_AGENT_MODEL`      | Default model name           | `ollama.model`       |
-| `LOCAL_AGENT_AGENTS_DIR` | Path to agents directory     | `agents.dir`         |
+### Environment variables
 
+| Variable | Purpose |
+|---|---|
+| `OLLAMA_HOST` | Override `ollama.base_url` |
+| `LOCAL_AGENT_MODEL` | Override the initial Ollama model |
+| `LOCAL_AGENT_AGENTS_DIR` | Override the agents directory |
+| `LOCAL_AGENT_TOOLS_TIMEOUT` | Override the built-in tool timeout |
+| `LOCAL_AGENT_TOOLS_MAX_GREP` | Override maximum grep results |
+| `LOCAL_AGENT_TOOLS_MAX_ITER` | Override maximum ReAct iterations |
+| `LOCAL_AGENT_ICE_EMBED_MODEL` | Override the ICE embedding model |
+| `LOCAL_AGENT_LOCAL_ONLY` | Enable or disable loopback endpoint enforcement |
+| `LOCAL_AGENT_ALLOW_LARGE_MODELS` | Bypass the 16 GB-oriented model/context guard |
+
+## Project instructions, skills, and profiles
+
+At startup, `local-agent` loads `./AGENTS.md`; if absent, it falls back to legacy `./AGENT.md`. `local-agent init` creates `AGENTS.md`.
+
+Flat skill files live in:
+
+```text
+~/.config/local-agent/skills/*.md
+```
+
+Each skill may contain YAML frontmatter followed by instructions:
+
+```markdown
+---
+name: go-review
+description: Review Go changes for correctness and concurrency
 ---
 
-## Keyboard Shortcuts
+Check cancellation, races, error handling, and tests.
+```
 
-### Input
+Manage skills with `/skill list`, `/skill activate <name>`, and `/skill deactivate <name>`.
 
-| Key             | Action                        |
-|-----------------|-------------------------------|
-| `enter`         | Send message                  |
-| `shift+enter`   | Insert new line               |
-| `up` / `down`   | Browse input history          |
-| `shift+tab`     | Cycle mode (ASK/PLAN/BUILD)   |
-| `ctrl+m`        | Quick model switch            |
+The global agent directory uses this layout:
 
-### Navigation
+```text
+~/.agents/
+  agents.md                 # global instructions; instructions.md is also accepted
+  mcp.json                  # global MCP servers when config.yaml has none
+  agents/
+    reviewer/
+      agent.yaml
+  skills/
+    go-review/
+      SKILL.md
+```
 
-| Key              | Action                       |
-|------------------|------------------------------|
-| `pgup` / `pgdown`| Scroll conversation          |
-| `ctrl+u`         | Half-page scroll up          |
-| `ctrl+d`         | Half-page scroll down        |
+Example `~/.agents/agents/reviewer/agent.yaml`:
 
-### Display
+```yaml
+name: reviewer
+description: Read-only Go reviewer
+model: qwen3.5:4b
+skills: [go-review]
+system_prompt: |
+  Focus on correctness, security, concurrency, and missing tests.
+```
 
-| Key             | Action                        |
-|-----------------|-------------------------------|
-| `?`             | Toggle help overlay           |
-| `t`             | Expand/collapse tool calls    |
-| `space`         | Toggle last tool details      |
-| `ctrl+t`        | Toggle thinking/CoT display   |
-| `ctrl+y`        | Copy last response            |
+Switch with `/agent reviewer`. A profile model is pinned until `/model auto`. `mcp_servers` restricts the model-visible and executable MCP surface to named connected servers; an empty list keeps all configured servers.
 
-### Control
+## Optional memory and ICE
 
-| Key             | Action                        |
-|-----------------|-------------------------------|
-| `esc`           | Cancel streaming / close overlay |
-| `ctrl+c`        | Quit                          |
-| `ctrl+l`        | Clear screen                  |
-| `ctrl+n`        | New conversation              |
+The local memory store is available even when ICE is disabled. It is keyed by canonical workspace, uses owner-only files with interprocess locking and coherent reloads, and fails closed on corrupt data. BUILD exposes explicit memory save/update/delete tools, while ASK and PLAN expose recall.
 
----
+Pre-workspace global memories and ICE entries have no trustworthy project provenance. Startup—including `-p` headless mode—keeps them quarantined and reports their count; only the TUI's preview-plus-exact-confirmation migration commands can attribute them to the current workspace. See [legacy-data-migration.md](docs/legacy-data-migration.md).
 
-## Slash Commands
+ICE is opt-in:
 
-| Command                              | Description                       |
-|--------------------------------------|-----------------------------------|
-| `/help`                              | Show help overlay                 |
-| `/clear`                             | Clear conversation history        |
-| `/new`                               | Start a fresh conversation        |
-| `/model [name\|list\|fast\|smart]`   | Show or switch models             |
-| `/models`                            | Open model picker                 |
-| `/agent [name\|list]`                | Show or switch agent profile      |
-| `/load <path>`                       | Load markdown file as context     |
-| `/unload`                            | Remove loaded context             |
-| `/skill [list\|activate\|deactivate] [name]` | Manage skills            |
-| `/servers`                           | List connected MCP servers        |
-| `/ice`                               | Show ICE engine status            |
-| `/sessions`                          | Browse saved sessions             |
-| `/exit`                              | Quit                              |
+```yaml
+ice:
+  enabled: true
+  embed_model: nomic-embed-text
+  # Optional: resolved below managed per-workspace user storage.
+  # Absolute paths and parent traversal are rejected.
+  # store_path: conversations.json
+```
 
----
+When enabled, ICE:
+
+- Embeds conversation messages with Ollama.
+- Retrieves similar messages from prior sessions.
+- Injects retrieved conversations and matching memories into the prompt.
+- Runs background extraction for facts, decisions, preferences, and TODOs after completed turns.
+
+Current storage locations:
+
+```text
+~/.config/local-agent/conversations.json  # ICE entries; every entry carries a workspace ID
+~/.config/local-agent/memory/<hash>.json  # workspace-scoped structured memories
+~/.config/local-agent/local-agent.db      # sessions, permissions, checkpoints, usage
+~/.config/local-agent/logs/               # structured session logs
+```
+
+Leaving `ice.store_path` empty uses the managed global ICE file shown above.
+An explicit relative value is confined beneath
+`~/.config/local-agent/ice/<workspace-hash>`; it cannot select an arbitrary
+repository directory, enter the Git worktree, or target an outside path.
+
+ICE is still a flat JSON vector store rather than an ANN index, but its bounded writes and reads are interprocess-coherent and retrieval is restricted to the same canonical workspace. Background auto-memory is single-flight, cancelled when foreground inference starts, joined at shutdown, and writes only to that workspace's memory store. Automatic extraction itself does not present a second approval prompt.
+
+## CLI reference
+
+| Command | Description |
+|---|---|
+| `local-agent` | Open the TUI |
+| `local-agent -p "prompt"` | Run one BUILD-mode prompt and print text to stdout |
+| `local-agent --model <name>` | Select the initial model; in headless mode this prevents auto-routing |
+| `local-agent --agent <name>` | Select an initial agent profile |
+| `local-agent --qwen-router` | Use the experimental Qwen-specific router |
+| `local-agent --yolo -p "prompt"` | Headless execution with every tool auto-approved |
+| `local-agent init [--force]` | Create a project `AGENTS.md` |
+| `local-agent logs` | List recent log files |
+| `local-agent logs -f` | Follow the latest log with `tail -f` |
+| `local-agent --version` | Print the build version |
+
+`-p` is currently a human-readable convenience mode, not a stable JSON automation protocol.
+
+## Slash commands
+
+| Command | Description |
+|---|---|
+| `/help` | Open help |
+| `/clear`, `/new` | Clear conversation state |
+| `/model` or `/models` | Open the model picker |
+| `/model list` | List configured models |
+| `/model <name>` | Switch and pin a configured model |
+| `/model auto` | Resume automatic model routing |
+| `/model fast`, `/model smart` | Select the first or last configured entry; experimental shortcuts |
+| `/agent [name\|list]` | List or switch profiles |
+| `/load <path>`, `/unload` | Asynchronously add or remove one regular, non-symlink markdown context file (32 KB maximum); quoted paths are supported |
+| `/skill [list\|activate\|deactivate]` | Manage skills |
+| `/servers` | Show connected MCP servers and tool count |
+| `/ice` | Show ICE status |
+| `/sessions` | Open lossless SQLite-backed saved sessions |
+| `/changes` | List files modified in the current TUI session |
+| `/commit [context]` | Generate a message from staged changes and run `git commit` |
+| `/stats` | Show in-memory token counters |
+| `/export [--force] <path>`, `/import <path>` | Atomically export owner-private Markdown with a typed v2 transcript envelope, or asynchronously import that envelope into a fresh session; replacement requires `--force`, and tool state is intentionally omitted |
+| `/checkpoint [label]` | Save the current agent message history to SQLite |
+| `/checkpoints` | List checkpoints |
+| `/restore <id>` | Replace agent history with a checkpoint |
+| `/migrate-memory [confirm <preview-count>]` | Preview and explicitly assign quarantined global memories to this workspace |
+| `/migrate-ice [confirm <preview-count>]` | Preview and explicitly assign quarantined ICE history to this workspace |
+| `/migrate-checkpoints [confirm <preview-count>]` | Preview and explicitly claim unbound legacy checkpoints into the active session |
+| `/exit` | Quit |
+
+`/commit` deliberately disables Git hooks, commit signing, configured
+fsmonitor helpers, pagers, and automatic maintenance/GC for its owned Git
+subprocesses. It still uses your Git identity and other non-executing
+configuration. Run `git commit` yourself when repository hooks or signing are
+required.
+
+Session snapshots preserve model-facing messages, tool-call IDs, tool cards, mode, model, profile, and counters. Loading one replaces both the visible transcript and the hidden model conversation. Checkpoints are validated against the active session.
+
+## Keyboard shortcuts
+
+| Key | Action |
+|---|---|
+| `enter`, `shift+enter` | Send / insert a newline |
+| `shift+tab` | Cycle ASK, PLAN, BUILD |
+| `ctrl+m` | Open model picker |
+| `tab` | Complete commands, files, and skills |
+| `up`, `down` | Browse input history |
+| `pgup`, `pgdown`, `ctrl+u`, `ctrl+d` | Scroll conversation |
+| `t`, `space` | Toggle all tool details / last tool |
+| `ctrl+t` | Toggle `<think>` tag display |
+| `ctrl+y` | Copy last response |
+| `ctrl+e` | Edit input with `$EDITOR` |
+| `ctrl+b`, `ctrl+k` | Toggle side panel / compact mode |
+| `esc` | Cancel active generation or close overlay; deny an active approval |
+| `ctrl+n`, `ctrl+l` | New conversation / clear view |
+| `ctrl+c` | Quit |
 
 ## Architecture
 
-```
-cmd/local-agent/          Entry point
-internal/
-  agent/                  ReAct loop orchestration
-  llm/                    LLM abstraction (OllamaClient, ModelManager)
-  mcp/                    MCP server registry
-  config/                 YAML config, env overrides, Router
-  ice/                    Infinite Context Engine
-  memory/                 Persistent key-value store
-  skill/                  Skill file loader
-  command/                Slash command registry
-  tui/                    BubbleTea v2 terminal UI
-  logging/                Structured logging
-```
+```text
+Charm TUI or headless output
+          |
+          v
+Agent ReAct loop -----> prompt builder + mode policy
+    |     |                    |
+    |     |                    +-- AGENTS.md, skills, loaded context, memory
+    |     |
+    |     +-- Tool policy -> permission checker -> built-ins / MCP registry
+    |
+    +-- Availability-aware ModelManager -> loopback Ollama
+                                      |-> chat models
+                                      +-> embedding model
 
-### Request Flow
-
-```
-User Input
-    |
-    v
-agent.AddUserMessage()
-    |
-    v
-ICE embeds message, retrieves relevant past context
-    |
-    v
-System prompt assembled (tools + skills + context + ICE + memory)
-    |
-    v
-Router selects model based on task complexity
-    |
-    v
-LLM streams response via ChatStream()
-    |
-    v
-Tool calls routed through MCP registry (parallel execution)
-    |
-    v
-ReAct loop continues (up to 10 iterations) until final text
-    |
-    v
-Conversation compacted if token budget exceeded
-Auto-memory detection runs in background
+Local persistence: scoped JSON memory/ICE + SQLite sessions/permissions/checkpoints + logs
 ```
 
-### Key Interfaces
+Package layout:
 
-- `llm.Client` -- pluggable LLM provider (`ChatStream`, `Ping`, `Embed`)
-- `agent.Output` -- streaming callbacks for TUI rendering
-- `command.Registry` -- extensible slash command dispatch
+```text
+cmd/local-agent/    CLI entry point and startup wiring
+internal/agent/     ReAct loop, prompts, policies, tools, hooks, checkpoints
+internal/llm/       Ollama client and model manager
+internal/mcp/       MCP connections, registry, health checks, reconnects
+internal/config/    YAML loading, model catalog, routing, agents, ignore rules
+internal/ice/       Embeddings, retrieval, context budget, auto-memory
+internal/memory/    Persistent structured memory
+internal/db/        SQLite schema and queries
+internal/skill/     Skill discovery and activation
+internal/command/   Slash and custom commands
+internal/tui/       Charm terminal interface
+internal/logging/   Per-run structured logs
+```
 
-### Concurrency
+Built-in, memory, and MCP calls execute deterministically in model order. The runtime does not parallelize unknown MCP effects; a future broker can opt proven read-only calls into bounded concurrency.
 
-`sync.RWMutex` protects shared state in `ModelManager`, `mcp.Registry`, and `memory.Store`. Auto-memory detection and MCP connections run as background goroutines. Tool calls execute in parallel when independent.
+## Alpha limitations and roadmap
 
----
+Known boundaries are documented here so the TUI does not promise more than the runtime provides:
 
-## Comparison
+- Ollama is the only implemented inference adapter. llama.cpp, MLX, and generic local OpenAI-compatible endpoints are not implemented.
+- Model routing is heuristic and the memory guard is tuned for 16 GB Apple silicon rather than detected free memory.
+- Small models can emit malformed or repetitive tool calls. Keep important work versioned and inspect every diff.
+- `privacy.local_only` validates endpoints but does not sandbox approved shell or STDIO MCP processes.
+- MCP support remains tool-focused; prompts, roots, subscriptions, sampling, and direct multimodal rendering are not yet exposed.
+- ICE is workspace-scoped but remains a flat JSON scan rather than a scalable lexical/vector index such as the Cortex/VecLite stack.
+- SQLite snapshots make completed-turn resume dependable, but the runtime is not yet a step-by-step durable event log that can continue in-flight tool execution after a crash.
+- Native Ollama reasoning and literal `<think>` tags are displayed separately, but thinking level is not yet configurable per model/profile.
+- Headless mode has no structured event stream or granular approval protocol. Without `--yolo`, risky calls fail closed.
+- There is no OS-level process, filesystem, or network sandbox yet.
 
-| Feature                          | local-agent | opencode | crush |
-|----------------------------------|:-----------:|:--------:|:-----:|
-| 100% local (no API keys)         | Yes         | No       | Yes   |
-| Model routing by task complexity | Yes         | No       | No    |
-| Operational modes (ASK/PLAN/BUILD)| Yes        | No       | No    |
-| Cross-session memory (ICE)       | Yes         | No       | No    |
-| Auto-memory detection            | Yes         | No       | No    |
-| Thinking/CoT extraction          | Yes         | Yes      | No    |
-| MCP tool support                 | Yes         | Yes      | Yes   |
-| Skills system                    | Yes         | No       | No    |
-| Plan form overlay                | Yes         | No       | No    |
-| Small model optimized            | Yes         | No       | No    |
-| TUI chat interface               | Yes         | Yes      | Yes   |
-| Language                         | Go          | TypeScript| Go   |
+The intended direction is a durable turn state machine and typed event stream, MCP effect metadata with bounded read-only concurrency, a measured RAM/resource scheduler, additional local runtime adapters, and an even stronger diff-first approval UI—while retaining the Go/Charm application.
 
----
-
-## Building
-
-This project uses [Task](https://taskfile.dev/) as its build tool.
+## Development
 
 ```bash
-task build       # Compile to bin/local-agent
-task run         # Build and run
-task dev         # Quick run via go run ./cmd/local-agent
-task test        # Run all tests: go test ./...
-task glyphrun    # Run terminal behavior specs
-task lint        # Run golangci-lint run ./...
-task clean       # Remove bin/ directory
+task build              # bin/local-agent
+task run                # build and launch
+task dev                # go run ./cmd/local-agent
+task test               # go test ./...
+task lint               # golangci-lint run ./...
+task glyphrun           # terminal behavior specs
+task glyphrun-snapshots # refresh intentional TUI snapshots
+task clean
 ```
 
-Run a single test:
+Run focused and race tests with:
 
 ```bash
-go test ./internal/agent/ -run TestFunctionName
+go test ./internal/agent -run TestName
+go test -race ./...
 ```
 
-### Terminal Behavior Specs
+Glyphrun specs under `specs/glyphrun/` cover CLI help/version/init/log behavior plus TUI launch, narrow-terminal recovery, responsive help, and clean quit flows.
 
-This repo includes [Glyphrun](https://github.com/abdul-hamid-achik/glyphrun) specs under `specs/glyphrun/` for terminal-level behavior:
-
-- CLI help and version output
-- `init --force` project bootstrapping
-- `logs` empty-state behavior
-- TUI launch, help overlay, scrolling, snapshots, and clean quit
-
-Run them with:
+With `qwen3.5:4b` installed in Ollama, run the opt-in live small-model/tool proof separately:
 
 ```bash
-task glyphrun
+glyph run specs/glyphrun/live_ollama_tool.yml --format md
 ```
-
-Refresh committed TUI snapshots after intentional UI changes:
-
-```bash
-task glyphrun-snapshots
-```
-
----
 
 ## License
 
-MIT
+MIT. See [`LICENSE`](LICENSE).

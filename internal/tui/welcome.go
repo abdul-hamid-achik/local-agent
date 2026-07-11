@@ -244,15 +244,16 @@ func (m WelcomeModel) renderLogoLine(line string) string {
 
 	result := ""
 	for i, r := range line {
-		if r == '╭' || r == '─' || r == '╮' || r == '│' || r == '╰' || r == '╯' {
+		switch r {
+		case '╭', '─', '╮', '│', '╰', '╯':
 			colorIdx := i % len(colors)
 			style := lipgloss.NewStyle().Foreground(lipgloss.Color(colors[colorIdx]))
 			result += style.Render(string(r))
-		} else if r == '╔' || r == '╗' || r == '║' || r == '═' || r == '╚' || r == '╝' {
+		case '╔', '╗', '║', '═', '╚', '╝':
 			colorIdx := (i + 1) % len(colors)
 			style := lipgloss.NewStyle().Foreground(lipgloss.Color(colors[colorIdx]))
 			result += style.Render(string(r))
-		} else {
+		default:
 			result += string(r)
 		}
 	}
@@ -356,28 +357,6 @@ func (m PulseModel) Update(msg tea.Msg) (PulseModel, tea.Cmd) {
 
 func (m PulseModel) Alpha() float64 {
 	return m.alpha
-}
-
-// gradientText applies a horizontal gradient to text
-func gradientText(text string, colors []string) string {
-	if noColor || len(colors) == 0 {
-		return text
-	}
-
-	result := ""
-	runes := []rune(text)
-	colorCount := len(colors)
-
-	for i, r := range runes {
-		colorIdx := int(float64(i) / float64(len(runes)) * float64(colorCount))
-		if colorIdx >= colorCount {
-			colorIdx = colorCount - 1
-		}
-		style := lipgloss.NewStyle().Foreground(lipgloss.Color(colors[colorIdx]))
-		result += style.Render(string(r))
-	}
-
-	return result
 }
 
 // slideInEffect creates a slide-in animation from left

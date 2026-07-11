@@ -1,8 +1,10 @@
 package permission
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
 )
@@ -26,11 +28,11 @@ func TestChecker_Yolo(t *testing.T) {
 
 func TestChecker_SetPolicy(t *testing.T) {
 	c := NewChecker(nil, false)
-	c.SetPolicy("bash", PolicyAllow)
+	mustSetPolicy(t, c, "bash", PolicyAllow)
 	if got := c.Check("bash"); got != PolicyAllow {
 		t.Errorf("Check() = %q, want %q", got, PolicyAllow)
 	}
-	c.SetPolicy("bash", PolicyDeny)
+	mustSetPolicy(t, c, "bash", PolicyDeny)
 	if got := c.Check("bash"); got != PolicyDeny {
 		t.Errorf("Check() = %q, want %q", got, PolicyDeny)
 	}
@@ -41,10 +43,10 @@ func TestChecker_WithDB(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	t.Cleanup(func() { _ = store.Close() })
 
 	c := NewChecker(store, false)
-	c.SetPolicy("file_write", PolicyAllow)
+	mustSetPolicy(t, c, "file_write", PolicyAllow)
 
 	// Create a new checker from the same DB to test persistence.
 	c2 := NewChecker(store, false)
@@ -55,9 +57,11 @@ func TestChecker_WithDB(t *testing.T) {
 
 func TestChecker_Reset(t *testing.T) {
 	c := NewChecker(nil, false)
-	c.SetPolicy("tool1", PolicyAllow)
-	c.SetPolicy("tool2", PolicyDeny)
-	c.Reset()
+	mustSetPolicy(t, c, "tool1", PolicyAllow)
+	mustSetPolicy(t, c, "tool2", PolicyDeny)
+	if err := c.Reset(); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
 
 	if got := c.Check("tool1"); got != PolicyAsk {
 		t.Errorf("after reset Check() = %q, want %q", got, PolicyAsk)
@@ -66,8 +70,8 @@ func TestChecker_Reset(t *testing.T) {
 
 func TestChecker_AllPolicies(t *testing.T) {
 	c := NewChecker(nil, false)
-	c.SetPolicy("a", PolicyAllow)
-	c.SetPolicy("b", PolicyDeny)
+	mustSetPolicy(t, c, "a", PolicyAllow)
+	mustSetPolicy(t, c, "b", PolicyDeny)
 
 	policies := c.AllPolicies()
 	if len(policies) != 2 {
@@ -80,8 +84,8 @@ func TestChecker_AllPolicies(t *testing.T) {
 
 func TestToCheckResult(t *testing.T) {
 	c := NewChecker(nil, false)
-	c.SetPolicy("allowed", PolicyAllow)
-	c.SetPolicy("denied", PolicyDeny)
+	mustSetPolicy(t, c, "allowed", PolicyAllow)
+	mustSetPolicy(t, c, "denied", PolicyDeny)
 
 	if c.ToCheckResult("allowed") != CheckAllow {
 		t.Error("expected CheckAllow for allowed tool")
@@ -98,5 +102,39 @@ func TestToCheckResult_Nil(t *testing.T) {
 	var c *Checker
 	if c.ToCheckResult("anything") != CheckAllow {
 		t.Error("nil checker should return CheckAllow")
+	}
+}
+
+func mustSetPolicy(t *testing.T, c *Checker, toolName string, policy Policy) {
+	t.Helper()
+	if err := c.SetPolicy(toolName, policy); err != nil {
+		t.Fatalf("set policy for %s: %v", toolName, err)
+	}
+}
+
+func TestRequestApprovalFailsClosedWithoutCallback(t *testing.T) {
+	allowed, always := RequestApproval("bash", map[string]any{"command": "true"}, nil)
+	if allowed || always {
+		t.Fatalf("missing callback returned allowed=%v always=%v, want false/false", allowed, always)
+	}
+}
+
+func TestRequestApprovalContextCancels(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	block := make(chan struct{})
+	allowed, always := RequestApprovalContext(ctx, "bash", nil, func(ApprovalRequest) { <-block })
+	if allowed || always {
+		t.Fatalf("cancelled approval returned allowed=%v always=%v", allowed, always)
+	}
+	close(block)
+}
+
+func TestAlwaysAllowResponds(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	allowed, _ := RequestApprovalContext(ctx, "read", nil, AlwaysAllow)
+	if !allowed {
+		t.Fatal("AlwaysAllow did not approve")
 	}
 }

@@ -2,7 +2,7 @@ version: 1
 name: local_agent_init
 
 intent: |
-  a user can run local-agent init in an empty project directory and create AGENT.md.
+  a user can run local-agent init in an empty project directory and create AGENTS.md.
 
 target:
   cmd: ["${projectRoot}/bin/local-agent", "init", "--force"]
@@ -19,7 +19,7 @@ preconditions:
 steps:
   - wait:
       screen:
-        contains: "AGENT.md created successfully."
+        contains: "AGENTS.md created successfully."
       timeoutMs: 3000
   - wait:
       process:
@@ -28,15 +28,15 @@ steps:
 
 outcomes:
   - id: success_message_visible
-    description: init reports that AGENT.md was created
+    description: init reports that AGENTS.md was created
     verify:
       screen:
-        contains: "AGENT.md created successfully."
+        contains: "AGENTS.md created successfully."
   - id: agent_file_created
-    description: init creates AGENT.md in the target project directory
+    description: init creates AGENTS.md in the target project directory
     verify:
       command:
-        run: "test -s .glyphrun/tmp/init-workdir/AGENT.md"
+        run: "test -s .glyphrun/tmp/init-workdir/AGENTS.md"
   - id: exits_zero
     description: init exits successfully
     verify:

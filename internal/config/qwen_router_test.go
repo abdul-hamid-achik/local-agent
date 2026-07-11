@@ -2,12 +2,13 @@ package config
 
 import (
 	"testing"
+	"time"
 )
 
 func TestQwenRouter_ClassifyTrivial(t *testing.T) {
 	tests := []struct {
-		name     string
-		query    string
+		name          string
+		query         string
 		maxComplexity QwenComplexity
 	}{
 		{"simple what", "what is go", QwenTrivial},
@@ -30,8 +31,8 @@ func TestQwenRouter_ClassifyTrivial(t *testing.T) {
 
 func TestQwenRouter_ClassifySimple(t *testing.T) {
 	tests := []struct {
-		name     string
-		query    string
+		name  string
+		query string
 	}{
 		{"simple how", "how do i create a file"},
 		{"simple explain", "explain this code"},
@@ -50,8 +51,8 @@ func TestQwenRouter_ClassifySimple(t *testing.T) {
 
 func TestQwenRouter_ClassifyModerate(t *testing.T) {
 	tests := []struct {
-		name     string
-		query    string
+		name  string
+		query string
 	}{
 		{"create function", "create a function to parse json"},
 		{"debug issue", "debug this nil pointer error"},
@@ -70,8 +71,8 @@ func TestQwenRouter_ClassifyModerate(t *testing.T) {
 
 func TestQwenRouter_ClassifyAdvanced(t *testing.T) {
 	tests := []struct {
-		name     string
-		query    string
+		name  string
+		query string
 	}{
 		{"architecture", "design microservice architecture"},
 		{"system design", "system design for high traffic"},
@@ -113,8 +114,8 @@ func TestQwenRouter_WordCountAffectsClassification(t *testing.T) {
 
 func TestQwenRouter_CodePatterns(t *testing.T) {
 	tests := []struct {
-		name     string
-		query    string
+		name          string
+		query         string
 		maxComplexity QwenComplexity
 	}{
 		{"simple variable", "declare a variable", QwenModerate},
@@ -174,6 +175,64 @@ func TestQwenRouter_SelectBuildModel(t *testing.T) {
 	model := router.SelectModelForMode("implement the feature", ModeBuildContext)
 	if model != "qwen3.5:4b" && model != "qwen3.5:9b" {
 		t.Errorf("BUILD mode should prefer 4B or 9B, got %s", model)
+	}
+}
+
+func TestQwenRouterMapsComplexityAndAvailability(t *testing.T) {
+	cfg := DefaultModelConfig()
+	router := NewQwenModelRouter(&cfg)
+	router.SetAvailableModels([]string{"qwen3.5:2b"})
+
+	for _, query := range []string{"what is go", "design a distributed system"} {
+		if got := router.SelectModelForMode(query, ModeBuildContext); got != "qwen3.5:2b" {
+			t.Errorf("SelectModelForMode(%q) = %q, want installed 2B fallback", query, got)
+		}
+	}
+}
+
+func TestQwenRouterReturnsNoModelForKnownEmptyInventory(t *testing.T) {
+	cfg := DefaultModelConfig()
+	router := NewQwenModelRouter(&cfg)
+	router.SetAvailableModels([]string{})
+
+	if got := router.ResolveAvailableModel(cfg.DefaultModel); got != "" {
+		t.Fatalf("empty inventory resolved to %q, want no model", got)
+	}
+	if got := router.SelectModelForMode("implement this", ModeBuildContext); got != "" {
+		t.Fatalf("empty inventory selected %q, want no model", got)
+	}
+}
+
+func TestQwenRouterCanonicalizesAvailableModelTags(t *testing.T) {
+	cfg := &ModelConfig{
+		Models:        []Model{{Name: "llama3", Capability: CapabilityMedium}},
+		DefaultModel:  "llama3",
+		FallbackChain: []string{"llama3"},
+	}
+	router := NewQwenModelRouter(cfg)
+	router.SetAvailableModels([]string{"llama3:latest"})
+	if got := router.ResolveAvailableModel("llama3"); got != "llama3" {
+		t.Fatalf("canonical available model resolved to %q", got)
+	}
+	if got := router.GetModelForCapability(CapabilityMedium); got != "llama3" {
+		t.Fatalf("canonical capability model resolved to %q", got)
+	}
+}
+
+func TestQwenRouterRecordOverrideDoesNotDeadlockWithAvailability(t *testing.T) {
+	cfg := DefaultModelConfig()
+	router := NewQwenModelRouter(&cfg)
+	router.SetAvailableModels([]string{"qwen3.5:2b"})
+	done := make(chan struct{})
+	go func() {
+		router.RecordOverride("explain this", "qwen3.5:2b")
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("RecordOverride deadlocked")
 	}
 }
 

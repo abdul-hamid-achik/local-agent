@@ -2,7 +2,6 @@ package tui
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,11 +25,10 @@ type Completer struct {
 	skills         []string
 	agents         []string
 	workDir        string
-	registry       *mcp.Registry
 	ignorePatterns *config.IgnorePatterns
 }
 
-func NewCompleter(cmdReg *command.Registry, models, skills, agents []string, registry *mcp.Registry) *Completer {
+func NewCompleter(cmdReg *command.Registry, models, skills, agents []string, _ *mcp.Registry) *Completer {
 	workDir, _ := os.Getwd()
 	return &Completer{
 		commands: cmdReg.All(),
@@ -38,7 +36,6 @@ func NewCompleter(cmdReg *command.Registry, models, skills, agents []string, reg
 		skills:   skills,
 		agents:   agents,
 		workDir:  workDir,
-		registry: registry,
 	}
 }
 
@@ -273,52 +270,107 @@ func FilterCompletions(items []Completion, query string) []Completion {
 	return filtered
 }
 
-// SearchFiles performs an async vecgrep search via the MCP registry.
+// SearchFiles performs a bounded, cancellation-aware filename search inside
+// the workspace. Completion must never invoke MCP behind the permission and
+// profile-scope broker; semantic search remains an explicit Cortex/MCP action.
 func (c *Completer) SearchFiles(ctx context.Context, query string) []Completion {
-	if c.registry == nil || query == "" {
+	query = strings.ToLower(strings.TrimSpace(query))
+	if query == "" {
 		return nil
 	}
-
-	result, err := c.registry.CallTool(ctx, "vecgrep_search", map[string]any{
-		"query": query,
-		"limit": 10,
-	})
-	if err != nil {
-		return nil
-	}
-
-	var results []Completion
-	// Parse the result content as JSON array of file paths or objects
-	var searchResults []struct {
-		Path  string  `json:"path"`
-		Score float64 `json:"score"`
-	}
-	if err := json.Unmarshal([]byte(result.Content), &searchResults); err != nil {
-		// Try as simple string lines
-		for _, line := range strings.Split(result.Content, "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" {
-				continue
-			}
-			results = append(results, Completion{
-				Label:       "@" + line,
-				Insert:      "@" + line + " ",
-				Category:    "search_result",
-				Description: "vecgrep match",
-			})
+	const maxResults = 10
+	results := make([]Completion, 0, maxResults)
+	_ = filepath.WalkDir(c.workDir, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
 		}
-		return results
-	}
-
-	for _, sr := range searchResults {
-		results = append(results, Completion{
-			Label:       "@" + sr.Path,
-			Insert:      "@" + sr.Path + " ",
-			Category:    "search_result",
-			Description: "vecgrep match",
-		})
-	}
+		select {
+		case <-ctx.Done():
+			return filepath.SkipAll
+		default:
+		}
+		if path == c.workDir {
+			return nil
+		}
+		relative, err := filepath.Rel(c.workDir, path)
+		if err != nil {
+			return nil
+		}
+		relative = filepath.ToSlash(relative)
+		if entry.Type()&os.ModeSymlink != 0 {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if c.ignorePatterns.Match(relative) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.IsDir() {
+			name := entry.Name()
+			if strings.HasPrefix(name, ".") || isCompletionHeavyDir(name) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.Contains(strings.ToLower(relative), query) {
+			return nil
+		}
+		if completion, ok := c.searchResultCompletion(relative); ok {
+			completion.Description = "workspace filename match"
+			results = append(results, completion)
+			if len(results) >= maxResults {
+				return filepath.SkipAll
+			}
+		}
+		return nil
+	})
 	return results
+}
+
+func isCompletionHeavyDir(name string) bool {
+	switch name {
+	case "node_modules", "vendor", "dist", "build", "target", "__pycache__", ".venv":
+		return true
+	default:
+		return false
+	}
+}
+
+func (c *Completer) searchResultCompletion(path string) (Completion, bool) {
+	path = strings.TrimSpace(strings.Trim(path, "`\"'"))
+	if path == "" {
+		return Completion{}, false
+	}
+	absolute := path
+	if !filepath.IsAbs(absolute) {
+		absolute = filepath.Join(c.workDir, path)
+	}
+	absolute, err := filepath.Abs(absolute)
+	if err != nil {
+		return Completion{}, false
+	}
+	relative, err := filepath.Rel(c.workDir, absolute)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return Completion{}, false
+	}
+	info, err := os.Stat(absolute)
+	if err != nil || info.IsDir() {
+		return Completion{}, false
+	}
+	relative = filepath.ToSlash(relative)
+	if c.ignorePatterns.Match(relative) {
+		return Completion{}, false
+	}
+	return Completion{
+		Label:       "@" + relative,
+		Insert:      "@" + relative + " ",
+		Category:    "search_result",
+		Description: "workspace match",
+	}, true
 }
 
 func (c *Completer) UpdateModels(models []string) {

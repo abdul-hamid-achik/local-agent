@@ -68,10 +68,10 @@ func (pf *PlanFormState) AssemblePrompt() string {
 
 	var b strings.Builder
 	b.WriteString("Plan the following task:\n")
-	b.WriteString(fmt.Sprintf("Task: %s\n", task))
-	b.WriteString(fmt.Sprintf("Scope: %s\n", scope))
+	fmt.Fprintf(&b, "Task: %s\n", task)
+	fmt.Fprintf(&b, "Scope: %s\n", scope)
 	if focus != "" {
-		b.WriteString(fmt.Sprintf("Focus: %s\n", focus))
+		fmt.Fprintf(&b, "Focus: %s\n", focus)
 	}
 	b.WriteString("\nProvide a step-by-step plan.")
 	return b.String()
