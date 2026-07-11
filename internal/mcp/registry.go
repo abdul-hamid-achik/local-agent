@@ -48,6 +48,7 @@ type Registry struct {
 	failedServers []FailedServer
 	serverConfigs map[string]config.ServerConfig // name -> config for reconnection
 	callTimeout   time.Duration                  // per tool-call timeout (0 = default)
+	version       string                         // advertised MCP client implementation version
 	closed        bool
 	lifecycleCtx  context.Context
 	cancel        context.CancelFunc
@@ -64,6 +65,12 @@ type Registry struct {
 
 // NewRegistry creates an empty Registry.
 func NewRegistry() *Registry {
+	return NewRegistryWithVersion(developmentImplementationVersion)
+}
+
+// NewRegistryWithVersion creates a registry whose MCP client handshakes
+// advertise the same build version as the local-agent CLI.
+func NewRegistryWithVersion(version string) *Registry {
 	lifecycleCtx, cancel := context.WithCancel(context.Background())
 	return &Registry{
 		toolMap:       make(map[string]toolRoute),
@@ -71,6 +78,7 @@ func NewRegistry() *Registry {
 		serverTools:   make(map[string][]llm.ToolDef),
 		serverConfigs: make(map[string]config.ServerConfig),
 		callTimeout:   defaultCallTimeout,
+		version:       clientImplementation(version).Version,
 		lifecycleCtx:  lifecycleCtx,
 		cancel:        cancel,
 	}
@@ -129,7 +137,7 @@ func (r *Registry) closeMCPClient(client *MCPClient) error {
 // given ctx. STDIO Connect also links ctx to an owned process-group cancel, so
 // Registry.Close's lifecycleWG wait cannot be stranded by a hanging child.
 func (r *Registry) discoverServer(ctx context.Context, srv config.ServerConfig) (*MCPClient, []llm.ToolDef, error) {
-	client, err := Connect(ctx, srv.Name, srv.Command, srv.Args, srv.Env, srv.Transport, srv.URL)
+	client, err := connectWithVersion(ctx, r.version, srv.Name, srv.Command, srv.Args, srv.Env, srv.Transport, srv.URL)
 	if err != nil {
 		return nil, nil, err
 	}

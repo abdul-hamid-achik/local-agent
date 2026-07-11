@@ -384,6 +384,10 @@ ICE is still a flat JSON vector store rather than an ANN index, but its bounded 
 | `local-agent logs -f` | Follow the latest log with `tail -f` |
 | `local-agent --version` | Print the build version |
 
+Source builds print `dev`. Tagged release artifacts print the tag version
+(for example, `0.3.0`), and MCP client handshakes advertise that same build
+version.
+
 `-p` is currently a human-readable convenience mode, not a stable JSON automation protocol.
 
 ## Slash commands

@@ -25,6 +25,9 @@ func (c *deadlineToolCaller) CallTool(ctx context.Context, _ string, _ map[strin
 
 func TestNewRegistry(t *testing.T) {
 	r := NewRegistry()
+	if r.version != developmentImplementationVersion {
+		t.Fatalf("default registry version = %q, want %q", r.version, developmentImplementationVersion)
+	}
 
 	if r.ToolCount() != 0 {
 		t.Errorf("ToolCount() = %d, want 0", r.ToolCount())
@@ -34,6 +37,13 @@ func TestNewRegistry(t *testing.T) {
 	}
 	if tools := r.Tools(); len(tools) != 0 {
 		t.Errorf("Tools() = %v, want empty", tools)
+	}
+}
+
+func TestNewRegistryWithVersion(t *testing.T) {
+	r := NewRegistryWithVersion("0.3.0")
+	if r.version != "0.3.0" {
+		t.Fatalf("release registry version = %q, want 0.3.0", r.version)
 	}
 }
 

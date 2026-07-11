@@ -159,7 +159,7 @@ func run() int {
 		servers = agentsDir.GetMCPServers()
 	}
 
-	registry := mcp.NewRegistry()
+	registry := mcp.NewRegistryWithVersion(version)
 	defer registry.Close()
 
 	ag := agent.New(modelManager, registry, cfg.Ollama.NumCtx)

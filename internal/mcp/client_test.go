@@ -7,6 +7,15 @@ import (
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+func TestClientImplementationVersion(t *testing.T) {
+	if got := clientImplementation("0.3.0"); got.Name != "local-agent" || got.Version != "0.3.0" {
+		t.Fatalf("release implementation = %#v", got)
+	}
+	if got := clientImplementation("  "); got.Version != developmentImplementationVersion {
+		t.Fatalf("development implementation = %#v", got)
+	}
+}
+
 func TestRenderToolResultPreservesStructuredAndReceipts(t *testing.T) {
 	result := &sdkmcp.CallToolResult{
 		Content: []sdkmcp.Content{

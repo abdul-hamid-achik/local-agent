@@ -20,8 +20,12 @@ type MCPClient struct {
 
 // Connect establishes a connection to an MCP server using the specified transport.
 func Connect(ctx context.Context, name, command string, args []string, env []string, transport, url string) (*MCPClient, error) {
+	return connectWithVersion(ctx, developmentImplementationVersion, name, command, args, env, transport, url)
+}
+
+func connectWithVersion(ctx context.Context, implementationVersion, name, command string, args []string, env []string, transport, url string) (*MCPClient, error) {
 	client := sdkmcp.NewClient(
-		&sdkmcp.Implementation{Name: "local-agent", Version: "0.2.0"},
+		clientImplementation(implementationVersion),
 		nil,
 	)
 
@@ -77,6 +81,16 @@ func Connect(ctx context.Context, name, command string, args []string, env []str
 		session:       session,
 		processCancel: processCancel,
 	}, nil
+}
+
+const developmentImplementationVersion = "dev"
+
+func clientImplementation(version string) *sdkmcp.Implementation {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		version = developmentImplementationVersion
+	}
+	return &sdkmcp.Implementation{Name: "local-agent", Version: version}
 }
 
 // Name returns the server name.
