@@ -27,6 +27,15 @@ tasks:
     cmds:
       - go test ./...
 
+  verify:
+    desc: Run the same verification gates as CI
+    cmds:
+      - go mod tidy -diff
+      - golangci-lint run ./...
+      - go vet ./...
+      - go test ./... -count=1 -race
+      - go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+
   glyphrun:
     desc: Run terminal behavior specs with Glyphrun
     cmds:
