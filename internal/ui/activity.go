@@ -178,8 +178,8 @@ func (m *Model) renderWorkingLine() string {
 	longCancel := ""
 	shortCancel := ""
 	if activity.cancellable {
-		longCancel = " · Esc cancel"
-		shortCancel = " · Esc"
+		longCancel = " · esc cancel"
+		shortCancel = " · esc"
 	}
 
 	elapsed := ""

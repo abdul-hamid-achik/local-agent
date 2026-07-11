@@ -66,28 +66,20 @@ type ToolCardStyles struct {
 
 // NewToolCardStyles creates styles based on theme.
 func NewToolCardStyles(isDark bool) ToolCardStyles {
-	ld := lipgloss.LightDark(isDark)
-	runningBorder := ld(lipgloss.Color("#5e81ac"), lipgloss.Color("#81a1c1"))
-	runningTitle := ld(lipgloss.Color("#4f8f8f"), lipgloss.Color("#88c0d0"))
-	success := ld(lipgloss.Color("#4f8f38"), lipgloss.Color("#a3be8c"))
-	failure := ld(lipgloss.Color("#c94f4f"), lipgloss.Color("#bf616a"))
-	body := ld(lipgloss.Color("#4c566a"), lipgloss.Color("#d8dee9"))
-	// Timing and labels are functional text, not decorative borders.
-	dimmed := ld(lipgloss.Color("#5b6779"), lipgloss.Color("#8b97ad"))
-	elapsed := ld(lipgloss.Color("#5e81ac"), lipgloss.Color("#81a1c1"))
+	palette := outputSemanticPalette(isDark)
 
 	return ToolCardStyles{
-		BorderRunning: lipgloss.NewStyle().Foreground(runningBorder),
-		BorderSuccess: lipgloss.NewStyle().Foreground(success),
-		BorderError:   lipgloss.NewStyle().Foreground(failure),
-		TitleRunning:  lipgloss.NewStyle().Foreground(runningTitle).Bold(true),
-		TitleSuccess:  lipgloss.NewStyle().Foreground(success).Bold(true),
-		TitleError:    lipgloss.NewStyle().Foreground(failure).Bold(true),
-		Args:          lipgloss.NewStyle().Foreground(body),
-		Result:        lipgloss.NewStyle().Foreground(body),
-		Error:         lipgloss.NewStyle().Foreground(failure),
-		Dimmed:        lipgloss.NewStyle().Foreground(dimmed),
-		Elapsed:       lipgloss.NewStyle().Foreground(elapsed),
+		BorderRunning: lipgloss.NewStyle().Foreground(palette.Accent2),
+		BorderSuccess: lipgloss.NewStyle().Foreground(palette.Success),
+		BorderError:   lipgloss.NewStyle().Foreground(palette.Error),
+		TitleRunning:  lipgloss.NewStyle().Foreground(palette.Accent).Bold(true),
+		TitleSuccess:  lipgloss.NewStyle().Foreground(palette.Success).Bold(true),
+		TitleError:    lipgloss.NewStyle().Foreground(palette.Error).Bold(true),
+		Args:          lipgloss.NewStyle().Foreground(palette.Muted),
+		Result:        lipgloss.NewStyle().Foreground(palette.Muted),
+		Error:         lipgloss.NewStyle().Foreground(palette.Error),
+		Dimmed:        lipgloss.NewStyle().Foreground(palette.Dim),
+		Elapsed:       lipgloss.NewStyle().Foreground(palette.Accent2),
 	}
 }
 
@@ -172,6 +164,7 @@ func (c ToolCard) ViewWithActivity(width int, activityGlyph string, elapsed time
 	inner := width - 2 // gutter is "│ "
 
 	titleStyle := c.getTitleStyle()
+	presentation := presentTool(c.Name, c.Kind, c.State)
 
 	// Leading glyph and trailing timing meta. Running animation is supplied by
 	// the parent so every card can share one Bubbles spinner tick chain.
@@ -213,12 +206,12 @@ func (c ToolCard) ViewWithActivity(width int, activityGlyph string, elapsed time
 			summary = ""
 			summaryBudget = 0
 			nameBudget = max(0, textBudget)
-		} else if nameW := lipgloss.Width(c.Name); nameW < nameBudget {
+		} else if nameW := lipgloss.Width(presentation.label); nameW < nameBudget {
 			summaryBudget = min(summaryW, summaryBudget+(nameBudget-nameW))
 			nameBudget = nameW
 		}
 	}
-	name := truncateDisplay(c.Name, max(0, nameBudget))
+	name := truncateDisplay(presentation.label, max(0, nameBudget))
 	header := glyph
 	if name != "" {
 		header += " " + titleStyle.Render(name)
@@ -233,6 +226,9 @@ func (c ToolCard) ViewWithActivity(width int, activityGlyph string, elapsed time
 	lines := []string{header}
 
 	if c.Expanded && c.State != ToolCardRunning {
+		if presentation.differsFromRaw() {
+			lines = append(lines, c.Styles.Dimmed.Render(truncateDisplay("tool: "+presentation.raw, inner)))
+		}
 		if c.Args != "" {
 			lines = append(lines, c.Styles.Dimmed.Render(truncateDisplay("args: "+c.Args, inner)))
 		}

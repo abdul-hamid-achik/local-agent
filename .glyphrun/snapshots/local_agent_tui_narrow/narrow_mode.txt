@@ -2,17 +2,17 @@
 
 
 
-   ╭────────────────────────────────╮
-   │    Select Mode                 │
-   │                                │
-   │ │ ASK  ✓                       │
-   │ │ Read, search, and answer wi… │
-   │   PLAN                         │
-   │   Explore and design without … │
-   │   BUILD                        │
-   │   Edit, execute, and use appr… │
-   │ ↑/↓ · Enter · Esc back         │
-   ╰────────────────────────────────╯
+ ╭────────────────────────────────────╮
+ │ Mode                               │
+ │                                    │
+ │   ASK                              │
+ │   Read, search, and answer withou… │
+ │ │ PLAN  ✓                          │
+ │ │ Explore and design without muta… │
+ │   BUILD                            │
+ │   Edit, execute, and use approved… │
+ │ esc back · enter select · ↑/↓ move │
+ ╰────────────────────────────────────╯
 
 
 ───────────────────────────────────────

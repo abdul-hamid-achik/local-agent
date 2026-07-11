@@ -15,17 +15,13 @@ type helpRow struct {
 
 // helpContentWidth returns the inner width for the help modal content.
 func (m *Model) helpContentWidth() int {
-	w := min(60, m.width-8)
-	if w < 1 {
-		return 1
-	}
-	return w
+	return pickerListWidth(m.width, 60)
 }
 
 // helpViewportHeight returns the viewport height for the help modal.
 func (m *Model) helpViewportHeight() int {
-	// Leave room for border (2), padding (2), title (2), footer (1)
-	h := m.height - 10
+	// Shared frame: border (2), title + gap (2), and footer (1).
+	h := m.height - 6
 	if h < 1 {
 		h = 1
 	}
@@ -40,30 +36,7 @@ func (m *Model) buildHelpContent(innerW int) string {
 	b.WriteString(m.styles.OverlayAccent.Render("Keyboard Shortcuts"))
 	b.WriteString("\n")
 
-	shortcuts := []helpRow{
-		{"enter", "Send message"},
-		{"shift+enter", "New line in input"},
-		{"shift+tab", "Cycle mode (ASK/PLAN/BUILD)"},
-		{"ctrl+p", "Open session settings"},
-		{"ctrl+m", "Quick model switch"},
-		{"esc", "Cancel streaming / close overlay"},
-		{"ctrl+c", "Quit"},
-		{"ctrl+l", "Clear screen (keep history)"},
-		{"ctrl+n", "New conversation"},
-		{"?", "Toggle this help (when input empty)"},
-		{"t", "Expand/collapse tools (input empty)"},
-		{"space", "Toggle last tool (input empty)"},
-		{"ctrl+y", "Copy last response"},
-		{"ctrl+t", "Toggle thinking display"},
-		{"ctrl+k", "Toggle compact mode"},
-		{"ctrl+e", "Open input in $EDITOR"},
-		{"↑/↓", "Browse input history"},
-		{"pgup/pgdown", "Scroll viewport"},
-		{"ctrl+u/d", "Half-page scroll"},
-		{"tab", "Autocomplete (commands/files/skills)"},
-	}
-
-	m.writeHelpRows(&b, shortcuts, innerW)
+	m.writeHelpRows(&b, m.keyHelpRows(), innerW)
 
 	b.WriteString("\n")
 	b.WriteString(m.styles.OverlayAccent.Render("Input Shortcuts"))
@@ -93,6 +66,24 @@ func (m *Model) buildHelpContent(innerW int) string {
 	return b.String()
 }
 
+func (m *Model) keyHelpRows() []helpRow {
+	var rows []helpRow
+	for _, group := range m.keys.FullHelp() {
+		for _, binding := range group {
+			help := binding.Help()
+			if strings.TrimSpace(help.Key) == "" || strings.TrimSpace(help.Desc) == "" {
+				continue
+			}
+			description := strings.TrimSpace(help.Desc)
+			if len(description) > 0 {
+				description = strings.ToUpper(description[:1]) + description[1:]
+			}
+			rows = append(rows, helpRow{key: strings.ToLower(help.Key), desc: description})
+		}
+	}
+	return rows
+}
+
 // writeHelpRows renders aligned rows on normal terminals and stacked rows on
 // narrow ones. Descriptions wrap instead of being silently clipped.
 func (m *Model) writeHelpRows(b *strings.Builder, rows []helpRow, innerW int) {
@@ -113,6 +104,9 @@ func (m *Model) writeHelpRows(b *strings.Builder, rows []helpRow, innerW int) {
 	keyW := 16
 	if innerW < 44 {
 		keyW = 10
+		for _, row := range rows {
+			keyW = min(16, max(keyW, lipgloss.Width(row.key)))
+		}
 	}
 	// Leave the terminal's final cell unused. Writing exactly to the edge can
 	// trigger an implicit wrap before the explicit newline in some PTYs.
@@ -136,6 +130,14 @@ func (m *Model) writeHelpRows(b *strings.Builder, rows []helpRow, innerW int) {
 
 // initHelpViewport creates and populates the help viewport for scrolling.
 func (m *Model) initHelpViewport() {
+	m.resizeHelpViewport(false)
+}
+
+func (m *Model) resizeHelpViewport(preserveOffset bool) {
+	offset := 0
+	if preserveOffset {
+		offset = m.helpViewport.YOffset()
+	}
 	innerW := m.helpContentWidth()
 	vpH := m.helpViewportHeight()
 
@@ -153,10 +155,11 @@ func (m *Model) initHelpViewport() {
 
 	content := m.buildHelpContent(innerW)
 	m.helpViewport.SetContent(content)
+	m.helpViewport.SetYOffset(offset)
 }
 
 // renderHelpOverlay builds a centered, scrollable help modal.
-func (m *Model) renderHelpOverlay(contentWidth int) string {
+func (m *Model) renderHelpOverlay(_ int) string {
 	innerW := m.helpContentWidth()
 
 	var b strings.Builder
@@ -171,25 +174,19 @@ func (m *Model) renderHelpOverlay(contentWidth int) string {
 
 	// Scroll indicator / footer.
 	pct := m.helpViewport.ScrollPercent()
-	closeHint := "Esc/q " + m.overlayCloseLabel()
-	var hint string
+	hints := []keyHint{{Key: "esc/q", Action: m.overlayCloseLabel()}}
 	if pct <= 0 {
-		hint = closeHint + " · ↓ more"
+		hints = append(hints, keyHint{Key: "↓", Action: "more"})
 	} else if pct >= 1.0 {
-		hint = closeHint
+		hints = append(hints, keyHint{Key: "j/k", Action: "scroll"})
 	} else {
-		hint = fmt.Sprintf("%s · %.0f%% · j/k", closeHint, pct*100)
+		hints = append(hints,
+			keyHint{Key: "j/k", Action: "scroll"},
+			keyHint{Key: fmt.Sprintf("%.0f%%", pct*100)},
+		)
 	}
-	b.WriteString(m.styles.OverlayDim.Render(hint))
 
-	// Wrap in a box.
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(m.styles.FocusIndicator.GetForeground()).
-		Padding(1, 2).
-		Width(innerW + 6) // outer box: inner viewport + padding (4) + border (2)
-
-	return box.Render(b.String())
+	return m.renderPickerFrame(b.String(), 60, m.renderKeyHints(innerW, hints...))
 }
 
 // overlayOnContent renders the overlay centered on the viewport area.

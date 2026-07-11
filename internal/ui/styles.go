@@ -39,6 +39,49 @@ var (
 	nordLight5 = "#3B4252" // secondary text
 )
 
+// semanticPalette is the single color vocabulary shared by the transcript,
+// Bubbles components, overlays, composer, and tool receipts. Components own
+// layout, but they should not invent a second meaning for the same state.
+type semanticPalette struct {
+	Dim     color.Color
+	Muted   color.Color
+	Text    color.Color
+	Accent  color.Color
+	Accent2 color.Color
+	Error   color.Color
+	Success color.Color
+	Special color.Color
+	Warning color.Color
+	Border  color.Color
+}
+
+func newSemanticPalette(isDark bool) semanticPalette {
+	ld := lipgloss.LightDark(isDark)
+	return semanticPalette{
+		Dim:     ld(lipgloss.Color("#5B6779"), lipgloss.Color("#8B97AD")),
+		Muted:   ld(lipgloss.Color(nordLight4), lipgloss.Color(nord4)),
+		Text:    ld(lipgloss.Color(nordLight5), lipgloss.Color(nord5)),
+		Accent:  ld(lipgloss.Color("#4F8F8F"), lipgloss.Color(nord12)),
+		Accent2: ld(lipgloss.Color("#5E81AC"), lipgloss.Color(nord13)),
+		Error:   ld(lipgloss.Color("#C94F4F"), lipgloss.Color(nord7)),
+		Success: ld(lipgloss.Color("#4F8F38"), lipgloss.Color(nord10)),
+		Special: ld(lipgloss.Color("#7B5A83"), lipgloss.Color(nord11)),
+		Warning: ld(lipgloss.Color("#8A6500"), lipgloss.Color(nord9)),
+		Border:  ld(lipgloss.Color(nordLight3), lipgloss.Color(nord3)),
+	}
+}
+
+func outputSemanticPalette(isDark bool) semanticPalette {
+	if !noColor {
+		return newSemanticPalette(isDark)
+	}
+	plain := lipgloss.NoColor{}
+	return semanticPalette{
+		Dim: plain, Muted: plain, Text: plain, Accent: plain, Accent2: plain,
+		Error: plain, Success: plain, Special: plain, Warning: plain, Border: plain,
+	}
+}
+
 // Styles holds all pre-built lipgloss styles.
 type Styles struct {
 	// Header
@@ -144,17 +187,17 @@ func NewStyles(isDark bool) Styles {
 func adaptiveStyles(isDark bool) Styles {
 	// Body-muted colors must remain readable; border colors can be subtler.
 	// LightDark keeps every semantic token adaptive without hardcoded ANSI.
-	ld := lipgloss.LightDark(isDark)
-	colorDim := ld(lipgloss.Color("#5B6779"), lipgloss.Color("#8B97AD"))
-	colorMuted := ld(lipgloss.Color(nordLight4), lipgloss.Color(nord4))
-	colorText := ld(lipgloss.Color(nordLight5), lipgloss.Color(nord5))
-	colorAccent := ld(lipgloss.Color("#4F8F8F"), lipgloss.Color(nord12))
-	colorAccent2 := ld(lipgloss.Color("#5E81AC"), lipgloss.Color(nord13))
-	colorError := ld(lipgloss.Color("#C94F4F"), lipgloss.Color(nord7))
-	colorSuccess := ld(lipgloss.Color("#4F8F38"), lipgloss.Color(nord10))
-	colorSpecial := ld(lipgloss.Color("#7B5A83"), lipgloss.Color(nord11))
-	colorWarning := ld(lipgloss.Color("#8A6500"), lipgloss.Color(nord9))
-	colorBorder := ld(lipgloss.Color(nordLight3), lipgloss.Color(nord3))
+	palette := newSemanticPalette(isDark)
+	colorDim := palette.Dim
+	colorMuted := palette.Muted
+	colorText := palette.Text
+	colorAccent := palette.Accent
+	colorAccent2 := palette.Accent2
+	colorError := palette.Error
+	colorSuccess := palette.Success
+	colorSpecial := palette.Special
+	colorWarning := palette.Warning
+	colorBorder := palette.Border
 
 	return Styles{
 		HeaderTitle: lipgloss.NewStyle().

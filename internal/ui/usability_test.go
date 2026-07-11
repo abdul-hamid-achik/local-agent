@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestNarrowTerminalUsesFullWidthConversation(t *testing.T) {
@@ -88,7 +89,7 @@ func TestHelpOverlayFitsNarrowTerminal(t *testing.T) {
 	if !strings.Contains(overlay, "Keyboard Shortcuts") {
 		t.Fatalf("help content missing from overlay:\n%s", overlay)
 	}
-	if !strings.Contains(overlay, "Esc/q close") {
+	if !strings.Contains(ansi.Strip(overlay), "esc/q close") {
 		t.Fatalf("help footer hid the close affordance:\n%s", overlay)
 	}
 }

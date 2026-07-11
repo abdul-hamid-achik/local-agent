@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestSettingsPickerOpensWithCurrentValues(t *testing.T) {
@@ -23,7 +24,7 @@ func TestSettingsPickerOpensWithCurrentValues(t *testing.T) {
 		t.Fatal("Ctrl+P did not open session settings")
 	}
 	rendered := m.renderSettingsPicker()
-	for _, want := range []string{"Session Settings", "Pinned", "qwen3.5:4b", "reviewer", "2 servers", "17 tools"} {
+	for _, want := range []string{"Settings", "Pinned", "qwen3.5:4b", "reviewer", "2 servers", "17 tools"} {
 		if !strings.Contains(rendered, want) {
 			t.Errorf("settings missing %q:\n%s", want, rendered)
 		}
@@ -76,8 +77,8 @@ func TestSettingsModeCommitsOnlyOnSelection(t *testing.T) {
 	if m.mode != ModePlan || m.overlay != OverlaySettings {
 		t.Fatalf("selected mode = %d overlay=%d, want PLAN/settings", m.mode, m.overlay)
 	}
-	if len(m.entries) != 1 || !strings.Contains(m.entries[0].Content, "Mode switched to PLAN") {
-		t.Fatalf("mode receipt = %#v", m.entries)
+	if len(m.entries) != 0 {
+		t.Fatalf("empty-state mode switch added redundant receipt: %#v", m.entries)
 	}
 }
 
@@ -282,7 +283,7 @@ func TestSettingsCompactRowsUseEitherResponsiveBreakpoint(t *testing.T) {
 	}
 }
 
-func TestSettingsCompactRowsFitMinimumWithLabelsFirstDetail(t *testing.T) {
+func TestSettingsCompactRowsFitMinimumWithLabelsAndFooter(t *testing.T) {
 	m := newTestModel(t)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: minTerminalWidth, Height: minTerminalHeight})
 	m = updated.(*Model)
@@ -290,8 +291,12 @@ func TestSettingsCompactRowsFitMinimumWithLabelsFirstDetail(t *testing.T) {
 	m.settingsPickerState.List.Select(int(settingsRuntime))
 
 	rendered := m.renderSettingsPicker()
-	if !strings.Contains(rendered, "Inspect local") {
-		t.Fatalf("minimum selected detail missing:\n%s", rendered)
+	if strings.Contains(rendered, "Inspect local") {
+		t.Fatalf("minimum settings spent its action row on selected prose:\n%s", rendered)
+	}
+	plain := ansi.Strip(rendered)
+	if !strings.Contains(plain, "esc close") || !strings.Contains(plain, "enter") || !strings.Contains(plain, "↑/↓") {
+		t.Fatalf("minimum settings lost actionable navigation:\n%s", rendered)
 	}
 	for _, label := range []string{"Model", "Agent profile", "Mode", "Sessions", "Compact layout", "Runtime status", "Help"} {
 		if !strings.Contains(rendered, label) {

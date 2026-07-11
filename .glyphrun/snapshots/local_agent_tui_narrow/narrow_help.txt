@@ -1,19 +1,19 @@
-
  ╭────────────────────────────────────╮
+ │ Help                               │
  │                                    │
- │  Help                              │
- │                                    │
- │  Keyboard Shortcuts                │
- │    enter       Send message        │
- │    shift+ent…  New line in input   │
- │    shift+tab   Cycle mode          │
- │                (ASK/PLAN/BUILD)    │
- │    ctrl+p      Open session        │
- │                settings            │
- │    ctrl+m      Quick model         │
- │                switch              │
- │    esc         Cancel streaming    │
- │  Esc/q close · ↓ more              │
- │                                    │
+ │ Keyboard Shortcuts                 │
+ │   enter        Send message        │
+ │   shift+enter  New line            │
+ │   esc          Cancel / close      │
+ │                overlay             │
+ │   ctrl+c       Quit                │
+ │   ctrl+l       Clear screen        │
+ │   ctrl+n       New conversation    │
+ │   ?            Show help (empty    │
+ │                input)              │
+ │   t            Toggle all tools    │
+ │                (empty input)       │
+ │   ctrl+y       Copy last response  │
+ │                (empty input)       │
+ │ esc/q close · ↓ more               │
  ╰────────────────────────────────────╯
-❯ Ask, @mention files, or type /help

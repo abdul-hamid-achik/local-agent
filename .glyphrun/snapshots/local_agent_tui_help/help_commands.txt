@@ -1,35 +1,35 @@
-
-                           ╭────────────────────────────────────────────────────────────────╮
-                           │                                                                │
-                           │  Help                                                          │
-                           │                                                                │
-                           │                                                                │
-                           │  Slash Commands                                                │
-                           │    /help             Show help overlay with shortcuts and      │
-                           │                      commands                                  │
-                           │    /clear            Clear conversation history                │
-                           │    /new              Start a fresh conversation                │
-                           │    /model            Show, switch, or list models              │
-                           │    /models           Open model picker                         │
-                           │    /agent            Show or switch agent profile              │
-                           │    /load             Load a markdown file as context           │
-                           │    /unload           Remove loaded context file                │
-                           │    /skill            Manage skills (list, activate,            │
-                           │                      deactivate)                               │
-                           │    /servers          List connected MCP servers                │
-                           │    /ice              Show Infinite Context Engine status       │
-                           │    /sessions         Browse and restore saved sessions         │
-                           │    /changes          List files modified by the agent this     │
-                           │                      session                                   │
-                           │    /commit           Generate commit message from staged       │
-                           │                      changes and commit                        │
-                           │    /stats            Show token usage statistics for this      │
-                           │                      session                                   │
-                           │    /export           Export readable Markdown with a typed     │
-                           │                      v2 transcript                             │
-                           │    /import           Import a typed v2 transcript into a       │
-                           │                      fresh session                             │
-                           │  Esc/q close · 65% · j/k                                       │
-                           │                                                                │
-                           ╰────────────────────────────────────────────────────────────────╯
-❯ Ask, @mention files, or type /help
+                             ╭────────────────────────────────────────────────────────────╮
+                             │ Help                                                       │
+                             │                                                            │
+                             │ Slash Commands                                             │
+                             │   /help             Show help overlay with shortcuts and   │
+                             │                     commands                               │
+                             │   /clear            Clear conversation history             │
+                             │   /new              Start a fresh conversation             │
+                             │   /model            Show, switch, or list models           │
+                             │   /models           Open model picker                      │
+                             │   /agent            Show or switch agent profile           │
+                             │   /load             Load a markdown file as context        │
+                             │   /unload           Remove loaded context file             │
+                             │   /skill            Manage skills (list, activate,         │
+                             │                     deactivate)                            │
+                             │   /servers          List connected MCP servers             │
+                             │   /ice              Show Infinite Context Engine status    │
+                             │   /sessions         Browse and restore saved sessions      │
+                             │   /changes          List files modified by the agent this  │
+                             │                     session                                │
+                             │   /commit           Generate commit message from staged    │
+                             │                     changes and commit                     │
+                             │   /stats            Show token usage statistics for this   │
+                             │                     session                                │
+                             │   /export           Export readable Markdown with a typed  │
+                             │                     v2 transcript                          │
+                             │   /import           Import a typed v2 transcript into a    │
+                             │                     fresh session                          │
+                             │   /checkpoint       Save a checkpoint of the current       │
+                             │                     conversation                           │
+                             │   /checkpoints      List saved checkpoints (use /restore   │
+                             │                     <id> to rewind)                        │
+                             │   /restore          Restore the conversation to a saved    │
+                             │ esc/q close · j/k scroll · 77%                             │
+                             ╰────────────────────────────────────────────────────────────╯

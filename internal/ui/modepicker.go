@@ -41,13 +41,12 @@ func newModePickerState(current Mode, terminalWidth, terminalHeight int, isDark 
 		items[i] = definitions[i]
 	}
 
-	delegate := list.NewDefaultDelegate()
-	delegate.Styles = list.NewDefaultItemStyles(isDark)
-	delegate.SetSpacing(0)
+	delegate := newPickerDelegate(isDark, false)
 	width := pickerListWidth(terminalWidth, 52)
 	height := pickerListHeight(terminalHeight, len(items)*delegate.Height()+2, 4)
 	l := list.New(items, delegate, width, height)
-	l.Title = "Select Mode"
+	configurePickerList(&l, isDark)
+	l.Title = "Mode"
 	l.SetShowStatusBar(false)
 	l.SetShowHelp(false)
 	l.SetShowPagination(false)

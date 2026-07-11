@@ -2,6 +2,8 @@ package ui
 
 import (
 	"testing"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 func TestOverlay_ESC_ClosesCompletion(t *testing.T) {
@@ -31,60 +33,140 @@ func TestOverlay_ESC_ClosesCompletion(t *testing.T) {
 	}
 }
 
-func TestOverlay_ESC_ClearsInputToPreventRetrigger(t *testing.T) {
+func TestOverlay_ESC_PreservesFullComposerDraft(t *testing.T) {
 	m := newTestModel(t)
 
-	// Simulate: user typed "/" which triggered completion, then presses ESC.
+	// The trigger remains in the composer while subsequent query text is owned
+	// by the completion filter.
 	m.input.SetValue("/")
-	items := []Completion{
-		{Label: "/help", Insert: "/help ", Category: "command"},
-		{Label: "/clear", Insert: "/clear ", Category: "command"},
-	}
-	m.completionState = newCompletionState("command", items, false)
-	m.overlay = OverlayCompletion
-
-	// Press ESC to close.
-	updated, _ := m.Update(escKey())
+	m.triggerCompletion("/")
+	updated, _ := m.Update(charKey('h'))
+	m = updated.(*Model)
+	updated, _ = m.Update(charKey('e'))
 	m = updated.(*Model)
 
-	// Input must be cleared so auto-trigger doesn't reopen.
-	if m.input.Value() != "" {
-		t.Errorf("ESC should clear input, got %q", m.input.Value())
+	updated, _ = m.Update(escKey())
+	m = updated.(*Model)
+
+	if m.input.Value() != "/he" {
+		t.Errorf("ESC should preserve the trigger and filtered draft, got %q", m.input.Value())
 	}
 	if m.isCompletionActive() {
 		t.Error("completion should be closed after ESC")
 	}
-	if m.overlay != OverlayNone {
-		t.Errorf("overlay should be OverlayNone, got %d", m.overlay)
+	if m.completionSuppressedDraft != "/he" {
+		t.Errorf("suppressed draft = %q, want /he", m.completionSuppressedDraft)
+	}
+	if !m.input.Focused() {
+		t.Error("composer should regain focus after completion dismissal")
 	}
 }
 
-func TestOverlay_ESC_NoRetriggerOnSubsequentUpdate(t *testing.T) {
+func TestOverlay_ESC_SuppressesOnlyExactUnchangedDraft(t *testing.T) {
 	m := newTestModel(t)
-
-	// Simulate: user typed "/" which triggered completion, then presses ESC.
 	m.input.SetValue("/")
-	items := []Completion{
-		{Label: "/help", Insert: "/help ", Category: "command"},
-	}
-	m.completionState = newCompletionState("command", items, false)
-	m.overlay = OverlayCompletion
-
-	// Press ESC.
+	m.triggerCompletion("/")
 	updated, _ := m.Update(escKey())
 	m = updated.(*Model)
 
-	// Send another key event (e.g., a harmless key like 'a') to cycle through Update.
-	// This exercises the auto-trigger path at lines 968-972.
-	updated, _ = m.Update(charKey('a'))
+	// A later non-editing update still runs the automatic discovery check, but
+	// the exact dismissed draft must remain quiet.
+	updated, _ = m.Update(DoneFlashExpiredMsg{})
+	m = updated.(*Model)
+	if m.isCompletionActive() {
+		t.Error("completion should not re-trigger for the exact dismissed draft")
+	}
+	if m.input.Value() != "/" || m.completionSuppressedDraft != "/" {
+		t.Fatalf("unchanged draft suppression was lost: input=%q suppressed=%q", m.input.Value(), m.completionSuppressedDraft)
+	}
+
+	// Editing the draft clears suppression and restores automatic discovery.
+	updated, _ = m.Update(charKey('h'))
+	m = updated.(*Model)
+	if !m.isCompletionActive() || m.overlay != OverlayCompletion {
+		t.Fatal("editing the dismissed draft should reopen matching completions")
+	}
+	if m.completionSuppressedDraft != "" {
+		t.Errorf("edit should clear completion suppression, got %q", m.completionSuppressedDraft)
+	}
+	if got := m.completionState.Filter.Value(); got != "h" {
+		t.Errorf("reopened filter = %q, want h", got)
+	}
+}
+
+func TestOverlay_TabReopensSuppressedCompletion(t *testing.T) {
+	m := newTestModel(t)
+	m.input.SetValue("/he")
+	m.triggerCompletion("/he")
+	updated, _ := m.Update(escKey())
 	m = updated.(*Model)
 
-	// Completion must NOT have re-opened.
-	if m.isCompletionActive() {
-		t.Error("completion should not re-trigger after ESC close")
+	updated, _ = m.Update(tabKey())
+	m = updated.(*Model)
+	if !m.isCompletionActive() || m.overlay != OverlayCompletion {
+		t.Fatal("explicit Tab should reopen an unchanged dismissed draft")
 	}
-	if m.overlay != OverlayNone {
-		t.Errorf("overlay should still be OverlayNone, got %d", m.overlay)
+	if m.completionSuppressedDraft != "" {
+		t.Errorf("explicit reopen should clear suppression, got %q", m.completionSuppressedDraft)
+	}
+	if got := m.completionState.Filter.Value(); got != "he" {
+		t.Errorf("explicit reopen filter = %q, want he", got)
+	}
+}
+
+func TestOverlay_SuppressionClearsAfterComposerMutations(t *testing.T) {
+	t.Run("submit_reset_allows_fresh_trigger", func(t *testing.T) {
+		m := newTestModel(t)
+		m.input.SetValue("/")
+		m.triggerCompletion("/")
+		updated, _ := m.Update(escKey())
+		m = updated.(*Model)
+
+		updated, _ = m.Update(enterKey())
+		m = updated.(*Model)
+		if got := m.completionSuppressedDraft; got != "" {
+			t.Fatalf("submit reset left stale suppression %q", got)
+		}
+
+		updated, _ = m.Update(charKey('/'))
+		m = updated.(*Model)
+		if !m.isCompletionActive() || m.overlay != OverlayCompletion {
+			t.Fatal("fresh trigger after submit reset did not reopen completion")
+		}
+	})
+
+	t.Run("newline_is_an_edit", func(t *testing.T) {
+		m := newTestModel(t)
+		m.input.SetValue("/")
+		m.triggerCompletion("/")
+		updated, _ := m.Update(escKey())
+		m = updated.(*Model)
+
+		updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
+		m = updated.(*Model)
+		if got := m.completionSuppressedDraft; got != "" {
+			t.Fatalf("newline edit left stale suppression %q", got)
+		}
+		if got := m.input.Value(); got != "/\n" {
+			t.Fatalf("newline edit produced %q, want %q", got, "/\n")
+		}
+	})
+}
+
+func TestOverlay_BackspaceRemovesSuppressedTriggerWithoutReopening(t *testing.T) {
+	m := newTestModel(t)
+	m.input.SetValue("/")
+	m.triggerCompletion("/")
+	updated, _ := m.Update(escKey())
+	m = updated.(*Model)
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	m = updated.(*Model)
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("Backspace left dismissed trigger in composer: %q", got)
+	}
+	if m.isCompletionActive() || m.overlay != OverlayNone {
+		t.Fatal("removing the dismissed trigger reopened completion")
 	}
 }
 

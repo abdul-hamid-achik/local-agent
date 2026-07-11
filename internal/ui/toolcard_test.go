@@ -24,10 +24,13 @@ func TestToolCardViewWithActivityIsPureAndShowsSummary(t *testing.T) {
 	if !reflect.DeepEqual(card, before) {
 		t.Fatalf("rendering mutated the card:\nbefore: %#v\nafter:  %#v", before, card)
 	}
-	for _, want := range []string{"◐", "write_file", "write src/", "1.5s"} {
+	for _, want := range []string{"◐", "Writing", "write src/", "1.5s"} {
 		if !strings.Contains(first, want) {
 			t.Fatalf("running card missing %q:\n%s", want, first)
 		}
+	}
+	if card.Name != "write_file" {
+		t.Fatalf("presentation changed raw correlation name: %q", card.Name)
 	}
 	assertToolCardLinesFit(t, first, 56)
 }

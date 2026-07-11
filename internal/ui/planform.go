@@ -7,8 +7,9 @@ import (
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 )
+
+const planFormMaximumWidth = 60
 
 // PlanFormField represents a single field in the plan form.
 type PlanFormField struct {
@@ -29,13 +30,17 @@ type PlanFormState struct {
 // NewPlanFormState creates a plan form pre-filled with the user's task description.
 func NewPlanFormState(task string) *PlanFormState {
 	taskInput := textinput.New()
+	taskInput.SetStyles(semanticTextInputStyles(true))
 	taskInput.Placeholder = "Describe the task..."
+	taskInput.Prompt = ""
 	taskInput.CharLimit = 512
 	taskInput.SetValue(task)
 	taskInput.Focus()
 
 	focusInput := textinput.New()
+	focusInput.SetStyles(semanticTextInputStyles(true))
 	focusInput.Placeholder = "Any constraints or requirements? (optional)"
+	focusInput.Prompt = ""
 	focusInput.CharLimit = 512
 
 	return &PlanFormState{
@@ -178,81 +183,144 @@ func (m *Model) advancePlanFormField(dir int) {
 	}
 }
 
-// renderPlanForm renders the plan form overlay.
+func compactPlanForm(width, height int) bool {
+	return width <= 40 || height <= 20
+}
+
+func (m *Model) renderPlanTextField(field PlanFormField, active bool, width int) string {
+	valueWidth := max(1, width-2)
+	if active {
+		// Render a sized copy so View remains pure while the parent continues to
+		// own the live Bubbles input and all message handling.
+		input := field.Input
+		input.SetWidth(valueWidth)
+		return m.styles.FocusIndicator.Render("> ") + input.View()
+	}
+
+	value := strings.TrimSpace(field.Input.Value())
+	if value == "" {
+		value = "(empty)"
+	}
+	return "  " + m.styles.OverlayDim.Render(truncateDisplay(value, valueWidth))
+}
+
+func (m *Model) renderPlanSelectField(field PlanFormField, active, compact bool, width int) string {
+	if len(field.Options) == 0 {
+		return m.styles.OverlayDim.Render("(no choices)")
+	}
+	selected := min(max(0, field.OptionIndex), len(field.Options)-1)
+	if compact {
+		control := "← " + field.Options[selected] + " →"
+		return m.styles.FocusIndicator.Render(truncateDisplay(control, width))
+	}
+
+	lines := make([]string, 0, len(field.Options))
+	for i, option := range field.Options {
+		prefix := "  "
+		style := m.styles.OverlayDim
+		if i == selected {
+			prefix = "● "
+			if active {
+				prefix = "▸ "
+				style = m.styles.FocusIndicator
+			}
+		}
+		lines = append(lines, style.Render(prefix+truncateDisplay(option, max(1, width-2))))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func planFormFooter(pf *PlanFormState, width int) string {
+	if pf == nil || len(pf.Fields) == 0 {
+		return "esc cancel"
+	}
+	active := min(max(0, pf.ActiveField), len(pf.Fields)-1)
+	field := pf.Fields[active]
+	last := active == len(pf.Fields)-1
+
+	if width >= 42 {
+		switch {
+		case last:
+			return "esc cancel · enter submit · shift+tab back"
+		case field.Kind == "select":
+			return "esc cancel · enter/tab next · ←/→ choose"
+		default:
+			return "esc cancel · enter/tab next"
+		}
+	}
+	if width >= 24 {
+		switch {
+		case last:
+			return "esc cancel\nenter submit · shift+tab back"
+		case field.Kind == "select":
+			return "esc cancel\nenter next · ←/→ choose"
+		default:
+			return "esc cancel · enter next"
+		}
+	}
+
+	switch {
+	case last:
+		return "esc cancel\nenter submit\nshift+tab back"
+	case field.Kind == "select":
+		return "esc cancel\nenter next\n←→ choose"
+	default:
+		return "esc cancel\nenter next"
+	}
+}
+
+func (m *Model) renderCompactPlanForm(pf *PlanFormState, contentWidth int) string {
+	active := min(max(0, pf.ActiveField), len(pf.Fields)-1)
+	field := pf.Fields[active]
+
+	var b strings.Builder
+	b.WriteString(m.styles.OverlayTitle.Render(fmt.Sprintf("Plan · %d/%d", active+1, len(pf.Fields))))
+	b.WriteString("\n")
+	b.WriteString(m.styles.FocusIndicator.Render(field.Label))
+	b.WriteString("\n")
+	if field.Kind == "select" {
+		b.WriteString(m.renderPlanSelectField(field, true, true, contentWidth))
+	} else {
+		b.WriteString(m.renderPlanTextField(field, true, contentWidth))
+	}
+
+	return m.renderPickerFrame(b.String(), planFormMaximumWidth, planFormFooter(pf, contentWidth))
+}
+
+// renderPlanForm renders a responsive parent-owned form. Compact terminals show
+// one active step; normal terminals retain the complete form without spending
+// rows on decorative whitespace.
 func (m *Model) renderPlanForm() string {
 	pf := m.planFormState
-	if pf == nil {
+	if pf == nil || len(pf.Fields) == 0 {
 		return ""
 	}
 
-	activeStyle := m.styles.FocusIndicator // Use focus indicator style for active fields
+	contentWidth := pickerListWidth(m.width, planFormMaximumWidth)
+	if compactPlanForm(m.width, m.height) {
+		return m.renderCompactPlanForm(pf, contentWidth)
+	}
 
 	var b strings.Builder
 	b.WriteString(m.styles.OverlayTitle.Render("Plan Task"))
 	b.WriteString("\n\n")
-
 	for i, field := range pf.Fields {
-		isActive := i == pf.ActiveField
-
-		ls := m.styles.OverlayAccent
-		if isActive {
-			ls = activeStyle
+		active := i == pf.ActiveField
+		labelStyle := m.styles.OverlayAccent
+		if active {
+			labelStyle = m.styles.FocusIndicator
 		}
-		b.WriteString(ls.Render(field.Label))
+		b.WriteString(labelStyle.Render(field.Label))
 		b.WriteString("\n")
-
-		switch field.Kind {
-		case "text":
-			if isActive {
-				b.WriteString(m.styles.FocusIndicator.Render("> ") + field.Input.View())
-			} else {
-				val := field.Input.Value()
-				if val == "" {
-					val = m.styles.OverlayDim.Render("(empty)")
-				}
-				b.WriteString("  " + m.styles.OverlayDim.Render(val))
-			}
-		case "select":
-			for j, opt := range field.Options {
-				selected := j == field.OptionIndex
-				prefix := "  "
-				if selected && isActive {
-					prefix = m.styles.FocusIndicator.Render("▸ ")
-				} else if selected {
-					prefix = "● "
-				}
-				if selected && isActive {
-					b.WriteString("  " + activeStyle.Render(prefix+opt))
-				} else if selected {
-					b.WriteString("  " + prefix + opt)
-				} else {
-					b.WriteString("  " + m.styles.OverlayDim.Render(prefix+opt))
-				}
-				b.WriteString("\n")
-			}
+		if field.Kind == "select" {
+			b.WriteString(m.renderPlanSelectField(field, active, false, contentWidth))
+		} else {
+			b.WriteString(m.renderPlanTextField(field, active, contentWidth))
 		}
-		b.WriteString("\n\n")
+		if i < len(pf.Fields)-1 {
+			b.WriteString("\n\n")
+		}
 	}
 
-	if pf.Fields[pf.ActiveField].Kind == "select" {
-		b.WriteString(m.styles.OverlayDim.Render("↑↓←→=select  Tab/Enter=next  Esc=cancel"))
-	} else {
-		b.WriteString(m.styles.OverlayDim.Render("Tab=next field  Enter=submit  Esc=cancel"))
-	}
-
-	maxW := 50
-	if m.width-8 > maxW {
-		maxW = m.width - 8
-	}
-	if maxW > 60 {
-		maxW = 60
-	}
-
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(m.styles.OverlayBorder).
-		Padding(1, 2).
-		Width(maxW)
-
-	return box.Render(b.String())
+	return m.renderPickerFrame(b.String(), planFormMaximumWidth, planFormFooter(pf, contentWidth))
 }

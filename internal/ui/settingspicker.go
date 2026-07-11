@@ -31,7 +31,7 @@ func (i settingsItem) Title() string {
 	if i.value == "" {
 		return i.title
 	}
-	return i.title + "  ·  " + i.value
+	return i.title + " · " + i.value
 }
 
 func (i settingsItem) Description() string { return i.description }
@@ -60,10 +60,8 @@ func newSettingsPickerState(items []settingsItem, terminalWidth, terminalHeight 
 	height := settingsListHeight(listItems, itemHeight, terminalHeight)
 
 	l := list.New(listItems, delegate, width, height)
-	l.Title = "Session Settings"
-	if terminalWidth < 36 {
-		l.Title = "Settings ↑↓↵⎋"
-	}
+	configurePickerList(&l, isDark)
+	l.Title = "Settings"
 	setSettingsTitleDensity(&l, compact)
 	l.SetShowStatusBar(false)
 	l.SetShowHelp(false)
@@ -83,14 +81,7 @@ func compactSettingsRows(terminalWidth, terminalHeight int) bool {
 }
 
 func newSettingsDelegate(isDark, compact bool) list.DefaultDelegate {
-	delegate := list.NewDefaultDelegate()
-	delegate.Styles = list.NewDefaultItemStyles(isDark)
-	delegate.SetSpacing(0)
-	if compact {
-		delegate.ShowDescription = false
-		delegate.SetHeight(1)
-	}
-	return delegate
+	return newPickerDelegate(isDark, compact)
 }
 
 func setSettingsTitleDensity(l *list.Model, compact bool) {
@@ -100,7 +91,7 @@ func setSettingsTitleDensity(l *list.Model, compact bool) {
 		// minimum that row is better spent keeping all seven settings visible.
 		bottom = 0
 	}
-	l.Styles.TitleBar = l.Styles.TitleBar.Padding(0, 0, bottom, 2)
+	l.Styles.TitleBar = l.Styles.TitleBar.Padding(0, 0, bottom, 0)
 }
 
 func settingsDetailWidth(terminalWidth int) int {
@@ -114,7 +105,10 @@ func settingsListHeight(items []list.Item, itemHeight, terminalHeight int) int {
 }
 
 func pickerContentWidth(terminalWidth, maximum int) int {
-	width := terminalWidth - 8
+	// Narrow modals should use the available canvas instead of leaving the
+	// desktop-sized gutters that make their content wrap prematurely. The
+	// shared frame still retains one cell of breathing room on either side.
+	width := terminalWidth - 4
 	if width > maximum {
 		width = maximum
 	}
@@ -147,7 +141,7 @@ func pickerListHeight(terminalHeight, desired, chrome int) int {
 // its viewport to a terminal resize.
 func (m *Model) resizePickerOverlays() {
 	if state := m.completionState; state != nil {
-		state.Filter.SetWidth(max(1, pickerListWidth(m.width, 60)-2))
+		state.Filter.SetWidth(completionFilterInputWidth(m.width))
 	}
 	if state := m.settingsPickerState; state != nil {
 		compact := compactSettingsRows(m.width, m.height)
@@ -282,18 +276,12 @@ func (m *Model) renderSettingsPicker() string {
 		return ""
 	}
 	content := m.settingsPickerState.List.View()
-	if m.settingsPickerState.Compact {
+	if m.settingsPickerState.Compact && m.width >= 36 {
 		if item, ok := m.settingsPickerState.List.SelectedItem().(settingsItem); ok && strings.TrimSpace(item.description) != "" {
 			detail := truncateDisplay(strings.TrimSpace(item.description), settingsDetailWidth(m.width))
 			content = strings.TrimRight(content, "\n") + "\n" +
 				m.styles.OverlayDim.Render("  "+detail)
 		}
 	}
-	footer := m.pickerNavigationFooter(58, false)
-	if m.width < 36 {
-		// The minimum tier carries its navigation keys in the title so the
-		// rounded frame stays fully visible instead of occupying the last row.
-		footer = ""
-	}
-	return m.renderPickerFrame(content, 58, footer)
+	return m.renderPickerFrame(content, 58, m.pickerNavigationFooter(58, false))
 }

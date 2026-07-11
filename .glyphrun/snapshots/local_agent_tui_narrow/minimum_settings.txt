@@ -1,11 +1,11 @@
-   ╭──────────────────────╮
-   │    Settings ↑↓↵⎋     │
-   │ │ Model  ·  Auto · … │
-   │   Agent profile  · … │
-   │   Mode  ·  ASK       │
-   │   Sessions  ·  Resu… │
-   │   Compact layout  ·… │
-   │   Runtime status  ·… │
-   │   Help  ·  Shortcuts │
-   │   Choose an install… │
-   ╰──────────────────────╯
+ ╭──────────────────────────╮
+ │ Settings                 │
+ │ │ Model · Pinned · qwen… │
+ │   Agent profile · Defau… │
+ │   Mode · ASK             │
+ │   Sessions · Resume      │
+ │   Compact layout · Auto  │
+ │   Runtime status · 0 se… │
+ │   Help · Shortcuts       │
+ │ esc close · enter · ↑/↓  │
+ ╰──────────────────────────╯

@@ -253,3 +253,120 @@ func TestPlanForm_SelectField(t *testing.T) {
 		t.Errorf("expected option 1 after down, got %d", m.planFormState.Fields[1].OptionIndex)
 	}
 }
+
+func TestPlanFormFitsSupportedTerminalSizes(t *testing.T) {
+	sizes := []struct {
+		name    string
+		width   int
+		height  int
+		compact bool
+	}{
+		{name: "minimum", width: 30, height: 12, compact: true},
+		{name: "narrow", width: 40, height: 20, compact: true},
+		{name: "normal", width: 80, height: 24, compact: false},
+	}
+
+	for _, size := range sizes {
+		for active := 0; active < 3; active++ {
+			t.Run(size.name+"_"+strings.Repeat("step", active+1), func(t *testing.T) {
+				m := newTestModel(t)
+				m.width = size.width
+				m.height = size.height
+				m.openPlanForm("refactor the Unicode 模型 routing path without breaking compatibility")
+				for m.planFormState.ActiveField < active {
+					m.advancePlanFormField(1)
+				}
+
+				rendered := m.renderPlanForm()
+				assertRenderedLinesFit(t, rendered, size.width)
+				assertRenderedHeightFits(t, rendered, size.height)
+				if strings.Contains(rendered, "> >") {
+					t.Fatalf("plan form rendered duplicate input prompts:\n%s", rendered)
+				}
+				if !strings.Contains(rendered, "╰") {
+					t.Fatalf("plan form lost its closing border:\n%s", rendered)
+				}
+				if !strings.Contains(rendered, "esc cancel") {
+					t.Fatalf("plan form lost its cancellation affordance:\n%s", rendered)
+				}
+
+				if size.compact {
+					progress := []string{"Plan · 1/3", "Plan · 2/3", "Plan · 3/3"}[active]
+					if !strings.Contains(rendered, progress) {
+						t.Fatalf("compact plan form missing progress %q:\n%s", progress, rendered)
+					}
+					for i, label := range []string{"Task", "Scope", "Focus (optional)"} {
+						if (i == active) != strings.Contains(rendered, label) {
+							t.Fatalf("compact plan form field visibility for %q is wrong:\n%s", label, rendered)
+						}
+					}
+					return
+				}
+
+				for _, label := range []string{"Plan Task", "Task", "Scope", "Focus (optional)"} {
+					if !strings.Contains(rendered, label) {
+						t.Fatalf("normal plan form missing %q:\n%s", label, rendered)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestPlanFormFooterMatchesEnterBehavior(t *testing.T) {
+	sizes := []struct {
+		name   string
+		width  int
+		height int
+	}{
+		{name: "minimum", width: 30, height: 12},
+		{name: "narrow", width: 40, height: 20},
+		{name: "normal", width: 80, height: 24},
+	}
+	steps := []struct {
+		active        int
+		footer        string
+		wantSubmitted bool
+		wantNext      int
+	}{
+		{active: 0, footer: "next", wantNext: 1},
+		{active: 1, footer: "next", wantNext: 2},
+		{active: 2, footer: "enter submit", wantSubmitted: true, wantNext: 2},
+	}
+
+	for _, size := range sizes {
+		for _, step := range steps {
+			t.Run(size.name+"_"+strings.Repeat("enter", step.active+1), func(t *testing.T) {
+				m := newTestModel(t)
+				m.width = size.width
+				m.height = size.height
+				m.openPlanForm("plan this change")
+				for m.planFormState.ActiveField < step.active {
+					m.advancePlanFormField(1)
+				}
+
+				rendered := m.renderPlanForm()
+				if !strings.Contains(rendered, step.footer) {
+					t.Fatalf("step %d footer missing %q:\n%s", step.active+1, step.footer, rendered)
+				}
+				if !strings.Contains(rendered, "enter") {
+					t.Fatalf("step %d footer does not name Enter behavior:\n%s", step.active+1, rendered)
+				}
+				if step.active < 2 && strings.Contains(rendered, "enter submit") {
+					t.Fatalf("step %d falsely advertised submission:\n%s", step.active+1, rendered)
+				}
+
+				submitted, cancelled := m.updatePlanForm(enterKey())
+				if cancelled {
+					t.Fatalf("Enter cancelled step %d", step.active+1)
+				}
+				if submitted != step.wantSubmitted {
+					t.Fatalf("step %d submitted = %v, want %v", step.active+1, submitted, step.wantSubmitted)
+				}
+				if got := m.planFormState.ActiveField; got != step.wantNext {
+					t.Fatalf("step %d active field after Enter = %d, want %d", step.active+1, got, step.wantNext)
+				}
+			})
+		}
+	}
+}

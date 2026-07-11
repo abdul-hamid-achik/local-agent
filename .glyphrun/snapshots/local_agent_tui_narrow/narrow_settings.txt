@@ -1,19 +1,19 @@
 
 
 
-   ╭────────────────────────────────╮
-   │    Session Settings            │
-   │ │ Model  ·  Auto · qwen3.5:2b  │
-   │   Agent profile  ·  Default    │
-   │   Mode  ·  ASK                 │
-   │   Sessions  ·  Resume          │
-   │   Compact layout  ·  Auto      │
-   │   Runtime status  ·  0 server… │
-   │   Help  ·  Shortcuts           │
-   │                                │
-   │   Choose an installed local m… │
-   │ ↑/↓ · Enter · Esc close        │
-   ╰────────────────────────────────╯
+ ╭────────────────────────────────────╮
+ │ Settings                           │
+ │ │ Model · Pinned · qwen3.5:2b      │
+ │   Agent profile · Default          │
+ │   Mode · PLAN                      │
+ │   Sessions · Resume                │
+ │   Compact layout · Auto            │
+ │   Runtime status · 0 servers · 19… │
+ │   Help · Shortcuts                 │
+ │                                    │
+ │   Choose an installed local model  │
+ │ esc close · enter · ↑/↓            │
+ ╰────────────────────────────────────╯
 
 ───────────────────────────────────────
 ❯ Ask, @mention files, or type /help

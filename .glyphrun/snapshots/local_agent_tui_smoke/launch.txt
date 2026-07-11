@@ -14,8 +14,8 @@
                                                       LOCAL AGENT
                                      Local-first · Ollama · tool effects ask first
                                                    ASK · qwen3.5:2b
-                                  Enter send · / commands · Ctrl+P settings · ? help
-                                  Shift+Tab mode · Ctrl+M model · @ files · # skills
+                                  enter send · / commands · ctrl+p settings · ? help
+                                  shift+tab mode · ctrl+m model · @ files · # skills
 
 
 

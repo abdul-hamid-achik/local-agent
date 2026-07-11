@@ -62,6 +62,7 @@ const (
 type CompletionState struct {
 	Kind          string          // "command", "attachments", "skills"
 	Filter        textinput.Model // inline filter field
+	ComposerDraft string          // complete composer value when the modal opened
 	AllItems      []Completion    // full unfiltered list
 	FilteredItems []Completion    // items matching current filter
 	Index         int             // cursor in FilteredItems
@@ -160,7 +161,8 @@ type Model struct {
 	initCancel   context.CancelFunc
 
 	// Completion modal
-	completionState *CompletionState // nil when no overlay
+	completionState           *CompletionState // nil when no overlay
+	completionSuppressedDraft string           // exact unchanged draft dismissed with Escape
 
 	// Tool display
 	toolEntries    []ToolEntry
@@ -432,6 +434,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		m.scramble.SetDark(msg.IsDark())
 		// Update tool card styles for theme.
 		m.toolCardMgr.SetDark(msg.IsDark())
+		m.restylePickerOverlays()
 		// Recreate markdown renderer for new theme.
 		if m.width > 0 {
 			m.markdownWidth = m.chatContentWidth()
@@ -505,7 +508,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 
 		// Resize help viewport if it's open.
 		if m.overlay == OverlayHelp {
-			m.initHelpViewport()
+			m.resizeHelpViewport(true)
 		}
 		m.resizePickerOverlays()
 
@@ -570,10 +573,12 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 				m.pendingPaste = ""
 				return m, m.beginShutdown()
 			case msg.String() == "y":
+				m.clearCompletionSuppression()
 				m.input.InsertString("```\n" + m.pendingPaste + "\n```")
 				m.pendingPaste = ""
 				m.syncInputHeight()
 			case msg.String() == "n":
+				m.clearCompletionSuppression()
 				m.input.InsertString(m.pendingPaste)
 				m.pendingPaste = ""
 				m.syncInputHeight()
@@ -662,8 +667,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			if key.Matches(msg, m.keys.Cancel) {
 				switch m.overlay {
 				case OverlayCompletion:
-					m.input.SetValue("")
-					m.closeCompletion()
+					m.dismissCompletion()
 				case OverlayModelPicker:
 					m.closeModelPicker()
 				case OverlayPlanForm:
@@ -1005,6 +1009,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		case key.Matches(msg, m.keys.NewLine):
 			// Insert newline in textarea (shift+enter).
 			if m.state == StateIdle {
+				m.clearCompletionSuppression()
 				m.input.InsertString("\n")
 				m.syncInputHeight()
 				return m, nil
@@ -1018,6 +1023,8 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		case key.Matches(msg, m.keys.Complete):
 			// Tab key for autocomplete
 			if m.state == StateIdle && m.completer != nil && !m.isCompletionActive() {
+				// Explicit completion always overrides an earlier Escape dismissal.
+				m.completionSuppressedDraft = ""
 				m.triggerCompletion(m.input.Value())
 			}
 
@@ -1483,6 +1490,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		m.appendShutdownQuit(&cmds)
 
 	case editorReturnMsg:
+		m.clearCompletionSuppression()
 		m.input.SetValue(msg.Content)
 		m.input.CursorEnd()
 		m.syncInputHeight()
@@ -1542,6 +1550,21 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		m.viewport.GotoBottom()
 
 	case tea.MouseWheelMsg:
+		// A visible overlay owns pointer input. Scroll document overlays through
+		// their own Bubbles viewports and swallow wheel events for all other
+		// overlays so the hidden transcript cannot move underneath a modal.
+		if m.overlay != OverlayNone {
+			switch m.overlay {
+			case OverlayHelp:
+				m.helpViewport, _ = m.helpViewport.Update(msg)
+			case OverlayRuntimeStatus:
+				if m.runtimeStatusState != nil {
+					m.runtimeStatusState.Viewport, _ = m.runtimeStatusState.Viewport.Update(msg)
+				}
+			}
+			return m, nil
+		}
+
 		wasAtBottom := m.viewport.AtBottom()
 		m.viewport, _ = m.viewport.Update(msg)
 
@@ -1558,6 +1581,12 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		return m, nil
 
 	case tea.MouseClickMsg:
+		// Modals are intentionally keyboard-first. Until a child explicitly owns
+		// pointer interaction, clicks are swallowed rather than reaching ToolCards
+		// hidden behind the overlay.
+		if m.overlay != OverlayNone {
+			return m, nil
+		}
 		if msg.Button == tea.MouseLeft {
 			m.handleMouseClick(msg.X, msg.Y)
 		}
@@ -1567,6 +1596,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		if lines > 10 && m.state == StateIdle {
 			m.pendingPaste = msg.Content
 		} else if m.state == StateIdle {
+			m.clearCompletionSuppression()
 			m.input.InsertString(msg.Content)
 			m.syncInputHeight()
 		}
@@ -1606,9 +1636,15 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 
 		// Auto-trigger completion when user types /, @, or #
 		newInput := m.input.Value()
+		suppressed := m.completionSuppressedDraft != "" && newInput == m.completionSuppressedDraft
+		if m.completionSuppressedDraft != "" && !suppressed {
+			// Suppression is tied to one exact draft. The first edit restores normal
+			// automatic discovery, including reopening for the edited prefix.
+			m.completionSuppressedDraft = ""
+		}
 		if m.completer != nil && len(newInput) > 0 {
 			first := newInput[0]
-			if (first == '/' || first == '@' || first == '#') && !m.isCompletionActive() {
+			if (first == '/' || first == '@' || first == '#') && !m.isCompletionActive() && !suppressed {
 				m.triggerCompletion(newInput)
 			}
 		}
@@ -1633,17 +1669,23 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 }
 
 func agentTextareaStyles(isDark bool) textarea.Styles {
-	styles := textarea.DefaultLightStyles()
-	if isDark {
-		styles = textarea.DefaultDarkStyles()
+	styles := textarea.DefaultStyles(isDark)
+	palette := outputSemanticPalette(isDark)
+	styles.Focused = textarea.StyleState{
+		Base:        lipgloss.NewStyle(),
+		Text:        lipgloss.NewStyle().Foreground(palette.Text),
+		CursorLine:  lipgloss.NewStyle(),
+		Placeholder: lipgloss.NewStyle().Foreground(palette.Dim),
+		Prompt:      lipgloss.NewStyle().Foreground(palette.Accent).Bold(true),
 	}
-	styles.Focused.Base = lipgloss.NewStyle()
-	styles.Focused.CursorLine = lipgloss.NewStyle()
-	styles.Blurred.Base = lipgloss.NewStyle()
-	ld := lipgloss.LightDark(isDark)
-	styles.Focused.Prompt = lipgloss.NewStyle().Foreground(
-		ld(lipgloss.Color("#5e81ac"), lipgloss.Color("#88c0d0")),
-	)
+	styles.Blurred = textarea.StyleState{
+		Base:        lipgloss.NewStyle(),
+		Text:        lipgloss.NewStyle().Foreground(palette.Muted),
+		CursorLine:  lipgloss.NewStyle(),
+		Placeholder: lipgloss.NewStyle().Foreground(palette.Dim),
+		Prompt:      lipgloss.NewStyle().Foreground(palette.Dim),
+	}
+	styles.Cursor.Color = palette.Accent
 	return styles
 }
 
@@ -1680,6 +1722,7 @@ func (m *Model) navigateHistory(dir int) bool {
 		} else {
 			return false // already at oldest
 		}
+		m.clearCompletionSuppression()
 		m.input.SetValue(m.promptHistory[m.historyIndex])
 		m.input.CursorEnd()
 		return true
@@ -1691,11 +1734,13 @@ func (m *Model) navigateHistory(dir int) bool {
 		}
 		if m.historyIndex < len(m.promptHistory)-1 {
 			m.historyIndex++
+			m.clearCompletionSuppression()
 			m.input.SetValue(m.promptHistory[m.historyIndex])
 			m.input.CursorEnd()
 		} else {
 			// Past newest: restore saved input
 			m.historyIndex = -1
+			m.clearCompletionSuppression()
 			m.input.SetValue(m.historySaved)
 			m.input.CursorEnd()
 		}
@@ -1714,6 +1759,7 @@ func (m *Model) submitInput() tea.Cmd {
 
 	m.pushHistory(text)
 
+	m.clearCompletionSuppression()
 	m.input.Reset()
 	m.input.SetHeight(1)
 
@@ -2400,9 +2446,14 @@ func (m *Model) isCompletionActive() bool {
 }
 
 // newCompletionState creates a CompletionState with the filter textinput initialized.
-func newCompletionState(kind string, items []Completion, multiSelect bool) *CompletionState {
+func newCompletionState(kind string, items []Completion, multiSelect bool, theme ...bool) *CompletionState {
+	isDark := true
+	if len(theme) > 0 {
+		isDark = theme[0]
+	}
 	ti := textinput.New()
-	ti.Placeholder = "type to filter..."
+	ti.SetStyles(semanticTextInputStyles(isDark))
+	ti.Placeholder = "type to narrow"
 	ti.Prompt = ""
 	ti.Focus()
 	ti.CharLimit = 128
@@ -2444,8 +2495,16 @@ func (m *Model) triggerCompletion(input string) {
 		return
 	}
 
-	m.completionState = newCompletionState(kind, items, multiSelect)
-	m.completionState.Filter.SetWidth(max(1, pickerListWidth(m.width, 60)-2))
+	m.completionState = newCompletionState(kind, items, multiSelect, m.isDark)
+	m.completionState.ComposerDraft = input
+	if len(input) > 1 {
+		query := input[1:]
+		m.completionState.Filter.SetValue(query)
+		m.completionState.Filter.CursorEnd()
+		m.completionState.FilteredItems = FilterCompletions(items, query)
+	}
+	m.completionState.Filter.SetWidth(completionFilterInputWidth(m.width))
+	m.completionSuppressedDraft = ""
 	m.overlay = OverlayCompletion
 	m.input.Blur()
 }
@@ -2558,8 +2617,51 @@ func (m *Model) drillUpFolder() {
 
 func (m *Model) closeCompletion() {
 	m.completionState = nil
+	m.clearCompletionSuppression()
 	m.overlay = OverlayNone
 	m.input.Focus()
+}
+
+func (m *Model) clearCompletionSuppression() {
+	m.completionSuppressedDraft = ""
+}
+
+// dismissCompletion returns every character typed through the completion
+// filter to the composer. Automatic discovery remains dismissed only while
+// that exact draft is unchanged; editing it or pressing Tab can reopen the
+// completion surface.
+func (m *Model) dismissCompletion() {
+	draft := m.completionDraft()
+	m.closeCompletion()
+	m.input.SetValue(draft)
+	m.input.CursorEnd()
+	m.syncInputHeight()
+	m.completionSuppressedDraft = draft
+}
+
+func (m *Model) completionDraft() string {
+	cs := m.completionState
+	if cs == nil {
+		return m.input.Value()
+	}
+
+	query := cs.Filter.Value()
+	switch cs.Kind {
+	case "command":
+		return "/" + query
+	case "skills":
+		return "#" + query
+	case "attachments":
+		if cs.CurrentPath != "" {
+			return "@" + strings.Trim(cs.CurrentPath, "/") + "/" + query
+		}
+		return "@" + query
+	default:
+		if cs.ComposerDraft != "" {
+			return cs.ComposerDraft
+		}
+		return m.input.Value()
+	}
 }
 
 // sendToAgent sends a message to the agent, setting mode context first.
@@ -2678,6 +2780,7 @@ func (m *Model) setMode(mode Mode) {
 	if mode < ModeAsk || mode > ModeBuild || mode == m.mode {
 		return
 	}
+	hadConversation := m.conversationStarted()
 	m.mode = mode
 	cfg := m.modeConfigs[mode]
 	m.setRouterMode(cfg.RouterMode)
@@ -2699,11 +2802,15 @@ func (m *Model) setMode(mode Mode) {
 		m.logger.Info("mode switched", "mode", cfg.Label, "model", m.model)
 	}
 
-	// Keep mode changes as durable transcript receipts.
-	m.entries = append(m.entries, ChatEntry{
-		Kind:    "system",
-		Content: fmt.Sprintf("Mode switched to %s (%s)", cfg.Label, m.model),
-	})
+	// The empty-state orientation already owns mode and model. Once a real
+	// conversation exists, retain a compact durable receipt for the transition.
+	if hadConversation {
+		receipt := "Mode · " + cfg.Label
+		if m.model != "" {
+			receipt += " · " + m.model
+		}
+		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: receipt})
+	}
 	m.viewport.SetContent(m.renderEntries())
 	m.viewport.GotoBottom()
 }
@@ -2784,6 +2891,7 @@ func (m *Model) closeModelPicker() {
 // openPlanForm shows the plan form pre-filled with the given task text.
 func (m *Model) openPlanForm(task string) {
 	m.planFormState = NewPlanFormState(task)
+	m.restylePickerOverlays()
 	m.overlay = OverlayPlanForm
 	m.input.Blur()
 }

@@ -2,10 +2,12 @@ package ui
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestRuntimeStatusBoundsFailuresAndScrollsToFinalEntry(t *testing.T) {
@@ -24,7 +26,8 @@ func TestRuntimeStatusBoundsFailuresAndScrollsToFinalEntry(t *testing.T) {
 	top := m.renderRuntimeStatus()
 	assertRenderedLinesFit(t, top, 40)
 	assertRenderedHeightFits(t, top, 20)
-	if !strings.Contains(top, "Esc/q back") || !strings.Contains(top, "↓ more") {
+	plainTop := ansi.Strip(top)
+	if !strings.Contains(plainTop, "esc/q back") || !strings.Contains(plainTop, "↓") {
 		t.Fatalf("runtime footer is not persistently actionable:\n%s", top)
 	}
 
@@ -53,4 +56,34 @@ func TestRuntimeStatusPreservesScrollAcrossResize(t *testing.T) {
 	}
 	assertRenderedLinesFit(t, m.renderRuntimeStatus(), 60)
 	assertRenderedHeightFits(t, m.renderRuntimeStatus(), 20)
+}
+
+func TestRuntimeStatusSeparatesLocalToolsFromMCPServers(t *testing.T) {
+	m := newTestModel(t)
+	home := t.TempDir()
+	workspace := filepath.Join(home, "src", "project")
+	t.Setenv("HOME", home)
+	m.agent.SetWorkDir(workspace)
+	m.toolCount = 19
+	m.serverCount = 0
+
+	content := m.buildRuntimeStatusContent(52)
+	for _, want := range []string{"Workspace", "~/src/project", "Tools", "19 available", "MCP", "0 servers"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("runtime status missing %q:\n%s", want, content)
+		}
+	}
+	if strings.Contains(content, "across 0 MCP servers") {
+		t.Fatalf("runtime status still conflates local tools with MCP servers:\n%s", content)
+	}
+}
+
+func TestCompactWorkspacePathPreservesRepositoryName(t *testing.T) {
+	path := filepath.Join(string(filepath.Separator), "Users", "person", "projects", "local-agent")
+	if got, want := compactWorkspacePath(path, 22), "…/projects/local-agent"; got != want {
+		t.Fatalf("compact workspace = %q, want %q", got, want)
+	}
+	if got, want := compactWorkspacePath(path, 14), "…/local-agent"; got != want {
+		t.Fatalf("narrow workspace = %q, want %q", got, want)
+	}
 }

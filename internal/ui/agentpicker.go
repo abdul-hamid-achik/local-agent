@@ -52,13 +52,12 @@ func newAgentPickerState(names []string, current string, terminalWidth, terminal
 		items = append(items, agentItem{name: name, display: name, current: name == current})
 	}
 
-	delegate := list.NewDefaultDelegate()
-	delegate.Styles = list.NewDefaultItemStyles(isDark)
-	delegate.SetSpacing(0)
+	delegate := newPickerDelegate(isDark, false)
 	width := pickerListWidth(terminalWidth, 52)
 	height := pickerListHeight(terminalHeight, len(items)*delegate.Height()+2, 4)
 	l := list.New(items, delegate, width, height)
-	l.Title = "Select Agent Profile"
+	configurePickerList(&l, isDark)
+	l.Title = "Profile"
 	l.SetShowStatusBar(false)
 	l.SetShowHelp(false)
 	l.SetShowPagination(false)

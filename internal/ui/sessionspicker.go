@@ -57,9 +57,7 @@ func newSessionsPickerState(sessions []SessionListItem, width, height int, isDar
 		}
 	}
 
-	delegate := list.NewDefaultDelegate()
-	delegate.Styles = list.NewDefaultItemStyles(isDark)
-	delegate.SetSpacing(0)
+	delegate := newPickerDelegate(isDark, false)
 
 	listW := pickerListWidth(width, 60)
 
@@ -68,6 +66,7 @@ func newSessionsPickerState(sessions []SessionListItem, width, height int, isDar
 	pickerH = pickerListHeight(height, pickerH, 4)
 
 	l := list.New(items, delegate, listW, pickerH)
+	configurePickerList(&l, isDark)
 	l.Title = "Sessions"
 	l.SetShowStatusBar(false)
 	l.SetShowHelp(false)
@@ -121,7 +120,10 @@ func (m *Model) renderSessionsPicker() string {
 	default:
 		content += m.styles.OverlayDim.Render("No saved sessions in this workspace.")
 	}
-	return m.renderPickerFrame(content, 60, "Esc "+m.overlayCloseLabel())
+	return m.renderPickerFrame(content, 60, m.renderKeyHints(
+		pickerListWidth(m.width, 60),
+		keyHint{Key: "esc", Action: m.overlayCloseLabel()},
+	))
 }
 
 // closeSessionsPicker dismisses the sessions picker overlay.

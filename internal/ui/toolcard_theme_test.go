@@ -8,6 +8,10 @@ import (
 )
 
 func TestNewToolCardStylesUsesLightDarkPalette(t *testing.T) {
+	previous := noColor
+	noColor = false
+	t.Cleanup(func() { noColor = previous })
+
 	tests := []struct {
 		name   string
 		isDark bool
@@ -74,6 +78,10 @@ func TestNewToolCardStylesUsesLightDarkPalette(t *testing.T) {
 }
 
 func TestToolCardManagerSetDarkUpdatesStylesAndPreservesCallID(t *testing.T) {
+	previous := noColor
+	noColor = false
+	t.Cleanup(func() { noColor = previous })
+
 	mgr := NewToolCardManager(false)
 	mgr.AddCardWithID("call-42", "read_file", ToolCardFile, time.Now())
 

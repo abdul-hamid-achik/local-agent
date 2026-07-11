@@ -62,11 +62,11 @@ func DefaultKeyMap() KeyMap {
 		),
 		Help: key.NewBinding(
 			key.WithKeys("?"),
-			key.WithHelp("?", "toggle help"),
+			key.WithHelp("?", "show help (empty input)"),
 		),
 		ToggleTools: key.NewBinding(
 			key.WithKeys("t"),
-			key.WithHelp("t", "expand/collapse tool details"),
+			key.WithHelp("t", "toggle all tools (empty input)"),
 		),
 		PageUp: key.NewBinding(
 			key.WithKeys("pgup"),
@@ -106,7 +106,7 @@ func DefaultKeyMap() KeyMap {
 		),
 		CopyLast: key.NewBinding(
 			key.WithKeys("ctrl+y"),
-			key.WithHelp("ctrl+y", "copy last response"),
+			key.WithHelp("ctrl+y", "copy last response (empty input)"),
 		),
 		CycleMode: key.NewBinding(
 			key.WithKeys("shift+tab"),
@@ -122,19 +122,19 @@ func DefaultKeyMap() KeyMap {
 		),
 		HistoryUp: key.NewBinding(
 			key.WithKeys("up"),
-			key.WithHelp("↑", "previous input"),
+			key.WithHelp("↑", "previous input (empty input)"),
 		),
 		HistoryDown: key.NewBinding(
 			key.WithKeys("down"),
-			key.WithHelp("↓", "next input"),
+			key.WithHelp("↓", "next input (history active)"),
 		),
 		ToggleFocusedTool: key.NewBinding(
 			key.WithKeys(" "),
-			key.WithHelp("space", "toggle last tool details"),
+			key.WithHelp("space", "toggle last tool (empty input)"),
 		),
 		ToggleThinking: key.NewBinding(
 			key.WithKeys("ctrl+t"),
-			key.WithHelp("ctrl+t", "toggle thinking display"),
+			key.WithHelp("ctrl+t", "toggle thinking (empty input)"),
 		),
 		CompactToggle: key.NewBinding(
 			key.WithKeys("ctrl+k"),
@@ -160,6 +160,6 @@ func (k KeyMap) FullHelp() [][]key.Binding {
 		{k.PageUp, k.PageDown, k.HalfPageUp, k.HalfPageDn},
 		{k.CycleMode, k.ModelPicker, k.SettingsPicker},
 		{k.HistoryUp, k.HistoryDown},
-		{k.ToggleFocusedTool, k.ToggleThinking, k.CompactToggle, k.ExternalEditor},
+		{k.ToggleFocusedTool, k.ToggleThinking, k.CompactToggle, k.ExternalEditor, k.Complete},
 	}
 }

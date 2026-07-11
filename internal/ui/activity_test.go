@@ -20,7 +20,7 @@ func TestMinimumTerminalWorkingStatesFit(t *testing.T) {
 		set  func(*Model)
 		want string
 	}{
-		{name: "idle", set: func(*Model) {}, want: "Ctrl+P settings"},
+		{name: "idle", set: func(*Model) {}, want: "ctrl+p settings"},
 		{name: "failed runtime", set: func(m *Model) {
 			m.failedServers = []FailedServer{{Name: "tools", Reason: "offline"}}
 		}, want: "failed"},
@@ -68,7 +68,7 @@ func TestMinimumTerminalWorkingStatesFit(t *testing.T) {
 			if got := lipgloss.Height(strings.TrimSuffix(view, "\n")); got > 12 {
 				t.Fatalf("minimum view height = %d, want <= 12:\n%s", got, view)
 			}
-			if m.composerIsBusy() && !strings.Contains(view, "Esc") && tt.name != "export" {
+			if m.composerIsBusy() && !strings.Contains(view, "esc") && tt.name != "export" {
 				t.Fatalf("cancellable working state lost Esc affordance:\n%s", view)
 			}
 		})
@@ -135,7 +135,7 @@ func TestToolCardUsesSharedSpinnerAndCompletedReceiptIsStable(t *testing.T) {
 	if footerBefore != footerAfter || !strings.Contains(footerAfter, "Tool running") || strings.Contains(footerAfter, "internal/ui") {
 		t.Fatalf("tool footer competed with the animated card: before=%q after=%q", footerBefore, footerAfter)
 	}
-	for _, want := range []string{"read_file", "internal/ui", "1.5s"} {
+	for _, want := range []string{"Reading", "internal/ui", "1.5s"} {
 		if !strings.Contains(after, want) {
 			t.Fatalf("running tool receipt missing %q:\n%s", want, after)
 		}

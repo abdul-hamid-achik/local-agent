@@ -148,7 +148,8 @@ func (m *Model) renderCompletionModal() string {
 	b.WriteString("\n")
 
 	// Filter input
-	b.WriteString(m.styles.CompletionFilter.Render("> " + cs.Filter.View()))
+	b.WriteString(m.styles.FocusIndicator.Render(completionFilterPrompt))
+	b.WriteString(cs.Filter.View())
 	b.WriteString("\n")
 
 	// Breadcrumb for @ file browsing
@@ -237,15 +238,19 @@ func (m *Model) renderCompletionModal() string {
 		b.WriteString("\n")
 	}
 
-	// Footer hints
-	hints := "Esc cancel · Enter select"
+	// Footer hints use the same priority grammar as every other modal.
+	hints := []keyHint{
+		{Key: m.keys.Cancel.Help().Key, Action: "cancel"},
+		{Key: m.keys.CompleteSelect.Help().Key, Action: "select"},
+		{Key: "↑/↓", Action: "move"},
+	}
 	if cs.Kind == "attachments" && cs.CurrentPath != "" {
-		hints += " · Backspace up"
+		hints = append(hints, keyHint{Key: "backspace", Action: "up"})
 	}
 	if cs.Selected != nil {
-		hints += " · Tab toggle"
+		hints = append(hints, keyHint{Key: m.keys.CompleteToggle.Help().Key, Action: "toggle"})
 	}
-	return m.renderPickerFrame(b.String(), 60, truncateDisplay(hints, contentW))
+	return m.renderPickerFrame(b.String(), 60, m.renderKeyHints(contentW, hints...))
 }
 
 // renderStatusLine builds the status bar above the input/hint area.
@@ -258,14 +263,14 @@ func (m *Model) renderStatusLine() string {
 		if args != "" {
 			promptText += " " + args
 		}
-		actions := "y allow · n deny · a always · Esc cancel"
+		actions := "esc cancel · y allow · n deny · a always"
 		switch {
 		case paneW < 34:
-			actions = "y/n/a"
+			actions = "esc · y/n/a"
 		case paneW < 52:
-			actions = "y/n/a · Esc cancel"
+			actions = "esc cancel · y/n/a"
 		case paneW < 80:
-			actions = "y allow · n deny · a always"
+			actions = "esc · y allow · n deny · a always"
 		}
 		fixed := "  Approve  · " + actions
 		promptBudget := max(1, paneW-lipgloss.Width(fixed)-1)
@@ -337,7 +342,7 @@ func (m *Model) renderStatusLine() string {
 		parts = append(parts, contextStatus)
 	}
 	if paneW >= 58 && conversationStarted {
-		parts = append(parts, m.styles.FocusIndicator.Render("Ctrl+P settings"))
+		parts = append(parts, m.styles.FocusIndicator.Render("ctrl+p settings"))
 	}
 
 	separator := m.styles.StatusText.Render(" · ")
@@ -605,14 +610,14 @@ func (m *Model) renderWelcome(b *strings.Builder) {
 	}
 
 	if micro {
-		writeLine(m.styles.WelcomeHint, "Enter · Ctrl+P settings")
+		writeLine(m.styles.WelcomeHint, "enter · ctrl+p settings")
 		writeLine(m.styles.StatusText, "? help · / @ #")
 	} else if compact {
-		writeLine(m.styles.WelcomeHint, "Enter send · Ctrl+P settings · ? help")
+		writeLine(m.styles.WelcomeHint, "enter send · ctrl+p settings · ? help")
 		writeLine(m.styles.StatusText, "/ commands · @ files · # skills")
 	} else {
-		writeLine(m.styles.WelcomeHint, "Enter send · / commands · Ctrl+P settings · ? help")
-		writeLine(m.styles.StatusText, "Shift+Tab mode · Ctrl+M model · @ files · # skills")
+		writeLine(m.styles.WelcomeHint, "enter send · / commands · ctrl+p settings · ? help")
+		writeLine(m.styles.StatusText, "shift+tab mode · ctrl+m model · @ files · # skills")
 	}
 
 	// Center the welcome content horizontally in the available viewport width.

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -252,6 +253,117 @@ func TestScrollAnchor_ViewportAtBottom(t *testing.T) {
 
 	if m.viewport.AtBottom() {
 		t.Error("viewport should not be at bottom after scrolling to top")
+	}
+}
+
+func TestOverlayMouseWheelScrollsDocumentInsteadOfTranscript(t *testing.T) {
+	for _, overlay := range []OverlayKind{OverlayHelp, OverlayRuntimeStatus} {
+		t.Run(overlayName(overlay), func(t *testing.T) {
+			m := newTestModel(t)
+			m.viewport.SetContent(strings.Repeat("transcript line\n", 80))
+			m.viewport.GotoTop()
+			transcriptOffset := m.viewport.YOffset()
+
+			var modalOffset func() int
+			var modalDelta int
+			switch overlay {
+			case OverlayHelp:
+				m.overlay = OverlayHelp
+				m.initHelpViewport()
+				m.helpViewport.SetHeight(2)
+				m.helpViewport.SetContent(strings.Repeat("help line\n", 40))
+				modalDelta = m.helpViewport.MouseWheelDelta
+				modalOffset = func() int { return m.helpViewport.YOffset() }
+			case OverlayRuntimeStatus:
+				m.openRuntimeStatus()
+				m.runtimeStatusState.Viewport.SetHeight(2)
+				m.runtimeStatusState.Viewport.SetContent(strings.Repeat("runtime line\n", 40))
+				modalDelta = m.runtimeStatusState.Viewport.MouseWheelDelta
+				modalOffset = func() int { return m.runtimeStatusState.Viewport.YOffset() }
+			}
+
+			updated, _ := m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown})
+			m = updated.(*Model)
+			if got := modalOffset(); got != modalDelta {
+				t.Fatalf("modal wheel moved %d rows, want %d", got, modalDelta)
+			}
+			if got := m.viewport.YOffset(); got != transcriptOffset {
+				t.Fatalf("hidden transcript moved from %d to %d", transcriptOffset, got)
+			}
+			if !m.anchorActive || m.userScrolledUp {
+				t.Fatalf("modal wheel changed transcript anchor: active=%v scrolled=%v", m.anchorActive, m.userScrolledUp)
+			}
+		})
+	}
+}
+
+func TestOtherOverlaysSwallowMouseWheel(t *testing.T) {
+	overlays := []OverlayKind{
+		OverlayCompletion,
+		OverlayModelPicker,
+		OverlayPlanForm,
+		OverlaySessionsPicker,
+		OverlaySettings,
+		OverlayAgentPicker,
+		OverlayModePicker,
+	}
+	for _, overlay := range overlays {
+		t.Run(overlayName(overlay), func(t *testing.T) {
+			m := newTestModel(t)
+			m.viewport.SetContent(strings.Repeat("transcript line\n", 80))
+			m.viewport.GotoTop()
+			m.toolEntries = []ToolEntry{{Collapsed: true}}
+			m.toolEntryRows = map[int]int{0: 0}
+			m.overlay = overlay
+
+			updated, _ := m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown})
+			m = updated.(*Model)
+			if got := m.viewport.YOffset(); got != 0 {
+				t.Fatalf("overlay wheel moved hidden transcript to %d", got)
+			}
+		})
+	}
+}
+
+func TestOverlayClicksNeverToggleHiddenToolCards(t *testing.T) {
+	for overlay := OverlayHelp; overlay <= OverlayRuntimeStatus; overlay++ {
+		t.Run(overlayName(overlay), func(t *testing.T) {
+			m := newTestModel(t)
+			m.toolEntries = []ToolEntry{{Collapsed: true}}
+			m.toolEntryRows = map[int]int{0: 0}
+			m.overlay = overlay
+
+			updated, _ := m.Update(tea.MouseClickMsg{X: 0, Y: 0, Button: tea.MouseLeft})
+			m = updated.(*Model)
+			if !m.toolEntries[0].Collapsed {
+				t.Fatal("overlay click toggled a hidden ToolCard")
+			}
+		})
+	}
+}
+
+func overlayName(overlay OverlayKind) string {
+	switch overlay {
+	case OverlayHelp:
+		return "help"
+	case OverlayCompletion:
+		return "completion"
+	case OverlayModelPicker:
+		return "model"
+	case OverlayPlanForm:
+		return "plan"
+	case OverlaySessionsPicker:
+		return "sessions"
+	case OverlaySettings:
+		return "settings"
+	case OverlayAgentPicker:
+		return "agent"
+	case OverlayModePicker:
+		return "mode"
+	case OverlayRuntimeStatus:
+		return "runtime"
+	default:
+		return "none"
 	}
 }
 

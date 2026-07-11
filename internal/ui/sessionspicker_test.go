@@ -6,6 +6,7 @@ import (
 	"unicode/utf8"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestSessionTitleTruncationPreservesUnicode(t *testing.T) {
@@ -32,7 +33,25 @@ func TestSessionsPickerFitsMinimumAndKeepsFooter(t *testing.T) {
 	rendered := m.renderSessionsPicker()
 	assertRenderedLinesFit(t, rendered, minTerminalWidth)
 	assertRenderedHeightFits(t, rendered, minTerminalHeight)
-	if !strings.Contains(rendered, "Esc close") {
+	plain := ansi.Strip(rendered)
+	if !strings.Contains(plain, "esc close") {
 		t.Fatalf("sessions footer missing close affordance:\n%s", rendered)
+	}
+}
+
+func TestSessionsPickerFooterNamesSlashFilterBinding(t *testing.T) {
+	m := newTestModel(t)
+	m.sessionsPickerState = newSessionsPickerState([]SessionListItem{
+		{ID: 1, Title: "First session", CreatedAt: "just now"},
+		{ID: 2, Title: "Second session", CreatedAt: "yesterday"},
+	}, m.width, m.height, m.isDark)
+	m.overlay = OverlaySessionsPicker
+
+	rendered := ansi.Strip(m.renderSessionsPicker())
+	if !strings.Contains(rendered, "/ filter") {
+		t.Fatalf("sessions footer should expose the Bubbles filter binding:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "Type to filter") {
+		t.Fatalf("sessions footer should not imply filtering starts without /:\n%s", rendered)
 	}
 }

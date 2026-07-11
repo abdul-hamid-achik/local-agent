@@ -24,21 +24,13 @@ func (m *Model) renderPickerFrame(content string, maximum int, footer string) st
 
 func (m *Model) pickerNavigationFooter(maximum int, filterable bool) string {
 	width := pickerListWidth(m.width, maximum)
-	closeLabel := m.overlayCloseLabel()
+	hints := []keyHint{
+		{Key: m.keys.Cancel.Help().Key, Action: m.overlayCloseLabel()},
+		{Key: m.keys.CompleteSelect.Help().Key, Action: "select"},
+		{Key: "↑/↓", Action: "move"},
+	}
 	if filterable {
-		if width < 24 {
-			return "/ filter Esc " + closeLabel
-		}
-		if width < 42 {
-			return "/ filter · Esc " + closeLabel
-		}
-		return "Type to filter · Enter select · Esc " + closeLabel
+		hints = append(hints, keyHint{Key: "/", Action: "filter"})
 	}
-	if width < 24 {
-		return "↑↓ Enter Esc " + closeLabel
-	}
-	if width < 42 {
-		return "↑/↓ · Enter · Esc " + closeLabel
-	}
-	return "↑/↓ navigate · Enter select · Esc " + closeLabel
+	return m.renderKeyHints(width, hints...)
 }

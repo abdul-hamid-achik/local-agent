@@ -20,7 +20,7 @@ terminal:
 
 preconditions:
   commands:
-    - run: "rm -rf .glyphrun/tmp/narrow-home .glyphrun/tmp/narrow-agents && mkdir -p .glyphrun/tmp/narrow-home .glyphrun/tmp/narrow-agents && go build -o ./bin/local-agent ./cmd/local-agent"
+    - run: "rm -rf .glyphrun/tmp/narrow-home .glyphrun/tmp/narrow-agents && mkdir -p .glyphrun/tmp/narrow-home/.config/local-agent .glyphrun/tmp/narrow-agents && printf '%s\\n' 'model:' '  auto_select: false' > .glyphrun/tmp/narrow-home/.config/local-agent/config.yaml && go build -o ./bin/local-agent ./cmd/local-agent"
       cwd: "."
       timeoutMs: 30000
 
@@ -34,7 +34,7 @@ steps:
       rows: 12
   - wait:
       screen:
-        contains: "Ctrl+P settings"
+        contains: "ctrl+p settings"
       timeoutMs: 2000
   - snapshot: minimum_idle
   - press: "ctrl+p"
@@ -44,6 +44,27 @@ steps:
       timeoutMs: 2000
   - snapshot: minimum_settings
   - press: "esc"
+  - wait:
+      screen:
+        contains: "ctrl+p settings"
+      timeoutMs: 2000
+  - press: "shift+tab"
+  - wait:
+      screen:
+        contains: "PLAN"
+      timeoutMs: 2000
+  - type: "polish the interface"
+  - press: "enter"
+  - wait:
+      screen:
+        contains: "Plan · 1/3"
+      timeoutMs: 2000
+  - snapshot: minimum_plan_form
+  - press: "esc"
+  - wait:
+      screen:
+        contains: "ctrl+p settings"
+      timeoutMs: 2000
   - resize:
       cols: 40
       rows: 20
@@ -55,7 +76,7 @@ steps:
   - press: "ctrl+p"
   - wait:
       screen:
-        contains: "Session Settings"
+        contains: "Settings"
       timeoutMs: 2000
   - snapshot: narrow_settings
   - press: "down"
@@ -63,13 +84,13 @@ steps:
   - press: "enter"
   - wait:
       screen:
-        contains: "Select Mode"
+        contains: "Read, search"
       timeoutMs: 2000
   - snapshot: narrow_mode
   - press: "esc"
   - wait:
       screen:
-        contains: "Session Settings"
+        contains: "Settings"
       timeoutMs: 2000
   - press: "down"
   - press: "down"
@@ -77,18 +98,29 @@ steps:
   - press: "enter"
   - wait:
       screen:
-        contains: "Runtime Status"
+        contains: "MCP"
       timeoutMs: 2000
   - snapshot: narrow_runtime
   - press: "esc"
   - wait:
       screen:
-        contains: "Session Settings"
+        contains: "Settings"
       timeoutMs: 2000
   - press: "esc"
   - wait:
       screen:
-        contains: "Ctrl+P settings"
+        contains: "ctrl+p settings"
+      timeoutMs: 2000
+  - press: "?"
+  - wait:
+      screen:
+        contains: "Keyboard Shortcuts"
+      timeoutMs: 2000
+  - snapshot: narrow_help
+  - press: "q"
+  - wait:
+      screen:
+        contains: "ctrl+p settings"
       timeoutMs: 2000
   - press: "/"
   - wait:
@@ -99,15 +131,13 @@ steps:
   - press: "esc"
   - wait:
       screen:
-        contains: "Ctrl+P settings"
+        notContains: "Commands"
       timeoutMs: 2000
-  - press: "?"
   - wait:
       screen:
-        contains: "Keyboard Shortcuts"
+        contains: "❯ /"
       timeoutMs: 2000
-  - snapshot: narrow_help
-  - press: "q"
+  - snapshot: narrow_command_draft
   - press: "ctrl+c"
   - wait:
       process:
@@ -126,6 +156,12 @@ outcomes:
     verify:
       snapshot:
         name: minimum_settings
+        mode: text
+  - id: minimum_plan_form_is_usable
+    description: the PLAN prompt exposes one truthful bounded step at the supported minimum
+    verify:
+      snapshot:
+        name: minimum_plan_form
         mode: text
   - id: narrow_conversation_is_directly_usable
     description: the conversation keeps the complete narrow terminal width without persistent chrome
@@ -156,6 +192,12 @@ outcomes:
     verify:
       snapshot:
         name: narrow_commands
+        mode: text
+  - id: completion_cancel_preserves_draft
+    description: dismissing completion returns the unchanged trigger to the composer
+    verify:
+      snapshot:
+        name: narrow_command_draft
         mode: text
   - id: responsive_help_opens
     description: help remains usable after the terminal is narrowed

@@ -2,7 +2,7 @@
          LOCAL AGENT
  Local-first · approvals on
       ASK · qwen3.5:2b
-   Enter · Ctrl+P settings
+   enter · ctrl+p settings
        ? help · / @ #
 
 

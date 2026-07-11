@@ -1,18 +1,18 @@
 
 
 
-
-   ╭────────────────────────────────╮
-   │ Runtime Status                 │
-   │                                │
-   │ Model  Auto · qwen3.5:2b       │
-   │ Profile  Default               │
-   │ Mode  ASK                      │
-   │ Tools  19 across 0 MCP servers │
-   │ ICE  disabled                  │
-   │ Esc/q back                     │
-   ╰────────────────────────────────╯
-
+ ╭────────────────────────────────────╮
+ │ Runtime                            │
+ │                                    │
+ │ Workspace  …/projects/local-agent  │
+ │ Model      Pinned · qwen3.5:2b     │
+ │ Profile    Default                 │
+ │ Mode       PLAN                    │
+ │ Tools      19 available            │
+ │ MCP        0 servers               │
+ │ ICE        disabled                │
+ │ esc/q back                         │
+ ╰────────────────────────────────────╯
 
 
 ───────────────────────────────────────

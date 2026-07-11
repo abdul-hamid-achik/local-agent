@@ -47,6 +47,7 @@ func TestCycleMode(t *testing.T) {
 
 	t.Run("adds_system_message", func(t *testing.T) {
 		m := newTestModel(t)
+		m.entries = append(m.entries, ChatEntry{Kind: "user", Content: "hello"})
 		before := len(m.entries)
 
 		updated, _ := m.Update(shiftTabKey())
@@ -59,7 +60,7 @@ func TestCycleMode(t *testing.T) {
 		if last.Kind != "system" {
 			t.Errorf("expected 'system' kind, got %q", last.Kind)
 		}
-		if !strings.Contains(last.Content, "Mode switched to") {
+		if !strings.Contains(last.Content, "Mode · PLAN") {
 			t.Errorf("expected mode switch info in content, got %q", last.Content)
 		}
 	})

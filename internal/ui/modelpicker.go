@@ -22,7 +22,7 @@ func (i modelItem) Title() string {
 		return title + "  ⚠"
 	}
 	if i.isCurrent {
-		title += " ●"
+		title += "  ✓"
 	}
 	return title
 }
@@ -67,9 +67,7 @@ func newModelPickerState(models []config.Model, currentModel string, terminalWid
 		}
 	}
 
-	delegate := list.NewDefaultDelegate()
-	delegate.Styles = list.NewDefaultItemStyles(isDark)
-	delegate.SetSpacing(0)
+	delegate := newPickerDelegate(isDark, false)
 
 	pickerW := pickerListWidth(terminalWidth, 50)
 	// Height: items + title bar (2 lines)
@@ -77,7 +75,8 @@ func newModelPickerState(models []config.Model, currentModel string, terminalWid
 	pickerH = pickerListHeight(terminalHeight, pickerH, 4)
 
 	l := list.New(items, delegate, pickerW, pickerH)
-	l.Title = "Select Model"
+	configurePickerList(&l, isDark)
+	l.Title = "Model"
 	l.SetShowStatusBar(false)
 	l.SetShowHelp(false)
 	l.SetShowPagination(false)
