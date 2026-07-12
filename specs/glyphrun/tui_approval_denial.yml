@@ -1,0 +1,174 @@
+version: 1
+name: local_agent_tui_approval_denial
+
+intent: |
+  a user can see a consequential tool request, retain its exact arguments at
+  minimum width, deny it from the keyboard, and continue without any file effect.
+
+target:
+  cmd:
+    - "${projectRoot}/.glyphrun/tmp/fake-ollama-approval"
+    - "${projectRoot}/bin/local-agent"
+    - "${projectRoot}/.glyphrun/tmp/approval-protocol.txt"
+  cwd: ".glyphrun/tmp/approval-workdir"
+  env:
+    HOME: "${projectRoot}/.glyphrun/tmp/approval-home"
+    LOCAL_AGENT_AGENTS_DIR: "${projectRoot}/.glyphrun/tmp/approval-agents"
+    LOCAL_AGENT_REDUCED_MOTION: "1"
+
+terminal:
+  cols: 90
+  rows: 28
+
+preconditions:
+  commands:
+    - run: "rm -rf .glyphrun/tmp/approval-home .glyphrun/tmp/approval-agents .glyphrun/tmp/approval-workdir .glyphrun/tmp/approval-protocol.txt .glyphrun/tmp/fake-ollama-approval && mkdir -p .glyphrun/tmp/approval-home/.config/local-agent .glyphrun/tmp/approval-agents .glyphrun/tmp/approval-workdir && printf '%s\\n' 'model:' '  auto_select: false' > .glyphrun/tmp/approval-home/.config/local-agent/config.yaml && go build -o ./bin/local-agent ./cmd/local-agent && go build -o .glyphrun/tmp/fake-ollama-approval ./specs/glyphrun/fixtures/fake_ollama_approval"
+      cwd: "."
+      timeoutMs: 30000
+
+steps:
+  - wait:
+      screen:
+        contains: "Ask, @mention files, or type /help"
+      timeoutMs: 5000
+  - press: "shift+tab"
+  - wait:
+      screen:
+        contains: "PLAN · qwen3.5:2b"
+      timeoutMs: 2000
+  - press: "shift+tab"
+  - wait:
+      screen:
+        contains: "BUILD · qwen3.5:2b"
+      timeoutMs: 2000
+  - type: "Create approval-probe.txt with the exact text must not be written."
+  - press: "enter"
+  - wait:
+      screen:
+        contains: "Thinking"
+      timeoutMs: 2000
+  - snapshot: busy_normal
+  - wait:
+      screen:
+        contains: "Approve write"
+      timeoutMs: 5000
+  - wait:
+      screen:
+        contains: "approval-probe.txt"
+      timeoutMs: 2000
+  - wait:
+      screen:
+        contains: "n deny"
+      timeoutMs: 2000
+  - wait:
+      idle:
+        quietForMs: 50
+      timeoutMs: 2000
+  - snapshot: approval_normal
+  - resize:
+      cols: 30
+      rows: 12
+  - wait:
+      screen:
+        contains: "approval-probe.txt"
+      timeoutMs: 2000
+  - wait:
+      screen:
+        contains: "y allow"
+      timeoutMs: 2000
+  - wait:
+      screen:
+        contains: "n deny"
+      timeoutMs: 2000
+  - wait:
+      screen:
+        contains: "a always"
+      timeoutMs: 2000
+  - wait:
+      idle:
+        quietForMs: 50
+      timeoutMs: 2000
+  - snapshot: approval_minimum
+  - press: "n"
+  - wait:
+      screen:
+        contains: "Denied safely."
+      timeoutMs: 4000
+  - resize:
+      cols: 50
+      rows: 20
+  - wait:
+      screen:
+        contains: "Denied safely. No file was changed."
+      timeoutMs: 2000
+  - wait:
+      screen:
+        contains: "Write failed"
+      timeoutMs: 2000
+  - wait:
+      screen:
+        contains: "Ask, @mention files, or type /help"
+      timeoutMs: 2000
+  - wait:
+      screen:
+        notContains: "✓ Done"
+      timeoutMs: 4000
+  - snapshot: denied_receipt
+  - press: "space"
+  - wait:
+      screen:
+        contains: "tool: write"
+      timeoutMs: 2000
+  - snapshot: denied_receipt_expanded
+  - press: "ctrl+c"
+  - wait:
+      process:
+        exitCode: 0
+      timeoutMs: 3000
+
+outcomes:
+  - id: busy_turn_is_clear
+    description: the real BUILD turn replaces the composer with a cancellable local-model activity line
+    verify:
+      snapshot:
+        name: busy_normal
+        mode: text
+  - id: normal_approval_is_inspectable
+    description: normal width exposes the exact write arguments and explicit approval decisions
+    verify:
+      snapshot:
+        name: approval_normal
+        mode: text
+  - id: minimum_approval_remains_safe
+    description: 30x12 preserves the consequential path and all three keyboard decisions
+    verify:
+      snapshot:
+        name: approval_minimum
+        mode: text
+  - id: keyboard_denial_returns_a_receipt
+    description: denying with n produces a failed Write receipt and the model acknowledges the denial
+    verify:
+      snapshot:
+        name: denied_receipt
+        mode: text
+  - id: denied_receipt_is_keyboard_inspectable
+    description: Space expands the denied receipt to show its raw tool identity and arguments
+    verify:
+      snapshot:
+        name: denied_receipt_expanded
+        mode: text
+  - id: denied_write_has_no_effect
+    description: the denied tool never creates its requested workspace file
+    verify:
+      command:
+        run: "test ! -e .glyphrun/tmp/approval-workdir/approval-probe.txt"
+  - id: fake_provider_observed_the_denial
+    description: exactly two provider calls occurred and the second contained the denied tool result
+    verify:
+      command:
+        run: "rg -q '^protocol_ok=true$' .glyphrun/tmp/approval-protocol.txt"
+  - id: approval_flow_quits_cleanly
+    description: ctrl+c exits cleanly after the denied turn is complete
+    verify:
+      process:
+        exitCode: 0

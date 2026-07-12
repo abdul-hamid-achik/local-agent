@@ -1,0 +1,27 @@
+  you ───────────────────────────────────────────────────────────────────────────
+  Create approval-probe.txt with the exact text must not be written.
+
+  Permission required for `write`:
+  ```json
+  {
+    "content": "must not be written",
+    "path": "approval-probe.txt"
+  }
+  ```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+─────────────────────────────────────────────────────────────────────────────────────────
+  Approve write content="must not be written"… · esc cancel · y allow · n deny · a always

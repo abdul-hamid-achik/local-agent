@@ -1,0 +1,11 @@
+  {
+  "content": "must not be
+  written",
+  "path":
+  "approval-probe.txt"
+  }
+  ```
+─────────────────────────────
+  Approve write content="mus…
+  esc cancel · y allow
+  n deny · a always
