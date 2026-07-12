@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -12,6 +11,7 @@ import (
 	"github.com/charmbracelet/log"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
+	"github.com/abdul-hamid-achik/local-agent/internal/execution"
 	"github.com/abdul-hamid-achik/local-agent/internal/ice"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 	"github.com/abdul-hamid-achik/local-agent/internal/mcp"
@@ -39,7 +39,6 @@ type Agent struct {
 	approvalCallback func(permission.ApprovalRequest)
 	toolsConfig      config.ToolsConfig
 	logger           *log.Logger
-	turnCounter      atomic.Uint64
 	turnRunning      atomic.Bool
 	turnMu           sync.Mutex
 	turnCancel       context.CancelFunc
@@ -52,6 +51,14 @@ type Agent struct {
 
 	checkpointStore     CheckpointStore
 	checkpointSessionID int64
+
+	executionLedger     ExecutionLedger
+	executionSessionID  int64
+	executionCursor     int64
+	executionRunID      string
+	executionRunIDErr   error
+	requireExecutionLog bool
+	unresolvedExecution *UnresolvedExecutionError
 }
 
 // SetLogger sets the structured logger used for observability. Safe to leave
@@ -68,18 +75,16 @@ func (a *Agent) logTurn(turnID string) *log.Logger {
 	return a.logger.With("turn", turnID)
 }
 
-// nextTurnID returns a monotonically increasing per-process turn correlation ID.
-func (a *Agent) nextTurnID() string {
-	return "t" + strconv.FormatUint(a.turnCounter.Add(1), 10)
-}
-
 // New creates a new Agent.
 func New(llmClient llm.Client, registry *mcp.Registry, numCtx int) *Agent {
+	runID, runIDErr := execution.NewRunID()
 	return &Agent{
-		llmClient:  llmClient,
-		registry:   registry,
-		numCtx:     numCtx,
-		toolPolicy: DefaultToolPolicy(),
+		llmClient:         llmClient,
+		registry:          registry,
+		numCtx:            numCtx,
+		toolPolicy:        DefaultToolPolicy(),
+		executionRunID:    runID,
+		executionRunIDErr: runIDErr,
 		// Filesystem reads can enter OS syscalls that do not observe context
 		// cancellation. Allow at most one abandoned worker for the lifetime of
 		// an Agent; later reads wait on this slot and remain cancellable.
@@ -390,6 +395,14 @@ func (a *Agent) MaxGrepResults() int {
 // Close cleans up resources.
 func (a *Agent) Close() {
 	a.turnMu.Lock()
+	if a.closed {
+		done := a.turnDone
+		a.turnMu.Unlock()
+		if done != nil {
+			<-done
+		}
+		return
+	}
 	a.closed = true
 	cancel := a.turnCancel
 	done := a.turnDone

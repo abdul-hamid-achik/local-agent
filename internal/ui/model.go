@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -27,6 +28,7 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/command"
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
+	"github.com/abdul-hamid-achik/local-agent/internal/execution"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 	"github.com/abdul-hamid-achik/local-agent/internal/permission"
 	"github.com/abdul-hamid-achik/local-agent/internal/safeio"
@@ -186,6 +188,8 @@ type Model struct {
 
 	// Session persistence
 	sessionID               int64
+	executionCursor         int64
+	executionLease          *db.ExecutionSessionLease
 	sessionStore            *db.Store
 	sessionsPickerState     *SessionsPickerState
 	sessionLoadToken        uint64
@@ -802,6 +806,8 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 						si := item.(sessionItem)
 						sessionID := si.id
 						sessionTitle := si.title
+						activeSessionID := m.sessionID
+						activeSessionLeased := m.executionLease != nil
 						m.overlayParent = OverlayNone
 						m.closeSessionsPicker()
 						m.sessionLoadToken++
@@ -813,11 +819,30 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 							if workspaceErr != nil {
 								return SessionLoadedMsg{LoadToken: loadToken, Err: workspaceErr}
 							}
+							var lease *db.ExecutionSessionLease
+							var err error
+							if sessionID != activeSessionID || !activeSessionLeased {
+								lease, err = m.sessionStore.AcquireExecutionSessionLease(context.Background(), sessionID, workspaceID)
+								if err != nil {
+									return SessionLoadedMsg{LoadToken: loadToken, Err: err}
+								}
+							}
 							session, state, err := loadPersistedSession(context.Background(), m.sessionStore, sessionID, workspaceID)
 							if err != nil {
+								if lease != nil {
+									_ = lease.Close()
+								}
 								return SessionLoadedMsg{LoadToken: loadToken, Err: err}
 							}
-							return SessionLoadedMsg{LoadToken: loadToken, SessionID: session.ID, State: state, Title: sessionTitle}
+							unresolved, unresolvedErr := m.sessionStore.ListExecutionRecoveryHazards(context.Background(), session.ID, workspaceID, state.ExecutionCursor, 100)
+							warning := unresolvedExecutionWarning(unresolved)
+							if unresolvedErr != nil {
+								warning = fmt.Sprintf("Recovery check failed: %v. This session will remain blocked until durable execution state can be verified.", unresolvedErr)
+							}
+							return SessionLoadedMsg{
+								LoadToken: loadToken, SessionID: session.ID, State: state,
+								Title: sessionTitle, RecoveryWarning: warning, ExecutionLease: lease,
+							}
 						}
 						return m, tea.Batch(m.startActivityCmd(), load)
 					}
@@ -1235,10 +1260,14 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 
 	case AgentDoneMsg:
 		if m.logger != nil {
-			m.logger.Info("agent done", "eval_tokens", m.evalCount)
+			m.logger.Info("agent done", "eval_tokens", m.evalCount, "err", msg.Err)
 		}
+		var unresolved *agent.UnresolvedExecutionError
+		hasUnresolved := errors.As(msg.Err, &unresolved)
 		m.flushStream()
-		m.sessionTurnCount++
+		if msg.Err == nil {
+			m.sessionTurnCount++
+		}
 		if m.cancel != nil {
 			m.cancel()
 			m.cancel = nil
@@ -1253,27 +1282,64 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		m.recalcViewportHeight()
 		m.viewport.SetContent(m.renderEntries())
 		m.viewport.GotoBottom()
-		// Terminal title flash.
-		m.doneFlash = true
-		cmds = append(cmds, tea.Tick(2*time.Second, func(time.Time) tea.Msg {
-			return DoneFlashExpiredMsg{}
-		}))
-		// Persist a lossless state snapshot after every completed turn.
-		if m.sessionID > 0 && m.sessionStore != nil {
-			stateJSON, err := encodeSessionState(m)
-			if err == nil {
-				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-				err = m.sessionStore.SaveSessionState(ctx, m.sessionID, stateJSON)
-				if err == nil {
-					_, err = m.sessionStore.RecordTokenUsage(ctx, db.RecordTokenUsageParams{
-						SessionID: m.sessionID, Turn: int64(m.sessionTurnCount), EvalCount: int64(m.turnEvalTotal),
-						PromptTokens: int64(m.turnPromptTotal), Model: m.model,
-					})
+		if msg.Err == nil {
+			// Terminal title flash is a success receipt, not a generic stopped state.
+			m.doneFlash = true
+			cmds = append(cmds, tea.Tick(2*time.Second, func(time.Time) tea.Msg {
+				return DoneFlashExpiredMsg{}
+			}))
+		} else {
+			m.doneFlash = false
+			switch {
+			case hasUnresolved:
+				detail := "execution state requires reconciliation"
+				if unresolved.Cause != nil {
+					detail = unresolved.Cause.Error()
 				}
-				cancel()
+				m.entries = append(m.entries, ChatEntry{
+					Kind: "error",
+					Content: fmt.Sprintf(
+						"Recovery blocked for %s: %s. Inspect the workspace before starting /new; automatic retry is disabled.",
+						unresolved.ToolName, detail,
+					),
+				})
+			case errors.Is(msg.Err, context.Canceled) && !m.shuttingDown:
+				m.entries = append(m.entries, ChatEntry{Kind: "system", Content: "Turn cancelled."})
 			}
-			if err != nil {
-				m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("Save session: %v", err)})
+			m.viewport.SetContent(m.renderEntries())
+			m.viewport.GotoBottom()
+		}
+		// Persist a lossless state snapshot after every settled attempt. Failed
+		// turns may contain cancellation or unknown-outcome receipts that must
+		// survive restart even though they do not count as completed turns.
+		if m.sessionID > 0 && m.sessionStore != nil {
+			previousCursor := m.executionCursor
+			var cursorErr error
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			if m.executionLease == nil {
+				cursorErr = errors.New("execution session lease is unavailable; snapshot cursor was not advanced")
+			} else {
+				m.executionCursor, cursorErr = m.snapshotExecutionCursor(ctx)
+			}
+			stateJSON, saveErr := encodeSessionState(m)
+			if saveErr == nil {
+				saveErr = m.sessionStore.SaveSessionState(ctx, m.sessionID, stateJSON)
+			}
+			if saveErr != nil {
+				m.executionCursor = previousCursor
+			} else if cursorErr == nil {
+				m.agent.SetExecutionSnapshotCursor(m.executionCursor)
+			}
+			var usageErr error
+			if saveErr == nil && msg.Err == nil {
+				_, usageErr = m.sessionStore.RecordTokenUsage(ctx, db.RecordTokenUsageParams{
+					SessionID: m.sessionID, Turn: int64(m.sessionTurnCount), EvalCount: int64(m.turnEvalTotal),
+					PromptTokens: int64(m.turnPromptTotal), Model: m.model,
+				})
+			}
+			cancel()
+			if persistErr := errors.Join(cursorErr, saveErr, usageErr); persistErr != nil {
+				m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("Save session: %v", persistErr)})
 				m.viewport.SetContent(m.renderEntries())
 				m.viewport.GotoBottom()
 			}
@@ -1526,24 +1592,45 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 
 	case SessionLoadedMsg:
 		if !m.sessionLoading || msg.LoadToken != m.sessionLoadToken {
+			if msg.ExecutionLease != nil {
+				_ = msg.ExecutionLease.Close()
+			}
 			break
 		}
 		m.sessionLoading = false
 		if m.state != StateIdle {
+			if msg.ExecutionLease != nil {
+				_ = msg.ExecutionLease.Close()
+			}
 			break
 		}
 		m.input.Focus()
 		m.invalidateEntryCache()
 		if msg.Err != nil {
+			if msg.ExecutionLease != nil {
+				_ = msg.ExecutionLease.Close()
+			}
 			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("Load session: %v", msg.Err)})
 		} else {
 			if err := m.restoreSessionState(msg.State); err != nil {
+				if msg.ExecutionLease != nil {
+					_ = msg.ExecutionLease.Close()
+				}
 				m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("Load session: %v", err)})
 			} else {
+				if msg.ExecutionLease != nil {
+					_ = m.releaseExecutionSessionLease()
+					m.executionLease = msg.ExecutionLease
+				}
 				m.sessionID = msg.SessionID
 				m.agent.SetCheckpointSessionID(msg.SessionID)
+				m.agent.SetExecutionSessionID(msg.SessionID)
+				m.agent.SetExecutionSnapshotCursor(m.executionCursor)
 				m.legacyCheckpointPreview = nil
 				m.entries = append(m.entries, ChatEntry{Kind: "system", Content: fmt.Sprintf("Restored session: %s", msg.Title)})
+				if msg.RecoveryWarning != "" {
+					m.entries = append(m.entries, ChatEntry{Kind: "error", Content: msg.RecoveryWarning})
+				}
 			}
 		}
 		m.viewport.SetContent(m.renderEntries())
@@ -1666,6 +1753,65 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 	m.checkAutoScroll()
 
 	return m, tea.Batch(cmds...)
+}
+
+func (m *Model) snapshotExecutionCursor(ctx context.Context) (int64, error) {
+	workspaceID, err := canonicalWorkspaceID(m.agent.WorkDir())
+	if err != nil {
+		return m.executionCursor, err
+	}
+	hazards, err := m.sessionStore.ListExecutionRecoveryHazards(ctx, m.sessionID, workspaceID, m.executionCursor, 100)
+	if err != nil {
+		return m.executionCursor, fmt.Errorf("inspect execution projection: %w", err)
+	}
+	messages := m.agent.Messages()
+	for _, state := range hazards {
+		if state.Latest.Type != execution.EventCompleted {
+			continue
+		}
+		projected := false
+		for _, message := range messages {
+			if message.Role == "tool" && message.ToolCallID == state.Identity.CanonicalCallID {
+				projected = true
+				break
+			}
+		}
+		if !projected {
+			return m.executionCursor, fmt.Errorf("completed effect %s is absent from the session snapshot", state.Identity.ExecutionID)
+		}
+	}
+	latest, err := m.sessionStore.LatestExecutionEventID(ctx, m.sessionID, workspaceID)
+	if err != nil {
+		return m.executionCursor, fmt.Errorf("read execution cursor: %w", err)
+	}
+	return latest, nil
+}
+
+func unresolvedExecutionWarning(states []execution.State) string {
+	for _, state := range states {
+		toolName := state.Identity.ToolName
+		if toolName == "" {
+			toolName = "unknown tool"
+		}
+		switch {
+		case state.Latest.Type == execution.EventOutcomeUnknown:
+			return fmt.Sprintf(
+				"Recovery blocked: %s has a durable outcome-unknown receipt. Inspect the workspace before starting /new; automatic continuation is disabled.",
+				toolName,
+			)
+		case state.Latest.Type == execution.EventStarted && state.Identity.EffectClass != execution.EffectReadOnly:
+			return fmt.Sprintf(
+				"Recovery blocked: %s has a durable dispatch marker but no terminal receipt. Its outcome is unknown, so automatic continuation is disabled. Inspect the workspace before starting /new.",
+				toolName,
+			)
+		case state.Latest.Type == execution.EventCompleted && state.Identity.EffectClass != execution.EffectReadOnly:
+			return fmt.Sprintf(
+				"Recovery blocked: %s completed after the last saved transcript. Continuation is disabled so the effect cannot be repeated; inspect the workspace before starting /new.",
+				toolName,
+			)
+		}
+	}
+	return ""
 }
 
 func agentTextareaStyles(isDark bool) textarea.Styles {
@@ -2239,11 +2385,15 @@ func (m *Model) resetConversationSession() {
 	m.cancelSessionLoad()
 	m.cancelSessionList()
 	m.sessionID = 0
+	m.executionCursor = 0
+	_ = m.releaseExecutionSessionLease()
 	m.legacyCheckpointPreview = nil
 	m.legacyMemoryPreview = nil
 	m.legacyICEPreview = nil
 	if m.agent != nil {
 		m.agent.SetCheckpointSessionID(0)
+		m.agent.SetExecutionSessionID(0)
+		m.agent.SetExecutionSnapshotCursor(0)
 	}
 	m.sessionEvalTotal = 0
 	m.sessionPromptTotal = 0
@@ -2251,6 +2401,22 @@ func (m *Model) resetConversationSession() {
 	m.fileChanges = nil
 	m.toolsPending = 0
 	m.toolCardMgr.Cards = nil
+}
+
+// ReleaseExecutionSessionLease releases the cross-process ownership held by
+// the active interactive session. The main program calls it after Bubble Tea
+// has joined the current turn and before SQLite closes.
+func (m *Model) ReleaseExecutionSessionLease() error {
+	return m.releaseExecutionSessionLease()
+}
+
+func (m *Model) releaseExecutionSessionLease() error {
+	if m.executionLease == nil {
+		return nil
+	}
+	lease := m.executionLease
+	m.executionLease = nil
+	return lease.Close()
 }
 
 func (m *Model) cancelSessionLoad() {
@@ -2668,6 +2834,8 @@ func (m *Model) completionDraft() string {
 func (m *Model) sendToAgent(text string) tea.Cmd {
 	m.cancelSessionLoad()
 	m.cancelSessionList()
+	messagesBeforeTurn := m.agent.Messages()
+	createdSession := false
 	cfg := m.modeConfigs[m.mode]
 	if m.logger != nil {
 		m.logger.Info("user message", "mode", cfg.Label, "length", len(text))
@@ -2704,11 +2872,37 @@ func (m *Model) sendToAgent(text string) tea.Cmd {
 			})
 		}
 		if err != nil {
-			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("Create session: %v", err)})
+			return m.failTurnBeforeRun(text, fmt.Sprintf("Create session: %v", err))
 		} else {
+			lease, leaseErr := m.sessionStore.AcquireExecutionSessionLease(context.Background(), session.ID, session.WorkspaceID)
+			if leaseErr != nil {
+				cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), time.Second)
+				cleanupErr := m.sessionStore.DeleteSession(cleanupCtx, session.ID)
+				cancelCleanup()
+				if cleanupErr != nil {
+					leaseErr = errors.Join(leaseErr, fmt.Errorf("cleanup session: %w", cleanupErr))
+				}
+				return m.failTurnBeforeRun(text, fmt.Sprintf("Lock session: %v", leaseErr))
+			}
 			m.sessionID = session.ID
+			m.executionCursor = 0
+			m.executionLease = lease
+			createdSession = true
 			m.agent.SetCheckpointSessionID(session.ID)
+			m.agent.SetExecutionSessionID(session.ID)
+			m.agent.SetExecutionSnapshotCursor(0)
 		}
+	}
+	if m.sessionID > 0 && m.sessionStore != nil && m.executionLease == nil {
+		workspaceID, workspaceErr := canonicalWorkspaceID(m.agent.WorkDir())
+		if workspaceErr != nil {
+			return m.failTurnBeforeRun(text, fmt.Sprintf("Lock session: %v", workspaceErr))
+		}
+		lease, leaseErr := m.sessionStore.AcquireExecutionSessionLease(context.Background(), m.sessionID, workspaceID)
+		if leaseErr != nil {
+			return m.failTurnBeforeRun(text, fmt.Sprintf("Lock session: %v", leaseErr))
+		}
+		m.executionLease = lease
 	}
 
 	// Set mode context on the agent.
@@ -2738,7 +2932,22 @@ func (m *Model) sendToAgent(text string) tea.Cmd {
 			cancel()
 		}
 		if err != nil {
-			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("Save session: %v", err)})
+			m.agent.ReplaceMessages(messagesBeforeTurn)
+			if createdSession {
+				leaseErr := m.releaseExecutionSessionLease()
+				cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), time.Second)
+				cleanupErr := m.sessionStore.DeleteSession(cleanupCtx, m.sessionID)
+				cancelCleanup()
+				m.sessionID = 0
+				m.executionCursor = 0
+				m.agent.SetCheckpointSessionID(0)
+				m.agent.SetExecutionSessionID(0)
+				m.agent.SetExecutionSnapshotCursor(0)
+				if cleanupFailure := errors.Join(leaseErr, cleanupErr); cleanupFailure != nil {
+					return m.failTurnBeforeRun(text, fmt.Sprintf("Save session: %v (cleanup: %v)", err, cleanupFailure))
+				}
+			}
+			return m.failTurnBeforeRun(text, fmt.Sprintf("Save session: %v", err))
 		}
 	}
 
@@ -2767,6 +2976,23 @@ func (m *Model) sendToAgent(text string) tea.Cmd {
 		return runAgent
 	}
 	return tea.Batch(m.scramble.Tick(), runAgent)
+}
+
+func (m *Model) failTurnBeforeRun(text, message string) tea.Cmd {
+	if last := len(m.entries) - 1; last >= 0 && m.entries[last].Kind == "user" && m.entries[last].Content == text {
+		m.entries = m.entries[:last]
+	}
+	m.entries = append(m.entries, ChatEntry{Kind: "error", Content: message})
+	m.state = StateIdle
+	m.input.SetValue(text)
+	m.input.CursorEnd()
+	m.input.Focus()
+	m.syncInputHeight()
+	m.recalcViewportHeight()
+	m.invalidateEntryCache()
+	m.viewport.SetContent(m.renderEntries())
+	m.viewport.GotoBottom()
+	return nil
 }
 
 // cycleMode advances through ASK -> PLAN -> BUILD -> ASK.

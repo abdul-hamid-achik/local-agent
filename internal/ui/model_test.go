@@ -2,14 +2,20 @@ package ui
 
 import (
 	"context"
+	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/abdul-hamid-achik/local-agent/internal/agent"
 	"github.com/abdul-hamid-achik/local-agent/internal/command"
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
+	"github.com/abdul-hamid-achik/local-agent/internal/db"
+	"github.com/abdul-hamid-achik/local-agent/internal/execution"
+	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 )
 
 func TestSubmitInput_EmptyReturnsNil(t *testing.T) {
@@ -319,6 +325,247 @@ func TestAgentDoneMsg(t *testing.T) {
 	if !m.anchorActive {
 		t.Error("anchorActive should be reset to true")
 	}
+}
+
+func TestAgentDoneFailureIsNotRenderedAsCompletedTurn(t *testing.T) {
+	m := newTestModel(t)
+	m.state = StateStreaming
+	m.sessionTurnCount = 3
+	m.doneFlash = true
+
+	updated, _ := m.Update(AgentDoneMsg{Err: &agent.UnresolvedExecutionError{
+		ExecutionID: "exec_test",
+		ToolName:    "bash",
+	}})
+	m = updated.(*Model)
+
+	if m.sessionTurnCount != 3 {
+		t.Fatalf("failed turn count = %d, want 3", m.sessionTurnCount)
+	}
+	if m.doneFlash {
+		t.Fatal("failed turn retained the success flash")
+	}
+	if len(m.entries) == 0 || !strings.Contains(m.entries[len(m.entries)-1].Content, "Recovery blocked for bash") {
+		t.Fatalf("failed turn receipt = %#v", m.entries)
+	}
+}
+
+func TestAgentDoneCancelledSnapshotAdvancesCompletedEffectCursor(t *testing.T) {
+	m, store, terminal := modelWithCompletedExecution(t)
+
+	updated, _ := m.Update(AgentDoneMsg{Err: context.Canceled})
+	m = updated.(*Model)
+	if m.executionCursor != terminal.ID {
+		t.Fatalf("cancelled settled cursor = %d, want %d", m.executionCursor, terminal.ID)
+	}
+	raw, err := store.GetSessionState(context.Background(), m.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := decodeSessionState(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.ExecutionCursor != terminal.ID {
+		t.Fatalf("saved cursor = %d, want %d", state.ExecutionCursor, terminal.ID)
+	}
+}
+
+func TestAgentDoneLaterErrorAdvancesProjectedCompletedEffectCursor(t *testing.T) {
+	m, _, terminal := modelWithCompletedExecution(t)
+
+	updated, _ := m.Update(AgentDoneMsg{Err: errors.New("later model failure")})
+	m = updated.(*Model)
+	if m.executionCursor != terminal.ID {
+		t.Fatalf("settled error cursor = %d, want projected terminal %d", m.executionCursor, terminal.ID)
+	}
+}
+
+func TestAgentDoneCompletedRecoveryHazardDoesNotAdvanceCursor(t *testing.T) {
+	m, store, terminal := modelWithCompletedExecution(t)
+	m.agent.ReplaceMessages(nil)
+	m.toolEntries = []ToolEntry{{ID: terminal.Identity.CanonicalCallID, Name: terminal.Identity.ToolName, Status: ToolStatusDone}}
+
+	updated, _ := m.Update(AgentDoneMsg{Err: &agent.UnresolvedExecutionError{
+		ExecutionID: terminal.Identity.ExecutionID,
+		ToolName:    terminal.Identity.ToolName,
+		EventType:   execution.EventCompleted,
+		Cause:       context.Canceled,
+	}})
+	m = updated.(*Model)
+	if m.executionCursor != 0 {
+		t.Fatalf("unprojected completed hazard advanced cursor to %d", m.executionCursor)
+	}
+	raw, err := store.GetSessionState(context.Background(), m.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := decodeSessionState(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.ExecutionCursor != 0 {
+		t.Fatalf("saved unprojected cursor = %d", state.ExecutionCursor)
+	}
+}
+
+func modelWithCompletedExecution(t *testing.T) (*Model, *db.Store, execution.Event) {
+	t.Helper()
+	store, err := db.OpenPath(filepath.Join(t.TempDir(), "execution.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	workspace, err := canonicalWorkspaceID(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.CreateSession(context.Background(), db.CreateSessionParams{Title: "execution", WorkspaceID: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := store.AcquireExecutionSessionLease(context.Background(), session.ID, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lease.Close() })
+	m := newTestModel(t)
+	m.agent.SetWorkDir(workspace)
+	m.agent.SetExecutionLedger(store)
+	m.agent.SetExecutionSessionID(session.ID)
+	m.SetSessionStore(store)
+	m.sessionID = session.ID
+	m.executionLease = lease
+	identity := execution.Identity{
+		SessionID: session.ID, WorkspaceID: workspace, RunID: "run_ui", TurnID: "turn_ui",
+		ExecutionID: "exec_ui", IdempotencyKey: "idem_ui", CanonicalCallID: "call_ui",
+		ToolName: "write", Iteration: 1, Ordinal: 1, Kind: execution.KindBuiltin, EffectClass: execution.Effectful,
+	}
+	base := execution.Event{
+		Identity: identity, Type: execution.EventRequested, Approval: execution.ApprovalNotApplicable,
+		ArgumentsSHA256: execution.HashText("arguments"),
+	}
+	for _, event := range []execution.Event{
+		base,
+		func() execution.Event {
+			e := base
+			e.Type = execution.EventApproved
+			e.Approval = execution.ApprovalEmbedding
+			return e
+		}(),
+		func() execution.Event { e := base; e.Type = execution.EventStarted; return e }(),
+	} {
+		if _, _, err := store.AppendExecutionEvent(context.Background(), event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	terminal := base
+	terminal.Type = execution.EventCompleted
+	terminal.ResultSHA256 = execution.HashText("done")
+	stored, _, err := store.AppendExecutionEvent(context.Background(), terminal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.agent.AppendMessage(llm.Message{Role: "tool", ToolCallID: identity.CanonicalCallID, ToolName: identity.ToolName, Content: "done"})
+	return m, store, stored
+}
+
+func TestSendToAgentFailsClosedWhenSessionCannotBeCreated(t *testing.T) {
+	store, err := db.OpenPath(filepath.Join(t.TempDir(), "closed.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	m := newTestModel(t)
+	m.SetSessionStore(store)
+
+	if cmd := m.sendToAgent("keep my draft"); cmd != nil {
+		t.Fatal("session creation failure still returned an agent command")
+	}
+	if m.state != StateIdle || m.sessionID != 0 || m.input.Value() != "keep my draft" {
+		t.Fatalf("failed send state = state %v session %d draft %q", m.state, m.sessionID, m.input.Value())
+	}
+	if len(m.agent.Messages()) != 0 {
+		t.Fatalf("failed send reached agent history: %#v", m.agent.Messages())
+	}
+}
+
+func TestSendToAgentRevertsHistoryWhenPreturnSnapshotFails(t *testing.T) {
+	store, err := db.OpenPath(filepath.Join(t.TempDir(), "closed.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := t.TempDir()
+	session, err := store.CreateSession(context.Background(), db.CreateSessionParams{Title: "existing", WorkspaceID: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := store.AcquireExecutionSessionLease(context.Background(), session.ID, session.WorkspaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lease.Close() })
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	m := newTestModel(t)
+	m.agent.SetWorkDir(workspace)
+	m.SetSessionStore(store)
+	m.sessionID = session.ID
+	m.executionLease = lease
+	m.agent.AddUserMessage("already durable")
+
+	if cmd := m.sendToAgent("do not dispatch"); cmd != nil {
+		t.Fatal("snapshot failure still returned an agent command")
+	}
+	messages := m.agent.Messages()
+	if len(messages) != 1 || messages[0].Content != "already durable" {
+		t.Fatalf("snapshot failure changed agent history: %#v", messages)
+	}
+	if m.input.Value() != "do not dispatch" || m.state != StateIdle {
+		t.Fatalf("snapshot failure lost retry draft: state %v draft %q", m.state, m.input.Value())
+	}
+}
+
+func TestResetConversationReleasesExecutionSessionLease(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "leases.db")
+	first, err := db.OpenPath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = first.Close() })
+	second, err := db.OpenPath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = second.Close() })
+	workspace, err := canonicalWorkspaceID(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := first.CreateSession(context.Background(), db.CreateSessionParams{Title: "lease", WorkspaceID: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := first.AcquireExecutionSessionLease(context.Background(), session.ID, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := newTestModel(t)
+	m.sessionID = session.ID
+	m.executionLease = lease
+
+	m.resetConversationSession()
+	if m.executionLease != nil || m.sessionID != 0 {
+		t.Fatalf("reset retained session ownership: session=%d lease=%v", m.sessionID, m.executionLease)
+	}
+	reacquired, err := second.AcquireExecutionSessionLease(context.Background(), session.ID, workspace)
+	if err != nil {
+		t.Fatalf("reset did not release cross-process lease: %v", err)
+	}
+	_ = reacquired.Close()
 }
 
 func TestShutdownWaitsForActiveTurnBeforeQuit(t *testing.T) {

@@ -70,6 +70,7 @@ type persistedSessionState struct {
 	SessionEvalTotal    int                  `json:"session_eval_total,omitempty"`
 	SessionPromptTotal  int                  `json:"session_prompt_total,omitempty"`
 	SessionTurnCount    int                  `json:"session_turn_count,omitempty"`
+	ExecutionCursor     int64                `json:"execution_cursor,omitempty"`
 	FileChanges         map[string]int       `json:"file_changes,omitempty"`
 }
 
@@ -198,8 +199,45 @@ func encodeSessionState(m *Model) (string, error) {
 		SessionEvalTotal:    m.sessionEvalTotal,
 		SessionPromptTotal:  m.sessionPromptTotal,
 		SessionTurnCount:    m.sessionTurnCount,
+		ExecutionCursor:     m.executionCursor,
 		FileChanges:         m.fileChanges,
 	}
+	return marshalPersistedSessionState(state)
+}
+
+// EncodeHeadlessSessionState creates a version-1 snapshot that the interactive
+// session picker can restore after a non-interactive run. Tool messages remain
+// in model history, while the visible transcript stays focused on user and
+// assistant text because headless mode has no persisted ToolCard state.
+func EncodeHeadlessSessionState(messages []llm.Message, model, agentProfile string, modelPinned bool, executionCursor int64) (string, error) {
+	if executionCursor < 0 {
+		return "", fmt.Errorf("encode session state: execution cursor must not be negative")
+	}
+	entries := make([]persistedChatEntry, 0, len(messages))
+	for _, message := range messages {
+		switch message.Role {
+		case "user", "assistant":
+			if message.Content != "" {
+				entries = append(entries, persistedChatEntry{
+					Kind:    message.Role,
+					Content: boundedSessionText(message.Content, maxPersistedToolResultBytes),
+				})
+			}
+		}
+	}
+	return marshalPersistedSessionState(persistedSessionState{
+		Version:         1,
+		Messages:        append([]llm.Message(nil), messages...),
+		Entries:         entries,
+		Mode:            ModeBuild,
+		Model:           model,
+		ModelPinned:     modelPinned,
+		AgentProfile:    agentProfile,
+		ExecutionCursor: executionCursor,
+	})
+}
+
+func marshalPersistedSessionState(state persistedSessionState) (string, error) {
 	data, err := json.Marshal(state)
 	if err != nil {
 		return "", fmt.Errorf("encode session state: %w", err)
@@ -214,6 +252,9 @@ func decodeSessionState(raw string) (persistedSessionState, error) {
 	}
 	if state.Version != 1 {
 		return state, fmt.Errorf("unsupported session state version %d", state.Version)
+	}
+	if state.ExecutionCursor < 0 {
+		return state, fmt.Errorf("invalid execution cursor %d", state.ExecutionCursor)
 	}
 	return state, nil
 }
@@ -368,6 +409,7 @@ func (m *Model) restoreSessionState(state persistedSessionState) error {
 	m.sessionEvalTotal = state.SessionEvalTotal
 	m.sessionPromptTotal = state.SessionPromptTotal
 	m.sessionTurnCount = state.SessionTurnCount
+	m.executionCursor = state.ExecutionCursor
 	m.fileChanges = make(map[string]int, len(state.FileChanges))
 	for path, count := range state.FileChanges {
 		m.fileChanges[path] = count

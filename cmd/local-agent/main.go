@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -9,6 +10,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -19,6 +21,7 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/command"
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
+	executionpkg "github.com/abdul-hamid-achik/local-agent/internal/execution"
 	"github.com/abdul-hamid-achik/local-agent/internal/ice"
 	"github.com/abdul-hamid-achik/local-agent/internal/initcmd"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
@@ -163,6 +166,10 @@ func run() int {
 	defer registry.Close()
 
 	ag := agent.New(modelManager, registry, cfg.Ollama.NumCtx)
+	// The application always runs with durable execution tracking. Embedded
+	// package users may opt out, but neither the TUI nor headless mode may send
+	// provider work without a scoped SQLite ledger.
+	ag.RequireExecutionLedger(true)
 	ag.SetToolsConfig(cfg.Tools)
 	ag.SetRouter(router)
 	// Cap any single tool result so a runaway read/command can't blow the
@@ -175,29 +182,28 @@ func run() int {
 			return 1
 		}
 	}
-	defer ag.Close()
-
 	// Open SQLite database for permissions and stats.
 	dbStore, err := db.Open()
 	if err != nil {
-		log.Printf("warning: database: %v (permissions disabled)", err)
+		fmt.Fprintf(os.Stderr, "database: %v\nlocal-agent requires its private execution ledger and will not start without it.\n", err)
+		return 1
 	}
-	if dbStore != nil {
-		defer func() {
-			if err := dbStore.Close(); err != nil {
-				log.Printf("warning: close database: %v", err)
-			}
-		}()
-	}
+	ag.SetExecutionLedger(dbStore)
+	defer func() {
+		if err := dbStore.Close(); err != nil {
+			log.Printf("warning: close database: %v", err)
+		}
+	}()
+	// Register this after the database closer: defers run LIFO, so the active
+	// turn joins and writes its final execution receipt before SQLite closes.
+	defer ag.Close()
 
 	// Set up tool permission checker.
 	permChecker := permission.NewChecker(dbStore, *yoloFlag)
 	ag.SetPermissionChecker(permChecker)
 
 	// Enable non-destructive compaction + manual checkpoints when the DB is up.
-	if dbStore != nil {
-		ag.SetCheckpointStore(dbStore, 0)
-	}
+	ag.SetCheckpointStore(dbStore, 0)
 
 	workspace := currentWorkspace()
 	iceStorePath := ""
@@ -348,12 +354,75 @@ func run() int {
 
 		// Set BUILD mode for headless execution.
 		ag.SetModeContext(buildMode.SystemPromptPrefix, buildMode.ToolPolicy)
+		if workspace == "" {
+			fmt.Fprintln(os.Stderr, "local-agent: workspace identity is unavailable; refusing to start a headless turn")
+			return 1
+		}
+		session, err := dbStore.CreateSession(ctx, db.CreateSessionParams{
+			Title:       headlessSessionTitle(*promptFlag),
+			Model:       modelName,
+			Mode:        buildMode.Label,
+			WorkspaceID: workspace,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "local-agent: create execution session: %v\n", err)
+			return 1
+		}
+		executionLease, err := dbStore.AcquireExecutionSessionLease(ctx, session.ID, workspace)
+		if err != nil {
+			cleanupErr := dbStore.DeleteSession(context.Background(), session.ID)
+			fmt.Fprintf(os.Stderr, "local-agent: lock execution session: %v\n", errors.Join(err, cleanupErr))
+			return 1
+		}
+		defer func() {
+			ag.Close()
+			if err := executionLease.Close(); err != nil {
+				log.Printf("warning: release execution session: %v", err)
+			}
+		}()
+		ag.SetCheckpointSessionID(session.ID)
+		ag.SetExecutionSessionID(session.ID)
+		ag.SetExecutionSnapshotCursor(0)
 
 		// Run the agent synchronously.
 		out := agent.NewHeadlessOutput()
 		ag.AddUserMessage(*promptFlag)
-		if err := ag.Run(ctx, out); err != nil {
-			fmt.Fprintf(os.Stderr, "local-agent: %v\n", err)
+		persistHeadlessState := func(saveCtx context.Context, executionCursor int64) error {
+			stateJSON, encodeErr := ui.EncodeHeadlessSessionState(
+				ag.Messages(), modelName, cfg.AgentProfile, modelPinned, executionCursor,
+			)
+			if encodeErr != nil {
+				return encodeErr
+			}
+			return dbStore.SaveSessionState(saveCtx, session.ID, stateJSON)
+		}
+		if err := persistHeadlessState(ctx, 0); err != nil {
+			leaseErr := executionLease.Close()
+			cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), time.Second)
+			cleanupErr := dbStore.DeleteSession(cleanupCtx, session.ID)
+			cancelCleanup()
+			fmt.Fprintf(os.Stderr, "local-agent: save execution session before dispatch: %v\n", err)
+			if cleanupFailure := errors.Join(leaseErr, cleanupErr); cleanupFailure != nil {
+				fmt.Fprintf(os.Stderr, "local-agent: remove incomplete execution session: %v\n", cleanupFailure)
+			}
+			return 1
+		}
+		runErr := ag.Run(ctx, out)
+		saveCtx, cancelSave := context.WithTimeout(context.Background(), 2*time.Second)
+		finalCursor := int64(0)
+		finalCursor, cursorErr := headlessSnapshotExecutionCursor(saveCtx, dbStore, ag, session.ID, workspace, 0)
+		saveErr := persistHeadlessState(saveCtx, finalCursor)
+		cancelSave()
+		saveErr = errors.Join(cursorErr, saveErr)
+		if runErr != nil {
+			if saveErr != nil {
+				fmt.Fprintf(os.Stderr, "local-agent: save execution session after failure: %v\n", saveErr)
+			}
+			fmt.Fprintf(os.Stderr, "local-agent: %v\n", runErr)
+			return 1
+		}
+		if saveErr != nil {
+			fmt.Fprintf(os.Stderr, "local-agent: save completed execution session: %v\n", saveErr)
 			return 1
 		}
 		return 0
@@ -396,6 +465,12 @@ func run() int {
 	}
 
 	m := ui.New(ag, cmdReg, skillMgr, completer, modelManager, router, logger)
+	defer func() {
+		ag.Close()
+		if err := m.ReleaseExecutionSessionLease(); err != nil {
+			log.Printf("warning: release execution session: %v", err)
+		}
+	}()
 	m.SetModelPinned(modelPinned)
 	m.SetSessionStore(dbStore)
 	m.SetAgentProfileSource(agentsDir, baseLoadedContext, cfg.AgentProfile)
@@ -557,7 +632,54 @@ func currentWorkspace() string {
 	if err != nil {
 		return ""
 	}
-	return workDir
+	absolute, err := filepath.Abs(workDir)
+	if err != nil {
+		return ""
+	}
+	if resolved, resolveErr := filepath.EvalSymlinks(absolute); resolveErr == nil {
+		absolute = resolved
+	}
+	return filepath.Clean(absolute)
+}
+
+func headlessSessionTitle(prompt string) string {
+	title := strings.TrimSpace(strings.SplitN(prompt, "\n", 2)[0])
+	if title == "" {
+		title = "Headless session " + time.Now().Format("2006-01-02 15:04")
+	}
+	runes := []rune(title)
+	if len(runes) > 72 {
+		title = string(runes[:69]) + "..."
+	}
+	return title
+}
+
+func headlessSnapshotExecutionCursor(ctx context.Context, store *db.Store, ag *agent.Agent, sessionID int64, workspaceID string, current int64) (int64, error) {
+	hazards, err := store.ListExecutionRecoveryHazards(ctx, sessionID, workspaceID, current, 100)
+	if err != nil {
+		return current, fmt.Errorf("inspect execution projection: %w", err)
+	}
+	messages := ag.Messages()
+	for _, state := range hazards {
+		if state.Latest.Type != executionpkg.EventCompleted {
+			continue
+		}
+		projected := false
+		for _, message := range messages {
+			if message.Role == "tool" && message.ToolCallID == state.Identity.CanonicalCallID {
+				projected = true
+				break
+			}
+		}
+		if !projected {
+			return current, fmt.Errorf("completed effect %s is absent from the headless snapshot", state.Identity.ExecutionID)
+		}
+	}
+	latest, err := store.LatestExecutionEventID(ctx, sessionID, workspaceID)
+	if err != nil {
+		return current, fmt.Errorf("read execution cursor: %w", err)
+	}
+	return latest, nil
 }
 
 func applyWorkspaceIgnore(ag *agent.Agent, workDir string) error {

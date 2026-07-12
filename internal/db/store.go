@@ -3,11 +3,14 @@ package db
 import (
 	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
 )
 
 //go:embed migrations/*.sql
@@ -16,7 +19,9 @@ var migrations embed.FS
 // Store wraps the sqlc Queries with the underlying database connection.
 type Store struct {
 	*Queries
-	db *sql.DB
+	db                 *sql.DB
+	dbPath             string
+	executionLeaseRoot string
 }
 
 // Open creates or opens the SQLite database at the default location
@@ -40,6 +45,8 @@ func Open() (*Store, error) {
 
 // OpenPath creates or opens the SQLite database at the given path and runs migrations.
 func OpenPath(path string) (*Store, error) {
+	dbPath := path
+	executionLeaseRoot := ""
 	if path != ":memory:" {
 		file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 		if err != nil {
@@ -51,9 +58,19 @@ func OpenPath(path string) (*Store, error) {
 		if err := os.Chmod(path, 0o600); err != nil {
 			return nil, fmt.Errorf("secure db: %w", err)
 		}
+		absolute, err := filepath.Abs(path)
+		if err != nil {
+			return nil, fmt.Errorf("resolve db path: %w", err)
+		}
+		resolved, err := filepath.EvalSymlinks(absolute)
+		if err != nil {
+			return nil, fmt.Errorf("resolve db symlinks: %w", err)
+		}
+		dbPath = filepath.Clean(resolved)
+		executionLeaseRoot = dbPath + ".leases"
 	}
 
-	conn, err := sql.Open("sqlite", path+"?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=ON")
+	conn, err := sql.Open("sqlite", path+"?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=ON&_txlock=immediate")
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
@@ -61,7 +78,7 @@ func OpenPath(path string) (*Store, error) {
 	// not honor the mattn-style _busy_timeout DSN option on every version, so
 	// set it explicitly before concurrent first-open migration attempts.
 	conn.SetMaxOpenConns(1)
-	if _, err := conn.Exec(`PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;`); err != nil {
+	if err := configureSQLiteConnection(conn, path); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("configure sqlite connection: %w", err)
 	}
@@ -83,9 +100,45 @@ func OpenPath(path string) (*Store, error) {
 	}
 
 	return &Store{
-		Queries: New(conn),
-		db:      conn,
+		Queries:            New(conn),
+		db:                 conn,
+		dbPath:             dbPath,
+		executionLeaseRoot: executionLeaseRoot,
 	}, nil
+}
+
+func configureSQLiteConnection(conn *sql.DB, path string) error {
+	if _, err := conn.Exec(`PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;`); err != nil {
+		return err
+	}
+
+	// WAL mode is persistent database state and two first-open processes can race
+	// to set it. Retry only SQLITE_BUSY; all other errors fail closed.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var journalMode string
+		err := conn.QueryRow(`PRAGMA journal_mode = WAL`).Scan(&journalMode)
+		if err == nil {
+			if path != ":memory:" && !strings.EqualFold(journalMode, "wal") {
+				return fmt.Errorf("journal mode is %q, want WAL", journalMode)
+			}
+			break
+		}
+		if !sqliteBusy(err) || !time.Now().Before(deadline) {
+			return err
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if _, err := conn.Exec(`PRAGMA synchronous = FULL;`); err != nil {
+		return err
+	}
+	return nil
+}
+
+func sqliteBusy(err error) bool {
+	var sqliteErr *sqlite.Error
+	return errors.As(err, &sqliteErr) && sqliteErr.Code()&0xff == 5
 }
 
 // Close closes the database connection.

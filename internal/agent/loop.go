@@ -9,9 +9,11 @@ import (
 	"time"
 	"unicode/utf8"
 
+	executionPkg "github.com/abdul-hamid-achik/local-agent/internal/execution"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
-	permissionPkg "github.com/abdul-hamid-achik/local-agent/internal/permission"
 )
+
+const maxToolCallsPerResponse = 64
 
 // Run executes the ReAct loop: query -> LLM -> tool calls -> observe -> repeat.
 // It streams output via the Output interface and returns a terminal error for
@@ -47,6 +49,16 @@ func (a *Agent) Run(ctx context.Context, out Output) error {
 		a.turnRunning.Store(false)
 		a.turnMu.Unlock()
 	}()
+	execRuntime, err := a.executionRuntime(ctx)
+	if err != nil {
+		out.Error(err.Error())
+		return err
+	}
+	turnID, err := executionPkg.NewTurnID()
+	if err != nil {
+		out.Error(fmt.Sprintf("execution turn identity: %v", err))
+		return fmt.Errorf("execution turn identity: %w", err)
+	}
 	if a.iceEngine != nil {
 		a.iceEngine.CancelAutoMemory()
 	}
@@ -92,8 +104,8 @@ func (a *Agent) Run(ctx context.Context, out Output) error {
 
 	maxIters := a.MaxIterations()
 
-	// Per-turn correlation ID threads through every log line for this turn.
-	turnID := a.nextTurnID()
+	// A process-independent turn ID threads through logs and every durable tool
+	// execution identity for this turn.
 	lg := a.logTurn(turnID)
 	turnStart := time.Now()
 	if lg != nil {
@@ -151,6 +163,9 @@ func (a *Agent) Run(ctx context.Context, out Output) error {
 				out.StreamReasoning(chunk.Reasoning)
 			}
 			if len(chunk.ToolCalls) > 0 {
+				if len(chunk.ToolCalls) > maxToolCallsPerResponse-len(toolCalls) {
+					return fmt.Errorf("model streamed at least %d tool calls; maximum per response is %d", len(toolCalls)+len(chunk.ToolCalls), maxToolCallsPerResponse)
+				}
 				toolCalls = append(toolCalls, chunk.ToolCalls...)
 			}
 			if chunk.Done {
@@ -190,7 +205,21 @@ func (a *Agent) Run(ctx context.Context, out Output) error {
 			lg.Info("llm response", "iter", i, "ms", time.Since(llmStart).Milliseconds(),
 				"prompt_tokens", lastPromptTokens, "eval_tokens", lastEvalTokens, "tool_calls", len(toolCalls))
 		}
+		if len(toolCalls) > maxToolCallsPerResponse {
+			err := fmt.Errorf("model returned %d tool calls; maximum per response is %d", len(toolCalls), maxToolCallsPerResponse)
+			out.Error(err.Error())
+			return err
+		}
+		providerCallIDs := make([]string, len(toolCalls))
+		for toolIndex := range toolCalls {
+			providerCallIDs[toolIndex] = toolCalls[toolIndex].ID
+		}
 		a.ensureToolCallIDs(toolCalls, turnID, i+1)
+		trackedExecutions, err := a.newTrackedExecutions(ctx, execRuntime, turnID, i+1, toolCalls, providerCallIDs)
+		if err != nil {
+			out.Error(fmt.Sprintf("record requested tool execution: %v", err))
+			return fmt.Errorf("record requested tool execution: %w", err)
+		}
 
 		// Record assistant message in conversation history.
 		assistantMsg := llm.Message{
@@ -245,40 +274,53 @@ func (a *Agent) Run(ctx context.Context, out Output) error {
 			return nil
 		}
 
-		// Execute tool calls in provider order. Cancellation is a hard barrier:
-		// no new backend starts after cancellation, but a backend that already
-		// started always receives a durable result/unknown-outcome receipt.
+		// Execute tool calls in provider order. Requested/approval/dispatch and
+		// terminal transitions are committed synchronously around the backend.
 		for toolIndex, tc := range toolCalls {
-			if err := ctx.Err(); err != nil {
-				a.cancelUndispatchedToolCalls(toolCalls[toolIndex:], out, err)
-				return err
+			tracked := &trackedExecutions[toolIndex]
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				if ledgerErr := a.cancelTrackedToolCalls(ctx, execRuntime, trackedExecutions[toolIndex:], toolCalls[toolIndex:], out, ctxErr); ledgerErr != nil {
+					return ledgerErr
+				}
+				return ctxErr
 			}
 
-			kind := "mcp"
+			kind := tracked.identity.Kind
 			requiresApproval := true
 
 			// Classify policy/scope before hooks. Hooks may normalize arguments but
-			// may not change identity; final arguments are approved below.
-			if a.memoryStore != nil && a.isMemoryTool(tc.Name) {
+			// may not change identity; final arguments are hashed and approved below.
+			switch kind {
+			case executionPkg.KindMemory:
 				if !a.toolPolicy.AllowsMemory(tc.Name) {
+					if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventDenied, executionPkg.ApprovalDenied, "", "blocked by active mode")); err != nil {
+						return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
+					}
 					a.blockedToolCall(tc, out)
 					continue
 				}
-				kind = "memory"
 				requiresApproval = memoryToolRequiresApproval(tc.Name)
-			} else if a.isToolsTool(tc.Name) {
+			case executionPkg.KindBuiltin:
 				if !a.toolPolicy.AllowsBuiltin(tc.Name) {
+					if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventDenied, executionPkg.ApprovalDenied, "", "blocked by active mode")); err != nil {
+						return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
+					}
 					a.blockedToolCall(tc, out)
 					continue
 				}
-				kind = "builtin"
 				requiresApproval = builtinToolRequiresApproval(tc.Name)
-			} else {
+			case executionPkg.KindMCP:
 				if !a.toolPolicy.AllowMCP {
+					if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventDenied, executionPkg.ApprovalDenied, "", "MCP blocked by active mode")); err != nil {
+						return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
+					}
 					a.blockedToolCall(tc, out)
 					continue
 				}
 				if !a.allowsMCPTool(tc.Name) {
+					if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventDenied, executionPkg.ApprovalDenied, "", "blocked by active agent profile MCP scope")); err != nil {
+						return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
+					}
 					a.deniedToolCall(tc, out, "tool call blocked by active agent profile MCP scope")
 					continue
 				}
@@ -291,49 +333,143 @@ func (a *Agent) Run(ctx context.Context, out Output) error {
 				block = true
 				reason = "tool hook attempted to change approved tool identity"
 			}
+			effectiveHash, hashErr := executionPkg.HashCanonicalArguments(tc.Arguments)
+			if hashErr != nil {
+				reason := fmt.Sprintf("invalid effective tool arguments: %v", hashErr)
+				if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventFailed, executionPkg.ApprovalNotApplicable, reason, "effective argument hashing failed")); err != nil {
+					return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
+				}
+				a.failedToolCall(tc, out, reason)
+				continue
+			}
+			tracked.effectiveHash = effectiveHash
+			toolCalls[toolIndex] = tc
 			if block {
-				out.ToolCallStart(tc.ID, tc.Name, tc.Arguments)
-				result := capToolResultForContext(reason, a.numCtx)
-				out.ToolCallResult(tc.ID, tc.Name, result, true, 0)
-				a.AppendMessage(llm.Message{Role: "tool", Content: result, ToolName: tc.Name, ToolCallID: tc.ID})
-				if err := ctx.Err(); err != nil {
+				if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventDenied, executionPkg.ApprovalDenied, reason, "blocked by pre-tool hook")); err != nil {
+					return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
+				}
+				a.failedToolCall(tc, out, reason)
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					if ledgerErr := a.cancelTrackedToolCalls(ctx, execRuntime, trackedExecutions[toolIndex+1:], toolCalls[toolIndex+1:], out, ctxErr); ledgerErr != nil {
+						return ledgerErr
+					}
+					return ctxErr
+				}
+				continue
+			}
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				if ledgerErr := a.cancelTrackedToolCalls(ctx, execRuntime, trackedExecutions[toolIndex:], toolCalls[toolIndex:], out, ctxErr); ledgerErr != nil {
+					return ledgerErr
+				}
+				return ctxErr
+			}
+
+			if preflightErr := a.preflightToolCall(kind, tc); preflightErr != nil {
+				result := fmt.Sprintf("tool request failed preflight: %v", preflightErr)
+				if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventFailed, executionPkg.ApprovalNotApplicable, result, "preflight rejected request before dispatch")); err != nil {
+					return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
+				}
+				a.failedToolCall(tc, out, result)
+				continue
+			}
+
+			authorization := toolAuthorization{allowed: true, approval: executionPkg.ApprovalNotApplicable}
+			if requiresApproval {
+				var authorizationErr error
+				authorization, authorizationErr = a.decideToolAuthorization(ctx, tc, func() error {
+					return appendExecutionEvent(ctx, execRuntime, executionEvent(*tracked, executionPkg.EventApprovalRequested, executionPkg.ApprovalRequested, "", "interactive approval requested"))
+				})
+				if authorizationErr != nil {
+					return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, authorizationErr)
+				}
+			} else if tracked.identity.EffectClass != executionPkg.EffectReadOnly {
+				// memory_recall persists LastUsed metadata but remains implicitly
+				// allowed by the built-in tool policy.
+				authorization.approval = executionPkg.ApprovalPolicy
+			}
+			if authorization.cancelled {
+				ctxErr := ctx.Err()
+				if ctxErr == nil {
+					ctxErr = context.Canceled
+				}
+				if ledgerErr := a.cancelTrackedToolCalls(ctx, execRuntime, trackedExecutions[toolIndex:], toolCalls[toolIndex:], out, ctxErr); ledgerErr != nil {
+					return ledgerErr
+				}
+				return ctxErr
+			}
+			if !authorization.allowed {
+				if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventDenied, executionPkg.ApprovalDenied, authorization.reason, "authorization denied before dispatch")); err != nil {
+					return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
+				}
+				a.deniedToolCall(tc, out, "tool call denied: "+authorization.reason)
+				continue
+			}
+			if err := appendExecutionEvent(ctx, execRuntime, executionEvent(*tracked, executionPkg.EventApproved, authorization.approval, "", "tool execution authorized")); err != nil {
+				return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
+			}
+			if authorization.persistAlways {
+				a.persistAlwaysApproval(tc, out)
+			}
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				if ledgerErr := a.cancelTrackedToolCalls(ctx, execRuntime, trackedExecutions[toolIndex:], toolCalls[toolIndex:], out, ctxErr); ledgerErr != nil {
+					return ledgerErr
+				}
+				return ctxErr
+			}
+
+			if err := appendExecutionEvent(ctx, execRuntime, executionEvent(*tracked, executionPkg.EventStarted, executionPkg.ApprovalNotApplicable, "", "durable dispatch intent committed")); err != nil {
+				return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
+			}
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				if err := a.cancelCommittedDispatchIntent(ctx, execRuntime, *tracked, tc, out, ctxErr, false); err != nil {
 					a.cancelUndispatchedToolCalls(toolCalls[toolIndex+1:], out, err)
 					return err
 				}
-				continue
+				if tracked.identity.EffectClass != executionPkg.EffectReadOnly && execRuntime.ledger != nil {
+					unresolved := a.unresolvedFor(*tracked, executionPkg.EventOutcomeUnknown, fmt.Errorf("durable dispatch intent for tool %q has an unknown outcome", tc.Name))
+					a.latchUnresolvedExecution(unresolved)
+					if ledgerErr := a.cancelTrackedToolCalls(ctx, execRuntime, trackedExecutions[toolIndex+1:], toolCalls[toolIndex+1:], out, unresolved); ledgerErr != nil {
+						return ledgerErr
+					}
+					return unresolved
+				}
+				if ledgerErr := a.cancelTrackedToolCalls(ctx, execRuntime, trackedExecutions[toolIndex+1:], toolCalls[toolIndex+1:], out, ctxErr); ledgerErr != nil {
+					return ledgerErr
+				}
+				return ctxErr
 			}
-			if err := ctx.Err(); err != nil {
-				a.cancelUndispatchedToolCalls(toolCalls[toolIndex:], out, err)
-				return err
-			}
-			if requiresApproval && !a.authorizeToolCall(ctx, tc, out) {
-				if err := ctx.Err(); err != nil {
-					a.cancelUndispatchedToolCalls(toolCalls[toolIndex:], out, err)
+			out.ToolCallStart(tc.ID, tc.Name, tc.Arguments)
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				if err := a.cancelCommittedDispatchIntent(ctx, execRuntime, *tracked, tc, out, ctxErr, true); err != nil {
+					a.cancelUndispatchedToolCalls(toolCalls[toolIndex+1:], out, err)
 					return err
 				}
-				continue
+				if tracked.identity.EffectClass != executionPkg.EffectReadOnly && execRuntime.ledger != nil {
+					unresolved := a.unresolvedFor(*tracked, executionPkg.EventOutcomeUnknown, fmt.Errorf("durable dispatch intent for tool %q has an unknown outcome", tc.Name))
+					a.latchUnresolvedExecution(unresolved)
+					if ledgerErr := a.cancelTrackedToolCalls(ctx, execRuntime, trackedExecutions[toolIndex+1:], toolCalls[toolIndex+1:], out, unresolved); ledgerErr != nil {
+						return ledgerErr
+					}
+					return unresolved
+				}
+				if ledgerErr := a.cancelTrackedToolCalls(ctx, execRuntime, trackedExecutions[toolIndex+1:], toolCalls[toolIndex+1:], out, ctxErr); ledgerErr != nil {
+					return ledgerErr
+				}
+				return ctxErr
 			}
-			if err := ctx.Err(); err != nil {
-				a.cancelUndispatchedToolCalls(toolCalls[toolIndex:], out, err)
-				return err
-			}
-
-			out.ToolCallStart(tc.ID, tc.Name, tc.Arguments)
 			startTime := time.Now()
 
 			var result string
 			var isErr bool
 			switch kind {
-			case "builtin":
-				result, isErr = a.handleBuiltinToolWithCancellation(ctx, tc, requiresApproval)
-			case "memory":
+			case executionPkg.KindBuiltin:
+				result, isErr = a.handleBuiltinToolWithCancellation(ctx, tc, tracked.identity.EffectClass != executionPkg.EffectReadOnly)
+			case executionPkg.KindMemory:
 				result, isErr = a.handleMemoryTool(tc)
 			default:
-				toolResult, err := a.registry.CallTool(ctx, tc.Name, tc.Arguments)
-				if err != nil {
-					// Once an MCP request is dispatched, a transport error is never
-					// proof that a remote mutation did not commit. Do not invite retry.
-					result = mcpDispatchErrorReceipt(tc.Name, err)
+				toolResult, callErr := a.registry.CallTool(ctx, tc.Name, tc.Arguments)
+				if callErr != nil {
+					result = mcpDispatchErrorReceipt(tc.Name, callErr)
 					isErr = true
 				} else if toolResult == nil {
 					result, isErr = "ERROR: MCP tool returned no result", true
@@ -342,13 +478,36 @@ func (a *Agent) Run(ctx context.Context, out Output) error {
 					isErr = toolResult.IsError
 				}
 			}
+			duration := time.Since(startTime)
+			// Hooks are the result-redaction boundary. Apply them before the
+			// durable receipt so secrets removed from UI/model text are not copied
+			// into the execution ledger.
 			a.runPostHooks(ctx, tc, &result, isErr)
-			if isErr && toolCallMayHaveEffects(kind, tc.Name) && !strings.HasPrefix(result, "OUTCOME UNKNOWN:") {
+			if isErr && tracked.identity.EffectClass != executionPkg.EffectReadOnly && !strings.HasPrefix(result, "OUTCOME UNKNOWN:") {
 				result = dispatchedEffectErrorReceipt(tc.Name, result, ctx.Err())
-				isErr = true
 			}
 
-			duration := time.Since(startTime)
+			terminalType := executionPkg.EventCompleted
+			if isErr {
+				terminalType = executionPkg.EventFailed
+				switch {
+				case tracked.identity.EffectClass != executionPkg.EffectReadOnly:
+					terminalType = executionPkg.EventOutcomeUnknown
+				case ctx.Err() != nil:
+					terminalType = executionPkg.EventCancelled
+				}
+			}
+			terminalDetail := fmt.Sprintf("backend returned after %dms", duration.Milliseconds())
+			if err := appendExecutionEvent(ctx, execRuntime, executionEvent(*tracked, terminalType, executionPkg.ApprovalNotApplicable, result, terminalDetail)); err != nil {
+				unresolved := a.unresolvedFor(*tracked, executionPkg.EventStarted, err)
+				a.latchUnresolvedExecution(unresolved)
+				unknownResult := capToolResultForContext(terminalLedgerFailureReceipt(tc.Name, err), a.numCtx)
+				out.ToolCallResult(tc.ID, tc.Name, unknownResult, true, duration)
+				a.AppendMessage(llm.Message{Role: "tool", Content: unknownResult, ToolName: tc.Name, ToolCallID: tc.ID})
+				a.cancelUndispatchedToolCalls(toolCalls[toolIndex+1:], out, unresolved)
+				return unresolved
+			}
+
 			result = capToolResultForContext(result, a.numCtx)
 			if lg != nil {
 				lg.Debug("tool", "name", tc.Name, "kind", kind, "ms", duration.Milliseconds(), "error", isErr)
@@ -360,9 +519,19 @@ func (a *Agent) Run(ctx context.Context, out Output) error {
 				ToolName:   tc.Name,
 				ToolCallID: tc.ID,
 			})
-			if err := ctx.Err(); err != nil {
-				a.cancelUndispatchedToolCalls(toolCalls[toolIndex+1:], out, err)
-				return err
+			if terminalType == executionPkg.EventOutcomeUnknown && execRuntime.ledger != nil {
+				unresolved := a.unresolvedFor(*tracked, executionPkg.EventOutcomeUnknown, fmt.Errorf("durable outcome for tool %q is unknown and requires explicit reconciliation", tc.Name))
+				a.latchUnresolvedExecution(unresolved)
+				if ledgerErr := a.cancelTrackedToolCalls(ctx, execRuntime, trackedExecutions[toolIndex+1:], toolCalls[toolIndex+1:], out, unresolved); ledgerErr != nil {
+					return ledgerErr
+				}
+				return unresolved
+			}
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				if ledgerErr := a.cancelTrackedToolCalls(ctx, execRuntime, trackedExecutions[toolIndex+1:], toolCalls[toolIndex+1:], out, ctxErr); ledgerErr != nil {
+					return ledgerErr
+				}
+				return ctxErr
 			}
 		}
 		if err := ctx.Err(); err != nil {
@@ -393,9 +562,9 @@ func (a *Agent) Run(ctx context.Context, out Output) error {
 	if lg != nil {
 		lg.Warn("turn end", "reason", "max_iterations", "iters", maxIters, "ms", time.Since(turnStart).Milliseconds())
 	}
-	err := fmt.Errorf("reached max iterations (%d)", maxIters)
-	out.Error(err.Error())
-	return err
+	limitErr := fmt.Errorf("reached max iterations (%d)", maxIters)
+	out.Error(limitErr.Error())
+	return limitErr
 }
 
 func capToolResultForContext(result string, numCtx int) string {
@@ -480,19 +649,6 @@ func memoryToolRequiresApproval(name string) bool {
 	}
 }
 
-func toolCallMayHaveEffects(kind, name string) bool {
-	switch kind {
-	case "mcp":
-		return true
-	case "builtin":
-		return builtinToolRequiresApproval(name)
-	case "memory":
-		return memoryToolRequiresApproval(name)
-	default:
-		return false
-	}
-}
-
 func mcpDispatchErrorReceipt(name string, err error) string {
 	return fmt.Sprintf("OUTCOME UNKNOWN: tool %q ended without a result receipt and may have taken effect: %v", name, err)
 }
@@ -542,52 +698,18 @@ func (a *Agent) handleBuiltinToolWithCancellation(ctx context.Context, tc llm.To
 // and MCP operation. The CLI always installs a checker; nil remains an
 // explicit embedding opt-out for package users and unit tests.
 func (a *Agent) authorizeToolCall(ctx context.Context, tc llm.ToolCall, out Output) bool {
-	if ctx.Err() != nil {
+	decision, err := a.decideToolAuthorization(ctx, tc, nil)
+	if err != nil || decision.cancelled {
 		return false
 	}
-	if a.permChecker == nil {
-		return ctx.Err() == nil
-	}
-
-	decision := a.permChecker.ToCheckResult(tc.Name)
-	if ctx.Err() != nil {
+	if !decision.allowed {
+		a.deniedToolCall(tc, out, "tool call denied: "+decision.reason)
 		return false
 	}
-
-	switch decision {
-	case permissionPkg.CheckAllow:
-		// Persisted interactive approvals do not authorize non-interactive
-		// callers. Only the explicit yolo capability may execute a risky call
-		// without a live approval channel.
-		if !a.permChecker.IsYolo() && a.approvalCallback == nil {
-			a.deniedToolCall(tc, out, "tool call denied: interactive approval is unavailable; persisted allows do not apply to headless execution")
-			return false
-		}
-		// CheckAllow includes explicit yolo mode. Neither path may revive a
-		// cancelled turn.
-		return ctx.Err() == nil
-	case permissionPkg.CheckDeny:
-		a.deniedToolCall(tc, out, "tool call blocked by permission policy")
-		return false
-	case permissionPkg.CheckAsk:
-		allowed, always := permissionPkg.RequestApprovalContext(ctx, tc.Name, tc.Arguments, a.approvalCallback)
-		if ctx.Err() != nil {
-			return false
-		}
-		if always && allowed {
-			if err := a.permChecker.SetPolicy(tc.Name, permissionPkg.PolicyAllow); err != nil {
-				out.SystemMessage(fmt.Sprintf("warning: approval was granted, but could not be persisted: %v", err))
-			}
-		}
-		if !allowed {
-			a.deniedToolCall(tc, out, "tool call denied: explicit approval required")
-			return false
-		}
-		return true
-	default:
-		a.deniedToolCall(tc, out, "tool call denied by unknown permission state")
-		return false
+	if decision.persistAlways {
+		a.persistAlwaysApproval(tc, out)
 	}
+	return ctx.Err() == nil
 }
 
 func (a *Agent) deniedToolCall(tc llm.ToolCall, out Output, reason string) {
@@ -596,6 +718,18 @@ func (a *Agent) deniedToolCall(tc llm.ToolCall, out Output, reason string) {
 	a.AppendMessage(llm.Message{
 		Role:       "tool",
 		Content:    reason,
+		ToolName:   tc.Name,
+		ToolCallID: tc.ID,
+	})
+}
+
+func (a *Agent) failedToolCall(tc llm.ToolCall, out Output, reason string) {
+	result := capToolResultForContext(reason, a.numCtx)
+	out.ToolCallStart(tc.ID, tc.Name, tc.Arguments)
+	out.ToolCallResult(tc.ID, tc.Name, result, true, 0)
+	a.AppendMessage(llm.Message{
+		Role:       "tool",
+		Content:    result,
 		ToolName:   tc.Name,
 		ToolCallID: tc.ID,
 	})

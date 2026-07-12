@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
+	"github.com/abdul-hamid-achik/local-agent/internal/execution"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 )
 
@@ -124,6 +125,68 @@ func TestLosslessSessionStateRestoresAgentHistory(t *testing.T) {
 	}
 	if !target.modelPinned {
 		t.Fatal("saved model pin state was not restored")
+	}
+}
+
+func TestEncodeHeadlessSessionStateIsResumable(t *testing.T) {
+	t.Parallel()
+
+	messages := []llm.Message{
+		{Role: "user", Content: "inspect the tree"},
+		{Role: "assistant", Content: "I will inspect it", ToolCalls: []llm.ToolCall{{ID: "call-1", Name: "ls"}}},
+		{Role: "tool", Content: "README.md", ToolName: "ls", ToolCallID: "call-1"},
+		{Role: "assistant", Content: "The repository has a README."},
+	}
+	raw, err := EncodeHeadlessSessionState(messages, "qwen3.5:4b", "reviewer", true, 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := decodeSessionState(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Mode != ModeBuild || state.Model != "qwen3.5:4b" || !state.ModelPinned || state.AgentProfile != "reviewer" || state.ExecutionCursor != 42 {
+		t.Fatalf("headless metadata = mode %v model %q pinned %v profile %q cursor %d", state.Mode, state.Model, state.ModelPinned, state.AgentProfile, state.ExecutionCursor)
+	}
+	if len(state.Messages) != len(messages) || state.Messages[2].Role != "tool" {
+		t.Fatalf("headless messages = %#v", state.Messages)
+	}
+	if len(state.Entries) != 3 {
+		t.Fatalf("visible headless entries = %#v, want user and assistant text only", state.Entries)
+	}
+	for _, entry := range state.Entries {
+		if entry.Kind == "tool" {
+			t.Fatalf("tool message leaked into visible transcript: %#v", state.Entries)
+		}
+	}
+}
+
+func TestUnresolvedExecutionWarningOnlyBlocksStartedEffects(t *testing.T) {
+	t.Parallel()
+
+	states := []execution.State{
+		{
+			Identity: execution.Identity{ToolName: "read", EffectClass: execution.EffectReadOnly},
+			Latest:   execution.Event{Type: execution.EventStarted},
+		},
+		{
+			Identity: execution.Identity{ToolName: "bash", EffectClass: execution.EffectUnknown},
+			Latest:   execution.Event{Type: execution.EventStarted},
+		},
+	}
+	warning := unresolvedExecutionWarning(states)
+	if !strings.Contains(warning, "bash") || !strings.Contains(warning, "outcome is unknown") || !strings.Contains(warning, "/new") {
+		t.Fatalf("unresolvedExecutionWarning() = %q", warning)
+	}
+	states[1].Latest.Type = execution.EventOutcomeUnknown
+	warning = unresolvedExecutionWarning(states)
+	if !strings.Contains(warning, "bash") || !strings.Contains(warning, "outcome-unknown receipt") || !strings.Contains(warning, "/new") {
+		t.Fatalf("outcome-unknown warning = %q", warning)
+	}
+	states[1].Latest.Type = execution.EventCompleted
+	states[1].Identity.EffectClass = execution.EffectReadOnly
+	if warning := unresolvedExecutionWarning(states); warning != "" {
+		t.Fatalf("terminal/read-only warning = %q, want empty", warning)
 	}
 }
 

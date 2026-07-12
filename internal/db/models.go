@@ -23,6 +23,31 @@ type CheckpointLegacyClaim struct {
 	CreatedAt    string `json:"created_at"`
 }
 
+type ExecutionEvent struct {
+	ID              int64  `json:"id"`
+	SessionID       int64  `json:"session_id"`
+	WorkspaceID     string `json:"workspace_id"`
+	RunID           string `json:"run_id"`
+	TurnID          string `json:"turn_id"`
+	ExecutionID     string `json:"execution_id"`
+	IdempotencyKey  string `json:"idempotency_key"`
+	ProviderCallID  string `json:"provider_call_id"`
+	CanonicalCallID string `json:"canonical_call_id"`
+	Iteration       int64  `json:"iteration"`
+	Ordinal         int64  `json:"ordinal"`
+	ToolName        string `json:"tool_name"`
+	Kind            string `json:"kind"`
+	EffectClass     string `json:"effect_class"`
+	EventType       string `json:"event_type"`
+	Approval        string `json:"approval"`
+	ArgumentsSha256 string `json:"arguments_sha256"`
+	ResultSha256    string `json:"result_sha256"`
+	ResultReceipt   string `json:"result_receipt"`
+	Detail          string `json:"detail"`
+	OccurredAt      string `json:"occurred_at"`
+	RecordedAt      string `json:"recorded_at"`
+}
+
 type FileChange struct {
 	ID        int64  `json:"id"`
 	SessionID int64  `json:"session_id"`

@@ -361,6 +361,11 @@ func TestCloseCancelsAndJoinsActiveTurn(t *testing.T) {
 	if err := ag.Run(context.Background(), &outputRecorder{}); err == nil || !strings.Contains(err.Error(), "closed") {
 		t.Fatalf("closed agent accepted a new turn: %v", err)
 	}
+	secondClose := time.Now()
+	ag.Close()
+	if elapsed := time.Since(secondClose); elapsed > 100*time.Millisecond {
+		t.Fatalf("repeated Close was not idempotent: %s", elapsed)
+	}
 }
 
 func TestMCPTransportErrorsAreOutcomeUnknown(t *testing.T) {

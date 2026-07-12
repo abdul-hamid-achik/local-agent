@@ -5,6 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/abdul-hamid-achik/local-agent/internal/db"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 	"github.com/abdul-hamid-achik/local-agent/internal/permission"
 )
@@ -120,13 +121,15 @@ type SessionListMsg struct {
 	Err       error
 }
 
-// SessionLoadedMsg delivers a loaded session's entries from noted.
+// SessionLoadedMsg delivers a persisted session and its execution lease.
 type SessionLoadedMsg struct {
-	LoadToken uint64
-	SessionID int64
-	State     persistedSessionState
-	Title     string
-	Err       error
+	LoadToken       uint64
+	SessionID       int64
+	State           persistedSessionState
+	Title           string
+	RecoveryWarning string
+	ExecutionLease  *db.ExecutionSessionLease
+	Err             error
 }
 
 // ToolApprovalMsg asks the user to approve a tool call.
