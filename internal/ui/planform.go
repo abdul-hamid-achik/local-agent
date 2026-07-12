@@ -7,6 +7,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 const planFormMaximumWidth = 60
@@ -187,21 +188,23 @@ func compactPlanForm(width, height int) bool {
 	return width <= 40 || height <= 20
 }
 
-func (m *Model) renderPlanTextField(field PlanFormField, active bool, width int) string {
+func (m *Model) renderPlanTextFieldView(field PlanFormField, active bool, width int) (string, *tea.Cursor) {
 	valueWidth := max(1, width-2)
 	if active {
 		// Render a sized copy so View remains pure while the parent continues to
 		// own the live Bubbles input and all message handling.
 		input := field.Input
 		input.SetWidth(valueWidth)
-		return m.styles.FocusIndicator.Render("> ") + input.View()
+		input.SetVirtualCursor(false)
+		return m.styles.FocusIndicator.Render("> ") + input.View(),
+			offsetCursor(input.Cursor(), lipgloss.Width("> "), 0)
 	}
 
 	value := strings.TrimSpace(field.Input.Value())
 	if value == "" {
 		value = "(empty)"
 	}
-	return "  " + m.styles.OverlayDim.Render(truncateDisplay(value, valueWidth))
+	return "  " + m.styles.OverlayDim.Render(truncateDisplay(value, valueWidth)), nil
 }
 
 func (m *Model) renderPlanSelectField(field PlanFormField, active, compact bool, width int) string {
@@ -269,7 +272,7 @@ func planFormFooter(pf *PlanFormState, width int) string {
 	}
 }
 
-func (m *Model) renderCompactPlanForm(pf *PlanFormState, contentWidth int) string {
+func (m *Model) renderCompactPlanFormView(pf *PlanFormState, contentWidth int) (string, *tea.Cursor) {
 	active := min(max(0, pf.ActiveField), len(pf.Fields)-1)
 	field := pf.Fields[active]
 
@@ -278,30 +281,41 @@ func (m *Model) renderCompactPlanForm(pf *PlanFormState, contentWidth int) strin
 	b.WriteString("\n")
 	b.WriteString(m.styles.FocusIndicator.Render(field.Label))
 	b.WriteString("\n")
+	controlY := strings.Count(b.String(), "\n")
+	var cursor *tea.Cursor
 	if field.Kind == "select" {
 		b.WriteString(m.renderPlanSelectField(field, true, true, contentWidth))
 	} else {
-		b.WriteString(m.renderPlanTextField(field, true, contentWidth))
+		var fieldView string
+		fieldView, cursor = m.renderPlanTextFieldView(field, true, contentWidth)
+		b.WriteString(fieldView)
+		cursor = offsetCursor(cursor, 0, controlY)
 	}
 
-	return m.renderPickerFrame(b.String(), planFormMaximumWidth, planFormFooter(pf, contentWidth))
+	return m.renderPickerFrame(b.String(), planFormMaximumWidth, planFormFooter(pf, contentWidth)), pickerFrameCursor(cursor)
 }
 
 // renderPlanForm renders a responsive parent-owned form. Compact terminals show
 // one active step; normal terminals retain the complete form without spending
 // rows on decorative whitespace.
 func (m *Model) renderPlanForm() string {
+	view, _ := m.renderPlanFormView()
+	return view
+}
+
+func (m *Model) renderPlanFormView() (string, *tea.Cursor) {
 	pf := m.planFormState
 	if pf == nil || len(pf.Fields) == 0 {
-		return ""
+		return "", nil
 	}
 
 	contentWidth := pickerListWidth(m.width, planFormMaximumWidth)
 	if compactPlanForm(m.width, m.height) {
-		return m.renderCompactPlanForm(pf, contentWidth)
+		return m.renderCompactPlanFormView(pf, contentWidth)
 	}
 
 	var b strings.Builder
+	var cursor *tea.Cursor
 	b.WriteString(m.styles.OverlayTitle.Render("Plan Task"))
 	b.WriteString("\n\n")
 	for i, field := range pf.Fields {
@@ -312,15 +326,20 @@ func (m *Model) renderPlanForm() string {
 		}
 		b.WriteString(labelStyle.Render(field.Label))
 		b.WriteString("\n")
+		controlY := strings.Count(b.String(), "\n")
 		if field.Kind == "select" {
 			b.WriteString(m.renderPlanSelectField(field, active, false, contentWidth))
 		} else {
-			b.WriteString(m.renderPlanTextField(field, active, contentWidth))
+			fieldView, fieldCursor := m.renderPlanTextFieldView(field, active, contentWidth)
+			b.WriteString(fieldView)
+			if active {
+				cursor = offsetCursor(fieldCursor, 0, controlY)
+			}
 		}
 		if i < len(pf.Fields)-1 {
 			b.WriteString("\n\n")
 		}
 	}
 
-	return m.renderPickerFrame(b.String(), planFormMaximumWidth, planFormFooter(pf, contentWidth))
+	return m.renderPickerFrame(b.String(), planFormMaximumWidth, planFormFooter(pf, contentWidth)), pickerFrameCursor(cursor)
 }

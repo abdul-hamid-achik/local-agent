@@ -22,6 +22,11 @@ func TestRenderKeyHintsDegradesByPriority(t *testing.T) {
 		t.Fatalf("wide hints = %q", wide)
 	}
 
+	progressive := ansi.Strip(m.renderKeyHints(30, hints[:3]...))
+	if progressive != "esc close · enter select · ↑/↓" {
+		t.Fatalf("progressive hints hid an action that fits = %q", progressive)
+	}
+
 	compact := ansi.Strip(m.renderKeyHints(24, hints...))
 	if compact != "esc close · enter · ↑/↓" {
 		t.Fatalf("compact hints = %q", compact)

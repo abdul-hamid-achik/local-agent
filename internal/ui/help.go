@@ -195,10 +195,7 @@ func (m *Model) overlayOnContent(base, overlay string) string {
 	overlayLines := strings.Split(overlay, "\n")
 
 	// Center vertically.
-	startY := (len(baseLines) - len(overlayLines)) / 2
-	if startY < 0 {
-		startY = 0
-	}
+	startY := centeredOverlayStartY(base, overlay)
 
 	for i, ol := range overlayLines {
 		row := startY + i
@@ -206,11 +203,7 @@ func (m *Model) overlayOnContent(base, overlay string) string {
 			break
 		}
 		// Center horizontally.
-		olW := lipgloss.Width(ol)
-		padLeft := (m.width - olW) / 2
-		if padLeft < 0 {
-			padLeft = 0
-		}
+		padLeft := centeredOverlayLineX(m.width, ol)
 		line := strings.Repeat(" ", padLeft) + ol
 		if lineW := lipgloss.Width(line); lineW < m.width {
 			line += strings.Repeat(" ", m.width-lineW)

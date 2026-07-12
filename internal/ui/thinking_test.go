@@ -1,6 +1,12 @@
 package ui
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
+)
 
 func TestProcessStreamChunk_PlainText(t *testing.T) {
 	main, think, inThinking, buf := processStreamChunk("hello world", false, "")
@@ -120,6 +126,47 @@ func TestHasPartialTagSuffix(t *testing.T) {
 		got := hasPartialTagSuffix(tt.s, tt.tag)
 		if got != tt.want {
 			t.Errorf("hasPartialTagSuffix(%q, %q) = %d, want %d", tt.s, tt.tag, got, tt.want)
+		}
+	}
+}
+
+func TestRenderThinkingBoxUsesCompactRail(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 80
+
+	collapsed := ansi.Strip(m.renderThinkingBox("inspect files\ncompare behavior\nreport result", true))
+	if !strings.Contains(collapsed, "│ ▸ reasoning · 3 lines · ctrl+t expand") {
+		t.Fatalf("collapsed reasoning receipt is unclear:\n%s", collapsed)
+	}
+	if strings.Contains(collapsed, "inspect files") || strings.ContainsAny(collapsed, "╭╮╰╯") {
+		t.Fatalf("collapsed reasoning retained heavy chrome or hidden content:\n%s", collapsed)
+	}
+
+	expanded := ansi.Strip(m.renderThinkingBox("inspect files\ncompare behavior\nreport result", false))
+	for _, want := range []string{"│ ▾ reasoning", "ctrl+t collapse", "│ inspect files", "│ report result"} {
+		if !strings.Contains(expanded, want) {
+			t.Fatalf("expanded reasoning missing %q:\n%s", want, expanded)
+		}
+	}
+}
+
+func TestThinkingHeaderUsesSingularLineLabel(t *testing.T) {
+	got := thinkingHeader("▸", "expand", 1, 80)
+	if got != "▸ reasoning · 1 line · ctrl+t expand" {
+		t.Fatalf("singular reasoning header = %q", got)
+	}
+}
+
+func TestRenderThinkingBoxStaysInsideReadableTranscript(t *testing.T) {
+	for _, width := range []int{30, 40, 80, 160} {
+		m := newTestModel(t)
+		m.width = width
+		rendered := m.renderThinkingBox(strings.Repeat("long reasoning text ", 10), false)
+		maximum := max(4, m.chatContentWidth()-2)
+		for lineNumber, line := range strings.Split(rendered, "\n") {
+			if got := lipgloss.Width(line); got > maximum {
+				t.Fatalf("width %d line %d = %d cells, want <= %d: %q", width, lineNumber+1, got, maximum, line)
+			}
 		}
 	}
 }

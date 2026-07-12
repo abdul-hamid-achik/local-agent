@@ -1,0 +1,123 @@
+version: 1
+name: local_agent_tui_session_receipts
+
+intent: |
+  a user can find and restore a saved workspace session, inspect compact and
+  expanded tool receipts, reveal saved reasoning, and see an actionable block
+  when an effect has a durable dispatch marker without a terminal receipt.
+
+target:
+  cmd: ["./bin/local-agent"]
+  cwd: "."
+  env:
+    HOME: "${projectRoot}/.glyphrun/tmp/session-receipts-home"
+    LOCAL_AGENT_AGENTS_DIR: "${projectRoot}/.glyphrun/tmp/session-receipts-agents"
+    LOCAL_AGENT_REDUCED_MOTION: "1"
+    OLLAMA_HOST: "http://127.0.0.1:1"
+
+terminal:
+  cols: 110
+  rows: 40
+
+preconditions:
+  commands:
+    - run: "rm -rf .glyphrun/tmp/session-receipts-home .glyphrun/tmp/session-receipts-agents && mkdir -p .glyphrun/tmp/session-receipts-home/.config/local-agent .glyphrun/tmp/session-receipts-agents && printf '%s\\n' 'model:' '  auto_select: false' > .glyphrun/tmp/session-receipts-home/.config/local-agent/config.yaml && go build -o ./bin/local-agent ./cmd/local-agent"
+      cwd: "."
+      timeoutMs: 30000
+    - run: "sqlite3 .glyphrun/tmp/session-receipts-home/.config/local-agent/local-agent.db '.read internal/db/migrations/001_init.sql' '.read internal/db/migrations/002_checkpoints.sql' '.read internal/db/migrations/003_session_state.sql' '.read internal/db/migrations/004_execution_events.sql'"
+      cwd: "."
+      timeoutMs: 5000
+    - run: "sed 's|__PROJECT_ROOT__|${projectRoot}|g' specs/glyphrun/fixtures/session_receipts.sql | sqlite3 .glyphrun/tmp/session-receipts-home/.config/local-agent/local-agent.db"
+      cwd: "."
+      timeoutMs: 5000
+
+steps:
+  - wait:
+      screen:
+        contains: "Ask, @mention files, or type /help"
+      timeoutMs: 5000
+  - wait:
+      screen:
+        contains: "hint: is `ollama serve` running?"
+      timeoutMs: 5000
+  - press: "ctrl+p"
+  - wait:
+      screen:
+        contains: "Settings"
+      timeoutMs: 2000
+  - press: "down"
+  - press: "down"
+  - press: "down"
+  - press: "enter"
+  - wait:
+      screen:
+        contains: "Recovery receipt review"
+      timeoutMs: 3000
+  - snapshot: sessions
+  - press: "/"
+  - type: "recovery"
+  - wait:
+      screen:
+        contains: "Filter › recovery"
+      timeoutMs: 2000
+  - snapshot: sessions_filtered
+  - press: "enter"
+  - wait:
+      screen:
+        contains: "Recovery blocked: write_file has a durable dispatch marker"
+      timeoutMs: 3000
+  - snapshot: compact_receipts
+  - press: "t"
+  - wait:
+      screen:
+        contains: "package ui"
+      timeoutMs: 2000
+  - snapshot: expanded_receipts
+  - press: "ctrl+t"
+  - wait:
+      screen:
+        contains: "one successful read and one failed test command"
+      timeoutMs: 2000
+  - snapshot: expanded_reasoning
+  - press: "ctrl+c"
+  - wait:
+      process:
+        exitCode: 0
+      timeoutMs: 3000
+
+outcomes:
+  - id: saved_session_is_discoverable
+    description: the workspace session picker exposes the deterministic saved receipt fixture
+    verify:
+      snapshot:
+        name: sessions
+        mode: text
+  - id: saved_sessions_can_be_filtered
+    description: the Bubbles session filter keeps the matching recovery session selected
+    verify:
+      snapshot:
+        name: sessions_filtered
+        mode: text
+  - id: compact_receipts_preserve_failure_and_recovery_context
+    description: restored receipts show success, failure, and actionable no-retry recovery guidance
+    verify:
+      snapshot:
+        name: compact_receipts
+        mode: text
+  - id: tool_receipts_expand_together
+    description: the transcript exposes saved arguments and bounded results for inspection
+    verify:
+      snapshot:
+        name: expanded_receipts
+        mode: text
+  - id: saved_reasoning_is_inspectable
+    description: the reasoning disclosure can be opened independently from tool receipts
+    verify:
+      snapshot:
+        name: expanded_reasoning
+        mode: text
+  - id: receipt_flow_quits_cleanly
+    description: ctrl+c exits cleanly after restoring and inspecting a saved session
+    verify:
+      process:
+        exitCode: 0

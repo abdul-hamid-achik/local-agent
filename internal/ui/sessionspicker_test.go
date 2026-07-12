@@ -20,6 +20,56 @@ func TestSessionTitleTruncationPreservesUnicode(t *testing.T) {
 	}
 }
 
+func TestFormatSessionTimestamp(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{
+			name:  "utc with fractional seconds",
+			value: "2026-07-11T12:00:00.000Z",
+			want:  "Jul 11, 2026 · 12:00 UTC",
+		},
+		{
+			name:  "recorded negative offset",
+			value: "2026-07-11T12:00:00-06:00",
+			want:  "Jul 11, 2026 · 12:00 UTC-06:00",
+		},
+		{
+			name:  "recorded positive offset",
+			value: "2026-07-11T12:00:00+05:30",
+			want:  "Jul 11, 2026 · 12:00 UTC+05:30",
+		},
+		{name: "friendly label", value: "yesterday", want: "yesterday"},
+		{name: "unparseable label", value: "  just now  ", want: "  just now  "},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatSessionTimestamp(tt.value); got != tt.want {
+				t.Fatalf("formatSessionTimestamp(%q) = %q, want %q", tt.value, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSessionsPickerFormatsPersistedTimestampOnce(t *testing.T) {
+	state := newSessionsPickerState([]SessionListItem{{
+		ID:        1,
+		Title:     "Release polish",
+		CreatedAt: "2026-07-11T12:00:00.000Z",
+	}}, 80, 24, true)
+
+	item, ok := state.List.Items()[0].(sessionItem)
+	if !ok {
+		t.Fatalf("sessions item has type %T, want sessionItem", state.List.Items()[0])
+	}
+	if got, want := item.Description(), "Jul 11, 2026 · 12:00 UTC"; got != want {
+		t.Fatalf("session description = %q, want %q", got, want)
+	}
+}
+
 func TestSessionsPickerFitsMinimumAndKeepsFooter(t *testing.T) {
 	m := newTestModel(t)
 	m.width = minTerminalWidth

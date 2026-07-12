@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
@@ -53,7 +54,7 @@ func newSessionsPickerState(sessions []SessionListItem, width, height int, isDar
 		items[i] = sessionItem{
 			id:        s.ID,
 			title:     s.Title,
-			createdAt: s.CreatedAt,
+			createdAt: formatSessionTimestamp(s.CreatedAt),
 		}
 	}
 
@@ -79,6 +80,25 @@ func newSessionsPickerState(sessions []SessionListItem, width, height int, isDar
 		Sessions: sessions,
 		Phase:    sessionsReady,
 	}
+}
+
+// formatSessionTimestamp turns persisted RFC3339 values into compact,
+// scan-friendly labels. It keeps the timestamp's recorded offset instead of
+// consulting time.Local, which makes terminal snapshots deterministic across
+// machines. Human-authored and otherwise unparseable labels pass through.
+func formatSessionTimestamp(value string) string {
+	parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(value))
+	if err != nil {
+		return value
+	}
+
+	zone := parsed.Format("-07:00")
+	if zone == "+00:00" {
+		zone = "UTC"
+	} else {
+		zone = "UTC" + zone
+	}
+	return parsed.Format("Jan 2, 2006 · 15:04") + " " + zone
 }
 
 func newSessionsMessageState(phase sessionsPickerPhase, message string) *SessionsPickerState {

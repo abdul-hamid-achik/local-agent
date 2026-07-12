@@ -22,24 +22,16 @@ func (m *Model) renderKeyHints(width int, hints ...keyHint) string {
 	if width <= 0 || len(hints) == 0 {
 		return ""
 	}
-	if rendered := m.renderKeyHintSet(hints, -1); lipgloss.Width(rendered) <= width {
-		return rendered
-	}
-	if rendered := m.renderKeyHintSet(hints, 1); lipgloss.Width(rendered) <= width {
-		return rendered
-	}
-	for keep := len(hints) - 1; keep > 0; keep-- {
-		if rendered := m.renderKeyHintSet(hints[:keep], 1); lipgloss.Width(rendered) <= width {
-			return rendered
+	// Compact progressively: keep as many controls as possible, then retain as
+	// many leading action labels as fit. Trying every intermediate action count
+	// avoids needlessly turning a clear primary hint such as "enter select" into
+	// an unlabeled "enter" when only a lower-priority action needs to yield.
+	for keep := len(hints); keep > 0; keep-- {
+		for actionLimit := keep; actionLimit > 0; actionLimit-- {
+			if rendered := m.renderKeyHintSet(hints[:keep], actionLimit); lipgloss.Width(rendered) <= width {
+				return rendered
+			}
 		}
-	}
-	for keep := len(hints) - 1; keep > 0; keep-- {
-		if rendered := m.renderKeyHintSet(hints[:keep], -1); lipgloss.Width(rendered) <= width {
-			return rendered
-		}
-	}
-	if rendered := m.renderKeyHintSet(hints[:1], 1); lipgloss.Width(rendered) <= width {
-		return rendered
 	}
 	return truncateDisplay(m.renderKeyHintSet(hints[:1], 0), width)
 }

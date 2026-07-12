@@ -1,0 +1,39 @@
+                                                 LOCAL AGENT
+                                Local-first · Ollama · tool effects ask first
+                                              ASK · qwen3.5:2b
+                             enter send · / commands · ctrl+p settings · ? help
+                             shift+tab mode · ctrl+m model · @ files · # skills
+
+  ollama: no model selected
+  hint: is `ollama serve` running? is "qwen3.5:2b" pulled?
+
+
+
+
+
+
+
+                        ╭────────────────────────────────────────────────────────────╮
+                        │ Filter › recovery                                          │
+                        │                                                            │
+                        │   Recovery receipt review                                  │
+                        │   Jul 11, 2026 · 12:00 UTC                                 │
+                        │                                                            │
+                        │                                                            │
+                        │ esc back · enter select · ↑/↓ move · / filter              │
+                        ╰────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+
+
+
+
+
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ Ask, @mention files, or type /help

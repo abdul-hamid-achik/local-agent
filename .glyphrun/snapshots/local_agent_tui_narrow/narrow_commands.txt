@@ -13,7 +13,7 @@
  │   /unload · Remove loaded context… │
  │   /skill · Manage skills (list, a… │
  │   /servers · List connected MCP s… │
- │ esc cancel · enter · ↑/↓           │
+ │ esc cancel · enter select · ↑/↓    │
  ╰────────────────────────────────────╯
 ───────────────────────────────────────
 ❯ /

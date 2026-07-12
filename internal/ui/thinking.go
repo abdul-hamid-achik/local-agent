@@ -71,54 +71,67 @@ func hasPartialTagSuffix(s, tag string) int {
 
 // renderThinkingBox renders a collapsible thinking content box.
 func (m *Model) renderThinkingBox(content string, collapsed bool) string {
+	content = strings.TrimRight(content, "\n")
 	if content == "" {
 		return ""
 	}
 
-	lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
+	lines := strings.Split(content, "\n")
+	// The caller indents this block by two cells. Bound it to the same readable
+	// transcript width as assistant prose instead of expanding to the terminal
+	// edge on wide screens.
+	width := max(4, m.chatContentWidth()-2)
+	inner := max(1, width-2) // left rail plus one separating space
+	direction := "▸"
+	action := "expand"
+	if !collapsed {
+		direction = "▾"
+		action = "collapse"
+	}
+	header := thinkingHeader(direction, action, len(lines), inner)
 
+	bar := m.styles.ThinkingBorder.Render("│")
 	var b strings.Builder
+	b.WriteString(bar)
+	b.WriteByte(' ')
+	b.WriteString(m.styles.ThinkingHeader.Render(header))
 
+	// Collapsed means collapsed: keep the receipt and its discoverable shortcut,
+	// but do not leak a three-line preview that still consumes transcript space.
 	if collapsed {
-		hidden := len(lines) - 3
-		if hidden < 0 {
-			hidden = 0
-		}
-		header := fmt.Sprintf("▸ thinking (%d lines)", len(lines))
-		if hidden > 0 {
-			header += fmt.Sprintf(" — %d hidden, ctrl+t to expand", hidden)
-		}
-		b.WriteString(m.styles.ThinkingHeader.Render(header))
-		b.WriteString("\n")
-
-		start := len(lines) - 3
-		if start < 0 {
-			start = 0
-		}
-		for _, line := range lines[start:] {
-			b.WriteString(m.styles.ThinkingContent.Render(line))
-			b.WriteString("\n")
-		}
-	} else {
-		header := fmt.Sprintf("▾ thinking (%d lines) — ctrl+t to collapse", len(lines))
-		b.WriteString(m.styles.ThinkingHeader.Render(header))
-		b.WriteString("\n")
-		for _, line := range lines {
-			b.WriteString(m.styles.ThinkingContent.Render(line))
-			b.WriteString("\n")
-		}
+		return b.String()
 	}
 
-	boxWidth := m.width - 8
-	if boxWidth < 20 {
-		boxWidth = 20
+	for _, sourceLine := range lines {
+		wrapped := wrapText(sourceLine, inner)
+		if wrapped == "" {
+			wrapped = " "
+		}
+		for _, line := range strings.Split(wrapped, "\n") {
+			b.WriteByte('\n')
+			b.WriteString(bar)
+			b.WriteByte(' ')
+			b.WriteString(m.styles.ThinkingContent.UnsetPaddingLeft().Render(line))
+		}
 	}
+	return b.String()
+}
 
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(m.styles.OverlayBorder).
-		Padding(0, 2).
-		Width(boxWidth)
-
-	return box.Render(strings.TrimRight(b.String(), "\n"))
+func thinkingHeader(direction, action string, lineCount, width int) string {
+	unit := "lines"
+	if lineCount == 1 {
+		unit = "line"
+	}
+	candidates := []string{
+		fmt.Sprintf("%s reasoning · %d %s · ctrl+t %s", direction, lineCount, unit, action),
+		fmt.Sprintf("%s reasoning · %d · ctrl+t", direction, lineCount),
+		fmt.Sprintf("%s reasoning · ctrl+t", direction),
+		fmt.Sprintf("%s reasoning", direction),
+	}
+	for _, candidate := range candidates {
+		if lipgloss.Width(candidate) <= width {
+			return candidate
+		}
+	}
+	return truncateDisplay(candidates[len(candidates)-1], width)
 }

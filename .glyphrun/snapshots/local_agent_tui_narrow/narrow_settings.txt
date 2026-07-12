@@ -12,7 +12,7 @@
  │   Help · Shortcuts                 │
  │                                    │
  │   Choose an installed local model  │
- │ esc close · enter · ↑/↓            │
+ │ esc close · enter select · ↑/↓     │
  ╰────────────────────────────────────╯
 
 ───────────────────────────────────────

@@ -25,6 +25,7 @@ func (m *Model) View() tea.View {
 	// chrome that competes with code and tool output.
 	paneWidth := m.chatPaneWidth()
 	var content strings.Builder
+	var viewCursor *tea.Cursor
 	content.WriteString(m.viewport.View())
 	content.WriteString("\n")
 	content.WriteString(m.styles.Divider.Render(rule(paneWidth)))
@@ -42,18 +43,28 @@ func (m *Model) View() tea.View {
 	} else if m.composerIsBusy() {
 		content.WriteString(m.renderWorkingLine())
 	} else {
-		content.WriteString(m.input.View())
+		// Render a local copy with Bubbles' virtual cursor disabled. The same
+		// copy supplies the one real cursor owned by this top-level view.
+		input := m.input
+		input.SetVirtualCursor(false)
+		composerY := strings.Count(content.String(), "\n")
+		content.WriteString(input.View())
+		viewCursor = offsetCursor(input.Cursor(), 0, composerY)
 	}
 
 	// Render overlays on top (centered modal) using overlayOnContent
 	if m.overlay != OverlayNone {
 		var overlay string
+		var localCursor *tea.Cursor
+		// Every overlay suppresses the underlying composer cursor. Text-entry
+		// overlays may replace it with their own translated child cursor below.
+		viewCursor = nil
 		switch m.overlay {
 		case OverlayHelp:
 			overlay = m.renderHelpOverlay(m.width)
 		case OverlayCompletion:
 			if m.isCompletionActive() {
-				overlay = m.renderCompletionModal()
+				overlay, localCursor = m.renderCompletionModalView()
 			}
 		case OverlayModelPicker:
 			if m.modelPickerState != nil {
@@ -61,7 +72,7 @@ func (m *Model) View() tea.View {
 			}
 		case OverlayPlanForm:
 			if m.planFormState != nil {
-				overlay = m.renderPlanForm()
+				overlay, localCursor = m.renderPlanFormView()
 			}
 		case OverlaySessionsPicker:
 			if m.sessionsPickerState != nil {
@@ -80,12 +91,14 @@ func (m *Model) View() tea.View {
 			base := content.String()
 			content.Reset()
 			content.WriteString(m.overlayOnContent(base, overlay))
+			viewCursor = overlayCursor(base, overlay, m.width, localCursor)
 		}
 	}
 
 	v := tea.NewView(content.String() + "\n")
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
+	v.Cursor = viewCursor
 
 	// Terminal title progress.
 	switch m.state {
@@ -124,11 +137,19 @@ func (m *Model) renderNarrowTerminalView(hint string) tea.View {
 }
 
 func (m *Model) renderCompletionModal() string {
+	view, _ := m.renderCompletionModalView()
+	return view
+}
+
+func (m *Model) renderCompletionModalView() (string, *tea.Cursor) {
 	cs := m.completionState
 	if cs == nil {
-		return ""
+		return "", nil
 	}
 	contentW := pickerListWidth(m.width, 60)
+	filter := cs.Filter
+	filter.SetVirtualCursor(false)
+	filter.SetWidth(completionFilterInputWidth(m.width))
 
 	var b strings.Builder
 
@@ -148,9 +169,12 @@ func (m *Model) renderCompletionModal() string {
 	b.WriteString("\n")
 
 	// Filter input
+	filterY := strings.Count(b.String(), "\n")
 	b.WriteString(m.styles.FocusIndicator.Render(completionFilterPrompt))
-	b.WriteString(cs.Filter.View())
+	filterX := lipgloss.Width(completionFilterPrompt)
+	b.WriteString(filter.View())
 	b.WriteString("\n")
+	filterCursor := offsetCursor(filter.Cursor(), filterX, filterY)
 
 	// Breadcrumb for @ file browsing
 	if cs.Kind == "attachments" && cs.CurrentPath != "" {
@@ -250,7 +274,7 @@ func (m *Model) renderCompletionModal() string {
 	if cs.Selected != nil {
 		hints = append(hints, keyHint{Key: m.keys.CompleteToggle.Help().Key, Action: "toggle"})
 	}
-	return m.renderPickerFrame(b.String(), 60, m.renderKeyHints(contentW, hints...))
+	return m.renderPickerFrame(b.String(), 60, m.renderKeyHints(contentW, hints...)), pickerFrameCursor(filterCursor)
 }
 
 // renderStatusLine builds the status bar above the input/hint area.
