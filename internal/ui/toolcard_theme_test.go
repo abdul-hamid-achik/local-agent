@@ -21,17 +21,17 @@ func TestNewToolCardStylesUsesLightDarkPalette(t *testing.T) {
 			name:   "light",
 			isDark: false,
 			want: map[string]string{
-				"border running": "#5e81ac",
-				"border success": "#4f8f38",
-				"border error":   "#c94f4f",
-				"title running":  "#4f8f8f",
-				"title success":  "#4f8f38",
-				"title error":    "#c94f4f",
+				"border running": "#50759f",
+				"border success": "#477f33",
+				"border error":   "#c34848",
+				"title running":  "#447c7c",
+				"title success":  "#477f33",
+				"title error":    "#c34848",
 				"args":           "#4c566a",
 				"result":         "#4c566a",
-				"error":          "#c94f4f",
+				"error":          "#c34848",
 				"dimmed":         "#5b6779",
-				"elapsed":        "#5e81ac",
+				"elapsed":        "#50759f",
 			},
 		},
 		{
@@ -88,7 +88,7 @@ func TestToolCardManagerSetDarkUpdatesStylesAndPreservesCallID(t *testing.T) {
 	if len(mgr.Cards) != 1 {
 		t.Fatalf("card count = %d, want 1", len(mgr.Cards))
 	}
-	assertToolCardForeground(t, "light running title", mgr.Cards[0].Styles.TitleRunning, "#4f8f8f")
+	assertToolCardForeground(t, "light running title", mgr.Cards[0].Styles.TitleRunning, "#447c7c")
 
 	mgr.SetDark(true)
 

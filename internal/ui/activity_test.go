@@ -75,6 +75,23 @@ func TestMinimumTerminalWorkingStatesFit(t *testing.T) {
 	}
 }
 
+func TestMinimumTerminalNoticeKeepsSettingsRecoveryVisible(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 30, Height: 12})
+	m = updated.(*Model)
+	m.entries = append(m.entries, ChatEntry{Kind: "error", Content: "local runtime unavailable"})
+	m.invalidateEntryCache()
+	m.recalcViewportHeight()
+	m.viewport.SetContent(m.renderEntries())
+	m.viewport.GotoBottom()
+
+	view := ansi.Strip(m.View().Content)
+	if !strings.Contains(view, "ctrl+p settings") {
+		t.Fatalf("minimum notice state lost the Settings recovery path:\n%s", view)
+	}
+	assertRenderedHeightFits(t, m.View().Content, m.height)
+}
+
 func TestAnimationClocksStopOutsideTheirPhase(t *testing.T) {
 	m := newTestModel(t)
 	m.initializing = false
@@ -167,7 +184,7 @@ func TestApprovalOwnsFooterAndPausesActivityClock(t *testing.T) {
 		Response: responses,
 	}
 
-	view := m.View().Content
+	view := ansi.Strip(m.View().Content)
 	if !strings.Contains(view, "Approve write_file") || strings.Contains(view, "Responding") {
 		t.Fatalf("approval did not exclusively own the footer:\n%s", view)
 	}
@@ -231,6 +248,27 @@ func TestOwnedOperationsNeverRenderReady(t *testing.T) {
 				t.Fatal("owned operation has no visible working line")
 			}
 		})
+	}
+}
+
+func TestPausedFollowRecoveryFitsTheSingleWorkingRow(t *testing.T) {
+	for _, width := range []int{30, 40, 80} {
+		m := newTestModel(t)
+		m.width = width
+		m.state = StateStreaming
+		m.turnStartedAt = m.nowTime().Add(-2 * time.Second)
+		m.pauseFollow()
+
+		line := ansi.Strip(m.renderWorkingLine())
+		if !strings.Contains(line, "end") {
+			t.Fatalf("width %d paused working line lost End recovery: %q", width, line)
+		}
+		if !strings.Contains(line, "esc") {
+			t.Fatalf("width %d paused working line lost cancellation: %q", width, line)
+		}
+		if got := lipgloss.Width(line); got > width {
+			t.Fatalf("width %d paused working line is %d cells: %q", width, got, line)
+		}
 	}
 }
 

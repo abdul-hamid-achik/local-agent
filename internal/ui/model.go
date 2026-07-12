@@ -112,6 +112,15 @@ type ChatEntry struct {
 	ThinkingCollapsed bool   // default: true
 }
 
+// toolHitRegion is an exact, ordered transcript row target for one ToolCard
+// header. Dense receipts can be adjacent, so hit testing must never infer a
+// fixed card height or iterate an unordered map.
+type toolHitRegion struct {
+	ToolIndex int
+	Row       int
+	EndCol    int
+}
+
 // startupItem tracks the progress of a single startup task.
 type startupItem struct {
 	ID     string
@@ -170,14 +179,14 @@ type Model struct {
 	// Tool display
 	toolEntries    []ToolEntry
 	toolsCollapsed bool
-	toolEntryRows  map[int]int // toolIndex → starting row in viewport
+	toolHitRegions []toolHitRegion
 	toolCardMgr    ToolCardManager
 
 	// Incremental rendering cache
-	cachedEntriesRender string
-	cachedEntryCount    int
-	cachedToolEntryRows map[int]int
-	entryCacheValid     bool
+	cachedEntriesRender  string
+	cachedEntryCount     int
+	cachedToolHitRegions []toolHitRegion
+	entryCacheValid      bool
 
 	// Thinking state
 	thinkBuf       strings.Builder
@@ -202,7 +211,7 @@ type Model struct {
 	legacyICEPreview        *legacyICEPreview
 
 	// Paste detection
-	pendingPaste string
+	pendingPaste *pendingPaste
 
 	// Responsive layout
 	forceCompact bool // user-toggled compact mode
@@ -294,7 +303,14 @@ func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, com
 	ta.CharLimit = 32 * 1024
 	ta.SetHeight(1)
 	ta.ShowLineNumbers = false
-	ta.Prompt = "❯ "
+	// A single send marker followed by continuation rails makes multiline
+	// drafts read as one composer instead of several submitted messages.
+	ta.SetPromptFunc(2, func(info textarea.PromptInfo) string {
+		if info.LineNumber == 0 {
+			return "❯ "
+		}
+		return "│ "
+	})
 
 	ta.SetStyles(agentTextareaStyles(true))
 
@@ -364,6 +380,7 @@ func (m *Model) beginShutdown() tea.Cmd {
 		m.pendingApproval.Response <- permission.ApprovalResponse{Allowed: false}
 		m.pendingApproval = nil
 	}
+	m.pendingPaste = nil
 	if m.sessionLoading {
 		m.cancelSessionLoad()
 	}
@@ -488,10 +505,10 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			m.viewport.KeyMap.Right = key.NewBinding(key.WithDisabled())
 			m.viewport.SetContent(m.renderEntries())
 			m.ready = true
-			// Initialize scroll anchor system
-			m.anchorActive = true
-			// Initialize tool entry rows map
-			m.toolEntryRows = make(map[int]int, 8)
+			// Initialize scroll follow intent at the newest transcript row.
+			m.markFollowingLatest()
+			// Hit regions are populated by the transcript renderer.
+			m.toolHitRegions = nil
 		} else {
 			m.viewport.SetWidth(viewportWidth)
 			m.viewport.SetHeight(contentH)
@@ -505,10 +522,8 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			if markdownChanged || widthChanged {
 				m.viewport.SetContent(m.renderEntries())
 			}
-			// Maintain scroll position - if anchor is active, stay at bottom
-			if m.anchorActive {
-				m.viewport.GotoBottom()
-			}
+			// Maintain scroll position - if anchor is active, stay at bottom.
+			m.gotoBottomIfFollowing()
 		}
 
 		// Resize help viewport if it's open.
@@ -545,6 +560,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			case key.Matches(msg, m.keys.Quit):
 				m.pendingApproval.Response <- permission.ApprovalResponse{Allowed: false}
 				m.pendingApproval = nil
+				m.recalcViewportHeight()
 				return m, m.beginShutdown()
 			case key.Matches(msg, m.keys.Cancel):
 				m.pendingApproval.Response <- permission.ApprovalResponse{Allowed: false}
@@ -565,6 +581,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 				m.pendingApproval = nil
 				resumeActivity = true
 			}
+			if m.pendingApproval == nil {
+				m.recalcViewportHeight()
+			}
 			if resumeActivity {
 				return m, m.startActivityCmd()
 			}
@@ -572,26 +591,48 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		}
 
 		// Pending paste intercept: y/n/esc before anything else.
-		if m.pendingPaste != "" {
+		if m.pendingPaste != nil {
+			pending := m.pendingPaste
 			switch {
 			case key.Matches(msg, m.keys.Quit):
-				m.pendingPaste = ""
+				m.pendingPaste = nil
+				m.recalcViewportHeight()
 				return m, m.beginShutdown()
-			case msg.String() == "y":
-				m.clearCompletionSuppression()
-				m.input.InsertString("```\n" + m.pendingPaste + "\n```")
-				m.pendingPaste = ""
-				m.syncInputHeight()
-				return m, m.reflowInputViewport()
-			case msg.String() == "n":
-				m.clearCompletionSuppression()
-				m.input.InsertString(m.pendingPaste)
-				m.pendingPaste = ""
-				m.syncInputHeight()
-				return m, m.reflowInputViewport()
+			case strings.EqualFold(msg.String(), "y"):
+				if pending.PlainFits {
+					m.clearCompletionSuppression()
+					insertion := pending.Content
+					if pending.FencedFits {
+						insertion = pending.Fenced
+					}
+					m.input.InsertString(insertion)
+					m.pendingPaste = nil
+					m.recalcViewportHeight()
+					m.syncInputHeight()
+					return m, m.reflowInputViewport()
+				}
+			case strings.EqualFold(msg.String(), "n"):
+				if pending.PlainFits && pending.FencedFits {
+					m.clearCompletionSuppression()
+					m.input.InsertString(pending.Content)
+					m.pendingPaste = nil
+					m.recalcViewportHeight()
+					m.syncInputHeight()
+					return m, m.reflowInputViewport()
+				}
 			case key.Matches(msg, m.keys.Cancel):
-				m.pendingPaste = ""
+				m.pendingPaste = nil
+				m.recalcViewportHeight()
 			}
+			return m, nil
+		}
+
+		// End is the transcript's explicit recovery action whenever the composer
+		// is empty or temporarily unavailable. Handle it before owned busy-state
+		// guards so the advertised action cannot be swallowed by an in-flight
+		// session, file, export, or commit operation.
+		if key.Matches(msg, m.keys.JumpLatest) && m.canJumpToLatest() {
+			m.resumeFollow()
 			return m, nil
 		}
 
@@ -635,7 +676,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 				m.entries = append(m.entries, ChatEntry{Kind: "system", Content: "File operation cancelled; any late read result will be ignored."})
 				m.invalidateEntryCache()
 				m.viewport.SetContent(m.renderEntries())
-				m.viewport.GotoBottom()
+				m.gotoBottomIfFollowing()
 			}
 			return m, nil
 		}
@@ -1006,7 +1047,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		case key.Matches(msg, m.keys.ClearView):
 			if m.state == StateIdle {
 				m.viewport.SetContent(m.renderEntries())
-				m.viewport.GotoBottom()
+				m.resumeFollow()
 				return m, nil
 			}
 
@@ -1022,7 +1063,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 					Content: "New conversation started.",
 				})
 				m.viewport.SetContent(m.renderEntries())
-				m.viewport.GotoBottom()
+				m.resumeFollow()
 				return m, nil
 			}
 
@@ -1110,10 +1151,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		if now := time.Now(); now.Sub(m.lastStreamPaint) >= 33*time.Millisecond {
 			m.lastStreamPaint = now
 			m.viewport.SetContent(m.renderEntries())
-			// Use scroll anchor system - only auto-scroll if anchor is active
-			if m.anchorActive {
-				m.viewport.GotoBottom()
-			}
+			m.gotoBottomIfFollowing()
 		}
 
 	case StreamThinkingMsg:
@@ -1125,9 +1163,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		if now := time.Now(); now.Sub(m.lastStreamPaint) >= 33*time.Millisecond {
 			m.lastStreamPaint = now
 			m.viewport.SetContent(m.renderEntries())
-			if m.anchorActive {
-				m.viewport.GotoBottom()
-			}
+			m.gotoBottomIfFollowing()
 		}
 
 	case StreamDoneMsg:
@@ -1185,10 +1221,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		// Flush any accumulated stream text before tool display.
 		m.flushStream()
 		m.viewport.SetContent(m.renderEntries())
-		// Use scroll anchor system
-		if m.anchorActive {
-			m.viewport.GotoBottom()
-		}
+		m.gotoBottomIfFollowing()
 
 	case PlanFormCompletedMsg:
 		return m, m.submitPlanFormPrompt(msg.Prompt)
@@ -1243,10 +1276,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			m.toolsPending--
 		}
 		m.viewport.SetContent(m.renderEntries())
-		// Use scroll anchor system
-		if m.anchorActive {
-			m.viewport.GotoBottom()
-		}
+		m.gotoBottomIfFollowing()
 
 	case SystemMessageMsg:
 		m.entries = append(m.entries, ChatEntry{
@@ -1254,10 +1284,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			Content: msg.Msg,
 		})
 		m.viewport.SetContent(m.renderEntries())
-		// Use scroll anchor system
-		if m.anchorActive {
-			m.viewport.GotoBottom()
-		}
+		m.gotoBottomIfFollowing()
 
 	case ErrorMsg:
 		if m.logger != nil {
@@ -1268,10 +1295,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			Content: msg.Msg,
 		})
 		m.viewport.SetContent(m.renderEntries())
-		// Use scroll anchor system
-		if m.anchorActive {
-			m.viewport.GotoBottom()
-		}
+		m.gotoBottomIfFollowing()
 
 	case AgentDoneMsg:
 		if m.logger != nil {
@@ -1279,6 +1303,8 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		}
 		var unresolved *agent.UnresolvedExecutionError
 		hasUnresolved := errors.As(msg.Err, &unresolved)
+		followWasPaused := m.followPaused()
+		followYOffset := m.viewport.YOffset()
 		m.flushStream()
 		if msg.Err == nil {
 			m.sessionTurnCount++
@@ -1289,14 +1315,12 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		}
 		m.lastTurnDuration = m.turnElapsed()
 		m.state = StateIdle
-		m.userScrolledUp = false
-		m.anchorActive = true
 		m.input.Focus()
 		m.input.SetHeight(1)
 		m.inputLines = 1
 		m.recalcViewportHeight()
 		m.viewport.SetContent(m.renderEntries())
-		m.viewport.GotoBottom()
+		m.restoreFollowPosition(followWasPaused, followYOffset)
 		if msg.Err == nil {
 			// Terminal title flash is a success receipt, not a generic stopped state.
 			m.doneFlash = true
@@ -1322,7 +1346,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 				m.entries = append(m.entries, ChatEntry{Kind: "system", Content: "Turn cancelled."})
 			}
 			m.viewport.SetContent(m.renderEntries())
-			m.viewport.GotoBottom()
+			m.restoreFollowPosition(followWasPaused, followYOffset)
 		}
 		// Persist a lossless state snapshot after every settled attempt. Failed
 		// turns may contain cancellation or unknown-outcome receipts that must
@@ -1356,7 +1380,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			if persistErr := errors.Join(cursorErr, saveErr, usageErr); persistErr != nil {
 				m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("Save session: %v", persistErr)})
 				m.viewport.SetContent(m.renderEntries())
-				m.viewport.GotoBottom()
+				m.restoreFollowPosition(followWasPaused, followYOffset)
 			}
 		}
 		m.appendShutdownQuit(&cmds)
@@ -1419,7 +1443,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 				Content: msg.Text,
 			})
 			m.viewport.SetContent(m.renderEntries())
-			m.viewport.GotoBottom()
+			m.resumeFollow()
 		}
 
 	case ContextLoadResultMsg:
@@ -1440,7 +1464,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		}
 		m.invalidateEntryCache()
 		m.viewport.SetContent(m.renderEntries())
-		m.viewport.GotoBottom()
+		m.gotoBottomIfFollowing()
 
 	case ImportResultMsg:
 		if !m.fileLoading || msg.Token != m.fileOpToken {
@@ -1454,7 +1478,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("Import failed: %v", msg.Err)})
 			m.invalidateEntryCache()
 			m.viewport.SetContent(m.renderEntries())
-			m.viewport.GotoBottom()
+			m.gotoBottomIfFollowing()
 			break
 		}
 
@@ -1471,7 +1495,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		)})
 		m.invalidateEntryCache()
 		m.viewport.SetContent(m.renderEntries())
-		m.viewport.GotoBottom()
+		m.resumeFollow()
 
 	case ExportResultMsg:
 		if !m.exportRunning || msg.Token != m.exportToken {
@@ -1489,7 +1513,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			}
 			m.invalidateEntryCache()
 			m.viewport.SetContent(m.renderEntries())
-			m.viewport.GotoBottom()
+			m.gotoBottomIfFollowing()
 		}
 		m.appendShutdownQuit(&cmds)
 
@@ -1530,17 +1554,18 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: detail})
 			m.invalidateRenderedCache()
 			m.viewport.SetContent(m.renderEntries())
-			m.viewport.GotoBottom()
+			m.gotoBottomIfFollowing()
 			break
 		}
 		m.pendingApproval = &msg
+		m.recalcViewportHeight()
 		m.entries = append(m.entries, ChatEntry{
 			Kind:    "system",
 			Content: detail,
 		})
 		m.invalidateRenderedCache()
 		m.viewport.SetContent(m.renderEntries())
-		m.viewport.GotoBottom()
+		m.gotoBottomIfFollowing()
 
 	case CommitResultMsg:
 		if !m.commitRunning || msg.Token != m.commitToken {
@@ -1567,7 +1592,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		}
 		m.invalidateEntryCache()
 		m.viewport.SetContent(m.renderEntries())
-		m.viewport.GotoBottom()
+		m.gotoBottomIfFollowing()
 		m.appendShutdownQuit(&cmds)
 
 	case editorReturnMsg:
@@ -1649,7 +1674,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			}
 		}
 		m.viewport.SetContent(m.renderEntries())
-		m.viewport.GotoBottom()
+		m.resumeFollow()
 
 	case tea.MouseWheelMsg:
 		// A visible overlay owns pointer input. Scroll document overlays through
@@ -1667,18 +1692,13 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			return m, nil
 		}
 
-		wasAtBottom := m.viewport.AtBottom()
+		beforeOffset := m.viewport.YOffset()
 		m.viewport, _ = m.viewport.Update(msg)
 
-		// Use AtBottom() to determine scroll anchor state
-		// If viewport was at bottom before scroll up, user is scrolling away
-		if msg.Button == tea.MouseWheelUp && wasAtBottom {
-			m.anchorActive = false
-			m.userScrolledUp = true
-		} else if m.viewport.AtBottom() {
-			// Scrolled back to bottom - re-enable anchor
-			m.anchorActive = true
-			m.userScrolledUp = false
+		if m.viewport.AtBottom() {
+			m.markFollowingLatest()
+		} else if m.viewport.YOffset() != beforeOffset {
+			m.pauseFollow()
 		}
 		return m, nil
 
@@ -1694,13 +1714,17 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		}
 
 	case tea.PasteMsg:
-		lines := strings.Count(msg.Content, "\n") + 1
-		if lines > 10 && m.state == StateIdle {
-			m.pendingPaste = msg.Content
-			// The parent owns the safety prompt. Do not forward this PasteMsg to
-			// the textarea before the user chooses fenced or plain insertion.
-			return m, nil
-		} else if m.state == StateIdle {
+		if m.state == StateIdle {
+			draft := m.input.Value()
+			cursor := pasteCursorAt(draft, m.input.Line(), m.input.Column())
+			assessment := assessPaste(msg.Content, cursor, m.input.Length(), m.input.LineCount(), m.input.CharLimit)
+			if !assessment.PlainFits || assessment.NeedsReview {
+				m.pendingPaste = assessment
+				m.recalcViewportHeight()
+				// The parent owns the safety prompt. Do not forward this PasteMsg to
+				// the textarea before the user chooses fenced or plain insertion.
+				return m, nil
+			}
 			m.clearCompletionSuppression()
 			m.input.InsertString(msg.Content)
 			m.syncInputHeight()
@@ -1727,9 +1751,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		if m.toolsPending > 0 && m.ready {
 			m.invalidateEntryCache()
 			m.viewport.SetContent(m.renderEntries())
-			if m.anchorActive {
-				m.viewport.GotoBottom()
-			}
+			m.gotoBottomIfFollowing()
 		}
 	}
 
@@ -1762,14 +1784,17 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		}
 	}
 
-	wasAtBottom := m.viewport.AtBottom()
+	beforeOffset := m.viewport.YOffset()
 	var cmd tea.Cmd
 	m.viewport, cmd = m.viewport.Update(msg)
 	cmds = append(cmds, cmd)
 
-	// Detect keyboard scroll during streaming: if we moved away from bottom, mark scrolled up.
-	if m.state == StateStreaming && wasAtBottom && !m.viewport.AtBottom() {
-		m.userScrolledUp = true
+	if keyMsg, ok := msg.(tea.KeyPressMsg); ok && m.transcriptScrollKey(keyMsg) {
+		if m.viewport.AtBottom() {
+			m.markFollowingLatest()
+		} else if m.viewport.YOffset() != beforeOffset {
+			m.pauseFollow()
+		}
 	}
 	m.checkAutoScroll()
 
@@ -1936,7 +1961,7 @@ func (m *Model) submitInput() tea.Cmd {
 		if err != nil {
 			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("command parse error: %v", err)})
 			m.viewport.SetContent(m.renderEntries())
-			m.viewport.GotoBottom()
+			m.resumeFollow()
 			return nil
 		}
 
@@ -1950,7 +1975,7 @@ func (m *Model) submitInput() tea.Cmd {
 				Content: result.Error,
 			})
 			m.viewport.SetContent(m.renderEntries())
-			m.viewport.GotoBottom()
+			m.resumeFollow()
 			return nil
 		}
 
@@ -2024,7 +2049,7 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 			})
 		}
 		m.viewport.SetContent(m.renderEntries())
-		m.viewport.GotoBottom()
+		m.resumeFollow()
 		return nil
 
 	case command.ActionQuit:
@@ -2035,7 +2060,7 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 		if path == "" {
 			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: "load: no path specified"})
 			m.viewport.SetContent(m.renderEntries())
-			m.viewport.GotoBottom()
+			m.resumeFollow()
 			return nil
 		}
 		m.fileOpToken++
@@ -2045,7 +2070,7 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: fmt.Sprintf("Loading context from: %s (Esc cancels)", path)})
 		m.invalidateEntryCache()
 		m.viewport.SetContent(m.renderEntries())
-		m.viewport.GotoBottom()
+		m.resumeFollow()
 		load := func() tea.Msg {
 			data, err := safeio.ReadRegularFileNoFollow(path, maxLoadedContextBytes, safeio.StartupReadTimeout)
 			return ContextLoadResultMsg{Token: token, Path: path, Data: string(data), Err: err}
@@ -2063,7 +2088,7 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 			})
 		}
 		m.viewport.SetContent(m.renderEntries())
-		m.viewport.GotoBottom()
+		m.resumeFollow()
 		return nil
 
 	case command.ActionActivateSkill:
@@ -2081,7 +2106,7 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 			}
 		}
 		m.viewport.SetContent(m.renderEntries())
-		m.viewport.GotoBottom()
+		m.resumeFollow()
 		return nil
 
 	case command.ActionDeactivateSkill:
@@ -2099,7 +2124,7 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 			}
 		}
 		m.viewport.SetContent(m.renderEntries())
-		m.viewport.GotoBottom()
+		m.resumeFollow()
 		return nil
 
 	case command.ActionSwitchModel:
@@ -2124,7 +2149,7 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 		if err := config.CheckModelMemorySafe(result.Data); err != nil {
 			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: err.Error()})
 			m.viewport.SetContent(m.renderEntries())
-			m.viewport.GotoBottom()
+			m.resumeFollow()
 			return nil
 		}
 		if m.modelManager != nil {
@@ -2135,7 +2160,7 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 					Content: fmt.Sprintf("Failed to switch model: %v", err),
 				})
 				m.viewport.SetContent(m.renderEntries())
-				m.viewport.GotoBottom()
+				m.resumeFollow()
 				return nil
 			}
 		}
@@ -2149,14 +2174,14 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 			Content: result.Text,
 		})
 		m.viewport.SetContent(m.renderEntries())
-		m.viewport.GotoBottom()
+		m.resumeFollow()
 		return nil
 
 	case command.ActionEnableAutoModel:
 		m.modelPinned = false
 		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: result.Text})
 		m.viewport.SetContent(m.renderEntries())
-		m.viewport.GotoBottom()
+		m.resumeFollow()
 		return nil
 
 	case command.ActionShowModelPicker:
@@ -2177,7 +2202,7 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 				Content: "A commit is already in progress. Wait for it to finish before starting another.",
 			})
 			m.viewport.SetContent(m.renderEntries())
-			m.viewport.GotoBottom()
+			m.resumeFollow()
 			return nil
 		}
 		m.entries = append(m.entries, ChatEntry{
@@ -2185,7 +2210,7 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 			Content: "Generating commit message from staged changes. Automated /commit disables Git hooks, signing, fsmonitor, and background maintenance.",
 		})
 		m.viewport.SetContent(m.renderEntries())
-		m.viewport.GotoBottom()
+		m.resumeFollow()
 		m.commitToken++
 		ctx, cancel := context.WithCancel(context.Background())
 		m.commitCancel = cancel
@@ -2218,7 +2243,7 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 			})
 		}
 		m.viewport.SetContent(m.renderEntries())
-		m.viewport.GotoBottom()
+		m.resumeFollow()
 		return nil
 
 	case command.ActionExport:
@@ -2229,13 +2254,13 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 				Content: "export: no path specified",
 			})
 			m.viewport.SetContent(m.renderEntries())
-			m.viewport.GotoBottom()
+			m.resumeFollow()
 			return nil
 		}
 		if m.exportRunning {
 			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: "An export is already in progress. Wait for its receipt before starting another."})
 			m.viewport.SetContent(m.renderEntries())
-			m.viewport.GotoBottom()
+			m.resumeFollow()
 			return nil
 		}
 		content := []byte(m.formatConversationForExport())
@@ -2248,7 +2273,7 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: fmt.Sprintf("Exporting conversation to: %s", path)})
 		m.invalidateEntryCache()
 		m.viewport.SetContent(m.renderEntries())
-		m.viewport.GotoBottom()
+		m.resumeFollow()
 		return tea.Batch(m.startActivityCmd(), exportConversationCmd(workDir, path, content, force, token))
 
 	case command.ActionImport:
@@ -2259,7 +2284,7 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 				Content: "import: no path specified",
 			})
 			m.viewport.SetContent(m.renderEntries())
-			m.viewport.GotoBottom()
+			m.resumeFollow()
 			return nil
 		}
 		m.fileOpToken++
@@ -2269,7 +2294,7 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: fmt.Sprintf("Importing conversation from: %s (Esc cancels)", path)})
 		m.invalidateEntryCache()
 		m.viewport.SetContent(m.renderEntries())
-		m.viewport.GotoBottom()
+		m.resumeFollow()
 		load := func() tea.Msg {
 			data, err := safeio.ReadRegularFile(path, maxImportBytes, safeio.StartupReadTimeout)
 			if err != nil {
@@ -2312,7 +2337,7 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 		}
 		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: note})
 		m.viewport.SetContent(m.renderEntries())
-		m.viewport.GotoBottom()
+		m.resumeFollow()
 		return nil
 
 	case command.ActionListCheckpoints:
@@ -2334,7 +2359,7 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 		}
 		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: strings.TrimRight(b.String(), "\n")})
 		m.viewport.SetContent(m.renderEntries())
-		m.viewport.GotoBottom()
+		m.resumeFollow()
 		return nil
 
 	case command.ActionRestoreCheckpoint:
@@ -2342,14 +2367,14 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 		if perr != nil {
 			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("restore: %q is not a valid checkpoint id", result.Data)})
 			m.viewport.SetContent(m.renderEntries())
-			m.viewport.GotoBottom()
+			m.resumeFollow()
 			return nil
 		}
 		n, err := m.agent.RestoreCheckpoint(context.Background(), id)
 		if err != nil {
 			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("restore failed: %v", err)})
 			m.viewport.SetContent(m.renderEntries())
-			m.viewport.GotoBottom()
+			m.resumeFollow()
 			return nil
 		}
 		// Rebuild the visible transcript from the restored agent history.
@@ -2361,7 +2386,7 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 			Content: fmt.Sprintf("restored checkpoint #%d — conversation rewound to %d messages", id, n),
 		})
 		m.viewport.SetContent(m.renderEntries())
-		m.viewport.GotoBottom()
+		m.resumeFollow()
 		return nil
 
 	case command.ActionPreviewLegacyCheckpoints:
@@ -2396,7 +2421,7 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 				Content: result.Text,
 			})
 			m.viewport.SetContent(m.renderEntries())
-			m.viewport.GotoBottom()
+			m.resumeFollow()
 		}
 		return nil
 	}
@@ -2502,10 +2527,16 @@ func (m *Model) invalidateRenderedCache() {
 // footerHeight returns the total height of the footer area (divider + status + input/hint).
 func (m *Model) footerHeight() int {
 	height := 1 // divider
-	if m.renderStatusLine() != "" {
-		height++
+	if status := m.renderStatusLine(); status != "" {
+		statusRows := lipgloss.Height(status)
+		height += statusRows
+		if statusRows > 1 {
+			// A decision-only footer ends with the top-level terminal safety row;
+			// reserve it so wrapped actions never push a 30x12 view past the edge.
+			height++
+		}
 	}
-	if m.pendingApproval != nil || m.pendingPaste != "" {
+	if m.pendingApproval != nil || m.pendingPaste != nil {
 		return height
 	}
 	if !m.composerIsBusy() {
@@ -2549,15 +2580,14 @@ func (m *Model) invalidateEntryCache() {
 	m.entryCacheValid = false
 	m.cachedEntriesRender = ""
 	m.cachedEntryCount = 0
-	m.cachedToolEntryRows = nil
+	m.cachedToolHitRegions = nil
 }
 
 // checkAutoScroll resets scroll anchor when the viewport is at the bottom,
 // allowing auto-scroll to resume during streaming.
 func (m *Model) checkAutoScroll() {
 	if m.viewport.AtBottom() {
-		m.anchorActive = true
-		m.userScrolledUp = false
+		m.markFollowingLatest()
 	}
 }
 
@@ -2874,6 +2904,7 @@ func (m *Model) sendToAgent(text string) tea.Cmd {
 		m.logger.Info("user message", "mode", cfg.Label, "length", len(text))
 	}
 
+	m.resumeFollow()
 	m.input.Blur()
 	m.state = StateWaiting
 	m.turnStartedAt = m.nowTime()
@@ -2891,7 +2922,7 @@ func (m *Model) sendToAgent(text string) tea.Cmd {
 		Content: text,
 	})
 	m.viewport.SetContent(m.renderEntries())
-	m.viewport.GotoBottom()
+	m.gotoBottomIfFollowing()
 
 	if m.sessionID == 0 && m.sessionStore != nil {
 		workspaceID, workspaceErr := canonicalWorkspaceID(m.agent.WorkDir())
@@ -2951,7 +2982,7 @@ func (m *Model) sendToAgent(text string) tea.Cmd {
 					Content: fmt.Sprintf("Failed to switch routed model: %v", err),
 				})
 				m.viewport.SetContent(m.renderEntries())
-				m.viewport.GotoBottom()
+				m.gotoBottomIfFollowing()
 			}
 		}
 	}
@@ -3024,7 +3055,7 @@ func (m *Model) failTurnBeforeRun(text, message string) tea.Cmd {
 	m.recalcViewportHeight()
 	m.invalidateEntryCache()
 	m.viewport.SetContent(m.renderEntries())
-	m.viewport.GotoBottom()
+	m.resumeFollow()
 	return nil
 }
 
@@ -3071,7 +3102,7 @@ func (m *Model) setMode(mode Mode) {
 		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: receipt})
 	}
 	m.viewport.SetContent(m.renderEntries())
-	m.viewport.GotoBottom()
+	m.resumeFollow()
 }
 
 // openModelPicker shows the model picker overlay.
@@ -3113,7 +3144,7 @@ func (m *Model) selectModel(name string) {
 		m.entries = append(m.entries, ChatEntry{Kind: "error", Content: err.Error()})
 		m.closeModelPicker()
 		m.viewport.SetContent(m.renderEntries())
-		m.viewport.GotoBottom()
+		m.resumeFollow()
 		return
 	}
 	if m.modelManager != nil {
@@ -3138,7 +3169,7 @@ func (m *Model) selectModel(name string) {
 	})
 	m.closeModelPicker()
 	m.viewport.SetContent(m.renderEntries())
-	m.viewport.GotoBottom()
+	m.resumeFollow()
 }
 
 // closeModelPicker dismisses the model picker overlay.
@@ -3188,17 +3219,16 @@ func (m *Model) copyToClipboard(text string) tea.Cmd {
 }
 
 // handleMouseClick hit-tests tool entries and toggles their collapsed state.
-func (m *Model) handleMouseClick(_ int, y int) {
-	// The viewport starts at terminal row zero in the sidebar-free layout.
-	vpY := y + m.viewport.YOffset()
-	if m.toolEntryRows == nil {
+func (m *Model) handleMouseClick(x, y int) {
+	if x < 0 || x >= m.viewport.Width() || y < 0 || y >= m.viewport.Height() {
 		return
 	}
-
-	for toolIdx, startRow := range m.toolEntryRows {
-		if vpY >= startRow && vpY < startRow+3 {
-			if toolIdx >= 0 && toolIdx < len(m.toolEntries) {
-				m.toolEntries[toolIdx].Collapsed = !m.toolEntries[toolIdx].Collapsed
+	// The viewport starts at terminal row zero in the sidebar-free layout.
+	vpY := y + m.viewport.YOffset()
+	for _, region := range m.toolHitRegions {
+		if vpY == region.Row && x < region.EndCol {
+			if region.ToolIndex >= 0 && region.ToolIndex < len(m.toolEntries) {
+				m.toolEntries[region.ToolIndex].Collapsed = !m.toolEntries[region.ToolIndex].Collapsed
 				m.invalidateEntryCache()
 				m.viewport.SetContent(m.renderEntries())
 			}

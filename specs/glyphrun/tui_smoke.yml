@@ -10,18 +10,22 @@ target:
   env:
     HOME: "${projectRoot}/.glyphrun/tmp/home"
     LOCAL_AGENT_AGENTS_DIR: "${projectRoot}/.glyphrun/tmp/agents"
-    OLLAMA_HOST: "http://127.0.0.1:11434"
+    OLLAMA_HOST: "http://127.0.0.1:1"
 
 preconditions:
   commands:
-    - run: "rm -rf .glyphrun/tmp/home .glyphrun/tmp/agents && mkdir -p .glyphrun/tmp/home .glyphrun/tmp/agents && go build -o ./bin/local-agent ./cmd/local-agent"
+    - run: "rm -rf .glyphrun/tmp/home .glyphrun/tmp/agents && mkdir -p .glyphrun/tmp/home/.config/local-agent .glyphrun/tmp/agents && printf '%s\\n' 'model:' '  auto_select: false' > .glyphrun/tmp/home/.config/local-agent/config.yaml && go build -o ./bin/local-agent ./cmd/local-agent"
       cwd: "."
       timeoutMs: 30000
 
 steps:
   - wait:
       screen:
-        contains: "LOCAL AGENT"
+        contains: "Ask, @mention files, or type /help"
+      timeoutMs: 5000
+  - wait:
+      screen:
+        contains: "hint: is `ollama serve` running?"
       timeoutMs: 5000
   - snapshot: launch
   - press: "ctrl+c"
@@ -32,7 +36,7 @@ steps:
 
 outcomes:
   - id: launch_snapshot_stable
-    description: the normal-width welcome uses the committed honest local-first copy
+    description: the normal-width welcome and settled local-runtime guidance remain stable
     verify:
       snapshot:
         name: launch

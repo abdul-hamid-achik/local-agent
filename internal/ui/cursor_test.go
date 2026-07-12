@@ -135,7 +135,7 @@ func TestViewCursorHiddenWithoutTextOwnership(t *testing.T) {
 		{
 			name: "paste_confirmation_owns_footer",
 			setup: func(m *Model) {
-				m.pendingPaste = "one\ntwo"
+				m.pendingPaste = assessPaste("one\ntwo", pasteCursorAtEnd(m.input.Value()), m.input.Length(), m.input.LineCount(), m.input.CharLimit)
 			},
 		},
 		{

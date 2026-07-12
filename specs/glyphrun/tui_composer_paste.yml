@@ -67,7 +67,7 @@ steps:
   - paste: "fixture line 01\nfixture line 02\nfixture line 03\nfixture line 04\nfixture line 05\nfixture line 06\nfixture line 07\nfixture line 08\nfixture line 09\nfixture line 10\nfixture line 11"
   - wait:
       screen:
-        contains: "Large paste (11 lines). Wrap as code block? [y/n/esc]"
+        contains: "Large paste 11 lines"
       timeoutMs: 2000
   - snapshot: large_paste_prompt
   - press: "y"

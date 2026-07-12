@@ -6,7 +6,10 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/abdul-hamid-achik/local-agent/internal/permission"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestPendingApprovalEscapeDeniesAndCancels(t *testing.T) {
@@ -79,5 +82,31 @@ func TestUninspectableApprovalFailsClosed(t *testing.T) {
 	}
 	if response := <-responses; response.Allowed {
 		t.Fatal("uninspectable tool call was approved")
+	}
+}
+
+func TestApprovalDecisionKeepsIdentityAndEveryActionAtMinimumWidth(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 30, Height: 12})
+	m = updated.(*Model)
+	responses := make(chan permission.ApprovalResponse, 1)
+	updated, _ = m.Update(ToolApprovalMsg{
+		ToolName: "write_file",
+		Args:     map[string]any{"path": "approval-probe.txt"},
+		Response: responses,
+	})
+	m = updated.(*Model)
+
+	prompt := ansi.Strip(m.renderStatusLine())
+	for _, want := range []string{"write_file", "esc cancel", "y allow", "n deny", "a always"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("minimum approval prompt lost %q:\n%s", want, prompt)
+		}
+	}
+	if got, want := m.footerHeight(), 2+lipgloss.Height(prompt); got != want {
+		t.Fatalf("approval footer height = %d, want %d", got, want)
+	}
+	if got := lipgloss.Height(m.View().Content); got > m.height {
+		t.Fatalf("minimum approval view height = %d, want <= %d", got, m.height)
 	}
 }

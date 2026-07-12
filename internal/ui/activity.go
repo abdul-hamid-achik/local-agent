@@ -61,7 +61,7 @@ func (m *Model) currentWorkingActivity() (workingActivity, bool) {
 	// Interactive prompts own the footer while they are open. Reporting work
 	// behind an approval would imply progress even though the operation is
 	// deliberately paused on the user's decision.
-	if m.pendingApproval != nil || m.pendingPaste != "" {
+	if m.pendingApproval != nil || m.pendingPaste != nil {
 		return workingActivity{}, false
 	}
 
@@ -198,6 +198,16 @@ func (m *Model) renderWorkingLine() string {
 		activity.label + elapsed + shortCancel,
 		activity.label + shortCancel,
 		activity.label,
+	}
+	if m.followPaused() {
+		candidates = []string{
+			activity.label + detail + elapsed + longCancel + " · end latest",
+			activity.label + elapsed + longCancel + " · end latest",
+			activity.label + longCancel + " · end latest",
+			activity.label + shortCancel + " · end",
+			"Paused" + shortCancel + " · end",
+			"Paused · end",
+		}
 	}
 
 	const leftPad = "  "

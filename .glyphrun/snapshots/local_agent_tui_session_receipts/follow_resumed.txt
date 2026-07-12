@@ -1,0 +1,17 @@
+  │ ▾ ✗ Run failed (310ms)
+  │ tool: bash
+  │ args: command=go test ./internal/ui
+  │ exit status 1: fixture regression
+
+  assistant ─────────────────────────────────────────────────────────────────────────────────────────
+
+    The read completed, the test failure is visible, and the interrupted effect needs inspection.
+
+  Restored session: Recovery receipt review
+
+  ✗ error
+  Recovery blocked: write_file has a durable dispatch marker but no terminal receipt. Its outcome is
+  unknown, so automatic continuation is disabled. Inspect the workspace before starting /new.
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ [ BUILD ] · qwen3.5:2b · ctrl+p settings
+❯ Ask, @mention files, or type /help

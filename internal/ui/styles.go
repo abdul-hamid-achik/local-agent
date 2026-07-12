@@ -58,13 +58,15 @@ type semanticPalette struct {
 func newSemanticPalette(isDark bool) semanticPalette {
 	ld := lipgloss.LightDark(isDark)
 	return semanticPalette{
-		Dim:     ld(lipgloss.Color("#5B6779"), lipgloss.Color("#8B97AD")),
-		Muted:   ld(lipgloss.Color(nordLight4), lipgloss.Color(nord4)),
-		Text:    ld(lipgloss.Color(nordLight5), lipgloss.Color(nord5)),
-		Accent:  ld(lipgloss.Color("#4F8F8F"), lipgloss.Color(nord12)),
-		Accent2: ld(lipgloss.Color("#5E81AC"), lipgloss.Color(nord13)),
-		Error:   ld(lipgloss.Color("#C94F4F"), lipgloss.Color(nord7)),
-		Success: ld(lipgloss.Color("#4F8F38"), lipgloss.Color(nord10)),
+		Dim:   ld(lipgloss.Color("#5B6779"), lipgloss.Color("#8B97AD")),
+		Muted: ld(lipgloss.Color(nordLight4), lipgloss.Color(nord4)),
+		Text:  ld(lipgloss.Color(nordLight5), lipgloss.Color(nord5)),
+		// Light semantic foregrounds retain the Nord-adjacent hues while clearing
+		// 4.5:1 against a white terminal background for normal-sized text.
+		Accent:  ld(lipgloss.Color("#447C7C"), lipgloss.Color(nord12)),
+		Accent2: ld(lipgloss.Color("#50759F"), lipgloss.Color(nord13)),
+		Error:   ld(lipgloss.Color("#C34848"), lipgloss.Color(nord7)),
+		Success: ld(lipgloss.Color("#477F33"), lipgloss.Color(nord10)),
 		Special: ld(lipgloss.Color("#7B5A83"), lipgloss.Color(nord11)),
 		Warning: ld(lipgloss.Color("#8A6500"), lipgloss.Color(nord9)),
 		Border:  ld(lipgloss.Color(nordLight3), lipgloss.Color(nord3)),

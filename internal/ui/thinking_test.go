@@ -171,6 +171,22 @@ func TestRenderThinkingBoxStaysInsideReadableTranscript(t *testing.T) {
 	}
 }
 
+func TestLiveReasoningUsesAssistantOwnedStableRail(t *testing.T) {
+	m := newTestModel(t)
+	m.reducedMotion = true
+	m.thinkBuf.WriteString("inspect files\ncompare behavior")
+
+	plain := ansi.Strip(m.renderEntries())
+	assistantAt := strings.Index(plain, "assistant")
+	reasoningAt := strings.Index(plain, "│ reasoning · live")
+	if assistantAt < 0 || reasoningAt < assistantAt {
+		t.Fatalf("live reasoning is not owned by the assistant header:\n%s", plain)
+	}
+	if strings.Contains(plain, "chars") || strings.Contains(plain, "ctrl+t") {
+		t.Fatalf("live reasoning exposed unstable metrics or an unavailable action:\n%s", plain)
+	}
+}
+
 func TestToggleThinkingAppliesToEveryVisibleDisclosure(t *testing.T) {
 	m := newTestModel(t)
 	m.entries = []ChatEntry{

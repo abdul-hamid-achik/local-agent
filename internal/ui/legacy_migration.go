@@ -113,7 +113,7 @@ func (m *Model) appendLegacyMigrationEntry(kind, content string) {
 	m.entries = append(m.entries, ChatEntry{Kind: kind, Content: content})
 	m.invalidateEntryCache()
 	m.viewport.SetContent(m.renderEntries())
-	m.viewport.GotoBottom()
+	m.resumeFollow()
 }
 
 func (m *Model) previewLegacyMemory() {

@@ -1,11 +1,11 @@
 
-         LOCAL AGENT
+  ollama: no model
  ╭──────────────────────────╮
  │ Plan · 1/3               │
  │ Task                     │
  │ > polish the interface   │
  │ esc cancel · enter next  │
  ╰──────────────────────────╯
-
 ─────────────────────────────
+ PLAN · ctrl+p settings
 ❯ Ask or type / for commands

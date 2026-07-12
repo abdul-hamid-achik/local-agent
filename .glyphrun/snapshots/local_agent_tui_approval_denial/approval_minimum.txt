@@ -1,4 +1,3 @@
-  {
   "content": "must not be
   written",
   "path":

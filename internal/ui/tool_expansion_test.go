@@ -108,6 +108,20 @@ func TestToggleLastTool(t *testing.T) {
 	}
 }
 
+func TestSpaceKeyTogglesLastToolThroughBubbleTeaKeyName(t *testing.T) {
+	m := newTestModel(t)
+	m.toolEntries = []ToolEntry{{Name: "write", Status: ToolStatusError, Collapsed: true}}
+
+	updated, _ := m.Update(charKey(' '))
+	m = updated.(*Model)
+	if m.toolEntries[0].Collapsed {
+		t.Fatal("PTY space key did not expand the advertised last ToolCard")
+	}
+	if m.input.Value() != "" {
+		t.Fatalf("ToolCard shortcut leaked a space into the composer: %q", m.input.Value())
+	}
+}
+
 func TestFileWriteSnapshotBefore(t *testing.T) {
 	m := newTestModel(t)
 

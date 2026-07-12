@@ -1,4 +1,4 @@
-
+              LOCAL AGENT
  ╭────────────────────────────────────╮
  │ Commands                           │
  │ Filter › type to narrow            │

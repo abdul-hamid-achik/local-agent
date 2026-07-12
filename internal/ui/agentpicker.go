@@ -91,7 +91,7 @@ func (m *Model) selectAgentProfile(name string) {
 	m.closeAgentPicker()
 	m.invalidateEntryCache()
 	m.viewport.SetContent(m.renderEntries())
-	m.viewport.GotoBottom()
+	m.resumeFollow()
 }
 
 func (m *Model) renderAgentPicker() string {

@@ -117,6 +117,20 @@ func (m *Model) renderThinkingBox(content string, collapsed bool) string {
 	return b.String()
 }
 
+// renderLiveThinkingBox is the stable in-progress counterpart to a completed
+// reasoning disclosure. It intentionally omits implementation metrics and a
+// shortcut that is unavailable until the receipt is complete.
+func (m *Model) renderLiveThinkingBox() string {
+	width := max(4, m.chatContentWidth()-2)
+	inner := max(1, width-2)
+	header := "reasoning · live"
+	if lipgloss.Width(header) > inner {
+		header = truncateDisplay("reasoning", inner)
+	}
+	return m.styles.ThinkingBorder.Render("│") + " " +
+		m.styles.ThinkingHeader.Render(header)
+}
+
 func thinkingHeader(direction, action string, lineCount, width int) string {
 	unit := "lines"
 	if lineCount == 1 {

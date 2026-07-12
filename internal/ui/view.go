@@ -8,7 +8,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/abdul-hamid-achik/local-agent/internal/agent"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 )
 
@@ -38,7 +37,7 @@ func (m *Model) View() tea.View {
 
 	// The composer is replaced by one width-tiered liveness line while work is
 	// active. Idle gets the complete textarea back without a blank status row.
-	if m.pendingApproval != nil || m.pendingPaste != "" {
+	if m.pendingApproval != nil || m.pendingPaste != nil {
 		// The status prompt above owns the footer until the user answers.
 	} else if m.composerIsBusy() {
 		content.WriteString(m.renderWorkingLine())
@@ -282,39 +281,55 @@ func (m *Model) renderStatusLine() string {
 	paneW := m.chatPaneWidth()
 	// Pending tool approval prompt overrides normal status.
 	if m.pendingApproval != nil {
-		args := agent.FormatToolArgs(m.pendingApproval.Args)
+		args := FormatToolArgs(m.pendingApproval.Args)
 		promptText := m.pendingApproval.ToolName
 		if args != "" {
 			promptText += " " + args
 		}
-		actions := "esc cancel · y allow · n deny · a always"
-		switch {
-		case paneW < 34:
-			actions = "esc · y/n/a"
-		case paneW < 52:
-			actions = "esc cancel · y/n/a"
-		case paneW < 80:
-			actions = "esc · y allow · n deny · a always"
-		}
-		fixed := "  Approve  · " + actions
-		promptBudget := max(1, paneW-lipgloss.Width(fixed)-1)
-		promptText = truncateDisplay(promptText, promptBudget)
-		line := fmt.Sprintf("  Approve %s · %s", promptText, actions)
-		return m.styles.ApprovalPrompt.Render(truncateDisplay(line, paneW))
+		return m.renderDecisionPrompt(
+			"Approve", promptText,
+			keyHint{Key: "esc", Action: "cancel"},
+			keyHint{Key: "y", Action: "allow"},
+			keyHint{Key: "n", Action: "deny"},
+			keyHint{Key: "a", Action: "always"},
+		)
 	}
 
 	// Pending paste prompt overrides normal status.
-	if m.pendingPaste != "" {
-		lines := strings.Count(m.pendingPaste, "\n") + 1
-		return m.styles.StatusText.Render(truncateDisplay(
-			fmt.Sprintf("  Large paste (%d lines). Wrap as code block? [y/n/esc]", lines), paneW,
-		))
+	if m.pendingPaste != nil {
+		pending := m.pendingPaste
+		switch {
+		case !pending.PlainFits:
+			return m.renderDecisionPrompt(
+				"Paste too large", pending.descriptor(),
+				keyHint{Key: "esc", Action: "dismiss"},
+				keyHint{Action: "use @file or /load"},
+			)
+		case !pending.FencedFits:
+			return m.renderDecisionPrompt(
+				"Large paste", pending.descriptor()+" · plain only",
+				keyHint{Key: "esc", Action: "cancel"},
+				keyHint{Key: "y", Action: "plain"},
+			)
+		default:
+			return m.renderDecisionPrompt(
+				"Large paste", pending.descriptor(),
+				keyHint{Key: "esc", Action: "cancel"},
+				keyHint{Key: "y", Action: "code"},
+				keyHint{Key: "n", Action: "plain"},
+			)
+		}
+	}
+	if m.followPaused() && m.state == StateIdle && !m.composerIsBusy() {
+		return m.renderFollowPausedStatus(paneW)
 	}
 	if m.state != StateIdle || m.composerIsBusy() {
 		return ""
 	}
 	conversationStarted := m.conversationStarted()
-	if !conversationStarted && len(m.failedServers) == 0 && !m.doneFlash && (m.promptTokens <= 0 || m.numCtx <= 0) {
+	hasNotice := m.hasTranscriptNotice()
+	noticeNeedsRecovery := hasNotice && (paneW < 36 || m.height < 16)
+	if !conversationStarted && !noticeNeedsRecovery && len(m.failedServers) == 0 && !m.doneFlash && (m.promptTokens <= 0 || m.numCtx <= 0) {
 		// The empty-state orientation already carries mode, model, and Settings.
 		// Repeating them immediately above the composer only adds visual noise.
 		return ""
@@ -335,6 +350,12 @@ func (m *Model) renderStatusLine() string {
 		modeLabel = "[ " + modeLabel + " ]"
 	}
 	parts := []string{modeStyle.Render(modeLabel)}
+	if !conversationStarted && noticeNeedsRecovery {
+		// Startup and recovery notices can push the empty-state hints out of a
+		// minimum-height viewport. Keep the Settings recovery path in the fixed
+		// footer until a real conversation begins.
+		parts = append(parts, m.styles.FocusIndicator.Render("ctrl+p settings"))
+	}
 
 	if failures := len(m.failedServers); failures > 0 {
 		label := "⚠ connection failed"
@@ -399,6 +420,15 @@ func (m *Model) conversationStarted() bool {
 	return false
 }
 
+func (m *Model) hasTranscriptNotice() bool {
+	for _, entry := range m.entries {
+		if entry.Kind == "system" || entry.Kind == "error" {
+			return true
+		}
+	}
+	return false
+}
+
 // formatTokens formats a token count as "1.2k" or "8192".
 func formatTokens(n int) string {
 	if n >= 1000 {
@@ -454,7 +484,7 @@ func (m *Model) renderEntries() string {
 			break
 		}
 	}
-	if !hasUserMsg && m.streamBuf.Len() == 0 {
+	if !hasUserMsg && !m.hasLiveTurn() {
 		var b strings.Builder
 		m.renderWelcome(&b)
 		hasNotice := false
@@ -485,8 +515,8 @@ func (m *Model) renderEntries() string {
 	// Fast path: if entry cache is valid and entry count matches, reuse
 	// the cached prefix and only re-render the streaming tail.
 	if m.entryCacheValid && len(m.entries) == m.cachedEntryCount {
-		m.toolEntryRows = m.cachedToolEntryRows
-		if m.streamBuf.Len() > 0 {
+		m.toolHitRegions = append(m.toolHitRegions[:0], m.cachedToolHitRegions...)
+		if m.hasLiveTurn() {
 			var b strings.Builder
 			b.WriteString(m.cachedEntriesRender)
 			if m.cachedEntriesRender != "" && len(m.entries) > 0 {
@@ -501,7 +531,7 @@ func (m *Model) renderEntries() string {
 
 	// Full render: iterate all entries.
 	var b strings.Builder
-	m.toolEntryRows = make(map[int]int)
+	m.toolHitRegions = m.toolHitRegions[:0]
 	renderedLines := 0
 	previousKind := ""
 	renderedAny := false
@@ -532,7 +562,12 @@ func (m *Model) renderEntries() string {
 			renderedLines += strings.Count(separator, "\n")
 		}
 		if entry.Kind == "tool_group" {
-			m.toolEntryRows[entry.ToolIndex] = renderedLines
+			header, _, _ := strings.Cut(chunk, "\n")
+			m.toolHitRegions = append(m.toolHitRegions, toolHitRegion{
+				ToolIndex: entry.ToolIndex,
+				Row:       renderedLines,
+				EndCol:    lipgloss.Width(header),
+			})
 		}
 		b.WriteString(chunk)
 		renderedLines += strings.Count(chunk, "\n")
@@ -540,21 +575,14 @@ func (m *Model) renderEntries() string {
 		renderedAny = true
 	}
 
-	// Cache the rendered entries prefix and toolEntryRows.
+	// Cache the rendered entries prefix and exact ToolCard header targets.
 	m.cachedEntriesRender = b.String()
 	m.cachedEntryCount = len(m.entries)
-	if m.cachedToolEntryRows == nil {
-		m.cachedToolEntryRows = make(map[int]int, 8)
-	} else {
-		clear(m.cachedToolEntryRows)
-	}
-	for k, v := range m.toolEntryRows {
-		m.cachedToolEntryRows[k] = v
-	}
+	m.cachedToolHitRegions = append(m.cachedToolHitRegions[:0], m.toolHitRegions...)
 	m.entryCacheValid = true
 
 	// Render current streaming content (plain text, no Glamour).
-	if m.streamBuf.Len() > 0 {
+	if m.hasLiveTurn() {
 		if renderedAny {
 			b.WriteString(transcriptEntrySeparator(previousKind, "assistant"))
 		}
@@ -562,6 +590,10 @@ func (m *Model) renderEntries() string {
 	}
 
 	return b.String()
+}
+
+func (m *Model) hasLiveTurn() bool {
+	return m.streamBuf.Len() > 0 || m.thinkBuf.Len() > 0
 }
 
 // transcriptEntrySeparator is the single owner of vertical rhythm between
@@ -707,17 +739,12 @@ func (m *Model) renderAssistantMsg(b *strings.Builder, entry ChatEntry, contentW
 
 // renderStreamingMsg renders the in-progress assistant message (plain text).
 func (m *Model) renderStreamingMsg(b *strings.Builder, content string, contentW int) {
-	// Show thinking indicator during streaming.
-	if m.thinkBuf.Len() > 0 {
-		thinkHint := m.styles.ThinkingHeader.Render(
-			fmt.Sprintf("  thinking: %d chars...", m.thinkBuf.Len()),
-		)
-		b.WriteString(thinkHint)
-		b.WriteString("\n")
-	}
-
 	label := m.styles.AsstLabel.Render("assistant")
-	cursor := m.styles.StreamCursor.Render(" " + m.spin.View())
+	activity := "•"
+	if !m.reducedMotion {
+		activity = m.spin.View()
+	}
+	cursor := m.styles.StreamCursor.Render(" " + activity)
 	labelW := lipgloss.Width(label) + lipgloss.Width(cursor)
 	ruleW := contentW - labelW - 3
 	if ruleW < 4 {
@@ -725,6 +752,14 @@ func (m *Model) renderStreamingMsg(b *strings.Builder, content string, contentW 
 	}
 	b.WriteString(label + cursor + " " + m.styles.RoleRule.Render(rule(ruleW)))
 	b.WriteString("\n")
+
+	// Live reasoning uses the same assistant-owned hierarchy as the completed
+	// disclosure. Keeping it compact prevents token-by-token height jitter; the
+	// full receipt becomes expandable only after the turn settles.
+	if m.thinkBuf.Len() > 0 {
+		b.WriteString(indentBlock(m.renderLiveThinkingBox(), "  "))
+		b.WriteString("\n")
+	}
 
 	// During streaming: render the stable markdown prefix with Glamour (cached)
 	// and only the trailing partial paragraph as plain wrapped text. This shows

@@ -3,8 +3,9 @@ name: local_agent_tui_session_receipts
 
 intent: |
   a user can find and restore a saved workspace session, inspect compact and
-  expanded tool receipts, reveal saved reasoning, and see an actionable block
-  when an effect has a durable dispatch marker without a terminal receipt.
+  expanded tool receipts, reveal saved reasoning, pause transcript following,
+  return to the latest output, and see an actionable block when an effect has a
+  durable dispatch marker without a terminal receipt.
 
 target:
   cmd: ["./bin/local-agent"]
@@ -79,6 +80,25 @@ steps:
         contains: "one successful read and one failed test command"
       timeoutMs: 2000
   - snapshot: expanded_reasoning
+  - resize:
+      cols: 110
+      rows: 18
+  - press: "pgup"
+  - wait:
+      screen:
+        contains: "Follow paused · end latest"
+      timeoutMs: 2000
+  - snapshot: follow_paused
+  - press: "end"
+  - wait:
+      screen:
+        notContains: "Follow paused"
+      timeoutMs: 2000
+  - wait:
+      screen:
+        contains: "Recovery blocked: write_file has a durable dispatch marker"
+      timeoutMs: 2000
+  - snapshot: follow_resumed
   - press: "ctrl+c"
   - wait:
       process:
@@ -115,6 +135,18 @@ outcomes:
     verify:
       snapshot:
         name: expanded_reasoning
+        mode: text
+  - id: transcript_follow_can_be_paused
+    description: Page Up preserves an earlier transcript position and exposes the End recovery action
+    verify:
+      snapshot:
+        name: follow_paused
+        mode: text
+  - id: transcript_follow_can_resume
+    description: End returns directly to the latest recovery receipt and removes the paused state
+    verify:
+      snapshot:
+        name: follow_resumed
         mode: text
   - id: receipt_flow_quits_cleanly
     description: ctrl+c exits cleanly after restoring and inspecting a saved session

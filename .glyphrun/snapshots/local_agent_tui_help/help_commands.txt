@@ -1,6 +1,7 @@
                              ╭────────────────────────────────────────────────────────────╮
                              │ Help                                                       │
                              │                                                            │
+                             │                                                            │
                              │ Slash Commands                                             │
                              │   /help             Show help overlay with shortcuts and   │
                              │                     commands                               │
@@ -30,6 +31,5 @@
                              │                     conversation                           │
                              │   /checkpoints      List saved checkpoints (use /restore   │
                              │                     <id> to rewind)                        │
-                             │   /restore          Restore the conversation to a saved    │
-                             │ esc/q close · j/k scroll · 77%                             │
+                             │ esc/q close · j/k scroll · 75%                             │
                              ╰────────────────────────────────────────────────────────────╯

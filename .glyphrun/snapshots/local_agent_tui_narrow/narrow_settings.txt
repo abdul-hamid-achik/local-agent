@@ -1,6 +1,6 @@
-
-
-
+              LOCAL AGENT
+    Local-first · tool effects ask
+           PLAN · qwen3.5:2b
  ╭────────────────────────────────────╮
  │ Settings                           │
  │ │ Model · Pinned · qwen3.5:2b      │

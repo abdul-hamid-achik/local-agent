@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -8,6 +9,7 @@ import (
 
 	"github.com/abdul-hamid-achik/local-agent/internal/agent"
 	"github.com/abdul-hamid-achik/local-agent/internal/command"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // TestScrollAnchor_Initialization verifies scroll anchor is properly initialized
@@ -113,12 +115,13 @@ func TestScrollAnchor_StreamTextMsg(t *testing.T) {
 	}
 }
 
-// TestScrollAnchor_AgentDoneMsg resets anchor
+// TestScrollAnchor_AgentDoneMsg preserves an explicit paused-follow intent.
 func TestScrollAnchor_AgentDoneMsg(t *testing.T) {
 	m := newTestModel(t)
+	setScrollableTranscript(m)
+	m.viewport.GotoTop()
 	m.state = StateStreaming
-	m.anchorActive = false
-	m.userScrolledUp = true
+	m.pauseFollow()
 
 	updated, _ := m.Update(AgentDoneMsg{})
 	m = updated.(*Model)
@@ -126,11 +129,8 @@ func TestScrollAnchor_AgentDoneMsg(t *testing.T) {
 	if m.state != StateIdle {
 		t.Errorf("state should be StateIdle, got %d", m.state)
 	}
-	if !m.anchorActive {
-		t.Error("anchorActive should be reset to true after AgentDoneMsg")
-	}
-	if m.userScrolledUp {
-		t.Error("userScrolledUp should be reset to false")
+	if m.anchorActive || !m.userScrolledUp {
+		t.Error("AgentDoneMsg discarded the user's paused-follow intent")
 	}
 }
 
@@ -225,6 +225,144 @@ func TestCheckAutoScroll_ReenablesAnchorAtBottom(t *testing.T) {
 	}
 }
 
+func TestKeyboardScrollPausesFollowAndEndResumesLatest(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m = updated.(*Model)
+	setScrollableTranscript(m)
+	m.resumeFollow()
+	bottom := m.viewport.YOffset()
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyPgUp})
+	m = updated.(*Model)
+	pausedOffset := m.viewport.YOffset()
+	if !m.followPaused() || pausedOffset >= bottom {
+		t.Fatalf("Page Up did not pause transcript follow: offset=%d bottom=%d", pausedOffset, bottom)
+	}
+	if status := ansi.Strip(m.renderStatusLine()); !strings.Contains(status, "Follow paused") || !strings.Contains(status, "end latest") {
+		t.Fatalf("paused transcript has no recovery affordance: %q", status)
+	}
+
+	m.state = StateStreaming
+	updated, _ = m.Update(StreamTextMsg{Text: "new streamed output"})
+	m = updated.(*Model)
+	if got := m.viewport.YOffset(); got != pausedOffset {
+		t.Fatalf("next token snapped paused viewport from %d to %d", pausedOffset, got)
+	}
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnd})
+	m = updated.(*Model)
+	if m.followPaused() || !m.viewport.AtBottom() {
+		t.Fatal("End did not resume follow at the latest output")
+	}
+}
+
+func TestAgentDonePreservesPausedViewportOffset(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m = updated.(*Model)
+	setScrollableTranscript(m)
+	m.resumeFollow()
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyPgUp})
+	m = updated.(*Model)
+	pausedOffset := m.viewport.YOffset()
+	m.state = StateStreaming
+	m.streamBuf.WriteString("settling answer")
+
+	updated, _ = m.Update(AgentDoneMsg{})
+	m = updated.(*Model)
+	if !m.followPaused() {
+		t.Fatal("turn completion resumed follow without user intent")
+	}
+	if got := m.viewport.YOffset(); got != pausedOffset {
+		t.Fatalf("turn completion moved paused viewport from %d to %d", pausedOffset, got)
+	}
+}
+
+func TestEndPreservesNonemptyComposerAndOverlayOwnership(t *testing.T) {
+	m := newTestModel(t)
+	setScrollableTranscript(m)
+	m.pauseFollow()
+	m.input.SetValue("draft")
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnd})
+	m = updated.(*Model)
+	if !m.followPaused() || m.input.Value() != "draft" {
+		t.Fatal("End stole normal textarea behavior from a nonempty draft")
+	}
+
+	m.input.SetValue("")
+	m.overlay = OverlayHelp
+	m.initHelpViewport()
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnd})
+	m = updated.(*Model)
+	if !m.followPaused() || m.overlay != OverlayHelp {
+		t.Fatal("End moved the hidden transcript behind an overlay")
+	}
+}
+
+func TestEndResumesFollowDuringOwnedBusyStates(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*Model)
+	}{
+		{name: "session loading", setup: func(m *Model) { m.sessionLoading = true }},
+		{name: "session listing", setup: func(m *Model) { m.sessionListing = true }},
+		{name: "file loading", setup: func(m *Model) { m.fileLoading = true }},
+		{name: "export", setup: func(m *Model) { m.exportRunning = true }},
+		{name: "commit", setup: func(m *Model) { m.commitRunning = true }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newTestModel(t)
+			setScrollableTranscript(m)
+			m.viewport.GotoTop()
+			m.pauseFollow()
+			tt.setup(m)
+			if working := ansi.Strip(m.renderWorkingLine()); !strings.Contains(working, "end") {
+				t.Fatalf("busy footer did not advertise latest recovery: %q", working)
+			}
+
+			updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnd})
+			m = updated.(*Model)
+			if m.followPaused() || !m.viewport.AtBottom() {
+				t.Fatal("owned busy-state guard swallowed End")
+			}
+		})
+	}
+}
+
+func TestReceiptActionsKeepFollowIntentAligned(t *testing.T) {
+	tests := []struct {
+		name string
+		act  func(*Model)
+	}{
+		{name: "agent profile selection", act: func(m *Model) { m.selectAgentProfile("") }},
+		{name: "legacy migration receipt", act: func(m *Model) { m.appendLegacyMigrationEntry("system", "Migration preview") }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newTestModel(t)
+			setScrollableTranscript(m)
+			m.viewport.GotoTop()
+			m.pauseFollow()
+
+			tt.act(m)
+			if m.followPaused() || !m.viewport.AtBottom() {
+				t.Fatal("explicit receipt jumped without resuming follow intent")
+			}
+		})
+	}
+}
+
+func setScrollableTranscript(m *Model) {
+	m.entries = nil
+	for i := 0; i < 24; i++ {
+		m.entries = append(m.entries, ChatEntry{Kind: "user", Content: fmt.Sprintf("transcript row %02d", i)})
+	}
+	m.invalidateEntryCache()
+	m.viewport.SetContent(m.renderEntries())
+}
+
 // TestScrollAnchor_ViewportAtBottom helper
 func TestScrollAnchor_ViewportAtBottom(t *testing.T) {
 	m := newTestModel(t)
@@ -313,7 +451,7 @@ func TestOtherOverlaysSwallowMouseWheel(t *testing.T) {
 			m.viewport.SetContent(strings.Repeat("transcript line\n", 80))
 			m.viewport.GotoTop()
 			m.toolEntries = []ToolEntry{{Collapsed: true}}
-			m.toolEntryRows = map[int]int{0: 0}
+			m.toolHitRegions = []toolHitRegion{{ToolIndex: 0, Row: 0, EndCol: 12}}
 			m.overlay = overlay
 
 			updated, _ := m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown})
@@ -330,7 +468,7 @@ func TestOverlayClicksNeverToggleHiddenToolCards(t *testing.T) {
 		t.Run(overlayName(overlay), func(t *testing.T) {
 			m := newTestModel(t)
 			m.toolEntries = []ToolEntry{{Collapsed: true}}
-			m.toolEntryRows = map[int]int{0: 0}
+			m.toolHitRegions = []toolHitRegion{{ToolIndex: 0, Row: 0, EndCol: 12}}
 			m.overlay = overlay
 
 			updated, _ := m.Update(tea.MouseClickMsg{X: 0, Y: 0, Button: tea.MouseLeft})

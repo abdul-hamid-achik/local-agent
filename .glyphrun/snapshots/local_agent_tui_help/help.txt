@@ -15,6 +15,7 @@
                              │   pgdown            Scroll down                            │
                              │   ctrl+u            Half page up                           │
                              │   ctrl+d            Half page down                         │
+                             │   end               Latest output (empty input)            │
                              │   shift+tab         Cycle mode (ASK/PLAN/BUILD)            │
                              │   ctrl+m            Quick model switch                     │
                              │   ctrl+p            Open settings                          │
@@ -30,6 +31,5 @@
                              │   @file             Attach file or agent                   │
                              │   #skill            Activate skill                         │
                              │   /cmd              Run slash command                      │
-                             │                                                            │
                              │ esc/q close · ↓ more                                       │
                              ╰────────────────────────────────────────────────────────────╯

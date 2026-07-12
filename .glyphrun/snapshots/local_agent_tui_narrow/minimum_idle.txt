@@ -1,11 +1,11 @@
 
-         LOCAL AGENT
- Local-first · approvals on
-      ASK · qwen3.5:2b
-   enter · ctrl+p settings
-       ? help · / @ #
-
+  ollama: no model
+  selected
+  hint: is `ollama
+  serve` running? is
+  "qwen3.5:2b" pulled?
 
 
 ─────────────────────────────
+ ASK · ctrl+p settings
 ❯ Ask or type / for commands

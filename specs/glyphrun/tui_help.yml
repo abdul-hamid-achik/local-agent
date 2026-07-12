@@ -10,18 +10,22 @@ target:
   env:
     HOME: "${projectRoot}/.glyphrun/tmp/help-home"
     LOCAL_AGENT_AGENTS_DIR: "${projectRoot}/.glyphrun/tmp/help-agents"
-    OLLAMA_HOST: "http://127.0.0.1:11434"
+    OLLAMA_HOST: "http://127.0.0.1:1"
 
 preconditions:
   commands:
-    - run: "rm -rf .glyphrun/tmp/help-home .glyphrun/tmp/help-agents && mkdir -p .glyphrun/tmp/help-home .glyphrun/tmp/help-agents && go build -o ./bin/local-agent ./cmd/local-agent"
+    - run: "rm -rf .glyphrun/tmp/help-home .glyphrun/tmp/help-agents && mkdir -p .glyphrun/tmp/help-home/.config/local-agent .glyphrun/tmp/help-agents && printf '%s\\n' 'model:' '  auto_select: false' > .glyphrun/tmp/help-home/.config/local-agent/config.yaml && go build -o ./bin/local-agent ./cmd/local-agent"
       cwd: "."
       timeoutMs: 30000
 
 steps:
   - wait:
       screen:
-        contains: "LOCAL AGENT"
+        contains: "Ask, @mention files, or type /help"
+      timeoutMs: 5000
+  - wait:
+      screen:
+        contains: "hint: is `ollama serve` running?"
       timeoutMs: 5000
   - press: "?"
   - wait:

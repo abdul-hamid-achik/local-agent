@@ -25,5 +25,7 @@
 
 
 
+
+
 ─────────────────────────────────────────────────────────────────────────────────────────
-  Large paste (11 lines). Wrap as code block? [y/n/esc]
+  Large paste 11 lines · 175 B · esc cancel · y code · n plain

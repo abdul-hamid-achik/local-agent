@@ -16,6 +16,7 @@ type KeyMap struct {
 	PageDown          key.Binding
 	HalfPageUp        key.Binding
 	HalfPageDn        key.Binding
+	JumpLatest        key.Binding
 	Complete          key.Binding
 	CompleteUp        key.Binding
 	CompleteDown      key.Binding
@@ -84,6 +85,10 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("ctrl+d"),
 			key.WithHelp("ctrl+d", "half page down"),
 		),
+		JumpLatest: key.NewBinding(
+			key.WithKeys("end"),
+			key.WithHelp("end", "latest output (empty input)"),
+		),
 		Complete: key.NewBinding(
 			key.WithKeys("tab", "ctrl+i"),
 			key.WithHelp("tab", "autocomplete"),
@@ -129,7 +134,7 @@ func DefaultKeyMap() KeyMap {
 			key.WithHelp("↓", "next input (history active)"),
 		),
 		ToggleFocusedTool: key.NewBinding(
-			key.WithKeys(" "),
+			key.WithKeys("space"),
 			key.WithHelp("space", "toggle last tool (empty input)"),
 		),
 		ToggleThinking: key.NewBinding(
@@ -157,7 +162,7 @@ func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Send, k.NewLine, k.Cancel, k.Quit},
 		{k.ClearView, k.NewConvo, k.Help, k.ToggleTools, k.CopyLast},
-		{k.PageUp, k.PageDown, k.HalfPageUp, k.HalfPageDn},
+		{k.PageUp, k.PageDown, k.HalfPageUp, k.HalfPageDn, k.JumpLatest},
 		{k.CycleMode, k.ModelPicker, k.SettingsPicker},
 		{k.HistoryUp, k.HistoryDown},
 		{k.ToggleFocusedTool, k.ToggleThinking, k.CompactToggle, k.ExternalEditor, k.Complete},

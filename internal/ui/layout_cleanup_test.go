@@ -6,6 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestMultilineComposerCostsOneViewportRowPerLine(t *testing.T) {
@@ -51,6 +52,20 @@ func TestFiveRowComposerFitsTerminalAndKeepsTailVisible(t *testing.T) {
 	}
 }
 
+func TestMultilineComposerUsesOneSendMarkerAndContinuationRails(t *testing.T) {
+	m := newTestModel(t)
+	m.input.SetValue("first\nsecond\nthird")
+	m.syncInputHeight()
+
+	view := ansi.Strip(m.input.View())
+	if got := strings.Count(view, "❯ "); got != 1 {
+		t.Fatalf("multiline composer rendered %d send markers, want one:\n%s", got, view)
+	}
+	if got := strings.Count(view, "│ "); got != 2 {
+		t.Fatalf("multiline composer rendered %d continuation rails, want two:\n%s", got, view)
+	}
+}
+
 func TestHeightOnlyResizePreservesRenderedCaches(t *testing.T) {
 	m := newTestModel(t)
 	m.entries = []ChatEntry{{
@@ -80,7 +95,7 @@ func TestHeightOnlyResizePreservesRenderedCaches(t *testing.T) {
 func TestMouseHitTestingStartsAtViewportRowZero(t *testing.T) {
 	m := newTestModel(t)
 	m.toolEntries = []ToolEntry{{Collapsed: true}}
-	m.toolEntryRows = map[int]int{0: 0}
+	m.toolHitRegions = []toolHitRegion{{ToolIndex: 0, Row: 0, EndCol: 12}}
 	m.handleMouseClick(0, 0)
 	if m.toolEntries[0].Collapsed {
 		t.Fatal("row-zero tool card was not toggled")
@@ -89,10 +104,55 @@ func TestMouseHitTestingStartsAtViewportRowZero(t *testing.T) {
 	m.viewport.SetContent(strings.Repeat("line\n", 100))
 	m.viewport.SetYOffset(3)
 	m.toolEntries[0].Collapsed = true
-	m.toolEntryRows[0] = 3
+	m.toolHitRegions[0].Row = 3
 	m.handleMouseClick(0, 0)
 	if m.toolEntries[0].Collapsed {
 		t.Fatal("scrolled row-zero tool card was not toggled")
+	}
+}
+
+func TestDenseToolCardHitRegionsNeverOverlap(t *testing.T) {
+	m := newTestModel(t)
+	m.toolEntries = []ToolEntry{{Collapsed: true}, {Collapsed: true}}
+	m.toolHitRegions = []toolHitRegion{
+		{ToolIndex: 0, Row: 4, EndCol: 12},
+		{ToolIndex: 1, Row: 5, EndCol: 12},
+	}
+
+	m.handleMouseClick(0, 5)
+	if !m.toolEntries[0].Collapsed || m.toolEntries[1].Collapsed {
+		t.Fatalf("second dense receipt toggled the wrong card: %#v", m.toolEntries)
+	}
+
+	m.toolEntries[0].Collapsed = true
+	m.toolEntries[1].Collapsed = true
+	m.handleMouseClick(0, 6)
+	if !m.toolEntries[0].Collapsed || !m.toolEntries[1].Collapsed {
+		t.Fatal("clicking below an exact ToolCard header toggled a receipt")
+	}
+}
+
+func TestToolCardMouseTargetsExcludeFooterAndRightPadding(t *testing.T) {
+	m := newTestModel(t)
+	m.toolEntries = []ToolEntry{{Collapsed: true}}
+	m.viewport.SetHeight(5)
+	m.toolHitRegions = []toolHitRegion{{ToolIndex: 0, Row: 5, EndCol: 8}}
+
+	// Terminal row viewport.Height() is the divider immediately below the
+	// transcript. It must never alias a scrolled transcript row.
+	m.handleMouseClick(0, m.viewport.Height())
+	if !m.toolEntries[0].Collapsed {
+		t.Fatal("clicking the divider toggled an offscreen ToolCard")
+	}
+
+	m.toolHitRegions[0].Row = 0
+	m.handleMouseClick(8, 0)
+	if !m.toolEntries[0].Collapsed {
+		t.Fatal("clicking right-side padding toggled a ToolCard")
+	}
+	m.handleMouseClick(7, 0)
+	if m.toolEntries[0].Collapsed {
+		t.Fatal("clicking inside the rendered ToolCard header did not toggle it")
 	}
 }
 

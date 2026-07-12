@@ -12,7 +12,7 @@ target:
   env:
     HOME: "${projectRoot}/.glyphrun/tmp/narrow-home"
     LOCAL_AGENT_AGENTS_DIR: "${projectRoot}/.glyphrun/tmp/narrow-agents"
-    OLLAMA_HOST: "http://127.0.0.1:11434"
+    OLLAMA_HOST: "http://127.0.0.1:1"
 
 terminal:
   cols: 80
@@ -28,6 +28,10 @@ steps:
   - wait:
       screen:
         contains: "Ask, @mention files, or type /help"
+      timeoutMs: 5000
+  - wait:
+      screen:
+        contains: "hint: is `ollama serve` running?"
       timeoutMs: 5000
   - resize:
       cols: 30
@@ -46,7 +50,7 @@ steps:
   - press: "esc"
   - wait:
       screen:
-        contains: "ctrl+p settings"
+        notContains: "Settings"
       timeoutMs: 2000
   - press: "shift+tab"
   - wait:
@@ -63,7 +67,7 @@ steps:
   - press: "esc"
   - wait:
       screen:
-        contains: "ctrl+p settings"
+        notContains: "Plan · 1/3"
       timeoutMs: 2000
   - resize:
       cols: 40
@@ -109,7 +113,7 @@ steps:
   - press: "esc"
   - wait:
       screen:
-        contains: "ctrl+p settings"
+        notContains: "Settings"
       timeoutMs: 2000
   - press: "?"
   - wait:
@@ -120,7 +124,7 @@ steps:
   - press: "q"
   - wait:
       screen:
-        contains: "ctrl+p settings"
+        notContains: "Keyboard Shortcuts"
       timeoutMs: 2000
   - press: "/"
   - wait:

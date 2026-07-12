@@ -62,4 +62,18 @@ func TestRenderEntriesNestsReasoningAndDenselyStacksTools(t *testing.T) {
 	if strings.Contains(plain, "starting\n\n\n") || strings.Contains(plain, "(20ms)\n\n\n") {
 		t.Fatalf("semantic boundary contains duplicate blank rows:\n%s", plain)
 	}
+	if len(m.toolHitRegions) != 2 || m.toolHitRegions[1].Row != m.toolHitRegions[0].Row+1 {
+		t.Fatalf("dense ToolCard headers do not have exact adjacent hit rows: %#v", m.toolHitRegions)
+	}
+	if m.toolHitRegions[1].EndCol <= 0 {
+		t.Fatalf("ToolCard header has no horizontal hit bound: %#v", m.toolHitRegions[1])
+	}
+	m.handleMouseClick(m.toolHitRegions[1].EndCol, m.toolHitRegions[1].Row)
+	if !m.toolEntries[0].Collapsed || !m.toolEntries[1].Collapsed {
+		t.Fatal("clicking immediately beyond a rendered header toggled a receipt")
+	}
+	m.handleMouseClick(0, m.toolHitRegions[1].Row)
+	if !m.toolEntries[0].Collapsed || m.toolEntries[1].Collapsed {
+		t.Fatalf("clicking the second rendered header toggled the wrong receipt: %#v", m.toolEntries)
+	}
 }

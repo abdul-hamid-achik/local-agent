@@ -25,7 +25,7 @@
 
 ─────────────────────────────────────────────────────────────────────────────────────────
 ❯ Review the first receipt.
-❯ Keep the second line while I check Settings.
-❯ ```
-❯ fixture line 01
-❯ fixture line 02
+│ Keep the second line while I check Settings.
+│ ```
+│ fixture line 01
+│ fixture line 02

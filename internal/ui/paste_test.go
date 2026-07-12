@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestPasteMsg_SmallPaste(t *testing.T) {
@@ -15,7 +17,7 @@ func TestPasteMsg_SmallPaste(t *testing.T) {
 	updated, _ := m.Update(tea.PasteMsg{Content: content})
 	m = updated.(*Model)
 
-	if m.pendingPaste != "" {
+	if m.pendingPaste != nil {
 		t.Error("small paste should not trigger pending paste")
 	}
 	if got := strings.Count(m.input.Value(), content); got != 1 {
@@ -32,7 +34,7 @@ func TestPasteMsg_LargePaste(t *testing.T) {
 	updated, _ := m.Update(tea.PasteMsg{Content: content})
 	m = updated.(*Model)
 
-	if m.pendingPaste == "" {
+	if m.pendingPaste == nil {
 		t.Error("large paste should trigger pending paste")
 	}
 	if m.input.Value() != "" {
@@ -48,20 +50,20 @@ func TestPasteMsg_LargePasteNotIdle(t *testing.T) {
 	updated, _ := m.Update(tea.PasteMsg{Content: content})
 	m = updated.(*Model)
 
-	if m.pendingPaste != "" {
+	if m.pendingPaste != nil {
 		t.Error("should not set pending paste during streaming")
 	}
 }
 
 func TestPendingPaste_AcceptY(t *testing.T) {
 	m := newTestModel(t)
-	m.pendingPaste = "line1\nline2\nline3"
+	m.pendingPaste = assessPaste("line1\nline2\nline3", pasteCursorAtEnd(m.input.Value()), m.input.Length(), m.input.LineCount(), m.input.CharLimit)
 
-	updated, _ := m.Update(tea.KeyPressMsg{Code: 'y'})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'Y'})
 	m = updated.(*Model)
 
-	if m.pendingPaste != "" {
-		t.Error("pressing y should clear pending paste")
+	if m.pendingPaste != nil {
+		t.Error("pressing Y should clear pending paste")
 	}
 }
 
@@ -79,7 +81,7 @@ func TestPendingPasteAcceptanceKeepsClosingFenceVisible(t *testing.T) {
 	}, "\n")
 	updated, _ = m.Update(tea.PasteMsg{Content: paste})
 	m = updated.(*Model)
-	if m.pendingPaste != paste {
+	if m.pendingPaste == nil || m.pendingPaste.Content != paste {
 		t.Fatal("large paste did not remain pending for an explicit decision")
 	}
 	if got := m.input.Value(); got != base {
@@ -99,14 +101,48 @@ func TestPendingPasteAcceptanceKeepsClosingFenceVisible(t *testing.T) {
 	}
 }
 
+func TestPendingPasteAtMidLineKeepsBothFencesOnOwnLines(t *testing.T) {
+	m := newTestModel(t)
+	m.input.SetValue("abcXYZ")
+	m.input.CursorStart()
+	for range 3 {
+		updated, _ := m.Update(rightKey())
+		m = updated.(*Model)
+	}
+	if m.input.Line() != 0 || m.input.Column() != 3 {
+		t.Fatalf("cursor = %d:%d, want 0:3", m.input.Line(), m.input.Column())
+	}
+
+	paste := strings.Join([]string{
+		"line 01", "line 02", "line 03", "line 04", "line 05", "line 06",
+		"line 07", "line 08", "line 09", "line 10", "line 11",
+	}, "\n")
+	updated, _ := m.Update(tea.PasteMsg{Content: paste})
+	m = updated.(*Model)
+	if m.pendingPaste == nil {
+		t.Fatal("large mid-line paste did not require review")
+	}
+	wantInsertion := "\n```\n" + paste + "\n```\n"
+	if got := m.pendingPaste.Fenced; got != wantInsertion {
+		t.Fatalf("fenced mid-line insertion = %q, want %q", got, wantInsertion)
+	}
+
+	updated, _ = m.Update(charKey('y'))
+	m = updated.(*Model)
+	want := "abc" + wantInsertion + "XYZ"
+	if got := m.input.Value(); got != want {
+		t.Fatalf("accepted mid-line paste = %q, want %q", got, want)
+	}
+}
+
 func TestPendingPaste_RejectN(t *testing.T) {
 	m := newTestModel(t)
-	m.pendingPaste = "line1\nline2\nline3"
+	m.pendingPaste = assessPaste("line1\nline2\nline3", pasteCursorAtEnd(m.input.Value()), m.input.Length(), m.input.LineCount(), m.input.CharLimit)
 
 	updated, _ := m.Update(tea.KeyPressMsg{Code: 'n'})
 	m = updated.(*Model)
 
-	if m.pendingPaste != "" {
+	if m.pendingPaste != nil {
 		t.Error("pressing n should clear pending paste")
 	}
 	if got := strings.Count(m.input.Value(), "line1"); got != 1 {
@@ -116,12 +152,160 @@ func TestPendingPaste_RejectN(t *testing.T) {
 
 func TestPendingPaste_CancelEsc(t *testing.T) {
 	m := newTestModel(t)
-	m.pendingPaste = "line1\nline2\nline3"
+	m.pendingPaste = assessPaste("line1\nline2\nline3", pasteCursorAtEnd(m.input.Value()), m.input.Length(), m.input.LineCount(), m.input.CharLimit)
 
 	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	m = updated.(*Model)
 
-	if m.pendingPaste != "" {
+	if m.pendingPaste != nil {
 		t.Error("pressing esc should clear pending paste")
+	}
+}
+
+func TestPasteMsg_HugeSingleLineRequiresReview(t *testing.T) {
+	m := newTestModel(t)
+	content := strings.Repeat("x", pasteReviewByteThreshold)
+
+	updated, _ := m.Update(tea.PasteMsg{Content: content})
+	m = updated.(*Model)
+	if m.pendingPaste == nil || !m.pendingPaste.NeedsReview {
+		t.Fatal("large one-line payload bypassed paste review")
+	}
+	if m.input.Value() != "" {
+		t.Fatal("reviewed one-line payload mutated the composer before consent")
+	}
+	if prompt := ansi.Strip(m.renderStatusLine()); !strings.Contains(prompt, "1 line") || !strings.Contains(prompt, "4.0 KiB") {
+		t.Fatalf("paste prompt omitted truthful size metadata:\n%s", prompt)
+	}
+}
+
+func TestPasteMsg_OverCapacityIsRefusedWithoutClipping(t *testing.T) {
+	m := newTestModel(t)
+	content := strings.Repeat("x", m.input.CharLimit+1)
+
+	updated, _ := m.Update(tea.PasteMsg{Content: content})
+	m = updated.(*Model)
+	if m.pendingPaste == nil || m.pendingPaste.PlainFits {
+		t.Fatal("over-capacity payload was not refused")
+	}
+	prompt := ansi.Strip(m.renderStatusLine())
+	for _, want := range []string{"Paste too large", "@file", "/load", "esc dismiss"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("oversize prompt missing %q:\n%s", want, prompt)
+		}
+	}
+
+	updated, _ = m.Update(charKey('y'))
+	m = updated.(*Model)
+	if m.pendingPaste == nil || m.input.Value() != "" {
+		t.Fatal("oversize payload was inserted or dismissed by an unsupported choice")
+	}
+}
+
+func TestPasteMsg_DoubleWidthDraftUsesBubblesRemainingCapacity(t *testing.T) {
+	m := newTestModel(t)
+	draft := strings.Repeat("界", m.input.CharLimit/2)
+	m.input.SetValue(draft)
+	if got := m.input.Length(); got != m.input.CharLimit {
+		t.Fatalf("double-width fixture length = %d, want %d", got, m.input.CharLimit)
+	}
+
+	updated, _ := m.Update(tea.PasteMsg{Content: "x"})
+	m = updated.(*Model)
+	if m.pendingPaste == nil || m.pendingPaste.PlainFits {
+		t.Fatal("double-width draft allowed a paste that Bubbles would silently clip")
+	}
+	if m.input.Value() != draft {
+		t.Fatal("refused paste changed the double-width draft")
+	}
+}
+
+func TestPasteMsg_TabExpansionCannotSilentlyClip(t *testing.T) {
+	m := newTestModel(t)
+	draft := strings.Repeat("d", m.input.CharLimit-8)
+	m.input.SetValue(draft)
+
+	updated, _ := m.Update(tea.PasteMsg{Content: "\t\t\t"})
+	m = updated.(*Model)
+	if m.pendingPaste == nil || m.pendingPaste.PlainFits {
+		t.Fatal("three tabs were admitted into eight remaining cells despite expanding to twelve spaces")
+	}
+	if m.input.Value() != draft {
+		t.Fatal("refused tab-heavy paste changed the draft")
+	}
+}
+
+func TestPasteMsg_TextareaLineLimitCannotSilentlyClip(t *testing.T) {
+	m := newTestModel(t)
+	content := strings.Repeat("\n", pasteTextareaMaxLines)
+
+	updated, _ := m.Update(tea.PasteMsg{Content: content})
+	m = updated.(*Model)
+	if m.pendingPaste == nil || m.pendingPaste.PlainFits {
+		t.Fatal("payload beyond the textarea logical-row limit was admitted")
+	}
+	if m.input.Value() != "" || m.input.LineCount() != 1 {
+		t.Fatal("refused high-line paste partially changed the composer")
+	}
+}
+
+func TestPendingPaste_EmbeddedFenceUsesLongerMarkdownFence(t *testing.T) {
+	m := newTestModel(t)
+	content := strings.Join([]string{
+		"line 01", "line 02", "line 03", "```", "line 05", "line 06",
+		"line 07", "line 08", "line 09", "line 10", "line 11",
+	}, "\n")
+	updated, _ := m.Update(tea.PasteMsg{Content: content})
+	m = updated.(*Model)
+	if m.pendingPaste == nil || !strings.HasPrefix(m.pendingPaste.Fenced, "````\n") {
+		t.Fatalf("embedded backticks did not select a safe fence: %#v", m.pendingPaste)
+	}
+
+	updated, _ = m.Update(charKey('y'))
+	m = updated.(*Model)
+	if got := strings.Count(m.input.Value(), content); got != 1 {
+		t.Fatalf("fenced payload was not preserved exactly once: %d", got)
+	}
+	if got := strings.Count(m.input.Value(), "````"); got != 2 {
+		t.Fatalf("safe wrapper has %d four-backtick fences, want two", got)
+	}
+}
+
+func TestPendingPaste_OffersPlainOnlyWhenFenceExceedsCapacity(t *testing.T) {
+	m := newTestModel(t)
+	content := strings.Repeat("p", pasteReviewByteThreshold)
+	draft := strings.Repeat("d", m.input.CharLimit-len(content))
+	m.input.SetValue(draft)
+	m.pendingPaste = assessPaste(content, pasteCursorAtEnd(draft), m.input.Length(), m.input.LineCount(), m.input.CharLimit)
+	if !m.pendingPaste.PlainFits || m.pendingPaste.FencedFits {
+		t.Fatalf("invalid plain-only fixture: %#v", m.pendingPaste)
+	}
+	if prompt := ansi.Strip(m.renderStatusLine()); !strings.Contains(prompt, "plain only") || strings.Contains(prompt, "n plain") {
+		t.Fatalf("plain-only decision is misleading:\n%s", prompt)
+	}
+
+	updated, _ := m.Update(charKey('y'))
+	m = updated.(*Model)
+	if m.pendingPaste != nil || m.input.Value() != draft+content {
+		t.Fatal("plain-only acceptance did not preserve the exact payload")
+	}
+}
+
+func TestPasteDecisionKeepsAllActionsAtMinimumWidth(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 30, Height: 12})
+	m = updated.(*Model)
+	content := strings.Repeat("line\n", 11)
+	updated, _ = m.Update(tea.PasteMsg{Content: content})
+	m = updated.(*Model)
+
+	prompt := ansi.Strip(m.renderStatusLine())
+	for _, want := range []string{"esc cancel", "y code", "n plain"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("minimum paste prompt lost %q:\n%s", want, prompt)
+		}
+	}
+	if got := lipgloss.Height(m.View().Content); got > m.height {
+		t.Fatalf("minimum paste decision height = %d, want <= %d", got, m.height)
 	}
 }

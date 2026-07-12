@@ -1,13 +1,13 @@
-
-
-
-
-
               LOCAL AGENT
     Local-first · tool effects ask
            PLAN · qwen3.5:2b
  enter send · ctrl+p settings · ? help
     / commands · @ files · # skills
+
+  ollama: no model selected
+  hint: is `ollama serve`
+  running? is "qwen3.5:2b"
+  pulled?
 
 
 
