@@ -170,3 +170,27 @@ func TestRenderThinkingBoxStaysInsideReadableTranscript(t *testing.T) {
 		}
 	}
 }
+
+func TestToggleThinkingAppliesToEveryVisibleDisclosure(t *testing.T) {
+	m := newTestModel(t)
+	m.entries = []ChatEntry{
+		{Kind: "assistant", Content: "first", ThinkingContent: "first reasoning", ThinkingCollapsed: true},
+		{Kind: "assistant", Content: "second", ThinkingContent: "second reasoning", ThinkingCollapsed: true},
+	}
+
+	updated, _ := m.Update(ctrlKey('t'))
+	m = updated.(*Model)
+	for i, entry := range m.entries {
+		if entry.ThinkingCollapsed {
+			t.Fatalf("entry %d remained collapsed after shared disclosure toggle", i)
+		}
+	}
+
+	updated, _ = m.Update(ctrlKey('t'))
+	m = updated.(*Model)
+	for i, entry := range m.entries {
+		if !entry.ThinkingCollapsed {
+			t.Fatalf("entry %d remained expanded after shared disclosure toggle", i)
+		}
+	}
+}

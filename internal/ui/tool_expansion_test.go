@@ -3,7 +3,32 @@ package ui
 import (
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestToolCallStartStoresSemanticSummaryForPersistence(t *testing.T) {
+	m := newTestModel(t)
+	args := map[string]any{"path": "internal/ui/session.go"}
+	updated, _ := m.Update(ToolCallStartMsg{
+		ID: "read-1", Name: "read_file", Args: args, StartTime: time.Now(),
+	})
+	m = updated.(*Model)
+
+	if len(m.toolEntries) != 1 || len(m.toolCardMgr.Cards) != 1 {
+		t.Fatalf("tool lifecycle was not created: entries=%d cards=%d", len(m.toolEntries), len(m.toolCardMgr.Cards))
+	}
+	if got, want := m.toolEntries[0].Summary, "internal/ui/session.go"; got != want {
+		t.Fatalf("stored tool summary = %q, want %q", got, want)
+	}
+	if got, want := m.toolCardMgr.Cards[0].Summary, m.toolEntries[0].Summary; got != want {
+		t.Fatalf("live card summary = %q, want stored summary %q", got, want)
+	}
+
+	args["path"] = "internal/ui/model.go"
+	if got := m.toolEntries[0].Summary; got != "internal/ui/session.go" {
+		t.Fatalf("stored summary changed with ephemeral arguments: %q", got)
+	}
+}
 
 func TestPerEntryCollapse_Default(t *testing.T) {
 	m := newTestModel(t)

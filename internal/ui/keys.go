@@ -134,7 +134,7 @@ func DefaultKeyMap() KeyMap {
 		),
 		ToggleThinking: key.NewBinding(
 			key.WithKeys("ctrl+t"),
-			key.WithHelp("ctrl+t", "toggle thinking (empty input)"),
+			key.WithHelp("ctrl+t", "toggle all reasoning (empty input)"),
 		),
 		CompactToggle: key.NewBinding(
 			key.WithKeys("ctrl+k"),

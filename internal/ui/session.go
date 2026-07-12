@@ -38,6 +38,7 @@ type persistedChatEntry struct {
 type persistedToolEntry struct {
 	ID        string        `json:"id"`
 	Name      string        `json:"name"`
+	Summary   string        `json:"summary,omitempty"`
 	Args      string        `json:"args,omitempty"`
 	Result    string        `json:"result,omitempty"`
 	IsError   bool          `json:"is_error,omitempty"`
@@ -135,6 +136,7 @@ func persistToolEntries(entries []ToolEntry) []persistedToolEntry {
 		result[i] = persistedToolEntry{
 			ID:        entry.ID,
 			Name:      entry.Name,
+			Summary:   boundedToolCardSummary(entry.Summary),
 			Args:      boundedSessionText(entry.Args, maxPersistedToolArgsBytes),
 			Result:    boundedSessionText(entry.Result, maxPersistedToolResultBytes),
 			IsError:   entry.IsError,
@@ -154,6 +156,7 @@ func restoreToolEntries(entries []persistedToolEntry) []ToolEntry {
 		result[i] = ToolEntry{
 			ID:        entry.ID,
 			Name:      entry.Name,
+			Summary:   restoredToolSummary(entry),
 			Args:      entry.Args,
 			Result:    entry.Result,
 			IsError:   entry.IsError,
@@ -165,6 +168,17 @@ func restoreToolEntries(entries []persistedToolEntry) []ToolEntry {
 		}
 	}
 	return result
+}
+
+// restoredToolSummary preserves the semantic summary written by current
+// snapshots. Version-1 snapshots created before summary persistence omitted
+// the field, so their already-bounded display arguments become compact context
+// instead of leaving a restored receipt with only a generic action label.
+func restoredToolSummary(entry persistedToolEntry) string {
+	if summary := boundedToolCardSummary(entry.Summary); summary != "" {
+		return summary
+	}
+	return boundedToolCardSummary(entry.Args)
 }
 
 func encodeSessionState(m *Model) (string, error) {
@@ -429,6 +443,7 @@ func (m *Model) restoreSessionState(state persistedSessionState) error {
 		m.toolCardMgr.AddCardWithID(entry.ID, entry.Name, kind, entry.StartTime)
 		card := &m.toolCardMgr.Cards[len(m.toolCardMgr.Cards)-1]
 		card.Args = entry.Args
+		card.SetSummary(entry.Summary)
 		card.Result = entry.Result
 		card.Duration = entry.Duration
 		switch entry.Status {

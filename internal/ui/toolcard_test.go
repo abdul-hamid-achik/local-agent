@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestToolCardViewWithActivityIsPureAndShowsSummary(t *testing.T) {
@@ -75,6 +76,48 @@ func TestToolCardCollapsedErrorAlwaysShowsResult(t *testing.T) {
 	card.Result = ""
 	if fallback := card.View(38); !strings.Contains(fallback, "no error details") {
 		t.Fatalf("empty error did not expose a diagnostic fallback:\n%s", fallback)
+	}
+}
+
+func TestToolCardCompletedReceiptShowsDisclosureState(t *testing.T) {
+	card := NewToolCard("read_file", ToolCardFile, true)
+	card.State = ToolCardSuccess
+	card.Duration = 42 * time.Millisecond
+	card.Result = "package ui"
+
+	collapsed := ansi.Strip(card.View(48))
+	if !strings.Contains(collapsed, "▸ ✓ Read") || strings.Contains(collapsed, "▾") {
+		t.Fatalf("collapsed receipt did not expose its disclosure state:\n%s", collapsed)
+	}
+
+	card.Expanded = true
+	expanded := ansi.Strip(card.View(48))
+	if !strings.Contains(expanded, "▾ ✓ Read") || strings.Contains(expanded, "▸") {
+		t.Fatalf("expanded receipt did not expose its disclosure state:\n%s", expanded)
+	}
+
+	card.State = ToolCardRunning
+	running := ansi.Strip(card.View(48))
+	if strings.Contains(running, "▸") || strings.Contains(running, "▾") {
+		t.Fatalf("non-expandable running receipt showed a disclosure mark:\n%s", running)
+	}
+
+	card = NewToolCard("bash", ToolCardBash, true)
+	card.State = ToolCardError
+	card.Duration = 310 * time.Millisecond
+	card.Result = "exit status 1"
+	failed := ansi.Strip(card.View(48))
+	if !strings.Contains(failed, "▸ ✗ Run failed") || !strings.Contains(failed, "exit status 1") {
+		t.Fatalf("failed receipt lost its disclosure or error state:\n%s", failed)
+	}
+
+	card.State = ToolCardSuccess
+	card.Expanded = false
+	for _, width := range []int{4, 5, 12} {
+		assertToolCardLinesFit(t, card.View(width), width)
+	}
+	if tiny := ansi.Strip(card.View(4)); strings.Contains(tiny, "▸") {
+		t.Fatalf("extreme-width receipt kept a disclosure mark that cannot fit: %q", tiny)
 	}
 }
 

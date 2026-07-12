@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 func TestMultilineComposerCostsOneViewportRowPerLine(t *testing.T) {
@@ -25,6 +26,28 @@ func TestMultilineComposerCostsOneViewportRowPerLine(t *testing.T) {
 		if got := m.viewport.Height(); got != initial {
 			t.Fatalf("width %d: collapsed composer height = %d, want %d", width, got, initial)
 		}
+	}
+}
+
+func TestFiveRowComposerFitsTerminalAndKeepsTailVisible(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 32})
+	m = updated.(*Model)
+	lines := make([]string, 14)
+	for i := range lines {
+		lines[i] = "fixture line " + string(rune('A'+i))
+	}
+	m.input.SetValue(strings.Join(lines, "\n"))
+	m.syncInputHeight()
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnd, Mod: tea.ModCtrl})
+	m = updated.(*Model)
+
+	view := m.View().Content
+	if got := lipgloss.Height(view); got > m.height {
+		t.Fatalf("five-row composer view height = %d, want <= %d", got, m.height)
+	}
+	if !strings.Contains(view, lines[len(lines)-1]) {
+		t.Fatalf("five-row composer clipped its tail:\n%s", view)
 	}
 }
 

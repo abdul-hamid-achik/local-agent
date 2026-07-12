@@ -1,0 +1,31 @@
+                                       LOCAL AGENT
+                      Local-first · Ollama · tool effects ask first
+                                    ASK · qwen3.5:2b
+                   enter send · / commands · ctrl+p settings · ? help
+                   shift+tab mode · ctrl+m model · @ files · # skills
+
+  ollama: no model selected
+  hint: is `ollama serve` running? is "qwen3.5:2b" pulled?
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+─────────────────────────────────────────────────────────────────────────────────────────
+❯ fixture line 08
+❯ fixture line 09
+❯ fixture line 10
+❯ fixture line 11
+❯ ```

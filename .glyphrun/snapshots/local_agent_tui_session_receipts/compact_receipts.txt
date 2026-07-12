@@ -1,17 +1,14 @@
   you ───────────────────────────────────────────────────────────────────────────────────────────────
   Review the release receipts.
 
-  │ ▸ reasoning · 1 line · ctrl+t expand
   assistant ─────────────────────────────────────────────────────────────────────────────────────────
+  │ ▸ reasoning · 1 line · ctrl+t expand
 
     I checked the saved verification receipts.
 
-
-  │ ✓ Read (42ms)
-
-  │ ✗ Run failed (310ms)
+  │ ▸ ✓ Read · path=internal/ui/view.go (42ms)
+  │ ▸ ✗ Run failed · command=go test ./internal/ui (310ms)
   │ exit status 1: fixture regression
-
 
   assistant ─────────────────────────────────────────────────────────────────────────────────────────
 
@@ -19,10 +16,13 @@
 
   Restored session: Recovery receipt review
 
-
   ✗ error
   Recovery blocked: write_file has a durable dispatch marker but no terminal receipt. Its outcome is
   unknown, so automatic continuation is disabled. Inspect the workspace before starting /new.
+
+
+
+
 
 
 

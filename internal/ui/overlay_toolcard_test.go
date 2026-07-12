@@ -264,7 +264,7 @@ func TestDuplicateRestoredToolIDUsesNewestReceipt(t *testing.T) {
 	m.ready = true
 	m.width, m.height = 100, 40
 	var renderedBuilder strings.Builder
-	m.renderToolGroup(&renderedBuilder, 0, 0)
+	m.renderToolGroup(&renderedBuilder, 0)
 	rendered := renderedBuilder.String()
 	if !strings.Contains(rendered, "NEW RECEIPT") || strings.Contains(rendered, "OLD RECEIPT") {
 		t.Fatalf("tool entry rendered stale duplicate receipt:\n%s", rendered)

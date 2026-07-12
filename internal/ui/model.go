@@ -87,6 +87,7 @@ const (
 type ToolEntry struct {
 	ID            string
 	Name          string
+	Summary       string         // bounded semantic context for compact/restored receipts
 	Args          string         // formatted args string
 	RawArgs       map[string]any `json:"-"` // ephemeral original args
 	Result        string
@@ -581,11 +582,13 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 				m.input.InsertString("```\n" + m.pendingPaste + "\n```")
 				m.pendingPaste = ""
 				m.syncInputHeight()
+				return m, m.reflowInputViewport()
 			case msg.String() == "n":
 				m.clearCompletionSuppression()
 				m.input.InsertString(m.pendingPaste)
 				m.pendingPaste = ""
 				m.syncInputHeight()
+				return m, m.reflowInputViewport()
 			case key.Matches(msg, m.keys.Cancel):
 				m.pendingPaste = ""
 			}
@@ -964,15 +967,26 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			}
 
 		case key.Matches(msg, m.keys.ToggleThinking):
-			// Toggle thinking collapsed for last assistant entry.
+			// Every visible disclosure advertises the same shortcut, so one press
+			// applies the newest receipt's next state to all reasoning blocks.
 			if m.state == StateIdle && strings.TrimSpace(m.input.Value()) == "" {
+				targetCollapsed := false
+				found := false
 				for i := len(m.entries) - 1; i >= 0; i-- {
 					if m.entries[i].Kind == "assistant" && m.entries[i].ThinkingContent != "" {
-						m.entries[i].ThinkingCollapsed = !m.entries[i].ThinkingCollapsed
-						m.invalidateEntryCache()
-						m.viewport.SetContent(m.renderEntries())
+						targetCollapsed = !m.entries[i].ThinkingCollapsed
+						found = true
 						break
 					}
+				}
+				if found {
+					for i := range m.entries {
+						if m.entries[i].Kind == "assistant" && m.entries[i].ThinkingContent != "" {
+							m.entries[i].ThinkingCollapsed = targetCollapsed
+						}
+					}
+					m.invalidateEntryCache()
+					m.viewport.SetContent(m.renderEntries())
 				}
 				return m, nil
 			}
@@ -1138,6 +1152,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			StartTime: msg.StartTime,
 			Collapsed: m.toolsCollapsed,
 		}
+		te.Summary = boundedToolCardSummary(toolSummary(classifyTool(msg.Name), te))
 		// Snapshot file content before write for diff view.
 		if classifyTool(msg.Name) == ToolTypeFileWrite {
 			te.BeforeContent = readFileForDiffAt(msg.Args, m.agent.WorkDir())
@@ -1160,7 +1175,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		if len(m.toolCardMgr.Cards) > 0 {
 			card := &m.toolCardMgr.Cards[len(m.toolCardMgr.Cards)-1]
 			card.Args = te.Args
-			card.SetSummary(toolSummary(classifyTool(msg.Name), te))
+			card.SetSummary(te.Summary)
 		}
 
 		m.entries = append(m.entries, ChatEntry{
@@ -1682,10 +1697,16 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		lines := strings.Count(msg.Content, "\n") + 1
 		if lines > 10 && m.state == StateIdle {
 			m.pendingPaste = msg.Content
+			// The parent owns the safety prompt. Do not forward this PasteMsg to
+			// the textarea before the user chooses fenced or plain insertion.
+			return m, nil
 		} else if m.state == StateIdle {
 			m.clearCompletionSuppression()
 			m.input.InsertString(msg.Content)
 			m.syncInputHeight()
+			// The paste was inserted directly, so consume the message here instead
+			// of letting the common child update insert it a second time.
+			return m, m.reflowInputViewport()
 		}
 	}
 
@@ -2509,6 +2530,18 @@ func (m *Model) syncInputHeight() {
 		m.recalcViewportHeight()
 	}
 }
+
+// reflowInputViewport lets Bubbles populate its internal viewport with content
+// inserted directly by the parent before it repositions around the preserved
+// cursor. Without this no-op child update, a large accepted paste can clamp its
+// five-row viewport against stale pre-paste content and hide the closing rows.
+func (m *Model) reflowInputViewport() tea.Cmd {
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(inputViewportReflowMsg{})
+	return cmd
+}
+
+type inputViewportReflowMsg struct{}
 
 // invalidateEntryCache marks the incremental entry render cache as stale,
 // forcing a full re-render on the next renderEntries() call.

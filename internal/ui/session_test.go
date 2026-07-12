@@ -265,6 +265,7 @@ func TestSessionToolPersistenceExcludesEphemeralDataAndBoundsCards(t *testing.T)
 	m.toolEntries = []ToolEntry{{
 		ID:            "tool-1",
 		Name:          "write",
+		Summary:       strings.Repeat("summary ", maxToolCardSummaryBytes),
 		Args:          strings.Repeat("a", maxPersistedToolArgsBytes*2),
 		RawArgs:       map[string]any{"token": "RAW_SECRET_DO_NOT_PERSIST"},
 		Result:        strings.Repeat("r", maxPersistedToolResultBytes*2),
@@ -287,8 +288,8 @@ func TestSessionToolPersistenceExcludesEphemeralDataAndBoundsCards(t *testing.T)
 		t.Fatalf("tool entries = %d", len(state.ToolEntries))
 	}
 	entry := state.ToolEntries[0]
-	if len(entry.Args) > maxPersistedToolArgsBytes || len(entry.Result) > maxPersistedToolResultBytes {
-		t.Fatalf("persisted tool card exceeded bounds: args=%d result=%d", len(entry.Args), len(entry.Result))
+	if len(entry.Summary) > maxToolCardSummaryBytes || len(entry.Args) > maxPersistedToolArgsBytes || len(entry.Result) > maxPersistedToolResultBytes {
+		t.Fatalf("persisted tool card exceeded bounds: summary=%d args=%d result=%d", len(entry.Summary), len(entry.Args), len(entry.Result))
 	}
 	if len(entry.DiffLines) > maxPersistedDiffLines {
 		t.Fatalf("persisted diff lines = %d", len(entry.DiffLines))
@@ -297,6 +298,45 @@ func TestSessionToolPersistenceExcludesEphemeralDataAndBoundsCards(t *testing.T)
 	if restored[0].RawArgs != nil || restored[0].BeforeContent != "" {
 		t.Fatalf("ephemeral fields restored: %#v", restored[0])
 	}
+}
+
+func TestSessionToolSummaryRoundTripAndLegacyFallback(t *testing.T) {
+	t.Run("current snapshot", func(t *testing.T) {
+		persisted := persistToolEntries([]ToolEntry{{
+			ID: "read-1", Name: "read_file", Summary: "internal/ui/session.go", Args: "path=internal/ui/session.go",
+		}})
+		if got, want := persisted[0].Summary, "internal/ui/session.go"; got != want {
+			t.Fatalf("persisted summary = %q, want %q", got, want)
+		}
+		restored := restoreToolEntries(persisted)
+		if got, want := restored[0].Summary, persisted[0].Summary; got != want {
+			t.Fatalf("restored summary = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("legacy snapshot without summary", func(t *testing.T) {
+		state := persistedSessionState{
+			Version: 1,
+			Mode:    ModeAsk,
+			Entries: []persistedChatEntry{{Kind: "tool_group", ToolIndex: 0}},
+			ToolEntries: []persistedToolEntry{{
+				ID: "run-1", Name: "bash", Args: "command=go test ./internal/ui", Status: ToolStatusDone, Collapsed: true,
+			}},
+		}
+		m := newTestModel(t)
+		if err := m.restoreSessionState(state); err != nil {
+			t.Fatal(err)
+		}
+		if got, want := m.toolEntries[0].Summary, "command=go test ./internal/ui"; got != want {
+			t.Fatalf("legacy entry summary = %q, want args fallback %q", got, want)
+		}
+		if got, want := m.toolCardMgr.Cards[0].Summary, m.toolEntries[0].Summary; got != want {
+			t.Fatalf("restored card summary = %q, want %q", got, want)
+		}
+		if view := m.toolCardMgr.Cards[0].View(64); !strings.Contains(view, "go test ./internal/ui") {
+			t.Fatalf("collapsed legacy receipt omitted recovered context:\n%s", view)
+		}
+	})
 }
 
 func TestLoadPersistedSessionRejectsDifferentCanonicalWorkspace(t *testing.T) {

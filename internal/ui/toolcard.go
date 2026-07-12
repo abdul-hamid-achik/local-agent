@@ -179,6 +179,17 @@ func (c ToolCard) ViewWithActivity(width int, activityGlyph string, elapsed time
 		}
 	} else {
 		glyph = titleStyle.Render(c.statusGlyph())
+		// Completed receipts are interactive. Match the reasoning receipt's
+		// disclosure grammar so expansion is discoverable without adding a noisy
+		// instruction to every tool row. Preserve the lifecycle glyph, and omit
+		// only the disclosure mark when the card has fewer than three inner cells.
+		if inner >= lipgloss.Width(glyph)+2 {
+			disclosure := "▸"
+			if c.Expanded {
+				disclosure = "▾"
+			}
+			glyph = c.Styles.Dimmed.Render(disclosure) + " " + glyph
+		}
 		meta = c.Styles.Dimmed.Render("(" + formatDuration(c.Duration) + ")")
 	}
 

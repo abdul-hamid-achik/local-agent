@@ -489,11 +489,9 @@ func (m *Model) renderEntries() string {
 		if m.streamBuf.Len() > 0 {
 			var b strings.Builder
 			b.WriteString(m.cachedEntriesRender)
-			if len(m.entries) > 0 {
+			if m.cachedEntriesRender != "" && len(m.entries) > 0 {
 				last := m.entries[len(m.entries)-1]
-				if last.Kind != "tool_group" {
-					b.WriteString("\n")
-				}
+				b.WriteString(transcriptEntrySeparator(last.Kind, "assistant"))
 			}
 			m.renderStreamingMsg(&b, m.streamBuf.String(), contentW)
 			return b.String()
@@ -505,8 +503,10 @@ func (m *Model) renderEntries() string {
 	var b strings.Builder
 	m.toolEntryRows = make(map[int]int)
 	renderedLines := 0
+	previousKind := ""
+	renderedAny := false
 
-	for i, entry := range m.entries {
+	for _, entry := range m.entries {
 		var entryView strings.Builder
 		switch entry.Kind {
 		case "user":
@@ -514,33 +514,30 @@ func (m *Model) renderEntries() string {
 		case "assistant":
 			m.renderAssistantMsg(&entryView, entry, contentW)
 		case "tool_group":
-			m.toolEntryRows[entry.ToolIndex] = renderedLines
-			m.renderToolGroup(&entryView, entry.ToolIndex, i)
+			m.renderToolGroup(&entryView, entry.ToolIndex)
 		case "error":
 			m.renderEntryError(&entryView, entry.Content, contentW)
 		case "system":
 			entryView.WriteString(m.styles.SystemText.Render(wrapText(entry.Content, contentW)))
-			entryView.WriteString("\n\n")
+			entryView.WriteString("\n")
 		}
-		chunk := entryView.String()
+		chunk := strings.TrimRight(entryView.String(), "\n")
+		if chunk == "" {
+			continue
+		}
+
+		if renderedAny {
+			separator := transcriptEntrySeparator(previousKind, entry.Kind)
+			b.WriteString(separator)
+			renderedLines += strings.Count(separator, "\n")
+		}
+		if entry.Kind == "tool_group" {
+			m.toolEntryRows[entry.ToolIndex] = renderedLines
+		}
 		b.WriteString(chunk)
 		renderedLines += strings.Count(chunk, "\n")
-
-		// Add spacing between message groups.
-		if i < len(m.entries)-1 {
-			next := m.entries[i+1]
-			curr := entry.Kind
-			nextK := next.Kind
-
-			// Consistent spacing between all tool_group entries.
-			if curr == "tool_group" {
-				// Already added spacing in renderToolGroup, skip here to avoid double spacing
-				continue
-			} else if curr != nextK {
-				b.WriteString("\n")
-				renderedLines++
-			}
-		}
+		previousKind = entry.Kind
+		renderedAny = true
 	}
 
 	// Cache the rendered entries prefix and toolEntryRows.
@@ -558,16 +555,26 @@ func (m *Model) renderEntries() string {
 
 	// Render current streaming content (plain text, no Glamour).
 	if m.streamBuf.Len() > 0 {
-		if len(m.entries) > 0 {
-			last := m.entries[len(m.entries)-1]
-			if last.Kind != "tool_group" {
-				b.WriteString("\n")
-			}
+		if renderedAny {
+			b.WriteString(transcriptEntrySeparator(previousKind, "assistant"))
 		}
 		m.renderStreamingMsg(&b, m.streamBuf.String(), contentW)
 	}
 
 	return b.String()
+}
+
+// transcriptEntrySeparator is the single owner of vertical rhythm between
+// transcript entries. Consecutive compact receipts form a dense stack; every
+// other semantic boundary gets exactly one blank row.
+func transcriptEntrySeparator(previous, current string) string {
+	if previous == "tool_group" && current == "tool_group" {
+		return "\n"
+	}
+	if previous == "system" && current == "system" {
+		return "\n"
+	}
+	return "\n\n"
 }
 
 func (m *Model) renderEntryError(b *strings.Builder, content string, contentW int) {
@@ -666,13 +673,6 @@ func (m *Model) renderUserMsg(b *strings.Builder, content string, contentW int) 
 // renderAssistantMsg renders a completed assistant message block.
 // Uses cached RenderedContent if available (snap-into-place pattern).
 func (m *Model) renderAssistantMsg(b *strings.Builder, entry ChatEntry, contentW int) {
-	// Render thinking box if present.
-	if entry.ThinkingContent != "" {
-		thinkBox := m.renderThinkingBox(entry.ThinkingContent, entry.ThinkingCollapsed)
-		b.WriteString(indentBlock(thinkBox, "  "))
-		b.WriteString("\n")
-	}
-
 	label := m.styles.AsstLabel.Render("assistant")
 	labelW := lipgloss.Width(label)
 	ruleW := contentW - labelW - 3
@@ -681,6 +681,14 @@ func (m *Model) renderAssistantMsg(b *strings.Builder, entry ChatEntry, contentW
 	}
 	b.WriteString(label + " " + m.styles.RoleRule.Render(rule(ruleW)))
 	b.WriteString("\n")
+
+	// Reasoning belongs to this assistant turn, so its disclosure follows the
+	// role header instead of appearing as an unowned block above it.
+	if entry.ThinkingContent != "" {
+		thinkBox := m.renderThinkingBox(entry.ThinkingContent, entry.ThinkingCollapsed)
+		b.WriteString(indentBlock(thinkBox, "  "))
+		b.WriteString("\n")
+	}
 
 	// Use cached rendered content if available.
 	rendered := entry.RenderedContent
@@ -744,18 +752,14 @@ func (m *Model) renderStreamingMsg(b *strings.Builder, content string, contentW 
 	}
 }
 
-// renderToolGroup renders a tool entry using the fancy tool card component.
-func (m *Model) renderToolGroup(b *strings.Builder, toolIdx, entryIdx int) {
+// renderToolGroup renders one tight tool receipt. The parent transcript owns
+// all spacing between this block and its neighbors.
+func (m *Model) renderToolGroup(b *strings.Builder, toolIdx int) {
 	if toolIdx < 0 || toolIdx >= len(m.toolEntries) {
 		return
 	}
 	te := m.toolEntries[toolIdx]
 	layout := m.currentLayout()
-
-	// Add spacing before the first tool_group in a sequence.
-	if entryIdx > 0 && m.entries[entryIdx-1].Kind != "tool_group" {
-		b.WriteString("\n")
-	}
 
 	// Find corresponding tool card
 	var card *ToolCard
@@ -793,7 +797,6 @@ func (m *Model) renderToolGroup(b *strings.Builder, toolIdx, entryIdx int) {
 		// Add left padding to align with message content
 		cardView = indentBlock(cardView, "  ")
 		b.WriteString(cardView)
-		b.WriteString("\n\n") // Add vertical spacing between tool cards
 	} else {
 		// Fallback to basic rendering if no card exists
 		tt := classifyTool(te.Name)
@@ -866,11 +869,6 @@ func (m *Model) renderToolGroup(b *strings.Builder, toolIdx, entryIdx int) {
 			b.WriteString(m.styles.ToolErrorText.Render(layout.ToolIndent + result))
 			b.WriteString("\n")
 		}
-	}
-
-	// Add spacing after the last tool_group in a sequence.
-	if entryIdx < len(m.entries)-1 && m.entries[entryIdx+1].Kind != "tool_group" {
-		b.WriteString("\n")
 	}
 }
 
