@@ -5,9 +5,9 @@ A local-first coding agent for the terminal, built in Go with Charm and powered 
 > **Status: alpha.** `local-agent` can inspect a repository, edit files, run commands, use MCP tools, and retain optional cross-session memory. Run it in a clean Git worktree, read every approval request, and review the resulting diff. The current safety layer is useful, but it is not an operating-system sandbox.
 
 ```text
-  ASK  -> read and explain
-  PLAN -> inspect and design
-  BUILD -> edit, execute, and use MCP with approval
+  NORMAL -> interactive work; changes require approval
+  PLAN   -> inspect and design without mutations
+  AUTO   -> run a durable goal until a verified safe stop
 ```
 
 ## What works today
@@ -16,7 +16,7 @@ A local-first coding agent for the terminal, built in Go with Charm and powered 
 - Streaming chat through Ollama with an availability-aware local model router.
 - Qwen 3.5, Phi-4 Mini, and manually selected Ornith/Gemma/Qwen exclusive profiles.
 - Read, search, diff, validated patch, atomic write, file-management, and shell tools.
-- ASK, PLAN, and BUILD policies with approval prompts for risky operations.
+- NORMAL, PLAN, and AUTO authority with approval prompts for risky operations.
 - STDIO, SSE, and Streamable HTTP MCP tool servers, including an MCPHub gateway.
 - Project instructions from `AGENTS.md` with legacy `AGENT.md` fallback.
 - Lossless SQLite session resume, native reasoning display, skills, agent profiles, optional ICE retrieval, checkpoints, logs, and terminal behavior tests.
@@ -40,7 +40,7 @@ Start Ollama in one terminal:
 ollama serve
 ```
 
-Pull the default model. The 4B tier is optional but recommended for BUILD work:
+Pull the default model. The 4B tier is optional but recommended for coding work:
 
 ```bash
 ollama pull qwen3.5:2b
@@ -78,7 +78,7 @@ Approximate artifact sizes vary by Ollama build and quantization:
 | Model | Approx. size | Intended role | Automatic routing |
 |---|---:|---|---|
 | `qwen3.5:0.8b` | 1.0 GB | Very short answers and lightweight classification; weak autonomous tool use | Eligible |
-| `qwen3.5:2b` | 2.7 GB | Default ASK model and modest tool chains | Eligible |
+| `qwen3.5:2b` | 2.7 GB | Compact interactive answers and modest tool chains | Eligible |
 | `phi4-mini:latest` | 2.5 GB | Alternative compact reasoning/tool profile | Fallback eligible |
 | `qwen3.5:4b` | 3.4 GB | Preferred coding, debugging, review, and multi-step tools | Eligible |
 | `qwen3.5:9b` | 6.6 GB | Deep manual profile | No; exclusive |
@@ -132,11 +132,21 @@ Cycle modes with `shift+tab`.
 
 | Mode | Model behavior | Available tools |
 |---|---|---|
-| ASK | Prefers fast answers | Workspace reads, search, listing, diff, existence checks, and memory recall |
-| PLAN | Promotes toward the complex installed tier and opens a structured plan form | Same read-only workspace tools as ASK |
-| BUILD | Promotes toward the complex installed tier | Read tools, writes, validated edits, shell, memory mutation, and MCP |
+| NORMAL | Routes for the interactive task | Read tools, writes, validated edits, shell, memory, and MCP; mutations remain approval-gated |
+| PLAN | Opens a structured plan form and routes toward the complex installed tier | Workspace reads, search, listing, diff, existence checks, and memory recall only |
+| AUTO | Enters a durable Goal Runtime with budgets, recovery, and Cortex verification | The NORMAL tool surface under the same approval policy; no blanket approval |
 
-The mode policy is enforced by the host, not just by a prompt. A model-generated write call in ASK or PLAN is returned as blocked.
+The mode policy is enforced by the host, not just by a prompt. A model-generated
+mutation in PLAN is returned as blocked. AUTO is not YOLO: selecting it opens a
+durable goal form, and an active goal is controlled through the Goal Inspector
+instead of accepting an ordinary prompt that could bypass its permit and budget.
+Legacy ASK sessions restore as NORMAL. Legacy BUILD sessions restore as NORMAL
+unless they already carry a durable goal, in which case they restore as AUTO.
+
+AUTO currently runs through the foreground Bubble Tea Goal Runtime. The
+UI-independent `internal/supervisor` and `internal/workunit` packages are
+validated scheduling contracts, not wired execution engines: there is no
+headless `run --until-blocked`, queue, or parallel specialist process runner.
 
 ## Safety and privacy boundaries
 
@@ -201,7 +211,7 @@ Configure Cortex, Obsidian, and the rest of your catalog inside MCPHub using the
 
 1. Start `local-agent`.
 2. Check startup status or run `/servers`.
-3. Enter BUILD mode when the task needs MCP.
+3. Use NORMAL for interactive MCP work, or AUTO for a bounded durable goal.
 4. Review and approve each MCP call.
 
 `local-agent` intentionally keeps Cortex orchestration behind MCPHub instead of embedding a second intelligence stack. Cortex analysis, investigation, and delegation appear as namespaced MCP tools. MCPHub owns lazy discovery, authentication, and downstream policy; local-agent owns the final user approval and transcript.
@@ -334,7 +344,7 @@ Switch with `/agent reviewer`. A profile model is pinned until `/model auto`. `m
 
 ## Optional memory and ICE
 
-The local memory store is available even when ICE is disabled. It is keyed by canonical workspace, uses owner-only files with interprocess locking and coherent reloads, and fails closed on corrupt data. BUILD exposes explicit memory save/update/delete tools, while ASK and PLAN expose recall.
+The local memory store is available even when ICE is disabled. It is keyed by canonical workspace, uses owner-only files with interprocess locking and coherent reloads, and fails closed on corrupt data. NORMAL and AUTO expose explicit memory save/update/delete tools, while PLAN exposes recall.
 
 Pre-workspace global memories and ICE entries have no trustworthy project provenance. Startup—including `-p` headless mode—keeps them quarantined and reports their count; only the TUI's preview-plus-exact-confirmation migration commands can attribute them to the current workspace. See [legacy-data-migration.md](docs/legacy-data-migration.md).
 
@@ -377,7 +387,8 @@ ICE is still a flat JSON vector store rather than an ANN index, but its bounded 
 | Command | Description |
 |---|---|
 | `local-agent` | Open the TUI |
-| `local-agent -p "prompt"` | Run one BUILD-mode prompt and print text to stdout |
+| `local-agent -p "prompt"` | Run one user-directed NORMAL prompt and print text to stdout |
+| `local-agent --mode plan -p "prompt"` | Run one read-only PLAN prompt; mutation tools are not exposed |
 | `local-agent --model <name>` | Select the initial model; in headless mode this prevents auto-routing |
 | `local-agent --agent <name>` | Select an initial agent profile |
 | `local-agent --qwen-router` | Use the experimental Qwen-specific router |
@@ -385,6 +396,9 @@ ICE is still a flat JSON vector store rather than an ANN index, but its bounded 
 | `local-agent init [--force]` | Create a project `AGENTS.md` |
 | `local-agent logs` | List recent log files |
 | `local-agent logs -f` | Follow the latest log with `tail -f` |
+| `local-agent goal list [--limit 20] [--json]` | List validated durable goals in the current workspace without resuming them |
+| `local-agent goal show [--json] <session-id>` | Inspect one complete validated goal snapshot |
+| `local-agent goal pending [--limit 20] [--json] <session-id>` | Inspect unresolved decisions, approvals, and recovery items |
 | `local-agent --version` | Print the build version |
 
 Source builds print `dev`. Tagged release artifacts print the tag version
@@ -392,6 +406,13 @@ Source builds print `dev`. Tagged release artifacts print the tag version
 version.
 
 `-p` is currently a human-readable convenience mode, not a stable JSON automation protocol.
+
+The `goal` CLI commands are read-only. The current TUI writes Cortex-decision
+and unknown-execution recovery items, and `goal pending` can inspect their
+least-privilege summaries. Local Agent does not yet expose a CLI/modal action
+that appends execution-reconciliation evidence and clears the matching goal
+blocker. The durable `deferred_approval` record type is implemented in the
+store, but foreground approval prompts do not currently enqueue that type.
 
 ## Slash commands
 
@@ -440,7 +461,7 @@ Session snapshots preserve model-facing messages, tool-call IDs, tool cards, mod
 `/goal new` adds a host-owned Goal Runtime above the normal agent loop. The
 reviewed form requires an objective, at least one independently checkable
 acceptance criterion, and at least one finite limit. Saving the form is the
-explicit instruction to start the first BUILD turn. Later automatic turns are
+explicit instruction to start the first AUTO turn. Later automatic turns are
 admitted only after the previous turn produced a successful tool receipt and
 the linked Cortex case advanced semantically. Each continuation permit is
 saved with the exact agent TurnID before provider dispatch. The remaining
@@ -457,6 +478,13 @@ no settled receipt, the goal becomes outcome-unknown and cannot retry that
 effect automatically. An otherwise active restored goal is paused until the
 user resumes it. Goal definitions are immutable after creation; `/goal budget`
 changes only limits.
+
+`/goal show` opens the responsive Goal Inspector. It reports the objective,
+honest criterion proof state, last settled turn, blocker and recovery reason,
+Cortex revision, persistence health, and remaining budgets. Pause, Resume,
+Budget, and Drop are derived from the same state-aware action metadata used by
+slash completion and Help; unavailable actions show their reason, and Drop
+requires confirmation.
 
 When Cortex is reachable directly or through MCPHub, the runtime links one
 stable Cortex case and asks for semantic status between productive turns.
@@ -491,7 +519,7 @@ The supported minimum is 30 columns by 12 rows.
 | Key | Action |
 |---|---|
 | `enter`, `shift+enter` | Send / insert a newline |
-| `shift+tab` | Cycle ASK, PLAN, BUILD |
+| `shift+tab` | Cycle NORMAL, PLAN, AUTO |
 | `ctrl+p` | Open session settings (model, profile, mode, sessions, layout, runtime) |
 | `ctrl+m` | Open model picker |
 | `tab` | Complete commands, files, and skills |
@@ -544,6 +572,9 @@ internal/skill/     Skill discovery and activation
 internal/command/   Slash and custom commands
 internal/goal/      Durable goal lifecycle, budgets, receipts, and recovery
 internal/goaladvisor/ Bounded Cortex/MCPHub semantic adapter
+internal/controlplane/ Append-only exception values and validation
+internal/supervisor/ UI-independent scheduling decision contract (not yet wired)
+internal/workunit/  Specialist scheduling/admission contract (does not spawn work)
 internal/ui/        Charm terminal interface
 internal/logging/   Per-run structured logs
 ```
@@ -560,7 +591,9 @@ Known boundaries are documented here so the TUI does not promise more than the r
 - `privacy.local_only` validates endpoints but does not sandbox approved shell or STDIO MCP processes.
 - MCP support remains tool-focused; prompts, roots, subscriptions, sampling, and direct multimodal rendering are not yet exposed.
 - ICE is workspace-scoped but remains a flat JSON scan rather than a scalable lexical/vector index such as the Cortex/VecLite stack.
-- SQLite snapshots make completed-turn resume dependable, but the runtime is not yet a step-by-step durable event log that can continue in-flight tool execution after a crash.
+- SQLite snapshots and the append-only execution ledger preserve completed state and tool-effect boundaries, but there is no first-class supervisor run/event repository or automatic continuation of in-flight execution after a crash.
+- Outcome-reconciliation items are durable and inspectable, but Local Agent does not yet provide the evidence-entry/resolution workflow needed to clear an outcome-unknown goal blocker.
+- The supervisor and specialist work graph are safety-tested contracts only; headless run-until-blocked, queue/watch/resume controllers, durable evaluation-basis storage, and specialist process execution are not wired.
 - Native Ollama reasoning and literal `<think>` tags are displayed separately, but thinking level is not yet configurable per model/profile.
 - Headless mode has no structured event stream or granular approval protocol. Without `--yolo`, risky calls fail closed.
 - There is no OS-level process, filesystem, or network sandbox yet.

@@ -7,5 +7,5 @@
 
 
 ─────────────────────────────
- ASK · ctrl+p settings
+ NORMAL · ctrl+p settings
 ❯ Ask or type / for commands

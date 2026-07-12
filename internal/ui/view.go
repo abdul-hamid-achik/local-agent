@@ -89,6 +89,10 @@ func (m *Model) View() tea.View {
 			overlay = m.renderModePicker()
 		case OverlayRuntimeStatus:
 			overlay = m.renderRuntimeStatus()
+		case OverlayGoalInspector:
+			if m.goalInspectorState != nil {
+				overlay = m.goalInspectorState.View()
+			}
 		}
 		if overlay != "" {
 			base := content.String()
@@ -331,7 +335,7 @@ func (m *Model) renderStatusLine() string {
 		return ""
 	}
 	if summary, ok := m.goalStatusSummary(); ok {
-		return " " + RenderGoalStatusLine(summary, max(1, paneW-1), m.isDark)
+		return m.renderGoalFooterStatus(summary, paneW)
 	}
 	conversationStarted := m.conversationStarted()
 	hasNotice := m.hasTranscriptNotice()
@@ -345,11 +349,11 @@ func (m *Model) renderStatusLine() string {
 	cfg := m.modeConfigs[m.mode]
 	var modeStyle lipgloss.Style
 	switch m.mode {
-	case ModeAsk:
+	case ModeNormal:
 		modeStyle = m.styles.ModeAsk
 	case ModePlan:
 		modeStyle = m.styles.ModePlan
-	case ModeBuild:
+	case ModeAuto:
 		modeStyle = m.styles.ModeBuild
 	}
 	modeLabel := cfg.Label
@@ -415,6 +419,81 @@ func (m *Model) renderStatusLine() string {
 		return m.styles.StatusText.Render(truncateDisplay(" "+plain, paneW))
 	}
 	return line
+}
+
+// renderGoalFooterStatus keeps Goal Runtime additive: progress joins the
+// normal mode/model/context grammar instead of replacing it. Optional metadata
+// yields from the right while mode and a useful goal label survive every
+// supported width tier.
+func (m *Model) renderGoalFooterStatus(summary GoalSummary, paneW int) string {
+	if paneW <= 1 {
+		return ""
+	}
+	available := paneW - 1 // preserve the status row's leading breathing cell
+	cfg := m.modeConfigs[m.mode]
+	modeStyle := m.styles.ModeBuild
+	switch m.mode {
+	case ModeNormal:
+		modeStyle = m.styles.ModeAsk
+	case ModePlan:
+		modeStyle = m.styles.ModePlan
+	case ModeAuto:
+		modeStyle = m.styles.ModeBuild
+	}
+	modeLabel := cfg.Label
+	if paneW >= 48 {
+		modeLabel = "[ " + modeLabel + " ]"
+	}
+	modePart := modeStyle.Render(modeLabel)
+	separator := m.styles.StatusText.Render(" · ")
+
+	type metadataPart struct {
+		view string
+	}
+	candidates := make([]metadataPart, 0, 5)
+	contextStatus := m.renderContextStatus(paneW < 80)
+	contextHigh := m.numCtx > 0 && m.promptTokens*100/m.numCtx >= 75
+	if failures := len(m.failedServers); failures > 0 {
+		label := "⚠ connection failed"
+		if failures > 1 {
+			label = fmt.Sprintf("⚠ %d connections failed", failures)
+		}
+		candidates = append(candidates, metadataPart{view: m.styles.ErrorText.UnsetPaddingLeft().Render(label)})
+	}
+	if contextHigh && contextStatus != "" {
+		candidates = append(candidates, metadataPart{view: contextStatus})
+	}
+	if m.model != "" {
+		candidates = append(candidates, metadataPart{view: m.styles.StatusText.Render(truncateDisplay(m.model, 20))})
+	}
+	if !contextHigh && contextStatus != "" {
+		candidates = append(candidates, metadataPart{view: contextStatus})
+	}
+	if m.doneFlash {
+		done := "✓ Done"
+		if m.lastTurnDuration > 0 {
+			done += " · " + formatWorkingElapsed(m.lastTurnDuration)
+		}
+		candidates = append(candidates, metadataPart{view: m.styles.StatusCheck.UnsetPaddingLeft().Render(done)})
+	}
+
+	const minimumGoalWidth = 12
+	selected := make([]string, 0, len(candidates))
+	fixedWidth := lipgloss.Width(modePart) + lipgloss.Width(separator) // mode-to-goal separator
+	for _, candidate := range candidates {
+		cost := lipgloss.Width(separator) + lipgloss.Width(candidate.view)
+		if available-fixedWidth-cost < minimumGoalWidth {
+			continue
+		}
+		selected = append(selected, candidate.view)
+		fixedWidth += cost
+	}
+	goalWidth := max(1, available-fixedWidth)
+	goalPart := RenderGoalStatusLine(summary, goalWidth, m.isDark)
+	parts := []string{modePart, goalPart}
+	parts = append(parts, selected...)
+	line := " " + strings.Join(parts, separator)
+	return truncateDisplay(line, paneW)
 }
 
 func (m *Model) conversationStarted() bool {

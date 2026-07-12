@@ -244,12 +244,12 @@ func TestShowTerminalGoalOmitsLiveWallTime(t *testing.T) {
 
 	m.showGoal()
 
-	if len(m.entries) == 0 {
-		t.Fatal("show goal produced no receipt")
+	if m.overlay != OverlayGoalInspector || m.goalInspectorState == nil {
+		t.Fatal("show goal did not open the inspector")
 	}
-	receipt := m.entries[len(m.entries)-1].Content
-	if strings.Contains(receipt, "3h/30m") || strings.Contains(receipt, "30m") {
-		t.Fatalf("terminal receipt kept a live wall clock: %q", receipt)
+	inspector := m.goalInspectorState.View()
+	if strings.Contains(inspector, "3h/30m") || strings.Contains(inspector, "30m") {
+		t.Fatalf("terminal inspector kept a live wall clock: %q", inspector)
 	}
 }
 
@@ -636,6 +636,92 @@ func TestGoalCompletionRejectsWorkspaceMutationAfterCortexAdvice(t *testing.T) {
 	}
 }
 
+func TestGoalCompletionFromCortexPersistsAndRestoresVerifiedGitProof(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git unavailable: %v", err)
+	}
+	repository := t.TempDir()
+	runGoalGitTest(t, repository, "init", "-q")
+	runGoalGitTest(t, repository, "config", "user.name", "Goal UI Test")
+	runGoalGitTest(t, repository, "config", "user.email", "goal-ui@example.invalid")
+	tracked := filepath.Join(repository, "tracked.txt")
+	if err := os.WriteFile(tracked, []byte("verified completion\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGoalGitTest(t, repository, "add", "tracked.txt")
+	runGoalGitTest(t, repository, "commit", "-qm", "verified completion")
+
+	m := newGoalRuntimeTestModel(t, &goalCountingClient{})
+	m.agent.SetWorkDir(repository)
+	store, sessionID := attachGoalTestSession(t, m)
+	defer func() { _ = store.Close() }()
+	runtime := newUIGoalRuntime(t, sessionID, goal.BudgetLimits{MaxContinuationTurns: 3})
+	if err := runtime.AttachCortex(context.Background(), goal.CortexCorrelation{TaskID: "task_1", Revision: 6, Actor: goalActor}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.RecordTurn(context.Background(), goal.TurnReport{
+		TurnID: "turn_productive", Productive: true, Summary: "write completed with a durable receipt",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	m.goalRuntime = runtime
+	if err := m.persistGoalSession(); err != nil {
+		t.Fatal(err)
+	}
+
+	proofRevision, err := goaladvisor.CurrentWorkspaceRevision(context.Background(), repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	advice := goaladvisor.Advice{
+		OK: true, TaskID: "task_1", Revision: 7, Phase: "complete", Summary: "verified in Cortex",
+		VerificationOutcome: "verified",
+		ProofRevision:       proofRevision,
+		CriterionEvidence: map[string]goaladvisor.CriterionProof{
+			"criterion_1": {
+				Claim: "The durable receipt is verified", Evidence: []string{"case://task_1/verification/vr_complete"},
+				Revision: proofRevision.Commit, DirtyDigest: proofRevision.DirtyDigest,
+			},
+		},
+	}
+	token := beginGoalOperationForTest(t, m, "Checking goal")
+	if cmd := m.handleGoalStatusResult(goalStatusResultMsg{Token: token, Advice: advice}); cmd != nil {
+		t.Fatal("verified completion unexpectedly scheduled more work")
+	}
+	completed := snapshotUIGoal(t, runtime)
+	if completed.State != goal.StateCompleted || completed.Completion == nil {
+		t.Fatalf("verified Cortex advice did not complete goal: %#v", completed)
+	}
+	if completed.Cortex.Revision != 7 || completed.Completion.ValidatedBy != "cortex:task_1@7" {
+		t.Fatalf("completion correlation = %#v", completed)
+	}
+	if len(completed.Completion.Results) != 1 || !strings.Contains(completed.Completion.Results[0].Evidence, proofRevision.Commit) {
+		t.Fatalf("completion omitted Git proof: %#v", completed.Completion.Results)
+	}
+
+	workspaceID, err := canonicalWorkspaceID(repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, persisted, err := loadPersistedSession(context.Background(), store, sessionID, workspaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Goal == nil || persisted.Goal.State != goal.StateCompleted || persisted.Goal.Completion == nil {
+		t.Fatalf("persisted verified completion = %#v", persisted.Goal)
+	}
+
+	restarted := newGoalRuntimeTestModel(t, &goalCountingClient{})
+	restarted.agent.SetWorkDir(repository)
+	if err := restarted.restoreSessionState(persisted); err != nil {
+		t.Fatal(err)
+	}
+	restored := snapshotUIGoal(t, restarted.goalRuntime)
+	if restored.State != goal.StateCompleted || restored.Completion == nil || restored.Completion.ValidatedBy != "cortex:task_1@7" {
+		t.Fatalf("restored verified completion = %#v", restored)
+	}
+}
+
 func TestBoundGoalSummaryPreservesUTF8AtByteLimit(t *testing.T) {
 	got := boundGoalSummary(strings.Repeat("界", goal.MaxReasonBytes))
 	if len(got) > goal.MaxReasonBytes || !utf8.ValidString(got) {
@@ -826,6 +912,18 @@ func attachGoalTestSession(t *testing.T, m *Model) (*db.Store, int64) {
 	}
 	m.SetSessionStore(store)
 	m.sessionID = session.ID
+	lease, err := store.AcquireExecutionSessionLease(context.Background(), session.ID, workspace)
+	if err != nil {
+		_ = store.Close()
+		t.Fatal(err)
+	}
+	m.executionLease = lease
+	t.Cleanup(func() {
+		if m.executionLease == lease {
+			m.executionLease = nil
+		}
+		_ = lease.Close()
+	})
 	return store, session.ID
 }
 

@@ -1,0 +1,19 @@
+                        LOCAL AGENT
+       Local-first · Ollama · tool effects ask first
+                     AUTO · qwen3.5:2b
+    enter send · / commands · ctrl+p settings · ? help
+    shift+tab mode · ctrl+m model · @ files · # skills
+
+  ╭──────────────────────────────────────────────────────╮
+  │ Goal · 1/6                                           │
+  │ Objective                                            │
+  │ > What outcome should persist?                       │
+  │ esc cancel · enter/tab next                          │
+  ╰──────────────────────────────────────────────────────╯
+
+
+
+
+
+───────────────────────────────────────────────────────────
+❯ Ask, @mention files, or type /help

@@ -36,5 +36,5 @@
 
 
 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
- [ BUILD ] · qwen3.5:2b · ctrl+p settings
+ [ NORMAL ] · qwen3.5:2b · ctrl+p settings
 ❯ Ask, @mention files, or type /help

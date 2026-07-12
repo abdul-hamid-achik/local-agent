@@ -77,8 +77,33 @@ func TestSettingsModeCommitsOnlyOnSelection(t *testing.T) {
 	if m.mode != ModePlan || m.overlay != OverlaySettings {
 		t.Fatalf("selected mode = %d overlay=%d, want PLAN/settings", m.mode, m.overlay)
 	}
+	if item, ok := m.settingsPickerState.List.SelectedItem().(settingsItem); !ok || item.action != settingsMode || item.value != "PLAN" {
+		t.Fatalf("mode row was not refreshed after selection: %#v", m.settingsPickerState.List.SelectedItem())
+	}
 	if len(m.entries) != 0 {
 		t.Fatalf("empty-state mode switch added redundant receipt: %#v", m.entries)
+	}
+}
+
+func TestSettingsAutoSelectionMovesCleanlyIntoGoalEntry(t *testing.T) {
+	m := newTestModel(t)
+	m.openSettingsPicker()
+	m.settingsPickerState.List.Select(int(settingsMode))
+
+	updated, _ := m.Update(enterKey())
+	m = updated.(*Model)
+	updated, _ = m.Update(downKey())
+	m = updated.(*Model)
+	updated, _ = m.Update(downKey())
+	m = updated.(*Model)
+	updated, _ = m.Update(enterKey())
+	m = updated.(*Model)
+
+	if m.mode != ModeAuto || m.overlay != OverlayGoalForm || m.goalFormState == nil {
+		t.Fatalf("AUTO selection = mode %d overlay %d goal form %v", m.mode, m.overlay, m.goalFormState != nil)
+	}
+	if m.settingsPickerState != nil || m.overlayParent != OverlayNone {
+		t.Fatalf("AUTO entry retained stale Settings hierarchy: settings=%v parent=%d", m.settingsPickerState != nil, m.overlayParent)
 	}
 }
 

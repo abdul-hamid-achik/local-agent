@@ -1,0 +1,116 @@
+version: 1
+name: local_agent_tui_modes
+
+intent: |
+  NORMAL remains the interactive approval-gated default, PLAN opens a
+  read-only planning surface, and AUTO deliberately enters a durable Goal
+  Runtime instead of behaving like an unbounded build toggle.
+
+target:
+  cmd: ["./bin/local-agent"]
+  cwd: "."
+  env:
+    HOME: "${projectRoot}/.glyphrun/tmp/modes-home"
+    LOCAL_AGENT_AGENTS_DIR: "${projectRoot}/.glyphrun/tmp/modes-agents"
+    LOCAL_AGENT_REDUCED_MOTION: "1"
+    OLLAMA_HOST: "http://127.0.0.1:1"
+
+terminal:
+  cols: 60
+  rows: 20
+
+preconditions:
+  commands:
+    - run: "rm -rf .glyphrun/tmp/modes-home .glyphrun/tmp/modes-agents && mkdir -p .glyphrun/tmp/modes-home/.config/local-agent .glyphrun/tmp/modes-agents && printf '%s\n' 'model:' '  auto_select: false' > .glyphrun/tmp/modes-home/.config/local-agent/config.yaml && go build -o ./bin/local-agent ./cmd/local-agent"
+      cwd: "."
+      timeoutMs: 30000
+
+steps:
+  - wait:
+      screen:
+        contains: "hint: is `ollama serve` running?"
+      timeoutMs: 5000
+  - wait:
+      screen:
+        contains: "NORMAL · qwen3.5:2b"
+      timeoutMs: 3000
+  - snapshot: normal_default
+  - press: "shift+tab"
+  - wait:
+      screen:
+        contains: "PLAN · qwen3.5:2b"
+      timeoutMs: 2000
+  - type: "design a safe migration"
+  - press: "enter"
+  - wait:
+      screen:
+        contains: "Plan · 1/3"
+      timeoutMs: 2000
+  - snapshot: plan_read_only
+  - press: "esc"
+  - wait:
+      screen:
+        notContains: "Plan · 1/3"
+      timeoutMs: 2000
+  - press: "shift+tab"
+  - wait:
+      screen:
+        contains: "Goal · 1/6"
+      timeoutMs: 2000
+  - wait:
+      screen:
+        contains: "What outcome should persist?"
+      timeoutMs: 2000
+  - snapshot: auto_goal_entry
+  - press: "esc"
+  - wait:
+      screen:
+        notContains: "Goal · 1/6"
+      timeoutMs: 2000
+  - wait:
+      screen:
+        contains: "AUTO · qwen3.5:2b"
+      timeoutMs: 2000
+  - type: "ship a bounded durable migration"
+  - press: "enter"
+  - wait:
+      screen:
+        contains: "ship a bounded durable migration"
+      timeoutMs: 2000
+  - snapshot: auto_prefilled_goal
+  - press: "ctrl+c"
+  - wait:
+      process:
+        exitCode: 0
+      timeoutMs: 3000
+
+outcomes:
+  - id: normal_is_interactive_default
+    description: startup names NORMAL as the approval-gated interactive authority
+    verify:
+      snapshot:
+        name: normal_default
+        mode: text
+  - id: plan_remains_read_only_and_structured
+    description: PLAN retains the bounded structured planning workflow
+    verify:
+      snapshot:
+        name: plan_read_only
+        mode: text
+  - id: auto_is_deliberate_goal_entry
+    description: cycling to AUTO opens the durable objective and budget form immediately
+    verify:
+      snapshot:
+        name: auto_goal_entry
+        mode: text
+  - id: auto_submission_prefills_durable_objective
+    description: cancelling then submitting in AUTO returns to a prefilled goal form without provider dispatch
+    verify:
+      snapshot:
+        name: auto_prefilled_goal
+        mode: text
+  - id: modes_flow_quits_cleanly
+    description: ctrl+c exits cleanly from the AUTO goal form
+    verify:
+      process:
+        exitCode: 0

@@ -54,6 +54,22 @@ func TestPendingApprovalAcceptsUppercaseDecision(t *testing.T) {
 	}
 }
 
+func TestPendingApprovalAlwaysDecisionCarriesPersistentAuthority(t *testing.T) {
+	m := newTestModel(t)
+	responses := make(chan permission.ApprovalResponse, 1)
+	m.pendingApproval = &ToolApprovalMsg{ToolName: "write", Response: responses}
+
+	updated, _ := m.Update(charKey('a'))
+	m = updated.(*Model)
+	if m.pendingApproval != nil {
+		t.Fatal("approval remained pending after a")
+	}
+	response := <-responses
+	if !response.Allowed || !response.Always {
+		t.Fatalf("always response = %#v, want allowed persistent authority", response)
+	}
+}
+
 func TestApprovalDetailShowsArgumentsAndBoundsSize(t *testing.T) {
 	detail, inspectable := approvalDetail("bash", map[string]any{"command": "rm -rf ./build && make test"})
 	if !inspectable {

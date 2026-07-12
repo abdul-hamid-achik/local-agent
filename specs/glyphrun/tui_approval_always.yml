@@ -1,0 +1,103 @@
+version: 1
+name: local_agent_tui_approval_always
+
+intent: |
+  choosing "always allow" from the real approval UI writes an ApprovalAlways
+  receipt and a durable permission policy. A fresh local-agent process using
+  the same HOME must reuse that policy without showing a second prompt.
+
+target:
+  cmd:
+    - "${projectRoot}/.glyphrun/tmp/fake-ollama-always"
+    - "${projectRoot}/bin/local-agent"
+    - "${projectRoot}/.glyphrun/tmp/approval-always-protocol.txt"
+  cwd: ".glyphrun/tmp/approval-always-workdir"
+  env:
+    HOME: "${projectRoot}/.glyphrun/tmp/approval-always-home"
+    LOCAL_AGENT_AGENTS_DIR: "${projectRoot}/.glyphrun/tmp/approval-always-agents"
+    LOCAL_AGENT_REDUCED_MOTION: "1"
+
+terminal:
+  cols: 90
+  rows: 28
+
+preconditions:
+  commands:
+    - run: "rm -rf .glyphrun/tmp/approval-always-home .glyphrun/tmp/approval-always-agents .glyphrun/tmp/approval-always-workdir .glyphrun/tmp/approval-always-protocol.txt .glyphrun/tmp/fake-ollama-always && mkdir -p .glyphrun/tmp/approval-always-home/.config/local-agent .glyphrun/tmp/approval-always-agents .glyphrun/tmp/approval-always-workdir && printf '%s\\n' 'model:' '  auto_select: false' > .glyphrun/tmp/approval-always-home/.config/local-agent/config.yaml && go build -o ./bin/local-agent ./cmd/local-agent && go build -o .glyphrun/tmp/fake-ollama-always ./specs/glyphrun/fixtures/fake_ollama_always"
+      cwd: "."
+      timeoutMs: 30000
+
+steps:
+  - wait:
+      screen:
+        contains: "Ask, @mention files, or type /help"
+      timeoutMs: 5000
+  - wait:
+      screen:
+        contains: "NORMAL"
+      timeoutMs: 2000
+  - type: "Create always-first.txt with the exact text first approval."
+  - press: "enter"
+  - wait:
+      screen:
+        contains: "Approve write"
+      timeoutMs: 5000
+  - wait:
+      screen:
+        contains: "a always"
+      timeoutMs: 2000
+  - press: "a"
+  - wait:
+      screen:
+        contains: "First approval persisted."
+      timeoutMs: 5000
+  - wait:
+      screen:
+        contains: "Ask, @mention files, or type /help"
+      timeoutMs: 3000
+  - press: "ctrl+c"
+  - wait:
+      screen:
+        notContains: "First approval persisted."
+      timeoutMs: 5000
+  - wait:
+      screen:
+        contains: "NORMAL"
+      timeoutMs: 5000
+  - type: "Create always-second.txt with the exact text second policy use."
+  - press: "enter"
+  - wait:
+      screen:
+        contains: "Persisted approval reused without another prompt."
+      timeoutMs: 5000
+  - wait:
+      screen:
+        notContains: "Approve write"
+      timeoutMs: 2000
+  - press: "ctrl+c"
+  - wait:
+      process:
+        exitCode: 0
+      timeoutMs: 5000
+
+outcomes:
+  - id: first_always_approval_runs
+    description: the explicitly approved first write executes
+    verify:
+      command:
+        run: "test \"$(cat .glyphrun/tmp/approval-always-workdir/always-first.txt)\" = 'first approval'"
+  - id: persisted_policy_runs_after_restart
+    description: a new local-agent process executes the second write without another prompt
+    verify:
+      command:
+        run: "test \"$(cat .glyphrun/tmp/approval-always-workdir/always-second.txt)\" = 'second policy use'"
+  - id: fake_provider_observed_both_receipts
+    description: both turns completed with exactly one tool receipt apiece
+    verify:
+      command:
+        run: "rg -q '^protocol_ok=true$' .glyphrun/tmp/approval-always-protocol.txt"
+  - id: both_processes_quit_cleanly
+    description: the wrapper and both local-agent processes exit successfully
+    verify:
+      process:
+        exitCode: 0

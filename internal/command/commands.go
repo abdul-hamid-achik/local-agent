@@ -9,6 +9,8 @@ import (
 
 // RegisterBuiltins adds all built-in slash commands to the registry.
 func RegisterBuiltins(r *Registry) {
+	registerGoalActions(r)
+
 	r.Register(&Command{
 		Name:        "help",
 		Aliases:     []string{"h", "?"},
@@ -46,6 +48,9 @@ func RegisterBuiltins(r *Registry) {
 		Description: "Create, inspect, pause, resume, budget, or drop a durable goal",
 		Usage:       "/goal [new [objective]|show|pause|resume|budget|drop]",
 		Handler: func(ctx *Context, args []string) Result {
+			if ctx == nil {
+				ctx = &Context{}
+			}
 			if len(args) == 0 {
 				if ctx.GoalConfigured {
 					return Result{Action: ActionShowGoal}
@@ -53,40 +58,33 @@ func RegisterBuiltins(r *Registry) {
 				return Result{Action: ActionOpenGoal}
 			}
 
+			if spec, ok := r.MatchAction("goal", args[0]); ok {
+				if spec.ID == GoalActionNew {
+					if state := resolveActionState(spec, ctx); !state.Enabled {
+						return Result{Error: state.DisabledReason}
+					}
+					return Result{Action: spec.Action, Data: strings.TrimSpace(strings.Join(args[1:], " "))}
+				}
+				if len(args) != 1 {
+					return Result{Error: "usage: " + spec.CommandText()}
+				}
+				if state := resolveActionState(spec, ctx); !state.Enabled {
+					return Result{Error: state.DisabledReason}
+				}
+				return Result{Action: spec.Action}
+			}
 			switch args[0] {
-			case "new", "set":
-				return Result{Action: ActionOpenGoal, Data: strings.TrimSpace(strings.Join(args[1:], " "))}
-			case "show", "status":
-				if len(args) != 1 {
-					return Result{Error: "usage: /goal show"}
-				}
-				return Result{Action: ActionShowGoal}
-			case "pause":
-				if len(args) != 1 {
-					return Result{Error: "usage: /goal pause"}
-				}
-				return Result{Action: ActionPauseGoal}
-			case "resume", "retry":
-				if len(args) != 1 {
-					return Result{Error: "usage: /goal resume"}
-				}
-				return Result{Action: ActionResumeGoal}
-			case "edit", "budget":
-				if len(args) != 1 {
-					return Result{Error: "usage: /goal budget"}
-				}
-				return Result{Action: ActionEditGoalBudget}
-			case "drop":
-				if len(args) != 1 {
-					return Result{Error: "usage: /goal drop"}
-				}
-				return Result{Action: ActionDropGoal}
 			default:
 				// A free-form suffix is the shortest path from `/goal ship the
 				// release` to the reviewed form. Lifecycle subcommands remain
 				// closed so a flag typo cannot become a state transition.
 				if len(args) == 1 && strings.HasPrefix(args[0], "-") {
 					return Result{Error: "usage: /goal [new [objective]|show|pause|resume|budget|drop]"}
+				}
+				if spec, exists := r.Action(GoalActionNew); exists {
+					if state := resolveActionState(spec, ctx); !state.Enabled {
+						return Result{Error: state.DisabledReason}
+					}
 				}
 				return Result{Action: ActionOpenGoal, Data: strings.TrimSpace(strings.Join(args, " "))}
 			}

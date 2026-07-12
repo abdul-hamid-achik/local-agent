@@ -8,6 +8,7 @@ import (
 
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
 	"github.com/abdul-hamid-achik/local-agent/internal/execution"
+	"github.com/abdul-hamid-achik/local-agent/internal/goal"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 )
 
@@ -145,7 +146,7 @@ func TestEncodeHeadlessSessionStateIsResumable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Mode != ModeBuild || state.Model != "qwen3.5:4b" || !state.ModelPinned || state.AgentProfile != "reviewer" || state.ExecutionCursor != 42 {
+	if state.Version != currentPersistedSessionVersion || state.Mode != ModeNormal || state.Model != "qwen3.5:4b" || !state.ModelPinned || state.AgentProfile != "reviewer" || state.ExecutionCursor != 42 {
 		t.Fatalf("headless metadata = mode %v model %q pinned %v profile %q cursor %d", state.Mode, state.Model, state.ModelPinned, state.AgentProfile, state.ExecutionCursor)
 	}
 	if len(state.Messages) != len(messages) || state.Messages[2].Role != "tool" {
@@ -158,6 +159,41 @@ func TestEncodeHeadlessSessionStateIsResumable(t *testing.T) {
 		if entry.Kind == "tool" {
 			t.Fatalf("tool message leaked into visible transcript: %#v", state.Entries)
 		}
+	}
+}
+
+func TestPersistedModeMigrationSeparatesLegacyBuildFromAuto(t *testing.T) {
+	tests := []struct {
+		name string
+		mode Mode
+		goal bool
+		want Mode
+	}{
+		{name: "ask becomes normal", mode: ModeAsk, want: ModeNormal},
+		{name: "plan stays plan", mode: ModePlan, want: ModePlan},
+		{name: "interactive build becomes normal", mode: ModeBuild, want: ModeNormal},
+		{name: "build carrying durable goal becomes auto", mode: ModeBuild, goal: true, want: ModeAuto},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			state := persistedSessionState{Version: 1, Mode: test.mode}
+			if test.goal {
+				runtime := newUIGoalRuntime(t, 42, goal.BudgetLimits{})
+				snapshot := snapshotUIGoal(t, runtime)
+				state.Goal = &snapshot
+			}
+			migrated, err := migratePersistedSessionState(state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if migrated.Version != currentPersistedSessionVersion || migrated.Mode != test.want {
+				t.Fatalf("migrated state = version %d mode %d, want version %d mode %d", migrated.Version, migrated.Mode, currentPersistedSessionVersion, test.want)
+			}
+		})
+	}
+
+	if _, err := migratePersistedSessionState(persistedSessionState{Version: 99}); err == nil {
+		t.Fatal("unsupported session version was accepted")
 	}
 }
 

@@ -21,6 +21,7 @@ type Completion struct {
 }
 
 type Completer struct {
+	registry       *command.Registry
 	commands       []*command.Command
 	models         []string
 	skills         []string
@@ -32,6 +33,7 @@ type Completer struct {
 func NewCompleter(cmdReg *command.Registry, models, skills, agents []string, _ *mcp.Registry) *Completer {
 	workDir, _ := os.Getwd()
 	return &Completer{
+		registry: cmdReg,
 		commands: cmdReg.All(),
 		models:   models,
 		skills:   skills,
@@ -57,6 +59,9 @@ func (c *Completer) Complete(input string) []Completion {
 func (c *Completer) completeCommand(input string) []Completion {
 	var completions []Completion
 	input = strings.TrimPrefix(input, "/")
+	if commandName, argument, hasArgument := strings.Cut(input, " "); hasArgument {
+		return c.completeCommandAction(commandName, strings.TrimSpace(argument))
+	}
 
 	for _, cmd := range c.commands {
 		matches := strings.HasPrefix(cmd.Name, input)
@@ -75,6 +80,40 @@ func (c *Completer) completeCommand(input string) []Completion {
 		})
 	}
 
+	return completions
+}
+
+func (c *Completer) completeCommandAction(commandName, prefix string) []Completion {
+	if c == nil || c.registry == nil {
+		return nil
+	}
+	commandName = strings.ToLower(strings.TrimSpace(commandName))
+	if commandName == "g" {
+		commandName = "goal"
+	}
+	states := c.registry.Actions(commandName, nil)
+	completions := make([]Completion, 0, len(states))
+	for _, state := range states {
+		spec := state.Spec
+		matchesPrefix := strings.HasPrefix(strings.ToLower(spec.Argument), strings.ToLower(prefix)) ||
+			strings.HasPrefix(strings.ToLower(spec.Title), strings.ToLower(prefix))
+		for _, alias := range spec.Aliases {
+			matchesPrefix = matchesPrefix || strings.HasPrefix(strings.ToLower(alias), strings.ToLower(prefix))
+		}
+		search := strings.ToLower(strings.Join(append([]string{
+			spec.Argument, spec.Title, spec.Description,
+		}, spec.Aliases...), " "))
+		if prefix != "" && !matchesPrefix {
+			continue
+		}
+		completions = append(completions, Completion{
+			Label:       spec.CommandText(),
+			Insert:      spec.CommandText() + " ",
+			Category:    "action",
+			Description: spec.Description,
+			SearchTerms: search,
+		})
+	}
 	return completions
 }
 

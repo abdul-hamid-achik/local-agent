@@ -70,6 +70,8 @@ func run() int {
 			return 0
 		case "logs":
 			return handleLogs(os.Args[2:])
+		case "goal":
+			return handleGoalCommand(os.Args[2:])
 		}
 	}
 
@@ -77,8 +79,14 @@ func run() int {
 	modelFlag := flag.String("model", "", "override Ollama model")
 	agentProfileFlag := flag.String("agent", "", "override agent profile")
 	promptFlag := flag.String("p", "", "run in non-interactive mode: send prompt, print response, exit")
+	modeFlag := flag.String("mode", "normal", "headless authority: normal or plan (AUTO requires a durable goal)")
 	yoloFlag := flag.Bool("yolo", false, "auto-approve all tool calls (skip permission prompts)")
 	flag.Parse()
+	headlessMode, err := parseHeadlessMode(*modeFlag, *promptFlag != "")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mode: %v\n", err)
+		return 2
+	}
 
 	cfg, agentsDir, err := config.LoadWithAgentsDir()
 	if err != nil {
@@ -290,11 +298,11 @@ func run() int {
 			fmt.Fprintf(os.Stderr, "agent profile: %v\n", err)
 			return 1
 		}
-		buildMode := ui.DefaultModeConfigs()[ui.ModeBuild]
+		modeConfig := ui.DefaultModeConfigs()[headlessMode]
 		if explicitRouter, ok := router.(interface{ SetModeContext(config.ModeContext) }); ok {
-			explicitRouter.SetModeContext(buildMode.RouterMode)
+			explicitRouter.SetModeContext(modeConfig.RouterMode)
 		}
-		routedModel := selectHeadlessModel(modelName, *promptFlag, modelPinned, router, buildMode.RouterMode)
+		routedModel := selectHeadlessModel(modelName, *promptFlag, modelPinned, router, modeConfig.RouterMode)
 		if routedModel != modelName {
 			modelName = routedModel
 			if modelName == "" {
@@ -353,8 +361,9 @@ func run() int {
 			fmt.Fprintln(os.Stderr, "ICE: disabled because workspace identity is unavailable")
 		}
 
-		// Set BUILD mode for headless execution.
-		ag.SetModeContext(buildMode.SystemPromptPrefix, buildMode.ToolPolicy)
+		// Headless -p is one user-directed NORMAL or read-only PLAN turn, never
+		// an implicit AUTO goal loop.
+		ag.SetModeContext(modeConfig.SystemPromptPrefix, modeConfig.ToolPolicy)
 		if workspace == "" {
 			fmt.Fprintln(os.Stderr, "local-agent: workspace identity is unavailable; refusing to start a headless turn")
 			return 1
@@ -362,7 +371,7 @@ func run() int {
 		session, err := dbStore.CreateSession(ctx, db.CreateSessionParams{
 			Title:       headlessSessionTitle(*promptFlag),
 			Model:       modelName,
-			Mode:        buildMode.Label,
+			Mode:        modeConfig.Label,
 			WorkspaceID: workspace,
 		})
 		if err != nil {

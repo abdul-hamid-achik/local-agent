@@ -11,6 +11,7 @@ import (
 	"charm.land/bubbletea/v2"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/agent"
+	"github.com/abdul-hamid-achik/local-agent/internal/command"
 	"github.com/abdul-hamid-achik/local-agent/internal/execution"
 	"github.com/abdul-hamid-achik/local-agent/internal/goal"
 	"github.com/abdul-hamid-achik/local-agent/internal/goaladvisor"
@@ -59,6 +60,51 @@ func defaultGoalFormValues(objective string) GoalFormValues {
 		TokenBudget: defaultGoalTokenBudget,
 		TimeBudget:  defaultGoalTimeBudget,
 	}
+}
+
+func (m *Model) hasLiveGoal() bool {
+	if m.goalRuntime == nil {
+		return false
+	}
+	snapshot, err := m.goalRuntime.Snapshot(context.Background())
+	// A snapshot failure must not make an existing runtime look replaceable.
+	return err != nil || !snapshot.State.Terminal()
+}
+
+func (m *Model) handleAutoModeSubmit(text string) tea.Cmd {
+	if m.goalRuntime == nil {
+		if err := m.openGoalForm(text, false); err != nil {
+			m.appendGoalError("Start AUTO goal: " + err.Error())
+		}
+		return nil
+	}
+	snapshot, err := m.goalRuntime.Snapshot(context.Background())
+	if err != nil {
+		m.restoreAutoComposerDraft(text)
+		m.appendGoalError("Read AUTO goal: " + err.Error())
+		return nil
+	}
+	if snapshot.State.Terminal() {
+		if err := m.openGoalForm(text, false); err != nil {
+			m.restoreAutoComposerDraft(text)
+			m.appendGoalError("Start next AUTO goal: " + err.Error())
+		}
+		return nil
+	}
+
+	// AUTO is controlled through durable goal transitions. Do not smuggle an
+	// ordinary prompt around its permit, budget, Cortex, or recovery checks.
+	// Preserve the draft so switching back to NORMAL never loses user input.
+	m.restoreAutoComposerDraft(text)
+	m.appendGoalSystem("AUTO is supervising the active durable goal. Your draft is preserved; use the Goal Inspector to pause, resume, adjust budget, or drop it, or switch to NORMAL for a separate prompt.")
+	m.showGoal()
+	return nil
+}
+
+func (m *Model) restoreAutoComposerDraft(text string) {
+	m.input.SetValue(text)
+	m.input.CursorEnd()
+	m.syncInputHeight()
 }
 
 func goalFormValuesFromSnapshot(snapshot goal.Snapshot) GoalFormValues {
@@ -152,7 +198,7 @@ func (m *Model) applyGoalForm(event GoalFormEvent) tea.Cmd {
 		}
 	}
 
-	createdSession, err := m.ensureExecutionSession(values.Objective, m.modeConfigs[ModeBuild].Label)
+	createdSession, err := m.ensureExecutionSession(values.Objective, m.modeConfigs[ModeAuto].Label)
 	if err != nil {
 		m.appendGoalError(err.Error())
 		return nil
@@ -188,8 +234,8 @@ func (m *Model) applyGoalForm(event GoalFormEvent) tea.Cmd {
 	}
 	m.goalRuntime = runtime
 	oldMode := m.mode
-	m.mode = ModeBuild
-	m.setRouterMode(m.modeConfigs[ModeBuild].RouterMode)
+	m.mode = ModeAuto
+	m.setRouterMode(m.modeConfigs[ModeAuto].RouterMode)
 	if err := m.persistGoalSession(); err != nil {
 		m.goalRuntime = previous
 		m.mode = oldMode
@@ -747,6 +793,11 @@ func (m *Model) settleGoalTurn(message AgentDoneMsg) {
 		m.appendGoalError("Read settled goal: " + err.Error())
 		return
 	}
+	if report.OutcomeUnknown {
+		if controlErr := m.recordExecutionReconciliationByID(snapshot, report.OutcomeRef); controlErr != nil {
+			m.appendGoalError("Record execution reconciliation: " + controlErr.Error())
+		}
+	}
 	switch snapshot.State {
 	case goal.StateActive:
 		m.goalNeedsEvaluation = true
@@ -871,8 +922,18 @@ func (m *Model) handleGoalStatusResult(message goalStatusResultMsg) tea.Cmd {
 	}
 
 	phase := strings.ToLower(strings.TrimSpace(message.Advice.Phase))
+	pendingDecision := message.Advice.PendingDecision || phase == "needs_human_decision"
+	if pendingDecision {
+		if controlErr := m.recordCortexDecisionControlItem(beforeStatus, message.Advice); controlErr != nil {
+			m.protectControlPlaneFailure("Record Cortex decision", controlErr)
+			return nil
+		}
+	} else if controlErr := m.resolveCortexDecisionControlItems(beforeStatus, message.Advice); controlErr != nil {
+		m.protectControlPlaneFailure("Resolve Cortex decision", controlErr)
+		return nil
+	}
 	switch {
-	case message.Advice.PendingDecision || phase == "needs_human_decision":
+	case pendingDecision:
 		if err := ensureGoalBlock(m.goalRuntime, goal.BlockDecision, correlation.TaskID, "Cortex is waiting for a human decision"); err != nil {
 			m.appendGoalError("Pause for Cortex decision: " + err.Error())
 			return nil
@@ -1137,37 +1198,31 @@ func (m *Model) showGoal() {
 		m.appendGoalError("Read goal: " + err.Error())
 		return
 	}
-	var builder strings.Builder
-	fmt.Fprintf(&builder, "Goal · %s\n%s\n", snapshot.State, snapshot.Objective)
-	for _, criterion := range snapshot.AcceptanceCriteria {
-		fmt.Fprintf(&builder, "  · %s\n", criterion.Description)
+	// A newly attached/restored goal adds one stable status row. Reconcile the
+	// transcript height before centering the inspector so a 30x12 view retains
+	// the terminal safety row.
+	m.recalcViewportHeight()
+	actions := make([]command.ActionState, 0, 4)
+	if m.cmdRegistry != nil {
+		for _, action := range m.cmdRegistry.Actions("goal", m.buildCommandContext()) {
+			switch action.Spec.ID {
+			case command.GoalActionPause, command.GoalActionResume, command.GoalActionBudget, command.GoalActionDrop:
+				actions = append(actions, action)
+			}
+		}
 	}
-	budgetParts := make([]string, 0, 3)
-	if snapshot.Budget.MaxContinuationTurns > 0 {
-		budgetParts = append(budgetParts, fmt.Sprintf("%d/%d continuations", snapshot.Usage.ContinuationTurns, snapshot.Budget.MaxContinuationTurns))
-	}
-	if snapshot.Budget.MaxEvalTokens > 0 {
-		budgetParts = append(budgetParts, fmt.Sprintf("%s/%s eval tokens", formatGoalTokens(snapshot.Usage.EvalTokens), formatGoalTokens(snapshot.Budget.MaxEvalTokens)))
-	}
-	if snapshot.Budget.MaxWallTime > 0 && !snapshot.State.Terminal() {
-		budgetParts = append(budgetParts, fmt.Sprintf("%s/%s", formatGoalDuration(m.nowTime().Sub(snapshot.CreatedAt)), formatGoalDuration(snapshot.Budget.MaxWallTime)))
-	}
-	if len(budgetParts) == 0 {
-		budgetParts = append(budgetParts, "unlimited")
-	}
-	fmt.Fprintf(&builder, "Budget · %s", strings.Join(budgetParts, " · "))
-	if snapshot.Cortex.TaskID != "" {
-		fmt.Fprintf(&builder, "\nCortex · %s · revision %d", snapshot.Cortex.TaskID, snapshot.Cortex.Revision)
-	} else {
-		builder.WriteString("\nCortex · not linked (bounded local goal)")
-	}
-	if snapshot.StateReason != "" {
-		fmt.Fprintf(&builder, "\nStatus · %s", snapshot.StateReason)
-	}
-	if m.goalPersistenceDirty {
-		builder.WriteString("\nPersistence · retry required before any dispatch")
-	}
-	m.appendGoalSystem(builder.String())
+	m.goalInspectorState = NewGoalInspector(snapshot, actions, GoalInspectorOptions{
+		Width: m.width, Height: m.height, IsDark: m.isDark,
+		ReducedMotion: m.reducedMotion, Now: m.nowTime(), PersistenceDirty: m.goalPersistenceDirty,
+	})
+	m.overlayParent = OverlayNone
+	m.overlay = OverlayGoalInspector
+	m.input.Blur()
+}
+
+func (m *Model) closeGoalInspector() {
+	m.goalInspectorState = nil
+	m.closeOverlayToParent()
 }
 
 func (m *Model) pauseGoal() {
@@ -1303,6 +1358,7 @@ func (m *Model) recoverRestoredGoal() error {
 	changed := false
 	if snapshot.PendingContinuation != nil {
 		permit := snapshot.PendingContinuation
+		controlErr := m.recordRestoredTurnReconciliations(snapshot, permit.TurnID)
 		err = m.goalRuntime.RecoverPendingContinuation(context.Background(), goal.PendingRecovery{
 			TurnID: permit.TurnID, Kind: goal.PendingOutcomeUnknown,
 			Reason:     "session restored with an unsettled continuation permit",
@@ -1313,6 +1369,7 @@ func (m *Model) recoverRestoredGoal() error {
 		if err == nil {
 			m.appendGoalError("Goal recovery blocked: an admitted continuation has no settled receipt. Inspect and reconcile before retrying.")
 		}
+		err = errors.Join(err, controlErr)
 	} else if snapshot.State == goal.StateActive {
 		err = m.goalRuntime.Pause(context.Background(), "session restored; resume explicitly")
 		changed = err == nil
@@ -1320,11 +1377,8 @@ func (m *Model) recoverRestoredGoal() error {
 			m.appendGoalSystem("Goal restored in a paused state. Resume explicitly with /goal resume.")
 		}
 	}
-	if err != nil {
-		return err
-	}
 	if changed {
-		return m.persistGoalSession()
+		err = errors.Join(err, m.persistGoalSession())
 	}
-	return nil
+	return err
 }

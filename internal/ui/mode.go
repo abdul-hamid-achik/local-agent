@@ -5,13 +5,20 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
 )
 
-// Mode represents the operational mode of the TUI.
+// Mode represents the operational authority of the TUI.
 type Mode int
 
 const (
-	ModeAsk   Mode = iota // Direct Q&A, fast model, no tools
-	ModePlan              // Planning, medium model, no tools
-	ModeBuild             // Full execution, smart model, all tools
+	ModeNormal Mode = iota // Interactive work with approval-gated mutations.
+	ModePlan               // Read-only exploration and planning.
+	ModeAuto               // Durable Goal Runtime supervised until a safe stop.
+)
+
+// Legacy source aliases keep embeddings and older tests compiling while saved
+// ASK/BUILD values migrate through the session-version boundary below.
+const (
+	ModeAsk   = ModeNormal
+	ModeBuild = ModeAuto
 )
 
 // ModeConfig holds the configuration for a single mode.
@@ -26,12 +33,12 @@ type ModeConfig struct {
 // DefaultModeConfigs returns the configuration for each mode.
 func DefaultModeConfigs() [3]ModeConfig {
 	return [3]ModeConfig{
-		{ // ModeAsk
-			Label:               "ASK",
-			SystemPromptPrefix:  "Provide direct, concise answers. Use tools when the user asks about files or the codebase.",
-			ToolPolicy:          agent.AskToolPolicy(),
-			PreferredCapability: config.CapabilitySimple,
-			RouterMode:          config.ModeAskContext,
+		{ // ModeNormal
+			Label:               "NORMAL",
+			SystemPromptPrefix:  "Work interactively with the user. Use tools when useful; every mutation remains subject to the configured approval policy.",
+			ToolPolicy:          agent.BuildToolPolicy(),
+			PreferredCapability: config.CapabilityAdvanced,
+			RouterMode:          config.ModeBuildContext,
 		},
 		{ // ModePlan
 			Label:               "PLAN",
@@ -40,9 +47,9 @@ func DefaultModeConfigs() [3]ModeConfig {
 			PreferredCapability: config.CapabilityComplex,
 			RouterMode:          config.ModePlanContext,
 		},
-		{ // ModeBuild
-			Label:               "BUILD",
-			SystemPromptPrefix:  "Execute tasks using all available tools.",
+		{ // ModeAuto
+			Label:               "AUTO",
+			SystemPromptPrefix:  "Execute only the active durable goal under its host budgets, approval policy, Cortex verification, and safe stop conditions.",
 			ToolPolicy:          agent.BuildToolPolicy(),
 			PreferredCapability: config.CapabilityAdvanced,
 			RouterMode:          config.ModeBuildContext,

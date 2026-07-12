@@ -2,7 +2,7 @@
  │ Settings                 │
  │ │ Model · Pinned · qwen… │
  │   Agent profile · Defau… │
- │   Mode · ASK             │
+ │   Mode · NORMAL          │
  │   Sessions · Resume      │
  │   Compact layout · Auto  │
  │   Runtime status · 0 se… │

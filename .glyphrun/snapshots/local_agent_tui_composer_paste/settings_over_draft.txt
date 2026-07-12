@@ -1,6 +1,6 @@
                                        LOCAL AGENT
                       Local-first · Ollama · tool effects ask first
-                                    ASK · qwen3.5:2b
+                                   NORMAL · qwen3.5:2b
                    enter send · / commands · ctrl+p settings · ? help
                    shift+tab mode · ctrl+m model · @ files · # skills
 
@@ -11,8 +11,8 @@
                │ │ Choose an installed local model                        │
                │   Agent profile · Default                                │
                │   Change prompt, skills, model, and MCP scope            │
-               │   Mode · ASK                                             │
-               │   ASK, PLAN, or BUILD authority                          │
+               │   Mode · NORMAL                                          │
+               │   NORMAL, PLAN, or AUTO authority                        │
                │   Sessions · Resume                                      │
                │   Open a saved workspace session                         │
                │   Compact layout · Auto                                  │

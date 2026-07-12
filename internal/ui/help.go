@@ -57,8 +57,16 @@ func (m *Model) buildHelpContent(innerW int) string {
 	// Slash commands.
 	if m.cmdRegistry != nil {
 		commands := make([]helpRow, 0, len(m.cmdRegistry.All()))
+		ctx := m.buildCommandContext()
 		for _, cmd := range m.cmdRegistry.All() {
 			commands = append(commands, helpRow{key: "/" + cmd.Name, desc: cmd.Description})
+			for _, action := range m.cmdRegistry.Actions(cmd.Name, ctx) {
+				description := action.Spec.Description
+				if !action.Enabled {
+					description = "Unavailable · " + action.DisabledReason
+				}
+				commands = append(commands, helpRow{key: action.Spec.CommandText(), desc: description})
+			}
 		}
 		m.writeHelpRows(&b, commands, innerW)
 	}

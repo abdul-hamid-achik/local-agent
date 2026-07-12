@@ -17,10 +17,12 @@ var ErrExecutionSessionBusy = errors.New("execution session is busy")
 // It is independent of Store.Close and is released automatically by the kernel
 // when the owning process exits. The reusable lock file is never unlinked.
 type ExecutionSessionLease struct {
-	mu        sync.Mutex
-	file      *os.File
-	sessionID int64
-	closed    bool
+	mu          sync.Mutex
+	file        *os.File
+	sessionID   int64
+	workspaceID string
+	leaseRoot   string
+	closed      bool
 }
 
 // Close releases the execution lease. Repeated and concurrent calls are safe
@@ -78,7 +80,10 @@ func (s *Store) AcquireExecutionSessionLease(ctx context.Context, sessionID int6
 		_ = file.Close()
 		return nil, fmt.Errorf("%w: session %d", ErrExecutionSessionBusy, sessionID)
 	}
-	lease := &ExecutionSessionLease{file: file, sessionID: sessionID}
+	lease := &ExecutionSessionLease{
+		file: file, sessionID: sessionID, workspaceID: workspaceID,
+		leaseRoot: s.executionLeaseRoot,
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, errors.Join(err, lease.Close())
 	}

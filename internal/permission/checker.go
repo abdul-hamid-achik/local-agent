@@ -55,8 +55,7 @@ func (c *Checker) Check(toolName string) Policy {
 // SetPolicy updates the policy for a tool and persists it.
 func (c *Checker) SetPolicy(toolName string, policy Policy) error {
 	c.mu.Lock()
-	c.cache[toolName] = policy
-	c.mu.Unlock()
+	defer c.mu.Unlock()
 
 	if c.store != nil {
 		if _, err := c.store.UpsertToolPermission(context.Background(), db.UpsertToolPermissionParams{
@@ -66,6 +65,7 @@ func (c *Checker) SetPolicy(toolName string, policy Policy) error {
 			return fmt.Errorf("persist permission for %s: %w", toolName, err)
 		}
 	}
+	c.cache[toolName] = policy
 	return nil
 }
 

@@ -39,9 +39,14 @@ type Context struct {
 	FileChanges map[string]int // path → modification count
 	// Goal runtime summary. Commands receive only the bounded fields needed to
 	// choose an action; the UI remains the authority for transitions.
-	GoalConfigured bool
-	GoalObjective  string
-	GoalStatus     string
+	GoalConfigured       bool
+	GoalObjective        string
+	GoalStatus           string
+	GoalPending          bool
+	GoalBlocker          string
+	GoalExhausted        bool
+	GoalPersistenceDirty bool
+	GoalBusy             bool
 }
 
 // SkillInfo is a read-only view of a skill for command display.
@@ -100,14 +105,17 @@ const (
 
 // Registry holds all registered slash commands.
 type Registry struct {
-	commands map[string]*Command // name/alias → command
-	all      []*Command          // ordered list
+	commands    map[string]*Command // name/alias → command
+	all         []*Command          // ordered list
+	actions     map[ActionID]ActionSpec
+	actionOrder []ActionID
 }
 
 // NewRegistry creates an empty command registry.
 func NewRegistry() *Registry {
 	return &Registry{
 		commands: make(map[string]*Command),
+		actions:  make(map[ActionID]ActionSpec),
 	}
 }
 

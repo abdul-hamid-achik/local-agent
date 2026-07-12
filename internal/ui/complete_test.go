@@ -60,6 +60,28 @@ func TestCompleter_Complete(t *testing.T) {
 	})
 }
 
+func TestCompleterGoalActionsUseRegistryMetadata(t *testing.T) {
+	registry := command.NewRegistry()
+	command.RegisterBuiltins(registry)
+	completer := NewCompleter(registry, nil, nil, nil, nil)
+
+	all := completer.Complete("/goal ")
+	if len(all) != 6 {
+		t.Fatalf("goal action completions = %d, want 6: %#v", len(all), all)
+	}
+	if all[0].Label != "/goal new" || all[len(all)-1].Label != "/goal drop" {
+		t.Fatalf("goal actions lost registry order: %#v", all)
+	}
+	resume := completer.Complete("/goal re")
+	if len(resume) != 1 || resume[0].Label != "/goal resume" || !strings.Contains(strings.ToLower(resume[0].Description), "resume") {
+		t.Fatalf("resume completion = %#v", resume)
+	}
+	alias := completer.Complete("/g stat")
+	if len(alias) != 1 || alias[0].Label != "/goal show" {
+		t.Fatalf("goal alias completion = %#v", alias)
+	}
+}
+
 func TestSearchFilesIsBoundedToWorkspaceWithoutMCP(t *testing.T) {
 	root := t.TempDir()
 	for _, name := range []string{"src/alpha_handler.go", "nested/alpha_test.go", "node_modules/alpha.js"} {

@@ -58,7 +58,7 @@ func TestSendToAgent_RoutesModelPerSend(t *testing.T) {
 	m.modelManager = modelManager
 	m.router = router
 	m.model = "qwen3.5:2b"
-	m.mode = ModeBuild
+	m.mode = ModeNormal
 
 	cmd := m.sendToAgent("debug this issue across files")
 	if cmd == nil {

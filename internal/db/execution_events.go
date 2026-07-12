@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/execution"
 )
@@ -327,6 +328,57 @@ func (s *Store) ListExecutionRecoveryHazards(ctx context.Context, sessionID int6
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("read execution recovery hazards: %w", err)
+	}
+	return states, nil
+}
+
+// ListExecutionReconciliationTargets returns the exact turn's bounded latest
+// executions whose external outcome still requires evidence. Unlike the
+// session recovery projection, it excludes completed post-cursor receipts:
+// those may need snapshot projection, but their backend outcome is known and
+// must not be represented as execution reconciliation.
+func (s *Store) ListExecutionReconciliationTargets(ctx context.Context, sessionID int64, workspaceID, turnID string, limit int) ([]execution.State, error) {
+	if strings.TrimSpace(turnID) == "" || strings.TrimSpace(turnID) != turnID || len(turnID) > execution.MaxTurnIDBytes || !utf8.ValidString(turnID) {
+		return nil, fmt.Errorf("execution reconciliation turn id is invalid")
+	}
+	if err := validateExecutionListLimit(limit, maxExecutionRecoveryHazards); err != nil {
+		return nil, err
+	}
+	if err := validateExecutionSessionScope(ctx, s.db, sessionID, workspaceID); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		WITH ranked AS (
+			SELECT e.*,
+			       COUNT(*) OVER (PARTITION BY execution_id) AS event_count,
+			       ROW_NUMBER() OVER (PARTITION BY execution_id ORDER BY id DESC) AS latest_rank
+			  FROM execution_events e
+			 WHERE session_id = ? AND workspace_id = ? AND turn_id = ?
+		)
+		SELECT `+executionEventColumns+`, event_count
+		  FROM ranked
+		 WHERE latest_rank = 1
+		   AND (
+		       event_type = 'outcome_unknown'
+		       OR (event_type = 'started' AND effect_class != 'read_only')
+		   )
+		 ORDER BY id ASC
+		 LIMIT ?`, sessionID, workspaceID, turnID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list execution reconciliation targets: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	states := make([]execution.State, 0)
+	for rows.Next() {
+		event, count, scanErr := scanExecutionState(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		states = append(states, execution.State{Identity: event.Identity, Latest: event, EventCount: count})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read execution reconciliation targets: %w", err)
 	}
 	return states, nil
 }

@@ -15,5 +15,5 @@
 
     Denied safely. No file was changed.
 ─────────────────────────────────────────────────
- [ BUILD ] · qwen3.5:2b · ctx 0%
+ [ NORMAL ] · qwen3.5:2b · ctx 0%
 ❯ Ask, @mention files, or type /help

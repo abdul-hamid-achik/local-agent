@@ -138,7 +138,11 @@ func TestRestoredPendingContinuationBlocksWithoutProviderDispatch(t *testing.T) 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	workspace := m.agent.WorkDir()
+	workspace, err := canonicalWorkspaceID(m.agent.WorkDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.agent.SetWorkDir(workspace)
 	session, err := store.CreateSession(context.Background(), db.CreateSessionParams{
 		Title: "pending goal", Mode: "BUILD", WorkspaceID: workspace,
 	})
@@ -270,7 +274,11 @@ func TestSettledTurnSaveFailureStopsAndRestoresPendingAsOutcomeUnknown(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	workspace := m.agent.WorkDir()
+	workspace, err := canonicalWorkspaceID(m.agent.WorkDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.agent.SetWorkDir(workspace)
 	session, err := store.CreateSession(context.Background(), db.CreateSessionParams{
 		Title: "settlement failure", Mode: "BUILD", WorkspaceID: workspace,
 	})
@@ -328,6 +336,7 @@ func TestSettledTurnSaveFailureStopsAndRestoresPendingAsOutcomeUnknown(t *testin
 	}
 
 	restarted := newGoalRuntimeTestModel(t, client)
+	restarted.agent.SetWorkDir(workspace)
 	restarted.SetSessionStore(reopened)
 	restarted.sessionID = session.ID
 	if err := restarted.restoreSessionState(saved); err != nil {

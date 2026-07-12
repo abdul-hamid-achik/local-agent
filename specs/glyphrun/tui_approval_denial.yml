@@ -31,15 +31,9 @@ steps:
       screen:
         contains: "Ask, @mention files, or type /help"
       timeoutMs: 5000
-  - press: "shift+tab"
   - wait:
       screen:
-        contains: "PLAN · qwen3.5:2b"
-      timeoutMs: 2000
-  - press: "shift+tab"
-  - wait:
-      screen:
-        contains: "BUILD · qwen3.5:2b"
+        contains: "NORMAL"
       timeoutMs: 2000
   - type: "Create approval-probe.txt with the exact text must not be written."
   - press: "enter"
@@ -128,7 +122,7 @@ steps:
 
 outcomes:
   - id: busy_turn_is_clear
-    description: the real BUILD turn replaces the composer with a cancellable local-model activity line
+    description: the real NORMAL turn replaces the composer with a cancellable local-model activity line
     verify:
       snapshot:
         name: busy_normal

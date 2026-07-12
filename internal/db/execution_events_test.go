@@ -266,6 +266,39 @@ func TestListExecutionRecoveryHazardsClassifiesCursorStates(t *testing.T) {
 	}
 }
 
+func TestListExecutionReconciliationTargetsScopesTurnAndExcludesCompleted(t *testing.T) {
+	store := testStore(t)
+	workspaceID := "/workspace/reconciliation-turn"
+	session := createExecutionTestSession(t, store, workspaceID)
+
+	target := executionTestEvent(t, session.ID, workspaceID, "target-started", execution.Effectful)
+	target.Identity.TurnID = "turn_target"
+	targetStarted := appendStartedExecutionFixture(t, store, target)
+	other := executionTestEvent(t, session.ID, workspaceID, "other-started", execution.Effectful)
+	other.Identity.TurnID = "turn_other"
+	appendStartedExecutionFixture(t, store, other)
+	completed := executionTestEvent(t, session.ID, workspaceID, "target-completed", execution.Effectful)
+	completed.Identity.TurnID = "turn_target"
+	appendCompletedExecutionFixture(t, store, completed)
+
+	states, err := store.ListExecutionReconciliationTargets(context.Background(), session.ID, workspaceID, "turn_target", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(states) != 1 || states[0].Identity.ExecutionID != targetStarted.Identity.ExecutionID || states[0].Latest.Type != execution.EventStarted {
+		t.Fatalf("reconciliation targets = %#v", states)
+	}
+	if _, err := store.ListExecutionReconciliationTargets(context.Background(), session.ID, workspaceID, " turn_target ", 10); err == nil {
+		t.Fatal("non-canonical turn id unexpectedly accepted")
+	}
+	if _, err := store.ListExecutionReconciliationTargets(context.Background(), session.ID, workspaceID, "turn_target", 0); err == nil {
+		t.Fatal("unbounded reconciliation target query unexpectedly accepted")
+	}
+	if _, err := store.ListExecutionReconciliationTargets(context.Background(), session.ID, "/workspace/other", "turn_target", 10); !errors.Is(err, ErrExecutionWorkspaceMismatch) {
+		t.Fatalf("cross-workspace reconciliation target error = %v", err)
+	}
+}
+
 func TestListExecutionRecoveryHazardsCannotHidePostCursorCompletion(t *testing.T) {
 	store := testStore(t)
 	workspaceID := "/workspace/recovery-bound"

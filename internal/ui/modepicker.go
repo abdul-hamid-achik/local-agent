@@ -27,9 +27,9 @@ type ModePickerState struct {
 
 func newModePickerState(current Mode, terminalWidth, terminalHeight int, isDark bool) *ModePickerState {
 	definitions := []modeItem{
-		{mode: ModeAsk, title: "ASK", description: "Read, search, and answer without mutations"},
+		{mode: ModeNormal, title: "NORMAL", description: "Interactive work with approval-gated changes"},
 		{mode: ModePlan, title: "PLAN", description: "Explore and design without mutations"},
-		{mode: ModeBuild, title: "BUILD", description: "Edit, execute, and use approved MCP tools"},
+		{mode: ModeAuto, title: "AUTO", description: "Run a durable goal until a verified safe stop"},
 	}
 	items := make([]list.Item, len(definitions))
 	selected := 0

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -395,7 +396,7 @@ func TestScrollAnchor_ViewportAtBottom(t *testing.T) {
 }
 
 func TestOverlayMouseWheelScrollsDocumentInsteadOfTranscript(t *testing.T) {
-	for _, overlay := range []OverlayKind{OverlayHelp, OverlayRuntimeStatus} {
+	for _, overlay := range []OverlayKind{OverlayHelp, OverlayRuntimeStatus, OverlayGoalInspector} {
 		t.Run(overlayName(overlay), func(t *testing.T) {
 			m := newTestModel(t)
 			m.viewport.SetContent(strings.Repeat("transcript line\n", 80))
@@ -418,6 +419,13 @@ func TestOverlayMouseWheelScrollsDocumentInsteadOfTranscript(t *testing.T) {
 				m.runtimeStatusState.Viewport.SetContent(strings.Repeat("runtime line\n", 40))
 				modalDelta = m.runtimeStatusState.Viewport.MouseWheelDelta
 				modalOffset = func() int { return m.runtimeStatusState.Viewport.YOffset() }
+			case OverlayGoalInspector:
+				m.goalInspectorState = NewGoalInspector(goalInspectorFixture(time.Now()), nil, GoalInspectorOptions{Width: 80, Height: 24})
+				m.overlay = OverlayGoalInspector
+				m.goalInspectorState.viewport.SetHeight(2)
+				m.goalInspectorState.viewport.SetContent(strings.Repeat("goal line\n", 40))
+				modalDelta = m.goalInspectorState.viewport.MouseWheelDelta
+				modalOffset = func() int { return m.goalInspectorState.viewport.YOffset() }
 			}
 
 			updated, _ := m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown})
@@ -465,7 +473,7 @@ func TestOtherOverlaysSwallowMouseWheel(t *testing.T) {
 }
 
 func TestOverlayClicksNeverToggleHiddenToolCards(t *testing.T) {
-	for overlay := OverlayHelp; overlay <= OverlayRuntimeStatus; overlay++ {
+	for overlay := OverlayHelp; overlay <= OverlayGoalInspector; overlay++ {
 		t.Run(overlayName(overlay), func(t *testing.T) {
 			m := newTestModel(t)
 			m.toolEntries = []ToolEntry{{Collapsed: true}}
@@ -503,6 +511,8 @@ func overlayName(overlay OverlayKind) string {
 		return "goal"
 	case OverlayRuntimeStatus:
 		return "runtime"
+	case OverlayGoalInspector:
+		return "goal-inspector"
 	default:
 		return "none"
 	}

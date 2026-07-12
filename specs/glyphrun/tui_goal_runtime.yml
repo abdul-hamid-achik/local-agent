@@ -105,13 +105,18 @@ steps:
   - press: "enter"
   - wait:
       screen:
-        contains: "Goal · paused"
+        contains: "Goal inspector · 0/1 verified"
       timeoutMs: 2000
   - wait:
       screen:
-        contains: "Cortex · not linked (bounded local goal)"
+        contains: "paused · unproductive turn"
       timeoutMs: 2000
   - snapshot: goal_paused_receipt
+  - press: "esc"
+  - wait:
+      screen:
+        notContains: "Goal inspector"
+      timeoutMs: 2000
   - type: "/goal budget"
   - wait:
       screen:
@@ -180,7 +185,11 @@ steps:
   - press: "enter"
   - wait:
       screen:
-        contains: "Goal · dropped"
+        contains: "Goal inspector · 0/1 verified"
+      timeoutMs: 2000
+  - wait:
+      screen:
+        contains: "dropped · Ship a polished goal UI"
       timeoutMs: 2000
   - snapshot: goal_dropped_receipt
   - press: "ctrl+c"
@@ -203,7 +212,7 @@ outcomes:
         name: goal_form_minimum
         mode: text
   - id: unavailable_advisors_stop_safely
-    description: local fallback makes one bounded attempt and pauses instead of looping
+    description: the Goal Inspector shows that local fallback paused after one bounded attempt instead of looping
     verify:
       snapshot:
         name: goal_paused_receipt
@@ -221,7 +230,7 @@ outcomes:
         name: goal_budget_minimum
         mode: text
   - id: dropping_never_claims_completion
-    description: the terminal receipt distinguishes explicit abandonment from verified completion
+    description: the Goal Inspector distinguishes explicit abandonment from verified completion
     verify:
       snapshot:
         name: goal_dropped_receipt

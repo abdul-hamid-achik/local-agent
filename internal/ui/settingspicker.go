@@ -184,6 +184,9 @@ func (m *Model) resizePickerOverlays() {
 	if m.runtimeStatusState != nil {
 		m.refreshRuntimeStatus(true)
 	}
+	if m.goalInspectorState != nil {
+		m.goalInspectorState.SetSize(m.width, m.height)
+	}
 }
 
 func (m *Model) settingsItems() []settingsItem {
@@ -212,7 +215,7 @@ func (m *Model) settingsItems() []settingsItem {
 	return []settingsItem{
 		{action: settingsModel, title: "Model", value: modelValue, description: "Choose an installed local model"},
 		{action: settingsAgent, title: "Agent profile", value: profile, description: "Change prompt, skills, model, and MCP scope"},
-		{action: settingsMode, title: "Mode", value: m.modeConfigs[m.mode].Label, description: "ASK, PLAN, or BUILD authority"},
+		{action: settingsMode, title: "Mode", value: m.modeConfigs[m.mode].Label, description: "NORMAL, PLAN, or AUTO authority"},
 		{action: settingsSessions, title: "Sessions", value: "Resume", description: "Open a saved workspace session"},
 		{action: settingsCompact, title: "Compact layout", value: compact, description: "Toggle the explicit compact transcript preference"},
 		{action: settingsRuntime, title: "Runtime status", value: runtime, description: "Inspect local model, tools, servers, and failures"},

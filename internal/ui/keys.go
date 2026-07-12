@@ -115,7 +115,7 @@ func DefaultKeyMap() KeyMap {
 		),
 		CycleMode: key.NewBinding(
 			key.WithKeys("shift+tab"),
-			key.WithHelp("shift+tab", "cycle mode (ASK/PLAN/BUILD)"),
+			key.WithHelp("shift+tab", "cycle mode (NORMAL/PLAN/AUTO)"),
 		),
 		ModelPicker: key.NewBinding(
 			key.WithKeys("ctrl+m"),

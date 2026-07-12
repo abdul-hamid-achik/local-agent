@@ -69,3 +69,17 @@ func TestHelpPreservesScrollAcrossResize(t *testing.T) {
 	assertRenderedLinesFit(t, m.renderHelpOverlay(m.width), 60)
 	assertRenderedHeightFits(t, m.renderHelpOverlay(m.width), 18)
 }
+
+func TestHelpGoalActionsShareStateAwareRegistryMetadata(t *testing.T) {
+	m := newTestModel(t)
+	m.width, m.height = 80, 24
+	content := ansi.Strip(m.buildHelpContent(m.helpContentWidth()))
+	for _, action := range []string{"/goal new", "/goal show", "/goal pause", "/goal resume", "/goal budget", "/goal drop"} {
+		if !strings.Contains(content, action) {
+			t.Fatalf("help omitted %q:\n%s", action, content)
+		}
+	}
+	if !strings.Contains(content, "Unavailable") || !strings.Contains(content, "No goal is configured") {
+		t.Fatalf("help omitted goal action availability:\n%s", content)
+	}
+}

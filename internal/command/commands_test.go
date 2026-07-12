@@ -58,14 +58,16 @@ func TestBuiltin_Goal(t *testing.T) {
 		{name: "shows configured goal", ctx: &Context{GoalConfigured: true}, wantAction: ActionShowGoal},
 		{name: "prefills free-form objective", ctx: &Context{}, args: []string{"ship", "the", "release"}, wantAction: ActionOpenGoal, wantData: "ship the release"},
 		{name: "new accepts objective", ctx: &Context{}, args: []string{"new", "fix", "resume"}, wantAction: ActionOpenGoal, wantData: "fix resume"},
-		{name: "show", ctx: &Context{}, args: []string{"show"}, wantAction: ActionShowGoal},
-		{name: "pause", ctx: &Context{}, args: []string{"pause"}, wantAction: ActionPauseGoal},
-		{name: "resume", ctx: &Context{}, args: []string{"resume"}, wantAction: ActionResumeGoal},
-		{name: "edit is budget-only", ctx: &Context{GoalObjective: "durable objective"}, args: []string{"edit"}, wantAction: ActionEditGoalBudget},
-		{name: "drop", ctx: &Context{}, args: []string{"drop"}, wantAction: ActionDropGoal},
-		{name: "drop rejects trailing input", ctx: &Context{}, args: []string{"drop", "extra"}, wantError: true},
-		{name: "pause rejects trailing input", ctx: &Context{}, args: []string{"pause", "now"}, wantError: true},
-		{name: "status rejects trailing input", ctx: &Context{}, args: []string{"status", "verbose"}, wantError: true},
+		{name: "show", ctx: &Context{GoalConfigured: true, GoalStatus: "active"}, args: []string{"show"}, wantAction: ActionShowGoal},
+		{name: "pause", ctx: &Context{GoalConfigured: true, GoalStatus: "active"}, args: []string{"pause"}, wantAction: ActionPauseGoal},
+		{name: "resume", ctx: &Context{GoalConfigured: true, GoalStatus: "paused"}, args: []string{"resume"}, wantAction: ActionResumeGoal},
+		{name: "edit is budget-only", ctx: &Context{GoalConfigured: true, GoalObjective: "durable objective", GoalStatus: "paused"}, args: []string{"edit"}, wantAction: ActionEditGoalBudget},
+		{name: "drop", ctx: &Context{GoalConfigured: true, GoalStatus: "paused"}, args: []string{"drop"}, wantAction: ActionDropGoal},
+		{name: "drop rejects trailing input", ctx: &Context{GoalConfigured: true, GoalStatus: "paused"}, args: []string{"drop", "extra"}, wantError: true},
+		{name: "pause rejects trailing input", ctx: &Context{GoalConfigured: true, GoalStatus: "active"}, args: []string{"pause", "now"}, wantError: true},
+		{name: "status rejects trailing input", ctx: &Context{GoalConfigured: true, GoalStatus: "active"}, args: []string{"status", "verbose"}, wantError: true},
+		{name: "pause explains missing goal", ctx: &Context{}, args: []string{"pause"}, wantError: true},
+		{name: "new rejects active goal", ctx: &Context{GoalConfigured: true, GoalStatus: "active"}, args: []string{"new", "other"}, wantError: true},
 		{name: "unknown flag fails closed", ctx: &Context{}, args: []string{"--forever"}, wantError: true},
 	}
 
@@ -90,14 +92,15 @@ func TestBuiltin_Goal(t *testing.T) {
 	for _, alias := range []struct {
 		name       string
 		args       []string
+		ctx        *Context
 		wantAction Action
 	}{
-		{name: "g", args: []string{"set", "alias objective"}, wantAction: ActionOpenGoal},
-		{name: "goal", args: []string{"status"}, wantAction: ActionShowGoal},
-		{name: "goal", args: []string{"retry"}, wantAction: ActionResumeGoal},
-		{name: "goal", args: []string{"budget"}, wantAction: ActionEditGoalBudget},
+		{name: "g", args: []string{"set", "alias objective"}, ctx: &Context{}, wantAction: ActionOpenGoal},
+		{name: "goal", args: []string{"status"}, ctx: &Context{GoalConfigured: true, GoalStatus: "paused"}, wantAction: ActionShowGoal},
+		{name: "goal", args: []string{"retry"}, ctx: &Context{GoalConfigured: true, GoalStatus: "paused"}, wantAction: ActionResumeGoal},
+		{name: "goal", args: []string{"budget"}, ctx: &Context{GoalConfigured: true, GoalStatus: "paused"}, wantAction: ActionEditGoalBudget},
 	} {
-		result := r.Execute(&Context{}, alias.name, alias.args)
+		result := r.Execute(alias.ctx, alias.name, alias.args)
 		if result.Error != "" || result.Action != alias.wantAction {
 			t.Fatalf("/%s %v = action %d error %q, want action %d", alias.name, alias.args, result.Action, result.Error, alias.wantAction)
 		}

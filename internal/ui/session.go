@@ -77,6 +77,8 @@ type persistedSessionState struct {
 	Goal                *goal.Snapshot       `json:"goal,omitempty"`
 }
 
+const currentPersistedSessionVersion = 2
+
 func sessionTitle(prompt string) string {
 	title := strings.TrimSpace(strings.SplitN(prompt, "\n", 2)[0])
 	if title == "" {
@@ -209,7 +211,7 @@ func encodeSessionState(m *Model) (string, error) {
 		goalSnapshot = &snapshot
 	}
 	state := persistedSessionState{
-		Version:             1,
+		Version:             currentPersistedSessionVersion,
 		Messages:            m.agent.Messages(),
 		Entries:             entries,
 		ToolEntries:         persistToolEntries(m.toolEntries),
@@ -251,10 +253,10 @@ func EncodeHeadlessSessionState(messages []llm.Message, model, agentProfile stri
 		}
 	}
 	return marshalPersistedSessionState(persistedSessionState{
-		Version:         1,
+		Version:         currentPersistedSessionVersion,
 		Messages:        append([]llm.Message(nil), messages...),
 		Entries:         entries,
-		Mode:            ModeBuild,
+		Mode:            ModeNormal,
 		Model:           model,
 		ModelPinned:     modelPinned,
 		AgentProfile:    agentProfile,
@@ -275,11 +277,35 @@ func decodeSessionState(raw string) (persistedSessionState, error) {
 	if err := json.Unmarshal([]byte(raw), &state); err != nil {
 		return state, fmt.Errorf("decode session state: %w", err)
 	}
-	if state.Version != 1 {
-		return state, fmt.Errorf("unsupported session state version %d", state.Version)
-	}
 	if state.ExecutionCursor < 0 {
 		return state, fmt.Errorf("invalid execution cursor %d", state.ExecutionCursor)
+	}
+	return migratePersistedSessionState(state)
+}
+
+func migratePersistedSessionState(state persistedSessionState) (persistedSessionState, error) {
+	switch state.Version {
+	case 1:
+		if state.Mode < ModeNormal || state.Mode > ModeAuto {
+			return state, fmt.Errorf("invalid legacy saved mode %d", state.Mode)
+		}
+		// Legacy BUILD was an interactive authority level, not an autonomous
+		// loop. Only a session carrying a real durable goal migrates to AUTO.
+		if state.Goal != nil {
+			state.Mode = ModeAuto
+		} else if state.Mode == ModeBuild {
+			state.Mode = ModeNormal
+		}
+		state.Version = currentPersistedSessionVersion
+	case currentPersistedSessionVersion:
+		if state.Mode < ModeNormal || state.Mode > ModeAuto {
+			return state, fmt.Errorf("invalid saved mode %d", state.Mode)
+		}
+		if state.Goal != nil {
+			state.Mode = ModeAuto
+		}
+	default:
+		return state, fmt.Errorf("unsupported session state version %d", state.Version)
 	}
 	return state, nil
 }
@@ -343,15 +369,13 @@ func loadPersistedSession(ctx context.Context, store *db.Store, id int64, worksp
 }
 
 func (m *Model) restoreSessionState(state persistedSessionState) error {
-	if state.Version != 1 {
-		return fmt.Errorf("unsupported session state version %d", state.Version)
-	}
-	if state.Mode < ModeAsk || state.Mode > ModeBuild {
-		return fmt.Errorf("invalid saved mode %d", state.Mode)
+	var err error
+	state, err = migratePersistedSessionState(state)
+	if err != nil {
+		return err
 	}
 	var targetGoal *goal.Runtime
 	if state.Goal != nil {
-		var err error
 		targetGoal, err = goal.Restore(*state.Goal)
 		if err != nil {
 			return fmt.Errorf("restore goal runtime: %w", err)
@@ -368,7 +392,6 @@ func (m *Model) restoreSessionState(state persistedSessionState) error {
 
 	var targetProfile *config.AgentProfile
 	var targetProfileSkills []string
-	var err error
 	if state.AgentProfile != "" {
 		targetProfile, err = m.validateAgentProfile(state.AgentProfile)
 		if err != nil {

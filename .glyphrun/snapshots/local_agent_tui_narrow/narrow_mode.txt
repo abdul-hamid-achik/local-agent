@@ -5,12 +5,12 @@
  ╭────────────────────────────────────╮
  │ Mode                               │
  │                                    │
- │   ASK                              │
- │   Read, search, and answer withou… │
+ │   NORMAL                           │
+ │   Interactive work with approval-… │
  │ │ PLAN  ✓                          │
  │ │ Explore and design without muta… │
- │   BUILD                            │
- │   Edit, execute, and use approved… │
+ │   AUTO                             │
+ │   Run a durable goal until a veri… │
  │ esc back · enter select · ↑/↓ move │
  ╰────────────────────────────────────╯
 

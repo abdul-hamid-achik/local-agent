@@ -16,7 +16,7 @@
                              │   ctrl+u            Half page up                           │
                              │   ctrl+d            Half page down                         │
                              │   end               Latest output (empty input)            │
-                             │   shift+tab         Cycle mode (ASK/PLAN/BUILD)            │
+                             │   shift+tab         Cycle mode (NORMAL/PLAN/AUTO)          │
                              │   ctrl+m            Quick model switch                     │
                              │   ctrl+p            Open settings                          │
                              │   ↑                 Previous input (empty input)           │

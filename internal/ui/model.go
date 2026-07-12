@@ -60,6 +60,7 @@ const (
 	OverlayModePicker
 	OverlayGoalForm
 	OverlayRuntimeStatus
+	OverlayGoalInspector
 )
 
 // CompletionState holds all state for the interactive completion modal.
@@ -232,6 +233,7 @@ type Model struct {
 	runtimeStatusState  *RuntimeStatusState
 	planFormState       *PlanFormState
 	goalFormState       *GoalForm
+	goalInspectorState  *GoalInspector
 	modelPinned         bool
 
 	// Goal Runtime. The host owns continuation, budget, cancellation and
@@ -350,7 +352,7 @@ func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, com
 		inputLines:     1,
 		toolsCollapsed: true,
 		initializing:   true,
-		mode:           ModeAsk,
+		mode:           ModeNormal,
 		modeConfigs:    DefaultModeConfigs(),
 		modelManager:   modelManager,
 		router:         router,
@@ -481,6 +483,10 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			m.goalFormState.SetTheme(m.isDark)
 			m.goalFormState.SetReducedMotion(m.reducedMotion)
 		}
+		if m.goalInspectorState != nil {
+			m.goalInspectorState.SetTheme(m.isDark)
+			m.goalInspectorState.SetReducedMotion(m.reducedMotion)
+		}
 		// Recreate markdown renderer for new theme.
 		if m.width > 0 {
 			m.markdownWidth = m.chatContentWidth()
@@ -557,6 +563,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		m.resizePickerOverlays()
 		if m.goalFormState != nil {
 			m.goalFormState.SetSize(m.width, m.height)
+		}
+		if m.goalInspectorState != nil {
+			m.goalInspectorState.SetSize(m.width, m.height)
 		}
 
 		// Input width matches viewport exactly - they're one unified area
@@ -776,6 +785,11 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 					m.closeModePicker()
 				case OverlayRuntimeStatus:
 					m.closeRuntimeStatus()
+				case OverlayGoalInspector:
+					if m.goalInspectorState != nil && m.goalInspectorState.CancelConfirmation() {
+						return m, nil
+					}
+					m.closeGoalInspector()
 				case OverlayHelp:
 					m.closeHelpOverlay()
 				default:
@@ -838,8 +852,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			if m.overlay == OverlayModePicker && m.modePickerState != nil {
 				if key.Matches(msg, m.keys.CompleteSelect) {
 					if item := m.modePickerState.List.SelectedItem(); item != nil {
-						m.setMode(item.(modeItem).mode)
+						selectedMode := item.(modeItem).mode
 						m.closeModePicker()
+						m.setMode(selectedMode)
 					}
 				} else {
 					var cmd tea.Cmd
@@ -889,6 +904,18 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 					m.closeGoalForm()
 				case GoalActionSave:
 					cmds = append(cmds, m.applyGoalForm(event))
+				}
+				return m, tea.Batch(cmds...)
+			}
+
+			if m.overlay == OverlayGoalInspector && m.goalInspectorState != nil {
+				event, cmd := m.goalInspectorState.Update(msg)
+				if cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+				if event.Action != command.ActionNone {
+					m.closeGoalInspector()
+					cmds = append(cmds, m.handleCommandAction(command.Result{Action: event.Action}))
 				}
 				return m, tea.Batch(cmds...)
 			}
@@ -1781,6 +1808,10 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 				if m.runtimeStatusState != nil {
 					m.runtimeStatusState.Viewport, _ = m.runtimeStatusState.Viewport.Update(msg)
 				}
+			case OverlayGoalInspector:
+				if m.goalInspectorState != nil {
+					m.goalInspectorState.updateViewport(msg)
+				}
 			}
 			return m, nil
 		}
@@ -2080,6 +2111,9 @@ func (m *Model) submitInput() tea.Cmd {
 		m.openPlanForm(text)
 		return nil
 	}
+	if m.mode == ModeAuto {
+		return m.handleAutoModeSubmit(text)
+	}
 
 	// Regular message — send to agent.
 	return m.sendToAgent(text)
@@ -2094,7 +2128,6 @@ func (m *Model) buildCommandContext() *command.Context {
 		AgentList:          m.agentList,
 		ToolCount:          m.toolCount,
 		ServerCount:        m.serverCount,
-		ServerNames:        m.agent.ServerNames(),
 		LoadedFile:         m.loadedFile,
 		ICEEnabled:         m.iceEnabled,
 		ICEConversations:   m.iceConversations,
@@ -2106,13 +2139,23 @@ func (m *Model) buildCommandContext() *command.Context {
 		CurrentModel:       m.model,
 		FileChanges:        m.fileChanges,
 	}
+	if m.agent != nil {
+		ctx.ServerNames = m.agent.ServerNames()
+	}
 	if m.goalRuntime != nil {
 		if snapshot, err := m.goalRuntime.Snapshot(context.Background()); err == nil {
 			ctx.GoalConfigured = true
 			ctx.GoalObjective = snapshot.Objective
 			ctx.GoalStatus = string(snapshot.State)
+			ctx.GoalPending = snapshot.PendingContinuation != nil
+			ctx.GoalExhausted = len(snapshot.ExhaustedBy) > 0
+			if snapshot.Blocker != nil {
+				ctx.GoalBlocker = string(snapshot.Blocker.Kind)
+			}
 		}
 	}
+	ctx.GoalPersistenceDirty = m.goalPersistenceDirty
+	ctx.GoalBusy = m.goalOperationRunning || m.goalOperation != ""
 
 	if m.skillMgr != nil {
 		for _, s := range m.skillMgr.All() {
@@ -2564,6 +2607,7 @@ func (m *Model) resetConversationSession() {
 	m.goalOperationToken++
 	m.goalRuntime = nil
 	m.goalFormState = nil
+	m.goalInspectorState = nil
 	m.goalTurnID = ""
 	m.goalTurnToolCalls = 0
 	m.goalTurnSuccesses = 0
@@ -3036,6 +3080,12 @@ func (m *Model) completionDraft() string {
 
 // sendToAgent sends a message to the agent, setting mode context first.
 func (m *Model) sendToAgent(text string) tea.Cmd {
+	// Every provider path must honor AUTO's durable goal boundary, including
+	// custom slash commands that expand to ActionSendPrompt. Goal turns use the
+	// separate sendGoalToAgentTurn path after consuming their host permit.
+	if m.mode == ModeAuto {
+		return m.handleAutoModeSubmit(text)
+	}
 	turnID, err := execution.NewTurnID()
 	if err != nil {
 		return m.failTurnBeforeRun(text, fmt.Sprintf("Create turn identity: %v", err))
@@ -3250,7 +3300,7 @@ func (m *Model) failTurnBeforeRun(text, message string) tea.Cmd {
 	return nil
 }
 
-// cycleMode advances through ASK -> PLAN -> BUILD -> ASK.
+// cycleMode advances through NORMAL -> PLAN -> AUTO -> NORMAL.
 func (m *Model) cycleMode() {
 	m.setMode((m.mode + 1) % 3)
 }
@@ -3258,7 +3308,7 @@ func (m *Model) cycleMode() {
 // setMode commits one mode transition. Picker navigation never calls this;
 // the route, model, and durable transcript change only on selection.
 func (m *Model) setMode(mode Mode) {
-	if mode < ModeAsk || mode > ModeBuild || mode == m.mode {
+	if mode < ModeNormal || mode > ModeAuto || mode == m.mode {
 		return
 	}
 	hadConversation := m.conversationStarted()
@@ -3294,6 +3344,18 @@ func (m *Model) setMode(mode Mode) {
 	}
 	m.viewport.SetContent(m.renderEntries())
 	m.resumeFollow()
+	if m.overlay == OverlaySettings && m.settingsPickerState != nil {
+		// Mode picker selection returns to Settings before this transition is
+		// committed. Refresh again so the visible row never reports the mode we
+		// just left.
+		m.refreshSettingsPicker()
+	}
+	if mode == ModeAuto && !m.hasLiveGoal() {
+		// AUTO entry replaces Settings with the reviewed durable-goal form. Do
+		// not retain a hidden stale picker behind that new authority boundary.
+		m.settingsPickerState = nil
+		_ = m.openGoalForm("", false)
+	}
 }
 
 // openModelPicker shows the model picker overlay.
