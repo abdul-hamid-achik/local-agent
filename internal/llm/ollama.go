@@ -250,12 +250,16 @@ func (o *OllamaClient) ChatStream(ctx context.Context, opts ChatOptions, fn func
 		messages = append(messages, converted)
 	}
 
+	options := map[string]any{"num_ctx": o.numCtx}
+	if opts.MaxEvalTokens > 0 {
+		options["num_predict"] = opts.MaxEvalTokens
+	}
 	request := ollamaChatRequest{
 		Model:    o.model,
 		Messages: messages,
 		Stream:   true,
 		Tools:    convertTools(opts.Tools),
-		Options:  map[string]any{"num_ctx": o.numCtx},
+		Options:  options,
 	}
 
 	sawDone := false

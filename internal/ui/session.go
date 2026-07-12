@@ -12,6 +12,7 @@ import (
 
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
+	"github.com/abdul-hamid-achik/local-agent/internal/goal"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 )
 
@@ -73,6 +74,7 @@ type persistedSessionState struct {
 	SessionTurnCount    int                  `json:"session_turn_count,omitempty"`
 	ExecutionCursor     int64                `json:"execution_cursor,omitempty"`
 	FileChanges         map[string]int       `json:"file_changes,omitempty"`
+	Goal                *goal.Snapshot       `json:"goal,omitempty"`
 }
 
 func sessionTitle(prompt string) string {
@@ -198,6 +200,14 @@ func encodeSessionState(m *Model) (string, error) {
 	if manualSkills == nil {
 		manualSkills = subtractSkillNames(m.activeSkillNames(), m.profileSkills)
 	}
+	var goalSnapshot *goal.Snapshot
+	if m.goalRuntime != nil {
+		snapshot, err := m.goalRuntime.Snapshot(context.Background())
+		if err != nil {
+			return "", fmt.Errorf("snapshot goal runtime: %w", err)
+		}
+		goalSnapshot = &snapshot
+	}
 	state := persistedSessionState{
 		Version:             1,
 		Messages:            m.agent.Messages(),
@@ -215,6 +225,7 @@ func encodeSessionState(m *Model) (string, error) {
 		SessionTurnCount:    m.sessionTurnCount,
 		ExecutionCursor:     m.executionCursor,
 		FileChanges:         m.fileChanges,
+		Goal:                goalSnapshot,
 	}
 	return marshalPersistedSessionState(state)
 }
@@ -325,6 +336,9 @@ func loadPersistedSession(ctx context.Context, store *db.Store, id int64, worksp
 		return db.Session{}, persistedSessionState{}, err
 	}
 	state, err := decodeSessionState(raw)
+	if err == nil && state.Goal != nil && state.Goal.SessionID != id {
+		return db.Session{}, persistedSessionState{}, fmt.Errorf("session %d contains goal state for session %d", id, state.Goal.SessionID)
+	}
 	return session, state, err
 }
 
@@ -334,6 +348,14 @@ func (m *Model) restoreSessionState(state persistedSessionState) error {
 	}
 	if state.Mode < ModeAsk || state.Mode > ModeBuild {
 		return fmt.Errorf("invalid saved mode %d", state.Mode)
+	}
+	var targetGoal *goal.Runtime
+	if state.Goal != nil {
+		var err error
+		targetGoal, err = goal.Restore(*state.Goal)
+		if err != nil {
+			return fmt.Errorf("restore goal runtime: %w", err)
+		}
 	}
 
 	targetManualSkills := uniqueSkillNames(state.ManualSkills)
@@ -428,6 +450,8 @@ func (m *Model) restoreSessionState(state persistedSessionState) error {
 	for path, count := range state.FileChanges {
 		m.fileChanges[path] = count
 	}
+	m.goalRuntime = targetGoal
+	m.goalPersistenceDirty = false
 
 	m.toolsPending = 0
 	m.toolCardMgr = NewToolCardManager(m.isDark)

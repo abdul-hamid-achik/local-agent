@@ -1,0 +1,233 @@
+version: 1
+name: local_agent_tui_goal_runtime
+
+intent: |
+  a user can define a bounded durable goal at normal and minimum terminal
+  sizes, observe safe local fallback when Cortex and Ollama are unavailable,
+  inspect locked budget editing, and drop the goal without false completion.
+
+target:
+  cmd: ["./bin/local-agent"]
+  cwd: "."
+  env:
+    HOME: "${projectRoot}/.glyphrun/tmp/goal-home"
+    LOCAL_AGENT_AGENTS_DIR: "${projectRoot}/.glyphrun/tmp/goal-agents"
+    LOCAL_AGENT_REDUCED_MOTION: "1"
+    OLLAMA_HOST: "http://127.0.0.1:1"
+
+terminal:
+  cols: 80
+  rows: 24
+
+preconditions:
+  commands:
+    - run: "rm -rf .glyphrun/tmp/goal-home .glyphrun/tmp/goal-agents && mkdir -p .glyphrun/tmp/goal-home/.config/local-agent .glyphrun/tmp/goal-agents && printf '%s\\n' 'model:' '  auto_select: false' > .glyphrun/tmp/goal-home/.config/local-agent/config.yaml && go build -o ./bin/local-agent ./cmd/local-agent"
+      cwd: "."
+      timeoutMs: 30000
+
+steps:
+  - wait:
+      screen:
+        contains: "Ask, @mention files, or type /help"
+      timeoutMs: 5000
+  - wait:
+      screen:
+        contains: "hint: is `ollama serve` running?"
+      timeoutMs: 5000
+  - type: "/goal new Ship a polished goal UI"
+  - wait:
+      screen:
+        contains: "goal new Ship a polished goal UI"
+      timeoutMs: 2000
+  - press: "esc"
+  - wait:
+      screen:
+        notContains: "Commands"
+      timeoutMs: 2000
+  - press: "enter"
+  - wait:
+      screen:
+        contains: "Define done, then bound the run."
+      timeoutMs: 2000
+  - wait:
+      screen:
+        contains: "Ship a polished goal UI"
+      timeoutMs: 2000
+  - snapshot: goal_form_normal
+  - press: "enter"
+  - type: "The durable goal status is visible and accurate"
+  - resize:
+      cols: 30
+      rows: 12
+  - wait:
+      screen:
+        contains: "Goal · 2/6"
+      timeoutMs: 2000
+  - wait:
+      screen:
+        contains: "Acceptance criteria"
+      timeoutMs: 2000
+  - snapshot: goal_form_minimum
+  - resize:
+      cols: 80
+      rows: 24
+  - press: "tab"
+  - press: "tab"
+  - press: "tab"
+  - press: "tab"
+  - wait:
+      screen:
+        contains: "Save goal"
+      timeoutMs: 2000
+  - press: "enter"
+  - wait:
+      screen:
+        contains: "Cortex is unavailable; continuing as a bounded local goal."
+      timeoutMs: 5000
+  - wait:
+      screen:
+        contains: "Goal paused"
+      timeoutMs: 5000
+  - wait:
+      screen:
+        contains: "Ask, @mention files, or type /help"
+      timeoutMs: 3000
+  - type: "/goal show"
+  - wait:
+      screen:
+        contains: "Filter › goal show"
+      timeoutMs: 2000
+  - press: "esc"
+  - wait:
+      screen:
+        notContains: "Commands"
+      timeoutMs: 2000
+  - press: "enter"
+  - wait:
+      screen:
+        contains: "Goal · paused"
+      timeoutMs: 2000
+  - wait:
+      screen:
+        contains: "Cortex · not linked (bounded local goal)"
+      timeoutMs: 2000
+  - snapshot: goal_paused_receipt
+  - type: "/goal budget"
+  - wait:
+      screen:
+        contains: "Filter › goal budget"
+      timeoutMs: 2000
+  - press: "esc"
+  - wait:
+      screen:
+        notContains: "Commands"
+      timeoutMs: 2000
+  - press: "enter"
+  - wait:
+      screen:
+        contains: "Definition locked · adjust limits only."
+      timeoutMs: 2000
+  - wait:
+      screen:
+        contains: "Auto turns"
+      timeoutMs: 2000
+  - snapshot: goal_budget_normal
+  - resize:
+      cols: 30
+      rows: 12
+  - wait:
+      screen:
+        contains: "Goal budgets · 1/4"
+      timeoutMs: 2000
+  - wait:
+      screen:
+        contains: "Locked · Ship"
+      timeoutMs: 2000
+  - snapshot: goal_budget_minimum
+  - press: "esc"
+  - wait:
+      screen:
+        notContains: "Goal budgets"
+      timeoutMs: 2000
+  - resize:
+      cols: 80
+      rows: 24
+  - type: "/goal drop"
+  - wait:
+      screen:
+        contains: "Filter › goal drop"
+      timeoutMs: 2000
+  - press: "esc"
+  - wait:
+      screen:
+        notContains: "Commands"
+      timeoutMs: 2000
+  - press: "enter"
+  - wait:
+      screen:
+        contains: "Goal dropped without claiming completion."
+      timeoutMs: 2000
+  - type: "/goal show"
+  - wait:
+      screen:
+        contains: "Filter › goal show"
+      timeoutMs: 2000
+  - press: "esc"
+  - wait:
+      screen:
+        notContains: "Commands"
+      timeoutMs: 2000
+  - press: "enter"
+  - wait:
+      screen:
+        contains: "Goal · dropped"
+      timeoutMs: 2000
+  - snapshot: goal_dropped_receipt
+  - press: "ctrl+c"
+  - wait:
+      process:
+        exitCode: 0
+      timeoutMs: 3000
+
+outcomes:
+  - id: normal_goal_form_is_clear
+    description: the wide goal form explains verifiable done and bounded continuation
+    verify:
+      snapshot:
+        name: goal_form_normal
+        mode: text
+  - id: minimum_goal_form_is_usable
+    description: the active acceptance step and cancellation path fit at 30x12
+    verify:
+      snapshot:
+        name: goal_form_minimum
+        mode: text
+  - id: unavailable_advisors_stop_safely
+    description: local fallback makes one bounded attempt and pauses instead of looping
+    verify:
+      snapshot:
+        name: goal_paused_receipt
+        mode: text
+  - id: budget_editor_locks_definition
+    description: the wide budget editor identifies immutable goal fields and auto-turn semantics
+    verify:
+      snapshot:
+        name: goal_budget_normal
+        mode: text
+  - id: minimum_budget_editor_keeps_context
+    description: the 30x12 budget editor retains locked objective context and progress
+    verify:
+      snapshot:
+        name: goal_budget_minimum
+        mode: text
+  - id: dropping_never_claims_completion
+    description: the terminal receipt distinguishes explicit abandonment from verified completion
+    verify:
+      snapshot:
+        name: goal_dropped_receipt
+        mode: text
+  - id: goal_flow_quits_cleanly
+    description: ctrl+c exits cleanly after the durable goal lifecycle
+    verify:
+      process:
+        exitCode: 0

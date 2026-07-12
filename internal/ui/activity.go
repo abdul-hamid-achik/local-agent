@@ -90,6 +90,8 @@ func (m *Model) currentWorkingActivity() (workingActivity, bool) {
 		return workingActivity{label: "Generating commit", cancellable: true}, true
 	case m.exportRunning:
 		return workingActivity{label: "Publishing export"}, true
+	case m.goalOperation != "":
+		return workingActivity{label: m.goalOperation, detail: "Cortex", cancellable: true}, true
 	case m.toolsPending > 0:
 		// The running ToolCard is the single animated, detailed surface for tool
 		// work. The footer keeps only the global cancellation affordance.

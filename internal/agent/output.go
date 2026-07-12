@@ -10,7 +10,11 @@ type Output interface {
 	// StreamReasoning sends provider-native thinking separately from answer text.
 	StreamReasoning(text string)
 
-	// StreamDone signals that the current response is complete.
+	// StreamDone reports evaluation usage for the current provider request. For
+	// a hard-capped request whose terminal provider receipt is missing or
+	// untrustworthy, evalCount may be the conservative unaccounted reservation;
+	// callers must include every report in durable turn usage even when the turn
+	// later returns an error.
 	StreamDone(evalCount, promptTokens int)
 
 	// ToolCallStart signals the beginning of a tool invocation.

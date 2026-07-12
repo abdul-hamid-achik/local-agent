@@ -410,6 +410,11 @@ version.
 | `/servers` | Show connected MCP servers and tool count |
 | `/ice` | Show ICE status |
 | `/sessions` | Open lossless SQLite-backed saved sessions |
+| `/goal [new [objective]]` | Open the reviewed form for a durable, budgeted goal |
+| `/goal show` | Show objective, acceptance criteria, usage, state, and Cortex linkage |
+| `/goal pause`, `/goal resume` | Stop automatic continuation or explicitly resume one user-directed turn |
+| `/goal budget` | Change automatic-continuation, evaluation-token, and wall-time limits without editing the goal definition |
+| `/goal drop` | Abandon the goal without claiming completion |
 | `/changes` | List files modified in the current TUI session |
 | `/commit [context]` | Generate a message from staged changes and run `git commit` |
 | `/stats` | Show in-memory token counters |
@@ -429,6 +434,44 @@ configuration. Run `git commit` yourself when repository hooks or signing are
 required.
 
 Session snapshots preserve model-facing messages, tool-call IDs, tool cards, mode, model, profile, and counters. Loading one replaces both the visible transcript and the hidden model conversation. Checkpoints are validated against the active session.
+
+### Durable goals and bounded continuation
+
+`/goal new` adds a host-owned Goal Runtime above the normal agent loop. The
+reviewed form requires an objective, at least one independently checkable
+acceptance criterion, and at least one finite limit. Saving the form is the
+explicit instruction to start the first BUILD turn. Later automatic turns are
+admitted only after the previous turn produced a successful tool receipt and
+the linked Cortex case advanced semantically. Each continuation permit is
+saved with the exact agent TurnID before provider dispatch. The remaining
+evaluation-token allowance is sent to every Ollama request as a hard generation
+cap, and the remaining wall allowance becomes the turn context deadline; both
+are rechecked before any later tool dispatch. Evaluation-token and wall-time
+limits apply to the whole goal; the auto-turn limit applies only to
+host-initiated continuations, not a new user-directed `/goal resume`.
+
+Budget exhaustion pauses work; it never means success. A no-tool yield, failed
+turn, cancellation, unavailable Cortex status, or persistence failure also
+stops automatic continuation. If a process restarts with an admitted turn but
+no settled receipt, the goal becomes outcome-unknown and cannot retry that
+effect automatically. An otherwise active restored goal is paused until the
+user resumes it. Goal definitions are immutable after creation; `/goal budget`
+changes only limits.
+
+When Cortex is reachable directly or through MCPHub, the runtime links one
+stable Cortex case and asks for semantic status between productive turns.
+Cortex's structured next action is bounded prompt context for the model—it is
+never executed directly by the host and still passes through normal tool
+policy and approval. Local Agent owns scheduling, budgets, cancellation,
+session persistence, and the execution ledger. A goal reaches `completed` only
+when the linked Cortex case is `complete` with a current canonical `verified`
+assessment and no missing, stale, or degraded verification. Every local
+acceptance ID and statement must have a matching bound named-claim receipt and
+verifier receipt, and those receipts must match the host's current Git HEAD and
+dirty-tree digest. The accepted commit, digest, and evidence references remain
+in the durable completion record. Without Cortex, each bounded turn requires an
+explicit user resume and the runtime deliberately cannot declare its own
+completion.
 
 The terminal interface keeps the conversation full-width. Infrequent controls
 live in transient, keyboard-first overlays: press `ctrl+p` for session settings,
@@ -479,6 +522,10 @@ Agent ReAct loop -----> prompt builder + mode policy
                                       |-> chat models
                                       +-> embedding model
 
+Goal Runtime -> durable permits/budgets/receipts -> optional Cortex advisor
+     |                                                |
+     +-- owns continuation and cancellation           +-- returns semantic state/actions only
+
 Local persistence: scoped JSON memory/ICE + SQLite sessions/permissions/checkpoints + logs
 ```
 
@@ -495,6 +542,8 @@ internal/memory/    Persistent structured memory
 internal/db/        SQLite schema and queries
 internal/skill/     Skill discovery and activation
 internal/command/   Slash and custom commands
+internal/goal/      Durable goal lifecycle, budgets, receipts, and recovery
+internal/goaladvisor/ Bounded Cortex/MCPHub semantic adapter
 internal/ui/        Charm terminal interface
 internal/logging/   Per-run structured logs
 ```
@@ -538,7 +587,7 @@ go test ./internal/agent -run TestName
 go test -race ./...
 ```
 
-Glyphrun specs under `specs/glyphrun/` cover CLI help/version/init/log behavior plus the normal-width launch, the 30×12 minimum, canonical command discovery, full-width narrow-terminal settings/help flow, and clean quits.
+Glyphrun specs under `specs/glyphrun/` cover CLI help/version/init/log behavior plus the normal-width launch, the 30×12 minimum, canonical command discovery, the durable-goal form and safe local fallback, full-width narrow-terminal settings/help flow, and clean quits.
 
 With `qwen3.5:4b` installed in Ollama, run the opt-in live small-model/tool proof separately:
 

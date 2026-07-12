@@ -6,13 +6,13 @@
  │ ▸ /help · Show help overlay with … │
  │   /clear · Clear conversation his… │
  │   /new · Start a fresh conversati… │
+ │   /goal · Create, inspect, pause,… │
  │   /model · Show, switch, or list … │
  │   /models · Open model picker      │
  │   /agent · Show or switch agent p… │
  │   /load · Load a markdown file as… │
  │   /unload · Remove loaded context… │
  │   /skill · Manage skills (list, a… │
- │   /servers · List connected MCP s… │
  │ esc cancel · enter select · ↑/↓    │
  ╰────────────────────────────────────╯
 ───────────────────────────────────────

@@ -186,6 +186,32 @@ func TestExecutionLedgerOrdersEffectfulLifecycleAndIdentities(t *testing.T) {
 	}
 }
 
+func TestExecutionLedgerRunTurnPreservesCallerTurnIdentity(t *testing.T) {
+	client := &scriptedClient{responses: [][]llm.StreamChunk{
+		{{ToolCalls: []llm.ToolCall{{
+			ID: "provider-write", Name: "write",
+			Arguments: map[string]any{"path": "out.txt", "content": "stable turn"},
+		}}, Done: true}},
+		{{Text: "done", Done: true}},
+	}}
+	ledger := &fakeExecutionLedger{}
+	ag, _ := newLedgerAgent(t, client, nil, ledger)
+	const turnID = "turn_goal_runtime_stable"
+	if err := ag.RunTurn(context.Background(), &outputRecorder{}, turnID); err != nil {
+		t.Fatal(err)
+	}
+
+	events := ledger.snapshot()
+	if len(events) == 0 {
+		t.Fatal("caller-owned turn produced no execution events")
+	}
+	for _, event := range events {
+		if event.Identity.TurnID != turnID {
+			t.Fatalf("execution event turn id = %q, want %q", event.Identity.TurnID, turnID)
+		}
+	}
+}
+
 func TestExecutionLedgerPostHookRedactsDurableUIAndModelReceipts(t *testing.T) {
 	const secret = "super-secret-backend-value"
 	client := &scriptedClient{responses: [][]llm.StreamChunk{

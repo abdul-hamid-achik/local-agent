@@ -1,0 +1,23 @@
+
+  ⚠️ Model response failed: no model selected
+
+  You can try:
+  - Checking if Ollama is running (`ollama ps`)
+  - Switching to a different model (ctrl+m)
+  - Reducing context size
+
+  Tool results are still available above.
+
+  Goal paused · unproductive turn: LLM response: no model selected
+
+  Goal · paused
+  Ship a polished goal UI
+    · The durable goal status is visible and accurate
+  Budget · 0/8 continuations · 0/12k eval tokens · 0s/30m
+  Cortex · not linked (bounded local goal)
+  Status · unproductive turn: LLM response: no model selected
+
+
+───────────────────────────────────────────────────────────────────────────────
+ Ⅱ paused · Ship a polished goal UI · 0/8 auto turns · 0/12k tok · 0s/30m
+❯ Ask, @mention files, or type /help

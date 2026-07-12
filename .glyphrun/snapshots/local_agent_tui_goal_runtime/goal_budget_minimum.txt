@@ -1,0 +1,11 @@
+  ╭────────────────────────╮
+  │ Goal budgets · 1/4     │
+  │ Locked · Ship a polis… │
+  │ 1 acceptance criterion │
+  │ Auto-turn budget       │
+  │ > 8                    │
+  │ Blank skips this limit │
+  │ set at least one limit │
+  │ esc cancel             │
+  │ enter/tab next         │
+  ╰────────────────────────╯

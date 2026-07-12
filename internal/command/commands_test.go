@@ -43,6 +43,67 @@ func TestBuiltin_New(t *testing.T) {
 	}
 }
 
+func TestBuiltin_Goal(t *testing.T) {
+	r := newTestRegistry()
+
+	tests := []struct {
+		name       string
+		ctx        *Context
+		args       []string
+		wantAction Action
+		wantData   string
+		wantError  bool
+	}{
+		{name: "opens form when absent", ctx: &Context{}, wantAction: ActionOpenGoal},
+		{name: "shows configured goal", ctx: &Context{GoalConfigured: true}, wantAction: ActionShowGoal},
+		{name: "prefills free-form objective", ctx: &Context{}, args: []string{"ship", "the", "release"}, wantAction: ActionOpenGoal, wantData: "ship the release"},
+		{name: "new accepts objective", ctx: &Context{}, args: []string{"new", "fix", "resume"}, wantAction: ActionOpenGoal, wantData: "fix resume"},
+		{name: "show", ctx: &Context{}, args: []string{"show"}, wantAction: ActionShowGoal},
+		{name: "pause", ctx: &Context{}, args: []string{"pause"}, wantAction: ActionPauseGoal},
+		{name: "resume", ctx: &Context{}, args: []string{"resume"}, wantAction: ActionResumeGoal},
+		{name: "edit is budget-only", ctx: &Context{GoalObjective: "durable objective"}, args: []string{"edit"}, wantAction: ActionEditGoalBudget},
+		{name: "drop", ctx: &Context{}, args: []string{"drop"}, wantAction: ActionDropGoal},
+		{name: "drop rejects trailing input", ctx: &Context{}, args: []string{"drop", "extra"}, wantError: true},
+		{name: "pause rejects trailing input", ctx: &Context{}, args: []string{"pause", "now"}, wantError: true},
+		{name: "status rejects trailing input", ctx: &Context{}, args: []string{"status", "verbose"}, wantError: true},
+		{name: "unknown flag fails closed", ctx: &Context{}, args: []string{"--forever"}, wantError: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := r.Execute(tt.ctx, "goal", tt.args)
+			if tt.wantError {
+				if result.Error == "" {
+					t.Fatal("expected an error")
+				}
+				return
+			}
+			if result.Error != "" {
+				t.Fatalf("unexpected error: %s", result.Error)
+			}
+			if result.Action != tt.wantAction || result.Data != tt.wantData {
+				t.Fatalf("goal result = action %d data %q, want action %d data %q", result.Action, result.Data, tt.wantAction, tt.wantData)
+			}
+		})
+	}
+
+	for _, alias := range []struct {
+		name       string
+		args       []string
+		wantAction Action
+	}{
+		{name: "g", args: []string{"set", "alias objective"}, wantAction: ActionOpenGoal},
+		{name: "goal", args: []string{"status"}, wantAction: ActionShowGoal},
+		{name: "goal", args: []string{"retry"}, wantAction: ActionResumeGoal},
+		{name: "goal", args: []string{"budget"}, wantAction: ActionEditGoalBudget},
+	} {
+		result := r.Execute(&Context{}, alias.name, alias.args)
+		if result.Error != "" || result.Action != alias.wantAction {
+			t.Fatalf("/%s %v = action %d error %q, want action %d", alias.name, alias.args, result.Action, result.Error, alias.wantAction)
+		}
+	}
+}
+
 func TestBuiltin_Model(t *testing.T) {
 	r := newTestRegistry()
 	ctx := &Context{

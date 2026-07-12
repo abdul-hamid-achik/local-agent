@@ -37,6 +37,11 @@ type Context struct {
 	CurrentModel       string
 	// File changes
 	FileChanges map[string]int // path → modification count
+	// Goal runtime summary. Commands receive only the bounded fields needed to
+	// choose an action; the UI remains the authority for transitions.
+	GoalConfigured bool
+	GoalObjective  string
+	GoalStatus     string
 }
 
 // SkillInfo is a read-only view of a skill for command display.
@@ -85,6 +90,12 @@ const (
 	ActionClaimLegacyMemory               // Explicitly claim the exact previewed memory file
 	ActionPreviewLegacyICE                // Preview provenance-free ICE entry adoption
 	ActionClaimLegacyICE                  // Explicitly claim the exact previewed ICE set
+	ActionOpenGoal                        // Open the goal form (Data = optional objective)
+	ActionShowGoal                        // Show the active goal summary
+	ActionPauseGoal                       // Pause automatic goal continuation
+	ActionResumeGoal                      // Resume/retry the active goal
+	ActionDropGoal                        // Drop the active goal without claiming completion
+	ActionEditGoalBudget                  // Open the active goal's budget-only editor
 )
 
 // Registry holds all registered slash commands.

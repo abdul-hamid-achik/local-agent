@@ -1,0 +1,526 @@
+// Package goaladvisor connects the host-owned Goal Runtime to a semantic
+// advisor without giving that advisor authority over local effects.
+package goaladvisor
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"reflect"
+	"strings"
+	"unicode/utf8"
+
+	"github.com/abdul-hamid-achik/local-agent/internal/goal"
+	"github.com/abdul-hamid-achik/local-agent/internal/mcp"
+)
+
+var (
+	ErrUnavailable = errors.New("cortex goal advisor is unavailable")
+	ErrRejected    = errors.New("cortex goal request was rejected")
+)
+
+const (
+	openTool    = "cortex_open_task"
+	statusTool  = "cortex_status"
+	handoffTool = "cortex_handoff"
+	gatewayTool = "mcphub_call_tool"
+
+	maxAdviceSummaryBytes = 4 * 1024
+	maxAdviceTextBytes    = 1024
+	maxAdviceItems        = 16
+)
+
+// Registry is the narrow MCP capability Cortex needs. ResolveToolName keeps
+// direct Cortex and lazy MCPHub configurations interchangeable.
+type Registry interface {
+	ResolveToolName(remoteName string) (string, bool)
+	CallTool(ctx context.Context, name string, args map[string]any) (*mcp.ToolResult, error)
+}
+
+// Cortex is a stateless adapter. Local Agent owns scheduling, cancellation,
+// budgets and approvals; Cortex only returns durable semantic state.
+type Cortex struct {
+	registry  Registry
+	workspace string
+	actor     string
+	revision  func(context.Context, string) (WorkspaceRevision, error)
+}
+
+func NewCortex(registry Registry, workspace, actor string) *Cortex {
+	return &Cortex{
+		registry:  registry,
+		workspace: strings.TrimSpace(workspace),
+		actor:     strings.TrimSpace(actor),
+		revision:  CurrentWorkspaceRevision,
+	}
+}
+
+// OpenRequest is the explicit user-approved creation/link request. GoalID is
+// reused as Cortex's idempotency key, so response loss is safe to retry.
+type OpenRequest struct {
+	GoalID             string
+	Objective          string
+	AcceptanceCriteria []goal.AcceptanceCriterion
+}
+
+// Advice is the bounded portion of Cortex status Local Agent needs to decide
+// whether to continue, pause, block, or complete.
+type Advice struct {
+	OK                  bool
+	TaskID              string
+	Revision            int64
+	Phase               string
+	Summary             string
+	VerificationOutcome string
+	VerificationDone    []string
+	MissingVerification []string
+	StaleVerification   []string
+	CriterionEvidence   map[string]CriterionProof
+	ProofRevision       WorkspaceRevision
+	PendingDecision     bool
+	Degraded            bool
+	Actions             []Action
+	Warnings            []string
+}
+
+// CriterionProof is the exact Cortex named-claim receipt bound to one local
+// acceptance ID and one verified workspace state.
+type CriterionProof struct {
+	Claim       string
+	Evidence    []string
+	Revision    string
+	DirtyDigest string
+}
+
+type Action struct {
+	Tool      string         `json:"tool,omitempty"`
+	Reason    string         `json:"reason,omitempty"`
+	Arguments map[string]any `json:"arguments,omitempty"`
+	Inputs    []string       `json:"inputs,omitempty"`
+	BlockedBy []string       `json:"blockedBy,omitempty"`
+}
+
+// Open idempotently creates or resumes the Cortex case for a local goal.
+func (c *Cortex) Open(ctx context.Context, request OpenRequest) (Advice, error) {
+	if c == nil || c.registry == nil {
+		return Advice{}, ErrUnavailable
+	}
+	if strings.TrimSpace(request.GoalID) == "" || strings.TrimSpace(request.Objective) == "" {
+		return Advice{}, fmt.Errorf("%w: goal id and objective are required", ErrRejected)
+	}
+	goalText := cortexGoalText(request.Objective, request.AcceptanceCriteria)
+	advice, err := c.call(ctx, openTool, map[string]any{
+		"goal":           goalText,
+		"workspace":      c.workspace,
+		"mode":           "change",
+		"surfaces":       []string{"code", "terminal"},
+		"risk":           "medium",
+		"actor":          defaultActor(c.actor),
+		"idempotencyKey": request.GoalID,
+	})
+	if err == nil {
+		if strings.TrimSpace(advice.TaskID) == "" {
+			return advice, fmt.Errorf("%w: Cortex open returned no task id", ErrRejected)
+		}
+		if !validCortexPhase(advice.Phase) || advice.Degraded {
+			return advice, fmt.Errorf("%w: Cortex open returned an unknown or degraded phase", ErrRejected)
+		}
+	}
+	return advice, err
+}
+
+// Status reads the current Cortex case. It is the only automatic host call;
+// returned actions are prompt context, never executed by this adapter.
+func (c *Cortex) Status(ctx context.Context, taskID string) (Advice, error) {
+	if c == nil || c.registry == nil {
+		return Advice{}, ErrUnavailable
+	}
+	if strings.TrimSpace(taskID) == "" {
+		return Advice{}, fmt.Errorf("%w: cortex task id is required", ErrRejected)
+	}
+	advice, err := c.call(ctx, statusTool, map[string]any{
+		"taskId":    taskID,
+		"detail":    "standard",
+		"workspace": c.workspace,
+	})
+	if err != nil {
+		return advice, err
+	}
+	if advice.TaskID != strings.TrimSpace(taskID) || !validCortexPhase(advice.Phase) {
+		return advice, fmt.Errorf("%w: Cortex status identity or phase is invalid", ErrRejected)
+	}
+	if advice.Degraded {
+		return advice, fmt.Errorf("%w: Cortex status is degraded", ErrRejected)
+	}
+	if !strings.EqualFold(advice.Phase, "complete") || !strings.EqualFold(advice.VerificationOutcome, "verified") {
+		return advice, nil
+	}
+	evidence, proofRevision, evidenceErr := c.criterionEvidence(ctx, taskID, advice.Revision)
+	if evidenceErr != nil {
+		advice.Warnings = boundAdviceStrings(append(advice.Warnings, "exact acceptance evidence unavailable: "+evidenceErr.Error()))
+		return advice, nil
+	}
+	advice.CriterionEvidence = evidence
+	advice.ProofRevision = proofRevision
+	return advice, nil
+}
+
+func validCortexPhase(phase string) bool {
+	switch strings.ToLower(strings.TrimSpace(phase)) {
+	case "new", "orienting", "investigating", "planned", "changing", "verifying", "persisting",
+		"complete", "blocked", "abandoned", "needs_human_decision":
+		return true
+	default:
+		return false
+	}
+}
+
+func defaultActor(actor string) string {
+	if actor == "" {
+		return "local-agent"
+	}
+	return actor
+}
+
+func cortexGoalText(objective string, criteria []goal.AcceptanceCriterion) string {
+	var builder strings.Builder
+	builder.WriteString(strings.TrimSpace(objective))
+	if len(criteria) == 0 {
+		return builder.String()
+	}
+	builder.WriteString("\n\nAcceptance criteria:")
+	for _, criterion := range criteria {
+		description := strings.TrimSpace(criterion.Description)
+		if description != "" {
+			builder.WriteString("\n- [")
+			builder.WriteString(strings.TrimSpace(criterion.ID))
+			builder.WriteString("] ")
+			builder.WriteString(description)
+		}
+	}
+	return builder.String()
+}
+
+func (c *Cortex) call(ctx context.Context, tool string, args map[string]any) (Advice, error) {
+	if ctx == nil {
+		return Advice{}, fmt.Errorf("%w: context is nil", ErrRejected)
+	}
+	exposed, direct := c.registry.ResolveToolName(tool)
+	callArgs := args
+	if !direct {
+		var gateway bool
+		exposed, gateway = c.registry.ResolveToolName(gatewayTool)
+		if !gateway {
+			return Advice{}, fmt.Errorf("%w: neither %s nor the MCPHub gateway is connected", ErrUnavailable, tool)
+		}
+		callArgs = map[string]any{
+			"server":    "cortex",
+			"tool":      tool,
+			"arguments": args,
+		}
+	}
+
+	result, err := c.registry.CallTool(ctx, exposed, callArgs)
+	if err != nil {
+		return Advice{}, fmt.Errorf("%s: %w", tool, err)
+	}
+	if result == nil {
+		return Advice{}, fmt.Errorf("%w: %s returned no receipt", ErrUnavailable, tool)
+	}
+	advice, parseErr := parseAdvice(result.Content)
+	if parseErr != nil {
+		return Advice{}, fmt.Errorf("%s response: %w", tool, parseErr)
+	}
+	if result.IsError || !advice.OK {
+		detail := advice.Summary
+		if detail == "" {
+			detail = "Cortex rejected the request"
+		}
+		return advice, fmt.Errorf("%w: %s", ErrRejected, detail)
+	}
+	return advice, nil
+}
+
+type adviceEnvelope struct {
+	OK                  bool            `json:"ok"`
+	TaskID              string          `json:"taskId"`
+	Revision            int64           `json:"revision"`
+	Phase               string          `json:"phase"`
+	Summary             string          `json:"summary"`
+	Error               string          `json:"error"`
+	VerificationOutcome string          `json:"verificationOutcome"`
+	VerificationDone    []string        `json:"verificationDone"`
+	MissingVerification []string        `json:"missingVerification"`
+	StaleVerification   []string        `json:"staleVerification"`
+	PendingDecision     json.RawMessage `json:"pendingDecision"`
+	Degraded            bool            `json:"degraded"`
+	Actions             []Action        `json:"actions"`
+	Warnings            []string        `json:"warnings"`
+}
+
+func parseAdvice(content string) (Advice, error) {
+	content = primaryJSONContent(content)
+	var envelope adviceEnvelope
+	if err := json.Unmarshal([]byte(content), &envelope); err != nil {
+		return Advice{}, fmt.Errorf("decode JSON envelope: %w", err)
+	}
+	if envelope.Revision < 0 {
+		return Advice{}, fmt.Errorf("revision must not be negative")
+	}
+	summary := strings.TrimSpace(envelope.Summary)
+	if summary == "" {
+		summary = strings.TrimSpace(envelope.Error)
+	}
+	pending := len(envelope.PendingDecision) > 0 && string(envelope.PendingDecision) != "null" && string(envelope.PendingDecision) != "{}"
+	return Advice{
+		OK:                  envelope.OK,
+		TaskID:              boundAdviceText(strings.TrimSpace(envelope.TaskID), goal.MaxCorrelationIDBytes),
+		Revision:            envelope.Revision,
+		Phase:               boundAdviceText(strings.TrimSpace(envelope.Phase), maxAdviceTextBytes),
+		Summary:             boundAdviceText(summary, maxAdviceSummaryBytes),
+		VerificationOutcome: boundAdviceText(strings.TrimSpace(envelope.VerificationOutcome), maxAdviceTextBytes),
+		VerificationDone:    boundAdviceStrings(envelope.VerificationDone),
+		MissingVerification: boundAdviceStrings(envelope.MissingVerification),
+		StaleVerification:   boundAdviceStrings(envelope.StaleVerification),
+		PendingDecision:     pending,
+		Degraded:            envelope.Degraded,
+		Actions:             boundAdviceActions(envelope.Actions),
+		Warnings:            boundAdviceStrings(envelope.Warnings),
+	}, nil
+}
+
+type handoffEnvelope struct {
+	TaskID       string `json:"taskId"`
+	Revision     int64  `json:"revision"`
+	Phase        string `json:"phase"`
+	Verification struct {
+		Outcome string `json:"outcome"`
+	} `json:"verification"`
+	Receipts []handoffReceipt `json:"receipts"`
+}
+
+type handoffReceipt struct {
+	ID          string   `json:"id"`
+	BatchID     string   `json:"batchId"`
+	ClaimID     string   `json:"claimId"`
+	Claim       string   `json:"claim"`
+	Purpose     string   `json:"purpose"`
+	Status      string   `json:"status"`
+	Binding     string   `json:"binding"`
+	Evidence    []string `json:"evidence"`
+	Artifact    string   `json:"artifact"`
+	Revision    string   `json:"revision"`
+	DirtyDigest string   `json:"dirtyDigest"`
+}
+
+func (c *Cortex) criterionEvidence(ctx context.Context, taskID string, caseRevision int64) (map[string]CriterionProof, WorkspaceRevision, error) {
+	content, err := c.callRaw(ctx, handoffTool, map[string]any{
+		"taskId":    taskID,
+		"workspace": c.workspace,
+	})
+	if err != nil {
+		return nil, WorkspaceRevision{}, err
+	}
+	var handoff handoffEnvelope
+	if err := json.Unmarshal([]byte(primaryJSONContent(content)), &handoff); err != nil {
+		return nil, WorkspaceRevision{}, fmt.Errorf("decode handoff: %w", err)
+	}
+	if strings.TrimSpace(handoff.TaskID) != strings.TrimSpace(taskID) || handoff.Revision != caseRevision ||
+		!strings.EqualFold(handoff.Phase, "complete") || !strings.EqualFold(handoff.Verification.Outcome, "verified") {
+		return nil, WorkspaceRevision{}, fmt.Errorf("handoff identity, revision, phase, or verification does not match status")
+	}
+	revisionFn := c.revision
+	if revisionFn == nil {
+		revisionFn = CurrentWorkspaceRevision
+	}
+	current, err := revisionFn(ctx, c.workspace)
+	if err != nil {
+		return nil, WorkspaceRevision{}, fmt.Errorf("read current workspace revision: %w", err)
+	}
+
+	batchEvidence := make(map[string][]string)
+	for _, receipt := range handoff.Receipts {
+		if receipt.Purpose != "verifier_run" || strings.TrimSpace(receipt.BatchID) == "" ||
+			!strings.EqualFold(receipt.Status, "passed") || receipt.Binding != "bound" || !receiptMatchesWorkspace(receipt, current) {
+			continue
+		}
+		refs := receiptEvidenceRefs(taskID, receipt)
+		if len(refs) > 0 {
+			batchEvidence[receipt.BatchID] = appendUniqueAdviceRefs(batchEvidence[receipt.BatchID], refs...)
+		}
+	}
+
+	result := make(map[string]CriterionProof)
+	conflicts := make(map[string]struct{})
+	for _, receipt := range handoff.Receipts {
+		claimID := strings.TrimSpace(receipt.ClaimID)
+		claim := strings.TrimSpace(receipt.Claim)
+		if _, conflicted := conflicts[claimID]; conflicted {
+			continue
+		}
+		batchRefs := batchEvidence[receipt.BatchID]
+		if receipt.Purpose != "named_claim" || claimID == "" || len(claimID) > goal.MaxCriterionIDBytes ||
+			claim == "" || len(claim) > goal.MaxCriterionBytes || len(batchRefs) == 0 ||
+			!strings.EqualFold(receipt.Status, "passed") || receipt.Binding != "bound" || !receiptMatchesWorkspace(receipt, current) {
+			continue
+		}
+		refs := receiptEvidenceRefs(taskID, receipt)
+		refs = appendUniqueAdviceRefs(refs, batchRefs...)
+		if len(refs) > 0 {
+			proof := CriterionProof{
+				Claim:       claim,
+				Evidence:    refs,
+				Revision:    receipt.Revision,
+				DirtyDigest: receipt.DirtyDigest,
+			}
+			if previous, exists := result[claimID]; exists && !reflect.DeepEqual(previous, proof) {
+				delete(result, claimID)
+				conflicts[claimID] = struct{}{}
+				continue
+			}
+			result[claimID] = proof
+		}
+	}
+	return result, current, nil
+}
+
+func receiptMatchesWorkspace(receipt handoffReceipt, current WorkspaceRevision) bool {
+	return current.Valid() && receipt.Revision == current.Commit && receipt.DirtyDigest == current.DirtyDigest
+}
+
+func receiptEvidenceRefs(taskID string, receipt handoffReceipt) []string {
+	refs := make([]string, 0, len(receipt.Evidence)+2)
+	if id := boundAdviceText(strings.TrimSpace(receipt.ID), maxAdviceTextBytes); id != "" {
+		refs = append(refs, "case://"+strings.TrimSpace(taskID)+"/verification/"+id)
+	}
+	for _, ref := range receipt.Evidence {
+		if ref = strings.TrimSpace(ref); ref != "" {
+			refs = appendUniqueAdviceRefs(refs, boundAdviceText(ref, maxAdviceTextBytes))
+		}
+	}
+	if artifact := strings.TrimSpace(receipt.Artifact); artifact != "" {
+		refs = appendUniqueAdviceRefs(refs, boundAdviceText(artifact, maxAdviceTextBytes))
+	}
+	return refs
+}
+
+func appendUniqueAdviceRefs(destination []string, values ...string) []string {
+	seen := make(map[string]struct{}, len(destination)+len(values))
+	for _, value := range destination {
+		seen[value] = struct{}{}
+	}
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		destination = append(destination, value)
+		if len(destination) >= maxAdviceItems {
+			break
+		}
+	}
+	return destination
+}
+
+func (c *Cortex) callRaw(ctx context.Context, tool string, args map[string]any) (string, error) {
+	if ctx == nil {
+		return "", fmt.Errorf("%w: context is nil", ErrRejected)
+	}
+	exposed, direct := c.registry.ResolveToolName(tool)
+	callArgs := args
+	if !direct {
+		var gateway bool
+		exposed, gateway = c.registry.ResolveToolName(gatewayTool)
+		if !gateway {
+			return "", fmt.Errorf("%w: neither %s nor the MCPHub gateway is connected", ErrUnavailable, tool)
+		}
+		callArgs = map[string]any{"server": "cortex", "tool": tool, "arguments": args}
+	}
+	result, err := c.registry.CallTool(ctx, exposed, callArgs)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", tool, err)
+	}
+	if result == nil {
+		return "", fmt.Errorf("%w: %s returned no receipt", ErrUnavailable, tool)
+	}
+	if result.IsError {
+		return "", fmt.Errorf("%w: %s", ErrRejected, boundAdviceText(strings.TrimSpace(result.Content), maxAdviceSummaryBytes))
+	}
+	return result.Content, nil
+}
+
+func primaryJSONContent(content string) string {
+	content = strings.TrimSpace(content)
+	if marker := strings.Index(content, "\nstructured: "); marker >= 0 {
+		return strings.TrimSpace(content[:marker])
+	}
+	if strings.HasPrefix(content, "structured: ") {
+		return strings.TrimSpace(strings.TrimPrefix(content, "structured: "))
+	}
+	return content
+}
+
+func boundAdviceActions(values []Action) []Action {
+	if len(values) == 0 {
+		return nil
+	}
+	if len(values) > maxAdviceItems {
+		values = values[:maxAdviceItems]
+	}
+	result := make([]Action, 0, len(values))
+	for _, value := range values {
+		value.Tool = boundAdviceText(strings.TrimSpace(value.Tool), maxAdviceTextBytes)
+		value.Reason = boundAdviceText(strings.TrimSpace(value.Reason), maxAdviceTextBytes)
+		value.Inputs = boundAdviceStrings(value.Inputs)
+		value.BlockedBy = boundAdviceStrings(value.BlockedBy)
+		// Arguments are already bounded by the MCP result cap. Clone the map so
+		// callers cannot mutate a reused decoder value; the host treats it only
+		// as prompt context and never dispatches it.
+		if value.Arguments != nil {
+			value.Arguments = cloneAdviceArguments(value.Arguments)
+		}
+		result = append(result, value)
+	}
+	return result
+}
+
+func cloneAdviceArguments(values map[string]any) map[string]any {
+	result := make(map[string]any, len(values))
+	for key, value := range values {
+		key = boundAdviceText(strings.TrimSpace(key), maxAdviceTextBytes)
+		if key != "" {
+			result[key] = value
+		}
+	}
+	return result
+}
+
+func boundAdviceStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	if len(values) > maxAdviceItems {
+		values = values[:maxAdviceItems]
+	}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if value = boundAdviceText(strings.TrimSpace(value), maxAdviceTextBytes); value != "" {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+func boundAdviceText(value string, limit int) string {
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	for limit > 0 && !utf8.RuneStart(value[limit]) {
+		limit--
+	}
+	return value[:limit]
+}

@@ -1,0 +1,23 @@
+
+  Goal paused · unproductive turn: LLM response: no model selected
+
+  Goal · paused
+  Ship a polished goal UI
+    · The durable goal status is visible and accurate
+  Budget · 0/8 continuations · 0/12k eval tokens · 0s/30m
+  Cortex · not linked (bounded local goal)
+  Status · unproductive turn: LLM response: no model selected
+
+  Goal dropped without claiming completion.
+
+  Goal · dropped
+  Ship a polished goal UI
+    · The durable goal status is visible and accurate
+  Budget · 0/8 continuations · 0/12k eval tokens
+  Cortex · not linked (bounded local goal)
+  Status · dropped by user
+
+
+───────────────────────────────────────────────────────────────────────────────
+ × dropped · Ship a polished goal UI · 0/8 auto turns · 0/12k tok
+❯ Ask, @mention files, or type /help

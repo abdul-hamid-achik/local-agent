@@ -29,6 +29,7 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
 	"github.com/abdul-hamid-achik/local-agent/internal/execution"
+	"github.com/abdul-hamid-achik/local-agent/internal/goal"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 	"github.com/abdul-hamid-achik/local-agent/internal/permission"
 	"github.com/abdul-hamid-achik/local-agent/internal/safeio"
@@ -57,6 +58,7 @@ const (
 	OverlaySettings
 	OverlayAgentPicker
 	OverlayModePicker
+	OverlayGoalForm
 	OverlayRuntimeStatus
 )
 
@@ -229,7 +231,22 @@ type Model struct {
 	modePickerState     *ModePickerState
 	runtimeStatusState  *RuntimeStatusState
 	planFormState       *PlanFormState
+	goalFormState       *GoalForm
 	modelPinned         bool
+
+	// Goal Runtime. The host owns continuation, budget, cancellation and
+	// persistence; Cortex is an advisory semantic state machine only.
+	goalRuntime          *goal.Runtime
+	goalAdvisor          GoalAdvisor
+	goalOperation        string
+	goalOperationToken   uint64
+	goalOperationCancel  context.CancelFunc
+	goalOperationRunning bool
+	goalTurnID           string
+	goalTurnToolCalls    int
+	goalTurnSuccesses    int
+	goalNeedsEvaluation  bool
+	goalPersistenceDirty bool
 
 	// Logging
 	logger *log.Logger
@@ -371,6 +388,9 @@ func (m *Model) SetInitCancel(cancel context.CancelFunc) {
 
 func (m *Model) beginShutdown() tea.Cmd {
 	m.shuttingDown = true
+	if m.goalOperationCancel != nil {
+		m.goalOperationCancel()
+	}
 	m.fileOpToken++
 	m.fileLoading = false
 	if m.initCancel != nil {
@@ -400,7 +420,7 @@ func (m *Model) beginShutdown() tea.Cmd {
 }
 
 func (m *Model) shutdownReady() bool {
-	return m.cancel == nil && !m.commitRunning && !m.exportRunning
+	return m.cancel == nil && !m.commitRunning && !m.exportRunning && !m.goalOperationRunning
 }
 
 func (m *Model) appendShutdownQuit(commands *[]tea.Cmd) {
@@ -457,6 +477,10 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		// Update tool card styles for theme.
 		m.toolCardMgr.SetDark(msg.IsDark())
 		m.restylePickerOverlays()
+		if m.goalFormState != nil {
+			m.goalFormState.SetTheme(m.isDark)
+			m.goalFormState.SetReducedMotion(m.reducedMotion)
+		}
 		// Recreate markdown renderer for new theme.
 		if m.width > 0 {
 			m.markdownWidth = m.chatContentWidth()
@@ -531,6 +555,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			m.resizeHelpViewport(true)
 		}
 		m.resizePickerOverlays()
+		if m.goalFormState != nil {
+			m.goalFormState.SetSize(m.width, m.height)
+		}
 
 		// Input width matches viewport exactly - they're one unified area
 		if msg.Width < 36 {
@@ -702,6 +729,16 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.goalOperation != "" {
+			switch {
+			case key.Matches(msg, m.keys.Quit):
+				m.cancelGoalOperation("Goal operation cancelled during shutdown.")
+				return m, m.beginShutdown()
+			case key.Matches(msg, m.keys.Cancel):
+				m.cancelGoalOperation("Goal operation cancelled; the goal is paused.")
+			}
+			return m, nil
+		}
 		// Quit remains global even while a list/modal owns keyboard focus.
 		// Bubbles list quit bindings are deliberately disabled so Ctrl+C must
 		// follow the application's graceful cancel/join path here.
@@ -720,6 +757,8 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 					m.closeModelPicker()
 				case OverlayPlanForm:
 					m.closePlanForm()
+				case OverlayGoalForm:
+					m.closeGoalForm()
 				case OverlaySessionsPicker:
 					// If the list is filtering, let ESC clear the filter first.
 					if m.sessionsPickerState != nil && m.sessionsPickerState.ready() && m.sessionsPickerState.List.FilterState() == list.Filtering {
@@ -838,6 +877,20 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 					return m, m.submitPlanFormPrompt(prompt)
 				}
 				return m, nil
+			}
+
+			if m.overlay == OverlayGoalForm && m.goalFormState != nil {
+				event, cmd := m.goalFormState.Update(msg)
+				if cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+				switch event.Action {
+				case GoalActionCancel:
+					m.closeGoalForm()
+				case GoalActionSave:
+					cmds = append(cmds, m.applyGoalForm(event))
+				}
+				return m, tea.Batch(cmds...)
 			}
 
 			// Sessions picker overlay: forward keys to list, Enter loads.
@@ -1175,6 +1228,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		m.sessionPromptTotal += msg.PromptTokens
 
 	case ToolCallStartMsg:
+		if m.goalTurnID != "" {
+			m.goalTurnToolCalls++
+		}
 		startToolSpinner := m.state != StateStreaming && m.toolsPending == 0
 		if m.state == StateWaiting {
 			m.state = StateStreaming
@@ -1226,6 +1282,12 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 	case PlanFormCompletedMsg:
 		return m, m.submitPlanFormPrompt(msg.Prompt)
 
+	case goalOpenResultMsg:
+		return m, m.handleGoalOpenResult(msg)
+
+	case goalStatusResultMsg:
+		return m, m.handleGoalStatusResult(msg)
+
 	case ToolCallResultMsg:
 		m.invalidateEntryCache()
 		if m.logger != nil {
@@ -1264,6 +1326,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		}
 		if !matched {
 			break
+		}
+		if m.goalTurnID != "" && !msg.IsError {
+			m.goalTurnSuccesses++
 		}
 		// Update tool card
 		cardState := ToolCardSuccess
@@ -1306,6 +1371,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		followWasPaused := m.followPaused()
 		followYOffset := m.viewport.YOffset()
 		m.flushStream()
+		m.settleGoalTurn(msg)
 		if msg.Err == nil {
 			m.sessionTurnCount++
 		}
@@ -1351,6 +1417,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		// Persist a lossless state snapshot after every settled attempt. Failed
 		// turns may contain cancellation or unknown-outcome receipts that must
 		// survive restart even though they do not count as completed turns.
+		settledPersisted := m.sessionID <= 0 || m.sessionStore == nil
 		if m.sessionID > 0 && m.sessionStore != nil {
 			previousCursor := m.executionCursor
 			var cursorErr error
@@ -1378,9 +1445,32 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			}
 			cancel()
 			if persistErr := errors.Join(cursorErr, saveErr, usageErr); persistErr != nil {
+				settledPersisted = false
+				if m.goalRuntime != nil {
+					m.goalPersistenceDirty = true
+				}
 				m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("Save session: %v", persistErr)})
 				m.viewport.SetContent(m.renderEntries())
 				m.restoreFollowPosition(followWasPaused, followYOffset)
+			} else {
+				settledPersisted = true
+				if m.goalRuntime != nil {
+					m.goalPersistenceDirty = false
+				}
+			}
+		}
+		if m.goalNeedsEvaluation && !m.shuttingDown {
+			if settledPersisted {
+				m.doneFlash = false
+				if cmd := m.beginGoalEvaluation(false); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+			} else if m.goalRuntime != nil {
+				m.goalNeedsEvaluation = false
+				if snapshot, err := m.goalRuntime.Snapshot(context.Background()); err == nil && snapshot.State == goal.StateActive {
+					_ = m.goalRuntime.Pause(context.Background(), "settled goal turn could not be persisted")
+				}
+				m.appendGoalError("Goal continuation stopped because the settled turn was not durably saved.")
 			}
 		}
 		m.appendShutdownQuit(&cmds)
@@ -1666,6 +1756,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 				m.agent.SetCheckpointSessionID(msg.SessionID)
 				m.agent.SetExecutionSessionID(msg.SessionID)
 				m.agent.SetExecutionSnapshotCursor(m.executionCursor)
+				if err := m.recoverRestoredGoal(); err != nil {
+					m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("Restore goal recovery: %v", err)})
+				}
 				m.legacyCheckpointPreview = nil
 				m.entries = append(m.entries, ChatEntry{Kind: "system", Content: fmt.Sprintf("Restored session: %s", msg.Title)})
 				if msg.RecoveryWarning != "" {
@@ -2012,6 +2105,13 @@ func (m *Model) buildCommandContext() *command.Context {
 		NumCtx:             m.numCtx,
 		CurrentModel:       m.model,
 		FileChanges:        m.fileChanges,
+	}
+	if m.goalRuntime != nil {
+		if snapshot, err := m.goalRuntime.Snapshot(context.Background()); err == nil {
+			ctx.GoalConfigured = true
+			ctx.GoalObjective = snapshot.Objective
+			ctx.GoalStatus = string(snapshot.State)
+		}
 	}
 
 	if m.skillMgr != nil {
@@ -2413,6 +2513,33 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 		m.claimLegacyICE(result.Data)
 		return nil
 
+	case command.ActionOpenGoal:
+		if err := m.openGoalForm(result.Data, false); err != nil {
+			m.appendGoalError(err.Error())
+		}
+		return nil
+
+	case command.ActionEditGoalBudget:
+		if err := m.openGoalForm("", true); err != nil {
+			m.appendGoalError(err.Error())
+		}
+		return nil
+
+	case command.ActionShowGoal:
+		m.showGoal()
+		return nil
+
+	case command.ActionPauseGoal:
+		m.pauseGoal()
+		return nil
+
+	case command.ActionResumeGoal:
+		return m.resumeGoal()
+
+	case command.ActionDropGoal:
+		m.dropGoal()
+		return nil
+
 	default:
 		// ActionNone — just show text.
 		if result.Text != "" {
@@ -2428,6 +2555,20 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 }
 
 func (m *Model) resetConversationSession() {
+	if m.goalOperationCancel != nil {
+		m.goalOperationCancel()
+	}
+	m.goalOperationCancel = nil
+	m.goalOperation = ""
+	m.goalOperationRunning = false
+	m.goalOperationToken++
+	m.goalRuntime = nil
+	m.goalFormState = nil
+	m.goalTurnID = ""
+	m.goalTurnToolCalls = 0
+	m.goalTurnSuccesses = 0
+	m.goalNeedsEvaluation = false
+	m.goalPersistenceDirty = false
 	m.cancelSessionLoad()
 	m.cancelSessionList()
 	m.sessionID = 0
@@ -2895,6 +3036,25 @@ func (m *Model) completionDraft() string {
 
 // sendToAgent sends a message to the agent, setting mode context first.
 func (m *Model) sendToAgent(text string) tea.Cmd {
+	turnID, err := execution.NewTurnID()
+	if err != nil {
+		return m.failTurnBeforeRun(text, fmt.Sprintf("Create turn identity: %v", err))
+	}
+	return m.sendToAgentTurn(text, turnID)
+}
+
+// sendToAgentTurn dispatches a message under an already-reserved identity.
+// Goal continuation permits are consumed before this call, so replacing the
+// ID here would sever crash recovery from the execution ledger.
+func (m *Model) sendToAgentTurn(text, turnID string) tea.Cmd {
+	return m.sendToAgentTurnPresented(text, turnID, true, agent.TurnLimits{})
+}
+
+func (m *Model) sendGoalToAgentTurn(text, turnID string, limits agent.TurnLimits) tea.Cmd {
+	return m.sendToAgentTurnPresented(text, turnID, false, limits)
+}
+
+func (m *Model) sendToAgentTurnPresented(text, turnID string, visible bool, limits agent.TurnLimits) tea.Cmd {
 	m.cancelSessionLoad()
 	m.cancelSessionList()
 	messagesBeforeTurn := m.agent.Messages()
@@ -2917,56 +3077,19 @@ func (m *Model) sendToAgent(text string) tea.Cmd {
 	m.turnEvalTotal = 0
 	m.turnPromptTotal = 0
 
-	m.entries = append(m.entries, ChatEntry{
-		Kind:    "user",
-		Content: text,
-	})
+	if visible {
+		m.entries = append(m.entries, ChatEntry{
+			Kind:    "user",
+			Content: text,
+		})
+	}
 	m.viewport.SetContent(m.renderEntries())
 	m.gotoBottomIfFollowing()
 
-	if m.sessionID == 0 && m.sessionStore != nil {
-		workspaceID, workspaceErr := canonicalWorkspaceID(m.agent.WorkDir())
-		var session db.Session
-		var err error
-		if workspaceErr != nil {
-			err = workspaceErr
-		} else {
-			session, err = m.sessionStore.CreateSession(context.Background(), db.CreateSessionParams{
-				Title: sessionTitle(text), Model: m.model, Mode: cfg.Label, WorkspaceID: workspaceID,
-			})
-		}
-		if err != nil {
-			return m.failTurnBeforeRun(text, fmt.Sprintf("Create session: %v", err))
-		} else {
-			lease, leaseErr := m.sessionStore.AcquireExecutionSessionLease(context.Background(), session.ID, session.WorkspaceID)
-			if leaseErr != nil {
-				cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), time.Second)
-				cleanupErr := m.sessionStore.DeleteSession(cleanupCtx, session.ID)
-				cancelCleanup()
-				if cleanupErr != nil {
-					leaseErr = errors.Join(leaseErr, fmt.Errorf("cleanup session: %w", cleanupErr))
-				}
-				return m.failTurnBeforeRun(text, fmt.Sprintf("Lock session: %v", leaseErr))
-			}
-			m.sessionID = session.ID
-			m.executionCursor = 0
-			m.executionLease = lease
-			createdSession = true
-			m.agent.SetCheckpointSessionID(session.ID)
-			m.agent.SetExecutionSessionID(session.ID)
-			m.agent.SetExecutionSnapshotCursor(0)
-		}
-	}
-	if m.sessionID > 0 && m.sessionStore != nil && m.executionLease == nil {
-		workspaceID, workspaceErr := canonicalWorkspaceID(m.agent.WorkDir())
-		if workspaceErr != nil {
-			return m.failTurnBeforeRun(text, fmt.Sprintf("Lock session: %v", workspaceErr))
-		}
-		lease, leaseErr := m.sessionStore.AcquireExecutionSessionLease(context.Background(), m.sessionID, workspaceID)
-		if leaseErr != nil {
-			return m.failTurnBeforeRun(text, fmt.Sprintf("Lock session: %v", leaseErr))
-		}
-		m.executionLease = lease
+	var sessionErr error
+	createdSession, sessionErr = m.ensureExecutionSession(text, cfg.Label)
+	if sessionErr != nil {
+		return m.failPresentedTurnBeforeRun(text, sessionErr.Error(), visible)
 	}
 
 	// Set mode context on the agent.
@@ -3008,10 +3131,10 @@ func (m *Model) sendToAgent(text string) tea.Cmd {
 				m.agent.SetExecutionSessionID(0)
 				m.agent.SetExecutionSnapshotCursor(0)
 				if cleanupFailure := errors.Join(leaseErr, cleanupErr); cleanupFailure != nil {
-					return m.failTurnBeforeRun(text, fmt.Sprintf("Save session: %v (cleanup: %v)", err, cleanupFailure))
+					return m.failPresentedTurnBeforeRun(text, fmt.Sprintf("Save session: %v (cleanup: %v)", err, cleanupFailure), visible)
 				}
 			}
-			return m.failTurnBeforeRun(text, fmt.Sprintf("Save session: %v", err))
+			return m.failPresentedTurnBeforeRun(text, fmt.Sprintf("Save session: %v", err), visible)
 		}
 	}
 
@@ -3031,8 +3154,8 @@ func (m *Model) sendToAgent(text string) tea.Cmd {
 
 	runAgent := func() tea.Msg {
 		adapter := NewAdapter(p)
-		err := m.agent.Run(ctx, adapter)
-		return AgentDoneMsg{Err: err}
+		err := m.agent.RunTurnWithLimits(ctx, adapter, turnID, limits)
+		return AgentDoneMsg{TurnID: turnID, Err: err}
 	}
 
 	m.scramble.Reset()
@@ -3040,6 +3163,74 @@ func (m *Model) sendToAgent(text string) tea.Cmd {
 		return runAgent
 	}
 	return tea.Batch(m.scramble.Tick(), runAgent)
+}
+
+func (m *Model) failPresentedTurnBeforeRun(text, message string, visible bool) tea.Cmd {
+	if visible {
+		return m.failTurnBeforeRun(text, message)
+	}
+	m.entries = append(m.entries, ChatEntry{Kind: "error", Content: message})
+	m.state = StateIdle
+	m.input.Focus()
+	m.syncInputHeight()
+	m.recalcViewportHeight()
+	m.invalidateEntryCache()
+	m.viewport.SetContent(m.renderEntries())
+	m.resumeFollow()
+	return nil
+}
+
+// ensureExecutionSession creates or reacquires the durable session boundary
+// before a turn (or a Goal Runtime) can own work. Keeping this operation
+// separate lets explicit goal creation bind Cortex and persist its state before
+// the first provider command is dispatched.
+func (m *Model) ensureExecutionSession(title, modeLabel string) (bool, error) {
+	if m.sessionStore == nil {
+		return false, nil
+	}
+	if m.sessionID > 0 {
+		if m.executionLease != nil {
+			return false, nil
+		}
+		workspaceID, err := canonicalWorkspaceID(m.agent.WorkDir())
+		if err != nil {
+			return false, fmt.Errorf("lock session: %w", err)
+		}
+		lease, err := m.sessionStore.AcquireExecutionSessionLease(context.Background(), m.sessionID, workspaceID)
+		if err != nil {
+			return false, fmt.Errorf("lock session: %w", err)
+		}
+		m.executionLease = lease
+		return false, nil
+	}
+
+	workspaceID, err := canonicalWorkspaceID(m.agent.WorkDir())
+	if err != nil {
+		return false, fmt.Errorf("create session: %w", err)
+	}
+	session, err := m.sessionStore.CreateSession(context.Background(), db.CreateSessionParams{
+		Title: sessionTitle(title), Model: m.model, Mode: modeLabel, WorkspaceID: workspaceID,
+	})
+	if err != nil {
+		return false, fmt.Errorf("create session: %w", err)
+	}
+	lease, leaseErr := m.sessionStore.AcquireExecutionSessionLease(context.Background(), session.ID, session.WorkspaceID)
+	if leaseErr != nil {
+		cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), time.Second)
+		cleanupErr := m.sessionStore.DeleteSession(cleanupCtx, session.ID)
+		cancelCleanup()
+		if cleanupErr != nil {
+			leaseErr = errors.Join(leaseErr, fmt.Errorf("cleanup session: %w", cleanupErr))
+		}
+		return false, fmt.Errorf("lock session: %w", leaseErr)
+	}
+	m.sessionID = session.ID
+	m.executionCursor = 0
+	m.executionLease = lease
+	m.agent.SetCheckpointSessionID(session.ID)
+	m.agent.SetExecutionSessionID(session.ID)
+	m.agent.SetExecutionSnapshotCursor(0)
+	return true, nil
 }
 
 func (m *Model) failTurnBeforeRun(text, message string) tea.Cmd {

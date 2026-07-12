@@ -73,6 +73,10 @@ func (m *Model) View() tea.View {
 			if m.planFormState != nil {
 				overlay, localCursor = m.renderPlanFormView()
 			}
+		case OverlayGoalForm:
+			if m.goalFormState != nil {
+				overlay, localCursor = m.goalFormState.ViewWithCursor()
+			}
 		case OverlaySessionsPicker:
 			if m.sessionsPickerState != nil {
 				overlay = m.renderSessionsPicker()
@@ -325,6 +329,9 @@ func (m *Model) renderStatusLine() string {
 	}
 	if m.state != StateIdle || m.composerIsBusy() {
 		return ""
+	}
+	if summary, ok := m.goalStatusSummary(); ok {
+		return " " + RenderGoalStatusLine(summary, max(1, paneW-1), m.isDark)
 	}
 	conversationStarted := m.conversationStarted()
 	hasNotice := m.hasTranscriptNotice()

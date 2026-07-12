@@ -444,6 +444,7 @@ func TestOtherOverlaysSwallowMouseWheel(t *testing.T) {
 		OverlaySettings,
 		OverlayAgentPicker,
 		OverlayModePicker,
+		OverlayGoalForm,
 	}
 	for _, overlay := range overlays {
 		t.Run(overlayName(overlay), func(t *testing.T) {
@@ -498,6 +499,8 @@ func overlayName(overlay OverlayKind) string {
 		return "agent"
 	case OverlayModePicker:
 		return "mode"
+	case OverlayGoalForm:
+		return "goal"
 	case OverlayRuntimeStatus:
 		return "runtime"
 	default:

@@ -54,7 +54,10 @@ type SystemMessageMsg struct {
 }
 
 // AgentDoneMsg signals the agent loop has completed.
-type AgentDoneMsg struct{ Err error }
+type AgentDoneMsg struct {
+	TurnID string
+	Err    error
+}
 
 // ShutdownMsg requests a graceful stop. Active turns are cancelled and joined
 // before BubbleTea exits so dispatched effects receive a final receipt.

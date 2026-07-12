@@ -1,0 +1,23 @@
+       ╭────────────────────────────────────────────────────────────────╮
+       │ Goal                                                           │
+       │ Define done, then bound the run.                               │
+       │                                                                │
+       │ Objective                                                      │
+       │ > Ship a polished goal UI                                      │
+       │                                                                │
+       │ Acceptance criteria                                            │
+       │   (required)                                                   │
+       │                                                                │
+       │                                                                │
+       │                                                                │
+       │ Limits · set at least one                                      │
+       │ Auto turns   8                                                 │
+       │ Tokens       12000                                             │
+       │ Time         30m                                               │
+       │                                                                │
+       │ Actions                                                        │
+       │ ▸ Save goal ·   Cancel                                         │
+       │ Create durable goal                                            │
+       │ esc cancel · enter/tab next                                    │
+       ╰────────────────────────────────────────────────────────────────╯
+❯ Ask, @mention files, or type /help

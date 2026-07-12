@@ -135,7 +135,7 @@ func (m *ModelManager) ChatStream(ctx context.Context, opts ChatOptions, fn func
 	m.mu.RUnlock()
 
 	if model == "" {
-		return fmt.Errorf("no model selected")
+		return ErrNoModelSelected
 	}
 
 	client, err := m.getClient(ctx, model)
@@ -169,7 +169,7 @@ func (m *ModelManager) Ping() error {
 	m.mu.RUnlock()
 
 	if model == "" {
-		return fmt.Errorf("no model selected")
+		return ErrNoModelSelected
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -342,7 +342,7 @@ func (m *ModelManager) EmbedWithCurrentModel(ctx context.Context, texts []string
 	m.mu.RUnlock()
 
 	if model == "" {
-		return nil, fmt.Errorf("no model selected")
+		return nil, ErrNoModelSelected
 	}
 	return m.Embed(ctx, model, texts)
 }

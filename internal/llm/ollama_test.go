@@ -89,6 +89,9 @@ func TestOllamaChatStreamPreservesToolWireShape(t *testing.T) {
 		if len(request.Tools) != 1 || request.Tools[0].Function.Name != "read_file" {
 			t.Errorf("tools = %#v", request.Tools)
 		}
+		if request.Options["num_predict"] != float64(23) {
+			t.Errorf("hard generation cap = %#v", request.Options["num_predict"])
+		}
 		_, _ = fmt.Fprintln(w, `{"message":{"role":"assistant","tool_calls":[{"id":"call-new","function":{"name":"read_file","arguments":{"path":"go.mod"}}}]},"done":true}`)
 	}))
 	defer server.Close()
@@ -98,7 +101,7 @@ func TestOllamaChatStreamPreservesToolWireShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	options := ChatOptions{
-		System: "local only",
+		System: "local only", MaxEvalTokens: 23,
 		Messages: []Message{
 			{
 				Role: "assistant",

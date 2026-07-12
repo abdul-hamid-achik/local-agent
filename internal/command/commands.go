@@ -41,6 +41,59 @@ func RegisterBuiltins(r *Registry) {
 	})
 
 	r.Register(&Command{
+		Name:        "goal",
+		Aliases:     []string{"g"},
+		Description: "Create, inspect, pause, resume, budget, or drop a durable goal",
+		Usage:       "/goal [new [objective]|show|pause|resume|budget|drop]",
+		Handler: func(ctx *Context, args []string) Result {
+			if len(args) == 0 {
+				if ctx.GoalConfigured {
+					return Result{Action: ActionShowGoal}
+				}
+				return Result{Action: ActionOpenGoal}
+			}
+
+			switch args[0] {
+			case "new", "set":
+				return Result{Action: ActionOpenGoal, Data: strings.TrimSpace(strings.Join(args[1:], " "))}
+			case "show", "status":
+				if len(args) != 1 {
+					return Result{Error: "usage: /goal show"}
+				}
+				return Result{Action: ActionShowGoal}
+			case "pause":
+				if len(args) != 1 {
+					return Result{Error: "usage: /goal pause"}
+				}
+				return Result{Action: ActionPauseGoal}
+			case "resume", "retry":
+				if len(args) != 1 {
+					return Result{Error: "usage: /goal resume"}
+				}
+				return Result{Action: ActionResumeGoal}
+			case "edit", "budget":
+				if len(args) != 1 {
+					return Result{Error: "usage: /goal budget"}
+				}
+				return Result{Action: ActionEditGoalBudget}
+			case "drop":
+				if len(args) != 1 {
+					return Result{Error: "usage: /goal drop"}
+				}
+				return Result{Action: ActionDropGoal}
+			default:
+				// A free-form suffix is the shortest path from `/goal ship the
+				// release` to the reviewed form. Lifecycle subcommands remain
+				// closed so a flag typo cannot become a state transition.
+				if len(args) == 1 && strings.HasPrefix(args[0], "-") {
+					return Result{Error: "usage: /goal [new [objective]|show|pause|resume|budget|drop]"}
+				}
+				return Result{Action: ActionOpenGoal, Data: strings.TrimSpace(strings.Join(args, " "))}
+			}
+		},
+	})
+
+	r.Register(&Command{
 		Name:        "model",
 		Aliases:     []string{"m"},
 		Description: "Show, switch, or list models",

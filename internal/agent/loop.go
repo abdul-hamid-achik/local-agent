@@ -3,7 +3,9 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -15,10 +17,76 @@ import (
 
 const maxToolCallsPerResponse = 64
 
+var ErrTurnEvalBudgetExhausted = errors.New("turn evaluation-token budget exhausted")
+
+// TurnLimits are hard, per-turn provider limits supplied by a host scheduler.
+// Zero leaves a dimension unlimited. Goal Runtime passes only its remaining
+// budget, so each provider iteration and every later tool dispatch fail closed.
+type TurnLimits struct {
+	MaxEvalTokens int64
+	// Deadline is the immutable host admission deadline. Hosts that own an
+	// absolute wall budget should set this instead of converting the deadline to
+	// a duration before routing, persistence, or command scheduling work.
+	Deadline time.Time
+	// MaxWallTime is retained for callers that only have a relative per-turn
+	// timeout. When both fields are set, the earlier deadline wins.
+	MaxWallTime time.Duration
+}
+
+func (limits TurnLimits) validate() error {
+	if limits.MaxEvalTokens < 0 || limits.MaxWallTime < 0 {
+		return fmt.Errorf("turn limits must not be negative")
+	}
+	return nil
+}
+
+func (limits TurnLimits) bounded() bool {
+	return limits.MaxEvalTokens > 0 || !limits.Deadline.IsZero() || limits.MaxWallTime > 0
+}
+
+func (limits TurnLimits) effectiveDeadline(now time.Time) (time.Time, bool) {
+	deadline := limits.Deadline
+	if limits.MaxWallTime > 0 {
+		relative := now.Add(limits.MaxWallTime)
+		if deadline.IsZero() || relative.Before(deadline) {
+			deadline = relative
+		}
+	}
+	return deadline, !deadline.IsZero()
+}
+
 // Run executes the ReAct loop: query -> LLM -> tool calls -> observe -> repeat.
 // It streams output via the Output interface and returns a terminal error for
 // headless callers and automation.
 func (a *Agent) Run(ctx context.Context, out Output) error {
+	turnID, err := executionPkg.NewTurnID()
+	if err != nil {
+		out.Error(fmt.Sprintf("execution turn identity: %v", err))
+		return fmt.Errorf("execution turn identity: %w", err)
+	}
+	return a.RunTurn(ctx, out, turnID)
+}
+
+// RunTurn executes one ReAct turn under a caller-supplied durable identity.
+// Goal Runtime consumes a continuation permit before dispatch, so the host,
+// execution ledger, and settled goal receipt must share this exact ID. Callers
+// that do not need correlation should use Run.
+func (a *Agent) RunTurn(ctx context.Context, out Output, turnID string) error {
+	return a.RunTurnWithLimits(ctx, out, turnID, TurnLimits{})
+}
+
+// RunTurnWithLimits executes one turn with host-owned hard generation and wall
+// limits. It preserves RunTurn's durable identity and execution-ledger rules.
+func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string, limits TurnLimits) error {
+	if strings.TrimSpace(turnID) == "" || len(turnID) > executionPkg.MaxTurnIDBytes || !utf8.ValidString(turnID) {
+		err := fmt.Errorf("execution turn identity is invalid")
+		out.Error(err.Error())
+		return err
+	}
+	if err := limits.validate(); err != nil {
+		out.Error(err.Error())
+		return err
+	}
 	a.turnMu.Lock()
 	if a.closed {
 		a.turnMu.Unlock()
@@ -33,12 +101,17 @@ func (a *Agent) Run(ctx context.Context, out Output) error {
 		return err
 	}
 	turnCtx, turnCancel := context.WithCancel(ctx)
+	limitCancel := func() {}
+	if deadline, ok := limits.effectiveDeadline(time.Now()); ok {
+		turnCtx, limitCancel = context.WithDeadline(turnCtx, deadline)
+	}
 	turnDone := make(chan struct{})
 	a.turnCancel = turnCancel
 	a.turnDone = turnDone
 	a.turnMu.Unlock()
 	ctx = turnCtx
 	defer func() {
+		limitCancel()
 		turnCancel()
 		close(turnDone)
 		a.turnMu.Lock()
@@ -54,13 +127,18 @@ func (a *Agent) Run(ctx context.Context, out Output) error {
 		out.Error(err.Error())
 		return err
 	}
-	turnID, err := executionPkg.NewTurnID()
-	if err != nil {
-		out.Error(fmt.Sprintf("execution turn identity: %v", err))
-		return fmt.Errorf("execution turn identity: %w", err)
-	}
 	if a.iceEngine != nil {
-		a.iceEngine.CancelAutoMemory()
+		if limits.bounded() {
+			// A bounded turn must not overlap an optional provider generation that
+			// was launched by the previous turn. Cancel and join it before the main
+			// request; the absolute deadline already covers this admission work.
+			a.iceEngine.StopAutoMemory()
+		} else {
+			a.iceEngine.CancelAutoMemory()
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 	}
 
 	var tools []llm.ToolDef
@@ -100,6 +178,7 @@ func (a *Agent) Run(ctx context.Context, out Output) error {
 	const maxRetries = 2
 	var lastPromptTokens int
 	var lastEvalTokens int
+	var totalEvalTokens int64
 	var retryCount int
 
 	maxIters := a.MaxIterations()
@@ -115,7 +194,7 @@ func (a *Agent) Run(ctx context.Context, out Output) error {
 	// Compact before the next provider request as well as after responses. This
 	// protects direct-answer conversations, which may never enter the tool loop,
 	// from submitting an already oversized history to Ollama.
-	if estimated := a.estimatePromptTokens(system, tools); a.shouldCompact(estimated) {
+	if estimated := a.estimatePromptTokens(system, tools); !limits.bounded() && a.shouldCompact(estimated) {
 		if lg != nil {
 			lg.Info("compaction", "phase", "before_request", "prompt_tokens", estimated, "num_ctx", a.numCtx)
 		}
@@ -131,10 +210,23 @@ func (a *Agent) Run(ctx context.Context, out Output) error {
 		default:
 		}
 
+		remainingEvalTokens := int64(0)
+		requestEvalLimit := 0
+		if limits.MaxEvalTokens > 0 {
+			remainingEvalTokens = limits.MaxEvalTokens - totalEvalTokens
+			if remainingEvalTokens <= 0 {
+				return fmt.Errorf("%w: used %d of %d", ErrTurnEvalBudgetExhausted, totalEvalTokens, limits.MaxEvalTokens)
+			}
+			requestEvalLimit = boundedEvalLimit(remainingEvalTokens)
+		}
+
 		// Stream LLM response.
 		var textBuf strings.Builder
 		var toolCalls []llm.ToolCall
 		llmStart := time.Now()
+		lastEvalTokens = 0
+		doneSeen := false
+		reportedEvalTokens := int64(0)
 
 		// Snapshot the message history under the lock: ChatStream runs while
 		// other goroutines may AppendMessage, and passing the live slice would
@@ -145,9 +237,10 @@ func (a *Agent) Run(ctx context.Context, out Output) error {
 		a.mu.RUnlock()
 
 		err := a.llmClient.ChatStream(ctx, llm.ChatOptions{
-			Messages: msgsSnapshot,
-			Tools:    tools,
-			System:   system,
+			Messages:      msgsSnapshot,
+			Tools:         tools,
+			System:        system,
+			MaxEvalTokens: requestEvalLimit,
 		}, func(chunk llm.StreamChunk) error {
 			select {
 			case <-ctx.Done():
@@ -169,19 +262,42 @@ func (a *Agent) Run(ctx context.Context, out Output) error {
 				toolCalls = append(toolCalls, chunk.ToolCalls...)
 			}
 			if chunk.Done {
+				if doneSeen {
+					return fmt.Errorf("provider returned more than one terminal usage receipt")
+				}
+				if chunk.EvalCount < 0 {
+					return fmt.Errorf("invalid provider evaluation-token receipt %d", chunk.EvalCount)
+				}
+				doneSeen = true
 				lastPromptTokens = chunk.PromptEvalCount
 				lastEvalTokens = chunk.EvalCount
+				reportedEvalTokens = int64(chunk.EvalCount)
 				out.StreamDone(chunk.EvalCount, chunk.PromptEvalCount)
 			}
 			return nil
 		})
 
 		if err != nil {
+			reservedEvalTokens := int64(0)
+			if !errors.Is(err, llm.ErrNoModelSelected) {
+				reservedEvalTokens = chargeUnknownEvalReservation(out, requestEvalLimit, reportedEvalTokens)
+			}
+			var reservationErr error
+			if reservedEvalTokens > 0 {
+				reservationErr = fmt.Errorf(
+					"%w: provider stream ended without a trustworthy terminal usage receipt; conservatively charged %d reserved token(s)",
+					ErrTurnEvalBudgetExhausted, reservedEvalTokens,
+				)
+			}
 			if ctx.Err() != nil {
-				return ctx.Err()
+				return errors.Join(ctx.Err(), reservationErr)
+			}
+			if reservationErr != nil {
+				out.Error(reservationErr.Error())
+				return errors.Join(reservationErr, fmt.Errorf("LLM response: %w", err))
 			}
 			// Retry on transient JSON parse errors from small models.
-			if retryCount < maxRetries && isRetryableError(err) {
+			if limits.MaxEvalTokens == 0 && retryCount < maxRetries && isRetryableError(err) {
 				retryCount++
 				if lg != nil {
 					lg.Warn("llm retry", "iter", i, "attempt", retryCount, "err", err)
@@ -200,13 +316,49 @@ func (a *Agent) Run(ctx context.Context, out Output) error {
 			out.SystemMessage(fmt.Sprintf("⚠️ Model response failed: %v\n\nYou can try:\n- Checking if Ollama is running (`ollama ps`)\n- Switching to a different model (ctrl+m)\n- Reducing context size\n\nTool results are still available above.", err))
 			return fmt.Errorf("LLM response: %w", err)
 		}
+		if !doneSeen {
+			reservedEvalTokens := chargeUnknownEvalReservation(out, requestEvalLimit, 0)
+			receiptErr := fmt.Errorf("provider stream ended without a terminal usage receipt")
+			if reservedEvalTokens > 0 {
+				budgetErr := fmt.Errorf(
+					"%w: provider stream ended without a terminal usage receipt; conservatively charged %d reserved token(s)",
+					ErrTurnEvalBudgetExhausted, reservedEvalTokens,
+				)
+				out.Error(budgetErr.Error())
+				return errors.Join(budgetErr, receiptErr)
+			}
+			out.Error(receiptErr.Error())
+			return receiptErr
+		}
 		retryCount = 0 // reset on success
+		if lastEvalTokens < 0 || int64(lastEvalTokens) > math.MaxInt64-totalEvalTokens {
+			return fmt.Errorf("invalid provider evaluation-token receipt %d", lastEvalTokens)
+		}
+		totalEvalTokens += int64(lastEvalTokens)
 		if lg != nil {
 			lg.Info("llm response", "iter", i, "ms", time.Since(llmStart).Milliseconds(),
 				"prompt_tokens", lastPromptTokens, "eval_tokens", lastEvalTokens, "tool_calls", len(toolCalls))
 		}
 		if len(toolCalls) > maxToolCallsPerResponse {
 			err := fmt.Errorf("model returned %d tool calls; maximum per response is %d", len(toolCalls), maxToolCallsPerResponse)
+			out.Error(err.Error())
+			return err
+		}
+		if limits.MaxEvalTokens > 0 && totalEvalTokens > limits.MaxEvalTokens {
+			// A provider that violates num_predict has already crossed the requested
+			// generation boundary. Preserve only its text and stop before creating
+			// any durable execution intents.
+			a.AppendMessage(llm.Message{Role: "assistant", Content: textBuf.String()})
+			err := fmt.Errorf("%w: provider reported %d used token(s) for a %d-token limit", ErrTurnEvalBudgetExhausted, totalEvalTokens, limits.MaxEvalTokens)
+			out.Error(err.Error())
+			return err
+		}
+		if limits.MaxEvalTokens > 0 && totalEvalTokens == limits.MaxEvalTokens && len(toolCalls) > 0 {
+			// The provider may return tool requests on the response that consumes
+			// the final token allowance. Keep its text, but never create durable
+			// dispatch intents or execute effects after the hard boundary.
+			a.AppendMessage(llm.Message{Role: "assistant", Content: textBuf.String()})
+			err := fmt.Errorf("%w before tool dispatch: used %d of %d", ErrTurnEvalBudgetExhausted, totalEvalTokens, limits.MaxEvalTokens)
 			out.Error(err.Error())
 			return err
 		}
@@ -252,14 +404,14 @@ func (a *Agent) Run(ctx context.Context, out Output) error {
 			}
 			a.mu.RUnlock()
 
-			if a.iceEngine != nil && hasEnoughMessages && userContent != "" {
+			if !limits.bounded() && a.iceEngine != nil && hasEnoughMessages && userContent != "" {
 				a.iceEngine.DetectAutoMemory(ctx, userContent, assistantMsg.Content)
 			}
 			estimatedPromptTokens := a.estimatePromptTokens(system, tools)
 			if estimatedPromptTokens < lastPromptTokens {
 				estimatedPromptTokens = lastPromptTokens
 			}
-			if a.shouldCompact(estimatedPromptTokens) {
+			if !limits.bounded() && a.shouldCompact(estimatedPromptTokens) {
 				if lg != nil {
 					lg.Info("compaction", "phase", "direct_response", "prompt_tokens", estimatedPromptTokens, "num_ctx", a.numCtx)
 				}
@@ -543,7 +695,7 @@ func (a *Agent) Run(ctx context.Context, out Output) error {
 		if estimatedPromptTokens < lastPromptTokens {
 			estimatedPromptTokens = lastPromptTokens
 		}
-		if a.shouldCompact(estimatedPromptTokens) {
+		if !limits.bounded() && a.shouldCompact(estimatedPromptTokens) {
 			if lg != nil {
 				lg.Info("compaction", "iter", i, "prompt_tokens", estimatedPromptTokens, "num_ctx", a.numCtx)
 			}
@@ -565,6 +717,35 @@ func (a *Agent) Run(ctx context.Context, out Output) error {
 	limitErr := fmt.Errorf("reached max iterations (%d)", maxIters)
 	out.Error(limitErr.Error())
 	return limitErr
+}
+
+func boundedEvalLimit(remaining int64) int {
+	if remaining <= 0 {
+		return 0
+	}
+	maxInt := int64(^uint(0) >> 1)
+	if remaining > maxInt {
+		return int(maxInt)
+	}
+	return int(remaining)
+}
+
+// chargeUnknownEvalReservation propagates a fail-closed usage receipt when a
+// capped provider request does not return trustworthy terminal accounting. The
+// exact number of generated tokens is unknowable in that failure mode, so the
+// host must consume the unaccounted portion of the per-request reservation
+// before it may admit another goal turn.
+func chargeUnknownEvalReservation(out Output, requestLimit int, reported int64) int64 {
+	if requestLimit <= 0 {
+		return 0
+	}
+	reserved := int64(requestLimit)
+	if reported >= reserved {
+		return 0
+	}
+	missing := reserved - max(int64(0), reported)
+	out.StreamDone(int(missing), 0)
+	return missing
 }
 
 func capToolResultForContext(result string, numCtx int) string {

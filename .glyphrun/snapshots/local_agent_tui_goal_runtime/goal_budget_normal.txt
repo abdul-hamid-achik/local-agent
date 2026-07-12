@@ -1,0 +1,23 @@
+       ╭────────────────────────────────────────────────────────────────╮
+       │ Goal budgets                                                   │
+       │ Definition locked · adjust limits only.                        │
+       │                                                                │
+       │ Objective · locked                                             │
+       │   Ship a polished goal UI                                      │
+       │                                                                │
+       │ Acceptance criteria · locked                                   │
+       │   The durable goal status is visible and accurate              │
+       │                                                                │
+       │                                                                │
+       │                                                                │
+       │ Limits · set at least one                                      │
+       │ Auto turns > 8                                                 │
+       │ Tokens       12000                                             │
+       │ Time         30m                                               │
+       │                                                                │
+       │ Actions                                                        │
+       │ ▸ Save budgets ·   Cancel                                      │
+       │ Update limits only                                             │
+       │ esc cancel · enter/tab next                                    │
+       ╰────────────────────────────────────────────────────────────────╯
+❯ Ask, @mention files, or type /help

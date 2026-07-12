@@ -22,6 +22,7 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
 	executionpkg "github.com/abdul-hamid-achik/local-agent/internal/execution"
+	"github.com/abdul-hamid-achik/local-agent/internal/goaladvisor"
 	"github.com/abdul-hamid-achik/local-agent/internal/ice"
 	"github.com/abdul-hamid-achik/local-agent/internal/initcmd"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
@@ -465,6 +466,7 @@ func run() int {
 	}
 
 	m := ui.New(ag, cmdReg, skillMgr, completer, modelManager, router, logger)
+	m.SetGoalAdvisor(goaladvisor.NewCortex(registry, ag.WorkDir(), "local-agent"))
 	defer func() {
 		ag.Close()
 		if err := m.ReleaseExecutionSessionLease(); err != nil {

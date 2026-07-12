@@ -1,6 +1,13 @@
 package llm
 
-import "context"
+import (
+	"context"
+	"errors"
+)
+
+// ErrNoModelSelected is a local preflight rejection. No provider request or
+// generation can have started when a Client returns this sentinel.
+var ErrNoModelSelected = errors.New("no model selected")
 
 // Client is the interface for LLM providers.
 type Client interface {
@@ -20,9 +27,10 @@ type Client interface {
 
 // ChatOptions holds parameters for a chat request.
 type ChatOptions struct {
-	Messages []Message
-	Tools    []ToolDef
-	System   string
+	Messages      []Message
+	Tools         []ToolDef
+	System        string
+	MaxEvalTokens int // zero leaves provider generation uncapped
 }
 
 // Message represents a conversation message.
