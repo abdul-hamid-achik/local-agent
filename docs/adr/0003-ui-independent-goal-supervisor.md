@@ -195,8 +195,9 @@ never edits history to make a recovery appear clean.
 ## Follow-up
 
 1. Persist the supervisor's pre-turn evaluation basis and first-class
-   goal/run/event projections. The current `goal list`, `goal show`, and
-   `goal pending` commands are read-only projections over session/control data.
+   goal/run/event projections. `goal list`, `goal show`, `goal pending`, and the
+   default `goal recover` dry run are read-only projections; only the complete
+   explicit `goal recover --apply` form is an evidence controller.
 2. Extract the current Bubble Tea scheduling logic behind the supervisor driver
    interfaces.
 3. Add `run --until-blocked`, evidence-backed `goal resume`, and `goal watch`

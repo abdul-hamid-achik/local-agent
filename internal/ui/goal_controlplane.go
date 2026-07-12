@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/controlplane"
-	"github.com/abdul-hamid-achik/local-agent/internal/execution"
 	"github.com/abdul-hamid-achik/local-agent/internal/goal"
 	"github.com/abdul-hamid-achik/local-agent/internal/goaladvisor"
 )
@@ -138,103 +137,6 @@ func (m *Model) resolveCortexDecisionControlItems(snapshot goal.Snapshot, advice
 		}
 	}
 	return nil
-}
-
-func (m *Model) recordExecutionReconciliationControlItem(snapshot goal.Snapshot, state execution.State) error {
-	if m.sessionStore == nil {
-		return nil
-	}
-	if m.executionLease == nil {
-		return fmt.Errorf("durable execution reconciliation requires the active session lease")
-	}
-	workspaceID, err := canonicalWorkspaceID(m.agent.WorkDir())
-	if err != nil {
-		return fmt.Errorf("resolve execution reconciliation workspace: %w", err)
-	}
-	if state.Identity.SessionID != snapshot.SessionID || state.Identity.WorkspaceID != workspaceID || state.Latest.Identity != state.Identity {
-		return fmt.Errorf("execution reconciliation target is outside the exact goal session scope")
-	}
-	if state.Latest.Type != execution.EventOutcomeUnknown &&
-		(state.Latest.Type != execution.EventStarted || state.Identity.EffectClass == execution.EffectReadOnly) {
-		return fmt.Errorf("execution %q does not have an unknown effect outcome", state.Identity.ExecutionID)
-	}
-	turnMatchesGoal := snapshot.LastTurn != nil && snapshot.LastTurn.TurnID == state.Identity.TurnID
-	turnMatchesPermit := snapshot.PendingContinuation != nil && snapshot.PendingContinuation.TurnID == state.Identity.TurnID
-	if !turnMatchesGoal && !turnMatchesPermit {
-		return fmt.Errorf("execution %q turn %q does not match the goal receipt or pending permit", state.Identity.ExecutionID, state.Identity.TurnID)
-	}
-	identityHash := controlplane.HashText(fmt.Sprintf(
-		"execution-reconciliation\x00%d\x00%s\x00%s",
-		snapshot.SessionID, snapshot.ID, state.Identity.ExecutionID,
-	))
-	payload, payloadDigest, err := controlplane.MarshalDocument(map[string]any{
-		"execution_id": state.Identity.ExecutionID,
-		"turn_id":      state.Identity.TurnID,
-		"tool":         boundGoalText(state.Identity.ToolName, controlplane.MaxDetailBytes),
-		"event_type":   state.Latest.Type,
-		"effect_class": state.Identity.EffectClass,
-	})
-	if err != nil {
-		return fmt.Errorf("encode execution reconciliation: %w", err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), goalControlPlaneTimeout)
-	defer cancel()
-	_, _, err = m.sessionStore.AppendControlItem(ctx, m.executionLease, controlplane.Item{
-		ItemID:         "ctrl_execution_" + identityHash[:32],
-		IdempotencyKey: "ctrlidem_execution_" + identityHash[:32],
-		Kind:           controlplane.KindExecutionReconciliation,
-		Identity: controlplane.Identity{
-			SessionID: snapshot.SessionID, WorkspaceID: workspaceID,
-			GoalID: snapshot.ID, ExecutionID: state.Identity.ExecutionID,
-			TurnID: state.Identity.TurnID,
-		},
-		ExternalID:    state.Identity.CanonicalCallID,
-		Summary:       boundGoalText("Reconcile outcome of "+fallbackGoalText(state.Identity.ToolName, "unknown tool"), controlplane.MaxSummaryBytes),
-		PayloadJSON:   payload,
-		PayloadSHA256: payloadDigest,
-	})
-	if err != nil {
-		return fmt.Errorf("persist execution reconciliation: %w", err)
-	}
-	return nil
-}
-
-func (m *Model) recordExecutionReconciliationByID(snapshot goal.Snapshot, executionID string) error {
-	if m.sessionStore == nil || strings.TrimSpace(executionID) == "" {
-		return nil
-	}
-	workspaceID, err := canonicalWorkspaceID(m.agent.WorkDir())
-	if err != nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), goalControlPlaneTimeout)
-	defer cancel()
-	state, err := m.sessionStore.GetExecutionState(ctx, snapshot.SessionID, workspaceID, executionID)
-	if err != nil {
-		return fmt.Errorf("read execution reconciliation target %q: %w", executionID, err)
-	}
-	return m.recordExecutionReconciliationControlItem(snapshot, state)
-}
-
-func (m *Model) recordRestoredTurnReconciliations(snapshot goal.Snapshot, turnID string) error {
-	if m.sessionStore == nil || strings.TrimSpace(turnID) == "" {
-		return nil
-	}
-	workspaceID, err := canonicalWorkspaceID(m.agent.WorkDir())
-	if err != nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), goalControlPlaneTimeout)
-	defer cancel()
-	states, err := m.sessionStore.ListExecutionReconciliationTargets(ctx, snapshot.SessionID, workspaceID, turnID, controlplane.MaxListLimit)
-	if err != nil {
-		return fmt.Errorf("list restored execution reconciliation targets: %w", err)
-	}
-	var joined error
-	for _, state := range states {
-		joined = errors.Join(joined, m.recordExecutionReconciliationControlItem(snapshot, state))
-	}
-	return joined
 }
 
 func (m *Model) protectControlPlaneFailure(operation string, controlErr error) {

@@ -10,7 +10,7 @@ target:
 
 preconditions:
   commands:
-    - run: "go build -o ./bin/local-agent ./cmd/local-agent"
+    - run: "rm -rf .glyphrun/tmp/goal-recover-home .glyphrun/tmp/goal-recover-workdir && mkdir -p .glyphrun/tmp/goal-recover-home .glyphrun/tmp/goal-recover-workdir && go build -o ./bin/local-agent ./cmd/local-agent"
       cwd: "."
       timeoutMs: 30000
 
@@ -40,6 +40,42 @@ outcomes:
     verify:
       screen:
         contains: "override Ollama model"
+  - id: goal_recovery_help_is_explicit
+    description: goal help documents dry-run, complete evidence apply, no-resume behavior, and the absence of a force override
+    verify:
+      command:
+        run: |
+          output="$(HOME='${projectRoot}/.glyphrun/tmp/goal-recover-home' ./bin/local-agent goal help)"
+          printf '%s\n' "$output" | rg -q 'goal recover \[--json\] <session-id>'
+          printf '%s\n' "$output" | rg -q 'goal recover --apply --item ID.*--observed-at RFC3339'
+          printf '%s\n' "$output" | rg -q 'never resumes execution'
+          printf '%s\n' "$output" | rg -q 'no force override'
+  - id: goal_recovery_dry_run_does_not_create_authority
+    description: a default recovery attempt on an absent session fails without creating group, item, or resolution authority
+    verify:
+      command:
+        run: |
+          set +e
+          output="$(cd .glyphrun/tmp/goal-recover-workdir && HOME='${projectRoot}/.glyphrun/tmp/goal-recover-home' '${projectRoot}/bin/local-agent' goal recover 1 2>&1)"
+          code=$?
+          set -e
+          test "$code" -eq 1
+          printf '%s\n' "$output" | rg -q 'goal recover: inspect durable recovery group'
+          db='${projectRoot}/.glyphrun/tmp/goal-recover-home/.config/local-agent/local-agent.db'
+          test "$(sqlite3 "$db" 'SELECT (SELECT COUNT(*) FROM reconciliation_groups) + (SELECT COUNT(*) FROM reconciliation_group_resolutions) + (SELECT COUNT(*) FROM control_items) + (SELECT COUNT(*) FROM control_resolutions);')" = '0'
+  - id: incomplete_goal_recovery_apply_is_rejected_before_mutation
+    description: apply requires the complete evidence form before lease or authority mutation
+    verify:
+      command:
+        run: |
+          set +e
+          output="$(cd .glyphrun/tmp/goal-recover-workdir && HOME='${projectRoot}/.glyphrun/tmp/goal-recover-home' '${projectRoot}/bin/local-agent' goal recover --apply 1 2>&1)"
+          code=$?
+          set -e
+          test "$code" -eq 2
+          printf '%s\n' "$output" | rg -q -- '--apply requires non-empty --item'
+          db='${projectRoot}/.glyphrun/tmp/goal-recover-home/.config/local-agent/local-agent.db'
+          test "$(sqlite3 "$db" 'SELECT (SELECT COUNT(*) FROM reconciliation_groups) + (SELECT COUNT(*) FROM reconciliation_group_resolutions) + (SELECT COUNT(*) FROM control_items) + (SELECT COUNT(*) FROM control_resolutions);')" = '0'
   - id: exits_zero
     description: help exits successfully
     verify:

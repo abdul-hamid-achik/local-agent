@@ -19,11 +19,13 @@ import (
 )
 
 type fakeExecutionLedger struct {
-	mu         sync.Mutex
-	events     []executionpkg.Event
-	unresolved []executionpkg.State
-	fail       map[executionpkg.EventType]error
-	onAppend   func(executionpkg.Event)
+	mu          sync.Mutex
+	events      []executionpkg.Event
+	unresolved  []executionpkg.State
+	fail        map[executionpkg.EventType]error
+	onAppend    func(executionpkg.Event)
+	listCursors []int64
+	listErr     error
 }
 
 type normalizeExecutionArgsHook struct{}
@@ -81,6 +83,10 @@ func (l *fakeExecutionLedger) AppendExecutionEvent(_ context.Context, event exec
 func (l *fakeExecutionLedger) ListExecutionRecoveryHazards(_ context.Context, _ int64, _ string, afterEventID int64, _ int) ([]executionpkg.State, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.listCursors = append(l.listCursors, afterEventID)
+	if l.listErr != nil {
+		return nil, l.listErr
+	}
 	states := make([]executionpkg.State, 0, len(l.unresolved))
 	for _, state := range l.unresolved {
 		if state.Latest.ID == 0 || state.Latest.ID > afterEventID {
@@ -100,6 +106,38 @@ func (l *fakeExecutionLedger) setUnresolved(states []executionpkg.State) {
 	l.mu.Lock()
 	l.unresolved = append([]executionpkg.State(nil), states...)
 	l.mu.Unlock()
+}
+
+func (l *fakeExecutionLedger) setListError(err error) {
+	l.mu.Lock()
+	l.listErr = err
+	l.mu.Unlock()
+}
+
+func (l *fakeExecutionLedger) recoveryCursors() []int64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]int64(nil), l.listCursors...)
+}
+
+type blockingRecoveryLedger struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (l *blockingRecoveryLedger) AppendExecutionEvent(_ context.Context, event executionpkg.Event) (executionpkg.Event, bool, error) {
+	return event, true, nil
+}
+
+func (l *blockingRecoveryLedger) ListExecutionRecoveryHazards(ctx context.Context, _ int64, _ string, _ int64, _ int) ([]executionpkg.State, error) {
+	l.once.Do(func() { close(l.started) })
+	select {
+	case <-l.release:
+		return nil, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 func executionEventTypes(events []executionpkg.Event) []executionpkg.EventType {
@@ -528,6 +566,159 @@ func TestExecutionLedgerStrictModeRefusesPersistedUnknownOutcome(t *testing.T) {
 	}
 	if client.calls != 0 {
 		t.Fatalf("provider ran with persisted unknown outcome: %d", client.calls)
+	}
+}
+
+func TestRecheckExecutionRecoveryRetainsCursorAndQueriesBeforeProvider(t *testing.T) {
+	identity := executionpkg.Identity{
+		SessionID: 42, WorkspaceID: "ignored", RunID: "run_recheck", TurnID: "turn_recheck",
+		ExecutionID: "exec_recheck", IdempotencyKey: "idem_recheck", CanonicalCallID: "call_recheck",
+		ToolName: "server__mutate", Iteration: 1, Ordinal: 1, Kind: executionpkg.KindMCP, EffectClass: executionpkg.EffectUnknown,
+	}
+	ledger := &fakeExecutionLedger{unresolved: []executionpkg.State{{
+		Identity: identity,
+		Latest:   executionpkg.Event{Identity: identity, Type: executionpkg.EventOutcomeUnknown},
+	}}}
+	client := &scriptedClient{responses: [][]llm.StreamChunk{{{Text: "after explicit retry", Done: true}}}}
+	ag, _ := newLedgerAgent(t, client, nil, ledger)
+	ag.SetExecutionSnapshotCursor(23)
+
+	err := ag.Run(context.Background(), &outputRecorder{})
+	var unresolved *UnresolvedExecutionError
+	if !errors.As(err, &unresolved) {
+		t.Fatalf("first Run error = %T %v", err, err)
+	}
+	messagesBefore := ag.Messages()
+	if got := ledger.recoveryCursors(); !reflect.DeepEqual(got, []int64{23}) {
+		t.Fatalf("initial recovery cursors = %v", got)
+	}
+
+	ledger.setUnresolved(nil)
+	if err := ag.RecheckExecutionRecovery(); err != nil {
+		t.Fatalf("RecheckExecutionRecovery() error = %v", err)
+	}
+	if client.calls != 0 {
+		t.Fatalf("recheck scheduled %d provider calls", client.calls)
+	}
+	ag.mu.RLock()
+	gotSession, gotCursor, gotLatch := ag.executionSessionID, ag.executionCursor, ag.unresolvedExecution
+	ag.mu.RUnlock()
+	if gotSession != 42 || gotCursor != 23 || gotLatch != nil {
+		t.Fatalf("execution state after recheck = session %d cursor %d latch %#v", gotSession, gotCursor, gotLatch)
+	}
+	if got := ag.Messages(); !reflect.DeepEqual(got, messagesBefore) {
+		t.Fatalf("recheck changed messages: got %#v want %#v", got, messagesBefore)
+	}
+	if got := ledger.recoveryCursors(); !reflect.DeepEqual(got, []int64{23}) {
+		t.Fatalf("recheck queried outside Run: %v", got)
+	}
+
+	if err := ag.Run(context.Background(), &outputRecorder{}); err != nil {
+		t.Fatalf("explicit Run after durable reconciliation = %v", err)
+	}
+	if got := ledger.recoveryCursors(); !reflect.DeepEqual(got, []int64{23, 23}) {
+		t.Fatalf("recovery cursors after explicit Run = %v", got)
+	}
+	if client.calls != 1 {
+		t.Fatalf("provider calls after explicit Run = %d", client.calls)
+	}
+}
+
+func TestRecheckExecutionRecoveryCannotBypassPersistingHazard(t *testing.T) {
+	identity := executionpkg.Identity{
+		SessionID: 42, WorkspaceID: "ignored", RunID: "run_still_unknown", TurnID: "turn_still_unknown",
+		ExecutionID: "exec_still_unknown", IdempotencyKey: "idem_still_unknown", CanonicalCallID: "call_still_unknown",
+		ToolName: "write", Iteration: 1, Ordinal: 1, Kind: executionpkg.KindBuiltin, EffectClass: executionpkg.Effectful,
+	}
+	ledger := &fakeExecutionLedger{unresolved: []executionpkg.State{{
+		Identity: identity,
+		Latest:   executionpkg.Event{Identity: identity, Type: executionpkg.EventOutcomeUnknown},
+	}}}
+	client := &scriptedClient{responses: [][]llm.StreamChunk{{{Text: "must not run", Done: true}}}}
+	ag, _ := newLedgerAgent(t, client, nil, ledger)
+	ag.SetExecutionSnapshotCursor(11)
+
+	for attempt := 0; attempt < 2; attempt++ {
+		if attempt > 0 {
+			if err := ag.RecheckExecutionRecovery(); err != nil {
+				t.Fatalf("RecheckExecutionRecovery() error = %v", err)
+			}
+		}
+		err := ag.Run(context.Background(), &outputRecorder{})
+		var unresolved *UnresolvedExecutionError
+		if !errors.As(err, &unresolved) || unresolved.ExecutionID != identity.ExecutionID {
+			t.Fatalf("Run %d error = %T %v", attempt+1, err, err)
+		}
+	}
+	if got := ledger.recoveryCursors(); !reflect.DeepEqual(got, []int64{11, 11}) {
+		t.Fatalf("recovery cursors = %v", got)
+	}
+	if client.calls != 0 {
+		t.Fatalf("provider bypassed persistent hazard: %d calls", client.calls)
+	}
+}
+
+func TestRecheckExecutionRecoveryFailsClosedOnProjectionError(t *testing.T) {
+	identity := executionpkg.Identity{
+		SessionID: 42, WorkspaceID: "ignored", RunID: "run_corrupt", TurnID: "turn_corrupt",
+		ExecutionID: "exec_corrupt", IdempotencyKey: "idem_corrupt", CanonicalCallID: "call_corrupt",
+		ToolName: "write", Iteration: 1, Ordinal: 1, Kind: executionpkg.KindBuiltin, EffectClass: executionpkg.Effectful,
+	}
+	ledger := &fakeExecutionLedger{unresolved: []executionpkg.State{{
+		Identity: identity,
+		Latest:   executionpkg.Event{Identity: identity, Type: executionpkg.EventOutcomeUnknown},
+	}}}
+	client := &scriptedClient{responses: [][]llm.StreamChunk{{{Text: "must not run", Done: true}}}}
+	ag, _ := newLedgerAgent(t, client, nil, ledger)
+
+	if err := ag.Run(context.Background(), &outputRecorder{}); err == nil {
+		t.Fatal("first Run accepted an unresolved execution")
+	}
+	ledger.setUnresolved(nil)
+	ledger.setListError(errors.New("corrupt effective projection"))
+	if err := ag.RecheckExecutionRecovery(); err != nil {
+		t.Fatalf("RecheckExecutionRecovery() error = %v", err)
+	}
+	err := ag.Run(context.Background(), &outputRecorder{})
+	if err == nil || !strings.Contains(err.Error(), "corrupt effective projection") {
+		t.Fatalf("Run after projection corruption = %v", err)
+	}
+	if client.calls != 0 {
+		t.Fatalf("provider ran after projection error: %d", client.calls)
+	}
+}
+
+func TestRecheckExecutionRecoveryRejectsActiveTurnAndSchedulesNothing(t *testing.T) {
+	ledger := &blockingRecoveryLedger{started: make(chan struct{}), release: make(chan struct{})}
+	client := &scriptedClient{responses: [][]llm.StreamChunk{{{Text: "done", Done: true}}}}
+	ag := New(client, nil, 4096)
+	ag.SetWorkDir(t.TempDir())
+	ag.SetModeContext("test", BuildToolPolicy())
+	ag.SetPermissionChecker(permission.NewChecker(nil, true))
+	ag.SetExecutionLedger(ledger)
+	ag.SetExecutionSessionID(42)
+	ag.RequireExecutionLedger(true)
+	ag.AddUserMessage("wait at recovery query")
+
+	done := make(chan error, 1)
+	go func() { done <- ag.Run(context.Background(), &outputRecorder{}) }()
+	<-ledger.started
+	recheckErr := ag.RecheckExecutionRecovery()
+	providerCallsBeforeRelease := client.calls
+	close(ledger.release)
+	runErr := <-done
+
+	if !errors.Is(recheckErr, ErrExecutionRecoveryRecheckDuringTurn) {
+		t.Fatalf("active-turn recheck error = %v", recheckErr)
+	}
+	if providerCallsBeforeRelease != 0 {
+		t.Fatalf("recheck scheduled provider work while turn was blocked: %d", providerCallsBeforeRelease)
+	}
+	if runErr != nil {
+		t.Fatalf("original Run error = %v", runErr)
+	}
+	if client.calls != 1 {
+		t.Fatalf("original Run provider calls = %d", client.calls)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -67,6 +68,16 @@ func productiveTurn(id string, tokens int64) TurnReport {
 	return TurnReport{TurnID: id, EvalTokens: tokens, Productive: true, Summary: "completed a verified unit of work"}
 }
 
+func recordAdmittedTurn(t *testing.T, runtime *Runtime, kind TurnAdmissionKind, report TurnReport) {
+	t.Helper()
+	if _, err := runtime.BeginTurn(context.Background(), report.TurnID, kind); err != nil {
+		t.Fatalf("admit %s turn %s: %v", kind, report.TurnID, err)
+	}
+	if err := runtime.RecordTurn(context.Background(), report); err != nil {
+		t.Fatalf("record %s turn %s: %v", kind, report.TurnID, err)
+	}
+}
+
 func completionRequest() CompletionRequest {
 	return CompletionRequest{
 		ValidatedBy: "local-agent-host",
@@ -75,6 +86,17 @@ func completionRequest() CompletionRequest {
 			{CriterionID: "tests", Satisfied: true, Evidence: "go test ./internal/goal passed"},
 			{CriterionID: "recovery", Satisfied: true, Evidence: "outcome-unknown recovery test passed"},
 		},
+	}
+}
+
+func testReconciliationReceipt() *ReconciliationReceipt {
+	return &ReconciliationReceipt{
+		Version:             ReconciliationReceiptVersion,
+		GroupItemID:         "ctrl_turn_group",
+		FinalItemID:         "ctrl_execution_final",
+		FinalResolutionID:   "ctrlres_execution_final",
+		ResolutionSetSHA256: strings.Repeat("a", 64),
+		TargetCount:         1,
 	}
 }
 
@@ -134,14 +156,231 @@ func TestNewGeneratesDistinctGoalIDs(t *testing.T) {
 	}
 }
 
+func TestEveryTurnKindRequiresAndSettlesExactDurableAdmission(t *testing.T) {
+	runtime, _ := testRuntime(t, BudgetLimits{MaxContinuationTurns: 3})
+	ctx := context.Background()
+	initial := productiveTurn("turn_initial", 5)
+
+	if err := runtime.RecordTurn(ctx, initial); !errors.Is(err, ErrTurnPending) {
+		t.Fatalf("unadmitted initial receipt error = %v", err)
+	}
+	if _, err := runtime.BeginTurn(ctx, initial.TurnID, TurnAdmissionKind("forged")); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("invalid admission kind error = %v", err)
+	}
+	admission, err := runtime.BeginTurn(ctx, initial.TurnID, AdmissionInitial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if admission.Kind != AdmissionInitial || admission.Ordinal != 0 {
+		t.Fatalf("initial admission = %#v", admission)
+	}
+	if err := runtime.RecordTurn(ctx, productiveTurn("wrong_initial", 1)); !errors.Is(err, ErrTurnPending) {
+		t.Fatalf("mismatched initial receipt error = %v", err)
+	}
+	if snapshot := mustSnapshot(t, runtime); snapshot.PendingContinuation == nil || snapshot.PendingContinuation.TurnID != initial.TurnID {
+		t.Fatalf("mismatch consumed initial admission: %#v", snapshot.PendingContinuation)
+	}
+	if err := runtime.RecordTurn(ctx, initial); err != nil {
+		t.Fatal(err)
+	}
+
+	manual := productiveTurn("turn_manual", 7)
+	admission, err = runtime.BeginTurn(ctx, manual.TurnID, AdmissionManual)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if admission.Kind != AdmissionManual || admission.Ordinal != 0 {
+		t.Fatalf("manual admission = %#v", admission)
+	}
+	if usage := mustSnapshot(t, runtime).Usage.ContinuationTurns; usage != 0 {
+		t.Fatalf("manual admission consumed %d continuation turns", usage)
+	}
+	if err := runtime.RecordTurn(ctx, manual); err != nil {
+		t.Fatal(err)
+	}
+
+	automatic := productiveTurn("turn_automatic", 11)
+	admission, err = runtime.BeginContinuation(ctx, automatic.TurnID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if admission.Kind != AdmissionAutomatic || admission.Ordinal != 1 {
+		t.Fatalf("automatic admission = %#v", admission)
+	}
+	if err := runtime.RecordTurn(ctx, automatic); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.RecordTurn(ctx, automatic); err != nil {
+		t.Fatalf("exact settled receipt replay failed: %v", err)
+	}
+	snapshot := mustSnapshot(t, runtime)
+	if snapshot.PendingContinuation != nil || snapshot.Usage.ContinuationTurns != 1 || snapshot.Usage.EvalTokens != 23 {
+		t.Fatalf("settled admission snapshot = %#v", snapshot)
+	}
+	if _, err := runtime.BeginTurn(ctx, "late_initial", AdmissionInitial); !errors.Is(err, ErrIllegalTransition) {
+		t.Fatalf("second initial admission error = %v", err)
+	}
+
+	fresh, _ := testRuntime(t, BudgetLimits{})
+	if _, err := fresh.BeginTurn(ctx, "manual_first", AdmissionManual); !errors.Is(err, ErrIllegalTransition) {
+		t.Fatalf("manual first-turn admission error = %v", err)
+	}
+}
+
+func TestInitialAndManualAdmissionRecoveryNeverRedispatchesOrChangesContinuationUsage(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		kind  TurnAdmissionKind
+		setup func(*testing.T, *Runtime)
+	}{
+		{name: "initial", kind: AdmissionInitial},
+		{name: "manual", kind: AdmissionManual, setup: func(t *testing.T, runtime *Runtime) {
+			recordAdmittedTurn(t, runtime, AdmissionInitial, productiveTurn("prior", 1))
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runtime, _ := testRuntime(t, BudgetLimits{MaxContinuationTurns: 2})
+			if test.setup != nil {
+				test.setup(t, runtime)
+			}
+			turnID := "orphaned_" + test.name
+			if _, err := runtime.BeginTurn(context.Background(), turnID, test.kind); err != nil {
+				t.Fatal(err)
+			}
+			if err := runtime.RecoverPendingContinuation(context.Background(), PendingRecovery{
+				TurnID: turnID, Kind: PendingCancelledBeforeDispatch,
+				Reason: "host proved dispatch never began", Evidence: "provider command was never created",
+			}); err != nil {
+				t.Fatal(err)
+			}
+			snapshot := mustSnapshot(t, runtime)
+			if snapshot.State != StatePaused || snapshot.PendingContinuation != nil || snapshot.Usage.ContinuationTurns != 0 {
+				t.Fatalf("%s recovery = %#v", test.kind, snapshot)
+			}
+			if snapshot.LastPendingRecovery == nil || snapshot.LastPendingRecovery.Permit.Kind != test.kind {
+				t.Fatalf("%s recovery receipt = %#v", test.kind, snapshot.LastPendingRecovery)
+			}
+		})
+	}
+}
+
+func TestRestoreMigratesOnlyProvableLegacyAutomaticPermits(t *testing.T) {
+	runtime, clock := testRuntime(t, BudgetLimits{MaxContinuationTurns: 2})
+	recordAdmittedTurn(t, runtime, AdmissionInitial, productiveTurn("initial", 1))
+	if _, err := runtime.BeginContinuation(context.Background(), "legacy_auto"); err != nil {
+		t.Fatal(err)
+	}
+	legacy := mustSnapshot(t, runtime)
+	legacy.Version = LegacySnapshotVersion
+	legacy.PendingContinuation.Kind = ""
+	encoded, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded Snapshot
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := Restore(decoded, WithClock(clock))
+	if err != nil {
+		t.Fatalf("restore legacy automatic permit: %v", err)
+	}
+	if pending := mustSnapshot(t, restored).PendingContinuation; pending == nil || pending.Kind != AdmissionAutomatic || pending.Ordinal != 1 {
+		t.Fatalf("migrated legacy permit = %#v", pending)
+	}
+
+	initial, initialClock := testRuntime(t, BudgetLimits{})
+	if _, err := initial.BeginTurn(context.Background(), "stripped_initial", AdmissionInitial); err != nil {
+		t.Fatal(err)
+	}
+	forged := mustSnapshot(t, initial)
+	forged.PendingContinuation.Kind = ""
+	if _, err := Restore(forged, WithClock(initialClock)); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("zero-ordinal missing kind error = %v", err)
+	}
+}
+
+func TestConcurrentTurnAdmissionHasExactlyOneWinner(t *testing.T) {
+	runtime, _ := testRuntime(t, BudgetLimits{})
+	type result struct {
+		turnID string
+		err    error
+	}
+	results := make(chan result, 16)
+	var wait sync.WaitGroup
+	for worker := 0; worker < cap(results); worker++ {
+		wait.Add(1)
+		go func(worker int) {
+			defer wait.Done()
+			turnID := fmt.Sprintf("concurrent_%d", worker)
+			_, err := runtime.BeginTurn(context.Background(), turnID, AdmissionInitial)
+			results <- result{turnID: turnID, err: err}
+		}(worker)
+	}
+	wait.Wait()
+	close(results)
+
+	winner := ""
+	for result := range results {
+		if result.err == nil {
+			if winner != "" {
+				t.Fatalf("multiple admissions won: %q and %q", winner, result.turnID)
+			}
+			winner = result.turnID
+			continue
+		}
+		if !errors.Is(result.err, ErrTurnPending) {
+			t.Fatalf("losing admission %q error = %v", result.turnID, result.err)
+		}
+	}
+	if winner == "" {
+		t.Fatal("no concurrent admission succeeded")
+	}
+	snapshot := mustSnapshot(t, runtime)
+	if snapshot.PendingContinuation == nil || snapshot.PendingContinuation.TurnID != winner || snapshot.PendingContinuation.Kind != AdmissionInitial {
+		t.Fatalf("winning admission = %#v, winner %q", snapshot.PendingContinuation, winner)
+	}
+	if snapshot.Usage.ContinuationTurns != 0 {
+		t.Fatalf("concurrent initial admission consumed continuation usage: %#v", snapshot.Usage)
+	}
+}
+
+func TestStaleReceiptCannotSettleOrRedispatchAnotherAdmission(t *testing.T) {
+	runtime, _ := testRuntime(t, BudgetLimits{})
+	initial := productiveTurn("settled_initial", 3)
+	recordAdmittedTurn(t, runtime, AdmissionInitial, initial)
+	if _, err := runtime.BeginTurn(context.Background(), "pending_manual", AdmissionManual); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.RecordTurn(context.Background(), initial); !errors.Is(err, ErrTurnPending) {
+		t.Fatalf("stale settled receipt error = %v", err)
+	}
+	if pending := mustSnapshot(t, runtime).PendingContinuation; pending == nil || pending.TurnID != "pending_manual" {
+		t.Fatalf("stale receipt consumed newer admission: %#v", pending)
+	}
+	if err := runtime.RecoverPendingContinuation(context.Background(), PendingRecovery{
+		TurnID: "pending_manual", Kind: PendingCancelledBeforeDispatch,
+		Reason: "provider command was never returned", Evidence: "host retained the undispatched command boundary",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Resume(context.Background(), "continue with a new turn identity"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.BeginTurn(context.Background(), initial.TurnID, AdmissionManual); !errors.Is(err, ErrTurnConflict) {
+		t.Fatalf("settled turn id reuse error = %v", err)
+	}
+	if _, err := runtime.BeginTurn(context.Background(), "pending_manual", AdmissionManual); !errors.Is(err, ErrTurnConflict) {
+		t.Fatalf("recovered turn id redispatch error = %v", err)
+	}
+}
+
 func TestContinuationPermitExactBudgetBoundaryAndIdempotency(t *testing.T) {
 	runtime, _ := testRuntime(t, BudgetLimits{MaxContinuationTurns: 1})
 	if decision, err := runtime.CanAutoContinue(context.Background()); err != nil || decision.Reason != ContinuationNoTurnReceipt {
 		t.Fatalf("initial continuation decision = %#v, %v", decision, err)
 	}
-	if err := runtime.RecordTurn(context.Background(), productiveTurn("initial", 10)); err != nil {
-		t.Fatal(err)
-	}
+	recordAdmittedTurn(t, runtime, AdmissionInitial, productiveTurn("initial", 10))
 	if decision, _ := runtime.CanAutoContinue(context.Background()); !decision.Allowed {
 		t.Fatalf("productive turn did not enable continuation: %#v", decision)
 	}
@@ -189,9 +428,7 @@ func TestContinuationPermitExactBudgetBoundaryAndIdempotency(t *testing.T) {
 func TestRecoverPendingContinuationNeverRedispatchesOrRefunds(t *testing.T) {
 	t.Run("restored permit cannot be redispatched", func(t *testing.T) {
 		runtime, clock := testRuntime(t, BudgetLimits{MaxContinuationTurns: 2})
-		if err := runtime.RecordTurn(context.Background(), productiveTurn("initial", 5)); err != nil {
-			t.Fatal(err)
-		}
+		recordAdmittedTurn(t, runtime, AdmissionInitial, productiveTurn("initial", 5))
 		if _, err := runtime.BeginContinuation(context.Background(), "orphaned"); err != nil {
 			t.Fatal(err)
 		}
@@ -212,9 +449,7 @@ func TestRecoverPendingContinuationNeverRedispatchesOrRefunds(t *testing.T) {
 
 	t.Run("proven pre-dispatch cancellation pauses", func(t *testing.T) {
 		runtime, _ := testRuntime(t, BudgetLimits{MaxContinuationTurns: 2})
-		if err := runtime.RecordTurn(context.Background(), productiveTurn("initial", 5)); err != nil {
-			t.Fatal(err)
-		}
+		recordAdmittedTurn(t, runtime, AdmissionInitial, productiveTurn("initial", 5))
 		if _, err := runtime.BeginContinuation(context.Background(), "cancelled"); err != nil {
 			t.Fatal(err)
 		}
@@ -249,10 +484,8 @@ func TestRecoverPendingContinuationNeverRedispatchesOrRefunds(t *testing.T) {
 	})
 
 	t.Run("uncertain dispatch blocks", func(t *testing.T) {
-		runtime, _ := testRuntime(t, BudgetLimits{MaxContinuationTurns: 3})
-		if err := runtime.RecordTurn(context.Background(), productiveTurn("initial", 5)); err != nil {
-			t.Fatal(err)
-		}
+		runtime, clock := testRuntime(t, BudgetLimits{MaxContinuationTurns: 3})
+		recordAdmittedTurn(t, runtime, AdmissionInitial, productiveTurn("initial", 5))
 		if _, err := runtime.BeginContinuation(context.Background(), "uncertain"); err != nil {
 			t.Fatal(err)
 		}
@@ -278,14 +511,22 @@ func TestRecoverPendingContinuationNeverRedispatchesOrRefunds(t *testing.T) {
 		}
 		resolution := BlockResolution{
 			Reference: "exec_123", Reason: "workspace inspected", Reconciled: true,
-			Evidence: "execution ledger proves the write never started",
+			Evidence:       "execution ledger proves the write never started",
+			Reconciliation: testReconciliationReceipt(),
 		}
-		if err := runtime.ResolveBlock(context.Background(), resolution); err != nil {
+		if err := runtime.ResolveBlock(context.Background(), resolution); !errors.Is(err, ErrOutcomeUnknown) {
+			t.Fatalf("generic outcome resolution error = %v", err)
+		}
+		resolved, err := ApplyVerifiedReconciliation(context.Background(), snapshot, resolution, clock.Now())
+		if err != nil {
 			t.Fatal(err)
 		}
-		snapshot = mustSnapshot(t, runtime)
+		snapshot = resolved
 		if snapshot.State != StatePaused || snapshot.LastBlockResolution == nil || snapshot.LastBlockResolution.Resolution.Evidence != resolution.Evidence {
 			t.Fatalf("resolved snapshot = %#v", snapshot)
+		}
+		if current := mustSnapshot(t, runtime); current.State != StateBlocked {
+			t.Fatalf("pure reconciliation mutated caller runtime: %#v", current)
 		}
 	})
 }
@@ -293,9 +534,7 @@ func TestRecoverPendingContinuationNeverRedispatchesOrRefunds(t *testing.T) {
 func TestUnproductiveTurnRequiresNewHostDirectedProgress(t *testing.T) {
 	runtime, _ := testRuntime(t, BudgetLimits{})
 	unproductive := TurnReport{TurnID: "stalled", EvalTokens: 12, Summary: "repeated the same hypothesis"}
-	if err := runtime.RecordTurn(context.Background(), unproductive); err != nil {
-		t.Fatal(err)
-	}
+	recordAdmittedTurn(t, runtime, AdmissionInitial, unproductive)
 	if decision, _ := runtime.CanAutoContinue(context.Background()); decision.Reason != ContinuationUnproductive {
 		t.Fatalf("unproductive decision = %#v", decision)
 	}
@@ -308,9 +547,7 @@ func TestUnproductiveTurnRequiresNewHostDirectedProgress(t *testing.T) {
 	if decision, _ := runtime.CanAutoContinue(context.Background()); decision.Reason != ContinuationUnproductive {
 		t.Fatalf("resume incorrectly converted stale output into progress: %#v", decision)
 	}
-	if err := runtime.RecordTurn(context.Background(), productiveTurn("user-directed", 8)); err != nil {
-		t.Fatal(err)
-	}
+	recordAdmittedTurn(t, runtime, AdmissionManual, productiveTurn("user-directed", 8))
 	if decision, _ := runtime.CanAutoContinue(context.Background()); !decision.Allowed {
 		t.Fatalf("new productive turn did not restore eligibility: %#v", decision)
 	}
@@ -379,6 +616,9 @@ func TestManualTransitionMatrixAndGenericBlock(t *testing.T) {
 
 func TestOutcomeUnknownTurnBlocksImmediately(t *testing.T) {
 	runtime, _ := testRuntime(t, BudgetLimits{MaxEvalTokens: 100})
+	if _, err := runtime.BeginTurn(context.Background(), "unknown", AdmissionInitial); err != nil {
+		t.Fatal(err)
+	}
 	invalid := productiveTurn("unknown", 12)
 	invalid.OutcomeUnknown = true
 	invalid.OutcomeRef = "exec_1"
@@ -403,9 +643,7 @@ func TestOutcomeUnknownTurnBlocksImmediately(t *testing.T) {
 
 func TestBudgetExhaustionNeverCompletesGoal(t *testing.T) {
 	runtime, _ := testRuntime(t, BudgetLimits{MaxEvalTokens: 100})
-	if err := runtime.RecordTurn(context.Background(), productiveTurn("token-limit", 100)); err != nil {
-		t.Fatal(err)
-	}
+	recordAdmittedTurn(t, runtime, AdmissionInitial, productiveTurn("token-limit", 100))
 	snapshot := mustSnapshot(t, runtime)
 	if snapshot.State != StateExhausted || snapshot.Completion != nil {
 		t.Fatalf("budget exhaustion implied completion: %#v", snapshot)
@@ -484,9 +722,7 @@ func TestCortexCorrelationIsMonotonicAndImmutable(t *testing.T) {
 
 func TestSnapshotRoundTripIsolationAndForgeryRejection(t *testing.T) {
 	runtime, clock := testRuntime(t, BudgetLimits{MaxContinuationTurns: 3})
-	if err := runtime.RecordTurn(context.Background(), productiveTurn("initial", 2)); err != nil {
-		t.Fatal(err)
-	}
+	recordAdmittedTurn(t, runtime, AdmissionInitial, productiveTurn("initial", 2))
 	if _, err := runtime.BeginContinuation(context.Background(), "unknown"); err != nil {
 		t.Fatal(err)
 	}
@@ -496,9 +732,16 @@ func TestSnapshotRoundTripIsolationAndForgeryRejection(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := runtime.ResolveBlock(context.Background(), BlockResolution{
-		Reference: "exec_9", Reason: "inspected ledger", Reconciled: true, Evidence: "no dispatch event exists",
-	}); err != nil {
+	resolution := BlockResolution{
+		Reference: "exec_9", Reason: "inspected ledger", Reconciled: true,
+		Evidence: "no dispatch event exists", Reconciliation: testReconciliationReceipt(),
+	}
+	resolved, err := ApplyVerifiedReconciliation(context.Background(), mustSnapshot(t, runtime), resolution, clock.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err = Restore(resolved, WithClock(clock))
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -535,10 +778,41 @@ func TestSnapshotRoundTripIsolationAndForgeryRejection(t *testing.T) {
 	if _, err := Restore(forgedEvidence, WithClock(clock)); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("missing reconciliation evidence error = %v", err)
 	}
+	forgedReceipt := cloneSnapshot(again)
+	forgedReceipt.LastBlockResolution.Resolution.Reconciliation.ResolutionSetSHA256 = strings.Repeat("0", 63) + "z"
+	if _, err := Restore(forgedReceipt, WithClock(clock)); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("forged typed reconciliation receipt error = %v", err)
+	}
 	forgedTime := cloneSnapshot(again)
 	forgedTime.LastBlockResolution.ResolvedAt = forgedTime.UpdatedAt.Add(time.Second)
 	if _, err := Restore(forgedTime, WithClock(clock)); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("forged resolution time error = %v", err)
+	}
+}
+
+func TestRestoreRejectsLegacyOutcomeProseWithoutDurableReceipt(t *testing.T) {
+	runtime, clock := testRuntime(t, BudgetLimits{})
+	if _, err := runtime.BeginTurn(context.Background(), "legacy_unknown", AdmissionInitial); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.RecoverPendingContinuation(context.Background(), PendingRecovery{
+		TurnID: "legacy_unknown", Kind: PendingOutcomeUnknown,
+		Reason: "legacy process lost", Evidence: "legacy host text", OutcomeRef: "exec_legacy",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	legacy := mustSnapshot(t, runtime)
+	legacy.Version = LegacySnapshotVersion
+	legacy.Blocker = nil
+	legacy.State = StatePaused
+	legacy.StateReason = "legacy block resolved"
+	legacy.LastBlockResolution = &BlockResolutionRecord{
+		Blocker:    Blocker{Kind: BlockOutcomeUnknown, Reference: "exec_legacy", Reason: "legacy process lost", BlockedAt: legacy.UpdatedAt},
+		Resolution: BlockResolution{Reference: "exec_legacy", Reason: "legacy inspection", Reconciled: true, Evidence: "unbound prose"},
+		ResolvedAt: legacy.UpdatedAt,
+	}
+	if _, err := Restore(legacy, WithClock(clock)); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "no durable control receipt") {
+		t.Fatalf("legacy unbound reconciliation error = %v", err)
 	}
 }
 
@@ -571,9 +845,7 @@ func TestNilContextFailsClosed(t *testing.T) {
 
 func TestConcurrentReadersAndCorrelationUpdates(t *testing.T) {
 	runtime, _ := testRuntime(t, BudgetLimits{})
-	if err := runtime.RecordTurn(context.Background(), productiveTurn("initial", 1)); err != nil {
-		t.Fatal(err)
-	}
+	recordAdmittedTurn(t, runtime, AdmissionInitial, productiveTurn("initial", 1))
 	correlation := CortexCorrelation{TaskID: "task_1", Actor: "actor_1"}
 	var wait sync.WaitGroup
 	for worker := 0; worker < 8; worker++ {

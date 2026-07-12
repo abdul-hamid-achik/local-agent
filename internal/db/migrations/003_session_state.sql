@@ -5,5 +5,6 @@
 CREATE TABLE IF NOT EXISTS session_state (
     session_id INTEGER PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
     state_json TEXT NOT NULL DEFAULT '{}',
+	revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );

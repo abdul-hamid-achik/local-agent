@@ -397,6 +397,7 @@ func run() int {
 		// Run the agent synchronously.
 		out := agent.NewHeadlessOutput()
 		ag.AddUserMessage(*promptFlag)
+		sessionStateRevision := int64(0)
 		persistHeadlessState := func(saveCtx context.Context, executionCursor int64) error {
 			stateJSON, encodeErr := ui.EncodeHeadlessSessionState(
 				ag.Messages(), modelName, cfg.AgentProfile, modelPinned, executionCursor,
@@ -404,7 +405,14 @@ func run() int {
 			if encodeErr != nil {
 				return encodeErr
 			}
-			return dbStore.SaveSessionState(saveCtx, session.ID, stateJSON)
+			nextRevision, saveErr := saveHeadlessSessionStateCAS(
+				saveCtx, dbStore, session.ID, sessionStateRevision, stateJSON,
+			)
+			if saveErr != nil {
+				return saveErr
+			}
+			sessionStateRevision = nextRevision
+			return nil
 		}
 		if err := persistHeadlessState(ctx, 0); err != nil {
 			leaseErr := executionLease.Close()
@@ -665,6 +673,14 @@ func headlessSessionTitle(prompt string) string {
 	return title
 }
 
+func saveHeadlessSessionStateCAS(ctx context.Context, store *db.Store, sessionID, expectedRevision int64, stateJSON string) (int64, error) {
+	record, err := store.SaveSessionStateCAS(ctx, sessionID, expectedRevision, stateJSON)
+	if err != nil {
+		return expectedRevision, err
+	}
+	return record.Revision, nil
+}
+
 func headlessSnapshotExecutionCursor(ctx context.Context, store *db.Store, ag *agent.Agent, sessionID int64, workspaceID string, current int64) (int64, error) {
 	hazards, err := store.ListExecutionRecoveryHazards(ctx, sessionID, workspaceID, current, 100)
 	if err != nil {
@@ -677,7 +693,9 @@ func headlessSnapshotExecutionCursor(ctx context.Context, store *db.Store, ag *a
 		}
 		projected := false
 		for _, message := range messages {
-			if message.Role == "tool" && message.ToolCallID == state.Identity.CanonicalCallID {
+			if message.Role == "tool" &&
+				message.ToolCallID == state.Identity.CanonicalCallID &&
+				executionpkg.HashText(message.Content) == state.Latest.ResultSHA256 {
 				projected = true
 				break
 			}

@@ -141,6 +141,11 @@ func sqliteBusy(err error) bool {
 	return errors.As(err, &sqliteErr) && sqliteErr.Code()&0xff == 5
 }
 
+func sqliteConstraint(err error) bool {
+	var sqliteErr *sqlite.Error
+	return errors.As(err, &sqliteErr) && sqliteErr.Code()&0xff == 19
+}
+
 // Close closes the database connection.
 func (s *Store) Close() error {
 	return s.db.Close()
@@ -172,7 +177,10 @@ func runMigrations(conn *sql.DB) error {
 	if err := ensureSessionWorkspaceColumn(conn); err != nil {
 		return err
 	}
-	return ensureCheckpointWorkspaceColumn(conn)
+	if err := ensureCheckpointWorkspaceColumn(conn); err != nil {
+		return err
+	}
+	return ensureSessionStateRevisionColumn(conn)
 }
 
 // ensureSessionWorkspaceColumn upgrades databases created before workspace
@@ -248,6 +256,29 @@ func ensureCheckpointWorkspaceColumn(conn *sql.DB) error {
 	}
 	if _, err := conn.Exec(`CREATE INDEX IF NOT EXISTS idx_checkpoints_workspace_session ON checkpoints(workspace_id, session_id, id DESC)`); err != nil {
 		return fmt.Errorf("index checkpoints workspace identity: %w", err)
+	}
+	return nil
+}
+
+// ensureSessionStateRevisionColumn adds the compare-and-swap generation used
+// by compound reconciliation transactions. Legacy rows begin at revision zero;
+// the next successful write advances them to one.
+func ensureSessionStateRevisionColumn(conn *sql.DB) error {
+	found, err := tableColumnExists(conn, "session_state", "revision")
+	if err != nil {
+		return err
+	}
+	if found {
+		return nil
+	}
+	if _, err := conn.Exec(`ALTER TABLE session_state ADD COLUMN revision INTEGER NOT NULL DEFAULT 0`); err != nil {
+		addedByPeer, inspectErr := tableColumnExists(conn, "session_state", "revision")
+		if inspectErr != nil {
+			return fmt.Errorf("add session state revision: %v (re-inspect: %w)", err, inspectErr)
+		}
+		if !addedByPeer {
+			return fmt.Errorf("add session state revision: %w", err)
+		}
 	}
 	return nil
 }

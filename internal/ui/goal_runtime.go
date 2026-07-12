@@ -97,8 +97,7 @@ func (m *Model) handleAutoModeSubmit(text string) tea.Cmd {
 	// Preserve the draft so switching back to NORMAL never loses user input.
 	m.restoreAutoComposerDraft(text)
 	m.appendGoalSystem("AUTO is supervising the active durable goal. Your draft is preserved; use the Goal Inspector to pause, resume, adjust budget, or drop it, or switch to NORMAL for a separate prompt.")
-	m.showGoal()
-	return nil
+	return m.showGoal()
 }
 
 func (m *Model) restoreAutoComposerDraft(text string) {
@@ -374,13 +373,9 @@ func (m *Model) persistGoalSession() (err error) {
 	if m.sessionStore == nil || m.sessionID <= 0 {
 		return fmt.Errorf("durable session is unavailable")
 	}
-	stateJSON, err := encodeSessionState(m)
-	if err != nil {
-		return err
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	return m.sessionStore.SaveSessionState(ctx, m.sessionID, stateJSON)
+	return m.persistSessionState(ctx)
 }
 
 func (m *Model) restoreGoalSnapshot(snapshot goal.Snapshot) error {
@@ -419,6 +414,7 @@ func (m *Model) persistGoalAdvisorTransition(before goal.Snapshot, operation str
 
 func (m *Model) discardExecutionSession() error {
 	if m.sessionID <= 0 || m.sessionStore == nil {
+		m.resetSessionStateRevision()
 		return nil
 	}
 	id := m.sessionID
@@ -428,6 +424,7 @@ func (m *Model) discardExecutionSession() error {
 	cancel()
 	m.sessionID = 0
 	m.executionCursor = 0
+	m.resetSessionStateRevision()
 	m.agent.SetCheckpointSessionID(0)
 	m.agent.SetExecutionSessionID(0)
 	m.agent.SetExecutionSnapshotCursor(0)
@@ -535,7 +532,7 @@ func (m *Model) startGoalTurn(advice *goaladvisor.Advice, manual bool) tea.Cmd {
 		return nil
 	}
 	if snapshot.PendingContinuation != nil {
-		m.appendGoalError("Goal turn blocked: an admitted continuation still requires settlement or recovery.")
+		m.appendGoalError("Goal turn blocked: an admitted turn still requires settlement or recovery.")
 		return nil
 	}
 	if snapshot.State != goal.StateActive {
@@ -547,33 +544,44 @@ func (m *Model) startGoalTurn(advice *goaladvisor.Advice, manual bool) tea.Cmd {
 		m.appendGoalError("Create goal turn: " + err.Error())
 		return nil
 	}
-	if !manual && snapshot.LastTurn != nil {
-		if _, err := m.goalRuntime.BeginContinuation(context.Background(), turnID); err != nil {
+	admissionKind := goal.AdmissionInitial
+	if snapshot.LastTurn != nil {
+		if manual {
+			admissionKind = goal.AdmissionManual
+		} else {
+			admissionKind = goal.AdmissionAutomatic
+		}
+	}
+	if _, err := m.goalRuntime.BeginTurn(context.Background(), turnID, admissionKind); err != nil {
+		if admissionKind == goal.AdmissionAutomatic {
 			m.appendGoalSystem(goalContinuationDeniedMessage(err, snapshot.StateReason))
-			return nil
+		} else {
+			m.appendGoalError("Admit goal turn: " + err.Error())
 		}
-		// A continuation permit is a durable dispatch boundary. Never return the
-		// provider command unless this exact pending TurnID is safely on disk.
-		if err := m.persistGoalSession(); err != nil {
-			recoveryErr := m.goalRuntime.RecoverPendingContinuation(context.Background(), goal.PendingRecovery{
-				TurnID: turnID, Kind: goal.PendingCancelledBeforeDispatch,
-				Reason:   "goal permit could not be persisted before dispatch",
-				Evidence: "session snapshot save failed before the Bubble Tea provider command was returned",
-			})
-			m.appendGoalError("Save continuation permit: " + errors.Join(err, recoveryErr).Error())
-			return nil
-		}
-		snapshot, err = m.goalRuntime.Snapshot(context.Background())
-		if err != nil {
-			recoveryErr := m.goalRuntime.RecoverPendingContinuation(context.Background(), goal.PendingRecovery{
-				TurnID: turnID, Kind: goal.PendingCancelledBeforeDispatch,
-				Reason:   "goal permit was persisted but could not be read before dispatch",
-				Evidence: "the provider command had not been created when the durable snapshot read failed",
-			})
-			_ = m.persistGoalSession()
-			m.appendGoalError("Read admitted continuation: " + errors.Join(err, recoveryErr).Error())
-			return nil
-		}
+		return nil
+	}
+	// Every provider turn has one durable dispatch boundary. Never create or
+	// return the provider command unless this exact pending TurnID and kind are
+	// safely on disk.
+	if err := m.persistGoalSession(); err != nil {
+		recoveryErr := m.goalRuntime.RecoverPendingContinuation(context.Background(), goal.PendingRecovery{
+			TurnID: turnID, Kind: goal.PendingCancelledBeforeDispatch,
+			Reason:   "goal turn admission could not be persisted before dispatch",
+			Evidence: "session snapshot save failed before the Bubble Tea provider command was returned",
+		})
+		m.appendGoalError("Save goal turn admission: " + errors.Join(err, recoveryErr).Error())
+		return nil
+	}
+	snapshot, err = m.goalRuntime.Snapshot(context.Background())
+	if err != nil {
+		recoveryErr := m.goalRuntime.RecoverPendingContinuation(context.Background(), goal.PendingRecovery{
+			TurnID: turnID, Kind: goal.PendingCancelledBeforeDispatch,
+			Reason:   "goal turn admission was persisted but could not be read before dispatch",
+			Evidence: "the provider command had not been created when the durable snapshot read failed",
+		})
+		_ = m.persistGoalSession()
+		m.appendGoalError("Read admitted goal turn: " + errors.Join(err, recoveryErr).Error())
+		return nil
 	}
 
 	limits, limitErr := goalAgentTurnLimits(snapshot, m.nowTime())
@@ -584,8 +592,6 @@ func (m *Model) startGoalTurn(advice *goaladvisor.Advice, manual bool) tea.Cmd {
 				TurnID: current.PendingContinuation.TurnID, Kind: goal.PendingCancelledBeforeDispatch,
 				Reason: "goal budget expired before provider dispatch", Evidence: "host rechecked the remaining hard limits before creating the provider command",
 			})
-		} else if current.State == goal.StateActive {
-			_ = m.goalRuntime.Pause(context.Background(), "goal budget expired before provider dispatch")
 		}
 		_ = m.persistGoalSession()
 		m.appendGoalSystem("Goal budget exhausted before dispatch. Completion was not inferred; adjust /goal budget before resuming.")
@@ -604,8 +610,6 @@ func (m *Model) startGoalTurn(advice *goaladvisor.Advice, manual bool) tea.Cmd {
 				Reason:   "goal turn failed before provider dispatch",
 				Evidence: "sendToAgentTurn returned without entering the waiting state",
 			})
-		} else if snapshot.State == goal.StateActive {
-			_ = m.goalRuntime.Pause(context.Background(), "goal turn failed before provider dispatch")
 		}
 		m.goalTurnID = ""
 		_ = m.persistGoalSession()
@@ -792,11 +796,6 @@ func (m *Model) settleGoalTurn(message AgentDoneMsg) {
 	if err != nil {
 		m.appendGoalError("Read settled goal: " + err.Error())
 		return
-	}
-	if report.OutcomeUnknown {
-		if controlErr := m.recordExecutionReconciliationByID(snapshot, report.OutcomeRef); controlErr != nil {
-			m.appendGoalError("Record execution reconciliation: " + controlErr.Error())
-		}
 	}
 	switch snapshot.State {
 	case goal.StateActive:
@@ -1188,16 +1187,22 @@ func (m *Model) prepareManualGoalResume(before goal.Snapshot, advice goaladvisor
 	return fmt.Errorf("cannot resume a %s goal", before.State)
 }
 
-func (m *Model) showGoal() {
+func (m *Model) showGoal() tea.Cmd {
 	if m.goalRuntime == nil {
 		m.appendGoalSystem("No goal is configured. Start one with /goal new.")
-		return
+		return nil
 	}
 	snapshot, err := m.goalRuntime.Snapshot(context.Background())
 	if err != nil {
 		m.appendGoalError("Read goal: " + err.Error())
-		return
+		return nil
 	}
+	recoveryCommand := m.ensureGoalRecoveryProjection(snapshot, false)
+	m.renderGoalInspector(snapshot)
+	return recoveryCommand
+}
+
+func (m *Model) renderGoalInspector(snapshot goal.Snapshot) {
 	// A newly attached/restored goal adds one stable status row. Reconcile the
 	// transcript height before centering the inspector so a 30x12 view retains
 	// the terminal safety row.
@@ -1211,9 +1216,11 @@ func (m *Model) showGoal() {
 			}
 		}
 	}
+	actions, recoveryStatus := m.decorateGoalInspectorRecovery(snapshot, actions)
 	m.goalInspectorState = NewGoalInspector(snapshot, actions, GoalInspectorOptions{
 		Width: m.width, Height: m.height, IsDark: m.isDark,
 		ReducedMotion: m.reducedMotion, Now: m.nowTime(), PersistenceDirty: m.goalPersistenceDirty,
+		RecoveryStatus: recoveryStatus,
 	})
 	m.overlayParent = OverlayNone
 	m.overlay = OverlayGoalInspector
@@ -1259,7 +1266,7 @@ func (m *Model) resumeGoal() tea.Cmd {
 		return nil
 	}
 	if snapshot.PendingContinuation != nil {
-		m.appendGoalError("Goal has an admitted continuation without a settled receipt. Restore or reconcile it before retrying.")
+		m.appendGoalError("Goal has an admitted turn without a settled receipt. Restore or reconcile it before retrying.")
 		return nil
 	}
 	switch snapshot.State {
@@ -1345,7 +1352,7 @@ func (m *Model) goalStatusSummary() (GoalSummary, bool) {
 }
 
 // recoverRestoredGoal deliberately never restarts provider work. A persisted
-// permit without a settled receipt is outcome-unknown; an otherwise active
+// turn admission without a settled receipt is outcome-unknown; an otherwise active
 // goal becomes paused until the user explicitly resumes it.
 func (m *Model) recoverRestoredGoal() error {
 	if m.goalRuntime == nil {
@@ -1358,18 +1365,16 @@ func (m *Model) recoverRestoredGoal() error {
 	changed := false
 	if snapshot.PendingContinuation != nil {
 		permit := snapshot.PendingContinuation
-		controlErr := m.recordRestoredTurnReconciliations(snapshot, permit.TurnID)
 		err = m.goalRuntime.RecoverPendingContinuation(context.Background(), goal.PendingRecovery{
 			TurnID: permit.TurnID, Kind: goal.PendingOutcomeUnknown,
-			Reason:     "session restored with an unsettled continuation permit",
+			Reason:     "session restored with an unsettled goal turn admission",
 			Evidence:   "the prior process ended without a durable goal turn receipt, so provider dispatch cannot be ruled out",
 			OutcomeRef: permit.TurnID,
 		})
 		changed = err == nil
 		if err == nil {
-			m.appendGoalError("Goal recovery blocked: an admitted continuation has no settled receipt. Inspect and reconcile before retrying.")
+			m.appendGoalError("Goal recovery blocked: an admitted turn has no settled receipt. Inspect and reconcile before retrying.")
 		}
-		err = errors.Join(err, controlErr)
 	} else if snapshot.State == goal.StateActive {
 		err = m.goalRuntime.Pause(context.Background(), "session restored; resume explicitly")
 		changed = err == nil

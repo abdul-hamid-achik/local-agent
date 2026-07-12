@@ -105,6 +105,16 @@ func snapshotUIGoal(t *testing.T, runtime *goal.Runtime) goal.Snapshot {
 	return snapshot
 }
 
+func recordUIGoalTurn(t *testing.T, runtime *goal.Runtime, kind goal.TurnAdmissionKind, report goal.TurnReport) {
+	t.Helper()
+	if _, err := runtime.BeginTurn(context.Background(), report.TurnID, kind); err != nil {
+		t.Fatalf("admit %s goal turn %s: %v", kind, report.TurnID, err)
+	}
+	if err := runtime.RecordTurn(context.Background(), report); err != nil {
+		t.Fatalf("record %s goal turn %s: %v", kind, report.TurnID, err)
+	}
+}
+
 func beginGoalOperationForTest(t *testing.T, m *Model, label string) uint64 {
 	t.Helper()
 	snapshot := snapshotUIGoal(t, m.goalRuntime)
@@ -119,6 +129,9 @@ func TestGoalNoToolTurnPausesWithoutSchedulingContinuation(t *testing.T) {
 	client := &goalCountingClient{}
 	m := newGoalRuntimeTestModel(t, client)
 	m.goalRuntime = newUIGoalRuntime(t, 42, goal.BudgetLimits{MaxContinuationTurns: 3})
+	if _, err := m.goalRuntime.BeginTurn(context.Background(), "turn_no_tool", goal.AdmissionInitial); err != nil {
+		t.Fatal(err)
+	}
 	m.goalTurnID = "turn_no_tool"
 	m.turnEvalTotal = 17
 	m.state = StateStreaming
@@ -152,11 +165,9 @@ func TestGoalUnresolvedOutcomeBlocksEvenAfterSuccessfulToolReceipt(t *testing.T)
 	client := &goalCountingClient{}
 	m := newGoalRuntimeTestModel(t, client)
 	runtime := newUIGoalRuntime(t, 42, goal.BudgetLimits{MaxContinuationTurns: 3})
-	if err := runtime.RecordTurn(context.Background(), goal.TurnReport{
+	recordUIGoalTurn(t, runtime, goal.AdmissionInitial, goal.TurnReport{
 		TurnID: "turn_initial", Productive: true, Summary: "verified initial progress",
-	}); err != nil {
-		t.Fatal(err)
-	}
+	})
 	if _, err := runtime.BeginContinuation(context.Background(), "turn_unknown"); err != nil {
 		t.Fatal(err)
 	}
@@ -199,11 +210,9 @@ func TestGoalMismatchedAgentReceiptRecoversPendingPermitAsOutcomeUnknown(t *test
 	client := &goalCountingClient{}
 	m := newGoalRuntimeTestModel(t, client)
 	runtime := newUIGoalRuntime(t, 42, goal.BudgetLimits{MaxContinuationTurns: 3})
-	if err := runtime.RecordTurn(context.Background(), goal.TurnReport{
+	recordUIGoalTurn(t, runtime, goal.AdmissionInitial, goal.TurnReport{
 		TurnID: "turn_initial", Productive: true, Summary: "verified initial progress",
-	}); err != nil {
-		t.Fatal(err)
-	}
+	})
 	if _, err := runtime.BeginContinuation(context.Background(), "turn_expected"); err != nil {
 		t.Fatal(err)
 	}
@@ -253,121 +262,154 @@ func TestShowTerminalGoalOmitsLiveWallTime(t *testing.T) {
 	}
 }
 
-func TestGoalContinuationPermitSaveFailurePreventsDispatch(t *testing.T) {
-	client := &goalCountingClient{}
-	m := newGoalRuntimeTestModel(t, client)
+func TestGoalTurnAdmissionSaveFailurePreventsEveryDispatchKind(t *testing.T) {
+	for _, test := range []struct {
+		name              string
+		manual            bool
+		priorTurn         bool
+		wantKind          goal.TurnAdmissionKind
+		wantContinuations int64
+	}{
+		{name: "initial", wantKind: goal.AdmissionInitial},
+		{name: "manual", manual: true, priorTurn: true, wantKind: goal.AdmissionManual},
+		{name: "automatic", priorTurn: true, wantKind: goal.AdmissionAutomatic, wantContinuations: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &goalCountingClient{}
+			m := newGoalRuntimeTestModel(t, client)
 
-	store, err := db.OpenPath(filepath.Join(t.TempDir(), "closed-goal.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	session, err := store.CreateSession(context.Background(), db.CreateSessionParams{
-		Title: "closed goal store", Mode: "BUILD", WorkspaceID: m.agent.WorkDir(),
-	})
-	if err != nil {
-		_ = store.Close()
-		t.Fatal(err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
+			store, err := db.OpenPath(filepath.Join(t.TempDir(), "closed-goal.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			session, err := store.CreateSession(context.Background(), db.CreateSessionParams{
+				Title: "closed goal store", Mode: "BUILD", WorkspaceID: m.agent.WorkDir(),
+			})
+			if err != nil {
+				_ = store.Close()
+				t.Fatal(err)
+			}
+			if err := store.Close(); err != nil {
+				t.Fatal(err)
+			}
 
-	runtime := newUIGoalRuntime(t, session.ID, goal.BudgetLimits{MaxContinuationTurns: 3})
-	if err := runtime.RecordTurn(context.Background(), goal.TurnReport{
-		TurnID: "turn_initial", Productive: true, Summary: "verified initial progress",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	m.goalRuntime = runtime
-	m.sessionStore = store
-	m.sessionID = session.ID
+			runtime := newUIGoalRuntime(t, session.ID, goal.BudgetLimits{MaxContinuationTurns: 3})
+			if test.priorTurn {
+				recordUIGoalTurn(t, runtime, goal.AdmissionInitial, goal.TurnReport{
+					TurnID: "turn_initial", Productive: true, Summary: "verified initial progress",
+				})
+			}
+			m.goalRuntime = runtime
+			m.sessionStore = store
+			m.sessionID = session.ID
+			if err := m.initializeSessionStateRevision(0); err != nil {
+				t.Fatal(err)
+			}
 
-	if cmd := m.startGoalTurn(nil, false); cmd != nil {
-		t.Fatal("provider command returned after the continuation permit failed to persist")
-	}
+			if cmd := m.startGoalTurn(nil, test.manual); cmd != nil {
+				t.Fatalf("provider command returned after %s admission failed to persist", test.wantKind)
+			}
 
-	snapshot := snapshotUIGoal(t, runtime)
-	if snapshot.PendingContinuation != nil {
-		t.Fatalf("failed permit save left an in-flight continuation: %#v", snapshot.PendingContinuation)
-	}
-	if snapshot.State != goal.StatePaused || snapshot.Usage.ContinuationTurns != 1 {
-		t.Fatalf("failed permit save state = %s usage=%#v", snapshot.State, snapshot.Usage)
-	}
-	if snapshot.LastPendingRecovery == nil || snapshot.LastPendingRecovery.Recovery.Kind != goal.PendingCancelledBeforeDispatch {
-		t.Fatalf("failed permit save lacked pre-dispatch recovery evidence: %#v", snapshot.LastPendingRecovery)
-	}
-	if snapshot.LastPendingRecovery.Recovery.Evidence == "" {
-		t.Fatal("failed permit save recovery omitted evidence")
-	}
-	if m.state != StateIdle || m.goalTurnID != "" {
-		t.Fatalf("failed permit save entered provider state: state=%v turn=%q", m.state, m.goalTurnID)
-	}
-	if got := client.calls.Load(); got != 0 {
-		t.Fatalf("permit persistence failure dispatched %d provider calls", got)
+			snapshot := snapshotUIGoal(t, runtime)
+			if snapshot.PendingContinuation != nil {
+				t.Fatalf("failed admission save left an in-flight turn: %#v", snapshot.PendingContinuation)
+			}
+			if snapshot.State != goal.StatePaused || snapshot.Usage.ContinuationTurns != test.wantContinuations {
+				t.Fatalf("failed %s save state = %s usage=%#v", test.wantKind, snapshot.State, snapshot.Usage)
+			}
+			if snapshot.LastPendingRecovery == nil || snapshot.LastPendingRecovery.Recovery.Kind != goal.PendingCancelledBeforeDispatch {
+				t.Fatalf("failed admission save lacked pre-dispatch recovery evidence: %#v", snapshot.LastPendingRecovery)
+			}
+			if snapshot.LastPendingRecovery.Permit.Kind != test.wantKind || snapshot.LastPendingRecovery.Recovery.Evidence == "" {
+				t.Fatalf("failed admission recovery = %#v", snapshot.LastPendingRecovery)
+			}
+			if m.state != StateIdle || m.goalTurnID != "" || client.calls.Load() != 0 {
+				t.Fatalf("failed %s save entered provider state=%v turn=%q calls=%d", test.wantKind, m.state, m.goalTurnID, client.calls.Load())
+			}
+		})
 	}
 }
 
-func TestGoalContinuationPermitIsDurableBeforeProviderCommandRuns(t *testing.T) {
-	client := &goalCountingClient{}
-	m := newGoalRuntimeTestModel(t, client)
-	store, err := db.OpenPath(filepath.Join(t.TempDir(), "goal-permit.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if m.cancel != nil {
-			m.cancel()
-		}
-		_ = m.releaseExecutionSessionLease()
-		_ = store.Close()
-	}()
-	workspace, err := canonicalWorkspaceID(m.agent.WorkDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	session, err := store.CreateSession(context.Background(), db.CreateSessionParams{
-		Title: "durable goal permit", Mode: "BUILD", WorkspaceID: workspace,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	runtime := newUIGoalRuntime(t, session.ID, goal.BudgetLimits{MaxContinuationTurns: 3})
-	if err := runtime.RecordTurn(context.Background(), goal.TurnReport{
-		TurnID: "turn_initial", Productive: true, Summary: "verified initial progress",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	m.goalRuntime = runtime
-	m.SetSessionStore(store)
-	m.sessionID = session.ID
+func TestEveryGoalTurnKindIsDurableBeforeProviderCommandRuns(t *testing.T) {
+	for _, test := range []struct {
+		name              string
+		manual            bool
+		priorTurn         bool
+		wantKind          goal.TurnAdmissionKind
+		wantContinuations int64
+	}{
+		{name: "initial automatic path", wantKind: goal.AdmissionInitial},
+		{name: "initial manual path", manual: true, wantKind: goal.AdmissionInitial},
+		{name: "manual", manual: true, priorTurn: true, wantKind: goal.AdmissionManual},
+		{name: "automatic", priorTurn: true, wantKind: goal.AdmissionAutomatic, wantContinuations: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &goalCountingClient{}
+			m := newGoalRuntimeTestModel(t, client)
+			store, err := db.OpenPath(filepath.Join(t.TempDir(), "goal-admission.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if m.cancel != nil {
+					m.cancel()
+				}
+				_ = m.releaseExecutionSessionLease()
+				_ = store.Close()
+			}()
+			workspace, err := canonicalWorkspaceID(m.agent.WorkDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			session, err := store.CreateSession(context.Background(), db.CreateSessionParams{
+				Title: "durable goal admission", Mode: "BUILD", WorkspaceID: workspace,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			runtime := newUIGoalRuntime(t, session.ID, goal.BudgetLimits{MaxContinuationTurns: 3})
+			if test.priorTurn {
+				recordUIGoalTurn(t, runtime, goal.AdmissionInitial, goal.TurnReport{
+					TurnID: "turn_initial", Productive: true, Summary: "verified initial progress",
+				})
+			}
+			m.goalRuntime = runtime
+			m.SetSessionStore(store)
+			m.sessionID = session.ID
+			if err := m.initializeSessionStateRevision(0); err != nil {
+				t.Fatal(err)
+			}
 
-	cmd := m.startGoalTurn(nil, false)
-	if cmd == nil {
-		t.Fatalf("durably admitted continuation returned no provider command: state=%v turn=%q entries=%#v", m.state, m.goalTurnID, m.entries)
-	}
-	if m.state != StateWaiting || m.goalTurnID == "" {
-		t.Fatalf("admitted continuation state=%v turn=%q", m.state, m.goalTurnID)
-	}
-	if got := client.calls.Load(); got != 0 {
-		t.Fatalf("provider ran before Bubble Tea executed its command: %d calls", got)
-	}
+			cmd := m.startGoalTurn(nil, test.manual)
+			if cmd == nil {
+				t.Fatalf("durably admitted %s turn returned no provider command: state=%v turn=%q entries=%#v", test.wantKind, m.state, m.goalTurnID, m.entries)
+			}
+			if m.state != StateWaiting || m.goalTurnID == "" {
+				t.Fatalf("admitted %s state=%v turn=%q", test.wantKind, m.state, m.goalTurnID)
+			}
+			if got := client.calls.Load(); got != 0 {
+				t.Fatalf("provider ran before Bubble Tea executed its command: %d calls", got)
+			}
 
-	raw, err := store.GetSessionState(context.Background(), session.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	persisted, err := decodeSessionState(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if persisted.Goal == nil || persisted.Goal.PendingContinuation == nil {
-		t.Fatalf("provider command exists without a durable permit: %#v", persisted.Goal)
-	}
-	if persisted.Goal.PendingContinuation.TurnID != m.goalTurnID {
-		t.Fatalf("durable permit turn = %q, provider turn = %q", persisted.Goal.PendingContinuation.TurnID, m.goalTurnID)
-	}
-	if persisted.Goal.Usage.ContinuationTurns != 1 {
-		t.Fatalf("durable continuation usage = %#v", persisted.Goal.Usage)
+			raw, err := store.GetSessionState(context.Background(), session.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			persisted, err := decodeSessionState(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if persisted.Goal == nil || persisted.Goal.PendingContinuation == nil {
+				t.Fatalf("provider command exists without a durable admission: %#v", persisted.Goal)
+			}
+			pending := persisted.Goal.PendingContinuation
+			if pending.TurnID != m.goalTurnID || pending.Kind != test.wantKind {
+				t.Fatalf("durable admission = %#v, provider turn = %q", pending, m.goalTurnID)
+			}
+			if persisted.Goal.Usage.ContinuationTurns != test.wantContinuations {
+				t.Fatalf("%s continuation usage = %#v", test.wantKind, persisted.Goal.Usage)
+			}
+		})
 	}
 }
 
@@ -375,11 +417,9 @@ func TestGoalManualTurnCannotBypassPendingContinuation(t *testing.T) {
 	client := &goalCountingClient{}
 	m := newGoalRuntimeTestModel(t, client)
 	runtime := newUIGoalRuntime(t, 42, goal.BudgetLimits{MaxContinuationTurns: 3})
-	if err := runtime.RecordTurn(context.Background(), goal.TurnReport{
+	recordUIGoalTurn(t, runtime, goal.AdmissionInitial, goal.TurnReport{
 		TurnID: "turn_initial", Productive: true, Summary: "verified initial progress",
-	}); err != nil {
-		t.Fatal(err)
-	}
+	})
 	if _, err := runtime.BeginContinuation(context.Background(), "turn_pending"); err != nil {
 		t.Fatal(err)
 	}
@@ -659,11 +699,9 @@ func TestGoalCompletionFromCortexPersistsAndRestoresVerifiedGitProof(t *testing.
 	if err := runtime.AttachCortex(context.Background(), goal.CortexCorrelation{TaskID: "task_1", Revision: 6, Actor: goalActor}); err != nil {
 		t.Fatal(err)
 	}
-	if err := runtime.RecordTurn(context.Background(), goal.TurnReport{
+	recordUIGoalTurn(t, runtime, goal.AdmissionInitial, goal.TurnReport{
 		TurnID: "turn_productive", Productive: true, Summary: "write completed with a durable receipt",
-	}); err != nil {
-		t.Fatal(err)
-	}
+	})
 	m.goalRuntime = runtime
 	if err := m.persistGoalSession(); err != nil {
 		t.Fatal(err)
@@ -703,7 +741,7 @@ func TestGoalCompletionFromCortexPersistsAndRestoresVerifiedGitProof(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, persisted, err := loadPersistedSession(context.Background(), store, sessionID, workspaceID)
+	_, persisted, _, err := loadPersistedSession(context.Background(), store, sessionID, workspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -735,11 +773,9 @@ func TestGoalLocalOnlyProgressRequiresExplicitResume(t *testing.T) {
 	store, sessionID := attachGoalTestSession(t, m)
 	defer func() { _ = store.Close() }()
 	runtime := newUIGoalRuntime(t, sessionID, goal.BudgetLimits{MaxContinuationTurns: 3})
-	if err := runtime.RecordTurn(context.Background(), goal.TurnReport{
+	recordUIGoalTurn(t, runtime, goal.AdmissionInitial, goal.TurnReport{
 		TurnID: "turn_read", Productive: true, Summary: "one successful read",
-	}); err != nil {
-		t.Fatal(err)
-	}
+	})
 	m.goalRuntime = runtime
 
 	if cmd := m.beginGoalEvaluation(false); cmd != nil {
@@ -763,11 +799,9 @@ func TestGoalCortexStatusWithoutRevisionAdvancePauses(t *testing.T) {
 	if err := runtime.AttachCortex(context.Background(), goal.CortexCorrelation{TaskID: "task_1", Revision: 4, Actor: goalActor}); err != nil {
 		t.Fatal(err)
 	}
-	if err := runtime.RecordTurn(context.Background(), goal.TurnReport{
+	recordUIGoalTurn(t, runtime, goal.AdmissionInitial, goal.TurnReport{
 		TurnID: "turn_read", Productive: true, Summary: "read succeeded",
-	}); err != nil {
-		t.Fatal(err)
-	}
+	})
 	m.goalRuntime = runtime
 	token := beginGoalOperationForTest(t, m, "Checking goal")
 
@@ -871,6 +905,9 @@ func TestGoalCreationPersistenceFailureRestoresModeWithoutReceipt(t *testing.T) 
 	m.SetSessionStore(store)
 	m.sessionID = session.ID
 	m.executionLease = lease
+	if err := m.initializeSessionStateRevision(0); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -912,6 +949,9 @@ func attachGoalTestSession(t *testing.T, m *Model) (*db.Store, int64) {
 	}
 	m.SetSessionStore(store)
 	m.sessionID = session.ID
+	if err := m.initializeSessionStateRevision(0); err != nil {
+		t.Fatal(err)
+	}
 	lease, err := store.AcquireExecutionSessionLease(context.Background(), session.ID, workspace)
 	if err != nil {
 		_ = store.Close()

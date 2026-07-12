@@ -93,6 +93,10 @@ func (m *Model) View() tea.View {
 			if m.goalInspectorState != nil {
 				overlay = m.goalInspectorState.View()
 			}
+		case OverlayGoalRecovery:
+			if m.goalRecoveryState != nil {
+				overlay, localCursor = m.goalRecoveryState.ViewWithCursor()
+			}
 		}
 		if overlay != "" {
 			base := content.String()

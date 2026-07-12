@@ -14,17 +14,27 @@ import (
 
 const (
 	// SnapshotVersion is the durable Goal Runtime schema version.
-	SnapshotVersion = 1
+	SnapshotVersion = 2
+	// LegacySnapshotVersion is the only snapshot schema that can be upgraded in
+	// place. Version 1 predates universal turn-admission kinds and typed
+	// reconciliation receipts.
+	LegacySnapshotVersion = 1
 
-	MaxGoalIDBytes        = 128
-	MaxCorrelationIDBytes = 256
-	MaxTurnIDBytes        = 128
-	MaxObjectiveBytes     = 16 * 1024
-	MaxCriteria           = 64
-	MaxCriterionIDBytes   = 128
-	MaxCriterionBytes     = 4 * 1024
-	MaxReasonBytes        = 4 * 1024
-	MaxEvidenceBytes      = 16 * 1024
+	// ReconciliationReceiptVersion is the machine-verifiable authority binding
+	// stored when an outcome-unknown blocker is cleared atomically with its
+	// control-plane evidence.
+	ReconciliationReceiptVersion = 1
+
+	MaxGoalIDBytes           = 128
+	MaxCorrelationIDBytes    = 256
+	MaxTurnIDBytes           = 128
+	MaxObjectiveBytes        = 16 * 1024
+	MaxCriteria              = 64
+	MaxCriterionIDBytes      = 128
+	MaxCriterionBytes        = 4 * 1024
+	MaxReasonBytes           = 4 * 1024
+	MaxEvidenceBytes         = 16 * 1024
+	MaxReconciliationTargets = 10_000
 )
 
 var (
@@ -163,17 +173,40 @@ type TurnReceipt struct {
 	RecordedAt time.Time `json:"recorded_at"`
 }
 
-// ContinuationPermit is durably consumed before an automatic continuation is
-// dispatched. While a permit is pending, every later begin attempt fails
-// closed; callers must settle or explicitly recover it.
-type ContinuationPermit struct {
-	TurnID    string    `json:"turn_id"`
-	Ordinal   int64     `json:"ordinal"`
-	GrantedAt time.Time `json:"granted_at"`
+// TurnAdmissionKind identifies why one provider turn was admitted. Every turn
+// is durably admitted before dispatch, but only automatic admissions consume
+// the continuation-turn budget.
+type TurnAdmissionKind string
+
+const (
+	AdmissionInitial   TurnAdmissionKind = "initial"
+	AdmissionManual    TurnAdmissionKind = "manual"
+	AdmissionAutomatic TurnAdmissionKind = "automatic"
+)
+
+func (k TurnAdmissionKind) Valid() bool {
+	switch k {
+	case AdmissionInitial, AdmissionManual, AdmissionAutomatic:
+		return true
+	default:
+		return false
+	}
 }
 
-// PendingRecoveryKind identifies the only safe host conclusions after a
-// continuation permit survives without a settled turn receipt.
+// ContinuationPermit is the legacy name of the durable provider-turn
+// admission. Keeping the type and JSON field names stable preserves existing
+// session snapshots while Kind extends the permit to initial and manual turns.
+// While an admission is pending, every later begin attempt fails closed;
+// callers must settle or explicitly recover it.
+type ContinuationPermit struct {
+	TurnID    string            `json:"turn_id"`
+	Kind      TurnAdmissionKind `json:"kind,omitempty"`
+	Ordinal   int64             `json:"ordinal"`
+	GrantedAt time.Time         `json:"granted_at"`
+}
+
+// PendingRecoveryKind identifies the only safe host conclusions after a turn
+// admission survives without a settled receipt.
 type PendingRecoveryKind string
 
 const (
@@ -198,8 +231,8 @@ type PendingRecovery struct {
 	OutcomeRef string              `json:"outcome_ref,omitempty"`
 }
 
-// PendingRecoveryRecord retains both the consumed permit and the evidence that
-// made it safe to leave the in-flight state.
+// PendingRecoveryRecord retains both the consumed admission and the evidence
+// that made it safe to leave the in-flight state.
 type PendingRecoveryRecord struct {
 	Permit      ContinuationPermit `json:"permit"`
 	Recovery    PendingRecovery    `json:"recovery"`
@@ -255,10 +288,24 @@ type Blocker struct {
 // BlockResolution is a host-authored reconciliation receipt. Outcome-unknown
 // blockers require Reconciled=true and non-empty Evidence.
 type BlockResolution struct {
-	Reference  string `json:"reference"`
-	Reason     string `json:"reason"`
-	Reconciled bool   `json:"reconciled,omitempty"`
-	Evidence   string `json:"evidence,omitempty"`
+	Reference      string                 `json:"reference"`
+	Reason         string                 `json:"reason"`
+	Reconciled     bool                   `json:"reconciled,omitempty"`
+	Evidence       string                 `json:"evidence,omitempty"`
+	Reconciliation *ReconciliationReceipt `json:"reconciliation,omitempty"`
+}
+
+// ReconciliationReceipt binds a Goal Runtime transition to one exact durable
+// control-plane resolution set. It contains no user evidence or raw tool data;
+// the evidence remains in the append-only control plane and is addressed by
+// these identities and digest.
+type ReconciliationReceipt struct {
+	Version             int    `json:"version"`
+	GroupItemID         string `json:"group_item_id"`
+	FinalItemID         string `json:"final_item_id"`
+	FinalResolutionID   string `json:"final_resolution_id"`
+	ResolutionSetSHA256 string `json:"resolution_set_sha256"`
+	TargetCount         int    `json:"target_count"`
 }
 
 // BlockResolutionRecord preserves the reconciliation that made a blocker safe

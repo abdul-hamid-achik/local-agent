@@ -215,45 +215,9 @@ func (s *Store) ListUnresolvedExecutions(ctx context.Context, sessionID int64, w
 	if err := validateExecutionListLimit(limit, maxUnresolvedList); err != nil {
 		return nil, err
 	}
-	if err := validateExecutionSessionScope(ctx, s.db, sessionID, workspaceID); err != nil {
-		return nil, err
-	}
-	rows, err := s.db.QueryContext(ctx, `
-		WITH ranked AS (
-			SELECT e.*,
-			       COUNT(*) OVER (PARTITION BY execution_id) AS event_count,
-			       ROW_NUMBER() OVER (PARTITION BY execution_id ORDER BY id DESC) AS latest_rank
-			  FROM execution_events e
-			 WHERE session_id = ? AND workspace_id = ?
-		)
-		SELECT `+executionEventColumns+`, event_count
-		  FROM ranked
-		 WHERE latest_rank = 1
-		   AND event_type NOT IN ('denied', 'completed', 'failed', 'cancelled')
-		 ORDER BY CASE
-		              WHEN event_type = 'outcome_unknown' THEN 0
-		              WHEN event_type = 'started' AND effect_class != 'read_only' THEN 0
-		              ELSE 1
-		          END,
-		          id ASC
-		 LIMIT ?`, sessionID, workspaceID, limit)
-	if err != nil {
-		return nil, fmt.Errorf("list unresolved executions: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	states := make([]execution.State, 0)
-	for rows.Next() {
-		event, count, scanErr := scanExecutionState(rows)
-		if scanErr != nil {
-			return nil, scanErr
-		}
-		states = append(states, execution.State{Identity: event.Identity, Latest: event, EventCount: count})
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read unresolved executions: %w", err)
-	}
-	return states, nil
+	return s.listEffectiveExecutionStates(ctx, effectiveExecutionQuery{
+		kind: effectiveUnresolved, sessionID: sessionID, workspaceID: workspaceID,
+	}, limit, false)
 }
 
 // LatestExecutionEventID returns the highest durable event ID in one scoped
@@ -287,49 +251,10 @@ func (s *Store) ListExecutionRecoveryHazards(ctx context.Context, sessionID int6
 	if err := validateExecutionListLimit(limit, maxExecutionRecoveryHazards); err != nil {
 		return nil, err
 	}
-	if err := validateExecutionSessionScope(ctx, s.db, sessionID, workspaceID); err != nil {
-		return nil, err
-	}
-	rows, err := s.db.QueryContext(ctx, `
-		WITH ranked AS (
-			SELECT e.*,
-			       COUNT(*) OVER (PARTITION BY execution_id) AS event_count,
-			       ROW_NUMBER() OVER (PARTITION BY execution_id ORDER BY id DESC) AS latest_rank
-			  FROM execution_events e
-			 WHERE session_id = ? AND workspace_id = ?
-		)
-		SELECT `+executionEventColumns+`, event_count
-		  FROM ranked
-		 WHERE latest_rank = 1
-		   AND (
-		       event_type = 'outcome_unknown'
-		       OR (event_type = 'started' AND effect_class != 'read_only')
-		       OR (event_type = 'completed' AND effect_class != 'read_only' AND id > ?)
-		   )
-		 ORDER BY CASE
-		              WHEN event_type = 'outcome_unknown' THEN 0
-		              WHEN event_type = 'started' AND effect_class != 'read_only' THEN 0
-		              ELSE 1
-		          END,
-		          id ASC
-		 LIMIT ?`, sessionID, workspaceID, afterEventID, limit)
-	if err != nil {
-		return nil, fmt.Errorf("list execution recovery hazards: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	states := make([]execution.State, 0)
-	for rows.Next() {
-		event, count, scanErr := scanExecutionState(rows)
-		if scanErr != nil {
-			return nil, scanErr
-		}
-		states = append(states, execution.State{Identity: event.Identity, Latest: event, EventCount: count})
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read execution recovery hazards: %w", err)
-	}
-	return states, nil
+	return s.listEffectiveExecutionStates(ctx, effectiveExecutionQuery{
+		kind: effectiveRecovery, sessionID: sessionID, workspaceID: workspaceID,
+		afterEventID: afterEventID,
+	}, limit, true)
 }
 
 // ListExecutionReconciliationTargets returns the exact turn's bounded latest
@@ -344,43 +269,10 @@ func (s *Store) ListExecutionReconciliationTargets(ctx context.Context, sessionI
 	if err := validateExecutionListLimit(limit, maxExecutionRecoveryHazards); err != nil {
 		return nil, err
 	}
-	if err := validateExecutionSessionScope(ctx, s.db, sessionID, workspaceID); err != nil {
-		return nil, err
-	}
-	rows, err := s.db.QueryContext(ctx, `
-		WITH ranked AS (
-			SELECT e.*,
-			       COUNT(*) OVER (PARTITION BY execution_id) AS event_count,
-			       ROW_NUMBER() OVER (PARTITION BY execution_id ORDER BY id DESC) AS latest_rank
-			  FROM execution_events e
-			 WHERE session_id = ? AND workspace_id = ? AND turn_id = ?
-		)
-		SELECT `+executionEventColumns+`, event_count
-		  FROM ranked
-		 WHERE latest_rank = 1
-		   AND (
-		       event_type = 'outcome_unknown'
-		       OR (event_type = 'started' AND effect_class != 'read_only')
-		   )
-		 ORDER BY id ASC
-		 LIMIT ?`, sessionID, workspaceID, turnID, limit)
-	if err != nil {
-		return nil, fmt.Errorf("list execution reconciliation targets: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	states := make([]execution.State, 0)
-	for rows.Next() {
-		event, count, scanErr := scanExecutionState(rows)
-		if scanErr != nil {
-			return nil, scanErr
-		}
-		states = append(states, execution.State{Identity: event.Identity, Latest: event, EventCount: count})
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read execution reconciliation targets: %w", err)
-	}
-	return states, nil
+	return s.listEffectiveExecutionStates(ctx, effectiveExecutionQuery{
+		kind: effectiveReconciliationTargets, sessionID: sessionID,
+		workspaceID: workspaceID, turnID: turnID,
+	}, limit, true)
 }
 
 type executionRowScanner interface {

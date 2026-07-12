@@ -17,9 +17,15 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/controlplane"
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
 	"github.com/abdul-hamid-achik/local-agent/internal/goal"
+	"github.com/abdul-hamid-achik/local-agent/internal/reconciliation"
 )
 
 const goalCommandLimit = 100
+
+const (
+	goalRecoveryActor           = "local-user"
+	goalRecoveryNoResumeWarning = "Recovery records evidence only. It never resumes execution; resume the paused goal separately after review."
+)
 
 type goalSessionStore interface {
 	ListSessions(context.Context, db.ListSessionsParams) ([]db.Session, error)
@@ -30,6 +36,15 @@ type goalSessionStore interface {
 type goalControlStore interface {
 	goalSessionStore
 	ListControlStates(context.Context, controlplane.Query) ([]controlplane.State, error)
+}
+
+type goalRecoveryStore interface {
+	GetSessionStateRecord(context.Context, int64) (db.SessionStateRecord, error)
+	InspectReconciliationGroup(context.Context, int64, string) (db.ReconciliationGroupInspection, error)
+	AcquireExecutionSessionLease(context.Context, int64, string) (*db.ExecutionSessionLease, error)
+	EnsureReconciliationGroup(context.Context, *db.ExecutionSessionLease, db.EnsureReconciliationGroupRequest) (db.ReconciliationGroup, bool, error)
+	ResolveExecutionReconciliation(context.Context, *db.ExecutionSessionLease, db.ResolveExecutionReconciliationRequest) (db.ReconciliationCommitReceipt, error)
+	ResolveReconciliationParent(context.Context, *db.ExecutionSessionLease, db.ResolveReconciliationParentRequest) (db.ReconciliationCommitReceipt, error)
 }
 
 // goalSummary is the stable read model printed by `local-agent goal list`.
@@ -66,6 +81,60 @@ type pendingControlSummary struct {
 	CreatedAt   time.Time         `json:"created_at"`
 }
 
+type goalRecoveryMemberSummary struct {
+	ItemID      string `json:"item_id"`
+	ExecutionID string `json:"execution_id"`
+	EventID     int64  `json:"event_id"`
+	EventType   string `json:"event_type"`
+	EffectClass string `json:"effect_class"`
+	Resolved    bool   `json:"resolved"`
+}
+
+type goalRecoveryParentSummary struct {
+	ItemID         string `json:"item_id"`
+	Required       bool   `json:"required"`
+	Resolved       bool   `json:"resolved"`
+	Ready          bool   `json:"ready"`
+	BlockedByCount int    `json:"blocked_by_count"`
+}
+
+// goalRecoveryDryRun is deliberately redacted. Never encode the repository
+// inspection directly: it contains canonical payload and evidence envelopes.
+type goalRecoveryDryRun struct {
+	DryRun                   bool                        `json:"dry_run"`
+	SessionID                int64                       `json:"session_id"`
+	SessionRevision          int64                       `json:"session_revision"`
+	GoalID                   string                      `json:"goal_id"`
+	GoalState                goal.State                  `json:"goal_state"`
+	GroupItemID              string                      `json:"group_item_id"`
+	TurnID                   string                      `json:"turn_id"`
+	BlockerReference         string                      `json:"blocker_reference"`
+	SnapshotCursor           int64                       `json:"snapshot_cursor"`
+	GroupPayloadSHA256       string                      `json:"group_payload_sha256"`
+	MemberSetSHA256          string                      `json:"member_set_sha256"`
+	ExecutionMemberCount     int                         `json:"execution_member_count"`
+	Members                  []goalRecoveryMemberSummary `json:"members"`
+	UnresolvedExecutionItems []string                    `json:"unresolved_execution_items"`
+	Parent                   goalRecoveryParentSummary   `json:"parent"`
+	NoResumeWarning          string                      `json:"no_resume_warning"`
+}
+
+type goalRecoveryApplyResult struct {
+	Applied             bool       `json:"applied"`
+	Inserted            bool       `json:"inserted"`
+	SessionID           int64      `json:"session_id"`
+	SessionRevision     int64      `json:"session_revision"`
+	GroupItemID         string     `json:"group_item_id"`
+	ItemID              string     `json:"item_id"`
+	ResolutionID        string     `json:"resolution_id"`
+	GoalState           goal.State `json:"goal_state"`
+	GoalCleared         bool       `json:"goal_cleared"`
+	RemainingExecutions int        `json:"remaining_executions"`
+	ParentPending       bool       `json:"parent_pending"`
+	ExecutionCursor     int64      `json:"execution_cursor"`
+	NoResumeWarning     string     `json:"no_resume_warning"`
+}
+
 func handleGoalCommand(args []string) int {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
 		writeGoalUsage(os.Stdout)
@@ -94,6 +163,8 @@ func handleGoalCommand(args []string) int {
 		return handleGoalShow(store, workspace, args[1:], os.Stdout, os.Stderr)
 	case "pending":
 		return handleGoalPending(store, workspace, args[1:], os.Stdout, os.Stderr)
+	case "recover":
+		return handleGoalRecover(store, workspace, args[1:], os.Stdout, os.Stderr)
 	default:
 		goalFprintf(os.Stderr, "goal: unknown command %q\n", args[0])
 		writeGoalUsage(os.Stderr)
@@ -147,6 +218,323 @@ func handleGoalPending(store goalControlStore, workspace string, args []string, 
 	}
 	writePendingControlItems(stdout, pending)
 	return 0
+}
+
+func handleGoalRecover(store goalRecoveryStore, workspace string, args []string, stdout, stderr io.Writer) int {
+	if store == nil {
+		_, _ = fmt.Fprintln(stderr, "goal recover: durable store is unavailable")
+		return 1
+	}
+	normalized, err := normalizeGoalRecoverArgs(args)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "goal recover: %v\n", err)
+		return 2
+	}
+	flags := flag.NewFlagSet("goal recover", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	apply := flags.Bool("apply", false, "persist the exact typed evidence")
+	jsonOutput := flags.Bool("json", false, "print machine-readable JSON")
+	itemID := flags.String("item", "", "exact execution-member or parent item ID")
+	observation := flags.String("observation", "", "effect_applied, effect_not_applied, effect_compensated, or turn_abandoned_after_inspection")
+	source := flags.String("source", "", "external_receipt, workspace_artifact, verification_check, or operator_observation")
+	reference := flags.String("reference", "", "redacted evidence reference")
+	summary := flags.String("summary", "", "bounded inspection summary")
+	observedAtText := flags.String("observed-at", "", "evidence observation time in RFC3339")
+	if err := flags.Parse(normalized); err != nil {
+		return 2
+	}
+	if flags.NArg() != 1 {
+		_, _ = fmt.Fprintln(stderr, "goal recover: provide exactly one session ID")
+		return 2
+	}
+	sessionID, err := strconv.ParseInt(flags.Arg(0), 10, 64)
+	if err != nil || sessionID <= 0 {
+		_, _ = fmt.Fprintf(stderr, "goal recover: invalid session ID %q\n", flags.Arg(0))
+		return 2
+	}
+	provided := make(map[string]bool)
+	flags.Visit(func(value *flag.Flag) { provided[value.Name] = true })
+	if !*apply {
+		for name := range provided {
+			if name != "json" && name != "apply" {
+				_, _ = fmt.Fprintf(stderr, "goal recover: --%s requires --apply\n", name)
+				return 2
+			}
+		}
+		inspection, err := store.InspectReconciliationGroup(context.Background(), sessionID, workspace)
+		if err != nil {
+			if errors.Is(err, db.ErrReconciliationGroupNotFound) {
+				_, _ = fmt.Fprintln(stderr, "goal recover: no existing reconciliation group; dry-run never creates one")
+			} else {
+				_, _ = fmt.Fprintf(stderr, "goal recover: inspect durable recovery group: %v\n", err)
+			}
+			return 1
+		}
+		projection := projectGoalRecoveryDryRun(inspection)
+		if *jsonOutput {
+			if err := writeJSON(stdout, projection); err != nil {
+				_, _ = fmt.Fprintf(stderr, "goal recover: %v\n", err)
+				return 1
+			}
+		} else {
+			writeGoalRecoveryDryRun(stdout, projection)
+		}
+		return 0
+	}
+
+	required := map[string]string{
+		"item": *itemID, "observation": *observation, "source": *source,
+		"reference": *reference, "summary": *summary, "observed-at": *observedAtText,
+	}
+	for _, name := range []string{"item", "observation", "source", "reference", "summary", "observed-at"} {
+		if !provided[name] || strings.TrimSpace(required[name]) == "" {
+			_, _ = fmt.Fprintf(stderr, "goal recover: --apply requires non-empty --%s\n", name)
+			return 2
+		}
+	}
+	observedAt, err := time.Parse(time.RFC3339, *observedAtText)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "goal recover: invalid --observed-at RFC3339 value: %v\n", err)
+		return 2
+	}
+	sourceValue := reconciliation.Source{
+		Kind: reconciliation.SourceKind(*source), Reference: *reference, ObservedAt: observedAt.UTC(),
+	}
+	if err := sourceValue.Validate(); err != nil {
+		_, _ = fmt.Fprintf(stderr, "goal recover: invalid evidence source: %v\n", err)
+		return 2
+	}
+	var memberEvidence *reconciliation.Request
+	var parentEvidence *reconciliation.TurnRequest
+	if conclusion := reconciliation.TurnConclusion(*observation); conclusion.Valid() {
+		request := reconciliation.TurnRequest{Conclusion: conclusion, Source: sourceValue, Summary: *summary}
+		if err := request.Validate(); err != nil {
+			_, _ = fmt.Fprintf(stderr, "goal recover: invalid parent evidence: %v\n", err)
+			return 2
+		}
+		parentEvidence = &request
+	} else if disposition := reconciliation.Disposition(*observation); disposition.Valid() {
+		request := reconciliation.Request{Disposition: disposition, Source: sourceValue, Summary: *summary}
+		if err := request.Validate(); err != nil {
+			_, _ = fmt.Fprintf(stderr, "goal recover: invalid execution evidence: %v\n", err)
+			return 2
+		}
+		memberEvidence = &request
+	} else {
+		_, _ = fmt.Fprintf(stderr, "goal recover: invalid --observation %q\n", *observation)
+		return 2
+	}
+
+	ctx := context.Background()
+	lease, err := store.AcquireExecutionSessionLease(ctx, sessionID, workspace)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "goal recover: acquire exact session lease: %v\n", err)
+		return 1
+	}
+	defer func() {
+		if err := lease.Close(); err != nil {
+			_, _ = fmt.Fprintf(stderr, "goal recover: release session lease: %v\n", err)
+		}
+	}()
+	record, err := store.GetSessionStateRecord(ctx, sessionID)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "goal recover: load revisioned session: %v\n", err)
+		return 1
+	}
+	inspection, inspectErr := store.InspectReconciliationGroup(ctx, sessionID, workspace)
+	var group db.ReconciliationGroup
+	switch {
+	case inspectErr == nil:
+		if inspection.SessionRevision != record.Revision {
+			_, _ = fmt.Fprintf(stderr, "goal recover: %v: inspected revision %d differs from loaded revision %d\n", db.ErrSessionStateConflict, inspection.SessionRevision, record.Revision)
+			return 1
+		}
+		group = inspection.Group
+	case errors.Is(inspectErr, db.ErrReconciliationGroupNotFound):
+		group, _, err = store.EnsureReconciliationGroup(ctx, lease, db.EnsureReconciliationGroupRequest{
+			SessionID: sessionID, WorkspaceID: workspace, ExpectedSessionRevision: record.Revision,
+		})
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "goal recover: ensure exact reconciliation group: %v\n", err)
+			return 1
+		}
+	default:
+		_, _ = fmt.Fprintf(stderr, "goal recover: inspect durable recovery group: %v\n", inspectErr)
+		return 1
+	}
+
+	var receipt db.ReconciliationCommitReceipt
+	if *itemID == group.GroupItemID {
+		if parentEvidence == nil {
+			_, _ = fmt.Fprintf(stderr, "goal recover: parent item %q requires observation %q\n", *itemID, reconciliation.TurnAbandonedAfterInspection)
+			return 2
+		}
+		receipt, err = store.ResolveReconciliationParent(ctx, lease, db.ResolveReconciliationParentRequest{
+			SessionID: sessionID, WorkspaceID: workspace, GroupItemID: group.GroupItemID,
+			ExpectedSessionRevision: record.Revision, Actor: goalRecoveryActor, Evidence: *parentEvidence,
+		})
+	} else if member, ok := reconciliationMemberByItemID(group, *itemID); ok {
+		if memberEvidence == nil {
+			_, _ = fmt.Fprintf(stderr, "goal recover: execution item %q requires an effect observation\n", *itemID)
+			return 2
+		}
+		receipt, err = store.ResolveExecutionReconciliation(ctx, lease, db.ResolveExecutionReconciliationRequest{
+			SessionID: sessionID, WorkspaceID: workspace, GroupItemID: group.GroupItemID,
+			ControlItemID: member.ControlItemID, ExpectedSessionRevision: record.Revision,
+			Actor: goalRecoveryActor, Evidence: *memberEvidence,
+		})
+	} else {
+		_, _ = fmt.Fprintf(stderr, "goal recover: item %q is not the exact parent or execution member of group %q\n", *itemID, group.GroupItemID)
+		return 2
+	}
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "goal recover: apply typed evidence: %v\n", err)
+		return 1
+	}
+	result := projectGoalRecoveryApply(sessionID, receipt)
+	if *jsonOutput {
+		if err := writeJSON(stdout, result); err != nil {
+			_, _ = fmt.Fprintf(stderr, "goal recover: %v\n", err)
+			return 1
+		}
+	} else {
+		writeGoalRecoveryApply(stdout, result)
+	}
+	return 0
+}
+
+func normalizeGoalRecoverArgs(args []string) ([]string, error) {
+	valueFlags := map[string]bool{
+		"item": true, "observation": true, "source": true,
+		"reference": true, "summary": true, "observed-at": true,
+	}
+	flagArgs := make([]string, 0, len(args))
+	positionals := make([]string, 0, 1)
+	for index := 0; index < len(args); index++ {
+		argument := args[index]
+		if argument == "--" {
+			positionals = append(positionals, args[index+1:]...)
+			break
+		}
+		if !strings.HasPrefix(argument, "-") || argument == "-" {
+			positionals = append(positionals, argument)
+			continue
+		}
+		flagArgs = append(flagArgs, argument)
+		nameValue := strings.TrimLeft(argument, "-")
+		name, _, hasValue := strings.Cut(nameValue, "=")
+		if !valueFlags[name] || hasValue {
+			continue
+		}
+		if index+1 >= len(args) {
+			return nil, fmt.Errorf("--%s requires a value", name)
+		}
+		index++
+		flagArgs = append(flagArgs, args[index])
+	}
+	return append(flagArgs, positionals...), nil
+}
+
+func reconciliationMemberByItemID(group db.ReconciliationGroup, itemID string) (db.ReconciliationGroupMember, bool) {
+	for _, member := range group.Members {
+		if member.ControlItemID == itemID {
+			return member, true
+		}
+	}
+	return db.ReconciliationGroupMember{}, false
+}
+
+func projectGoalRecoveryDryRun(inspection db.ReconciliationGroupInspection) goalRecoveryDryRun {
+	group := inspection.Group
+	members := make([]goalRecoveryMemberSummary, 0, len(group.Members))
+	unresolved := make([]string, 0, len(group.Members))
+	for _, member := range group.Members {
+		members = append(members, goalRecoveryMemberSummary{
+			ItemID: member.ControlItemID, ExecutionID: member.ExecutionID,
+			EventID: member.EventID, EventType: string(member.EventType),
+			EffectClass: string(member.EffectClass), Resolved: member.Resolved,
+		})
+		if !member.Resolved {
+			unresolved = append(unresolved, member.ControlItemID)
+		}
+	}
+	parentResolved := group.ParentResolution != nil
+	return goalRecoveryDryRun{
+		DryRun: true, SessionID: inspection.SessionID, SessionRevision: inspection.SessionRevision,
+		GoalID: inspection.GoalID, GoalState: inspection.GoalState,
+		GroupItemID: group.GroupItemID, TurnID: group.TurnID, BlockerReference: group.BlockerReference,
+		SnapshotCursor: group.SnapshotCursor, GroupPayloadSHA256: group.PayloadSHA256,
+		MemberSetSHA256: group.MemberSetSHA256, ExecutionMemberCount: group.ExecutionMemberCount,
+		Members: members, UnresolvedExecutionItems: unresolved,
+		Parent: goalRecoveryParentSummary{
+			ItemID: group.GroupItemID, Required: true, Resolved: parentResolved,
+			Ready: !parentResolved && len(unresolved) == 0, BlockedByCount: len(unresolved),
+		},
+		NoResumeWarning: goalRecoveryNoResumeWarning,
+	}
+}
+
+func projectGoalRecoveryApply(sessionID int64, receipt db.ReconciliationCommitReceipt) goalRecoveryApplyResult {
+	state := goal.StateBlocked
+	if receipt.Goal != nil {
+		state = receipt.Goal.State
+	} else if !receipt.ParentPending {
+		state = ""
+	}
+	return goalRecoveryApplyResult{
+		Applied: true, Inserted: receipt.Inserted, SessionID: sessionID,
+		SessionRevision: receipt.SessionRevision, GroupItemID: receipt.GroupItemID,
+		ItemID: receipt.ItemID, ResolutionID: receipt.ResolutionID, GoalState: state,
+		GoalCleared: receipt.GoalCleared, RemainingExecutions: receipt.RemainingExecutions,
+		ParentPending: receipt.ParentPending, ExecutionCursor: receipt.ExecutionCursor,
+		NoResumeWarning: goalRecoveryNoResumeWarning,
+	}
+}
+
+func writeGoalRecoveryDryRun(writer io.Writer, view goalRecoveryDryRun) {
+	goalFprintln(writer, "Recovery dry run (read-only)")
+	goalFprintf(writer, "Session: %d @ revision %d\n", view.SessionID, view.SessionRevision)
+	goalFprintf(writer, "Goal: %s · %s\n", terminalSafeGoalText(view.GoalID), view.GoalState)
+	goalFprintf(writer, "Group: %s\n", terminalSafeGoalText(view.GroupItemID))
+	goalFprintf(writer, "Turn: %s · snapshot cursor %d\n", terminalSafeGoalText(view.TurnID), view.SnapshotCursor)
+	goalFprintf(writer, "Members: %d total · %d unresolved\n", view.ExecutionMemberCount, len(view.UnresolvedExecutionItems))
+	for _, member := range view.Members {
+		status := "pending"
+		if member.Resolved {
+			status = "resolved"
+		}
+		goalFprintf(writer, "  %s · %s · %s · %s\n",
+			terminalSafeGoalText(member.ItemID), terminalSafeGoalText(member.ExecutionID), member.EventType, status)
+	}
+	parentStatus := "blocked"
+	switch {
+	case view.Parent.Resolved:
+		parentStatus = "resolved"
+	case view.Parent.Ready:
+		parentStatus = "ready"
+	}
+	goalFprintf(writer, "Parent: %s · %s", terminalSafeGoalText(view.Parent.ItemID), parentStatus)
+	if view.Parent.BlockedByCount > 0 {
+		goalFprintf(writer, " · waiting on %d execution member(s)", view.Parent.BlockedByCount)
+	}
+	goalFprintln(writer)
+	goalFprintf(writer, "Warning: %s\n", view.NoResumeWarning)
+}
+
+func writeGoalRecoveryApply(writer io.Writer, result goalRecoveryApplyResult) {
+	action := "replayed"
+	if result.Inserted {
+		action = "recorded"
+	}
+	goalFprintf(writer, "Recovery evidence %s: %s\n", action, terminalSafeGoalText(result.ResolutionID))
+	goalFprintf(writer, "Group: %s · item %s\n", terminalSafeGoalText(result.GroupItemID), terminalSafeGoalText(result.ItemID))
+	goalFprintf(writer, "Session revision: %d\n", result.SessionRevision)
+	if result.GoalCleared {
+		goalFprintf(writer, "Goal state: %s\n", result.GoalState)
+	} else {
+		goalFprintf(writer, "Remaining execution members: %d · parent pending: %t\n", result.RemainingExecutions, result.ParentPending)
+	}
+	goalFprintf(writer, "Warning: %s\n", result.NoResumeWarning)
 }
 
 func handleGoalList(store goalSessionStore, workspace string, args []string, stdout, stderr io.Writer) int {
@@ -317,8 +705,10 @@ func writeGoalUsage(writer io.Writer) {
 	_, _ = fmt.Fprintln(writer, "  local-agent goal list [--limit 20] [--json]")
 	_, _ = fmt.Fprintln(writer, "  local-agent goal show [--json] <session-id>")
 	_, _ = fmt.Fprintln(writer, "  local-agent goal pending [--limit 20] [--json] <session-id>")
+	_, _ = fmt.Fprintln(writer, "  local-agent goal recover [--json] <session-id>")
+	_, _ = fmt.Fprintln(writer, "  local-agent goal recover --apply --item ID --observation VALUE --source VALUE --reference TEXT --summary TEXT --observed-at RFC3339 [--json] <session-id>")
 	_, _ = fmt.Fprintln(writer)
-	_, _ = fmt.Fprintln(writer, "These commands inspect durable goal state and never resume execution.")
+	_, _ = fmt.Fprintln(writer, "Recovery is read-only unless --apply is explicit. Recovery never resumes execution and has no force override.")
 }
 
 func projectPendingControlItems(states []controlplane.State, sessionID int64, workspaceID string) ([]pendingControlSummary, error) {

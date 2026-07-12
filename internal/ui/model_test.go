@@ -407,6 +407,100 @@ func TestAgentDoneCompletedRecoveryHazardDoesNotAdvanceCursor(t *testing.T) {
 	}
 }
 
+func TestAgentDoneSameCallIDWrongResultDoesNotAdvanceCursor(t *testing.T) {
+	m, store, terminal := modelWithCompletedExecution(t)
+	m.agent.ReplaceMessages([]llm.Message{{
+		Role: "tool", ToolCallID: terminal.Identity.CanonicalCallID,
+		ToolName: terminal.Identity.ToolName, Content: "wrong result",
+	}})
+
+	updated, _ := m.Update(AgentDoneMsg{Err: context.Canceled})
+	m = updated.(*Model)
+	if m.executionCursor != 0 {
+		t.Fatalf("same-call wrong result advanced cursor to %d", m.executionCursor)
+	}
+	record, err := store.GetSessionStateRecord(context.Background(), m.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := decodeSessionState(record.StateJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.ExecutionCursor != 0 {
+		t.Fatalf("saved wrong-result cursor = %d", state.ExecutionCursor)
+	}
+}
+
+func TestInteractiveSessionCASRejectsStaleWriterWithoutRetry(t *testing.T) {
+	store, err := db.OpenPath(filepath.Join(t.TempDir(), "interactive-cas.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	workspace := t.TempDir()
+	session, err := store.CreateSession(context.Background(), db.CreateSessionParams{
+		Title: "interactive CAS", WorkspaceID: workspace,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := store.AcquireExecutionSessionLease(context.Background(), session.ID, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lease.Close() })
+
+	m := newTestModel(t)
+	m.agent.SetWorkDir(workspace)
+	m.SetSessionStore(store)
+	m.sessionID = session.ID
+	m.executionLease = lease
+	if err := m.initializeSessionStateRevision(0); err != nil {
+		t.Fatal(err)
+	}
+	m.agent.AddUserMessage("already durable")
+	if err := m.persistSessionState(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	m.sessionStateMu.RLock()
+	staleRevision := m.sessionStateRevision
+	m.sessionStateMu.RUnlock()
+	external, err := store.SaveSessionStateCAS(
+		context.Background(), session.ID, staleRevision, `{"writer":"external coordinator"}`,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if cmd := m.sendToAgent("do not dispatch"); cmd != nil {
+		t.Fatal("stale interactive writer returned a provider command")
+	}
+	m.sessionStateMu.RLock()
+	known, dirty, retainedRevision := m.sessionStateRevisionKnown, m.sessionStatePersistenceDirty, m.sessionStateRevision
+	m.sessionStateMu.RUnlock()
+	if known || !dirty || retainedRevision != staleRevision {
+		t.Fatalf("stale CAS state = known %v dirty %v revision %d", known, dirty, retainedRevision)
+	}
+	messages := m.agent.Messages()
+	if len(messages) != 1 || messages[0].Content != "already durable" {
+		t.Fatalf("stale save changed agent history: %#v", messages)
+	}
+	if m.input.Value() != "do not dispatch" || m.state != StateIdle {
+		t.Fatalf("stale save lost retry draft: state=%v draft=%q", m.state, m.input.Value())
+	}
+	if err := m.persistSessionState(context.Background()); !errors.Is(err, ErrSessionStateRevisionUnknown) {
+		t.Fatalf("second stale save error = %v", err)
+	}
+	stored, err := store.GetSessionStateRecord(context.Background(), session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Revision != external.Revision || stored.StateJSON != `{"writer":"external coordinator"}` {
+		t.Fatalf("stale interactive save overwrote external state: revision=%d state=%s", stored.Revision, stored.StateJSON)
+	}
+}
+
 func modelWithCompletedExecution(t *testing.T) (*Model, *db.Store, execution.Event) {
 	t.Helper()
 	store, err := db.OpenPath(filepath.Join(t.TempDir(), "execution.db"))
@@ -434,6 +528,9 @@ func modelWithCompletedExecution(t *testing.T) (*Model, *db.Store, execution.Eve
 	m.SetSessionStore(store)
 	m.sessionID = session.ID
 	m.executionLease = lease
+	if err := m.initializeSessionStateRevision(0); err != nil {
+		t.Fatal(err)
+	}
 	identity := execution.Identity{
 		SessionID: session.ID, WorkspaceID: workspace, RunID: "run_ui", TurnID: "turn_ui",
 		ExecutionID: "exec_ui", IdempotencyKey: "idem_ui", CanonicalCallID: "call_ui",
@@ -513,6 +610,9 @@ func TestSendToAgentRevertsHistoryWhenPreturnSnapshotFails(t *testing.T) {
 	m.SetSessionStore(store)
 	m.sessionID = session.ID
 	m.executionLease = lease
+	if err := m.initializeSessionStateRevision(0); err != nil {
+		t.Fatal(err)
+	}
 	m.agent.AddUserMessage("already durable")
 
 	if cmd := m.sendToAgent("do not dispatch"); cmd != nil {
@@ -554,10 +654,22 @@ func TestResetConversationReleasesExecutionSessionLease(t *testing.T) {
 	m := newTestModel(t)
 	m.sessionID = session.ID
 	m.executionLease = lease
+	if err := m.initializeSessionStateRevision(7); err != nil {
+		t.Fatal(err)
+	}
+	m.sessionStateMu.Lock()
+	m.sessionStatePersistenceDirty = true
+	m.sessionStateMu.Unlock()
 
 	m.resetConversationSession()
 	if m.executionLease != nil || m.sessionID != 0 {
 		t.Fatalf("reset retained session ownership: session=%d lease=%v", m.sessionID, m.executionLease)
+	}
+	m.sessionStateMu.RLock()
+	revision, known, dirty := m.sessionStateRevision, m.sessionStateRevisionKnown, m.sessionStatePersistenceDirty
+	m.sessionStateMu.RUnlock()
+	if revision != 0 || known || dirty {
+		t.Fatalf("reset retained revision authority: revision=%d known=%v dirty=%v", revision, known, dirty)
 	}
 	reacquired, err := second.AcquireExecutionSessionLease(context.Background(), session.ID, workspace)
 	if err != nil {

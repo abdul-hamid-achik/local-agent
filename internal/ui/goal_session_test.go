@@ -19,11 +19,9 @@ func TestGoalSessionStateRoundTripAndLegacyClear(t *testing.T) {
 		MaxContinuationTurns: 4,
 		MaxEvalTokens:        2_000,
 	})
-	if err := source.goalRuntime.RecordTurn(context.Background(), goal.TurnReport{
+	recordUIGoalTurn(t, source.goalRuntime, goal.AdmissionInitial, goal.TurnReport{
 		TurnID: "turn_saved", EvalTokens: 31, Productive: true, Summary: "saved progress",
-	}); err != nil {
-		t.Fatal(err)
-	}
+	})
 
 	raw, err := encodeSessionState(source)
 	if err != nil {
@@ -124,88 +122,105 @@ func TestLoadPersistedSessionRejectsGoalOwnedByDifferentSession(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, _, err = loadPersistedSession(context.Background(), store, session.ID, workspace)
+	_, _, _, err = loadPersistedSession(context.Background(), store, session.ID, workspace)
 	if err == nil || !strings.Contains(err.Error(), "contains goal state for session") {
 		t.Fatalf("cross-session goal load error = %v", err)
 	}
 }
 
-func TestRestoredPendingContinuationBlocksWithoutProviderDispatch(t *testing.T) {
-	client := &goalCountingClient{}
-	m := newGoalRuntimeTestModel(t, client)
-	store, err := db.OpenPath(filepath.Join(t.TempDir(), "goal-pending-restore.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-	workspace, err := canonicalWorkspaceID(m.agent.WorkDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	m.agent.SetWorkDir(workspace)
-	session, err := store.CreateSession(context.Background(), db.CreateSessionParams{
-		Title: "pending goal", Mode: "BUILD", WorkspaceID: workspace,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	runtime := newUIGoalRuntime(t, session.ID, goal.BudgetLimits{MaxContinuationTurns: 3})
-	if err := runtime.RecordTurn(context.Background(), goal.TurnReport{
-		TurnID: "turn_initial", Productive: true, Summary: "verified progress",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := runtime.BeginContinuation(context.Background(), "turn_orphaned"); err != nil {
-		t.Fatal(err)
-	}
-	pending := snapshotUIGoal(t, runtime)
-	state := persistedSessionState{Version: 1, Mode: ModeBuild, Goal: &pending}
-	raw, err := marshalPersistedSessionState(state)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SaveSessionState(context.Background(), session.ID, raw); err != nil {
-		t.Fatal(err)
-	}
+func TestRestoredPendingTurnAdmissionsBlockWithoutProviderDispatch(t *testing.T) {
+	for _, test := range []struct {
+		name              string
+		kind              goal.TurnAdmissionKind
+		priorTurn         bool
+		wantContinuations int64
+	}{
+		{name: "initial", kind: goal.AdmissionInitial},
+		{name: "manual", kind: goal.AdmissionManual, priorTurn: true},
+		{name: "automatic", kind: goal.AdmissionAutomatic, priorTurn: true, wantContinuations: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &goalCountingClient{}
+			m := newGoalRuntimeTestModel(t, client)
+			store, err := db.OpenPath(filepath.Join(t.TempDir(), "goal-pending-restore.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			workspace, err := canonicalWorkspaceID(m.agent.WorkDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			m.agent.SetWorkDir(workspace)
+			session, err := store.CreateSession(context.Background(), db.CreateSessionParams{
+				Title: "pending goal", Mode: "BUILD", WorkspaceID: workspace,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			runtime := newUIGoalRuntime(t, session.ID, goal.BudgetLimits{MaxContinuationTurns: 3})
+			if test.priorTurn {
+				recordUIGoalTurn(t, runtime, goal.AdmissionInitial, goal.TurnReport{
+					TurnID: "turn_initial", Productive: true, Summary: "verified progress",
+				})
+			}
+			if _, err := runtime.BeginTurn(context.Background(), "turn_orphaned", test.kind); err != nil {
+				t.Fatal(err)
+			}
+			pending := snapshotUIGoal(t, runtime)
+			state := persistedSessionState{Version: 1, Mode: ModeBuild, Goal: &pending}
+			raw, err := marshalPersistedSessionState(state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.SaveSessionState(context.Background(), session.ID, raw); err != nil {
+				t.Fatal(err)
+			}
+			stateRecord, err := store.GetSessionStateRecord(context.Background(), session.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
 
-	m.SetSessionStore(store)
-	m.sessionLoading = true
-	m.sessionLoadToken = 7
-	updated, cmd := m.Update(SessionLoadedMsg{
-		LoadToken: 7, SessionID: session.ID, State: state, Title: "pending goal",
-	})
-	m = updated.(*Model)
-	if cmd != nil {
-		t.Fatal("restoring an orphaned continuation returned a command that could dispatch work")
-	}
-	if got := client.calls.Load(); got != 0 {
-		t.Fatalf("restored orphaned continuation dispatched %d provider calls", got)
-	}
+			m.SetSessionStore(store)
+			m.sessionLoading = true
+			m.sessionLoadToken = 7
+			updated, cmd := m.Update(SessionLoadedMsg{
+				LoadToken: 7, SessionID: session.ID, State: state, StateRecord: stateRecord, Title: "pending goal",
+			})
+			m = updated.(*Model)
+			if cmd != nil {
+				t.Fatalf("restoring an orphaned %s turn returned a provider command", test.kind)
+			}
+			if got := client.calls.Load(); got != 0 {
+				t.Fatalf("restored orphaned %s turn dispatched %d provider calls", test.kind, got)
+			}
 
-	recovered := snapshotUIGoal(t, m.goalRuntime)
-	if recovered.State != goal.StateBlocked || recovered.PendingContinuation != nil || recovered.Blocker == nil {
-		t.Fatalf("restored orphaned continuation = %#v", recovered)
-	}
-	if recovered.LastPendingRecovery == nil || recovered.LastPendingRecovery.Recovery.Kind != goal.PendingOutcomeUnknown {
-		t.Fatalf("restored continuation lacked outcome-unknown recovery: %#v", recovered.LastPendingRecovery)
-	}
-	if recovered.Usage.ContinuationTurns != 1 {
-		t.Fatalf("restored continuation budget was refunded: %#v", recovered.Usage)
-	}
+			recovered := snapshotUIGoal(t, m.goalRuntime)
+			if recovered.State != goal.StateBlocked || recovered.PendingContinuation != nil || recovered.Blocker == nil {
+				t.Fatalf("restored orphaned %s turn = %#v", test.kind, recovered)
+			}
+			if recovered.LastPendingRecovery == nil || recovered.LastPendingRecovery.Recovery.Kind != goal.PendingOutcomeUnknown || recovered.LastPendingRecovery.Permit.Kind != test.kind {
+				t.Fatalf("restored %s turn lacked bound outcome-unknown recovery: %#v", test.kind, recovered.LastPendingRecovery)
+			}
+			if recovered.Usage.ContinuationTurns != test.wantContinuations {
+				t.Fatalf("restored %s continuation usage = %#v", test.kind, recovered.Usage)
+			}
 
-	savedRaw, err := store.GetSessionState(context.Background(), session.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	saved, err := decodeSessionState(savedRaw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if saved.Goal == nil || saved.Goal.State != goal.StateBlocked || saved.Goal.PendingContinuation != nil {
-		t.Fatalf("recovered goal was not durably saved: %#v", saved.Goal)
-	}
-	if len(m.entries) == 0 || !strings.Contains(m.entries[0].Content, "Goal recovery blocked") {
-		t.Fatalf("restored goal did not explain recovery block: %#v", m.entries)
+			savedRaw, err := store.GetSessionState(context.Background(), session.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			saved, err := decodeSessionState(savedRaw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if saved.Goal == nil || saved.Goal.State != goal.StateBlocked || saved.Goal.PendingContinuation != nil {
+				t.Fatalf("recovered %s goal was not durably saved: %#v", test.kind, saved.Goal)
+			}
+			if len(m.entries) == 0 || !strings.Contains(m.entries[0].Content, "Goal recovery blocked") {
+				t.Fatalf("restored goal did not explain recovery block: %#v", m.entries)
+			}
+		})
 	}
 }
 
@@ -234,12 +249,16 @@ func TestRestoredActiveGoalPausesDurablyWithoutProviderDispatch(t *testing.T) {
 	if err := store.SaveSessionState(context.Background(), session.ID, raw); err != nil {
 		t.Fatal(err)
 	}
+	stateRecord, err := store.GetSessionStateRecord(context.Background(), session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	m.SetSessionStore(store)
 	m.sessionLoading = true
 	m.sessionLoadToken = 9
 	updated, cmd := m.Update(SessionLoadedMsg{
-		LoadToken: 9, SessionID: session.ID, State: state, Title: "active goal",
+		LoadToken: 9, SessionID: session.ID, State: state, StateRecord: stateRecord, Title: "active goal",
 	})
 	m = updated.(*Model)
 	if cmd != nil {
@@ -286,16 +305,17 @@ func TestSettledTurnSaveFailureStopsAndRestoresPendingAsOutcomeUnknown(t *testin
 		t.Fatal(err)
 	}
 	runtime := newUIGoalRuntime(t, session.ID, goal.BudgetLimits{MaxContinuationTurns: 3})
-	if err := runtime.RecordTurn(context.Background(), goal.TurnReport{
+	recordUIGoalTurn(t, runtime, goal.AdmissionInitial, goal.TurnReport{
 		TurnID: "turn_initial", Productive: true, Summary: "verified progress",
-	}); err != nil {
-		t.Fatal(err)
-	}
+	})
 	if _, err := runtime.BeginContinuation(context.Background(), "turn_settled"); err != nil {
 		t.Fatal(err)
 	}
 	m.SetSessionStore(store)
 	m.sessionID = session.ID
+	if err := m.initializeSessionStateRevision(0); err != nil {
+		t.Fatal(err)
+	}
 	m.goalRuntime = runtime
 	if err := m.persistGoalSession(); err != nil {
 		t.Fatal(err)
@@ -323,11 +343,11 @@ func TestSettledTurnSaveFailureStopsAndRestoresPendingAsOutcomeUnknown(t *testin
 		t.Fatal(err)
 	}
 	defer func() { _ = reopened.Close() }()
-	savedRaw, err := reopened.GetSessionState(context.Background(), session.ID)
+	stateRecord, err := reopened.GetSessionStateRecord(context.Background(), session.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	saved, err := decodeSessionState(savedRaw)
+	saved, err := decodeSessionState(stateRecord.StateJSON)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,6 +359,9 @@ func TestSettledTurnSaveFailureStopsAndRestoresPendingAsOutcomeUnknown(t *testin
 	restarted.agent.SetWorkDir(workspace)
 	restarted.SetSessionStore(reopened)
 	restarted.sessionID = session.ID
+	if err := restarted.initializeSessionStateRevision(stateRecord.Revision); err != nil {
+		t.Fatal(err)
+	}
 	if err := restarted.restoreSessionState(saved); err != nil {
 		t.Fatal(err)
 	}

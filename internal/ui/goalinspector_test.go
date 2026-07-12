@@ -173,6 +173,20 @@ func TestGoalInspectorActionsExposeReasonsAndConfirmDrop(t *testing.T) {
 	}
 }
 
+func TestGoalInspectorEmitsSelectedActionIdentityWithoutRoutingChildren(t *testing.T) {
+	now := time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC)
+	snapshot := goalInspectorFixture(now)
+	inspector := NewGoalInspector(snapshot, []command.ActionState{{
+		Spec:    command.ActionSpec{ID: goalInspectorRecoveryActionID, Title: "Recovery"},
+		Enabled: true,
+	}}, GoalInspectorOptions{Width: 80, Height: 24, Now: now})
+
+	event, _ := inspector.Update(enterKey())
+	if event.ActionID != goalInspectorRecoveryActionID || event.Action != command.ActionNone {
+		t.Fatalf("selected action event = %#v", event)
+	}
+}
+
 func TestGoalInspectorCachesUntilPresentationChanges(t *testing.T) {
 	now := time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC)
 	snapshot := goalInspectorFixture(now)

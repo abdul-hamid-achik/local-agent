@@ -4,12 +4,11 @@
 
 Accepted — 2026-07-12
 
-Implementation is partial at the product layer. The domain, migration, leased
-SQLite store, Cortex-decision producer, unknown-execution producer, and bounded
-read-only CLI projection are implemented. Foreground approvals do not yet
-produce `deferred_approval` items, and Local Agent has no user-facing command or
-modal that appends execution-reconciliation evidence and clears the matching
-Goal Runtime blocker.
+Implementation remains partial at the product layer. The domain, migration,
+leased SQLite store, Cortex-decision producer, unknown-execution producer,
+bounded CLI projections, and ADR-0004 evidence-backed `goal recover --apply`
+controller are implemented. Foreground approvals do not yet produce
+`deferred_approval` items.
 
 ## Context
 
@@ -72,8 +71,9 @@ latest durable state is `outcome_unknown`, or `started` with an effectful or
 unknown effect class. A completed, read-only, missing, or otherwise safe
 execution cannot acquire a reconciliation item. Resolution does not append,
 update, or delete any execution event. It is designed to be an independent
-authority receipt for a consumer that explicitly clears its recovery latch;
-that consumer workflow is not wired in the current TUI or CLI.
+authority receipt for a consumer that explicitly clears its recovery latch.
+ADR-0004 adds the grouped atomic coordinator and explicit CLI consumer; a
+standalone control resolution still cannot clear the Goal Runtime blocker.
 
 ### Identity and scope
 
@@ -150,7 +150,9 @@ unbounded history API.
   crash/restart without relying on TUI state; deferred-approval production is
   not wired yet.
 - Store consumers can audit the original question and exact resolving evidence;
-  the current CLI intentionally shows only pending least-privilege summaries.
+  `goal pending` shows only pending least-privilege summaries, while
+  `goal recover` uses a separate redacted group projection and requires the
+  complete explicit apply form for mutation.
 - Exact retry is safe while altered replay fails closed.
 - Reconciliation cannot silently convert unknown external work into a claimed
   backend completion.

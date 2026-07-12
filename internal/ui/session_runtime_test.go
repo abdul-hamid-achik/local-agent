@@ -174,7 +174,7 @@ func TestSessionRuntimeSwitchAndCrossProcessRoundTrip(t *testing.T) {
 	if err := store.SaveSessionState(ctx, session.ID, rawA); err != nil {
 		t.Fatal(err)
 	}
-	_, decodedA, err := loadPersistedSession(ctx, store, session.ID, workspaceID)
+	_, decodedA, _, err := loadPersistedSession(ctx, store, session.ID, workspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}

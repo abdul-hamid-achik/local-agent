@@ -149,12 +149,9 @@ func TestGoalAndExecutionLedgerRecoverTogetherAfterSubprocessCrash(t *testing.T)
 		t.Fatal(err)
 	}
 	runtime := newUIGoalRuntime(t, session.ID, goal.BudgetLimits{MaxContinuationTurns: 3})
-	if err := runtime.RecordTurn(context.Background(), goal.TurnReport{
+	recordUIGoalTurn(t, runtime, goal.AdmissionInitial, goal.TurnReport{
 		TurnID: "turn_before_crash", Productive: true, Summary: "prior progress was verified",
-	}); err != nil {
-		_ = store.Close()
-		t.Fatal(err)
-	}
+	})
 	const admittedTurn = "turn_goal_crash"
 	if _, err := runtime.BeginContinuation(context.Background(), admittedTurn); err != nil {
 		_ = store.Close()
@@ -224,14 +221,16 @@ func TestGoalAndExecutionLedgerRecoverTogetherAfterSubprocessCrash(t *testing.T)
 			_ = restartedLease.Close()
 		}
 	}()
-	_, persisted, err := loadPersistedSession(context.Background(), restartedStore, session.ID, workspaceID)
+	_, persisted, stateRecord, err := loadPersistedSession(context.Background(), restartedStore, session.ID, workspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if persisted.ExecutionCursor != 0 || persisted.Goal == nil || persisted.Goal.PendingContinuation == nil {
 		t.Fatalf("crash snapshot lost cursor or permit: %#v", persisted)
 	}
-	if persisted.Goal.PendingContinuation.TurnID != admittedTurn || persisted.Goal.Usage.ContinuationTurns != 1 {
+	if persisted.Goal.PendingContinuation.TurnID != admittedTurn ||
+		persisted.Goal.PendingContinuation.Kind != goal.AdmissionAutomatic ||
+		persisted.Goal.Usage.ContinuationTurns != 1 {
 		t.Fatalf("persisted permit = %#v usage=%#v", persisted.Goal.PendingContinuation, persisted.Goal.Usage)
 	}
 	hazards, err := restartedStore.ListExecutionRecoveryHazards(context.Background(), session.ID, workspaceID, 0, 100)
@@ -249,10 +248,19 @@ func TestGoalAndExecutionLedgerRecoverTogetherAfterSubprocessCrash(t *testing.T)
 	m.SetSessionStore(restartedStore)
 	m.sessionLoading = true
 	m.sessionLoadToken = 1
-	updated, _ := m.Update(SessionLoadedMsg{
-		LoadToken: 1, SessionID: session.ID, State: persisted, Title: session.Title,
+	updated, recoveryCommand := m.Update(SessionLoadedMsg{
+		LoadToken: 1, SessionID: session.ID, State: persisted, StateRecord: stateRecord, Title: session.Title,
 		RecoveryWarning: warning, ExecutionLease: restartedLease,
 	})
+	m = updated.(*Model)
+	if recoveryCommand == nil {
+		t.Fatal("restored outcome-unknown goal did not schedule reconciliation group ensure")
+	}
+	recoveryResult := awaitCommandMessage[goalRecoveryLoadResultMsg](t, commandMessages(recoveryCommand), 3*time.Second)
+	if recoveryResult.err != nil {
+		t.Fatalf("ensure restored reconciliation group: %v", recoveryResult.err)
+	}
+	updated, _ = m.Update(recoveryResult)
 	m = updated.(*Model)
 	leaseOwnedByModel = true
 	defer func() { _ = m.releaseExecutionSessionLease() }()

@@ -2,6 +2,7 @@ package goal
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"reflect"
@@ -95,6 +96,9 @@ func Restore(snapshot Snapshot, options ...Option) (*Runtime, error) {
 		return nil, err
 	}
 	copy := cloneSnapshot(snapshot)
+	if err := migrateLegacySnapshot(&copy); err != nil {
+		return nil, err
+	}
 	if err := validateSnapshot(copy); err != nil {
 		return nil, err
 	}
@@ -144,36 +148,70 @@ func (r *Runtime) CanAutoContinue(ctx context.Context) (ContinuationDecision, er
 	return r.continuationDecisionLocked(), nil
 }
 
-// BeginContinuation consumes one continuation-turn unit before dispatch and
-// records a pending permit. Repeating the same TurnID is retry-safe.
-func (r *Runtime) BeginContinuation(ctx context.Context, turnID string) (ContinuationPermit, error) {
+// BeginTurn durably admits one provider turn. Every new turn must settle this
+// exact admission through RecordTurn or RecoverPendingContinuation. Initial and
+// manual turns do not consume the automatic continuation budget.
+func (r *Runtime) BeginTurn(ctx context.Context, turnID string, kind TurnAdmissionKind) (ContinuationPermit, error) {
 	if err := contextError(ctx); err != nil {
 		return ContinuationPermit{}, err
 	}
 	if err := validateText("turn id", turnID, MaxTurnIDBytes, true); err != nil {
 		return ContinuationPermit{}, err
 	}
+	if !kind.Valid() {
+		return ContinuationPermit{}, fmt.Errorf("%w: invalid turn admission kind %q", ErrInvalid, kind)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if pending := r.state.PendingContinuation; pending != nil {
 		return ContinuationPermit{}, fmt.Errorf("%w: %s requires settlement or recovery", ErrTurnPending, pending.TurnID)
 	}
+	if last := r.state.LastTurn; last != nil && last.TurnID == turnID {
+		return ContinuationPermit{}, fmt.Errorf("%w: turn id %s already has a settled receipt", ErrTurnConflict, turnID)
+	}
+	if recovered := r.state.LastPendingRecovery; recovered != nil && recovered.Permit.TurnID == turnID {
+		return ContinuationPermit{}, fmt.Errorf("%w: recovered turn id %s cannot be redispatched", ErrTurnConflict, turnID)
+	}
 	now := r.nowLocked()
 	r.refreshBudgetLocked(now)
-	decision := r.continuationDecisionLocked()
-	if !decision.Allowed {
-		if decision.Reason == ContinuationBudget {
+
+	switch kind {
+	case AdmissionInitial:
+		if r.state.State == StateExhausted || len(r.state.ExhaustedBy) > 0 {
 			return ContinuationPermit{}, fmt.Errorf("%w: %s", ErrBudgetExhausted, strings.Join(budgetDimensionStrings(r.state.ExhaustedBy), ", "))
 		}
-		return ContinuationPermit{}, fmt.Errorf("%w: %s", ErrAutoContinuationDenied, decision.Reason)
+		if r.state.State != StateActive || r.state.LastTurn != nil {
+			return ContinuationPermit{}, fmt.Errorf("%w: initial turn requires an active goal without a prior receipt", ErrIllegalTransition)
+		}
+	case AdmissionManual:
+		if r.state.State == StateExhausted || len(r.state.ExhaustedBy) > 0 {
+			return ContinuationPermit{}, fmt.Errorf("%w: %s", ErrBudgetExhausted, strings.Join(budgetDimensionStrings(r.state.ExhaustedBy), ", "))
+		}
+		if r.state.State != StateActive || r.state.LastTurn == nil {
+			return ContinuationPermit{}, fmt.Errorf("%w: manual turn requires an active goal with a prior receipt", ErrIllegalTransition)
+		}
+	case AdmissionAutomatic:
+		decision := r.continuationDecisionLocked()
+		if !decision.Allowed {
+			if decision.Reason == ContinuationBudget {
+				return ContinuationPermit{}, fmt.Errorf("%w: %s", ErrBudgetExhausted, strings.Join(budgetDimensionStrings(r.state.ExhaustedBy), ", "))
+			}
+			return ContinuationPermit{}, fmt.Errorf("%w: %s", ErrAutoContinuationDenied, decision.Reason)
+		}
+		if r.state.Usage.ContinuationTurns == math.MaxInt64 {
+			return ContinuationPermit{}, fmt.Errorf("%w: continuation-turn usage overflow", ErrInvalid)
+		}
+		r.state.Usage.ContinuationTurns++
 	}
-	if r.state.Usage.ContinuationTurns == math.MaxInt64 {
-		return ContinuationPermit{}, fmt.Errorf("%w: continuation-turn usage overflow", ErrInvalid)
+
+	ordinal := int64(0)
+	if kind == AdmissionAutomatic {
+		ordinal = r.state.Usage.ContinuationTurns
 	}
-	r.state.Usage.ContinuationTurns++
 	permit := &ContinuationPermit{
 		TurnID:    turnID,
-		Ordinal:   r.state.Usage.ContinuationTurns,
+		Kind:      kind,
+		Ordinal:   ordinal,
 		GrantedAt: now,
 	}
 	r.state.PendingContinuation = permit
@@ -182,10 +220,17 @@ func (r *Runtime) BeginContinuation(ctx context.Context, turnID string) (Continu
 	return *permit, nil
 }
 
-// RecoverPendingContinuation resolves a permit left without a turn receipt.
-// It never redispatches and never refunds the consumed continuation budget. A
-// proven pre-dispatch cancellation lands paused (or exhausted); any uncertainty
-// lands blocked until ResolveBlock records reconciliation.
+// BeginContinuation is the compatibility wrapper for callers that explicitly
+// request an automatic continuation.
+func (r *Runtime) BeginContinuation(ctx context.Context, turnID string) (ContinuationPermit, error) {
+	return r.BeginTurn(ctx, turnID, AdmissionAutomatic)
+}
+
+// RecoverPendingContinuation resolves a turn admission left without a receipt.
+// The legacy method name remains stable for embeddings. Recovery never
+// redispatches and never refunds automatic continuation usage. A proven
+// pre-dispatch cancellation lands paused (or exhausted); any uncertainty lands
+// blocked until ResolveBlock records reconciliation.
 func (r *Runtime) RecoverPendingContinuation(ctx context.Context, recovery PendingRecovery) error {
 	if err := contextError(ctx); err != nil {
 		return err
@@ -199,7 +244,7 @@ func (r *Runtime) RecoverPendingContinuation(ctx context.Context, recovery Pendi
 		if previous := r.state.LastPendingRecovery; previous != nil && reflect.DeepEqual(previous.Recovery, recovery) {
 			return nil
 		}
-		return fmt.Errorf("%w: no continuation permit is pending", ErrIllegalTransition)
+		return fmt.Errorf("%w: no turn admission is pending", ErrIllegalTransition)
 	}
 	if recovery.TurnID != r.state.PendingContinuation.TurnID {
 		return fmt.Errorf("%w: recovery %s does not match %s", ErrTurnPending, recovery.TurnID, r.state.PendingContinuation.TurnID)
@@ -228,16 +273,16 @@ func (r *Runtime) RecoverPendingContinuation(ctx context.Context, recovery Pendi
 	}
 	if len(r.state.ExhaustedBy) > 0 {
 		r.state.State = StateExhausted
-		r.state.StateReason = "continuation cancelled before dispatch; budget exhausted"
+		r.state.StateReason = "turn cancelled before dispatch; budget exhausted"
 		return nil
 	}
 	r.state.State = StatePaused
-	r.state.StateReason = "continuation cancelled before dispatch: " + recovery.Reason
+	r.state.StateReason = "turn cancelled before dispatch: " + recovery.Reason
 	return nil
 }
 
-// RecordTurn commits the settled receipt for an initial, user-directed, or
-// permitted continuation turn. Duplicate identical receipts are idempotent.
+// RecordTurn commits the settled receipt for an exactly admitted initial,
+// manual, or automatic turn. Duplicate identical receipts are idempotent.
 func (r *Runtime) RecordTurn(ctx context.Context, report TurnReport) error {
 	if err := contextError(ctx); err != nil {
 		return err
@@ -251,18 +296,25 @@ func (r *Runtime) RecordTurn(ctx context.Context, report TurnReport) error {
 		return ErrTerminal
 	}
 	if last := r.state.LastTurn; last != nil && last.TurnID == report.TurnID {
+		if pending := r.state.PendingContinuation; pending != nil {
+			return fmt.Errorf("%w: receipt %s does not settle %s", ErrTurnPending, report.TurnID, pending.TurnID)
+		}
 		if reflect.DeepEqual(last.TurnReport, report) {
 			return nil
 		}
 		return fmt.Errorf("%w: duplicate turn id %s", ErrTurnConflict, report.TurnID)
 	}
-	if pending := r.state.PendingContinuation; pending != nil && pending.TurnID != report.TurnID {
+	pending := r.state.PendingContinuation
+	if pending == nil {
+		return fmt.Errorf("%w: receipt %s has no durable turn admission", ErrTurnPending, report.TurnID)
+	}
+	if pending.TurnID != report.TurnID {
 		return fmt.Errorf("%w: receipt %s does not settle %s", ErrTurnPending, report.TurnID, pending.TurnID)
 	}
 	if r.state.State == StateBlocked {
 		return fmt.Errorf("%w: resolve the current blocker before recording another turn", ErrIllegalTransition)
 	}
-	if r.state.State == StatePaused && r.state.PendingContinuation == nil {
+	if r.state.State == StatePaused {
 		return fmt.Errorf("%w: resume the paused goal before recording another turn", ErrIllegalTransition)
 	}
 	if report.EvalTokens > math.MaxInt64-r.state.Usage.EvalTokens {
@@ -435,7 +487,7 @@ func (r *Runtime) Block(ctx context.Context, blocker Blocker) error {
 		return ErrTerminal
 	}
 	if r.state.PendingContinuation != nil {
-		return fmt.Errorf("%w: settle the pending continuation before blocking", ErrTurnPending)
+		return fmt.Errorf("%w: settle the pending turn admission before blocking", ErrTurnPending)
 	}
 	if r.state.State == StateBlocked {
 		if r.state.Blocker != nil && sameBlocker(*r.state.Blocker, blocker) {
@@ -453,9 +505,45 @@ func (r *Runtime) Block(ctx context.Context, blocker Blocker) error {
 	return nil
 }
 
-// ResolveBlock records explicit recovery. Resolution always lands in paused or
-// exhausted state, so it cannot restart work without a separate Resume call.
+// ResolveBlock records explicit recovery for dependency and decision blockers.
+// Outcome-unknown recovery is deliberately rejected: only
+// ApplyVerifiedReconciliation may apply its typed, atomically persisted control
+// receipt. Resolution always lands in paused or exhausted state, so it cannot
+// restart work without a separate Resume call.
 func (r *Runtime) ResolveBlock(ctx context.Context, resolution BlockResolution) error {
+	return r.resolveBlock(ctx, resolution, false)
+}
+
+// ApplyVerifiedReconciliation applies one repository-verified recovery receipt
+// to an isolated durable snapshot. Persistence coordinators call this pure
+// transition inside the same transaction that appends the final control-plane
+// resolution. It never mutates a caller-owned Runtime and never resumes work.
+func ApplyVerifiedReconciliation(ctx context.Context, snapshot Snapshot, resolution BlockResolution, resolvedAt time.Time) (Snapshot, error) {
+	if err := contextError(ctx); err != nil {
+		return Snapshot{}, err
+	}
+	if resolvedAt.IsZero() {
+		return Snapshot{}, fmt.Errorf("%w: reconciliation time is required", ErrInvalid)
+	}
+	resolvedAt = resolvedAt.UTC()
+	if resolvedAt.Before(snapshot.UpdatedAt) {
+		return Snapshot{}, fmt.Errorf("%w: reconciliation predates the durable goal snapshot", ErrInvalid)
+	}
+	runtime, err := Restore(snapshot, WithClock(fixedClock{now: resolvedAt}))
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if err := runtime.resolveBlock(ctx, resolution, true); err != nil {
+		return Snapshot{}, err
+	}
+	return runtime.Snapshot(ctx)
+}
+
+type fixedClock struct{ now time.Time }
+
+func (c fixedClock) Now() time.Time { return c.now }
+
+func (r *Runtime) resolveBlock(ctx context.Context, resolution BlockResolution, verified bool) error {
 	if err := contextError(ctx); err != nil {
 		return err
 	}
@@ -474,12 +562,23 @@ func (r *Runtime) ResolveBlock(ctx context.Context, resolution BlockResolution) 
 		return fmt.Errorf("%w: blocker reference does not match", ErrIllegalTransition)
 	}
 	if r.state.Blocker.Kind == BlockOutcomeUnknown {
+		if !verified {
+			return ErrOutcomeUnknown
+		}
 		if !resolution.Reconciled {
 			return ErrOutcomeUnknown
 		}
 		if err := validateText("outcome reconciliation evidence", resolution.Evidence, MaxEvidenceBytes, true); err != nil {
 			return fmt.Errorf("%w: %v", ErrOutcomeUnknown, err)
 		}
+		if resolution.Reconciliation == nil {
+			return fmt.Errorf("%w: typed reconciliation receipt is required", ErrOutcomeUnknown)
+		}
+		if err := resolution.Reconciliation.Validate(); err != nil {
+			return fmt.Errorf("%w: %v", ErrOutcomeUnknown, err)
+		}
+	} else if resolution.Reconciled || resolution.Reconciliation != nil {
+		return fmt.Errorf("%w: reconciliation evidence requires an outcome-unknown blocker", ErrInvalid)
 	}
 	now := r.nowLocked()
 	resolved := *r.state.Blocker
@@ -682,6 +781,102 @@ func validatePendingRecovery(recovery PendingRecovery) error {
 	return nil
 }
 
+func migrateLegacySnapshot(snapshot *Snapshot) error {
+	if snapshot == nil {
+		return fmt.Errorf("%w: goal snapshot is nil", ErrInvalid)
+	}
+	switch snapshot.Version {
+	case SnapshotVersion:
+		return nil
+	case LegacySnapshotVersion:
+		// Version 1 could contain host-authored outcome evidence with no durable
+		// control receipt. Prose alone cannot be upgraded into authority.
+		if record := snapshot.LastBlockResolution; record != nil && record.Kind == BlockOutcomeUnknown && record.Resolution.Reconciliation == nil {
+			return fmt.Errorf("%w: legacy outcome reconciliation has no durable control receipt", ErrInvalid)
+		}
+		migrateLegacyTurnAdmissions(snapshot)
+		snapshot.Version = SnapshotVersion
+		return nil
+	default:
+		return fmt.Errorf("%w: unsupported goal snapshot version %d", ErrInvalid, snapshot.Version)
+	}
+}
+
+func migrateLegacyTurnAdmissions(snapshot *Snapshot) {
+	// Before admission kinds existed, the only persisted permit was an
+	// automatic continuation and therefore always had a positive continuation
+	// ordinal. Do not infer a kind for zero-ordinal data: that would let a
+	// stripped new initial/manual kind pass as legacy.
+	if pending := snapshot.PendingContinuation; pending != nil && pending.Kind == "" && pending.Ordinal > 0 {
+		pending.Kind = AdmissionAutomatic
+	}
+	if recovery := snapshot.LastPendingRecovery; recovery != nil && recovery.Permit.Kind == "" && recovery.Permit.Ordinal > 0 {
+		recovery.Permit.Kind = AdmissionAutomatic
+	}
+}
+
+// Validate checks the shape of a typed control-plane binding without claiming
+// that its referenced rows exist. The atomic reconciliation coordinator owns
+// that database cross-check.
+func (r ReconciliationReceipt) Validate() error {
+	if r.Version != ReconciliationReceiptVersion {
+		return fmt.Errorf("%w: unsupported reconciliation receipt version %d", ErrInvalid, r.Version)
+	}
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{"reconciliation group item id", r.GroupItemID},
+		{"reconciliation final item id", r.FinalItemID},
+		{"reconciliation final resolution id", r.FinalResolutionID},
+	} {
+		if err := validateText(field.name, field.value, MaxGoalIDBytes, true); err != nil {
+			return err
+		}
+		if strings.TrimSpace(field.value) != field.value {
+			return fmt.Errorf("%w: %s is not canonical", ErrInvalid, field.name)
+		}
+	}
+	if !validLowerSHA256(r.ResolutionSetSHA256) {
+		return fmt.Errorf("%w: reconciliation resolution-set SHA-256 is invalid", ErrInvalid)
+	}
+	if r.TargetCount <= 0 || r.TargetCount > MaxReconciliationTargets {
+		return fmt.Errorf("%w: reconciliation target count must be between 1 and %d", ErrInvalid, MaxReconciliationTargets)
+	}
+	return nil
+}
+
+func validLowerSHA256(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	decoded, err := hex.DecodeString(value)
+	return err == nil && hex.EncodeToString(decoded) == value
+}
+
+func validateTurnAdmission(name string, admission ContinuationPermit, continuationUsage int64) error {
+	if err := validateText(name+" turn id", admission.TurnID, MaxTurnIDBytes, true); err != nil {
+		return err
+	}
+	if !admission.Kind.Valid() {
+		return fmt.Errorf("%w: invalid %s kind %q", ErrInvalid, name, admission.Kind)
+	}
+	switch admission.Kind {
+	case AdmissionAutomatic:
+		if admission.Ordinal <= 0 || admission.Ordinal > continuationUsage {
+			return fmt.Errorf("%w: invalid %s continuation ordinal", ErrInvalid, name)
+		}
+	case AdmissionInitial, AdmissionManual:
+		if admission.Ordinal != 0 {
+			return fmt.Errorf("%w: %s %s admission cannot consume continuation budget", ErrInvalid, name, admission.Kind)
+		}
+	}
+	if admission.GrantedAt.IsZero() {
+		return fmt.Errorf("%w: %s timestamp is required", ErrInvalid, name)
+	}
+	return nil
+}
+
 func validateBlocker(blocker Blocker, persisted bool) error {
 	if !blocker.Kind.Valid() {
 		return fmt.Errorf("%w: invalid blocker kind %q", ErrInvalid, blocker.Kind)
@@ -794,29 +989,30 @@ func validateSnapshot(snapshot Snapshot) error {
 		}
 	}
 	if snapshot.PendingContinuation != nil {
-		if err := validateText("pending turn id", snapshot.PendingContinuation.TurnID, MaxTurnIDBytes, true); err != nil {
+		if err := validateTurnAdmission("pending", *snapshot.PendingContinuation, snapshot.Usage.ContinuationTurns); err != nil {
 			return err
 		}
-		if snapshot.PendingContinuation.Ordinal <= 0 || snapshot.PendingContinuation.GrantedAt.IsZero() {
-			return fmt.Errorf("%w: invalid pending continuation", ErrInvalid)
-		}
 		if snapshot.PendingContinuation.GrantedAt.Before(snapshot.CreatedAt) || snapshot.PendingContinuation.GrantedAt.After(snapshot.UpdatedAt) {
-			return fmt.Errorf("%w: pending continuation timestamp is outside the snapshot lifetime", ErrInvalid)
+			return fmt.Errorf("%w: pending turn admission timestamp is outside the snapshot lifetime", ErrInvalid)
 		}
-		if snapshot.PendingContinuation.Ordinal > snapshot.Usage.ContinuationTurns {
-			return fmt.Errorf("%w: pending continuation exceeds recorded usage", ErrInvalid)
+		switch snapshot.PendingContinuation.Kind {
+		case AdmissionInitial:
+			if snapshot.LastTurn != nil {
+				return fmt.Errorf("%w: pending initial admission cannot follow a turn receipt", ErrInvalid)
+			}
+		case AdmissionManual, AdmissionAutomatic:
+			if snapshot.LastTurn == nil {
+				return fmt.Errorf("%w: pending %s admission requires a prior turn receipt", ErrInvalid, snapshot.PendingContinuation.Kind)
+			}
 		}
 		if snapshot.State.Terminal() || snapshot.State == StateBlocked || snapshot.State == StatePaused {
-			return fmt.Errorf("%w: pending continuation cannot exist in %s", ErrInvalid, snapshot.State)
+			return fmt.Errorf("%w: pending turn admission cannot exist in %s", ErrInvalid, snapshot.State)
 		}
 	}
 	if snapshot.LastPendingRecovery != nil {
 		record := snapshot.LastPendingRecovery
-		if err := validateText("recovered permit turn id", record.Permit.TurnID, MaxTurnIDBytes, true); err != nil {
+		if err := validateTurnAdmission("recovered permit", record.Permit, snapshot.Usage.ContinuationTurns); err != nil {
 			return err
-		}
-		if record.Permit.Ordinal <= 0 || record.Permit.Ordinal > snapshot.Usage.ContinuationTurns || record.Permit.GrantedAt.IsZero() {
-			return fmt.Errorf("%w: invalid recovered continuation permit", ErrInvalid)
 		}
 		if record.Permit.GrantedAt.Before(snapshot.CreatedAt) {
 			return fmt.Errorf("%w: recovered permit predates the goal", ErrInvalid)
@@ -868,6 +1064,14 @@ func validateSnapshot(snapshot Snapshot) error {
 			if err := validateText("outcome reconciliation evidence", record.Resolution.Evidence, MaxEvidenceBytes, true); err != nil {
 				return err
 			}
+			if record.Resolution.Reconciliation == nil {
+				return fmt.Errorf("%w: outcome reconciliation is missing its typed control receipt", ErrInvalid)
+			}
+			if err := record.Resolution.Reconciliation.Validate(); err != nil {
+				return err
+			}
+		} else if record.Resolution.Reconciled || record.Resolution.Reconciliation != nil {
+			return fmt.Errorf("%w: non-outcome block resolution contains reconciliation evidence", ErrInvalid)
 		}
 	}
 	if snapshot.State == StateCompleted {
@@ -912,6 +1116,10 @@ func cloneSnapshot(snapshot Snapshot) Snapshot {
 	}
 	if snapshot.LastBlockResolution != nil {
 		value := *snapshot.LastBlockResolution
+		if snapshot.LastBlockResolution.Resolution.Reconciliation != nil {
+			receipt := *snapshot.LastBlockResolution.Resolution.Reconciliation
+			value.Resolution.Reconciliation = &receipt
+		}
 		copy.LastBlockResolution = &value
 	}
 	if snapshot.Completion != nil {

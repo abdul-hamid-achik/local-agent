@@ -10,6 +10,7 @@ import (
 
 	"github.com/abdul-hamid-achik/local-agent/internal/controlplane"
 	"github.com/abdul-hamid-achik/local-agent/internal/execution"
+	"github.com/abdul-hamid-achik/local-agent/internal/reconciliation"
 )
 
 var controlTestTime = time.Date(2026, time.July, 12, 9, 30, 0, 456_000_000, time.UTC)
@@ -55,6 +56,35 @@ func controlTestResolution(t *testing.T, item controlplane.Item, suffix string, 
 	}
 }
 
+func controlTestExecutionResolution(t *testing.T, store *Store, item controlplane.Item, suffix string, disposition reconciliation.Disposition) controlplane.Resolution {
+	t.Helper()
+	resolution := controlTestResolution(t, item, suffix, controlplane.OutcomeReconciled)
+	state, err := store.GetExecutionState(context.Background(), item.Identity.SessionID, item.Identity.WorkspaceID, item.Identity.ExecutionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := executionReconciliationTarget(item, state.Latest, resolution.ResolvedBy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := (reconciliation.Request{
+		Disposition: disposition,
+		Source: reconciliation.Source{
+			Kind:      reconciliation.SourceOperatorObservation,
+			Reference: "test-operator:" + suffix, ObservedAt: controlTestTime.Add(30 * time.Second),
+		},
+		Summary: "Test operator inspected the external effect.",
+	}).Bind(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolution.EvidenceJSON, resolution.EvidenceSHA256, err = envelope.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resolution
+}
+
 func acquireControlTestLease(t *testing.T, store *Store, session Session) *ExecutionSessionLease {
 	t.Helper()
 	lease, err := store.AcquireExecutionSessionLease(context.Background(), session.ID, session.WorkspaceID)
@@ -67,6 +97,28 @@ func acquireControlTestLease(t *testing.T, store *Store, session Session) *Execu
 		}
 	})
 	return lease
+}
+
+func resolveExecutionReconciliationTestTx(t *testing.T, store *Store, lease *ExecutionSessionLease, candidate controlplane.Resolution) (controlplane.Resolution, bool) {
+	t.Helper()
+	release, err := store.holdControlLease(context.Background(), lease, candidate.SessionID, candidate.WorkspaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	tx, err := store.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	stored, inserted, err := resolveControlItemTx(context.Background(), tx, candidate, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	return stored, inserted
 }
 
 func TestControlItemAppendReplayConflictsAndLeaseOwnership(t *testing.T) {
@@ -191,6 +243,63 @@ func TestControlResolutionAndBoundedStateProjection(t *testing.T) {
 	}
 }
 
+func TestResolveControlItemTxLeavesCommitAndRollbackToCaller(t *testing.T) {
+	store := testStore(t)
+	workspaceID := "/workspace/control-tx-helper"
+	session := createExecutionTestSession(t, store, workspaceID)
+	lease := acquireControlTestLease(t, store, session)
+	item := controlTestItem(t, session.ID, workspaceID, "tx-helper", controlplane.KindDeferredApproval)
+	if _, _, err := store.AppendControlItem(context.Background(), lease, item); err != nil {
+		t.Fatal(err)
+	}
+	resolution := controlTestResolution(t, item, "tx-helper", controlplane.OutcomeDenied)
+
+	tx, err := store.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, inserted, err := resolveControlItemTx(context.Background(), tx, resolution, false); err != nil || !inserted {
+		t.Fatalf("tx-local resolution inserted=%v error=%v", inserted, err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.GetControlState(context.Background(), session.ID, workspaceID, item.ItemID)
+	if err != nil || !state.Pending() {
+		t.Fatalf("rollback leaked tx-local resolution = %#v, error=%v", state, err)
+	}
+
+	tx, err = store.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, inserted, err := resolveControlItemTx(context.Background(), tx, resolution, false)
+	if err != nil || !inserted {
+		_ = tx.Rollback()
+		t.Fatalf("tx-local commit candidate inserted=%v error=%v", inserted, err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	tx, err = store.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, inserted, err := resolveControlItemTx(context.Background(), tx, resolution, false)
+	if err != nil || inserted || replayed.ID != stored.ID {
+		_ = tx.Rollback()
+		t.Fatalf("tx-local replay = %#v inserted=%v error=%v", replayed, inserted, err)
+	}
+	var count int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM control_resolutions WHERE item_id = ?`, item.ItemID).Scan(&count); err != nil || count != 1 {
+		_ = tx.Rollback()
+		t.Fatalf("tx remained usable after replay count=%d error=%v", count, err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestExecutionReconciliationRequiresHazardAndNeverMutatesLedger(t *testing.T) {
 	store := testStore(t)
 	workspaceID := "/workspace/reconciliation"
@@ -201,13 +310,21 @@ func TestExecutionReconciliationRequiresHazardAndNeverMutatesLedger(t *testing.T
 	started := appendStartedExecutionFixture(t, store, requested)
 	item := controlTestItem(t, session.ID, workspaceID, "reconcile", controlplane.KindExecutionReconciliation)
 	item.Identity.ExecutionID = started.Identity.ExecutionID
+	item.Identity.TurnID = started.Identity.TurnID
 	if _, inserted, err := store.AppendControlItem(context.Background(), lease, item); err != nil || !inserted {
 		t.Fatalf("append reconciliation inserted=%v error=%v", inserted, err)
 	}
 
-	resolution := controlTestResolution(t, item, "reconcile", controlplane.OutcomeReconciled)
-	if _, inserted, err := store.ResolveControlItem(context.Background(), lease, resolution); err != nil || !inserted {
-		t.Fatalf("resolve reconciliation inserted=%v error=%v", inserted, err)
+	resolution := controlTestExecutionResolution(t, store, item, "reconcile", reconciliation.DispositionEffectNotApplied)
+	if _, _, err := store.ResolveControlItem(context.Background(), lease, resolution); !errors.Is(err, ErrAtomicReconciliationRequired) {
+		t.Fatalf("generic reconciliation resolution error=%v", err)
+	}
+	hazards, err := store.ListExecutionRecoveryHazards(context.Background(), session.ID, workspaceID, 0, 10)
+	if err != nil || len(hazards) != 1 || hazards[0].Identity.ExecutionID != started.Identity.ExecutionID {
+		t.Fatalf("generic resolution suppressed hazard = %#v, error=%v", hazards, err)
+	}
+	if _, inserted := resolveExecutionReconciliationTestTx(t, store, lease, resolution); !inserted {
+		t.Fatal("atomic test reconciliation was treated as replay")
 	}
 	events, err := store.ListExecutionEvents(context.Background(), session.ID, workspaceID, started.Identity.ExecutionID, 10)
 	if err != nil {

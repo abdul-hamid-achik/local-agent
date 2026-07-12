@@ -399,6 +399,8 @@ ICE is still a flat JSON vector store rather than an ANN index, but its bounded 
 | `local-agent goal list [--limit 20] [--json]` | List validated durable goals in the current workspace without resuming them |
 | `local-agent goal show [--json] <session-id>` | Inspect one complete validated goal snapshot |
 | `local-agent goal pending [--limit 20] [--json] <session-id>` | Inspect unresolved decisions, approvals, and recovery items |
+| `local-agent goal recover [--json] <session-id>` | Dry-run an existing validated reconciliation group without creating or changing it |
+| `local-agent goal recover --apply --item ID --observation VALUE --source VALUE --reference TEXT --summary TEXT --observed-at RFC3339 [--json] <session-id>` | Append exact typed recovery evidence through the shared atomic coordinator |
 | `local-agent --version` | Print the build version |
 
 Source builds print `dev`. Tagged release artifacts print the tag version
@@ -407,12 +409,17 @@ version.
 
 `-p` is currently a human-readable convenience mode, not a stable JSON automation protocol.
 
-The `goal` CLI commands are read-only. The current TUI writes Cortex-decision
-and unknown-execution recovery items, and `goal pending` can inspect their
-least-privilege summaries. Local Agent does not yet expose a CLI/modal action
-that appends execution-reconciliation evidence and clears the matching goal
-blocker. The durable `deferred_approval` record type is implemented in the
-store, but foreground approval prompts do not currently enqueue that type.
+`goal list`, `goal show`, `goal pending`, and the default `goal recover` dry run
+are read-only. Recovery mutation requires the complete explicit `--apply`
+form, acquires the exact session/workspace lease, and accepts only a member
+conclusion (`effect_applied`, `effect_not_applied`, or `effect_compensated`) or
+the turn-parent conclusion `turn_abandoned_after_inspection`. Evidence sources
+are `external_receipt`, `workspace_artifact`, `verification_check`, and
+`operator_observation`. The timestamp and all evidence fields participate in
+exact replay identity; changed evidence conflicts. There is no force escape
+hatch, and a successful recovery ends in PAUSED or EXHAUSTED without resuming
+provider work. The durable `deferred_approval` record type is implemented in
+the store, but foreground approval prompts do not currently enqueue that type.
 
 ## Slash commands
 
@@ -592,7 +599,7 @@ Known boundaries are documented here so the TUI does not promise more than the r
 - MCP support remains tool-focused; prompts, roots, subscriptions, sampling, and direct multimodal rendering are not yet exposed.
 - ICE is workspace-scoped but remains a flat JSON scan rather than a scalable lexical/vector index such as the Cortex/VecLite stack.
 - SQLite snapshots and the append-only execution ledger preserve completed state and tool-effect boundaries, but there is no first-class supervisor run/event repository or automatic continuation of in-flight execution after a crash.
-- Outcome-reconciliation items are durable and inspectable, but Local Agent does not yet provide the evidence-entry/resolution workflow needed to clear an outcome-unknown goal blocker.
+- Outcome-reconciliation items now have manual evidence-entry and atomic TUI/CLI resolution workflows. Local Agent still cannot verify an unknown backend outcome automatically, repair a completed-but-unprojected effect automatically, or auto-resume after reconciliation.
 - The supervisor and specialist work graph are safety-tested contracts only; headless run-until-blocked, queue/watch/resume controllers, durable evaluation-basis storage, and specialist process execution are not wired.
 - Native Ollama reasoning and literal `<think>` tags are displayed separately, but thinking level is not yet configurable per model/profile.
 - Headless mode has no structured event stream or granular approval protocol. Without `--yolo`, risky calls fail closed.
@@ -620,7 +627,11 @@ go test ./internal/agent -run TestName
 go test -race ./...
 ```
 
-Glyphrun specs under `specs/glyphrun/` cover CLI help/version/init/log behavior plus the normal-width launch, the 30×12 minimum, canonical command discovery, the durable-goal form and safe local fallback, full-width narrow-terminal settings/help flow, and clean quits.
+Glyphrun specs under `specs/glyphrun/` cover CLI help/version/init/log behavior,
+goal-recovery help and fail-closed read-only/apply validation, the normal-width
+launch, the 30×12 minimum, canonical command discovery, the durable-goal form
+and safe local fallback, full-width narrow-terminal settings/help flow, and
+clean quits.
 
 With `qwen3.5:4b` installed in Ollama, run the opt-in live small-model/tool proof separately:
 

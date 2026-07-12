@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -44,6 +45,51 @@ func TestHeadlessSessionTitleNamesBlankPrompt(t *testing.T) {
 	}
 }
 
+func TestSaveHeadlessSessionStateCASChainsAndDoesNotRetryConflict(t *testing.T) {
+	store, err := db.OpenPath(filepath.Join(t.TempDir(), "headless-cas.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	session, err := store.CreateSession(context.Background(), db.CreateSessionParams{
+		Title: "headless CAS", WorkspaceID: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	revision := int64(0)
+	revision, err = saveHeadlessSessionStateCAS(context.Background(), store, session.ID, revision, `{"turn":1}`)
+	if err != nil || revision != 1 {
+		t.Fatalf("first save revision/error = %d, %v", revision, err)
+	}
+	revision, err = saveHeadlessSessionStateCAS(context.Background(), store, session.ID, revision, `{"turn":2}`)
+	if err != nil || revision != 2 {
+		t.Fatalf("second save revision/error = %d, %v", revision, err)
+	}
+
+	external, err := store.SaveSessionStateCAS(context.Background(), session.ID, revision, `{"writer":"external"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleRevision, err := saveHeadlessSessionStateCAS(
+		context.Background(), store, session.ID, revision, `{"writer":"stale-headless"}`,
+	)
+	if !errors.Is(err, db.ErrSessionStateConflict) {
+		t.Fatalf("stale save error = %v", err)
+	}
+	if staleRevision != revision {
+		t.Fatalf("failed save advanced caller revision to %d, want %d", staleRevision, revision)
+	}
+	stored, err := store.GetSessionStateRecord(context.Background(), session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Revision != external.Revision || stored.StateJSON != `{"writer":"external"}` {
+		t.Fatalf("stale save overwrote durable state: revision=%d state=%s", stored.Revision, stored.StateJSON)
+	}
+}
+
 func TestHeadlessSnapshotCursorRequiresProjectedCompletedReceipt(t *testing.T) {
 	store, err := db.OpenPath(filepath.Join(t.TempDir(), "headless.db"))
 	if err != nil {
@@ -71,6 +117,7 @@ func TestHeadlessSnapshotCursorRequiresProjectedCompletedReceipt(t *testing.T) {
 	started.Type = execution.EventStarted
 	completed := requested
 	completed.Type = execution.EventCompleted
+	completed.ResultSHA256 = execution.HashText("done")
 	for _, event := range []execution.Event{requested, approved, started} {
 		if _, _, err := store.AppendExecutionEvent(context.Background(), event); err != nil {
 			t.Fatal(err)
@@ -84,6 +131,11 @@ func TestHeadlessSnapshotCursorRequiresProjectedCompletedReceipt(t *testing.T) {
 	missing := agent.New(nil, nil, 4096)
 	if cursor, err := headlessSnapshotExecutionCursor(context.Background(), store, missing, session.ID, workspace, 0); err == nil || cursor != 0 {
 		t.Fatalf("missing receipt cursor/error = %d, %v", cursor, err)
+	}
+	wrongResult := agent.New(nil, nil, 4096)
+	wrongResult.AppendMessage(llm.Message{Role: "tool", ToolCallID: identity.CanonicalCallID, ToolName: identity.ToolName, Content: "wrong result"})
+	if cursor, err := headlessSnapshotExecutionCursor(context.Background(), store, wrongResult, session.ID, workspace, 0); err == nil || cursor != 0 {
+		t.Fatalf("wrong-result receipt cursor/error = %d, %v", cursor, err)
 	}
 	projected := agent.New(nil, nil, 4096)
 	projected.AppendMessage(llm.Message{Role: "tool", ToolCallID: identity.CanonicalCallID, ToolName: identity.ToolName, Content: "done"})

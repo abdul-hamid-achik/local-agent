@@ -246,6 +246,51 @@ func TestStaleSessionLoadCannotReplaceCurrentState(t *testing.T) {
 	}
 }
 
+func TestSessionLoadAdoptsExactStateRevision(t *testing.T) {
+	store, err := db.OpenPath(filepath.Join(t.TempDir(), "session-revision.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	workspace := t.TempDir()
+	session, err := store.CreateSession(context.Background(), db.CreateSessionParams{
+		Title: "revisioned session", WorkspaceID: workspace,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := persistedSessionState{Version: currentPersistedSessionVersion, Mode: ModeBuild}
+	raw, err := marshalPersistedSessionState(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveSessionState(context.Background(), session.ID, raw); err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.GetSessionStateRecord(context.Background(), session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m := newTestModel(t)
+	m.SetSessionStore(store)
+	if err := m.initializeSessionStateRevision(record.Revision + 99); err != nil {
+		t.Fatal(err)
+	}
+	m.sessionLoading = true
+	m.sessionLoadToken = 8
+	updated, _ := m.Update(SessionLoadedMsg{
+		LoadToken: 8, SessionID: session.ID, State: state, StateRecord: record, Title: session.Title,
+	})
+	m = updated.(*Model)
+	m.sessionStateMu.RLock()
+	gotRevision, known, dirty := m.sessionStateRevision, m.sessionStateRevisionKnown, m.sessionStatePersistenceDirty
+	m.sessionStateMu.RUnlock()
+	if m.sessionID != session.ID || gotRevision != record.Revision || !known || dirty {
+		t.Fatalf("loaded revision state = session %d revision %d known %v dirty %v", m.sessionID, gotRevision, known, dirty)
+	}
+}
+
 func TestEscapeInvalidatesSessionLoad(t *testing.T) {
 	m := newTestModel(t)
 	m.sessionLoading = true
@@ -412,10 +457,10 @@ func TestLoadPersistedSessionRejectsDifferentCanonicalWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, _, err := loadPersistedSession(ctx, store, session.ID, workspaceB); err == nil || !strings.Contains(err.Error(), "different workspace") {
+	if _, _, _, err := loadPersistedSession(ctx, store, session.ID, workspaceB); err == nil || !strings.Contains(err.Error(), "different workspace") {
 		t.Fatalf("cross-workspace load error = %v, want ownership rejection", err)
 	}
-	loaded, _, err := loadPersistedSession(ctx, store, session.ID, workspaceA)
+	loaded, _, _, err := loadPersistedSession(ctx, store, session.ID, workspaceA)
 	if err != nil {
 		t.Fatalf("same-workspace load failed: %v", err)
 	}

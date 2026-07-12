@@ -25,12 +25,14 @@ type GoalInspectorOptions struct {
 	ReducedMotion    bool
 	Now              time.Time
 	PersistenceDirty bool
+	RecoveryStatus   string
 }
 
 // GoalInspectorEvent asks the parent to execute one already-resolved command
 // action. The child never mutates the goal runtime or persists session state.
 type GoalInspectorEvent struct {
-	Action command.Action
+	ActionID command.ActionID
+	Action   command.Action
 }
 
 // GoalInspector is a read-only goal document plus a small action rail. A
@@ -47,6 +49,7 @@ type GoalInspector struct {
 	reducedMotion    bool
 	now              time.Time
 	persistenceDirty bool
+	recoveryStatus   string
 	styles           Styles
 	viewport         viewport.Model
 	cache            goalInspectorRenderCache
@@ -73,6 +76,7 @@ func NewGoalInspector(snapshot goal.Snapshot, actions []command.ActionState, opt
 		reducedMotion:    options.ReducedMotion,
 		now:              now,
 		persistenceDirty: options.PersistenceDirty,
+		recoveryStatus:   strings.TrimSpace(options.RecoveryStatus),
 		styles:           NewStyles(options.IsDark),
 	}
 	inspector.selected = inspector.firstEnabledAction()
@@ -192,7 +196,7 @@ func (i *GoalInspector) Update(msg tea.KeyPressMsg) (GoalInspectorEvent, tea.Cmd
 		}
 		i.confirming = false
 		i.invalidate()
-		return GoalInspectorEvent{Action: selected.Spec.Action}, nil
+		return GoalInspectorEvent{ActionID: selected.Spec.ID, Action: selected.Spec.Action}, nil
 	default:
 		if navigateReadOnlyViewport(&i.viewport, msg.String()) {
 			i.invalidate()
@@ -327,8 +331,15 @@ func (i *GoalInspector) buildDocument() string {
 		}
 		i.writeSection(&b, "Blocker", value, width)
 	}
+	if i.recoveryStatus != "" {
+		i.writeSection(&b, "Recovery", i.recoveryStatus, width)
+	}
 	if pending := i.snapshot.PendingContinuation; pending != nil {
-		i.writeSection(&b, "In flight", fmt.Sprintf("turn %s · permit %d has no settled receipt", pending.TurnID, pending.Ordinal), width)
+		value := fmt.Sprintf("turn %s · %s admission has no settled receipt", pending.TurnID, pending.Kind)
+		if pending.Kind == goal.AdmissionAutomatic {
+			value = fmt.Sprintf("turn %s · automatic permit %d has no settled receipt", pending.TurnID, pending.Ordinal)
+		}
+		i.writeSection(&b, "In flight", value, width)
 	}
 
 	if turn := i.snapshot.LastTurn; turn != nil {

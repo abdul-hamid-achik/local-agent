@@ -11,6 +11,7 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"charm.land/bubbles/v2/key"
@@ -61,6 +62,7 @@ const (
 	OverlayGoalForm
 	OverlayRuntimeStatus
 	OverlayGoalInspector
+	OverlayGoalRecovery
 )
 
 // CompletionState holds all state for the interactive completion modal.
@@ -200,18 +202,22 @@ type Model struct {
 	doneFlash bool
 
 	// Session persistence
-	sessionID               int64
-	executionCursor         int64
-	executionLease          *db.ExecutionSessionLease
-	sessionStore            *db.Store
-	sessionsPickerState     *SessionsPickerState
-	sessionLoadToken        uint64
-	sessionLoading          bool
-	sessionListToken        uint64
-	sessionListing          bool
-	legacyCheckpointPreview *legacyCheckpointPreview
-	legacyMemoryPreview     *legacyMemoryPreview
-	legacyICEPreview        *legacyICEPreview
+	sessionID                    int64
+	executionCursor              int64
+	executionLease               *db.ExecutionSessionLease
+	sessionStore                 *db.Store
+	sessionStateMu               sync.RWMutex
+	sessionStateRevision         int64
+	sessionStateRevisionKnown    bool
+	sessionStatePersistenceDirty bool
+	sessionsPickerState          *SessionsPickerState
+	sessionLoadToken             uint64
+	sessionLoading               bool
+	sessionListToken             uint64
+	sessionListing               bool
+	legacyCheckpointPreview      *legacyCheckpointPreview
+	legacyMemoryPreview          *legacyMemoryPreview
+	legacyICEPreview             *legacyICEPreview
 
 	// Paste detection
 	pendingPaste *pendingPaste
@@ -224,17 +230,25 @@ type Model struct {
 	modeConfigs [3]ModeConfig
 
 	// Model management
-	modelManager        *llm.ModelManager
-	router              config.ModelRouter
-	modelPickerState    *ModelPickerState
-	settingsPickerState *SettingsPickerState
-	agentPickerState    *AgentPickerState
-	modePickerState     *ModePickerState
-	runtimeStatusState  *RuntimeStatusState
-	planFormState       *PlanFormState
-	goalFormState       *GoalForm
-	goalInspectorState  *GoalInspector
-	modelPinned         bool
+	modelManager             *llm.ModelManager
+	router                   config.ModelRouter
+	modelPickerState         *ModelPickerState
+	settingsPickerState      *SettingsPickerState
+	agentPickerState         *AgentPickerState
+	modePickerState          *ModePickerState
+	runtimeStatusState       *RuntimeStatusState
+	planFormState            *PlanFormState
+	goalFormState            *GoalForm
+	goalInspectorState       *GoalInspector
+	goalRecoveryState        *GoalRecovery
+	goalRecoveryProjection   goalRecoveryProjection
+	goalRecoveryLoadToken    uint64
+	goalRecoveryLoadRunning  bool
+	goalRecoveryLoadScope    goalRecoveryOperationScope
+	goalRecoveryApplyToken   uint64
+	goalRecoveryApplyRunning bool
+	goalRecoveryApplyItemID  string
+	modelPinned              bool
 
 	// Goal Runtime. The host owns continuation, budget, cancellation and
 	// persistence; Cortex is an advisory semantic state machine only.
@@ -487,6 +501,10 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			m.goalInspectorState.SetTheme(m.isDark)
 			m.goalInspectorState.SetReducedMotion(m.reducedMotion)
 		}
+		if m.goalRecoveryState != nil {
+			m.goalRecoveryState.SetTheme(m.isDark)
+			m.goalRecoveryState.SetReducedMotion(m.reducedMotion)
+		}
 		// Recreate markdown renderer for new theme.
 		if m.width > 0 {
 			m.markdownWidth = m.chatContentWidth()
@@ -567,6 +585,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		if m.goalInspectorState != nil {
 			m.goalInspectorState.SetSize(m.width, m.height)
 		}
+		if m.goalRecoveryState != nil {
+			m.goalRecoveryState.SetSize(m.width, m.height)
+		}
 
 		// Input width matches viewport exactly - they're one unified area
 		if msg.Width < 36 {
@@ -576,6 +597,16 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		}
 		m.input.SetWidth(viewportWidth)
 		m.syncInputHeight()
+
+	case goalRecoveryLoadResultMsg:
+		if cmd := m.handleGoalRecoveryLoadResult(msg); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+
+	case goalRecoveryApplyResultMsg:
+		if cmd := m.handleGoalRecoveryApplyResult(msg); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 
 	case ShutdownMsg:
 		return m, m.beginShutdown()
@@ -785,6 +816,15 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 					m.closeModePicker()
 				case OverlayRuntimeStatus:
 					m.closeRuntimeStatus()
+				case OverlayGoalRecovery:
+					if m.goalRecoveryState != nil {
+						event, cmd := m.goalRecoveryState.Update(msg)
+						cmds = append(cmds, cmd, m.handleGoalRecoveryEvent(event))
+					} else {
+						m.closeGoalRecovery()
+					}
+					cmds = append(cmds, tea.ClearScreen)
+					return m, tea.Batch(cmds...)
 				case OverlayGoalInspector:
 					if m.goalInspectorState != nil && m.goalInspectorState.CancelConfirmation() {
 						return m, nil
@@ -908,12 +948,20 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 				return m, tea.Batch(cmds...)
 			}
 
+			if m.overlay == OverlayGoalRecovery && m.goalRecoveryState != nil {
+				event, cmd := m.goalRecoveryState.Update(msg)
+				cmds = append(cmds, cmd, m.handleGoalRecoveryEvent(event))
+				return m, tea.Batch(cmds...)
+			}
+
 			if m.overlay == OverlayGoalInspector && m.goalInspectorState != nil {
 				event, cmd := m.goalInspectorState.Update(msg)
 				if cmd != nil {
 					cmds = append(cmds, cmd)
 				}
-				if event.Action != command.ActionNone {
+				if event.ActionID == goalInspectorRecoveryActionID {
+					m.openGoalRecovery()
+				} else if event.Action != command.ActionNone {
 					m.closeGoalInspector()
 					cmds = append(cmds, m.handleCommandAction(command.Result{Action: event.Action}))
 				}
@@ -951,7 +999,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 									return SessionLoadedMsg{LoadToken: loadToken, Err: err}
 								}
 							}
-							session, state, err := loadPersistedSession(context.Background(), m.sessionStore, sessionID, workspaceID)
+							session, state, stateRecord, err := loadPersistedSession(context.Background(), m.sessionStore, sessionID, workspaceID)
 							if err != nil {
 								if lease != nil {
 									_ = lease.Close()
@@ -965,7 +1013,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 							}
 							return SessionLoadedMsg{
 								LoadToken: loadToken, SessionID: session.ID, State: state,
-								Title: sessionTitle, RecoveryWarning: warning, ExecutionLease: lease,
+								StateRecord: stateRecord, Title: sessionTitle, RecoveryWarning: warning, ExecutionLease: lease,
 							}
 						}
 						return m, tea.Batch(m.startActivityCmd(), load)
@@ -1454,10 +1502,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			} else {
 				m.executionCursor, cursorErr = m.snapshotExecutionCursor(ctx)
 			}
-			stateJSON, saveErr := encodeSessionState(m)
-			if saveErr == nil {
-				saveErr = m.sessionStore.SaveSessionState(ctx, m.sessionID, stateJSON)
-			}
+			saveErr := m.persistSessionState(ctx)
 			if saveErr != nil {
 				m.executionCursor = previousCursor
 			} else if cursorErr == nil {
@@ -1483,6 +1528,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 				settledPersisted = true
 				if m.goalRuntime != nil {
 					m.goalPersistenceDirty = false
+				}
+				if cmd := m.ensureCurrentGoalRecoveryProjection(false); cmd != nil {
+					cmds = append(cmds, cmd)
 				}
 			}
 		}
@@ -1768,6 +1816,11 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 				_ = msg.ExecutionLease.Close()
 			}
 			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("Load session: %v", msg.Err)})
+		} else if err := validateLoadedSessionStateRecord(msg.SessionID, msg.StateRecord); err != nil {
+			if msg.ExecutionLease != nil {
+				_ = msg.ExecutionLease.Close()
+			}
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("Load session: %v", err)})
 		} else {
 			if err := m.restoreSessionState(msg.State); err != nil {
 				if msg.ExecutionLease != nil {
@@ -1775,16 +1828,20 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 				}
 				m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("Load session: %v", err)})
 			} else {
+				m.resetGoalRecoveryPresentation()
 				if msg.ExecutionLease != nil {
 					_ = m.releaseExecutionSessionLease()
 					m.executionLease = msg.ExecutionLease
 				}
 				m.sessionID = msg.SessionID
+				_ = m.initializeSessionStateRevision(msg.StateRecord.Revision)
 				m.agent.SetCheckpointSessionID(msg.SessionID)
 				m.agent.SetExecutionSessionID(msg.SessionID)
 				m.agent.SetExecutionSnapshotCursor(m.executionCursor)
 				if err := m.recoverRestoredGoal(); err != nil {
 					m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("Restore goal recovery: %v", err)})
+				} else if cmd := m.ensureCurrentGoalRecoveryProjection(false); cmd != nil {
+					cmds = append(cmds, cmd)
 				}
 				m.legacyCheckpointPreview = nil
 				m.entries = append(m.entries, ChatEntry{Kind: "system", Content: fmt.Sprintf("Restored session: %s", msg.Title)})
@@ -1811,6 +1868,10 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			case OverlayGoalInspector:
 				if m.goalInspectorState != nil {
 					m.goalInspectorState.updateViewport(msg)
+				}
+			case OverlayGoalRecovery:
+				if m.goalRecoveryState != nil {
+					_, _ = m.goalRecoveryState.Update(msg)
 				}
 			}
 			return m, nil
@@ -1941,7 +2002,9 @@ func (m *Model) snapshotExecutionCursor(ctx context.Context) (int64, error) {
 		}
 		projected := false
 		for _, message := range messages {
-			if message.Role == "tool" && message.ToolCallID == state.Identity.CanonicalCallID {
+			if message.Role == "tool" &&
+				message.ToolCallID == state.Identity.CanonicalCallID &&
+				execution.HashText(message.Content) == state.Latest.ResultSHA256 {
 				projected = true
 				break
 			}
@@ -2569,8 +2632,7 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 		return nil
 
 	case command.ActionShowGoal:
-		m.showGoal()
-		return nil
+		return m.showGoal()
 
 	case command.ActionPauseGoal:
 		m.pauseGoal()
@@ -2608,6 +2670,7 @@ func (m *Model) resetConversationSession() {
 	m.goalRuntime = nil
 	m.goalFormState = nil
 	m.goalInspectorState = nil
+	m.resetGoalRecoveryPresentation()
 	m.goalTurnID = ""
 	m.goalTurnToolCalls = 0
 	m.goalTurnSuccesses = 0
@@ -2617,6 +2680,7 @@ func (m *Model) resetConversationSession() {
 	m.cancelSessionList()
 	m.sessionID = 0
 	m.executionCursor = 0
+	m.resetSessionStateRevision()
 	_ = m.releaseExecutionSessionLease()
 	m.legacyCheckpointPreview = nil
 	m.legacyMemoryPreview = nil
@@ -3162,12 +3226,9 @@ func (m *Model) sendToAgentTurnPresented(text, turnID string, visible bool, limi
 	m.agent.AddUserMessage(text)
 	m.agent.SetModeContext(cfg.SystemPromptPrefix, cfg.ToolPolicy)
 	if m.sessionID > 0 && m.sessionStore != nil {
-		stateJSON, err := encodeSessionState(m)
-		if err == nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			err = m.sessionStore.SaveSessionState(ctx, m.sessionID, stateJSON)
-			cancel()
-		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		err := m.persistSessionState(ctx)
+		cancel()
 		if err != nil {
 			m.agent.ReplaceMessages(messagesBeforeTurn)
 			if createdSession {
@@ -3177,6 +3238,7 @@ func (m *Model) sendToAgentTurnPresented(text, turnID string, visible bool, limi
 				cancelCleanup()
 				m.sessionID = 0
 				m.executionCursor = 0
+				m.resetSessionStateRevision()
 				m.agent.SetCheckpointSessionID(0)
 				m.agent.SetExecutionSessionID(0)
 				m.agent.SetExecutionSnapshotCursor(0)
@@ -3253,6 +3315,7 @@ func (m *Model) ensureExecutionSession(title, modeLabel string) (bool, error) {
 		m.executionLease = lease
 		return false, nil
 	}
+	m.resetSessionStateRevision()
 
 	workspaceID, err := canonicalWorkspaceID(m.agent.WorkDir())
 	if err != nil {
@@ -3277,6 +3340,9 @@ func (m *Model) ensureExecutionSession(title, modeLabel string) (bool, error) {
 	m.sessionID = session.ID
 	m.executionCursor = 0
 	m.executionLease = lease
+	if err := m.initializeSessionStateRevision(0); err != nil {
+		return false, fmt.Errorf("initialize session state revision: %w", err)
+	}
 	m.agent.SetCheckpointSessionID(session.ID)
 	m.agent.SetExecutionSessionID(session.ID)
 	m.agent.SetExecutionSnapshotCursor(0)

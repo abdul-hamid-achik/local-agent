@@ -15,7 +15,10 @@ import (
 
 const executionLedgerTimeout = 5 * time.Second
 
-var ErrExecutionLedgerRequired = errors.New("execution ledger is required")
+var (
+	ErrExecutionLedgerRequired            = errors.New("execution ledger is required")
+	ErrExecutionRecoveryRecheckDuringTurn = errors.New("execution recovery cannot be rechecked while an agent turn is running")
+)
 
 // ExecutionLedger is the durable lifecycle surface required by Agent. Keeping
 // it independent of db.Store lets embedded callers and tests provide their own
@@ -28,7 +31,8 @@ type ExecutionLedger interface {
 // UnresolvedExecutionError means an execution cannot be continued safely: it
 // either lacks a durable terminal receipt after dispatch intent or has a
 // durable outcome_unknown receipt that requires explicit reconciliation. The
-// active session is latched until SetExecutionSessionID selects a new scope.
+// active session is latched until the session scope changes or a host that has
+// committed durable reconciliation explicitly requests a recovery recheck.
 type UnresolvedExecutionError struct {
 	SessionID      int64
 	WorkspaceID    string
@@ -70,9 +74,9 @@ func (a *Agent) SetExecutionLedger(ledger ExecutionLedger) {
 	a.mu.Unlock()
 }
 
-// SetExecutionSessionID sets the durable session scope. Changing sessions is
-// the only current way to clear an unresolved-execution latch; reconciliation
-// will gain an explicit API in a later slice.
+// SetExecutionSessionID sets the durable session scope. Changing sessions
+// clears an unresolved-execution latch because the old hazard belongs to a
+// different durable scope.
 func (a *Agent) SetExecutionSessionID(sessionID int64) {
 	a.mu.Lock()
 	if a.executionSessionID != sessionID {
@@ -96,6 +100,26 @@ func (a *Agent) SetExecutionSnapshotCursor(cursor int64) {
 	}
 	a.executionCursor = cursor
 	a.mu.Unlock()
+}
+
+// RecheckExecutionRecovery clears only the in-memory unresolved-execution
+// cache. It deliberately keeps the durable session scope and snapshot cursor
+// unchanged: the next explicitly requested Run must query the execution ledger
+// again before it can perform provider work. Recovery controllers call this
+// only after their durable reconciliation transaction commits.
+//
+// Rechecking during a turn is rejected so a controller cannot invalidate the
+// cache between that turn's recovery check and provider dispatch.
+func (a *Agent) RecheckExecutionRecovery() error {
+	a.turnMu.Lock()
+	defer a.turnMu.Unlock()
+	if a.turnRunning.Load() {
+		return ErrExecutionRecoveryRecheckDuringTurn
+	}
+	a.mu.Lock()
+	a.unresolvedExecution = nil
+	a.mu.Unlock()
+	return nil
 }
 
 // RequireExecutionLedger makes Run fail before provider work unless a ledger

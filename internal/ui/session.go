@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,6 +16,8 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/goal"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 )
+
+var ErrSessionStateRevisionUnknown = errors.New("session state revision is unknown; reload the durable session before saving")
 
 // SessionListItem represents a session in the list.
 type SessionListItem struct {
@@ -232,6 +235,82 @@ func encodeSessionState(m *Model) (string, error) {
 	return marshalPersistedSessionState(state)
 }
 
+// initializeSessionStateRevision establishes the exact generation a Model may
+// replace. New sessions use zero; restored and embedded sessions must supply a
+// revision read from SessionStateRecord. It never consults storage or guesses a
+// generation after a conflict.
+func (m *Model) initializeSessionStateRevision(revision int64) error {
+	if revision < 0 {
+		return fmt.Errorf("invalid session state revision %d", revision)
+	}
+	m.sessionStateMu.Lock()
+	m.sessionStateRevision = revision
+	m.sessionStateRevisionKnown = true
+	m.sessionStatePersistenceDirty = false
+	m.sessionStateMu.Unlock()
+	return nil
+}
+
+func (m *Model) resetSessionStateRevision() {
+	m.sessionStateMu.Lock()
+	m.sessionStateRevision = 0
+	m.sessionStateRevisionKnown = false
+	m.sessionStatePersistenceDirty = false
+	m.sessionStateMu.Unlock()
+}
+
+func validateLoadedSessionStateRecord(sessionID int64, record db.SessionStateRecord) error {
+	if sessionID <= 0 || record.SessionID != sessionID {
+		return fmt.Errorf("session state record belongs to session %d, not %d", record.SessionID, sessionID)
+	}
+	if record.Revision < 0 {
+		return fmt.Errorf("session state record has invalid revision %d", record.Revision)
+	}
+	return nil
+}
+
+// persistSessionState is the only production interactive session writer. A
+// stale revision is never refreshed and retried with caller-owned JSON: the
+// Model forgets its authority and remains dirty until an explicit durable
+// session reload (or a future coordinator-result hydration) installs a record.
+func (m *Model) persistSessionState(ctx context.Context) error {
+	stateJSON, err := encodeSessionState(m)
+	if err != nil {
+		m.sessionStateMu.Lock()
+		m.sessionStatePersistenceDirty = true
+		m.sessionStateMu.Unlock()
+		return err
+	}
+
+	m.sessionStateMu.Lock()
+	defer m.sessionStateMu.Unlock()
+	if m.sessionStore == nil || m.sessionID <= 0 {
+		m.sessionStatePersistenceDirty = true
+		return fmt.Errorf("durable session is unavailable")
+	}
+	if !m.sessionStateRevisionKnown {
+		m.sessionStatePersistenceDirty = true
+		return ErrSessionStateRevisionUnknown
+	}
+	expectedRevision := m.sessionStateRevision
+	record, err := m.sessionStore.SaveSessionStateCAS(ctx, m.sessionID, expectedRevision, stateJSON)
+	if err != nil {
+		m.sessionStatePersistenceDirty = true
+		if errors.Is(err, db.ErrSessionStateConflict) {
+			m.sessionStateRevisionKnown = false
+		}
+		return err
+	}
+	if record.SessionID != m.sessionID || record.Revision <= expectedRevision {
+		m.sessionStateRevisionKnown = false
+		m.sessionStatePersistenceDirty = true
+		return fmt.Errorf("session state CAS returned invalid record session=%d revision=%d", record.SessionID, record.Revision)
+	}
+	m.sessionStateRevision = record.Revision
+	m.sessionStatePersistenceDirty = false
+	return nil
+}
+
 // EncodeHeadlessSessionState creates a version-1 snapshot that the interactive
 // session picker can restore after a non-interactive run. Tool messages remain
 // in model history, while the visible transcript stays focused on user and
@@ -346,26 +425,26 @@ func listPersistedSessions(ctx context.Context, store *db.Store, workspaceID str
 	return items, nil
 }
 
-func loadPersistedSession(ctx context.Context, store *db.Store, id int64, workspaceID string) (db.Session, persistedSessionState, error) {
+func loadPersistedSession(ctx context.Context, store *db.Store, id int64, workspaceID string) (db.Session, persistedSessionState, db.SessionStateRecord, error) {
 	if store == nil {
-		return db.Session{}, persistedSessionState{}, fmt.Errorf("session persistence is unavailable")
+		return db.Session{}, persistedSessionState{}, db.SessionStateRecord{}, fmt.Errorf("session persistence is unavailable")
 	}
 	session, err := store.GetSession(ctx, id)
 	if err != nil {
-		return db.Session{}, persistedSessionState{}, err
+		return db.Session{}, persistedSessionState{}, db.SessionStateRecord{}, err
 	}
 	if workspaceID == "" || session.WorkspaceID != workspaceID {
-		return db.Session{}, persistedSessionState{}, fmt.Errorf("session %d belongs to a different workspace", id)
+		return db.Session{}, persistedSessionState{}, db.SessionStateRecord{}, fmt.Errorf("session %d belongs to a different workspace", id)
 	}
-	raw, err := store.GetSessionState(ctx, id)
+	record, err := store.GetSessionStateRecord(ctx, id)
 	if err != nil {
-		return db.Session{}, persistedSessionState{}, err
+		return db.Session{}, persistedSessionState{}, db.SessionStateRecord{}, err
 	}
-	state, err := decodeSessionState(raw)
+	state, err := decodeSessionState(record.StateJSON)
 	if err == nil && state.Goal != nil && state.Goal.SessionID != id {
-		return db.Session{}, persistedSessionState{}, fmt.Errorf("session %d contains goal state for session %d", id, state.Goal.SessionID)
+		return db.Session{}, persistedSessionState{}, db.SessionStateRecord{}, fmt.Errorf("session %d contains goal state for session %d", id, state.Goal.SessionID)
 	}
-	return session, state, err
+	return session, state, record, err
 }
 
 func (m *Model) restoreSessionState(state persistedSessionState) error {

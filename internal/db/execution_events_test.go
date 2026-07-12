@@ -834,6 +834,22 @@ func TestExecutionMigrationObjectsAreIdempotent(t *testing.T) {
 		{"trigger", "execution_events_no_delete"},
 		{"index", "ux_execution_events_phase"},
 		{"index", "ux_execution_events_terminal"},
+		{"index", "ux_control_items_execution_reconciliation_target"},
+		{"trigger", "control_items_execution_reconciliation_target_guard"},
+		{"table", "reconciliation_groups"},
+		{"table", "reconciliation_group_members"},
+		{"table", "reconciliation_group_resolutions"},
+		{"index", "idx_reconciliation_groups_session"},
+		{"index", "idx_reconciliation_group_members_group"},
+		{"trigger", "reconciliation_groups_scope_guard"},
+		{"trigger", "reconciliation_group_members_target_guard"},
+		{"trigger", "reconciliation_group_resolutions_scope_guard"},
+		{"trigger", "reconciliation_groups_no_update"},
+		{"trigger", "reconciliation_groups_no_delete"},
+		{"trigger", "reconciliation_group_members_no_update"},
+		{"trigger", "reconciliation_group_members_no_delete"},
+		{"trigger", "reconciliation_group_resolutions_no_update"},
+		{"trigger", "reconciliation_group_resolutions_no_delete"},
 	} {
 		var count int
 		if err := store.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = ? AND name = ?`, object.kind, object.name).Scan(&count); err != nil {
@@ -842,5 +858,9 @@ func TestExecutionMigrationObjectsAreIdempotent(t *testing.T) {
 		if count != 1 {
 			t.Fatalf("%s %s count = %d", object.kind, object.name, count)
 		}
+	}
+	revisionFound, err := tableColumnExists(store.db, "session_state", "revision")
+	if err != nil || !revisionFound {
+		t.Fatalf("session_state revision found=%v error=%v", revisionFound, err)
 	}
 }

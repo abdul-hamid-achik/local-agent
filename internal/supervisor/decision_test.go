@@ -72,6 +72,21 @@ func authority() Observation {
 
 func recordProductive(t *testing.T, runtime *goal.Runtime, id string) {
 	t.Helper()
+	if _, err := runtime.BeginTurn(context.Background(), id, goal.AdmissionInitial); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.RecordTurn(context.Background(), goal.TurnReport{
+		TurnID: id, EvalTokens: 10, Productive: true, Summary: "one tested slice completed",
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func recordManualProductive(t *testing.T, runtime *goal.Runtime, id string) {
+	t.Helper()
+	if _, err := runtime.BeginTurn(context.Background(), id, goal.AdmissionManual); err != nil {
+		t.Fatal(err)
+	}
 	if err := runtime.RecordTurn(context.Background(), goal.TurnReport{
 		TurnID: id, EvalTokens: 10, Productive: true, Summary: "one tested slice completed",
 	}); err != nil {
@@ -254,7 +269,7 @@ func TestDecideRequiresEvaluationBoundToLastTurnAndDurableRevision(t *testing.T)
 		t.Fatalf("undurable revision error = %v", err)
 	}
 
-	recordProductive(t, runtime, "turn_2")
+	recordManualProductive(t, runtime, "turn_2")
 	observation.Evaluation = valid.Evaluation
 	if _, err := Decide(context.Background(), runtime, observation); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("stale last-turn evaluation error = %v", err)
@@ -268,8 +283,10 @@ func TestDecideStopsWithRefreshedGoalWhenContinuationObservationChanges(t *testi
 	runtime, err := goal.New(goal.Spec{
 		ID: "stale_observation", SessionID: 42, Objective: "return the refreshed state",
 		AcceptanceCriteria: []goal.AcceptanceCriterion{{ID: "fresh", Description: "decision uses current state"}},
-		Budget:             goal.BudgetLimits{MaxContinuationTurns: 3, MaxWallTime: 5 * time.Minute},
-		Cortex:             goal.CortexCorrelation{TaskID: "task_123", Revision: 1, Actor: "local-agent"},
+		// Universal turn admission samples the goal clock once before the
+		// receipt. Six steps keep exhaustion at the Decide refresh boundary.
+		Budget: goal.BudgetLimits{MaxContinuationTurns: 3, MaxWallTime: 6 * time.Minute},
+		Cortex: goal.CortexCorrelation{TaskID: "task_123", Revision: 1, Actor: "local-agent"},
 	}, goal.WithClock(clock))
 	if err != nil {
 		t.Fatal(err)
@@ -415,6 +432,9 @@ func TestDecideMapsGoalTerminalAndBlockedStates(t *testing.T) {
 
 func TestDecideMapsUnproductiveAndBudgetStops(t *testing.T) {
 	unproductive := newRuntime(t, true, goal.BudgetLimits{MaxContinuationTurns: 3})
+	if _, err := unproductive.BeginTurn(context.Background(), "yield", goal.AdmissionInitial); err != nil {
+		t.Fatal(err)
+	}
 	if err := unproductive.RecordTurn(context.Background(), goal.TurnReport{
 		TurnID: "yield", Summary: "no concrete receipt",
 	}); err != nil {

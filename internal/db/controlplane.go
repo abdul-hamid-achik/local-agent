@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/controlplane"
+	"github.com/abdul-hamid-achik/local-agent/internal/execution"
+	"github.com/abdul-hamid-achik/local-agent/internal/reconciliation"
 )
 
 var (
@@ -18,6 +20,8 @@ var (
 	ErrControlLeaseRequired         = errors.New("control-plane mutation requires an active session lease")
 	ErrControlLeaseScope            = errors.New("control-plane lease does not own this session scope")
 	ErrControlExecutionNotHazardous = errors.New("execution does not require outcome reconciliation")
+	ErrControlReconciliationInvalid = errors.New("execution reconciliation evidence is invalid")
+	ErrAtomicReconciliationRequired = errors.New("execution reconciliation requires the atomic session commit path")
 )
 
 const controlItemColumns = `
@@ -36,9 +40,6 @@ const controlResolutionColumns = `
 // recovery process cannot race the live owner. Exact replays return the
 // existing row with inserted=false; every differing collision fails closed.
 func (s *Store) AppendControlItem(ctx context.Context, lease *ExecutionSessionLease, candidate controlplane.Item) (controlplane.Item, bool, error) {
-	if err := candidate.Validate(); err != nil {
-		return controlplane.Item{}, false, fmt.Errorf("validate control-plane item: %w", err)
-	}
 	release, err := s.holdControlLease(ctx, lease, candidate.Identity.SessionID, candidate.Identity.WorkspaceID)
 	if err != nil {
 		return controlplane.Item{}, false, err
@@ -50,6 +51,22 @@ func (s *Store) AppendControlItem(ctx context.Context, lease *ExecutionSessionLe
 		return controlplane.Item{}, false, fmt.Errorf("begin control-plane item append: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	stored, inserted, err := appendControlItemTx(ctx, tx, candidate)
+	if err != nil {
+		return controlplane.Item{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return controlplane.Item{}, false, fmt.Errorf("commit control-plane item append: %w", err)
+	}
+	return stored, inserted, nil
+}
+
+// appendControlItemTx appends or exactly replays one item without acquiring a
+// lease or committing the caller's transaction.
+func appendControlItemTx(ctx context.Context, tx *sql.Tx, candidate controlplane.Item) (controlplane.Item, bool, error) {
+	if err := candidate.Validate(); err != nil {
+		return controlplane.Item{}, false, fmt.Errorf("validate control-plane item: %w", err)
+	}
 	if err := validateExecutionSessionScope(ctx, tx, candidate.Identity.SessionID, candidate.Identity.WorkspaceID); err != nil {
 		return controlplane.Item{}, false, err
 	}
@@ -60,16 +77,28 @@ func (s *Store) AppendControlItem(ctx context.Context, lease *ExecutionSessionLe
 	}
 	if len(existing) > 0 {
 		if len(existing) == 1 && controlItemsEquivalent(existing[0], candidate) {
-			if err := tx.Commit(); err != nil {
-				return controlplane.Item{}, false, fmt.Errorf("commit control-plane item replay: %w", err)
-			}
 			return existing[0], false, nil
 		}
 		return controlplane.Item{}, false, fmt.Errorf("%w: item ID or idempotency key is bound to different immutable content", ErrControlItemConflict)
 	}
 	if candidate.Kind == controlplane.KindExecutionReconciliation {
-		if err := validateReconcilableExecution(ctx, tx, candidate.Identity); err != nil {
+		if _, err := validateReconcilableExecution(ctx, tx, candidate.Identity); err != nil {
 			return controlplane.Item{}, false, err
+		}
+		var existingTarget string
+		err := tx.QueryRowContext(ctx, `
+			SELECT item_id
+			  FROM control_items
+			 WHERE session_id = ? AND workspace_id = ? AND execution_id = ?
+			   AND kind = 'execution_reconciliation'
+			 LIMIT 1`,
+			candidate.Identity.SessionID, candidate.Identity.WorkspaceID, candidate.Identity.ExecutionID,
+		).Scan(&existingTarget)
+		if err == nil {
+			return controlplane.Item{}, false, fmt.Errorf("%w: execution %q is already bound to item %q", ErrControlItemConflict, candidate.Identity.ExecutionID, existingTarget)
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return controlplane.Item{}, false, fmt.Errorf("inspect execution reconciliation uniqueness: %w", err)
 		}
 	}
 	if candidate.CreatedAt.IsZero() {
@@ -101,18 +130,12 @@ func (s *Store) AppendControlItem(ctx context.Context, lease *ExecutionSessionLe
 	if err != nil {
 		return controlplane.Item{}, false, err
 	}
-	if err := tx.Commit(); err != nil {
-		return controlplane.Item{}, false, fmt.Errorf("commit control-plane item append: %w", err)
-	}
 	return stored, true, nil
 }
 
 // ResolveControlItem appends the sole terminal resolution for an item. The
 // parent item and the existing execution ledger remain untouched.
 func (s *Store) ResolveControlItem(ctx context.Context, lease *ExecutionSessionLease, candidate controlplane.Resolution) (controlplane.Resolution, bool, error) {
-	if err := candidate.Validate(); err != nil {
-		return controlplane.Resolution{}, false, fmt.Errorf("validate control-plane resolution: %w", err)
-	}
 	release, err := s.holdControlLease(ctx, lease, candidate.SessionID, candidate.WorkspaceID)
 	if err != nil {
 		return controlplane.Resolution{}, false, err
@@ -124,6 +147,24 @@ func (s *Store) ResolveControlItem(ctx context.Context, lease *ExecutionSessionL
 		return controlplane.Resolution{}, false, fmt.Errorf("begin control-plane resolution append: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	stored, inserted, err := resolveControlItemTx(ctx, tx, candidate, false)
+	if err != nil {
+		return controlplane.Resolution{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return controlplane.Resolution{}, false, fmt.Errorf("commit control-plane resolution append: %w", err)
+	}
+	return stored, inserted, nil
+}
+
+// resolveControlItemTx appends or replays one resolution inside the caller's
+// transaction. It performs no lease acquisition and never commits, so the
+// later reconciliation service can atomically couple this receipt to a
+// session-state compare-and-swap.
+func resolveControlItemTx(ctx context.Context, tx *sql.Tx, candidate controlplane.Resolution, allowExecutionReconciliation bool) (controlplane.Resolution, bool, error) {
+	if err := candidate.Validate(); err != nil {
+		return controlplane.Resolution{}, false, fmt.Errorf("validate control-plane resolution: %w", err)
+	}
 	if err := validateExecutionSessionScope(ctx, tx, candidate.SessionID, candidate.WorkspaceID); err != nil {
 		return controlplane.Resolution{}, false, err
 	}
@@ -140,6 +181,9 @@ func (s *Store) ResolveControlItem(ctx context.Context, lease *ExecutionSessionL
 	if !candidate.Outcome.ValidFor(item.Kind) {
 		return controlplane.Resolution{}, false, fmt.Errorf("%w: outcome %q cannot resolve %s", ErrControlResolutionConflict, candidate.Outcome, item.Kind)
 	}
+	if item.Kind == controlplane.KindExecutionReconciliation && !allowExecutionReconciliation {
+		return controlplane.Resolution{}, false, ErrAtomicReconciliationRequired
+	}
 
 	existing, err := queryControlResolutionsByIdentity(ctx, tx, candidate.ResolutionID, candidate.IdempotencyKey, candidate.ItemID)
 	if err != nil {
@@ -147,12 +191,14 @@ func (s *Store) ResolveControlItem(ctx context.Context, lease *ExecutionSessionL
 	}
 	if len(existing) > 0 {
 		if len(existing) == 1 && controlResolutionsEquivalent(existing[0], candidate) {
-			if err := tx.Commit(); err != nil {
-				return controlplane.Resolution{}, false, fmt.Errorf("commit control-plane resolution replay: %w", err)
-			}
 			return existing[0], false, nil
 		}
 		return controlplane.Resolution{}, false, fmt.Errorf("%w: resolution ID, idempotency key, or item is bound to different immutable content", ErrControlResolutionConflict)
+	}
+	if item.Kind == controlplane.KindExecutionReconciliation {
+		if err := validateExecutionReconciliationResolution(ctx, tx, item, candidate); err != nil {
+			return controlplane.Resolution{}, false, err
+		}
 	}
 	if candidate.ResolvedAt.IsZero() {
 		candidate.ResolvedAt = time.Now().UTC()
@@ -180,9 +226,6 @@ func (s *Store) ResolveControlItem(ctx context.Context, lease *ExecutionSessionL
 	stored, err := getControlResolutionByRowID(ctx, tx, id)
 	if err != nil {
 		return controlplane.Resolution{}, false, err
-	}
-	if err := tx.Commit(); err != nil {
-		return controlplane.Resolution{}, false, fmt.Errorf("commit control-plane resolution append: %w", err)
 	}
 	return stored, true, nil
 }
@@ -277,25 +320,87 @@ func (s *Store) holdControlLease(ctx context.Context, lease *ExecutionSessionLea
 	return lease.mu.Unlock, nil
 }
 
-func validateReconcilableExecution(ctx context.Context, tx *sql.Tx, identity controlplane.Identity) error {
-	var eventType, effectClass string
-	err := tx.QueryRowContext(ctx, `
-		SELECT event_type, effect_class
+func validateReconcilableExecution(ctx context.Context, tx *sql.Tx, identity controlplane.Identity) (execution.Event, error) {
+	event, err := scanExecutionEvent(tx.QueryRowContext(ctx, `
+		SELECT `+executionEventColumns+`
 		  FROM execution_events
 		 WHERE session_id = ? AND workspace_id = ? AND execution_id = ?
 		 ORDER BY id DESC LIMIT 1`,
 		identity.SessionID, identity.WorkspaceID, identity.ExecutionID,
-	).Scan(&eventType, &effectClass)
+	))
 	if errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("%w: execution %q has no durable lifecycle", ErrControlExecutionNotHazardous, identity.ExecutionID)
+		return execution.Event{}, fmt.Errorf("%w: execution %q has no durable lifecycle", ErrControlExecutionNotHazardous, identity.ExecutionID)
 	}
 	if err != nil {
-		return fmt.Errorf("read execution reconciliation target: %w", err)
+		return execution.Event{}, fmt.Errorf("read execution reconciliation target: %w", err)
 	}
-	if eventType == "outcome_unknown" || (eventType == "started" && effectClass != "read_only") {
-		return nil
+	if event.Identity.TurnID != identity.TurnID {
+		return execution.Event{}, fmt.Errorf("%w: execution %q belongs to turn %q, not %q", ErrControlExecutionNotHazardous, identity.ExecutionID, event.Identity.TurnID, identity.TurnID)
 	}
-	return fmt.Errorf("%w: execution %q latest event is %s/%s", ErrControlExecutionNotHazardous, identity.ExecutionID, eventType, effectClass)
+	if event.Type == execution.EventOutcomeUnknown ||
+		(event.Type == execution.EventStarted && event.Identity.EffectClass != execution.EffectReadOnly) {
+		return event, nil
+	}
+	return execution.Event{}, fmt.Errorf("%w: execution %q latest event is %s/%s", ErrControlExecutionNotHazardous, identity.ExecutionID, event.Type, event.Identity.EffectClass)
+}
+
+func validateExecutionReconciliationResolution(ctx context.Context, tx *sql.Tx, item controlplane.Item, candidate controlplane.Resolution) error {
+	event, err := validateReconcilableExecution(ctx, tx, item.Identity)
+	if err != nil {
+		return err
+	}
+	target, err := executionReconciliationTarget(item, event, candidate.ResolvedBy)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrControlReconciliationInvalid, err)
+	}
+	envelope, err := reconciliation.Parse(candidate.EvidenceJSON, candidate.EvidenceSHA256)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrControlReconciliationInvalid, err)
+	}
+	if !envelope.MatchesTarget(target) {
+		return fmt.Errorf("%w: evidence target differs from the durable item or latest event", ErrControlReconciliationInvalid)
+	}
+	return nil
+}
+
+func executionReconciliationTarget(item controlplane.Item, event execution.Event, actor string) (reconciliation.Target, error) {
+	if item.Kind != controlplane.KindExecutionReconciliation ||
+		item.Identity.SessionID != event.Identity.SessionID ||
+		item.Identity.WorkspaceID != event.Identity.WorkspaceID ||
+		item.Identity.ExecutionID != event.Identity.ExecutionID ||
+		item.Identity.TurnID != event.Identity.TurnID {
+		return reconciliation.Target{}, errors.New("control item does not match the immutable execution event")
+	}
+	eventDigest, err := executionEventDigest(event)
+	if err != nil {
+		return reconciliation.Target{}, err
+	}
+	target := reconciliation.Target{
+		SessionID: item.Identity.SessionID, WorkspaceID: item.Identity.WorkspaceID,
+		GoalID: item.Identity.GoalID, ItemID: item.ItemID,
+		ItemPayloadSHA256: item.PayloadSHA256, ExecutionID: item.Identity.ExecutionID,
+		TurnID: item.Identity.TurnID, LatestEventID: event.ID,
+		LatestEventType: string(event.Type), LatestEventSHA256: eventDigest, Actor: actor,
+	}
+	if err := target.Validate(); err != nil {
+		return reconciliation.Target{}, err
+	}
+	return target, nil
+}
+
+func executionEventDigest(event execution.Event) (string, error) {
+	fingerprint := reconciliation.EventFingerprint{
+		EventID: event.ID, SessionID: event.Identity.SessionID,
+		WorkspaceID: event.Identity.WorkspaceID, RunID: event.Identity.RunID,
+		ExecutionID: event.Identity.ExecutionID, IdempotencyKey: event.Identity.IdempotencyKey,
+		TurnID: event.Identity.TurnID, CanonicalCallID: event.Identity.CanonicalCallID,
+		ToolName: event.Identity.ToolName, Kind: string(event.Identity.Kind),
+		Iteration: event.Identity.Iteration, Ordinal: event.Identity.Ordinal,
+		EventType: string(event.Type), EffectClass: string(event.Identity.EffectClass),
+		Approval: string(event.Approval), ArgumentsSHA256: event.ArgumentsSHA256,
+		ResultSHA256: event.ResultSHA256, OccurredAt: event.OccurredAt,
+	}
+	return fingerprint.Digest()
 }
 
 func validateControlLookup(sessionID int64, workspaceID, itemID string) error {
