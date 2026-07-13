@@ -73,8 +73,17 @@ var toolActionRegistry = map[string]toolActionLabels{
 	"memory_update":      {running: "Updating memory", success: "Updated memory", failure: "Update memory failed"},
 	"memory_list":        {running: "Listing memories", success: "Listed memories", failure: "List memories failed"},
 	"update_plan":        {running: "Updating plan", success: "Updated plan", failure: "Update plan failed"},
-	"tool_search":        {running: "Loading tools", success: "Loaded tools", failure: "Load tools failed"},
-	"task":               {running: "Running task", success: "Completed task", failure: "Task failed"},
+	// Bob (bobcli.dev) repository-factory tools, typically namespaced through MCP.
+	"bob_plan":              {running: "Planning repository", success: "Planned repository", failure: "Repository plan failed"},
+	"bob_check":             {running: "Checking repository drift", success: "Checked repository drift", failure: "Drift check failed"},
+	"bob_apply":             {running: "Applying repository plan", success: "Applied repository plan", failure: "Repository apply failed"},
+	"bob_inspect":           {running: "Inspecting repository", success: "Inspected repository", failure: "Repository inspect failed"},
+	"bob_stats":             {running: "Reading Bob stats", success: "Read Bob stats", failure: "Bob stats failed"},
+	"bob_validate_manifest": {running: "Validating manifest", success: "Validated manifest", failure: "Manifest validation failed"},
+	"bob_recipe_describe":   {running: "Describing recipe", success: "Described recipe", failure: "Recipe describe failed"},
+	"bob_learn":             {running: "Learning Bob contract", success: "Learned Bob contract", failure: "Bob learn failed"},
+	"tool_search":           {running: "Loading tools", success: "Loaded tools", failure: "Load tools failed"},
+	"task":                  {running: "Running task", success: "Completed task", failure: "Task failed"},
 }
 
 var toolKindRegistry = map[ToolCardKind]toolActionLabels{

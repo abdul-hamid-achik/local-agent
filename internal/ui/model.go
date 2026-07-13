@@ -1509,6 +1509,11 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		}
 		matched := false
 		result := boundedToolCardResult(msg.Result)
+		// Bob envelopes carry stable conflict/error codes and copy-pasteable
+		// corrective commands; keep that digest visible ahead of the raw JSON.
+		if digest := bobReceiptDigest(msg.Name, msg.Result); digest != "" {
+			result = boundedToolCardResult(digest + "\n" + msg.Result)
+		}
 		for i := len(m.toolEntries) - 1; i >= 0; i-- {
 			if toolCallMatches(msg.ID, msg.Name, m.toolEntries[i].ID, m.toolEntries[i].Name) && m.toolEntries[i].Status == ToolStatusRunning {
 				matched = true
