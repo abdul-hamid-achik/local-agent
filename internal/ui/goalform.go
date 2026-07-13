@@ -77,6 +77,10 @@ type GoalFormOptions struct {
 	Height        int
 	IsDark        bool
 	ReducedMotion bool
+	// DraftFromPrompt tells the form that the initial definition was inferred
+	// from the user's composer text. The draft remains fully editable and is
+	// never dispatched until the user explicitly reviews and saves it.
+	DraftFromPrompt bool
 	// BudgetOnly locks the immutable objective and acceptance criteria while
 	// preserving them as context for a budget amendment.
 	BudgetOnly bool
@@ -105,14 +109,15 @@ type GoalForm struct {
 	choiceIndex int
 	errorText   string
 
-	width         int
-	height        int
-	isDark        bool
-	reducedMotion bool
-	budgetOnly    bool
-	customChoices bool
-	styles        Styles
-	cache         goalFormRenderCache
+	width           int
+	height          int
+	isDark          bool
+	reducedMotion   bool
+	budgetOnly      bool
+	draftFromPrompt bool
+	customChoices   bool
+	styles          Styles
+	cache           goalFormRenderCache
 }
 
 type goalFormRenderCache struct {
@@ -133,12 +138,13 @@ func NewGoalForm(initial GoalFormValues, options GoalFormOptions) *GoalForm {
 	}
 
 	f := &GoalForm{
-		width:         options.Width,
-		height:        options.Height,
-		isDark:        options.IsDark,
-		reducedMotion: options.ReducedMotion,
-		budgetOnly:    options.BudgetOnly,
-		styles:        NewStyles(options.IsDark),
+		width:           options.Width,
+		height:          options.Height,
+		isDark:          options.IsDark,
+		reducedMotion:   options.ReducedMotion,
+		budgetOnly:      options.BudgetOnly,
+		draftFromPrompt: options.DraftFromPrompt,
+		styles:          NewStyles(options.IsDark),
 	}
 	f.objective = newGoalTextInput("What outcome should persist?", 768)
 	f.acceptance = textarea.New()
@@ -685,6 +691,10 @@ func (f *GoalForm) renderCompactView() (string, *tea.Cursor) {
 	}
 	b.WriteString(f.styles.OverlayTitle.Render(fmt.Sprintf("%s · %d/%d", title, f.visibleFieldNumber(), f.visibleFieldCount())))
 	b.WriteString("\n")
+	if f.draftFromPrompt && !f.budgetOnly {
+		b.WriteString(f.styles.OverlayDim.Render(truncateDisplay("Prompt draft · review", width)))
+		b.WriteString("\n")
+	}
 	if f.budgetOnly {
 		b.WriteString(f.renderLockedDefinitionContext(width))
 		b.WriteString("\n")
@@ -710,6 +720,10 @@ func (f *GoalForm) renderFullView() (string, *tea.Cursor) {
 
 	title := "Goal"
 	subtitle := "Define done, then bound the run."
+	if f.draftFromPrompt && !f.budgetOnly {
+		title = "Review goal draft"
+		subtitle = "Inferred from your prompt · edit objective, proof, and limits before AUTO starts."
+	}
 	if f.budgetOnly {
 		title = "Goal budgets"
 		subtitle = "Definition locked · adjust limits only."

@@ -12,9 +12,9 @@
        │ dropped · dropped by user                                      │
        │                                                                │
        │ Last turn                                                      │
-       │ not productive · 0 eval · just now · LLM response: no model    │
-       │ selected                                                       │
+       │ none recorded                                                  │
        │                                                                │
+       │ Cortex                                                         │
        │ Actions · 1/4                                                  │
        │ › Pause ×  Resume ×  Budget ×  Drop ×                          │
        │   Unavailable · Only an active goal can be paused.             │

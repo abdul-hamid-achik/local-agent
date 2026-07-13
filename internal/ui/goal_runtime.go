@@ -73,7 +73,7 @@ func (m *Model) hasLiveGoal() bool {
 
 func (m *Model) handleAutoModeSubmit(text string) tea.Cmd {
 	if m.goalRuntime == nil {
-		if err := m.openGoalForm(text, false); err != nil {
+		if err := m.openGoalDraftForm(text); err != nil {
 			m.appendGoalError("Start AUTO goal: " + err.Error())
 		}
 		return nil
@@ -85,7 +85,7 @@ func (m *Model) handleAutoModeSubmit(text string) tea.Cmd {
 		return nil
 	}
 	if snapshot.State.Terminal() {
-		if err := m.openGoalForm(text, false); err != nil {
+		if err := m.openGoalDraftForm(text); err != nil {
 			m.restoreAutoComposerDraft(text)
 			m.appendGoalError("Start next AUTO goal: " + err.Error())
 		}
@@ -121,7 +121,32 @@ func goalFormValuesFromSnapshot(snapshot goal.Snapshot) GoalFormValues {
 }
 
 func (m *Model) openGoalForm(objective string, budgetOnly bool) error {
+	return m.openGoalFormInternal(objective, budgetOnly, false)
+}
+
+func (m *Model) openGoalDraftForm(prompt string) error {
+	return m.openGoalFormInternal(prompt, false, true)
+}
+
+func (m *Model) openGoalFormInternal(objective string, budgetOnly, draftFromPrompt bool) error {
 	values := defaultGoalFormValues(objective)
+	if draftFromPrompt {
+		draft, err := goal.InferDraft(objective, goal.BudgetLimits{
+			MaxContinuationTurns: defaultGoalContinuationBudget,
+			MaxEvalTokens:        defaultGoalTokenBudget,
+			MaxWallTime:          defaultGoalTimeBudget,
+		})
+		if err != nil {
+			return fmt.Errorf("infer goal draft: %w", err)
+		}
+		values = GoalFormValues{
+			Objective:          draft.Objective,
+			AcceptanceCriteria: strings.Join(draft.AcceptanceCriteria, "\n"),
+			TurnBudget:         draft.Budget.MaxContinuationTurns,
+			TokenBudget:        draft.Budget.MaxEvalTokens,
+			TimeBudget:         draft.Budget.MaxWallTime,
+		}
+	}
 	if budgetOnly {
 		if m.goalRuntime == nil {
 			return fmt.Errorf("no goal is configured; create one with /goal new")
@@ -138,6 +163,7 @@ func (m *Model) openGoalForm(objective string, budgetOnly bool) error {
 	m.goalFormState = NewGoalForm(values, GoalFormOptions{
 		Width: m.width, Height: m.height, IsDark: m.isDark,
 		ReducedMotion: m.reducedMotion, BudgetOnly: budgetOnly,
+		DraftFromPrompt: draftFromPrompt,
 	})
 	m.overlayParent = OverlayNone
 	m.overlay = OverlayGoalForm
@@ -477,10 +503,23 @@ func (m *Model) handleGoalOpenResult(message goalOpenResultMsg) tea.Cmd {
 	linked := false
 	linkMessage := ""
 	if message.Err != nil {
-		// The local goal was committed before optional Cortex discovery. A
-		// missing/degraded advisor must never erase it; bounded local continuation
-		// remains user-directed and cannot claim verified completion on its own.
-		linkMessage = "Cortex is unavailable; continuing as a bounded local goal. Retry linking with /goal resume."
+		// AUTO promises semantic supervision. Keep the durable local goal, but do
+		// not silently dispatch an unsupervised provider turn when Cortex cannot
+		// accept it. The exact bounded error is retained as an actionable receipt.
+		detail := truncateGoalAdvisorError(message.Err)
+		if before.State == goal.StateActive && before.PendingContinuation == nil {
+			if err := m.goalRuntime.Pause(context.Background(), "Cortex link failed: "+detail); err != nil {
+				m.appendGoalError("Pause goal after Cortex link failure: " + err.Error())
+				return nil
+			}
+		}
+		if err := m.persistGoalSession(); err != nil {
+			stopErr := m.stopGoalAfterPersistenceFailure(before, "Cortex link failure could not be persisted")
+			m.appendGoalError("Save Cortex link failure: " + errors.Join(err, stopErr).Error())
+			return nil
+		}
+		m.appendGoalError("Cortex link failed · " + detail + ". Goal paused; update or rebuild Cortex so cortex_open_task is exposed, then run /goal resume.")
+		return nil
 	} else {
 		if strings.TrimSpace(message.Advice.TaskID) == "" {
 			linkMessage = "Cortex returned no task identity; continuing as a bounded local goal."
@@ -509,6 +548,15 @@ func (m *Model) handleGoalOpenResult(message goalOpenResultMsg) tea.Cmd {
 		return m.startGoalTurn(&message.Advice, false)
 	}
 	return m.startGoalTurn(nil, message.Manual)
+}
+
+func truncateGoalAdvisorError(err error) string {
+	detail := strings.Join(strings.Fields(err.Error()), " ")
+	const maxBytes = 320
+	if len(detail) > maxBytes {
+		detail = detail[:maxBytes-1] + "…"
+	}
+	return detail
 }
 
 func fallbackGoalText(value, fallback string) string {

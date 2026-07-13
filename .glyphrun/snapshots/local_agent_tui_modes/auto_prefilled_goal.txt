@@ -6,11 +6,11 @@
 
   ╭──────────────────────────────────────────────────────╮
   │ Goal · 1/6                                           │
+  │ Prompt draft · review                                │
   │ Objective                                            │
   │ > ship a bounded durable migration                   │
   │ esc cancel · enter/tab next                          │
   ╰──────────────────────────────────────────────────────╯
-
 
 
 

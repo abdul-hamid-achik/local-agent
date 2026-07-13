@@ -3,7 +3,7 @@ name: local_agent_tui_goal_runtime
 
 intent: |
   a user can define a bounded durable goal at normal and minimum terminal
-  sizes, observe safe local fallback when Cortex and Ollama are unavailable,
+  sizes, observe fail-closed behavior when Cortex is unavailable,
   inspect locked budget editing, and drop the goal without false completion.
 
 target:
@@ -82,7 +82,7 @@ steps:
   - press: "enter"
   - wait:
       screen:
-        contains: "Cortex is unavailable; continuing as a bounded local goal."
+        contains: "Cortex link failed"
       timeoutMs: 5000
   - wait:
       screen:
@@ -109,7 +109,7 @@ steps:
       timeoutMs: 2000
   - wait:
       screen:
-        contains: "paused · unproductive turn"
+        contains: "paused · Cortex link failed"
       timeoutMs: 2000
   - snapshot: goal_paused_receipt
   - press: "esc"
@@ -212,7 +212,7 @@ outcomes:
         name: goal_form_minimum
         mode: text
   - id: unavailable_advisors_stop_safely
-    description: the Goal Inspector shows that local fallback paused after one bounded attempt instead of looping
+    description: the Goal Inspector shows that AUTO paused before provider dispatch when semantic supervision was unavailable
     verify:
       snapshot:
         name: goal_paused_receipt

@@ -85,6 +85,20 @@ func TestBuildSystemPrompt(t *testing.T) {
 	})
 }
 
+func TestSimplifyToolsForSmallModelIncludesRequiredArguments(t *testing.T) {
+	prompt := simplifyToolsForSmallModel([]llm.ToolDef{{
+		Name:        "bash",
+		Description: "Execute a shell command.",
+		Parameters: map[string]any{
+			"type":     "object",
+			"required": []any{"timeout", "command"},
+		},
+	}})
+	if !strings.Contains(prompt, "bash (required: command, timeout)") {
+		t.Fatalf("small-model tool prompt omitted required arguments: %q", prompt)
+	}
+}
+
 func TestBuildSystemPrompt_WithWorkDir(t *testing.T) {
 	result := buildSystemPrompt("", nil, "", "", nil, "", "/home/user/myproject", "")
 	if !strings.Contains(result, "Working directory: /home/user/myproject") {

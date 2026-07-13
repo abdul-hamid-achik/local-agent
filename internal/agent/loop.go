@@ -17,7 +17,10 @@ import (
 
 const maxToolCallsPerResponse = 64
 
-var ErrTurnEvalBudgetExhausted = errors.New("turn evaluation-token budget exhausted")
+var (
+	ErrTurnEvalBudgetExhausted = errors.New("turn evaluation-token budget exhausted")
+	ErrMalformedToolLoop       = errors.New("model repeatedly returned malformed tool requests")
+)
 
 // TurnLimits are hard, per-turn provider limits supplied by a host scheduler.
 // Zero leaves a dimension unlimited. Goal Runtime passes only its remaining
@@ -180,6 +183,7 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 	var lastEvalTokens int
 	var totalEvalTokens int64
 	var retryCount int
+	var malformedToolIterations int
 
 	maxIters := a.MaxIterations()
 
@@ -428,6 +432,7 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 
 		// Execute tool calls in provider order. Requested/approval/dispatch and
 		// terminal transitions are committed synchronously around the backend.
+		preflightRejections := 0
 		for toolIndex, tc := range toolCalls {
 			tracked := &trackedExecutions[toolIndex]
 			if ctxErr := ctx.Err(); ctxErr != nil {
@@ -517,6 +522,7 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 			}
 
 			if preflightErr := a.preflightToolCall(kind, tc); preflightErr != nil {
+				preflightRejections++
 				result := fmt.Sprintf("tool request failed preflight: %v", preflightErr)
 				if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventFailed, executionPkg.ApprovalNotApplicable, result, "preflight rejected request before dispatch")); err != nil {
 					return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
@@ -685,6 +691,16 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 				}
 				return ctxErr
 			}
+		}
+		if preflightRejections == len(toolCalls) {
+			malformedToolIterations++
+			if malformedToolIterations >= 2 {
+				err := fmt.Errorf("%w twice consecutively; switch to a larger model or retry with explicit tool arguments", ErrMalformedToolLoop)
+				out.Error(err.Error())
+				return err
+			}
+		} else {
+			malformedToolIterations = 0
 		}
 		if err := ctx.Err(); err != nil {
 			return err

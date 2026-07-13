@@ -9,12 +9,12 @@
        │ Productive turns are progress signals, not acceptance proof.   │
        │                                                                │
        │ State                                                          │
-       │ paused · unproductive turn: LLM response: no model selected    │
+       │ paused · Cortex link failed: cortex goal advisor is            │
+       │ unavailable: neither cortex_open_task nor the MCPHub gateway   │
+       │ is connected                                                   │
        │                                                                │
        │ Last turn                                                      │
-       │ not productive · 0 eval · just now · LLM response: no model    │
-       │ selected                                                       │
-       │                                                                │
+       │ none recorded                                                  │
        │ Actions · 2/4                                                  │
        │ Pause ×  › Resume  Budget  Drop                                │
        │ Resume or safely retry goal evaluation                         │

@@ -652,6 +652,43 @@ func TestGoalFormReducedMotionUsesStaticBubblesCursors(t *testing.T) {
 	}
 }
 
+func TestGoalFormPromptDraftMakesReviewBoundaryExplicit(t *testing.T) {
+	initial := GoalFormValues{
+		Objective:          "Polish the Cortex goal experience",
+		AcceptanceCriteria: "Cortex status is compact\nTool failures remain readable",
+		TurnBudget:         8,
+	}
+
+	wide := NewGoalForm(initial, GoalFormOptions{
+		Width: 80, Height: 24, DraftFromPrompt: true,
+	})
+	wideView := wide.View()
+	for _, want := range []string{"Review goal draft", "Inferred from your prompt", "before AUTO starts"} {
+		if !strings.Contains(wideView, want) {
+			t.Fatalf("prompt review form missing %q:\n%s", want, wideView)
+		}
+	}
+	values, err := wide.Values()
+	if err != nil || values != initial {
+		t.Fatalf("review presentation changed inferred values: values=%#v err=%v", values, err)
+	}
+	assertRenderedLinesFit(t, wideView, 80)
+	assertRenderedHeightFits(t, wideView, 24)
+
+	compact := NewGoalForm(initial, GoalFormOptions{
+		Width: 30, Height: 12, DraftFromPrompt: true, ReducedMotion: true,
+	})
+	compactView := compact.View()
+	if !strings.Contains(compactView, "Prompt draft") || !strings.Contains(compactView, "review") {
+		t.Fatalf("compact prompt review boundary missing:\n%s", compactView)
+	}
+	if compact.objective.Styles().Cursor.Blink || compact.acceptance.Styles().Cursor.Blink {
+		t.Fatal("prompt draft ignored reduced-motion cursor policy")
+	}
+	assertRenderedLinesFit(t, compactView, 30)
+	assertRenderedHeightFits(t, compactView, 12)
+}
+
 func TestGoalFormCursorStaysInsideFrame(t *testing.T) {
 	form := NewGoalForm(GoalFormValues{Objective: "模型 goal"}, GoalFormOptions{Width: 30, Height: 12})
 	view, cursor := form.ViewWithCursor()

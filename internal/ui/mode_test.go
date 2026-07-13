@@ -182,6 +182,9 @@ func TestAutoSubmitEntersOrControlsDurableGoal(t *testing.T) {
 		if got := m.goalFormState.objective.Value(); got != "ship a verified compact interface" {
 			t.Fatalf("prefilled objective = %q", got)
 		}
+		if !m.goalFormState.draftFromPrompt {
+			t.Fatal("AUTO prompt was not presented as a reviewable draft")
+		}
 		if client.calls.Load() != 0 {
 			t.Fatalf("AUTO form made %d provider calls", client.calls.Load())
 		}

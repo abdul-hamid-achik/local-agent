@@ -845,6 +845,50 @@ func TestGoalRelinkChecksStatusBeforeManualProviderTurn(t *testing.T) {
 	}
 }
 
+func TestGoalOpenFailurePausesWithoutProviderDispatch(t *testing.T) {
+	client := &goalCountingClient{}
+	m := newGoalRuntimeTestModel(t, client)
+	store, sessionID := attachGoalTestSession(t, m)
+	defer func() { _ = store.Close() }()
+	m.goalRuntime = newUIGoalRuntime(t, sessionID, goal.BudgetLimits{MaxContinuationTurns: 3})
+	token := beginGoalOperationForTest(t, m, "Linking Cortex")
+
+	cmd := m.handleGoalOpenResult(goalOpenResultMsg{
+		Token: token,
+		Err:   errors.New("cortex_open_task: unknown tool"),
+	})
+	if cmd != nil {
+		t.Fatal("failed Cortex link scheduled work")
+	}
+	snapshot := snapshotUIGoal(t, m.goalRuntime)
+	if snapshot.State != goal.StatePaused || !strings.Contains(snapshot.StateReason, "unknown tool") {
+		t.Fatalf("failed link state = %s reason %q", snapshot.State, snapshot.StateReason)
+	}
+	if client.calls.Load() != 0 {
+		t.Fatalf("failed link dispatched %d provider calls", client.calls.Load())
+	}
+	if len(m.entries) == 0 || !strings.Contains(m.entries[len(m.entries)-1].Content, "cortex_open_task") {
+		t.Fatalf("missing actionable Cortex receipt: %#v", m.entries)
+	}
+}
+
+func TestAutoPromptOpensReviewedInferredDraft(t *testing.T) {
+	m := newGoalRuntimeTestModel(t, &goalCountingClient{})
+	if cmd := m.handleAutoModeSubmit("Polish the goal workflow"); cmd != nil {
+		t.Fatal("draft review dispatched work")
+	}
+	if m.goalFormState == nil || !m.goalFormState.draftFromPrompt {
+		t.Fatal("AUTO prompt did not open an inferred draft review")
+	}
+	values, err := m.goalFormState.Values()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values.Objective != "Polish the goal workflow" || len(values.CriterionDescriptions()) < 2 {
+		t.Fatalf("draft values = %#v", values)
+	}
+}
+
 func TestGoalAdvisorOperationJoinsShutdown(t *testing.T) {
 	m := newGoalRuntimeTestModel(t, &goalCountingClient{})
 	m.goalRuntime = newUIGoalRuntime(t, 42, goal.BudgetLimits{MaxContinuationTurns: 3})

@@ -946,6 +946,30 @@ func TestExecutionPreflightRejectsInvalidAndUnavailableToolsBeforeStarted(t *tes
 	}
 }
 
+func TestExecutionStopsConsecutiveMalformedToolIterations(t *testing.T) {
+	client := &scriptedClient{responses: [][]llm.StreamChunk{
+		{{ToolCalls: []llm.ToolCall{{ID: "bad-1", Name: "bash", Arguments: map[string]any{}}}, Done: true}},
+		{{ToolCalls: []llm.ToolCall{{ID: "bad-2", Name: "find", Arguments: map[string]any{}}}, Done: true}},
+		{{Text: "must not be requested", Done: true}},
+	}}
+	ledger := &fakeExecutionLedger{}
+	ag, _ := newLedgerAgent(t, client, nil, ledger)
+	err := ag.Run(context.Background(), &outputRecorder{})
+	if !errors.Is(err, ErrMalformedToolLoop) {
+		t.Fatalf("Run error = %v, want ErrMalformedToolLoop", err)
+	}
+	if client.calls != 2 {
+		t.Fatalf("provider calls = %d, want 2", client.calls)
+	}
+	want := []executionpkg.EventType{
+		executionpkg.EventRequested, executionpkg.EventFailed,
+		executionpkg.EventRequested, executionpkg.EventFailed,
+	}
+	if got := executionEventTypes(ledger.snapshot()); !reflect.DeepEqual(got, want) {
+		t.Fatalf("events = %v, want %v", got, want)
+	}
+}
+
 func TestRequireExecutionLedgerFailsBeforeProviderWithoutLedger(t *testing.T) {
 	client := &scriptedClient{responses: [][]llm.StreamChunk{{{Text: "must not run", Done: true}}}}
 	ag := New(client, nil, 4096)

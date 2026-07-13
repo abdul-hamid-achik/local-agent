@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -227,9 +228,33 @@ func simplifyToolsForSmallModel(tools []llm.ToolDef) string {
 		if len(desc) > 50 {
 			desc = desc[:47] + "..."
 		}
+		required := requiredToolParameters(t.Parameters)
+		if len(required) > 0 {
+			fmt.Fprintf(&b, "- %s (required: %s): %s\n", t.Name, strings.Join(required, ", "), desc)
+			continue
+		}
 		fmt.Fprintf(&b, "- %s: %s\n", t.Name, desc)
 	}
 	return b.String()
+}
+
+func requiredToolParameters(schema map[string]any) []string {
+	if len(schema) == 0 {
+		return nil
+	}
+	var required []string
+	switch values := schema["required"].(type) {
+	case []string:
+		required = append(required, values...)
+	case []any:
+		for _, value := range values {
+			if name, ok := value.(string); ok {
+				required = append(required, name)
+			}
+		}
+	}
+	sort.Strings(required)
+	return required
 }
 
 // buildEnvironmentSectionContext creates the cancellable environment section.
