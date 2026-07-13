@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // queuedFollowUp is deliberately limited to one item. A single visible queue
@@ -42,6 +43,66 @@ func (m *Model) queueComposerFollowUp() tea.Cmd {
 	m.inputLines = 1
 	m.recalcViewportHeight()
 	return nil
+}
+
+// renderQueuedFollowUp keeps the single pending instruction visible while the
+// active turn settles. It is deliberately one physical row: queue state should
+// never steal an unpredictable amount of transcript space.
+func (m *Model) renderQueuedFollowUp() string {
+	if m.queuedFollowUp == nil {
+		return ""
+	}
+	prompt := strings.Join(strings.Fields(sanitizeTerminalMultiline(m.queuedFollowUp.Prompt)), " ")
+	if prompt == "" {
+		prompt = "follow-up"
+	}
+
+	prefix := "  " + m.styles.FocusIndicator.Render("queued") + m.styles.StatusText.Render(" › ")
+	hints := []string{" · ↑ edit · esc clear", " · ↑ edit · esc", " · ↑/esc", ""}
+	width := max(1, m.chatPaneWidth())
+	hint := hints[len(hints)-1]
+	for _, candidate := range hints {
+		if width-lipgloss.Width(prefix)-lipgloss.Width(candidate) >= 8 {
+			hint = candidate
+			break
+		}
+	}
+	available := max(1, width-lipgloss.Width(prefix)-lipgloss.Width(hint))
+	return prefix + m.styles.StatusText.Render(truncateDisplay(prompt, available)) +
+		m.styles.StatusText.Render(hint)
+}
+
+// editQueuedFollowUp returns the one queued instruction to the live composer.
+// Up owns this action before ordinary history navigation while a turn runs.
+func (m *Model) editQueuedFollowUp() bool {
+	if m.queuedFollowUp == nil {
+		return false
+	}
+	prompt := m.queuedFollowUp.Prompt
+	if draft := strings.TrimSpace(m.input.Value()); draft != "" {
+		prompt += "\n" + m.input.Value()
+	}
+	m.queuedFollowUp = nil
+	m.clearCompletionSuppression()
+	m.input.SetValue(prompt)
+	m.input.CursorEnd()
+	m.input.Focus()
+	m.syncInputHeight()
+	m.recalcViewportHeight()
+	return true
+}
+
+// clearQueuedFollowUp releases the queue slot without cancelling the active
+// run. Escape owns this action before the run-cancel fallback.
+func (m *Model) clearQueuedFollowUp() bool {
+	if m.queuedFollowUp == nil {
+		return false
+	}
+	m.queuedFollowUp = nil
+	m.input.Focus()
+	m.syncInputHeight()
+	m.recalcViewportHeight()
+	return true
 }
 
 // restoreQueuedFollowUp returns authority to the user after a failed or

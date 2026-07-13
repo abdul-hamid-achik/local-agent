@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/abdul-hamid-achik/local-agent/internal/agent"
 	"github.com/abdul-hamid-achik/local-agent/internal/ui"
 )
 
@@ -24,5 +25,16 @@ func parseHeadlessMode(value string, headless bool) (ui.Mode, error) {
 		return ui.ModeAuto, nil
 	default:
 		return ui.ModeNormal, fmt.Errorf("unknown authority %q (want normal, plan, or auto)", value)
+	}
+}
+
+func headlessAuthorityMode(mode ui.Mode) agent.AuthorityMode {
+	switch mode {
+	case ui.ModePlan:
+		return agent.AuthorityPlan
+	case ui.ModeAuto:
+		return agent.AuthorityAutoScoped
+	default:
+		return agent.AuthorityNormal
 	}
 }

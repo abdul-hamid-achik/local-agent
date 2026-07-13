@@ -64,6 +64,14 @@ func TestSendToAgent_RoutesModelPerSend(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected sendToAgent to return a command")
 	}
+	if !m.input.Focused() {
+		t.Fatal("ordinary active turn blurred the follow-up composer")
+	}
+	updated, _ := m.Update(charKey('n'))
+	m = updated.(*Model)
+	if got := m.input.Value(); got != "n" {
+		t.Fatalf("real active-turn key event produced %q, want recoverable draft", got)
+	}
 	if router.query != "debug this issue across files" {
 		t.Fatalf("router query = %q", router.query)
 	}

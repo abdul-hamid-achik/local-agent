@@ -68,20 +68,20 @@ tasks:
   glyphrun:
     desc: Run terminal behavior specs with Glyphrun
     cmds:
-      - glyph run specs/glyphrun/version.yml specs/glyphrun/tui_smoke.yml specs/glyphrun/tui_modes.yml specs/glyphrun/tui_narrow.yml specs/glyphrun/tui_goal_runtime.yml specs/glyphrun/tui_ollama_inventory.yml specs/glyphrun/tui_composer_paste.yml specs/glyphrun/tui_approval_denial.yml specs/glyphrun/tui_approval_always.yml specs/glyphrun/tui_session_receipts.yml specs/glyphrun/help.yml specs/glyphrun/logs_empty.yml specs/glyphrun/init.yml specs/glyphrun/tui_help.yml --format md --progress auto --parallel 1
+      - glyph run specs/version.yml specs/tui_smoke.yml specs/tui_modes.yml specs/tui_narrow.yml specs/tui_goal_runtime.yml specs/tui_ollama_inventory.yml specs/tui_composer_paste.yml specs/tui_approval_denial.yml specs/tui_approval_always.yml specs/tui_session_receipts.yml specs/help.yml specs/logs_empty.yml specs/init.yml specs/tui_help.yml --format md --progress auto --parallel 1
 
   glyphrun-snapshots:
     desc: Refresh committed Glyphrun terminal snapshots
     cmds:
-      - glyph snapshot update specs/glyphrun/tui_smoke.yml --format md
-      - glyph snapshot update specs/glyphrun/tui_modes.yml --format md
-      - glyph snapshot update specs/glyphrun/tui_narrow.yml --format md
-      - glyph snapshot update specs/glyphrun/tui_goal_runtime.yml --format md
-      - glyph snapshot update specs/glyphrun/tui_ollama_inventory.yml --format md
-      - glyph snapshot update specs/glyphrun/tui_composer_paste.yml --format md
-      - glyph snapshot update specs/glyphrun/tui_approval_denial.yml --format md
-      - glyph snapshot update specs/glyphrun/tui_session_receipts.yml --format md
-      - glyph snapshot update specs/glyphrun/tui_help.yml --format md
+      - glyph snapshot update specs/tui_smoke.yml --format md
+      - glyph snapshot update specs/tui_modes.yml --format md
+      - glyph snapshot update specs/tui_narrow.yml --format md
+      - glyph snapshot update specs/tui_goal_runtime.yml --format md
+      - glyph snapshot update specs/tui_ollama_inventory.yml --format md
+      - glyph snapshot update specs/tui_composer_paste.yml --format md
+      - glyph snapshot update specs/tui_approval_denial.yml --format md
+      - glyph snapshot update specs/tui_session_receipts.yml --format md
+      - glyph snapshot update specs/tui_help.yml --format md
 
   clean:
     desc: Clean build artifacts

@@ -63,8 +63,9 @@ func SafeToolArgsForPersistence(name string, args map[string]any) map[string]any
 	return redactSensitiveArguments(args)
 }
 
-// SanitizeMessagesForPersistence clones model history and removes sensitive
-// tool-call arguments before it crosses the durable session boundary.
+// SanitizeMessagesForPersistence clones model history, replaces transient tool
+// content with its bounded durable receipt, and removes sensitive tool-call
+// arguments before history crosses a durable session boundary.
 func SanitizeMessagesForPersistence(messages []llm.Message) []llm.Message {
 	if len(messages) == 0 {
 		return nil
@@ -72,6 +73,10 @@ func SanitizeMessagesForPersistence(messages []llm.Message) []llm.Message {
 	result := make([]llm.Message, len(messages))
 	for index, message := range messages {
 		result[index] = message
+		if message.DurableContent != "" {
+			result[index].Content = message.DurableContent
+		}
+		result[index].DurableContent = ""
 		if len(message.ToolCalls) == 0 {
 			continue
 		}

@@ -11,7 +11,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/abdul-hamid-achik/local-agent/internal/ecosystem"
 	executionPkg "github.com/abdul-hamid-achik/local-agent/internal/execution"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 )
@@ -172,10 +171,15 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 		a.turnRunning.Store(false)
 		a.turnMu.Unlock()
 	}()
+	// Transient structured results exist only for provider iterations inside
+	// this turn. Settle them before RunTurn returns so a future user turn,
+	// checkpoint, or cursor projection can observe only the durable receipts.
+	defer a.settleTransientMessages()
 	// A provider such as ModelManager may expose a different context window for
 	// each selected model. Resolve it exactly once so every budget decision in
 	// this turn stays coherent even if selection changes concurrently.
 	turnNumCtx := a.NumCtx()
+	authorityMode := a.AuthorityMode()
 	execRuntime, err := a.executionRuntime(ctx)
 	if err != nil {
 		out.Error(err.Error())
@@ -569,6 +573,11 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 				block = true
 				reason = "tool hook attempted to change approved tool identity"
 			}
+			effectiveKind, effectiveEffect := a.executionKindForCall(tc)
+			if effectiveKind != tracked.identity.Kind || effectiveEffect != tracked.identity.EffectClass {
+				block = true
+				reason = "tool hook attempted to change durable execution effect"
+			}
 			effectiveHash, hashErr := executionPkg.HashCanonicalArguments(tc.Arguments)
 			if hashErr != nil {
 				reason := fmt.Sprintf("invalid effective tool arguments: %v", hashErr)
@@ -610,7 +619,15 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 				continue
 			}
 
+			autoApproved := requiresApproval &&
+				a.authorityAutoApproves(authorityMode, tc, tracked.identity.Kind)
+			if autoApproved {
+				requiresApproval = false
+			}
 			authorization := toolAuthorization{allowed: true, approval: executionPkg.ApprovalNotApplicable}
+			if autoApproved {
+				authorization.approval = executionPkg.ApprovalPolicy
+			}
 			if requiresApproval {
 				var authorizationErr error
 				authorization, authorizationErr = a.decideToolAuthorization(ctx, tc, func() error {
@@ -760,28 +777,18 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 				tc.Name, tc.Arguments, semanticText, structured, errorMeta,
 				transportErr, isErr, kind == executionPkg.KindBuiltin || kind == executionPkg.KindMemory,
 			)
-			if len(structured) > 0 {
-				// Typed MCP payloads are transient parser input. The provider history,
-				// execution ledger, session snapshot, and TUI all receive only this
-				// bounded allowlisted projection.
-				result = ecosystem.SafeReceiptText(projection)
-			}
-			if isErr && tracked.identity.EffectClass != executionPkg.EffectReadOnly && !strings.HasPrefix(result, "OUTCOME UNKNOWN:") {
-				result = dispatchedEffectErrorReceipt(tc.Name, result, ctx.Err())
+			// Typed MCP payloads stay inside the parser boundary. Only exact,
+			// host-trusted, bounded projections may enter the active provider turn;
+			// every durable boundary and the UI receive only the allowlisted receipt.
+			modelResult, durableResult := a.semanticToolContents(tc, projection, result, structured, isErr)
+			if isErr && tracked.identity.EffectClass != executionPkg.EffectReadOnly && !strings.HasPrefix(durableResult, "OUTCOME UNKNOWN:") {
+				durableResult = dispatchedEffectErrorReceipt(tc.Name, durableResult, ctx.Err())
+				modelResult = durableResult
 			}
 
-			terminalType := executionPkg.EventCompleted
-			if isErr {
-				terminalType = executionPkg.EventFailed
-				switch {
-				case tracked.identity.EffectClass != executionPkg.EffectReadOnly:
-					terminalType = executionPkg.EventOutcomeUnknown
-				case ctx.Err() != nil:
-					terminalType = executionPkg.EventCancelled
-				}
-			}
+			terminalType := terminalExecutionEventType(tracked.identity.EffectClass, isErr, ctx.Err())
 			terminalDetail := fmt.Sprintf("backend returned after %dms", duration.Milliseconds())
-			if err := appendExecutionEvent(ctx, execRuntime, executionEvent(*tracked, terminalType, executionPkg.ApprovalNotApplicable, result, terminalDetail)); err != nil {
+			if err := appendExecutionEvent(ctx, execRuntime, executionEvent(*tracked, terminalType, executionPkg.ApprovalNotApplicable, durableResult, terminalDetail)); err != nil {
 				unresolved := a.unresolvedFor(*tracked, executionPkg.EventStarted, err)
 				a.latchUnresolvedExecution(unresolved)
 				unknownResult := capToolResultForContext(terminalLedgerFailureReceipt(tc.Name, err), turnNumCtx)
@@ -791,19 +798,24 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 				return unresolved
 			}
 
-			result = capToolResultForContext(result, turnNumCtx)
+			durableResult = capToolResultForContext(durableResult, turnNumCtx)
+			modelResult = capToolResultForContext(modelResult, turnNumCtx)
 			if lg != nil {
 				lg.Debug("tool", "name", tc.Name, "kind", kind, "ms", duration.Milliseconds(), "error", isErr)
 			}
 			emitSemanticToolResult(
-				out, tc.ID, tc.Name, result, structured, isErr, transportErr, duration, projection,
+				out, tc.ID, tc.Name, durableResult, structured, isErr, transportErr, duration, projection,
 			)
-			a.AppendMessage(llm.Message{
+			toolMessage := llm.Message{
 				Role:       "tool",
-				Content:    result,
+				Content:    modelResult,
 				ToolName:   tc.Name,
 				ToolCallID: tc.ID,
-			})
+			}
+			if modelResult != durableResult {
+				toolMessage.DurableContent = durableResult
+			}
+			a.AppendMessage(toolMessage)
 			if terminalType == executionPkg.EventOutcomeUnknown && execRuntime.ledger != nil {
 				unresolved := a.unresolvedFor(*tracked, executionPkg.EventOutcomeUnknown, fmt.Errorf("durable outcome for tool %q is unknown and requires explicit reconciliation", tc.Name))
 				a.latchUnresolvedExecution(unresolved)

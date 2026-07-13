@@ -30,5 +30,6 @@
                              │   /servers          List connected MCP servers             │
                              │   /ice              Show Infinite Context Engine status    │
                              │   /sessions         Browse and restore saved sessions      │
-─────────────────────────────│   /changes          List files modified by the agent this  │────────────────────────────
-                             │ esc/q close · j/k scroll · 64%                             │
+                             │   /changes          List files modified by the agent this  │
+─────────────────────────────│ esc/q close · j/k scroll · 64%                             │────────────────────────────
+                             ╰────────────────────────────────────────────────────────────╯

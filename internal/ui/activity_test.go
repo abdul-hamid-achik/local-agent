@@ -27,17 +27,17 @@ func TestMinimumTerminalWorkingStatesFit(t *testing.T) {
 		{name: "waiting", set: func(m *Model) {
 			m.state = StateWaiting
 			m.turnStartedAt = base.Add(-1500 * time.Millisecond)
-		}, want: "Thinking"},
+		}, want: "Running"},
 		{name: "reasoning", set: func(m *Model) {
 			m.state = StateStreaming
 			m.turnStartedAt = base.Add(-2 * time.Second)
 			m.thinkBuf.WriteString("checking")
-		}, want: "Reasoning"},
+		}, want: "Running"},
 		{name: "streaming", set: func(m *Model) {
 			m.state = StateStreaming
 			m.turnStartedAt = base.Add(-3 * time.Second)
 			m.streamBuf.WriteString("partial")
-		}, want: "Responding"},
+		}, want: "Running"},
 		{name: "session loading", set: func(m *Model) { m.sessionLoading = true }, want: "Restoring session"},
 		{name: "file operation", set: func(m *Model) { m.fileLoading = true }, want: "Reading local file"},
 		{name: "commit", set: func(m *Model) { m.commitRunning = true }, want: "Generating commit"},
@@ -70,6 +70,10 @@ func TestMinimumTerminalWorkingStatesFit(t *testing.T) {
 			}
 			if m.composerIsBusy() && !strings.Contains(view, "esc") && tt.name != "export" {
 				t.Fatalf("cancellable working state lost Esc affordance:\n%s", view)
+			}
+			if (tt.name == "waiting" || tt.name == "reasoning" || tt.name == "streaming") &&
+				!strings.Contains(view, "queue") {
+				t.Fatalf("minimum active-turn view lost the queue affordance:\n%s", view)
 			}
 		})
 	}
@@ -305,11 +309,45 @@ func TestReducedMotionUsesStaticWorkingGlyph(t *testing.T) {
 	}
 	m.state = StateStreaming
 	line := m.renderWorkingLine()
-	if !strings.Contains(line, "•") || !strings.Contains(line, "Responding") {
+	if !strings.Contains(line, "•") || !strings.Contains(line, "Running") {
 		t.Fatalf("reduced-motion working line is not clear and static: %q", line)
 	}
 	if cmd := m.startSpinnerCmd(); cmd != nil {
 		t.Fatal("reduced motion scheduled a spinner clock")
+	}
+}
+
+func TestRunningFooterOwnsControlsNotAssistantState(t *testing.T) {
+	m := newTestModel(t)
+	m.state = StateStreaming
+	m.model = "private-model-name"
+	m.thinkBuf.WriteString("working through the request")
+
+	line := ansi.Strip(m.renderWorkingLine())
+	for _, want := range []string{"Running", "esc cancel", "enter queue"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("operational footer omitted %q: %q", want, line)
+		}
+	}
+	for _, forbidden := range []string{"Thinking", "Reasoning", "Responding", "private-model-name"} {
+		if strings.Contains(line, forbidden) {
+			t.Fatalf("operational footer duplicated assistant/model state %q: %q", forbidden, line)
+		}
+	}
+}
+
+func TestIdleRecoveryUsesOneCompactFooterAction(t *testing.T) {
+	m := newTestModel(t)
+	m.standaloneRecovery = &standaloneRecoveryState{}
+
+	status := ansi.Strip(m.renderStatusLine())
+	for _, want := range []string{"Recovery paused", "/recover", "inspect"} {
+		if !strings.Contains(status, want) {
+			t.Fatalf("recovery footer omitted %q: %q", want, status)
+		}
+	}
+	if strings.Contains(status, "\n") {
+		t.Fatalf("wide recovery footer used more than one row: %q", status)
 	}
 }
 

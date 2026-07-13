@@ -173,4 +173,36 @@ model: qwen3.5:0.8b
 			t.Errorf("expected 0 agents, got %d", len(dir.Agents))
 		}
 	})
+
+	t.Run("loads legacy mcp_servers key", func(t *testing.T) {
+		tmp := t.TempDir()
+		mcpJSON := `{"mcp_servers":[{"name":"cortex","command":"cortex","args":["serve"]}]}`
+		if err := os.WriteFile(filepath.Join(tmp, "mcp.json"), []byte(mcpJSON), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		dir, err := LoadAgentsDir(tmp)
+		if err != nil {
+			t.Fatalf("LoadAgentsDir() error: %v", err)
+		}
+		if len(dir.MCPServers) != 1 || dir.MCPServers[0].Name != "cortex" {
+			t.Fatalf("MCPServers = %#v, want cortex", dir.MCPServers)
+		}
+	})
+
+	t.Run("servers key wins when both keys are present", func(t *testing.T) {
+		tmp := t.TempDir()
+		mcpJSON := `{"servers":[{"name":"canonical"}],"mcp_servers":[{"name":"legacy"}]}`
+		if err := os.WriteFile(filepath.Join(tmp, "mcp.json"), []byte(mcpJSON), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		dir, err := LoadAgentsDir(tmp)
+		if err != nil {
+			t.Fatalf("LoadAgentsDir() error: %v", err)
+		}
+		if len(dir.MCPServers) != 1 || dir.MCPServers[0].Name != "canonical" {
+			t.Fatalf("MCPServers = %#v, want canonical server", dir.MCPServers)
+		}
+	})
 }

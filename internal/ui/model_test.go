@@ -408,6 +408,11 @@ func TestAgentDoneCompletedRecoveryHazardDoesNotAdvanceCursor(t *testing.T) {
 	if state.ExecutionCursor != 0 {
 		t.Fatalf("saved unprojected cursor = %d", state.ExecutionCursor)
 	}
+	for _, entry := range m.entries {
+		if strings.Contains(entry.Content, "Save session:") {
+			t.Fatalf("expected recovery boundary was duplicated as a save failure: %#v", m.entries)
+		}
+	}
 }
 
 func TestAgentDoneSameCallIDWrongResultDoesNotAdvanceCursor(t *testing.T) {
@@ -704,6 +709,20 @@ func TestShutdownWaitsForActiveTurnBeforeQuit(t *testing.T) {
 }
 
 func TestInitCompleteMsg(t *testing.T) {
+	t.Run("reflows_startup_footer", func(t *testing.T) {
+		m := newTestModel(t)
+		updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+		m = updated.(*Model)
+		m.initializing = true
+		m.recalcViewportHeight()
+
+		updated, _ = m.Update(InitCompleteMsg{Model: "llama3", NumCtx: 8192})
+		m = updated.(*Model)
+		if got, want := m.viewport.Height(), m.viewportHeight(); got != want {
+			t.Fatalf("settled viewport height = %d, want recalculated %d", got, want)
+		}
+	})
+
 	t.Run("basic_fields", func(t *testing.T) {
 		m := newTestModel(t)
 

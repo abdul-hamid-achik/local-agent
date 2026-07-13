@@ -36,7 +36,15 @@ type SkillDef struct {
 }
 
 type MCPConfig struct {
-	Servers []ServerConfig `json:"servers,omitempty"`
+	Servers    []ServerConfig `json:"servers,omitempty"`
+	MCPServers []ServerConfig `json:"mcp_servers,omitempty"`
+}
+
+func (c MCPConfig) resolvedServers() []ServerConfig {
+	if len(c.Servers) > 0 {
+		return c.Servers
+	}
+	return c.MCPServers
 }
 
 type ModelsConfig struct {
@@ -189,7 +197,7 @@ func (d *AgentsDir) loadMCP(path string) error {
 		return fmt.Errorf("parse mcp.json: %w", err)
 	}
 
-	d.MCPServers = mcpCfg.Servers
+	d.MCPServers = mcpCfg.resolvedServers()
 	return nil
 }
 

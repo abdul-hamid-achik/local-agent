@@ -23,5 +23,5 @@
 
 
 ─────────────────────────────────────────────────────────────────────────────────────────
-   • Running · esc cancel · enter queue
-▏❯ Write a follow-up · enter queue
+   • Running · esc cancel
+  queued › Summarize after the probe. · ↑ edit · esc clear

@@ -10,6 +10,16 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+func TestAssistantHeaderIsStaticWhileFooterOwnsMotion(t *testing.T) {
+	m := newTestModel(t)
+	m.reducedMotion = false
+	var rendered strings.Builder
+	m.renderAssistantHeader(&rendered, 80)
+	if got := rendered.String(); strings.Contains(got, m.spin.View()) {
+		t.Fatalf("assistant header duplicated the footer spinner: %q", got)
+	}
+}
+
 func TestProcessStreamChunk_PlainText(t *testing.T) {
 	main, think, inThinking, buf := processStreamChunk("hello world", false, "")
 	if main != "hello world" {
@@ -137,25 +147,29 @@ func TestRenderThinkingBoxUsesCompactRail(t *testing.T) {
 	m.width = 80
 
 	collapsed := ansi.Strip(m.renderThinkingBox("inspect files\ncompare behavior\nreport result", true))
-	if !strings.Contains(collapsed, "│ ▸ reasoning · 3 lines · ctrl+t expand") {
+	if !strings.Contains(collapsed, "│ ▸ Thought") {
 		t.Fatalf("collapsed reasoning receipt is unclear:\n%s", collapsed)
 	}
-	if strings.Contains(collapsed, "inspect files") || strings.ContainsAny(collapsed, "╭╮╰╯") {
+	if strings.Contains(collapsed, "inspect files") || strings.ContainsAny(collapsed, "╭╮╰╯") ||
+		strings.Contains(collapsed, "ctrl+t") || strings.Contains(collapsed, "lines") {
 		t.Fatalf("collapsed reasoning retained heavy chrome or hidden content:\n%s", collapsed)
 	}
 
 	expanded := ansi.Strip(m.renderThinkingBox("inspect files\ncompare behavior\nreport result", false))
-	for _, want := range []string{"│ ▾ reasoning", "ctrl+t collapse", "│ inspect files", "│ report result"} {
+	for _, want := range []string{"│ ▾ Thought", "│ inspect files", "│ report result"} {
 		if !strings.Contains(expanded, want) {
 			t.Fatalf("expanded reasoning missing %q:\n%s", want, expanded)
 		}
 	}
+	if strings.Contains(expanded, "ctrl+t") || strings.Contains(expanded, "lines") {
+		t.Fatalf("expanded reasoning repeated global controls or metrics:\n%s", expanded)
+	}
 }
 
-func TestThinkingHeaderUsesSingularLineLabel(t *testing.T) {
-	got := thinkingHeader("▸", "expand", 1, 80)
-	if got != "▸ reasoning · 1 line · ctrl+t expand" {
-		t.Fatalf("singular reasoning header = %q", got)
+func TestThinkingHeaderKeepsTranscriptQuiet(t *testing.T) {
+	got := thinkingHeader("▸", 80)
+	if got != "▸ Thought" {
+		t.Fatalf("reasoning header = %q", got)
 	}
 }
 
@@ -173,16 +187,16 @@ func TestRenderThinkingBoxStaysInsideReadableTranscript(t *testing.T) {
 	}
 }
 
-func TestLiveReasoningUsesStableStandaloneRailUntilAnswerStarts(t *testing.T) {
+func TestLiveReasoningStaysInsideAssistantTurnUntilAnswerStarts(t *testing.T) {
 	m := newTestModel(t)
 	m.reducedMotion = true
 	m.thinkBuf.WriteString("inspect files\ncompare behavior")
 
 	plain := ansi.Strip(m.renderEntries())
-	if strings.Contains(plain, "assistant") {
-		t.Fatalf("thinking-only stream rendered an empty assistant block:\n%s", plain)
+	if got := strings.Count(plain, "assistant"); got != 1 {
+		t.Fatalf("thinking-only stream rendered %d assistant headers, want one:\n%s", got, plain)
 	}
-	for _, want := range []string{"│ reasoning · live", "compare behavior"} {
+	for _, want := range []string{"│ Thinking…", "compare behavior"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("live reasoning omitted %q:\n%s", want, plain)
 		}
@@ -206,7 +220,7 @@ func TestLiveReasoningSummarySanitizesTerminalAndBidiControls(t *testing.T) {
 
 	m := newTestModel(t)
 	rendered := ansi.Strip(m.renderLiveThinkingBox(unsafe))
-	if strings.Contains(rendered, "REASONING_SECRET") || !strings.Contains(rendered, "reasoning · live · inspect files") {
+	if strings.Contains(rendered, "REASONING_SECRET") || !strings.Contains(rendered, "Thinking… · inspect files") {
 		t.Fatalf("unsafe live reasoning header = %q", rendered)
 	}
 }
@@ -226,17 +240,17 @@ func TestExpandedReasoningStripsTerminalControlSequences(t *testing.T) {
 	}
 }
 
-func TestReasoningOnlyCompletionAvoidsEmptyAssistantBlock(t *testing.T) {
+func TestReasoningOnlyCompletionBelongsToAssistantBlock(t *testing.T) {
 	m := newTestModel(t)
 	m.entries = []ChatEntry{{
 		Kind: "assistant", ThinkingContent: "inspect files", ThinkingCollapsed: true,
 	}}
 
 	plain := ansi.Strip(m.renderEntries())
-	if strings.Contains(plain, "assistant") {
-		t.Fatalf("completed reasoning-only segment rendered empty assistant chrome:\n%s", plain)
+	if got := strings.Count(plain, "assistant"); got != 1 {
+		t.Fatalf("completed reasoning-only segment rendered %d assistant headers, want one:\n%s", got, plain)
 	}
-	if !strings.Contains(plain, "reasoning · 1 line") {
+	if !strings.Contains(plain, "▸ Thought") {
 		t.Fatalf("completed reasoning receipt missing:\n%s", plain)
 	}
 }
@@ -269,13 +283,33 @@ func TestToolCallSettlesReasoningBeforeReceipt(t *testing.T) {
 		t.Fatalf("reasoning/tool entry order = %#v", m.entries)
 	}
 	plain := ansi.Strip(m.renderEntries())
-	if strings.Contains(plain, "assistant") {
-		t.Fatalf("tool reasoning rendered empty assistant role:\n%s", plain)
+	if got := strings.Count(plain, "assistant"); got != 1 {
+		t.Fatalf("tool reasoning rendered %d assistant headers, want one:\n%s", got, plain)
 	}
-	reasoningAt := strings.Index(plain, "reasoning")
+	reasoningAt := strings.Index(plain, "Thought")
 	toolAt := strings.Index(strings.ToLower(plain), "read")
 	if reasoningAt < 0 || toolAt < 0 || reasoningAt > toolAt {
 		t.Fatalf("reasoning did not precede tool receipt:\n%s", plain)
+	}
+}
+
+func TestAssistantHeaderAppearsOnceAcrossReasoningSegments(t *testing.T) {
+	m := newTestModel(t)
+	m.entries = []ChatEntry{
+		{Kind: "user", Content: "inspect and explain"},
+		{Kind: "assistant", ThinkingContent: "inspect files", ThinkingCollapsed: true},
+		{Kind: "assistant", ThinkingContent: "compare behavior", ThinkingCollapsed: true},
+		{Kind: "assistant", Content: "Here is the result."},
+	}
+
+	plain := ansi.Strip(m.renderEntries())
+	if got := strings.Count(plain, "assistant"); got != 1 {
+		t.Fatalf("one assistant turn rendered %d role headers:\n%s", got, plain)
+	}
+	for _, want := range []string{"inspect and explain", "▸ Thought", "Here is the result."} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("assistant turn omitted %q:\n%s", want, plain)
+		}
 	}
 }
 

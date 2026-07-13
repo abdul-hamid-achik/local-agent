@@ -50,11 +50,22 @@ func DefaultModeConfigs() [3]ModeConfig {
 		},
 		{ // ModeAuto
 			Label:               "AUTO",
-			SystemPromptPrefix:  "Work proactively toward the user's request. Use the full configured tool set while honoring the approval policy and all host safety boundaries.",
+			SystemPromptPrefix:  "Work proactively toward the user's request. Workspace-confined file changes and host-catalogued local ecosystem operations may proceed automatically. Pause for shell commands, deletion, external paths, secrets, human decisions, and unknown tools.",
 			ToolPolicy:          agent.BuildToolPolicy(),
 			PreferredCapability: config.CapabilityAdvanced,
 			RouterMode:          config.ModeBuildContext,
 		},
+	}
+}
+
+func agentAuthorityMode(mode Mode) agent.AuthorityMode {
+	switch mode {
+	case ModePlan:
+		return agent.AuthorityPlan
+	case ModeAuto:
+		return agent.AuthorityAutoScoped
+	default:
+		return agent.AuthorityNormal
 	}
 }
 

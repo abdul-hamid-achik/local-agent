@@ -2,12 +2,17 @@ package ecosystem
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 )
 
-const maxProjectionIdentifierBytes = 96
+const (
+	maxProjectionIdentifierBytes = 96
+	maxProjectionDigestItems     = 6
+	maxProjectionMetric          = int64(1<<53 - 1)
+)
 
 // ToolRole is the stable product role a companion tool plays. It deliberately
 // describes user intent rather than transport topology: MCPHub may route a
@@ -77,6 +82,54 @@ type ToolRoute struct {
 	Lazy    bool   `json:"lazy,omitempty"`
 }
 
+// ReceiptDigestKind identifies a small, exact companion-tool contract whose
+// useful non-secret fields can safely survive the raw MCP parser boundary.
+// The values are deliberately product-specific: an unrecognized structured
+// document remains DomainUnknown instead of becoming a generic success.
+type ReceiptDigestKind string
+
+const (
+	DigestMCPHubServers          ReceiptDigestKind = "mcphub_servers"
+	DigestMCPHubSearch           ReceiptDigestKind = "mcphub_search"
+	DigestMCPHubDescribe         ReceiptDigestKind = "mcphub_describe"
+	DigestMCPHubResolve          ReceiptDigestKind = "mcphub_resolve"
+	DigestMCPHubStats            ReceiptDigestKind = "mcphub_stats"
+	DigestMCPHubStored           ReceiptDigestKind = "mcphub_stored"
+	DigestMCPHubPage             ReceiptDigestKind = "mcphub_page"
+	DigestMCPHubUnavailable      ReceiptDigestKind = "mcphub_unavailable"
+	DigestMCPHubCursorOutOfRange ReceiptDigestKind = "mcphub_cursor_out_of_range"
+	DigestMCPHubError            ReceiptDigestKind = "mcphub_error"
+	DigestCortexFailure          ReceiptDigestKind = "cortex_failure"
+)
+
+// ReceiptDigest is a bounded allowlist of MCPHub management metadata. It must
+// never contain descriptions, schemas, queries, arguments, page data, previews,
+// error prose, or any other arbitrary server-controlled value. Items, Target,
+// Required, and Expose are canonical identifiers; numeric fields are bounded.
+// This lets the model and UI answer questions such as "how many servers?"
+// without copying raw StructuredContent into persistent session state.
+type ReceiptDigest struct {
+	Kind          ReceiptDigestKind `json:"kind,omitempty"`
+	Count         int64             `json:"count,omitempty"`
+	Connected     int64             `json:"connected,omitempty"`
+	TotalTools    int64             `json:"total_tools,omitempty"`
+	Calls         int64             `json:"calls,omitempty"`
+	Errors        int64             `json:"errors,omitempty"`
+	Estimated     int64             `json:"estimated_tokens,omitempty"`
+	Target        string            `json:"target,omitempty"`
+	Items         []string          `json:"items,omitempty"`
+	Required      []string          `json:"required,omitempty"`
+	Ambiguous     bool              `json:"ambiguous,omitempty"`
+	Expose        string            `json:"expose,omitempty"`
+	OriginalBytes int64             `json:"original_bytes,omitempty"`
+	BudgetBytes   int64             `json:"budget_bytes,omitempty"`
+	Cursor        int64             `json:"cursor,omitempty"`
+	NextCursor    int64             `json:"next_cursor,omitempty"`
+	TotalBytes    int64             `json:"total_bytes,omitempty"`
+	PageBytes     int64             `json:"page_bytes,omitempty"`
+	Done          bool              `json:"done,omitempty"`
+}
+
 // ToolProjection is the semantic, persistable projection of one tool call.
 // It contains no arbitrary argument or result values and is safe to keep in a
 // session transcript after Normalize.
@@ -88,6 +141,7 @@ type ToolProjection struct {
 	Domain     DomainState    `json:"domain,omitempty"`
 	Evidence   EvidenceState  `json:"evidence,omitempty"`
 	Route      ToolRoute      `json:"route,omitempty"`
+	Digest     *ReceiptDigest `json:"digest,omitempty"`
 }
 
 // RawReceipt is the short-lived parser boundary between an MCP/tool transport
@@ -289,11 +343,18 @@ func ProjectReceipt(projection ToolProjection, receipt RawReceipt) ToolProjectio
 			projection.Domain, projection.Evidence = DomainUnknown, EvidenceNone
 		}
 	case "cortex":
-		// Cortex owns coordination, but a successful MCP exchange is not proof
-		// that a task started, completed, or verified. Add exact per-operation
-		// parsers before promoting these receipts.
-		projection.Domain = DomainUnknown
-		projection.Evidence = EvidenceNone
+		// Cortex's shared envelope is authoritative when it explicitly rejects
+		// a request. Successful coordination is still not verification evidence,
+		// so optimistic envelopes remain unknown until an operation-specific
+		// success parser exists.
+		if taskID, failed := projectCortexFailureReceipt(receipt); failed {
+			projection.Domain = DomainFailed
+			projection.Evidence = EvidenceNone
+			projection.Digest = &ReceiptDigest{Kind: DigestCortexFailure, Target: taskID}
+		} else {
+			projection.Domain = DomainUnknown
+			projection.Evidence = EvidenceNone
+		}
 	default:
 		if receipt.ToolError || len(receipt.ErrorMeta) > 0 {
 			projection.Domain = DomainFailed
@@ -348,7 +409,128 @@ func SafeReceiptText(projection ToolProjection) string {
 	appendField("domain", string(projection.Domain))
 	appendField("evidence", string(projection.Evidence))
 	appendField("call_id", projection.Route.CallID)
-	return strings.Join(parts, " ")
+	receipt := strings.Join(parts, " ")
+	if summary := projection.SummaryText(); summary != "" {
+		receipt += "\nsummary: " + summary
+	}
+	return receipt
+}
+
+// SummaryText renders only host-derived, bounded digest fields. It is safe for
+// the model, transcript, and compact tool card; raw MCP content is never used.
+func (p ToolProjection) SummaryText() string {
+	p = p.Normalize()
+	if p.Digest == nil {
+		return ""
+	}
+	digest := *p.Digest
+	switch digest.Kind {
+	case DigestMCPHubServers:
+		parts := []string{
+			metricLabel(digest.Count, "server", "servers"),
+			fmt.Sprintf("%d connected", digest.Connected),
+			metricLabel(digest.TotalTools, "tool", "tools"),
+		}
+		if digest.Expose != "" {
+			parts = append(parts, digest.Expose+" exposure")
+		}
+		if items := digestItemSummary(digest.Items, digest.Count); items != "" {
+			parts = append(parts, items)
+		}
+		return strings.Join(parts, " · ")
+	case DigestMCPHubSearch:
+		parts := []string{metricLabel(digest.Count, "match", "matches")}
+		if items := digestItemSummary(digest.Items, digest.Count); items != "" {
+			parts = append(parts, items)
+		}
+		return strings.Join(parts, " · ")
+	case DigestMCPHubDescribe:
+		if digest.Target == "" {
+			return "tool contract unavailable"
+		}
+		if len(digest.Required) == 0 {
+			return digest.Target + " · no required fields"
+		}
+		return digest.Target + " · requires " + strings.Join(digest.Required, ", ")
+	case DigestMCPHubResolve:
+		if digest.Target == "" {
+			return "no matching tool"
+		}
+		parts := []string{"recommended " + digest.Target}
+		if digest.Ambiguous {
+			parts = append(parts, "ambiguous")
+		}
+		if len(digest.Required) > 0 {
+			parts = append(parts, "requires "+strings.Join(digest.Required, ", "))
+		}
+		if len(digest.Items) > 0 {
+			parts = append(parts, metricLabel(int64(len(digest.Items)), "alternative", "alternatives"))
+		}
+		return strings.Join(parts, " · ")
+	case DigestMCPHubStats:
+		return strings.Join([]string{
+			metricLabel(digest.Calls, "call", "calls"),
+			metricLabel(digest.Errors, "error", "errors"),
+			fmt.Sprintf("~%d est. tokens", digest.Estimated),
+			metricLabel(digest.Count, "server", "servers"),
+		}, " · ")
+	case DigestMCPHubStored:
+		parts := []string{"result stored"}
+		if digest.OriginalBytes > 0 {
+			parts = append(parts, fmt.Sprintf("%d bytes", digest.OriginalBytes))
+		}
+		if p.Route.CallID != "" {
+			parts = append(parts, "fetch "+p.Route.CallID)
+		}
+		return strings.Join(parts, " · ")
+	case DigestMCPHubPage:
+		end := digest.NextCursor
+		if end < digest.Cursor {
+			end = digest.Cursor
+		}
+		parts := []string{fmt.Sprintf("bytes %d–%d of %d", digest.Cursor, end, digest.TotalBytes)}
+		if digest.Done {
+			parts = append(parts, "final page")
+		} else {
+			parts = append(parts, fmt.Sprintf("continue at cursor %d", digest.NextCursor))
+		}
+		// Page bytes may contain arbitrary downstream data. The parser validates
+		// and discards them instead of copying them into persistent model history.
+		parts = append(parts, "payload omitted from persistent context")
+		return strings.Join(parts, " · ")
+	case DigestMCPHubUnavailable:
+		return "stored result unavailable or expired"
+	case DigestMCPHubCursorOutOfRange:
+		return fmt.Sprintf("cursor %d is outside the stored result", digest.Cursor)
+	case DigestMCPHubError:
+		return "MCPHub reported an error"
+	case DigestCortexFailure:
+		if digest.Target != "" {
+			return "Cortex rejected the request for " + digest.Target
+		}
+		return "Cortex rejected the request"
+	default:
+		return ""
+	}
+}
+
+func metricLabel(value int64, singular, plural string) string {
+	label := plural
+	if value == 1 {
+		label = singular
+	}
+	return fmt.Sprintf("%d %s", value, label)
+}
+
+func digestItemSummary(items []string, total int64) string {
+	if len(items) == 0 {
+		return ""
+	}
+	summary := strings.Join(items, ", ")
+	if remaining := total - int64(len(items)); remaining > 0 {
+		summary += fmt.Sprintf(" +%d", remaining)
+	}
+	return summary
 }
 
 func classifyBobDomain(envelope BobEnvelope) DomainState {
@@ -422,7 +604,83 @@ func (p ToolProjection) Normalize() ToolProjection {
 			p.Domain = DomainUnknown
 		}
 	}
+	if p.Digest != nil {
+		digest := normalizeReceiptDigest(*p.Digest)
+		if digest.Kind == "" {
+			p.Digest = nil
+		} else {
+			p.Digest = &digest
+		}
+	}
 	return p
+}
+
+func normalizeReceiptDigest(digest ReceiptDigest) ReceiptDigest {
+	if !validReceiptDigestKind(digest.Kind) {
+		return ReceiptDigest{}
+	}
+	digest.Target = canonicalIdentifier(digest.Target)
+	digest.Expose = canonicalIdentifier(digest.Expose)
+	digest.Items = normalizeDigestIdentifiers(digest.Items)
+	digest.Required = normalizeDigestIdentifiers(digest.Required)
+	digest.Count = boundedProjectionMetric(digest.Count)
+	digest.Connected = boundedProjectionMetric(digest.Connected)
+	digest.TotalTools = boundedProjectionMetric(digest.TotalTools)
+	digest.Calls = boundedProjectionMetric(digest.Calls)
+	digest.Errors = boundedProjectionMetric(digest.Errors)
+	digest.Estimated = boundedProjectionMetric(digest.Estimated)
+	digest.OriginalBytes = boundedProjectionMetric(digest.OriginalBytes)
+	digest.BudgetBytes = boundedProjectionMetric(digest.BudgetBytes)
+	digest.Cursor = boundedProjectionMetric(digest.Cursor)
+	digest.NextCursor = boundedProjectionMetric(digest.NextCursor)
+	digest.TotalBytes = boundedProjectionMetric(digest.TotalBytes)
+	digest.PageBytes = boundedProjectionMetric(digest.PageBytes)
+	return digest
+}
+
+func normalizeDigestIdentifiers(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	result := make([]string, 0, min(len(values), maxProjectionDigestItems))
+	seen := make(map[string]struct{}, min(len(values), maxProjectionDigestItems))
+	for _, value := range values {
+		value = canonicalIdentifier(value)
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+		if len(result) == maxProjectionDigestItems {
+			break
+		}
+	}
+	return result
+}
+
+func boundedProjectionMetric(value int64) int64 {
+	if value < 0 {
+		return 0
+	}
+	if value > maxProjectionMetric {
+		return maxProjectionMetric
+	}
+	return value
+}
+
+func validReceiptDigestKind(value ReceiptDigestKind) bool {
+	switch value {
+	case "", DigestMCPHubServers, DigestMCPHubSearch, DigestMCPHubDescribe,
+		DigestMCPHubResolve, DigestMCPHubStats, DigestMCPHubStored,
+		DigestMCPHubPage, DigestMCPHubUnavailable,
+		DigestMCPHubCursorOutOfRange, DigestMCPHubError, DigestCortexFailure:
+		return true
+	default:
+		return false
+	}
 }
 
 func splitToolName(name string) []string {

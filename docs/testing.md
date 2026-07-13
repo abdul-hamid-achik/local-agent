@@ -44,10 +44,10 @@ Snapshots are evidence of rendering; they are not a substitute for outcome asser
 
 ## Optional live Ollama proof
 
-With `qwen3.5:4b` installed, run the opt-in small-model tool scenario separately:
+With `qwen3.5:0.8b` installed, run the opt-in constrained-model tool scenario separately:
 
 ```bash
-glyph run specs/glyphrun/live_ollama_tool.yml --format md
+glyph run specs/live_ollama_tool.yml --format md
 ```
 
 This proof depends on a live local model and is intentionally outside the deterministic default suite.

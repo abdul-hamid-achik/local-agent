@@ -441,6 +441,23 @@ func TestDefaultModeConfigs(t *testing.T) {
 	}
 }
 
+func TestAgentAuthorityModeMapping(t *testing.T) {
+	tests := []struct {
+		mode Mode
+		want agent.AuthorityMode
+	}{
+		{mode: ModeNormal, want: agent.AuthorityNormal},
+		{mode: ModePlan, want: agent.AuthorityPlan},
+		{mode: ModeAuto, want: agent.AuthorityAutoScoped},
+		{mode: Mode(99), want: agent.AuthorityNormal},
+	}
+	for _, test := range tests {
+		if got := agentAuthorityMode(test.mode); got != test.want {
+			t.Fatalf("agent authority for %v = %v, want %v", test.mode, got, test.want)
+		}
+	}
+}
+
 func TestConversationalPresetSubmitDispatchesImmediately(t *testing.T) {
 	for _, test := range []struct {
 		name string

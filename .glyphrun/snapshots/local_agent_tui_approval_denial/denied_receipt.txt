@@ -2,18 +2,18 @@
   Create approval-probe.txt with the exact
   text must not be written.
 
+  assistant ─────────────────────────────
+  │ ▸ Thought
+
   │ ▸ ✗ Write failed · approval-probe.txt (0ms)
   │ tool call denied: user denied tool executi…
 
-  assistant ─────────────────────────────
 
     Denied safely. No file was changed.
 
 
 
 
-
-
 ─────────────────────────────────────────────────
- qwen3.5:2b · ctx 0%
+ qwen3.5:0.8b · ctx 0%
 ▏❯ Ask, @mention files, or type /help

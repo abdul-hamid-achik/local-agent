@@ -58,6 +58,10 @@ func (a *Agent) compactForContext(ctx context.Context, out Output, numCtx int) b
 	}
 	older := append([]llm.Message(nil), messages[:splitAt]...)
 	recent := append([]llm.Message(nil), messages[splitAt:]...)
+	// Transient tool results are useful to the active provider turn but must not
+	// enter a durable summary. Recent history remains transient in memory; once
+	// it ages into the summarized side it is replaced by its bounded receipt.
+	older = SanitizeMessagesForPersistence(older)
 	durableRecoveryContexts, err := collectDurableRecoveryContexts(messages)
 	if err != nil {
 		out.Error(fmt.Sprintf("compaction preserved full history because durable recovery context is invalid: %v", err))

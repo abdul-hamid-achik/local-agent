@@ -1,17 +1,226 @@
 package agent
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/abdul-hamid-achik/local-agent/internal/config"
 	"github.com/abdul-hamid-achik/local-agent/internal/ecosystem"
+	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 )
 
 type semanticOutputRecorder struct {
 	projection ecosystem.ToolProjection
 	result     string
+}
+
+func TestSemanticToolContentsFeedsValidatedResultPageOnlyToActiveModel(t *testing.T) {
+	const (
+		callID = "3f9a1c2e7b804d5e9f1a2b3c4d5e6f70"
+		secret = "SECRET_TRANSIENT_PAGE_CONTENT"
+	)
+	payload := []byte(`{"content":[{"type":"text","text":"` + secret + `"}]}`)
+	structured := json.RawMessage(fmt.Sprintf(
+		`{"status":"ok","callId":%q,"mediaType":"application/json","data":%q,"cursor":0,"nextCursor":%d,"done":true,"totalBytes":%d}`,
+		callID, base64.StdEncoding.EncodeToString(payload), len(payload), len(payload),
+	))
+	projection := projectSemanticToolReceipt(
+		"mcphub__mcphub_get_result", map[string]any{"callId": callID, "cursor": 0},
+		"outer MCP text", structured, nil, false, false, false,
+	)
+
+	ag := New(nil, nil, 8192)
+	ag.SetTrustedLocalMCPServers([]config.ServerConfig{{Name: "mcphub", Command: "mcphub"}})
+	call := llm.ToolCall{Name: "mcphub__mcphub_get_result", Arguments: map[string]any{"callId": callID, "cursor": 0}}
+	modelResult, durableResult := ag.semanticToolContents(call, projection, "outer MCP text", structured, false)
+	if !strings.Contains(modelResult, secret) || !strings.Contains(modelResult, "transient; not saved") {
+		t.Fatalf("active model result = %q", modelResult)
+	}
+	if strings.Contains(durableResult, secret) || durableResult != ecosystem.SafeReceiptText(projection) {
+		t.Fatalf("durable result = %q", durableResult)
+	}
+	safe := SanitizeMessagesForPersistence([]llm.Message{{
+		Role: "tool", Content: modelResult, DurableContent: durableResult,
+	}})
+	if strings.Contains(safe[0].Content, secret) || safe[0].Content != durableResult {
+		t.Fatalf("persisted result = %#v", safe[0])
+	}
+}
+
+func TestSemanticToolContentsFeedsOnlyExactTrustedSuccessfulCortexResults(t *testing.T) {
+	const secret = "SECRET_TRUSTED_CORTEX_RESULT"
+	structured := json.RawMessage(`{"ok":true,"taskId":"task-123","summary":"` + secret + `","rawAvailable":false}`)
+	ag := New(nil, nil, 8192)
+	ag.SetTrustedLocalMCPServers([]config.ServerConfig{
+		{Name: "cortex", Command: "cortex"},
+		{Name: "mcphub", Command: "/opt/homebrew/bin/mcphub"},
+	})
+
+	tests := []struct {
+		name string
+		call llm.ToolCall
+	}{
+		{name: "direct", call: llm.ToolCall{Name: "cortex__cortex_status"}},
+		{name: "pinned mcphub", call: llm.ToolCall{Name: "mcphub__cortex__cortex_investigate"}},
+		{name: "lazy mcphub", call: llm.ToolCall{
+			Name: "mcphub__mcphub_call_tool",
+			Arguments: map[string]any{
+				"server": "cortex", "tool": "cortex_plan", "arguments": map[string]any{"taskId": "task-123"},
+			},
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			projection := projectSemanticToolReceipt(test.call.Name, test.call.Arguments, "text", structured, nil, false, false, false)
+			modelResult, durableResult := ag.semanticToolContents(test.call, projection, string(structured), structured, false)
+			if !strings.Contains(modelResult, secret) || !strings.Contains(modelResult, "transient; not saved") {
+				t.Fatalf("model result = %q", modelResult)
+			}
+			if strings.Contains(durableResult, secret) || durableResult != ecosystem.SafeReceiptText(projection) {
+				t.Fatalf("durable result = %q", durableResult)
+			}
+			safe := SanitizeMessagesForPersistence([]llm.Message{{Content: modelResult, DurableContent: durableResult}})
+			if strings.Contains(safe[0].Content, secret) || safe[0].Content != durableResult {
+				t.Fatalf("persisted result = %#v", safe[0])
+			}
+		})
+	}
+}
+
+func TestSemanticToolContentsRejectsCortexSpoofsErrorsAndManagementContent(t *testing.T) {
+	const secret = "SECRET_UNTRUSTED_STRUCTURED_RESULT"
+	ag := New(nil, nil, 8192)
+	ag.SetTrustedLocalMCPServers([]config.ServerConfig{
+		{Name: "cortex", Command: "cortex"},
+		{Name: "mcphub", Command: "mcphub"},
+		{Name: "remote", Command: "cortex", Transport: "sse", URL: "https://example.test/mcp"},
+	})
+
+	tests := []struct {
+		name       string
+		call       llm.ToolCall
+		structured json.RawMessage
+		toolError  bool
+	}{
+		{
+			name: "untrusted suffix spoof", call: llm.ToolCall{Name: "evil__cortex_status"},
+			structured: json.RawMessage(`{"ok":true,"summary":"` + secret + `"}`),
+		},
+		{
+			name: "remote cortex", call: llm.ToolCall{Name: "remote__cortex_status"},
+			structured: json.RawMessage(`{"ok":true,"summary":"` + secret + `"}`),
+		},
+		{
+			name: "explicit rejection", call: llm.ToolCall{Name: "cortex__cortex_status"},
+			structured: json.RawMessage(`{"ok":false,"summary":"` + secret + `","error":"rejected"}`),
+		},
+		{
+			name: "tool error despite optimistic body", call: llm.ToolCall{Name: "cortex__cortex_status"}, toolError: true,
+			structured: json.RawMessage(`{"ok":true,"summary":"` + secret + `"}`),
+		},
+		{
+			name: "mcphub arbitrary search prose", call: llm.ToolCall{Name: "mcphub__mcphub_search_tools"},
+			structured: json.RawMessage(`{"query":"` + secret + `","count":1,"matches":[{"namespaced":"cortex__cortex_status","description":"` + secret + `"}]}`),
+		},
+		{
+			name: "oversized cortex", call: llm.ToolCall{Name: "cortex__cortex_status"},
+			structured: json.RawMessage(`{"ok":true,"summary":"` + strings.Repeat("x", maxTransientCortexResultBytes) + `"}`),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			projection := projectSemanticToolReceipt(test.call.Name, test.call.Arguments, "text", test.structured, nil, false, test.toolError, false)
+			modelResult, durableResult := ag.semanticToolContents(test.call, projection, string(test.structured), test.structured, test.toolError)
+			if modelResult != durableResult || strings.Contains(modelResult, secret) {
+				t.Fatalf("untrusted content crossed model boundary: model=%q durable=%q", modelResult, durableResult)
+			}
+		})
+	}
+}
+
+func TestSemanticToolContentsSanitizesTrustedMCPHubDescribeSchema(t *testing.T) {
+	const secret = "SECRET_SCHEMA_PROSE"
+	call := llm.ToolCall{
+		Name:      "mcphub__mcphub_describe_tool",
+		Arguments: map[string]any{"server": "builder", "tool": "build"},
+	}
+	structured := json.RawMessage(`{
+		"server":"builder","tool":"build","namespaced":"builder__build",
+		"description":"` + secret + `",
+		"input_schema":{
+			"type":"object","title":"` + secret + `","description":"` + secret + `",
+			"properties":{
+				"path":{"type":"string","description":"` + secret + `","default":"` + secret + `","examples":["` + secret + `"]},
+				"mode":{"type":"string","enum":["fast","safe"],"title":"` + secret + `"},
+				"options":{"type":"array","items":{"type":"object","properties":{"depth":{"type":"integer","description":"` + secret + `"}},"required":["depth"],"additionalProperties":false}}
+			},
+			"required":["path","mode"],"additionalProperties":false,
+			"examples":[{"path":"` + secret + `"}]
+		}
+	}`)
+	ag := New(nil, nil, 8192)
+	ag.SetTrustedLocalMCPServers([]config.ServerConfig{{Name: "mcphub", Command: "mcphub"}})
+	projection := projectSemanticToolReceipt(call.Name, call.Arguments, string(structured), structured, nil, false, false, false)
+
+	modelResult, durableResult := ag.semanticToolContents(call, projection, string(structured), structured, false)
+	for _, required := range []string{
+		`"tool":"builder__build"`, `"path":{"type":"string"}`, `"mode":{"enum":["fast","safe"],"type":"string"}`,
+		`"depth":{"type":"integer"}`, `"required":["path","mode"]`, `"additionalProperties":false`,
+	} {
+		if !strings.Contains(modelResult, required) {
+			t.Fatalf("sanitized schema missing %q: %s", required, modelResult)
+		}
+	}
+	for _, forbidden := range []string{secret, `"description"`, `"title"`, `"examples"`, `"default"`} {
+		if strings.Contains(modelResult, forbidden) {
+			t.Fatalf("sanitized schema retained %q: %s", forbidden, modelResult)
+		}
+	}
+	if strings.Contains(durableResult, `"properties"`) || strings.Contains(durableResult, secret) || durableResult != ecosystem.SafeReceiptText(projection) {
+		t.Fatalf("durable schema receipt = %q", durableResult)
+	}
+	safe := SanitizeMessagesForPersistence([]llm.Message{{Content: modelResult, DurableContent: durableResult}})
+	if safe[0].Content != durableResult || strings.Contains(safe[0].Content, `"properties"`) {
+		t.Fatalf("persisted schema content = %#v", safe[0])
+	}
+}
+
+func TestSemanticToolContentsRejectsUntrustedOrIndirectDescribeSchema(t *testing.T) {
+	structured := json.RawMessage(`{"server":"builder","tool":"build","namespaced":"builder__build","input_schema":{"type":"object","properties":{"path":{"type":"string"}}}}`)
+	ag := New(nil, nil, 8192)
+	ag.SetTrustedLocalMCPServers([]config.ServerConfig{{Name: "mcphub", Command: "mcphub"}})
+	tests := []llm.ToolCall{
+		{Name: "evil__mcphub_describe_tool"},
+		{Name: "mcphub__mcphub_call_tool", Arguments: map[string]any{"server": "mcphub", "tool": "mcphub_describe_tool"}},
+		{Name: "mcphub__other__mcphub_describe_tool"},
+	}
+	for _, call := range tests {
+		projection := projectSemanticToolReceipt(call.Name, call.Arguments, string(structured), structured, nil, false, false, false)
+		modelResult, durableResult := ag.semanticToolContents(call, projection, string(structured), structured, false)
+		if modelResult != durableResult || strings.Contains(modelResult, `"properties"`) {
+			t.Fatalf("indirect describe %q crossed transient boundary: model=%q durable=%q", call.Name, modelResult, durableResult)
+		}
+	}
+}
+
+func TestSemanticToolContentsUsesPostHookCortexText(t *testing.T) {
+	const secret = "SECRET_REDACTED_CORTEX_VALUE"
+	call := llm.ToolCall{Name: "cortex__cortex_status"}
+	structured := json.RawMessage(`{"ok":true,"summary":"` + secret + `"}`)
+	redacted := `{"ok":true,"summary":"[hidden by host hook]"}`
+	ag := New(nil, nil, 8192)
+	ag.SetTrustedLocalMCPServers([]config.ServerConfig{{Name: "cortex", Command: "cortex"}})
+	projection := projectSemanticToolReceipt(call.Name, nil, redacted, structured, nil, false, false, false)
+
+	modelResult, _ := ag.semanticToolContents(call, projection, redacted, structured, false)
+	if strings.Contains(modelResult, secret) || !strings.Contains(modelResult, "[hidden by host hook]") {
+		t.Fatalf("model result bypassed post-hook redaction: %q", modelResult)
+	}
 }
 
 func (*semanticOutputRecorder) StreamText(string)                            {}

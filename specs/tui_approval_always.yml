@@ -23,7 +23,7 @@ terminal:
 
 preconditions:
   commands:
-    - run: "rm -rf .glyphrun/tmp/approval-always-home .glyphrun/tmp/approval-always-agents .glyphrun/tmp/approval-always-workdir .glyphrun/tmp/approval-always-protocol.txt .glyphrun/tmp/fake-ollama-always && mkdir -p .glyphrun/tmp/approval-always-home/.config/local-agent .glyphrun/tmp/approval-always-agents .glyphrun/tmp/approval-always-workdir && printf '%s\\n' 'model:' '  auto_select: false' > .glyphrun/tmp/approval-always-home/.config/local-agent/config.yaml && go build -o ./bin/local-agent ./cmd/local-agent && go build -o .glyphrun/tmp/fake-ollama-always ./specs/glyphrun/fixtures/fake_ollama_always"
+    - run: "rm -rf .glyphrun/tmp/approval-always-home .glyphrun/tmp/approval-always-agents .glyphrun/tmp/approval-always-workdir .glyphrun/tmp/approval-always-protocol.txt .glyphrun/tmp/fake-ollama-always && mkdir -p .glyphrun/tmp/approval-always-home/.config/local-agent .glyphrun/tmp/approval-always-agents .glyphrun/tmp/approval-always-workdir && printf '%s\\n' 'model:' '  auto_select: false' > .glyphrun/tmp/approval-always-home/.config/local-agent/config.yaml && go build -o ./bin/local-agent ./cmd/local-agent && go build -o .glyphrun/tmp/fake-ollama-always ./specs/fixtures/fake_ollama_always"
       cwd: "."
       timeoutMs: 30000
 
@@ -34,7 +34,7 @@ steps:
       timeoutMs: 5000
   - wait:
       screen:
-        contains: "qwen3.5:2b"
+        contains: "qwen3.5:0.8b"
       timeoutMs: 2000
   - type: "Write session-grant.txt with the exact text session scoped approval."
   - press: "enter"
@@ -73,7 +73,7 @@ steps:
       timeoutMs: 5000
   - wait:
       screen:
-        contains: "qwen3.5:2b"
+        contains: "qwen3.5:0.8b"
       timeoutMs: 5000
   - type: "Write session-grant.txt with the exact text session scoped approval."
   - press: "enter"

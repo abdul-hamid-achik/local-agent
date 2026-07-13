@@ -2,9 +2,27 @@ package ecosystem
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"strings"
 )
+
+// MCPHub caps result pages at 8 KiB. Enforce the same parser bound so a
+// malicious or incompatible gateway cannot smuggle an unbounded transient
+// payload into the next provider request.
+const maxMCPHubResultPageBytes = 8 * 1024
+
+type mcphubResultPageEnvelope struct {
+	Status     string `json:"status"`
+	CallID     string `json:"callId"`
+	MediaType  string `json:"mediaType"`
+	Data       string `json:"data"`
+	Cursor     *int64 `json:"cursor"`
+	NextCursor *int64 `json:"nextCursor"`
+	Done       *bool  `json:"done"`
+	TotalBytes *int64 `json:"totalBytes"`
+}
 
 func receiptDocument(receipt RawReceipt) (json.RawMessage, bool) {
 	if document, ok := exactJSONDocument(receipt.Structured); ok {
@@ -26,44 +44,356 @@ func projectMCPHubReceipt(projection ToolProjection, receipt RawReceipt) (ToolPr
 	if !ok {
 		return projection, false
 	}
-	var envelope struct {
-		Status string `json:"status"`
-		CallID string `json:"callId"`
-		Done   *bool  `json:"done"`
-		Error  any    `json:"error"`
-	}
-	if json.Unmarshal(document, &envelope) != nil {
-		return projection, false
-	}
-	if envelope.CallID != "" {
-		projection.Route.CallID = canonicalIdentifier(envelope.CallID)
-	}
 
 	if projection.Operation == "mcphub_get_result" {
-		switch envelope.Status {
-		case "ok":
-			switch {
-			case envelope.Done == nil:
-				projection.Domain = DomainUnknown
-			case !*envelope.Done:
-				projection.Domain = DomainAttention
-			default:
-				projection.Domain = DomainSucceeded
-			}
-		case "unavailable", "cursor_out_of_range":
-			projection.Domain = DomainBlocked
-		default:
+		return projectMCPHubResultPage(projection, document), true
+	}
+	if projected, stored := projectMCPHubStoredReceipt(projection, document); stored {
+		return projected, true
+	}
+	if !isMCPHubManagementOperation(projection.Operation) {
+		return projection, false
+	}
+	if jsonObjectHasValue(document, "error") {
+		projection.Domain = DomainFailed
+		projection.Evidence = EvidenceNone
+		projection.Digest = &ReceiptDigest{Kind: DigestMCPHubError}
+		return projection, true
+	}
+
+	switch projection.Operation {
+	case "mcphub_list_servers":
+		return projectMCPHubServers(projection, document)
+	case "mcphub_search_tools":
+		return projectMCPHubSearch(projection, document)
+	case "mcphub_describe_tool":
+		return projectMCPHubDescribe(projection, document)
+	case "mcphub_resolve_tool":
+		return projectMCPHubResolve(projection, document)
+	case "mcphub_stats":
+		return projectMCPHubStats(projection, document)
+	default:
+		return projection, false
+	}
+}
+
+func isMCPHubManagementOperation(operation string) bool {
+	switch operation {
+	case "mcphub_list_servers", "mcphub_search_tools", "mcphub_describe_tool",
+		"mcphub_resolve_tool", "mcphub_stats":
+		return true
+	default:
+		return false
+	}
+}
+
+func projectMCPHubStoredReceipt(projection ToolProjection, document json.RawMessage) (ToolProjection, bool) {
+	var envelope struct {
+		Status        string `json:"status"`
+		CallID        string `json:"callId"`
+		Server        string `json:"server"`
+		Tool          string `json:"tool"`
+		OriginalBytes int64  `json:"originalBytes"`
+		BudgetBytes   int64  `json:"budgetBytes"`
+	}
+	if json.Unmarshal(document, &envelope) != nil || envelope.Status != "stored" {
+		return projection, false
+	}
+	callID := canonicalIdentifier(envelope.CallID)
+	if callID == "" {
+		projection.Domain = DomainUnknown
+		projection.Evidence = EvidenceNone
+		return projection, true
+	}
+	projection.Route.CallID = callID
+	if projection.Route.Server == "" {
+		projection.Route.Server = canonicalIdentifier(envelope.Server)
+	}
+	if projection.Route.Tool == "" {
+		projection.Route.Tool = canonicalIdentifier(envelope.Tool)
+	}
+	projection.Domain = DomainAttention
+	projection.Evidence = EvidenceNone
+	projection.Digest = &ReceiptDigest{
+		Kind: DigestMCPHubStored, OriginalBytes: envelope.OriginalBytes, BudgetBytes: envelope.BudgetBytes,
+	}
+	return projection.Normalize(), true
+}
+
+func projectMCPHubResultPage(projection ToolProjection, document json.RawMessage) ToolProjection {
+	var envelope mcphubResultPageEnvelope
+	if json.Unmarshal(document, &envelope) != nil {
+		projection.Domain = DomainUnknown
+		projection.Evidence = EvidenceNone
+		return projection
+	}
+
+	// Retrieval is bound to the exact opaque identifier the model supplied. A
+	// mismatched or absent response ID never replaces it and can never become a
+	// follow-up fetch target.
+	requestedID := canonicalIdentifier(projection.Route.CallID)
+	receivedID := canonicalIdentifier(envelope.CallID)
+	if requestedID == "" || receivedID == "" || requestedID != receivedID {
+		projection.Domain = DomainFailed
+		projection.Evidence = EvidenceNone
+		projection.Digest = &ReceiptDigest{Kind: DigestMCPHubError}
+		return projection.Normalize()
+	}
+	projection.Route.CallID = requestedID
+
+	switch envelope.Status {
+	case "ok":
+		page, ok := decodeMCPHubResultPage(envelope)
+		if !ok {
 			projection.Domain = DomainUnknown
+			projection.Evidence = EvidenceNone
+			return projection.Normalize()
 		}
-		projection.Evidence = EvidenceNone
-		return projection, true
+		projection.Digest = &ReceiptDigest{
+			Kind: DigestMCPHubPage, Cursor: *envelope.Cursor, NextCursor: *envelope.NextCursor,
+			TotalBytes: *envelope.TotalBytes, PageBytes: int64(len(page)), Done: *envelope.Done,
+		}
+		if *envelope.Done {
+			projection.Domain = DomainSucceeded
+		} else {
+			// The page call completed, but the stored result still has a precise
+			// continuation cursor. Attention is terminal and avoids a fake spinner.
+			projection.Domain = DomainAttention
+		}
+	case "unavailable":
+		projection.Domain = DomainBlocked
+		projection.Digest = &ReceiptDigest{Kind: DigestMCPHubUnavailable}
+	case "cursor_out_of_range":
+		projection.Domain = DomainBlocked
+		cursor := int64(0)
+		if envelope.Cursor != nil {
+			cursor = *envelope.Cursor
+		}
+		projection.Digest = &ReceiptDigest{Kind: DigestMCPHubCursorOutOfRange, Cursor: cursor}
+	default:
+		projection.Domain = DomainUnknown
 	}
-	if envelope.Status == "stored" && envelope.CallID != "" {
-		projection.Domain = DomainAttention
-		projection.Evidence = EvidenceNone
-		return projection, true
+	projection.Evidence = EvidenceNone
+	return projection.Normalize()
+}
+
+func decodeMCPHubResultPage(envelope mcphubResultPageEnvelope) ([]byte, bool) {
+	page, err := base64.StdEncoding.DecodeString(envelope.Data)
+	if err != nil || envelope.MediaType != "application/json" || envelope.Cursor == nil ||
+		envelope.NextCursor == nil || envelope.Done == nil || envelope.TotalBytes == nil ||
+		*envelope.Cursor < 0 || *envelope.NextCursor < *envelope.Cursor ||
+		*envelope.TotalBytes < *envelope.NextCursor ||
+		int64(len(page)) != *envelope.NextCursor-*envelope.Cursor ||
+		len(page) > maxMCPHubResultPageBytes ||
+		(!*envelope.Done && *envelope.NextCursor == *envelope.Cursor) {
+		return nil, false
 	}
-	return projection, false
+	return page, true
+}
+
+// TransientModelContent returns the decoded byte fragment from one exact,
+// validated MCPHub result-page envelope. The fragment is intentionally not
+// part of ToolProjection: callers may feed it to the active provider turn but
+// must pair it with SafeReceiptText as the durable replacement.
+func TransientModelContent(projection ToolProjection, receipt RawReceipt) (string, bool) {
+	projection = projection.Normalize()
+	if projection.Digest == nil || projection.Digest.Kind != DigestMCPHubPage ||
+		projection.Operation != "mcphub_get_result" {
+		return "", false
+	}
+	document, ok := receiptDocument(receipt)
+	if !ok {
+		return "", false
+	}
+	var envelope mcphubResultPageEnvelope
+	if json.Unmarshal(document, &envelope) != nil || envelope.Status != "ok" {
+		return "", false
+	}
+	requestedID := canonicalIdentifier(projection.Route.CallID)
+	if requestedID == "" || canonicalIdentifier(envelope.CallID) != requestedID {
+		return "", false
+	}
+	page, ok := decodeMCPHubResultPage(envelope)
+	if !ok || envelope.Cursor == nil || envelope.NextCursor == nil || envelope.Done == nil || envelope.TotalBytes == nil {
+		return "", false
+	}
+	digest := projection.Digest
+	if digest.Cursor != *envelope.Cursor || digest.NextCursor != *envelope.NextCursor ||
+		digest.TotalBytes != *envelope.TotalBytes || digest.Done != *envelope.Done ||
+		digest.PageBytes != int64(len(page)) {
+		return "", false
+	}
+	// A byte page may split a UTF-8 code point. Keep the provider request valid
+	// while preserving the useful JSON fragment; the durable receipt contains
+	// no page data at all.
+	payload := strings.ToValidUTF8(string(page), "�")
+	return fmt.Sprintf(
+		"MCPHub result page (transient; not saved)\ncall_id: %s\nbytes: %d-%d of %d\ndone: %t\npayload_fragment:\n%s",
+		requestedID, *envelope.Cursor, *envelope.NextCursor, *envelope.TotalBytes, *envelope.Done, payload,
+	), true
+}
+
+func projectMCPHubServers(projection ToolProjection, document json.RawMessage) (ToolProjection, bool) {
+	var envelope struct {
+		Servers []struct {
+			Name      string `json:"name"`
+			Connected bool   `json:"connected"`
+		} `json:"servers"`
+		TotalTools *int64 `json:"total_tools"`
+		Expose     string `json:"expose"`
+	}
+	if json.Unmarshal(document, &envelope) != nil || !jsonObjectHasValue(document, "servers") || envelope.TotalTools == nil {
+		return projection, false
+	}
+	items := make([]string, 0, len(envelope.Servers))
+	connected := int64(0)
+	for _, server := range envelope.Servers {
+		items = append(items, server.Name)
+		if server.Connected {
+			connected++
+		}
+	}
+	projection.Domain = DomainSucceeded
+	projection.Evidence = EvidenceNone
+	projection.Digest = &ReceiptDigest{
+		Kind: DigestMCPHubServers, Count: int64(len(envelope.Servers)), Connected: connected,
+		TotalTools: *envelope.TotalTools, Items: items, Expose: envelope.Expose,
+	}
+	return projection.Normalize(), true
+}
+
+func projectMCPHubSearch(projection ToolProjection, document json.RawMessage) (ToolProjection, bool) {
+	var envelope struct {
+		Count   *int64 `json:"count"`
+		Matches []struct {
+			Namespaced string `json:"namespaced"`
+		} `json:"matches"`
+	}
+	if json.Unmarshal(document, &envelope) != nil || envelope.Count == nil || !jsonObjectHasValue(document, "matches") {
+		return projection, false
+	}
+	items := make([]string, 0, len(envelope.Matches))
+	for _, match := range envelope.Matches {
+		items = append(items, match.Namespaced)
+	}
+	projection.Domain = DomainSucceeded
+	projection.Evidence = EvidenceNone
+	projection.Digest = &ReceiptDigest{Kind: DigestMCPHubSearch, Count: *envelope.Count, Items: items}
+	return projection.Normalize(), true
+}
+
+func projectMCPHubDescribe(projection ToolProjection, document json.RawMessage) (ToolProjection, bool) {
+	var envelope struct {
+		Server     string `json:"server"`
+		Tool       string `json:"tool"`
+		Namespaced string `json:"namespaced"`
+		Input      struct {
+			Required []string `json:"required"`
+		} `json:"input_schema"`
+	}
+	if json.Unmarshal(document, &envelope) != nil || !jsonObjectHasValue(document, "input_schema") {
+		return projection, false
+	}
+	target := envelope.Namespaced
+	if target == "" && envelope.Server != "" && envelope.Tool != "" {
+		target = envelope.Server + "__" + envelope.Tool
+	}
+	if canonicalIdentifier(target) == "" {
+		return projection, false
+	}
+	projection.Domain = DomainSucceeded
+	projection.Evidence = EvidenceNone
+	projection.Digest = &ReceiptDigest{Kind: DigestMCPHubDescribe, Target: target, Required: envelope.Input.Required}
+	return projection.Normalize(), true
+}
+
+func projectMCPHubResolve(projection ToolProjection, document json.RawMessage) (ToolProjection, bool) {
+	type match struct {
+		Namespaced string `json:"namespaced"`
+	}
+	var envelope struct {
+		Recommendation *struct {
+			Namespaced string   `json:"namespaced"`
+			Required   []string `json:"required_fields"`
+		} `json:"recommendation"`
+		Ambiguous    *bool   `json:"ambiguous"`
+		Alternatives []match `json:"alternatives"`
+	}
+	if json.Unmarshal(document, &envelope) != nil || envelope.Ambiguous == nil ||
+		!jsonObjectHasValue(document, "recommendation") || !jsonObjectHasValue(document, "alternatives") {
+		return projection, false
+	}
+	digest := ReceiptDigest{Kind: DigestMCPHubResolve, Ambiguous: *envelope.Ambiguous}
+	if envelope.Recommendation != nil {
+		digest.Target = envelope.Recommendation.Namespaced
+		digest.Required = envelope.Recommendation.Required
+	}
+	for _, alternative := range envelope.Alternatives {
+		digest.Items = append(digest.Items, alternative.Namespaced)
+	}
+	projection.Domain = DomainSucceeded
+	projection.Evidence = EvidenceNone
+	projection.Digest = &digest
+	return projection.Normalize(), true
+}
+
+func projectMCPHubStats(projection ToolProjection, document json.RawMessage) (ToolProjection, bool) {
+	var envelope struct {
+		Totals *struct {
+			Calls     int64 `json:"calls"`
+			Errors    int64 `json:"errors"`
+			EstTokens int64 `json:"est_tokens"`
+		} `json:"totals"`
+		Servers []struct {
+			Server string `json:"server"`
+		} `json:"servers"`
+	}
+	if json.Unmarshal(document, &envelope) != nil || envelope.Totals == nil || !jsonObjectHasValue(document, "servers") {
+		return projection, false
+	}
+	items := make([]string, 0, len(envelope.Servers))
+	for _, server := range envelope.Servers {
+		items = append(items, server.Server)
+	}
+	projection.Domain = DomainSucceeded
+	projection.Evidence = EvidenceNone
+	projection.Digest = &ReceiptDigest{
+		Kind: DigestMCPHubStats, Count: int64(len(envelope.Servers)), Calls: envelope.Totals.Calls,
+		Errors: envelope.Totals.Errors, Estimated: envelope.Totals.EstTokens, Items: items,
+	}
+	return projection.Normalize(), true
+}
+
+func jsonObjectHasValue(document json.RawMessage, key string) bool {
+	var object map[string]json.RawMessage
+	if json.Unmarshal(document, &object) != nil {
+		return false
+	}
+	value, exists := object[key]
+	if !exists {
+		return false
+	}
+	value = bytes.TrimSpace(value)
+	return len(value) > 0 && !bytes.Equal(value, []byte("null"))
+}
+
+// projectCortexFailureReceipt recognizes only the shared, explicit rejection
+// envelope. It intentionally does not promote ok=true to success: coordination
+// success and verified evidence are different claims and need operation-specific
+// parsers. Error prose and summaries remain outside the persisted projection.
+func projectCortexFailureReceipt(receipt RawReceipt) (string, bool) {
+	document, ok := receiptDocument(receipt)
+	if !ok {
+		return "", false
+	}
+	var envelope struct {
+		OK     *bool  `json:"ok"`
+		TaskID string `json:"taskId"`
+	}
+	if json.Unmarshal(document, &envelope) != nil || envelope.OK == nil || *envelope.OK {
+		return "", false
+	}
+	return canonicalIdentifier(envelope.TaskID), true
 }
 
 func projectBobReceipt(operation string, receipt RawReceipt) (DomainState, bool) {

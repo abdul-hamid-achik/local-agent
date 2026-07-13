@@ -326,7 +326,7 @@ func (a *Agent) newTrackedExecutions(ctx context.Context, runtime executionRunti
 		if err != nil {
 			return nil, err
 		}
-		kind, effectClass := a.executionKind(calls[i].Name)
+		kind, effectClass := a.executionKindForCall(calls[i])
 		providerID := ""
 		if i < len(providerIDs) {
 			providerID = providerIDs[i]
@@ -357,6 +357,11 @@ func (a *Agent) newTrackedExecutions(ctx context.Context, runtime executionRunti
 }
 
 func (a *Agent) executionKind(name string) (executionpkg.Kind, executionpkg.EffectClass) {
+	return a.executionKindForCall(llm.ToolCall{Name: name})
+}
+
+func (a *Agent) executionKindForCall(call llm.ToolCall) (executionpkg.Kind, executionpkg.EffectClass) {
+	name := call.Name
 	if a.isMemoryTool(name) {
 		if name == "memory_list" {
 			return executionpkg.KindMemory, executionpkg.EffectReadOnly
@@ -374,15 +379,31 @@ func (a *Agent) executionKind(name string) (executionpkg.Kind, executionpkg.Effe
 			return executionpkg.KindBuiltin, executionpkg.Effectful
 		}
 	}
-	// MCP ToolAnnotations are server-supplied presentation hints. Without a
-	// separate host-owned trust policy, they never weaken durable effect
-	// classification: every MCP dispatch remains outcome-unknown.
+	// The exact contract catalog is host-owned and argument-aware. MCP
+	// ToolAnnotations remain server-supplied presentation hints and are never
+	// consulted here.
+	if contract, ok := a.trustedMCPContract(call); ok {
+		return executionpkg.KindMCP, contract.effect
+	}
 	return executionpkg.KindMCP, executionpkg.EffectUnknown
 }
 
 // mcpToolRequiresApproval is deliberately independent of server metadata.
 // Only a future explicit host-owned trust policy may narrow this invariant.
 func mcpToolRequiresApproval() bool { return true }
+
+func terminalExecutionEventType(effect executionpkg.EffectClass, isError bool, contextErr error) executionpkg.EventType {
+	if !isError {
+		return executionpkg.EventCompleted
+	}
+	if effect != executionpkg.EffectReadOnly {
+		return executionpkg.EventOutcomeUnknown
+	}
+	if contextErr != nil {
+		return executionpkg.EventCancelled
+	}
+	return executionpkg.EventFailed
+}
 
 func (a *Agent) mcpToolDefinition(name string) (llm.ToolDef, bool) {
 	for _, def := range a.mcpTools() {

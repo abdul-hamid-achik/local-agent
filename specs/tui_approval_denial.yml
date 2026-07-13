@@ -23,7 +23,7 @@ terminal:
 
 preconditions:
   commands:
-    - run: "rm -rf .glyphrun/tmp/approval-home .glyphrun/tmp/approval-agents .glyphrun/tmp/approval-workdir .glyphrun/tmp/approval-protocol.txt .glyphrun/tmp/fake-ollama-approval && mkdir -p .glyphrun/tmp/approval-home/.config/local-agent .glyphrun/tmp/approval-agents .glyphrun/tmp/approval-workdir && printf '%s\\n' 'model:' '  auto_select: false' > .glyphrun/tmp/approval-home/.config/local-agent/config.yaml && go build -o ./bin/local-agent ./cmd/local-agent && go build -o .glyphrun/tmp/fake-ollama-approval ./specs/glyphrun/fixtures/fake_ollama_approval"
+    - run: "rm -rf .glyphrun/tmp/approval-home .glyphrun/tmp/approval-agents .glyphrun/tmp/approval-workdir .glyphrun/tmp/approval-protocol.txt .glyphrun/tmp/fake-ollama-approval && mkdir -p .glyphrun/tmp/approval-home/.config/local-agent .glyphrun/tmp/approval-agents .glyphrun/tmp/approval-workdir && printf '%s\\n' 'model:' '  auto_select: false' > .glyphrun/tmp/approval-home/.config/local-agent/config.yaml && go build -o ./bin/local-agent ./cmd/local-agent && go build -o .glyphrun/tmp/fake-ollama-approval ./specs/fixtures/fake_ollama_approval"
       cwd: "."
       timeoutMs: 30000
 
@@ -34,15 +34,31 @@ steps:
       timeoutMs: 5000
   - wait:
       screen:
-        contains: "qwen3.5:2b"
+        contains: "qwen3.5:0.8b"
       timeoutMs: 2000
   - type: "Create approval-probe.txt with the exact text must not be written."
   - press: "enter"
   - wait:
       screen:
-        contains: "Thinking"
+        contains: "Running"
+      timeoutMs: 2000
+  - wait:
+      screen:
+        contains: "Thinking… · Checking workspace policy before the write."
       timeoutMs: 2000
   - snapshot: busy_normal
+  - type: "Summarize after the probe."
+  - press: "enter"
+  - wait:
+      screen:
+        contains: "queued › Summarize after the probe."
+      timeoutMs: 2000
+  - snapshot: busy_follow_up_queued
+  - press: "esc"
+  - wait:
+      screen:
+        notContains: "queued ›"
+      timeoutMs: 2000
   - wait:
       screen:
         contains: "Permission · write"
@@ -127,10 +143,16 @@ steps:
 
 outcomes:
   - id: busy_turn_is_clear
-    description: the real NORMAL turn replaces the composer with a cancellable local-model activity line
+    description: provider reasoning stays inside the assistant transcript while cancel plus queue controls remain in the operational footer
     verify:
       snapshot:
         name: busy_normal
+        mode: text
+  - id: running_turn_has_a_visible_recoverable_queue
+    description: Enter queues one visible follow-up and Escape clears that queue without cancelling the active turn
+    verify:
+      snapshot:
+        name: busy_follow_up_queued
         mode: text
   - id: normal_approval_is_inspectable
     description: normal width exposes the exact write arguments and explicit approval decisions

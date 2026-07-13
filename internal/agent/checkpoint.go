@@ -47,6 +47,7 @@ func (a *Agent) snapshotMessagesJSON() (string, int, error) {
 	msgs := make([]llm.Message, len(a.messages))
 	copy(msgs, a.messages)
 	a.mu.RUnlock()
+	msgs = SanitizeMessagesForPersistence(msgs)
 
 	data, err := json.Marshal(msgs)
 	if err != nil {

@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"fmt"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -76,19 +75,16 @@ func (m *Model) renderThinkingBox(content string, collapsed bool) string {
 		return ""
 	}
 
-	lines := strings.Split(content, "\n")
 	// The caller indents this block by two cells. Bound it to the same readable
 	// transcript width as assistant prose instead of expanding to the terminal
 	// edge on wide screens.
 	width := max(4, m.chatContentWidth()-2)
 	inner := max(1, width-2) // left rail plus one separating space
 	direction := "▸"
-	action := "expand"
 	if !collapsed {
 		direction = "▾"
-		action = "collapse"
 	}
-	header := thinkingHeader(direction, action, len(lines), inner)
+	header := thinkingHeader(direction, inner)
 
 	bar := m.styles.ThinkingBorder.Render("│")
 	var b strings.Builder
@@ -96,12 +92,14 @@ func (m *Model) renderThinkingBox(content string, collapsed bool) string {
 	b.WriteByte(' ')
 	b.WriteString(m.styles.ThinkingHeader.Render(header))
 
-	// Collapsed means collapsed: keep the receipt and its discoverable shortcut,
-	// but do not leak a three-line preview that still consumes transcript space.
+	// Keep the settled receipt intentionally quiet. The global help surface owns
+	// the disclosure shortcut; repeating it on every assistant turn makes the
+	// transcript read like control chrome instead of a conversation.
 	if collapsed {
 		return b.String()
 	}
 
+	lines := strings.Split(content, "\n")
 	for _, sourceLine := range lines {
 		wrapped := wrapText(sourceLine, inner)
 		if wrapped == "" {
@@ -118,13 +116,13 @@ func (m *Model) renderThinkingBox(content string, collapsed bool) string {
 }
 
 // renderLiveThinkingBox is the stable in-progress counterpart to a completed
-// reasoning disclosure. It intentionally omits implementation metrics and a
-// shortcut that is unavailable until the receipt is complete.
+// reasoning disclosure. Thinking belongs to the assistant transcript; the
+// footer is reserved for operational controls such as cancel and queue.
 func (m *Model) renderLiveThinkingBox(content string) string {
 	width := max(4, m.chatContentWidth()-2)
 	inner := max(1, width-2)
 	summary := liveThinkingSummary(content)
-	header := "reasoning · live"
+	header := "Thinking…"
 	if summary != "" {
 		header += " · " + summary
 	}
@@ -145,21 +143,10 @@ func liveThinkingSummary(content string) string {
 	return ""
 }
 
-func thinkingHeader(direction, action string, lineCount, width int) string {
-	unit := "lines"
-	if lineCount == 1 {
-		unit = "line"
+func thinkingHeader(direction string, width int) string {
+	header := direction + " Thought"
+	if lipgloss.Width(header) <= width {
+		return header
 	}
-	candidates := []string{
-		fmt.Sprintf("%s reasoning · %d %s · ctrl+t %s", direction, lineCount, unit, action),
-		fmt.Sprintf("%s reasoning · %d · ctrl+t", direction, lineCount),
-		fmt.Sprintf("%s reasoning · ctrl+t", direction),
-		fmt.Sprintf("%s reasoning", direction),
-	}
-	for _, candidate := range candidates {
-		if lipgloss.Width(candidate) <= width {
-			return candidate
-		}
-	}
-	return truncateDisplay(candidates[len(candidates)-1], width)
+	return truncateDisplay(header, width)
 }

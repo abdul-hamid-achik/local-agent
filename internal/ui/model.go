@@ -473,11 +473,6 @@ func (m *Model) appendShutdownQuit(commands *[]tea.Cmd) {
 	}
 }
 
-// renderStartup renders the welcome screen and inline connection progress.
-func (m *Model) renderStartup(b *strings.Builder) {
-	m.renderWelcome(b)
-}
-
 func (m *Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		textarea.Blink,
@@ -1264,6 +1259,12 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			return m, m.beginShutdown()
 
 		case key.Matches(msg, m.keys.Cancel):
+			// A visible queued follow-up owns the first Escape. Clearing the queue
+			// must not also cancel the active run; a later Escape still reaches the
+			// ordinary cancellation path below.
+			if m.clearQueuedFollowUp() {
+				return m, nil
+			}
 			if (m.state == StateStreaming || m.state == StateWaiting) && m.cancel != nil {
 				m.cancel()
 			}
@@ -1415,6 +1416,11 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			}
 
 		case key.Matches(msg, m.keys.HistoryUp):
+			// During an active turn, Up edits the one visible queued follow-up
+			// before it can be mistaken for ordinary prompt-history navigation.
+			if m.editQueuedFollowUp() {
+				return m, nil
+			}
 			if m.state == StateIdle && m.overlay == OverlayNone {
 				if strings.TrimSpace(m.input.Value()) == "" || m.historyIndex != -1 {
 					if m.navigateHistory(-1) {
@@ -1698,11 +1704,18 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		if m.sessionID > 0 && m.sessionStore != nil {
 			previousCursor := m.executionCursor
 			var cursorErr error
+			cursorStoppedAtRecovery := false
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			if m.executionLease == nil {
 				cursorErr = errors.New("execution session lease is unavailable; snapshot cursor was not advanced")
 			} else {
 				m.executionCursor, cursorErr = m.snapshotExecutionCursor(ctx)
+				// An unresolved execution deliberately keeps the snapshot cursor on
+				// the safe side of the effect. The transcript can still be saved at
+				// that old cursor; presenting the expected boundary stop as a second
+				// "Save session" failure makes one recovery condition look like data
+				// loss and floods the chat with duplicate red errors.
+				cursorStoppedAtRecovery = hasUnresolved && cursorErr != nil
 			}
 			saveErr := m.persistSessionState(ctx)
 			if saveErr != nil {
@@ -1718,7 +1731,11 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 				})
 			}
 			cancel()
-			if persistErr := errors.Join(cursorErr, saveErr, usageErr); persistErr != nil {
+			persistErr := errors.Join(saveErr, usageErr)
+			if !cursorStoppedAtRecovery {
+				persistErr = errors.Join(cursorErr, persistErr)
+			}
+			if persistErr != nil {
 				settledPersisted = false
 				if m.goalRuntime != nil {
 					m.goalPersistenceDirty = true
@@ -1933,6 +1950,10 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		m.initializing = false
 		m.startupItems = nil
 
+		// Startup and the interactive composer reserve different footer geometry.
+		// Reflow immediately so the first usable frame does not keep a stale blank
+		// row until the next resize or input event.
+		m.recalcViewportHeight()
 		m.viewport.SetContent(m.renderEntries())
 
 	case CommandResultMsg:
@@ -2376,9 +2397,13 @@ func (m *Model) snapshotExecutionCursor(ctx context.Context) (int64, error) {
 		}
 		projected := false
 		for _, message := range messages {
+			resultContent := message.Content
+			if message.DurableContent != "" {
+				resultContent = message.DurableContent
+			}
 			if message.Role == "tool" &&
 				message.ToolCallID == state.Identity.CanonicalCallID &&
-				execution.HashText(message.Content) == state.Latest.ResultSHA256 {
+				execution.HashText(resultContent) == state.Latest.ResultSHA256 {
 				projected = true
 				break
 			}
@@ -3622,8 +3647,12 @@ func (m *Model) sendToAgentTurnPresentedWithMode(text, turnID string, visible bo
 	}
 
 	m.resumeFollow()
-	m.input.Blur()
 	m.state = StateWaiting
+	// Ordinary active turns keep the Bubbles textarea focused so real terminal
+	// key events can draft and queue a follow-up. Rendering an editable-looking
+	// composer while the child is blurred makes the queue affordance inert.
+	// Goal-owned turns still reject child updates through composerEditable.
+	m.input.Focus()
 	m.turnStartedAt = m.nowTime()
 	m.lastTurnDuration = 0
 	m.doneFlash = false
@@ -3668,6 +3697,7 @@ func (m *Model) sendToAgentTurnPresentedWithMode(text, turnID string, visible bo
 	}
 	m.agent.AddUserMessage(text)
 	m.agent.SetModeContext(cfg.SystemPromptPrefix, cfg.ToolPolicy)
+	m.agent.SetAuthorityMode(agentAuthorityMode(authority))
 	if m.sessionID > 0 && m.sessionStore != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		err := m.persistSessionState(ctx)

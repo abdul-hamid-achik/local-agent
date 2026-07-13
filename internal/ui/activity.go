@@ -69,17 +69,17 @@ func (m *Model) currentWorkingActivity() (workingActivity, bool) {
 	case m.shuttingDown:
 		return workingActivity{label: "Stopping safely", detail: "waiting for receipts"}, true
 	case m.initializing:
-		connected := 0
+		settled := 0
 		for _, item := range m.startupItems {
 			if item.Status == "connected" || item.Status == "failed" {
-				connected++
+				settled++
 			}
 		}
-		detail := ""
+		detail := "local runtime"
 		if len(m.startupItems) > 0 {
-			detail = fmt.Sprintf("%d/%d reported", connected, len(m.startupItems))
+			detail += fmt.Sprintf(" · %d/%d", settled, len(m.startupItems))
 		}
-		return workingActivity{label: "Connecting local runtime", detail: detail}, true
+		return workingActivity{label: "Starting", detail: detail}, true
 	case m.sessionListing:
 		return workingActivity{label: "Loading sessions", cancellable: true}, true
 	case m.sessionLoading:
@@ -102,15 +102,11 @@ func (m *Model) currentWorkingActivity() (workingActivity, bool) {
 		return activity, true
 	case m.state == StateWaiting:
 		return workingActivity{
-			label: "Thinking", detail: m.model, elapsed: m.turnElapsed(), cancellable: true, waiting: true,
+			label: "Running", elapsed: m.turnElapsed(), cancellable: true, waiting: true,
 		}, true
 	case m.state == StateStreaming:
-		label := "Responding"
-		if m.streamBuf.Len() == 0 && m.thinkBuf.Len() > 0 {
-			label = "Reasoning"
-		}
 		return workingActivity{
-			label: label, detail: m.model, elapsed: m.turnElapsed(), cancellable: true,
+			label: "Running", elapsed: m.turnElapsed(), cancellable: true,
 		}, true
 	case m.ollamaInventoryCommitting:
 		return workingActivity{label: "Updating Ollama inventory", detail: "verifying model authority"}, true
@@ -197,28 +193,41 @@ func (m *Model) renderWorkingLine() string {
 	}
 
 	elapsed := ""
-	if activity.elapsed > 0 {
+	// Sub-second timers flicker between otherwise identical frames and add no
+	// useful progress signal. Start showing elapsed time after one full second;
+	// longer operations still keep the compact live timer.
+	if activity.elapsed >= time.Second {
 		elapsed = " · " + formatWorkingElapsed(activity.elapsed)
 	}
 	detail := ""
 	if activity.detail != "" {
 		detail = " · " + activity.detail
 	}
-	queued := ""
-	if m.queuedFollowUp != nil {
-		queued = " · follow-up queued"
+	queueAction := ""
+	if m.queuedFollowUp == nil && m.goalTurnID == "" && m.goalOperation == "" &&
+		(m.state == StateWaiting || m.state == StateStreaming) {
+		queueAction = " · enter queue"
 	}
 
 	candidates := []string{
-		activity.label + detail + elapsed + queued + longCancel,
-		activity.label + elapsed + queued + longCancel,
-		activity.label + queued + longCancel,
-		activity.label + elapsed + longCancel,
-		activity.label + longCancel,
-		activity.label + elapsed + shortCancel,
-		activity.label + shortCancel,
-		activity.label,
+		activity.label + detail + elapsed + longCancel + queueAction,
+		activity.label + elapsed + longCancel + queueAction,
+		activity.label + longCancel + queueAction,
 	}
+	if queueAction != "" {
+		candidates = append(candidates,
+			activity.label+elapsed+shortCancel+" · queue",
+			activity.label+shortCancel+" · queue",
+			"Run"+shortCancel+" · queue",
+		)
+	}
+	candidates = append(candidates,
+		activity.label+elapsed+longCancel,
+		activity.label+longCancel,
+		activity.label+elapsed+shortCancel,
+		activity.label+shortCancel,
+		activity.label,
+	)
 	if m.followPaused() {
 		candidates = []string{
 			activity.label + detail + elapsed + longCancel + " · end latest",

@@ -180,6 +180,10 @@ func run() int {
 	defer registry.Close()
 
 	ag := agent.New(modelManager, registry, cfg.Ollama.NumCtx)
+	// Derive any reduced-friction MCP contracts from the same host-owned server
+	// configuration the registry will connect. Server annotations and model tool
+	// names alone never establish trust.
+	ag.SetTrustedLocalMCPServers(servers)
 	// The application always runs with durable execution tracking. Embedded
 	// package users may opt out, but neither the TUI nor headless mode may send
 	// provider work without a scoped SQLite ledger.
@@ -354,9 +358,10 @@ func run() int {
 			fmt.Fprintln(os.Stderr, "ICE: disabled because workspace identity is unavailable")
 		}
 
-		// Headless -p is one user-directed NORMAL or read-only PLAN turn, never
-		// an implicit AUTO goal loop.
+		// Headless -p is one bounded turn. AUTO uses the same scoped authority as
+		// the TUI; it is not the global --yolo bypass.
 		ag.SetModeContext(modeConfig.SystemPromptPrefix, modeConfig.ToolPolicy)
+		ag.SetAuthorityMode(headlessAuthorityMode(headlessMode))
 		if workspace == "" {
 			fmt.Fprintln(os.Stderr, "local-agent: workspace identity is unavailable; refusing to start a headless turn")
 			return 1

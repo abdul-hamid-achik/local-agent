@@ -39,11 +39,16 @@ type ChatOptions struct {
 
 // Message represents a conversation message.
 type Message struct {
-	Role       string     `json:"role"` // system, user, assistant, tool
-	Content    string     `json:"content"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolName   string     `json:"tool_name,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
+	Role    string `json:"role"` // system, user, assistant, tool
+	Content string `json:"content"`
+	// DurableContent is the bounded replacement for transient tool content when
+	// history crosses a persistence or compaction boundary. It is host-only:
+	// providers receive Content, while JSON/session/checkpoint writers must call
+	// agent.SanitizeMessagesForPersistence before serialization.
+	DurableContent string     `json:"-"`
+	ToolCalls      []ToolCall `json:"tool_calls,omitempty"`
+	ToolName       string     `json:"tool_name,omitempty"`
+	ToolCallID     string     `json:"tool_call_id,omitempty"`
 	// HostOwned marks a message whose exact contents were validated and
 	// authored by the local host. It is deliberately not persisted or sent on
 	// the wire: restore code must re-derive the marker from durable state, so a

@@ -22,7 +22,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const fixtureModel = "qwen3.5:2b"
+const fixtureModel = "qwen3.5:0.8b"
 
 type fixtureState struct {
 	mu            sync.Mutex
@@ -107,7 +107,7 @@ func run() int {
 
 	exitCode := 0
 	for process := 1; process <= 2; process++ {
-		command := exec.Command(binary)
+		command := exec.Command(binary, "-model", fixtureModel)
 		command.Stdin = os.Stdin
 		command.Stdout = os.Stdout
 		command.Stderr = os.Stderr

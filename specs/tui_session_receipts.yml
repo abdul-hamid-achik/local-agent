@@ -28,7 +28,7 @@ preconditions:
     - run: "sqlite3 .glyphrun/tmp/session-receipts-home/.config/local-agent/local-agent.db '.read internal/db/migrations/001_init.sql' '.read internal/db/migrations/002_checkpoints.sql' '.read internal/db/migrations/003_session_state.sql' '.read internal/db/migrations/004_execution_events.sql'"
       cwd: "."
       timeoutMs: 5000
-    - run: "sed 's|__PROJECT_ROOT__|${projectRoot}|g' specs/glyphrun/fixtures/session_receipts.sql | sqlite3 .glyphrun/tmp/session-receipts-home/.config/local-agent/local-agent.db"
+    - run: "sed 's|__PROJECT_ROOT__|${projectRoot}|g' specs/fixtures/session_receipts.sql | sqlite3 .glyphrun/tmp/session-receipts-home/.config/local-agent/local-agent.db"
       cwd: "."
       timeoutMs: 5000
 

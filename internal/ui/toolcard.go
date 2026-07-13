@@ -188,6 +188,15 @@ func (c ToolCard) ViewWithActivity(width int, activityGlyph string, elapsed time
 	presentation := presentTool(presentationName, c.Kind, c.State)
 	if deferredMCPHubResult(projection) {
 		presentation.label = "Result stored"
+	} else if projection.Operation == "mcphub_get_result" && projection.Digest != nil {
+		switch projection.Digest.Kind {
+		case ecosystem.DigestMCPHubPage:
+			presentation.label = "Read result page"
+		case ecosystem.DigestMCPHubUnavailable:
+			presentation.label = "Stored result unavailable"
+		case ecosystem.DigestMCPHubCursorOutOfRange:
+			presentation.label = "Result cursor invalid"
+		}
 	}
 
 	// Leading glyph and trailing timing meta. Running animation is supplied by
@@ -230,10 +239,14 @@ func (c ToolCard) ViewWithActivity(width int, activityGlyph string, elapsed time
 		textBudget -= metaW + 1
 	}
 	nameBudget := max(0, textBudget)
+	cardSummary := c.Summary
+	if projected := projection.SummaryText(); projected != "" && c.State != ToolCardRunning {
+		cardSummary = projected
+	}
 	summary := ""
 	summaryBudget := 0
-	if (c.State == ToolCardRunning || !c.Expanded) && c.Summary != "" && textBudget >= 7 {
-		summary = boundedToolCardSummary(c.Summary)
+	if (c.State == ToolCardRunning || !c.Expanded) && cardSummary != "" && textBudget >= 7 {
+		summary = boundedToolCardSummary(cardSummary)
 		summaryW := lipgloss.Width(summary)
 		summaryBudget = min(summaryW, max(1, textBudget/2))
 		nameBudget = textBudget - summaryBudget - 3 // " · "
@@ -349,10 +362,15 @@ func toolCardStateFromProjection(projection ecosystem.ToolProjection) ToolCardSt
 func compactToolAttention(projection ecosystem.ToolProjection) string {
 	projection = projection.Normalize()
 	if deferredMCPHubResult(projection) {
+		if summary := projection.SummaryText(); summary != "" {
+			return summary
+		}
 		return "Result stored · fetch " + projection.Route.CallID
 	}
-	if projection.Operation == "mcphub_get_result" && projection.Route.CallID != "" {
-		return "Result pending · fetch " + projection.Route.CallID
+	if projection.Operation == "mcphub_get_result" && projection.Digest != nil {
+		if summary := projection.SummaryText(); summary != "" {
+			return summary
+		}
 	}
 
 	// The bounded domain projection is authoritative. Arbitrary server prose is
@@ -386,7 +404,7 @@ func toolProjectionDetails(projection ecosystem.ToolProjection) []string {
 	if projection.Transport == "" {
 		return nil
 	}
-	details := make([]string, 0, 7)
+	details := make([]string, 0, 8)
 	if projection.Specialist != "" {
 		label := describeEcosystemServer(projection.Specialist).label
 		details = append(details, "specialist: "+label+" · "+string(projection.Role))
@@ -414,6 +432,9 @@ func toolProjectionDetails(projection ecosystem.ToolProjection) []string {
 	details = append(details, "evidence: "+evidence)
 	if projection.Route.CallID != "" {
 		details = append(details, "stored result: "+projection.Route.CallID)
+	}
+	if summary := projection.SummaryText(); summary != "" {
+		details = append(details, "receipt: "+summary)
 	}
 	return details
 }

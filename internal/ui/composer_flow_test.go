@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -66,8 +67,82 @@ func TestComposerQueuesOneFollowUpAndShowsReceipt(t *testing.T) {
 	if got := m.input.Value(); got != "" {
 		t.Fatalf("queued slot accepted a second hidden draft: %q", got)
 	}
-	if status := ansi.Strip(m.renderStatusLine()); !strings.Contains(status, "follow-up queued") {
-		t.Fatalf("working status omitted queue receipt: %q", status)
+	view := ansi.Strip(m.View().Content)
+	for _, want := range []string{"queued", "check the tests after this", "↑ edit", "esc clear"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("visible queue receipt omitted %q:\n%s", want, view)
+		}
+	}
+	if status := ansi.Strip(m.renderStatusLine()); strings.Contains(status, "follow-up queued") || strings.Contains(status, "check the tests") {
+		t.Fatalf("working status duplicated the visible queue row: %q", status)
+	}
+}
+
+func TestUpEditsQueuedFollowUpBeforeHistory(t *testing.T) {
+	m := newTestModel(t)
+	m.state = StateStreaming
+	m.queuedFollowUp = &queuedFollowUp{Prompt: "revise the queued instruction"}
+	m.pushHistory("older prompt")
+
+	updated, _ := m.Update(upKey())
+	m = updated.(*Model)
+	if m.queuedFollowUp != nil {
+		t.Fatalf("Up left queued follow-up hidden: %#v", m.queuedFollowUp)
+	}
+	if got := m.input.Value(); got != "revise the queued instruction" {
+		t.Fatalf("Up restored composer = %q", got)
+	}
+	if m.historyIndex != -1 {
+		t.Fatalf("Up navigated history before editing queue: index=%d", m.historyIndex)
+	}
+	if !m.composerEditable() {
+		t.Fatal("edited queued follow-up did not return composer authority")
+	}
+}
+
+func TestEscapeClearsQueueBeforeCancellingRun(t *testing.T) {
+	m := newTestModel(t)
+	m.state = StateStreaming
+	m.queuedFollowUp = &queuedFollowUp{Prompt: "keep the active run"}
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancel = cancel
+
+	updated, _ := m.Update(escKey())
+	m = updated.(*Model)
+	if m.queuedFollowUp != nil {
+		t.Fatalf("first Escape did not clear queue: %#v", m.queuedFollowUp)
+	}
+	select {
+	case <-ctx.Done():
+		t.Fatal("first Escape cancelled the run while clearing the queue")
+	default:
+	}
+
+	_, _ = m.Update(escKey())
+	select {
+	case <-ctx.Done():
+	default:
+		t.Fatal("second Escape did not reach active-run cancellation")
+	}
+}
+
+func TestQueuedFollowUpPreviewStaysOnOneBoundedRow(t *testing.T) {
+	for _, width := range []int{30, 48, 100} {
+		m := newTestModel(t)
+		m.width = width
+		m.state = StateStreaming
+		m.queuedFollowUp = &queuedFollowUp{Prompt: strings.Repeat("inspect the focused behavior ", 10)}
+
+		preview := ansi.Strip(m.renderQueuedFollowUp())
+		if strings.Contains(preview, "\n") {
+			t.Fatalf("width %d queue preview wrapped: %q", width, preview)
+		}
+		if got := lipgloss.Width(preview); got == 0 || got > m.chatPaneWidth() {
+			t.Fatalf("width %d queue preview width = %d, pane = %d: %q", width, got, m.chatPaneWidth(), preview)
+		}
+		if !strings.Contains(preview, "queued") {
+			t.Fatalf("width %d queue preview lost identity: %q", width, preview)
+		}
 	}
 }
 

@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	fixtureModel = "qwen3.5:2b"
+	fixtureModel = "qwen3.5:0.8b"
 	fixturePath  = "approval-probe.txt"
 )
 
@@ -99,7 +99,7 @@ func run() int {
 		serveDone <- server.Serve(listener)
 	}()
 
-	cmd := exec.Command(binary)
+	cmd := exec.Command(binary, "-model", fixtureModel)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -182,6 +182,15 @@ func fixtureHandler(state *fixtureState) http.Handler {
 
 		switch call := state.nextChat(); call {
 		case 1:
+			// Emit provider-native reasoning before the tool request so the terminal
+			// spec covers the live transcript hierarchy independently from the
+			// operational cancel/queue footer.
+			writeNDJSON(w, map[string]any{
+				"message": map[string]any{
+					"role": "assistant", "thinking": "Checking workspace policy before the write.",
+				},
+				"done": false,
+			})
 			timer := time.NewTimer(3 * time.Second)
 			defer timer.Stop()
 			select {

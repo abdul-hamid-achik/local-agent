@@ -1,8 +1,8 @@
   you ───────────────────────────────────────────────────────────────────────────
   Create approval-probe.txt with the exact text must not be written.
 
-
-
+  assistant ─────────────────────────────────────────────────────────────────────
+  │ Thinking… · Checking workspace policy before the write.
 
  ╭──────────────────────────────────────────────────────────────────────────────────────╮
  │ Permission · write                                                                   │

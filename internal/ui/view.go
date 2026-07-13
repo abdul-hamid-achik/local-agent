@@ -13,7 +13,12 @@ import (
 
 func (m *Model) View() tea.View {
 	if !m.ready {
-		return tea.NewView("  initializing...")
+		// Bubble Tea has not delivered terminal dimensions yet, so centering would
+		// be guesswork. Keep the same product identity and startup language as the
+		// full shell instead of flashing an unrelated debug placeholder.
+		v := tea.NewView("LOCAL AGENT\nStarting…")
+		v.AltScreen = true
+		return v
 	}
 	if hint := m.narrowTerminalHint(); hint != "" {
 		return m.renderNarrowTerminalView(hint)
@@ -46,6 +51,11 @@ func (m *Model) View() tea.View {
 		input := m.input
 		input.SetVirtualCursor(false)
 		content.WriteString(strings.Repeat("\n", max(0, lipgloss.Height(input.View())-1)))
+	} else if m.queuedFollowUp != nil {
+		// The queue owns one stable footer row until it dispatches, is restored
+		// after failure, or the user edits/clears it. Never hide pending input in
+		// model state with no visible recovery path.
+		content.WriteString(m.renderQueuedFollowUp())
 	} else if m.composerEditable() {
 		// Render a local copy with Bubbles' virtual cursor disabled. The same
 		// copy supplies the one real cursor owned by this top-level view.
@@ -355,6 +365,12 @@ func (m *Model) renderStatusLine() string {
 	if m.state != StateIdle || m.composerIsBusy() {
 		return m.renderWorkingLine()
 	}
+	if m.standaloneRecovery != nil {
+		return m.renderDecisionPrompt(
+			"Recovery paused", "",
+			keyHint{Key: "/recover", Action: "inspect"},
+		)
+	}
 	if summary, ok := m.goalStatusSummary(); ok {
 		return m.renderGoalFooterStatus(summary, paneW)
 	}
@@ -588,13 +604,6 @@ func entriesFromMessages(msgs []llm.Message) []ChatEntry {
 func (m *Model) renderEntries() string {
 	contentW := m.chatContentWidth()
 
-	// Startup progress screen.
-	if m.initializing {
-		var b strings.Builder
-		m.renderStartup(&b)
-		return b.String()
-	}
-
 	// Welcome message when no user messages yet
 	hasUserMsg := false
 	for _, e := range m.entries {
@@ -642,7 +651,7 @@ func (m *Model) renderEntries() string {
 				last := m.entries[len(m.entries)-1]
 				b.WriteString(transcriptEntrySeparator(last.Kind, "assistant"))
 			}
-			m.renderStreamingMsg(&b, m.streamBuf.String(), contentW)
+			m.renderStreamingMsg(&b, m.streamBuf.String(), contentW, !assistantTurnStarted(m.entries))
 			return b.String()
 		}
 		return m.cachedEntriesRender
@@ -654,14 +663,16 @@ func (m *Model) renderEntries() string {
 	renderedLines := 0
 	previousKind := ""
 	renderedAny := false
+	assistantStarted := false
 
 	for _, entry := range m.entries {
 		var entryView strings.Builder
 		switch entry.Kind {
 		case "user":
+			assistantStarted = false
 			m.renderUserMsg(&entryView, entry.Content, contentW)
 		case "assistant":
-			m.renderAssistantMsg(&entryView, entry, contentW)
+			m.renderAssistantMsg(&entryView, entry, contentW, !assistantStarted)
 		case "tool_group":
 			m.renderToolGroup(&entryView, entry.ToolIndex)
 		case "error":
@@ -673,6 +684,9 @@ func (m *Model) renderEntries() string {
 		chunk := strings.TrimRight(entryView.String(), "\n")
 		if chunk == "" {
 			continue
+		}
+		if entry.Kind == "assistant" {
+			assistantStarted = true
 		}
 
 		if renderedAny {
@@ -705,7 +719,7 @@ func (m *Model) renderEntries() string {
 		if renderedAny {
 			b.WriteString(transcriptEntrySeparator(previousKind, "assistant"))
 		}
-		m.renderStreamingMsg(&b, m.streamBuf.String(), contentW)
+		m.renderStreamingMsg(&b, m.streamBuf.String(), contentW, !assistantStarted)
 	}
 
 	return b.String()
@@ -713,6 +727,25 @@ func (m *Model) renderEntries() string {
 
 func (m *Model) hasLiveTurn() bool {
 	return strings.TrimSpace(m.streamBuf.String()) != "" || strings.TrimSpace(m.thinkBuf.String()) != ""
+}
+
+// assistantTurnStarted reports whether the current user turn already owns an
+// assistant header. Tool receipts can split provider output into several
+// durable transcript segments; they must not create a new role header each
+// time reasoning resumes.
+func assistantTurnStarted(entries []ChatEntry) bool {
+	for index := len(entries) - 1; index >= 0; index-- {
+		switch entries[index].Kind {
+		case "user":
+			return false
+		case "assistant":
+			if strings.TrimSpace(entries[index].Content) != "" ||
+				strings.TrimSpace(entries[index].ThinkingContent) != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // transcriptEntrySeparator is the single owner of vertical rhythm between
@@ -763,38 +796,18 @@ func (m *Model) renderWelcome(b *strings.Builder) {
 	writeLine(m.styles.StatusText, trust)
 
 	var infoParts []string
-	if m.initializing {
-		infoParts = append(infoParts, "Starting local services…")
-	} else {
-		presentedMode := m.presentedMode()
-		if presentedMode != ModeNormal {
-			infoParts = append(infoParts, m.modeConfigs[presentedMode].Label)
-		}
-		if model := sanitizeTerminalSingleLine(m.model); model != "" {
-			infoParts = append(infoParts, model)
-		}
-		if m.ollamaOffline {
-			infoParts = append(infoParts, "offline")
-		}
+	presentedMode := m.presentedMode()
+	if presentedMode != ModeNormal {
+		infoParts = append(infoParts, m.modeConfigs[presentedMode].Label)
+	}
+	if model := sanitizeTerminalSingleLine(m.model); model != "" {
+		infoParts = append(infoParts, model)
+	}
+	if m.ollamaOffline {
+		infoParts = append(infoParts, "offline")
 	}
 	if len(infoParts) > 0 {
 		writeLine(m.styles.StatusText, strings.Join(infoParts, " · "))
-	}
-	if m.initializing && len(m.startupItems) > 0 {
-		for _, item := range m.startupItems {
-			icon := m.spin.View()
-			switch item.Status {
-			case "connected":
-				icon = m.styles.StatusDot.Render("✓")
-			case "failed":
-				icon = m.styles.ErrorText.Render("!")
-			}
-			line := icon + " " + sanitizeStartupDetail(item.Label)
-			if detail := sanitizeStartupDetail(item.Detail); detail != "" {
-				line += " · " + detail
-			}
-			writeLine(m.styles.StatusText, line)
-		}
 	}
 
 	if micro {
@@ -830,7 +843,7 @@ func (m *Model) renderUserMsg(b *strings.Builder, content string, contentW int) 
 
 // renderAssistantMsg renders a completed assistant message block.
 // Uses cached RenderedContent if available (snap-into-place pattern).
-func (m *Model) renderAssistantMsg(b *strings.Builder, entry ChatEntry, contentW int) {
+func (m *Model) renderAssistantMsg(b *strings.Builder, entry ChatEntry, contentW int, showHeader bool) {
 	content := sanitizeTerminalMultiline(entry.Content)
 	hasContent := strings.TrimSpace(content) != ""
 	hasThinking := strings.TrimSpace(entry.ThinkingContent) != ""
@@ -838,22 +851,9 @@ func (m *Model) renderAssistantMsg(b *strings.Builder, entry ChatEntry, contentW
 		return
 	}
 
-	// A tool-call segment can contain reasoning without user-facing prose. Keep
-	// that receipt compact instead of rendering an empty `assistant` role block.
-	if !hasContent {
-		b.WriteString(indentBlock(m.renderThinkingBox(entry.ThinkingContent, entry.ThinkingCollapsed), "  "))
-		b.WriteString("\n")
-		return
+	if showHeader {
+		m.renderAssistantHeader(b, contentW)
 	}
-
-	label := m.styles.AsstLabel.Render("assistant")
-	labelW := lipgloss.Width(label)
-	ruleW := contentW - labelW - 3
-	if ruleW < 4 {
-		ruleW = 4
-	}
-	b.WriteString(label + " " + m.styles.RoleRule.Render(rule(ruleW)))
-	b.WriteString("\n")
 
 	// Reasoning belongs to this assistant turn, so its disclosure follows the
 	// role header instead of appearing as an unowned block above it.
@@ -861,6 +861,9 @@ func (m *Model) renderAssistantMsg(b *strings.Builder, entry ChatEntry, contentW
 		thinkBox := m.renderThinkingBox(entry.ThinkingContent, entry.ThinkingCollapsed)
 		b.WriteString(indentBlock(thinkBox, "  "))
 		b.WriteString("\n")
+	}
+	if !hasContent {
+		return
 	}
 
 	// Use cached rendered content if available.
@@ -884,7 +887,7 @@ func (m *Model) renderAssistantMsg(b *strings.Builder, entry ChatEntry, contentW
 }
 
 // renderStreamingMsg renders the in-progress assistant message (plain text).
-func (m *Model) renderStreamingMsg(b *strings.Builder, content string, contentW int) {
+func (m *Model) renderStreamingMsg(b *strings.Builder, content string, contentW int, showHeader bool) {
 	content = sanitizeTerminalMultiline(content)
 	hasContent := strings.TrimSpace(content) != ""
 	hasThinking := strings.TrimSpace(m.thinkBuf.String()) != ""
@@ -892,28 +895,9 @@ func (m *Model) renderStreamingMsg(b *strings.Builder, content string, contentW 
 		return
 	}
 
-	// Provider-native reasoning frequently arrives before any answer prose. A
-	// single live rail communicates progress without a visually empty assistant
-	// message that later snaps into a different hierarchy.
-	if !hasContent {
-		b.WriteString(indentBlock(m.renderLiveThinkingBox(m.thinkBuf.String()), "  "))
-		b.WriteString("\n")
-		return
+	if showHeader {
+		m.renderAssistantHeader(b, contentW)
 	}
-
-	label := m.styles.AsstLabel.Render("assistant")
-	activity := "•"
-	if !m.reducedMotion {
-		activity = m.spin.View()
-	}
-	cursor := m.styles.StreamCursor.Render(" " + activity)
-	labelW := lipgloss.Width(label) + lipgloss.Width(cursor)
-	ruleW := contentW - labelW - 3
-	if ruleW < 4 {
-		ruleW = 4
-	}
-	b.WriteString(label + cursor + " " + m.styles.RoleRule.Render(rule(ruleW)))
-	b.WriteString("\n")
 
 	// Live reasoning uses the same assistant-owned hierarchy as the completed
 	// disclosure. Keeping it compact prevents token-by-token height jitter; the
@@ -921,6 +905,9 @@ func (m *Model) renderStreamingMsg(b *strings.Builder, content string, contentW 
 	if hasThinking {
 		b.WriteString(indentBlock(m.renderLiveThinkingBox(m.thinkBuf.String()), "  "))
 		b.WriteString("\n")
+	}
+	if !hasContent {
+		return
 	}
 
 	// During streaming: render the stable markdown prefix with Glamour (cached)
@@ -947,6 +934,17 @@ func (m *Model) renderStreamingMsg(b *strings.Builder, content string, contentW 
 		b.WriteString(indentBlock(wrapText(tail, wrapWidth), "  "))
 		b.WriteString("\n")
 	}
+}
+
+func (m *Model) renderAssistantHeader(b *strings.Builder, contentW int) {
+	label := m.styles.AsstLabel.Render("assistant")
+	// The operational footer owns the one active animation. Keeping the role
+	// header static makes streamed reasoning feel like transcript content rather
+	// than a second competing progress indicator.
+	labelW := lipgloss.Width(label)
+	ruleW := max(4, contentW-labelW-3)
+	b.WriteString(label + " " + m.styles.RoleRule.Render(rule(ruleW)))
+	b.WriteString("\n")
 }
 
 // renderToolGroup renders one tight tool receipt. The parent transcript owns

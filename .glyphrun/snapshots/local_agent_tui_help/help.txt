@@ -30,5 +30,6 @@
                              │ Input Shortcuts                                            │
                              │   @file             Attach file or agent                   │
                              │   #skill            Activate skill                         │
-─────────────────────────────│   /cmd              Run slash command                      │────────────────────────────
-                             │ esc/q close · ↓ more                                       │
+                             │   /cmd              Run slash command                      │
+─────────────────────────────│ esc/q close · ↓ more                                       │────────────────────────────
+                             ╰────────────────────────────────────────────────────────────╯

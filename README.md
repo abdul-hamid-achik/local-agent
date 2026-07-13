@@ -652,16 +652,16 @@ go test ./internal/agent -run TestName
 go test -race ./...
 ```
 
-Glyphrun specs under `specs/glyphrun/` cover CLI help/version/init/log behavior,
+Glyphrun specs under `specs/` cover CLI help/version/init/log behavior,
 goal-recovery help and fail-closed read-only/apply validation, the normal-width
 launch, the 30×12 minimum, canonical command discovery, the durable-goal form
 and safe local fallback, full-width narrow-terminal settings/help flow, and
 clean quits.
 
-With `qwen3.5:4b` installed in Ollama, run the opt-in live small-model/tool proof separately:
+With `qwen3.5:0.8b` installed in Ollama, run the opt-in live constrained-model/tool proof separately:
 
 ```bash
-glyph run specs/glyphrun/live_ollama_tool.yml --format md
+glyph run specs/live_ollama_tool.yml --format md
 ```
 
 ## License

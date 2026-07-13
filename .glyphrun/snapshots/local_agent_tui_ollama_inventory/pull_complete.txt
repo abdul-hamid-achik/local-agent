@@ -8,6 +8,7 @@
 
 
                                        LOCAL AGENT
+                      Local-first · Ollama · tool effects ask first
                ╭──────────────────────────────────────────────────────────╮
                │ Add Ollama model                                         │
                │ ✓ tiny-code:latest is available                          │

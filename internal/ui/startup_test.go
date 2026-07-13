@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestStartupProgressRendersInMainPane(t *testing.T) {
+func TestStartupKeepsStableWelcomeShellAndOneFooterProgressLine(t *testing.T) {
 	m := newTestModel(t)
 	m.initializing = true
 	updated, _ := m.Update(StartupStatusMsg{
@@ -18,15 +18,46 @@ func TestStartupProgressRendersInMainPane(t *testing.T) {
 	m = updated.(*Model)
 
 	content := m.renderEntries()
-	for _, want := range []string{"Starting local services", "Ollama", "line one line two", "MCP", "details available in logs"} {
+	for _, want := range []string{"LOCAL AGENT", "Local-first", "enter send"} {
 		if !strings.Contains(content, want) {
-			t.Errorf("startup pane missing %q:\n%s", want, content)
+			t.Errorf("stable startup shell missing %q:\n%s", want, content)
 		}
 	}
-	if strings.Contains(m.renderStatusLine(), "ready") {
-		t.Fatalf("initializing status claimed readiness: %q", m.renderStatusLine())
+	for _, hidden := range []string{"line one line two", "details available in logs"} {
+		if strings.Contains(content, hidden) {
+			t.Errorf("startup shell exposed per-service detail %q:\n%s", hidden, content)
+		}
+	}
+	status := m.renderStatusLine()
+	for _, want := range []string{"Starting", "local runtime", "1/2"} {
+		if !strings.Contains(status, want) {
+			t.Fatalf("startup footer omitted %q: %q", want, status)
+		}
+	}
+	if strings.Contains(strings.ToLower(status), "ready") {
+		t.Fatalf("initializing status claimed readiness: %q", status)
 	}
 	assertRenderedLinesFit(t, content, m.chatPaneWidth())
+
+	m.initializing = false
+	m.startupItems = nil
+	if settled := m.renderEntries(); settled != content {
+		t.Fatalf("welcome shell jumped when startup settled:\nduring:\n%s\nafter:\n%s", content, settled)
+	}
+}
+
+func TestPreWindowStartupUsesProductShellInsteadOfDebugPlaceholder(t *testing.T) {
+	m := newTestModel(t)
+	m.ready = false
+	view := m.View()
+	for _, want := range []string{"LOCAL AGENT", "Starting"} {
+		if !strings.Contains(view.Content, want) {
+			t.Fatalf("pre-window startup omitted %q: %q", want, view.Content)
+		}
+	}
+	if strings.Contains(strings.ToLower(view.Content), "initializing") {
+		t.Fatalf("pre-window startup leaked implementation placeholder: %q", view.Content)
+	}
 }
 
 func TestStartupStatusUpdatesByID(t *testing.T) {

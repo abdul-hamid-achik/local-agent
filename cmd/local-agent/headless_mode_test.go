@@ -3,6 +3,7 @@ package main
 import (
 	"testing"
 
+	"github.com/abdul-hamid-achik/local-agent/internal/agent"
 	"github.com/abdul-hamid-achik/local-agent/internal/ui"
 )
 
@@ -31,5 +32,22 @@ func TestParseHeadlessMode(t *testing.T) {
 				t.Fatalf("parseHeadlessMode() = %v, want %v", got, test.want)
 			}
 		})
+	}
+}
+
+func TestHeadlessAuthorityMode(t *testing.T) {
+	tests := []struct {
+		mode ui.Mode
+		want agent.AuthorityMode
+	}{
+		{mode: ui.ModeNormal, want: agent.AuthorityNormal},
+		{mode: ui.ModePlan, want: agent.AuthorityPlan},
+		{mode: ui.ModeAuto, want: agent.AuthorityAutoScoped},
+		{mode: ui.Mode(99), want: agent.AuthorityNormal},
+	}
+	for _, test := range tests {
+		if got := headlessAuthorityMode(test.mode); got != test.want {
+			t.Fatalf("headless authority for %v = %v, want %v", test.mode, got, test.want)
+		}
 	}
 }

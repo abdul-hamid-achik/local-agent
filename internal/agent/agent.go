@@ -34,6 +34,7 @@ type Agent struct {
 	router           config.ModelRouter
 	modePrefix       string
 	toolPolicy       ToolPolicy
+	authorityMode    AuthorityMode
 	workDir          string
 	ignoreContent    string
 	permChecker      *permission.Checker
@@ -53,6 +54,7 @@ type Agent struct {
 	hooks          []ToolHook
 	mcpServerScope map[string]struct{}
 	mcpScopeSet    bool
+	trustedMCP     map[string]trustedMCPImplementation
 
 	checkpointStore     CheckpointStore
 	checkpointSessionID int64
@@ -94,9 +96,11 @@ func New(llmClient llm.Client, registry *mcp.Registry, numCtx int) *Agent {
 		registry:          registry,
 		numCtx:            numCtx,
 		toolPolicy:        DefaultToolPolicy(),
+		authorityMode:     AuthorityNormal,
 		executionRunID:    runID,
 		executionRunIDErr: runIDErr,
 		approvalGrants:    make(map[string]struct{}),
+		trustedMCP:        make(map[string]trustedMCPImplementation),
 		// Filesystem reads can enter OS syscalls that do not observe context
 		// cancellation. Allow at most one abandoned worker for the lifetime of
 		// an Agent; later reads wait on this slot and remain cancellable.

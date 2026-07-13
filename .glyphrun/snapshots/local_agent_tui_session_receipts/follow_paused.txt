@@ -1,7 +1,8 @@
+  you ───────────────────────────────────────────────────────────────────────────────────────────────
   Review the release receipts.
 
   assistant ─────────────────────────────────────────────────────────────────────────────────────────
-  │ ▾ reasoning · 1 line · ctrl+t collapse
+  │ ▾ Thought
   │ The saved run includes one successful read and one failed test command.
 
     I checked the saved verification receipts.
@@ -11,7 +12,6 @@
   │ args: path=internal/ui/view.go
   │ package ui
   │
-  │ func renderFixture() string { return "ready" }
 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
   Follow paused · end latest
 ▏❯ Ask, @mention files, or type /help
