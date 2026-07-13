@@ -227,17 +227,15 @@ func run() int {
 		}
 	}
 	var memStore *memory.Store
-	var legacyMemoryNotice string
 	if workspace == "" {
 		log.Printf("warning: project memory disabled: workspace identity is unavailable")
 	} else {
-		legacyMemoryNotice = legacyMemoryQuarantineNotice(workspace)
-		if legacyMemoryNotice != "" {
-			if *promptFlag != "" {
-				fmt.Fprintln(os.Stderr, "memory:", legacyMemoryNotice)
-			} else {
-				log.Printf("memory: %s", legacyMemoryNotice)
-			}
+		// Interactive users can inspect and explicitly attribute quarantined
+		// memory with /migrate-memory. Keep that optional maintenance state out
+		// of the startup transcript; headless runs retain an stderr diagnostic
+		// because they have no interactive maintenance surface.
+		if notice := legacyMemoryNoticeForLaunch(workspace, *promptFlag != ""); notice != "" {
+			fmt.Fprintln(os.Stderr, "memory:", notice)
 		}
 		memStore = memory.NewStore(memory.DefaultPathForWorkspace(workspace))
 		if err := memStore.Err(); err != nil {
@@ -526,9 +524,6 @@ func run() int {
 
 	go func() {
 		defer close(initDone)
-		if legacyMemoryNotice != "" {
-			p.Send(ui.StartupStatusMsg{ID: "legacy:memory", Label: "Legacy memory", Status: "failed", Detail: legacyMemoryNotice})
-		}
 
 		// 1. Ping Ollama.
 		p.Send(ui.StartupStatusMsg{ID: "ollama", Label: "Ollama (" + modelName + ")", Status: "connecting"})
@@ -627,14 +622,6 @@ func run() int {
 		for index := range ollamaModels {
 			ollamaModels[index].EffectiveContext = modelManager.ContextPolicy(ollamaModels[index].Name).Effective
 		}
-		var failedServers []ui.FailedServer
-		for _, fs := range registry.FailedServers() {
-			failedServers = append(failedServers, ui.FailedServer{
-				Name:   fs.Name,
-				Reason: fs.Reason,
-			})
-		}
-
 		p.Send(ui.InitCompleteMsg{
 			Model:                    modelName,
 			ModelList:                modelList,
@@ -647,7 +634,6 @@ func run() int {
 			ToolCount:                ag.ToolCount(),
 			ServerCount:              registry.ServerCount(),
 			NumCtx:                   modelManager.NumCtx(),
-			FailedServers:            failedServers,
 			ICEEnabled:               iceEnabled,
 			ICEConversations:         iceConversations,
 			ICESessionID:             iceSessionID,
@@ -741,26 +727,6 @@ func applyWorkspaceIgnore(ag *agent.Agent, workDir string) error {
 		ag.SetIgnoreContent(ignore.Raw())
 	}
 	return nil
-}
-
-// legacyMemoryQuarantineNotice performs read-only startup inventory. Startup,
-// including headless mode, must never assign provenance-free memory to the
-// first working directory that happens to launch local-agent.
-func legacyMemoryQuarantineNotice(workspace string) string {
-	preview, err := memory.PreviewDefaultLegacyForWorkspace(workspace)
-	if err != nil {
-		// A completed claim belongs to exactly one workspace. Other workspaces
-		// already use their own scoped store, so repeating that durable receipt
-		// on every launch is noise rather than an actionable startup failure.
-		if errors.Is(err, memory.ErrLegacyMemoryClaimedByAnotherWorkspace) {
-			return ""
-		}
-		return fmt.Sprintf("legacy memory remains quarantined: %v", err)
-	}
-	if !preview.AlreadyClaimed && preview.Count > 0 {
-		return fmt.Sprintf("%d provenance-free memories quarantined; open the TUI and use /migrate-memory to preview explicit attribution", preview.Count)
-	}
-	return ""
 }
 
 // handleLogs implements the "logs" subcommand.

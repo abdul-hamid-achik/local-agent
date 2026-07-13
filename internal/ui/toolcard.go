@@ -244,18 +244,27 @@ func (c ToolCard) ViewWithActivity(width int, activityGlyph string, elapsed time
 			lines = append(lines, c.Styles.Dimmed.Render(truncateDisplay("args: "+c.Args, inner)))
 		}
 	}
-	if c.State == ToolCardError || (c.Expanded && c.State != ToolCardRunning) {
-		result := strings.TrimRight(c.Result, "\n")
-		if c.State == ToolCardError && strings.TrimSpace(result) == "" {
-			result = "(no error details)"
-		}
-		if result != "" {
-			resultStyle := c.Styles.Result
-			if c.State == ToolCardError {
-				resultStyle = c.Styles.Error
+	if c.State == ToolCardError {
+		compact := compactToolFailure(c.Name, c.Result)
+		if compact != "" {
+			for _, resultLine := range strings.Split(compact, "\n") {
+				lines = append(lines, c.Styles.Error.Render(truncateDisplay(resultLine, inner)))
 			}
+		}
+		if c.Expanded {
+			raw := strings.TrimRight(c.Result, "\n")
+			if raw != "" && sanitizeVisibleText(raw) != sanitizeVisibleText(compact) {
+				lines = append(lines, c.Styles.Dimmed.Render(truncateDisplay("details:", inner)))
+				for _, resultLine := range strings.Split(raw, "\n") {
+					lines = append(lines, c.Styles.Error.Render(truncateDisplay(resultLine, inner)))
+				}
+			}
+		}
+	} else if c.Expanded && c.State != ToolCardRunning {
+		result := strings.TrimRight(c.Result, "\n")
+		if result != "" {
 			for _, resultLine := range strings.Split(result, "\n") {
-				lines = append(lines, resultStyle.Render(truncateDisplay(resultLine, inner)))
+				lines = append(lines, c.Styles.Result.Render(truncateDisplay(resultLine, inner)))
 			}
 		}
 	}

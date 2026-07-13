@@ -15,6 +15,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/agent"
+	"github.com/abdul-hamid-achik/local-agent/internal/command"
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
 	"github.com/abdul-hamid-achik/local-agent/internal/goal"
 	"github.com/abdul-hamid-achik/local-agent/internal/goaladvisor"
@@ -872,13 +873,16 @@ func TestGoalOpenFailurePausesWithoutProviderDispatch(t *testing.T) {
 	}
 }
 
-func TestAutoPromptOpensReviewedInferredDraft(t *testing.T) {
+func TestExplicitGoalPromptOpensReviewedInferredDraft(t *testing.T) {
 	m := newGoalRuntimeTestModel(t, &goalCountingClient{})
-	if cmd := m.handleAutoModeSubmit("Polish the goal workflow"); cmd != nil {
+	if cmd := m.handleCommandAction(command.Result{
+		Action: command.ActionOpenGoal,
+		Goal:   &command.GoalRequest{Prompt: "Polish the goal workflow"},
+	}); cmd != nil {
 		t.Fatal("draft review dispatched work")
 	}
 	if m.goalFormState == nil || !m.goalFormState.draftFromPrompt {
-		t.Fatal("AUTO prompt did not open an inferred draft review")
+		t.Fatal("explicit /goal prompt did not open an inferred draft review")
 	}
 	values, err := m.goalFormState.Values()
 	if err != nil {

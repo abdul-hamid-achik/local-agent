@@ -46,6 +46,8 @@ func (m *Model) buildHelpContent(innerW int) string {
 		{"@file", "Attach file or agent"},
 		{"#skill", "Activate skill"},
 		{"/cmd", "Run slash command"},
+		{"enter (running)", "Queue one follow-up; it sends after the current turn settles successfully"},
+		{"esc (running)", "Cancel the turn; a queued follow-up returns to the composer"},
 	}
 
 	m.writeHelpRows(&b, inputShortcuts, innerW)

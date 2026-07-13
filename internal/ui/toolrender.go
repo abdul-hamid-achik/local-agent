@@ -66,6 +66,9 @@ func toolSummary(tt ToolType, te ToolEntry) string {
 	if te.RawArgs == nil {
 		return ""
 	}
+	if summary := ecosystemToolSummary(te.Name, te.RawArgs); summary != "" {
+		return summary
+	}
 	switch tt {
 	case ToolTypeBash:
 		if cmd, ok := te.RawArgs["command"].(string); ok {

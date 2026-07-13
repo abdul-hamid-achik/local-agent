@@ -118,15 +118,29 @@ const (
 	ApprovalYolo          Approval = "yolo"
 	ApprovalEmbedding     Approval = "embedding"
 	ApprovalOnce          Approval = "once"
-	ApprovalAlways        Approval = "always"
-	ApprovalDenied        Approval = "denied"
+	// ApprovalSession reuses the historical "always" wire value so existing
+	// append-only ledgers remain readable. Runtime semantics are now bounded to
+	// this Agent session and exact request; no global policy is persisted.
+	ApprovalSession Approval = "always"
+	// ApprovalAlways is retained only to decode and compile legacy callers.
+	ApprovalAlways       Approval = ApprovalSession
+	ApprovalUserDenied   Approval = "denied"
+	ApprovalPolicyDenied Approval = ApprovalUserDenied
+	// Host refusals and cancellations are distinguished by EventFailed and
+	// EventCancelled respectively. Reusing not_applicable preserves the stable
+	// database wire contract while ensuring neither is EventDenied.
+	ApprovalHostRefused Approval = ApprovalNotApplicable
+	ApprovalCancelled   Approval = ApprovalNotApplicable
+	// ApprovalDenied is retained as a source-compatible alias for old callers.
+	// New lifecycle code must choose user_denied or policy_denied explicitly.
+	ApprovalDenied Approval = ApprovalUserDenied
 )
 
 func (a Approval) Valid() bool {
 	switch a {
 	case ApprovalNotApplicable, ApprovalRequested, ApprovalPolicy, ApprovalYolo,
 		ApprovalEmbedding,
-		ApprovalOnce, ApprovalAlways, ApprovalDenied:
+		ApprovalOnce, ApprovalSession, ApprovalUserDenied:
 		return true
 	default:
 		return false

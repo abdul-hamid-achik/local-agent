@@ -21,7 +21,29 @@ var (
 	ErrTurnEvalBudgetExhausted   = errors.New("turn evaluation-token budget exhausted")
 	ErrTurnContextBudgetExceeded = errors.New("turn context budget exceeded")
 	ErrMalformedToolLoop         = errors.New("model repeatedly returned malformed tool requests")
+	ErrRepeatedHostRefusal       = errors.New("model repeatedly submitted an identical request refused by the approval host")
 )
+
+const maxIdenticalHostRefusals = 2
+
+// RepeatedHostRefusalError stops an impossible approval loop without
+// misreporting the host's refusal as a user denial.
+type RepeatedHostRefusalError struct {
+	ToolName      string
+	ArgumentsHash string
+	Code          string
+	Attempts      int
+}
+
+func (e *RepeatedHostRefusalError) Error() string {
+	if e == nil {
+		return ErrRepeatedHostRefusal.Error()
+	}
+	return fmt.Sprintf("%v: tool=%q arguments=%s code=%q attempts=%d; change the request or approval renderer before retrying",
+		ErrRepeatedHostRefusal, e.ToolName, e.ArgumentsHash, e.Code, e.Attempts)
+}
+
+func (e *RepeatedHostRefusalError) Unwrap() error { return ErrRepeatedHostRefusal }
 
 // TurnContextBudgetError reports that a bounded turn cannot safely make its
 // next provider request without exceeding the active model's context window.
@@ -212,6 +234,7 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 	var totalEvalTokens int64
 	var retryCount int
 	var malformedToolIterations int
+	hostRefusalCounts := make(map[string]int)
 
 	maxIters := a.MaxIterations()
 
@@ -492,7 +515,7 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 			switch kind {
 			case executionPkg.KindMemory:
 				if !a.toolPolicy.AllowsMemory(tc.Name) {
-					if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventDenied, executionPkg.ApprovalDenied, "", "blocked by active mode")); err != nil {
+					if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventDenied, executionPkg.ApprovalPolicyDenied, "", "blocked by active mode")); err != nil {
 						return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
 					}
 					a.blockedToolCall(tc, out)
@@ -501,7 +524,7 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 				requiresApproval = memoryToolRequiresApproval(tc.Name)
 			case executionPkg.KindBuiltin:
 				if !a.toolPolicy.AllowsBuiltin(tc.Name) {
-					if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventDenied, executionPkg.ApprovalDenied, "", "blocked by active mode")); err != nil {
+					if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventDenied, executionPkg.ApprovalPolicyDenied, "", "blocked by active mode")); err != nil {
 						return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
 					}
 					a.blockedToolCall(tc, out)
@@ -510,14 +533,14 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 				requiresApproval = builtinToolRequiresApproval(tc.Name)
 			case executionPkg.KindMCP:
 				if !a.toolPolicy.AllowMCP {
-					if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventDenied, executionPkg.ApprovalDenied, "", "MCP blocked by active mode")); err != nil {
+					if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventDenied, executionPkg.ApprovalPolicyDenied, "", "MCP blocked by active mode")); err != nil {
 						return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
 					}
 					a.blockedToolCall(tc, out)
 					continue
 				}
 				if !a.allowsMCPTool(tc.Name) {
-					if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventDenied, executionPkg.ApprovalDenied, "", "blocked by active agent profile MCP scope")); err != nil {
+					if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventDenied, executionPkg.ApprovalPolicyDenied, "", "blocked by active agent profile MCP scope")); err != nil {
 						return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
 					}
 					a.deniedToolCall(tc, out, "tool call blocked by active agent profile MCP scope")
@@ -544,7 +567,7 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 			tracked.effectiveHash = effectiveHash
 			toolCalls[toolIndex] = tc
 			if block {
-				if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventDenied, executionPkg.ApprovalDenied, reason, "blocked by pre-tool hook")); err != nil {
+				if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventFailed, executionPkg.ApprovalHostRefused, reason, "host pre-tool hook refused request")); err != nil {
 					return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
 				}
 				a.failedToolCall(tc, out, reason, turnNumCtx)
@@ -588,17 +611,49 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 				authorization.approval = executionPkg.ApprovalPolicy
 			}
 			if authorization.cancelled {
-				ctxErr := ctx.Err()
-				if ctxErr == nil {
-					ctxErr = context.Canceled
+				cancelErr := ctx.Err()
+				if cancelErr == nil {
+					cancelErr = context.Canceled
 				}
-				if ledgerErr := a.cancelTrackedToolCalls(ctx, execRuntime, trackedExecutions[toolIndex:], toolCalls[toolIndex:], out, ctxErr); ledgerErr != nil {
+				result := fmt.Sprintf("CANCELLED — NOT DISPATCHED: approval for tool %q was cancelled: %s", tc.Name, authorization.reason)
+				if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventCancelled, executionPkg.ApprovalCancelled, result, "interactive approval cancelled before dispatch")); err != nil {
+					return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
+				}
+				a.failedToolCall(tc, out, result, turnNumCtx)
+				if ledgerErr := a.cancelTrackedToolCalls(ctx, execRuntime, trackedExecutions[toolIndex+1:], toolCalls[toolIndex+1:], out, cancelErr); ledgerErr != nil {
 					return ledgerErr
 				}
-				return ctxErr
+				return cancelErr
 			}
 			if !authorization.allowed {
-				if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventDenied, executionPkg.ApprovalDenied, authorization.reason, "authorization denied before dispatch")); err != nil {
+				if authorization.hostRefused {
+					code := authorization.refusalCode
+					if code == "" {
+						code = "host_refused"
+					}
+					result := fmt.Sprintf("tool request refused by host [%s]: %s. Do not retry unchanged; change the request or approval renderer.", code, authorization.reason)
+					if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventFailed, executionPkg.ApprovalHostRefused, result, "approval host refused request before dispatch")); err != nil {
+						return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
+					}
+					a.failedToolCall(tc, out, result, turnNumCtx)
+					key := tc.Name + "\x00" + tracked.argumentsHash() + "\x00" + code
+					hostRefusalCounts[key]++
+					if hostRefusalCounts[key] >= maxIdenticalHostRefusals {
+						loopErr := &RepeatedHostRefusalError{
+							ToolName:      tc.Name,
+							ArgumentsHash: tracked.argumentsHash(),
+							Code:          code,
+							Attempts:      hostRefusalCounts[key],
+						}
+						if ledgerErr := a.cancelTrackedToolCalls(ctx, execRuntime, trackedExecutions[toolIndex+1:], toolCalls[toolIndex+1:], out, loopErr); ledgerErr != nil {
+							return ledgerErr
+						}
+						out.Error(loopErr.Error())
+						return loopErr
+					}
+					continue
+				}
+				if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventDenied, authorization.approval, authorization.reason, "authorization denied before dispatch")); err != nil {
 					return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
 				}
 				a.deniedToolCall(tc, out, "tool call denied: "+authorization.reason)
@@ -606,9 +661,6 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 			}
 			if err := appendExecutionEvent(ctx, execRuntime, executionEvent(*tracked, executionPkg.EventApproved, authorization.approval, "", "tool execution authorized")); err != nil {
 				return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
-			}
-			if authorization.persistAlways {
-				a.persistAlwaysApproval(tc, out)
 			}
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				if ledgerErr := a.cancelTrackedToolCalls(ctx, execRuntime, trackedExecutions[toolIndex:], toolCalls[toolIndex:], out, ctxErr); ledgerErr != nil {
@@ -953,11 +1005,16 @@ func (a *Agent) authorizeToolCall(ctx context.Context, tc llm.ToolCall, out Outp
 		return false
 	}
 	if !decision.allowed {
+		if decision.hostRefused {
+			code := decision.refusalCode
+			if code == "" {
+				code = "host_refused"
+			}
+			a.failedToolCall(tc, out, fmt.Sprintf("tool request refused by host [%s]: %s", code, decision.reason), a.NumCtx())
+			return false
+		}
 		a.deniedToolCall(tc, out, "tool call denied: "+decision.reason)
 		return false
-	}
-	if decision.persistAlways {
-		a.persistAlwaysApproval(tc, out)
 	}
 	return ctx.Err() == nil
 }

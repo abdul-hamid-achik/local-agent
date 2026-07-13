@@ -552,8 +552,9 @@ func TestRiskyBuiltinFailsClosedWithoutApprovalUI(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(tmpDir, "out.txt")); !os.IsNotExist(err) {
 		t.Fatalf("unapproved write executed, stat err=%v", err)
 	}
-	if !strings.Contains(strings.Join(out.toolResults, "\n"), "explicit approval required") {
-		t.Fatalf("missing denial result: %v", out.toolResults)
+	result := strings.Join(out.toolResults, "\n")
+	if !strings.Contains(result, "approval_ui_unavailable") || strings.Contains(result, "user denied") {
+		t.Fatalf("missing typed host refusal result: %v", out.toolResults)
 	}
 }
 

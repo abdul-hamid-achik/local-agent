@@ -29,7 +29,7 @@ func newModePickerState(current Mode, terminalWidth, terminalHeight int, isDark 
 	definitions := []modeItem{
 		{mode: ModeNormal, title: "NORMAL", description: "Interactive work with approval-gated changes"},
 		{mode: ModePlan, title: "PLAN", description: "Explore and design without mutations"},
-		{mode: ModeAuto, title: "AUTO", description: "Run a durable goal until a verified safe stop"},
+		{mode: ModeAuto, title: "AUTO", description: "Work proactively with configured approvals"},
 	}
 	items := make([]list.Item, len(definitions))
 	selected := 0

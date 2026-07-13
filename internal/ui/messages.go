@@ -147,9 +147,13 @@ type SessionLoadedMsg struct {
 
 // ToolApprovalMsg asks the user to approve a tool call.
 type ToolApprovalMsg struct {
-	ToolName string
-	Args     map[string]any
-	Response chan<- permission.ApprovalResponse
+	RequestID       string
+	ToolName        string
+	Args            map[string]any
+	ArgumentsSHA256 string
+	Preview         permission.ApprovalPreview
+	Scope           permission.ApprovalScope
+	Response        chan<- permission.ApprovalResponse
 }
 
 // CommitResultMsg carries the result of an async /commit operation.

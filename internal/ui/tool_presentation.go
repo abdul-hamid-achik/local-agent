@@ -75,6 +75,63 @@ var toolActionRegistry = map[string]toolActionLabels{
 	"update_plan":        {running: "Updating plan", success: "Updated plan", failure: "Update plan failed"},
 	"tool_search":        {running: "Loading tools", success: "Loaded tools", failure: "Load tools failed"},
 	"task":               {running: "Running task", success: "Completed task", failure: "Task failed"},
+
+	// Cortex keeps durable goals and evidence legible without exposing its MCP
+	// implementation names in the compact transcript.
+	"cortex_start_task":       {running: "Starting case", success: "Started case", failure: "Case start failed"},
+	"cortex_open_task":        {running: "Opening case", success: "Opened case", failure: "Case open failed"},
+	"cortex_investigate":      {running: "Investigating", success: "Investigated", failure: "Investigation failed"},
+	"cortex_plan":             {running: "Planning change", success: "Planned change", failure: "Change plan failed"},
+	"cortex_begin_change":     {running: "Claiming change", success: "Claimed change", failure: "Change claim failed"},
+	"cortex_verify":           {running: "Verifying evidence", success: "Verified evidence", failure: "Verification failed"},
+	"cortex_remember":         {running: "Saving outcome", success: "Saved outcome", failure: "Outcome save failed"},
+	"cortex_status":           {running: "Checking Cortex", success: "Checked Cortex", failure: "Cortex check failed"},
+	"cortex_list_tasks":       {running: "Listing cases", success: "Listed cases", failure: "Case list failed"},
+	"cortex_sessions":         {running: "Listing Cortex sessions", success: "Listed Cortex sessions", failure: "Session list failed"},
+	"cortex_timeline":         {running: "Reading Cortex timeline", success: "Read Cortex timeline", failure: "Timeline read failed"},
+	"cortex_metrics":          {running: "Reading Cortex metrics", success: "Read Cortex metrics", failure: "Metrics read failed"},
+	"cortex_overview":         {running: "Reading Cortex overview", success: "Read Cortex overview", failure: "Overview read failed"},
+	"cortex_archive":          {running: "Archiving case", success: "Archived case", failure: "Case archive failed"},
+	"cortex_unarchive":        {running: "Restoring case", success: "Restored case", failure: "Case restore failed"},
+	"cortex_resolve":          {running: "Resolving hypothesis", success: "Resolved hypothesis", failure: "Hypothesis resolution failed"},
+	"cortex_note":             {running: "Recording evidence", success: "Recorded evidence", failure: "Evidence record failed"},
+	"cortex_request_decision": {running: "Requesting decision", success: "Requested decision", failure: "Decision request failed"},
+	"cortex_answer_decision":  {running: "Recording decision", success: "Recorded decision", failure: "Decision record failed"},
+	"cortex_handoff":          {running: "Reading handoff", success: "Read handoff", failure: "Handoff read failed"},
+	"cortex_abort_task":       {running: "Stopping case", success: "Stopped case", failure: "Case stop failed"},
+	"cortex_read_evidence":    {running: "Reading evidence", success: "Read evidence", failure: "Evidence read failed"},
+	"cortex_read_artifact":    {running: "Reading evidence artifact", success: "Read evidence artifact", failure: "Artifact read failed"},
+	"cortex_recall_cases":     {running: "Recalling related cases", success: "Recalled related cases", failure: "Case recall failed"},
+
+	// Bob is deterministic and read-only over MCP. Use repository language so
+	// users can distinguish inspection from an actual filesystem mutation.
+	"bob_inspect":           {running: "Inspecting repository", success: "Inspected repository", failure: "Repository inspection failed"},
+	"bob_plan":              {running: "Planning repository", success: "Planned repository", failure: "Repository plan failed"},
+	"bob_check":             {running: "Checking repository contract", success: "Checked repository contract", failure: "Repository check failed"},
+	"bob_validate_manifest": {running: "Validating Bob manifest", success: "Validated Bob manifest", failure: "Manifest validation failed"},
+	"bob_recipe_describe":   {running: "Reading Bob recipe", success: "Read Bob recipe", failure: "Recipe read failed"},
+	"bob_stats":             {running: "Reading Bob stats", success: "Read Bob stats", failure: "Bob stats failed"},
+
+	// Monitor has both observation and effectful tools. Action-specific copy
+	// keeps a process termination from looking like a harmless generic call.
+	"monitor_snapshot":        {running: "Reading system health", success: "Read system health", failure: "System health read failed"},
+	"monitor_processes":       {running: "Listing processes", success: "Listed processes", failure: "Process list failed"},
+	"monitor_doctor":          {running: "Checking diagnostic tools", success: "Checked diagnostic tools", failure: "Tool check failed"},
+	"monitor_analyze":         {running: "Analyzing system health", success: "Analyzed system health", failure: "System analysis failed"},
+	"monitor_kill":            {running: "Stopping process", success: "Stopped process", failure: "Process stop failed"},
+	"monitor_profile_capture": {running: "Capturing process profile", success: "Captured process profile", failure: "Profile capture failed"},
+	"monitor_investigate":     {running: "Investigating process", success: "Investigated process", failure: "Process investigation failed"},
+	"monitor_record":          {running: "Recording screen", success: "Recorded screen", failure: "Screen recording failed"},
+
+	// MCPHub management calls remain visibly different from the downstream
+	// action summarized beside the card.
+	"mcphub_list_servers":  {running: "Checking tool connections", success: "Checked tool connections", failure: "Connection check failed"},
+	"mcphub_search_tools":  {running: "Searching ecosystem tools", success: "Searched ecosystem tools", failure: "Tool search failed"},
+	"mcphub_describe_tool": {running: "Reading tool contract", success: "Read tool contract", failure: "Tool contract read failed"},
+	"mcphub_resolve_tool":  {running: "Resolving ecosystem tool", success: "Resolved ecosystem tool", failure: "Tool resolution failed"},
+	"mcphub_call_tool":     {running: "Calling ecosystem tool", success: "Called ecosystem tool", failure: "Ecosystem tool failed"},
+	"mcphub_get_result":    {running: "Reading stored result", success: "Read stored result", failure: "Stored result read failed"},
+	"mcphub_stats":         {running: "Reading MCPHub stats", success: "Read MCPHub stats", failure: "MCPHub stats failed"},
 }
 
 var toolKindRegistry = map[ToolCardKind]toolActionLabels{

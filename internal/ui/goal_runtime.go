@@ -62,41 +62,6 @@ func defaultGoalFormValues(objective string) GoalFormValues {
 	}
 }
 
-func (m *Model) handleAutoModeSubmit(text string) tea.Cmd {
-	if m.goalRuntime == nil {
-		if err := m.openGoalDraftForm(text); err != nil {
-			m.appendGoalError("Start AUTO goal: " + err.Error())
-		}
-		return nil
-	}
-	snapshot, err := m.goalRuntime.Snapshot(context.Background())
-	if err != nil {
-		m.restoreAutoComposerDraft(text)
-		m.appendGoalError("Read AUTO goal: " + err.Error())
-		return nil
-	}
-	if snapshot.State.Terminal() {
-		if err := m.openGoalDraftForm(text); err != nil {
-			m.restoreAutoComposerDraft(text)
-			m.appendGoalError("Start next AUTO goal: " + err.Error())
-		}
-		return nil
-	}
-
-	// AUTO is controlled through durable goal transitions. Do not smuggle an
-	// ordinary prompt around its permit, budget, Cortex, or recovery checks.
-	// Preserve the draft so switching back to NORMAL never loses user input.
-	m.restoreAutoComposerDraft(text)
-	m.appendGoalSystem("AUTO is supervising the active durable goal. Your draft is preserved; use the Goal Inspector to pause, resume, adjust budget, or drop it, or switch to NORMAL for a separate prompt.")
-	return m.showGoal()
-}
-
-func (m *Model) restoreAutoComposerDraft(text string) {
-	m.input.SetValue(text)
-	m.input.CursorEnd()
-	m.syncInputHeight()
-}
-
 func goalFormValuesFromSnapshot(snapshot goal.Snapshot) GoalFormValues {
 	criteria := make([]string, 0, len(snapshot.AcceptanceCriteria))
 	for _, criterion := range snapshot.AcceptanceCriteria {

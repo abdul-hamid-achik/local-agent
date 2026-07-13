@@ -39,7 +39,7 @@ func DefaultKeyMap() KeyMap {
 	return KeyMap{
 		Send: key.NewBinding(
 			key.WithKeys("enter"),
-			key.WithHelp("enter", "send message"),
+			key.WithHelp("enter", "send / queue one follow-up"),
 		),
 		NewLine: key.NewBinding(
 			key.WithKeys("shift+enter"),

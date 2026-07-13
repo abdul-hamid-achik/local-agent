@@ -66,6 +66,7 @@ const (
 	OverlayGoalRecovery
 	OverlayModelDetails
 	OverlayModelPull
+	OverlayApproval
 )
 
 // CompletionState holds all state for the interactive completion modal.
@@ -339,6 +340,8 @@ type Model struct {
 
 	// Tool approval prompt
 	pendingApproval *ToolApprovalMsg
+	approvalState   *ApprovalState
+	queuedFollowUp  *queuedFollowUp
 
 	// Prompt history
 	promptHistory []string // all submitted inputs
@@ -436,8 +439,7 @@ func (m *Model) beginShutdown() tea.Cmd {
 		m.initCancel()
 	}
 	if m.pendingApproval != nil {
-		m.pendingApproval.Response <- permission.ApprovalResponse{Allowed: false}
-		m.pendingApproval = nil
+		m.resolvePendingApproval(permission.Cancelled("application is shutting down"))
 	}
 	m.pendingPaste = nil
 	if m.sessionLoading {
@@ -604,6 +606,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			m.resizeHelpViewport(true)
 		}
 		m.resizePickerOverlays()
+		if m.overlay == OverlayApproval && m.approvalState != nil {
+			m.resizeApproval(true)
+		}
 		if m.goalFormState != nil {
 			m.goalFormState.SetSize(m.width, m.height)
 		}
@@ -645,36 +650,35 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			return m, nil
 		}
 
-		// Pending tool approval intercept: y/n/a before anything else.
+		// Pending tool approval owns the keyboard before every other overlay.
+		// Decisions remain typed so a host failure cannot be reported as a human
+		// denial, and session authority stays exact-request scoped.
 		if m.pendingApproval != nil {
 			resumeActivity := false
 			switch {
 			case key.Matches(msg, m.keys.Quit):
-				m.pendingApproval.Response <- permission.ApprovalResponse{Allowed: false}
-				m.pendingApproval = nil
-				m.recalcViewportHeight()
+				m.resolvePendingApproval(permission.Cancelled("application is shutting down"))
 				return m, m.beginShutdown()
 			case key.Matches(msg, m.keys.Cancel):
-				m.pendingApproval.Response <- permission.ApprovalResponse{Allowed: false}
-				m.pendingApproval = nil
+				m.resolvePendingApproval(permission.Cancelled("approval cancelled by user"))
 				if m.cancel != nil {
 					m.cancel()
 				}
 			case strings.EqualFold(msg.String(), "y"):
-				m.pendingApproval.Response <- permission.ApprovalResponse{Allowed: true}
-				m.pendingApproval = nil
+				m.resolvePendingApproval(permission.AllowOnce())
 				resumeActivity = true
 			case strings.EqualFold(msg.String(), "n"):
-				m.pendingApproval.Response <- permission.ApprovalResponse{Allowed: false}
-				m.pendingApproval = nil
+				m.resolvePendingApproval(permission.Deny())
 				resumeActivity = true
-			case strings.EqualFold(msg.String(), "a"):
-				m.pendingApproval.Response <- permission.ApprovalResponse{Allowed: true, Always: true}
-				m.pendingApproval = nil
+			case strings.EqualFold(msg.String(), "s"):
+				m.resolvePendingApproval(permission.AllowSession())
 				resumeActivity = true
-			}
-			if m.pendingApproval == nil {
-				m.recalcViewportHeight()
+			case strings.EqualFold(msg.String(), "d"):
+				m.toggleApprovalDetails()
+			default:
+				if m.approvalState != nil {
+					navigateReadOnlyViewport(&m.approvalState.Viewport, msg.String())
+				}
 			}
 			if resumeActivity {
 				return m, m.startActivityCmd()
@@ -1352,7 +1356,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 
 		case key.Matches(msg, m.keys.NewLine):
 			// Insert newline in textarea (shift+enter).
-			if m.state == StateIdle {
+			if m.composerEditable() {
 				m.clearCompletionSuppression()
 				m.input.InsertString("\n")
 				m.syncInputHeight()
@@ -1362,6 +1366,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		case key.Matches(msg, m.keys.Send):
 			if m.state == StateIdle {
 				return m, m.submitInput()
+			}
+			if m.composerEditable() {
+				return m, m.queueComposerFollowUp()
 			}
 
 		case key.Matches(msg, m.keys.Complete):
@@ -1595,9 +1602,16 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		}
 		m.lastTurnDuration = m.turnElapsed()
 		m.state = StateIdle
+		if msg.Err != nil {
+			m.restoreQueuedFollowUp()
+		}
 		m.input.Focus()
-		m.input.SetHeight(1)
-		m.inputLines = 1
+		if m.queuedFollowUp == nil && strings.TrimSpace(m.input.Value()) == "" {
+			m.input.SetHeight(1)
+			m.inputLines = 1
+		} else {
+			m.syncInputHeight()
+		}
 		m.recalcViewportHeight()
 		m.viewport.SetContent(m.renderEntries())
 		m.restoreFollowPosition(followWasPaused, followYOffset)
@@ -1685,6 +1699,19 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 					_ = m.goalRuntime.Pause(context.Background(), "settled goal turn could not be persisted")
 				}
 				m.appendGoalError("Goal continuation stopped because the settled turn was not durably saved.")
+			}
+		}
+		if msg.Err == nil && !settledPersisted {
+			// A queued follow-up may only cross a durable settlement boundary.
+			// Return it to the composer when saving fails so it cannot dispatch
+			// unexpectedly after some later, unrelated turn.
+			m.restoreQueuedFollowUp()
+			m.recalcViewportHeight()
+		}
+		if msg.Err == nil && settledPersisted && !m.goalNeedsEvaluation && !m.shuttingDown && m.queuedFollowUp != nil {
+			m.doneFlash = false
+			if cmd := m.dispatchQueuedFollowUp(); cmd != nil {
+				cmds = append(cmds, cmd)
 			}
 		}
 		m.appendShutdownQuit(&cmds)
@@ -1971,24 +1998,18 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		}
 
 	case ToolApprovalMsg:
-		detail, inspectable := approvalDetail(msg.ToolName, msg.Args)
-		if !inspectable {
-			msg.Response <- permission.ApprovalResponse{Allowed: false}
-			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: detail})
+		if err := m.openApproval(msg); err != nil {
+			if msg.Response != nil {
+				msg.Response <- permission.Refuse("approval_preview_unavailable", err.Error())
+			}
+			m.entries = append(m.entries, ChatEntry{
+				Kind:    "error",
+				Content: "Approval preview unavailable: " + err.Error(),
+			})
 			m.invalidateRenderedCache()
 			m.viewport.SetContent(m.renderEntries())
 			m.gotoBottomIfFollowing()
-			break
 		}
-		m.pendingApproval = &msg
-		m.recalcViewportHeight()
-		m.entries = append(m.entries, ChatEntry{
-			Kind:    "system",
-			Content: detail,
-		})
-		m.invalidateRenderedCache()
-		m.viewport.SetContent(m.renderEntries())
-		m.gotoBottomIfFollowing()
 
 	case CommitResultMsg:
 		if !m.commitRunning || msg.Token != m.commitToken {
@@ -2103,7 +2124,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		}
 
 	case tea.PasteMsg:
-		if m.state == StateIdle {
+		if m.composerEditable() {
 			draft := m.input.Value()
 			cursor := pasteCursorAt(draft, m.input.Line(), m.input.Column())
 			assessment := assessPaste(msg.Content, cursor, m.input.Length(), m.input.LineCount(), m.input.CharLimit)
@@ -2155,7 +2176,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 	}
 
 	// Update sub-components.
-	if m.state == StateIdle && m.overlay == OverlayNone && !m.initializing {
+	if m.composerEditable() {
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		cmds = append(cmds, cmd)
@@ -2171,14 +2192,14 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			// automatic discovery, including reopening for the edited prefix.
 			m.completionSuppressedDraft = ""
 		}
-		if m.completer != nil && len(newInput) > 0 {
+		if m.state == StateIdle && m.completer != nil && len(newInput) > 0 {
 			first := newInput[0]
 			if (first == '/' || first == '@' || first == '#') && !m.isCompletionActive() && !suppressed {
 				m.triggerCompletion(newInput)
 			}
 		}
 		// Auto-close if trigger char removed
-		if m.isCompletionActive() && (len(newInput) == 0 || (newInput[0] != '/' && newInput[0] != '@' && newInput[0] != '#')) {
+		if m.state == StateIdle && m.isCompletionActive() && (len(newInput) == 0 || (newInput[0] != '/' && newInput[0] != '@' && newInput[0] != '#')) {
 			m.closeCompletion()
 		}
 	}
@@ -2266,6 +2287,12 @@ func (m *Model) updateActiveOverlayMessage(msg tea.Msg) tea.Cmd {
 				field.Input, cmd = field.Input.Update(msg)
 				return cmd
 			}
+		}
+	case OverlayApproval:
+		if m.approvalState != nil {
+			var cmd tea.Cmd
+			m.approvalState.Viewport, cmd = m.approvalState.Viewport.Update(msg)
+			return cmd
 		}
 	}
 	return nil
@@ -2454,16 +2481,9 @@ func (m *Model) submitInput() tea.Cmd {
 		return m.handleCommandAction(result)
 	}
 
-	// Plan mode: show the plan form instead of sending directly.
-	if m.mode == ModePlan {
-		m.openPlanForm(text)
-		return nil
-	}
-	if m.mode == ModeAuto {
-		return m.handleAutoModeSubmit(text)
-	}
-
-	// Regular message — send to agent.
+	// Every conversational preset sends the draft immediately. PLAN applies its
+	// read-only tool policy in sendToAgentTurnPresented; AUTO applies its normal
+	// routing and approval policy. Durable work remains an explicit /goal flow.
 	return m.sendToAgent(text)
 }
 
@@ -3068,10 +3088,19 @@ func (m *Model) footerHeight() int {
 			height++
 		}
 	}
-	if m.pendingApproval != nil || m.pendingPaste != nil {
+	if m.pendingApproval != nil {
+		// The approval modal owns the visual control surface. Reserve one safety
+		// row even though the footer itself is blank so the terminal's trailing
+		// newline cannot push a minimum-height view past the canvas.
+		return height + 1
+	}
+	if m.pendingPaste != nil {
 		return height
 	}
-	if !m.composerIsBusy() {
+	if m.overlay != OverlayNone {
+		return height + m.inputLines
+	}
+	if m.composerEditable() {
 		return height + m.inputLines
 	}
 	return height + 1
@@ -3430,12 +3459,6 @@ func (m *Model) completionDraft() string {
 
 // sendToAgent sends a message to the agent, setting mode context first.
 func (m *Model) sendToAgent(text string) tea.Cmd {
-	// Every provider path must honor AUTO's durable goal boundary, including
-	// custom slash commands that expand to ActionSendPrompt. Goal turns use the
-	// separate sendGoalToAgentTurn path after consuming their host permit.
-	if m.mode == ModeAuto {
-		return m.handleAutoModeSubmit(text)
-	}
 	turnID, err := execution.NewTurnID()
 	if err != nil {
 		return m.failTurnBeforeRun(text, fmt.Sprintf("Create turn identity: %v", err))
@@ -3544,9 +3567,13 @@ func (m *Model) sendToAgentTurnPresented(text, turnID string, visible bool, limi
 	// Set up the approval callback so tool permission prompts go through the TUI.
 	m.agent.SetApprovalCallback(func(req permission.ApprovalRequest) {
 		p.Send(ToolApprovalMsg{
-			ToolName: req.ToolName,
-			Args:     req.Args,
-			Response: req.Response,
+			RequestID:       req.RequestID,
+			ToolName:        req.ToolName,
+			Args:            req.Args,
+			ArgumentsSHA256: req.ArgumentsSHA256,
+			Preview:         req.Preview,
+			Scope:           req.Scope,
+			Response:        req.Response,
 		})
 	})
 
@@ -4057,15 +4084,10 @@ func importedConversationMessages(entries []ChatEntry) ([]llm.Message, int, erro
 	return messages, uiOnlySections, nil
 }
 
-const maxApprovalDetail = 4096
-
 func approvalDetail(toolName string, args map[string]any) (string, bool) {
 	encoded, err := json.MarshalIndent(args, "", "  ")
 	if err != nil {
 		return fmt.Sprintf("Refused `%s`: its exact arguments could not be encoded for inspection.", toolName), false
-	}
-	if len(encoded) > maxApprovalDetail {
-		return fmt.Sprintf("Refused `%s`: its exact arguments are %d bytes, above the %d-byte approval inspection limit. Split the operation into smaller calls so every consequential argument is visible before approval.", toolName, len(encoded), maxApprovalDetail), false
 	}
 	return fmt.Sprintf("Permission required for `%s`:\n```json\n%s\n```", toolName, encoded), true
 }

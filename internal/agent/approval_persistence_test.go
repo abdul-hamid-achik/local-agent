@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -23,7 +22,7 @@ func (o *approvalPersistenceOutput) SystemMessage(message string) {
 	o.system = append(o.system, message)
 }
 
-func TestAlwaysApprovalPersistsAcrossCheckerRestartAndSkipsSecondPrompt(t *testing.T) {
+func TestAllowSessionIsExactRequestScopedAndDoesNotPersistGlobally(t *testing.T) {
 	ctx := context.Background()
 	workDir := t.TempDir()
 	databasePath := filepath.Join(t.TempDir(), "always-approval.db")
@@ -39,7 +38,7 @@ func TestAlwaysApprovalPersistsAcrossCheckerRestartAndSkipsSecondPrompt(t *testi
 		t.Fatal(err)
 	}
 	session, err := store.CreateSession(ctx, db.CreateSessionParams{
-		Title: "always approval", Model: "test-model", Mode: "BUILD", WorkspaceID: workspaceID,
+		Title: "session approval", Model: "test-model", Mode: "BUILD", WorkspaceID: workspaceID,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -47,63 +46,66 @@ func TestAlwaysApprovalPersistsAcrossCheckerRestartAndSkipsSecondPrompt(t *testi
 
 	var approvalPrompts atomic.Int64
 	firstClient := &scriptedClient{responses: [][]llm.StreamChunk{
-		{{ToolCalls: []llm.ToolCall{{ID: "write-first", Name: "write", Arguments: map[string]any{"path": "first.txt", "content": "first"}}}, Done: true}},
+		{{ToolCalls: []llm.ToolCall{{ID: "write-first", Name: "write", Arguments: map[string]any{"path": "same.txt", "content": "same"}}}, Done: true}},
+		{{ToolCalls: []llm.ToolCall{{ID: "write-repeat", Name: "write", Arguments: map[string]any{"path": "same.txt", "content": "same"}}}, Done: true}},
 		{{Text: "first complete", Done: true}},
 	}}
 	first := configuredPersistentApprovalAgent(firstClient, store, permission.NewChecker(store, false), workDir, session.ID, 0)
 	first.SetApprovalCallback(func(request permission.ApprovalRequest) {
 		approvalPrompts.Add(1)
-		request.Response <- permission.ApprovalResponse{Allowed: true, Always: true}
+		request.Response <- permission.AllowSession()
 	})
-	first.AddUserMessage("write the first file")
+	first.AddUserMessage("write the same file twice")
 	if err := first.RunTurn(ctx, &approvalPersistenceOutput{}, "turn_always_first"); err != nil {
 		t.Fatal(err)
 	}
 	if approvalPrompts.Load() != 1 {
 		t.Fatalf("first turn approval prompts = %d, want 1", approvalPrompts.Load())
 	}
-	if data, err := os.ReadFile(filepath.Join(workDir, "first.txt")); err != nil || string(data) != "first" {
+	if data, err := os.ReadFile(filepath.Join(workDir, "same.txt")); err != nil || string(data) != "same" {
 		t.Fatalf("first approved effect = %q err=%v", data, err)
 	}
-	if policy := permission.NewChecker(store, false).Check("write"); policy != permission.PolicyAllow {
-		t.Fatalf("persisted write policy = %q, want allow", policy)
+	if policy := permission.NewChecker(store, false).Check("write"); policy != permission.PolicyAsk {
+		t.Fatalf("session approval persisted global write policy = %q", policy)
 	}
 
 	firstHazards, err := store.ListExecutionRecoveryHazards(ctx, session.ID, workspaceID, 0, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(firstHazards) != 1 {
-		t.Fatalf("first completed execution states = %d, want 1", len(firstHazards))
+	if len(firstHazards) != 2 {
+		t.Fatalf("first completed execution states = %d, want 2", len(firstHazards))
 	}
-	firstEvents, err := store.ListExecutionEvents(ctx, session.ID, workspaceID, firstHazards[0].Identity.ExecutionID, 20)
-	if err != nil {
-		t.Fatal(err)
+	for _, state := range firstHazards {
+		firstEvents, eventsErr := store.ListExecutionEvents(ctx, session.ID, workspaceID, state.Identity.ExecutionID, 20)
+		if eventsErr != nil {
+			t.Fatal(eventsErr)
+		}
+		assertExecutionApproval(t, firstEvents, executionpkg.ApprovalSession)
 	}
-	assertExecutionApproval(t, firstEvents, executionpkg.ApprovalAlways)
 	firstCursor, err := store.LatestExecutionEventID(ctx, session.ID, workspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	secondClient := &scriptedClient{responses: [][]llm.StreamChunk{
-		{{ToolCalls: []llm.ToolCall{{ID: "write-second", Name: "write", Arguments: map[string]any{"path": "second.txt", "content": "second"}}}, Done: true}},
+		{{ToolCalls: []llm.ToolCall{{ID: "write-after-restart", Name: "write", Arguments: map[string]any{"path": "same.txt", "content": "same"}}}, Done: true}},
 		{{Text: "second complete", Done: true}},
 	}}
 	restartedChecker := permission.NewChecker(store, false)
 	second := configuredPersistentApprovalAgent(secondClient, store, restartedChecker, workDir, session.ID, firstCursor)
 	second.SetApprovalCallback(func(request permission.ApprovalRequest) {
 		approvalPrompts.Add(1)
-		request.Response <- permission.ApprovalResponse{Allowed: true}
+		request.Response <- permission.AllowOnce()
 	})
-	second.AddUserMessage("write the second file")
+	second.AddUserMessage("write after restart")
 	if err := second.RunTurn(ctx, &approvalPersistenceOutput{}, "turn_always_second"); err != nil {
 		t.Fatal(err)
 	}
-	if approvalPrompts.Load() != 1 {
-		t.Fatalf("persisted allow prompted again; total prompts=%d", approvalPrompts.Load())
+	if approvalPrompts.Load() != 2 {
+		t.Fatalf("session approval survived agent restart; total prompts=%d", approvalPrompts.Load())
 	}
-	if data, err := os.ReadFile(filepath.Join(workDir, "second.txt")); err != nil || string(data) != "second" {
+	if data, err := os.ReadFile(filepath.Join(workDir, "same.txt")); err != nil || string(data) != "same" {
 		t.Fatalf("second policy-approved effect = %q err=%v", data, err)
 	}
 	secondHazards, err := store.ListExecutionRecoveryHazards(ctx, session.ID, workspaceID, firstCursor, 100)
@@ -117,52 +119,40 @@ func TestAlwaysApprovalPersistsAcrossCheckerRestartAndSkipsSecondPrompt(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertExecutionApproval(t, secondEvents, executionpkg.ApprovalPolicy)
+	assertExecutionApproval(t, secondEvents, executionpkg.ApprovalOnce)
 }
 
-func TestAlwaysApprovalPersistenceFailureWarnsAndDoesNotSurviveCheckerRestart(t *testing.T) {
-	databasePath := filepath.Join(t.TempDir(), "failed-always-approval.db")
-	store, err := db.OpenPath(databasePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	checker := permission.NewChecker(store, false)
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-
+func TestAllowSessionDoesNotAuthorizeChangedArguments(t *testing.T) {
 	client := &scriptedClient{responses: [][]llm.StreamChunk{
-		{{ToolCalls: []llm.ToolCall{{ID: "write", Name: "write", Arguments: map[string]any{"path": "approved.txt", "content": "approved"}}}, Done: true}},
+		{{ToolCalls: []llm.ToolCall{{ID: "write-one", Name: "write", Arguments: map[string]any{"path": "approved.txt", "content": "one"}}}, Done: true}},
+		{{ToolCalls: []llm.ToolCall{{ID: "write-two", Name: "write", Arguments: map[string]any{"path": "approved.txt", "content": "two"}}}, Done: true}},
 		{{Text: "done", Done: true}},
 	}}
 	ledger := &fakeExecutionLedger{}
 	ag, workDir := newLedgerAgent(t, client, nil, ledger)
-	ag.SetPermissionChecker(checker)
+	ag.SetPermissionChecker(permission.NewChecker(nil, false))
+	var prompts atomic.Int64
 	ag.SetApprovalCallback(func(request permission.ApprovalRequest) {
-		request.Response <- permission.ApprovalResponse{Allowed: true, Always: true}
+		prompts.Add(1)
+		request.Response <- permission.AllowSession()
 	})
-	out := &approvalPersistenceOutput{}
-	if err := ag.RunTurn(context.Background(), out, "turn_failed_always_persist"); err != nil {
+	if err := ag.RunTurn(context.Background(), &approvalPersistenceOutput{}, "turn_scoped_session"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(workDir, "approved.txt")); err != nil {
-		t.Fatalf("explicitly approved effect did not run: %v", err)
+	if prompts.Load() != 2 {
+		t.Fatalf("changed canonical arguments reused session grant; prompts=%d", prompts.Load())
 	}
-	if !strings.Contains(strings.Join(out.system, "\n"), "approval was granted, but could not be persisted") {
-		t.Fatalf("persistence failure warning = %#v", out.system)
+	if data, err := os.ReadFile(filepath.Join(workDir, "approved.txt")); err != nil || string(data) != "two" {
+		t.Fatalf("final approved effect = %q err=%v", data, err)
 	}
-	if policy := checker.Check("write"); policy != permission.PolicyAsk {
-		t.Fatalf("failed persistence changed the live checker to %q", policy)
+	approved := 0
+	for _, event := range ledger.snapshot() {
+		if event.Type == executionpkg.EventApproved && event.Approval == executionpkg.ApprovalSession {
+			approved++
+		}
 	}
-	assertExecutionApproval(t, ledger.snapshot(), executionpkg.ApprovalAlways)
-
-	reopened, err := db.OpenPath(databasePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = reopened.Close() }()
-	if policy := permission.NewChecker(reopened, false).Check("write"); policy != permission.PolicyAsk {
-		t.Fatalf("failed persistence survived checker restart as %q", policy)
+	if approved != 2 {
+		t.Fatalf("session-approved events = %d, want 2", approved)
 	}
 }
 

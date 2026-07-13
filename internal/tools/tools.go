@@ -59,7 +59,7 @@ func ReadToolDef() llm.ToolDef {
 func WriteToolDef() llm.ToolDef {
 	return llm.ToolDef{
 		Name:        "write",
-		Description: "Write content to a file. Use this to create new files or overwrite existing ones. Creates parent directories if needed.",
+		Description: "Atomically write complete content to one file. Use this to create or overwrite a file; parent directories are created as needed. Submit the complete intended file in one call—do not split content merely to fit an approval display.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -184,7 +184,7 @@ func DiffToolDef() llm.ToolDef {
 func EditToolDef() llm.ToolDef {
 	return llm.ToolDef{
 		Name:        "edit",
-		Description: "Apply a patch to a file. Use this to make targeted edits to specific lines without overwriting the entire file. The patch format is: @@ -start,count +new_start,new_count @@\nfollowed by lines starting with - (remove), + (add), or (context).",
+		Description: "Atomically apply a complete unified-diff patch to one file. Use this for targeted edits without overwriting the entire file. Submit all related hunks together—do not split a coherent patch merely to fit an approval display. Format: @@ -start,count +new_start,new_count @@ followed by - (remove), + (add), or space (context) lines.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

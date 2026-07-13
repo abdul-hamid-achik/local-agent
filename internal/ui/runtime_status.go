@@ -57,7 +57,28 @@ func (m *Model) buildRuntimeStatusContent(width int) string {
 	if !m.modelPinned {
 		routing = "Auto"
 	}
-	lines := make([]string, 0, 12)
+	lines := make([]string, 0, 18)
+	toolCount := m.toolCount
+	var serverNames []string
+	failedServers := append([]FailedServer(nil), m.failedServers...)
+	serverToolCounts := make(map[string]int)
+	if m.agent != nil {
+		toolCount = m.agent.ToolCount()
+		statuses := m.agent.MCPConnectionStatuses()
+		if len(statuses) > 0 {
+			serverNames = make([]string, 0, len(statuses))
+			failedServers = make([]FailedServer, 0, len(statuses))
+			for _, status := range statuses {
+				serverToolCounts[strings.ToLower(status.Name)] = status.ToolCount
+				if status.Connected {
+					serverNames = append(serverNames, status.Name)
+				} else {
+					failedServers = append(failedServers, FailedServer{Name: status.Name, Reason: status.LastError})
+				}
+			}
+		}
+	}
+	connections := projectEcosystemConnections(serverNames, failedServers)
 	if m.agent != nil {
 		if workspace := compactWorkspacePath(m.agent.WorkDir(), runtimeStatusValueWidth(width)); workspace != "" {
 			lines = append(lines, m.runtimeStatusRow("Workspace", workspace, width))
@@ -67,8 +88,8 @@ func (m *Model) buildRuntimeStatusContent(width int) string {
 		m.runtimeStatusRow("Model", routing+" · "+m.model, width),
 		m.runtimeStatusRow("Profile", profile, width),
 		m.runtimeStatusRow("Mode", m.modeConfigs[m.mode].Label, width),
-		m.runtimeStatusRow("Tools", fmt.Sprintf("%d available", m.toolCount), width),
-		m.runtimeStatusRow("MCP", fmt.Sprintf("%d servers", m.serverCount), width),
+		m.runtimeStatusRow("Tools", fmt.Sprintf("%d available", toolCount), width),
+		m.runtimeStatusRow("MCP", summarizeConnectionHealth(connections), width),
 	)
 	if m.promptTokens > 0 && m.numCtx > 0 {
 		percent := min(100, max(0, m.promptTokens*100/m.numCtx))
@@ -88,21 +109,27 @@ func (m *Model) buildRuntimeStatusContent(width int) string {
 	} else {
 		lines = append(lines, m.runtimeStatusRow("ICE", "disabled", width))
 	}
-	if m.agent != nil {
-		if names := m.agent.ServerNames(); len(names) > 0 {
-			lines = append(lines, "", m.styles.OverlayAccent.Render("Connected MCP"))
-			lines = append(lines, m.styles.OverlayDim.Render(wrapText(strings.Join(names, " · "), max(1, width))))
-		}
-	}
-	if len(m.failedServers) > 0 {
-		lines = append(lines, "", m.styles.ErrorText.Render("Connection failures"))
-		for _, failed := range m.failedServers {
-			line := failed.Name
-			if failed.Reason != "" {
-				line += " · " + failed.Reason
+	if len(connections) > 0 {
+		lines = append(lines, "", m.styles.OverlayAccent.Render("Tool connections"))
+		for _, connection := range connections {
+			value := connection.Health.String() + " · " + connection.Role
+			if count := serverToolCounts[strings.ToLower(connection.Name)]; connection.Health == capabilityConnected && count > 0 {
+				value += fmt.Sprintf(" · %d tools", count)
 			}
-			lines = append(lines, m.styles.OverlayDim.Render(wrapText(line, max(1, width))))
+			lines = append(lines, m.runtimeStatusRow(connection.Label, value, width))
+			if connection.Health == capabilityUnavailable {
+				if connection.Detail != "" {
+					lines = append(lines, m.runtimeStatusRow("", connection.Detail, width))
+				}
+				if connection.Recovery != "" {
+					lines = append(lines, m.runtimeStatusRow("", connection.Recovery, width))
+				}
+			}
 		}
+	} else {
+		lines = append(lines, "", m.styles.OverlayDim.Render(
+			wrapText("MCP is optional. Add a server in local-agent.yaml or the XDG config when you need ecosystem tools.", max(1, width)),
+		))
 	}
 	return strings.Join(lines, "\n")
 }

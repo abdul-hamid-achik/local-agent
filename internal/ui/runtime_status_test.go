@@ -68,13 +68,32 @@ func TestRuntimeStatusSeparatesLocalToolsFromMCPServers(t *testing.T) {
 	m.serverCount = 0
 
 	content := m.buildRuntimeStatusContent(52)
-	for _, want := range []string{"Workspace", "~/src/project", "Tools", "19 available", "MCP", "0 servers"} {
+	for _, want := range []string{"Workspace", "~/src/project", "Tools", fmt.Sprintf("%d available", m.agent.ToolCount()), "MCP", "0 servers configured"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("runtime status missing %q:\n%s", want, content)
 		}
 	}
 	if strings.Contains(content, "across 0 MCP servers") {
 		t.Fatalf("runtime status still conflates local tools with MCP servers:\n%s", content)
+	}
+}
+
+func TestRuntimeStatusReconcilesReconnectedEcosystemServers(t *testing.T) {
+	m := newTestModel(t)
+	m.failedServers = []FailedServer{
+		{Name: "mcphub", Reason: "stale failure"},
+		{Name: "cortex", Reason: "connection refused"},
+	}
+	// Registry test seams are not needed here: project the same live/failure
+	// inputs used by Runtime and assert the rendered vocabulary independently.
+	connections := projectEcosystemConnections([]string{"mcphub", "monitor"}, m.failedServers)
+	if got := summarizeConnectionHealth(connections); got != "degraded · 2 connected · 1 unavailable" {
+		t.Fatalf("runtime projection = %q", got)
+	}
+	for _, connection := range connections {
+		if connection.Label == "MCPHub" && connection.Health != capabilityConnected {
+			t.Fatalf("stale MCPHub failure won over live connection: %#v", connections)
+		}
 	}
 }
 

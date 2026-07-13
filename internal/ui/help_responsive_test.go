@@ -52,6 +52,22 @@ func TestHelpKeepsKeysAndContextTruthfulAtNarrowWidth(t *testing.T) {
 	}
 }
 
+func TestHelpExplainsOneSlotFollowUpLifecycle(t *testing.T) {
+	m := newTestModel(t)
+	content := strings.Join(strings.Fields(strings.ToLower(ansi.Strip(m.buildHelpContent(m.helpContentWidth())))), " ")
+	for _, want := range []string{
+		"send / queue one follow-up",
+		"enter (running)",
+		"after the current turn settles successfully",
+		"esc (running)",
+		"returns to the composer",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("help omitted %q:\n%s", want, content)
+		}
+	}
+}
+
 func TestHelpPreservesScrollAcrossResize(t *testing.T) {
 	m := newTestModel(t)
 	m.overlay = OverlayHelp

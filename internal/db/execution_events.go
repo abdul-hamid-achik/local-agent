@@ -425,11 +425,11 @@ func validateExecutionTransition(existing []execution.Event, candidate execution
 		if started || approved || !validApproval {
 			return fmt.Errorf("%w: approved requires one valid pre-start approval source", ErrIllegalExecutionTransition)
 		}
-		if (candidate.Approval == execution.ApprovalOnce || candidate.Approval == execution.ApprovalAlways) && !approvalRequested {
+		if candidate.Approval == execution.ApprovalOnce && !approvalRequested {
 			return fmt.Errorf("%w: interactive approval requires approval_requested", ErrIllegalExecutionTransition)
 		}
 	case execution.EventDenied:
-		if started || candidate.Approval != execution.ApprovalDenied {
+		if started || candidate.Approval != execution.ApprovalUserDenied {
 			return fmt.Errorf("%w: denied requires a pre-start denied decision", ErrIllegalExecutionTransition)
 		}
 	case execution.EventStarted:
@@ -464,7 +464,7 @@ func validateExecutionTransition(existing []execution.Event, candidate execution
 func approvalGrant(approval execution.Approval) bool {
 	switch approval {
 	case execution.ApprovalPolicy, execution.ApprovalYolo, execution.ApprovalEmbedding,
-		execution.ApprovalOnce, execution.ApprovalAlways:
+		execution.ApprovalOnce, execution.ApprovalSession:
 		return true
 	default:
 		return false

@@ -47,6 +47,16 @@ func TestViewCursorOwnsFocusedComposer(t *testing.T) {
 	}
 }
 
+func TestViewCursorOwnsRunningFollowUpComposer(t *testing.T) {
+	m := newTestModel(t)
+	m.state = StateStreaming
+	m.input.SetValue("check the focused tests")
+	m.input.CursorEnd()
+
+	view := m.View()
+	assertViewCursorAfter(t, view, "❯ check the focused tests")
+}
+
 func TestViewCursorOwnsCompletionFilter(t *testing.T) {
 	m := newTestModel(t)
 	m.completionState = newCompletionState("command", []Completion{{Label: "/help", Insert: "/help"}}, false, m.isDark)
@@ -145,9 +155,17 @@ func TestViewCursorHiddenWithoutTextOwnership(t *testing.T) {
 			},
 		},
 		{
-			name: "busy_state_replaces_composer",
+			name: "queued_follow_up_replaces_composer",
 			setup: func(m *Model) {
 				m.state = StateWaiting
+				m.queuedFollowUp = &queuedFollowUp{Prompt: "already queued"}
+			},
+		},
+		{
+			name: "goal_turn_replaces_composer",
+			setup: func(m *Model) {
+				m.state = StateWaiting
+				m.goalTurnID = "goal-turn"
 			},
 		},
 		{

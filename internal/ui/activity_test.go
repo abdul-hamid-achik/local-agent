@@ -174,22 +174,24 @@ func TestToolCardUsesSharedSpinnerAndCompletedReceiptIsStable(t *testing.T) {
 	}
 }
 
-func TestApprovalOwnsFooterAndPausesActivityClock(t *testing.T) {
+func TestApprovalModalPausesActivityClock(t *testing.T) {
 	m := newTestModel(t)
 	m.state = StateStreaming
 	responses := make(chan permission.ApprovalResponse, 1)
-	m.pendingApproval = &ToolApprovalMsg{
+	m = openApprovalForTest(t, m, ToolApprovalMsg{
 		ToolName: "write_file",
 		Args:     map[string]any{"path": "internal/ui/view.go"},
 		Response: responses,
-	}
+	})
 
-	view := ansi.Strip(m.View().Content)
-	if !strings.Contains(view, "Approve write_file") || strings.Contains(view, "Responding") {
-		t.Fatalf("approval did not exclusively own the footer:\n%s", view)
+	modal := ansi.Strip(m.renderApproval())
+	for _, want := range []string{"Permission · write_file", "once", "session", "deny"} {
+		if !strings.Contains(modal, want) {
+			t.Fatalf("approval modal omitted %q:\n%s", want, modal)
+		}
 	}
 	if m.needsSpinner() || m.needsScramble() || m.renderWorkingLine() != "" {
-		t.Fatal("approval left a hidden activity clock or working line active")
+		t.Fatal("approval modal left a hidden activity clock or footer line active")
 	}
 
 	updated, cmd := m.Update(charKey('y'))

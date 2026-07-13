@@ -194,9 +194,15 @@ func (m *Model) renderWorkingLine() string {
 	if strings.TrimSpace(activity.detail) != "" {
 		detail = " · " + strings.TrimSpace(activity.detail)
 	}
+	queued := ""
+	if m.queuedFollowUp != nil {
+		queued = " · follow-up queued"
+	}
 
 	candidates := []string{
-		activity.label + detail + elapsed + longCancel,
+		activity.label + detail + elapsed + queued + longCancel,
+		activity.label + elapsed + queued + longCancel,
+		activity.label + queued + longCancel,
 		activity.label + elapsed + longCancel,
 		activity.label + longCancel,
 		activity.label + elapsed + shortCancel,

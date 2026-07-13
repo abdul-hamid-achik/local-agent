@@ -35,6 +35,25 @@ func TestStartupLegacyMemoryInventoryNeverClaims(t *testing.T) {
 	}
 }
 
+func TestInteractiveStartupDefersLegacyMemoryDiagnosticsUntilRequested(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := t.TempDir()
+	legacy := memory.NewStore(memory.DefaultPathForWorkspace(""))
+	if _, err := legacy.Save("provenance-free", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	if notice := legacyMemoryNoticeForLaunch(workspace, false); notice != "" {
+		t.Fatalf("interactive startup exposed optional maintenance state: %q", notice)
+	}
+	if notice := legacyMemoryNoticeForLaunch(workspace, true); !strings.Contains(notice, "1 provenance-free memories quarantined") {
+		t.Fatalf("headless diagnostic was lost: %q", notice)
+	}
+	if got := memory.NewStore(memory.DefaultPathForWorkspace("")).Count(); got != 1 {
+		t.Fatalf("launch projection changed global legacy memory count to %d", got)
+	}
+}
+
 func TestStartupLegacyMemoryClaimedByAnotherWorkspaceIsSilent(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	workspaceA := t.TempDir()

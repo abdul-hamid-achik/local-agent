@@ -35,28 +35,29 @@ func (m *Model) View() tea.View {
 		content.WriteString("\n")
 	}
 
-	// The composer is replaced by one width-tiered liveness line while work is
-	// active. Idle gets the complete textarea back without a blank status row.
+	// Ordinary turns keep the composer available so the next instruction can be
+	// drafted while work continues. Owned operations and a queued follow-up use
+	// the compact liveness line until authority returns to the textarea.
 	if m.pendingApproval != nil || m.pendingPaste != nil {
 		// The status prompt above owns the footer until the user answers.
-	} else if m.composerIsBusy() {
-		content.WriteString(m.renderWorkingLine())
-	} else {
+	} else if m.overlay != OverlayNone {
+		// Preserve the composer's row allocation behind transparent overlays so
+		// opening a modal never shifts the transcript or its centered position.
+		input := m.input
+		input.SetVirtualCursor(false)
+		content.WriteString(strings.Repeat("\n", max(0, lipgloss.Height(input.View())-1)))
+	} else if m.composerEditable() {
 		// Render a local copy with Bubbles' virtual cursor disabled. The same
 		// copy supplies the one real cursor owned by this top-level view.
 		input := m.input
+		if m.state != StateIdle {
+			input.Placeholder = "Write a follow-up · enter queue"
+		}
 		input.SetVirtualCursor(false)
 		inputView := input.View()
-		if m.overlay != OverlayNone {
-			// An overlay owns focus, but retaining the composer's row count keeps
-			// modal placement stable. Hide the prompt and draft so neither can be
-			// mistaken for an active control behind a transparent wide modal.
-			content.WriteString(strings.Repeat("\n", max(0, lipgloss.Height(inputView)-1)))
-		} else {
-			composerY := strings.Count(content.String(), "\n")
-			content.WriteString(inputView)
-			viewCursor = offsetCursor(input.Cursor(), 0, composerY)
-		}
+		composerY := strings.Count(content.String(), "\n")
+		content.WriteString(inputView)
+		viewCursor = offsetCursor(input.Cursor(), 0, composerY)
 	}
 
 	// Render overlays on top (centered modal) using overlayOnContent
@@ -111,6 +112,8 @@ func (m *Model) View() tea.View {
 			if m.goalRecoveryState != nil {
 				overlay, localCursor = m.goalRecoveryState.ViewWithCursor()
 			}
+		case OverlayApproval:
+			overlay = m.renderApproval()
 		}
 		if overlay != "" {
 			base := content.String()
@@ -305,20 +308,10 @@ func (m *Model) renderCompletionModalView() (string, *tea.Cursor) {
 // renderStatusLine builds the status bar above the input/hint area.
 func (m *Model) renderStatusLine() string {
 	paneW := m.chatPaneWidth()
-	// Pending tool approval prompt overrides normal status.
+	// Approval is a scrollable modal. Keep the footer blank so exact arguments
+	// are not duplicated into the transcript layer behind that modal.
 	if m.pendingApproval != nil {
-		args := FormatToolArgs(m.pendingApproval.Args)
-		promptText := m.pendingApproval.ToolName
-		if args != "" {
-			promptText += " " + args
-		}
-		return m.renderDecisionPrompt(
-			"Approve", promptText,
-			keyHint{Key: "esc", Action: "cancel"},
-			keyHint{Key: "y", Action: "allow"},
-			keyHint{Key: "n", Action: "deny"},
-			keyHint{Key: "a", Action: "always"},
-		)
+		return ""
 	}
 
 	// Pending paste prompt overrides normal status.
@@ -350,7 +343,7 @@ func (m *Model) renderStatusLine() string {
 		return m.renderFollowPausedStatus(paneW)
 	}
 	if m.state != StateIdle || m.composerIsBusy() {
-		return ""
+		return m.renderWorkingLine()
 	}
 	if summary, ok := m.goalStatusSummary(); ok {
 		return m.renderGoalFooterStatus(summary, paneW)

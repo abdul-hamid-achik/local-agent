@@ -138,3 +138,46 @@ func TestAlwaysAllowResponds(t *testing.T) {
 		t.Fatal("AlwaysAllow did not approve")
 	}
 }
+
+func TestResolveApprovalContextDistinguishesHostUserAndCancellation(t *testing.T) {
+	t.Run("host refusal", func(t *testing.T) {
+		response := ResolveApprovalContext(context.Background(), ApprovalRequest{ToolName: "write"}, func(request ApprovalRequest) {
+			request.Response <- Refuse("preview_unavailable", "could not render diff")
+		})
+		if response.Decision != DecisionHostRefuse || response.Code != "preview_unavailable" || response.Allowed {
+			t.Fatalf("response = %#v", response)
+		}
+	})
+
+	t.Run("user deny", func(t *testing.T) {
+		response := ResolveApprovalContext(context.Background(), ApprovalRequest{ToolName: "write"}, func(request ApprovalRequest) {
+			request.Response <- Deny()
+		})
+		if response.Decision != DecisionUserDeny || response.Allowed {
+			t.Fatalf("response = %#v", response)
+		}
+	})
+
+	t.Run("missing host", func(t *testing.T) {
+		response := ResolveApprovalContext(context.Background(), ApprovalRequest{ToolName: "write"}, nil)
+		if response.Decision != DecisionHostRefuse || response.Code != "approval_ui_unavailable" {
+			t.Fatalf("response = %#v", response)
+		}
+	})
+
+	t.Run("cancelled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		response := ResolveApprovalContext(ctx, ApprovalRequest{ToolName: "write"}, func(ApprovalRequest) {})
+		if response.Decision != DecisionCancelled || response.Allowed {
+			t.Fatalf("response = %#v", response)
+		}
+	})
+}
+
+func TestLegacyAlwaysNormalizesToSessionOnly(t *testing.T) {
+	response := (ApprovalResponse{Allowed: true, Always: true}).Normalize()
+	if response.Decision != DecisionAllowSession || !response.Allowed || !response.Always {
+		t.Fatalf("response = %#v", response)
+	}
+}

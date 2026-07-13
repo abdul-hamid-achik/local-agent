@@ -37,17 +37,21 @@ type Agent struct {
 	ignoreContent    string
 	permChecker      *permission.Checker
 	approvalCallback func(permission.ApprovalRequest)
-	toolsConfig      config.ToolsConfig
-	logger           *log.Logger
-	turnRunning      atomic.Bool
-	turnMu           sync.Mutex
-	turnCancel       context.CancelFunc
-	turnDone         chan struct{}
-	closed           bool
-	readOnlySlots    chan struct{}
-	hooks            []ToolHook
-	mcpServerScope   map[string]struct{}
-	mcpScopeSet      bool
+	// approvalGrants contains host-approved, exact-request grants for this Agent
+	// session. Keys bind workspace, tool and canonical arguments; they are never
+	// persisted as global tool-only policies.
+	approvalGrants map[string]struct{}
+	toolsConfig    config.ToolsConfig
+	logger         *log.Logger
+	turnRunning    atomic.Bool
+	turnMu         sync.Mutex
+	turnCancel     context.CancelFunc
+	turnDone       chan struct{}
+	closed         bool
+	readOnlySlots  chan struct{}
+	hooks          []ToolHook
+	mcpServerScope map[string]struct{}
+	mcpScopeSet    bool
 
 	checkpointStore     CheckpointStore
 	checkpointSessionID int64
@@ -91,6 +95,7 @@ func New(llmClient llm.Client, registry *mcp.Registry, numCtx int) *Agent {
 		toolPolicy:        DefaultToolPolicy(),
 		executionRunID:    runID,
 		executionRunIDErr: runIDErr,
+		approvalGrants:    make(map[string]struct{}),
 		// Filesystem reads can enter OS syscalls that do not observe context
 		// cancellation. Allow at most one abandoned worker for the lifetime of
 		// an Agent; later reads wait on this slot and remain cancellable.

@@ -5,13 +5,14 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
 )
 
-// Mode represents the operational authority of the TUI.
+// Mode represents the conversational preset selected in the TUI. Durable goal
+// execution is an explicit, separate lifecycle entered through /goal.
 type Mode int
 
 const (
 	ModeNormal Mode = iota // Interactive work with approval-gated mutations.
 	ModePlan               // Read-only exploration and planning.
-	ModeAuto               // Durable Goal Runtime supervised until a safe stop.
+	ModeAuto               // Proactive work with full tools and configured approvals.
 )
 
 // Legacy source aliases keep embeddings and older tests compiling while saved
@@ -49,7 +50,7 @@ func DefaultModeConfigs() [3]ModeConfig {
 		},
 		{ // ModeAuto
 			Label:               "AUTO",
-			SystemPromptPrefix:  "Execute only the active durable goal under its host budgets, approval policy, Cortex verification, and safe stop conditions.",
+			SystemPromptPrefix:  "Work proactively toward the user's request. Use the full configured tool set while honoring the approval policy and all host safety boundaries.",
 			ToolPolicy:          agent.BuildToolPolicy(),
 			PreferredCapability: config.CapabilityAdvanced,
 			RouterMode:          config.ModeBuildContext,

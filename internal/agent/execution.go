@@ -460,11 +460,13 @@ func (a *Agent) preflightToolCall(kind executionpkg.Kind, tc llm.ToolCall) error
 }
 
 type toolAuthorization struct {
-	allowed       bool
-	cancelled     bool
-	approval      executionpkg.Approval
-	reason        string
-	persistAlways bool
+	allowed     bool
+	cancelled   bool
+	hostRefused bool
+	approval    executionpkg.Approval
+	decision    permissionPkg.ApprovalDecision
+	reason      string
+	refusalCode string
 }
 
 func (a *Agent) decideToolAuthorization(ctx context.Context, tc llm.ToolCall, beforeAsk func() error) (toolAuthorization, error) {
@@ -478,7 +480,13 @@ func (a *Agent) decideToolAuthorization(ctx context.Context, tc llm.ToolCall, be
 	switch a.permChecker.ToCheckResult(tc.Name) {
 	case permissionPkg.CheckAllow:
 		if !a.permChecker.IsYolo() && a.approvalCallback == nil {
-			return toolAuthorization{approval: executionpkg.ApprovalDenied, reason: "interactive approval is unavailable; persisted allows do not apply to headless execution"}, nil
+			return toolAuthorization{
+				hostRefused: true,
+				approval:    executionpkg.ApprovalHostRefused,
+				decision:    permissionPkg.DecisionHostRefuse,
+				refusalCode: "approval_ui_unavailable",
+				reason:      "interactive approval is unavailable; persisted allows do not apply to headless execution",
+			}, nil
 		}
 		approval := executionpkg.ApprovalPolicy
 		if a.permChecker.IsYolo() {
@@ -486,36 +494,86 @@ func (a *Agent) decideToolAuthorization(ctx context.Context, tc llm.ToolCall, be
 		}
 		return toolAuthorization{allowed: true, approval: approval}, nil
 	case permissionPkg.CheckDeny:
-		return toolAuthorization{approval: executionpkg.ApprovalDenied, reason: "tool call blocked by permission policy"}, nil
+		return toolAuthorization{
+			approval: executionpkg.ApprovalPolicyDenied,
+			decision: permissionPkg.DecisionUserDeny,
+			reason:   "tool call blocked by permission policy",
+		}, nil
 	case permissionPkg.CheckAsk:
+		argumentsHash, err := executionpkg.HashCanonicalArguments(tc.Arguments)
+		if err != nil {
+			return toolAuthorization{
+				hostRefused: true,
+				approval:    executionpkg.ApprovalHostRefused,
+				decision:    permissionPkg.DecisionHostRefuse,
+				refusalCode: "approval_arguments_invalid",
+				reason:      fmt.Sprintf("tool arguments cannot be bound for approval: %v", err),
+			}, nil
+		}
+		request := a.newApprovalRequest(ctx, tc, argumentsHash)
+		if a.hasSessionApproval(request) {
+			return toolAuthorization{
+				allowed:  true,
+				approval: executionpkg.ApprovalSession,
+				decision: permissionPkg.DecisionAllowSession,
+			}, nil
+		}
 		if beforeAsk != nil {
 			if err := beforeAsk(); err != nil {
 				return toolAuthorization{}, err
 			}
 		}
-		allowed, always := permissionPkg.RequestApprovalContext(ctx, tc.Name, tc.Arguments, a.approvalCallback)
+		response := permissionPkg.ResolveApprovalContext(ctx, request, a.approvalCallback)
 		if err := ctx.Err(); err != nil {
-			return toolAuthorization{cancelled: true, reason: err.Error()}, nil
+			return toolAuthorization{cancelled: true, approval: executionpkg.ApprovalCancelled, decision: permissionPkg.DecisionCancelled, reason: err.Error()}, nil
 		}
-		if !allowed {
-			return toolAuthorization{approval: executionpkg.ApprovalDenied, reason: "explicit approval required"}, nil
+		switch response.Decision {
+		case permissionPkg.DecisionAllowOnce:
+			return toolAuthorization{allowed: true, approval: executionpkg.ApprovalOnce, decision: response.Decision}, nil
+		case permissionPkg.DecisionAllowSession:
+			a.rememberSessionApproval(request)
+			return toolAuthorization{allowed: true, approval: executionpkg.ApprovalSession, decision: response.Decision}, nil
+		case permissionPkg.DecisionUserDeny:
+			reason := response.Message
+			if reason == "" {
+				reason = "user denied tool execution"
+			}
+			return toolAuthorization{approval: executionpkg.ApprovalUserDenied, decision: response.Decision, reason: reason}, nil
+		case permissionPkg.DecisionCancelled:
+			reason := response.Message
+			if reason == "" {
+				reason = "approval was cancelled"
+			}
+			return toolAuthorization{cancelled: true, approval: executionpkg.ApprovalCancelled, decision: response.Decision, reason: reason}, nil
+		case permissionPkg.DecisionHostRefuse:
+			reason := response.Message
+			if reason == "" {
+				reason = "approval host refused the request"
+			}
+			return toolAuthorization{
+				hostRefused: true,
+				approval:    executionpkg.ApprovalHostRefused,
+				decision:    response.Decision,
+				refusalCode: response.Code,
+				reason:      reason,
+			}, nil
+		default:
+			return toolAuthorization{
+				hostRefused: true,
+				approval:    executionpkg.ApprovalHostRefused,
+				decision:    permissionPkg.DecisionHostRefuse,
+				refusalCode: "invalid_approval_decision",
+				reason:      "approval host returned an invalid decision",
+			}, nil
 		}
-		approval := executionpkg.ApprovalOnce
-		if always {
-			approval = executionpkg.ApprovalAlways
-		}
-		return toolAuthorization{allowed: true, approval: approval, persistAlways: always}, nil
 	default:
-		return toolAuthorization{approval: executionpkg.ApprovalDenied, reason: "unknown permission state"}, nil
-	}
-}
-
-func (a *Agent) persistAlwaysApproval(tc llm.ToolCall, out Output) {
-	if a.permChecker == nil {
-		return
-	}
-	if err := a.permChecker.SetPolicy(tc.Name, permissionPkg.PolicyAllow); err != nil {
-		out.SystemMessage(fmt.Sprintf("warning: approval was granted, but could not be persisted: %v", err))
+		return toolAuthorization{
+			hostRefused: true,
+			approval:    executionpkg.ApprovalHostRefused,
+			decision:    permissionPkg.DecisionHostRefuse,
+			refusalCode: "unknown_permission_state",
+			reason:      "unknown permission state",
+		}, nil
 	}
 }
 

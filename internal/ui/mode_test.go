@@ -13,6 +13,7 @@ import (
 func TestCycleMode(t *testing.T) {
 	t.Run("cycles_normal_to_plan", func(t *testing.T) {
 		m := newTestModel(t)
+		m.input.SetValue("keep this draft")
 		if m.mode != ModeNormal {
 			t.Fatalf("expected initial mode ModeNormal, got %d", m.mode)
 		}
@@ -22,6 +23,12 @@ func TestCycleMode(t *testing.T) {
 
 		if m.mode != ModePlan {
 			t.Errorf("expected ModePlan after cycling from NORMAL, got %d", m.mode)
+		}
+		if got := m.input.Value(); got != "keep this draft" {
+			t.Fatalf("mode cycle changed composer draft to %q", got)
+		}
+		if m.overlay != OverlayNone || m.planFormState != nil || m.goalFormState != nil {
+			t.Fatalf("mode cycle opened UI: overlay=%d plan=%v goal=%v", m.overlay, m.planFormState != nil, m.goalFormState != nil)
 		}
 	})
 
@@ -230,73 +237,94 @@ func TestDefaultModeConfigs(t *testing.T) {
 		t.Errorf("ModeAuto label should be AUTO, got %q", configs[ModeAuto].Label)
 	}
 	if !configs[ModeAuto].ToolPolicy.AllowMCP {
-		t.Error("ModeAuto should allow tools under Goal Runtime and permission policy")
+		t.Error("ModeAuto should allow tools under the configured permission policy")
 	}
 }
 
-func TestAutoSubmitEntersOrControlsDurableGoal(t *testing.T) {
-	t.Run("new goal opens prefilled form", func(t *testing.T) {
-		client := &goalCountingClient{}
-		m := newGoalRuntimeTestModel(t, client)
-		m.mode = ModeAuto
-		m.input.SetValue("ship a verified compact interface")
-		if cmd := m.submitInput(); cmd != nil {
-			t.Fatal("AUTO goal form unexpectedly dispatched a provider command")
-		}
-		if m.overlay != OverlayGoalForm || m.goalFormState == nil {
-			t.Fatalf("AUTO submit overlay=%d form=%v", m.overlay, m.goalFormState != nil)
-		}
-		if got := m.goalFormState.objective.Value(); got != "ship a verified compact interface" {
-			t.Fatalf("prefilled objective = %q", got)
-		}
-		if !m.goalFormState.draftFromPrompt {
-			t.Fatal("AUTO prompt was not presented as a reviewable draft")
-		}
-		if client.calls.Load() != 0 {
-			t.Fatalf("AUTO form made %d provider calls", client.calls.Load())
-		}
-	})
+func TestConversationalPresetSubmitDispatchesImmediately(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		mode Mode
+	}{
+		{name: "plan", mode: ModePlan},
+		{name: "auto", mode: ModeAuto},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &goalCountingClient{}
+			m := newGoalRuntimeTestModel(t, client)
+			m.mode = test.mode
+			m.input.SetValue("ship a verified compact interface")
+			cmd := m.submitInput()
+			if cmd == nil {
+				t.Fatal("ordinary prompt did not dispatch a provider command")
+			}
+			if m.overlay != OverlayNone || m.planFormState != nil || m.goalFormState != nil {
+				t.Fatalf("submit opened UI: overlay=%d plan=%v goal=%v", m.overlay, m.planFormState != nil, m.goalFormState != nil)
+			}
+			if m.goalRuntime != nil {
+				t.Fatal("ordinary prompt implicitly created a durable goal")
+			}
+			if got := m.input.Value(); got != "" {
+				t.Fatalf("submitted composer draft was not cleared: %q", got)
+			}
+			if m.state != StateWaiting || len(m.entries) == 0 || m.entries[len(m.entries)-1].Kind != "user" {
+				t.Fatalf("submit presentation: state=%v entries=%#v", m.state, m.entries)
+			}
+			if done, ok := cmd().(AgentDoneMsg); !ok || done.TurnID == "" {
+				t.Fatalf("provider result = %#v", done)
+			}
+			if got := client.calls.Load(); got != 1 {
+				t.Fatalf("provider calls = %d, want 1", got)
+			}
+		})
+	}
 
-	t.Run("live goal preserves draft and opens inspector", func(t *testing.T) {
+	t.Run("auto prompt does not hijack an existing goal", func(t *testing.T) {
 		client := &goalCountingClient{}
 		m := newGoalRuntimeTestModel(t, client)
 		m.mode = ModeAuto
 		m.goalRuntime = newUIGoalRuntime(t, 42, goal.BudgetLimits{MaxContinuationTurns: 3})
-		m.input.SetValue("one-off instruction that must not bypass the goal")
-		if cmd := m.submitInput(); cmd != nil {
-			t.Fatal("active AUTO goal unexpectedly dispatched a provider command")
+		before := snapshotUIGoal(t, m.goalRuntime)
+		m.input.SetValue("one-off instruction")
+		cmd := m.submitInput()
+		if cmd == nil {
+			t.Fatal("AUTO prompt with an existing goal did not dispatch")
 		}
-		if m.overlay != OverlayGoalInspector || m.goalInspectorState == nil {
-			t.Fatalf("active AUTO submit overlay=%d inspector=%v", m.overlay, m.goalInspectorState != nil)
+		if m.overlay != OverlayNone || m.goalInspectorState != nil || m.goalFormState != nil {
+			t.Fatalf("AUTO prompt opened goal UI: overlay=%d inspector=%v form=%v", m.overlay, m.goalInspectorState != nil, m.goalFormState != nil)
 		}
-		if got := m.input.Value(); got != "one-off instruction that must not bypass the goal" {
-			t.Fatalf("preserved AUTO draft = %q", got)
+		after := snapshotUIGoal(t, m.goalRuntime)
+		if after.ID != before.ID || after.State != before.State || after.Objective != before.Objective {
+			t.Fatalf("ordinary AUTO prompt changed durable goal: before=%#v after=%#v", before, after)
 		}
-		if client.calls.Load() != 0 {
-			t.Fatalf("active AUTO draft made %d provider calls", client.calls.Load())
+		if done, ok := cmd().(AgentDoneMsg); !ok || done.TurnID == "" {
+			t.Fatalf("provider result = %#v", done)
+		}
+		if got := client.calls.Load(); got != 1 {
+			t.Fatalf("provider calls = %d, want 1", got)
 		}
 	})
 
-	t.Run("custom prompt command cannot bypass live goal", func(t *testing.T) {
+	t.Run("auto custom prompt dispatches without goal UI", func(t *testing.T) {
 		client := &goalCountingClient{}
 		m := newGoalRuntimeTestModel(t, client)
 		m.mode = ModeAuto
 		m.goalRuntime = newUIGoalRuntime(t, 42, goal.BudgetLimits{MaxContinuationTurns: 3})
-		m.input.SetValue("draft remains visible")
-		if cmd := m.handleCommandAction(command.Result{
+		cmd := m.handleCommandAction(command.Result{
 			Action: command.ActionSendPrompt,
-			Data:   "expanded custom instruction that must not dispatch",
-		}); cmd != nil {
-			t.Fatal("AUTO custom prompt returned a provider command")
+			Data:   "expanded custom instruction",
+		})
+		if cmd == nil {
+			t.Fatal("AUTO custom prompt did not dispatch")
 		}
-		if m.overlay != OverlayGoalInspector || m.goalInspectorState == nil {
-			t.Fatalf("AUTO custom prompt overlay=%d inspector=%v", m.overlay, m.goalInspectorState != nil)
+		if m.overlay != OverlayNone || m.goalInspectorState != nil || m.goalFormState != nil {
+			t.Fatalf("AUTO custom prompt opened goal UI: overlay=%d inspector=%v form=%v", m.overlay, m.goalInspectorState != nil, m.goalFormState != nil)
 		}
-		if got := m.input.Value(); got != "expanded custom instruction that must not dispatch" {
-			t.Fatalf("AUTO custom prompt did not preserve its expanded draft: %q", got)
+		if done, ok := cmd().(AgentDoneMsg); !ok || done.TurnID == "" {
+			t.Fatalf("provider result = %#v", done)
 		}
-		if client.calls.Load() != 0 {
-			t.Fatalf("AUTO custom prompt made %d provider calls", client.calls.Load())
+		if got := client.calls.Load(); got != 1 {
+			t.Fatalf("provider calls = %d, want 1", got)
 		}
 	})
 }

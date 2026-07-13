@@ -42,7 +42,7 @@ func TestPasteMsg_LargePaste(t *testing.T) {
 	}
 }
 
-func TestPasteMsg_LargePasteNotIdle(t *testing.T) {
+func TestPasteMsg_LargePasteDuringOrdinaryTurnRequiresReview(t *testing.T) {
 	m := newTestModel(t)
 	m.state = StateStreaming
 
@@ -50,8 +50,40 @@ func TestPasteMsg_LargePasteNotIdle(t *testing.T) {
 	updated, _ := m.Update(tea.PasteMsg{Content: content})
 	m = updated.(*Model)
 
+	if m.pendingPaste == nil || !m.pendingPaste.NeedsReview {
+		t.Error("large follow-up paste bypassed review during streaming")
+	}
+	if m.input.Value() != "" {
+		t.Fatalf("reviewed follow-up paste mutated composer: %q", m.input.Value())
+	}
+}
+
+func TestPasteMsg_SmallPasteDraftsFollowUpDuringOrdinaryTurn(t *testing.T) {
+	m := newTestModel(t)
+	m.state = StateWaiting
+
+	updated, _ := m.Update(tea.PasteMsg{Content: "check this next"})
+	m = updated.(*Model)
+	if got := m.input.Value(); got != "check this next" {
+		t.Fatalf("running follow-up paste = %q", got)
+	}
 	if m.pendingPaste != nil {
-		t.Error("should not set pending paste during streaming")
+		t.Fatal("small running paste unexpectedly required review")
+	}
+}
+
+func TestPasteMsgCannotCreateHiddenSecondFollowUp(t *testing.T) {
+	m := newTestModel(t)
+	m.state = StateStreaming
+	m.queuedFollowUp = &queuedFollowUp{Prompt: "first follow-up"}
+
+	updated, _ := m.Update(tea.PasteMsg{Content: "hidden second follow-up"})
+	m = updated.(*Model)
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("queued slot accepted hidden paste: %q", got)
+	}
+	if m.pendingPaste != nil {
+		t.Fatal("queued slot opened an unreachable paste decision")
 	}
 }
 
