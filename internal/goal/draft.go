@@ -7,12 +7,15 @@ import (
 )
 
 const (
-	// GoalDraftVersion identifies the review payload produced before a durable
-	// goal exists. Drafts have no execution authority and are never persisted as
-	// Runtime snapshots.
+	// GoalDraftVersion identifies the deterministic definition projected before
+	// a durable goal exists. Drafts have no execution authority by themselves
+	// and are never persisted as Runtime snapshots.
 	GoalDraftVersion = 1
 
 	maxDraftSourceBytes = MaxObjectiveBytes
+	// Draft criteria quote only a compact, human-readable projection of the
+	// objective. The complete objective remains authoritative in Draft.Objective.
+	maxDraftCriterionExcerptBytes = 768
 )
 
 // DraftSource records how a review-only goal suggestion was produced.
@@ -22,11 +25,12 @@ const (
 	DraftSourceDeterministic DraftSource = "deterministic"
 )
 
-// Draft is a bounded, review-only suggestion derived from a user's prompt.
+// Draft is a bounded definition suggestion derived from a user's prompt.
 // SourcePrompt preserves the exact submitted bytes so presentation code can
-// restore the composer without silently replacing the user's words. Objective
-// and AcceptanceCriteria are suggestions only; callers must present them for
-// explicit review and must not create or dispatch a Runtime from a Draft alone.
+// restore the composer without silently replacing the user's words. A caller
+// may accept a concrete draft only when it also holds an explicit typed goal
+// creation intent; otherwise it must ask the contextual follow-up. InferDraft
+// itself never creates or dispatches a Runtime.
 type Draft struct {
 	Version            int
 	Source             DraftSource
@@ -34,6 +38,11 @@ type Draft struct {
 	Objective          string
 	AcceptanceCriteria []string
 	Budget             BudgetLimits
+	// NeedsFollowUp is true only when the prompt lacks a concrete target. The
+	// caller can then ask FollowUpPrompt instead of forcing every goal through a
+	// generic multi-field review.
+	NeedsFollowUp  bool
+	FollowUpPrompt string
 }
 
 // InferDraft returns conservative local suggestions without consulting a
@@ -58,17 +67,83 @@ func InferDraft(prompt string, defaults BudgetLimits) (Draft, error) {
 		return Draft{}, fmt.Errorf("%w: goal prompt is required", ErrInvalid)
 	}
 
+	criteria := inferDraftCriteria(objective)
+	for index, criterion := range criteria {
+		if err := validateText(fmt.Sprintf("draft acceptance criterion %d", index+1), criterion, MaxCriterionBytes, true); err != nil {
+			return Draft{}, err
+		}
+	}
+	needsFollowUp := draftPromptNeedsFollowUp(objective)
+	followUp := ""
+	if needsFollowUp {
+		followUp = "What concrete behavior or artifact should change, and what observable result would prove it?"
+	}
+
 	return Draft{
-		Version:      GoalDraftVersion,
-		Source:       DraftSourceDeterministic,
-		SourcePrompt: prompt,
-		Objective:    objective,
-		AcceptanceCriteria: []string{
-			"The requested outcome is complete and can be demonstrated.",
-			"Relevant verification passes for the changed behavior.",
-		},
-		Budget: defaults,
+		Version:            GoalDraftVersion,
+		Source:             DraftSourceDeterministic,
+		SourcePrompt:       prompt,
+		Objective:          objective,
+		AcceptanceCriteria: criteria,
+		Budget:             defaults,
+		NeedsFollowUp:      needsFollowUp,
+		FollowUpPrompt:     followUp,
 	}, nil
+}
+
+func inferDraftCriteria(objective string) []string {
+	excerpt := boundDraftText(strings.Join(strings.Fields(objective), " "), maxDraftCriterionExcerptBytes)
+	return []string{
+		"Demonstrate every requested outcome and constraint in the objective: " + excerpt,
+		"Record passing evidence from focused or reproducible verification of the requested outcome: " + excerpt,
+	}
+}
+
+// draftPromptNeedsFollowUp deliberately recognizes only obvious ambiguity. A
+// short but concrete request such as "fix parser" remains actionable, while
+// deictic requests such as "fix it" ask one contextual question before AUTO.
+func draftPromptNeedsFollowUp(objective string) bool {
+	words := strings.Fields(strings.ToLower(objective))
+	if len(words) < 2 {
+		return true
+	}
+	meaningfulTargets := 0
+	for _, word := range words {
+		word = strings.Trim(word, ".,:;!?()[]{}\"'`")
+		if word == "" || draftPromptStopWord(word) {
+			continue
+		}
+		meaningfulTargets++
+	}
+	return meaningfulTargets == 0
+}
+
+func draftPromptStopWord(word string) bool {
+	switch word {
+	case "a", "an", "and", "better", "can", "change", "clean", "complete", "could", "create", "do", "everything", "finish", "fix", "handle", "i", "implement", "improve", "it", "make", "more", "on", "please", "polish", "review", "ship", "something", "stuff", "that", "the", "thing", "this", "to", "update", "we", "work", "would", "you":
+		return true
+	default:
+		return false
+	}
+}
+
+func boundDraftText(value string, maxBytes int) string {
+	value = strings.TrimSpace(value)
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len(value) <= maxBytes {
+		return value
+	}
+	const suffix = "…"
+	limit := maxBytes - len(suffix)
+	if limit <= 0 {
+		return strings.Repeat(".", maxBytes)
+	}
+	for limit > 0 && !utf8.ValidString(value[:limit]) {
+		limit--
+	}
+	return strings.TrimSpace(value[:limit]) + suffix
 }
 
 // ReviewedSpec converts explicitly reviewed values into the immutable portion

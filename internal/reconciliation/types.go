@@ -138,11 +138,18 @@ func (t Target) Validate() error {
 	if err := validateText("target workspace id", t.WorkspaceID, MaxWorkspaceBytes); err != nil {
 		return err
 	}
+	// GoalID is intentionally optional for ordinary NORMAL/AUTO turns. A Goal
+	// Runtime recovery still binds its non-empty goal ID; standalone execution
+	// reconciliation must not fabricate one merely to record typed evidence.
+	if t.GoalID != "" {
+		if err := validateText("target goal id", t.GoalID, MaxIdentityBytes); err != nil {
+			return err
+		}
+	}
 	for _, field := range []struct {
 		name  string
 		value string
 	}{
-		{"target goal id", t.GoalID},
 		{"target item id", t.ItemID},
 		{"target execution id", t.ExecutionID},
 		{"target turn id", t.TurnID},

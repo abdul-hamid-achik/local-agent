@@ -201,13 +201,14 @@ func renderDiffAtWidth(lines []DiffLine, styles Styles, maxLines, width int) str
 			break
 		}
 
+		content := sanitizeTerminalLine(line.Content)
 		switch line.Kind {
 		case DiffAdded:
-			b.WriteString(styles.DiffAdded.PaddingLeft(indent).Render(fit("+ " + line.Content)))
+			b.WriteString(styles.DiffAdded.PaddingLeft(indent).Render(fit("+ " + content)))
 		case DiffRemoved:
-			b.WriteString(styles.DiffRemoved.PaddingLeft(indent).Render(fit("- " + line.Content)))
+			b.WriteString(styles.DiffRemoved.PaddingLeft(indent).Render(fit("- " + content)))
 		case DiffContext:
-			b.WriteString(styles.DiffContext.PaddingLeft(indent).Render(fit("  " + line.Content)))
+			b.WriteString(styles.DiffContext.PaddingLeft(indent).Render(fit("  " + content)))
 		}
 		b.WriteString("\n")
 		displayed++

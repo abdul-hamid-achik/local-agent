@@ -119,6 +119,19 @@ func TestRenderDiffAtWidthFitsPane(t *testing.T) {
 	assertRenderedLinesFit(t, got, 20)
 }
 
+func TestRenderDiffStripsTerminalControlsAndPreservesIndentation(t *testing.T) {
+	lines := []DiffLine{{Kind: DiffAdded, Content: "  value\x1b]0;owned\x07\u202espoof"}}
+	rendered := renderDiffAtWidth(lines, NewStyles(true), 10, 40)
+	for _, forbidden := range []string{"\x1b]", "\x07", "\u202e", "owned"} {
+		if strings.Contains(rendered, forbidden) {
+			t.Fatalf("diff retained terminal control payload %q: %q", forbidden, rendered)
+		}
+	}
+	if !strings.Contains(ansi.Strip(rendered), "  value") || !strings.Contains(rendered, "spoof") {
+		t.Fatalf("diff lost visible or indented content: %q", rendered)
+	}
+}
+
 func TestAdaptiveStatusTextUsesReadableMutedColor(t *testing.T) {
 	tests := []struct {
 		name   string

@@ -36,10 +36,22 @@ type ecosystemDescriptor struct {
 }
 
 var ecosystemDescriptors = map[string]ecosystemDescriptor{
-	"mcphub":  {label: "MCPHub", role: "gateway and discovery", order: 0},
-	"cortex":  {label: "Cortex", role: "goals and evidence", order: 1},
-	"bob":     {label: "Bob", role: "repository contracts", order: 2},
-	"monitor": {label: "Monitor", role: "system diagnostics", order: 3},
+	"mcphub":     {label: "MCPHub", role: "gateway and discovery", order: 0},
+	"cortex":     {label: "Cortex", role: "goals and evidence", order: 1},
+	"bob":        {label: "Bob", role: "repository contracts", order: 2},
+	"monitor":    {label: "Monitor", role: "system diagnostics", order: 3},
+	"codemap":    {label: "Codemap", role: "structural evidence", order: 4},
+	"vecgrep":    {label: "Vecgrep", role: "semantic discovery", order: 5},
+	"glyphrun":   {label: "Glyphrun", role: "terminal verification", order: 6},
+	"glyph":      {label: "Glyphrun", role: "terminal verification", order: 6},
+	"cairntrace": {label: "Cairntrace", role: "browser verification", order: 7},
+	"cairn":      {label: "Cairntrace", role: "browser verification", order: 7},
+	"vidtrace":   {label: "Vidtrace", role: "video evidence", order: 8},
+	"filecheap":  {label: "file.cheap", role: "artifact storage", order: 9},
+	"fcheap":     {label: "file.cheap", role: "artifact storage", order: 9},
+	"tinyvault":  {label: "TinyVault", role: "secret boundary", order: 10},
+	"tvault":     {label: "TinyVault", role: "secret boundary", order: 10},
+	"veclite":    {label: "VecLite", role: "vector storage", order: 11},
 }
 
 // projectEcosystemConnections reconciles the live registry names with the
@@ -111,8 +123,17 @@ func describeEcosystemServer(name string) ecosystemDescriptor {
 func ecosystemIdentity(name string) string {
 	canonical := strings.ToLower(strings.TrimSpace(name))
 	compact := strings.NewReplacer("-", "", "_", "", " ", "").Replace(canonical)
-	if compact == "mcphub" {
+	switch compact {
+	case "mcphub":
 		return "mcphub"
+	case "file.cheap", "filecheap":
+		return "filecheap"
+	case "tinyvault":
+		return "tinyvault"
+	case "cairntrace":
+		return "cairntrace"
+	case "glyphrun":
+		return "glyphrun"
 	}
 	for _, part := range strings.FieldsFunc(canonical, func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsNumber(r)

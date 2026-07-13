@@ -22,6 +22,9 @@ var configFileReader = safeio.NewReader()
 var configFileReadTimeout = safeio.StartupReadTimeout
 
 type Config struct {
+	// SourcePath is the host-resolved config selected by repository/XDG
+	// precedence. It is runtime metadata only and is never serialized.
+	SourcePath   string         `yaml:"-" json:"-"`
 	Ollama       OllamaConfig   `yaml:"ollama"`
 	Model        ModelConfig    `yaml:"model,omitempty"`
 	Agents       AgentsConfig   `yaml:"agents,omitempty"`
@@ -109,6 +112,10 @@ func Load() (*Config, error) {
 	if localPath != "" {
 		if err := yaml.Unmarshal(data, &cfg); err != nil {
 			return nil, fmt.Errorf("parse config %s: %w", localPath, err)
+		}
+		cfg.SourcePath = localPath
+		if absolute, absErr := filepath.Abs(localPath); absErr == nil {
+			cfg.SourcePath = filepath.Clean(absolute)
 		}
 	}
 

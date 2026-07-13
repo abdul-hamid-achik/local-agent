@@ -124,6 +124,9 @@ type GoalRecoveryOptions struct {
 	Height        int
 	IsDark        bool
 	ReducedMotion bool
+	// Standalone adapts the already-designed evidence review for an ordinary
+	// goal-less session. Persistence and authority remain parent-owned.
+	Standalone bool
 }
 
 type goalRecoveryChoice[T ~string] struct {
@@ -214,6 +217,7 @@ type GoalRecovery struct {
 	height        int
 	isDark        bool
 	reducedMotion bool
+	standalone    bool
 	styles        Styles
 	cache         goalRecoveryRenderCache
 }
@@ -261,6 +265,7 @@ func NewGoalRecovery(items []GoalRecoveryItem, options GoalRecoveryOptions) *Goa
 		height:           max(minTerminalHeight, options.Height),
 		isDark:           options.IsDark,
 		reducedMotion:    options.ReducedMotion,
+		standalone:       options.Standalone,
 		styles:           NewStyles(options.IsDark),
 	}
 	recovery.applyStyles()
@@ -663,6 +668,28 @@ func (r *GoalRecovery) confirmationDetail() string {
 		lines := []string{
 			"Abandons the inspected provider turn only; this is not proof of backend or goal completion.",
 			"No execution outcome is invented; AUTO will not resume.",
+			goalRecoveryObservationLabel(draft.Observation) + " · " + goalRecoverySourceLabel(draft.Source),
+			"Summary · " + draft.Summary,
+			"Reference · " + draft.Reference,
+		}
+		return r.styles.OverlayDim.Render(goalRecoveryWrapLines(lines, r.detail.Width()))
+	}
+	if r.standalone {
+		if r.compact() {
+			lines := []string{
+				"Execution observation only.",
+				"Ledger stays " + eventType + ".",
+				"No tool is retried.",
+				goalRecoveryObservationLabel(draft.Observation) + " · " + goalRecoverySourceLabel(draft.Source),
+				"Summary · " + draft.Summary,
+				"Reference · " + draft.Reference,
+			}
+			return r.styles.OverlayDim.Render(goalRecoveryWrapLines(lines, r.detail.Width()))
+		}
+		lines := []string{
+			"Records typed evidence for this execution only; it does not claim backend or task completion.",
+			"The immutable ledger stays " + eventType + "; no tool is retried.",
+			"After the receipt commits, the next prompt rechecks durable state before provider work.",
 			goalRecoveryObservationLabel(draft.Observation) + " · " + goalRecoverySourceLabel(draft.Source),
 			"Summary · " + draft.Summary,
 			"Reference · " + draft.Reference,
@@ -1122,14 +1149,26 @@ func (r *GoalRecovery) renderList() string {
 	}
 	var b strings.Builder
 	title := fmt.Sprintf("Recovery · %d %s", count, noun)
+	if r.standalone {
+		title = fmt.Sprintf("Execution recovery · %d %s", count, noun)
+	}
 	if r.compact() {
 		title = fmt.Sprintf("Recovery · %d", count)
+		if r.standalone {
+			title = fmt.Sprintf("Execution recovery · %d", count)
+		}
 	}
 	b.WriteString(r.styles.OverlayTitle.Render(truncateDisplay(title, width)))
 	b.WriteByte('\n')
 	banner := "The prior turn may have produced effects. Recovery records observations; it is not proof of backend or goal completion."
+	if r.standalone {
+		banner = "The prior execution may have produced an effect. Review it before recording typed evidence; no tool is retried."
+	}
 	if r.compact() {
 		banner = "Turn effects unknown.\nNot completion proof."
+		if r.standalone {
+			banner = "Execution effect unknown.\nNo tool retry."
+		}
 	}
 	b.WriteString(r.errorStyle().Render(wrapText(banner, width)))
 	b.WriteByte('\n')

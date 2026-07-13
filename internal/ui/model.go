@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"reflect"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -29,6 +30,7 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/command"
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
+	"github.com/abdul-hamid-achik/local-agent/internal/ecosystem"
 	"github.com/abdul-hamid-achik/local-agent/internal/execution"
 	"github.com/abdul-hamid-achik/local-agent/internal/goal"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
@@ -81,6 +83,9 @@ type CompletionState struct {
 	CurrentPath   string          // for @ file browsing: relative dir path
 	Searching     bool            // true while vecgrep is in flight
 	DebounceTag   int             // cancel stale searches
+	Preview       completionPreview
+	PreviewToken  uint64
+	PreviewCancel context.CancelFunc
 }
 
 // ToolStatus represents the state of a tool execution.
@@ -104,9 +109,10 @@ type ToolEntry struct {
 	Status        ToolStatus
 	StartTime     time.Time
 	Duration      time.Duration
-	Collapsed     bool       // per-entry collapse state
-	BeforeContent string     `json:"-"` // ephemeral snapshot before file write
-	DiffLines     []DiffLine // computed diff (nil = not a file write)
+	Collapsed     bool                     // per-entry collapse state
+	BeforeContent string                   `json:"-"` // ephemeral snapshot before file write
+	DiffLines     []DiffLine               // computed diff (nil = not a file write)
+	Projection    ecosystem.ToolProjection // bounded semantic role, route, and outcome
 }
 
 // ChatEntry is a single item in the chat log.
@@ -220,9 +226,6 @@ type Model struct {
 	sessionLoadCancel            context.CancelFunc
 	sessionListToken             uint64
 	sessionListing               bool
-	legacyCheckpointPreview      *legacyCheckpointPreview
-	legacyMemoryPreview          *legacyMemoryPreview
-	legacyICEPreview             *legacyICEPreview
 
 	// Paste detection
 	pendingPaste *pendingPaste
@@ -262,6 +265,7 @@ type Model struct {
 	goalRecoveryApplyToken   uint64
 	goalRecoveryApplyRunning bool
 	goalRecoveryApplyItemID  string
+	standaloneRecovery       *standaloneRecoveryState
 	modelPinned              bool
 
 	// Goal Runtime. The host owns continuation, budget, cancellation and
@@ -339,9 +343,13 @@ type Model struct {
 	fileChanges map[string]int // path → number of modifications
 
 	// Tool approval prompt
-	pendingApproval *ToolApprovalMsg
-	approvalState   *ApprovalState
-	queuedFollowUp  *queuedFollowUp
+	pendingApproval    *ToolApprovalMsg
+	approvalState      *ApprovalState
+	queuedFollowUp     *queuedFollowUp
+	turnMessagesBefore []llm.Message
+	turnPrompt         string
+	turnPromptVisible  bool
+	turnCheckpointSet  bool
 
 	// Prompt history
 	promptHistory []string // all submitted inputs
@@ -362,14 +370,7 @@ func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, com
 	ta.ShowLineNumbers = false
 	// A single send marker followed by continuation rails makes multiline
 	// drafts read as one composer instead of several submitted messages.
-	ta.SetPromptFunc(2, func(info textarea.PromptInfo) string {
-		if info.LineNumber == 0 {
-			return "❯ "
-		}
-		return "│ "
-	})
-
-	ta.SetStyles(agentTextareaStyles(true))
+	configureComposerMode(&ta, true, ModeNormal)
 
 	initialStyles := NewStyles(true)
 	s := spinner.New(
@@ -515,7 +516,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		m.styles = NewStyles(m.isDark)
 		// Update spinner style for theme.
 		m.spin.Style = m.styles.StatusDot
-		m.input.SetStyles(agentTextareaStyles(m.isDark))
+		m.syncComposerAuthority()
 		m.scramble.SetDark(msg.IsDark())
 		// Update tool card styles for theme.
 		m.toolCardMgr.SetDark(msg.IsDark())
@@ -635,6 +636,16 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 
 	case goalRecoveryApplyResultMsg:
 		if cmd := m.handleGoalRecoveryApplyResult(msg); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+
+	case standaloneRecoveryInspectResultMsg:
+		if cmd := m.handleStandaloneRecoveryInspect(msg); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+
+	case standaloneRecoveryApplyResultMsg:
+		if cmd := m.handleStandaloneRecoveryApply(msg); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
 
@@ -1134,14 +1145,33 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 								}
 								return SessionLoadedMsg{LoadToken: loadToken, Err: err}
 							}
-							unresolved, unresolvedErr := m.sessionStore.ListExecutionRecoveryHazards(loadCtx, session.ID, workspaceID, state.ExecutionCursor, 100)
+							var (
+								unresolved       []execution.State
+								recoveryTarget   *agent.UnresolvedExecutionError
+								recoveryContexts []db.StandaloneReconciliationContext
+								unresolvedErr    error
+							)
+							if state.Goal == nil {
+								projection, projectErr := m.sessionStore.ProjectExecutionRecovery(loadCtx, session.ID, workspaceID, state.ExecutionCursor, 100)
+								if projectErr != nil {
+									if lease != nil {
+										_ = lease.Close()
+									}
+									return SessionLoadedMsg{LoadToken: loadToken, Err: fmt.Errorf("project execution recovery: %w", projectErr)}
+								}
+								unresolved, recoveryContexts = projection.Hazards, projection.Contexts
+								recoveryTarget = standaloneRecoveryTarget(unresolved, state.ExecutionCursor)
+							} else {
+								unresolved, unresolvedErr = m.sessionStore.ListExecutionRecoveryHazards(loadCtx, session.ID, workspaceID, state.ExecutionCursor, 100)
+							}
 							warning := unresolvedExecutionWarning(unresolved)
 							if unresolvedErr != nil {
 								warning = fmt.Sprintf("Recovery check failed: %v. This session will remain blocked until durable execution state can be verified.", unresolvedErr)
 							}
 							return SessionLoadedMsg{
 								LoadToken: loadToken, SessionID: session.ID, State: state,
-								StateRecord: stateRecord, Title: sessionTitle, RecoveryWarning: warning, ExecutionLease: lease,
+								StateRecord: stateRecord, Title: sessionTitle, RecoveryWarning: warning,
+								RecoveryTarget: recoveryTarget, RecoveryContexts: recoveryContexts, ExecutionLease: lease,
 							}
 						}
 						return m, tea.Batch(m.startActivityCmd(), load)
@@ -1161,15 +1191,19 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 				case key.Matches(msg, m.keys.CompleteUp):
 					if cs.Index > 0 {
 						cs.Index--
+						return m, m.refreshCompletionPreview()
 					}
+					return m, nil
 				case key.Matches(msg, m.keys.CompleteDown):
 					if cs.Index < len(cs.FilteredItems)-1 {
 						cs.Index++
+						return m, m.refreshCompletionPreview()
 					}
+					return m, nil
 				case key.Matches(msg, m.keys.CompleteSelect):
 					// Enter: if item is a folder, drill into it; otherwise accept
 					if cs.Index < len(cs.FilteredItems) && cs.Kind == "attachments" && cs.FilteredItems[cs.Index].Category == "folder" {
-						m.drillIntoFolder()
+						return m, m.drillIntoFolder()
 					} else {
 						m.acceptCompletion()
 					}
@@ -1179,8 +1213,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 				default:
 					// Check for backspace on empty filter => go up directory for @ kind
 					if msg.Code == tea.KeyBackspace && cs.Filter.Value() == "" && cs.Kind == "attachments" && cs.CurrentPath != "" {
-						m.drillUpFolder()
-						return m, nil
+						return m, m.drillUpFolder()
 					}
 
 					// Forward all other keys to filter input
@@ -1204,16 +1237,18 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 					if cs.Filter.Value() != oldFilter {
 						cs.FilteredItems = FilterCompletions(cs.AllItems, cs.Filter.Value())
 						cs.Index = 0
+						previewCmd := m.refreshCompletionPreview()
 
 						// Schedule debounced vecgrep search for @ kind
 						if cs.Kind == "attachments" && cs.Filter.Value() != "" {
 							cs.DebounceTag++
 							tag := cs.DebounceTag
 							query := cs.Filter.Value()
-							return m, tea.Batch(cmd, tea.Tick(300*time.Millisecond, func(time.Time) tea.Msg {
+							return m, tea.Batch(cmd, previewCmd, tea.Tick(300*time.Millisecond, func(time.Time) tea.Msg {
 								return CompletionDebounceTickMsg{Tag: tag, Query: query}
 							}))
 						}
+						return m, tea.Batch(cmd, previewCmd)
 					}
 					return m, cmd
 				}
@@ -1282,7 +1317,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 				targetCollapsed := false
 				found := false
 				for i := len(m.entries) - 1; i >= 0; i-- {
-					if m.entries[i].Kind == "assistant" && m.entries[i].ThinkingContent != "" {
+					if m.entries[i].Kind == "assistant" && strings.TrimSpace(m.entries[i].ThinkingContent) != "" {
 						targetCollapsed = !m.entries[i].ThinkingCollapsed
 						found = true
 						break
@@ -1290,7 +1325,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 				}
 				if found {
 					for i := range m.entries {
-						if m.entries[i].Kind == "assistant" && m.entries[i].ThinkingContent != "" {
+						if m.entries[i].Kind == "assistant" && strings.TrimSpace(m.entries[i].ThinkingContent) != "" {
 							m.entries[i].ThinkingCollapsed = targetCollapsed
 						}
 					}
@@ -1376,7 +1411,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			if m.state == StateIdle && m.completer != nil && !m.isCompletionActive() {
 				// Explicit completion always overrides an earlier Escape dismissal.
 				m.completionSuppressedDraft = ""
-				m.triggerCompletion(m.input.Value())
+				return m, m.triggerCompletion(m.input.Value())
 			}
 
 		case key.Matches(msg, m.keys.HistoryUp):
@@ -1456,14 +1491,16 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		if m.state == StateWaiting {
 			m.state = StateStreaming
 		}
+		projection := ecosystem.ProjectToolCall(msg.Name, msg.Args)
 		te := ToolEntry{
-			ID:        msg.ID,
-			Name:      msg.Name,
-			Args:      FormatToolArgs(msg.Args),
-			RawArgs:   msg.Args,
-			Status:    ToolStatusRunning,
-			StartTime: msg.StartTime,
-			Collapsed: m.toolsCollapsed,
+			ID:         msg.ID,
+			Name:       msg.Name,
+			Args:       agent.FormatToolArgsForTool(msg.Name, msg.Args),
+			RawArgs:    agent.SafeToolArgsForPersistence(msg.Name, msg.Args),
+			Status:     ToolStatusRunning,
+			StartTime:  msg.StartTime,
+			Collapsed:  m.toolsCollapsed,
+			Projection: projection,
 		}
 		te.Summary = boundedToolCardSummary(toolSummary(classifyTool(msg.Name), te))
 		// Snapshot file content before write for diff view.
@@ -1489,14 +1526,17 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			card := &m.toolCardMgr.Cards[len(m.toolCardMgr.Cards)-1]
 			card.Args = te.Args
 			card.SetSummary(te.Summary)
+			card.Projection = te.Projection
 		}
 
+		// Settle the assistant segment before its tool receipt so transcript order
+		// remains reasoning/prose → tool. Thinking-only segments render as one
+		// compact disclosure without an empty assistant block.
+		m.flushStream()
 		m.entries = append(m.entries, ChatEntry{
 			Kind:      "tool_group",
 			ToolIndex: len(m.toolEntries) - 1,
 		})
-		// Flush any accumulated stream text before tool display.
-		m.flushStream()
 		m.viewport.SetContent(m.renderEntries())
 		m.gotoBottomIfFollowing()
 
@@ -1524,16 +1564,21 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		for i := len(m.toolEntries) - 1; i >= 0; i-- {
 			if toolCallMatches(msg.ID, msg.Name, m.toolEntries[i].ID, m.toolEntries[i].Name) && m.toolEntries[i].Status == ToolStatusRunning {
 				matched = true
+				projection := msg.Projection.Normalize()
+				if projection.Transport == "" {
+					projection = ecosystem.ProjectToolResult(m.toolEntries[i].Projection, msg.Result, msg.IsError)
+				}
+				m.toolEntries[i].Projection = projection
 				m.toolEntries[i].Result = result
-				m.toolEntries[i].IsError = msg.IsError
+				m.toolEntries[i].IsError = projection.Transport == ecosystem.TransportFailed || projection.Domain == ecosystem.DomainFailed
 				m.toolEntries[i].Duration = msg.Duration
-				if msg.IsError {
+				if m.toolEntries[i].IsError {
 					m.toolEntries[i].Status = ToolStatusError
 				} else {
 					m.toolEntries[i].Status = ToolStatusDone
 				}
 				// Compute diff for file writes and track file changes.
-				if classifyTool(m.toolEntries[i].Name) == ToolTypeFileWrite && !msg.IsError {
+				if classifyTool(m.toolEntries[i].Name) == ToolTypeFileWrite && projection.Successful() {
 					afterContent := readFileForDiffAt(m.toolEntries[i].RawArgs, m.agent.WorkDir())
 					m.toolEntries[i].DiffLines = computeDiff(m.toolEntries[i].BeforeContent, afterContent)
 					if path := toolSummary(ToolTypeFileWrite, m.toolEntries[i]); path != "" {
@@ -1553,15 +1598,19 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		if !matched {
 			break
 		}
-		if m.goalTurnID != "" && !msg.IsError {
+		var completedProjection ecosystem.ToolProjection
+		for i := len(m.toolEntries) - 1; i >= 0; i-- {
+			if toolCallMatches(msg.ID, msg.Name, m.toolEntries[i].ID, m.toolEntries[i].Name) {
+				completedProjection = m.toolEntries[i].Projection
+				break
+			}
+		}
+		if m.goalTurnID != "" && completedProjection.Successful() {
 			m.goalTurnSuccesses++
 		}
 		// Update tool card
-		cardState := ToolCardSuccess
-		if msg.IsError {
-			cardState = ToolCardError
-		}
-		m.toolCardMgr.UpdateCardWithID(msg.ID, msg.Name, cardState, result, msg.Duration)
+		cardState := toolCardStateFromProjection(completedProjection)
+		m.toolCardMgr.UpdateCardSemanticWithID(msg.ID, msg.Name, cardState, result, msg.Duration, completedProjection)
 
 		if m.toolsPending > 0 {
 			m.toolsPending--
@@ -1594,6 +1643,10 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		}
 		var unresolved *agent.UnresolvedExecutionError
 		hasUnresolved := errors.As(msg.Err, &unresolved)
+		if hasUnresolved {
+			m.rollbackPreflightRejectedPrompt()
+		}
+		m.clearTurnMessageCheckpoint()
 		followWasPaused := m.followPaused()
 		followYOffset := m.viewport.YOffset()
 		m.flushStream()
@@ -1630,17 +1683,8 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			m.doneFlash = false
 			switch {
 			case hasUnresolved:
-				detail := "execution state requires reconciliation"
-				if unresolved.Cause != nil {
-					detail = unresolved.Cause.Error()
-				}
-				m.entries = append(m.entries, ChatEntry{
-					Kind: "error",
-					Content: fmt.Sprintf(
-						"Recovery blocked for %s: %s. Inspect the workspace before starting /new; automatic retry is disabled.",
-						unresolved.ToolName, detail,
-					),
-				})
+				m.entries, _ = appendExecutionRecoveryNotice(m.entries, unresolved)
+				m.rememberStandaloneRecovery(unresolved)
 			case errors.Is(msg.Err, context.Canceled) && !m.shuttingDown:
 				m.entries = append(m.entries, ChatEntry{Kind: "system", Content: "Turn cancelled."})
 			}
@@ -2000,6 +2044,16 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			}
 			// Re-filter with current query
 			cs.FilteredItems = FilterCompletions(cs.AllItems, cs.Filter.Value())
+			if cs.Index >= len(cs.FilteredItems) {
+				cs.Index = max(0, len(cs.FilteredItems)-1)
+			}
+			cmds = append(cmds, m.refreshCompletionPreview())
+		}
+
+	case completionPreviewResultMsg:
+		if m.isCompletionActive() && m.completionState.Kind == "attachments" && m.completionState.PreviewToken == msg.Token {
+			m.completionState.PreviewCancel = nil
+			m.completionState.Preview = msg.Preview
 		}
 
 	case ToolApprovalMsg:
@@ -2200,7 +2254,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		if m.state == StateIdle && m.completer != nil && len(newInput) > 0 {
 			first := newInput[0]
 			if (first == '/' || first == '@' || first == '#') && !m.isCompletionActive() && !suppressed {
-				m.triggerCompletion(newInput)
+				cmds = append(cmds, m.triggerCompletion(newInput))
 			}
 		}
 		// Auto-close if trigger char removed
@@ -2315,7 +2369,10 @@ func (m *Model) snapshotExecutionCursor(ctx context.Context) (int64, error) {
 	messages := m.agent.Messages()
 	for _, state := range hazards {
 		if state.Latest.Type != execution.EventCompleted {
-			continue
+			return m.executionCursor, fmt.Errorf(
+				"execution %s remains %s/%s and cannot cross the snapshot boundary",
+				state.Identity.ExecutionID, state.Latest.Type, state.Identity.EffectClass,
+			)
 		}
 		projected := false
 		for _, message := range messages {
@@ -2346,12 +2403,12 @@ func unresolvedExecutionWarning(states []execution.State) string {
 		switch {
 		case state.Latest.Type == execution.EventOutcomeUnknown:
 			return fmt.Sprintf(
-				"Recovery blocked: %s has a durable outcome-unknown receipt. Inspect the workspace before starting /new; automatic continuation is disabled.",
+				"Recovery blocked: %s has a durable outcome-unknown receipt. Use /recover to inspect and record exact evidence; automatic continuation is disabled.",
 				toolName,
 			)
 		case state.Latest.Type == execution.EventStarted && state.Identity.EffectClass != execution.EffectReadOnly:
 			return fmt.Sprintf(
-				"Recovery blocked: %s has a durable dispatch marker but no terminal receipt. Its outcome is unknown, so automatic continuation is disabled. Inspect the workspace before starting /new.",
+				"Recovery blocked: %s has a durable dispatch marker but no terminal receipt. Its outcome is unknown; use /recover to inspect and record exact evidence.",
 				toolName,
 			)
 		case state.Latest.Type == execution.EventCompleted && state.Identity.EffectClass != execution.EffectReadOnly:
@@ -2364,15 +2421,53 @@ func unresolvedExecutionWarning(states []execution.State) string {
 	return ""
 }
 
+func standaloneRecoveryTarget(states []execution.State, snapshotCursor int64) *agent.UnresolvedExecutionError {
+	for _, state := range states {
+		if state.Latest.Type != execution.EventOutcomeUnknown &&
+			(state.Latest.Type != execution.EventStarted || state.Identity.EffectClass == execution.EffectReadOnly) {
+			continue
+		}
+		return &agent.UnresolvedExecutionError{
+			SessionID: state.Identity.SessionID, WorkspaceID: state.Identity.WorkspaceID,
+			SnapshotCursor: snapshotCursor, TurnID: state.Identity.TurnID,
+			ExecutionID: state.Identity.ExecutionID, ToolName: state.Identity.ToolName,
+			EventType: state.Latest.Type,
+			Cause:     errors.New("durable execution outcome requires explicit reconciliation"),
+		}
+	}
+	return nil
+}
+
 func agentTextareaStyles(isDark bool) textarea.Styles {
+	return agentTextareaStylesForMode(isDark, ModeNormal)
+}
+
+// agentTextareaStylesForMode keeps the composer's focus treatment semantic:
+// NORMAL is a quiet neutral rail, PLAN uses Nord purple, and AUTO uses the
+// success green already shared by completed work. outputSemanticPalette also
+// preserves NO_COLOR behavior.
+func agentTextareaStylesForMode(isDark bool, mode Mode) textarea.Styles {
 	styles := textarea.DefaultStyles(isDark)
 	palette := outputSemanticPalette(isDark)
+	// Dim is the quiet neutral token that still meets text contrast. Border is
+	// deliberately softer and made the NORMAL send marker hard to read on light
+	// terminals.
+	promptColor := palette.Dim
+	cursorColor := palette.Accent
+	switch mode {
+	case ModePlan:
+		promptColor = palette.Special
+		cursorColor = palette.Special
+	case ModeAuto:
+		promptColor = palette.Success
+		cursorColor = palette.Success
+	}
 	styles.Focused = textarea.StyleState{
 		Base:        lipgloss.NewStyle(),
 		Text:        lipgloss.NewStyle().Foreground(palette.Text),
 		CursorLine:  lipgloss.NewStyle(),
 		Placeholder: lipgloss.NewStyle().Foreground(palette.Dim),
-		Prompt:      lipgloss.NewStyle().Foreground(palette.Accent).Bold(true),
+		Prompt:      lipgloss.NewStyle().Foreground(promptColor).Bold(mode != ModeNormal),
 	}
 	styles.Blurred = textarea.StyleState{
 		Base:        lipgloss.NewStyle(),
@@ -2381,8 +2476,21 @@ func agentTextareaStyles(isDark bool) textarea.Styles {
 		Placeholder: lipgloss.NewStyle().Foreground(palette.Dim),
 		Prompt:      lipgloss.NewStyle().Foreground(palette.Dim),
 	}
-	styles.Cursor.Color = palette.Accent
+	styles.Cursor.Color = cursorColor
 	return styles
+}
+
+func configureComposerMode(input *textarea.Model, isDark bool, mode Mode) {
+	input.SetStyles(agentTextareaStylesForMode(isDark, mode))
+	input.SetPromptFunc(3, func(info textarea.PromptInfo) string {
+		if info.LineNumber == 0 {
+			if mode == ModeNormal {
+				return "▏❯ "
+			}
+			return "▌❯ "
+		}
+		return " │ "
+	})
 }
 
 // pushHistory appends text to history, deduplicating consecutive entries, capping at 100.
@@ -2451,6 +2559,20 @@ func (m *Model) submitInput() tea.Cmd {
 	text := strings.TrimSpace(m.input.Value())
 	if text == "" {
 		return nil
+	}
+	// An ordinary outcome-unknown execution owns the next safety decision. Do
+	// not send the same (or a new) prompt back through Agent just to rediscover
+	// the durable latch and render another error. Preserve the draft and route
+	// Enter to the same read-only inspection used by /recover; only an explicit
+	// evidence commit can release a later provider turn.
+	if m.standaloneRecovery != nil && m.goalRuntime == nil && !strings.HasPrefix(text, "/") {
+		return m.openStandaloneRecovery()
+	}
+	// A durable Goal Runtime exclusively owns agent turns until it is dropped or
+	// the conversation is reset. Keep ordinary drafts intact and route the user
+	// to the inspector instead of starting an unbounded side turn.
+	if m.goalRuntime != nil && !strings.HasPrefix(text, "/") {
+		return m.rejectPromptWhileGoalAttached(text, false)
 	}
 
 	m.pushHistory(text)
@@ -2682,6 +2804,9 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 		return nil
 
 	case command.ActionSendPrompt:
+		if m.goalRuntime != nil {
+			return m.rejectPromptWhileGoalAttached(result.Data, true)
+		}
 		if result.Text != "" {
 			m.entries = append(m.entries, ChatEntry{Kind: "system", Content: result.Text})
 		}
@@ -2881,41 +3006,18 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 		m.resumeFollow()
 		return nil
 
-	case command.ActionPreviewLegacyCheckpoints:
-		m.previewLegacyCheckpoints()
-		return nil
-
-	case command.ActionClaimLegacyCheckpoints:
-		m.claimLegacyCheckpoints(result.Data)
-		return nil
-
-	case command.ActionPreviewLegacyMemory:
-		m.previewLegacyMemory()
-		return nil
-
-	case command.ActionClaimLegacyMemory:
-		m.claimLegacyMemory(result.Data)
-		return nil
-
-	case command.ActionPreviewLegacyICE:
-		m.previewLegacyICE()
-		return nil
-
-	case command.ActionClaimLegacyICE:
-		m.claimLegacyICE(result.Data)
-		return nil
-
 	case command.ActionOpenGoal:
 		var err error
+		var goalCmd tea.Cmd
 		if result.Goal != nil {
-			err = m.openGoalRequestForm(*result.Goal)
+			goalCmd, err = m.openGoalRequestForm(*result.Goal)
 		} else {
 			err = m.openGoalForm(result.Data, false)
 		}
 		if err != nil {
 			m.appendGoalError(err.Error())
 		}
-		return nil
+		return goalCmd
 
 	case command.ActionEditGoalBudget:
 		if err := m.openGoalForm("", true); err != nil {
@@ -2936,6 +3038,9 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 	case command.ActionDropGoal:
 		m.dropGoal()
 		return nil
+
+	case command.ActionRecoverExecution:
+		return m.openStandaloneRecovery()
 
 	default:
 		// ActionNone — just show text.
@@ -2959,8 +3064,10 @@ func (m *Model) resetConversationSession() {
 	m.goalOperationCancel = nil
 	m.goalOperation = ""
 	m.goalOperationRunning = false
+	m.standaloneRecovery = nil
 	m.goalOperationToken++
 	m.goalRuntime = nil
+	m.syncComposerAuthority()
 	m.goalFormState = nil
 	m.goalInspectorState = nil
 	m.resetGoalRecoveryPresentation()
@@ -2975,9 +3082,6 @@ func (m *Model) resetConversationSession() {
 	m.executionCursor = 0
 	m.resetSessionStateRevision()
 	_ = m.releaseExecutionSessionLease()
-	m.legacyCheckpointPreview = nil
-	m.legacyMemoryPreview = nil
-	m.legacyICEPreview = nil
 	if m.agent != nil {
 		m.agent.SetCheckpointSessionID(0)
 		m.agent.SetExecutionSessionID(0)
@@ -3045,10 +3149,11 @@ func (m *Model) cancelSessionList() {
 // flushStream moves accumulated stream text into a chat entry with cached rendering.
 func (m *Model) flushStream() {
 	m.invalidateEntryCache()
-	if m.streamBuf.Len() > 0 || m.thinkBuf.Len() > 0 {
-		content := m.streamBuf.String()
+	content := sanitizeTerminalMultiline(m.streamBuf.String())
+	thinking := strings.Trim(sanitizeTerminalMultiline(m.thinkBuf.String()), "\r\n")
+	if strings.TrimSpace(content) != "" || strings.TrimSpace(thinking) != "" {
 		var rendered string
-		if m.md != nil && content != "" {
+		if m.md != nil && strings.TrimSpace(content) != "" {
 			rendered = m.md.RenderFull(content)
 		}
 		entry := ChatEntry{
@@ -3057,16 +3162,20 @@ func (m *Model) flushStream() {
 			RenderedContent: rendered,
 		}
 		// Attach thinking content if present.
-		if m.thinkBuf.Len() > 0 {
-			entry.ThinkingContent = m.thinkBuf.String()
+		if strings.TrimSpace(thinking) != "" {
+			entry.ThinkingContent = thinking
 			entry.ThinkingCollapsed = true
 		}
 		m.entries = append(m.entries, entry)
-		m.streamBuf.Reset()
-		m.thinkBuf.Reset()
-		m.inThinking = false
-		m.thinkSearchBuf = ""
 	}
+	// A flush is also a semantic segment boundary (tool call or completed turn).
+	// Clear whitespace-only buffers and partial tag search state even when there
+	// was nothing worth presenting, otherwise a later segment can inherit a
+	// phantom live/assistant block.
+	m.streamBuf.Reset()
+	m.thinkBuf.Reset()
+	m.inThinking = false
+	m.thinkSearchBuf = ""
 }
 
 // invalidateRenderedCache clears cached renders (e.g. on terminal resize).
@@ -3074,7 +3183,7 @@ func (m *Model) invalidateRenderedCache() {
 	for i := range m.entries {
 		if m.entries[i].Kind == "assistant" && m.entries[i].RenderedContent != "" {
 			if m.md != nil {
-				m.entries[i].RenderedContent = m.md.RenderFull(m.entries[i].Content)
+				m.entries[i].RenderedContent = m.md.RenderFull(sanitizeTerminalMultiline(m.entries[i].Content))
 			}
 		}
 	}
@@ -3268,14 +3377,14 @@ func newCompletionState(kind string, items []Completion, multiSelect bool, theme
 	}
 }
 
-func (m *Model) triggerCompletion(input string) {
+func (m *Model) triggerCompletion(input string) tea.Cmd {
 	var kind string
 	var items []Completion
 	var multiSelect bool
 
 	if strings.HasPrefix(input, "/") {
 		if strings.ContainsAny(strings.TrimPrefix(input, "/"), " \t\n") {
-			return
+			return nil
 		}
 		kind = "command"
 		items = m.completer.Complete(input)
@@ -3290,7 +3399,7 @@ func (m *Model) triggerCompletion(input string) {
 	}
 
 	if len(items) == 0 {
-		return
+		return nil
 	}
 
 	m.completionState = newCompletionState(kind, items, multiSelect, m.isDark)
@@ -3305,6 +3414,7 @@ func (m *Model) triggerCompletion(input string) {
 	m.completionSuppressedDraft = ""
 	m.overlay = OverlayCompletion
 	m.input.Blur()
+	return m.refreshCompletionPreview()
 }
 
 func (m *Model) acceptCompletion() {
@@ -3361,10 +3471,10 @@ func (m *Model) toggleCompletionSelection() {
 }
 
 // drillIntoFolder navigates into a subfolder in the @ completion modal.
-func (m *Model) drillIntoFolder() {
+func (m *Model) drillIntoFolder() tea.Cmd {
 	cs := m.completionState
 	if cs == nil || cs.Index >= len(cs.FilteredItems) {
-		return
+		return nil
 	}
 
 	item := cs.FilteredItems[cs.Index]
@@ -3382,13 +3492,14 @@ func (m *Model) drillIntoFolder() {
 	cs.Filter.SetValue("")
 	cs.FilteredItems = fileItems
 	cs.Index = 0
+	return m.refreshCompletionPreview()
 }
 
 // drillUpFolder navigates to the parent folder in the @ completion modal.
-func (m *Model) drillUpFolder() {
+func (m *Model) drillUpFolder() tea.Cmd {
 	cs := m.completionState
 	if cs == nil || cs.CurrentPath == "" {
-		return
+		return nil
 	}
 
 	// Pop last segment
@@ -3411,9 +3522,13 @@ func (m *Model) drillUpFolder() {
 	cs.Filter.SetValue("")
 	cs.FilteredItems = items
 	cs.Index = 0
+	return m.refreshCompletionPreview()
 }
 
 func (m *Model) closeCompletion() {
+	if m.completionState != nil && m.completionState.PreviewCancel != nil {
+		m.completionState.PreviewCancel()
+	}
 	m.completionState = nil
 	m.clearCompletionSuppression()
 	m.overlay = OverlayNone
@@ -3464,6 +3579,9 @@ func (m *Model) completionDraft() string {
 
 // sendToAgent sends a message to the agent, setting mode context first.
 func (m *Model) sendToAgent(text string) tea.Cmd {
+	if m.goalRuntime != nil {
+		return m.rejectPromptWhileGoalAttached(text, true)
+	}
 	turnID, err := execution.NewTurnID()
 	if err != nil {
 		return m.failTurnBeforeRun(text, fmt.Sprintf("Create turn identity: %v", err))
@@ -3475,19 +3593,30 @@ func (m *Model) sendToAgent(text string) tea.Cmd {
 // Goal continuation permits are consumed before this call, so replacing the
 // ID here would sever crash recovery from the execution ledger.
 func (m *Model) sendToAgentTurn(text, turnID string) tea.Cmd {
-	return m.sendToAgentTurnPresented(text, turnID, true, agent.TurnLimits{})
+	return m.sendToAgentTurnPresentedWithMode(text, turnID, true, agent.TurnLimits{}, m.mode)
 }
 
 func (m *Model) sendGoalToAgentTurn(text, turnID string, limits agent.TurnLimits) tea.Cmd {
-	return m.sendToAgentTurnPresented(text, turnID, false, limits)
+	// A durable Goal Runtime owns its execution authority independently from the
+	// conversational mode selector. Shift+Tab may prepare the user's eventual
+	// post-goal mode, but it must never downgrade or otherwise mutate an already
+	// admitted goal turn's tool contract.
+	return m.sendToAgentTurnPresentedWithMode(text, turnID, false, limits, ModeAuto)
 }
 
-func (m *Model) sendToAgentTurnPresented(text, turnID string, visible bool, limits agent.TurnLimits) tea.Cmd {
+func (m *Model) sendToAgentTurnPresentedWithMode(text, turnID string, visible bool, limits agent.TurnLimits, authority Mode) tea.Cmd {
 	m.cancelSessionLoad()
 	m.cancelSessionList()
 	messagesBeforeTurn := m.agent.Messages()
+	m.turnMessagesBefore = append([]llm.Message(nil), messagesBeforeTurn...)
+	m.turnPrompt = text
+	m.turnPromptVisible = visible
+	m.turnCheckpointSet = true
 	createdSession := false
-	cfg := m.modeConfigs[m.mode]
+	if authority < ModeNormal || authority > ModeAuto {
+		authority = ModeNormal
+	}
+	cfg := m.modeConfigs[authority]
 	if m.logger != nil {
 		m.logger.Info("user message", "mode", cfg.Label, "length", len(text))
 	}
@@ -3596,6 +3725,7 @@ func (m *Model) sendToAgentTurnPresented(text, turnID string, visible bool, limi
 }
 
 func (m *Model) failPresentedTurnBeforeRun(text, message string, visible bool) tea.Cmd {
+	m.clearTurnMessageCheckpoint()
 	if visible {
 		return m.failTurnBeforeRun(text, message)
 	}
@@ -3608,6 +3738,41 @@ func (m *Model) failPresentedTurnBeforeRun(text, message string, visible bool) t
 	m.viewport.SetContent(m.renderEntries())
 	m.resumeFollow()
 	return nil
+}
+
+func (m *Model) rollbackPreflightRejectedPrompt() bool {
+	if m == nil || m.agent == nil || !m.turnCheckpointSet {
+		return false
+	}
+	current := m.agent.Messages()
+	before := m.turnMessagesBefore
+	if len(current) != len(before)+1 || !reflect.DeepEqual(current[:len(before)], before) {
+		return false
+	}
+	last := current[len(current)-1]
+	if last.Role != "user" || last.Content != m.turnPrompt || len(last.ToolCalls) != 0 || last.ToolName != "" || last.ToolCallID != "" {
+		return false
+	}
+	m.agent.ReplaceMessages(append([]llm.Message(nil), before...))
+	if m.turnPromptVisible {
+		if index := len(m.entries) - 1; index >= 0 && m.entries[index].Kind == "user" && m.entries[index].Content == m.turnPrompt {
+			m.entries = m.entries[:index]
+		}
+		m.input.SetValue(m.turnPrompt)
+		m.input.CursorEnd()
+		m.invalidateEntryCache()
+	}
+	return true
+}
+
+func (m *Model) clearTurnMessageCheckpoint() {
+	if m == nil {
+		return
+	}
+	m.turnMessagesBefore = nil
+	m.turnPrompt = ""
+	m.turnPromptVisible = false
+	m.turnCheckpointSet = false
 }
 
 // ensureExecutionSession creates or reacquires the durable session boundary
@@ -3697,12 +3862,18 @@ func (m *Model) setMode(mode Mode) {
 	}
 	hadConversation := m.conversationStarted()
 	m.mode = mode
-	cfg := m.modeConfigs[mode]
-	m.setRouterMode(cfg.RouterMode)
+	ambientConfig := m.modeConfigs[mode]
+	m.syncComposerAuthority()
+	// With a Goal Runtime attached, Shift+Tab only prepares the ambient mode for
+	// work after the goal. The active router/model authority remains AUTO, just
+	// like the rail and footer. Otherwise a visible AUTO goal could silently
+	// inherit PLAN routing until its next continuation reasserted authority.
+	authorityConfig := m.modeConfigs[m.presentedMode()]
+	m.setRouterMode(authorityConfig.RouterMode)
 
 	// Auto-select model via router.
 	if !m.modelPinned && m.router != nil {
-		newModel := m.router.GetModelForCapability(cfg.PreferredCapability)
+		newModel := m.router.GetModelForCapability(authorityConfig.PreferredCapability)
 		if newModel != "" && newModel != m.model {
 			if m.modelManager != nil {
 				m.prepareModelSwitch()
@@ -3714,13 +3885,16 @@ func (m *Model) setMode(mode Mode) {
 	}
 
 	if m.logger != nil {
-		m.logger.Info("mode switched", "mode", cfg.Label, "model", m.model)
+		m.logger.Info("mode switched", "mode", ambientConfig.Label, "authority", authorityConfig.Label, "model", m.model)
 	}
 
 	// The empty-state orientation already owns mode and model. Once a real
 	// conversation exists, retain a compact durable receipt for the transition.
 	if hadConversation {
-		receipt := "Mode · " + cfg.Label
+		receipt := "Mode · " + ambientConfig.Label
+		if m.goalRuntime != nil {
+			receipt = "After goal · " + ambientConfig.Label + " · active goal · AUTO"
+		}
 		if m.model != "" {
 			receipt += " · " + m.model
 		}
@@ -3744,7 +3918,7 @@ func (m *Model) openModelPicker() {
 	if len(m.ollamaModels) > 0 {
 		m.modelPickerState = newOllamaModelPickerState(m.ollamaModels, m.model, m.width, m.height, m.isDark)
 		if m.ollamaVersion != "" {
-			m.modelPickerState.List.Title = "Ollama " + m.ollamaVersion + " · models"
+			m.modelPickerState.List.Title = ollamaModelPickerTitle(m.ollamaVersion)
 		}
 		m.overlay = OverlayModelPicker
 		m.input.Blur()
@@ -3753,7 +3927,7 @@ func (m *Model) openModelPicker() {
 	if m.ollamaInventoryAttempted {
 		m.modelPickerState = newOllamaModelPickerState(nil, m.model, m.width, m.height, m.isDark)
 		if m.ollamaVersion != "" {
-			m.modelPickerState.List.Title = "Ollama " + m.ollamaVersion + " · models"
+			m.modelPickerState.List.Title = ollamaModelPickerTitle(m.ollamaVersion)
 		}
 		m.overlay = OverlayModelPicker
 		m.input.Blur()
@@ -3818,6 +3992,20 @@ func (m *Model) selectModel(name string) {
 // checks have succeeded. Ollama Cloud grants remain exact and session-scoped.
 func (m *Model) switchSelectedModel(name string) bool {
 	old := m.model
+	if config.CanonicalModelName(old) == config.CanonicalModelName(name) && strings.TrimSpace(old) != "" {
+		// Selecting the active model is idempotent. This also absorbs duplicate
+		// Enter/delivery events without re-preparing the provider or stacking
+		// identical `Model` receipts in the transcript.
+		m.modelPinned = true
+		for index := range m.ollamaModels {
+			m.ollamaModels[index].Current = config.CanonicalModelName(m.ollamaModels[index].Name) == config.CanonicalModelName(name)
+		}
+		m.cloudConsentState = nil
+		m.closeModelPicker()
+		m.viewport.SetContent(m.renderEntries())
+		m.resumeFollow()
+		return true
+	}
 	if m.modelManager != nil {
 		m.prepareModelSwitch()
 		if err := m.modelManager.SetCurrentModel(name); err != nil {
@@ -3846,10 +4034,11 @@ func (m *Model) switchSelectedModel(name string) bool {
 	if m.logger != nil {
 		m.logger.Info("model switched", "from", old, "to", name)
 	}
-	m.entries = append(m.entries, ChatEntry{
-		Kind:    "system",
-		Content: fmt.Sprintf("Model: %s", name),
-	})
+	// Empty state and the fixed status line already own the current model. Once
+	// a conversation exists, retain one compact transition receipt.
+	if m.conversationStarted() {
+		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: "Model · " + name})
+	}
 	m.cloudConsentState = nil
 	m.closeModelPicker()
 	m.viewport.SetContent(m.renderEntries())

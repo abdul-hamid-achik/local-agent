@@ -107,7 +107,7 @@ func TestEvidenceRejectsNonCanonicalUnboundedAndForgedInput(t *testing.T) {
 	for _, mutate := range []func(*Target){
 		func(target *Target) { target.SessionID = 0 },
 		func(target *Target) { target.WorkspaceID = " workspace " },
-		func(target *Target) { target.GoalID = "" },
+		func(target *Target) { target.GoalID = " goal " },
 		func(target *Target) { target.ItemPayloadSHA256 = "bad" },
 		func(target *Target) { target.ExecutionID = "" },
 		func(target *Target) { target.TurnID = string([]byte{0xff}) },
@@ -121,6 +121,26 @@ func TestEvidenceRejectsNonCanonicalUnboundedAndForgedInput(t *testing.T) {
 		if _, err := request.Bind(target); err == nil {
 			t.Fatalf("invalid target %#v was accepted", target)
 		}
+	}
+}
+
+func TestEvidenceAllowsGoalLessExecutionTarget(t *testing.T) {
+	target := validTarget(t)
+	target.GoalID = ""
+	envelope, err := validRequest().Bind(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, digest, err := envelope.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := Parse(document, digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.GoalID != "" || !parsed.MatchesTarget(target) {
+		t.Fatalf("goal-less envelope = %#v", parsed)
 	}
 }
 

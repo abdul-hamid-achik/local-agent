@@ -57,3 +57,25 @@ func DefaultModeConfigs() [3]ModeConfig {
 		},
 	}
 }
+
+// presentedMode is the authority currently communicated by the TUI. The
+// ambient selector remains in m.mode so Shift+Tab can prepare a later
+// conversational turn, but an attached Goal Runtime owns AUTO authority until
+// the session is reset. Rendering the ambient value during that lifecycle
+// would claim a PLAN/NORMAL contract that the next goal turn does not use.
+func (m *Model) presentedMode() Mode {
+	if m != nil && m.goalRuntime != nil {
+		return ModeAuto
+	}
+	if m == nil || m.mode < ModeNormal || m.mode > ModeAuto {
+		return ModeNormal
+	}
+	return m.mode
+}
+
+func (m *Model) syncComposerAuthority() {
+	if m == nil {
+		return
+	}
+	configureComposerMode(&m.input, m.isDark, m.presentedMode())
+}

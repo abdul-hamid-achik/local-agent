@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -192,6 +193,84 @@ func (a *Agent) AppendMessage(msg llm.Message) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.messages = append(a.messages, msg)
+}
+
+// AppendDurableRecoveryContext installs one already validated, host-authored
+// reconciliation receipt. Exact content is idempotent; a persisted copy is
+// re-marked HostOwned after restore instead of being duplicated. Callers must
+// derive content from durable typed reconciliation rather than user text.
+func (a *Agent) AppendDurableRecoveryContext(content string) error {
+	if !strings.HasPrefix(content, DurableRecoveryContextPrefix) {
+		return fmt.Errorf("durable recovery context has an invalid prefix")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	next := make([]llm.Message, 0, len(a.messages)+1)
+	found := false
+	seenHostContent := make(map[string]struct{})
+	for _, message := range a.messages {
+		if message.Role == "system" && strings.HasPrefix(message.Content, DurableRecoveryContextPrefix) {
+			if message.Content == content {
+				message.HostOwned = true
+				found = true
+			}
+			// A prefix never grants authority. Persisted or otherwise injected
+			// prefixed messages are removed unless the host marker is already
+			// present or this exact content is the newly validated projection.
+			if !message.HostOwned {
+				continue
+			}
+			if _, duplicate := seenHostContent[message.Content]; duplicate {
+				continue
+			}
+			seenHostContent[message.Content] = struct{}{}
+		}
+		next = append(next, message)
+	}
+	if !found {
+		next = append(next, llm.Message{Role: "system", Content: content, HostOwned: true})
+	}
+	if _, err := collectDurableRecoveryContexts(next); err != nil {
+		return err
+	}
+	a.messages = next
+	return nil
+}
+
+// InstallDurableRecoveryContexts replaces every prefixed system message with
+// the complete set derived from the current durable DB projection. This is the
+// restore boundary: persisted JSON carries no HostOwned marker, so no saved
+// prefix text is allowed to survive unless the DB independently re-authorizes
+// its exact content.
+func (a *Agent) InstallDurableRecoveryContexts(contents []string) error {
+	nextContexts := make([]llm.Message, 0, len(contents))
+	seen := make(map[string]struct{}, len(contents))
+	for _, content := range contents {
+		if !strings.HasPrefix(content, DurableRecoveryContextPrefix) {
+			return fmt.Errorf("durable recovery context has an invalid prefix")
+		}
+		if _, duplicate := seen[content]; duplicate {
+			continue
+		}
+		seen[content] = struct{}{}
+		nextContexts = append(nextContexts, llm.Message{Role: "system", Content: content, HostOwned: true})
+	}
+	if _, err := collectDurableRecoveryContexts(nextContexts); err != nil {
+		return err
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	next := make([]llm.Message, 0, len(a.messages)+len(nextContexts))
+	for _, message := range a.messages {
+		if message.Role == "system" && strings.HasPrefix(message.Content, DurableRecoveryContextPrefix) {
+			continue
+		}
+		next = append(next, message)
+	}
+	next = append(next, nextContexts...)
+	a.messages = next
+	return nil
 }
 
 // ReplaceMessages replaces the entire conversation history.

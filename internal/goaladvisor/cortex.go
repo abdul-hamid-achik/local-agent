@@ -64,6 +64,14 @@ type OpenRequest struct {
 	AcceptanceCriteria []goal.AcceptanceCriterion
 }
 
+// cortexAcceptanceCriterion is Cortex's immutable named-claim contract. Keep
+// this adapter type separate from goal.AcceptanceCriterion so neither side can
+// silently reinterpret the other's wire field names.
+type cortexAcceptanceCriterion struct {
+	ID        string `json:"id"`
+	Statement string `json:"statement"`
+}
+
 // Advice is the bounded portion of Cortex status Local Agent needs to decide
 // whether to continue, pause, block, or complete.
 type Advice struct {
@@ -109,15 +117,19 @@ func (c *Cortex) Open(ctx context.Context, request OpenRequest) (Advice, error) 
 	if strings.TrimSpace(request.GoalID) == "" || strings.TrimSpace(request.Objective) == "" {
 		return Advice{}, fmt.Errorf("%w: goal id and objective are required", ErrRejected)
 	}
-	goalText := cortexGoalText(request.Objective, request.AcceptanceCriteria)
+	criteria, err := cortexAcceptanceCriteria(request.AcceptanceCriteria)
+	if err != nil {
+		return Advice{}, err
+	}
 	advice, err := c.call(ctx, openTool, map[string]any{
-		"goal":           goalText,
-		"workspace":      c.workspace,
-		"mode":           "change",
-		"surfaces":       []string{"code", "terminal"},
-		"risk":           "medium",
-		"actor":          defaultActor(c.actor),
-		"idempotencyKey": request.GoalID,
+		"goal":               strings.TrimSpace(request.Objective),
+		"acceptanceCriteria": criteria,
+		"workspace":          c.workspace,
+		"mode":               "change",
+		"surfaces":           []string{"code", "terminal"},
+		"risk":               "medium",
+		"actor":              defaultActor(c.actor),
+		"idempotencyKey":     strings.TrimSpace(request.GoalID),
 	})
 	if err == nil {
 		if strings.TrimSpace(advice.TaskID) == "" {
@@ -183,23 +195,28 @@ func defaultActor(actor string) string {
 	return actor
 }
 
-func cortexGoalText(objective string, criteria []goal.AcceptanceCriterion) string {
-	var builder strings.Builder
-	builder.WriteString(strings.TrimSpace(objective))
-	if len(criteria) == 0 {
-		return builder.String()
+func cortexAcceptanceCriteria(criteria []goal.AcceptanceCriterion) ([]cortexAcceptanceCriterion, error) {
+	if len(criteria) == 0 || len(criteria) > goal.MaxCriteria {
+		return nil, fmt.Errorf("%w: acceptance criteria count must be between 1 and %d", ErrRejected, goal.MaxCriteria)
 	}
-	builder.WriteString("\n\nAcceptance criteria:")
+	result := make([]cortexAcceptanceCriterion, 0, len(criteria))
+	seen := make(map[string]struct{}, len(criteria))
 	for _, criterion := range criteria {
-		description := strings.TrimSpace(criterion.Description)
-		if description != "" {
-			builder.WriteString("\n- [")
-			builder.WriteString(strings.TrimSpace(criterion.ID))
-			builder.WriteString("] ")
-			builder.WriteString(description)
+		id := strings.TrimSpace(criterion.ID)
+		statement := strings.TrimSpace(criterion.Description)
+		if id == "" || !utf8.ValidString(id) || len(id) > goal.MaxCriterionIDBytes {
+			return nil, fmt.Errorf("%w: acceptance criterion id is empty, invalid UTF-8, or too long", ErrRejected)
 		}
+		if statement == "" || !utf8.ValidString(statement) || len(statement) > goal.MaxCriterionBytes {
+			return nil, fmt.Errorf("%w: acceptance criterion %q is empty, invalid UTF-8, or too long", ErrRejected, id)
+		}
+		if _, duplicate := seen[id]; duplicate {
+			return nil, fmt.Errorf("%w: duplicate acceptance criterion id %q", ErrRejected, id)
+		}
+		seen[id] = struct{}{}
+		result = append(result, cortexAcceptanceCriterion{ID: id, Statement: statement})
 	}
-	return builder.String()
+	return result, nil
 }
 
 func (c *Cortex) call(ctx context.Context, tool string, args map[string]any) (Advice, error) {
@@ -228,7 +245,11 @@ func (c *Cortex) call(ctx context.Context, tool string, args map[string]any) (Ad
 	if result == nil {
 		return Advice{}, fmt.Errorf("%w: %s returned no receipt", ErrUnavailable, tool)
 	}
-	advice, parseErr := parseAdvice(result.Content)
+	document, documentErr := toolResultDocument(result)
+	if documentErr != nil {
+		return Advice{}, fmt.Errorf("%s response: %w", tool, documentErr)
+	}
+	advice, parseErr := parseAdvice(document)
 	if parseErr != nil {
 		return Advice{}, fmt.Errorf("%s response: %w", tool, parseErr)
 	}
@@ -447,10 +468,31 @@ func (c *Cortex) callRaw(ctx context.Context, tool string, args map[string]any) 
 	if result == nil {
 		return "", fmt.Errorf("%w: %s returned no receipt", ErrUnavailable, tool)
 	}
-	if result.IsError {
-		return "", fmt.Errorf("%w: %s", ErrRejected, boundAdviceText(strings.TrimSpace(result.Content), maxAdviceSummaryBytes))
+	document, documentErr := toolResultDocument(result)
+	if documentErr != nil {
+		return "", fmt.Errorf("%s response: %w", tool, documentErr)
 	}
-	return result.Content, nil
+	if result.IsError {
+		return "", fmt.Errorf("%w: %s", ErrRejected, boundAdviceText(strings.TrimSpace(document), maxAdviceSummaryBytes))
+	}
+	return document, nil
+}
+
+func toolResultDocument(result *mcp.ToolResult) (string, error) {
+	if result == nil {
+		return "", errors.New("missing tool result")
+	}
+	if structured := strings.TrimSpace(string(result.Structured)); structured != "" && structured != "null" {
+		if !json.Valid([]byte(structured)) {
+			return "", errors.New("structuredContent is not valid JSON")
+		}
+		return structured, nil
+	}
+	content := primaryJSONContent(result.Content)
+	if content == "" {
+		return "", errors.New("tool result contains no JSON document")
+	}
+	return content, nil
 }
 
 func primaryJSONContent(content string) string {

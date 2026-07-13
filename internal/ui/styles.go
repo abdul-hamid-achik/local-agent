@@ -324,10 +324,10 @@ func adaptiveStyles(isDark bool) Styles {
 
 		ModeAsk: lipgloss.NewStyle().
 			Bold(true).
-			Foreground(colorAccent2),
+			Foreground(colorMuted),
 		ModePlan: lipgloss.NewStyle().
 			Bold(true).
-			Foreground(colorWarning), // yellow
+			Foreground(colorSpecial),
 		ModeBuild: lipgloss.NewStyle().
 			Bold(true).
 			Foreground(colorSuccess),

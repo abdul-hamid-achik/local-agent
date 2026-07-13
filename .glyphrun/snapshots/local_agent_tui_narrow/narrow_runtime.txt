@@ -1,6 +1,4 @@
               LOCAL AGENT
-    Local-first · tool effects ask
-      PLAN · qwen3.5:2b · offline
  ╭────────────────────────────────────╮
  │ Runtime                            │
  │                                    │
@@ -9,10 +7,12 @@
  │ Profile    Default                 │
  │ Mode       PLAN                    │
  │ Tools      19 available            │
- │ MCP        0 servers               │
+ │ MCP        unavailable · 0 servers │
+ │            configured              │
  │ ICE        disabled                │
+ │                                    │
+ │ MCP is optional. Add a server in   │
+ │ local-agent.yaml or the XDG config │
+ │ when you need ecosystem tools.     │
  │ esc/q back                         │
  ╰────────────────────────────────────╯
-
-
-───────────────────────────────────────

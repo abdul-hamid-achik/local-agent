@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/abdul-hamid-achik/local-agent/internal/ecosystem"
 	executionPkg "github.com/abdul-hamid-achik/local-agent/internal/execution"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 )
@@ -226,7 +227,16 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 		}
 	}
 
-	system := buildSystemPromptForModelBudgetContext(ctx, a.modePrefix, tools, a.skillContent, a.loadedCtx, a.memoryStore, iceContext, a.workDir, a.ignoreContent, a.llmClient.Model(), turnNumCtx)
+	loadedContext := a.loadedCtx
+	if a.toolPolicy.AllowMCP {
+		if guidance := a.mcpServerGuidance(); guidance != "" {
+			if loadedContext != "" {
+				guidance += "\n\n"
+			}
+			loadedContext = guidance + loadedContext
+		}
+	}
+	system := buildSystemPromptForModelBudgetContext(ctx, a.modePrefix, tools, a.skillContent, loadedContext, a.memoryStore, iceContext, a.workDir, a.ignoreContent, a.llmClient.Model(), turnNumCtx)
 
 	const maxRetries = 2
 	var lastPromptTokens int
@@ -267,7 +277,7 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 			lg.Info("compaction", "phase", "before_request", "prompt_tokens", estimated, "num_ctx", turnNumCtx)
 		}
 		if a.compactForContext(ctx, out, turnNumCtx) {
-			system = buildSystemPromptForModelBudgetContext(ctx, a.modePrefix, tools, a.skillContent, a.loadedCtx, a.memoryStore, iceContext, a.workDir, a.ignoreContent, a.llmClient.Model(), turnNumCtx)
+			system = buildSystemPromptForModelBudgetContext(ctx, a.modePrefix, tools, a.skillContent, loadedContext, a.memoryStore, iceContext, a.workDir, a.ignoreContent, a.llmClient.Model(), turnNumCtx)
 		}
 	}
 
@@ -546,6 +556,10 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 					a.deniedToolCall(tc, out, "tool call blocked by active agent profile MCP scope")
 					continue
 				}
+				// MCP annotations are untrusted display metadata. All MCP calls
+				// remain on the normal authorization path so explicit policy and
+				// yolo decisions retain their durable audit reason.
+				requiresApproval = mcpToolRequiresApproval()
 			}
 
 			originalID, originalName := tc.ID, tc.Name
@@ -713,6 +727,8 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 
 			var result string
 			var isErr bool
+			var structured, errorMeta json.RawMessage
+			transportErr := false
 			switch kind {
 			case executionPkg.KindBuiltin:
 				result, isErr = a.handleBuiltinToolWithCancellation(ctx, tc, tracked.identity.EffectClass != executionPkg.EffectReadOnly)
@@ -723,11 +739,15 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 				if callErr != nil {
 					result = mcpDispatchErrorReceipt(tc.Name, callErr)
 					isErr = true
+					transportErr = true
 				} else if toolResult == nil {
 					result, isErr = "ERROR: MCP tool returned no result", true
+					transportErr = true
 				} else {
 					result = toolResult.Content
 					isErr = toolResult.IsError
+					structured = toolResult.Structured
+					errorMeta = toolResult.ErrorMeta
 				}
 			}
 			duration := time.Since(startTime)
@@ -735,6 +755,17 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 			// durable receipt so secrets removed from UI/model text are not copied
 			// into the execution ledger.
 			a.runPostHooks(ctx, tc, &result, isErr)
+			semanticText := result
+			projection := projectSemanticToolReceipt(
+				tc.Name, tc.Arguments, semanticText, structured, errorMeta,
+				transportErr, isErr, kind == executionPkg.KindBuiltin || kind == executionPkg.KindMemory,
+			)
+			if len(structured) > 0 {
+				// Typed MCP payloads are transient parser input. The provider history,
+				// execution ledger, session snapshot, and TUI all receive only this
+				// bounded allowlisted projection.
+				result = ecosystem.SafeReceiptText(projection)
+			}
 			if isErr && tracked.identity.EffectClass != executionPkg.EffectReadOnly && !strings.HasPrefix(result, "OUTCOME UNKNOWN:") {
 				result = dispatchedEffectErrorReceipt(tc.Name, result, ctx.Err())
 			}
@@ -764,7 +795,9 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 			if lg != nil {
 				lg.Debug("tool", "name", tc.Name, "kind", kind, "ms", duration.Milliseconds(), "error", isErr)
 			}
-			out.ToolCallResult(tc.ID, tc.Name, result, isErr, duration)
+			emitSemanticToolResult(
+				out, tc.ID, tc.Name, result, structured, isErr, transportErr, duration, projection,
+			)
 			a.AppendMessage(llm.Message{
 				Role:       "tool",
 				Content:    result,
@@ -822,7 +855,7 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 			}
 			if a.compactForContext(ctx, out, turnNumCtx) {
 				// Rebuild system prompt after compaction (memory may have changed).
-				system = buildSystemPromptForModelBudgetContext(ctx, a.modePrefix, tools, a.skillContent, a.loadedCtx, a.memoryStore, iceContext, a.workDir, a.ignoreContent, a.llmClient.Model(), turnNumCtx)
+				system = buildSystemPromptForModelBudgetContext(ctx, a.modePrefix, tools, a.skillContent, loadedContext, a.memoryStore, iceContext, a.workDir, a.ignoreContent, a.llmClient.Model(), turnNumCtx)
 			}
 		}
 

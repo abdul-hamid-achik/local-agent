@@ -37,6 +37,34 @@ func TestPresentToolUsesStateSpecificActionLabels(t *testing.T) {
 	}
 }
 
+func TestPresentToolAttentionNeverFallsBackToSuccessCopy(t *testing.T) {
+	tests := []struct {
+		name string
+		want string
+	}{
+		{name: "read_file", want: "Needs attention"},
+		{name: "apply_patch", want: "Needs attention"},
+		{name: "fcheap_save", want: "Artifact save needs review"},
+		{name: "vault_get_secret", want: "Secret access needs attention"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			labels, ok := registeredToolLabels(tt.name)
+			if !ok {
+				t.Fatalf("tool %q is not registered", tt.name)
+			}
+			got := presentTool(tt.name, ToolCardGeneric, ToolCardAttention).label
+			if got != tt.want {
+				t.Fatalf("attention label = %q, want %q", got, tt.want)
+			}
+			if got == labels.success {
+				t.Fatalf("attention label reused success copy %q", got)
+			}
+		})
+	}
+}
+
 func TestPresentToolHumanizesUnknownIdentifiersSafely(t *testing.T) {
 	tests := []struct {
 		name  string

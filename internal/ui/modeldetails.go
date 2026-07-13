@@ -18,26 +18,23 @@ func renderCompactOllamaModelDetails(model OllamaModelDescriptor, width int, isD
 	warningStyle := lipgloss.NewStyle().Foreground(palette.Warning)
 
 	appendLine := func(lines []string, style lipgloss.Style, value string) []string {
-		value = strings.TrimSpace(value)
+		value = sanitizeTerminalSingleLine(value)
 		if value == "" {
 			return lines
 		}
 		return append(lines, style.Render(truncateDisplay(value, width)))
 	}
 
-	title := strings.TrimSpace(model.DisplayName)
-	if title == "" {
-		title = model.Name
-	}
+	title := modelDisplayName(model)
 	lines := appendLine(nil, titleStyle, title)
 	lines = appendLine(lines, textStyle, modelSelectionState(model))
 
 	modelParts := make([]string, 0, 4)
-	if model.ParameterSize != "" {
-		modelParts = append(modelParts, model.ParameterSize)
+	if value := sanitizeTerminalSingleLine(model.ParameterSize); value != "" {
+		modelParts = append(modelParts, value)
 	}
-	if model.Quantization != "" {
-		modelParts = append(modelParts, model.Quantization)
+	if value := sanitizeTerminalSingleLine(model.Quantization); value != "" {
+		modelParts = append(modelParts, value)
 	}
 	if size := humanModelBytes(model.SizeBytes); size != "" {
 		modelParts = append(modelParts, size+" weights")
@@ -65,8 +62,8 @@ func renderCompactOllamaModelDetails(model OllamaModelDescriptor, width int, isD
 	if capabilities := compactCapabilities(model.Capabilities); capabilities != "" {
 		lines = appendLine(lines, dimStyle, "Can · "+strings.ReplaceAll(capabilities, "+", " · "))
 	}
-	if model.Reason != "" {
-		lines = appendLine(lines, warningStyle, "Note · "+model.Reason)
+	if reason := sanitizeTerminalSingleLine(model.Reason); reason != "" {
+		lines = appendLine(lines, warningStyle, "Note · "+reason)
 	}
 	if model.Source != OllamaModelLocal {
 		lines = appendLine(lines, dimStyle, "Cloud · remote prompts")
@@ -94,11 +91,11 @@ func renderOllamaModelDetails(model OllamaModelDescriptor, width int, isDark boo
 	}
 	source := strings.ToLower(modelGroupLabel(descriptorGroup(OllamaModelDescriptor{Source: model.Source, Selectable: true, Fit: true})))
 	rows := [][2]string{{"Source", source}, {"Status", status}}
-	if model.ParameterSize != "" {
-		rows = append(rows, [2]string{"Parameters", model.ParameterSize})
+	if parameterSize := sanitizeTerminalSingleLine(model.ParameterSize); parameterSize != "" {
+		rows = append(rows, [2]string{"Parameters", parameterSize})
 	}
-	if model.Quantization != "" {
-		rows = append(rows, [2]string{"Quantization", model.Quantization})
+	if quantization := sanitizeTerminalSingleLine(model.Quantization); quantization != "" {
+		rows = append(rows, [2]string{"Quantization", quantization})
 	}
 	if size := humanModelBytes(model.SizeBytes); size != "" {
 		rows = append(rows, [2]string{"Weights", size})
@@ -120,10 +117,7 @@ func renderOllamaModelDetails(model OllamaModelDescriptor, width int, isDark boo
 	}
 
 	var b strings.Builder
-	title := model.DisplayName
-	if title == "" {
-		title = model.Name
-	}
+	title := modelDisplayName(model)
 	b.WriteString(accent.Render(title))
 	if model.Current {
 		b.WriteString("  " + lipgloss.NewStyle().Foreground(palette.Success).Render("✓ current"))
@@ -138,9 +132,9 @@ func renderOllamaModelDetails(model OllamaModelDescriptor, width int, isDark boo
 		}
 		b.WriteString(rowStyle.Render(row[1]))
 	}
-	if model.Reason != "" {
+	if reason := sanitizeTerminalSingleLine(model.Reason); reason != "" {
 		b.WriteString("\n\n")
-		b.WriteString(lipgloss.NewStyle().Foreground(palette.Warning).Render(model.Reason))
+		b.WriteString(lipgloss.NewStyle().Foreground(palette.Warning).Render(reason))
 	}
 	if model.Source != OllamaModelLocal {
 		b.WriteString("\n\n")

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestInferDraftPreservesPromptAndReturnsDeterministicSuggestions(t *testing.T) {
@@ -34,6 +35,65 @@ func TestInferDraftPreservesPromptAndReturnsDeterministicSuggestions(t *testing.
 	}
 	if len(first.AcceptanceCriteria) != 2 || first.Budget != budget {
 		t.Fatalf("suggestions = %#v", first)
+	}
+	for _, criterion := range first.AcceptanceCriteria {
+		if !strings.Contains(criterion, "Cortex recovery") || !strings.Contains(criterion, "without dispatching work") {
+			t.Fatalf("criterion is not prompt-specific: %q", criterion)
+		}
+		if strings.Contains(criterion, "The requested outcome is complete") || strings.Contains(criterion, "Relevant verification passes") {
+			t.Fatalf("criterion retained canned copy: %q", criterion)
+		}
+	}
+	if first.NeedsFollowUp || first.FollowUpPrompt != "" {
+		t.Fatalf("concrete prompt unexpectedly needs follow-up: %#v", first)
+	}
+}
+
+func TestInferDraftRequestsOneContextualFollowUpForAmbiguousPrompts(t *testing.T) {
+	for _, prompt := range []string{"fix it", "make this better", "continue"} {
+		t.Run(prompt, func(t *testing.T) {
+			draft, err := InferDraft(prompt, BudgetLimits{MaxWallTime: time.Minute})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !draft.NeedsFollowUp || !strings.Contains(draft.FollowUpPrompt, "concrete behavior or artifact") {
+				t.Fatalf("ambiguous draft = %#v", draft)
+			}
+			if len(draft.AcceptanceCriteria) != 2 || !strings.Contains(draft.AcceptanceCriteria[0], prompt) {
+				t.Fatalf("ambiguous draft lost editable prompt context: %#v", draft)
+			}
+		})
+	}
+
+	for _, prompt := range []string{"fix parser", "polish the model picker", "make Shift+Tab cycle modes"} {
+		t.Run(prompt, func(t *testing.T) {
+			draft, err := InferDraft(prompt, BudgetLimits{MaxWallTime: time.Minute})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if draft.NeedsFollowUp || draft.FollowUpPrompt != "" {
+				t.Fatalf("concrete draft unexpectedly needs follow-up: %#v", draft)
+			}
+		})
+	}
+}
+
+func TestInferDraftCriteriaAreBoundedAndUTF8Safe(t *testing.T) {
+	prompt := "Improve 模型 picker " + strings.Repeat("界", maxDraftCriterionExcerptBytes)
+	draft, err := InferDraft(prompt, BudgetLimits{MaxContinuationTurns: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, criterion := range draft.AcceptanceCriteria {
+		if !utf8.ValidString(criterion) {
+			t.Fatalf("criterion is invalid UTF-8: %q", criterion)
+		}
+		if len(criterion) > MaxCriterionBytes {
+			t.Fatalf("criterion bytes = %d, max %d", len(criterion), MaxCriterionBytes)
+		}
+		if !strings.Contains(criterion, "模型 picker") || !strings.HasSuffix(criterion, "…") {
+			t.Fatalf("criterion did not preserve a bounded prompt-specific excerpt: %q", criterion)
+		}
 	}
 }
 

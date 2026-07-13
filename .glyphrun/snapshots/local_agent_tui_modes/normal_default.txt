@@ -14,6 +14,5 @@
 
 
 
-
 ───────────────────────────────────────────────────────────
-❯ Ask, @mention files, or type /help
+▏❯ Ask, @mention files, or type /help

@@ -338,7 +338,7 @@ func TestReceiptActionsKeepFollowIntentAligned(t *testing.T) {
 		act  func(*Model)
 	}{
 		{name: "agent profile selection", act: func(m *Model) { m.selectAgentProfile("") }},
-		{name: "legacy migration receipt", act: func(m *Model) { m.appendLegacyMigrationEntry("system", "Migration preview") }},
+		{name: "goal error receipt", act: func(m *Model) { m.appendGoalError("Goal needs attention") }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -45,6 +45,7 @@ Go 1.25+ project implementing a local-first terminal coding agent. Ollama is the
 - **agent/** — ReAct loop, prompt construction, mode policy, ordered tool dispatch, compaction, hooks, and checkpoints. Built-in, memory, and MCP effects execute deterministically in model order.
 - **llm/** — Ollama client, authoritative live inventory, local/Cloud context policy, availability-aware model routing, per-request expectations, and runtime switching.
 - **mcp/** — STDIO, SSE, and Streamable HTTP connections, namespaced tools, health checks, bounded results, and reconnects.
+- **ecosystem/** — Exact companion-tool receipt parsers and bounded transport/domain/evidence projections. Raw MCP structured output must not cross into persisted UI state.
 - **config/** — YAML/XDG loading, environment overrides, model preferences, routing, privacy policy, agent profiles, and ignore rules.
 - **ice/** — Optional workspace-scoped Ollama embeddings, bounded JSON retrieval, and single-flight background auto-memory.
 - **memory/** — Workspace-scoped structured JSON memory under `~/.config/local-agent/memory/<workspace-hash>.json`, with owner-only files, locking, and coherent reloads.
@@ -59,7 +60,7 @@ Go 1.25+ project implementing a local-first terminal coding agent. Ollama is the
 
 ### Request Flow
 
-1. The TUI or headless controller submits user input under NORMAL, PLAN, or reviewed AUTO authority.
+1. The TUI or headless controller submits user input under NORMAL, PLAN, or AUTO authority.
 2. Project instructions, active skills, loaded context, workspace memory, and optional ICE retrieval form bounded prompt context.
 3. `ModelManager` resolves a verified Ollama model and freezes the expected context policy for that request.
 4. The model response streams through the Agent loop.
@@ -67,7 +68,9 @@ Go 1.25+ project implementing a local-first terminal coding agent. Ollama is the
 6. Tool receipts return in model order; the loop continues within iteration, token, and context limits.
 7. Completed session state is persisted. Background auto-memory yields to foreground inference and joins at shutdown.
 
-AUTO adds a durable Goal Runtime around this flow. Local Agent owns budgets, permits, cancellation, approvals, persistence, and recovery. Cortex is optional bounded semantic input.
+An explicit `/goal` adds a durable Goal Runtime around this flow. Ordinary AUTO prompts remain direct and approval-gated. Local Agent owns budgets, permits, cancellation, approvals, persistence, and recovery. Cortex is optional bounded semantic input.
+
+MCP transport success, domain success, and verified evidence are independent. Parse known structured contracts inside `internal/ecosystem`; unknown versions remain attention/unknown, and raw `StructuredContent` is discarded before the UI or session persistence boundary.
 
 ### Key Interfaces
 

@@ -162,6 +162,74 @@ func newLedgerAgent(t *testing.T, client llm.Client, registry *mcp.Registry, led
 	return ag, workDir
 }
 
+func TestMCPExecutionEffectIsAlwaysUnknownWithoutHostTrustPolicy(t *testing.T) {
+	ag := New(nil, nil, 4096)
+	for _, name := range []string{"cortex__status", "cortex__start_task", "mcphub__mcphub_call_tool"} {
+		kind, effect := ag.executionKind(name)
+		if kind != executionpkg.KindMCP || effect != executionpkg.EffectUnknown {
+			t.Fatalf("executionKind(%q) = %q/%q, want MCP/outcome-unknown", name, kind, effect)
+		}
+	}
+	if !mcpToolRequiresApproval() {
+		t.Fatal("MCP dispatch bypassed the authorization path")
+	}
+}
+
+func TestMCPAuthorizationPreservesConfiguredPolicyAndYoloAuditReasons(t *testing.T) {
+	tests := []struct {
+		name         string
+		checker      *permission.Checker
+		callback     func(permission.ApprovalRequest)
+		wantAllowed  bool
+		wantApproval executionpkg.Approval
+	}{
+		{
+			name: "yolo remains audited", checker: permission.NewChecker(nil, true),
+			wantAllowed: true, wantApproval: executionpkg.ApprovalYolo,
+		},
+		{
+			name: "explicit allow remains audited", checker: func() *permission.Checker {
+				checker := permission.NewChecker(nil, false)
+				if err := checker.SetPolicy("cortex__status", permission.PolicyAllow); err != nil {
+					t.Fatal(err)
+				}
+				return checker
+			}(), callback: func(permission.ApprovalRequest) {},
+			wantAllowed: true, wantApproval: executionpkg.ApprovalPolicy,
+		},
+		{
+			name: "default ask remains interactive", checker: permission.NewChecker(nil, false),
+			callback:    func(request permission.ApprovalRequest) { request.Response <- permission.AllowOnce() },
+			wantAllowed: true, wantApproval: executionpkg.ApprovalOnce,
+		},
+		{
+			name: "explicit deny remains audited", checker: func() *permission.Checker {
+				checker := permission.NewChecker(nil, false)
+				if err := checker.SetPolicy("cortex__status", permission.PolicyDeny); err != nil {
+					t.Fatal(err)
+				}
+				return checker
+			}(), wantApproval: executionpkg.ApprovalPolicyDenied,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ag := New(nil, nil, 4096)
+			ag.SetPermissionChecker(tt.checker)
+			ag.SetApprovalCallback(tt.callback)
+			decision, err := ag.decideToolAuthorization(context.Background(), llm.ToolCall{
+				ID: "call-cortex-status", Name: "cortex__status", Arguments: map[string]any{"taskId": "task-1"},
+			}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.allowed != tt.wantAllowed || decision.approval != tt.wantApproval {
+				t.Fatalf("authorization = allowed:%v approval:%q, want %v/%q", decision.allowed, decision.approval, tt.wantAllowed, tt.wantApproval)
+			}
+		})
+	}
+}
+
 func TestExecutionLedgerOrdersEffectfulLifecycleAndIdentities(t *testing.T) {
 	client := &scriptedClient{responses: [][]llm.StreamChunk{
 		{{ToolCalls: []llm.ToolCall{{
@@ -509,7 +577,7 @@ func TestExecutionLedgerPreservesDuplicateProviderIDs(t *testing.T) {
 	}
 }
 
-func TestExecutionLedgerStrictModeRefusesUnresolvedEffect(t *testing.T) {
+func TestExecutionLedgerRequiresExplicitRecheckBeforeAUserRequestedRun(t *testing.T) {
 	identity := executionpkg.Identity{
 		SessionID: 42, WorkspaceID: "ignored", RunID: "run_old", TurnID: "turn_old",
 		ExecutionID: "exec_old", IdempotencyKey: "idem_old", CanonicalCallID: "call_old",
@@ -529,18 +597,19 @@ func TestExecutionLedgerStrictModeRefusesUnresolvedEffect(t *testing.T) {
 	}
 	ledger.setUnresolved(nil)
 	if err := ag.Run(context.Background(), &outputRecorder{}); !errors.As(err, &unresolved) {
-		t.Fatalf("same session bypassed unresolved latch: %v", err)
+		t.Fatalf("latched Run error = %T %v, want unresolved until explicit recheck", err, err)
 	}
-	if client.calls != 0 {
-		t.Fatalf("provider calls before scope reset = %d", client.calls)
+	if err := ag.RecheckExecutionRecovery(); err != nil {
+		t.Fatal(err)
 	}
-
-	ag.SetExecutionSessionID(43)
 	if err := ag.Run(context.Background(), &outputRecorder{}); err != nil {
-		t.Fatalf("new session did not clear latch: %v", err)
+		t.Fatalf("same session did not observe explicit durable recheck: %v", err)
 	}
 	if client.calls != 1 {
-		t.Fatalf("provider calls after scope reset = %d", client.calls)
+		t.Fatalf("provider calls after durable reconciliation = %d", client.calls)
+	}
+	if got := ledger.recoveryCursors(); !reflect.DeepEqual(got, []int64{0, 0}) {
+		t.Fatalf("latched Run queried durable recovery without explicit recheck: %v", got)
 	}
 }
 

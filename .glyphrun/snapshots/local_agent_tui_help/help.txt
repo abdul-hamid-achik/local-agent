@@ -2,7 +2,7 @@
                              │ Help                                                       │
                              │                                                            │
                              │ Keyboard Shortcuts                                         │
-                             │   enter             Send message                           │
+                             │   enter             Send / queue one follow-up             │
                              │   shift+enter       New line                               │
   ollama: no model selected  │   esc               Cancel / close overlay                 │
   try: ollama serve · ollama │   ctrl+c            Quit                                   │
@@ -30,6 +30,5 @@
                              │ Input Shortcuts                                            │
                              │   @file             Attach file or agent                   │
                              │   #skill            Activate skill                         │
-                             │   /cmd              Run slash command                      │
-─────────────────────────────│ esc/q close · ↓ more                                       │────────────────────────────
-                             ╰────────────────────────────────────────────────────────────╯
+─────────────────────────────│   /cmd              Run slash command                      │────────────────────────────
+                             │ esc/q close · ↓ more                                       │

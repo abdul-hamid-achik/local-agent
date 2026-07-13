@@ -68,6 +68,4 @@ ICE currently uses a bounded flat JSON scan rather than an approximate-nearest-n
 
 ## Legacy data
 
-Historical global entries without trustworthy project provenance remain quarantined. Completed claims owned by another workspace stay isolated and no longer produce repeated startup noise. Recovery aliases are intentionally hidden from normal Help and command completion; they are an exceptional operator path, not part of the everyday workflow.
-
-See [Legacy data migration](/legacy-data-migration) for the explicit preview, confirmation, and recovery path.
+Historical global entries without trustworthy project provenance remain quarantined. They are not loaded into repository-scoped memory, do not appear in the command surface, and do not produce routine startup notices.

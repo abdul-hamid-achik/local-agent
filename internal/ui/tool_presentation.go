@@ -10,9 +10,10 @@ import (
 const maxToolPresentationWidth = 48
 
 type toolActionLabels struct {
-	running string
-	success string
-	failure string
+	running   string
+	success   string
+	attention string
+	failure   string
 }
 
 type toolPresentation struct {
@@ -83,7 +84,7 @@ var toolActionRegistry = map[string]toolActionLabels{
 	"cortex_investigate":      {running: "Investigating", success: "Investigated", failure: "Investigation failed"},
 	"cortex_plan":             {running: "Planning change", success: "Planned change", failure: "Change plan failed"},
 	"cortex_begin_change":     {running: "Claiming change", success: "Claimed change", failure: "Change claim failed"},
-	"cortex_verify":           {running: "Verifying evidence", success: "Verified evidence", failure: "Verification failed"},
+	"cortex_verify":           {running: "Verifying evidence", success: "Verified evidence", attention: "Verification needs review", failure: "Verification failed"},
 	"cortex_remember":         {running: "Saving outcome", success: "Saved outcome", failure: "Outcome save failed"},
 	"cortex_status":           {running: "Checking Cortex", success: "Checked Cortex", failure: "Cortex check failed"},
 	"cortex_list_tasks":       {running: "Listing cases", success: "Listed cases", failure: "Case list failed"},
@@ -105,9 +106,9 @@ var toolActionRegistry = map[string]toolActionLabels{
 
 	// Bob exposes read-only inspection plus explicit repository-factory
 	// actions. Use repository language so effects remain unmistakable.
-	"bob_inspect":           {running: "Inspecting repository", success: "Inspected repository", failure: "Repository inspection failed"},
-	"bob_plan":              {running: "Planning repository", success: "Planned repository", failure: "Repository plan failed"},
-	"bob_check":             {running: "Checking repository contract", success: "Checked repository contract", failure: "Repository check failed"},
+	"bob_inspect":           {running: "Inspecting repository", success: "Inspected repository", attention: "Repository needs attention", failure: "Repository inspection failed"},
+	"bob_plan":              {running: "Planning repository", success: "Planned repository", attention: "Plan needs attention", failure: "Repository plan failed"},
+	"bob_check":             {running: "Checking repository contract", success: "Checked repository contract", attention: "Repository needs convergence", failure: "Repository check failed"},
 	"bob_apply":             {running: "Applying repository plan", success: "Applied repository plan", failure: "Repository apply failed"},
 	"bob_validate_manifest": {running: "Validating Bob manifest", success: "Validated Bob manifest", failure: "Manifest validation failed"},
 	"bob_recipe_describe":   {running: "Reading Bob recipe", success: "Read Bob recipe", failure: "Recipe read failed"},
@@ -134,6 +135,36 @@ var toolActionRegistry = map[string]toolActionLabels{
 	"mcphub_call_tool":     {running: "Calling ecosystem tool", success: "Called ecosystem tool", failure: "Ecosystem tool failed"},
 	"mcphub_get_result":    {running: "Reading stored result", success: "Read stored result", failure: "Stored result read failed"},
 	"mcphub_stats":         {running: "Reading MCPHub stats", success: "Read MCPHub stats", failure: "MCPHub stats failed"},
+
+	// Discovery and structural evidence remain distinct from verification.
+	"vecgrep_search":     {running: "Searching semantically", success: "Found candidates", attention: "Search needs attention", failure: "Semantic search failed"},
+	"vecgrep_status":     {running: "Checking semantic index", success: "Checked semantic index", attention: "Semantic index needs attention", failure: "Semantic index check failed"},
+	"vecgrep_index":      {running: "Indexing semantic search", success: "Indexed semantic search", attention: "Semantic index needs attention", failure: "Semantic indexing failed"},
+	"codemap_status":     {running: "Checking code index", success: "Checked code index", attention: "Code index needs attention", failure: "Code index check failed"},
+	"codemap_index":      {running: "Indexing code structure", success: "Indexed code structure", attention: "Code index needs attention", failure: "Code indexing failed"},
+	"codemap_map":        {running: "Mapping code structure", success: "Mapped code structure", attention: "Code map needs attention", failure: "Code mapping failed"},
+	"codemap_explore":    {running: "Exploring code structure", success: "Explored code structure", attention: "Code exploration needs attention", failure: "Code exploration failed"},
+	"codemap_find":       {running: "Finding code symbol", success: "Found code symbol", attention: "Symbol lookup needs attention", failure: "Symbol lookup failed"},
+	"codemap_context":    {running: "Reading structural context", success: "Read structural context", attention: "Structural context needs attention", failure: "Structural context failed"},
+	"codemap_impact":     {running: "Tracing code impact", success: "Traced code impact", attention: "Impact analysis needs attention", failure: "Impact analysis failed"},
+	"codemap_review":     {running: "Reviewing structural change", success: "Reviewed structural change", attention: "Structural review needs attention", failure: "Structural review failed"},
+	"codemap_references": {running: "Tracing references", success: "Traced references", attention: "Reference evidence needs attention", failure: "Reference tracing failed"},
+
+	// Verification tools only use the successful wording after their versioned
+	// run envelope reports a passed outcome.
+	"glyph_run":      {running: "Running terminal verification", success: "Verified terminal flow", attention: "Terminal verification needs review", failure: "Terminal verification failed"},
+	"glyphrun_run":   {running: "Running terminal verification", success: "Verified terminal flow", attention: "Terminal verification needs review", failure: "Terminal verification failed"},
+	"cairn_run":      {running: "Running browser verification", success: "Verified browser flow", attention: "Browser verification needs review", failure: "Browser verification failed"},
+	"cairntrace_run": {running: "Running browser verification", success: "Verified browser flow", attention: "Browser verification needs review", failure: "Browser verification failed"},
+
+	"vidtrace_extract":       {running: "Extracting video evidence", success: "Extracted video evidence", attention: "Video evidence needs attention", failure: "Video extraction failed"},
+	"vidtrace_validate":      {running: "Validating video evidence", success: "Validated video evidence", attention: "Video evidence needs attention", failure: "Video validation failed"},
+	"vidtrace_investigate":   {running: "Investigating video evidence", success: "Investigated video evidence", attention: "Video investigation is partial", failure: "Video investigation failed"},
+	"fcheap_save":            {running: "Saving evidence artifact", success: "Saved evidence artifact", attention: "Artifact save needs review", failure: "Artifact save failed"},
+	"fcheap_restore":         {running: "Restoring evidence artifact", success: "Restored evidence artifact", attention: "Artifact restore needs review", failure: "Artifact restore failed"},
+	"fcheap_validate":        {running: "Validating evidence artifact", success: "Validated evidence artifact", attention: "Artifact validation needs review", failure: "Artifact validation failed"},
+	"vault_get_secret":       {running: "Reading approved secret", success: "Read approved secret", attention: "Secret access needs attention", failure: "Secret read failed"},
+	"vault_run_with_secrets": {running: "Running with scoped secrets", success: "Ran with scoped secrets", attention: "Secret-backed run needs attention", failure: "Secret-backed run failed"},
 }
 
 var toolKindRegistry = map[ToolCardKind]toolActionLabels{
@@ -174,6 +205,13 @@ func (l toolActionLabels) forState(state ToolCardState) string {
 		return l.success
 	case ToolCardError:
 		return l.failure
+	case ToolCardAttention:
+		if l.attention != "" {
+			return l.attention
+		}
+		// A transport can complete while the domain outcome still needs
+		// interpretation. Never reuse the success verb for that state.
+		return "Needs attention"
 	default:
 		return l.running
 	}
@@ -202,6 +240,9 @@ func unknownToolLabel(label string, kind ToolCardKind, state ToolCardState) stri
 	}
 	if state == ToolCardError {
 		return label + " failed"
+	}
+	if state == ToolCardAttention {
+		return label + " needs attention"
 	}
 
 	object := lowerInitial(label)

@@ -703,6 +703,37 @@ func TestGoalFormPromptDraftMakesReviewBoundaryExplicit(t *testing.T) {
 	assertRenderedHeightFits(t, compactView, 12)
 }
 
+func TestGoalFormContextualFollowUpIsGuidanceNotAnError(t *testing.T) {
+	const followUp = "What concrete behavior should change, and what result would prove it?"
+	for _, size := range []struct {
+		width  int
+		height int
+	}{
+		{width: 80, height: 24},
+		{width: 30, height: 12},
+	} {
+		form := NewGoalForm(GoalFormValues{
+			Objective: "fix it", AcceptanceCriteria: "Demonstrate the requested outcome: fix it", TimeBudget: time.Minute,
+		}, GoalFormOptions{
+			Width: size.width, Height: size.height, DraftFromPrompt: true, FollowUpPrompt: followUp,
+		})
+		rendered := ansi.Strip(form.View())
+		if form.Error() != "" || strings.Contains(rendered, "! "+followUp) {
+			t.Fatalf("follow-up rendered as an error: error=%q\n%s", form.Error(), rendered)
+		}
+		if size.width >= 80 {
+			for _, want := range []string{"Complete goal details", "What concrete behavior should change"} {
+				if !strings.Contains(rendered, want) {
+					t.Fatalf("full follow-up omitted %q:\n%s", want, rendered)
+				}
+			}
+		} else if !strings.Contains(rendered, "Needs detail") {
+			t.Fatalf("compact follow-up omitted guidance:\n%s", rendered)
+		}
+		assertRenderedLinesFit(t, form.View(), size.width)
+	}
+}
+
 func TestGoalFormCursorStaysInsideFrame(t *testing.T) {
 	form := NewGoalForm(GoalFormValues{Objective: "模型 goal"}, GoalFormOptions{Width: 30, Height: 12})
 	view, cursor := form.ViewWithCursor()

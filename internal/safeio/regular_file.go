@@ -10,18 +10,48 @@ import (
 	"io"
 	"math"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
 const StartupReadTimeout = 2 * time.Second
 
 var (
-	ErrNotRegular  = errors.New("file is not a regular file")
-	ErrTooLarge    = errors.New("file exceeds size limit")
-	ErrSymlink     = errors.New("symbolic links are not allowed")
-	ErrReadBusy    = errors.New("bounded file reader is occupied")
-	ErrReadTimeout = errors.New("bounded file read timed out")
+	ErrNotRegular = errors.New("file is not a regular file")
+	ErrTooLarge   = errors.New("file exceeds size limit")
+	ErrSymlink    = errors.New("symbolic links are not allowed")
+	// ErrNoFollowUnsupported is returned when a platform cannot provide the
+	// descriptor-relative traversal required to make a no-follow open race-safe.
+	// Callers must fail closed rather than fall back to an lstat/open sequence.
+	ErrNoFollowUnsupported = errors.New("race-safe no-follow traversal is unavailable on this platform")
+	ErrReadBusy            = errors.New("bounded file reader is occupied")
+	ErrReadTimeout         = errors.New("bounded file read timed out")
 )
+
+// withinPathComponents is shared by the platform-specific component walkers.
+// It lives in this portable file so all build targets apply identical lexical
+// containment rules before touching the filesystem.
+func withinPathComponents(root, relative string) (string, []string, error) {
+	root, err := filepath.Abs(root)
+	if err != nil {
+		return "", nil, fmt.Errorf("resolve workspace root %s: %w", root, err)
+	}
+	if filepath.IsAbs(relative) {
+		return "", nil, fmt.Errorf("workspace path must be relative: %s", relative)
+	}
+	clean := filepath.Clean(filepath.FromSlash(relative))
+	if clean == "." || clean == "" || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", nil, fmt.Errorf("workspace path escapes root: %s", relative)
+	}
+	components := strings.Split(clean, string(filepath.Separator))
+	for _, component := range components {
+		if component == "" || component == "." || component == ".." {
+			return "", nil, fmt.Errorf("invalid workspace path component in %s", relative)
+		}
+	}
+	return filepath.Clean(root), components, nil
+}
 
 type readResult struct {
 	data []byte

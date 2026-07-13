@@ -20,6 +20,8 @@ Global instructions for the local-agent project.
 - Follow the Charm "smart parent, dumb child" pattern: the main `Model` processes all messages; child components expose methods returning `tea.Cmd`.
 - Use `lipgloss.LightDark()` for adaptive theming. Never hardcode ANSI colors.
 - Render cached content where possible to avoid per-frame re-rendering overhead.
+- Never render a successful MCP transport as domain success or verified evidence. Use the bounded `internal/ecosystem` projection and keep transport, domain, and evidence states separate.
+- Keep raw MCP `StructuredContent` inside the agent parser boundary. Do not concatenate it into transcript text or persist it in UI/session state.
 
 ## Code Style
 

@@ -3,6 +3,8 @@ package ui
 import (
 	"strings"
 	"testing"
+	"time"
+	"unicode"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -171,19 +173,109 @@ func TestRenderThinkingBoxStaysInsideReadableTranscript(t *testing.T) {
 	}
 }
 
-func TestLiveReasoningUsesAssistantOwnedStableRail(t *testing.T) {
+func TestLiveReasoningUsesStableStandaloneRailUntilAnswerStarts(t *testing.T) {
 	m := newTestModel(t)
 	m.reducedMotion = true
 	m.thinkBuf.WriteString("inspect files\ncompare behavior")
 
 	plain := ansi.Strip(m.renderEntries())
-	assistantAt := strings.Index(plain, "assistant")
-	reasoningAt := strings.Index(plain, "│ reasoning · live")
-	if assistantAt < 0 || reasoningAt < assistantAt {
-		t.Fatalf("live reasoning is not owned by the assistant header:\n%s", plain)
+	if strings.Contains(plain, "assistant") {
+		t.Fatalf("thinking-only stream rendered an empty assistant block:\n%s", plain)
+	}
+	for _, want := range []string{"│ reasoning · live", "compare behavior"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("live reasoning omitted %q:\n%s", want, plain)
+		}
 	}
 	if strings.Contains(plain, "chars") || strings.Contains(plain, "ctrl+t") {
 		t.Fatalf("live reasoning exposed unstable metrics or an unavailable action:\n%s", plain)
+	}
+}
+
+func TestLiveReasoningSummarySanitizesTerminalAndBidiControls(t *testing.T) {
+	unsafe := "earlier\n\x1b]52;c;REASONING_SECRET\x07inspect\x1b[2J\tfiles\u202e\u2066"
+	summary := liveThinkingSummary(unsafe)
+	if strings.Contains(summary, "REASONING_SECRET") || !strings.Contains(summary, "inspect files") {
+		t.Fatalf("sanitized live reasoning summary = %q", summary)
+	}
+	for _, character := range summary {
+		if unicode.IsControl(character) || isBidiControl(character) {
+			t.Fatalf("unsafe rune %U survived live reasoning summary: %q", character, summary)
+		}
+	}
+
+	m := newTestModel(t)
+	rendered := ansi.Strip(m.renderLiveThinkingBox(unsafe))
+	if strings.Contains(rendered, "REASONING_SECRET") || !strings.Contains(rendered, "reasoning · live · inspect files") {
+		t.Fatalf("unsafe live reasoning header = %q", rendered)
+	}
+}
+
+func TestExpandedReasoningStripsTerminalControlSequences(t *testing.T) {
+	m := newTestModel(t)
+	rendered := m.renderThinkingBox("inspect\x1b]0;owned\x07\nthen \u202espoof", false)
+	for _, forbidden := range []string{"\x1b]", "\x07", "\u202e", "owned"} {
+		if strings.Contains(rendered, forbidden) {
+			t.Fatalf("expanded reasoning retained terminal control payload %q: %q", forbidden, rendered)
+		}
+	}
+	for _, want := range []string{"inspect", "then", "spoof"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expanded reasoning dropped visible text %q: %q", want, rendered)
+		}
+	}
+}
+
+func TestReasoningOnlyCompletionAvoidsEmptyAssistantBlock(t *testing.T) {
+	m := newTestModel(t)
+	m.entries = []ChatEntry{{
+		Kind: "assistant", ThinkingContent: "inspect files", ThinkingCollapsed: true,
+	}}
+
+	plain := ansi.Strip(m.renderEntries())
+	if strings.Contains(plain, "assistant") {
+		t.Fatalf("completed reasoning-only segment rendered empty assistant chrome:\n%s", plain)
+	}
+	if !strings.Contains(plain, "reasoning · 1 line") {
+		t.Fatalf("completed reasoning receipt missing:\n%s", plain)
+	}
+}
+
+func TestWhitespaceOnlyThinkingDoesNotCreateLiveOrCompletedBlock(t *testing.T) {
+	m := newTestModel(t)
+	m.state = StateStreaming
+	updated, _ := m.Update(StreamThinkingMsg{Text: " \n\t "})
+	m = updated.(*Model)
+	if m.hasLiveTurn() {
+		t.Fatal("whitespace-only reasoning created a live turn")
+	}
+	m.flushStream()
+	if len(m.entries) != 0 {
+		t.Fatalf("whitespace-only reasoning created entries: %#v", m.entries)
+	}
+}
+
+func TestToolCallSettlesReasoningBeforeReceipt(t *testing.T) {
+	m := newTestModel(t)
+	m.reducedMotion = true
+	m.state = StateStreaming
+	m.thinkBuf.WriteString("inspect the target")
+
+	updated, _ := m.Update(ToolCallStartMsg{
+		ID: "call-1", Name: "read", Args: map[string]any{"path": "README.md"}, StartTime: time.Now(),
+	})
+	m = updated.(*Model)
+	if len(m.entries) != 2 || m.entries[0].Kind != "assistant" || m.entries[1].Kind != "tool_group" {
+		t.Fatalf("reasoning/tool entry order = %#v", m.entries)
+	}
+	plain := ansi.Strip(m.renderEntries())
+	if strings.Contains(plain, "assistant") {
+		t.Fatalf("tool reasoning rendered empty assistant role:\n%s", plain)
+	}
+	reasoningAt := strings.Index(plain, "reasoning")
+	toolAt := strings.Index(strings.ToLower(plain), "read")
+	if reasoningAt < 0 || toolAt < 0 || reasoningAt > toolAt {
+		t.Fatalf("reasoning did not precede tool receipt:\n%s", plain)
 	}
 }
 

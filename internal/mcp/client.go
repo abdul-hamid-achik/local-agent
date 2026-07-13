@@ -15,6 +15,7 @@ type MCPClient struct {
 	name          string
 	client        *sdkmcp.Client
 	session       *sdkmcp.ClientSession
+	instructions  string
 	processCancel context.CancelFunc
 }
 
@@ -79,8 +80,16 @@ func connectWithVersion(ctx context.Context, implementationVersion, name, comman
 		name:          name,
 		client:        client,
 		session:       session,
+		instructions:  serverInstructionsFromInitializeResult(session.InitializeResult()),
 		processCancel: processCancel,
 	}, nil
+}
+
+func serverInstructionsFromInitializeResult(result *sdkmcp.InitializeResult) string {
+	if result == nil {
+		return ""
+	}
+	return boundServerInstruction(result.Instructions, maxServerInstructionBytes)
 }
 
 const developmentImplementationVersion = "dev"
@@ -95,6 +104,16 @@ func clientImplementation(version string) *sdkmcp.Implementation {
 
 // Name returns the server name.
 func (c *MCPClient) Name() string { return c.name }
+
+// Instructions returns bounded usage guidance supplied by the MCP server
+// during initialization. Callers must continue to treat it as untrusted
+// server-authored content rather than host policy.
+func (c *MCPClient) Instructions() string {
+	if c == nil {
+		return ""
+	}
+	return c.instructions
+}
 
 // ListTools returns all tools from this server.
 func (c *MCPClient) ListTools(ctx context.Context) ([]*sdkmcp.Tool, error) {
@@ -123,17 +142,31 @@ func (c *MCPClient) CallTool(ctx context.Context, name string, args map[string]a
 		return nil, fmt.Errorf("call tool %s on %s: %w", name, c.name, err)
 	}
 
+	structured := marshalBoundedMCPValue(result.StructuredContent)
+	content := renderToolResult(result)
+	// StructuredContent is host-only parser input. Never stringify it into the
+	// model/UI text channel: typed payloads can contain secrets, large evidence,
+	// or fields whose meaning depends on an exact companion-tool contract. The
+	// agent derives a bounded semantic receipt after projection when no safe
+	// unstructured content was supplied.
+	var errorMeta json.RawMessage
+	if result.Meta != nil {
+		errorMeta = marshalBoundedMCPValue(result.Meta["error"])
+	}
 	return &ToolResult{
-		Content: renderToolResult(result),
-		IsError: result.IsError,
+		Content:    content,
+		Structured: structured,
+		ErrorMeta:  errorMeta,
+		IsError:    result.IsError,
 	}, nil
 }
 
 const maxRenderedMCPResultBytes = 96 * 1024
 
-// renderToolResult preserves structured MCP data and emits bounded receipts
-// for binary/resource blocks. Passing base64 media directly to a small model
-// would waste its context and previously those blocks disappeared entirely.
+// renderToolResult renders only unstructured MCP content and emits bounded
+// receipts for binary/resource blocks. StructuredContent has its own typed
+// boundary and must not be concatenated here: doing so duplicates typed MCP
+// handlers' JSON and makes exact semantic parsing impossible.
 func renderToolResult(result *sdkmcp.CallToolResult) string {
 	const truncatedMarker = "\n... [MCP result truncated]"
 	var b strings.Builder
@@ -181,17 +214,24 @@ func renderToolResult(result *sdkmcp.CallToolResult) string {
 		}
 	}
 
-	if result.StructuredContent != nil {
-		if structured, err := json.Marshal(result.StructuredContent); err == nil {
-			appendPart("structured: " + string(structured))
-		} else {
-			appendPart(fmt.Sprintf("[structured content could not be encoded: %v]", err))
-		}
-	}
 	if truncated {
 		b.WriteString(truncatedMarker)
 	}
 	return b.String()
+}
+
+// marshalBoundedMCPValue preserves a JSON value atomically. Oversized or
+// invalid values are omitted instead of truncating them into misleading JSON;
+// callers then fail closed to an unknown semantic outcome.
+func marshalBoundedMCPValue(value any) json.RawMessage {
+	if value == nil {
+		return nil
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil || len(encoded) > maxRenderedMCPResultBytes {
+		return nil
+	}
+	return append(json.RawMessage(nil), encoded...)
 }
 
 // Close shuts down the MCP server connection.

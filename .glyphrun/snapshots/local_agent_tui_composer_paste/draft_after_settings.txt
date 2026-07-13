@@ -27,5 +27,5 @@
 
 
 ─────────────────────────────────────────────────────────────────────────────────────────
-❯ Review the first receipt.
-│ Keep the second line while I check Settings.
+▏❯ Review the first receipt.
+ │ Keep the second line while I check Settings.

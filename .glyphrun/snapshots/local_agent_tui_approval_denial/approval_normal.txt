@@ -1,27 +1,26 @@
   you ───────────────────────────────────────────────────────────────────────────
   Create approval-probe.txt with the exact text must not be written.
 
-  Permission required for `write`:
-  ```json
-  {
-    "content": "must not be written",
-    "path": "approval-probe.txt"
-  }
-  ```
 
 
 
-
-
-
-
-
-
-
+ ╭──────────────────────────────────────────────────────────────────────────────────────╮
+ │ Permission · write                                                                   │
+ │ Action     Write 19 B                                                                │
+ │ Target     /Users/abdulachik/projects/local-agent/.glyphrun/tmp/approval-workdir/app │
+ │            roval-probe.txt                                                           │
+ │ Scope      This exact request · current Agent session                                │
+ │ Request    80109752db71                                                              │
+ │                                                                                      │
+ │ Proposed change                                                                      │
+ │ -                                                                                    │
+ │ +must not be written                                                                 │
+ │                                                                                      │
+ │ esc cancel · y once · s session · n deny · d arguments · j/k scroll                  │
+ ╰──────────────────────────────────────────────────────────────────────────────────────╯
 
 
 
 
 
 ─────────────────────────────────────────────────────────────────────────────────────────
-  Approve write content="must not be written"… · esc cancel · y allow · n deny · a always

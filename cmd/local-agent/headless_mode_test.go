@@ -17,7 +17,7 @@ func TestParseHeadlessMode(t *testing.T) {
 		{name: "default", value: "", headless: true, want: ui.ModeNormal},
 		{name: "normal", value: " NORMAL ", headless: true, want: ui.ModeNormal},
 		{name: "plan", value: "plan", headless: true, want: ui.ModePlan},
-		{name: "auto requires supervisor", value: "auto", headless: true, wantErr: true},
+		{name: "auto", value: "auto", headless: true, want: ui.ModeAuto},
 		{name: "unknown", value: "build", headless: true, wantErr: true},
 		{name: "interactive flag unsupported", value: "plan", headless: false, wantErr: true},
 	}

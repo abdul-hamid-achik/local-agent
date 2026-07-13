@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
@@ -163,6 +164,77 @@ func TestRegistry_RegisterConnectedServer_ReplacesExistingState(t *testing.T) {
 	}
 	if len(r.FailedServers()) != 0 {
 		t.Fatalf("failed server entry should be cleared on successful registration, got %#v", r.FailedServers())
+	}
+}
+
+func TestRegistryServerInstructionsAreSortedBoundedAndReplaced(t *testing.T) {
+	r := NewRegistry()
+	defer r.Close()
+
+	longUnicode := strings.Repeat("é", maxServerInstructionBytes)
+	r.mu.Lock()
+	r.registerConnectedServerLocked("zeta", &MCPClient{name: "zeta", instructions: "  use zeta_search  "}, nil)
+	r.registerConnectedServerLocked("alpha", &MCPClient{name: "alpha", instructions: longUnicode}, nil)
+	r.mu.Unlock()
+
+	got := r.ServerInstructions()
+	if len(got) != 2 || got[0].Name != "alpha" || got[1].Name != "zeta" {
+		t.Fatalf("ServerInstructions() = %#v, want alpha then zeta", got)
+	}
+	if len(got[0].Text) > maxServerInstructionBytes || !utf8.ValidString(got[0].Text) || !strings.Contains(got[0].Text, "guidance truncated") {
+		t.Fatalf("unicode guidance was not bounded safely: bytes=%d tail=%q", len(got[0].Text), got[0].Text[len(got[0].Text)-min(80, len(got[0].Text)):])
+	}
+	if got[1].Text != "use zeta_search" {
+		t.Fatalf("trimmed zeta guidance = %q", got[1].Text)
+	}
+
+	got[1].Text = "caller mutation"
+	if again := r.ServerInstructions(); len(again) != 2 || again[1].Text != "use zeta_search" {
+		t.Fatalf("caller mutated registry guidance: %#v", again)
+	}
+
+	r.mu.Lock()
+	r.registerConnectedServerLocked("zeta", &MCPClient{name: "zeta", instructions: "replacement"}, nil)
+	r.removeServerLocked("alpha")
+	r.mu.Unlock()
+	if replaced := r.ServerInstructions(); len(replaced) != 1 || replaced[0] != (ServerInstruction{Name: "zeta", Text: "replacement"}) {
+		t.Fatalf("replaced guidance = %#v", replaced)
+	}
+}
+
+func TestMCPClientInstructionsNilSafe(t *testing.T) {
+	var client *MCPClient
+	if got := client.Instructions(); got != "" {
+		t.Fatalf("nil client instructions = %q", got)
+	}
+}
+
+func TestRegistryServerInstructionsKeepAggregateEntriesAtomic(t *testing.T) {
+	r := NewRegistry()
+	defer r.Close()
+
+	r.mu.Lock()
+	for _, name := range []string{"a", "b", "c", "d", "e"} {
+		r.registerConnectedServerLocked(name, &MCPClient{
+			name:         name,
+			instructions: strings.Repeat(name, maxServerInstructionBytes+1),
+		}, nil)
+	}
+	r.mu.Unlock()
+
+	got := r.ServerInstructions()
+	total := 0
+	for _, instruction := range got {
+		total += len(instruction.Text)
+		if !strings.HasSuffix(instruction.Text, serverInstructionTruncatedMarker) {
+			t.Fatalf("partially projected guidance for %s: %q", instruction.Name, instruction.Text[len(instruction.Text)-min(80, len(instruction.Text)):])
+		}
+	}
+	if total > maxAllServerInstructionBytes {
+		t.Fatalf("aggregate guidance bytes = %d", total)
+	}
+	if len(got) != maxAllServerInstructionBytes/maxServerInstructionBytes {
+		t.Fatalf("atomic bounded entries = %d, want %d", len(got), maxAllServerInstructionBytes/maxServerInstructionBytes)
 	}
 }
 

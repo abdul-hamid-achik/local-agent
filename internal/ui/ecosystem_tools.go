@@ -46,11 +46,6 @@ func gatewayToolSummary(args map[string]any) string {
 	if tool != "" {
 		parts = append(parts, friendlyRemoteAction(tool))
 	}
-	if nested, ok := args["arguments"].(map[string]any); ok {
-		if anchor := ecosystemArgumentAnchor(remoteToolKey(tool), nested); anchor != "" {
-			parts = append(parts, anchor)
-		}
-	}
 	if len(parts) == 0 {
 		return ""
 	}

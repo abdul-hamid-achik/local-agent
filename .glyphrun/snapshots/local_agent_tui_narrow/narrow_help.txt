@@ -2,7 +2,8 @@
  │ Help                               │
  │                                    │
  │ Keyboard Shortcuts                 │
- │   enter        Send message        │
+ │   enter        Send / queue one    │
+ │                follow-up           │
  │   shift+enter  New line            │
  │   esc          Cancel / close      │
  │                overlay             │
@@ -14,6 +15,5 @@
  │   t            Toggle all tools    │
  │                (empty input)       │
  │   ctrl+y       Copy last response  │
- │                (empty input)       │
  │ esc/q close · ↓ more               │
  ╰────────────────────────────────────╯

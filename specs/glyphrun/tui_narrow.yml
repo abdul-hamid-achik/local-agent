@@ -3,8 +3,8 @@ name: local_agent_tui_narrow
 
 intent: |
   a user can begin at the supported 30x12 minimum, then keep a full-width
-  conversation at 40 columns while navigating nested settings, completion,
-  runtime, and help modals before quitting cleanly.
+  conversation at 40 columns while the mode rail and nested settings,
+  completion, runtime, and help modals remain legible before quitting cleanly.
 
 target:
   cmd: ["./bin/local-agent"]
@@ -40,6 +40,10 @@ steps:
       screen:
         contains: "ctrl+p settings"
       timeoutMs: 2000
+  - wait:
+      screen:
+        contains: "▏❯ Ask"
+      timeoutMs: 2000
   - snapshot: minimum_idle
   - press: "ctrl+p"
   - wait:
@@ -57,14 +61,11 @@ steps:
       screen:
         contains: "PLAN"
       timeoutMs: 2000
-  - type: "polish the interface"
-  - press: "enter"
   - wait:
       screen:
-        contains: "Plan · 1/3"
+        contains: "▌❯ Ask"
       timeoutMs: 2000
   - snapshot: minimum_plan_form
-  - press: "esc"
   - wait:
       screen:
         notContains: "Plan · 1/3"
@@ -161,8 +162,8 @@ outcomes:
       snapshot:
         name: minimum_settings
         mode: text
-  - id: minimum_plan_form_is_usable
-    description: the PLAN prompt exposes one truthful bounded step at the supported minimum
+  - id: minimum_plan_mode_is_usable
+    description: the PLAN rail remains legible at the supported minimum without opening a form
     verify:
       snapshot:
         name: minimum_plan_form

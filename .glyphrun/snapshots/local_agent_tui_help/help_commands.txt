@@ -1,11 +1,15 @@
                              ╭────────────────────────────────────────────────────────────╮
                              │ Help                                                       │
                              │                                                            │
-                             │                                                            │
+                             │   enter (running)   Queue one follow-up; it sends after    │
+                             │                     the current turn settles successfully  │
+                             │   esc (running)     Cancel the turn; a queued follow-up    │
+  ollama: no model selected  │                     returns to the composer                │
+  try: ollama serve · ollama │                                                            │
                              │ Slash Commands                                             │
                              │   /help             Show help overlay with shortcuts and   │
-  ollama: no model selected  │                     commands                               │
-  try: ollama serve · ollama │   /clear            Clear conversation history             │
+                             │                     commands                               │
+                             │   /clear            Clear conversation history             │
                              │   /goal             Create, inspect, pause, resume,        │
                              │                     budget, or drop a durable goal         │
                              │   /goal new         Define a durable objective,            │
@@ -16,6 +20,8 @@
                              │   /goal budget      Unavailable · No goal is configured.   │
                              │   /goal drop        Unavailable · No goal is configured.   │
                              │   /model            Show, switch, or list models           │
+                             │   /recover          Review a paused execution and record   │
+                             │                     typed evidence                         │
                              │   /agent            Show or switch agent profile           │
                              │   /load             Load a markdown file as context        │
                              │   /unload           Remove loaded context file             │
@@ -24,12 +30,5 @@
                              │   /servers          List connected MCP servers             │
                              │   /ice              Show Infinite Context Engine status    │
                              │   /sessions         Browse and restore saved sessions      │
-                             │   /changes          List files modified by the agent this  │
-                             │                     session                                │
-                             │   /commit           Generate commit message from staged    │
-                             │                     changes and commit                     │
-                             │   /stats            Show token usage statistics for this   │
-                             │                     session                                │
-                             │   /export           Export readable Markdown with a typed  │
-─────────────────────────────│ esc/q close · j/k scroll · 73%                             │────────────────────────────
-                             ╰────────────────────────────────────────────────────────────╯
+─────────────────────────────│   /changes          List files modified by the agent this  │────────────────────────────
+                             │ esc/q close · j/k scroll · 64%                             │

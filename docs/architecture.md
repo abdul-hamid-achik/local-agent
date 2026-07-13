@@ -17,6 +17,8 @@ Agent loop --------> prompt builder + mode policy
     |                         +-- AGENTS.md, skills, context, memory
     |
     +-- tool policy -> approval -> built-ins / MCP registry
+    |                                    |
+    |                                    +-- typed result -> semantic receipt
     |
     +-- ModelManager -> Ollama inventory -> local or consented Cloud model
 
@@ -30,12 +32,27 @@ Persistence -> scoped memory/ICE + SQLite sessions/ledger + logs
 - `internal/agent` owns the ReAct loop, prompts, policies, and tool dispatch.
 - `internal/llm` owns the Ollama client, live inventory, model admission, and per-request context policy.
 - `internal/mcp` owns server connections, health checks, reconnection, and tool namespacing.
+- `internal/ecosystem` turns exact, versioned companion-tool results into bounded semantic receipts.
 - `internal/ui` owns the Charm interface and renders state from the host runtime.
 - `internal/goal` owns durable goal state, budgets, receipts, and recovery values.
 - `internal/goaladvisor` bounds the optional Cortex/MCPHub semantic adapter.
 - `internal/db` persists sessions, permissions, checkpoints, and execution evidence.
 
 The model does not enforce its own mode. The host decides which tools are visible and rejects out-of-policy requests.
+
+## Harness contract
+
+The harness owns the turn loop, context construction, tool orchestration, approvals, persistence, recovery, and progress projection. Companion tools keep their own domain authority. For example, MCPHub decides how a downstream tool is routed, Bob decides whether a repository is clean or drifting, and Glyphrun or Cairntrace decides whether its verification run passed.
+
+Local Agent therefore projects every tool receipt across three independent axes:
+
+- **Transport** — running, succeeded, or failed to return a receipt.
+- **Domain** — succeeded, failed, blocked, drifted, conflicted, needs attention, or is not safely understood.
+- **Evidence** — candidate, supported, verified, contradicted, or stale.
+
+A successful MCP exchange is not proof that the requested operation succeeded. Exact structured output is interpreted inside the agent, then discarded; the TUI and saved session receive only the bounded semantic projection. Unknown schemas remain visible as attention states instead of being painted as successful verification. MCP tool-call arguments follow the same boundary: saved sessions retain only safe route identifiers, never arbitrary downstream payloads.
+
+The transcript is the chronological source of truth. Overlays provide temporary selection or inspection, while the composer remains the action surface. Local Agent does not duplicate every companion product into a persistent dashboard.
 
 ## Effect ordering
 

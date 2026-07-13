@@ -1,0 +1,19 @@
+
+  You can try:
+  - Checking if Ollama is running (`ollama ps`)
+  - Switching to a different model (ctrl+o)
+  - Reducing context size
+
+  Tool results are still available above.
+  Mode · AUTO · qwen3.5:2b
+  Goal saved · linking Cortex before the first turn…
+
+  ✗ error
+  Cortex link failed · cortex goal advisor is
+  unavailable: neither cortex_open_task nor the
+  MCPHub gateway is connected. Goal paused; update or
+  rebuild Cortex so cortex_open_task is exposed, then
+  run /goal resume.
+───────────────────────────────────────────────────────────
+ [ AUTO ] · Ⅱ paused · ship a bounde… · 0s/30m · qwen3.5:2b
+▌❯ Ask, @mention files, or type /help

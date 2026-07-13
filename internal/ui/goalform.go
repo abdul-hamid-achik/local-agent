@@ -78,9 +78,11 @@ type GoalFormOptions struct {
 	IsDark        bool
 	ReducedMotion bool
 	// DraftFromPrompt tells the form that the initial definition was inferred
-	// from the user's composer text. The draft remains fully editable and is
-	// never dispatched until the user explicitly reviews and saves it.
+	// from the user's composer text. The draft remains fully editable.
 	DraftFromPrompt bool
+	// FollowUpPrompt replaces generic review copy when the inferred draft is
+	// missing one concrete detail. It is guidance, not a validation error.
+	FollowUpPrompt string
 	// BudgetOnly locks the immutable objective and acceptance criteria while
 	// preserving them as context for a budget amendment.
 	BudgetOnly bool
@@ -115,6 +117,7 @@ type GoalForm struct {
 	reducedMotion   bool
 	budgetOnly      bool
 	draftFromPrompt bool
+	followUpPrompt  string
 	customChoices   bool
 	styles          Styles
 	cache           goalFormRenderCache
@@ -144,6 +147,7 @@ func NewGoalForm(initial GoalFormValues, options GoalFormOptions) *GoalForm {
 		reducedMotion:   options.ReducedMotion,
 		budgetOnly:      options.BudgetOnly,
 		draftFromPrompt: options.DraftFromPrompt,
+		followUpPrompt:  strings.TrimSpace(options.FollowUpPrompt),
 		styles:          NewStyles(options.IsDark),
 	}
 	f.objective = newGoalTextInput("What outcome should persist?", 768)
@@ -705,7 +709,11 @@ func (f *GoalForm) renderCompactView() (string, *tea.Cursor) {
 	b.WriteString(f.styles.OverlayTitle.Render(fmt.Sprintf("%s · %d/%d", title, f.visibleFieldNumber(), f.visibleFieldCount())))
 	b.WriteString("\n")
 	if f.draftFromPrompt && !f.budgetOnly {
-		b.WriteString(f.styles.OverlayDim.Render(truncateDisplay("Prompt draft · review", width)))
+		prompt := "Prompt draft · review"
+		if f.followUpPrompt != "" {
+			prompt = "Needs detail · " + f.followUpPrompt
+		}
+		b.WriteString(f.styles.OverlayDim.Render(truncateDisplay(prompt, width)))
 		b.WriteString("\n")
 		if f.active == GoalFieldActions {
 			b.WriteString(f.renderCompactGoalSummary(width))
@@ -785,6 +793,10 @@ func (f *GoalForm) renderFullView() (string, *tea.Cursor) {
 	if f.draftFromPrompt && !f.budgetOnly {
 		title = "Review goal draft"
 		subtitle = "Inferred from your prompt · edit objective, proof, and limits before AUTO starts."
+		if f.followUpPrompt != "" {
+			title = "Complete goal details"
+			subtitle = f.followUpPrompt
+		}
 	}
 	if f.budgetOnly {
 		title = "Goal budgets"

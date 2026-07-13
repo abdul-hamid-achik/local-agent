@@ -41,19 +41,20 @@ var ErrRegistryClosed = errors.New("MCP registry is closed")
 
 // Registry manages multiple MCP server connections and routes tool calls.
 type Registry struct {
-	mu            sync.RWMutex
-	clients       map[string]*MCPClient
-	toolMap       map[string]toolRoute // exposed tool name -> server and remote name
-	serverTools   map[string][]llm.ToolDef
-	failedServers []FailedServer
-	serverConfigs map[string]config.ServerConfig // name -> config for reconnection
-	callTimeout   time.Duration                  // per tool-call timeout (0 = default)
-	version       string                         // advertised MCP client implementation version
-	closed        bool
-	lifecycleCtx  context.Context
-	cancel        context.CancelFunc
-	lifecycleWG   sync.WaitGroup
-	closeOnce     sync.Once
+	mu             sync.RWMutex
+	clients        map[string]*MCPClient
+	toolMap        map[string]toolRoute // exposed tool name -> server and remote name
+	serverTools    map[string][]llm.ToolDef
+	serverGuidance map[string]string
+	failedServers  []FailedServer
+	serverConfigs  map[string]config.ServerConfig // name -> config for reconnection
+	callTimeout    time.Duration                  // per tool-call timeout (0 = default)
+	version        string                         // advertised MCP client implementation version
+	closed         bool
+	lifecycleCtx   context.Context
+	cancel         context.CancelFunc
+	lifecycleWG    sync.WaitGroup
+	closeOnce      sync.Once
 
 	// Test seams keep shutdown overlap tests deterministic without launching a
 	// real child process. Production always uses discoverServer/client.Close.
@@ -73,14 +74,15 @@ func NewRegistry() *Registry {
 func NewRegistryWithVersion(version string) *Registry {
 	lifecycleCtx, cancel := context.WithCancel(context.Background())
 	return &Registry{
-		toolMap:       make(map[string]toolRoute),
-		clients:       make(map[string]*MCPClient),
-		serverTools:   make(map[string][]llm.ToolDef),
-		serverConfigs: make(map[string]config.ServerConfig),
-		callTimeout:   defaultCallTimeout,
-		version:       clientImplementation(version).Version,
-		lifecycleCtx:  lifecycleCtx,
-		cancel:        cancel,
+		toolMap:        make(map[string]toolRoute),
+		clients:        make(map[string]*MCPClient),
+		serverTools:    make(map[string][]llm.ToolDef),
+		serverGuidance: make(map[string]string),
+		serverConfigs:  make(map[string]config.ServerConfig),
+		callTimeout:    defaultCallTimeout,
+		version:        clientImplementation(version).Version,
+		lifecycleCtx:   lifecycleCtx,
+		cancel:         cancel,
 	}
 }
 
@@ -152,7 +154,7 @@ func (r *Registry) discoverServer(ctx context.Context, srv config.ServerConfig) 
 
 	serverDefs := make([]llm.ToolDef, 0, len(tools))
 	for _, tool := range tools {
-		serverDefs = append(serverDefs, ToLLMToolDef(tool.Name, tool.Description, tool.InputSchema))
+		serverDefs = append(serverDefs, ToLLMToolDefFromMCP(tool))
 	}
 	return client, serverDefs, nil
 }
@@ -308,6 +310,44 @@ func (r *Registry) ServerNames() []string {
 	return names
 }
 
+const maxAllServerInstructionBytes = 16 * 1024
+
+// ServerInstructions returns a deterministic, bounded snapshot of usage
+// guidance supplied by connected MCP servers during initialization. Guidance
+// remains server-authored data; consumers must not treat it as host policy.
+func (r *Registry) ServerInstructions() []ServerInstruction {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	names := make([]string, 0, len(r.serverGuidance))
+	for name, guidance := range r.serverGuidance {
+		if strings.TrimSpace(guidance) != "" {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+
+	remaining := maxAllServerInstructionBytes
+	instructions := make([]ServerInstruction, 0, len(names))
+	for _, name := range names {
+		if remaining <= 0 {
+			break
+		}
+		guidance := boundServerInstruction(r.serverGuidance[name], maxServerInstructionBytes)
+		if guidance == "" {
+			continue
+		}
+		// Keep each server's guidance atomic. A silently cut calling convention
+		// is less useful than omitting that entry from this bounded snapshot.
+		if len(guidance) > remaining {
+			continue
+		}
+		instructions = append(instructions, ServerInstruction{Name: name, Text: guidance})
+		remaining -= len(guidance)
+	}
+	return instructions
+}
+
 // FailedServers returns the list of servers that failed to connect.
 func (r *Registry) FailedServers() []FailedServer {
 	r.mu.RLock()
@@ -371,6 +411,7 @@ func (r *Registry) Close() {
 		r.clients = make(map[string]*MCPClient)
 		r.toolMap = make(map[string]toolRoute)
 		r.serverTools = make(map[string][]llm.ToolDef)
+		r.serverGuidance = make(map[string]string)
 		r.failedServers = nil
 		r.serverConfigs = make(map[string]config.ServerConfig)
 		r.mu.Unlock()
@@ -487,6 +528,7 @@ func (r *Registry) clearFailedServerLocked(name string) {
 func (r *Registry) removeServerLocked(name string) {
 	delete(r.clients, name)
 	delete(r.serverTools, name)
+	delete(r.serverGuidance, name)
 	r.rebuildToolMapLocked()
 }
 
@@ -499,6 +541,11 @@ func (r *Registry) registerConnectedServerLocked(name string, client *MCPClient,
 	}
 	r.clients[name] = client
 	r.serverTools[name] = defs
+	if guidance := boundServerInstruction(client.Instructions(), maxServerInstructionBytes); guidance != "" {
+		r.serverGuidance[name] = guidance
+	} else {
+		delete(r.serverGuidance, name)
+	}
 	r.clearFailedServerLocked(name)
 	r.rebuildToolMapLocked()
 	return true

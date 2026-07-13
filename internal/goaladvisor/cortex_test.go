@@ -18,6 +18,7 @@ type fakeRegistry struct {
 	name    string
 	calls   []string
 	args    map[string]any
+	history []map[string]any
 	result  *mcp.ToolResult
 	results map[string]*mcp.ToolResult
 	err     error
@@ -32,10 +33,18 @@ func (f *fakeRegistry) CallTool(_ context.Context, name string, args map[string]
 	f.name = name
 	f.calls = append(f.calls, name)
 	f.args = args
+	f.history = append(f.history, cloneTestArgs(args))
 	if f.results != nil {
 		return f.results[name], f.err
 	}
 	return f.result, f.err
+}
+
+func cloneTestArgs(args map[string]any) map[string]any {
+	payload, _ := json.Marshal(args)
+	var cloned map[string]any
+	_ = json.Unmarshal(payload, &cloned)
+	return cloned
 }
 
 func TestCortexOpenUsesLazyGatewayAndStableIdentity(t *testing.T) {
@@ -64,8 +73,70 @@ func TestCortexOpenUsesLazyGatewayAndStableIdentity(t *testing.T) {
 	if downstream["idempotencyKey"] != "goal_1" || downstream["workspace"] != "/work/repo" {
 		t.Fatalf("identity args = %#v", downstream)
 	}
-	if text, _ := downstream["goal"].(string); !strings.Contains(text, "Ship safely") || !strings.Contains(text, "[ac_1] Tests pass") {
+	if text, _ := downstream["goal"].(string); text != "Ship safely" {
 		t.Fatalf("goal text = %q", text)
+	}
+	criteriaJSON, err := json.Marshal(downstream["acceptanceCriteria"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(criteriaJSON) != `[{"id":"ac_1","statement":"Tests pass"}]` {
+		t.Fatalf("acceptance criteria = %s", criteriaJSON)
+	}
+}
+
+func TestCortexOpenSendsImmutableCriteriaAndRetriesIdentically(t *testing.T) {
+	registry := &fakeRegistry{
+		routes: map[string]string{openTool: "cortex__cortex_open_task"},
+		result: &mcp.ToolResult{
+			Content:    `{"ok":false,"summary":"stale display text"}`,
+			Structured: json.RawMessage(`{"ok":true,"taskId":"task_1","phase":"investigating"}`),
+		},
+	}
+	request := OpenRequest{
+		GoalID:    "goal_1",
+		Objective: "Ship safely",
+		AcceptanceCriteria: []goal.AcceptanceCriterion{
+			{ID: "tests", Description: "All tests pass"},
+			{ID: "docs", Description: "Public docs match behavior"},
+		},
+	}
+	advisor := NewCortex(registry, "/work/repo", "")
+	for attempt := 0; attempt < 2; attempt++ {
+		advice, err := advisor.Open(context.Background(), request)
+		if err != nil || advice.TaskID != "task_1" {
+			t.Fatalf("attempt %d: advice=%+v err=%v", attempt+1, advice, err)
+		}
+	}
+	if len(registry.history) != 2 || !reflect.DeepEqual(registry.history[0], registry.history[1]) {
+		t.Fatalf("idempotent retry changed arguments: %#v", registry.history)
+	}
+	if registry.history[0]["idempotencyKey"] != "goal_1" {
+		t.Fatalf("idempotency key = %#v", registry.history[0]["idempotencyKey"])
+	}
+}
+
+func TestCortexOpenRejectsInvalidImmutableCriteriaBeforeDispatch(t *testing.T) {
+	tests := []struct {
+		name     string
+		criteria []goal.AcceptanceCriterion
+	}{
+		{name: "missing", criteria: nil},
+		{name: "empty id", criteria: []goal.AcceptanceCriterion{{Description: "Tests pass"}}},
+		{name: "empty statement", criteria: []goal.AcceptanceCriterion{{ID: "tests"}}},
+		{name: "duplicate id", criteria: []goal.AcceptanceCriterion{{ID: "tests", Description: "One"}, {ID: "tests", Description: "Two"}}},
+		{name: "oversized statement", criteria: []goal.AcceptanceCriterion{{ID: "tests", Description: strings.Repeat("x", goal.MaxCriterionBytes+1)}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			registry := &fakeRegistry{routes: map[string]string{openTool: "open"}}
+			_, err := NewCortex(registry, "/work", "").Open(context.Background(), OpenRequest{
+				GoalID: "goal_1", Objective: "Ship", AcceptanceCriteria: test.criteria,
+			})
+			if !errors.Is(err, ErrRejected) || len(registry.calls) != 0 {
+				t.Fatalf("err=%v calls=%#v", err, registry.calls)
+			}
+		})
 	}
 }
 

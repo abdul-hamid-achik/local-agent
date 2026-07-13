@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -136,6 +135,18 @@ func RegisterBuiltins(r *Registry) {
 				}
 				return Result{Error: fmt.Sprintf("Unknown model: %s (use /model list to see available)", args[0])}
 			}
+		},
+	})
+
+	r.Register(&Command{
+		Name:        "recover",
+		Description: "Review a paused execution and record typed evidence",
+		Usage:       "/recover",
+		Handler: func(_ *Context, args []string) Result {
+			if len(args) != 0 {
+				return Result{Error: "usage: /recover"}
+			}
+			return Result{Action: ActionRecoverExecution}
 		},
 	})
 
@@ -410,29 +421,6 @@ func RegisterBuiltins(r *Registry) {
 	})
 
 	r.Register(&Command{
-		Name:        "migrate-checkpoints",
-		Description: "Preview or explicitly claim unbound legacy checkpoints",
-		Usage:       "/migrate-checkpoints [confirm <preview-count>]",
-		Hidden:      true,
-		Handler: func(_ *Context, args []string) Result {
-			if len(args) == 0 {
-				return Result{Action: ActionPreviewLegacyCheckpoints}
-			}
-			if len(args) != 2 || args[0] != "confirm" {
-				return Result{Error: "usage: /migrate-checkpoints [confirm <preview-count>]"}
-			}
-			count, err := strconv.ParseInt(args[1], 10, 64)
-			if err != nil || count <= 0 {
-				return Result{Error: "confirmation count must be the positive number shown by /migrate-checkpoints"}
-			}
-			return Result{Action: ActionClaimLegacyCheckpoints, Data: strconv.FormatInt(count, 10)}
-		},
-	})
-
-	registerCountConfirmedMigration(r, "migrate-memory", "Preview or explicitly claim quarantined legacy memory", ActionPreviewLegacyMemory, ActionClaimLegacyMemory)
-	registerCountConfirmedMigration(r, "migrate-ice", "Preview or explicitly claim quarantined legacy ICE history", ActionPreviewLegacyICE, ActionClaimLegacyICE)
-
-	r.Register(&Command{
 		Name:        "exit",
 		Aliases:     []string{"quit", "q"},
 		Description: "Quit local-agent",
@@ -542,28 +530,6 @@ func expandHomePath(path string) string {
 		}
 	}
 	return path
-}
-
-func registerCountConfirmedMigration(r *Registry, name, description string, previewAction, claimAction Action) {
-	r.Register(&Command{
-		Name:        name,
-		Description: description,
-		Usage:       "/" + name + " [confirm <preview-count>]",
-		Hidden:      true,
-		Handler: func(_ *Context, args []string) Result {
-			if len(args) == 0 {
-				return Result{Action: previewAction}
-			}
-			if len(args) != 2 || args[0] != "confirm" {
-				return Result{Error: "usage: /" + name + " [confirm <preview-count>]"}
-			}
-			count, err := strconv.ParseInt(args[1], 10, 64)
-			if err != nil || count <= 0 {
-				return Result{Error: "confirmation count must be the positive number shown by /" + name}
-			}
-			return Result{Action: claimAction, Data: strconv.FormatInt(count, 10)}
-		},
-	})
 }
 
 func skillList(ctx *Context) Result {

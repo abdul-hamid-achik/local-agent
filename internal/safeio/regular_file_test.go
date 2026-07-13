@@ -47,6 +47,29 @@ func TestReadRegularFileNoFollowRejectsOutsideSymlink(t *testing.T) {
 	}
 }
 
+func TestOpenWithinNoFollowRejectsIntermediateSymlink(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret"), []byte("outside-secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "redirect")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	file, err := OpenWithinNoFollow(root, filepath.Join("redirect", "secret"))
+	if file != nil {
+		_ = file.Close()
+		t.Fatal("intermediate symlink returned a readable descriptor")
+	}
+	if err == nil {
+		t.Fatal("intermediate symlink was followed")
+	}
+
+	if _, err := OpenWithinNoFollow(root, filepath.Join("..", "secret")); err == nil {
+		t.Fatal("lexical workspace escape was accepted")
+	}
+}
+
 func TestReadPrivateRegularFileChmodsVerifiedDescriptor(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "store.json")
 	if err := os.WriteFile(path, []byte("[]"), 0o644); err != nil {

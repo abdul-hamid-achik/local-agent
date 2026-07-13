@@ -9,7 +9,7 @@ A local-first coding agent for the terminal, built in Go with Charm and powered 
 ```text
   NORMAL -> interactive work; changes require approval
   PLAN   -> inspect and design without mutations
-  AUTO   -> run a durable goal until a verified safe stop
+  AUTO   -> proactive work under the same approval policy
 ```
 
 ## What works today
@@ -136,19 +136,21 @@ Cycle modes with `shift+tab`.
 | Mode | Model behavior | Available tools |
 |---|---|---|
 | NORMAL | Routes for the interactive task | Read tools, writes, validated edits, shell, memory, and MCP; mutations remain approval-gated |
-| PLAN | Opens a structured plan form and routes toward the complex installed tier | Workspace reads, search, listing, diff, existence checks, and memory recall only |
-| AUTO | Marks durable autonomous authority; submitting a prompt or `/goal` opens a reviewed Goal Runtime | The NORMAL tool surface under the same approval policy; no blanket approval |
+| PLAN | Sends ordinary prompts directly under a read-only host policy | Workspace reads, search, listing, diff, existence checks, and memory recall only |
+| AUTO | Sends ordinary prompts directly with proactive tool routing | The NORMAL tool surface under the same approval policy; no blanket approval |
 
 The mode policy is enforced by the host, not just by a prompt. A model-generated
 mutation in PLAN is returned as blocked. `shift+tab` only changes authority; it
-never opens a form or creates work. AUTO is not YOLO: submitting an AUTO prompt
-or running `/goal <duration> <prompt>` opens a reviewed goal draft, and an active
-goal is controlled through the Goal Inspector instead of accepting an ordinary
-prompt that could bypass its permit and budget.
+never opens a form or creates work. Ordinary prompts are sent immediately in all
+three modes. AUTO is not YOLO: risky operations still follow the configured
+approval policy. A durable bounded run is created only through
+`/goal <duration> <prompt>` or `/goal new`, and an active goal is controlled
+through the Goal Inspector instead of accepting an ordinary prompt that could
+bypass its permit and budget.
 Legacy ASK sessions restore as NORMAL. Legacy BUILD sessions restore as NORMAL
 unless they already carry a durable goal, in which case they restore as AUTO.
 
-AUTO currently runs through the foreground Bubble Tea Goal Runtime. The
+Active `/goal` runs currently use the foreground Bubble Tea Goal Runtime. The
 UI-independent `internal/supervisor` and `internal/workunit` packages are
 validated scheduling contracts, not wired execution engines: there is no
 headless `run --until-blocked`, queue, or parallel specialist process runner.
@@ -216,7 +218,7 @@ Configure Cortex, Obsidian, and the rest of your catalog inside MCPHub using the
 
 1. Start `local-agent`.
 2. Check startup status or run `/servers`.
-3. Use NORMAL for interactive MCP work, or AUTO for a bounded durable goal.
+3. Use NORMAL for interactive MCP work, AUTO for proactive work, or `/goal` for a bounded durable run.
 4. Review and approve each MCP call.
 
 `local-agent` intentionally keeps Cortex orchestration behind MCPHub instead of embedding a second intelligence stack. Cortex analysis, investigation, and delegation appear as namespaced MCP tools. MCPHub owns lazy discovery, authentication, and downstream policy; local-agent owns the final user approval and transcript.
@@ -360,7 +362,7 @@ Switch with `/agent reviewer`. A profile model is pinned until `/model auto`. `m
 
 The local memory store is available even when ICE is disabled. It is keyed by canonical workspace, uses owner-only files with interprocess locking and coherent reloads, and fails closed on corrupt data. NORMAL and AUTO expose explicit memory save/update/delete tools, while PLAN exposes recall.
 
-Pre-workspace global memories and ICE entries have no trustworthy project provenance. Startup—including `-p` headless mode—keeps unclaimed data quarantined and reports its count; a completed claim owned by another workspace remains isolated without producing repeated startup noise. Only the TUI's preview-plus-exact-confirmation migration commands can attribute unclaimed data to the current workspace. See [legacy-data-migration.md](docs/legacy-data-migration.md).
+Pre-workspace global memories and ICE entries have no trustworthy project provenance. They remain quarantined, are never attributed to the current repository, and do not add maintenance noise to normal interactive or headless startup.
 
 ICE is opt-in:
 
@@ -403,6 +405,7 @@ ICE is still a flat JSON vector store rather than an ANN index, but its bounded 
 | `local-agent` | Open the TUI |
 | `local-agent -p "prompt"` | Run one user-directed NORMAL prompt and print text to stdout |
 | `local-agent --mode plan -p "prompt"` | Run one read-only PLAN prompt; mutation tools are not exposed |
+| `local-agent --mode auto -p "prompt"` | Run one proactive AUTO prompt under the configured approval policy |
 | `local-agent --model <name>` | Select the initial model; in headless mode this prevents auto-routing |
 | `local-agent --agent <name>` | Select an initial agent profile |
 | `local-agent --qwen-router` | Use the experimental Qwen-specific router |
@@ -451,7 +454,7 @@ the store, but foreground approval prompts do not currently enqueue that type.
 | `/servers` | Show connected MCP servers and tool count |
 | `/ice` | Show ICE status |
 | `/sessions` | Open lossless SQLite-backed saved sessions |
-| `/goal <duration> <prompt>` | Open a prefilled goal review with the requested wall-time cap and no hidden turn/token limits |
+| `/goal <duration> <prompt>` | Infer bounded criteria and start a concrete goal with that wall-time cap; ambiguity asks one follow-up |
 | `/goal [new [objective]]` | Open the reviewed form for a durable, budgeted goal |
 | `/goal show` | Show objective, acceptance criteria, usage, state, and Cortex linkage |
 | `/goal pause`, `/goal resume` | Stop automatic continuation or explicitly resume one user-directed turn |
@@ -466,8 +469,6 @@ the store, but foreground approval prompts do not currently enqueue that type.
 | `/restore <id>` | Replace agent history with a checkpoint |
 | `/exit` | Quit |
 
-Legacy `/migrate-memory`, `/migrate-ice`, and `/migrate-checkpoints` recovery aliases remain executable for quarantined old data, but are hidden from everyday Help and completion until the migration workflow moves into Settings.
-
 `/commit` deliberately disables Git hooks, commit signing, configured
 fsmonitor helpers, pagers, and automatic maintenance/GC for its owned Git
 subprocesses. It still uses your Git identity and other non-executing
@@ -478,14 +479,14 @@ Session snapshots preserve model-facing messages, tool-call IDs, tool cards, mod
 
 ### Durable goals and bounded continuation
 
-`/goal <duration> <prompt>` is the compact path: it infers an editable objective
-and acceptance criteria, applies only the explicit wall-time cap, and focuses a
-final review that shows the proof draft before Save. `/goal new` opens the same
-host-owned Goal Runtime above the normal agent loop from an empty or partial
-definition. The
-reviewed form requires an objective, at least one independently checkable
-acceptance criterion, and at least one finite limit. Saving the form is the
-explicit instruction to start the first AUTO turn. Later automatic turns are
+`/goal <duration> <prompt>` is the compact path: it deterministically infers a
+bounded objective and prompt-specific acceptance criteria, applies only the
+explicit wall-time cap, and starts the first AUTO turn when the prompt names a
+concrete target. Obvious ambiguity asks one contextual follow-up before any
+runtime exists. `/goal new` opens the manual host-owned Goal Runtime review from
+an empty or partial definition. Every definition requires an objective, at
+least one independently checkable acceptance criterion, and at least one finite
+limit. Later automatic turns are
 admitted only after the previous turn produced a successful tool receipt and
 the linked Cortex case advanced semantically. Each continuation permit is
 saved with the exact agent TurnID before provider dispatch. The remaining
@@ -512,6 +513,9 @@ requires confirmation.
 
 When Cortex is reachable directly or through MCPHub, the runtime links one
 stable Cortex case and asks for semantic status between productive turns.
+Cortex receives each local acceptance ID and statement through its typed,
+immutable `acceptanceCriteria` field; criteria are never embedded into free-form
+goal prose.
 Cortex's structured next action is bounded prompt context for the model—it is
 never executed directly by the host and still passes through normal tool
 policy and approval. Local Agent owns scheduling, budgets, cancellation,

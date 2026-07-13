@@ -332,8 +332,10 @@ func TestAgentDoneFailureIsNotRenderedAsCompletedTurn(t *testing.T) {
 	m.doneFlash = true
 
 	updated, _ := m.Update(AgentDoneMsg{Err: &agent.UnresolvedExecutionError{
+		SessionID:   7,
 		ExecutionID: "exec_test",
 		ToolName:    "bash",
+		EventType:   execution.EventOutcomeUnknown,
 	}})
 	m = updated.(*Model)
 
@@ -343,7 +345,8 @@ func TestAgentDoneFailureIsNotRenderedAsCompletedTurn(t *testing.T) {
 	if m.doneFlash {
 		t.Fatal("failed turn retained the success flash")
 	}
-	if len(m.entries) == 0 || !strings.Contains(m.entries[len(m.entries)-1].Content, "Recovery blocked for bash") {
+	if len(m.entries) == 0 || !strings.Contains(m.entries[len(m.entries)-1].Content, "Recovery paused after bash") ||
+		!strings.Contains(m.entries[len(m.entries)-1].Content, "/recover") {
 		t.Fatalf("failed turn receipt = %#v", m.entries)
 	}
 }

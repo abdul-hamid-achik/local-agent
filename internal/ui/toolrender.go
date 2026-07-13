@@ -102,6 +102,7 @@ func detectCodeBlocks(text string) bool {
 // formatToolResult formats a tool result for display with smart truncation.
 // It preserves code blocks and adds expand/collapse hints.
 func formatToolResult(result string, maxLines int, maxWidth int) string {
+	result = sanitizeTerminalMultiline(result)
 	if result == "" {
 		return "(no output)"
 	}
@@ -117,9 +118,7 @@ func formatToolResult(result string, maxLines int, maxWidth int) string {
 		for i := 0; i < maxLines; i++ {
 			line := lines[i]
 			// Truncate long lines
-			if len(line) > maxWidth {
-				line = line[:maxWidth-3] + "..."
-			}
+			line = truncateDisplay(line, maxWidth)
 			b.WriteString(line)
 			b.WriteString("\n")
 		}
@@ -137,9 +136,7 @@ func formatToolResult(result string, maxLines int, maxWidth int) string {
 	// Truncate long lines
 	var b strings.Builder
 	for i, line := range lines {
-		if len(line) > maxWidth {
-			line = line[:maxWidth-3] + "..."
-		}
+		line = truncateDisplay(line, maxWidth)
 		b.WriteString(line)
 		if i < len(lines)-1 {
 			b.WriteString("\n")

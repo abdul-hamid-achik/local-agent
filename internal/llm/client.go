@@ -44,6 +44,11 @@ type Message struct {
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolName   string     `json:"tool_name,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
+	// HostOwned marks a message whose exact contents were validated and
+	// authored by the local host. It is deliberately not persisted or sent on
+	// the wire: restore code must re-derive the marker from durable state, so a
+	// user-authored message cannot forge host authority through JSON history.
+	HostOwned bool `json:"-"`
 }
 
 // StreamChunk is a piece of a streaming response.
@@ -68,4 +73,19 @@ type ToolDef struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description"`
 	Parameters  map[string]any `json:"parameters"` // JSON Schema
+	// DisplayName and Behavior are host-only MCP presentation metadata.
+	// They must never be sent to model providers as part of a tool schema.
+	DisplayName string       `json:"-"`
+	Behavior    ToolBehavior `json:"-"`
+}
+
+// ToolBehavior is the bounded presentation projection of standard MCP tool
+// annotations. It is untrusted server metadata and must never by itself alter
+// authorization, durable effect classification, or recovery semantics.
+type ToolBehavior struct {
+	Declared    bool
+	ReadOnly    bool
+	Destructive bool
+	Idempotent  bool
+	OpenWorld   bool
 }

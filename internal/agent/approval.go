@@ -76,6 +76,10 @@ func (a *Agent) buildApprovalPreview(ctx context.Context, tc llm.ToolCall, argum
 		Kind:            permissionpkg.PreviewGeneric,
 		ArgumentsSHA256: argumentsHash,
 	}
+	if def, ok := a.mcpToolDefinition(tc.Name); ok {
+		preview.ActionLabel = boundApprovalLabel(def.DisplayName)
+		preview.Consequence = mcpApprovalConsequence(def.Behavior)
+	}
 	pathArg := func(key string, destructive bool) string {
 		raw, _ := tc.Arguments[key].(string)
 		if raw == "" {
@@ -161,6 +165,38 @@ func (a *Agent) buildApprovalPreview(ctx context.Context, tc llm.ToolCall, argum
 		}
 	}
 	return preview
+}
+
+func mcpApprovalConsequence(behavior llm.ToolBehavior) string {
+	if !behavior.Declared {
+		return "The MCP server supplied no effect metadata. This call may read data, contact external systems, or change durable state; inspect the exact arguments."
+	}
+	// MCP destructiveHint is meaningful only for non-read-only tools. Keep the
+	// call effect-unknown and approval-gated, but do not present a conventional
+	// readOnlyHint as an asserted destructive operation.
+	if behavior.ReadOnly {
+		if behavior.OpenWorld {
+			return "The server declares this read-only, but it may contact external systems. Server annotations are untrusted."
+		}
+		return "The server declares this read-only. Server annotations are untrusted, so the call remains effect-unknown and approval-gated."
+	}
+	consequence := "Server metadata indicates this call may create or update durable state."
+	if behavior.Destructive {
+		consequence = "Server metadata indicates this call may make destructive changes."
+	}
+	if behavior.OpenWorld {
+		consequence = strings.TrimSuffix(consequence, ".") + " and contact external systems."
+	}
+	return consequence
+}
+
+func boundApprovalLabel(value string) string {
+	value = strings.TrimSpace(strings.ToValidUTF8(value, "�"))
+	const maximumBytes = 160
+	if len(value) <= maximumBytes {
+		return value
+	}
+	return truncateApprovalUTF8(value, maximumBytes-3) + "..."
 }
 
 func approvalExistingContent(path string) (content string, exists bool, omittedReason string) {

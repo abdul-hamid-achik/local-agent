@@ -1,0 +1,26 @@
+  you ───────────────────────────────────────────────────────────────────────────
+  Write session-grant.txt with the exact text session scoped approval.
+
+
+
+
+ ╭──────────────────────────────────────────────────────────────────────────────────────╮
+ │ Permission · write                                                                   │
+ │ Action     Write 23 B                                                                │
+ │ Target     /Users/abdulachik/projects/local-agent/.glyphrun/tmp/approval-always-work │
+ │            dir/session-grant.txt                                                     │
+ │ Scope      This exact request · current Agent session                                │
+ │ Request    309302e8b9f8                                                              │
+ │                                                                                      │
+ │ Proposed change                                                                      │
+ │ -                                                                                    │
+ │ +session scoped approval                                                             │
+ │                                                                                      │
+ │ esc cancel · y once · s session · n deny · d arguments · j/k scroll                  │
+ ╰──────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+─────────────────────────────────────────────────────────────────────────────────────────

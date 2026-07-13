@@ -20,6 +20,7 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/goal"
 	"github.com/abdul-hamid-achik/local-agent/internal/goaladvisor"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
+	"github.com/charmbracelet/x/ansi"
 )
 
 type goalCountingClient struct {
@@ -891,6 +892,81 @@ func TestExplicitGoalPromptOpensReviewedInferredDraft(t *testing.T) {
 	if values.Objective != "Polish the goal workflow" || len(values.CriterionDescriptions()) < 2 {
 		t.Fatalf("draft values = %#v", values)
 	}
+	if m.goalFormState.ActiveField() != GoalFieldTime || !strings.Contains(m.goalFormState.followUpPrompt, "30m") {
+		t.Fatalf("missing-time follow-up field=%v prompt=%q", m.goalFormState.ActiveField(), m.goalFormState.followUpPrompt)
+	}
+}
+
+func TestExplicitBoundedGoalStartsDirectlyWhenPromptIsConcrete(t *testing.T) {
+	m := newGoalRuntimeTestModel(t, &goalCountingClient{})
+	store, sessionID := attachGoalTestSession(t, m)
+	defer func() { _ = store.Close() }()
+	if err := store.SaveSessionState(context.Background(), sessionID, `{"version":2,"goal":null,"execution_cursor":0}`); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.initializeSessionStateRevision(1); err != nil {
+		t.Fatal(err)
+	}
+	m.goalAdvisor = &goalStaticAdvisor{}
+	m.mode = ModePlan
+
+	cmd := m.handleCommandAction(command.Result{
+		Action: command.ActionOpenGoal,
+		Goal: &command.GoalRequest{
+			Prompt:     "Make Shift+Tab cycle NORMAL, PLAN, and AUTO without opening a goal form",
+			TimeBudget: 45 * time.Minute, TimeExplicit: true,
+		},
+	})
+	if cmd == nil {
+		formError := ""
+		if m.goalFormState != nil {
+			formError = m.goalFormState.Error()
+		}
+		t.Fatalf("complete bounded goal did not start Cortex linking: runtime=%v form_error=%q entries=%#v", m.goalRuntime != nil, formError, m.entries)
+	}
+	if m.goalRuntime == nil || m.goalFormState != nil || m.overlay != OverlayNone || m.mode != ModeAuto {
+		t.Fatalf("direct goal runtime=%v form=%v overlay=%v mode=%v", m.goalRuntime != nil, m.goalFormState != nil, m.overlay, m.mode)
+	}
+	snapshot := snapshotUIGoal(t, m.goalRuntime)
+	if snapshot.Objective != "Make Shift+Tab cycle NORMAL, PLAN, and AUTO without opening a goal form" {
+		t.Fatalf("objective = %q", snapshot.Objective)
+	}
+	if snapshot.Budget.MaxWallTime != 45*time.Minute || snapshot.Budget.MaxContinuationTurns != 0 || snapshot.Budget.MaxEvalTokens != 0 {
+		t.Fatalf("explicit budget = %#v", snapshot.Budget)
+	}
+	if len(snapshot.AcceptanceCriteria) != 2 {
+		t.Fatalf("criteria = %#v", snapshot.AcceptanceCriteria)
+	}
+	for _, criterion := range snapshot.AcceptanceCriteria {
+		if !strings.Contains(criterion.Description, "Shift+Tab") || !strings.Contains(criterion.Description, "goal form") {
+			t.Fatalf("criterion is not prompt-specific: %#v", criterion)
+		}
+	}
+	if m.goalOperationCancel != nil {
+		m.goalOperationCancel()
+	}
+}
+
+func TestExplicitBoundedGoalAsksContextualFollowUpWhenPromptIsAmbiguous(t *testing.T) {
+	m := newGoalRuntimeTestModel(t, &goalCountingClient{})
+	cmd := m.handleCommandAction(command.Result{
+		Action: command.ActionOpenGoal,
+		Goal: &command.GoalRequest{
+			Prompt: "fix it", TimeBudget: 20 * time.Minute, TimeExplicit: true,
+		},
+	})
+	if cmd != nil || m.goalRuntime != nil || m.overlay != OverlayGoalForm || m.goalFormState == nil {
+		t.Fatalf("ambiguous goal cmd=%v runtime=%v overlay=%v form=%v", cmd != nil, m.goalRuntime != nil, m.overlay, m.goalFormState != nil)
+	}
+	if m.goalFormState.ActiveField() != GoalFieldObjective {
+		t.Fatalf("follow-up field = %v, want objective", m.goalFormState.ActiveField())
+	}
+	for _, want := range []string{"Complete goal details", "concrete behavior or artifact", "observable result"} {
+		if !strings.Contains(ansi.Strip(m.goalFormState.View()), want) {
+			t.Fatalf("contextual follow-up omitted %q:\n%s", want, ansi.Strip(m.goalFormState.View()))
+		}
+	}
+	assertRenderedLinesFit(t, m.goalFormState.View(), m.width)
 }
 
 func TestGoalAdvisorOperationJoinsShutdown(t *testing.T) {
@@ -956,9 +1032,12 @@ func TestGoalCreationPersistenceFailureRestoresModeWithoutReceipt(t *testing.T) 
 	if err := m.initializeSessionStateRevision(0); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Close(); err != nil {
+	// Advance the durable revision behind the model. Recovery preflight remains
+	// healthy, then goal persistence fails at its optimistic concurrency guard.
+	if err := store.SaveSessionState(context.Background(), session.ID, `{"version":2,"goal":null}`); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
 	m.mode = ModeAsk
 	m.goalFormState = NewGoalForm(defaultGoalFormValues("Ship safely"), GoalFormOptions{})
 	entriesBefore := len(m.entries)

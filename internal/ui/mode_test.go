@@ -1,14 +1,51 @@
 package ui
 
 import (
+	"context"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/abdul-hamid-achik/local-agent/internal/agent"
 	"github.com/abdul-hamid-achik/local-agent/internal/command"
+	"github.com/abdul-hamid-achik/local-agent/internal/config"
 	"github.com/abdul-hamid-achik/local-agent/internal/goal"
+	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 	"github.com/charmbracelet/x/ansi"
 )
+
+type modeAuthorityCaptureClient struct {
+	options chan llm.ChatOptions
+}
+
+type modeAuthorityRouter struct {
+	stubRouter
+	context    config.ModeContext
+	capability config.ModelCapability
+}
+
+func (r *modeAuthorityRouter) SetModeContext(mode config.ModeContext) {
+	r.context = mode
+}
+
+func (r *modeAuthorityRouter) GetModelForCapability(capability config.ModelCapability) string {
+	r.capability = capability
+	return r.stubRouter.GetModelForCapability(capability)
+}
+
+func (c *modeAuthorityCaptureClient) ChatStream(_ context.Context, options llm.ChatOptions, emit func(llm.StreamChunk) error) error {
+	c.options <- options
+	return emit(llm.StreamChunk{Done: true})
+}
+
+func (*modeAuthorityCaptureClient) Ping() error   { return nil }
+func (*modeAuthorityCaptureClient) Model() string { return "mode-authority-test" }
+func (*modeAuthorityCaptureClient) Embed(context.Context, string, []string) ([][]float32, error) {
+	return nil, nil
+}
 
 func TestCycleMode(t *testing.T) {
 	t.Run("cycles_normal_to_plan", func(t *testing.T) {
@@ -71,6 +108,27 @@ func TestCycleMode(t *testing.T) {
 		}
 	})
 
+	t.Run("cycles_with_attached_goal_without_opening_ui", func(t *testing.T) {
+		m := newTestModel(t)
+		m.goalRuntime = newUIGoalRuntime(t, 42, goal.BudgetLimits{MaxContinuationTurns: 3})
+		before := snapshotUIGoal(t, m.goalRuntime)
+		m.input.SetValue("keep attached-goal draft")
+
+		updated, _ := m.Update(shiftTabKey())
+		m = updated.(*Model)
+
+		if m.mode != ModePlan || m.overlay != OverlayNone || m.goalInspectorState != nil || m.goalFormState != nil || m.planFormState != nil {
+			t.Fatalf("attached-goal Shift+Tab = mode %d overlay %d inspector=%v goal_form=%v plan_form=%v", m.mode, m.overlay, m.goalInspectorState != nil, m.goalFormState != nil, m.planFormState != nil)
+		}
+		if got := m.input.Value(); got != "keep attached-goal draft" {
+			t.Fatalf("attached-goal Shift+Tab changed draft: %q", got)
+		}
+		after := snapshotUIGoal(t, m.goalRuntime)
+		if !reflect.DeepEqual(after, before) {
+			t.Fatalf("attached-goal Shift+Tab changed goal: before=%#v after=%#v", before, after)
+		}
+	})
+
 	t.Run("adds_system_message", func(t *testing.T) {
 		m := newTestModel(t)
 		m.entries = append(m.entries, ChatEntry{Kind: "user", Content: "hello"})
@@ -103,6 +161,148 @@ func TestCycleMode(t *testing.T) {
 			t.Error("should not cycle mode when not idle")
 		}
 	})
+}
+
+func TestAttachedGoalPresentsAutoAuthorityWhileAmbientModeCycles(t *testing.T) {
+	previous := noColor
+	noColor = false
+	t.Cleanup(func() { noColor = previous })
+
+	m := newTestModel(t)
+	router := &modeAuthorityRouter{stubRouter: stubRouter{selected: m.model}}
+	m.router = router
+	m.modelPinned = true
+	m.entries = []ChatEntry{{Kind: "user", Content: "goal work"}}
+	m.goalRuntime = newUIGoalRuntime(t, 42, goal.BudgetLimits{MaxContinuationTurns: 3})
+	m.syncComposerAuthority()
+
+	updated, _ := m.Update(shiftTabKey())
+	m = updated.(*Model)
+	if m.mode != ModePlan {
+		t.Fatalf("ambient mode = %v, want PLAN", m.mode)
+	}
+	if got := m.presentedMode(); got != ModeAuto {
+		t.Fatalf("presented goal authority = %v, want AUTO", got)
+	}
+	if router.context != config.ModeBuildContext {
+		t.Fatalf("active goal router authority = %v, want AUTO/build while ambient PLAN", router.context)
+	}
+	assertSameColor(t, "attached-goal composer rail", m.input.Styles().Focused.Prompt.GetForeground(), newSemanticPalette(m.isDark).Success)
+
+	status := ansi.Strip(m.renderStatusLine())
+	if !strings.Contains(status, "AUTO") || strings.Contains(status, "PLAN") {
+		t.Fatalf("goal footer did not present its AUTO authority: %q", status)
+	}
+	last := m.entries[len(m.entries)-1]
+	if last.Kind != "system" || !strings.Contains(last.Content, "After goal · PLAN") || !strings.Contains(last.Content, "active goal · AUTO") {
+		t.Fatalf("ambient mode receipt did not distinguish future and active authority: %#v", last)
+	}
+
+	m.resetConversationSession()
+	if got := m.presentedMode(); got != ModePlan {
+		t.Fatalf("post-goal presented mode = %v, want saved ambient PLAN", got)
+	}
+	assertSameColor(t, "post-goal composer rail", m.input.Styles().Focused.Prompt.GetForeground(), newSemanticPalette(m.isDark).Special)
+}
+
+func TestComposerModeRailIsImmediateAdaptiveAndCompact(t *testing.T) {
+	previous := noColor
+	noColor = false
+	t.Cleanup(func() { noColor = previous })
+
+	for _, isDark := range []bool{false, true} {
+		t.Run(map[bool]string{false: "light", true: "dark"}[isDark], func(t *testing.T) {
+			m := newTestModel(t)
+			m.isDark = isDark
+			m.styles = NewStyles(isDark)
+			configureComposerMode(&m.input, isDark, ModeNormal)
+			updated, _ := m.Update(tea.WindowSizeMsg{Width: minTerminalWidth, Height: minTerminalHeight})
+			m = updated.(*Model)
+			palette := newSemanticPalette(isDark)
+
+			assertSameColor(t, "normal composer rail", m.input.Styles().Focused.Prompt.GetForeground(), palette.Dim)
+			normal := m.View()
+			if !strings.Contains(ansi.Strip(normal.Content), "▏❯ Ask") {
+				t.Fatalf("empty-state NORMAL composer omitted neutral rail:\n%s", ansi.Strip(normal.Content))
+			}
+			if status := m.renderStatusLine(); status != "" {
+				t.Fatalf("test requires empty-state status suppression, got %q", ansi.Strip(status))
+			}
+
+			updated, _ = m.Update(shiftTabKey())
+			m = updated.(*Model)
+			if m.mode != ModePlan || m.overlay != OverlayNone || m.planFormState != nil || m.goalFormState != nil {
+				t.Fatalf("Shift+Tab did not directly select PLAN: mode=%v overlay=%v", m.mode, m.overlay)
+			}
+			assertSameColor(t, "plan composer rail", m.input.Styles().Focused.Prompt.GetForeground(), palette.Special)
+			plan := m.View()
+			if !strings.Contains(ansi.Strip(plan.Content), "▌❯ Ask") || !strings.Contains(ansi.Strip(plan.Content), "PLAN") {
+				t.Fatalf("empty-state PLAN mode is not visible on composer/welcome:\n%s", ansi.Strip(plan.Content))
+			}
+
+			updated, _ = m.Update(shiftTabKey())
+			m = updated.(*Model)
+			if m.mode != ModeAuto || m.overlay != OverlayNone || m.planFormState != nil || m.goalFormState != nil {
+				t.Fatalf("Shift+Tab did not directly select AUTO: mode=%v overlay=%v", m.mode, m.overlay)
+			}
+			assertSameColor(t, "auto composer rail", m.input.Styles().Focused.Prompt.GetForeground(), palette.Success)
+			auto := m.View()
+			if !strings.Contains(ansi.Strip(auto.Content), "▌❯ Ask") || !strings.Contains(ansi.Strip(auto.Content), "AUTO") {
+				t.Fatalf("empty-state AUTO mode is not visible on composer/welcome:\n%s", ansi.Strip(auto.Content))
+			}
+
+			updated, _ = m.Update(shiftTabKey())
+			m = updated.(*Model)
+			if m.mode != ModeNormal || m.overlay != OverlayNone || m.planFormState != nil || m.goalFormState != nil {
+				t.Fatalf("Shift+Tab did not wrap directly to NORMAL: mode=%v overlay=%v", m.mode, m.overlay)
+			}
+			assertSameColor(t, "wrapped normal composer rail", m.input.Styles().Focused.Prompt.GetForeground(), palette.Dim)
+			normalAgain := m.View()
+			plainNormalAgain := ansi.Strip(normalAgain.Content)
+			if !strings.Contains(plainNormalAgain, "▏❯ Ask") || strings.Contains(plainNormalAgain, "PLAN ·") || strings.Contains(plainNormalAgain, "AUTO ·") {
+				t.Fatalf("wrapped NORMAL mode is not quiet and visible on the composer:\n%s", plainNormalAgain)
+			}
+
+			for name, view := range map[string]tea.View{"normal": normal, "plan": plan, "auto": auto, "normal_again": normalAgain} {
+				assertRenderedLinesFit(t, view.Content, minTerminalWidth)
+				assertRenderedHeightFits(t, view.Content, minTerminalHeight)
+				if view.Cursor == nil || view.Cursor.X != 3 {
+					t.Fatalf("%s composer cursor drifted from three-cell rail/prompt: %#v", name, view.Cursor)
+				}
+			}
+		})
+	}
+}
+
+func TestComposerModeRailRespectsNoColor(t *testing.T) {
+	previous := noColor
+	noColor = true
+	t.Cleanup(func() { noColor = previous })
+
+	for _, mode := range []Mode{ModeNormal, ModePlan, ModeAuto} {
+		m := newTestModel(t)
+		m.mode = mode
+		m.styles = NewStyles(true)
+		configureComposerMode(&m.input, true, mode)
+		updated, _ := m.Update(tea.WindowSizeMsg{Width: minTerminalWidth, Height: minTerminalHeight})
+		m = updated.(*Model)
+
+		styles := agentTextareaStylesForMode(true, mode)
+		if rendered := styles.Focused.Prompt.Render("┃"); lipgloss.Width(rendered) != 1 || hasANSIColor(rendered) {
+			t.Fatalf("mode %v NO_COLOR rail = %q", mode, rendered)
+		}
+		view := m.View()
+		plain := ansi.Strip(view.Content)
+		wantRail := "▌❯ Ask"
+		if mode == ModeNormal {
+			wantRail = "▏❯ Ask"
+		}
+		if !strings.Contains(plain, wantRail) || hasANSIColor(view.Content) {
+			t.Fatalf("mode %v NO_COLOR composer omitted its glyph fallback or emitted color:\n%s", mode, plain)
+		}
+		assertRenderedLinesFit(t, view.Content, minTerminalWidth)
+		assertRenderedHeightFits(t, view.Content, minTerminalHeight)
+	}
 }
 
 func TestExplicitGoalDurationOpensReviewWithoutHiddenCaps(t *testing.T) {
@@ -246,6 +446,7 @@ func TestConversationalPresetSubmitDispatchesImmediately(t *testing.T) {
 		name string
 		mode Mode
 	}{
+		{name: "normal", mode: ModeNormal},
 		{name: "plan", mode: ModePlan},
 		{name: "auto", mode: ModeAuto},
 	} {
@@ -279,52 +480,113 @@ func TestConversationalPresetSubmitDispatchesImmediately(t *testing.T) {
 		})
 	}
 
-	t.Run("auto prompt does not hijack an existing goal", func(t *testing.T) {
+	t.Run("attached goal rejects ordinary prompts in every mode", func(t *testing.T) {
+		for _, mode := range []Mode{ModeNormal, ModePlan, ModeAuto} {
+			t.Run(DefaultModeConfigs()[mode].Label, func(t *testing.T) {
+				client := &goalCountingClient{}
+				m := newGoalRuntimeTestModel(t, client)
+				m.mode = mode
+				m.goalRuntime = newUIGoalRuntime(t, 42, goal.BudgetLimits{MaxContinuationTurns: 3})
+				before := snapshotUIGoal(t, m.goalRuntime)
+				entriesBefore := len(m.entries)
+				historyBefore := len(m.promptHistory)
+				const draft = "one-off instruction must remain editable"
+				m.input.SetValue(draft)
+
+				if cmd := m.submitInput(); cmd != nil {
+					t.Fatal("attached-goal prompt returned a side-turn command")
+				}
+				if got := client.calls.Load(); got != 0 {
+					t.Fatalf("provider calls = %d, want 0", got)
+				}
+				if got := m.input.Value(); got != draft {
+					t.Fatalf("attached-goal prompt consumed draft: %q", got)
+				}
+				if m.overlay != OverlayGoalInspector || m.goalInspectorState == nil || m.goalFormState != nil || m.planFormState != nil {
+					t.Fatalf("attached-goal UI: overlay=%d inspector=%v goal_form=%v plan_form=%v", m.overlay, m.goalInspectorState != nil, m.goalFormState != nil, m.planFormState != nil)
+				}
+				if len(m.promptHistory) != historyBefore {
+					t.Fatalf("rejected prompt entered history: %#v", m.promptHistory)
+				}
+				if len(m.entries) != entriesBefore+1 || m.entries[len(m.entries)-1].Kind != "error" ||
+					!strings.Contains(m.entries[len(m.entries)-1].Content, "Goal Inspector") ||
+					!strings.Contains(m.entries[len(m.entries)-1].Content, "/new") {
+					t.Fatalf("attached-goal status = %#v", m.entries[entriesBefore:])
+				}
+				after := snapshotUIGoal(t, m.goalRuntime)
+				if !reflect.DeepEqual(after, before) {
+					t.Fatalf("rejected prompt changed durable goal: before=%#v after=%#v", before, after)
+				}
+				if m.state != StateIdle || len(m.agent.Messages()) != 0 {
+					t.Fatalf("rejected prompt reached turn state: state=%v messages=%#v", m.state, m.agent.Messages())
+				}
+			})
+		}
+	})
+
+	t.Run("attached goal rejects and preserves custom prompt", func(t *testing.T) {
 		client := &goalCountingClient{}
 		m := newGoalRuntimeTestModel(t, client)
 		m.mode = ModeAuto
 		m.goalRuntime = newUIGoalRuntime(t, 42, goal.BudgetLimits{MaxContinuationTurns: 3})
 		before := snapshotUIGoal(t, m.goalRuntime)
-		m.input.SetValue("one-off instruction")
-		cmd := m.submitInput()
-		if cmd == nil {
-			t.Fatal("AUTO prompt with an existing goal did not dispatch")
-		}
-		if m.overlay != OverlayNone || m.goalInspectorState != nil || m.goalFormState != nil {
-			t.Fatalf("AUTO prompt opened goal UI: overlay=%d inspector=%v form=%v", m.overlay, m.goalInspectorState != nil, m.goalFormState != nil)
-		}
-		after := snapshotUIGoal(t, m.goalRuntime)
-		if after.ID != before.ID || after.State != before.State || after.Objective != before.Objective {
-			t.Fatalf("ordinary AUTO prompt changed durable goal: before=%#v after=%#v", before, after)
-		}
-		if done, ok := cmd().(AgentDoneMsg); !ok || done.TurnID == "" {
-			t.Fatalf("provider result = %#v", done)
-		}
-		if got := client.calls.Load(); got != 1 {
-			t.Fatalf("provider calls = %d, want 1", got)
-		}
-	})
-
-	t.Run("auto custom prompt dispatches without goal UI", func(t *testing.T) {
-		client := &goalCountingClient{}
-		m := newGoalRuntimeTestModel(t, client)
-		m.mode = ModeAuto
-		m.goalRuntime = newUIGoalRuntime(t, 42, goal.BudgetLimits{MaxContinuationTurns: 3})
+		const generated = "expanded custom instruction"
 		cmd := m.handleCommandAction(command.Result{
 			Action: command.ActionSendPrompt,
-			Data:   "expanded custom instruction",
+			Data:   generated,
 		})
-		if cmd == nil {
-			t.Fatal("AUTO custom prompt did not dispatch")
+		if cmd != nil {
+			t.Fatal("attached-goal custom prompt returned a side-turn command")
 		}
-		if m.overlay != OverlayNone || m.goalInspectorState != nil || m.goalFormState != nil {
-			t.Fatalf("AUTO custom prompt opened goal UI: overlay=%d inspector=%v form=%v", m.overlay, m.goalInspectorState != nil, m.goalFormState != nil)
+		if m.overlay != OverlayGoalInspector || m.goalInspectorState == nil || m.goalFormState != nil || m.planFormState != nil {
+			t.Fatalf("attached-goal custom UI: overlay=%d inspector=%v goal_form=%v plan_form=%v", m.overlay, m.goalInspectorState != nil, m.goalFormState != nil, m.planFormState != nil)
 		}
-		if done, ok := cmd().(AgentDoneMsg); !ok || done.TurnID == "" {
-			t.Fatalf("provider result = %#v", done)
+		if got := m.input.Value(); got != generated {
+			t.Fatalf("generated custom prompt was not preserved: %q", got)
 		}
-		if got := client.calls.Load(); got != 1 {
-			t.Fatalf("provider calls = %d, want 1", got)
+		if got := client.calls.Load(); got != 0 {
+			t.Fatalf("provider calls = %d, want 0", got)
+		}
+		if len(m.entries) != 1 || m.entries[0].Kind != "error" || !strings.Contains(m.entries[0].Content, "remains in the composer") {
+			t.Fatalf("custom prompt status = %#v", m.entries)
+		}
+		after := snapshotUIGoal(t, m.goalRuntime)
+		if !reflect.DeepEqual(after, before) {
+			t.Fatalf("custom prompt changed durable goal: before=%#v after=%#v", before, after)
 		}
 	})
+}
+
+func TestGoalTurnAuthorityRemainsAutoAfterConversationalModeCycle(t *testing.T) {
+	client := &modeAuthorityCaptureClient{options: make(chan llm.ChatOptions, 1)}
+	m := newGoalRuntimeTestModel(t, client)
+	// Reproduce a goal created in AUTO followed by a Shift+Tab cycle to PLAN.
+	m.mode = ModePlan
+	configureComposerMode(&m.input, m.isDark, m.mode)
+
+	cmd := m.sendGoalToAgentTurn("continue the admitted goal", "turn_goal_authority", agent.TurnLimits{})
+	if cmd == nil || m.state != StateWaiting {
+		t.Fatalf("goal turn did not reach provider boundary: cmd=%v state=%v", cmd != nil, m.state)
+	}
+	if done, ok := cmd().(AgentDoneMsg); !ok || done.Err != nil {
+		t.Fatalf("goal provider result = %#v", done)
+	}
+	options := <-client.options
+	autoPrefix := m.modeConfigs[ModeAuto].SystemPromptPrefix
+	planPrefix := m.modeConfigs[ModePlan].SystemPromptPrefix
+	if !strings.Contains(options.System, autoPrefix) || strings.Contains(options.System, planPrefix) {
+		t.Fatalf("goal authority drifted with UI mode:\n%s", options.System)
+	}
+	toolNames := make(map[string]bool, len(options.Tools))
+	for _, tool := range options.Tools {
+		toolNames[tool.Name] = true
+	}
+	for _, required := range []string{"write", "bash"} {
+		if !toolNames[required] {
+			t.Fatalf("AUTO goal authority omitted %q after PLAN cycle: %#v", required, toolNames)
+		}
+	}
+	if m.mode != ModePlan {
+		t.Fatalf("goal authority silently rewrote conversational mode to %v", m.mode)
+	}
 }

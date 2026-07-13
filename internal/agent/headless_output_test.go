@@ -58,6 +58,31 @@ func TestHeadlessOutput_ToolCallStart(t *testing.T) {
 	}
 }
 
+func TestHeadlessOutput_ToolCallStartDoesNotPrintMCPArguments(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	out := newHeadlessOutput(&stdout, &stderr)
+	secret := "HEADLESS_MCP_SECRET"
+
+	out.ToolCallStart("call-1", "mcphub__mcphub_call_tool", map[string]any{
+		"server": "cortex",
+		"tool":   "cortex__investigate",
+		"arguments": map[string]any{
+			"query":   secret,
+			"api_key": secret,
+		},
+	})
+
+	got := stderr.String()
+	if strings.Contains(got, secret) || strings.Contains(got, "api_key") {
+		t.Fatalf("headless diagnostic leaked MCP arguments: %q", got)
+	}
+	for _, route := range []string{"cortex", "investigate"} {
+		if !strings.Contains(got, route) {
+			t.Fatalf("headless diagnostic = %q, missing route %q", got, route)
+		}
+	}
+}
+
 func TestHeadlessOutput_ToolCallResult(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	out := newHeadlessOutput(&stdout, &stderr)

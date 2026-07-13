@@ -2,10 +2,11 @@ version: 1
 name: local_agent_tui_modes
 
 intent: |
-  Normal remains the quiet interactive default, Shift+Tab only changes
-  authority, PLAN keeps rejected durable-goal saves inside their review,
-  PLAN opens a read-only planning surface, and explicit `/goal <time>
-  <prompt>` opens a bounded durable-goal review.
+  Normal remains the quiet interactive default, Shift+Tab cycles
+  NORMAL -> PLAN -> AUTO -> NORMAL without opening forms, PLAN sends ordinary
+  prompts directly under read-only authority, and explicit `/goal <time>
+  <prompt>` starts a bounded durable goal without a redundant form. An active
+  goal keeps effective AUTO authority while Shift+Tab selects the next ambient mode.
 
 target:
   cmd: ["./bin/local-agent"]
@@ -39,49 +40,35 @@ steps:
       screen:
         notContains: "NORMAL ·"
       timeoutMs: 2000
+  - wait:
+      screen:
+        contains: "▏❯ Ask"
+      timeoutMs: 2000
   - snapshot: normal_default
   - press: "shift+tab"
   - wait:
       screen:
         contains: "PLAN · qwen3.5:2b"
       timeoutMs: 2000
-  - type: "/goal 30m ship a bounded durable migration"
   - wait:
       screen:
-        notContains: "Commands"
-      timeoutMs: 2000
-  - press: "enter"
-  - wait:
-      screen:
-        contains: "Save goal"
-      timeoutMs: 2000
-  - press: "enter"
-  - wait:
-      screen:
-        contains: "PLAN is read-only"
-      timeoutMs: 2000
-  - wait:
-      screen:
-        contains: "Use AUTO"
-      timeoutMs: 2000
-  - snapshot: plan_goal_rejected_inline
-  - press: "esc"
-  - wait:
-      screen:
-        notContains: "Save goal"
+        contains: "▌❯ Ask"
       timeoutMs: 2000
   - type: "design a safe migration"
   - press: "enter"
   - wait:
       screen:
-        contains: "Plan · 1/3"
+        contains: "LLM error: no model selected"
       timeoutMs: 2000
-  - snapshot: plan_read_only
-  - press: "esc"
   - wait:
       screen:
         notContains: "Plan · 1/3"
       timeoutMs: 2000
+  - wait:
+      screen:
+        contains: "▌❯ Ask"
+      timeoutMs: 2000
+  - snapshot: plan_read_only
   - press: "shift+tab"
   - wait:
       screen:
@@ -90,6 +77,10 @@ steps:
   - wait:
       screen:
         notContains: "Goal ·"
+      timeoutMs: 2000
+  - wait:
+      screen:
+        contains: "▌❯ Ask"
       timeoutMs: 2000
   - snapshot: auto_mode
   - type: "/goal 30m ship a bounded durable migration"
@@ -100,13 +91,27 @@ steps:
   - press: "enter"
   - wait:
       screen:
-        contains: "ship a bounded durable migration"
+        contains: "Cortex link failed"
       timeoutMs: 2000
   - wait:
       screen:
-        contains: "Save goal"
+        contains: "Goal paused"
       timeoutMs: 2000
-  - snapshot: explicit_goal_review
+  - wait:
+      screen:
+        notContains: "Save goal"
+      timeoutMs: 2000
+  - snapshot: explicit_goal_direct
+  - press: "shift+tab"
+  - wait:
+      screen:
+        contains: "After goal · NORMAL · active goal · AUTO"
+      timeoutMs: 2000
+  - wait:
+      screen:
+        contains: "AUTO"
+      timeoutMs: 2000
+  - snapshot: active_goal_auto_authority
   - press: "ctrl+c"
   - wait:
       process:
@@ -121,31 +126,31 @@ outcomes:
         name: normal_default
         mode: text
   - id: plan_remains_read_only_and_structured
-    description: PLAN retains the bounded structured planning workflow
+    description: PLAN sends an ordinary prompt directly under read-only authority without opening a form
     verify:
       snapshot:
         name: plan_read_only
         mode: text
-  - id: plan_goal_rejection_stays_in_review
-    description: PLAN rejects a durable-goal save inline without dismissing or obscuring its reviewed form
-    verify:
-      snapshot:
-        name: plan_goal_rejected_inline
-        mode: text
   - id: auto_mode_does_not_open_goal_ui
-    description: cycling to AUTO changes authority without opening or creating a goal
+    description: the full Shift+Tab ring changes authority and wraps to quiet NORMAL without opening or creating a goal
     verify:
       snapshot:
         name: auto_mode
         mode: text
-  - id: explicit_goal_command_opens_bounded_review
-    description: "`/goal <time> <prompt>` opens a prefilled review with only the requested time cap"
+  - id: explicit_goal_command_starts_directly
+    description: "`/goal <time> <prompt>` starts a concrete bounded goal without a redundant form"
     verify:
       snapshot:
-        name: explicit_goal_review
+        name: explicit_goal_direct
+        mode: text
+  - id: active_goal_authority_remains_auto
+    description: Shift+Tab records the next ambient mode while the active goal remains visibly and effectively AUTO
+    verify:
+      snapshot:
+        name: active_goal_auto_authority
         mode: text
   - id: modes_flow_quits_cleanly
-    description: ctrl+c exits cleanly from the AUTO goal form
+    description: ctrl+c exits cleanly from the paused AUTO goal
     verify:
       process:
         exitCode: 0

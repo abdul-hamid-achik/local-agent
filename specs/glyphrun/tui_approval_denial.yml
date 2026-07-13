@@ -2,8 +2,9 @@ version: 1
 name: local_agent_tui_approval_denial
 
 intent: |
-  a user can see a consequential tool request, retain its exact arguments at
-  minimum width, deny it from the keyboard, and continue without any file effect.
+  a user can see a consequential tool request, retain its action and target
+  context at minimum width, deny it from the keyboard, and continue without any
+  file effect.
 
 target:
   cmd:
@@ -44,11 +45,19 @@ steps:
   - snapshot: busy_normal
   - wait:
       screen:
-        contains: "Approve write"
+        contains: "Permission · write"
       timeoutMs: 5000
   - wait:
       screen:
         contains: "approval-probe.txt"
+      timeoutMs: 2000
+  - wait:
+      screen:
+        contains: "y once"
+      timeoutMs: 2000
+  - wait:
+      screen:
+        contains: "s session"
       timeoutMs: 2000
   - wait:
       screen:
@@ -64,19 +73,15 @@ steps:
       rows: 12
   - wait:
       screen:
-        contains: "approval-probe.txt"
+        contains: "Permission · write"
       timeoutMs: 2000
   - wait:
       screen:
-        contains: "y allow"
+        contains: "Action Write 19 B"
       timeoutMs: 2000
   - wait:
       screen:
-        contains: "n deny"
-      timeoutMs: 2000
-  - wait:
-      screen:
-        contains: "a always"
+        contains: "esc cancel · y · s · n"
       timeoutMs: 2000
   - wait:
       idle:
@@ -134,7 +139,7 @@ outcomes:
         name: approval_normal
         mode: text
   - id: minimum_approval_remains_safe
-    description: 30x12 preserves the consequential path and all three keyboard decisions
+    description: 30x12 preserves the action and target context plus compact once, session-scoped, and deny shortcuts
     verify:
       snapshot:
         name: approval_minimum
@@ -146,7 +151,7 @@ outcomes:
         name: denied_receipt
         mode: text
   - id: denied_receipt_is_keyboard_inspectable
-    description: Space expands the denied receipt to show its raw tool identity and arguments
+    description: Space expands the denied receipt to show safe tool identity, redacted arguments, and transport/domain/evidence state
     verify:
       snapshot:
         name: denied_receipt_expanded

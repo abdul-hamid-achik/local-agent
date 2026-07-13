@@ -206,7 +206,8 @@ func (m *Model) renderCompletionModalView() (string, *tea.Cursor) {
 
 	// Breadcrumb for @ file browsing
 	if cs.Kind == "attachments" && cs.CurrentPath != "" {
-		b.WriteString(m.styles.CompletionCategory.Render(truncateDisplay(cs.CurrentPath+"/", contentW)))
+		breadcrumb := sanitizeTerminalSingleLine(cs.CurrentPath) + "/"
+		b.WriteString(m.styles.CompletionCategory.Render(truncateDisplay(breadcrumb, contentW)))
 		b.WriteString("\n")
 	}
 
@@ -222,6 +223,8 @@ func (m *Model) renderCompletionModalView() (string, *tea.Cursor) {
 	if cs.Searching {
 		fixedRows++
 	}
+	previewRows := completionPreviewRowBudget(m.height, cs)
+	fixedRows += previewRows
 	maxVisible := min(10, max(1, m.height-fixedRows))
 	items := cs.FilteredItems
 	if len(items) == 0 {
@@ -240,6 +243,9 @@ func (m *Model) renderCompletionModalView() (string, *tea.Cursor) {
 
 		for i := start; i < end; i++ {
 			item := items[i]
+			displayLabel := sanitizeTerminalSingleLine(item.Label)
+			displayCategory := sanitizeTerminalSingleLine(item.Category)
+			displayDescription := sanitizeTerminalSingleLine(item.Description)
 			prefix := "  "
 			if i == cs.Index {
 				prefix = m.styles.FocusIndicator.Render("▸ ")
@@ -261,15 +267,15 @@ func (m *Model) renderCompletionModalView() (string, *tea.Cursor) {
 
 			category := ""
 			if cs.Kind == "attachments" {
-				category = "  " + item.Category
+				category = "  " + displayCategory
 			}
 			labelWidth := max(1, contentW-2-lipgloss.Width(category)-lipgloss.Width(selectedMark))
-			label := truncateDisplay(item.Label, labelWidth)
+			label := truncateDisplay(displayLabel, labelWidth)
 			description := ""
-			if cs.Kind == "command" && strings.TrimSpace(item.Description) != "" {
+			if cs.Kind == "command" && displayDescription != "" {
 				remaining := labelWidth - lipgloss.Width(label)
 				if remaining >= 6 {
-					description = " · " + truncateDisplay(strings.TrimSpace(item.Description), remaining-3)
+					description = " · " + truncateDisplay(displayDescription, remaining-3)
 				}
 			}
 			cat := m.styles.CompletionCategory.Render(category)
@@ -287,6 +293,10 @@ func (m *Model) renderCompletionModalView() (string, *tea.Cursor) {
 	// Searching indicator
 	if cs.Searching {
 		b.WriteString(m.styles.CompletionSearching.Render(truncateDisplay("  searching...", contentW)))
+		b.WriteString("\n")
+	}
+	if preview := m.renderCompletionPreview(contentW, previewRows); preview != "" {
+		b.WriteString(preview)
 		b.WriteString("\n")
 	}
 
@@ -357,9 +367,10 @@ func (m *Model) renderStatusLine() string {
 		return ""
 	}
 
-	cfg := m.modeConfigs[m.mode]
+	presentedMode := m.presentedMode()
+	cfg := m.modeConfigs[presentedMode]
 	var modeStyle lipgloss.Style
-	switch m.mode {
+	switch presentedMode {
 	case ModeNormal:
 		modeStyle = m.styles.ModeAsk
 	case ModePlan:
@@ -372,7 +383,7 @@ func (m *Model) renderStatusLine() string {
 		modeLabel = "[ " + modeLabel + " ]"
 	}
 	parts := make([]string, 0, 7)
-	if m.mode != ModeNormal {
+	if presentedMode != ModeNormal {
 		parts = append(parts, modeStyle.Render(modeLabel))
 	}
 	if !conversationStarted && noticeNeedsRecovery {
@@ -402,11 +413,11 @@ func (m *Model) renderStatusLine() string {
 	if contextHigh && contextStatus != "" {
 		parts = append(parts, contextStatus)
 	}
-	if m.model != "" {
-		parts = append(parts, m.styles.StatusText.Render(m.model))
+	if model := sanitizeTerminalSingleLine(m.model); model != "" {
+		parts = append(parts, m.styles.StatusText.Render(model))
 	}
-	if paneW >= 80 && m.agentProfile != "" {
-		parts = append(parts, m.styles.StatusText.Render("@"+m.agentProfile))
+	if profile := sanitizeTerminalSingleLine(m.agentProfile); paneW >= 80 && profile != "" {
+		parts = append(parts, m.styles.StatusText.Render("@"+profile))
 	}
 	if !contextHigh && contextStatus != "" {
 		parts = append(parts, contextStatus)
@@ -427,7 +438,7 @@ func (m *Model) renderStatusLine() string {
 		// The remaining two semantic parts use bounded short labels, so this is
 		// only a final guard for unusually wide mode/profile glyphs.
 		plain := ""
-		if m.mode != ModeNormal {
+		if presentedMode != ModeNormal {
 			plain = cfg.Label
 		}
 		if len(m.failedServers) > 0 {
@@ -450,24 +461,16 @@ func (m *Model) renderGoalFooterStatus(summary GoalSummary, paneW int) string {
 		return ""
 	}
 	available := paneW - 1 // preserve the status row's leading breathing cell
-	cfg := m.modeConfigs[m.mode]
+	// An attached Goal Runtime always dispatches with AUTO authority. m.mode is
+	// only the ambient selection for future non-goal turns, so it must not tint
+	// or label this active-goal status row.
+	cfg := m.modeConfigs[ModeAuto]
 	modeStyle := m.styles.ModeBuild
-	switch m.mode {
-	case ModeNormal:
-		modeStyle = m.styles.ModeAsk
-	case ModePlan:
-		modeStyle = m.styles.ModePlan
-	case ModeAuto:
-		modeStyle = m.styles.ModeBuild
-	}
 	modeLabel := cfg.Label
 	if paneW >= 48 {
 		modeLabel = "[ " + modeLabel + " ]"
 	}
-	modePart := ""
-	if m.mode != ModeNormal {
-		modePart = modeStyle.Render(modeLabel)
-	}
+	modePart := modeStyle.Render(modeLabel)
 	separator := m.styles.StatusText.Render(" · ")
 
 	type metadataPart struct {
@@ -486,8 +489,8 @@ func (m *Model) renderGoalFooterStatus(summary GoalSummary, paneW int) string {
 	if contextHigh && contextStatus != "" {
 		candidates = append(candidates, metadataPart{view: contextStatus})
 	}
-	if m.model != "" {
-		candidates = append(candidates, metadataPart{view: m.styles.StatusText.Render(truncateDisplay(m.model, 20))})
+	if model := sanitizeTerminalSingleLine(m.model); model != "" {
+		candidates = append(candidates, metadataPart{view: m.styles.StatusText.Render(truncateDisplay(model, 20))})
 	}
 	if !contextHigh && contextStatus != "" {
 		candidates = append(candidates, metadataPart{view: contextStatus})
@@ -619,7 +622,7 @@ func (m *Model) renderEntries() string {
 		for _, e := range m.entries {
 			switch e.Kind {
 			case "system":
-				b.WriteString(m.styles.SystemText.Render(wrapText(e.Content, contentW)))
+				b.WriteString(m.styles.SystemText.Render(wrapText(sanitizeTerminalMultiline(e.Content), contentW)))
 				b.WriteString("\n\n")
 			case "error":
 				m.renderEntryError(&b, e.Content, contentW)
@@ -664,7 +667,7 @@ func (m *Model) renderEntries() string {
 		case "error":
 			m.renderEntryError(&entryView, entry.Content, contentW)
 		case "system":
-			entryView.WriteString(m.styles.SystemText.Render(wrapText(entry.Content, contentW)))
+			entryView.WriteString(m.styles.SystemText.Render(wrapText(sanitizeTerminalMultiline(entry.Content), contentW)))
 			entryView.WriteString("\n")
 		}
 		chunk := strings.TrimRight(entryView.String(), "\n")
@@ -709,7 +712,7 @@ func (m *Model) renderEntries() string {
 }
 
 func (m *Model) hasLiveTurn() bool {
-	return m.streamBuf.Len() > 0 || m.thinkBuf.Len() > 0
+	return strings.TrimSpace(m.streamBuf.String()) != "" || strings.TrimSpace(m.thinkBuf.String()) != ""
 }
 
 // transcriptEntrySeparator is the single owner of vertical rhythm between
@@ -726,7 +729,7 @@ func transcriptEntrySeparator(previous, current string) string {
 }
 
 func (m *Model) renderEntryError(b *strings.Builder, content string, contentW int) {
-	content = strings.TrimSpace(content)
+	content = strings.TrimSpace(sanitizeTerminalMultiline(content))
 	if content == "" {
 		content = "The operation failed without an error message."
 	}
@@ -763,11 +766,12 @@ func (m *Model) renderWelcome(b *strings.Builder) {
 	if m.initializing {
 		infoParts = append(infoParts, "Starting local services…")
 	} else {
-		if m.mode != ModeNormal {
-			infoParts = append(infoParts, m.modeConfigs[m.mode].Label)
+		presentedMode := m.presentedMode()
+		if presentedMode != ModeNormal {
+			infoParts = append(infoParts, m.modeConfigs[presentedMode].Label)
 		}
-		if m.model != "" {
-			infoParts = append(infoParts, m.model)
+		if model := sanitizeTerminalSingleLine(m.model); model != "" {
+			infoParts = append(infoParts, model)
 		}
 		if m.ollamaOffline {
 			infoParts = append(infoParts, "offline")
@@ -811,6 +815,7 @@ func (m *Model) renderWelcome(b *strings.Builder) {
 
 // renderUserMsg renders a user message block.
 func (m *Model) renderUserMsg(b *strings.Builder, content string, contentW int) {
+	content = sanitizeTerminalMultiline(content)
 	label := m.styles.UserLabel.Render("you")
 	labelW := lipgloss.Width(label)
 	ruleW := contentW - labelW - 3
@@ -826,6 +831,21 @@ func (m *Model) renderUserMsg(b *strings.Builder, content string, contentW int) 
 // renderAssistantMsg renders a completed assistant message block.
 // Uses cached RenderedContent if available (snap-into-place pattern).
 func (m *Model) renderAssistantMsg(b *strings.Builder, entry ChatEntry, contentW int) {
+	content := sanitizeTerminalMultiline(entry.Content)
+	hasContent := strings.TrimSpace(content) != ""
+	hasThinking := strings.TrimSpace(entry.ThinkingContent) != ""
+	if !hasContent && !hasThinking {
+		return
+	}
+
+	// A tool-call segment can contain reasoning without user-facing prose. Keep
+	// that receipt compact instead of rendering an empty `assistant` role block.
+	if !hasContent {
+		b.WriteString(indentBlock(m.renderThinkingBox(entry.ThinkingContent, entry.ThinkingCollapsed), "  "))
+		b.WriteString("\n")
+		return
+	}
+
 	label := m.styles.AsstLabel.Render("assistant")
 	labelW := lipgloss.Width(label)
 	ruleW := contentW - labelW - 3
@@ -837,7 +857,7 @@ func (m *Model) renderAssistantMsg(b *strings.Builder, entry ChatEntry, contentW
 
 	// Reasoning belongs to this assistant turn, so its disclosure follows the
 	// role header instead of appearing as an unowned block above it.
-	if entry.ThinkingContent != "" {
+	if hasThinking {
 		thinkBox := m.renderThinkingBox(entry.ThinkingContent, entry.ThinkingCollapsed)
 		b.WriteString(indentBlock(thinkBox, "  "))
 		b.WriteString("\n")
@@ -845,8 +865,13 @@ func (m *Model) renderAssistantMsg(b *strings.Builder, entry ChatEntry, contentW
 
 	// Use cached rendered content if available.
 	rendered := entry.RenderedContent
+	if content != entry.Content {
+		// Cached Glamour output is trusted only when it was derived from the same
+		// sanitized source. Restored or synthetic entries must be rendered again.
+		rendered = ""
+	}
 	if rendered == "" {
-		rendered = entry.Content
+		rendered = content
 		if m.md != nil {
 			rendered = m.md.RenderFull(rendered)
 		}
@@ -860,6 +885,22 @@ func (m *Model) renderAssistantMsg(b *strings.Builder, entry ChatEntry, contentW
 
 // renderStreamingMsg renders the in-progress assistant message (plain text).
 func (m *Model) renderStreamingMsg(b *strings.Builder, content string, contentW int) {
+	content = sanitizeTerminalMultiline(content)
+	hasContent := strings.TrimSpace(content) != ""
+	hasThinking := strings.TrimSpace(m.thinkBuf.String()) != ""
+	if !hasContent && !hasThinking {
+		return
+	}
+
+	// Provider-native reasoning frequently arrives before any answer prose. A
+	// single live rail communicates progress without a visually empty assistant
+	// message that later snaps into a different hierarchy.
+	if !hasContent {
+		b.WriteString(indentBlock(m.renderLiveThinkingBox(m.thinkBuf.String()), "  "))
+		b.WriteString("\n")
+		return
+	}
+
 	label := m.styles.AsstLabel.Render("assistant")
 	activity := "•"
 	if !m.reducedMotion {
@@ -877,8 +918,8 @@ func (m *Model) renderStreamingMsg(b *strings.Builder, content string, contentW 
 	// Live reasoning uses the same assistant-owned hierarchy as the completed
 	// disclosure. Keeping it compact prevents token-by-token height jitter; the
 	// full receipt becomes expandable only after the turn settles.
-	if m.thinkBuf.Len() > 0 {
-		b.WriteString(indentBlock(m.renderLiveThinkingBox(), "  "))
+	if hasThinking {
+		b.WriteString(indentBlock(m.renderLiveThinkingBox(m.thinkBuf.String()), "  "))
 		b.WriteString("\n")
 	}
 
@@ -956,18 +997,19 @@ func (m *Model) renderToolGroup(b *strings.Builder, toolIdx int) {
 	} else {
 		// Fallback to basic rendering if no card exists
 		tt := classifyTool(te.Name)
+		toolName := safeToolIdentifier(te.Name)
 
 		switch te.Status {
 		case ToolStatusRunning:
 			// Running: show spinner with type-specific icon
 			icon := m.styles.ToolCallIcon.Render(toolIcon(tt, te.Status))
 			spinView := m.spin.View()
-			text := m.styles.ToolCallText.Render(fmt.Sprintf(" %s ", te.Name))
+			text := m.styles.ToolCallText.Render(fmt.Sprintf(" %s ", toolName))
 			hint := m.styles.ToolRunningText.Render(spinView + " running...")
 			b.WriteString(icon + text + hint)
 			// For running bash tools, show command inline
 			if tt == ToolTypeBash {
-				if summary := toolSummary(tt, te); summary != "" {
+				if summary := sanitizeTerminalSingleLine(toolSummary(tt, te)); summary != "" {
 					b.WriteString("\n")
 					b.WriteString(m.styles.ToolBashCmd.Render(layout.ToolIndent + "$ " + summary))
 				}
@@ -979,20 +1021,20 @@ func (m *Model) renderToolGroup(b *strings.Builder, toolIdx int) {
 			icon := m.styles.ToolDoneIcon.Render(toolIcon(tt, te.Status))
 			if te.Collapsed {
 				// Collapsed: single line with type-specific summary
-				text := m.styles.ToolDoneText.Render(fmt.Sprintf(" %s (%s)", te.Name, dur))
+				text := m.styles.ToolDoneText.Render(fmt.Sprintf(" %s (%s)", toolName, dur))
 				b.WriteString(icon + text)
-				if summary := toolSummary(tt, te); summary != "" {
+				if summary := sanitizeTerminalSingleLine(toolSummary(tt, te)); summary != "" {
 					summ := truncate(summary, layout.ToolSummaryMax)
 					b.WriteString(m.styles.ToolBashCmd.Render(" " + summ))
 				}
 				b.WriteString("\n")
 			} else {
 				// Expanded: show args + result (or diff for file writes)
-				text := m.styles.ToolDoneText.Render(fmt.Sprintf(" %s (%s)", te.Name, dur))
+				text := m.styles.ToolDoneText.Render(fmt.Sprintf(" %s (%s)", toolName, dur))
 				b.WriteString(icon + text)
 				b.WriteString("\n")
 				// Args
-				args := truncate(te.Args, layout.ArgsTruncMax)
+				args := truncate(sanitizeTerminalSingleLine(te.Args), layout.ArgsTruncMax)
 				b.WriteString(m.styles.ToolDetailText.Render(layout.ToolIndent + "args: " + args))
 				b.WriteString("\n")
 				// Diff or result
@@ -1017,11 +1059,11 @@ func (m *Model) renderToolGroup(b *strings.Builder, toolIdx int) {
 			// Error: always expanded regardless of collapse state
 			dur := formatDuration(te.Duration)
 			icon := m.styles.ToolErrorIcon.Render(toolIcon(tt, te.Status))
-			text := m.styles.ToolErrorText.Render(fmt.Sprintf(" %s (%s)", te.Name, dur))
+			text := m.styles.ToolErrorText.Render(fmt.Sprintf(" %s (%s)", toolName, dur))
 			b.WriteString(icon + text)
 			b.WriteString("\n")
 			// Error result always shown
-			result := truncate(te.Result, layout.ResultTruncMax)
+			result := truncate(sanitizeTerminalMultiline(te.Result), layout.ResultTruncMax)
 			b.WriteString(m.styles.ToolErrorText.Render(layout.ToolIndent + result))
 			b.WriteString("\n")
 		}

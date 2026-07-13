@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/viewport"
@@ -12,7 +13,11 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/permission"
 )
 
-const approvalMaximumWidth = 86
+const (
+	approvalMaximumWidth            = 86
+	approvalMaximumActionBytes      = 256
+	approvalMaximumConsequenceBytes = 768
+)
 
 // ApprovalState owns presentation-only state for an approval request. The
 // root Model remains responsible for every decision and side effect.
@@ -98,7 +103,11 @@ func (m *Model) renderApproval() string {
 		return ""
 	}
 	contentWidth := pickerListWidth(m.width, approvalMaximumWidth)
-	title := m.styles.OverlayTitle.Render(truncateDisplay("Permission · "+m.pendingApproval.ToolName, contentWidth))
+	toolName := boundedApprovalMetadata(m.pendingApproval.ToolName, approvalMaximumActionBytes)
+	if toolName == "" {
+		toolName = "unknown tool"
+	}
+	title := m.styles.OverlayTitle.Render(truncateDisplay("Permission · "+toolName, contentWidth))
 	body := title + "\n" + m.approvalState.Viewport.View()
 	detailAction := "arguments"
 	if m.approvalState.ShowArguments {
@@ -131,7 +140,7 @@ func (m *Model) buildApprovalPreview(width int) string {
 	var lines []string
 
 	appendRow := func(label, value string) {
-		value = strings.TrimSpace(value)
+		value = sanitizeApprovalMetadata(value)
 		if value == "" {
 			return
 		}
@@ -144,24 +153,42 @@ func (m *Model) buildApprovalPreview(width int) string {
 		}
 	}
 
+	actionLabel := boundedApprovalMetadata(preview.ActionLabel, approvalMaximumActionBytes)
+	hasCustomAction := actionLabel != ""
+	if !hasCustomAction {
+		actionLabel = boundedApprovalMetadata(request.ToolName, approvalMaximumActionBytes)
+	}
 	switch preview.Kind {
 	case permission.PreviewFileWrite:
-		appendRow("Action", "Write "+formatApprovalBytes(preview.ByteSize))
+		if !hasCustomAction {
+			actionLabel = "Write " + formatApprovalBytes(preview.ByteSize)
+		}
+		appendRow("Action", actionLabel)
 		appendRow("Target", preview.Path)
 	case permission.PreviewFilePatch:
-		appendRow("Action", "Patch file")
+		if !hasCustomAction {
+			actionLabel = "Patch file"
+		}
+		appendRow("Action", actionLabel)
 		appendRow("Target", preview.Path)
 	case permission.PreviewCommand:
-		appendRow("Action", "Run command")
+		if !hasCustomAction {
+			actionLabel = "Run command"
+		}
+		appendRow("Action", actionLabel)
 	case permission.PreviewFilesystem:
-		appendRow("Action", "Change filesystem")
+		if !hasCustomAction {
+			actionLabel = "Change filesystem"
+		}
+		appendRow("Action", actionLabel)
 		appendRow("Path", preview.Path)
 		appendRow("From", preview.SourcePath)
 		appendRow("To", preview.DestinationPath)
 	default:
-		appendRow("Action", "Run "+request.ToolName)
+		appendRow("Action", "Run "+actionLabel)
 		appendRow("Target", preview.Path)
 	}
+	appendRow("Impact", boundedApprovalMetadata(preview.Consequence, approvalMaximumConsequenceBytes))
 	appendRow("Scope", approvalScopeLabel(request.Scope))
 	digest := request.ArgumentsSHA256
 	if digest == "" {
@@ -192,6 +219,42 @@ func (m *Model) buildApprovalPreview(width int) string {
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+func boundedApprovalMetadata(value string, maximumBytes int) string {
+	value = sanitizeApprovalMetadata(value)
+	if maximumBytes <= 0 || value == "" {
+		return ""
+	}
+	if len(value) <= maximumBytes {
+		return value
+	}
+	marker := "..."
+	limit := maximumBytes - len(marker)
+	if limit <= 0 {
+		return marker[:maximumBytes]
+	}
+	for limit > 0 && !utf8.ValidString(value[:limit]) {
+		limit--
+	}
+	return strings.TrimSpace(value[:limit]) + marker
+}
+
+// sanitizeApprovalMetadata treats every label supplied by a model or MCP
+// server as untrusted terminal data. Exact arguments remain available in the
+// JSON details view; presentation metadata must never be able to emit ANSI,
+// OSC, C0/C1, newline, tab, or bidi reordering controls into the decision UI.
+func sanitizeApprovalMetadata(value string) string {
+	value = sanitizeApprovalPreviewLine(value)
+	return strings.Join(strings.Fields(value), " ")
+}
+
+// sanitizeApprovalPreviewLine preserves ordinary spacing in commands, diffs,
+// and JSON while removing sequences that can change terminal state or visual
+// ordering. Callers pass one logical line at a time.
+func sanitizeApprovalPreviewLine(value string) string {
+	value = sanitizeTerminalMultiline(value)
+	return strings.NewReplacer("\t", "    ", "\n", " ").Replace(value)
 }
 
 func (m *Model) buildApprovalArguments(width int) string {
@@ -240,6 +303,7 @@ func (m *Model) renderApprovalDiff(diff string, width int) []string {
 }
 
 func approvalWrappedLines(value string, width int) []string {
+	value = sanitizeApprovalPreviewLine(value)
 	if value == "" {
 		return nil
 	}

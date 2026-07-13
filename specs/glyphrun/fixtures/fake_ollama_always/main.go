@@ -1,6 +1,6 @@
 // Command fake-ollama-always runs two consecutive local-agent TUI processes
 // against one deterministic Ollama fixture. The shared HOME proves that an
-// interactive "always allow" decision survives process restart.
+// exact-request session grant is reused in-process but not after restart.
 package main
 
 import (
@@ -55,23 +55,27 @@ func (s *fixtureState) fail(format string, args ...any) {
 func (s *fixtureState) writeReceipt(path string, durable durableApprovalState) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	ok := s.chatRequests == 4 && s.toolReceipts == 2 && s.protocolError == "" && durable.OK()
+	ok := s.chatRequests == 6 && s.toolReceipts == 3 && s.protocolError == "" && durable.OK()
 	return os.WriteFile(path, []byte(fmt.Sprintf(
-		"protocol_ok=%t\nchat_requests=%d\ntool_receipts=%d\napproval_always_receipts=%d\napproval_policy_receipts=%d\npersisted_allow_rows=%d\ndurable_error=%s\nprotocol_error=%s\n",
-		ok, s.chatRequests, s.toolReceipts, durable.AlwaysReceipts, durable.PolicyReceipts, durable.AllowRows,
+		"protocol_ok=%t\nchat_requests=%d\ntool_receipts=%d\napproval_session_receipts=%d\napproval_once_receipts=%d\napproval_requested_receipts=%d\napproval_policy_receipts=%d\npersisted_allow_rows=%d\ndurable_error=%s\nprotocol_error=%s\n",
+		ok, s.chatRequests, s.toolReceipts, durable.SessionReceipts, durable.OnceReceipts,
+		durable.RequestedReceipts, durable.PolicyReceipts, durable.AllowRows,
 		strings.ReplaceAll(durable.Err, "\n", " "), strings.ReplaceAll(s.protocolError, "\n", " "),
 	)), 0o600)
 }
 
 type durableApprovalState struct {
-	AlwaysReceipts int
-	PolicyReceipts int
-	AllowRows      int
-	Err            string
+	SessionReceipts   int
+	OnceReceipts      int
+	RequestedReceipts int
+	PolicyReceipts    int
+	AllowRows         int
+	Err               string
 }
 
 func (s durableApprovalState) OK() bool {
-	return s.Err == "" && s.AlwaysReceipts == 1 && s.PolicyReceipts == 1 && s.AllowRows == 1
+	return s.Err == "" && s.SessionReceipts == 2 && s.OnceReceipts == 1 &&
+		s.RequestedReceipts == 2 && s.PolicyReceipts == 0 && s.AllowRows == 0
 }
 
 type chatRequest struct {
@@ -163,7 +167,17 @@ func inspectDurableApproval() durableApprovalState {
 	}{
 		{
 			query: "SELECT COUNT(*) FROM execution_events WHERE event_type = ? AND approval = ?",
-			args:  []any{"approved", "always"}, dest: &state.AlwaysReceipts,
+			// ApprovalSession retains the historical "always" wire value for
+			// append-only compatibility; it no longer represents global policy.
+			args: []any{"approved", "always"}, dest: &state.SessionReceipts,
+		},
+		{
+			query: "SELECT COUNT(*) FROM execution_events WHERE event_type = ? AND approval = ?",
+			args:  []any{"approved", "once"}, dest: &state.OnceReceipts,
+		},
+		{
+			query: "SELECT COUNT(*) FROM execution_events WHERE event_type = ?",
+			args:  []any{"approval_requested"}, dest: &state.RequestedReceipts,
 		},
 		{
 			query: "SELECT COUNT(*) FROM execution_events WHERE event_type = ? AND approval = ?",
@@ -214,25 +228,36 @@ func fixtureHandler(state *fixtureState) http.Handler {
 		}
 		switch call := state.nextChat(); call {
 		case 1:
-			writeToolCall(w, "always-first", "always-first.txt", "first approval")
+			writeToolCall(w, "session-first", "session-grant.txt", "session scoped approval")
 		case 2:
 			if !hasSuccessfulToolReceipt(request) {
 				state.fail("first follow-up omitted a successful tool receipt")
 			}
 			state.recordToolReceipt()
 			writeNDJSON(w, map[string]any{
-				"message": map[string]any{"role": "assistant", "content": "First approval persisted."},
+				"message": map[string]any{"role": "assistant", "content": "Session approval recorded."},
 				"done":    true, "eval_count": 4, "prompt_eval_count": 6,
 			})
 		case 3:
-			writeToolCall(w, "always-second", "always-second.txt", "second policy use")
+			writeToolCall(w, "session-reuse", "session-grant.txt", "session scoped approval")
 		case 4:
 			if !hasSuccessfulToolReceipt(request) {
-				state.fail("second follow-up omitted a successful tool receipt")
+				state.fail("in-process reuse follow-up omitted a successful tool receipt")
 			}
 			state.recordToolReceipt()
 			writeNDJSON(w, map[string]any{
-				"message": map[string]any{"role": "assistant", "content": "Persisted approval reused without another prompt."},
+				"message": map[string]any{"role": "assistant", "content": "Session approval reused without another prompt."},
+				"done":    true, "eval_count": 4, "prompt_eval_count": 6,
+			})
+		case 5:
+			writeToolCall(w, "restart-once", "session-grant.txt", "session scoped approval")
+		case 6:
+			if !hasSuccessfulToolReceipt(request) {
+				state.fail("restart follow-up omitted a successful tool receipt")
+			}
+			state.recordToolReceipt()
+			writeNDJSON(w, map[string]any{
+				"message": map[string]any{"role": "assistant", "content": "Restart required a fresh approval."},
 				"done":    true, "eval_count": 4, "prompt_eval_count": 6,
 			})
 		default:

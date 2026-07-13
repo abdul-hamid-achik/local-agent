@@ -77,58 +77,61 @@ func goalFormValuesFromSnapshot(snapshot goal.Snapshot) GoalFormValues {
 }
 
 func (m *Model) openGoalForm(objective string, budgetOnly bool) error {
-	return m.openGoalFormInternal(objective, budgetOnly, false)
+	return m.openGoalFormInternal(objective, budgetOnly)
 }
 
-func (m *Model) openGoalDraftForm(prompt string) error {
-	return m.openGoalFormInternal(prompt, false, true)
-}
-
-func (m *Model) openGoalRequestForm(request command.GoalRequest) error {
-	if !request.TimeExplicit {
-		return m.openGoalDraftForm(request.Prompt)
+func (m *Model) openGoalRequestForm(request command.GoalRequest) (tea.Cmd, error) {
+	budget := goal.BudgetLimits{
+		MaxContinuationTurns: defaultGoalContinuationBudget,
+		MaxEvalTokens:        defaultGoalTokenBudget,
+		MaxWallTime:          defaultGoalTimeBudget,
 	}
-	draft, err := goal.InferDraft(request.Prompt, goal.BudgetLimits{MaxWallTime: request.TimeBudget})
+	if request.TimeExplicit {
+		budget = goal.BudgetLimits{MaxWallTime: request.TimeBudget}
+	}
+	draft, err := goal.InferDraft(request.Prompt, budget)
 	if err != nil {
-		return fmt.Errorf("infer goal draft: %w", err)
+		return nil, fmt.Errorf("infer goal draft: %w", err)
 	}
 	values := GoalFormValues{
 		Objective:          draft.Objective,
 		AcceptanceCriteria: strings.Join(draft.AcceptanceCriteria, "\n"),
-		TimeBudget:         request.TimeBudget,
+		TurnBudget:         draft.Budget.MaxContinuationTurns,
+		TokenBudget:        draft.Budget.MaxEvalTokens,
+		TimeBudget:         draft.Budget.MaxWallTime,
+	}
+	followUp := draft.FollowUpPrompt
+	followUpField := GoalFieldObjective
+	if !draft.NeedsFollowUp && !request.TimeExplicit {
+		followUp = fmt.Sprintf("Confirm the %s AUTO time limit, or enter another duration.", formatGoalTimeInput(defaultGoalTimeBudget))
+		followUpField = GoalFieldTime
 	}
 	m.goalFormState = NewGoalForm(values, GoalFormOptions{
 		Width: m.width, Height: m.height, IsDark: m.isDark,
-		ReducedMotion: m.reducedMotion, DraftFromPrompt: true,
+		ReducedMotion: m.reducedMotion, DraftFromPrompt: true, FollowUpPrompt: followUp,
 	})
-	if values.Objective != "" && len(values.CriterionDescriptions()) > 0 {
+	if followUp != "" {
+		m.goalFormState.focusField(followUpField)
+	} else {
 		m.goalFormState.focusField(GoalFieldActions)
 	}
 	m.overlayParent = OverlayNone
 	m.overlay = OverlayGoalForm
 	m.input.Blur()
-	return nil
+
+	// `/goal <duration> <prompt>` is itself the explicit creation intent. When
+	// the deterministic draft found a concrete target, start it directly; the
+	// transient form remains available if persistence or recovery preflight
+	// needs human correction. Ambiguous prompts ask exactly one contextual
+	// follow-up instead.
+	if request.TimeExplicit && !draft.NeedsFollowUp {
+		return m.applyGoalFormWithAuthority(GoalFormEvent{Action: GoalActionSave, Values: values}, true), nil
+	}
+	return nil, nil
 }
 
-func (m *Model) openGoalFormInternal(objective string, budgetOnly, draftFromPrompt bool) error {
+func (m *Model) openGoalFormInternal(objective string, budgetOnly bool) error {
 	values := defaultGoalFormValues(objective)
-	if draftFromPrompt {
-		draft, err := goal.InferDraft(objective, goal.BudgetLimits{
-			MaxContinuationTurns: defaultGoalContinuationBudget,
-			MaxEvalTokens:        defaultGoalTokenBudget,
-			MaxWallTime:          defaultGoalTimeBudget,
-		})
-		if err != nil {
-			return fmt.Errorf("infer goal draft: %w", err)
-		}
-		values = GoalFormValues{
-			Objective:          draft.Objective,
-			AcceptanceCriteria: strings.Join(draft.AcceptanceCriteria, "\n"),
-			TurnBudget:         draft.Budget.MaxContinuationTurns,
-			TokenBudget:        draft.Budget.MaxEvalTokens,
-			TimeBudget:         draft.Budget.MaxWallTime,
-		}
-	}
 	if budgetOnly {
 		if m.goalRuntime == nil {
 			return fmt.Errorf("no goal is configured; create one with /goal new")
@@ -145,7 +148,6 @@ func (m *Model) openGoalFormInternal(objective string, budgetOnly, draftFromProm
 	m.goalFormState = NewGoalForm(values, GoalFormOptions{
 		Width: m.width, Height: m.height, IsDark: m.isDark,
 		ReducedMotion: m.reducedMotion, BudgetOnly: budgetOnly,
-		DraftFromPrompt: draftFromPrompt,
 	})
 	m.overlayParent = OverlayNone
 	m.overlay = OverlayGoalForm
@@ -160,12 +162,16 @@ func (m *Model) closeGoalForm() {
 }
 
 func (m *Model) applyGoalForm(event GoalFormEvent) tea.Cmd {
+	return m.applyGoalFormWithAuthority(event, false)
+}
+
+func (m *Model) applyGoalFormWithAuthority(event GoalFormEvent, explicitGoalCommand bool) tea.Cmd {
 	if event.Action != GoalActionSave || m.goalFormState == nil {
 		return nil
 	}
 	budgetOnly := m.goalFormState.BudgetOnly()
 	values := event.Values
-	if !budgetOnly && m.mode == ModePlan {
+	if !budgetOnly && m.mode == ModePlan && !explicitGoalCommand {
 		m.goalFormState.SetError("PLAN is read-only. Use AUTO to save this goal.")
 		return nil
 	}
@@ -194,6 +200,10 @@ func (m *Model) applyGoalForm(event GoalFormEvent) tea.Cmd {
 		}
 		m.closeGoalForm()
 		m.appendGoalSystem("Goal budgets updated. Run /goal resume when you are ready to continue.")
+		return nil
+	}
+	if err := m.blockGoalCreationDuringStandaloneRecovery(); err != nil {
+		m.goalFormState.SetError(err.Error())
 		return nil
 	}
 
@@ -246,10 +256,12 @@ func (m *Model) applyGoalForm(event GoalFormEvent) tea.Cmd {
 	m.goalRuntime = runtime
 	oldMode := m.mode
 	m.mode = ModeAuto
+	m.syncComposerAuthority()
 	m.setRouterMode(m.modeConfigs[ModeAuto].RouterMode)
 	if err := m.persistGoalSession(); err != nil {
 		m.goalRuntime = previous
 		m.mode = oldMode
+		m.syncComposerAuthority()
 		m.setRouterMode(m.modeConfigs[oldMode].RouterMode)
 		if createdSession {
 			_ = m.discardExecutionSession()
@@ -260,6 +272,36 @@ func (m *Model) applyGoalForm(event GoalFormEvent) tea.Cmd {
 	m.closeGoalForm()
 	m.appendGoalSystem("Goal saved · linking Cortex before the first turn…")
 	return m.beginGoalOpen(false)
+}
+
+func (m *Model) blockGoalCreationDuringStandaloneRecovery() error {
+	const guidance = "goal creation is blocked by ordinary execution recovery; use /recover to reconcile it, or /new to start a clean session"
+	if m == nil {
+		return errors.New(guidance)
+	}
+	if m.standaloneRecovery != nil {
+		return errors.New(guidance)
+	}
+	// An existing Goal Runtime owns its durable recovery path. This check is
+	// only for converting an ordinary session into a newly goal-owned one.
+	if m.goalRuntime != nil || m.sessionStore == nil || m.sessionID <= 0 || m.agent == nil {
+		return nil
+	}
+	workspaceID, err := canonicalWorkspaceID(m.agent.WorkDir())
+	if err != nil {
+		return fmt.Errorf("%s; recovery check failed: %w", guidance, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	projection, err := m.sessionStore.ProjectExecutionRecovery(ctx, m.sessionID, workspaceID, m.executionCursor, 100)
+	if err != nil {
+		return fmt.Errorf("%s; recovery check failed: %w", guidance, err)
+	}
+	if len(projection.Hazards) == 0 {
+		return nil
+	}
+	m.rememberStandaloneRecovery(standaloneRecoveryTarget(projection.Hazards, m.executionCursor))
+	return errors.New(guidance)
 }
 
 func (m *Model) beginGoalOpen(manual bool) tea.Cmd {
@@ -1234,6 +1276,39 @@ func (m *Model) showGoal() tea.Cmd {
 	recoveryCommand := m.ensureGoalRecoveryProjection(snapshot, false)
 	m.renderGoalInspector(snapshot)
 	return recoveryCommand
+}
+
+func (m *Model) rejectPromptWhileGoalAttached(prompt string, generated bool) tea.Cmd {
+	if m == nil || m.goalRuntime == nil {
+		return nil
+	}
+	message := "Goal attached · draft not sent. Use the Goal Inspector actions, or /new for unrelated work."
+	if generated {
+		if m.preserveGeneratedPrompt(prompt) {
+			message = "Goal attached · generated prompt not sent; it remains in the composer. Use the Goal Inspector actions, or /new for unrelated work."
+		} else {
+			message = "Goal attached · generated prompt not sent. Use the Goal Inspector actions, or /new for unrelated work."
+		}
+	}
+	m.appendGoalError(message)
+	return m.showGoal()
+}
+
+func (m *Model) preserveGeneratedPrompt(prompt string) bool {
+	trimmed := strings.TrimSpace(prompt)
+	if m == nil || trimmed == "" || strings.HasPrefix(trimmed, "/") || strings.TrimSpace(m.input.Value()) != "" {
+		return false
+	}
+	if !pasteInsertionFits(0, 1, prompt, m.input.CharLimit) {
+		return false
+	}
+	m.input.SetValue(prompt)
+	if strings.TrimSpace(m.input.Value()) == "" {
+		return false
+	}
+	m.input.CursorEnd()
+	m.syncInputHeight()
+	return true
 }
 
 func (m *Model) renderGoalInspector(snapshot goal.Snapshot) {

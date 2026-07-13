@@ -1,18 +1,19 @@
-                        LOCAL AGENT
-       Local-first · Ollama · tool effects ask first
-                PLAN · qwen3.5:2b · offline
-    enter send · / commands · ctrl+p settings · ? help
-    shift+tab mode · ctrl+o models · @ files · # skills
+  try: ollama serve · ollama pull qwen3.5:2b
 
- ╭────────────────────────────────────────────────────────╮
- │ Plan · 1/3                                             │
- │ Task                                                   │
- │ > design a safe migration                              │
- │ esc cancel · enter/tab next                            │
- ╰────────────────────────────────────────────────────────╯
+  you ─────────────────────────────────────────────
+  design a safe migration
 
+  ✗ error
+  LLM error: no model selected
 
+  ⚠️ Model response failed: no model selected
 
+  You can try:
+  - Checking if Ollama is running (`ollama ps`)
+  - Switching to a different model (ctrl+o)
+  - Reducing context size
 
-
+  Tool results are still available above.
 ───────────────────────────────────────────────────────────
+ [ PLAN ] · qwen3.5:2b · ctrl+p settings
+▌❯ Ask, @mention files, or type /help

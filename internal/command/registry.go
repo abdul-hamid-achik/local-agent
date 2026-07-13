@@ -86,38 +86,33 @@ type GoalRequest struct {
 type Action int
 
 const (
-	ActionNone                     Action = iota
-	ActionShowHelp                        // Show help overlay
-	ActionClear                           // Clear conversation history
-	ActionQuit                            // Exit the application
-	ActionLoadContext                     // Load markdown context (Data = path)
-	ActionUnloadContext                   // Remove loaded context
-	ActionActivateSkill                   // Activate skill (Data = name)
-	ActionDeactivateSkill                 // Deactivate skill (Data = name)
-	ActionSwitchModel                     // Switch model (Data = model name)
-	ActionEnableAutoModel                 // Resume availability-aware automatic routing
-	ActionSwitchAgent                     // Switch agent profile (Data = agent name)
-	ActionShowSessions                    // Open sessions picker
-	ActionShowModelPicker                 // Open model picker overlay
-	ActionCommit                          // Generate commit message and commit
-	ActionSendPrompt                      // Send Data as a message to the agent
-	ActionExport                          // Export conversation (Data = path)
-	ActionImport                          // Import conversation (Data = path)
-	ActionCheckpoint                      // Save a conversation checkpoint (Data = optional label)
-	ActionListCheckpoints                 // List saved checkpoints
-	ActionRestoreCheckpoint               // Restore a checkpoint (Data = id)
-	ActionPreviewLegacyCheckpoints        // Preview unbound legacy checkpoint adoption
-	ActionClaimLegacyCheckpoints          // Explicitly claim the exact previewed legacy set
-	ActionPreviewLegacyMemory             // Preview provenance-free global memory adoption
-	ActionClaimLegacyMemory               // Explicitly claim the exact previewed memory file
-	ActionPreviewLegacyICE                // Preview provenance-free ICE entry adoption
-	ActionClaimLegacyICE                  // Explicitly claim the exact previewed ICE set
-	ActionOpenGoal                        // Open the goal form (Data = optional objective)
-	ActionShowGoal                        // Show the active goal summary
-	ActionPauseGoal                       // Pause automatic goal continuation
-	ActionResumeGoal                      // Resume/retry the active goal
-	ActionDropGoal                        // Drop the active goal without claiming completion
-	ActionEditGoalBudget                  // Open the active goal's budget-only editor
+	ActionNone              Action = iota
+	ActionShowHelp                 // Show help overlay
+	ActionClear                    // Clear conversation history
+	ActionQuit                     // Exit the application
+	ActionLoadContext              // Load markdown context (Data = path)
+	ActionUnloadContext            // Remove loaded context
+	ActionActivateSkill            // Activate skill (Data = name)
+	ActionDeactivateSkill          // Deactivate skill (Data = name)
+	ActionSwitchModel              // Switch model (Data = model name)
+	ActionEnableAutoModel          // Resume availability-aware automatic routing
+	ActionSwitchAgent              // Switch agent profile (Data = agent name)
+	ActionShowSessions             // Open sessions picker
+	ActionShowModelPicker          // Open model picker overlay
+	ActionCommit                   // Generate commit message and commit
+	ActionSendPrompt               // Send Data as a message to the agent
+	ActionExport                   // Export conversation (Data = path)
+	ActionImport                   // Import conversation (Data = path)
+	ActionCheckpoint               // Save a conversation checkpoint (Data = optional label)
+	ActionListCheckpoints          // List saved checkpoints
+	ActionRestoreCheckpoint        // Restore a checkpoint (Data = id)
+	ActionOpenGoal                 // Open the goal form (Data = optional objective)
+	ActionShowGoal                 // Show the active goal summary
+	ActionPauseGoal                // Pause automatic goal continuation
+	ActionResumeGoal               // Resume/retry the active goal
+	ActionDropGoal                 // Drop the active goal without claiming completion
+	ActionEditGoalBudget           // Open the active goal's budget-only editor
+	ActionRecoverExecution         // Review typed evidence for a paused ordinary execution
 )
 
 // Registry holds all registered slash commands.

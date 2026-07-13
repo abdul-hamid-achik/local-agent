@@ -1,10 +1,14 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestConfigFileCandidatesPrecedenceAndDeduplication(t *testing.T) {
@@ -118,6 +122,50 @@ func TestFindAndReadConfigFileFallsBackToHomeConfig(t *testing.T) {
 	}
 	if path != homePath || string(data) != "home" {
 		t.Fatalf("home fallback path=%q data=%q, want path=%q data=%q", path, data, homePath, "home")
+	}
+}
+
+func TestLoadRecordsAbsoluteSelectedConfigPathWithoutSerializingIt(t *testing.T) {
+	workspace := t.TempDir()
+	oldWorkDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldWorkDir) })
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+
+	path := filepath.Join(workspace, "local-agent.yaml")
+	writeConfigFixture(t, path, "privacy:\n  local_only: false\n")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPath, err := filepath.Abs("local-agent.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SourcePath != wantPath {
+		t.Fatalf("SourcePath = %q, want %q", cfg.SourcePath, wantPath)
+	}
+	encoded, err := yaml.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "sourcepath") || strings.Contains(string(encoded), cfg.SourcePath) {
+		t.Fatalf("runtime source path was serialized: %s", encoded)
+	}
+	encoded, err = json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "SourcePath") || strings.Contains(string(encoded), cfg.SourcePath) {
+		t.Fatalf("runtime source path was JSON serialized: %s", encoded)
 	}
 }
 

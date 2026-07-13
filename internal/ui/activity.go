@@ -114,6 +114,11 @@ func (m *Model) currentWorkingActivity() (workingActivity, bool) {
 		}, true
 	case m.ollamaInventoryCommitting:
 		return workingActivity{label: "Updating Ollama inventory", detail: "verifying model authority"}, true
+	case m.standaloneRecovery != nil && m.standaloneRecovery.loading:
+		// Inspection is read-only and normally completes quickly. A static status
+		// both locks the composer and avoids introducing another animation clock
+		// for a one-shot durable receipt lookup.
+		return workingActivity{label: "Inspecting recovery", detail: "read-only durable receipt", static: true}, true
 	default:
 		return workingActivity{}, false
 	}
@@ -162,6 +167,11 @@ func (m *Model) renderWorkingLine() string {
 	if !ok {
 		return ""
 	}
+	activity.label = sanitizeTerminalSingleLine(activity.label)
+	activity.detail = sanitizeTerminalSingleLine(activity.detail)
+	if activity.label == "" {
+		activity.label = "Working"
+	}
 
 	motion := m.styles.StatusDot.Render("•")
 	if !m.reducedMotion && !activity.static {
@@ -191,8 +201,8 @@ func (m *Model) renderWorkingLine() string {
 		elapsed = " · " + formatWorkingElapsed(activity.elapsed)
 	}
 	detail := ""
-	if strings.TrimSpace(activity.detail) != "" {
-		detail = " · " + strings.TrimSpace(activity.detail)
+	if activity.detail != "" {
+		detail = " · " + activity.detail
 	}
 	queued := ""
 	if m.queuedFollowUp != nil {

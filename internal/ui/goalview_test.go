@@ -4,8 +4,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestRenderGoalStatusLineIsAdaptiveAndUseful(t *testing.T) {
@@ -39,6 +41,24 @@ func TestRenderGoalStatusLineIsAdaptiveAndUseful(t *testing.T) {
 	for _, want := range []string{"3/12 auto turns", "8k/32k tok", "14m/1h"} {
 		if !strings.Contains(wide, want) {
 			t.Fatalf("wide status missing %q: %q", want, wide)
+		}
+	}
+}
+
+func TestRenderGoalStatusLineSanitizesUserObjective(t *testing.T) {
+	raw := "ship\x1b]52;c;GOAL_SECRET\x07\x1b[2J\nrelease\u202e\u2066"
+	plain := ansi.Strip(RenderGoalStatusLine(GoalSummary{Objective: raw, Phase: GoalPhaseActive}, 100, true))
+	if strings.Contains(plain, "GOAL_SECRET") || strings.Contains(plain, "\n") {
+		t.Fatalf("goal objective escaped its fixed row: %q", plain)
+	}
+	for _, character := range plain {
+		if unicode.IsControl(character) || isBidiControl(character) {
+			t.Fatalf("goal objective retained unsafe rune %U: %q", character, plain)
+		}
+	}
+	for _, visible := range []string{"ship", "release"} {
+		if !strings.Contains(plain, visible) {
+			t.Fatalf("goal objective lost visible text %q: %q", visible, plain)
 		}
 	}
 }

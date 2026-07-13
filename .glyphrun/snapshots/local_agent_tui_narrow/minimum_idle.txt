@@ -8,4 +8,4 @@
 
 ─────────────────────────────
  ctrl+p settings · qwen3.5:2b
-❯ Ask or type / for commands
+▏❯ Ask or type / for commands

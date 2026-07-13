@@ -47,7 +47,7 @@ func (h *HeadlessOutput) StreamDone(evalCount, promptTokens int) {
 
 // ToolCallStart writes a brief tool invocation notice to stderr.
 func (h *HeadlessOutput) ToolCallStart(_ string, name string, args map[string]any) {
-	_, _ = fmt.Fprintf(h.stderr, "→ %s %s\n", name, FormatToolArgs(args))
+	_, _ = fmt.Fprintf(h.stderr, "→ %s %s\n", name, FormatToolArgsForTool(name, args))
 }
 
 // ToolCallResult writes the tool result summary to stderr.

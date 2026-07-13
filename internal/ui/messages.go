@@ -5,7 +5,9 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/abdul-hamid-achik/local-agent/internal/agent"
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
+	"github.com/abdul-hamid-achik/local-agent/internal/ecosystem"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 	"github.com/abdul-hamid-achik/local-agent/internal/permission"
 )
@@ -36,11 +38,12 @@ type ToolCallStartMsg struct {
 
 // ToolCallResultMsg delivers the result of a tool call.
 type ToolCallResultMsg struct {
-	ID       string
-	Name     string
-	Result   string
-	IsError  bool
-	Duration time.Duration
+	ID         string
+	Name       string
+	Result     string
+	IsError    bool
+	Duration   time.Duration
+	Projection ecosystem.ToolProjection
 }
 
 // ErrorMsg reports an error.
@@ -135,14 +138,16 @@ type SessionListMsg struct {
 
 // SessionLoadedMsg delivers a persisted session and its execution lease.
 type SessionLoadedMsg struct {
-	LoadToken       uint64
-	SessionID       int64
-	State           persistedSessionState
-	StateRecord     db.SessionStateRecord
-	Title           string
-	RecoveryWarning string
-	ExecutionLease  *db.ExecutionSessionLease
-	Err             error
+	LoadToken        uint64
+	SessionID        int64
+	State            persistedSessionState
+	StateRecord      db.SessionStateRecord
+	Title            string
+	RecoveryWarning  string
+	RecoveryTarget   *agent.UnresolvedExecutionError
+	RecoveryContexts []db.StandaloneReconciliationContext
+	ExecutionLease   *db.ExecutionSessionLease
+	Err              error
 }
 
 // ToolApprovalMsg asks the user to approve a tool call.

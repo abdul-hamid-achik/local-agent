@@ -3,6 +3,7 @@ package mcp
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -16,7 +17,25 @@ func TestClientImplementationVersion(t *testing.T) {
 	}
 }
 
-func TestRenderToolResultPreservesStructuredAndReceipts(t *testing.T) {
+func TestServerInstructionsFromInitializeResult(t *testing.T) {
+	if got := serverInstructionsFromInitializeResult(nil); got != "" {
+		t.Fatalf("nil initialize guidance = %q", got)
+	}
+	got := serverInstructionsFromInitializeResult(&sdkmcp.InitializeResult{
+		Instructions: "  use mcphub_search_tools before guessing  ",
+	})
+	if got != "use mcphub_search_tools before guessing" {
+		t.Fatalf("initialize guidance = %q", got)
+	}
+	got = serverInstructionsFromInitializeResult(&sdkmcp.InitializeResult{
+		Instructions: string([]byte{'a', 0xff, 'b'}),
+	})
+	if !utf8.ValidString(got) || got != "a�b" {
+		t.Fatalf("invalid UTF-8 guidance was not repaired: %q", got)
+	}
+}
+
+func TestRenderToolResultKeepsStructuredContentOutOfDisplayText(t *testing.T) {
 	result := &sdkmcp.CallToolResult{
 		Content: []sdkmcp.Content{
 			&sdkmcp.TextContent{Text: "summary"},
@@ -31,11 +50,17 @@ func TestRenderToolResultPreservesStructuredAndReceipts(t *testing.T) {
 		"summary",
 		"[image: mime=image/png encoded_bytes=7]",
 		"[resource: uri=file:///tmp/evidence.json name=evidence mime=application/json]",
-		`structured: {"count":2,"ok":true}`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("rendered result %q does not contain %q", got, want)
 		}
+	}
+	if strings.Contains(got, "structured:") || strings.Contains(got, `"count":2`) {
+		t.Fatalf("structured content was flattened into display text: %q", got)
+	}
+	structured := marshalBoundedMCPValue(result.StructuredContent)
+	if string(structured) != `{"count":2,"ok":true}` {
+		t.Fatalf("structured content = %s", structured)
 	}
 }
 
@@ -48,5 +73,17 @@ func TestRenderToolResultIsBounded(t *testing.T) {
 	}
 	if !strings.HasSuffix(got, "... [MCP result truncated]") {
 		t.Fatalf("rendered result did not disclose truncation: %q", got[len(got)-80:])
+	}
+}
+
+func TestMarshalBoundedMCPValueIsAtomic(t *testing.T) {
+	if got := marshalBoundedMCPValue(map[string]any{"ok": true}); string(got) != `{"ok":true}` {
+		t.Fatalf("bounded value = %s", got)
+	}
+	if got := marshalBoundedMCPValue(map[string]any{"payload": strings.Repeat("x", maxRenderedMCPResultBytes)}); got != nil {
+		t.Fatalf("oversized structured value was retained: %d bytes", len(got))
+	}
+	if got := marshalBoundedMCPValue(func() {}); got != nil {
+		t.Fatalf("unencodable structured value was retained: %s", got)
 	}
 }

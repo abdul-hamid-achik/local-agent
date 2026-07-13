@@ -15,6 +15,19 @@ import (
 
 const executionLedgerTimeout = 5 * time.Second
 
+const (
+	// DurableRecoveryContextPrefix identifies the closed, host-authored model
+	// context derived from a validated execution reconciliation. Content with
+	// this prefix is not trusted unless its in-memory Message is also HostOwned.
+	DurableRecoveryContextPrefix = "Local Agent durable recovery receipt"
+	// MaxDurableRecoveryContextMessageBytes bounds each receipt independently.
+	MaxDurableRecoveryContextMessageBytes = 2 * 1024
+	// MaxDurableRecoveryContextMessages and the aggregate bound prevent a long
+	// reconciliation history from taking over the provider context window.
+	MaxDurableRecoveryContextMessages       = 100
+	MaxDurableRecoveryContextAggregateBytes = 64 * 1024
+)
+
 var (
 	ErrExecutionLedgerRequired            = errors.New("execution ledger is required")
 	ErrExecutionRecoveryRecheckDuringTurn = errors.New("execution recovery cannot be rechecked while an agent turn is running")
@@ -64,6 +77,26 @@ func (e *UnresolvedExecutionError) Unwrap() error {
 		return nil
 	}
 	return e.Cause
+}
+
+// RecoveryInspectCommand returns the read-only CLI inspection command for an
+// ordinary execution-effect hazard. Completed post-snapshot effects require a
+// different projection repair and therefore intentionally return no command.
+func (e *UnresolvedExecutionError) RecoveryInspectCommand() string {
+	if e == nil || e.SessionID <= 0 || strings.TrimSpace(e.ExecutionID) == "" {
+		return ""
+	}
+	if e.EventType != executionpkg.EventOutcomeUnknown && e.EventType != executionpkg.EventStarted {
+		return ""
+	}
+	return fmt.Sprintf("local-agent execution recover %d %s", e.SessionID, shellQuoteRecoveryArgument(e.ExecutionID))
+}
+
+func shellQuoteRecoveryArgument(value string) string {
+	if value != "" && !strings.ContainsAny(value, " \t\r\n'\"`$\\;&|<>()[]{}*?!") {
+		return value
+	}
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 // SetExecutionLedger installs the append-only lifecycle store. A nil ledger is
@@ -341,7 +374,23 @@ func (a *Agent) executionKind(name string) (executionpkg.Kind, executionpkg.Effe
 			return executionpkg.KindBuiltin, executionpkg.Effectful
 		}
 	}
+	// MCP ToolAnnotations are server-supplied presentation hints. Without a
+	// separate host-owned trust policy, they never weaken durable effect
+	// classification: every MCP dispatch remains outcome-unknown.
 	return executionpkg.KindMCP, executionpkg.EffectUnknown
+}
+
+// mcpToolRequiresApproval is deliberately independent of server metadata.
+// Only a future explicit host-owned trust policy may narrow this invariant.
+func mcpToolRequiresApproval() bool { return true }
+
+func (a *Agent) mcpToolDefinition(name string) (llm.ToolDef, bool) {
+	for _, def := range a.mcpTools() {
+		if def.Name == name {
+			return def, true
+		}
+	}
+	return llm.ToolDef{}, false
 }
 
 func preflightRequiredString(args map[string]any, key string, allowEmpty bool) error {

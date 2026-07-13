@@ -2,7 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"strings"
 
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
@@ -39,10 +38,7 @@ type CloudConsentState struct {
 }
 
 func newCloudConsentState(model OllamaModelDescriptor, terminalWidth, terminalHeight int, isDark bool) *CloudConsentState {
-	displayName := strings.TrimSpace(model.DisplayName)
-	if displayName == "" {
-		displayName = model.Name
-	}
+	displayName := modelDisplayName(model)
 	items := []list.Item{
 		cloudConsentItem{
 			action:      cloudConsentCancel,
@@ -113,7 +109,7 @@ func (m *Model) renderCloudConsent() string {
 		keyHint{Key: "enter", Action: "use"},
 	)
 	if m.cloudConsentState.Error != "" {
-		footer += "\n" + m.styles.ErrorText.Render(truncateDisplay(m.cloudConsentState.Error, width))
+		footer += "\n" + m.styles.ErrorText.Render(truncateDisplay(sanitizeTerminalSingleLine(m.cloudConsentState.Error), width))
 	}
 	return m.renderPickerFrame(content, 62, footer)
 }

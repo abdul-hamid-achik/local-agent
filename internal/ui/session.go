@@ -11,8 +11,10 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/abdul-hamid-achik/local-agent/internal/agent"
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
+	"github.com/abdul-hamid-achik/local-agent/internal/ecosystem"
 	"github.com/abdul-hamid-achik/local-agent/internal/goal"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 )
@@ -40,17 +42,18 @@ type persistedChatEntry struct {
 // ephemeral fields may contain secrets or multi-megabyte file snapshots and
 // are not needed to render a completed tool card after resume.
 type persistedToolEntry struct {
-	ID        string        `json:"id"`
-	Name      string        `json:"name"`
-	Summary   string        `json:"summary,omitempty"`
-	Args      string        `json:"args,omitempty"`
-	Result    string        `json:"result,omitempty"`
-	IsError   bool          `json:"is_error,omitempty"`
-	Status    ToolStatus    `json:"status"`
-	StartTime time.Time     `json:"start_time"`
-	Duration  time.Duration `json:"duration,omitempty"`
-	Collapsed bool          `json:"collapsed,omitempty"`
-	DiffLines []DiffLine    `json:"diff_lines,omitempty"`
+	ID         string                   `json:"id"`
+	Name       string                   `json:"name"`
+	Summary    string                   `json:"summary,omitempty"`
+	Args       string                   `json:"args,omitempty"`
+	Result     string                   `json:"result,omitempty"`
+	IsError    bool                     `json:"is_error,omitempty"`
+	Status     ToolStatus               `json:"status"`
+	StartTime  time.Time                `json:"start_time"`
+	Duration   time.Duration            `json:"duration,omitempty"`
+	Collapsed  bool                     `json:"collapsed,omitempty"`
+	DiffLines  []DiffLine               `json:"diff_lines,omitempty"`
+	Projection ecosystem.ToolProjection `json:"projection,omitempty"`
 }
 
 const (
@@ -141,17 +144,18 @@ func persistToolEntries(entries []ToolEntry) []persistedToolEntry {
 	result := make([]persistedToolEntry, len(entries))
 	for i, entry := range entries {
 		result[i] = persistedToolEntry{
-			ID:        entry.ID,
-			Name:      entry.Name,
-			Summary:   boundedToolCardSummary(entry.Summary),
-			Args:      boundedSessionText(entry.Args, maxPersistedToolArgsBytes),
-			Result:    boundedSessionText(entry.Result, maxPersistedToolResultBytes),
-			IsError:   entry.IsError,
-			Status:    entry.Status,
-			StartTime: entry.StartTime,
-			Duration:  entry.Duration,
-			Collapsed: entry.Collapsed,
-			DiffLines: persistDiffLines(entry.DiffLines),
+			ID:         entry.ID,
+			Name:       entry.Name,
+			Summary:    boundedToolCardSummary(entry.Summary),
+			Args:       boundedSessionText(entry.Args, maxPersistedToolArgsBytes),
+			Result:     boundedSessionText(entry.Result, maxPersistedToolResultBytes),
+			IsError:    entry.IsError,
+			Status:     entry.Status,
+			StartTime:  entry.StartTime,
+			Duration:   entry.Duration,
+			Collapsed:  entry.Collapsed,
+			DiffLines:  persistDiffLines(entry.DiffLines),
+			Projection: entry.Projection.Normalize(),
 		}
 	}
 	return result
@@ -160,21 +164,51 @@ func persistToolEntries(entries []ToolEntry) []persistedToolEntry {
 func restoreToolEntries(entries []persistedToolEntry) []ToolEntry {
 	result := make([]ToolEntry, len(entries))
 	for i, entry := range entries {
-		result[i] = ToolEntry{
-			ID:        entry.ID,
-			Name:      entry.Name,
-			Summary:   restoredToolSummary(entry),
-			Args:      entry.Args,
-			Result:    entry.Result,
-			IsError:   entry.IsError,
-			Status:    entry.Status,
-			StartTime: entry.StartTime,
-			Duration:  entry.Duration,
-			Collapsed: entry.Collapsed,
-			DiffLines: append([]DiffLine(nil), entry.DiffLines...),
+		restored := ToolEntry{
+			ID:         entry.ID,
+			Name:       entry.Name,
+			Summary:    restoredToolSummary(entry),
+			Args:       entry.Args,
+			Result:     entry.Result,
+			IsError:    entry.IsError,
+			Status:     entry.Status,
+			StartTime:  entry.StartTime,
+			Duration:   entry.Duration,
+			Collapsed:  entry.Collapsed,
+			DiffLines:  append([]DiffLine(nil), entry.DiffLines...),
+			Projection: entry.Projection.Normalize(),
 		}
+		settleInterruptedToolEntry(&restored)
+		result[i] = restored
 	}
 	return result
+}
+
+// settleInterruptedToolEntry makes restore idempotent. A running card cannot
+// resume provider work, and changing only its display state would leave the
+// persisted semantic projection as running/pending. A later restore could then
+// paint that stale projection as live again. Settle both representations at
+// the same boundary and preserve only bounded routing identity.
+func settleInterruptedToolEntry(entry *ToolEntry) {
+	if entry == nil {
+		return
+	}
+	projection := entry.Projection.Normalize()
+	interrupted := entry.Status == ToolStatusRunning ||
+		(entry.Status == ToolStatusError && (projection.Transport == ecosystem.TransportRunning || projection.Domain == ecosystem.DomainPending))
+	if !interrupted {
+		return
+	}
+	if projection.Transport == "" && projection.Domain == "" {
+		projection = ecosystem.ProjectToolCall(entry.Name, nil)
+	}
+	projection.Transport = ecosystem.TransportFailed
+	projection.Domain = ecosystem.DomainUnknown
+	projection.Evidence = ecosystem.EvidenceNone
+	entry.Status = ToolStatusError
+	entry.IsError = true
+	entry.Result = "Interrupted before session was saved"
+	entry.Projection = projection.Normalize()
 }
 
 // restoredToolSummary preserves the semantic summary written by current
@@ -344,6 +378,8 @@ func EncodeHeadlessSessionState(messages []llm.Message, model, agentProfile stri
 }
 
 func marshalPersistedSessionState(state persistedSessionState) (string, error) {
+	state.Messages = agent.SanitizeMessagesForPersistence(state.Messages)
+	state.ToolEntries = sanitizePersistedToolEntryArgs(state.ToolEntries)
 	data, err := json.Marshal(state)
 	if err != nil {
 		return "", fmt.Errorf("encode session state: %w", err)
@@ -359,7 +395,38 @@ func decodeSessionState(raw string) (persistedSessionState, error) {
 	if state.ExecutionCursor < 0 {
 		return state, fmt.Errorf("invalid execution cursor %d", state.ExecutionCursor)
 	}
-	return migratePersistedSessionState(state)
+	state, err := migratePersistedSessionState(state)
+	if err != nil {
+		return state, err
+	}
+	state.Messages = agent.SanitizeMessagesForPersistence(state.Messages)
+	state.ToolEntries = sanitizePersistedToolEntryArgs(state.ToolEntries)
+	return state, nil
+}
+
+func sanitizePersistedToolEntryArgs(entries []persistedToolEntry) []persistedToolEntry {
+	if len(entries) == 0 {
+		return nil
+	}
+	result := append([]persistedToolEntry(nil), entries...)
+	for index := range result {
+		if !agent.ToolArgumentsRequirePrivacy(result[index].Name) {
+			continue
+		}
+		projection := result[index].Projection.Normalize()
+		routeArgs := make(map[string]any, 3)
+		if projection.Route.Server != "" {
+			routeArgs["server"] = projection.Route.Server
+		}
+		if projection.Route.Tool != "" {
+			routeArgs["tool"] = projection.Route.Tool
+		}
+		if projection.Route.CallID != "" {
+			routeArgs["call_id"] = projection.Route.CallID
+		}
+		result[index].Args = agent.FormatToolArgsForTool(result[index].Name, routeArgs)
+	}
+	return result
 }
 
 func migratePersistedSessionState(state persistedSessionState) (persistedSessionState, error) {
@@ -453,6 +520,10 @@ func (m *Model) restoreSessionState(state persistedSessionState) error {
 	if err != nil {
 		return err
 	}
+	// Restore is also callable with an in-memory snapshot, so enforce the same
+	// privacy boundary as JSON decoding before messages or cards enter the UI.
+	state.Messages = agent.SanitizeMessagesForPersistence(state.Messages)
+	state.ToolEntries = sanitizePersistedToolEntryArgs(state.ToolEntries)
 	var targetGoal *goal.Runtime
 	if state.Goal != nil {
 		targetGoal, err = goal.Restore(*state.Goal)
@@ -534,7 +605,6 @@ func (m *Model) restoreSessionState(state persistedSessionState) error {
 	}
 
 	m.mode = state.Mode
-	m.setRouterMode(m.modeConfigs[m.mode].RouterMode)
 	m.modelPinned = state.ModelPinned
 	m.agent.ReplaceMessages(append([]llm.Message(nil), state.Messages...))
 	m.entries = make([]ChatEntry, len(state.Entries))
@@ -560,6 +630,8 @@ func (m *Model) restoreSessionState(state persistedSessionState) error {
 	}
 	m.goalRuntime = targetGoal
 	m.goalPersistenceDirty = false
+	m.syncComposerAuthority()
+	m.setRouterMode(m.modeConfigs[m.presentedMode()].RouterMode)
 
 	m.toolsPending = 0
 	m.toolCardMgr = NewToolCardManager(m.isDark)
@@ -576,17 +648,22 @@ func (m *Model) restoreSessionState(state persistedSessionState) error {
 		card := &m.toolCardMgr.Cards[len(m.toolCardMgr.Cards)-1]
 		card.Args = entry.Args
 		card.SetSummary(entry.Summary)
+		card.Projection = entry.Projection
 		card.Result = entry.Result
 		card.Duration = entry.Duration
 		switch entry.Status {
 		case ToolStatusRunning:
+			settleInterruptedToolEntry(entry)
 			card.State = ToolCardError
-			card.Result = "Interrupted before session was saved"
-			entry.Status = ToolStatusError
+			card.Result = entry.Result
+			card.Projection = entry.Projection
 		case ToolStatusError:
-			card.State = ToolCardError
+			card.State = toolCardStateFromProjection(entry.Projection)
+			if card.State == ToolCardSuccess {
+				card.State = ToolCardError
+			}
 		default:
-			card.State = ToolCardSuccess
+			card.State = toolCardStateFromProjection(entry.Projection)
 		}
 	}
 	return nil

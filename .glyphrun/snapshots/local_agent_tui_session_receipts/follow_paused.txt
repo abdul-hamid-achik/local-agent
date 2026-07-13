@@ -14,4 +14,4 @@
   │ func renderFixture() string { return "ready" }
 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
   Follow paused · end latest
-❯ Ask, @mention files, or type /help
+▏❯ Ask, @mention files, or type /help

@@ -1,3 +1,12 @@
+
+
+
+
+
+
+
+
+
                                        LOCAL AGENT
                       Local-first · Ollama · tool effects ask first
                                      kimi-code:cloud
@@ -13,15 +22,5 @@
 
 
 
-
-
-
-
-
-
-
-
-
-
 ─────────────────────────────────────────────────────────────────────────────────────────
-❯ Ask, @mention files, or type /help
+▏❯ Ask, @mention files, or type /help

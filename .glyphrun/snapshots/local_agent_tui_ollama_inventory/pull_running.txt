@@ -1,8 +1,8 @@
-                                       LOCAL AGENT
-                      Local-first · Ollama · tool effects ask first
-                                     kimi-code:cloud
-                   enter send · / commands · ctrl+p settings · ? help
-                   shift+tab mode · ctrl+o models · @ files · # skills
+
+
+
+
+
 
 
 
@@ -15,7 +15,6 @@
                │ downloading                                              │
                │ esc cancel                                               │
                ╰──────────────────────────────────────────────────────────╯
-
 
 
 

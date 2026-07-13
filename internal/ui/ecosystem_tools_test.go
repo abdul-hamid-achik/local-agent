@@ -32,7 +32,7 @@ func TestEcosystemToolSummaryUnderstandsDirectAndLazyCalls(t *testing.T) {
 				"server": "cortex", "tool": "cortex_status",
 				"arguments": map[string]any{"taskId": "task_456", "api_token": "do-not-render"},
 			},
-			want: []string{"Cortex", "status", "task task_456"},
+			want: []string{"Cortex", "status"},
 		},
 	}
 
@@ -62,9 +62,14 @@ func TestToolSummaryUsesEcosystemProjectionBeforeGenericFallback(t *testing.T) {
 		},
 	}
 	got := toolSummary(ToolTypeDefault, entry)
-	for _, want := range []string{"Monitor", "processes", "filter \"local-agent\"", "by rss"} {
+	for _, want := range []string{"Monitor", "processes"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("tool summary %q missing %q", got, want)
+		}
+	}
+	for _, private := range []string{"local-agent", "rss", "filter"} {
+		if strings.Contains(got, private) {
+			t.Fatalf("tool summary %q exposed nested MCP argument %q", got, private)
 		}
 	}
 }

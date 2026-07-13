@@ -1,19 +1,19 @@
+  you ───────────────────────────────────
+  Create approval-probe.txt with the exact
   text must not be written.
 
-  Permission required for `write`:
-  ```json
-  {
-    "content": "must not be written",
-    "path": "approval-probe.txt"
-  }
-  ```
-
   │ ▸ ✗ Write failed · approval-probe.txt (0ms)
-  │ tool call denied: explicit approval requir…
+  │ tool call denied: user denied tool executi…
 
   assistant ─────────────────────────────
 
     Denied safely. No file was changed.
+
+
+
+
+
+
 ─────────────────────────────────────────────────
  qwen3.5:2b · ctx 0%
-❯ Ask, @mention files, or type /help
+▏❯ Ask, @mention files, or type /help

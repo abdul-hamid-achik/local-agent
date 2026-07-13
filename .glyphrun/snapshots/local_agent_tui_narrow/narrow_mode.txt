@@ -10,7 +10,7 @@
  │ │ PLAN  ✓                          │
  │ │ Explore and design without muta… │
  │   AUTO                             │
- │   Run a durable goal until a veri… │
+ │   Work proactively with configure… │
  │ esc back · enter select · ↑/↓ move │
  ╰────────────────────────────────────╯
 

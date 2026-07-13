@@ -72,6 +72,8 @@ func run() int {
 			return handleLogs(os.Args[2:])
 		case "goal":
 			return handleGoalCommand(os.Args[2:])
+		case "execution":
+			return handleExecutionCommand(os.Args[2:])
 		}
 	}
 
@@ -79,7 +81,7 @@ func run() int {
 	modelFlag := flag.String("model", "", "override Ollama model")
 	agentProfileFlag := flag.String("agent", "", "override agent profile")
 	promptFlag := flag.String("p", "", "run in non-interactive mode: send prompt, print response, exit")
-	modeFlag := flag.String("mode", "normal", "headless authority: normal or plan (AUTO requires a durable goal)")
+	modeFlag := flag.String("mode", "normal", "headless authority: normal, plan, or auto")
 	yoloFlag := flag.Bool("yolo", false, "auto-approve all tool calls (skip permission prompts)")
 	flag.Parse()
 	headlessMode, err := parseHeadlessMode(*modeFlag, *promptFlag != "")
@@ -230,13 +232,9 @@ func run() int {
 	if workspace == "" {
 		log.Printf("warning: project memory disabled: workspace identity is unavailable")
 	} else {
-		// Interactive users can inspect and explicitly attribute quarantined
-		// memory with /migrate-memory. Keep that optional maintenance state out
-		// of the startup transcript; headless runs retain an stderr diagnostic
-		// because they have no interactive maintenance surface.
-		if notice := legacyMemoryNoticeForLaunch(workspace, *promptFlag != ""); notice != "" {
-			fmt.Fprintln(os.Stderr, "memory:", notice)
-		}
+		// Pre-workspace memory remains quarantined. Startup only opens the
+		// canonical workspace-scoped store; historical inventory is deliberately
+		// absent from the everyday transcript and command surface.
 		memStore = memory.NewStore(memory.DefaultPathForWorkspace(workspace))
 		if err := memStore.Err(); err != nil {
 			log.Printf("warning: project memory disabled: %v", err)
@@ -273,6 +271,7 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "project instructions: %v\n", err)
 		return 1
 	}
+	baseLoadedContext = appendLoadedContext(baseLoadedContext, buildHostConfigProjection(cfg, agentsDir, servers))
 
 	// Non-interactive / pipe mode: run a single prompt and exit.
 	if *promptFlag != "" {
@@ -350,13 +349,6 @@ func run() int {
 				fmt.Fprintf(os.Stderr, "ICE: %v\n", err)
 			} else {
 				ag.SetICEEngine(iceEngine)
-				preview, previewErr := iceEngine.PreviewLegacyEntries()
-				switch {
-				case previewErr != nil:
-					fmt.Fprintf(os.Stderr, "ICE: legacy history remains quarantined: %v\n", previewErr)
-				case !preview.AlreadyClaimed && preview.Count > 0:
-					fmt.Fprintf(os.Stderr, "ICE: %d provenance-free history entries quarantined; open the TUI and run /migrate-ice to explicitly attribute them\n", preview.Count)
-				}
 			}
 		} else if cfg.ICE.Enabled {
 			fmt.Fprintln(os.Stderr, "ICE: disabled because workspace identity is unavailable")
@@ -586,13 +578,6 @@ func run() int {
 				iceConversations = iceEngine.ScopedEntryCount()
 				iceSessionID = iceEngine.SessionID()
 				detail := fmt.Sprintf("%d scoped conversations", iceConversations)
-				preview, previewErr := iceEngine.PreviewLegacyEntries()
-				switch {
-				case previewErr != nil:
-					detail += "; legacy history quarantined: " + previewErr.Error()
-				case !preview.AlreadyClaimed && preview.Count > 0:
-					detail += fmt.Sprintf("; %d legacy entries quarantined — /migrate-ice", preview.Count)
-				}
 				p.Send(ui.StartupStatusMsg{ID: "ice", Label: "ICE", Status: "connected", Detail: detail})
 			}
 		} else if cfg.ICE.Enabled {

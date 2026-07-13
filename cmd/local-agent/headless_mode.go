@@ -21,8 +21,8 @@ func parseHeadlessMode(value string, headless bool) (ui.Mode, error) {
 	case "plan":
 		return ui.ModePlan, nil
 	case "auto":
-		return ui.ModeNormal, fmt.Errorf("AUTO requires a durable Goal Runtime; use the TUI and define the goal, criteria, and budgets")
+		return ui.ModeAuto, nil
 	default:
-		return ui.ModeNormal, fmt.Errorf("unknown authority %q (want normal or plan)", value)
+		return ui.ModeNormal, fmt.Errorf("unknown authority %q (want normal, plan, or auto)", value)
 	}
 }

@@ -453,6 +453,10 @@ func (m *Model) closeGoalRecovery() {
 	if m == nil {
 		return
 	}
+	if m.standaloneRecovery != nil {
+		m.closeStandaloneRecovery()
+		return
+	}
 	m.goalRecoveryState = nil
 	if m.overlayParent == OverlayGoalInspector && m.goalInspectorState != nil {
 		if m.goalRuntime != nil {
@@ -476,6 +480,9 @@ func (m *Model) handleGoalRecoveryEvent(event GoalRecoveryEvent) tea.Cmd {
 		m.closeGoalRecovery()
 		return nil
 	case GoalRecoveryActionApply:
+		if m.standaloneRecovery != nil {
+			return m.beginStandaloneRecoveryApply(event)
+		}
 		return m.beginGoalRecoveryApply(event)
 	default:
 		return nil

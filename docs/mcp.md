@@ -27,6 +27,10 @@ With a gateway:
 - Local Agent owns the final user approval and transcript.
 - Cortex and other tools appear as namespaced MCP calls.
 
+MCPHub's lazy mode intentionally advertises only pinned tools plus its discovery and routing tools. Unpinned tools are not missing: the normal flow is `search → describe or resolve → call`. Local Agent keeps the outer MCPHub namespace for safe routing, but the transcript presents the downstream specialist and action. It does not flatten the entire downstream catalog into every model request.
+
+Large lazy results may return a stored-result receipt. Retrieve its bounded pages explicitly with `mcphub_get_result`; Local Agent does not inject every page into the conversation automatically. Treat stored TinyVault results as sensitive because the gateway stores the exact downstream result for its configured retention period.
+
 ## Direct servers
 
 You can also connect a server directly:
@@ -55,6 +59,21 @@ Cortex does not own Local Agent's budgets, approval prompts, scheduling, or canc
 `privacy.local_only: true` accepts only local-machine HTTP MCP endpoints (`localhost`, loopback IPs, and unspecified bind aliases). It cannot constrain what an approved STDIO server does after it starts.
 
 Treat each MCP server as a separate trusted process. It may read files, contact services, or create effects according to its own configuration. Review each approval request and keep server catalogs narrow.
+
+Local Agent treats MCP safety annotations as untrusted presentation hints, not
+authority. They may improve the wording of an approval preview, but they never
+change authorization or durable effect classification. Every MCP call remains
+effect-unknown and passes through the normal approval-policy path, including
+tools that declare themselves read-only. Explicit `ask`, `deny`, `allow`, and
+yolo decisions retain their normal audit receipts.
+
+## Structured result boundary
+
+Local Agent preserves MCP `StructuredContent` separately from display text. It prefers an exact structured contract for semantic interpretation and accepts text only when the known tool returns one complete JSON document. It never parses prose or Markdown with status heuristics.
+
+Structured payloads are short-lived host input. After an exact tool-specific parser derives transport, domain, evidence, and routing state, the structured copy is discarded rather than copied into the saved visual tool card. The post-hook text required by model history and the execution ledger keeps its existing bounded persistence policy. This avoids duplicate `text + structured` output and keeps a second secret-bearing or very large structured copy out of the transcript projection.
+
+Versioned verifier contracts can produce verified or contradicted evidence. Unrecognized versions, partial results, stale indexes, and stored-result receipts remain neutral or attention states; they do not become green merely because MCP returned without a protocol error.
 
 ## Current protocol boundary
 

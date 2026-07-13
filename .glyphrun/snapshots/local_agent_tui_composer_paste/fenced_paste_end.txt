@@ -24,8 +24,8 @@
 
 
 ─────────────────────────────────────────────────────────────────────────────────────────
-│ fixture line 08
-│ fixture line 09
-│ fixture line 10
-│ fixture line 11
-│ ```
+ │ fixture line 08
+ │ fixture line 09
+ │ fixture line 10
+ │ fixture line 11
+ │ ```

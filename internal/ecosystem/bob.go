@@ -108,7 +108,7 @@ func ParseBobEnvelope(text string) (BobEnvelope, bool) {
 	if err := json.Unmarshal([]byte(trimmed), &env); err != nil {
 		return BobEnvelope{}, false
 	}
-	if env.SchemaVersion < 1 || env.Command == "" || len(env.Data) == 0 {
+	if env.SchemaVersion != 1 || env.Command == "" || len(env.Data) == 0 {
 		return BobEnvelope{}, false
 	}
 	return env, true

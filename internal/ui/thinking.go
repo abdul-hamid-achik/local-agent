@@ -71,8 +71,8 @@ func hasPartialTagSuffix(s, tag string) int {
 
 // renderThinkingBox renders a collapsible thinking content box.
 func (m *Model) renderThinkingBox(content string, collapsed bool) string {
-	content = strings.TrimRight(content, "\n")
-	if content == "" {
+	content = strings.Trim(sanitizeTerminalMultiline(content), "\r\n")
+	if strings.TrimSpace(content) == "" {
 		return ""
 	}
 
@@ -120,15 +120,29 @@ func (m *Model) renderThinkingBox(content string, collapsed bool) string {
 // renderLiveThinkingBox is the stable in-progress counterpart to a completed
 // reasoning disclosure. It intentionally omits implementation metrics and a
 // shortcut that is unavailable until the receipt is complete.
-func (m *Model) renderLiveThinkingBox() string {
+func (m *Model) renderLiveThinkingBox(content string) string {
 	width := max(4, m.chatContentWidth()-2)
 	inner := max(1, width-2)
+	summary := liveThinkingSummary(content)
 	header := "reasoning · live"
+	if summary != "" {
+		header += " · " + summary
+	}
 	if lipgloss.Width(header) > inner {
-		header = truncateDisplay("reasoning", inner)
+		header = truncateDisplay(header, inner)
 	}
 	return m.styles.ThinkingBorder.Render("│") + " " +
 		m.styles.ThinkingHeader.Render(header)
+}
+
+func liveThinkingSummary(content string) string {
+	lines := strings.Split(strings.TrimSpace(content), "\n")
+	for index := len(lines) - 1; index >= 0; index-- {
+		if summary := sanitizeTerminalSingleLine(lines[index]); summary != "" {
+			return summary
+		}
+	}
+	return ""
 }
 
 func thinkingHeader(direction, action string, lineCount, width int) string {

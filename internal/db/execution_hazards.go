@@ -21,6 +21,15 @@ const (
 	maxEffectiveProjectionScan  = 10_000
 )
 
+// ExecutionRecoveryProjection is the bounded, validated restore-time view of
+// an ordinary session's post-snapshot execution state. Hazards still block
+// provider work. Contexts are closed host projections of exact typed
+// reconciliations and contain no operator-authored free text.
+type ExecutionRecoveryProjection struct {
+	Hazards  []execution.State
+	Contexts []StandaloneReconciliationContext
+}
+
 type effectiveExecutionKind uint8
 
 const (
@@ -99,6 +108,100 @@ func (s *Store) listEffectiveExecutionStates(ctx context.Context, query effectiv
 		states = states[:limit]
 	}
 	return states, nil
+}
+
+// ProjectExecutionRecovery returns unresolved hazards together with validated
+// standalone reconciliation contexts that the effective hazard view normally
+// filters out. It is intentionally goal-less: goal recovery has a separate
+// authority projection and must never be flattened into ordinary model
+// context. The combined projection is bounded by limit and fails closed on
+// overflow or corrupt evidence.
+func (s *Store) ProjectExecutionRecovery(ctx context.Context, sessionID int64, workspaceID string, afterEventID int64, limit int) (ExecutionRecoveryProjection, error) {
+	if afterEventID < 0 {
+		return ExecutionRecoveryProjection{}, fmt.Errorf("execution recovery cursor must not be negative")
+	}
+	if err := validateExecutionListLimit(limit, maxExecutionRecoveryHazards); err != nil {
+		return ExecutionRecoveryProjection{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return ExecutionRecoveryProjection{}, fmt.Errorf("begin execution recovery projection: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := validateExecutionSessionScope(ctx, tx, sessionID, workspaceID); err != nil {
+		return ExecutionRecoveryProjection{}, err
+	}
+	record, err := getSessionStateRecord(ctx, tx, sessionID)
+	if err != nil {
+		return ExecutionRecoveryProjection{}, err
+	}
+	if err := requireGoalLessSessionState(record.StateJSON); err != nil {
+		return ExecutionRecoveryProjection{}, err
+	}
+
+	query := effectiveExecutionQuery{
+		kind: effectiveRecovery, sessionID: sessionID, workspaceID: workspaceID,
+		afterEventID: afterEventID,
+	}
+	projection := ExecutionRecoveryProjection{
+		Hazards: make([]execution.State, 0, limit), Contexts: make([]StandaloneReconciliationContext, 0, limit),
+	}
+	offset := 0
+	for {
+		if offset >= maxEffectiveProjectionScan {
+			return ExecutionRecoveryProjection{}, fmt.Errorf("%w: scanned at least %d raw candidates", ErrExecutionHazardOverflow, maxEffectiveProjectionScan)
+		}
+		pageLimit := effectiveProjectionPageSize
+		if remaining := maxEffectiveProjectionScan - offset; pageLimit > remaining {
+			pageLimit = remaining
+		}
+		page, err := queryRawExecutionProjectionPage(ctx, tx, query, pageLimit, offset)
+		if err != nil {
+			return ExecutionRecoveryProjection{}, err
+		}
+		if len(page) == 0 {
+			break
+		}
+		offset += len(page)
+		for _, state := range page {
+			if executionStateCanBeReconciled(state) {
+				validated, err := validatedExecutionReconciliationForState(ctx, tx, state)
+				if err != nil {
+					return ExecutionRecoveryProjection{}, err
+				}
+				if validated != nil {
+					// Goal-owned receipts remain resolved for hazard filtering, but
+					// only canonical goal-less evidence may enter ordinary context.
+					if validated.envelope.GoalID == "" {
+						expected, err := standaloneExecutionReconciliationItem(state)
+						if err != nil {
+							return ExecutionRecoveryProjection{}, err
+						}
+						if !controlItemsEquivalent(validated.state.Item, expected) {
+							return ExecutionRecoveryProjection{}, fmt.Errorf("%w: execution %q has a non-canonical standalone control item", ErrExecutionReconciliationCorrupt, state.Identity.ExecutionID)
+						}
+						context, err := standaloneReconciliationContext(*validated.state.Resolution, validated.envelope, state)
+						if err != nil {
+							return ExecutionRecoveryProjection{}, fmt.Errorf("%w: execution %q host context: %v", ErrExecutionReconciliationCorrupt, state.Identity.ExecutionID, err)
+						}
+						projection.Contexts = append(projection.Contexts, context)
+					}
+					if len(projection.Hazards)+len(projection.Contexts) > limit {
+						return ExecutionRecoveryProjection{}, fmt.Errorf("%w: more than %d restore entries", ErrExecutionHazardOverflow, limit)
+					}
+					continue
+				}
+			}
+			projection.Hazards = append(projection.Hazards, state)
+			if len(projection.Hazards)+len(projection.Contexts) > limit {
+				return ExecutionRecoveryProjection{}, fmt.Errorf("%w: more than %d restore entries", ErrExecutionHazardOverflow, limit)
+			}
+		}
+		if len(page) < pageLimit {
+			break
+		}
+	}
+	return projection, nil
 }
 
 func queryRawExecutionProjectionPage(ctx context.Context, tx *sql.Tx, query effectiveExecutionQuery, limit, offset int) ([]execution.State, error) {
@@ -197,68 +300,78 @@ func executionStateCanBeReconciled(state execution.State) bool {
 		(state.Latest.Type == execution.EventStarted && state.Identity.EffectClass != execution.EffectReadOnly)
 }
 
+type validatedExecutionReconciliation struct {
+	state    controlplane.State
+	envelope reconciliation.Envelope
+}
+
 func executionStateEffectivelyReconciled(ctx context.Context, tx *sql.Tx, state execution.State) (bool, error) {
+	validated, err := validatedExecutionReconciliationForState(ctx, tx, state)
+	return validated != nil, err
+}
+
+func validatedExecutionReconciliationForState(ctx context.Context, tx *sql.Tx, state execution.State) (*validatedExecutionReconciliation, error) {
 	rows, err := tx.QueryContext(ctx, controlStateSelect+`
 		WHERE i.session_id = ? AND i.workspace_id = ? AND i.execution_id = ?
 		  AND i.kind = 'execution_reconciliation'
 		ORDER BY i.id ASC
 		LIMIT 2`, state.Identity.SessionID, state.Identity.WorkspaceID, state.Identity.ExecutionID)
 	if err != nil {
-		return false, fmt.Errorf("query execution reconciliation overlay: %w", err)
+		return nil, fmt.Errorf("query execution reconciliation overlay: %w", err)
 	}
 	controlStates := make([]controlplane.State, 0, 2)
 	for rows.Next() {
 		controlState, scanErr := scanControlState(rows)
 		if scanErr != nil {
 			_ = rows.Close()
-			return false, fmt.Errorf("%w: scan control state: %v", ErrExecutionReconciliationCorrupt, scanErr)
+			return nil, fmt.Errorf("%w: scan control state: %v", ErrExecutionReconciliationCorrupt, scanErr)
 		}
 		controlStates = append(controlStates, controlState)
 	}
 	if err := rows.Close(); err != nil {
-		return false, fmt.Errorf("close execution reconciliation overlay: %w", err)
+		return nil, fmt.Errorf("close execution reconciliation overlay: %w", err)
 	}
 	if err := rows.Err(); err != nil {
-		return false, fmt.Errorf("read execution reconciliation overlay: %w", err)
+		return nil, fmt.Errorf("read execution reconciliation overlay: %w", err)
 	}
 	if len(controlStates) == 0 {
-		return false, nil
+		return nil, nil
 	}
 	if len(controlStates) != 1 {
-		return false, fmt.Errorf("%w: execution %q has %d control items", ErrExecutionReconciliationCorrupt, state.Identity.ExecutionID, len(controlStates))
+		return nil, fmt.Errorf("%w: execution %q has %d control items", ErrExecutionReconciliationCorrupt, state.Identity.ExecutionID, len(controlStates))
 	}
 	controlState := controlStates[0]
 	item := controlState.Item
 	if err := item.Validate(); err != nil {
-		return false, fmt.Errorf("%w: invalid item %q: %v", ErrExecutionReconciliationCorrupt, item.ItemID, err)
+		return nil, fmt.Errorf("%w: invalid item %q: %v", ErrExecutionReconciliationCorrupt, item.ItemID, err)
 	}
 	if item.Identity.SessionID != state.Identity.SessionID ||
 		item.Identity.WorkspaceID != state.Identity.WorkspaceID ||
 		item.Identity.ExecutionID != state.Identity.ExecutionID ||
 		item.Identity.TurnID != state.Identity.TurnID {
-		return false, fmt.Errorf("%w: item %q does not match the immutable execution scope", ErrExecutionReconciliationCorrupt, item.ItemID)
+		return nil, fmt.Errorf("%w: item %q does not match the immutable execution scope", ErrExecutionReconciliationCorrupt, item.ItemID)
 	}
 	if controlState.Resolution == nil {
-		return false, nil
+		return nil, nil
 	}
 	resolution := *controlState.Resolution
 	if err := resolution.Validate(); err != nil {
-		return false, fmt.Errorf("%w: invalid resolution %q: %v", ErrExecutionReconciliationCorrupt, resolution.ResolutionID, err)
+		return nil, fmt.Errorf("%w: invalid resolution %q: %v", ErrExecutionReconciliationCorrupt, resolution.ResolutionID, err)
 	}
 	if resolution.ItemID != item.ItemID || resolution.SessionID != item.Identity.SessionID ||
 		resolution.WorkspaceID != item.Identity.WorkspaceID || resolution.Outcome != controlplane.OutcomeReconciled {
-		return false, fmt.Errorf("%w: resolution %q does not exactly resolve item %q", ErrExecutionReconciliationCorrupt, resolution.ResolutionID, item.ItemID)
+		return nil, fmt.Errorf("%w: resolution %q does not exactly resolve item %q", ErrExecutionReconciliationCorrupt, resolution.ResolutionID, item.ItemID)
 	}
 	target, err := executionReconciliationTarget(item, state.Latest, resolution.ResolvedBy)
 	if err != nil {
-		return false, fmt.Errorf("%w: derive target: %v", ErrExecutionReconciliationCorrupt, err)
+		return nil, fmt.Errorf("%w: derive target: %v", ErrExecutionReconciliationCorrupt, err)
 	}
 	envelope, err := reconciliation.Parse(resolution.EvidenceJSON, resolution.EvidenceSHA256)
 	if err != nil {
-		return false, fmt.Errorf("%w: parse resolution %q: %v", ErrExecutionReconciliationCorrupt, resolution.ResolutionID, err)
+		return nil, fmt.Errorf("%w: parse resolution %q: %v", ErrExecutionReconciliationCorrupt, resolution.ResolutionID, err)
 	}
 	if !envelope.MatchesTarget(target) {
-		return false, fmt.Errorf("%w: resolution %q target binding differs from durable state", ErrExecutionReconciliationCorrupt, resolution.ResolutionID)
+		return nil, fmt.Errorf("%w: resolution %q target binding differs from durable state", ErrExecutionReconciliationCorrupt, resolution.ResolutionID)
 	}
-	return true, nil
+	return &validatedExecutionReconciliation{state: controlState, envelope: envelope}, nil
 }

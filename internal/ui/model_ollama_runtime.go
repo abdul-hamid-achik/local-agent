@@ -95,7 +95,7 @@ func (m *Model) closeModelPull() {
 	if m.ollamaInventoryAttempted {
 		m.modelPickerState = newOllamaModelPickerState(m.ollamaModels, m.model, m.width, m.height, m.isDark)
 		if m.ollamaVersion != "" {
-			m.modelPickerState.List.Title = "Ollama " + m.ollamaVersion + " · models"
+			m.modelPickerState.List.Title = ollamaModelPickerTitle(m.ollamaVersion)
 		}
 	}
 	m.overlay = OverlayModelPicker
@@ -315,7 +315,7 @@ func (m *Model) applyOllamaInventory(message OllamaModelInventoryMsg) {
 	if m.overlay == OverlayModelPicker {
 		m.modelPickerState = newOllamaModelPickerState(models, m.model, m.width, m.height, m.isDark)
 		if m.ollamaVersion != "" {
-			m.modelPickerState.List.Title = "Ollama " + m.ollamaVersion + " · models"
+			m.modelPickerState.List.Title = ollamaModelPickerTitle(m.ollamaVersion)
 		}
 	}
 	if m.settingsPickerState != nil {

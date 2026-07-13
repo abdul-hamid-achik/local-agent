@@ -8,11 +8,30 @@ outline: deep
 
 Local Agent is the conversation, model, permission, and foreground-goal host. The surrounding projects remain focused tools with explicit interfaces. They are not all bundled integrations.
 
+The shared transcript vocabulary keeps those ownership boundaries legible:
+
+| Tool | Product role | Evidence meaning |
+| --- | --- | --- |
+| MCPHub | Gateway and lazy catalog | Routing only |
+| Cortex | Coordination, criteria, and evidence closure | Preserves claims and proof relationships |
+| Vecgrep | Semantic discovery | Candidate |
+| Codemap | Code structure and impact | Supported, or stale when its index reports drift |
+| Glyphrun | CLI and TUI verification | Verified or contradicted from a versioned run |
+| Cairntrace | Browser verification | Verified or contradicted from a versioned run |
+| Vidtrace | Video evidence | Artifact-backed support |
+| file.cheap | Artifact storage | Preserves evidence; does not create truth by itself |
+| TinyVault | Secret boundary | Security state, never evidence content |
+| Monitor | Ambient and requested observability | Operational support |
+| Bob | Repository contract and convergence | Clean, drift, conflict, blocked, or failed |
+| VecLite | Vector storage | Internal capability, not an independent claim |
+
+Local Agent shows these as semantic tool receipts in one chronological transcript. A green transport receipt is never substituted for a domain result or verification outcome.
+
 ## Connected runtime
 
 ### [Cortex](https://cortexai.tools/)
 
-An evidence-guided engineering kernel for durable task state, bounded changes, and verification. Local Agent can use Cortex as the optional semantic advisor for durable goals, directly or through MCPHub.
+An evidence-guided engineering kernel for durable task state, bounded changes, and verification. Local Agent can use Cortex as the optional semantic advisor for durable goals, directly or through MCPHub. Local acceptance IDs and statements cross that boundary as typed, immutable `acceptanceCriteria`; they are never flattened into goal prose.
 
 ### [MCPHub](https://mcphubcli.dev/)
 
@@ -21,6 +40,10 @@ A single configuration and gateway for discovering MCP servers and synchronizing
 The [MCPHub website](https://mcphubcli.dev/) and [source repository](https://github.com/abdul-hamid-achik/mcphub) document the gateway, synchronization, and deployment workflow.
 
 ## Discovery and local data
+
+### [Codemap](https://github.com/abdul-hamid-achik/codemap)
+
+Structural code maps, references, impact, and index freshness. Local Agent treats fresh structural results as support, while missing or stale indexes remain visible instead of being interpreted as negative evidence.
 
 ### [Vecgrep](https://vecgrep.dev/)
 
@@ -64,7 +87,7 @@ A deterministic, model-free repository factory that turns a `bob.yaml` contract 
 
 Bob is built to be driven by agents. Run `bob learn --json` once at the start of a session for a machine-readable onboarding brief: every command, the exit-code contract (0 success, 2 conflicts, 3 drift without conflicts, 4 invalid input; `plan` always exits 0), the stable `data.error.code` values, and the recipe catalog. Every `--json` failure envelope carries copy-pasteable corrective commands in `next_actions`, and every plan action carries a stable `code` field for branching without parsing prose.
 
-Bob's `files` recipe lets an agent declare an arbitrary file tree in `bob.yaml` — paths, modes, contents, and literal `${vars.key}` substitution — and scaffold or reconcile any repository through Bob's plan/apply/lock conflict safety; `bob recipe show files --json` returns the schema with an example. When Bob is reached as a configured MCP tool, Local Agent surfaces the conflict codes and corrective next actions from these envelopes directly in the tool receipt.
+Bob's `files` recipe lets an agent declare an arbitrary file tree in `bob.yaml` — paths, modes, contents, and literal `${vars.key}` substitution — and scaffold or reconcile any repository through Bob's plan/apply/lock conflict safety; `bob recipe show files --json` returns the schema with an example. When Bob is reached as a configured MCP tool, Local Agent reads its versioned structured result and keeps transport separate from clean, drift, conflict, blocked, and failed repository states.
 
 The [Bob website](https://bobcli.dev/) and [source repository](https://github.com/abdul-hamid-achik/bob) document its repository contracts and build workflow; the [agent guide](https://bobcli.dev/agents) is the onboarding reference for coding agents.
 

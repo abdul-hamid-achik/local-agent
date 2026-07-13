@@ -89,9 +89,9 @@ type modelItem struct {
 }
 
 func (i modelItem) Title() string {
-	name := i.descriptor.DisplayName
+	name := modelDisplayName(i.descriptor)
 	if name == "" {
-		name = i.name
+		name = sanitizeTerminalSingleLine(i.name)
 	}
 	parts := []string{modelGroupLabel(descriptorGroup(i.descriptor)), name}
 	if state := modelRowState(i.descriptor, i.isCurrent, i.unsafe); state != "" {
@@ -102,20 +102,26 @@ func (i modelItem) Title() string {
 
 func (i modelItem) Description() string {
 	if i.descriptor.Name == "" { // legacy config projection
+		size := sanitizeTerminalSingleLine(i.size)
+		capability := sanitizeTerminalSingleLine(i.capability)
 		if i.unsafe {
-			return fmt.Sprintf("%s · needs >16GB — unavailable", i.size)
+			return fmt.Sprintf("%s · needs >16GB — unavailable", size)
 		}
-		return fmt.Sprintf("%s · %s", i.size, i.capability)
+		return fmt.Sprintf("%s · %s", size, capability)
 	}
 	parts := make([]string, 0, 5)
 	if size := humanModelBytes(i.descriptor.SizeBytes); size != "" {
 		parts = append(parts, size)
 	}
 	if i.descriptor.ParameterSize != "" {
-		parts = append(parts, i.descriptor.ParameterSize)
+		if value := sanitizeTerminalSingleLine(i.descriptor.ParameterSize); value != "" {
+			parts = append(parts, value)
+		}
 	}
 	if i.descriptor.Quantization != "" {
-		parts = append(parts, i.descriptor.Quantization)
+		if value := sanitizeTerminalSingleLine(i.descriptor.Quantization); value != "" {
+			parts = append(parts, value)
+		}
 	}
 	if capabilities := compactCapabilities(i.descriptor.Capabilities); capabilities != "" {
 		parts = append(parts, capabilities)
@@ -131,13 +137,32 @@ func (i modelItem) Description() string {
 
 func (i modelItem) FilterValue() string {
 	return strings.Join([]string{
-		i.name,
-		i.descriptor.DisplayName,
+		sanitizeTerminalSingleLine(i.name),
+		modelDisplayName(i.descriptor),
 		modelGroupLabel(descriptorGroup(i.descriptor)),
 		modelRowState(i.descriptor, i.isCurrent, i.unsafe),
-		strings.Join(i.descriptor.Capabilities, " "),
-		i.descriptor.Reason,
+		sanitizeTerminalSingleLine(strings.Join(i.descriptor.Capabilities, " ")),
+		sanitizeTerminalSingleLine(i.descriptor.Reason),
 	}, " ")
+}
+
+// modelDisplayName returns a terminal-safe presentation projection while the
+// descriptor itself retains the exact Ollama identifier used for selection
+// and network requests.
+func modelDisplayName(model OllamaModelDescriptor) string {
+	name := sanitizeTerminalSingleLine(model.DisplayName)
+	if name == "" {
+		name = sanitizeTerminalSingleLine(model.Name)
+	}
+	return name
+}
+
+func ollamaModelPickerTitle(version string) string {
+	version = sanitizeTerminalSingleLine(version)
+	if version == "" {
+		return "Ollama models"
+	}
+	return "Ollama " + version + " · models"
 }
 
 type ModelPickerState struct {
@@ -275,15 +300,16 @@ func modelRowState(model OllamaModelDescriptor, legacyCurrent, legacyUnsafe bool
 }
 
 func modelDecisionReason(model OllamaModelDescriptor) string {
+	reason := sanitizeTerminalSingleLine(model.Reason)
 	switch {
 	case model.RequiresConsent && !model.ConsentGranted:
-		if strings.TrimSpace(model.Reason) != "" {
-			return strings.TrimSpace(model.Reason)
+		if reason != "" {
+			return reason
 		}
 		return "Ollama Cloud confirmation required before use"
 	case !model.Selectable || !model.Fit:
-		if strings.TrimSpace(model.Reason) != "" {
-			return strings.TrimSpace(model.Reason)
+		if reason != "" {
+			return reason
 		}
 		return "model is unavailable under the current Ollama policy"
 	default:
@@ -336,7 +362,7 @@ func (m *Model) renderModelSelectionDetail(state *ModelPickerState, width int) s
 	}
 	descriptor, ok := state.SelectedDescriptor()
 	if !ok {
-		return m.styles.OverlayDim.Render(wrapText(state.Notice, width))
+		return m.styles.OverlayDim.Render(wrapText(sanitizeTerminalSingleLine(state.Notice), width))
 	}
 
 	lines := []string{m.styles.OverlayAccent.Render(wrapText(modelSelectionState(descriptor), width))}
@@ -357,7 +383,9 @@ func (m *Model) renderModelSelectionDetail(state *ModelPickerState, width int) s
 		lines = append(lines, m.styles.OverlayDim.Render(wrapText(label+" · "+reason, width)))
 	}
 	if state.Notice != "" {
-		lines = append(lines, m.styles.OverlayDim.Render(wrapText(state.Notice, width)))
+		if notice := sanitizeTerminalSingleLine(state.Notice); notice != "" {
+			lines = append(lines, m.styles.OverlayDim.Render(wrapText(notice, width)))
+		}
 	}
 	return strings.Join(lines, "\n")
 }

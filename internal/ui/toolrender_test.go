@@ -3,9 +3,37 @@ package ui
 import (
 	"strings"
 	"testing"
+	"unicode"
+	"unicode/utf8"
 
 	"charm.land/lipgloss/v2"
 )
+
+func TestFormatToolResultSanitizesFallbackOutput(t *testing.T) {
+	result := "safe\x1b]52;c;TOOL_SECRET\x07\n\x1b[2Jnext\u202e\u2066"
+	formatted := formatToolResult(result, 20, 80)
+	if strings.Contains(formatted, "TOOL_SECRET") || !strings.Contains(formatted, "safe\nnext") {
+		t.Fatalf("sanitized fallback result = %q", formatted)
+	}
+	for _, character := range formatted {
+		if character == '\n' || character == '\t' {
+			continue
+		}
+		if unicode.IsControl(character) || isBidiControl(character) {
+			t.Fatalf("unsafe rune %U survived fallback result: %q", character, formatted)
+		}
+	}
+}
+
+func TestFormatToolResultTruncatesUnicodeByDisplayWidth(t *testing.T) {
+	formatted := formatToolResult("界界界", 20, 5)
+	if !strings.Contains(formatted, "…") || !strings.HasPrefix(formatted, "界界") {
+		t.Fatalf("unicode truncation = %q", formatted)
+	}
+	if !utf8.ValidString(formatted) {
+		t.Fatalf("unicode truncation produced invalid UTF-8: %q", formatted)
+	}
+}
 
 func TestClassifyTool(t *testing.T) {
 	tests := []struct {

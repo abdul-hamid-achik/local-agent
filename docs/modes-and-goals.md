@@ -1,6 +1,6 @@
 ---
 title: Modes and durable goals
-description: Use NORMAL, PLAN, and AUTO authority safely, and review bounded durable goals before they run.
+description: Use NORMAL, PLAN, and AUTO authority safely, then start bounded durable goals with an explicit command.
 outline: deep
 ---
 
@@ -22,15 +22,15 @@ Use PLAN to understand a repository, compare approaches, or produce a change pla
 
 ## AUTO
 
-AUTO marks deliberate authority to run a bounded foreground goal. It is not YOLO and does not grant blanket approval.
+AUTO sends ordinary prompts directly with proactive access to the NORMAL tool surface. It is not YOLO and does not grant blanket approval: risky operations still follow the configured approval policy.
 
-After switching to AUTO, submit a prompt to open a reviewed draft. The draft must have:
+Switching modes never creates durable work. To start a bounded foreground goal, use `/goal <duration> <prompt>` or `/goal new`. Every durable definition must have:
 
 - one objective;
 - at least one independently checkable acceptance criterion; and
 - at least one finite wall-time, evaluation-token, or automatic-turn limit.
 
-Saving that review starts the first turn.
+`/goal <duration> <prompt>` is already an explicit creation instruction. A concrete prompt starts directly; an ambiguous prompt asks one contextual follow-up before anything runs. `/goal new` remains the manual review path.
 
 ## Compact goal command
 
@@ -40,7 +40,7 @@ You can start with a duration and prompt:
 /goal 30m fix the flaky session restore test and prove the fix
 ```
 
-Local Agent infers an editable objective and proof draft, then asks you to review it. The duration must be a valid Go-style value such as `15m`, `1h`, or `1h30m`; invalid duration-like input is rejected rather than silently becoming part of the objective.
+Local Agent deterministically infers bounded, prompt-specific acceptance criteria and starts the goal when the prompt names a concrete target. Obvious ambiguity such as `fix it` opens a focused follow-up instead. The duration must be a valid Go-style value such as `15m`, `1h`, or `1h30m`; invalid duration-like input is rejected rather than silently becoming part of the objective.
 
 For an empty or partial draft:
 

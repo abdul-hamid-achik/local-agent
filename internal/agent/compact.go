@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
@@ -57,6 +58,16 @@ func (a *Agent) compactForContext(ctx context.Context, out Output, numCtx int) b
 	}
 	older := append([]llm.Message(nil), messages[:splitAt]...)
 	recent := append([]llm.Message(nil), messages[splitAt:]...)
+	durableRecoveryContexts, err := collectDurableRecoveryContexts(messages)
+	if err != nil {
+		out.Error(fmt.Sprintf("compaction preserved full history because durable recovery context is invalid: %v", err))
+		return false
+	}
+	// Prefix text alone is never authority. Remove every prefixed system
+	// message from the ordinary transcript, then reinsert only the deduplicated
+	// host-owned receipts validated above.
+	older = stripDurableRecoveryPrefixMessages(older)
+	recent = stripDurableRecoveryPrefixMessages(recent)
 
 	summary := summarizeMessages(older)
 	if budget := optionalPromptBudget(numCtx); budget > 0 {
@@ -65,7 +76,7 @@ func (a *Agent) compactForContext(ctx context.Context, out Output, numCtx int) b
 
 	// Ask LLM to produce a compact summary.
 	var summaryBuf strings.Builder
-	err := a.llmClient.ChatStream(ctx, llm.ChatOptions{
+	err = a.llmClient.ChatStream(ctx, llm.ChatOptions{
 		Messages: []llm.Message{
 			{Role: "user", Content: summary},
 		},
@@ -112,20 +123,59 @@ func (a *Agent) compactForContext(ctx context.Context, out Output, numCtx int) b
 		}
 	}
 
-	// Replace messages with summary + recent.
-	compacted := make([]llm.Message, 0, 1+len(recent))
+	// Replace messages with summary + validated durable receipts + recent.
+	compacted := make([]llm.Message, 0, 1+len(durableRecoveryContexts)+len(recent))
 	compacted = append(compacted, llm.Message{
 		Role:    "system",
 		Content: fmt.Sprintf("Conversation summary:\n%s", summaryText),
 	})
+	compacted = append(compacted, durableRecoveryContexts...)
 	compacted = append(compacted, recent...)
 	a.ReplaceMessages(compacted)
 
 	if reporter, ok := out.(contextCompactionOutput); ok {
 		reporter.ContextCompacted()
 	}
-	out.SystemMessage(fmt.Sprintf("Context compacted: %d messages summarized, %d kept", len(older), len(recent)))
+	out.SystemMessage(fmt.Sprintf("Context compacted: %d messages summarized, %d kept", len(older), len(recent)+len(durableRecoveryContexts)))
 	return true
+}
+
+func collectDurableRecoveryContexts(messages []llm.Message) ([]llm.Message, error) {
+	contexts := make([]llm.Message, 0)
+	seen := make(map[string]struct{})
+	aggregateBytes := 0
+	for _, message := range messages {
+		if message.Role != "system" || !strings.HasPrefix(message.Content, DurableRecoveryContextPrefix) || !message.HostOwned {
+			continue
+		}
+		if !utf8.ValidString(message.Content) || len(message.Content) == 0 || len(message.Content) > MaxDurableRecoveryContextMessageBytes {
+			return nil, fmt.Errorf("receipt exceeds the %d-byte UTF-8 bound", MaxDurableRecoveryContextMessageBytes)
+		}
+		if _, exists := seen[message.Content]; exists {
+			continue
+		}
+		seen[message.Content] = struct{}{}
+		if len(seen) > MaxDurableRecoveryContextMessages {
+			return nil, fmt.Errorf("receipt count exceeds %d", MaxDurableRecoveryContextMessages)
+		}
+		aggregateBytes += len(message.Content)
+		if aggregateBytes > MaxDurableRecoveryContextAggregateBytes {
+			return nil, fmt.Errorf("receipt content exceeds %d aggregate bytes", MaxDurableRecoveryContextAggregateBytes)
+		}
+		contexts = append(contexts, llm.Message{Role: "system", Content: message.Content, HostOwned: true})
+	}
+	return contexts, nil
+}
+
+func stripDurableRecoveryPrefixMessages(messages []llm.Message) []llm.Message {
+	filtered := make([]llm.Message, 0, len(messages))
+	for _, message := range messages {
+		if message.Role == "system" && strings.HasPrefix(message.Content, DurableRecoveryContextPrefix) {
+			continue
+		}
+		filtered = append(filtered, message)
+	}
+	return filtered
 }
 
 // recentConversationBoundary chooses a user-turn boundary so an assistant
@@ -167,7 +217,7 @@ func summarizeMessages(msgs []llm.Message) string {
 				fmt.Fprintf(&b, "Assistant: %s\n", msg.Content)
 			}
 			for _, tc := range msg.ToolCalls {
-				fmt.Fprintf(&b, "Assistant called tool %s(%s)\n", tc.Name, FormatToolArgs(tc.Arguments))
+				fmt.Fprintf(&b, "Assistant called tool %s(%s)\n", tc.Name, FormatToolArgsForTool(tc.Name, tc.Arguments))
 			}
 		case "tool":
 			content := msg.Content

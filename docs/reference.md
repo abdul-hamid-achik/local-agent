@@ -15,6 +15,7 @@ Local Agent has three operator surfaces: the interactive TUI, human-readable hea
 | `local-agent` | Open the TUI in the current workspace |
 | `local-agent -p "prompt"` | Run one human-readable NORMAL prompt |
 | `local-agent --mode plan -p "prompt"` | Run one read-only PLAN prompt |
+| `local-agent --mode auto -p "prompt"` | Run one proactive AUTO prompt under the configured approval policy |
 | `local-agent --model <name>` | Select and pin the initial Ollama model |
 | `local-agent --agent <name>` | Select the initial agent profile |
 | `local-agent --qwen-router` | Enable the experimental Qwen-specific router |
@@ -39,6 +40,14 @@ local-agent goal recover <session-id>
 
 Add `--json` for machine-readable projections. The default `goal recover` is a dry run. Applying typed recovery evidence requires the complete explicit form printed by `--help`; there is no force flag. Successful reconciliation pauses or exhausts the goal and never schedules provider work by itself.
 
+An ordinary session with an outcome-unknown tool receipt uses a separate exact-execution workflow:
+
+```bash
+local-agent execution recover <session-id> <execution-id>
+```
+
+Inspection is read-only. Applying evidence requires the exact revision and event ID printed by inspection plus a typed observation, source, reference, summary, and observation time. It records an immutable reconciliation receipt; it never retries the tool or rewrites its original outcome.
+
 ## Conversation commands
 
 | Command | Purpose |
@@ -60,6 +69,7 @@ Add `--json` for machine-readable projections. The default `goal recover` is a d
 | `/checkpoint [label]` | Save current agent history |
 | `/checkpoints` | List checkpoints |
 | `/restore <id>` | Restore a checkpoint from the active session |
+| `/recover` | Review the current session's outcome-unknown execution and record typed evidence |
 | `/exit` | Quit |
 
 `/load` accepts a regular, non-symlink Markdown file up to 32 KB. Quoted paths are supported.
@@ -68,7 +78,7 @@ Add `--json` for machine-readable projections. The default `goal recover` is a d
 
 | Command | Purpose |
 |---|---|
-| `/goal <duration> <prompt>` | Infer and open a reviewed bounded goal draft |
+| `/goal <duration> <prompt>` | Infer bounded criteria and start a concrete goal; ambiguous prompts ask one follow-up |
 | `/goal new [objective]` | Open an empty or partial goal review |
 | `/goal show` | Inspect objective, criteria, proof, state, and budgets |
 | `/goal pause` | Stop host-initiated continuation |

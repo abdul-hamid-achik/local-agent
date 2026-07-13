@@ -58,7 +58,7 @@ func RenderGoalStatusLine(summary GoalSummary, width int, isDark bool) string {
 		return truncateDisplay(phase, width)
 	}
 
-	objective := strings.TrimSpace(summary.Objective)
+	objective := sanitizeTerminalSingleLine(summary.Objective)
 	if objective == "" {
 		objective = "untitled goal"
 	}

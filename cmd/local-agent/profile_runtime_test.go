@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -67,6 +68,89 @@ func TestBuildBaseLoadedContextNeverLoadsOutsideSymlink(t *testing.T) {
 	}
 	if strings.Contains(loaded, secret) {
 		t.Fatalf("outside secret entered model context: %q", loaded)
+	}
+}
+
+func TestBuildHostConfigProjectionIsUsefulAndRedacted(t *testing.T) {
+	cfg := &config.Config{
+		SourcePath: "/xdg/local-agent/config.yaml",
+		Privacy:    config.PrivacyConfig{LocalOnly: true},
+	}
+	agentsDir := &config.AgentsDir{
+		Path:               "/home/user/.agents",
+		Agents:             map[string]config.AgentProfile{"reviewer": {Name: "reviewer"}},
+		Skills:             []config.SkillDef{{Name: "go"}, {Name: "docs"}},
+		GlobalInstructions: "private instructions must not be copied",
+	}
+	servers := []config.ServerConfig{
+		{
+			Name:    "mcphub",
+			Command: "/opt/homebrew/bin/mcphub",
+			Args:    []string{"mcp", "serve", "--agent", "SECRET_ROUTE_VALUE"},
+			Env:     []string{"TOKEN=SECRET_ENV_VALUE"},
+		},
+		{
+			Name:      "remote",
+			Transport: "streamable-http",
+			URL:       "https://SECRET_URL_VALUE.example/mcp?token=SECRET_QUERY",
+		},
+	}
+
+	projection := buildHostConfigProjection(cfg, agentsDir, servers)
+	for _, want := range []string{
+		"/xdg/local-agent/config.yaml",
+		"/home/user/.agents",
+		"profiles: 1",
+		"skills: 2",
+		`"mcphub" (stdio, gateway, scoped agent route)`,
+		`"remote" (streamable-http)`,
+		"Do not use filesystem tools",
+	} {
+		if !strings.Contains(projection, want) {
+			t.Fatalf("projection missing %q: %s", want, projection)
+		}
+	}
+	for _, secret := range []string{
+		"SECRET_ROUTE_VALUE",
+		"SECRET_ENV_VALUE",
+		"SECRET_URL_VALUE",
+		"SECRET_QUERY",
+		"private instructions must not be copied",
+	} {
+		if strings.Contains(projection, secret) {
+			t.Fatalf("projection leaked %q: %s", secret, projection)
+		}
+	}
+}
+
+func TestAppendLoadedContextKeepsProjectionSeparate(t *testing.T) {
+	if got := appendLoadedContext("project instructions", "host projection"); got != "project instructions\n\nhost projection" {
+		t.Fatalf("combined context = %q", got)
+	}
+}
+
+func TestBuildHostConfigProjectionBoundsAndQuotesHostFields(t *testing.T) {
+	servers := make([]config.ServerConfig, 0, maxHostProjectionServers+5)
+	for i := 0; i < maxHostProjectionServers+5; i++ {
+		servers = append(servers, config.ServerConfig{
+			Name:    fmt.Sprintf("server-%02d-\n%s", i, strings.Repeat("x", maxHostProjectionNameRunes*2)),
+			Command: "tool",
+		})
+	}
+	longPath := "/" + strings.Repeat("private/", maxHostProjectionPathRunes)
+	projection := buildHostConfigProjection(&config.Config{SourcePath: longPath}, &config.AgentsDir{Path: longPath}, servers)
+
+	if strings.Contains(projection, longPath) {
+		t.Fatal("projection included an unbounded host path")
+	}
+	if !strings.Contains(projection, "... (5 more configured endpoints)") {
+		t.Fatalf("projection did not disclose bounded endpoints: %s", projection)
+	}
+	if strings.Contains(projection, "server-00-\n") {
+		t.Fatal("server name injected a literal newline")
+	}
+	if !strings.Contains(projection, `server-00-\n`) {
+		t.Fatalf("quoted server name missing: %s", projection)
 	}
 }
 

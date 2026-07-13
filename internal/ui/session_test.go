@@ -7,9 +7,11 @@ import (
 	"testing"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
+	"github.com/abdul-hamid-achik/local-agent/internal/ecosystem"
 	"github.com/abdul-hamid-achik/local-agent/internal/execution"
 	"github.com/abdul-hamid-achik/local-agent/internal/goal"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
+	"github.com/abdul-hamid-achik/local-agent/internal/reconciliation"
 )
 
 func TestSerializeDeserialize_Roundtrip(t *testing.T) {
@@ -211,12 +213,12 @@ func TestUnresolvedExecutionWarningOnlyBlocksStartedEffects(t *testing.T) {
 		},
 	}
 	warning := unresolvedExecutionWarning(states)
-	if !strings.Contains(warning, "bash") || !strings.Contains(warning, "outcome is unknown") || !strings.Contains(warning, "/new") {
+	if !strings.Contains(warning, "bash") || !strings.Contains(warning, "outcome is unknown") || !strings.Contains(warning, "/recover") {
 		t.Fatalf("unresolvedExecutionWarning() = %q", warning)
 	}
 	states[1].Latest.Type = execution.EventOutcomeUnknown
 	warning = unresolvedExecutionWarning(states)
-	if !strings.Contains(warning, "bash") || !strings.Contains(warning, "outcome-unknown receipt") || !strings.Contains(warning, "/new") {
+	if !strings.Contains(warning, "bash") || !strings.Contains(warning, "outcome-unknown receipt") || !strings.Contains(warning, "/recover") {
 		t.Fatalf("outcome-unknown warning = %q", warning)
 	}
 	states[1].Latest.Type = execution.EventCompleted
@@ -236,6 +238,10 @@ func TestStaleSessionLoadCannotReplaceCurrentState(t *testing.T) {
 		LoadToken: 1,
 		SessionID: 99,
 		State:     persistedSessionState{Version: 1, Mode: ModeBuild},
+		RecoveryContexts: []db.StandaloneReconciliationContext{{
+			ResolutionID: "ctrlres_stale", EvidenceSHA256: strings.Repeat("a", 64),
+			Disposition: reconciliation.DispositionEffectApplied, SourceKind: reconciliation.SourceVerificationCheck,
+		}},
 	})
 	m = updated.(*Model)
 	if len(m.entries) != 1 || m.entries[0].Content != "current" || m.sessionID != 0 {
@@ -243,6 +249,9 @@ func TestStaleSessionLoadCannotReplaceCurrentState(t *testing.T) {
 	}
 	if !m.sessionLoading {
 		t.Fatal("stale result cancelled the newer in-flight session load")
+	}
+	if got := standaloneRecoveryHostMessages(m.agent.Messages()); len(got) != 0 {
+		t.Fatalf("stale load injected recovery context: %#v", got)
 	}
 }
 
@@ -274,6 +283,7 @@ func TestSessionLoadAdoptsExactStateRevision(t *testing.T) {
 
 	m := newTestModel(t)
 	m.SetSessionStore(store)
+	m.standaloneRecovery = &standaloneRecoveryState{}
 	if err := m.initializeSessionStateRevision(record.Revision + 99); err != nil {
 		t.Fatal(err)
 	}
@@ -288,6 +298,9 @@ func TestSessionLoadAdoptsExactStateRevision(t *testing.T) {
 	m.sessionStateMu.RUnlock()
 	if m.sessionID != session.ID || gotRevision != record.Revision || !known || dirty {
 		t.Fatalf("loaded revision state = session %d revision %d known %v dirty %v", m.sessionID, gotRevision, known, dirty)
+	}
+	if m.standaloneRecovery != nil {
+		t.Fatalf("clean session retained a prior recovery target: %#v", m.standaloneRecovery)
 	}
 }
 
@@ -376,6 +389,11 @@ func TestSessionToolPersistenceExcludesEphemeralDataAndBoundsCards(t *testing.T)
 		BeforeContent: "BEFORE_SECRET_DO_NOT_PERSIST",
 		Status:        ToolStatusDone,
 		DiffLines:     make([]DiffLine, maxPersistedDiffLines*2),
+		Projection: ecosystem.ToolProjection{
+			Specialist: "bob", Operation: "bob_check", Role: ecosystem.RoleBuild,
+			Transport: ecosystem.TransportSucceeded, Domain: ecosystem.DomainConflict,
+			Route: ecosystem.ToolRoute{Gateway: "mcphub", Server: "bob", Tool: "bob_check", Lazy: true},
+		},
 	}}
 	raw, err := encodeSessionState(m)
 	if err != nil {
@@ -401,6 +419,77 @@ func TestSessionToolPersistenceExcludesEphemeralDataAndBoundsCards(t *testing.T)
 	restored := restoreToolEntries(state.ToolEntries)
 	if restored[0].RawArgs != nil || restored[0].BeforeContent != "" {
 		t.Fatalf("ephemeral fields restored: %#v", restored[0])
+	}
+	if restored[0].Projection.Domain != ecosystem.DomainConflict || restored[0].Projection.Route.Gateway != "mcphub" {
+		t.Fatalf("semantic projection did not round-trip: %#v", restored[0].Projection)
+	}
+}
+
+func TestSessionPersistenceRedactsMCPToolCallArgumentsAndLegacyCardText(t *testing.T) {
+	secret := "SESSION_MCP_SECRET_DO_NOT_PERSIST"
+	state := persistedSessionState{
+		Version: currentPersistedSessionVersion,
+		Mode:    ModeNormal,
+		Messages: []llm.Message{{
+			Role: "assistant",
+			ToolCalls: []llm.ToolCall{{
+				ID: "call-1", Name: "mcphub__mcphub_call_tool",
+				Arguments: map[string]any{
+					"server": "cortex", "tool": "cortex__investigate",
+					"arguments": map[string]any{"query": secret, "manifest_yaml": secret},
+				},
+			}},
+		}},
+		ToolEntries: []persistedToolEntry{{
+			ID: "call-1", Name: "mcphub__mcphub_call_tool", Args: "query=" + secret,
+			Projection: ecosystem.ToolProjection{
+				Specialist: "cortex", Operation: "investigate", Role: ecosystem.RoleCoordination,
+				Transport: ecosystem.TransportSucceeded, Domain: ecosystem.DomainUnknown,
+				Route: ecosystem.ToolRoute{Gateway: "mcphub", Server: "cortex", Tool: "investigate", Lazy: true},
+			},
+		}},
+	}
+
+	raw, err := marshalPersistedSessionState(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(raw, secret) || strings.Contains(raw, "manifest_yaml") {
+		t.Fatalf("session JSON leaked MCP payload: %s", raw)
+	}
+	for _, route := range []string{"cortex", "investigate"} {
+		if !strings.Contains(raw, route) {
+			t.Fatalf("session JSON = %s, missing safe route %q", raw, route)
+		}
+	}
+
+	decoded, err := decodeSessionState(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedAgain, err := marshalPersistedSessionState(decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(encodedAgain, secret) {
+		t.Fatalf("restored session reintroduced MCP secret: %s", encodedAgain)
+	}
+
+	model := newTestModel(t)
+	if err := model.restoreSessionState(state); err != nil {
+		t.Fatal(err)
+	}
+	live, err := marshalPersistedSessionState(persistedSessionState{
+		Version:     currentPersistedSessionVersion,
+		Mode:        ModeNormal,
+		Messages:    model.agent.Messages(),
+		ToolEntries: persistToolEntries(model.toolEntries),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(live, secret) || len(model.toolEntries) != 1 || strings.Contains(model.toolEntries[0].Args, secret) {
+		t.Fatalf("in-memory restore admitted MCP secret: %s entries=%#v", live, model.toolEntries)
 	}
 }
 
@@ -441,6 +530,52 @@ func TestSessionToolSummaryRoundTripAndLegacyFallback(t *testing.T) {
 			t.Fatalf("collapsed legacy receipt omitted recovered context:\n%s", view)
 		}
 	})
+}
+
+func TestInterruptedToolRestoreSettlesSemanticProjectionIdempotently(t *testing.T) {
+	running := ecosystem.ProjectToolCall("mcphub__bob__bob_check", nil)
+	persisted := []persistedToolEntry{{
+		ID: "tool-interrupted", Name: "mcphub__bob__bob_check", Status: ToolStatusRunning,
+		Projection: running,
+	}}
+
+	assertSettled := func(label string, entry ToolEntry) {
+		t.Helper()
+		if entry.Status != ToolStatusError || !entry.IsError || entry.Result != "Interrupted before session was saved" {
+			t.Fatalf("%s display state did not settle: %#v", label, entry)
+		}
+		projection := entry.Projection.Normalize()
+		if projection.Transport != ecosystem.TransportFailed || projection.Domain != ecosystem.DomainUnknown || projection.Evidence != ecosystem.EvidenceNone {
+			t.Fatalf("%s semantic projection did not settle: %#v", label, projection)
+		}
+	}
+
+	first := restoreToolEntries(persisted)
+	if len(first) != 1 {
+		t.Fatalf("first restore entries = %d", len(first))
+	}
+	assertSettled("first restore", first[0])
+
+	second := restoreToolEntries(persistToolEntries(first))
+	if len(second) != 1 {
+		t.Fatalf("second restore entries = %d", len(second))
+	}
+	assertSettled("second restore", second[0])
+
+	m := newTestModel(t)
+	state := persistedSessionState{
+		Version:     currentPersistedSessionVersion,
+		Mode:        ModeNormal,
+		Entries:     []persistedChatEntry{{Kind: "tool_group", ToolIndex: 0}},
+		ToolEntries: persistToolEntries(second),
+	}
+	if err := m.restoreSessionState(state); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.toolCardMgr.Cards) != 1 || m.toolCardMgr.Cards[0].State != ToolCardError {
+		t.Fatalf("double-restored card revived as non-error: %#v", m.toolCardMgr.Cards)
+	}
+	assertSettled("model restore", m.toolEntries[0])
 }
 
 func TestLoadPersistedSessionRejectsDifferentCanonicalWorkspace(t *testing.T) {

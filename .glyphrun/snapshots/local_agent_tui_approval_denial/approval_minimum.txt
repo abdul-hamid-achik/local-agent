@@ -1,10 +1,10 @@
-  "content": "must not be
-  written",
-  "path":
-  "approval-probe.txt"
-  }
-  ```
-─────────────────────────────
-  Approve write content="mus…
-  esc cancel · y allow
-  n deny · a always
+  you ───────────────
+ ╭──────────────────────────╮
+ │ Permission · write       │
+ │ Action Write 19 B        │
+ │ Target /Users/abdulachik │
+ │        /projects/local-a │
+ │        gent/.glyphrun/tm │
+ │        p/approval-workdi │
+ │ esc cancel · y · s · n   │
+ ╰──────────────────────────╯

@@ -44,6 +44,16 @@ func TestBuiltin_New(t *testing.T) {
 	}
 }
 
+func TestBuiltin_Recover(t *testing.T) {
+	r := newTestRegistry()
+	if result := r.Execute(&Context{}, "recover", nil); result.Error != "" || result.Action != ActionRecoverExecution {
+		t.Fatalf("/recover = %#v", result)
+	}
+	if result := r.Execute(&Context{}, "recover", []string{"force"}); result.Error == "" || result.Action != ActionNone {
+		t.Fatalf("/recover force did not fail closed: %#v", result)
+	}
+}
+
 func TestBuiltin_Goal(t *testing.T) {
 	r := newTestRegistry()
 
@@ -229,65 +239,13 @@ func TestBuiltin_Models(t *testing.T) {
 	}
 }
 
-func TestLegacyMigrationCommandsStayExecutableButHidden(t *testing.T) {
+func TestLegacyMigrationCommandsAreNotRegistered(t *testing.T) {
 	r := newTestRegistry()
-	for _, cmd := range r.All() {
-		if strings.HasPrefix(cmd.Name, "migrate-") {
-			t.Fatalf("maintenance command %q leaked into discovery", cmd.Name)
+	for _, name := range []string{"migrate-memory", "migrate-ice", "migrate-checkpoints"} {
+		result := r.Execute(&Context{}, name, nil)
+		if result.Action != ActionNone || !strings.Contains(result.Error, "unknown command") {
+			t.Fatalf("legacy command %q remains executable: %#v", name, result)
 		}
-	}
-	if result := r.Execute(&Context{}, "migrate-memory", nil); result.Action != ActionPreviewLegacyMemory {
-		t.Fatalf("hidden compatibility command stopped working: %#v", result)
-	}
-}
-
-func TestBuiltin_MigrateCheckpointsRequiresExplicitCountConfirmation(t *testing.T) {
-	r := newTestRegistry()
-	preview := r.Execute(&Context{}, "migrate-checkpoints", nil)
-	if preview.Error != "" || preview.Action != ActionPreviewLegacyCheckpoints {
-		t.Fatalf("preview result = %#v", preview)
-	}
-
-	for _, args := range [][]string{{"confirm"}, {"yes", "2"}, {"confirm", "zero"}, {"confirm", "0"}} {
-		result := r.Execute(&Context{}, "migrate-checkpoints", args)
-		if result.Error == "" || result.Action != ActionNone {
-			t.Fatalf("invalid confirmation %v accepted: %#v", args, result)
-		}
-	}
-
-	confirmed := r.Execute(&Context{}, "migrate-checkpoints", []string{"confirm", "2"})
-	if confirmed.Error != "" || confirmed.Action != ActionClaimLegacyCheckpoints || confirmed.Data != "2" {
-		t.Fatalf("confirmation result = %#v", confirmed)
-	}
-}
-
-func TestBuiltin_LegacyStoresRequireExplicitCountConfirmation(t *testing.T) {
-	r := newTestRegistry()
-	tests := []struct {
-		name          string
-		previewAction Action
-		claimAction   Action
-	}{
-		{name: "migrate-memory", previewAction: ActionPreviewLegacyMemory, claimAction: ActionClaimLegacyMemory},
-		{name: "migrate-ice", previewAction: ActionPreviewLegacyICE, claimAction: ActionClaimLegacyICE},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			preview := r.Execute(&Context{}, tt.name, nil)
-			if preview.Error != "" || preview.Action != tt.previewAction {
-				t.Fatalf("preview result = %#v", preview)
-			}
-			for _, args := range [][]string{{"confirm"}, {"yes", "2"}, {"confirm", "zero"}, {"confirm", "0"}} {
-				result := r.Execute(&Context{}, tt.name, args)
-				if result.Error == "" || result.Action != ActionNone {
-					t.Fatalf("invalid confirmation %v accepted: %#v", args, result)
-				}
-			}
-			confirmed := r.Execute(&Context{}, tt.name, []string{"confirm", "2"})
-			if confirmed.Error != "" || confirmed.Action != tt.claimAction || confirmed.Data != "2" {
-				t.Fatalf("confirmation result = %#v", confirmed)
-			}
-		})
 	}
 }
 

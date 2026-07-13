@@ -156,6 +156,8 @@ const (
 // arbitrary whole-request display limit.
 type ApprovalPreview struct {
 	Kind              ApprovalPreviewKind
+	ActionLabel       string
+	Consequence       string
 	Path              string
 	SourcePath        string
 	DestinationPath   string

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"unicode"
 
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
@@ -41,6 +42,86 @@ func TestOllamaModelPickerGroupsAndProjectsMetadata(t *testing.T) {
 	}
 	if !strings.HasPrefix(blocked.Title(), "LOCAL ·") || !strings.Contains(blocked.Title(), "unavailable") || blocked.Description() != "" {
 		t.Fatalf("blocked projection = %q / %q", blocked.Title(), blocked.Description())
+	}
+}
+
+func TestOllamaModelDisplayProjectionStripsTerminalControlsWithoutChangingIdentity(t *testing.T) {
+	rawName := "qwen\x1b]52;c;NAME_SECRET\x07\n:cloud\u202e"
+	rawDisplayName := "Qwen\x1b]0;DISPLAY_SECRET\x07\x1b[2J\nCloud\u2066"
+	rawReason := "Review\x1b]8;;https://REASON_SECRET.invalid\x07 link\x1b]8;;\x07\nrequired\u202e"
+	descriptor := OllamaModelDescriptor{
+		Name: rawName, DisplayName: rawDisplayName, Source: OllamaModelCloud,
+		ParameterSize: "120B\x1b]52;c;PARAM_SECRET\x07\nclass", Quantization: "Q4\x1b[31m\u009b2J\nK_M\u2066",
+		Capabilities: []string{"tools", "thinking", "completion"},
+		Selectable:   true, Fit: true, RequiresConsent: true, Reason: rawReason,
+	}
+	state := newOllamaModelPickerState([]OllamaModelDescriptor{descriptor}, rawName, 100, 30, true)
+	state.Notice = "Refresh\x1b]0;NOTICE_SECRET\x07\x1b[2J\nfailed\u2066"
+	state.List.Title = ollamaModelPickerTitle("0.31\x1b]0;VERSION_SECRET\x07\n.2\u202e")
+	item := state.List.Items()[0].(modelItem)
+
+	for name, value := range map[string]string{
+		"title":        item.Title(),
+		"description":  item.Description(),
+		"filter":       item.FilterValue(),
+		"reason":       modelDecisionReason(descriptor),
+		"picker title": state.List.Title,
+	} {
+		if strings.ContainsAny(value, "\x1b\r\n\t") {
+			t.Fatalf("%s retained a terminal or row control: %q", name, value)
+		}
+		for _, character := range value {
+			if unicode.IsControl(character) || isBidiControl(character) {
+				t.Fatalf("%s retained unsafe rune %U: %q", name, character, value)
+			}
+		}
+		for _, secret := range []string{"DISPLAY_SECRET", "PARAM_SECRET", "REASON_SECRET", "VERSION_SECRET"} {
+			if strings.Contains(value, secret) {
+				t.Fatalf("%s retained OSC payload %q: %q", name, secret, value)
+			}
+		}
+	}
+
+	m := newTestModel(t)
+	m.width, m.height = 100, 30
+	m.modelPickerState = state
+	m.overlay = OverlayModelPicker
+	wideDetails := renderOllamaModelDetails(descriptor, 72, m.isDark)
+	compactDetails := renderCompactOllamaModelDetails(descriptor, 32, m.isDark)
+	detail := m.renderModelSelectionDetail(state, 72)
+	consent := newCloudConsentState(descriptor, 72, 24, m.isDark)
+	for name, rendered := range map[string]string{
+		"picker":          m.renderModelPicker(),
+		"selected detail": detail,
+		"wide details":    wideDetails,
+		"compact details": compactDetails,
+		"cloud consent":   consent.List.View(),
+	} {
+		plain := ansi.Strip(rendered)
+		for _, secret := range []string{"DISPLAY_SECRET", "PARAM_SECRET", "REASON_SECRET", "NOTICE_SECRET"} {
+			if strings.Contains(plain, secret) {
+				t.Fatalf("%s retained OSC payload %q:\n%s", name, secret, plain)
+			}
+		}
+		if strings.Contains(plain, "Review\n") || strings.Contains(plain, "Qwen\nCloud") {
+			t.Fatalf("%s allowed metadata to create a row:\n%s", name, plain)
+		}
+		for _, character := range plain {
+			if character == '\n' {
+				continue
+			}
+			if unicode.IsControl(character) || isBidiControl(character) {
+				t.Fatalf("%s retained unsafe rune %U:\n%s", name, character, plain)
+			}
+		}
+	}
+
+	selected, ok := state.SelectedDescriptor()
+	if !ok || selected.Name != rawName || selected.DisplayName != rawDisplayName || selected.Reason != rawReason {
+		t.Fatalf("display sanitization changed selection identity: %#v", selected)
+	}
+	if consent.ModelName != rawName {
+		t.Fatalf("cloud consent changed network identifier: %q", consent.ModelName)
 	}
 }
 

@@ -4,6 +4,8 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/abdul-hamid-achik/local-agent/internal/ecosystem"
 )
 
 // Adapter bridges the agent.Output interface to BubbleTea messages.
@@ -34,6 +36,14 @@ func (a *Adapter) ToolCallStart(callID, name string, args map[string]any) {
 
 func (a *Adapter) ToolCallResult(callID, name string, result string, isError bool, duration time.Duration) {
 	sendMsg(a.program, ToolCallResultMsg{ID: callID, Name: name, Result: result, IsError: isError, Duration: duration})
+}
+
+// ToolCallSemanticResult carries only the bounded host projection into the UI;
+// raw StructuredContent remains inside the agent parser boundary.
+func (a *Adapter) ToolCallSemanticResult(callID, name string, result string, isError bool, duration time.Duration, projection ecosystem.ToolProjection) {
+	sendMsg(a.program, ToolCallResultMsg{
+		ID: callID, Name: name, Result: result, IsError: isError, Duration: duration, Projection: projection,
+	})
 }
 
 func (a *Adapter) SystemMessage(msg string) {
