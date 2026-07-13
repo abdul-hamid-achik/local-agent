@@ -62,7 +62,11 @@ A terminal system monitor for macOS and Linux with a TUI, JSON CLI, and MCP surf
 
 A deterministic, model-free repository factory that turns a `bob.yaml` contract into owned infrastructure and detects drift in CI. It complements Local Agent's coding workflow but is not embedded.
 
-The [Bob website](https://bobcli.dev/) and [source repository](https://github.com/abdul-hamid-achik/bob) document its repository contracts and build workflow.
+Bob is built to be driven by agents. Run `bob learn --json` once at the start of a session for a machine-readable onboarding brief: every command, the exit-code contract (0 success, 2 conflicts, 3 drift without conflicts, 4 invalid input; `plan` always exits 0), the stable `data.error.code` values, and the recipe catalog. Every `--json` failure envelope carries copy-pasteable corrective commands in `next_actions`, and every plan action carries a stable `code` field for branching without parsing prose.
+
+Bob's `files` recipe lets an agent declare an arbitrary file tree in `bob.yaml` — paths, modes, contents, and literal `${vars.key}` substitution — and scaffold or reconcile any repository through Bob's plan/apply/lock conflict safety; `bob recipe show files --json` returns the schema with an example. When Bob is reached as a configured MCP tool, Local Agent surfaces the conflict codes and corrective next actions from these envelopes directly in the tool receipt.
+
+The [Bob website](https://bobcli.dev/) and [source repository](https://github.com/abdul-hamid-achik/bob) document its repository contracts and build workflow; the [agent guide](https://bobcli.dev/agents) is the onboarding reference for coding agents.
 
 ## Relationship rule
 

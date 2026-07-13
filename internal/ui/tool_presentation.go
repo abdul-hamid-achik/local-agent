@@ -103,14 +103,16 @@ var toolActionRegistry = map[string]toolActionLabels{
 	"cortex_read_artifact":    {running: "Reading evidence artifact", success: "Read evidence artifact", failure: "Artifact read failed"},
 	"cortex_recall_cases":     {running: "Recalling related cases", success: "Recalled related cases", failure: "Case recall failed"},
 
-	// Bob is deterministic and read-only over MCP. Use repository language so
-	// users can distinguish inspection from an actual filesystem mutation.
+	// Bob exposes read-only inspection plus explicit repository-factory
+	// actions. Use repository language so effects remain unmistakable.
 	"bob_inspect":           {running: "Inspecting repository", success: "Inspected repository", failure: "Repository inspection failed"},
 	"bob_plan":              {running: "Planning repository", success: "Planned repository", failure: "Repository plan failed"},
 	"bob_check":             {running: "Checking repository contract", success: "Checked repository contract", failure: "Repository check failed"},
+	"bob_apply":             {running: "Applying repository plan", success: "Applied repository plan", failure: "Repository apply failed"},
 	"bob_validate_manifest": {running: "Validating Bob manifest", success: "Validated Bob manifest", failure: "Manifest validation failed"},
 	"bob_recipe_describe":   {running: "Reading Bob recipe", success: "Read Bob recipe", failure: "Recipe read failed"},
 	"bob_stats":             {running: "Reading Bob stats", success: "Read Bob stats", failure: "Bob stats failed"},
+	"bob_learn":             {running: "Learning Bob contract", success: "Learned Bob contract", failure: "Bob learn failed"},
 
 	// Monitor has both observation and effectful tools. Action-specific copy
 	// keeps a process termination from looking like a harmless generic call.
