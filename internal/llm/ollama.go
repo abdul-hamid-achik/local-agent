@@ -77,7 +77,7 @@ type ollamaChatRequest struct {
 	Messages []ollamaMessage `json:"messages"`
 	Stream   bool            `json:"stream"`
 	Tools    []ollamaTool    `json:"tools,omitempty"`
-	Options  map[string]any  `json:"options"`
+	Options  map[string]any  `json:"options,omitempty"`
 }
 
 type ollamaChatResponse struct {
@@ -93,11 +93,15 @@ type ollamaListResponse struct {
 }
 
 type ollamaListModel struct {
-	Name        string `json:"name"`
-	Model       string `json:"model"`
-	RemoteModel string `json:"remote_model,omitempty"`
-	RemoteHost  string `json:"remote_host,omitempty"`
-	Size        int64  `json:"size"`
+	Name         string             `json:"name"`
+	Model        string             `json:"model"`
+	RemoteModel  string             `json:"remote_model,omitempty"`
+	RemoteHost   string             `json:"remote_host,omitempty"`
+	Size         int64              `json:"size"`
+	Digest       string             `json:"digest,omitempty"`
+	ModifiedAt   time.Time          `json:"modified_at,omitempty"`
+	Details      ollamaModelDetails `json:"details,omitempty"`
+	Capabilities []string           `json:"capabilities,omitempty"`
 }
 
 type ollamaEmbedResponse struct {
@@ -250,7 +254,10 @@ func (o *OllamaClient) ChatStream(ctx context.Context, opts ChatOptions, fn func
 		messages = append(messages, converted)
 	}
 
-	options := map[string]any{"num_ctx": o.numCtx}
+	options := make(map[string]any, 2)
+	if o.numCtx > 0 {
+		options["num_ctx"] = o.numCtx
+	}
 	if opts.MaxEvalTokens > 0 {
 		options["num_predict"] = opts.MaxEvalTokens
 	}

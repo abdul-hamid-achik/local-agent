@@ -12,17 +12,35 @@ import (
 const compactThreshold = 0.75 // Trigger compaction at 75% of context window
 const keepMessages = 4        // Keep the last N messages intact
 
-// shouldCompact returns true if the prompt token count exceeds 75% of numCtx.
+type contextCompactionOutput interface {
+	ContextCompacted()
+}
+
+// shouldCompact returns true if the prompt token count exceeds 75% of the
+// currently effective context window.
 func (a *Agent) shouldCompact(promptTokens int) bool {
-	if a.numCtx <= 0 || promptTokens <= 0 {
+	return shouldCompactForContext(promptTokens, a.NumCtx())
+}
+
+// shouldCompactForContext evaluates a turn against its context-window
+// snapshot. Keeping the snapshot explicit prevents a model switch from
+// changing compaction policy halfway through a turn.
+func shouldCompactForContext(promptTokens, numCtx int) bool {
+	if numCtx <= 0 || promptTokens <= 0 {
 		return false
 	}
-	return float64(promptTokens) > float64(a.numCtx)*compactThreshold
+	return float64(promptTokens) > float64(numCtx)*compactThreshold
 }
 
 // compact summarizes older messages into a single recap, keeping the last
 // keepMessages intact. Returns true if compaction was performed.
 func (a *Agent) compact(ctx context.Context, out Output) bool {
+	return a.compactForContext(ctx, out, a.NumCtx())
+}
+
+// compactForContext compacts using the immutable context-window snapshot for
+// the active turn.
+func (a *Agent) compactForContext(ctx context.Context, out Output, numCtx int) bool {
 	a.mu.RLock()
 	messages := make([]llm.Message, len(a.messages))
 	copy(messages, a.messages)
@@ -41,7 +59,7 @@ func (a *Agent) compact(ctx context.Context, out Output) bool {
 	recent := append([]llm.Message(nil), messages[splitAt:]...)
 
 	summary := summarizeMessages(older)
-	if budget := optionalPromptBudget(a.numCtx); budget > 0 {
+	if budget := optionalPromptBudget(numCtx); budget > 0 {
 		summary = boundPromptText(summary, budget)
 	}
 
@@ -51,7 +69,8 @@ func (a *Agent) compact(ctx context.Context, out Output) bool {
 		Messages: []llm.Message{
 			{Role: "user", Content: summary},
 		},
-		System: "You are a conversation summarizer. Produce a concise summary of the conversation so far, capturing all key facts, decisions, tool results, and user requests. Keep it under 500 words. Output only the summary, no preamble.",
+		System:          "You are a conversation summarizer. Produce a concise summary of the conversation so far, capturing all key facts, decisions, tool results, and user requests. Keep it under 500 words. Output only the summary, no preamble.",
+		ExpectedContext: numCtx,
 	}, func(chunk llm.StreamChunk) error {
 		if chunk.Text != "" {
 			summaryBuf.WriteString(chunk.Text)
@@ -102,6 +121,9 @@ func (a *Agent) compact(ctx context.Context, out Output) bool {
 	compacted = append(compacted, recent...)
 	a.ReplaceMessages(compacted)
 
+	if reporter, ok := out.(contextCompactionOutput); ok {
+		reporter.ContextCompacted()
+	}
 	out.SystemMessage(fmt.Sprintf("Context compacted: %d messages summarized, %d kept", len(older), len(recent)))
 	return true
 }

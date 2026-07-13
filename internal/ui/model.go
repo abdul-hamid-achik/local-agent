@@ -54,6 +54,7 @@ const (
 	OverlayHelp
 	OverlayCompletion
 	OverlayModelPicker
+	OverlayCloudConsent
 	OverlayPlanForm
 	OverlaySessionsPicker
 	OverlaySettings
@@ -63,6 +64,8 @@ const (
 	OverlayRuntimeStatus
 	OverlayGoalInspector
 	OverlayGoalRecovery
+	OverlayModelDetails
+	OverlayModelPull
 )
 
 // CompletionState holds all state for the interactive completion modal.
@@ -213,6 +216,7 @@ type Model struct {
 	sessionsPickerState          *SessionsPickerState
 	sessionLoadToken             uint64
 	sessionLoading               bool
+	sessionLoadCancel            context.CancelFunc
 	sessionListToken             uint64
 	sessionListing               bool
 	legacyCheckpointPreview      *legacyCheckpointPreview
@@ -233,6 +237,15 @@ type Model struct {
 	modelManager             *llm.ModelManager
 	router                   config.ModelRouter
 	modelPickerState         *ModelPickerState
+	cloudConsentState        *CloudConsentState
+	cloudRestoreAuthorized   string
+	modelPullState           *ModelPullState
+	modelDetailsState        *OllamaModelDescriptor
+	modelPullCancel          context.CancelFunc
+	modelPullProgress        <-chan OllamaModelPullProgressMsg
+	modelPullRequest         uint64
+	modelPullRunning         bool
+	modelInventoryRequest    uint64
 	settingsPickerState      *SettingsPickerState
 	agentPickerState         *AgentPickerState
 	modePickerState          *ModePickerState
@@ -293,13 +306,21 @@ type Model struct {
 	shuttingDown  bool
 
 	// Display info
-	model        string
-	modelList    []string
-	agentProfile string
-	agentList    []string
-	toolCount    int
-	serverCount  int
-	numCtx       int
+	model                     string
+	modelList                 []string
+	ollamaModels              []OllamaModelDescriptor
+	ollamaVersion             string
+	localOnly                 bool
+	ollamaOffline             bool
+	ollamaInventoryAttempted  bool
+	pendingOllamaInventory    *OllamaModelInventoryMsg
+	ollamaInventoryCommitting bool
+	ollamaInventoryCommitID   uint64
+	agentProfile              string
+	agentList                 []string
+	toolCount                 int
+	serverCount               int
+	numCtx                    int
 
 	failedServers []FailedServer
 
@@ -404,6 +425,8 @@ func (m *Model) SetInitCancel(cancel context.CancelFunc) {
 
 func (m *Model) beginShutdown() tea.Cmd {
 	m.shuttingDown = true
+	m.pendingOllamaInventory = nil
+	m.cancelPendingCloudSessionRestore()
 	if m.goalOperationCancel != nil {
 		m.goalOperationCancel()
 	}
@@ -418,7 +441,7 @@ func (m *Model) beginShutdown() tea.Cmd {
 	}
 	m.pendingPaste = nil
 	if m.sessionLoading {
-		m.cancelSessionLoad()
+		m.cancelSessionLoadForShutdown()
 	}
 	if m.sessionListing {
 		m.cancelSessionList()
@@ -426,6 +449,7 @@ func (m *Model) beginShutdown() tea.Cmd {
 	if m.commitCancel != nil {
 		m.commitCancel()
 	}
+	m.cancelModelPull()
 	if m.cancel != nil {
 		m.cancel()
 	}
@@ -436,7 +460,8 @@ func (m *Model) beginShutdown() tea.Cmd {
 }
 
 func (m *Model) shutdownReady() bool {
-	return m.cancel == nil && !m.commitRunning && !m.exportRunning && !m.goalOperationRunning
+	return m.cancel == nil && !m.commitRunning && !m.exportRunning && !m.goalOperationRunning &&
+		!m.modelPullRunning && !m.sessionLoading && !m.ollamaInventoryCommitting
 }
 
 func (m *Model) appendShutdownQuit(commands *[]tea.Cmd) {
@@ -709,7 +734,6 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		if m.sessionLoading {
 			switch {
 			case key.Matches(msg, m.keys.Quit):
-				m.cancelSessionLoad()
 				return m, m.beginShutdown()
 			case key.Matches(msg, m.keys.Cancel):
 				m.cancelSessionLoad()
@@ -769,6 +793,21 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			}
 			return m, nil
 		}
+		// Installing a verified Ollama snapshot can change execution location and
+		// the current model's authority. Do not let a new turn or model switch race
+		// that reconciliation. If a refresh is waiting behind an active turn,
+		// Escape still cancels the foreground turn so the commit can finish.
+		if m.ollamaInventoryCommitting {
+			switch {
+			case key.Matches(msg, m.keys.Quit):
+				return m, m.beginShutdown()
+			case key.Matches(msg, m.keys.Cancel):
+				if m.cancel != nil {
+					m.cancel()
+				}
+			}
+			return m, nil
+		}
 		if m.goalOperation != "" {
 			switch {
 			case key.Matches(msg, m.keys.Quit):
@@ -794,14 +833,34 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 				case OverlayCompletion:
 					m.dismissCompletion()
 				case OverlayModelPicker:
+					if m.modelPickerState != nil && m.modelPickerState.List.FilterState() != list.Unfiltered {
+						var cmd tea.Cmd
+						m.modelPickerState.List, cmd = m.modelPickerState.List.Update(msg)
+						cmds = append(cmds, cmd)
+						return m, tea.Batch(cmds...)
+					}
 					m.closeModelPicker()
+				case OverlayCloudConsent:
+					m.closeCloudConsent()
+					return m, nil
+				case OverlayModelDetails:
+					m.closeModelDetails()
+					return m, nil
+				case OverlayModelPull:
+					if m.modelPullState != nil && m.modelPullState.Phase == ModelPullRunning {
+						m.cancelModelPull()
+						m.modelPullState.Apply(OllamaModelPullProgressMsg{Name: m.modelPullState.Name, Err: errors.New("model download cancelled")})
+						return m, nil
+					}
+					m.closeModelPull()
+					return m, nil
 				case OverlayPlanForm:
 					m.closePlanForm()
 				case OverlayGoalForm:
 					m.closeGoalForm()
 				case OverlaySessionsPicker:
 					// If the list is filtering, let ESC clear the filter first.
-					if m.sessionsPickerState != nil && m.sessionsPickerState.ready() && m.sessionsPickerState.List.FilterState() == list.Filtering {
+					if m.sessionsPickerState != nil && m.sessionsPickerState.ready() && m.sessionsPickerState.List.FilterState() != list.Unfiltered {
 						var cmd tea.Cmd
 						m.sessionsPickerState.List, cmd = m.sessionsPickerState.List.Update(msg)
 						cmds = append(cmds, cmd)
@@ -906,17 +965,72 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 
 			// Model picker overlay: forward keys to list, Enter selects.
 			if m.overlay == OverlayModelPicker && m.modelPickerState != nil {
-				if key.Matches(msg, m.keys.CompleteSelect) {
-					if item := m.modelPickerState.List.SelectedItem(); item != nil {
-						mi := item.(modelItem)
-						m.selectModel(mi.name)
+				if m.modelPickerState.List.FilterState() == list.Filtering {
+					var cmd tea.Cmd
+					m.modelPickerState.List, cmd = m.modelPickerState.List.Update(msg)
+					cmds = append(cmds, cmd)
+					if !key.Matches(msg, m.keys.CompleteSelect) {
+						return m, tea.Batch(cmds...)
 					}
-				} else {
+				}
+				handled := false
+				switch {
+				case msg.String() == "a":
+					cmds = append(cmds, m.openModelPull())
+					handled = true
+				case msg.String() == "d":
+					if descriptor, ok := m.modelPickerState.SelectedDescriptor(); ok {
+						m.openModelDetails(descriptor)
+						cmds = append(cmds, m.requestOllamaModelDetails(descriptor))
+					}
+					handled = true
+				case msg.String() == "r":
+					m.modelPickerState.Notice = "Refreshing Ollama inventory…"
+					if !m.reducedMotion {
+						cmds = append(cmds, m.modelPickerState.List.StartSpinner())
+					}
+					cmds = append(cmds, m.refreshOllamaInventory())
+					handled = true
+				case key.Matches(msg, m.keys.CompleteSelect):
+					if descriptor, ok := m.modelPickerState.SelectedDescriptor(); ok && descriptor.Selectable && descriptor.Fit {
+						m.selectModel(descriptor.Name)
+					} else if reason := m.modelPickerState.SelectedReason(); reason != "" {
+						m.modelPickerState.List.Title = "Unavailable · " + reason
+					}
+					handled = true
+				}
+				if !handled {
 					var cmd tea.Cmd
 					m.modelPickerState.List, cmd = m.modelPickerState.List.Update(msg)
 					cmds = append(cmds, cmd)
 				}
 				return m, tea.Batch(cmds...)
+			}
+
+			if m.overlay == OverlayCloudConsent && m.cloudConsentState != nil {
+				if key.Matches(msg, m.keys.CompleteSelect) {
+					if item, ok := m.cloudConsentState.List.SelectedItem().(cloudConsentItem); ok {
+						if item.action == cloudConsentAllow {
+							cmds = append(cmds, m.confirmCloudModel(m.cloudConsentState.ModelName))
+						} else {
+							m.closeCloudConsent()
+						}
+					}
+				} else {
+					var cmd tea.Cmd
+					m.cloudConsentState.List, cmd = m.cloudConsentState.List.Update(msg)
+					cmds = append(cmds, cmd)
+				}
+				return m, tea.Batch(cmds...)
+			}
+
+			if m.overlay == OverlayModelPull && m.modelPullState != nil {
+				cmds = append(cmds, m.modelPullState.Update(msg))
+				return m, tea.Batch(cmds...)
+			}
+
+			if m.overlay == OverlayModelDetails {
+				return m, nil
 			}
 
 			// Plan form overlay.
@@ -973,6 +1087,14 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 				if !m.sessionsPickerState.ready() {
 					return m, nil
 				}
+				if m.sessionsPickerState.List.FilterState() == list.Filtering {
+					var cmd tea.Cmd
+					m.sessionsPickerState.List, cmd = m.sessionsPickerState.List.Update(msg)
+					cmds = append(cmds, cmd)
+					if !key.Matches(msg, m.keys.CompleteSelect) {
+						return m, tea.Batch(cmds...)
+					}
+				}
 				if key.Matches(msg, m.keys.CompleteSelect) {
 					if item := m.sessionsPickerState.List.SelectedItem(); item != nil {
 						si := item.(sessionItem)
@@ -987,6 +1109,8 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 						m.sessionLoading = true
 						m.input.Blur()
 						workspaceID, workspaceErr := canonicalWorkspaceID(m.agent.WorkDir())
+						loadCtx, loadCancel := context.WithCancel(context.Background())
+						m.sessionLoadCancel = loadCancel
 						load := func() tea.Msg {
 							if workspaceErr != nil {
 								return SessionLoadedMsg{LoadToken: loadToken, Err: workspaceErr}
@@ -994,19 +1118,19 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 							var lease *db.ExecutionSessionLease
 							var err error
 							if sessionID != activeSessionID || !activeSessionLeased {
-								lease, err = m.sessionStore.AcquireExecutionSessionLease(context.Background(), sessionID, workspaceID)
+								lease, err = m.sessionStore.AcquireExecutionSessionLease(loadCtx, sessionID, workspaceID)
 								if err != nil {
 									return SessionLoadedMsg{LoadToken: loadToken, Err: err}
 								}
 							}
-							session, state, stateRecord, err := loadPersistedSession(context.Background(), m.sessionStore, sessionID, workspaceID)
+							session, state, stateRecord, err := loadPersistedSession(loadCtx, m.sessionStore, sessionID, workspaceID)
 							if err != nil {
 								if lease != nil {
 									_ = lease.Close()
 								}
 								return SessionLoadedMsg{LoadToken: loadToken, Err: err}
 							}
-							unresolved, unresolvedErr := m.sessionStore.ListExecutionRecoveryHazards(context.Background(), session.ID, workspaceID, state.ExecutionCursor, 100)
+							unresolved, unresolvedErr := m.sessionStore.ListExecutionRecoveryHazards(loadCtx, session.ID, workspaceID, state.ExecutionCursor, 100)
 							warning := unresolvedExecutionWarning(unresolved)
 							if unresolvedErr != nil {
 								warning = fmt.Sprintf("Recovery check failed: %v. This session will remain blocked until durable execution state can be verified.", unresolvedErr)
@@ -1059,6 +1183,18 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 					oldFilter := cs.Filter.Value()
 					var cmd tea.Cmd
 					cs.Filter, cmd = cs.Filter.Update(msg)
+					if cs.Kind == "command" && strings.ContainsAny(cs.Filter.Value(), " \t\n") {
+						// Once arguments begin, completion has done its job. Return the
+						// entire draft to the composer so Enter executes the command
+						// instead of selecting a suggestion and discarding arguments.
+						draft := m.completionDraft()
+						m.closeCompletion()
+						m.input.SetValue(draft)
+						m.input.CursorEnd()
+						m.syncInputHeight()
+						m.completionSuppressedDraft = draft
+						return m, cmd
+					}
 
 					// Re-filter if text changed
 					if cs.Filter.Value() != oldFilter {
@@ -1301,6 +1437,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		m.turnPromptTotal += msg.PromptTokens
 		m.sessionEvalTotal += msg.EvalCount
 		m.sessionPromptTotal += msg.PromptTokens
+
+	case ContextCompactedMsg:
+		m.promptTokens = 0
 
 	case ToolCallStartMsg:
 		if m.goalTurnID != "" {
@@ -1550,7 +1689,118 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		}
 		m.appendShutdownQuit(&cmds)
 
+	case OllamaModelPullRequestedMsg:
+		cmds = append(cmds, m.startModelPull(msg.Name))
+		if m.modelPullState != nil && !m.reducedMotion {
+			cmds = append(cmds, m.modelPullState.Spinner.Tick)
+		}
+
+	case OllamaModelPullCancelRequestedMsg:
+		m.cancelModelPull()
+		if m.modelPullState != nil {
+			m.modelPullState.Apply(OllamaModelPullProgressMsg{Name: msg.Name, Err: errors.New("model download cancelled")})
+		}
+
+	case OllamaModelPullProgressMsg:
+		if msg.RequestID != m.modelPullRequest {
+			break
+		}
+		if m.modelPullState == nil {
+			if msg.Done || msg.Err != nil {
+				m.modelPullRunning = false
+				m.cancelModelPull()
+				m.appendShutdownQuit(&cmds)
+			}
+			break
+		}
+		cmds = append(cmds, m.modelPullState.Apply(msg))
+		if msg.Done && msg.Err == nil {
+			m.modelPullRunning = false
+			m.cancelModelPull()
+			cmds = append(cmds, m.refreshOllamaInventory())
+			m.appendShutdownQuit(&cmds)
+		} else if msg.Err != nil {
+			m.modelPullRunning = false
+			m.cancelModelPull()
+			m.appendShutdownQuit(&cmds)
+		} else if m.modelPullProgress != nil {
+			cmds = append(cmds, waitModelPullProgress(m.modelPullProgress))
+		}
+
+	case OllamaModelInventoryMsg:
+		if msg.RequestID != m.modelInventoryRequest {
+			break
+		}
+		if msg.Err != nil || m.modelManager == nil {
+			m.applyOllamaInventory(msg)
+			break
+		}
+		if m.ollamaInventoryCommitting {
+			copy := msg
+			m.pendingOllamaInventory = &copy
+			break
+		}
+		cmds = append(cmds, m.commitOllamaInventory(msg))
+
+	case ollamaModelInventoryCommittedMsg:
+		if msg.Inventory.RequestID != m.ollamaInventoryCommitID {
+			break
+		}
+		m.ollamaInventoryCommitting = false
+		if !m.shuttingDown && msg.Inventory.RequestID == m.modelInventoryRequest {
+			m.applyOllamaInventory(msg.Inventory)
+			switch {
+			case msg.SelectionChanged:
+				m.setCurrentModelProjection(msg.SelectedModel)
+				if msg.SelectedModel != "" {
+					m.modelPinned = false
+				}
+				for index := range m.ollamaModels {
+					m.ollamaModels[index].Current = config.CanonicalModelName(m.ollamaModels[index].Name) == config.CanonicalModelName(msg.SelectedModel) && msg.SelectedModel != ""
+				}
+				detail := msg.SelectionReason
+				if msg.SelectionErr != nil {
+					detail += fmt.Sprintf("; reconciliation warning: %v", msg.SelectionErr)
+				}
+				if msg.SelectedModel != "" {
+					m.appendGoalSystem(fmt.Sprintf("Ollama inventory changed · %s · resumed automatic routing on local model %s", detail, msg.SelectedModel))
+				} else {
+					m.appendGoalError(fmt.Sprintf("Ollama inventory changed · %s. Model %q was cleared; select a verified model before the next turn.", detail, msg.PreviousModel))
+				}
+			case msg.RecoveryErr != nil:
+				detail := fmt.Sprintf("Ollama inventory recovered, but model %q could not be activated: %v", m.model, msg.RecoveryErr)
+				m.appendGoalError(detail)
+				if m.modelPickerState != nil {
+					m.modelPickerState.Notice = detail
+				}
+			case msg.RecoveredModel != "":
+				m.setCurrentModelProjection(msg.RecoveredModel)
+				m.appendGoalSystem(fmt.Sprintf("Ollama reconnected · %s ready", msg.RecoveredModel))
+			}
+		}
+		if !m.shuttingDown && m.pendingOllamaInventory != nil {
+			pending := *m.pendingOllamaInventory
+			m.pendingOllamaInventory = nil
+			if pending.RequestID == m.modelInventoryRequest {
+				cmds = append(cmds, m.commitOllamaInventory(pending))
+			}
+		}
+		m.appendShutdownQuit(&cmds)
+
+	case OllamaModelDetailsResultMsg:
+		if m.modelDetailsState != nil && config.CanonicalModelName(m.modelDetailsState.Name) == config.CanonicalModelName(msg.Model.Name) {
+			if msg.Err != nil {
+				m.modelDetailsState.Reason = "Details unavailable: " + msg.Err.Error()
+			} else {
+				copy := msg.Model
+				m.modelDetailsState = &copy
+			}
+		}
+
 	case StartupStatusMsg:
+		if msg.ID == "ollama" {
+			m.ollamaOffline = msg.Status == "failed"
+		}
 		found := false
 		for i, item := range m.startupItems {
 			if item.ID == msg.ID {
@@ -1568,20 +1818,28 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		}
 
 	case InitCompleteMsg:
-		m.model = msg.Model
-		m.modelList = msg.ModelList
+		m.setCurrentModelProjection(msg.Model)
+		m.ollamaModels = append([]OllamaModelDescriptor(nil), msg.OllamaModels...)
+		m.modelList = append([]string(nil), msg.ModelList...)
+		if selectable := manuallySelectableOllamaModels(m.ollamaModels); len(selectable) > 0 {
+			m.modelList = selectable
+		}
+		m.ollamaVersion = msg.OllamaVersion
+		m.localOnly = msg.LocalOnly
+		m.ollamaInventoryAttempted = msg.OllamaInventoryAttempted
 		m.setActiveProfileMetadata(msg.AgentProfile)
 		m.agentList = msg.AgentList
 		m.toolCount = msg.ToolCount
 		m.serverCount = msg.ServerCount
 		m.numCtx = msg.NumCtx
+		m.syncEffectiveContext(false)
 		m.failedServers = msg.FailedServers
 		m.iceEnabled = msg.ICEEnabled
 		m.iceConversations = msg.ICEConversations
 		m.iceSessionID = msg.ICESessionID
 
 		if m.completer != nil {
-			m.completer.UpdateModels(msg.ModelList)
+			m.completer.UpdateModels(m.modelList)
 			m.completer.UpdateAgents(msg.AgentList)
 		}
 
@@ -1796,62 +2054,8 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		m.input.Blur()
 
 	case SessionLoadedMsg:
-		if !m.sessionLoading || msg.LoadToken != m.sessionLoadToken {
-			if msg.ExecutionLease != nil {
-				_ = msg.ExecutionLease.Close()
-			}
-			break
-		}
-		m.sessionLoading = false
-		if m.state != StateIdle {
-			if msg.ExecutionLease != nil {
-				_ = msg.ExecutionLease.Close()
-			}
-			break
-		}
-		m.input.Focus()
-		m.invalidateEntryCache()
-		if msg.Err != nil {
-			if msg.ExecutionLease != nil {
-				_ = msg.ExecutionLease.Close()
-			}
-			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("Load session: %v", msg.Err)})
-		} else if err := validateLoadedSessionStateRecord(msg.SessionID, msg.StateRecord); err != nil {
-			if msg.ExecutionLease != nil {
-				_ = msg.ExecutionLease.Close()
-			}
-			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("Load session: %v", err)})
-		} else {
-			if err := m.restoreSessionState(msg.State); err != nil {
-				if msg.ExecutionLease != nil {
-					_ = msg.ExecutionLease.Close()
-				}
-				m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("Load session: %v", err)})
-			} else {
-				m.resetGoalRecoveryPresentation()
-				if msg.ExecutionLease != nil {
-					_ = m.releaseExecutionSessionLease()
-					m.executionLease = msg.ExecutionLease
-				}
-				m.sessionID = msg.SessionID
-				_ = m.initializeSessionStateRevision(msg.StateRecord.Revision)
-				m.agent.SetCheckpointSessionID(msg.SessionID)
-				m.agent.SetExecutionSessionID(msg.SessionID)
-				m.agent.SetExecutionSnapshotCursor(m.executionCursor)
-				if err := m.recoverRestoredGoal(); err != nil {
-					m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("Restore goal recovery: %v", err)})
-				} else if cmd := m.ensureCurrentGoalRecoveryProjection(false); cmd != nil {
-					cmds = append(cmds, cmd)
-				}
-				m.legacyCheckpointPreview = nil
-				m.entries = append(m.entries, ChatEntry{Kind: "system", Content: fmt.Sprintf("Restored session: %s", msg.Title)})
-				if msg.RecoveryWarning != "" {
-					m.entries = append(m.entries, ChatEntry{Kind: "error", Content: msg.RecoveryWarning})
-				}
-			}
-		}
-		m.viewport.SetContent(m.renderEntries())
-		m.resumeFollow()
+		cmds = append(cmds, m.handleSessionLoadedReceipt(msg))
+		m.appendShutdownQuit(&cmds)
 
 	case tea.MouseWheelMsg:
 		// A visible overlay owns pointer input. Scroll document overlays through
@@ -1940,6 +2144,16 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		}
 	}
 
+	// Visible Charm children own their non-key lifecycle messages (cursor
+	// blinks, list filter results, spinner ticks, and progress frames). Key
+	// presses stay in the explicit parent branches above so authority-changing
+	// actions cannot be hidden inside presentation components.
+	if _, isKey := msg.(tea.KeyPressMsg); !isKey && m.overlay != OverlayNone {
+		if cmd := m.updateActiveOverlayMessage(msg); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+
 	// Update sub-components.
 	if m.state == StateIdle && m.overlay == OverlayNone && !m.initializing {
 		var cmd tea.Cmd
@@ -1984,6 +2198,77 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 	m.checkAutoScroll()
 
 	return m, tea.Batch(cmds...)
+}
+
+func (m *Model) updateActiveOverlayMessage(msg tea.Msg) tea.Cmd {
+	switch m.overlay {
+	case OverlayCompletion:
+		if m.completionState != nil {
+			var cmd tea.Cmd
+			m.completionState.Filter, cmd = m.completionState.Filter.Update(msg)
+			return cmd
+		}
+	case OverlaySettings:
+		if m.settingsPickerState != nil {
+			var cmd tea.Cmd
+			m.settingsPickerState.List, cmd = m.settingsPickerState.List.Update(msg)
+			return cmd
+		}
+	case OverlayAgentPicker:
+		if m.agentPickerState != nil {
+			var cmd tea.Cmd
+			m.agentPickerState.List, cmd = m.agentPickerState.List.Update(msg)
+			return cmd
+		}
+	case OverlayModePicker:
+		if m.modePickerState != nil {
+			var cmd tea.Cmd
+			m.modePickerState.List, cmd = m.modePickerState.List.Update(msg)
+			return cmd
+		}
+	case OverlayModelPicker:
+		if m.modelPickerState != nil {
+			var cmd tea.Cmd
+			m.modelPickerState.List, cmd = m.modelPickerState.List.Update(msg)
+			return cmd
+		}
+	case OverlayCloudConsent:
+		if m.cloudConsentState != nil {
+			var cmd tea.Cmd
+			m.cloudConsentState.List, cmd = m.cloudConsentState.List.Update(msg)
+			return cmd
+		}
+	case OverlaySessionsPicker:
+		if m.sessionsPickerState != nil && m.sessionsPickerState.ready() {
+			var cmd tea.Cmd
+			m.sessionsPickerState.List, cmd = m.sessionsPickerState.List.Update(msg)
+			return cmd
+		}
+	case OverlayModelPull:
+		if m.modelPullState != nil {
+			return m.modelPullState.Update(msg)
+		}
+	case OverlayGoalForm:
+		if m.goalFormState != nil {
+			_, cmd := m.goalFormState.Update(msg)
+			return cmd
+		}
+	case OverlayGoalRecovery:
+		if m.goalRecoveryState != nil {
+			_, cmd := m.goalRecoveryState.Update(msg)
+			return cmd
+		}
+	case OverlayPlanForm:
+		if m.planFormState != nil && m.planFormState.ActiveField >= 0 && m.planFormState.ActiveField < len(m.planFormState.Fields) {
+			field := &m.planFormState.Fields[m.planFormState.ActiveField]
+			if field.Kind == "text" {
+				var cmd tea.Cmd
+				field.Input, cmd = field.Input.Update(msg)
+				return cmd
+			}
+		}
+	}
+	return nil
 }
 
 func (m *Model) snapshotExecutionCursor(ctx context.Context) (int64, error) {
@@ -2197,6 +2482,7 @@ func (m *Model) buildCommandContext() *command.Context {
 		ICESessionID:       m.iceSessionID,
 		SessionEvalTotal:   m.sessionEvalTotal,
 		SessionPromptTotal: m.sessionPromptTotal,
+		LatestPromptTokens: m.promptTokens,
 		SessionTurnCount:   m.sessionTurnCount,
 		NumCtx:             m.numCtx,
 		CurrentModel:       m.model,
@@ -2352,40 +2638,15 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 		if m.router != nil && query != "" {
 			m.router.RecordOverride(query, result.Data)
 		}
-		if err := config.CheckModelMemorySafe(result.Data); err != nil {
-			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: err.Error()})
-			m.viewport.SetContent(m.renderEntries())
-			m.resumeFollow()
-			return nil
-		}
-		if m.modelManager != nil {
-			m.prepareModelSwitch()
-			if err := m.modelManager.SetCurrentModel(result.Data); err != nil {
-				m.entries = append(m.entries, ChatEntry{
-					Kind:    "error",
-					Content: fmt.Sprintf("Failed to switch model: %v", err),
-				})
-				m.viewport.SetContent(m.renderEntries())
-				m.resumeFollow()
-				return nil
-			}
-		}
-		if m.logger != nil {
-			m.logger.Info("model switched", "from", m.model, "to", result.Data)
-		}
-		m.model = result.Data
-		m.modelPinned = true
-		m.entries = append(m.entries, ChatEntry{
-			Kind:    "system",
-			Content: result.Text,
-		})
-		m.viewport.SetContent(m.renderEntries())
-		m.resumeFollow()
+		m.selectModel(result.Data)
 		return nil
 
 	case command.ActionEnableAutoModel:
-		m.modelPinned = false
-		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: result.Text})
+		if err := m.enableAutomaticModelRouting(); err != nil {
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: err.Error()})
+		} else {
+			m.entries = append(m.entries, ChatEntry{Kind: "system", Content: result.Text})
+		}
 		m.viewport.SetContent(m.renderEntries())
 		m.resumeFollow()
 		return nil
@@ -2620,7 +2881,13 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 		return nil
 
 	case command.ActionOpenGoal:
-		if err := m.openGoalForm(result.Data, false); err != nil {
+		var err error
+		if result.Goal != nil {
+			err = m.openGoalRequestForm(*result.Goal)
+		} else {
+			err = m.openGoalForm(result.Data, false)
+		}
+		if err != nil {
 			m.appendGoalError(err.Error())
 		}
 		return nil
@@ -2660,6 +2927,7 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 }
 
 func (m *Model) resetConversationSession() {
+	m.revokeOllamaCloudConsent()
 	if m.goalOperationCancel != nil {
 		m.goalOperationCancel()
 	}
@@ -2715,6 +2983,10 @@ func (m *Model) releaseExecutionSessionLease() error {
 }
 
 func (m *Model) cancelSessionLoad() {
+	if m.sessionLoadCancel != nil {
+		m.sessionLoadCancel()
+		m.sessionLoadCancel = nil
+	}
 	if m.sessionLoading {
 		m.sessionLoadToken++
 	}
@@ -2722,6 +2994,17 @@ func (m *Model) cancelSessionLoad() {
 	if !m.sessionListing {
 		m.input.Focus()
 	}
+}
+
+func (m *Model) cancelSessionLoadForShutdown() {
+	if m.sessionLoadCancel != nil {
+		m.sessionLoadCancel()
+		m.sessionLoadCancel = nil
+		return
+	}
+	// Tests and embedders can mark a synthetic load without installing an
+	// owned command. There is nothing to join in that case.
+	m.sessionLoading = false
 }
 
 func (m *Model) cancelSessionList() {
@@ -2957,6 +3240,9 @@ func (m *Model) triggerCompletion(input string) {
 	var multiSelect bool
 
 	if strings.HasPrefix(input, "/") {
+		if strings.ContainsAny(strings.TrimPrefix(input, "/"), " \t\n") {
+			return
+		}
 		kind = "command"
 		items = m.completer.Complete(input)
 	} else if strings.HasPrefix(input, "@") {
@@ -3212,7 +3498,7 @@ func (m *Model) sendToAgentTurnPresented(text, turnID string, visible bool, limi
 		if newModel := m.router.SelectModelForMode(text, cfg.RouterMode); newModel != "" && newModel != m.model {
 			m.prepareModelSwitch()
 			if err := m.modelManager.SetCurrentModel(newModel); err == nil {
-				m.model = newModel
+				m.setCurrentModelProjection(newModel)
 			} else {
 				m.entries = append(m.entries, ChatEntry{
 					Kind:    "error",
@@ -3389,7 +3675,7 @@ func (m *Model) setMode(mode Mode) {
 			if m.modelManager != nil {
 				m.prepareModelSwitch()
 				if err := m.modelManager.SetCurrentModel(newModel); err == nil {
-					m.model = newModel
+					m.setCurrentModelProjection(newModel)
 				}
 			}
 		}
@@ -3416,17 +3702,29 @@ func (m *Model) setMode(mode Mode) {
 		// just left.
 		m.refreshSettingsPicker()
 	}
-	if mode == ModeAuto && !m.hasLiveGoal() {
-		// AUTO entry replaces Settings with the reviewed durable-goal form. Do
-		// not retain a hidden stale picker behind that new authority boundary.
-		m.settingsPickerState = nil
-		_ = m.openGoalForm("", false)
-	}
 }
 
 // openModelPicker shows the model picker overlay.
 func (m *Model) openModelPicker() {
 	if m.router == nil {
+		return
+	}
+	if len(m.ollamaModels) > 0 {
+		m.modelPickerState = newOllamaModelPickerState(m.ollamaModels, m.model, m.width, m.height, m.isDark)
+		if m.ollamaVersion != "" {
+			m.modelPickerState.List.Title = "Ollama " + m.ollamaVersion + " · models"
+		}
+		m.overlay = OverlayModelPicker
+		m.input.Blur()
+		return
+	}
+	if m.ollamaInventoryAttempted {
+		m.modelPickerState = newOllamaModelPickerState(nil, m.model, m.width, m.height, m.isDark)
+		if m.ollamaVersion != "" {
+			m.modelPickerState.List.Title = "Ollama " + m.ollamaVersion + " · models"
+		}
+		m.overlay = OverlayModelPicker
+		m.input.Blur()
 		return
 	}
 	catalog := m.router.ListModels()
@@ -3458,27 +3756,61 @@ func (m *Model) openModelPicker() {
 
 // selectModel switches to the given model and closes the picker.
 func (m *Model) selectModel(name string) {
-	old := m.model
-	if err := config.CheckModelMemorySafe(name); err != nil {
+	if descriptor, ok := m.ollamaModelDescriptor(name); ok {
+		if !descriptor.Selectable || !descriptor.Fit {
+			reason := descriptor.Reason
+			if reason == "" {
+				reason = "model is not admitted by the current Ollama policy"
+			}
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: reason})
+			m.closeModelPicker()
+			m.viewport.SetContent(m.renderEntries())
+			m.resumeFollow()
+			return
+		}
+		if descriptor.RequiresConsent && !descriptor.ConsentGranted {
+			m.openCloudConsent(descriptor)
+			return
+		}
+	} else if err := config.CheckModelMemorySafe(name); err != nil {
 		m.entries = append(m.entries, ChatEntry{Kind: "error", Content: err.Error()})
 		m.closeModelPicker()
 		m.viewport.SetContent(m.renderEntries())
 		m.resumeFollow()
 		return
 	}
+	m.switchSelectedModel(name)
+}
+
+// switchSelectedModel commits a model switch after all admission and consent
+// checks have succeeded. Ollama Cloud grants remain exact and session-scoped.
+func (m *Model) switchSelectedModel(name string) bool {
+	old := m.model
 	if m.modelManager != nil {
 		m.prepareModelSwitch()
 		if err := m.modelManager.SetCurrentModel(name); err != nil {
+			if descriptor, ok := m.ollamaModelDescriptor(name); ok && descriptor.ConsentGranted {
+				m.modelManager.RevokeOllamaCloudModel(name)
+				m.setCloudConsentProjection(name, false)
+			}
+			if m.overlay == OverlayCloudConsent && m.cloudConsentState != nil {
+				m.cloudConsentState.Error = fmt.Sprintf("Could not switch: %v", err)
+				return false
+			}
 			m.entries = append(m.entries, ChatEntry{
 				Kind:    "error",
 				Content: fmt.Sprintf("Failed to switch model: %v", err),
 			})
 			m.closeModelPicker()
-			return
+			return false
 		}
 	}
-	m.model = name
+	m.setCurrentModelProjection(name)
+	m.ollamaOffline = false
 	m.modelPinned = true
+	for index := range m.ollamaModels {
+		m.ollamaModels[index].Current = config.CanonicalModelName(m.ollamaModels[index].Name) == config.CanonicalModelName(name)
+	}
 	if m.logger != nil {
 		m.logger.Info("model switched", "from", old, "to", name)
 	}
@@ -3486,9 +3818,40 @@ func (m *Model) selectModel(name string) {
 		Kind:    "system",
 		Content: fmt.Sprintf("Model: %s", name),
 	})
+	m.cloudConsentState = nil
 	m.closeModelPicker()
 	m.viewport.SetContent(m.renderEntries())
 	m.resumeFollow()
+	return true
+}
+
+func (m *Model) ollamaModelDescriptor(name string) (OllamaModelDescriptor, bool) {
+	wanted := config.CanonicalModelName(name)
+	for _, descriptor := range m.ollamaModels {
+		if config.CanonicalModelName(descriptor.Name) == wanted {
+			return descriptor, true
+		}
+	}
+	return OllamaModelDescriptor{}, false
+}
+
+func (m *Model) validateModelAdmission(name string) error {
+	if descriptor, ok := m.ollamaModelDescriptor(name); ok {
+		if descriptor.Source == OllamaModelCloud && m.localOnly && !descriptor.ConsentGranted {
+			return fmt.Errorf("model %q requires Ollama Cloud confirmation for this conversation", name)
+		}
+		if descriptor.Selectable && descriptor.Fit {
+			return nil
+		}
+		if descriptor.Reason != "" {
+			return errors.New(descriptor.Reason)
+		}
+		return fmt.Errorf("model %q is not admitted by the current Ollama policy", name)
+	}
+	if m.ollamaInventoryAttempted {
+		return fmt.Errorf("model %q is absent from the current Ollama inventory", name)
+	}
+	return config.CheckModelMemorySafe(name)
 }
 
 // closeModelPicker dismisses the model picker overlay.

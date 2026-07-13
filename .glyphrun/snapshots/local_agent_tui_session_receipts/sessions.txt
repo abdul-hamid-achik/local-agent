@@ -1,11 +1,11 @@
                                                  LOCAL AGENT
                                 Local-first · Ollama · tool effects ask first
-                                             NORMAL · qwen3.5:2b
+                                            qwen3.5:2b · offline
                              enter send · / commands · ctrl+p settings · ? help
-                             shift+tab mode · ctrl+m model · @ files · # skills
+                             shift+tab mode · ctrl+o models · @ files · # skills
 
   ollama: no model selected
-  hint: is `ollama serve` running? is "qwen3.5:2b" pulled?
+  try: ollama serve · ollama pull qwen3.5:2b
 
 
 
@@ -36,4 +36,3 @@
 
 
 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
-❯ Ask, @mention files, or type /help

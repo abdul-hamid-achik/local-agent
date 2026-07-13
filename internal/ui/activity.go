@@ -112,6 +112,8 @@ func (m *Model) currentWorkingActivity() (workingActivity, bool) {
 		return workingActivity{
 			label: label, detail: m.model, elapsed: m.turnElapsed(), cancellable: true,
 		}, true
+	case m.ollamaInventoryCommitting:
+		return workingActivity{label: "Updating Ollama inventory", detail: "verifying model authority"}, true
 	default:
 		return workingActivity{}, false
 	}

@@ -578,7 +578,7 @@ func (a *Agent) cancelTrackedToolCalls(ctx context.Context, runtime executionRun
 	return nil
 }
 
-func (a *Agent) cancelCommittedDispatchIntent(ctx context.Context, runtime executionRuntime, tracked trackedToolExecution, call llm.ToolCall, out Output, cause error, startEmitted bool) error {
+func (a *Agent) cancelCommittedDispatchIntent(ctx context.Context, runtime executionRuntime, tracked trackedToolExecution, call llm.ToolCall, out Output, cause error, startEmitted bool, numCtx int) error {
 	if cause == nil {
 		cause = context.Canceled
 	}
@@ -595,7 +595,7 @@ func (a *Agent) cancelCommittedDispatchIntent(ctx context.Context, runtime execu
 			out.ToolCallResult(call.ID, call.Name, unknown, true, 0)
 			a.AppendMessage(llm.Message{Role: "tool", Content: unknown, ToolName: call.Name, ToolCallID: call.ID})
 		} else {
-			a.failedToolCall(call, out, unknown)
+			a.failedToolCall(call, out, unknown, numCtx)
 		}
 		return err
 	}
@@ -603,7 +603,7 @@ func (a *Agent) cancelCommittedDispatchIntent(ctx context.Context, runtime execu
 		out.ToolCallResult(call.ID, call.Name, result, true, 0)
 		a.AppendMessage(llm.Message{Role: "tool", Content: result, ToolName: call.Name, ToolCallID: call.ID})
 	} else {
-		a.failedToolCall(call, out, result)
+		a.failedToolCall(call, out, result, numCtx)
 	}
 	return nil
 }

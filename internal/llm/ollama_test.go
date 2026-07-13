@@ -92,6 +92,9 @@ func TestOllamaChatStreamPreservesToolWireShape(t *testing.T) {
 		if request.Options["num_predict"] != float64(23) {
 			t.Errorf("hard generation cap = %#v", request.Options["num_predict"])
 		}
+		if request.Options["num_ctx"] != float64(4096) {
+			t.Errorf("local context allocation = %#v", request.Options["num_ctx"])
+		}
 		_, _ = fmt.Fprintln(w, `{"message":{"role":"assistant","tool_calls":[{"id":"call-new","function":{"name":"read_file","arguments":{"path":"go.mod"}}}]},"done":true}`)
 	}))
 	defer server.Close()
@@ -122,6 +125,38 @@ func TestOllamaChatStreamPreservesToolWireShape(t *testing.T) {
 	}
 	if !got.Done || len(got.ToolCalls) != 1 || got.ToolCalls[0].ID != "call-new" || got.ToolCalls[0].Arguments["path"] != "go.mod" {
 		t.Fatalf("tool response = %#v", got)
+	}
+}
+
+func TestOllamaChatStreamOmitsZeroContextAllocation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" || r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request: %v", err)
+			return
+		}
+		var envelope map[string]json.RawMessage
+		if err := json.Unmarshal(body, &envelope); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		if _, exists := envelope["options"]; exists {
+			t.Errorf("empty local options leaked to cloud request: %s", body)
+		}
+		_, _ = fmt.Fprintln(w, `{"message":{"role":"assistant","content":"answer"},"done":true,"eval_count":1,"prompt_eval_count":2}`)
+	}))
+	defer server.Close()
+
+	client, err := NewOllamaClient(server.URL, "cloud-model", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.ChatStream(context.Background(), ChatOptions{}, func(StreamChunk) error { return nil }); err != nil {
+		t.Fatal(err)
 	}
 }
 

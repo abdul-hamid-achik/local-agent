@@ -46,9 +46,17 @@ func (m *Model) View() tea.View {
 		// copy supplies the one real cursor owned by this top-level view.
 		input := m.input
 		input.SetVirtualCursor(false)
-		composerY := strings.Count(content.String(), "\n")
-		content.WriteString(input.View())
-		viewCursor = offsetCursor(input.Cursor(), 0, composerY)
+		inputView := input.View()
+		if m.overlay != OverlayNone {
+			// An overlay owns focus, but retaining the composer's row count keeps
+			// modal placement stable. Hide the prompt and draft so neither can be
+			// mistaken for an active control behind a transparent wide modal.
+			content.WriteString(strings.Repeat("\n", max(0, lipgloss.Height(inputView)-1)))
+		} else {
+			composerY := strings.Count(content.String(), "\n")
+			content.WriteString(inputView)
+			viewCursor = offsetCursor(input.Cursor(), 0, composerY)
+		}
 	}
 
 	// Render overlays on top (centered modal) using overlayOnContent
@@ -69,6 +77,12 @@ func (m *Model) View() tea.View {
 			if m.modelPickerState != nil {
 				overlay = m.renderModelPicker()
 			}
+		case OverlayCloudConsent:
+			overlay = m.renderCloudConsent()
+		case OverlayModelDetails:
+			overlay = m.renderModelDetails()
+		case OverlayModelPull:
+			overlay, localCursor = m.renderModelPull()
 		case OverlayPlanForm:
 			if m.planFormState != nil {
 				overlay, localCursor = m.renderPlanFormView()
@@ -364,7 +378,10 @@ func (m *Model) renderStatusLine() string {
 	if paneW >= 40 {
 		modeLabel = "[ " + modeLabel + " ]"
 	}
-	parts := []string{modeStyle.Render(modeLabel)}
+	parts := make([]string, 0, 7)
+	if m.mode != ModeNormal {
+		parts = append(parts, modeStyle.Render(modeLabel))
+	}
 	if !conversationStarted && noticeNeedsRecovery {
 		// Startup and recovery notices can push the empty-state hints out of a
 		// minimum-height viewport. Keep the Settings recovery path in the fixed
@@ -416,9 +433,15 @@ func (m *Model) renderStatusLine() string {
 	if lipgloss.Width(line) > paneW {
 		// The remaining two semantic parts use bounded short labels, so this is
 		// only a final guard for unusually wide mode/profile glyphs.
-		plain := cfg.Label
+		plain := ""
+		if m.mode != ModeNormal {
+			plain = cfg.Label
+		}
 		if len(m.failedServers) > 0 {
-			plain += fmt.Sprintf(" · ⚠ %d failed", len(m.failedServers))
+			if plain != "" {
+				plain += " · "
+			}
+			plain += fmt.Sprintf("⚠ %d failed", len(m.failedServers))
 		}
 		return m.styles.StatusText.Render(truncateDisplay(" "+plain, paneW))
 	}
@@ -448,7 +471,10 @@ func (m *Model) renderGoalFooterStatus(summary GoalSummary, paneW int) string {
 	if paneW >= 48 {
 		modeLabel = "[ " + modeLabel + " ]"
 	}
-	modePart := modeStyle.Render(modeLabel)
+	modePart := ""
+	if m.mode != ModeNormal {
+		modePart = modeStyle.Render(modeLabel)
+	}
 	separator := m.styles.StatusText.Render(" · ")
 
 	type metadataPart struct {
@@ -483,7 +509,10 @@ func (m *Model) renderGoalFooterStatus(summary GoalSummary, paneW int) string {
 
 	const minimumGoalWidth = 12
 	selected := make([]string, 0, len(candidates))
-	fixedWidth := lipgloss.Width(modePart) + lipgloss.Width(separator) // mode-to-goal separator
+	fixedWidth := lipgloss.Width(modePart)
+	if modePart != "" {
+		fixedWidth += lipgloss.Width(separator)
+	}
 	for _, candidate := range candidates {
 		cost := lipgloss.Width(separator) + lipgloss.Width(candidate.view)
 		if available-fixedWidth-cost < minimumGoalWidth {
@@ -494,7 +523,11 @@ func (m *Model) renderGoalFooterStatus(summary GoalSummary, paneW int) string {
 	}
 	goalWidth := max(1, available-fixedWidth)
 	goalPart := RenderGoalStatusLine(summary, goalWidth, m.isDark)
-	parts := []string{modePart, goalPart}
+	parts := make([]string, 0, 2+len(selected))
+	if modePart != "" {
+		parts = append(parts, modePart)
+	}
+	parts = append(parts, goalPart)
 	parts = append(parts, selected...)
 	line := " " + strings.Join(parts, separator)
 	return truncateDisplay(line, paneW)
@@ -737,9 +770,14 @@ func (m *Model) renderWelcome(b *strings.Builder) {
 	if m.initializing {
 		infoParts = append(infoParts, "Starting local services…")
 	} else {
-		infoParts = append(infoParts, m.modeConfigs[m.mode].Label)
+		if m.mode != ModeNormal {
+			infoParts = append(infoParts, m.modeConfigs[m.mode].Label)
+		}
 		if m.model != "" {
 			infoParts = append(infoParts, m.model)
+		}
+		if m.ollamaOffline {
+			infoParts = append(infoParts, "offline")
 		}
 	}
 	if len(infoParts) > 0 {
@@ -770,7 +808,7 @@ func (m *Model) renderWelcome(b *strings.Builder) {
 		writeLine(m.styles.StatusText, "/ commands · @ files · # skills")
 	} else {
 		writeLine(m.styles.WelcomeHint, "enter send · / commands · ctrl+p settings · ? help")
-		writeLine(m.styles.StatusText, "shift+tab mode · ctrl+m model · @ files · # skills")
+		writeLine(m.styles.StatusText, "shift+tab mode · ctrl+o models · @ files · # skills")
 	}
 
 	// Center the welcome content horizontally in the available viewport width.

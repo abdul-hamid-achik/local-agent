@@ -2,9 +2,10 @@ version: 1
 name: local_agent_tui_modes
 
 intent: |
-  NORMAL remains the interactive approval-gated default, PLAN opens a
-  read-only planning surface, and AUTO deliberately enters a durable Goal
-  Runtime instead of behaving like an unbounded build toggle.
+  Normal remains the quiet interactive default, Shift+Tab only changes
+  authority, PLAN keeps rejected durable-goal saves inside their review,
+  PLAN opens a read-only planning surface, and explicit `/goal <time>
+  <prompt>` opens a bounded durable-goal review.
 
 target:
   cmd: ["./bin/local-agent"]
@@ -28,17 +29,46 @@ preconditions:
 steps:
   - wait:
       screen:
-        contains: "hint: is `ollama serve` running?"
+        contains: "try: ollama serve"
       timeoutMs: 5000
   - wait:
       screen:
-        contains: "NORMAL · qwen3.5:2b"
+        contains: "qwen3.5:2b"
       timeoutMs: 3000
+  - wait:
+      screen:
+        notContains: "NORMAL ·"
+      timeoutMs: 2000
   - snapshot: normal_default
   - press: "shift+tab"
   - wait:
       screen:
         contains: "PLAN · qwen3.5:2b"
+      timeoutMs: 2000
+  - type: "/goal 30m ship a bounded durable migration"
+  - wait:
+      screen:
+        notContains: "Commands"
+      timeoutMs: 2000
+  - press: "enter"
+  - wait:
+      screen:
+        contains: "Save goal"
+      timeoutMs: 2000
+  - press: "enter"
+  - wait:
+      screen:
+        contains: "PLAN is read-only"
+      timeoutMs: 2000
+  - wait:
+      screen:
+        contains: "Use AUTO"
+      timeoutMs: 2000
+  - snapshot: plan_goal_rejected_inline
+  - press: "esc"
+  - wait:
+      screen:
+        notContains: "Save goal"
       timeoutMs: 2000
   - type: "design a safe migration"
   - press: "enter"
@@ -55,29 +85,28 @@ steps:
   - press: "shift+tab"
   - wait:
       screen:
-        contains: "Goal · 1/6"
-      timeoutMs: 2000
-  - wait:
-      screen:
-        contains: "What outcome should persist?"
-      timeoutMs: 2000
-  - snapshot: auto_goal_entry
-  - press: "esc"
-  - wait:
-      screen:
-        notContains: "Goal · 1/6"
-      timeoutMs: 2000
-  - wait:
-      screen:
         contains: "AUTO · qwen3.5:2b"
       timeoutMs: 2000
-  - type: "ship a bounded durable migration"
+  - wait:
+      screen:
+        notContains: "Goal ·"
+      timeoutMs: 2000
+  - snapshot: auto_mode
+  - type: "/goal 30m ship a bounded durable migration"
+  - wait:
+      screen:
+        notContains: "Commands"
+      timeoutMs: 2000
   - press: "enter"
   - wait:
       screen:
         contains: "ship a bounded durable migration"
       timeoutMs: 2000
-  - snapshot: auto_prefilled_goal
+  - wait:
+      screen:
+        contains: "Save goal"
+      timeoutMs: 2000
+  - snapshot: explicit_goal_review
   - press: "ctrl+c"
   - wait:
       process:
@@ -86,7 +115,7 @@ steps:
 
 outcomes:
   - id: normal_is_interactive_default
-    description: startup names NORMAL as the approval-gated interactive authority
+    description: startup keeps Normal visually quiet while preserving the interactive authority
     verify:
       snapshot:
         name: normal_default
@@ -97,17 +126,23 @@ outcomes:
       snapshot:
         name: plan_read_only
         mode: text
-  - id: auto_is_deliberate_goal_entry
-    description: cycling to AUTO opens the durable objective and budget form immediately
+  - id: plan_goal_rejection_stays_in_review
+    description: PLAN rejects a durable-goal save inline without dismissing or obscuring its reviewed form
     verify:
       snapshot:
-        name: auto_goal_entry
+        name: plan_goal_rejected_inline
         mode: text
-  - id: auto_submission_prefills_durable_objective
-    description: cancelling then submitting in AUTO returns to a prefilled goal form without provider dispatch
+  - id: auto_mode_does_not_open_goal_ui
+    description: cycling to AUTO changes authority without opening or creating a goal
     verify:
       snapshot:
-        name: auto_prefilled_goal
+        name: auto_mode
+        mode: text
+  - id: explicit_goal_command_opens_bounded_review
+    description: "`/goal <time> <prompt>` opens a prefilled review with only the requested time cap"
+    verify:
+      snapshot:
+        name: explicit_goal_review
         mode: text
   - id: modes_flow_quits_cleanly
     description: ctrl+c exits cleanly from the AUTO goal form

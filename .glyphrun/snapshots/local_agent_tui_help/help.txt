@@ -4,8 +4,8 @@
                              │ Keyboard Shortcuts                                         │
                              │   enter             Send message                           │
                              │   shift+enter       New line                               │
-                             │   esc               Cancel / close overlay                 │
-                             │   ctrl+c            Quit                                   │
+  ollama: no model selected  │   esc               Cancel / close overlay                 │
+  try: ollama serve · ollama │   ctrl+c            Quit                                   │
                              │   ctrl+l            Clear screen                           │
                              │   ctrl+n            New conversation                       │
                              │   ?                 Show help (empty input)                │
@@ -17,7 +17,7 @@
                              │   ctrl+d            Half page down                         │
                              │   end               Latest output (empty input)            │
                              │   shift+tab         Cycle mode (NORMAL/PLAN/AUTO)          │
-                             │   ctrl+m            Quick model switch                     │
+                             │   ctrl+o            Open Ollama models                     │
                              │   ctrl+p            Open settings                          │
                              │   ↑                 Previous input (empty input)           │
                              │   ↓                 Next input (history active)            │
@@ -31,5 +31,5 @@
                              │   @file             Attach file or agent                   │
                              │   #skill            Activate skill                         │
                              │   /cmd              Run slash command                      │
-                             │ esc/q close · ↓ more                                       │
+─────────────────────────────│ esc/q close · ↓ more                                       │────────────────────────────
                              ╰────────────────────────────────────────────────────────────╯

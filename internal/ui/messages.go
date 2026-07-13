@@ -53,6 +53,11 @@ type SystemMessageMsg struct {
 	Msg string
 }
 
+// ContextCompactedMsg invalidates the previous provider occupancy snapshot.
+// The retained history is smaller, but its next exact prompt size is not known
+// until Ollama reports the following request.
+type ContextCompactedMsg struct{}
+
 // AgentDoneMsg signals the agent loop has completed.
 type AgentDoneMsg struct {
 	TurnID string
@@ -71,17 +76,21 @@ type FailedServer struct {
 
 // InitCompleteMsg signals startup is done.
 type InitCompleteMsg struct {
-	Model            string
-	ModelList        []string
-	AgentProfile     string
-	AgentList        []string
-	ToolCount        int
-	ServerCount      int
-	NumCtx           int
-	FailedServers    []FailedServer
-	ICEEnabled       bool
-	ICEConversations int
-	ICESessionID     string
+	Model                    string
+	ModelList                []string
+	OllamaModels             []OllamaModelDescriptor
+	OllamaVersion            string
+	LocalOnly                bool
+	OllamaInventoryAttempted bool
+	AgentProfile             string
+	AgentList                []string
+	ToolCount                int
+	ServerCount              int
+	NumCtx                   int
+	FailedServers            []FailedServer
+	ICEEnabled               bool
+	ICEConversations         int
+	ICESessionID             string
 }
 
 // CommandResultMsg carries the result of a slash command for display.

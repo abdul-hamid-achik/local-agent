@@ -29,6 +29,7 @@ type Engine struct {
 	store      *Store
 	memStore   *memory.Store
 	budgetCfg  BudgetConfig
+	context    contextWindowProvider
 	sessionID  string
 	projectID  string
 	turnIndex  int
@@ -39,6 +40,10 @@ type Engine struct {
 	autoWG     sync.WaitGroup
 	lifecycle  context.Context
 	close      context.CancelFunc
+}
+
+type contextWindowProvider interface {
+	NumCtx() int
 }
 
 // NewEngine creates an ICE engine. Returns an error if the store path
@@ -69,7 +74,7 @@ func NewEngine(client llm.Client, memStore *memory.Store, cfg EngineConfig) (*En
 		cancel()
 		return nil, err
 	}
-	return &Engine{
+	engine := &Engine{
 		embedder:   NewEmbedder(client, embedModel),
 		store:      store,
 		memStore:   memStore,
@@ -79,23 +84,37 @@ func NewEngine(client llm.Client, memStore *memory.Store, cfg EngineConfig) (*En
 		autoMemory: &AutoMemory{client: client, memStore: memStore},
 		lifecycle:  lifecycle,
 		close:      cancel,
-	}, nil
+	}
+	if provider, ok := client.(contextWindowProvider); ok {
+		engine.context = provider
+	}
+	return engine, nil
 }
 
 // AssembleContext retrieves relevant past context for the given query.
 func (e *Engine) AssembleContext(ctx context.Context, query string) (string, error) {
 	e.mu.Lock()
 	memStore := e.memStore
+	budgetCfg := e.activeBudgetConfigLocked()
 	e.mu.Unlock()
 	a := &Assembler{
 		embedder:  e.embedder,
 		convStore: e.store,
 		memStore:  memStore,
-		budgetCfg: e.budgetCfg,
+		budgetCfg: budgetCfg,
 		sessionID: e.sessionID,
 		projectID: e.projectID,
 	}
 	return a.Assemble(ctx, query)
+}
+
+func (e *Engine) activeBudgetConfigLocked() BudgetConfig {
+	if e.context != nil {
+		if numCtx := e.context.NumCtx(); numCtx > 0 {
+			return DefaultBudgetConfig(numCtx)
+		}
+	}
+	return e.budgetCfg
 }
 
 // SetMemoryStore swaps the project-scoped store after an explicit legacy

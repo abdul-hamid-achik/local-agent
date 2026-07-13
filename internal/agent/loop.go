@@ -18,9 +18,33 @@ import (
 const maxToolCallsPerResponse = 64
 
 var (
-	ErrTurnEvalBudgetExhausted = errors.New("turn evaluation-token budget exhausted")
-	ErrMalformedToolLoop       = errors.New("model repeatedly returned malformed tool requests")
+	ErrTurnEvalBudgetExhausted   = errors.New("turn evaluation-token budget exhausted")
+	ErrTurnContextBudgetExceeded = errors.New("turn context budget exceeded")
+	ErrMalformedToolLoop         = errors.New("model repeatedly returned malformed tool requests")
 )
+
+// TurnContextBudgetError reports that a bounded turn cannot safely make its
+// next provider request without exceeding the active model's context window.
+// Bounded turns may not launch an unaccounted summarization generation, so the
+// host must compact or replace history before retrying.
+type TurnContextBudgetError struct {
+	EstimatedPromptTokens int
+	ContextWindowTokens   int
+}
+
+func (e *TurnContextBudgetError) Error() string {
+	if e == nil {
+		return ErrTurnContextBudgetExceeded.Error()
+	}
+	return fmt.Sprintf(
+		"%v: estimated prompt uses %d of %d tokens; compact history or start a new conversation, then retry the bounded turn",
+		ErrTurnContextBudgetExceeded, e.EstimatedPromptTokens, e.ContextWindowTokens,
+	)
+}
+
+func (e *TurnContextBudgetError) Unwrap() error {
+	return ErrTurnContextBudgetExceeded
+}
 
 // TurnLimits are hard, per-turn provider limits supplied by a host scheduler.
 // Zero leaves a dimension unlimited. Goal Runtime passes only its remaining
@@ -125,6 +149,10 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 		a.turnRunning.Store(false)
 		a.turnMu.Unlock()
 	}()
+	// A provider such as ModelManager may expose a different context window for
+	// each selected model. Resolve it exactly once so every budget decision in
+	// this turn stays coherent even if selection changes concurrently.
+	turnNumCtx := a.NumCtx()
 	execRuntime, err := a.executionRuntime(ctx)
 	if err != nil {
 		out.Error(err.Error())
@@ -176,7 +204,7 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 		}
 	}
 
-	system := buildSystemPromptForModelBudgetContext(ctx, a.modePrefix, tools, a.skillContent, a.loadedCtx, a.memoryStore, iceContext, a.workDir, a.ignoreContent, a.llmClient.Model(), a.numCtx)
+	system := buildSystemPromptForModelBudgetContext(ctx, a.modePrefix, tools, a.skillContent, a.loadedCtx, a.memoryStore, iceContext, a.workDir, a.ignoreContent, a.llmClient.Model(), turnNumCtx)
 
 	const maxRetries = 2
 	var lastPromptTokens int
@@ -192,18 +220,31 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 	lg := a.logTurn(turnID)
 	turnStart := time.Now()
 	if lg != nil {
-		lg.Info("turn start", "model", a.llmClient.Model(), "tools", len(tools), "max_iters", maxIters)
+		lg.Info("turn start", "model", a.llmClient.Model(), "num_ctx", turnNumCtx, "tools", len(tools), "max_iters", maxIters)
 	}
 
 	// Compact before the next provider request as well as after responses. This
 	// protects direct-answer conversations, which may never enter the tool loop,
-	// from submitting an already oversized history to Ollama.
-	if estimated := a.estimatePromptTokens(system, tools); !limits.bounded() && a.shouldCompact(estimated) {
-		if lg != nil {
-			lg.Info("compaction", "phase", "before_request", "prompt_tokens", estimated, "num_ctx", a.numCtx)
+	// from submitting an already oversized history to Ollama. Bounded turns may
+	// not spend an untracked provider generation on compaction, so fail before the
+	// first provider request with an explicit recovery path instead.
+	if estimated := a.estimatePromptTokens(system, tools); shouldCompactForContext(estimated, turnNumCtx) {
+		if limits.bounded() {
+			err := &TurnContextBudgetError{
+				EstimatedPromptTokens: estimated,
+				ContextWindowTokens:   turnNumCtx,
+			}
+			if lg != nil {
+				lg.Warn("context admission denied", "prompt_tokens", estimated, "num_ctx", turnNumCtx, "bounded", true)
+			}
+			out.Error(err.Error())
+			return err
 		}
-		if a.compact(ctx, out) {
-			system = buildSystemPromptForModelBudgetContext(ctx, a.modePrefix, tools, a.skillContent, a.loadedCtx, a.memoryStore, iceContext, a.workDir, a.ignoreContent, a.llmClient.Model(), a.numCtx)
+		if lg != nil {
+			lg.Info("compaction", "phase", "before_request", "prompt_tokens", estimated, "num_ctx", turnNumCtx)
+		}
+		if a.compactForContext(ctx, out, turnNumCtx) {
+			system = buildSystemPromptForModelBudgetContext(ctx, a.modePrefix, tools, a.skillContent, a.loadedCtx, a.memoryStore, iceContext, a.workDir, a.ignoreContent, a.llmClient.Model(), turnNumCtx)
 		}
 	}
 
@@ -241,10 +282,11 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 		a.mu.RUnlock()
 
 		err := a.llmClient.ChatStream(ctx, llm.ChatOptions{
-			Messages:      msgsSnapshot,
-			Tools:         tools,
-			System:        system,
-			MaxEvalTokens: requestEvalLimit,
+			Messages:        msgsSnapshot,
+			Tools:           tools,
+			System:          system,
+			MaxEvalTokens:   requestEvalLimit,
+			ExpectedContext: turnNumCtx,
 		}, func(chunk llm.StreamChunk) error {
 			select {
 			case <-ctx.Done():
@@ -317,7 +359,7 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 			// Show error and provide a fallback response
 			out.Error(fmt.Sprintf("LLM error: %v", err))
 			// Send a system message explaining the error
-			out.SystemMessage(fmt.Sprintf("⚠️ Model response failed: %v\n\nYou can try:\n- Checking if Ollama is running (`ollama ps`)\n- Switching to a different model (ctrl+m)\n- Reducing context size\n\nTool results are still available above.", err))
+			out.SystemMessage(fmt.Sprintf("⚠️ Model response failed: %v\n\nYou can try:\n- Checking if Ollama is running (`ollama ps`)\n- Switching to a different model (ctrl+o)\n- Reducing context size\n\nTool results are still available above.", err))
 			return fmt.Errorf("LLM response: %w", err)
 		}
 		if !doneSeen {
@@ -415,11 +457,11 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 			if estimatedPromptTokens < lastPromptTokens {
 				estimatedPromptTokens = lastPromptTokens
 			}
-			if !limits.bounded() && a.shouldCompact(estimatedPromptTokens) {
+			if !limits.bounded() && shouldCompactForContext(estimatedPromptTokens, turnNumCtx) {
 				if lg != nil {
-					lg.Info("compaction", "phase", "direct_response", "prompt_tokens", estimatedPromptTokens, "num_ctx", a.numCtx)
+					lg.Info("compaction", "phase", "direct_response", "prompt_tokens", estimatedPromptTokens, "num_ctx", turnNumCtx)
 				}
-				a.compact(ctx, out)
+				a.compactForContext(ctx, out, turnNumCtx)
 			}
 			if err := ctx.Err(); err != nil {
 				return err
@@ -496,7 +538,7 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 				if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventFailed, executionPkg.ApprovalNotApplicable, reason, "effective argument hashing failed")); err != nil {
 					return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
 				}
-				a.failedToolCall(tc, out, reason)
+				a.failedToolCall(tc, out, reason, turnNumCtx)
 				continue
 			}
 			tracked.effectiveHash = effectiveHash
@@ -505,7 +547,7 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 				if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventDenied, executionPkg.ApprovalDenied, reason, "blocked by pre-tool hook")); err != nil {
 					return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
 				}
-				a.failedToolCall(tc, out, reason)
+				a.failedToolCall(tc, out, reason, turnNumCtx)
 				if ctxErr := ctx.Err(); ctxErr != nil {
 					if ledgerErr := a.cancelTrackedToolCalls(ctx, execRuntime, trackedExecutions[toolIndex+1:], toolCalls[toolIndex+1:], out, ctxErr); ledgerErr != nil {
 						return ledgerErr
@@ -527,7 +569,7 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 				if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventFailed, executionPkg.ApprovalNotApplicable, result, "preflight rejected request before dispatch")); err != nil {
 					return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
 				}
-				a.failedToolCall(tc, out, result)
+				a.failedToolCall(tc, out, result, turnNumCtx)
 				continue
 			}
 
@@ -579,7 +621,7 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 				return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
 			}
 			if ctxErr := ctx.Err(); ctxErr != nil {
-				if err := a.cancelCommittedDispatchIntent(ctx, execRuntime, *tracked, tc, out, ctxErr, false); err != nil {
+				if err := a.cancelCommittedDispatchIntent(ctx, execRuntime, *tracked, tc, out, ctxErr, false, turnNumCtx); err != nil {
 					a.cancelUndispatchedToolCalls(toolCalls[toolIndex+1:], out, err)
 					return err
 				}
@@ -598,7 +640,7 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 			}
 			out.ToolCallStart(tc.ID, tc.Name, tc.Arguments)
 			if ctxErr := ctx.Err(); ctxErr != nil {
-				if err := a.cancelCommittedDispatchIntent(ctx, execRuntime, *tracked, tc, out, ctxErr, true); err != nil {
+				if err := a.cancelCommittedDispatchIntent(ctx, execRuntime, *tracked, tc, out, ctxErr, true, turnNumCtx); err != nil {
 					a.cancelUndispatchedToolCalls(toolCalls[toolIndex+1:], out, err)
 					return err
 				}
@@ -659,14 +701,14 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 			if err := appendExecutionEvent(ctx, execRuntime, executionEvent(*tracked, terminalType, executionPkg.ApprovalNotApplicable, result, terminalDetail)); err != nil {
 				unresolved := a.unresolvedFor(*tracked, executionPkg.EventStarted, err)
 				a.latchUnresolvedExecution(unresolved)
-				unknownResult := capToolResultForContext(terminalLedgerFailureReceipt(tc.Name, err), a.numCtx)
+				unknownResult := capToolResultForContext(terminalLedgerFailureReceipt(tc.Name, err), turnNumCtx)
 				out.ToolCallResult(tc.ID, tc.Name, unknownResult, true, duration)
 				a.AppendMessage(llm.Message{Role: "tool", Content: unknownResult, ToolName: tc.Name, ToolCallID: tc.ID})
 				a.cancelUndispatchedToolCalls(toolCalls[toolIndex+1:], out, unresolved)
 				return unresolved
 			}
 
-			result = capToolResultForContext(result, a.numCtx)
+			result = capToolResultForContext(result, turnNumCtx)
 			if lg != nil {
 				lg.Debug("tool", "name", tc.Name, "kind", kind, "ms", duration.Milliseconds(), "error", isErr)
 			}
@@ -711,13 +753,24 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 		if estimatedPromptTokens < lastPromptTokens {
 			estimatedPromptTokens = lastPromptTokens
 		}
-		if !limits.bounded() && a.shouldCompact(estimatedPromptTokens) {
-			if lg != nil {
-				lg.Info("compaction", "iter", i, "prompt_tokens", estimatedPromptTokens, "num_ctx", a.numCtx)
+		if shouldCompactForContext(estimatedPromptTokens, turnNumCtx) {
+			if limits.bounded() {
+				err := &TurnContextBudgetError{
+					EstimatedPromptTokens: estimatedPromptTokens,
+					ContextWindowTokens:   turnNumCtx,
+				}
+				if lg != nil {
+					lg.Warn("context admission denied", "phase", "after_tools", "iter", i, "prompt_tokens", estimatedPromptTokens, "num_ctx", turnNumCtx, "bounded", true)
+				}
+				out.Error(err.Error())
+				return err
 			}
-			if a.compact(ctx, out) {
+			if lg != nil {
+				lg.Info("compaction", "iter", i, "prompt_tokens", estimatedPromptTokens, "num_ctx", turnNumCtx)
+			}
+			if a.compactForContext(ctx, out, turnNumCtx) {
 				// Rebuild system prompt after compaction (memory may have changed).
-				system = buildSystemPromptForModelBudgetContext(ctx, a.modePrefix, tools, a.skillContent, a.loadedCtx, a.memoryStore, iceContext, a.workDir, a.ignoreContent, a.llmClient.Model(), a.numCtx)
+				system = buildSystemPromptForModelBudgetContext(ctx, a.modePrefix, tools, a.skillContent, a.loadedCtx, a.memoryStore, iceContext, a.workDir, a.ignoreContent, a.llmClient.Model(), turnNumCtx)
 			}
 		}
 
@@ -920,8 +973,8 @@ func (a *Agent) deniedToolCall(tc llm.ToolCall, out Output, reason string) {
 	})
 }
 
-func (a *Agent) failedToolCall(tc llm.ToolCall, out Output, reason string) {
-	result := capToolResultForContext(reason, a.numCtx)
+func (a *Agent) failedToolCall(tc llm.ToolCall, out Output, reason string, numCtx int) {
+	result := capToolResultForContext(reason, numCtx)
 	out.ToolCallStart(tc.ID, tc.Name, tc.Arguments)
 	out.ToolCallResult(tc.ID, tc.Name, result, true, 0)
 	a.AppendMessage(llm.Message{

@@ -1,0 +1,17 @@
+{
+  "name": "local-agent-site",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "site": "vitepress dev docs --host 127.0.0.1",
+    "site:build": "vitepress build docs",
+    "site:preview": "vitepress preview docs --host 127.0.0.1"
+  },
+  "devDependencies": {
+    "vitepress": "1.6.4",
+    "vue": "3.5.39"
+  }
+}

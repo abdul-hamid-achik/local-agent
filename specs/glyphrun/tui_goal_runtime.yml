@@ -32,23 +32,15 @@ steps:
       timeoutMs: 5000
   - wait:
       screen:
-        contains: "hint: is `ollama serve` running?"
+        contains: "try: ollama serve"
       timeoutMs: 5000
-  - type: "/goal new Ship a polished goal UI"
-  - wait:
-      screen:
-        contains: "goal new Ship a polished goal UI"
-      timeoutMs: 2000
-  - press: "esc"
-  - wait:
-      screen:
-        notContains: "Commands"
-      timeoutMs: 2000
+  - type: "/goal new"
   - press: "enter"
   - wait:
       screen:
         contains: "Define done, then bound the run."
       timeoutMs: 2000
+  - type: "Ship a polished goal UI"
   - wait:
       screen:
         contains: "Ship a polished goal UI"
@@ -66,6 +58,10 @@ steps:
   - wait:
       screen:
         contains: "Acceptance criteria"
+      timeoutMs: 2000
+  - wait:
+      idle:
+        quietForMs: 50
       timeoutMs: 2000
   - snapshot: goal_form_minimum
   - resize:
@@ -95,11 +91,6 @@ steps:
   - type: "/goal show"
   - wait:
       screen:
-        contains: "Filter › goal show"
-      timeoutMs: 2000
-  - press: "esc"
-  - wait:
-      screen:
         notContains: "Commands"
       timeoutMs: 2000
   - press: "enter"
@@ -118,11 +109,6 @@ steps:
         notContains: "Goal inspector"
       timeoutMs: 2000
   - type: "/goal budget"
-  - wait:
-      screen:
-        contains: "Filter › goal budget"
-      timeoutMs: 2000
-  - press: "esc"
   - wait:
       screen:
         notContains: "Commands"
@@ -160,11 +146,6 @@ steps:
   - type: "/goal drop"
   - wait:
       screen:
-        contains: "Filter › goal drop"
-      timeoutMs: 2000
-  - press: "esc"
-  - wait:
-      screen:
         notContains: "Commands"
       timeoutMs: 2000
   - press: "enter"
@@ -173,11 +154,6 @@ steps:
         contains: "Goal dropped without claiming completion."
       timeoutMs: 2000
   - type: "/goal show"
-  - wait:
-      screen:
-        contains: "Filter › goal show"
-      timeoutMs: 2000
-  - press: "esc"
   - wait:
       screen:
         notContains: "Commands"

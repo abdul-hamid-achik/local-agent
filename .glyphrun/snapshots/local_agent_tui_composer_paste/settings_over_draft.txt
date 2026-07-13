@@ -1,14 +1,14 @@
                                        LOCAL AGENT
                       Local-first · Ollama · tool effects ask first
-                                   NORMAL · qwen3.5:2b
+                                  qwen3.5:2b · offline
                    enter send · / commands · ctrl+p settings · ? help
-                   shift+tab mode · ctrl+m model · @ files · # skills
+                   shift+tab mode · ctrl+o models · @ files · # skills
 
-               ╭──────────────────────────────────────────────────────────╮
-               │ Settings                                                 │
+  ollama: no mo╭──────────────────────────────────────────────────────────╮
+  try: ollama s│ Settings                                                 │
                │                                                          │
                │ │ Model · Pinned · qwen3.5:2b                            │
-               │ │ Choose an installed local model                        │
+               │ │ Choose an installed local model or Ollama Cloud model  │
                │   Agent profile · Default                                │
                │   Change prompt, skills, model, and MCP scope            │
                │   Mode · NORMAL                                          │
@@ -27,5 +27,3 @@
 
 
 ─────────────────────────────────────────────────────────────────────────────────────────
-❯ Review the first receipt.
-│ Keep the second line while I check Settings.

@@ -20,4 +20,3 @@
        │   Unavailable · Only an active goal can be paused.             │
        │ esc close · ←/→ action · enter select · j/k scroll             │
        ╰────────────────────────────────────────────────────────────────╯
-❯ Ask, @mention files, or type /help

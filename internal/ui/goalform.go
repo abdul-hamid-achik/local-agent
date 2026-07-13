@@ -434,12 +434,25 @@ func (f *GoalForm) firstEditableField() GoalFormField {
 	return GoalFieldObjective
 }
 
-// Error returns the most recent inline validation message.
+// Error returns the most recent inline validation or parent-owned semantic
+// message.
 func (f *GoalForm) Error() string {
 	if f == nil {
 		return ""
 	}
 	return f.errorText
+}
+
+// SetError presents a parent-owned semantic error without changing the
+// user's values, focus, or selected action. The parent remains responsible
+// for deciding whether an action is authorized; GoalForm only renders the
+// feedback beside the action that was rejected.
+func (f *GoalForm) SetError(message string) {
+	if f == nil {
+		return
+	}
+	f.errorText = strings.TrimSpace(message)
+	f.invalidate()
 }
 
 // Values validates and returns the typed form payload.
@@ -694,6 +707,10 @@ func (f *GoalForm) renderCompactView() (string, *tea.Cursor) {
 	if f.draftFromPrompt && !f.budgetOnly {
 		b.WriteString(f.styles.OverlayDim.Render(truncateDisplay("Prompt draft · review", width)))
 		b.WriteString("\n")
+		if f.active == GoalFieldActions {
+			b.WriteString(f.renderCompactGoalSummary(width))
+			b.WriteString("\n")
+		}
 	}
 	if f.budgetOnly {
 		b.WriteString(f.renderLockedDefinitionContext(width))
@@ -711,6 +728,51 @@ func (f *GoalForm) renderCompactView() (string, *tea.Cursor) {
 		b.WriteString(f.styles.ErrorText.Render(truncateDisplay("! "+f.errorText, max(1, width-2))))
 	}
 	return f.renderFrame(b.String(), f.renderFooter(width)), pickerFrameCursor(cursor)
+}
+
+func (f *GoalForm) renderCompactGoalSummary(width int) string {
+	lineWidth := max(1, width-2)
+	objective := strings.TrimSpace(f.objective.Value())
+	if objective == "" {
+		objective = "untitled goal"
+	}
+	criteriaValues := goalAcceptanceCriteria(f.acceptance.Value())
+	criteria := len(criteriaValues)
+	criteriaLabel := "criteria"
+	if criteria == 1 {
+		criteriaLabel = "criterion"
+	}
+	limits := make([]string, 0, 3)
+	if value := strings.TrimSpace(f.turns.Value()); value != "" {
+		limits = append(limits, value+" turns")
+	}
+	if value := strings.TrimSpace(f.tokens.Value()); value != "" {
+		limits = append(limits, value+" tokens")
+	}
+	if value := strings.TrimSpace(f.time.Value()); value != "" {
+		limits = append(limits, value)
+	}
+	if len(limits) == 1 && strings.TrimSpace(f.time.Value()) != "" {
+		limits = append(limits, "turns/tokens unlimited")
+	}
+	definition := f.styles.OverlayDim.Render(truncateDisplay(objective, lineWidth))
+	budget := fmt.Sprintf("%d %s", criteria, criteriaLabel)
+	if len(limits) > 0 {
+		budget += " · " + strings.Join(limits, " · ")
+	}
+	lines := []string{definition, f.styles.OverlayDim.Render(truncateDisplay(budget, lineWidth))}
+	if f.height >= 16 && len(criteriaValues) > 0 {
+		lines = append(lines, f.styles.OverlayDim.Render(truncateDisplay("Proof · "+criteriaValues[0], lineWidth)))
+		if len(criteriaValues) > 1 {
+			remaining := len(criteriaValues) - 1
+			label := "criterion"
+			if remaining != 1 {
+				label = "criteria"
+			}
+			lines = append(lines, f.styles.OverlayDim.Render(truncateDisplay(fmt.Sprintf("+%d more %s", remaining, label), lineWidth)))
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (f *GoalForm) renderFullView() (string, *tea.Cursor) {

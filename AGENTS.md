@@ -2,6 +2,17 @@
 
 Global instructions for the local-agent project.
 
+## Public Website Boundary
+
+- `docs/` is the source for the public website at [local-agent.dev](https://local-agent.dev). Treat every file under it as intentionally publishable.
+- Keep `docs/` as a standalone product and documentation website. Add only landing-page copy, public user documentation, or public static assets.
+- Do not create ADRs under `docs/` or anywhere else in this repository. Store project ADRs in `~/notes/projects/local-agent/adrs/`; `docs/architecture.md` may summarize only the stable public architecture contract.
+- Never link the public website to private Notes paths or assume those files ship with the repository.
+- Never place handoffs, scratch notes, implementation plans, agent transcripts, generated diagnostics, test artifacts, private paths, credentials, or internal-only operational material in `docs/`.
+- Put temporary or internal material outside `docs/` in an appropriate ignored workspace location. If a document is not meant to be public, stop and choose another location.
+- Keep public claims factual and source-backed. Do not invent adoption numbers, benchmarks, testimonials, compatibility, release status, or security guarantees.
+- Website changes must preserve responsive layout, keyboard navigation, accessible contrast, reduced-motion behavior, canonical metadata, and a successful production build.
+
 ## TUI Development Rules
 
 - **Always use Charm libraries** for all TUI components: [BubbleTea v2](https://charm.land/bubbletea/v2), [Bubbles v2](https://charm.land/bubbles/v2), [Lip Gloss v2](https://charm.land/lipgloss/v2), [Glamour](https://github.com/charmbracelet/glamour).

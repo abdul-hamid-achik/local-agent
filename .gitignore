@@ -33,6 +33,14 @@ Thumbs.db
 .glyphrun/tmp/
 .glyphrun/snapshots/**/*.json
 
+# Node and VitePress
+node_modules/
+docs/.vitepress/cache/
+docs/.vitepress/dist/
+
+# Task cache
+.task/
+
 # Temporary files
 tmp/
 temp/

@@ -8,4 +8,3 @@
   │ tab/shift+tab move     │
   │ enter newline          │
   ╰────────────────────────╯
-❯ Ask or type / for commands

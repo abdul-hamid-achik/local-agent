@@ -242,6 +242,20 @@ func TestReActIterationsCountAsOneUserTurn(t *testing.T) {
 	}
 }
 
+func TestContextCompactionClearsStaleOccupancy(t *testing.T) {
+	m := newTestModel(t)
+	m.promptTokens = 15_000
+	m.numCtx = 16_384
+	updated, _ := m.Update(ContextCompactedMsg{})
+	m = updated.(*Model)
+	if m.promptTokens != 0 {
+		t.Fatalf("prompt occupancy after compaction = %d, want unknown/zero", m.promptTokens)
+	}
+	if status := m.renderContextStatus(false); status != "" {
+		t.Fatalf("stale context status remained after compaction: %q", status)
+	}
+}
+
 func osWriteFile(path, content string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err

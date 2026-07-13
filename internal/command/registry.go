@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Command represents a slash command.
@@ -12,7 +13,10 @@ type Command struct {
 	Aliases     []string
 	Description string
 	Usage       string
-	Handler     func(ctx *Context, args []string) Result
+	// Hidden commands remain executable for compatibility and maintenance but
+	// stay out of everyday help, completion, and discovery surfaces.
+	Hidden  bool
+	Handler func(ctx *Context, args []string) Result
 }
 
 // Context provides commands with read access to application state.
@@ -32,6 +36,10 @@ type Context struct {
 	// Token stats
 	SessionEvalTotal   int
 	SessionPromptTotal int
+	// LatestPromptTokens is the provider-reported prompt size for the most
+	// recent request. Unlike SessionPromptTotal, it is an occupancy snapshot
+	// that can be compared with the active model's context window.
+	LatestPromptTokens int
 	SessionTurnCount   int
 	NumCtx             int
 	CurrentModel       string
@@ -63,6 +71,15 @@ type Result struct {
 	Data   string // Optional payload (e.g. file path, model name)
 	Error  string // Error text (takes priority over Text)
 	Force  bool   // Explicit confirmation for commands that replace existing data
+	Goal   *GoalRequest
+}
+
+// GoalRequest is the typed creation intent carried from slash-command parsing
+// to the TUI. Prompt and budget stay separate so the UI never reparses text.
+type GoalRequest struct {
+	Prompt       string
+	TimeBudget   time.Duration
+	TimeExplicit bool
 }
 
 // Action describes a side effect the TUI should perform.
@@ -139,7 +156,13 @@ func (r *Registry) Execute(ctx *Context, name string, args []string) Result {
 
 // All returns all registered commands in registration order.
 func (r *Registry) All() []*Command {
-	return r.all
+	visible := make([]*Command, 0, len(r.all))
+	for _, cmd := range r.all {
+		if !cmd.Hidden {
+			visible = append(visible, cmd)
+		}
+	}
+	return visible
 }
 
 // Match returns commands whose name starts with the given prefix.
@@ -147,6 +170,9 @@ func (r *Registry) Match(prefix string) []*Command {
 	var matches []*Command
 	seen := make(map[string]bool)
 	for _, cmd := range r.all {
+		if cmd.Hidden {
+			continue
+		}
 		if strings.HasPrefix(cmd.Name, prefix) && !seen[cmd.Name] {
 			matches = append(matches, cmd)
 			seen[cmd.Name] = true

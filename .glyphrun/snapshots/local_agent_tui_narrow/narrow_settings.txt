@@ -1,6 +1,6 @@
               LOCAL AGENT
     Local-first · tool effects ask
-           PLAN · qwen3.5:2b
+      PLAN · qwen3.5:2b · offline
  ╭────────────────────────────────────╮
  │ Settings                           │
  │ │ Model · Pinned · qwen3.5:2b      │
@@ -11,9 +11,8 @@
  │   Runtime status · 0 servers · 19… │
  │   Help · Shortcuts                 │
  │                                    │
- │   Choose an installed local model  │
+ │   Choose an installed local model… │
  │ esc close · enter select · ↑/↓     │
  ╰────────────────────────────────────╯
 
 ───────────────────────────────────────
-❯ Ask, @mention files, or type /help

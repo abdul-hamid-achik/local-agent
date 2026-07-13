@@ -486,10 +486,13 @@ func (m *Model) restoreSessionState(state persistedSessionState) error {
 	if targetModel == "" && targetProfile != nil {
 		targetModel = targetProfile.Model
 	}
+	if descriptor, ok := m.ollamaModelDescriptor(targetModel); ok && m.localOnly && descriptor.Source == OllamaModelCloud && m.cloudRestoreAuthorized != config.CanonicalModelName(targetModel) {
+		return fmt.Errorf("restore model: model %q requires fresh Ollama Cloud confirmation", targetModel)
+	}
 	oldModel := m.model
 	modelSwitched := false
 	if targetModel != "" && targetModel != m.model {
-		if err := config.CheckModelMemorySafe(targetModel); err != nil {
+		if err := m.validateModelAdmission(targetModel); err != nil {
 			return fmt.Errorf("restore model: %w", err)
 		}
 		if m.modelManager != nil {
@@ -524,7 +527,10 @@ func (m *Model) restoreSessionState(state persistedSessionState) error {
 		}
 	}
 	if targetModel != "" {
-		m.model = targetModel
+		m.setCurrentModelProjection(targetModel)
+		for index := range m.ollamaModels {
+			m.ollamaModels[index].Current = config.CanonicalModelName(m.ollamaModels[index].Name) == config.CanonicalModelName(targetModel)
+		}
 	}
 
 	m.mode = state.Mode

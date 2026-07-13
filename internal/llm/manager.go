@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 	"sync"
 	"time"
@@ -24,6 +25,10 @@ type ModelManager struct {
 	localKnown   bool
 	localModels  map[string]int64
 	localChecked time.Time
+	cloudKnown   bool
+	cloudModels  map[string]struct{}
+	cloudGrants  map[string]struct{}
+	nativeCtx    map[string]int
 }
 
 const localInventoryTTL = 30 * time.Second
@@ -35,18 +40,218 @@ type LocalModel struct {
 	Size int64
 }
 
+// ModelContextPolicy is the context contract for one exact Ollama model.
+// Native is the verified model maximum reported by Ollama. Request is the
+// num_ctx value sent on the wire; zero deliberately omits num_ctx. Effective is
+// the window host-side budgeting may rely on. Ollama Cloud models use their
+// verified native maximum and omit num_ctx so the service keeps its documented
+// maximum-by-default behavior.
+type ModelContextPolicy struct {
+	Native      int
+	Request     int
+	Effective   int
+	Cloud       bool
+	NativeKnown bool
+}
+
 var _ Client = (*ModelManager)(nil)
 
 func NewModelManager(baseURL string, numCtx int) *ModelManager {
 	return &ModelManager{
-		baseURL: baseURL,
-		numCtx:  numCtx,
-		clients: make(map[string]*OllamaClient),
-		active:  make(map[string]bool),
+		baseURL:     baseURL,
+		numCtx:      numCtx,
+		clients:     make(map[string]*OllamaClient),
+		active:      make(map[string]bool),
+		cloudModels: make(map[string]struct{}),
+		cloudGrants: make(map[string]struct{}),
+		nativeCtx:   make(map[string]int),
 	}
 }
 
+// ConfigureOllamaInventory installs the context and execution-location facts
+// from one verified Ollama inventory snapshot. Model names are canonicalized so
+// implicit :latest aliases share a single policy. An unverified snapshot clears
+// prior facts instead of allowing stale cloud or native-context metadata to
+// authorize later requests.
+func (m *ModelManager) ConfigureOllamaInventory(models []OllamaModel, verified bool) {
+	cloudModels, nativeCtx, _ := ollamaRuntimeFacts(models, verified)
+	m.inferenceMu.Lock()
+	defer m.inferenceMu.Unlock()
+	m.localMu.Lock()
+	m.cloudKnown = verified
+	m.cloudModels = cloudModels
+	m.nativeCtx = nativeCtx
+	m.pruneCloudGrantsLocked()
+	m.localMu.Unlock()
+}
+
+// ConfigureOllamaCloudInventory records exact cloud identities reported by the
+// configured Ollama daemon. It never grants access by itself.
+func (m *ModelManager) ConfigureOllamaCloudInventory(models []string, verified bool) {
+	m.inferenceMu.Lock()
+	defer m.inferenceMu.Unlock()
+	m.localMu.Lock()
+	defer m.localMu.Unlock()
+	m.cloudKnown = verified
+	m.cloudModels = make(map[string]struct{}, len(models))
+	for _, model := range models {
+		if canonical := config.CanonicalModelName(model); canonical != "" {
+			m.cloudModels[canonical] = struct{}{}
+		}
+	}
+	m.pruneCloudGrantsLocked()
+}
+
+// ConfigureOllamaRuntimeInventory atomically installs all privacy-admission and
+// context facts from one Ollama snapshot. Keeping local weights, cloud identity,
+// grants, and native limits in one inference-serialized commit prevents a
+// refresh from reclassifying a model between admission and request creation.
+func (m *ModelManager) ConfigureOllamaRuntimeInventory(required bool, models []OllamaModel, verified bool) {
+	cloudModels, nativeCtx, localModels := ollamaRuntimeFacts(models, verified)
+	m.inferenceMu.Lock()
+	defer m.inferenceMu.Unlock()
+	m.localMu.Lock()
+	defer m.localMu.Unlock()
+
+	m.localOnly = required
+	m.localKnown = verified
+	if verified {
+		m.localChecked = time.Now()
+	} else {
+		m.localChecked = time.Time{}
+	}
+	m.localModels = localModels
+	m.cloudKnown = verified
+	m.cloudModels = cloudModels
+	m.nativeCtx = nativeCtx
+	m.pruneCloudGrantsLocked()
+}
+
+func ollamaRuntimeFacts(models []OllamaModel, verified bool) (map[string]struct{}, map[string]int, map[string]int64) {
+	cloudModels := make(map[string]struct{}, len(models))
+	nativeCtx := make(map[string]int, len(models))
+	localModels := make(map[string]int64, len(models))
+	if !verified {
+		return cloudModels, nativeCtx, localModels
+	}
+	for _, model := range models {
+		canonical := config.CanonicalModelName(model.Name)
+		if canonical == "" {
+			continue
+		}
+		switch model.Location {
+		case OllamaModelLocationCloud:
+			cloudModels[canonical] = struct{}{}
+		case OllamaModelLocationLocal:
+			localModels[canonical] = model.SizeBytes
+		}
+		contextLength := boundedNativeContext(model.ContextLength)
+		if contextLength == 0 {
+			continue
+		}
+		// Duplicate implicit/explicit :latest entries should agree. If they do
+		// not, retaining the smaller verified maximum avoids overstating the
+		// provider budget.
+		if previous, exists := nativeCtx[canonical]; !exists || contextLength < previous {
+			nativeCtx[canonical] = contextLength
+		}
+	}
+	return cloudModels, nativeCtx, localModels
+}
+
+func (m *ModelManager) pruneCloudGrantsLocked() {
+	for granted := range m.cloudGrants {
+		if _, exists := m.cloudModels[granted]; !exists {
+			delete(m.cloudGrants, granted)
+		}
+	}
+}
+
+func boundedNativeContext(value int64) int {
+	if value <= 0 {
+		return 0
+	}
+	if value > int64(math.MaxInt) {
+		return math.MaxInt
+	}
+	return int(value)
+}
+
+// ContextPolicy returns the current model-specific request and host-budget
+// policy. Cloud status is derived only from a verified Ollama inventory; model
+// name suffixes never grant cloud semantics.
+func (m *ModelManager) ContextPolicy(model string) ModelContextPolicy {
+	m.localMu.RLock()
+	defer m.localMu.RUnlock()
+	return m.contextPolicyLocked(model)
+}
+
+func (m *ModelManager) contextPolicyLocked(model string) ModelContextPolicy {
+	canonical := config.CanonicalModelName(model)
+	native, nativeKnown := m.nativeCtx[canonical]
+	_, cloudModel := m.cloudModels[canonical]
+	cloud := canonical != "" && m.cloudKnown && cloudModel
+	policy := ModelContextPolicy{Native: native, Cloud: cloud, NativeKnown: nativeKnown}
+	if cloud {
+		// Ollama Cloud uses its maximum context by default. Sending the local
+		// KV-cache allocation here would incorrectly reduce that service window.
+		if nativeKnown {
+			policy.Effective = native
+		}
+		return policy
+	}
+	if canonical == "" || m.numCtx <= 0 {
+		return policy
+	}
+	policy.Request = m.numCtx
+	if nativeKnown && native < policy.Request {
+		policy.Request = native
+	}
+	policy.Effective = policy.Request
+	return policy
+}
+
+// EffectiveContext returns the current host-side context budget and whether it
+// is known. Local requests always have an explicit effective allocation. Cloud
+// requests are known only when their native maximum came from verified Ollama
+// metadata.
+func (m *ModelManager) EffectiveContext(model string) (int, bool) {
+	policy := m.ContextPolicy(model)
+	return policy.Effective, policy.Effective > 0
+}
+
+// GrantOllamaCloudModel grants one verified cloud model for the current
+// conversation. The grant is exact, ephemeral, and never covers
+// remote-host models.
+func (m *ModelManager) GrantOllamaCloudModel(model string) error {
+	canonical := config.CanonicalModelName(model)
+	m.localMu.Lock()
+	defer m.localMu.Unlock()
+	if canonical == "" || !m.cloudKnown {
+		return fmt.Errorf("cloud inventory is unavailable")
+	}
+	if _, exists := m.cloudModels[canonical]; !exists {
+		return fmt.Errorf("model %q is not a verified Ollama Cloud model", model)
+	}
+	m.cloudGrants[canonical] = struct{}{}
+	return nil
+}
+
+func (m *ModelManager) RevokeOllamaCloudModel(model string) {
+	m.localMu.Lock()
+	delete(m.cloudGrants, config.CanonicalModelName(model))
+	m.localMu.Unlock()
+}
+
+func (m *ModelManager) RevokeOllamaCloudGrants() {
+	m.localMu.Lock()
+	m.cloudGrants = make(map[string]struct{})
+	m.localMu.Unlock()
+}
+
 func (m *ModelManager) GetClient(modelName string) (*OllamaClient, error) {
+	m.inferenceMu.RLock()
+	defer m.inferenceMu.RUnlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	return m.getClient(ctx, modelName)
@@ -56,22 +261,32 @@ func (m *ModelManager) getClient(ctx context.Context, modelName string) (*Ollama
 	if err := m.ensureModelLocal(ctx, modelName); err != nil {
 		return nil, err
 	}
+	policy := m.ContextPolicy(modelName)
+	if err := validateRequestContextPolicy(modelName, policy); err != nil {
+		return nil, err
+	}
 	m.mu.RLock()
 	client, exists := m.clients[modelName]
 	m.mu.RUnlock()
 
-	if exists {
+	if exists && client.numCtx == policy.Request {
 		return client, nil
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if client, exists := m.clients[modelName]; exists {
+	// Re-read policy after taking the client lock so a context refresh that
+	// raced the first lookup cannot install a client with the old request value.
+	policy = m.ContextPolicy(modelName)
+	if err := validateRequestContextPolicy(modelName, policy); err != nil {
+		return nil, err
+	}
+	if client, exists := m.clients[modelName]; exists && client.numCtx == policy.Request {
 		return client, nil
 	}
 
-	client, err := NewOllamaClient(m.baseURL, modelName, m.numCtx)
+	client, err := NewOllamaClient(m.baseURL, modelName, policy.Request)
 	if err != nil {
 		return nil, fmt.Errorf("create client for %s: %w", modelName, err)
 	}
@@ -80,19 +295,34 @@ func (m *ModelManager) getClient(ctx context.Context, modelName string) (*Ollama
 	return client, nil
 }
 
-func (m *ModelManager) SetCurrentModel(model string) error {
-	inventoryCtx, cancelInventory := context.WithTimeout(context.Background(), 2*time.Second)
-	if err := m.ensureModelLocalFresh(inventoryCtx, model); err != nil {
-		cancelInventory()
-		return err
+func validateRequestContextPolicy(model string, policy ModelContextPolicy) error {
+	if policy.Cloud && !policy.NativeKnown {
+		return fmt.Errorf("cloud model %q has no verified context maximum; refresh Ollama metadata before using it", model)
 	}
-	cancelInventory()
+	return nil
+}
+
+func (m *ModelManager) SetCurrentModel(model string) error {
 	m.switchMu.Lock()
 	defer m.switchMu.Unlock()
 	m.inferenceMu.Lock()
 	defer m.inferenceMu.Unlock()
 
-	client, err := NewOllamaClient(m.baseURL, model, m.numCtx)
+	// Admission and policy selection must share the same inference snapshot.
+	// Otherwise a verified refresh could reclassify local weights as cloud after
+	// the local check but before the client is created.
+	inventoryCtx, cancelInventory := context.WithTimeout(context.Background(), 2*time.Second)
+	err := m.ensureModelLocalFresh(inventoryCtx, model)
+	cancelInventory()
+	if err != nil {
+		return err
+	}
+
+	policy := m.ContextPolicy(model)
+	if policy.Cloud && !policy.NativeKnown {
+		return fmt.Errorf("cloud model %q has no verified context maximum; refresh Ollama metadata before selecting it", model)
+	}
+	client, err := NewOllamaClient(m.baseURL, model, policy.Request)
 	if err != nil {
 		return fmt.Errorf("create client for %s: %w", model, err)
 	}
@@ -121,6 +351,38 @@ func (m *ModelManager) SetCurrentModel(model string) error {
 	return nil
 }
 
+// ClearCurrentModel removes inference authority from the current selection.
+// It is deliberately fail-closed: the selection is cleared before a best-
+// effort unload, so an Ollama inventory reclassification cannot leave a
+// remote model usable merely because releasing its resident runner failed.
+func (m *ModelManager) ClearCurrentModel() error {
+	m.switchMu.Lock()
+	defer m.switchMu.Unlock()
+	m.inferenceMu.Lock()
+	defer m.inferenceMu.Unlock()
+
+	m.mu.Lock()
+	previousName := m.currentModel
+	previousClient := m.clients[previousName]
+	previousActive := m.active[previousName]
+	m.currentModel = ""
+	m.mu.Unlock()
+
+	if previousName == "" || previousClient == nil || !previousActive {
+		return nil
+	}
+	unloadCtx, cancelUnload := context.WithTimeout(context.Background(), 5*time.Second)
+	err := previousClient.Unload(unloadCtx)
+	cancelUnload()
+	if err != nil {
+		return fmt.Errorf("unload cleared model %q: %w", previousName, err)
+	}
+	m.mu.Lock()
+	m.active[previousName] = false
+	m.mu.Unlock()
+	return nil
+}
+
 func (m *ModelManager) CurrentModel() string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -137,6 +399,9 @@ func (m *ModelManager) ChatStream(ctx context.Context, opts ChatOptions, fn func
 	if model == "" {
 		return ErrNoModelSelected
 	}
+	if err := m.validateExpectedContext(model, opts.ExpectedContext); err != nil {
+		return err
+	}
 
 	client, err := m.getClient(ctx, model)
 	if err != nil {
@@ -148,9 +413,29 @@ func (m *ModelManager) ChatStream(ctx context.Context, opts ChatOptions, fn func
 	return client.ChatStream(ctx, opts, fn)
 }
 
+func (m *ModelManager) validateExpectedContext(model string, expected int) error {
+	if expected <= 0 {
+		return nil
+	}
+	policy := m.ContextPolicy(model)
+	if err := validateRequestContextPolicy(model, policy); err != nil {
+		return err
+	}
+	if policy.Effective != expected {
+		return fmt.Errorf(
+			"model context changed before inference for %q: turn expected %d tokens, current policy provides %d; retry the turn",
+			model, expected, policy.Effective,
+		)
+	}
+	return nil
+}
+
 func (m *ModelManager) ChatStreamForModel(ctx context.Context, model string, opts ChatOptions, fn func(StreamChunk) error) error {
 	m.inferenceMu.RLock()
 	defer m.inferenceMu.RUnlock()
+	if err := m.validateExpectedContext(model, opts.ExpectedContext); err != nil {
+		return err
+	}
 	client, err := m.getClient(ctx, model)
 	if err != nil {
 		return err
@@ -206,11 +491,60 @@ func (m *ModelManager) ListLocalModels(ctx context.Context) ([]string, error) {
 	return models, nil
 }
 
+// ListOllamaModels returns the configured Ollama host's unfiltered inventory.
+// Privacy and routing policy must be applied by the caller using Location and
+// Capabilities; unlike ListLocalModels, cloud and remote-host entries remain.
+func (m *ModelManager) ListOllamaModels(ctx context.Context) ([]OllamaModel, error) {
+	client, err := NewOllamaClient(m.baseURL, "", m.numCtx)
+	if err != nil {
+		return nil, err
+	}
+	return client.ListModels(ctx)
+}
+
+func (m *ModelManager) ShowOllamaModel(ctx context.Context, model string) (OllamaModelInfo, error) {
+	client, err := NewOllamaClient(m.baseURL, "", m.numCtx)
+	if err != nil {
+		return OllamaModelInfo{}, err
+	}
+	return client.ShowModel(ctx, model)
+}
+
+func (m *ModelManager) ListRunningOllamaModels(ctx context.Context) ([]OllamaRunningModel, error) {
+	client, err := NewOllamaClient(m.baseURL, "", m.numCtx)
+	if err != nil {
+		return nil, err
+	}
+	return client.ListRunningModels(ctx)
+}
+
+func (m *ModelManager) OllamaVersion(ctx context.Context) (string, error) {
+	client, err := NewOllamaClient(m.baseURL, "", m.numCtx)
+	if err != nil {
+		return "", err
+	}
+	return client.Version(ctx)
+}
+
+func (m *ModelManager) PullOllamaModel(ctx context.Context, model string, fn func(OllamaPullProgress) error) error {
+	client, err := NewOllamaClient(m.baseURL, "", m.numCtx)
+	if err != nil {
+		return err
+	}
+	return client.PullModel(ctx, model, fn)
+}
+
 // ListLocalModelInventory returns local identities with their actual weight
 // sizes so memory admission never has to infer safety from a tag string.
 func (m *ModelManager) ListLocalModelInventory(ctx context.Context) ([]LocalModel, error) {
 	client, err := NewOllamaClient(m.baseURL, "", m.numCtx)
 	if err != nil {
+		return nil, err
+	}
+	// A model installed on a LAN or Internet Ollama daemon is not on-device.
+	// Reject the host before issuing /api/tags so local-only admission cannot
+	// reinterpret a remote daemon's positive size field as local weights.
+	if err := validateLocalOllamaHost(client); err != nil {
 		return nil, err
 	}
 	response, err := client.listModels(ctx)
@@ -240,6 +574,19 @@ func (m *ModelManager) ListLocalModelInventory(ctx context.Context) ([]LocalMode
 	}
 	sort.Slice(models, func(i, j int) bool { return models[i].Name < models[j].Name })
 	return models, nil
+}
+
+func validateLocalOllamaHost(client *OllamaClient) error {
+	if client == nil || client.base == nil {
+		return fmt.Errorf("configured Ollama host is unavailable")
+	}
+	if !isLocalOllamaHost(client.base.Hostname()) {
+		return fmt.Errorf(
+			"configured Ollama host %q is not a local-machine address; cannot verify on-device model weights",
+			client.base.Hostname(),
+		)
+	}
+	return nil
 }
 
 // ConfigureLocalOnly requires all inference model names to be proven by an
@@ -293,9 +640,25 @@ func (m *ModelManager) ensureModelLocalWithRefresh(ctx context.Context, model st
 	known := m.localKnown
 	checked := m.localChecked
 	size, allowed := m.localModels[canonical]
+	_, cloudGranted := m.cloudGrants[canonical]
+	_, cloudVerified := m.cloudModels[canonical]
+	cloudKnown := m.cloudKnown
 	m.localMu.RUnlock()
 	if !required {
 		return nil
+	}
+	if cloudKnown && cloudVerified && cloudGranted {
+		return nil
+	}
+	// Cached inventory cannot turn a LAN/Internet Ollama daemon into an
+	// on-device runtime. Enforce the host boundary on every local-only admission,
+	// including callers that installed inventory programmatically.
+	client, err := NewOllamaClient(m.baseURL, "", m.numCtx)
+	if err != nil {
+		return fmt.Errorf("local-only model admission: %w", err)
+	}
+	if err := validateLocalOllamaHost(client); err != nil {
+		return fmt.Errorf("local-only model admission: %w", err)
 	}
 	if !known || !allowed || forceRefresh || time.Since(checked) >= localInventoryTTL {
 		models, err := m.ListLocalModelInventory(ctx)
@@ -324,6 +687,13 @@ func (m *ModelManager) ensureModelLocalWithRefresh(ctx context.Context, model st
 func (m *ModelManager) Embed(ctx context.Context, model string, texts []string) ([][]float32, error) {
 	m.inferenceMu.RLock()
 	defer m.inferenceMu.RUnlock()
+	m.localMu.RLock()
+	_, cloudModel := m.cloudModels[config.CanonicalModelName(model)]
+	localOnly := m.localOnly
+	m.localMu.RUnlock()
+	if localOnly && cloudModel {
+		return nil, fmt.Errorf("cloud conversation consent does not cover embeddings")
+	}
 	client, err := m.getClient(ctx, model)
 	if err != nil {
 		return nil, err
@@ -348,6 +718,7 @@ func (m *ModelManager) EmbedWithCurrentModel(ctx context.Context, texts []string
 }
 
 func (m *ModelManager) Close() {
+	m.RevokeOllamaCloudGrants()
 	m.switchMu.Lock()
 	defer m.switchMu.Unlock()
 	m.inferenceMu.Lock()
@@ -377,6 +748,18 @@ func (m *ModelManager) BaseURL() string {
 }
 
 func (m *ModelManager) NumCtx() int {
+	m.mu.RLock()
+	model := m.currentModel
+	m.mu.RUnlock()
+	if model != "" {
+		policy := m.ContextPolicy(model)
+		if policy.Cloud && !policy.NativeKnown {
+			return 0
+		}
+		if policy.Effective > 0 {
+			return policy.Effective
+		}
+	}
 	return m.numCtx
 }
 

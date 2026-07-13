@@ -201,23 +201,45 @@ func (m *Model) renderHelpOverlay(_ int) string {
 func (m *Model) overlayOnContent(base, overlay string) string {
 	baseLines := strings.Split(base, "\n")
 	overlayLines := strings.Split(overlay, "\n")
-
-	// Center vertically.
 	startY := centeredOverlayStartY(base, overlay)
+	canvasWidth := max(m.width, lipgloss.Width(base), lipgloss.Width(overlay))
+	canvas := lipgloss.NewCanvas(canvasWidth, len(baseLines))
+	overlayWidth := lipgloss.Width(overlay)
+	// Preserve transcript context when the modal has a meaningful outside
+	// gutter. If only a few cells remain, those cells become chopped words and
+	// false-looking prompts, so the modal owns its intersecting rows instead.
+	compactMask := m.width > 0 && (m.width <= 40 || m.width-overlayWidth < 16)
+	layerCapacity := len(overlayLines) + 1
+	if compactMask {
+		layerCapacity += len(overlayLines)
+	}
+	layers := make([]*lipgloss.Layer, 0, layerCapacity)
+	layers = append(layers, lipgloss.NewLayer(base).Z(0))
 
 	for i, ol := range overlayLines {
 		row := startY + i
 		if row >= len(baseLines) {
 			break
 		}
-		// Center horizontally.
-		padLeft := centeredOverlayLineX(m.width, ol)
-		line := strings.Repeat(" ", padLeft) + ol
-		if lineW := lipgloss.Width(line); lineW < m.width {
-			line += strings.Repeat(" ", m.width-lineW)
+		overlayZ := 1
+		if compactMask {
+			// One- and two-cell transcript fragments around a narrow modal read
+			// like broken controls. Compact overlays therefore own their complete
+			// rows; wider terminals keep the transparent transcript context.
+			layers = append(layers, lipgloss.NewLayer(strings.Repeat(" ", m.width)).
+				Y(row).
+				Z(overlayZ))
+			overlayZ++
 		}
-		baseLines[row] = line
+		layers = append(layers, lipgloss.NewLayer(ol).
+			X(centeredOverlayLineX(m.width, ol)).
+			Y(row).
+			Z(overlayZ))
 	}
 
-	return strings.Join(baseLines, "\n")
+	// Lip Gloss' cell compositor keeps ANSI styles and grapheme widths intact.
+	// Wide overlay rows replace only their own bounds; compact rows use the
+	// explicit mask above so tiny base fragments never resemble active controls.
+	canvas.Compose(lipgloss.NewCompositor(layers...))
+	return canvas.Render()
 }

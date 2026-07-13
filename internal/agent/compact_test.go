@@ -14,9 +14,39 @@ import (
 
 // mockOutput implements the Output interface for testing.
 type mockOutput struct {
-	texts   []string
-	errors  []string
-	sysMsgs []string
+	texts       []string
+	errors      []string
+	sysMsgs     []string
+	compactions int
+}
+
+type contextWindowClient struct {
+	numCtx       int
+	numCtxCalls  int
+	chatCalls    int
+	summaryCalls int
+	expectedCtx  []int
+}
+
+func (c *contextWindowClient) NumCtx() int {
+	c.numCtxCalls++
+	return c.numCtx
+}
+
+func (c *contextWindowClient) ChatStream(_ context.Context, options llm.ChatOptions, emit func(llm.StreamChunk) error) error {
+	c.chatCalls++
+	c.expectedCtx = append(c.expectedCtx, options.ExpectedContext)
+	if strings.Contains(options.System, "conversation summarizer") {
+		c.summaryCalls++
+		return emit(llm.StreamChunk{Text: "older turns summarized", Done: true})
+	}
+	return emit(llm.StreamChunk{Text: "answer", PromptEvalCount: 20_000, EvalCount: 1, Done: true})
+}
+
+func (*contextWindowClient) Ping() error   { return nil }
+func (*contextWindowClient) Model() string { return "dynamic-context-test" }
+func (*contextWindowClient) Embed(context.Context, string, []string) ([][]float32, error) {
+	return nil, nil
 }
 
 func TestRecentConversationBoundaryKeepsToolPairsIntact(t *testing.T) {
@@ -122,6 +152,78 @@ func TestNoToolConversationCompactsAfterDirectResponse(t *testing.T) {
 	if len(out.sysMsgs) == 0 || !strings.Contains(out.sysMsgs[len(out.sysMsgs)-1], "Context compacted") {
 		t.Fatalf("missing compaction receipt: %#v", out.sysMsgs)
 	}
+	if out.compactions != 1 {
+		t.Fatalf("typed compaction notifications = %d, want 1", out.compactions)
+	}
+}
+
+func TestRunSnapshotsProviderContextWindowForCompaction(t *testing.T) {
+	tests := []struct {
+		name          string
+		providerCtx   int
+		configuredCtx int
+		wantCompacted bool
+	}{
+		{
+			name:          "20K prompt stays intact with 1M provider",
+			providerCtx:   1_000_000,
+			configuredCtx: 16_000,
+		},
+		{
+			name:          "20K prompt compacts with 16K provider",
+			providerCtx:   16_000,
+			configuredCtx: 1_000_000,
+			wantCompacted: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &contextWindowClient{numCtx: tt.providerCtx}
+			ag := New(client, nil, tt.configuredCtx)
+			ag.SetModeContext("", ToolPolicy{})
+			ag.ReplaceMessages([]llm.Message{
+				{Role: "user", Content: "first question"},
+				{Role: "assistant", Content: "first answer"},
+				{Role: "user", Content: "second question"},
+				{Role: "assistant", Content: "second answer"},
+				{Role: "user", Content: "third question"},
+				{Role: "assistant", Content: "third answer"},
+				{Role: "user", Content: "current question"},
+			})
+			out := &mockOutput{}
+
+			if err := ag.Run(context.Background(), out); err != nil {
+				t.Fatal(err)
+			}
+			if got := client.summaryCalls > 0; got != tt.wantCompacted {
+				t.Fatalf("compacted = %v, want %v (summary calls=%d)", got, tt.wantCompacted, client.summaryCalls)
+			}
+			wantCalls := 1
+			if tt.wantCompacted {
+				wantCalls++
+			}
+			if client.chatCalls != wantCalls {
+				t.Fatalf("provider calls = %d, want %d", client.chatCalls, wantCalls)
+			}
+			if client.numCtxCalls != 1 {
+				t.Fatalf("NumCtx calls = %d, want one immutable turn snapshot", client.numCtxCalls)
+			}
+			for request, got := range client.expectedCtx {
+				if got != tt.providerCtx {
+					t.Fatalf("request %d expected context = %d, want turn snapshot %d", request, got, tt.providerCtx)
+				}
+			}
+		})
+	}
+}
+
+func TestNumCtxFallsBackWhenProviderHasNoEffectiveWindow(t *testing.T) {
+	client := &contextWindowClient{}
+	ag := New(client, nil, 32_768)
+	if got := ag.NumCtx(); got != 32_768 {
+		t.Fatalf("NumCtx() = %d, want configured fallback", got)
+	}
 }
 
 func (m *mockOutput) StreamText(text string)                                               { m.texts = append(m.texts, text) }
@@ -130,6 +232,7 @@ func (m *mockOutput) StreamDone(_, _ int)                                       
 func (m *mockOutput) ToolCallStart(_ string, _ string, _ map[string]any)                   {}
 func (m *mockOutput) ToolCallResult(_ string, _ string, _ string, _ bool, _ time.Duration) {}
 func (m *mockOutput) SystemMessage(msg string)                                             { m.sysMsgs = append(m.sysMsgs, msg) }
+func (m *mockOutput) ContextCompacted()                                                    { m.compactions++ }
 func (m *mockOutput) Error(msg string)                                                     { m.errors = append(m.errors, msg) }
 
 func TestShouldCompact(t *testing.T) {

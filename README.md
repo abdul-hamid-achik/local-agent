@@ -2,6 +2,8 @@
 
 A local-first coding agent for the terminal, built in Go with Charm and powered by local Ollama models.
 
+[Website](https://local-agent.dev/) · [Getting started](https://local-agent.dev/getting-started) · [Safety](https://local-agent.dev/safety) · [Ecosystem](https://local-agent.dev/ecosystem)
+
 > **Status: alpha.** `local-agent` can inspect a repository, edit files, run commands, use MCP tools, and retain optional cross-session memory. Run it in a clean Git worktree, read every approval request, and review the resulting diff. The current safety layer is useful, but it is not an operating-system sandbox.
 
 ```text
@@ -71,7 +73,7 @@ The example enables an `mcphub` command. Comment out that server entry if MCPHub
 
 ## Local model setup
 
-`local-agent` asks Ollama for its locally installed inventory at startup. Cloud entries are excluded. Automatic routing chooses only installed, configured, non-exclusive models; if a preferred tier is missing, it follows the configured fallback chain.
+`local-agent` asks Ollama for its authoritative inventory at startup, including local weights and Ollama Cloud aliases. Automatic routing uses only admitted local models; Cloud remains an explicit, confirmed choice.
 
 Approximate artifact sizes vary by Ollama build and quantization:
 
@@ -108,7 +110,8 @@ The shipped memory guard is tuned for a 16 GB Apple-silicon machine:
 
 - `num_ctx: 16384` is the recommended 2B/4B default.
 - Qwen 9B, Ornith 9B, and Gemma E2B are explicit profiles. Switching models asks Ollama to unload the previous active chat model first.
-- Gemma E4B+, models tagged 10B or larger, and cloud tags are blocked by default.
+- Gemma E4B+ and local weights above the default 16 GB-oriented profile remain blocked unless explicitly overridden.
+- Ollama Cloud models remain visible while `privacy.local_only: true`. Manual selection asks for exact, conversation-only consent; automatic routing remains local.
 - `LOCAL_AGENT_ALLOW_LARGE_MODELS=1` bypasses the size guard. Use it only after measuring memory headroom; it does not add memory isolation.
 
 ### Automatic and pinned models
@@ -116,13 +119,13 @@ The shipped memory guard is tuned for a 16 GB Apple-silicon machine:
 The interactive TUI starts with automatic routing. Choosing a model or agent profile inside the TUI pins that model; `/model auto` releases the pin. Startup `--model` and profile model selections remain pinned in the TUI too.
 
 ```text
-/model                     open the picker
-/model list                list configured model names
+/model                     open the live Ollama inventory
+/model list                list models currently admitted from Ollama
 /model qwen3.5:4b          switch and pin this model
 /model auto                release the pin and resume automatic routing
 ```
 
-Selecting a model in the picker also pins it. The picker is filtered to Ollama's discovered local inventory. `/model list` still shows the configured catalog; use `ollama list` as the source of truth. `/model fast` and `/model smart` remain experimental shortcuts, so explicit model names are safer.
+Selecting a model in the picker also pins it. Ollama's `/api/tags` inventory is the source of truth, including custom local models and Ollama Cloud aliases. The picker groups local, cloud, remote, and policy-blocked entries; `d` opens capabilities/runtime details and `a` opens the cancellable pull form. Static model configuration is retained only as routing preference metadata. Cloud is never selected automatically across the privacy boundary.
 
 The `--qwen-router` CLI flag enables a more detailed Qwen-specific heuristic router and remains experimental.
 
@@ -134,12 +137,14 @@ Cycle modes with `shift+tab`.
 |---|---|---|
 | NORMAL | Routes for the interactive task | Read tools, writes, validated edits, shell, memory, and MCP; mutations remain approval-gated |
 | PLAN | Opens a structured plan form and routes toward the complex installed tier | Workspace reads, search, listing, diff, existence checks, and memory recall only |
-| AUTO | Enters a durable Goal Runtime with budgets, recovery, and Cortex verification | The NORMAL tool surface under the same approval policy; no blanket approval |
+| AUTO | Marks durable autonomous authority; submitting a prompt or `/goal` opens a reviewed Goal Runtime | The NORMAL tool surface under the same approval policy; no blanket approval |
 
 The mode policy is enforced by the host, not just by a prompt. A model-generated
-mutation in PLAN is returned as blocked. AUTO is not YOLO: selecting it opens a
-durable goal form, and an active goal is controlled through the Goal Inspector
-instead of accepting an ordinary prompt that could bypass its permit and budget.
+mutation in PLAN is returned as blocked. `shift+tab` only changes authority; it
+never opens a form or creates work. AUTO is not YOLO: submitting an AUTO prompt
+or running `/goal <duration> <prompt>` opens a reviewed goal draft, and an active
+goal is controlled through the Goal Inspector instead of accepting an ordinary
+prompt that could bypass its permit and budget.
 Legacy ASK sessions restore as NORMAL. Legacy BUILD sessions restore as NORMAL
 unless they already carry a durable goal, in which case they restore as AUTO.
 
@@ -159,9 +164,9 @@ privacy:
 
 With that setting, `local-agent`:
 
-- Rejects non-loopback Ollama URLs.
-- Rejects non-loopback SSE and Streamable HTTP MCP URLs.
-- Excludes Ollama cloud entries from local model discovery.
+- Rejects Ollama URLs outside local-machine hosts (`localhost`, loopback IPs, and unspecified bind aliases).
+- Rejects SSE and Streamable HTTP MCP URLs outside those local-machine hosts.
+- Shows Ollama Cloud entries for explicit selection, asks before crossing the boundary, and excludes them from automatic routing.
 - Canonicalizes built-in file paths, resolves symlinks, and rejects paths outside the startup workspace.
 - Applies `.agentignore` to built-in file operations.
 - Removes most parent-process environment variables before running the built-in shell tool.
@@ -239,8 +244,17 @@ Configuration is loaded from the first matching file:
 
 1. `./local-agent.yaml`
 2. `./local-agent.yml`
-3. `~/.config/local-agent/config.yaml`
-4. `~/.config/local-agent/config.yml`
+3. `$XDG_CONFIG_HOME/local-agent/config.yaml`
+4. `$XDG_CONFIG_HOME/local-agent/config.yml`
+5. `$HOME/.config/local-agent/config.yaml`
+6. `$HOME/.config/local-agent/config.yml`
+
+Repository-local configuration therefore has the highest precedence. The XDG
+locations are considered when `XDG_CONFIG_HOME` is an absolute path; the
+`$HOME/.config` locations remain the portable fallback. If XDG already points
+to `$HOME/.config`, duplicate paths are checked only once. Files are not
+merged: the first matching file is loaded, then environment overrides are
+applied.
 
 A compact configuration is:
 
@@ -288,7 +302,7 @@ See [`config.example.yaml`](config.example.yaml) for the configured model catalo
 | `LOCAL_AGENT_TOOLS_MAX_GREP` | Override maximum grep results |
 | `LOCAL_AGENT_TOOLS_MAX_ITER` | Override maximum ReAct iterations |
 | `LOCAL_AGENT_ICE_EMBED_MODEL` | Override the ICE embedding model |
-| `LOCAL_AGENT_LOCAL_ONLY` | Enable or disable loopback endpoint enforcement |
+| `LOCAL_AGENT_LOCAL_ONLY` | Enable or disable local-machine endpoint enforcement |
 | `LOCAL_AGENT_ALLOW_LARGE_MODELS` | Bypass the 16 GB-oriented model/context guard |
 | `LOCAL_AGENT_REDUCED_MOTION` | Replace TUI spinners and the waiting shimmer with static activity glyphs |
 
@@ -346,7 +360,7 @@ Switch with `/agent reviewer`. A profile model is pinned until `/model auto`. `m
 
 The local memory store is available even when ICE is disabled. It is keyed by canonical workspace, uses owner-only files with interprocess locking and coherent reloads, and fails closed on corrupt data. NORMAL and AUTO expose explicit memory save/update/delete tools, while PLAN exposes recall.
 
-Pre-workspace global memories and ICE entries have no trustworthy project provenance. Startup—including `-p` headless mode—keeps them quarantined and reports their count; only the TUI's preview-plus-exact-confirmation migration commands can attribute them to the current workspace. See [legacy-data-migration.md](docs/legacy-data-migration.md).
+Pre-workspace global memories and ICE entries have no trustworthy project provenance. Startup—including `-p` headless mode—keeps unclaimed data quarantined and reports its count; a completed claim owned by another workspace remains isolated without producing repeated startup noise. Only the TUI's preview-plus-exact-confirmation migration commands can attribute unclaimed data to the current workspace. See [legacy-data-migration.md](docs/legacy-data-migration.md).
 
 ICE is opt-in:
 
@@ -428,16 +442,16 @@ the store, but foreground approval prompts do not currently enqueue that type.
 | `/help` | Open help |
 | `/clear`, `/new` | Clear conversation state |
 | `/model` or `/models` | Open the model picker |
-| `/model list` | List configured models |
-| `/model <name>` | Switch and pin a configured model |
+| `/model list` | List admitted models from the live Ollama inventory |
+| `/model <name>` | Switch and pin an available Ollama model |
 | `/model auto` | Resume automatic model routing |
-| `/model fast`, `/model smart` | Select the first or last configured entry; experimental shortcuts |
 | `/agent [name\|list]` | List or switch profiles |
 | `/load <path>`, `/unload` | Asynchronously add or remove one regular, non-symlink markdown context file (32 KB maximum); quoted paths are supported |
 | `/skill [list\|activate\|deactivate]` | Manage skills |
 | `/servers` | Show connected MCP servers and tool count |
 | `/ice` | Show ICE status |
 | `/sessions` | Open lossless SQLite-backed saved sessions |
+| `/goal <duration> <prompt>` | Open a prefilled goal review with the requested wall-time cap and no hidden turn/token limits |
 | `/goal [new [objective]]` | Open the reviewed form for a durable, budgeted goal |
 | `/goal show` | Show objective, acceptance criteria, usage, state, and Cortex linkage |
 | `/goal pause`, `/goal resume` | Stop automatic continuation or explicitly resume one user-directed turn |
@@ -450,10 +464,9 @@ the store, but foreground approval prompts do not currently enqueue that type.
 | `/checkpoint [label]` | Save the current agent message history to SQLite |
 | `/checkpoints` | List checkpoints |
 | `/restore <id>` | Replace agent history with a checkpoint |
-| `/migrate-memory [confirm <preview-count>]` | Preview and explicitly assign quarantined global memories to this workspace |
-| `/migrate-ice [confirm <preview-count>]` | Preview and explicitly assign quarantined ICE history to this workspace |
-| `/migrate-checkpoints [confirm <preview-count>]` | Preview and explicitly claim unbound legacy checkpoints into the active session |
 | `/exit` | Quit |
+
+Legacy `/migrate-memory`, `/migrate-ice`, and `/migrate-checkpoints` recovery aliases remain executable for quarantined old data, but are hidden from everyday Help and completion until the migration workflow moves into Settings.
 
 `/commit` deliberately disables Git hooks, commit signing, configured
 fsmonitor helpers, pagers, and automatic maintenance/GC for its owned Git
@@ -465,7 +478,11 @@ Session snapshots preserve model-facing messages, tool-call IDs, tool cards, mod
 
 ### Durable goals and bounded continuation
 
-`/goal new` adds a host-owned Goal Runtime above the normal agent loop. The
+`/goal <duration> <prompt>` is the compact path: it infers an editable objective
+and acceptance criteria, applies only the explicit wall-time cap, and focuses a
+final review that shows the proof draft before Save. `/goal new` opens the same
+host-owned Goal Runtime above the normal agent loop from an empty or partial
+definition. The
 reviewed form requires an objective, at least one independently checkable
 acceptance criterion, and at least one finite limit. Saving the form is the
 explicit instruction to start the first AUTO turn. Later automatic turns are
@@ -528,7 +545,7 @@ The supported minimum is 30 columns by 12 rows.
 | `enter`, `shift+enter` | Send / insert a newline |
 | `shift+tab` | Cycle NORMAL, PLAN, AUTO |
 | `ctrl+p` | Open session settings (model, profile, mode, sessions, layout, runtime) |
-| `ctrl+m` | Open model picker |
+| `ctrl+o` | Open Ollama model picker |
 | `tab` | Complete commands, files, and skills |
 | `up`, `down` | Browse input history |
 | `pgup`, `pgdown`, `ctrl+u`, `ctrl+d` | Scroll conversation |
@@ -615,8 +632,12 @@ task run                # build and launch
 task dev                # go run ./cmd/local-agent
 task test               # go test ./...
 task lint               # golangci-lint run ./...
+task verify             # Go verification plus production website build
 task glyphrun           # terminal behavior specs
 task glyphrun-snapshots # refresh intentional TUI snapshots
+task site               # local documentation development server
+task site:build         # production website build
+task site:preview       # build and preview the production website
 task clean
 ```
 

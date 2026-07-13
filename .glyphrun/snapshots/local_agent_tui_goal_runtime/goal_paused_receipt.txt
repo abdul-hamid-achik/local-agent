@@ -20,4 +20,3 @@
        │ Resume or safely retry goal evaluation                         │
        │ esc close · ←/→ action · enter select · j/k scroll             │
        ╰────────────────────────────────────────────────────────────────╯
-❯ Ask, @mention files, or type /help

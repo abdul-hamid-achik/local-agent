@@ -34,3 +34,38 @@ func TestStartupLegacyMemoryInventoryNeverClaims(t *testing.T) {
 		t.Fatalf("startup inventory changed global legacy memory count to %d", got)
 	}
 }
+
+func TestStartupLegacyMemoryClaimedByAnotherWorkspaceIsSilent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspaceA := t.TempDir()
+	workspaceB := t.TempDir()
+	legacyPath := memory.DefaultPathForWorkspace("")
+	legacy := memory.NewStore(legacyPath)
+	if _, err := legacy.Save("workspace A fact", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	preview, err := memory.PreviewDefaultLegacyForWorkspace(workspaceA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := memory.ClaimPreviewedDefaultLegacyForWorkspace(workspaceA, preview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Claimed {
+		t.Fatalf("claim result = %#v", result)
+	}
+
+	if notice := legacyMemoryQuarantineNotice(workspaceB); notice != "" {
+		t.Fatalf("completed claim produced startup noise: %q", notice)
+	}
+	if _, err := os.Stat(memory.DefaultPathForWorkspace(workspaceB)); !os.IsNotExist(err) {
+		t.Fatalf("silent inventory created workspace B store: %v", err)
+	}
+	for _, path := range []string{result.MarkerPath, result.BackupPath, preview.ScopedPath} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("completed claim artifact %s changed: %v", path, err)
+		}
+	}
+}

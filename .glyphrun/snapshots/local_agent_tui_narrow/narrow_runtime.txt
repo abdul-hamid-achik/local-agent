@@ -1,6 +1,6 @@
               LOCAL AGENT
     Local-first · tool effects ask
-           PLAN · qwen3.5:2b
+      PLAN · qwen3.5:2b · offline
  ╭────────────────────────────────────╮
  │ Runtime                            │
  │                                    │
@@ -16,4 +16,3 @@
 
 
 ───────────────────────────────────────
-❯ Ask, @mention files, or type /help

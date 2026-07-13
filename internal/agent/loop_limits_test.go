@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -51,6 +52,15 @@ func (o *limitOutput) ToolCallStart(string, string, map[string]any)             
 func (*limitOutput) ToolCallResult(string, string, string, bool, time.Duration) {}
 func (*limitOutput) SystemMessage(string)                                       {}
 func (*limitOutput) Error(string)                                               {}
+
+type contextBudgetOutput struct {
+	limitOutput
+	errors []string
+}
+
+func (o *contextBudgetOutput) Error(message string) {
+	o.errors = append(o.errors, message)
+}
 
 type partialLimitedClient struct {
 	limit int
@@ -109,6 +119,40 @@ func (*boundedSideGenerationClient) Embed(_ context.Context, _ string, texts []s
 		result[index] = []float32{1}
 	}
 	return result, nil
+}
+
+type boundedToolResultClient struct {
+	calls atomic.Int64
+}
+
+func (c *boundedToolResultClient) ChatStream(_ context.Context, _ llm.ChatOptions, emit func(llm.StreamChunk) error) error {
+	call := c.calls.Add(1)
+	if call == 1 {
+		return emit(llm.StreamChunk{
+			Done: true, EvalCount: 1,
+			ToolCalls: []llm.ToolCall{{
+				ID: "expand-result", Name: "exists", Arguments: map[string]any{"path": "."},
+			}},
+		})
+	}
+	return emit(llm.StreamChunk{Text: "must not be requested", Done: true, EvalCount: 1})
+}
+
+func (*boundedToolResultClient) Ping() error   { return nil }
+func (*boundedToolResultClient) Model() string { return "bounded-tool-result-test" }
+func (*boundedToolResultClient) NumCtx() int   { return 1_200 }
+func (*boundedToolResultClient) Embed(context.Context, string, []string) ([][]float32, error) {
+	return nil, nil
+}
+
+type expandToolResultHook struct{}
+
+func (*expandToolResultHook) Name() string { return "expand-tool-result" }
+func (*expandToolResultHook) PreToolUse(context.Context, *llm.ToolCall) (bool, string) {
+	return false, ""
+}
+func (*expandToolResultHook) PostToolUse(_ context.Context, _ llm.ToolCall, result *string, _ bool) {
+	*result = strings.Repeat("tool-output ", 8_192)
 }
 
 type joinedAutoMemoryClient struct {
@@ -237,12 +281,12 @@ func TestRunTurnWithLimitsSkipsOptionalProviderGenerations(t *testing.T) {
 	engine, err := ice.NewEngine(client, memories, ice.EngineConfig{
 		StorePath: filepath.Join(dir, "conversations.json"),
 		Workspace: dir,
-		NumCtx:    64,
+		NumCtx:    16_384,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	agent := New(client, nil, 64)
+	agent := New(client, nil, 16_384)
 	agent.SetWorkDir(dir)
 	agent.SetICEEngine(engine)
 	defer agent.Close()
@@ -263,6 +307,58 @@ func TestRunTurnWithLimitsSkipsOptionalProviderGenerations(t *testing.T) {
 	}
 	if calls := client.uncappedCalls.Load(); calls != 0 {
 		t.Fatalf("bounded turn made %d uncapped provider generations", calls)
+	}
+}
+
+func TestRunTurnWithLimitsRejectsOversizedPromptBeforeProvider(t *testing.T) {
+	client := &boundedSideGenerationClient{}
+	agent := New(client, nil, 64)
+	agent.SetWorkDir(t.TempDir())
+	for index := 0; index < 3; index++ {
+		agent.AppendMessage(llm.Message{Role: "user", Content: "A long prior user message that pushes this bounded turn beyond its safe context threshold."})
+		agent.AppendMessage(llm.Message{Role: "assistant", Content: "A long prior assistant response that must be compacted before any new provider request."})
+	}
+	agent.AppendMessage(llm.Message{Role: "user", Content: "Continue the bounded goal."})
+	output := &contextBudgetOutput{}
+
+	err := agent.RunTurnWithLimits(context.Background(), output, "turn_context_full", TurnLimits{MaxEvalTokens: 8})
+	if !errors.Is(err, ErrTurnContextBudgetExceeded) {
+		t.Fatalf("error = %v, want context-budget error", err)
+	}
+	var detail *TurnContextBudgetError
+	if !errors.As(err, &detail) || detail.EstimatedPromptTokens <= 0 || detail.ContextWindowTokens != 64 {
+		t.Fatalf("typed context error = %#v", detail)
+	}
+	if calls := client.calls.Load(); calls != 0 {
+		t.Fatalf("oversized bounded turn made %d provider call(s), want zero", calls)
+	}
+	if len(output.errors) != 1 || !strings.Contains(output.errors[0], "compact history") || !strings.Contains(output.errors[0], "retry") {
+		t.Fatalf("recovery message = %#v", output.errors)
+	}
+}
+
+func TestRunTurnWithLimitsRejectsOversizedToolResultBeforeSecondProviderCall(t *testing.T) {
+	client := &boundedToolResultClient{}
+	agent := New(client, nil, 1_200)
+	agent.SetWorkDir(t.TempDir())
+	agent.SetModeContext("test", NewToolPolicy([]string{"exists"}, nil, false))
+	agent.AddToolHook(&expandToolResultHook{})
+	agent.AddUserMessage("Check whether the workspace exists, then continue the bounded goal.")
+	output := &contextBudgetOutput{}
+
+	err := agent.RunTurnWithLimits(context.Background(), output, "turn_tool_context_full", TurnLimits{MaxEvalTokens: 8})
+	if !errors.Is(err, ErrTurnContextBudgetExceeded) {
+		t.Fatalf("error = %v, provider calls = %d; want context-budget error", err, client.calls.Load())
+	}
+	if calls := client.calls.Load(); calls != 1 {
+		t.Fatalf("provider calls = %d, want exactly one before the tool result filled context", calls)
+	}
+	if starts := output.toolStarts.Load(); starts != 1 {
+		t.Fatalf("tool starts = %d, want one", starts)
+	}
+	var detail *TurnContextBudgetError
+	if !errors.As(err, &detail) || detail.EstimatedPromptTokens <= 0 || detail.ContextWindowTokens != 1_200 {
+		t.Fatalf("typed context error = %#v", detail)
 	}
 }
 

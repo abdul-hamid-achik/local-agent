@@ -195,12 +195,20 @@ func TestMemoryRiskyModelGuard(t *testing.T) {
 		t.Errorf("override env should allow large model, got: %v", err)
 	}
 	c.Ollama.Model = "qwen3.5:cloud"
-	if err := c.Validate(); err == nil {
-		t.Error("large-model override must not allow a cloud alias")
+	if err := c.Validate(); err != nil {
+		t.Errorf("config validation guessed execution location from a tag: %v", err)
 	}
 	c.Ollama.Model = "company-model:remote"
-	if err := c.Validate(); err == nil {
-		t.Error("large-model override must not allow a remote alias")
+	if err := c.Validate(); err != nil {
+		t.Errorf("config validation guessed remote execution from a tag: %v", err)
+	}
+	if err := CheckModelMemorySafe("qwen3.5:cloud"); err == nil {
+		t.Error("legacy unverified local-only check accepted a cloud alias")
+	}
+	c.Privacy.LocalOnly = false
+	c.Ollama.Model = "qwen3.5:cloud"
+	if err := c.Validate(); err != nil {
+		t.Errorf("Ollama cloud should be configurable when local-only is disabled: %v", err)
 	}
 }
 
@@ -221,8 +229,8 @@ func TestLocalModelSizeGuardUsesInventoryBytes(t *testing.T) {
 	if err := CheckLocalModelSizeSafe("deepseek-r1:latest", 10<<30); err != nil {
 		t.Fatalf("explicit measured-hardware override rejected: %v", err)
 	}
-	if err := CheckLocalModelSizeSafe("provider-cloud", 1<<30); err == nil {
-		t.Fatal("hardware override accepted a cloud alias")
+	if err := CheckLocalModelSizeSafe("provider-cloud", 1<<30); err != nil {
+		t.Fatalf("structured local inventory was overridden by a name heuristic: %v", err)
 	}
 }
 

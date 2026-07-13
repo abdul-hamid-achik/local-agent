@@ -117,20 +117,20 @@ func run() int {
 			}
 		}
 	}
-	// Discover the actual local Ollama inventory once. Routing uses this set to
-	// degrade to an installed tier instead of selecting a missing 0.8B/4B model
-	// from the static catalog. Cloud entries are excluded and byte sizes are
-	// retained for central memory admission.
+	// Ollama owns model availability. Local Agent applies privacy, capability,
+	// and memory policy to that inventory instead of inventing availability from
+	// a static catalog.
 	modelManager := llm.NewModelManager(cfg.Ollama.BaseURL, cfg.Ollama.NumCtx)
 	defer modelManager.Close()
 	discoveryCtx, cancelDiscovery := context.WithTimeout(context.Background(), 2*time.Second)
-	localInventory, discoveryErr := modelManager.ListLocalModelInventory(discoveryCtx)
+	ollamaInventory, discoveryErr := modelManager.ListOllamaModels(discoveryCtx)
 	cancelDiscovery()
-	localModels := make([]string, len(localInventory))
-	for i, model := range localInventory {
-		localModels[i] = model.Name
+	if discoveryErr == nil {
+		enrichCtx, cancelEnrich := context.WithTimeout(context.Background(), 2*time.Second)
+		ollamaInventory = enrichOllamaCapabilities(enrichCtx, modelManager, ollamaInventory, &cfg.Model)
+		cancelEnrich()
 	}
-	modelManager.ConfigureLocalInventory(cfg.Privacy.LocalOnly, localInventory, discoveryErr == nil)
+	modelManager.ConfigureOllamaRuntimeInventory(cfg.Privacy.LocalOnly, ollamaInventory, discoveryErr == nil)
 	if discoveryErr != nil && cfg.Privacy.LocalOnly && *promptFlag != "" {
 		fmt.Fprintf(os.Stderr, "model: local-only mode could not verify Ollama local weights: %v\n", discoveryErr)
 		return 1
@@ -140,12 +140,15 @@ func run() int {
 		fmt.Fprintln(os.Stderr, "model router does not support local inventory")
 		return 1
 	}
+	manualChatModels := manuallySelectableOllamaChatModels(ollamaInventory, cfg.Privacy.LocalOnly)
+	autoChatModels := autoRoutableOllamaChatModels(ollamaInventory)
 	modelName, modelList, err := resolveStartupModel(
 		modelName,
 		modelPinned,
 		cfg.Privacy.LocalOnly,
 		&cfg.Model,
-		localModels,
+		manualChatModels,
+		autoChatModels,
 		discoveryErr == nil,
 		awareRouter,
 	)
@@ -154,7 +157,7 @@ func run() int {
 		return 1
 	}
 	if discoveryErr != nil {
-		fmt.Fprintf(os.Stderr, "warning: local model discovery failed: %v\n", discoveryErr)
+		fmt.Fprintf(os.Stderr, "warning: Ollama model discovery failed: %v\n", discoveryErr)
 	}
 
 	if discoveryErr == nil || !cfg.Privacy.LocalOnly {
@@ -309,9 +312,9 @@ func run() int {
 				fmt.Fprintln(os.Stderr, "model routing failed: no compatible local chat model is installed")
 				return 1
 			}
-			if cfg.Privacy.LocalOnly && discoveryErr == nil {
-				if err := config.CheckModelAvailableLocally(modelName, localModels); err != nil {
-					fmt.Fprintf(os.Stderr, "model routing failed: %v\n", err)
+			if discoveryErr == nil {
+				if !containsModel(autoChatModels, modelName) {
+					fmt.Fprintf(os.Stderr, "model routing failed: model %q is not admitted for automatic local routing\n", modelName)
 					return 1
 				}
 			}
@@ -324,7 +327,7 @@ func run() int {
 		// Ping Ollama synchronously.
 		fmt.Fprintf(os.Stderr, "connecting to Ollama (%s)...\n", modelName)
 		if err := modelManager.Ping(); err != nil {
-			fmt.Fprintf(os.Stderr, "ollama: %v\nhint: is `ollama serve` running? is %q pulled?\n", err, modelName)
+			fmt.Fprintf(os.Stderr, "ollama: %v\ntry: ollama serve · ollama pull %s\n", err, modelName)
 			return 1
 		}
 
@@ -531,7 +534,7 @@ func run() int {
 		p.Send(ui.StartupStatusMsg{ID: "ollama", Label: "Ollama (" + modelName + ")", Status: "connecting"})
 		if err := modelManager.Ping(); err != nil {
 			p.Send(ui.StartupStatusMsg{ID: "ollama", Label: "Ollama (" + modelName + ")", Status: "failed", Detail: err.Error()})
-			p.Send(ui.ErrorMsg{Msg: fmt.Sprintf("ollama: %v\nhint: is `ollama serve` running? is %q pulled?", err, modelName)})
+			p.Send(ui.ErrorMsg{Msg: fmt.Sprintf("ollama: %v\ntry: ollama serve · ollama pull %s", err, modelName)})
 			// Continue — non-fatal for TUI, user can see the error.
 		} else {
 			p.Send(ui.StartupStatusMsg{ID: "ollama", Label: "Ollama (" + modelName + ")", Status: "connected"})
@@ -610,6 +613,20 @@ func run() int {
 		}
 
 		// 5. Collect results and send InitCompleteMsg.
+		var runningModels []llm.OllamaRunningModel
+		ollamaVersion := ""
+		if discoveryErr == nil {
+			metadataCtx, cancelMetadata := context.WithTimeout(initCtx, 2*time.Second)
+			runningModels, _ = modelManager.ListRunningOllamaModels(metadataCtx)
+			ollamaVersion, _ = modelManager.OllamaVersion(metadataCtx)
+			cancelMetadata()
+		}
+		ollamaModels := ui.BuildOllamaModelDescriptors(
+			ollamaInventory, runningModels, modelName, cfg.Privacy.LocalOnly,
+		)
+		for index := range ollamaModels {
+			ollamaModels[index].EffectiveContext = modelManager.ContextPolicy(ollamaModels[index].Name).Effective
+		}
 		var failedServers []ui.FailedServer
 		for _, fs := range registry.FailedServers() {
 			failedServers = append(failedServers, ui.FailedServer{
@@ -619,17 +636,21 @@ func run() int {
 		}
 
 		p.Send(ui.InitCompleteMsg{
-			Model:            modelName,
-			ModelList:        modelList,
-			AgentProfile:     activeAgentProfile,
-			AgentList:        agentList,
-			ToolCount:        ag.ToolCount(),
-			ServerCount:      registry.ServerCount(),
-			NumCtx:           cfg.Ollama.NumCtx,
-			FailedServers:    failedServers,
-			ICEEnabled:       iceEnabled,
-			ICEConversations: iceConversations,
-			ICESessionID:     iceSessionID,
+			Model:                    modelName,
+			ModelList:                modelList,
+			OllamaModels:             ollamaModels,
+			OllamaVersion:            ollamaVersion,
+			LocalOnly:                cfg.Privacy.LocalOnly,
+			OllamaInventoryAttempted: true,
+			AgentProfile:             activeAgentProfile,
+			AgentList:                agentList,
+			ToolCount:                ag.ToolCount(),
+			ServerCount:              registry.ServerCount(),
+			NumCtx:                   modelManager.NumCtx(),
+			FailedServers:            failedServers,
+			ICEEnabled:               iceEnabled,
+			ICEConversations:         iceConversations,
+			ICESessionID:             iceSessionID,
 		})
 	}()
 
@@ -728,6 +749,12 @@ func applyWorkspaceIgnore(ag *agent.Agent, workDir string) error {
 func legacyMemoryQuarantineNotice(workspace string) string {
 	preview, err := memory.PreviewDefaultLegacyForWorkspace(workspace)
 	if err != nil {
+		// A completed claim belongs to exactly one workspace. Other workspaces
+		// already use their own scoped store, so repeating that durable receipt
+		// on every launch is noise rather than an actionable startup failure.
+		if errors.Is(err, memory.ErrLegacyMemoryClaimedByAnotherWorkspace) {
+			return ""
+		}
 		return fmt.Sprintf("legacy memory remains quarantined: %v", err)
 	}
 	if !preview.AlreadyClaimed && preview.Count > 0 {

@@ -62,15 +62,6 @@ func defaultGoalFormValues(objective string) GoalFormValues {
 	}
 }
 
-func (m *Model) hasLiveGoal() bool {
-	if m.goalRuntime == nil {
-		return false
-	}
-	snapshot, err := m.goalRuntime.Snapshot(context.Background())
-	// A snapshot failure must not make an existing runtime look replaceable.
-	return err != nil || !snapshot.State.Terminal()
-}
-
 func (m *Model) handleAutoModeSubmit(text string) tea.Cmd {
 	if m.goalRuntime == nil {
 		if err := m.openGoalDraftForm(text); err != nil {
@@ -128,6 +119,32 @@ func (m *Model) openGoalDraftForm(prompt string) error {
 	return m.openGoalFormInternal(prompt, false, true)
 }
 
+func (m *Model) openGoalRequestForm(request command.GoalRequest) error {
+	if !request.TimeExplicit {
+		return m.openGoalDraftForm(request.Prompt)
+	}
+	draft, err := goal.InferDraft(request.Prompt, goal.BudgetLimits{MaxWallTime: request.TimeBudget})
+	if err != nil {
+		return fmt.Errorf("infer goal draft: %w", err)
+	}
+	values := GoalFormValues{
+		Objective:          draft.Objective,
+		AcceptanceCriteria: strings.Join(draft.AcceptanceCriteria, "\n"),
+		TimeBudget:         request.TimeBudget,
+	}
+	m.goalFormState = NewGoalForm(values, GoalFormOptions{
+		Width: m.width, Height: m.height, IsDark: m.isDark,
+		ReducedMotion: m.reducedMotion, DraftFromPrompt: true,
+	})
+	if values.Objective != "" && len(values.CriterionDescriptions()) > 0 {
+		m.goalFormState.focusField(GoalFieldActions)
+	}
+	m.overlayParent = OverlayNone
+	m.overlay = OverlayGoalForm
+	m.input.Blur()
+	return nil
+}
+
 func (m *Model) openGoalFormInternal(objective string, budgetOnly, draftFromPrompt bool) error {
 	values := defaultGoalFormValues(objective)
 	if draftFromPrompt {
@@ -183,6 +200,10 @@ func (m *Model) applyGoalForm(event GoalFormEvent) tea.Cmd {
 	}
 	budgetOnly := m.goalFormState.BudgetOnly()
 	values := event.Values
+	if !budgetOnly && m.mode == ModePlan {
+		m.goalFormState.SetError("PLAN is read-only. Use AUTO to save this goal.")
+		return nil
+	}
 	if budgetOnly {
 		if m.goalRuntime == nil {
 			m.appendGoalError("No goal is configured.")

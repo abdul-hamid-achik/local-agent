@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestLiveToolCardRetainsInspectableArguments(t *testing.T) {
@@ -138,9 +139,9 @@ func TestOverlayOnContent_Positioning(t *testing.T) {
 	}
 }
 
-func TestOverlayOnContent_ClearsOverlayRows(t *testing.T) {
+func TestOverlayOnContent_PreservesCellsOutsideOverlay(t *testing.T) {
 	m := newTestModel(t)
-	m.width = 40
+	m.width = 48
 	m.height = 5
 
 	base := strings.Join([]string{
@@ -150,6 +151,7 @@ func TestOverlayOnContent_ClearsOverlayRows(t *testing.T) {
 		strings.Repeat("x", m.width),
 		strings.Repeat("x", m.width),
 	}, "\n")
+	baseRows := strings.Split(base, "\n")
 	overlay := "modal"
 
 	result := m.overlayOnContent(base, overlay)
@@ -158,9 +160,119 @@ func TestOverlayOnContent_ClearsOverlayRows(t *testing.T) {
 	if got := lipgloss.Width(lines[overlayRow]); got != m.width {
 		t.Fatalf("overlay row width = %d, want %d", got, m.width)
 	}
-	if strings.Contains(lines[overlayRow], "x") {
-		t.Fatalf("overlay row should be padded with spaces, got %q", lines[overlayRow])
+	start := centeredOverlayLineX(m.width, overlay)
+	want := strings.Repeat("x", start) + overlay + strings.Repeat("x", m.width-start-lipgloss.Width(overlay))
+	if got := ansi.Strip(lines[overlayRow]); got != want {
+		t.Fatalf("overlay row changed cells outside modal:\n got %q\nwant %q", got, want)
 	}
+	for row, line := range lines {
+		if row != overlayRow && line != baseRows[row] {
+			t.Fatalf("overlay changed untouched row %d: got %q", row, line)
+		}
+	}
+}
+
+func TestOverlayOnContent_CompactRowsMaskBaseFragments(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 30
+	m.height = 5
+
+	base := strings.Join([]string{
+		strings.Repeat("x", m.width),
+		strings.Repeat("x", m.width),
+		strings.Repeat("x", m.width),
+		strings.Repeat("x", m.width),
+		strings.Repeat("x", m.width),
+	}, "\n")
+	overlay := "╭────╮\n│ ok │\n╰────╯"
+
+	result := ansi.Strip(m.overlayOnContent(base, overlay))
+	lines := strings.Split(result, "\n")
+	startY := centeredOverlayStartY(base, overlay)
+	for row, line := range lines {
+		if row < startY || row >= startY+lipgloss.Height(overlay) {
+			if line != strings.Repeat("x", m.width) {
+				t.Fatalf("compact mask changed untouched row %d: %q", row, line)
+			}
+			continue
+		}
+		if strings.Contains(line, "x") {
+			t.Fatalf("compact overlay row %d retained base fragments: %q", row, line)
+		}
+	}
+}
+
+func TestOverlayOnContent_MasksRowsWithTokenFragmentGutters(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 80
+	m.height = 5
+	base := strings.TrimSuffix(strings.Repeat(strings.Repeat("x", m.width)+"\n", 5), "\n")
+	overlay := "╭" + strings.Repeat("─", 66) + "╮\n│" + strings.Repeat(" ", 66) + "│\n╰" + strings.Repeat("─", 66) + "╯"
+
+	result := ansi.Strip(m.overlayOnContent(base, overlay))
+	lines := strings.Split(result, "\n")
+	startY := centeredOverlayStartY(base, overlay)
+	for row := startY; row < startY+lipgloss.Height(overlay); row++ {
+		if strings.Contains(lines[row], "x") {
+			t.Fatalf("near-full overlay row %d retained token fragments: %q", row, lines[row])
+		}
+	}
+}
+
+func TestOverlayOnContent_PreservesStyledWideTranscriptCells(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 48
+	m.height = 5
+
+	baseText := "界 transcript 🙂 remains"
+	baseText += strings.Repeat("·", m.width-lipgloss.Width(baseText))
+	palette := newSemanticPalette(true)
+	baseLine := lipgloss.NewStyle().
+		Foreground(palette.Text).
+		Background(palette.Border).
+		Render(baseText)
+	base := strings.Join([]string{baseLine, baseLine, baseLine, baseLine, baseLine}, "\n")
+	overlay := lipgloss.NewStyle().
+		Foreground(palette.Text).
+		Background(palette.Accent).
+		Render("╭─ command ─╮")
+
+	result := m.overlayOnContent(base, overlay)
+	resultLines := strings.Split(result, "\n")
+	row := centeredOverlayStartY(base, overlay)
+	start := centeredOverlayLineX(m.width, overlay)
+	end := start + lipgloss.Width(overlay)
+
+	wantCells := renderOverlayTestLine(baseLine, m.width)
+	gotCells := renderOverlayTestLine(resultLines[row], m.width)
+	for x := 0; x < m.width; x++ {
+		if x >= start && x < end {
+			continue
+		}
+		if !wantCells.CellAt(x, 0).Equal(gotCells.CellAt(x, 0)) {
+			t.Fatalf("outside cell %d changed: base=%#v result=%#v", x, wantCells.CellAt(x, 0), gotCells.CellAt(x, 0))
+		}
+	}
+
+	overlayCells := renderOverlayTestLine(overlay, lipgloss.Width(overlay))
+	for x := start; x < end; x++ {
+		if !overlayCells.CellAt(x-start, 0).Equal(gotCells.CellAt(x, 0)) {
+			t.Fatalf("modal cell %d was not composited: overlay=%#v result=%#v", x, overlayCells.CellAt(x-start, 0), gotCells.CellAt(x, 0))
+		}
+	}
+
+	untouched := renderOverlayTestLine(resultLines[0], m.width)
+	for x := 0; x < m.width; x++ {
+		if !wantCells.CellAt(x, 0).Equal(untouched.CellAt(x, 0)) {
+			t.Fatalf("untouched colored row changed at cell %d", x)
+		}
+	}
+}
+
+func renderOverlayTestLine(line string, width int) *lipgloss.Canvas {
+	canvas := lipgloss.NewCanvas(width, 1)
+	canvas.Compose(lipgloss.NewLayer(line))
+	return canvas
 }
 
 // TestToolCard_WidthCalculation verifies tool cards respect width constraints

@@ -1,3 +1,9 @@
+---
+title: Legacy data migration
+description: Recover quarantined historical memory, ICE entries, and checkpoints without assigning unscoped data to the wrong workspace.
+outline: deep
+---
+
 # Legacy data migration
 
 Workspace scoping deliberately does not make unowned historical data visible
@@ -9,7 +15,8 @@ never repeated for another workspace.
 Startup performs only `memory.PreviewDefaultLegacyForWorkspace(workspace)`.
 It reports provenance-free data as quarantined and opens the current
 workspace's scoped store; it never assigns the global file to the first current
-directory. Headless mode has no claim path.
+directory. A completed claim owned by another workspace stays isolated without
+being repeated as a startup failure. Headless mode has no claim path.
 
 In the TUI:
 

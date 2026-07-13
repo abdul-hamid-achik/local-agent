@@ -1,0 +1,26 @@
+
+
+
+
+
+
+
+             ╭──────────────────────────────────────────────────────────────╮
+             │ Use Ollama Cloud?                                            │
+             │ Prompts, context, files, and tool results leave this machine │
+             │ through Ollama Cloud.                                        │
+             │                                                              │
+             │ │ Cancel                                                     │
+             │ │ Keep this conversation local-only                          │
+             │   Use kimi-code:cloud for this conversation                  │
+             │   One conversation · never auto-routed · not saved           │
+             │                                                              │
+             │ esc cancel · enter use                                       │
+             ╰──────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+─────────────────────────────────────────────────────────────────────────────────────────

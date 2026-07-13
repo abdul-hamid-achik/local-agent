@@ -31,6 +31,10 @@ type ChatOptions struct {
 	Tools         []ToolDef
 	System        string
 	MaxEvalTokens int // zero leaves provider generation uncapped
+	// ExpectedContext pins a host-side context budget to the request. Provider
+	// managers use it to reject a turn whose model policy changed after the
+	// agent took its budget snapshot. Direct clients may ignore it.
+	ExpectedContext int
 }
 
 // Message represents a conversation message.

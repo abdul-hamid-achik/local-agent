@@ -118,8 +118,10 @@ func DefaultKeyMap() KeyMap {
 			key.WithHelp("shift+tab", "cycle mode (NORMAL/PLAN/AUTO)"),
 		),
 		ModelPicker: key.NewBinding(
-			key.WithKeys("ctrl+m"),
-			key.WithHelp("ctrl+m", "quick model switch"),
+			// Ctrl+M is carriage return in ordinary terminals and therefore
+			// indistinguishable from Enter without an enhanced keyboard protocol.
+			key.WithKeys("ctrl+o"),
+			key.WithHelp("ctrl+o", "open Ollama models"),
 		),
 		SettingsPicker: key.NewBinding(
 			key.WithKeys("ctrl+p"),

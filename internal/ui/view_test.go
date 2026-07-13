@@ -200,4 +200,15 @@ func TestContextUsageInComposerStatus(t *testing.T) {
 			t.Errorf("high context warning should outrank model metadata, got %q", status)
 		}
 	})
+
+	t.Run("cloud_uses_effective_window", func(t *testing.T) {
+		m := newTestModel(t)
+		m.model = "kimi-k2.7-code:cloud"
+		m.promptTokens = 120_351
+		m.numCtx = 1_048_576
+		status := m.renderStatusLine()
+		if !strings.Contains(status, "ctx 11%") || strings.Contains(status, "ctx 100%") {
+			t.Fatalf("cloud context status = %q, want 11%%", status)
+		}
+	})
 }

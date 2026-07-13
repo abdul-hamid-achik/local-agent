@@ -1,11 +1,11 @@
 
   ollama: no model
   selected
-  hint: is `ollama
-  serve` running? is
-  "qwen3.5:2b" pulled?
+  try: ollama serve ·
+  ollama pull
+  qwen3.5:2b
 
 
 ─────────────────────────────
- NORMAL · ctrl+p settings
+ ctrl+p settings · qwen3.5:2b
 ❯ Ask or type / for commands

@@ -33,7 +33,7 @@ steps:
       timeoutMs: 5000
   - wait:
       screen:
-        contains: "NORMAL"
+        contains: "qwen3.5:2b"
       timeoutMs: 2000
   - type: "Create approval-probe.txt with the exact text must not be written."
   - press: "enter"

@@ -4,6 +4,10 @@ import (
 	"testing"
 )
 
+type iceContextWindowStub struct{ numCtx int }
+
+func (s *iceContextWindowStub) NumCtx() int { return s.numCtx }
+
 func TestEngineConfigDefaults(t *testing.T) {
 	// Test embed model default
 	embedModel := ""
@@ -69,5 +73,21 @@ func TestBudgetConfigPercentages(t *testing.T) {
 	}
 	if budget.Code != 3475 {
 		t.Errorf("Code = %d, want %d", budget.Code, 3475)
+	}
+}
+
+func TestEngineBudgetTracksProviderContextWindow(t *testing.T) {
+	provider := &iceContextWindowStub{numCtx: 16_384}
+	engine := &Engine{budgetCfg: DefaultBudgetConfig(4_096), context: provider}
+	if got := engine.activeBudgetConfigLocked().NumCtx; got != 16_384 {
+		t.Fatalf("local budget context = %d, want 16384", got)
+	}
+	provider.numCtx = 1_048_576
+	if got := engine.activeBudgetConfigLocked().NumCtx; got != 1_048_576 {
+		t.Fatalf("cloud budget context = %d, want 1048576", got)
+	}
+	provider.numCtx = 0
+	if got := engine.activeBudgetConfigLocked().NumCtx; got != 4_096 {
+		t.Fatalf("unknown provider context = %d, want configured fallback 4096", got)
 	}
 }

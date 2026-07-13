@@ -34,7 +34,7 @@ steps:
       timeoutMs: 5000
   - wait:
       screen:
-        contains: "NORMAL"
+        contains: "qwen3.5:2b"
       timeoutMs: 2000
   - type: "Create always-first.txt with the exact text first approval."
   - press: "enter"
@@ -62,7 +62,7 @@ steps:
       timeoutMs: 5000
   - wait:
       screen:
-        contains: "NORMAL"
+        contains: "qwen3.5:2b"
       timeoutMs: 5000
   - type: "Create always-second.txt with the exact text second policy use."
   - press: "enter"

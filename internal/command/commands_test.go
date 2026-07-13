@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func newTestRegistry() *Registry {
@@ -70,6 +71,44 @@ func TestBuiltin_Goal(t *testing.T) {
 		{name: "new rejects active goal", ctx: &Context{GoalConfigured: true, GoalStatus: "active"}, args: []string{"new", "other"}, wantError: true},
 		{name: "unknown flag fails closed", ctx: &Context{}, args: []string{"--forever"}, wantError: true},
 	}
+
+	for _, test := range []struct {
+		args     []string
+		wantTime time.Duration
+		wantText string
+		wantErr  bool
+	}{
+		{args: []string{"30m", "polish", "the", "TUI"}, wantTime: 30 * time.Minute, wantText: "polish the TUI"},
+		{args: []string{"1h30m", "finish", "release"}, wantTime: 90 * time.Minute, wantText: "finish release"},
+		{args: []string{"30m"}, wantErr: true},
+		{args: []string{"0m", "never"}, wantErr: true},
+		{args: []string{"30min", "polish", "the", "TUI"}, wantErr: true},
+	} {
+		result := r.Execute(&Context{}, "goal", test.args)
+		if test.wantErr {
+			if result.Error == "" {
+				t.Fatalf("/goal %v accepted", test.args)
+			}
+			continue
+		}
+		if result.Error != "" || result.Goal == nil || result.Goal.TimeBudget != test.wantTime || result.Goal.Prompt != test.wantText || !result.Goal.TimeExplicit {
+			t.Fatalf("/goal %v = %#v", test.args, result)
+		}
+	}
+
+	t.Run("invalid duration is explicit", func(t *testing.T) {
+		result := r.Execute(&Context{}, "goal", []string{"30min", "polish", "the", "TUI"})
+		if result.Goal != nil || !strings.Contains(result.Error, "invalid goal duration") || !strings.Contains(result.Error, "30m") {
+			t.Fatalf("invalid duration result = %#v", result)
+		}
+	})
+
+	t.Run("numeric objective remains free-form", func(t *testing.T) {
+		result := r.Execute(&Context{}, "goal", []string{"2026", "roadmap"})
+		if result.Error != "" || result.Goal == nil || result.Goal.TimeExplicit || result.Goal.Prompt != "2026 roadmap" {
+			t.Fatalf("numeric objective = %#v", result)
+		}
+	})
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -137,18 +176,8 @@ func TestBuiltin_Model(t *testing.T) {
 			args:      []string{"list"},
 			checkText: "Available models",
 		},
-		{
-			name:       "fast switches to first",
-			args:       []string{"fast"},
-			wantAction: ActionSwitchModel,
-			wantData:   "qwen3.5:0.8b",
-		},
-		{
-			name:       "smart switches to last",
-			args:       []string{"smart"},
-			wantAction: ActionSwitchModel,
-			wantData:   "qwen3.5:9b",
-		},
+		{name: "fast shortcut removed", args: []string{"fast"}, wantErr: true},
+		{name: "smart shortcut removed", args: []string{"smart"}, wantErr: true},
 		{
 			name:       "valid name switches",
 			args:       []string{"qwen3.5:2b"},
@@ -197,6 +226,18 @@ func TestBuiltin_Models(t *testing.T) {
 	result := r.Execute(ctx, "models", nil)
 	if result.Action != ActionShowModelPicker {
 		t.Errorf("expected ActionShowModelPicker, got %d", result.Action)
+	}
+}
+
+func TestLegacyMigrationCommandsStayExecutableButHidden(t *testing.T) {
+	r := newTestRegistry()
+	for _, cmd := range r.All() {
+		if strings.HasPrefix(cmd.Name, "migrate-") {
+			t.Fatalf("maintenance command %q leaked into discovery", cmd.Name)
+		}
+	}
+	if result := r.Execute(&Context{}, "migrate-memory", nil); result.Action != ActionPreviewLegacyMemory {
+		t.Fatalf("hidden compatibility command stopped working: %#v", result)
 	}
 }
 
@@ -448,6 +489,32 @@ func TestBuiltin_Servers(t *testing.T) {
 			t.Errorf("expected tool count in output, got %q", result.Text)
 		}
 	})
+}
+
+func TestBuiltin_StatsSeparatesWorkloadFromContextOccupancy(t *testing.T) {
+	r := newTestRegistry()
+	result := r.Execute(&Context{
+		CurrentModel:       "kimi-k2.7-code:cloud",
+		SessionTurnCount:   6,
+		SessionEvalTotal:   3769,
+		SessionPromptTotal: 120351,
+		LatestPromptTokens: 120351,
+		NumCtx:             1_048_576,
+	}, "stats", nil)
+
+	for _, want := range []string{
+		"Prompt processed:  120351",
+		"Current request:  120351",
+		"Context window:  1048576",
+		"Context used:    11%",
+	} {
+		if !strings.Contains(result.Text, want) {
+			t.Fatalf("stats missing %q:\n%s", want, result.Text)
+		}
+	}
+	if strings.Contains(result.Text, "734%") || strings.Contains(result.Text, "(last turn)") {
+		t.Fatalf("stats still conflates session workload with occupancy:\n%s", result.Text)
+	}
 }
 
 func TestBuiltin_ICE(t *testing.T) {

@@ -13,5 +13,5 @@
   Recovery blocked: write_file has a durable dispatch marker but no terminal receipt. Its outcome is
   unknown, so automatic continuation is disabled. Inspect the workspace before starting /new.
 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
- [ NORMAL ] · qwen3.5:2b · ctrl+p settings
+ qwen3.5:2b · ctrl+p settings
 ❯ Ask, @mention files, or type /help

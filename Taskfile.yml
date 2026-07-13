@@ -17,6 +17,34 @@ tasks:
     cmds:
       - go run ./cmd/local-agent
 
+  'site:deps':
+    internal: true
+    sources:
+      - package.json
+      - package-lock.json
+    generates:
+      - node_modules/.package-lock.json
+    cmds:
+      - npm ci --no-audit --no-fund
+
+  site:
+    desc: Run the VitePress documentation site locally
+    deps: ['site:deps']
+    cmds:
+      - npm run site
+
+  'site:build':
+    desc: Build the VitePress documentation site
+    deps: ['site:deps']
+    cmds:
+      - npm run site:build
+
+  'site:preview':
+    desc: Preview the built VitePress documentation site
+    deps: ['site:build']
+    cmds:
+      - npm run site:preview
+
   lint:
     desc: Run linter
     cmds:
@@ -29,6 +57,7 @@ tasks:
 
   verify:
     desc: Run the same verification gates as CI
+    deps: ['site:build']
     cmds:
       - go mod tidy -diff
       - golangci-lint run ./...
@@ -39,7 +68,7 @@ tasks:
   glyphrun:
     desc: Run terminal behavior specs with Glyphrun
     cmds:
-      - glyph run specs/glyphrun/version.yml specs/glyphrun/tui_smoke.yml specs/glyphrun/tui_modes.yml specs/glyphrun/tui_narrow.yml specs/glyphrun/tui_goal_runtime.yml specs/glyphrun/tui_composer_paste.yml specs/glyphrun/tui_approval_denial.yml specs/glyphrun/tui_approval_always.yml specs/glyphrun/tui_session_receipts.yml specs/glyphrun/help.yml specs/glyphrun/logs_empty.yml specs/glyphrun/init.yml specs/glyphrun/tui_help.yml --format md --progress auto --parallel 1
+      - glyph run specs/glyphrun/version.yml specs/glyphrun/tui_smoke.yml specs/glyphrun/tui_modes.yml specs/glyphrun/tui_narrow.yml specs/glyphrun/tui_goal_runtime.yml specs/glyphrun/tui_ollama_inventory.yml specs/glyphrun/tui_composer_paste.yml specs/glyphrun/tui_approval_denial.yml specs/glyphrun/tui_approval_always.yml specs/glyphrun/tui_session_receipts.yml specs/glyphrun/help.yml specs/glyphrun/logs_empty.yml specs/glyphrun/init.yml specs/glyphrun/tui_help.yml --format md --progress auto --parallel 1
 
   glyphrun-snapshots:
     desc: Refresh committed Glyphrun terminal snapshots
@@ -48,6 +77,7 @@ tasks:
       - glyph snapshot update specs/glyphrun/tui_modes.yml --format md
       - glyph snapshot update specs/glyphrun/tui_narrow.yml --format md
       - glyph snapshot update specs/glyphrun/tui_goal_runtime.yml --format md
+      - glyph snapshot update specs/glyphrun/tui_ollama_inventory.yml --format md
       - glyph snapshot update specs/glyphrun/tui_composer_paste.yml --format md
       - glyph snapshot update specs/glyphrun/tui_approval_denial.yml --format md
       - glyph snapshot update specs/glyphrun/tui_session_receipts.yml --format md

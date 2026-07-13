@@ -85,7 +85,7 @@ func TestSettingsModeCommitsOnlyOnSelection(t *testing.T) {
 	}
 }
 
-func TestSettingsAutoSelectionMovesCleanlyIntoGoalEntry(t *testing.T) {
+func TestSettingsAutoSelectionChangesAuthorityWithoutCreatingGoal(t *testing.T) {
 	m := newTestModel(t)
 	m.openSettingsPicker()
 	m.settingsPickerState.List.Select(int(settingsMode))
@@ -99,11 +99,11 @@ func TestSettingsAutoSelectionMovesCleanlyIntoGoalEntry(t *testing.T) {
 	updated, _ = m.Update(enterKey())
 	m = updated.(*Model)
 
-	if m.mode != ModeAuto || m.overlay != OverlayGoalForm || m.goalFormState == nil {
+	if m.mode != ModeAuto || m.overlay != OverlaySettings || m.goalFormState != nil {
 		t.Fatalf("AUTO selection = mode %d overlay %d goal form %v", m.mode, m.overlay, m.goalFormState != nil)
 	}
-	if m.settingsPickerState != nil || m.overlayParent != OverlayNone {
-		t.Fatalf("AUTO entry retained stale Settings hierarchy: settings=%v parent=%d", m.settingsPickerState != nil, m.overlayParent)
+	if m.settingsPickerState == nil || m.overlayParent != OverlayNone {
+		t.Fatalf("AUTO selection lost Settings hierarchy: settings=%v parent=%d", m.settingsPickerState != nil, m.overlayParent)
 	}
 }
 

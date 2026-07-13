@@ -2,12 +2,14 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -37,6 +39,314 @@ func TestModelManagerNumCtx(t *testing.T) {
 	m := NewModelManager("http://localhost:11434", 8192)
 	if m.NumCtx() != 8192 {
 		t.Errorf("NumCtx() = %d, want %d", m.NumCtx(), 8192)
+	}
+}
+
+func TestModelManagerContextPolicyUsesVerifiedInventory(t *testing.T) {
+	manager := NewModelManager("http://localhost:11434", 16384)
+	manager.ConfigureOllamaInventory([]OllamaModel{
+		{Name: "local-small:latest", Location: OllamaModelLocationLocal, ContextLength: 8192},
+		{Name: "local-large:latest", Location: OllamaModelLocationLocal, ContextLength: 262144},
+		{Name: "cloud-large:latest", Location: OllamaModelLocationCloud, ContextLength: 1048576},
+		{Name: "remote:latest", Location: OllamaModelLocationRemote, ContextLength: 131072},
+	}, true)
+
+	tests := []struct {
+		name   string
+		model  string
+		policy ModelContextPolicy
+		known  bool
+	}{
+		{
+			name: "local native below allocation", model: "local-small",
+			policy: ModelContextPolicy{Native: 8192, Request: 8192, Effective: 8192, NativeKnown: true}, known: true,
+		},
+		{
+			name: "local native above allocation", model: "local-large",
+			policy: ModelContextPolicy{Native: 262144, Request: 16384, Effective: 16384, NativeKnown: true}, known: true,
+		},
+		{
+			name: "verified cloud omits allocation", model: "cloud-large",
+			policy: ModelContextPolicy{Native: 1048576, Effective: 1048576, Cloud: true, NativeKnown: true}, known: true,
+		},
+		{
+			name: "remote is not cloud", model: "remote",
+			policy: ModelContextPolicy{Native: 131072, Request: 16384, Effective: 16384, NativeKnown: true}, known: true,
+		},
+		{
+			name: "cloud suffix is not authority", model: "unverified:cloud",
+			policy: ModelContextPolicy{Request: 16384, Effective: 16384}, known: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := manager.ContextPolicy(test.model); got != test.policy {
+				t.Fatalf("policy = %#v, want %#v", got, test.policy)
+			}
+			if effective, known := manager.EffectiveContext(test.model); effective != test.policy.Effective || known != test.known {
+				t.Fatalf("effective context = %d, %v; want %d, %v", effective, known, test.policy.Effective, test.known)
+			}
+		})
+	}
+
+	manager.ConfigureOllamaInventory(nil, false)
+	if got := manager.ContextPolicy("cloud-large"); got.Cloud || got.NativeKnown || got.Request != 16384 || got.Effective != 16384 {
+		t.Fatalf("unverified refresh retained stale policy: %#v", got)
+	}
+}
+
+func TestModelManagerCloudContextRequiresVerifiedNativeMaximum(t *testing.T) {
+	manager := NewModelManager("http://localhost:11434", 16384)
+	manager.ConfigureOllamaCloudInventory([]string{"cloud:latest"}, true)
+	policy := manager.ContextPolicy("cloud")
+	if !policy.Cloud || policy.Request != 0 || policy.Effective != 0 || policy.NativeKnown {
+		t.Fatalf("cloud policy without native maximum = %#v", policy)
+	}
+	if effective, known := manager.EffectiveContext("cloud"); effective != 0 || known {
+		t.Fatalf("unknown cloud effective context = %d, %v", effective, known)
+	}
+	if err := manager.SetCurrentModel("cloud"); err == nil {
+		t.Fatal("selected a cloud model without a verified context maximum")
+	}
+}
+
+func TestModelManagerCurrentCloudFailsClosedWhenRefreshedContextBecomesUnknown(t *testing.T) {
+	chatCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/chat" {
+			chatCalls++
+			_, _ = fmt.Fprintln(w, `{"message":{"role":"assistant","content":"unexpected"},"done":true}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	manager := NewModelManager(server.URL, 16_384)
+	manager.ConfigureOllamaRuntimeInventory(false, []OllamaModel{{
+		Name: "cloud:latest", Location: OllamaModelLocationCloud, ContextLength: 1_048_576,
+	}}, true)
+	if err := manager.SetCurrentModel("cloud"); err != nil {
+		t.Fatal(err)
+	}
+	manager.ConfigureOllamaRuntimeInventory(false, []OllamaModel{{
+		Name: "cloud:latest", Location: OllamaModelLocationCloud,
+	}}, true)
+	if got := manager.NumCtx(); got != 0 {
+		t.Fatalf("unknown cloud NumCtx = %d, want 0", got)
+	}
+	err := manager.ChatStream(context.Background(), ChatOptions{ExpectedContext: 16_384}, func(StreamChunk) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "no verified context maximum") {
+		t.Fatalf("unknown cloud request error = %v", err)
+	}
+	if chatCalls != 0 {
+		t.Fatalf("provider received %d request(s), want none", chatCalls)
+	}
+}
+
+func TestModelManagerRejectsTurnWhenExpectedContextChanged(t *testing.T) {
+	chatCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/chat" {
+			chatCalls++
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	manager := NewModelManager(server.URL, 16_384)
+	manager.ConfigureOllamaRuntimeInventory(false, []OllamaModel{{
+		Name: "local:latest", Location: OllamaModelLocationLocal, SizeBytes: 1 << 30, ContextLength: 262_144,
+	}}, true)
+	if err := manager.SetCurrentModel("local"); err != nil {
+		t.Fatal(err)
+	}
+	err := manager.ChatStream(context.Background(), ChatOptions{ExpectedContext: 1_048_576}, func(StreamChunk) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "context changed before inference") {
+		t.Fatalf("context mismatch error = %v", err)
+	}
+	if chatCalls != 0 {
+		t.Fatalf("provider received %d request(s), want none", chatCalls)
+	}
+}
+
+func TestModelManagerRuntimeInventoryCommitWaitsForInferenceAndRevokesLocalAdmission(t *testing.T) {
+	chatStarted := make(chan struct{}, 1)
+	releaseChat := make(chan struct{})
+	var cloud atomic.Bool
+	var chatCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tags":
+			if cloud.Load() {
+				_, _ = fmt.Fprintln(w, `{"models":[{"name":"same:latest","model":"same:latest","remote_model":"same:latest","remote_host":"https://ollama.com","size":0}]}`)
+			} else {
+				_, _ = fmt.Fprintln(w, `{"models":[{"name":"same:latest","model":"same:latest","size":1073741824}]}`)
+			}
+		case "/api/chat":
+			chatCalls.Add(1)
+			chatStarted <- struct{}{}
+			<-releaseChat
+			_, _ = fmt.Fprintln(w, `{"message":{"role":"assistant","content":"done"},"done":true}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	manager := NewModelManager(server.URL, 16_384)
+	manager.ConfigureOllamaRuntimeInventory(true, []OllamaModel{{
+		Name: "same:latest", Location: OllamaModelLocationLocal, SizeBytes: 1 << 30, ContextLength: 262_144,
+	}}, true)
+	if err := manager.SetCurrentModel("same"); err != nil {
+		t.Fatal(err)
+	}
+	chatDone := make(chan error, 1)
+	go func() {
+		chatDone <- manager.ChatStream(context.Background(), ChatOptions{ExpectedContext: 16_384}, func(StreamChunk) error { return nil })
+	}()
+	select {
+	case <-chatStarted:
+	case <-time.After(time.Second):
+		t.Fatal("chat did not start")
+	}
+
+	cloud.Store(true)
+	refreshDone := make(chan struct{})
+	go func() {
+		manager.ConfigureOllamaRuntimeInventory(true, []OllamaModel{{
+			Name: "same:latest", Location: OllamaModelLocationCloud, ContextLength: 1_048_576,
+		}}, true)
+		close(refreshDone)
+	}()
+	select {
+	case <-refreshDone:
+		t.Fatal("runtime inventory changed during active inference")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(releaseChat)
+	if err := <-chatDone; err != nil {
+		t.Fatalf("active chat: %v", err)
+	}
+	select {
+	case <-refreshDone:
+	case <-time.After(time.Second):
+		t.Fatal("runtime inventory did not commit after inference")
+	}
+	err := manager.ChatStream(context.Background(), ChatOptions{}, func(StreamChunk) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "not installed with local Ollama weights") {
+		t.Fatalf("reclassified cloud admission error = %v", err)
+	}
+	if got := chatCalls.Load(); got != 1 {
+		t.Fatalf("provider received %d chat request(s), want one pre-refresh request", got)
+	}
+}
+
+func TestModelManagerSwitchAdmissionAndPolicyUseOneInventorySnapshot(t *testing.T) {
+	tagsStarted := make(chan struct{}, 1)
+	releaseTags := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/tags" {
+			http.NotFound(w, r)
+			return
+		}
+		tagsStarted <- struct{}{}
+		<-releaseTags
+		_, _ = fmt.Fprintln(w, `{"models":[{"name":"same:latest","model":"same:latest","size":1073741824}]}`)
+	}))
+	defer server.Close()
+
+	manager := NewModelManager(server.URL, 16_384)
+	manager.ConfigureOllamaRuntimeInventory(true, []OllamaModel{{
+		Name: "same:latest", Location: OllamaModelLocationLocal, SizeBytes: 1 << 30, ContextLength: 262_144,
+	}}, true)
+	switchDone := make(chan error, 1)
+	go func() { switchDone <- manager.SetCurrentModel("same") }()
+	select {
+	case <-tagsStarted:
+	case <-time.After(time.Second):
+		t.Fatal("model admission did not start")
+	}
+
+	refreshDone := make(chan struct{})
+	go func() {
+		manager.ConfigureOllamaRuntimeInventory(true, []OllamaModel{{
+			Name: "same:latest", Location: OllamaModelLocationCloud, ContextLength: 1_048_576,
+		}}, true)
+		close(refreshDone)
+	}()
+	select {
+	case <-refreshDone:
+		t.Fatal("inventory changed between model admission and client policy")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(releaseTags)
+	if err := <-switchDone; err != nil {
+		t.Fatalf("local switch: %v", err)
+	}
+	select {
+	case <-refreshDone:
+	case <-time.After(time.Second):
+		t.Fatal("inventory refresh did not resume after switch")
+	}
+	if policy := manager.ContextPolicy("same"); !policy.Cloud || policy.Effective != 1_048_576 {
+		t.Fatalf("post-switch policy = %#v", policy)
+	}
+}
+
+func TestModelManagerNumCtxTracksCurrentModelPolicy(t *testing.T) {
+	manager := NewModelManager("http://localhost:11434", 16_384)
+	manager.ConfigureOllamaInventory([]OllamaModel{
+		{Name: "local:latest", Location: OllamaModelLocationLocal, ContextLength: 262_144},
+		{Name: "cloud:latest", Location: OllamaModelLocationCloud, ContextLength: 1_048_576},
+	}, true)
+	if err := manager.SetCurrentModel("local"); err != nil {
+		t.Fatal(err)
+	}
+	if got := manager.NumCtx(); got != 16_384 {
+		t.Fatalf("local NumCtx = %d, want 16384", got)
+	}
+	if err := manager.SetCurrentModel("cloud"); err != nil {
+		t.Fatal(err)
+	}
+	if got := manager.NumCtx(); got != 1_048_576 {
+		t.Fatalf("cloud NumCtx = %d, want 1048576", got)
+	}
+}
+
+func TestModelManagerCachedClientFollowsContextPolicy(t *testing.T) {
+	manager := NewModelManager("http://localhost:11434", 16384)
+
+	localClient, err := manager.GetClient("model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if localClient.numCtx != 16384 {
+		t.Fatalf("initial client num_ctx = %d", localClient.numCtx)
+	}
+
+	manager.ConfigureOllamaInventory([]OllamaModel{{
+		Name: "model:latest", Location: OllamaModelLocationCloud, ContextLength: 1048576,
+	}}, true)
+	cloudClient, err := manager.GetClient("model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cloudClient == localClient || cloudClient.numCtx != 0 {
+		t.Fatalf("cached local client survived cloud policy: same=%v num_ctx=%d", cloudClient == localClient, cloudClient.numCtx)
+	}
+
+	manager.ConfigureOllamaInventory([]OllamaModel{{
+		Name: "model:latest", Location: OllamaModelLocationLocal, ContextLength: 8192,
+	}}, true)
+	reducedLocalClient, err := manager.GetClient("model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reducedLocalClient == cloudClient || reducedLocalClient.numCtx != 8192 {
+		t.Fatalf("cached cloud client survived local policy: same=%v num_ctx=%d", reducedLocalClient == cloudClient, reducedLocalClient.numCtx)
 	}
 }
 
@@ -161,6 +471,67 @@ func TestModelManagerLocalOnlyRejectsUnavailableInventory(t *testing.T) {
 	manager.ConfigureLocalOnly(true, nil, false)
 	if err := manager.SetCurrentModel("innocent-alias:latest"); err == nil || !strings.Contains(err.Error(), "inventory is unavailable") {
 		t.Fatalf("unverified inventory admission error = %v", err)
+	}
+}
+
+func TestModelManagerLocalOnlyRejectsRemoteOllamaHostBeforeInventoryRequest(t *testing.T) {
+	manager := NewModelManager("http://192.0.2.10:11434", 4096)
+	manager.ConfigureLocalInventory(true, []LocalModel{{Name: "qwen3.5:2b", Size: 1 << 30}}, true)
+
+	started := time.Now()
+	_, err := manager.GetClient("qwen3.5:2b")
+	if err == nil || !strings.Contains(err.Error(), "not a local-machine address") {
+		t.Fatalf("remote Ollama local-only admission error = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("remote host rejection waited for network I/O: %s", elapsed)
+	}
+}
+
+func TestModelManagerClearCurrentModelFailsClosed(t *testing.T) {
+	manager := NewModelManager("http://localhost:11434", 4096)
+	if err := manager.SetCurrentModel("qwen3.5:2b"); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ClearCurrentModel(); err != nil {
+		t.Fatal(err)
+	}
+	if manager.CurrentModel() != "" {
+		t.Fatalf("cleared model = %q", manager.CurrentModel())
+	}
+	if err := manager.ChatStream(context.Background(), ChatOptions{}, func(StreamChunk) error { return nil }); !errors.Is(err, ErrNoModelSelected) {
+		t.Fatalf("chat after clear error = %v, want ErrNoModelSelected", err)
+	}
+}
+
+func TestModelManagerOllamaCloudGrantIsExactAndRevocable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/tags" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = fmt.Fprint(w, `{"models":[]}`)
+	}))
+	defer server.Close()
+
+	manager := NewModelManager(server.URL, 4096)
+	manager.ConfigureLocalInventory(true, nil, true)
+	manager.ConfigureOllamaCloudInventory([]string{"qwen:cloud"}, true)
+	if err := manager.GrantOllamaCloudModel("qwen:cloud"); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ensureModelLocal(context.Background(), "qwen:cloud"); err != nil {
+		t.Fatalf("exact cloud grant rejected: %v", err)
+	}
+	if err := manager.GrantOllamaCloudModel("other:cloud"); err == nil {
+		t.Fatal("unverified cloud identity received a grant")
+	}
+	if err := manager.ensureModelLocal(context.Background(), "other:cloud"); err == nil {
+		t.Fatal("exact cloud grant covered a different model")
+	}
+	manager.RevokeOllamaCloudModel("qwen:cloud")
+	if err := manager.ensureModelLocal(context.Background(), "qwen:cloud"); err == nil {
+		t.Fatal("revoked cloud grant remained usable")
 	}
 }
 

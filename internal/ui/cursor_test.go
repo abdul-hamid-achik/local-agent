@@ -169,6 +169,24 @@ func TestViewCursorHiddenWithoutTextOwnership(t *testing.T) {
 	}
 }
 
+func TestOverlaySuppressesComposerPromptAndDraft(t *testing.T) {
+	m := newTestModel(t)
+	m.input.SetValue("draft must stay private under settings")
+	m.openSettingsPicker()
+
+	view := m.View()
+	plain := ansi.Strip(view.Content)
+	if strings.Contains(plain, "draft must stay private") {
+		t.Fatalf("overlay leaked the composer draft:\n%s", plain)
+	}
+	if strings.Contains(plain, "❯") {
+		t.Fatalf("overlay retained an active-looking composer prompt:\n%s", plain)
+	}
+	if view.Cursor != nil {
+		t.Fatalf("settings overlay retained cursor at (%d,%d)", view.Cursor.X, view.Cursor.Y)
+	}
+}
+
 func TestOverlayCursorUsesActualCenteredRowWidth(t *testing.T) {
 	base := strings.Join(make([]string, 9), "\n")
 	overlay := "────────\n────\n────────"

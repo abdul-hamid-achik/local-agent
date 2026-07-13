@@ -22,9 +22,9 @@ var legacyMemoryMigrationReader = safeio.NewReader()
 var legacyMemoryMarkerReader = safeio.NewReader()
 var legacyMemoryReadTimeout = 5 * time.Second
 
-// ErrLegacyMemoryClaimedByAnotherWorkspace lets startup continue with an
-// empty/current scoped store while still surfacing that legacy data belongs to
-// a different workspace.
+// ErrLegacyMemoryClaimedByAnotherWorkspace prevents a completed one-time
+// claim from being reused by another workspace. Callers may treat this durable,
+// expected ownership receipt as non-actionable while still failing closed.
 var ErrLegacyMemoryClaimedByAnotherWorkspace = errors.New("legacy memory is claimed by another workspace")
 
 // ErrLegacyMemoryPreviewStale prevents a confirmation from claiming a source

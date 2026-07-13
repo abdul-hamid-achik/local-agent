@@ -302,6 +302,29 @@ func TestEscapeInvalidatesSessionLoad(t *testing.T) {
 	}
 }
 
+func TestShutdownWaitsForSessionLoadCancellationReceipt(t *testing.T) {
+	m := newTestModel(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	m.sessionLoading = true
+	m.sessionLoadToken = 11
+	m.sessionLoadCancel = cancel
+
+	cmd := m.beginShutdown()
+	if cmd == nil || m.shutdownReady() || !m.sessionLoading {
+		t.Fatalf("shutdown did not retain load ownership: cmd=%v ready=%v loading=%v", cmd != nil, m.shutdownReady(), m.sessionLoading)
+	}
+	select {
+	case <-ctx.Done():
+	default:
+		t.Fatal("shutdown did not cancel session load context")
+	}
+	updated, quit := m.Update(SessionLoadedMsg{LoadToken: 11, Err: context.Canceled})
+	m = updated.(*Model)
+	if quit == nil || !m.shutdownReady() || m.sessionLoading {
+		t.Fatalf("cancellation receipt did not release shutdown: quit=%v ready=%v loading=%v", quit != nil, m.shutdownReady(), m.sessionLoading)
+	}
+}
+
 func TestLateSessionListCannotOpenDuringActiveTurn(t *testing.T) {
 	m := newTestModel(t)
 	m.sessionListing = true

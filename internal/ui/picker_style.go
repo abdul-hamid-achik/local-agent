@@ -127,7 +127,14 @@ func (m *Model) restylePickerOverlays() {
 		configurePickerList(&state.List, m.isDark)
 	}
 	if state := m.modelPickerState; state != nil {
-		state.List.SetDelegate(newPickerDelegate(m.isDark, false))
+		delegate := newPickerDelegate(m.isDark, state.Compact)
+		state.List.SetDelegate(delegate)
+		state.ItemHeight = delegate.Height()
+		configurePickerList(&state.List, m.isDark)
+		setSettingsTitleDensity(&state.List, state.Compact)
+	}
+	if state := m.cloudConsentState; state != nil {
+		state.List.SetDelegate(newPickerDelegate(m.isDark, state.Compact))
 		configurePickerList(&state.List, m.isDark)
 	}
 	if state := m.sessionsPickerState; state != nil && state.ready() {
@@ -143,5 +150,8 @@ func (m *Model) restylePickerOverlays() {
 				state.Fields[index].Input.SetStyles(semanticTextInputStyles(m.isDark))
 			}
 		}
+	}
+	if state := m.modelPullState; state != nil {
+		state.SetTheme(m.isDark)
 	}
 }

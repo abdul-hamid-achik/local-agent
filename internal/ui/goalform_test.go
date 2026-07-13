@@ -535,6 +535,20 @@ func TestGoalFormUsesCompactLayoutBelowFullHeight(t *testing.T) {
 	assertRenderedHeightFits(t, view, 23)
 }
 
+func TestGoalFormCompactActionsSummarizeInferredGoal(t *testing.T) {
+	form := NewGoalForm(GoalFormValues{
+		Objective: "ship a bounded migration", AcceptanceCriteria: "tests pass\nrollback works", TimeBudget: 30 * time.Minute,
+	}, GoalFormOptions{Width: 60, Height: 20, DraftFromPrompt: true})
+	form.SetActiveField(GoalFieldActions)
+	view := form.View()
+	for _, want := range []string{"ship a bounded migration", "2 criteria", "30m", "turns/tokens unlimited", "Proof · tests pass", "+1 more", "Save goal"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("compact review missing %q:\n%s", want, view)
+		}
+	}
+	assertRenderedHeightFits(t, view, 20)
+}
+
 func TestGoalFormIntegratedOverlayFitsAndOwnsCursor(t *testing.T) {
 	for _, size := range []struct {
 		name   string

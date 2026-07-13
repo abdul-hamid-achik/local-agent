@@ -199,7 +199,7 @@ func (m *Model) applyAgentProfile(name string) error {
 		return err
 	}
 	if profile.Model != "" {
-		if err := config.CheckModelMemorySafe(profile.Model); err != nil {
+		if err := m.validateModelAdmission(profile.Model); err != nil {
 			return fmt.Errorf("profile model: %w", err)
 		}
 		if m.modelManager != nil && profile.Model != m.model {
@@ -214,7 +214,7 @@ func (m *Model) applyAgentProfile(name string) error {
 	}
 
 	if profile.Model != "" {
-		m.model = profile.Model
+		m.setCurrentModelProjection(profile.Model)
 		m.modelPinned = true
 	} else {
 		m.modelPinned = false

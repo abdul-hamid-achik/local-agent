@@ -3,6 +3,7 @@ package ui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/command"
 	"github.com/abdul-hamid-achik/local-agent/internal/goal"
@@ -46,8 +47,8 @@ func TestCycleMode(t *testing.T) {
 		if m.mode != ModeAuto {
 			t.Errorf("expected ModeAuto after cycling from PLAN, got %d", m.mode)
 		}
-		if m.overlay != OverlayGoalForm {
-			t.Errorf("AUTO without a live goal should open the goal form, overlay=%d", m.overlay)
+		if m.overlay != OverlayNone || m.goalFormState != nil {
+			t.Errorf("AUTO mode switch created goal UI: overlay=%d form=%v", m.overlay, m.goalFormState != nil)
 		}
 	})
 
@@ -97,6 +98,61 @@ func TestCycleMode(t *testing.T) {
 	})
 }
 
+func TestExplicitGoalDurationOpensReviewWithoutHiddenCaps(t *testing.T) {
+	m := newTestModel(t)
+	m.handleCommandAction(command.Result{Action: command.ActionOpenGoal, Goal: &command.GoalRequest{
+		Prompt: "polish the model picker", TimeBudget: 45 * time.Minute, TimeExplicit: true,
+	}})
+	if m.overlay != OverlayGoalForm || m.goalFormState == nil {
+		t.Fatalf("goal review overlay=%v form=%v", m.overlay, m.goalFormState != nil)
+	}
+	values, err := m.goalFormState.Values()
+	if err != nil {
+		t.Fatalf("goal review values: %v", err)
+	}
+	if values.TimeBudget != 45*time.Minute || values.TurnBudget != 0 || values.TokenBudget != 0 {
+		t.Fatalf("goal budgets = %#v", values)
+	}
+	if m.goalFormState.active != GoalFieldActions {
+		t.Fatalf("complete goal request focused field %v, want actions", m.goalFormState.active)
+	}
+}
+
+func TestPlanModeCannotStartReviewedGoal(t *testing.T) {
+	m := newTestModel(t)
+	m.mode = ModePlan
+	m.overlay = OverlayGoalForm
+	m.goalFormState = NewGoalForm(GoalFormValues{
+		Objective: "ship safely", AcceptanceCriteria: "tests pass", TimeBudget: time.Minute,
+	}, GoalFormOptions{})
+	m.goalFormState.SetActiveField(GoalFieldActions)
+	entriesBefore := len(m.entries)
+	cmd := m.applyGoalForm(GoalFormEvent{Action: GoalActionSave, Values: GoalFormValues{
+		Objective: "ship safely", AcceptanceCriteria: "tests pass", TimeBudget: time.Minute,
+	}})
+	if cmd != nil || m.goalRuntime != nil || m.mode != ModePlan {
+		t.Fatalf("plan goal started: cmd=%v runtime=%v mode=%v", cmd != nil, m.goalRuntime != nil, m.mode)
+	}
+	if m.overlay != OverlayGoalForm || m.goalFormState == nil || m.goalFormState.ActiveField() != GoalFieldActions {
+		t.Fatalf("plan rejection dismissed or moved form: overlay=%v form=%v field=%v", m.overlay, m.goalFormState != nil, m.goalFormState.ActiveField())
+	}
+	if len(m.entries) != entriesBefore {
+		t.Fatalf("plan rejection leaked behind modal: entries=%d, want %d", len(m.entries), entriesBefore)
+	}
+	for _, want := range []string{"PLAN", "AUTO"} {
+		if !strings.Contains(m.goalFormState.Error(), want) {
+			t.Fatalf("inline error %q omits %q", m.goalFormState.Error(), want)
+		}
+		if !strings.Contains(ansi.Strip(m.goalFormState.View()), want) {
+			t.Fatalf("rendered form omits %q:\n%s", want, ansi.Strip(m.goalFormState.View()))
+		}
+	}
+	values, err := m.goalFormState.Values()
+	if err != nil || values.Objective != "ship safely" || values.AcceptanceCriteria != "tests pass" || values.TimeBudget != time.Minute {
+		t.Fatalf("plan rejection changed form values: values=%#v err=%v", values, err)
+	}
+}
+
 func TestModePickerKeepsAllAuthoritiesActionableAtMinimum(t *testing.T) {
 	m := newTestModel(t)
 	m.width, m.height = minTerminalWidth, minTerminalHeight
@@ -125,11 +181,11 @@ func TestModeStatusLine(t *testing.T) {
 		}
 	})
 
-	t.Run("normal_mode_badge", func(t *testing.T) {
+	t.Run("normal_mode_is_unbadged", func(t *testing.T) {
 		m.mode = ModeNormal
 		status := m.renderStatusLine()
-		if !strings.Contains(status, "NORMAL") {
-			t.Errorf("status line should contain NORMAL badge, got %q", status)
+		if strings.Contains(status, "NORMAL") {
+			t.Errorf("normal mode should be visually quiet, got %q", status)
 		}
 	})
 
@@ -140,6 +196,17 @@ func TestModeStatusLine(t *testing.T) {
 			t.Errorf("status line should contain PLAN badge, got %q", status)
 		}
 	})
+}
+
+func TestWelcomeMarksUnavailableOllamaModelOffline(t *testing.T) {
+	m := newTestModel(t)
+	m.model = "qwen3.5:2b"
+	m.ollamaOffline = true
+	var view strings.Builder
+	m.renderWelcome(&view)
+	if got := view.String(); !strings.Contains(got, "qwen3.5:2b · offline") {
+		t.Fatalf("offline welcome = %q", got)
+	}
 }
 
 func TestDefaultModeConfigs(t *testing.T) {

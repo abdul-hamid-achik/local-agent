@@ -39,7 +39,7 @@ steps:
       timeoutMs: 5000
   - wait:
       screen:
-        contains: "hint: is `ollama serve` running?"
+        contains: "try: ollama serve"
       timeoutMs: 5000
   - press: "ctrl+p"
   - wait:

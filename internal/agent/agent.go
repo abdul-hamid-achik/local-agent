@@ -61,6 +61,12 @@ type Agent struct {
 	unresolvedExecution *UnresolvedExecutionError
 }
 
+// contextWindowProvider is an optional capability implemented by clients that
+// can report the context window of their currently selected model.
+type contextWindowProvider interface {
+	NumCtx() int
+}
+
 // SetLogger sets the structured logger used for observability. Safe to leave
 // unset; all logging is nil-guarded.
 func (a *Agent) SetLogger(l *log.Logger) {
@@ -118,9 +124,20 @@ func (a *Agent) Router() config.ModelRouter {
 	return a.router
 }
 
-// NumCtx returns the context window size.
+// NumCtx returns the active provider context window when available, falling
+// back to the value configured when the agent was created.
 func (a *Agent) NumCtx() int {
-	return a.numCtx
+	a.mu.RLock()
+	client := a.llmClient
+	fallback := a.numCtx
+	a.mu.RUnlock()
+
+	if provider, ok := client.(contextWindowProvider); ok {
+		if numCtx := provider.NumCtx(); numCtx > 0 {
+			return numCtx
+		}
+	}
+	return fallback
 }
 
 // SetMemoryStore sets the memory store for cross-session persistence.

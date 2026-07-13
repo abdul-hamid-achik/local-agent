@@ -72,6 +72,25 @@ func TestTriggerCompletion(t *testing.T) {
 	})
 }
 
+func TestCommandCompletionReturnsArgumentsToComposer(t *testing.T) {
+	m := newTestModel(t)
+	m.triggerCompletion("/goal")
+	if !m.isCompletionActive() {
+		t.Fatal("goal completion did not open")
+	}
+
+	updated, _ := m.Update(charKey(' '))
+	m = updated.(*Model)
+	if m.isCompletionActive() || m.overlay != OverlayNone || m.input.Value() != "/goal " {
+		t.Fatalf("argument handoff = overlay %d active=%v input=%q", m.overlay, m.isCompletionActive(), m.input.Value())
+	}
+	updated, _ = m.Update(charKey('3'))
+	m = updated.(*Model)
+	if m.isCompletionActive() || m.input.Value() != "/goal 3" {
+		t.Fatalf("completion reopened while typing arguments: active=%v input=%q", m.isCompletionActive(), m.input.Value())
+	}
+}
+
 func TestAcceptCompletion(t *testing.T) {
 	t.Run("single_select", func(t *testing.T) {
 		m := newTestModel(t)

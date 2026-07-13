@@ -1,10 +1,12 @@
 package command
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // RegisterBuiltins adds all built-in slash commands to the registry.
@@ -22,6 +24,7 @@ func RegisterBuiltins(r *Registry) {
 
 	r.Register(&Command{
 		Name:        "clear",
+		Aliases:     []string{"new"},
 		Description: "Clear conversation history",
 		Handler: func(_ *Context, _ []string) Result {
 			return Result{
@@ -32,21 +35,10 @@ func RegisterBuiltins(r *Registry) {
 	})
 
 	r.Register(&Command{
-		Name:        "new",
-		Description: "Start a fresh conversation",
-		Handler: func(_ *Context, _ []string) Result {
-			return Result{
-				Text:   "New conversation started.",
-				Action: ActionClear,
-			}
-		},
-	})
-
-	r.Register(&Command{
 		Name:        "goal",
 		Aliases:     []string{"g"},
 		Description: "Create, inspect, pause, resume, budget, or drop a durable goal",
-		Usage:       "/goal [new [objective]|show|pause|resume|budget|drop]",
+		Usage:       "/goal [<duration> <prompt>|new [objective]|show|pause|resume|budget|drop]",
 		Handler: func(ctx *Context, args []string) Result {
 			if ctx == nil {
 				ctx = &Context{}
@@ -63,7 +55,15 @@ func RegisterBuiltins(r *Registry) {
 					if state := resolveActionState(spec, ctx); !state.Enabled {
 						return Result{Error: state.DisabledReason}
 					}
-					return Result{Action: spec.Action, Data: strings.TrimSpace(strings.Join(args[1:], " "))}
+					promptArgs := args[1:]
+					request, err := parseGoalRequest(promptArgs)
+					if err != nil {
+						return Result{Error: err.Error()}
+					}
+					if request == nil {
+						return Result{Action: spec.Action}
+					}
+					return Result{Action: spec.Action, Data: request.Prompt, Goal: request}
 				}
 				if len(args) != 1 {
 					return Result{Error: "usage: " + spec.CommandText()}
@@ -86,16 +86,20 @@ func RegisterBuiltins(r *Registry) {
 						return Result{Error: state.DisabledReason}
 					}
 				}
-				return Result{Action: ActionOpenGoal, Data: strings.TrimSpace(strings.Join(args, " "))}
+				request, err := parseGoalRequest(args)
+				if err != nil {
+					return Result{Error: err.Error()}
+				}
+				return Result{Action: ActionOpenGoal, Data: request.Prompt, Goal: request}
 			}
 		},
 	})
 
 	r.Register(&Command{
 		Name:        "model",
-		Aliases:     []string{"m"},
+		Aliases:     []string{"m", "models", "ml"},
 		Description: "Show, switch, or list models",
-		Usage:       "/model [name|list|fast|smart|auto]",
+		Usage:       "/model [name|list|auto]",
 		Handler: func(ctx *Context, args []string) Result {
 			if len(args) == 0 {
 				return Result{Action: ActionShowModelPicker}
@@ -120,27 +124,6 @@ func RegisterBuiltins(r *Registry) {
 				b.WriteString("\n* = current")
 				return Result{Text: b.String()}
 
-			case "fast":
-				if len(ctx.ModelList) > 0 {
-					return Result{
-						Text:   fmt.Sprintf("Switching to fastest model: %s", ctx.ModelList[0]),
-						Action: ActionSwitchModel,
-						Data:   ctx.ModelList[0],
-					}
-				}
-				return Result{Error: "No models available"}
-
-			case "smart":
-				if len(ctx.ModelList) > 0 {
-					smartModel := ctx.ModelList[len(ctx.ModelList)-1]
-					return Result{
-						Text:   fmt.Sprintf("Switching to smartest model: %s", smartModel),
-						Action: ActionSwitchModel,
-						Data:   smartModel,
-					}
-				}
-				return Result{Error: "No models available"}
-
 			default:
 				for _, m := range ctx.ModelList {
 					if m == args[0] {
@@ -153,15 +136,6 @@ func RegisterBuiltins(r *Registry) {
 				}
 				return Result{Error: fmt.Sprintf("Unknown model: %s (use /model list to see available)", args[0])}
 			}
-		},
-	})
-
-	r.Register(&Command{
-		Name:        "models",
-		Aliases:     []string{"ml"},
-		Description: "Open model picker",
-		Handler: func(_ *Context, _ []string) Result {
-			return Result{Action: ActionShowModelPicker}
 		},
 	})
 
@@ -349,11 +323,16 @@ func RegisterBuiltins(r *Registry) {
 			fmt.Fprintf(&b, "  Model:           %s\n", ctx.CurrentModel)
 			fmt.Fprintf(&b, "  Turns:           %d\n", ctx.SessionTurnCount)
 			fmt.Fprintf(&b, "  Output tokens:   %d\n", ctx.SessionEvalTotal)
-			fmt.Fprintf(&b, "  Prompt tokens:   %d (last turn)\n", ctx.SessionPromptTotal)
+			fmt.Fprintf(&b, "  Prompt processed:%8d\n", ctx.SessionPromptTotal)
+			if ctx.LatestPromptTokens > 0 {
+				fmt.Fprintf(&b, "  Current request:%8d\n", ctx.LatestPromptTokens)
+			}
 			if ctx.NumCtx > 0 {
 				fmt.Fprintf(&b, "  Context window:  %d\n", ctx.NumCtx)
-				pct := ctx.SessionPromptTotal * 100 / ctx.NumCtx
-				fmt.Fprintf(&b, "  Context used:    %d%%\n", pct)
+				if ctx.LatestPromptTokens > 0 {
+					pct := min(100, max(0, ctx.LatestPromptTokens*100/ctx.NumCtx))
+					fmt.Fprintf(&b, "  Context used:    %d%%\n", pct)
+				}
 			}
 			avgOut := ctx.SessionEvalTotal / ctx.SessionTurnCount
 			fmt.Fprintf(&b, "  Avg out/turn:    %d\n", avgOut)
@@ -434,6 +413,7 @@ func RegisterBuiltins(r *Registry) {
 		Name:        "migrate-checkpoints",
 		Description: "Preview or explicitly claim unbound legacy checkpoints",
 		Usage:       "/migrate-checkpoints [confirm <preview-count>]",
+		Hidden:      true,
 		Handler: func(_ *Context, args []string) Result {
 			if len(args) == 0 {
 				return Result{Action: ActionPreviewLegacyCheckpoints}
@@ -462,6 +442,99 @@ func RegisterBuiltins(r *Registry) {
 	})
 }
 
+func parseGoalRequest(args []string) (*GoalRequest, error) {
+	if len(args) == 0 {
+		return nil, nil
+	}
+	promptStart := 0
+	request := &GoalRequest{}
+	if duration, err := time.ParseDuration(args[0]); err == nil {
+		if duration <= 0 {
+			return nil, errors.New("goal duration must be positive")
+		}
+		request.TimeBudget = duration
+		request.TimeExplicit = true
+		promptStart = 1
+	} else if looksLikeGoalDuration(args[0]) {
+		return nil, fmt.Errorf("invalid goal duration %q; use Go duration syntax such as 30m or 1h30m", args[0])
+	}
+	request.Prompt = strings.TrimSpace(strings.Join(args[promptStart:], " "))
+	if request.TimeExplicit && request.Prompt == "" {
+		return nil, errors.New("usage: /goal <duration> <prompt>")
+	}
+	return request, nil
+}
+
+// looksLikeGoalDuration distinguishes a mistyped leading duration from a
+// free-form objective. It recognizes Go's units plus common long-form units,
+// while leaving numeric prompts such as "2026 roadmap" untouched.
+func looksLikeGoalDuration(value string) bool {
+	runes := []rune(strings.TrimSpace(value))
+	if len(runes) == 0 {
+		return false
+	}
+	index := 0
+	if runes[index] == '+' || runes[index] == '-' {
+		index++
+	}
+	if index >= len(runes) || runes[index] < '0' || runes[index] > '9' {
+		return false
+	}
+
+	sawUnit := false
+	for index < len(runes) {
+		digits := 0
+		dots := 0
+		for index < len(runes) {
+			r := runes[index]
+			if r >= '0' && r <= '9' {
+				digits++
+				index++
+				continue
+			}
+			if r == '.' && dots == 0 {
+				dots++
+				index++
+				continue
+			}
+			break
+		}
+		if digits == 0 {
+			return sawUnit
+		}
+		unitStart := index
+		for index < len(runes) {
+			r := runes[index]
+			if (r >= 'a' && r <= 'z') || r == 'µ' || r == 'μ' {
+				index++
+				continue
+			}
+			break
+		}
+		if unitStart == index {
+			return sawUnit
+		}
+		if !isGoalDurationUnit(string(runes[unitStart:index])) {
+			return sawUnit
+		}
+		sawUnit = true
+	}
+	return sawUnit
+}
+
+func isGoalDurationUnit(unit string) bool {
+	switch unit {
+	case "ns", "us", "µs", "μs", "ms", "s", "m", "h",
+		"sec", "secs", "second", "seconds",
+		"min", "mins", "minute", "minutes",
+		"hr", "hrs", "hour", "hours",
+		"d", "day", "days":
+		return true
+	default:
+		return false
+	}
+}
+
 func expandHomePath(path string) string {
 	if strings.HasPrefix(path, "~/") {
 		if home, err := os.UserHomeDir(); err == nil {
@@ -476,6 +549,7 @@ func registerCountConfirmedMigration(r *Registry, name, description string, prev
 		Name:        name,
 		Description: description,
 		Usage:       "/" + name + " [confirm <preview-count>]",
+		Hidden:      true,
 		Handler: func(_ *Context, args []string) Result {
 			if len(args) == 0 {
 				return Result{Action: previewAction}

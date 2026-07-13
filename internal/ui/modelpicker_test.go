@@ -116,19 +116,19 @@ func TestModelPicker_Navigation(t *testing.T) {
 	})
 }
 
-func TestModelPicker_CtrlM(t *testing.T) {
-	t.Run("opens_with_ctrl_m", func(t *testing.T) {
+func TestModelPicker_CtrlO(t *testing.T) {
+	t.Run("opens_with_ctrl_o", func(t *testing.T) {
 		m := newTestModel(t)
 		modelCfg := config.DefaultModelConfig()
 		m.router = config.NewRouter(&modelCfg)
 		m.model = "qwen3.5:0.8b"
 		m.state = StateIdle
 
-		updated, _ := m.Update(ctrlKey('m'))
+		updated, _ := m.Update(ctrlKey('o'))
 		m = updated.(*Model)
 
 		if m.overlay != OverlayModelPicker {
-			t.Errorf("ctrl+m should open model picker, got overlay %d", m.overlay)
+			t.Errorf("ctrl+o should open model picker, got overlay %d", m.overlay)
 		}
 	})
 
@@ -138,7 +138,7 @@ func TestModelPicker_CtrlM(t *testing.T) {
 		m.router = config.NewRouter(&modelCfg)
 		m.state = StateStreaming
 
-		updated, _ := m.Update(ctrlKey('m'))
+		updated, _ := m.Update(ctrlKey('o'))
 		m = updated.(*Model)
 
 		if m.overlay == OverlayModelPicker {

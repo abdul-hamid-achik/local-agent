@@ -40,6 +40,10 @@ func (a *Adapter) SystemMessage(msg string) {
 	sendMsg(a.program, SystemMessageMsg{Msg: msg})
 }
 
+func (a *Adapter) ContextCompacted() {
+	sendMsg(a.program, ContextCompactedMsg{})
+}
+
 func (a *Adapter) Error(msg string) {
 	// Log error for debugging
 	if len(msg) > 100 {

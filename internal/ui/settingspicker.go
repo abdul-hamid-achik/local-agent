@@ -168,9 +168,29 @@ func (m *Model) resizePickerOverlays() {
 		)
 	}
 	if state := m.modelPickerState; state != nil {
+		count := len(state.Inventory)
+		if count == 0 {
+			count = len(state.Models)
+		}
+		compact := compactModelPicker(m.width, m.height)
+		delegate := newPickerDelegate(m.isDark, compact)
+		state.List.SetDelegate(delegate)
+		setSettingsTitleDensity(&state.List, compact)
+		state.Compact = compact
+		state.ItemHeight = delegate.Height()
 		state.List.SetSize(
-			pickerListWidth(m.width, 50),
-			pickerListHeight(m.height, len(state.Models)*defaultPickerItemHeight+2, 4),
+			pickerListWidth(m.width, modelPickerMaximumWidth),
+			modelPickerListHeight(m.height, count, state.ItemHeight),
+		)
+		state.List.SetShowPagination(!compact && count*state.ItemHeight > state.List.Height()-2)
+	}
+	if state := m.cloudConsentState; state != nil {
+		state.Compact = m.width <= 40 || m.height <= 14
+		delegate := newPickerDelegate(m.isDark, state.Compact)
+		state.List.SetDelegate(delegate)
+		state.List.SetSize(
+			pickerListWidth(m.width, 62),
+			len(state.List.Items())*delegate.Height()+1,
 		)
 	}
 	if state := m.sessionsPickerState; state != nil {
@@ -212,8 +232,12 @@ func (m *Model) settingsItems() []settingsItem {
 		runtime += " · ICE"
 	}
 
+	modelDescription := "Choose an installed local model or Ollama Cloud model"
+	if len(m.ollamaModels) > 0 {
+		modelDescription = ollamaInventorySummary(m.ollamaModels)
+	}
 	return []settingsItem{
-		{action: settingsModel, title: "Model", value: modelValue, description: "Choose an installed local model"},
+		{action: settingsModel, title: "Model", value: modelValue, description: modelDescription},
 		{action: settingsAgent, title: "Agent profile", value: profile, description: "Change prompt, skills, model, and MCP scope"},
 		{action: settingsMode, title: "Mode", value: m.modeConfigs[m.mode].Label, description: "NORMAL, PLAN, or AUTO authority"},
 		{action: settingsSessions, title: "Sessions", value: "Resume", description: "Open a saved workspace session"},
