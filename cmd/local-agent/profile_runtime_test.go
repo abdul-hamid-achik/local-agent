@@ -37,6 +37,67 @@ func TestBuildBaseLoadedContextPrefersAgentsMD(t *testing.T) {
 	}
 }
 
+func TestNewRuntimeSkillManagerUsesOnlySelectedAgentsRoot(t *testing.T) {
+	home := t.TempDir()
+	selectedRoot := filepath.Join(home, "custom-agents")
+	selectedSkill := filepath.Join(selectedRoot, "skills", "review")
+	legacySkill := filepath.Join(home, ".config", "local-agent", "skills", "review")
+	for _, dir := range []string{selectedSkill, legacySkill} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(selectedSkill, "SKILL.md"), []byte("---\nname: review\n---\nselected"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacySkill, "SKILL.md"), []byte("---\nname: review\n---\nlegacy"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	manager, err := newRuntimeSkillManager(&config.AgentsDir{Path: selectedRoot}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.LoadAll(); err != nil {
+		t.Fatal(err)
+	}
+	all := manager.All()
+	if len(all) != 1 || all[0].Content != "selected" || all[0].Path != filepath.Join(selectedSkill, "SKILL.md") {
+		t.Fatalf("selected root skills = %#v", all)
+	}
+}
+
+func TestNewRuntimeSkillManagerRejectsMissingLoadedAgents(t *testing.T) {
+	for _, agentsDir := range []*config.AgentsDir{nil, {}} {
+		if _, err := newRuntimeSkillManager(agentsDir, true); err == nil {
+			t.Fatalf("newRuntimeSkillManager(%#v, true) succeeded, want error", agentsDir)
+		}
+	}
+}
+
+func TestNewRuntimeSkillManagerWithAutoLoadDisabledDisablesDiscovery(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	implicitSkill := filepath.Join(home, ".agents", "skills", "implicit")
+	if err := os.MkdirAll(implicitSkill, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(implicitSkill, "SKILL.md"), []byte("implicit"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	manager, err := newRuntimeSkillManager(nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.LoadAll(); err != nil {
+		t.Fatal(err)
+	}
+	if all := manager.All(); len(all) != 0 {
+		t.Fatalf("nil agents root discovered implicit skills: %#v", all)
+	}
+}
+
 func TestBuildBaseLoadedContextFallsBackToLegacyAgentMD(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "AGENT.md"), []byte("legacy instructions"), 0o644); err != nil {

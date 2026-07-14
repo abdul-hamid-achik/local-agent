@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,10 +15,23 @@ import (
 
 // mockOutput implements the Output interface for testing.
 type mockOutput struct {
-	texts       []string
-	errors      []string
-	sysMsgs     []string
-	compactions int
+	texts              []string
+	errors             []string
+	sysMsgs            []string
+	compactions        int
+	compactionStarts   int
+	compactionFinishes int
+}
+
+type failingCompactionClient struct{}
+
+func (*failingCompactionClient) ChatStream(context.Context, llm.ChatOptions, func(llm.StreamChunk) error) error {
+	return errors.New("summary unavailable")
+}
+func (*failingCompactionClient) Ping() error   { return nil }
+func (*failingCompactionClient) Model() string { return "failing-compaction-test" }
+func (*failingCompactionClient) Embed(context.Context, string, []string) ([][]float32, error) {
+	return nil, nil
 }
 
 type contextWindowClient struct {
@@ -98,6 +112,9 @@ func TestCompactUsesSystemSummaryAndCompleteRecentTurn(t *testing.T) {
 	if !ag.compact(context.Background(), out) {
 		t.Fatal("expected compaction")
 	}
+	if out.compactionStarts != 1 || out.compactionFinishes != 1 {
+		t.Fatalf("compaction lifecycle = %d starts, %d finishes", out.compactionStarts, out.compactionFinishes)
+	}
 
 	got := ag.Messages()
 	if got[0].Role != "system" || !strings.Contains(got[0].Content, "first turn recap") {
@@ -108,6 +125,25 @@ func TestCompactUsesSystemSummaryAndCompleteRecentTurn(t *testing.T) {
 	}
 	if got[2].ToolCalls[0].ID != got[3].ToolCallID {
 		t.Fatalf("tool call/result pair was broken: %#v", got)
+	}
+}
+
+func TestCompactionLifecycleFinishesAfterProviderError(t *testing.T) {
+	ag := New(&failingCompactionClient{}, nil, 4096)
+	ag.ReplaceMessages([]llm.Message{
+		{Role: "user", Content: "first"},
+		{Role: "assistant", Content: "one"},
+		{Role: "user", Content: "second"},
+		{Role: "assistant", Content: "two"},
+		{Role: "user", Content: "third"},
+		{Role: "assistant", Content: "three"},
+	})
+	out := &mockOutput{}
+	if ag.compact(context.Background(), out) {
+		t.Fatal("failed summary unexpectedly compacted")
+	}
+	if out.compactionStarts != 1 || out.compactionFinishes != 1 {
+		t.Fatalf("failed lifecycle = %d starts, %d finishes", out.compactionStarts, out.compactionFinishes)
 	}
 }
 
@@ -326,6 +362,8 @@ func (m *mockOutput) ToolCallStart(_ string, _ string, _ map[string]any)        
 func (m *mockOutput) ToolCallResult(_ string, _ string, _ string, _ bool, _ time.Duration) {}
 func (m *mockOutput) SystemMessage(msg string)                                             { m.sysMsgs = append(m.sysMsgs, msg) }
 func (m *mockOutput) ContextCompacted()                                                    { m.compactions++ }
+func (m *mockOutput) ContextCompactionStarted()                                            { m.compactionStarts++ }
+func (m *mockOutput) ContextCompactionFinished()                                           { m.compactionFinishes++ }
 func (m *mockOutput) Error(msg string)                                                     { m.errors = append(m.errors, msg) }
 
 func TestShouldCompact(t *testing.T) {

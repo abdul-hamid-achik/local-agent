@@ -99,6 +99,13 @@ func TestSessionTitleIsBounded(t *testing.T) {
 	}
 }
 
+func TestSessionTitleSanitizesPromptControls(t *testing.T) {
+	got := sessionTitle("safe\x1b]8;;https://example.invalid\x07link\x1b]8;;\x07\u202eevil")
+	if got != "safelinkevil" {
+		t.Fatalf("session title = %q, want %q", got, "safelinkevil")
+	}
+}
+
 func TestLosslessSessionStateRestoresAgentHistory(t *testing.T) {
 	source := newTestModel(t)
 	source.modelPinned = true

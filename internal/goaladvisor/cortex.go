@@ -21,10 +21,11 @@ var (
 )
 
 const (
-	openTool    = "cortex_open_task"
-	statusTool  = "cortex_status"
-	handoffTool = "cortex_handoff"
-	gatewayTool = "mcphub_call_tool"
+	openTool           = "cortex_open_task"
+	statusTool         = "cortex_status"
+	handoffTool        = "cortex_handoff"
+	answerDecisionTool = "cortex_answer_decision"
+	gatewayTool        = "mcphub_call_tool"
 
 	maxAdviceSummaryBytes = 4 * 1024
 	maxAdviceTextBytes    = 1024
@@ -87,6 +88,7 @@ type Advice struct {
 	CriterionEvidence   map[string]CriterionProof
 	ProofRevision       WorkspaceRevision
 	PendingDecision     bool
+	Decision            *PendingDecision
 	Degraded            bool
 	Actions             []Action
 	Warnings            []string
@@ -165,6 +167,9 @@ func (c *Cortex) Status(ctx context.Context, taskID string) (Advice, error) {
 	if advice.Degraded {
 		return advice, fmt.Errorf("%w: Cortex status is degraded", ErrRejected)
 	}
+	if err := validateDecisionPhase(advice); err != nil {
+		return advice, fmt.Errorf("%w: Cortex status decision state is inconsistent: %v", ErrRejected, err)
+	}
 	if !strings.EqualFold(advice.Phase, "complete") || !strings.EqualFold(advice.VerificationOutcome, "verified") {
 		return advice, nil
 	}
@@ -176,6 +181,72 @@ func (c *Cortex) Status(ctx context.Context, taskID string) (Advice, error) {
 	advice.CriterionEvidence = evidence
 	advice.ProofRevision = proofRevision
 	return advice, nil
+}
+
+// AnswerDecision records one exact human-selected option. Cortex may leave its
+// paused semantic phase when it accepts the answer, but this adapter never
+// resumes Local Agent's Goal Runtime or dispatches provider work; the host must
+// authorize those transitions separately.
+func (c *Cortex) AnswerDecision(ctx context.Context, request AnswerDecisionRequest) (Advice, error) {
+	if c == nil || c.registry == nil {
+		return Advice{}, ErrUnavailable
+	}
+	for _, field := range []struct {
+		name  string
+		value string
+		limit int
+	}{
+		{name: "task id", value: request.TaskID, limit: goal.MaxCorrelationIDBytes},
+		{name: "decision id", value: request.DecisionID, limit: maxDecisionStableIDBytes},
+		{name: "selected option id", value: request.OptionID, limit: maxDecisionStableIDBytes},
+		{name: "responder", value: request.Responder, limit: maxDecisionRequesterBytes},
+	} {
+		if err := validateExactDecisionText(field.name, field.value, field.limit); err != nil {
+			return Advice{}, fmt.Errorf("%w: invalid %s", ErrRejected, field.name)
+		}
+	}
+	if ctx == nil {
+		return Advice{}, fmt.Errorf("%w: context is nil", ErrRejected)
+	}
+	if err := ctx.Err(); err != nil {
+		return Advice{}, fmt.Errorf("%s: %w", answerDecisionTool, err)
+	}
+
+	advice, err := c.call(ctx, answerDecisionTool, map[string]any{
+		"taskId":     request.TaskID,
+		"workspace":  c.workspace,
+		"decisionId": request.DecisionID,
+		"answer":     request.OptionID,
+		"responder":  request.Responder,
+	})
+	if err != nil {
+		return advice, err
+	}
+	if advice.TaskID != request.TaskID || !validCortexPhase(advice.Phase) {
+		return advice, fmt.Errorf("%w: Cortex answer identity or phase is invalid", ErrRejected)
+	}
+	if advice.Degraded {
+		return advice, fmt.Errorf("%w: Cortex answer response is degraded", ErrRejected)
+	}
+	if err := validateDecisionPhase(advice); err != nil {
+		return advice, fmt.Errorf("%w: Cortex answer decision state is inconsistent: %v", ErrRejected, err)
+	}
+	if advice.PendingDecision || advice.Decision != nil {
+		return advice, fmt.Errorf("%w: Cortex answer did not settle the pending decision", ErrRejected)
+	}
+	return advice, nil
+}
+
+func validateDecisionPhase(advice Advice) error {
+	hasDecision := advice.Decision != nil
+	if advice.PendingDecision != hasDecision {
+		return errors.New("pending decision marker does not match typed decision")
+	}
+	wantsDecision := strings.EqualFold(strings.TrimSpace(advice.Phase), "needs_human_decision")
+	if wantsDecision != hasDecision {
+		return errors.New("phase does not match typed pending decision")
+	}
+	return nil
 }
 
 func validCortexPhase(phase string) bool {
@@ -251,7 +322,7 @@ func (c *Cortex) call(ctx context.Context, tool string, args map[string]any) (Ad
 	}
 	advice, parseErr := parseAdvice(document)
 	if parseErr != nil {
-		return Advice{}, fmt.Errorf("%s response: %w", tool, parseErr)
+		return Advice{}, fmt.Errorf("%w: %s response is invalid: %v", ErrRejected, tool, parseErr)
 	}
 	if result.IsError || !advice.OK {
 		detail := advice.Summary
@@ -282,6 +353,9 @@ type adviceEnvelope struct {
 
 func parseAdvice(content string) (Advice, error) {
 	content = primaryJSONContent(content)
+	if !utf8.ValidString(content) {
+		return Advice{}, fmt.Errorf("decode JSON envelope: invalid UTF-8")
+	}
 	var envelope adviceEnvelope
 	if err := json.Unmarshal([]byte(content), &envelope); err != nil {
 		return Advice{}, fmt.Errorf("decode JSON envelope: %w", err)
@@ -289,14 +363,21 @@ func parseAdvice(content string) (Advice, error) {
 	if envelope.Revision < 0 {
 		return Advice{}, fmt.Errorf("revision must not be negative")
 	}
+	taskID := strings.TrimSpace(envelope.TaskID)
+	if taskID != envelope.TaskID || len(taskID) > goal.MaxCorrelationIDBytes {
+		return Advice{}, fmt.Errorf("task id is not an exact bounded identity")
+	}
 	summary := strings.TrimSpace(envelope.Summary)
 	if summary == "" {
 		summary = strings.TrimSpace(envelope.Error)
 	}
-	pending := len(envelope.PendingDecision) > 0 && string(envelope.PendingDecision) != "null" && string(envelope.PendingDecision) != "{}"
+	decision, err := parsePendingDecision(envelope.PendingDecision)
+	if err != nil {
+		return Advice{}, err
+	}
 	return Advice{
 		OK:                  envelope.OK,
-		TaskID:              boundAdviceText(strings.TrimSpace(envelope.TaskID), goal.MaxCorrelationIDBytes),
+		TaskID:              taskID,
 		Revision:            envelope.Revision,
 		Phase:               boundAdviceText(strings.TrimSpace(envelope.Phase), maxAdviceTextBytes),
 		Summary:             boundAdviceText(summary, maxAdviceSummaryBytes),
@@ -304,7 +385,8 @@ func parseAdvice(content string) (Advice, error) {
 		VerificationDone:    boundAdviceStrings(envelope.VerificationDone),
 		MissingVerification: boundAdviceStrings(envelope.MissingVerification),
 		StaleVerification:   boundAdviceStrings(envelope.StaleVerification),
-		PendingDecision:     pending,
+		PendingDecision:     decision != nil,
+		Decision:            decision,
 		Degraded:            envelope.Degraded,
 		Actions:             boundAdviceActions(envelope.Actions),
 		Warnings:            boundAdviceStrings(envelope.Warnings),

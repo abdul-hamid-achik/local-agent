@@ -41,10 +41,16 @@ type goalOpenResultMsg struct {
 }
 
 type goalStatusResultMsg struct {
-	Token  uint64
-	Manual bool
-	Advice goaladvisor.Advice
-	Err    error
+	Token                  uint64
+	Manual                 bool
+	DecisionOnly           bool
+	DecisionRefresh        bool
+	DecisionGeneration     uint64
+	ExpectedDecisionTaskID string
+	ExpectedDecisionID     string
+	ExpectedRequestSHA256  string
+	Advice                 goaladvisor.Advice
+	Err                    error
 }
 
 // SetGoalAdvisor wires Cortex after the parent has built the MCP registry. It
@@ -81,6 +87,7 @@ func (m *Model) openGoalForm(objective string, budgetOnly bool) error {
 }
 
 func (m *Model) openGoalRequestForm(request command.GoalRequest) (tea.Cmd, error) {
+	anchor := m.captureInlineFormTranscriptAnchor()
 	budget := goal.BudgetLimits{
 		MaxContinuationTurns: defaultGoalContinuationBudget,
 		MaxEvalTokens:        defaultGoalTokenBudget,
@@ -106,6 +113,9 @@ func (m *Model) openGoalRequestForm(request command.GoalRequest) (tea.Cmd, error
 		followUp = fmt.Sprintf("Confirm the %s AUTO time limit, or enter another duration.", formatGoalTimeInput(defaultGoalTimeBudget))
 		followUpField = GoalFieldTime
 	}
+	if !m.prepareInlineFormOpen() {
+		return nil, fmt.Errorf("another composer-owned surface is active")
+	}
 	m.goalFormState = NewGoalForm(values, GoalFormOptions{
 		Width: m.width, Height: m.height, IsDark: m.isDark,
 		ReducedMotion: m.reducedMotion, DraftFromPrompt: true, FollowUpPrompt: followUp,
@@ -118,6 +128,7 @@ func (m *Model) openGoalRequestForm(request command.GoalRequest) (tea.Cmd, error
 	m.overlayParent = OverlayNone
 	m.overlay = OverlayGoalForm
 	m.input.Blur()
+	m.refreshInlineFormLayout(anchor)
 
 	// `/goal <duration> <prompt>` is itself the explicit creation intent. When
 	// the deterministic draft found a concrete target, start it directly; the
@@ -131,6 +142,7 @@ func (m *Model) openGoalRequestForm(request command.GoalRequest) (tea.Cmd, error
 }
 
 func (m *Model) openGoalFormInternal(objective string, budgetOnly bool) error {
+	anchor := m.captureInlineFormTranscriptAnchor()
 	values := defaultGoalFormValues(objective)
 	if budgetOnly {
 		if m.goalRuntime == nil {
@@ -145,6 +157,9 @@ func (m *Model) openGoalFormInternal(objective string, budgetOnly bool) error {
 		}
 		values = goalFormValuesFromSnapshot(snapshot)
 	}
+	if !m.prepareInlineFormOpen() {
+		return fmt.Errorf("another composer-owned surface is active")
+	}
 	m.goalFormState = NewGoalForm(values, GoalFormOptions{
 		Width: m.width, Height: m.height, IsDark: m.isDark,
 		ReducedMotion: m.reducedMotion, BudgetOnly: budgetOnly,
@@ -152,13 +167,22 @@ func (m *Model) openGoalFormInternal(objective string, budgetOnly bool) error {
 	m.overlayParent = OverlayNone
 	m.overlay = OverlayGoalForm
 	m.input.Blur()
+	m.refreshInlineFormLayout(anchor)
 	return nil
 }
 
 func (m *Model) closeGoalForm() {
+	anchor := m.captureInlineFormTranscriptAnchor()
 	m.goalFormState = nil
-	m.overlay = OverlayNone
-	m.input.Focus()
+	if m.overlay == OverlayGoalForm {
+		m.overlay = OverlayNone
+	}
+	if m.composerEditable() {
+		m.input.Focus()
+	} else {
+		m.input.Blur()
+	}
+	m.refreshInlineFormLayout(anchor)
 }
 
 func (m *Model) applyGoalForm(event GoalFormEvent) tea.Cmd {
@@ -169,6 +193,8 @@ func (m *Model) applyGoalFormWithAuthority(event GoalFormEvent, explicitGoalComm
 	if event.Action != GoalActionSave || m.goalFormState == nil {
 		return nil
 	}
+	anchor := m.captureInlineFormTranscriptAnchor()
+	defer m.refreshInlineFormLayout(anchor)
 	budgetOnly := m.goalFormState.BudgetOnly()
 	values := event.Values
 	if !budgetOnly && m.mode == ModePlan && !explicitGoalCommand {
@@ -346,6 +372,24 @@ func (m *Model) beginGoalOperation(label string, snapshot goal.Snapshot) (uint64
 	}
 	m.goalOperationToken++
 	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	m.goalOperation = label
+	m.goalOperationCancel = cancel
+	m.goalOperationRunning = true
+	m.input.Blur()
+	m.recalcViewportHeight()
+	return m.goalOperationToken, ctx, nil
+}
+
+// beginGoalControlOperation owns the same cancellable/tokened lifecycle as a
+// goal operation without consulting continuation budgets. Reading or settling
+// an already-pending human decision is control-plane work: it grants no model
+// turn and must remain possible after a continuation or wall budget expires.
+func (m *Model) beginGoalControlOperation(label string) (uint64, context.Context, error) {
+	if m.goalOperationRunning {
+		return 0, nil, fmt.Errorf("another goal operation is already running")
+	}
+	m.goalOperationToken++
+	ctx, cancel := context.WithTimeout(context.Background(), goalAdvisorTimeout)
 	m.goalOperation = label
 	m.goalOperationCancel = cancel
 	m.goalOperationRunning = true
@@ -675,10 +719,13 @@ func (m *Model) startGoalTurn(advice *goaladvisor.Advice, manual bool) tea.Cmd {
 	}
 
 	prompt := buildGoalPrompt(snapshot, advice, manual)
+	capability := agent.DurableGoalCapabilityActivity(
+		snapshot.ID, snapshot.Objective, goalCapabilityPhase(advice), goalCapabilityActivityDiscriminator(advice),
+	)
 	m.goalTurnID = turnID
 	m.goalTurnToolCalls = 0
 	m.goalTurnSuccesses = 0
-	command := m.sendGoalToAgentTurn(prompt, turnID, limits)
+	command := m.sendGoalToAgentTurnWithCapability(prompt, turnID, limits, capability)
 	if m.state != StateWaiting {
 		if pending, snapErr := m.goalRuntime.Snapshot(context.Background()); snapErr == nil && pending.PendingContinuation != nil {
 			_ = m.goalRuntime.RecoverPendingContinuation(context.Background(), goal.PendingRecovery{
@@ -939,22 +986,52 @@ func (m *Model) beginGoalEvaluation(manual bool) tea.Cmd {
 		return nil
 	}
 
-	token, ctx, operationErr := m.beginGoalOperation("Checking goal", snapshot)
+	decisionOnly := snapshot.State == goal.StateBlocked && snapshot.Blocker != nil && snapshot.Blocker.Kind == goal.BlockDecision
+	var token uint64
+	var ctx context.Context
+	var operationErr error
+	if decisionOnly {
+		token, ctx, operationErr = m.beginGoalControlOperation("Refreshing Cortex decision")
+	} else {
+		token, ctx, operationErr = m.beginGoalOperation("Checking goal", snapshot)
+	}
 	if operationErr != nil {
 		m.handleGoalOperationStartFailure("Cortex status", operationErr)
 		return nil
 	}
 	advisor := m.goalAdvisor
 	taskID := snapshot.Cortex.TaskID
+	expectedDecisionID := ""
+	expectedRequestSHA256 := ""
+	if decisionOnly && m.cortexDecisionAttempt != nil && m.cortexDecisionAttempt.TaskID == taskID {
+		expectedDecisionID = m.cortexDecisionAttempt.DecisionID
+		expectedRequestSHA256 = m.cortexDecisionAttempt.RequestSHA256
+	}
 	return tea.Batch(m.startActivityCmd(), func() tea.Msg {
 		advice, err := advisor.Status(ctx, taskID)
-		return goalStatusResultMsg{Token: token, Manual: manual, Advice: advice, Err: err}
+		return goalStatusResultMsg{
+			Token: token, Manual: manual, DecisionOnly: decisionOnly,
+			ExpectedDecisionTaskID: taskID, ExpectedDecisionID: expectedDecisionID,
+			ExpectedRequestSHA256: expectedRequestSHA256, Advice: advice, Err: err,
+		}
 	})
 }
 
 func (m *Model) handleGoalStatusResult(message goalStatusResultMsg) tea.Cmd {
+	if message.DecisionRefresh {
+		operation := m.cortexDecisionOp
+		if operation == nil || operation.Kind != cortexDecisionOperationRefresh ||
+			operation.Token != message.Token || operation.Generation != message.DecisionGeneration ||
+			operation.TaskID != message.ExpectedDecisionTaskID || operation.DecisionID != message.ExpectedDecisionID ||
+			operation.RequestSHA256 != message.ExpectedRequestSHA256 {
+			return nil
+		}
+	}
 	if !m.finishGoalOperation(message.Token) || m.goalRuntime == nil {
 		return nil
+	}
+	if message.DecisionRefresh {
+		m.cortexDecisionOp = nil
 	}
 	if m.shuttingDown {
 		if m.shutdownReady() {
@@ -963,6 +1040,10 @@ func (m *Model) handleGoalStatusResult(message goalStatusResultMsg) tea.Cmd {
 		return nil
 	}
 	if message.Err != nil {
+		if message.DecisionOnly {
+			m.markCortexDecisionOutcomeUnknown()
+			return nil
+		}
 		snapshot, _ := m.goalRuntime.Snapshot(context.Background())
 		if snapshot.State == goal.StateActive {
 			_ = m.goalRuntime.Pause(context.Background(), "Cortex status is unavailable; automatic continuation stopped")
@@ -978,6 +1059,66 @@ func (m *Model) handleGoalStatusResult(message goalStatusResultMsg) tea.Cmd {
 		return nil
 	}
 	beforeStatus := snapshot
+	reconciliationOnlyPending := false
+	supersededDecisionAttempt := false
+	decisionAttemptBeforeStatus := cloneCortexDecisionAttempt(m.cortexDecisionAttempt)
+	if message.DecisionOnly {
+		if !validCortexDecisionStatusAdvice(message.Advice, message.ExpectedDecisionTaskID) {
+			m.markCortexDecisionOutcomeUnknown()
+			return nil
+		}
+		if !cortexDecisionMatchesGoal(snapshot, message.ExpectedDecisionTaskID) {
+			m.markCortexDecisionOutcomeUnknown()
+			return nil
+		}
+		if message.ExpectedRequestSHA256 != "" && message.Advice.Decision != nil {
+			requestSHA256, requestErr := message.Advice.Decision.RequestBindingSHA256(message.Advice.TaskID)
+			if requestErr != nil {
+				m.markCortexDecisionOutcomeUnknown()
+				return nil
+			}
+			if message.Advice.Decision.ID == message.ExpectedDecisionID {
+				if requestSHA256 != message.ExpectedRequestSHA256 {
+					// Reusing a stable decision ID for changed request content is an
+					// immutable binding conflict, not a new decision.
+					m.markCortexDecisionOutcomeUnknown()
+					return nil
+				}
+				reconciliationOnlyPending = true
+			} else {
+				attempt := m.cortexDecisionAttempt
+				if attempt == nil || attempt.TaskID != message.ExpectedDecisionTaskID ||
+					attempt.DecisionID != message.ExpectedDecisionID ||
+					attempt.RequestSHA256 != message.ExpectedRequestSHA256 {
+					m.markCortexDecisionOutcomeUnknown()
+					return nil
+				}
+				if err := m.supersedeCortexDecisionControlItem(
+					snapshot, attempt, message.Advice.Decision.ID, requestSHA256,
+				); err != nil {
+					m.markCortexDecisionOutcomeUnknown()
+					return nil
+				}
+				supersededDecisionAttempt = true
+			}
+		}
+	}
+
+	phase := strings.ToLower(strings.TrimSpace(message.Advice.Phase))
+	pendingDecision := message.Advice.PendingDecision || phase == "needs_human_decision"
+	// The durable request is recorded before any local state transition. A
+	// typed pending status can become visible only after both the control item
+	// and matching BlockDecision snapshot have been persisted.
+	if pendingDecision {
+		if controlErr := m.recordCortexDecisionControlItem(beforeStatus, message.Advice); controlErr != nil {
+			m.protectControlPlaneFailure("Record Cortex decision", controlErr)
+			return nil
+		}
+	} else if controlErr := m.resolveCortexDecisionControlItems(beforeStatus, message.Advice); controlErr != nil {
+		m.protectControlPlaneFailure("Resolve Cortex decision", controlErr)
+		return nil
+	}
+
 	correlation := snapshot.Cortex
 	if message.Advice.TaskID != "" {
 		correlation.TaskID = message.Advice.TaskID
@@ -996,27 +1137,65 @@ func (m *Model) handleGoalStatusResult(message goalStatusResultMsg) tea.Cmd {
 		return nil
 	}
 
-	phase := strings.ToLower(strings.TrimSpace(message.Advice.Phase))
-	pendingDecision := message.Advice.PendingDecision || phase == "needs_human_decision"
-	if pendingDecision {
-		if controlErr := m.recordCortexDecisionControlItem(beforeStatus, message.Advice); controlErr != nil {
-			m.protectControlPlaneFailure("Record Cortex decision", controlErr)
+	// A decision refresh is reconciliation only. Fresh status may have advanced
+	// to any semantic phase, but this first authority boundary resolves the
+	// decision blocker and lands paused before another explicit resume can act.
+	if message.DecisionOnly && !pendingDecision {
+		current, snapshotErr := m.goalRuntime.Snapshot(context.Background())
+		if snapshotErr != nil || !cortexDecisionMatchesGoal(current, message.ExpectedDecisionTaskID) {
+			m.markCortexDecisionOutcomeUnknown()
 			return nil
 		}
-	} else if controlErr := m.resolveCortexDecisionControlItems(beforeStatus, message.Advice); controlErr != nil {
-		m.protectControlPlaneFailure("Resolve Cortex decision", controlErr)
+		if err := m.goalRuntime.ResolveBlock(context.Background(), goal.BlockResolution{
+			Reference: current.Blocker.Reference,
+			Reason:    "fresh Cortex status no longer reports the decision",
+			Evidence:  "fresh Cortex status",
+		}); err != nil {
+			m.markCortexDecisionOutcomeUnknown()
+			return nil
+		}
+		m.cortexDecisionAttempt = nil
+		if !m.persistGoalAdvisorTransition(beforeStatus, "Save cleared Cortex decision blocker") {
+			m.cortexDecisionAttempt = decisionAttemptBeforeStatus
+			return nil
+		}
+		m.clearCortexDecisionPresentation()
+		if message.Manual {
+			m.appendGoalSystem("Decision cleared; run /goal resume again to process fresh Cortex status.")
+		} else {
+			m.appendGoalSystem("Decision cleared; run /goal resume to process fresh Cortex status.")
+		}
 		return nil
 	}
+
 	switch {
 	case pendingDecision:
 		if err := ensureGoalBlock(m.goalRuntime, goal.BlockDecision, correlation.TaskID, "Cortex is waiting for a human decision"); err != nil {
 			m.appendGoalError("Pause for Cortex decision: " + err.Error())
 			return nil
 		}
+		if supersededDecisionAttempt {
+			// The old exact item is already durably answered/dismissed and the new
+			// request has been recorded. Clear the old no-retry fence in the same
+			// session-state write that retains the new blocker.
+			m.cortexDecisionAttempt = nil
+		}
 		if !m.persistGoalAdvisorTransition(beforeStatus, "Save Cortex decision blocker") {
+			if supersededDecisionAttempt {
+				m.cortexDecisionAttempt = decisionAttemptBeforeStatus
+			}
 			return nil
 		}
-		m.appendGoalSystem("Goal paused · Cortex requires a human decision. Answer it, then run /goal resume.")
+		if err := m.presentCortexDecision(message.Advice); err != nil {
+			m.appendGoalError("Show Cortex decision: " + err.Error())
+			return nil
+		}
+		if reconciliationOnlyPending {
+			m.cortexDecision.setOutcomeUnknown()
+			m.input.Blur()
+			m.recalcViewportHeight()
+		}
+		m.appendGoalSystem("Goal paused · Cortex requires a human decision.")
 		return nil
 
 	case phase == "blocked":
@@ -1425,14 +1604,38 @@ func (m *Model) dropGoal() {
 		m.appendGoalError("No goal is configured.")
 		return
 	}
+	if m.goalOperationRunning || m.cortexDecisionOp != nil {
+		m.appendGoalError("Wait for the active goal operation before dropping the goal.")
+		return
+	}
+	before, err := m.goalRuntime.Snapshot(context.Background())
+	if err != nil {
+		m.appendGoalError("Read goal before drop: " + err.Error())
+		return
+	}
+	workspaceID, dismissals, err := m.prepareCortexDecisionDropResolutions(before)
+	if err != nil {
+		m.appendGoalError("Prepare goal drop: " + err.Error())
+		return
+	}
+	attemptBefore := cloneCortexDecisionAttempt(m.cortexDecisionAttempt)
 	if err := m.goalRuntime.Drop(context.Background(), "dropped by user"); err != nil {
 		m.appendGoalError("Drop goal: " + err.Error())
 		return
 	}
-	if err := m.persistGoalSession(); err != nil {
-		m.appendGoalError("Save dropped goal: " + err.Error())
+	// A dropped goal cannot retain an answer fence: restore rejects that
+	// combination, and the user-drop receipts settle any still-pending durable
+	// controls in the same transaction as this fence-free snapshot.
+	m.cortexDecisionAttempt = nil
+	if err := m.persistDroppedGoalWithCortexDismissals(workspaceID, dismissals); err != nil {
+		rollbackErr := m.restoreGoalSnapshot(before)
+		m.cortexDecisionAttempt = attemptBefore
+		m.appendGoalError("Save dropped goal: " + errors.Join(err, rollbackErr).Error())
 		return
 	}
+	m.cortexDecisionGen++
+	m.cortexDecisionAttempt = nil
+	m.clearCortexDecisionPresentation()
 	m.appendGoalSystem("Goal dropped without claiming completion.")
 }
 

@@ -9,6 +9,7 @@ import (
 
 	"github.com/abdul-hamid-achik/local-agent/internal/agent"
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
+	"github.com/abdul-hamid-achik/local-agent/internal/execution"
 )
 
 type standaloneRecoveryState struct {
@@ -149,7 +150,7 @@ func (m *Model) handleStandaloneRecoveryInspect(message standaloneRecoveryInspec
 	item := GoalRecoveryItem{
 		ItemID: message.inspection.ItemID, Kind: GoalRecoveryExecutionEffect,
 		Subject: message.inspection.ToolName, Tool: message.inspection.ToolName,
-		Summary:     "The execution receipt was lost; inspect the external effect before continuing.",
+		Summary:     standaloneRecoverySummary(message.inspection),
 		ExecutionID: message.inspection.ExecutionID, TurnID: message.inspection.TurnID,
 		EventType: string(message.inspection.EventType), EffectClass: string(message.inspection.EffectClass),
 		Actionable: true,
@@ -162,6 +163,36 @@ func (m *Model) handleStandaloneRecoveryInspect(message standaloneRecoveryInspec
 	m.overlay = OverlayGoalRecovery
 	m.input.Blur()
 	return nil
+}
+
+func standaloneRecoverySummary(inspection db.StandaloneExecutionReconciliationInspection) string {
+	switch inspection.EventType {
+	case execution.EventOutcomeUnknown:
+		return "Dispatch occurred, but the host cannot verify the effect; inspect the exact target before continuing."
+	case execution.EventStarted:
+		return "Dispatch started without a terminal receipt; inspect the exact target before continuing."
+	default:
+		return "The execution requires explicit evidence before this session can continue."
+	}
+}
+
+func (m *Model) remindStandaloneRecoveryDraftPreserved() {
+	if m == nil || m.standaloneRecovery == nil {
+		return
+	}
+	const message = "Chat paused · your draft is still in the composer. Run /recover to inspect the uncertain execution before sending another prompt."
+	for index := len(m.entries) - 1; index >= 0; index-- {
+		entry := m.entries[index]
+		if entry.Kind == "user" {
+			break
+		}
+		if entry.Kind == "system" && entry.Content == message {
+			return
+		}
+	}
+	m.entries = append(m.entries, ChatEntry{Kind: "system", Content: message})
+	m.viewport.SetContent(m.renderEntries())
+	m.resumeFollow()
 }
 
 func (m *Model) beginStandaloneRecoveryApply(event GoalRecoveryEvent) tea.Cmd {

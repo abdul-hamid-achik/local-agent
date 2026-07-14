@@ -2,8 +2,11 @@ package skill
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/safeio"
@@ -87,6 +90,158 @@ func TestManager_LoadAll_NoFrontmatter(t *testing.T) {
 	}
 }
 
+func TestManagerLoadsFlatAndAgentSkillsDirectoryForms(t *testing.T) {
+	dir := t.TempDir()
+	mustWriteFile(t, filepath.Join(dir, "zeta.md"), "---\nname: zeta\ndescription: Last skill\n---\nZeta body")
+	directorySkill := filepath.Join(dir, "alpha")
+	if err := os.MkdirAll(directorySkill, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWriteFile(t, filepath.Join(directorySkill, "SKILL.md"), "---\ndescription: First skill\n---\nAlpha body")
+
+	m := NewManager(dir)
+	mustLoadAll(t, m)
+
+	if got := m.Names(); len(got) != 2 || got[0] != "alpha" || got[1] != "zeta" {
+		t.Fatalf("deterministic names = %#v, want [alpha zeta]", got)
+	}
+	catalog := m.Catalog()
+	if len(catalog) != 2 || catalog[0] != (CatalogEntry{Name: "alpha", Description: "First skill"}) || catalog[1] != (CatalogEntry{Name: "zeta", Description: "Last skill"}) {
+		t.Fatalf("catalog = %#v", catalog)
+	}
+	if body, ok := m.Load("alpha"); !ok || body != "Alpha body" {
+		t.Fatalf("Load(alpha) = %q, %v", body, ok)
+	}
+	if body, ok := m.Load("alpha "); ok || body != "" {
+		t.Fatalf("non-exact Load = %q, %v", body, ok)
+	}
+	if body, ok := m.Load("missing"); ok || body != "" {
+		t.Fatalf("missing Load = %q, %v", body, ok)
+	}
+	if content := m.ActiveContent(); content != "" {
+		t.Fatalf("on-demand load changed activation: %q", content)
+	}
+
+	// Catalog snapshots are detached from Manager state.
+	catalog[0].Description = "mutated"
+	if current := m.Catalog(); current[0].Description != "First skill" {
+		t.Fatalf("catalog mutation changed manager: %#v", current)
+	}
+}
+
+func TestManagerUsesOnlyExplicitSharedAgentsSkillsRoot(t *testing.T) {
+	home := t.TempDir()
+
+	sharedDir := filepath.Join(home, ".agents", "skills", "review")
+	legacyDir := filepath.Join(home, ".config", "local-agent", "skills", "review")
+	for _, dir := range []string{sharedDir, legacyDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("create skill dir %s: %v", dir, err)
+		}
+	}
+	mustWriteFile(t, filepath.Join(sharedDir, "SKILL.md"), "---\nname: review\ndescription: Canonical\n---\nshared body")
+	mustWriteFile(t, filepath.Join(legacyDir, "SKILL.md"), "---\nname: review\ndescription: Legacy duplicate\n---\nlegacy body")
+
+	m := NewManager(filepath.Join(home, ".agents", "skills"))
+	mustLoadAll(t, m)
+
+	all := m.All()
+	if len(all) != 1 {
+		t.Fatalf("default skills = %#v, want one shared skill", all)
+	}
+	if all[0].Path != filepath.Join(sharedDir, "SKILL.md") || all[0].Content != "shared body" {
+		t.Fatalf("default skill = %#v, want canonical .agents skill", all[0])
+	}
+}
+
+func TestManagerDirectorySkillAcceptsLegacyLowercaseFilename(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "lowercase")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWriteFile(t, filepath.Join(skillDir, "skill.md"), "---\nname: lowercase\ndescription: Compatible\n---\nlegacy lowercase body")
+
+	m := NewManager(dir)
+	mustLoadAll(t, m)
+	all := m.All()
+	if len(all) != 1 {
+		t.Fatalf("lowercase directory skills = %d, want one", len(all))
+	}
+	if all[0].Name != "lowercase" || all[0].Content != "legacy lowercase body" {
+		t.Fatalf("lowercase directory skill: name=%q content=%q path=%q", all[0].Name, all[0].Content, all[0].Path)
+	}
+}
+
+func TestManagerEmptyRootDisablesImplicitDiscovery(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	for _, root := range []string{
+		filepath.Join(home, ".agents", "skills", "shared"),
+		filepath.Join(home, ".config", "local-agent", "skills", "legacy"),
+	} {
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		mustWriteFile(t, filepath.Join(root, "SKILL.md"), "---\ndescription: must not load\n---\nbody")
+	}
+
+	m := NewManager("")
+	mustLoadAll(t, m)
+	if all := m.All(); len(all) != 0 {
+		t.Fatalf("empty root discovered implicit skills: %#v", all)
+	}
+}
+
+func TestManagerCatalogBoundsDoNotLimitFlatSkillDiscovery(t *testing.T) {
+	dir := t.TempDir()
+	for i := 0; i < maxSkillCatalogEntries+1; i++ {
+		name := fmt.Sprintf("skill-%03d", i)
+		mustWriteFile(t, filepath.Join(dir, name+".md"), fmt.Sprintf("---\nname: %s\ndescription: %s\n---\nbody-%03d", name, strings.Repeat("d", maxSkillDescriptionBytes+100), i))
+	}
+	m := NewManager(dir)
+	mustLoadAll(t, m)
+	if got := len(m.All()); got != maxSkillCatalogEntries+1 {
+		t.Fatalf("discovered skills = %d", got)
+	}
+	catalog := m.Catalog()
+	if len(catalog) == 0 || len(catalog) > maxSkillCatalogEntries {
+		t.Fatalf("catalog entries = %d", len(catalog))
+	}
+	for _, entry := range catalog {
+		if len(entry.Name) > maxSkillNameBytes || len(entry.Description) > maxSkillDescriptionBytes {
+			t.Fatalf("unbounded catalog entry = %#v", entry)
+		}
+	}
+	if body, ok := m.Load(fmt.Sprintf("skill-%03d", maxSkillCatalogEntries)); !ok || body != fmt.Sprintf("body-%03d", maxSkillCatalogEntries) {
+		t.Fatalf("exact load outside catalog bound = %q, %v", body, ok)
+	}
+}
+
+func TestManagerCatalogOmitsActiveSkills(t *testing.T) {
+	dir := t.TempDir()
+	mustWriteFile(t, filepath.Join(dir, "active.md"), "---\nname: active\ndescription: Already active\n---\nActive body")
+	mustWriteFile(t, filepath.Join(dir, "available.md"), "---\nname: available\ndescription: Load on demand\n---\nAvailable body")
+	m := NewManager(dir)
+	mustLoadAll(t, m)
+	mustActivate(t, m, "active")
+
+	catalog := m.Catalog()
+	if len(catalog) != 1 || catalog[0].Name != "available" {
+		t.Fatalf("catalog with active skill = %#v", catalog)
+	}
+	if active := m.ActiveContent(); !strings.Contains(active, "Active body") {
+		t.Fatalf("active content = %q", active)
+	}
+	if err := m.Deactivate("active"); err != nil {
+		t.Fatal(err)
+	}
+	catalog = m.Catalog()
+	if len(catalog) != 2 || catalog[0].Name != "active" || catalog[1].Name != "available" {
+		t.Fatalf("catalog after deactivation = %#v", catalog)
+	}
+}
+
 func TestManager_LoadAll_NonexistentDir(t *testing.T) {
 	m := NewManager("/nonexistent/path/that/does/not/exist")
 	if err := m.LoadAll(); err != nil {
@@ -122,6 +277,69 @@ func TestManagerLoadAllRejectsSymlinkedSkill(t *testing.T) {
 	if err := m.LoadAll(); !errors.Is(err, safeio.ErrSymlink) {
 		t.Fatalf("symlinked skill error = %v", err)
 	}
+}
+
+func TestManagerDirectorySkillsFailClosed(t *testing.T) {
+	t.Run("hidden symlink is not a skill candidate", func(t *testing.T) {
+		dir := t.TempDir()
+		outside := t.TempDir()
+		if err := os.Symlink(outside, filepath.Join(dir, ".package-manager")); err != nil {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+		validDir := filepath.Join(dir, "valid")
+		if err := os.MkdirAll(validDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		mustWriteFile(t, filepath.Join(validDir, "SKILL.md"), "---\nname: valid\n---\nbody")
+
+		m := NewManager(dir)
+		mustLoadAll(t, m)
+		if names := m.Names(); len(names) != 1 || names[0] != "valid" {
+			t.Fatalf("skills with hidden package link = %#v", names)
+		}
+	})
+
+	t.Run("symlinked SKILL.md", func(t *testing.T) {
+		dir := t.TempDir()
+		skillDir := filepath.Join(dir, "linked")
+		if err := os.MkdirAll(skillDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		outside := filepath.Join(t.TempDir(), "outside.md")
+		mustWriteFile(t, outside, "outside secret")
+		if err := os.Symlink(outside, filepath.Join(skillDir, "SKILL.md")); err != nil {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+		if err := NewManager(dir).LoadAll(); !errors.Is(err, safeio.ErrSymlink) {
+			t.Fatalf("symlinked directory skill error = %v", err)
+		}
+	})
+
+	t.Run("symlinked root", func(t *testing.T) {
+		realRoot := t.TempDir()
+		linkParent := t.TempDir()
+		link := filepath.Join(linkParent, "skills")
+		if err := os.Symlink(realRoot, link); err != nil {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+		if err := NewManager(link).LoadAll(); !errors.Is(err, safeio.ErrSymlink) {
+			t.Fatalf("symlinked root error = %v", err)
+		}
+	})
+
+	t.Run("oversized SKILL.md", func(t *testing.T) {
+		dir := t.TempDir()
+		skillDir := filepath.Join(dir, "large")
+		if err := os.MkdirAll(skillDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), make([]byte, maxSkillFileBytes+1), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := NewManager(dir).LoadAll(); !errors.Is(err, safeio.ErrTooLarge) {
+			t.Fatalf("oversized directory skill error = %v", err)
+		}
+	})
 }
 
 func TestManager_Activate_Deactivate(t *testing.T) {
@@ -208,6 +426,164 @@ func TestManager_ActiveContent(t *testing.T) {
 			t.Errorf("combined content missing expected parts: %q", content)
 		}
 	})
+}
+
+func TestManagerReloadIsIdempotentAndPreservesActivation(t *testing.T) {
+	dir := t.TempDir()
+	mustWriteFile(t, filepath.Join(dir, "stable.md"), "---\nname: stable\ndescription: Stable skill\n---\nStable body")
+	m := NewManager(dir)
+	mustLoadAll(t, m)
+	mustActivate(t, m, "stable")
+	mustLoadAll(t, m)
+
+	all := m.All()
+	if len(all) != 1 || !all[0].Active || all[0].Content != "Stable body" {
+		t.Fatalf("reloaded skills = %#v", all)
+	}
+	// Callers receive snapshots, not pointers into shared manager state.
+	all[0].Active = false
+	all[0].Content = "mutated"
+	if current := m.All(); len(current) != 1 || !current[0].Active || current[0].Content != "Stable body" {
+		t.Fatalf("external mutation changed manager state: %#v", current)
+	}
+}
+
+func TestManagerRejectsAmbiguousAndMalformedSkills(t *testing.T) {
+	t.Run("duplicate name", func(t *testing.T) {
+		first, second := t.TempDir(), t.TempDir()
+		mustWriteFile(t, filepath.Join(first, "first.md"), "---\nname: duplicate\n---\nfirst")
+		mustWriteFile(t, filepath.Join(second, "second.md"), "---\nname: duplicate\n---\nsecond")
+		m := NewManager(first)
+		m.AddSearchPath(second)
+		err := m.LoadAll()
+		if err == nil || !strings.Contains(err.Error(), "duplicate skill name \"duplicate\"") ||
+			!strings.Contains(err.Error(), "first.md") || !strings.Contains(err.Error(), "second.md") {
+			t.Fatalf("duplicate skill error = %v", err)
+		}
+	})
+
+	t.Run("duplicate flat and directory name", func(t *testing.T) {
+		dir := t.TempDir()
+		mustWriteFile(t, filepath.Join(dir, "duplicate.md"), "---\nname: duplicate\n---\nflat")
+		directorySkill := filepath.Join(dir, "nested")
+		if err := os.MkdirAll(directorySkill, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		mustWriteFile(t, filepath.Join(directorySkill, "SKILL.md"), "---\nname: duplicate\n---\ndirectory")
+		err := NewManager(dir).LoadAll()
+		if err == nil || !strings.Contains(err.Error(), "duplicate skill name \"duplicate\"") || !strings.Contains(err.Error(), "duplicate.md") || !strings.Contains(err.Error(), "SKILL.md") {
+			t.Fatalf("flat/directory duplicate error = %v", err)
+		}
+		if second := NewManager(dir).LoadAll(); second == nil || second.Error() != err.Error() {
+			t.Fatalf("duplicate rejection was not deterministic: first=%v second=%v", err, second)
+		}
+	})
+
+	t.Run("invalid frontmatter", func(t *testing.T) {
+		dir := t.TempDir()
+		mustWriteFile(t, filepath.Join(dir, "invalid.md"), "---\n: :\n---\nbody")
+		err := NewManager(dir).LoadAll()
+		if err == nil || !strings.Contains(err.Error(), "parse skill") {
+			t.Fatalf("invalid skill error = %v", err)
+		}
+	})
+
+	t.Run("unsupported frontmatter field", func(t *testing.T) {
+		dir := t.TempDir()
+		mustWriteFile(t, filepath.Join(dir, "unknown.md"), "---\nname: valid\ndescripton: typo\n---\nbody")
+		err := NewManager(dir).LoadAll()
+		if err == nil || !strings.Contains(err.Error(), "field descripton not found") {
+			t.Fatalf("unknown frontmatter field error = %v", err)
+		}
+	})
+
+	t.Run("known Agent Skills extension fields", func(t *testing.T) {
+		dir := t.TempDir()
+		mustWriteFile(t, filepath.Join(dir, "extended.md"), `---
+name: extended
+description: Extended metadata
+license: MIT
+compatibility: local-agent
+metadata:
+  version: "1"
+allowed-tools: Bash(go test:*)
+triggers:
+  - go
+---
+body`)
+		m := NewManager(dir)
+		if err := m.LoadAll(); err != nil {
+			t.Fatalf("known extension fields: %v", err)
+		}
+		if got := m.Names(); len(got) != 1 || got[0] != "extended" {
+			t.Fatalf("extended skill names = %#v", got)
+		}
+	})
+}
+
+func TestManagerRejectsInvalidSkillNamesDuringDiscovery(t *testing.T) {
+	tests := []struct {
+		name     string
+		declared string
+	}{
+		{name: "blank", declared: `""`},
+		{name: "whitespace only", declared: `"   "`},
+		{name: "leading whitespace", declared: `" alpha"`},
+		{name: "trailing whitespace", declared: `"alpha "`},
+		{name: "control", declared: `"alpha\u0007"`},
+		{name: "unicode format", declared: `"alpha\u202e"`},
+		{name: "oversized", declared: `"` + strings.Repeat("x", maxSkillNameBytes+1) + `"`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			mustWriteFile(t, filepath.Join(dir, "invalid.md"), "---\nname: "+tt.declared+"\n---\nbody")
+			err := NewManager(dir).LoadAll()
+			if err == nil || !strings.Contains(err.Error(), "invalid skill name") || !strings.Contains(err.Error(), "invalid.md") {
+				t.Fatalf("invalid name error = %v", err)
+			}
+		})
+	}
+}
+
+func TestManagerConcurrentReadsAndActivation(t *testing.T) {
+	dir := t.TempDir()
+	mustWriteFile(t, filepath.Join(dir, "alpha.md"), "---\nname: alpha\n---\nAlpha")
+	mustWriteFile(t, filepath.Join(dir, "beta.md"), "---\nname: beta\n---\nBeta")
+	m := NewManager(dir)
+	mustLoadAll(t, m)
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 100 {
+				_ = m.Names()
+				_ = m.All()
+				_ = m.Catalog()
+				_, _ = m.Load("alpha")
+				_ = m.ActiveContent()
+				_ = m.Has("alpha")
+			}
+		}()
+	}
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 100 {
+				if err := m.UpdateActive([]string{"beta"}, []string{"alpha"}); err != nil {
+					t.Errorf("update active: %v", err)
+				}
+				if err := m.UpdateActive([]string{"alpha"}, []string{"beta"}); err != nil {
+					t.Errorf("update active: %v", err)
+				}
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 func contains(s, substr string) bool {

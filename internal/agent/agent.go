@@ -11,6 +11,7 @@ import (
 
 	"github.com/charmbracelet/log"
 
+	"github.com/abdul-hamid-achik/local-agent/internal/capabilityadvisor"
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
 	"github.com/abdul-hamid-achik/local-agent/internal/execution"
 	"github.com/abdul-hamid-achik/local-agent/internal/ice"
@@ -27,6 +28,7 @@ type Agent struct {
 	registry         *mcp.Registry
 	messages         []llm.Message
 	skillContent     string
+	skillLoader      SkillLoader
 	loadedCtx        string
 	numCtx           int
 	memoryStore      *memory.Store
@@ -42,19 +44,22 @@ type Agent struct {
 	// approvalGrants contains host-approved, exact-request grants for this Agent
 	// session. Keys bind workspace, tool and canonical arguments; they are never
 	// persisted as global tool-only policies.
-	approvalGrants map[string]struct{}
-	toolsConfig    config.ToolsConfig
-	logger         *log.Logger
-	turnRunning    atomic.Bool
-	turnMu         sync.Mutex
-	turnCancel     context.CancelFunc
-	turnDone       chan struct{}
-	closed         bool
-	readOnlySlots  chan struct{}
-	hooks          []ToolHook
-	mcpServerScope map[string]struct{}
-	mcpScopeSet    bool
-	trustedMCP     map[string]trustedMCPImplementation
+	approvalGrants    map[string]struct{}
+	toolsConfig       config.ToolsConfig
+	logger            *log.Logger
+	turnRunning       atomic.Bool
+	turnMu            sync.Mutex
+	turnCancel        context.CancelFunc
+	turnDone          chan struct{}
+	closed            bool
+	readOnlySlots     chan struct{}
+	hooks             []ToolHook
+	mcpServerScope    map[string]struct{}
+	mcpScopeSet       bool
+	trustedMCP        map[string]trustedMCPImplementation
+	readRoots         map[string]*additionalReadRoot
+	capabilityAdvisor capabilityAdviser
+	capabilityRetries map[capabilityRetryKey]struct{}
 
 	checkpointStore     CheckpointStore
 	checkpointSessionID int64
@@ -91,7 +96,7 @@ func (a *Agent) logTurn(turnID string) *log.Logger {
 // New creates a new Agent.
 func New(llmClient llm.Client, registry *mcp.Registry, numCtx int) *Agent {
 	runID, runIDErr := execution.NewRunID()
-	return &Agent{
+	agent := &Agent{
 		llmClient:         llmClient,
 		registry:          registry,
 		numCtx:            numCtx,
@@ -101,11 +106,19 @@ func New(llmClient llm.Client, registry *mcp.Registry, numCtx int) *Agent {
 		executionRunIDErr: runIDErr,
 		approvalGrants:    make(map[string]struct{}),
 		trustedMCP:        make(map[string]trustedMCPImplementation),
+		readRoots:         make(map[string]*additionalReadRoot),
+		capabilityRetries: make(map[capabilityRetryKey]struct{}),
 		// Filesystem reads can enter OS syscalls that do not observe context
 		// cancellation. Allow at most one abandoned worker for the lifetime of
 		// an Agent; later reads wait on this slot and remain cancellable.
 		readOnlySlots: make(chan struct{}, 1),
 	}
+	capabilityRegistry := scopedCapabilityRegistry{agent: agent}
+	if registry != nil {
+		capabilityRegistry.backend = registry
+	}
+	agent.capabilityAdvisor = capabilityadvisor.New(capabilityRegistry)
+	return agent
 }
 
 // SetRouter sets the model router for auto-selection.
@@ -316,7 +329,7 @@ func (a *Agent) LLMClient() llm.Client {
 
 // ToolCount returns the number of available tools.
 func (a *Agent) ToolCount() int {
-	count := len(a.toolPolicy.localTools)
+	count := len(filterToolDefsByName(a.toolsBuiltinToolDefs(), a.toolPolicy.localTools))
 	if a.memoryStore != nil {
 		count += len(a.toolPolicy.memoryTools)
 	}
@@ -524,4 +537,5 @@ func (a *Agent) Close() {
 	if a.registry != nil {
 		a.registry.Close()
 	}
+	a.closeReadRoots()
 }

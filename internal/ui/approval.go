@@ -14,7 +14,6 @@ import (
 )
 
 const (
-	approvalMaximumWidth            = 86
 	approvalMaximumActionBytes      = 256
 	approvalMaximumConsequenceBytes = 768
 )
@@ -24,6 +23,52 @@ const (
 type ApprovalState struct {
 	Viewport      viewport.Model
 	ShowArguments bool
+	ChoiceIndex   int
+}
+
+type approvalChoice struct {
+	Decision     permission.ApprovalDecision
+	Key          string
+	Label        string
+	CompactLabel string
+}
+
+// Keep the safe outcome first: Enter on a newly opened permission request
+// denies it unless the user deliberately moves to an allow choice. Direct
+// y/n/s shortcuts remain available regardless of the focused row.
+var approvalChoices = [...]approvalChoice{
+	{Decision: permission.DecisionUserDeny, Key: "n", Label: "deny", CompactLabel: "deny"},
+	{Decision: permission.DecisionAllowOnce, Key: "y", Label: "once", CompactLabel: "once"},
+	{
+		Decision:     permission.DecisionAllowSession,
+		Key:          "s",
+		Label:        "identical request · current session",
+		CompactLabel: "identical/session",
+	},
+}
+
+type approvalTranscriptAnchor struct {
+	valid   bool
+	paused  bool
+	yOffset int
+}
+
+func (m *Model) captureApprovalTranscriptAnchor() approvalTranscriptAnchor {
+	if m == nil || !m.ready {
+		return approvalTranscriptAnchor{}
+	}
+	return approvalTranscriptAnchor{
+		valid:   true,
+		paused:  m.followPaused(),
+		yOffset: m.viewport.YOffset(),
+	}
+}
+
+func (m *Model) restoreApprovalTranscriptAnchor(anchor approvalTranscriptAnchor) {
+	if m == nil || !anchor.valid {
+		return
+	}
+	m.restoreFollowPosition(anchor.paused, anchor.yOffset)
 }
 
 func (m *Model) openApproval(request ToolApprovalMsg) error {
@@ -37,38 +82,119 @@ func (m *Model) openApproval(request ToolApprovalMsg) error {
 		return fmt.Errorf("encode exact arguments: %w", err)
 	}
 
+	anchor := m.captureApprovalTranscriptAnchor()
+	// Approval has the highest input authority. If a host request arrives while
+	// a composer-owned form is visible, cancel that transient form instead of
+	// retaining inaccessible state behind the decision surface.
+	if m.overlay == OverlayPlanForm || m.overlay == OverlayGoalForm {
+		m.planFormState = nil
+		m.goalFormState = nil
+		m.overlay = OverlayNone
+	}
+	// A Cortex decision remains presentation-only while approval temporarily
+	// owns the higher-priority inline surface. Its durable blocker is unchanged,
+	// and the exact request is shown again after approval settles.
+	if m.overlay == OverlayCortexDecision {
+		m.overlay = OverlayNone
+	}
 	m.pendingApproval = &request
-	m.approvalState = &ApprovalState{}
+	m.approvalState = &ApprovalState{ChoiceIndex: 0}
+	// Permission decisions are part of the active conversation flow. They own
+	// the composer/footer region instead of covering the transcript with a
+	// centered modal. Clear a completion defensively so an asynchronous host
+	// request never leaves hidden filter state behind the inline surface.
+	if m.isCompletionActive() {
+		m.dismissCompletion()
+	}
 	m.overlayParent = OverlayNone
-	m.overlay = OverlayApproval
+	m.overlay = OverlayNone
 	m.input.Blur()
 	m.resizeApproval(false)
 	m.recalcViewportHeight()
+	m.restoreApprovalTranscriptAnchor(anchor)
 	return nil
 }
 
 func (m *Model) resolvePendingApproval(response permission.ApprovalResponse) {
+	anchor := m.captureApprovalTranscriptAnchor()
 	if m.pendingApproval != nil && m.pendingApproval.Response != nil {
 		m.pendingApproval.Response <- response
 	}
 	m.pendingApproval = nil
 	m.approvalState = nil
-	if m.overlay == OverlayApproval {
-		m.overlay = OverlayNone
-		m.overlayParent = OverlayNone
-	}
-	if !m.shuttingDown {
+	if m.composerEditable() {
 		m.input.Focus()
+	} else {
+		m.input.Blur()
 	}
 	m.recalcViewportHeight()
+	m.restoreApprovalTranscriptAnchor(anchor)
+	m.activateCortexDecision()
 }
 
 func (m *Model) toggleApprovalDetails() {
 	if m.approvalState == nil || m.pendingApproval == nil {
 		return
 	}
+	anchor := m.captureApprovalTranscriptAnchor()
 	m.approvalState.ShowArguments = !m.approvalState.ShowArguments
 	m.resizeApproval(false)
+	m.recalcViewportHeight()
+	m.restoreApprovalTranscriptAnchor(anchor)
+}
+
+func (m *Model) moveApprovalChoice(delta int) {
+	if m.approvalState == nil || len(approvalChoices) == 0 || delta == 0 {
+		return
+	}
+	index := m.approvalState.ChoiceIndex + delta
+	if index < 0 {
+		index = len(approvalChoices) - 1
+	}
+	if index >= len(approvalChoices) {
+		index = 0
+	}
+	m.approvalState.ChoiceIndex = index
+}
+
+func (m *Model) selectedApprovalResponse() permission.ApprovalResponse {
+	if m.approvalState == nil || m.approvalState.ChoiceIndex < 0 ||
+		m.approvalState.ChoiceIndex >= len(approvalChoices) {
+		return permission.Deny()
+	}
+	switch approvalChoices[m.approvalState.ChoiceIndex].Decision {
+	case permission.DecisionAllowOnce:
+		return permission.AllowOnce()
+	case permission.DecisionAllowSession:
+		return permission.AllowSession()
+	default:
+		return permission.Deny()
+	}
+}
+
+// navigateApprovalViewport leaves arrows and j/k to the focused decision rows.
+// Long commands, diffs, and exact arguments retain explicit paging controls.
+func (m *Model) navigateApprovalViewport(keyName string) bool {
+	if m.approvalState == nil {
+		return false
+	}
+	switch keyName {
+	case "pgdown":
+		m.approvalState.Viewport.PageDown()
+	case "pgup":
+		m.approvalState.Viewport.PageUp()
+	case "ctrl+d":
+		m.approvalState.Viewport.HalfPageDown()
+	case "ctrl+u":
+		m.approvalState.Viewport.HalfPageUp()
+	case "home":
+		m.approvalState.Viewport.GotoTop()
+	case "end":
+		m.approvalState.Viewport.GotoBottom()
+	default:
+		return false
+	}
+	return true
 }
 
 func (m *Model) resizeApproval(preserveOffset bool) {
@@ -79,9 +205,9 @@ func (m *Model) resizeApproval(preserveOffset bool) {
 	if preserveOffset {
 		offset = m.approvalState.Viewport.YOffset()
 	}
-	width := pickerListWidth(m.width, approvalMaximumWidth)
+	width := m.approvalContentWidth()
 	content := m.buildApprovalContent(width)
-	bodyHeight := min(max(1, lipgloss.Height(content)), max(2, m.height-7))
+	bodyHeight := min(max(1, lipgloss.Height(content)), m.approvalBodyHeight())
 	vp := viewport.New(
 		viewport.WithWidth(width),
 		viewport.WithHeight(bodyHeight),
@@ -102,26 +228,137 @@ func (m *Model) renderApproval() string {
 	if m.approvalState == nil || m.pendingApproval == nil {
 		return ""
 	}
-	contentWidth := pickerListWidth(m.width, approvalMaximumWidth)
+	contentWidth := m.approvalContentWidth()
 	toolName := boundedApprovalMetadata(m.pendingApproval.ToolName, approvalMaximumActionBytes)
 	if toolName == "" {
 		toolName = "unknown tool"
 	}
-	title := m.styles.OverlayTitle.Render(truncateDisplay("Permission · "+toolName, contentWidth))
-	body := title + "\n" + m.approvalState.Viewport.View()
+	mode := m.modeConfigs[m.presentedMode()].Label
+	// Keep the tool identity ahead of the mode so narrow terminals preserve the
+	// action being authorized. The authority mode remains explicit whenever the
+	// available width permits it.
+	titleText := "◇ Permission · " + toolName + " · " + mode
+	title := m.styles.ApprovalPrompt.Render(truncateDisplay(titleText, contentWidth))
+	sections := []string{title}
+	if saved := m.renderApprovalComposerReceipt(contentWidth); saved != "" {
+		sections = append(sections, saved)
+	}
+	sections = append(sections, m.approvalState.Viewport.View(), m.renderApprovalChoices(contentWidth))
 	detailAction := "arguments"
 	if m.approvalState.ShowArguments {
 		detailAction = "preview"
 	}
 	hints := m.renderKeyHints(contentWidth,
 		keyHint{Key: "esc", Action: "cancel"},
-		keyHint{Key: "y", Action: "once"},
-		keyHint{Key: "s", Action: "session"},
-		keyHint{Key: "n", Action: "deny"},
+		keyHint{Key: "enter", Action: "select"},
+		keyHint{Key: "↑/↓/j/k", Action: "move"},
 		keyHint{Key: "d", Action: detailAction},
-		keyHint{Key: "j/k", Action: "scroll"},
+		keyHint{Key: "pgup/dn", Action: "scroll"},
 	)
-	return m.renderPickerFrame(body, approvalMaximumWidth, hints)
+	sections = append(sections, hints)
+	return indentApprovalSurface(strings.Join(sections, "\n"), 2, m.chatPaneWidth())
+}
+
+func (m *Model) renderApprovalComposerReceipt(width int) string {
+	hasDraft := m.input.Value() != ""
+	hasQueue := m.queuedFollowUp != nil
+	if !hasDraft && !hasQueue {
+		return ""
+	}
+
+	var candidates []string
+	switch {
+	case hasDraft && hasQueue:
+		candidates = []string{"Draft saved · queued follow-up saved", "Draft + queue saved", "Input saved"}
+	case hasDraft:
+		candidates = []string{"Composer draft saved", "Draft saved", "Input saved"}
+	default:
+		candidates = []string{"Queued follow-up saved", "Queue saved", "Input saved"}
+	}
+	chosen := candidates[len(candidates)-1]
+	for _, candidate := range candidates {
+		if lipgloss.Width(candidate) <= width {
+			chosen = candidate
+			break
+		}
+	}
+	return m.styles.OverlayDim.Render(truncateDisplay(chosen, max(1, width)))
+}
+
+func (m *Model) renderApprovalChoices(width int) string {
+	if m.approvalState == nil || width <= 0 {
+		return ""
+	}
+	selected := m.approvalState.ChoiceIndex
+	if selected < 0 || selected >= len(approvalChoices) {
+		selected = 0
+	}
+
+	choiceView := func(choice approvalChoice, active, compact bool) string {
+		indicator := "  "
+		label := choice.Label
+		if compact {
+			label = choice.CompactLabel
+		}
+		if active {
+			indicator = m.styles.FocusIndicator.Render("› ")
+		}
+		keyView := m.styles.FocusIndicator.Render(choice.Key)
+		labelView := m.styles.OverlayDim.Render(label)
+		return indicator + keyView + " " + labelView
+	}
+
+	wide := make([]string, 0, len(approvalChoices)*2-1)
+	for index, choice := range approvalChoices {
+		if index > 0 {
+			wide = append(wide, m.styles.OverlayDim.Render(" · "))
+		}
+		wide = append(wide, choiceView(choice, index == selected, false))
+	}
+	wideView := lipgloss.JoinHorizontal(lipgloss.Top, wide...)
+	if lipgloss.Width(wideView) <= width {
+		return wideView
+	}
+
+	rows := make([]string, 0, len(approvalChoices))
+	for index, choice := range approvalChoices {
+		rows = append(rows, truncateDisplay(choiceView(choice, index == selected, true), width))
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, rows...)
+}
+
+// approvalContentWidth gives commands and diffs the same horizontal room as
+// the conversation. Only the small inline indent is reserved; unlike picker
+// overlays this surface does not cap useful content at an arbitrary width.
+func (m *Model) approvalContentWidth() int {
+	return max(1, m.chatPaneWidth()-2)
+}
+
+// approvalBodyHeight keeps enough transcript visible to preserve context while
+// allowing consequential requests to expose useful detail. The Bubbles
+// viewport owns overflow, so minimum terminals retain the action, target, and
+// complete decision grammar without pushing the surface off-screen.
+func (m *Model) approvalBodyHeight() int {
+	switch {
+	case m.height <= 12:
+		return 2
+	case m.height < 20:
+		return 4
+	case m.height < 30:
+		return 8
+	default:
+		return 12
+	}
+}
+
+func indentApprovalSurface(value string, indent, width int) string {
+	prefix := strings.Repeat(" ", max(0, indent))
+	lineWidth := max(1, width-lipgloss.Width(prefix))
+	lines := strings.Split(value, "\n")
+	for index, line := range lines {
+		lines[index] = prefix + truncateDisplay(line, lineWidth)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m *Model) buildApprovalContent(width int) string {
@@ -312,7 +549,7 @@ func approvalWrappedLines(value string, width int) []string {
 
 func approvalScopeLabel(scope permission.ApprovalScope) string {
 	if scope.Kind == permission.ScopeExactRequest {
-		return "This exact request · current Agent session"
+		return "Identical request only · current Agent session"
 	}
 	return "This request only"
 }

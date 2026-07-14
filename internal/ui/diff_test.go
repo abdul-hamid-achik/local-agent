@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -8,6 +10,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/charmbracelet/x/ansi"
+
+	"github.com/abdul-hamid-achik/local-agent/internal/ecosystem"
 )
 
 func TestComputeDiff_Identical(t *testing.T) {
@@ -17,15 +23,134 @@ func TestComputeDiff_Identical(t *testing.T) {
 	}
 }
 
+func TestComputeDiffPreservesFinalNewlineOnlyChanges(t *testing.T) {
+	tests := []struct {
+		name             string
+		before           string
+		after            string
+		markerPrecededBy DiffLineKind
+	}{
+		{name: "remove final newline", before: "alpha\n", after: "alpha", markerPrecededBy: DiffAdded},
+		{name: "add final newline", before: "alpha", after: "alpha\n", markerPrecededBy: DiffRemoved},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			lines := computeDiff(test.before, test.after)
+			if len(lines) == 0 {
+				t.Fatal("final-newline-only edit produced no patch")
+			}
+			markerIndex := -1
+			for index, line := range lines {
+				if line.Kind == DiffNoNewline {
+					if markerIndex >= 0 {
+						t.Fatalf("patch contains multiple no-newline markers: %#v", lines)
+					}
+					markerIndex = index
+					if line.Content != diffNoNewlineContent {
+						t.Fatalf("no-newline content = %q", line.Content)
+					}
+				}
+			}
+			if markerIndex <= 0 || lines[markerIndex-1].Kind != test.markerPrecededBy {
+				t.Fatalf("no-newline marker is not immediately after affected side: %#v", lines)
+			}
+
+			plain := ansi.Strip(renderUnifiedDiffAtWidth("alpha.txt", lines, NewStyles(true), 0, 80))
+			if strings.Count(plain, diffNoNewlineContent) != 1 {
+				t.Fatalf("rendered patch does not contain the canonical marker once:\n%s", plain)
+			}
+
+			persisted := persistToolEntries([]ToolEntry{{
+				ID: "write-newline", Name: "write_file", Status: ToolStatusDone, DiffLines: lines,
+			}})
+			raw, err := json.Marshal(persisted)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded []persistedToolEntry
+			if err := json.Unmarshal(raw, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			restored := restoreToolEntries(decoded)
+			if len(restored) != 1 || len(restored[0].DiffLines) != len(lines) {
+				t.Fatalf("session round trip changed patch: %#v", restored)
+			}
+			if got := restored[0].DiffLines[markerIndex]; got.Kind != DiffNoNewline || got.Content != diffNoNewlineContent {
+				t.Fatalf("restored marker = %#v", got)
+			}
+		})
+	}
+}
+
+func TestComputeDiffOmitsBinarySnapshotsWithoutRawBytes(t *testing.T) {
+	const secret = "RAW_BINARY_SECRET_DO_NOT_PERSIST"
+	tests := []struct {
+		name   string
+		before string
+		after  string
+	}{
+		{name: "invalid UTF-8 before", before: string([]byte{0xff}) + secret, after: "text"},
+		{name: "invalid UTF-8 after", before: "text", after: secret + string([]byte{0xfe})},
+		{name: "NUL before", before: secret + "\x00tail", after: "text"},
+		{name: "NUL after", before: "text", after: "head\x00" + secret},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			lines := computeDiff(test.before, test.after)
+			if len(lines) != 2 {
+				t.Fatalf("binary patch lines = %d, want 2: %#v", len(lines), lines)
+			}
+			for _, line := range lines {
+				if line.Kind != DiffOmitted || !strings.Contains(line.Content, "binary diff omitted") {
+					t.Fatalf("binary patch exposed a non-omission line: %#v", line)
+				}
+			}
+			combined := lines[0].Content + lines[1].Content
+			for _, want := range []string{
+				fmt.Sprintf("%d bytes before", len(test.before)),
+				fmt.Sprintf("%d bytes after", len(test.after)),
+			} {
+				if !strings.Contains(combined, want) {
+					t.Fatalf("binary omission metadata = %q, missing %q", combined, want)
+				}
+			}
+			persisted := persistToolEntries([]ToolEntry{{
+				ID: "write-binary", Name: "write_file", Status: ToolStatusDone, DiffLines: lines,
+			}})
+			raw, err := json.Marshal(persisted)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plain := ansi.Strip(renderUnifiedDiffAtWidth("binary.dat", lines, NewStyles(true), 0, 80))
+			if strings.Contains(string(raw), secret) || strings.Contains(plain, secret) || strings.ContainsRune(string(raw), '\x00') {
+				t.Fatalf("binary snapshot bytes leaked: json=%s render=%s", raw, plain)
+			}
+		})
+	}
+}
+
 func TestComputeDiff_EmptyBefore(t *testing.T) {
 	result := computeDiff("", "line1\nline2\n")
 	if len(result) == 0 {
 		t.Fatal("expected diff lines for new file")
 	}
+	var added int
 	for _, line := range result {
-		if line.Kind != DiffAdded {
-			t.Errorf("new file should have only added lines, got kind %d", line.Kind)
+		switch line.Kind {
+		case DiffAdded:
+			added++
+		case DiffHunkHeader:
+			if line.Hunk == nil || line.Hunk.OldStart != 0 || line.Hunk.OldCount != 0 {
+				t.Fatalf("new-file hunk = %#v", line.Hunk)
+			}
+		default:
+			t.Errorf("new file body should have only added lines, got kind %d", line.Kind)
 		}
+	}
+	if added != 2 {
+		t.Fatalf("added lines = %d, want 2", added)
 	}
 }
 
@@ -34,10 +159,21 @@ func TestComputeDiff_EmptyAfter(t *testing.T) {
 	if len(result) == 0 {
 		t.Fatal("expected diff lines for deleted file")
 	}
+	var removed int
 	for _, line := range result {
-		if line.Kind != DiffRemoved {
-			t.Errorf("deleted file should have only removed lines, got kind %d", line.Kind)
+		switch line.Kind {
+		case DiffRemoved:
+			removed++
+		case DiffHunkHeader:
+			if line.Hunk == nil || line.Hunk.NewStart != 0 || line.Hunk.NewCount != 0 {
+				t.Fatalf("deleted-file hunk = %#v", line.Hunk)
+			}
+		default:
+			t.Errorf("deleted file body should have only removed lines, got kind %d", line.Kind)
 		}
+	}
+	if removed != 2 {
+		t.Fatalf("removed lines = %d, want 2", removed)
 	}
 }
 
@@ -105,6 +241,81 @@ func TestComputeDiff_ContextLimiting(t *testing.T) {
 	}
 }
 
+func TestComputeDiffBuildsTypedMultipleHunksAndLineCoordinates(t *testing.T) {
+	beforeLines := make([]string, 24)
+	afterLines := make([]string, 24)
+	for i := range beforeLines {
+		beforeLines[i] = fmt.Sprintf("line-%02d", i+1)
+		afterLines[i] = beforeLines[i]
+	}
+	afterLines[3] = "changed-04"
+	afterLines[19] = "changed-20"
+
+	lines := computeDiff(strings.Join(beforeLines, "\n")+"\n", strings.Join(afterLines, "\n")+"\n")
+	var headers, ellipses int
+	for _, line := range lines {
+		switch line.Kind {
+		case DiffHunkHeader:
+			headers++
+			if line.Hunk == nil || line.Content != formatDiffHunk(*line.Hunk) {
+				t.Fatalf("untyped hunk header: %#v", line)
+			}
+		case DiffEllipsis:
+			ellipses++
+		case DiffRemoved:
+			if line.Content == "line-04" && (line.OldLine != 4 || line.NewLine != 0) {
+				t.Fatalf("removed line coordinates = old %d new %d", line.OldLine, line.NewLine)
+			}
+		case DiffAdded:
+			if line.Content == "changed-04" && (line.OldLine != 0 || line.NewLine != 4) {
+				t.Fatalf("added line coordinates = old %d new %d", line.OldLine, line.NewLine)
+			}
+		}
+	}
+	if headers != 2 || ellipses == 0 {
+		t.Fatalf("patch structure = %d headers, %d ellipses; want 2 and at least 1", headers, ellipses)
+	}
+	if added, removed, known := diffTotals(lines); !known || added != 2 || removed != 2 {
+		t.Fatalf("patch totals = +%d -%d known=%v", added, removed, known)
+	}
+}
+
+func TestRenderUnifiedDiffFitsNarrowAndUsesWideOldNewGutters(t *testing.T) {
+	before := "line-01\nline-02\nline-03\nline-04\nline-05\n"
+	after := "line-01\nline-02\nline-03\nchanged-04\nline-05\n"
+	lines := computeDiff(before, after)
+	styles := NewStyles(true)
+
+	for _, width := range []int{24, 80} {
+		rendered := renderUnifiedDiffAtWidth("internal/ui/example.go", lines, styles, 0, width)
+		assertRenderedLinesFit(t, rendered, width)
+		plain := ansi.Strip(rendered)
+		for _, want := range []string{"+1 -1", "@@ -", "│ -", "│ +"} {
+			if !strings.Contains(plain, want) {
+				t.Fatalf("%d-column patch missing %q:\n%s", width, want, plain)
+			}
+		}
+	}
+
+	wide := ansi.Strip(renderUnifiedDiffAtWidth("internal/ui/example.go", lines, styles, 0, 80))
+	firstLine := strings.SplitN(wide, "\n", 2)[0]
+	if !strings.Contains(firstLine, "internal/ui/example.go") || len([]rune(firstLine)) != 80 {
+		t.Fatalf("wide file header is not full width: %q", firstLine)
+	}
+	for _, renderedLine := range strings.Split(wide, "\n") {
+		fields := strings.Fields(renderedLine)
+		if strings.Contains(renderedLine, "line-01") && (len(fields) < 4 || fields[0] != "1" || fields[1] != "1" || fields[2] != "│") {
+			t.Fatalf("context gutters = %q", renderedLine)
+		}
+		if strings.Contains(renderedLine, "line-04") && (len(fields) < 4 || fields[0] != "4" || fields[1] != "│" || fields[2] != "-") {
+			t.Fatalf("removed gutter = %q", renderedLine)
+		}
+		if strings.Contains(renderedLine, "changed-04") && (len(fields) < 4 || fields[0] != "4" || fields[1] != "│" || fields[2] != "+") {
+			t.Fatalf("added gutter = %q", renderedLine)
+		}
+	}
+}
+
 func TestFilterContext_EmptyInput(t *testing.T) {
 	result := filterContext(nil, 3)
 	if result != nil {
@@ -114,9 +325,9 @@ func TestFilterContext_EmptyInput(t *testing.T) {
 
 func TestFilterContext_AllChanges(t *testing.T) {
 	lines := []DiffLine{
-		{DiffAdded, "a"},
-		{DiffAdded, "b"},
-		{DiffRemoved, "c"},
+		{Kind: DiffAdded, Content: "a"},
+		{Kind: DiffAdded, Content: "b"},
+		{Kind: DiffRemoved, Content: "c"},
 	}
 	result := filterContext(lines, 3)
 	if len(result) != 3 {
@@ -170,11 +381,11 @@ func TestRenderDiff_Empty(t *testing.T) {
 
 func TestRenderDiff_MaxLines(t *testing.T) {
 	lines := []DiffLine{
-		{DiffAdded, "a"},
-		{DiffAdded, "b"},
-		{DiffAdded, "c"},
-		{DiffAdded, "d"},
-		{DiffAdded, "e"},
+		{Kind: DiffAdded, Content: "a"},
+		{Kind: DiffAdded, Content: "b"},
+		{Kind: DiffAdded, Content: "c"},
+		{Kind: DiffAdded, Content: "d"},
+		{Kind: DiffAdded, Content: "e"},
 	}
 	s := NewStyles(true)
 	result := renderDiff(lines, s, 3)
@@ -209,7 +420,254 @@ func TestReadFileForDiffRejectsWorkspaceEscape(t *testing.T) {
 	}
 }
 
-func TestDeniedWriteDiffSnapshotRejectsFIFOWithoutBlockingUpdate(t *testing.T) {
+func TestReadFileForDiffRejectsEscapingSymlinkPrefix(t *testing.T) {
+	workspace := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(workspace, "escape")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	snapshot := readDiffSnapshotForPathAt("escape/secret.txt", workspace)
+	if snapshot.Available || snapshot.Content != "" {
+		t.Fatalf("escaping symlink snapshot = %#v", snapshot)
+	}
+}
+
+func TestFileWriteDiffRunsAsyncClearsSnapshotsAndDiscardsStaleResult(t *testing.T) {
+	workspace := t.TempDir()
+	path := filepath.Join(workspace, "sample.go")
+	if err := os.WriteFile(path, []byte("package sample\n\nconst Value = 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := newTestModel(t)
+	m.agent.SetWorkDir(workspace)
+	m.toolsCollapsed = false
+
+	startMsg := newToolCallStartMsg("write-1", "write_file", map[string]any{"path": "sample.go"}, workspace)
+	updated, _ := m.Update(startMsg)
+	m = updated.(*Model)
+	if len(m.toolEntries) != 1 || !m.toolEntries[0].BeforeSnapshotAvailable {
+		t.Fatalf("pre-write snapshot = %#v", m.toolEntries)
+	}
+	if err := os.WriteFile(path, []byte("package sample\n\nconst Value = 2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	updated, cmd := m.Update(ToolCallResultMsg{
+		ID: "write-1", Name: "write_file", Result: "wrote sample.go",
+		Projection: ecosystem.ToolProjection{
+			Operation: "write_file", Transport: ecosystem.TransportSucceeded, Domain: ecosystem.DomainSucceeded,
+		},
+	})
+	m = updated.(*Model)
+	entry := m.toolEntries[0]
+	if !entry.DiffPending || entry.DiffGeneration == 0 || entry.RawArgs != nil || entry.BeforeContent != "" || entry.BeforeSnapshotAvailable {
+		t.Fatalf("pending diff retained ephemeral state: %#v", entry)
+	}
+	var loadingView strings.Builder
+	m.renderToolGroup(&loadingView, 0)
+	loading := strings.ToLower(ansi.Strip(loadingView.String()))
+	if !strings.Contains(loading, "diff loading") || strings.Contains(loading, "verified") {
+		t.Fatalf("pending card is not a static truthful loading receipt:\n%s", loading)
+	}
+
+	result := awaitCommandMessage[diffBuildResultMsg](t, commandMessages(cmd), 2*time.Second)
+	stale := result
+	stale.Generation++
+	stale.Lines = []DiffLine{{Kind: DiffAdded, Content: "stale", NewLine: 1}}
+	updated, _ = m.Update(stale)
+	m = updated.(*Model)
+	if !m.toolEntries[0].DiffPending || len(m.toolEntries[0].DiffLines) != 0 {
+		t.Fatalf("stale generation changed pending patch: %#v", m.toolEntries[0])
+	}
+
+	updated, _ = m.Update(result)
+	m = updated.(*Model)
+	if m.toolEntries[0].DiffPending || m.toolEntries[0].DiffGeneration != 0 || len(m.toolEntries[0].DiffLines) == 0 {
+		t.Fatalf("matching diff result was not installed: %#v", m.toolEntries[0])
+	}
+	var completedView strings.Builder
+	m.renderToolGroup(&completedView, 0)
+	rendered := ansi.Strip(completedView.String())
+	for _, want := range []string{"sample.go", "+1 -1", "@@ -", "const Value = 1", "const Value = 2"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("completed patch missing %q:\n%s", want, rendered)
+		}
+	}
+}
+
+func TestDiffSessionRoundTripPreservesHunksCoordinatesAndBounds(t *testing.T) {
+	lines := computeDiff("one\ntwo\nthree\n", "one\nchanged\nthree\n")
+	persisted := persistToolEntries([]ToolEntry{{
+		ID: "write-1", Name: "write_file", Summary: "sample.txt", Status: ToolStatusDone,
+		DiffLines: lines, DiffPending: true, DiffGeneration: 99,
+	}})
+	restored := restoreToolEntries(persisted)
+	if len(restored) != 1 || restored[0].DiffPending || restored[0].DiffGeneration != 0 {
+		t.Fatalf("restored async state = %#v", restored)
+	}
+	if len(restored[0].DiffLines) != len(lines) {
+		t.Fatalf("restored patch lines = %d, want %d", len(restored[0].DiffLines), len(lines))
+	}
+	for index, line := range lines {
+		got := restored[0].DiffLines[index]
+		if got.Kind != line.Kind || got.Content != line.Content || got.OldLine != line.OldLine || got.NewLine != line.NewLine {
+			t.Fatalf("restored line %d = %#v, want %#v", index, got, line)
+		}
+		if line.Hunk != nil && (got.Hunk == nil || *got.Hunk != *line.Hunk) {
+			t.Fatalf("restored hunk %d = %#v, want %#v", index, got.Hunk, line.Hunk)
+		}
+	}
+
+	oversized := make([]DiffLine, maxPersistedDiffLines*2)
+	for index := range oversized {
+		oversized[index] = DiffLine{
+			Kind: DiffContext, Content: strings.Repeat("x", 64), OldLine: index + 1, NewLine: index + 1,
+		}
+	}
+	bounded := persistDiffLines(oversized)
+	encoded, err := json.Marshal(bounded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bounded) > maxPersistedDiffLines || len(encoded) > maxPersistedDiffBytes {
+		t.Fatalf("persisted patch exceeded bounds: lines=%d bytes=%d", len(bounded), len(encoded))
+	}
+	if bounded[len(bounded)-1].Kind != DiffOmitted {
+		t.Fatalf("bounded patch lacks typed omission marker: %#v", bounded[len(bounded)-1])
+	}
+}
+
+func TestPersistDiffLinesCapsActualJSONExpansion(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{name: "quotes and backslashes", content: strings.Repeat(`"\`, 128)},
+		{name: "controls", content: strings.Repeat("\x01\t\r", 128)},
+		{name: "multibyte and escaped Unicode", content: strings.Repeat("界\u2028", 128)},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			lines := make([]DiffLine, 1_000)
+			for index := range lines {
+				lines[index] = DiffLine{
+					Kind: DiffAdded, Content: test.content, NewLine: index + 1,
+				}
+			}
+
+			bounded := persistDiffLines(lines)
+			encoded, err := json.Marshal(bounded)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(encoded) > maxPersistedDiffBytes {
+				t.Fatalf("encoded patch = %d bytes, cap = %d", len(encoded), maxPersistedDiffBytes)
+			}
+			if len(bounded) >= len(lines) || len(bounded) == 0 || bounded[len(bounded)-1].Kind != DiffOmitted {
+				t.Fatalf("expanded patch was not visibly bounded: input=%d output=%d tail=%#v", len(lines), len(bounded), bounded[len(bounded)-1])
+			}
+
+			stateRaw, err := marshalPersistedSessionState(persistedSessionState{
+				Version: currentPersistedSessionVersion,
+				Mode:    ModeNormal,
+				ToolEntries: []persistedToolEntry{{
+					ID: "adversarial-diff", Name: "write_file", DiffLines: lines,
+				}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded, err := decodeSessionState(stateRaw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			roundTrip, err := json.Marshal(decoded.ToolEntries[0].DiffLines)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(roundTrip) > maxPersistedDiffBytes {
+				t.Fatalf("round-trip encoded patch = %d bytes, cap = %d", len(roundTrip), maxPersistedDiffBytes)
+			}
+		})
+	}
+}
+
+func TestPersistDiffLinesCanonicalizesNoNewlineMarker(t *testing.T) {
+	const secret = "MARKER_CONTENT_MUST_NOT_PERSIST"
+	bounded := persistDiffLines([]DiffLine{{Kind: DiffNoNewline, Content: secret}})
+	if len(bounded) != 1 || bounded[0].Kind != DiffNoNewline || bounded[0].Content != diffNoNewlineContent {
+		t.Fatalf("canonical persisted marker = %#v", bounded)
+	}
+	encoded, err := json.Marshal(bounded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), secret) {
+		t.Fatalf("typed marker persisted caller-controlled content: %s", encoded)
+	}
+}
+
+func TestLiveDiffInstallationKeepsRowsBeyondThirtyInspectableAndMarksOversize(t *testing.T) {
+	var before, after strings.Builder
+	for line := 1; line <= 40; line++ {
+		fmt.Fprintf(&before, "before-%02d\n", line)
+		fmt.Fprintf(&after, "after-%02d\n", line)
+	}
+	patch := computeDiff(before.String(), after.String())
+
+	m := newTestModel(t)
+	m.toolEntries = []ToolEntry{{
+		ID: "write-many", Name: "write_file", Summary: "many.txt", Status: ToolStatusDone,
+		DiffPending: true, DiffGeneration: 7,
+	}}
+	m.toolCardMgr = NewToolCardManager(m.isDark)
+	m.toolCardMgr.AddCardWithID("write-many", "write_file", ToolCardFile, time.Now())
+	m.toolCardMgr.Cards[0].State = ToolCardSuccess
+
+	updated, _ := m.Update(diffBuildResultMsg{
+		Generation: 7, ToolID: "write-many", ToolName: "write_file", Lines: patch, Available: true,
+	})
+	m = updated.(*Model)
+	var expanded strings.Builder
+	m.renderToolGroup(&expanded, 0)
+	if plain := ansi.Strip(expanded.String()); !strings.Contains(plain, "after-31") {
+		t.Fatalf("expanded bounded patch hid row 31:\n%s", plain)
+	}
+	m.toolEntries[0].Collapsed = true
+	var collapsed strings.Builder
+	m.renderToolGroup(&collapsed, 0)
+	if strings.Contains(ansi.Strip(collapsed.String()), "after-31") {
+		t.Fatalf("collapsed card leaked patch body:\n%s", ansi.Strip(collapsed.String()))
+	}
+
+	oversized := make([]DiffLine, maxPersistedDiffLines*2)
+	for index := range oversized {
+		oversized[index] = DiffLine{
+			Kind: DiffAdded, Content: strings.Repeat("x", 64), NewLine: index + 1,
+		}
+	}
+	m.toolEntries = []ToolEntry{{
+		ID: "write-oversized", Name: "write_file", Status: ToolStatusDone,
+		DiffPending: true, DiffGeneration: 8,
+	}}
+	updated, _ = m.Update(diffBuildResultMsg{
+		Generation: 8, ToolID: "write-oversized", ToolName: "write_file", Lines: oversized, Available: true,
+	})
+	m = updated.(*Model)
+	installed := m.toolEntries[0].DiffLines
+	if len(installed) == 0 {
+		t.Fatal("live oversized patch was discarded")
+	}
+	if len(installed) > maxPersistedDiffLines || installed[len(installed)-1].Kind != DiffOmitted {
+		t.Fatalf("live oversized patch lacks bounded typed omission: lines=%d tail=%#v", len(installed), installed[len(installed)-1])
+	}
+}
+
+func TestWriteToolStartNeverReadsFIFOInsideUpdate(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("mkfifo fixture is Unix-specific")
 	}
@@ -225,10 +683,32 @@ func TestDeniedWriteDiffSnapshotRejectsFIFOWithoutBlockingUpdate(t *testing.T) {
 		ID: "denied-write", Name: "write", Args: map[string]any{"path": "blocked"},
 	})
 	m = updated.(*Model)
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("denied write snapshot blocked Bubble Tea Update for %s", elapsed)
+	if elapsed := time.Since(start); elapsed > 10*time.Millisecond {
+		t.Fatalf("write start performed filesystem work inside Bubble Tea Update for %s", elapsed)
 	}
 	if len(m.toolEntries) != 1 || m.toolEntries[0].BeforeContent != "" {
 		t.Fatalf("FIFO snapshot retained content: %#v", m.toolEntries)
+	}
+}
+
+func TestToolStartMessageCapturesPreWriteSnapshotBeforeUpdate(t *testing.T) {
+	workspace := t.TempDir()
+	path := filepath.Join(workspace, "before.txt")
+	if err := os.WriteFile(path, []byte("before\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	msg := newToolCallStartMsg("write-1", "write_file", map[string]any{"path": "before.txt"}, workspace)
+	if !msg.BeforeSnapshotAvailable || msg.BeforeContent != "before\n" {
+		t.Fatalf("pre-write message snapshot = available %v content %q", msg.BeforeSnapshotAvailable, msg.BeforeContent)
+	}
+	if err := os.WriteFile(path, []byte("after\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := newTestModel(t)
+	m.agent.SetWorkDir(workspace)
+	updated, _ := m.Update(msg)
+	m = updated.(*Model)
+	if len(m.toolEntries) != 1 || m.toolEntries[0].BeforeContent != "before\n" {
+		t.Fatalf("Update did not install the background snapshot: %#v", m.toolEntries)
 	}
 }

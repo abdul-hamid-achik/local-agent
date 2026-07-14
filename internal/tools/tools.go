@@ -302,3 +302,23 @@ func ExistsToolDef() llm.ToolDef {
 		},
 	}
 }
+
+// LoadSkillToolDef describes progressive, model-selected skill loading. The
+// host resolves only an exact name from its already-discovered catalog.
+func LoadSkillToolDef() llm.ToolDef {
+	return llm.ToolDef{
+		Name:        "load_skill",
+		Description: "Load the body of one available skill by its exact catalog name before acting when that skill clearly matches the task. This is read-only and does not activate the skill globally.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{
+					"type":        "string",
+					"description": "Exact skill name from the Available Skills catalog.",
+				},
+			},
+			"required":             []string{"name"},
+			"additionalProperties": false,
+		},
+	}
+}

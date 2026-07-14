@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"image/color"
 	"strings"
 	"testing"
 	"time"
@@ -18,8 +19,8 @@ func openApprovalForTest(t *testing.T, m *Model, request ToolApprovalMsg) *Model
 	t.Helper()
 	updated, _ := m.Update(request)
 	m = updated.(*Model)
-	if m.pendingApproval == nil || m.approvalState == nil || m.overlay != OverlayApproval {
-		t.Fatalf("approval modal did not open: pending=%v state=%v overlay=%v", m.pendingApproval != nil, m.approvalState != nil, m.overlay)
+	if m.pendingApproval == nil || m.approvalState == nil || m.overlay != OverlayNone {
+		t.Fatalf("inline approval did not open: pending=%v state=%v overlay=%v", m.pendingApproval != nil, m.approvalState != nil, m.overlay)
 	}
 	return m
 }
@@ -85,6 +86,179 @@ func TestPendingApprovalSessionDecisionIsExplicit(t *testing.T) {
 	}
 }
 
+func TestApprovalChoiceSelectionDefaultsToDenyAndSupportsArrowsAndVim(t *testing.T) {
+	tests := []struct {
+		name         string
+		move         []tea.KeyPressMsg
+		wantIndex    int
+		wantDecision permission.ApprovalDecision
+	}{
+		{name: "safe default", wantIndex: 0, wantDecision: permission.DecisionUserDeny},
+		{name: "down to once", move: []tea.KeyPressMsg{downKey()}, wantIndex: 1, wantDecision: permission.DecisionAllowOnce},
+		{name: "vim to session", move: []tea.KeyPressMsg{charKey('j'), charKey('j')}, wantIndex: 2, wantDecision: permission.DecisionAllowSession},
+		{name: "up wraps to session", move: []tea.KeyPressMsg{upKey()}, wantIndex: 2, wantDecision: permission.DecisionAllowSession},
+		{name: "vim up wraps to session", move: []tea.KeyPressMsg{charKey('k')}, wantIndex: 2, wantDecision: permission.DecisionAllowSession},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newTestModel(t)
+			responses := make(chan permission.ApprovalResponse, 1)
+			m = openApprovalForTest(t, m, ToolApprovalMsg{
+				ToolName: "write_file",
+				Args:     map[string]any{"path": "selection.txt"},
+				Response: responses,
+			})
+
+			for _, move := range tt.move {
+				updated, _ := m.Update(move)
+				m = updated.(*Model)
+			}
+			if got := m.approvalState.ChoiceIndex; got != tt.wantIndex {
+				t.Fatalf("choice index = %d, want %d", got, tt.wantIndex)
+			}
+			selected := ansi.Strip(m.renderApprovalChoices(m.approvalContentWidth()))
+			if !strings.Contains(selected, "› "+approvalChoices[tt.wantIndex].Key) {
+				t.Fatalf("selected choice has no visible focus indicator:\n%s", selected)
+			}
+
+			updated, _ := m.Update(enterKey())
+			m = updated.(*Model)
+			if m.pendingApproval != nil {
+				t.Fatal("Enter did not resolve the selected permission choice")
+			}
+			if got := (<-responses).Normalize().Decision; got != tt.wantDecision {
+				t.Fatalf("Enter decision = %q, want %q", got, tt.wantDecision)
+			}
+		})
+	}
+}
+
+func TestApprovalPreservesAndAcknowledgesDraftAndQueueAcrossResolutions(t *testing.T) {
+	tests := []struct {
+		name         string
+		resolve      tea.KeyPressMsg
+		wantDecision permission.ApprovalDecision
+		wantCancel   bool
+	}{
+		{name: "allow once", resolve: charKey('y'), wantDecision: permission.DecisionAllowOnce},
+		{name: "deny", resolve: charKey('n'), wantDecision: permission.DecisionUserDeny},
+		{name: "escape", resolve: escKey(), wantDecision: permission.DecisionCancelled, wantCancel: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newTestModel(t)
+			updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 28})
+			m = updated.(*Model)
+			m.state = StateStreaming
+			m.input.SetValue("unfinished composer draft")
+			m.input.CursorEnd()
+			m.queuedFollowUp = &queuedFollowUp{Prompt: "queued instruction remains intact"}
+			ctx, cancel := context.WithCancel(context.Background())
+			m.cancel = cancel
+			responses := make(chan permission.ApprovalResponse, 1)
+
+			m = openApprovalForTest(t, m, ToolApprovalMsg{
+				ToolName: "bash",
+				Args:     map[string]any{"command": "go test ./internal/ui"},
+				Response: responses,
+			})
+			if m.input.Focused() {
+				t.Fatal("composer retained focus while permission owned the footer")
+			}
+			plain := ansi.Strip(m.renderApproval())
+			for _, want := range []string{"Draft saved", "queued follow-up saved"} {
+				if !strings.Contains(plain, want) {
+					t.Fatalf("approval did not acknowledge %q:\n%s", want, plain)
+				}
+			}
+
+			updated, _ = m.Update(tt.resolve)
+			m = updated.(*Model)
+			if got := m.input.Value(); got != "unfinished composer draft" {
+				t.Fatalf("resolution changed composer draft to %q", got)
+			}
+			if m.queuedFollowUp == nil || m.queuedFollowUp.Prompt != "queued instruction remains intact" {
+				t.Fatalf("resolution changed queued follow-up: %#v", m.queuedFollowUp)
+			}
+			if m.input.Focused() {
+				t.Fatal("queued follow-up did not retain footer authority after approval")
+			}
+			if got := (<-responses).Normalize().Decision; got != tt.wantDecision {
+				t.Fatalf("decision = %q, want %q", got, tt.wantDecision)
+			}
+			select {
+			case <-ctx.Done():
+				if !tt.wantCancel {
+					t.Fatal("allow/deny cancelled the active run")
+				}
+			default:
+				if tt.wantCancel {
+					t.Fatal("Escape did not cancel the active run")
+				}
+			}
+		})
+	}
+}
+
+func TestApprovalRestoresComposerFocusFromCurrentAuthority(t *testing.T) {
+	tests := []struct {
+		name        string
+		setup       func(*Model)
+		wantFocused bool
+	}{
+		{name: "ordinary running draft", setup: func(m *Model) {
+			m.state = StateStreaming
+			m.input.SetValue("continue drafting")
+		}, wantFocused: true},
+		{name: "queued follow-up owns footer", setup: func(m *Model) {
+			m.state = StateStreaming
+			m.queuedFollowUp = &queuedFollowUp{Prompt: "already queued"}
+		}},
+		{name: "goal turn owns authority", setup: func(m *Model) {
+			m.state = StateStreaming
+			m.goalTurnID = "goal-turn"
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newTestModel(t)
+			tt.setup(m)
+			responses := make(chan permission.ApprovalResponse, 1)
+			m = openApprovalForTest(t, m, ToolApprovalMsg{
+				ToolName: "read_file",
+				Args:     map[string]any{"path": "focus.txt"},
+				Response: responses,
+			})
+			updated, _ := m.Update(charKey('y'))
+			m = updated.(*Model)
+			<-responses
+			if got := m.input.Focused(); got != tt.wantFocused {
+				t.Fatalf("composer focused = %v, want %v", got, tt.wantFocused)
+			}
+		})
+	}
+}
+
+func TestApprovalSurfaceNamesActiveAuthority(t *testing.T) {
+	m := newTestModel(t)
+	m.mode = ModeNormal
+	m.width = 120
+	m.height = 36
+	m = openApprovalForTest(t, m, ToolApprovalMsg{
+		ToolName: "mcphub__cortex__cortex_investigate",
+		Args:     map[string]any{"taskId": "task-1", "question": "inspect"},
+		Response: make(chan permission.ApprovalResponse, 1),
+	})
+
+	view := ansi.Strip(m.renderApproval())
+	if !strings.Contains(view, "Permission · mcphub__cortex__cortex_investigate · NORMAL") {
+		t.Fatalf("approval omitted authority mode:\n%s", view)
+	}
+}
+
 func TestLargeWriteApprovalUsesViewportInsteadOfRefusal(t *testing.T) {
 	m := newTestModel(t)
 	responses := make(chan permission.ApprovalResponse, 1)
@@ -143,10 +317,13 @@ func TestUnencodableApprovalIsTypedHostRefusal(t *testing.T) {
 	}
 }
 
-func TestApprovalModalFitsMinimumTerminalAndKeepsDecisionKeys(t *testing.T) {
+func TestInlineApprovalFitsMinimumTerminalAndKeepsDecisionKeys(t *testing.T) {
 	m := newTestModel(t)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 30, Height: 12})
 	m = updated.(*Model)
+	m.state = StateStreaming
+	m.input.SetValue("draft")
+	m.queuedFollowUp = &queuedFollowUp{Prompt: "queued follow-up"}
 	responses := make(chan permission.ApprovalResponse, 1)
 	m = openApprovalForTest(t, m, ToolApprovalMsg{
 		ToolName: "write_file",
@@ -155,15 +332,165 @@ func TestApprovalModalFitsMinimumTerminalAndKeepsDecisionKeys(t *testing.T) {
 		Response: responses,
 	})
 
-	modal := ansi.Strip(m.renderApproval())
-	for _, want := range []string{"write_file", "esc", "y", "s", "n"} {
-		if !strings.Contains(modal, want) {
-			t.Fatalf("minimum approval modal lost %q:\n%s", want, modal)
+	inline := ansi.Strip(m.renderApproval())
+	for _, want := range []string{"write_file", "Draft + queue saved", "esc", "enter", "n deny", "y once", "s identical/session"} {
+		if !strings.Contains(inline, want) {
+			t.Fatalf("minimum inline approval lost %q:\n%s", want, inline)
 		}
 	}
 	if got := lipgloss.Height(m.View().Content); got > m.height {
-		t.Fatalf("minimum approval view height = %d (modal %d), want <= %d:\n%s", got, lipgloss.Height(m.renderApproval()), m.height, modal)
+		t.Fatalf("minimum approval view height = %d (surface %d), want <= %d:\n%s", got, lipgloss.Height(m.renderApproval()), m.height, inline)
 	}
+}
+
+func TestApprovalPreservesPausedTranscriptAcrossOpenDetailsResizeAndResolve(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = updated.(*Model)
+	setScrollableTranscript(m)
+	m.viewport.SetYOffset(6)
+	m.pauseFollow()
+	wantOffset := m.viewport.YOffset()
+	responses := make(chan permission.ApprovalResponse, 1)
+	m.state = StateStreaming
+	m = openApprovalForTest(t, m, ToolApprovalMsg{
+		ToolName: "write_file",
+		Args: map[string]any{
+			"path":    "scroll.txt",
+			"content": strings.Repeat("a long exact argument line that must remain inspectable ", 80),
+		},
+		Preview: permission.ApprovalPreview{
+			Kind:        permission.PreviewFileWrite,
+			Path:        "scroll.txt",
+			Consequence: strings.Repeat("bounded consequence ", 30),
+		},
+		Response: responses,
+	})
+	assertPausedApprovalTranscript := func(stage string) {
+		t.Helper()
+		if got := m.viewport.YOffset(); got != wantOffset {
+			t.Fatalf("%s moved transcript from %d to %d", stage, wantOffset, got)
+		}
+		if !m.followPaused() || !m.userScrolledUp {
+			t.Fatalf("%s changed follow intent: active=%v scrolled=%v", stage, m.anchorActive, m.userScrolledUp)
+		}
+	}
+	assertPausedApprovalTranscript("open")
+
+	updated, _ = m.Update(charKey('d'))
+	m = updated.(*Model)
+	assertPausedApprovalTranscript("details")
+	if !m.approvalState.ShowArguments {
+		t.Fatal("details key did not expose exact arguments")
+	}
+	approvalBeforeWheel := m.approvalState.Viewport.YOffset()
+	updated, _ = m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown})
+	m = updated.(*Model)
+	assertPausedApprovalTranscript("approval wheel")
+	if got := m.approvalState.Viewport.YOffset(); got <= approvalBeforeWheel {
+		t.Fatalf("approval wheel offset = %d, want > %d", got, approvalBeforeWheel)
+	}
+	approvalBeforeResize := m.approvalState.Viewport.YOffset()
+
+	updated, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 22})
+	m = updated.(*Model)
+	assertPausedApprovalTranscript("resize")
+	if got := m.approvalState.Viewport.YOffset(); got != approvalBeforeResize {
+		t.Fatalf("resize moved approval details from %d to %d", approvalBeforeResize, got)
+	}
+
+	updated, _ = m.Update(charKey('n'))
+	m = updated.(*Model)
+	assertPausedApprovalTranscript("resolve")
+	if got := (<-responses).Normalize().Decision; got != permission.DecisionUserDeny {
+		t.Fatalf("resolution = %q, want deny", got)
+	}
+}
+
+func TestApprovalThemeChangeRebuildsCachedBodyAndPreservesOffsets(t *testing.T) {
+	previous := noColor
+	noColor = false
+	t.Cleanup(func() { noColor = previous })
+
+	m := newTestModel(t)
+	setScrollableTranscript(m)
+	m.viewport.SetYOffset(6)
+	m.pauseFollow()
+	m = openApprovalForTest(t, m, ToolApprovalMsg{
+		ToolName: "write_file",
+		Preview: permission.ApprovalPreview{
+			Kind:        permission.PreviewFileWrite,
+			Path:        "theme.txt",
+			Consequence: strings.Repeat("inspect the proposed local change ", 30),
+		},
+		Response: make(chan permission.ApprovalResponse, 1),
+	})
+	m.approvalState.Viewport.SetYOffset(2)
+	wantTranscriptOffset := m.viewport.YOffset()
+	wantApprovalOffset := m.approvalState.Viewport.YOffset()
+	labelWidth := min(10, max(6, m.approvalContentWidth()/5))
+	oldStyledLabel := m.styles.OverlayAccent.Width(labelWidth).Render("Impact")
+
+	updated, _ := m.Update(tea.BackgroundColorMsg{Color: color.White})
+	m = updated.(*Model)
+	newStyledLabel := m.styles.OverlayAccent.Width(labelWidth).Render("Impact")
+	cachedBody := m.approvalState.Viewport.View()
+	if oldStyledLabel == newStyledLabel {
+		t.Fatal("test palettes rendered the same approval label")
+	}
+	if !strings.Contains(cachedBody, newStyledLabel) || strings.Contains(cachedBody, oldStyledLabel) {
+		t.Fatalf("approval body retained stale theme styles:\n%s", cachedBody)
+	}
+	if got := m.viewport.YOffset(); got != wantTranscriptOffset || !m.followPaused() {
+		t.Fatalf("theme change moved paused transcript: offset=%d want=%d paused=%v", got, wantTranscriptOffset, m.followPaused())
+	}
+	if got := m.approvalState.Viewport.YOffset(); got != wantApprovalOffset {
+		t.Fatalf("theme change moved approval body: offset=%d want=%d", got, wantApprovalOffset)
+	}
+}
+
+func TestApprovalUsesInlineComposerWidthAndShowsDiff(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 140, Height: 32})
+	m = updated.(*Model)
+	m.entries = append(m.entries, ChatEntry{Kind: "user", Content: "conversation remains visible"})
+	m.invalidateEntryCache()
+	m.viewport.SetContent(m.renderEntries())
+	m = openApprovalForTest(t, m, ToolApprovalMsg{
+		ToolName: "edit",
+		Args:     map[string]any{"path": "internal/ui/view.go"},
+		Preview: permission.ApprovalPreview{
+			Kind: permission.PreviewFilePatch,
+			Path: "internal/ui/view.go",
+			Diff: "@@ -1 +1 @@\n-old composer\n+inline composer",
+		},
+		Response: make(chan permission.ApprovalResponse, 1),
+	})
+
+	if m.overlay != OverlayNone {
+		t.Fatalf("approval covered the transcript with overlay %v", m.overlay)
+	}
+	if got := m.approvalState.Viewport.Width(); got <= 86 || got != m.approvalContentWidth() {
+		t.Fatalf("inline approval width = %d, want full composer width %d", got, m.approvalContentWidth())
+	}
+	plain := ansi.Strip(m.View().Content)
+	for _, want := range []string{
+		"conversation remains visible",
+		"Permission · edit",
+		"internal/ui/view.go",
+		"-old composer",
+		"+inline composer",
+		"y once",
+		"n deny",
+	} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("inline approval view missing %q:\n%s", want, plain)
+		}
+	}
+	if strings.Index(plain, "conversation remains visible") > strings.Index(plain, "Permission · edit") {
+		t.Fatalf("approval did not remain below the transcript:\n%s", plain)
+	}
+	assertRenderedLinesFit(t, m.View().Content, 140)
 }
 
 func TestMCPApprovalShowsActionAndConsequence(t *testing.T) {

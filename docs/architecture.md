@@ -36,7 +36,7 @@ Persistence -> scoped memory/ICE + SQLite sessions/ledger + logs
 - `internal/ui` owns the Charm interface and renders state from the host runtime.
 - `internal/goal` owns durable goal state, budgets, receipts, and recovery values.
 - `internal/goaladvisor` bounds the optional Cortex/MCPHub semantic adapter.
-- `internal/db` persists sessions, permissions, checkpoints, and execution evidence.
+- `internal/db` persists sessions, permissions, checkpoints, and execution evidence through sqlc-backed schema models and a transactional checksum ledger.
 
 The model does not enforce its own mode. The host decides which tools are visible and rejects out-of-policy requests.
 
@@ -52,7 +52,7 @@ Local Agent therefore projects every tool receipt across three independent axes:
 
 A successful MCP exchange is not proof that the requested operation succeeded. Exact structured output is interpreted inside the agent, then discarded; the TUI and saved session receive only the bounded semantic projection. Unknown schemas remain visible as attention states instead of being painted as successful verification. MCP tool-call arguments follow the same boundary: saved sessions retain only safe route identifiers, never arbitrary downstream payloads.
 
-The transcript is the chronological source of truth. Overlays provide temporary selection or inspection, while the composer remains the action surface. Local Agent does not duplicate every companion product into a persistent dashboard.
+The transcript is the chronological source of truth. Composer-owned inline surfaces handle active authority decisions; overlays are reserved for temporary global selection or deep inspection. Local Agent does not duplicate every companion product into a persistent dashboard.
 
 ## Effect ordering
 

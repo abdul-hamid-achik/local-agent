@@ -30,10 +30,12 @@ type StreamDoneMsg struct {
 
 // ToolCallStartMsg signals a tool invocation has begun.
 type ToolCallStartMsg struct {
-	ID        string
-	Name      string
-	Args      map[string]any
-	StartTime time.Time
+	ID                      string
+	Name                    string
+	Args                    map[string]any
+	StartTime               time.Time
+	BeforeContent           string
+	BeforeSnapshotAvailable bool
 }
 
 // ToolCallResultMsg delivers the result of a tool call.
@@ -56,10 +58,22 @@ type SystemMessageMsg struct {
 	Msg string
 }
 
+// CapabilityRouteMsg is an ephemeral host advisory. It must never be appended
+// to ChatEntry, ToolEntry, session state, or evidence receipts.
+type CapabilityRouteMsg struct {
+	Route agent.CapabilityRoute
+}
+
 // ContextCompactedMsg invalidates the previous provider occupancy snapshot.
 // The retained history is smaller, but its next exact prompt size is not known
 // until Ollama reports the following request.
 type ContextCompactedMsg struct{}
+
+// ContextCompactionStartedMsg and ContextCompactionFinishedMsg expose the
+// hidden summarization request as one explicit UI phase. They carry no model
+// text or transcript data.
+type ContextCompactionStartedMsg struct{}
+type ContextCompactionFinishedMsg struct{}
 
 // AgentDoneMsg signals the agent loop has completed.
 type AgentDoneMsg struct {
@@ -111,14 +125,17 @@ type StartupStatusMsg struct {
 
 // CompletionSearchResultMsg delivers async vecgrep search results.
 type CompletionSearchResultMsg struct {
-	Tag     int
-	Results []Completion
+	Generation uint64
+	Tag        int
+	Results    []Completion
 }
 
 // CompletionDebounceTickMsg fires after the debounce interval to trigger a search.
 type CompletionDebounceTickMsg struct {
-	Tag   int
-	Query string
+	Generation uint64
+	Tag        int
+	Query      string
+	Path       string
 }
 
 // PlanFormCompletedMsg signals the plan form has been submitted with a structured prompt.
@@ -174,6 +191,16 @@ type ContextLoadResultMsg struct {
 	Path  string
 	Data  string
 	Err   error
+}
+
+// ReadScopeResultMsg completes one process-local external read-root change.
+// The Agent remains the authority for canonicalization and overlap checks.
+type ReadScopeResultMsg struct {
+	Token     uint64
+	Operation string
+	Path      string
+	Count     int
+	Err       error
 }
 
 // ImportResultMsg completes a bounded asynchronous /import operation. Parsing

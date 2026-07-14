@@ -17,14 +17,14 @@ type sessionItem struct {
 }
 
 func (i sessionItem) Title() string {
-	return truncateDisplay(i.title, 40)
+	return truncateDisplay(sanitizeTerminalSingleLine(i.title), 40)
 }
 
 func (i sessionItem) Description() string {
 	return i.createdAt
 }
 
-func (i sessionItem) FilterValue() string { return i.title }
+func (i sessionItem) FilterValue() string { return sanitizeTerminalSingleLine(i.title) }
 
 // SessionsPickerState holds state for the sessions picker overlay.
 type SessionsPickerState struct {

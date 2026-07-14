@@ -15,7 +15,7 @@ func completionFilterInputWidth(terminalWidth int) int {
 // semanticTextInputStyles keeps custom Bubbles inputs in the same adaptive
 // palette as lists, the composer, and ToolCards. Starting from Bubbles keeps
 // its cursor behavior while replacing every hardcoded default color.
-func semanticTextInputStyles(isDark bool) textinput.Styles {
+func semanticTextInputStyles(isDark bool, reducedMotion ...bool) textinput.Styles {
 	styles := textinput.DefaultStyles(isDark)
 	palette := outputSemanticPalette(isDark)
 	styles.Focused = textinput.StyleState{
@@ -31,6 +31,7 @@ func semanticTextInputStyles(isDark bool) textinput.Styles {
 		Prompt:      lipgloss.NewStyle().Foreground(palette.Dim),
 	}
 	styles.Cursor.Color = palette.Accent
+	styles.Cursor.Blink = len(reducedMotion) == 0 || !reducedMotion[0]
 	return styles
 }
 
@@ -142,12 +143,12 @@ func (m *Model) restylePickerOverlays() {
 		configurePickerList(&state.List, m.isDark)
 	}
 	if state := m.completionState; state != nil {
-		state.Filter.SetStyles(semanticTextInputStyles(m.isDark))
+		state.Filter.SetStyles(semanticTextInputStyles(m.isDark, m.reducedMotion))
 	}
 	if state := m.planFormState; state != nil {
 		for index := range state.Fields {
 			if state.Fields[index].Kind == "text" {
-				state.Fields[index].Input.SetStyles(semanticTextInputStyles(m.isDark))
+				state.Fields[index].Input.SetStyles(semanticTextInputStyles(m.isDark, m.reducedMotion))
 			}
 		}
 	}

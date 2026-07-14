@@ -28,6 +28,7 @@ type Context struct {
 	ToolCount        int
 	ServerCount      int
 	ServerNames      []string
+	ReadRoots        []string
 	Skills           []SkillInfo
 	LoadedFile       string
 	ICEEnabled       bool
@@ -43,6 +44,11 @@ type Context struct {
 	SessionTurnCount   int
 	NumCtx             int
 	CurrentModel       string
+	// Artifacts is a bounded, parser-safe view of durable artifacts projected
+	// from completed tool receipts in transcript order. It deliberately omits
+	// provider prose, source paths, raw manifests, and MCP structured content.
+	Artifacts          []ArtifactInfo
+	ArtifactsTruncated bool
 	// File changes
 	FileChanges map[string]int // path → modification count
 	// Goal runtime summary. Commands receive only the bounded fields needed to
@@ -55,6 +61,23 @@ type Context struct {
 	GoalExhausted        bool
 	GoalPersistenceDirty bool
 	GoalBusy             bool
+}
+
+// MaxContextArtifacts bounds the number of artifact summaries exposed to one
+// slash-command invocation, even when a session contains more tool receipts.
+const MaxContextArtifacts = 64
+
+// ArtifactInfo is the read-only command view of a normalized artifact digest.
+// URI and CreatedAt are host-derived/canonicalized before this value reaches
+// the command package; ContentSHA256 is the full lowercase SHA-256 digest.
+type ArtifactInfo struct {
+	URI            string
+	FileCount      int64
+	TotalBytes     int64
+	CreatedAt      string
+	ContentSHA256  string
+	SecretsWarning bool
+	IndexingFailed bool
 }
 
 // SkillInfo is a read-only view of a skill for command display.
@@ -113,6 +136,9 @@ const (
 	ActionDropGoal                 // Drop the active goal without claiming completion
 	ActionEditGoalBudget           // Open the active goal's budget-only editor
 	ActionRecoverExecution         // Review typed evidence for a paused ordinary execution
+	ActionAddReadRoot              // Grant one process-local external read-only root (Data = path)
+	ActionRemoveReadRoot           // Revoke one process-local external read-only root (Data = path)
+	ActionClearReadRoots           // Revoke every process-local external read-only root
 )
 
 // Registry holds all registered slash commands.
@@ -145,6 +171,9 @@ func (r *Registry) Execute(ctx *Context, name string, args []string) Result {
 	cmd, ok := r.commands[name]
 	if !ok {
 		return Result{Error: fmt.Sprintf("unknown command: /%s — type /help for available commands", name)}
+	}
+	if ctx == nil {
+		ctx = &Context{}
 	}
 	return cmd.Handler(ctx, args)
 }

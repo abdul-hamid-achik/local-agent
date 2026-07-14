@@ -83,7 +83,18 @@ func run() int {
 	promptFlag := flag.String("p", "", "run in non-interactive mode: send prompt, print response, exit")
 	modeFlag := flag.String("mode", "normal", "headless authority: normal, plan, or auto")
 	yoloFlag := flag.Bool("yolo", false, "auto-approve all tool calls (skip permission prompts)")
+	var resumeFlag resumeFlagValue
+	flag.Var(&resumeFlag, "resume", "restore a saved interactive session by positive ID or latest")
 	flag.Parse()
+	resumeSelector, resumeRequested, err := resumeFlag.selector()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "resume: %v\n", err)
+		return 2
+	}
+	if err := validateResumeInvocation(resumeRequested, commandLineFlagProvided(os.Args[1:], "p")); err != nil {
+		fmt.Fprintf(os.Stderr, "resume: %v\n", err)
+		return 2
+	}
 	headlessMode, err := parseHeadlessMode(*modeFlag, *promptFlag != "")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "mode: %v\n", err)
@@ -248,28 +259,18 @@ func run() int {
 		}
 	}
 
-	skillDirs := []string{cfg.SkillsDir}
-	if agentsDir != nil && len(agentsDir.Skills) > 0 {
-		for _, s := range agentsDir.Skills {
-			if s.Path != "" {
-				skillDir := filepath.Dir(s.Path)
-				if skillDir != "" {
-					skillDirs = append(skillDirs, skillDir)
-				}
-			}
-		}
-	}
-
-	skillMgr := skill.NewManager("")
-	for _, dir := range skillDirs {
-		if dir != "" {
-			skillMgr.AddSearchPath(dir)
-		}
+	skillMgr, err := newRuntimeSkillManager(agentsDir, cfg.Agents.AutoLoad)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "skills: %v\n", err)
+		return 1
 	}
 	if err := skillMgr.LoadAll(); err != nil {
 		fmt.Fprintf(os.Stderr, "skills: %v\n", err)
 		return 1
 	}
+	// One loader setup feeds both headless and TUI runs. Manual/profile
+	// activation remains an independent, eager prompt-content mechanism.
+	ag.SetSkillLoader(skillMgr)
 	baseLoadedContext, err := buildBaseLoadedContext(agentsDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "project instructions: %v\n", err)
@@ -490,6 +491,12 @@ func run() int {
 	}()
 	m.SetModelPinned(modelPinned)
 	m.SetSessionStore(dbStore)
+	if resumeRequested {
+		if err := m.SetStartupSessionResume(resumeSelector); err != nil {
+			fmt.Fprintf(os.Stderr, "resume: %v\n", err)
+			return 2
+		}
+	}
 	m.SetAgentProfileSource(agentsDir, baseLoadedContext, cfg.AgentProfile)
 	// Bubble Tea's built-in signal handler exits before Model.Update sees the
 	// event. Own SIGINT/SIGTERM so every OS shutdown follows the same
@@ -640,6 +647,18 @@ func run() int {
 		return 1
 	}
 	return 0
+}
+
+func newRuntimeSkillManager(agentsDir *config.AgentsDir, autoLoad bool) (*skill.Manager, error) {
+	if !autoLoad {
+		return skill.NewManager(""), nil
+	}
+	if agentsDir == nil || strings.TrimSpace(agentsDir.Path) == "" {
+		return nil, errors.New("shared agents directory was not loaded")
+	}
+	// The selected shared agents root owns profiles and skills together. Do
+	// not mix it with Local Agent's private config/state directory.
+	return skill.NewManager(filepath.Join(agentsDir.Path, "skills")), nil
 }
 
 // currentWorkspace returns the process workspace used to scope local memory.

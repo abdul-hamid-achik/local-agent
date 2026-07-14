@@ -1,6 +1,9 @@
 package skill
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseFrontmatter(t *testing.T) {
 	tests := []struct {
@@ -74,5 +77,16 @@ func TestParseFrontmatter(t *testing.T) {
 				t.Errorf("Content = %q, want %q", skill.Content, tt.wantContent)
 			}
 		})
+	}
+}
+
+func TestParseFrontmatterPreservesLongMarkdownLines(t *testing.T) {
+	body := strings.Repeat("x", 128*1024)
+	skill, err := parseFrontmatter("---\nname: long-line\ndescription: Long body\n---\n" + body)
+	if err != nil {
+		t.Fatalf("parseFrontmatter: %v", err)
+	}
+	if skill.Name != "long-line" || skill.Content != body {
+		t.Fatalf("long-line skill was truncated: name=%q bytes=%d", skill.Name, len(skill.Content))
 	}
 }

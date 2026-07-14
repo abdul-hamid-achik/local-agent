@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
@@ -58,6 +59,7 @@ const (
 	OverlayModelPicker
 	OverlayCloudConsent
 	OverlayPlanForm
+	OverlayCortexDecision
 	OverlaySessionsPicker
 	OverlaySettings
 	OverlayAgentPicker
@@ -68,21 +70,24 @@ const (
 	OverlayGoalRecovery
 	OverlayModelDetails
 	OverlayModelPull
-	OverlayApproval
 )
 
-// CompletionState holds all state for the interactive completion modal.
+// CompletionState holds all state for the composer-owned completion popup.
 type CompletionState struct {
 	Kind          string          // "command", "attachments", "skills"
 	Filter        textinput.Model // inline filter field
-	ComposerDraft string          // complete composer value when the modal opened
-	AllItems      []Completion    // full unfiltered list
-	FilteredItems []Completion    // items matching current filter
-	Index         int             // cursor in FilteredItems
-	Selected      map[int]bool    // multi-select (keys = AllItems indices)
-	CurrentPath   string          // for @ file browsing: relative dir path
-	Searching     bool            // true while vecgrep is in flight
-	DebounceTag   int             // cancel stale searches
+	Anchor        completionAnchor
+	CommandPrefix string       // exact `/command ` prefix for registry action completion
+	BaseItems     []Completion // non-workspace items retained across async searches
+	AllItems      []Completion // full unfiltered list
+	FilteredItems []Completion // items matching current filter
+	Index         int          // cursor in FilteredItems
+	Selected      map[int]bool // multi-select (keys = AllItems indices)
+	CurrentPath   string       // for @ file browsing: relative dir path
+	Searching     bool         // true while vecgrep is in flight
+	Generation    uint64       // guards results across close/reopen cycles
+	DebounceTag   int          // cancel stale searches
+	SearchCancel  context.CancelFunc
 	Preview       completionPreview
 	PreviewToken  uint64
 	PreviewCancel context.CancelFunc
@@ -99,20 +104,23 @@ const (
 
 // ToolEntry tracks the lifecycle of a single tool call.
 type ToolEntry struct {
-	ID            string
-	Name          string
-	Summary       string         // bounded semantic context for compact/restored receipts
-	Args          string         // formatted args string
-	RawArgs       map[string]any `json:"-"` // ephemeral original args
-	Result        string
-	IsError       bool
-	Status        ToolStatus
-	StartTime     time.Time
-	Duration      time.Duration
-	Collapsed     bool                     // per-entry collapse state
-	BeforeContent string                   `json:"-"` // ephemeral snapshot before file write
-	DiffLines     []DiffLine               // computed diff (nil = not a file write)
-	Projection    ecosystem.ToolProjection // bounded semantic role, route, and outcome
+	ID                      string
+	Name                    string
+	Summary                 string         // bounded semantic context for compact/restored receipts
+	Args                    string         // formatted args string
+	RawArgs                 map[string]any `json:"-"` // ephemeral original args
+	Result                  string
+	IsError                 bool
+	Status                  ToolStatus
+	StartTime               time.Time
+	Duration                time.Duration
+	Collapsed               bool                     // per-entry collapse state
+	BeforeContent           string                   `json:"-"` // ephemeral snapshot before file write
+	BeforeSnapshotAvailable bool                     `json:"-"` // false when the bounded pre-write read was unavailable
+	DiffLines               []DiffLine               // computed diff (nil = not a file write)
+	DiffPending             bool                     `json:"-"` // post-write read/LCS is running outside Update
+	DiffGeneration          uint64                   `json:"-"` // accepts exactly one matching asynchronous result
+	Projection              ecosystem.ToolProjection // bounded semantic role, route, and outcome
 }
 
 // ChatEntry is a single item in the chat log.
@@ -176,6 +184,7 @@ type Model struct {
 	turnEvalTotal    int
 	turnPromptTotal  int
 	toolsPending     int
+	capabilityRoute  *agent.CapabilityRoute
 	inputLines       int
 	userScrolledUp   bool
 
@@ -187,15 +196,19 @@ type Model struct {
 	startupItems []startupItem
 	initCancel   context.CancelFunc
 
-	// Completion modal
+	// Composer-owned completion popup
 	completionState           *CompletionState // nil when no overlay
 	completionSuppressedDraft string           // exact unchanged draft dismissed with Escape
+	completionGeneration      uint64
+	completionSearch          func(context.Context, string, string) []Completion
+	completionReader          *completionWorkspaceReader
 
 	// Tool display
 	toolEntries    []ToolEntry
 	toolsCollapsed bool
 	toolHitRegions []toolHitRegion
 	toolCardMgr    ToolCardManager
+	diffGeneration uint64
 
 	// Incremental rendering cache
 	cachedEntriesRender  string
@@ -226,6 +239,7 @@ type Model struct {
 	sessionLoadCancel            context.CancelFunc
 	sessionListToken             uint64
 	sessionListing               bool
+	startupResumeSelector        *SessionResumeSelector
 
 	// Paste detection
 	pendingPaste *pendingPaste
@@ -270,17 +284,21 @@ type Model struct {
 
 	// Goal Runtime. The host owns continuation, budget, cancellation and
 	// persistence; Cortex is an advisory semantic state machine only.
-	goalRuntime          *goal.Runtime
-	goalAdvisor          GoalAdvisor
-	goalOperation        string
-	goalOperationToken   uint64
-	goalOperationCancel  context.CancelFunc
-	goalOperationRunning bool
-	goalTurnID           string
-	goalTurnToolCalls    int
-	goalTurnSuccesses    int
-	goalNeedsEvaluation  bool
-	goalPersistenceDirty bool
+	goalRuntime           *goal.Runtime
+	goalAdvisor           GoalAdvisor
+	goalOperation         string
+	goalOperationToken    uint64
+	goalOperationCancel   context.CancelFunc
+	goalOperationRunning  bool
+	cortexDecision        *cortexDecisionPresentation
+	cortexDecisionOp      *cortexDecisionOperation
+	cortexDecisionAttempt *cortexDecisionAttempt
+	cortexDecisionGen     uint64
+	goalTurnID            string
+	goalTurnToolCalls     int
+	goalTurnSuccesses     int
+	goalNeedsEvaluation   bool
+	goalPersistenceDirty  bool
 
 	// Logging
 	logger *log.Logger
@@ -298,17 +316,20 @@ type Model struct {
 	profileSkills       []string
 
 	// Runtime
-	program       *tea.Program
-	cancel        context.CancelFunc
-	commitCancel  context.CancelFunc
-	commitRunner  commitEffectRunner
-	commitToken   uint64
-	commitRunning bool
-	fileOpToken   uint64
-	fileLoading   bool
-	exportToken   uint64
-	exportRunning bool
-	shuttingDown  bool
+	program            *tea.Program
+	cancel             context.CancelFunc
+	commitCancel       context.CancelFunc
+	commitRunner       commitEffectRunner
+	commitToken        uint64
+	commitRunning      bool
+	fileOpToken        uint64
+	fileLoading        bool
+	readScopeOpToken   uint64
+	readScopeOpRunning bool
+	exportToken        uint64
+	exportRunning      bool
+	compactingContext  bool
+	shuttingDown       bool
 
 	// Display info
 	model                     string
@@ -379,30 +400,31 @@ func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, com
 	)
 
 	return &Model{
-		input:          ta,
-		spin:           s,
-		scramble:       NewScrambleModel(true),
-		styles:         initialStyles,
-		keys:           DefaultKeyMap(),
-		state:          StateIdle,
-		isDark:         true,
-		reducedMotion:  reducedMotionRequested(),
-		now:            time.Now,
-		inputLines:     1,
-		toolsCollapsed: true,
-		initializing:   true,
-		mode:           ModeNormal,
-		modeConfigs:    DefaultModeConfigs(),
-		modelManager:   modelManager,
-		router:         router,
-		logger:         logger,
-		agent:          ag,
-		cmdRegistry:    cmdReg,
-		skillMgr:       skillMgr,
-		completer:      completer,
-		historyIndex:   -1,
-		toolCardMgr:    NewToolCardManager(true),
-		commitRunner:   runCommit,
+		input:            ta,
+		spin:             s,
+		scramble:         NewScrambleModel(true),
+		styles:           initialStyles,
+		keys:             DefaultKeyMap(),
+		state:            StateIdle,
+		isDark:           true,
+		reducedMotion:    reducedMotionRequested(),
+		now:              time.Now,
+		inputLines:       1,
+		toolsCollapsed:   true,
+		initializing:     true,
+		mode:             ModeNormal,
+		modeConfigs:      DefaultModeConfigs(),
+		modelManager:     modelManager,
+		router:           router,
+		logger:           logger,
+		agent:            ag,
+		cmdRegistry:      cmdReg,
+		skillMgr:         skillMgr,
+		completer:        completer,
+		completionReader: newCompletionWorkspaceReader(),
+		historyIndex:     -1,
+		toolCardMgr:      NewToolCardManager(true),
+		commitRunner:     runCommit,
 	}
 }
 
@@ -420,6 +442,18 @@ func (m *Model) SetModelPinned(pinned bool) {
 // SetSessionStore enables private SQLite-backed, lossless session resume.
 func (m *Model) SetSessionStore(store *db.Store) {
 	m.sessionStore = store
+}
+
+// SetStartupSessionResume schedules one validated restore after InitComplete.
+// It never starts provider work and shares the interactive picker's tokened
+// restore authority.
+func (m *Model) SetStartupSessionResume(selector SessionResumeSelector) error {
+	if !selector.valid() {
+		return fmt.Errorf("invalid startup session resume selector")
+	}
+	copy := selector
+	m.startupResumeSelector = &copy
+	return nil
 }
 
 // SetInitCancel stores the cancel function for the background init goroutine.
@@ -464,7 +498,7 @@ func (m *Model) beginShutdown() tea.Cmd {
 
 func (m *Model) shutdownReady() bool {
 	return m.cancel == nil && !m.commitRunning && !m.exportRunning && !m.goalOperationRunning &&
-		!m.modelPullRunning && !m.sessionLoading && !m.ollamaInventoryCommitting
+		!m.modelPullRunning && !m.sessionLoading && !m.ollamaInventoryCommitting && !m.readScopeOpRunning
 }
 
 func (m *Model) appendShutdownQuit(commands *[]tea.Cmd) {
@@ -507,6 +541,8 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.BackgroundColorMsg:
+		approvalAnchor := m.captureApprovalTranscriptAnchor()
+		inlineFormAnchor := m.captureInlineFormTranscriptAnchor()
 		m.isDark = msg.IsDark()
 		m.styles = NewStyles(m.isDark)
 		// Update spinner style for theme.
@@ -520,6 +556,10 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			m.goalFormState.SetTheme(m.isDark)
 			m.goalFormState.SetReducedMotion(m.reducedMotion)
 		}
+		if m.cortexDecision != nil {
+			m.cortexDecision.SetTheme(m.isDark)
+			m.cortexDecision.reducedMotion = m.reducedMotion
+		}
 		if m.goalInspectorState != nil {
 			m.goalInspectorState.SetTheme(m.isDark)
 			m.goalInspectorState.SetReducedMotion(m.reducedMotion)
@@ -527,6 +567,12 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		if m.goalRecoveryState != nil {
 			m.goalRecoveryState.SetTheme(m.isDark)
 			m.goalRecoveryState.SetReducedMotion(m.reducedMotion)
+		}
+		if m.pendingApproval != nil && m.approvalState != nil {
+			// Approval previews live in a cached Bubbles viewport. Rebuild its
+			// styled content immediately so a live theme switch cannot leave the
+			// body on the old palette while the title and choices change.
+			m.resizeApproval(true)
 		}
 		// Recreate markdown renderer for new theme.
 		if m.width > 0 {
@@ -537,11 +583,22 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		if m.ready {
 			m.viewport.SetContent(m.renderEntries())
 		}
+		m.refreshInlineFormLayout(inlineFormAnchor)
+		m.restoreApprovalTranscriptAnchor(approvalAnchor)
 
 	case tea.WindowSizeMsg:
+		approvalAnchor := m.captureApprovalTranscriptAnchor()
+		completionAnchor := m.captureCompletionTranscriptAnchor()
+		inlineFormAnchor := m.captureInlineFormTranscriptAnchor()
 		widthChanged := msg.Width != m.width
 		m.width = msg.Width
 		m.height = msg.Height
+		if m.goalFormState != nil {
+			m.goalFormState.SetSize(m.width, m.height)
+		}
+		if m.cortexDecision != nil {
+			m.cortexDecision.SetSize(m.width, m.height)
+		}
 
 		// The conversation always owns the full terminal width. Infrequent
 		// controls are presented in overlays.
@@ -602,11 +659,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			m.resizeHelpViewport(true)
 		}
 		m.resizePickerOverlays()
-		if m.overlay == OverlayApproval && m.approvalState != nil {
+		if m.pendingApproval != nil && m.approvalState != nil {
 			m.resizeApproval(true)
-		}
-		if m.goalFormState != nil {
-			m.goalFormState.SetSize(m.width, m.height)
+			m.recalcViewportHeight()
 		}
 		if m.goalInspectorState != nil {
 			m.goalInspectorState.SetSize(m.width, m.height)
@@ -623,6 +678,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		}
 		m.input.SetWidth(viewportWidth)
 		m.syncInputHeight()
+		m.restoreApprovalTranscriptAnchor(approvalAnchor)
+		m.restoreCompletionTranscriptAnchor(completionAnchor)
+		m.restoreInlineFormTranscriptAnchor(inlineFormAnchor)
 
 	case goalRecoveryLoadResultMsg:
 		if cmd := m.handleGoalRecoveryLoadResult(msg); cmd != nil {
@@ -679,12 +737,17 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			case strings.EqualFold(msg.String(), "s"):
 				m.resolvePendingApproval(permission.AllowSession())
 				resumeActivity = true
+			case key.Matches(msg, m.keys.CompleteSelect):
+				m.resolvePendingApproval(m.selectedApprovalResponse())
+				resumeActivity = true
+			case key.Matches(msg, m.keys.CompleteUp), strings.EqualFold(msg.String(), "k"):
+				m.moveApprovalChoice(-1)
+			case key.Matches(msg, m.keys.CompleteDown), strings.EqualFold(msg.String(), "j"):
+				m.moveApprovalChoice(1)
 			case strings.EqualFold(msg.String(), "d"):
 				m.toggleApprovalDetails()
 			default:
-				if m.approvalState != nil {
-					navigateReadOnlyViewport(&m.approvalState.Viewport, msg.String())
-				}
+				m.navigateApprovalViewport(msg.String())
 			}
 			if resumeActivity {
 				return m, m.startActivityCmd()
@@ -711,6 +774,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 					m.pendingPaste = nil
 					m.recalcViewportHeight()
 					m.syncInputHeight()
+					m.activateCortexDecision()
 					return m, m.reflowInputViewport()
 				}
 			case strings.EqualFold(msg.String(), "n"):
@@ -720,13 +784,22 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 					m.pendingPaste = nil
 					m.recalcViewportHeight()
 					m.syncInputHeight()
+					m.activateCortexDecision()
 					return m, m.reflowInputViewport()
 				}
 			case key.Matches(msg, m.keys.Cancel):
 				m.pendingPaste = nil
 				m.recalcViewportHeight()
+				m.activateCortexDecision()
 			}
 			return m, nil
+		}
+
+		// Cortex decisions own keys ahead of busy goal-operation guards. Escape
+		// hides only the presentation while an exact answer/refresh continues;
+		// it must never be reinterpreted as cancellation of that operation.
+		if m.cortexDecisionActive() {
+			return m, m.updateCortexDecisionKey(msg)
 		}
 
 		// End is the transcript's explicit recovery action whenever the composer
@@ -1043,8 +1116,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 				return m, nil
 			}
 
-			// Plan form overlay.
+			// Composer-owned inline Plan form.
 			if m.overlay == OverlayPlanForm && m.planFormState != nil {
+				anchor := m.captureInlineFormTranscriptAnchor()
 				submitted, cancelled := m.updatePlanForm(msg)
 				if cancelled {
 					m.closePlanForm()
@@ -1053,12 +1127,16 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 				if submitted {
 					prompt := m.planFormState.AssemblePrompt()
 					m.closePlanForm()
-					return m, m.submitPlanFormPrompt(prompt)
+					cmd := m.submitPlanFormPrompt(prompt)
+					m.restoreInlineFormTranscriptAnchor(anchor)
+					return m, cmd
 				}
+				m.refreshInlineFormLayout(anchor)
 				return m, nil
 			}
 
 			if m.overlay == OverlayGoalForm && m.goalFormState != nil {
+				anchor := m.captureInlineFormTranscriptAnchor()
 				event, cmd := m.goalFormState.Update(msg)
 				if cmd != nil {
 					cmds = append(cmds, cmd)
@@ -1069,6 +1147,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 				case GoalActionSave:
 					cmds = append(cmds, m.applyGoalForm(event))
 				}
+				m.refreshInlineFormLayout(anchor)
 				return m, tea.Batch(cmds...)
 			}
 
@@ -1108,68 +1187,10 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 				if key.Matches(msg, m.keys.CompleteSelect) {
 					if item := m.sessionsPickerState.List.SelectedItem(); item != nil {
 						si := item.(sessionItem)
-						sessionID := si.id
-						sessionTitle := si.title
-						activeSessionID := m.sessionID
-						activeSessionLeased := m.executionLease != nil
+						selector, _ := SessionIDResumeSelector(si.id)
 						m.overlayParent = OverlayNone
 						m.closeSessionsPicker()
-						m.sessionLoadToken++
-						loadToken := m.sessionLoadToken
-						m.sessionLoading = true
-						m.input.Blur()
-						workspaceID, workspaceErr := canonicalWorkspaceID(m.agent.WorkDir())
-						loadCtx, loadCancel := context.WithCancel(context.Background())
-						m.sessionLoadCancel = loadCancel
-						load := func() tea.Msg {
-							if workspaceErr != nil {
-								return SessionLoadedMsg{LoadToken: loadToken, Err: workspaceErr}
-							}
-							var lease *db.ExecutionSessionLease
-							var err error
-							if sessionID != activeSessionID || !activeSessionLeased {
-								lease, err = m.sessionStore.AcquireExecutionSessionLease(loadCtx, sessionID, workspaceID)
-								if err != nil {
-									return SessionLoadedMsg{LoadToken: loadToken, Err: err}
-								}
-							}
-							session, state, stateRecord, err := loadPersistedSession(loadCtx, m.sessionStore, sessionID, workspaceID)
-							if err != nil {
-								if lease != nil {
-									_ = lease.Close()
-								}
-								return SessionLoadedMsg{LoadToken: loadToken, Err: err}
-							}
-							var (
-								unresolved       []execution.State
-								recoveryTarget   *agent.UnresolvedExecutionError
-								recoveryContexts []db.StandaloneReconciliationContext
-								unresolvedErr    error
-							)
-							if state.Goal == nil {
-								projection, projectErr := m.sessionStore.ProjectExecutionRecovery(loadCtx, session.ID, workspaceID, state.ExecutionCursor, 100)
-								if projectErr != nil {
-									if lease != nil {
-										_ = lease.Close()
-									}
-									return SessionLoadedMsg{LoadToken: loadToken, Err: fmt.Errorf("project execution recovery: %w", projectErr)}
-								}
-								unresolved, recoveryContexts = projection.Hazards, projection.Contexts
-								recoveryTarget = standaloneRecoveryTarget(unresolved, state.ExecutionCursor)
-							} else {
-								unresolved, unresolvedErr = m.sessionStore.ListExecutionRecoveryHazards(loadCtx, session.ID, workspaceID, state.ExecutionCursor, 100)
-							}
-							warning := unresolvedExecutionWarning(unresolved)
-							if unresolvedErr != nil {
-								warning = fmt.Sprintf("Recovery check failed: %v. This session will remain blocked until durable execution state can be verified.", unresolvedErr)
-							}
-							return SessionLoadedMsg{
-								LoadToken: loadToken, SessionID: session.ID, State: state,
-								StateRecord: stateRecord, Title: sessionTitle, RecoveryWarning: warning,
-								RecoveryTarget: recoveryTarget, RecoveryContexts: recoveryContexts, ExecutionLease: lease,
-							}
-						}
-						return m, tea.Batch(m.startActivityCmd(), load)
+						return m, m.requestSessionRestore(selector)
 					}
 				} else {
 					var cmd tea.Cmd
@@ -1219,29 +1240,32 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 						// Once arguments begin, completion has done its job. Return the
 						// entire draft to the composer so Enter executes the command
 						// instead of selecting a suggestion and discarding arguments.
-						draft := m.completionDraft()
+						draft, cursorRune := m.completionDraftAndCursor()
 						m.closeCompletion()
-						m.input.SetValue(draft)
-						m.input.CursorEnd()
-						m.syncInputHeight()
+						m.setComposerDraftAtRune(draft, cursorRune)
 						m.completionSuppressedDraft = draft
 						return m, cmd
 					}
 
 					// Re-filter if text changed
 					if cs.Filter.Value() != oldFilter {
-						cs.FilteredItems = FilterCompletions(cs.AllItems, cs.Filter.Value())
+						if cs.CommandPrefix != "" {
+							cs.BaseItems = m.completer.CompleteStatic(cs.CommandPrefix + cs.Filter.Value())
+							cs.AllItems = append([]Completion(nil), cs.BaseItems...)
+							cs.FilteredItems = append([]Completion(nil), cs.BaseItems...)
+						} else {
+							cs.FilteredItems = FilterCompletions(cs.AllItems, cs.Filter.Value())
+						}
 						cs.Index = 0
 						previewCmd := m.refreshCompletionPreview()
 
-						// Schedule debounced vecgrep search for @ kind
-						if cs.Kind == "attachments" && cs.Filter.Value() != "" {
-							cs.DebounceTag++
-							tag := cs.DebounceTag
-							query := cs.Filter.Value()
-							return m, tea.Batch(cmd, previewCmd, tea.Tick(300*time.Millisecond, func(time.Time) tea.Msg {
-								return CompletionDebounceTickMsg{Tag: tag, Query: query}
-							}))
+						if cs.Kind == "attachments" {
+							searchCmd := m.scheduleCompletionSearch(
+								cs.Filter.Value(),
+								cs.CurrentPath,
+								cs.Filter.Value() != "",
+							)
+							return m, tea.Batch(cmd, previewCmd, searchCmd)
 						}
 						return m, tea.Batch(cmd, previewCmd)
 					}
@@ -1409,7 +1433,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 
 		case key.Matches(msg, m.keys.Complete):
 			// Tab key for autocomplete
-			if m.state == StateIdle && m.completer != nil && !m.isCompletionActive() {
+			if m.composerEditable() && m.completer != nil && !m.isCompletionActive() {
 				// Explicit completion always overrides an earlier Escape dismissal.
 				m.completionSuppressedDraft = ""
 				return m, m.triggerCompletion(m.input.Value())
@@ -1489,6 +1513,17 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 	case ContextCompactedMsg:
 		m.promptTokens = 0
 
+	case ContextCompactionStartedMsg:
+		m.compactingContext = true
+		m.viewport.SetContent(m.renderEntries())
+		m.gotoBottomIfFollowing()
+		cmds = append(cmds, m.startActivityCmd())
+
+	case ContextCompactionFinishedMsg:
+		m.compactingContext = false
+		m.viewport.SetContent(m.renderEntries())
+		m.gotoBottomIfFollowing()
+
 	case ToolCallStartMsg:
 		if m.goalTurnID != "" {
 			m.goalTurnToolCalls++
@@ -1509,9 +1544,11 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			Projection: projection,
 		}
 		te.Summary = boundedToolCardSummary(toolSummary(classifyTool(msg.Name), te))
-		// Snapshot file content before write for diff view.
 		if classifyTool(msg.Name) == ToolTypeFileWrite {
-			te.BeforeContent = readFileForDiffAt(msg.Args, m.agent.WorkDir())
+			// The Adapter captured this before returning control to the tool
+			// execution path. Update only installs the immutable result.
+			te.BeforeContent = msg.BeforeContent
+			te.BeforeSnapshotAvailable = msg.BeforeSnapshotAvailable
 		}
 		m.toolEntries = append(m.toolEntries, te)
 		m.toolsPending++
@@ -1555,6 +1592,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 	case goalStatusResultMsg:
 		return m, m.handleGoalStatusResult(msg)
 
+	case cortexDecisionAnswerResultMsg:
+		return m, m.handleCortexDecisionAnswerResult(msg)
+
 	case ToolCallResultMsg:
 		m.invalidateEntryCache()
 		if m.logger != nil {
@@ -1567,6 +1607,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		if digest := bobReceiptDigest(msg.Name, msg.Result); digest != "" {
 			result = boundedToolCardResult(digest + "\n" + msg.Result)
 		}
+		var diffCmd tea.Cmd
 		for i := len(m.toolEntries) - 1; i >= 0; i-- {
 			if toolCallMatches(msg.ID, msg.Name, m.toolEntries[i].ID, m.toolEntries[i].Name) && m.toolEntries[i].Status == ToolStatusRunning {
 				matched = true
@@ -1583,21 +1624,38 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 				} else {
 					m.toolEntries[i].Status = ToolStatusDone
 				}
-				// Compute diff for file writes and track file changes.
+				// Successful file writes schedule the bounded post-write read and LCS
+				// outside Update. The command owns only the path and pre-write bytes;
+				// raw arguments and entry snapshots are cleared before Update returns.
 				if classifyTool(m.toolEntries[i].Name) == ToolTypeFileWrite && projection.Successful() {
-					afterContent := readFileForDiffAt(m.toolEntries[i].RawArgs, m.agent.WorkDir())
-					m.toolEntries[i].DiffLines = computeDiff(m.toolEntries[i].BeforeContent, afterContent)
-					if path := toolSummary(ToolTypeFileWrite, m.toolEntries[i]); path != "" {
+					path := toolSummary(ToolTypeFileWrite, m.toolEntries[i])
+					if path != "" {
 						if m.fileChanges == nil {
 							m.fileChanges = make(map[string]int)
 						}
 						m.fileChanges[path]++
+					}
+					beforeAvailable := m.toolEntries[i].BeforeSnapshotAvailable || m.toolEntries[i].BeforeContent != ""
+					if diffPath := diffPathFromArgs(m.toolEntries[i].RawArgs); diffPath != "" && beforeAvailable {
+						m.diffGeneration++
+						m.toolEntries[i].DiffPending = true
+						m.toolEntries[i].DiffGeneration = m.diffGeneration
+						diffCmd = buildFileDiffCmd(diffBuildRequest{
+							Generation:      m.diffGeneration,
+							ToolID:          m.toolEntries[i].ID,
+							ToolName:        m.toolEntries[i].Name,
+							Path:            diffPath,
+							WorkDir:         m.agent.WorkDir(),
+							Before:          m.toolEntries[i].BeforeContent,
+							BeforeAvailable: beforeAvailable,
+						})
 					}
 				}
 				// Raw arguments and pre-write snapshots are needed only while the
 				// call is active. Do not retain them in memory or session state.
 				m.toolEntries[i].RawArgs = nil
 				m.toolEntries[i].BeforeContent = ""
+				m.toolEntries[i].BeforeSnapshotAvailable = false
 				break
 			}
 		}
@@ -1621,6 +1679,35 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		if m.toolsPending > 0 {
 			m.toolsPending--
 		}
+		if diffCmd != nil {
+			cmds = append(cmds, diffCmd)
+		}
+		m.viewport.SetContent(m.renderEntries())
+		m.gotoBottomIfFollowing()
+
+	case diffBuildResultMsg:
+		matched := false
+		for i := len(m.toolEntries) - 1; i >= 0; i-- {
+			entry := &m.toolEntries[i]
+			if !toolCallMatches(msg.ToolID, msg.ToolName, entry.ID, entry.Name) ||
+				!entry.DiffPending || entry.DiffGeneration != msg.Generation {
+				continue
+			}
+			entry.DiffPending = false
+			entry.DiffGeneration = 0
+			if msg.Available {
+				// The live card and persisted session share one explicit bound. This
+				// keeps every retained row inspectable while oversized patches end in
+				// a typed omission marker instead of a renderer-only dead end.
+				entry.DiffLines = persistDiffLines(msg.Lines)
+			}
+			matched = true
+			break
+		}
+		if !matched {
+			break
+		}
+		m.invalidateEntryCache()
 		m.viewport.SetContent(m.renderEntries())
 		m.gotoBottomIfFollowing()
 
@@ -1631,6 +1718,15 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		})
 		m.viewport.SetContent(m.renderEntries())
 		m.gotoBottomIfFollowing()
+
+	case CapabilityRouteMsg:
+		if m.state == StateWaiting || m.state == StateStreaming {
+			m.capabilityRoute = nil
+			route := sanitizeCapabilityRoute(msg.Route)
+			if route.Server != "" && route.Tool != "" && route.Phase != "" {
+				m.capabilityRoute = &route
+			}
+		}
 
 	case ErrorMsg:
 		if m.logger != nil {
@@ -1644,6 +1740,8 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		m.gotoBottomIfFollowing()
 
 	case AgentDoneMsg:
+		m.compactingContext = false
+		m.capabilityRoute = nil
 		if m.logger != nil {
 			m.logger.Info("agent done", "eval_tokens", m.evalCount, "err", msg.Err)
 		}
@@ -1955,6 +2053,13 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		// row until the next resize or input event.
 		m.recalcViewportHeight()
 		m.viewport.SetContent(m.renderEntries())
+		if m.startupResumeSelector != nil {
+			selector := *m.startupResumeSelector
+			m.startupResumeSelector = nil
+			if !m.shuttingDown {
+				cmds = append(cmds, m.requestSessionRestore(selector))
+			}
+		}
 
 	case CommandResultMsg:
 		if msg.Text != "" {
@@ -1965,6 +2070,34 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			m.viewport.SetContent(m.renderEntries())
 			m.resumeFollow()
 		}
+
+	case ReadScopeResultMsg:
+		if !m.readScopeOpRunning || msg.Token != m.readScopeOpToken {
+			break
+		}
+		m.readScopeOpRunning = false
+		if !m.shuttingDown {
+			if msg.Err != nil {
+				m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("/scope %s failed: %v", msg.Operation, msg.Err)})
+			} else {
+				var receipt string
+				switch msg.Operation {
+				case "add-read":
+					receipt = fmt.Sprintf("Added process-local read-only root: %s\nWrites remain confined to the working directory.", msg.Path)
+				case "remove-read":
+					receipt = fmt.Sprintf("Removed process-local read-only root: %s", msg.Path)
+				case "clear-read":
+					receipt = fmt.Sprintf("Cleared %d process-local read-only root(s).", msg.Count)
+				default:
+					receipt = "Updated process-local read-only roots."
+				}
+				m.entries = append(m.entries, ChatEntry{Kind: "system", Content: receipt})
+			}
+			m.invalidateEntryCache()
+			m.viewport.SetContent(m.renderEntries())
+			m.gotoBottomIfFollowing()
+		}
+		m.appendShutdownQuit(&cmds)
 
 	case ContextLoadResultMsg:
 		if !m.fileLoading || msg.Token != m.fileOpToken {
@@ -2038,43 +2171,36 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		m.appendShutdownQuit(&cmds)
 
 	case CompletionDebounceTickMsg:
-		if m.isCompletionActive() && m.completionState.DebounceTag == msg.Tag {
-			cs := m.completionState
-			cs.Searching = true
-			query := msg.Query
-			tag := msg.Tag
-			return m, func() tea.Msg {
-				results := m.completer.SearchFiles(context.Background(), query)
-				return CompletionSearchResultMsg{Tag: tag, Results: results}
-			}
+		if m.isCompletionActive() &&
+			m.completionState.Generation == msg.Generation &&
+			m.completionState.DebounceTag == msg.Tag {
+			return m, m.beginCompletionSearch(msg.Generation, msg.Tag, msg.Query, msg.Path)
 		}
 
 	case CompletionSearchResultMsg:
-		if m.isCompletionActive() && m.completionState.DebounceTag == msg.Tag {
+		if m.isCompletionActive() &&
+			m.completionState.Generation == msg.Generation &&
+			m.completionState.DebounceTag == msg.Tag {
+			anchor := m.captureCompletionTranscriptAnchor()
 			cs := m.completionState
 			cs.Searching = false
-			// Merge search results into AllItems, deduplicating by Insert
-			existing := make(map[string]bool)
-			for _, item := range cs.AllItems {
-				existing[item.Insert] = true
-			}
-			for _, result := range msg.Results {
-				if !existing[result.Insert] {
-					cs.AllItems = append(cs.AllItems, result)
-				}
-			}
-			// Re-filter with current query
-			cs.FilteredItems = FilterCompletions(cs.AllItems, cs.Filter.Value())
-			if cs.Index >= len(cs.FilteredItems) {
-				cs.Index = max(0, len(cs.FilteredItems)-1)
-			}
+			cs.SearchCancel = nil
+			replaceCompletionItems(cs, mergeCompletionItems(cs.BaseItems, msg.Results))
 			cmds = append(cmds, m.refreshCompletionPreview())
+			m.recalcViewportHeight()
+			m.restoreCompletionTranscriptAnchor(anchor)
 		}
 
 	case completionPreviewResultMsg:
-		if m.isCompletionActive() && m.completionState.Kind == "attachments" && m.completionState.PreviewToken == msg.Token {
+		if m.isCompletionActive() &&
+			m.completionState.Kind == "attachments" &&
+			m.completionState.Generation == msg.Generation &&
+			m.completionState.PreviewToken == msg.Token {
+			anchor := m.captureCompletionTranscriptAnchor()
 			m.completionState.PreviewCancel = nil
 			m.completionState.Preview = msg.Preview
+			m.recalcViewportHeight()
+			m.restoreCompletionTranscriptAnchor(anchor)
 		}
 
 	case ToolApprovalMsg:
@@ -2159,11 +2285,25 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		m.appendShutdownQuit(&cmds)
 
 	case tea.MouseWheelMsg:
+		// Inline permission requests own wheel input just like document overlays,
+		// but remain in normal layout flow so the transcript stays visible. Scroll
+		// their bounded preview without moving or changing follow intent below it.
+		if m.pendingApproval != nil {
+			if m.approvalState != nil {
+				m.approvalState.Viewport, _ = m.approvalState.Viewport.Update(msg)
+			}
+			return m, nil
+		}
 		// A visible overlay owns pointer input. Scroll document overlays through
 		// their own Bubbles viewports and swallow wheel events for all other
 		// overlays so the hidden transcript cannot move underneath a modal.
 		if m.overlay != OverlayNone {
 			switch m.overlay {
+			case OverlayCortexDecision:
+				if m.cortexDecision != nil {
+					m.cortexDecision.detail, _ = m.cortexDecision.detail.Update(msg)
+					m.cortexDecision.cacheValid = false
+				}
 			case OverlayHelp:
 				m.helpViewport, _ = m.helpViewport.Update(msg)
 			case OverlayRuntimeStatus:
@@ -2193,10 +2333,10 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		return m, nil
 
 	case tea.MouseClickMsg:
-		// Modals are intentionally keyboard-first. Until a child explicitly owns
-		// pointer interaction, clicks are swallowed rather than reaching ToolCards
-		// hidden behind the overlay.
-		if m.overlay != OverlayNone {
+		// Modal and inline decision surfaces are intentionally keyboard-first.
+		// Until a child explicitly owns pointer interaction, clicks are swallowed
+		// rather than reaching ToolCards behind an authority-changing prompt.
+		if m.overlay != OverlayNone || m.pendingApproval != nil {
 			return m, nil
 		}
 		if msg.Button == tea.MouseLeft {
@@ -2272,15 +2412,8 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			// automatic discovery, including reopening for the edited prefix.
 			m.completionSuppressedDraft = ""
 		}
-		if m.state == StateIdle && m.completer != nil && len(newInput) > 0 {
-			first := newInput[0]
-			if (first == '/' || first == '@' || first == '#') && !m.isCompletionActive() && !suppressed {
-				cmds = append(cmds, m.triggerCompletion(newInput))
-			}
-		}
-		// Auto-close if trigger char removed
-		if m.state == StateIdle && m.isCompletionActive() && (len(newInput) == 0 || (newInput[0] != '/' && newInput[0] != '@' && newInput[0] != '#')) {
-			m.closeCompletion()
+		if m.completer != nil && newInput != "" && !m.isCompletionActive() && !suppressed {
+			cmds = append(cmds, m.triggerCompletion(newInput))
 		}
 	}
 
@@ -2367,12 +2500,6 @@ func (m *Model) updateActiveOverlayMessage(msg tea.Msg) tea.Cmd {
 				field.Input, cmd = field.Input.Update(msg)
 				return cmd
 			}
-		}
-	case OverlayApproval:
-		if m.approvalState != nil {
-			var cmd tea.Cmd
-			m.approvalState.Viewport, cmd = m.approvalState.Viewport.Update(msg)
-			return cmd
 		}
 	}
 	return nil
@@ -2587,11 +2714,12 @@ func (m *Model) submitInput() tea.Cmd {
 	}
 	// An ordinary outcome-unknown execution owns the next safety decision. Do
 	// not send the same (or a new) prompt back through Agent just to rediscover
-	// the durable latch and render another error. Preserve the draft and route
-	// Enter to the same read-only inspection used by /recover; only an explicit
-	// evidence commit can release a later provider turn.
+	// the durable latch and render another error. Keep the draft visible and
+	// explain the explicit /recover action; silently replacing Enter with a
+	// five-step wizard makes an ordinary question look swallowed.
 	if m.standaloneRecovery != nil && m.goalRuntime == nil && !strings.HasPrefix(text, "/") {
-		return m.openStandaloneRecovery()
+		m.remindStandaloneRecoveryDraftPreserved()
+		return nil
 	}
 	// A durable Goal Runtime exclusively owns agent turns until it is dropped or
 	// the conversation is reset. Keep ordinary drafts intact and route the user
@@ -2641,6 +2769,7 @@ func (m *Model) submitInput() tea.Cmd {
 
 // buildCommandContext creates a Context for slash command execution.
 func (m *Model) buildCommandContext() *command.Context {
+	artifacts, artifactsTruncated := commandArtifactInfos(m.toolEntries)
 	ctx := &command.Context{
 		Model:              m.model,
 		ModelList:          m.modelList,
@@ -2658,10 +2787,13 @@ func (m *Model) buildCommandContext() *command.Context {
 		SessionTurnCount:   m.sessionTurnCount,
 		NumCtx:             m.numCtx,
 		CurrentModel:       m.model,
+		Artifacts:          artifacts,
+		ArtifactsTruncated: artifactsTruncated,
 		FileChanges:        m.fileChanges,
 	}
 	if m.agent != nil {
 		ctx.ServerNames = m.agent.ServerNames()
+		ctx.ReadRoots = m.agent.ReadRoots()
 	}
 	if m.goalRuntime != nil {
 		if snapshot, err := m.goalRuntime.Snapshot(context.Background()); err == nil {
@@ -2718,6 +2850,58 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 
 	case command.ActionQuit:
 		return m.beginShutdown()
+
+	case command.ActionAddReadRoot, command.ActionRemoveReadRoot, command.ActionClearReadRoots:
+		if m.agent == nil {
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: "/scope is unavailable before the agent is initialized."})
+			m.viewport.SetContent(m.renderEntries())
+			m.resumeFollow()
+			return nil
+		}
+		if m.readScopeOpRunning {
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: "A /scope change is already in progress."})
+			m.viewport.SetContent(m.renderEntries())
+			m.resumeFollow()
+			return nil
+		}
+		operation := "add-read"
+		path := strings.TrimSpace(result.Data)
+		switch result.Action {
+		case command.ActionRemoveReadRoot:
+			operation = "remove-read"
+		case command.ActionClearReadRoots:
+			operation = "clear-read"
+		}
+		if operation != "clear-read" && path == "" {
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("/scope %s: no directory specified", operation)})
+			m.viewport.SetContent(m.renderEntries())
+			m.resumeFollow()
+			return nil
+		}
+		m.readScopeOpToken++
+		token := m.readScopeOpToken
+		m.readScopeOpRunning = true
+		progress := fmt.Sprintf("Updating read-only scope: %s %s", operation, path)
+		if operation == "clear-read" {
+			progress = "Clearing additional read-only roots for this process."
+		}
+		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: strings.TrimSpace(progress)})
+		m.invalidateEntryCache()
+		m.viewport.SetContent(m.renderEntries())
+		m.resumeFollow()
+		agentInstance := m.agent
+		return func() tea.Msg {
+			msg := ReadScopeResultMsg{Token: token, Operation: operation, Path: path}
+			switch operation {
+			case "add-read":
+				msg.Path, msg.Err = agentInstance.AddReadRoot(path)
+			case "remove-read":
+				msg.Path, msg.Err = agentInstance.RemoveReadRoot(path)
+			case "clear-read":
+				msg.Count, msg.Err = agentInstance.ClearReadRoots()
+			}
+			return msg
+		}
 
 	case command.ActionLoadContext:
 		path := strings.TrimSpace(result.Data)
@@ -3068,6 +3252,15 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 		return m.openStandaloneRecovery()
 
 	default:
+		if result.Action != command.ActionNone {
+			m.entries = append(m.entries, ChatEntry{
+				Kind:    "error",
+				Content: fmt.Sprintf("unsupported command action: %d", result.Action),
+			})
+			m.viewport.SetContent(m.renderEntries())
+			m.resumeFollow()
+			return nil
+		}
 		// ActionNone — just show text.
 		if result.Text != "" {
 			m.entries = append(m.entries, ChatEntry{
@@ -3089,6 +3282,10 @@ func (m *Model) resetConversationSession() {
 	m.goalOperationCancel = nil
 	m.goalOperation = ""
 	m.goalOperationRunning = false
+	m.cortexDecision = nil
+	m.cortexDecisionOp = nil
+	m.cortexDecisionAttempt = nil
+	m.cortexDecisionGen++
 	m.standaloneRecovery = nil
 	m.goalOperationToken++
 	m.goalRuntime = nil
@@ -3218,6 +3415,9 @@ func (m *Model) invalidateRenderedCache() {
 // footerHeight returns the total height of the footer area (divider + status + input/hint).
 func (m *Model) footerHeight() int {
 	height := 1 // divider
+	if m.compactCompletionOwnsDivider() {
+		height = 0
+	}
 	if status := m.renderStatusLine(); status != "" {
 		statusRows := lipgloss.Height(status)
 		height += statusRows
@@ -3228,13 +3428,25 @@ func (m *Model) footerHeight() int {
 		}
 	}
 	if m.pendingApproval != nil {
-		// The approval modal owns the visual control surface. Reserve one safety
-		// row even though the footer itself is blank so the terminal's trailing
-		// newline cannot push a minimum-height view past the canvas.
-		return height + 1
+		return height + lipgloss.Height(m.renderApproval())
 	}
 	if m.pendingPaste != nil {
 		return height
+	}
+	if m.overlay == OverlayCortexDecision && m.cortexDecision != nil {
+		return height + lipgloss.Height(m.cortexDecision.View(m.cortexDecisionBusyMarker()))
+	}
+	if m.overlay == OverlayCompletion && m.isCompletionActive() {
+		popup, _ := m.renderCompletionModalView()
+		return height + lipgloss.Height(popup) + m.inputLines
+	}
+	if m.overlay == OverlayPlanForm && m.planFormState != nil {
+		form, _ := m.renderPlanFormView()
+		return height + lipgloss.Height(form)
+	}
+	if m.overlay == OverlayGoalForm && m.goalFormState != nil {
+		form, _ := m.goalFormState.ViewWithCursor()
+		return height + lipgloss.Height(form)
 	}
 	if m.overlay != OverlayNone {
 		return height + m.inputLines
@@ -3375,13 +3587,17 @@ func (m *Model) isCompletionActive() bool {
 }
 
 // newCompletionState creates a CompletionState with the filter textinput initialized.
-func newCompletionState(kind string, items []Completion, multiSelect bool, theme ...bool) *CompletionState {
+func newCompletionState(kind string, items []Completion, multiSelect bool, presentation ...bool) *CompletionState {
 	isDark := true
-	if len(theme) > 0 {
-		isDark = theme[0]
+	reducedMotion := false
+	if len(presentation) > 0 {
+		isDark = presentation[0]
+	}
+	if len(presentation) > 1 {
+		reducedMotion = presentation[1]
 	}
 	ti := textinput.New()
-	ti.SetStyles(semanticTextInputStyles(isDark))
+	ti.SetStyles(semanticTextInputStyles(isDark, reducedMotion))
 	ti.Placeholder = "type to narrow"
 	ti.Prompt = ""
 	ti.Focus()
@@ -3395,6 +3611,7 @@ func newCompletionState(kind string, items []Completion, multiSelect bool, theme
 	return &CompletionState{
 		Kind:          kind,
 		Filter:        ti,
+		BaseItems:     append([]Completion(nil), items...),
 		AllItems:      items,
 		FilteredItems: items,
 		Index:         0,
@@ -3403,76 +3620,69 @@ func newCompletionState(kind string, items []Completion, multiSelect bool, theme
 }
 
 func (m *Model) triggerCompletion(input string) tea.Cmd {
-	var kind string
-	var items []Completion
-	var multiSelect bool
-
-	if strings.HasPrefix(input, "/") {
-		if strings.ContainsAny(strings.TrimPrefix(input, "/"), " \t\n") {
-			return nil
-		}
-		kind = "command"
-		items = m.completer.Complete(input)
-	} else if strings.HasPrefix(input, "@") {
-		kind = "attachments"
-		items = m.completer.Complete(input)
-		multiSelect = true
-	} else if strings.HasPrefix(input, "#") {
-		kind = "skills"
-		items = m.completer.Complete(input)
-		multiSelect = true
+	if m.completer == nil {
+		return nil
 	}
-
-	if len(items) == 0 {
+	cursorRune := utf8.RuneCountInString(input)
+	if input == m.input.Value() {
+		cursorRune = textareaCursorRuneOffset(input, m.input.Line(), m.input.Column())
+	}
+	token, ok := completionTokenAtCursor(input, cursorRune)
+	if !ok {
 		return nil
 	}
 
-	m.completionState = newCompletionState(kind, items, multiSelect, m.isDark)
-	m.completionState.ComposerDraft = input
-	if len(input) > 1 {
-		query := input[1:]
-		m.completionState.Filter.SetValue(query)
-		m.completionState.Filter.CursorEnd()
-		m.completionState.FilteredItems = FilterCompletions(items, query)
+	source := token.Source
+	if source == "" {
+		source = string(token.Anchor.Trigger)
 	}
+	baseItems := m.completer.CompleteStatic(source)
+	filteredItems := FilterCompletions(baseItems, token.Query)
+	if token.CommandPrefix != "" {
+		filteredItems = append([]Completion(nil), baseItems...)
+	}
+	if token.Kind != "attachments" && len(filteredItems) == 0 {
+		return nil
+	}
+
+	anchor := m.captureCompletionTranscriptAnchor()
+	m.completionGeneration++
+	m.completionState = newCompletionState(token.Kind, baseItems, token.Kind != "command", m.isDark, m.reducedMotion)
+	m.completionState.Anchor = token.Anchor
+	m.completionState.CommandPrefix = token.CommandPrefix
+	m.completionState.Generation = m.completionGeneration
+	m.completionState.Filter.SetValue(token.Query)
+	m.completionState.Filter.CursorEnd()
+	m.completionState.FilteredItems = filteredItems
 	m.completionState.Filter.SetWidth(completionFilterInputWidth(m.width))
 	m.completionSuppressedDraft = ""
 	m.overlay = OverlayCompletion
 	m.input.Blur()
-	return m.refreshCompletionPreview()
+	m.recalcViewportHeight()
+	m.restoreCompletionTranscriptAnchor(anchor)
+
+	previewCmd := m.refreshCompletionPreview()
+	if token.Kind == "attachments" {
+		return tea.Batch(previewCmd, m.scheduleCompletionSearch(token.Query, "", false))
+	}
+	return previewCmd
 }
 
 func (m *Model) acceptCompletion() {
 	cs := m.completionState
-	if cs == nil || len(cs.FilteredItems) == 0 {
+	if cs == nil {
 		return
 	}
-
-	isMultiSelect := cs.Kind == "attachments" || cs.Kind == "skills"
-
-	if isMultiSelect {
-		// Collect all selected items (indices reference AllItems)
-		var selectedItems []string
-		for idx := range cs.Selected {
-			if idx < len(cs.AllItems) {
-				selectedItems = append(selectedItems, cs.AllItems[idx].Insert)
-			}
-		}
-
-		// If nothing selected, use current filtered item
-		if len(selectedItems) == 0 && cs.Index < len(cs.FilteredItems) {
-			selectedItems = append(selectedItems, cs.FilteredItems[cs.Index].Insert)
-		}
-
-		m.input.SetValue(strings.Join(selectedItems, " "))
-		m.input.CursorEnd()
-	} else {
-		item := cs.FilteredItems[cs.Index]
-		m.input.SetValue(item.Insert)
-		m.input.CursorEnd()
+	anchorSnapshot := m.captureCompletionTranscriptAnchor()
+	anchor := normalizedCompletionAnchor(cs, m.input.Value())
+	insertion := completionInsertion(cs, completionAnchorSuffixStartsWithSpace(anchor))
+	if insertion == "" {
+		return
 	}
-
+	draft, cursorRune := replaceCompletionAnchor(anchor, insertion)
+	m.setComposerDraftAtRune(draft, cursorRune)
 	m.closeCompletion()
+	m.restoreCompletionTranscriptAnchor(anchorSnapshot)
 }
 
 func (m *Model) toggleCompletionSelection() {
@@ -3502,22 +3712,16 @@ func (m *Model) drillIntoFolder() tea.Cmd {
 		return nil
 	}
 
+	anchor := m.captureCompletionTranscriptAnchor()
 	item := cs.FilteredItems[cs.Index]
-	folderName := strings.TrimSuffix(item.Label, "/")
-
-	if cs.CurrentPath != "" {
-		cs.CurrentPath += "/" + folderName
-	} else {
-		cs.CurrentPath = folderName
-	}
-
-	// Get new directory contents
-	fileItems := m.completer.CompleteFilePath(cs.CurrentPath)
-	cs.AllItems = fileItems
+	cs.CurrentPath = strings.Trim(strings.TrimPrefix(completionItemPath(item), "@"), "/")
+	cs.BaseItems = nil
 	cs.Filter.SetValue("")
-	cs.FilteredItems = fileItems
+	replaceCompletionItems(cs, nil)
 	cs.Index = 0
-	return m.refreshCompletionPreview()
+	m.recalcViewportHeight()
+	m.restoreCompletionTranscriptAnchor(anchor)
+	return tea.Batch(m.refreshCompletionPreview(), m.scheduleCompletionSearch("", cs.CurrentPath, false))
 }
 
 // drillUpFolder navigates to the parent folder in the @ completion modal.
@@ -3527,6 +3731,7 @@ func (m *Model) drillUpFolder() tea.Cmd {
 		return nil
 	}
 
+	anchor := m.captureCompletionTranscriptAnchor()
 	// Pop last segment
 	if idx := strings.LastIndex(cs.CurrentPath, "/"); idx >= 0 {
 		cs.CurrentPath = cs.CurrentPath[:idx]
@@ -3534,30 +3739,38 @@ func (m *Model) drillUpFolder() tea.Cmd {
 		cs.CurrentPath = ""
 	}
 
-	// Re-list
-	var items []Completion
 	if cs.CurrentPath == "" {
-		// Back to root — show agents + files
-		items = m.completer.Complete("@")
+		cs.BaseItems = m.completer.CompleteStatic("@")
 	} else {
-		items = m.completer.CompleteFilePath(cs.CurrentPath)
+		cs.BaseItems = nil
 	}
-
-	cs.AllItems = items
 	cs.Filter.SetValue("")
-	cs.FilteredItems = items
+	replaceCompletionItems(cs, append([]Completion(nil), cs.BaseItems...))
 	cs.Index = 0
-	return m.refreshCompletionPreview()
+	m.recalcViewportHeight()
+	m.restoreCompletionTranscriptAnchor(anchor)
+	return tea.Batch(m.refreshCompletionPreview(), m.scheduleCompletionSearch("", cs.CurrentPath, false))
 }
 
 func (m *Model) closeCompletion() {
-	if m.completionState != nil && m.completionState.PreviewCancel != nil {
-		m.completionState.PreviewCancel()
+	anchor := m.captureCompletionTranscriptAnchor()
+	if m.completionState != nil {
+		if m.completionState.SearchCancel != nil {
+			m.completionState.SearchCancel()
+		}
+		if m.completionState.PreviewCancel != nil {
+			m.completionState.PreviewCancel()
+		}
 	}
+	m.completionGeneration++
 	m.completionState = nil
 	m.clearCompletionSuppression()
 	m.overlay = OverlayNone
-	m.input.Focus()
+	if m.composerEditable() {
+		m.input.Focus()
+	}
+	m.recalcViewportHeight()
+	m.restoreCompletionTranscriptAnchor(anchor)
 }
 
 func (m *Model) clearCompletionSuppression() {
@@ -3569,37 +3782,37 @@ func (m *Model) clearCompletionSuppression() {
 // that exact draft is unchanged; editing it or pressing Tab can reopen the
 // completion surface.
 func (m *Model) dismissCompletion() {
-	draft := m.completionDraft()
+	anchorSnapshot := m.captureCompletionTranscriptAnchor()
+	draft, cursorRune := m.completionDraftAndCursor()
 	m.closeCompletion()
-	m.input.SetValue(draft)
-	m.input.CursorEnd()
-	m.syncInputHeight()
+	m.setComposerDraftAtRune(draft, cursorRune)
 	m.completionSuppressedDraft = draft
+	m.restoreCompletionTranscriptAnchor(anchorSnapshot)
 }
 
-func (m *Model) completionDraft() string {
+func (m *Model) completionDraftAndCursor() (string, int) {
 	cs := m.completionState
 	if cs == nil {
-		return m.input.Value()
+		draft := m.input.Value()
+		return draft, textareaCursorRuneOffset(draft, m.input.Line(), m.input.Column())
 	}
 
-	query := cs.Filter.Value()
+	anchor := normalizedCompletionAnchor(cs, m.input.Value())
+	prefix := string(anchor.Trigger)
+	if cs.CommandPrefix != "" {
+		prefix = cs.CommandPrefix
+	}
+	query := prefix + cs.Filter.Value()
+	queryCursorRune := utf8.RuneCountInString(prefix) + cs.Filter.Position()
 	switch cs.Kind {
-	case "command":
-		return "/" + query
-	case "skills":
-		return "#" + query
 	case "attachments":
 		if cs.CurrentPath != "" {
-			return "@" + strings.Trim(cs.CurrentPath, "/") + "/" + query
+			prefix := "@" + strings.Trim(cs.CurrentPath, "/") + "/"
+			query = prefix + cs.Filter.Value()
+			queryCursorRune = utf8.RuneCountInString(prefix) + cs.Filter.Position()
 		}
-		return "@" + query
-	default:
-		if cs.ComposerDraft != "" {
-			return cs.ComposerDraft
-		}
-		return m.input.Value()
 	}
+	return replaceCompletionAnchorAt(anchor, query, queryCursorRune)
 }
 
 // sendToAgent sends a message to the agent, setting mode context first.
@@ -3629,7 +3842,15 @@ func (m *Model) sendGoalToAgentTurn(text, turnID string, limits agent.TurnLimits
 	return m.sendToAgentTurnPresentedWithMode(text, turnID, false, limits, ModeAuto)
 }
 
+func (m *Model) sendGoalToAgentTurnWithCapability(text, turnID string, limits agent.TurnLimits, capability agent.CapabilityActivity) tea.Cmd {
+	return m.sendToAgentTurnPresentedWithCapability(text, turnID, false, limits, ModeAuto, capability)
+}
+
 func (m *Model) sendToAgentTurnPresentedWithMode(text, turnID string, visible bool, limits agent.TurnLimits, authority Mode) tea.Cmd {
+	return m.sendToAgentTurnPresentedWithCapability(text, turnID, visible, limits, authority, agent.CapabilityActivity{})
+}
+
+func (m *Model) sendToAgentTurnPresentedWithCapability(text, turnID string, visible bool, limits agent.TurnLimits, authority Mode, capability agent.CapabilityActivity) tea.Cmd {
 	m.cancelSessionLoad()
 	m.cancelSessionList()
 	messagesBeforeTurn := m.agent.Messages()
@@ -3662,6 +3883,7 @@ func (m *Model) sendToAgentTurnPresentedWithMode(text, turnID string, visible bo
 	m.promptTokens = 0
 	m.turnEvalTotal = 0
 	m.turnPromptTotal = 0
+	m.capabilityRoute = nil
 
 	if visible {
 		m.entries = append(m.entries, ChatEntry{
@@ -3742,8 +3964,10 @@ func (m *Model) sendToAgentTurnPresentedWithMode(text, turnID string, visible bo
 	})
 
 	runAgent := func() tea.Msg {
-		adapter := NewAdapter(p)
-		err := m.agent.RunTurnWithLimits(ctx, adapter, turnID, limits)
+		adapter := NewAdapter(p, m.agent.WorkDir())
+		err := m.agent.RunTurnWithOptions(ctx, adapter, turnID, agent.TurnOptions{
+			Limits: limits, Capability: capability,
+		})
 		return AgentDoneMsg{TurnID: turnID, Err: err}
 	}
 
@@ -4111,19 +4335,32 @@ func (m *Model) closeModelPicker() {
 	m.closeOverlayToParent()
 }
 
-// openPlanForm shows the plan form pre-filled with the given task text.
+// openPlanForm gives the inline Plan form temporary composer ownership.
 func (m *Model) openPlanForm(task string) {
-	m.planFormState = NewPlanFormState(task)
+	anchor := m.captureInlineFormTranscriptAnchor()
+	if !m.prepareInlineFormOpen() {
+		return
+	}
+	m.planFormState = NewPlanFormState(task, m.isDark, m.reducedMotion)
 	m.restylePickerOverlays()
 	m.overlay = OverlayPlanForm
 	m.input.Blur()
+	m.refreshInlineFormLayout(anchor)
 }
 
-// closePlanForm dismisses the plan form and returns focus to input.
+// closePlanForm releases composer ownership without changing its saved draft.
 func (m *Model) closePlanForm() {
+	anchor := m.captureInlineFormTranscriptAnchor()
 	m.planFormState = nil
-	m.overlay = OverlayNone
-	m.input.Focus()
+	if m.overlay == OverlayPlanForm {
+		m.overlay = OverlayNone
+	}
+	if m.composerEditable() {
+		m.input.Focus()
+	} else {
+		m.input.Blur()
+	}
+	m.refreshInlineFormLayout(anchor)
 }
 
 // submitPlanFormPrompt sends the assembled plan prompt to the agent.

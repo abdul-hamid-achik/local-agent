@@ -99,6 +99,17 @@ func (a *Agent) buildApprovalPreview(ctx context.Context, tc llm.ToolCall, argum
 		}
 		return raw
 	}
+	readablePathArg := func(key string) string {
+		raw, _ := tc.Arguments[key].(string)
+		if raw == "" {
+			return ""
+		}
+		resolved, err := a.resolveReadablePath(raw)
+		if err == nil {
+			return resolved.absolute
+		}
+		return raw
+	}
 
 	switch tc.Name {
 	case "write":
@@ -144,7 +155,7 @@ func (a *Agent) buildApprovalPreview(ctx context.Context, tc llm.ToolCall, argum
 		preview.Command, _ = tc.Arguments["command"].(string)
 	case "copy":
 		preview.Kind = permissionpkg.PreviewFilesystem
-		preview.SourcePath = pathArg("source", false)
+		preview.SourcePath = readablePathArg("source")
 		preview.DestinationPath = pathArg("destination", false)
 	case "move":
 		preview.Kind = permissionpkg.PreviewFilesystem

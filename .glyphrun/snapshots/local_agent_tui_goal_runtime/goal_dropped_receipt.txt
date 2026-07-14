@@ -1,3 +1,7 @@
+                                  LOCAL AGENT
+                 Local-first · Ollama · tool effects ask first
+                          AUTO · qwen3.5:2b · offline
+              enter send · / commands · ctrl+p settings · ? help
        ╭────────────────────────────────────────────────────────────────╮
        │ Goal inspector · 0/1 verified                                  │
        │ × dropped · Ship a polished goal UI                            │
@@ -20,3 +24,7 @@
        │   Unavailable · Only an active goal can be paused.             │
        │ esc close · ←/→ action · enter select · j/k scroll             │
        ╰────────────────────────────────────────────────────────────────╯
+
+
+───────────────────────────────────────────────────────────────────────────────
+ [ AUTO ] · × dropped · Ship a polis… · 0/8 auto turns · 0/12k tok · qwen3.5:2b

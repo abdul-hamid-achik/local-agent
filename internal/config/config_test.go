@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestDefaults(t *testing.T) {
 	cfg := defaults()
@@ -94,6 +97,12 @@ func TestValidate(t *testing.T) {
 	}
 
 	c := base()
+	c.SkillsDir = "~/.config/local-agent/skills"
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "skills_dir is no longer supported") {
+		t.Fatalf("retired skills_dir error = %v", err)
+	}
+
+	c = base()
 	c.Ollama.Model = ""
 	if err := c.Validate(); err == nil {
 		t.Error("empty model should fail validation")

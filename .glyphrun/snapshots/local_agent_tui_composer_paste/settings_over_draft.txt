@@ -17,7 +17,7 @@
                │   Open a saved workspace session                         │
                │   Compact layout · Auto                                  │
                │   Toggle the explicit compact transcript preference      │
-               │   Runtime status · 0 servers · 19 tools                  │
+               │   Runtime status · 0 servers · 20 tools                  │
                │   Inspect local model, tools, servers, and failures      │
                │   Help · Shortcuts                                       │
                │   Keyboard reference and slash commands                  │

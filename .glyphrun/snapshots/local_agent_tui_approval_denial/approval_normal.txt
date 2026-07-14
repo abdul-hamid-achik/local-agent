@@ -4,23 +4,24 @@
   assistant ─────────────────────────────────────────────────────────────────────
   │ Thinking… · Checking workspace policy before the write.
 
- ╭──────────────────────────────────────────────────────────────────────────────────────╮
- │ Permission · write                                                                   │
- │ Action     Write 19 B                                                                │
- │ Target     /Users/abdulachik/projects/local-agent/.glyphrun/tmp/approval-workdir/app │
- │            roval-probe.txt                                                           │
- │ Scope      This exact request · current Agent session                                │
- │ Request    80109752db71                                                              │
- │                                                                                      │
- │ Proposed change                                                                      │
- │ -                                                                                    │
- │ +must not be written                                                                 │
- │                                                                                      │
- │ esc cancel · y once · s session · n deny · d arguments · j/k scroll                  │
- ╰──────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
 
 
 
 
 
 ─────────────────────────────────────────────────────────────────────────────────────────
+  ◇ Permission · write · NORMAL
+  Action     Write 19 B
+  Target     /Users/abdulachik/projects/local-agent/.glyphrun/tmp/approval-workdir/approv
+             al-probe.txt
+  Scope      Identical request only · current Agent session
+  Request    80109752db71
+
+  Proposed change
+  -
+  › n deny ·   y once ·   s identical request · current session
+  esc cancel · enter select · ↑/↓/j/k move · d arguments · pgup/dn scroll

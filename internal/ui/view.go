@@ -32,46 +32,88 @@ func (m *Model) View() tea.View {
 	var viewCursor *tea.Cursor
 	content.WriteString(m.viewport.View())
 	content.WriteString("\n")
-	content.WriteString(m.styles.Divider.Render(rule(paneWidth)))
-	content.WriteString("\n")
-
-	if status := m.renderStatusLine(); status != "" {
-		content.WriteString(status)
+	if !m.compactCompletionOwnsDivider() {
+		content.WriteString(m.styles.Divider.Render(rule(paneWidth)))
 		content.WriteString("\n")
 	}
 
-	// Ordinary turns keep the composer available so the next instruction can be
-	// drafted while work continues. Owned operations and a queued follow-up use
-	// the compact liveness line until authority returns to the textarea.
-	if m.pendingApproval != nil || m.pendingPaste != nil {
-		// The status prompt above owns the footer until the user answers.
-	} else if m.overlay != OverlayNone {
-		// Preserve the composer's row allocation behind transparent overlays so
-		// opening a modal never shifts the transcript or its centered position.
-		input := m.input
-		input.SetVirtualCursor(false)
-		content.WriteString(strings.Repeat("\n", max(0, lipgloss.Height(input.View())-1)))
-	} else if m.queuedFollowUp != nil {
-		// The queue owns one stable footer row until it dispatches, is restored
-		// after failure, or the user edits/clears it. Never hide pending input in
-		// model state with no visible recovery path.
-		content.WriteString(m.renderQueuedFollowUp())
-	} else if m.composerEditable() {
-		// Render a local copy with Bubbles' virtual cursor disabled. The same
-		// copy supplies the one real cursor owned by this top-level view.
-		input := m.input
-		if m.state != StateIdle {
-			input.Placeholder = "Write a follow-up · enter queue"
+	// Permission requests replace the composer in-flow. They deliberately do
+	// not use overlayOnContent: the transcript stays visible, code keeps the
+	// terminal width, and the decision reads as the next conversational action.
+	if m.pendingApproval != nil {
+		content.WriteString(m.renderApproval())
+	} else {
+		if status := m.renderStatusLine(); status != "" {
+			content.WriteString(status)
+			content.WriteString("\n")
 		}
-		input.SetVirtualCursor(false)
-		inputView := input.View()
-		composerY := strings.Count(content.String(), "\n")
-		content.WriteString(inputView)
-		viewCursor = offsetCursor(input.Cursor(), 0, composerY)
+
+		// Ordinary turns keep the composer available so the next instruction can be
+		// drafted while work continues. Owned operations and a queued follow-up use
+		// the compact liveness line until authority returns to the textarea.
+		if m.pendingPaste != nil {
+			// The status prompt above owns the footer until the user answers.
+		} else if m.overlay == OverlayCortexDecision && m.cortexDecision != nil {
+			// Human decisions are full-width composer owners. They remain below the
+			// visible transcript and never mask it with an overlay.
+			content.WriteString(m.cortexDecision.View(m.cortexDecisionBusyMarker()))
+		} else if m.overlay == OverlayCompletion && m.isCompletionActive() {
+			// Completion is owned by the composer: the popup sits immediately above
+			// the unchanged textarea, and only its Bubbles filter owns the terminal
+			// cursor. Keeping the draft visible makes the replacement span legible.
+			popupY := strings.Count(content.String(), "\n")
+			popup, popupCursor := m.renderCompletionModalView()
+			content.WriteString(popup)
+			content.WriteString("\n")
+			input := m.input
+			input.SetVirtualCursor(false)
+			content.WriteString(input.View())
+			viewCursor = offsetCursor(popupCursor, 0, popupY)
+		} else if m.overlay == OverlayPlanForm && m.planFormState != nil {
+			// Structured planning temporarily owns the composer rows. The transcript
+			// remains immediately above this full-width inline form.
+			formY := strings.Count(content.String(), "\n")
+			form, formCursor := m.renderPlanFormView()
+			content.WriteString(form)
+			viewCursor = offsetCursor(formCursor, 0, formY)
+		} else if m.overlay == OverlayGoalForm && m.goalFormState != nil {
+			// Goal definition follows the same composer contract as Plan: one typed
+			// inline owner, no transcript mask, and one translated Bubbles cursor.
+			formY := strings.Count(content.String(), "\n")
+			form, formCursor := m.goalFormState.ViewWithCursor()
+			content.WriteString(form)
+			viewCursor = offsetCursor(formCursor, 0, formY)
+		} else if m.overlay != OverlayNone {
+			// Preserve the composer's row allocation behind centered overlays so the
+			// transcript does not shift when transient navigation opens.
+			input := m.input
+			input.SetVirtualCursor(false)
+			content.WriteString(strings.Repeat("\n", max(0, lipgloss.Height(input.View())-1)))
+		} else if m.queuedFollowUp != nil {
+			// The queue owns one stable footer row until it dispatches, is restored
+			// after failure, or the user edits/clears it. Never hide pending input in
+			// model state with no visible recovery path.
+			content.WriteString(m.renderQueuedFollowUp())
+		} else if m.composerEditable() {
+			// Render a local copy with Bubbles' virtual cursor disabled. The same
+			// copy supplies the one real cursor owned by this top-level view.
+			input := m.input
+			if m.state != StateIdle {
+				input.Placeholder = "Write a follow-up · enter queue"
+			}
+			input.SetVirtualCursor(false)
+			inputView := input.View()
+			composerY := strings.Count(content.String(), "\n")
+			content.WriteString(inputView)
+			viewCursor = offsetCursor(input.Cursor(), 0, composerY)
+		}
 	}
 
-	// Render overlays on top (centered modal) using overlayOnContent
-	if m.overlay != OverlayNone {
+	// Infrequent controls remain centered overlays. Composer-owned completion,
+	// Plan, and Goal surfaces were already rendered in the normal footer flow.
+	if m.overlay != OverlayNone && m.overlay != OverlayCompletion &&
+		m.overlay != OverlayCortexDecision &&
+		m.overlay != OverlayPlanForm && m.overlay != OverlayGoalForm {
 		var overlay string
 		var localCursor *tea.Cursor
 		// Every overlay suppresses the underlying composer cursor. Text-entry
@@ -80,10 +122,6 @@ func (m *Model) View() tea.View {
 		switch m.overlay {
 		case OverlayHelp:
 			overlay = m.renderHelpOverlay(m.width)
-		case OverlayCompletion:
-			if m.isCompletionActive() {
-				overlay, localCursor = m.renderCompletionModalView()
-			}
 		case OverlayModelPicker:
 			if m.modelPickerState != nil {
 				overlay = m.renderModelPicker()
@@ -94,14 +132,6 @@ func (m *Model) View() tea.View {
 			overlay = m.renderModelDetails()
 		case OverlayModelPull:
 			overlay, localCursor = m.renderModelPull()
-		case OverlayPlanForm:
-			if m.planFormState != nil {
-				overlay, localCursor = m.renderPlanFormView()
-			}
-		case OverlayGoalForm:
-			if m.goalFormState != nil {
-				overlay, localCursor = m.goalFormState.ViewWithCursor()
-			}
 		case OverlaySessionsPicker:
 			if m.sessionsPickerState != nil {
 				overlay = m.renderSessionsPicker()
@@ -122,8 +152,6 @@ func (m *Model) View() tea.View {
 			if m.goalRecoveryState != nil {
 				overlay, localCursor = m.goalRecoveryState.ViewWithCursor()
 			}
-		case OverlayApproval:
-			overlay = m.renderApproval()
 		}
 		if overlay != "" {
 			base := content.String()
@@ -188,25 +216,49 @@ func (m *Model) renderCompletionModalView() (string, *tea.Cursor) {
 	filter := cs.Filter
 	filter.SetVirtualCursor(false)
 	filter.SetWidth(completionFilterInputWidth(m.width))
+	popupRows := completionPopupHeight(m.height, m.inputLines)
+	// Border rows plus the one-line key footer live outside the content body.
+	contentRows := max(2, popupRows-3)
+	showTitle := contentRows >= 3
+	showDivider := contentRows >= 5
+	fixedRows := 1 // filter
+	if showTitle {
+		fixedRows++
+	}
+	if showDivider {
+		fixedRows++
+	}
+	remainingRows := max(1, contentRows-fixedRows)
+	previewRows := 0
+	if cs.Kind == "attachments" && remainingRows >= 2 {
+		previewRows = min(6, max(1, (remainingRows+1)/2))
+	}
+	itemRows := max(1, remainingRows-previewRows)
 
 	var b strings.Builder
 
-	// Title
-	var title string
-	switch cs.Kind {
-	case "command":
-		title = "Commands"
-	case "attachments":
-		title = "Attach Files & Agents"
-	case "skills":
-		title = "Skills"
-	default:
-		title = "Complete"
+	if showTitle {
+		var title string
+		switch cs.Kind {
+		case "command":
+			title = "Commands"
+		case "attachments":
+			title = "Attach Files & Agents"
+		case "skills":
+			title = "Skills"
+		default:
+			title = "Complete"
+		}
+		if cs.Kind == "attachments" && cs.CurrentPath != "" {
+			title += " · " + sanitizeTerminalSingleLine(cs.CurrentPath) + "/"
+		}
+		if cs.Searching {
+			title += " · searching…"
+		}
+		b.WriteString(m.styles.OverlayTitle.Render(truncateDisplay(title, contentW)))
+		b.WriteString("\n")
 	}
-	b.WriteString(m.styles.OverlayTitle.Render(truncateDisplay(title, contentW)))
-	b.WriteString("\n")
 
-	// Filter input
 	filterY := strings.Count(b.String(), "\n")
 	b.WriteString(m.styles.FocusIndicator.Render(completionFilterPrompt))
 	filterX := lipgloss.Width(completionFilterPrompt)
@@ -214,41 +266,32 @@ func (m *Model) renderCompletionModalView() (string, *tea.Cursor) {
 	b.WriteString("\n")
 	filterCursor := offsetCursor(filter.Cursor(), filterX, filterY)
 
-	// Breadcrumb for @ file browsing
-	if cs.Kind == "attachments" && cs.CurrentPath != "" {
-		breadcrumb := sanitizeTerminalSingleLine(cs.CurrentPath) + "/"
-		b.WriteString(m.styles.CompletionCategory.Render(truncateDisplay(breadcrumb, contentW)))
+	if showDivider {
+		b.WriteString(m.styles.FocusIndicator.Render(strings.Repeat("─", contentW)))
 		b.WriteString("\n")
 	}
 
-	// Divider
-	b.WriteString(m.styles.FocusIndicator.Render(strings.Repeat("─", contentW)))
-	b.WriteString("\n")
-
-	// Scrollable items (max 10 visible)
-	fixedRows := 6 // title, filter, divider, footer, and border rows
-	if cs.Kind == "attachments" && cs.CurrentPath != "" {
-		fixedRows++
-	}
-	if cs.Searching {
-		fixedRows++
-	}
-	previewRows := completionPreviewRowBudget(m.height, cs)
-	fixedRows += previewRows
-	maxVisible := min(10, max(1, m.height-fixedRows))
 	items := cs.FilteredItems
 	if len(items) == 0 {
-		b.WriteString(m.styles.CompletionCategory.Render("  (no matches)"))
-		b.WriteString("\n")
-	} else {
-		// Calculate scroll window
-		start := 0
-		if cs.Index >= maxVisible {
-			start = cs.Index - maxVisible + 1
+		empty := "  (no matches)"
+		if cs.Searching {
+			empty = "  (searching…)"
 		}
-		end := start + maxVisible
+		b.WriteString(m.styles.CompletionCategory.Render(truncateDisplay(empty, contentW)))
+		b.WriteString("\n")
+		for row := 1; row < itemRows; row++ {
+			b.WriteString(strings.Repeat(" ", contentW))
+			b.WriteString("\n")
+		}
+	} else {
+		start := 0
+		if cs.Index >= itemRows {
+			start = cs.Index - itemRows + 1
+		}
+		end := start + itemRows
 		if end > len(items) {
 			end = len(items)
+			start = max(0, end-itemRows)
 		}
 
 		for i := start; i < end; i++ {
@@ -298,16 +341,26 @@ func (m *Model) renderCompletionModalView() (string, *tea.Cursor) {
 			}
 			b.WriteString("\n")
 		}
+		for row := end - start; row < itemRows; row++ {
+			b.WriteString(strings.Repeat(" ", contentW))
+			b.WriteString("\n")
+		}
 	}
 
-	// Searching indicator
-	if cs.Searching {
-		b.WriteString(m.styles.CompletionSearching.Render(truncateDisplay("  searching...", contentW)))
-		b.WriteString("\n")
-	}
-	if preview := m.renderCompletionPreview(contentW, previewRows); preview != "" {
-		b.WriteString(preview)
-		b.WriteString("\n")
+	if previewRows > 0 {
+		preview := m.renderCompletionPreview(contentW, previewRows)
+		lines := strings.Split(preview, "\n")
+		if preview == "" {
+			lines = nil
+		}
+		for row := 0; row < previewRows; row++ {
+			if row < len(lines) {
+				b.WriteString(lines[row])
+			} else {
+				b.WriteString(strings.Repeat(" ", contentW))
+			}
+			b.WriteString("\n")
+		}
 	}
 
 	// Footer hints use the same priority grammar as every other modal.
@@ -325,12 +378,52 @@ func (m *Model) renderCompletionModalView() (string, *tea.Cursor) {
 	return m.renderPickerFrame(b.String(), 60, m.renderKeyHints(contentW, hints...)), pickerFrameCursor(filterCursor)
 }
 
+func completionPopupHeight(terminalHeight, inputLines int) int {
+	if terminalHeight <= 0 {
+		terminalHeight = 24
+	}
+	inputLines = max(1, inputLines)
+	// Prefer two visible transcript rows. Multiline drafts may borrow one of
+	// them at the supported minimum size so the popup and full textarea remain
+	// visible together.
+	available := terminalHeight - 1 - inputLines - 2 // divider + transcript
+	if available < 5 {
+		available = terminalHeight - 1 - inputLines - 1
+	}
+	return min(15, max(5, available))
+}
+
+// At the minimum height with a five-line draft, the popup's top border is the
+// transcript/composer boundary. Omitting the redundant rule preserves one
+// transcript row plus the top-level terminal safety row without hiding draft
+// lines or completion controls.
+func (m *Model) compactCompletionOwnsDivider() bool {
+	return m.overlay == OverlayCompletion &&
+		m.isCompletionActive() &&
+		completionPopupHeight(m.height, m.inputLines) == 5
+}
+
 // renderStatusLine builds the status bar above the input/hint area.
 func (m *Model) renderStatusLine() string {
 	paneW := m.chatPaneWidth()
-	// Approval is a scrollable modal. Keep the footer blank so exact arguments
-	// are not duplicated into the transcript layer behind that modal.
+	// Approval owns the complete inline composer surface and is rendered by
+	// View, so the ordinary status line stays quiet behind it.
 	if m.pendingApproval != nil {
+		return ""
+	}
+	// Completion uses the full composer-owned footer budget for the popup and
+	// the still-visible draft; its own key footer carries the active guidance.
+	if m.overlay == OverlayCompletion && m.isCompletionActive() {
+		return ""
+	}
+	// The Cortex decision frame carries its own state and key guidance, including
+	// in-flight liveness, so no competing working/status footer is rendered.
+	if m.cortexDecisionActive() {
+		return ""
+	}
+	// Structured Plan and Goal editing own the same footer region. Their field
+	// labels and key footer are the complete active status while open.
+	if m.inlineFormActive() {
 		return ""
 	}
 
@@ -575,10 +668,6 @@ func formatTokens(n int) string {
 // renderEntries builds the full chat content for the viewport.
 // Uses an incremental cache: during streaming, only the streaming tail is
 // re-rendered while the entries prefix is reused from cache.
-// maxChatContentWidth caps how wide chat text wraps, so prose stays readable
-// on very wide terminals instead of spanning the whole screen.
-const maxChatContentWidth = 120
-
 // entriesFromMessages rebuilds the visible chat transcript from a restored
 // agent message history. User and assistant text become chat entries; tool
 // messages are omitted from the visual (they remain in the agent's context for
@@ -612,7 +701,7 @@ func (m *Model) renderEntries() string {
 			break
 		}
 	}
-	if !hasUserMsg && !m.hasLiveTurn() {
+	if !hasUserMsg && !m.hasVisibleLiveTurn() {
 		var b strings.Builder
 		m.renderWelcome(&b)
 		hasNotice := false
@@ -644,14 +733,18 @@ func (m *Model) renderEntries() string {
 	// the cached prefix and only re-render the streaming tail.
 	if m.entryCacheValid && len(m.entries) == m.cachedEntryCount {
 		m.toolHitRegions = append(m.toolHitRegions[:0], m.cachedToolHitRegions...)
-		if m.hasLiveTurn() {
+		if m.hasVisibleLiveTurn() {
 			var b strings.Builder
 			b.WriteString(m.cachedEntriesRender)
 			if m.cachedEntriesRender != "" && len(m.entries) > 0 {
 				last := m.entries[len(m.entries)-1]
 				b.WriteString(transcriptEntrySeparator(last.Kind, "assistant"))
 			}
-			m.renderStreamingMsg(&b, m.streamBuf.String(), contentW, !assistantTurnStarted(m.entries))
+			if m.hasLiveTurnContent() {
+				m.renderStreamingMsg(&b, m.streamBuf.String(), contentW, !assistantTurnStarted(m.entries))
+			} else {
+				m.renderInlineTurnActivity(&b, m.inlineTurnActivity(), contentW, !assistantTurnStarted(m.entries))
+			}
 			return b.String()
 		}
 		return m.cachedEntriesRender
@@ -714,19 +807,64 @@ func (m *Model) renderEntries() string {
 	m.cachedToolHitRegions = append(m.cachedToolHitRegions[:0], m.toolHitRegions...)
 	m.entryCacheValid = true
 
-	// Render current streaming content (plain text, no Glamour).
-	if m.hasLiveTurn() {
+	// Render current streaming content (plain text, no Glamour). Provider calls
+	// can legitimately produce no tokens while compacting, awaiting permission,
+	// or continuing after a tool receipt. Keep that phase next to the last
+	// transcript event instead of making the user scan a tall blank viewport for
+	// the footer.
+	if m.hasLiveTurnContent() {
 		if renderedAny {
 			b.WriteString(transcriptEntrySeparator(previousKind, "assistant"))
 		}
 		m.renderStreamingMsg(&b, m.streamBuf.String(), contentW, !assistantStarted)
+	} else if label := m.inlineTurnActivity(); label != "" {
+		if renderedAny {
+			b.WriteString(transcriptEntrySeparator(previousKind, "assistant"))
+		}
+		m.renderInlineTurnActivity(&b, label, contentW, !assistantStarted)
 	}
 
 	return b.String()
 }
 
 func (m *Model) hasLiveTurn() bool {
+	return m.hasLiveTurnContent()
+}
+
+func (m *Model) hasVisibleLiveTurn() bool {
+	return m.hasLiveTurnContent() || m.inlineTurnActivity() != ""
+}
+
+func (m *Model) hasLiveTurnContent() bool {
 	return strings.TrimSpace(m.streamBuf.String()) != "" || strings.TrimSpace(m.thinkBuf.String()) != ""
+}
+
+func (m *Model) inlineTurnActivity() string {
+	if m == nil || m.hasLiveTurnContent() || m.toolsPending > 0 {
+		return ""
+	}
+	if m.pendingApproval != nil {
+		return "Waiting for permission below…"
+	}
+	if m.compactingContext {
+		return "Preparing context…"
+	}
+	if m.state == StateWaiting || m.state == StateStreaming {
+		return "Waiting for model…"
+	}
+	return ""
+}
+
+func (m *Model) renderInlineTurnActivity(b *strings.Builder, label string, contentW int, showHeader bool) {
+	label = sanitizeTerminalSingleLine(label)
+	if label == "" {
+		return
+	}
+	if showHeader {
+		m.renderAssistantHeader(b, contentW)
+	}
+	b.WriteString(indentBlock(m.styles.StreamHint.Render(label), "  "))
+	b.WriteString("\n")
 }
 
 // assistantTurnStarted reports whether the current user turn already owns an
@@ -973,7 +1111,7 @@ func (m *Model) renderToolGroup(b *strings.Builder, toolIdx int) {
 		availableWidth := max(4, m.chatPaneWidth()-4)
 		cardView := card.View(availableWidth)
 		if card.State == ToolCardRunning {
-			glyph := "•"
+			glyph := "…"
 			if !m.reducedMotion {
 				glyph = m.spin.View()
 			}
@@ -983,8 +1121,15 @@ func (m *Model) renderToolGroup(b *strings.Builder, toolIdx int) {
 			}
 			cardView = card.ViewWithActivity(availableWidth, glyph, elapsed)
 		}
-		if card.Expanded && card.State != ToolCardRunning && len(te.DiffLines) > 0 {
-			diffView := strings.TrimRight(renderDiffAtWidth(te.DiffLines, m.styles, 30, availableWidth), "\n")
+		if card.Expanded && card.State != ToolCardRunning {
+			var diffView string
+			if te.DiffPending {
+				diffView = renderDiffLoadingAtWidth(te.Summary, m.styles, availableWidth)
+			} else if len(te.DiffLines) > 0 {
+				diffView = strings.TrimRight(
+					renderUnifiedDiffAtWidth(te.Summary, te.DiffLines, m.styles, 0, availableWidth), "\n",
+				)
+			}
 			if diffView != "" {
 				cardView += "\n" + diffView
 			}
@@ -996,12 +1141,54 @@ func (m *Model) renderToolGroup(b *strings.Builder, toolIdx int) {
 		// Fallback to basic rendering if no card exists
 		tt := classifyTool(te.Name)
 		toolName := safeToolIdentifier(te.Name)
+		projectedState := toolCardStateFromProjection(te.Projection)
+		if te.Status == ToolStatusDone && projectedState != ToolCardSuccess {
+			// A missing live/restored card must not erase the bounded semantic
+			// projection. In particular, transport success with an unknown domain
+			// outcome remains attention-colored instead of falling through to the
+			// legacy green completion receipt.
+			kind := ToolCardGeneric
+			switch tt {
+			case ToolTypeFileRead, ToolTypeFileWrite:
+				kind = ToolCardFile
+			case ToolTypeBash:
+				kind = ToolCardBash
+			}
+			fallback := NewToolCard(te.Name, kind, m.isDark)
+			fallback.ID = te.ID
+			fallback.State = projectedState
+			fallback.SetSummary(te.Summary)
+			fallback.Args = te.Args
+			fallback.Result = te.Result
+			fallback.Duration = te.Duration
+			fallback.Expanded = !te.Collapsed
+			fallback.Projection = te.Projection
+			cardView := fallback.View(max(4, m.chatPaneWidth()-4))
+			if fallback.Expanded {
+				var diffView string
+				if te.DiffPending {
+					diffView = renderDiffLoadingAtWidth(te.Summary, m.styles, max(4, m.chatPaneWidth()-4))
+				} else if len(te.DiffLines) > 0 {
+					diffView = strings.TrimRight(renderUnifiedDiffAtWidth(
+						te.Summary, te.DiffLines, m.styles, 0, max(4, m.chatPaneWidth()-4),
+					), "\n")
+				}
+				if diffView != "" {
+					cardView += "\n" + diffView
+				}
+			}
+			b.WriteString(indentBlock(cardView, "  "))
+			return
+		}
 
 		switch te.Status {
 		case ToolStatusRunning:
 			// Running: show spinner with type-specific icon
 			icon := m.styles.ToolCallIcon.Render(toolIcon(tt, te.Status))
-			spinView := m.spin.View()
+			spinView := "…"
+			if !m.reducedMotion {
+				spinView = m.spin.View()
+			}
 			text := m.styles.ToolCallText.Render(fmt.Sprintf(" %s ", toolName))
 			hint := m.styles.ToolRunningText.Render(spinView + " running...")
 			b.WriteString(icon + text + hint)
@@ -1036,8 +1223,12 @@ func (m *Model) renderToolGroup(b *strings.Builder, toolIdx int) {
 				b.WriteString(m.styles.ToolDetailText.Render(layout.ToolIndent + "args: " + args))
 				b.WriteString("\n")
 				// Diff or result
-				if te.DiffLines != nil {
-					b.WriteString(renderDiffAtWidth(te.DiffLines, m.styles, 30, max(1, m.chatPaneWidth()-4)))
+				diffWidth := max(1, m.chatPaneWidth()-4)
+				if te.DiffPending {
+					b.WriteString(renderDiffLoadingAtWidth(te.Summary, m.styles, diffWidth))
+					b.WriteString("\n")
+				} else if len(te.DiffLines) > 0 {
+					b.WriteString(renderUnifiedDiffAtWidth(te.Summary, te.DiffLines, m.styles, 0, diffWidth))
 				} else {
 					// Use smart result formatting with truncation
 					result := formatToolResult(te.Result, 20, layout.ResultTruncMax)

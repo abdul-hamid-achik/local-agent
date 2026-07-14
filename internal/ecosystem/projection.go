@@ -134,14 +134,15 @@ type ReceiptDigest struct {
 // It contains no arbitrary argument or result values and is safe to keep in a
 // session transcript after Normalize.
 type ToolProjection struct {
-	Specialist string         `json:"specialist,omitempty"`
-	Operation  string         `json:"operation,omitempty"`
-	Role       ToolRole       `json:"role,omitempty"`
-	Transport  TransportState `json:"transport,omitempty"`
-	Domain     DomainState    `json:"domain,omitempty"`
-	Evidence   EvidenceState  `json:"evidence,omitempty"`
-	Route      ToolRoute      `json:"route,omitempty"`
-	Digest     *ReceiptDigest `json:"digest,omitempty"`
+	Specialist string          `json:"specialist,omitempty"`
+	Operation  string          `json:"operation,omitempty"`
+	Role       ToolRole        `json:"role,omitempty"`
+	Transport  TransportState  `json:"transport,omitempty"`
+	Domain     DomainState     `json:"domain,omitempty"`
+	Evidence   EvidenceState   `json:"evidence,omitempty"`
+	Route      ToolRoute       `json:"route,omitempty"`
+	Digest     *ReceiptDigest  `json:"digest,omitempty"`
+	Artifact   *ArtifactDigest `json:"artifact,omitempty"`
 }
 
 // RawReceipt is the short-lived parser boundary between an MCP/tool transport
@@ -290,7 +291,7 @@ func ProjectReceipt(projection ToolProjection, receipt RawReceipt) ToolProjectio
 		projection.Transport = TransportFailed
 		projection.Domain = DomainFailed
 		projection.Evidence = EvidenceNone
-		return projection
+		return projection.Normalize()
 	}
 
 	projection.Transport = TransportSucceeded
@@ -337,10 +338,12 @@ func ProjectReceipt(projection ToolProjection, receipt RawReceipt) ToolProjectio
 			projection.Domain, projection.Evidence = DomainUnknown, EvidenceNone
 		}
 	case "filecheap", "fcheap":
-		if domain, evidence, ok := projectFileCheapReceipt(projection.Operation, receipt); ok {
+		if domain, evidence, artifact, ok := projectFileCheapReceipt(projection.Operation, receipt); ok {
 			projection.Domain, projection.Evidence = domain, evidence
+			projection.Artifact = artifact
 		} else {
 			projection.Domain, projection.Evidence = DomainUnknown, EvidenceNone
+			projection.Artifact = nil
 		}
 	case "cortex":
 		// Cortex's shared envelope is authoritative when it explicitly rejects
@@ -420,6 +423,9 @@ func SafeReceiptText(projection ToolProjection) string {
 // the model, transcript, and compact tool card; raw MCP content is never used.
 func (p ToolProjection) SummaryText() string {
 	p = p.Normalize()
+	if p.Artifact != nil {
+		return p.Artifact.summaryText()
+	}
 	if p.Digest == nil {
 		return ""
 	}
@@ -610,6 +616,19 @@ func (p ToolProjection) Normalize() ToolProjection {
 			p.Digest = nil
 		} else {
 			p.Digest = &digest
+		}
+	}
+	if p.Artifact != nil {
+		artifact := normalizeArtifactDigest(*p.Artifact)
+		validContext := artifact.Kind != "" && p.Transport == TransportSucceeded &&
+			(p.Domain == DomainSucceeded || p.Domain == DomainAttention) &&
+			p.Evidence == EvidenceSupported &&
+			p.Role == RoleArtifact && (p.Specialist == "filecheap" || p.Specialist == "fcheap") &&
+			(p.Operation == "fcheap_save" || p.Operation == "filecheap_save")
+		if !validContext {
+			p.Artifact = nil
+		} else {
+			p.Artifact = &artifact
 		}
 	}
 	return p

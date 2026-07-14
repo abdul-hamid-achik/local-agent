@@ -3,8 +3,9 @@ name: local_agent_tui_narrow
 
 intent: |
   a user can begin at the supported 30x12 minimum, then keep a full-width
-  conversation at 40 columns while the mode rail and nested settings,
-  completion, runtime, and help modals remain legible before quitting cleanly.
+  conversation at 40 columns while the mode rail, composer-owned command
+  completion, and nested settings, runtime, and help overlays remain legible
+  while strict slash-command parsing fails closed before quitting cleanly.
 
 target:
   cmd: ["./bin/local-agent"]
@@ -143,6 +144,29 @@ steps:
         contains: "❯ /"
       timeoutMs: 2000
   - snapshot: narrow_command_draft
+  - resize:
+      cols: 80
+      rows: 24
+  - type: 'load "unterminated'
+  - wait:
+      screen:
+        notContains: "Commands"
+      timeoutMs: 2000
+  - press: "enter"
+  - wait:
+      screen:
+        contains: 'command parse error: unterminated " quote'
+      timeoutMs: 2000
+  - type: "/resume 42"
+  - wait:
+      screen:
+        notContains: "Commands"
+      timeoutMs: 2000
+  - press: "enter"
+  - wait:
+      screen:
+        contains: "usage: /sessions"
+      timeoutMs: 2000
   - press: "ctrl+c"
   - wait:
       process:

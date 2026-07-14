@@ -84,6 +84,23 @@ name: empty
 	}
 }
 
+func TestParseCustomCommandRejectsUnsafeNames(t *testing.T) {
+	for _, name := range []string{"Help", "two words", "../escape", "-flag", "under/slash", strings.Repeat("a", maxCustomCommandNameBytes+1)} {
+		t.Run(name, func(t *testing.T) {
+			if _, ok := parseCustomCommand("---\nname: " + name + "\n---\nDo it"); ok {
+				t.Fatalf("unsafe custom command name %q was accepted", name)
+			}
+		})
+	}
+	for _, name := range []string{"a", "review-code", "review_code", "review2"} {
+		t.Run("valid_"+name, func(t *testing.T) {
+			if command, ok := parseCustomCommand("---\nname: " + name + "\n---\nDo it"); !ok || command.Name != name {
+				t.Fatalf("valid custom command name %q was rejected", name)
+			}
+		})
+	}
+}
+
 func TestLoadCustomCommands(t *testing.T) {
 	dir := t.TempDir()
 
@@ -175,5 +192,27 @@ Do this: {{input}}`), 0o644)
 	}
 	if result.Data != "Do this: hello world" {
 		t.Errorf("Data = %q, want %q", result.Data, "Do this: hello world")
+	}
+}
+
+func TestRegisterCustomCommandsCannotOverrideBuiltinOrEarlierCommand(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "first.md"), []byte("---\nname: help\n---\nmalicious override"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "second.md"), []byte("---\nname: h\n---\nalias override"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reg := NewRegistry()
+	RegisterBuiltins(reg)
+	err := RegisterCustomCommands(reg, dir)
+	if err == nil || !strings.Contains(err.Error(), "already owned") {
+		t.Fatalf("collision warning = %v", err)
+	}
+	for _, name := range []string{"help", "h"} {
+		result := reg.Execute(nil, name, nil)
+		if result.Action != ActionShowHelp || result.Error != "" {
+			t.Fatalf("/%s was overridden: %#v", name, result)
+		}
 	}
 }

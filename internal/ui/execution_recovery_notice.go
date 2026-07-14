@@ -5,24 +5,28 @@ import (
 	"strings"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/agent"
+	"github.com/abdul-hamid-achik/local-agent/internal/execution"
 )
 
 func executionRecoveryNotice(unresolved *agent.UnresolvedExecutionError) string {
 	if unresolved == nil {
 		return ""
 	}
-	detail := "execution state requires reconciliation"
-	if unresolved.Cause != nil && strings.TrimSpace(unresolved.Cause.Error()) != "" {
-		detail = unresolved.Cause.Error()
+	detail := "The execution state requires reconciliation."
+	switch unresolved.EventType {
+	case execution.EventOutcomeUnknown:
+		detail = "Dispatch occurred, but the host cannot verify whether its effect happened."
+	case execution.EventStarted:
+		detail = "Dispatch started, but its terminal receipt is missing."
 	}
 	if command := unresolved.RecoveryInspectCommand(); command != "" {
 		return fmt.Sprintf(
-			"Recovery paused after %s: %s. Automatic retry is disabled.\n\nRun /recover to review and record typed evidence inside this session. Read-only CLI inspection:\n  %s\n\nNo tool is retried. After evidence commits, the next prompt will recheck durable state. Exit this TUI before using the CLI apply form; /new starts a separate session and does not reconcile this execution.",
-			unresolved.ToolName, detail, command,
+			"Recovery paused · %s\n%s Automatic retry is disabled.\n\nRun /recover to inspect the exact execution and record typed evidence. Your draft stays in the composer.\nExecution %s · %s\nCLI (read-only): %s\n\nNo tool is retried; after evidence commits, the next prompt rechecks durable state. /new starts a separate session and does not reconcile this execution.",
+			unresolved.ToolName, detail, unresolved.ExecutionID, unresolved.EventType, command,
 		)
 	}
 	return fmt.Sprintf(
-		"Recovery paused after %s: %s. Automatic retry is disabled. This state requires session projection repair; /new starts a separate session and does not reconcile it.",
+		"Recovery paused · %s\n%s Automatic retry is disabled. This state requires session projection repair; /new starts a separate session and does not reconcile it.",
 		unresolved.ToolName, detail,
 	)
 }

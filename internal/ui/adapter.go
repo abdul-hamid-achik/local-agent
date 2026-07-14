@@ -5,17 +5,23 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/abdul-hamid-achik/local-agent/internal/agent"
 	"github.com/abdul-hamid-achik/local-agent/internal/ecosystem"
 )
 
 // Adapter bridges the agent.Output interface to BubbleTea messages.
 type Adapter struct {
 	program *tea.Program
+	workDir string
 }
 
 // NewAdapter creates an Adapter that sends messages to the given program.
-func NewAdapter(p *tea.Program) *Adapter {
-	return &Adapter{program: p}
+func NewAdapter(p *tea.Program, workDir ...string) *Adapter {
+	dir := ""
+	if len(workDir) > 0 {
+		dir = workDir[0]
+	}
+	return &Adapter{program: p, workDir: dir}
 }
 
 func (a *Adapter) StreamText(text string) {
@@ -31,7 +37,21 @@ func (a *Adapter) StreamDone(evalCount, promptTokens int) {
 }
 
 func (a *Adapter) ToolCallStart(callID, name string, args map[string]any) {
-	sendMsg(a.program, ToolCallStartMsg{ID: callID, Name: name, Args: args, StartTime: time.Now()})
+	sendMsg(a.program, newToolCallStartMsg(callID, name, args, a.workDir))
+}
+
+// newToolCallStartMsg captures an optional pre-write snapshot on the agent's
+// background execution path, before ToolCallStart returns and the backend can
+// mutate the file. Bubble Tea Update receives immutable snapshot data and
+// never performs filesystem I/O.
+func newToolCallStartMsg(callID, name string, args map[string]any, workDir string) ToolCallStartMsg {
+	msg := ToolCallStartMsg{ID: callID, Name: name, Args: args, StartTime: time.Now()}
+	if classifyTool(name) == ToolTypeFileWrite {
+		snapshot := readDiffSnapshotForArgsAt(args, workDir)
+		msg.BeforeContent = snapshot.Content
+		msg.BeforeSnapshotAvailable = snapshot.Available
+	}
+	return msg
 }
 
 func (a *Adapter) ToolCallResult(callID, name string, result string, isError bool, duration time.Duration) {
@@ -50,8 +70,20 @@ func (a *Adapter) SystemMessage(msg string) {
 	sendMsg(a.program, SystemMessageMsg{Msg: msg})
 }
 
+func (a *Adapter) CapabilityRoute(route agent.CapabilityRoute) {
+	sendMsg(a.program, CapabilityRouteMsg{Route: route})
+}
+
 func (a *Adapter) ContextCompacted() {
 	sendMsg(a.program, ContextCompactedMsg{})
+}
+
+func (a *Adapter) ContextCompactionStarted() {
+	sendMsg(a.program, ContextCompactionStartedMsg{})
+}
+
+func (a *Adapter) ContextCompactionFinished() {
+	sendMsg(a.program, ContextCompactionFinishedMsg{})
 }
 
 func (a *Adapter) Error(msg string) {

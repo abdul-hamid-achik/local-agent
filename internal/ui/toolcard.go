@@ -123,11 +123,18 @@ func (c ToolCard) statusGlyph() string {
 	case ToolCardSuccess:
 		return "✓"
 	case ToolCardAttention:
+		// Unknown means the bounded domain projection could not establish an
+		// outcome. Keep that visibly distinct from a known conflict, stale
+		// evidence, or another explicit attention state without painting it as a
+		// failure.
+		if c.Projection.Normalize().Domain == ecosystem.DomainUnknown {
+			return "?"
+		}
 		return "!"
 	case ToolCardError:
 		return "✗"
 	default:
-		return "●"
+		return "…"
 	}
 }
 
@@ -223,7 +230,9 @@ func (c ToolCard) ViewWithActivity(width int, activityGlyph string, elapsed time
 			}
 			glyph = c.Styles.Dimmed.Render(disclosure) + " " + glyph
 		}
-		meta = c.Styles.Dimmed.Render("(" + formatDuration(c.Duration) + ")")
+		if c.Duration > 0 {
+			meta = c.Styles.Dimmed.Render("(" + formatDuration(c.Duration) + ")")
+		}
 	}
 
 	// Keep at least a small, readable name. Timing yields first, then the summary,

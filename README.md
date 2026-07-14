@@ -62,6 +62,19 @@ Or run this checkout directly:
 go run ./cmd/local-agent
 ```
 
+Resume an exact saved session, or the newest one for the current canonical
+workspace, when opening the interactive TUI:
+
+```bash
+local-agent --resume 42
+local-agent --resume latest
+```
+
+`--resume` accepts only a positive session ID or `latest` and cannot be combined
+with headless `-p`. Loading restores the saved database title and conversation
+state after TUI startup; it does not submit a prompt or automatically continue a
+durable goal.
+
 No configuration file is required for the basic Ollama-only experience. To start from the annotated configuration:
 
 ```bash
@@ -182,14 +195,19 @@ The following operations require approval by default:
 - `memory_save`, `memory_update`, and `memory_delete`
 - Every MCP tool call
 
-The TUI shows the tool name and arguments. Respond with:
+The TUI replaces the composer with an inline permission surface while keeping
+the transcript visible. It shows a bounded action preview, target or command,
+and an inline diff for supported file changes. Respond with:
 
 - `y` to allow once
 - `n` to deny
-- `a` to always allow that tool name; the policy is persisted in SQLite
-- `esc` to deny and cancel the active turn
+- `s` to allow the identical request again during the current Agent process
+- `d` to switch between the preview and exact arguments
+- `esc` to cancel the approval and active turn
 
-Read/search tools stay inside the workspace but do not prompt. “Always allow” is currently stored per tool name, not per path or argument pattern.
+Read/search tools stay inside the workspace but do not prompt. The `s` grant is
+bound to the exact canonical arguments and is not persisted across process
+restarts. There is no broad per-tool “always allow” choice in the TUI.
 
 ### What local-only does not guarantee
 
@@ -223,7 +241,12 @@ Configure Cortex, Obsidian, and the rest of your catalog inside MCPHub using the
 
 `local-agent` intentionally keeps Cortex orchestration behind MCPHub instead of embedding a second intelligence stack. Cortex analysis, investigation, and delegation appear as namespaced MCP tools. MCPHub owns lazy discovery, authentication, and downstream policy; local-agent owns the final user approval and transcript.
 
-Every exposed MCP tool is namespaced as `<server>__<tool>`, results retain structured JSON, and media/resource blocks become bounded receipts instead of silently disappearing or flooding a small model with base64.
+Every exposed MCP tool is namespaced as `<server>__<tool>`. Exact structured
+output stays inside the agent parser boundary and is discarded after known
+tool-specific interpretation rather than copied into transcript or saved-card
+text. Known integrations produce bounded semantic projections; media and
+resource blocks are likewise bounded instead of flooding a small model or
+session state with base64.
 
 You can also configure direct servers:
 
@@ -312,13 +335,14 @@ See [`config.example.yaml`](config.example.yaml) for the configured model catalo
 
 At startup, `local-agent` loads `./AGENTS.md`; if absent, it falls back to legacy `./AGENT.md`. `local-agent init` creates `AGENTS.md`.
 
-Flat skill files live in:
+Global skills live under the selected shared agents directory, which defaults
+to:
 
 ```text
-~/.config/local-agent/skills/*.md
+~/.agents/skills/<name>/SKILL.md
 ```
 
-Each skill may contain YAML frontmatter followed by instructions:
+Each `SKILL.md` may contain YAML frontmatter followed by instructions:
 
 ```markdown
 ---
@@ -330,6 +354,17 @@ Check cancellation, races, error handling, and tests.
 ```
 
 Manage skills with `/skill list`, `/skill activate <name>`, and `/skill deactivate <name>`.
+Skill names must be unique. Startup rejects ambiguous names, invalid YAML
+frontmatter, files over 1 MiB, and symlinked skill files instead of silently
+choosing or skipping one. `~/.config/local-agent` remains reserved for Local
+Agent configuration and private runtime data; it is not searched for skills.
+Set `agents.dir` or `LOCAL_AGENT_AGENTS_DIR` to select a different shared root.
+The retired top-level `skills_dir` setting is rejected with migration guidance.
+
+Inactive skills are exposed to the model as a bounded name-and-description
+catalog. When one clearly matches the task, the agent can load that exact
+skill on demand through a read-only built-in tool; the body is not added to
+every prompt and automatic loading does not activate the skill globally.
 
 The global agent directory uses this layout:
 
@@ -344,6 +379,10 @@ The global agent directory uses this layout:
     go-review/
       SKILL.md
 ```
+
+Agent Skills in this directory use the same frontmatter format shown above.
+Give each `SKILL.md` an explicit, unique `name`; Local Agent uses that declared
+name for catalog lookup and profile activation.
 
 Example `~/.agents/agents/reviewer/agent.yaml`:
 
@@ -408,6 +447,7 @@ ICE is still a flat JSON vector store rather than an ANN index, but its bounded 
 | `local-agent --mode auto -p "prompt"` | Run one proactive AUTO prompt under the configured approval policy |
 | `local-agent --model <name>` | Select the initial model; in headless mode this prevents auto-routing |
 | `local-agent --agent <name>` | Select an initial agent profile |
+| `local-agent --resume <id\|latest>` | Open the TUI and restore an exact or newest current-workspace session |
 | `local-agent --qwen-router` | Use the experimental Qwen-specific router |
 | `local-agent --yolo -p "prompt"` | Headless execution with every tool auto-approved |
 | `local-agent init [--force]` | Create a project `AGENTS.md` |
@@ -418,6 +458,7 @@ ICE is still a flat JSON vector store rather than an ANN index, but its bounded 
 | `local-agent goal pending [--limit 20] [--json] <session-id>` | Inspect unresolved decisions, approvals, and recovery items |
 | `local-agent goal recover [--json] <session-id>` | Dry-run an existing validated reconciliation group without creating or changing it |
 | `local-agent goal recover --apply --item ID --observation VALUE --source VALUE --reference TEXT --summary TEXT --observed-at RFC3339 [--json] <session-id>` | Append exact typed recovery evidence through the shared atomic coordinator |
+| `local-agent execution recover [--json] <session-id> <execution-id>` | Inspect one outcome-unknown execution in an ordinary session without retrying it |
 | `local-agent --version` | Print the build version |
 
 Source builds print `dev`. Tagged release artifacts print the tag version
@@ -437,6 +478,10 @@ exact replay identity; changed evidence conflicts. There is no force escape
 hatch, and a successful recovery ends in PAUSED or EXHAUSTED without resuming
 provider work. The durable `deferred_approval` record type is implemented in
 the store, but foreground approval prompts do not currently enqueue that type.
+Ordinary sessions without a durable goal use `execution recover`; its default
+inspection is read-only, while applying evidence requires the exact revision,
+event ID, typed observation, source, reference, summary, and timestamp printed
+by its help. It never retries the original tool.
 
 ## Slash commands
 
@@ -450,12 +495,15 @@ the store, but foreground approval prompts do not currently enqueue that type.
 | `/model auto` | Resume automatic model routing |
 | `/agent [name\|list]` | List or switch profiles |
 | `/load <path>`, `/unload` | Asynchronously add or remove one regular, non-symlink markdown context file (32 KB maximum); quoted paths are supported |
-| `/skill [list\|activate\|deactivate]` | Manage skills |
+| `/scope [list\|add-read <directory>\|remove-read <directory>\|clear-read]` | Manage process-local read-only access to directories outside the writable workspace |
+| `/skill`, `/skill list` | List discovered skills and their activation state |
+| `/skill activate <name>`, `/skill deactivate <name>` | Add or remove one skill from active prompt context |
 | `/servers` | Show connected MCP servers and tool count |
 | `/ice` | Show ICE status |
-| `/sessions` | Open lossless SQLite-backed saved sessions |
+| `/sessions`, `/resume` | Open the lossless SQLite-backed session picker; neither command accepts an ID argument |
+| `/artifacts`, `/artifact` | List bounded file.cheap stash receipts saved in the current session |
 | `/goal <duration> <prompt>` | Infer bounded criteria and start a concrete goal with that wall-time cap; ambiguity asks one follow-up |
-| `/goal [new [objective]]` | Open the reviewed form for a durable, budgeted goal |
+| `/goal [objective]`, `/goal new [objective]` | Open the inline reviewed form, optionally prefilled; bare `/goal` shows an existing goal instead |
 | `/goal show` | Show objective, acceptance criteria, usage, state, and Cortex linkage |
 | `/goal pause`, `/goal resume` | Stop automatic continuation or explicitly resume one user-directed turn |
 | `/goal budget` | Change automatic-continuation, evaluation-token, and wall-time limits without editing the goal definition |
@@ -467,7 +515,17 @@ the store, but foreground approval prompts do not currently enqueue that type.
 | `/checkpoint [label]` | Save the current agent message history to SQLite |
 | `/checkpoints` | List checkpoints |
 | `/restore <id>` | Replace agent history with a checkpoint |
+| `/recover` | Review the current session's outcome-unknown execution and record typed evidence |
 | `/exit` | Quit |
+
+Slash commands use a small argument parser, not a shell. Single or double
+quotes and backslash-escaped whitespace can group an argument, while environment
+variables and command substitutions remain literal. `/load`, `/scope`, `/import`,
+and `/export` separately expand a leading `~/`. An unterminated quote is rejected
+before the command runs. Documented arity is enforced: commands with no
+arguments and `/goal show`, `/goal pause`, `/goal resume`, `/goal budget`, or
+`/goal drop` reject trailing fields, while `/restore` accepts exactly one
+canonical positive decimal ID.
 
 `/commit` deliberately disables Git hooks, commit signing, configured
 fsmonitor helpers, pagers, and automatic maintenance/GC for its owned Git
@@ -475,7 +533,7 @@ subprocesses. It still uses your Git identity and other non-executing
 configuration. Run `git commit` yourself when repository hooks or signing are
 required.
 
-Session snapshots preserve model-facing messages, tool-call IDs, tool cards, mode, model, profile, and counters. Loading one replaces both the visible transcript and the hidden model conversation. Checkpoints are validated against the active session.
+Session snapshots preserve model-facing messages, tool-call IDs, tool cards, mode, model, profile, counters, and bounded artifact receipts. Loading one replaces both the visible transcript and the hidden model conversation. Checkpoints are validated against the active session. `/artifacts` shows only host-normalized stash URIs, counts, timestamps, hashes, and static warning flags; raw file.cheap manifests, paths, and provider prose do not enter session state.
 
 ### Durable goals and bounded continuation
 
@@ -558,7 +616,7 @@ The supported minimum is 30 columns by 12 rows.
 | `ctrl+y` | Copy last response |
 | `ctrl+e` | Edit input with `$EDITOR` |
 | `ctrl+k` | Toggle compact mode |
-| `esc` | Cancel active generation or close overlay; deny an active approval |
+| `esc` | Close an overlay or inline form, cancel an approval, or cancel active generation |
 | `ctrl+n`, `ctrl+l` | New conversation / clear view |
 | `ctrl+c` | Quit |
 

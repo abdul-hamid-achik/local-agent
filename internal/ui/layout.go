@@ -66,9 +66,6 @@ func (m *Model) chatContentWidth() int {
 	if width < 14 {
 		width = 14
 	}
-	if width > maxChatContentWidth {
-		width = maxChatContentWidth
-	}
 	return width
 }
 

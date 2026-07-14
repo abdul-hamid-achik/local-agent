@@ -1,10 +1,11 @@
-  ╭────────────────────────╮
-  │ Goal · 2/6             │
-  │ Acceptance criteria    │
-  │ > The durable goal     │
-  │   status is visible    │
-  │   and accurate         │
-  │ esc cancel             │
-  │ tab/shift+tab move     │
-  │ enter newline          │
-  ╰────────────────────────╯
+
+
+─────────────────────────────
+╭───────────────────────────╮
+│ Goal · 2/6                │
+│ Acceptance criteria       │
+│ > status is visible       │
+│   and accurate            │
+│ esc cancel · tab/⇧ move   │
+│ enter newline             │
+╰───────────────────────────╯

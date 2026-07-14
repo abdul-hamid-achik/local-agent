@@ -23,5 +23,5 @@
 
 
 ─────────────────────────────────────────────────────────────────────────────────────────
-   • Running · esc cancel
+   … Running · esc cancel
   queued › Summarize after the probe. · ↑ edit · esc clear

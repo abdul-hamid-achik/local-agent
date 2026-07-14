@@ -13,7 +13,6 @@ import (
 )
 
 const (
-	goalFormMaximumWidth    = 66
 	goalAcceptanceHeight    = 3
 	goalFormMaximumCriteria = 64
 )
@@ -61,7 +60,7 @@ func (v GoalFormValues) CriterionDescriptions() []string {
 	return goalAcceptanceCriteria(v.AcceptanceCriteria)
 }
 
-// GoalFormChoice configures one action in the modal's final focus step.
+// GoalFormChoice configures one action in the form's final focus step.
 // RequiresValidGoal should be true for actions that create or update a goal.
 type GoalFormChoice struct {
 	Action            GoalAction
@@ -96,7 +95,7 @@ type GoalFormEvent struct {
 	Values GoalFormValues
 }
 
-// GoalForm is a parent-routed, persistence-free modal component. It does not
+// GoalForm is a parent-routed, persistence-free inline component. It does not
 // implement tea.Model: the application Model receives messages first and may
 // forward them through Update, then decide what to do with GoalFormEvent.
 type GoalForm struct {
@@ -359,7 +358,7 @@ func (f *GoalForm) sizeInputs() {
 	}
 	f.objective.SetWidth(fullWidth)
 	f.acceptance.SetWidth(goalAcceptanceInputWidth(contentWidth))
-	f.acceptance.SetHeight(goalAcceptanceHeight)
+	f.acceptance.SetHeight(f.acceptanceHeight())
 	f.turns.SetWidth(budgetWidth)
 	f.tokens.SetWidth(budgetWidth)
 	f.time.SetWidth(budgetWidth)
@@ -374,11 +373,22 @@ func goalAcceptanceInputWidth(contentWidth int) int {
 }
 
 func (f *GoalForm) contentWidth() int {
-	return pickerListWidth(f.width, goalFormMaximumWidth)
+	return inlineFormContentWidth(f.width)
 }
 
 func (f *GoalForm) compact() bool {
-	return f.width <= 48 || f.height < 24
+	return f.width <= 48 || f.height < 27
+}
+
+func (f *GoalForm) minimumHeightLayout() bool {
+	return f.height <= minTerminalHeight
+}
+
+func (f *GoalForm) acceptanceHeight() int {
+	if f.minimumHeightLayout() {
+		return 2
+	}
+	return goalAcceptanceHeight
 }
 
 // ActiveField returns the currently focused form step.
@@ -661,14 +671,14 @@ func (f *GoalForm) invalidate() {
 	}
 }
 
-// View renders the cached modal without a hardware-cursor position.
+// View renders the cached form without a hardware-cursor position.
 func (f *GoalForm) View() string {
 	view, _ := f.ViewWithCursor()
 	return view
 }
 
-// ViewWithCursor renders the modal and a cursor local to the returned frame.
-// The parent can translate it with overlayCursor after centering the overlay.
+// ViewWithCursor renders the form and a cursor local to the returned frame.
+// The parent translates it from the inline footer's origin.
 func (f *GoalForm) ViewWithCursor() (string, *tea.Cursor) {
 	if f == nil {
 		return "", nil
@@ -713,9 +723,18 @@ func (f *GoalForm) renderCompactView() (string, *tea.Cursor) {
 		if f.followUpPrompt != "" {
 			prompt = "Needs detail · " + f.followUpPrompt
 		}
-		b.WriteString(f.styles.OverlayDim.Render(truncateDisplay(prompt, width)))
+		if f.minimumHeightLayout() {
+			if f.followUpPrompt != "" {
+				prompt = "Needs detail"
+			}
+			b.WriteString(f.styles.OverlayDim.Render(truncateDisplay(prompt, width)))
+		} else if f.followUpPrompt != "" {
+			b.WriteString(f.styles.OverlayDim.Render(wrapText(prompt, width)))
+		} else {
+			b.WriteString(f.styles.OverlayDim.Render(truncateDisplay(prompt, width)))
+		}
 		b.WriteString("\n")
-		if f.active == GoalFieldActions {
+		if f.active == GoalFieldActions && !f.minimumHeightLayout() {
 			b.WriteString(f.renderCompactGoalSummary(width))
 			b.WriteString("\n")
 		}
@@ -913,6 +932,12 @@ func (f *GoalForm) renderBudgetStep(input *textinput.Model, width int) (string, 
 	if f.errorText != "" {
 		return control, cursor
 	}
+	if f.minimumHeightLayout() {
+		if f.budgetOnly {
+			return control, cursor
+		}
+		return control + "\n" + f.styles.OverlayDim.Render(truncateDisplay("Blank skips · set one", width)), cursor
+	}
 	helper := lipgloss.JoinVertical(
 		lipgloss.Left,
 		f.styles.OverlayDim.Render(truncateDisplay("Blank skips this limit", width)),
@@ -949,7 +974,12 @@ func (f *GoalForm) renderTextInput(input *textinput.Model, active bool, width in
 func (f *GoalForm) renderAcceptance(active bool, width int) (string, *tea.Cursor) {
 	view := f.acceptance
 	view.SetWidth(goalAcceptanceInputWidth(width))
-	view.SetHeight(goalAcceptanceHeight)
+	view.SetHeight(f.acceptanceHeight())
+	// Textarea populates and repositions its private viewport during Update.
+	// Initial values can be taller than the compact window before the child has
+	// received a key, so reflow a render-only copy to keep the visible rows and
+	// hardware cursor on the same multiline position.
+	view, _ = view.Update(goalAcceptanceReflowMsg{})
 	view.SetVirtualCursor(false)
 	lines := strings.Split(view.View(), "\n")
 	for index := range lines {
@@ -970,6 +1000,8 @@ func (f *GoalForm) renderAcceptance(active bool, width int) (string, *tea.Cursor
 	}
 	return strings.Join(lines, "\n"), offsetCursor(view.Cursor(), 2, 0)
 }
+
+type goalAcceptanceReflowMsg struct{}
 
 func (f *GoalForm) visibleFieldCount() int {
 	if f.budgetOnly {
@@ -1029,7 +1061,7 @@ func (f *GoalForm) renderActionControl(width int, compact bool) string {
 			style = f.styles.ErrorText
 		}
 		result := style.Render(truncateDisplay(label, width))
-		if description := strings.TrimSpace(choice.Description); description != "" {
+		if description := strings.TrimSpace(choice.Description); description != "" && !f.minimumHeightLayout() {
 			result += "\n" + f.styles.OverlayDim.Render(truncateDisplay(description, max(1, width-1)))
 		}
 		return result
@@ -1062,6 +1094,9 @@ type goalFormHint struct {
 }
 
 func (f *GoalForm) renderFooter(width int) string {
+	if f.minimumHeightLayout() {
+		return f.renderMinimumFooter(width)
+	}
 	hints := []goalFormHint{{key: "esc", action: "cancel"}}
 	switch f.active {
 	case GoalFieldAcceptance:
@@ -1109,14 +1144,54 @@ func (f *GoalForm) renderFooter(width int) string {
 	return strings.Join(rows, "\n")
 }
 
-func (f *GoalForm) renderFrame(content, footer string) string {
-	if footer != "" {
-		content = strings.TrimRight(content, "\n") + "\n" + footer
+func (f *GoalForm) renderMinimumFooter(width int) string {
+	if f.errorText != "" {
+		return f.renderMinimumHint(width, "esc/tab", "cancel or move")
 	}
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(f.styles.OverlayBorder).
-		Padding(0, 1).
-		Width(f.contentWidth() + 2).
-		Render(content)
+
+	var hints []goalFormHint
+	switch f.active {
+	case GoalFieldAcceptance:
+		hints = []goalFormHint{
+			{key: "esc", action: "cancel · tab/⇧ move"},
+			{key: "enter", action: "newline"},
+		}
+	case GoalFieldActions:
+		if f.budgetOnly {
+			hints = []goalFormHint{
+				{key: "esc", action: "cancel · ⇧tab back"},
+				{key: "enter/space · arrows/hjkl"},
+			}
+		} else {
+			hints = []goalFormHint{
+				{key: "esc", action: "cancel · ⇧tab back"},
+				{key: "enter/space", action: "select"},
+				{key: "arrows/hjkl", action: "choose"},
+			}
+		}
+	default:
+		back := goalFormHint{key: "esc", action: "cancel"}
+		if f.active > f.firstEditableField() {
+			back = goalFormHint{key: "esc", action: "cancel · ⇧tab back"}
+		}
+		hints = []goalFormHint{back, {key: "enter/tab", action: "next"}}
+	}
+
+	rows := make([]string, 0, len(hints))
+	for _, hint := range hints {
+		rows = append(rows, f.renderMinimumHint(width, hint.key, hint.action))
+	}
+	return strings.Join(rows, "\n")
+}
+
+func (f *GoalForm) renderMinimumHint(width int, keyText, action string) string {
+	line := f.styles.FocusIndicator.Render(keyText)
+	if action != "" {
+		line += " " + f.styles.OverlayDim.Render(action)
+	}
+	return truncateDisplay(line, width)
+}
+
+func (f *GoalForm) renderFrame(content, footer string) string {
+	return renderInlineFormFrame(f.styles, content, footer, f.width)
 }

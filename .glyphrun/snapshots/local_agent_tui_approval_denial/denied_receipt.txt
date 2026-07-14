@@ -5,7 +5,7 @@
   assistant ─────────────────────────────
   │ ▸ Thought
 
-  │ ▸ ✗ Write failed · approval-probe.txt (0ms)
+  │ ▸ ✗ Write failed · approval-probe.txt
   │ tool call denied: user denied tool executi…
 
 

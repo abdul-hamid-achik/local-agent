@@ -10,8 +10,6 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-const planFormMaximumWidth = 60
-
 // PlanFormField represents a single field in the plan form.
 type PlanFormField struct {
 	Label       string
@@ -22,16 +20,26 @@ type PlanFormField struct {
 	Input       textinput.Model
 }
 
-// PlanFormState holds state for the plan form overlay.
+// PlanFormState holds state for the composer-owned plan form.
 type PlanFormState struct {
 	Fields      []PlanFormField
 	ActiveField int
 }
 
 // NewPlanFormState creates a plan form pre-filled with the user's task description.
-func NewPlanFormState(task string) *PlanFormState {
+// Presentation options are ordered as theme-dark, then reduced-motion so older
+// callers that only select a theme remain source compatible.
+func NewPlanFormState(task string, presentation ...bool) *PlanFormState {
+	isDark := true
+	reducedMotion := false
+	if len(presentation) > 0 {
+		isDark = presentation[0]
+	}
+	if len(presentation) > 1 {
+		reducedMotion = presentation[1]
+	}
 	taskInput := textinput.New()
-	taskInput.SetStyles(semanticTextInputStyles(true))
+	taskInput.SetStyles(semanticTextInputStyles(isDark, reducedMotion))
 	taskInput.Placeholder = "Describe the task..."
 	taskInput.Prompt = ""
 	taskInput.CharLimit = 512
@@ -39,7 +47,7 @@ func NewPlanFormState(task string) *PlanFormState {
 	taskInput.Focus()
 
 	focusInput := textinput.New()
-	focusInput.SetStyles(semanticTextInputStyles(true))
+	focusInput.SetStyles(semanticTextInputStyles(isDark, reducedMotion))
 	focusInput.Placeholder = "Any constraints or requirements? (optional)"
 	focusInput.Prompt = ""
 	focusInput.CharLimit = 512
@@ -83,7 +91,7 @@ func (pf *PlanFormState) AssemblePrompt() string {
 	return b.String()
 }
 
-// updatePlanForm handles key events within the plan form overlay.
+// updatePlanForm handles key events within the inline plan form.
 // Returns the updated model, any command, and whether the form was submitted or cancelled.
 func (m *Model) updatePlanForm(msg tea.KeyPressMsg) (bool, bool) {
 	pf := m.planFormState
@@ -162,6 +170,8 @@ func (m *Model) advancePlanFormField(dir int) {
 	if pf == nil {
 		return
 	}
+	anchor := m.captureInlineFormTranscriptAnchor()
+	defer m.refreshInlineFormLayout(anchor)
 
 	// Blur current field
 	current := &pf.Fields[pf.ActiveField]
@@ -292,7 +302,7 @@ func (m *Model) renderCompactPlanFormView(pf *PlanFormState, contentWidth int) (
 		cursor = offsetCursor(cursor, 0, controlY)
 	}
 
-	return m.renderPickerFrame(b.String(), planFormMaximumWidth, planFormFooter(pf, contentWidth)), pickerFrameCursor(cursor)
+	return renderInlineFormFrame(m.styles, b.String(), planFormFooter(pf, contentWidth), m.width), pickerFrameCursor(cursor)
 }
 
 // renderPlanForm renders a responsive parent-owned form. Compact terminals show
@@ -309,7 +319,7 @@ func (m *Model) renderPlanFormView() (string, *tea.Cursor) {
 		return "", nil
 	}
 
-	contentWidth := pickerListWidth(m.width, planFormMaximumWidth)
+	contentWidth := inlineFormContentWidth(m.width)
 	if compactPlanForm(m.width, m.height) {
 		return m.renderCompactPlanFormView(pf, contentWidth)
 	}
@@ -341,5 +351,5 @@ func (m *Model) renderPlanFormView() (string, *tea.Cursor) {
 		}
 	}
 
-	return m.renderPickerFrame(b.String(), planFormMaximumWidth, planFormFooter(pf, contentWidth)), pickerFrameCursor(cursor)
+	return renderInlineFormFrame(m.styles, b.String(), planFormFooter(pf, contentWidth), m.width), pickerFrameCursor(cursor)
 }

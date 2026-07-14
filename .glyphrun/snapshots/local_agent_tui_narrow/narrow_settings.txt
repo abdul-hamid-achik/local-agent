@@ -8,7 +8,7 @@
  │   Mode · PLAN                      │
  │   Sessions · Resume                │
  │   Compact layout · Auto            │
- │   Runtime status · 0 servers · 19… │
+ │   Runtime status · 0 servers · 20… │
  │   Help · Shortcuts                 │
  │                                    │
  │   Choose an installed local model… │

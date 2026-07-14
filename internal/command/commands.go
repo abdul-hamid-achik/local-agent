@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -11,12 +13,17 @@ import (
 // RegisterBuiltins adds all built-in slash commands to the registry.
 func RegisterBuiltins(r *Registry) {
 	registerGoalActions(r)
+	registerScopeActions(r)
 
 	r.Register(&Command{
 		Name:        "help",
 		Aliases:     []string{"h", "?"},
 		Description: "Show help overlay with shortcuts and commands",
-		Handler: func(_ *Context, _ []string) Result {
+		Usage:       "/help",
+		Handler: func(_ *Context, args []string) Result {
+			if err := noArguments(args, "/help"); err != "" {
+				return Result{Error: err}
+			}
 			return Result{Action: ActionShowHelp}
 		},
 	})
@@ -25,7 +32,11 @@ func RegisterBuiltins(r *Registry) {
 		Name:        "clear",
 		Aliases:     []string{"new"},
 		Description: "Clear conversation history",
-		Handler: func(_ *Context, _ []string) Result {
+		Usage:       "/clear",
+		Handler: func(_ *Context, args []string) Result {
+			if err := noArguments(args, "/clear"); err != "" {
+				return Result{Error: err}
+			}
 			return Result{
 				Text:   "Conversation cleared.",
 				Action: ActionClear,
@@ -103,6 +114,9 @@ func RegisterBuiltins(r *Registry) {
 			if len(args) == 0 {
 				return Result{Action: ActionShowModelPicker}
 			}
+			if len(args) != 1 {
+				return Result{Error: "usage: /model [name|list|auto]"}
+			}
 
 			switch args[0] {
 			case "auto":
@@ -156,6 +170,9 @@ func RegisterBuiltins(r *Registry) {
 		Description: "Show or switch agent profile",
 		Usage:       "/agent [name|list]",
 		Handler: func(ctx *Context, args []string) Result {
+			if len(args) > 1 {
+				return Result{Error: "usage: /agent [name|list]"}
+			}
 			if len(args) == 0 || args[0] == "list" {
 				var b strings.Builder
 				if len(ctx.AgentList) == 0 {
@@ -206,9 +223,61 @@ func RegisterBuiltins(r *Registry) {
 	})
 
 	r.Register(&Command{
+		Name:        "scope",
+		Description: "List or manage process-local external read-only roots",
+		Usage:       "/scope [list|add-read <directory>|remove-read <directory>|clear-read]",
+		Handler: func(ctx *Context, args []string) Result {
+			if ctx == nil {
+				ctx = &Context{}
+			}
+			if len(args) == 0 || (len(args) == 1 && (args[0] == "list" || args[0] == "ls")) {
+				if len(ctx.ReadRoots) == 0 {
+					return Result{Text: "No additional read-only roots are active. Add one with /scope add-read <directory>."}
+				}
+				roots := append([]string(nil), ctx.ReadRoots...)
+				sort.Strings(roots)
+				var b strings.Builder
+				fmt.Fprintf(&b, "Additional process-local read-only roots (%d):\n", len(roots))
+				for _, root := range roots {
+					fmt.Fprintf(&b, "  - %s\n", root)
+				}
+				b.WriteString("\nWrites remain confined to the working directory. These grants are not persisted.")
+				return Result{Text: b.String()}
+			}
+
+			spec, ok := r.MatchAction("scope", args[0])
+			if !ok {
+				return Result{Error: "usage: /scope [list|add-read <directory>|remove-read <directory>|clear-read]"}
+			}
+			switch spec.ID {
+			case ScopeActionAddRead, ScopeActionRemoveRead:
+				if len(args) < 2 {
+					return Result{Error: "usage: " + spec.CommandText() + " <directory>"}
+				}
+				path := expandHomePath(strings.TrimSpace(strings.Join(args[1:], " ")))
+				if path == "" {
+					return Result{Error: "usage: " + spec.CommandText() + " <directory>"}
+				}
+				return Result{Action: spec.Action, Data: path}
+			case ScopeActionClearRead:
+				if len(args) != 1 {
+					return Result{Error: "usage: " + spec.CommandText()}
+				}
+				return Result{Action: spec.Action}
+			default:
+				return Result{Error: "unsupported scope action"}
+			}
+		},
+	})
+
+	r.Register(&Command{
 		Name:        "unload",
 		Description: "Remove loaded context file",
-		Handler: func(ctx *Context, _ []string) Result {
+		Usage:       "/unload",
+		Handler: func(ctx *Context, args []string) Result {
+			if err := noArguments(args, "/unload"); err != "" {
+				return Result{Error: err}
+			}
 			if ctx.LoadedFile == "" {
 				return Result{Text: "No context file loaded."}
 			}
@@ -225,11 +294,17 @@ func RegisterBuiltins(r *Registry) {
 		Description: "Manage skills (list, activate, deactivate)",
 		Usage:       "/skill [list|activate|deactivate] [name]",
 		Handler: func(ctx *Context, args []string) Result {
-			if len(args) == 0 || args[0] == "list" {
+			if len(args) == 0 {
 				return skillList(ctx)
 			}
-			if len(args) < 2 {
-				return Result{Error: "Usage: /skill [list|activate|deactivate] <name>"}
+			if args[0] == "list" {
+				if len(args) != 1 {
+					return Result{Error: "usage: /skill list"}
+				}
+				return skillList(ctx)
+			}
+			if len(args) != 2 {
+				return Result{Error: "usage: /skill [list|activate|deactivate] <name>"}
 			}
 			switch args[0] {
 			case "activate", "on":
@@ -253,7 +328,11 @@ func RegisterBuiltins(r *Registry) {
 	r.Register(&Command{
 		Name:        "servers",
 		Description: "List connected MCP servers",
-		Handler: func(ctx *Context, _ []string) Result {
+		Usage:       "/servers",
+		Handler: func(ctx *Context, args []string) Result {
+			if err := noArguments(args, "/servers"); err != "" {
+				return Result{Error: err}
+			}
 			if len(ctx.ServerNames) == 0 {
 				return Result{Text: "No MCP servers connected."}
 			}
@@ -270,7 +349,11 @@ func RegisterBuiltins(r *Registry) {
 	r.Register(&Command{
 		Name:        "ice",
 		Description: "Show Infinite Context Engine status",
-		Handler: func(ctx *Context, _ []string) Result {
+		Usage:       "/ice",
+		Handler: func(ctx *Context, args []string) Result {
+			if err := noArguments(args, "/ice"); err != "" {
+				return Result{Error: err}
+			}
 			if !ctx.ICEEnabled {
 				return Result{Text: "ICE is not enabled. Add `ice: {enabled: true}` to your config.yaml"}
 			}
@@ -286,23 +369,81 @@ func RegisterBuiltins(r *Registry) {
 
 	r.Register(&Command{
 		Name:        "sessions",
-		Aliases:     []string{"ss"},
+		Aliases:     []string{"ss", "resume"},
 		Description: "Browse and restore saved sessions",
-		Handler: func(_ *Context, _ []string) Result {
+		Usage:       "/sessions",
+		Handler: func(_ *Context, args []string) Result {
+			if err := noArguments(args, "/sessions"); err != "" {
+				return Result{Error: err}
+			}
 			return Result{Action: ActionShowSessions}
+		},
+	})
+
+	r.Register(&Command{
+		Name:        "artifacts",
+		Aliases:     []string{"artifact"},
+		Description: "List durable artifacts saved in this session",
+		Usage:       "/artifacts",
+		Handler: func(ctx *Context, args []string) Result {
+			if len(args) != 0 {
+				return Result{Error: "usage: /artifacts"}
+			}
+			if ctx == nil || len(ctx.Artifacts) == 0 {
+				return Result{Text: "No saved artifacts in this session."}
+			}
+
+			artifacts := ctx.Artifacts
+			truncated := ctx.ArtifactsTruncated
+			if len(artifacts) > MaxContextArtifacts {
+				artifacts = artifacts[:MaxContextArtifacts]
+				truncated = true
+			}
+			var b strings.Builder
+			if truncated {
+				fmt.Fprintf(&b, "Saved artifacts (%d shown; more omitted):\n", len(artifacts))
+			} else {
+				fmt.Fprintf(&b, "Saved artifacts (%d):\n", len(artifacts))
+			}
+			for _, artifact := range artifacts {
+				fileLabel := "files"
+				if artifact.FileCount == 1 {
+					fileLabel = "file"
+				}
+				fmt.Fprintf(&b, "  %s\n", artifact.URI)
+				fmt.Fprintf(&b, "    %d %s · %d bytes · created %s\n", artifact.FileCount, fileLabel, artifact.TotalBytes, artifact.CreatedAt)
+				fmt.Fprintf(&b, "    Content SHA-256 (full): %s\n", artifact.ContentSHA256)
+				if artifact.SecretsWarning {
+					b.WriteString("    Warning: potential secrets need review.\n")
+				}
+				if artifact.IndexingFailed {
+					b.WriteString("    Indexing: incomplete.\n")
+				}
+			}
+			return Result{Text: strings.TrimSuffix(b.String(), "\n")}
 		},
 	})
 
 	r.Register(&Command{
 		Name:        "changes",
 		Description: "List files modified by the agent this session",
-		Handler: func(ctx *Context, _ []string) Result {
+		Usage:       "/changes",
+		Handler: func(ctx *Context, args []string) Result {
+			if err := noArguments(args, "/changes"); err != "" {
+				return Result{Error: err}
+			}
 			if len(ctx.FileChanges) == 0 {
 				return Result{Text: "No files modified this session."}
 			}
 			var b strings.Builder
 			fmt.Fprintf(&b, "Files modified (%d):\n", len(ctx.FileChanges))
-			for path, count := range ctx.FileChanges {
+			paths := make([]string, 0, len(ctx.FileChanges))
+			for path := range ctx.FileChanges {
+				paths = append(paths, path)
+			}
+			sort.Strings(paths)
+			for _, path := range paths {
+				count := ctx.FileChanges[path]
 				if count > 1 {
 					fmt.Fprintf(&b, "  ✎ %s (%dx)\n", path, count)
 				} else {
@@ -325,7 +466,11 @@ func RegisterBuiltins(r *Registry) {
 	r.Register(&Command{
 		Name:        "stats",
 		Description: "Show token usage statistics for this session",
-		Handler: func(ctx *Context, _ []string) Result {
+		Usage:       "/stats",
+		Handler: func(ctx *Context, args []string) Result {
+			if err := noArguments(args, "/stats"); err != "" {
+				return Result{Error: err}
+			}
 			if ctx.SessionTurnCount == 0 {
 				return Result{Text: "No token usage recorded yet."}
 			}
@@ -403,7 +548,11 @@ func RegisterBuiltins(r *Registry) {
 	r.Register(&Command{
 		Name:        "checkpoints",
 		Description: "List saved checkpoints (use /restore <id> to rewind)",
-		Handler: func(_ *Context, _ []string) Result {
+		Usage:       "/checkpoints",
+		Handler: func(_ *Context, args []string) Result {
+			if err := noArguments(args, "/checkpoints"); err != "" {
+				return Result{Error: err}
+			}
 			return Result{Action: ActionListCheckpoints}
 		},
 	})
@@ -413,8 +562,12 @@ func RegisterBuiltins(r *Registry) {
 		Description: "Restore the conversation to a saved checkpoint",
 		Usage:       "/restore <id>",
 		Handler: func(_ *Context, args []string) Result {
-			if len(args) < 1 || args[0] == "" {
+			if len(args) != 1 || args[0] == "" {
 				return Result{Error: "usage: /restore <id> — see /checkpoints for ids"}
+			}
+			id, err := strconv.ParseInt(args[0], 10, 64)
+			if err != nil || id <= 0 || strconv.FormatInt(id, 10) != args[0] {
+				return Result{Error: "restore id must be a positive decimal integer — see /checkpoints for ids"}
 			}
 			return Result{Action: ActionRestoreCheckpoint, Data: args[0]}
 		},
@@ -424,10 +577,21 @@ func RegisterBuiltins(r *Registry) {
 		Name:        "exit",
 		Aliases:     []string{"quit", "q"},
 		Description: "Quit local-agent",
-		Handler: func(_ *Context, _ []string) Result {
+		Usage:       "/exit",
+		Handler: func(_ *Context, args []string) Result {
+			if err := noArguments(args, "/exit"); err != "" {
+				return Result{Error: err}
+			}
 			return Result{Action: ActionQuit}
 		},
 	})
+}
+
+func noArguments(args []string, usage string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	return "usage: " + usage
 }
 
 func parseGoalRequest(args []string) (*GoalRequest, error) {
@@ -534,7 +698,7 @@ func expandHomePath(path string) string {
 
 func skillList(ctx *Context) Result {
 	if len(ctx.Skills) == 0 {
-		return Result{Text: "No skills found. Add .md files to ~/.config/local-agent/skills/"}
+		return Result{Text: "No skills found. Add Agent Skills under the configured agents directory at skills/<name>/SKILL.md"}
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "Skills (%d):\n", len(ctx.Skills))

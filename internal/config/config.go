@@ -24,16 +24,18 @@ var configFileReadTimeout = safeio.StartupReadTimeout
 type Config struct {
 	// SourcePath is the host-resolved config selected by repository/XDG
 	// precedence. It is runtime metadata only and is never serialized.
-	SourcePath   string         `yaml:"-" json:"-"`
-	Ollama       OllamaConfig   `yaml:"ollama"`
-	Model        ModelConfig    `yaml:"model,omitempty"`
-	Agents       AgentsConfig   `yaml:"agents,omitempty"`
-	Servers      []ServerConfig `yaml:"servers,omitempty"`
-	SkillsDir    string         `yaml:"skills_dir,omitempty"`
-	ICE          ICEConfig      `yaml:"ice,omitempty"`
-	AgentProfile string         `yaml:"agent_profile,omitempty"`
-	Tools        ToolsConfig    `yaml:"tools,omitempty"`
-	Privacy      PrivacyConfig  `yaml:"privacy,omitempty"`
+	SourcePath string         `yaml:"-" json:"-"`
+	Ollama     OllamaConfig   `yaml:"ollama"`
+	Model      ModelConfig    `yaml:"model,omitempty"`
+	Agents     AgentsConfig   `yaml:"agents,omitempty"`
+	Servers    []ServerConfig `yaml:"servers,omitempty"`
+	// SkillsDir is decoded only to reject the retired split skill root with a
+	// clear migration error instead of silently ignoring an old configuration.
+	SkillsDir    string        `yaml:"skills_dir,omitempty"`
+	ICE          ICEConfig     `yaml:"ice,omitempty"`
+	AgentProfile string        `yaml:"agent_profile,omitempty"`
+	Tools        ToolsConfig   `yaml:"tools,omitempty"`
+	Privacy      PrivacyConfig `yaml:"privacy,omitempty"`
 }
 
 type PrivacyConfig struct {
@@ -103,15 +105,20 @@ func defaults() Config {
 }
 
 func Load() (*Config, error) {
+	cfg, _, err := loadConfigAndAgents()
+	return cfg, err
+}
+
+func loadConfigAndAgents() (*Config, *AgentsDir, error) {
 	cfg := defaults()
 
 	localPath, data, err := findAndReadConfigFile()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if localPath != "" {
 		if err := yaml.Unmarshal(data, &cfg); err != nil {
-			return nil, fmt.Errorf("parse config %s: %w", localPath, err)
+			return nil, nil, fmt.Errorf("parse config %s: %w", localPath, err)
 		}
 		cfg.SourcePath = localPath
 		if absolute, absErr := filepath.Abs(localPath); absErr == nil {
@@ -119,36 +126,55 @@ func Load() (*Config, error) {
 		}
 	}
 
-	agentsDir := cfg.Agents.Dir
-	if agentsDir == "" {
-		agentsDir = FindAgentsDir()
-	}
+	// Environment selection must be applied before loading the shared agents
+	// root. Otherwise LOCAL_AGENT_AGENTS_DIR changes the returned config but
+	// silently preloads metadata from a different directory.
+	applyEnvOverrides(&cfg)
 
 	var agentsData *AgentsDir
-	if agentsDir != "" && cfg.Agents.AutoLoad {
-		var err error
+	if cfg.Agents.AutoLoad {
+		agentsDir, resolveErr := resolveAgentsDir(cfg.Agents.Dir)
+		if resolveErr != nil {
+			return nil, nil, resolveErr
+		}
 		agentsData, err = LoadAgentsDir(agentsDir)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: failed to load .agents directory: %v\n", err)
-		} else {
-			if agentsData != nil {
-				if cfg.Ollama.Model == "" {
-					cfg.Ollama.Model = cfg.Model.DefaultModel
-				}
+			return nil, nil, fmt.Errorf("load agents directory %s: %w", agentsDir, err)
+		}
+		if agentsData != nil {
+			if cfg.Ollama.Model == "" {
+				cfg.Ollama.Model = cfg.Model.DefaultModel
+			}
 
-				if len(cfg.Servers) == 0 && agentsData.HasMCP() {
-					cfg.Servers = agentsData.GetMCPServers()
-				}
+			if len(cfg.Servers) == 0 && agentsData.HasMCP() {
+				cfg.Servers = agentsData.GetMCPServers()
 			}
 		}
 	}
 
-	applyEnvOverrides(&cfg)
 	clampNumCtxForMemory(&cfg)
 	if err := cfg.Validate(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return &cfg, nil
+	return &cfg, agentsData, nil
+}
+
+// resolveAgentsDir returns an explicit root whenever shared agent metadata is
+// enabled. FindAgentsDir preserves compatibility with an existing selected
+// root, while a fresh install consistently targets ~/.agents without creating
+// it merely by reading configuration.
+func resolveAgentsDir(configured string) (string, error) {
+	if configured != "" {
+		return configured, nil
+	}
+	if discovered := FindAgentsDir(); discovered != "" {
+		return discovered, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve default agents directory: %w", err)
+	}
+	return filepath.Join(home, ".agents"), nil
 }
 
 // safeMaxNumCtx bounds the KV-cache allocation on a 16GB Mac. A larger context
@@ -170,6 +196,9 @@ func clampNumCtxForMemory(cfg *Config) {
 // Validate checks the loaded configuration for problems that would otherwise
 // surface as confusing runtime failures, and fails fast with a clear message.
 func (c *Config) Validate() error {
+	if strings.TrimSpace(c.SkillsDir) != "" {
+		return errors.New("config: skills_dir is no longer supported; move skills under the selected agents directory at skills/<name>/SKILL.md")
+	}
 	if c.Ollama.Model == "" {
 		return fmt.Errorf("config: ollama.model is empty (set a model, e.g. qwen3.5:2b)")
 	}
@@ -343,22 +372,7 @@ func isMemoryRiskyModel(model string) bool {
 }
 
 func LoadWithAgentsDir() (*Config, *AgentsDir, error) {
-	cfg, err := Load()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	agentsDir := cfg.Agents.Dir
-	if agentsDir == "" {
-		agentsDir = FindAgentsDir()
-	}
-
-	var agents *AgentsDir
-	if agentsDir != "" && cfg.Agents.AutoLoad {
-		agents, _ = LoadAgentsDir(agentsDir)
-	}
-
-	return cfg, agents, nil
+	return loadConfigAndAgents()
 }
 
 func findAndReadConfigFile() (string, []byte, error) {

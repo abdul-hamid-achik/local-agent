@@ -21,6 +21,7 @@ With this setting, Local Agent treats `localhost`, loopback IPs, and unspecified
 - rejects other SSE and Streamable HTTP MCP URLs;
 - excludes Ollama Cloud from automatic routing and requires exact conversation-only consent for manual selection;
 - canonicalizes built-in file paths, resolves symlinks, and rejects paths outside the startup workspace;
+- permits explicit, process-local external read-only roots without widening write authority;
 - applies `.agentignore` to built-in file operations;
 - removes most inherited environment variables before built-in shell execution;
 - starts STDIO MCP servers with a minimal environment and deterministic local executable lookup.
@@ -34,7 +35,29 @@ The following requests require approval by default:
 - memory save, update, and delete;
 - every MCP tool call.
 
-The approval card shows the tool and arguments. `a` persists approval by tool name, not by exact path or argument pattern.
+The inline approval surface replaces the composer while leaving the transcript
+visible. It shows the action, scope, target or command, and a bounded diff when
+one is available. Press `y` to allow once, `n` to deny, `s` to allow the
+identical canonical request again during the current Agent process, `d` to
+inspect exact arguments, or `esc` to cancel the approval and active turn. The
+session grant is not a broad tool-name policy and is not persisted across
+process restarts.
+
+## Reading another project
+
+NORMAL, PLAN, and AUTO keep the startup workspace as the only writable root.
+When a task needs source material from another project, grant that directory
+for the current process:
+
+```text
+/scope add-read ~/projects/mcphub
+```
+
+Built-in list, read, grep, and copy-source operations can then use that root,
+while write, edit, move, remove, and copy destinations remain confined to the
+startup workspace. The grant observes the external root's `.agentignore`, is
+not saved in the session, and can be revoked with `/scope remove-read` or
+`/scope clear-read`.
 
 ## What local-only cannot guarantee
 

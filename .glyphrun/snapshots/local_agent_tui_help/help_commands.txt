@@ -24,12 +24,12 @@
                              │                     typed evidence                         │
                              │   /agent            Show or switch agent profile           │
                              │   /load             Load a markdown file as context        │
-                             │   /unload           Remove loaded context file             │
-                             │   /skill            Manage skills (list, activate,         │
-                             │                     deactivate)                            │
-                             │   /servers          List connected MCP servers             │
-                             │   /ice              Show Infinite Context Engine status    │
-                             │   /sessions         Browse and restore saved sessions      │
-                             │   /changes          List files modified by the agent this  │
-─────────────────────────────│ esc/q close · j/k scroll · 64%                             │────────────────────────────
+                             │   /scope            List or manage process-local external  │
+                             │                     read-only roots                        │
+                             │   /scope add-read   Grant process-local read-only access   │
+                             │                     to an external directory               │
+                             │   /scope remove-r…  Revoke one external read-only          │
+                             │                     directory grant                        │
+                             │   /scope clear-re…  Revoke every external read-only        │
+─────────────────────────────│ esc/q close · j/k scroll · 53%                             │────────────────────────────
                              ╰────────────────────────────────────────────────────────────╯

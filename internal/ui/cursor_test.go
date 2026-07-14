@@ -78,6 +78,33 @@ func TestViewCursorOwnsCompletionFilter(t *testing.T) {
 	}
 }
 
+func TestReducedMotionDisablesTransientInputCursorBlink(t *testing.T) {
+	t.Run("completion filter", func(t *testing.T) {
+		m := newTestModel(t)
+		m.reducedMotion = true
+		m.completionState = newCompletionState(
+			"command", []Completion{{Label: "/help", Insert: "/help"}}, false, m.isDark, m.reducedMotion,
+		)
+		m.overlay = OverlayCompletion
+		m.input.Blur()
+		m.resizePickerOverlays()
+		view := m.View()
+		if view.Cursor == nil || view.Cursor.Blink {
+			t.Fatalf("reduced-motion completion cursor = %#v, want visible and static", view.Cursor)
+		}
+	})
+
+	t.Run("plan field", func(t *testing.T) {
+		m := newTestModel(t)
+		m.reducedMotion = true
+		m.openPlanForm("keep the cursor still")
+		view := m.View()
+		if view.Cursor == nil || view.Cursor.Blink {
+			t.Fatalf("reduced-motion Plan cursor = %#v, want visible and static", view.Cursor)
+		}
+	})
+}
+
 func TestViewCursorOwnsPlanTextFields(t *testing.T) {
 	for _, test := range []struct {
 		name   string

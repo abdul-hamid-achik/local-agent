@@ -22,7 +22,7 @@ func TestExecutionRecoveryNoticeIsActionableAndDeduplicated(t *testing.T) {
 	}
 	for _, want := range []string{
 		"local-agent execution recover 17 exec_timeout",
-		"Read-only", "next prompt will recheck", "/new starts a separate session",
+		"read-only", "next prompt rechecks", "/new starts a separate session",
 	} {
 		if !strings.Contains(entries[0].Content, want) {
 			t.Fatalf("notice missing %q: %s", want, entries[0].Content)
@@ -32,6 +32,24 @@ func TestExecutionRecoveryNoticeIsActionableAndDeduplicated(t *testing.T) {
 	entries, appended = appendExecutionRecoveryNotice(entries, unresolved)
 	if appended || len(entries) != 2 {
 		t.Fatalf("duplicate notice appended: %#v appended=%v", entries, appended)
+	}
+}
+
+func TestExecutionRecoveryNoticeDistinguishesMissingAndUncertainReceipts(t *testing.T) {
+	unknown := executionRecoveryNotice(&agent.UnresolvedExecutionError{
+		SessionID: 2, ExecutionID: "exec_unknown", ToolName: "cortex_investigate",
+		EventType: execution.EventOutcomeUnknown,
+	})
+	if !strings.Contains(unknown, "cannot verify whether its effect happened") || strings.Contains(unknown, "receipt is missing") {
+		t.Fatalf("unknown-outcome copy = %q", unknown)
+	}
+
+	started := executionRecoveryNotice(&agent.UnresolvedExecutionError{
+		SessionID: 2, ExecutionID: "exec_started", ToolName: "bash",
+		EventType: execution.EventStarted,
+	})
+	if !strings.Contains(started, "terminal receipt is missing") || strings.Contains(started, "cannot verify whether its effect happened") {
+		t.Fatalf("started-event copy = %q", started)
 	}
 }
 

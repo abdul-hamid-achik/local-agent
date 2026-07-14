@@ -12,6 +12,8 @@ import (
 
 const maxCustomCommandBytes int64 = 1 << 20
 
+const maxCustomCommandNameBytes = 64
+
 var customCommandReader = safeio.NewReader()
 
 // CustomCommand represents a user-defined command loaded from a markdown file.
@@ -97,17 +99,37 @@ func parseCustomCommand(content string) (CustomCommand, bool) {
 		}
 	}
 
-	if cmd.Name == "" || cmd.Template == "" {
+	if !validCustomCommandName(cmd.Name) || cmd.Template == "" {
 		return CustomCommand{}, false
 	}
 
 	return cmd, true
 }
 
+func validCustomCommandName(name string) bool {
+	if name == "" || len(name) > maxCustomCommandNameBytes {
+		return false
+	}
+	for index, r := range name {
+		if r >= 'a' && r <= 'z' || index > 0 && r >= '0' && r <= '9' || index > 0 && (r == '-' || r == '_') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 // RegisterCustomCommands loads and registers custom commands from the given directory.
 func RegisterCustomCommands(r *Registry, dir string) error {
 	cmds, loadErr := LoadCustomCommands(dir)
+	var registrationWarnings []error
 	for _, cc := range cmds {
+		if existing, collision := r.commands[cc.Name]; collision {
+			registrationWarnings = append(registrationWarnings, fmt.Errorf(
+				"register custom command %q: spelling is already owned by /%s", cc.Name, existing.Name,
+			))
+			continue
+		}
 		// Capture for closure.
 		tmpl := cc.Template
 		desc := cc.Description
@@ -128,5 +150,5 @@ func RegisterCustomCommands(r *Registry, dir string) error {
 			},
 		})
 	}
-	return loadErr
+	return errors.Join(loadErr, errors.Join(registrationWarnings...))
 }

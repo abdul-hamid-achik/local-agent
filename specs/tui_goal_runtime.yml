@@ -2,9 +2,10 @@ version: 1
 name: local_agent_tui_goal_runtime
 
 intent: |
-  a user can define a bounded durable goal at normal and minimum terminal
-  sizes, observe fail-closed behavior when Cortex is unavailable,
-  inspect locked budget editing, and drop the goal without false completion.
+  a user can define a bounded durable goal in the inline composer surface at
+  normal and minimum terminal sizes, observe fail-closed behavior when Cortex
+  is unavailable, inspect locked budget editing, and drop the goal without
+  false completion.
 
 target:
   cmd: ["./bin/local-agent"]
@@ -17,7 +18,7 @@ target:
 
 terminal:
   cols: 80
-  rows: 24
+  rows: 32
 
 preconditions:
   commands:
@@ -35,6 +36,7 @@ steps:
         contains: "try: ollama serve"
       timeoutMs: 5000
   - type: "/goal new"
+  - press: "enter"
   - press: "enter"
   - wait:
       screen:
@@ -66,7 +68,7 @@ steps:
   - snapshot: goal_form_minimum
   - resize:
       cols: 80
-      rows: 24
+      rows: 32
   - press: "tab"
   - press: "tab"
   - press: "tab"
@@ -94,6 +96,7 @@ steps:
         notContains: "Commands"
       timeoutMs: 2000
   - press: "enter"
+  - press: "enter"
   - wait:
       screen:
         contains: "Goal inspector · 0/1 verified"
@@ -113,6 +116,7 @@ steps:
       screen:
         notContains: "Commands"
       timeoutMs: 2000
+  - press: "enter"
   - press: "enter"
   - wait:
       screen:
@@ -142,12 +146,13 @@ steps:
       timeoutMs: 2000
   - resize:
       cols: 80
-      rows: 24
+      rows: 32
   - type: "/goal drop"
   - wait:
       screen:
         notContains: "Commands"
       timeoutMs: 2000
+  - press: "enter"
   - press: "enter"
   - wait:
       screen:
@@ -158,6 +163,7 @@ steps:
       screen:
         notContains: "Commands"
       timeoutMs: 2000
+  - press: "enter"
   - press: "enter"
   - wait:
       screen:
@@ -176,13 +182,13 @@ steps:
 
 outcomes:
   - id: normal_goal_form_is_clear
-    description: the wide goal form explains verifiable done and bounded continuation
+    description: the wide inline goal form explains verifiable done and bounded continuation
     verify:
       snapshot:
         name: goal_form_normal
         mode: text
   - id: minimum_goal_form_is_usable
-    description: the active acceptance step and cancellation path fit at 30x12
+    description: the 30x12 inline form retains the active acceptance step and cancellation path
     verify:
       snapshot:
         name: goal_form_minimum

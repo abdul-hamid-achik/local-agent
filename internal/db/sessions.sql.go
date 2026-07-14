@@ -157,7 +157,7 @@ func (q *Queries) GetSessionMessages(ctx context.Context, sessionID int64) ([]Se
 }
 
 const listSessions = `-- name: ListSessions :many
-SELECT id, title, model, mode, workspace_id, created_at, updated_at FROM sessions WHERE workspace_id = ? ORDER BY updated_at DESC LIMIT ?
+SELECT id, title, model, mode, workspace_id, created_at, updated_at FROM sessions WHERE workspace_id = ? ORDER BY updated_at DESC, id DESC LIMIT ?
 `
 
 type ListSessionsParams struct {

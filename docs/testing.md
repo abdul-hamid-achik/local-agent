@@ -31,7 +31,9 @@ The verification task runs:
 task glyphrun
 ```
 
-Committed scenarios cover normal and minimum terminal sizes, authority modes, goal review and receipts, the Ollama inventory, approval decisions, composer paste behavior, sessions, and Help.
+Committed scenarios cover normal and minimum terminal sizes, authority modes,
+inline goal review and approvals, goal receipts, the Ollama inventory, composer
+paste behavior, sessions, and Help.
 
 Refresh snapshots only for an intentional visual change:
 

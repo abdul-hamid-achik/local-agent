@@ -39,6 +39,30 @@ func TestSemanticToolReceiptDoesNotPaintBobDriftGreen(t *testing.T) {
 	}
 }
 
+func TestMissingToolCardKeepsDomainUnknownOutOfSuccessState(t *testing.T) {
+	m := newTestModel(t)
+	m.toolEntries = []ToolEntry{{
+		ID: "cortex-status-1", Name: "cortex__cortex_status", Status: ToolStatusDone,
+		Collapsed: true,
+		Projection: ecosystem.ToolProjection{
+			Specialist: "cortex", Operation: "cortex_status", Role: ecosystem.RoleCoordination,
+			Transport: ecosystem.TransportSucceeded, Domain: ecosystem.DomainUnknown,
+		},
+	}}
+
+	var rendered strings.Builder
+	m.renderToolGroup(&rendered, 0)
+	plain := ansi.Strip(rendered.String())
+	if !strings.Contains(plain, "?") || !strings.Contains(plain, "Needs attention") {
+		t.Fatalf("cardless domain-unknown receipt lost its attention state:\n%s", plain)
+	}
+	for _, forbidden := range []string{"✓", "Checked Cortex"} {
+		if strings.Contains(plain, forbidden) {
+			t.Fatalf("cardless domain-unknown receipt claimed success with %q:\n%s", forbidden, plain)
+		}
+	}
+}
+
 func TestExpandedSemanticReceiptShowsDownstreamRouteAndEvidence(t *testing.T) {
 	card := NewToolCard("mcphub__cortex__cortex_investigate", ToolCardGeneric, true)
 	card.State = ToolCardSuccess

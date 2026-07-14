@@ -96,4 +96,27 @@ Global profiles and skills use the shared agent directory:
       SKILL.md
 ```
 
-Flat Local Agent skills may also live under `~/.config/local-agent/skills/*.md`. Switch profiles with `/agent`, and activate skills with `/skill`.
+The selected shared agents directory is the only global skill root; it defaults
+to `~/.agents` and may be changed with `agents.dir` or
+`LOCAL_AGENT_AGENTS_DIR`. The private `~/.config/local-agent` directory is
+reserved for configuration and runtime data and is not searched for skills.
+The retired top-level `skills_dir` setting is rejected with migration guidance.
+Give each Agent Skill an explicit identity at the start of `SKILL.md`:
+
+```markdown
+---
+name: go-review
+description: Review Go changes for correctness and concurrency
+---
+```
+
+Local Agent uses the declared name for catalog lookup and profile activation.
+Skill names must be unique across search paths; invalid YAML frontmatter, files
+over 1 MiB, and symlinked files fail closed during startup. Switch profiles
+with `/agent`, and activate skills with `/skill`.
+
+Inactive skills contribute only bounded name and description metadata to the
+model. For a clearly matching task, the model can request the already-discovered
+body by exact name through a read-only built-in tool. This on-demand path does
+not activate the skill or expose its filesystem path and auxiliary directory
+assets.

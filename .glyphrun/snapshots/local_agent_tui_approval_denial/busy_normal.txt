@@ -23,5 +23,5 @@
 
 
 ─────────────────────────────────────────────────────────────────────────────────────────
-   • Running · esc cancel · enter queue
+   … Running · esc cancel · enter queue
 ▏❯ Write a follow-up · enter queue

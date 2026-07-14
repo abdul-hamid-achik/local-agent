@@ -345,7 +345,7 @@ func TestAgentDoneFailureIsNotRenderedAsCompletedTurn(t *testing.T) {
 	if m.doneFlash {
 		t.Fatal("failed turn retained the success flash")
 	}
-	if len(m.entries) == 0 || !strings.Contains(m.entries[len(m.entries)-1].Content, "Recovery paused after bash") ||
+	if len(m.entries) == 0 || !strings.Contains(m.entries[len(m.entries)-1].Content, "Recovery paused · bash") ||
 		!strings.Contains(m.entries[len(m.entries)-1].Content, "/recover") {
 		t.Fatalf("failed turn receipt = %#v", m.entries)
 	}
@@ -921,4 +921,19 @@ func TestCommandResultMsg(t *testing.T) {
 			t.Errorf("expected %d entries (no change), got %d", before, len(m.entries))
 		}
 	})
+}
+
+func TestHandleCommandActionRejectsUnknownAction(t *testing.T) {
+	m := newTestModel(t)
+	m.handleCommandAction(command.Result{Action: command.Action(10_000), Text: "must not be shown"})
+	if len(m.entries) == 0 {
+		t.Fatal("unknown action was silently ignored")
+	}
+	last := m.entries[len(m.entries)-1]
+	if last.Kind != "error" || !strings.Contains(last.Content, "unsupported command action") {
+		t.Fatalf("unknown action entry = %#v", last)
+	}
+	if strings.Contains(last.Content, "must not be shown") {
+		t.Fatalf("unknown action rendered success text: %#v", last)
+	}
 }

@@ -75,6 +75,7 @@ var toolActionRegistry = map[string]toolActionLabels{
 	"memory_list":        {running: "Listing memories", success: "Listed memories", failure: "List memories failed"},
 	"update_plan":        {running: "Updating plan", success: "Updated plan", failure: "Update plan failed"},
 	"tool_search":        {running: "Loading tools", success: "Loaded tools", failure: "Load tools failed"},
+	"load_skill":         {running: "Loading skill", success: "Loaded skill", failure: "Skill load failed"},
 	"task":               {running: "Running task", success: "Completed task", failure: "Task failed"},
 
 	// Cortex keeps durable goals and evidence legible without exposing its MCP

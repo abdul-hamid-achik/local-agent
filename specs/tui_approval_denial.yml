@@ -2,9 +2,10 @@ version: 1
 name: local_agent_tui_approval_denial
 
 intent: |
-  a user can see a consequential tool request, retain its action and target
-  context at minimum width, deny it from the keyboard, and continue without any
-  file effect.
+  a user can review a consequential request inline where the composer normally
+  lives, retain the surrounding transcript plus action and target context at
+  minimum width, deny it from the keyboard, and continue without any file
+  effect.
 
 target:
   cmd:
@@ -73,11 +74,15 @@ steps:
       timeoutMs: 2000
   - wait:
       screen:
-        contains: "s session"
+        contains: "identical request"
       timeoutMs: 2000
   - wait:
       screen:
         contains: "n deny"
+      timeoutMs: 2000
+  - wait:
+      screen:
+        contains: "you"
       timeoutMs: 2000
   - wait:
       idle:
@@ -97,7 +102,7 @@ steps:
       timeoutMs: 2000
   - wait:
       screen:
-        contains: "esc cancel · y · s · n"
+        contains: "s identical/session"
       timeoutMs: 2000
   - wait:
       idle:
@@ -155,13 +160,13 @@ outcomes:
         name: busy_follow_up_queued
         mode: text
   - id: normal_approval_is_inspectable
-    description: normal width exposes the exact write arguments and explicit approval decisions
+    description: normal width exposes the write preview and explicit decisions inline without covering the transcript
     verify:
       snapshot:
         name: approval_normal
         mode: text
   - id: minimum_approval_remains_safe
-    description: 30x12 preserves the action and target context plus compact once, session-scoped, and deny shortcuts
+    description: 30x12 inline approval preserves action and target context plus compact once, exact-request session, and deny shortcuts
     verify:
       snapshot:
         name: approval_minimum

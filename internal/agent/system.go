@@ -88,9 +88,22 @@ func buildSystemPromptForModelBudget(modePrefix string, tools []llm.ToolDef, ski
 }
 
 func buildSystemPromptForModelBudgetContext(ctx context.Context, modePrefix string, tools []llm.ToolDef, skillContent, loadedContext string, memStore *memory.Store, iceContext, workDir, ignoreContent string, modelName string, numCtx int) string {
+	return buildSystemPromptForModelBudgetContextWithSkillCatalog(ctx, modePrefix, tools, skillContent, "", loadedContext, memStore, iceContext, workDir, ignoreContent, modelName, numCtx)
+}
+
+func buildSystemPromptForModelBudgetContextWithSkillCatalog(ctx context.Context, modePrefix string, tools []llm.ToolDef, skillContent, skillCatalog, loadedContext string, memStore *memory.Store, iceContext, workDir, ignoreContent string, modelName string, numCtx int) string {
+	return buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadRoots(ctx, modePrefix, tools, skillContent, skillCatalog, loadedContext, memStore, iceContext, workDir, ignoreContent, modelName, numCtx, nil)
+}
+
+func buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadRoots(ctx context.Context, modePrefix string, tools []llm.ToolDef, skillContent, skillCatalog, loadedContext string, memStore *memory.Store, iceContext, workDir, ignoreContent string, modelName string, numCtx int, readRoots []string) string {
 	useSmallModel := isSmallModel(modelName)
 	if budget := optionalPromptBudget(numCtx); budget > 0 {
-		loadedContext = boundPromptText(loadedContext, budget*50/100)
+		loadedContextShare := 50
+		if skillCatalog != "" {
+			loadedContextShare = 40
+			skillCatalog = boundPromptText(skillCatalog, budget*10/100)
+		}
+		loadedContext = boundPromptText(loadedContext, budget*loadedContextShare/100)
 		skillContent = boundPromptText(skillContent, budget*20/100)
 		iceContext = boundPromptText(iceContext, budget*25/100)
 		ignoreContent = boundPromptText(ignoreContent, budget*5/100)
@@ -111,11 +124,14 @@ func buildSystemPromptForModelBudgetContext(ctx context.Context, modePrefix stri
 		toolList = b.String()
 	}
 
-	envSection := buildEnvironmentSectionContext(ctx, workDir)
+	envSection := buildEnvironmentSectionContextWithReadRoots(ctx, workDir, readRoots)
 
 	var skillSection string
 	if skillContent != "" {
 		skillSection = fmt.Sprintf("\n## Active Skills\n%s\n", skillContent)
+	}
+	if skillCatalog != "" {
+		skillSection += skillCatalog
 	}
 
 	var ctxSection string
@@ -257,8 +273,7 @@ func requiredToolParameters(schema map[string]any) []string {
 	return required
 }
 
-// buildEnvironmentSectionContext creates the cancellable environment section.
-func buildEnvironmentSectionContext(ctx context.Context, workDir string) string {
+func buildEnvironmentSectionContextWithReadRoots(ctx context.Context, workDir string, readRoots []string) string {
 	if workDir == "" {
 		return ""
 	}
@@ -266,6 +281,15 @@ func buildEnvironmentSectionContext(ctx context.Context, workDir string) string 
 	var b strings.Builder
 	b.WriteString("\n## Environment\n")
 	fmt.Fprintf(&b, "Working directory: %s\n", workDir)
+	b.WriteString("Filesystem authority: the working directory is the writable workspace.\n")
+	if len(readRoots) == 0 {
+		b.WriteString("Additional read-only roots: none. Unlisted external paths are unavailable; the user can grant one with /scope add-read <directory>.\n")
+	} else {
+		b.WriteString("Additional process-local read-only roots (never valid write destinations):\n")
+		for _, root := range readRoots {
+			fmt.Fprintf(&b, "- %s\n", root)
+		}
+	}
 
 	// Auto-detect project type from marker files.
 	if info := detectProjectInfoContext(ctx, workDir); info != "" {

@@ -69,6 +69,11 @@ func (h *HeadlessOutput) SystemMessage(msg string) {
 	_, _ = fmt.Fprintf(h.stderr, "[system] %s\n", msg)
 }
 
+// CapabilityRoute writes an advisory diagnostic without contaminating stdout.
+func (h *HeadlessOutput) CapabilityRoute(route CapabilityRoute) {
+	_, _ = fmt.Fprintf(h.stderr, "[capability] %s -> %s__%s (advisory)\n", route.Phase, route.Server, route.Tool)
+}
+
 // Error writes an error message to stderr.
 func (h *HeadlessOutput) Error(msg string) {
 	_, _ = fmt.Fprintf(h.stderr, "[error] %s\n", msg)

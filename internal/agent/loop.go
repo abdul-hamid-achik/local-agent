@@ -82,6 +82,14 @@ type TurnLimits struct {
 	MaxWallTime time.Duration
 }
 
+// TurnOptions binds hard limits and one optional host-owned capability
+// activity to the same admitted turn. Keeping this data per-call avoids a
+// mutable "next turn" setter surviving a cancelled preflight.
+type TurnOptions struct {
+	Limits     TurnLimits
+	Capability CapabilityActivity
+}
+
 func (limits TurnLimits) validate() error {
 	if limits.MaxEvalTokens < 0 || limits.MaxWallTime < 0 {
 		return fmt.Errorf("turn limits must not be negative")
@@ -121,12 +129,19 @@ func (a *Agent) Run(ctx context.Context, out Output) error {
 // execution ledger, and settled goal receipt must share this exact ID. Callers
 // that do not need correlation should use Run.
 func (a *Agent) RunTurn(ctx context.Context, out Output, turnID string) error {
-	return a.RunTurnWithLimits(ctx, out, turnID, TurnLimits{})
+	return a.RunTurnWithOptions(ctx, out, turnID, TurnOptions{})
 }
 
 // RunTurnWithLimits executes one turn with host-owned hard generation and wall
 // limits. It preserves RunTurn's durable identity and execution-ledger rules.
 func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string, limits TurnLimits) error {
+	return a.RunTurnWithOptions(ctx, out, turnID, TurnOptions{Limits: limits})
+}
+
+// RunTurnWithOptions executes one turn with a single immutable host-owned
+// options snapshot.
+func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID string, options TurnOptions) error {
+	limits := options.Limits
 	if strings.TrimSpace(turnID) == "" || len(turnID) > executionPkg.MaxTurnIDBytes || !utf8.ValidString(turnID) {
 		err := fmt.Errorf("execution turn identity is invalid")
 		out.Error(err.Error())
@@ -209,6 +224,7 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 	}
 	// Merge built-in file tools according to the active mode policy.
 	tools = append(tools, filterToolDefsByName(a.toolsBuiltinToolDefs(), a.toolPolicy.localTools)...)
+	skillCatalog := a.skillCatalogPrompt()
 
 	// ICE: index user message and assemble cross-session context.
 	var iceContext string
@@ -219,6 +235,18 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 		lastMsg = a.messages[len(a.messages)-1]
 	}
 	a.mu.RUnlock()
+
+	capabilityActivity := options.Capability
+	if !capabilityActivity.NonTrivial && hasMessages && lastMsg.Role == "user" {
+		capabilityActivity = CapabilityActivityFromPrompt(
+			capabilityScopeID(execRuntime.sessionID, turnID), lastMsg.Content,
+			capabilityPhaseForAuthority(authorityMode), strings.TrimSpace(a.workDir) != "",
+		)
+	}
+	capabilityHintText, capabilityHint := a.resolveTurnCapability(ctx, out, capabilityActivity)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	if a.iceEngine != nil && hasMessages {
 		if lastMsg.Role == "user" {
@@ -240,7 +268,14 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 			loadedContext = guidance + loadedContext
 		}
 	}
-	system := buildSystemPromptForModelBudgetContext(ctx, a.modePrefix, tools, a.skillContent, loadedContext, a.memoryStore, iceContext, a.workDir, a.ignoreContent, a.llmClient.Model(), turnNumCtx)
+	if capabilityHintText != "" {
+		if loadedContext != "" {
+			capabilityHintText += "\n\n"
+		}
+		loadedContext = capabilityHintText + loadedContext
+	}
+	readRoots := a.ReadRoots()
+	system := buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadRoots(ctx, a.modePrefix, tools, a.skillContent, skillCatalog, loadedContext, a.memoryStore, iceContext, a.workDir, a.ignoreContent, a.llmClient.Model(), turnNumCtx, readRoots)
 
 	const maxRetries = 2
 	var lastPromptTokens int
@@ -281,7 +316,7 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 			lg.Info("compaction", "phase", "before_request", "prompt_tokens", estimated, "num_ctx", turnNumCtx)
 		}
 		if a.compactForContext(ctx, out, turnNumCtx) {
-			system = buildSystemPromptForModelBudgetContext(ctx, a.modePrefix, tools, a.skillContent, loadedContext, a.memoryStore, iceContext, a.workDir, a.ignoreContent, a.llmClient.Model(), turnNumCtx)
+			system = buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadRoots(ctx, a.modePrefix, tools, a.skillContent, skillCatalog, loadedContext, a.memoryStore, iceContext, a.workDir, a.ignoreContent, a.llmClient.Model(), turnNumCtx, readRoots)
 		}
 	}
 
@@ -777,6 +812,9 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 				tc.Name, tc.Arguments, semanticText, structured, errorMeta,
 				transportErr, isErr, kind == executionPkg.KindBuiltin || kind == executionPkg.KindMemory,
 			)
+			if capabilityRouteOutcomeFailed(projection, isErr) {
+				a.markCapabilityRouteFailed(capabilityActivity, tc.Name, tc.Arguments, capabilityHint)
+			}
 			// Typed MCP payloads stay inside the parser boundary. Only exact,
 			// host-trusted, bounded projections may enter the active provider turn;
 			// every durable boundary and the UI receive only the allowlisted receipt.
@@ -867,7 +905,7 @@ func (a *Agent) RunTurnWithLimits(ctx context.Context, out Output, turnID string
 			}
 			if a.compactForContext(ctx, out, turnNumCtx) {
 				// Rebuild system prompt after compaction (memory may have changed).
-				system = buildSystemPromptForModelBudgetContext(ctx, a.modePrefix, tools, a.skillContent, loadedContext, a.memoryStore, iceContext, a.workDir, a.ignoreContent, a.llmClient.Model(), turnNumCtx)
+				system = buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadRoots(ctx, a.modePrefix, tools, a.skillContent, skillCatalog, loadedContext, a.memoryStore, iceContext, a.workDir, a.ignoreContent, a.llmClient.Model(), turnNumCtx, readRoots)
 			}
 		}
 

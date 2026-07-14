@@ -152,27 +152,17 @@ func TestStandaloneRecoveryUsesHeldLeaseAndExplicitlyRechecksAgent(t *testing.T)
 	}
 	entriesBeforeRedirect := len(m.entries)
 	redirect := m.submitInput()
-	if redirect == nil || m.standaloneRecovery == nil || !m.standaloneRecovery.loading {
-		t.Fatalf("blocked Enter did not route to recovery inspection: cmd=%v recovery=%#v", redirect != nil, m.standaloneRecovery)
+	if redirect != nil || m.standaloneRecovery == nil || m.standaloneRecovery.loading {
+		t.Fatalf("blocked Enter silently opened recovery: cmd=%v recovery=%#v", redirect != nil, m.standaloneRecovery)
 	}
 	if got := m.input.Value(); got != "continue safely" {
-		t.Fatalf("recovery redirect consumed the explicit draft: %q", got)
+		t.Fatalf("recovery reminder consumed the explicit draft: %q", got)
 	}
-	if len(m.entries) != entriesBeforeRedirect || len(m.agent.Messages()) != 0 || client.calls.Load() != 0 {
-		t.Fatalf("recovery redirect dispatched a turn: entries=%d/%d messages=%#v provider=%d", len(m.entries), entriesBeforeRedirect, m.agent.Messages(), client.calls.Load())
+	if len(m.entries) != entriesBeforeRedirect+1 ||
+		!strings.Contains(m.entries[len(m.entries)-1].Content, "draft is still in the composer") ||
+		len(m.agent.Messages()) != 0 || client.calls.Load() != 0 {
+		t.Fatalf("recovery reminder state: entries=%d/%d messages=%#v provider=%d", len(m.entries), entriesBeforeRedirect, m.agent.Messages(), client.calls.Load())
 	}
-	if activity, active := m.currentWorkingActivity(); !active || activity.label != "Inspecting recovery" || !activity.static {
-		t.Fatalf("recovery inspection status = %#v active=%v", activity, active)
-	}
-	updated, _ = m.Update(redirect())
-	m = updated.(*Model)
-	if m.overlay != OverlayGoalRecovery || m.goalRecoveryState == nil || !m.goalRecoveryState.standalone {
-		t.Fatalf("blocked Enter did not open the typed recovery wizard: overlay=%d state=%#v", m.overlay, m.goalRecoveryState)
-	}
-	if got := m.input.Value(); got != "continue safely" {
-		t.Fatalf("recovery wizard changed the preserved draft: %q", got)
-	}
-	m.closeStandaloneRecovery()
 	record, err := store.GetSessionStateRecord(context.Background(), session.ID)
 	if err != nil {
 		t.Fatal(err)

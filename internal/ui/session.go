@@ -61,32 +61,34 @@ const (
 	maxPersistedToolResultBytes = 16 * 1024
 	maxPersistedDiffBytes       = 64 * 1024
 	maxPersistedDiffLines       = 2_000
+	persistedDiffOmission       = "...[remaining diff omitted from saved session]"
 )
 
 type persistedSessionState struct {
-	Version             int                  `json:"version"`
-	Messages            []llm.Message        `json:"messages"`
-	Entries             []persistedChatEntry `json:"entries"`
-	ToolEntries         []persistedToolEntry `json:"tool_entries,omitempty"`
-	Mode                Mode                 `json:"mode"`
-	Model               string               `json:"model,omitempty"`
-	ModelPinned         bool                 `json:"model_pinned,omitempty"`
-	AgentProfile        string               `json:"agent_profile,omitempty"`
-	LoadedFile          string               `json:"loaded_file,omitempty"`
-	ManualLoadedContext string               `json:"manual_loaded_context,omitempty"`
-	ManualSkills        []string             `json:"manual_skills,omitempty"`
-	SessionEvalTotal    int                  `json:"session_eval_total,omitempty"`
-	SessionPromptTotal  int                  `json:"session_prompt_total,omitempty"`
-	SessionTurnCount    int                  `json:"session_turn_count,omitempty"`
-	ExecutionCursor     int64                `json:"execution_cursor,omitempty"`
-	FileChanges         map[string]int       `json:"file_changes,omitempty"`
-	Goal                *goal.Snapshot       `json:"goal,omitempty"`
+	Version               int                    `json:"version"`
+	Messages              []llm.Message          `json:"messages"`
+	Entries               []persistedChatEntry   `json:"entries"`
+	ToolEntries           []persistedToolEntry   `json:"tool_entries,omitempty"`
+	Mode                  Mode                   `json:"mode"`
+	Model                 string                 `json:"model,omitempty"`
+	ModelPinned           bool                   `json:"model_pinned,omitempty"`
+	AgentProfile          string                 `json:"agent_profile,omitempty"`
+	LoadedFile            string                 `json:"loaded_file,omitempty"`
+	ManualLoadedContext   string                 `json:"manual_loaded_context,omitempty"`
+	ManualSkills          []string               `json:"manual_skills,omitempty"`
+	SessionEvalTotal      int                    `json:"session_eval_total,omitempty"`
+	SessionPromptTotal    int                    `json:"session_prompt_total,omitempty"`
+	SessionTurnCount      int                    `json:"session_turn_count,omitempty"`
+	ExecutionCursor       int64                  `json:"execution_cursor,omitempty"`
+	FileChanges           map[string]int         `json:"file_changes,omitempty"`
+	Goal                  *goal.Snapshot         `json:"goal,omitempty"`
+	CortexDecisionAttempt *cortexDecisionAttempt `json:"cortex_decision_attempt,omitempty"`
 }
 
 const currentPersistedSessionVersion = 2
 
 func sessionTitle(prompt string) string {
-	title := strings.TrimSpace(strings.SplitN(prompt, "\n", 2)[0])
+	title := sanitizeTerminalSingleLine(strings.SplitN(prompt, "\n", 2)[0])
 	if title == "" {
 		title = "Local agent session " + time.Now().Format("2006-01-02 15:04")
 	}
@@ -116,28 +118,72 @@ func persistDiffLines(lines []DiffLine) []DiffLine {
 	if len(lines) == 0 {
 		return nil
 	}
-	remaining := maxPersistedDiffBytes
 	capacity := len(lines)
 	if capacity > maxPersistedDiffLines {
 		capacity = maxPersistedDiffLines
 	}
 	result := make([]DiffLine, 0, capacity)
-	const perLineOverhead = 32
+	// The limit applies to the encoded JSON array, not the in-memory string
+	// lengths. Quotes, backslashes, controls, and a few Unicode code points can
+	// expand during encoding, so charge the exact object encoding and array
+	// separators while always reserving a typed omission marker.
+	encodedBytes := 2 // opening and closing JSON array brackets
+	omission := DiffLine{Kind: DiffOmitted, Content: persistedDiffOmission}
+	omissionBytes := encodedDiffLineBytes(omission)
 	for i, line := range lines {
 		if len(result) >= maxPersistedDiffLines-1 && i < len(lines)-1 {
-			result = append(result, DiffLine{Kind: DiffContext, Content: "...[remaining diff omitted from saved session]"})
+			result = append(result, omission)
 			break
 		}
-		if remaining <= perLineOverhead {
-			result = append(result, DiffLine{Kind: DiffContext, Content: "...[remaining diff omitted from saved session]"})
+		content := line.Content
+		if line.Kind == DiffNoNewline {
+			content = diffNoNewlineContent
+		}
+		persisted := DiffLine{
+			Kind: line.Kind, Content: content, OldLine: max(0, line.OldLine), NewLine: max(0, line.NewLine),
+		}
+		if line.Hunk != nil {
+			hunk := *line.Hunk
+			hunk.OldStart = max(0, hunk.OldStart)
+			hunk.OldCount = max(0, hunk.OldCount)
+			hunk.NewStart = max(0, hunk.NewStart)
+			hunk.NewCount = max(0, hunk.NewCount)
+			persisted.Hunk = &hunk
+		}
+		lineBytes := encodedDiffLineBytes(persisted)
+		lineCost := lineBytes
+		if len(result) > 0 {
+			lineCost++ // JSON array comma
+		}
+		needsOmission := i < len(lines)-1
+		reservedBytes := 0
+		if needsOmission {
+			reservedBytes = omissionBytes + 1 // comma before the omission marker
+		}
+		if encodedBytes+lineCost+reservedBytes > maxPersistedDiffBytes {
+			omissionCost := omissionBytes
+			if len(result) > 0 {
+				omissionCost++
+			}
+			if encodedBytes+omissionCost <= maxPersistedDiffBytes {
+				result = append(result, omission)
+			}
 			break
 		}
-		remaining -= perLineOverhead
-		content := boundedSessionText(line.Content, remaining)
-		result = append(result, DiffLine{Kind: line.Kind, Content: content})
-		remaining -= len(content)
+		result = append(result, persisted)
+		encodedBytes += lineCost
 	}
 	return result
+}
+
+func encodedDiffLineBytes(line DiffLine) int {
+	encoded, err := json.Marshal(line)
+	if err != nil {
+		// DiffLine contains only JSON-supported scalar fields. Returning a value
+		// beyond the ceiling is a fail-closed fallback if that contract changes.
+		return maxPersistedDiffBytes + 1
+	}
+	return len(encoded)
 }
 
 func persistToolEntries(entries []ToolEntry) []persistedToolEntry {
@@ -175,7 +221,7 @@ func restoreToolEntries(entries []persistedToolEntry) []ToolEntry {
 			StartTime:  entry.StartTime,
 			Duration:   entry.Duration,
 			Collapsed:  entry.Collapsed,
-			DiffLines:  append([]DiffLine(nil), entry.DiffLines...),
+			DiffLines:  persistDiffLines(entry.DiffLines),
 			Projection: entry.Projection.Normalize(),
 		}
 		settleInterruptedToolEntry(&restored)
@@ -248,23 +294,24 @@ func encodeSessionState(m *Model) (string, error) {
 		goalSnapshot = &snapshot
 	}
 	state := persistedSessionState{
-		Version:             currentPersistedSessionVersion,
-		Messages:            m.agent.Messages(),
-		Entries:             entries,
-		ToolEntries:         persistToolEntries(m.toolEntries),
-		Mode:                m.mode,
-		Model:               m.model,
-		ModelPinned:         m.modelPinned,
-		AgentProfile:        m.agentProfile,
-		LoadedFile:          m.loadedFile,
-		ManualLoadedContext: m.manualLoadedContext,
-		ManualSkills:        append([]string(nil), manualSkills...),
-		SessionEvalTotal:    m.sessionEvalTotal,
-		SessionPromptTotal:  m.sessionPromptTotal,
-		SessionTurnCount:    m.sessionTurnCount,
-		ExecutionCursor:     m.executionCursor,
-		FileChanges:         m.fileChanges,
-		Goal:                goalSnapshot,
+		Version:               currentPersistedSessionVersion,
+		Messages:              m.agent.Messages(),
+		Entries:               entries,
+		ToolEntries:           persistToolEntries(m.toolEntries),
+		Mode:                  m.mode,
+		Model:                 m.model,
+		ModelPinned:           m.modelPinned,
+		AgentProfile:          m.agentProfile,
+		LoadedFile:            m.loadedFile,
+		ManualLoadedContext:   m.manualLoadedContext,
+		ManualSkills:          append([]string(nil), manualSkills...),
+		SessionEvalTotal:      m.sessionEvalTotal,
+		SessionPromptTotal:    m.sessionPromptTotal,
+		SessionTurnCount:      m.sessionTurnCount,
+		ExecutionCursor:       m.executionCursor,
+		FileChanges:           m.fileChanges,
+		Goal:                  goalSnapshot,
+		CortexDecisionAttempt: cloneCortexDecisionAttempt(m.cortexDecisionAttempt),
 	}
 	return marshalPersistedSessionState(state)
 }
@@ -410,6 +457,9 @@ func sanitizePersistedToolEntryArgs(entries []persistedToolEntry) []persistedToo
 	}
 	result := append([]persistedToolEntry(nil), entries...)
 	for index := range result {
+		// Apply the same exact serialized diff ceiling to decoded and direct
+		// in-memory snapshots, not only snapshots produced by encodeSessionState.
+		result[index].DiffLines = persistDiffLines(result[index].DiffLines)
 		if !agent.ToolArgumentsRequirePrivacy(result[index].Name) {
 			continue
 		}
@@ -531,6 +581,10 @@ func (m *Model) restoreSessionState(state persistedSessionState) error {
 			return fmt.Errorf("restore goal runtime: %w", err)
 		}
 	}
+	targetDecisionAttempt := cloneCortexDecisionAttempt(state.CortexDecisionAttempt)
+	if err := validateRestoredCortexDecisionAttempt(targetDecisionAttempt, state.Goal); err != nil {
+		return fmt.Errorf("restore Cortex decision answer fence: %w", err)
+	}
 
 	targetManualSkills := uniqueSkillNames(state.ManualSkills)
 	if err := m.validateSkillNames(uniqueSkillNames(m.manualSkills, m.profileSkills), "current session"); err != nil {
@@ -630,6 +684,17 @@ func (m *Model) restoreSessionState(state persistedSessionState) error {
 	}
 	m.goalRuntime = targetGoal
 	m.goalPersistenceDirty = false
+	// Pending decision prose is never session state. A restore discards every
+	// transient presentation/generation and recovers it only through fresh,
+	// read-only Cortex status after the durable Goal snapshot is installed.
+	m.cortexDecision = nil
+	m.cortexDecisionOp = nil
+	m.cortexDecisionAttempt = targetDecisionAttempt
+	m.cortexDecisionGen++
+	if m.overlay == OverlayCortexDecision {
+		m.overlay = OverlayNone
+		m.overlayParent = OverlayNone
+	}
 	m.syncComposerAuthority()
 	m.setRouterMode(m.modeConfigs[m.presentedMode()].RouterMode)
 

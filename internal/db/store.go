@@ -1,12 +1,15 @@
 package db
 
 import (
+	"crypto/sha256"
 	"database/sql"
 	"embed"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -157,21 +160,47 @@ func (s *Store) DB() *sql.DB {
 }
 
 func runMigrations(conn *sql.DB) error {
-	entries, err := migrations.ReadDir("migrations")
+	return runMigrationFS(conn, migrations, "migrations")
+}
+
+// runMigrationFS applies each embedded migration exactly once and records the
+// source checksum in the database. Earlier releases replayed every file on
+// every startup, which made all future migrations depend on perfect SQL-level
+// idempotence and could not detect a rewritten migration. Existing databases
+// without the ledger are upgraded by replaying the current idempotent baseline
+// once, then recording it transactionally.
+func runMigrationFS(conn *sql.DB, source fs.ReadDirFS, directory string) error {
+	if conn == nil {
+		return errors.New("migration database is nil")
+	}
+	if _, err := conn.Exec(`
+		CREATE TABLE IF NOT EXISTS schema_migrations (
+			name       TEXT PRIMARY KEY,
+			checksum   TEXT NOT NULL,
+			applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+			CHECK (length(trim(name)) > 0 AND length(CAST(name AS BLOB)) <= 255),
+			CHECK (length(checksum) = 64 AND checksum NOT GLOB '*[^0-9a-f]*')
+		)
+	`); err != nil {
+		return fmt.Errorf("create migration ledger: %w", err)
+	}
+
+	entries, err := source.ReadDir(directory)
 	if err != nil {
 		return fmt.Errorf("read migrations dir: %w", err)
 	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 
 	for _, entry := range entries {
-		if entry.IsDir() {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
 			continue
 		}
-		data, err := migrations.ReadFile("migrations/" + entry.Name())
+		data, err := fs.ReadFile(source, directory+"/"+entry.Name())
 		if err != nil {
 			return fmt.Errorf("read migration %s: %w", entry.Name(), err)
 		}
-		if _, err := conn.Exec(string(data)); err != nil {
-			return fmt.Errorf("exec migration %s: %w", entry.Name(), err)
+		if err := applyMigration(conn, entry.Name(), data); err != nil {
+			return err
 		}
 	}
 	if err := ensureSessionWorkspaceColumn(conn); err != nil {
@@ -181,6 +210,41 @@ func runMigrations(conn *sql.DB) error {
 		return err
 	}
 	return ensureSessionStateRevisionColumn(conn)
+}
+
+func applyMigration(conn *sql.DB, name string, data []byte) error {
+	checksum := fmt.Sprintf("%x", sha256.Sum256(data))
+	tx, err := conn.Begin()
+	if err != nil {
+		return fmt.Errorf("begin migration %s: %w", name, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var recorded string
+	err = tx.QueryRow(`SELECT checksum FROM schema_migrations WHERE name = ?`, name).Scan(&recorded)
+	switch {
+	case err == nil:
+		if recorded != checksum {
+			return fmt.Errorf("migration %s checksum mismatch: database=%s source=%s", name, recorded, checksum)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit checked migration %s: %w", name, err)
+		}
+		return nil
+	case !errors.Is(err, sql.ErrNoRows):
+		return fmt.Errorf("read migration %s ledger: %w", name, err)
+	}
+
+	if _, err := tx.Exec(string(data)); err != nil {
+		return fmt.Errorf("exec migration %s: %w", name, err)
+	}
+	if _, err := tx.Exec(`INSERT INTO schema_migrations (name, checksum) VALUES (?, ?)`, name, checksum); err != nil {
+		return fmt.Errorf("record migration %s: %w", name, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit migration %s: %w", name, err)
+	}
+	return nil
 }
 
 // ensureSessionWorkspaceColumn upgrades databases created before workspace

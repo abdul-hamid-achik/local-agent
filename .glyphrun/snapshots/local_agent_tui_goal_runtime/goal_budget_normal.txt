@@ -1,22 +1,31 @@
-       ╭────────────────────────────────────────────────────────────────╮
-       │ Goal budgets                                                   │
-       │ Definition locked · adjust limits only.                        │
-       │                                                                │
-       │ Objective · locked                                             │
-       │   Ship a polished goal UI                                      │
-       │                                                                │
-       │ Acceptance criteria · locked                                   │
-       │   The durable goal status is visible and accurate              │
-       │                                                                │
-       │                                                                │
-       │                                                                │
-       │ Limits · set at least one                                      │
-       │ Auto turns > 8                                                 │
-       │ Tokens       12000                                             │
-       │ Time         30m                                               │
-       │                                                                │
-       │ Actions                                                        │
-       │ ▸ Save budgets ·   Cancel                                      │
-       │ Update limits only                                             │
-       │ esc cancel · enter/tab next                                    │
-       ╰────────────────────────────────────────────────────────────────╯
+
+  ✗ error
+  Cortex link failed · cortex goal advisor is unavailable: neither
+  cortex_open_task nor the MCPHub gateway is connected. Goal paused;
+  update or rebuild Cortex so cortex_open_task is exposed, then run /goal
+  resume.
+
+
+───────────────────────────────────────────────────────────────────────────────
+╭─────────────────────────────────────────────────────────────────────────────╮
+│ Goal budgets                                                                │
+│ Definition locked · adjust limits only.                                     │
+│                                                                             │
+│ Objective · locked                                                          │
+│   Ship a polished goal UI                                                   │
+│                                                                             │
+│ Acceptance criteria · locked                                                │
+│   The durable goal status is visible and accurate                           │
+│                                                                             │
+│                                                                             │
+│                                                                             │
+│ Limits · set at least one                                                   │
+│ Auto turns > 8                                                              │
+│ Tokens       12000                                                          │
+│ Time         30m                                                            │
+│                                                                             │
+│ Actions                                                                     │
+│ ▸ Save budgets ·   Cancel                                                   │
+│ Update limits only                                                          │
+│ esc cancel · enter/tab next                                                 │
+╰─────────────────────────────────────────────────────────────────────────────╯

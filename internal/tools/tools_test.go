@@ -154,3 +154,27 @@ func TestExistsToolDef(t *testing.T) {
 		t.Errorf("Name = %q, want %q", tool.Name, "exists")
 	}
 }
+
+func TestLoadSkillToolDef(t *testing.T) {
+	tool := LoadSkillToolDef()
+	if tool.Name != "load_skill" {
+		t.Fatalf("Name = %q", tool.Name)
+	}
+	if !IsBuiltinTool(tool.Name) {
+		t.Fatal("load_skill is not classified as built-in")
+	}
+	properties, ok := tool.Parameters["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties = %#v", tool.Parameters["properties"])
+	}
+	if _, ok := properties["name"]; !ok {
+		t.Fatal("name property missing")
+	}
+	required, ok := tool.Parameters["required"].([]string)
+	if !ok || len(required) != 1 || required[0] != "name" {
+		t.Fatalf("required = %#v", tool.Parameters["required"])
+	}
+	if additional, ok := tool.Parameters["additionalProperties"].(bool); !ok || additional {
+		t.Fatalf("additionalProperties = %#v", tool.Parameters["additionalProperties"])
+	}
+}

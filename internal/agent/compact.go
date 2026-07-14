@@ -17,6 +17,15 @@ type contextCompactionOutput interface {
 	ContextCompacted()
 }
 
+// contextCompactionLifecycleOutput is an optional, presentation-only progress
+// contract. Compaction performs its own provider request before the ordinary
+// turn can continue, so callers need a bounded lifecycle signal rather than a
+// long, unexplained gap in streaming output.
+type contextCompactionLifecycleOutput interface {
+	ContextCompactionStarted()
+	ContextCompactionFinished()
+}
+
 // shouldCompact returns true if the prompt token count exceeds 75% of the
 // currently effective context window.
 func (a *Agent) shouldCompact(promptTokens int) bool {
@@ -76,6 +85,11 @@ func (a *Agent) compactForContext(ctx context.Context, out Output, numCtx int) b
 	summary := summarizeMessages(older)
 	if budget := optionalPromptBudget(numCtx); budget > 0 {
 		summary = boundPromptText(summary, budget)
+	}
+
+	if reporter, ok := out.(contextCompactionLifecycleOutput); ok {
+		reporter.ContextCompactionStarted()
+		defer reporter.ContextCompactionFinished()
 	}
 
 	// Ask LLM to produce a compact summary.

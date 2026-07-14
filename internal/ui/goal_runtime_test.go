@@ -949,6 +949,8 @@ func TestExplicitBoundedGoalStartsDirectlyWhenPromptIsConcrete(t *testing.T) {
 
 func TestExplicitBoundedGoalAsksContextualFollowUpWhenPromptIsAmbiguous(t *testing.T) {
 	m := newGoalRuntimeTestModel(t, &goalCountingClient{})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 32})
+	m = updated.(*Model)
 	cmd := m.handleCommandAction(command.Result{
 		Action: command.ActionOpenGoal,
 		Goal: &command.GoalRequest{
@@ -961,8 +963,9 @@ func TestExplicitBoundedGoalAsksContextualFollowUpWhenPromptIsAmbiguous(t *testi
 	if m.goalFormState.ActiveField() != GoalFieldObjective {
 		t.Fatalf("follow-up field = %v, want objective", m.goalFormState.ActiveField())
 	}
-	for _, want := range []string{"Complete goal details", "concrete behavior or artifact", "observable result"} {
-		if !strings.Contains(ansi.Strip(m.goalFormState.View()), want) {
+	normalized := strings.Join(strings.Fields(ansi.Strip(m.goalFormState.View())), " ")
+	for _, want := range []string{"Complete goal details", "concrete behavior or artifact", "observable", "result would prove it"} {
+		if !strings.Contains(normalized, want) {
 			t.Fatalf("contextual follow-up omitted %q:\n%s", want, ansi.Strip(m.goalFormState.View()))
 		}
 	}

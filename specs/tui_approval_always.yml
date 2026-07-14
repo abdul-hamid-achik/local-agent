@@ -44,7 +44,7 @@ steps:
       timeoutMs: 5000
   - wait:
       screen:
-        contains: "s session"
+        contains: "identical request"
       timeoutMs: 2000
   - snapshot: session_permission
   - press: "s"

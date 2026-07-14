@@ -56,6 +56,25 @@ func (c *Completer) Complete(input string) []Completion {
 	return completions
 }
 
+// CompleteStatic returns only in-memory completion sources. The UI uses this
+// from Update so filesystem listing and walking are always deferred to a
+// cancellable tea.Cmd.
+func (c *Completer) CompleteStatic(input string) []Completion {
+	if c == nil {
+		return nil
+	}
+	switch {
+	case strings.HasPrefix(input, "/"):
+		return c.completeCommand(input)
+	case strings.HasPrefix(input, "@"):
+		return c.completeAgents(input)
+	case strings.HasPrefix(input, "#"):
+		return c.completeSkill(input)
+	default:
+		return nil
+	}
+}
+
 func (c *Completer) completeCommand(input string) []Completion {
 	var completions []Completion
 	input = strings.TrimPrefix(input, "/")
@@ -118,10 +137,18 @@ func (c *Completer) completeCommandAction(commandName, prefix string) []Completi
 }
 
 func (c *Completer) completeAgentOrFile(input string) []Completion {
-	var completions []Completion
+	completions := c.completeAgents(input)
 	input = strings.TrimPrefix(input, "@")
 
-	// Always show agents first
+	// Always append file results (not just when no agents match)
+	completions = append(completions, c.completeFile(input)...)
+
+	return completions
+}
+
+func (c *Completer) completeAgents(input string) []Completion {
+	input = strings.TrimPrefix(input, "@")
+	var completions []Completion
 	for _, agent := range c.agents {
 		if strings.HasPrefix(agent, input) {
 			completions = append(completions, Completion{
@@ -131,10 +158,6 @@ func (c *Completer) completeAgentOrFile(input string) []Completion {
 			})
 		}
 	}
-
-	// Always append file results (not just when no agents match)
-	completions = append(completions, c.completeFile(input)...)
-
 	return completions
 }
 
@@ -266,6 +289,121 @@ func (c *Completer) CompleteFilePath(relPath string) []Completion {
 	}
 
 	return completions
+}
+
+// WorkspaceCompletions performs every filesystem-backed completion operation.
+// Callers must run it inside a tea.Cmd; context cancellation stops directory
+// iteration and the bounded recursive search as soon as control returns from
+// the underlying filesystem call.
+func (c *Completer) WorkspaceCompletions(ctx context.Context, query, currentPath string) []Completion {
+	if c == nil || ctx == nil {
+		return nil
+	}
+	listed := c.listWorkspaceCompletions(ctx, query, currentPath)
+	if err := ctx.Err(); err != nil || currentPath != "" || strings.TrimSpace(query) == "" {
+		return listed
+	}
+
+	results := c.SearchFiles(ctx, query)
+	existing := make(map[string]bool, len(listed))
+	for _, item := range listed {
+		existing[item.Insert] = true
+	}
+	for _, item := range results {
+		if !existing[item.Insert] {
+			listed = append(listed, item)
+			existing[item.Insert] = true
+		}
+	}
+	return listed
+}
+
+func (c *Completer) listWorkspaceCompletions(ctx context.Context, query, currentPath string) []Completion {
+	query = filepath.ToSlash(strings.TrimSpace(query))
+	currentPath = strings.Trim(filepath.ToSlash(strings.TrimSpace(currentPath)), "/")
+	directoryPath := currentPath
+	prefix := query
+	if currentPath == "" {
+		if slash := strings.LastIndex(query, "/"); slash >= 0 {
+			directoryPath = strings.Trim(query[:slash], "/")
+			prefix = query[slash+1:]
+		}
+	}
+	if filepath.IsAbs(directoryPath) || directoryPath == ".." || strings.HasPrefix(directoryPath, "../") {
+		return nil
+	}
+
+	root, err := filepath.Abs(c.workDir)
+	if err != nil {
+		return nil
+	}
+	root, err = filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil
+	}
+	directory := filepath.Join(root, filepath.FromSlash(directoryPath))
+	directory, err = filepath.EvalSymlinks(directory)
+	if err != nil {
+		return nil
+	}
+	within, err := filepath.Rel(root, directory)
+	if err != nil || within == ".." || strings.HasPrefix(within, ".."+string(filepath.Separator)) {
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return nil
+	default:
+	}
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return nil
+	}
+
+	items := make([]Completion, 0, len(entries))
+	for _, entry := range entries {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
+		name := entry.Name()
+		if entry.Type()&os.ModeSymlink != 0 {
+			continue
+		}
+		if strings.HasPrefix(name, ".") && !strings.HasPrefix(prefix, ".") {
+			continue
+		}
+		relative := filepath.ToSlash(filepath.Join(directoryPath, name))
+		if c.ignorePatterns.Match(relative) || !strings.HasPrefix(name, prefix) {
+			continue
+		}
+
+		isDirectory := entry.IsDir()
+		display := name
+		if currentPath == "" && directoryPath != "" {
+			display = strings.TrimSuffix(directoryPath, "/") + "/" + display
+		}
+		if isDirectory {
+			display += "/"
+		}
+		label := display
+		if currentPath == "" {
+			label = "@" + display
+		}
+		category := "file"
+		insertPath := relative
+		if isDirectory {
+			category = "folder"
+			insertPath += "/"
+		}
+		items = append(items, Completion{
+			Label:    label,
+			Insert:   "@" + insertPath + " ",
+			Category: category,
+		})
+	}
+	return items
 }
 
 func (c *Completer) completeSkill(input string) []Completion {

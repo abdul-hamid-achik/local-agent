@@ -88,6 +88,26 @@ func TestTransientInputsAndCompactDensitySurviveThemeChange(t *testing.T) {
 	assertRenderedHeightFits(t, rendered, minTerminalHeight)
 }
 
+func TestTransientInputReducedMotionSurvivesThemeChange(t *testing.T) {
+	m := newTestModel(t)
+	m.reducedMotion = true
+	m.planFormState = NewPlanFormState("polish the interface", m.isDark, m.reducedMotion)
+	m.completionState = newCompletionState(
+		"command", []Completion{{Label: "/help"}}, false, m.isDark, m.reducedMotion,
+	)
+
+	updated, _ := m.Update(tea.BackgroundColorMsg{Color: color.White})
+	m = updated.(*Model)
+	if m.completionState.Filter.Styles().Cursor.Blink {
+		t.Fatal("theme change re-enabled the reduced-motion completion cursor")
+	}
+	for _, field := range m.planFormState.Fields {
+		if field.Kind == "text" && field.Input.Styles().Cursor.Blink {
+			t.Fatalf("theme change re-enabled the reduced-motion Plan cursor for %q", field.Label)
+		}
+	}
+}
+
 func hasANSIColor(value string) bool {
 	return strings.Contains(value, "\x1b[38;") || strings.Contains(value, "\x1b[48;")
 }

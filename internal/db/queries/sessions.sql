@@ -5,7 +5,7 @@ INSERT INTO sessions (title, model, mode, workspace_id) VALUES (?, ?, ?, ?) RETU
 SELECT * FROM sessions WHERE id = ?;
 
 -- name: ListSessions :many
-SELECT * FROM sessions WHERE workspace_id = ? ORDER BY updated_at DESC LIMIT ?;
+SELECT * FROM sessions WHERE workspace_id = ? ORDER BY updated_at DESC, id DESC LIMIT ?;
 
 -- name: UpdateSessionTitle :exec
 UPDATE sessions SET title = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?;

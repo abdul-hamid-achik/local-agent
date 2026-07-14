@@ -1,10 +1,11 @@
-  you ───────────────
- ╭──────────────────────────╮
- │ Permission · write       │
- │ Action Write 19 B        │
- │ Target /Users/abdulachik │
- │        /projects/local-a │
- │        gent/.glyphrun/tm │
- │        p/approval-workdi │
- │ esc cancel · y · s · n   │
- ╰──────────────────────────╯
+  assistant ─────────
+  │ Thinking… · Checki…
+
+─────────────────────────────
+  ◇ Permission · write · NOR…
+  Action Write 19 B
+  Target /Users/abdulachik/pr
+  › n deny
+    y once
+    s identical/session
+  esc cancel · enter select

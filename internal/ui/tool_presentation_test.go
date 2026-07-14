@@ -23,6 +23,8 @@ func TestPresentToolUsesStateSpecificActionLabels(t *testing.T) {
 		{name: "bash", kind: ToolCardBash, state: ToolCardSuccess, want: "Ran"},
 		{name: "grep", kind: ToolCardSearch, state: ToolCardError, want: "Search failed"},
 		{name: "memory_save", kind: ToolCardGeneric, state: ToolCardSuccess, want: "Saved memory"},
+		{name: "load_skill", kind: ToolCardGeneric, state: ToolCardRunning, want: "Loading skill"},
+		{name: "load_skill", kind: ToolCardGeneric, state: ToolCardSuccess, want: "Loaded skill"},
 		{name: "server__read-file", kind: ToolCardGeneric, state: ToolCardSuccess, want: "Read"},
 		{name: "", kind: ToolCardSearch, state: ToolCardRunning, want: "Searching"},
 	}

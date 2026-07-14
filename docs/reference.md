@@ -18,6 +18,7 @@ Local Agent has three operator surfaces: the interactive TUI, human-readable hea
 | `local-agent --mode auto -p "prompt"` | Run one proactive AUTO prompt under the configured approval policy |
 | `local-agent --model <name>` | Select and pin the initial Ollama model |
 | `local-agent --agent <name>` | Select the initial agent profile |
+| `local-agent --resume <id\|latest>` | Open the TUI and restore an exact or newest current-workspace session |
 | `local-agent --qwen-router` | Enable the experimental Qwen-specific router |
 | `local-agent --yolo -p "prompt"` | Bypass approvals for a trusted disposable workflow |
 | `local-agent init [--force]` | Create a project `AGENTS.md` |
@@ -26,6 +27,11 @@ Local Agent has three operator surfaces: the interactive TUI, human-readable hea
 | `local-agent --version` | Print the build version |
 
 `-p` is a human-readable convenience surface, not a stable JSON event protocol. Without `--yolo`, risky and MCP calls fail closed because headless mode has no approval UI.
+
+`--resume` is interactive-only and cannot be combined with `-p`. Session IDs
+must be positive integers; `latest` selects the most recently updated session
+whose canonical workspace matches the startup workspace. The restore runs after
+TUI initialization and does not dispatch provider work by itself.
 
 ## Durable-goal inspection
 
@@ -59,11 +65,16 @@ Inspection is read-only. Applying evidence requires the exact revision and event
 | `/model <name>` | Switch to and pin a model |
 | `/model auto` | Release the pin and resume local automatic routing |
 | `/agent [name\|list]` | List or switch profiles |
-| `/skill [list\|activate\|deactivate]` | Manage skills |
+| `/skill`, `/skill list` | List discovered skills and their activation state |
+| `/skill activate <name>`, `/skill deactivate <name>` | Add or remove one skill from active prompt context |
 | `/load <path>`, `/unload` | Add or remove one bounded Markdown context file |
+| `/scope list` | List process-local external read-only roots |
+| `/scope add-read <directory>` | Grant read-only access to one directory outside the writable workspace |
+| `/scope remove-read <directory>`, `/scope clear-read` | Revoke one or every external read-only root |
 | `/servers` | Show connected MCP servers and tool count |
 | `/ice` | Show optional ICE status |
-| `/sessions` | Open saved workspace sessions |
+| `/sessions`, `/resume` | Open the saved-session picker; neither command accepts an ID argument |
+| `/artifacts`, `/artifact` | List bounded file.cheap stash receipts in the current session |
 | `/changes` | List files modified in the current TUI session |
 | `/stats` | Show in-memory token and context counters |
 | `/checkpoint [label]` | Save current agent history |
@@ -72,14 +83,23 @@ Inspection is read-only. Applying evidence requires the exact revision and event
 | `/recover` | Review the current session's outcome-unknown execution and record typed evidence |
 | `/exit` | Quit |
 
-`/load` accepts a regular, non-symlink Markdown file up to 32 KB. Quoted paths are supported.
+Slash commands use a small argument parser rather than a shell. Single or
+double quotes and backslash-escaped whitespace group arguments; environment
+variables and command substitutions remain literal. `/load`, `/scope`, `/import`,
+and `/export` separately expand a leading `~/`. An unterminated quote is rejected
+before command dispatch. Documented arity is enforced: commands with no
+arguments and `/goal show`, `/goal pause`, `/goal resume`, `/goal budget`, or
+`/goal drop` reject trailing fields, while `/restore` accepts exactly one
+canonical positive decimal ID. `/load` accepts a regular, non-symlink Markdown
+file up to 32 KB.
 
 ## Goal commands
 
 | Command | Purpose |
 |---|---|
 | `/goal <duration> <prompt>` | Infer bounded criteria and start a concrete goal; ambiguous prompts ask one follow-up |
-| `/goal new [objective]` | Open an empty or partial goal review |
+| `/goal [objective]` | Open the inline review, optionally prefilled; bare `/goal` shows the active goal when one exists |
+| `/goal new [objective]` | Open an inline, editable goal review below the transcript |
 | `/goal show` | Inspect objective, criteria, proof, state, and budgets |
 | `/goal pause` | Stop host-initiated continuation |
 | `/goal resume` | Explicitly request one user-directed continuation |
@@ -114,7 +134,7 @@ Use Go duration syntax such as `30m` or `1h30m`. Duration-shaped but invalid inp
 | `ctrl+y` | Copy the latest response |
 | `ctrl+e` | Edit input with `$EDITOR` |
 | `ctrl+k` | Toggle compact transcript layout |
-| `esc` | Close an overlay, deny approval, or cancel active generation |
+| `esc` | Close an overlay or inline form, cancel an approval, or cancel active generation |
 | `ctrl+n`, `ctrl+l` | New conversation or clear the view |
 | `ctrl+c` | Quit |
 

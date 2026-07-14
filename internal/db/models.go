@@ -23,6 +23,40 @@ type CheckpointLegacyClaim struct {
 	CreatedAt    string `json:"created_at"`
 }
 
+type ControlItem struct {
+	ID             int64  `json:"id"`
+	ItemID         string `json:"item_id"`
+	IdempotencyKey string `json:"idempotency_key"`
+	SessionID      int64  `json:"session_id"`
+	WorkspaceID    string `json:"workspace_id"`
+	Kind           string `json:"kind"`
+	GoalID         string `json:"goal_id"`
+	ExecutionID    string `json:"execution_id"`
+	TurnID         string `json:"turn_id"`
+	ExternalID     string `json:"external_id"`
+	Summary        string `json:"summary"`
+	PayloadJson    string `json:"payload_json"`
+	PayloadSha256  string `json:"payload_sha256"`
+	CreatedAt      string `json:"created_at"`
+	RecordedAt     string `json:"recorded_at"`
+}
+
+type ControlResolution struct {
+	ID             int64  `json:"id"`
+	ResolutionID   string `json:"resolution_id"`
+	IdempotencyKey string `json:"idempotency_key"`
+	ItemID         string `json:"item_id"`
+	SessionID      int64  `json:"session_id"`
+	WorkspaceID    string `json:"workspace_id"`
+	Outcome        string `json:"outcome"`
+	EvidenceJson   string `json:"evidence_json"`
+	EvidenceSha256 string `json:"evidence_sha256"`
+	ResolvedBy     string `json:"resolved_by"`
+	Detail         string `json:"detail"`
+	ResolvedAt     string `json:"resolved_at"`
+	RecordedAt     string `json:"recorded_at"`
+}
+
 type ExecutionEvent struct {
 	ID              int64  `json:"id"`
 	SessionID       int64  `json:"session_id"`
@@ -58,6 +92,53 @@ type FileChange struct {
 	CreatedAt string `json:"created_at"`
 }
 
+type SQLCReconciliationGroup struct {
+	ID                   int64  `json:"id"`
+	GroupItemID          string `json:"group_item_id"`
+	IdempotencyKey       string `json:"idempotency_key"`
+	SessionID            int64  `json:"session_id"`
+	WorkspaceID          string `json:"workspace_id"`
+	GoalID               string `json:"goal_id"`
+	TurnID               string `json:"turn_id"`
+	BlockerReference     string `json:"blocker_reference"`
+	SnapshotCursor       int64  `json:"snapshot_cursor"`
+	GoalSnapshotSha256   string `json:"goal_snapshot_sha256"`
+	MemberSetSha256      string `json:"member_set_sha256"`
+	ExecutionMemberCount int64  `json:"execution_member_count"`
+	PayloadJson          string `json:"payload_json"`
+	PayloadSha256        string `json:"payload_sha256"`
+	CreatedAt            string `json:"created_at"`
+	RecordedAt           string `json:"recorded_at"`
+}
+
+type SQLCReconciliationGroupMember struct {
+	ID                int64  `json:"id"`
+	GroupItemID       string `json:"group_item_id"`
+	ControlItemID     string `json:"control_item_id"`
+	ExecutionID       string `json:"execution_id"`
+	TurnID            string `json:"turn_id"`
+	EventID           int64  `json:"event_id"`
+	EventType         string `json:"event_type"`
+	EffectClass       string `json:"effect_class"`
+	EventSha256       string `json:"event_sha256"`
+	ItemPayloadSha256 string `json:"item_payload_sha256"`
+	RecordedAt        string `json:"recorded_at"`
+}
+
+type SQLCReconciliationGroupResolution struct {
+	ID             int64  `json:"id"`
+	ResolutionID   string `json:"resolution_id"`
+	IdempotencyKey string `json:"idempotency_key"`
+	GroupItemID    string `json:"group_item_id"`
+	SessionID      int64  `json:"session_id"`
+	WorkspaceID    string `json:"workspace_id"`
+	EvidenceJson   string `json:"evidence_json"`
+	EvidenceSha256 string `json:"evidence_sha256"`
+	ResolvedBy     string `json:"resolved_by"`
+	ResolvedAt     string `json:"resolved_at"`
+	RecordedAt     string `json:"recorded_at"`
+}
+
 type Session struct {
 	ID          int64  `json:"id"`
 	Title       string `json:"title"`
@@ -83,6 +164,7 @@ type SessionMessage struct {
 type SessionState struct {
 	SessionID int64  `json:"session_id"`
 	StateJson string `json:"state_json"`
+	Revision  int64  `json:"revision"`
 	UpdatedAt string `json:"updated_at"`
 }
 

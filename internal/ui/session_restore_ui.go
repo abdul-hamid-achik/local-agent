@@ -104,6 +104,9 @@ func (m *Model) finishLoadedSession(message SessionLoadedMsg) (bool, tea.Cmd) {
 		m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("Restore goal recovery: %v", err)})
 	} else {
 		cmd = m.ensureCurrentGoalRecoveryProjection(false)
+		if decisionCmd := m.beginRestoredCortexDecisionRefresh(); decisionCmd != nil {
+			cmd = tea.Batch(cmd, decisionCmd)
+		}
 	}
 	m.entries = append(m.entries, ChatEntry{Kind: "system", Content: fmt.Sprintf("Restored session: %s", message.Title)})
 	if message.RecoveryWarning != "" {

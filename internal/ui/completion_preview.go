@@ -46,8 +46,9 @@ type completionPreview struct {
 }
 
 type completionPreviewResultMsg struct {
-	Token   uint64
-	Preview completionPreview
+	Generation uint64
+	Token      uint64
+	Preview    completionPreview
 }
 
 type completionPreviewLoader func(context.Context, string, string) completionPreview
@@ -127,6 +128,7 @@ func (m *Model) refreshCompletionPreview() tea.Cmd {
 	}
 	cs.PreviewToken++
 	token := cs.PreviewToken
+	generation := cs.Generation
 
 	item, ok := selectedCompletion(cs)
 	if !ok {
@@ -159,7 +161,7 @@ func (m *Model) refreshCompletionPreview() tea.Cmd {
 	return func() tea.Msg {
 		defer cancel()
 		preview := defaultCompletionPreviewReader.read(ctx, workDir, path)
-		return completionPreviewResultMsg{Token: token, Preview: preview}
+		return completionPreviewResultMsg{Generation: generation, Token: token, Preview: preview}
 	}
 }
 
@@ -328,32 +330,17 @@ func sanitizeCompletionPreviewPath(path string) string {
 	return sanitizeTerminalSingleLine(path)
 }
 
-func completionPreviewRowBudget(height int, cs *CompletionState) int {
-	if cs == nil || cs.Kind != "attachments" {
-		return 0
-	}
-	switch {
-	case height <= 12:
-		// Keep one real content row even at the supported 30x12 minimum. The
-		// picker yields list density before it degrades into metadata-only chrome.
-		return 3
-	case height <= 17:
-		return 3
-	case height <= 23:
-		return 4
-	default:
-		return 6
-	}
-}
-
 func (m *Model) renderCompletionPreview(width, rows int) string {
 	cs := m.completionState
-	if cs == nil || cs.Kind != "attachments" || rows < 2 {
+	if cs == nil || cs.Kind != "attachments" || rows < 1 {
 		return ""
 	}
 	preview := cs.Preview
-	lines := []string{m.styles.FocusIndicator.Render(strings.Repeat("─", max(1, width)))}
 	meta := completionPreviewMeta(preview)
+	if rows == 1 {
+		return m.styles.CompletionCategory.Render(truncateDisplay(meta, width))
+	}
+	lines := []string{m.styles.FocusIndicator.Render(strings.Repeat("─", max(1, width)))}
 	lines = append(lines, m.styles.CompletionCategory.Render(truncateDisplay(meta, width)))
 	if preview.State == completionPreviewReady && rows > 2 {
 		contentLines := strings.Split(preview.Content, "\n")

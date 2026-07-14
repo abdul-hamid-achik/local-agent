@@ -92,6 +92,8 @@ func (m *Model) currentWorkingActivity() (workingActivity, bool) {
 		return workingActivity{label: "Publishing export"}, true
 	case m.goalOperation != "":
 		return workingActivity{label: m.goalOperation, detail: "Cortex", cancellable: true}, true
+	case m.compactingContext:
+		return workingActivity{label: "Preparing context", detail: "summarizing earlier turns", cancellable: true}, true
 	case m.toolsPending > 0:
 		// The running ToolCard is the single animated, detailed surface for tool
 		// work. The footer keeps only the global cancellation affordance.
@@ -100,6 +102,11 @@ func (m *Model) currentWorkingActivity() (workingActivity, bool) {
 			activity.label = fmt.Sprintf("%d tools running", m.toolsPending)
 		}
 		return activity, true
+	case m.capabilityRoute != nil && (m.state == StateWaiting || m.state == StateStreaming):
+		return workingActivity{
+			label: "Capability route", detail: capabilityRouteDetail(*m.capabilityRoute),
+			elapsed: m.turnElapsed(), cancellable: true,
+		}, true
 	case m.state == StateWaiting:
 		return workingActivity{
 			label: "Running", elapsed: m.turnElapsed(), cancellable: true, waiting: true,
@@ -169,7 +176,10 @@ func (m *Model) renderWorkingLine() string {
 		activity.label = "Working"
 	}
 
-	motion := m.styles.StatusDot.Render("•")
+	// A single-cell ellipsis communicates unfinished work even when animation is
+	// disabled. Unlike a filled dot it cannot be mistaken for a settled status
+	// marker, and it keeps reduced-motion and static operations width-stable.
+	motion := m.styles.StatusDot.Render("…")
 	if !m.reducedMotion && !activity.static {
 		if activity.waiting {
 			cells := 1
@@ -178,7 +188,7 @@ func (m *Model) renderWorkingLine() string {
 			}
 			motion = m.scramble.ViewN(cells)
 			if motion == "" {
-				motion = m.styles.StatusDot.Render("•")
+				motion = m.styles.StatusDot.Render("…")
 			}
 		} else {
 			motion = m.spin.View()

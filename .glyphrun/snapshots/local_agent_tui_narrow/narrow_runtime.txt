@@ -6,7 +6,7 @@
  │ Model      Pinned · qwen3.5:2b     │
  │ Profile    Default                 │
  │ Mode       PLAN                    │
- │ Tools      19 available            │
+ │ Tools      20 available            │
  │ MCP        unavailable · 0 servers │
  │            configured              │
  │ ICE        disabled                │

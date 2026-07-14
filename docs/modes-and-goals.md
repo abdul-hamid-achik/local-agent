@@ -30,7 +30,12 @@ Switching modes never creates durable work. To start a bounded foreground goal, 
 - at least one independently checkable acceptance criterion; and
 - at least one finite wall-time, evaluation-token, or automatic-turn limit.
 
-`/goal <duration> <prompt>` is already an explicit creation instruction. A concrete prompt starts directly; an ambiguous prompt asks one contextual follow-up before anything runs. `/goal new` remains the manual review path.
+`/goal <duration> <prompt>` is already an explicit creation instruction. A
+concrete prompt starts directly; an ambiguous prompt asks one contextual
+follow-up before anything runs. `/goal new` opens the inline manual review.
+Free-form input such as `/goal improve the narrow model picker` opens the same
+review prefilled. Bare `/goal` opens it when no goal exists and shows the active
+goal otherwise.
 
 ## Compact goal command
 
@@ -61,6 +66,18 @@ Automatic continuation is conservative:
 Budget exhaustion, cancellation, a failed turn, unavailable Cortex status, or an unproductive yield pauses the run. Stopping never means success.
 
 When Cortex is unavailable, the bounded goal remains useful but each later turn requires explicit `/goal resume`, and Local Agent does not declare its own completion.
+
+If Cortex asks a typed human question, the goal pauses and an inline Cortex
+decision surface replaces the composer while the transcript stays visible.
+Use `up`/`down` or `j`/`k` to inspect the options and `enter` to confirm one.
+`esc` hides the presentation without answering or unblocking the goal. Recording
+an answer updates Cortex; it does not resume Local Agent work. The first
+`/goal resume` after an answer refreshes Cortex and clears the durable decision
+blocker without dispatching provider work. If the fresh Cortex state leaves the
+goal actionable and paused, the TUI asks for a second explicit `/goal resume`.
+That command checks fresh state again and starts one user-directed turn only
+when the goal still permits it; a blocked, complete, or abandoned case does not
+start another turn.
 
 ## Goal controls
 

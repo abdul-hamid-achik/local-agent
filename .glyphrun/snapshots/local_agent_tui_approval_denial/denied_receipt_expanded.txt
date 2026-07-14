@@ -5,7 +5,7 @@
   assistant ─────────────────────────────
   │ ▸ Thought
 
-  │ ▾ ✗ Write failed (0ms)
+  │ ▾ ✗ Write failed
   │ tool: write
   │ args: content="[hidden]" path="approval-pr…
   │ transport: failed

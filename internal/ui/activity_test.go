@@ -178,7 +178,7 @@ func TestToolCardUsesSharedSpinnerAndCompletedReceiptIsStable(t *testing.T) {
 	}
 }
 
-func TestApprovalModalPausesActivityClock(t *testing.T) {
+func TestInlineApprovalPausesActivityClock(t *testing.T) {
 	m := newTestModel(t)
 	m.state = StateStreaming
 	responses := make(chan permission.ApprovalResponse, 1)
@@ -188,14 +188,14 @@ func TestApprovalModalPausesActivityClock(t *testing.T) {
 		Response: responses,
 	})
 
-	modal := ansi.Strip(m.renderApproval())
+	inline := ansi.Strip(m.renderApproval())
 	for _, want := range []string{"Permission · write_file", "once", "session", "deny"} {
-		if !strings.Contains(modal, want) {
-			t.Fatalf("approval modal omitted %q:\n%s", want, modal)
+		if !strings.Contains(inline, want) {
+			t.Fatalf("inline approval omitted %q:\n%s", want, inline)
 		}
 	}
 	if m.needsSpinner() || m.needsScramble() || m.renderWorkingLine() != "" {
-		t.Fatal("approval modal left a hidden activity clock or footer line active")
+		t.Fatal("inline approval left a hidden activity clock or footer line active")
 	}
 
 	updated, cmd := m.Update(charKey('y'))
@@ -309,12 +309,50 @@ func TestReducedMotionUsesStaticWorkingGlyph(t *testing.T) {
 	}
 	m.state = StateStreaming
 	line := m.renderWorkingLine()
-	if !strings.Contains(line, "•") || !strings.Contains(line, "Running") {
+	if !strings.Contains(line, "…") || !strings.Contains(line, "Running") {
 		t.Fatalf("reduced-motion working line is not clear and static: %q", line)
+	}
+	if strings.Contains(line, "•") {
+		t.Fatalf("reduced-motion working line used an ambiguous settled dot: %q", line)
 	}
 	if cmd := m.startSpinnerCmd(); cmd != nil {
 		t.Fatal("reduced motion scheduled a spinner clock")
 	}
+}
+
+func TestReducedMotionUsesStaticRunningToolGlyph(t *testing.T) {
+	base := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)
+	newRunningModel := func(t *testing.T) *Model {
+		t.Helper()
+		m := newTestModel(t)
+		m.reducedMotion = true
+		m.now = func() time.Time { return base.Add(1500 * time.Millisecond) }
+		m.toolEntries = []ToolEntry{{
+			ID: "call-1", Name: "read_file", Status: ToolStatusRunning, StartTime: base,
+		}}
+		return m
+	}
+
+	t.Run("tool card", func(t *testing.T) {
+		m := newRunningModel(t)
+		m.toolCardMgr.AddCardWithID("call-1", "read_file", ToolCardFile, base)
+		var rendered strings.Builder
+		m.renderToolGroup(&rendered, 0)
+		view := ansi.Strip(rendered.String())
+		if !strings.Contains(view, "…") || strings.Contains(view, "•") {
+			t.Fatalf("reduced-motion tool card used an ambiguous activity glyph: %q", view)
+		}
+	})
+
+	t.Run("fallback receipt", func(t *testing.T) {
+		m := newRunningModel(t)
+		var rendered strings.Builder
+		m.renderToolGroup(&rendered, 0)
+		view := ansi.Strip(rendered.String())
+		if !strings.Contains(view, "…") || strings.Contains(view, "•") {
+			t.Fatalf("reduced-motion fallback receipt used an ambiguous activity glyph: %q", view)
+		}
+	})
 }
 
 func TestRunningFooterOwnsControlsNotAssistantState(t *testing.T) {

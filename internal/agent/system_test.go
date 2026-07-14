@@ -109,6 +109,24 @@ func TestBuildSystemPrompt_WithWorkDir(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPromptShowsAdditionalReadOnlyRoots(t *testing.T) {
+	result := buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadRoots(
+		context.Background(), "", nil, "", "", "", nil, "", "/workspace", "", "", 0,
+		[]string{"/projects/mcphub", "/projects/shared docs"},
+	)
+	for _, want := range []string{
+		"Filesystem authority: the working directory is the writable workspace.",
+		"Additional process-local read-only roots",
+		"- /projects/mcphub",
+		"- /projects/shared docs",
+		"never valid write destinations",
+	} {
+		if !strings.Contains(result, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, result)
+		}
+	}
+}
+
 func TestBuildSystemPrompt_EmptyWorkDir(t *testing.T) {
 	result := buildSystemPrompt("", nil, "", "", nil, "", "", "")
 	if strings.Contains(result, "Working directory") {

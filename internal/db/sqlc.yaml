@@ -9,3 +9,7 @@ sql:
         out: "."
         emit_json_tags: true
         emit_empty_slices: true
+        rename:
+          reconciliation_group: SQLCReconciliationGroup
+          reconciliation_group_member: SQLCReconciliationGroupMember
+          reconciliation_group_resolution: SQLCReconciliationGroupResolution

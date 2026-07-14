@@ -57,6 +57,22 @@ func TestRegistry_Execute(t *testing.T) {
 	})
 }
 
+func TestRegistryExecuteProvidesEmptyContextWhenNil(t *testing.T) {
+	r := NewRegistry()
+	r.Register(&Command{
+		Name: "nil-safe",
+		Handler: func(ctx *Context, _ []string) Result {
+			if ctx == nil {
+				t.Fatal("handler received a nil context")
+			}
+			return Result{Text: "ok"}
+		},
+	})
+	if result := r.Execute(nil, "nil-safe", nil); result.Text != "ok" {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
 func TestRegistry_ExecuteByAlias(t *testing.T) {
 	r := NewRegistry()
 	r.Register(&Command{

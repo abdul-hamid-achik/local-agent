@@ -229,7 +229,7 @@ func (s *ModelPullState) render(width int, compact, hardwareCursor bool) (string
 			}
 			body.WriteString("\n" + muted.Render(humanTransferBytes(s.Completed)+" / "+humanTransferBytes(s.Total)))
 		} else {
-			indicator := "•"
+			indicator := "…"
 			if !s.reducedMotion {
 				indicator = s.Spinner.View()
 			}

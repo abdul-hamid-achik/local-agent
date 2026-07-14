@@ -91,6 +91,52 @@ func TestCommandCompletionReturnsArgumentsToComposer(t *testing.T) {
 	}
 }
 
+func TestGoalActionCompletionIsReachableFromComposer(t *testing.T) {
+	tests := []struct {
+		name string
+		open func(*testing.T, *Model) *Model
+	}{
+		{
+			name: "typing action prefix",
+			open: func(t *testing.T, m *Model) *Model {
+				t.Helper()
+				m.input.SetValue("/goal ")
+				m.input.CursorEnd()
+				m.completionSuppressedDraft = "/goal "
+				updated, _ := m.Update(charKey('r'))
+				m = updated.(*Model)
+				updated, _ = m.Update(charKey('e'))
+				return updated.(*Model)
+			},
+		},
+		{
+			name: "explicit tab",
+			open: func(t *testing.T, m *Model) *Model {
+				t.Helper()
+				m.input.SetValue("/goal re")
+				m.input.CursorEnd()
+				updated, _ := m.Update(tabKey())
+				return updated.(*Model)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			m := test.open(t, newTestModel(t))
+			if !m.isCompletionActive() || len(m.completionState.FilteredItems) != 1 ||
+				m.completionState.FilteredItems[0].Label != "/goal resume" {
+				t.Fatalf("goal action completion = %#v", m.completionState)
+			}
+			updated, _ := m.Update(enterKey())
+			m = updated.(*Model)
+			if m.isCompletionActive() || m.input.Value() != "/goal resume " {
+				t.Fatalf("accepted goal action: active=%v draft=%q", m.isCompletionActive(), m.input.Value())
+			}
+		})
+	}
+}
+
 func TestAcceptCompletion(t *testing.T) {
 	t.Run("single_select", func(t *testing.T) {
 		m := newTestModel(t)

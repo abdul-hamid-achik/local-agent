@@ -148,6 +148,70 @@ func TestToolCardCompletedReceiptShowsDisclosureState(t *testing.T) {
 	}
 }
 
+func TestToolCardStatusGlyphsKeepUnknownDistinctAndSingleWidth(t *testing.T) {
+	tests := []struct {
+		name       string
+		state      ToolCardState
+		projection ecosystem.ToolProjection
+		want       string
+	}{
+		{name: "running", state: ToolCardRunning, want: "…"},
+		{name: "success", state: ToolCardSuccess, want: "✓"},
+		{
+			name:  "unknown outcome",
+			state: ToolCardAttention,
+			projection: ecosystem.ToolProjection{
+				Transport: ecosystem.TransportSucceeded,
+				Domain:    ecosystem.DomainUnknown,
+			},
+			want: "?",
+		},
+		{
+			name:  "known attention",
+			state: ToolCardAttention,
+			projection: ecosystem.ToolProjection{
+				Transport: ecosystem.TransportSucceeded,
+				Domain:    ecosystem.DomainConflict,
+			},
+			want: "!",
+		},
+		{name: "failure", state: ToolCardError, want: "✗"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			card := NewToolCard("remote_tool", ToolCardGeneric, true)
+			card.State = tt.state
+			card.Projection = tt.projection
+			if got := card.statusGlyph(); got != tt.want {
+				t.Fatalf("status glyph = %q, want %q", got, tt.want)
+			} else if width := lipgloss.Width(got); width != 1 {
+				t.Fatalf("status glyph %q width = %d, want 1", got, width)
+			}
+		})
+	}
+}
+
+func TestToolCardOmitsMeaninglessZeroDuration(t *testing.T) {
+	card := NewToolCard("read_file", ToolCardFile, true)
+	card.State = ToolCardSuccess
+	card.SetSummary("internal/ui/toolcard.go")
+
+	withoutDuration := ansi.Strip(card.View(40))
+	if strings.Contains(withoutDuration, "(0s)") {
+		t.Fatalf("zero-duration receipt kept meaningless timing noise:\n%s", withoutDuration)
+	}
+	if !strings.Contains(withoutDuration, "Read") || !strings.Contains(withoutDuration, "toolcard.go") {
+		t.Fatalf("compact receipt did not spend the recovered width on useful context:\n%s", withoutDuration)
+	}
+
+	card.Duration = 42 * time.Millisecond
+	withDuration := ansi.Strip(card.View(40))
+	if !strings.Contains(withDuration, "(42ms)") {
+		t.Fatalf("measured duration was omitted:\n%s", withDuration)
+	}
+}
+
 func TestToolCardProjectionStateFailsClosed(t *testing.T) {
 	tests := []struct {
 		name       string

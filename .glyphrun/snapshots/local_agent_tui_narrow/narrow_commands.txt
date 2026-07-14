@@ -1,18 +1,19 @@
-              LOCAL AGENT
- ╭────────────────────────────────────╮
- │ Commands                           │
- │ Filter › type to narrow            │
- │ ────────────────────────────────── │
- │ ▸ /help · Show help overlay with … │
- │   /clear · Clear conversation his… │
- │   /goal · Create, inspect, pause,… │
- │   /model · Show, switch, or list … │
- │   /recover · Review a paused exec… │
- │   /agent · Show or switch agent p… │
- │   /load · Load a markdown file as… │
- │   /unload · Remove loaded context… │
- │   /skill · Manage skills (list, a… │
- │   /servers · List connected MCP s… │
- │ esc cancel · enter select · ↑/↓    │
- ╰────────────────────────────────────╯
+
+
 ───────────────────────────────────────
+╭────────────────────────────────────╮
+│ Commands                           │
+│ Filter › type to narrow            │
+│ ────────────────────────────────── │
+│ ▸ /help · Show help overlay with … │
+│   /clear · Clear conversation his… │
+│   /goal · Create, inspect, pause,… │
+│   /model · Show, switch, or list … │
+│   /recover · Review a paused exec… │
+│   /agent · Show or switch agent p… │
+│   /load · Load a markdown file as… │
+│   /scope · List or manage process… │
+│   /unload · Remove loaded context… │
+│ esc cancel · enter select · ↑/↓    │
+╰────────────────────────────────────╯
+▌❯ /

@@ -640,6 +640,16 @@ func TestModelPullStateRequestProgressAndFailure(t *testing.T) {
 	}
 }
 
+func TestModelPullReducedMotionUsesUnfinishedStaticGlyph(t *testing.T) {
+	state := NewModelPullState(true, true)
+	state.Name = "qwen"
+	state.Phase = ModelPullRunning
+	plain := ansi.Strip(state.View(50))
+	if !strings.Contains(plain, "… Connecting to Ollama") || strings.Contains(plain, "•") {
+		t.Fatalf("reduced-motion connection state used an ambiguous glyph: %q", plain)
+	}
+}
+
 func TestModelPullIgnoresStaleModelProgress(t *testing.T) {
 	state := NewModelPullState(false, true)
 	state.Name, state.Phase = "wanted", ModelPullRunning

@@ -166,6 +166,54 @@ func TestCompletionPreviewReaderBoundsCancelledBlockingWork(t *testing.T) {
 	}
 }
 
+func TestCompletionWorkspaceReaderBoundsCancelledBlockingWork(t *testing.T) {
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var calls atomic.Int32
+	reader := newCompletionWorkspaceReader()
+	search := func(_ context.Context, query, _ string) []Completion {
+		calls.Add(1)
+		started <- struct{}{}
+		<-release
+		return []Completion{{Label: query, Insert: "@" + query + " "}}
+	}
+
+	firstContext, cancelFirst := context.WithCancel(context.Background())
+	firstResult := make(chan []Completion, 1)
+	go func() {
+		firstResult <- reader.read(firstContext, search, "first.txt", "")
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("blocking workspace worker did not start")
+	}
+	cancelFirst()
+	if result := <-firstResult; len(result) != 0 {
+		t.Fatalf("cancelled workspace search returned %#v", result)
+	}
+
+	secondContext, cancelSecond := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancelSecond()
+	if result := reader.read(secondContext, search, "second.txt", ""); len(result) != 0 {
+		t.Fatalf("queued workspace search returned %#v", result)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("blocked workspace reader started %d workers, want exactly one", got)
+	}
+
+	close(release)
+	thirdContext, cancelThird := context.WithTimeout(context.Background(), time.Second)
+	defer cancelThird()
+	third := reader.read(thirdContext, search, "third.txt", "")
+	if len(third) != 1 || third[0].Label != "third.txt" {
+		t.Fatalf("workspace reader did not recover after release: %#v", third)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("recovered workspace worker calls = %d, want 2", got)
+	}
+}
+
 func TestCompletionPreviewReportsBinaryErrorAndTruncationHonestly(t *testing.T) {
 	workspace := t.TempDir()
 	outside := t.TempDir()

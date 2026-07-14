@@ -72,6 +72,18 @@ Explain the request flow in this repository and identify the tests that cover it
 
 Local Agent begins in **NORMAL** mode. Reads can proceed inside the workspace. Mutating tools such as edits, writes, shell commands, and MCP calls require approval by default.
 
+To reopen saved work directly, pass a positive session ID or select the newest
+session in the current canonical workspace:
+
+```bash
+local-agent --resume 42
+local-agent --resume latest
+```
+
+Startup resume is available only in the interactive TUI, so it cannot be
+combined with `-p`. It restores state without sending a prompt or automatically
+continuing a durable goal.
+
 ## Essential controls
 
 | Key | Action |
@@ -82,10 +94,13 @@ Local Agent begins in **NORMAL** mode. Reads can proceed inside the workspace. M
 | `ctrl+o` | Open the live Ollama model picker |
 | `ctrl+p` | Open session settings |
 | `tab` | Complete commands, paths, and skills |
-| `esc` | Close an overlay or cancel active work |
+| `esc` | Close an overlay or inline form, cancel an approval, or cancel active work |
 | `ctrl+c` | Quit |
 
-Inside an approval prompt, use `y` to allow once, `n` to deny, or `a` to persist an allow-by-tool-name policy.
+Inside the inline approval surface, use `y` to allow once, `n` to deny, `s` to
+allow the identical canonical request again during the current Agent process,
+or `d` to inspect exact arguments. Press `esc` to cancel the approval and the
+active turn. No broad allow-by-tool-name policy is persisted by this flow.
 
 ## Optional configuration
 

@@ -256,7 +256,7 @@ func TestGoalFormBudgetOnlyLocksDefinitionAndSkipsItsFocus(t *testing.T) {
 		TokenBudget:        32_000,
 		TimeBudget:         time.Hour,
 	}
-	form := NewGoalForm(initial, GoalFormOptions{Width: 80, Height: 24, BudgetOnly: true})
+	form := NewGoalForm(initial, GoalFormOptions{Width: 80, Height: 32, BudgetOnly: true})
 
 	if !form.BudgetOnly() {
 		t.Fatal("budget-only option was not applied")
@@ -295,7 +295,7 @@ func TestGoalFormBudgetOnlyLocksDefinitionAndSkipsItsFocus(t *testing.T) {
 		}
 	}
 	assertRenderedLinesFit(t, rendered, 80)
-	assertRenderedHeightFits(t, rendered, 24)
+	assertRenderedHeightFits(t, rendered, 32)
 }
 
 func TestGoalFormBudgetOnlyCompactKeepsLockedContext(t *testing.T) {
@@ -362,7 +362,7 @@ func TestGoalFormFitsMinimumAndNormalCanvases(t *testing.T) {
 	}{
 		{name: "minimum", width: 30, height: 12, compact: true},
 		{name: "narrow", width: 40, height: 20, compact: true},
-		{name: "normal", width: 80, height: 24, compact: false},
+		{name: "normal", width: 80, height: 32, compact: false},
 	}
 
 	for _, size := range sizes {
@@ -475,7 +475,7 @@ func TestGoalFormValidationIsInlineAndClearsWhenFocusMoves(t *testing.T) {
 	form := NewGoalForm(GoalFormValues{
 		Objective:          "bounded work",
 		AcceptanceCriteria: "done is verifiable",
-	}, GoalFormOptions{Width: 80, Height: 24})
+	}, GoalFormOptions{Width: 80, Height: 32})
 	form.SetActiveField(GoalFieldActions)
 	_, _ = form.Update(enterKey())
 
@@ -488,7 +488,7 @@ func TestGoalFormValidationIsInlineAndClearsWhenFocusMoves(t *testing.T) {
 	if errorAt < 0 || tokensAt < 0 || errorAt > tokensAt {
 		t.Fatalf("validation error was not rendered beside Auto turns:\n%s", rendered)
 	}
-	assertRenderedHeightFits(t, rendered, 24)
+	assertRenderedHeightFits(t, rendered, 32)
 
 	_, _ = form.Update(tabKey())
 	if form.ActiveField() != GoalFieldTokens || form.Error() != "" {
@@ -504,7 +504,7 @@ func TestGoalFormBudgetCopyExplainsAutomaticContinuationLimit(t *testing.T) {
 	}, GoalFormOptions{Width: 30, Height: 12})
 	compact.SetActiveField(GoalFieldTurns)
 	compactView := compact.View()
-	for _, want := range []string{"Auto-turn budget", "Blank skips this limit", "set at least one"} {
+	for _, want := range []string{"Auto-turn budget", "Blank skips", "set one"} {
 		if !strings.Contains(compactView, want) {
 			t.Fatalf("compact budget step missing %q:\n%s", want, compactView)
 		}
@@ -515,7 +515,7 @@ func TestGoalFormBudgetCopyExplainsAutomaticContinuationLimit(t *testing.T) {
 		Objective:          "goal",
 		AcceptanceCriteria: "done",
 		TurnBudget:         8,
-	}, GoalFormOptions{Width: 80, Height: 24})
+	}, GoalFormOptions{Width: 80, Height: 32})
 	wideView := wide.View()
 	if !strings.Contains(wideView, "Limits") || !strings.Contains(wideView, "set at least one") || !strings.Contains(wideView, "Auto turns") {
 		t.Fatalf("wide budget grammar is not truthful:\n%s", wideView)
@@ -549,26 +549,24 @@ func TestGoalFormCompactActionsSummarizeInferredGoal(t *testing.T) {
 	assertRenderedHeightFits(t, view, 20)
 }
 
-func TestGoalFormIntegratedOverlayFitsAndOwnsCursor(t *testing.T) {
+func TestGoalFormIntegratedInlineFitsAndOwnsCursor(t *testing.T) {
 	for _, size := range []struct {
 		name   string
 		width  int
 		height int
 	}{
 		{name: "minimum", width: 30, height: 12},
-		{name: "normal", width: 80, height: 24},
+		{name: "wide", width: 120, height: 36},
 	} {
 		t.Run(size.name, func(t *testing.T) {
 			m := newTestModel(t)
 			updated, _ := m.Update(tea.WindowSizeMsg{Width: size.width, Height: size.height})
 			m = updated.(*Model)
-			m.goalFormState = NewGoalForm(GoalFormValues{
-				Objective:          "integrated goal",
-				AcceptanceCriteria: "done",
-				TurnBudget:         4,
-			}, GoalFormOptions{Width: size.width, Height: size.height, IsDark: m.isDark})
-			m.overlay = OverlayGoalForm
-			m.input.Blur()
+			m.viewport.SetContent("TRANSCRIPT SENTINEL\ntranscript tail")
+			m.input.SetValue("saved composer draft")
+			if err := m.openGoalForm("integrated goal", false); err != nil {
+				t.Fatalf("open goal form: %v", err)
+			}
 
 			view := m.View()
 			assertRenderedLinesFit(t, view.Content, size.width)
@@ -578,7 +576,22 @@ func TestGoalFormIntegratedOverlayFitsAndOwnsCursor(t *testing.T) {
 				t.Fatal("integrated View mutated the live goal input cursor mode")
 			}
 			if m.input.Focused() {
-				t.Fatal("composer retained focus under the goal overlay")
+				t.Fatal("composer retained focus under the inline goal form")
+			}
+			plain := ansi.Strip(view.Content)
+			if transcriptAt, formAt := strings.Index(plain, "TRANSCRIPT SENTINEL"), strings.Index(plain, "Goal"); transcriptAt < 0 || formAt <= transcriptAt {
+				t.Fatalf("transcript/form order is wrong:\n%s", plain)
+			}
+			if strings.Contains(plain, "saved composer draft") || m.input.Value() != "saved composer draft" {
+				t.Fatalf("form did not replace composer without mutating its draft: value=%q\n%s", m.input.Value(), plain)
+			}
+			for _, line := range strings.Split(view.Content, "\n") {
+				if strings.Contains(line, "╭") {
+					if !strings.HasPrefix(ansi.Strip(line), "╭") || lipgloss.Width(line) != m.chatPaneWidth() {
+						t.Fatalf("inline form frame is centered or not pane-wide: width=%d want=%d line=%q", lipgloss.Width(line), m.chatPaneWidth(), ansi.Strip(line))
+					}
+					break
+				}
 			}
 		})
 	}
@@ -608,10 +621,11 @@ func TestGoalFormAcceptanceWrapRetainsPromptGutterAtMinimum(t *testing.T) {
 	if labelAt < 0 || footerAt < 0 {
 		t.Fatalf("acceptance control or footer missing:\n%s", plain)
 	}
-	if got := footerAt - labelAt - 1; got != goalAcceptanceHeight {
-		t.Fatalf("acceptance gained a frame-wrapped row: got %d control rows, want %d\n%s", got, goalAcceptanceHeight, plain)
+	wantHeight := form.acceptanceHeight()
+	if got := footerAt - labelAt - 1; got != wantHeight {
+		t.Fatalf("acceptance gained a frame-wrapped row: got %d control rows, want %d\n%s", got, wantHeight, plain)
 	}
-	for row := 0; row < goalAcceptanceHeight; row++ {
+	for row := 0; row < wantHeight; row++ {
 		line := lines[labelAt+1+row]
 		prefix := "│   "
 		if row == 0 {
@@ -674,11 +688,12 @@ func TestGoalFormPromptDraftMakesReviewBoundaryExplicit(t *testing.T) {
 	}
 
 	wide := NewGoalForm(initial, GoalFormOptions{
-		Width: 80, Height: 24, DraftFromPrompt: true,
+		Width: 80, Height: 32, DraftFromPrompt: true,
 	})
 	wideView := wide.View()
-	for _, want := range []string{"Review goal draft", "Inferred from your prompt", "before AUTO starts"} {
-		if !strings.Contains(wideView, want) {
+	wideCopy := strings.Join(strings.Fields(ansi.Strip(wideView)), " ")
+	for _, want := range []string{"Review goal draft", "Inferred from your prompt", "before AUTO", "starts."} {
+		if !strings.Contains(wideCopy, want) {
 			t.Fatalf("prompt review form missing %q:\n%s", want, wideView)
 		}
 	}
@@ -687,7 +702,7 @@ func TestGoalFormPromptDraftMakesReviewBoundaryExplicit(t *testing.T) {
 		t.Fatalf("review presentation changed inferred values: values=%#v err=%v", values, err)
 	}
 	assertRenderedLinesFit(t, wideView, 80)
-	assertRenderedHeightFits(t, wideView, 24)
+	assertRenderedHeightFits(t, wideView, 32)
 
 	compact := NewGoalForm(initial, GoalFormOptions{
 		Width: 30, Height: 12, DraftFromPrompt: true, ReducedMotion: true,
@@ -709,7 +724,7 @@ func TestGoalFormContextualFollowUpIsGuidanceNotAnError(t *testing.T) {
 		width  int
 		height int
 	}{
-		{width: 80, height: 24},
+		{width: 80, height: 32},
 		{width: 30, height: 12},
 	} {
 		form := NewGoalForm(GoalFormValues{

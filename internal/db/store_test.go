@@ -2,9 +2,12 @@ package db
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -292,6 +295,102 @@ func TestDoubleOpen(t *testing.T) {
 			t.Errorf("close second store: %v", err)
 		}
 	})
+}
+
+func TestMigrationLedgerRecordsExactEmbeddedChecksums(t *testing.T) {
+	store := testStore(t)
+	entries, err := migrations.ReadDir("migrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := make(map[string]string)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+			continue
+		}
+		data, err := migrations.ReadFile("migrations/" + entry.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		want[entry.Name()] = fmt.Sprintf("%x", sha256.Sum256(data))
+	}
+
+	rows, err := store.db.Query(`SELECT name, checksum FROM schema_migrations ORDER BY name`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(map[string]string)
+	for rows.Next() {
+		var name, checksum string
+		if err := rows.Scan(&name, &checksum); err != nil {
+			_ = rows.Close()
+			t.Fatal(err)
+		}
+		got[name] = checksum
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("migration ledger count = %d, want %d: %#v", len(got), len(want), got)
+	}
+	for name, checksum := range want {
+		if got[name] != checksum {
+			t.Fatalf("migration %s checksum = %q, want %q", name, got[name], checksum)
+		}
+	}
+
+	// A second run reads the ledger and leaves the exact recorded set intact.
+	if err := runMigrations(store.db); err != nil {
+		t.Fatalf("repeat migrations: %v", err)
+	}
+	var count int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != len(want) {
+		t.Fatalf("repeat migration ledger count = %d, want %d", count, len(want))
+	}
+}
+
+func TestMigrationLedgerRejectsRewrittenMigration(t *testing.T) {
+	store := testStore(t)
+	if _, err := store.db.Exec(`UPDATE schema_migrations SET checksum = ? WHERE name = ?`, strings.Repeat("0", 64), "001_init.sql"); err != nil {
+		t.Fatal(err)
+	}
+	err := runMigrations(store.db)
+	if err == nil || !strings.Contains(err.Error(), "001_init.sql checksum mismatch") {
+		t.Fatalf("rewritten migration error = %v", err)
+	}
+}
+
+func TestFailedMigrationRollsBackSchemaAndLedgerTogether(t *testing.T) {
+	store := testStore(t)
+	err := applyMigration(store.db, "999_broken.sql", []byte(`
+		CREATE TABLE migration_rollback_probe (id INTEGER PRIMARY KEY);
+		INSERT INTO table_that_does_not_exist (id) VALUES (1);
+	`))
+	if err == nil || !strings.Contains(err.Error(), "exec migration 999_broken.sql") {
+		t.Fatalf("broken migration error = %v", err)
+	}
+
+	var schemaCount int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'migration_rollback_probe'`).Scan(&schemaCount); err != nil {
+		t.Fatal(err)
+	}
+	if schemaCount != 0 {
+		t.Fatal("failed migration left its schema change committed")
+	}
+	var ledgerCount int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE name = '999_broken.sql'`).Scan(&ledgerCount); err != nil {
+		t.Fatal(err)
+	}
+	if ledgerCount != 0 {
+		t.Fatal("failed migration left a ledger receipt")
+	}
 }
 
 func TestOpenPathMigratesLegacySessionWorkspaceIdempotently(t *testing.T) {

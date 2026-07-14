@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -57,7 +56,17 @@ func (b *cappedBuffer) String() string {
 }
 
 func (a *Agent) toolsBuiltinToolDefs() []llm.ToolDef {
-	return tools.AllToolDefs()
+	defs := tools.AllToolDefs()
+	if a.hasSkillLoader() {
+		return defs
+	}
+	filtered := make([]llm.ToolDef, 0, len(defs)-1)
+	for _, def := range defs {
+		if def.Name != "load_skill" {
+			filtered = append(filtered, def)
+		}
+	}
+	return filtered
 }
 
 func (a *Agent) isToolsTool(name string) bool {
@@ -94,6 +103,8 @@ func (a *Agent) handleToolsTool(ctx context.Context, tc llm.ToolCall) (string, b
 		return a.handleMove(tc.Arguments)
 	case "exists":
 		return a.handleExists(tc.Arguments)
+	case "load_skill":
+		return a.handleLoadSkill(tc.Arguments)
 	default:
 		return fmt.Sprintf("unknown tool: %s", tc.Name), true
 	}
@@ -108,11 +119,12 @@ func (a *Agent) handleGrep(ctx context.Context, args map[string]any) (string, bo
 		return "error: pattern is required", true
 	}
 
-	path := a.getArgString(args, "path", a.workDir)
-	path, err := a.resolvePath(path)
+	requestedPath := a.getArgString(args, "path", a.workDir)
+	readable, err := a.resolveReadablePath(requestedPath)
 	if err != nil {
 		return fmt.Sprintf("error: %v", err), true
 	}
+	path := readable.absolute
 	include := a.getArgString(args, "include", "")
 	context := a.getArgInt(args, "context", 3)
 	if context < 0 {
@@ -123,7 +135,7 @@ func (a *Agent) handleGrep(ctx context.Context, args map[string]any) (string, bo
 	}
 	maxResults := a.MaxGrepResults()
 
-	if _, err := os.Stat(path); err != nil {
+	if _, err := readable.stat(); err != nil {
 		return fmt.Sprintf("error: path does not exist: %s", path), true
 	}
 
@@ -133,7 +145,7 @@ func (a *Agent) handleGrep(ctx context.Context, args map[string]any) (string, bo
 	}
 
 	var results []string
-	err = filepath.Walk(path, func(filePath string, info os.FileInfo, err error) error {
+	err = readable.walk(func(filePath string, info os.FileInfo, err error) error {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
@@ -143,7 +155,7 @@ func (a *Agent) handleGrep(ctx context.Context, args map[string]any) (string, bo
 		if info.Mode()&os.ModeSymlink != 0 {
 			return nil
 		}
-		if filePath != path && a.pathIgnoredResolved(filePath) {
+		if filePath != path && readable.ignored(a, filePath) {
 			if info.IsDir() {
 				return filepath.SkipDir
 			}
@@ -151,7 +163,7 @@ func (a *Agent) handleGrep(ctx context.Context, args map[string]any) (string, bo
 		}
 
 		if info.IsDir() {
-			if shouldSkipDir(info.Name()) {
+			if filePath != path && shouldSkipDir(info.Name()) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -168,7 +180,7 @@ func (a *Agent) handleGrep(ctx context.Context, args map[string]any) (string, bo
 			return nil
 		}
 
-		content, err := readBoundedFile(filePath, maxFileReadBytes)
+		content, err := readable.readBoundedAt(filePath, maxFileReadBytes)
 		if err != nil {
 			return nil
 		}
@@ -233,12 +245,12 @@ func (a *Agent) handleRead(args map[string]any) (string, bool) {
 		return "error: path is required", true
 	}
 
-	path, err := a.resolvePath(path)
+	readable, err := a.resolveReadablePath(path)
 	if err != nil {
 		return fmt.Sprintf("error: %v", err), true
 	}
 
-	data, err := readBoundedFile(path, maxFileReadBytes)
+	data, err := readable.readBounded(maxFileReadBytes)
 	if err != nil {
 		return fmt.Sprintf("error reading file: %v", err), true
 	}
@@ -305,13 +317,14 @@ func (a *Agent) handleGlob(ctx context.Context, args map[string]any) (string, bo
 		return "error: pattern is required", true
 	}
 
-	path := a.getArgString(args, "path", a.workDir)
-	path, err := a.resolvePath(path)
+	requestedPath := a.getArgString(args, "path", a.workDir)
+	readable, err := a.resolveReadablePath(requestedPath)
 	if err != nil {
 		return fmt.Sprintf("error: %v", err), true
 	}
+	path := readable.absolute
 
-	if _, err := os.Stat(path); err != nil {
+	if _, err := readable.stat(); err != nil {
 		return fmt.Sprintf("error: path does not exist: %s", path), true
 	}
 
@@ -324,14 +337,14 @@ func (a *Agent) handleGlob(ctx context.Context, args map[string]any) (string, bo
 	}
 
 	var matches []string
-	err = filepath.Walk(path, func(filePath string, info os.FileInfo, err error) error {
+	err = readable.walk(func(filePath string, info os.FileInfo, err error) error {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
 		if err != nil {
 			return nil
 		}
-		if filePath != path && a.pathIgnoredResolved(filePath) {
+		if filePath != path && readable.ignored(a, filePath) {
 			if info.IsDir() {
 				return filepath.SkipDir
 			}
@@ -438,13 +451,14 @@ func (a *Agent) handleLs(ctx context.Context, args map[string]any) (string, bool
 	if err := ctx.Err(); err != nil {
 		return fmt.Sprintf("error: ls cancelled: %v", err), true
 	}
-	path := a.getArgString(args, "path", a.workDir)
-	path, err := a.resolvePath(path)
+	requestedPath := a.getArgString(args, "path", a.workDir)
+	readable, err := a.resolveReadablePath(requestedPath)
 	if err != nil {
 		return fmt.Sprintf("error: %v", err), true
 	}
+	path := readable.absolute
 
-	entries, err := os.ReadDir(path)
+	entries, err := readable.readDir()
 	if err != nil {
 		return fmt.Sprintf("error reading directory: %v", err), true
 	}
@@ -464,7 +478,7 @@ func (a *Agent) handleLs(ctx context.Context, args map[string]any) (string, bool
 			return fmt.Sprintf("error: ls cancelled: %v", err), true
 		}
 		name := e.Name()
-		if a.pathIgnoredResolved(filepath.Join(path, name)) {
+		if readable.ignored(a, filepath.Join(path, name)) {
 			continue
 		}
 		if e.IsDir() {
@@ -497,14 +511,15 @@ func (a *Agent) handleFind(ctx context.Context, args map[string]any) (string, bo
 		return "error: name is required", true
 	}
 
-	path := a.getArgString(args, "path", a.workDir)
-	path, err := a.resolvePath(path)
+	requestedPath := a.getArgString(args, "path", a.workDir)
+	readable, err := a.resolveReadablePath(requestedPath)
 	if err != nil {
 		return fmt.Sprintf("error: %v", err), true
 	}
+	path := readable.absolute
 	fileType := a.getArgString(args, "type", "")
 
-	if _, err := os.Stat(path); err != nil {
+	if _, err := readable.stat(); err != nil {
 		return fmt.Sprintf("error: path does not exist: %s", path), true
 	}
 
@@ -516,14 +531,14 @@ func (a *Agent) handleFind(ctx context.Context, args map[string]any) (string, bo
 	}
 
 	var results []string
-	err = filepath.Walk(path, func(filePath string, info os.FileInfo, err error) error {
+	err = readable.walk(func(filePath string, info os.FileInfo, err error) error {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
 		if err != nil {
 			return nil
 		}
-		if filePath != path && a.pathIgnoredResolved(filePath) {
+		if filePath != path && readable.ignored(a, filePath) {
 			if info.IsDir() {
 				return filepath.SkipDir
 			}
@@ -756,34 +771,7 @@ func resolveExistingAncestor(path string) (string, error) {
 }
 
 func (a *Agent) pathIgnored(path string) bool {
-	if strings.TrimSpace(a.ignoreContent) == "" {
-		return false
-	}
-	cleanPath := strings.TrimSuffix(filepath.ToSlash(filepath.Clean(path)), "/")
-	ancestors := []string{cleanPath}
-	for parent := filepath.ToSlash(filepath.Dir(cleanPath)); parent != "." && parent != "/" && parent != ""; parent = filepath.ToSlash(filepath.Dir(parent)) {
-		ancestors = append(ancestors, parent)
-	}
-	ignored := false
-	for _, line := range strings.Split(a.ignoreContent, "\n") {
-		pattern := strings.TrimSpace(line)
-		if pattern == "" || strings.HasPrefix(pattern, "#") {
-			continue
-		}
-		negated := strings.HasPrefix(pattern, "!")
-		pattern = strings.TrimSpace(strings.TrimPrefix(pattern, "!"))
-		pattern = strings.TrimPrefix(strings.TrimSuffix(filepath.ToSlash(pattern), "/"), "/")
-		if pattern == "" {
-			continue
-		}
-		for _, candidate := range ancestors {
-			if ignorePatternMatches(pattern, candidate) {
-				ignored = !negated
-				break
-			}
-		}
-	}
-	return ignored
+	return pathIgnoredWithContent(a.ignoreContent, path)
 }
 
 func (a *Agent) pathIgnoredResolved(path string) bool {
@@ -814,35 +802,18 @@ func (a *Agent) pathIgnoredResolved(path string) bool {
 }
 
 func readBoundedFile(path string, limit int64) ([]byte, error) {
-	if limit <= 0 {
-		return nil, fmt.Errorf("invalid read limit %d", limit)
-	}
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, err
 	}
-	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("path is not a regular file (%s)", info.Mode().Type())
-	}
-	if info.Size() > limit {
-		return nil, fmt.Errorf("file is %d bytes; limit is %d bytes", info.Size(), limit)
+	if err := validateBoundedFileInfo(info, limit); err != nil {
+		return nil, err
 	}
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	data, readErr := io.ReadAll(io.LimitReader(file, limit+1))
-	closeErr := file.Close()
-	if readErr != nil {
-		return nil, readErr
-	}
-	if closeErr != nil {
-		return nil, fmt.Errorf("close file after reading: %w", closeErr)
-	}
-	if int64(len(data)) > limit {
-		return nil, fmt.Errorf("file grew beyond %d-byte limit while reading", limit)
-	}
-	return data, nil
+	return readBoundedOpenFile(file, limit)
 }
 
 func ignorePatternMatches(pattern, cleanPath string) bool {
@@ -943,13 +914,13 @@ func (a *Agent) handleDiff(ctx context.Context, args map[string]any) (string, bo
 		return "error: new_content is required", true
 	}
 
-	path, err := a.resolvePath(path)
+	readable, err := a.resolveReadablePath(path)
 	if err != nil {
 		return fmt.Sprintf("error: %v", err), true
 	}
 
 	// Read current content
-	oldContent, err := readBoundedFile(path, maxFileReadBytes)
+	oldContent, err := readable.readBounded(maxFileReadBytes)
 	if err != nil {
 		return fmt.Sprintf("error reading file: %v", err), true
 	}
@@ -1185,17 +1156,17 @@ func (a *Agent) handleCopy(args map[string]any) (string, bool) {
 		return "error: source and destination are required", true
 	}
 
-	var err error
-	source, err = a.resolvePath(source)
+	readableSource, err := a.resolveReadablePath(source)
 	if err != nil {
 		return fmt.Sprintf("error: source: %v", err), true
 	}
+	source = readableSource.absolute
 	destination, err = a.resolvePath(destination)
 	if err != nil {
 		return fmt.Sprintf("error: destination: %v", err), true
 	}
 
-	info, err := os.Stat(source)
+	info, err := readableSource.stat()
 	if err != nil {
 		return fmt.Sprintf("error: %v", err), true
 	}
@@ -1204,7 +1175,7 @@ func (a *Agent) handleCopy(args map[string]any) (string, bool) {
 		return "error: copying directories not supported (use bash with cp -r)", true
 	}
 
-	srcData, err := readBoundedFile(source, maxCopyBytes)
+	srcData, err := readableSource.readBounded(maxCopyBytes)
 	if err != nil {
 		return fmt.Sprintf("error reading source: %v", err), true
 	}
@@ -1264,12 +1235,13 @@ func (a *Agent) handleExists(args map[string]any) (string, bool) {
 		return "error: path is required", true
 	}
 
-	path, err := a.resolvePath(path)
+	readable, err := a.resolveReadablePath(path)
 	if err != nil {
 		return fmt.Sprintf("error: %v", err), true
 	}
+	path = readable.absolute
 
-	info, err := os.Stat(path)
+	info, err := readable.stat()
 	if os.IsNotExist(err) {
 		return fmt.Sprintf("false: %s does not exist", path), false
 	}

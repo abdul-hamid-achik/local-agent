@@ -8,12 +8,15 @@ import "strings"
 type ActionID string
 
 const (
-	GoalActionNew     ActionID = "goal.new"
-	GoalActionInspect ActionID = "goal.inspect"
-	GoalActionPause   ActionID = "goal.pause"
-	GoalActionResume  ActionID = "goal.resume"
-	GoalActionBudget  ActionID = "goal.budget"
-	GoalActionDrop    ActionID = "goal.drop"
+	GoalActionNew         ActionID = "goal.new"
+	GoalActionInspect     ActionID = "goal.inspect"
+	GoalActionPause       ActionID = "goal.pause"
+	GoalActionResume      ActionID = "goal.resume"
+	GoalActionBudget      ActionID = "goal.budget"
+	GoalActionDrop        ActionID = "goal.drop"
+	ScopeActionAddRead    ActionID = "scope.add-read"
+	ScopeActionRemoveRead ActionID = "scope.remove-read"
+	ScopeActionClearRead  ActionID = "scope.clear-read"
 )
 
 // ActionSpec is the bounded metadata needed to expose one command action in
@@ -238,6 +241,25 @@ func registerGoalActions(r *Registry) {
 		{
 			ID: GoalActionDrop, Command: "goal", Argument: "drop",
 			Title: "Drop", Description: "Abandon without claiming completion", Action: ActionDropGoal, Destructive: true,
+		},
+	} {
+		r.RegisterAction(spec)
+	}
+}
+
+func registerScopeActions(r *Registry) {
+	for _, spec := range []ActionSpec{
+		{
+			ID: ScopeActionAddRead, Command: "scope", Argument: "add-read", Aliases: []string{"add", "mount"},
+			Title: "Add read root", Description: "Grant process-local read-only access to an external directory", Action: ActionAddReadRoot,
+		},
+		{
+			ID: ScopeActionRemoveRead, Command: "scope", Argument: "remove-read", Aliases: []string{"remove", "unmount"},
+			Title: "Remove read root", Description: "Revoke one external read-only directory grant", Action: ActionRemoveReadRoot,
+		},
+		{
+			ID: ScopeActionClearRead, Command: "scope", Argument: "clear-read", Aliases: []string{"clear"},
+			Title: "Clear read roots", Description: "Revoke every external read-only directory grant", Action: ActionClearReadRoots,
 		},
 	} {
 		r.RegisterAction(spec)

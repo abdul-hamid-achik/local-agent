@@ -344,7 +344,7 @@ func TestPlanModeCannotStartReviewedGoal(t *testing.T) {
 		t.Fatalf("plan rejection dismissed or moved form: overlay=%v form=%v field=%v", m.overlay, m.goalFormState != nil, m.goalFormState.ActiveField())
 	}
 	if len(m.entries) != entriesBefore {
-		t.Fatalf("plan rejection leaked behind modal: entries=%d, want %d", len(m.entries), entriesBefore)
+		t.Fatalf("plan rejection leaked behind inline form: entries=%d, want %d", len(m.entries), entriesBefore)
 	}
 	for _, want := range []string{"PLAN", "AUTO"} {
 		if !strings.Contains(m.goalFormState.Error(), want) {

@@ -10,14 +10,36 @@ Local Agent separates resumable conversation state from optional cross-session r
 
 ## Sessions
 
-`/sessions` opens SQLite-backed sessions for the current workspace. A restored session includes both visible and model-facing state:
+`/sessions` and its `/resume` alias open SQLite-backed sessions for the current
+workspace. A restored session includes both visible and model-facing state:
 
 - transcript and tool-call identities;
 - mode, model pin, and profile;
 - token counters and tool receipts;
+- bounded file.cheap artifact receipts;
 - durable goal state when present.
 
 Loading a session replaces the active conversation. It does not merge two transcripts.
+
+The same lossless restore path is available at TUI startup:
+
+```bash
+local-agent --resume 42
+local-agent --resume latest
+```
+
+An exact ID must belong to the current canonical workspace. `latest` selects
+that workspace's most recently updated session. The database title is restored
+with the session, and an active session lease prevents two Local Agent processes
+from resuming it concurrently. Startup restore retains the normal cloud-consent
+and recovery checks but does not submit a prompt or automatically resume a
+durable goal. `--resume` cannot be combined with headless `-p`.
+
+`/artifacts` (or `/artifact`) lists completed file.cheap save receipts from the
+active or restored transcript. The durable projection contains a host-derived
+stash URI, file and byte counts, creation time, full content SHA-256, and static
+secret-scan or indexing flags. Raw manifests, source paths, findings, and
+provider error prose remain outside persisted UI state.
 
 ## Checkpoints
 
@@ -63,6 +85,10 @@ When enabled, ICE can retrieve similar prior messages and run bounded background
 ~/.config/local-agent/local-agent.db
 ~/.config/local-agent/logs/
 ```
+
+SQLite migrations are applied transactionally and recorded with source
+checksums. Startup refuses a migration whose recorded checksum no longer
+matches the embedded source.
 
 ICE currently uses a bounded flat JSON scan rather than an approximate-nearest-neighbor index.
 

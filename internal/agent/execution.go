@@ -2,11 +2,16 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/google/jsonschema-go/jsonschema"
 
 	executionpkg "github.com/abdul-hamid-achik/local-agent/internal/execution"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
@@ -371,7 +376,7 @@ func (a *Agent) executionKindForCall(call llm.ToolCall) (executionpkg.Kind, exec
 	}
 	if a.isToolsTool(name) {
 		switch name {
-		case "grep", "read", "glob", "ls", "find", "diff", "exists":
+		case "grep", "read", "glob", "ls", "find", "diff", "exists", "load_skill":
 			return executionpkg.KindBuiltin, executionpkg.EffectReadOnly
 		case "bash":
 			return executionpkg.KindBuiltin, executionpkg.EffectUnknown
@@ -412,6 +417,74 @@ func (a *Agent) mcpToolDefinition(name string) (llm.ToolDef, bool) {
 		}
 	}
 	return llm.ToolDef{}, false
+}
+
+// preflightMCPToolArguments validates a call against a detached copy of the
+// exact schema advertised by the MCP server. Resolving without a Loader is
+// intentional: preflight must stay pure and must never fetch external schemas.
+func preflightMCPToolArguments(def llm.ToolDef, args map[string]any) error {
+	schemaJSON, err := json.Marshal(def.Parameters)
+	if err != nil {
+		return errors.New("MCP tool exposes an invalid input schema")
+	}
+
+	var schema jsonschema.Schema
+	if err := json.Unmarshal(schemaJSON, &schema); err != nil {
+		return errors.New("MCP tool exposes an invalid input schema")
+	}
+	resolved, err := schema.Resolve(nil)
+	if err != nil {
+		return errors.New("MCP tool exposes an invalid or unsupported input schema")
+	}
+	if err := resolved.Validate(args); err != nil {
+		return mcpArgumentSchemaMismatch(&schema, args)
+	}
+	return nil
+}
+
+const mcpArgumentSchemaMismatchMessage = "arguments do not satisfy the MCP tool input schema"
+
+// mcpArgumentSchemaMismatch must not wrap the validator error: jsonschema-go
+// includes rejected instance values in many diagnostics. Those values are MCP
+// arguments and must stay out of durable receipts, UI output, and tool messages.
+// Root required names are safe schema metadata and make the common correction
+// actionable; all other failures deliberately use the generic host text.
+func mcpArgumentSchemaMismatch(schema *jsonschema.Schema, args map[string]any) error {
+	missing := make([]string, 0, len(schema.Required))
+	for _, name := range schema.Required {
+		if _, exists := args[name]; exists {
+			continue
+		}
+		if !safeMCPRequiredPropertyName(name) || len(missing) >= 8 {
+			return errors.New(mcpArgumentSchemaMismatchMessage)
+		}
+		missing = append(missing, name)
+	}
+	if len(missing) == 0 {
+		return errors.New(mcpArgumentSchemaMismatchMessage)
+	}
+	sort.Strings(missing)
+	for index := range missing {
+		missing[index] = strconv.Quote(missing[index])
+	}
+	return fmt.Errorf("%s; missing required properties: %s", mcpArgumentSchemaMismatchMessage, strings.Join(missing, ", "))
+}
+
+func safeMCPRequiredPropertyName(name string) bool {
+	if name == "" || len(name) > 64 {
+		return false
+	}
+	for _, char := range name {
+		if char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' {
+			continue
+		}
+		switch char {
+		case '_', '-', '.', '$':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func preflightRequiredString(args map[string]any, key string, allowEmpty bool) error {
@@ -471,6 +544,18 @@ func (a *Agent) preflightToolCall(kind executionpkg.Kind, tc llm.ToolCall) error
 			return nil
 		case "find":
 			return preflightRequiredString(tc.Arguments, "name", false)
+		case "load_skill":
+			if !a.hasSkillLoader() {
+				return errors.New("skill loading is unavailable")
+			}
+			if err := preflightRequiredString(tc.Arguments, "name", false); err != nil {
+				return err
+			}
+			name := tc.Arguments["name"].(string)
+			if len(tc.Arguments) != 1 || !validModelSkillName(name) {
+				return errors.New("name must be one exact catalog name")
+			}
+			return nil
 		case "diff":
 			if err := preflightRequiredString(tc.Arguments, "path", false); err != nil {
 				return err
@@ -523,7 +608,11 @@ func (a *Agent) preflightToolCall(kind executionpkg.Kind, tc llm.ToolCall) error
 		if !ok || resolved != tc.Name {
 			return fmt.Errorf("unknown MCP tool %q", tc.Name)
 		}
-		return nil
+		def, ok := a.mcpToolDefinition(tc.Name)
+		if !ok {
+			return fmt.Errorf("unknown MCP tool %q", tc.Name)
+		}
+		return preflightMCPToolArguments(def, tc.Arguments)
 	default:
 		return fmt.Errorf("unknown execution kind %q", kind)
 	}
