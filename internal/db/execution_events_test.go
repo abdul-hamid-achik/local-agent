@@ -299,6 +299,52 @@ func TestListExecutionReconciliationTargetsScopesTurnAndExcludesCompleted(t *tes
 	}
 }
 
+func TestListStandaloneReconciliationPendingExcludesAnsweredTerminals(t *testing.T) {
+	store := testStore(t)
+	workspaceID := "/workspace/reconciliation-pending"
+	session := createExecutionTestSession(t, store, workspaceID)
+
+	unknownStarted := appendStartedExecutionFixture(t, store,
+		executionTestEvent(t, session.ID, workspaceID, "pending-unknown", execution.EffectUnknown))
+	outcomeUnknown := unknownStarted
+	outcomeUnknown.Type = execution.EventOutcomeUnknown
+	outcomeUnknown.ResultReceipt = "backend outcome is unknown"
+	outcomeUnknown.ResultSHA256 = execution.HashText(outcomeUnknown.ResultReceipt)
+	outcomeUnknown.OccurredAt = unknownStarted.OccurredAt.Add(time.Second)
+	appendExecutionEvent(t, store, outcomeUnknown)
+
+	appendStartedExecutionFixture(t, store,
+		executionTestEvent(t, session.ID, workspaceID, "pending-started", execution.Effectful))
+
+	appendCompletedExecutionFixture(t, store,
+		executionTestEvent(t, session.ID, workspaceID, "answered-completed", execution.Effectful))
+
+	failedStarted := appendStartedExecutionFixture(t, store,
+		executionTestEvent(t, session.ID, workspaceID, "answered-failed", execution.Effectful))
+	failed := failedStarted
+	failed.Type = execution.EventFailed
+	failed.ResultReceipt = "backend answered: exit status 7"
+	failed.ResultSHA256 = execution.HashText(failed.ResultReceipt)
+	failed.OccurredAt = failedStarted.OccurredAt.Add(time.Second)
+	appendExecutionEvent(t, store, failed)
+
+	states, err := store.ListStandaloneExecutionReconciliationPending(context.Background(), session.ID, workspaceID, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(states) != 2 {
+		t.Fatalf("pending reconciliations = %#v, want the unknown and started hazards only", states)
+	}
+	if states[0].Latest.Type != execution.EventOutcomeUnknown || states[1].Latest.Type != execution.EventStarted {
+		t.Fatalf("pending reconciliations misordered or misclassified: %#v", states)
+	}
+	for _, state := range states {
+		if !executionStateCanBeReconciled(state) {
+			t.Fatalf("listed state cannot be reconciled: %#v", state)
+		}
+	}
+}
+
 func TestListExecutionRecoveryHazardsCannotHidePostCursorCompletion(t *testing.T) {
 	store := testStore(t)
 	workspaceID := "/workspace/recovery-bound"

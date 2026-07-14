@@ -36,6 +36,7 @@ const (
 	effectiveUnresolved effectiveExecutionKind = iota + 1
 	effectiveRecovery
 	effectiveReconciliationTargets
+	effectiveReconciliationPending
 )
 
 type effectiveExecutionQuery struct {
@@ -273,6 +274,25 @@ func queryRawExecutionProjectionPage(ctx context.Context, tx *sql.Tx, query effe
 			 ORDER BY id ASC
 			 LIMIT ? OFFSET ?`
 		args = []any{query.sessionID, query.workspaceID, query.turnID, limit, offset}
+	case effectiveReconciliationPending:
+		statement = `
+			WITH ranked AS (
+				SELECT e.*,
+				       COUNT(*) OVER (PARTITION BY execution_id) AS event_count,
+				       ROW_NUMBER() OVER (PARTITION BY execution_id ORDER BY id DESC) AS latest_rank
+				  FROM execution_events e
+				 WHERE session_id = ? AND workspace_id = ?
+			)
+			SELECT ` + executionEventColumns + `, event_count
+			  FROM ranked
+			 WHERE latest_rank = 1
+			   AND (
+			       event_type = 'outcome_unknown'
+			       OR (event_type = 'started' AND effect_class != 'read_only')
+			   )
+			 ORDER BY id ASC
+			 LIMIT ? OFFSET ?`
+		args = []any{query.sessionID, query.workspaceID, limit, offset}
 	default:
 		return nil, errors.New("invalid effective execution projection kind")
 	}

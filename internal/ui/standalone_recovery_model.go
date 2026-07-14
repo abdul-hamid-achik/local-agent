@@ -33,7 +33,10 @@ type standaloneRecoveryApplyResultMsg struct {
 	token      uint64
 	inspection db.StandaloneExecutionReconciliationInspection
 	receipt    db.StandaloneExecutionReconciliationReceipt
-	err        error
+	// remaining is the count of executions still pending reconciliation after
+	// this resolution committed, or -1 when the recount was unavailable.
+	remaining int
+	err       error
 }
 
 func (m *Model) rememberStandaloneRecovery(unresolved *agent.UnresolvedExecutionError) {
@@ -239,7 +242,13 @@ func (m *Model) beginStandaloneRecoveryApply(event GoalRecoveryEvent) tea.Cmd {
 			ExecutionID: inspection.ExecutionID, ExpectedSessionRevision: inspection.SessionRevision,
 			ExpectedEventID: inspection.EventID, Actor: goalActor, Evidence: evidence,
 		})
-		return standaloneRecoveryApplyResultMsg{token: token, inspection: inspection, receipt: receipt, err: applyErr}
+		remaining := -1
+		if applyErr == nil {
+			if pending, pendingErr := store.ListStandaloneExecutionReconciliationPending(ctx, inspection.SessionID, inspection.WorkspaceID, 100); pendingErr == nil {
+				remaining = len(pending)
+			}
+		}
+		return standaloneRecoveryApplyResultMsg{token: token, inspection: inspection, receipt: receipt, remaining: remaining, err: applyErr}
 	}
 }
 
@@ -300,9 +309,18 @@ func (m *Model) handleStandaloneRecoveryApply(message standaloneRecoveryApplyRes
 	m.overlayParent = OverlayNone
 	m.overlay = OverlayNone
 	m.input.Focus()
-	m.entries = append(m.entries, ChatEntry{Kind: "system", Content: fmt.Sprintf(
+	completion := fmt.Sprintf(
 		"Recovery evidence recorded · %s · no tool was retried. The next prompt will recheck durable state.", r.ResolutionID,
-	)})
+	)
+	switch {
+	case message.remaining == 0:
+		completion += " No executions remain pending reconciliation."
+	case message.remaining == 1:
+		completion += " 1 execution remains pending reconciliation · run /recover again."
+	case message.remaining > 1:
+		completion += fmt.Sprintf(" %d executions remain pending reconciliation · run /recover again.", message.remaining)
+	}
+	m.entries = append(m.entries, ChatEntry{Kind: "system", Content: completion})
 	m.viewport.SetContent(m.renderEntries())
 	m.resumeFollow()
 	return tea.ClearScreen

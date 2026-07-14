@@ -35,6 +35,29 @@ func TestExecutionRecoveryNoticeIsActionableAndDeduplicated(t *testing.T) {
 	}
 }
 
+func TestExecutionRecoveryNoticeReportsReconciliationBacklog(t *testing.T) {
+	single := executionRecoveryNotice(&agent.UnresolvedExecutionError{
+		SessionID: 17, ExecutionID: "exec_only", ToolName: "bash",
+		EventType: execution.EventOutcomeUnknown, PendingReconciliations: 1,
+	})
+	if strings.Contains(single, "--all") {
+		t.Fatalf("single pending execution advertised batch recovery: %q", single)
+	}
+	backlog := executionRecoveryNotice(&agent.UnresolvedExecutionError{
+		SessionID: 17, ExecutionID: "exec_oldest", ToolName: "bash",
+		EventType: execution.EventOutcomeUnknown, PendingReconciliations: 3,
+	})
+	for _, want := range []string{
+		"3 executions are pending reconciliation",
+		"this is the oldest",
+		"local-agent execution recover 17 --all",
+	} {
+		if !strings.Contains(backlog, want) {
+			t.Fatalf("backlog notice missing %q: %s", want, backlog)
+		}
+	}
+}
+
 func TestExecutionRecoveryNoticeDistinguishesMissingAndUncertainReceipts(t *testing.T) {
 	unknown := executionRecoveryNotice(&agent.UnresolvedExecutionError{
 		SessionID: 2, ExecutionID: "exec_unknown", ToolName: "cortex_investigate",

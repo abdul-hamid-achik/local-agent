@@ -20,9 +20,16 @@ func executionRecoveryNotice(unresolved *agent.UnresolvedExecutionError) string 
 		detail = "Dispatch started, but its terminal receipt is missing."
 	}
 	if command := unresolved.RecoveryInspectCommand(); command != "" {
+		backlog := ""
+		if unresolved.PendingReconciliations > 1 {
+			backlog = fmt.Sprintf(
+				"\n%d executions are pending reconciliation in this session; this is the oldest. List them all (read-only): local-agent execution recover %d --all",
+				unresolved.PendingReconciliations, unresolved.SessionID,
+			)
+		}
 		return fmt.Sprintf(
-			"Recovery paused · %s\n%s Automatic retry is disabled.\n\nRun /recover to inspect the exact execution and record typed evidence. Your draft stays in the composer.\nExecution %s · %s\nCLI (read-only): %s\n\nNo tool is retried; after evidence commits, the next prompt rechecks durable state. /new starts a separate session and does not reconcile this execution.",
-			unresolved.ToolName, detail, unresolved.ExecutionID, unresolved.EventType, command,
+			"Recovery paused · %s\n%s Automatic retry is disabled.\n\nRun /recover to inspect the exact execution and record typed evidence. Your draft stays in the composer.\nExecution %s · %s\nCLI (read-only): %s%s\n\nNo tool is retried; after evidence commits, the next prompt rechecks durable state. /new starts a separate session and does not reconcile this execution.",
+			unresolved.ToolName, detail, unresolved.ExecutionID, unresolved.EventType, command, backlog,
 		)
 	}
 	return fmt.Sprintf(

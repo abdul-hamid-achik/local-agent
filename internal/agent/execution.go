@@ -61,6 +61,10 @@ type UnresolvedExecutionError struct {
 	ToolName       string
 	EventType      executionpkg.EventType
 	Cause          error
+	// PendingReconciliations counts every execution in the session that still
+	// requires reconciliation evidence, including this one, so hosts can report
+	// the full backlog instead of revealing it one recovery at a time.
+	PendingReconciliations int
 }
 
 func (e *UnresolvedExecutionError) Error() string {
@@ -236,6 +240,8 @@ func (a *Agent) executionRuntime(ctx context.Context) (executionRuntime, error) 
 	if err != nil {
 		return runtime, fmt.Errorf("inspect execution recovery hazards after snapshot cursor %d: %w", runtime.snapshotCursor, err)
 	}
+	var firstUnresolved *UnresolvedExecutionError
+	pendingReconciliations := 0
 	for _, state := range states {
 		unknownOutcome := state.Latest.Type == executionpkg.EventOutcomeUnknown
 		missingTerminal := state.Latest.Type == executionpkg.EventStarted && state.Identity.EffectClass != executionpkg.EffectReadOnly
@@ -244,13 +250,19 @@ func (a *Agent) executionRuntime(ctx context.Context) (executionRuntime, error) 
 		if !unknownOutcome && !missingTerminal && !answeredAfterSnapshot {
 			continue
 		}
+		if unknownOutcome || missingTerminal {
+			pendingReconciliations++
+		}
+		if firstUnresolved != nil {
+			continue
+		}
 		reason := "durable state is started without a terminal receipt"
 		if unknownOutcome {
 			reason = "durable outcome is unknown and requires explicit reconciliation"
 		} else if answeredAfterSnapshot {
 			reason = fmt.Sprintf("%s effect is newer than the session snapshot and must be projected before provider work", state.Latest.Type)
 		}
-		unresolved := &UnresolvedExecutionError{
+		firstUnresolved = &UnresolvedExecutionError{
 			SessionID:      state.Identity.SessionID,
 			WorkspaceID:    state.Identity.WorkspaceID,
 			SnapshotCursor: runtime.snapshotCursor,
@@ -260,8 +272,11 @@ func (a *Agent) executionRuntime(ctx context.Context) (executionRuntime, error) 
 			EventType:      state.Latest.Type,
 			Cause:          errors.New(reason),
 		}
-		a.latchUnresolvedExecution(unresolved)
-		return runtime, unresolved
+	}
+	if firstUnresolved != nil {
+		firstUnresolved.PendingReconciliations = pendingReconciliations
+		a.latchUnresolvedExecution(firstUnresolved)
+		return runtime, firstUnresolved
 	}
 	return runtime, nil
 }

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
+	"github.com/abdul-hamid-achik/local-agent/internal/execution"
 	"github.com/abdul-hamid-achik/local-agent/internal/reconciliation"
 )
 
@@ -22,6 +23,7 @@ type executionRecoveryStore interface {
 	InspectStandaloneExecutionReconciliation(context.Context, int64, string, string) (db.StandaloneExecutionReconciliationInspection, error)
 	AcquireExecutionSessionLease(context.Context, int64, string) (*db.ExecutionSessionLease, error)
 	ResolveStandaloneExecutionReconciliation(context.Context, *db.ExecutionSessionLease, db.ResolveStandaloneExecutionReconciliationRequest) (db.StandaloneExecutionReconciliationReceipt, error)
+	ListStandaloneExecutionReconciliationPending(context.Context, int64, string, int) ([]execution.State, error)
 }
 
 type executionRecoveryView struct {
@@ -100,6 +102,7 @@ func handleExecutionRecover(store executionRecoveryStore, workspace string, args
 	flags.SetOutput(stderr)
 	flags.Usage = func() { writeExecutionRecoverUsage(stdout) }
 	apply := flags.Bool("apply", false, "append typed reconciliation evidence")
+	all := flags.Bool("all", false, "target every execution pending reconciliation in the session")
 	jsonOutput := flags.Bool("json", false, "print machine-readable JSON")
 	revision := flags.Int64("revision", -1, "exact session revision shown by inspection")
 	eventID := flags.Int64("event-id", -1, "exact latest event ID shown by inspection")
@@ -116,8 +119,16 @@ func handleExecutionRecover(store executionRecoveryStore, workspace string, args
 	if code, done := flagParseExitCode(flags.Parse(normalized)); done {
 		return code
 	}
-	if flags.NArg() != 2 {
-		executionFprintln(stderr, "execution recover: provide SESSION_ID and EXECUTION_ID")
+	wantArgs := 2
+	if *all {
+		wantArgs = 1
+	}
+	if flags.NArg() != wantArgs {
+		if *all {
+			executionFprintln(stderr, "execution recover: provide SESSION_ID only with --all")
+		} else {
+			executionFprintln(stderr, "execution recover: provide SESSION_ID and EXECUTION_ID")
+		}
 		return 2
 	}
 	sessionID, err := strconv.ParseInt(flags.Arg(0), 10, 64)
@@ -125,17 +136,19 @@ func handleExecutionRecover(store executionRecoveryStore, workspace string, args
 		executionFprintf(stderr, "execution recover: invalid session ID %q\n", flags.Arg(0))
 		return 2
 	}
-	executionID := flags.Arg(1)
 	provided := make(map[string]bool)
 	flags.Visit(func(value *flag.Flag) { provided[value.Name] = true })
 	if !*apply {
 		for name := range provided {
-			if name != "json" && name != "apply" {
+			if name != "json" && name != "apply" && name != "all" {
 				executionFprintf(stderr, "execution recover: --%s requires --apply\n", name)
 				return 2
 			}
 		}
-		inspection, err := store.InspectStandaloneExecutionReconciliation(context.Background(), sessionID, workspace, executionID)
+		if *all {
+			return listExecutionRecoveryPending(store, workspace, sessionID, *jsonOutput, stdout, stderr)
+		}
+		inspection, err := store.InspectStandaloneExecutionReconciliation(context.Background(), sessionID, workspace, flags.Arg(1))
 		if err != nil {
 			executionFprintf(stderr, "execution recover: inspect immutable receipt: %v\n", err)
 			return 1
@@ -152,14 +165,26 @@ func handleExecutionRecover(store executionRecoveryStore, workspace string, args
 		return 0
 	}
 
-	required := []string{"revision", "event-id", "observation", "source", "reference", "summary", "observed-at"}
+	required := []string{"observation", "source", "reference", "summary", "observed-at"}
+	if *all {
+		// Batch apply derives the exact revision/event tokens from a fresh
+		// inspection of each execution under the held session lease.
+		for _, name := range []string{"revision", "event-id"} {
+			if provided[name] {
+				executionFprintf(stderr, "execution recover: --%s cannot be combined with --all; exact tokens are inspected per execution\n", name)
+				return 2
+			}
+		}
+	} else {
+		required = append([]string{"revision", "event-id"}, required...)
+	}
 	for _, name := range required {
 		if !provided[name] {
 			executionFprintf(stderr, "execution recover: --apply requires --%s from a prior inspection\n", name)
 			return 2
 		}
 	}
-	if *revision < 0 || *eventID <= 0 {
+	if !*all && (*revision < 0 || *eventID <= 0) {
 		executionFprintln(stderr, "execution recover: --revision must be non-negative and --event-id must be positive")
 		return 2
 	}
@@ -190,8 +215,11 @@ func handleExecutionRecover(store executionRecoveryStore, workspace string, args
 			executionFprintf(stderr, "execution recover: release session lease: %v\n", err)
 		}
 	}()
+	if *all {
+		return applyAllExecutionRecoveries(store, lease, workspace, sessionID, evidence, *jsonOutput, stdout, stderr)
+	}
 	receipt, err := store.ResolveStandaloneExecutionReconciliation(context.Background(), lease, db.ResolveStandaloneExecutionReconciliationRequest{
-		SessionID: sessionID, WorkspaceID: workspace, ExecutionID: executionID,
+		SessionID: sessionID, WorkspaceID: workspace, ExecutionID: flags.Arg(1),
 		ExpectedSessionRevision: *revision, ExpectedEventID: *eventID,
 		Actor: executionRecoveryActor, Evidence: evidence,
 	})
@@ -199,21 +227,140 @@ func handleExecutionRecover(store executionRecoveryStore, workspace string, args
 		executionFprintf(stderr, "execution recover: append typed evidence: %v\n", err)
 		return 1
 	}
-	view := executionRecoveryApplyView{
-		SessionID: receipt.SessionID, SessionRevision: receipt.SessionRevision,
-		ExecutionID: receipt.ExecutionID, EventID: receipt.EventID,
-		ItemID: receipt.ItemID, ResolutionID: receipt.ResolutionID, Inserted: receipt.Inserted,
-		Notice: "Evidence recorded; the immutable outcome-unknown event was not changed and no tool was retried.",
-	}
+	view := recoveryApplyView(receipt)
 	if *jsonOutput {
 		if err := writeExecutionJSON(stdout, view); err != nil {
 			executionFprintf(stderr, "execution recover: %v\n", err)
 			return 1
 		}
 	} else {
-		executionFprintf(stdout, "Reconciled execution %s at event %d.\nReceipt: %s\n%s\n", terminalSafeGoalText(view.ExecutionID), view.EventID, terminalSafeGoalText(view.ResolutionID), view.Notice)
+		writeExecutionRecoveryReceipt(stdout, view)
 	}
 	return 0
+}
+
+func recoveryApplyView(receipt db.StandaloneExecutionReconciliationReceipt) executionRecoveryApplyView {
+	return executionRecoveryApplyView{
+		SessionID: receipt.SessionID, SessionRevision: receipt.SessionRevision,
+		ExecutionID: receipt.ExecutionID, EventID: receipt.EventID,
+		ItemID: receipt.ItemID, ResolutionID: receipt.ResolutionID, Inserted: receipt.Inserted,
+		Notice: "Evidence recorded; the immutable outcome-unknown event was not changed and no tool was retried.",
+	}
+}
+
+func writeExecutionRecoveryReceipt(writer io.Writer, view executionRecoveryApplyView) {
+	executionFprintf(writer, "Reconciled execution %s at event %d.\nReceipt: %s\n%s\n", terminalSafeGoalText(view.ExecutionID), view.EventID, terminalSafeGoalText(view.ResolutionID), view.Notice)
+}
+
+type executionRecoveryPendingView struct {
+	SessionID int64                       `json:"session_id"`
+	Workspace string                      `json:"workspace_id"`
+	Count     int                         `json:"count"`
+	Pending   []executionRecoveryItemView `json:"pending"`
+}
+
+type executionRecoveryItemView struct {
+	ExecutionID    string `json:"execution_id"`
+	ToolName       string `json:"tool_name"`
+	EventID        int64  `json:"event_id"`
+	EventType      string `json:"event_type"`
+	EffectClass    string `json:"effect_class"`
+	TurnID         string `json:"turn_id"`
+	InspectCommand string `json:"inspect_command"`
+}
+
+func listExecutionRecoveryPending(store executionRecoveryStore, workspace string, sessionID int64, jsonOutput bool, stdout, stderr io.Writer) int {
+	states, err := store.ListStandaloneExecutionReconciliationPending(context.Background(), sessionID, workspace, 100)
+	if err != nil {
+		executionFprintf(stderr, "execution recover: list pending reconciliations: %v\n", err)
+		return 1
+	}
+	view := executionRecoveryPendingView{
+		SessionID: sessionID, Workspace: workspace,
+		Count: len(states), Pending: make([]executionRecoveryItemView, 0, len(states)),
+	}
+	for _, state := range states {
+		view.Pending = append(view.Pending, executionRecoveryItemView{
+			ExecutionID: state.Identity.ExecutionID, ToolName: state.Identity.ToolName,
+			EventID: state.Latest.ID, EventType: string(state.Latest.Type),
+			EffectClass: string(state.Identity.EffectClass), TurnID: state.Identity.TurnID,
+			InspectCommand: fmt.Sprintf("local-agent execution recover %d %s", sessionID, state.Identity.ExecutionID),
+		})
+	}
+	if jsonOutput {
+		if err := writeExecutionJSON(stdout, view); err != nil {
+			executionFprintf(stderr, "execution recover: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	if view.Count == 0 {
+		executionFprintf(stdout, "No executions are pending reconciliation in session %d.\n", sessionID)
+		return 0
+	}
+	table := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
+	executionFprintf(table, "EXECUTION\tTOOL\tEVENT\tEFFECT\n")
+	for _, item := range view.Pending {
+		executionFprintf(table, "%s\t%s\t%d · %s\t%s\n",
+			terminalSafeGoalText(item.ExecutionID), terminalSafeGoalText(item.ToolName),
+			item.EventID, item.EventType, item.EffectClass)
+	}
+	_ = table.Flush()
+	executionFprintf(stdout, "\n%d execution(s) pending reconciliation.\n", view.Count)
+	executionFprintln(stdout, "Inspect each with the read-only command, or reconcile all with one verified observation:")
+	executionFprintf(stdout, "  local-agent execution recover %d --all --apply --observation effect_not_applied --source verification_check --reference REF --summary SUMMARY --observed-at RFC3339\n", sessionID)
+	executionFprintln(stdout, "Only assert one shared disposition after verifying every listed execution independently.")
+	return 0
+}
+
+func applyAllExecutionRecoveries(store executionRecoveryStore, lease *db.ExecutionSessionLease, workspace string, sessionID int64, evidence reconciliation.Request, jsonOutput bool, stdout, stderr io.Writer) int {
+	ctx := context.Background()
+	states, err := store.ListStandaloneExecutionReconciliationPending(ctx, sessionID, workspace, 100)
+	if err != nil {
+		executionFprintf(stderr, "execution recover: list pending reconciliations: %v\n", err)
+		return 1
+	}
+	receipts := make([]executionRecoveryApplyView, 0, len(states))
+	emit := func() int {
+		if !jsonOutput {
+			executionFprintf(stdout, "Reconciled %d execution(s).\n", len(receipts))
+			return 0
+		}
+		if err := writeExecutionJSON(stdout, receipts); err != nil {
+			executionFprintf(stderr, "execution recover: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	for _, state := range states {
+		// Each resolution re-inspects under the held lease so the exact
+		// revision/event tokens are always fresh and CAS-verified.
+		inspection, err := store.InspectStandaloneExecutionReconciliation(ctx, sessionID, workspace, state.Identity.ExecutionID)
+		if err != nil {
+			executionFprintf(stderr, "execution recover: inspect %s: %v\n", state.Identity.ExecutionID, err)
+			_ = emit()
+			return 1
+		}
+		if inspection.Resolved {
+			continue
+		}
+		receipt, err := store.ResolveStandaloneExecutionReconciliation(ctx, lease, db.ResolveStandaloneExecutionReconciliationRequest{
+			SessionID: sessionID, WorkspaceID: workspace, ExecutionID: inspection.ExecutionID,
+			ExpectedSessionRevision: inspection.SessionRevision, ExpectedEventID: inspection.EventID,
+			Actor: executionRecoveryActor, Evidence: evidence,
+		})
+		if err != nil {
+			executionFprintf(stderr, "execution recover: append typed evidence for %s: %v\n", inspection.ExecutionID, err)
+			_ = emit()
+			return 1
+		}
+		view := recoveryApplyView(receipt)
+		receipts = append(receipts, view)
+		if !jsonOutput {
+			writeExecutionRecoveryReceipt(stdout, view)
+		}
+	}
+	return emit()
 }
 
 func normalizeExecutionRecoverArgs(args []string) ([]string, error) {
@@ -224,7 +371,8 @@ func normalizeExecutionRecoverArgs(args []string) ([]string, error) {
 	var flags, positional []string
 	for index := 0; index < len(args); index++ {
 		argument := args[index]
-		if argument == "--apply" || argument == "-apply" || argument == "--json" || argument == "-json" {
+		if argument == "--apply" || argument == "-apply" || argument == "--json" || argument == "-json" ||
+			argument == "--all" || argument == "-all" {
 			flags = append(flags, argument)
 			continue
 		}
@@ -284,7 +432,9 @@ func writeExecutionRecovery(writer io.Writer, view executionRecoveryView) {
 func writeExecutionUsage(writer io.Writer) {
 	executionFprintln(writer, "Usage:")
 	executionFprintln(writer, "  local-agent execution recover [--json] SESSION_ID EXECUTION_ID")
+	executionFprintln(writer, "  local-agent execution recover [--json] SESSION_ID --all")
 	executionFprintln(writer, "  local-agent execution recover --apply --revision N ... SESSION_ID EXECUTION_ID")
+	executionFprintln(writer, "  local-agent execution recover --all --apply [evidence options] SESSION_ID")
 	executionFprintln(writer)
 	executionFprintln(writer, "Safety:")
 	executionFprintln(writer, "  Inspection is read-only.")
@@ -297,11 +447,18 @@ func writeExecutionUsage(writer io.Writer) {
 func writeExecutionRecoverUsage(writer io.Writer) {
 	executionFprintln(writer, "Usage:")
 	executionFprintln(writer, "  local-agent execution recover [--json] SESSION_ID EXECUTION_ID")
+	executionFprintln(writer, "  local-agent execution recover [--json] SESSION_ID --all")
 	executionFprintln(writer, "  local-agent execution recover --apply [evidence options] SESSION_ID EXECUTION_ID")
+	executionFprintln(writer, "  local-agent execution recover --all --apply [evidence options] SESSION_ID")
 	executionFprintln(writer)
 	executionFprintln(writer, "Options:")
 	executionFprintln(writer, "  --json               Print machine-readable JSON")
 	executionFprintln(writer, "  --apply              Append typed reconciliation evidence")
+	executionFprintln(writer, "  --all                Target every pending reconciliation in the session.")
+	executionFprintln(writer, "                       Listing is read-only; with --apply, one shared typed")
+	executionFprintln(writer, "                       observation is recorded per execution and exact")
+	executionFprintln(writer, "                       revision/event tokens are inspected under the lease")
+	executionFprintln(writer, "                       (omit --revision and --event-id).")
 	executionFprintln(writer, "  -h, --help           Show this help")
 	executionFprintln(writer)
 	executionFprintln(writer, "Required with --apply:")

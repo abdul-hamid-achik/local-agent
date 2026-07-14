@@ -262,6 +262,20 @@ func (s *Store) ListExecutionRecoveryHazards(ctx context.Context, sessionID int6
 // session recovery projection, it excludes completed post-cursor receipts:
 // those may need snapshot projection, but their backend outcome is known and
 // must not be represented as execution reconciliation.
+// ListStandaloneExecutionReconciliationPending returns the session's bounded
+// latest executions whose external outcome still requires evidence, oldest
+// first, across every turn. Already-reconciled executions and answered
+// post-cursor receipts are excluded: the former have evidence on file and the
+// latter need snapshot projection, not reconciliation.
+func (s *Store) ListStandaloneExecutionReconciliationPending(ctx context.Context, sessionID int64, workspaceID string, limit int) ([]execution.State, error) {
+	if err := validateExecutionListLimit(limit, maxExecutionRecoveryHazards); err != nil {
+		return nil, err
+	}
+	return s.listEffectiveExecutionStates(ctx, effectiveExecutionQuery{
+		kind: effectiveReconciliationPending, sessionID: sessionID, workspaceID: workspaceID,
+	}, limit, false)
+}
+
 func (s *Store) ListExecutionReconciliationTargets(ctx context.Context, sessionID int64, workspaceID, turnID string, limit int) ([]execution.State, error) {
 	if strings.TrimSpace(turnID) == "" || strings.TrimSpace(turnID) != turnID || len(turnID) > execution.MaxTurnIDBytes || !utf8.ValidString(turnID) {
 		return nil, fmt.Errorf("execution reconciliation turn id is invalid")
