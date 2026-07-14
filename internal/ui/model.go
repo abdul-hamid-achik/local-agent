@@ -3913,16 +3913,9 @@ func (m *Model) sendToAgentTurnPresentedWithCapability(text, turnID string, visi
 	// Goal-owned turns still reject child updates through composerEditable.
 	m.input.Focus()
 	m.turnStartedAt = m.nowTime()
-	m.lastTurnDuration = 0
-	m.doneFlash = false
+	m.resetTurnDiagnostics()
 	m.recalcViewportHeight()
 	m.streamBuf.Reset()
-	m.evalCount = 0
-	m.promptTokens = 0
-	m.turnEvalTotal = 0
-	m.turnPromptTotal = 0
-	m.capabilityRoute = nil
-	m.lastCapabilityRoute = nil
 
 	if visible {
 		m.entries = append(m.entries, ChatEntry{

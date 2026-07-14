@@ -205,6 +205,7 @@ func handleGoalCommandIO(args []string, stdout, stderr io.Writer) int {
 func handleGoalPending(store goalControlStore, workspace string, args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("goal pending", flag.ContinueOnError)
 	flags.SetOutput(stderr)
+	flags.Usage = func() { writeGoalPendingUsage(stdout) }
 	jsonOutput := flags.Bool("json", false, "print machine-readable JSON")
 	limit := flags.Int("limit", 20, "maximum pending items to print (1-100)")
 	if code, done := flagParseExitCode(flags.Parse(args)); done {
@@ -258,6 +259,7 @@ func handleGoalRecover(store goalRecoveryStore, workspace string, args []string,
 	}
 	flags := flag.NewFlagSet("goal recover", flag.ContinueOnError)
 	flags.SetOutput(stderr)
+	flags.Usage = func() { writeGoalRecoverUsage(stdout) }
 	apply := flags.Bool("apply", false, "persist the exact typed evidence")
 	jsonOutput := flags.Bool("json", false, "print machine-readable JSON")
 	itemID := flags.String("item", "", "exact execution-member or parent item ID")
@@ -570,6 +572,7 @@ func writeGoalRecoveryApply(writer io.Writer, result goalRecoveryApplyResult) {
 func handleGoalList(store goalSessionStore, workspace string, args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("goal list", flag.ContinueOnError)
 	flags.SetOutput(stderr)
+	flags.Usage = func() { writeGoalListUsage(stdout) }
 	jsonOutput := flags.Bool("json", false, "print machine-readable JSON")
 	limit := flags.Int("limit", 20, "maximum durable sessions to inspect (1-100)")
 	if code, done := flagParseExitCode(flags.Parse(args)); done {
@@ -605,6 +608,7 @@ func handleGoalList(store goalSessionStore, workspace string, args []string, std
 func handleGoalShow(store goalSessionStore, workspace string, args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("goal show", flag.ContinueOnError)
 	flags.SetOutput(stderr)
+	flags.Usage = func() { writeGoalShowUsage(stdout) }
 	jsonOutput := flags.Bool("json", false, "print the complete validated snapshot as JSON")
 	if code, done := flagParseExitCode(flags.Parse(args)); done {
 		return code
@@ -732,13 +736,81 @@ func decodeGoalSummary(session db.Session, raw string) (goalSummary, bool, error
 
 func writeGoalUsage(writer io.Writer) {
 	_, _ = fmt.Fprintln(writer, "Usage:")
-	_, _ = fmt.Fprintln(writer, "  local-agent goal list [--limit 20] [--json]")
-	_, _ = fmt.Fprintln(writer, "  local-agent goal show [--json] <session-id>")
-	_, _ = fmt.Fprintln(writer, "  local-agent goal pending [--limit 20] [--json] <session-id>")
-	_, _ = fmt.Fprintln(writer, "  local-agent goal recover [--json] <session-id>")
-	_, _ = fmt.Fprintln(writer, "  local-agent goal recover --apply --item ID --observation VALUE --source VALUE --reference TEXT --summary TEXT --observed-at RFC3339 [--json] <session-id>")
+	_, _ = fmt.Fprintln(writer, "  local-agent goal <command> [options]")
 	_, _ = fmt.Fprintln(writer)
-	_, _ = fmt.Fprintln(writer, "Recovery is read-only unless --apply is explicit. Recovery never resumes execution and has no force override.")
+	_, _ = fmt.Fprintln(writer, "Commands:")
+	_, _ = fmt.Fprintln(writer, "  list      List durable goal sessions")
+	_, _ = fmt.Fprintln(writer, "  show      Show one validated goal snapshot")
+	_, _ = fmt.Fprintln(writer, "  pending   List pending control items for a session")
+	_, _ = fmt.Fprintln(writer, "  recover   Inspect or reconcile paused goal work")
+	_, _ = fmt.Fprintln(writer)
+	_, _ = fmt.Fprintln(writer, "Recovery:")
+	_, _ = fmt.Fprintln(writer, "  local-agent goal recover [--json] <session-id>")
+	_, _ = fmt.Fprintln(writer, "  local-agent goal recover --apply --item ID ... --observed-at RFC3339 <session-id>")
+	_, _ = fmt.Fprintln(writer)
+	_, _ = fmt.Fprintln(writer, "Safety:")
+	_, _ = fmt.Fprintln(writer, "  Recovery is read-only unless --apply is explicit.")
+	_, _ = fmt.Fprintln(writer, "  Recovery never resumes execution and has no force override.")
+	_, _ = fmt.Fprintln(writer)
+	_, _ = fmt.Fprintln(writer, "Run `local-agent goal <command> --help` for command options.")
+}
+
+func writeGoalListUsage(writer io.Writer) {
+	_, _ = fmt.Fprintln(writer, "Usage:")
+	_, _ = fmt.Fprintln(writer, "  local-agent goal list [options]")
+	_, _ = fmt.Fprintln(writer)
+	_, _ = fmt.Fprintln(writer, "Options:")
+	_, _ = fmt.Fprintln(writer, "  --limit N    Maximum durable sessions to inspect (default 20; range 1-100)")
+	_, _ = fmt.Fprintln(writer, "  --json       Print machine-readable JSON")
+	_, _ = fmt.Fprintln(writer, "  -h, --help   Show this help")
+}
+
+func writeGoalShowUsage(writer io.Writer) {
+	_, _ = fmt.Fprintln(writer, "Usage:")
+	_, _ = fmt.Fprintln(writer, "  local-agent goal show [options] <session-id>")
+	_, _ = fmt.Fprintln(writer)
+	_, _ = fmt.Fprintln(writer, "Options:")
+	_, _ = fmt.Fprintln(writer, "  --json       Print the complete validated snapshot as JSON")
+	_, _ = fmt.Fprintln(writer, "  -h, --help   Show this help")
+}
+
+func writeGoalPendingUsage(writer io.Writer) {
+	_, _ = fmt.Fprintln(writer, "Usage:")
+	_, _ = fmt.Fprintln(writer, "  local-agent goal pending [options] <session-id>")
+	_, _ = fmt.Fprintln(writer)
+	_, _ = fmt.Fprintln(writer, "Options:")
+	_, _ = fmt.Fprintln(writer, "  --limit N    Maximum pending items to print (default 20; range 1-100)")
+	_, _ = fmt.Fprintln(writer, "  --json       Print machine-readable JSON")
+	_, _ = fmt.Fprintln(writer, "  -h, --help   Show this help")
+}
+
+func writeGoalRecoverUsage(writer io.Writer) {
+	_, _ = fmt.Fprintln(writer, "Usage:")
+	_, _ = fmt.Fprintln(writer, "  local-agent goal recover [--json] <session-id>")
+	_, _ = fmt.Fprintln(writer, "  local-agent goal recover --apply [evidence options] [--json] <session-id>")
+	_, _ = fmt.Fprintln(writer)
+	_, _ = fmt.Fprintln(writer, "Options:")
+	_, _ = fmt.Fprintln(writer, "  --json               Print machine-readable JSON")
+	_, _ = fmt.Fprintln(writer, "  --apply              Persist the exact typed evidence")
+	_, _ = fmt.Fprintln(writer, "  -h, --help           Show this help")
+	_, _ = fmt.Fprintln(writer)
+	_, _ = fmt.Fprintln(writer, "Required with --apply:")
+	_, _ = fmt.Fprintln(writer, "  --item ID            Exact execution-member or parent item ID")
+	_, _ = fmt.Fprintln(writer, "  --observation VALUE")
+	_, _ = fmt.Fprintln(writer, "      effect_applied, effect_not_applied, effect_compensated, or")
+	_, _ = fmt.Fprintln(writer, "      turn_abandoned_after_inspection")
+	_, _ = fmt.Fprintln(writer, "  --source VALUE")
+	_, _ = fmt.Fprintln(writer, "      external_receipt, workspace_artifact, verification_check, or")
+	_, _ = fmt.Fprintln(writer, "      operator_observation")
+	_, _ = fmt.Fprintln(writer, "  --reference TEXT     Redacted evidence reference")
+	_, _ = fmt.Fprintln(writer, "  --summary TEXT       Bounded inspection summary")
+	_, _ = fmt.Fprintln(writer, "  --observed-at RFC3339")
+	_, _ = fmt.Fprintln(writer, "      Evidence observation time")
+	_, _ = fmt.Fprintln(writer)
+	_, _ = fmt.Fprintln(writer, "Safety:")
+	_, _ = fmt.Fprintln(writer, "  Inspection is read-only unless --apply is explicit.")
+	_, _ = fmt.Fprintln(writer, "  Applying requires every evidence option shown above.")
+	_, _ = fmt.Fprintln(writer, "  Recovery never resumes execution and has no force override.")
 }
 
 func projectPendingControlItems(states []controlplane.State, sessionID int64, workspaceID string) ([]pendingControlSummary, error) {

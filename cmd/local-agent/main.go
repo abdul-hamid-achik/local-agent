@@ -59,7 +59,7 @@ func run() int {
 		}
 	}
 
-	options, err := parseRootOptions(os.Args[0], os.Args[1:], os.Stderr)
+	options, err := parseRootOptions(os.Args[0], os.Args[1:], os.Stderr, os.Stdout)
 	if errors.Is(err, flag.ErrHelp) {
 		return 0
 	}

@@ -98,6 +98,7 @@ func handleExecutionCommandIO(args []string, stdout, stderr io.Writer) int {
 func handleExecutionRecover(store executionRecoveryStore, workspace string, args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("execution recover", flag.ContinueOnError)
 	flags.SetOutput(stderr)
+	flags.Usage = func() { writeExecutionRecoverUsage(stdout) }
 	apply := flags.Bool("apply", false, "append typed reconciliation evidence")
 	jsonOutput := flags.Bool("json", false, "print machine-readable JSON")
 	revision := flags.Int64("revision", -1, "exact session revision shown by inspection")
@@ -283,9 +284,43 @@ func writeExecutionRecovery(writer io.Writer, view executionRecoveryView) {
 func writeExecutionUsage(writer io.Writer) {
 	executionFprintln(writer, "Usage:")
 	executionFprintln(writer, "  local-agent execution recover [--json] SESSION_ID EXECUTION_ID")
-	executionFprintln(writer, "  local-agent execution recover --apply --revision N --event-id N --observation VALUE --source VALUE --reference TEXT --summary TEXT --observed-at RFC3339 [--json] SESSION_ID EXECUTION_ID")
+	executionFprintln(writer, "  local-agent execution recover --apply --revision N ... SESSION_ID EXECUTION_ID")
 	executionFprintln(writer)
-	executionFprintln(writer, "Inspection is read-only. Apply requires exact inspection tokens and typed evidence; it never retries a tool or rewrites the immutable execution ledger.")
+	executionFprintln(writer, "Safety:")
+	executionFprintln(writer, "  Inspection is read-only.")
+	executionFprintln(writer, "  Apply requires exact inspection tokens and typed evidence.")
+	executionFprintln(writer, "  It never retries a tool or rewrites the immutable execution ledger.")
+	executionFprintln(writer)
+	executionFprintln(writer, "Run `local-agent execution recover --help` for all options.")
+}
+
+func writeExecutionRecoverUsage(writer io.Writer) {
+	executionFprintln(writer, "Usage:")
+	executionFprintln(writer, "  local-agent execution recover [--json] SESSION_ID EXECUTION_ID")
+	executionFprintln(writer, "  local-agent execution recover --apply [evidence options] SESSION_ID EXECUTION_ID")
+	executionFprintln(writer)
+	executionFprintln(writer, "Options:")
+	executionFprintln(writer, "  --json               Print machine-readable JSON")
+	executionFprintln(writer, "  --apply              Append typed reconciliation evidence")
+	executionFprintln(writer, "  -h, --help           Show this help")
+	executionFprintln(writer)
+	executionFprintln(writer, "Required with --apply:")
+	executionFprintln(writer, "  --revision N         Exact session revision shown by inspection")
+	executionFprintln(writer, "  --event-id N         Exact latest event ID shown by inspection")
+	executionFprintln(writer, "  --observation VALUE")
+	executionFprintln(writer, "      effect_applied, effect_not_applied, or effect_compensated")
+	executionFprintln(writer, "  --source VALUE")
+	executionFprintln(writer, "      external_receipt, workspace_artifact, verification_check, or")
+	executionFprintln(writer, "      operator_observation")
+	executionFprintln(writer, "  --reference TEXT     Redacted evidence reference")
+	executionFprintln(writer, "  --summary TEXT       Bounded inspection summary")
+	executionFprintln(writer, "  --observed-at RFC3339")
+	executionFprintln(writer, "      Evidence observation time")
+	executionFprintln(writer)
+	executionFprintln(writer, "Safety:")
+	executionFprintln(writer, "  Inspection is read-only unless --apply is explicit.")
+	executionFprintln(writer, "  Applying requires every evidence option shown above.")
+	executionFprintln(writer, "  It never retries a tool or rewrites the immutable execution ledger.")
 }
 
 func executionFprintf(writer io.Writer, format string, args ...any) {

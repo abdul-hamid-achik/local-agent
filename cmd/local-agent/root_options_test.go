@@ -32,7 +32,7 @@ func TestParseRootOptionsTreatsVersionOnlyAsAParsedFlag(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			options, err := parseRootOptions("local-agent", test.args, &bytes.Buffer{})
+			options, err := parseRootOptions("local-agent", test.args, &bytes.Buffer{}, &bytes.Buffer{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -139,7 +139,7 @@ func TestParseRootOptionsPreservesOrderingAliasesAndFlagLikeValues(t *testing.T)
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			options, err := parseRootOptions("local-agent", test.args, &bytes.Buffer{})
+			options, err := parseRootOptions("local-agent", test.args, &bytes.Buffer{}, &bytes.Buffer{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -166,12 +166,15 @@ func TestParseRootOptionsPreservesOrderingAliasesAndFlagLikeValues(t *testing.T)
 }
 
 func TestParseRootOptionsHelpIsSideEffectFree(t *testing.T) {
-	var output bytes.Buffer
-	_, err := parseRootOptions("local-agent", []string{"-h"}, &output)
+	var stdout, stderr bytes.Buffer
+	_, err := parseRootOptions("local-agent", []string{"-h"}, &stderr, &stdout)
 	if !errors.Is(err, flag.ErrHelp) {
 		t.Fatalf("help error = %v, want flag.ErrHelp", err)
 	}
-	help := output.String()
+	if stderr.Len() != 0 {
+		t.Fatalf("help wrote to stderr: %q", stderr.String())
+	}
+	help := stdout.String()
 	for _, text := range []string{
 		"local-agent <command> [options]",
 		"init       ",
@@ -192,6 +195,21 @@ func TestParseRootOptionsHelpIsSideEffectFree(t *testing.T) {
 		if strings.Contains(help, legacySpelling) {
 			t.Fatalf("help exposed single-dash spelling %q:\n%s", legacySpelling, help)
 		}
+	}
+	assertHelpLinesAtMost(t, help, 100)
+}
+
+func TestParseRootOptionsErrorsStayOnStderr(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	_, err := parseRootOptions("local-agent", []string{"--unknown"}, &stderr, &stdout)
+	if err == nil || errors.Is(err, flag.ErrHelp) {
+		t.Fatalf("unknown flag error = %v, want parse error", err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("unknown flag wrote help to stdout: %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "flag provided but not defined") {
+		t.Fatalf("unknown flag stderr = %q", stderr.String())
 	}
 }
 

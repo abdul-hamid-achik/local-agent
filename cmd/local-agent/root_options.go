@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"io"
 )
@@ -26,11 +27,11 @@ type rootOptions struct {
 	arguments      []string
 }
 
-func parseRootOptions(program string, args []string, output io.Writer) (rootOptions, error) {
+func parseRootOptions(program string, args []string, stderr, stdout io.Writer) (rootOptions, error) {
 	var options rootOptions
 	flags := flag.NewFlagSet(program, flag.ContinueOnError)
-	flags.SetOutput(output)
-	flags.Usage = func() { writeRootUsage(output, program) }
+	flags.SetOutput(stderr)
+	flags.Usage = func() {}
 	flags.BoolVar(&options.qwenRouter, "qwen-router", false, "use optimized Qwen model router (experimental)")
 	flags.StringVar(&options.model, "model", "", "override Ollama model")
 	flags.StringVar(&options.agentProfile, "agent", "", "override agent profile")
@@ -45,6 +46,9 @@ func parseRootOptions(program string, args []string, output io.Writer) (rootOpti
 	flags.Var(&options.resume, "resume", "restore a saved interactive session by positive ID or latest")
 
 	err := flags.Parse(args)
+	if errors.Is(err, flag.ErrHelp) {
+		writeRootUsage(stdout, program)
+	}
 	flags.Visit(func(visited *flag.Flag) {
 		switch visited.Name {
 		case "p", "prompt":

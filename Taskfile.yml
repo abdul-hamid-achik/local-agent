@@ -89,8 +89,11 @@ tasks:
   glyphrun-contracts:
     desc: Verify every committed Glyphrun contract hash
     cmds:
-      - for: [specs/cli_flags.yml, specs/cli_skip_approvals.yml, specs/help.yml, specs/init.yml, specs/live_ollama_tool.yml, specs/logs_empty.yml, specs/tui_approval_always.yml, specs/tui_approval_denial.yml, specs/tui_composer_paste.yml, specs/tui_external_read.yml, specs/tui_goal_runtime.yml, specs/tui_help.yml, specs/tui_modes.yml, specs/tui_narrow.yml, specs/tui_ollama_inventory.yml, specs/tui_session_receipts.yml, specs/tui_smoke.yml, specs/version.yml]
-        cmd: glyph spec verify {{.ITEM}} --format md
+      - |
+        set -eu
+        for spec in specs/*.yml; do
+          glyph spec verify "$spec" --format md
+        done
 
   glyphrun:
     desc: Run terminal behavior specs with Glyphrun

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestHandleRootHelpUsesPublicCLIContract(t *testing.T) {
@@ -86,12 +87,31 @@ func TestGoalSubcommandHelpDoesNotOpenDurableStore(t *testing.T) {
 		name    string
 		command string
 		args    []string
+		want    []string
 	}{
-		{name: "list", command: "list", args: []string{"--help"}},
-		{name: "list after flag", command: "list", args: []string{"--json", "--help"}},
-		{name: "show", command: "show", args: []string{"--help"}},
-		{name: "pending", command: "pending", args: []string{"--help"}},
-		{name: "recover after positional", command: "recover", args: []string{"42", "--help"}},
+		{
+			name: "list", command: "list", args: []string{"--help"},
+			want: []string{"local-agent goal list [options]", "--limit N", "--json"},
+		},
+		{
+			name: "list after flag", command: "list", args: []string{"--json", "--help"},
+			want: []string{"local-agent goal list [options]", "--limit N", "--json"},
+		},
+		{
+			name: "show", command: "show", args: []string{"--help"},
+			want: []string{"local-agent goal show [options] <session-id>", "--json"},
+		},
+		{
+			name: "pending", command: "pending", args: []string{"--help"},
+			want: []string{"local-agent goal pending [options] <session-id>", "--limit N", "--json"},
+		},
+		{
+			name: "recover after positional", command: "recover", args: []string{"42", "--help"},
+			want: []string{
+				"local-agent goal recover", "Required with --apply:", "--item ID",
+				"--observed-at RFC3339", "never resumes execution", "no force override",
+			},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
@@ -99,9 +119,15 @@ func TestGoalSubcommandHelpDoesNotOpenDurableStore(t *testing.T) {
 			if code := handleGoalCommandIO(args, &stdout, &stderr); code != 0 {
 				t.Fatalf("goal %s %q exit = %d, want 0; stderr=%s", test.command, test.args, code, stderr.String())
 			}
-			if !strings.Contains(stderr.String(), "Usage of goal "+test.command) {
-				t.Fatalf("goal %s help missing usage: %s", test.command, stderr.String())
+			if stderr.Len() != 0 {
+				t.Fatalf("goal %s help wrote to stderr: %q", test.command, stderr.String())
 			}
+			for _, expected := range test.want {
+				if !strings.Contains(stdout.String(), expected) {
+					t.Fatalf("goal %s help omitted %q:\n%s", test.command, expected, stdout.String())
+				}
+			}
+			assertHelpLinesAtMost(t, stdout.String(), 100)
 			assertDefaultDatabaseDoesNotExist(t, home)
 		})
 	}
@@ -116,10 +142,64 @@ func TestExecutionSubcommandHelpDoesNotOpenDurableStore(t *testing.T) {
 	if code := handleExecutionCommandIO([]string{"recover", "session", "--json", "--help"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("execution recover --help exit = %d, want 0; stderr=%s", code, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "Usage of execution recover") {
-		t.Fatalf("execution help missing usage: %s", stderr.String())
+	if stderr.Len() != 0 {
+		t.Fatalf("execution help wrote to stderr: %q", stderr.String())
 	}
+	for _, expected := range []string{
+		"local-agent execution recover", "SESSION_ID EXECUTION_ID", "Required with --apply:",
+		"--revision N", "--event-id N", "--observed-at RFC3339", "never retries a tool",
+	} {
+		if !strings.Contains(stdout.String(), expected) {
+			t.Fatalf("execution help omitted %q:\n%s", expected, stdout.String())
+		}
+	}
+	assertHelpLinesAtMost(t, stdout.String(), 100)
 	assertDefaultDatabaseDoesNotExist(t, home)
+}
+
+func TestRecoveryHelpFitsCommonTerminals(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		write  func(io.Writer)
+		wanted []string
+	}{
+		{
+			name: "goal", write: writeGoalUsage,
+			wanted: []string{
+				"goal recover [--json] <session-id>",
+				"goal recover --apply --item ID ... --observed-at RFC3339",
+				"never resumes execution", "no force override",
+			},
+		},
+		{
+			name: "execution", write: writeExecutionUsage,
+			wanted: []string{
+				"execution recover [--json] SESSION_ID EXECUTION_ID",
+				"exact inspection tokens and typed evidence",
+				"never retries a tool", "immutable execution ledger",
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			test.write(&output)
+			for _, expected := range test.wanted {
+				if !strings.Contains(output.String(), expected) {
+					t.Fatalf("help omitted %q:\n%s", expected, output.String())
+				}
+			}
+			assertHelpLinesAtMost(t, output.String(), 100)
+		})
+	}
+}
+
+func assertHelpLinesAtMost(t *testing.T, output string, limit int) {
+	t.Helper()
+	for index, line := range strings.Split(output, "\n") {
+		if width := utf8.RuneCountInString(line); width > limit {
+			t.Fatalf("help line %d is %d columns, want at most %d:\n%s", index+1, width, limit, line)
+		}
+	}
 }
 
 func TestUnknownGoalAndExecutionCommandsDoNotOpenDurableStore(t *testing.T) {

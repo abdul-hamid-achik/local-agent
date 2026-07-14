@@ -1,5 +1,5 @@
 version: 1
-contractHash: sha256:64e04518c1dfb4c28c3d671c152bf46b72397b7a1c667a6622caff81840bf54c
+contractHash: sha256:f15d2101695803a7c077eb7d18ae6b6792d44999e217a0a795df5b282b7dcd83
 name: local_agent_help
 
 intent: |
@@ -46,7 +46,8 @@ outcomes:
     verify:
       command:
         run: |
-          output="$(HOME='${projectRoot}/.glyphrun/tmp/goal-recover-home' ./bin/local-agent goal help)"
+          root="$PWD"
+          output="$(HOME="$root/.glyphrun/tmp/goal-recover-home" "$root/bin/local-agent" goal help)"
           printf '%s\n' "$output" | grep -q 'goal recover \[--json\] <session-id>'
           printf '%s\n' "$output" | grep -q 'goal recover --apply --item ID.*--observed-at RFC3339'
           printf '%s\n' "$output" | grep -q 'never resumes execution'
@@ -56,26 +57,28 @@ outcomes:
     verify:
       command:
         run: |
+          root="$PWD"
           set +e
-          output="$(cd .glyphrun/tmp/goal-recover-workdir && HOME='${projectRoot}/.glyphrun/tmp/goal-recover-home' '${projectRoot}/bin/local-agent' goal recover 1 2>&1)"
+          output="$(cd "$root/.glyphrun/tmp/goal-recover-workdir" && HOME="$root/.glyphrun/tmp/goal-recover-home" "$root/bin/local-agent" goal recover 1 2>&1)"
           code=$?
           set -e
           test "$code" -eq 1
           printf '%s\n' "$output" | grep -q 'goal recover: inspect durable recovery group'
-          db='${projectRoot}/.glyphrun/tmp/goal-recover-home/.config/local-agent/local-agent.db'
+          db="$root/.glyphrun/tmp/goal-recover-home/.config/local-agent/local-agent.db"
           go run ./specs/fixtures/assert_empty_recovery "$db"
   - id: incomplete_goal_recovery_apply_is_rejected_before_mutation
     description: apply requires the complete evidence form before lease or authority mutation
     verify:
       command:
         run: |
+          root="$PWD"
           set +e
-          output="$(cd .glyphrun/tmp/goal-recover-workdir && HOME='${projectRoot}/.glyphrun/tmp/goal-recover-home' '${projectRoot}/bin/local-agent' goal recover --apply 1 2>&1)"
+          output="$(cd "$root/.glyphrun/tmp/goal-recover-workdir" && HOME="$root/.glyphrun/tmp/goal-recover-home" "$root/bin/local-agent" goal recover --apply 1 2>&1)"
           code=$?
           set -e
           test "$code" -eq 2
           printf '%s\n' "$output" | grep -q -- '--apply requires non-empty --item'
-          db='${projectRoot}/.glyphrun/tmp/goal-recover-home/.config/local-agent/local-agent.db'
+          db="$root/.glyphrun/tmp/goal-recover-home/.config/local-agent/local-agent.db"
           go run ./specs/fixtures/assert_empty_recovery "$db"
   - id: exits_zero
     description: help exits successfully
