@@ -63,6 +63,11 @@ steps:
       rows: 28
   - wait:
       screen:
+        contains: "press enter"
+      timeoutMs: 2000
+  - press: "enter"
+  - wait:
+      screen:
         contains: "Allow exact external read-only file?"
       timeoutMs: 2000
   - wait:

@@ -84,10 +84,10 @@ func (m *Model) narrowTerminalHint() string {
 	return ""
 }
 
-// terminalInteractionPaused keeps the undersized fallback honest: while the
-// decision/composer surfaces cannot be rendered, they cannot consume input.
+// terminalInteractionPaused keeps both terminal safety fallbacks honest: while
+// the decision/composer surfaces cannot be rendered, they cannot consume input.
 // Resize and asynchronous receipts are still processed by the parent model;
 // Ctrl+C deliberately falls through to the ordinary graceful-shutdown path.
 func (m *Model) terminalInteractionPaused() bool {
-	return m.ready && m.narrowTerminalHint() != ""
+	return m.ready && (m.narrowTerminalHint() != "" || m.terminalInputResumeActive())
 }

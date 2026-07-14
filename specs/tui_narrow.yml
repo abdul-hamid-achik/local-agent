@@ -9,8 +9,8 @@ intent: |
   while strict slash-command parsing fails closed before quitting cleanly.
 
 target:
-  cmd: ["./bin/local-agent"]
-  cwd: "."
+  cmd: ["${projectRoot}/bin/local-agent"]
+  cwd: ".glyphrun/tmp/narrow-home/workspace/local-agent"
   env:
     HOME: "${projectRoot}/.glyphrun/tmp/narrow-home"
     LOCAL_AGENT_AGENTS_DIR: "${projectRoot}/.glyphrun/tmp/narrow-agents"
@@ -22,7 +22,7 @@ terminal:
 
 preconditions:
   commands:
-    - run: "rm -rf .glyphrun/tmp/narrow-home .glyphrun/tmp/narrow-agents && mkdir -p .glyphrun/tmp/narrow-home/.config/local-agent .glyphrun/tmp/narrow-agents && printf '%s\\n' 'model:' '  auto_select: false' > .glyphrun/tmp/narrow-home/.config/local-agent/config.yaml && go build -o ./bin/local-agent ./cmd/local-agent"
+    - run: "rm -rf .glyphrun/tmp/narrow-home .glyphrun/tmp/narrow-agents && mkdir -p .glyphrun/tmp/narrow-home/.config/local-agent .glyphrun/tmp/narrow-home/workspace/local-agent .glyphrun/tmp/narrow-agents && printf '%s\\n' 'model:' '  auto_select: false' > .glyphrun/tmp/narrow-home/.config/local-agent/config.yaml && go build -o ./bin/local-agent ./cmd/local-agent"
       cwd: "."
       timeoutMs: 30000
 

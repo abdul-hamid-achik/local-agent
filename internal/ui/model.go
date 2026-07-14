@@ -330,10 +330,18 @@ type Model struct {
 	readScopeOpLabel   string
 	readScopeOpDraft   string
 	readScopePrompt    *ReadScopePrompt
-	exportToken        uint64
-	exportRunning      bool
-	compactingContext  bool
-	shuttingDown       bool
+	// Input crosses a bounded two-phase resume handshake after an undersized
+	// terminal becomes supported. Charm does not expose input provenance across
+	// its concurrent senders, so quiet windows mitigate reordering while a
+	// consumed explicit gesture keeps authority surfaces fail-closed.
+	terminalInputResumePhase terminalInputResumePhase
+	terminalInputResumeToken uint64
+	terminalInputResumeAt    time.Time
+	terminalInputTickPending bool
+	exportToken              uint64
+	exportRunning            bool
+	compactingContext        bool
+	shuttingDown             bool
 
 	// Display info
 	model                     string
@@ -472,6 +480,7 @@ func (m *Model) SetInitCancel(cancel context.CancelFunc) {
 
 func (m *Model) beginShutdown() tea.Cmd {
 	m.shuttingDown = true
+	m.cancelTerminalInputResume()
 	m.pendingOllamaInventory = nil
 	m.cancelPendingCloudSessionRestore()
 	if m.goalOperationCancel != nil {
@@ -551,6 +560,15 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 	}()
 
 	var cmds []tea.Cmd
+	// Resize and terminal input are produced by independent Bubble Tea sources.
+	// Gate every terminal-originated event in one place while the size fallback
+	// or explicit resume handshake owns the screen. Charm exposes no physical
+	// input timestamp, so the consumed re-arm gesture—not inferred event order—
+	// keeps authority surfaces closed. Ctrl+C alone retains its owner-specific
+	// graceful-shutdown path below.
+	if paused, cmd := m.pauseTerminalOriginatedInput(msg); paused {
+		return m, cmd
+	}
 
 	switch msg := msg.(type) {
 	case tea.BackgroundColorMsg:
@@ -603,9 +621,20 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		approvalAnchor := m.captureApprovalTranscriptAnchor()
 		completionAnchor := m.captureCompletionTranscriptAnchor()
 		inlineFormAnchor := m.captureInlineFormTranscriptAnchor()
+		wasUndersized := m.ready && m.narrowTerminalHint() != ""
 		widthChanged := msg.Width != m.width
 		m.width = msg.Width
 		m.height = msg.Height
+		isUndersized := m.narrowTerminalHint() != ""
+		switch {
+		case isUndersized:
+			m.resetHiddenApprovalChoice()
+			m.cancelTerminalInputResume()
+		case wasUndersized:
+			cmds = append(cmds, m.armTerminalInputResume())
+		case m.terminalInputResumeActive():
+			cmds = append(cmds, m.armTerminalInputResume())
+		}
 		if m.goalFormState != nil {
 			m.goalFormState.SetSize(m.width, m.height)
 		}
@@ -718,6 +747,11 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 	case ShutdownMsg:
 		return m, m.beginShutdown()
 
+	case terminalInputResumeMsg:
+		if cmd := m.finishTerminalInputResume(msg); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+
 	case tea.KeyPressMsg:
 		// During startup, only allow Ctrl+C to quit.
 		if m.initializing {
@@ -726,14 +760,6 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			}
 			return m, nil
 		}
-		// View intentionally hides every interactive surface below the supported
-		// terminal size. Ignore all ordinary keys there so an unseen approval,
-		// read-scope decision, paste prompt, overlay, or composer cannot mutate.
-		// Ctrl+C falls through and retains the exact owner-specific shutdown path.
-		if m.terminalInteractionPaused() && !key.Matches(msg, m.keys.Quit) {
-			return m, nil
-		}
-
 		// Pending tool approval owns the keyboard before every other overlay.
 		// Decisions remain typed so a host failure cannot be reported as a human
 		// denial, and session authority stays exact-request scoped.
@@ -2246,6 +2272,21 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		}
 
 	case ToolApprovalMsg:
+		if m.shuttingDown {
+			// A callback may cross the shutdown boundary after the active turn has
+			// already been cancelled. Never reopen interactive authority while the
+			// host is joining receipts, and never mislabel host cancellation as a
+			// human denial. Production response channels are buffered; the
+			// non-blocking send also keeps malformed or already-settled adapters from
+			// freezing the Bubble Tea parent during shutdown.
+			if msg.Response != nil {
+				select {
+				case msg.Response <- permission.Cancelled("application is shutting down"):
+				default:
+				}
+			}
+			break
+		}
 		if err := m.openApproval(msg); err != nil {
 			if msg.Response != nil {
 				msg.Response <- permission.Refuse("approval_preview_unavailable", err.Error())
@@ -2327,9 +2368,6 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		m.appendShutdownQuit(&cmds)
 
 	case tea.MouseWheelMsg:
-		if m.terminalInteractionPaused() {
-			return m, nil
-		}
 		// Inline permission requests own wheel input just like document overlays,
 		// but remain in normal layout flow so the transcript stays visible. Scroll
 		// their bounded preview without moving or changing follow intent below it.
@@ -2384,9 +2422,6 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		return m, nil
 
 	case tea.MouseClickMsg:
-		if m.terminalInteractionPaused() {
-			return m, nil
-		}
 		// Modal and inline decision surfaces are intentionally keyboard-first.
 		// Until a child explicitly owns pointer interaction, clicks are swallowed
 		// rather than reaching ToolCards behind an authority-changing prompt.
@@ -2398,9 +2433,6 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		}
 
 	case tea.PasteMsg:
-		if m.terminalInteractionPaused() {
-			return m, nil
-		}
 		if m.composerEditable() {
 			draft := m.input.Value()
 			cursor := pasteCursorAt(draft, m.input.Line(), m.input.Column())

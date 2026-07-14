@@ -112,6 +112,9 @@ jobs:
             glyph spec verify "$spec" --format md
           done
 
+      - name: Prebuild application for terminal suite
+        run: go build -o ./bin/local-agent ./cmd/local-agent
+
       - name: Verify complete deterministic terminal suite
         run: |
           set -eu

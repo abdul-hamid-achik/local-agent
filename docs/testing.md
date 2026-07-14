@@ -67,8 +67,10 @@ task glyphrun
 `task glyphrun-contracts` verifies that every committed spec still matches its
 reviewed intent and outcomes. `task glyphrun-cli` is the fast local smoke suite
 for public flags, skip-approval behavior, and exact external-file reads.
-`task glyphrun` runs every deterministic spec and is the execution gate enforced
-in CI; `live_ollama_tool.yml` remains explicitly opt-in.
+`task glyphrun` prebuilds Local Agent once, then runs every deterministic spec;
+this keeps a cold dependency build outside the bounded per-spec terminal
+timeouts. The same execution gate runs in CI, while `live_ollama_tool.yml`
+remains explicitly opt-in.
 
 Committed scenarios cover normal and minimum terminal sizes, authority modes,
 public CLI parsing, explicit external-file review, inline goal review and

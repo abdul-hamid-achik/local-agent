@@ -487,13 +487,52 @@ func TestUndersizedTerminalPausesReadScopeDecisionAndDraftUntilResize(t *testing
 		}
 	}
 
-	updated, _ = m.Update(tea.WindowSizeMsg{Width: minTerminalWidth, Height: minTerminalHeight})
+	updated, resumeCmd := m.Update(tea.WindowSizeMsg{Width: minTerminalWidth, Height: minTerminalHeight})
+	m = updated.(*Model)
+	firstResumeToken := m.terminalInputResumeToken
+	firstResumeAt := m.terminalInputResumeAt
+	if resumeCmd == nil || !m.terminalInputResumeActive() {
+		t.Fatalf("supported resize did not quarantine read-scope input: cmd=%v active=%v", resumeCmd != nil, m.terminalInputResumeActive())
+	}
+	if visible := ansi.Strip(m.View().Content); !strings.Contains(visible, "INPUT PAUSED") || strings.Contains(visible, "evidence.txt") {
+		t.Fatalf("resize quarantine exposed read authority early:\n%s", visible)
+	}
+
+	// A key typed against the undersized frame may be delivered after SIGWINCH.
+	// It must extend the quiet handshake, never grant authority.
+	updated, delayedKeyCmd := m.Update(charKey('y'))
+	m = updated.(*Model)
+	latestResumeAt := m.terminalInputResumeAt
+	if delayedKeyCmd != nil || m.terminalInputResumeToken != firstResumeToken || !latestResumeAt.After(firstResumeAt) || m.readScopePrompt == nil || m.readScopeOpRunning {
+		t.Fatalf("delayed read key escaped quarantine: cmd=%v token=%d deadline advanced=%v prompt=%v running=%v", delayedKeyCmd != nil, m.terminalInputResumeToken, latestResumeAt.After(firstResumeAt), m.readScopePrompt != nil, m.readScopeOpRunning)
+	}
+	updated, remainingCmd := m.Update(terminalInputResumeMsg{Token: firstResumeToken, At: firstResumeAt})
+	m = updated.(*Model)
+	if remainingCmd == nil || !m.terminalInputResumeActive() || m.readScopePrompt == nil || len(m.agent.ReadGrants()) != 0 {
+		t.Fatal("early resume receipt granted or exposed read authority")
+	}
+	updated, _ = m.Update(terminalInputResumeMsg{Token: firstResumeToken, At: latestResumeAt})
+	m = updated.(*Model)
+	if m.terminalInputResumePhase != terminalInputResumeAwaitGesture || !strings.Contains(ansi.Strip(m.View().Content), "press enter") {
+		t.Fatalf("read-scope drain did not request explicit resume:\n%s", ansi.Strip(m.View().Content))
+	}
+	updated, confirmationCmd := m.Update(enterKey())
+	m = updated.(*Model)
+	confirmationToken := m.terminalInputResumeToken
+	confirmationAt := m.terminalInputResumeAt
+	if confirmationCmd == nil || m.terminalInputResumePhase != terminalInputResumeConfirmationQuiet || m.readScopePrompt == nil {
+		t.Fatal("resume gesture leaked into read-scope decision")
+	}
+	updated, _ = m.Update(terminalInputResumeMsg{Token: confirmationToken, At: confirmationAt})
 	m = updated.(*Model)
 	visible := ansi.Strip(m.View().Content)
 	for _, want := range []string{"exact file", "evidence.txt", "y allow"} {
 		if !strings.Contains(strings.ToLower(visible), strings.ToLower(want)) {
 			t.Fatalf("read-scope surface did not restore %q after resize:\n%s", want, visible)
 		}
+	}
+	if m.terminalInputResumeActive() || len(m.agent.ReadGrants()) != 0 || m.input.Value() != draft {
+		t.Fatalf("quiet handshake changed read state: active=%v grants=%#v draft=%q", m.terminalInputResumeActive(), m.agent.ReadGrants(), m.input.Value())
 	}
 	updated, _ = m.Update(charKey('n'))
 	m = updated.(*Model)

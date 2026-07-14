@@ -26,6 +26,9 @@ func (m *Model) View() tea.View {
 	if hint := m.narrowTerminalHint(); hint != "" {
 		return m.renderNarrowTerminalView(hint)
 	}
+	if m.terminalInputResumeActive() {
+		return m.renderTerminalInputResumeView()
+	}
 
 	// The conversation, status, and composer own the complete terminal width.
 	// Infrequent controls are exposed through overlays instead of persistent
@@ -193,15 +196,44 @@ func (m *Model) View() tea.View {
 
 // renderNarrowTerminalView keeps tiny terminals recoverable.
 func (m *Model) renderNarrowTerminalView(hint string) tea.View {
-	terminalWidth := max(1, m.width)
-	terminalHeight := max(1, m.height)
-	contentW := max(1, terminalWidth-2)
 	titleText := "TERMINAL TOO SMALL"
 	if m.width < minTerminalWidth && m.height >= minTerminalHeight {
 		titleText = "TERMINAL TOO NARROW"
 	} else if m.height < minTerminalHeight && m.width >= minTerminalWidth {
 		titleText = "TERMINAL TOO SHORT"
 	}
+	return m.renderTerminalPauseView(
+		titleText,
+		hint,
+		[]string{"Input paused · ctrl+c quit", "Paused · ctrl+c", "ctrl+c"},
+		"resize terminal",
+	)
+}
+
+func (m *Model) renderTerminalInputResumeView() tea.View {
+	title := "INPUT PAUSED"
+	hint := "Restoring input after resize; input received here is ignored."
+	controls := []string{"Waiting for quiet · ctrl+c quit", "Waiting · ctrl+c", "ctrl+c"}
+	switch m.terminalInputResumePhase {
+	case terminalInputResumeAwaitGesture:
+		hint = "Input is quiet · press enter to resume."
+		controls = []string{"enter resume · ctrl+c quit", "enter · ctrl+c", "ctrl+c"}
+	case terminalInputResumeConfirmationQuiet:
+		hint = "Confirming the input boundary; input received here is ignored."
+		controls = []string{"Resuming · ctrl+c quit", "Resuming · ctrl+c", "ctrl+c"}
+	}
+	return m.renderTerminalPauseView(
+		title,
+		hint,
+		controls,
+		"restoring input",
+	)
+}
+
+func (m *Model) renderTerminalPauseView(titleText, hint string, controlCandidates []string, titleSuffix string) tea.View {
+	terminalWidth := max(1, m.width)
+	terminalHeight := max(1, m.height)
+	contentW := max(1, terminalWidth-2)
 
 	rows := []string{m.styles.OverlayTitle.Render(truncateDisplay(titleText, contentW))}
 	if terminalHeight > 2 {
@@ -215,12 +247,12 @@ func (m *Model) renderNarrowTerminalView(hint string) tea.View {
 		}
 	}
 	if terminalHeight > 1 {
-		controlHint := "Input paused · ctrl+c quit"
-		if lipgloss.Width(controlHint) > contentW {
-			controlHint = "Paused · ctrl+c"
-		}
-		if lipgloss.Width(controlHint) > contentW {
-			controlHint = "ctrl+c"
+		controlHint := "ctrl+c"
+		for _, candidate := range controlCandidates {
+			controlHint = candidate
+			if lipgloss.Width(candidate) <= contentW {
+				break
+			}
 		}
 		rows = append(rows, m.styles.FocusIndicator.Render(truncateDisplay(controlHint, contentW)))
 	}
@@ -238,7 +270,7 @@ func (m *Model) renderNarrowTerminalView(hint string) tea.View {
 
 	v := tea.NewView(content)
 	v.AltScreen = true
-	v.WindowTitle = m.windowTitleBase() + " · resize terminal"
+	v.WindowTitle = m.windowTitleBase() + " · " + titleSuffix
 	return v
 }
 

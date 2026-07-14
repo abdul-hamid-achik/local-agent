@@ -157,6 +157,12 @@ func (m *Model) moveApprovalChoice(delta int) {
 	m.approvalState.ChoiceIndex = index
 }
 
+func (m *Model) resetHiddenApprovalChoice() {
+	if m != nil && m.approvalState != nil {
+		m.approvalState.ChoiceIndex = 0
+	}
+}
+
 func (m *Model) selectedApprovalResponse() permission.ApprovalResponse {
 	if m.approvalState == nil || m.approvalState.ChoiceIndex < 0 ||
 		m.approvalState.ChoiceIndex >= len(approvalChoices) {

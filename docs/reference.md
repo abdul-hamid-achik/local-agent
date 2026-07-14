@@ -150,7 +150,9 @@ The supported minimum terminal is 30 columns by 12 rows. Compact status rows
 retain skipped-approval, unavailable-MCP, and Cloud/Remote boundaries instead
 of truncating the rightmost state. At that minimum, file approvals preserve an
 identifying target tail and show explicit paging plus exact-argument controls.
-Below the minimum, input is paused except for `ctrl+c`; resizing restores the
-unchanged composer, overlay, or pending authority decision.
+Below the minimum, input is paused except for `ctrl+c`. After resizing, Local
+Agent waits for terminal input to become quiet and asks you to press `enter` to
+re-arm it; that gesture is consumed before the unchanged composer, overlay, or
+pending authority decision returns.
 Set `LOCAL_AGENT_REDUCED_MOTION=1` to replace active animations with static
 state indicators.

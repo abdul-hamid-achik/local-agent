@@ -72,7 +72,10 @@ identifying tail rather than an indistinguishable path prefix. `pgdn` exposes
 the remaining preview and `d` switches to the exact arguments before a
 decision. Below that minimum, Local Agent replaces interactive surfaces with a
 resize notice and pauses keyboard, mouse, and paste input except for `ctrl+c`.
-Restoring a supported size reveals the unchanged pending decision and draft.
+Restoring a supported size first waits for a quiet input boundary and requires
+an explicit `enter` re-arm gesture. That gesture is consumed, a second bounded
+quiet guard runs, and only then does the unchanged pending decision and draft
+return.
 
 Databases created by older releases may contain broad per-tool `allow` rows.
 On upgrade, Local Agent retires those rows to `ask`; they never authorize a

@@ -100,11 +100,84 @@ func TestUndersizedTerminalPausesApprovalAndDraftUntilResize(t *testing.T) {
 		}
 	}
 
-	updated, _ = m.Update(tea.WindowSizeMsg{Width: minTerminalWidth, Height: minTerminalHeight})
+	updated, resumeCmd := m.Update(tea.WindowSizeMsg{Width: minTerminalWidth, Height: minTerminalHeight})
 	m = updated.(*Model)
+	firstResumeToken := m.terminalInputResumeToken
+	firstResumeAt := m.terminalInputResumeAt
+	if resumeCmd == nil || !m.terminalInputResumeActive() {
+		t.Fatalf("supported resize did not start input quarantine: cmd=%v active=%v", resumeCmd != nil, m.terminalInputResumeActive())
+	}
 	visible := ansi.Strip(m.View().Content)
-	if !strings.Contains(visible, "Permission") || !strings.Contains(visible, "write_file") {
-		t.Fatalf("exact approval did not reappear after resize:\n%s", visible)
+	if !strings.Contains(visible, "INPUT PAUSED") || strings.Contains(visible, "Permission") {
+		t.Fatalf("resize quarantine exposed approval before queued input drained:\n%s", visible)
+	}
+	assertRenderedLinesFit(t, m.View().Content, minTerminalWidth)
+	assertRenderedHeightFits(t, m.View().Content, minTerminalHeight)
+
+	// Reproduce the PTY ordering seen on Linux: SIGWINCH reaches Bubble Tea
+	// before events that were generated while the undersized fallback was
+	// visible. Press/release, bracketed paste, and pointer events are separate
+	// terminal messages, so every variant must extend the quiet window.
+	queuedInputs := []struct {
+		name    string
+		message tea.Msg
+	}{
+		{name: "allow key", message: charKey('y')},
+		{name: "session key", message: charKey('s')},
+		{name: "selected approval", message: enterKey()},
+		{name: "key release", message: tea.KeyReleaseMsg{Code: 'y', Text: "y"}},
+		{name: "paste start", message: tea.PasteStartMsg{}},
+		{name: "paste content", message: tea.PasteMsg{Content: "queued paste"}},
+		{name: "paste end", message: tea.PasteEndMsg{}},
+		{name: "mouse click", message: tea.MouseClickMsg{X: 1, Y: 1, Button: tea.MouseLeft}},
+		{name: "mouse release", message: tea.MouseReleaseMsg{X: 1, Y: 1, Button: tea.MouseLeft}},
+		{name: "mouse wheel", message: tea.MouseWheelMsg{X: 1, Y: 1, Button: tea.MouseWheelDown}},
+	}
+	latestResumeAt := firstResumeAt
+	for _, queued := range queuedInputs {
+		beforeResumeAt := m.terminalInputResumeAt
+		updated, delayedInputCmd := m.Update(queued.message)
+		m = updated.(*Model)
+		latestResumeAt = m.terminalInputResumeAt
+		if delayedInputCmd != nil || m.terminalInputResumeToken != firstResumeToken || !latestResumeAt.After(beforeResumeAt) || m.pendingApproval == nil {
+			t.Fatalf("%s did not extend one quiet deadline: cmd=%v token=%d deadline advanced=%v pending=%v", queued.name, delayedInputCmd != nil, m.terminalInputResumeToken, latestResumeAt.After(beforeResumeAt), m.pendingApproval != nil)
+		}
+		if m.input.Value() != "preserved draft" {
+			t.Fatalf("%s changed hidden draft to %q", queued.name, m.input.Value())
+		}
+		select {
+		case response := <-responses:
+			t.Fatalf("%s emitted hidden decision %q", queued.name, response.Normalize().Decision)
+		default:
+		}
+	}
+	updated, _ = m.Update(SystemMessageMsg{Msg: "async receipt while input is quarantined"})
+	m = updated.(*Model)
+	if !strings.Contains(entryText(m.entries), "async receipt while input is quarantined") || !m.terminalInputResumeActive() {
+		t.Fatal("input quarantine blocked an asynchronous receipt")
+	}
+	updated, remainingCmd := m.Update(terminalInputResumeMsg{Token: firstResumeToken, At: firstResumeAt})
+	m = updated.(*Model)
+	if remainingCmd == nil || !m.terminalInputResumeActive() || m.pendingApproval == nil {
+		t.Fatal("early quiet-period receipt released approval after delayed input")
+	}
+	updated, _ = m.Update(terminalInputResumeMsg{Token: firstResumeToken, At: latestResumeAt})
+	m = updated.(*Model)
+	if m.terminalInputResumePhase != terminalInputResumeAwaitGesture || !strings.Contains(ansi.Strip(m.View().Content), "press enter") {
+		t.Fatalf("initial drain did not reach explicit resume gesture:\n%s", ansi.Strip(m.View().Content))
+	}
+	updated, confirmationCmd := m.Update(enterKey())
+	m = updated.(*Model)
+	confirmationToken := m.terminalInputResumeToken
+	confirmationAt := m.terminalInputResumeAt
+	if confirmationCmd == nil || m.terminalInputResumePhase != terminalInputResumeConfirmationQuiet || m.pendingApproval == nil {
+		t.Fatal("resume Enter was not consumed into confirmation drain")
+	}
+	updated, _ = m.Update(terminalInputResumeMsg{Token: confirmationToken, At: confirmationAt})
+	m = updated.(*Model)
+	visible = ansi.Strip(m.View().Content)
+	if m.terminalInputResumeActive() || !strings.Contains(visible, "Permission") || !strings.Contains(visible, "write_file") {
+		t.Fatalf("exact approval did not reappear after quiet handshake:\n%s", visible)
 	}
 	updated, _ = m.Update(charKey('y'))
 	m = updated.(*Model)
@@ -122,6 +195,11 @@ func TestUndersizedTerminalStillAllowsGracefulQuitFromApproval(t *testing.T) {
 	m = openApprovalForTest(t, m, ToolApprovalMsg{ToolName: "bash", Response: responses})
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 20, Height: 8})
 	m = updated.(*Model)
+	updated, _ = m.Update(tea.WindowSizeMsg{Width: minTerminalWidth, Height: minTerminalHeight})
+	m = updated.(*Model)
+	if !m.terminalInputResumeActive() {
+		t.Fatal("supported resize did not enter input quarantine")
+	}
 
 	updated, cmd := m.Update(ctrlKey('c'))
 	m = updated.(*Model)
@@ -130,6 +208,211 @@ func TestUndersizedTerminalStillAllowsGracefulQuitFromApproval(t *testing.T) {
 	}
 	if decision := (<-responses).Normalize().Decision; decision != permission.DecisionCancelled {
 		t.Fatalf("shutdown approval decision = %q, want cancelled", decision)
+	}
+}
+
+func TestResizeBurstKeepsOneInputResumeTick(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: minTerminalWidth - 1, Height: minTerminalHeight - 1})
+	m = updated.(*Model)
+	updated, firstTick := m.Update(tea.WindowSizeMsg{Width: minTerminalWidth, Height: minTerminalHeight})
+	m = updated.(*Model)
+	firstToken := m.terminalInputResumeToken
+	firstDeadline := m.terminalInputResumeAt
+	if firstTick == nil || !m.terminalInputTickPending {
+		t.Fatal("supported resize did not schedule the initial resume tick")
+	}
+
+	updated, duplicateTick := m.Update(tea.WindowSizeMsg{Width: minTerminalWidth + 1, Height: minTerminalHeight})
+	m = updated.(*Model)
+	latestDeadline := m.terminalInputResumeAt
+	if duplicateTick != nil || m.terminalInputResumeToken != firstToken || !latestDeadline.After(firstDeadline) {
+		t.Fatalf("resize burst allocated another tick or failed to slide the deadline: cmd=%v token=%d advanced=%v", duplicateTick != nil, m.terminalInputResumeToken, latestDeadline.After(firstDeadline))
+	}
+
+	updated, remainingTick := m.Update(terminalInputResumeMsg{Token: firstToken, At: firstDeadline})
+	m = updated.(*Model)
+	if remainingTick == nil || !m.terminalInputTickPending || m.terminalInputResumePhase != terminalInputResumeInitialQuiet {
+		t.Fatal("shared resize tick did not reschedule the remainder of the sliding deadline")
+	}
+	updated, _ = m.Update(terminalInputResumeMsg{Token: firstToken, At: latestDeadline})
+	m = updated.(*Model)
+	if m.terminalInputTickPending || m.terminalInputResumePhase != terminalInputResumeAwaitGesture {
+		t.Fatal("shared resize tick did not finish at the latest deadline")
+	}
+}
+
+func TestLateApprovalDuringShutdownFailsClosedWithoutBlockingJoin(t *testing.T) {
+	m := newTestModel(t)
+	_, cancel := context.WithCancel(context.Background())
+	m.cancel = cancel
+
+	updated, shutdownCmd := m.Update(ShutdownMsg{})
+	m = updated.(*Model)
+	if shutdownCmd == nil || !m.shuttingDown || m.shutdownReady() {
+		t.Fatalf("shutdown did not retain active-turn ownership: cmd=%v shutting=%v ready=%v", shutdownCmd != nil, m.shuttingDown, m.shutdownReady())
+	}
+
+	responses := make(chan permission.ApprovalResponse, 1)
+	updated, _ = m.Update(ToolApprovalMsg{
+		ToolName: "write_file",
+		Args:     map[string]any{"path": "must-not-open.txt"},
+		Response: responses,
+	})
+	m = updated.(*Model)
+	if m.pendingApproval != nil || m.approvalState != nil {
+		t.Fatal("late approval reopened an authority surface during shutdown")
+	}
+	select {
+	case response := <-responses:
+		normalized := response.Normalize()
+		if normalized.Decision != permission.DecisionCancelled || normalized.Code != "cancelled" || normalized.Message != "application is shutting down" {
+			t.Fatalf("late approval response = %#v, want typed shutdown cancellation", normalized)
+		}
+	default:
+		t.Fatal("late buffered approval did not receive shutdown cancellation")
+	}
+
+	updated, quitCmd := m.Update(AgentDoneMsg{Err: context.Canceled})
+	m = updated.(*Model)
+	if quitCmd == nil || !m.shutdownReady() || m.pendingApproval != nil {
+		t.Fatalf("late approval blocked shutdown join: cmd=%v ready=%v pending=%v", quitCmd != nil, m.shutdownReady(), m.pendingApproval != nil)
+	}
+}
+
+func TestLateApprovalCannotBlockShutdownOnUnavailableResponseChannel(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		responses chan permission.ApprovalResponse
+	}{
+		{name: "unbuffered", responses: make(chan permission.ApprovalResponse)},
+		{name: "full", responses: func() chan permission.ApprovalResponse {
+			responses := make(chan permission.ApprovalResponse, 1)
+			responses <- permission.Deny()
+			return responses
+		}()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			m := newTestModel(t)
+			m.shuttingDown = true
+			done := make(chan struct{})
+			go func() {
+				updated, _ := m.Update(ToolApprovalMsg{ToolName: "bash", Response: test.responses})
+				m = updated.(*Model)
+				close(done)
+			}()
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("late approval blocked Update during shutdown")
+			}
+			if m.pendingApproval != nil || m.approvalState != nil {
+				t.Fatal("unavailable response channel reopened approval during shutdown")
+			}
+		})
+	}
+}
+
+func TestInputQuarantineProcessesAsyncApprovalButKeepsItHidden(t *testing.T) {
+	m := newTestModel(t)
+	m.input.SetValue("draft survives async approval")
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: minTerminalWidth - 1, Height: minTerminalHeight - 1})
+	m = updated.(*Model)
+	updated, resumeCmd := m.Update(tea.WindowSizeMsg{Width: minTerminalWidth, Height: minTerminalHeight})
+	m = updated.(*Model)
+	if resumeCmd == nil || !m.terminalInputResumeActive() {
+		t.Fatal("resize did not arm input quarantine")
+	}
+
+	responses := make(chan permission.ApprovalResponse, 1)
+	updated, _ = m.Update(ToolApprovalMsg{
+		ToolName: "write_file",
+		Args:     map[string]any{"path": "arrived-during-quarantine.txt"},
+		Response: responses,
+	})
+	m = updated.(*Model)
+	visible := ansi.Strip(m.View().Content)
+	if m.pendingApproval == nil || m.approvalState == nil || !strings.Contains(visible, "INPUT PAUSED") || strings.Contains(visible, "Permission") {
+		t.Fatalf("async approval was dropped or exposed during quarantine:\n%s", visible)
+	}
+	if m.input.Value() != "draft survives async approval" {
+		t.Fatalf("async approval changed draft to %q", m.input.Value())
+	}
+
+	updated, delayedCmd := m.Update(charKey('y'))
+	m = updated.(*Model)
+	resumeAt := m.terminalInputResumeAt
+	if delayedCmd != nil || m.pendingApproval == nil {
+		t.Fatal("delayed approval key escaped the shared quiet window")
+	}
+	select {
+	case response := <-responses:
+		t.Fatalf("hidden async approval emitted %q", response.Normalize().Decision)
+	default:
+	}
+
+	updated, _ = m.Update(terminalInputResumeMsg{Token: m.terminalInputResumeToken, At: resumeAt})
+	m = updated.(*Model)
+	if m.terminalInputResumePhase != terminalInputResumeAwaitGesture {
+		t.Fatal("async approval drain did not await explicit resume")
+	}
+	updated, confirmationCmd := m.Update(enterKey())
+	m = updated.(*Model)
+	confirmationToken := m.terminalInputResumeToken
+	confirmationAt := m.terminalInputResumeAt
+	if confirmationCmd == nil || m.pendingApproval == nil {
+		t.Fatal("resume gesture leaked into async approval")
+	}
+	updated, _ = m.Update(terminalInputResumeMsg{Token: confirmationToken, At: confirmationAt})
+	m = updated.(*Model)
+	visible = ansi.Strip(m.View().Content)
+	if m.terminalInputResumeActive() || !strings.Contains(visible, "Permission") || !strings.Contains(visible, "write_file") {
+		t.Fatalf("async approval did not reappear intact after quiet receipt:\n%s", visible)
+	}
+	updated, _ = m.Update(charKey('n'))
+	m = updated.(*Model)
+	if m.pendingApproval != nil {
+		t.Fatal("visible denial left async approval pending")
+	}
+	if decision := (<-responses).Normalize().Decision; decision != permission.DecisionUserDeny {
+		t.Fatalf("visible async approval decision = %q, want deny", decision)
+	}
+}
+
+func TestResizeResumeResetsApprovalSelectionToDeny(t *testing.T) {
+	m := newTestModel(t)
+	responses := make(chan permission.ApprovalResponse, 1)
+	m = openApprovalForTest(t, m, ToolApprovalMsg{ToolName: "bash", Response: responses})
+	m.moveApprovalChoice(2)
+	if m.approvalState.ChoiceIndex != 2 {
+		t.Fatal("test did not select session approval before resize")
+	}
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: minTerminalWidth - 1, Height: minTerminalHeight - 1})
+	m = updated.(*Model)
+	if m.approvalState == nil || m.approvalState.ChoiceIndex != 0 {
+		t.Fatal("hiding approval did not restore the safe deny choice")
+	}
+	updated, _ = m.Update(tea.WindowSizeMsg{Width: minTerminalWidth, Height: minTerminalHeight})
+	m = updated.(*Model)
+	initialToken, initialAt := m.terminalInputResumeToken, m.terminalInputResumeAt
+	updated, _ = m.Update(terminalInputResumeMsg{Token: initialToken, At: initialAt})
+	m = updated.(*Model)
+	updated, confirmationCmd := m.Update(enterKey())
+	m = updated.(*Model)
+	confirmationToken, confirmationAt := m.terminalInputResumeToken, m.terminalInputResumeAt
+	if confirmationCmd == nil || m.approvalState == nil || m.approvalState.ChoiceIndex != 0 {
+		t.Fatal("resume gesture changed the safe approval choice")
+	}
+	updated, _ = m.Update(terminalInputResumeMsg{Token: confirmationToken, At: confirmationAt})
+	m = updated.(*Model)
+	updated, _ = m.Update(enterKey())
+	m = updated.(*Model)
+	if m.pendingApproval != nil {
+		t.Fatal("visible Enter did not resolve restored approval")
+	}
+	if decision := (<-responses).Normalize().Decision; decision != permission.DecisionUserDeny {
+		t.Fatalf("restored approval Enter = %q, want safe deny", decision)
 	}
 }
 

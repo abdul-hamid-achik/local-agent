@@ -1,7 +1,7 @@
  ╭────────────────────────────────────╮
  │ Runtime                            │
  │                                    │
- │ Workspace  …/projects/local-agent  │
+ │ Workspace  ~/workspace/local-agent │
  │ Model      Pinned · qwen3.5:2b     │
  │ Ollama     setup needed · ctrl+o   │
  │            select or install a     │

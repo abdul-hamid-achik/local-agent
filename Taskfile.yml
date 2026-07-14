@@ -98,6 +98,7 @@ tasks:
   glyphrun:
     desc: Run every deterministic terminal behavior spec with Glyphrun
     cmds:
+      - go build -o ./bin/local-agent ./cmd/local-agent
       - |
         set -eu
         set --
