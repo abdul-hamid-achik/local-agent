@@ -81,7 +81,7 @@ func (m *Model) requestSessionRestore(selector SessionResumeSelector) tea.Cmd {
 		} else {
 			unresolved, unresolvedErr = store.ListExecutionRecoveryHazards(loadCtx, session.ID, workspaceID, state.ExecutionCursor, 100)
 		}
-		warning := unresolvedExecutionWarning(unresolved)
+		warning := unresolvedExecutionWarning(unresolved, state.Goal != nil)
 		if unresolvedErr != nil {
 			warning = fmt.Sprintf("Recovery check failed: %v. This session will remain blocked until durable execution state can be verified.", unresolvedErr)
 		}

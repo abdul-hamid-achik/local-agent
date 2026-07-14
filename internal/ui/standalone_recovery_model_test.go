@@ -332,7 +332,7 @@ func TestSessionLoadHydratesStandaloneRecoveryBeforeProviderTurn(t *testing.T) {
 	m.sessionLoadToken = 41
 	updated, _ := m.Update(SessionLoadedMsg{
 		LoadToken: 41, SessionID: session.ID, State: state, StateRecord: record,
-		Title: session.Title, RecoveryWarning: unresolvedExecutionWarning(projection.Hazards),
+		Title: session.Title, RecoveryWarning: unresolvedExecutionWarning(projection.Hazards, false),
 		RecoveryTarget: target, ExecutionLease: lease,
 	})
 	m = updated.(*Model)

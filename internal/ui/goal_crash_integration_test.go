@@ -240,7 +240,7 @@ func TestGoalAndExecutionLedgerRecoverTogetherAfterSubprocessCrash(t *testing.T)
 	if len(hazards) != 1 || hazards[0].Latest.Type != executionpkg.EventStarted || hazards[0].Identity.TurnID != admittedTurn {
 		t.Fatalf("crash execution hazards = %#v", hazards)
 	}
-	warning := unresolvedExecutionWarning(hazards)
+	warning := unresolvedExecutionWarning(hazards, true)
 
 	client := &goalCountingClient{}
 	m := newGoalRuntimeTestModel(t, client)

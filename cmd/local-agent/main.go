@@ -54,6 +54,8 @@ func run() int {
 			return handleGoalCommand(os.Args[2:])
 		case "execution":
 			return handleExecutionCommand(os.Args[2:])
+		case "session":
+			return handleSessionCommand(os.Args[2:])
 		case "help":
 			return handleRootHelp(os.Args[2:], os.Args[0], os.Stdout, os.Stderr)
 		}

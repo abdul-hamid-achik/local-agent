@@ -16,6 +16,7 @@ func writeRootUsage(writer io.Writer, program string) {
 	_, _ = fmt.Fprintln(writer, "  logs       List recent session logs or follow the latest log")
 	_, _ = fmt.Fprintln(writer, "  goal       Inspect durable goals and reconcile paused goal work")
 	_, _ = fmt.Fprintln(writer, "  execution  Inspect and reconcile standalone execution effects")
+	_, _ = fmt.Fprintln(writer, "  session    Repair a session's execution snapshot projection")
 	_, _ = fmt.Fprintln(writer, "  help       Show this help")
 	_, _ = fmt.Fprintln(writer)
 	_, _ = fmt.Fprintln(writer, "Options:")

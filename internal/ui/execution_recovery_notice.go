@@ -33,8 +33,8 @@ func executionRecoveryNotice(unresolved *agent.UnresolvedExecutionError) string 
 		)
 	}
 	return fmt.Sprintf(
-		"Recovery paused · %s\n%s Automatic retry is disabled. This state needs session projection repair, which this build does not implement yet: /recover cannot reconcile a completed effect, and /new starts a separate session without reconciling it. The effect itself is recorded in the durable ledger.",
-		unresolved.ToolName, detail,
+		"Recovery paused · %s\n%s Automatic retry is disabled. This state needs session projection repair: the effect is recorded in the durable ledger but is newer than the saved transcript, so /recover cannot reconcile it.\nCLI (close this session first): local-agent session repair %d\n/new starts a separate session without reconciling it.",
+		unresolved.ToolName, detail, unresolved.SessionID,
 	)
 }
 

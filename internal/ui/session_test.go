@@ -255,18 +255,18 @@ func TestUnresolvedExecutionWarningOnlyBlocksStartedEffects(t *testing.T) {
 			Latest:   execution.Event{Type: execution.EventStarted},
 		},
 	}
-	warning := unresolvedExecutionWarning(states)
+	warning := unresolvedExecutionWarning(states, false)
 	if !strings.Contains(warning, "bash") || !strings.Contains(warning, "outcome is unknown") || !strings.Contains(warning, "/recover") {
 		t.Fatalf("unresolvedExecutionWarning() = %q", warning)
 	}
 	states[1].Latest.Type = execution.EventOutcomeUnknown
-	warning = unresolvedExecutionWarning(states)
+	warning = unresolvedExecutionWarning(states, false)
 	if !strings.Contains(warning, "bash") || !strings.Contains(warning, "outcome-unknown receipt") || !strings.Contains(warning, "/recover") {
 		t.Fatalf("outcome-unknown warning = %q", warning)
 	}
 	states[1].Latest.Type = execution.EventCompleted
 	states[1].Identity.EffectClass = execution.EffectReadOnly
-	if warning := unresolvedExecutionWarning(states); warning != "" {
+	if warning := unresolvedExecutionWarning(states, false); warning != "" {
 		t.Fatalf("terminal/read-only warning = %q, want empty", warning)
 	}
 }

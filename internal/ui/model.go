@@ -2635,7 +2635,7 @@ func (m *Model) snapshotExecutionCursor(ctx context.Context) (int64, error) {
 	return latest, nil
 }
 
-func unresolvedExecutionWarning(states []execution.State) string {
+func unresolvedExecutionWarning(states []execution.State, goalOwned bool) string {
 	for _, state := range states {
 		toolName := state.Identity.ToolName
 		if toolName == "" {
@@ -2654,9 +2654,15 @@ func unresolvedExecutionWarning(states []execution.State) string {
 			)
 		case (state.Latest.Type == execution.EventCompleted || state.Latest.Type == execution.EventFailed) &&
 			state.Identity.EffectClass != execution.EffectReadOnly:
+			if goalOwned {
+				return fmt.Sprintf(
+					"Recovery blocked: %s %s after the last saved transcript. Continuation is disabled so the effect cannot be repeated; use the goal recovery inspector to reconcile this goal-owned session.",
+					toolName, state.Latest.Type,
+				)
+			}
 			return fmt.Sprintf(
-				"Recovery blocked: %s %s after the last saved transcript. Continuation is disabled so the effect cannot be repeated; inspect the workspace before starting /new.",
-				toolName, state.Latest.Type,
+				"Recovery blocked: %s %s after the last saved transcript. Continuation is disabled so the effect cannot be repeated; inspect the workspace, then close this session and run `local-agent session repair %d`.",
+				toolName, state.Latest.Type, state.Identity.SessionID,
 			)
 		}
 	}
