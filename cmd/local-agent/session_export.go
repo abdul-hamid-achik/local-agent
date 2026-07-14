@@ -29,6 +29,7 @@ type sessionExportStore interface {
 	GetSession(context.Context, int64) (db.Session, error)
 	GetSessionState(context.Context, int64) (string, error)
 	ListSessionExecutionEvents(context.Context, int64, string, int) ([]execution.Event, error)
+	ListExecutionRecoveryHazards(context.Context, int64, string, int64, int) ([]execution.State, error)
 	ListControlStates(context.Context, controlplane.Query) ([]controlplane.State, error)
 	GetSessionTokenStats(context.Context, int64) ([]db.TokenStat, error)
 	GetSessionFileChanges(context.Context, int64) ([]db.FileChange, error)
@@ -95,6 +96,7 @@ type sessionExportOpenIssue struct {
 	EventType   string `json:"event_type"`
 	EffectClass string `json:"effect_class"`
 	Status      string `json:"status"`
+	Remedy      string `json:"remedy"`
 }
 
 type sessionExportBounded struct {
@@ -154,16 +156,12 @@ func handleSessionExport(store sessionExportStore, workspace string, args []stri
 	flags.Usage = func() { writeSessionUsage(stdout) }
 	format := flags.String("format", "both", "output format: jsonl, md, or both")
 	outDir := flags.String("out", "", "output directory (default: ./local-agent-audit-<id>)")
-	normalized := make([]string, 0, len(args))
-	var positional []string
-	for _, argument := range args {
-		if strings.HasPrefix(argument, "-") {
-			normalized = append(normalized, argument)
-			continue
-		}
-		positional = append(positional, argument)
+	normalized, err := reorderFlagsBeforePositionals(args, map[string]bool{"format": true, "out": true})
+	if err != nil {
+		executionFprintf(stderr, "session export: %v\n", err)
+		return 2
 	}
-	if code, done := flagParseExitCode(flags.Parse(append(normalized, positional...))); done {
+	if code, done := flagParseExitCode(flags.Parse(normalized)); done {
 		return code
 	}
 	if flags.NArg() != 1 {
@@ -258,7 +256,6 @@ func collectSessionExport(ctx context.Context, store sessionExportStore, workspa
 	if len(events) == sessionExportLimit {
 		bundle.Truncations["execution_events"] = sessionExportBounded{Returned: len(events), Limit: sessionExportLimit}
 	}
-	latestByExecution := map[string]execution.Event{}
 	for _, event := range events {
 		bundle.ExecutionEvents = append(bundle.ExecutionEvents, sessionExportExecutionEvent{
 			EventID: event.ID, ExecutionID: event.Identity.ExecutionID, TurnID: event.Identity.TurnID,
@@ -268,7 +265,6 @@ func collectSessionExport(ctx context.Context, store sessionExportStore, workspa
 			ResultSHA256: event.ResultSHA256, ResultReceipt: event.ResultReceipt,
 			Detail: event.Detail, OccurredAt: event.OccurredAt.UTC().Format(time.RFC3339Nano),
 		})
-		latestByExecution[event.Identity.ExecutionID] = event
 	}
 
 	states, err := store.ListControlStates(ctx, controlplane.Query{
@@ -277,7 +273,6 @@ func collectSessionExport(ctx context.Context, store sessionExportStore, workspa
 	if err != nil {
 		return sessionExportBundle{}, fmt.Errorf("list control states: %w", err)
 	}
-	resolvedExecution := map[string]bool{}
 	for _, state := range states {
 		view := sessionExportControlState{
 			ItemID: state.Item.ItemID, Kind: string(state.Item.Kind),
@@ -288,9 +283,6 @@ func collectSessionExport(ctx context.Context, store sessionExportStore, workspa
 		if state.Resolution != nil {
 			view.Outcome = string(state.Resolution.Outcome)
 			view.ResolvedBy = state.Resolution.ResolvedBy
-			if state.Item.Kind == controlplane.KindExecutionReconciliation && state.Item.Identity.ExecutionID != "" {
-				resolvedExecution[state.Item.Identity.ExecutionID] = true
-			}
 		}
 		bundle.ControlStates = append(bundle.ControlStates, view)
 	}
@@ -309,35 +301,67 @@ func collectSessionExport(ctx context.Context, store sessionExportStore, workspa
 		}
 	}
 
-	for executionID, event := range latestByExecution {
-		status := openIssueStatus(event.Type, event.Identity.EffectClass)
+	// Open issues come from the SAME authoritative hazard projection the agent
+	// runtime uses to decide whether to block: it applies the snapshot cursor
+	// (so a completed/failed effect newer than the saved transcript is flagged),
+	// the reconciliation overlay (so only validly-reconciled executions are
+	// cleared), and is a bounded latest-state-per-execution view (immune to the
+	// timeline's event truncation).
+	cursor := decodeExportExecutionCursor(bundle.StateJSON)
+	hazards, err := store.ListExecutionRecoveryHazards(ctx, sessionID, workspace, cursor, maxSessionExportHazards)
+	if err != nil {
+		return sessionExportBundle{}, fmt.Errorf("project execution recovery hazards: %w", err)
+	}
+	for _, hazard := range hazards {
+		status, remedy := openIssueStatus(hazard.Latest.Type, hazard.Identity.EffectClass, sessionID)
 		if status == "" {
 			continue
 		}
-		if resolvedExecution[executionID] {
-			status = "reconciled evidence on file"
-		}
 		bundle.OpenIssues = append(bundle.OpenIssues, sessionExportOpenIssue{
-			ExecutionID: executionID, ToolName: event.Identity.ToolName,
-			EventType: string(event.Type), EffectClass: string(event.Identity.EffectClass), Status: status,
+			ExecutionID: hazard.Identity.ExecutionID, ToolName: hazard.Identity.ToolName,
+			EventType: string(hazard.Latest.Type), EffectClass: string(hazard.Identity.EffectClass),
+			Status: status, Remedy: remedy,
 		})
 	}
 	return bundle, nil
 }
 
-// openIssueStatus reports the audit status of an execution's latest event, or
-// "" when the execution is cleanly terminal and needs no attention.
-func openIssueStatus(eventType execution.EventType, effect execution.EffectClass) string {
+const maxSessionExportHazards = 100
+
+// openIssueStatus classifies a recovery hazard the same way the agent runtime's
+// executionRuntime does, and names the exact remedy. Unknown/started hazards
+// need reconciliation evidence; an answered terminal newer than the snapshot
+// needs projection repair, not reconciliation.
+func openIssueStatus(eventType execution.EventType, effect execution.EffectClass, sessionID int64) (status, remedy string) {
 	switch {
 	case eventType == execution.EventOutcomeUnknown:
-		return "UNRESOLVED — outcome unknown, needs reconciliation"
+		return "UNRESOLVED — outcome unknown, needs reconciliation",
+			fmt.Sprintf("local-agent execution recover %d --all", sessionID)
 	case eventType == execution.EventStarted && effect != execution.EffectReadOnly:
-		return "UNRESOLVED — started without a terminal receipt"
-	case eventType == execution.EventRequested || eventType == execution.EventApprovalRequested || eventType == execution.EventApproved:
-		return "INCOMPLETE — dispatched but not terminal in the ledger"
+		return "UNRESOLVED — started without a terminal receipt",
+			fmt.Sprintf("local-agent execution recover %d --all", sessionID)
+	case (eventType == execution.EventCompleted || eventType == execution.EventFailed) && effect != execution.EffectReadOnly:
+		return "UNPROJECTED — answered effect newer than the saved transcript",
+			fmt.Sprintf("local-agent session repair %d", sessionID)
 	default:
-		return ""
+		return "", ""
 	}
+}
+
+// decodeExportExecutionCursor reads the persisted session snapshot cursor. A
+// missing or malformed cursor falls back to 0, which over-reports post-cursor
+// answered effects rather than hiding a wedge — the safe direction for an audit.
+func decodeExportExecutionCursor(stateJSON json.RawMessage) int64 {
+	if len(stateJSON) == 0 {
+		return 0
+	}
+	var envelope struct {
+		ExecutionCursor int64 `json:"execution_cursor"`
+	}
+	if err := json.Unmarshal(stateJSON, &envelope); err != nil || envelope.ExecutionCursor < 0 {
+		return 0
+	}
+	return envelope.ExecutionCursor
 }
 
 func writeSessionExportJSONL(path string, bundle sessionExportBundle) error {
@@ -405,15 +429,17 @@ func writeSessionExportMarkdown(path string, bundle sessionExportBundle) error {
 
 	b.WriteString("## Open issues\n\n")
 	if len(bundle.OpenIssues) == 0 {
-		b.WriteString("None — every execution reached a clean terminal state.\n\n")
+		b.WriteString("None — every execution is projected and cleanly terminal (no unresolved, ")
+		b.WriteString("started-without-receipt, or unprojected-answered hazards block continuation).\n\n")
 	} else {
-		b.WriteString("| Execution | Tool | Latest event | Status |\n|---|---|---|---|\n")
+		b.WriteString("These executions block continuation. Status and the exact remedy per row:\n\n")
+		b.WriteString("| Execution | Tool | Latest event | Status | Remedy |\n|---|---|---|---|---|\n")
 		for _, issue := range bundle.OpenIssues {
-			fmt.Fprintf(&b, "| `%s` | %s | %s | %s |\n",
+			fmt.Fprintf(&b, "| `%s` | %s | %s | %s | `%s` |\n",
 				markdownSafe(issue.ExecutionID), markdownSafe(issue.ToolName),
-				markdownSafe(issue.EventType), markdownSafe(issue.Status))
+				markdownSafe(issue.EventType), markdownSafe(issue.Status), markdownSafe(issue.Remedy))
 		}
-		fmt.Fprintf(&b, "\nReconcile these with `local-agent execution recover %d --all`.\n\n", bundle.Session.ID)
+		b.WriteString("\n")
 	}
 
 	b.WriteString("## Execution timeline\n\n")
@@ -473,6 +499,32 @@ func sessionListTitle(title string) string {
 		return string([]rune(title)[:45]) + "..."
 	}
 	return title
+}
+
+// reorderFlagsBeforePositionals moves flags ahead of positional arguments so
+// `SESSION_ID --flag` parses like `--flag SESSION_ID`, while keeping each
+// value-taking flag bound to its value. valueFlags names the flags that consume
+// the following argument (unless given as --flag=value).
+func reorderFlagsBeforePositionals(args []string, valueFlags map[string]bool) ([]string, error) {
+	var flags, positional []string
+	for i := 0; i < len(args); i++ {
+		argument := args[i]
+		if !strings.HasPrefix(argument, "-") {
+			positional = append(positional, argument)
+			continue
+		}
+		name := strings.TrimLeft(argument, "-")
+		bare, _, hasValue := strings.Cut(name, "=")
+		flags = append(flags, argument)
+		if valueFlags[bare] && !hasValue {
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("--%s requires a value", bare)
+			}
+			flags = append(flags, args[i+1])
+			i++
+		}
+	}
+	return append(flags, positional...), nil
 }
 
 // relativizeHome rewrites the caller's home directory prefix to ~ so an export

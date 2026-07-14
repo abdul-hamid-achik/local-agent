@@ -206,10 +206,11 @@ func (s *Store) ListExecutionEvents(ctx context.Context, sessionID int64, worksp
 	return events, nil
 }
 
-// ListSessionExecutionEvents returns every immutable lifecycle edge recorded
-// for one session, in append order, across all executions. It is the audit
-// projection: a complete, read-only timeline for `session export`. The limit
-// is bounded so a runaway session cannot produce an unbounded export.
+// ListSessionExecutionEvents returns immutable lifecycle edges recorded for one
+// session across all executions, in append order. It is the audit timeline for
+// `session export`. When a session has more than limit events the MOST RECENT
+// limit are returned (still chronological): an audit of a wedged session cares
+// about the events that led to the wedge, not the session's first prompts.
 func (s *Store) ListSessionExecutionEvents(ctx context.Context, sessionID int64, workspaceID string, limit int) ([]execution.Event, error) {
 	if err := validateExecutionListLimit(limit, maxExecutionEventList); err != nil {
 		return nil, err
@@ -219,9 +220,12 @@ func (s *Store) ListSessionExecutionEvents(ctx context.Context, sessionID int64,
 	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT `+executionEventColumns+`
-		   FROM execution_events
-		  WHERE session_id = ? AND workspace_id = ?
-		  ORDER BY id ASC LIMIT ?`,
+		   FROM (
+		     SELECT `+executionEventColumns+`
+		       FROM execution_events
+		      WHERE session_id = ? AND workspace_id = ?
+		      ORDER BY id DESC LIMIT ?
+		   ) ORDER BY id ASC`,
 		sessionID, workspaceID, limit,
 	)
 	if err != nil {
