@@ -13,11 +13,11 @@
 
 
 
+
 ─────────────────────────────────────────────────────────────────────────────────────────
   ◇ Permission · write · NORMAL
   Action     Write 23 B
-  Target     /Users/abdulachik/projects/local-agent/.glyphrun/tmp/approval-always-workdir
-             /session-grant.txt
+  Target     <temp>/local-agent-glyphrun-approval-always-workdir/session-grant.txt
   Scope      Identical request only · current Agent session
   Request    309302e8b9f8
 

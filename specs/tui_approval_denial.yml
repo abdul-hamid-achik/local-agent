@@ -1,4 +1,5 @@
 version: 1
+contractHash: sha256:0e4796092c907803f0ac4ec75968d6d9cd57ec69a5a4ed20aa6616d7382ec875
 name: local_agent_tui_approval_denial
 
 intent: |
@@ -12,7 +13,7 @@ target:
     - "${projectRoot}/.glyphrun/tmp/fake-ollama-approval"
     - "${projectRoot}/bin/local-agent"
     - "${projectRoot}/.glyphrun/tmp/approval-protocol.txt"
-  cwd: ".glyphrun/tmp/approval-workdir"
+  cwd: "/tmp/local-agent-glyphrun-approval-workdir"
   env:
     HOME: "${projectRoot}/.glyphrun/tmp/approval-home"
     LOCAL_AGENT_AGENTS_DIR: "${projectRoot}/.glyphrun/tmp/approval-agents"
@@ -24,7 +25,7 @@ terminal:
 
 preconditions:
   commands:
-    - run: "rm -rf .glyphrun/tmp/approval-home .glyphrun/tmp/approval-agents .glyphrun/tmp/approval-workdir .glyphrun/tmp/approval-protocol.txt .glyphrun/tmp/fake-ollama-approval && mkdir -p .glyphrun/tmp/approval-home/.config/local-agent .glyphrun/tmp/approval-agents .glyphrun/tmp/approval-workdir && printf '%s\\n' 'model:' '  auto_select: false' > .glyphrun/tmp/approval-home/.config/local-agent/config.yaml && go build -o ./bin/local-agent ./cmd/local-agent && go build -o .glyphrun/tmp/fake-ollama-approval ./specs/fixtures/fake_ollama_approval"
+    - run: "rm -rf .glyphrun/tmp/approval-home .glyphrun/tmp/approval-agents .glyphrun/tmp/approval-protocol.txt .glyphrun/tmp/fake-ollama-approval /tmp/local-agent-glyphrun-approval-workdir && mkdir -p .glyphrun/tmp/approval-home/.config/local-agent .glyphrun/tmp/approval-agents /tmp/local-agent-glyphrun-approval-workdir && printf '%s\\n' 'model:' '  auto_select: false' > .glyphrun/tmp/approval-home/.config/local-agent/config.yaml && go build -o ./bin/local-agent ./cmd/local-agent && go build -o .glyphrun/tmp/fake-ollama-approval ./specs/fixtures/fake_ollama_approval"
       cwd: "."
       timeoutMs: 30000
 
@@ -183,12 +184,12 @@ outcomes:
     description: the denied tool never creates its requested workspace file
     verify:
       command:
-        run: "test ! -e .glyphrun/tmp/approval-workdir/approval-probe.txt"
+        run: "test ! -e /tmp/local-agent-glyphrun-approval-workdir/approval-probe.txt"
   - id: fake_provider_observed_the_denial
     description: exactly two provider calls occurred and the second contained the denied tool result
     verify:
       command:
-        run: "rg -q '^protocol_ok=true$' .glyphrun/tmp/approval-protocol.txt"
+        run: "grep -q '^protocol_ok=true$' .glyphrun/tmp/approval-protocol.txt"
   - id: approval_flow_quits_cleanly
     description: ctrl+c exits cleanly after the denied turn is complete
     verify:

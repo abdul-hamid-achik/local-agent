@@ -15,6 +15,9 @@ terminal:
   normalize:
     trimRight: true
     normalizeLineEndings: true
+    replace:
+      - regex: "/(?:private/)?tmp/local-agent-glyphrun"
+        with: "<temp>/local-agent-glyphrun"
 
 artifacts:
   rawLog: true

@@ -6,12 +6,25 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // MCPHub caps result pages at 8 KiB. Enforce the same parser bound so a
 // malicious or incompatible gateway cannot smuggle an unbounded transient
 // payload into the next provider request.
 const maxMCPHubResultPageBytes = 8 * 1024
+
+const (
+	mcphubResolverContractVersion           = 1
+	maxMCPHubCatalogRevisionBytes           = 128
+	maxMCPHubResolverDocumentBytes          = 64 * 1024
+	maxMCPHubResolverIdentifierBytes        = 256
+	maxMCPHubResolverRequiredFields         = 48
+	maxMCPHubResolverRequiredFieldBytes     = 128
+	maxMCPHubResolverRequiredFieldNameBytes = 2048
+	maxMCPHubResolverAlternatives           = 5
+)
 
 type mcphubResultPageEnvelope struct {
 	Status     string `json:"status"`
@@ -58,6 +71,9 @@ func projectMCPHubReceipt(projection ToolProjection, receipt RawReceipt) (ToolPr
 	if !isMCPHubManagementOperation(projection.Operation) {
 		return projection, false
 	}
+	if projection.Operation == "mcphub_resolve_tool" {
+		return projectMCPHubResolve(projection, document), true
+	}
 	if jsonObjectHasValue(document, "error") {
 		projection.Domain = DomainFailed
 		projection.Evidence = EvidenceNone
@@ -72,8 +88,6 @@ func projectMCPHubReceipt(projection ToolProjection, receipt RawReceipt) (ToolPr
 		return projectMCPHubSearch(projection, document)
 	case "mcphub_describe_tool":
 		return projectMCPHubDescribe(projection, document)
-	case "mcphub_resolve_tool":
-		return projectMCPHubResolve(projection, document)
 	case "mcphub_stats":
 		return projectMCPHubStats(projection, document)
 	default:
@@ -311,34 +325,200 @@ func projectMCPHubDescribe(projection ToolProjection, document json.RawMessage) 
 	return projection.Normalize(), true
 }
 
-func projectMCPHubResolve(projection ToolProjection, document json.RawMessage) (ToolProjection, bool) {
-	type match struct {
-		Namespaced string `json:"namespaced"`
+func projectMCPHubResolve(projection ToolProjection, document json.RawMessage) ToolProjection {
+	// Resolver receipts are advisory. Start from the fail-closed projection so
+	// any contract mismatch remains transport success without domain success.
+	projection.Domain = DomainUnknown
+	projection.Evidence = EvidenceNone
+	projection.Digest = nil
+	if !validMCPHubResolverDocument(document) {
+		return projection.Normalize()
 	}
+	if jsonObjectHasValue(document, "error") {
+		projection.Domain = DomainFailed
+		projection.Digest = &ReceiptDigest{Kind: DigestMCPHubError}
+		return projection.Normalize()
+	}
+
 	var envelope struct {
-		Recommendation *struct {
-			Namespaced string   `json:"namespaced"`
-			Required   []string `json:"required_fields"`
-		} `json:"recommendation"`
-		Ambiguous    *bool   `json:"ambiguous"`
-		Alternatives []match `json:"alternatives"`
+		ContractVersion *int            `json:"contract_version"`
+		CatalogRevision *string         `json:"catalog_revision"`
+		Status          *string         `json:"status"`
+		Recommendation  json.RawMessage `json:"recommendation"`
+		Ambiguous       *bool           `json:"ambiguous"`
+		Alternatives    json.RawMessage `json:"alternatives"`
 	}
-	if json.Unmarshal(document, &envelope) != nil || envelope.Ambiguous == nil ||
-		!jsonObjectHasValue(document, "recommendation") || !jsonObjectHasValue(document, "alternatives") {
-		return projection, false
+	if json.Unmarshal(document, &envelope) != nil || envelope.ContractVersion == nil ||
+		*envelope.ContractVersion != mcphubResolverContractVersion || envelope.CatalogRevision == nil ||
+		!validMCPHubCatalogRevision(*envelope.CatalogRevision) || envelope.Status == nil || envelope.Ambiguous == nil {
+		return projection.Normalize()
 	}
+	alternatives, ok := parseMCPHubResolverAlternatives(envelope.Alternatives)
+	if !ok {
+		return projection.Normalize()
+	}
+	recommendation := bytes.TrimSpace(envelope.Recommendation)
+	hasRecommendation := jsonKind(recommendation, '{')
+	noRecommendation := bytes.Equal(recommendation, []byte("null"))
+	if !hasRecommendation && !noRecommendation {
+		return projection.Normalize()
+	}
+
 	digest := ReceiptDigest{Kind: DigestMCPHubResolve, Ambiguous: *envelope.Ambiguous}
-	if envelope.Recommendation != nil {
-		digest.Target = envelope.Recommendation.Namespaced
-		digest.Required = envelope.Recommendation.Required
+	var domain DomainState
+	switch *envelope.Status {
+	case "no_match":
+		if hasRecommendation || *envelope.Ambiguous || len(alternatives) != 0 {
+			return projection.Normalize()
+		}
+		domain = DomainAttention
+	case "confident", "ambiguous":
+		wantAmbiguous := *envelope.Status == "ambiguous"
+		if !hasRecommendation || *envelope.Ambiguous != wantAmbiguous {
+			return projection.Normalize()
+		}
+		target, required, ok := parseMCPHubResolverRecommendation(recommendation)
+		if !ok {
+			return projection.Normalize()
+		}
+		digest.Target = target
+		digest.Required = required
+		if wantAmbiguous {
+			domain = DomainAttention
+		} else {
+			domain = DomainSucceeded
+		}
+	default:
+		return projection.Normalize()
 	}
-	for _, alternative := range envelope.Alternatives {
-		digest.Items = append(digest.Items, alternative.Namespaced)
+	seen := map[string]struct{}{digest.Target: {}}
+	for _, alternative := range alternatives {
+		if _, duplicate := seen[alternative]; duplicate {
+			return projection.Normalize()
+		}
+		seen[alternative] = struct{}{}
+		digest.Items = append(digest.Items, alternative)
 	}
-	projection.Domain = DomainSucceeded
+	projection.Domain = domain
 	projection.Evidence = EvidenceNone
 	projection.Digest = &digest
-	return projection.Normalize(), true
+	return projection.Normalize()
+}
+
+func validMCPHubResolverDocument(document json.RawMessage) bool {
+	document = bytes.TrimSpace(document)
+	return len(document) > 0 && len(document) <= maxMCPHubResolverDocumentBytes &&
+		document[0] == '{' && json.Valid(document)
+}
+
+func validMCPHubCatalogRevision(value string) bool {
+	if value == "" || len(value) > maxMCPHubCatalogRevisionBytes || !utf8.ValidString(value) || strings.TrimSpace(value) != value {
+		return false
+	}
+	for index := 0; index < len(value); index++ {
+		character := value[index]
+		if (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
+			(character >= '0' && character <= '9') || strings.ContainsRune("_-.:/", rune(character)) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func parseMCPHubResolverRecommendation(raw json.RawMessage) (string, []string, bool) {
+	var recommendation struct {
+		Server     string          `json:"server"`
+		Tool       string          `json:"tool"`
+		Namespaced string          `json:"namespaced"`
+		Required   json.RawMessage `json:"required_fields"`
+	}
+	if json.Unmarshal(raw, &recommendation) != nil ||
+		!validMCPHubResolverIdentifier(recommendation.Server, false) ||
+		!validMCPHubResolverIdentifier(recommendation.Tool, true) ||
+		!validMCPHubResolverNamespacedIdentifier(recommendation.Namespaced) ||
+		recommendation.Namespaced != recommendation.Server+"__"+recommendation.Tool {
+		return "", nil, false
+	}
+	required, ok := parseMCPHubResolverRequiredFields(recommendation.Required)
+	if !ok {
+		return "", nil, false
+	}
+	return recommendation.Namespaced, required, true
+}
+
+func parseMCPHubResolverAlternatives(raw json.RawMessage) ([]string, bool) {
+	var alternatives []struct {
+		Namespaced string `json:"namespaced"`
+	}
+	if !jsonKind(raw, '[') || json.Unmarshal(raw, &alternatives) != nil || alternatives == nil ||
+		len(alternatives) > maxMCPHubResolverAlternatives {
+		return nil, false
+	}
+	seen := make(map[string]struct{}, len(alternatives))
+	result := make([]string, 0, len(alternatives))
+	for _, alternative := range alternatives {
+		if !validMCPHubResolverNamespacedIdentifier(alternative.Namespaced) {
+			return nil, false
+		}
+		if _, duplicate := seen[alternative.Namespaced]; duplicate {
+			return nil, false
+		}
+		seen[alternative.Namespaced] = struct{}{}
+		result = append(result, alternative.Namespaced)
+	}
+	return result, true
+}
+
+func parseMCPHubResolverRequiredFields(raw json.RawMessage) ([]string, bool) {
+	var required []string
+	if !jsonKind(raw, '[') || json.Unmarshal(raw, &required) != nil || required == nil ||
+		len(required) > maxMCPHubResolverRequiredFields {
+		return nil, false
+	}
+	seen := make(map[string]struct{}, len(required))
+	total := 0
+	for _, field := range required {
+		if field == "" || len(field) > maxMCPHubResolverRequiredFieldBytes || !utf8.ValidString(field) || strings.TrimSpace(field) != field {
+			return nil, false
+		}
+		for _, character := range field {
+			if unicode.IsLetter(character) || unicode.IsNumber(character) || strings.ContainsRune("_-.:/$[]", character) {
+				continue
+			}
+			return nil, false
+		}
+		if _, duplicate := seen[field]; duplicate {
+			return nil, false
+		}
+		seen[field] = struct{}{}
+		total += len(field)
+		if total > maxMCPHubResolverRequiredFieldNameBytes {
+			return nil, false
+		}
+	}
+	return append([]string(nil), required...), true
+}
+
+func validMCPHubResolverNamespacedIdentifier(value string) bool {
+	server, tool, found := strings.Cut(value, "__")
+	return found && validMCPHubResolverIdentifier(server, false) && validMCPHubResolverIdentifier(tool, true)
+}
+
+func validMCPHubResolverIdentifier(value string, allowDoubleUnderscore bool) bool {
+	if value == "" || len(value) > maxMCPHubResolverIdentifierBytes || !utf8.ValidString(value) || strings.TrimSpace(value) != value {
+		return false
+	}
+	if !allowDoubleUnderscore && strings.Contains(value, "__") {
+		return false
+	}
+	for _, character := range value {
+		if unicode.IsLetter(character) || unicode.IsNumber(character) || strings.ContainsRune("_-.:/", character) {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func projectMCPHubStats(projection ToolProjection, document json.RawMessage) (ToolProjection, bool) {

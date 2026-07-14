@@ -1,4 +1,5 @@
 version: 1
+contractHash: sha256:7481bd59fcaa34fb105fec1cfc22e2ea3c479435ac6e93b57a2403446f85cda6
 name: local_agent_tui_ollama_inventory
 
 intent: |

@@ -114,6 +114,20 @@ func TestHelpDescribesMentionsAsComposerInsertions(t *testing.T) {
 	}
 }
 
+func TestHelpDescribesExplicitExternalPathReviewBoundary(t *testing.T) {
+	m := newTestModel(t)
+	content := strings.Join(strings.Fields(strings.ToLower(ansi.Strip(m.buildHelpContent(m.helpContentWidth())))), " ")
+	for _, want := range []string{
+		"~/… or /…",
+		"temporary read-only access",
+		"mcp tools require separate approval",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("help omitted external-path boundary %q:\n%s", want, content)
+		}
+	}
+}
+
 func TestHelpPreservesScrollAcrossResize(t *testing.T) {
 	m := newTestModel(t)
 	m.overlay = OverlayHelp

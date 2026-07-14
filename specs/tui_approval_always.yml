@@ -1,4 +1,5 @@
 version: 1
+contractHash: sha256:a0d7dbb0556022734f0d9ee89bbeb8ca28facae3c3674156d9dd3dcc08f49e02
 name: local_agent_tui_approval_always
 
 intent: |
@@ -11,7 +12,7 @@ target:
     - "${projectRoot}/.glyphrun/tmp/fake-ollama-always"
     - "${projectRoot}/bin/local-agent"
     - "${projectRoot}/.glyphrun/tmp/approval-always-protocol.txt"
-  cwd: ".glyphrun/tmp/approval-always-workdir"
+  cwd: "/tmp/local-agent-glyphrun-approval-always-workdir"
   env:
     HOME: "${projectRoot}/.glyphrun/tmp/approval-always-home"
     LOCAL_AGENT_AGENTS_DIR: "${projectRoot}/.glyphrun/tmp/approval-always-agents"
@@ -23,7 +24,7 @@ terminal:
 
 preconditions:
   commands:
-    - run: "rm -rf .glyphrun/tmp/approval-always-home .glyphrun/tmp/approval-always-agents .glyphrun/tmp/approval-always-workdir .glyphrun/tmp/approval-always-protocol.txt .glyphrun/tmp/fake-ollama-always && mkdir -p .glyphrun/tmp/approval-always-home/.config/local-agent .glyphrun/tmp/approval-always-agents .glyphrun/tmp/approval-always-workdir && printf '%s\\n' 'model:' '  auto_select: false' > .glyphrun/tmp/approval-always-home/.config/local-agent/config.yaml && go build -o ./bin/local-agent ./cmd/local-agent && go build -o .glyphrun/tmp/fake-ollama-always ./specs/fixtures/fake_ollama_always"
+    - run: "rm -rf .glyphrun/tmp/approval-always-home .glyphrun/tmp/approval-always-agents .glyphrun/tmp/approval-always-protocol.txt .glyphrun/tmp/fake-ollama-always /tmp/local-agent-glyphrun-approval-always-workdir && mkdir -p .glyphrun/tmp/approval-always-home/.config/local-agent .glyphrun/tmp/approval-always-agents /tmp/local-agent-glyphrun-approval-always-workdir && printf '%s\\n' 'model:' '  auto_select: false' > .glyphrun/tmp/approval-always-home/.config/local-agent/config.yaml && go build -o ./bin/local-agent ./cmd/local-agent && go build -o .glyphrun/tmp/fake-ollama-always ./specs/fixtures/fake_ollama_always"
       cwd: "."
       timeoutMs: 30000
 
@@ -102,7 +103,7 @@ outcomes:
     description: the explicitly session-approved exact write executes
     verify:
       command:
-        run: "test \"$(cat .glyphrun/tmp/approval-always-workdir/session-grant.txt)\" = 'session scoped approval'"
+        run: "test \"$(cat /tmp/local-agent-glyphrun-approval-always-workdir/session-grant.txt)\" = 'session scoped approval'"
   - id: session_permission_is_reviewed
     description: the first prompt exposes the exact-request session decision
     verify:
@@ -113,7 +114,7 @@ outcomes:
     description: the identical request reuses the grant inside the first Agent process without another permission request
     verify:
       command:
-        run: "rg -q '^approval_session_receipts=2$' .glyphrun/tmp/approval-always-protocol.txt"
+        run: "grep -q '^approval_session_receipts=2$' .glyphrun/tmp/approval-always-protocol.txt"
   - id: restart_requires_fresh_permission
     description: the second Agent process prompts again for the identical request
     verify:
@@ -124,7 +125,7 @@ outcomes:
     description: all three writes completed with one tool receipt apiece and no global allow row
     verify:
       command:
-        run: "rg -q '^protocol_ok=true$' .glyphrun/tmp/approval-always-protocol.txt"
+        run: "grep -q '^protocol_ok=true$' .glyphrun/tmp/approval-always-protocol.txt"
   - id: both_processes_quit_cleanly
     description: the wrapper and both local-agent processes exit successfully
     verify:

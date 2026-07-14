@@ -1,11 +1,13 @@
                              ╭────────────────────────────────────────────────────────────╮
                              │ Help                                                       │
                              │                                                            │
+                             │   #skill            Insert skill mention text              │
+                             │   /cmd              Run slash command                      │
                              │   team / swarm / …  Ask naturally for a read-only expert   │
-                             │                     consultation when enabled              │
-                             │   enter (running)   Queue one follow-up; it sends after    │
-  ollama: no model selected  │                     the current turn settles successfully  │
-  try: ollama serve · ollama │   esc (running)     Cancel the turn; a queued follow-up    │
+  ollama: no model selected  │                     consultation when enabled              │
+  try: ollama serve · ollama │   enter (running)   Queue one follow-up; it sends after    │
+                             │                     the current turn settles successfully  │
+                             │   esc (running)     Cancel the turn; a queued follow-up    │
                              │                     returns to the composer                │
                              │                                                            │
                              │ Slash Commands                                             │
@@ -29,7 +31,5 @@
                              │   /scope            List or manage temporary external      │
                              │                     read-only grants                       │
                              │   /scope add-read   Grant process-local read-only access   │
-                             │                     to an external directory               │
-                             │   /scope remove-r…  Revoke one external directory or       │
-─────────────────────────────│ esc/q close · j/k scroll · pgup/pgdn page · 51%            │────────────────────────────
+─────────────────────────────│ esc/q close · j/k scroll · pgup/pgdn page · 49%            │────────────────────────────
                              ╰────────────────────────────────────────────────────────────╯

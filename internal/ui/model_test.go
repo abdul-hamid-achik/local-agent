@@ -802,6 +802,10 @@ func TestHandleCommandAction(t *testing.T) {
 				if m.entries[0].Kind != "system" {
 					t.Errorf("expected system entry, got %q", m.entries[0].Kind)
 				}
+				if m.capabilityRoute != nil || m.lastCapabilityRoute != nil || m.promptTokens != 0 || m.doneFlash {
+					t.Fatalf("clear retained prior-turn diagnostics: active=%#v last=%#v prompt=%d done=%v",
+						m.capabilityRoute, m.lastCapabilityRoute, m.promptTokens, m.doneFlash)
+				}
 			},
 		},
 		{
@@ -877,6 +881,13 @@ func TestHandleCommandAction(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := newTestModel(t)
+			if tt.result.Action == command.ActionClear {
+				route := agent.CapabilityRoute{Phase: "research", Status: agent.CapabilityRouteResolved, Server: "hitspec", Tool: "hitspec_capture_webpage"}
+				m.capabilityRoute = &route
+				m.lastCapabilityRoute = &route
+				m.promptTokens = 4_096
+				m.doneFlash = true
+			}
 			// Pre-populate loadedFile for unload test.
 			if tt.result.Action == command.ActionUnloadContext {
 				m.loadedFile = "old.md"

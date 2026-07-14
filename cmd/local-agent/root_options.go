@@ -30,6 +30,7 @@ func parseRootOptions(program string, args []string, output io.Writer) (rootOpti
 	var options rootOptions
 	flags := flag.NewFlagSet(program, flag.ContinueOnError)
 	flags.SetOutput(output)
+	flags.Usage = func() { writeRootUsage(output, program) }
 	flags.BoolVar(&options.qwenRouter, "qwen-router", false, "use optimized Qwen model router (experimental)")
 	flags.StringVar(&options.model, "model", "", "override Ollama model")
 	flags.StringVar(&options.agentProfile, "agent", "", "override agent profile")

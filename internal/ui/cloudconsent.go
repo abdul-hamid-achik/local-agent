@@ -5,6 +5,7 @@ import (
 
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
 )
 
@@ -113,10 +114,15 @@ func (m *Model) renderCloudConsent() string {
 			enterAction = "use"
 		}
 	}
-	footer := m.renderKeyHints(width,
-		keyHint{Key: "esc", Action: "cancel"},
-		keyHint{Key: "enter", Action: enterAction},
-	)
+	hints := []keyHint{
+		{Key: "esc", Action: "cancel"},
+		{Key: "enter", Action: enterAction},
+	}
+	withMovement := append(append([]keyHint(nil), hints...), keyHint{Key: "↑/↓", Action: "move"})
+	if lipgloss.Width(m.renderKeyHintSet(withMovement, 2)) <= width {
+		hints = withMovement
+	}
+	footer := m.renderKeyHints(width, hints...)
 	if m.cloudConsentState.Error != "" {
 		footer += "\n" + m.styles.ErrorText.Render(truncateDisplay(sanitizeTerminalSingleLine(m.cloudConsentState.Error), width))
 	}

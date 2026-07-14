@@ -1,4 +1,5 @@
 version: 1
+contractHash: sha256:f98cb7ae7bf73e4773aea02edcf26ec8cec357dadf74ccb6c2e68ebd297a4ab3
 name: local_agent_tui_modes
 
 intent: |

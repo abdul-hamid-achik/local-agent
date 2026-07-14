@@ -171,9 +171,26 @@ func TestParseRootOptionsHelpIsSideEffectFree(t *testing.T) {
 	if !errors.Is(err, flag.ErrHelp) {
 		t.Fatalf("help error = %v, want flag.ErrHelp", err)
 	}
-	for _, flagName := range []string{"-prompt string", "-auto", "-plan", "-skip-approvals", "-version"} {
-		if !strings.Contains(output.String(), flagName) {
-			t.Fatalf("help omitted %q:\n%s", flagName, output.String())
+	help := output.String()
+	for _, text := range []string{
+		"local-agent <command> [options]",
+		"init       ",
+		"logs       ",
+		"goal       ",
+		"execution  ",
+		"-p, --prompt <text>",
+		"--auto",
+		"--plan",
+		"--skip-approvals",
+		"--version",
+	} {
+		if !strings.Contains(help, text) {
+			t.Fatalf("help omitted %q:\n%s", text, help)
+		}
+	}
+	for _, legacySpelling := range []string{"\n  -auto ", "\n  -plan ", "\n  -skip-approvals "} {
+		if strings.Contains(help, legacySpelling) {
+			t.Fatalf("help exposed single-dash spelling %q:\n%s", legacySpelling, help)
 		}
 	}
 }
@@ -195,6 +212,11 @@ func TestRunHandlesVersionAndEmptyPromptsBeforeConfiguration(t *testing.T) {
 
 	if code := runWithArgs("--version"); code != 0 {
 		t.Fatalf("real --version exit = %d, want 0 before invalid config", code)
+	}
+	for _, args := range [][]string{{"help"}, {"--help"}} {
+		if code := runWithArgs(args...); code != 0 {
+			t.Fatalf("help invocation %q exit = %d, want 0 before invalid config", args, code)
+		}
 	}
 	for _, args := range [][]string{{"--prompt="}, {"-p="}, {"--prompt", "   "}} {
 		if code := runWithArgs(args...); code != 2 {

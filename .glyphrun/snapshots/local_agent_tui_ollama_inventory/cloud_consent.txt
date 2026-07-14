@@ -15,7 +15,7 @@
              │   Use kimi-code:cloud for this conversation                  │
              │   One conversation · never auto-routed · not saved           │
              │                                                              │
-             │ esc cancel · enter cancel                                    │
+             │ esc cancel · enter cancel · ↑/↓ move                         │
              ╰──────────────────────────────────────────────────────────────╯
 
 

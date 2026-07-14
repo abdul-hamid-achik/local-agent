@@ -82,14 +82,20 @@ tasks:
       - go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 
   glyphrun-cli:
-    desc: Run fast CLI compatibility specs with Glyphrun
+    desc: Run release-critical CLI and external-read contracts with Glyphrun
     cmds:
-      - glyph run specs/cli_flags.yml specs/cli_skip_approvals.yml --format md --progress auto --parallel 1
+      - glyph run specs/cli_flags.yml specs/cli_skip_approvals.yml specs/tui_external_read.yml --format md --progress auto --parallel 1
+
+  glyphrun-contracts:
+    desc: Verify every committed Glyphrun contract hash
+    cmds:
+      - for: [specs/cli_flags.yml, specs/cli_skip_approvals.yml, specs/help.yml, specs/init.yml, specs/live_ollama_tool.yml, specs/logs_empty.yml, specs/tui_approval_always.yml, specs/tui_approval_denial.yml, specs/tui_composer_paste.yml, specs/tui_external_read.yml, specs/tui_goal_runtime.yml, specs/tui_help.yml, specs/tui_modes.yml, specs/tui_narrow.yml, specs/tui_ollama_inventory.yml, specs/tui_session_receipts.yml, specs/tui_smoke.yml, specs/version.yml]
+        cmd: glyph spec verify {{.ITEM}} --format md
 
   glyphrun:
     desc: Run terminal behavior specs with Glyphrun
     cmds:
-      - glyph run specs/version.yml specs/cli_flags.yml specs/cli_skip_approvals.yml specs/tui_smoke.yml specs/tui_modes.yml specs/tui_narrow.yml specs/tui_goal_runtime.yml specs/tui_ollama_inventory.yml specs/tui_composer_paste.yml specs/tui_approval_denial.yml specs/tui_approval_always.yml specs/tui_session_receipts.yml specs/help.yml specs/logs_empty.yml specs/init.yml specs/tui_help.yml --format md --progress auto --parallel 1
+      - glyph run specs/version.yml specs/cli_flags.yml specs/cli_skip_approvals.yml specs/tui_smoke.yml specs/tui_modes.yml specs/tui_narrow.yml specs/tui_goal_runtime.yml specs/tui_ollama_inventory.yml specs/tui_composer_paste.yml specs/tui_external_read.yml specs/tui_approval_denial.yml specs/tui_approval_always.yml specs/tui_session_receipts.yml specs/help.yml specs/logs_empty.yml specs/init.yml specs/tui_help.yml --format md --progress auto --parallel 1
 
   glyphrun-snapshots:
     desc: Refresh committed Glyphrun terminal snapshots

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -24,7 +23,6 @@ import (
 	executionpkg "github.com/abdul-hamid-achik/local-agent/internal/execution"
 	"github.com/abdul-hamid-achik/local-agent/internal/goaladvisor"
 	"github.com/abdul-hamid-achik/local-agent/internal/ice"
-	"github.com/abdul-hamid-achik/local-agent/internal/initcmd"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 	"github.com/abdul-hamid-achik/local-agent/internal/logging"
 	"github.com/abdul-hamid-achik/local-agent/internal/mcp"
@@ -49,24 +47,15 @@ func run() int {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "init":
-			force := false
-			for _, arg := range os.Args[2:] {
-				if arg == "--force" || arg == "-force" {
-					force = true
-				}
-			}
-			if err := initcmd.Run(".", initcmd.Options{Force: force}); err != nil {
-				fmt.Fprintf(os.Stderr, "init: %v\n", err)
-				return 1
-			}
-			fmt.Println("AGENTS.md created successfully.")
-			return 0
+			return handleInit(os.Args[2:])
 		case "logs":
 			return handleLogs(os.Args[2:])
 		case "goal":
 			return handleGoalCommand(os.Args[2:])
 		case "execution":
 			return handleExecutionCommand(os.Args[2:])
+		case "help":
+			return handleRootHelp(os.Args[2:], os.Args[0], os.Stdout, os.Stderr)
 		}
 	}
 
@@ -85,6 +74,7 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "unexpected argument %q; pass a headless request with -p/--prompt\n", options.arguments[0])
 		return 2
 	}
+	writeLegacyYoloWarning(os.Stderr, options.legacyYolo)
 
 	qwenRouterFlag := &options.qwenRouter
 	modelFlag := &options.model
@@ -801,55 +791,4 @@ func applyWorkspaceIgnore(ag *agent.Agent, workDir string) error {
 		ag.SetIgnoreContent(ignore.Raw())
 	}
 	return nil
-}
-
-// handleLogs implements the "logs" subcommand.
-// With -f it execs tail -f on the latest log file; otherwise it lists recent sessions.
-func handleLogs(args []string) int {
-	follow := false
-	for _, arg := range args {
-		if arg == "-f" {
-			follow = true
-		}
-	}
-
-	if follow {
-		latest, err := logging.LatestLogPath()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "logs: %v\n", err)
-			return 1
-		}
-		fmt.Fprintf(os.Stderr, "following %s\n", latest)
-		tailBin, err := exec.LookPath("tail")
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "logs: tail not found: %v\n", err)
-			return 1
-		}
-		// Replace the process with tail -f.
-		if err := syscall.Exec(tailBin, []string{"tail", "-f", latest}, os.Environ()); err != nil {
-			fmt.Fprintf(os.Stderr, "logs: exec tail: %v\n", err)
-			return 1
-		}
-		return 0
-	}
-
-	// List recent log sessions.
-	entries, err := logging.ListLogs(20)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "logs: %v\n", err)
-		return 1
-	}
-	if len(entries) == 0 {
-		fmt.Println("No log files found in", logging.LogDir())
-		return 0
-	}
-
-	fmt.Printf("Recent sessions (%s):\n\n", logging.LogDir())
-	for _, e := range entries {
-		name := filepath.Base(e.Path)
-		sizeKB := float64(e.Size) / 1024
-		fmt.Printf("  %-30s  %s  %6.1f KB\n", name, e.ModTime.Format("2006-01-02 15:04:05"), sizeKB)
-	}
-	fmt.Printf("\nTip: run `local-agent logs -f` to follow the latest log.\n")
-	return 0
 }

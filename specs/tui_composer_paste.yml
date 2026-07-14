@@ -1,4 +1,5 @@
 version: 1
+contractHash: sha256:f0324e1fe8da44ec72a04dc99e651953ede34007f5fc3c7b66a52db93b777752
 name: local_agent_tui_composer_paste
 
 intent: |

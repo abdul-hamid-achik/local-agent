@@ -1,4 +1,5 @@
 version: 1
+contractHash: sha256:ba330995539e41466e83903c8c92af759689f6242f46a5cfdc0f94550806ef42
 name: local_agent_version
 
 intent: |

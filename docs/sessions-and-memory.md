@@ -33,7 +33,7 @@ that workspace's most recently updated session. The database title is restored
 with the session, and an active session lease prevents two Local Agent processes
 from resuming it concurrently. Startup restore retains the normal cloud-consent
 and recovery checks but does not submit a prompt or automatically resume a
-durable goal. `--resume` cannot be combined with headless `-p`.
+durable goal. `--resume` cannot be combined with headless `-p` or `--prompt`.
 
 `/artifacts` (or `/artifact`) lists completed file.cheap save receipts from the
 active or restored transcript. The durable projection contains a host-derived

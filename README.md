@@ -30,7 +30,7 @@ A local-first coding agent for the terminal, built in Go with Charm and powered 
 
 ### Prerequisites
 
-- [Go 1.25+](https://go.dev/dl/)
+- [Go 1.25.12 or newer](https://go.dev/dl/)
 - [Ollama](https://ollama.com/) running on the same machine
 - [Task](https://taskfile.dev/) for repository development commands (optional)
 - MCPHub, Cortex, Obsidian, or other MCP servers only if you want those tools
@@ -74,7 +74,7 @@ local-agent --resume latest
 ```
 
 `--resume` accepts only a positive session ID or `latest` and cannot be combined
-with headless `-p`. Loading restores the saved database title and conversation
+with headless `-p`/`--prompt`. Loading restores the saved database title and conversation
 state after TUI startup; it does not submit a prompt or automatically continue a
 durable goal.
 
@@ -728,8 +728,9 @@ task dev                # go run ./cmd/local-agent
 task test               # go test ./...
 task lint               # golangci-lint run ./...
 task verify             # Go verification plus production website build
-task glyphrun-cli        # fast public CLI contracts
-task glyphrun           # terminal behavior specs
+task glyphrun-contracts  # verify every committed spec contract hash
+task glyphrun-cli        # fast release-critical terminal contracts
+task glyphrun           # complete deterministic terminal suite
 task glyphrun-snapshots # refresh intentional TUI snapshots
 task site               # local documentation development server
 task site:build         # production website build
@@ -744,11 +745,11 @@ go test ./internal/agent -run TestName
 go test -race ./...
 ```
 
-Glyphrun specs under `specs/` cover CLI help/version/init/log behavior,
-goal-recovery help and fail-closed read-only/apply validation, the normal-width
-launch, the 30×12 minimum, canonical command discovery, the durable-goal form
-and safe local fallback, full-width narrow-terminal settings/help flow, and
-clean quits.
+Glyphrun specs under `specs/` carry verified contract hashes and cover CLI
+help/version/init/log behavior, headless authority aliases, exact external-file
+read review, goal recovery, the normal-width launch, the 30×12 minimum,
+canonical command discovery, model and approval flows, saved-session receipts,
+and clean quits.
 
 With `qwen3.5:0.8b` installed in Ollama, run the opt-in live constrained-model/tool proof separately:
 

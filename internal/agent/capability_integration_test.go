@@ -66,11 +66,16 @@ type capabilityOutputRecorder struct {
 }
 
 type capabilityRegistryBackend struct {
-	exposed string
-	calls   int
+	exposed     string
+	resolutions map[string]string
+	calls       int
 }
 
-func (backend *capabilityRegistryBackend) ResolveToolName(string) (string, bool) {
+func (backend *capabilityRegistryBackend) ResolveToolName(name string) (string, bool) {
+	if backend.resolutions != nil {
+		exposed, ok := backend.resolutions[name]
+		return exposed, ok
+	}
 	return backend.exposed, backend.exposed != ""
 }
 
@@ -428,6 +433,38 @@ func TestCapabilityResolverRequiresTrustedLocalMCPHub(t *testing.T) {
 	}
 	if got := capabilityRoutingHostState(agent, backend, []mcp.ConnectionStatus{{Name: "gateway", Connected: true}}); got != CapabilityRoutingHostUnavailable {
 		t.Fatalf("explicit deny routing state = %v, want unavailable", got)
+	}
+}
+
+func TestCapabilityResolverFiltersTrustAndScopeBeforeAmbiguity(t *testing.T) {
+	const resolver = "mcphub_resolve_tool"
+	backend := &capabilityRegistryBackend{resolutions: map[string]string{
+		"trusted__" + resolver:   "trusted__" + resolver,
+		"untrusted__" + resolver: "untrusted__" + resolver,
+	}}
+	agent := New(nil, nil, 0)
+	agent.SetTrustedLocalMCPServers([]config.ServerConfig{
+		{Name: "trusted", Command: "/opt/homebrew/bin/mcphub", Transport: "stdio"},
+		{Name: "untrusted", Command: "mcphub-wrapper", Transport: "stdio"},
+	})
+	registry := scopedCapabilityRegistry{agent: agent, backend: backend}
+
+	if exposed, ok := registry.ResolveToolName(resolver); !ok || exposed != "trusted__"+resolver {
+		t.Fatalf("trusted resolver with untrusted name collision = %q, %v", exposed, ok)
+	}
+
+	backend.resolutions["second__"+resolver] = "second__" + resolver
+	agent.SetTrustedLocalMCPServers([]config.ServerConfig{
+		{Name: "trusted", Command: "/opt/homebrew/bin/mcphub", Transport: "stdio"},
+		{Name: "second", Command: "/usr/local/bin/mcphub", Transport: "stdio"},
+	})
+	if exposed, ok := registry.ResolveToolName(resolver); ok || exposed != "" {
+		t.Fatalf("multiple eligible trusted resolvers did not fail closed: %q, %v", exposed, ok)
+	}
+
+	agent.SetMCPServerScope([]string{"second"})
+	if exposed, ok := registry.ResolveToolName(resolver); !ok || exposed != "second__"+resolver {
+		t.Fatalf("scoped trusted resolver = %q, %v", exposed, ok)
 	}
 }
 

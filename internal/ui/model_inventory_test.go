@@ -436,6 +436,9 @@ func TestOllamaCloudConsentModalFitsSupportedTerminals(t *testing.T) {
 				t.Fatalf("%dx%d consent missing %q:\n%s", size.width, size.height, want, view)
 			}
 		}
+		if size.width >= 90 && !strings.Contains(ansi.Strip(view), "↑/↓ move") {
+			t.Fatalf("%dx%d consent omitted movement affordance:\n%s", size.width, size.height, view)
+		}
 		m.cloudConsentState.List.Select(1)
 		if selected := ansi.Strip(m.renderCloudConsent()); !strings.Contains(selected, "enter use") {
 			t.Fatalf("%dx%d consent did not describe the focused allow action:\n%s", size.width, size.height, selected)

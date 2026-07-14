@@ -1,4 +1,5 @@
 version: 1
+contractHash: sha256:378b7bf846d40ced5095db43594a23603610362f2a86a9245807bd60bc5763c9
 name: local_agent_tui_narrow
 
 intent: |

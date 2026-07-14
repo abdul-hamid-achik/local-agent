@@ -262,17 +262,38 @@ func capabilityRoutingHostState(agent *Agent, backend capabilityToolRegistry, st
 func (registry scopedCapabilityRegistry) ResolveToolName(remoteName string) (string, bool) {
 	agent := registry.agent
 	backend := registry.backend
-	if agent == nil || backend == nil {
+	if agent == nil || backend == nil || remoteName == "" || strings.TrimSpace(remoteName) != remoteName || strings.Contains(remoteName, "__") {
 		return "", false
 	}
-	exposed, ok := backend.ResolveToolName(remoteName)
-	namespace, operation, namespaced := strings.Cut(exposed, "__")
-	if !ok || !namespaced || strings.Contains(operation, "__") || operation != remoteName ||
-		agent.trustedMCPImplementation(namespace) != trustedMCPHub ||
-		!agent.allowsMCPTool(exposed) || agent.authorityPermissionDenied(exposed) {
-		return "", false
+
+	// Resolve exact routes only after projecting the host-trusted MCPHub
+	// namespaces. A different, untrusted server may legitimately expose the same
+	// protocol-level tool name; it must not make the trusted host integration
+	// globally ambiguous. Multiple eligible trusted MCPHub routes still fail
+	// closed instead of selecting one by map or configuration order.
+	agent.mu.RLock()
+	trustedNamespaces := make([]string, 0, len(agent.trustedMCP))
+	for namespace, implementation := range agent.trustedMCP {
+		if implementation == trustedMCPHub {
+			trustedNamespaces = append(trustedNamespaces, namespace)
+		}
 	}
-	return exposed, true
+	agent.mu.RUnlock()
+	sort.Strings(trustedNamespaces)
+
+	match := ""
+	for _, namespace := range trustedNamespaces {
+		candidate := namespace + "__" + remoteName
+		exposed, ok := backend.ResolveToolName(candidate)
+		if !ok || exposed != candidate || !agent.allowsMCPTool(candidate) || agent.authorityPermissionDenied(candidate) {
+			continue
+		}
+		if match != "" {
+			return "", false
+		}
+		match = candidate
+	}
+	return match, match != ""
 }
 
 func (registry scopedCapabilityRegistry) CallTool(ctx context.Context, exposedName string, args map[string]any) (*mcp.ToolResult, error) {

@@ -49,6 +49,7 @@ func (m *Model) buildHelpContent(innerW int) string {
 
 	inputShortcuts := []helpRow{
 		{"@file / @agent", "Insert file or agent mention text"},
+		{"~/… or /…", "Review temporary read-only access; MCP tools require separate approval"},
 		{"#skill", "Insert skill mention text"},
 		{"/cmd", "Run slash command"},
 		{"team / swarm / MoE", "Ask naturally for a read-only expert consultation when enabled"},

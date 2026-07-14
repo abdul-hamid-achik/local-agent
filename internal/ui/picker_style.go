@@ -75,7 +75,7 @@ func newPickerDelegate(isDark, compact bool) list.DefaultDelegate {
 	return delegate
 }
 
-func configurePickerList(l *list.Model, isDark bool) {
+func configurePickerList(l *list.Model, isDark bool, reducedMotion ...bool) {
 	palette := outputSemanticPalette(isDark)
 	l.Styles.TitleBar = lipgloss.NewStyle().Padding(0, 0, 1, 0)
 	l.Styles.Title = lipgloss.NewStyle().
@@ -106,6 +106,7 @@ func configurePickerList(l *list.Model, isDark bool) {
 	filterStyles.Focused.Prompt = lipgloss.NewStyle().Foreground(palette.Accent).Bold(true)
 	filterStyles.Blurred = filterStyles.Focused
 	filterStyles.Cursor.Color = palette.Accent
+	filterStyles.Cursor.Blink = len(reducedMotion) == 0 || !reducedMotion[0]
 	l.FilterInput.SetStyles(filterStyles)
 	l.FilterInput.Prompt = "Filter › "
 	l.FilterInput.Placeholder = "type to narrow"
@@ -116,31 +117,31 @@ func (m *Model) restylePickerOverlays() {
 		delegate := newPickerDelegate(m.isDark, state.Compact)
 		state.List.SetDelegate(delegate)
 		state.ItemHeight = delegate.Height()
-		configurePickerList(&state.List, m.isDark)
+		configurePickerList(&state.List, m.isDark, m.reducedMotion)
 		setSettingsTitleDensity(&state.List, state.Compact)
 	}
 	if state := m.agentPickerState; state != nil {
 		state.List.SetDelegate(newPickerDelegate(m.isDark, false))
-		configurePickerList(&state.List, m.isDark)
+		configurePickerList(&state.List, m.isDark, m.reducedMotion)
 	}
 	if state := m.modePickerState; state != nil {
 		state.List.SetDelegate(newPickerDelegate(m.isDark, false))
-		configurePickerList(&state.List, m.isDark)
+		configurePickerList(&state.List, m.isDark, m.reducedMotion)
 	}
 	if state := m.modelPickerState; state != nil {
 		delegate := newPickerDelegate(m.isDark, state.Compact)
 		state.List.SetDelegate(delegate)
 		state.ItemHeight = delegate.Height()
-		configurePickerList(&state.List, m.isDark)
+		configurePickerList(&state.List, m.isDark, m.reducedMotion)
 		setSettingsTitleDensity(&state.List, state.Compact)
 	}
 	if state := m.cloudConsentState; state != nil {
 		state.List.SetDelegate(newPickerDelegate(m.isDark, state.Compact))
-		configurePickerList(&state.List, m.isDark)
+		configurePickerList(&state.List, m.isDark, m.reducedMotion)
 	}
 	if state := m.sessionsPickerState; state != nil && state.ready() {
 		state.List.SetDelegate(newPickerDelegate(m.isDark, false))
-		configurePickerList(&state.List, m.isDark)
+		configurePickerList(&state.List, m.isDark, m.reducedMotion)
 	}
 	if state := m.completionState; state != nil {
 		state.Filter.SetStyles(semanticTextInputStyles(m.isDark, m.reducedMotion))

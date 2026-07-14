@@ -1,4 +1,5 @@
 version: 1
+contractHash: sha256:9da76cf2c4b04ec9044ede00e0debcc754caa47caa1c472ee6107e560ee2ac36
 name: local_agent_cli_flags
 
 intent: |
@@ -20,7 +21,7 @@ preconditions:
 steps:
   - wait:
       screen:
-        contains: "Usage of ./bin/local-agent"
+        contains: "./bin/local-agent <command> [options]"
       timeoutMs: 2000
   - wait:
       process:
@@ -34,14 +35,36 @@ outcomes:
       command:
         run: |
           output="$(./bin/local-agent -h 2>&1)"
-          printf '%s\n' "$output" | grep -qE -- '^  -p string$'
-          printf '%s\n' "$output" | grep -qE -- '^  -prompt string$'
-          printf '%s\n' "$output" | grep -qE -- '^  -auto$'
-          printf '%s\n' "$output" | grep -qE -- '^  -plan$'
-          printf '%s\n' "$output" | grep -qE -- '^  -skip-approvals$'
-          printf '%s\n' "$output" | grep -qE -- '^  -version$'
-          printf '%s\n' "$output" | grep -qE -- '^  -yolo$'
-          printf '%s\n' "$output" | grep -qE -- 'deprecated alias for --skip-approvals'
+          printf '%s\n' "$output" | grep -qF -- '  -p, --prompt <text>'
+          printf '%s\n' "$output" | grep -qF -- '      --auto'
+          printf '%s\n' "$output" | grep -qF -- '      --plan'
+          printf '%s\n' "$output" | grep -qF -- '      --skip-approvals'
+          printf '%s\n' "$output" | grep -qF -- '      --version'
+          printf '%s\n' "$output" | grep -qF -- '      --yolo'
+          printf '%s\n' "$output" | grep -qF -- 'Deprecated alias for --skip-approvals; does not enable --auto'
+          printf '%s\n' "$output" | grep -qF -- '  execution  Inspect and reconcile standalone execution effects'
+
+  - id: legacy_yolo_warns_without_changing_authority
+    description: invoking --yolo emits a migration warning and explicitly states that AUTO authority is separate
+    verify:
+      command:
+        run: |
+          set +e
+          output="$(./bin/local-agent --yolo --auto 2>&1)"
+          code=$?
+          set -e
+          test "$code" -eq 2
+          printf '%s\n' "$output" | grep -qF -- 'warning: --yolo is deprecated; use --skip-approvals'
+          printf '%s\n' "$output" | grep -qF -- 'does not enable --auto'
+
+  - id: root_help_command_is_discoverable
+    description: the explicit help command exits successfully and lists public subcommands without initializing the runtime
+    verify:
+      command:
+        run: |
+          output="$(./bin/local-agent help 2>&1)"
+          printf '%s\n' "$output" | grep -qF -- './bin/local-agent <command> [options]'
+          printf '%s\n' "$output" | grep -qF -- '  init       Create an AGENTS.md starter file'
 
   - id: prompt_alias_preserves_resume_exclusion
     description: --prompt is treated exactly like -p when validating the interactive-only resume contract

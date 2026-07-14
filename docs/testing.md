@@ -24,8 +24,8 @@ The verification task runs:
 - `govulncheck` v1.6.0.
 
 `task verify` covers the local Go and public-site gates. Glyphrun has separate
-fast and full tasks because it exercises the compiled program through a
-pseudo-terminal.
+contract, fast, and full tasks because it exercises the compiled program through
+a pseudo-terminal.
 
 ## Pinned versions
 
@@ -38,7 +38,7 @@ The repository currently fixes these versions or version ranges:
 | Website packages | VitePress 1.6.4 and Vue 3.5.39 |
 | CI linter | golangci-lint 2.12.2 |
 | Vulnerability scanner | govulncheck 1.6.0 in `Taskfile.yml` and CI |
-| CLI terminal contracts | Glyphrun 0.14.0 in CI, installed with Go 1.26.x; local-agent is then rebuilt with the Go 1.25.12 application toolchain |
+| Terminal contracts | Glyphrun 0.14.0 in CI, installed with Go 1.26.x; local-agent is then rebuilt with the Go 1.25.12 application toolchain |
 
 The local `golangci-lint` and `glyph` tasks use the executables on `PATH`; use
 the CI versions above when reproducing CI exactly.
@@ -50,7 +50,8 @@ The verification workflow has four independent jobs:
 - Linux Go verification: module diff, golangci-lint, vet, race tests, and
   govulncheck;
 - VitePress production build plus a test of links in the rendered site;
-- the fast Glyphrun CLI contracts from `task glyphrun-cli`;
+- all committed Glyphrun contract hashes plus the fast release-critical CLI and
+  external-read contracts from `task glyphrun-cli`;
 - a macOS build, `--version` smoke test, and Darwin-sensitive package tests.
 
 ## Terminal behavior
@@ -58,17 +59,22 @@ The verification workflow has four independent jobs:
 [Glyphrun](https://glyphrun.dev/) drives the compiled application through a real pseudo-terminal and verifies user-visible outcomes against a deterministic terminal emulator.
 
 ```bash
+task glyphrun-contracts
 task glyphrun-cli
 task glyphrun
 ```
 
-`task glyphrun-cli` runs the public flag and skip-approval compatibility specs
-and is the Glyphrun subset enforced in CI. `task glyphrun` adds the complete
-committed terminal suite.
+`task glyphrun-contracts` verifies that every committed spec still matches its
+reviewed intent and outcomes. `task glyphrun-cli` runs the public flag,
+skip-approval, and exact external-file read contracts and is the execution
+subset enforced in CI. `task glyphrun` adds the complete 17-scenario
+deterministic terminal suite; the live Ollama proof remains opt-in.
 
 Committed scenarios cover normal and minimum terminal sizes, authority modes,
-public CLI parsing, inline goal review and approvals, goal receipts, the Ollama
-inventory, composer paste behavior, sessions, and Help.
+public CLI parsing, explicit external-file review, inline goal review and
+approvals, goal receipts, the Ollama inventory, composer paste behavior,
+sessions, and Help. Their fixtures are Go programs or repository data, so the
+suite does not require system `sqlite3`, `rg`, or a `scripts/` directory.
 
 Refresh snapshots only for an intentional visual change:
 

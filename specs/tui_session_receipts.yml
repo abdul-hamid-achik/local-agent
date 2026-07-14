@@ -1,4 +1,5 @@
 version: 1
+contractHash: sha256:156f033818b065a2cc5bcb3efa1fd727b7967bf85bee25c032dbd409a43fa390
 name: local_agent_tui_session_receipts
 
 intent: |
@@ -25,12 +26,9 @@ preconditions:
     - run: "rm -rf .glyphrun/tmp/session-receipts-home .glyphrun/tmp/session-receipts-agents && mkdir -p .glyphrun/tmp/session-receipts-home/.config/local-agent .glyphrun/tmp/session-receipts-agents && printf '%s\\n' 'model:' '  auto_select: false' > .glyphrun/tmp/session-receipts-home/.config/local-agent/config.yaml && go build -o ./bin/local-agent ./cmd/local-agent"
       cwd: "."
       timeoutMs: 30000
-    - run: "sqlite3 .glyphrun/tmp/session-receipts-home/.config/local-agent/local-agent.db '.read internal/db/migrations/001_init.sql' '.read internal/db/migrations/002_checkpoints.sql' '.read internal/db/migrations/003_session_state.sql' '.read internal/db/migrations/004_execution_events.sql'"
+    - run: "go run ./specs/fixtures/session_receipts .glyphrun/tmp/session-receipts-home/.config/local-agent/local-agent.db '${projectRoot}'"
       cwd: "."
-      timeoutMs: 5000
-    - run: "sed 's|__PROJECT_ROOT__|${projectRoot}|g' specs/fixtures/session_receipts.sql | sqlite3 .glyphrun/tmp/session-receipts-home/.config/local-agent/local-agent.db"
-      cwd: "."
-      timeoutMs: 5000
+      timeoutMs: 30000
 
 steps:
   - wait:

@@ -15,7 +15,7 @@ Run Local Agent in a clean Git worktree, read approval requests, and review the 
 ## Requirements
 
 - macOS or Linux
-- [Go 1.25 or newer](https://go.dev/dl/)
+- [Go 1.25.12 or newer](https://go.dev/dl/)
 - [Ollama](https://ollama.com/) running on the same machine
 - A Git worktree for work you want the agent to inspect or change
 
@@ -81,7 +81,7 @@ local-agent --resume latest
 ```
 
 Startup resume is available only in the interactive TUI, so it cannot be
-combined with `-p`. It restores state without sending a prompt or automatically
+combined with `-p` or `--prompt`. It restores state without sending a prompt or automatically
 continuing a durable goal.
 
 ## Essential controls

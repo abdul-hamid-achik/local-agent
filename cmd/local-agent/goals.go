@@ -136,40 +136,70 @@ type goalRecoveryApplyResult struct {
 }
 
 func handleGoalCommand(args []string) int {
-	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
-		writeGoalUsage(os.Stdout)
+	return handleGoalCommandIO(args, os.Stdout, os.Stderr)
+}
+
+func handleGoalCommandIO(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		writeGoalUsage(stdout)
 		return 0
+	}
+	if args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
+		if len(args) > 1 {
+			goalFprintf(stderr, "goal: unexpected argument %q after %s\n", args[1], args[0])
+			return 2
+		}
+		writeGoalUsage(stdout)
+		return 0
+	}
+	command := args[0]
+	switch command {
+	case "list", "show", "pending", "recover":
+	default:
+		goalFprintf(stderr, "goal: unknown command %q\n", command)
+		writeGoalUsage(stderr)
+		return 2
+	}
+	if hasHelpFlag(args[1:]) {
+		helpArgs := []string{"--help"}
+		switch command {
+		case "list":
+			return handleGoalList(nil, "", helpArgs, stdout, stderr)
+		case "show":
+			return handleGoalShow(nil, "", helpArgs, stdout, stderr)
+		case "pending":
+			return handleGoalPending(nil, "", helpArgs, stdout, stderr)
+		case "recover":
+			return handleGoalRecover(nil, "", helpArgs, stdout, stderr)
+		}
 	}
 	workspace := currentWorkspace()
 	if workspace == "" {
-		goalFprintln(os.Stderr, "goal: workspace identity is unavailable")
+		goalFprintln(stderr, "goal: workspace identity is unavailable")
 		return 1
 	}
 	store, err := db.Open()
 	if err != nil {
-		goalFprintf(os.Stderr, "goal: open durable store: %v\n", err)
+		goalFprintf(stderr, "goal: open durable store: %v\n", err)
 		return 1
 	}
 	defer func() {
 		if err := store.Close(); err != nil {
-			goalFprintf(os.Stderr, "goal: close durable store: %v\n", err)
+			goalFprintf(stderr, "goal: close durable store: %v\n", err)
 		}
 	}()
 
-	switch args[0] {
+	switch command {
 	case "list":
-		return handleGoalList(store, workspace, args[1:], os.Stdout, os.Stderr)
+		return handleGoalList(store, workspace, args[1:], stdout, stderr)
 	case "show":
-		return handleGoalShow(store, workspace, args[1:], os.Stdout, os.Stderr)
+		return handleGoalShow(store, workspace, args[1:], stdout, stderr)
 	case "pending":
-		return handleGoalPending(store, workspace, args[1:], os.Stdout, os.Stderr)
+		return handleGoalPending(store, workspace, args[1:], stdout, stderr)
 	case "recover":
-		return handleGoalRecover(store, workspace, args[1:], os.Stdout, os.Stderr)
-	default:
-		goalFprintf(os.Stderr, "goal: unknown command %q\n", args[0])
-		writeGoalUsage(os.Stderr)
-		return 2
+		return handleGoalRecover(store, workspace, args[1:], stdout, stderr)
 	}
+	return 2
 }
 
 func handleGoalPending(store goalControlStore, workspace string, args []string, stdout, stderr io.Writer) int {
@@ -177,8 +207,8 @@ func handleGoalPending(store goalControlStore, workspace string, args []string, 
 	flags.SetOutput(stderr)
 	jsonOutput := flags.Bool("json", false, "print machine-readable JSON")
 	limit := flags.Int("limit", 20, "maximum pending items to print (1-100)")
-	if err := flags.Parse(args); err != nil {
-		return 2
+	if code, done := flagParseExitCode(flags.Parse(args)); done {
+		return code
 	}
 	if flags.NArg() != 1 {
 		_, _ = fmt.Fprintln(stderr, "goal pending: provide exactly one session ID from `local-agent goal list`")
@@ -221,10 +251,6 @@ func handleGoalPending(store goalControlStore, workspace string, args []string, 
 }
 
 func handleGoalRecover(store goalRecoveryStore, workspace string, args []string, stdout, stderr io.Writer) int {
-	if store == nil {
-		_, _ = fmt.Fprintln(stderr, "goal recover: durable store is unavailable")
-		return 1
-	}
 	normalized, err := normalizeGoalRecoverArgs(args)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "goal recover: %v\n", err)
@@ -240,8 +266,12 @@ func handleGoalRecover(store goalRecoveryStore, workspace string, args []string,
 	reference := flags.String("reference", "", "redacted evidence reference")
 	summary := flags.String("summary", "", "bounded inspection summary")
 	observedAtText := flags.String("observed-at", "", "evidence observation time in RFC3339")
-	if err := flags.Parse(normalized); err != nil {
-		return 2
+	if code, done := flagParseExitCode(flags.Parse(normalized)); done {
+		return code
+	}
+	if store == nil {
+		_, _ = fmt.Fprintln(stderr, "goal recover: durable store is unavailable")
+		return 1
 	}
 	if flags.NArg() != 1 {
 		_, _ = fmt.Fprintln(stderr, "goal recover: provide exactly one session ID")
@@ -542,8 +572,8 @@ func handleGoalList(store goalSessionStore, workspace string, args []string, std
 	flags.SetOutput(stderr)
 	jsonOutput := flags.Bool("json", false, "print machine-readable JSON")
 	limit := flags.Int("limit", 20, "maximum durable sessions to inspect (1-100)")
-	if err := flags.Parse(args); err != nil {
-		return 2
+	if code, done := flagParseExitCode(flags.Parse(args)); done {
+		return code
 	}
 	if flags.NArg() != 0 {
 		_, _ = fmt.Fprintln(stderr, "goal list: unexpected positional arguments")
@@ -576,8 +606,8 @@ func handleGoalShow(store goalSessionStore, workspace string, args []string, std
 	flags := flag.NewFlagSet("goal show", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	jsonOutput := flags.Bool("json", false, "print the complete validated snapshot as JSON")
-	if err := flags.Parse(args); err != nil {
-		return 2
+	if code, done := flagParseExitCode(flags.Parse(args)); done {
+		return code
 	}
 	if flags.NArg() != 1 {
 		_, _ = fmt.Fprintln(stderr, "goal show: provide exactly one session ID from `local-agent goal list`")

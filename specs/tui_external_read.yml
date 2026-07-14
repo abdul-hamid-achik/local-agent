@@ -1,0 +1,109 @@
+version: 1
+contractHash: sha256:80b1db7575de016c29e224466d9710391bc9cd2f4362a68e3ee0cb22f6191752
+name: local_agent_tui_external_read
+
+intent: |
+  a prompt can name one existing file outside the startup workspace, pause
+  before model dispatch for an exact read-only review, and resume only after
+  the user grants temporary access without exposing sibling files or write
+  authority.
+
+target:
+  cmd:
+    - "${projectRoot}/bin/local-agent"
+    - "--model"
+    - "qwen3.5:0.8b"
+  cwd: ".glyphrun/tmp/external-read-workspace"
+  env:
+    HOME: "${projectRoot}/.glyphrun/tmp/external-read-home"
+    LOCAL_AGENT_AGENTS_DIR: "${projectRoot}/.glyphrun/tmp/external-read-agents"
+    LOCAL_AGENT_REDUCED_MOTION: "1"
+    OLLAMA_HOST: "http://127.0.0.1:1"
+
+terminal:
+  cols: 90
+  rows: 28
+
+preconditions:
+  commands:
+    - run: "rm -rf .glyphrun/tmp/external-read-home .glyphrun/tmp/external-read-agents .glyphrun/tmp/external-read-workspace .glyphrun/tmp/external-read-evidence && mkdir -p .glyphrun/tmp/external-read-home/.config/local-agent .glyphrun/tmp/external-read-agents .glyphrun/tmp/external-read-workspace .glyphrun/tmp/external-read-evidence && printf '%s\\n' 'model:' '  auto_select: false' > .glyphrun/tmp/external-read-home/.config/local-agent/config.yaml && printf '%s\\n' 'deterministic video fixture' > .glyphrun/tmp/external-read-evidence/bug.mp4 && printf '%s\\n' 'must remain unavailable' > .glyphrun/tmp/external-read-evidence/sibling.txt && go build -o ./bin/local-agent ./cmd/local-agent"
+      cwd: "."
+      timeoutMs: 30000
+
+steps:
+  - wait:
+      screen:
+        contains: "Ask, @mention files, or type /help"
+      timeoutMs: 5000
+  - type: "Analyze \"${projectRoot}/.glyphrun/tmp/external-read-evidence/bug.mp4\" with vidtrace."
+  - press: "enter"
+  - wait:
+      screen:
+        contains: "Allow exact external read-only file?"
+      timeoutMs: 5000
+  - wait:
+      screen:
+        contains: "bug.mp4"
+      timeoutMs: 2000
+  - wait:
+      screen:
+        contains: "exact files never include siblings"
+      timeoutMs: 2000
+  - press: "y"
+  - wait:
+      screen:
+        contains: "Granted temporary read-only access to 1 explicit path."
+      timeoutMs: 5000
+  - wait:
+      screen:
+        contains: "with vidtrace."
+      timeoutMs: 5000
+  - wait:
+      screen:
+        contains: "Ask, @mention files, or type /help"
+      timeoutMs: 5000
+  - type: "/scope list"
+  - press: "enter"
+  - wait:
+      screen:
+        contains: "Temporary read-only grants"
+      timeoutMs: 3000
+  - wait:
+      screen:
+        contains: "exact file ·"
+      timeoutMs: 2000
+  - wait:
+      screen:
+        contains: "bug.mp4"
+      timeoutMs: 2000
+  - wait:
+      screen:
+        notContains: "sibling.txt"
+      timeoutMs: 2000
+  - press: "ctrl+c"
+  - wait:
+      process:
+        exitCode: 0
+      timeoutMs: 3000
+
+outcomes:
+  - id: explicit_external_file_requires_review
+    description: an existing file outside the startup workspace opens an exact-file read-only decision before the prompt is dispatched
+    verify:
+      screen:
+        contains: "exact file ·"
+  - id: approved_prompt_resumes
+    description: approval resumes the original video-analysis prompt and records one temporary explicit-path grant
+    verify:
+      screen:
+        contains: "with vidtrace."
+  - id: sibling_remains_unavailable
+    description: the scope omits the neighboring fixture and approval changes no files
+    verify:
+      command:
+        run: "test \"$(cat .glyphrun/tmp/external-read-evidence/sibling.txt)\" = 'must remain unavailable'"
+  - id: external_read_flow_quits_cleanly
+    description: ctrl+c exits cleanly after the exact-file grant is visible
+    verify:
+      process:
+        exitCode: 0

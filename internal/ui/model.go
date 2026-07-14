@@ -2306,7 +2306,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			m.sessionsPickerState = newSessionsMessageState(sessionsEmpty, "")
 			m.overlay = OverlaySessionsPicker
 		} else {
-			m.sessionsPickerState = newSessionsPickerState(msg.Sessions, m.width, m.height, m.isDark)
+			m.sessionsPickerState = newSessionsPickerState(msg.Sessions, m.width, m.height, m.isDark, m.reducedMotion)
 			m.overlay = OverlaySessionsPicker
 		}
 		m.input.Blur()
@@ -2903,8 +2903,6 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 
 	case command.ActionClear:
 		m.agent.ClearHistory()
-		m.capabilityRoute = nil
-		m.lastCapabilityRoute = nil
 		m.entries = nil
 		m.toolEntries = nil
 		m.resetConversationSession()
@@ -3334,9 +3332,24 @@ func (m *Model) resetConversationSession() {
 	m.sessionEvalTotal = 0
 	m.sessionPromptTotal = 0
 	m.sessionTurnCount = 0
+	m.resetTurnDiagnostics()
 	m.fileChanges = nil
 	m.toolsPending = 0
 	m.toolCardMgr.Cards = nil
+}
+
+// resetTurnDiagnostics clears presentation derived from the previous turn.
+// These values are never part of a saved session, so carrying them across a
+// new conversation or a session restore would mislabel the active transcript.
+func (m *Model) resetTurnDiagnostics() {
+	m.lastTurnDuration = 0
+	m.doneFlash = false
+	m.evalCount = 0
+	m.promptTokens = 0
+	m.turnEvalTotal = 0
+	m.turnPromptTotal = 0
+	m.capabilityRoute = nil
+	m.lastCapabilityRoute = nil
 }
 
 // ReleaseExecutionSessionLease releases the cross-process ownership held by
@@ -4196,7 +4209,7 @@ func (m *Model) openModelPicker() {
 		return
 	}
 	if len(m.ollamaModels) > 0 {
-		m.modelPickerState = newOllamaModelPickerState(m.ollamaModels, m.model, m.width, m.height, m.isDark)
+		m.modelPickerState = newOllamaModelPickerState(m.ollamaModels, m.model, m.width, m.height, m.isDark, m.reducedMotion)
 		if m.ollamaVersion != "" {
 			m.modelPickerState.List.Title = ollamaModelPickerTitle(m.ollamaVersion)
 		}
@@ -4205,7 +4218,7 @@ func (m *Model) openModelPicker() {
 		return
 	}
 	if m.ollamaInventoryAttempted {
-		m.modelPickerState = newOllamaModelPickerState(nil, m.model, m.width, m.height, m.isDark)
+		m.modelPickerState = newOllamaModelPickerState(nil, m.model, m.width, m.height, m.isDark, m.reducedMotion)
 		if m.ollamaVersion != "" {
 			m.modelPickerState.List.Title = ollamaModelPickerTitle(m.ollamaVersion)
 		}
@@ -4235,7 +4248,7 @@ func (m *Model) openModelPicker() {
 		return
 	}
 
-	m.modelPickerState = newModelPickerState(models, m.model, m.width, m.height, m.isDark)
+	m.modelPickerState = newModelPickerState(models, m.model, m.width, m.height, m.isDark, m.reducedMotion)
 	m.overlay = OverlayModelPicker
 	m.input.Blur()
 }

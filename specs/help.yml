@@ -1,4 +1,5 @@
 version: 1
+contractHash: sha256:64e04518c1dfb4c28c3d671c152bf46b72397b7a1c667a6622caff81840bf54c
 name: local_agent_help
 
 intent: |
@@ -17,7 +18,7 @@ preconditions:
 steps:
   - wait:
       screen:
-        contains: "Usage of ./bin/local-agent"
+        contains: "./bin/local-agent <command> [options]"
       timeoutMs: 2000
   - wait:
       process:
@@ -29,27 +30,27 @@ outcomes:
     description: the help output shows usage text
     verify:
       screen:
-        contains: "Usage of ./bin/local-agent"
+        contains: "./bin/local-agent <command> [options]"
   - id: prompt_flag_documented
     description: the public non-interactive prompt flag is documented
     verify:
       screen:
-        contains: "run one non-interactive prompt"
+        contains: "Run one non-interactive prompt"
   - id: model_flag_documented
     description: the model override flag is documented
     verify:
       screen:
-        contains: "override Ollama model"
+        contains: "Override the Ollama model"
   - id: goal_recovery_help_is_explicit
     description: goal help documents dry-run, complete evidence apply, no-resume behavior, and the absence of a force override
     verify:
       command:
         run: |
           output="$(HOME='${projectRoot}/.glyphrun/tmp/goal-recover-home' ./bin/local-agent goal help)"
-          printf '%s\n' "$output" | rg -q 'goal recover \[--json\] <session-id>'
-          printf '%s\n' "$output" | rg -q 'goal recover --apply --item ID.*--observed-at RFC3339'
-          printf '%s\n' "$output" | rg -q 'never resumes execution'
-          printf '%s\n' "$output" | rg -q 'no force override'
+          printf '%s\n' "$output" | grep -q 'goal recover \[--json\] <session-id>'
+          printf '%s\n' "$output" | grep -q 'goal recover --apply --item ID.*--observed-at RFC3339'
+          printf '%s\n' "$output" | grep -q 'never resumes execution'
+          printf '%s\n' "$output" | grep -q 'no force override'
   - id: goal_recovery_dry_run_does_not_create_authority
     description: a default recovery attempt on an absent session fails without creating group, item, or resolution authority
     verify:
@@ -60,9 +61,9 @@ outcomes:
           code=$?
           set -e
           test "$code" -eq 1
-          printf '%s\n' "$output" | rg -q 'goal recover: inspect durable recovery group'
+          printf '%s\n' "$output" | grep -q 'goal recover: inspect durable recovery group'
           db='${projectRoot}/.glyphrun/tmp/goal-recover-home/.config/local-agent/local-agent.db'
-          test "$(sqlite3 "$db" 'SELECT (SELECT COUNT(*) FROM reconciliation_groups) + (SELECT COUNT(*) FROM reconciliation_group_resolutions) + (SELECT COUNT(*) FROM control_items) + (SELECT COUNT(*) FROM control_resolutions);')" = '0'
+          go run ./specs/fixtures/assert_empty_recovery "$db"
   - id: incomplete_goal_recovery_apply_is_rejected_before_mutation
     description: apply requires the complete evidence form before lease or authority mutation
     verify:
@@ -73,9 +74,9 @@ outcomes:
           code=$?
           set -e
           test "$code" -eq 2
-          printf '%s\n' "$output" | rg -q -- '--apply requires non-empty --item'
+          printf '%s\n' "$output" | grep -q -- '--apply requires non-empty --item'
           db='${projectRoot}/.glyphrun/tmp/goal-recover-home/.config/local-agent/local-agent.db'
-          test "$(sqlite3 "$db" 'SELECT (SELECT COUNT(*) FROM reconciliation_groups) + (SELECT COUNT(*) FROM reconciliation_group_resolutions) + (SELECT COUNT(*) FROM control_items) + (SELECT COUNT(*) FROM control_resolutions);')" = '0'
+          go run ./specs/fixtures/assert_empty_recovery "$db"
   - id: exits_zero
     description: help exits successfully
     verify:

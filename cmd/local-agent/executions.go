@@ -53,33 +53,46 @@ type executionRecoveryApplyView struct {
 }
 
 func handleExecutionCommand(args []string) int {
-	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
-		writeExecutionUsage(os.Stdout)
+	return handleExecutionCommandIO(args, os.Stdout, os.Stderr)
+}
+
+func handleExecutionCommandIO(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		writeExecutionUsage(stdout)
 		return 0
+	}
+	if args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
+		if len(args) > 1 {
+			executionFprintf(stderr, "execution: unexpected argument %q after %s\n", args[1], args[0])
+			return 2
+		}
+		writeExecutionUsage(stdout)
+		return 0
+	}
+	if args[0] != "recover" {
+		executionFprintf(stderr, "execution: unknown command %q\n", args[0])
+		writeExecutionUsage(stderr)
+		return 2
+	}
+	if hasHelpFlag(args[1:]) {
+		return handleExecutionRecover(nil, "", []string{"--help"}, stdout, stderr)
 	}
 	workspace := currentWorkspace()
 	if workspace == "" {
-		executionFprintln(os.Stderr, "execution: workspace identity is unavailable")
+		executionFprintln(stderr, "execution: workspace identity is unavailable")
 		return 1
 	}
 	store, err := db.Open()
 	if err != nil {
-		executionFprintf(os.Stderr, "execution: open durable store: %v\n", err)
+		executionFprintf(stderr, "execution: open durable store: %v\n", err)
 		return 1
 	}
 	defer func() {
 		if err := store.Close(); err != nil {
-			executionFprintf(os.Stderr, "execution: close durable store: %v\n", err)
+			executionFprintf(stderr, "execution: close durable store: %v\n", err)
 		}
 	}()
-	switch args[0] {
-	case "recover":
-		return handleExecutionRecover(store, workspace, args[1:], os.Stdout, os.Stderr)
-	default:
-		executionFprintf(os.Stderr, "execution: unknown command %q\n", args[0])
-		writeExecutionUsage(os.Stderr)
-		return 2
-	}
+	return handleExecutionRecover(store, workspace, args[1:], stdout, stderr)
 }
 
 func handleExecutionRecover(store executionRecoveryStore, workspace string, args []string, stdout, stderr io.Writer) int {
@@ -99,8 +112,8 @@ func handleExecutionRecover(store executionRecoveryStore, workspace string, args
 		executionFprintf(stderr, "execution recover: %v\n", err)
 		return 2
 	}
-	if err := flags.Parse(normalized); err != nil {
-		return 2
+	if code, done := flagParseExitCode(flags.Parse(normalized)); done {
+		return code
 	}
 	if flags.NArg() != 2 {
 		executionFprintln(stderr, "execution recover: provide SESSION_ID and EXECUTION_ID")

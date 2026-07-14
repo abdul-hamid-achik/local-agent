@@ -16,12 +16,12 @@
 ─────────────────────────────────────────────────────────────────────────────────────────
   ◇ Permission · write · NORMAL
   Action     Write 19 B
-  Target     /Users/abdulachik/projects/local-agent/.glyphrun/tmp/approval-workdir/approv
-             al-probe.txt
+  Target     <temp>/local-agent-glyphrun-approval-workdir/approval-probe.txt
   Scope      Identical request only · current Agent session
   Request    80109752db71
 
   Proposed change
   +must not be written
+
   › n deny ·   y once ·   s identical request · current session
   esc cancel · enter select · ↑/↓/j/k move · d arguments · pgup/dn scroll

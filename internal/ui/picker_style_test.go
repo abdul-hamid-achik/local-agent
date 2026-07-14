@@ -95,6 +95,15 @@ func TestTransientInputReducedMotionSurvivesThemeChange(t *testing.T) {
 	m.completionState = newCompletionState(
 		"command", []Completion{{Label: "/help"}}, false, m.isDark, m.reducedMotion,
 	)
+	m.modelPickerState = newOllamaModelPickerState([]OllamaModelDescriptor{{
+		Name: "local-code", Source: OllamaModelLocal, Selectable: true, Fit: true,
+	}}, "local-code", m.width, m.height, m.isDark, m.reducedMotion)
+	m.sessionsPickerState = newSessionsPickerState([]SessionListItem{{
+		ID: 1, Title: "Reduced motion", CreatedAt: "just now",
+	}}, m.width, m.height, m.isDark, m.reducedMotion)
+	if m.modelPickerState.List.FilterInput.Styles().Cursor.Blink || m.sessionsPickerState.List.FilterInput.Styles().Cursor.Blink {
+		t.Fatal("reduced motion left a picker filter cursor blinking")
+	}
 
 	updated, _ := m.Update(tea.BackgroundColorMsg{Color: color.White})
 	m = updated.(*Model)
@@ -105,6 +114,9 @@ func TestTransientInputReducedMotionSurvivesThemeChange(t *testing.T) {
 		if field.Kind == "text" && field.Input.Styles().Cursor.Blink {
 			t.Fatalf("theme change re-enabled the reduced-motion Plan cursor for %q", field.Label)
 		}
+	}
+	if m.modelPickerState.List.FilterInput.Styles().Cursor.Blink || m.sessionsPickerState.List.FilterInput.Styles().Cursor.Blink {
+		t.Fatal("theme change re-enabled a reduced-motion picker filter cursor")
 	}
 }
 

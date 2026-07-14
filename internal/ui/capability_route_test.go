@@ -3,12 +3,47 @@ package ui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/lipgloss/v2"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/agent"
 	"github.com/abdul-hamid-achik/local-agent/internal/goaladvisor"
 )
+
+func TestNewConversationClearsPriorTurnDiagnostics(t *testing.T) {
+	m := newTestModel(t)
+	route := agent.CapabilityRoute{
+		Phase: "research", Status: agent.CapabilityRouteResolved,
+		Server: "hitspec", Tool: "hitspec_capture_webpage",
+	}
+	m.capabilityRoute = &route
+	m.lastCapabilityRoute = &route
+	m.promptTokens = 4_096
+	m.evalCount = 256
+	m.turnPromptTotal = 4_096
+	m.turnEvalTotal = 256
+	m.doneFlash = true
+	m.lastTurnDuration = 3 * time.Second
+
+	updated, _ := m.Update(ctrlKey('n'))
+	m = updated.(*Model)
+
+	if m.capabilityRoute != nil || m.lastCapabilityRoute != nil {
+		t.Fatalf("new conversation retained contextual route: active=%#v last=%#v", m.capabilityRoute, m.lastCapabilityRoute)
+	}
+	if m.promptTokens != 0 || m.evalCount != 0 || m.turnPromptTotal != 0 || m.turnEvalTotal != 0 {
+		t.Fatalf("new conversation retained token diagnostics: prompt=%d eval=%d turn_prompt=%d turn_eval=%d",
+			m.promptTokens, m.evalCount, m.turnPromptTotal, m.turnEvalTotal)
+	}
+	if m.doneFlash || m.lastTurnDuration != 0 {
+		t.Fatalf("new conversation retained completion receipt: done=%v duration=%s", m.doneFlash, m.lastTurnDuration)
+	}
+	runtimeStatus := m.buildRuntimeStatusContent(58)
+	if strings.Contains(runtimeStatus, "Last MCP route") || strings.Contains(runtimeStatus, "~4.1k") {
+		t.Fatalf("new conversation rendered stale runtime diagnostics:\n%s", runtimeStatus)
+	}
+}
 
 func TestCapabilityRouteIsEphemeralAdvisoryFooterState(t *testing.T) {
 	m := newTestModel(t)
