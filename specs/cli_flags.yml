@@ -34,14 +34,14 @@ outcomes:
       command:
         run: |
           output="$(./bin/local-agent -h 2>&1)"
-          printf '%s\n' "$output" | rg -q -- '^  -p string$'
-          printf '%s\n' "$output" | rg -q -- '^  -prompt string$'
-          printf '%s\n' "$output" | rg -q -- '^  -auto$'
-          printf '%s\n' "$output" | rg -q -- '^  -plan$'
-          printf '%s\n' "$output" | rg -q -- '^  -skip-approvals$'
-          printf '%s\n' "$output" | rg -q -- '^  -version$'
-          printf '%s\n' "$output" | rg -q -- '^  -yolo$'
-          printf '%s\n' "$output" | rg -q -- 'deprecated alias for --skip-approvals'
+          printf '%s\n' "$output" | grep -qE -- '^  -p string$'
+          printf '%s\n' "$output" | grep -qE -- '^  -prompt string$'
+          printf '%s\n' "$output" | grep -qE -- '^  -auto$'
+          printf '%s\n' "$output" | grep -qE -- '^  -plan$'
+          printf '%s\n' "$output" | grep -qE -- '^  -skip-approvals$'
+          printf '%s\n' "$output" | grep -qE -- '^  -version$'
+          printf '%s\n' "$output" | grep -qE -- '^  -yolo$'
+          printf '%s\n' "$output" | grep -qE -- 'deprecated alias for --skip-approvals'
 
   - id: prompt_alias_preserves_resume_exclusion
     description: --prompt is treated exactly like -p when validating the interactive-only resume contract
@@ -53,9 +53,9 @@ outcomes:
           code=$?
           set -e
           test "$code" -eq 2
-          printf '%s\n' "$output" | rg -q -- '--resume'
-          printf '%s\n' "$output" | rg -q -- '-p'
-          printf '%s\n' "$output" | rg -q -- '--prompt'
+          printf '%s\n' "$output" | grep -qE -- '--resume'
+          printf '%s\n' "$output" | grep -qE -- '-p'
+          printf '%s\n' "$output" | grep -qE -- '--prompt'
 
   - id: version_spelling_is_preserved_as_a_prompt_value
     description: --version consumed as the value of --prompt is not reinterpreted as the root version flag
@@ -67,8 +67,8 @@ outcomes:
           code=$?
           set -e
           test "$code" -eq 2
-          printf '%s\n' "$output" | rg -q -- '--auto and --plan are mutually exclusive'
-          ! printf '%s\n' "$output" | rg -qx -- 'dev'
+          printf '%s\n' "$output" | grep -qE -- '--auto and --plan are mutually exclusive'
+          ! printf '%s\n' "$output" | grep -qxE -- 'dev'
 
   - id: explicit_empty_prompt_values_are_rejected
     description: both prompt aliases reject an explicitly empty equals-form value before config or network access
@@ -83,8 +83,8 @@ outcomes:
           set -e
           test "$long_code" -eq 2
           test "$short_code" -eq 2
-          printf '%s\n' "$long_output" | rg -q -- 'requires a non-empty value'
-          printf '%s\n' "$short_output" | rg -q -- 'requires a non-empty value'
+          printf '%s\n' "$long_output" | grep -qE -- 'requires a non-empty value'
+          printf '%s\n' "$short_output" | grep -qE -- 'requires a non-empty value'
 
   - id: auto_requires_a_headless_prompt
     description: --auto fails before config or network access when neither -p nor --prompt is present
@@ -96,8 +96,8 @@ outcomes:
           code=$?
           set -e
           test "$code" -eq 2
-          printf '%s\n' "$output" | rg -q -- '-p'
-          printf '%s\n' "$output" | rg -q -- '--prompt'
+          printf '%s\n' "$output" | grep -qE -- '-p'
+          printf '%s\n' "$output" | grep -qE -- '--prompt'
 
   - id: plan_requires_a_headless_prompt
     description: --plan fails before config or network access when neither -p nor --prompt is present
@@ -109,8 +109,8 @@ outcomes:
           code=$?
           set -e
           test "$code" -eq 2
-          printf '%s\n' "$output" | rg -q -- '-p'
-          printf '%s\n' "$output" | rg -q -- '--prompt'
+          printf '%s\n' "$output" | grep -qE -- '-p'
+          printf '%s\n' "$output" | grep -qE -- '--prompt'
 
   - id: auto_and_plan_are_mutually_exclusive
     description: contradictory authority shortcuts fail deterministically before config or network access
@@ -122,7 +122,7 @@ outcomes:
           code=$?
           set -e
           test "$code" -eq 2
-          printf '%s\n' "$output" | rg -q -- '--auto and --plan are mutually exclusive'
+          printf '%s\n' "$output" | grep -qE -- '--auto and --plan are mutually exclusive'
 
   - id: shortcuts_reject_conflicting_explicit_modes
     description: each shortcut rejects an explicitly contradictory --mode value
@@ -137,8 +137,8 @@ outcomes:
           set -e
           test "$auto_code" -eq 2
           test "$plan_code" -eq 2
-          printf '%s\n' "$auto_output" | rg -q -- '--auto conflicts with --mode "plan"'
-          printf '%s\n' "$plan_output" | rg -q -- '--plan conflicts with --mode "auto"'
+          printf '%s\n' "$auto_output" | grep -qE -- '--auto conflicts with --mode "plan"'
+          printf '%s\n' "$plan_output" | grep -qE -- '--plan conflicts with --mode "auto"'
 
   - id: flag_like_values_follow_cli_token_order
     description: string flags consume the following token even when it looks like another public flag
@@ -156,9 +156,9 @@ outcomes:
           test "$mode_code" -eq 2
           test "$prompt_code" -eq 2
           test "$model_code" -eq 2
-          printf '%s\n' "$mode_output" | rg -q -- 'unknown authority "--auto"'
-          printf '%s\n' "$prompt_output" | rg -q -- '--auto conflicts with --mode "plan"'
-          printf '%s\n' "$model_output" | rg -q -- 'require a headless prompt via -p/--prompt'
+          printf '%s\n' "$mode_output" | grep -qE -- 'unknown authority "--auto"'
+          printf '%s\n' "$prompt_output" | grep -qE -- '--auto conflicts with --mode "plan"'
+          printf '%s\n' "$model_output" | grep -qE -- 'require a headless prompt via -p/--prompt'
 
   - id: shortcuts_accept_matching_explicit_modes
     description: matching shortcut and --mode combinations pass conflict validation and reach the prompt requirement
@@ -173,10 +173,10 @@ outcomes:
           set -e
           test "$auto_code" -eq 2
           test "$plan_code" -eq 2
-          printf '%s\n' "$auto_output" | rg -q -- '--prompt'
-          printf '%s\n' "$plan_output" | rg -q -- '--prompt'
-          ! printf '%s\n' "$auto_output" | rg -q -- 'conflicts with --mode'
-          ! printf '%s\n' "$plan_output" | rg -q -- 'conflicts with --mode'
+          printf '%s\n' "$auto_output" | grep -qE -- '--prompt'
+          printf '%s\n' "$plan_output" | grep -qE -- '--prompt'
+          ! printf '%s\n' "$auto_output" | grep -qE -- 'conflicts with --mode'
+          ! printf '%s\n' "$plan_output" | grep -qE -- 'conflicts with --mode'
 
   - id: help_exits_zero
     description: help remains a successful side-effect-free command

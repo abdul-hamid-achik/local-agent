@@ -82,8 +82,10 @@ jobs:
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: '1.26.x'
-          cache: true
-          cache-dependency-path: go.sum
+          # This toolchain only installs Glyphrun. The application setup below
+          # owns the module cache so two Go versions do not restore over the
+          # same populated GOPATH in one job.
+          cache: false
 
       - name: Install pinned Glyphrun
         run: go install github.com/abdul-hamid-achik/glyphrun/cmd/glyph@v0.14.0
