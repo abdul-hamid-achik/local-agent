@@ -8,7 +8,7 @@
 
 
                                        LOCAL AGENT
-                      Local-first · Ollama · tool effects ask first
+                     Local-first · Ollama · approval prompts enabled
                ╭──────────────────────────────────────────────────────────╮
                │ Add Ollama model                                         │
                │ ! model download cancelled                               │

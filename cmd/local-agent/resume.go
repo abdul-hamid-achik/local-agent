@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/ui"
 )
@@ -38,23 +37,9 @@ func (f resumeFlagValue) selector() (ui.SessionResumeSelector, bool, error) {
 	return selector, true, nil
 }
 
-func commandLineFlagProvided(args []string, name string) bool {
-	short := "-" + name
-	long := "--" + name
-	for _, argument := range args {
-		if argument == "--" {
-			return false
-		}
-		if argument == short || argument == long || strings.HasPrefix(argument, short+"=") || strings.HasPrefix(argument, long+"=") {
-			return true
-		}
-	}
-	return false
-}
-
 func validateResumeInvocation(resumeRequested, promptFlagProvided bool) error {
 	if resumeRequested && promptFlagProvided {
-		return fmt.Errorf("--resume is available only for the interactive TUI and cannot be combined with -p")
+		return fmt.Errorf("--resume is available only for the interactive TUI and cannot be combined with -p/--prompt")
 	}
 	return nil
 }

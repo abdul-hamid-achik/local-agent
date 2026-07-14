@@ -45,14 +45,3 @@ func TestValidateResumeInvocationRejectsHeadlessPrompt(t *testing.T) {
 		}
 	}
 }
-
-func TestCommandLineFlagProvided(t *testing.T) {
-	for _, args := range [][]string{{"-p", "prompt"}, {"--p=prompt"}, {"--resume", "latest", "-p="}} {
-		if !commandLineFlagProvided(args, "p") {
-			t.Fatalf("-p not detected in %#v", args)
-		}
-	}
-	if commandLineFlagProvided([]string{"--resume", "latest", "--", "-p", "ignored"}, "p") {
-		t.Fatal("flag parser scanned past --")
-	}
-}

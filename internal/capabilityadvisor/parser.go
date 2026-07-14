@@ -13,6 +13,7 @@ import (
 )
 
 const (
+	resolverContractVersion    = 1
 	maxResolverResultBytes     = 64 * 1024
 	maxIdentifierBytes         = 256
 	maxRequiredFields          = 48
@@ -23,9 +24,12 @@ const (
 
 type resolverEnvelope struct {
 	Error                     json.RawMessage `json:"error"`
+	ContractVersion           *int            `json:"contract_version"`
+	Status                    *string         `json:"status"`
 	Recommendation            json.RawMessage `json:"recommendation"`
 	Ambiguous                 *bool           `json:"ambiguous"`
 	Alternatives              json.RawMessage `json:"alternatives"`
+	CatalogRevision           *string         `json:"catalog_revision"`
 	ArgumentTemplateTruncated *bool           `json:"argument_template_truncated"`
 	AlternativesTruncated     *bool           `json:"alternatives_truncated"`
 }
@@ -43,48 +47,67 @@ type alternativeWire struct {
 	Namespaced string `json:"namespaced"`
 }
 
-func parseResolverResult(result *mcp.ToolResult) (*Hint, bool, error) {
+func parseResolverResult(result *mcp.ToolResult) (*Hint, bool, string, error) {
 	document, err := resolverDocument(result)
 	if err != nil {
-		return nil, false, err
+		return nil, false, "", err
 	}
 	var envelope resolverEnvelope
 	if err := json.Unmarshal(document, &envelope); err != nil {
-		return nil, false, fmt.Errorf("decode resolver response: %w", err)
+		return nil, false, "", fmt.Errorf("decode resolver response: %w", err)
+	}
+	if envelope.ContractVersion == nil || *envelope.ContractVersion != resolverContractVersion {
+		return nil, false, "", errors.New("resolver contract version is unsupported")
+	}
+	if envelope.Status == nil {
+		return nil, false, "", errors.New("resolver response is missing status")
+	}
+	if envelope.CatalogRevision == nil {
+		return nil, false, "", errors.New("resolver response is missing catalog revision")
+	}
+	catalogRevision, err := safeCatalogRevision(*envelope.CatalogRevision)
+	if err != nil || catalogRevision == "" {
+		return nil, false, "", errors.New("resolver returned an invalid catalog revision")
 	}
 	if hasJSONValue(envelope.Error) {
-		return nil, false, errors.New("resolver reported an error")
+		return nil, false, "", errors.New("resolver reported an error")
 	}
 	if envelope.Ambiguous == nil || len(bytes.TrimSpace(envelope.Recommendation)) == 0 ||
 		len(bytes.TrimSpace(envelope.Alternatives)) == 0 {
-		return nil, false, errors.New("resolver response is missing control fields")
+		return nil, false, "", errors.New("resolver response is missing control fields")
 	}
 
 	alternatives, err := parseAlternatives(envelope.Alternatives)
 	if err != nil {
-		return nil, false, err
+		return nil, false, "", err
 	}
 	recommendation := bytes.TrimSpace(envelope.Recommendation)
 	if bytes.Equal(recommendation, []byte("null")) {
 		if *envelope.Ambiguous || len(alternatives) != 0 {
-			return nil, false, errors.New("no-match response has inconsistent alternatives")
+			return nil, false, "", errors.New("no-match response has inconsistent alternatives")
 		}
-		return nil, false, nil
+		if err := validateResolverStatus(envelope.Status, false, false); err != nil {
+			return nil, false, "", err
+		}
+		return nil, false, catalogRevision, nil
 	}
 
 	var wire recommendationWire
 	if err := json.Unmarshal(recommendation, &wire); err != nil {
-		return nil, false, fmt.Errorf("decode resolver recommendation: %w", err)
+		return nil, false, "", fmt.Errorf("decode resolver recommendation: %w", err)
 	}
 	if err := validateRecommendationIdentity(wire); err != nil {
-		return nil, false, err
+		return nil, false, "", err
 	}
 	required, err := parseRequiredFields(wire.RequiredFields)
 	if err != nil {
-		return nil, false, err
+		return nil, false, "", err
 	}
 	if err := validateAlternativeSet(wire.Namespaced, alternatives); err != nil {
-		return nil, false, err
+		return nil, false, "", err
+	}
+	if err := validateResolverStatus(envelope.Status, true, *envelope.Ambiguous); err != nil {
+		return nil, false, "", err
 	}
 
 	hint := &Hint{
@@ -98,7 +121,24 @@ func parseResolverResult(result *mcp.ToolResult) (*Hint, bool, error) {
 		ArgumentTemplateTruncated: boolValue(wire.ArgumentTemplateTruncated) || boolValue(envelope.ArgumentTemplateTruncated),
 		AlternativesTruncated:     boolValue(envelope.AlternativesTruncated),
 	}
-	return hint, true, nil
+	return hint, true, catalogRevision, nil
+}
+
+// validateResolverStatus accepts MCPHub's versioned confidence conclusion.
+// Scores, confidence values, reason prose, and matched terms remain outside
+// the allowlisted host projection. parseResolverResult requires status before
+// calling this helper.
+func validateResolverStatus(status *string, matched, ambiguous bool) error {
+	want := "confident"
+	if !matched {
+		want = "no_match"
+	} else if ambiguous {
+		want = "ambiguous"
+	}
+	if *status != want {
+		return errors.New("resolver status is inconsistent with its recommendation")
+	}
+	return nil
 }
 
 func resolverDocument(result *mcp.ToolResult) ([]byte, error) {

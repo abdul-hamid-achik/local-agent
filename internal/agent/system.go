@@ -96,6 +96,14 @@ func buildSystemPromptForModelBudgetContextWithSkillCatalog(ctx context.Context,
 }
 
 func buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadRoots(ctx context.Context, modePrefix string, tools []llm.ToolDef, skillContent, skillCatalog, loadedContext string, memStore *memory.Store, iceContext, workDir, ignoreContent string, modelName string, numCtx int, readRoots []string) string {
+	grants := make([]ReadGrant, 0, len(readRoots))
+	for _, root := range readRoots {
+		grants = append(grants, ReadGrant{Path: root, Kind: ReadGrantDirectory})
+	}
+	return buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadGrants(ctx, modePrefix, tools, skillContent, skillCatalog, loadedContext, memStore, iceContext, workDir, ignoreContent, modelName, numCtx, grants)
+}
+
+func buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadGrants(ctx context.Context, modePrefix string, tools []llm.ToolDef, skillContent, skillCatalog, loadedContext string, memStore *memory.Store, iceContext, workDir, ignoreContent string, modelName string, numCtx int, readGrants []ReadGrant) string {
 	useSmallModel := isSmallModel(modelName)
 	if budget := optionalPromptBudget(numCtx); budget > 0 {
 		loadedContextShare := 50
@@ -124,7 +132,7 @@ func buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadRoots(ctx cont
 		toolList = b.String()
 	}
 
-	envSection := buildEnvironmentSectionContextWithReadRoots(ctx, workDir, readRoots)
+	envSection := buildEnvironmentSectionContextWithReadGrants(ctx, workDir, readGrants)
 
 	var skillSection string
 	if skillContent != "" {
@@ -273,21 +281,25 @@ func requiredToolParameters(schema map[string]any) []string {
 	return required
 }
 
-func buildEnvironmentSectionContextWithReadRoots(ctx context.Context, workDir string, readRoots []string) string {
+func buildEnvironmentSectionContextWithReadGrants(ctx context.Context, workDir string, readGrants []ReadGrant) string {
 	if workDir == "" {
 		return ""
 	}
 
 	var b strings.Builder
 	b.WriteString("\n## Environment\n")
-	fmt.Fprintf(&b, "Working directory: %s\n", workDir)
+	fmt.Fprintf(&b, "Working directory: %s\n", strconv.QuoteToGraphic(workDir))
 	b.WriteString("Filesystem authority: the working directory is the writable workspace.\n")
-	if len(readRoots) == 0 {
-		b.WriteString("Additional read-only roots: none. Unlisted external paths are unavailable; the user can grant one with /scope add-read <directory>.\n")
+	if len(readGrants) == 0 {
+		b.WriteString("Additional temporary read grants: none. Unlisted external paths are unavailable.\n")
 	} else {
-		b.WriteString("Additional process-local read-only roots (never valid write destinations):\n")
-		for _, root := range readRoots {
-			fmt.Fprintf(&b, "- %s\n", root)
+		b.WriteString("Additional temporary read grants (never valid write destinations):\n")
+		for _, grant := range readGrants {
+			kind := "directory"
+			if grant.Kind == ReadGrantExactFile {
+				kind = "exact file only; siblings remain unavailable"
+			}
+			fmt.Fprintf(&b, "- %s: %s\n", kind, strconv.QuoteToGraphic(grant.Path))
 		}
 	}
 

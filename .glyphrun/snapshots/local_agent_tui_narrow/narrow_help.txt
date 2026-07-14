@@ -15,5 +15,5 @@
  │   t            Toggle all tools    │
  │                (empty input)       │
  │   ctrl+y       Copy last response  │
- │ esc/q close · ↓ more               │
+ │ esc/q close · pgdn · g/shift+g     │
  ╰────────────────────────────────────╯

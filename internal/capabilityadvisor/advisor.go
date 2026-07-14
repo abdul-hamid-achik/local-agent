@@ -5,6 +5,7 @@ package capabilityadvisor
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/mcp"
 )
@@ -13,6 +14,16 @@ const (
 	resolverToolName = "mcphub_resolve_tool"
 	resolverMaxHits  = 5
 	maxCacheEntries  = 256
+	// Positive routes are deliberately short-lived when the host has no
+	// proactive catalog-revision feed. MCP servers can reconnect or change
+	// their advertised tools while Local Agent remains open, so an unbounded
+	// positive cache would keep recommending a stale route indefinitely.
+	resolvedCacheTTL  = 5 * time.Minute
+	ambiguousCacheTTL = 30 * time.Second
+	// A no-match can mean that a downstream was temporarily disconnected.
+	// Keep negative caching brief even when the host cannot yet supply a
+	// catalog revision.
+	noMatchCacheTTL = 30 * time.Second
 )
 
 // Registry is the narrow MCP surface used by the host-owned advisor. The
@@ -33,6 +44,10 @@ type Activity struct {
 	CurrentActivity     string
 	DesiredOutcome      string
 	AvailableInputKinds []string
+	// IntentTags are locally classified, allowlisted semantic labels such as
+	// "symbols", "observability", or "repository". They preserve useful
+	// routing signal without sending the user's prompt or arbitrary wording.
+	IntentTags []string
 }
 
 // Request carries host control metadata separately from the activity sent to
@@ -40,11 +55,14 @@ type Activity struct {
 // cache key and are never included in the resolver query or durable state.
 // NonTrivial fails closed: a false value skips resolution. Reconsider bypasses
 // a previous successful recommendation or no-match result after a downstream
-// failure or an explicit user request.
+// failure or an explicit user request. CatalogRevision is optional, opaque
+// host-owned metadata. When available, it separates cache generations without
+// ever entering the resolver query.
 type Request struct {
 	GoalID             string
 	NonTrivial         bool
 	Reconsider         bool
+	CatalogRevision    string
 	CacheDiscriminator [32]byte
 	Activity           Activity
 }
@@ -56,6 +74,7 @@ type Status string
 const (
 	StatusSkipped     Status = "skipped"
 	StatusResolved    Status = "resolved"
+	StatusAmbiguous   Status = "ambiguous"
 	StatusNoMatch     Status = "no_match"
 	StatusUnavailable Status = "unavailable"
 	StatusInvalid     Status = "invalid"
@@ -92,19 +111,23 @@ func (h Hint) Truncated() bool {
 // user turn; callers continue without Hint when Status is unavailable or
 // invalid. Attempted means this invocation dispatched an MCP resolver call.
 // Cached means no MCP call was needed because this phase/activity was already
-// resolved successfully (including a valid no-match result).
+// resolved successfully (including a valid ambiguous or no-match result).
+// CatalogRevision is an optional bounded opaque revision returned by MCPHub.
 type Result struct {
-	Status    Status
-	Hint      *Hint
-	Attempted bool
-	Cached    bool
+	Status          Status
+	Hint            *Hint
+	CatalogRevision string
+	Attempted       bool
+	Cached          bool
 }
 
 type cacheKey [32]byte
 
 type cacheEntry struct {
-	status Status
-	hint   *Hint
+	status          Status
+	hint            *Hint
+	catalogRevision string
+	expiresAt       time.Time
 }
 
 type flight struct {
@@ -122,6 +145,7 @@ type Advisor struct {
 	cache    map[cacheKey]cacheEntry
 	order    []cacheKey
 	inflight map[cacheKey]*flight
+	now      func() time.Time
 }
 
 // New returns a capability advisor backed by registry. A nil registry is
@@ -131,6 +155,7 @@ func New(registry Registry) *Advisor {
 		registry: registry,
 		cache:    make(map[cacheKey]cacheEntry),
 		inflight: make(map[cacheKey]*flight),
+		now:      time.Now,
 	}
 }
 
@@ -166,8 +191,12 @@ func (a *Advisor) Advise(ctx context.Context, request Request) Result {
 			a.deleteCacheLocked(prepared.key)
 		}
 		if cached, ok := a.cache[prepared.key]; ok {
-			a.mu.Unlock()
-			return resultFromCache(cached)
+			if cached.expired(a.now()) {
+				a.deleteCacheLocked(prepared.key)
+			} else {
+				a.mu.Unlock()
+				return resultFromCache(cached)
+			}
 		}
 		if existing, ok := a.inflight[prepared.key]; ok {
 			done := existing.done
@@ -192,10 +221,17 @@ func (a *Advisor) Advise(ctx context.Context, request Request) Result {
 	}
 
 	result := a.resolve(ctx, prepared.query)
+	if prepared.catalogRevision != "" && result.CatalogRevision != "" &&
+		prepared.catalogRevision != result.CatalogRevision {
+		// The host and resolver observed different catalog generations. Do not
+		// cache or expose a recommendation whose availability may already have
+		// changed; a later call can retry against a coherent snapshot.
+		result = Result{Status: StatusInvalid, Attempted: result.Attempted}
+	}
 
 	a.mu.Lock()
 	if cacheable(result.Status) {
-		a.storeCacheLocked(prepared.key, cacheEntry{status: result.Status, hint: cloneHint(result.Hint)})
+		a.storeCacheLocked(prepared.key, cacheEntryFromResult(result, prepared.catalogRevision, a.now()))
 	}
 	active.result = cloneResult(result)
 	delete(a.inflight, prepared.key)
@@ -220,22 +256,29 @@ func (a *Advisor) resolve(ctx context.Context, query string) Result {
 		return Result{Status: StatusUnavailable, Attempted: true}
 	}
 
-	hint, matched, err := parseResolverResult(result)
+	hint, matched, catalogRevision, err := parseResolverResult(result)
 	if err != nil {
 		return Result{Status: StatusInvalid, Attempted: true}
 	}
 	if !matched {
-		return Result{Status: StatusNoMatch, Attempted: true}
+		return Result{Status: StatusNoMatch, CatalogRevision: catalogRevision, Attempted: true}
 	}
-	return Result{Status: StatusResolved, Hint: hint, Attempted: true}
+	status := StatusResolved
+	if hint.Ambiguous {
+		status = StatusAmbiguous
+	}
+	return Result{Status: status, Hint: hint, CatalogRevision: catalogRevision, Attempted: true}
 }
 
 func cacheable(status Status) bool {
-	return status == StatusResolved || status == StatusNoMatch
+	return status == StatusResolved || status == StatusAmbiguous || status == StatusNoMatch
 }
 
 func resultFromCache(entry cacheEntry) Result {
-	return Result{Status: entry.status, Hint: cloneHint(entry.hint), Cached: true}
+	return Result{
+		Status: entry.status, Hint: cloneHint(entry.hint),
+		CatalogRevision: entry.catalogRevision, Cached: true,
+	}
 }
 
 func resultFromFlight(result Result) Result {
@@ -248,6 +291,29 @@ func resultFromFlight(result Result) Result {
 func cloneResult(result Result) Result {
 	result.Hint = cloneHint(result.Hint)
 	return result
+}
+
+func cacheEntryFromResult(result Result, requestedRevision string, now time.Time) cacheEntry {
+	revision := result.CatalogRevision
+	if revision == "" {
+		revision = requestedRevision
+	}
+	entry := cacheEntry{
+		status: result.Status, hint: cloneHint(result.Hint), catalogRevision: revision,
+	}
+	switch result.Status {
+	case StatusResolved:
+		entry.expiresAt = now.Add(resolvedCacheTTL)
+	case StatusAmbiguous:
+		entry.expiresAt = now.Add(ambiguousCacheTTL)
+	case StatusNoMatch:
+		entry.expiresAt = now.Add(noMatchCacheTTL)
+	}
+	return entry
+}
+
+func (entry cacheEntry) expired(now time.Time) bool {
+	return !entry.expiresAt.IsZero() && !now.Before(entry.expiresAt)
 }
 
 func cloneHint(hint *Hint) *Hint {

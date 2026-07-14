@@ -23,8 +23,13 @@ func TestPresentToolUsesStateSpecificActionLabels(t *testing.T) {
 		{name: "bash", kind: ToolCardBash, state: ToolCardSuccess, want: "Ran"},
 		{name: "grep", kind: ToolCardSearch, state: ToolCardError, want: "Search failed"},
 		{name: "memory_save", kind: ToolCardGeneric, state: ToolCardSuccess, want: "Saved memory"},
+		{name: "consult_experts", kind: ToolCardGeneric, state: ToolCardRunning, want: "Consulting experts"},
+		{name: "consult_experts", kind: ToolCardGeneric, state: ToolCardSuccess, want: "Consulted experts"},
+		{name: "consult_experts", kind: ToolCardGeneric, state: ToolCardAttention, want: "Expert consultation is partial"},
+		{name: "consult_experts", kind: ToolCardGeneric, state: ToolCardError, want: "Expert consultation failed"},
 		{name: "load_skill", kind: ToolCardGeneric, state: ToolCardRunning, want: "Loading skill"},
 		{name: "load_skill", kind: ToolCardGeneric, state: ToolCardSuccess, want: "Loaded skill"},
+		{name: "hitspec_capture_webpage", kind: ToolCardGeneric, state: ToolCardSuccess, want: "Captured webpage artifact"},
 		{name: "server__read-file", kind: ToolCardGeneric, state: ToolCardSuccess, want: "Read"},
 		{name: "", kind: ToolCardSearch, state: ToolCardRunning, want: "Searching"},
 	}
@@ -47,6 +52,7 @@ func TestPresentToolAttentionNeverFallsBackToSuccessCopy(t *testing.T) {
 		{name: "read_file", want: "Needs attention"},
 		{name: "apply_patch", want: "Needs attention"},
 		{name: "fcheap_save", want: "Artifact save needs review"},
+		{name: "hitspec_capture_webpage", want: "Webpage artifact needs review"},
 		{name: "vault_get_secret", want: "Secret access needs attention"},
 	}
 

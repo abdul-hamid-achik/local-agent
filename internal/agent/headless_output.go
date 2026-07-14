@@ -71,7 +71,31 @@ func (h *HeadlessOutput) SystemMessage(msg string) {
 
 // CapabilityRoute writes an advisory diagnostic without contaminating stdout.
 func (h *HeadlessOutput) CapabilityRoute(route CapabilityRoute) {
-	_, _ = fmt.Fprintf(h.stderr, "[capability] %s -> %s__%s (advisory)\n", route.Phase, route.Server, route.Tool)
+	freshness := route.Freshness
+	if freshness == "" {
+		freshness = CapabilityRouteFreshnessUnknown
+	}
+	reconsidered := ""
+	if route.Reconsidered {
+		reconsidered = ", reconsidered"
+	}
+	switch route.Status {
+	case CapabilityRouteResolved:
+		_, _ = fmt.Fprintf(
+			h.stderr, "[capability] %s resolved -> %s__%s (%s%s advisory)\n",
+			route.Phase, route.Server, route.Tool, freshness, reconsidered,
+		)
+	case CapabilityRouteAmbiguous:
+		_, _ = fmt.Fprintf(
+			h.stderr, "[capability] %s ambiguous (%d candidates; %s%s advisory)\n",
+			route.Phase, route.CandidateCount, freshness, reconsidered,
+		)
+	default:
+		_, _ = fmt.Fprintf(
+			h.stderr, "[capability] %s %s (%s%s advisory)\n",
+			route.Phase, route.Status, freshness, reconsidered,
+		)
+	}
 }
 
 // Error writes an error message to stderr.

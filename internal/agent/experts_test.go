@@ -1,0 +1,125 @@
+package agent
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/abdul-hamid-achik/local-agent/internal/execution"
+	"github.com/abdul-hamid-achik/local-agent/internal/expertselector"
+	"github.com/abdul-hamid-achik/local-agent/internal/expertteam"
+	"github.com/abdul-hamid-achik/local-agent/internal/llm"
+	"github.com/abdul-hamid-achik/local-agent/internal/resource"
+)
+
+type fakeExpertConsultant struct {
+	request  expertteam.Request
+	result   expertteam.Result
+	err      error
+	calls    int
+	profiles int
+}
+
+func (consultant *fakeExpertConsultant) ProfileCount() int { return consultant.profiles }
+
+func (consultant *fakeExpertConsultant) Consult(_ context.Context, request expertteam.Request) (expertteam.Result, error) {
+	consultant.calls++
+	consultant.request = request
+	return consultant.result, consultant.err
+}
+
+func TestConsultExpertsToolIsAvailableOnlyWithHostRuntime(t *testing.T) {
+	ag := New(nil, nil, 8192)
+	if hasToolDef(ag.toolsBuiltinToolDefs(), "consult_experts") {
+		t.Fatal("consult_experts was exposed without a runtime")
+	}
+	ag.SetExpertConsultant(&fakeExpertConsultant{})
+	if !hasToolDef(ag.toolsBuiltinToolDefs(), "consult_experts") {
+		t.Fatal("consult_experts was not exposed after runtime installation")
+	}
+	if builtinToolRequiresApproval("consult_experts") {
+		t.Fatal("read-only expert consultation unexpectedly requires effect approval")
+	}
+	kind, effect := ag.executionKind("consult_experts")
+	if kind != execution.KindBuiltin || effect != execution.EffectReadOnly {
+		t.Fatalf("execution contract = %s/%s", kind, effect)
+	}
+	if !AskToolPolicy().AllowsBuiltin("consult_experts") || !PlanToolPolicy().AllowsBuiltin("consult_experts") {
+		t.Fatal("read-only modes do not admit expert consultation")
+	}
+}
+
+func TestExpertConsultationProfileCountUsesOptionalRuntimeSurface(t *testing.T) {
+	ag := New(nil, nil, 8192)
+	if got := ag.ExpertConsultationProfileCount(); got != 0 {
+		t.Fatalf("profile count without runtime=%d", got)
+	}
+	ag.SetExpertConsultant(&fakeExpertConsultant{profiles: 7})
+	if got := ag.ExpertConsultationProfileCount(); got != 7 {
+		t.Fatalf("profile count=%d, want 7", got)
+	}
+}
+
+func TestConsultExpertsPreflightRejectsInvalidShapeBeforeRuntime(t *testing.T) {
+	ag := New(nil, nil, 8192)
+	ag.SetExpertConsultant(&fakeExpertConsultant{})
+	tests := []llm.ToolCall{
+		{Name: "consult_experts", Arguments: map[string]any{"strategy": "team"}},
+		{Name: "consult_experts", Arguments: map[string]any{"strategy": "invalid", "objective": "review"}},
+		{Name: "consult_experts", Arguments: map[string]any{"strategy": "team", "objective": "review", "extra": true}},
+		{Name: "consult_experts", Arguments: map[string]any{"strategy": "team", "objective": "review", "experts": []any{"ok", 3}}},
+		{Name: "consult_experts", Arguments: map[string]any{"strategy": "team", "objective": strings.Repeat("x", maxExpertObjectiveBytes+1)}},
+		{Name: "consult_experts", Arguments: map[string]any{"strategy": "team", "objective": "review", "experts": []any{"bad\nname"}}},
+	}
+	for index, call := range tests {
+		if err := ag.preflightToolCall(execution.KindBuiltin, call); err == nil {
+			t.Errorf("case %d passed preflight", index)
+		}
+	}
+}
+
+func TestConsultExpertsReturnsAdvisoryReceiptAndExactRequest(t *testing.T) {
+	consultant := &fakeExpertConsultant{result: expertteam.Result{
+		Strategy: expertselector.StrategyTeam, Parallelism: 2,
+		Plan: resource.ConcurrencyPlan{MaxConcurrentInference: 2, MaxConcurrentDistinctModels: 1},
+		Experts: []expertteam.ExpertReceipt{{
+			Name: "critic", Model: "qwen:2b", Status: expertteam.ExpertCompleted,
+			Reason: "Selected explicitly.", Report: "One bounded finding.",
+			EvalTokens: 1, ChargedEvalTokens: 1,
+		}},
+	}}
+	ag := New(nil, nil, 8192)
+	ag.SetExpertConsultant(consultant)
+	call := llm.ToolCall{Name: "consult_experts", Arguments: map[string]any{
+		"strategy": "team", "objective": "Review the integration.", "experts": []any{"critic"},
+	}}
+	if err := ag.preflightToolCall(execution.KindBuiltin, call); err != nil {
+		t.Fatal(err)
+	}
+	content, isErr := ag.handleBuiltinToolWithCancellation(context.Background(), call, false)
+	if isErr || !strings.Contains(content, "advisory; not verified evidence") || !strings.Contains(content, "One bounded finding") {
+		t.Fatalf("receipt = %q, error=%v", content, isErr)
+	}
+	if consultant.request.Strategy != expertselector.StrategyTeam || consultant.request.Objective != "Review the integration." ||
+		len(consultant.request.ExpertNames) != 1 || consultant.request.ExpertNames[0] != "critic" {
+		t.Fatalf("request = %#v", consultant.request)
+	}
+}
+
+func TestConsultExpertsMapsRuntimeErrorsWithoutLeakingRawProviderDetail(t *testing.T) {
+	consultant := &fakeExpertConsultant{
+		result: expertteam.Result{Strategy: expertselector.StrategyTeam, Experts: []expertteam.ExpertReceipt{{
+			Name: "critic", Model: "qwen:2b", Status: expertteam.ExpertFailed, ErrorCode: "inference_failed",
+		}}},
+		err: errors.Join(expertteam.ErrAllExpertsFailed, errors.New("password=do-not-leak")),
+	}
+	ag := New(nil, nil, 8192)
+	ag.SetExpertConsultant(consultant)
+	content, isErr := ag.handleConsultExperts(context.Background(), map[string]any{
+		"strategy": "team", "objective": "Review failure.",
+	})
+	if !isErr || !strings.Contains(content, "all selected experts failed") || strings.Contains(content, "do-not-leak") {
+		t.Fatalf("mapped error = %q, error=%v", content, isErr)
+	}
+}

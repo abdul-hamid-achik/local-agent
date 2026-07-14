@@ -31,6 +31,34 @@ func TestHelpUsesSharedFrameAtSupportedSizes(t *testing.T) {
 	}
 }
 
+func TestHelpFooterAdvertisesPageAndEndpointNavigation(t *testing.T) {
+	m := newTestModel(t)
+	m.width, m.height = 80, 24
+	m.overlay = OverlayHelp
+	m.initHelpViewport()
+	footer := ansi.Strip(m.renderHelpOverlay(m.width))
+	for _, want := range []string{"pgdn more", "g/shift+g ends"} {
+		if !strings.Contains(footer, want) {
+			t.Fatalf("help footer omitted %q:\n%s", want, footer)
+		}
+	}
+}
+
+func TestHelpMinimumFooterKeepsClosePageAndEndpointNavigation(t *testing.T) {
+	m := newTestModel(t)
+	m.width, m.height = 30, 12
+	m.overlay = OverlayHelp
+	m.initHelpViewport()
+	footer := ansi.Strip(m.renderHelpOverlay(m.width))
+	for _, want := range []string{"esc/q close", "pgdn more", "g/⇧g ends"} {
+		if !strings.Contains(footer, want) {
+			t.Fatalf("minimum help footer omitted %q:\n%s", want, footer)
+		}
+	}
+	assertRenderedLinesFit(t, footer, 30)
+	assertRenderedHeightFits(t, footer, 12)
+}
+
 func TestHelpKeepsKeysAndContextTruthfulAtNarrowWidth(t *testing.T) {
 	m := newTestModel(t)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 20})
@@ -64,6 +92,24 @@ func TestHelpExplainsOneSlotFollowUpLifecycle(t *testing.T) {
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("help omitted %q:\n%s", want, content)
+		}
+	}
+}
+
+func TestHelpDescribesMentionsAsComposerInsertions(t *testing.T) {
+	m := newTestModel(t)
+	content := strings.Join(strings.Fields(strings.ToLower(ansi.Strip(m.buildHelpContent(m.helpContentWidth())))), " ")
+	for _, want := range []string{
+		"@file / @agent insert file or agent mention text",
+		"#skill insert skill mention text",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("help omitted truthful insertion contract %q:\n%s", want, content)
+		}
+	}
+	for _, stale := range []string{"attach file or agent", "activate skill"} {
+		if strings.Contains(content, stale) {
+			t.Fatalf("help still claims unsupported action %q:\n%s", stale, content)
 		}
 	}
 }

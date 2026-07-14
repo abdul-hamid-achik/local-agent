@@ -37,6 +37,9 @@ func TestDefaults(t *testing.T) {
 	if !cfg.Privacy.LocalOnly {
 		t.Error("Privacy.LocalOnly should be true by default")
 	}
+	if !cfg.Experts.Enabled || cfg.Experts.MaxEvalTokens != 768 || cfg.Experts.Timeout != "90s" {
+		t.Errorf("Experts defaults = %#v", cfg.Experts)
+	}
 }
 
 func TestApplyEnvOverrides(t *testing.T) {
@@ -124,6 +127,27 @@ func TestValidate(t *testing.T) {
 	c.Tools.Timeout = "banana"
 	if err := c.Validate(); err == nil {
 		t.Error("unparseable tools.timeout should fail validation")
+	}
+
+	c = base()
+	c.Experts.MaxConcurrentInference = -1
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "experts.max_concurrent_inference") {
+		t.Fatalf("negative expert cap error = %v", err)
+	}
+	c = base()
+	c.Experts.MaxTeamExperts = 17
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "experts.max_team_experts") {
+		t.Fatalf("oversized team cap error = %v", err)
+	}
+	c = base()
+	c.Experts.MaxEvalTokens = 0
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "experts.max_eval_tokens") {
+		t.Fatalf("zero expert token cap error = %v", err)
+	}
+	c = base()
+	c.Experts.Timeout = "11m"
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "experts.timeout") {
+		t.Fatalf("expert timeout error = %v", err)
 	}
 
 	c = base()

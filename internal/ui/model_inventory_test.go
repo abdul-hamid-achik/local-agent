@@ -431,10 +431,14 @@ func TestOllamaCloudConsentModalFitsSupportedTerminals(t *testing.T) {
 		m.cloudConsentState = newCloudConsentState(OllamaModelDescriptor{Name: "kimi-code:cloud"}, size.width, size.height, m.isDark)
 		m.overlay = OverlayCloudConsent
 		view := m.renderCloudConsent()
-		for _, want := range []string{"Use Ollama Cloud?", "results", "Ollama Cloud.", "Cancel", "Use kimi-code", "esc", "enter", "use"} {
+		for _, want := range []string{"Use Ollama Cloud?", "results", "Ollama Cloud.", "Cancel", "Use kimi-code", "esc", "enter", "cancel"} {
 			if !strings.Contains(view, want) {
 				t.Fatalf("%dx%d consent missing %q:\n%s", size.width, size.height, want, view)
 			}
+		}
+		m.cloudConsentState.List.Select(1)
+		if selected := ansi.Strip(m.renderCloudConsent()); !strings.Contains(selected, "enter use") {
+			t.Fatalf("%dx%d consent did not describe the focused allow action:\n%s", size.width, size.height, selected)
 		}
 		assertRenderedLinesFit(t, view, size.width)
 		assertRenderedHeightFits(t, view, size.height)

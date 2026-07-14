@@ -203,6 +203,33 @@ func TestProjectToolResultUsesEvidenceLadderWithoutInventingVerification(t *test
 	}
 }
 
+func TestProjectReceiptClassifiesTrustedExpertConsultationSummary(t *testing.T) {
+	tests := []struct {
+		name   string
+		text   string
+		domain DomainState
+	}{
+		{name: "complete", text: "Expert consultation receipt (advisory; not verified evidence)\nexperts: total=2 · completed=2 · failed=0\nprivate expert prose", domain: DomainSucceeded},
+		{name: "partial", text: "Expert consultation receipt (advisory; not verified evidence)\nexperts: total=3 · completed=2 · failed=1", domain: DomainAttention},
+		{name: "all failed", text: "Expert consultation receipt (advisory; not verified evidence)\nexperts: total=2 · completed=0 · failed=2", domain: DomainFailed},
+		{name: "no experts", text: "Expert consultation receipt (advisory; not verified evidence)\nexperts: total=0 · completed=0 · failed=0", domain: DomainFailed},
+		{name: "malformed", text: "Expert consultation receipt (advisory; not verified evidence)\nexperts: total=3 · completed=3 · failed=1", domain: DomainUnknown},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := ProjectReceipt(ProjectToolCall("consult_experts", nil), RawReceipt{Text: test.text, TrustedLocal: true})
+			if got.Transport != TransportSucceeded || got.Domain != test.domain || got.Evidence != EvidenceNone {
+				t.Fatalf("expert projection = %#v", got)
+			}
+		})
+	}
+
+	untrusted := ProjectReceipt(ProjectToolCall("consult_experts", nil), RawReceipt{Text: "experts: total=1 · completed=1 · failed=0"})
+	if untrusted.Domain != DomainUnknown || untrusted.Successful() {
+		t.Fatalf("untrusted expert-shaped text was accepted: %#v", untrusted)
+	}
+}
+
 func TestProjectionNormalizeBoundsAndRejectsUnknownEnums(t *testing.T) {
 	projection := (ToolProjection{
 		Specialist: strings.Repeat("x", 300) + "\x1b]52;c;payload",

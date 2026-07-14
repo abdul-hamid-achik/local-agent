@@ -8,15 +8,18 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+
+	"github.com/abdul-hamid-achik/local-agent/internal/agent"
 )
 
 type workingActivity struct {
-	label       string
-	detail      string
-	elapsed     time.Duration
-	cancellable bool
-	waiting     bool
-	static      bool
+	label        string
+	compactLabel string
+	detail       string
+	elapsed      time.Duration
+	cancellable  bool
+	waiting      bool
+	static       bool
 }
 
 func reducedMotionRequested() bool {
@@ -86,6 +89,12 @@ func (m *Model) currentWorkingActivity() (workingActivity, bool) {
 		return workingActivity{label: "Restoring session", cancellable: true}, true
 	case m.fileLoading:
 		return workingActivity{label: "Reading local file", cancellable: true}, true
+	case m.readScopeOpRunning:
+		label := m.readScopeOpLabel
+		if label == "" {
+			label = "Updating read-only scope"
+		}
+		return workingActivity{label: label, detail: "writes remain workspace-only"}, true
 	case m.commitRunning:
 		return workingActivity{label: "Generating commit", cancellable: true}, true
 	case m.exportRunning:
@@ -103,8 +112,20 @@ func (m *Model) currentWorkingActivity() (workingActivity, bool) {
 		}
 		return activity, true
 	case m.capabilityRoute != nil && (m.state == StateWaiting || m.state == StateStreaming):
+		route := *m.capabilityRoute
+		if route.Status != agent.CapabilityRouteResolved {
+			// A resolver miss or failure is advisory metadata, not the state of
+			// the provider turn. Keep the active execution as the primary label
+			// and expose the typed route state as progressive detail. Runtime
+			// retains the complete advisory after the turn settles.
+			return workingActivity{
+				label: "Running", detail: capabilityRouteLabel(route),
+				elapsed: m.turnElapsed(), cancellable: true,
+			}, true
+		}
 		return workingActivity{
-			label: "Capability route", detail: capabilityRouteDetail(*m.capabilityRoute),
+			label: capabilityRouteLabel(route), compactLabel: capabilityRouteCompactLabel(route),
+			detail:  capabilityRouteDetail(route),
 			elapsed: m.turnElapsed(), cancellable: true,
 		}, true
 	case m.state == StateWaiting:
@@ -171,6 +192,7 @@ func (m *Model) renderWorkingLine() string {
 		return ""
 	}
 	activity.label = sanitizeTerminalSingleLine(activity.label)
+	activity.compactLabel = sanitizeTerminalSingleLine(activity.compactLabel)
 	activity.detail = sanitizeTerminalSingleLine(activity.detail)
 	if activity.label == "" {
 		activity.label = "Working"
@@ -225,10 +247,26 @@ func (m *Model) renderWorkingLine() string {
 		activity.label + longCancel + queueAction,
 	}
 	if queueAction != "" {
+		// Preserve the semantic activity label by shortening controls before
+		// falling back to the compact identity. This keeps typed routing states
+		// inspectable at ordinary widths while still fitting the 30-column tier.
 		candidates = append(candidates,
 			activity.label+elapsed+shortCancel+" · queue",
 			activity.label+shortCancel+" · queue",
-			"Run"+shortCancel+" · queue",
+		)
+		if activity.compactLabel != "" {
+			candidates = append(candidates,
+				activity.compactLabel+elapsed+shortCancel+" · queue",
+				activity.compactLabel+shortCancel+" · queue",
+			)
+		}
+		candidates = append(candidates, "Run"+shortCancel+" · queue")
+	}
+	if activity.compactLabel != "" {
+		candidates = append(candidates,
+			activity.compactLabel+elapsed+shortCancel,
+			activity.compactLabel+shortCancel,
+			activity.compactLabel,
 		)
 	}
 	candidates = append(candidates,
@@ -249,7 +287,10 @@ func (m *Model) renderWorkingLine() string {
 		}
 	}
 
-	const leftPad = "  "
+	leftPad := "  "
+	if m.chatPaneWidth() < 40 {
+		leftPad = " "
+	}
 	textWidth := max(1, m.chatPaneWidth()-lipgloss.Width(leftPad)-lipgloss.Width(motion)-1)
 	chosen := candidates[len(candidates)-1]
 	for _, candidate := range candidates {

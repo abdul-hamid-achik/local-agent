@@ -22,6 +22,11 @@ func (m *Model) helpContentWidth() int {
 func (m *Model) helpViewportHeight() int {
 	// Shared frame: border (2), title + gap (2), and footer (1).
 	h := m.height - 6
+	if m.helpContentWidth() < 30 {
+		// The minimum-width footer uses a second row so close, page navigation,
+		// and endpoint navigation all remain discoverable.
+		h--
+	}
 	if h < 1 {
 		h = 1
 	}
@@ -43,9 +48,10 @@ func (m *Model) buildHelpContent(innerW int) string {
 	b.WriteString("\n")
 
 	inputShortcuts := []helpRow{
-		{"@file", "Attach file or agent"},
-		{"#skill", "Activate skill"},
+		{"@file / @agent", "Insert file or agent mention text"},
+		{"#skill", "Insert skill mention text"},
 		{"/cmd", "Run slash command"},
+		{"team / swarm / MoE", "Ask naturally for a read-only expert consultation when enabled"},
 		{"enter (running)", "Queue one follow-up; it sends after the current turn settles successfully"},
 		{"esc (running)", "Cancel the turn; a queued follow-up returns to the composer"},
 	}
@@ -186,17 +192,39 @@ func (m *Model) renderHelpOverlay(_ int) string {
 	pct := m.helpViewport.ScrollPercent()
 	hints := []keyHint{{Key: "esc/q", Action: m.overlayCloseLabel()}}
 	if pct <= 0 {
-		hints = append(hints, keyHint{Key: "↓", Action: "more"})
+		hints = append(hints,
+			keyHint{Key: "pgdn", Action: "more"},
+			keyHint{Key: "g/shift+g", Action: "ends"},
+		)
 	} else if pct >= 1.0 {
-		hints = append(hints, keyHint{Key: "j/k", Action: "scroll"})
+		hints = append(hints,
+			keyHint{Key: "j/k", Action: "scroll"},
+			keyHint{Key: "g", Action: "top"},
+		)
 	} else {
 		hints = append(hints,
 			keyHint{Key: "j/k", Action: "scroll"},
+			keyHint{Key: "pgup/pgdn", Action: "page"},
 			keyHint{Key: fmt.Sprintf("%.0f%%", pct*100)},
 		)
 	}
 
-	return m.renderPickerFrame(b.String(), 60, m.renderKeyHints(innerW, hints...))
+	footer := m.renderKeyHints(innerW, hints...)
+	if innerW < 30 {
+		var navigation []keyHint
+		switch {
+		case pct <= 0:
+			navigation = []keyHint{{Key: "pgdn", Action: "more"}, {Key: "g/⇧g", Action: "ends"}}
+		case pct >= 1.0:
+			navigation = []keyHint{{Key: "j/k", Action: "scroll"}, {Key: "g", Action: "top"}}
+		default:
+			navigation = []keyHint{{Key: "pgup/dn", Action: "page"}, {Key: "g/⇧g", Action: "ends"}}
+		}
+		footer = m.renderKeyHints(innerW, keyHint{Key: "esc/q", Action: m.overlayCloseLabel()}) + "\n" +
+			m.renderKeyHints(innerW, navigation...)
+	}
+
+	return m.renderPickerFrame(b.String(), 60, footer)
 }
 
 // overlayOnContent renders the overlay centered on the viewport area.

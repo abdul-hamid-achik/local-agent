@@ -224,39 +224,62 @@ func RegisterBuiltins(r *Registry) {
 
 	r.Register(&Command{
 		Name:        "scope",
-		Description: "List or manage process-local external read-only roots",
-		Usage:       "/scope [list|add-read <directory>|remove-read <directory>|clear-read]",
+		Description: "List or manage temporary external read-only grants",
+		Usage:       "/scope [list|add-read <directory>|remove-read <path>|clear-read]",
 		Handler: func(ctx *Context, args []string) Result {
 			if ctx == nil {
 				ctx = &Context{}
 			}
 			if len(args) == 0 || (len(args) == 1 && (args[0] == "list" || args[0] == "ls")) {
-				if len(ctx.ReadRoots) == 0 {
-					return Result{Text: "No additional read-only roots are active. Add one with /scope add-read <directory>."}
+				grants := append([]ReadGrantInfo(nil), ctx.ReadGrants...)
+				if len(grants) == 0 {
+					for _, root := range ctx.ReadRoots {
+						grants = append(grants, ReadGrantInfo{Path: root, Kind: "directory"})
+					}
 				}
-				roots := append([]string(nil), ctx.ReadRoots...)
-				sort.Strings(roots)
+				if len(grants) == 0 {
+					return Result{Text: "No temporary external read-only grants are active. Add a directory with /scope add-read <directory>; exact-file access is requested automatically when an ordinary prompt names an external file."}
+				}
+				sort.SliceStable(grants, func(i, j int) bool {
+					if grants[i].Path != grants[j].Path {
+						return grants[i].Path < grants[j].Path
+					}
+					return grants[i].Kind < grants[j].Kind
+				})
 				var b strings.Builder
-				fmt.Fprintf(&b, "Additional process-local read-only roots (%d):\n", len(roots))
-				for _, root := range roots {
-					fmt.Fprintf(&b, "  - %s\n", root)
+				fmt.Fprintf(&b, "Temporary read-only grants (%d):\n", len(grants))
+				for _, grant := range grants {
+					kind := "directory"
+					if grant.Kind == "exact_file" {
+						kind = "exact file"
+					}
+					fmt.Fprintf(&b, "  - %s · %s\n", kind, grant.Path)
 				}
-				b.WriteString("\nWrites remain confined to the working directory. These grants are not persisted.")
+				b.WriteString("\nWrites remain confined to the working directory. Exact-file grants never include siblings. These grants are not persisted.")
 				return Result{Text: b.String()}
 			}
 
 			spec, ok := r.MatchAction("scope", args[0])
 			if !ok {
-				return Result{Error: "usage: /scope [list|add-read <directory>|remove-read <directory>|clear-read]"}
+				return Result{Error: "usage: /scope [list|add-read <directory>|remove-read <path>|clear-read]"}
 			}
 			switch spec.ID {
-			case ScopeActionAddRead, ScopeActionRemoveRead:
+			case ScopeActionAddRead:
 				if len(args) < 2 {
 					return Result{Error: "usage: " + spec.CommandText() + " <directory>"}
 				}
 				path := expandHomePath(strings.TrimSpace(strings.Join(args[1:], " ")))
 				if path == "" {
 					return Result{Error: "usage: " + spec.CommandText() + " <directory>"}
+				}
+				return Result{Action: spec.Action, Data: path}
+			case ScopeActionRemoveRead:
+				if len(args) < 2 {
+					return Result{Error: "usage: " + spec.CommandText() + " <path>"}
+				}
+				path := expandHomePath(strings.TrimSpace(strings.Join(args[1:], " ")))
+				if path == "" {
+					return Result{Error: "usage: " + spec.CommandText() + " <path>"}
 				}
 				return Result{Action: spec.Action, Data: path}
 			case ScopeActionClearRead:
@@ -327,21 +350,42 @@ func RegisterBuiltins(r *Registry) {
 
 	r.Register(&Command{
 		Name:        "servers",
-		Description: "List connected MCP servers",
+		Description: "List MCP server connection status",
 		Usage:       "/servers",
 		Handler: func(ctx *Context, args []string) Result {
 			if err := noArguments(args, "/servers"); err != "" {
 				return Result{Error: err}
 			}
-			if len(ctx.ServerNames) == 0 {
-				return Result{Text: "No MCP servers connected."}
+			if len(ctx.Servers) == 0 && len(ctx.ServerNames) == 0 {
+				return Result{Text: "No MCP servers configured or discovered."}
 			}
+			servers := append([]ServerInfo(nil), ctx.Servers...)
+			if len(servers) == 0 {
+				for _, name := range ctx.ServerNames {
+					servers = append(servers, ServerInfo{Name: name, Connected: true})
+				}
+			}
+			sort.SliceStable(servers, func(i, j int) bool {
+				return strings.ToLower(servers[i].Name) < strings.ToLower(servers[j].Name)
+			})
 			var b strings.Builder
-			fmt.Fprintf(&b, "Connected servers (%d):\n", len(ctx.ServerNames))
-			for _, name := range ctx.ServerNames {
-				fmt.Fprintf(&b, "  - %s\n", name)
+			fmt.Fprintf(&b, "MCP servers (%d):\n", len(servers))
+			for _, server := range servers {
+				state := "unavailable"
+				if server.Connected {
+					state = "connected"
+				}
+				fmt.Fprintf(&b, "  - %s · %s", server.Name, state)
+				if server.Connected && server.ToolCount > 0 {
+					fmt.Fprintf(&b, " · %d tools", server.ToolCount)
+				}
+				b.WriteByte('\n')
 			}
-			fmt.Fprintf(&b, "\nTotal tools: %d", ctx.ToolCount)
+			if ctx.MCPToolCount > 0 {
+				fmt.Fprintf(&b, "\nMCP tools available: %d", ctx.MCPToolCount)
+			} else if ctx.ToolCount > 0 {
+				fmt.Fprintf(&b, "\nTotal tools available: %d", ctx.ToolCount)
+			}
 			return Result{Text: b.String()}
 		},
 	})

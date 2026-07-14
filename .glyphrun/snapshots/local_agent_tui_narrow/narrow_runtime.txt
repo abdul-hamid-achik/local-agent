@@ -1,4 +1,3 @@
-              LOCAL AGENT
  ╭────────────────────────────────────╮
  │ Runtime                            │
  │                                    │
@@ -6,13 +5,15 @@
  │ Model      Pinned · qwen3.5:2b     │
  │ Profile    Default                 │
  │ Mode       PLAN                    │
- │ Tools      20 available            │
- │ MCP        unavailable · 0 servers │
- │            configured              │
- │ ICE        disabled                │
- │                                    │
- │ MCP is optional. Add a server in   │
- │ local-agent.yaml or the XDG config │
- │ when you need ecosystem tools.     │
- │ esc/q back                         │
+ │ Approval   Prompted for            │
+ │            approval-gated tools    │
+ │ Read scope workspace only          │
+ │ Tools      21 ready · 21 local · 0 │
+ │            MCP                     │
+ │ MCP        not configured · 0      │
+ │            servers                 │
+ │ Context r… not exposed ·           │
+ │            policy/catalog          │
+ │ Experts    ready · read-only · 5   │
+ │ esc/q back · j/k scroll · ↓ more   │
  ╰────────────────────────────────────╯

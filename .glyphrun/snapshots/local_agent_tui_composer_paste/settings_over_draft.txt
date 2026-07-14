@@ -1,5 +1,5 @@
                                        LOCAL AGENT
-                      Local-first · Ollama · tool effects ask first
+                     Local-first · Ollama · approval prompts enabled
                                   qwen3.5:2b · offline
                    enter send · / commands · ctrl+p settings · ? help
                    shift+tab mode · ctrl+o models · @ files · # skills
@@ -17,8 +17,8 @@
                │   Open a saved workspace session                         │
                │   Compact layout · Auto                                  │
                │   Toggle the explicit compact transcript preference      │
-               │   Runtime status · 0 servers · 20 tools                  │
-               │   Inspect local model, tools, servers, and failures      │
+               │   Runtime status · 21 ready tools · 21 local · 0 MCP     │
+               │   Inspect model, approval posture, tools, servers, and … │
                │   Help · Shortcuts                                       │
                │   Keyboard reference and slash commands                  │
                │ esc close · enter select · ↑/↓ move                      │

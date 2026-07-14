@@ -175,7 +175,7 @@ func TestMCPExecutionEffectIsAlwaysUnknownWithoutHostTrustPolicy(t *testing.T) {
 	}
 }
 
-func TestMCPAuthorizationPreservesConfiguredPolicyAndYoloAuditReasons(t *testing.T) {
+func TestMCPAuthorizationPreservesConfiguredPolicyAndSkippedApprovalAuditReasons(t *testing.T) {
 	tests := []struct {
 		name         string
 		checker      *permission.Checker
@@ -184,18 +184,8 @@ func TestMCPAuthorizationPreservesConfiguredPolicyAndYoloAuditReasons(t *testing
 		wantApproval executionpkg.Approval
 	}{
 		{
-			name: "yolo remains audited", checker: permission.NewChecker(nil, true),
+			name: "skipped approval remains audited", checker: permission.NewChecker(nil, true),
 			wantAllowed: true, wantApproval: executionpkg.ApprovalYolo,
-		},
-		{
-			name: "explicit allow remains audited", checker: func() *permission.Checker {
-				checker := permission.NewChecker(nil, false)
-				if err := checker.SetPolicy("cortex__status", permission.PolicyAllow); err != nil {
-					t.Fatal(err)
-				}
-				return checker
-			}(), callback: func(permission.ApprovalRequest) {},
-			wantAllowed: true, wantApproval: executionpkg.ApprovalPolicy,
 		},
 		{
 			name: "default ask remains interactive", checker: permission.NewChecker(nil, false),
@@ -205,6 +195,15 @@ func TestMCPAuthorizationPreservesConfiguredPolicyAndYoloAuditReasons(t *testing
 		{
 			name: "explicit deny remains audited", checker: func() *permission.Checker {
 				checker := permission.NewChecker(nil, false)
+				if err := checker.SetPolicy("cortex__status", permission.PolicyDeny); err != nil {
+					t.Fatal(err)
+				}
+				return checker
+			}(), wantApproval: executionpkg.ApprovalPolicyDenied,
+		},
+		{
+			name: "explicit deny wins over skipped approvals", checker: func() *permission.Checker {
+				checker := permission.NewChecker(nil, true)
 				if err := checker.SetPolicy("cortex__status", permission.PolicyDeny); err != nil {
 					t.Fatal(err)
 				}

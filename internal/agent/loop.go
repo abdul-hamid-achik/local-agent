@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	executionPkg "github.com/abdul-hamid-achik/local-agent/internal/execution"
+	"github.com/abdul-hamid-achik/local-agent/internal/expertteam"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 )
 
@@ -195,6 +196,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 	// this turn stays coherent even if selection changes concurrently.
 	turnNumCtx := a.NumCtx()
 	authorityMode := a.AuthorityMode()
+	modePrefix, turnToolPolicy := a.modeContext()
 	execRuntime, err := a.executionRuntime(ctx)
 	if err != nil {
 		out.Error(err.Error())
@@ -215,15 +217,15 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 	}
 
 	var tools []llm.ToolDef
-	if a.toolPolicy.AllowMCP && a.registry != nil {
+	if turnToolPolicy.AllowMCP && a.registry != nil {
 		tools = append(tools, a.mcpTools()...)
 	}
 	// Merge memory built-in tools if available.
 	if a.memoryStore != nil {
-		tools = append(tools, filterToolDefsByName(a.memoryBuiltinToolDefs(), a.toolPolicy.memoryTools)...)
+		tools = append(tools, filterToolDefsByName(a.memoryBuiltinToolDefs(), turnToolPolicy.memoryTools)...)
 	}
 	// Merge built-in file tools according to the active mode policy.
-	tools = append(tools, filterToolDefsByName(a.toolsBuiltinToolDefs(), a.toolPolicy.localTools)...)
+	tools = append(tools, filterToolDefsByName(a.toolsBuiltinToolDefs(), turnToolPolicy.localTools)...)
 	skillCatalog := a.skillCatalogPrompt()
 
 	// ICE: index user message and assemble cross-session context.
@@ -243,7 +245,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 			capabilityPhaseForAuthority(authorityMode), strings.TrimSpace(a.workDir) != "",
 		)
 	}
-	capabilityHintText, capabilityHint := a.resolveTurnCapability(ctx, out, capabilityActivity)
+	capabilityHintText, capabilityHint := a.resolveTurnCapabilityWithPolicy(ctx, out, capabilityActivity, turnToolPolicy.AllowMCP)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -259,23 +261,18 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 		}
 	}
 
-	loadedContext := a.loadedCtx
-	if a.toolPolicy.AllowMCP {
+	capabilityBaseContext := a.loadedCtx
+	if turnToolPolicy.AllowMCP {
 		if guidance := a.mcpServerGuidance(); guidance != "" {
-			if loadedContext != "" {
+			if capabilityBaseContext != "" {
 				guidance += "\n\n"
 			}
-			loadedContext = guidance + loadedContext
+			capabilityBaseContext = guidance + capabilityBaseContext
 		}
 	}
-	if capabilityHintText != "" {
-		if loadedContext != "" {
-			capabilityHintText += "\n\n"
-		}
-		loadedContext = capabilityHintText + loadedContext
-	}
-	readRoots := a.ReadRoots()
-	system := buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadRoots(ctx, a.modePrefix, tools, a.skillContent, skillCatalog, loadedContext, a.memoryStore, iceContext, a.workDir, a.ignoreContent, a.llmClient.Model(), turnNumCtx, readRoots)
+	loadedContext := composeCapabilityContext(capabilityHintText, capabilityBaseContext)
+	readGrants := a.ReadGrants()
+	system := buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadGrants(ctx, modePrefix, tools, a.skillContent, skillCatalog, loadedContext, a.memoryStore, iceContext, a.workDir, a.ignoreContent, a.llmClient.Model(), turnNumCtx, readGrants)
 
 	const maxRetries = 2
 	var lastPromptTokens int
@@ -283,6 +280,8 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 	var totalEvalTokens int64
 	var retryCount int
 	var malformedToolIterations int
+	var capabilityReroutes int
+	var expertConsultations int
 	hostRefusalCounts := make(map[string]int)
 
 	maxIters := a.MaxIterations()
@@ -316,7 +315,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 			lg.Info("compaction", "phase", "before_request", "prompt_tokens", estimated, "num_ctx", turnNumCtx)
 		}
 		if a.compactForContext(ctx, out, turnNumCtx) {
-			system = buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadRoots(ctx, a.modePrefix, tools, a.skillContent, skillCatalog, loadedContext, a.memoryStore, iceContext, a.workDir, a.ignoreContent, a.llmClient.Model(), turnNumCtx, readRoots)
+			system = buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadGrants(ctx, modePrefix, tools, a.skillContent, skillCatalog, loadedContext, a.memoryStore, iceContext, a.workDir, a.ignoreContent, a.llmClient.Model(), turnNumCtx, readGrants)
 		}
 	}
 
@@ -343,6 +342,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 		llmStart := time.Now()
 		lastEvalTokens = 0
 		doneSeen := false
+		callbackSeen := false
 		reportedEvalTokens := int64(0)
 
 		// Snapshot the message history under the lock: ChatStream runs while
@@ -360,10 +360,14 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 			MaxEvalTokens:   requestEvalLimit,
 			ExpectedContext: turnNumCtx,
 		}, func(chunk llm.StreamChunk) error {
+			callbackSeen = true
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
 			default:
+			}
+			if doneSeen {
+				return fmt.Errorf("provider streamed data after its terminal usage receipt")
 			}
 
 			if chunk.Text != "" {
@@ -380,11 +384,11 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 				toolCalls = append(toolCalls, chunk.ToolCalls...)
 			}
 			if chunk.Done {
-				if doneSeen {
-					return fmt.Errorf("provider returned more than one terminal usage receipt")
+				if chunk.EvalCount < 0 || chunk.PromptEvalCount < 0 {
+					return fmt.Errorf("invalid provider token receipt: eval=%d prompt=%d", chunk.EvalCount, chunk.PromptEvalCount)
 				}
-				if chunk.EvalCount < 0 {
-					return fmt.Errorf("invalid provider evaluation-token receipt %d", chunk.EvalCount)
+				if int64(chunk.EvalCount) > math.MaxInt64-totalEvalTokens {
+					return fmt.Errorf("provider evaluation-token receipt %d overflows the parent turn counter", chunk.EvalCount)
 				}
 				doneSeen = true
 				lastPromptTokens = chunk.PromptEvalCount
@@ -397,7 +401,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 
 		if err != nil {
 			reservedEvalTokens := int64(0)
-			if !errors.Is(err, llm.ErrNoModelSelected) {
+			if !errors.Is(err, llm.ErrNoModelSelected) || callbackSeen {
 				reservedEvalTokens = chargeUnknownEvalReservation(out, requestEvalLimit, reportedEvalTokens)
 			}
 			var reservationErr error
@@ -547,6 +551,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 		// Execute tool calls in provider order. Requested/approval/dispatch and
 		// terminal transitions are committed synchronously around the backend.
 		preflightRejections := 0
+		capabilityRouteFailed := false
 		for toolIndex, tc := range toolCalls {
 			tracked := &trackedExecutions[toolIndex]
 			if ctxErr := ctx.Err(); ctxErr != nil {
@@ -563,7 +568,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 			// may not change identity; final arguments are hashed and approved below.
 			switch kind {
 			case executionPkg.KindMemory:
-				if !a.toolPolicy.AllowsMemory(tc.Name) {
+				if !turnToolPolicy.AllowsMemory(tc.Name) {
 					if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventDenied, executionPkg.ApprovalPolicyDenied, "", "blocked by active mode")); err != nil {
 						return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
 					}
@@ -572,7 +577,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 				}
 				requiresApproval = memoryToolRequiresApproval(tc.Name)
 			case executionPkg.KindBuiltin:
-				if !a.toolPolicy.AllowsBuiltin(tc.Name) {
+				if !turnToolPolicy.AllowsBuiltin(tc.Name) {
 					if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventDenied, executionPkg.ApprovalPolicyDenied, "", "blocked by active mode")); err != nil {
 						return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
 					}
@@ -581,7 +586,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 				}
 				requiresApproval = builtinToolRequiresApproval(tc.Name)
 			case executionPkg.KindMCP:
-				if !a.toolPolicy.AllowMCP {
+				if !turnToolPolicy.AllowMCP {
 					if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventDenied, executionPkg.ApprovalPolicyDenied, "", "MCP blocked by active mode")); err != nil {
 						return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
 					}
@@ -597,7 +602,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 				}
 				// MCP annotations are untrusted display metadata. All MCP calls
 				// remain on the normal authorization path so explicit policy and
-				// yolo decisions retain their durable audit reason.
+				// Skip-approval decisions retain their durable audit reason.
 				requiresApproval = mcpToolRequiresApproval()
 			}
 
@@ -644,7 +649,13 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 				return ctxErr
 			}
 
-			if preflightErr := a.preflightToolCall(kind, tc); preflightErr != nil {
+			var preflightErr error
+			if tc.Name == "consult_experts" && expertConsultations >= 1 {
+				preflightErr = errors.New("consult_experts may be dispatched at most once per parent turn")
+			} else {
+				preflightErr = a.preflightToolCall(kind, tc)
+			}
+			if preflightErr != nil {
 				preflightRejections++
 				result := fmt.Sprintf("tool request failed preflight: %v", preflightErr)
 				if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventFailed, executionPkg.ApprovalNotApplicable, result, "preflight rejected request before dispatch")); err != nil {
@@ -781,9 +792,52 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 			var isErr bool
 			var structured, errorMeta json.RawMessage
 			transportErr := false
+			var stopAfterTool error
 			switch kind {
 			case executionPkg.KindBuiltin:
-				result, isErr = a.handleBuiltinToolWithCancellation(ctx, tc, tracked.identity.EffectClass != executionPkg.EffectReadOnly)
+				if tc.Name == "consult_experts" {
+					expertConsultations++
+					remaining := 0
+					if limits.MaxEvalTokens > 0 {
+						remaining = boundedEvalLimit(limits.MaxEvalTokens - totalEvalTokens)
+					}
+					var usage expertteam.Usage
+					var usageErr error
+					result, isErr, usage, usageErr = a.handleConsultExpertsWithBudget(ctx, tc.Arguments, remaining)
+					if usageErr != nil {
+						if remaining > 0 {
+							out.StreamDone(remaining, 0)
+							totalEvalTokens += int64(remaining)
+							stopAfterTool = fmt.Errorf("%w: expert consultation returned an invalid usage receipt; conservatively charged %d reserved token(s)", ErrTurnEvalBudgetExhausted, remaining)
+						} else {
+							stopAfterTool = errors.New("expert consultation usage could not be validated")
+						}
+						isErr = true
+					} else if usage.EvalTokens > 0 || usage.PromptEvalTokens > 0 {
+						if int64(usage.EvalTokens) > math.MaxInt64-totalEvalTokens {
+							if remaining > 0 {
+								out.StreamDone(remaining, 0)
+								totalEvalTokens += int64(remaining)
+								stopAfterTool = fmt.Errorf("%w: expert consultation usage overflowed the parent counter; conservatively charged %d reserved token(s)", ErrTurnEvalBudgetExhausted, remaining)
+							} else {
+								stopAfterTool = errors.New("expert consultation usage overflowed the parent turn counter")
+							}
+							isErr = true
+						} else {
+							out.StreamDone(usage.EvalTokens, usage.PromptEvalTokens)
+							totalEvalTokens += int64(usage.EvalTokens)
+							if limits.MaxEvalTokens > 0 && totalEvalTokens >= limits.MaxEvalTokens {
+								stopAfterTool = fmt.Errorf("%w after expert consultation: used %d of %d", ErrTurnEvalBudgetExhausted, totalEvalTokens, limits.MaxEvalTokens)
+								if totalEvalTokens > limits.MaxEvalTokens {
+									isErr = true
+									result = "error: expert provider exceeded the remaining evaluation-token budget\n" + result
+								}
+							}
+						}
+					}
+				} else {
+					result, isErr = a.handleBuiltinToolWithCancellation(ctx, tc, tracked.identity.EffectClass != executionPkg.EffectReadOnly)
+				}
 			case executionPkg.KindMemory:
 				result, isErr = a.handleMemoryTool(tc)
 			default:
@@ -812,8 +866,9 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 				tc.Name, tc.Arguments, semanticText, structured, errorMeta,
 				transportErr, isErr, kind == executionPkg.KindBuiltin || kind == executionPkg.KindMemory,
 			)
-			if capabilityRouteOutcomeFailed(projection, isErr) {
-				a.markCapabilityRouteFailed(capabilityActivity, tc.Name, tc.Arguments, capabilityHint)
+			if capabilityRouteOutcomeFailed(projection, isErr) &&
+				a.markCapabilityRouteFailed(capabilityActivity, tc.Name, tc.Arguments, capabilityHint) {
+				capabilityRouteFailed = true
 			}
 			// Typed MCP payloads stay inside the parser boundary. Only exact,
 			// host-trusted, bounded projections may enter the active provider turn;
@@ -862,6 +917,16 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 				}
 				return unresolved
 			}
+			if stopAfterTool != nil {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					stopAfterTool = errors.Join(ctxErr, stopAfterTool)
+				}
+				if ledgerErr := a.cancelTrackedToolCalls(ctx, execRuntime, trackedExecutions[toolIndex+1:], toolCalls[toolIndex+1:], out, stopAfterTool); ledgerErr != nil {
+					return ledgerErr
+				}
+				out.Error(stopAfterTool.Error())
+				return stopAfterTool
+			}
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				if ledgerErr := a.cancelTrackedToolCalls(ctx, execRuntime, trackedExecutions[toolIndex+1:], toolCalls[toolIndex+1:], out, ctxErr); ledgerErr != nil {
 					return ledgerErr
@@ -881,6 +946,15 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 		}
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		if capabilityRouteFailed && capabilityReroutes < maxCapabilityReroutesPerTurn && i < maxIters-1 {
+			capabilityReroutes++
+			capabilityHintText, capabilityHint = a.resolveTurnCapabilityWithPolicy(ctx, out, capabilityActivity, turnToolPolicy.AllowMCP)
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			loadedContext = composeCapabilityContext(capabilityHintText, capabilityBaseContext)
+			system = buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadGrants(ctx, modePrefix, tools, a.skillContent, skillCatalog, loadedContext, a.memoryStore, iceContext, a.workDir, a.ignoreContent, a.llmClient.Model(), turnNumCtx, readGrants)
 		}
 
 		// Check if we should compact the conversation.
@@ -905,7 +979,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 			}
 			if a.compactForContext(ctx, out, turnNumCtx) {
 				// Rebuild system prompt after compaction (memory may have changed).
-				system = buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadRoots(ctx, a.modePrefix, tools, a.skillContent, skillCatalog, loadedContext, a.memoryStore, iceContext, a.workDir, a.ignoreContent, a.llmClient.Model(), turnNumCtx, readRoots)
+				system = buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadGrants(ctx, modePrefix, tools, a.skillContent, skillCatalog, loadedContext, a.memoryStore, iceContext, a.workDir, a.ignoreContent, a.llmClient.Model(), turnNumCtx, readGrants)
 			}
 		}
 

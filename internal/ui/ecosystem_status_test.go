@@ -39,10 +39,10 @@ func TestProjectEcosystemConnectionsUsesSharedHealthVocabulary(t *testing.T) {
 
 func TestProjectEcosystemConnectionsNamesKnownAndCustomServers(t *testing.T) {
 	connections := projectEcosystemConnections(
-		[]string{"bob-mcp", "private_search"},
+		[]string{"bob-mcp", "hitspec", "private_search"},
 		[]FailedServer{{Name: "mcp-hub", Reason: "executable file not found"}},
 	)
-	if len(connections) != 3 {
+	if len(connections) != 4 {
 		t.Fatalf("connections = %#v", connections)
 	}
 	got := make(map[string]string, len(connections))
@@ -52,6 +52,7 @@ func TestProjectEcosystemConnectionsNamesKnownAndCustomServers(t *testing.T) {
 	for label, role := range map[string]string{
 		"MCPHub":         "gateway and discovery",
 		"Bob":            "repository contracts",
+		"Hitspec":        "bounded web and HTTP",
 		"private_search": "MCP tools",
 	} {
 		if got[label] != role {
@@ -61,7 +62,7 @@ func TestProjectEcosystemConnectionsNamesKnownAndCustomServers(t *testing.T) {
 }
 
 func TestConnectionHealthEmptyStateIsExplicitAndQuiet(t *testing.T) {
-	if got := summarizeConnectionHealth(nil); got != "unavailable · 0 servers configured" {
+	if got := summarizeConnectionHealth(nil); got != "not configured · 0 servers" {
 		t.Fatalf("empty health summary = %q", got)
 	}
 }

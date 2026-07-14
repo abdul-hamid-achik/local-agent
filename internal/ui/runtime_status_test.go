@@ -1,14 +1,26 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/abdul-hamid-achik/local-agent/internal/agent"
+	"github.com/abdul-hamid-achik/local-agent/internal/expertteam"
+	"github.com/abdul-hamid-achik/local-agent/internal/goal"
 	"github.com/charmbracelet/x/ansi"
 )
+
+type runtimeStatusExpertConsultant struct{ profiles int }
+
+func (consultant runtimeStatusExpertConsultant) Consult(context.Context, expertteam.Request) (expertteam.Result, error) {
+	return expertteam.Result{}, nil
+}
+
+func (consultant runtimeStatusExpertConsultant) ProfileCount() int { return consultant.profiles }
 
 func TestRuntimeStatusBoundsFailuresAndScrollsToFinalEntry(t *testing.T) {
 	m := newTestModel(t)
@@ -26,6 +38,9 @@ func TestRuntimeStatusBoundsFailuresAndScrollsToFinalEntry(t *testing.T) {
 	top := m.renderRuntimeStatus()
 	assertRenderedLinesFit(t, top, 40)
 	assertRenderedHeightFits(t, top, 20)
+	if integrated := ansi.Strip(m.View().Content); !strings.Contains(integrated, "╰") {
+		t.Fatalf("integrated Runtime overlay clipped its bottom border:\n%s", integrated)
+	}
 	plainTop := ansi.Strip(top)
 	if !strings.Contains(plainTop, "esc/q back") || !strings.Contains(plainTop, "↓") {
 		t.Fatalf("runtime footer is not persistently actionable:\n%s", top)
@@ -68,13 +83,140 @@ func TestRuntimeStatusSeparatesLocalToolsFromMCPServers(t *testing.T) {
 	m.serverCount = 0
 
 	content := m.buildRuntimeStatusContent(52)
-	for _, want := range []string{"Workspace", "~/src/project", "Tools", fmt.Sprintf("%d available", m.agent.ToolCount()), "MCP", "0 servers configured"} {
-		if !strings.Contains(content, want) {
+	searchable := strings.Join(strings.Fields(content), " ")
+	availability := m.agent.ToolAvailability()
+	for _, want := range []string{
+		"Workspace", "~/src/project", "Tools", fmt.Sprintf("%d ready", availability.Ready()),
+		fmt.Sprintf("%d local", availability.Local),
+		"MCP", "not configured", "0 servers", "Context route", "not exposed · policy/catalog", "Experts", "disabled in configuration",
+	} {
+		if !strings.Contains(searchable, want) {
 			t.Fatalf("runtime status missing %q:\n%s", want, content)
 		}
 	}
 	if strings.Contains(content, "across 0 MCP servers") {
 		t.Fatalf("runtime status still conflates local tools with MCP servers:\n%s", content)
+	}
+}
+
+func TestRuntimeStatusPluralizesVisibleCounters(t *testing.T) {
+	m := newTestModel(t)
+	m.sessionTurnCount = 1
+	m.sessionEvalTotal = 12
+	m.iceEnabled = true
+	m.iceConversations = 1
+	m.applyMCPStatusSnapshot([]MCPServerStatus{{Name: "one", Connected: true, ToolCount: 1}})
+
+	content := strings.Join(strings.Fields(ansi.Strip(m.buildRuntimeStatusContent(58))), " ")
+	for _, want := range []string{"1 turn", "1 conversation", "1 tool"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("Runtime omitted natural singular %q:\n%s", want, content)
+		}
+	}
+	for _, stale := range []string{"1 turns", "1 conversations", "1 tools"} {
+		if strings.Contains(content, stale) {
+			t.Fatalf("Runtime retained mechanical plural %q:\n%s", stale, content)
+		}
+	}
+}
+
+func TestRuntimeStatusRetainsExpertStartupFailure(t *testing.T) {
+	m := newTestModel(t)
+	m.SetExpertRuntimeSetupFailed()
+	content := m.buildRuntimeStatusContent(58)
+	searchable := strings.Join(strings.Fields(content), " ")
+	for _, want := range []string{"Experts", "setup failed", "review experts config/profiles; restart"} {
+		if !strings.Contains(searchable, want) {
+			t.Fatalf("expert startup status omitted %q:\n%s", want, content)
+		}
+	}
+	if strings.Contains(content, "see diagnostics") {
+		t.Fatalf("expert startup status retained non-actionable recovery copy:\n%s", content)
+	}
+}
+
+func TestRuntimeStatusKeepsReadOnlyExpertBoundaryWithProfiles(t *testing.T) {
+	m := newTestModel(t)
+	m.agent.SetExpertConsultant(runtimeStatusExpertConsultant{profiles: 3})
+	content := strings.Join(strings.Fields(ansi.Strip(m.buildRuntimeStatusContent(58))), " ")
+	for _, want := range []string{"Experts", "ready", "3 profiles", "read-only", "adaptive"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expert runtime status omitted %q:\n%s", want, content)
+		}
+	}
+}
+
+func TestRuntimeStatusUsesNaturalSingularAuthorityLabels(t *testing.T) {
+	m := newTestModel(t)
+	workspace := t.TempDir()
+	external := t.TempDir()
+	m.agent.SetWorkDir(workspace)
+	if _, err := m.agent.AddReadRoot(external); err != nil {
+		t.Fatal(err)
+	}
+
+	content := strings.Join(strings.Fields(ansi.Strip(m.buildRuntimeStatusContent(58))), " ")
+	if !strings.Contains(content, "Read scope 1 temporary external grant") || strings.Contains(content, "grant(s)") {
+		t.Fatalf("Runtime retained mechanical singular copy:\n%s", content)
+	}
+}
+
+func TestRuntimeStatusRowsSanitizeConfigurableLabels(t *testing.T) {
+	m := newTestModel(t)
+	m.agentProfile = "reviewer\nApproval · disabled\x1b]52;c;payload\a\u202e"
+	content := ansi.Strip(m.buildRuntimeStatusContent(58))
+	for _, forbidden := range []string{"\nApproval · disabled", "\x1b]52", "\a", "\u202e"} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("Runtime retained untrusted profile control %q:\n%s", forbidden, content)
+		}
+	}
+	if !strings.Contains(content, "reviewer Approval · disabled") {
+		t.Fatalf("Runtime lost the safe profile projection:\n%s", content)
+	}
+	if m.agentProfile != "reviewer\nApproval · disabled\x1b]52;c;payload\a\u202e" {
+		t.Fatal("Runtime display sanitization mutated the profile identity")
+	}
+}
+
+func TestRuntimeStatusUsesPresentedAuthorityAndPrioritizesReadScope(t *testing.T) {
+	m := newTestModel(t)
+	m.model = "qwen-cloud:latest"
+	m.modelPinned = true
+	m.ollamaModels = []OllamaModelDescriptor{{Name: m.model, Source: OllamaModelCloud}}
+	m.mode = ModePlan
+	m.goalRuntime = newUIGoalRuntime(t, 42, goal.BudgetLimits{MaxContinuationTurns: 3})
+
+	content := strings.Join(strings.Fields(ansi.Strip(m.buildRuntimeStatusContent(80))), " ")
+	for _, want := range []string{
+		"Model Pinned · CLOUD · remote prompts · qwen-cloud:latest",
+		"Mode AUTO · Goal Runtime",
+		"Approval",
+		"Read scope workspace only",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("Runtime omitted presented authority %q:\n%s", want, content)
+		}
+	}
+	approval := strings.Index(content, "Approval")
+	readScope := strings.Index(content, "Read scope")
+	tools := strings.Index(content, "Tools")
+	if approval < 0 || readScope <= approval || tools <= readScope {
+		t.Fatalf("authority rows are not ordered Approval -> Read scope -> Tools:\n%s", content)
+	}
+}
+
+func TestContextRoutingRuntimeLabelDistinguishesServerAvailability(t *testing.T) {
+	for _, test := range []struct {
+		state agent.CapabilityRoutingHostState
+		want  string
+	}{
+		{state: agent.CapabilityRoutingHostUnavailable, want: "not exposed · policy/catalog"},
+		{state: agent.CapabilityRoutingHostServerUnavailable, want: "MCPHub server unavailable"},
+		{state: agent.CapabilityRoutingHostReady, want: "ready · MCPHub advisory"},
+	} {
+		if got := contextRoutingRuntimeLabel(test.state); !strings.Contains(got, test.want) {
+			t.Fatalf("routing label for state %v = %q, want %q", test.state, got, test.want)
+		}
 	}
 }
 

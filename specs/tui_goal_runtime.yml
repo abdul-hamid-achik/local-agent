@@ -3,9 +3,9 @@ name: local_agent_tui_goal_runtime
 
 intent: |
   a user can define a bounded durable goal in the inline composer surface at
-  normal and minimum terminal sizes, observe fail-closed behavior when Cortex
-  is unavailable, inspect locked budget editing, and drop the goal without
-  false completion.
+  normal and minimum terminal sizes, continue safely without optional Cortex,
+  observe provider failure without false completion, inspect locked budget
+  editing, and drop the goal explicitly.
 
 target:
   cmd: ["./bin/local-agent"]
@@ -80,7 +80,7 @@ steps:
   - press: "enter"
   - wait:
       screen:
-        contains: "Cortex link failed"
+        contains: "Goal saved · Cortex is not configured"
       timeoutMs: 5000
   - wait:
       screen:
@@ -103,7 +103,7 @@ steps:
       timeoutMs: 2000
   - wait:
       screen:
-        contains: "paused · Cortex link failed"
+        contains: "paused · unproductive turn"
       timeoutMs: 2000
   - snapshot: goal_paused_receipt
   - press: "esc"
@@ -194,7 +194,7 @@ outcomes:
         name: goal_form_minimum
         mode: text
   - id: unavailable_advisors_stop_safely
-    description: the Goal Inspector shows that AUTO paused before provider dispatch when semantic supervision was unavailable
+    description: the Goal Inspector shows that AUTO continued without optional Cortex and paused safely when local provider inference could not start
     verify:
       snapshot:
         name: goal_paused_receipt

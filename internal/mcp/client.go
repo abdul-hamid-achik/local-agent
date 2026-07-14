@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os/exec"
 	"strings"
 
@@ -21,10 +22,14 @@ type MCPClient struct {
 
 // Connect establishes a connection to an MCP server using the specified transport.
 func Connect(ctx context.Context, name, command string, args []string, env []string, transport, url string) (*MCPClient, error) {
-	return connectWithVersion(ctx, developmentImplementationVersion, name, command, args, env, transport, url)
+	return connectWithVersion(ctx, developmentImplementationVersion, name, command, args, env, transport, url, false)
 }
 
-func connectWithVersion(ctx context.Context, implementationVersion, name, command string, args []string, env []string, transport, url string) (*MCPClient, error) {
+func connectWithVersion(ctx context.Context, implementationVersion, name, command string, args []string, env []string, transport, url string, localOnly bool) (*MCPClient, error) {
+	return connectWithVersionAndTrust(ctx, implementationVersion, name, command, args, env, transport, url, localOnly, "")
+}
+
+func connectWithVersionAndTrust(ctx context.Context, implementationVersion, name, command string, args []string, env []string, transport, url string, localOnly bool, executableSHA256 string) (*MCPClient, error) {
 	client := sdkmcp.NewClient(
 		clientImplementation(implementationVersion),
 		nil,
@@ -39,18 +44,37 @@ func connectWithVersion(ctx context.Context, implementationVersion, name, comman
 		if url == "" {
 			return nil, fmt.Errorf("sse transport requires url for %s", name)
 		}
-		t = &sdkmcp.SSEClientTransport{Endpoint: url}
+		var httpClient *http.Client
+		if localOnly {
+			var err error
+			httpClient, err = newLocalOnlyMCPHTTPClient(url)
+			if err != nil {
+				return nil, fmt.Errorf("sse transport for %s: %w", name, err)
+			}
+		}
+		t = &sdkmcp.SSEClientTransport{Endpoint: url, HTTPClient: httpClient}
 	case "streamable-http":
 		if url == "" {
 			return nil, fmt.Errorf("streamable-http transport requires url for %s", name)
 		}
-		t = &sdkmcp.StreamableClientTransport{Endpoint: url}
+		var httpClient *http.Client
+		if localOnly {
+			var err error
+			httpClient, err = newLocalOnlyMCPHTTPClient(url)
+			if err != nil {
+				return nil, fmt.Errorf("streamable-http transport for %s: %w", name, err)
+			}
+		}
+		t = &sdkmcp.StreamableClientTransport{Endpoint: url, HTTPClient: httpClient}
 	default: // "stdio" or ""
 		if command == "" {
 			return nil, fmt.Errorf("stdio transport requires command for %s", name)
 		}
 		resolvedCommand, err := resolveExecutable(command)
 		if err != nil {
+			return nil, fmt.Errorf("stdio transport command for %s: %w", name, err)
+		}
+		if err := verifyTrustedExecutable(resolvedCommand, executableSHA256); err != nil {
 			return nil, fmt.Errorf("stdio transport command for %s: %w", name, err)
 		}
 		// The SDK owns cmd.Wait, while MCPClient owns cancellation of the
@@ -221,15 +245,17 @@ func renderToolResult(result *sdkmcp.CallToolResult) string {
 }
 
 // marshalBoundedMCPValue preserves a JSON value atomically. Oversized or
-// invalid values are omitted instead of truncating them into misleading JSON;
-// callers then fail closed to an unknown semantic outcome.
+// invalid non-nil values become a JSON null marker instead of disappearing.
+// The marker preserves the fact that typed content was present, so callers do
+// not mistake a duplicated TextContent payload for genuinely unstructured
+// output and accidentally bypass the semantic parser boundary.
 func marshalBoundedMCPValue(value any) json.RawMessage {
 	if value == nil {
 		return nil
 	}
 	encoded, err := json.Marshal(value)
 	if err != nil || len(encoded) > maxRenderedMCPResultBytes {
-		return nil
+		return json.RawMessage("null")
 	}
 	return append(json.RawMessage(nil), encoded...)
 }

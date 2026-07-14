@@ -28,14 +28,18 @@ type settingsItem struct {
 }
 
 func (i settingsItem) Title() string {
-	if i.value == "" {
-		return i.title
+	title := sanitizeTerminalSingleLine(i.title)
+	value := sanitizeTerminalSingleLine(i.value)
+	if value == "" {
+		return title
 	}
-	return i.title + " · " + i.value
+	return title + " · " + value
 }
 
-func (i settingsItem) Description() string { return i.description }
-func (i settingsItem) FilterValue() string { return i.title + " " + i.value }
+func (i settingsItem) Description() string { return sanitizeTerminalSingleLine(i.description) }
+func (i settingsItem) FilterValue() string {
+	return sanitizeTerminalSingleLine(i.title + " " + i.value)
+}
 
 // SettingsPickerState is the transient control center that replaces the
 // persistent navigation chrome. It contains list/navigation and responsive
@@ -210,11 +214,19 @@ func (m *Model) resizePickerOverlays() {
 }
 
 func (m *Model) settingsItems() []settingsItem {
-	modelValue := m.model
+	modelValue := m.currentModelSurfaceLabel(false)
 	if !m.modelPinned {
-		modelValue = "Auto · " + modelValue
+		if m.currentModelIsNonLocal() {
+			modelValue += " · Auto"
+		} else {
+			modelValue = "Auto · " + modelValue
+		}
 	} else if modelValue != "" {
-		modelValue = "Pinned · " + modelValue
+		if m.currentModelIsNonLocal() {
+			modelValue += " · Pinned"
+		} else {
+			modelValue = "Pinned · " + modelValue
+		}
 	}
 	profile := m.agentProfile
 	if profile == "" {
@@ -224,25 +236,55 @@ func (m *Model) settingsItems() []settingsItem {
 	if m.forceCompact {
 		compact = "On"
 	}
-	runtime := fmt.Sprintf("%d servers · %d tools", m.serverCount, m.toolCount)
-	if len(m.failedServers) > 0 {
-		runtime += fmt.Sprintf(" · %d failed", len(m.failedServers))
+	connected, unavailable, _ := m.mcpStatusCounts()
+	runtime := fmt.Sprintf("%d %s total", m.toolCount, pluralizeNoun(m.toolCount, "tool", "tools"))
+	if m.agent != nil {
+		availability := m.agent.ToolAvailability()
+		runtime = fmt.Sprintf("%d ready %s · %d local · %d MCP",
+			availability.Ready(), pluralizeNoun(availability.Ready(), "tool", "tools"),
+			availability.Local, availability.MCPConnected,
+		)
+		if retainedUnavailable := availability.MCPRetained - availability.MCPConnected; retainedUnavailable > 0 {
+			runtime += fmt.Sprintf(" · %d MCP unavailable", retainedUnavailable)
+		}
+	}
+	if len(m.mcpServers) > 0 {
+		runtime += fmt.Sprintf(" · %d %s · %d connected · %d unavailable",
+			len(m.mcpServers), pluralizeServer(len(m.mcpServers)), connected, unavailable,
+		)
+	} else if len(m.failedServers) > 0 {
+		runtime += fmt.Sprintf(" · %d unavailable", len(m.failedServers))
 	}
 	if m.iceEnabled {
 		runtime += " · ICE"
+	}
+	if m.skipApprovalsEnabled() {
+		runtime += " · no approval prompts"
 	}
 
 	modelDescription := "Choose an installed local model or Ollama Cloud model"
 	if len(m.ollamaModels) > 0 {
 		modelDescription = ollamaInventorySummary(m.ollamaModels)
 	}
+	runtimeDescription := "Inspect model, approval posture, tools, servers, and failures"
+	if len(m.mcpServers) > 0 {
+		runtimeDescription = fmt.Sprintf("%d %s · %d connected · %d unavailable · inspect approval and runtime details",
+			len(m.mcpServers), pluralizeServer(len(m.mcpServers)), connected, unavailable,
+		)
+	}
+	modeTitle := "Mode"
+	modeDescription := "NORMAL, PLAN, or AUTO authority"
+	if m.goalRuntime != nil {
+		modeTitle = "Next chat mode"
+		modeDescription = "Goal Runtime keeps AUTO; this applies after the goal"
+	}
 	return []settingsItem{
 		{action: settingsModel, title: "Model", value: modelValue, description: modelDescription},
 		{action: settingsAgent, title: "Agent profile", value: profile, description: "Change prompt, skills, model, and MCP scope"},
-		{action: settingsMode, title: "Mode", value: m.modeConfigs[m.mode].Label, description: "NORMAL, PLAN, or AUTO authority"},
+		{action: settingsMode, title: modeTitle, value: m.modeConfigs[m.mode].Label, description: modeDescription},
 		{action: settingsSessions, title: "Sessions", value: "Resume", description: "Open a saved workspace session"},
 		{action: settingsCompact, title: "Compact layout", value: compact, description: "Toggle the explicit compact transcript preference"},
-		{action: settingsRuntime, title: "Runtime status", value: runtime, description: "Inspect local model, tools, servers, and failures"},
+		{action: settingsRuntime, title: "Runtime status", value: runtime, description: runtimeDescription},
 		{action: settingsHelp, title: "Help", value: "Shortcuts", description: "Keyboard reference and slash commands"},
 	}
 }

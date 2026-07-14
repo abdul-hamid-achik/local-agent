@@ -322,3 +322,35 @@ func LoadSkillToolDef() llm.ToolDef {
 		},
 	}
 }
+
+// ConsultExpertsToolDef describes application-level advisory fan-out. The
+// host supplies no tools to child experts and retains all effect authority in
+// the parent Agent.
+func ConsultExpertsToolDef() llm.ToolDef {
+	return llm.ToolDef{
+		Name:        "consult_experts",
+		Description: "Run a bounded read-only Team, Swarm, or application-level mixture of experts and return independent advisory reports. Use when the user explicitly requests experts or when multiple perspectives materially improve a difficult decision. Child experts cannot call tools or mutate files; the parent remains the coordinator and must verify their claims.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"strategy": map[string]any{
+					"type":        "string",
+					"enum":        []string{"team", "swarm", "moe"},
+					"description": "team uses a stable bounded group; swarm maximizes diverse perspectives; moe routes to the best matching profiles.",
+				},
+				"objective": map[string]any{
+					"type":        "string",
+					"description": "The exact bounded question or objective every selected expert should analyze.",
+				},
+				"experts": map[string]any{
+					"type":        "array",
+					"items":       map[string]any{"type": "string"},
+					"maxItems":    16,
+					"description": "Optional exact profile names. Team uses exactly these names; Swarm seeds them; MoE uses them as a no-match fallback.",
+				},
+			},
+			"required":             []string{"strategy", "objective"},
+			"additionalProperties": false,
+		},
+	}
+}

@@ -378,6 +378,45 @@ func TestModelManagerChatStreamNoModel(t *testing.T) {
 	if err == nil {
 		t.Error("ChatStream should fail when no model is set")
 	}
+	if !errors.Is(err, ErrNoModelSelected) || !errors.Is(err, ErrInferenceNotStarted) {
+		t.Fatalf("ChatStream error = %v, want pre-dispatch and no-model sentinels", err)
+	}
+}
+
+func TestModelManagerChatStreamForModelMarksOnlyPreDispatchErrors(t *testing.T) {
+	t.Run("context policy changed", func(t *testing.T) {
+		manager := NewModelManager("http://localhost:11434", 8192)
+		manager.ConfigureOllamaInventory([]OllamaModel{{
+			Name:          "expert:3b",
+			Location:      OllamaModelLocationLocal,
+			ContextLength: 16_384,
+		}}, true)
+		err := manager.ChatStreamForModel(
+			context.Background(),
+			"expert:3b",
+			ChatOptions{ExpectedContext: 4096},
+			func(StreamChunk) error { return nil },
+		)
+		if !errors.Is(err, ErrInferenceNotStarted) || !strings.Contains(err.Error(), "context changed before inference") {
+			t.Fatalf("context pre-dispatch error = %v", err)
+		}
+	})
+
+	t.Run("client creation rejected", func(t *testing.T) {
+		manager := NewModelManager("http://localhost:11434", 8192)
+		err := manager.ChatStreamForModel(context.Background(), "", ChatOptions{}, func(StreamChunk) error { return nil })
+		if !errors.Is(err, ErrInferenceNotStarted) || !strings.Contains(err.Error(), "model name is required") {
+			t.Fatalf("client pre-dispatch error = %v", err)
+		}
+	})
+
+	t.Run("provider client error is dispatch unknown", func(t *testing.T) {
+		manager := NewModelManager("http://localhost:11434", 8192)
+		err := manager.ChatStreamForModel(context.Background(), "expert:3b", ChatOptions{}, nil)
+		if err == nil || errors.Is(err, ErrInferenceNotStarted) {
+			t.Fatalf("provider client error = %v, want unmarked dispatch status", err)
+		}
+	})
 }
 
 func TestModelManagerPingNoModel(t *testing.T) {
@@ -485,6 +524,31 @@ func TestModelManagerLocalOnlyRejectsRemoteOllamaHostBeforeInventoryRequest(t *t
 	}
 	if elapsed := time.Since(started); elapsed > time.Second {
 		t.Fatalf("remote host rejection waited for network I/O: %s", elapsed)
+	}
+}
+
+func TestModelManagerLocalOnlyCloudGrantNeverAuthorizesRemoteOllamaHost(t *testing.T) {
+	manager := NewModelManager("http://192.0.2.10:11434", 4096)
+	manager.ConfigureLocalInventory(true, nil, true)
+	manager.ConfigureOllamaCloudInventory([]string{"qwen:cloud"}, true)
+	if err := manager.GrantOllamaCloudModel("qwen:cloud"); err != nil {
+		t.Fatal(err)
+	}
+
+	started := time.Now()
+	err := manager.ensureModelLocal(context.Background(), "qwen:cloud")
+	if err == nil || !strings.Contains(err.Error(), "not a local-machine address") {
+		t.Fatalf("remote Ollama cloud-grant admission error = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("remote cloud-grant rejection waited for network I/O: %s", elapsed)
+	}
+	started = time.Now()
+	if _, err := manager.PrepareExpertModels(context.Background(), []string{"qwen:cloud"}); err == nil || !strings.Contains(err.Error(), "not a local-machine address") {
+		t.Fatalf("remote Ollama expert snapshot error = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("remote expert snapshot rejection waited for network I/O: %s", elapsed)
 	}
 }
 

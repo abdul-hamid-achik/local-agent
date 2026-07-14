@@ -110,13 +110,18 @@ func TestCapabilityHintIsTransientAndClearRouteIsAdvisory(t *testing.T) {
 	system := client.system()
 	for _, expected := range []string{
 		"Host capability advisory", "advisory only", "bob__bob_plan",
-		"Required argument fields: workspace", "mcphub_call_tool", "approval", "execution-ledger",
+		"Required argument fields: workspace", "mcphub_describe_tool", "runtime relationships",
+		"mcphub_call_tool", "approval", "execution-ledger",
 	} {
 		if !strings.Contains(system, expected) {
 			t.Fatalf("system prompt missing %q:\n%s", expected, system)
 		}
 	}
-	if len(output.routes) != 1 || output.routes[0] != (CapabilityRoute{Phase: "planning", Server: "bob", Tool: "bob_plan"}) {
+	wantRoute := CapabilityRoute{
+		Phase: "planning", Status: CapabilityRouteResolved, Freshness: CapabilityRouteFresh,
+		Server: "bob", Tool: "bob_plan", CandidateCount: 1,
+	}
+	if len(output.routes) != 1 || output.routes[0] != wantRoute {
 		t.Fatalf("routes = %#v", output.routes)
 	}
 	for _, message := range agent.Messages() {
@@ -126,10 +131,29 @@ func TestCapabilityHintIsTransientAndClearRouteIsAdvisory(t *testing.T) {
 	}
 }
 
+func TestCapabilityHintComposesHitspecInlineFetchWithSeparatePersistence(t *testing.T) {
+	agent := New(nil, nil, 0)
+	agent.SetModeContext("test", BuildToolPolicy())
+	activity := CapabilityActivity{DesiredOutcome: "A readable durable Markdown artifact"}
+	hint := capabilityadvisor.Hint{
+		Namespaced: "hitspec__hitspec_fetch", Server: "hitspec", Tool: "hitspec_fetch",
+	}
+
+	got := agent.formatCapabilityHint(activity, hint)
+	for _, expected := range []string{
+		"returns bounded content inline", "does not create a workspace file", "review the inline result",
+		"separately authorized host action", "fcheap_save separately", "distinct effect and approval boundaries",
+	} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("Hitspec composition hint missing %q:\n%s", expected, got)
+		}
+	}
+}
+
 func TestAmbiguousCapabilityHintDoesNotEmitSelectedRoute(t *testing.T) {
 	client := &capabilityCaptureClient{}
 	advisor := &staticCapabilityAdviser{result: capabilityadvisor.Result{
-		Status: capabilityadvisor.StatusResolved, Attempted: true,
+		Status: capabilityadvisor.StatusAmbiguous, Attempted: true,
 		Hint: &capabilityadvisor.Hint{
 			Namespaced: "bob__bob_plan", Server: "bob", Tool: "bob_plan", Ambiguous: true,
 			Alternatives: []string{"cortex__cortex_plan"}, RequiredFields: []string{"workspace"},
@@ -145,12 +169,80 @@ func TestAmbiguousCapabilityHintDoesNotEmitSelectedRoute(t *testing.T) {
 	if err := agent.RunTurnWithOptions(context.Background(), output, "turn_ambiguous", TurnOptions{Capability: activity}); err != nil {
 		t.Fatal(err)
 	}
-	if len(output.routes) != 0 {
-		t.Fatalf("ambiguous recommendation emitted a selected route: %#v", output.routes)
+	wantRoute := CapabilityRoute{
+		Phase: "planning", Status: CapabilityRouteAmbiguous, Freshness: CapabilityRouteFresh,
+		CandidateCount: 2,
+	}
+	if len(output.routes) != 1 || output.routes[0] != wantRoute {
+		t.Fatalf("ambiguous recommendation did not emit bounded state: %#v", output.routes)
 	}
 	system := client.system()
 	if !strings.Contains(system, "ambiguous route") || !strings.Contains(system, "No capability has been selected") || !strings.Contains(system, "cortex__cortex_plan") {
 		t.Fatalf("ambiguous hint was not explicit:\n%s", system)
+	}
+}
+
+func TestCapabilityRouteEventsExposeBoundedStatusAndFreshness(t *testing.T) {
+	activity := CapabilityActivity{
+		ScopeID: "session_1", Objective: "Investigate project evidence", Phase: "research",
+		CurrentActivity: "Inspect available evidence", DesiredOutcome: "A source-backed finding",
+		AvailableInputKinds: []string{"workspace"}, NonTrivial: true,
+	}
+	tests := []struct {
+		name   string
+		result capabilityadvisor.Result
+		want   CapabilityRoute
+	}{
+		{
+			name: "cached resolved",
+			result: capabilityadvisor.Result{
+				Status: capabilityadvisor.StatusResolved, Cached: true, CatalogRevision: "catalog-7",
+				Hint: &capabilityadvisor.Hint{Namespaced: "bob__plan", Server: "bob", Tool: "plan"},
+			},
+			want: CapabilityRoute{
+				Phase: "research", Status: CapabilityRouteResolved, Freshness: CapabilityRouteCached,
+				Server: "bob", Tool: "plan", CandidateCount: 1, CatalogRevision: "catalog-7",
+			},
+		},
+		{
+			name: "fresh no match",
+			result: capabilityadvisor.Result{
+				Status: capabilityadvisor.StatusNoMatch, Attempted: true, CatalogRevision: "catalog-8",
+			},
+			want: CapabilityRoute{
+				Phase: "research", Status: CapabilityRouteNoMatch, Freshness: CapabilityRouteFresh,
+				CatalogRevision: "catalog-8",
+			},
+		},
+		{
+			name:   "pre-dispatch unavailable",
+			result: capabilityadvisor.Result{Status: capabilityadvisor.StatusUnavailable},
+			want: CapabilityRoute{
+				Phase: "research", Status: CapabilityRouteUnavailable, Freshness: CapabilityRouteFreshnessUnknown,
+			},
+		},
+		{
+			name:   "fresh invalid",
+			result: capabilityadvisor.Result{Status: capabilityadvisor.StatusInvalid, Attempted: true},
+			want: CapabilityRoute{
+				Phase: "research", Status: CapabilityRouteInvalid, Freshness: CapabilityRouteFresh,
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			advisor := &staticCapabilityAdviser{result: test.result}
+			agent := New(&capabilityCaptureClient{}, nil, 0)
+			agent.capabilityAdvisor = advisor
+			output := &capabilityOutputRecorder{}
+			text, hint := agent.resolveTurnCapability(context.Background(), output, activity)
+			if len(output.routes) != 1 || output.routes[0] != test.want {
+				t.Fatalf("routes = %#v, want %#v", output.routes, test.want)
+			}
+			if test.want.Status != CapabilityRouteResolved && (text != "" || hint != nil) {
+				t.Fatalf("non-resolved route entered model context: text=%q hint=%#v", text, hint)
+			}
+		})
 	}
 }
 
@@ -201,9 +293,11 @@ func TestFailedRecommendedGatewayRouteIsReconsidered(t *testing.T) {
 	if hint == nil {
 		t.Fatal("first recommendation was not resolved")
 	}
-	agent.markCapabilityRouteFailed(activity, "mcphub__mcphub_call_tool", map[string]any{
+	if !agent.markCapabilityRouteFailed(activity, "mcphub__mcphub_call_tool", map[string]any{
 		"server": "hitspec", "tool": "hitspec_capture_webpage", "arguments": map[string]any{"url": "https://example.com"},
-	}, hint)
+	}, hint) {
+		t.Fatal("exact failed recommendation was not marked for reconsideration")
+	}
 	otherActivity := CapabilityActivityFromPrompt(
 		"session_1", "capture https://example.org as Markdown", "research", true,
 	)
@@ -217,6 +311,47 @@ func TestFailedRecommendedGatewayRouteIsReconsidered(t *testing.T) {
 	defer advisor.mu.Unlock()
 	if len(advisor.requests) != 3 || advisor.requests[0].Reconsider || advisor.requests[1].Reconsider || !advisor.requests[2].Reconsider {
 		t.Fatalf("requests = %#v", advisor.requests)
+	}
+}
+
+func TestFailedRouteReconsiderationRefreshesTransientContextOnce(t *testing.T) {
+	advisor := &staticCapabilityAdviser{result: capabilityadvisor.Result{
+		Status: capabilityadvisor.StatusNoMatch, Attempted: true, CatalogRevision: "catalog-2",
+	}}
+	agent := New(&capabilityCaptureClient{}, nil, 0)
+	agent.capabilityAdvisor = advisor
+	activity := CapabilityActivityFromPrompt("session_1", "inspect bug.mp4 and diagnose the failure", "research", true)
+	failedHint := &capabilityadvisor.Hint{
+		Namespaced: "vidtrace__inspect_video", Server: "vidtrace", Tool: "inspect_video",
+	}
+	if !agent.markCapabilityRouteFailed(activity, "mcphub__mcphub_call_tool", map[string]any{
+		"server": "vidtrace", "tool": "inspect_video", "arguments": map[string]any{"path": "/private/bug.mp4"},
+	}, failedHint) {
+		t.Fatal("failed route was not eligible for a bounded refresh")
+	}
+	output := &capabilityOutputRecorder{}
+	text, hint := agent.resolveTurnCapability(context.Background(), output, activity)
+	if text != "" || hint != nil {
+		t.Fatalf("no-match refresh retained stale advisory: text=%q hint=%#v", text, hint)
+	}
+	if advisor.callCount() != 1 {
+		t.Fatalf("refresh calls = %d, want 1", advisor.callCount())
+	}
+	advisor.mu.Lock()
+	request := advisor.requests[0]
+	advisor.mu.Unlock()
+	if !request.Reconsider {
+		t.Fatalf("refresh request did not force reconsideration: %#v", request)
+	}
+	want := CapabilityRoute{
+		Phase: activity.Phase, Status: CapabilityRouteNoMatch, Freshness: CapabilityRouteFresh,
+		CatalogRevision: "catalog-2", Reconsidered: true,
+	}
+	if len(output.routes) != 1 || output.routes[0] != want {
+		t.Fatalf("refresh route event = %#v, want %#v", output.routes, want)
+	}
+	if got := composeCapabilityContext(text, "base context"); got != "base context" || strings.Contains(got, "vidtrace") {
+		t.Fatalf("stale advisory survived refresh: %q", got)
 	}
 }
 
@@ -255,9 +390,44 @@ func TestCapabilityResolverRequiresTrustedLocalMCPHub(t *testing.T) {
 	if _, err := registry.CallTool(context.Background(), exposed, map[string]any{"query": "bounded", "max_hits": 5}); err != nil || backend.calls != 1 {
 		t.Fatalf("trusted resolver call: calls=%d err=%v", backend.calls, err)
 	}
+	for _, test := range []struct {
+		name     string
+		statuses []mcp.ConnectionStatus
+		want     CapabilityRoutingHostState
+	}{
+		{
+			name: "connected trusted namespace",
+			statuses: []mcp.ConnectionStatus{
+				{Name: "other", Connected: true},
+				{Name: "gateway", Connected: true, ToolCount: 4},
+			},
+			want: CapabilityRoutingHostReady,
+		},
+		{
+			name: "retained resolver on disconnected namespace",
+			statuses: []mcp.ConnectionStatus{
+				{Name: "gateway", Connected: false, ToolCount: 4, LastError: "private transport failure"},
+			},
+			want: CapabilityRoutingHostServerUnavailable,
+		},
+		{
+			name:     "retained resolver without live status row",
+			statuses: []mcp.ConnectionStatus{{Name: "other", Connected: true}},
+			want:     CapabilityRoutingHostServerUnavailable,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := capabilityRoutingHostState(agent, backend, test.statuses); got != test.want {
+				t.Fatalf("routing state = %v, want %v", got, test.want)
+			}
+		})
+	}
 	agent.DenyAllMCPTools()
 	if exposed, ok := registry.ResolveToolName("mcphub_resolve_tool"); ok || exposed != "" {
 		t.Fatalf("deny-all scope exposed resolver: %q", exposed)
+	}
+	if got := capabilityRoutingHostState(agent, backend, []mcp.ConnectionStatus{{Name: "gateway", Connected: true}}); got != CapabilityRoutingHostUnavailable {
+		t.Fatalf("explicit deny routing state = %v, want unavailable", got)
 	}
 }
 
@@ -308,6 +478,19 @@ func TestCapabilityActivityPrivacyAndClassification(t *testing.T) {
 		}
 	}
 
+	multiline := CapabilityActivityFromPrompt(
+		"session_1", "Implement contextual MCP routing.\nKeep raw task details private.\nVerify the selected tool contract.", "working", true,
+	)
+	if !multiline.NonTrivial {
+		t.Fatalf("multiline task did not receive host-side capability routing: %#v", multiline)
+	}
+	multilineProjection := multiline.Objective + multiline.CurrentActivity + multiline.DesiredOutcome
+	for _, private := range []string{"contextual", "raw task details", "selected tool contract"} {
+		if strings.Contains(strings.ToLower(multilineProjection), private) {
+			t.Fatalf("multiline raw wording crossed resolver projection: %q", multilineProjection)
+		}
+	}
+
 	if got := CapabilityActivityFromPrompt("session_1", "I was wondering whether cats generally enjoy sunny windows in the afternoon", "working", true); got.NonTrivial {
 		t.Fatalf("long casual chat triggered capability resolution: %#v", got)
 	}
@@ -317,6 +500,70 @@ func TestCapabilityActivityPrivacyAndClassification(t *testing.T) {
 	} {
 		if got := CapabilityActivityFromPrompt("session_1", unsafe, "working", true); got.NonTrivial || got.Objective != "" {
 			t.Fatalf("unsafe prompt was projected: %#v", got)
+		}
+	}
+}
+
+func TestCapabilityActivityProjectsExternalFileFacetsWithoutPaths(t *testing.T) {
+	tests := []struct {
+		prompt string
+		kinds  []string
+		secret []string
+	}{
+		{
+			prompt: "analyze /Users/alice/incident/private-bug.mp4 and diagnose the visible failure",
+			kinds:  []string{"external_file", "video"},
+			secret: []string{"alice", "incident", "private-bug", "/users/"},
+		},
+		{
+			prompt: "inspect screenshot-customer-42.jpg for the rendering defect",
+			kinds:  []string{"external_file", "image"},
+			secret: []string{"screenshot-customer-42", ".jpg"},
+		},
+		{
+			prompt: "analyze interview-private.m4a and verify the audio issue",
+			kinds:  []string{"external_file", "audio"},
+			secret: []string{"interview-private", ".m4a"},
+		},
+		{
+			prompt: "review /private/contracts/acquisition-secret.pdf and identify the document issue",
+			kinds:  []string{"external_file", "document"},
+			secret: []string{"contracts", "acquisition-secret", "/private/"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.kinds[1], func(t *testing.T) {
+			activity := CapabilityActivityFromPrompt("session_external", test.prompt, "research", false)
+			if !activity.NonTrivial {
+				t.Fatalf("external file was not classified: %#v", activity)
+			}
+			for _, kind := range test.kinds {
+				if !containsAnyWord(strings.Join(activity.AvailableInputKinds, ","), kind) {
+					t.Fatalf("input kinds %v missing %q", activity.AvailableInputKinds, kind)
+				}
+			}
+			request := activity.request(false)
+			projected := strings.ToLower(strings.Join([]string{
+				request.Activity.Objective, request.Activity.CurrentActivity, request.Activity.DesiredOutcome,
+			}, " "))
+			for _, private := range test.secret {
+				if strings.Contains(projected, private) {
+					t.Fatalf("private path/name fragment %q entered resolver projection %q", private, projected)
+				}
+			}
+		})
+	}
+
+	codePath := CapabilityActivityFromPrompt("session_external", "fix internal/agent/private_handler.go", "implementation", true)
+	if containsAnyWord(strings.Join(codePath.AvailableInputKinds, ","), "external_file") {
+		t.Fatalf("workspace source path was mislabeled as external: %#v", codePath.AvailableInputKinds)
+	}
+	for _, unsafe := range []string{
+		`{"path":"/private/incident.mp4"}`,
+		"analyze /private/incident.mp4 with API_KEY=private",
+	} {
+		if got := CapabilityActivityFromPrompt("session_external", unsafe, "research", false); got.NonTrivial {
+			t.Fatalf("unsafe external-file prompt crossed fail-closed boundary: %#v", got)
 		}
 	}
 }
@@ -334,8 +581,15 @@ func TestCapabilityActivityTracksPrivateMaterialChangesWithoutSendingThem(t *tes
 	if first.request(false).CacheDiscriminator != cosmetic.request(false).CacheDiscriminator {
 		t.Fatal("case and punctuation-only changes did not reuse the cache discriminator")
 	}
+	if !containsAnyWord(strings.Join(first.IntentTags, ","), "security", "references") ||
+		!containsAnyWord(strings.Join(second.IntentTags, ","), "observability", "telemetry") {
+		t.Fatalf("materially different tasks lost allowlisted routing signal: first=%v second=%v", first.IntentTags, second.IntentTags)
+	}
+	if strings.Join(first.IntentTags, "\x00") == strings.Join(second.IntentTags, "\x00") {
+		t.Fatalf("materially different tasks share intent facets: %v", first.IntentTags)
+	}
 	for _, request := range []capabilityadvisor.Request{first.request(false), second.request(false)} {
-		projection := request.Activity.Objective + request.Activity.CurrentActivity + request.Activity.DesiredOutcome
+		projection := request.Activity.Objective + request.Activity.CurrentActivity + request.Activity.DesiredOutcome + strings.Join(request.Activity.IntentTags, " ")
 		if strings.Contains(strings.ToLower(projection), "authentication") || strings.Contains(strings.ToLower(projection), "logging") {
 			t.Fatalf("private task wording entered resolver activity: %q", projection)
 		}
@@ -379,7 +633,10 @@ func TestDurableGoalCapabilityHonorsHostPhaseAndActivityChanges(t *testing.T) {
 func TestHeadlessCapabilityRouteStaysOnStderr(t *testing.T) {
 	var stdout, stderr strings.Builder
 	output := newHeadlessOutput(&stdout, &stderr)
-	output.CapabilityRoute(CapabilityRoute{Phase: "research", Server: "hitspec", Tool: "hitspec_capture_webpage"})
+	output.CapabilityRoute(CapabilityRoute{
+		Phase: "research", Status: CapabilityRouteResolved, Freshness: CapabilityRouteFresh,
+		Server: "hitspec", Tool: "hitspec_capture_webpage", CandidateCount: 1,
+	})
 	if stdout.Len() != 0 || !strings.Contains(stderr.String(), "advisory") || !strings.Contains(stderr.String(), "hitspec__hitspec_capture_webpage") {
 		t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}

@@ -14,6 +14,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/abdul-hamid-achik/local-agent/internal/netpolicy"
 )
 
 const (
@@ -159,6 +161,11 @@ func NewOllamaClient(baseURL, model string, numCtx int) (*OllamaClient, error) {
 }
 
 func newOllamaHTTPClient(base *url.URL) *http.Client {
+	dialer := &net.Dialer{}
+	return newOllamaHTTPClientWithNetwork(base, net.DefaultResolver, dialer.DialContext)
+}
+
+func newOllamaHTTPClientWithNetwork(base *url.URL, resolver netpolicy.IPResolver, dial netpolicy.DialContextFunc) *http.Client {
 	transport := &http.Transport{Proxy: http.ProxyFromEnvironment}
 	if defaultTransport, ok := http.DefaultTransport.(*http.Transport); ok {
 		transport = defaultTransport.Clone()
@@ -167,6 +174,7 @@ func newOllamaHTTPClient(base *url.URL) *http.Client {
 	// both faster and preserves the local-only boundary for localhost aliases.
 	if isLocalOllamaHost(base.Hostname()) {
 		transport.Proxy = nil
+		transport.DialContext = netpolicy.LocalOnlyDialContext(resolver, dial, "Ollama")
 	}
 
 	originScheme := strings.ToLower(base.Scheme)
@@ -186,11 +194,7 @@ func newOllamaHTTPClient(base *url.URL) *http.Client {
 }
 
 func isLocalOllamaHost(host string) bool {
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && (ip.IsLoopback() || ip.IsUnspecified())
+	return netpolicy.IsLocalHost(host)
 }
 
 func (o *OllamaClient) Model() string { return o.model }
@@ -229,6 +233,9 @@ func (o *OllamaClient) ChatStream(ctx context.Context, opts ChatOptions, fn func
 	if fn == nil {
 		return errors.New("ollama stream callback is nil")
 	}
+	if opts.NumThread < 0 {
+		return errors.New("ollama num_thread cannot be negative")
+	}
 
 	messages := make([]ollamaMessage, 0, len(opts.Messages)+1)
 	if opts.System != "" {
@@ -254,12 +261,15 @@ func (o *OllamaClient) ChatStream(ctx context.Context, opts ChatOptions, fn func
 		messages = append(messages, converted)
 	}
 
-	options := make(map[string]any, 2)
+	options := make(map[string]any, 3)
 	if o.numCtx > 0 {
 		options["num_ctx"] = o.numCtx
 	}
 	if opts.MaxEvalTokens > 0 {
 		options["num_predict"] = opts.MaxEvalTokens
+	}
+	if opts.NumThread > 0 {
+		options["num_thread"] = opts.NumThread
 	}
 	request := ollamaChatRequest{
 		Model:    o.model,

@@ -21,6 +21,9 @@ const (
 	maxDesiredOutcomeBytes  = 512
 	maxInputKinds           = 16
 	maxInputKindBytes       = 48
+	maxIntentTags           = 16
+	maxIntentTagBytes       = 48
+	maxCatalogRevisionBytes = 128
 	maxResolverQueryBytes   = 2048
 )
 
@@ -33,8 +36,9 @@ var (
 )
 
 type preparedRequest struct {
-	query string
-	key   cacheKey
+	query           string
+	key             cacheKey
+	catalogRevision string
 }
 
 func prepareRequest(request Request) (preparedRequest, error) {
@@ -62,22 +66,58 @@ func prepareRequest(request Request) (preparedRequest, error) {
 	if err != nil {
 		return preparedRequest{}, err
 	}
+	intentTags, err := safeIntentTags(request.Activity.IntentTags)
+	if err != nil {
+		return preparedRequest{}, err
+	}
+	catalogRevision, err := safeCatalogRevision(request.CatalogRevision)
+	if err != nil {
+		return preparedRequest{}, err
+	}
 	available := "none"
 	if len(kinds) > 0 {
 		available = strings.Join(kinds, ", ")
 	}
+	intents := "none"
+	if len(intentTags) > 0 {
+		intents = strings.Join(intentTags, ", ")
+	}
 	query := fmt.Sprintf(
-		"Goal: %s. Phase: %s. Current activity: %s. Desired outcome: %s. Available inputs: %s.",
-		objective, phase, current, outcome, available,
+		"Goal: %s. Phase: %s. Current activity: %s. Desired outcome: %s. Available inputs: %s. Intent facets: %s.",
+		objective, phase, current, outcome, available, intents,
 	)
 	if len(query) > maxResolverQueryBytes {
 		return preparedRequest{}, errors.New("resolver query exceeds bounded size")
 	}
 
 	return preparedRequest{
-		query: query,
-		key:   activityCacheKey(goalID, objective, phase, current, outcome, kinds, request.CacheDiscriminator),
+		query:           query,
+		key:             activityCacheKey(goalID, objective, phase, current, outcome, kinds, intentTags, catalogRevision, request.CacheDiscriminator),
+		catalogRevision: catalogRevision,
 	}, nil
+}
+
+// safeCatalogRevision accepts an optional opaque ASCII catalog generation
+// supplied by the trusted host. It is cache metadata only and is never
+// included in the resolver query. Keeping the alphabet deliberately small
+// prevents a future registry implementation from turning revision metadata
+// into prompt text.
+func safeCatalogRevision(value string) (string, error) {
+	if value == "" {
+		return "", nil
+	}
+	if !utf8.ValidString(value) || strings.TrimSpace(value) != value || len(value) > maxCatalogRevisionBytes {
+		return "", errors.New("catalog revision is invalid or too long")
+	}
+	for index := 0; index < len(value); index++ {
+		character := value[index]
+		if (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
+			(character >= '0' && character <= '9') || strings.ContainsRune("_-.:/", rune(character)) {
+			continue
+		}
+		return "", errors.New("catalog revision contains unsafe characters")
+	}
+	return value, nil
 }
 
 func exactHostID(value string) (string, error) {
@@ -143,22 +183,30 @@ func stripURLQueries(value string) string {
 }
 
 func safeInputKinds(values []string) ([]string, error) {
-	if len(values) > maxInputKinds {
-		return nil, errors.New("too many available input kinds")
+	return safeLabels(values, maxInputKinds, maxInputKindBytes, "available input kind")
+}
+
+func safeIntentTags(values []string) ([]string, error) {
+	return safeLabels(values, maxIntentTags, maxIntentTagBytes, "intent tag")
+}
+
+func safeLabels(values []string, maxValues, maxBytes int, field string) ([]string, error) {
+	if len(values) > maxValues {
+		return nil, fmt.Errorf("too many %ss", field)
 	}
 	seen := make(map[string]struct{}, len(values))
 	result := make([]string, 0, len(values))
 	for _, value := range values {
 		if !utf8.ValidString(value) {
-			return nil, errors.New("input kind is not valid UTF-8")
+			return nil, fmt.Errorf("%s is not valid UTF-8", field)
 		}
 		value = strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(value)), "_"))
-		if value == "" || len(value) > maxInputKindBytes {
-			return nil, errors.New("input kind is empty or too long")
+		if value == "" || len(value) > maxBytes {
+			return nil, fmt.Errorf("%s is empty or too long", field)
 		}
 		for _, r := range value {
 			if (r < 'a' || r > 'z') && (r < '0' || r > '9') && !strings.ContainsRune("_-.", r) {
-				return nil, errors.New("input kind must be a label, not an input value")
+				return nil, fmt.Errorf("%s must be a label, not an input value", field)
 			}
 		}
 		if _, duplicate := seen[value]; duplicate {
@@ -171,7 +219,7 @@ func safeInputKinds(values []string) ([]string, error) {
 	return result, nil
 }
 
-func activityCacheKey(goalID, objective, phase, current, outcome string, kinds []string, discriminator [32]byte) cacheKey {
+func activityCacheKey(goalID, objective, phase, current, outcome string, kinds, intentTags []string, catalogRevision string, discriminator [32]byte) cacheKey {
 	hash := sha256.New()
 	for _, value := range []string{
 		goalID,
@@ -180,6 +228,8 @@ func activityCacheKey(goalID, objective, phase, current, outcome string, kinds [
 		normalizeMaterialText(current),
 		normalizeMaterialText(outcome),
 		strings.Join(kinds, "\x00"),
+		strings.Join(intentTags, "\x00"),
+		catalogRevision,
 	} {
 		var size [8]byte
 		binary.BigEndian.PutUint64(size[:], uint64(len(value)))

@@ -847,6 +847,32 @@ func TestGoalRelinkChecksStatusBeforeManualProviderTurn(t *testing.T) {
 	}
 }
 
+func TestGoalOpenWithoutConfiguredAdvisorStartsOneBoundedLocalTurn(t *testing.T) {
+	client := &goalCountingClient{}
+	m := newGoalRuntimeTestModel(t, client)
+	store, sessionID := attachGoalTestSession(t, m)
+	defer func() { _ = store.Close() }()
+	m.goalRuntime = newUIGoalRuntime(t, sessionID, goal.BudgetLimits{MaxContinuationTurns: 3})
+
+	cmd := m.beginGoalOpen(false)
+	if cmd == nil {
+		t.Fatal("unconfigured Cortex did not schedule the initial local goal turn")
+	}
+	if m.state != StateWaiting || m.goalTurnID == "" || m.goalOperationRunning {
+		t.Fatalf("local goal startup = state %v turn %q operation_running %v", m.state, m.goalTurnID, m.goalOperationRunning)
+	}
+	snapshot := snapshotUIGoal(t, m.goalRuntime)
+	if snapshot.State != goal.StateActive || snapshot.Cortex.TaskID != "" || snapshot.PendingContinuation == nil {
+		t.Fatalf("local goal startup snapshot = %#v", snapshot)
+	}
+	if snapshot.PendingContinuation.Kind != goal.AdmissionInitial {
+		t.Fatalf("local goal admission = %q, want %q", snapshot.PendingContinuation.Kind, goal.AdmissionInitial)
+	}
+	if client.calls.Load() != 0 {
+		t.Fatalf("provider ran synchronously during admission: %d calls", client.calls.Load())
+	}
+}
+
 func TestGoalOpenFailurePausesWithoutProviderDispatch(t *testing.T) {
 	client := &goalCountingClient{}
 	m := newGoalRuntimeTestModel(t, client)

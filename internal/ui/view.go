@@ -42,6 +42,8 @@ func (m *Model) View() tea.View {
 	// terminal width, and the decision reads as the next conversational action.
 	if m.pendingApproval != nil {
 		content.WriteString(m.renderApproval())
+	} else if m.readScopePrompt != nil {
+		content.WriteString(m.renderReadScopePrompt())
 	} else {
 		if status := m.renderStatusLine(); status != "" {
 			content.WriteString(status)
@@ -411,6 +413,9 @@ func (m *Model) renderStatusLine() string {
 	if m.pendingApproval != nil {
 		return ""
 	}
+	if m.readScopePrompt != nil {
+		return ""
+	}
 	// Completion uses the full composer-owned footer budget for the popup and
 	// the still-visible draft; its own key footer carries the active guidance.
 	if m.overlay == OverlayCompletion && m.isCompletionActive() {
@@ -470,7 +475,7 @@ func (m *Model) renderStatusLine() string {
 	conversationStarted := m.conversationStarted()
 	hasNotice := m.hasTranscriptNotice()
 	noticeNeedsRecovery := hasNotice && (paneW < 36 || m.height < 16)
-	if !conversationStarted && !noticeNeedsRecovery && len(m.failedServers) == 0 && !m.doneFlash && (m.promptTokens <= 0 || m.numCtx <= 0) {
+	if !conversationStarted && !noticeNeedsRecovery && len(m.failedServers) == 0 && !m.skipApprovalsEnabled() && !m.doneFlash && (m.promptTokens <= 0 || m.numCtx <= 0) {
 		// The empty-state orientation already carries mode, model, and Settings.
 		// Repeating them immediately above the composer only adds visual noise.
 		return ""
@@ -495,6 +500,9 @@ func (m *Model) renderStatusLine() string {
 	if presentedMode != ModeNormal {
 		parts = append(parts, modeStyle.Render(modeLabel))
 	}
+	if m.skipApprovalsEnabled() {
+		parts = append(parts, m.styles.ErrorText.UnsetPaddingLeft().Render("approval prompts skipped"))
+	}
 	if !conversationStarted && noticeNeedsRecovery {
 		// Startup and recovery notices can push the empty-state hints out of a
 		// minimum-height viewport. Keep the Settings recovery path in the fixed
@@ -503,10 +511,7 @@ func (m *Model) renderStatusLine() string {
 	}
 
 	if failures := len(m.failedServers); failures > 0 {
-		label := "⚠ connection failed"
-		if failures > 1 {
-			label = fmt.Sprintf("⚠ %d connections failed", failures)
-		}
+		label := mcpUnavailableStatusLabel(failures)
 		parts = append(parts, m.styles.ErrorText.UnsetPaddingLeft().Render(label))
 	}
 	if m.doneFlash {
@@ -522,7 +527,7 @@ func (m *Model) renderStatusLine() string {
 	if contextHigh && contextStatus != "" {
 		parts = append(parts, contextStatus)
 	}
-	if model := sanitizeTerminalSingleLine(m.model); model != "" {
+	if model := m.currentModelSurfaceLabel(paneW < 58); model != "" {
 		parts = append(parts, m.styles.StatusText.Render(model))
 	}
 	if profile := sanitizeTerminalSingleLine(m.agentProfile); paneW >= 80 && profile != "" {
@@ -544,19 +549,24 @@ func (m *Model) renderStatusLine() string {
 		line = " " + strings.Join(parts, separator)
 	}
 	if lipgloss.Width(line) > paneW {
-		// The remaining two semantic parts use bounded short labels, so this is
-		// only a final guard for unusually wide mode/profile glyphs.
-		plain := ""
+		// Preserve every compact safety boundary instead of truncating a single
+		// concatenated string from the right. Combined Cloud, MCP, and approval
+		// posture can legitimately need a second row at the minimum width.
+		compact := make([]string, 0, 4)
 		if presentedMode != ModeNormal {
-			plain = cfg.Label
+			compact = append(compact, modeStyle.Render(cfg.Label))
+		}
+		if m.skipApprovalsEnabled() {
+			compact = append(compact, m.styles.ErrorText.UnsetPaddingLeft().Render("no prompts"))
 		}
 		if len(m.failedServers) > 0 {
-			if plain != "" {
-				plain += " · "
-			}
-			plain += fmt.Sprintf("⚠ %d failed", len(m.failedServers))
+			compact = append(compact, m.styles.ErrorText.UnsetPaddingLeft().Render("MCP unavailable"))
 		}
-		return m.styles.StatusText.Render(truncateDisplay(" "+plain, paneW))
+		if m.currentModelIsNonLocal() {
+			boundary := strings.Fields(m.currentModelSurfaceLabel(true))[0]
+			compact = append(compact, m.styles.StatusText.Render(boundary))
+		}
+		return renderPackedStatusRows(paneW, compact, separator)
 	}
 	return line
 }
@@ -585,40 +595,74 @@ func (m *Model) renderGoalFooterStatus(summary GoalSummary, paneW int) string {
 	type metadataPart struct {
 		view string
 	}
-	candidates := make([]metadataPart, 0, 5)
+	required := make([]metadataPart, 0, 3)
+	if m.skipApprovalsEnabled() {
+		label := "approval prompts skipped"
+		if paneW < 58 {
+			label = "no prompts"
+		}
+		required = append(required, metadataPart{view: m.styles.ErrorText.UnsetPaddingLeft().Render(label)})
+	}
 	contextStatus := m.renderContextStatus(paneW < 80)
 	contextHigh := m.numCtx > 0 && m.promptTokens*100/m.numCtx >= 75
 	if failures := len(m.failedServers); failures > 0 {
-		label := "⚠ connection failed"
-		if failures > 1 {
-			label = fmt.Sprintf("⚠ %d connections failed", failures)
+		label := "MCP unavailable"
+		if paneW >= 58 {
+			label = mcpUnavailableStatusLabel(failures)
 		}
-		candidates = append(candidates, metadataPart{view: m.styles.ErrorText.UnsetPaddingLeft().Render(label)})
+		required = append(required, metadataPart{view: m.styles.ErrorText.UnsetPaddingLeft().Render(label)})
 	}
+	if m.currentModelIsNonLocal() {
+		boundary := m.currentModelSurfaceLabel(true)
+		if paneW < 58 {
+			boundary = strings.Fields(boundary)[0]
+		}
+		required = append(required, metadataPart{view: m.styles.StatusText.Render(boundary)})
+	}
+
+	optional := make([]metadataPart, 0, 4)
 	if contextHigh && contextStatus != "" {
-		candidates = append(candidates, metadataPart{view: contextStatus})
+		optional = append(optional, metadataPart{view: contextStatus})
 	}
-	if model := sanitizeTerminalSingleLine(m.model); model != "" {
-		candidates = append(candidates, metadataPart{view: m.styles.StatusText.Render(truncateDisplay(model, 20))})
+	if model := m.currentModelSurfaceLabel(false); model != "" && !m.currentModelIsNonLocal() {
+		optional = append(optional, metadataPart{view: m.styles.StatusText.Render(truncateDisplay(model, 20))})
 	}
 	if !contextHigh && contextStatus != "" {
-		candidates = append(candidates, metadataPart{view: contextStatus})
+		optional = append(optional, metadataPart{view: contextStatus})
 	}
 	if m.doneFlash {
 		done := "✓ Done"
 		if m.lastTurnDuration > 0 {
 			done += " · " + formatWorkingElapsed(m.lastTurnDuration)
 		}
-		candidates = append(candidates, metadataPart{view: m.styles.StatusCheck.UnsetPaddingLeft().Render(done)})
+		optional = append(optional, metadataPart{view: m.styles.StatusCheck.UnsetPaddingLeft().Render(done)})
 	}
 
 	const minimumGoalWidth = 12
-	selected := make([]string, 0, len(candidates))
 	fixedWidth := lipgloss.Width(modePart)
 	if modePart != "" {
 		fixedWidth += lipgloss.Width(separator)
 	}
-	for _, candidate := range candidates {
+	requiredWidth := 0
+	for _, candidate := range required {
+		requiredWidth += lipgloss.Width(separator) + lipgloss.Width(candidate.view)
+	}
+	if len(required) > 0 && available-fixedWidth-requiredWidth < minimumGoalWidth {
+		goalWidth := max(1, available-fixedWidth)
+		core := " " + strings.Join([]string{modePart, RenderGoalStatusLine(summary, goalWidth, m.isDark)}, separator)
+		safety := make([]string, 0, len(required))
+		for _, candidate := range required {
+			safety = append(safety, candidate.view)
+		}
+		return truncateDisplay(core, paneW) + "\n" + renderPackedStatusRows(paneW, safety, separator)
+	}
+
+	selected := make([]string, 0, len(required)+len(optional))
+	for _, candidate := range required {
+		selected = append(selected, candidate.view)
+		fixedWidth += lipgloss.Width(separator) + lipgloss.Width(candidate.view)
+	}
+	for _, candidate := range optional {
 		cost := lipgloss.Width(separator) + lipgloss.Width(candidate.view)
 		if available-fixedWidth-cost < minimumGoalWidth {
 			continue
@@ -636,6 +680,43 @@ func (m *Model) renderGoalFooterStatus(summary GoalSummary, paneW int) string {
 	parts = append(parts, selected...)
 	line := " " + strings.Join(parts, separator)
 	return truncateDisplay(line, paneW)
+}
+
+// renderPackedStatusRows keeps short host-authored status tokens intact while
+// packing them into the fewest width-safe rows. It is reserved for compact
+// safety fallbacks where dropping a rightmost token would hide active authority
+// or a remote-execution boundary.
+func renderPackedStatusRows(width int, parts []string, separator string) string {
+	if width <= 0 || len(parts) == 0 {
+		return ""
+	}
+	available := max(1, width-1)
+	rows := make([]string, 0, 2)
+	current := ""
+	for _, part := range parts {
+		if strings.TrimSpace(part) == "" {
+			continue
+		}
+		part = truncateDisplay(part, available)
+		candidate := part
+		if current != "" {
+			candidate = current + separator + part
+		}
+		if current != "" && lipgloss.Width(candidate) > available {
+			rows = append(rows, " "+current)
+			current = part
+			continue
+		}
+		current = candidate
+	}
+	if current != "" {
+		rows = append(rows, " "+current)
+	}
+	return strings.Join(rows, "\n")
+}
+
+func mcpUnavailableStatusLabel(count int) string {
+	return fmt.Sprintf("⚠ %d MCP %s unavailable", count, pluralizeServer(count))
 }
 
 func (m *Model) conversationStarted() bool {
@@ -925,21 +1006,27 @@ func (m *Model) renderWelcome(b *strings.Builder) {
 	}
 
 	writeLine(m.styles.OverlayTitle, "LOCAL AGENT")
-	trust := "Local-first · Ollama · tool effects ask first"
+	trust := "Local-first · Ollama · " + m.approvalPostureWelcomeLabel(false)
 	if micro {
-		trust = "Local-first · approvals on"
+		trust = "Local-first · " + m.approvalPostureWelcomeLabel(true)
 	} else if compact {
-		trust = "Local-first · tool effects ask"
+		trust = "Local-first · " + m.approvalPostureWelcomeLabel(true)
 	}
 	writeLine(m.styles.StatusText, trust)
 
 	var infoParts []string
 	presentedMode := m.presentedMode()
+	modelLabel := m.currentModelSurfaceLabel(compact)
+	if m.currentModelIsNonLocal() && modelLabel != "" {
+		// The execution boundary precedes ordinary mode/model metadata so a
+		// narrow welcome surface cannot imply that Cloud prompts remain local.
+		infoParts = append(infoParts, modelLabel)
+	}
 	if presentedMode != ModeNormal {
 		infoParts = append(infoParts, m.modeConfigs[presentedMode].Label)
 	}
-	if model := sanitizeTerminalSingleLine(m.model); model != "" {
-		infoParts = append(infoParts, model)
+	if !m.currentModelIsNonLocal() && modelLabel != "" {
+		infoParts = append(infoParts, modelLabel)
 	}
 	if m.ollamaOffline {
 		infoParts = append(infoParts, "offline")

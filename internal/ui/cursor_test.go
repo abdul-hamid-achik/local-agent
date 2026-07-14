@@ -79,6 +79,24 @@ func TestViewCursorOwnsCompletionFilter(t *testing.T) {
 }
 
 func TestReducedMotionDisablesTransientInputCursorBlink(t *testing.T) {
+	t.Run("main composer", func(t *testing.T) {
+		t.Setenv("LOCAL_AGENT_REDUCED_MOTION", "1")
+		m := newTestModel(t)
+		if m.input.Styles().Cursor.Blink {
+			t.Fatal("reduced motion left the main textarea cursor blinking")
+		}
+		view := m.View()
+		if view.Cursor == nil || view.Cursor.Blink {
+			t.Fatalf("reduced-motion composer cursor = %#v, want visible and static", view.Cursor)
+		}
+
+		m.mode = ModeAuto
+		m.syncComposerAuthority()
+		if m.input.Styles().Cursor.Blink {
+			t.Fatal("authority restyle re-enabled the reduced-motion composer cursor")
+		}
+	})
+
 	t.Run("completion filter", func(t *testing.T) {
 		m := newTestModel(t)
 		m.reducedMotion = true

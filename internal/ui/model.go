@@ -165,28 +165,29 @@ type Model struct {
 	keys          KeyMap
 
 	// State
-	state            State
-	overlay          OverlayKind
-	overlayParent    OverlayKind
-	entries          []ChatEntry
-	streamBuf        strings.Builder
-	lastStreamPaint  time.Time // throttles per-token re-renders during streaming
-	turnStartedAt    time.Time
-	lastTurnDuration time.Duration
-	now              func() time.Time
-	width            int
-	height           int
-	ready            bool
-	isDark           bool
-	reducedMotion    bool
-	evalCount        int
-	promptTokens     int
-	turnEvalTotal    int
-	turnPromptTotal  int
-	toolsPending     int
-	capabilityRoute  *agent.CapabilityRoute
-	inputLines       int
-	userScrolledUp   bool
+	state               State
+	overlay             OverlayKind
+	overlayParent       OverlayKind
+	entries             []ChatEntry
+	streamBuf           strings.Builder
+	lastStreamPaint     time.Time // throttles per-token re-renders during streaming
+	turnStartedAt       time.Time
+	lastTurnDuration    time.Duration
+	now                 func() time.Time
+	width               int
+	height              int
+	ready               bool
+	isDark              bool
+	reducedMotion       bool
+	evalCount           int
+	promptTokens        int
+	turnEvalTotal       int
+	turnPromptTotal     int
+	toolsPending        int
+	capabilityRoute     *agent.CapabilityRoute
+	lastCapabilityRoute *agent.CapabilityRoute
+	inputLines          int
+	userScrolledUp      bool
 
 	// Scroll anchor system - prevents jitter during streaming.
 	anchorActive bool // true when user wants to stay at bottom
@@ -326,6 +327,9 @@ type Model struct {
 	fileLoading        bool
 	readScopeOpToken   uint64
 	readScopeOpRunning bool
+	readScopeOpLabel   string
+	readScopeOpDraft   string
+	readScopePrompt    *ReadScopePrompt
 	exportToken        uint64
 	exportRunning      bool
 	compactingContext  bool
@@ -347,8 +351,11 @@ type Model struct {
 	toolCount                 int
 	serverCount               int
 	numCtx                    int
+	approvalPosture           ApprovalPosture
+	expertRuntimeSetupFailed  bool
 
 	failedServers []FailedServer
+	mcpServers    []MCPServerStatus
 
 	// ICE
 	iceEnabled       bool
@@ -383,6 +390,7 @@ type Model struct {
 
 // New creates a new TUI Model.
 func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, completer *Completer, modelManager *llm.ModelManager, router config.ModelRouter, logger *log.Logger) *Model {
+	reducedMotion := reducedMotionRequested()
 	ta := textarea.New()
 	ta.Placeholder = "Ask, @mention files, or type /help"
 	ta.Focus()
@@ -391,7 +399,7 @@ func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, com
 	ta.ShowLineNumbers = false
 	// A single send marker followed by continuation rails makes multiline
 	// drafts read as one composer instead of several submitted messages.
-	configureComposerMode(&ta, true, ModeNormal)
+	configureComposerMode(&ta, true, ModeNormal, reducedMotion)
 
 	initialStyles := NewStyles(true)
 	s := spinner.New(
@@ -407,11 +415,12 @@ func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, com
 		keys:             DefaultKeyMap(),
 		state:            StateIdle,
 		isDark:           true,
-		reducedMotion:    reducedMotionRequested(),
+		reducedMotion:    reducedMotion,
 		now:              time.Now,
 		inputLines:       1,
 		toolsCollapsed:   true,
 		initializing:     true,
+		approvalPosture:  ApprovalPosturePrompted,
 		mode:             ModeNormal,
 		modeConfigs:      DefaultModeConfigs(),
 		modelManager:     modelManager,
@@ -477,6 +486,7 @@ func (m *Model) beginShutdown() tea.Cmd {
 		m.resolvePendingApproval(permission.Cancelled("application is shutting down"))
 	}
 	m.pendingPaste = nil
+	m.readScopePrompt = nil
 	if m.sessionLoading {
 		m.cancelSessionLoadForShutdown()
 	}
@@ -755,6 +765,23 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			return m, nil
 		}
 
+		// External read-root authorization is a host-owned decision. It precedes
+		// every overlay and never falls through to composer or agent shortcuts.
+		if m.readScopePrompt != nil {
+			switch {
+			case key.Matches(msg, m.keys.Quit):
+				m.readScopePrompt = nil
+				return m, m.beginShutdown()
+			case strings.EqualFold(msg.String(), "y"):
+				return m, m.confirmReadScopePrompt()
+			case strings.EqualFold(msg.String(), "n"):
+				m.resolveReadScopePrompt("denied")
+			case key.Matches(msg, m.keys.Cancel):
+				m.resolveReadScopePrompt("cancelled")
+			}
+			return m, nil
+		}
+
 		// Pending paste intercept: y/n/esc before anything else.
 		if m.pendingPaste != nil {
 			pending := m.pendingPaste
@@ -851,6 +878,15 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 				m.invalidateEntryCache()
 				m.viewport.SetContent(m.renderEntries())
 				m.gotoBottomIfFollowing()
+			}
+			return m, nil
+		}
+		// Read-scope preview and commit are serialized host filesystem work. They
+		// are intentionally not cancellable halfway through validation/commit;
+		// quit waits for the tokened receipt and every other key is ignored.
+		if m.readScopeOpRunning {
+			if key.Matches(msg, m.keys.Quit) {
+				return m, m.beginShutdown()
 			}
 			return m, nil
 		}
@@ -1723,8 +1759,10 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		if m.state == StateWaiting || m.state == StateStreaming {
 			m.capabilityRoute = nil
 			route := sanitizeCapabilityRoute(msg.Route)
-			if route.Server != "" && route.Tool != "" && route.Phase != "" {
+			if capabilityRouteRenderable(route) {
 				m.capabilityRoute = &route
+				last := route
+				m.lastCapabilityRoute = &last
 			}
 		}
 
@@ -2024,7 +2062,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		m.serverCount = msg.ServerCount
 		m.numCtx = msg.NumCtx
 		m.syncEffectiveContext(false)
-		m.failedServers = msg.FailedServers
+		m.applyInitialMCPStatus(msg.MCPServers, msg.FailedServers)
 		m.iceEnabled = msg.ICEEnabled
 		m.iceConversations = msg.ICEConversations
 		m.iceSessionID = msg.ICESessionID
@@ -2034,14 +2072,14 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			m.completer.UpdateAgents(msg.AgentList)
 		}
 
-		if len(msg.FailedServers) > 0 {
-			var parts []string
-			for _, fs := range msg.FailedServers {
-				parts = append(parts, fs.Name+" ("+fs.Reason+")")
+		if len(m.failedServers) > 0 {
+			parts := make([]string, 0, len(m.failedServers))
+			for _, fs := range m.failedServers {
+				parts = append(parts, fs.Name)
 			}
 			m.entries = append(m.entries, ChatEntry{
 				Kind:    "system",
-				Content: "Failed to connect: " + strings.Join(parts, ", "),
+				Content: "MCP unavailable: " + strings.Join(parts, ", ") + ". Open Runtime status for recovery guidance.",
 			})
 		}
 
@@ -2061,6 +2099,19 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			}
 		}
 
+	case MCPStatusSnapshotMsg:
+		m.applyMCPStatusSnapshot(msg.Servers)
+
+	case ReadScopePreviewResultMsg:
+		m.handleReadScopePreviewResult(msg)
+		m.appendShutdownQuit(&cmds)
+
+	case PromptPathPreflightResultMsg:
+		if cmd := m.handlePromptPathPreflightResult(msg); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		m.appendShutdownQuit(&cmds)
+
 	case CommandResultMsg:
 		if msg.Text != "" {
 			m.entries = append(m.entries, ChatEntry{
@@ -2072,30 +2123,8 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		}
 
 	case ReadScopeResultMsg:
-		if !m.readScopeOpRunning || msg.Token != m.readScopeOpToken {
-			break
-		}
-		m.readScopeOpRunning = false
-		if !m.shuttingDown {
-			if msg.Err != nil {
-				m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("/scope %s failed: %v", msg.Operation, msg.Err)})
-			} else {
-				var receipt string
-				switch msg.Operation {
-				case "add-read":
-					receipt = fmt.Sprintf("Added process-local read-only root: %s\nWrites remain confined to the working directory.", msg.Path)
-				case "remove-read":
-					receipt = fmt.Sprintf("Removed process-local read-only root: %s", msg.Path)
-				case "clear-read":
-					receipt = fmt.Sprintf("Cleared %d process-local read-only root(s).", msg.Count)
-				default:
-					receipt = "Updated process-local read-only roots."
-				}
-				m.entries = append(m.entries, ChatEntry{Kind: "system", Content: receipt})
-			}
-			m.invalidateEntryCache()
-			m.viewport.SetContent(m.renderEntries())
-			m.gotoBottomIfFollowing()
+		if cmd := m.handleReadScopeResult(msg); cmd != nil {
+			cmds = append(cmds, cmd)
 		}
 		m.appendShutdownQuit(&cmds)
 
@@ -2294,6 +2323,12 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			}
 			return m, nil
 		}
+		// The external read-scope prompt is an authority-changing inline
+		// decision. It is keyboard-first and owns pointer input just like an
+		// approval, so the transcript cannot move behind it.
+		if m.readScopePrompt != nil {
+			return m, nil
+		}
 		// A visible overlay owns pointer input. Scroll document overlays through
 		// their own Bubbles viewports and swallow wheel events for all other
 		// overlays so the hidden transcript cannot move underneath a modal.
@@ -2336,7 +2371,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		// Modal and inline decision surfaces are intentionally keyboard-first.
 		// Until a child explicitly owns pointer interaction, clicks are swallowed
 		// rather than reaching ToolCards behind an authority-changing prompt.
-		if m.overlay != OverlayNone || m.pendingApproval != nil {
+		if m.overlay != OverlayNone || m.pendingApproval != nil || m.readScopePrompt != nil {
 			return m, nil
 		}
 		if msg.Button == tea.MouseLeft {
@@ -2632,8 +2667,10 @@ func agentTextareaStylesForMode(isDark bool, mode Mode) textarea.Styles {
 	return styles
 }
 
-func configureComposerMode(input *textarea.Model, isDark bool, mode Mode) {
-	input.SetStyles(agentTextareaStylesForMode(isDark, mode))
+func configureComposerMode(input *textarea.Model, isDark bool, mode Mode, reducedMotion ...bool) {
+	styles := agentTextareaStylesForMode(isDark, mode)
+	styles.Cursor.Blink = len(reducedMotion) == 0 || !reducedMotion[0]
+	input.SetStyles(styles)
 	input.SetPromptFunc(3, func(info textarea.PromptInfo) string {
 		if info.LineNumber == 0 {
 			if mode == ModeNormal {
@@ -2712,6 +2749,9 @@ func (m *Model) submitInput() tea.Cmd {
 	if text == "" {
 		return nil
 	}
+	if m.readScopeOpRunning || m.readScopePrompt != nil {
+		return nil
+	}
 	// An ordinary outcome-unknown execution owns the next safety decision. Do
 	// not send the same (or a new) prompt back through Agent just to rediscover
 	// the durable latch and render another error. Keep the draft visible and
@@ -2726,6 +2766,22 @@ func (m *Model) submitInput() tea.Cmd {
 	// to the inspector instead of starting an unbounded side turn.
 	if m.goalRuntime != nil && !strings.HasPrefix(text, "/") {
 		return m.rejectPromptWhileGoalAttached(text, false)
+	}
+	if !strings.HasPrefix(text, "/") {
+		if cmd, started := m.beginPromptPathPreflight(text); started {
+			return cmd
+		}
+	}
+	return m.submitPreparedInput(text)
+}
+
+// submitPreparedInput consumes a draft after host preflight has either found
+// no new authority or committed the exact approved grants. It deliberately
+// does not invoke path preflight again, which makes auto-resume single-shot.
+func (m *Model) submitPreparedInput(text string) tea.Cmd {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
 	}
 
 	m.pushHistory(text)
@@ -2758,7 +2814,7 @@ func (m *Model) submitInput() tea.Cmd {
 			return nil
 		}
 
-		return m.handleCommandAction(result)
+		return m.handleCommandActionWithDraft(result, text)
 	}
 
 	// Every conversational preset sends the draft immediately. PLAN applies its
@@ -2792,8 +2848,15 @@ func (m *Model) buildCommandContext() *command.Context {
 		FileChanges:        m.fileChanges,
 	}
 	if m.agent != nil {
-		ctx.ServerNames = m.agent.ServerNames()
+		ctx.Servers = m.commandMCPServers()
+		_, _, ctx.MCPToolCount = m.mcpStatusCounts()
+		if len(ctx.Servers) == 0 {
+			ctx.ServerNames = m.agent.ServerNames()
+		}
 		ctx.ReadRoots = m.agent.ReadRoots()
+		for _, grant := range m.agent.ReadGrants() {
+			ctx.ReadGrants = append(ctx.ReadGrants, command.ReadGrantInfo{Path: grant.Path, Kind: string(grant.Kind)})
+		}
 	}
 	if m.goalRuntime != nil {
 		if snapshot, err := m.goalRuntime.Snapshot(context.Background()); err == nil {
@@ -2825,6 +2888,10 @@ func (m *Model) buildCommandContext() *command.Context {
 
 // handleCommandAction processes a command result's action.
 func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
+	return m.handleCommandActionWithDraft(result, "")
+}
+
+func (m *Model) handleCommandActionWithDraft(result command.Result, draft string) tea.Cmd {
 	switch result.Action {
 	case command.ActionShowHelp:
 		m.overlayParent = OverlayNone
@@ -2834,6 +2901,8 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 
 	case command.ActionClear:
 		m.agent.ClearHistory()
+		m.capabilityRoute = nil
+		m.lastCapabilityRoute = nil
 		m.entries = nil
 		m.toolEntries = nil
 		m.resetConversationSession()
@@ -2852,56 +2921,7 @@ func (m *Model) handleCommandAction(result command.Result) tea.Cmd {
 		return m.beginShutdown()
 
 	case command.ActionAddReadRoot, command.ActionRemoveReadRoot, command.ActionClearReadRoots:
-		if m.agent == nil {
-			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: "/scope is unavailable before the agent is initialized."})
-			m.viewport.SetContent(m.renderEntries())
-			m.resumeFollow()
-			return nil
-		}
-		if m.readScopeOpRunning {
-			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: "A /scope change is already in progress."})
-			m.viewport.SetContent(m.renderEntries())
-			m.resumeFollow()
-			return nil
-		}
-		operation := "add-read"
-		path := strings.TrimSpace(result.Data)
-		switch result.Action {
-		case command.ActionRemoveReadRoot:
-			operation = "remove-read"
-		case command.ActionClearReadRoots:
-			operation = "clear-read"
-		}
-		if operation != "clear-read" && path == "" {
-			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("/scope %s: no directory specified", operation)})
-			m.viewport.SetContent(m.renderEntries())
-			m.resumeFollow()
-			return nil
-		}
-		m.readScopeOpToken++
-		token := m.readScopeOpToken
-		m.readScopeOpRunning = true
-		progress := fmt.Sprintf("Updating read-only scope: %s %s", operation, path)
-		if operation == "clear-read" {
-			progress = "Clearing additional read-only roots for this process."
-		}
-		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: strings.TrimSpace(progress)})
-		m.invalidateEntryCache()
-		m.viewport.SetContent(m.renderEntries())
-		m.resumeFollow()
-		agentInstance := m.agent
-		return func() tea.Msg {
-			msg := ReadScopeResultMsg{Token: token, Operation: operation, Path: path}
-			switch operation {
-			case "add-read":
-				msg.Path, msg.Err = agentInstance.AddReadRoot(path)
-			case "remove-read":
-				msg.Path, msg.Err = agentInstance.RemoveReadRoot(path)
-			case "clear-read":
-				msg.Count, msg.Err = agentInstance.ClearReadRoots()
-			}
-			return msg
-		}
+		return m.beginReadScopeAction(result, draft)
 
 	case command.ActionLoadContext:
 		path := strings.TrimSpace(result.Data)
@@ -3430,6 +3450,9 @@ func (m *Model) footerHeight() int {
 	if m.pendingApproval != nil {
 		return height + lipgloss.Height(m.renderApproval())
 	}
+	if m.readScopePrompt != nil {
+		return height + lipgloss.Height(m.renderReadScopePrompt())
+	}
 	if m.pendingPaste != nil {
 		return height
 	}
@@ -3884,6 +3907,7 @@ func (m *Model) sendToAgentTurnPresentedWithCapability(text, turnID string, visi
 	m.turnEvalTotal = 0
 	m.turnPromptTotal = 0
 	m.capabilityRoute = nil
+	m.lastCapabilityRoute = nil
 
 	if visible {
 		m.entries = append(m.entries, ChatEntry{
@@ -4291,7 +4315,7 @@ func (m *Model) switchSelectedModel(name string) bool {
 	// Empty state and the fixed status line already own the current model. Once
 	// a conversation exists, retain one compact transition receipt.
 	if m.conversationStarted() {
-		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: "Model · " + name})
+		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: "Model · " + m.currentModelSurfaceLabel(false)})
 	}
 	m.cloudConsentState = nil
 	m.closeModelPicker()

@@ -3,6 +3,7 @@ package ecosystem
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -176,6 +177,7 @@ var specialistRoles = map[string]ToolRole{
 	"tvault":     RoleSecurity,
 	"filecheap":  RoleArtifact,
 	"fcheap":     RoleArtifact,
+	"hitspec":    RoleDiscovery,
 }
 
 // ProjectToolCall creates a bounded semantic projection without retaining raw
@@ -221,6 +223,9 @@ func ProjectToolCall(name string, args map[string]any) ToolProjection {
 
 	projection.Specialist = inferSpecialist(projection.Route.Server, projection.Operation, segments)
 	projection.Role = specialistRoles[projection.Specialist]
+	if projection.Specialist == "hitspec" && projection.Operation == "hitspec_capture_webpage" {
+		projection.Role = RoleArtifact
+	}
 	if projection.Role == "" {
 		projection.Role = RoleGeneral
 	}
@@ -295,6 +300,15 @@ func ProjectReceipt(projection ToolProjection, receipt RawReceipt) ToolProjectio
 	}
 
 	projection.Transport = TransportSucceeded
+	if projection.Operation == "consult_experts" {
+		if receipt.TrustedLocal {
+			projection.Domain = projectExpertConsultationDomain(receipt.Text)
+		} else {
+			projection.Domain = DomainUnknown
+		}
+		projection.Evidence = EvidenceNone
+		return finalizeToolReceipt(projection, receipt.ToolError)
+	}
 	if projected, recognized := projectMCPHubReceipt(projection, receipt); recognized {
 		return finalizeToolReceipt(projected, receipt.ToolError)
 	}
@@ -345,6 +359,14 @@ func ProjectReceipt(projection ToolProjection, receipt RawReceipt) ToolProjectio
 			projection.Domain, projection.Evidence = DomainUnknown, EvidenceNone
 			projection.Artifact = nil
 		}
+	case "hitspec":
+		if domain, evidence, artifact, ok := projectHitspecReceipt(projection.Operation, receipt); ok {
+			projection.Domain, projection.Evidence = domain, evidence
+			projection.Artifact = artifact
+		} else {
+			projection.Domain, projection.Evidence = DomainUnknown, EvidenceNone
+			projection.Artifact = nil
+		}
 	case "cortex":
 		// Cortex's shared envelope is authoritative when it explicitly rejects
 		// a request. Successful coordination is still not verification evidence,
@@ -378,6 +400,47 @@ func ProjectReceipt(projection ToolProjection, receipt RawReceipt) ToolProjectio
 		}
 	}
 	return finalizeToolReceipt(projection, receipt.ToolError)
+}
+
+// projectExpertConsultationDomain recognizes only the bounded summary line
+// emitted by Local Agent's built-in expert runtime. Expert prose remains
+// advisory text and is never interpreted as domain evidence.
+func projectExpertConsultationDomain(text string) DomainState {
+	const prefix = "experts: total="
+	for range 5 {
+		line, rest, more := strings.Cut(text, "\n")
+		if strings.HasPrefix(line, prefix) {
+			totalText, counts, ok := strings.Cut(strings.TrimPrefix(line, prefix), " · completed=")
+			if !ok {
+				return DomainUnknown
+			}
+			completedText, failedText, ok := strings.Cut(counts, " · failed=")
+			if !ok {
+				return DomainUnknown
+			}
+			total, totalErr := strconv.Atoi(totalText)
+			completed, completedErr := strconv.Atoi(completedText)
+			failed, failedErr := strconv.Atoi(failedText)
+			if totalErr != nil || completedErr != nil || failedErr != nil ||
+				total < 0 || total > 99 || completed < 0 || failed < 0 || completed+failed != total ||
+				line != fmt.Sprintf("experts: total=%d · completed=%d · failed=%d", total, completed, failed) {
+				return DomainUnknown
+			}
+			switch {
+			case total == 0 || completed == 0:
+				return DomainFailed
+			case failed > 0:
+				return DomainAttention
+			default:
+				return DomainSucceeded
+			}
+		}
+		if !more {
+			break
+		}
+		text = rest
+	}
+	return DomainUnknown
 }
 
 func finalizeToolReceipt(projection ToolProjection, toolError bool) ToolProjection {
@@ -620,11 +683,15 @@ func (p ToolProjection) Normalize() ToolProjection {
 	}
 	if p.Artifact != nil {
 		artifact := normalizeArtifactDigest(*p.Artifact)
-		validContext := artifact.Kind != "" && p.Transport == TransportSucceeded &&
+		baseContext := artifact.Kind != "" && p.Transport == TransportSucceeded &&
 			(p.Domain == DomainSucceeded || p.Domain == DomainAttention) &&
-			p.Evidence == EvidenceSupported &&
-			p.Role == RoleArtifact && (p.Specialist == "filecheap" || p.Specialist == "fcheap") &&
+			p.Evidence == EvidenceSupported && p.Role == RoleArtifact
+		fileCheapContext := artifact.Kind == ArtifactDigestFileCheapStash &&
+			(p.Specialist == "filecheap" || p.Specialist == "fcheap") &&
 			(p.Operation == "fcheap_save" || p.Operation == "filecheap_save")
+		hitspecContext := artifact.Kind == ArtifactDigestHitspecCapture && p.Specialist == "hitspec" &&
+			p.Operation == "hitspec_capture_webpage"
+		validContext := baseContext && (fileCheapContext || hitspecContext)
 		if !validContext {
 			p.Artifact = nil
 		} else {

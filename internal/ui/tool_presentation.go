@@ -73,6 +73,7 @@ var toolActionRegistry = map[string]toolActionLabels{
 	"memory_delete":      {running: "Removing memory", success: "Removed memory", failure: "Remove memory failed"},
 	"memory_update":      {running: "Updating memory", success: "Updated memory", failure: "Update memory failed"},
 	"memory_list":        {running: "Listing memories", success: "Listed memories", failure: "List memories failed"},
+	"consult_experts":    {running: "Consulting experts", success: "Consulted experts", attention: "Expert consultation is partial", failure: "Expert consultation failed"},
 	"update_plan":        {running: "Updating plan", success: "Updated plan", failure: "Update plan failed"},
 	"tool_search":        {running: "Loading tools", success: "Loaded tools", failure: "Load tools failed"},
 	"load_skill":         {running: "Loading skill", success: "Loaded skill", failure: "Skill load failed"},
@@ -129,13 +130,18 @@ var toolActionRegistry = map[string]toolActionLabels{
 
 	// MCPHub management calls remain visibly different from the downstream
 	// action summarized beside the card.
-	"mcphub_list_servers":  {running: "Checking tool connections", success: "Checked tool connections", failure: "Connection check failed"},
-	"mcphub_search_tools":  {running: "Searching ecosystem tools", success: "Searched ecosystem tools", failure: "Tool search failed"},
-	"mcphub_describe_tool": {running: "Reading tool contract", success: "Read tool contract", failure: "Tool contract read failed"},
-	"mcphub_resolve_tool":  {running: "Resolving ecosystem tool", success: "Resolved ecosystem tool", failure: "Tool resolution failed"},
-	"mcphub_call_tool":     {running: "Calling ecosystem tool", success: "Called ecosystem tool", failure: "Ecosystem tool failed"},
-	"mcphub_get_result":    {running: "Reading stored result", success: "Read stored result", failure: "Stored result read failed"},
-	"mcphub_stats":         {running: "Reading MCPHub stats", success: "Read MCPHub stats", failure: "MCPHub stats failed"},
+	"mcphub_list_servers":     {running: "Checking tool connections", success: "Checked tool connections", failure: "Connection check failed"},
+	"mcphub_search_tools":     {running: "Searching ecosystem tools", success: "Searched ecosystem tools", failure: "Tool search failed"},
+	"mcphub_describe_tool":    {running: "Reading tool contract", success: "Read tool contract", failure: "Tool contract read failed"},
+	"mcphub_resolve_tool":     {running: "Resolving ecosystem tool", success: "Resolved ecosystem tool", failure: "Tool resolution failed"},
+	"mcphub_call_tool":        {running: "Calling ecosystem tool", success: "Called ecosystem tool", failure: "Ecosystem tool failed"},
+	"mcphub_get_result":       {running: "Reading stored result", success: "Read stored result", failure: "Stored result read failed"},
+	"mcphub_stats":            {running: "Reading MCPHub stats", success: "Read MCPHub stats", failure: "MCPHub stats failed"},
+	"hitspec_fetch":           {running: "Fetching HTTP content", success: "Fetched HTTP content", attention: "HTTP fetch needs review", failure: "HTTP fetch failed"},
+	"hitspec_list_requests":   {running: "Listing saved HTTP requests", success: "Listed saved HTTP requests", attention: "Request list needs review", failure: "Request listing failed"},
+	"hitspec_validate":        {running: "Validating HTTP request", success: "Validated HTTP request", attention: "HTTP request needs review", failure: "HTTP request validation failed"},
+	"hitspec_search_web":      {running: "Searching the public web", success: "Found web candidates", attention: "Web search needs review", failure: "Web search failed"},
+	"hitspec_capture_webpage": {running: "Capturing webpage artifact", success: "Captured webpage artifact", attention: "Webpage artifact needs review", failure: "Webpage capture failed"},
 
 	// Discovery and structural evidence remain distinct from verification.
 	"vecgrep_search":     {running: "Searching semantically", success: "Found candidates", attention: "Search needs attention", failure: "Semantic search failed"},

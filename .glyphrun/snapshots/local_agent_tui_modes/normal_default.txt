@@ -1,5 +1,5 @@
                         LOCAL AGENT
-       Local-first · Ollama · tool effects ask first
+      Local-first · Ollama · approval prompts enabled
                    qwen3.5:2b · offline
     enter send · / commands · ctrl+p settings · ? help
     shift+tab mode · ctrl+o models · @ files · # skills

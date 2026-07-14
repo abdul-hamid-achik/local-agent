@@ -19,17 +19,17 @@ const modes = [
     name: 'PLAN',
     title: 'Read-only analysis',
     description:
-      'Explore, search, list, compare, and recall. The host removes mutation tools and rejects mutation attempts.',
-    scope: 'read · search · list · diff · recall',
+      'Explore, search, compare, recall, or request a tool-free expert consultation. The host removes mutation tools and rejects mutation attempts.',
+    scope: 'read · search · diff · recall · experts',
   },
   {
     id: 'auto',
     index: '03',
     name: 'AUTO',
-    title: 'Reviewed durable goal',
+    title: 'Proactive work',
     description:
-      'Run a bounded goal in the foreground with explicit budgets, permits, receipts, and recovery. AUTO is not YOLO.',
-    scope: 'reviewed goal · same approval policy',
+      'Send ordinary prompts directly with proactive access to the NORMAL tool surface. AUTO does not create a durable goal or skip approvals.',
+    scope: 'proactive prompt · same approval policy',
   },
 ]
 
@@ -95,7 +95,7 @@ const ecosystemGroups = [
         <p class="la-lead">
           local-agent is an alpha terminal coding agent for Ollama. Inspect repositories, edit
           files, run commands, and call MCP tools in NORMAL; enforce read-only work in PLAN; or
-          review a bounded durable goal in AUTO.
+          send proactive work in AUTO. Start bounded durable goals explicitly with /goal.
         </p>
 
         <p class="la-hero-proof">Mutating effects require approval by default.</p>
@@ -171,7 +171,7 @@ const ecosystemGroups = [
                 <code>go test ./internal/llm/... -race</code>
                 <div class="la-approval-options">
                   <span>[y] once</span>
-                  <span>[a] always</span>
+                  <span>[s] exact request / session</span>
                   <span>[n] deny</span>
                 </div>
               </div>
@@ -206,7 +206,7 @@ const ecosystemGroups = [
       </div>
       <div>
         <dt>Extensions</dt>
-        <dd>MCP tools</dd>
+        <dd>MCP · expert teams</dd>
       </div>
       <div>
         <dt>Platforms</dt>
@@ -340,28 +340,28 @@ const ecosystemGroups = [
               <dd>one request</dd>
             </div>
             <div>
-              <dt>Always allow</dt>
-              <dd>persisted by tool name</dd>
+              <dt>Allow exact request</dt>
+              <dd>current Agent process</dd>
             </div>
             <div>
               <dt>Deny</dt>
-              <dd>recorded in the session</dd>
+              <dd>stop this request</dd>
             </div>
           </dl>
         </article>
 
         <article class="la-goal-panel" aria-labelledby="goal-panel-title">
           <div class="la-panel-number" aria-hidden="true">02 / GOAL RUNTIME</div>
-          <h3 id="goal-panel-title">AUTO stays bounded and foreground.</h3>
+          <h3 id="goal-panel-title">Durable goals stay bounded and foreground.</h3>
           <p>
-            Review the objective and limits before the first turn. Permits, budgets, receipts, and
-            recovery remain visible as the goal advances.
+            Start a goal explicitly with /goal. Its objective, limits, permits, receipts, and
+            recovery remain visible as it advances.
           </p>
 
           <dl class="la-goal-facts">
             <div>
               <dt>Authority</dt>
-              <dd>AUTO · same approval policy</dd>
+              <dd>goal-owned AUTO · same approval policy</dd>
             </div>
             <div>
               <dt>Budgets</dt>
@@ -401,7 +401,10 @@ const ecosystemGroups = [
         </li>
         <li>
           <span>02</span>
-          <p>Built-in file tools canonicalize paths and remain inside the startup workspace.</p>
+          <p>
+            Built-in file tools canonicalize paths; external reads require a temporary exact-file
+            or directory grant, while writes stay in the startup workspace.
+          </p>
         </li>
         <li>
           <span>03</span>

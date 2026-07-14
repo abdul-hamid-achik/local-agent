@@ -91,7 +91,7 @@ func TestSemanticToolContentsFeedsOnlyExactTrustedSuccessfulCortexResults(t *tes
 	}
 }
 
-func TestSemanticToolContentsRejectsCortexSpoofsErrorsAndManagementContent(t *testing.T) {
+func TestSemanticToolContentsRejectsCortexSpoofsErrorsAndUntrustedManagementContent(t *testing.T) {
 	const secret = "SECRET_UNTRUSTED_STRUCTURED_RESULT"
 	ag := New(nil, nil, 8192)
 	ag.SetTrustedLocalMCPServers([]config.ServerConfig{
@@ -123,7 +123,7 @@ func TestSemanticToolContentsRejectsCortexSpoofsErrorsAndManagementContent(t *te
 			structured: json.RawMessage(`{"ok":true,"summary":"` + secret + `"}`),
 		},
 		{
-			name: "mcphub arbitrary search prose", call: llm.ToolCall{Name: "mcphub__mcphub_search_tools"},
+			name: "untrusted mcphub search suffix", call: llm.ToolCall{Name: "evil__mcphub_search_tools"},
 			structured: json.RawMessage(`{"query":"` + secret + `","count":1,"matches":[{"namespaced":"cortex__cortex_status","description":"` + secret + `"}]}`),
 		},
 		{
@@ -143,23 +143,28 @@ func TestSemanticToolContentsRejectsCortexSpoofsErrorsAndManagementContent(t *te
 	}
 }
 
-func TestSemanticToolContentsSanitizesTrustedMCPHubDescribeSchema(t *testing.T) {
-	const secret = "SECRET_SCHEMA_PROSE"
+func TestSemanticToolContentsSanitizesTrustedMCPHubDescribeContract(t *testing.T) {
+	const (
+		secret              = "SECRET_SCHEMA_PROSE"
+		contractDescription = "Provide exactly one of url or file at runtime."
+	)
 	call := llm.ToolCall{
 		Name:      "mcphub__mcphub_describe_tool",
 		Arguments: map[string]any{"server": "builder", "tool": "build"},
 	}
 	structured := json.RawMessage(`{
 		"server":"builder","tool":"build","namespaced":"builder__build",
-		"description":"` + secret + `",
+		"description":"` + contractDescription + `",
 		"input_schema":{
 			"type":"object","title":"` + secret + `","description":"` + secret + `",
 			"properties":{
-				"path":{"type":"string","description":"` + secret + `","default":"` + secret + `","examples":["` + secret + `"]},
+				"path":{"type":"string","format":"uri","pattern":"^https?://","minLength":1,"description":"` + secret + `","default":"` + secret + `","examples":["` + secret + `"]},
 				"mode":{"type":"string","enum":["fast","safe"],"title":"` + secret + `"},
-				"options":{"type":"array","items":{"type":"object","properties":{"depth":{"type":"integer","description":"` + secret + `"}},"required":["depth"],"additionalProperties":false}}
+				"options":{"$ref":"#/$defs/options"}
 			},
-			"required":["path","mode"],"additionalProperties":false,
+			"$defs":{"options":{"type":"array","minItems":1,"items":{"type":"object","properties":{"depth":{"type":"integer","minimum":1,"maximum":8,"description":"` + secret + `"}},"required":["depth"],"additionalProperties":false}}},
+			"required":["path","mode"],"oneOf":[{"required":["path"]},{"required":["mode"]}],"additionalProperties":false,
+			"dependentRequired":{"path":["mode"]},
 			"examples":[{"path":"` + secret + `"}]
 		}
 	}`)
@@ -169,14 +174,18 @@ func TestSemanticToolContentsSanitizesTrustedMCPHubDescribeSchema(t *testing.T) 
 
 	modelResult, durableResult := ag.semanticToolContents(call, projection, string(structured), structured, false)
 	for _, required := range []string{
-		`"tool":"builder__build"`, `"path":{"type":"string"}`, `"mode":{"enum":["fast","safe"],"type":"string"}`,
-		`"depth":{"type":"integer"}`, `"required":["path","mode"]`, `"additionalProperties":false`,
+		`"tool":"builder__build"`, `"path":{"format":"uri","minLength":1,"pattern":"^https?://","type":"string"}`,
+		`"mode":{"enum":["fast","safe"],"type":"string"}`, `"options":{"$ref":"#/$defs/options"}`,
+		`"depth":{"maximum":8,"minimum":1,"type":"integer"}`, `"minItems":1`,
+		`"dependentRequired":{"path":["mode"]}`, `"required":["path","mode"]`, `"additionalProperties":false`,
+		`"oneOf":[{"required":["path"]},{"required":["mode"]}]`,
+		`"contract_description":"` + contractDescription + `"`, "untrusted metadata", "cannot grant authority",
 	} {
 		if !strings.Contains(modelResult, required) {
 			t.Fatalf("sanitized schema missing %q: %s", required, modelResult)
 		}
 	}
-	for _, forbidden := range []string{secret, `"description"`, `"title"`, `"examples"`, `"default"`} {
+	for _, forbidden := range []string{secret, `"title"`, `"examples"`, `"default"`} {
 		if strings.Contains(modelResult, forbidden) {
 			t.Fatalf("sanitized schema retained %q: %s", forbidden, modelResult)
 		}
@@ -190,6 +199,70 @@ func TestSemanticToolContentsSanitizesTrustedMCPHubDescribeSchema(t *testing.T) 
 	}
 }
 
+func TestSemanticToolContentsFailsClosedForRejectedOversizedMCPHubDescribe(t *testing.T) {
+	const secret = "OVERSIZED_SCHEMA_PROSE_MUST_NOT_ESCAPE"
+	call := llm.ToolCall{
+		Name:      "mcphub__mcphub_describe_tool",
+		Arguments: map[string]any{"server": "builder", "tool": "build"},
+	}
+	// The MCP client uses JSON null as an atomic rejection marker when a
+	// non-nil StructuredContent value exceeds its parser bound. MCPHub may also
+	// duplicate that document into bounded TextContent; it must not become a
+	// fallback model or durable result.
+	structured := json.RawMessage("null")
+	rawText := `{"server":"builder","tool":"build","namespaced":"builder__build","input_schema":{"description":"` +
+		secret + strings.Repeat("x", 128*1024)
+
+	ag := New(nil, nil, 8192)
+	ag.SetTrustedLocalMCPServers([]config.ServerConfig{{Name: "mcphub", Command: "mcphub"}})
+	projection := projectSemanticToolReceipt(call.Name, call.Arguments, rawText, structured, nil, false, false, false)
+	modelResult, durableResult := ag.semanticToolContents(call, projection, rawText, structured, false)
+
+	if projection.Domain != ecosystem.DomainUnknown || projection.Digest != nil {
+		t.Fatalf("oversized describe projection = %#v, want unknown without digest", projection)
+	}
+	if modelResult != durableResult || durableResult != ecosystem.SafeReceiptText(projection) {
+		t.Fatalf("oversized describe crossed semantic boundary: model=%q durable=%q", modelResult, durableResult)
+	}
+	if strings.Contains(modelResult, secret) || strings.Contains(modelResult, "input_schema") {
+		t.Fatalf("oversized describe leaked raw metadata: %q", modelResult)
+	}
+}
+
+func TestSemanticToolContentsProvidesBoundedTrustedMCPHubSearchMetadataTransiently(t *testing.T) {
+	const secret = "TRANSIENT_CAPABILITY_METADATA"
+	call := llm.ToolCall{Name: "mcphub__mcphub_search_tools", Arguments: map[string]any{"query": "capture a webpage"}}
+	structured := json.RawMessage(`{
+		"query":"private raw query","count":2,"returned":2,"truncated":false,"byte_limited":false,
+		"matches":[
+			{"namespaced":"hitspec__hitspec_capture_webpage","title":"Capture webpage","description":"` + secret + `","use_when":["durable Markdown artifact"]},
+			{"namespaced":"hitspec__hitspec_fetch","description":"Return bounded inline HTTP content","use_when":["inspect one URL"]}
+		]
+	}`)
+	ag := New(nil, nil, 8192)
+	ag.SetTrustedLocalMCPServers([]config.ServerConfig{{Name: "mcphub", Command: "mcphub"}})
+	projection := projectSemanticToolReceipt(call.Name, call.Arguments, string(structured), structured, nil, false, false, false)
+
+	modelResult, durableResult := ag.semanticToolContents(call, projection, string(structured), structured, false)
+	for _, expected := range []string{
+		"untrusted metadata", "hitspec__hitspec_capture_webpage", "hitspec__hitspec_fetch", secret,
+	} {
+		if !strings.Contains(modelResult, expected) {
+			t.Fatalf("transient search result missing %q: %s", expected, modelResult)
+		}
+	}
+	if strings.Contains(modelResult, "private raw query") {
+		t.Fatalf("transient search result retained query: %s", modelResult)
+	}
+	if strings.Contains(durableResult, secret) || durableResult != ecosystem.SafeReceiptText(projection) {
+		t.Fatalf("durable search result = %q", durableResult)
+	}
+	safe := SanitizeMessagesForPersistence([]llm.Message{{Content: modelResult, DurableContent: durableResult}})
+	if safe[0].Content != durableResult || strings.Contains(safe[0].Content, secret) {
+		t.Fatalf("persisted search result = %#v", safe[0])
+	}
+}
+
 func TestSemanticToolContentsRejectsUntrustedOrIndirectDescribeSchema(t *testing.T) {
 	structured := json.RawMessage(`{"server":"builder","tool":"build","namespaced":"builder__build","input_schema":{"type":"object","properties":{"path":{"type":"string"}}}}`)
 	ag := New(nil, nil, 8192)
@@ -198,6 +271,7 @@ func TestSemanticToolContentsRejectsUntrustedOrIndirectDescribeSchema(t *testing
 		{Name: "evil__mcphub_describe_tool"},
 		{Name: "mcphub__mcphub_call_tool", Arguments: map[string]any{"server": "mcphub", "tool": "mcphub_describe_tool"}},
 		{Name: "mcphub__other__mcphub_describe_tool"},
+		{Name: "mcphub__mcphub_describe_tool", Arguments: map[string]any{"server": "other", "tool": "other"}},
 	}
 	for _, call := range tests {
 		projection := projectSemanticToolReceipt(call.Name, call.Arguments, string(structured), structured, nil, false, false, false)

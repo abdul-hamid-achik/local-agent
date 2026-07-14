@@ -255,6 +255,20 @@ func (m *Model) renderApproval() string {
 		keyHint{Key: "d", Action: detailAction},
 		keyHint{Key: "pgup/dn", Action: "scroll"},
 	)
+	if contentWidth < 40 {
+		hints = m.renderKeyHints(contentWidth,
+			keyHint{Key: "esc", Action: "cancel"},
+			keyHint{Key: "enter", Action: "select"},
+		)
+		detailHints := []keyHint{{Key: "d", Action: detailAction}}
+		switch {
+		case !m.approvalState.Viewport.AtBottom():
+			detailHints = append([]keyHint{{Key: "pgdn", Action: "more"}}, detailHints...)
+		case m.approvalState.Viewport.YOffset() > 0:
+			detailHints = append([]keyHint{{Key: "pgup", Action: "previous"}}, detailHints...)
+		}
+		hints += "\n" + m.renderKeyHints(contentWidth, detailHints...)
+	}
 	sections = append(sections, hints)
 	return indentApprovalSurface(strings.Join(sections, "\n"), 2, m.chatPaneWidth())
 }
@@ -318,6 +332,19 @@ func (m *Model) renderApprovalChoices(width int) string {
 	wideView := lipgloss.JoinHorizontal(lipgloss.Top, wide...)
 	if lipgloss.Width(wideView) <= width {
 		return wideView
+	}
+	if width < 40 {
+		firstChoice := strings.TrimLeft(choiceView(approvalChoices[0], selected == 0, true), " ")
+		secondChoice := strings.TrimLeft(choiceView(approvalChoices[1], selected == 1, true), " ")
+		first := lipgloss.JoinHorizontal(lipgloss.Top,
+			firstChoice,
+			m.styles.OverlayDim.Render(" · "),
+			secondChoice,
+		)
+		second := choiceView(approvalChoices[2], selected == 2, true)
+		return lipgloss.JoinVertical(lipgloss.Left,
+			truncateDisplay(first, width), truncateDisplay(second, width),
+		)
 	}
 
 	rows := make([]string, 0, len(approvalChoices))
@@ -389,6 +416,18 @@ func (m *Model) buildApprovalPreview(width int) string {
 			lines = append(lines, strings.Repeat(" ", labelWidth+1)+continuation)
 		}
 	}
+	appendPathRow := func(label, value string) {
+		value = sanitizeApprovalMetadata(value)
+		if value == "" {
+			return
+		}
+		if m.approvalBodyHeight() <= 2 {
+			labelWidth := min(10, max(6, width/5))
+			available := max(1, width-labelWidth-1)
+			value = compactWorkspacePath(value, available)
+		}
+		appendRow(label, value)
+	}
 
 	actionLabel := boundedApprovalMetadata(preview.ActionLabel, approvalMaximumActionBytes)
 	hasCustomAction := actionLabel != ""
@@ -401,13 +440,13 @@ func (m *Model) buildApprovalPreview(width int) string {
 			actionLabel = "Write " + formatApprovalBytes(preview.ByteSize)
 		}
 		appendRow("Action", actionLabel)
-		appendRow("Target", preview.Path)
+		appendPathRow("Target", preview.Path)
 	case permission.PreviewFilePatch:
 		if !hasCustomAction {
 			actionLabel = "Patch file"
 		}
 		appendRow("Action", actionLabel)
-		appendRow("Target", preview.Path)
+		appendPathRow("Target", preview.Path)
 	case permission.PreviewCommand:
 		if !hasCustomAction {
 			actionLabel = "Run command"
@@ -418,12 +457,12 @@ func (m *Model) buildApprovalPreview(width int) string {
 			actionLabel = "Change filesystem"
 		}
 		appendRow("Action", actionLabel)
-		appendRow("Path", preview.Path)
-		appendRow("From", preview.SourcePath)
-		appendRow("To", preview.DestinationPath)
+		appendPathRow("Path", preview.Path)
+		appendPathRow("From", preview.SourcePath)
+		appendPathRow("To", preview.DestinationPath)
 	default:
 		appendRow("Action", "Run "+actionLabel)
-		appendRow("Target", preview.Path)
+		appendPathRow("Target", preview.Path)
 	}
 	appendRow("Impact", boundedApprovalMetadata(preview.Consequence, approvalMaximumConsequenceBytes))
 	appendRow("Scope", approvalScopeLabel(request.Scope))
@@ -516,8 +555,15 @@ func (m *Model) buildApprovalArguments(width int) string {
 }
 
 func (m *Model) renderApprovalDiff(diff string, width int) []string {
-	lines := make([]string, 0, strings.Count(diff, "\n")+1)
-	for _, line := range strings.Split(diff, "\n") {
+	rawLines := strings.Split(diff, "\n")
+	lines := make([]string, 0, len(rawLines))
+	for index, line := range rawLines {
+		// The line diff for a new file can begin with a synthetic deletion of
+		// the empty preimage ("-"). It carries no reviewable material and can
+		// consume the last visible preview row, hiding the actual addition.
+		if line == "-" && index+1 < len(rawLines) && strings.HasPrefix(rawLines[index+1], "+") {
+			continue
+		}
 		style := m.styles.DiffContext.PaddingLeft(0)
 		switch {
 		case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):

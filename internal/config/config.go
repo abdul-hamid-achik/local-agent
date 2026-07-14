@@ -1,24 +1,31 @@
 package config
 
 import (
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/abdul-hamid-achik/local-agent/internal/execpath"
+	"github.com/abdul-hamid-achik/local-agent/internal/netpolicy"
 	"github.com/abdul-hamid-achik/local-agent/internal/safeio"
 	"gopkg.in/yaml.v3"
 )
 
 const maxStartupConfigBytes int64 = 1 << 20
+const maxRepoMCPExecutableBytes int64 = 256 << 20
+const repoMCPTrustEnv = "LOCAL_AGENT_TRUST_REPO_MCP"
 
 var configFileReader = safeio.NewReader()
+var repoMCPExecutableReader = safeio.NewReader()
 var configFileReadTimeout = safeio.StartupReadTimeout
 
 type Config struct {
@@ -35,6 +42,7 @@ type Config struct {
 	ICE          ICEConfig     `yaml:"ice,omitempty"`
 	AgentProfile string        `yaml:"agent_profile,omitempty"`
 	Tools        ToolsConfig   `yaml:"tools,omitempty"`
+	Experts      ExpertsConfig `yaml:"experts,omitempty"`
 	Privacy      PrivacyConfig `yaml:"privacy,omitempty"`
 }
 
@@ -56,6 +64,21 @@ type ToolsConfig struct {
 	MaxIterations  int    `yaml:"max_iterations,omitempty"`
 }
 
+// ExpertsConfig controls application-level read-only Team/Swarm/MoE
+// consultation. Zero concurrency/fan-out values mean machine-adaptive auto;
+// explicit values are safety caps and never force the resource planner above
+// measured capacity.
+type ExpertsConfig struct {
+	Enabled                     bool   `yaml:"enabled"`
+	MaxConcurrentInference      int    `yaml:"max_concurrent_inference,omitempty"`
+	MaxConcurrentDistinctModels int    `yaml:"max_concurrent_distinct_models,omitempty"`
+	MaxTeamExperts              int    `yaml:"max_team_experts,omitempty"`
+	MaxSwarmWorkers             int    `yaml:"max_swarm_workers,omitempty"`
+	MaxMoEExperts               int    `yaml:"max_moe_experts,omitempty"`
+	MaxEvalTokens               int    `yaml:"max_eval_tokens,omitempty"`
+	Timeout                     string `yaml:"timeout,omitempty"`
+}
+
 type ICEConfig struct {
 	Enabled    bool   `yaml:"enabled"`
 	EmbedModel string `yaml:"embed_model,omitempty"`
@@ -69,12 +92,33 @@ type OllamaConfig struct {
 }
 
 type ServerConfig struct {
-	Name      string   `yaml:"name"`
-	Command   string   `yaml:"command,omitempty"`
-	Args      []string `yaml:"args,omitempty"`
-	Env       []string `yaml:"env,omitempty"`
-	Transport string   `yaml:"transport,omitempty"`
-	URL       string   `yaml:"url,omitempty"`
+	Name             string   `yaml:"name"`
+	Command          string   `yaml:"command,omitempty"`
+	Args             []string `yaml:"args,omitempty"`
+	Env              []string `yaml:"env,omitempty"`
+	Transport        string   `yaml:"transport,omitempty"`
+	URL              string   `yaml:"url,omitempty"`
+	ExecutableSHA256 string   `yaml:"-" json:"-"`
+}
+
+// RepoMCPTrustError reports executable MCP authority supplied by a
+// repository-local configuration before any server process is started. The
+// digest binds consent to both the selected repository path and the exact
+// STDIO command, arguments, and environment.
+type RepoMCPTrustError struct {
+	SourcePath  string
+	Digest      string
+	ServerCount int
+}
+
+func (e *RepoMCPTrustError) Error() string {
+	return fmt.Sprintf(
+		"repository-local config %q requests %d STDIO MCP server process(es); refusing to start them without explicit trust (re-run with %s=%s for this exact executable configuration)",
+		e.SourcePath,
+		e.ServerCount,
+		repoMCPTrustEnv,
+		e.Digest,
+	)
 }
 
 func defaults() Config {
@@ -100,6 +144,11 @@ func defaults() Config {
 			MaxGrepResults: 500,
 			MaxIterations:  10,
 		},
+		Experts: ExpertsConfig{
+			Enabled:       true,
+			MaxEvalTokens: 768,
+			Timeout:       "90s",
+		},
 		Privacy: PrivacyConfig{LocalOnly: true},
 	}
 }
@@ -116,9 +165,16 @@ func loadConfigAndAgents() (*Config, *AgentsDir, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	repoConfig := isRepositoryLocalConfigPath(localPath)
+	var repoConfiguredServers []ServerConfig
+	repoSelectedAgentsDir := false
 	if localPath != "" {
 		if err := yaml.Unmarshal(data, &cfg); err != nil {
 			return nil, nil, fmt.Errorf("parse config %s: %w", localPath, err)
+		}
+		if repoConfig {
+			repoConfiguredServers = append([]ServerConfig(nil), cfg.Servers...)
+			repoSelectedAgentsDir = strings.TrimSpace(cfg.Agents.Dir) != ""
 		}
 		cfg.SourcePath = localPath
 		if absolute, absErr := filepath.Abs(localPath); absErr == nil {
@@ -130,6 +186,11 @@ func loadConfigAndAgents() (*Config, *AgentsDir, error) {
 	// root. Otherwise LOCAL_AGENT_AGENTS_DIR changes the returned config but
 	// silently preloads metadata from a different directory.
 	applyEnvOverrides(&cfg)
+	if os.Getenv("LOCAL_AGENT_AGENTS_DIR") != "" {
+		// Process environment is user-controlled startup authority. Do not
+		// attribute an environment-selected agents root to repository config.
+		repoSelectedAgentsDir = false
+	}
 
 	var agentsData *AgentsDir
 	if cfg.Agents.AutoLoad {
@@ -156,7 +217,137 @@ func loadConfigAndAgents() (*Config, *AgentsDir, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, nil, err
 	}
+	if repoConfig {
+		var repoAuthorities []ServerConfig
+		if len(repoConfiguredServers) > 0 {
+			repoAuthorities = cfg.Servers
+		}
+		if len(repoConfiguredServers) == 0 && repoSelectedAgentsDir && agentsData != nil {
+			repoAuthorities = cfg.Servers
+		}
+		if err := requireRepositoryMCPTrust(cfg.SourcePath, repoAuthorities); err != nil {
+			return nil, nil, err
+		}
+	}
 	return &cfg, agentsData, nil
+}
+
+func isRepositoryLocalConfigPath(path string) bool {
+	return path == "local-agent.yaml" || path == "local-agent.yml"
+}
+
+type repoMCPExecutableAuthority struct {
+	Name             string   `json:"name"`
+	Command          string   `json:"command"`
+	ResolvedCommand  string   `json:"resolved_command"`
+	ExecutablePath   string   `json:"executable_path"`
+	ExecutableSHA256 string   `json:"executable_sha256"`
+	Args             []string `json:"args,omitempty"`
+	Env              []string `json:"env,omitempty"`
+}
+
+type repoMCPTrustMaterial struct {
+	Version    int                          `json:"version"`
+	SourcePath string                       `json:"source_path"`
+	Servers    []repoMCPExecutableAuthority `json:"servers"`
+}
+
+func requireRepositoryMCPTrust(sourcePath string, servers []ServerConfig) error {
+	authorities := make([]repoMCPExecutableAuthority, 0, len(servers))
+	serverIndexes := make([]int, 0, len(servers))
+	for index, server := range servers {
+		if server.Transport != "" && server.Transport != "stdio" {
+			continue
+		}
+		authority, err := repositoryMCPExecutableAuthority(server)
+		if err != nil {
+			return fmt.Errorf("resolve repository MCP executable %q: %w", server.Name, err)
+		}
+		authorities = append(authorities, authority)
+		serverIndexes = append(serverIndexes, index)
+	}
+	if len(authorities) == 0 {
+		return nil
+	}
+
+	// Server ordering does not change process authority. Sort canonical copies
+	// while retaining the original indexes used to pin runtime launch paths.
+	sortedAuthorities := append([]repoMCPExecutableAuthority(nil), authorities...)
+	sort.Slice(sortedAuthorities, func(i, j int) bool {
+		left, _ := json.Marshal(sortedAuthorities[i])
+		right, _ := json.Marshal(sortedAuthorities[j])
+		return string(left) < string(right)
+	})
+	material, err := json.Marshal(repoMCPTrustMaterial{
+		Version:    2,
+		SourcePath: filepath.Clean(sourcePath),
+		Servers:    sortedAuthorities,
+	})
+	if err != nil {
+		return fmt.Errorf("encode repository MCP trust material: %w", err)
+	}
+	digest := fmt.Sprintf("sha256:%x", sha256.Sum256(material))
+	if strings.TrimSpace(os.Getenv(repoMCPTrustEnv)) == digest {
+		for authorityIndex, serverIndex := range serverIndexes {
+			// Pin startup to the exact symlink-resolved target covered by the
+			// digest so neither PATH nor a retargeted launcher symlink can select a
+			// different executable.
+			servers[serverIndex].Command = authorities[authorityIndex].ExecutablePath
+			servers[serverIndex].ExecutableSHA256 = authorities[authorityIndex].ExecutableSHA256
+		}
+		return nil
+	}
+	return &RepoMCPTrustError{
+		SourcePath:  sourcePath,
+		Digest:      digest,
+		ServerCount: len(authorities),
+	}
+}
+
+func repositoryMCPExecutableAuthority(server ServerConfig) (repoMCPExecutableAuthority, error) {
+	resolved, err := execpath.Resolve(server.Command)
+	if err != nil {
+		return repoMCPExecutableAuthority{}, err
+	}
+	resolved, err = filepath.Abs(resolved)
+	if err != nil {
+		return repoMCPExecutableAuthority{}, fmt.Errorf("make executable path absolute: %w", err)
+	}
+	resolved = filepath.Clean(resolved)
+	realPath, err := filepath.EvalSymlinks(resolved)
+	if err != nil {
+		return repoMCPExecutableAuthority{}, fmt.Errorf("resolve executable symlinks: %w", err)
+	}
+	realPath, err = filepath.Abs(realPath)
+	if err != nil {
+		return repoMCPExecutableAuthority{}, fmt.Errorf("make executable target absolute: %w", err)
+	}
+	realPath = filepath.Clean(realPath)
+
+	info, err := os.Stat(realPath)
+	if err != nil {
+		return repoMCPExecutableAuthority{}, fmt.Errorf("inspect executable: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return repoMCPExecutableAuthority{}, fmt.Errorf("resolved executable path %q is not a regular file", realPath)
+	}
+	contents, err := repoMCPExecutableReader.ReadRegularFileNoFollow(
+		realPath, maxRepoMCPExecutableBytes, safeio.StartupReadTimeout,
+	)
+	if err != nil {
+		return repoMCPExecutableAuthority{}, fmt.Errorf("read executable for trust digest: %w", err)
+	}
+	contentHash := sha256.Sum256(contents)
+
+	return repoMCPExecutableAuthority{
+		Name:             server.Name,
+		Command:          server.Command,
+		ResolvedCommand:  resolved,
+		ExecutablePath:   realPath,
+		ExecutableSHA256: fmt.Sprintf("sha256:%x", contentHash),
+		Args:             append([]string(nil), server.Args...),
+		Env:              append([]string(nil), server.Env...),
+	}, nil
 }
 
 // resolveAgentsDir returns an explicit root whenever shared agent metadata is
@@ -232,6 +423,25 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("config: tools.timeout must be positive, got %s", c.Tools.Timeout)
 		}
 	}
+	for name, value := range map[string]int{
+		"max_concurrent_inference":       c.Experts.MaxConcurrentInference,
+		"max_concurrent_distinct_models": c.Experts.MaxConcurrentDistinctModels,
+		"max_team_experts":               c.Experts.MaxTeamExperts,
+		"max_swarm_workers":              c.Experts.MaxSwarmWorkers,
+		"max_moe_experts":                c.Experts.MaxMoEExperts,
+	} {
+		if value < 0 || value > 16 {
+			return fmt.Errorf("config: experts.%s must be 0..16, got %d", name, value)
+		}
+	}
+	if c.Experts.MaxEvalTokens < 1 || c.Experts.MaxEvalTokens > 8192 {
+		return fmt.Errorf("config: experts.max_eval_tokens must be 1..8192, got %d", c.Experts.MaxEvalTokens)
+	}
+	if d, err := time.ParseDuration(c.Experts.Timeout); err != nil {
+		return fmt.Errorf("config: invalid experts.timeout %q: %w", c.Experts.Timeout, err)
+	} else if d < time.Second || d > 10*time.Minute {
+		return fmt.Errorf("config: experts.timeout must be between 1s and 10m, got %s", c.Experts.Timeout)
+	}
 	serverNames := make(map[string]struct{}, len(c.Servers))
 	for i, s := range c.Servers {
 		if s.Name == "" {
@@ -268,15 +478,11 @@ func (c *Config) Validate() error {
 }
 
 func isLocalHost(host string) bool {
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	ip := net.ParseIP(host)
 	// Ollama commonly exports OLLAMA_HOST=0.0.0.0 (or ::) to describe its
 	// local listen address. Connecting to an unspecified address still targets
 	// this host, so it is safe for local-only client routing. Actual LAN/WAN
 	// addresses remain rejected.
-	return ip != nil && (ip.IsLoopback() || ip.IsUnspecified())
+	return netpolicy.IsLocalHost(host)
 }
 
 // CheckModelMemorySafe rejects cloud and clearly oversized local tiers. The

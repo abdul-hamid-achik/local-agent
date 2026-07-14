@@ -72,7 +72,7 @@ func TestNarrowStatusPrioritizesConnectionFailure(t *testing.T) {
 	m.failedServers = []FailedServer{{Name: "local-tools", Reason: "connection refused"}}
 
 	status := m.renderStatusLine()
-	if !strings.Contains(status, "connection failed") {
+	if !strings.Contains(status, "1 MCP server unavailable") {
 		t.Fatalf("narrow status hid operational failure: %q", status)
 	}
 	assertRenderedLinesFit(t, status, m.chatPaneWidth())

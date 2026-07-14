@@ -104,9 +104,18 @@ func (m *Model) renderCloudConsent() string {
 	content := m.styles.OverlayTitle.Render("Use Ollama Cloud?") + "\n" +
 		m.styles.OverlayDim.Render(wrapText("Prompts, context, files, and tool results leave this machine through Ollama Cloud.", width)) + "\n\n" +
 		m.cloudConsentState.List.View()
+	enterAction := "select"
+	if selected, ok := m.cloudConsentState.List.SelectedItem().(cloudConsentItem); ok {
+		switch selected.action {
+		case cloudConsentCancel:
+			enterAction = "cancel"
+		case cloudConsentAllow:
+			enterAction = "use"
+		}
+	}
 	footer := m.renderKeyHints(width,
 		keyHint{Key: "esc", Action: "cancel"},
-		keyHint{Key: "enter", Action: "use"},
+		keyHint{Key: "enter", Action: enterAction},
 	)
 	if m.cloudConsentState.Error != "" {
 		footer += "\n" + m.styles.ErrorText.Render(truncateDisplay(sanitizeTerminalSingleLine(m.cloudConsentState.Error), width))

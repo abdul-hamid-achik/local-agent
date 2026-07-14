@@ -296,7 +296,11 @@ func (m *Model) applyGoalFormWithAuthority(event GoalFormEvent, explicitGoalComm
 		return nil
 	}
 	m.closeGoalForm()
-	m.appendGoalSystem("Goal saved · linking Cortex before the first turn…")
+	if m.goalAdvisor == nil {
+		m.appendGoalSystem("Goal saved · Cortex is not configured; starting one bounded local turn…")
+	} else {
+		m.appendGoalSystem("Goal saved · linking Cortex before the first turn…")
+	}
 	return m.beginGoalOpen(false)
 }
 
@@ -338,6 +342,14 @@ func (m *Model) beginGoalOpen(manual bool) tea.Cmd {
 		m.appendGoalError("Cortex link blocked until the current goal snapshot is saved. Run /goal resume to retry persistence.")
 		return nil
 	}
+	// Cortex is an optional semantic advisor. An installation with no advisor
+	// configured still gets one host-bounded initial turn; later progress
+	// remains explicit because an unlinked goal cannot verify itself. Once an
+	// advisor is configured, its failures continue through the durable
+	// pause-and-retry path below rather than silently degrading.
+	if m.goalAdvisor == nil {
+		return m.startGoalTurn(nil, manual)
+	}
 	snapshot, err := m.goalRuntime.Snapshot(context.Background())
 	if err != nil {
 		m.appendGoalError("Read goal: " + err.Error())
@@ -354,9 +366,6 @@ func (m *Model) beginGoalOpen(manual bool) tea.Cmd {
 	}
 	advisor := m.goalAdvisor
 	return tea.Batch(m.startActivityCmd(), func() tea.Msg {
-		if advisor == nil {
-			return goalOpenResultMsg{Token: token, Manual: manual, Err: goaladvisor.ErrUnavailable}
-		}
 		advice, err := advisor.Open(ctx, request)
 		return goalOpenResultMsg{Token: token, Manual: manual, Advice: advice, Err: err}
 	})

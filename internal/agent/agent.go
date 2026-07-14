@@ -14,6 +14,7 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/capabilityadvisor"
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
 	"github.com/abdul-hamid-achik/local-agent/internal/execution"
+	"github.com/abdul-hamid-achik/local-agent/internal/expertteam"
 	"github.com/abdul-hamid-achik/local-agent/internal/ice"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 	"github.com/abdul-hamid-achik/local-agent/internal/mcp"
@@ -58,8 +59,10 @@ type Agent struct {
 	mcpScopeSet       bool
 	trustedMCP        map[string]trustedMCPImplementation
 	readRoots         map[string]*additionalReadRoot
+	readFiles         map[string]*additionalReadFile
 	capabilityAdvisor capabilityAdviser
 	capabilityRetries map[capabilityRetryKey]struct{}
+	expertConsultant  ExpertConsultant
 
 	checkpointStore     CheckpointStore
 	checkpointSessionID int64
@@ -71,6 +74,13 @@ type Agent struct {
 	executionRunIDErr   error
 	requireExecutionLog bool
 	unresolvedExecution *UnresolvedExecutionError
+}
+
+// ExpertConsultant is the bounded read-only team runtime surface. Keeping the
+// interface on Agent allows deterministic fakes without coupling tests to a
+// provider implementation.
+type ExpertConsultant interface {
+	Consult(context.Context, expertteam.Request) (expertteam.Result, error)
 }
 
 // contextWindowProvider is an optional capability implemented by clients that
@@ -107,6 +117,7 @@ func New(llmClient llm.Client, registry *mcp.Registry, numCtx int) *Agent {
 		approvalGrants:    make(map[string]struct{}),
 		trustedMCP:        make(map[string]trustedMCPImplementation),
 		readRoots:         make(map[string]*additionalReadRoot),
+		readFiles:         make(map[string]*additionalReadFile),
 		capabilityRetries: make(map[capabilityRetryKey]struct{}),
 		// Filesystem reads can enter OS syscalls that do not observe context
 		// cancellation. Allow at most one abandoned worker for the lifetime of
@@ -126,11 +137,30 @@ func (a *Agent) SetRouter(router config.ModelRouter) {
 	a.router = router
 }
 
+// SetExpertConsultant installs application-level Team/Swarm/MoE support. A nil
+// consultant removes the model-visible tool.
+func (a *Agent) SetExpertConsultant(consultant ExpertConsultant) {
+	a.mu.Lock()
+	a.expertConsultant = consultant
+	a.mu.Unlock()
+}
+
 // SetModeContext configures the mode prefix injected into the system prompt
 // and the tool policy for the current turn.
 func (a *Agent) SetModeContext(prefix string, policy ToolPolicy) {
+	a.mu.Lock()
 	a.modePrefix = prefix
 	a.toolPolicy = policy
+	a.mu.Unlock()
+}
+
+// modeContext returns one coherent mode snapshot. A turn keeps this snapshot
+// for its lifetime so a concurrent host-mode change cannot alter its visible
+// tools after the provider has already received the system prompt.
+func (a *Agent) modeContext() (string, ToolPolicy) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.modePrefix, a.toolPolicy
 }
 
 // AppendLoadedContext appends to the loaded context.
@@ -327,16 +357,68 @@ func (a *Agent) LLMClient() llm.Client {
 	return a.llmClient
 }
 
-// ToolCount returns the number of available tools.
+// ToolAvailability separates local authority from currently connected MCP
+// transport. MCPRetained includes scoped definitions kept during reconnect so
+// diagnostics can explain why a tool remains known without calling it ready.
+type ToolAvailability struct {
+	Local        int
+	MCPConnected int
+	MCPRetained  int
+}
+
+// Ready returns tool definitions backed by local authority or a currently
+// connected MCP namespace.
+func (availability ToolAvailability) Ready() int {
+	return availability.Local + availability.MCPConnected
+}
+
+// ToolAvailability returns a non-blocking host snapshot. It does not ping or
+// reconnect MCP servers and says nothing about downstream domain success.
+func (a *Agent) ToolAvailability() ToolAvailability {
+	if a == nil {
+		return ToolAvailability{}
+	}
+	a.mu.RLock()
+	policy := a.toolPolicy
+	hasMemory := a.memoryStore != nil
+	a.mu.RUnlock()
+
+	availability := ToolAvailability{
+		Local: len(filterToolDefsByName(a.toolsBuiltinToolDefs(), policy.localTools)),
+	}
+	if hasMemory {
+		availability.Local += len(filterToolDefsByName(a.memoryBuiltinToolDefs(), policy.memoryTools))
+	}
+	if !policy.AllowMCP || a.registry == nil {
+		return availability
+	}
+
+	mcpTools := a.mcpTools()
+	availability.MCPRetained = len(mcpTools)
+	connected := make(map[string]struct{})
+	for _, status := range a.registry.ConnectionStatuses() {
+		if status.Connected {
+			connected[status.Name] = struct{}{}
+		}
+	}
+	for _, tool := range mcpTools {
+		server, _, namespaced := strings.Cut(tool.Name, "__")
+		if !namespaced {
+			continue
+		}
+		if _, ready := connected[server]; ready {
+			availability.MCPConnected++
+		}
+	}
+	return availability
+}
+
+// ToolCount returns the model-visible tool definition count. During an MCP
+// reconnect this intentionally includes retained definitions; presentation
+// surfaces should use ToolAvailability when claiming readiness.
 func (a *Agent) ToolCount() int {
-	count := len(filterToolDefsByName(a.toolsBuiltinToolDefs(), a.toolPolicy.localTools))
-	if a.memoryStore != nil {
-		count += len(a.toolPolicy.memoryTools)
-	}
-	if a.toolPolicy.AllowMCP && a.registry != nil {
-		count += len(a.mcpTools())
-	}
-	return count
+	availability := a.ToolAvailability()
+	return availability.Local + availability.MCPRetained
 }
 
 // SetMCPServerScope restricts model-visible and executable MCP tools to the

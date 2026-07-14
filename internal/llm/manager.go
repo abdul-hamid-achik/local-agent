@@ -16,10 +16,14 @@ type ModelManager struct {
 	numCtx       int
 	clients      map[string]*OllamaClient
 	active       map[string]bool
+	activity     map[string]modelActivity
+	activitySeq  uint64
 	currentModel string
 	mu           sync.RWMutex
 	switchMu     sync.Mutex
 	inferenceMu  sync.RWMutex
+	expertGate   chan struct{}
+	admission    *modelAdmission
 	localMu      sync.RWMutex
 	localOnly    bool
 	localKnown   bool
@@ -62,6 +66,9 @@ func NewModelManager(baseURL string, numCtx int) *ModelManager {
 		numCtx:      numCtx,
 		clients:     make(map[string]*OllamaClient),
 		active:      make(map[string]bool),
+		activity:    make(map[string]modelActivity),
+		expertGate:  make(chan struct{}, 1),
+		admission:   newModelAdmission(),
 		cloudModels: make(map[string]struct{}),
 		cloudGrants: make(map[string]struct{}),
 		nativeCtx:   make(map[string]int),
@@ -303,6 +310,10 @@ func validateRequestContextPolicy(model string, policy ModelContextPolicy) error
 }
 
 func (m *ModelManager) SetCurrentModel(model string) error {
+	if err := m.admission.acquireOrdinary(context.Background()); err != nil {
+		return err
+	}
+	defer m.admission.releaseOrdinary()
 	m.switchMu.Lock()
 	defer m.switchMu.Unlock()
 	m.inferenceMu.Lock()
@@ -344,8 +355,10 @@ func (m *ModelManager) SetCurrentModel(model string) error {
 	m.mu.Lock()
 	m.clients[model] = client
 	m.currentModel = model
+	m.markNonExpertActivityLocked(model)
 	if previousName != "" && previousName != model {
 		m.active[previousName] = false
+		delete(m.activity, modelResourceKey(previousName))
 	}
 	m.mu.Unlock()
 	return nil
@@ -356,6 +369,10 @@ func (m *ModelManager) SetCurrentModel(model string) error {
 // effort unload, so an Ollama inventory reclassification cannot leave a
 // remote model usable merely because releasing its resident runner failed.
 func (m *ModelManager) ClearCurrentModel() error {
+	if err := m.admission.acquireOrdinary(context.Background()); err != nil {
+		return err
+	}
+	defer m.admission.releaseOrdinary()
 	m.switchMu.Lock()
 	defer m.switchMu.Unlock()
 	m.inferenceMu.Lock()
@@ -366,6 +383,9 @@ func (m *ModelManager) ClearCurrentModel() error {
 	previousClient := m.clients[previousName]
 	previousActive := m.active[previousName]
 	m.currentModel = ""
+	if !previousActive {
+		delete(m.activity, modelResourceKey(previousName))
+	}
 	m.mu.Unlock()
 
 	if previousName == "" || previousClient == nil || !previousActive {
@@ -379,6 +399,7 @@ func (m *ModelManager) ClearCurrentModel() error {
 	}
 	m.mu.Lock()
 	m.active[previousName] = false
+	delete(m.activity, modelResourceKey(previousName))
 	m.mu.Unlock()
 	return nil
 }
@@ -390,6 +411,10 @@ func (m *ModelManager) CurrentModel() string {
 }
 
 func (m *ModelManager) ChatStream(ctx context.Context, opts ChatOptions, fn func(StreamChunk) error) error {
+	if err := m.admission.acquireOrdinary(ctx); err != nil {
+		return inferenceNotStarted(err)
+	}
+	defer m.admission.releaseOrdinary()
 	m.inferenceMu.RLock()
 	defer m.inferenceMu.RUnlock()
 	m.mu.RLock()
@@ -397,18 +422,19 @@ func (m *ModelManager) ChatStream(ctx context.Context, opts ChatOptions, fn func
 	m.mu.RUnlock()
 
 	if model == "" {
-		return ErrNoModelSelected
+		return inferenceNotStarted(ErrNoModelSelected)
 	}
 	if err := m.validateExpectedContext(model, opts.ExpectedContext); err != nil {
-		return err
+		return inferenceNotStarted(err)
 	}
 
 	client, err := m.getClient(ctx, model)
 	if err != nil {
-		return err
+		return inferenceNotStarted(err)
 	}
 	m.mu.Lock()
 	m.active[model] = true
+	m.markNonExpertActivityLocked(model)
 	m.mu.Unlock()
 	return client.ChatStream(ctx, opts, fn)
 }
@@ -431,17 +457,22 @@ func (m *ModelManager) validateExpectedContext(model string, expected int) error
 }
 
 func (m *ModelManager) ChatStreamForModel(ctx context.Context, model string, opts ChatOptions, fn func(StreamChunk) error) error {
+	if err := m.admission.acquireExpert(ctx, model); err != nil {
+		return inferenceNotStarted(err)
+	}
+	defer m.admission.releaseExpert()
 	m.inferenceMu.RLock()
 	defer m.inferenceMu.RUnlock()
 	if err := m.validateExpectedContext(model, opts.ExpectedContext); err != nil {
-		return err
+		return inferenceNotStarted(err)
 	}
 	client, err := m.getClient(ctx, model)
 	if err != nil {
-		return err
+		return inferenceNotStarted(err)
 	}
 	m.mu.Lock()
 	m.active[model] = true
+	m.markExpertActivityLocked(model)
 	m.mu.Unlock()
 	return client.ChatStream(ctx, opts, fn)
 }
@@ -647,18 +678,20 @@ func (m *ModelManager) ensureModelLocalWithRefresh(ctx context.Context, model st
 	if !required {
 		return nil
 	}
-	if cloudKnown && cloudVerified && cloudGranted {
-		return nil
-	}
 	// Cached inventory cannot turn a LAN/Internet Ollama daemon into an
 	// on-device runtime. Enforce the host boundary on every local-only admission,
-	// including callers that installed inventory programmatically.
+	// including explicitly granted cloud aliases and callers that installed
+	// inventory programmatically. Cloud consent crosses the model-execution
+	// boundary; it never grants access to a remote Ollama control plane.
 	client, err := NewOllamaClient(m.baseURL, "", m.numCtx)
 	if err != nil {
 		return fmt.Errorf("local-only model admission: %w", err)
 	}
 	if err := validateLocalOllamaHost(client); err != nil {
 		return fmt.Errorf("local-only model admission: %w", err)
+	}
+	if cloudKnown && cloudVerified && cloudGranted {
+		return nil
 	}
 	if !known || !allowed || forceRefresh || time.Since(checked) >= localInventoryTTL {
 		models, err := m.ListLocalModelInventory(ctx)
@@ -685,6 +718,10 @@ func (m *ModelManager) ensureModelLocalWithRefresh(ctx context.Context, model st
 }
 
 func (m *ModelManager) Embed(ctx context.Context, model string, texts []string) ([][]float32, error) {
+	if err := m.admission.acquireOrdinary(ctx); err != nil {
+		return nil, err
+	}
+	defer m.admission.releaseOrdinary()
 	m.inferenceMu.RLock()
 	defer m.inferenceMu.RUnlock()
 	m.localMu.RLock()
@@ -702,6 +739,7 @@ func (m *ModelManager) Embed(ctx context.Context, model string, texts []string) 
 	// Embedding weights are resident too. Chat switches only evict the
 	// previous current chat model, while Close unloads every resident client.
 	m.active[model] = true
+	m.markNonExpertActivityLocked(model)
 	m.mu.Unlock()
 	return client.Embed(ctx, model, texts)
 }
@@ -719,6 +757,10 @@ func (m *ModelManager) EmbedWithCurrentModel(ctx context.Context, texts []string
 
 func (m *ModelManager) Close() {
 	m.RevokeOllamaCloudGrants()
+	if err := m.admission.acquireOrdinary(context.Background()); err != nil {
+		return
+	}
+	defer m.admission.releaseOrdinary()
 	m.switchMu.Lock()
 	defer m.switchMu.Unlock()
 	m.inferenceMu.Lock()
@@ -733,6 +775,7 @@ func (m *ModelManager) Close() {
 	}
 	m.clients = make(map[string]*OllamaClient)
 	m.active = make(map[string]bool)
+	m.activity = make(map[string]modelActivity)
 	m.currentModel = ""
 	m.mu.Unlock()
 

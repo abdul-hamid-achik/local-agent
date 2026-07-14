@@ -1,7 +1,7 @@
-                                  LOCAL AGENT
-                 Local-first · Ollama · tool effects ask first
+                Local-first · Ollama · approval prompts enabled
                           AUTO · qwen3.5:2b · offline
               enter send · / commands · ctrl+p settings · ? help
+              shift+tab mode · ctrl+o models · @ files · # skills
        ╭────────────────────────────────────────────────────────────────╮
        │ Goal inspector · 0/1 verified                                  │
        │ × dropped · Ship a polished goal UI                            │
@@ -16,9 +16,9 @@
        │ dropped · dropped by user                                      │
        │                                                                │
        │ Last turn                                                      │
-       │ none recorded                                                  │
+       │ not productive · 0 eval · just now · LLM response: inference   │
+       │ not started: no model selected                                 │
        │                                                                │
-       │ Cortex                                                         │
        │ Actions · 1/4                                                  │
        │ › Pause ×  Resume ×  Budget ×  Drop ×                          │
        │   Unavailable · Only an active goal can be paused.             │

@@ -3,21 +3,22 @@ package tools
 import "github.com/abdul-hamid-achik/local-agent/internal/llm"
 
 var builtinToolNames = map[string]bool{
-	"grep":       true,
-	"read":       true,
-	"write":      true,
-	"glob":       true,
-	"bash":       true,
-	"ls":         true,
-	"find":       true,
-	"diff":       true,
-	"edit":       true,
-	"mkdir":      true,
-	"remove":     true,
-	"copy":       true,
-	"move":       true,
-	"exists":     true,
-	"load_skill": true,
+	"grep":            true,
+	"read":            true,
+	"write":           true,
+	"glob":            true,
+	"bash":            true,
+	"ls":              true,
+	"find":            true,
+	"diff":            true,
+	"edit":            true,
+	"mkdir":           true,
+	"remove":          true,
+	"copy":            true,
+	"move":            true,
+	"exists":          true,
+	"load_skill":      true,
+	"consult_experts": true,
 }
 
 func AllToolDefs() []llm.ToolDef {
@@ -37,6 +38,7 @@ func AllToolDefs() []llm.ToolDef {
 		MoveToolDef(),
 		ExistsToolDef(),
 		LoadSkillToolDef(),
+		ConsultExpertsToolDef(),
 	}
 }
 

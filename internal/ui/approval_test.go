@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"image/color"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -325,21 +326,30 @@ func TestInlineApprovalFitsMinimumTerminalAndKeepsDecisionKeys(t *testing.T) {
 	m.input.SetValue("draft")
 	m.queuedFollowUp = &queuedFollowUp{Prompt: "queued follow-up"}
 	responses := make(chan permission.ApprovalResponse, 1)
+	target := filepath.Join(string(filepath.Separator), "Users", "person", "projects", "local-agent", "approval-probe.txt")
 	m = openApprovalForTest(t, m, ToolApprovalMsg{
 		ToolName: "write_file",
-		Args:     map[string]any{"path": "approval-probe.txt"},
-		Preview:  permission.ApprovalPreview{Kind: permission.PreviewFileWrite, Path: "approval-probe.txt"},
+		Args:     map[string]any{"path": target},
+		Preview:  permission.ApprovalPreview{Kind: permission.PreviewFileWrite, Path: target},
 		Response: responses,
 	})
 
 	inline := ansi.Strip(m.renderApproval())
-	for _, want := range []string{"write_file", "Draft + queue saved", "esc", "enter", "n deny", "y once", "s identical/session"} {
+	for _, want := range []string{"write_file", "Draft + queue saved", "approval-probe.txt", "esc", "enter", "n deny", "y once", "s identical/session", "pgdn more", "d arguments"} {
 		if !strings.Contains(inline, want) {
 			t.Fatalf("minimum inline approval lost %q:\n%s", want, inline)
 		}
 	}
 	if got := lipgloss.Height(m.View().Content); got > m.height {
 		t.Fatalf("minimum approval view height = %d (surface %d), want <= %d:\n%s", got, lipgloss.Height(m.renderApproval()), m.height, inline)
+	}
+}
+
+func TestApprovalDiffPrioritizesMaterialAdditionOverEmptyPreimage(t *testing.T) {
+	m := newTestModel(t)
+	lines := m.renderApprovalDiff("-\n+must not be written", 60)
+	if len(lines) != 1 || !strings.Contains(ansi.Strip(lines[0]), "+must not be written") {
+		t.Fatalf("material diff was not first: %#v", lines)
 	}
 }
 

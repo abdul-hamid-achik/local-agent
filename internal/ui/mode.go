@@ -88,5 +88,5 @@ func (m *Model) syncComposerAuthority() {
 	if m == nil {
 		return
 	}
-	configureComposerMode(&m.input, m.isDark, m.presentedMode())
+	configureComposerMode(&m.input, m.isDark, m.presentedMode(), m.reducedMotion)
 }

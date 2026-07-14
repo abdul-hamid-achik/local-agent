@@ -2,7 +2,7 @@
 
 A local-first coding agent for the terminal, built in Go with Charm and powered by local Ollama models.
 
-[Website](https://local-agent.dev/) · [Getting started](https://local-agent.dev/getting-started) · [Safety](https://local-agent.dev/safety) · [Ecosystem](https://local-agent.dev/ecosystem)
+[Website](https://local-agent.dev/) · [Getting started](https://local-agent.dev/getting-started) · [Safety](https://local-agent.dev/safety) · [Ecosystem](https://local-agent.dev/ecosystem) · [Expert teams](https://local-agent.dev/experts)
 
 > **Status: alpha.** `local-agent` can inspect a repository, edit files, run commands, use MCP tools, and retain optional cross-session memory. Run it in a clean Git worktree, read every approval request, and review the resulting diff. The current safety layer is useful, but it is not an operating-system sandbox.
 
@@ -20,6 +20,9 @@ A local-first coding agent for the terminal, built in Go with Charm and powered 
 - Read, search, diff, validated patch, atomic write, file-management, and shell tools.
 - NORMAL, PLAN, and AUTO authority with approval prompts for risky operations.
 - STDIO, SSE, and Streamable HTTP MCP tool servers, including an MCPHub gateway.
+- Contextual MCPHub routing with explicit confident, ambiguous, and no-match outcomes.
+- Read-only Team, Swarm, and application-level MoE consultations whose concurrency adapts to host CPU and memory.
+- Process-local read grants for an exact external file or directory, without widening write authority.
 - Project instructions from `AGENTS.md` with legacy `AGENT.md` fallback.
 - Lossless SQLite session resume, native reasoning display, skills, agent profiles, optional ICE retrieval, checkpoints, logs, and terminal behavior tests.
 
@@ -149,19 +152,26 @@ Cycle modes with `shift+tab`.
 | Mode | Model behavior | Available tools |
 |---|---|---|
 | NORMAL | Routes for the interactive task | Read tools, writes, validated edits, shell, memory, and MCP; mutations remain approval-gated |
-| PLAN | Sends ordinary prompts directly under a read-only host policy | Workspace reads, search, listing, diff, existence checks, and memory recall only |
+| PLAN | Sends ordinary prompts directly under a read-only host policy | Workspace reads, search, listing, diff, existence checks, memory recall, and advisory expert consultation only |
 | AUTO | Sends ordinary prompts directly with proactive tool routing | The NORMAL tool surface under the same approval policy; no blanket approval |
 
 The mode policy is enforced by the host, not just by a prompt. A model-generated
 mutation in PLAN is returned as blocked. `shift+tab` only changes authority; it
 never opens a form or creates work. Ordinary prompts are sent immediately in all
-three modes. AUTO is not YOLO: risky operations still follow the configured
-approval policy. A durable bounded run is created only through
+three modes. AUTO does not skip approvals: risky operations still follow the
+configured approval policy. A durable bounded run is created only through
 `/goal <duration> <prompt>` or `/goal new`, and an active goal is controlled
 through the Goal Inspector instead of accepting an ordinary prompt that could
 bypass its permit and budget.
 Legacy ASK sessions restore as NORMAL. Legacy BUILD sessions restore as NORMAL
 unless they already carry a durable goal, in which case they restore as AUTO.
+
+When enabled, `consult_experts` is a read-only tool in every mode. It can run at
+most one bounded Team, Swarm, or application-level MoE consultation per parent
+turn, but child experts receive no filesystem, shell, memory, or MCP tools.
+In a bounded turn, their evaluation usage shares the parent turn or Goal
+budget. The parent agent retains all authority and must verify their advisory
+reports.
 
 Active `/goal` runs currently use the foreground Bubble Tea Goal Runtime. The
 UI-independent `internal/supervisor` and `internal/workunit` packages are
@@ -182,7 +192,7 @@ With that setting, `local-agent`:
 - Rejects Ollama URLs outside local-machine hosts (`localhost`, loopback IPs, and unspecified bind aliases).
 - Rejects SSE and Streamable HTTP MCP URLs outside those local-machine hosts.
 - Shows Ollama Cloud entries for explicit selection, asks before crossing the boundary, and excludes them from automatic routing.
-- Canonicalizes built-in file paths, resolves symlinks, and rejects paths outside the startup workspace.
+- Canonicalizes built-in file paths, resolves symlinks, and requires a temporary exact-file or directory read grant outside the startup workspace.
 - Applies `.agentignore` to built-in file operations.
 - Removes most parent-process environment variables before running the built-in shell tool.
 - Starts STDIO MCP servers with a minimal environment and deterministic local executable lookup.
@@ -219,7 +229,13 @@ restarts. There is no broad per-tool “always allow” choice in the TUI.
 
 Do not describe the current alpha as “data can never leave the machine” unless the agent and every approved subprocess are also running inside an OS/container network sandbox.
 
-`--yolo` bypasses all approval prompts. In non-interactive `-p` mode, risky and MCP calls fail closed because there is no approval UI; add `--yolo` only for a trusted prompt in a disposable or well-versioned workspace.
+`--skip-approvals` skips approval prompts, but explicit deny policies, host
+validation, workspace/scope limits, privacy checks, tool preflight, and the
+execution ledger still apply. In non-interactive `-p`/`--prompt` mode, requests
+that need an approval fail closed by default because there is no approval UI.
+Use the flag only for a trusted request in a disposable or well-versioned
+workspace. `--yolo` remains a deprecated compatibility alias for
+`--skip-approvals`.
 
 ## MCPHub, Cortex, and other MCP tools
 
@@ -306,6 +322,10 @@ tools:
   timeout: 30s
   max_grep_results: 500
   max_iterations: 10
+
+# Read-only Team, Swarm, and application-level MoE consultation.
+experts:
+  enabled: true
 
 # Disabled by default. Pull nomic-embed-text before enabling.
 ice:
@@ -442,14 +462,15 @@ ICE is still a flat JSON vector store rather than an ANN index, but its bounded 
 | Command | Description |
 |---|---|
 | `local-agent` | Open the TUI |
-| `local-agent -p "prompt"` | Run one user-directed NORMAL prompt and print text to stdout |
-| `local-agent --mode plan -p "prompt"` | Run one read-only PLAN prompt; mutation tools are not exposed |
-| `local-agent --mode auto -p "prompt"` | Run one proactive AUTO prompt under the configured approval policy |
+| `local-agent -p "prompt"`, `local-agent --prompt "prompt"` | Run one user-directed NORMAL prompt and print text to stdout |
+| `local-agent --plan --prompt "prompt"` | Run one read-only PLAN prompt; equivalent to `--mode plan` |
+| `local-agent --auto --prompt "prompt"` | Run one proactive AUTO prompt; equivalent to `--mode auto` and does not skip approvals |
 | `local-agent --model <name>` | Select the initial model; in headless mode this prevents auto-routing |
 | `local-agent --agent <name>` | Select an initial agent profile |
 | `local-agent --resume <id\|latest>` | Open the TUI and restore an exact or newest current-workspace session |
 | `local-agent --qwen-router` | Use the experimental Qwen-specific router |
-| `local-agent --yolo -p "prompt"` | Headless execution with every tool auto-approved |
+| `local-agent --skip-approvals` | Skip approval prompts while retaining explicit denies and host/tool boundaries |
+| `local-agent --yolo` | Deprecated compatibility alias for `--skip-approvals` |
 | `local-agent init [--force]` | Create a project `AGENTS.md` |
 | `local-agent logs` | List recent log files |
 | `local-agent logs -f` | Follow the latest log with `tail -f` |
@@ -465,7 +486,11 @@ Source builds print `dev`. Tagged release artifacts print the tag version
 (for example, `0.4.0`), and MCP client handshakes advertise that same build
 version.
 
-`-p` is currently a human-readable convenience mode, not a stable JSON automation protocol.
+`-p` and `--prompt` are exact aliases for a human-readable convenience mode,
+not a stable JSON automation protocol. `--auto` and `--plan` require a
+non-empty prompt and are mutually exclusive. Passing an explicit empty or
+whitespace-only prompt exits with status 2 before configuration, network, or
+provider initialization.
 
 `goal list`, `goal show`, `goal pending`, and the default `goal recover` dry run
 are read-only. Recovery mutation requires the complete explicit `--apply`
@@ -495,7 +520,7 @@ by its help. It never retries the original tool.
 | `/model auto` | Resume automatic model routing |
 | `/agent [name\|list]` | List or switch profiles |
 | `/load <path>`, `/unload` | Asynchronously add or remove one regular, non-symlink markdown context file (32 KB maximum); quoted paths are supported |
-| `/scope [list\|add-read <directory>\|remove-read <directory>\|clear-read]` | Manage process-local read-only access to directories outside the writable workspace |
+| `/scope [list\|add-read <directory>\|remove-read <path>\|clear-read]` | Manage process-local read-only access outside the writable workspace; exact files are proposed automatically when referenced in a prompt |
 | `/skill`, `/skill list` | List discovered skills and their activation state |
 | `/skill activate <name>`, `/skill deactivate <name>` | Add or remove one skill from active prompt context |
 | `/servers` | Show connected MCP servers and tool count |
@@ -598,7 +623,10 @@ shows canonical commands with descriptions while aliases remain searchable.
 Active work uses one phase-specific animation with elapsed time and a visible
 cancel affordance; live ToolCards own tool animation, and approval prompts pause
 background motion until answered. Completed turns briefly show a stable receipt.
-The supported minimum is 30 columns by 12 rows.
+The supported minimum is 30 columns by 12 rows. Compact status rows preserve
+skipped-approval, unavailable-MCP, and Cloud/Remote boundaries; minimum-width
+file approvals keep an identifying target tail plus paging and exact-argument
+controls.
 
 ## Keyboard shortcuts
 
@@ -632,6 +660,8 @@ Agent ReAct loop -----> prompt builder + mode policy
     |     |
     |     +-- Tool policy -> permission checker -> built-ins / MCP registry
     |
+    +-- Expert selector -> resource plan -> tool-free advisory inference
+    |
     +-- Availability-aware ModelManager -> loopback Ollama
                                       |-> chat models
                                       +-> embedding model
@@ -658,6 +688,9 @@ internal/skill/     Skill discovery and activation
 internal/command/   Slash and custom commands
 internal/goal/      Durable goal lifecycle, budgets, receipts, and recovery
 internal/goaladvisor/ Bounded Cortex/MCPHub semantic adapter
+internal/expertselector/ Deterministic local Team, Swarm, and MoE selection
+internal/expertteam/ Bounded read-only expert inference runtime
+internal/resource/  Host resource probe and conservative concurrency planner
 internal/controlplane/ Append-only exception values and validation
 internal/supervisor/ UI-independent scheduling decision contract (not yet wired)
 internal/workunit/  Specialist scheduling/admission contract (does not spawn work)
@@ -665,26 +698,26 @@ internal/ui/        Charm terminal interface
 internal/logging/   Per-run structured logs
 ```
 
-Built-in, memory, and MCP calls execute deterministically in model order. The runtime does not parallelize unknown MCP effects; a future broker can opt proven read-only calls into bounded concurrency.
+Top-level built-in, memory, and MCP calls execute deterministically in model order. The runtime does not parallelize unknown MCP effects. `consult_experts` is the bounded exception inside one read-only tool call: its tool-free inference reports may run concurrently under the host resource plan.
 
 ## Alpha limitations and roadmap
 
 Known boundaries are documented here so the TUI does not promise more than the runtime provides:
 
 - Ollama is the only implemented inference adapter. llama.cpp, MLX, and generic local OpenAI-compatible endpoints are not implemented.
-- Model routing is heuristic and the memory guard is tuned for 16 GB Apple silicon rather than detected free memory.
+- Model routing remains heuristic. Expert fan-out uses measured CPU and memory, including process-visible Linux cgroup limits, where the host exposes them; it has no portable discrete-VRAM or model-specific KV-allocation telemetry. General model admission still uses the conservative 16 GB-oriented guard.
 - Small models can emit malformed or repetitive tool calls. Keep important work versioned and inspect every diff.
 - `privacy.local_only` validates endpoints but does not sandbox approved shell or STDIO MCP processes.
 - MCP support remains tool-focused; prompts, roots, subscriptions, sampling, and direct multimodal rendering are not yet exposed.
 - ICE is workspace-scoped but remains a flat JSON scan rather than a scalable lexical/vector index such as the Cortex/VecLite stack.
 - SQLite snapshots and the append-only execution ledger preserve completed state and tool-effect boundaries, but there is no first-class supervisor run/event repository or automatic continuation of in-flight execution after a crash.
 - Outcome-reconciliation items now have manual evidence-entry and atomic TUI/CLI resolution workflows. Local Agent still cannot verify an unknown backend outcome automatically, repair a completed-but-unprojected effect automatically, or auto-resume after reconciliation.
-- The supervisor and specialist work graph are safety-tested contracts only; headless run-until-blocked, queue/watch/resume controllers, durable evaluation-basis storage, and specialist process execution are not wired.
+- The supervisor and durable specialist work graph remain safety-tested contracts only; headless run-until-blocked, queue/watch/resume controllers, durable evaluation-basis storage, and specialist process execution are not wired. The separate expert runtime is transient, read-only inference consultation rather than durable work-unit execution.
 - Native Ollama reasoning and literal `<think>` tags are displayed separately, but thinking level is not yet configurable per model/profile.
-- Headless mode has no structured event stream or granular approval protocol. Without `--yolo`, risky calls fail closed.
+- Headless mode has no structured event stream or granular approval protocol. Without `--skip-approvals`, requests that need approval fail closed by default.
 - There is no OS-level process, filesystem, or network sandbox yet.
 
-The intended direction is a durable turn state machine and typed event stream, MCP effect metadata with bounded read-only concurrency, a measured RAM/resource scheduler, additional local runtime adapters, and an even stronger diff-first approval UI—while retaining the Go/Charm application.
+The intended direction is a durable turn state machine and typed event stream, MCP effect metadata with bounded read-only concurrency, additional local runtime adapters, and an even stronger diff-first approval UI—while retaining the Go/Charm application.
 
 ## Development
 
@@ -695,6 +728,7 @@ task dev                # go run ./cmd/local-agent
 task test               # go test ./...
 task lint               # golangci-lint run ./...
 task verify             # Go verification plus production website build
+task glyphrun-cli        # fast public CLI contracts
 task glyphrun           # terminal behavior specs
 task glyphrun-snapshots # refresh intentional TUI snapshots
 task site               # local documentation development server

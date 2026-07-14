@@ -22,7 +22,7 @@ Use PLAN to understand a repository, compare approaches, or produce a change pla
 
 ## AUTO
 
-AUTO sends ordinary prompts directly with proactive access to the NORMAL tool surface. It is not YOLO and does not grant blanket approval: risky operations still follow the configured approval policy.
+AUTO sends ordinary prompts directly with proactive access to the NORMAL tool surface. It does not skip approvals or grant blanket authority: risky operations still follow the configured approval policy.
 
 Switching modes never creates durable work. To start a bounded foreground goal, use `/goal <duration> <prompt>` or `/goal new`. Every durable definition must have:
 

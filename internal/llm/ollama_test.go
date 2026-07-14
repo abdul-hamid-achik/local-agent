@@ -6,10 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/abdul-hamid-achik/local-agent/internal/netpolicy"
 )
 
 func TestOllamaChatStreamPreservesNativeReasoning(t *testing.T) {
@@ -95,6 +99,9 @@ func TestOllamaChatStreamPreservesToolWireShape(t *testing.T) {
 		if request.Options["num_ctx"] != float64(4096) {
 			t.Errorf("local context allocation = %#v", request.Options["num_ctx"])
 		}
+		if request.Options["num_thread"] != float64(3) {
+			t.Errorf("host thread cap = %#v", request.Options["num_thread"])
+		}
 		_, _ = fmt.Fprintln(w, `{"message":{"role":"assistant","tool_calls":[{"id":"call-new","function":{"name":"read_file","arguments":{"path":"go.mod"}}}]},"done":true}`)
 	}))
 	defer server.Close()
@@ -104,7 +111,7 @@ func TestOllamaChatStreamPreservesToolWireShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	options := ChatOptions{
-		System: "local only", MaxEvalTokens: 23,
+		System: "local only", MaxEvalTokens: 23, NumThread: 3,
 		Messages: []Message{
 			{
 				Role: "assistant",
@@ -224,6 +231,84 @@ func TestOllamaClientRejectsCrossOriginRedirect(t *testing.T) {
 	default:
 	}
 }
+
+func TestOllamaLocalHTTPClientRejectsPoisonedLocalhostResolution(t *testing.T) {
+	base, err := url.Parse("http://localhost:11434")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver := ollamaResolverFunc(func(context.Context, string) ([]net.IPAddr, error) {
+		return []net.IPAddr{
+			{IP: net.ParseIP("127.0.0.1")},
+			{IP: net.ParseIP("198.51.100.20")},
+		}, nil
+	})
+	dialed := false
+	client := newOllamaHTTPClientWithNetwork(base, resolver, func(context.Context, string, string) (net.Conn, error) {
+		dialed = true
+		return nil, errors.New("unexpected dial")
+	})
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport = %T, want *http.Transport", client.Transport)
+	}
+	if transport.Proxy != nil {
+		t.Fatal("local Ollama transport retained an environment proxy")
+	}
+
+	_, err = transport.DialContext(context.Background(), "tcp", "localhost:11434")
+	if err == nil || !strings.Contains(err.Error(), "non-loopback address") {
+		t.Fatalf("poisoned localhost error = %v", err)
+	}
+	if dialed {
+		t.Fatal("poisoned localhost resolution reached the Ollama network dialer")
+	}
+}
+
+func TestOllamaLocalHTTPClientPinsVerifiedIPv4AndIPv6(t *testing.T) {
+	base, err := url.Parse("http://localhost:11434")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name string
+		ip   net.IP
+		want string
+	}{
+		{name: "IPv4", ip: net.ParseIP("127.0.0.1"), want: "127.0.0.1:11434"},
+		{name: "IPv6", ip: net.IPv6loopback, want: "[::1]:11434"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			resolver := ollamaResolverFunc(func(context.Context, string) ([]net.IPAddr, error) {
+				return []net.IPAddr{{IP: test.ip}}, nil
+			})
+			var target string
+			stop := errors.New("dial seam reached")
+			client := newOllamaHTTPClientWithNetwork(base, resolver, func(_ context.Context, _ string, address string) (net.Conn, error) {
+				target = address
+				return nil, stop
+			})
+			transport := client.Transport.(*http.Transport)
+
+			_, err := transport.DialContext(context.Background(), "tcp", "localhost:11434")
+			if !errors.Is(err, stop) {
+				t.Fatalf("dial error = %v, want seam error", err)
+			}
+			if target != test.want {
+				t.Fatalf("verified Ollama dial target = %q, want %q", target, test.want)
+			}
+		})
+	}
+}
+
+type ollamaResolverFunc func(context.Context, string) ([]net.IPAddr, error)
+
+func (f ollamaResolverFunc) LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error) {
+	return f(ctx, host)
+}
+
+var _ netpolicy.IPResolver = ollamaResolverFunc(nil)
 
 func TestOllamaClientBoundsNonStreamingResponses(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

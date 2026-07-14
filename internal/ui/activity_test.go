@@ -23,7 +23,7 @@ func TestMinimumTerminalWorkingStatesFit(t *testing.T) {
 		{name: "idle", set: func(*Model) {}, want: "ctrl+p settings"},
 		{name: "failed runtime", set: func(m *Model) {
 			m.failedServers = []FailedServer{{Name: "tools", Reason: "offline"}}
-		}, want: "failed"},
+		}, want: "MCP unavailable"},
 		{name: "waiting", set: func(m *Model) {
 			m.state = StateWaiting
 			m.turnStartedAt = base.Add(-1500 * time.Millisecond)

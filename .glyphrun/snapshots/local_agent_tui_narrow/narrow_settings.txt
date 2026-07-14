@@ -1,5 +1,5 @@
               LOCAL AGENT
-    Local-first · tool effects ask
+   Local-first · approval prompts on
       PLAN · qwen3.5:2b · offline
  ╭────────────────────────────────────╮
  │ Settings                           │
@@ -8,7 +8,7 @@
  │   Mode · PLAN                      │
  │   Sessions · Resume                │
  │   Compact layout · Auto            │
- │   Runtime status · 0 servers · 20… │
+ │   Runtime status · 21 ready tools… │
  │   Help · Shortcuts                 │
  │                                    │
  │   Choose an installed local model… │

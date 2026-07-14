@@ -1,0 +1,57 @@
+package main
+
+import (
+	"flag"
+	"io"
+)
+
+// rootOptions is the side-effect-free projection of the root CLI flags. A
+// dedicated FlagSet keeps parsing reusable in tests and lets --version return
+// before configuration or runtime initialization without scanning prompt
+// values as if they were flags.
+type rootOptions struct {
+	qwenRouter     bool
+	model          string
+	agentProfile   string
+	prompt         string
+	mode           string
+	auto           bool
+	plan           bool
+	skipApprovals  bool
+	legacyYolo     bool
+	version        bool
+	promptProvided bool
+	modeProvided   bool
+	resume         resumeFlagValue
+	arguments      []string
+}
+
+func parseRootOptions(program string, args []string, output io.Writer) (rootOptions, error) {
+	var options rootOptions
+	flags := flag.NewFlagSet(program, flag.ContinueOnError)
+	flags.SetOutput(output)
+	flags.BoolVar(&options.qwenRouter, "qwen-router", false, "use optimized Qwen model router (experimental)")
+	flags.StringVar(&options.model, "model", "", "override Ollama model")
+	flags.StringVar(&options.agentProfile, "agent", "", "override agent profile")
+	flags.StringVar(&options.prompt, "p", "", "shorthand for --prompt")
+	flags.StringVar(&options.prompt, "prompt", "", "run one non-interactive prompt, print the response, and exit")
+	flags.StringVar(&options.mode, "mode", "normal", "headless authority: normal, plan, or auto")
+	flags.BoolVar(&options.auto, "auto", false, "shortcut for --mode auto (requires --prompt)")
+	flags.BoolVar(&options.plan, "plan", false, "shortcut for --mode plan (requires --prompt)")
+	flags.BoolVar(&options.skipApprovals, "skip-approvals", false, "skip approval prompts; host, scope, and tool boundaries still apply")
+	flags.BoolVar(&options.legacyYolo, "yolo", false, "deprecated alias for --skip-approvals")
+	flags.BoolVar(&options.version, "version", false, "print the build version and exit")
+	flags.Var(&options.resume, "resume", "restore a saved interactive session by positive ID or latest")
+
+	err := flags.Parse(args)
+	flags.Visit(func(visited *flag.Flag) {
+		switch visited.Name {
+		case "p", "prompt":
+			options.promptProvided = true
+		case "mode":
+			options.modeProvided = true
+		}
+	})
+	options.arguments = append([]string(nil), flags.Args()...)
+	return options, err
+}

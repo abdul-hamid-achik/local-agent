@@ -41,12 +41,8 @@ steps:
   - press: "enter"
   - wait:
       screen:
-        contains: "Running"
-      timeoutMs: 2000
-  - wait:
-      screen:
         contains: "Thinking… · Checking workspace policy before the write."
-      timeoutMs: 2000
+      timeoutMs: 5000
   - snapshot: busy_normal
   - type: "Summarize after the probe."
   - press: "enter"

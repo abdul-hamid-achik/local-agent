@@ -29,7 +29,7 @@ func DefaultToolPolicy() ToolPolicy {
 
 func AskToolPolicy() ToolPolicy {
 	return NewToolPolicy(
-		[]string{"read", "grep", "glob", "ls", "find", "diff", "exists", "load_skill"},
+		[]string{"read", "grep", "glob", "ls", "find", "diff", "exists", "load_skill", "consult_experts"},
 		[]string{"memory_recall"},
 		false,
 	)
@@ -41,7 +41,7 @@ func PlanToolPolicy() ToolPolicy {
 
 func BuildToolPolicy() ToolPolicy {
 	return NewToolPolicy(
-		[]string{"grep", "read", "write", "edit", "glob", "bash", "ls", "find", "diff", "mkdir", "remove", "copy", "move", "exists", "load_skill"},
+		[]string{"grep", "read", "write", "edit", "glob", "bash", "ls", "find", "diff", "mkdir", "remove", "copy", "move", "exists", "load_skill", "consult_experts"},
 		[]string{"memory_save", "memory_recall", "memory_delete", "memory_update", "memory_list"},
 		true,
 	)

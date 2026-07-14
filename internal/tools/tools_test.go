@@ -178,3 +178,36 @@ func TestLoadSkillToolDef(t *testing.T) {
 		t.Fatalf("additionalProperties = %#v", tool.Parameters["additionalProperties"])
 	}
 }
+
+func TestConsultExpertsToolDef(t *testing.T) {
+	tool := ConsultExpertsToolDef()
+	if tool.Name != "consult_experts" {
+		t.Fatalf("Name = %q", tool.Name)
+	}
+	if !IsBuiltinTool(tool.Name) {
+		t.Fatal("consult_experts is not classified as built-in")
+	}
+	properties, ok := tool.Parameters["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties = %#v", tool.Parameters["properties"])
+	}
+	strategy, ok := properties["strategy"].(map[string]any)
+	if !ok {
+		t.Fatalf("strategy = %#v", properties["strategy"])
+	}
+	values, ok := strategy["enum"].([]string)
+	if !ok || len(values) != 3 || values[0] != "team" || values[1] != "swarm" || values[2] != "moe" {
+		t.Fatalf("strategy enum = %#v", strategy["enum"])
+	}
+	experts, ok := properties["experts"].(map[string]any)
+	if !ok || experts["maxItems"] != 16 {
+		t.Fatalf("experts schema = %#v", properties["experts"])
+	}
+	required, ok := tool.Parameters["required"].([]string)
+	if !ok || len(required) != 2 || required[0] != "strategy" || required[1] != "objective" {
+		t.Fatalf("required = %#v", tool.Parameters["required"])
+	}
+	if additional, ok := tool.Parameters["additionalProperties"].(bool); !ok || additional {
+		t.Fatalf("additionalProperties = %#v", tool.Parameters["additionalProperties"])
+	}
+}

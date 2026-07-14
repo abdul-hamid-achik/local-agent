@@ -3,11 +3,27 @@ package llm
 import (
 	"context"
 	"errors"
+	"fmt"
 )
 
-// ErrNoModelSelected is a local preflight rejection. No provider request or
-// generation can have started when a Client returns this sentinel.
-var ErrNoModelSelected = errors.New("no model selected")
+var (
+	// ErrNoModelSelected is a local preflight rejection. No provider request or
+	// generation can have started when a Client returns this sentinel.
+	ErrNoModelSelected = errors.New("no model selected")
+
+	// ErrInferenceNotStarted identifies a host-side rejection that happened
+	// before the provider's inference dispatch. Provider ChatStream errors are
+	// intentionally not wrapped with this sentinel because dispatch may already
+	// have happened by then.
+	ErrInferenceNotStarted = errors.New("inference not started")
+)
+
+func inferenceNotStarted(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%w: %w", ErrInferenceNotStarted, err)
+}
 
 // Client is the interface for LLM providers.
 type Client interface {
@@ -31,6 +47,9 @@ type ChatOptions struct {
 	Tools         []ToolDef
 	System        string
 	MaxEvalTokens int // zero leaves provider generation uncapped
+	// NumThread is a host-only local inference cap. Zero leaves the provider
+	// default unchanged; positive values are sent as Ollama num_thread.
+	NumThread int
 	// ExpectedContext pins a host-side context budget to the request. Provider
 	// managers use it to reject a turn whose model policy changed after the
 	// agent took its budget snapshot. Direct clients may ignore it.

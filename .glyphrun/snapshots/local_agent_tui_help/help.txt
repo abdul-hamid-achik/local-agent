@@ -28,8 +28,8 @@
                              │   tab               Autocomplete                           │
                              │                                                            │
                              │ Input Shortcuts                                            │
-                             │   @file             Attach file or agent                   │
-                             │   #skill            Activate skill                         │
+                             │   @file / @agent    Insert file or agent mention text      │
+                             │   #skill            Insert skill mention text              │
                              │   /cmd              Run slash command                      │
-─────────────────────────────│ esc/q close · ↓ more                                       │────────────────────────────
+─────────────────────────────│ esc/q close · pgdn more · g/shift+g ends                   │────────────────────────────
                              ╰────────────────────────────────────────────────────────────╯

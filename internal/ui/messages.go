@@ -91,6 +91,22 @@ type FailedServer struct {
 	Reason string
 }
 
+// MCPServerStatus is a bounded presentation snapshot. Detail is transient UI
+// context only and is sanitized again when it enters Model state; it must never
+// be copied into persisted transcript or session state.
+type MCPServerStatus struct {
+	Name      string
+	Connected bool
+	ToolCount int
+	Detail    string
+}
+
+// MCPStatusSnapshotMsg replaces the previous cached MCP presentation state.
+// The registry health monitor emits it after connection-state transitions.
+type MCPStatusSnapshotMsg struct {
+	Servers []MCPServerStatus
+}
+
 // InitCompleteMsg signals startup is done.
 type InitCompleteMsg struct {
 	Model                    string
@@ -105,6 +121,7 @@ type InitCompleteMsg struct {
 	ServerCount              int
 	NumCtx                   int
 	FailedServers            []FailedServer
+	MCPServers               []MCPServerStatus
 	ICEEnabled               bool
 	ICEConversations         int
 	ICESessionID             string
@@ -196,11 +213,39 @@ type ContextLoadResultMsg struct {
 // ReadScopeResultMsg completes one process-local external read-root change.
 // The Agent remains the authority for canonicalization and overlap checks.
 type ReadScopeResultMsg struct {
+	Token       uint64
+	Operation   string
+	Path        string
+	Kind        string
+	Count       int
+	Grants      []agent.ReadGrant
+	AutoResume  bool
+	RolledBack  int
+	RollbackErr error
+	Err         error
+}
+
+// ReadScopePreviewResultMsg completes canonicalization and read-only boundary
+// checks before the user is asked to authorize an external root.
+type ReadScopePreviewResultMsg struct {
 	Token     uint64
-	Operation string
-	Path      string
-	Count     int
+	Requested string
+	Canonical string
+	Workspace string
+	Draft     string
+	Grant     agent.ReadGrant
 	Err       error
+}
+
+// PromptPathPreflightResultMsg carries canonical host projections plus opaque
+// preview identities owned by Agent. Missing, workspace-local, non-regular and
+// already-authorized candidates are omitted by the background inspector.
+type PromptPathPreflightResultMsg struct {
+	Token                  uint64
+	Draft                  string
+	Grants                 []agent.ReadGrant
+	MoreCandidates         bool
+	CandidateLimitExceeded bool
 }
 
 // ImportResultMsg completes a bounded asynchronous /import operation. Parsing

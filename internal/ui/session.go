@@ -699,6 +699,8 @@ func (m *Model) restoreSessionState(state persistedSessionState) error {
 	m.setRouterMode(m.modeConfigs[m.presentedMode()].RouterMode)
 
 	m.toolsPending = 0
+	m.capabilityRoute = nil
+	m.lastCapabilityRoute = nil
 	m.toolCardMgr = NewToolCardManager(m.isDark)
 	for i := range m.toolEntries {
 		entry := &m.toolEntries[i]

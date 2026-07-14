@@ -9,6 +9,7 @@ import (
 const (
 	maxProjectionArtifactIDBytes = 128
 	fileCheapManifestSchema      = "1.0"
+	hitspecCaptureSchema         = "hitspec.capture.v1"
 )
 
 // ArtifactDigestKind identifies one exact, bounded artifact contract. Artifact
@@ -19,12 +20,15 @@ type ArtifactDigestKind string
 
 const (
 	ArtifactDigestFileCheapStash ArtifactDigestKind = "filecheap_stash"
+	ArtifactDigestHitspecCapture ArtifactDigestKind = "hitspec_capture"
 )
 
 // ArtifactDigest is the persistable projection of one durable artifact. URI is
 // host-derived during Normalize and is never accepted from an MCP response or a
-// restored session. ContentSHA256 names the algorithm used by file.cheap's
-// manifest content_hash contract.
+// restored session. SchemaVersion identifies the exact parser contract: it is
+// file.cheap's manifest version for direct saves and a host-owned projection
+// version for Hitspec capture receipts. ContentSHA256 is retained only for the
+// direct file.cheap manifest contract, which guarantees its algorithm.
 type ArtifactDigest struct {
 	Kind           ArtifactDigestKind `json:"kind"`
 	ID             string             `json:"id"`
@@ -39,20 +43,29 @@ type ArtifactDigest struct {
 }
 
 func normalizeArtifactDigest(digest ArtifactDigest) ArtifactDigest {
-	if digest.Kind != ArtifactDigestFileCheapStash ||
-		!validFileCheapStashID(digest.ID) ||
-		digest.SchemaVersion != fileCheapManifestSchema ||
-		!validLowerSHA256(digest.ContentSHA256) ||
-		!validProjectionMetric(digest.FileCount) ||
-		!validProjectionMetric(digest.TotalSize) {
+	if !validFileCheapStashID(digest.ID) || !validProjectionMetric(digest.FileCount) || !validProjectionMetric(digest.TotalSize) {
 		return ArtifactDigest{}
 	}
-	createdAt, err := time.Parse(time.RFC3339, digest.CreatedAt)
-	if err != nil {
+	switch digest.Kind {
+	case ArtifactDigestFileCheapStash:
+		if digest.SchemaVersion != fileCheapManifestSchema || !validLowerSHA256(digest.ContentSHA256) || digest.CreatedAt == "" {
+			return ArtifactDigest{}
+		}
+	case ArtifactDigestHitspecCapture:
+		if digest.SchemaVersion != hitspecCaptureSchema || digest.ContentSHA256 != "" || digest.FileCount < 1 {
+			return ArtifactDigest{}
+		}
+	default:
 		return ArtifactDigest{}
+	}
+	if digest.CreatedAt != "" {
+		createdAt, err := time.Parse(time.RFC3339, digest.CreatedAt)
+		if err != nil {
+			return ArtifactDigest{}
+		}
+		digest.CreatedAt = createdAt.UTC().Format(time.RFC3339Nano)
 	}
 	digest.URI = fileCheapStashURI(digest.ID)
-	digest.CreatedAt = createdAt.UTC().Format(time.RFC3339Nano)
 	return digest
 }
 

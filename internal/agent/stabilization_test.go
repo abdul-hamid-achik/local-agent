@@ -558,17 +558,20 @@ func TestRiskyBuiltinFailsClosedWithoutApprovalUI(t *testing.T) {
 	}
 }
 
-func TestPersistedAllowDoesNotAuthorizeHeadlessEffects(t *testing.T) {
+func TestLegacyPersistedAllowRequiresNewExactApproval(t *testing.T) {
 	store, err := db.OpenPath(filepath.Join(t.TempDir(), "permissions.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	interactive := permission.NewChecker(store, false)
-	if err := interactive.SetPolicy("bash", permission.PolicyAllow); err != nil {
+	if _, err := store.UpsertToolPermission(context.Background(), db.UpsertToolPermissionParams{
+		ToolName: "bash", Policy: "allow",
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := interactive.SetPolicy("server__mutate", permission.PolicyAllow); err != nil {
+	if _, err := store.UpsertToolPermission(context.Background(), db.UpsertToolPermissionParams{
+		ToolName: "server__mutate", Policy: "allow",
+	}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -591,7 +594,7 @@ func TestPersistedAllowDoesNotAuthorizeHeadlessEffects(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(workDir, "forbidden")); !os.IsNotExist(err) {
 		t.Fatalf("persisted allow dispatched headless bash: %v", err)
 	}
-	if len(out.toolResults) != 1 || !strings.Contains(out.toolResults[0], "persisted allows do not apply") {
+	if len(out.toolResults) != 1 || !strings.Contains(out.toolResults[0], "approval_ui_unavailable") {
 		t.Fatalf("headless denial receipt = %#v", out.toolResults)
 	}
 
@@ -600,7 +603,7 @@ func TestPersistedAllowDoesNotAuthorizeHeadlessEffects(t *testing.T) {
 	if ag.authorizeToolCall(context.Background(), llm.ToolCall{ID: "mcp", Name: "server__mutate"}, mcpOut) {
 		t.Fatal("persisted MCP allow bypassed missing interactive capability")
 	}
-	if len(mcpOut.toolResults) != 1 || !strings.Contains(mcpOut.toolResults[0], "persisted allows do not apply") {
+	if len(mcpOut.toolResults) != 1 || !strings.Contains(mcpOut.toolResults[0], "approval_ui_unavailable") {
 		t.Fatalf("MCP headless denial receipt = %#v", mcpOut.toolResults)
 	}
 }

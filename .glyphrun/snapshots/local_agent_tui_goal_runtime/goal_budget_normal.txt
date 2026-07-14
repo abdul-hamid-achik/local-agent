@@ -1,9 +1,9 @@
+  - Reducing context size
 
-  ✗ error
-  Cortex link failed · cortex goal advisor is unavailable: neither
-  cortex_open_task nor the MCPHub gateway is connected. Goal paused;
-  update or rebuild Cortex so cortex_open_task is exposed, then run /goal
-  resume.
+  Tool results are still available above.
+
+  Goal paused · unproductive turn: LLM response: inference not started: no
+  model selected
 
 
 ───────────────────────────────────────────────────────────────────────────────

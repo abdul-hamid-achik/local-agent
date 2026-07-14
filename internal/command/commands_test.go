@@ -669,12 +669,16 @@ func TestBuiltinRestoreRequiresCanonicalPositiveID(t *testing.T) {
 func TestBuiltinScopeParsesProcessLocalReadRootActions(t *testing.T) {
 	r := newTestRegistry()
 
-	if result := r.Execute(&Context{}, "scope", nil); result.Error != "" || result.Action != ActionNone || !strings.Contains(result.Text, "No additional read-only roots") {
+	if result := r.Execute(&Context{}, "scope", nil); result.Error != "" || result.Action != ActionNone || !strings.Contains(result.Text, "No temporary external read-only grants") || !strings.Contains(result.Text, "exact-file access") {
 		t.Fatalf("/scope empty = %#v", result)
 	}
 	listed := r.Execute(&Context{ReadRoots: []string{"/z", "/a"}}, "scope", []string{"list"})
 	if listed.Error != "" || !strings.Contains(listed.Text, "/a") || strings.Index(listed.Text, "/a") > strings.Index(listed.Text, "/z") || !strings.Contains(listed.Text, "not persisted") {
 		t.Fatalf("/scope list = %#v", listed)
+	}
+	typed := r.Execute(&Context{ReadGrants: []ReadGrantInfo{{Path: "/tmp/report.pdf", Kind: "exact_file"}}}, "scope", []string{"list"})
+	if typed.Error != "" || !strings.Contains(typed.Text, "exact file") || !strings.Contains(typed.Text, "never include siblings") {
+		t.Fatalf("/scope typed list = %#v", typed)
 	}
 
 	for _, test := range []struct {

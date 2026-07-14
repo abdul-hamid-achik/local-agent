@@ -8,6 +8,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/abdul-hamid-achik/local-agent/internal/goal"
 )
 
 func TestSettingsPickerOpensWithCurrentValues(t *testing.T) {
@@ -24,10 +26,79 @@ func TestSettingsPickerOpensWithCurrentValues(t *testing.T) {
 		t.Fatal("Ctrl+P did not open session settings")
 	}
 	rendered := m.renderSettingsPicker()
-	for _, want := range []string{"Settings", "Pinned", "qwen3.5:4b", "reviewer", "2 servers", "17 tools"} {
+	for _, want := range []string{"Settings", "Pinned", "qwen3.5:4b", "reviewer", "ready tools", "local"} {
 		if !strings.Contains(rendered, want) {
 			t.Errorf("settings missing %q:\n%s", want, rendered)
 		}
+	}
+}
+
+func TestSettingsDistinguishesGoalAuthorityFromNextChatMode(t *testing.T) {
+	m := newTestModel(t)
+	m.mode = ModePlan
+	m.goalRuntime = newUIGoalRuntime(t, 43, goal.BudgetLimits{MaxContinuationTurns: 2})
+	items := m.settingsItems()
+	mode := items[int(settingsMode)]
+	if mode.title != "Next chat mode" || mode.value != "PLAN" ||
+		!strings.Contains(mode.description, "keeps AUTO") || !strings.Contains(mode.description, "after the goal") {
+		t.Fatalf("goal-owned Settings mode = %#v", mode)
+	}
+}
+
+func TestSettingsItemsSanitizeTerminalAndBidiControls(t *testing.T) {
+	item := settingsItem{
+		title: "Mode\x1b]52;c;payload\a", value: "PLAN\nspoof\u202e", description: "safe\ttext\u2066",
+	}
+	for label, value := range map[string]string{
+		"title": item.Title(), "description": item.Description(), "filter": item.FilterValue(),
+	} {
+		for _, character := range value {
+			if character == '\n' || character == '\r' || character == '\t' || isBidiControl(character) {
+				t.Fatalf("%s retained terminal control in %q", label, value)
+			}
+		}
+		if strings.Contains(value, "52;c") {
+			t.Fatalf("%s retained OSC payload in %q", label, value)
+		}
+	}
+}
+
+func TestSettingsRuntimeFallbackDoesNotDoubleCountServers(t *testing.T) {
+	m := newTestModel(t)
+	m.agent = nil
+	m.toolCount = 7
+	m.mcpServers = []MCPServerStatus{
+		{Name: "ready", Connected: true, ToolCount: 4},
+		{Name: "offline", Connected: false},
+	}
+
+	runtimeItem := m.settingsItems()[int(settingsRuntime)]
+	for _, want := range []string{"7 tools total", "2 servers", "1 connected", "1 unavailable"} {
+		if !strings.Contains(runtimeItem.value, want) {
+			t.Fatalf("runtime fallback missing %q: %q", want, runtimeItem.value)
+		}
+	}
+	if strings.Count(runtimeItem.value, "servers") != 1 || strings.Count(runtimeItem.value, "connected") != 1 {
+		t.Fatalf("runtime fallback duplicated server accounting: %q", runtimeItem.value)
+	}
+}
+
+func TestSettingsRuntimeUsesVisibleNaturalSingularSummary(t *testing.T) {
+	m := newTestModel(t)
+	m.agent = nil
+	m.toolCount = 1
+	m.mcpServers = []MCPServerStatus{{Name: "ready", Connected: true, ToolCount: 1}}
+
+	item := m.settingsItems()[int(settingsRuntime)]
+	for _, value := range []string{item.value, item.description} {
+		for _, want := range []string{"1 server", "1 connected", "0 unavailable"} {
+			if !strings.Contains(value, want) {
+				t.Fatalf("Settings summary missing %q: %#v", want, item)
+			}
+		}
+	}
+	if !strings.Contains(item.value, "1 tool total") || strings.Contains(item.value, "1 tools") {
+		t.Fatalf("Settings tool count is not naturally singular: %#v", item)
 	}
 }
 

@@ -57,14 +57,18 @@ func (b *cappedBuffer) String() string {
 
 func (a *Agent) toolsBuiltinToolDefs() []llm.ToolDef {
 	defs := tools.AllToolDefs()
-	if a.hasSkillLoader() {
+	if a.hasSkillLoader() && a.hasExpertConsultant() {
 		return defs
 	}
-	filtered := make([]llm.ToolDef, 0, len(defs)-1)
+	filtered := make([]llm.ToolDef, 0, len(defs))
 	for _, def := range defs {
-		if def.Name != "load_skill" {
-			filtered = append(filtered, def)
+		if def.Name == "load_skill" && !a.hasSkillLoader() {
+			continue
 		}
+		if def.Name == "consult_experts" && !a.hasExpertConsultant() {
+			continue
+		}
+		filtered = append(filtered, def)
 	}
 	return filtered
 }
@@ -105,6 +109,8 @@ func (a *Agent) handleToolsTool(ctx context.Context, tc llm.ToolCall) (string, b
 		return a.handleExists(tc.Arguments)
 	case "load_skill":
 		return a.handleLoadSkill(tc.Arguments)
+	case "consult_experts":
+		return a.handleConsultExperts(ctx, tc.Arguments)
 	default:
 		return fmt.Sprintf("unknown tool: %s", tc.Name), true
 	}
@@ -458,15 +464,20 @@ func (a *Agent) handleLs(ctx context.Context, args map[string]any) (string, bool
 	}
 	path := readable.absolute
 
-	entries, err := readable.readDir()
+	entries, hadEntries, err := readable.readDirBounded(ctx, a.MaxGrepResults(), func(entry os.DirEntry) bool {
+		return !readable.ignored(a, filepath.Join(path, entry.Name()))
+	})
 	if err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return fmt.Sprintf("error: ls cancelled: %v", contextErr), true
+		}
 		return fmt.Sprintf("error reading directory: %v", err), true
 	}
 	if err := ctx.Err(); err != nil {
 		return fmt.Sprintf("error: ls cancelled: %v", err), true
 	}
 
-	if len(entries) == 0 {
+	if !hadEntries {
 		return "Directory is empty", false
 	}
 
@@ -478,16 +489,10 @@ func (a *Agent) handleLs(ctx context.Context, args map[string]any) (string, bool
 			return fmt.Sprintf("error: ls cancelled: %v", err), true
 		}
 		name := e.Name()
-		if readable.ignored(a, filepath.Join(path, name)) {
-			continue
-		}
 		if e.IsDir() {
 			dirs = append(dirs, name+"/")
 		} else {
 			files = append(files, name)
-		}
-		if len(dirs)+len(files) >= a.MaxGrepResults() {
-			break
 		}
 	}
 

@@ -9,7 +9,7 @@ target:
     - "${projectRoot}/bin/local-agent"
     - "-model"
     - "qwen3.5:0.8b"
-    - "-yolo"
+    - "--skip-approvals"
     - "-p"
     - "Use the read_file tool exactly once to read probe.txt. Do not use bash or any other tool. Then reply with only the exact file contents and no explanation."
   cwd: "testdata/live_ollama"

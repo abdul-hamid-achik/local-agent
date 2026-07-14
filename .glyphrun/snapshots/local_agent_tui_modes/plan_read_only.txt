@@ -1,12 +1,12 @@
-  try: ollama serve · ollama pull qwen3.5:2b
 
   you ─────────────────────────────────────────────
   design a safe migration
 
   ✗ error
-  LLM error: no model selected
+  LLM error: inference not started: no model selected
 
-  ⚠️ Model response failed: no model selected
+  ⚠️ Model response failed: inference not started: no
+  model selected
 
   You can try:
   - Checking if Ollama is running (`ollama ps`)

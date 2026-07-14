@@ -12,7 +12,7 @@
 │   /recover · Review a paused exec… │
 │   /agent · Show or switch agent p… │
 │   /load · Load a markdown file as… │
-│   /scope · List or manage process… │
+│   /scope · List or manage tempora… │
 │   /unload · Remove loaded context… │
 │ esc cancel · enter select · ↑/↓    │
 ╰────────────────────────────────────╯

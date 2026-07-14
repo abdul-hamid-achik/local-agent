@@ -19,6 +19,33 @@ Local Agent supports both repository-local and user-wide configuration. Files ar
 
 `XDG_CONFIG_HOME` is used only when it is absolute. Duplicate paths are checked once.
 
+## Repository-local STDIO trust
+
+A repository configuration is data from the repository, not pre-approved
+process authority. When `./local-agent.yaml` or `./local-agent.yml` supplies a
+STDIO MCP server directly—or selects an `agents.dir` that supplies one—Local
+Agent stops before spawning the process and prints a trust digest. To approve
+that exact configuration for the launch, pass the digest back through the
+process environment:
+
+```bash
+LOCAL_AGENT_TRUST_REPO_MCP=sha256:<digest-from-the-error> local-agent
+```
+
+The digest covers the absolute repository configuration path plus each STDIO
+server name, command, resolved absolute executable path, executable content,
+argument list, and explicit environment. A trusted launch is pinned to that
+resolved executable path and rechecks its content immediately before process
+startup. Moving the repository, replacing the executable, or changing any of
+those values requires a new decision. User-wide
+configuration under `$XDG_CONFIG_HOME` or `$HOME/.config`, the default
+`~/.agents` root, and an agents root selected through
+`LOCAL_AGENT_AGENTS_DIR` remain user-controlled startup authority and do not
+require this repository trust step.
+
+This approval permits the configured server process to start. Individual MCP
+tool calls still follow the normal approval policy.
+
 ## Minimal configuration
 
 ```yaml
@@ -45,6 +72,16 @@ tools:
   max_grep_results: 500
   max_iterations: 10
 
+experts:
+  enabled: true
+  max_concurrent_inference: 0
+  max_concurrent_distinct_models: 0
+  max_team_experts: 0
+  max_swarm_workers: 0
+  max_moe_experts: 0
+  max_eval_tokens: 768
+  timeout: 90s
+
 ice:
   enabled: false
 
@@ -52,6 +89,30 @@ servers: []
 ```
 
 Start from the annotated [`config.example.yaml`](https://github.com/abdul-hamid-achik/local-agent/blob/main/config.example.yaml) when you need the complete model and MCP examples.
+
+## Expert runtime
+
+The `experts` block configures the read-only application-level [expert
+runtime](/experts). Zero values select machine-adaptive auto limits. Non-zero
+concurrency and fan-out values are caps: they can make a run smaller, but they
+cannot force the resource planner above its CPU, RAM, or built-in safety limit.
+`max_concurrent_distinct_models` separately protects the more expensive case
+where selected profiles use different local model weights.
+
+Experts are enabled by default. `max_eval_tokens` is the ceiling for each
+expert, while the remaining evaluation allowance of a bounded parent turn is
+the aggregate consultation cap. The runtime can reduce fan-out and distributes
+that remainder without exceeding the per-expert ceiling. Charged child usage is
+added to the parent and therefore to an active Goal's accumulated evaluation
+budget. `timeout` is also per-expert; the parent turn's cancellation and
+deadline still stop the whole consultation. Disabling the block removes
+`consult_experts` from the model tool catalog.
+
+The automatic resource snapshot honors process-visible Linux cgroup v1/v2 CPU
+and memory limits. A sequential consultation still reserves the full accepted
+set of local model weights; if that set does not fit, deterministic fan-out is
+reduced. Verified Cloud or remote-only selections do not consume local model
+weight budget and remain serial because provider-side capacity is unknown.
 
 ## Environment overrides
 
@@ -65,6 +126,7 @@ Start from the annotated [`config.example.yaml`](https://github.com/abdul-hamid-
 | `LOCAL_AGENT_TOOLS_MAX_ITER` | Override ReAct iterations |
 | `LOCAL_AGENT_ICE_EMBED_MODEL` | Override the ICE embedding model |
 | `LOCAL_AGENT_LOCAL_ONLY` | Toggle local-machine endpoint enforcement |
+| `LOCAL_AGENT_TRUST_REPO_MCP` | Trust the exact digest printed for repository-local STDIO MCP authority |
 | `LOCAL_AGENT_ALLOW_LARGE_MODELS` | Bypass the 16 GB-oriented admission guard |
 | `LOCAL_AGENT_REDUCED_MOTION` | Replace animated TUI activity with static glyphs |
 

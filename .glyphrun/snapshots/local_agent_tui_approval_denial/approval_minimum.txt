@@ -4,8 +4,8 @@
 ─────────────────────────────
   ◇ Permission · write · NOR…
   Action Write 19 B
-  Target /Users/abdulachik/pr
-  › n deny
-    y once
+  Target …/approval-probe.txt
+  › n deny · y once
     s identical/session
   esc cancel · enter select
+  pgdn more · d arguments

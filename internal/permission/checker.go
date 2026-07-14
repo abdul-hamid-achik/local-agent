@@ -2,6 +2,7 @@ package permission
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -13,26 +14,35 @@ import (
 type Policy string
 
 const (
-	PolicyAllow Policy = "allow" // always allow
-	PolicyDeny  Policy = "deny"  // always deny
-	PolicyAsk   Policy = "ask"   // prompt user each time
+	// PolicyAllow is retained only for decoding legacy databases and for the
+	// Check return value when approval prompts are explicitly skipped. Broad tool-name grants are not
+	// valid under the current exact-request approval contract.
+	PolicyAllow Policy = "allow"
+	PolicyDeny  Policy = "deny" // always deny
+	PolicyAsk   Policy = "ask"  // prompt user each time
 )
+
+// ErrBroadAllowUnsupported reports an attempt to create the retired global
+// tool-name allow policy. Callers must use an exact-request approval or opt
+// explicitly into the process-wide skip-approvals posture instead.
+var ErrBroadAllowUnsupported = errors.New("broad tool allow policies are unsupported; use an exact-request approval")
 
 // Checker manages tool permissions with an in-memory cache backed by SQLite.
 type Checker struct {
-	store *db.Store
-	cache map[string]Policy
-	mu    sync.RWMutex
-	yolo  bool // auto-approve all
+	store         *db.Store
+	cache         map[string]Policy
+	mu            sync.RWMutex
+	skipApprovals bool
 }
 
 // NewChecker creates a permission checker. If store is nil, all tools default to "ask".
-// If yolo is true, all tools are auto-approved.
-func NewChecker(store *db.Store, yolo bool) *Checker {
+// If skipApprovals is true, approval prompts are bypassed while host, scope,
+// and tool validation remain authoritative.
+func NewChecker(store *db.Store, skipApprovals bool) *Checker {
 	c := &Checker{
-		store: store,
-		cache: make(map[string]Policy),
-		yolo:  yolo,
+		store:         store,
+		cache:         make(map[string]Policy),
+		skipApprovals: skipApprovals,
 	}
 	if store != nil {
 		c.loadFromDB()
@@ -42,19 +52,33 @@ func NewChecker(store *db.Store, yolo bool) *Checker {
 
 // Check returns the policy for the given tool.
 func (c *Checker) Check(toolName string) Policy {
-	if c.yolo {
+	c.mu.RLock()
+	p, ok := c.cache[toolName]
+	c.mu.RUnlock()
+	// A configured deny is an authority boundary, not an approval prompt. The
+	// process-wide skip posture may remove Ask interactions, but it must never
+	// turn an explicit in-memory or persisted denial into permission.
+	if ok && p == PolicyDeny {
+		return p
+	}
+	if c.skipApprovals {
 		return PolicyAllow
 	}
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	if p, ok := c.cache[toolName]; ok {
+	if ok {
 		return p
 	}
 	return PolicyAsk
 }
 
-// SetPolicy updates the policy for a tool and persists it.
+// SetPolicy updates an ask/deny policy for a tool and persists it. Broad
+// allows are rejected because they cannot carry an exact-request scope.
 func (c *Checker) SetPolicy(toolName string, policy Policy) error {
+	if policy == PolicyAllow {
+		return ErrBroadAllowUnsupported
+	}
+	if policy != PolicyAsk && policy != PolicyDeny {
+		return fmt.Errorf("invalid permission policy %q", policy)
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -70,9 +94,15 @@ func (c *Checker) SetPolicy(toolName string, policy Policy) error {
 	return nil
 }
 
-// IsYolo returns true if the checker auto-approves all tools.
+// SkipsApprovals reports the process-wide approval-prompt posture.
+func (c *Checker) SkipsApprovals() bool {
+	return c != nil && c.skipApprovals
+}
+
+// IsYolo is retained for source compatibility.
+// Deprecated: use SkipsApprovals.
 func (c *Checker) IsYolo() bool {
-	return c.yolo
+	return c.SkipsApprovals()
 }
 
 // AllPolicies returns all explicitly set policies.
@@ -89,14 +119,14 @@ func (c *Checker) AllPolicies() map[string]Policy {
 // Reset clears all stored permissions.
 func (c *Checker) Reset() error {
 	c.mu.Lock()
-	c.cache = make(map[string]Policy)
-	c.mu.Unlock()
+	defer c.mu.Unlock()
 
 	if c.store != nil {
 		if err := c.store.ResetToolPermissions(context.Background()); err != nil {
 			return fmt.Errorf("reset persisted permissions: %w", err)
 		}
 	}
+	c.cache = make(map[string]Policy)
 	return nil
 }
 
@@ -109,8 +139,12 @@ func (c *Checker) loadFromDB() {
 	defer c.mu.Unlock()
 	for _, p := range perms {
 		switch Policy(p.Policy) {
-		case PolicyAllow, PolicyDeny, PolicyAsk:
+		case PolicyDeny, PolicyAsk:
 			c.cache[p.ToolName] = Policy(p.Policy)
+		case PolicyAllow:
+			// Databases from before exact-request approval persisted broad
+			// per-tool allows. Never rehydrate that obsolete authority. The
+			// corresponding migration rewrites the durable row to "ask".
 		}
 	}
 }
@@ -276,7 +310,8 @@ func RequestApproval(toolName string, args map[string]any, callback func(Approva
 }
 
 // RequestApprovalContext is the cancellable form used by an active agent
-// turn. Missing approval UI fails closed: callers must opt into yolo mode or
+// turn. Missing approval UI fails closed: callers must opt into the explicit
+// skip-approvals posture or
 // provide an explicit response before a risky tool may execute.
 func RequestApprovalContext(ctx context.Context, toolName string, args map[string]any, callback func(ApprovalRequest)) (bool, bool) {
 	response := ResolveApprovalContext(ctx, ApprovalRequest{ToolName: toolName, Args: args}, callback)
@@ -315,7 +350,7 @@ const (
 
 // ToCheckResult checks the tool and returns the result, simplifying the caller logic.
 func (c *Checker) ToCheckResult(toolName string) CheckResult {
-	if c == nil || c.yolo {
+	if c == nil {
 		return CheckAllow
 	}
 	switch c.Check(toolName) {
@@ -329,8 +364,8 @@ func (c *Checker) ToCheckResult(toolName string) CheckResult {
 }
 
 // NilSafe creates a no-op checker if store is nil, for safe optional use.
-func NilSafe(store *db.Store, yolo bool) *Checker {
-	return NewChecker(store, yolo)
+func NilSafe(store *db.Store, skipApprovals bool) *Checker {
+	return NewChecker(store, skipApprovals)
 }
 
 // AlwaysAllow is an explicit auto-approval callback for trusted callers.

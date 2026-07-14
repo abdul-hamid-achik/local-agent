@@ -3,6 +3,11 @@ version: 1
 artifactRoot: .glyphrun/runs
 snapshotRoot: .glyphrun/snapshots
 
+# Preserve every artifact from one full task glyphrun batch so a late failure
+# cannot prune the diagnostics for an earlier scenario in the same run.
+retention:
+  keepRuns: 20
+
 terminal:
   cols: 120
   rows: 36

@@ -28,7 +28,10 @@ type Context struct {
 	ToolCount        int
 	ServerCount      int
 	ServerNames      []string
+	Servers          []ServerInfo
+	MCPToolCount     int
 	ReadRoots        []string
+	ReadGrants       []ReadGrantInfo
 	Skills           []SkillInfo
 	LoadedFile       string
 	ICEEnabled       bool
@@ -87,6 +90,21 @@ type SkillInfo struct {
 	Active      bool
 }
 
+// ServerInfo is the bounded, read-only MCP connection projection exposed to
+// slash commands. It intentionally excludes transport error strings so command
+// output can be persisted without retaining raw server failures.
+type ServerInfo struct {
+	Name      string
+	Connected bool
+	ToolCount int
+}
+
+// ReadGrantInfo is the typed temporary filesystem authority shown by /scope.
+type ReadGrantInfo struct {
+	Path string
+	Kind string
+}
+
 // Result is returned by command handlers to describe what to do.
 type Result struct {
 	Text   string // Display text (shown as system message)
@@ -136,9 +154,9 @@ const (
 	ActionDropGoal                 // Drop the active goal without claiming completion
 	ActionEditGoalBudget           // Open the active goal's budget-only editor
 	ActionRecoverExecution         // Review typed evidence for a paused ordinary execution
-	ActionAddReadRoot              // Grant one process-local external read-only root (Data = path)
-	ActionRemoveReadRoot           // Revoke one process-local external read-only root (Data = path)
-	ActionClearReadRoots           // Revoke every process-local external read-only root
+	ActionAddReadRoot              // Grant one temporary external read-only directory (Data = path)
+	ActionRemoveReadRoot           // Revoke one temporary external read-only grant (Data = path)
+	ActionClearReadRoots           // Revoke every temporary external read-only grant
 )
 
 // Registry holds all registered slash commands.

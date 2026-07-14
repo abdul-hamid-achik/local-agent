@@ -58,6 +58,19 @@ func TestMCPHubManagementReceiptsExposeOnlyBoundedDigests(t *testing.T) {
 	}
 }
 
+func TestStructuredRejectionMarkerNeverFallsBackToDuplicatedText(t *testing.T) {
+	projection := ProjectReceipt(ProjectToolCall("mcphub__mcphub_describe_tool", map[string]any{
+		"server": "builder", "tool": "build",
+	}), RawReceipt{
+		Structured: json.RawMessage("null"),
+		Text:       `{"server":"builder","tool":"build","namespaced":"builder__build","input_schema":{"description":"must remain behind the parser boundary"}}`,
+	})
+
+	if projection.Domain != DomainUnknown || projection.Digest != nil {
+		t.Fatalf("rejected typed receipt = %#v, want unknown without digest", projection)
+	}
+}
+
 func TestMCPHubStoredAndPagedReceiptsSeparateTransientPayload(t *testing.T) {
 	const (
 		callID = "3f9a1c2e7b804d5e9f1a2b3c4d5e6f70"

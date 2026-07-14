@@ -25,8 +25,12 @@ type mcphubResultPageEnvelope struct {
 }
 
 func receiptDocument(receipt RawReceipt) (json.RawMessage, bool) {
-	if document, ok := exactJSONDocument(receipt.Structured); ok {
-		return document, true
+	// Any non-empty Structured value, including the host's null rejection
+	// marker, proves that typed content was present. Never fall back to a
+	// duplicated text block when that typed value is unsupported or oversized;
+	// doing so would let arbitrary typed fields escape the parser boundary.
+	if len(bytes.TrimSpace(receipt.Structured)) > 0 {
+		return exactJSONDocument(receipt.Structured)
 	}
 	return exactJSONDocument(json.RawMessage(strings.TrimSpace(receipt.Text)))
 }
@@ -878,6 +882,68 @@ func projectFileCheapReceipt(operation string, receipt RawReceipt) (DomainState,
 	default:
 		return "", EvidenceNone, nil, false
 	}
+}
+
+// projectHitspecReceipt recognizes the compact Hitspec v2.18 capture surface.
+// The webpage body, URLs, title, tags, and downstream failure prose remain
+// inside the short-lived parser boundary. Only durable file.cheap identity and
+// bounded storage metrics survive as an artifact projection.
+func projectHitspecReceipt(operation string, receipt RawReceipt) (DomainState, EvidenceState, *ArtifactDigest, bool) {
+	if operation != "hitspec_capture_webpage" {
+		return "", EvidenceNone, nil, false
+	}
+	document, ok := receiptDocument(receipt)
+	if !ok {
+		return "", EvidenceNone, nil, false
+	}
+	var output struct {
+		HTTPStatus    *int64 `json:"http_status"`
+		MarkdownBytes *int64 `json:"markdown_bytes"`
+		Stash         *struct {
+			ID             string          `json:"id"`
+			Status         string          `json:"status"`
+			CreatedAt      string          `json:"created_at"`
+			FileCount      *int64          `json:"file_count"`
+			TotalSize      *int64          `json:"total_size"`
+			Indexed        *bool           `json:"indexed"`
+			IndexRequested *bool           `json:"index_requested"`
+			Failed         json.RawMessage `json:"failed"`
+		} `json:"stash"`
+	}
+	if json.Unmarshal(document, &output) != nil || output.HTTPStatus == nil || *output.HTTPStatus < 200 || *output.HTTPStatus > 299 ||
+		output.MarkdownBytes == nil || *output.MarkdownBytes < 0 || output.Stash == nil ||
+		output.Stash.FileCount == nil || output.Stash.TotalSize == nil || output.Stash.Indexed == nil || output.Stash.IndexRequested == nil {
+		return "", EvidenceNone, nil, false
+	}
+	if rawJSONPresent(output.Stash.Failed) && !jsonKind(output.Stash.Failed, '[') {
+		return "", EvidenceNone, nil, false
+	}
+	switch output.Stash.Status {
+	case "failed":
+		return DomainFailed, EvidenceNone, nil, true
+	case "unknown":
+		return DomainUnknown, EvidenceNone, nil, true
+	case "saved", "saved_with_failures":
+	default:
+		return "", EvidenceNone, nil, false
+	}
+	artifact := normalizeArtifactDigest(ArtifactDigest{
+		Kind:           ArtifactDigestHitspecCapture,
+		ID:             output.Stash.ID,
+		SchemaVersion:  hitspecCaptureSchema,
+		FileCount:      *output.Stash.FileCount,
+		TotalSize:      *output.Stash.TotalSize,
+		CreatedAt:      output.Stash.CreatedAt,
+		IndexingFailed: *output.Stash.IndexRequested && !*output.Stash.Indexed,
+	})
+	if artifact.Kind == "" {
+		return "", EvidenceNone, nil, false
+	}
+	domain := DomainSucceeded
+	if output.Stash.Status == "saved_with_failures" || rawJSONArrayLen(output.Stash.Failed) > 0 || artifact.IndexingFailed {
+		domain = DomainAttention
+	}
+	return domain, EvidenceSupported, &artifact, true
 }
 
 type fileCheapSaveEnvelope struct {

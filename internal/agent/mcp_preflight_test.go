@@ -266,3 +266,26 @@ func newMCPPreflightRegistry(t *testing.T, marker string) *registrypkg.Registry 
 	}
 	return registry
 }
+
+func TestToolAvailabilitySeparatesLocalAndConnectedMCPTools(t *testing.T) {
+	registry := newMCPPreflightRegistry(t, filepath.Join(t.TempDir(), "calls.log"))
+	ag := New(&capabilityCaptureClient{}, registry, 4096)
+	t.Cleanup(ag.Close)
+
+	availability := ag.ToolAvailability()
+	if availability.Local <= 0 {
+		t.Fatalf("local tool availability = %#v, want built-ins", availability)
+	}
+	if availability.MCPConnected != 2 || availability.MCPRetained != 2 {
+		t.Fatalf("connected MCP availability = %#v, want 2 connected/retained", availability)
+	}
+	if got := ag.ToolCount(); got != availability.Local+availability.MCPRetained {
+		t.Fatalf("visible ToolCount = %d, want local + retained = %d", got, availability.Local+availability.MCPRetained)
+	}
+
+	ag.SetMCPServerScope([]string{"outside-profile"})
+	restricted := ag.ToolAvailability()
+	if restricted.MCPConnected != 0 || restricted.MCPRetained != 0 || restricted.Local != availability.Local {
+		t.Fatalf("profile-scoped availability = %#v, want local-only %#v", restricted, availability)
+	}
+}

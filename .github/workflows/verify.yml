@@ -42,12 +42,19 @@ jobs:
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 
   site:
-    name: VitePress site build
+    name: VitePress site verification
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
 
       - name: Set up Node
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
@@ -59,3 +66,63 @@ jobs:
 
       - name: Build site
         run: npm run site:build
+
+      - name: Test rendered internal links
+        run: go test ./internal/doclinks -count=1 -args -dist="${GITHUB_WORKSPACE}/docs/.vitepress/dist"
+
+  glyphrun-cli:
+    name: Glyphrun CLI contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Go for Glyphrun
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: '1.26.x'
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Install pinned Glyphrun
+        run: go install github.com/abdul-hamid-achik/glyphrun/cmd/glyph@v0.14.0
+
+      # Glyphrun currently needs Go 1.26 to build, but the application contract
+      # is Go 1.25. Switch back before the specs compile local-agent so the PTY
+      # surface is exercised with the same minimum toolchain as releases.
+      - name: Set up application Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Verify public CLI contracts
+        run: glyph run specs/cli_flags.yml specs/cli_skip_approvals.yml --format md --progress auto --parallel 1
+
+  darwin-smoke:
+    name: Darwin build and POSIX smoke tests
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Build release-compatible binary
+        env:
+          CGO_ENABLED: 0
+        run: go build -trimpath -o "${RUNNER_TEMP}/local-agent" ./cmd/local-agent
+
+      - name: Run binary smoke test
+        run: '"${RUNNER_TEMP}/local-agent" --version'
+
+      - name: Run Darwin-sensitive package tests
+        run: go test ./cmd/local-agent ./internal/config ./internal/db ./internal/mcp ./internal/safeio -count=1

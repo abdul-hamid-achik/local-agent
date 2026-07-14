@@ -31,10 +31,10 @@ outcomes:
       screen:
         contains: "Usage of ./bin/local-agent"
   - id: prompt_flag_documented
-    description: the non-interactive prompt flag is documented
+    description: the public non-interactive prompt flag is documented
     verify:
       screen:
-        contains: "run in non-interactive mode"
+        contains: "run one non-interactive prompt"
   - id: model_flag_documented
     description: the model override flag is documented
     verify:

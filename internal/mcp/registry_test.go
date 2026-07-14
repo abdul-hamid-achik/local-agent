@@ -42,9 +42,12 @@ func TestNewRegistry(t *testing.T) {
 }
 
 func TestNewRegistryWithVersion(t *testing.T) {
-	r := NewRegistryWithVersion("0.3.0")
+	r := NewRegistryWithVersion("0.3.0", WithLocalOnly(true))
 	if r.version != "0.3.0" {
 		t.Fatalf("release registry version = %q, want 0.3.0", r.version)
+	}
+	if !r.localOnly {
+		t.Fatal("local-only registry option was not applied")
 	}
 }
 
@@ -325,6 +328,69 @@ func TestRegistryCloseCancelsAndJoinsHealthMonitor(t *testing.T) {
 
 	if r.ServerCount() != 0 || len(r.FailedServers()) != 0 {
 		t.Fatalf("closed registry retained state: servers=%d failed=%v", r.ServerCount(), r.FailedServers())
+	}
+}
+
+func TestHealthMonitorPublishesFailureAndRecoverySnapshots(t *testing.T) {
+	r := NewRegistry()
+	t.Cleanup(r.Close)
+	r.mu.Lock()
+	r.failedServers = append(r.failedServers, FailedServer{Name: "demo", Reason: "connection refused"})
+	r.serverConfigs["demo"] = config.ServerConfig{Name: "demo", Command: "unused"}
+	r.mu.Unlock()
+	r.testConnector = func(context.Context, config.ServerConfig) (*MCPClient, []llm.ToolDef, error) {
+		return &MCPClient{name: "demo"}, []llm.ToolDef{{Name: "inspect"}}, nil
+	}
+
+	var snapshots [][]ConnectionStatus
+	r.healthCheckRound(context.Background(), MonitorConfig{
+		MaxRetries: 1, BackoffBase: time.Nanosecond,
+		OnSnapshot: func(statuses []ConnectionStatus) {
+			snapshots = append(snapshots, append([]ConnectionStatus(nil), statuses...))
+		},
+	}, func(string) {})
+	if len(snapshots) < 2 {
+		t.Fatalf("health monitor snapshots=%d, want failure and recovery", len(snapshots))
+	}
+	first := snapshots[0]
+	last := snapshots[len(snapshots)-1]
+	if len(first) != 1 || first[0].Connected || first[0].Name != "demo" {
+		t.Fatalf("first snapshot = %#v, want unavailable demo", first)
+	}
+	if len(last) != 1 || !last[0].Connected || last[0].ToolCount != 1 {
+		t.Fatalf("last snapshot = %#v, want recovered demo", last)
+	}
+	first[0].Name = "caller mutation"
+	if current := r.ConnectionStatuses(); len(current) != 1 || current[0].Name != "demo" {
+		t.Fatalf("snapshot caller mutated registry state: %#v", current)
+	}
+}
+
+func TestHealthMonitorReconnectsRetainedFailedClientOnlyOncePerRound(t *testing.T) {
+	r := NewRegistry()
+	t.Cleanup(r.Close)
+	r.mu.Lock()
+	r.clients["demo"] = &MCPClient{name: "demo"}
+	r.serverTools["demo"] = nil
+	r.failedServers = append(r.failedServers, FailedServer{Name: "demo", Reason: "connection refused"})
+	r.serverConfigs["demo"] = config.ServerConfig{Name: "demo", Command: "unused"}
+	r.rebuildToolMapLocked()
+	r.mu.Unlock()
+	var connectorCalls atomic.Int32
+	r.testConnector = func(context.Context, config.ServerConfig) (*MCPClient, []llm.ToolDef, error) {
+		connectorCalls.Add(1)
+		return &MCPClient{name: "demo"}, []llm.ToolDef{{Name: "inspect"}}, nil
+	}
+
+	r.healthCheckRound(context.Background(), MonitorConfig{
+		MaxRetries: 1, BackoffBase: time.Nanosecond,
+	}, func(string) {})
+	if calls := connectorCalls.Load(); calls != 1 {
+		t.Fatalf("reconnect calls = %d, want one per unhealthy server per round", calls)
+	}
+	statuses := r.ConnectionStatuses()
+	if len(statuses) != 1 || !statuses[0].Connected || statuses[0].ToolCount != 1 {
+		t.Fatalf("recovered statuses = %#v", statuses)
 	}
 }
 

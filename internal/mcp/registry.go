@@ -50,6 +50,7 @@ type Registry struct {
 	serverConfigs  map[string]config.ServerConfig // name -> config for reconnection
 	callTimeout    time.Duration                  // per tool-call timeout (0 = default)
 	version        string                         // advertised MCP client implementation version
+	localOnly      bool                           // enforce per-request local HTTP authority
 	closed         bool
 	lifecycleCtx   context.Context
 	cancel         context.CancelFunc
@@ -69,11 +70,23 @@ func NewRegistry() *Registry {
 	return NewRegistryWithVersion(developmentImplementationVersion)
 }
 
+// RegistryOption configures a Registry without expanding each constructor as
+// new host-owned execution policy is introduced.
+type RegistryOption func(*Registry)
+
+// WithLocalOnly enforces local-machine, same-origin authority on every MCP
+// SSE and Streamable HTTP request made by the registry.
+func WithLocalOnly(required bool) RegistryOption {
+	return func(registry *Registry) {
+		registry.localOnly = required
+	}
+}
+
 // NewRegistryWithVersion creates a registry whose MCP client handshakes
 // advertise the same build version as the local-agent CLI.
-func NewRegistryWithVersion(version string) *Registry {
+func NewRegistryWithVersion(version string, options ...RegistryOption) *Registry {
 	lifecycleCtx, cancel := context.WithCancel(context.Background())
-	return &Registry{
+	registry := &Registry{
 		toolMap:        make(map[string]toolRoute),
 		clients:        make(map[string]*MCPClient),
 		serverTools:    make(map[string][]llm.ToolDef),
@@ -84,6 +97,12 @@ func NewRegistryWithVersion(version string) *Registry {
 		lifecycleCtx:   lifecycleCtx,
 		cancel:         cancel,
 	}
+	for _, option := range options {
+		if option != nil {
+			option(registry)
+		}
+	}
+	return registry
 }
 
 // SetCallTimeout overrides the per tool-call timeout. A non-positive value
@@ -139,7 +158,10 @@ func (r *Registry) closeMCPClient(client *MCPClient) error {
 // given ctx. STDIO Connect also links ctx to an owned process-group cancel, so
 // Registry.Close's lifecycleWG wait cannot be stranded by a hanging child.
 func (r *Registry) discoverServer(ctx context.Context, srv config.ServerConfig) (*MCPClient, []llm.ToolDef, error) {
-	client, err := connectWithVersion(ctx, r.version, srv.Name, srv.Command, srv.Args, srv.Env, srv.Transport, srv.URL)
+	client, err := connectWithVersionAndTrust(
+		ctx, r.version, srv.Name, srv.Command, srv.Args, srv.Env, srv.Transport, srv.URL,
+		r.localOnly, srv.ExecutableSHA256,
+	)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -578,6 +600,10 @@ type MonitorConfig struct {
 	Interval    time.Duration
 	MaxRetries  int
 	BackoffBase time.Duration
+	// OnSnapshot receives immutable connection-state snapshots after monitor
+	// transitions. Callers must return promptly; Registry.Close joins the
+	// monitor and therefore also waits for an active callback to return.
+	OnSnapshot func([]ConnectionStatus)
 }
 
 var defaultMonitorConfig = MonitorConfig{
@@ -590,7 +616,9 @@ var defaultMonitorConfig = MonitorConfig{
 // returned function cancels this monitor; Registry.Close cancels and joins it.
 func (r *Registry) StartHealthMonitor(ctx context.Context, cfg MonitorConfig, logFn func(string)) context.CancelFunc {
 	if cfg.Interval <= 0 {
+		onSnapshot := cfg.OnSnapshot
 		cfg = defaultMonitorConfig
+		cfg.OnSnapshot = onSnapshot
 	}
 	if logFn == nil {
 		logFn = func(string) {}
@@ -606,6 +634,7 @@ func (r *Registry) StartHealthMonitor(ctx context.Context, cfg MonitorConfig, lo
 	stopLifecycleCancel := context.AfterFunc(r.lifecycleCtx, cancel)
 	r.lifecycleWG.Add(1)
 	r.mu.Unlock()
+	r.emitConnectionSnapshot(cfg.OnSnapshot)
 
 	go func() {
 		defer r.lifecycleWG.Done()
@@ -628,11 +657,25 @@ func (r *Registry) StartHealthMonitor(ctx context.Context, cfg MonitorConfig, lo
 
 func (r *Registry) healthCheckRound(ctx context.Context, cfg MonitorConfig, logFn func(string)) {
 	statuses := r.HealthCheck(ctx)
+	handledUnhealthy := make(map[string]struct{}, len(statuses))
 
 	for _, status := range statuses {
 		if status.Connected {
 			continue
 		}
+		// HealthCheck can contain both the retained client row and the failure
+		// receipt for the same server. One round owns at most one reconnect per
+		// server; otherwise a successful first reconnect is immediately replaced
+		// by a redundant second connection from the stale duplicate row.
+		if _, handled := handledUnhealthy[status.Name]; handled {
+			continue
+		}
+		handledUnhealthy[status.Name] = struct{}{}
+		// Publish the failed ping before waiting through reconnect backoff. The
+		// retained client may still exist, so the explicit failure receipt must
+		// win in ConnectionStatuses until a successful reconnect clears it.
+		r.setFailedServer(status.Name, status.LastError)
+		r.emitConnectionSnapshot(cfg.OnSnapshot)
 
 		// Server is down, try to reconnect
 		logFn(fmt.Sprintf("server %s unhealthy, attempting reconnect...", status.Name))
@@ -648,12 +691,21 @@ func (r *Registry) healthCheckRound(ctx context.Context, cfg MonitorConfig, logF
 			_, err := r.ReconnectServer(ctx, status.Name)
 			if err == nil {
 				logFn(fmt.Sprintf("server %s reconnected", status.Name))
+				r.emitConnectionSnapshot(cfg.OnSnapshot)
 				break
 			}
+			r.emitConnectionSnapshot(cfg.OnSnapshot)
 
 			if attempt == cfg.MaxRetries {
 				logFn(fmt.Sprintf("server %s reconnection failed after %d attempts: %v", status.Name, cfg.MaxRetries, err))
 			}
 		}
 	}
+}
+
+func (r *Registry) emitConnectionSnapshot(callback func([]ConnectionStatus)) {
+	if callback == nil {
+		return
+	}
+	callback(r.ConnectionStatuses())
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/mcp"
 )
@@ -97,7 +98,17 @@ func baseRequest() Request {
 }
 
 func resolverToolResult(server, tool string, required []string) *mcp.ToolResult {
-	payload, err := json.Marshal(map[string]any{
+	return resolverToolResultWithRevision(server, tool, required, "")
+}
+
+func resolverToolResultWithRevision(server, tool string, required []string, catalogRevision string) *mcp.ToolResult {
+	if catalogRevision == "" {
+		catalogRevision = "catalog-v1-test"
+	}
+	envelope := map[string]any{
+		"contract_version": 1,
+		"status":           "confident",
+		"catalog_revision": catalogRevision,
 		"recommendation": map[string]any{
 			"server":                      server,
 			"tool":                        tool,
@@ -109,7 +120,8 @@ func resolverToolResult(server, tool string, required []string) *mcp.ToolResult 
 		"ambiguous":              false,
 		"alternatives":           []any{},
 		"alternatives_truncated": false,
-	})
+	}
+	payload, err := json.Marshal(envelope)
 	if err != nil {
 		panic(err)
 	}
@@ -119,6 +131,9 @@ func resolverToolResult(server, tool string, required []string) *mcp.ToolResult 
 func TestAdvisorCallsResolverAndKeepsOnlyAllowlistedHint(t *testing.T) {
 	const secret = "must-not-survive"
 	payload := `{
+		"contract_version":1,
+		"status":"confident",
+		"catalog_revision":"catalog-v1",
 		"query":"remote raw query",
 		"recommendation":{
 			"server":"bob",
@@ -145,12 +160,15 @@ func TestAdvisorCallsResolverAndKeepsOnlyAllowlistedHint(t *testing.T) {
 	}
 	request := baseRequest()
 	request.GoalID = "private-goal-id"
+	request.CatalogRevision = "catalog-v1"
 	request.Activity.Objective = "Capture https://example.com/page?X-Amz-Signature=" + secret + " as Markdown"
 	request.Activity.AvailableInputKinds = []string{"URL", "workspace"}
+	request.Activity.IntentTags = []string{"Security", "code"}
 
 	result := New(registry).Advise(context.Background(), request)
 	if result.Status != StatusResolved || !result.Attempted || result.Cached || result.Hint == nil {
-		t.Fatalf("result = %#v", result)
+		_, _, _, parseErr := parseResolverResult(registry.results[0])
+		t.Fatalf("result = %#v (parse error: %v)", result, parseErr)
 	}
 	want := &Hint{
 		Namespaced:                "bob__bob_plan",
@@ -183,7 +201,7 @@ func TestAdvisorCallsResolverAndKeepsOnlyAllowlistedHint(t *testing.T) {
 	if !ok || len(query) > maxResolverQueryBytes {
 		t.Fatalf("bounded query = %#v", calls[0].args["query"])
 	}
-	for _, forbidden := range []string{secret, "private-goal-id", "X-Amz-Signature", "?"} {
+	for _, forbidden := range []string{secret, "private-goal-id", "catalog-v1", "X-Amz-Signature", "?"} {
 		if strings.Contains(query, forbidden) {
 			t.Fatalf("query retained %q: %q", forbidden, query)
 		}
@@ -194,10 +212,25 @@ func TestAdvisorCallsResolverAndKeepsOnlyAllowlistedHint(t *testing.T) {
 		"Current activity: Design repository changes before editing.",
 		"Desired outcome: A reproducible implementation plan.",
 		"Available inputs: url, workspace.",
+		"Intent facets: code, security.",
 	} {
 		if !strings.Contains(query, expected) {
 			t.Fatalf("query %q does not contain %q", query, expected)
 		}
+	}
+}
+
+func TestAdvisorRejectsIntentValuesThatAreNotBoundedLabels(t *testing.T) {
+	registry := &advisorRegistry{exposed: "mcphub__mcphub_resolve_tool", resolveOK: true}
+	request := baseRequest()
+	request.Activity.IntentTags = []string{"code", "private/path"}
+	result := New(registry).Advise(context.Background(), request)
+	if result.Status != StatusInvalid || result.Attempted {
+		t.Fatalf("invalid intent result = %#v", result)
+	}
+	_, calls := registry.snapshot()
+	if len(calls) != 0 {
+		t.Fatalf("invalid intent reached resolver: %#v", calls)
 	}
 }
 
@@ -294,7 +327,7 @@ func assertResolverCallCount(t *testing.T, advisor *Advisor, registry *advisorRe
 func TestAdvisorCachesValidNoMatch(t *testing.T) {
 	registry := &advisorRegistry{
 		exposed: "mcphub__mcphub_resolve_tool", resolveOK: true,
-		results: []*mcp.ToolResult{{Structured: json.RawMessage(`{"recommendation":null,"ambiguous":false,"alternatives":[]}`)}},
+		results: []*mcp.ToolResult{{Structured: json.RawMessage(`{"contract_version":1,"status":"no_match","catalog_revision":"catalog-v1-test","recommendation":null,"ambiguous":false,"alternatives":[]}`)}},
 	}
 	advisor := New(registry)
 	first := advisor.Advise(context.Background(), baseRequest())
@@ -308,6 +341,161 @@ func TestAdvisorCachesValidNoMatch(t *testing.T) {
 	_, calls := registry.snapshot()
 	if len(calls) != 1 {
 		t.Fatalf("no-match resolver calls = %d, want 1", len(calls))
+	}
+}
+
+func TestAdvisorExpiresNoMatchAndDiscoversRecoveredCatalog(t *testing.T) {
+	now := time.Date(2026, time.July, 13, 12, 0, 0, 0, time.UTC)
+	registry := &advisorRegistry{
+		exposed: "mcphub__mcphub_resolve_tool", resolveOK: true,
+		results: []*mcp.ToolResult{
+			{Structured: json.RawMessage(`{"contract_version":1,"status":"no_match","recommendation":null,"ambiguous":false,"alternatives":[],"catalog_revision":"catalog-a"}`)},
+			resolverToolResultWithRevision("vidtrace", "inspect_video", []string{"path"}, "catalog-b"),
+		},
+	}
+	advisor := New(registry)
+	advisor.now = func() time.Time { return now }
+
+	first := advisor.Advise(context.Background(), baseRequest())
+	now = now.Add(noMatchCacheTTL - time.Nanosecond)
+	beforeExpiry := advisor.Advise(context.Background(), baseRequest())
+	now = now.Add(time.Nanosecond)
+	afterExpiry := advisor.Advise(context.Background(), baseRequest())
+
+	if first.Status != StatusNoMatch || first.CatalogRevision != "catalog-a" || !first.Attempted {
+		t.Fatalf("first no-match = %#v", first)
+	}
+	if beforeExpiry.Status != StatusNoMatch || !beforeExpiry.Cached || beforeExpiry.CatalogRevision != "catalog-a" {
+		t.Fatalf("unexpired no-match = %#v", beforeExpiry)
+	}
+	if afterExpiry.Status != StatusResolved || !afterExpiry.Attempted || afterExpiry.Cached ||
+		afterExpiry.Hint == nil || afterExpiry.Hint.Server != "vidtrace" || afterExpiry.CatalogRevision != "catalog-b" {
+		t.Fatalf("refreshed result = %#v", afterExpiry)
+	}
+	_, calls := registry.snapshot()
+	if len(calls) != 2 {
+		t.Fatalf("resolver calls = %d, want 2", len(calls))
+	}
+}
+
+func TestAdvisorExpiresPositiveAndAmbiguousRoutesWithoutRevisionFeed(t *testing.T) {
+	tests := []struct {
+		name       string
+		first      *mcp.ToolResult
+		ttl        time.Duration
+		wantStatus Status
+	}{
+		{
+			name:       "resolved",
+			first:      resolverToolResultWithRevision("bob", "bob_plan", []string{"workspace"}, "catalog-a"),
+			ttl:        resolvedCacheTTL,
+			wantStatus: StatusResolved,
+		},
+		{
+			name: "ambiguous",
+			first: &mcp.ToolResult{Structured: json.RawMessage(`{
+				"contract_version":1,"status":"ambiguous","catalog_revision":"catalog-a",
+				"recommendation":{"server":"bob","tool":"bob_plan","namespaced":"bob__bob_plan","required_fields":["workspace"]},
+				"ambiguous":true,"alternatives":[{"namespaced":"cortex__cortex_plan"}]
+			}`)},
+			ttl:        ambiguousCacheTTL,
+			wantStatus: StatusAmbiguous,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			now := time.Date(2026, time.July, 13, 12, 0, 0, 0, time.UTC)
+			registry := &advisorRegistry{
+				exposed: "mcphub__mcphub_resolve_tool", resolveOK: true,
+				results: []*mcp.ToolResult{
+					test.first,
+					resolverToolResultWithRevision("vidtrace", "inspect_video", []string{"path"}, "catalog-b"),
+				},
+			}
+			advisor := New(registry)
+			advisor.now = func() time.Time { return now }
+
+			first := advisor.Advise(context.Background(), baseRequest())
+			now = now.Add(test.ttl - time.Nanosecond)
+			cached := advisor.Advise(context.Background(), baseRequest())
+			now = now.Add(time.Nanosecond)
+			refreshed := advisor.Advise(context.Background(), baseRequest())
+
+			if first.Status != test.wantStatus || !first.Attempted || first.Cached {
+				t.Fatalf("first route = %#v", first)
+			}
+			if cached.Status != test.wantStatus || !cached.Cached || cached.Attempted {
+				t.Fatalf("cached route = %#v", cached)
+			}
+			if refreshed.Status != StatusResolved || refreshed.Cached || !refreshed.Attempted ||
+				refreshed.Hint == nil || refreshed.Hint.Server != "vidtrace" || refreshed.CatalogRevision != "catalog-b" {
+				t.Fatalf("refreshed route = %#v", refreshed)
+			}
+			_, calls := registry.snapshot()
+			if len(calls) != 2 {
+				t.Fatalf("resolver calls = %d, want 2", len(calls))
+			}
+		})
+	}
+}
+
+func TestAdvisorCatalogRevisionSeparatesCacheGenerations(t *testing.T) {
+	registry := &advisorRegistry{
+		exposed: "mcphub__mcphub_resolve_tool", resolveOK: true,
+		results: []*mcp.ToolResult{
+			resolverToolResultWithRevision("bob", "bob_plan", []string{"workspace"}, "catalog-a"),
+			resolverToolResultWithRevision("cortex", "cortex_plan", []string{"workspace"}, "catalog-b"),
+		},
+	}
+	advisor := New(registry)
+	request := baseRequest()
+	request.CatalogRevision = "catalog-a"
+	first := advisor.Advise(context.Background(), request)
+	cached := advisor.Advise(context.Background(), request)
+	request.CatalogRevision = "catalog-b"
+	refreshed := advisor.Advise(context.Background(), request)
+
+	if first.CatalogRevision != "catalog-a" || first.Hint == nil || first.Hint.Server != "bob" {
+		t.Fatalf("first generation = %#v", first)
+	}
+	if !cached.Cached || cached.CatalogRevision != "catalog-a" {
+		t.Fatalf("cached generation = %#v", cached)
+	}
+	if !refreshed.Attempted || refreshed.Cached || refreshed.CatalogRevision != "catalog-b" ||
+		refreshed.Hint == nil || refreshed.Hint.Server != "cortex" {
+		t.Fatalf("refreshed generation = %#v", refreshed)
+	}
+	_, calls := registry.snapshot()
+	if len(calls) != 2 {
+		t.Fatalf("resolver calls = %d, want 2", len(calls))
+	}
+}
+
+func TestAdvisorDoesNotExposeMismatchedCatalogGeneration(t *testing.T) {
+	registry := &advisorRegistry{
+		exposed: "mcphub__mcphub_resolve_tool", resolveOK: true,
+		results: []*mcp.ToolResult{
+			resolverToolResultWithRevision("bob", "bob_plan", []string{"workspace"}, "catalog-a"),
+			resolverToolResultWithRevision("cortex", "cortex_plan", []string{"workspace"}, "catalog-b"),
+		},
+	}
+	advisor := New(registry)
+	request := baseRequest()
+	request.CatalogRevision = "catalog-b"
+
+	first := advisor.Advise(context.Background(), request)
+	second := advisor.Advise(context.Background(), request)
+	if first.Status != StatusInvalid || first.Hint != nil || first.CatalogRevision != "" || !first.Attempted {
+		t.Fatalf("mismatched generation = %#v", first)
+	}
+	if second.Status != StatusResolved || second.Hint == nil || second.Hint.Server != "cortex" ||
+		second.CatalogRevision != "catalog-b" || !second.Attempted || second.Cached {
+		t.Fatalf("retry after mismatch = %#v", second)
+	}
+	_, calls := registry.snapshot()
+	if len(calls) != 2 {
+		t.Fatalf("resolver calls = %d, want 2", len(calls))
 	}
 }
 
@@ -370,6 +558,76 @@ func TestAdvisorInvalidResolverResultIsNotCached(t *testing.T) {
 	}
 }
 
+func TestAdvisorRejectsInconsistentResolverStatusAndUnsafeRevision(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+	}{
+		{
+			name: "missing contract version",
+			payload: `{
+				"status":"no_match","catalog_revision":"catalog-v1-aabbcc",
+				"recommendation":null,"ambiguous":false,"alternatives":[]
+			}`,
+		},
+		{
+			name: "missing status",
+			payload: `{
+				"contract_version":1,"catalog_revision":"catalog-v1-aabbcc",
+				"recommendation":null,"ambiguous":false,"alternatives":[]
+			}`,
+		},
+		{
+			name: "missing catalog revision",
+			payload: `{
+				"contract_version":1,"status":"no_match",
+				"recommendation":null,"ambiguous":false,"alternatives":[]
+			}`,
+		},
+		{
+			name: "confident without recommendation",
+			payload: `{
+				"contract_version":1,"status":"confident","catalog_revision":"catalog-v1-aabbcc",
+				"recommendation":null,"ambiguous":false,"alternatives":[]
+			}`,
+		},
+		{
+			name: "no match with recommendation",
+			payload: `{
+				"contract_version":1,"status":"no_match","catalog_revision":"catalog-v1-aabbcc",
+				"recommendation":{"server":"bob","tool":"bob_plan","namespaced":"bob__bob_plan","required_fields":[]},
+				"ambiguous":false,"alternatives":[]
+			}`,
+		},
+		{
+			name: "unicode revision",
+			payload: `{
+				"contract_version":1,"status":"no_match","catalog_revision":"catálogo-v1",
+				"recommendation":null,"ambiguous":false,"alternatives":[]
+			}`,
+		},
+		{
+			name: "unsupported contract version",
+			payload: `{
+				"contract_version":2,"status":"no_match","catalog_revision":"catalog-v2-aabbcc",
+				"recommendation":null,"ambiguous":false,"alternatives":[]
+			}`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			registry := &advisorRegistry{
+				exposed: "mcphub__mcphub_resolve_tool", resolveOK: true,
+				results: []*mcp.ToolResult{{Structured: json.RawMessage(test.payload)}},
+			}
+			result := New(registry).Advise(context.Background(), baseRequest())
+			if result.Status != StatusInvalid || result.Hint != nil || !result.Attempted || result.CatalogRevision != "" {
+				t.Fatalf("invalid resolver contract = %#v", result)
+			}
+		})
+	}
+}
+
 func TestAdvisorRejectsInstructionLikeRequiredField(t *testing.T) {
 	invalid := &mcp.ToolResult{Structured: json.RawMessage(`{
 		"recommendation":{
@@ -399,6 +657,7 @@ func TestAdvisorSkipsTrivialOrUnsafeActivity(t *testing.T) {
 		{name: "raw tool JSON", mutate: func(request *Request) { request.Activity.CurrentActivity = `{"result":"arbitrary tool output"}` }, status: StatusInvalid},
 		{name: "credential assignment", mutate: func(request *Request) { request.Activity.DesiredOutcome = "Use password=topsecret" }, status: StatusInvalid},
 		{name: "input value instead of kind", mutate: func(request *Request) { request.Activity.AvailableInputKinds = []string{"https://example.com/private"} }, status: StatusInvalid},
+		{name: "unsafe catalog revision", mutate: func(request *Request) { request.CatalogRevision = "catalog revision with spaces" }, status: StatusInvalid},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -421,6 +680,9 @@ func TestAdvisorReturnsAmbiguousHintWithoutExecutingRecommendation(t *testing.T)
 	registry := &advisorRegistry{
 		exposed: "mcphub__mcphub_resolve_tool", resolveOK: true,
 		results: []*mcp.ToolResult{{Content: `{
+			"contract_version":1,
+			"status":"ambiguous",
+			"catalog_revision":"catalog-v1-aabbccddeeff001122334455",
 			"recommendation":{"server":"bob","tool":"bob_plan","namespaced":"bob__bob_plan","required_fields":["workspace"]},
 			"ambiguous":true,
 			"alternatives":[{"namespaced":"cortex__cortex_plan"}],
@@ -429,7 +691,8 @@ func TestAdvisorReturnsAmbiguousHintWithoutExecutingRecommendation(t *testing.T)
 		}`}},
 	}
 	result := New(registry).Advise(context.Background(), baseRequest())
-	if result.Status != StatusResolved || result.Hint == nil || !result.Hint.Ambiguous ||
+	if result.Status != StatusAmbiguous || result.CatalogRevision != "catalog-v1-aabbccddeeff001122334455" ||
+		result.Hint == nil || !result.Hint.Ambiguous ||
 		!result.Hint.ArgumentTemplateTruncated || !reflect.DeepEqual(result.Hint.Alternatives, []string{"cortex__cortex_plan"}) {
 		t.Fatalf("ambiguous result = %#v", result)
 	}

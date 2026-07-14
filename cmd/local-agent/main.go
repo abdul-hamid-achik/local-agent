@@ -46,13 +46,6 @@ func main() {
 }
 
 func run() int {
-	// Handle --version flag before flag.Parse (which may fail)
-	for _, arg := range os.Args[1:] {
-		if arg == "--version" || arg == "-version" {
-			fmt.Println(version)
-			return 0
-		}
-	}
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "init":
@@ -77,25 +70,57 @@ func run() int {
 		}
 	}
 
-	qwenRouterFlag := flag.Bool("qwen-router", false, "use optimized Qwen model router (experimental)")
-	modelFlag := flag.String("model", "", "override Ollama model")
-	agentProfileFlag := flag.String("agent", "", "override agent profile")
-	promptFlag := flag.String("p", "", "run in non-interactive mode: send prompt, print response, exit")
-	modeFlag := flag.String("mode", "normal", "headless authority: normal, plan, or auto")
-	yoloFlag := flag.Bool("yolo", false, "auto-approve all tool calls (skip permission prompts)")
-	var resumeFlag resumeFlagValue
-	flag.Var(&resumeFlag, "resume", "restore a saved interactive session by positive ID or latest")
-	flag.Parse()
+	options, err := parseRootOptions(os.Args[0], os.Args[1:], os.Stderr)
+	if errors.Is(err, flag.ErrHelp) {
+		return 0
+	}
+	if err != nil {
+		return 2
+	}
+	if options.version {
+		fmt.Println(version)
+		return 0
+	}
+	if len(options.arguments) > 0 {
+		fmt.Fprintf(os.Stderr, "unexpected argument %q; pass a headless request with -p/--prompt\n", options.arguments[0])
+		return 2
+	}
+
+	qwenRouterFlag := &options.qwenRouter
+	modelFlag := &options.model
+	agentProfileFlag := &options.agentProfile
+	promptFlag := options.prompt
+	modeFlag := &options.mode
+	autoFlag := &options.auto
+	planFlag := &options.plan
+	skipApprovalsFlag := &options.skipApprovals
+	legacyYoloFlag := &options.legacyYolo
+	resumeFlag := options.resume
+	promptProvided := options.promptProvided
+	if promptProvided && strings.TrimSpace(promptFlag) == "" {
+		fmt.Fprintln(os.Stderr, "prompt: -p/--prompt requires a non-empty value")
+		return 2
+	}
 	resumeSelector, resumeRequested, err := resumeFlag.selector()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "resume: %v\n", err)
 		return 2
 	}
-	if err := validateResumeInvocation(resumeRequested, commandLineFlagProvided(os.Args[1:], "p")); err != nil {
+	if err := validateResumeInvocation(resumeRequested, promptProvided); err != nil {
 		fmt.Fprintf(os.Stderr, "resume: %v\n", err)
 		return 2
 	}
-	headlessMode, err := parseHeadlessMode(*modeFlag, *promptFlag != "")
+	resolvedMode, err := resolveAuthorityShortcut(
+		*modeFlag,
+		options.modeProvided,
+		*autoFlag,
+		*planFlag,
+	)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mode: %v\n", err)
+		return 2
+	}
+	headlessMode, err := parseHeadlessMode(resolvedMode, promptProvided)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "mode: %v\n", err)
 		return 2
@@ -144,7 +169,7 @@ func run() int {
 		cancelEnrich()
 	}
 	modelManager.ConfigureOllamaRuntimeInventory(cfg.Privacy.LocalOnly, ollamaInventory, discoveryErr == nil)
-	if discoveryErr != nil && cfg.Privacy.LocalOnly && *promptFlag != "" {
+	if discoveryErr != nil && cfg.Privacy.LocalOnly && promptFlag != "" {
 		fmt.Fprintf(os.Stderr, "model: local-only mode could not verify Ollama local weights: %v\n", discoveryErr)
 		return 1
 	}
@@ -187,7 +212,7 @@ func run() int {
 		servers = agentsDir.GetMCPServers()
 	}
 
-	registry := mcp.NewRegistryWithVersion(version)
+	registry := mcp.NewRegistryWithVersion(version, mcp.WithLocalOnly(cfg.Privacy.LocalOnly))
 	defer registry.Close()
 
 	ag := agent.New(modelManager, registry, cfg.Ollama.NumCtx)
@@ -201,6 +226,12 @@ func run() int {
 	ag.RequireExecutionLedger(true)
 	ag.SetToolsConfig(cfg.Tools)
 	ag.SetRouter(router)
+	expertConsultant, expertErr := newRuntimeExpertConsultant(cfg, modelManager, agentsDir, ollamaInventory)
+	if expertErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: expert consultation disabled: %v\n", expertErr)
+	} else if expertConsultant != nil {
+		ag.SetExpertConsultant(expertConsultant)
+	}
 	// Cap any single tool result so a runaway read/command can't blow the
 	// (small, local) context window. ~96KB is generous for code/output.
 	ag.AddToolHook(agent.NewSizeCapHook(96 * 1024))
@@ -228,7 +259,7 @@ func run() int {
 	defer ag.Close()
 
 	// Set up tool permission checker.
-	permChecker := permission.NewChecker(dbStore, *yoloFlag)
+	permChecker := permission.NewChecker(dbStore, *skipApprovalsFlag || *legacyYoloFlag)
 	ag.SetPermissionChecker(permChecker)
 
 	// Enable non-destructive compaction + manual checkpoints when the DB is up.
@@ -279,7 +310,7 @@ func run() int {
 	baseLoadedContext = appendLoadedContext(baseLoadedContext, buildHostConfigProjection(cfg, agentsDir, servers))
 
 	// Non-interactive / pipe mode: run a single prompt and exit.
-	if *promptFlag != "" {
+	if promptFlag != "" {
 		ctx, cancelRun := context.WithCancel(context.Background())
 		defer cancelRun()
 		headlessSignals := make(chan os.Signal, 1)
@@ -307,7 +338,7 @@ func run() int {
 		if explicitRouter, ok := router.(interface{ SetModeContext(config.ModeContext) }); ok {
 			explicitRouter.SetModeContext(modeConfig.RouterMode)
 		}
-		routedModel := selectHeadlessModel(modelName, *promptFlag, modelPinned, router, modeConfig.RouterMode)
+		routedModel := selectHeadlessModel(modelName, promptFlag, modelPinned, router, modeConfig.RouterMode)
 		if routedModel != modelName {
 			modelName = routedModel
 			if modelName == "" {
@@ -360,7 +391,7 @@ func run() int {
 		}
 
 		// Headless -p is one bounded turn. AUTO uses the same scoped authority as
-		// the TUI; it is not the global --yolo bypass.
+		// the TUI; it is independent from the --skip-approvals posture.
 		ag.SetModeContext(modeConfig.SystemPromptPrefix, modeConfig.ToolPolicy)
 		ag.SetAuthorityMode(headlessAuthorityMode(headlessMode))
 		if workspace == "" {
@@ -368,7 +399,7 @@ func run() int {
 			return 1
 		}
 		session, err := dbStore.CreateSession(ctx, db.CreateSessionParams{
-			Title:       headlessSessionTitle(*promptFlag),
+			Title:       headlessSessionTitle(promptFlag),
 			Model:       modelName,
 			Mode:        modeConfig.Label,
 			WorkspaceID: workspace,
@@ -395,7 +426,7 @@ func run() int {
 
 		// Run the agent synchronously.
 		out := agent.NewHeadlessOutput()
-		ag.AddUserMessage(*promptFlag)
+		ag.AddUserMessage(promptFlag)
 		sessionStateRevision := int64(0)
 		persistHeadlessState := func(saveCtx context.Context, executionCursor int64) error {
 			stateJSON, encodeErr := ui.EncodeHeadlessSessionState(
@@ -482,7 +513,17 @@ func run() int {
 	}
 
 	m := ui.New(ag, cmdReg, skillMgr, completer, modelManager, router, logger)
-	m.SetGoalAdvisor(goaladvisor.NewCortex(registry, ag.WorkDir(), "local-agent"))
+	if expertErr != nil {
+		m.SetExpertRuntimeSetupFailed()
+	}
+	if permChecker.SkipsApprovals() {
+		m.SetApprovalPosture(ui.ApprovalPostureSkipApprovals)
+	} else {
+		m.SetApprovalPosture(ui.ApprovalPosturePrompted)
+	}
+	if goalAdvisorConfigured(servers) {
+		m.SetGoalAdvisor(goaladvisor.NewCortex(registry, ag.WorkDir(), "local-agent"))
+	}
 	defer func() {
 		ag.Close()
 		if err := m.ReleaseExecutionSessionLease(); err != nil {
@@ -569,7 +610,11 @@ func run() int {
 		// Start background health monitoring so a crashed MCP server is
 		// auto-reconnected instead of staying dead until restart. Bound to
 		// initCtx, so it stops cleanly when the TUI exits.
-		registry.StartHealthMonitor(initCtx, mcp.MonitorConfig{}, func(s string) {
+		registry.StartHealthMonitor(initCtx, mcp.MonitorConfig{
+			OnSnapshot: func(statuses []mcp.ConnectionStatus) {
+				p.Send(ui.MCPStatusSnapshotMsg{Servers: projectMCPStatuses(statuses)})
+			},
+		}, func(s string) {
 			if logger != nil {
 				logger.Info("mcp health", "detail", s)
 			}
@@ -619,6 +664,13 @@ func run() int {
 		for index := range ollamaModels {
 			ollamaModels[index].EffectiveContext = modelManager.ContextPolicy(ollamaModels[index].Name).Effective
 		}
+		failedServers := registry.FailedServers()
+		failedServerProjection := make([]ui.FailedServer, 0, len(failedServers))
+		for _, failed := range failedServers {
+			failedServerProjection = append(failedServerProjection, ui.FailedServer{
+				Name: failed.Name, Reason: failed.Reason,
+			})
+		}
 		p.Send(ui.InitCompleteMsg{
 			Model:                    modelName,
 			ModelList:                modelList,
@@ -631,6 +683,8 @@ func run() int {
 			ToolCount:                ag.ToolCount(),
 			ServerCount:              registry.ServerCount(),
 			NumCtx:                   modelManager.NumCtx(),
+			FailedServers:            failedServerProjection,
+			MCPServers:               projectMCPStatuses(registry.ConnectionStatuses()),
 			ICEEnabled:               iceEnabled,
 			ICEConversations:         iceConversations,
 			ICESessionID:             iceSessionID,
@@ -647,6 +701,17 @@ func run() int {
 		return 1
 	}
 	return 0
+}
+
+func projectMCPStatuses(statuses []mcp.ConnectionStatus) []ui.MCPServerStatus {
+	projected := make([]ui.MCPServerStatus, 0, len(statuses))
+	for _, status := range statuses {
+		projected = append(projected, ui.MCPServerStatus{
+			Name: status.Name, Connected: status.Connected,
+			ToolCount: status.ToolCount, Detail: status.LastError,
+		})
+	}
+	return projected
 }
 
 func newRuntimeSkillManager(agentsDir *config.AgentsDir, autoLoad bool) (*skill.Manager, error) {

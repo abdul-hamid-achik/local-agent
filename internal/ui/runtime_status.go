@@ -4,14 +4,29 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/viewport"
 	"charm.land/lipgloss/v2"
+
+	"github.com/abdul-hamid-achik/local-agent/internal/agent"
 )
 
 type RuntimeStatusState struct {
 	Viewport viewport.Model
+}
+
+// SetExpertRuntimeSetupFailed keeps a startup validation failure visible after
+// the alternate-screen TUI opens. The detailed diagnostic remains on stderr;
+// Runtime shows only a fixed host-authored recovery label.
+func (m *Model) SetExpertRuntimeSetupFailed() {
+	if m == nil {
+		return
+	}
+	m.expertRuntimeSetupFailed = true
 }
 
 func (m *Model) openRuntimeStatus() {
@@ -32,7 +47,10 @@ func (m *Model) refreshRuntimeStatus(preserveOffset bool) {
 	}
 	width := pickerListWidth(m.width, 58)
 	content := m.buildRuntimeStatusContent(width)
-	height := min(max(1, lipgloss.Height(content)), max(1, m.height-5))
+	// Reserve one terminal row beyond the frame's calculated content so a
+	// full-height centered overlay never clips its bottom border in the final
+	// Bubble Tea view (notably at the supported 40x20 narrow test tier).
+	height := min(max(1, lipgloss.Height(content)), max(1, m.height-6))
 	vp := viewport.New(
 		viewport.WithWidth(width),
 		viewport.WithHeight(height),
@@ -58,25 +76,29 @@ func (m *Model) buildRuntimeStatusContent(width int) string {
 		routing = "Auto"
 	}
 	lines := make([]string, 0, 18)
-	toolCount := m.toolCount
-	var serverNames []string
-	failedServers := append([]FailedServer(nil), m.failedServers...)
-	serverToolCounts := make(map[string]int)
+	toolSummary := fmt.Sprintf("%d visible", m.toolCount)
+	var readGrants []agent.ReadGrant
+	serverNames, failedServers, serverToolCounts := m.mcpRuntimeProjection()
 	if m.agent != nil {
-		toolCount = m.agent.ToolCount()
-		statuses := m.agent.MCPConnectionStatuses()
-		if len(statuses) > 0 {
-			serverNames = make([]string, 0, len(statuses))
-			failedServers = make([]FailedServer, 0, len(statuses))
-			for _, status := range statuses {
-				serverToolCounts[strings.ToLower(status.Name)] = status.ToolCount
-				if status.Connected {
-					serverNames = append(serverNames, status.Name)
-				} else {
-					failedServers = append(failedServers, FailedServer{Name: status.Name, Reason: status.LastError})
-				}
-			}
+		toolSummary = runtimeToolAvailabilityLabel(m.agent.ToolAvailability())
+		readGrants = m.agent.ReadGrants()
+	}
+	readScope := "workspace only"
+	if len(readGrants) > 0 {
+		grantLabel := "grants"
+		if len(readGrants) == 1 {
+			grantLabel = "grant"
 		}
+		readScope = fmt.Sprintf("%d temporary external %s", len(readGrants), grantLabel)
+	}
+	model := m.currentModelSurfaceLabel(false)
+	modelRuntime := routing
+	if model != "" {
+		modelRuntime += " · " + model
+	}
+	mode := m.modeConfigs[m.presentedMode()].Label
+	if m.goalRuntime != nil {
+		mode += " · Goal Runtime"
 	}
 	connections := projectEcosystemConnections(serverNames, failedServers)
 	if m.agent != nil {
@@ -85,12 +107,45 @@ func (m *Model) buildRuntimeStatusContent(width int) string {
 		}
 	}
 	lines = append(lines,
-		m.runtimeStatusRow("Model", routing+" · "+m.model, width),
+		m.runtimeStatusRow("Model", modelRuntime, width),
 		m.runtimeStatusRow("Profile", profile, width),
-		m.runtimeStatusRow("Mode", m.modeConfigs[m.mode].Label, width),
-		m.runtimeStatusRow("Tools", fmt.Sprintf("%d available", toolCount), width),
+		m.runtimeStatusRow("Mode", mode, width),
+		m.runtimeStatusRow("Approval", m.approvalPostureRuntimeLabel(), width),
+		m.runtimeStatusRow("Read scope", readScope, width),
+		m.runtimeStatusRow("Tools", toolSummary, width),
 		m.runtimeStatusRow("MCP", summarizeConnectionHealth(connections), width),
 	)
+	contextRouting := contextRoutingRuntimeLabel(agent.CapabilityRoutingHostUnavailable)
+	experts := "disabled in configuration"
+	if m.agent != nil {
+		contextRouting = contextRoutingRuntimeLabel(m.agent.CapabilityRoutingState())
+		if m.agent.ExpertConsultationAvailable() {
+			experts = "ready · read-only · adaptive"
+			if count := m.agent.ExpertConsultationProfileCount(); count > 0 {
+				profileLabel := "profiles"
+				if count == 1 {
+					profileLabel = "profile"
+				}
+				experts = fmt.Sprintf("ready · read-only · %d %s · adaptive", count, profileLabel)
+			}
+		} else if m.expertRuntimeSetupFailed {
+			experts = "setup failed · review experts config/profiles; restart"
+		}
+	}
+	lines = append(lines,
+		m.runtimeStatusRow("Context route", contextRouting, width),
+		m.runtimeStatusRow("Experts", experts, width),
+	)
+	if m.lastCapabilityRoute != nil {
+		route := sanitizeCapabilityRoute(*m.lastCapabilityRoute)
+		if capabilityRouteRenderable(route) {
+			value := capabilityRouteLabel(route)
+			if detail := capabilityRouteDetail(route); detail != "" {
+				value += " · " + detail
+			}
+			lines = append(lines, m.runtimeStatusRow("Last MCP route", value+" · advisory only", width))
+		}
+	}
 	if m.promptTokens > 0 && m.numCtx > 0 {
 		percent := min(100, max(0, m.promptTokens*100/m.numCtx))
 		lines = append(lines, m.runtimeStatusRow("Context",
@@ -100,12 +155,15 @@ func (m *Model) buildRuntimeStatusContent(width int) string {
 	}
 	if m.sessionTurnCount > 0 {
 		lines = append(lines, m.runtimeStatusRow("Session",
-			fmt.Sprintf("%d turns · %s output", m.sessionTurnCount, formatTokens(m.sessionEvalTotal)),
+			fmt.Sprintf("%d %s · %s output", m.sessionTurnCount, pluralizeNoun(m.sessionTurnCount, "turn", "turns"), formatTokens(m.sessionEvalTotal)),
 			width,
 		))
 	}
 	if m.iceEnabled {
-		lines = append(lines, m.runtimeStatusRow("ICE", fmt.Sprintf("enabled · %d conversations", m.iceConversations), width))
+		lines = append(lines, m.runtimeStatusRow("ICE",
+			fmt.Sprintf("enabled · %d %s", m.iceConversations, pluralizeNoun(m.iceConversations, "conversation", "conversations")),
+			width,
+		))
 	} else {
 		lines = append(lines, m.runtimeStatusRow("ICE", "disabled", width))
 	}
@@ -114,7 +172,7 @@ func (m *Model) buildRuntimeStatusContent(width int) string {
 		for _, connection := range connections {
 			value := connection.Health.String() + " · " + connection.Role
 			if count := serverToolCounts[strings.ToLower(connection.Name)]; connection.Health == capabilityConnected && count > 0 {
-				value += fmt.Sprintf(" · %d tools", count)
+				value += fmt.Sprintf(" · %d %s", count, pluralizeNoun(count, "tool", "tools"))
 			}
 			lines = append(lines, m.runtimeStatusRow(connection.Label, value, width))
 			if connection.Health == capabilityUnavailable {
@@ -131,10 +189,46 @@ func (m *Model) buildRuntimeStatusContent(width int) string {
 			wrapText("MCP is optional. Add a server in local-agent.yaml or the XDG config when you need ecosystem tools.", max(1, width)),
 		))
 	}
+	if len(readGrants) > 0 {
+		lines = append(lines, "", m.styles.OverlayAccent.Render("External read access"))
+		for _, grant := range readGrants {
+			label := "Directory"
+			if grant.Kind == agent.ReadGrantExactFile {
+				label = "Exact file"
+			}
+			// Runtime is scrollable, so show the complete escaped authority instead
+			// of independently compacting paths into potentially identical tails.
+			lines = append(lines, m.runtimeStatusRow(label, displayWorkspacePath(grant.Path), width))
+		}
+		lines = append(lines, m.styles.OverlayDim.Render(
+			wrapText("Temporary and not saved with sessions · /scope clear-read revokes all · writes remain workspace-only", max(1, width)),
+		))
+	}
 	return strings.Join(lines, "\n")
 }
 
+func runtimeToolAvailabilityLabel(availability agent.ToolAvailability) string {
+	label := fmt.Sprintf("%d ready · %d local · %d MCP", availability.Ready(), availability.Local, availability.MCPConnected)
+	if unavailable := availability.MCPRetained - availability.MCPConnected; unavailable > 0 {
+		label += fmt.Sprintf(" · %d MCP unavailable", unavailable)
+	}
+	return label
+}
+
+func contextRoutingRuntimeLabel(state agent.CapabilityRoutingHostState) string {
+	switch state {
+	case agent.CapabilityRoutingHostReady:
+		return "ready · MCPHub advisory"
+	case agent.CapabilityRoutingHostServerUnavailable:
+		return "not ready · MCPHub server unavailable"
+	default:
+		return "not exposed · policy/catalog"
+	}
+}
+
 func (m *Model) runtimeStatusRow(label, value string, width int) string {
+	label = sanitizeTerminalSingleLine(label)
+	value = sanitizeTerminalSingleLine(value)
 	valueWidth := runtimeStatusValueWidth(width)
 	labelWidth := max(1, width-valueWidth)
 	wrapped := strings.Split(wrapText(strings.TrimSpace(value), valueWidth), "\n")
@@ -154,13 +248,23 @@ func (m *Model) runtimeStatusRow(label, value string, width int) string {
 }
 
 func runtimeStatusValueWidth(width int) int {
-	const normalLabelWidth = 11
+	// The longest core labels (Context route and Last MCP route) remain whole at
+	// the normal 58-column overlay width. Narrow overlays still divide space
+	// proportionally and truncate only when the terminal makes that unavoidable.
+	const normalLabelWidth = 16
 	labelWidth := min(normalLabelWidth, max(1, width/3))
 	return max(1, width-labelWidth)
 }
 
 func displayWorkspacePath(path string) string {
-	path = strings.TrimSpace(path)
+	display := workspaceDisplayPath(path)
+	if display == "" {
+		return ""
+	}
+	return terminalSafePathLiteral(display)
+}
+
+func workspaceDisplayPath(path string) string {
 	if path == "" {
 		return ""
 	}
@@ -177,28 +281,49 @@ func displayWorkspacePath(path string) string {
 	return clean
 }
 
+// terminalSafePathLiteral keeps ordinary paths unchanged, but quotes any path
+// whose bytes or runes could alter terminal state or make an escaped identity
+// ambiguous. strconv's graphic form exposes controls instead of silently
+// deleting them, so the visual projection remains faithful to the authority.
+func terminalSafePathLiteral(path string) string {
+	quote := !utf8.ValidString(path) || strings.TrimSpace(path) != path
+	if !quote {
+		for _, character := range path {
+			if !unicode.IsGraphic(character) || character == '\\' || character == '"' {
+				quote = true
+				break
+			}
+		}
+	}
+	if quote {
+		return strconv.QuoteToGraphic(path)
+	}
+	return path
+}
+
 // compactWorkspacePath keeps the identifying end of a workspace visible at
 // narrow widths. A leading path fragment is less useful than the repository
 // name and its immediate parent.
 func compactWorkspacePath(path string, width int) string {
-	display := displayWorkspacePath(path)
-	if display == "" || lipgloss.Width(display) <= width {
-		return display
+	display := workspaceDisplayPath(path)
+	safeDisplay := terminalSafePathLiteral(display)
+	if display == "" || lipgloss.Width(safeDisplay) <= width {
+		return safeDisplay
 	}
 
 	base := filepath.Base(display)
 	parent := filepath.Base(filepath.Dir(display))
 	if parent != "." && parent != string(filepath.Separator) {
-		candidate := "…" + string(filepath.Separator) + filepath.Join(parent, base)
+		candidate := terminalSafePathLiteral("…" + string(filepath.Separator) + filepath.Join(parent, base))
 		if lipgloss.Width(candidate) <= width {
 			return candidate
 		}
 	}
-	candidate := "…" + string(filepath.Separator) + base
+	candidate := terminalSafePathLiteral("…" + string(filepath.Separator) + base)
 	if lipgloss.Width(candidate) <= width {
 		return candidate
 	}
-	return truncateDisplay(base, width)
+	return truncateDisplay(terminalSafePathLiteral(base), width)
 }
 
 func (m *Model) renderRuntimeStatus() string {

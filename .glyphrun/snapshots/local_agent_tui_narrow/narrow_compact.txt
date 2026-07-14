@@ -1,5 +1,5 @@
               LOCAL AGENT
-    Local-first · tool effects ask
+   Local-first · approval prompts on
       PLAN · qwen3.5:2b · offline
  enter send · ctrl+p settings · ? help
     / commands · @ files · # skills

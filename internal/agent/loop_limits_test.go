@@ -5,11 +5,14 @@ import (
 	"errors"
 	"io"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/abdul-hamid-achik/local-agent/internal/expertselector"
+	"github.com/abdul-hamid-achik/local-agent/internal/expertteam"
 	"github.com/abdul-hamid-achik/local-agent/internal/ice"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 	"github.com/abdul-hamid-achik/local-agent/internal/memory"
@@ -94,6 +97,41 @@ func (*rejectedLimitedClient) Embed(context.Context, string, []string) ([][]floa
 	return nil, llm.ErrNoModelSelected
 }
 
+type callbackThenNoModelClient struct{}
+
+func (*callbackThenNoModelClient) ChatStream(_ context.Context, _ llm.ChatOptions, emit func(llm.StreamChunk) error) error {
+	if err := emit(llm.StreamChunk{Reasoning: "provider entered the stream"}); err != nil {
+		return err
+	}
+	return llm.ErrNoModelSelected
+}
+
+func (*callbackThenNoModelClient) Ping() error   { return nil }
+func (*callbackThenNoModelClient) Model() string { return "callback-no-model-test" }
+func (*callbackThenNoModelClient) Embed(context.Context, string, []string) ([][]float32, error) {
+	return nil, nil
+}
+
+type overflowingParentReceiptClient struct {
+	calls atomic.Int64
+}
+
+func (client *overflowingParentReceiptClient) ChatStream(_ context.Context, _ llm.ChatOptions, emit func(llm.StreamChunk) error) error {
+	if client.calls.Add(1) == 1 {
+		return emit(llm.StreamChunk{
+			Done: true, EvalCount: 2,
+			ToolCalls: []llm.ToolCall{{ID: "list-before-overflow", Name: "ls", Arguments: map[string]any{}}},
+		})
+	}
+	return emit(llm.StreamChunk{Done: true, EvalCount: int(^uint(0) >> 1)})
+}
+
+func (*overflowingParentReceiptClient) Ping() error   { return nil }
+func (*overflowingParentReceiptClient) Model() string { return "overflowing-parent-receipt-test" }
+func (*overflowingParentReceiptClient) Embed(context.Context, string, []string) ([][]float32, error) {
+	return nil, nil
+}
+
 type boundedSideGenerationClient struct {
 	calls         atomic.Int64
 	uncappedCalls atomic.Int64
@@ -161,6 +199,74 @@ type joinedAutoMemoryClient struct {
 	mainCalls   atomic.Int64
 }
 
+type expertBudgetTurnClient struct {
+	calls  atomic.Int64
+	limits []int
+	repeat bool
+}
+
+type cancellationReceiptExpertConsultant struct {
+	started chan struct{}
+	calls   atomic.Int64
+}
+
+func (consultant *cancellationReceiptExpertConsultant) Consult(ctx context.Context, request expertteam.Request) (expertteam.Result, error) {
+	consultant.calls.Add(1)
+	close(consultant.started)
+	<-ctx.Done()
+	return expertteam.Result{
+		Strategy: request.Strategy,
+		Experts: []expertteam.ExpertReceipt{{
+			Name: "cancelled", Status: expertteam.ExpertFailed, ErrorCode: "cancelled",
+			ChargedEvalTokens: request.MaxTotalEvalTokens, UsageEstimated: true,
+		}},
+	}, ctx.Err()
+}
+
+type postTerminalTurnClient struct{}
+
+func (*postTerminalTurnClient) ChatStream(_ context.Context, _ llm.ChatOptions, emit func(llm.StreamChunk) error) error {
+	if err := emit(llm.StreamChunk{Done: true, EvalCount: 1, PromptEvalCount: 1}); err != nil {
+		return err
+	}
+	return emit(llm.StreamChunk{Text: "late uncharged parent text"})
+}
+
+func (*postTerminalTurnClient) Ping() error   { return nil }
+func (*postTerminalTurnClient) Model() string { return "post-terminal-test" }
+func (*postTerminalTurnClient) Embed(context.Context, string, []string) ([][]float32, error) {
+	return nil, nil
+}
+
+type textCountingOutput struct {
+	limitOutput
+	textChunks atomic.Int64
+}
+
+func (output *textCountingOutput) StreamText(string) { output.textChunks.Add(1) }
+
+func (c *expertBudgetTurnClient) ChatStream(_ context.Context, options llm.ChatOptions, emit func(llm.StreamChunk) error) error {
+	call := c.calls.Add(1)
+	c.limits = append(c.limits, options.MaxEvalTokens)
+	if call == 1 || (c.repeat && call == 2) {
+		return emit(llm.StreamChunk{
+			Done: true, EvalCount: 2,
+			ToolCalls: []llm.ToolCall{{
+				ID: "expert-consult", Name: "consult_experts", Arguments: map[string]any{
+					"strategy": "team", "objective": "Review the bounded integration.",
+				},
+			}},
+		})
+	}
+	return emit(llm.StreamChunk{Text: "synthesis", Done: true, EvalCount: options.MaxEvalTokens})
+}
+
+func (*expertBudgetTurnClient) Ping() error   { return nil }
+func (*expertBudgetTurnClient) Model() string { return "expert-budget-test" }
+func (*expertBudgetTurnClient) Embed(context.Context, string, []string) ([][]float32, error) {
+	return nil, nil
+}
+
 func (c *joinedAutoMemoryClient) ChatStream(ctx context.Context, options llm.ChatOptions, emit func(llm.StreamChunk) error) error {
 	if options.MaxEvalTokens == 0 {
 		close(c.autoStarted)
@@ -202,6 +308,186 @@ func TestRunTurnWithLimitsCapsProviderAndStopsBeforeToolDispatch(t *testing.T) {
 	}
 	if output.toolStarts.Load() != 0 {
 		t.Fatalf("hard token boundary dispatched %d tools", output.toolStarts.Load())
+	}
+}
+
+func TestRunTurnWithLimitsChargesExpertChildrenToParentBudget(t *testing.T) {
+	client := &expertBudgetTurnClient{}
+	consultant := &fakeExpertConsultant{result: expertteam.Result{
+		Strategy: expertselector.StrategyTeam,
+		Experts: []expertteam.ExpertReceipt{{
+			Name: "critic", Model: "qwen:2b", Status: expertteam.ExpertCompleted,
+			Report: "bounded finding", EvalTokens: 3, PromptEvalTokens: 4, ChargedEvalTokens: 3,
+		}},
+	}}
+	agent := New(client, nil, 4096)
+	agent.SetWorkDir(t.TempDir())
+	agent.SetExpertConsultant(consultant)
+	agent.AddUserMessage("Consult an expert, then synthesize within the goal budget.")
+	output := &limitOutput{}
+
+	if err := agent.RunTurnWithLimits(context.Background(), output, "turn_expert_budget", TurnLimits{MaxEvalTokens: 10}); err != nil {
+		t.Fatal(err)
+	}
+	if consultant.request.MaxTotalEvalTokens != 8 {
+		t.Fatalf("expert shared cap=%d, want remaining 8", consultant.request.MaxTotalEvalTokens)
+	}
+	if got := output.evalTokens.Load(); got != 10 {
+		t.Fatalf("parent charged usage=%d, want 2 parent + 3 expert + 5 synthesis", got)
+	}
+	if len(client.limits) != 2 || client.limits[0] != 10 || client.limits[1] != 5 {
+		t.Fatalf("parent request limits=%v", client.limits)
+	}
+}
+
+func TestRunTurnWithLimitsPreservesCancellationWhenExpertReservationExhaustsBudget(t *testing.T) {
+	client := &expertBudgetTurnClient{}
+	consultant := &cancellationReceiptExpertConsultant{started: make(chan struct{})}
+	agent := New(client, nil, 4096)
+	agent.SetWorkDir(t.TempDir())
+	agent.SetExpertConsultant(consultant)
+	agent.AddUserMessage("Cancel while the bounded expert consultation is running.")
+	output := &limitOutput{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		<-consultant.started
+		cancel()
+	}()
+
+	err := agent.RunTurnWithLimits(ctx, output, "turn_cancelled_expert_budget", TurnLimits{MaxEvalTokens: 10})
+	if !errors.Is(err, context.Canceled) || !errors.Is(err, ErrTurnEvalBudgetExhausted) {
+		t.Fatalf("error=%v, want joined cancellation and budget exhaustion", err)
+	}
+	if got := output.evalTokens.Load(); got != 10 {
+		t.Fatalf("cancelled parent charge=%d, want 2 parent + 8 expert reservation", got)
+	}
+	if calls := consultant.calls.Load(); calls != 1 {
+		t.Fatalf("expert dispatches=%d, want 1", calls)
+	}
+	if calls := client.calls.Load(); calls != 1 {
+		t.Fatalf("parent calls=%d, want no synthesis after cancellation", calls)
+	}
+}
+
+func TestRunTurnDispatchesAtMostOneExpertConsultation(t *testing.T) {
+	client := &expertBudgetTurnClient{repeat: true}
+	consultant := &fakeExpertConsultant{result: expertteam.Result{
+		Strategy: expertselector.StrategyTeam,
+		Experts: []expertteam.ExpertReceipt{{
+			Name: "critic", Model: "qwen:2b", Status: expertteam.ExpertCompleted, Report: "one consultation",
+			EvalTokens: 1, ChargedEvalTokens: 1,
+		}},
+	}}
+	agent := New(client, nil, 4096)
+	agent.SetWorkDir(t.TempDir())
+	agent.SetExpertConsultant(consultant)
+	agent.AddUserMessage("Try consulting twice, then answer.")
+
+	if err := agent.RunTurn(context.Background(), &limitOutput{}, "turn_one_expert_consult"); err != nil {
+		t.Fatal(err)
+	}
+	if consultant.calls != 1 {
+		t.Fatalf("expert runtime dispatches=%d, want exactly one", consultant.calls)
+	}
+}
+
+func TestRunTurnWithLimitsChargesReservationForInvalidExpertUsage(t *testing.T) {
+	client := &expertBudgetTurnClient{}
+	consultant := &fakeExpertConsultant{result: expertteam.Result{
+		Strategy: expertselector.StrategyTeam,
+		Experts: []expertteam.ExpertReceipt{{
+			Name: "invalid", Status: expertteam.ExpertFailed, ChargedEvalTokens: -1,
+		}},
+	}}
+	agent := New(client, nil, 4096)
+	agent.SetWorkDir(t.TempDir())
+	agent.SetExpertConsultant(consultant)
+	agent.AddUserMessage("Consult the invalid fake runtime.")
+	output := &limitOutput{}
+
+	err := agent.RunTurnWithLimits(context.Background(), output, "turn_invalid_expert_usage", TurnLimits{MaxEvalTokens: 10})
+	if !errors.Is(err, ErrTurnEvalBudgetExhausted) {
+		t.Fatalf("error=%v, want budget exhaustion", err)
+	}
+	if got := output.evalTokens.Load(); got != 10 {
+		t.Fatalf("conservative parent charge=%d, want full 10", got)
+	}
+	if calls := client.calls.Load(); calls != 1 {
+		t.Fatalf("parent calls=%d, want no synthesis after invalid usage", calls)
+	}
+}
+
+func TestRunTurnValidatesExpertUsageBeforeEmittingIt(t *testing.T) {
+	if strconv.IntSize < 64 {
+		t.Skip("64-bit overflow boundary")
+	}
+	client := &expertBudgetTurnClient{}
+	maxInt := int(^uint(0) >> 1)
+	consultant := &fakeExpertConsultant{result: expertteam.Result{
+		Strategy: expertselector.StrategyTeam,
+		Experts: []expertteam.ExpertReceipt{{
+			Name: "overflow", Status: expertteam.ExpertCompleted, Report: "invalid huge receipt",
+			EvalTokens: maxInt, ChargedEvalTokens: maxInt,
+		}},
+	}}
+	agent := New(client, nil, 4096)
+	agent.SetWorkDir(t.TempDir())
+	agent.SetExpertConsultant(consultant)
+	agent.AddUserMessage("Exercise an overflowing custom usage receipt.")
+	output := &limitOutput{}
+	maxEval := int64(^uint64(0) >> 1)
+
+	err := agent.RunTurnWithLimits(context.Background(), output, "turn_expert_usage_overflow", TurnLimits{MaxEvalTokens: maxEval})
+	if !errors.Is(err, ErrTurnEvalBudgetExhausted) {
+		t.Fatalf("error=%v, want budget exhaustion", err)
+	}
+	if got := output.evalTokens.Load(); got != maxEval {
+		t.Fatalf("validated conservative charge=%d, want %d", got, maxEval)
+	}
+	if calls := client.calls.Load(); calls != 1 {
+		t.Fatalf("parent calls=%d, want no synthesis after overflow", calls)
+	}
+}
+
+func TestRunTurnValidatesParentUsageBeforeEmittingIt(t *testing.T) {
+	if strconv.IntSize < 64 {
+		t.Skip("64-bit overflow boundary")
+	}
+	client := &overflowingParentReceiptClient{}
+	agent := New(client, nil, 4096)
+	agent.SetWorkDir(t.TempDir())
+	agent.AddUserMessage("Exercise an overflowing parent usage receipt after one tool iteration.")
+	output := &limitOutput{}
+	maxEval := int64(^uint64(0) >> 1)
+
+	err := agent.RunTurnWithLimits(context.Background(), output, "turn_parent_usage_overflow", TurnLimits{MaxEvalTokens: maxEval})
+	if !errors.Is(err, ErrTurnEvalBudgetExhausted) {
+		t.Fatalf("error=%v, want conservative budget exhaustion", err)
+	}
+	if got := output.evalTokens.Load(); got != maxEval {
+		t.Fatalf("validated conservative charge=%d, want %d", got, maxEval)
+	}
+	if calls := client.calls.Load(); calls != 2 {
+		t.Fatalf("parent calls=%d, want overflow on second request", calls)
+	}
+}
+
+func TestRunTurnRejectsChunksAfterTerminalReceipt(t *testing.T) {
+	agent := New(&postTerminalTurnClient{}, nil, 4096)
+	agent.SetWorkDir(t.TempDir())
+	agent.AddUserMessage("Reject text after the terminal receipt.")
+	output := &textCountingOutput{}
+
+	err := agent.RunTurnWithLimits(context.Background(), output, "turn_post_terminal", TurnLimits{MaxEvalTokens: 5})
+	if !errors.Is(err, ErrTurnEvalBudgetExhausted) {
+		t.Fatalf("error=%v, want conservative budget exhaustion", err)
+	}
+	if output.evalTokens.Load() != 5 {
+		t.Fatalf("post-terminal charge=%d, want reservation 5", output.evalTokens.Load())
+	}
+	if output.textChunks.Load() != 0 {
+		t.Fatalf("accepted %d post-terminal text chunks", output.textChunks.Load())
 	}
 }
 
@@ -271,6 +557,21 @@ func TestRunTurnWithLimitsDoesNotChargeKnownLocalPreflightRejection(t *testing.T
 	}
 	if output.toolStarts.Load() != 0 {
 		t.Fatalf("local preflight rejection dispatched %d tools", output.toolStarts.Load())
+	}
+}
+
+func TestRunTurnWithLimitsChargesReservationWhenNoModelErrorFollowsCallback(t *testing.T) {
+	agent := New(&callbackThenNoModelClient{}, nil, 4096)
+	agent.SetWorkDir(t.TempDir())
+	agent.AddUserMessage("Enter the provider stream before returning no model.")
+	output := &limitOutput{}
+
+	err := agent.RunTurnWithLimits(context.Background(), output, "turn_callback_no_model", TurnLimits{MaxEvalTokens: 7})
+	if !errors.Is(err, llm.ErrNoModelSelected) || !errors.Is(err, ErrTurnEvalBudgetExhausted) {
+		t.Fatalf("error=%v, want joined no-model and budget exhaustion", err)
+	}
+	if got := output.evalTokens.Load(); got != 7 {
+		t.Fatalf("callback no-model charge=%d, want full 7-token reservation", got)
 	}
 }
 

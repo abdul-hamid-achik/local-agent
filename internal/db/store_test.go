@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -364,6 +365,73 @@ func TestMigrationLedgerRejectsRewrittenMigration(t *testing.T) {
 	err := runMigrations(store.db)
 	if err == nil || !strings.Contains(err.Error(), "001_init.sql checksum mismatch") {
 		t.Fatalf("rewritten migration error = %v", err)
+	}
+}
+
+func TestOpenPathRetiresLegacyBroadToolAllows(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-permissions.db")
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.Exec(`
+		CREATE TABLE tool_permissions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			tool_name TEXT NOT NULL UNIQUE,
+			policy TEXT NOT NULL DEFAULT 'ask',
+			updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+		);
+		INSERT INTO tool_permissions (tool_name, policy) VALUES
+			('bash', 'allow'),
+			('server__mutate', 'allow'),
+			('remove', 'deny');
+	`); err != nil {
+		_ = legacy.Close()
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := OpenPath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	rows, err := store.db.Query(`SELECT tool_name, policy FROM tool_permissions ORDER BY tool_name`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(map[string]string)
+	for rows.Next() {
+		var toolName, policy string
+		if err := rows.Scan(&toolName, &policy); err != nil {
+			_ = rows.Close()
+			t.Fatal(err)
+		}
+		got[toolName] = policy
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"bash":           "ask",
+		"server__mutate": "ask",
+		"remove":         "deny",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("migrated permissions = %#v, want %#v", got, want)
+	}
+	var applied int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE name = '008_retire_broad_tool_allows.sql'`).Scan(&applied); err != nil {
+		t.Fatal(err)
+	}
+	if applied != 1 {
+		t.Fatalf("retirement migration ledger rows = %d, want 1", applied)
 	}
 }
 

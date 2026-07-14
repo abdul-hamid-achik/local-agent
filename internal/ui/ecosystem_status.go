@@ -47,11 +47,12 @@ var ecosystemDescriptors = map[string]ecosystemDescriptor{
 	"cairntrace": {label: "Cairntrace", role: "browser verification", order: 7},
 	"cairn":      {label: "Cairntrace", role: "browser verification", order: 7},
 	"vidtrace":   {label: "Vidtrace", role: "video evidence", order: 8},
-	"filecheap":  {label: "file.cheap", role: "artifact storage", order: 9},
-	"fcheap":     {label: "file.cheap", role: "artifact storage", order: 9},
-	"tinyvault":  {label: "TinyVault", role: "secret boundary", order: 10},
-	"tvault":     {label: "TinyVault", role: "secret boundary", order: 10},
-	"veclite":    {label: "VecLite", role: "vector storage", order: 11},
+	"hitspec":    {label: "Hitspec", role: "bounded web and HTTP", order: 9},
+	"filecheap":  {label: "file.cheap", role: "artifact storage", order: 10},
+	"fcheap":     {label: "file.cheap", role: "artifact storage", order: 10},
+	"tinyvault":  {label: "TinyVault", role: "secret boundary", order: 11},
+	"tvault":     {label: "TinyVault", role: "secret boundary", order: 11},
+	"veclite":    {label: "VecLite", role: "vector storage", order: 12},
 }
 
 // projectEcosystemConnections reconciles the live registry names with the
@@ -163,17 +164,23 @@ func summarizeConnectionHealth(connections []ecosystemConnection) string {
 	case unavailable > 0:
 		return fmt.Sprintf("%s · 0 connected · %d unavailable", capabilityUnavailable, unavailable)
 	default:
-		return capabilityUnavailable.String() + " · 0 servers configured"
+		// Optional MCP not being configured is an absence of transport, not a
+		// failed transport or domain outcome.
+		return "not configured · 0 servers"
 	}
 }
 
 func (h capabilityHealth) String() string { return string(h) }
 
 func pluralizeServer(count int) string {
+	return pluralizeNoun(count, "server", "servers")
+}
+
+func pluralizeNoun(count int, singular, plural string) string {
 	if count == 1 {
-		return "server"
+		return singular
 	}
-	return "servers"
+	return plural
 }
 
 func compactConnectionFailure(reason string) string {

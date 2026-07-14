@@ -13,6 +13,7 @@ require (
 	github.com/google/jsonschema-go v0.4.2
 	github.com/lucasb-eyer/go-colorful v1.4.0
 	github.com/modelcontextprotocol/go-sdk v1.4.1
+	golang.org/x/net v0.55.0
 	golang.org/x/sys v0.45.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.46.1
@@ -55,7 +56,6 @@ require (
 	github.com/yuin/goldmark v1.7.17 // indirect
 	github.com/yuin/goldmark-emoji v1.0.5 // indirect
 	golang.org/x/exp v0.0.0-20251023183803-a4bb9ffd2546 // indirect
-	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/oauth2 v0.34.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/term v0.43.0 // indirect

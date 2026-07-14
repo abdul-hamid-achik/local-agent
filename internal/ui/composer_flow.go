@@ -20,7 +20,7 @@ type queuedFollowUp struct {
 // because their completion may replace the active conversation authority.
 func (m *Model) composerEditable() bool {
 	if m.initializing || m.shuttingDown || m.overlay != OverlayNone ||
-		m.pendingApproval != nil || m.pendingPaste != nil {
+		m.pendingApproval != nil || m.pendingPaste != nil || m.readScopePrompt != nil {
 		return false
 	}
 	if m.state == StateIdle {

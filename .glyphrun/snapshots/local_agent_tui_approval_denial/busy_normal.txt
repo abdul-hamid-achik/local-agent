@@ -23,5 +23,5 @@
 
 
 ─────────────────────────────────────────────────────────────────────────────────────────
-   … Running · esc cancel · enter queue
+   … Running · Routing unavailable · implementation · esc cancel · enter queue
 ▏❯ Write a follow-up · enter queue

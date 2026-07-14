@@ -73,6 +73,22 @@ model:
   auto_select: true
   embed_model: "nomic-embed-text"
 
+# Read-only application-level expert consultation. Team, Swarm, and MoE use
+# ordinary tool-free Ollama calls; they are not a model-internal/token-level MoE.
+# Zero concurrency and fan-out values mean auto. Explicit values are caps only:
+# they can reduce work but never force the machine above the measured CPU/RAM
+# plan. The runtime serializes work when the accepted model set fits, or reduces
+# deterministic fan-out when the complete local weight set does not fit.
+experts:
+  enabled: true
+  max_concurrent_inference: 0
+  max_concurrent_distinct_models: 0
+  max_team_experts: 0
+  max_swarm_workers: 0
+  max_moe_experts: 0
+  max_eval_tokens: 768
+  timeout: 90s
+
 # ICE (Infinite Context Engine) is opt-in. An empty store_path uses the managed
 # ~/.config/local-agent/conversations.json default. A non-empty relative value
 # is rooted under ~/.config/local-agent/ice/<workspace-hash>; absolute paths
@@ -84,7 +100,11 @@ ice:
   embed_model: "nomic-embed-text"
   # store_path: "conversations.json"
 
-# MCP tool servers
+# MCP tool servers. Prefer placing executable STDIO entries in user-wide
+# configuration. A repository-local copy of this file must be trusted with the
+# exact LOCAL_AGENT_TRUST_REPO_MCP digest printed at startup before any STDIO
+# process is spawned; changing the resolved executable or its content, command,
+# args, env, or repository path changes that digest.
 servers:
   # Recommended: one lazy MCPHub gateway. It keeps specialist schemas out of
   # small-model context until needed and lets Cortex orchestrate the stack.

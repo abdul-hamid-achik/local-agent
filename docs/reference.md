@@ -13,22 +13,30 @@ Local Agent has three operator surfaces: the interactive TUI, human-readable hea
 | Command | Purpose |
 |---|---|
 | `local-agent` | Open the TUI in the current workspace |
-| `local-agent -p "prompt"` | Run one human-readable NORMAL prompt |
-| `local-agent --mode plan -p "prompt"` | Run one read-only PLAN prompt |
-| `local-agent --mode auto -p "prompt"` | Run one proactive AUTO prompt under the configured approval policy |
+| `local-agent -p "prompt"`, `local-agent --prompt "prompt"` | Run one human-readable NORMAL prompt |
+| `local-agent --plan --prompt "prompt"` | Run one read-only PLAN prompt; equivalent to `--mode plan` |
+| `local-agent --auto --prompt "prompt"` | Run one proactive AUTO prompt; equivalent to `--mode auto` and does not skip approvals |
+| `local-agent --mode <normal\|plan\|auto> --prompt "prompt"` | Select headless authority explicitly |
 | `local-agent --model <name>` | Select and pin the initial Ollama model |
 | `local-agent --agent <name>` | Select the initial agent profile |
 | `local-agent --resume <id\|latest>` | Open the TUI and restore an exact or newest current-workspace session |
 | `local-agent --qwen-router` | Enable the experimental Qwen-specific router |
-| `local-agent --yolo -p "prompt"` | Bypass approvals for a trusted disposable workflow |
+| `local-agent --skip-approvals` | Skip approval prompts while preserving explicit denies and host/tool boundaries |
+| `local-agent --yolo` | Deprecated compatibility alias for `--skip-approvals` |
 | `local-agent init [--force]` | Create a project `AGENTS.md` |
 | `local-agent logs` | List recent structured logs |
 | `local-agent logs -f` | Follow the latest log |
 | `local-agent --version` | Print the build version |
 
-`-p` is a human-readable convenience surface, not a stable JSON event protocol. Without `--yolo`, risky and MCP calls fail closed because headless mode has no approval UI.
+`-p` and `--prompt` are exact aliases for a human-readable convenience surface,
+not a stable JSON event protocol. `--auto` and `--plan` require a non-empty
+prompt, are mutually exclusive, and reject a conflicting explicit `--mode`.
+AUTO does not imply `--skip-approvals`. An explicitly empty or whitespace-only
+prompt exits with status 2 before configuration, network, or provider startup.
+In headless mode, requests that need an approval fail closed by default because
+there is no approval UI.
 
-`--resume` is interactive-only and cannot be combined with `-p`. Session IDs
+`--resume` is interactive-only and cannot be combined with `-p` or `--prompt`. Session IDs
 must be positive integers; `latest` selects the most recently updated session
 whose canonical workspace matches the startup workspace. The restore runs after
 TUI initialization and does not dispatch provider work by itself.
@@ -68,9 +76,9 @@ Inspection is read-only. Applying evidence requires the exact revision and event
 | `/skill`, `/skill list` | List discovered skills and their activation state |
 | `/skill activate <name>`, `/skill deactivate <name>` | Add or remove one skill from active prompt context |
 | `/load <path>`, `/unload` | Add or remove one bounded Markdown context file |
-| `/scope list` | List process-local external read-only roots |
+| `/scope list` | List process-local external exact-file and directory read grants |
 | `/scope add-read <directory>` | Grant read-only access to one directory outside the writable workspace |
-| `/scope remove-read <directory>`, `/scope clear-read` | Revoke one or every external read-only root |
+| `/scope remove-read <path>`, `/scope clear-read` | Revoke one or every external read-only grant |
 | `/servers` | Show connected MCP servers and tool count |
 | `/ice` | Show optional ICE status |
 | `/sessions`, `/resume` | Open the saved-session picker; neither command accepts an ID argument |
@@ -138,4 +146,9 @@ Use Go duration syntax such as `30m` or `1h30m`. Duration-shaped but invalid inp
 | `ctrl+n`, `ctrl+l` | New conversation or clear the view |
 | `ctrl+c` | Quit |
 
-The supported minimum terminal is 30 columns by 12 rows. Set `LOCAL_AGENT_REDUCED_MOTION=1` to replace active animations with static state indicators.
+The supported minimum terminal is 30 columns by 12 rows. Compact status rows
+retain skipped-approval, unavailable-MCP, and Cloud/Remote boundaries instead
+of truncating the rightmost state. At that minimum, file approvals preserve an
+identifying target tail and show explicit paging plus exact-argument controls.
+Set `LOCAL_AGENT_REDUCED_MOTION=1` to replace active animations with static
+state indicators.

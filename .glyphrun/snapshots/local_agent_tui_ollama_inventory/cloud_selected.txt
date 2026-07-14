@@ -8,8 +8,8 @@
 
 
                                        LOCAL AGENT
-                      Local-first · Ollama · tool effects ask first
-                                     kimi-code:cloud
+                     Local-first · Ollama · approval prompts enabled
+                        CLOUD · remote prompts · kimi-code:cloud
                    enter send · / commands · ctrl+p settings · ? help
                    shift+tab mode · ctrl+o models · @ files · # skills
 

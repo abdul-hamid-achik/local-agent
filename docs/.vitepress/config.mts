@@ -47,6 +47,7 @@ const structuredData = JSON.stringify({
         'Live Ollama model discovery and routing',
         'Approval-gated repository and shell tools by default',
         'Model Context Protocol integrations',
+        'Machine-adaptive read-only expert teams',
         'Durable local sessions and reviewed goals',
       ],
     },
@@ -163,8 +164,8 @@ export default defineConfig({
         items: [
           { text: 'Ollama Models', link: '/ollama-models' },
           { text: 'Modes and Goals', link: '/modes-and-goals' },
+          { text: 'Expert Teams', link: '/experts' },
           { text: 'Sessions and Memory', link: '/sessions-and-memory' },
-          { text: 'Legacy Data Recovery', link: '/legacy-data-migration' },
           { text: 'Configuration', link: '/configuration' },
           { text: 'Command Reference', link: '/reference' },
         ],
@@ -193,8 +194,8 @@ export default defineConfig({
         text: 'Work',
         items: [
           { text: 'Modes and Goals', link: '/modes-and-goals' },
+          { text: 'Expert Teams', link: '/experts' },
           { text: 'Sessions and Memory', link: '/sessions-and-memory' },
-          { text: 'Legacy Data Recovery', link: '/legacy-data-migration' },
           { text: 'Configuration', link: '/configuration' },
           { text: 'Command Reference', link: '/reference' },
         ],

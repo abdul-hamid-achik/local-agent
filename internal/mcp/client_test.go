@@ -80,10 +80,10 @@ func TestMarshalBoundedMCPValueIsAtomic(t *testing.T) {
 	if got := marshalBoundedMCPValue(map[string]any{"ok": true}); string(got) != `{"ok":true}` {
 		t.Fatalf("bounded value = %s", got)
 	}
-	if got := marshalBoundedMCPValue(map[string]any{"payload": strings.Repeat("x", maxRenderedMCPResultBytes)}); got != nil {
-		t.Fatalf("oversized structured value was retained: %d bytes", len(got))
+	if got := marshalBoundedMCPValue(map[string]any{"payload": strings.Repeat("x", maxRenderedMCPResultBytes)}); string(got) != "null" {
+		t.Fatalf("oversized structured value = %q, want rejection marker", got)
 	}
-	if got := marshalBoundedMCPValue(func() {}); got != nil {
-		t.Fatalf("unencodable structured value was retained: %s", got)
+	if got := marshalBoundedMCPValue(func() {}); string(got) != "null" {
+		t.Fatalf("unencodable structured value = %q, want rejection marker", got)
 	}
 }

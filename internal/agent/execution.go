@@ -376,7 +376,7 @@ func (a *Agent) executionKindForCall(call llm.ToolCall) (executionpkg.Kind, exec
 	}
 	if a.isToolsTool(name) {
 		switch name {
-		case "grep", "read", "glob", "ls", "find", "diff", "exists", "load_skill":
+		case "grep", "read", "glob", "ls", "find", "diff", "exists", "load_skill", "consult_experts":
 			return executionpkg.KindBuiltin, executionpkg.EffectReadOnly
 		case "bash":
 			return executionpkg.KindBuiltin, executionpkg.EffectUnknown
@@ -556,6 +556,8 @@ func (a *Agent) preflightToolCall(kind executionpkg.Kind, tc llm.ToolCall) error
 				return errors.New("name must be one exact catalog name")
 			}
 			return nil
+		case "consult_experts":
+			return a.preflightConsultExperts(tc.Arguments)
 		case "diff":
 			if err := preflightRequiredString(tc.Arguments, "path", false); err != nil {
 				return err
@@ -638,7 +640,7 @@ func (a *Agent) decideToolAuthorization(ctx context.Context, tc llm.ToolCall, be
 
 	switch a.permChecker.ToCheckResult(tc.Name) {
 	case permissionPkg.CheckAllow:
-		if !a.permChecker.IsYolo() && a.approvalCallback == nil {
+		if !a.permChecker.SkipsApprovals() && a.approvalCallback == nil {
 			return toolAuthorization{
 				hostRefused: true,
 				approval:    executionpkg.ApprovalHostRefused,
@@ -648,7 +650,7 @@ func (a *Agent) decideToolAuthorization(ctx context.Context, tc llm.ToolCall, be
 			}, nil
 		}
 		approval := executionpkg.ApprovalPolicy
-		if a.permChecker.IsYolo() {
+		if a.permChecker.SkipsApprovals() {
 			approval = executionpkg.ApprovalYolo
 		}
 		return toolAuthorization{allowed: true, approval: approval}, nil

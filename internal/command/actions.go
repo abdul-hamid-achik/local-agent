@@ -255,11 +255,11 @@ func registerScopeActions(r *Registry) {
 		},
 		{
 			ID: ScopeActionRemoveRead, Command: "scope", Argument: "remove-read", Aliases: []string{"remove", "unmount"},
-			Title: "Remove read root", Description: "Revoke one external read-only directory grant", Action: ActionRemoveReadRoot,
+			Title: "Remove read grant", Description: "Revoke one external directory or exact-file read grant", Action: ActionRemoveReadRoot,
 		},
 		{
 			ID: ScopeActionClearRead, Command: "scope", Argument: "clear-read", Aliases: []string{"clear"},
-			Title: "Clear read roots", Description: "Revoke every external read-only directory grant", Action: ActionClearReadRoots,
+			Title: "Clear read grants", Description: "Revoke every temporary external read-only grant", Action: ActionClearReadRoots,
 		},
 	} {
 		r.RegisterAction(spec)
