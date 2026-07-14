@@ -101,6 +101,7 @@ const (
 	DigestMCPHubCursorOutOfRange ReceiptDigestKind = "mcphub_cursor_out_of_range"
 	DigestMCPHubError            ReceiptDigestKind = "mcphub_error"
 	DigestCortexFailure          ReceiptDigestKind = "cortex_failure"
+	DigestCortexReceipt          ReceiptDigestKind = "cortex_receipt"
 )
 
 // ReceiptDigest is a bounded allowlist of MCPHub management metadata. It must
@@ -390,11 +391,16 @@ func ProjectReceipt(projection ToolProjection, receipt RawReceipt) ToolProjectio
 			projection.Artifact = nil
 		}
 	case "cortex":
-		// Cortex's shared envelope is authoritative when it explicitly rejects
-		// a request. Successful coordination is still not verification evidence,
-		// so optimistic envelopes remain unknown until an operation-specific
-		// success parser exists.
-		if taskID, failed := projectCortexFailureReceipt(receipt); failed {
+		// Cortex's shared envelope is authoritative for the catalogued
+		// lifecycle operations: ok=true is coordination success (never
+		// verification evidence) and ok=false is a typed rejection. Everything
+		// else remains unknown until an operation-specific parser exists.
+		if domain, digest, ok := projectCortexReceipt(projection.Operation, receipt); ok {
+			projection.Domain = domain
+			projection.DomainTyped = true
+			projection.Evidence = EvidenceNone
+			projection.Digest = digest
+		} else if taskID, failed := projectCortexFailureReceipt(receipt); failed {
 			projection.Domain = DomainFailed
 			projection.DomainTyped = true
 			projection.Evidence = EvidenceNone
@@ -603,6 +609,15 @@ func (p ToolProjection) SummaryText() string {
 			return "Cortex rejected the request for " + digest.Target
 		}
 		return "Cortex rejected the request"
+	case DigestCortexReceipt:
+		parts := []string{"Cortex accepted the request"}
+		if digest.Target != "" {
+			parts[0] = "Cortex accepted the request for " + digest.Target
+		}
+		if len(digest.Items) == 1 {
+			parts = append(parts, "phase "+digest.Items[0])
+		}
+		return strings.Join(parts, " · ")
 	default:
 		return ""
 	}
@@ -787,7 +802,8 @@ func validReceiptDigestKind(value ReceiptDigestKind) bool {
 	case "", DigestMCPHubServers, DigestMCPHubSearch, DigestMCPHubDescribe,
 		DigestMCPHubResolve, DigestMCPHubStats, DigestMCPHubStored,
 		DigestMCPHubPage, DigestMCPHubUnavailable,
-		DigestMCPHubCursorOutOfRange, DigestMCPHubError, DigestCortexFailure:
+		DigestMCPHubCursorOutOfRange, DigestMCPHubError, DigestCortexFailure,
+		DigestCortexReceipt:
 		return true
 	default:
 		return false

@@ -382,10 +382,59 @@ func TestCortexFailureReceiptPersistsNoArbitraryErrorText(t *testing.T) {
 	assertProjectionOmits(t, failed, secret)
 
 	succeeded := ProjectReceipt(ProjectToolCall("mcphub__cortex__cortex_status", nil), RawReceipt{
-		Structured: json.RawMessage(`{"ok":true,"taskId":"task-123","summary":"` + secret + `"}`),
+		Structured: json.RawMessage(`{"ok":true,"taskId":"task-123","phase":"investigate","summary":"` + secret + `"}`),
 	})
-	if succeeded.Domain != DomainUnknown || succeeded.Evidence != EvidenceNone || succeeded.Digest != nil {
-		t.Fatalf("optimistic Cortex receipt was promoted: %#v", succeeded)
+	if succeeded.Domain != DomainSucceeded || !succeeded.DomainTyped || succeeded.Evidence != EvidenceNone ||
+		succeeded.Digest == nil || succeeded.Digest.Kind != DigestCortexReceipt || succeeded.Digest.Target != "task-123" {
+		t.Fatalf("typed Cortex success projection = %#v", succeeded)
+	}
+	assertProjectionOmits(t, succeeded, secret)
+}
+
+func TestCortexEnvelopeReceiptClassifiesCataloguedOperations(t *testing.T) {
+	// A successful lifecycle envelope is coordination success, never evidence.
+	opened := ProjectReceipt(ProjectToolCall("mcphub__cortex__cortex_open_task", nil), RawReceipt{
+		Structured: json.RawMessage(`{"ok":true,"taskId":"task-9","phase":"orient","facts":[],"rawAvailable":true}`),
+	})
+	if opened.Domain != DomainSucceeded || !opened.DomainTyped || opened.Evidence != EvidenceNone {
+		t.Fatalf("lifecycle success projection = %#v", opened)
+	}
+	if opened.Digest == nil || opened.Digest.Kind != DigestCortexReceipt ||
+		opened.Digest.Target != "task-9" || len(opened.Digest.Items) != 1 || opened.Digest.Items[0] != "orient" {
+		t.Fatalf("lifecycle success digest = %#v", opened.Digest)
+	}
+
+	// cortex_status embeds the envelope inside its StatusReport shape.
+	status := ProjectReceipt(ProjectToolCall("cortex__cortex_status", nil), RawReceipt{
+		Structured: json.RawMessage(`{"ok":true,"taskId":"task-9","phase":"verify","revision":7,"mode":"guided","risk":"low"}`),
+	})
+	if status.Domain != DomainSucceeded || !status.DomainTyped {
+		t.Fatalf("status success projection = %#v", status)
+	}
+
+	// ok:true without a task identity is structurally incomplete and stays unknown.
+	missingTask := ProjectReceipt(ProjectToolCall("mcphub__cortex__cortex_plan", nil), RawReceipt{
+		Structured: json.RawMessage(`{"ok":true,"summary":"planned"}`),
+	})
+	if missingTask.Domain != DomainUnknown || missingTask.DomainTyped {
+		t.Fatalf("incomplete envelope was promoted: %#v", missingTask)
+	}
+
+	// Non-envelope read projections (custom shapes) stay unknown.
+	sessions := ProjectReceipt(ProjectToolCall("mcphub__cortex__cortex_sessions", nil), RawReceipt{
+		Structured: json.RawMessage(`[{"sessionId":"sess-1"}]`),
+	})
+	if sessions.Domain != DomainUnknown || sessions.DomainTyped {
+		t.Fatalf("custom read shape was promoted: %#v", sessions)
+	}
+
+	// A server-declared error still refuses success even with an ok envelope.
+	contradiction := ProjectReceipt(ProjectToolCall("mcphub__cortex__cortex_verify", nil), RawReceipt{
+		Structured: json.RawMessage(`{"ok":true,"taskId":"task-9","phase":"verify"}`),
+		ToolError:  true,
+	})
+	if contradiction.Domain != DomainFailed || contradiction.DomainTyped {
+		t.Fatalf("isError ok-envelope contradiction = %#v", contradiction)
 	}
 }
 
