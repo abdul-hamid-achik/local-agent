@@ -82,13 +82,19 @@ jobs:
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: '1.26.x'
-          # This toolchain only installs Glyphrun. The application setup below
-          # owns the module cache so two Go versions do not restore over the
-          # same populated GOPATH in one job.
+          # cache: false only disables this action's restore/save hooks. The
+          # install step below separately isolates every writable Go path.
           cache: false
 
       - name: Install pinned Glyphrun
-        run: go install github.com/abdul-hamid-achik/glyphrun/cmd/glyph@v0.14.0
+        env:
+          GOBIN: ${{ runner.temp }}/glyphrun/bin
+          GOPATH: ${{ runner.temp }}/glyphrun/gopath
+          GOMODCACHE: ${{ runner.temp }}/glyphrun/gomodcache
+          GOCACHE: ${{ runner.temp }}/glyphrun/build-cache
+        run: |
+          go install github.com/abdul-hamid-achik/glyphrun/cmd/glyph@v0.14.0
+          echo "${GOBIN}" >> "${GITHUB_PATH}"
 
       # Glyphrun currently needs Go 1.26 to build, but the application contract
       # is Go 1.25. Switch back before the specs compile local-agent so the PTY
