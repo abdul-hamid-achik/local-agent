@@ -64,6 +64,9 @@ jobs:
       - name: Install site dependencies
         run: npm ci --no-audit --no-fund
 
+      - name: Audit site dependencies
+        run: npm audit --audit-level=moderate
+
       - name: Build site
         run: npm run site:build
 
