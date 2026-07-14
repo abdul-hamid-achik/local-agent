@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -12,13 +13,17 @@ import (
 )
 
 type fakeExecutionRecoveryStore struct {
-	inspection db.StandaloneExecutionReconciliationInspection
-	inspectErr error
-	inspected  int
-	acquired   int
-	pending    []execution.State
-	pendingErr error
-	listed     int
+	inspection  db.StandaloneExecutionReconciliationInspection
+	inspections map[string]db.StandaloneExecutionReconciliationInspection
+	inspectErr  error
+	inspected   int
+	acquired    int
+	lease       *db.ExecutionSessionLease
+	pending     []execution.State
+	pendingErr  error
+	listed      int
+	receipts    map[string]db.StandaloneExecutionReconciliationReceipt
+	resolved    []db.ResolveStandaloneExecutionReconciliationRequest
 }
 
 func (s *fakeExecutionRecoveryStore) ListStandaloneExecutionReconciliationPending(context.Context, int64, string, int) ([]execution.State, error) {
@@ -26,17 +31,27 @@ func (s *fakeExecutionRecoveryStore) ListStandaloneExecutionReconciliationPendin
 	return s.pending, s.pendingErr
 }
 
-func (s *fakeExecutionRecoveryStore) InspectStandaloneExecutionReconciliation(context.Context, int64, string, string) (db.StandaloneExecutionReconciliationInspection, error) {
+func (s *fakeExecutionRecoveryStore) InspectStandaloneExecutionReconciliation(_ context.Context, _ int64, _ string, executionID string) (db.StandaloneExecutionReconciliationInspection, error) {
 	s.inspected++
+	if inspection, ok := s.inspections[executionID]; ok {
+		return inspection, s.inspectErr
+	}
 	return s.inspection, s.inspectErr
 }
 
 func (s *fakeExecutionRecoveryStore) AcquireExecutionSessionLease(context.Context, int64, string) (*db.ExecutionSessionLease, error) {
 	s.acquired++
-	return nil, errors.New("not expected")
+	if s.lease == nil {
+		return nil, errors.New("not expected")
+	}
+	return s.lease, nil
 }
 
-func (s *fakeExecutionRecoveryStore) ResolveStandaloneExecutionReconciliation(context.Context, *db.ExecutionSessionLease, db.ResolveStandaloneExecutionReconciliationRequest) (db.StandaloneExecutionReconciliationReceipt, error) {
+func (s *fakeExecutionRecoveryStore) ResolveStandaloneExecutionReconciliation(_ context.Context, _ *db.ExecutionSessionLease, request db.ResolveStandaloneExecutionReconciliationRequest) (db.StandaloneExecutionReconciliationReceipt, error) {
+	s.resolved = append(s.resolved, request)
+	if receipt, ok := s.receipts[request.ExecutionID]; ok {
+		return receipt, nil
+	}
 	return db.StandaloneExecutionReconciliationReceipt{}, errors.New("not expected")
 }
 
@@ -89,7 +104,7 @@ func TestExecutionRecoverAllListsPendingReadOnly(t *testing.T) {
 		t.Fatalf("listing acquired a lease or skipped the query: %#v", store)
 	}
 	out := stdout.String()
-	for _, want := range []string{"exec_one", "exec_two", "2 execution(s) pending reconciliation", "--all --apply"} {
+	for _, want := range []string{"exec_one", "exec_two", "2 execution(s) pending reconciliation", "Reviewed-set digest", "--all --apply --set-digest"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("listing missing %q: %s", want, out)
 		}
@@ -103,6 +118,125 @@ func TestExecutionRecoverAllListsPendingReadOnly(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "No executions are pending reconciliation") {
 		t.Fatalf("empty listing output = %q", stdout.String())
+	}
+}
+
+func TestExecutionRecoverAllListingFailsClosedOnOverflow(t *testing.T) {
+	store := &fakeExecutionRecoveryStore{pendingErr: fmt.Errorf("%w: more than 100 effective hazards", db.ErrExecutionHazardOverflow)}
+	var stdout, stderr bytes.Buffer
+	code := handleExecutionRecover(store, "/workspace/repo", []string{"17", "--all"}, &stdout, &stderr)
+	if code != 1 || stdout.Len() != 0 {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	for _, want := range []string{"--all aborted", "exceeds the safe limit of 100", "recover executions individually"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("overflow error missing %q: %s", want, stderr.String())
+		}
+	}
+	if store.listed != 1 || store.acquired != 0 || store.inspected != 0 || len(store.resolved) != 0 {
+		t.Fatalf("overflow listing touched unexpected recovery operations: %#v", store)
+	}
+}
+
+func TestExecutionRecoverAllApplyProcessesEntireBoundedBacklog(t *testing.T) {
+	states := []execution.State{
+		{Identity: execution.Identity{ExecutionID: "exec_one"}, Latest: execution.Event{ID: 29, Type: execution.EventOutcomeUnknown}},
+		{Identity: execution.Identity{ExecutionID: "exec_two"}, Latest: execution.Event{ID: 41, Type: execution.EventOutcomeUnknown}},
+	}
+	store := &fakeExecutionRecoveryStore{
+		lease:   &db.ExecutionSessionLease{},
+		pending: states,
+		inspections: map[string]db.StandaloneExecutionReconciliationInspection{
+			"exec_one": {SessionID: 17, SessionRevision: 4, ExecutionID: "exec_one", EventID: 29},
+			"exec_two": {SessionID: 17, SessionRevision: 4, ExecutionID: "exec_two", EventID: 41},
+		},
+		receipts: map[string]db.StandaloneExecutionReconciliationReceipt{
+			"exec_one": {SessionID: 17, SessionRevision: 4, ExecutionID: "exec_one", EventID: 29, ResolutionID: "resolution_one", Inserted: true},
+			"exec_two": {SessionID: 17, SessionRevision: 4, ExecutionID: "exec_two", EventID: 41, ResolutionID: "resolution_two", Inserted: true},
+		},
+	}
+	var stdout, stderr bytes.Buffer
+	setDigest := executionRecoverySetDigest(17, "/workspace/repo", states)
+	code := handleExecutionRecover(store, "/workspace/repo", []string{
+		"17", "--all", "--apply", "--set-digest", setDigest, "--observation", "effect_not_applied",
+		"--source", "verification_check", "--reference", "ref", "--summary", "sum",
+		"--observed-at", "2026-07-14T10:00:00Z",
+	}, &stdout, &stderr)
+	if code != 0 || stderr.Len() != 0 {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	for _, want := range []string{"Reconciled execution exec_one", "Reconciled execution exec_two", "Reconciled 2 execution(s)."} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("batch output missing %q: %s", want, stdout.String())
+		}
+	}
+	if store.acquired != 1 || store.listed != 1 || store.inspected != 2 || len(store.resolved) != 2 {
+		t.Fatalf("bounded batch did not process every listed execution: %#v", store)
+	}
+}
+
+func TestExecutionRecoverAllApplyFailsClosedBeforeMutationOnOverflow(t *testing.T) {
+	store := &fakeExecutionRecoveryStore{
+		lease:      &db.ExecutionSessionLease{},
+		pendingErr: fmt.Errorf("%w: more than 100 effective hazards", db.ErrExecutionHazardOverflow),
+	}
+	var stdout, stderr bytes.Buffer
+	code := handleExecutionRecover(store, "/workspace/repo", []string{
+		"17", "--all", "--apply", "--set-digest", strings.Repeat("a", 64), "--observation", "effect_not_applied",
+		"--source", "verification_check", "--reference", "ref", "--summary", "sum",
+		"--observed-at", "2026-07-14T10:00:00Z",
+	}, &stdout, &stderr)
+	if code != 1 || stdout.Len() != 0 {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	for _, want := range []string{"--all aborted", "exceeds the safe limit of 100", "No evidence was recorded"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("overflow error missing %q: %s", want, stderr.String())
+		}
+	}
+	if store.acquired != 1 || store.listed != 1 || store.inspected != 0 || len(store.resolved) != 0 {
+		t.Fatalf("overflow apply performed mutation work: %#v", store)
+	}
+}
+
+func TestExecutionRecoverAllApplyRejectsChangedPendingSetBeforeEvidence(t *testing.T) {
+	reviewed := []execution.State{{
+		Identity: execution.Identity{ExecutionID: "exec_reviewed"},
+		Latest:   execution.Event{ID: 29, Type: execution.EventOutcomeUnknown},
+	}}
+	current := []execution.State{{
+		Identity: execution.Identity{ExecutionID: "exec_new"},
+		Latest:   execution.Event{ID: 41, Type: execution.EventOutcomeUnknown},
+	}}
+	store := &fakeExecutionRecoveryStore{lease: &db.ExecutionSessionLease{}, pending: current}
+	var stdout, stderr bytes.Buffer
+	code := handleExecutionRecover(store, "/workspace/repo", []string{
+		"17", "--all", "--apply", "--set-digest", executionRecoverySetDigest(17, "/workspace/repo", reviewed),
+		"--observation", "effect_not_applied", "--source", "verification_check",
+		"--reference", "ref", "--summary", "sum", "--observed-at", "2026-07-14T10:00:00Z",
+	}, &stdout, &stderr)
+	if code != 1 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "pending reconciliation set changed") ||
+		!strings.Contains(stderr.String(), "No evidence was recorded") {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if store.acquired != 1 || store.listed != 1 || store.inspected != 0 || len(store.resolved) != 0 {
+		t.Fatalf("changed set performed evidence work: %#v", store)
+	}
+}
+
+func TestExecutionRecoverAllApplyRequiresReviewedSetDigest(t *testing.T) {
+	store := &fakeExecutionRecoveryStore{}
+	var stdout, stderr bytes.Buffer
+	code := handleExecutionRecover(store, "/workspace/repo", []string{
+		"17", "--all", "--apply", "--observation", "effect_not_applied",
+		"--source", "verification_check", "--reference", "ref", "--summary", "sum",
+		"--observed-at", "2026-07-14T10:00:00Z",
+	}, &stdout, &stderr)
+	if code != 2 || !strings.Contains(stderr.String(), "--set-digest from a prior inspection") {
+		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
+	}
+	if store.acquired != 0 || store.listed != 0 {
+		t.Fatalf("missing digest touched the store: %#v", store)
 	}
 }
 

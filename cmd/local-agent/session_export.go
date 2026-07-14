@@ -17,30 +17,36 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/controlplane"
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
 	"github.com/abdul-hamid-achik/local-agent/internal/execution"
+	"github.com/abdul-hamid-achik/local-agent/internal/safeio"
 )
 
 const (
-	sessionListLimit   = 100
-	sessionExportLimit = 1000
+	sessionListLimit    = 100
+	sessionExportLimit  = 1000
+	sessionExportSchema = "local-agent.session-export.v2"
 )
 
 type sessionExportStore interface {
+	AcquireExecutionSessionLease(context.Context, int64, string) (*db.ExecutionSessionLease, error)
 	ListSessions(context.Context, db.ListSessionsParams) ([]db.Session, error)
 	GetSession(context.Context, int64) (db.Session, error)
-	GetSessionState(context.Context, int64) (string, error)
+	GetSessionStateForExport(context.Context, int64, int) (string, error)
 	ListSessionExecutionEvents(context.Context, int64, string, int) ([]execution.Event, error)
+	SessionExecutionEventExists(context.Context, int64, string, int64) (bool, error)
 	ListExecutionRecoveryHazards(context.Context, int64, string, int64, int) ([]execution.State, error)
 	ListControlStates(context.Context, controlplane.Query) ([]controlplane.State, error)
-	GetSessionTokenStats(context.Context, int64) ([]db.TokenStat, error)
-	GetSessionFileChanges(context.Context, int64) ([]db.FileChange, error)
-	ListCheckpoints(context.Context, int64) ([]db.Checkpoint, error)
+	ListRecentSessionTokenStats(context.Context, int64, int) ([]db.TokenStat, error)
+	ListRecentSessionFileChanges(context.Context, int64, int) ([]db.FileChange, error)
+	ListRecentSessionCheckpoints(context.Context, int64, int) ([]db.Checkpoint, error)
 }
 
 // sessionExportBundle is the machine-readable audit projection of one session.
-// Every field is already persisted; export copies nothing new into the world.
+// Source records are persisted; authority and bound fields are derived
+// read-only metadata. Export does not change durable state.
 type sessionExportBundle struct {
 	Schema          string                          `json:"schema"`
 	ExportedBy      string                          `json:"exported_by"`
+	GoalOwned       bool                            `json:"goal_owned"`
 	Session         db.Session                      `json:"session"`
 	StateJSON       json.RawMessage                 `json:"state_json,omitempty"`
 	ExecutionEvents []sessionExportExecutionEvent   `json:"execution_events"`
@@ -49,7 +55,19 @@ type sessionExportBundle struct {
 	FileChanges     []db.FileChange                 `json:"file_changes"`
 	Checkpoints     []sessionExportCheckpoint       `json:"checkpoints"`
 	OpenIssues      []sessionExportOpenIssue        `json:"open_issues"`
-	Truncations     map[string]sessionExportBounded `json:"truncations,omitempty"`
+	Bounds          map[string]sessionExportBounded `json:"bounds"`
+}
+
+type sessionExportMetadata struct {
+	Schema              string                          `json:"schema"`
+	ExportedBy          string                          `json:"exported_by"`
+	Projection          string                          `json:"projection"`
+	CollectedUnderLease bool                            `json:"collected_under_session_lease"`
+	GoalOwned           bool                            `json:"goal_owned"`
+	StateJSONIncluded   bool                            `json:"state_json_included"`
+	ReviewBeforeSharing bool                            `json:"review_before_sharing"`
+	Disclosure          []string                        `json:"disclosure"`
+	Bounds              map[string]sessionExportBounded `json:"bounds"`
 }
 
 type sessionExportExecutionEvent struct {
@@ -100,8 +118,18 @@ type sessionExportOpenIssue struct {
 }
 
 type sessionExportBounded struct {
-	Returned int `json:"returned"`
-	Limit    int `json:"limit"`
+	Returned                      int    `json:"returned"`
+	Limit                         int    `json:"limit"`
+	Selection                     string `json:"selection"`
+	BoundReached                  bool   `json:"bound_reached"`
+	AdditionalRecordsMayBeOmitted bool   `json:"additional_records_may_be_omitted"`
+}
+
+var sessionExportDisclosure = []string{
+	"This is a bounded audit projection, not a complete session transcript or full timeline.",
+	"Sections are separate bounded database reads collected while the cooperative exclusive session execution lease is held; this is not a single database transaction snapshot.",
+	"The JSONL includes raw durable session state (which may contain transcript content), execution receipt/detail text, and workspace or file paths.",
+	"The export layer does not perform general-purpose secret or path redaction; review every file before sharing it.",
 }
 
 func handleSessionList(store sessionExportStore, workspace string, args []string, stdout, stderr io.Writer) int {
@@ -196,8 +224,8 @@ func handleSessionExport(store sessionExportStore, workspace string, args []stri
 	if directory == "" {
 		directory = fmt.Sprintf("local-agent-audit-%d", sessionID)
 	}
-	if err := os.MkdirAll(directory, 0o700); err != nil {
-		executionFprintf(stderr, "session export: create output directory: %v\n", err)
+	if err := prepareSessionExportDirectory(directory); err != nil {
+		executionFprintf(stderr, "session export: prepare output directory: %v\n", err)
 		return 1
 	}
 	written := make([]string, 0, 2)
@@ -223,12 +251,38 @@ func handleSessionExport(store sessionExportStore, workspace string, args []stri
 		executionFprintf(stdout, "  %s\n", path)
 	}
 	if len(bundle.OpenIssues) > 0 {
-		executionFprintln(stdout, "This session has unresolved executions; see the Open Issues section of the summary.")
+		if wantMD {
+			executionFprintln(stdout, "This session has execution recovery issues; see the Open Issues section of the summary.")
+		} else {
+			executionFprintln(stdout, "This session has execution recovery issues; see the open_issue records in the JSONL export.")
+		}
+	}
+	executionFprintln(stdout, "Review before sharing: exports may contain raw session content, receipt/detail text, and paths.")
+	if sessionExportMayBeTruncated(bundle) {
+		switch {
+		case wantJSONL && wantMD:
+			executionFprintln(stdout, "One or more export bounds were reached; additional records may be omitted. See JSONL metadata and Markdown Export bounds.")
+		case wantJSONL:
+			executionFprintln(stdout, "One or more export bounds were reached; additional records may be omitted. See the JSONL metadata record.")
+		default:
+			executionFprintln(stdout, "One or more export bounds were reached; additional records may be omitted. See the Markdown Export bounds section.")
+		}
 	}
 	return 0
 }
 
-func collectSessionExport(ctx context.Context, store sessionExportStore, workspace string, sessionID int64) (sessionExportBundle, error) {
+func collectSessionExport(ctx context.Context, store sessionExportStore, workspace string, sessionID int64) (bundle sessionExportBundle, err error) {
+	lease, err := store.AcquireExecutionSessionLease(ctx, sessionID, workspace)
+	if err != nil {
+		return sessionExportBundle{}, fmt.Errorf("acquire exact session lease: %w", err)
+	}
+	defer func() {
+		if closeErr := lease.Close(); closeErr != nil {
+			bundle = sessionExportBundle{}
+			err = errors.Join(err, fmt.Errorf("release exact session lease: %w", closeErr))
+		}
+	}()
+
 	session, err := store.GetSession(ctx, sessionID)
 	if err != nil {
 		return sessionExportBundle{}, fmt.Errorf("read session %d: %w", sessionID, err)
@@ -236,26 +290,64 @@ func collectSessionExport(ctx context.Context, store sessionExportStore, workspa
 	if session.WorkspaceID != workspace {
 		return sessionExportBundle{}, fmt.Errorf("session %d belongs to a different workspace", sessionID)
 	}
-	bundle := sessionExportBundle{
-		Schema: "local-agent.session-export.v1", ExportedBy: "local-agent session export",
-		Session: session, Truncations: map[string]sessionExportBounded{},
+	bundle = sessionExportBundle{
+		Schema: sessionExportSchema, ExportedBy: "local-agent session export",
+		Session: session, Bounds: map[string]sessionExportBounded{},
 	}
+	executionCursor := int64(0)
+	stateAvailable := false
 
-	if raw, stateErr := store.GetSessionState(ctx, sessionID); stateErr == nil {
-		if json.Valid([]byte(raw)) {
-			bundle.StateJSON = json.RawMessage(raw)
+	if raw, stateErr := store.GetSessionStateForExport(ctx, sessionID, db.MaxSessionExportStateBytes); stateErr == nil {
+		state, inspectErr := db.InspectSessionRecoveryState(sessionID, raw)
+		if inspectErr != nil {
+			return sessionExportBundle{}, fmt.Errorf("read session %d state: %w", sessionID, inspectErr)
 		}
+		bundle.StateJSON = json.RawMessage(raw)
+		bundle.Bounds["state_json_bytes"] = newFailClosedSessionExportBound(
+			len(raw), db.MaxSessionExportStateBytes, "complete durable state bytes; oversize state fails the export",
+		)
+		bundle.GoalOwned = state.GoalOwned
+		executionCursor = state.ExecutionCursor
+		stateAvailable = true
 	} else if !errors.Is(stateErr, db.ErrSessionStateNotFound) {
 		return sessionExportBundle{}, fmt.Errorf("read session %d state: %w", sessionID, stateErr)
+	} else {
+		bundle.Bounds["state_json_bytes"] = newFailClosedSessionExportBound(
+			0, db.MaxSessionExportStateBytes, "no durable state record",
+		)
 	}
 
 	events, err := store.ListSessionExecutionEvents(ctx, sessionID, workspace, sessionExportLimit)
 	if err != nil {
 		return sessionExportBundle{}, fmt.Errorf("list execution events: %w", err)
 	}
-	if len(events) == sessionExportLimit {
-		bundle.Truncations["execution_events"] = sessionExportBounded{Returned: len(events), Limit: sessionExportLimit}
+	latestExecutionEventID := int64(0)
+	for _, event := range events {
+		if event.ID > latestExecutionEventID {
+			latestExecutionEventID = event.ID
+		}
 	}
+	if executionCursor > latestExecutionEventID {
+		return sessionExportBundle{}, fmt.Errorf(
+			"session execution cursor %d exceeds latest durable execution event %d",
+			executionCursor, latestExecutionEventID,
+		)
+	}
+	if executionCursor > 0 {
+		exists, existsErr := store.SessionExecutionEventExists(ctx, sessionID, workspace, executionCursor)
+		if existsErr != nil {
+			return sessionExportBundle{}, fmt.Errorf("validate session execution cursor %d: %w", executionCursor, existsErr)
+		}
+		if !exists {
+			return sessionExportBundle{}, fmt.Errorf(
+				"session execution cursor %d does not identify a durable execution event in this session/workspace",
+				executionCursor,
+			)
+		}
+	}
+	bundle.Bounds["execution_events"] = newSessionExportBound(
+		len(events), sessionExportLimit, "most recent events, returned in chronological order",
+	)
 	for _, event := range events {
 		bundle.ExecutionEvents = append(bundle.ExecutionEvents, sessionExportExecutionEvent{
 			EventID: event.ID, ExecutionID: event.Identity.ExecutionID, TurnID: event.Identity.TurnID,
@@ -273,6 +365,9 @@ func collectSessionExport(ctx context.Context, store sessionExportStore, workspa
 	if err != nil {
 		return sessionExportBundle{}, fmt.Errorf("list control states: %w", err)
 	}
+	bundle.Bounds["control_states"] = newSessionExportBound(
+		len(states), controlplane.MaxListLimit, "newest records first",
+	)
 	for _, state := range states {
 		view := sessionExportControlState{
 			ItemID: state.Item.ItemID, Kind: string(state.Item.Kind),
@@ -287,18 +382,33 @@ func collectSessionExport(ctx context.Context, store sessionExportStore, workspa
 		bundle.ControlStates = append(bundle.ControlStates, view)
 	}
 
-	if stats, statsErr := store.GetSessionTokenStats(ctx, sessionID); statsErr == nil {
-		bundle.TokenStats = stats
+	stats, err := store.ListRecentSessionTokenStats(ctx, sessionID, db.MaxSessionExportReadLimit)
+	if err != nil {
+		return sessionExportBundle{}, fmt.Errorf("list token stats: %w", err)
 	}
-	if changes, changesErr := store.GetSessionFileChanges(ctx, sessionID); changesErr == nil {
-		bundle.FileChanges = changes
+	bundle.TokenStats = stats
+	bundle.Bounds["token_stats"] = newSessionExportBound(
+		len(stats), db.MaxSessionExportReadLimit, "most recent records, returned in chronological order",
+	)
+	changes, err := store.ListRecentSessionFileChanges(ctx, sessionID, db.MaxSessionExportReadLimit)
+	if err != nil {
+		return sessionExportBundle{}, fmt.Errorf("list file changes: %w", err)
 	}
-	if checkpoints, cpErr := store.ListCheckpoints(ctx, sessionID); cpErr == nil {
-		for _, cp := range checkpoints {
-			bundle.Checkpoints = append(bundle.Checkpoints, sessionExportCheckpoint{
-				ID: cp.ID, Label: cp.Label, Kind: cp.Kind, MsgCount: cp.MsgCount, CreatedAt: cp.CreatedAt,
-			})
-		}
+	bundle.FileChanges = changes
+	bundle.Bounds["file_changes"] = newSessionExportBound(
+		len(changes), db.MaxSessionExportReadLimit, "most recent records, returned in chronological order",
+	)
+	checkpoints, err := store.ListRecentSessionCheckpoints(ctx, sessionID, db.MaxSessionExportReadLimit)
+	if err != nil {
+		return sessionExportBundle{}, fmt.Errorf("list checkpoints: %w", err)
+	}
+	bundle.Bounds["checkpoints"] = newSessionExportBound(
+		len(checkpoints), db.MaxSessionExportReadLimit, "most recent records, newest first",
+	)
+	for _, cp := range checkpoints {
+		bundle.Checkpoints = append(bundle.Checkpoints, sessionExportCheckpoint{
+			ID: cp.ID, Label: cp.Label, Kind: cp.Kind, MsgCount: cp.MsgCount, CreatedAt: cp.CreatedAt,
+		})
 	}
 
 	// Open issues come from the SAME authoritative hazard projection the agent
@@ -307,13 +417,18 @@ func collectSessionExport(ctx context.Context, store sessionExportStore, workspa
 	// the reconciliation overlay (so only validly-reconciled executions are
 	// cleared), and is a bounded latest-state-per-execution view (immune to the
 	// timeline's event truncation).
-	cursor := decodeExportExecutionCursor(bundle.StateJSON)
-	hazards, err := store.ListExecutionRecoveryHazards(ctx, sessionID, workspace, cursor, maxSessionExportHazards)
+	hazards, err := store.ListExecutionRecoveryHazards(ctx, sessionID, workspace, executionCursor, maxSessionExportHazards)
 	if err != nil {
 		return sessionExportBundle{}, fmt.Errorf("project execution recovery hazards: %w", err)
 	}
+	if !stateAvailable && len(hazards) > 0 {
+		return sessionExportBundle{}, errors.New("durable session state is missing, so recovery authority and exact remedies cannot be established")
+	}
+	bundle.Bounds["open_issues"] = newFailClosedSessionExportBound(
+		len(hazards), maxSessionExportHazards, "authoritative effective recovery hazards; overflow fails the export",
+	)
 	for _, hazard := range hazards {
-		status, remedy := openIssueStatus(hazard.Latest.Type, hazard.Identity.EffectClass, sessionID)
+		status, remedy := openIssueStatus(hazard.Latest.Type, hazard.Identity.EffectClass, sessionID, bundle.GoalOwned)
 		if status == "" {
 			continue
 		}
@@ -329,10 +444,25 @@ func collectSessionExport(ctx context.Context, store sessionExportStore, workspa
 const maxSessionExportHazards = 100
 
 // openIssueStatus classifies a recovery hazard the same way the agent runtime's
-// executionRuntime does, and names the exact remedy. Unknown/started hazards
-// need reconciliation evidence; an answered terminal newer than the snapshot
-// needs projection repair, not reconciliation.
-func openIssueStatus(eventType execution.EventType, effect execution.EffectClass, sessionID int64) (status, remedy string) {
+// executionRuntime does, and names the correct recovery authority. Goal-owned
+// hazards always route first to the universally available read-only goal
+// summary. For ordinary
+// sessions, unknown/started hazards need reconciliation evidence while an
+// answered terminal newer than the snapshot needs projection repair.
+func openIssueStatus(eventType execution.EventType, effect execution.EffectClass, sessionID int64, goalOwned bool) (status, remedy string) {
+	if goalOwned {
+		remedy = fmt.Sprintf("local-agent goal show %d", sessionID)
+		switch {
+		case eventType == execution.EventOutcomeUnknown:
+			return "GOAL-OWNED — outcome unknown; inspect the owning goal before recovery", remedy
+		case eventType == execution.EventStarted && effect != execution.EffectReadOnly:
+			return "GOAL-OWNED — dispatch has no terminal receipt; inspect the owning goal before recovery", remedy
+		case (eventType == execution.EventCompleted || eventType == execution.EventFailed) && effect != execution.EffectReadOnly:
+			return "GOAL-OWNED — answered effect is newer than saved goal state; inspect the owning goal before recovery", remedy
+		default:
+			return "", ""
+		}
+	}
 	switch {
 	case eventType == execution.EventOutcomeUnknown:
 		return "UNRESOLVED — outcome unknown, needs reconciliation",
@@ -348,76 +478,95 @@ func openIssueStatus(eventType execution.EventType, effect execution.EffectClass
 	}
 }
 
-// decodeExportExecutionCursor reads the persisted session snapshot cursor. A
-// missing or malformed cursor falls back to 0, which over-reports post-cursor
-// answered effects rather than hiding a wedge — the safe direction for an audit.
-func decodeExportExecutionCursor(stateJSON json.RawMessage) int64 {
-	if len(stateJSON) == 0 {
-		return 0
+func newSessionExportBound(returned, limit int, selection string) sessionExportBounded {
+	reached := returned >= limit
+	return sessionExportBounded{
+		Returned: returned, Limit: limit, Selection: selection,
+		BoundReached: reached, AdditionalRecordsMayBeOmitted: reached,
 	}
-	var envelope struct {
-		ExecutionCursor int64 `json:"execution_cursor"`
+}
+
+func newFailClosedSessionExportBound(returned, limit int, selection string) sessionExportBounded {
+	bound := newSessionExportBound(returned, limit, selection)
+	bound.AdditionalRecordsMayBeOmitted = false
+	return bound
+}
+
+func sessionExportMayBeTruncated(bundle sessionExportBundle) bool {
+	for _, bound := range bundle.Bounds {
+		if bound.AdditionalRecordsMayBeOmitted {
+			return true
+		}
 	}
-	if err := json.Unmarshal(stateJSON, &envelope); err != nil || envelope.ExecutionCursor < 0 {
-		return 0
-	}
-	return envelope.ExecutionCursor
+	return false
 }
 
 func writeSessionExportJSONL(path string, bundle sessionExportBundle) error {
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
-	if err != nil {
-		return fmt.Errorf("open JSONL export: %w", err)
-	}
-	defer func() { _ = file.Close() }()
-	encoder := json.NewEncoder(file)
-	emit := func(kind string, value any) error {
-		return encoder.Encode(map[string]any{"kind": kind, "value": value})
-	}
-	if err := emit("session", bundle.Session); err != nil {
-		return err
-	}
-	if len(bundle.StateJSON) > 0 {
-		if err := emit("state_json", bundle.StateJSON); err != nil {
+	return writePrivateSessionExport(path, "JSONL export", func(writer io.Writer) error {
+		encoder := json.NewEncoder(writer)
+		emit := func(kind string, value any) error {
+			return encoder.Encode(map[string]any{"kind": kind, "value": value})
+		}
+		metadata := sessionExportMetadata{
+			Schema: bundle.Schema, ExportedBy: bundle.ExportedBy,
+			Projection: "bounded_audit_projection", CollectedUnderLease: true, GoalOwned: bundle.GoalOwned,
+			StateJSONIncluded:   len(bundle.StateJSON) > 0,
+			ReviewBeforeSharing: true, Disclosure: append([]string(nil), sessionExportDisclosure...),
+			Bounds: bundle.Bounds,
+		}
+		if err := emit("metadata", metadata); err != nil {
 			return err
 		}
-	}
-	for _, event := range bundle.ExecutionEvents {
-		if err := emit("execution_event", event); err != nil {
+		if err := emit("session", bundle.Session); err != nil {
 			return err
 		}
-	}
-	for _, state := range bundle.ControlStates {
-		if err := emit("control_state", state); err != nil {
-			return err
+		if len(bundle.StateJSON) > 0 {
+			if err := emit("state_json", bundle.StateJSON); err != nil {
+				return err
+			}
 		}
-	}
-	for _, stat := range bundle.TokenStats {
-		if err := emit("token_stat", stat); err != nil {
-			return err
+		for _, event := range bundle.ExecutionEvents {
+			if err := emit("execution_event", event); err != nil {
+				return err
+			}
 		}
-	}
-	for _, change := range bundle.FileChanges {
-		if err := emit("file_change", change); err != nil {
-			return err
+		for _, state := range bundle.ControlStates {
+			if err := emit("control_state", state); err != nil {
+				return err
+			}
 		}
-	}
-	for _, checkpoint := range bundle.Checkpoints {
-		if err := emit("checkpoint", checkpoint); err != nil {
-			return err
+		for _, stat := range bundle.TokenStats {
+			if err := emit("token_stat", stat); err != nil {
+				return err
+			}
 		}
-	}
-	for _, issue := range bundle.OpenIssues {
-		if err := emit("open_issue", issue); err != nil {
-			return err
+		for _, change := range bundle.FileChanges {
+			if err := emit("file_change", change); err != nil {
+				return err
+			}
 		}
-	}
-	return nil
+		for _, checkpoint := range bundle.Checkpoints {
+			if err := emit("checkpoint", checkpoint); err != nil {
+				return err
+			}
+		}
+		for _, issue := range bundle.OpenIssues {
+			if err := emit("open_issue", issue); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func writeSessionExportMarkdown(path string, bundle sessionExportBundle) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Session %d audit\n\n", bundle.Session.ID)
+	b.WriteString("> **Review before sharing.** This is a bounded audit projection, not a complete transcript or full timeline. ")
+	b.WriteString("Sections are separate bounded reads collected while the session execution lease is held, not one database transaction snapshot. ")
+	b.WriteString("This summary can include session metadata and recorded paths. A JSONL export additionally includes raw durable session state ")
+	b.WriteString("(which may contain transcript content), execution receipt/detail text, and paths. ")
+	b.WriteString("The export layer does not perform general-purpose secret or path redaction.\n\n")
 	fmt.Fprintf(&b, "- **Title:** %s\n", markdownSafe(bundle.Session.Title))
 	fmt.Fprintf(&b, "- **Workspace:** %s\n", markdownSafe(relativizeHome(bundle.Session.WorkspaceID)))
 	fmt.Fprintf(&b, "- **Model:** %s\n", markdownSafe(bundle.Session.Model))
@@ -429,10 +578,13 @@ func writeSessionExportMarkdown(path string, bundle sessionExportBundle) error {
 
 	b.WriteString("## Open issues\n\n")
 	if len(bundle.OpenIssues) == 0 {
-		b.WriteString("None — every execution is projected and cleanly terminal (no unresolved, ")
-		b.WriteString("started-without-receipt, or unprojected-answered hazards block continuation).\n\n")
+		b.WriteString("None — the authoritative recovery projection found no unresolved outcome, ")
+		b.WriteString("effectful dispatch without a receipt, or unprojected answered effect that blocks continuation.\n\n")
 	} else {
-		b.WriteString("These executions block continuation. Status and the exact remedy per row:\n\n")
+		b.WriteString("These executions block continuation. Status and the safe next step per row:\n\n")
+		if bundle.GoalOwned {
+			b.WriteString("For goal-owned rows, start with the read-only `goal show` command below. If a durable reconciliation group already exists, `local-agent goal recover SESSION_ID` inspects it; otherwise reopen the owning session so its recovery coordinator can establish the group.\n\n")
+		}
 		b.WriteString("| Execution | Tool | Latest event | Status | Remedy |\n|---|---|---|---|---|\n")
 		for _, issue := range bundle.OpenIssues {
 			fmt.Fprintf(&b, "| `%s` | %s | %s | %s | `%s` |\n",
@@ -442,7 +594,10 @@ func writeSessionExportMarkdown(path string, bundle sessionExportBundle) error {
 		b.WriteString("\n")
 	}
 
-	b.WriteString("## Execution timeline\n\n")
+	b.WriteString("## Execution events (bounded)\n\n")
+	if bound, ok := bundle.Bounds["execution_events"]; ok && bound.AdditionalRecordsMayBeOmitted {
+		fmt.Fprintf(&b, "The %d-event export bound was reached; earlier events may be omitted.\n\n", bound.Limit)
+	}
 	if len(bundle.ExecutionEvents) == 0 {
 		b.WriteString("No execution events recorded.\n\n")
 	} else {
@@ -475,18 +630,99 @@ func writeSessionExportMarkdown(path string, bundle sessionExportBundle) error {
 		b.WriteString("\n")
 	}
 
-	if len(bundle.Truncations) > 0 {
-		b.WriteString("## Truncations\n\nSome sections hit their export bound and may be incomplete:\n\n")
-		for section, bound := range bundle.Truncations {
-			fmt.Fprintf(&b, "- **%s:** returned %d (limit %d)\n", section, bound.Returned, bound.Limit)
+	if len(bundle.Bounds) > 0 {
+		b.WriteString("## Export bounds\n\n")
+		b.WriteString("| Section | Returned | Limit | Selection | Truncation |\n|---|---:|---:|---|---|\n")
+		for _, section := range []string{
+			"state_json_bytes", "execution_events", "control_states", "token_stats", "file_changes", "checkpoints", "open_issues",
+		} {
+			bound, ok := bundle.Bounds[section]
+			if !ok {
+				continue
+			}
+			truncation := "bound not reached"
+			switch {
+			case bound.AdditionalRecordsMayBeOmitted:
+				truncation = "bound reached; additional records may be omitted"
+			case bound.BoundReached:
+				truncation = "bound reached; complete because overflow fails the export"
+			}
+			fmt.Fprintf(&b, "| %s | %d | %d | %s | %s |\n",
+				markdownSafe(section), bound.Returned, bound.Limit,
+				markdownSafe(bound.Selection), markdownSafe(truncation))
 		}
 		b.WriteString("\n")
 	}
 
-	b.WriteString("---\nThe full machine-readable timeline (including state_json and receipt hashes) is in the JSONL file next to this summary.\n")
-	if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
-		return fmt.Errorf("write markdown summary: %w", err)
+	b.WriteString("---\nUse `--format jsonl` or `--format both` to generate the bounded machine-readable audit projection. Review every export before sharing.\n")
+	return writePrivateSessionExport(path, "markdown summary", func(writer io.Writer) error {
+		_, err := io.WriteString(writer, b.String())
+		return err
+	})
+}
+
+func prepareSessionExportDirectory(path string) error {
+	created := false
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			return err
+		}
+		created = true
+		info, err = os.Lstat(path)
 	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%w: %s", safeio.ErrSymlink, path)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("output path is not a directory: %s", path)
+	}
+	if created {
+		if err := os.Chmod(path, 0o700); err != nil {
+			return fmt.Errorf("secure output directory: %w", err)
+		}
+	}
+	return nil
+}
+
+func writePrivateSessionExport(path, label string, write func(io.Writer) error) (err error) {
+	if err := safeio.ValidatePublishPath(path); err != nil {
+		return fmt.Errorf("validate %s path: %w", label, err)
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create private %s: %w", label, err)
+	}
+	temporaryPath := temporary.Name()
+	published := false
+	defer func() {
+		if !published {
+			_ = os.Remove(temporaryPath)
+		}
+	}()
+	if err := temporary.Chmod(0o600); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("secure private %s: %w", label, err)
+	}
+	if err := write(temporary); err != nil {
+		return errors.Join(fmt.Errorf("write %s: %w", label, err), temporary.Close())
+	}
+	if err := temporary.Sync(); err != nil {
+		return errors.Join(fmt.Errorf("sync %s: %w", label, err), temporary.Close())
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close %s: %w", label, err)
+	}
+	if err := safeio.ValidatePublishPath(path); err != nil {
+		return fmt.Errorf("revalidate %s path: %w", label, err)
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		return fmt.Errorf("publish %s: %w", label, err)
+	}
+	published = true
 	return nil
 }
 
@@ -527,8 +763,8 @@ func reorderFlagsBeforePositionals(args []string, valueFlags map[string]bool) ([
 	return append(flags, positional...), nil
 }
 
-// relativizeHome rewrites the caller's home directory prefix to ~ so an export
-// shared outward does not leak the operator's absolute home path.
+// relativizeHome shortens the caller's exact home-directory prefix for
+// Markdown display. It is a readability aid, not general path redaction.
 func relativizeHome(path string) string {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
@@ -543,9 +779,14 @@ func relativizeHome(path string) string {
 	return path
 }
 
-// markdownSafe strips characters that would break a table cell or inject
-// formatting from a value that may contain server-authored text.
+// markdownSafe escapes characters that would break a table cell or inject
+// Markdown/HTML formatting from a value that may contain server-authored text.
 func markdownSafe(value string) string {
-	replacer := strings.NewReplacer("|", "\\|", "\n", " ", "\r", " ", "`", "'")
+	replacer := strings.NewReplacer(
+		"\\", "\\\\", "|", "\\|", "\n", " ", "\r", " ", "`", "'",
+		"[", "\\[", "]", "\\]", "(", "\\(", ")", "\\)", "!", "\\!",
+		"<", "\\<", ">", "\\>", "&", "\\&", "*", "\\*",
+		"#", "\\#", "~", "\\~", "://", "\\://",
+	)
 	return replacer.Replace(terminalSafeGoalText(value))
 }

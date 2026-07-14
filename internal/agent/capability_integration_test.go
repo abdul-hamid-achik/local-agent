@@ -375,6 +375,16 @@ func TestCapabilityResolverRequiresTrustedLocalMCPHub(t *testing.T) {
 		{name: "remote impostor", server: config.ServerConfig{Name: "gateway", Command: "mcphub", Transport: "streamable-http", URL: "https://example.test/mcp"}},
 		{name: "wrapper impostor", server: config.ServerConfig{Name: "gateway", Command: "/bin/sh"}},
 		{name: "lookalike binary", server: config.ServerConfig{Name: "gateway", Command: "mcphub-wrapper"}},
+		{
+			name: "trusted gateway without resolver contract",
+			server: config.ServerConfig{
+				Name: "gateway", Command: "mcphub",
+				Trust: &config.MCPTrustConfig{
+					LocalOwner: "mcphub", Gateway: config.MCPTrustGatewayMCPHub,
+					ReadOnly: []string{"mcphub_list_servers"},
+				},
+			},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, backend, registry := makeRegistry(test.server)

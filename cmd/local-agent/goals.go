@@ -135,6 +135,27 @@ type goalRecoveryApplyResult struct {
 	NoResumeWarning     string     `json:"no_resume_warning"`
 }
 
+type goalOpenResult struct {
+	SessionID int64         `json:"session_id"`
+	Workspace string        `json:"workspace"`
+	Goal      goal.Snapshot `json:"goal"`
+}
+
+type goalRunInvocation struct {
+	SessionID int64
+	Prompt    string
+}
+
+type goalRunOptions struct {
+	SessionID     int64
+	Prompt        string
+	SkipApprovals bool
+	Model         string
+	AgentProfile  string
+}
+
+var activeGoalRun *goalRunInvocation
+
 func handleGoalCommand(args []string) int {
 	return handleGoalCommandIO(args, os.Stdout, os.Stderr)
 }
@@ -154,7 +175,7 @@ func handleGoalCommandIO(args []string, stdout, stderr io.Writer) int {
 	}
 	command := args[0]
 	switch command {
-	case "list", "show", "pending", "recover":
+	case "list", "show", "pending", "recover", "open", "run":
 	default:
 		goalFprintf(stderr, "goal: unknown command %q\n", command)
 		writeGoalUsage(stderr)
@@ -171,7 +192,14 @@ func handleGoalCommandIO(args []string, stdout, stderr io.Writer) int {
 			return handleGoalPending(nil, "", helpArgs, stdout, stderr)
 		case "recover":
 			return handleGoalRecover(nil, "", helpArgs, stdout, stderr)
+		case "open":
+			return handleGoalOpen(nil, "", helpArgs, stdout, stderr)
+		case "run":
+			return handleGoalRun(args[1:], stdout, stderr)
 		}
+	}
+	if command == "run" {
+		return handleGoalRun(args[1:], stdout, stderr)
 	}
 	workspace := currentWorkspace()
 	if workspace == "" {
@@ -190,6 +218,8 @@ func handleGoalCommandIO(args []string, stdout, stderr io.Writer) int {
 	}()
 
 	switch command {
+	case "open":
+		return handleGoalOpen(store, workspace, args[1:], stdout, stderr)
 	case "list":
 		return handleGoalList(store, workspace, args[1:], stdout, stderr)
 	case "show":
@@ -200,6 +230,155 @@ func handleGoalCommandIO(args []string, stdout, stderr io.Writer) int {
 		return handleGoalRecover(store, workspace, args[1:], stdout, stderr)
 	}
 	return 2
+}
+
+func handleGoalRun(args []string, stdout, stderr io.Writer) int {
+	if hasHelpFlag(args) {
+		writeGoalRunUsage(stdout)
+		return 0
+	}
+	options, code := parseGoalRunArgs(args, stdout, stderr)
+	if code != 0 {
+		return code
+	}
+	rootArgs := []string{os.Args[0], "--prompt", options.Prompt, "--mode", "auto"}
+	if options.SkipApprovals {
+		rootArgs = append(rootArgs, "--skip-approvals")
+	}
+	if options.Model != "" {
+		rootArgs = append(rootArgs, "--model", options.Model)
+	}
+	if options.AgentProfile != "" {
+		rootArgs = append(rootArgs, "--agent", options.AgentProfile)
+	}
+	originalArgs, originalInvocation := os.Args, activeGoalRun
+	os.Args = rootArgs
+	activeGoalRun = &goalRunInvocation{SessionID: options.SessionID, Prompt: options.Prompt}
+	defer func() {
+		os.Args = originalArgs
+		activeGoalRun = originalInvocation
+	}()
+	return run()
+}
+
+func parseGoalRunArgs(args []string, stdout, stderr io.Writer) (goalRunOptions, int) {
+	normalized, err := reorderFlagsBeforePositionals(args, map[string]bool{
+		"prompt": true,
+		"model":  true,
+		"agent":  true,
+	})
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "goal run: %v\n", err)
+		return goalRunOptions{}, 2
+	}
+	flags := flag.NewFlagSet("goal run", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	flags.Usage = func() { writeGoalRunUsage(stdout) }
+	prompt := flags.String("prompt", "", "instruction for this goal turn")
+	skipApprovals := flags.Bool("skip-approvals", false, "skip approval prompts")
+	model := flags.String("model", "", "override the Ollama model")
+	agentProfile := flags.String("agent", "", "override the agent profile")
+	if code, done := flagParseExitCode(flags.Parse(normalized)); done {
+		return goalRunOptions{}, code
+	}
+	if flags.NArg() != 1 {
+		_, _ = fmt.Fprintln(stderr, "goal run: provide exactly one session ID")
+		return goalRunOptions{}, 2
+	}
+	sessionID, err := strconv.ParseInt(flags.Arg(0), 10, 64)
+	if err != nil || sessionID <= 0 {
+		_, _ = fmt.Fprintf(stderr, "goal run: invalid session ID %q\n", flags.Arg(0))
+		return goalRunOptions{}, 2
+	}
+	promptText := strings.TrimSpace(*prompt)
+	if promptText == "" {
+		_, _ = fmt.Fprintln(stderr, "goal run: --prompt is required")
+		return goalRunOptions{}, 2
+	}
+	return goalRunOptions{
+		SessionID: sessionID, Prompt: promptText, SkipApprovals: *skipApprovals,
+		Model: strings.TrimSpace(*model), AgentProfile: strings.TrimSpace(*agentProfile),
+	}, 0
+}
+
+func handleGoalOpen(store *db.Store, workspace string, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("goal open", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	flags.Usage = func() { writeGoalOpenUsage(stdout) }
+	jsonOutput := flags.Bool("json", false, "print machine-readable JSON")
+	objective := flags.String("objective", "", "bounded goal objective")
+	criterion := flags.String("criterion", "", "acceptance criterion (defaults to the objective)")
+	maxTurns := flags.Int64("max-continuation-turns", 3, "maximum automatic continuation turns")
+	maxTokens := flags.Int64("max-eval-tokens", 1000, "maximum evaluation tokens")
+	if code, done := flagParseExitCode(flags.Parse(args)); done {
+		return code
+	}
+	if store == nil {
+		_, _ = fmt.Fprintln(stderr, "goal open: durable store is unavailable")
+		return 1
+	}
+	if flags.NArg() != 0 {
+		_, _ = fmt.Fprintln(stderr, "goal open: use --objective and no positional arguments")
+		return 2
+	}
+	objectiveText := strings.TrimSpace(*objective)
+	if objectiveText == "" {
+		_, _ = fmt.Fprintln(stderr, "goal open: --objective is required")
+		return 2
+	}
+	criterionText := strings.TrimSpace(*criterion)
+	if criterionText == "" {
+		criterionText = objectiveText
+	}
+	if *maxTurns <= 0 || *maxTokens <= 0 {
+		_, _ = fmt.Fprintln(stderr, "goal open: budgets must be positive")
+		return 2
+	}
+	session, err := store.CreateSession(context.Background(), db.CreateSessionParams{
+		Title: objectiveText, Model: "headless-goal", Mode: "AUTO", WorkspaceID: workspace,
+	})
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "goal open: create session: %v\n", err)
+		return 1
+	}
+	runtime, err := goal.New(goal.Spec{
+		SessionID: session.ID, Objective: objectiveText,
+		AcceptanceCriteria: []goal.AcceptanceCriterion{{ID: "criterion_1", Description: criterionText}},
+		Budget:             goal.BudgetLimits{MaxContinuationTurns: *maxTurns, MaxEvalTokens: *maxTokens},
+	})
+	if err != nil {
+		_ = store.DeleteSession(context.Background(), session.ID)
+		_, _ = fmt.Fprintf(stderr, "goal open: create runtime: %v\n", err)
+		return 1
+	}
+	snapshot, err := runtime.Snapshot(context.Background())
+	if err != nil {
+		_ = store.DeleteSession(context.Background(), session.ID)
+		_, _ = fmt.Fprintf(stderr, "goal open: snapshot runtime: %v\n", err)
+		return 1
+	}
+	state, err := json.Marshal(map[string]any{"version": 2, "execution_cursor": 0, "goal": snapshot})
+	if err != nil {
+		_ = store.DeleteSession(context.Background(), session.ID)
+		_, _ = fmt.Fprintf(stderr, "goal open: encode state: %v\n", err)
+		return 1
+	}
+	if err := store.SaveSessionState(context.Background(), session.ID, string(state)); err != nil {
+		_ = store.DeleteSession(context.Background(), session.ID)
+		_, _ = fmt.Fprintf(stderr, "goal open: persist state: %v\n", err)
+		return 1
+	}
+	result := goalOpenResult{SessionID: session.ID, Workspace: workspace, Goal: snapshot}
+	if *jsonOutput {
+		if err := writeJSON(stdout, result); err != nil {
+			_, _ = fmt.Fprintf(stderr, "goal open: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	goalFprintf(stdout, "Opened goal %s in session %d.\n", terminalSafeGoalText(snapshot.ID), session.ID)
+	goalFprintf(stdout, "Inspect it with: local-agent goal show %d --json\n", session.ID)
+	return 0
 }
 
 func handleGoalPending(store goalControlStore, workspace string, args []string, stdout, stderr io.Writer) int {
@@ -743,6 +922,8 @@ func writeGoalUsage(writer io.Writer) {
 	_, _ = fmt.Fprintln(writer, "  show      Show one validated goal snapshot")
 	_, _ = fmt.Fprintln(writer, "  pending   List pending control items for a session")
 	_, _ = fmt.Fprintln(writer, "  recover   Inspect or reconcile paused goal work")
+	_, _ = fmt.Fprintln(writer, "  open      Open and persist a new headless goal")
+	_, _ = fmt.Fprintln(writer, "  run       Execute one durable headless goal turn")
 	_, _ = fmt.Fprintln(writer)
 	_, _ = fmt.Fprintln(writer, "Recovery:")
 	_, _ = fmt.Fprintln(writer, "  local-agent goal recover [--json] <session-id>")
@@ -753,6 +934,31 @@ func writeGoalUsage(writer io.Writer) {
 	_, _ = fmt.Fprintln(writer, "  Recovery never resumes execution and has no force override.")
 	_, _ = fmt.Fprintln(writer)
 	_, _ = fmt.Fprintln(writer, "Run `local-agent goal <command> --help` for command options.")
+}
+
+func writeGoalOpenUsage(writer io.Writer) {
+	_, _ = fmt.Fprintln(writer, "Usage:")
+	_, _ = fmt.Fprintln(writer, "  local-agent goal open --objective TEXT [options]")
+	_, _ = fmt.Fprintln(writer)
+	_, _ = fmt.Fprintln(writer, "Options:")
+	_, _ = fmt.Fprintln(writer, "  --objective TEXT             Bounded goal objective (required)")
+	_, _ = fmt.Fprintln(writer, "  --criterion TEXT             Acceptance criterion (defaults to objective)")
+	_, _ = fmt.Fprintln(writer, "  --max-continuation-turns N   Automatic continuation budget (default 3)")
+	_, _ = fmt.Fprintln(writer, "  --max-eval-tokens N          Evaluation token budget (default 1000)")
+	_, _ = fmt.Fprintln(writer, "  --json                       Print machine-readable JSON")
+	_, _ = fmt.Fprintln(writer, "  -h, --help                   Show this help")
+}
+
+func writeGoalRunUsage(writer io.Writer) {
+	_, _ = fmt.Fprintln(writer, "Usage:")
+	_, _ = fmt.Fprintln(writer, "  local-agent goal run <session-id> --prompt TEXT [options]")
+	_, _ = fmt.Fprintln(writer)
+	_, _ = fmt.Fprintln(writer, "Options:")
+	_, _ = fmt.Fprintln(writer, "  --prompt TEXT       Instruction for this goal turn (required)")
+	_, _ = fmt.Fprintln(writer, "  --skip-approvals    Skip approval prompts; explicit denies still win")
+	_, _ = fmt.Fprintln(writer, "  --model NAME        Override the Ollama model")
+	_, _ = fmt.Fprintln(writer, "  --agent NAME        Override the agent profile")
+	_, _ = fmt.Fprintln(writer, "  -h, --help          Show this help")
 }
 
 func writeGoalListUsage(writer io.Writer) {

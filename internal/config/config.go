@@ -92,13 +92,14 @@ type OllamaConfig struct {
 }
 
 type ServerConfig struct {
-	Name             string   `yaml:"name"`
-	Command          string   `yaml:"command,omitempty"`
-	Args             []string `yaml:"args,omitempty"`
-	Env              []string `yaml:"env,omitempty"`
-	Transport        string   `yaml:"transport,omitempty"`
-	URL              string   `yaml:"url,omitempty"`
-	ExecutableSHA256 string   `yaml:"-" json:"-"`
+	Name             string          `yaml:"name" json:"name"`
+	Command          string          `yaml:"command,omitempty" json:"command,omitempty"`
+	Args             []string        `yaml:"args,omitempty" json:"args,omitempty"`
+	Env              []string        `yaml:"env,omitempty" json:"env,omitempty"`
+	Transport        string          `yaml:"transport,omitempty" json:"transport,omitempty"`
+	URL              string          `yaml:"url,omitempty" json:"url,omitempty"`
+	Trust            *MCPTrustConfig `yaml:"trust,omitempty" json:"trust,omitempty"`
+	ExecutableSHA256 string          `yaml:"-" json:"-"`
 }
 
 // RepoMCPTrustError reports executable MCP authority supplied by a
@@ -237,13 +238,14 @@ func isRepositoryLocalConfigPath(path string) bool {
 }
 
 type repoMCPExecutableAuthority struct {
-	Name             string   `json:"name"`
-	Command          string   `json:"command"`
-	ResolvedCommand  string   `json:"resolved_command"`
-	ExecutablePath   string   `json:"executable_path"`
-	ExecutableSHA256 string   `json:"executable_sha256"`
-	Args             []string `json:"args,omitempty"`
-	Env              []string `json:"env,omitempty"`
+	Name             string          `json:"name"`
+	Command          string          `json:"command"`
+	ResolvedCommand  string          `json:"resolved_command"`
+	ExecutablePath   string          `json:"executable_path"`
+	ExecutableSHA256 string          `json:"executable_sha256"`
+	Args             []string        `json:"args,omitempty"`
+	Env              []string        `json:"env,omitempty"`
+	Trust            *MCPTrustConfig `json:"trust,omitempty"`
 }
 
 type repoMCPTrustMaterial struct {
@@ -279,7 +281,7 @@ func requireRepositoryMCPTrust(sourcePath string, servers []ServerConfig) error 
 		return string(left) < string(right)
 	})
 	material, err := json.Marshal(repoMCPTrustMaterial{
-		Version:    2,
+		Version:    3,
 		SourcePath: filepath.Clean(sourcePath),
 		Servers:    sortedAuthorities,
 	})
@@ -305,6 +307,10 @@ func requireRepositoryMCPTrust(sourcePath string, servers []ServerConfig) error 
 }
 
 func repositoryMCPExecutableAuthority(server ServerConfig) (repoMCPExecutableAuthority, error) {
+	trust, err := ResolveMCPTrust(server)
+	if err != nil {
+		return repoMCPExecutableAuthority{}, fmt.Errorf("resolve MCP trust: %w", err)
+	}
 	resolved, err := execpath.Resolve(server.Command)
 	if err != nil {
 		return repoMCPExecutableAuthority{}, err
@@ -347,6 +353,7 @@ func repositoryMCPExecutableAuthority(server ServerConfig) (repoMCPExecutableAut
 		ExecutableSHA256: fmt.Sprintf("sha256:%x", contentHash),
 		Args:             append([]string(nil), server.Args...),
 		Env:              append([]string(nil), server.Env...),
+		Trust:            trust,
 	}, nil
 }
 
@@ -472,6 +479,9 @@ func (c *Config) Validate() error {
 			}
 		default:
 			return fmt.Errorf("config: server %q has unknown transport %q (want stdio, sse, or streamable-http)", s.Name, s.Transport)
+		}
+		if _, err := ResolveMCPTrust(s); err != nil {
+			return fmt.Errorf("config: server %q trust: %w", s.Name, err)
 		}
 	}
 	return nil

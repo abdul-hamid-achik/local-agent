@@ -6,9 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -285,6 +289,164 @@ func TestGoalListAndShowRenderingAndJSON(t *testing.T) {
 	var snapshot goal.Snapshot
 	if err := json.Unmarshal(stdout.Bytes(), &snapshot); err != nil || snapshot.SessionID != session.ID {
 		t.Fatalf("show JSON=%q snapshot=%#v err=%v", stdout.String(), snapshot, err)
+	}
+}
+
+func TestGoalOpenPersistsValidatedHeadlessRuntime(t *testing.T) {
+	store := openGoalCommandTestStore(t)
+	workspace := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	if code := handleGoalOpen(store, workspace, []string{
+		"--objective", "Inspect the release",
+		"--criterion", "the release report is complete",
+		"--max-continuation-turns", "4",
+		"--max-eval-tokens", "1200",
+		"--json",
+	}, &stdout, &stderr); code != 0 {
+		t.Fatalf("goal open code=%d stderr=%s", code, stderr.String())
+	}
+	var result goalOpenResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("decode goal open result: %v (%s)", err, stdout.String())
+	}
+	if result.SessionID <= 0 || result.Workspace != workspace || result.Goal.SessionID != result.SessionID || result.Goal.State != goal.StateActive {
+		t.Fatalf("goal open result = %#v", result)
+	}
+	if result.Goal.Budget.MaxContinuationTurns != 4 || result.Goal.Budget.MaxEvalTokens != 1200 {
+		t.Fatalf("goal open budget = %#v", result.Goal.Budget)
+	}
+	if _, err := getGoalSummary(context.Background(), store, workspace, result.SessionID); err != nil {
+		t.Fatalf("persisted goal cannot be read: %v", err)
+	}
+	_, restored, state, record, err := loadHeadlessGoalState(context.Background(), store, workspace, result.SessionID)
+	if err != nil || restored == nil || state.Goal == nil || record.Revision != 1 {
+		t.Fatalf("headless goal load runtime=%v state=%#v revision=%d err=%v", restored, state, record.Revision, err)
+	}
+}
+
+func TestParseGoalRunArgsAcceptsFlagsAfterSessionID(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	options, code := parseGoalRunArgs([]string{
+		"42", "--prompt", " continue safely ", "--skip-approvals", "--model=qwen3", "--agent", "reviewer",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("parse code=%d stderr=%q", code, stderr.String())
+	}
+	if options.SessionID != 42 || options.Prompt != "continue safely" || !options.SkipApprovals || options.Model != "qwen3" || options.AgentProfile != "reviewer" {
+		t.Fatalf("goal run options = %#v", options)
+	}
+}
+
+func TestParseGoalRunArgsRejectsMissingPrompt(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	_, code := parseGoalRunArgs([]string{"42"}, &stdout, &stderr)
+	if code != 2 || !strings.Contains(stderr.String(), "--prompt is required") {
+		t.Fatalf("parse code=%d stderr=%q", code, stderr.String())
+	}
+}
+
+func TestGoalRunExecutesAndSettlesDurableTurn(t *testing.T) {
+	home := t.TempDir()
+	workspace := filepath.Join(t.TempDir(), "workspace")
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Chdir(workspace)
+
+	var chatCalls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/tags":
+			_, _ = fmt.Fprint(writer, `{"models":[{"name":"qwen3.5:2b","size":42,"details":{"family":"qwen3"}}]}`)
+		case "/api/show":
+			_, _ = fmt.Fprint(writer, `{"capabilities":["completion","tools"],"details":{"family":"qwen3"},"model_info":{"qwen3.context_length":32768}}`)
+		case "/api/chat":
+			if chatCalls.Add(1) == 1 {
+				_, _ = fmt.Fprintln(writer, `{"message":{"role":"assistant","content":"durable turn complete"},"done":true,"eval_count":7,"prompt_eval_count":11}`)
+			} else {
+				_, _ = fmt.Fprintln(writer, `{"error":"known provider failure","done":true}`)
+			}
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+	t.Setenv("OLLAMA_HOST", server.URL)
+	t.Setenv("LOCAL_AGENT_MODEL", "qwen3.5:2b")
+	t.Setenv("LOCAL_AGENT_LOCAL_ONLY", "true")
+
+	store, err := db.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var openOut, openErr bytes.Buffer
+	if code := handleGoalOpen(store, currentWorkspace(), []string{
+		"--objective", "Finish the durable task", "--criterion", "the turn is recorded",
+		"--max-continuation-turns", "2", "--max-eval-tokens", "100", "--json",
+	}, &openOut, &openErr); code != 0 {
+		t.Fatalf("goal open code=%d stderr=%q", code, openErr.String())
+	}
+	var opened goalOpenResult
+	if err := json.Unmarshal(openOut.Bytes(), &opened); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var usageOut, usageErr bytes.Buffer
+	if code := handleGoalRun([]string{strconv.FormatInt(opened.SessionID, 10), "--prompt", "perform one verified turn"}, &usageOut, &usageErr); code != 0 {
+		t.Fatalf("goal run code=%d usage stderr=%q", code, usageErr.String())
+	}
+
+	store, err = db.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, restored, state, record, err := loadHeadlessGoalState(context.Background(), store, currentWorkspace(), opened.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := restored.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Revision != 3 || snapshot.PendingContinuation != nil || snapshot.LastTurn == nil {
+		t.Fatalf("settled state revision=%d snapshot=%#v", record.Revision, snapshot)
+	}
+	if snapshot.LastTurn.Summary != "assistant yielded without a concrete tool receipt" || snapshot.Usage.EvalTokens != 7 || snapshot.LastTurn.Productive {
+		t.Fatalf("turn receipt=%#v usage=%#v", snapshot.LastTurn, snapshot.Usage)
+	}
+	if len(state.Messages) < 2 || state.Messages[len(state.Messages)-1].Content != "durable turn complete" {
+		t.Fatalf("persisted messages=%#v", state.Messages)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if code := handleGoalRun([]string{strconv.FormatInt(opened.SessionID, 10), "--prompt", "try a known failing turn"}, &usageOut, &usageErr); code != 1 {
+		t.Fatalf("known-failure goal run code=%d, want 1", code)
+	}
+	store, err = db.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	_, restored, _, record, err = loadHeadlessGoalState(context.Background(), store, currentWorkspace(), opened.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err = restored.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Revision != 5 || snapshot.PendingContinuation != nil || snapshot.State != goal.StatePaused || snapshot.LastPendingRecovery != nil {
+		t.Fatalf("known failure left unsafe state revision=%d snapshot=%#v", record.Revision, snapshot)
+	}
+	if snapshot.LastTurn == nil || snapshot.LastTurn.OutcomeUnknown || !strings.Contains(snapshot.LastTurn.Summary, "known provider failure") {
+		t.Fatalf("known failure receipt=%#v", snapshot.LastTurn)
 	}
 }
 

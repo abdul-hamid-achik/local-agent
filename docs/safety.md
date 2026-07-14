@@ -36,7 +36,11 @@ process. A changed executable or moved configuration produces a different
 digest. A trusted launch uses the resolved path covered by that digest and
 rechecks its content immediately before startup. Protect the executable and its
 parent directory from concurrent writes, as the final OS launch remains
-path-based. This startup trust does not approve later MCP tool calls.
+path-based. This startup trust does not by itself approve later MCP tool calls.
+Separately, an exact trust contract in the trusted local-STDIO configuration
+can classify specific routes as read-only or workspace-effectful. Those
+contracts are host-owned, bound to the executable identity, and do not trust
+MCP annotations; all other routes remain on the normal approval path.
 
 Built-in workspace reads and approved file mutations execute relative to a
 workspace directory handle pinned for that operation. Local Agent rechecks the

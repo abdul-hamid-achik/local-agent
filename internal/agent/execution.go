@@ -451,15 +451,14 @@ func (a *Agent) executionOutcomeAnswered(
 		// application-level error, is a verifiable answer.
 		return true
 	}
-	server, ok := a.gatewayDownstreamServer(call)
-	if !ok {
+	if _, ok := a.gatewayDownstreamServer(call); !ok {
 		return false
 	}
-	if _, catalogued := trustedGatewayContracts[server]; !catalogued {
+	if _, catalogued := a.trustedMCPContract(call); !catalogued {
 		return false
 	}
-	return projection.DomainTyped &&
-		(projection.Domain == ecosystem.DomainFailed || projection.Domain == ecosystem.DomainBlocked)
+	return projection.DomainTyped && projection.Domain != "" &&
+		projection.Domain != ecosystem.DomainPending && projection.Domain != ecosystem.DomainUnknown
 }
 
 // terminalExecutionEventType classifies how a dispatched execution ends in the
@@ -724,7 +723,7 @@ func (a *Agent) decideToolAuthorization(ctx context.Context, tc llm.ToolCall, be
 		return toolAuthorization{allowed: true, approval: executionpkg.ApprovalEmbedding}, nil
 	}
 
-	switch checker.ToCheckResult(tc.Name) {
+	switch a.permissionCheckResult(checker, tc) {
 	case permissionPkg.CheckAllow:
 		if !checker.SkipsApprovals() && state.callback == nil {
 			return toolAuthorization{
@@ -759,7 +758,7 @@ func (a *Agent) decideToolAuthorization(ctx context.Context, tc llm.ToolCall, be
 		}
 		request := a.newApprovalRequest(ctx, tc, argumentsHash)
 		if a.hasSessionApproval(request) {
-			if err := a.revalidateInteractiveApproval(state, tc.Name); err != nil {
+			if err := a.revalidateInteractiveApproval(state, tc); err != nil {
 				return staleApprovalAuthorization(err), nil
 			}
 			return toolAuthorization{
@@ -779,7 +778,7 @@ func (a *Agent) decideToolAuthorization(ctx context.Context, tc llm.ToolCall, be
 		}
 		switch response.Decision {
 		case permissionPkg.DecisionAllowOnce:
-			if err := a.revalidateInteractiveApproval(state, tc.Name); err != nil {
+			if err := a.revalidateInteractiveApproval(state, tc); err != nil {
 				return staleApprovalAuthorization(err), nil
 			}
 			if err := a.revalidateApprovalPreview(ctx, tc, request); err != nil {
@@ -790,7 +789,7 @@ func (a *Agent) decideToolAuthorization(ctx context.Context, tc llm.ToolCall, be
 			}
 			return toolAuthorization{allowed: true, approval: executionpkg.ApprovalOnce, decision: response.Decision}, nil
 		case permissionPkg.DecisionAllowSession:
-			if err := a.revalidateInteractiveApproval(state, tc.Name); err != nil {
+			if err := a.revalidateInteractiveApproval(state, tc); err != nil {
 				return staleApprovalAuthorization(err), nil
 			}
 			if err := a.revalidateApprovalPreview(ctx, tc, request); err != nil {

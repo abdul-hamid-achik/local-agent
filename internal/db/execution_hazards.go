@@ -40,11 +40,12 @@ const (
 )
 
 type effectiveExecutionQuery struct {
-	kind         effectiveExecutionKind
-	sessionID    int64
-	workspaceID  string
-	turnID       string
-	afterEventID int64
+	kind            effectiveExecutionKind
+	sessionID       int64
+	workspaceID     string
+	turnID          string
+	afterEventID    int64
+	requireGoalLess bool
 }
 
 // listEffectiveExecutionStates overlays typed control-plane reconciliation on
@@ -59,6 +60,15 @@ func (s *Store) listEffectiveExecutionStates(ctx context.Context, query effectiv
 	defer func() { _ = tx.Rollback() }()
 	if err := validateExecutionSessionScope(ctx, tx, query.sessionID, query.workspaceID); err != nil {
 		return nil, err
+	}
+	if query.requireGoalLess {
+		record, err := getSessionStateRecord(ctx, tx, query.sessionID)
+		if err != nil {
+			return nil, err
+		}
+		if err := requireGoalLessSessionState(record.StateJSON); err != nil {
+			return nil, err
+		}
 	}
 
 	wanted := limit

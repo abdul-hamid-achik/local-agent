@@ -70,10 +70,16 @@ func TestSessionRepairRendersBoundedReceipt(t *testing.T) {
 		t.Fatalf("text render exit=%d stderr=%q", code, stderr.String())
 	}
 	out := stdout.String()
-	for _, want := range []string{"cursor 3 -> 41 @ revision 9", "2 answered effect(s)", "exec_crash", "failed/unknown", "absent from the saved transcript"} {
+	for _, want := range []string{
+		"cursor 3 -> 41 @ revision 9", "2 answered effect(s)", "exec_crash", "failed/unknown",
+		"absent from the saved transcript", "already terminal", "Review the durable",
+	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("text receipt missing %q: %s", want, out)
 		}
+	}
+	if strings.Contains(out, "local-agent execution recover") || strings.Contains(out, "EXECUTION_ID") {
+		t.Fatalf("text receipt recommends impossible terminal-effect recovery: %s", out)
 	}
 }
 

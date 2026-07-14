@@ -104,13 +104,60 @@ ice:
 # configuration. A repository-local copy of this file must be trusted with the
 # exact LOCAL_AGENT_TRUST_REPO_MCP digest printed at startup before any STDIO
 # process is spawned; changing the resolved executable or its content, command,
-# args, env, or repository path changes that digest.
+# args, env, exact trust routes, or repository path changes that digest.
 servers:
   # Recommended: one lazy MCPHub gateway. It keeps specialist schemas out of
   # small-model context until needed and lets Cortex orchestrate the stack.
   - name: mcphub
     command: mcphub
     args: [mcp, serve, --agent, local-agent]
+    # Host-owned exact authority. This is honored only for local STDIO when
+    # local_owner exactly matches the executable basename; wrappers, remote
+    # transports, MCP annotations, wildcards, and suffix matches cannot widen it.
+    # read_only routes are auto-authorized and ledgered as reads.
+    # workspace_effectful routes are auto-authorized only in AUTO and only when
+    # an explicit `workspace` argument resolves inside the active workspace.
+    trust:
+      local_owner: mcphub
+      gateway: mcphub
+      read_only:
+        - bob__bob_check
+        - bob__bob_inspect
+        - bob__bob_plan
+        - bob__bob_recipe_describe
+        - bob__bob_stats
+        - bob__bob_validate_manifest
+        - cortex__cortex_handoff
+        - cortex__cortex_list_tasks
+        - cortex__cortex_metrics
+        - cortex__cortex_overview
+        - cortex__cortex_read_artifact
+        - cortex__cortex_read_evidence
+        - cortex__cortex_recall_cases
+        - cortex__cortex_sessions
+        - cortex__cortex_status
+        - cortex__cortex_timeline
+        - mcphub_describe_tool
+        - mcphub_get_result
+        - mcphub_list_servers
+        - mcphub_resolve_tool
+        - mcphub_search_tools
+        - mcphub_stats
+      workspace_effectful:
+        - cortex__cortex_begin_change
+        - cortex__cortex_investigate
+        - cortex__cortex_note
+        - cortex__cortex_open_task
+        - cortex__cortex_plan
+        - cortex__cortex_remember
+        - cortex__cortex_request_decision
+        - cortex__cortex_resolve
+        - cortex__cortex_start_task
+        - cortex__cortex_verify
+
+    # Omitting trust currently uses a build-owned compatibility profile only
+    # for exact mcphub/cortex/bob basenames. Prefer an explicit list. To suppress
+    # that migration bridge, configure only: trust: {disabled: true}
 
   # Direct STDIO transport is also supported when MCPHub is not installed.
   # - name: noted

@@ -371,6 +371,30 @@ func TestMCPHubResultPageRejectsMismatchedAndOversizedPayloads(t *testing.T) {
 	}
 }
 
+func TestMCPHubCompletedPageReparsesDownstreamSpecialistEnvelope(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		body string
+		want DomainState
+	}{
+		{name: "cortex", body: `{"ok":true,"taskId":"task-1"}`, want: DomainSucceeded},
+		{name: "bob conflict", body: `{"schema_version":1,"ok":true,"workspace":"/repo","authority":` + bobTestAuthority +
+			` ,"plan_digest":"` + bobTestDigest + `","clean":false,"lock_changed":false,"conflict_count":2,"counts":{"create":0,"update":0,"adopt":0,"unchanged":0,"conflict":2},"warnings":[],"next_actions":[]}`, want: DomainConflict},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			const callID = "3f9a1c2e7b804d5e9f1a2b3c4d5e6f70"
+			payload := []byte(test.body)
+			document := `{"status":"ok","callId":"` + callID + `","mediaType":"application/json","data":"` +
+				base64.StdEncoding.EncodeToString(payload) + `","cursor":0,"nextCursor":` + strconv.Itoa(len(payload)) +
+				`,"done":true,"totalBytes":` + strconv.Itoa(len(payload)) + `}`
+			projection := ProjectReceipt(ProjectToolCall("mcphub__mcphub_get_result", map[string]any{"callId": callID}), RawReceipt{Structured: json.RawMessage(document)})
+			if projection.Domain != test.want || !projection.DomainTyped {
+				t.Fatalf("projection = %#v, want typed %s", projection, test.want)
+			}
+		})
+	}
+}
+
 func TestCortexFailureReceiptPersistsNoArbitraryErrorText(t *testing.T) {
 	const secret = "SECRET_CORTEX_ERROR_PROSE"
 	failed := ProjectReceipt(ProjectToolCall("mcphub__cortex__cortex_status", nil), RawReceipt{

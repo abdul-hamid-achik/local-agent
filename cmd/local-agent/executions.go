@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -17,7 +20,10 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/reconciliation"
 )
 
-const executionRecoveryActor = "local-user"
+const (
+	executionRecoveryActor    = "local-user"
+	executionRecoveryAllLimit = 100
+)
 
 type executionRecoveryStore interface {
 	InspectStandaloneExecutionReconciliation(context.Context, int64, string, string) (db.StandaloneExecutionReconciliationInspection, error)
@@ -111,6 +117,7 @@ func handleExecutionRecover(store executionRecoveryStore, workspace string, args
 	reference := flags.String("reference", "", "redacted evidence reference")
 	summary := flags.String("summary", "", "bounded inspection summary")
 	observedAtText := flags.String("observed-at", "", "evidence observation time in RFC3339")
+	setDigest := flags.String("set-digest", "", "exact pending-set digest shown by --all inspection")
 	normalized, err := normalizeExecutionRecoverArgs(args)
 	if err != nil {
 		executionFprintf(stderr, "execution recover: %v\n", err)
@@ -167,6 +174,7 @@ func handleExecutionRecover(store executionRecoveryStore, workspace string, args
 
 	required := []string{"observation", "source", "reference", "summary", "observed-at"}
 	if *all {
+		required = append(required, "set-digest")
 		// Batch apply derives the exact revision/event tokens from a fresh
 		// inspection of each execution under the held session lease.
 		for _, name := range []string{"revision", "event-id"} {
@@ -176,6 +184,10 @@ func handleExecutionRecover(store executionRecoveryStore, workspace string, args
 			}
 		}
 	} else {
+		if provided["set-digest"] {
+			executionFprintln(stderr, "execution recover: --set-digest can be used only with --all --apply")
+			return 2
+		}
 		required = append([]string{"revision", "event-id"}, required...)
 	}
 	for _, name := range required {
@@ -186,6 +198,10 @@ func handleExecutionRecover(store executionRecoveryStore, workspace string, args
 	}
 	if !*all && (*revision < 0 || *eventID <= 0) {
 		executionFprintln(stderr, "execution recover: --revision must be non-negative and --event-id must be positive")
+		return 2
+	}
+	if *all && !validExecutionRecoverySetDigest(*setDigest) {
+		executionFprintln(stderr, "execution recover: --set-digest must be the 64-character lowercase digest from a prior --all inspection")
 		return 2
 	}
 	observedAt, err := time.Parse(time.RFC3339, *observedAtText)
@@ -216,7 +232,7 @@ func handleExecutionRecover(store executionRecoveryStore, workspace string, args
 		}
 	}()
 	if *all {
-		return applyAllExecutionRecoveries(store, lease, workspace, sessionID, evidence, *jsonOutput, stdout, stderr)
+		return applyAllExecutionRecoveries(store, lease, workspace, sessionID, *setDigest, evidence, *jsonOutput, stdout, stderr)
 	}
 	receipt, err := store.ResolveStandaloneExecutionReconciliation(context.Background(), lease, db.ResolveStandaloneExecutionReconciliationRequest{
 		SessionID: sessionID, WorkspaceID: workspace, ExecutionID: flags.Arg(1),
@@ -256,6 +272,7 @@ type executionRecoveryPendingView struct {
 	SessionID int64                       `json:"session_id"`
 	Workspace string                      `json:"workspace_id"`
 	Count     int                         `json:"count"`
+	SetDigest string                      `json:"set_digest"`
 	Pending   []executionRecoveryItemView `json:"pending"`
 }
 
@@ -270,14 +287,15 @@ type executionRecoveryItemView struct {
 }
 
 func listExecutionRecoveryPending(store executionRecoveryStore, workspace string, sessionID int64, jsonOutput bool, stdout, stderr io.Writer) int {
-	states, err := store.ListStandaloneExecutionReconciliationPending(context.Background(), sessionID, workspace, 100)
+	states, err := store.ListStandaloneExecutionReconciliationPending(context.Background(), sessionID, workspace, executionRecoveryAllLimit)
 	if err != nil {
-		executionFprintf(stderr, "execution recover: list pending reconciliations: %v\n", err)
+		writeExecutionRecoveryPendingError(stderr, err, false)
 		return 1
 	}
 	view := executionRecoveryPendingView{
 		SessionID: sessionID, Workspace: workspace,
-		Count: len(states), Pending: make([]executionRecoveryItemView, 0, len(states)),
+		Count: len(states), SetDigest: executionRecoverySetDigest(sessionID, workspace, states),
+		Pending: make([]executionRecoveryItemView, 0, len(states)),
 	}
 	for _, state := range states {
 		view.Pending = append(view.Pending, executionRecoveryItemView{
@@ -308,16 +326,22 @@ func listExecutionRecoveryPending(store executionRecoveryStore, workspace string
 	_ = table.Flush()
 	executionFprintf(stdout, "\n%d execution(s) pending reconciliation.\n", view.Count)
 	executionFprintln(stdout, "Inspect each with the read-only command, or reconcile all with one verified observation:")
-	executionFprintf(stdout, "  local-agent execution recover %d --all --apply --observation effect_not_applied --source verification_check --reference REF --summary SUMMARY --observed-at RFC3339\n", sessionID)
+	executionFprintf(stdout, "Reviewed-set digest: %s\n", view.SetDigest)
+	executionFprintf(stdout, "  local-agent execution recover %d --all --apply --set-digest %s --observation effect_not_applied --source verification_check --reference REF --summary SUMMARY --observed-at RFC3339\n", sessionID, view.SetDigest)
 	executionFprintln(stdout, "Only assert one shared disposition after verifying every listed execution independently.")
 	return 0
 }
 
-func applyAllExecutionRecoveries(store executionRecoveryStore, lease *db.ExecutionSessionLease, workspace string, sessionID int64, evidence reconciliation.Request, jsonOutput bool, stdout, stderr io.Writer) int {
+func applyAllExecutionRecoveries(store executionRecoveryStore, lease *db.ExecutionSessionLease, workspace string, sessionID int64, expectedSetDigest string, evidence reconciliation.Request, jsonOutput bool, stdout, stderr io.Writer) int {
 	ctx := context.Background()
-	states, err := store.ListStandaloneExecutionReconciliationPending(ctx, sessionID, workspace, 100)
+	states, err := store.ListStandaloneExecutionReconciliationPending(ctx, sessionID, workspace, executionRecoveryAllLimit)
 	if err != nil {
-		executionFprintf(stderr, "execution recover: list pending reconciliations: %v\n", err)
+		writeExecutionRecoveryPendingError(stderr, err, true)
+		return 1
+	}
+	actualSetDigest := executionRecoverySetDigest(sessionID, workspace, states)
+	if actualSetDigest != expectedSetDigest {
+		executionFprintf(stderr, "execution recover: --all aborted: pending reconciliation set changed after inspection (reviewed %s, current %s). No evidence was recorded. Run the read-only --all inspection again.\n", expectedSetDigest, actualSetDigest)
 		return 1
 	}
 	receipts := make([]executionRecoveryApplyView, 0, len(states))
@@ -363,10 +387,65 @@ func applyAllExecutionRecoveries(store executionRecoveryStore, lease *db.Executi
 	return emit()
 }
 
+func executionRecoverySetDigest(sessionID int64, workspace string, states []execution.State) string {
+	type digestItem struct {
+		ExecutionID     string `json:"execution_id"`
+		EventID         int64  `json:"event_id"`
+		EventType       string `json:"event_type"`
+		ArgumentsSHA256 string `json:"arguments_sha256,omitempty"`
+	}
+	items := make([]digestItem, 0, len(states))
+	for _, state := range states {
+		items = append(items, digestItem{
+			ExecutionID: state.Identity.ExecutionID, EventID: state.Latest.ID,
+			EventType: string(state.Latest.Type), ArgumentsSHA256: state.Latest.ArgumentsSHA256,
+		})
+	}
+	sort.Slice(items, func(left, right int) bool {
+		if items[left].ExecutionID != items[right].ExecutionID {
+			return items[left].ExecutionID < items[right].ExecutionID
+		}
+		return items[left].EventID < items[right].EventID
+	})
+	payload, _ := json.Marshal(struct {
+		Version   int          `json:"version"`
+		SessionID int64        `json:"session_id"`
+		Workspace string       `json:"workspace_id"`
+		Pending   []digestItem `json:"pending"`
+	}{Version: 1, SessionID: sessionID, Workspace: workspace, Pending: items})
+	digest := sha256.Sum256(payload)
+	return fmt.Sprintf("%x", digest[:])
+}
+
+func validExecutionRecoverySetDigest(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, char := range value {
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func writeExecutionRecoveryPendingError(stderr io.Writer, err error, applying bool) {
+	if !errors.Is(err, db.ErrExecutionHazardOverflow) {
+		executionFprintf(stderr, "execution recover: list pending reconciliations: %v\n", err)
+		return
+	}
+	executionFprintf(stderr, "execution recover: --all aborted: pending reconciliation backlog exceeds the safe limit of %d; recover executions individually before retrying --all", executionRecoveryAllLimit)
+	if applying {
+		executionFprintf(stderr, ". No evidence was recorded")
+	}
+	executionFprintln(stderr, ".")
+}
+
 func normalizeExecutionRecoverArgs(args []string) ([]string, error) {
 	valueFlags := map[string]bool{
 		"revision": true, "event-id": true, "observation": true,
 		"source": true, "reference": true, "summary": true, "observed-at": true,
+		"set-digest": true,
 	}
 	var flags, positional []string
 	for index := 0; index < len(args); index++ {
@@ -434,11 +513,12 @@ func writeExecutionUsage(writer io.Writer) {
 	executionFprintln(writer, "  local-agent execution recover [--json] SESSION_ID EXECUTION_ID")
 	executionFprintln(writer, "  local-agent execution recover [--json] SESSION_ID --all")
 	executionFprintln(writer, "  local-agent execution recover --apply --revision N ... SESSION_ID EXECUTION_ID")
-	executionFprintln(writer, "  local-agent execution recover --all --apply [evidence options] SESSION_ID")
+	executionFprintln(writer, "  local-agent execution recover --all --apply --set-digest HASH [evidence options] SESSION_ID")
 	executionFprintln(writer)
 	executionFprintln(writer, "Safety:")
 	executionFprintln(writer, "  Inspection is read-only.")
 	executionFprintln(writer, "  Apply requires exact inspection tokens and typed evidence.")
+	executionFprintln(writer, "  Batch apply also requires the reviewed --all set digest.")
 	executionFprintln(writer, "  It never retries a tool or rewrites the immutable execution ledger.")
 	executionFprintln(writer)
 	executionFprintln(writer, "Run `local-agent execution recover --help` for all options.")
@@ -449,7 +529,7 @@ func writeExecutionRecoverUsage(writer io.Writer) {
 	executionFprintln(writer, "  local-agent execution recover [--json] SESSION_ID EXECUTION_ID")
 	executionFprintln(writer, "  local-agent execution recover [--json] SESSION_ID --all")
 	executionFprintln(writer, "  local-agent execution recover --apply [evidence options] SESSION_ID EXECUTION_ID")
-	executionFprintln(writer, "  local-agent execution recover --all --apply [evidence options] SESSION_ID")
+	executionFprintln(writer, "  local-agent execution recover --all --apply --set-digest HASH [evidence options] SESSION_ID")
 	executionFprintln(writer)
 	executionFprintln(writer, "Options:")
 	executionFprintln(writer, "  --json               Print machine-readable JSON")
@@ -457,8 +537,10 @@ func writeExecutionRecoverUsage(writer io.Writer) {
 	executionFprintln(writer, "  --all                Target every pending reconciliation in the session.")
 	executionFprintln(writer, "                       Listing is read-only; with --apply, one shared typed")
 	executionFprintln(writer, "                       observation is recorded per execution and exact")
-	executionFprintln(writer, "                       revision/event tokens are inspected under the lease")
-	executionFprintln(writer, "                       (omit --revision and --event-id).")
+	executionFprintln(writer, "                       revision/event tokens are inspected under the lease.")
+	executionFprintln(writer, "                       The exact pending set must match --set-digest")
+	executionFprintln(writer, "                       from the prior read-only listing (omit --revision and --event-id).")
+	executionFprintln(writer, "  --set-digest HASH    Exact pending-set digest shown by --all inspection")
 	executionFprintln(writer, "  -h, --help           Show this help")
 	executionFprintln(writer)
 	executionFprintln(writer, "Required with --apply:")
@@ -476,7 +558,7 @@ func writeExecutionRecoverUsage(writer io.Writer) {
 	executionFprintln(writer)
 	executionFprintln(writer, "Safety:")
 	executionFprintln(writer, "  Inspection is read-only unless --apply is explicit.")
-	executionFprintln(writer, "  Applying requires every evidence option shown above.")
+	executionFprintln(writer, "  Applying requires every evidence option shown above; --all also requires --set-digest.")
 	executionFprintln(writer, "  It never retries a tool or rewrites the immutable execution ledger.")
 }
 

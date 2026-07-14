@@ -6,7 +6,7 @@ outline: deep
 
 # Command reference
 
-Local Agent has three operator surfaces: the interactive TUI, human-readable headless prompts, and read-only or evidence-gated durable-goal inspection commands.
+Local Agent has three operator surfaces: the interactive TUI, human-readable headless prompts, and durable-goal lifecycle commands.
 
 ## CLI
 
@@ -41,9 +41,27 @@ must be positive integers; `latest` selects the most recently updated session
 whose canonical workspace matches the startup workspace. The restore runs after
 TUI initialization and does not dispatch provider work by itself.
 
-## Durable-goal inspection
+## Durable goals
 
-These commands operate on validated goal state for the current workspace:
+Create a bounded headless goal without dispatching provider work, then run one
+foreground turn:
+
+```bash
+local-agent goal open --objective "Finish the release audit" \
+  --criterion "the audit findings are verified" \
+  --max-continuation-turns 3 \
+  --max-eval-tokens 1200
+local-agent goal run <session-id> --prompt "Inspect the release and verify the criterion"
+```
+
+`goal open` prints the new session ID. `goal run` restores the goal and its
+conversation, records its turn admission before dispatch, uses AUTO authority,
+explicitly resumes a paused goal, and durably settles the turn before exiting.
+It runs one turn in the foreground; it does not create a background daemon or
+schedule another turn automatically.
+Add `--skip-approvals` only when you intend to suppress approval prompts.
+
+Inspect validated goal state for the current workspace with:
 
 ```bash
 local-agent goal list --limit 20
@@ -52,7 +70,11 @@ local-agent goal pending <session-id>
 local-agent goal recover <session-id>
 ```
 
-Add `--json` for machine-readable projections. The default `goal recover` is a dry run. Applying typed recovery evidence requires the complete explicit form printed by `--help`; there is no force flag. Successful reconciliation pauses or exhausts the goal and never schedules provider work by itself.
+Add `--json` for machine-readable inspection projections and `goal open` output.
+The default `goal recover` is a dry run. Applying typed recovery evidence
+requires the complete explicit form printed by `--help`; there is no force
+flag. Successful reconciliation pauses or exhausts the goal and never schedules
+provider work by itself.
 
 An ordinary session with an outcome-unknown tool receipt uses a separate exact-execution workflow:
 

@@ -191,6 +191,62 @@ func TestMCPContractsRemainUnknownWithoutHostLocalConfiguration(t *testing.T) {
 	}
 }
 
+func TestConfiguredMCPTrustReplacesLegacyCatalogAndSupportsNewOwner(t *testing.T) {
+	workspace := t.TempDir()
+	ag := New(nil, nil, 4096)
+	ag.SetWorkDir(workspace)
+	ag.SetTrustedLocalMCPServers([]config.ServerConfig{
+		{
+			Name: "acme-alias", Command: "/usr/local/bin/acme", Transport: "stdio",
+			Trust: &config.MCPTrustConfig{
+				LocalOwner: "acme", ReadOnly: []string{"inspect"}, WorkspaceEffectful: []string{"converge"},
+			},
+		},
+		{
+			Name: "gateway", Command: "/opt/homebrew/bin/mcphub", Transport: "stdio",
+			Trust: &config.MCPTrustConfig{
+				LocalOwner: "mcphub", Gateway: config.MCPTrustGatewayMCPHub,
+				ReadOnly: []string{"bob__bob_plan"},
+			},
+		},
+	})
+
+	for _, test := range []struct {
+		call       llm.ToolCall
+		wantEffect executionpkg.EffectClass
+		wantAuto   bool
+	}{
+		{call: llm.ToolCall{Name: "acme-alias__inspect"}, wantEffect: executionpkg.EffectReadOnly, wantAuto: true},
+		{call: llm.ToolCall{Name: "acme-alias__converge", Arguments: map[string]any{"workspace": workspace}}, wantEffect: executionpkg.Effectful, wantAuto: true},
+		{call: llm.ToolCall{Name: "acme-alias__delete"}, wantEffect: executionpkg.EffectUnknown},
+		{call: llm.ToolCall{Name: "gateway__bob__bob_plan"}, wantEffect: executionpkg.EffectReadOnly, wantAuto: true},
+		{call: llm.ToolCall{Name: "gateway__mcphub_call_tool", Arguments: map[string]any{"server": "bob", "tool": "bob_plan"}}, wantEffect: executionpkg.EffectReadOnly, wantAuto: true},
+		// Explicit gateway trust replaces the legacy profile rather than merging
+		// it, so an omitted management route remains gated.
+		{call: llm.ToolCall{Name: "gateway__mcphub_list_servers"}, wantEffect: executionpkg.EffectUnknown},
+		{call: llm.ToolCall{Name: "gateway__cortex__cortex_status"}, wantEffect: executionpkg.EffectUnknown},
+	} {
+		kind, effect := ag.executionKindForCall(test.call)
+		if kind != executionpkg.KindMCP || effect != test.wantEffect {
+			t.Fatalf("configured call %q = %s/%s, want MCP/%s", test.call.Name, kind, effect, test.wantEffect)
+		}
+		if got := ag.authorityAutoApproves(AuthorityAutoScoped, test.call, kind); got != test.wantAuto {
+			t.Fatalf("configured call %q auto=%v, want %v", test.call.Name, got, test.wantAuto)
+		}
+	}
+}
+
+func TestExplicitMCPTrustDisableSuppressesLegacyProfile(t *testing.T) {
+	ag := New(nil, nil, 4096)
+	ag.SetTrustedLocalMCPServers([]config.ServerConfig{{
+		Name: "mcphub", Command: "mcphub", Trust: &config.MCPTrustConfig{Disabled: true},
+	}})
+	call := llm.ToolCall{Name: "mcphub__bob__bob_plan"}
+	if _, ok := ag.trustedMCPContract(call); ok {
+		t.Fatal("explicitly disabled MCPHub retained legacy trust")
+	}
+}
+
 func TestTrustedLocalMCPServersRejectRemoteWrappersAndLookalikes(t *testing.T) {
 	ag := New(nil, nil, 4096)
 	ag.SetTrustedLocalMCPServers([]config.ServerConfig{
@@ -222,6 +278,25 @@ func TestTrustedLocalMCPServersRejectRemoteWrappersAndLookalikes(t *testing.T) {
 				t.Fatalf("trusted=%v, want %v", ok, tt.want)
 			}
 		})
+	}
+}
+
+func TestTrustedLocalMCPServersRejectDuplicateNamespacesAsASet(t *testing.T) {
+	for _, servers := range [][]config.ServerConfig{
+		{
+			{Name: "shared", Command: "mcphub"},
+			{Name: "shared", Command: "mcphub", Trust: &config.MCPTrustConfig{Disabled: true}},
+		},
+		{
+			{Name: "shared", Command: "mcphub"},
+			{Name: "shared", Command: "mcphub", Transport: "streamable-http", URL: "https://example.test/mcp"},
+		},
+	} {
+		ag := New(nil, nil, 4096)
+		ag.SetTrustedLocalMCPServers(servers)
+		if _, ok := ag.trustedMCPContract(llm.ToolCall{Name: "shared__mcphub_list_servers"}); ok {
+			t.Fatalf("duplicate namespace retained trust: %#v", servers)
+		}
 	}
 }
 
@@ -264,11 +339,14 @@ func TestAutoScopedAuthorityConfinesWritesAndCortexLifecycle(t *testing.T) {
 		{name: "normal trusted cortex read", mode: AuthorityNormal, kind: executionpkg.KindMCP, call: llm.ToolCall{Name: "mcphub__cortex__cortex_status"}, want: true},
 		{name: "plan trusted cortex read", mode: AuthorityPlan, kind: executionpkg.KindMCP, call: llm.ToolCall{Name: "mcphub__cortex__cortex_status"}, want: true},
 		{name: "normal lifecycle still prompts", mode: AuthorityNormal, kind: executionpkg.KindMCP, call: llm.ToolCall{Name: "cortex__cortex_open_task"}},
-		{name: "trusted lifecycle defaults to workspace", mode: AuthorityAutoScoped, kind: executionpkg.KindMCP, call: llm.ToolCall{Name: "cortex__cortex_open_task"}, want: true},
+		{name: "lifecycle missing workspace prompts", mode: AuthorityAutoScoped, kind: executionpkg.KindMCP, call: llm.ToolCall{Name: "cortex__cortex_open_task"}},
+		{name: "lifecycle blank workspace prompts", mode: AuthorityAutoScoped, kind: executionpkg.KindMCP, call: llm.ToolCall{Name: "cortex__cortex_open_task", Arguments: map[string]any{"workspace": " "}}},
+		{name: "lifecycle alternate selector prompts", mode: AuthorityAutoScoped, kind: executionpkg.KindMCP, call: llm.ToolCall{Name: "cortex__cortex_open_task", Arguments: map[string]any{"root": workspace}}},
 		{name: "trusted lifecycle explicit workspace", mode: AuthorityAutoScoped, kind: executionpkg.KindMCP, call: llm.ToolCall{Name: "cortex__cortex_open_task", Arguments: map[string]any{"workspace": workspace}}, want: true},
 		{name: "lifecycle parent escape prompts", mode: AuthorityAutoScoped, kind: executionpkg.KindMCP, call: llm.ToolCall{Name: "cortex__cortex_open_task", Arguments: map[string]any{"workspace": ".."}}},
 		{name: "lifecycle symlink escape prompts", mode: AuthorityAutoScoped, kind: executionpkg.KindMCP, call: llm.ToolCall{Name: "cortex__cortex_open_task", Arguments: map[string]any{"workspace": insideSymlink}}},
 		{name: "lazy lifecycle nested workspace", mode: AuthorityAutoScoped, kind: executionpkg.KindMCP, call: llm.ToolCall{Name: "mcphub__mcphub_call_tool", Arguments: map[string]any{"server": "cortex", "tool": "cortex_plan", "arguments": map[string]any{"workspace": "."}}}, want: true},
+		{name: "lazy lifecycle missing nested arguments", mode: AuthorityAutoScoped, kind: executionpkg.KindMCP, call: llm.ToolCall{Name: "mcphub__mcphub_call_tool", Arguments: map[string]any{"server": "cortex", "tool": "cortex_plan"}}},
 		{name: "lazy lifecycle nested path escape", mode: AuthorityAutoScoped, kind: executionpkg.KindMCP, call: llm.ToolCall{Name: "mcphub__mcphub_call_tool", Arguments: map[string]any{"server": "cortex", "tool": "cortex_plan", "arguments": map[string]any{"workspace": ".."}}}},
 		{name: "lazy lifecycle malformed nested args", mode: AuthorityAutoScoped, kind: executionpkg.KindMCP, call: llm.ToolCall{Name: "mcphub__mcphub_call_tool", Arguments: map[string]any{"server": "cortex", "tool": "cortex_plan", "arguments": "not-an-object"}}},
 		{name: "human answer remains gated", mode: AuthorityAutoScoped, kind: executionpkg.KindMCP, call: llm.ToolCall{Name: "cortex__cortex_answer_decision"}},
@@ -394,17 +472,68 @@ func TestAutoScopedTrustedMCPHonorsExplicitDeny(t *testing.T) {
 	ag := New(nil, nil, 4096)
 	ag.SetWorkDir(t.TempDir())
 	ag.SetTrustedLocalMCPServers([]config.ServerConfig{{Name: "mcphub", Command: "mcphub"}})
-	call := llm.ToolCall{Name: "mcphub__cortex__cortex_status"}
-	if !ag.authorityAutoApproves(AuthorityAutoScoped, call, executionpkg.KindMCP) {
+	pinned := llm.ToolCall{Name: "mcphub__cortex__cortex_status"}
+	lazy := llm.ToolCall{
+		Name: "mcphub__mcphub_call_tool", Arguments: map[string]any{"server": "cortex", "tool": "cortex_status"},
+	}
+	if !ag.authorityAutoApproves(AuthorityAutoScoped, pinned, executionpkg.KindMCP) ||
+		!ag.authorityAutoApproves(AuthorityAutoScoped, lazy, executionpkg.KindMCP) {
 		t.Fatal("trusted MCP read was not eligible for scoped AUTO authority")
 	}
 	checker := permission.NewChecker(nil, false)
-	if err := checker.SetPolicy(call.Name, permission.PolicyDeny); err != nil {
+	if err := checker.SetPolicy(pinned.Name, permission.PolicyDeny); err != nil {
 		t.Fatal(err)
 	}
 	ag.SetPermissionChecker(checker)
-	if ag.authorityAutoApproves(AuthorityAutoScoped, call, executionpkg.KindMCP) {
-		t.Fatal("explicit MCP deny was bypassed by scoped AUTO authority")
+	for _, call := range []llm.ToolCall{pinned, lazy} {
+		if ag.authorityAutoApproves(AuthorityAutoScoped, call, executionpkg.KindMCP) {
+			t.Fatalf("explicit MCP deny was bypassed by %q", call.Name)
+		}
+		decision, err := ag.decideToolAuthorization(context.Background(), call, nil)
+		if err != nil || decision.allowed || decision.decision != permission.DecisionUserDeny {
+			t.Fatalf("canonical deny for %q = %#v, %v", call.Name, decision, err)
+		}
+	}
+}
+
+func TestGatewayPinnedDenyBlocksUncataloguedLazyAlias(t *testing.T) {
+	pinned := "mcphub__weather__set_alarm"
+	lazy := llm.ToolCall{
+		Name: "mcphub__mcphub_call_tool",
+		Arguments: map[string]any{
+			"server": "weather",
+			"tool":   "set_alarm",
+		},
+	}
+	for name, skipApprovals := range map[string]bool{
+		"normal":         false,
+		"skip_approvals": true,
+	} {
+		t.Run(name, func(t *testing.T) {
+			ag := New(nil, nil, 4096)
+			ag.SetAuthorityMode(AuthorityNormal)
+			ag.SetTrustedLocalMCPServers([]config.ServerConfig{{Name: "mcphub", Command: "mcphub"}})
+			if _, catalogued := ag.trustedMCPContract(lazy); catalogued {
+				t.Fatal("uncatalogued downstream route unexpectedly gained a trust contract")
+			}
+			checker := permission.NewChecker(nil, skipApprovals)
+			if err := checker.SetPolicy(pinned, permission.PolicyDeny); err != nil {
+				t.Fatal(err)
+			}
+			ag.SetPermissionChecker(checker)
+
+			if got := ag.permissionCheckResult(checker, lazy); got != permission.CheckDeny {
+				t.Fatalf("lazy alias policy = %v, want deny", got)
+			}
+			decision, err := ag.decideToolAuthorization(context.Background(), lazy, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.allowed || decision.approval != executionpkg.ApprovalPolicyDenied ||
+				decision.decision != permission.DecisionUserDeny {
+				t.Fatalf("lazy alias authorization = %#v, want policy denial", decision)
+			}
+		})
 	}
 }
 
@@ -557,6 +686,29 @@ func TestExecutionOutcomeAnsweredRequiresEffectOwnerReceipt(t *testing.T) {
 				t.Fatalf("answered = %v (projection %+v), want %v", got, projection, tt.want)
 			}
 		})
+	}
+}
+
+func TestGatewayTypedTerminalDomainsProveDownstreamAnswered(t *testing.T) {
+	ag := New(nil, nil, 4096)
+	ag.SetTrustedLocalMCPServers([]config.ServerConfig{{Name: "mcphub", Command: "mcphub"}})
+	call := llm.ToolCall{Name: "mcphub__cortex__cortex_plan"}
+	for _, domain := range []ecosystem.DomainState{
+		ecosystem.DomainFailed, ecosystem.DomainBlocked, ecosystem.DomainConflict,
+		ecosystem.DomainDrift, ecosystem.DomainAttention, ecosystem.DomainSucceeded,
+	} {
+		projection := ecosystem.ToolProjection{Domain: domain, DomainTyped: true}
+		if !ag.executionOutcomeAnswered(call, executionpkg.KindMCP, executionpkg.Effectful, "typed", false, projection) {
+			t.Fatalf("typed terminal domain %q was not treated as an answer", domain)
+		}
+	}
+	for _, projection := range []ecosystem.ToolProjection{
+		{Domain: ecosystem.DomainUnknown, DomainTyped: true},
+		{Domain: ecosystem.DomainFailed, DomainTyped: false},
+	} {
+		if ag.executionOutcomeAnswered(call, executionpkg.KindMCP, executionpkg.Effectful, "untyped", false, projection) {
+			t.Fatalf("non-authoritative projection proved an answer: %#v", projection)
+		}
 	}
 }
 

@@ -21,6 +21,7 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
 	executionpkg "github.com/abdul-hamid-achik/local-agent/internal/execution"
+	"github.com/abdul-hamid-achik/local-agent/internal/goal"
 	"github.com/abdul-hamid-achik/local-agent/internal/goaladvisor"
 	"github.com/abdul-hamid-achik/local-agent/internal/ice"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
@@ -389,19 +390,37 @@ func run() int {
 			fmt.Fprintln(os.Stderr, "local-agent: workspace identity is unavailable; refusing to start a headless turn")
 			return 1
 		}
-		session, err := dbStore.CreateSession(ctx, db.CreateSessionParams{
-			Title:       headlessSessionTitle(promptFlag),
-			Model:       modelName,
-			Mode:        modeConfig.Label,
-			WorkspaceID: workspace,
-		})
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "local-agent: create execution session: %v\n", err)
-			return 1
+		var goalRuntime *goal.Runtime
+		sessionStateRevision := int64(0)
+		executionCursor := int64(0)
+		newSession := activeGoalRun == nil
+		var session db.Session
+		if activeGoalRun != nil {
+			var state headlessGoalState
+			var record db.SessionStateRecord
+			session, goalRuntime, state, record, err = loadHeadlessGoalState(ctx, dbStore, workspace, activeGoalRun.SessionID)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "goal run: load session: %v\n", err)
+				return 1
+			}
+			ag.ReplaceMessages(state.Messages)
+			executionCursor = state.ExecutionCursor
+			sessionStateRevision = record.Revision
+		} else {
+			session, err = dbStore.CreateSession(ctx, db.CreateSessionParams{
+				Title: headlessSessionTitle(promptFlag), Model: modelName, Mode: modeConfig.Label, WorkspaceID: workspace,
+			})
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "local-agent: create execution session: %v\n", err)
+				return 1
+			}
 		}
 		executionLease, err := dbStore.AcquireExecutionSessionLease(ctx, session.ID, workspace)
 		if err != nil {
-			cleanupErr := dbStore.DeleteSession(context.Background(), session.ID)
+			var cleanupErr error
+			if newSession {
+				cleanupErr = dbStore.DeleteSession(context.Background(), session.ID)
+			}
 			fmt.Fprintf(os.Stderr, "local-agent: lock execution session: %v\n", errors.Join(err, cleanupErr))
 			return 1
 		}
@@ -413,16 +432,54 @@ func run() int {
 		}()
 		ag.SetCheckpointSessionID(session.ID)
 		ag.SetExecutionSessionID(session.ID)
-		ag.SetExecutionSnapshotCursor(0)
+		ag.SetExecutionSnapshotCursor(executionCursor)
 
 		// Run the agent synchronously.
 		out := agent.NewHeadlessOutput()
+		if goalRuntime != nil {
+			turnID, idErr := goal.NewGoalID()
+			if idErr != nil {
+				fmt.Fprintf(os.Stderr, "goal run: create turn identity: %v\n", idErr)
+				return 1
+			}
+			admission := goal.AdmissionManual
+			snapshot, snapshotErr := goalRuntime.Snapshot(ctx)
+			if snapshotErr != nil {
+				fmt.Fprintf(os.Stderr, "goal run: inspect runtime: %v\n", snapshotErr)
+				return 1
+			}
+			if snapshot.State == goal.StatePaused {
+				if err := goalRuntime.Resume(ctx, "explicit headless goal run"); err != nil {
+					fmt.Fprintf(os.Stderr, "goal run: resume goal: %v\n", err)
+					return 1
+				}
+				snapshot, snapshotErr = goalRuntime.Snapshot(ctx)
+				if snapshotErr != nil {
+					fmt.Fprintf(os.Stderr, "goal run: inspect resumed runtime: %v\n", snapshotErr)
+					return 1
+				}
+			}
+			if snapshot.LastTurn == nil {
+				admission = goal.AdmissionInitial
+			}
+			if _, err := goalRuntime.BeginTurn(ctx, "turn_"+turnID, admission); err != nil {
+				fmt.Fprintf(os.Stderr, "goal run: admit turn: %v\n", err)
+				return 1
+			}
+		}
 		ag.AddUserMessage(promptFlag)
-		sessionStateRevision := int64(0)
 		persistHeadlessState := func(saveCtx context.Context, executionCursor int64) error {
-			stateJSON, encodeErr := ui.EncodeHeadlessSessionState(
-				ag.Messages(), modelName, cfg.AgentProfile, modelPinned, executionCursor,
-			)
+			var stateJSON string
+			var encodeErr error
+			if goalRuntime != nil {
+				snapshot, snapshotErr := goalRuntime.Snapshot(saveCtx)
+				if snapshotErr != nil {
+					return snapshotErr
+				}
+				stateJSON, encodeErr = ui.EncodeHeadlessGoalSessionState(ag.Messages(), modelName, cfg.AgentProfile, modelPinned, executionCursor, snapshot)
+			} else {
+				stateJSON, encodeErr = ui.EncodeHeadlessSessionState(ag.Messages(), modelName, cfg.AgentProfile, modelPinned, executionCursor)
+			}
 			if encodeErr != nil {
 				return encodeErr
 			}
@@ -435,11 +492,14 @@ func run() int {
 			sessionStateRevision = nextRevision
 			return nil
 		}
-		if err := persistHeadlessState(ctx, 0); err != nil {
+		if err := persistHeadlessState(ctx, executionCursor); err != nil {
 			leaseErr := executionLease.Close()
-			cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), time.Second)
-			cleanupErr := dbStore.DeleteSession(cleanupCtx, session.ID)
-			cancelCleanup()
+			var cleanupErr error
+			if newSession {
+				cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), time.Second)
+				cleanupErr = dbStore.DeleteSession(cleanupCtx, session.ID)
+				cancelCleanup()
+			}
 			fmt.Fprintf(os.Stderr, "local-agent: save execution session before dispatch: %v\n", err)
 			if cleanupFailure := errors.Join(leaseErr, cleanupErr); cleanupFailure != nil {
 				fmt.Fprintf(os.Stderr, "local-agent: remove incomplete execution session: %v\n", cleanupFailure)
@@ -447,9 +507,32 @@ func run() int {
 			return 1
 		}
 		runErr := ag.Run(ctx, out)
+		if goalRuntime != nil {
+			pending, snapshotErr := goalRuntime.Snapshot(context.Background())
+			if snapshotErr != nil {
+				runErr = errors.Join(runErr, snapshotErr)
+			} else if pending.PendingContinuation != nil {
+				summary, evalTokens, productive := out.GoalTurnStats()
+				report := goal.TurnReport{
+					TurnID: pending.PendingContinuation.TurnID, Productive: runErr == nil && productive,
+					Summary: summary, EvalTokens: evalTokens,
+				}
+				if runErr != nil {
+					report.Summary = boundedHeadlessGoalError(runErr)
+				}
+				var unresolved *agent.UnresolvedExecutionError
+				if errors.As(runErr, &unresolved) {
+					report.OutcomeUnknown = true
+					report.OutcomeRef = unresolved.ExecutionID
+					if report.OutcomeRef == "" {
+						report.OutcomeRef = pending.PendingContinuation.TurnID
+					}
+				}
+				runErr = errors.Join(runErr, goalRuntime.RecordTurn(context.Background(), report))
+			}
+		}
 		saveCtx, cancelSave := context.WithTimeout(context.Background(), 2*time.Second)
-		finalCursor := int64(0)
-		finalCursor, cursorErr := headlessSnapshotExecutionCursor(saveCtx, dbStore, ag, session.ID, workspace, 0)
+		finalCursor, cursorErr := headlessSnapshotExecutionCursor(saveCtx, dbStore, ag, session.ID, workspace, executionCursor)
 		saveErr := persistHeadlessState(saveCtx, finalCursor)
 		cancelSave()
 		saveErr = errors.Join(cursorErr, saveErr)

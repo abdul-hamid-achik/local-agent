@@ -11,7 +11,9 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/abdul-hamid-achik/local-agent/internal/config"
 	"github.com/abdul-hamid-achik/local-agent/internal/ecosystem"
+	executionpkg "github.com/abdul-hamid-achik/local-agent/internal/execution"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 )
 
@@ -87,7 +89,7 @@ func (a *Agent) semanticToolContents(call llm.ToolCall, projection ecosystem.Too
 	}
 	durableResult = ecosystem.SafeReceiptText(projection)
 	modelResult = durableResult
-	if _, trusted := a.trustedMCPContract(call); trusted && projection.Operation == "mcphub_get_result" && !toolError {
+	if projection.Operation == "mcphub_get_result" && !toolError && a.trustedDirectMCPHubOperation(call, projection.Operation) {
 		if transient, ok := ecosystem.TransientModelContent(projection, ecosystem.RawReceipt{Structured: structured}); ok {
 			return transient, durableResult
 		}
@@ -123,7 +125,11 @@ func (a *Agent) trustedMCPHubTransientContent(call llm.ToolCall, projection ecos
 
 func (a *Agent) trustedDirectMCPHubOperation(call llm.ToolCall, operation string) bool {
 	parts := strings.Split(call.Name, "__")
-	return len(parts) == 2 && parts[1] == operation && a.trustedMCPImplementation(parts[0]) == trustedMCPHub
+	if len(parts) != 2 || parts[1] != operation || !a.isTrustedMCPHubNamespace(parts[0]) {
+		return false
+	}
+	contract, trusted := a.trustedMCPContract(call)
+	return trusted && contract.auto && contract.effect == executionpkg.EffectReadOnly
 }
 
 func trustedMCPHubDescribeContent(call llm.ToolCall, projection ecosystem.ToolProjection, structured json.RawMessage) (string, bool) {
@@ -611,6 +617,32 @@ func (a *Agent) trustedCortexTransientContent(call llm.ToolCall, projection ecos
 		return "", false
 	}
 	if _, trusted := a.trustedMCPContract(call); !trusted {
+		return "", false
+	}
+	parts := strings.Split(call.Name, "__")
+	if len(parts) < 2 {
+		return "", false
+	}
+	server, ok := a.trustedMCPServer(parts[0])
+	if !ok {
+		return "", false
+	}
+	switch server.gateway {
+	case "":
+		// A direct route may use Cortex's transient parser only when the
+		// host-validated executable identity is actually Cortex. A custom
+		// server must not gain that identity by naming an operation cortex_*.
+		if server.localOwner != "cortex" {
+			return "", false
+		}
+	case config.MCPTrustGatewayMCPHub:
+		// A gateway route is allowed only when its exact pinned/lazy target is
+		// Cortex; the trust contract check above remains the route allowlist.
+		downstream, ok := a.gatewayDownstreamServer(call)
+		if !ok || downstream != "cortex" {
+			return "", false
+		}
+	default:
 		return "", false
 	}
 	// Use the post-hook text copy, not StructuredContent, so host result

@@ -61,12 +61,16 @@ type BobAction struct {
 // bobData is the union of the data fields this package reads. Absent fields
 // stay zero, which keeps parsing tolerant of both older and newer binaries.
 type bobData struct {
-	Error     *BobError     `json:"error"`
-	Conflicts []BobConflict `json:"conflicts"`
-	Actions   []BobAction   `json:"actions"`
-	Clean     *bool         `json:"clean"`
-	Plan      *struct {
-		Actions []BobAction `json:"actions"`
+	Error         *BobError     `json:"error"`
+	Conflicts     []BobConflict `json:"conflicts"`
+	Actions       []BobAction   `json:"actions"`
+	Clean         *bool         `json:"clean"`
+	LockChanged   *bool         `json:"lock_changed"`
+	ConflictCount *int          `json:"conflict_count"`
+	Plan          *struct {
+		Actions       []BobAction `json:"actions"`
+		LockChanged   *bool       `json:"lock_changed"`
+		ConflictCount *int        `json:"conflict_count"`
 	} `json:"plan"`
 }
 
@@ -172,6 +176,30 @@ func (e BobEnvelope) CleanFlag() (clean, present bool) {
 		return false, false
 	}
 	return *d.Clean, true
+}
+
+// LockChangedFlag returns the plan's lockfile drift marker when present.
+func (e BobEnvelope) LockChangedFlag() (changed, present bool) {
+	d := e.data()
+	if d.LockChanged != nil {
+		return *d.LockChanged, true
+	}
+	if d.Plan != nil && d.Plan.LockChanged != nil {
+		return *d.Plan.LockChanged, true
+	}
+	return false, false
+}
+
+// ConflictCount returns the plan's explicit conflict count when present.
+func (e BobEnvelope) ConflictCount() (count int, present bool) {
+	d := e.data()
+	if d.ConflictCount != nil {
+		return *d.ConflictCount, true
+	}
+	if d.Plan != nil && d.Plan.ConflictCount != nil {
+		return *d.Plan.ConflictCount, true
+	}
+	return 0, false
 }
 
 const (

@@ -240,6 +240,53 @@ func TestRepositoryConfigRequiresDigestBoundTrustForSTDIO(t *testing.T) {
 	}
 }
 
+func TestRepositoryMCPDigestBindsCanonicalEffectiveTrust(t *testing.T) {
+	workspace := enterIsolatedConfigWorkspace(t)
+	executable := filepath.Join(workspace, "bin", "mcphub")
+	writeExecutableFixture(t, executable, "#!/bin/sh\nexit 0\n")
+	t.Setenv("PATH", filepath.Dir(executable))
+	path := filepath.Join(workspace, "local-agent.yaml")
+	write := func(routes string) {
+		writeConfigFixture(t, path, `servers:
+  - name: gateway
+    command: mcphub
+    trust:
+      local_owner: mcphub
+      gateway: mcphub
+      read_only:
+`+routes)
+	}
+	write("        - mcphub_stats\n        - mcphub_list_servers\n")
+
+	_, err := Load()
+	var initial *RepoMCPTrustError
+	if !errors.As(err, &initial) {
+		t.Fatalf("initial Load error = %v, want RepoMCPTrustError", err)
+	}
+
+	// Contract order is not authority and therefore must not churn consent.
+	write("        - mcphub_list_servers\n        - mcphub_stats\n")
+	t.Setenv(repoMCPTrustEnv, initial.Digest)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("reordered equivalent trust changed digest: %v", err)
+	}
+	resolved, err := ResolveMCPTrust(cfg.Servers[0])
+	if err != nil || resolved == nil || strings.Join(resolved.ReadOnly, ",") != "mcphub_list_servers,mcphub_stats" {
+		t.Fatalf("resolved canonical trust = %#v, %v", resolved, err)
+	}
+
+	write("        - bob__bob_plan\n        - mcphub_list_servers\n        - mcphub_stats\n")
+	_, err = Load()
+	var changed *RepoMCPTrustError
+	if !errors.As(err, &changed) {
+		t.Fatalf("changed trust Load error = %v, want RepoMCPTrustError", err)
+	}
+	if changed.Digest == initial.Digest {
+		t.Fatalf("widened MCP trust retained digest %q", changed.Digest)
+	}
+}
+
 func TestRepositoryConfigAllowsNonExecutableMCPWithoutTrust(t *testing.T) {
 	workspace := enterIsolatedConfigWorkspace(t)
 	writeConfigFixture(t, filepath.Join(workspace, "local-agent.yml"), `servers:

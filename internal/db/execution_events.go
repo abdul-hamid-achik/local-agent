@@ -247,6 +247,31 @@ func (s *Store) ListSessionExecutionEvents(ctx context.Context, sessionID int64,
 	return events, nil
 }
 
+// SessionExecutionEventExists reports whether eventID is a durable event in
+// the exact scoped session. A recovery cursor is a global execution_events row
+// ID, so checking only that it is below the session's latest ID can accidentally
+// accept an event owned by another session.
+func (s *Store) SessionExecutionEventExists(ctx context.Context, sessionID int64, workspaceID string, eventID int64) (bool, error) {
+	if eventID <= 0 {
+		return false, fmt.Errorf("invalid execution event id %d", eventID)
+	}
+	if err := validateExecutionSessionScope(ctx, s.db, sessionID, workspaceID); err != nil {
+		return false, err
+	}
+	var exists bool
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS(
+		   SELECT 1
+		     FROM execution_events
+		    WHERE id = ? AND session_id = ? AND workspace_id = ?
+		 )`,
+		eventID, sessionID, workspaceID,
+	).Scan(&exists); err != nil {
+		return false, fmt.Errorf("check scoped execution event: %w", err)
+	}
+	return exists, nil
+}
+
 // ListUnresolvedExecutions returns bounded latest states that block automatic
 // continuation. This includes non-terminal lifecycles and the durable terminal
 // outcome_unknown state, which remains operationally unresolved until explicit
@@ -307,14 +332,16 @@ func (s *Store) ListExecutionRecoveryHazards(ctx context.Context, sessionID int6
 // latest executions whose external outcome still requires evidence, oldest
 // first, across every turn. Already-reconciled executions and answered
 // post-cursor receipts are excluded: the former have evidence on file and the
-// latter need snapshot projection, not reconciliation.
+// latter need snapshot projection, not reconciliation. It fails closed rather
+// than truncating when more than limit effective pending executions exist.
 func (s *Store) ListStandaloneExecutionReconciliationPending(ctx context.Context, sessionID int64, workspaceID string, limit int) ([]execution.State, error) {
 	if err := validateExecutionListLimit(limit, maxExecutionRecoveryHazards); err != nil {
 		return nil, err
 	}
 	return s.listEffectiveExecutionStates(ctx, effectiveExecutionQuery{
 		kind: effectiveReconciliationPending, sessionID: sessionID, workspaceID: workspaceID,
-	}, limit, false)
+		requireGoalLess: true,
+	}, limit, true)
 }
 
 func (s *Store) ListExecutionReconciliationTargets(ctx context.Context, sessionID int64, workspaceID, turnID string, limit int) ([]execution.State, error) {

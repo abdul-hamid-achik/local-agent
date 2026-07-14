@@ -136,12 +136,16 @@ Treat each MCP server as a separate trusted process. It may read files, contact 
 
 Local Agent treats MCP safety annotations as untrusted presentation hints, not
 authority. They may improve the wording of an approval preview, but they never
-change authorization or durable effect classification. Every MCP call remains
-effect-unknown and passes through the normal approval-policy path, including
-tools that declare themselves read-only. A contextual route and AUTO authority
-never approve the resulting call. `--skip-approvals` removes an `ask` prompt,
-but an explicit `deny` remains effective and the normal audit receipt is still
-recorded. `--yolo` is only a deprecated compatibility alias for that flag.
+change authorization or durable effect classification. By default, MCP calls
+remain effect-unknown and follow the normal approval-policy path. An exact
+local-STDIO trust contract may explicitly classify named routes as `read_only`
+or `workspace_effectful`: read-only routes can use the host's reduced-friction
+read path, while workspace-effectful routes can receive AUTO authority only
+when they provide an explicit workspace inside the active workspace. Unknown,
+remote, wrapped, or uncatalogued routes remain gated. `--skip-approvals`
+removes an `ask` prompt, but an explicit `deny` remains effective and the
+normal audit receipt is still recorded. `--yolo` is only a deprecated
+compatibility alias for that flag.
 
 ## Structured result boundary
 

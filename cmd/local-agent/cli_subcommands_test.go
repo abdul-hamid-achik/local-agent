@@ -106,6 +106,14 @@ func TestGoalSubcommandHelpDoesNotOpenDurableStore(t *testing.T) {
 			want: []string{"local-agent goal pending [options] <session-id>", "--limit N", "--json"},
 		},
 		{
+			name: "open", command: "open", args: []string{"--help"},
+			want: []string{"local-agent goal open --objective TEXT [options]", "--criterion TEXT", "--max-eval-tokens N"},
+		},
+		{
+			name: "run after positional", command: "run", args: []string{"42", "--help"},
+			want: []string{"local-agent goal run <session-id> --prompt TEXT [options]", "--skip-approvals", "--model NAME"},
+		},
+		{
 			name: "recover after positional", command: "recover", args: []string{"42", "--help"},
 			want: []string{
 				"local-agent goal recover", "Required with --apply:", "--item ID",

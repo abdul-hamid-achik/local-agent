@@ -246,14 +246,39 @@ servers:
   - name: mcphub
     command: mcphub
     args: [mcp, serve, --agent, local-agent]
+    trust:
+      local_owner: mcphub
+      gateway: mcphub
+      read_only:
+        - mcphub_list_servers
+        - mcphub_search_tools
+        - mcphub_describe_tool
+        - mcphub_resolve_tool
+        - bob__bob_check
+        - bob__bob_plan
+      workspace_effectful:
+        - cortex__cortex_investigate
+        - cortex__cortex_plan
 ```
+
+The `trust` block is host-owned, exact-route policy; see
+[`config.example.yaml`](config.example.yaml) for the complete built-in Cortex,
+Bob, and MCPHub compatibility catalog. It is accepted only for local STDIO when
+`local_owner` exactly matches the executable basename. `read_only` routes are
+auto-authorized and ledgered as reads. `workspace_effectful` routes are
+auto-authorized only in AUTO when an explicit `workspace` argument resolves
+inside the active workspace. Explicit
+deny policy still wins, and MCP annotations never grant authority. Omit the
+block to retain the exact build-owned migration profile for `mcphub`, `cortex`,
+or `bob`; use `trust: {disabled: true}` to suppress that profile.
 
 Configure Cortex, Obsidian, and the rest of your catalog inside MCPHub using their own installation instructions. Then:
 
 1. Start `local-agent`.
 2. Check startup status or run `/servers`.
 3. Use NORMAL for interactive MCP work, AUTO for proactive work, or `/goal` for a bounded durable run.
-4. Review and approve each MCP call.
+4. Review each MCP call; routes outside explicit trust still use the normal
+   approval path.
 
 `local-agent` intentionally keeps Cortex orchestration behind MCPHub instead of embedding a second intelligence stack. Cortex analysis, investigation, and delegation appear as namespaced MCP tools. MCPHub owns lazy discovery, authentication, and downstream policy; local-agent owns the final user approval and transcript.
 
@@ -474,6 +499,8 @@ ICE is still a flat JSON vector store rather than an ANN index, but its bounded 
 | `local-agent init [--force]` | Create a project `AGENTS.md` |
 | `local-agent logs` | List recent log files |
 | `local-agent logs -f` | Follow the latest log with `tail -f` |
+| `local-agent goal open --objective TEXT [options]` | Create a bounded durable goal in the current workspace without running provider work |
+| `local-agent goal run <session-id> --prompt TEXT [options]` | Run and durably settle one foreground turn for an existing headless goal |
 | `local-agent goal list [--limit 20] [--json]` | List validated durable goals in the current workspace without resuming them |
 | `local-agent goal show [--json] <session-id>` | Inspect one complete validated goal snapshot |
 | `local-agent goal pending [--limit 20] [--json] <session-id>` | Inspect unresolved decisions, approvals, and recovery items |
@@ -491,6 +518,14 @@ not a stable JSON automation protocol. `--auto` and `--plan` require a
 non-empty prompt and are mutually exclusive. Passing an explicit empty or
 whitespace-only prompt exits with status 2 before configuration, network, or
 provider initialization.
+
+`goal open` creates only durable state. `goal run` restores that exact state,
+records an admission before provider dispatch, runs one AUTO-authority turn, and
+stores the resulting receipt and conversation before exiting. It runs in the
+foreground, explicitly resumes a paused goal when requested, and does not create
+a daemon or automatically schedule another turn.
+Use `--skip-approvals` only when you intend to suppress interactive approval
+prompts; explicit denies and host/tool boundaries still apply.
 
 `goal list`, `goal show`, `goal pending`, and the default `goal recover` dry run
 are read-only. Recovery mutation requires the complete explicit `--apply`

@@ -337,9 +337,17 @@ func ProjectReceipt(projection ToolProjection, receipt RawReceipt) ToolProjectio
 		if domain, ok := projectBobReceipt(projection.Operation, receipt); ok {
 			projection.Domain = domain
 			projection.DomainTyped = true
-		} else if envelope, ok := ParseBobEnvelope(receipt.Text); ok {
-			projection.Domain = classifyBobDomain(envelope)
-			projection.DomainTyped = true
+		} else if !hasStructuredReceipt(receipt) {
+			if envelope, ok := ParseBobEnvelope(receipt.Text); ok {
+				if domain, recognized := projectBobCLIReceipt(projection.Operation, envelope); recognized {
+					projection.Domain = domain
+					projection.DomainTyped = true
+				} else {
+					projection.Domain = DomainUnknown
+				}
+			} else {
+				projection.Domain = DomainUnknown
+			}
 		} else {
 			projection.Domain = DomainUnknown
 		}
@@ -647,16 +655,15 @@ func classifyBobDomain(envelope BobEnvelope) DomainState {
 		return DomainConflict
 	}
 	if info, ok := envelope.ErrorInfo(); ok {
-		switch info.Code {
-		case "conflicts":
-			return DomainConflict
-		case "missing_manifest", "manifest_invalid", "input_invalid", "workspace_invalid":
-			return DomainBlocked
-		default:
-			return DomainFailed
-		}
+		return classifyBobErrorCode(info.Code)
+	}
+	if count, present := envelope.ConflictCount(); present && count > 0 {
+		return DomainConflict
 	}
 	if clean, present := envelope.CleanFlag(); present && !clean {
+		return DomainDrift
+	}
+	if changed, present := envelope.LockChangedFlag(); present && changed {
 		return DomainDrift
 	}
 	for _, action := range envelope.Actions() {
@@ -666,11 +673,169 @@ func classifyBobDomain(envelope BobEnvelope) DomainState {
 		if action.Code != "" && action.Code != "in_sync" && action.Code != "identical_content" {
 			return DomainDrift
 		}
+		if action.Code == "" && action.Kind != "" && action.Kind != "unchanged" {
+			return DomainDrift
+		}
 	}
 	if !envelope.OK {
 		return DomainFailed
 	}
 	return DomainSucceeded
+}
+
+func projectBobCLIReceipt(operation string, envelope BobEnvelope) (DomainState, bool) {
+	expectedCommand := map[string]string{
+		"bob_check":           "check",
+		"bob_inspect":         "inspect",
+		"bob_plan":            "plan",
+		"bob_recipe_describe": "recipe show",
+		"bob_stats":           "stats",
+	}[operation]
+	if expectedCommand == "" {
+		return "", false
+	}
+	if info, hasError := envelope.ErrorInfo(); hasError {
+		errorCommand := expectedCommand
+		if operation == "bob_recipe_describe" {
+			errorCommand = "recipe"
+		}
+		if envelope.Command != errorCommand {
+			return "", false
+		}
+		if envelope.OK || strings.TrimSpace(info.Code) == "" || strings.TrimSpace(info.Code) != info.Code ||
+			strings.TrimSpace(info.Message) == "" {
+			return "", false
+		}
+		return classifyBobErrorCode(info.Code), true
+	}
+	if envelope.Command != expectedCommand {
+		return "", false
+	}
+	if !validBobCLISuccess(operation, envelope) {
+		return "", false
+	}
+	if operation == "bob_inspect" {
+		inspection, ok := validBobCLIInspectReport(envelope.Data)
+		if !ok {
+			return "", false
+		}
+		return classifyBobInspection(inspection), true
+	}
+	if operation == "bob_plan" && len(envelope.Actions()) == 0 {
+		// Bob's --conflicts-only projection can legitimately omit every
+		// non-conflicting action. The envelope does not say whether filtering
+		// was requested, so an empty plan is valid but cannot prove convergence.
+		return DomainAttention, true
+	}
+	return classifyBobDomain(envelope), true
+}
+
+func validBobCLISuccess(operation string, envelope BobEnvelope) bool {
+	switch operation {
+	case "bob_inspect":
+		_, reportOK := validBobCLIInspectReport(envelope.Data)
+		return envelope.OK && reportOK
+	case "bob_plan":
+		return envelope.OK && validBobCLIPlan(envelope.Data, true)
+	case "bob_check":
+		var data struct {
+			Clean *bool           `json:"clean"`
+			Plan  json.RawMessage `json:"plan"`
+		}
+		if json.Unmarshal(envelope.Data, &data) != nil || data.Clean == nil || envelope.OK != *data.Clean ||
+			!validBobCLIPlan(data.Plan, true) {
+			return false
+		}
+		if !*data.Clean {
+			return true
+		}
+		var plan struct {
+			LockChanged *bool       `json:"lock_changed"`
+			Actions     []BobAction `json:"actions"`
+		}
+		if json.Unmarshal(data.Plan, &plan) != nil || plan.LockChanged == nil || *plan.LockChanged {
+			return false
+		}
+		for _, action := range plan.Actions {
+			if action.Kind != "unchanged" {
+				return false
+			}
+		}
+		return true
+	case "bob_recipe_describe":
+		return envelope.OK && validBobCLIRecipeDescription(envelope.Data)
+	case "bob_stats":
+		var data struct {
+			Enabled   *bool           `json:"enabled"`
+			LocalOnly *bool           `json:"local_only"`
+			Selection string          `json:"selection"`
+			Stats     json.RawMessage `json:"stats"`
+		}
+		return envelope.OK && json.Unmarshal(envelope.Data, &data) == nil && data.Enabled != nil &&
+			data.LocalOnly != nil && (data.Selection == "all" || validBobWorkspace(data.Selection)) &&
+			*data.LocalOnly && validBobStats(data.Stats, *data.Enabled)
+	default:
+		return false
+	}
+}
+
+func validBobCLIPlan(raw json.RawMessage, allowEmpty bool) bool {
+	if !jsonKind(raw, '{') {
+		return false
+	}
+	var plan struct {
+		SchemaVersion int             `json:"schema_version"`
+		Recipe        json.RawMessage `json:"recipe"`
+		LockChanged   *bool           `json:"lock_changed"`
+		ConflictCount *int            `json:"conflict_count"`
+		Actions       []BobAction     `json:"actions"`
+	}
+	if json.Unmarshal(raw, &plan) != nil || plan.SchemaVersion != 1 || plan.LockChanged == nil ||
+		plan.ConflictCount == nil || *plan.ConflictCount < 0 || !jsonObjectHasKey(raw, "actions") {
+		return false
+	}
+	_, recipeOK := validBobRecipeRef(plan.Recipe)
+	if !recipeOK || (!allowEmpty && len(plan.Actions) == 0) {
+		return false
+	}
+	conflicts := 0
+	previousPath := ""
+	for index, action := range plan.Actions {
+		if !validBobActionPath(action.Path) || !validBobCLIAction(action) {
+			return false
+		}
+		if index > 0 && action.Path <= previousPath {
+			return false
+		}
+		previousPath = action.Path
+		if action.Kind == "conflict" {
+			conflicts++
+		}
+	}
+	return conflicts == *plan.ConflictCount
+}
+
+func validBobCLIAction(action BobAction) bool {
+	if action.Code == "" {
+		switch action.Kind {
+		case "create", "update", "adopt", "unchanged", "conflict":
+			return true
+		default:
+			return false
+		}
+	}
+	return validBobActionKindCode(action.Kind, action.Code)
+}
+
+func classifyBobErrorCode(code string) DomainState {
+	switch code {
+	case "conflicts":
+		return DomainConflict
+	case "missing_manifest", "manifest_invalid", "manifest_too_large", "recipe_invalid", "recipe_unknown", "input_invalid", "workspace_invalid", "workspace_unauthorized":
+		return DomainBlocked
+	default:
+		return DomainFailed
+	}
 }
 
 // Successful reports a semantically successful terminal outcome.

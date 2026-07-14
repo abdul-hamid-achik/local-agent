@@ -230,6 +230,9 @@ func TestEffectiveHazardProjectionFiltersBeforeLimitAndDetectsOverflow(t *testin
 	store := testStore(t)
 	workspaceID := "/workspace/reconciliation-pagination"
 	session := createExecutionTestSession(t, store, workspaceID)
+	if err := store.SaveSessionState(context.Background(), session.ID, `{"version":2,"goal":null,"execution_cursor":0}`); err != nil {
+		t.Fatal(err)
+	}
 	lease := acquireControlTestLease(t, store, session)
 
 	for index := 0; index < effectiveProjectionPageSize+1; index++ {
@@ -257,6 +260,9 @@ func TestEffectiveHazardProjectionFiltersBeforeLimitAndDetectsOverflow(t *testin
 	}
 	if _, err := store.ListExecutionReconciliationTargets(context.Background(), session.ID, workspaceID, "turn-overflow", 1); !errors.Is(err, ErrExecutionHazardOverflow) {
 		t.Fatalf("reconciliation target overflow error = %v", err)
+	}
+	if _, err := store.ListStandaloneExecutionReconciliationPending(context.Background(), session.ID, workspaceID, 1); !errors.Is(err, ErrExecutionHazardOverflow) {
+		t.Fatalf("standalone reconciliation pending overflow error = %v", err)
 	}
 	if _, err := store.ListExecutionRecoveryHazards(context.Background(), session.ID, workspaceID, 0, 1); !errors.Is(err, ErrExecutionHazardOverflow) {
 		t.Fatalf("recovery hazard overflow error = %v", err)

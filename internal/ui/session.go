@@ -424,6 +424,32 @@ func EncodeHeadlessSessionState(messages []llm.Message, model, agentProfile stri
 	})
 }
 
+// EncodeHeadlessGoalSessionState persists one headless turn together with the
+// exact Goal Runtime snapshot that admitted and settled it.
+func EncodeHeadlessGoalSessionState(messages []llm.Message, model, agentProfile string, modelPinned bool, executionCursor int64, snapshot goal.Snapshot) (string, error) {
+	if executionCursor < 0 {
+		return "", fmt.Errorf("encode goal session state: execution cursor must not be negative")
+	}
+	if snapshot.SessionID <= 0 {
+		return "", fmt.Errorf("encode goal session state: goal session ID must be positive")
+	}
+	entries := make([]persistedChatEntry, 0, len(messages))
+	for _, message := range messages {
+		switch message.Role {
+		case "user", "assistant":
+			if message.Content != "" {
+				entries = append(entries, persistedChatEntry{Kind: message.Role, Content: boundedSessionText(message.Content, maxPersistedToolResultBytes)})
+			}
+		}
+	}
+	copy := snapshot
+	return marshalPersistedSessionState(persistedSessionState{
+		Version: currentPersistedSessionVersion, Messages: append([]llm.Message(nil), messages...), Entries: entries,
+		Mode: ModeAuto, Model: model, ModelPinned: modelPinned, AgentProfile: agentProfile,
+		ExecutionCursor: executionCursor, Goal: &copy,
+	})
+}
+
 func marshalPersistedSessionState(state persistedSessionState) (string, error) {
 	state.Messages = agent.SanitizeMessagesForPersistence(state.Messages)
 	state.ToolEntries = sanitizePersistedToolEntryArgs(state.ToolEntries)

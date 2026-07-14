@@ -61,7 +61,7 @@ type Agent struct {
 	hooks             []ToolHook
 	mcpServerScope    map[string]struct{}
 	mcpScopeSet       bool
-	trustedMCP        map[string]trustedMCPImplementation
+	trustedMCP        map[string]trustedMCPServer
 	readRoots         map[string]*additionalReadRoot
 	readFiles         map[string]*additionalReadFile
 	capabilityAdvisor capabilityAdviser
@@ -119,7 +119,7 @@ func New(llmClient llm.Client, registry *mcp.Registry, numCtx int) *Agent {
 		executionRunID:    runID,
 		executionRunIDErr: runIDErr,
 		approvalGrants:    make(map[string]struct{}),
-		trustedMCP:        make(map[string]trustedMCPImplementation),
+		trustedMCP:        make(map[string]trustedMCPServer),
 		readRoots:         make(map[string]*additionalReadRoot),
 		readFiles:         make(map[string]*additionalReadFile),
 		capabilityRetries: make(map[capabilityRetryKey]struct{}),

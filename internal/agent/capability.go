@@ -12,7 +12,9 @@ import (
 	"unicode/utf8"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/capabilityadvisor"
+	"github.com/abdul-hamid-achik/local-agent/internal/config"
 	"github.com/abdul-hamid-achik/local-agent/internal/ecosystem"
+	executionpkg "github.com/abdul-hamid-achik/local-agent/internal/execution"
 	"github.com/abdul-hamid-achik/local-agent/internal/mcp"
 )
 
@@ -273,8 +275,9 @@ func (registry scopedCapabilityRegistry) ResolveToolName(remoteName string) (str
 	// closed instead of selecting one by map or configuration order.
 	agent.mu.RLock()
 	trustedNamespaces := make([]string, 0, len(agent.trustedMCP))
-	for namespace, implementation := range agent.trustedMCP {
-		if implementation == trustedMCPHub {
+	for namespace, server := range agent.trustedMCP {
+		contract, trusted := server.contracts["mcphub_resolve_tool"]
+		if server.gateway == config.MCPTrustGatewayMCPHub && trusted && contract.auto && contract.effect == executionpkg.EffectReadOnly {
 			trustedNamespaces = append(trustedNamespaces, namespace)
 		}
 	}

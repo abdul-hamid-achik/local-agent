@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 
+	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 	permissionpkg "github.com/abdul-hamid-achik/local-agent/internal/permission"
 )
 
@@ -74,12 +75,12 @@ func (a *Agent) approvalStateSnapshot() approvalHostState {
 	}
 }
 
-func (a *Agent) revalidateInteractiveApproval(state approvalHostState, toolName string) error {
+func (a *Agent) revalidateInteractiveApproval(state approvalHostState, call llm.ToolCall) error {
 	current := a.approvalStateSnapshot()
 	if current.hostVersion != state.hostVersion || current.filesystemVersion != state.filesystemVersion || current.checker != state.checker {
 		return fmt.Errorf("approval host or workspace policy changed while the request was open")
 	}
-	if state.checker == nil || state.checker.ToCheckResult(toolName) != permissionpkg.CheckAsk {
+	if state.checker == nil || a.permissionCheckResult(state.checker, call) != permissionpkg.CheckAsk {
 		return fmt.Errorf("tool permission policy changed while the request was open")
 	}
 	return nil

@@ -51,6 +51,25 @@ func TestSemanticToolContentsFeedsValidatedResultPageOnlyToActiveModel(t *testin
 	}
 }
 
+func TestSemanticToolContentsRequiresExactConfiguredMCPHubContract(t *testing.T) {
+	const secret = "SECRET_UNCONFIGURED_MCPHUB_CONTENT"
+	ag := New(nil, nil, 8192)
+	ag.SetTrustedLocalMCPServers([]config.ServerConfig{{
+		Name: "mcphub", Command: "mcphub",
+		Trust: &config.MCPTrustConfig{
+			LocalOwner: "mcphub", Gateway: config.MCPTrustGatewayMCPHub,
+			ReadOnly: []string{"mcphub_list_servers"},
+		},
+	}})
+	call := llm.ToolCall{Name: "mcphub__mcphub_search_tools", Arguments: map[string]any{"query": "find"}}
+	structured := json.RawMessage(`{"query":"find","count":1,"matches":[{"namespaced":"acme__inspect","description":"` + secret + `"}]}`)
+	projection := projectSemanticToolReceipt(call.Name, call.Arguments, "outer", structured, nil, false, false, false)
+	modelResult, durableResult := ag.semanticToolContents(call, projection, "outer", structured, false)
+	if modelResult != durableResult || durableResult != ecosystem.SafeReceiptText(projection) || strings.Contains(modelResult, secret) {
+		t.Fatalf("unconfigured MCPHub contract crossed transient boundary: model=%q durable=%q", modelResult, durableResult)
+	}
+}
+
 func TestSemanticToolContentsFeedsOnlyExactTrustedSuccessfulCortexResults(t *testing.T) {
 	const secret = "SECRET_TRUSTED_CORTEX_RESULT"
 	structured := json.RawMessage(`{"ok":true,"taskId":"task-123","summary":"` + secret + `","rawAvailable":false}`)
@@ -140,6 +159,46 @@ func TestSemanticToolContentsRejectsCortexSpoofsErrorsAndUntrustedManagementCont
 				t.Fatalf("untrusted content crossed model boundary: model=%q durable=%q", modelResult, durableResult)
 			}
 		})
+	}
+}
+
+func TestSemanticToolContentsRejectsCortexIdentitySpoof(t *testing.T) {
+	const secret = "SECRET_CORTEX_IDENTITY_SPOOF"
+	ag := New(nil, nil, 8192)
+	ag.SetTrustedLocalMCPServers([]config.ServerConfig{
+		{
+			Name: "acme", Command: "acme",
+			Trust: &config.MCPTrustConfig{LocalOwner: "acme", ReadOnly: []string{"cortex_status"}},
+		},
+	})
+	call := llm.ToolCall{Name: "acme__cortex_status"}
+	structured := json.RawMessage(`{"ok":true,"summary":"` + secret + `"}`)
+	projection := projectSemanticToolReceipt(call.Name, call.Arguments, string(structured), structured, nil, false, false, false)
+	modelResult, durableResult := ag.semanticToolContents(call, projection, string(structured), structured, false)
+	if modelResult != durableResult || strings.Contains(modelResult, secret) {
+		t.Fatalf("custom server crossed Cortex transient boundary: model=%q durable=%q", modelResult, durableResult)
+	}
+}
+
+func TestSemanticToolContentsRejectsMCPHubResultIdentitySpoof(t *testing.T) {
+	const secret = "SECRET_MCPHUB_RESULT_IDENTITY_SPOOF"
+	payload := []byte(`{"content":[{"type":"text","text":"` + secret + `"}]}`)
+	structured := json.RawMessage(fmt.Sprintf(
+		`{"status":"ok","callId":"call-identity-spoof","mediaType":"application/json","data":%q,"cursor":0,"nextCursor":%d,"done":true,"totalBytes":%d}`,
+		base64.StdEncoding.EncodeToString(payload), len(payload), len(payload),
+	))
+	ag := New(nil, nil, 8192)
+	ag.SetTrustedLocalMCPServers([]config.ServerConfig{
+		{
+			Name: "acme", Command: "acme",
+			Trust: &config.MCPTrustConfig{LocalOwner: "acme", ReadOnly: []string{"mcphub_get_result"}},
+		},
+	})
+	call := llm.ToolCall{Name: "acme__mcphub_get_result", Arguments: map[string]any{"callId": "call-identity-spoof", "cursor": 0}}
+	projection := projectSemanticToolReceipt(call.Name, call.Arguments, "outer MCP text", structured, nil, false, false, false)
+	modelResult, durableResult := ag.semanticToolContents(call, projection, string(structured), structured, false)
+	if modelResult != durableResult || strings.Contains(modelResult, secret) {
+		t.Fatalf("custom server crossed MCPHub result transient boundary: model=%q durable=%q", modelResult, durableResult)
 	}
 }
 
@@ -313,7 +372,7 @@ func (r *semanticOutputRecorder) ToolCallSemanticResult(_ string, _ string, resu
 func TestEmitSemanticToolResultDoesNotForwardRawStructuredContent(t *testing.T) {
 	recorder := &semanticOutputRecorder{}
 	secret := "SECRET_STRUCTURED_VALUE"
-	structured := json.RawMessage(`{"schema_version":1,"ok":true,"clean":false,"conflict_count":0,"private":"` + secret + `"}`)
+	structured := json.RawMessage(`{"schema_version":1,"ok":true,"workspace":"/repo","authority":{"mode":"exact_allowlist","default_workspace":"/repo","selected_workspace":"/repo","allowed_workspace_count":1},"plan_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","clean":false,"lock_changed":false,"conflict_count":0,"counts":{"create":0,"update":1,"adopt":0,"unchanged":0,"conflict":0},"warnings":[],"next_actions":[],"private":"` + secret + `"}`)
 	projection := projectSemanticToolReceipt(
 		"bob__bob_check", nil, "repository checked", structured, nil, false, false, false,
 	)

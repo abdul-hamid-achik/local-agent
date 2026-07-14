@@ -40,6 +40,29 @@ func TestHeadlessOutput_StreamDone(t *testing.T) {
 	}
 }
 
+func TestHeadlessOutput_GoalTurnStats(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	out := newHeadlessOutput(&stdout, &stderr)
+	out.StreamText("completed the requested change")
+	out.StreamDone(17, 42)
+	out.ToolCallStart("call-1", "read", map[string]any{"path": "README.md"})
+	out.ToolCallResult("call-1", "read", "contents", false, time.Millisecond)
+	summary, evalTokens, productive := out.GoalTurnStats()
+	if summary != "settled 1 tool call(s), 1 successful" || evalTokens != 17 || !productive {
+		t.Fatalf("goal stats = %q/%d/%t", summary, evalTokens, productive)
+	}
+}
+
+func TestHeadlessOutput_GoalTurnStatsDoesNotTreatProseAsConcreteProgress(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	out := newHeadlessOutput(&stdout, &stderr)
+	out.StreamText("I think this is complete")
+	summary, _, productive := out.GoalTurnStats()
+	if summary != "assistant yielded without a concrete tool receipt" || productive {
+		t.Fatalf("goal stats = %q productive=%t", summary, productive)
+	}
+}
+
 func TestHeadlessOutput_ToolCallStart(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	out := newHeadlessOutput(&stdout, &stderr)

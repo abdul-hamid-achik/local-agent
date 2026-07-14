@@ -166,9 +166,10 @@ func handleSessionRepair(store sessionRepairStore, workspace string, args []stri
 		executionFprintf(stdout, "  ...and %d more; every effect remains recorded in the durable execution ledger.\n",
 			view.AnsweredTotal-len(view.Repaired))
 	}
-	executionFprintln(stdout, "These effects happened but are absent from the saved transcript. Inspect them with:")
-	executionFprintf(stdout, "  local-agent execution recover %d EXECUTION_ID\n", view.SessionID)
-	executionFprintln(stdout, "and tell the agent what changed (or let it recheck workspace state) on the next prompt.")
+	executionFprintln(stdout, "These effects happened but are absent from the saved transcript.")
+	executionFprintln(stdout, "They are already terminal, so execution recovery does not apply. Review the durable")
+	executionFprintln(stdout, "ledger and current workspace state, then tell the agent what changed (or let it")
+	executionFprintln(stdout, "recheck workspace state) on the next prompt.")
 	return 0
 }
 
@@ -179,15 +180,19 @@ func writeSessionUsage(writer io.Writer) {
 	executionFprintln(writer, "  local-agent session repair [--json] SESSION_ID")
 	executionFprintln(writer)
 	executionFprintln(writer, "list exports nothing; it enumerates sessions in the current workspace.")
-	executionFprintln(writer, "export writes a read-only JSONL timeline and a markdown summary (execution")
+	executionFprintln(writer, "export writes a bounded JSONL audit projection and a markdown summary (execution")
 	executionFprintln(writer, "events, control records, token stats, file changes, and an open-issues table)")
-	executionFprintln(writer, "so a wedged session can be handed to another engineer or agent for debugging.")
+	executionFprintln(writer, "for debugging. Review each generated file before sharing: raw session state, receipt/detail")
+	executionFprintln(writer, "text, and paths may be present, and export bounds can omit older records.")
 	executionFprintln(writer)
 	executionFprintln(writer, "Repair re-derives the session's execution snapshot cursor from the durable")
 	executionFprintln(writer, "ledger after a crash left answered terminal receipts newer than the saved")
 	executionFprintln(writer, "transcript. It refuses while any execution still requires reconciliation")
 	executionFprintln(writer, "evidence (run `local-agent execution recover SESSION_ID --all` first), never")
 	executionFprintln(writer, "retries a tool, and never rewrites the immutable execution ledger.")
+	executionFprintln(writer, "Goal-owned sessions start with `local-agent goal show SESSION_ID`; an existing durable")
+	executionFprintln(writer, "reconciliation group can then be inspected with `local-agent goal recover SESSION_ID`.")
+	executionFprintln(writer, "Standalone projection repair and execution recovery intentionally refuse them.")
 	executionFprintln(writer)
 	executionFprintln(writer, "Close the interactive session before repairing; the exact session lease is")
 	executionFprintln(writer, "exclusive.")

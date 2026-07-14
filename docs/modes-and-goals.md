@@ -37,6 +37,30 @@ Free-form input such as `/goal improve the narrow model picker` opens the same
 review prefilled. Bare `/goal` opens it when no goal exists and shows the active
 goal otherwise.
 
+## Headless goal turns
+
+Create durable goal state without dispatching provider work:
+
+```bash
+local-agent goal open --objective "Finish the release audit" \
+  --criterion "the audit findings are verified" \
+  --max-continuation-turns 3 \
+  --max-eval-tokens 1200
+```
+
+Use the returned session ID to run one explicit foreground turn:
+
+```bash
+local-agent goal run <session-id> --prompt "Inspect the release and verify the criterion"
+```
+
+The run uses AUTO authority under the configured approval policy. Local Agent
+persists the turn admission before provider dispatch and stores the settled goal
+receipt with the conversation afterward. The explicit command resumes a paused
+goal, but refuses blocked or exhausted state. A command invocation runs one
+turn; it does not detach or automatically start another turn. Use `goal show`
+to inspect the resulting state before issuing another `goal run`.
+
 ## Compact goal command
 
 You can start with a duration and prompt:

@@ -17,7 +17,7 @@ func TestSemanticToolReceiptDoesNotPaintBobDriftGreen(t *testing.T) {
 	})
 	m = updated.(*Model)
 	projection := ecosystem.ProjectReceipt(ecosystem.ProjectToolCall("bob__bob_check", nil), ecosystem.RawReceipt{
-		Structured: []byte(`{"schema_version":1,"ok":true,"clean":false,"conflict_count":0}`),
+		Structured: []byte(`{"schema_version":1,"ok":true,"workspace":"/repo","authority":{"mode":"exact_allowlist","default_workspace":"/repo","selected_workspace":"/repo","allowed_workspace_count":1},"plan_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","clean":false,"lock_changed":false,"conflict_count":0,"counts":{"create":0,"update":1,"adopt":0,"unchanged":0,"conflict":0},"warnings":[],"next_actions":[]}`),
 	})
 	updated, _ = m.Update(ToolCallResultMsg{
 		ID: "bob-1", Name: "bob__bob_check", Result: `{"schema_version":1,"ok":true,"clean":false}`,

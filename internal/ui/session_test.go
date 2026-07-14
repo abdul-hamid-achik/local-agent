@@ -207,6 +207,31 @@ func TestEncodeHeadlessSessionStateIsResumable(t *testing.T) {
 	}
 }
 
+func TestEncodeHeadlessGoalSessionStateIsResumable(t *testing.T) {
+	t.Parallel()
+
+	runtime := newUIGoalRuntime(t, 73, goal.BudgetLimits{MaxContinuationTurns: 3, MaxEvalTokens: 1200})
+	snapshot := snapshotUIGoal(t, runtime)
+	messages := []llm.Message{{Role: "user", Content: "finish the goal"}, {Role: "assistant", Content: "working"}}
+	raw, err := EncodeHeadlessGoalSessionState(messages, "qwen3.5:4b", "builder", true, 19, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := decodeSessionState(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Version != currentPersistedSessionVersion || state.Mode != ModeAuto || state.ExecutionCursor != 19 {
+		t.Fatalf("goal metadata = version %d mode %v cursor %d", state.Version, state.Mode, state.ExecutionCursor)
+	}
+	if state.Goal == nil || state.Goal.SessionID != 73 || state.Goal.ID != snapshot.ID {
+		t.Fatalf("goal snapshot = %#v", state.Goal)
+	}
+	if len(state.Messages) != 2 || state.Messages[1].Content != "working" {
+		t.Fatalf("goal messages = %#v", state.Messages)
+	}
+}
+
 func TestPersistedModeMigrationSeparatesLegacyBuildFromAuto(t *testing.T) {
 	tests := []struct {
 		name string

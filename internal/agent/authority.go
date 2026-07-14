@@ -1,8 +1,9 @@
 package agent
 
 import (
-	"path/filepath"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
 	executionpkg "github.com/abdul-hamid-achik/local-agent/internal/execution"
@@ -67,42 +68,47 @@ type mcpAuthorityContract struct {
 	workspaceScoped bool
 }
 
-type trustedMCPImplementation uint8
-
-const (
-	trustedMCPUnknown trustedMCPImplementation = iota
-	trustedMCPHub
-	trustedCortex
-	trustedBob
-)
+type trustedMCPServer struct {
+	localOwner string
+	gateway    string
+	contracts  map[string]mcpAuthorityContract
+}
 
 // SetTrustedLocalMCPServers derives namespace trust exclusively from the
-// host-resolved configuration. A server is trusted only when it is local STDIO
-// and its executable basename is exactly mcphub, cortex, or bob; remote
-// transports, wrapper commands, and lookalike names fail closed. Call this once
-// with the same server list used to connect the Registry, before starting turns.
+// host-resolved configuration. Explicit exact-route trust replaces the legacy
+// profile; an omitted policy may receive the build-owned compatibility profile.
+// config.ResolveMCPTrust keeps local STDIO and exact executable basename as the
+// safety floor, so remote transports, wrappers, and lookalikes fail closed.
+// Call this once with the same server list used to connect the Registry, before
+// starting turns.
 func (a *Agent) SetTrustedLocalMCPServers(servers []config.ServerConfig) {
-	trusted := make(map[string]trustedMCPImplementation)
+	trusted := make(map[string]trustedMCPServer)
+	namespaceCounts := make(map[string]int, len(servers))
 	for _, server := range servers {
-		if server.Name == "" || strings.Contains(server.Name, "__") || strings.TrimSpace(server.Name) != server.Name ||
-			strings.TrimSpace(server.URL) != "" {
+		namespaceCounts[server.Name]++
+	}
+	for _, server := range servers {
+		if namespaceCounts[server.Name] != 1 {
 			continue
 		}
-		transport := strings.ToLower(strings.TrimSpace(server.Transport))
-		if transport != "" && transport != "stdio" {
+		trust, err := config.ResolveMCPTrust(server)
+		if err != nil || trust == nil || trust.Disabled {
 			continue
 		}
-		command := strings.TrimSpace(server.Command)
-		if command == "" || command != server.Command {
+		contracts := make(map[string]mcpAuthorityContract, len(trust.ReadOnly)+len(trust.WorkspaceEffectful))
+		for _, route := range trust.ReadOnly {
+			contracts[route] = mcpAuthorityContract{effect: executionpkg.EffectReadOnly, auto: true}
+		}
+		for _, route := range trust.WorkspaceEffectful {
+			contracts[route] = mcpAuthorityContract{
+				effect: executionpkg.Effectful, auto: true, workspaceScoped: true,
+			}
+		}
+		if len(contracts) == 0 {
 			continue
 		}
-		switch filepath.Base(filepath.Clean(command)) {
-		case "mcphub":
-			trusted[server.Name] = trustedMCPHub
-		case "cortex":
-			trusted[server.Name] = trustedCortex
-		case "bob":
-			trusted[server.Name] = trustedBob
+		trusted[server.Name] = trustedMCPServer{
+			localOwner: trust.LocalOwner, gateway: trust.Gateway, contracts: contracts,
 		}
 	}
 	a.mu.Lock()
@@ -110,122 +116,55 @@ func (a *Agent) SetTrustedLocalMCPServers(servers []config.ServerConfig) {
 	a.mu.Unlock()
 }
 
-func (a *Agent) trustedMCPImplementation(namespace string) trustedMCPImplementation {
+func (a *Agent) trustedMCPServer(namespace string) (trustedMCPServer, bool) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	return a.trustedMCP[namespace]
+	server, ok := a.trustedMCP[namespace]
+	return server, ok
 }
 
-// trustedMCPHubReadContracts and trustedCortexContracts are host-owned exact
-// contracts. They intentionally do not consult llm.ToolBehavior: MCP
-// annotations and descriptions are server-authored presentation metadata and
-// cannot weaken approval or durable recovery policy.
-var trustedMCPHubReadContracts = map[string]mcpAuthorityContract{
-	"mcphub_list_servers":  {effect: executionpkg.EffectReadOnly, auto: true},
-	"mcphub_search_tools":  {effect: executionpkg.EffectReadOnly, auto: true},
-	"mcphub_describe_tool": {effect: executionpkg.EffectReadOnly, auto: true},
-	"mcphub_resolve_tool":  {effect: executionpkg.EffectReadOnly, auto: true},
-	"mcphub_get_result":    {effect: executionpkg.EffectReadOnly, auto: true},
-	"mcphub_stats":         {effect: executionpkg.EffectReadOnly, auto: true},
+func (a *Agent) isTrustedMCPHubNamespace(namespace string) bool {
+	server, ok := a.trustedMCPServer(namespace)
+	return ok && server.gateway == config.MCPTrustGatewayMCPHub
 }
 
-var trustedCortexContracts = map[string]mcpAuthorityContract{
-	// Exact reads are read-only in the durable ledger as well as the approval
-	// layer. An application-level read error therefore terminates as failed or
-	// cancelled and never strands the session behind outcome_unknown.
-	"cortex_status":        {effect: executionpkg.EffectReadOnly, auto: true},
-	"cortex_list_tasks":    {effect: executionpkg.EffectReadOnly, auto: true},
-	"cortex_sessions":      {effect: executionpkg.EffectReadOnly, auto: true},
-	"cortex_timeline":      {effect: executionpkg.EffectReadOnly, auto: true},
-	"cortex_metrics":       {effect: executionpkg.EffectReadOnly, auto: true},
-	"cortex_overview":      {effect: executionpkg.EffectReadOnly, auto: true},
-	"cortex_handoff":       {effect: executionpkg.EffectReadOnly, auto: true},
-	"cortex_read_evidence": {effect: executionpkg.EffectReadOnly, auto: true},
-	"cortex_read_artifact": {effect: executionpkg.EffectReadOnly, auto: true},
-	"cortex_recall_cases":  {effect: executionpkg.EffectReadOnly, auto: true},
-
-	// Cortex's local lifecycle is an explicit, bounded coordination contract.
-	// These operations may update Cortex state in AUTO, but remain effectful in
-	// the ledger. Cross-workspace requests fall back to interactive approval.
-	"cortex_start_task":       {effect: executionpkg.Effectful, auto: true, workspaceScoped: true},
-	"cortex_open_task":        {effect: executionpkg.Effectful, auto: true, workspaceScoped: true},
-	"cortex_investigate":      {effect: executionpkg.Effectful, auto: true, workspaceScoped: true},
-	"cortex_plan":             {effect: executionpkg.Effectful, auto: true, workspaceScoped: true},
-	"cortex_begin_change":     {effect: executionpkg.Effectful, auto: true, workspaceScoped: true},
-	"cortex_verify":           {effect: executionpkg.Effectful, auto: true, workspaceScoped: true},
-	"cortex_remember":         {effect: executionpkg.Effectful, auto: true, workspaceScoped: true},
-	"cortex_resolve":          {effect: executionpkg.Effectful, auto: true, workspaceScoped: true},
-	"cortex_note":             {effect: executionpkg.Effectful, auto: true, workspaceScoped: true},
-	"cortex_request_decision": {effect: executionpkg.Effectful, auto: true, workspaceScoped: true},
-	// answer_decision, archive, unarchive, and abort_task deliberately remain
-	// outside this catalog: they represent human authority or lifecycle reversal.
-}
-
-// trustedBobContracts covers Bob's entire MCP surface, which is read-only by
-// host-audited contract: repository mutation (bob apply) is deliberately
-// CLI-only and never exposed over MCP (bob ADR-0002/0003). Cataloguing these
-// as exact reads means a domain rejection such as "repository needs
-// convergence" terminates as failed with a durable receipt instead of
-// stranding the session behind outcome_unknown. Bob's own annotations remain
-// unconsulted presentation metadata, per the invariant above.
-var trustedBobContracts = map[string]mcpAuthorityContract{
-	"bob_inspect":           {effect: executionpkg.EffectReadOnly, auto: true},
-	"bob_plan":              {effect: executionpkg.EffectReadOnly, auto: true},
-	"bob_check":             {effect: executionpkg.EffectReadOnly, auto: true},
-	"bob_validate_manifest": {effect: executionpkg.EffectReadOnly, auto: true},
-	"bob_recipe_describe":   {effect: executionpkg.EffectReadOnly, auto: true},
-	"bob_stats":             {effect: executionpkg.EffectReadOnly, auto: true},
-}
-
-// trustedGatewayContracts routes MCPHub-namespaced downstream implementations
-// to their host-owned catalogs. Only implementations catalogued here may gain
-// authority through the gateway; every other downstream server stays on the
-// interactive permission path regardless of its self-declared annotations.
-var trustedGatewayContracts = map[string]map[string]mcpAuthorityContract{
-	"cortex": trustedCortexContracts,
-	"bob":    trustedBobContracts,
-}
-
-// trustedMCPContract resolves only Local Agent's reserved direct/gateway
+// trustedMCPContract resolves only exact host-configured direct or MCPHub
 // routes. Suffix matching is forbidden: `evil__cortex_status` must never gain
-// Cortex authority merely by resembling a known operation.
+// authority merely by resembling a configured operation. MCP annotations and
+// descriptions remain presentation metadata and are never consulted here.
 func (a *Agent) trustedMCPContract(call llm.ToolCall) (mcpAuthorityContract, bool) {
 	if call.Name == "" || strings.TrimSpace(call.Name) != call.Name {
 		return mcpAuthorityContract{}, false
 	}
 	parts := strings.Split(call.Name, "__")
+	if len(parts) < 2 {
+		return mcpAuthorityContract{}, false
+	}
+	server, ok := a.trustedMCPServer(parts[0])
+	if !ok {
+		return mcpAuthorityContract{}, false
+	}
+	route := ""
 	switch {
-	case len(parts) == 2 && a.trustedMCPImplementation(parts[0]) == trustedCortex:
-		contract, ok := trustedCortexContracts[parts[1]]
-		return contract, ok
-	case len(parts) == 2 && a.trustedMCPImplementation(parts[0]) == trustedBob:
-		contract, ok := trustedBobContracts[parts[1]]
-		return contract, ok
-	case len(parts) == 2 && a.trustedMCPImplementation(parts[0]) == trustedMCPHub:
+	case server.gateway == "" && len(parts) == 2:
+		route = parts[1]
+	case server.gateway == config.MCPTrustGatewayMCPHub && len(parts) == 2:
 		if parts[1] == "mcphub_call_tool" {
-			server, tool, ok := exactLazyMCPHubTarget(call.Arguments)
-			if !ok {
+			downstream, tool, exact := exactLazyMCPHubTarget(call.Arguments)
+			if !exact {
 				return mcpAuthorityContract{}, false
 			}
-			contracts, known := trustedGatewayContracts[server]
-			if !known {
-				return mcpAuthorityContract{}, false
-			}
-			contract, found := contracts[tool]
-			return contract, found
+			route = downstream + "__" + tool
+		} else {
+			route = parts[1]
 		}
-		contract, ok := trustedMCPHubReadContracts[parts[1]]
-		return contract, ok
-	case len(parts) == 3 && a.trustedMCPImplementation(parts[0]) == trustedMCPHub:
-		contracts, known := trustedGatewayContracts[parts[1]]
-		if !known {
-			return mcpAuthorityContract{}, false
-		}
-		contract, ok := contracts[parts[2]]
-		return contract, ok
+	case server.gateway == config.MCPTrustGatewayMCPHub && len(parts) == 3:
+		route = parts[1] + "__" + parts[2]
 	default:
 		return mcpAuthorityContract{}, false
 	}
+	contract, found := server.contracts[route]
+	return contract, found
 }
 
 func exactLazyMCPHubTarget(args map[string]any) (server, tool string, ok bool) {
@@ -256,7 +195,7 @@ func exactLazyMCPHubTarget(args map[string]any) (server, tool string, ok bool) {
 }
 
 func (a *Agent) authorityAutoApproves(mode AuthorityMode, call llm.ToolCall, kind executionpkg.Kind) bool {
-	if a.authorityPermissionDenied(call.Name) {
+	if a.authorityPermissionDeniedForCall(call) {
 		return false
 	}
 	if kind == executionpkg.KindMCP {
@@ -274,7 +213,7 @@ func (a *Agent) authorityAutoApproves(mode AuthorityMode, call llm.ToolCall, kin
 		if mode != AuthorityAutoScoped {
 			return false
 		}
-		return !contract.workspaceScoped || a.cortexWorkspaceWithinAuthority(call)
+		return !contract.workspaceScoped || a.mcpWorkspaceWithinAuthority(call)
 	}
 	if mode != AuthorityAutoScoped {
 		return false
@@ -305,7 +244,49 @@ func (a *Agent) authorityPermissionDenied(toolName string) bool {
 	return checker != nil && checker.ToCheckResult(toolName) == permissionpkg.CheckDeny
 }
 
-func (a *Agent) cortexWorkspaceWithinAuthority(call llm.ToolCall) bool {
+func (a *Agent) authorityPermissionDeniedForCall(call llm.ToolCall) bool {
+	checker := a.permissionChecker()
+	return checker != nil && a.permissionCheckResult(checker, call) == permissionpkg.CheckDeny
+}
+
+// permissionCheckResult preserves the policy result for the exposed call name
+// but lets an exact deny on a canonical pinned MCPHub route also block the lazy
+// call_tool spelling of that same downstream effect. Allows are not propagated
+// across spellings, so this aliasing can only narrow authority.
+func (a *Agent) permissionCheckResult(checker *permissionpkg.Checker, call llm.ToolCall) permissionpkg.CheckResult {
+	result := checker.ToCheckResult(call.Name)
+	canonical, ok := a.canonicalGatewayPermissionName(call)
+	if ok && canonical != call.Name && checker.ToCheckResult(canonical) == permissionpkg.CheckDeny {
+		return permissionpkg.CheckDeny
+	}
+	return result
+}
+
+func (a *Agent) canonicalGatewayPermissionName(call llm.ToolCall) (string, bool) {
+	parts := strings.Split(call.Name, "__")
+	if len(parts) < 2 || !a.isTrustedMCPHubNamespace(parts[0]) {
+		return "", false
+	}
+	switch {
+	case len(parts) == 3:
+		return call.Name, true
+	case len(parts) == 2 && parts[1] == "mcphub_call_tool":
+		server, tool, ok := exactLazyMCPHubTarget(call.Arguments)
+		if !ok {
+			return "", false
+		}
+		canonical := parts[0] + "__" + server + "__" + tool
+		if len(canonical) > executionpkg.MaxToolNameBytes || !utf8.ValidString(canonical) ||
+			strings.IndexFunc(canonical, unicode.IsControl) >= 0 {
+			return "", false
+		}
+		return canonical, true
+	default:
+		return "", false
+	}
+}
+
+func (a *Agent) mcpWorkspaceWithinAuthority(call llm.ToolCall) bool {
 	if strings.TrimSpace(a.activeWorkDir()) == "" {
 		return false
 	}
@@ -313,7 +294,7 @@ func (a *Agent) cortexWorkspaceWithinAuthority(call llm.ToolCall) bool {
 	if a.isTrustedLazyMCPHubCall(call.Name) {
 		nested, present := args["arguments"]
 		if !present || nested == nil {
-			return true
+			return false
 		}
 		var ok bool
 		args, ok = nested.(map[string]any)
@@ -323,14 +304,14 @@ func (a *Agent) cortexWorkspaceWithinAuthority(call llm.ToolCall) bool {
 	}
 	raw, present := args["workspace"]
 	if !present || raw == nil {
-		return true
+		return false
 	}
 	workspace, ok := raw.(string)
 	if !ok {
 		return false
 	}
 	if strings.TrimSpace(workspace) == "" {
-		return true
+		return false
 	}
 	_, err := a.resolvePath(workspace)
 	return err == nil
@@ -338,8 +319,11 @@ func (a *Agent) cortexWorkspaceWithinAuthority(call llm.ToolCall) bool {
 
 func (a *Agent) isTrustedLazyMCPHubCall(name string) bool {
 	parts := strings.Split(name, "__")
-	return len(parts) == 2 && parts[1] == "mcphub_call_tool" &&
-		a.trustedMCPImplementation(parts[0]) == trustedMCPHub
+	if len(parts) != 2 || parts[1] != "mcphub_call_tool" {
+		return false
+	}
+	server, ok := a.trustedMCPServer(parts[0])
+	return ok && server.gateway == config.MCPTrustGatewayMCPHub
 }
 
 // isGatewayRoutedMCPCall reports whether the call reaches its effect owner
@@ -347,7 +331,14 @@ func (a *Agent) isTrustedLazyMCPHubCall(name string) bool {
 // gateway answered, not that the downstream server did.
 func (a *Agent) isGatewayRoutedMCPCall(name string) bool {
 	parts := strings.Split(name, "__")
-	return len(parts) >= 2 && a.trustedMCPImplementation(parts[0]) == trustedMCPHub
+	if len(parts) < 2 {
+		return false
+	}
+	server, ok := a.trustedMCPServer(parts[0])
+	if !ok || server.gateway != config.MCPTrustGatewayMCPHub {
+		return false
+	}
+	return len(parts) == 3 || (len(parts) == 2 && parts[1] == "mcphub_call_tool")
 }
 
 // gatewayDownstreamServer resolves which downstream server a gateway-routed
@@ -355,7 +346,11 @@ func (a *Agent) isGatewayRoutedMCPCall(name string) bool {
 // management operations have no downstream and resolve to false.
 func (a *Agent) gatewayDownstreamServer(call llm.ToolCall) (string, bool) {
 	parts := strings.Split(call.Name, "__")
-	if len(parts) < 2 || a.trustedMCPImplementation(parts[0]) != trustedMCPHub {
+	if len(parts) < 2 {
+		return "", false
+	}
+	server, ok := a.trustedMCPServer(parts[0])
+	if !ok || server.gateway != config.MCPTrustGatewayMCPHub {
 		return "", false
 	}
 	if len(parts) == 3 {

@@ -172,4 +172,7 @@ func TestStandaloneExecutionReconciliationCannotBypassGoalRecovery(t *testing.T)
 	if _, err := store.ProjectExecutionRecovery(context.Background(), session.ID, session.WorkspaceID, 0, 100); !errors.Is(err, ErrStandaloneReconciliationGoalOwned) {
 		t.Fatalf("goal-owned projection error = %v", err)
 	}
+	if _, err := store.ListStandaloneExecutionReconciliationPending(context.Background(), session.ID, session.WorkspaceID, 100); !errors.Is(err, ErrStandaloneReconciliationGoalOwned) {
+		t.Fatalf("goal-owned pending-list error = %v", err)
+	}
 }

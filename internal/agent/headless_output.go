@@ -4,14 +4,19 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 )
 
 // HeadlessOutput implements the Output interface for non-interactive / pipe mode.
 // Text is written to stdout; tool calls, system messages, and errors go to stderr.
 type HeadlessOutput struct {
-	stdout io.Writer
-	stderr io.Writer
+	stdout        io.Writer
+	stderr        io.Writer
+	text          strings.Builder
+	evalTokens    int64
+	toolCalls     int64
+	toolSuccesses int64
 }
 
 // NewHeadlessOutput creates a HeadlessOutput that writes text to os.Stdout
@@ -33,6 +38,7 @@ func newHeadlessOutput(stdout, stderr io.Writer) *HeadlessOutput {
 
 // StreamText writes incremental text content to stdout.
 func (h *HeadlessOutput) StreamText(text string) {
+	h.text.WriteString(text)
 	_, _ = fmt.Fprint(h.stdout, text)
 }
 
@@ -42,12 +48,32 @@ func (h *HeadlessOutput) StreamReasoning(string) {}
 
 // StreamDone writes a trailing newline to ensure output is terminated.
 func (h *HeadlessOutput) StreamDone(evalCount, promptTokens int) {
+	if evalCount > 0 {
+		h.evalTokens += int64(evalCount)
+	}
 	_, _ = fmt.Fprintln(h.stdout)
 }
 
 // ToolCallStart writes a brief tool invocation notice to stderr.
 func (h *HeadlessOutput) ToolCallStart(_ string, name string, args map[string]any) {
+	h.toolCalls++
 	_, _ = fmt.Fprintf(h.stderr, "→ %s %s\n", name, FormatToolArgsForTool(name, args))
+}
+
+// GoalTurnStats returns the bounded facts needed to settle a headless goal
+// turn. Raw tool results never enter this projection.
+func (h *HeadlessOutput) GoalTurnStats() (summary string, evalTokens int64, productive bool) {
+	switch {
+	case h.toolSuccesses > 0:
+		summary = fmt.Sprintf("settled %d tool call(s), %d successful", h.toolCalls, h.toolSuccesses)
+	case h.toolCalls > 0:
+		summary = fmt.Sprintf("settled %d tool call(s) without a successful receipt", h.toolCalls)
+	case strings.TrimSpace(h.text.String()) != "":
+		summary = "assistant yielded without a concrete tool receipt"
+	default:
+		summary = "turn yielded without concrete progress"
+	}
+	return summary, h.evalTokens, h.toolSuccesses > 0
 }
 
 // ToolCallResult writes the tool result summary to stderr.
@@ -55,6 +81,8 @@ func (h *HeadlessOutput) ToolCallResult(_ string, name string, result string, is
 	status := "ok"
 	if isError {
 		status = "ERROR"
+	} else {
+		h.toolSuccesses++
 	}
 	// Truncate long results for stderr display.
 	display := result

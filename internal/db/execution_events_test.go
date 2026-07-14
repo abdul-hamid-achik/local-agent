@@ -213,6 +213,33 @@ func TestLatestExecutionEventIDNoEventsAndScope(t *testing.T) {
 	}
 }
 
+func TestSessionExecutionEventExistsRequiresExactSessionScope(t *testing.T) {
+	store := testStore(t)
+	workspaceID := "/workspace/cursor-membership"
+	session := createExecutionTestSession(t, store, workspaceID)
+	other := createExecutionTestSession(t, store, workspaceID)
+
+	owned := appendExecutionEvent(t, store,
+		executionTestEvent(t, session.ID, workspaceID, "owned-cursor", execution.EffectReadOnly))
+	foreign := appendExecutionEvent(t, store,
+		executionTestEvent(t, other.ID, workspaceID, "foreign-cursor", execution.EffectReadOnly))
+
+	exists, err := store.SessionExecutionEventExists(context.Background(), session.ID, workspaceID, owned.ID)
+	if err != nil || !exists {
+		t.Fatalf("owned event exists = %t, error %v", exists, err)
+	}
+	exists, err = store.SessionExecutionEventExists(context.Background(), session.ID, workspaceID, foreign.ID)
+	if err != nil || exists {
+		t.Fatalf("foreign event exists = %t, error %v", exists, err)
+	}
+	if _, err := store.SessionExecutionEventExists(context.Background(), session.ID, workspaceID, 0); err == nil {
+		t.Fatal("zero execution event id unexpectedly accepted")
+	}
+	if _, err := store.SessionExecutionEventExists(context.Background(), session.ID, "/workspace/other", owned.ID); !errors.Is(err, ErrExecutionWorkspaceMismatch) {
+		t.Fatalf("cross-workspace cursor membership error = %v", err)
+	}
+}
+
 func TestListExecutionRecoveryHazardsClassifiesCursorStates(t *testing.T) {
 	store := testStore(t)
 	workspaceID := "/workspace/recovery-cursor"
@@ -303,6 +330,9 @@ func TestListStandaloneReconciliationPendingExcludesAnsweredTerminals(t *testing
 	store := testStore(t)
 	workspaceID := "/workspace/reconciliation-pending"
 	session := createExecutionTestSession(t, store, workspaceID)
+	if err := store.SaveSessionState(context.Background(), session.ID, `{"version":2,"goal":null,"execution_cursor":0}`); err != nil {
+		t.Fatal(err)
+	}
 
 	unknownStarted := appendStartedExecutionFixture(t, store,
 		executionTestEvent(t, session.ID, workspaceID, "pending-unknown", execution.EffectUnknown))
@@ -342,6 +372,34 @@ func TestListStandaloneReconciliationPendingExcludesAnsweredTerminals(t *testing
 		if !executionStateCanBeReconciled(state) {
 			t.Fatalf("listed state cannot be reconciled: %#v", state)
 		}
+	}
+}
+
+func TestListStandaloneReconciliationPendingPreservesBoundAndDetectsOverflow(t *testing.T) {
+	store := testStore(t)
+	workspaceID := "/workspace/reconciliation-pending-bound"
+	session := createExecutionTestSession(t, store, workspaceID)
+	if err := store.SaveSessionState(context.Background(), session.ID, `{"version":2,"goal":null,"execution_cursor":0}`); err != nil {
+		t.Fatal(err)
+	}
+
+	for index := 0; index < maxExecutionRecoveryHazards; index++ {
+		appendStartedExecutionFixture(t, store,
+			executionTestEvent(t, session.ID, workspaceID, "bounded-"+strconv.Itoa(index), execution.Effectful))
+	}
+	states, err := store.ListStandaloneExecutionReconciliationPending(
+		context.Background(), session.ID, workspaceID, maxExecutionRecoveryHazards,
+	)
+	if err != nil || len(states) != maxExecutionRecoveryHazards {
+		t.Fatalf("bounded pending reconciliations = %d, error=%v", len(states), err)
+	}
+
+	appendStartedExecutionFixture(t, store,
+		executionTestEvent(t, session.ID, workspaceID, "overflow", execution.Effectful))
+	if _, err := store.ListStandaloneExecutionReconciliationPending(
+		context.Background(), session.ID, workspaceID, maxExecutionRecoveryHazards,
+	); !errors.Is(err, ErrExecutionHazardOverflow) {
+		t.Fatalf("pending reconciliation overflow error = %v", err)
 	}
 }
 

@@ -34,7 +34,8 @@ LOCAL_AGENT_TRUST_REPO_MCP=sha256:<digest-from-the-error> local-agent
 
 The digest covers the absolute repository configuration path plus each STDIO
 server name, command, resolved absolute executable path, executable content,
-argument list, and explicit environment. A trusted launch is pinned to that
+argument list, explicit environment, and canonical effective MCP trust
+contracts. A trusted launch is pinned to that
 resolved executable path and rechecks its content immediately before process
 startup. Moving the repository, replacing the executable, or changing any of
 those values requires a new decision. User-wide
@@ -43,8 +44,11 @@ configuration under `$XDG_CONFIG_HOME` or `$HOME/.config`, the default
 `LOCAL_AGENT_AGENTS_DIR` remain user-controlled startup authority and do not
 require this repository trust step.
 
-This approval permits the configured server process to start. Individual MCP
-tool calls still follow the normal approval policy.
+This approval permits the configured server process to start and binds consent
+to the effective trust contracts. Individual calls still follow the normal
+approval policy unless an exact local-STDIO route is declared in that trust
+configuration; explicit permission denies always win, and workspace-effectful
+AUTO authority still requires an explicit in-workspace `workspace` argument.
 
 ## Minimal configuration
 
