@@ -196,6 +196,25 @@ func TestAdditionalReadRootBoundedDirectoryScanHonorsCancellation(t *testing.T) 
 	}
 }
 
+func TestPhysicalEntryNameRejectsChangedExactEntry(t *testing.T) {
+	directory := t.TempDir()
+	expectedPath := filepath.Join(directory, "expected.txt")
+	requested := "requested.txt"
+	if err := os.WriteFile(expectedPath, []byte("expected"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, requested), []byte("replacement"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	expected, err := os.Stat(expectedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := physicalEntryName(directory, requested, expected); err == nil || !strings.Contains(err.Error(), "changed") {
+		t.Fatalf("physicalEntryName accepted a replaced exact entry: %v", err)
+	}
+}
+
 func TestExactReadFileGrantDoesNotAuthorizeParentOrSiblingWrites(t *testing.T) {
 	base := t.TempDir()
 	workspace := filepath.Join(base, "workspace")
@@ -258,6 +277,59 @@ func TestExactReadFileGrantDoesNotAuthorizeParentOrSiblingWrites(t *testing.T) {
 	}
 	if _, err := ag.resolveReadablePath(target); err == nil {
 		t.Fatal("removed exact file remained readable")
+	}
+}
+
+func TestExactReadFileGrantDoesNotAuthorizeHardLinkEntry(t *testing.T) {
+	base := t.TempDir()
+	workspace := filepath.Join(base, "workspace")
+	external := filepath.Join(base, "external")
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(external, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(external, "approved.txt")
+	alias := filepath.Join(external, "hard-link.txt")
+	if err := os.WriteFile(target, []byte("requested"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(target, alias); err != nil {
+		t.Skipf("hard links are unavailable: %v", err)
+	}
+
+	ag := New(nil, nil, 0)
+	ag.SetWorkDir(workspace)
+	t.Cleanup(ag.Close)
+	if _, err := ag.AddReadFile(target); err != nil {
+		t.Fatalf("AddReadFile target: %v", err)
+	}
+	if result, isErr := ag.handleRead(map[string]any{"path": alias}); !isErr || strings.Contains(result, "requested") {
+		t.Fatalf("hard-link read inherited exact authority: %q, error=%v", result, isErr)
+	}
+	inspection, err := ag.InspectReadPath(alias)
+	if err != nil {
+		t.Fatalf("InspectReadPath hard link: %v", err)
+	}
+	defer inspection.Release()
+	if !inspection.External || inspection.AlreadyReadable || inspection.Kind != ReadGrantExactFile {
+		t.Fatalf("hard-link inspection = %#v", inspection)
+	}
+	if _, err := ag.AddReadFile(alias); err != nil {
+		t.Fatalf("AddReadFile hard link: %v", err)
+	}
+	if grants := ag.ReadGrants(); len(grants) != 2 {
+		t.Fatalf("hard-link entries collapsed into %#v", grants)
+	}
+	if _, err := ag.RemoveReadPath(target); err != nil {
+		t.Fatalf("RemoveReadPath target: %v", err)
+	}
+	if result, isErr := ag.handleRead(map[string]any{"path": target}); !isErr || strings.Contains(result, "requested") {
+		t.Fatalf("removed entry inherited hard-link authority: %q, error=%v", result, isErr)
+	}
+	if result, isErr := ag.handleRead(map[string]any{"path": alias}); isErr || result != "requested" {
+		t.Fatalf("independently approved hard-link read = %q, error=%v", result, isErr)
 	}
 }
 
@@ -367,6 +439,96 @@ func TestExactReadFileRejectsReplacementAndClearIncludesFiles(t *testing.T) {
 	}
 }
 
+func TestStaleReadGrantsCannotPoisonOrInheritReplacementPaths(t *testing.T) {
+	base := t.TempDir()
+	workspace := filepath.Join(base, "workspace")
+	if err := os.Mkdir(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("directory", func(t *testing.T) {
+		path := filepath.Join(base, "directory")
+		moved := filepath.Join(base, "directory-old")
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(path, "value.txt"), []byte("old"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		ag := New(nil, nil, 0)
+		ag.SetWorkDir(workspace)
+		t.Cleanup(ag.Close)
+		if _, err := ag.AddReadRoot(path); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(path, moved); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(path, "value.txt"), []byte("new"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		granted, err := ag.AddReadRoot(path)
+		if err != nil {
+			t.Fatalf("replace stale directory grant: %v", err)
+		}
+		if grants := ag.ReadGrants(); len(grants) != 1 || grants[0].Path != granted {
+			t.Fatalf("stale directory grant survived replacement: %#v", grants)
+		}
+		if result, isErr := ag.handleRead(map[string]any{"path": filepath.Join(path, "value.txt")}); isErr || result != "new" {
+			t.Fatalf("replacement directory read = %q, error=%v", result, isErr)
+		}
+		if result, isErr := ag.handleRead(map[string]any{"path": filepath.Join(moved, "value.txt")}); !isErr || result == "old" {
+			t.Fatalf("moved stale directory remained authorized: %q, error=%v", result, isErr)
+		}
+	})
+
+	t.Run("exact file", func(t *testing.T) {
+		path := filepath.Join(base, "exact.txt")
+		moved := filepath.Join(base, "exact-old.txt")
+		unrelated := filepath.Join(base, "unrelated.txt")
+		if err := os.WriteFile(path, []byte("old"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(unrelated, []byte("other"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		ag := New(nil, nil, 0)
+		ag.SetWorkDir(workspace)
+		t.Cleanup(ag.Close)
+		if _, err := ag.AddReadFile(path); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(path, moved); err != nil {
+			t.Fatal(err)
+		}
+		if inspection, err := ag.InspectReadPath(unrelated); err != nil || inspection.AlreadyReadable {
+			inspection.Release()
+			t.Fatalf("stale exact grant poisoned inspection: %#v, %v", inspection, err)
+		} else {
+			inspection.Release()
+		}
+		if err := os.WriteFile(path, []byte("new"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		granted, err := ag.AddReadFile(path)
+		if err != nil {
+			t.Fatalf("replace stale exact grant: %v", err)
+		}
+		if grants := ag.ReadGrants(); len(grants) != 1 || grants[0].Path != granted {
+			t.Fatalf("stale exact grant survived replacement: %#v", grants)
+		}
+		if result, isErr := ag.handleRead(map[string]any{"path": path}); isErr || result != "new" {
+			t.Fatalf("replacement exact read = %q, error=%v", result, isErr)
+		}
+		if result, isErr := ag.handleRead(map[string]any{"path": moved}); !isErr || result == "old" {
+			t.Fatalf("moved stale exact file remained authorized: %q, error=%v", result, isErr)
+		}
+	})
+}
+
 func TestExistingDirectoryGrantCoversExactFileWithoutSecondAuthority(t *testing.T) {
 	workspace := t.TempDir()
 	external := t.TempDir()
@@ -405,10 +567,11 @@ func TestInspectReadPathRejectsImpossibleDirectoryAuthority(t *testing.T) {
 	ag := New(nil, nil, 0)
 	ag.SetWorkDir(workspace)
 	defer ag.Close()
+	filesystemRoot := filepath.Clean(filepath.VolumeName(workspace) + string(filepath.Separator))
 	if _, err := ag.InspectReadPath(base); err == nil || !strings.Contains(err.Error(), "overlaps writable workspace") {
 		t.Fatalf("workspace parent inspection error = %v", err)
 	}
-	if _, err := ag.InspectReadPath(string(filepath.Separator)); err == nil || !strings.Contains(err.Error(), "filesystem root") {
+	if _, err := ag.InspectReadPath(filesystemRoot); err == nil || !strings.Contains(err.Error(), "filesystem root") {
 		t.Fatalf("filesystem root inspection error = %v", err)
 	}
 	if _, err := ag.AddReadRoot(existing); err != nil {
@@ -416,6 +579,145 @@ func TestInspectReadPathRejectsImpossibleDirectoryAuthority(t *testing.T) {
 	}
 	if _, err := ag.InspectReadPath(externalParent); err == nil || !strings.Contains(err.Error(), "overlaps existing root") {
 		t.Fatalf("existing-root parent inspection error = %v", err)
+	}
+}
+
+func TestCaseInsensitiveWorkspaceAliasCannotBecomeReadGrant(t *testing.T) {
+	base := t.TempDir()
+	workspace := filepath.Join(base, "Workspace")
+	if err := os.Mkdir(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(workspace, "Secret.txt")
+	if err := os.WriteFile(target, []byte("do not expose"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	workspaceAlias := filepath.Join(base, "wORKSPACE")
+	targetAlias := filepath.Join(workspaceAlias, "sECRET.TXT")
+	workspaceInfo, err := os.Stat(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aliasInfo, err := os.Stat(workspaceAlias)
+	if err != nil || !os.SameFile(workspaceInfo, aliasInfo) {
+		t.Skip("filesystem is case-sensitive")
+	}
+	targetInfo, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetAliasInfo, err := os.Stat(targetAlias)
+	if err != nil || !os.SameFile(targetInfo, targetAliasInfo) {
+		t.Skip("filesystem does not resolve the file casing alias")
+	}
+	childAlias := filepath.Join(workspace, "sECRET.TXT")
+	childAliasInfo, err := os.Stat(childAlias)
+	if err != nil || !os.SameFile(targetInfo, childAliasInfo) {
+		t.Skip("filesystem does not resolve the child casing alias")
+	}
+
+	ag := New(nil, nil, 0)
+	ag.SetWorkDir(workspace)
+	ag.SetIgnoreContent("Secret.txt\n")
+	t.Cleanup(ag.Close)
+
+	inspection, err := ag.InspectReadPath(targetAlias)
+	if err != nil {
+		t.Fatalf("InspectReadPath casing alias: %v", err)
+	}
+	if inspection.External || !inspection.AlreadyReadable || inspection.identity != nil {
+		t.Fatalf("workspace casing alias inspection = %#v", inspection)
+	}
+	if _, err := ag.AddReadFile(targetAlias); err == nil || !strings.Contains(err.Error(), "already inside writable workspace") {
+		t.Fatalf("AddReadFile casing alias error = %v", err)
+	}
+	if _, err := ag.AddReadRoot(workspaceAlias); err == nil || !strings.Contains(err.Error(), "overlaps writable workspace") {
+		t.Fatalf("AddReadRoot casing alias error = %v", err)
+	}
+	if result, isErr := ag.handleRead(map[string]any{"path": targetAlias}); !isErr || strings.Contains(result, "do not expose") {
+		t.Fatalf("ignored workspace alias read = %q, error=%v", result, isErr)
+	}
+	if result, isErr := ag.handleRead(map[string]any{"path": childAlias}); !isErr || strings.Contains(result, "do not expose") || !strings.Contains(result, ".agentignore") {
+		t.Fatalf("ignored child casing alias read = %q, error=%v", result, isErr)
+	}
+	if result, isErr := ag.handleRemove(map[string]any{"path": childAlias}); !isErr || !strings.Contains(result, ".agentignore") {
+		t.Fatalf("ignored child casing alias remove = %q, error=%v", result, isErr)
+	}
+	if data, err := os.ReadFile(target); err != nil || string(data) != "do not expose" {
+		t.Fatalf("ignored child casing alias changed target: %q, %v", data, err)
+	}
+
+	// Resolution must remain fail-closed even if an authority created under a
+	// different workspace later overlaps the current workspace by identity.
+	otherWorkspace := filepath.Join(base, "other")
+	if err := os.Mkdir(otherWorkspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stale := New(nil, nil, 0)
+	stale.SetWorkDir(otherWorkspace)
+	if _, err := stale.AddReadFile(targetAlias); err != nil {
+		t.Fatalf("prepare overlapping grant: %v", err)
+	}
+	stale.SetWorkDir(workspace)
+	stale.SetIgnoreContent("Secret.txt\n")
+	t.Cleanup(stale.Close)
+	if result, isErr := stale.handleRead(map[string]any{"path": targetAlias}); !isErr || strings.Contains(result, "do not expose") {
+		t.Fatalf("overlapping stale grant read = %q, error=%v", result, isErr)
+	}
+}
+
+func TestCaseInsensitiveExactReadAliasUsesOneEntry(t *testing.T) {
+	base := t.TempDir()
+	workspace := filepath.Join(base, "workspace")
+	external := filepath.Join(base, "external")
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(external, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(external, "Evidence.txt")
+	alias := filepath.Join(external, "eVIDENCE.TXT")
+	if err := os.WriteFile(target, []byte("approved evidence"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	targetInfo, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aliasInfo, err := os.Stat(alias)
+	if err != nil || !os.SameFile(targetInfo, aliasInfo) {
+		t.Skip("filesystem is case-sensitive")
+	}
+
+	ag := New(nil, nil, 0)
+	ag.SetWorkDir(workspace)
+	t.Cleanup(ag.Close)
+	granted, err := ag.AddReadFile(target)
+	if err != nil {
+		t.Fatalf("AddReadFile: %v", err)
+	}
+	inspection, err := ag.InspectReadPath(alias)
+	if err != nil {
+		t.Fatalf("InspectReadPath alias: %v", err)
+	}
+	defer inspection.Release()
+	if !inspection.External || !inspection.AlreadyReadable || inspection.identity != nil {
+		t.Fatalf("exact alias inspection = %#v", inspection)
+	}
+	if result, isErr := ag.handleRead(map[string]any{"path": alias}); isErr || result != "approved evidence" {
+		t.Fatalf("exact alias read = %q, error=%v", result, isErr)
+	}
+	if grants := ag.ReadGrants(); len(grants) != 1 || grants[0].Path != granted {
+		t.Fatalf("exact alias duplicated grant: %#v", grants)
+	}
+	removed, err := ag.RemoveReadPath(alias)
+	if err != nil || removed.Path != granted || removed.Kind != ReadGrantExactFile {
+		t.Fatalf("RemoveReadPath alias = %#v, %v", removed, err)
+	}
+	if result, isErr := ag.handleRead(map[string]any{"path": target}); !isErr || strings.Contains(result, "approved evidence") {
+		t.Fatalf("removed exact alias remained readable: %q, error=%v", result, isErr)
 	}
 }
 
@@ -597,6 +899,14 @@ func TestAdditionalReadRootEnforcesItsAgentIgnore(t *testing.T) {
 	if result, isErr := ag.handleRead(map[string]any{"path": blocked}); !isErr || !strings.Contains(result, ".agentignore") {
 		t.Fatalf("ignored read = %q, error=%v", result, isErr)
 	}
+	blockedAlias := filepath.Join(external, "PRIVATE", "TOKEN.TXT")
+	if blockedInfo, statErr := os.Stat(blocked); statErr == nil {
+		if aliasInfo, aliasErr := os.Stat(blockedAlias); aliasErr == nil && os.SameFile(blockedInfo, aliasInfo) {
+			if result, isErr := ag.handleRead(map[string]any{"path": blockedAlias}); !isErr || !strings.Contains(result, ".agentignore") || strings.Contains(result, "secret") {
+				t.Fatalf("ignored external casing alias read = %q, error=%v", result, isErr)
+			}
+		}
+	}
 	if result, isErr := ag.handleRead(map[string]any{"path": public}); isErr || result != "public" {
 		t.Fatalf("public read = %q, error=%v", result, isErr)
 	}
@@ -635,11 +945,12 @@ func TestAdditionalReadRootClearCloseAndOverlapRules(t *testing.T) {
 	second := t.TempDir()
 	ag := New(nil, nil, 0)
 	ag.SetWorkDir(workspace)
+	filesystemRoot := filepath.Clean(filepath.VolumeName(workspace) + string(filepath.Separator))
 
 	if _, err := ag.AddReadRoot(workspace); err == nil || !strings.Contains(err.Error(), "overlaps") {
 		t.Fatalf("workspace overlap error = %v", err)
 	}
-	if _, err := ag.AddReadRoot(string(filepath.Separator)); err == nil {
+	if _, err := ag.AddReadRoot(filesystemRoot); err == nil {
 		t.Fatal("filesystem root was accepted")
 	}
 	for _, root := range []string{first, second} {

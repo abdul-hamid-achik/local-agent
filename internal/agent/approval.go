@@ -106,6 +106,7 @@ func (a *Agent) buildApprovalPreview(ctx context.Context, tc llm.ToolCall, argum
 		}
 		resolved, err := a.resolveReadablePath(raw)
 		if err == nil {
+			defer func() { _ = resolved.close() }()
 			return resolved.absolute
 		}
 		return raw
@@ -118,7 +119,7 @@ func (a *Agent) buildApprovalPreview(ctx context.Context, tc llm.ToolCall, argum
 		content, _ := tc.Arguments["content"].(string)
 		preview.ByteSize = int64(len(content))
 		preview.ContentSHA256 = executionpkg.HashText(content)
-		before, exists, reason := approvalExistingContent(preview.Path)
+		before, exists, reason := a.approvalExistingContent(preview.Path)
 		if exists {
 			preview.ExistingSHA256 = executionpkg.HashText(before)
 		}
@@ -136,7 +137,7 @@ func (a *Agent) buildApprovalPreview(ctx context.Context, tc llm.ToolCall, argum
 			preview.Diff = truncateApprovalUTF8(preview.Diff, maxApprovalDiffBytes)
 			preview.DiffTruncated = true
 		}
-		before, exists, reason := approvalExistingContent(preview.Path)
+		before, exists, reason := a.approvalExistingContent(preview.Path)
 		if exists {
 			preview.ExistingSHA256 = executionpkg.HashText(before)
 		}
@@ -160,7 +161,7 @@ func (a *Agent) buildApprovalPreview(ctx context.Context, tc llm.ToolCall, argum
 	case "move":
 		preview.Kind = permissionpkg.PreviewFilesystem
 		preview.SourcePath = pathArg("source", true)
-		preview.DestinationPath = pathArg("destination", false)
+		preview.DestinationPath = pathArg("destination", true)
 	case "remove":
 		preview.Kind = permissionpkg.PreviewFilesystem
 		preview.Path = pathArg("path", true)
@@ -210,11 +211,28 @@ func boundApprovalLabel(value string) string {
 	return truncateApprovalUTF8(value, maximumBytes-3) + "..."
 }
 
-func approvalExistingContent(path string) (content string, exists bool, omittedReason string) {
+func (a *Agent) approvalExistingContent(path string) (content string, exists bool, omittedReason string) {
 	if strings.TrimSpace(path) == "" {
 		return "", false, "target path is unavailable"
 	}
-	data, err := readBoundedFile(path, maxApprovalDiffInputBytes)
+	workspace, err := a.openWorkspaceRoot()
+	if err != nil {
+		return "", false, fmt.Sprintf("existing content unavailable: %v", err)
+	}
+	defer func() { _ = workspace.Close() }()
+	_, relative, err := workspace.resolve(a, path, false)
+	if err != nil {
+		return "", false, fmt.Sprintf("existing content unavailable: %v", err)
+	}
+	parent, name, err := workspace.openParent(relative, false)
+	if os.IsNotExist(err) {
+		return "", false, ""
+	}
+	if err != nil {
+		return "", false, fmt.Sprintf("existing content unavailable: %v", err)
+	}
+	defer func() { _ = parent.Close() }()
+	data, _, err := readPinnedRootFile(parent, name, maxApprovalDiffInputBytes)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", false, ""
 	}

@@ -197,6 +197,153 @@ func TestMoveSymlinkMovesLinkNotTarget(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRootRejectsRetargetedParentEscape(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink fixture requires unprivileged symlink creation")
+	}
+	workspace := t.TempDir()
+	outside := t.TempDir()
+	parent := filepath.Join(workspace, "safe")
+	if err := os.Mkdir(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outsideTarget := filepath.Join(outside, "victim.txt")
+	if err := os.WriteFile(outsideTarget, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ag := New(nil, nil, 0)
+	ag.SetWorkDir(workspace)
+	pinned, err := ag.openWorkspaceRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pinned.Close() })
+	_, relative, err := pinned.resolve(ag, filepath.Join(parent, "victim.txt"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(parent, filepath.Join(workspace, "safe-original")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, parent); err != nil {
+		t.Fatal(err)
+	}
+
+	if destination, name, openErr := pinned.openParent(relative, true); openErr == nil {
+		defer func() { _ = destination.Close() }()
+		if writeErr := atomicWriteRoot(destination, name, []byte("escaped"), 0o600); writeErr == nil {
+			t.Fatal("atomic write followed a retargeted parent outside workspace")
+		}
+	}
+	if removeErr := pinned.root.Remove(filepath.Join("safe", "victim.txt")); removeErr == nil {
+		t.Fatal("Root.Remove followed a retargeted parent outside workspace")
+	}
+	data, err := os.ReadFile(outsideTarget)
+	if err != nil || string(data) != "outside" {
+		t.Fatalf("outside target changed: %q, %v", data, err)
+	}
+}
+
+func TestWorkspaceReadablePathRejectsRetargetedParentEscape(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink fixture requires unprivileged symlink creation")
+	}
+	workspace := t.TempDir()
+	outside := t.TempDir()
+	parent := filepath.Join(workspace, "safe")
+	if err := os.Mkdir(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	insideTarget := filepath.Join(parent, "evidence.txt")
+	if err := os.WriteFile(insideTarget, []byte("inside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outsideTarget := filepath.Join(outside, "evidence.txt")
+	if err := os.WriteFile(outsideTarget, []byte("outside-secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ag := New(nil, nil, 0)
+	ag.SetWorkDir(workspace)
+	readable, err := ag.resolveReadablePath(insideTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = readable.close() })
+	if err := os.Rename(parent, filepath.Join(workspace, "safe-original")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, parent); err != nil {
+		t.Fatal(err)
+	}
+
+	data, readErr := readable.readBounded(maxFileReadBytes)
+	if readErr == nil || strings.Contains(string(data), "outside-secret") {
+		t.Fatalf("workspace read followed retargeted parent: data=%q err=%v", data, readErr)
+	}
+}
+
+func TestWorkspaceReadablePathCloseReleasesPinnedRoot(t *testing.T) {
+	workspace := t.TempDir()
+	target := filepath.Join(workspace, "evidence.txt")
+	if err := os.WriteFile(target, []byte("evidence"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ag := New(nil, nil, 0)
+	ag.SetWorkDir(workspace)
+	readable, err := ag.resolveReadablePath(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := readable.close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := readable.close(); err != nil {
+		t.Fatalf("second close: %v", err)
+	}
+	if _, err := readable.stat(); err == nil {
+		t.Fatal("closed readable path retained a usable workspace root")
+	}
+}
+
+func TestMoveApprovalPreviewPreservesFinalSymlinkEntry(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink fixture requires unprivileged symlink creation")
+	}
+	workspace := t.TempDir()
+	source := filepath.Join(workspace, "source.txt")
+	target := filepath.Join(workspace, "target.txt")
+	link := filepath.Join(workspace, "destination-link")
+	if err := os.WriteFile(source, []byte("source"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("target"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	ag := New(nil, nil, 0)
+	ag.SetWorkDir(workspace)
+	preview := ag.buildApprovalPreview(context.Background(), llm.ToolCall{
+		Name: "move",
+		Arguments: map[string]any{
+			"source":      source,
+			"destination": link,
+		},
+	}, "move-preview")
+	canonicalWorkspace, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedLink := filepath.Join(canonicalWorkspace, filepath.Base(link))
+	if preview.DestinationPath != expectedLink {
+		t.Fatalf("move destination preview = %q, want symlink entry %q", preview.DestinationPath, expectedLink)
+	}
+}
+
 func TestDestructivePathRejectsSymlinkedParentEscape(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink permissions vary on Windows")

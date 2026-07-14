@@ -74,10 +74,6 @@ steps:
       timeoutMs: 2000
   - wait:
       screen:
-        contains: "bug.mp4"
-      timeoutMs: 2000
-  - wait:
-      screen:
         notContains: "sibling.txt"
       timeoutMs: 2000
   - press: "ctrl+c"

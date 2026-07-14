@@ -117,13 +117,64 @@ type additionalReadFile struct {
 	pin    *os.File
 }
 
-// readablePath carries the authority needed to open one path. A nil root is the
-// ordinary workspace path, which keeps the existing resolver and behavior.
+// readablePath carries the authority needed to open one path. Workspace reads
+// own a per-operation pinned root; additional grants borrow their process-local
+// roots and exact-file pins from Agent state.
 type readablePath struct {
-	absolute string
-	relative string
-	root     *additionalReadRoot
-	file     *additionalReadFile
+	absolute  string
+	relative  string
+	workspace *workspaceRoot
+	root      *additionalReadRoot
+	file      *additionalReadFile
+}
+
+// pruneStaleReadGrantsLocked removes authorities whose displayed path no
+// longer names the pinned filesystem object. Callers hold a.mu for writing and
+// the turn boundary, so no provider operation can still be using the handles.
+func (a *Agent) pruneStaleReadGrantsLocked() {
+	for path, root := range a.readRoots {
+		if root.isCurrent() {
+			continue
+		}
+		delete(a.readRoots, path)
+		_ = root.root.Close()
+	}
+	for path, file := range a.readFiles {
+		if file.isCurrent() {
+			continue
+		}
+		delete(a.readFiles, path)
+		_ = file.pin.Close()
+		_ = file.root.Close()
+	}
+}
+
+func (root *additionalReadRoot) currentInfo() (os.FileInfo, error) {
+	if root == nil || root.root == nil || root.info == nil {
+		return nil, errors.New("read-only root is unavailable")
+	}
+	pinned, err := root.root.Stat(".")
+	if err != nil {
+		return nil, fmt.Errorf("read-only root identity is unavailable: %w", err)
+	}
+	current, err := os.Stat(root.path)
+	if err != nil {
+		return nil, err
+	}
+	if !pinned.IsDir() || !os.SameFile(root.info, pinned) || !os.SameFile(pinned, current) {
+		return nil, fmt.Errorf("read-only root changed after authorization: %s", root.path)
+	}
+	return pinned, nil
+}
+
+func (root *additionalReadRoot) isCurrent() bool {
+	_, err := root.currentInfo()
+	return err == nil
+}
+
+func (file *additionalReadFile) isCurrent() bool {
+	_, err := file.currentInfo()
+	return err == nil
 }
 
 // AddReadRoot grants read-only access to one external directory for this Agent
@@ -138,7 +189,7 @@ func (a *Agent) addReadRoot(path string, expected *readPathIdentity) (string, er
 	if err != nil {
 		return "", err
 	}
-	if canonical == string(filepath.Separator) {
+	if isFilesystemRoot(canonical) {
 		return "", errors.New("refusing to grant the filesystem root as read-only scope")
 	}
 	info, err := os.Stat(canonical)
@@ -156,7 +207,11 @@ func (a *Agent) addReadRoot(path string, expected *readPathIdentity) (string, er
 	if err != nil {
 		return "", err
 	}
-	if pathsOverlap(workspace, canonical) {
+	overlapsWorkspace, err := physicalPathsOverlap(workspace, canonical)
+	if err != nil {
+		return "", fmt.Errorf("compare read-only root with writable workspace: %w", err)
+	}
+	if overlapsWorkspace {
 		return "", fmt.Errorf("read-only root %q overlaps writable workspace %q", canonical, workspace)
 	}
 
@@ -200,13 +255,31 @@ func (a *Agent) addReadRoot(path string, expected *readPathIdentity) (string, er
 	}
 
 	a.mu.Lock()
+	a.pruneStaleReadGrantsLocked()
 	if existing := a.readRoots[canonical]; existing != nil {
 		a.mu.Unlock()
 		_ = root.Close()
 		return existing.path, nil
 	}
 	for _, existing := range a.readRoots {
-		if pathsOverlap(existing.path, canonical) {
+		existingInfo, compareErr := existing.currentInfo()
+		if compareErr != nil {
+			a.mu.Unlock()
+			_ = root.Close()
+			return "", fmt.Errorf("compare read-only roots: %w", compareErr)
+		}
+		if os.SameFile(existingInfo, pinned) {
+			a.mu.Unlock()
+			_ = root.Close()
+			return existing.path, nil
+		}
+		overlaps, overlapErr := physicalPathsOverlap(existing.path, canonical)
+		if overlapErr != nil {
+			a.mu.Unlock()
+			_ = root.Close()
+			return "", fmt.Errorf("compare read-only roots: %w", overlapErr)
+		}
+		if overlaps {
 			a.mu.Unlock()
 			_ = root.Close()
 			return "", fmt.Errorf("read-only root %q overlaps existing root %q", canonical, existing.path)
@@ -217,9 +290,22 @@ func (a *Agent) addReadRoot(path string, expected *readPathIdentity) (string, er
 	// avoids presenting duplicate scopes for the same path.
 	var superseded []*additionalReadFile
 	for path, file := range a.readFiles {
-		if _, inside, overlapErr := workspaceRelative(canonical, path); overlapErr == nil && inside {
+		if _, currentErr := file.currentInfo(); currentErr != nil {
+			delete(a.readFiles, path)
+			_ = file.pin.Close()
+			_ = file.root.Close()
+			continue
+		}
+		if _, inside, overlapErr := physicalPathRelative(canonical, path); overlapErr == nil && inside {
 			superseded = append(superseded, file)
 			delete(a.readFiles, path)
+		} else if overlapErr != nil {
+			for _, supersededFile := range superseded {
+				a.readFiles[supersededFile.path] = supersededFile
+			}
+			a.mu.Unlock()
+			_ = root.Close()
+			return "", fmt.Errorf("compare exact read file with read-only root: %w", overlapErr)
 		}
 	}
 	if len(a.readRoots)+len(a.readFiles) >= maxAdditionalReadAuthorities {
@@ -264,19 +350,41 @@ func (a *Agent) addReadFile(path string, expected *readPathIdentity) (string, er
 	if err != nil {
 		return "", err
 	}
-	if _, inside, relErr := workspaceRelative(workspace, canonical); relErr == nil && inside {
+	if _, inside, relErr := physicalPathRelative(workspace, canonical); relErr != nil {
+		return "", fmt.Errorf("compare exact read file with writable workspace: %w", relErr)
+	} else if inside {
 		return "", fmt.Errorf("exact read file %q is already inside writable workspace %q", canonical, workspace)
 	}
 
 	a.mu.RLock()
-	if existing := a.readFiles[canonical]; existing != nil {
+	if existing := a.readFiles[canonical]; existing != nil && existing.isCurrent() {
 		a.mu.RUnlock()
 		return existing.path, nil
 	}
+	for _, existing := range a.readFiles {
+		if !existing.isCurrent() {
+			continue
+		}
+		same, compareErr := sameExistingFileEntry(existing.path, canonical)
+		if compareErr != nil {
+			a.mu.RUnlock()
+			return "", fmt.Errorf("compare exact read files: %w", compareErr)
+		}
+		if same {
+			a.mu.RUnlock()
+			return existing.path, nil
+		}
+	}
 	for _, root := range a.readRoots {
-		if _, inside, relErr := workspaceRelative(root.path, canonical); relErr == nil && inside {
+		if !root.isCurrent() {
+			continue
+		}
+		if _, inside, relErr := physicalPathRelative(root.path, canonical); relErr == nil && inside {
 			a.mu.RUnlock()
 			return canonical, nil
+		} else if relErr != nil {
+			a.mu.RUnlock()
+			return "", fmt.Errorf("compare exact read file with read-only root: %w", relErr)
 		}
 	}
 	a.mu.RUnlock()
@@ -324,18 +432,39 @@ func (a *Agent) addReadFile(path string, expected *readPathIdentity) (string, er
 	}
 
 	a.mu.Lock()
+	a.pruneStaleReadGrantsLocked()
 	if existing := a.readFiles[canonical]; existing != nil {
 		a.mu.Unlock()
 		_ = pin.Close()
 		_ = root.Close()
 		return existing.path, nil
 	}
+	for _, existing := range a.readFiles {
+		same, compareErr := sameExistingFileEntry(existing.path, canonical)
+		if compareErr != nil {
+			a.mu.Unlock()
+			_ = pin.Close()
+			_ = root.Close()
+			return "", fmt.Errorf("compare exact read files: %w", compareErr)
+		}
+		if same {
+			a.mu.Unlock()
+			_ = pin.Close()
+			_ = root.Close()
+			return existing.path, nil
+		}
+	}
 	for _, directory := range a.readRoots {
-		if _, inside, relErr := workspaceRelative(directory.path, canonical); relErr == nil && inside {
+		if _, inside, relErr := physicalPathRelative(directory.path, canonical); relErr == nil && inside {
 			a.mu.Unlock()
 			_ = pin.Close()
 			_ = root.Close()
 			return canonical, nil
+		} else if relErr != nil {
+			a.mu.Unlock()
+			_ = pin.Close()
+			_ = root.Close()
+			return "", fmt.Errorf("compare exact read file with read-only root: %w", relErr)
 		}
 	}
 	if len(a.readRoots)+len(a.readFiles) >= maxAdditionalReadAuthorities {
@@ -422,7 +551,7 @@ func (a *Agent) InspectReadPath(path string) (ReadPathInspection, error) {
 	} else if !info.IsDir() {
 		return ReadPathInspection{}, fmt.Errorf("read path is neither a regular file nor directory: %s", canonical)
 	}
-	if kind == ReadGrantDirectory && canonical == string(filepath.Separator) {
+	if kind == ReadGrantDirectory && isFilesystemRoot(canonical) {
 		return ReadPathInspection{}, errors.New("refusing to grant the filesystem root as read-only scope")
 	}
 	workspace, err := a.canonicalWorkDir()
@@ -433,30 +562,71 @@ func (a *Agent) InspectReadPath(path string) (ReadPathInspection, error) {
 	if err != nil {
 		return ReadPathInspection{}, err
 	}
-	if _, inside, relErr := workspaceRelative(workspace, canonical); relErr == nil && inside {
+	if _, inside, relErr := physicalPathRelative(workspace, canonical); relErr != nil {
+		identity.release()
+		return ReadPathInspection{}, fmt.Errorf("compare read path with writable workspace: %w", relErr)
+	} else if inside {
 		identity.release()
 		return ReadPathInspection{Path: canonical, Kind: kind, AlreadyReadable: true}, nil
 	}
-	if kind == ReadGrantDirectory && pathsOverlap(workspace, canonical) {
-		identity.release()
-		return ReadPathInspection{}, fmt.Errorf("read-only root %q overlaps writable workspace %q", canonical, workspace)
+	if kind == ReadGrantDirectory {
+		overlaps, overlapErr := physicalPathsOverlap(workspace, canonical)
+		if overlapErr != nil {
+			identity.release()
+			return ReadPathInspection{}, fmt.Errorf("compare read-only root with writable workspace: %w", overlapErr)
+		}
+		if overlaps {
+			identity.release()
+			return ReadPathInspection{}, fmt.Errorf("read-only root %q overlaps writable workspace %q", canonical, workspace)
+		}
 	}
 
 	inspection := ReadPathInspection{Path: canonical, Kind: kind, External: true, identity: identity}
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	if kind == ReadGrantExactFile && a.readFiles[canonical] != nil {
-		inspection.AlreadyReadable = true
+	if kind == ReadGrantExactFile {
+		if file := a.readFiles[canonical]; file != nil && file.isCurrent() {
+			inspection.AlreadyReadable = true
+		}
 	}
-	if !inspection.AlreadyReadable {
-		for _, root := range a.readRoots {
-			if _, inside, relErr := workspaceRelative(root.path, canonical); relErr == nil && inside {
+	if kind == ReadGrantExactFile && !inspection.AlreadyReadable {
+		for _, file := range a.readFiles {
+			if !file.isCurrent() {
+				continue
+			}
+			same, compareErr := sameExistingFileEntry(file.path, canonical)
+			if compareErr != nil {
+				identity.release()
+				return ReadPathInspection{}, fmt.Errorf("compare exact read files: %w", compareErr)
+			}
+			if same {
 				inspection.AlreadyReadable = true
 				break
 			}
-			if kind == ReadGrantDirectory && pathsOverlap(root.path, canonical) {
+		}
+	}
+	if !inspection.AlreadyReadable {
+		for _, root := range a.readRoots {
+			if !root.isCurrent() {
+				continue
+			}
+			if _, inside, relErr := physicalPathRelative(root.path, canonical); relErr == nil && inside {
+				inspection.AlreadyReadable = true
+				break
+			} else if relErr != nil {
 				identity.release()
-				return ReadPathInspection{}, fmt.Errorf("read-only root %q overlaps existing root %q", canonical, root.path)
+				return ReadPathInspection{}, fmt.Errorf("compare read path with read-only root: %w", relErr)
+			}
+			if kind == ReadGrantDirectory {
+				overlaps, overlapErr := physicalPathsOverlap(root.path, canonical)
+				if overlapErr != nil {
+					identity.release()
+					return ReadPathInspection{}, fmt.Errorf("compare read-only roots: %w", overlapErr)
+				}
+				if overlaps {
+					identity.release()
+					return ReadPathInspection{}, fmt.Errorf("read-only root %q overlaps existing root %q", canonical, root.path)
+				}
 			}
 		}
 	}
@@ -495,6 +665,24 @@ func (a *Agent) RemoveReadPath(path string) (ReadGrant, error) {
 		directory = a.readRoots[requested]
 		file = a.readFiles[requested]
 		canonical = requested
+	}
+	if directory == nil && file == nil {
+		for path, existing := range a.readRoots {
+			if same, compareErr := sameExistingPath(existing.path, canonical); compareErr == nil && same {
+				directory = existing
+				canonical = path
+				break
+			}
+		}
+	}
+	if directory == nil && file == nil {
+		for path, existing := range a.readFiles {
+			if same, compareErr := sameExistingFileEntry(existing.path, canonical); compareErr == nil && same {
+				file = existing
+				canonical = path
+				break
+			}
+		}
 	}
 	if directory != nil {
 		delete(a.readRoots, canonical)
@@ -729,10 +917,201 @@ func absoluteCleanReadPath(path string) (string, error) {
 	return filepath.Clean(absolute), nil
 }
 
-func pathsOverlap(first, second string) bool {
-	_, firstContainsSecond, firstErr := workspaceRelative(first, second)
-	_, secondContainsFirst, secondErr := workspaceRelative(second, first)
-	return firstErr == nil && secondErr == nil && (firstContainsSecond || secondContainsFirst)
+func isFilesystemRoot(path string) bool {
+	clean := filepath.Clean(path)
+	return filepath.IsAbs(clean) && filepath.Dir(clean) == clean
+}
+
+// physicalPathRelative reports containment using filesystem identity instead
+// of path spelling. This matters on case-insensitive or normalization-aware
+// filesystems, where two different absolute strings can name the same directory
+// hierarchy. Missing final components are retained after the closest existing
+// ancestor so callers can also classify a read path that disappeared mid-check.
+func physicalPathRelative(root, candidate string) (string, bool, error) {
+	root = filepath.Clean(root)
+	candidate = filepath.Clean(candidate)
+	rootInfo, err := os.Stat(root)
+	if err != nil {
+		return "", false, fmt.Errorf("inspect containment root %q: %w", root, err)
+	}
+	if !rootInfo.IsDir() {
+		return "", false, fmt.Errorf("containment root is not a directory: %s", root)
+	}
+
+	current := candidate
+	components := make([]string, 0, 8)
+	for {
+		info, statErr := os.Stat(current)
+		if statErr == nil {
+			if info.IsDir() && os.SameFile(rootInfo, info) {
+				for left, right := 0, len(components)-1; left < right; left, right = left+1, right-1 {
+					components[left], components[right] = components[right], components[left]
+				}
+				if len(components) == 0 {
+					return ".", true, nil
+				}
+				return filepath.Join(components...), true, nil
+			}
+		} else if !os.IsNotExist(statErr) {
+			return "", false, fmt.Errorf("inspect containment candidate %q: %w", current, statErr)
+		}
+
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", false, nil
+		}
+		components = append(components, filepath.Base(current))
+		current = parent
+	}
+}
+
+// physicalCanonicalRelative additionally recovers the directory-entry spelling
+// for every existing component. Ignore rules are string based, so applying them
+// to an alternate casing or normalization would otherwise let a physical alias
+// of an ignored object evade policy on filesystems that accept that alias.
+func physicalCanonicalRelative(root, candidate string) (string, bool, error) {
+	relative, inside, err := physicalPathRelative(root, candidate)
+	if err != nil || !inside || relative == "." {
+		return relative, inside, err
+	}
+
+	components := strings.Split(filepath.Clean(relative), string(filepath.Separator))
+	canonical := make([]string, 0, len(components))
+	current := filepath.Clean(root)
+	for index, component := range components {
+		requested := filepath.Join(current, component)
+		info, statErr := os.Stat(requested)
+		if os.IsNotExist(statErr) {
+			canonical = append(canonical, components[index:]...)
+			return filepath.Join(canonical...), true, nil
+		}
+		if statErr != nil {
+			return "", false, fmt.Errorf("inspect contained path %q: %w", requested, statErr)
+		}
+
+		actual, nameErr := physicalEntryName(current, component, info)
+		if nameErr != nil {
+			return "", false, fmt.Errorf("resolve physical spelling for %q: %w", requested, nameErr)
+		}
+		canonical = append(canonical, actual)
+		current = filepath.Join(current, actual)
+	}
+	return filepath.Join(canonical...), true, nil
+}
+
+func physicalEntryName(directory, requested string, expected os.FileInfo) (string, error) {
+	opened, err := os.Open(directory)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = opened.Close() }()
+
+	var (
+		identicalName  string
+		identicalCount int
+		foldedName     string
+		foldedCount    int
+	)
+	for {
+		entries, readErr := opened.ReadDir(readDirectoryBatchSize)
+		for _, entry := range entries {
+			if entry.Name() == requested {
+				info, infoErr := entry.Info()
+				if infoErr != nil {
+					return "", infoErr
+				}
+				if !os.SameFile(expected, info) {
+					return "", errors.New("directory entry changed during physical resolution")
+				}
+				return requested, nil
+			}
+			info, infoErr := entry.Info()
+			if infoErr != nil || !os.SameFile(expected, info) {
+				continue
+			}
+			identicalName = entry.Name()
+			identicalCount++
+			if strings.EqualFold(entry.Name(), requested) {
+				foldedName = entry.Name()
+				foldedCount++
+			}
+		}
+		switch {
+		case errors.Is(readErr, io.EOF):
+			if identicalCount == 1 {
+				return identicalName, nil
+			}
+			if foldedCount == 1 {
+				return foldedName, nil
+			}
+			if identicalCount == 0 {
+				return "", errors.New("directory entry identity is unavailable")
+			}
+			return "", errors.New("directory entry identity is ambiguous")
+		case readErr != nil:
+			return "", readErr
+		case len(entries) == 0:
+			return "", io.ErrNoProgress
+		}
+	}
+}
+
+func physicalPathsOverlap(first, second string) (bool, error) {
+	if _, inside, err := physicalPathRelative(first, second); err != nil {
+		return false, err
+	} else if inside {
+		return true, nil
+	}
+	_, inside, err := physicalPathRelative(second, first)
+	return inside, err
+}
+
+func sameExistingPath(first, second string) (bool, error) {
+	firstInfo, err := os.Stat(first)
+	if err != nil {
+		return false, err
+	}
+	secondInfo, err := os.Stat(second)
+	if err != nil {
+		return false, err
+	}
+	return os.SameFile(firstInfo, secondInfo), nil
+}
+
+// sameExistingFileEntry distinguishes filesystem aliases for one directory
+// entry from separate hard links to the same inode. Exact-file authority is
+// path-entry scoped: alternate casing or Unicode normalization may identify
+// the approved entry, but a sibling hard link must be approved separately.
+func sameExistingFileEntry(first, second string) (bool, error) {
+	first = filepath.Clean(first)
+	second = filepath.Clean(second)
+	firstParent := filepath.Dir(first)
+	secondParent := filepath.Dir(second)
+	parentsMatch, err := sameExistingPath(firstParent, secondParent)
+	if err != nil || !parentsMatch {
+		return false, err
+	}
+
+	firstInfo, err := os.Stat(first)
+	if err != nil {
+		return false, err
+	}
+	secondInfo, err := os.Stat(second)
+	if err != nil {
+		return false, err
+	}
+	if !os.SameFile(firstInfo, secondInfo) {
+		return false, nil
+	}
+	firstName, err := physicalEntryName(firstParent, filepath.Base(first), firstInfo)
+	if err != nil {
+		return false, err
+	}
+	secondName, err := physicalEntryName(secondParent, filepath.Base(second), secondInfo)
+	if err != nil {
+		return false, err
+	}
+	return firstName == secondName, nil
 }
 
 func (a *Agent) resolveReadablePath(path string) (readablePath, error) {
@@ -744,10 +1123,20 @@ func (a *Agent) resolveReadablePath(path string) (readablePath, error) {
 			return readablePath{}, err
 		}
 	}
+	pinnedWorkspace, err := a.openWorkspaceRoot()
+	if err != nil {
+		return readablePath{}, err
+	}
 	resolved, workspaceErr := a.resolvePath(path)
 	if workspaceErr == nil {
-		return readablePath{absolute: resolved}, nil
+		relative, relativeErr := pinnedWorkspace.relative(resolved)
+		if relativeErr != nil {
+			_ = pinnedWorkspace.Close()
+			return readablePath{}, relativeErr
+		}
+		return readablePath{absolute: resolved, relative: relative, workspace: pinnedWorkspace}, nil
 	}
+	_ = pinnedWorkspace.Close()
 
 	workspace, err := a.canonicalWorkDir()
 	if err != nil {
@@ -766,19 +1155,47 @@ func (a *Agent) resolveReadablePath(path string) (readablePath, error) {
 	if err != nil {
 		return readablePath{}, fmt.Errorf("resolve readable path %q: %w", path, err)
 	}
-	if _, insideWorkspace, relErr := workspaceRelative(workspace, candidate); relErr == nil && insideWorkspace {
+	if _, insideWorkspace, relErr := physicalCanonicalRelative(workspace, candidate); relErr != nil {
+		return readablePath{}, fmt.Errorf("compare readable path with writable workspace: %w", relErr)
+	} else if insideWorkspace {
 		// Never let an additional root bypass a workspace .agentignore or a
-		// workspace symlink-escape rejection.
+		// workspace symlink-escape rejection. Identity-based containment also
+		// catches casing and normalization aliases on filesystems that accept
+		// more than one spelling for the same object.
 		return readablePath{}, workspaceErr
 	}
 
 	a.mu.RLock()
 	exact := a.readFiles[candidate]
+	var staleExactErr error
+	if exact != nil {
+		if _, currentErr := exact.currentInfo(); currentErr != nil {
+			staleExactErr = currentErr
+			exact = nil
+		}
+	}
 	var grant *additionalReadRoot
 	var relative string
 	if exact == nil {
+		if _, statErr := os.Stat(candidate); statErr == nil {
+			for _, file := range a.readFiles {
+				if !file.isCurrent() {
+					continue
+				}
+				same, compareErr := sameExistingFileEntry(file.path, candidate)
+				if compareErr == nil && same {
+					exact = file
+					break
+				}
+			}
+		}
+	}
+	if exact == nil {
 		for _, root := range a.readRoots {
-			rel, inside, relErr := workspaceRelative(root.path, candidate)
+			if !root.isCurrent() {
+				continue
+			}
+			rel, inside, relErr := physicalCanonicalRelative(root.path, candidate)
 			if relErr == nil && inside {
 				grant = root
 				relative = rel
@@ -788,23 +1205,36 @@ func (a *Agent) resolveReadablePath(path string) (readablePath, error) {
 	}
 	a.mu.RUnlock()
 	if exact != nil {
-		return readablePath{absolute: candidate, file: exact}, nil
+		return readablePath{absolute: exact.path, file: exact}, nil
 	}
 	if grant == nil {
+		if staleExactErr != nil {
+			return readablePath{}, staleExactErr
+		}
 		return readablePath{}, fmt.Errorf("path %q is outside the writable workspace and active temporary read grants; authorize the exact file when prompted or use /scope add-read <directory>", requested)
 	}
 	if pathIgnoredWithContent(grant.ignoreContent, relative) {
 		return readablePath{}, fmt.Errorf("path %q is excluded by %s/.agentignore", requested, grant.path)
 	}
-	return readablePath{absolute: candidate, relative: relative, root: grant}, nil
+	return readablePath{absolute: filepath.Join(grant.path, relative), relative: relative, root: grant}, nil
+}
+
+func (path readablePath) close() error {
+	if path.workspace == nil {
+		return nil
+	}
+	return path.workspace.Close()
 }
 
 func (path readablePath) stat() (os.FileInfo, error) {
 	if path.file != nil {
 		return path.file.currentInfo()
 	}
+	if path.workspace != nil {
+		return path.workspace.root.Stat(filepath.ToSlash(path.relative))
+	}
 	if path.root == nil {
-		return os.Stat(path.absolute)
+		return nil, errors.New("read authority is unavailable")
 	}
 	return path.root.root.Stat(filepath.ToSlash(path.relative))
 }
@@ -825,8 +1255,10 @@ func (path readablePath) readDirBounded(ctx context.Context, limit int, include 
 
 	var directory *os.File
 	var err error
-	if path.root == nil {
-		directory, err = os.Open(path.absolute)
+	if path.workspace != nil {
+		directory, err = path.workspace.root.Open(filepath.ToSlash(path.relative))
+	} else if path.root == nil {
+		return nil, false, errors.New("read authority is unavailable")
 	} else {
 		directory, err = path.root.root.Open(filepath.ToSlash(path.relative))
 	}
@@ -903,10 +1335,32 @@ func (path readablePath) readBoundedAt(absolute string, limit int64) ([]byte, er
 		}
 		return readBoundedOpenFile(file, limit)
 	}
+	if path.workspace != nil {
+		relative, inside, err := workspaceRelative(path.workspace.path, absolute)
+		if err != nil || !inside {
+			return nil, fmt.Errorf("path escapes workspace root: %s", absolute)
+		}
+		rootRelative := filepath.ToSlash(relative)
+		info, err := path.workspace.root.Stat(rootRelative)
+		if err != nil {
+			return nil, err
+		}
+		if err := validateBoundedFileInfo(info, limit); err != nil {
+			return nil, err
+		}
+		file, err := path.workspace.root.Open(rootRelative)
+		if err != nil {
+			return nil, err
+		}
+		return readBoundedOpenFile(file, limit)
+	}
 	if path.root == nil {
-		return readBoundedFile(absolute, limit)
+		return nil, errors.New("read authority is unavailable")
 	}
 	relative, inside, err := workspaceRelative(path.root.path, absolute)
+	if err != nil || !inside {
+		relative, inside, err = physicalCanonicalRelative(path.root.path, absolute)
+	}
 	if err != nil || !inside {
 		return nil, fmt.Errorf("path escapes read-only root: %s", absolute)
 	}
@@ -929,10 +1383,17 @@ func (path readablePath) ignored(a *Agent, absolute string) bool {
 	if path.file != nil {
 		return filepath.Clean(absolute) != path.file.path
 	}
+	if path.workspace != nil {
+		relative, inside, err := workspaceRelative(path.workspace.path, absolute)
+		return err != nil || !inside || a.pathIgnored(relative)
+	}
 	if path.root == nil {
-		return a.pathIgnoredResolved(absolute)
+		return true
 	}
 	relative, inside, err := workspaceRelative(path.root.path, absolute)
+	if err != nil || !inside {
+		relative, inside, err = physicalCanonicalRelative(path.root.path, absolute)
+	}
 	return err != nil || !inside || pathIgnoredWithContent(path.root.ignoreContent, relative)
 }
 
@@ -941,8 +1402,22 @@ func (path readablePath) walk(fn filepath.WalkFunc) error {
 		info, err := path.file.currentInfo()
 		return fn(path.file.path, info, err)
 	}
+	if path.workspace != nil {
+		start := filepath.ToSlash(path.relative)
+		return fs.WalkDir(path.workspace.root.FS(), start, func(relative string, entry fs.DirEntry, walkErr error) error {
+			absolute := filepath.Join(path.workspace.path, filepath.FromSlash(relative))
+			if walkErr != nil {
+				return fn(absolute, nil, walkErr)
+			}
+			info, err := entry.Info()
+			if err != nil {
+				return fn(absolute, nil, err)
+			}
+			return fn(absolute, info, nil)
+		})
+	}
 	if path.root == nil {
-		return filepath.Walk(path.absolute, fn)
+		return errors.New("read authority is unavailable")
 	}
 	start := filepath.ToSlash(path.relative)
 	return fs.WalkDir(path.root.root.FS(), start, func(relative string, entry fs.DirEntry, walkErr error) error {
@@ -970,7 +1445,11 @@ func (file *additionalReadFile) currentInfo() (os.FileInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !current.Mode().IsRegular() || !os.SameFile(pinned, current) {
+	pathInfo, err := os.Stat(file.path)
+	if err != nil {
+		return nil, err
+	}
+	if !current.Mode().IsRegular() || !os.SameFile(pinned, current) || !os.SameFile(pinned, pathInfo) {
 		return nil, fmt.Errorf("exact read file changed after authorization: %s", file.path)
 	}
 	return current, nil

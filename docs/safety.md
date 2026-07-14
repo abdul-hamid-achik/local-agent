@@ -38,6 +38,14 @@ rechecks its content immediately before startup. Protect the executable and its
 parent directory from concurrent writes, as the final OS launch remains
 path-based. This startup trust does not approve later MCP tool calls.
 
+Built-in workspace reads and approved file mutations execute relative to a
+workspace directory handle pinned for that operation. Local Agent rechecks the
+workspace identity, rejects symlink components while opening mutation parents,
+and creates atomic-write temporary files inside the pinned parent. A path
+component changed after validation therefore cannot redirect built-in file I/O
+outside the startup workspace. This boundary does not constrain an approved
+shell command or MCP process and does not turn Local Agent into an OS sandbox.
+
 ## Approval policy
 
 The following requests require approval by default:

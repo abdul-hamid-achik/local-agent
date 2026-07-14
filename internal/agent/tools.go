@@ -130,6 +130,7 @@ func (a *Agent) handleGrep(ctx context.Context, args map[string]any) (string, bo
 	if err != nil {
 		return fmt.Sprintf("error: %v", err), true
 	}
+	defer func() { _ = readable.close() }()
 	path := readable.absolute
 	include := a.getArgString(args, "include", "")
 	context := a.getArgInt(args, "context", 3)
@@ -255,6 +256,7 @@ func (a *Agent) handleRead(args map[string]any) (string, bool) {
 	if err != nil {
 		return fmt.Sprintf("error: %v", err), true
 	}
+	defer func() { _ = readable.close() }()
 
 	data, err := readable.readBounded(maxFileReadBytes)
 	if err != nil {
@@ -286,28 +288,32 @@ func (a *Agent) handleRead(args map[string]any) (string, bool) {
 }
 
 func (a *Agent) handleWrite(args map[string]any) (string, bool) {
-	path, _ := args["path"].(string)
+	requestedPath, _ := args["path"].(string)
 	content, _ := args["content"].(string)
 
-	if path == "" {
+	if requestedPath == "" {
 		return "error: path is required", true
 	}
-
-	path, err := a.resolvePath(path)
+	workspace, err := a.openWorkspaceRoot()
 	if err != nil {
 		return fmt.Sprintf("error: %v", err), true
 	}
-
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	defer func() { _ = workspace.Close() }()
+	path, relative, err := workspace.resolve(a, requestedPath, false)
+	if err != nil {
+		return fmt.Sprintf("error: %v", err), true
+	}
+	parent, name, err := workspace.openParent(relative, true)
+	if err != nil {
 		return fmt.Sprintf("error creating directory: %v", err), true
 	}
+	defer func() { _ = parent.Close() }()
 
 	mode := os.FileMode(0o644)
-	if info, statErr := os.Stat(path); statErr == nil {
+	if info, statErr := parent.Stat(name); statErr == nil {
 		mode = info.Mode().Perm()
 	}
-	if err := atomicWriteFile(path, []byte(content), mode); err != nil {
+	if err := atomicWriteRoot(parent, name, []byte(content), mode); err != nil {
 		return fmt.Sprintf("error writing file: %v", err), true
 	}
 
@@ -328,6 +334,7 @@ func (a *Agent) handleGlob(ctx context.Context, args map[string]any) (string, bo
 	if err != nil {
 		return fmt.Sprintf("error: %v", err), true
 	}
+	defer func() { _ = readable.close() }()
 	path := readable.absolute
 
 	if _, err := readable.stat(); err != nil {
@@ -462,6 +469,7 @@ func (a *Agent) handleLs(ctx context.Context, args map[string]any) (string, bool
 	if err != nil {
 		return fmt.Sprintf("error: %v", err), true
 	}
+	defer func() { _ = readable.close() }()
 	path := readable.absolute
 
 	entries, hadEntries, err := readable.readDirBounded(ctx, a.MaxGrepResults(), func(entry os.DirEntry) bool {
@@ -521,6 +529,7 @@ func (a *Agent) handleFind(ctx context.Context, args map[string]any) (string, bo
 	if err != nil {
 		return fmt.Sprintf("error: %v", err), true
 	}
+	defer func() { _ = readable.close() }()
 	path := readable.absolute
 	fileType := a.getArgString(args, "type", "")
 
@@ -665,7 +674,7 @@ func (a *Agent) resolvePath(path string) (string, error) {
 		return "", fmt.Errorf("resolve path %q: %w", path, err)
 	}
 
-	rel, inside, err := workspaceRelative(root, candidate)
+	rel, inside, err := physicalCanonicalRelative(root, candidate)
 	if err != nil {
 		return "", fmt.Errorf("resolve path %q: %w", path, err)
 	}
@@ -675,7 +684,7 @@ func (a *Agent) resolvePath(path string) (string, error) {
 	if a.pathIgnored(rel) {
 		return "", fmt.Errorf("path %q is excluded by .agentignore", path)
 	}
-	return candidate, nil
+	return filepath.Join(root, rel), nil
 }
 
 // resolveDestructivePath confines a remove/rename operand by canonicalizing
@@ -719,18 +728,39 @@ func (a *Agent) resolveDestructivePath(path string) (string, error) {
 	if lexicalInside && a.pathIgnored(lexicalRel) {
 		return "", fmt.Errorf("path %q is excluded by .agentignore", path)
 	}
+	if filepath.Clean(candidate) == filepath.Clean(lexicalRoot) {
+		return filepath.Clean(root), nil
+	}
+	if rootInfo, rootErr := os.Stat(root); rootErr == nil {
+		if candidateInfo, candidateErr := os.Lstat(candidate); candidateErr == nil && os.SameFile(rootInfo, candidateInfo) {
+			return filepath.Clean(root), nil
+		}
+	}
 	parent, err := resolveExistingAncestor(filepath.Dir(candidate))
 	if err != nil {
 		return "", fmt.Errorf("resolve parent for %q: %w", path, err)
 	}
-	candidate = filepath.Join(parent, filepath.Base(candidate))
-	rel, inside, err := workspaceRelative(root, candidate)
+	parentRel, inside, err := physicalCanonicalRelative(root, parent)
 	if err != nil {
 		return "", fmt.Errorf("resolve path %q: %w", path, err)
 	}
 	if !inside {
 		return "", fmt.Errorf("path %q escapes workspace %q", path, root)
 	}
+	parent = filepath.Join(root, parentRel)
+	name := filepath.Base(candidate)
+	candidate = filepath.Join(parent, name)
+	if info, statErr := os.Lstat(candidate); statErr == nil {
+		actualName, nameErr := physicalEntryName(parent, name, info)
+		if nameErr != nil {
+			return "", fmt.Errorf("resolve destructive path entry %q: %w", path, nameErr)
+		}
+		name = actualName
+		candidate = filepath.Join(parent, name)
+	} else if !os.IsNotExist(statErr) {
+		return "", fmt.Errorf("inspect destructive path %q: %w", path, statErr)
+	}
+	rel := filepath.Join(parentRel, name)
 	if a.pathIgnored(rel) {
 		return "", fmt.Errorf("path %q is excluded by .agentignore", path)
 	}
@@ -777,48 +807,6 @@ func resolveExistingAncestor(path string) (string, error) {
 
 func (a *Agent) pathIgnored(path string) bool {
 	return pathIgnoredWithContent(a.ignoreContent, path)
-}
-
-func (a *Agent) pathIgnoredResolved(path string) bool {
-	root := a.workDir
-	if root == "" {
-		root, _ = os.Getwd()
-	}
-	root, rootErr := filepath.Abs(root)
-	path, pathErr := filepath.Abs(path)
-	if rootErr != nil || pathErr != nil {
-		return true
-	}
-	// Walk callbacks receive the canonical path returned by resolvePath. Keep
-	// the comparison in that same namespace: on macOS, for example, /var is a
-	// symlink to /private/var and comparing one spelling to the other makes an
-	// in-workspace child look like an escape.
-	if resolved, err := filepath.EvalSymlinks(root); err == nil {
-		root = resolved
-	}
-	if resolved, err := resolveExistingAncestor(path); err == nil {
-		path = resolved
-	}
-	rel, err := filepath.Rel(root, path)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return true
-	}
-	return a.pathIgnored(rel)
-}
-
-func readBoundedFile(path string, limit int64) ([]byte, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, err
-	}
-	if err := validateBoundedFileInfo(info, limit); err != nil {
-		return nil, err
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	return readBoundedOpenFile(file, limit)
 }
 
 func ignorePatternMatches(pattern, cleanPath string) bool {
@@ -923,6 +911,7 @@ func (a *Agent) handleDiff(ctx context.Context, args map[string]any) (string, bo
 	if err != nil {
 		return fmt.Sprintf("error: %v", err), true
 	}
+	defer func() { _ = readable.close() }()
 
 	// Read current content
 	oldContent, err := readable.readBounded(maxFileReadBytes)
@@ -1056,23 +1045,33 @@ func longestCommonSubsequence(ctx context.Context, a, b []string) ([]string, err
 }
 
 func (a *Agent) handleEdit(args map[string]any) (string, bool) {
-	path, _ := args["path"].(string)
+	requestedPath, _ := args["path"].(string)
 	patch, _ := args["patch"].(string)
 
-	if path == "" {
+	if requestedPath == "" {
 		return "error: path is required", true
 	}
 	if patch == "" {
 		return "error: patch is required", true
 	}
 
-	path, err := a.resolvePath(path)
+	workspace, err := a.openWorkspaceRoot()
 	if err != nil {
 		return fmt.Sprintf("error: %v", err), true
 	}
+	defer func() { _ = workspace.Close() }()
+	path, relative, err := workspace.resolve(a, requestedPath, false)
+	if err != nil {
+		return fmt.Sprintf("error: %v", err), true
+	}
+	parent, name, err := workspace.openParent(relative, false)
+	if err != nil {
+		return fmt.Sprintf("error reading file: %v", err), true
+	}
+	defer func() { _ = parent.Close() }()
 
 	// Read current content
-	oldContent, err := readBoundedFile(path, maxFileReadBytes)
+	oldContent, info, err := readPinnedRootFile(parent, name, maxFileReadBytes)
 	if err != nil {
 		return fmt.Sprintf("error reading file: %v", err), true
 	}
@@ -1083,8 +1082,7 @@ func (a *Agent) handleEdit(args map[string]any) (string, bool) {
 		return fmt.Sprintf("error applying patch: %v", err), true
 	}
 
-	mode := oldContentMode(path)
-	if err := atomicWriteFile(path, []byte(newContent), mode); err != nil {
+	if err := atomicWriteRoot(parent, name, []byte(newContent), info.Mode().Perm()); err != nil {
 		return fmt.Sprintf("error writing file: %v", err), true
 	}
 
@@ -1092,17 +1090,20 @@ func (a *Agent) handleEdit(args map[string]any) (string, bool) {
 }
 
 func (a *Agent) handleMkdir(args map[string]any) (string, bool) {
-	path, _ := args["path"].(string)
-	if path == "" {
+	requestedPath, _ := args["path"].(string)
+	if requestedPath == "" {
 		return "error: path is required", true
 	}
-
-	path, err := a.resolvePath(path)
+	workspace, err := a.openWorkspaceRoot()
 	if err != nil {
 		return fmt.Sprintf("error: %v", err), true
 	}
-
-	if err := os.MkdirAll(path, 0755); err != nil {
+	defer func() { _ = workspace.Close() }()
+	path, relative, err := workspace.resolve(a, requestedPath, false)
+	if err != nil {
+		return fmt.Sprintf("error: %v", err), true
+	}
+	if err := workspace.mkdirAll(relative); err != nil {
 		return fmt.Sprintf("error creating directory: %v", err), true
 	}
 
@@ -1110,23 +1111,35 @@ func (a *Agent) handleMkdir(args map[string]any) (string, bool) {
 }
 
 func (a *Agent) handleRemove(args map[string]any) (string, bool) {
-	path, _ := args["path"].(string)
-	if path == "" {
+	requestedPath, _ := args["path"].(string)
+	if requestedPath == "" {
 		return "error: path is required", true
 	}
-
-	path, err := a.resolveDestructivePath(path)
+	workspace, err := a.openWorkspaceRoot()
 	if err != nil {
 		return fmt.Sprintf("error: %v", err), true
 	}
-	if root, rootErr := a.resolvePath("."); rootErr == nil && path == root {
+	defer func() { _ = workspace.Close() }()
+	path, relative, err := workspace.resolve(a, requestedPath, true)
+	if err != nil {
+		return fmt.Sprintf("error: %v", err), true
+	}
+	if relative == "." {
 		return "error: refusing to remove the workspace root", true
 	}
+	parent, name, err := workspace.openParent(relative, false)
+	if err != nil {
+		if os.IsNotExist(err) && a.getArgBool(args, "force", false) {
+			return "Removed (ignored nonexistent)", false
+		}
+		return fmt.Sprintf("error: %v", err), true
+	}
+	defer func() { _ = parent.Close() }()
 
 	recursive := a.getArgBool(args, "recursive", false)
 	force := a.getArgBool(args, "force", false)
 
-	info, err := os.Lstat(path)
+	info, err := parent.Lstat(name)
 	if err != nil {
 		if os.IsNotExist(err) {
 			if force {
@@ -1139,12 +1152,12 @@ func (a *Agent) handleRemove(args map[string]any) (string, bool) {
 
 	if info.IsDir() {
 		if recursive {
-			err = os.RemoveAll(path)
+			err = parent.RemoveAll(name)
 		} else {
-			err = os.Remove(path)
+			err = parent.Remove(name)
 		}
 	} else {
-		err = os.Remove(path)
+		err = parent.Remove(name)
 	}
 
 	if err != nil {
@@ -1160,13 +1173,19 @@ func (a *Agent) handleCopy(args map[string]any) (string, bool) {
 	if source == "" || destination == "" {
 		return "error: source and destination are required", true
 	}
+	workspace, err := a.openWorkspaceRoot()
+	if err != nil {
+		return fmt.Sprintf("error: destination: %v", err), true
+	}
+	defer func() { _ = workspace.Close() }()
 
 	readableSource, err := a.resolveReadablePath(source)
 	if err != nil {
 		return fmt.Sprintf("error: source: %v", err), true
 	}
+	defer func() { _ = readableSource.close() }()
 	source = readableSource.absolute
-	destination, err = a.resolvePath(destination)
+	destination, destinationRelative, err := workspace.resolve(a, destination, false)
 	if err != nil {
 		return fmt.Sprintf("error: destination: %v", err), true
 	}
@@ -1185,13 +1204,13 @@ func (a *Agent) handleCopy(args map[string]any) (string, bool) {
 		return fmt.Sprintf("error reading source: %v", err), true
 	}
 
-	// Create parent directory if needed
-	dir := filepath.Dir(destination)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	parent, name, err := workspace.openParent(destinationRelative, true)
+	if err != nil {
 		return fmt.Sprintf("error creating destination directory: %v", err), true
 	}
+	defer func() { _ = parent.Close() }()
 
-	err = atomicWriteFile(destination, srcData, info.Mode().Perm())
+	err = atomicWriteRoot(parent, name, srcData, info.Mode().Perm())
 	if err != nil {
 		return fmt.Sprintf("error writing destination: %v", err), true
 	}
@@ -1206,27 +1225,34 @@ func (a *Agent) handleMove(args map[string]any) (string, bool) {
 	if source == "" || destination == "" {
 		return "error: source and destination are required", true
 	}
-
-	var err error
-	source, err = a.resolveDestructivePath(source)
+	workspace, err := a.openWorkspaceRoot()
+	if err != nil {
+		return fmt.Sprintf("error: %v", err), true
+	}
+	defer func() { _ = workspace.Close() }()
+	source, sourceRelative, err := workspace.resolve(a, source, true)
 	if err != nil {
 		return fmt.Sprintf("error: source: %v", err), true
 	}
-	if root, rootErr := a.resolvePath("."); rootErr == nil && source == root {
+	if sourceRelative == "." {
 		return "error: refusing to move the workspace root", true
 	}
-	destination, err = a.resolveDestructivePath(destination)
+	destination, destinationRelative, err := workspace.resolve(a, destination, true)
 	if err != nil {
 		return fmt.Sprintf("error: destination: %v", err), true
 	}
-
-	// Create parent directory if needed
-	dir := filepath.Dir(destination)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	sourceParent, _, err := workspace.openParent(sourceRelative, false)
+	if err != nil {
+		return fmt.Sprintf("error: source: %v", err), true
+	}
+	defer func() { _ = sourceParent.Close() }()
+	destinationParent, _, err := workspace.openParent(destinationRelative, true)
+	if err != nil {
 		return fmt.Sprintf("error creating destination directory: %v", err), true
 	}
+	defer func() { _ = destinationParent.Close() }()
 
-	err = os.Rename(source, destination)
+	err = workspace.root.Rename(sourceRelative, destinationRelative)
 	if err != nil {
 		return fmt.Sprintf("error moving: %v", err), true
 	}
@@ -1244,6 +1270,7 @@ func (a *Agent) handleExists(args map[string]any) (string, bool) {
 	if err != nil {
 		return fmt.Sprintf("error: %v", err), true
 	}
+	defer func() { _ = readable.close() }()
 	path = readable.absolute
 
 	info, err := readable.stat()
@@ -1357,38 +1384,4 @@ func applyPatch(content, patch string) (string, error) {
 	}
 	result = append(result, source[sourcePos:]...)
 	return strings.Join(result, "\n"), nil
-}
-
-func oldContentMode(path string) os.FileMode {
-	if info, err := os.Stat(path); err == nil {
-		return info.Mode().Perm()
-	}
-	return 0o644
-}
-
-func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".local-agent-write-*")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-	defer func() { _ = os.Remove(tmpPath) }()
-
-	if err := tmp.Chmod(mode.Perm()); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpPath, path)
 }
