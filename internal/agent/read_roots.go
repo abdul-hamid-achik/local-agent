@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
 )
@@ -51,12 +52,48 @@ type ReadPathInspection struct {
 type readPathIdentity struct {
 	path string
 	info os.FileInfo
+	pin  *os.File
+	once sync.Once
 }
 
 // Grant returns the opaque commit value for this exact inspection. Callers may
 // display Path and Kind, but only AddInspectedReadGrant can consume identity.
-func (inspection ReadPathInspection) Grant() ReadGrant {
-	return ReadGrant{Path: inspection.Path, Kind: inspection.Kind, identity: inspection.identity}
+func (inspection *ReadPathInspection) Grant() ReadGrant {
+	if inspection == nil {
+		return ReadGrant{}
+	}
+	identity := inspection.identity
+	inspection.identity = nil
+	return ReadGrant{Path: inspection.Path, Kind: inspection.Kind, identity: identity}
+}
+
+// Release closes an uncommitted preview identity. Grant transfers ownership to
+// the returned ReadGrant, so releasing the inspection afterwards is harmless.
+func (inspection *ReadPathInspection) Release() {
+	if inspection == nil || inspection.identity == nil {
+		return
+	}
+	inspection.identity.release()
+	inspection.identity = nil
+}
+
+// Release closes the opaque preview/snapshot identity carried by a grant. It
+// is idempotent across value copies of the grant.
+func (grant ReadGrant) Release() {
+	if grant.identity != nil {
+		grant.identity.release()
+	}
+}
+
+func (identity *readPathIdentity) release() {
+	if identity == nil {
+		return
+	}
+	identity.once.Do(func() {
+		if identity.pin != nil {
+			_ = identity.pin.Close()
+		}
+	})
 }
 
 // additionalReadRoot is an explicit, process-local read grant. os.Root pins the
@@ -77,7 +114,7 @@ type additionalReadFile struct {
 	parent string
 	name   string
 	root   *os.Root
-	info   os.FileInfo
+	pin    *os.File
 }
 
 // readablePath carries the authority needed to open one path. A nil root is the
@@ -199,6 +236,7 @@ func (a *Agent) addReadRoot(path string, expected *readPathIdentity) (string, er
 	a.readRoots[canonical] = grant
 	a.mu.Unlock()
 	for _, file := range superseded {
+		_ = file.pin.Close()
 		_ = file.root.Close()
 	}
 	return canonical, nil
@@ -249,28 +287,38 @@ func (a *Agent) addReadFile(path string, expected *readPathIdentity) (string, er
 	if err != nil {
 		return "", fmt.Errorf("open exact read-file parent: %w", err)
 	}
-	pinned, err := root.Stat(filepath.ToSlash(name))
+	pin, err := root.Open(filepath.ToSlash(name))
 	if err != nil {
+		_ = root.Close()
+		return "", fmt.Errorf("pin exact read file: %w", err)
+	}
+	pinned, err := pin.Stat()
+	if err != nil {
+		_ = pin.Close()
 		_ = root.Close()
 		return "", fmt.Errorf("inspect exact read file: %w", err)
 	}
 	if !pinned.Mode().IsRegular() || !os.SameFile(info, pinned) {
+		_ = pin.Close()
 		_ = root.Close()
 		return "", fmt.Errorf("exact read file changed during authorization: %s", canonical)
 	}
 	if err := validateInspectedReadIdentity(expected, canonical, pinned); err != nil {
+		_ = pin.Close()
 		_ = root.Close()
 		return "", err
 	}
-	grant := &additionalReadFile{path: canonical, parent: parent, name: name, root: root, info: pinned}
+	grant := &additionalReadFile{path: canonical, parent: parent, name: name, root: root, pin: pin}
 
 	a.turnMu.Lock()
 	defer a.turnMu.Unlock()
 	if a.closed {
+		_ = pin.Close()
 		_ = root.Close()
 		return "", errors.New("agent is closed")
 	}
 	if a.turnRunning.Load() {
+		_ = pin.Close()
 		_ = root.Close()
 		return "", errors.New("read-only scope cannot change during an active agent turn")
 	}
@@ -278,18 +326,21 @@ func (a *Agent) addReadFile(path string, expected *readPathIdentity) (string, er
 	a.mu.Lock()
 	if existing := a.readFiles[canonical]; existing != nil {
 		a.mu.Unlock()
+		_ = pin.Close()
 		_ = root.Close()
 		return existing.path, nil
 	}
 	for _, directory := range a.readRoots {
 		if _, inside, relErr := workspaceRelative(directory.path, canonical); relErr == nil && inside {
 			a.mu.Unlock()
+			_ = pin.Close()
 			_ = root.Close()
 			return canonical, nil
 		}
 	}
 	if len(a.readRoots)+len(a.readFiles) >= maxAdditionalReadAuthorities {
 		a.mu.Unlock()
+		_ = pin.Close()
 		_ = root.Close()
 		return "", fmt.Errorf("read-only authority limit reached (%d)", maxAdditionalReadAuthorities)
 	}
@@ -305,6 +356,7 @@ func (a *Agent) addReadFile(path string, expected *readPathIdentity) (string, er
 // corresponding InspectReadPath call. A path that was replaced or retargeted
 // while the approval UI was open fails closed instead of inheriting consent.
 func (a *Agent) AddInspectedReadGrant(grant ReadGrant) (string, error) {
+	defer grant.Release()
 	if grant.identity == nil || grant.identity.info == nil {
 		return "", errors.New("read grant preview identity is unavailable; inspect the path again")
 	}
@@ -322,11 +374,38 @@ func validateInspectedReadIdentity(expected *readPathIdentity, canonical string,
 	if expected == nil {
 		return nil
 	}
-	if expected.info == nil || filepath.Clean(expected.path) != filepath.Clean(canonical) ||
-		current == nil || !os.SameFile(expected.info, current) {
+	expectedInfo := expected.info
+	if expected.pin != nil {
+		var err error
+		expectedInfo, err = expected.pin.Stat()
+		if err != nil {
+			return fmt.Errorf("read path changed after approval preview; inspect it again: %s", canonical)
+		}
+	}
+	if expectedInfo == nil || filepath.Clean(expected.path) != filepath.Clean(canonical) ||
+		current == nil || !os.SameFile(expectedInfo, current) {
 		return fmt.Errorf("read path changed after approval preview; inspect it again: %s", canonical)
 	}
 	return nil
+}
+
+func inspectReadPathIdentity(canonical string, kind ReadGrantKind, expected os.FileInfo) (*readPathIdentity, error) {
+	pin, err := os.Open(canonical)
+	if err != nil {
+		return nil, fmt.Errorf("pin read path identity: %w", err)
+	}
+	info, err := pin.Stat()
+	if err != nil {
+		_ = pin.Close()
+		return nil, fmt.Errorf("inspect pinned read path identity: %w", err)
+	}
+	validKind := (kind == ReadGrantExactFile && info.Mode().IsRegular()) ||
+		(kind == ReadGrantDirectory && info.IsDir())
+	if !validKind || (expected != nil && !os.SameFile(expected, info)) {
+		_ = pin.Close()
+		return nil, fmt.Errorf("read path changed during inspection: %s", canonical)
+	}
+	return &readPathIdentity{path: canonical, info: info, pin: pin}, nil
 }
 
 // InspectReadPath canonicalizes one existing host path without changing
@@ -350,11 +429,16 @@ func (a *Agent) InspectReadPath(path string) (ReadPathInspection, error) {
 	if err != nil {
 		return ReadPathInspection{}, err
 	}
-	identity := &readPathIdentity{path: canonical, info: info}
+	identity, err := inspectReadPathIdentity(canonical, kind, info)
+	if err != nil {
+		return ReadPathInspection{}, err
+	}
 	if _, inside, relErr := workspaceRelative(workspace, canonical); relErr == nil && inside {
-		return ReadPathInspection{Path: canonical, Kind: kind, AlreadyReadable: true, identity: identity}, nil
+		identity.release()
+		return ReadPathInspection{Path: canonical, Kind: kind, AlreadyReadable: true}, nil
 	}
 	if kind == ReadGrantDirectory && pathsOverlap(workspace, canonical) {
+		identity.release()
 		return ReadPathInspection{}, fmt.Errorf("read-only root %q overlaps writable workspace %q", canonical, workspace)
 	}
 
@@ -371,9 +455,14 @@ func (a *Agent) InspectReadPath(path string) (ReadPathInspection, error) {
 				break
 			}
 			if kind == ReadGrantDirectory && pathsOverlap(root.path, canonical) {
+				identity.release()
 				return ReadPathInspection{}, fmt.Errorf("read-only root %q overlaps existing root %q", canonical, root.path)
 			}
 		}
+	}
+	if inspection.AlreadyReadable {
+		identity.release()
+		inspection.identity = nil
 	}
 	return inspection, nil
 }
@@ -424,7 +513,7 @@ func (a *Agent) RemoveReadPath(path string) (ReadGrant, error) {
 		return result, nil
 	}
 	result := ReadGrant{Path: file.path, Kind: ReadGrantExactFile}
-	if err := file.root.Close(); err != nil {
+	if err := errors.Join(file.pin.Close(), file.root.Close()); err != nil {
 		return result, fmt.Errorf("close exact read file: %w", err)
 	}
 	return result, nil
@@ -464,7 +553,7 @@ func (a *Agent) ClearReadRoots() (int, error) {
 		closeErr = errors.Join(closeErr, root.root.Close())
 	}
 	for _, file := range files {
-		closeErr = errors.Join(closeErr, file.root.Close())
+		closeErr = errors.Join(closeErr, file.pin.Close(), file.root.Close())
 	}
 	if closeErr != nil {
 		return len(roots) + len(files), fmt.Errorf("close read-only grants: %w", closeErr)
@@ -489,18 +578,10 @@ func (a *Agent) ReadGrants() []ReadGrant {
 	a.mu.RLock()
 	grants := make([]ReadGrant, 0, len(a.readRoots)+len(a.readFiles))
 	for path := range a.readRoots {
-		root := a.readRoots[path]
-		grants = append(grants, ReadGrant{
-			Path: path, Kind: ReadGrantDirectory,
-			identity: &readPathIdentity{path: path, info: root.info},
-		})
+		grants = append(grants, ReadGrant{Path: path, Kind: ReadGrantDirectory})
 	}
 	for path := range a.readFiles {
-		file := a.readFiles[path]
-		grants = append(grants, ReadGrant{
-			Path: path, Kind: ReadGrantExactFile,
-			identity: &readPathIdentity{path: path, info: file.info},
-		})
+		grants = append(grants, ReadGrant{Path: path, Kind: ReadGrantExactFile})
 	}
 	a.mu.RUnlock()
 	sort.Slice(grants, func(i, j int) bool {
@@ -510,6 +591,49 @@ func (a *Agent) ReadGrants() []ReadGrant {
 		return grants[i].Kind < grants[j].Kind
 	})
 	return grants
+}
+
+// SnapshotReadGrants returns restorable grants with independently pinned
+// filesystem identities. Unlike ReadGrants, it performs host I/O and every
+// returned grant must be released by the caller (AddInspectedReadGrant consumes
+// a grant automatically). This keeps ordinary prompt/TUI rendering pin-free.
+func (a *Agent) SnapshotReadGrants() ([]ReadGrant, error) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	grants := make([]ReadGrant, 0, len(a.readRoots)+len(a.readFiles))
+	release := func() {
+		for _, grant := range grants {
+			grant.Release()
+		}
+	}
+	for path, root := range a.readRoots {
+		identity, err := inspectReadPathIdentity(path, ReadGrantDirectory, root.info)
+		if err != nil {
+			release()
+			return nil, fmt.Errorf("snapshot read-only root %q: %w", path, err)
+		}
+		grants = append(grants, ReadGrant{Path: path, Kind: ReadGrantDirectory, identity: identity})
+	}
+	for path, file := range a.readFiles {
+		pinned, err := file.pin.Stat()
+		if err != nil {
+			release()
+			return nil, fmt.Errorf("snapshot exact read file %q: %w", path, err)
+		}
+		identity, err := inspectReadPathIdentity(path, ReadGrantExactFile, pinned)
+		if err != nil {
+			release()
+			return nil, fmt.Errorf("snapshot exact read file %q: %w", path, err)
+		}
+		grants = append(grants, ReadGrant{Path: path, Kind: ReadGrantExactFile, identity: identity})
+	}
+	sort.Slice(grants, func(i, j int) bool {
+		if grants[i].Path != grants[j].Path {
+			return grants[i].Path < grants[j].Path
+		}
+		return grants[i].Kind < grants[j].Kind
+	})
+	return grants, nil
 }
 
 func (a *Agent) closeReadRoots() {
@@ -529,6 +653,7 @@ func (a *Agent) closeReadRoots() {
 		_ = root.root.Close()
 	}
 	for _, file := range files {
+		_ = file.pin.Close()
 		_ = file.root.Close()
 	}
 }
@@ -834,14 +959,18 @@ func (path readablePath) walk(fn filepath.WalkFunc) error {
 }
 
 func (file *additionalReadFile) currentInfo() (os.FileInfo, error) {
-	if file == nil || file.root == nil {
+	if file == nil || file.root == nil || file.pin == nil {
 		return nil, errors.New("exact read file is unavailable")
+	}
+	pinned, err := file.pin.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("exact read file identity is unavailable: %w", err)
 	}
 	current, err := file.root.Stat(filepath.ToSlash(file.name))
 	if err != nil {
 		return nil, err
 	}
-	if !current.Mode().IsRegular() || !os.SameFile(file.info, current) {
+	if !current.Mode().IsRegular() || !os.SameFile(pinned, current) {
 		return nil, fmt.Errorf("exact read file changed after authorization: %s", file.path)
 	}
 	return current, nil
@@ -860,7 +989,8 @@ func (file *additionalReadFile) openVerified() (*os.File, error) {
 		_ = opened.Close()
 		return nil, err
 	}
-	if !info.Mode().IsRegular() || !os.SameFile(file.info, info) {
+	pinned, pinErr := file.pin.Stat()
+	if pinErr != nil || !info.Mode().IsRegular() || !os.SameFile(pinned, info) {
 		_ = opened.Close()
 		return nil, fmt.Errorf("exact read file changed after authorization: %s", file.path)
 	}

@@ -278,14 +278,18 @@ func TestRestoreReadGrantSnapshotRejectsReplacement(t *testing.T) {
 	if _, err := ag.AddReadFile(target); err != nil {
 		t.Fatal(err)
 	}
-	before := ag.ReadGrants()
+	before, err := ag.SnapshotReadGrants()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { releaseReadGrants(before) })
 	if _, err := ag.RemoveReadPath(target); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(target); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(target, []byte("replacement"), 0o600); err != nil {
+	if err := os.WriteFile(target, []byte("replaced"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -356,13 +360,26 @@ func TestRuntimeStatusExposesTemporaryExactFileAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtimeView := ansi.Strip(m.buildRuntimeStatusContent(56))
+	searchable := strings.Join(strings.Fields(runtimeView), " ")
 	for _, want := range []string{
-		"Read scope", "1 temporary external grant", "External read access",
-		"Exact file", filepath.Base(target), "/scope", "clear-read revokes all", "writes remain workspace-only",
+		"Read scope", "1 temporary external grant", "External read access", "Exact file",
+		"/scope clear-read revokes all", "writes remain workspace-only",
 	} {
-		if !strings.Contains(runtimeView, want) {
+		if !strings.Contains(searchable, want) {
 			t.Fatalf("Runtime omitted %q:\n%s", want, runtimeView)
 		}
+	}
+	grants := m.agent.ReadGrants()
+	if len(grants) != 1 || grants[0].Kind != agent.ReadGrantExactFile {
+		t.Fatalf("exact-file authority = %#v", grants)
+	}
+	// Long Linux test paths wrap inside the filename at the normal Runtime
+	// width. Remove only layout whitespace to verify that the complete escaped
+	// authority remains visible across continuation lines.
+	compactView := strings.NewReplacer(" ", "", "\t", "", "\r", "", "\n", "").Replace(runtimeView)
+	compactPath := strings.NewReplacer(" ", "", "\t", "", "\r", "", "\n", "").Replace(displayWorkspacePath(grants[0].Path))
+	if !strings.Contains(compactView, compactPath) {
+		t.Fatalf("Runtime omitted complete exact-file path %q:\n%s", grants[0].Path, runtimeView)
 	}
 }
 
@@ -562,9 +579,15 @@ func TestReadScopeAndRuntimeEscapeTerminalControlsInAuthorityPaths(t *testing.T)
 		t.Fatal(err)
 	}
 	m.width, m.height = 80, 24
-	m.readScopePrompt = &ReadScopePrompt{Workspace: workspace, Grants: []agent.ReadGrant{inspection.Grant()}}
+	promptGrant := inspection.Grant()
+	t.Cleanup(promptGrant.Release)
+	m.readScopePrompt = &ReadScopePrompt{Workspace: workspace, Grants: []agent.ReadGrant{promptGrant}}
 	prompt := m.renderReadScopePrompt()
-	if _, err := m.agent.AddInspectedReadGrant(inspection.Grant()); err != nil {
+	commitInspection, err := m.agent.InspectReadPath(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.agent.AddInspectedReadGrant(commitInspection.Grant()); err != nil {
 		t.Fatal(err)
 	}
 	runtimeView := m.buildRuntimeStatusContent(58)

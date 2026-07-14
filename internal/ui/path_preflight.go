@@ -50,15 +50,18 @@ func (m *Model) beginPromptPathPreflight(draft string) (tea.Cmd, bool) {
 
 func (m *Model) handlePromptPathPreflightResult(msg PromptPathPreflightResultMsg) tea.Cmd {
 	if !m.readScopeOpRunning || msg.Token != m.readScopeOpToken {
+		releaseReadGrants(msg.Grants)
 		return nil
 	}
 	m.readScopeOpRunning = false
 	m.readScopeOpLabel = ""
 	m.readScopeOpDraft = ""
 	if m.shuttingDown {
+		releaseReadGrants(msg.Grants)
 		return nil
 	}
 	if msg.MoreCandidates {
+		releaseReadGrants(msg.Grants)
 		m.input.SetValue(msg.Draft)
 		m.input.Focus()
 		guidance := "External read preflight requires more than 4 new external read grants. Split the request into smaller groups; no path was authorized and nothing was sent."
@@ -113,13 +116,16 @@ func inspectPromptReadGrantIntents(agentInstance *agent.Agent, intents []promptP
 			inspection, err = agentInstance.InspectReadPath(intent.Fallback)
 		}
 		if err != nil || !inspection.External || inspection.AlreadyReadable {
+			inspection.Release()
 			continue
 		}
 		if inspection.Kind != agent.ReadGrantExactFile && inspection.Kind != agent.ReadGrantDirectory {
+			inspection.Release()
 			continue
 		}
 		key := string(inspection.Kind) + "\x00" + inspection.Path
 		if _, duplicate := seen[key]; duplicate {
+			inspection.Release()
 			continue
 		}
 		seen[key] = struct{}{}
@@ -127,6 +133,7 @@ func inspectPromptReadGrantIntents(agentInstance *agent.Agent, intents []promptP
 		grants = mergePromptReadGrant(grants, candidateGrant)
 	}
 	if len(grants) > maxPromptPathIntents {
+		releaseReadGrants(grants)
 		return nil, true
 	}
 	return grants, false
@@ -138,6 +145,7 @@ func inspectPromptReadGrantIntents(agentInstance *agent.Agent, intents []promptP
 func mergePromptReadGrant(grants []agent.ReadGrant, candidate agent.ReadGrant) []agent.ReadGrant {
 	for _, existing := range grants {
 		if existing.Kind == agent.ReadGrantDirectory && readScopePathContains(existing.Path, candidate.Path) {
+			candidate.Release()
 			return grants
 		}
 	}
@@ -147,6 +155,7 @@ func mergePromptReadGrant(grants []agent.ReadGrant, candidate agent.ReadGrant) [
 	kept := grants[:0]
 	for _, existing := range grants {
 		if readScopePathContains(candidate.Path, existing.Path) {
+			existing.Release()
 			continue
 		}
 		kept = append(kept, existing)

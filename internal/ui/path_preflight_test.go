@@ -160,6 +160,7 @@ func TestPromptPathGrantLimitIgnoresWorkspacePathsAndCollapsesCoverage(t *testin
 
 	coveredScan := scanExplicitPromptPaths(strings.Join(append(externalPaths, external), " "))
 	grants, overflow := inspectPromptReadGrantIntents(ag, coveredScan.Intents)
+	t.Cleanup(func() { releaseReadGrants(grants) })
 	canonicalExternal, err := filepath.EvalSymlinks(external)
 	if err != nil {
 		t.Fatal(err)
@@ -193,6 +194,7 @@ func TestFreePromptPathPunctuationFallsBackOnlyWhenExactPathIsMissing(t *testing
 	if overflow || len(grants) != 1 || grants[0].Path != canonicalPlain {
 		t.Fatalf("verified fallback grants = %#v overflow=%v", grants, overflow)
 	}
+	releaseReadGrants(grants)
 
 	if err := os.WriteFile(punctuated, []byte("punctuated"), 0o600); err != nil {
 		t.Fatal(err)
@@ -205,6 +207,7 @@ func TestFreePromptPathPunctuationFallsBackOnlyWhenExactPathIsMissing(t *testing
 	if overflow || len(grants) != 1 || grants[0].Path != canonicalPunctuated {
 		t.Fatalf("exact punctuated grants = %#v overflow=%v", grants, overflow)
 	}
+	t.Cleanup(func() { releaseReadGrants(grants) })
 }
 
 func TestExplicitPromptPathCandidatesRecognizesTildeAndRejectsURLs(t *testing.T) {
@@ -248,6 +251,7 @@ func TestInspectPromptReadGrantsKeepsExactFilesNarrowAndDeduplicated(t *testing.
 	if grants[0].Path == filepath.Dir(grants[0].Path) || grants[0].Path == external {
 		t.Fatalf("exact grant widened to a directory: %#v", grants[0])
 	}
+	releaseReadGrants(grants)
 
 	// An explicitly named directory supersedes only contained candidates. It
 	// is never inferred from the exact-file candidate above.
@@ -259,6 +263,7 @@ func TestInspectPromptReadGrantsKeepsExactFilesNarrowAndDeduplicated(t *testing.
 	if len(grants) != 1 || grants[0].Kind != agent.ReadGrantDirectory || grants[0].Path != canonicalExternal {
 		t.Fatalf("explicit directory did not supersede contained file: %#v", grants)
 	}
+	t.Cleanup(func() { releaseReadGrants(grants) })
 }
 
 func TestPromptPathPreflightIgnoresWorkspaceMissingAndCoveredPaths(t *testing.T) {
@@ -365,6 +370,7 @@ func TestOrdinaryPromptExactFileApprovalAutoResumesOnce(t *testing.T) {
 		t.Fatalf("committed grants = %#v", grants)
 	}
 	inspection, err := m.agent.InspectReadPath(sibling)
+	defer inspection.Release()
 	if err != nil || inspection.AlreadyReadable {
 		t.Fatalf("sibling inherited exact-file authority: %#v, %v", inspection, err)
 	}
@@ -374,7 +380,7 @@ func TestOrdinaryPromptApprovalRejectsFileReplacedWhilePromptIsOpen(t *testing.T
 	workspace := t.TempDir()
 	external := t.TempDir()
 	target := filepath.Join(external, "requested.txt")
-	if err := os.WriteFile(target, []byte("approved identity"), 0o600); err != nil {
+	if err := os.WriteFile(target, []byte("approved-identity"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -392,7 +398,7 @@ func TestOrdinaryPromptApprovalRejectsFileReplacedWhilePromptIsOpen(t *testing.T
 	if err := os.Remove(target); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(target, []byte("replacement identity"), 0o600); err != nil {
+	if err := os.WriteFile(target, []byte("replaced-identity"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

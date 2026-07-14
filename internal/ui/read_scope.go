@@ -94,15 +94,18 @@ func (m *Model) beginReadScopePreview(path, draft string) tea.Cmd {
 
 func (m *Model) handleReadScopePreviewResult(msg ReadScopePreviewResultMsg) {
 	if !m.readScopeOpRunning || msg.Token != m.readScopeOpToken {
+		msg.Grant.Release()
 		return
 	}
 	m.readScopeOpRunning = false
 	m.readScopeOpLabel = ""
 	if m.shuttingDown {
+		msg.Grant.Release()
 		m.readScopeOpDraft = ""
 		return
 	}
 	if msg.Err != nil {
+		msg.Grant.Release()
 		m.restoreReadScopeDraft(msg.Draft)
 		m.readScopeOpDraft = ""
 		m.appendReadScopeError(fmt.Sprintf("/scope add-read preview failed: %v", msg.Err))
@@ -147,6 +150,7 @@ func (m *Model) resolveReadScopePrompt(outcome string) {
 	}
 	prompt := *m.readScopePrompt
 	m.readScopePrompt = nil
+	releaseReadGrants(prompt.Grants)
 	m.restoreReadScopeDraft(prompt.Draft)
 	message := "External read path denied; draft restored."
 	if outcome == "cancelled" {
@@ -191,9 +195,15 @@ func (m *Model) beginReadGrantMutation(grants []agent.ReadGrant, draft string, a
 // compensation never revokes authority that existed before this approval.
 func applyPromptReadGrantsTransactional(agentInstance *agent.Agent, approved []agent.ReadGrant) ([]agent.ReadGrant, int, error, error) {
 	if agentInstance == nil {
+		releaseReadGrants(approved)
 		return nil, 0, nil, errors.New("agent is unavailable")
 	}
-	before := agentInstance.ReadGrants()
+	defer releaseReadGrants(approved)
+	before, snapshotErr := agentInstance.SnapshotReadGrants()
+	if snapshotErr != nil {
+		return nil, 0, nil, fmt.Errorf("snapshot existing read grants: %w", snapshotErr)
+	}
+	defer releaseReadGrants(before)
 	applied := make([]agent.ReadGrant, 0, len(approved))
 	for _, grant := range approved {
 		canonical, err := agentInstance.AddInspectedReadGrant(grant)
@@ -204,6 +214,12 @@ func applyPromptReadGrantsTransactional(agentInstance *agent.Agent, approved []a
 		applied = append(applied, agent.ReadGrant{Path: canonical, Kind: grant.Kind})
 	}
 	return applied, 0, nil, nil
+}
+
+func releaseReadGrants(grants []agent.ReadGrant) {
+	for _, grant := range grants {
+		grant.Release()
+	}
 }
 
 func restoreReadGrantSnapshot(agentInstance *agent.Agent, before []agent.ReadGrant) (int, error) {

@@ -222,6 +222,7 @@ func TestExactReadFileGrantDoesNotAuthorizeParentOrSiblingWrites(t *testing.T) {
 	if err != nil || !inspection.External || inspection.AlreadyReadable || inspection.Kind != ReadGrantExactFile {
 		t.Fatalf("inspection = %#v, %v", inspection, err)
 	}
+	defer inspection.Release()
 	granted, err := ag.AddReadFile(target)
 	if err != nil || granted != inspection.Path {
 		t.Fatalf("AddReadFile = %q, %v", granted, err)
@@ -352,10 +353,10 @@ func TestExactReadFileRejectsReplacementAndClearIncludesFiles(t *testing.T) {
 	if err := os.Remove(target); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(target, []byte("replacement"), 0o600); err != nil {
+	if err := os.WriteFile(target, []byte("swapped!"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if result, isErr := ag.handleRead(map[string]any{"path": target}); !isErr || strings.Contains(result, "replacement") || !strings.Contains(result, "changed after authorization") {
+	if result, isErr := ag.handleRead(map[string]any{"path": target}); !isErr || strings.Contains(result, "swapped!") || !strings.Contains(result, "changed after authorization") {
 		t.Fatalf("replacement read = %q, error=%v", result, isErr)
 	}
 	if count, err := ag.ClearReadRoots(); err != nil || count != 2 {
@@ -472,15 +473,14 @@ func TestInspectedReadGrantRejectsPathReplacementBeforeCommit(t *testing.T) {
 				if err := os.Remove(path); err != nil {
 					return err
 				}
-				return os.WriteFile(path, []byte("replacement"), 0o600)
+				return os.WriteFile(path, []byte("replaced"), 0o600)
 			},
 		},
 		{
 			name:    "directory",
 			prepare: func(path string) error { return os.Mkdir(path, 0o700) },
 			replace: func(path string) error {
-				moved := path + "-old"
-				if err := os.Rename(path, moved); err != nil {
+				if err := os.Remove(path); err != nil {
 					return err
 				}
 				return os.Mkdir(path, 0o700)
@@ -509,6 +509,64 @@ func TestInspectedReadGrantRejectsPathReplacementBeforeCommit(t *testing.T) {
 				t.Fatalf("replacement inherited authority: %#v", grants)
 			}
 		})
+	}
+}
+
+func TestReadGrantIdentityPinsHaveExplicitIndependentLifetimes(t *testing.T) {
+	base := t.TempDir()
+	workspace := filepath.Join(base, "workspace")
+	target := filepath.Join(base, "evidence.txt")
+	if err := os.Mkdir(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("evidence"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ag := New(nil, nil, 0)
+	ag.SetWorkDir(workspace)
+	t.Cleanup(ag.Close)
+	inspection, err := ag.InspectReadPath(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant := inspection.Grant()
+	previewPin := grant.identity.pin
+	canonical, err := ag.AddInspectedReadGrant(grant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := previewPin.Stat(); err == nil {
+		t.Fatal("consumed preview pin remained open")
+	}
+
+	snapshot, err := ag.SnapshotReadGrants()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot) != 1 || snapshot[0].identity == nil || snapshot[0].identity.pin == nil {
+		t.Fatalf("snapshot identity = %#v", snapshot)
+	}
+	snapshotPin := snapshot[0].identity.pin
+	snapshot[0].Release()
+	snapshot[0].Release()
+	if _, err := snapshotPin.Stat(); err == nil {
+		t.Fatal("released snapshot pin remained open")
+	}
+	if result, isErr := ag.handleRead(map[string]any{"path": target}); isErr || result != "evidence" {
+		t.Fatalf("snapshot release affected active authority: %q, error=%v", result, isErr)
+	}
+	if grants := ag.ReadGrants(); len(grants) != 1 || grants[0].identity != nil {
+		t.Fatalf("presentation grants unexpectedly own identity pins: %#v", grants)
+	}
+	ag.mu.RLock()
+	activePin := ag.readFiles[canonical].pin
+	ag.mu.RUnlock()
+	if _, err := ag.RemoveReadPath(target); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := activePin.Stat(); err == nil {
+		t.Fatal("revoked active pin remained open")
 	}
 }
 

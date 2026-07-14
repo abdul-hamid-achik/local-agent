@@ -486,6 +486,9 @@ func (m *Model) beginShutdown() tea.Cmd {
 		m.resolvePendingApproval(permission.Cancelled("application is shutting down"))
 	}
 	m.pendingPaste = nil
+	if m.readScopePrompt != nil {
+		releaseReadGrants(m.readScopePrompt.Grants)
+	}
 	m.readScopePrompt = nil
 	if m.sessionLoading {
 		m.cancelSessionLoadForShutdown()
@@ -770,7 +773,6 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		if m.readScopePrompt != nil {
 			switch {
 			case key.Matches(msg, m.keys.Quit):
-				m.readScopePrompt = nil
 				return m, m.beginShutdown()
 			case strings.EqualFold(msg.String(), "y"):
 				return m, m.confirmReadScopePrompt()

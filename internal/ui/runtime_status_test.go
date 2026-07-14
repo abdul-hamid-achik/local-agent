@@ -124,7 +124,10 @@ func TestRuntimeStatusRetainsExpertStartupFailure(t *testing.T) {
 	m := newTestModel(t)
 	m.SetExpertRuntimeSetupFailed()
 	content := m.buildRuntimeStatusContent(58)
-	searchable := strings.Join(strings.Fields(content), " ")
+	// Styling is applied independently to wrapped continuation lines. Strip it
+	// before collapsing layout whitespace so this assertion checks the copy,
+	// not whether the terminal emitted an ANSI reset at the wrap boundary.
+	searchable := strings.Join(strings.Fields(ansi.Strip(content)), " ")
 	for _, want := range []string{"Experts", "setup failed", "review experts config/profiles; restart"} {
 		if !strings.Contains(searchable, want) {
 			t.Fatalf("expert startup status omitted %q:\n%s", want, content)
