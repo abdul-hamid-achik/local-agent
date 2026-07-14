@@ -135,15 +135,19 @@ type ReceiptDigest struct {
 // It contains no arbitrary argument or result values and is safe to keep in a
 // session transcript after Normalize.
 type ToolProjection struct {
-	Specialist string          `json:"specialist,omitempty"`
-	Operation  string          `json:"operation,omitempty"`
-	Role       ToolRole        `json:"role,omitempty"`
-	Transport  TransportState  `json:"transport,omitempty"`
-	Domain     DomainState     `json:"domain,omitempty"`
-	Evidence   EvidenceState   `json:"evidence,omitempty"`
-	Route      ToolRoute       `json:"route,omitempty"`
-	Digest     *ReceiptDigest  `json:"digest,omitempty"`
-	Artifact   *ArtifactDigest `json:"artifact,omitempty"`
+	Specialist string         `json:"specialist,omitempty"`
+	Operation  string         `json:"operation,omitempty"`
+	Role       ToolRole       `json:"role,omitempty"`
+	Transport  TransportState `json:"transport,omitempty"`
+	Domain     DomainState    `json:"domain,omitempty"`
+	// DomainTyped reports that Domain came from an exact host-trusted envelope
+	// parser for the routed specialist. Generic transport or IsError coercion
+	// never sets it, so only typed domains prove the effect owner answered.
+	DomainTyped bool            `json:"domainTyped,omitempty"`
+	Evidence    EvidenceState   `json:"evidence,omitempty"`
+	Route       ToolRoute       `json:"route,omitempty"`
+	Digest      *ReceiptDigest  `json:"digest,omitempty"`
+	Artifact    *ArtifactDigest `json:"artifact,omitempty"`
 }
 
 // RawReceipt is the short-lived parser boundary between an MCP/tool transport
@@ -221,7 +225,15 @@ func ProjectToolCall(name string, args map[string]any) ToolProjection {
 		projection.Route.CallID = argumentIdentifier(args, "callId", "call_id")
 	}
 
-	projection.Specialist = inferSpecialist(projection.Route.Server, projection.Operation, segments)
+	if projection.Route.Gateway != "" && projection.Route.Server != "" {
+		// The gateway names the downstream authoritatively. A non-specialist
+		// downstream must not gain a specialist's parsers (or its persisted
+		// digest attribution) merely by echoing that specialist's operation
+		// naming through the gateway.
+		projection.Specialist = specialistIdentity(projection.Route.Server)
+	} else {
+		projection.Specialist = inferSpecialist(projection.Route.Server, projection.Operation, segments)
+	}
 	projection.Role = specialistRoles[projection.Specialist]
 	if projection.Specialist == "hitspec" && projection.Operation == "hitspec_capture_webpage" {
 		projection.Role = RoleArtifact
@@ -303,6 +315,7 @@ func ProjectReceipt(projection ToolProjection, receipt RawReceipt) ToolProjectio
 	if projection.Operation == "consult_experts" {
 		if receipt.TrustedLocal {
 			projection.Domain = projectExpertConsultationDomain(receipt.Text)
+			projection.DomainTyped = projection.Domain != DomainUnknown
 		} else {
 			projection.Domain = DomainUnknown
 		}
@@ -310,6 +323,7 @@ func ProjectReceipt(projection ToolProjection, receipt RawReceipt) ToolProjectio
 		return finalizeToolReceipt(projection, receipt.ToolError)
 	}
 	if projected, recognized := projectMCPHubReceipt(projection, receipt); recognized {
+		projected.DomainTyped = true
 		return finalizeToolReceipt(projected, receipt.ToolError)
 	}
 	if _, hasTypedError := exactJSONDocument(receipt.ErrorMeta); hasTypedError {
@@ -321,14 +335,17 @@ func ProjectReceipt(projection ToolProjection, receipt RawReceipt) ToolProjectio
 	case "bob":
 		if domain, ok := projectBobReceipt(projection.Operation, receipt); ok {
 			projection.Domain = domain
+			projection.DomainTyped = true
 		} else if envelope, ok := ParseBobEnvelope(receipt.Text); ok {
 			projection.Domain = classifyBobDomain(envelope)
+			projection.DomainTyped = true
 		} else {
 			projection.Domain = DomainUnknown
 		}
 	case "glyphrun", "glyph", "cairntrace", "cairn":
 		if domain, evidence, ok := projectVerifierReceipt(projection.Specialist, projection.Operation, receipt); ok {
 			projection.Domain, projection.Evidence = domain, evidence
+			projection.DomainTyped = true
 		} else {
 			projection.Domain = DomainUnknown
 			projection.Evidence = EvidenceNone
@@ -336,18 +353,21 @@ func ProjectReceipt(projection ToolProjection, receipt RawReceipt) ToolProjectio
 	case "codemap":
 		if domain, evidence, ok := projectCodemapReceipt(projection.Operation, receipt); ok {
 			projection.Domain, projection.Evidence = domain, evidence
+			projection.DomainTyped = true
 		} else {
 			projection.Domain, projection.Evidence = DomainUnknown, EvidenceNone
 		}
 	case "monitor":
 		if domain, evidence, ok := projectMonitorReceipt(projection.Operation, receipt); ok {
 			projection.Domain, projection.Evidence = domain, evidence
+			projection.DomainTyped = true
 		} else {
 			projection.Domain, projection.Evidence = DomainUnknown, EvidenceNone
 		}
 	case "vidtrace":
 		if domain, evidence, ok := projectVidtraceReceipt(projection.Operation, receipt); ok {
 			projection.Domain, projection.Evidence = domain, evidence
+			projection.DomainTyped = true
 		} else {
 			projection.Domain, projection.Evidence = DomainUnknown, EvidenceNone
 		}
@@ -355,6 +375,7 @@ func ProjectReceipt(projection ToolProjection, receipt RawReceipt) ToolProjectio
 		if domain, evidence, artifact, ok := projectFileCheapReceipt(projection.Operation, receipt); ok {
 			projection.Domain, projection.Evidence = domain, evidence
 			projection.Artifact = artifact
+			projection.DomainTyped = true
 		} else {
 			projection.Domain, projection.Evidence = DomainUnknown, EvidenceNone
 			projection.Artifact = nil
@@ -363,6 +384,7 @@ func ProjectReceipt(projection ToolProjection, receipt RawReceipt) ToolProjectio
 		if domain, evidence, artifact, ok := projectHitspecReceipt(projection.Operation, receipt); ok {
 			projection.Domain, projection.Evidence = domain, evidence
 			projection.Artifact = artifact
+			projection.DomainTyped = true
 		} else {
 			projection.Domain, projection.Evidence = DomainUnknown, EvidenceNone
 			projection.Artifact = nil
@@ -374,6 +396,7 @@ func ProjectReceipt(projection ToolProjection, receipt RawReceipt) ToolProjectio
 		// success parser exists.
 		if taskID, failed := projectCortexFailureReceipt(receipt); failed {
 			projection.Domain = DomainFailed
+			projection.DomainTyped = true
 			projection.Evidence = EvidenceNone
 			projection.Digest = &ReceiptDigest{Kind: DigestCortexFailure, Target: taskID}
 		} else {
@@ -385,6 +408,7 @@ func ProjectReceipt(projection ToolProjection, receipt RawReceipt) ToolProjectio
 			projection.Domain = DomainFailed
 		} else if receipt.TrustedLocal {
 			projection.Domain = DomainSucceeded
+			projection.DomainTyped = true
 		} else {
 			projection.Domain = DomainUnknown
 			projection.Evidence = EvidenceNone
@@ -450,6 +474,7 @@ func finalizeToolReceipt(projection ToolProjection, toolError bool) ToolProjecti
 	if toolError {
 		if projection.Domain == DomainSucceeded || projection.Domain == DomainPending || projection.Domain == DomainUnknown || projection.Domain == "" {
 			projection.Domain = DomainFailed
+			projection.DomainTyped = false
 		}
 		if projection.Evidence == EvidenceVerified {
 			projection.Evidence = EvidenceNone

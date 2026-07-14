@@ -241,7 +241,7 @@ func (s *Store) LatestExecutionEventID(ctx context.Context, sessionID int64, wor
 
 // ListExecutionRecoveryHazards returns the bounded latest states that must be
 // reconciled with a restored snapshot. Outcome-unknown and started non-read-only
-// executions are hazards regardless of the snapshot cursor. Completed
+// executions are hazards regardless of the snapshot cursor. Completed and failed
 // non-read-only executions are hazards only when their terminal receipt is newer
 // than afterEventID and therefore may be absent from the snapshot projection.
 func (s *Store) ListExecutionRecoveryHazards(ctx context.Context, sessionID int64, workspaceID string, afterEventID int64, limit int) ([]execution.State, error) {
@@ -444,9 +444,10 @@ func validateExecutionTransition(existing []execution.Event, candidate execution
 			return fmt.Errorf("%w: completed requires started", ErrIllegalExecutionTransition)
 		}
 	case execution.EventFailed:
-		if started && candidate.Identity.EffectClass != execution.EffectReadOnly {
-			return fmt.Errorf("%w: a started non-read-only execution must use outcome_unknown", ErrIllegalExecutionTransition)
-		}
+		// An answered backend error is a verifiable terminal outcome for every
+		// effect class. The agent reserves outcome_unknown for dispatches whose
+		// receipt did not come from the effect owner (transport loss, host-side
+		// kill, gateway relay without a typed domain receipt).
 	case execution.EventCancelled:
 		if started && candidate.Identity.EffectClass != execution.EffectReadOnly {
 			return fmt.Errorf("%w: a started non-read-only execution must use outcome_unknown", ErrIllegalExecutionTransition)

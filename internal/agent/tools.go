@@ -440,10 +440,10 @@ func (a *Agent) handleBash(parent context.Context, args map[string]any) (string,
 	}
 
 	if ctx.Err() == context.DeadlineExceeded {
-		return fmt.Sprintf("OUTCOME UNKNOWN: command timed out after %d seconds; its process group was terminated, but effects completed before termination may have occurred", timeout), true
+		return fmt.Sprintf(outcomeUnknownReceiptPrefix+" command timed out after %d seconds; its process group was terminated, but effects completed before termination may have occurred", timeout), true
 	}
 	if ctx.Err() == context.Canceled {
-		return "OUTCOME UNKNOWN: command was cancelled after dispatch; its process group was terminated, but effects completed before termination may have occurred", true
+		return outcomeUnknownReceiptPrefix + " command was cancelled after dispatch; its process group was terminated, but effects completed before termination may have occurred", true
 	}
 
 	if err != nil {

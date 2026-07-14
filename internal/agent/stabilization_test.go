@@ -193,7 +193,7 @@ func TestCancellationDuringBashEmitsUnknownOutcomeReceipt(t *testing.T) {
 	}
 }
 
-func TestEffectfulErrorAfterDispatchIsOutcomeUnknown(t *testing.T) {
+func TestEffectfulErrorAfterDispatchKeepsBackendReceipt(t *testing.T) {
 	workDir := t.TempDir()
 	client := &scriptedClient{responses: [][]llm.StreamChunk{
 		{{ToolCalls: []llm.ToolCall{{
@@ -213,19 +213,21 @@ func TestEffectfulErrorAfterDispatchIsOutcomeUnknown(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(workDir, "partial")); err != nil {
 		t.Fatalf("bash did not partially mutate before failure: %v", err)
 	}
-	if len(out.toolResults) != 1 || !strings.Contains(out.toolResults[0], "OUTCOME UNKNOWN:") || !strings.Contains(out.toolResults[0], "Do not retry automatically") {
+	// The backend answered: the exit status is a known outcome, so the raw
+	// receipt reaches the model instead of the unverifiable-outcome framing.
+	if len(out.toolResults) != 1 || !strings.Contains(out.toolResults[0], "exit status 1") || strings.Contains(out.toolResults[0], "OUTCOME UNKNOWN:") {
 		t.Fatalf("effectful failure receipt = %#v", out.toolResults)
 	}
 
-	// MCP IsError results use this same post-dispatch path. An application-level
-	// error is not a rollback guarantee, even when transport succeeded.
+	// dispatchedEffectErrorReceipt now frames only genuinely unverifiable
+	// outcomes: a dispatch cancelled mid-flight or lost in transport.
 	mcpReceipt := dispatchedEffectErrorReceipt("server__mutate", "remote rejected final step", nil)
 	if !strings.Contains(mcpReceipt, "OUTCOME UNKNOWN:") || !strings.Contains(mcpReceipt, "partially taken effect") {
-		t.Fatalf("MCP IsError receipt = %q", mcpReceipt)
+		t.Fatalf("unverifiable-outcome receipt = %q", mcpReceipt)
 	}
 }
 
-func TestMemoryPersistenceFailureIsOutcomeUnknownAndRollsBackMemory(t *testing.T) {
+func TestMemoryPersistenceFailureFailsAndRollsBackMemory(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "memory")
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -261,7 +263,7 @@ func TestMemoryPersistenceFailureIsOutcomeUnknownAndRollsBackMemory(t *testing.T
 	if err := ag.Run(context.Background(), out); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if len(out.toolResults) != 1 || !strings.Contains(out.toolResults[0], "OUTCOME UNKNOWN:") {
+	if len(out.toolResults) != 1 || !strings.Contains(out.toolResults[0], "error saving memory") || strings.Contains(out.toolResults[0], "OUTCOME UNKNOWN:") {
 		t.Fatalf("memory persistence receipt = %#v", out.toolResults)
 	}
 	if got := store.Count(); got != 0 {

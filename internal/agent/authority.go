@@ -73,13 +73,14 @@ const (
 	trustedMCPUnknown trustedMCPImplementation = iota
 	trustedMCPHub
 	trustedCortex
+	trustedBob
 )
 
 // SetTrustedLocalMCPServers derives namespace trust exclusively from the
 // host-resolved configuration. A server is trusted only when it is local STDIO
-// and its executable basename is exactly mcphub or cortex; remote transports,
-// wrapper commands, and lookalike names fail closed. Call this once with the
-// same server list used to connect the Registry, before starting turns.
+// and its executable basename is exactly mcphub, cortex, or bob; remote
+// transports, wrapper commands, and lookalike names fail closed. Call this once
+// with the same server list used to connect the Registry, before starting turns.
 func (a *Agent) SetTrustedLocalMCPServers(servers []config.ServerConfig) {
 	trusted := make(map[string]trustedMCPImplementation)
 	for _, server := range servers {
@@ -100,6 +101,8 @@ func (a *Agent) SetTrustedLocalMCPServers(servers []config.ServerConfig) {
 			trusted[server.Name] = trustedMCPHub
 		case "cortex":
 			trusted[server.Name] = trustedCortex
+		case "bob":
+			trusted[server.Name] = trustedBob
 		}
 	}
 	a.mu.Lock()
@@ -158,6 +161,31 @@ var trustedCortexContracts = map[string]mcpAuthorityContract{
 	// outside this catalog: they represent human authority or lifecycle reversal.
 }
 
+// trustedBobContracts covers Bob's entire MCP surface, which is read-only by
+// host-audited contract: repository mutation (bob apply) is deliberately
+// CLI-only and never exposed over MCP (bob ADR-0002/0003). Cataloguing these
+// as exact reads means a domain rejection such as "repository needs
+// convergence" terminates as failed with a durable receipt instead of
+// stranding the session behind outcome_unknown. Bob's own annotations remain
+// unconsulted presentation metadata, per the invariant above.
+var trustedBobContracts = map[string]mcpAuthorityContract{
+	"bob_inspect":           {effect: executionpkg.EffectReadOnly, auto: true},
+	"bob_plan":              {effect: executionpkg.EffectReadOnly, auto: true},
+	"bob_check":             {effect: executionpkg.EffectReadOnly, auto: true},
+	"bob_validate_manifest": {effect: executionpkg.EffectReadOnly, auto: true},
+	"bob_recipe_describe":   {effect: executionpkg.EffectReadOnly, auto: true},
+	"bob_stats":             {effect: executionpkg.EffectReadOnly, auto: true},
+}
+
+// trustedGatewayContracts routes MCPHub-namespaced downstream implementations
+// to their host-owned catalogs. Only implementations catalogued here may gain
+// authority through the gateway; every other downstream server stays on the
+// interactive permission path regardless of its self-declared annotations.
+var trustedGatewayContracts = map[string]map[string]mcpAuthorityContract{
+	"cortex": trustedCortexContracts,
+	"bob":    trustedBobContracts,
+}
+
 // trustedMCPContract resolves only Local Agent's reserved direct/gateway
 // routes. Suffix matching is forbidden: `evil__cortex_status` must never gain
 // Cortex authority merely by resembling a known operation.
@@ -170,19 +198,30 @@ func (a *Agent) trustedMCPContract(call llm.ToolCall) (mcpAuthorityContract, boo
 	case len(parts) == 2 && a.trustedMCPImplementation(parts[0]) == trustedCortex:
 		contract, ok := trustedCortexContracts[parts[1]]
 		return contract, ok
+	case len(parts) == 2 && a.trustedMCPImplementation(parts[0]) == trustedBob:
+		contract, ok := trustedBobContracts[parts[1]]
+		return contract, ok
 	case len(parts) == 2 && a.trustedMCPImplementation(parts[0]) == trustedMCPHub:
 		if parts[1] == "mcphub_call_tool" {
 			server, tool, ok := exactLazyMCPHubTarget(call.Arguments)
-			if !ok || server != "cortex" {
+			if !ok {
 				return mcpAuthorityContract{}, false
 			}
-			contract, found := trustedCortexContracts[tool]
+			contracts, known := trustedGatewayContracts[server]
+			if !known {
+				return mcpAuthorityContract{}, false
+			}
+			contract, found := contracts[tool]
 			return contract, found
 		}
 		contract, ok := trustedMCPHubReadContracts[parts[1]]
 		return contract, ok
-	case len(parts) == 3 && a.trustedMCPImplementation(parts[0]) == trustedMCPHub && parts[1] == "cortex":
-		contract, ok := trustedCortexContracts[parts[2]]
+	case len(parts) == 3 && a.trustedMCPImplementation(parts[0]) == trustedMCPHub:
+		contracts, known := trustedGatewayContracts[parts[1]]
+		if !known {
+			return mcpAuthorityContract{}, false
+		}
+		contract, ok := contracts[parts[2]]
 		return contract, ok
 	default:
 		return mcpAuthorityContract{}, false
@@ -301,4 +340,33 @@ func (a *Agent) isTrustedLazyMCPHubCall(name string) bool {
 	parts := strings.Split(name, "__")
 	return len(parts) == 2 && parts[1] == "mcphub_call_tool" &&
 		a.trustedMCPImplementation(parts[0]) == trustedMCPHub
+}
+
+// isGatewayRoutedMCPCall reports whether the call reaches its effect owner
+// through a known gateway hop. A gateway's own reply proves only that the
+// gateway answered, not that the downstream server did.
+func (a *Agent) isGatewayRoutedMCPCall(name string) bool {
+	parts := strings.Split(name, "__")
+	return len(parts) >= 2 && a.trustedMCPImplementation(parts[0]) == trustedMCPHub
+}
+
+// gatewayDownstreamServer resolves which downstream server a gateway-routed
+// call addresses, mirroring trustedMCPContract's exact name rules. Gateway
+// management operations have no downstream and resolve to false.
+func (a *Agent) gatewayDownstreamServer(call llm.ToolCall) (string, bool) {
+	parts := strings.Split(call.Name, "__")
+	if len(parts) < 2 || a.trustedMCPImplementation(parts[0]) != trustedMCPHub {
+		return "", false
+	}
+	if len(parts) == 3 {
+		return parts[1], true
+	}
+	if len(parts) == 2 && parts[1] == "mcphub_call_tool" {
+		server, _, ok := exactLazyMCPHubTarget(call.Arguments)
+		if !ok || server == "" {
+			return "", false
+		}
+		return server, true
+	}
+	return "", false
 }

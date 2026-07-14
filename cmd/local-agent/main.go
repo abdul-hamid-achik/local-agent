@@ -758,20 +758,27 @@ func headlessSnapshotExecutionCursor(ctx context.Context, store *db.Store, ag *a
 	}
 	messages := ag.Messages()
 	for _, state := range hazards {
-		if state.Latest.Type != executionpkg.EventCompleted {
-			continue
+		if state.Latest.Type != executionpkg.EventCompleted && state.Latest.Type != executionpkg.EventFailed {
+			return current, fmt.Errorf(
+				"execution %s remains %s/%s and cannot cross the headless snapshot boundary",
+				state.Identity.ExecutionID, state.Latest.Type, state.Identity.EffectClass,
+			)
 		}
 		projected := false
 		for _, message := range messages {
+			resultContent := message.Content
+			if message.DurableContent != "" {
+				resultContent = message.DurableContent
+			}
 			if message.Role == "tool" &&
 				message.ToolCallID == state.Identity.CanonicalCallID &&
-				executionpkg.HashText(message.Content) == state.Latest.ResultSHA256 {
+				executionpkg.HashText(resultContent) == state.Latest.ResultSHA256 {
 				projected = true
 				break
 			}
 		}
 		if !projected {
-			return current, fmt.Errorf("completed effect %s is absent from the headless snapshot", state.Identity.ExecutionID)
+			return current, fmt.Errorf("%s effect %s is absent from the headless snapshot", state.Latest.Type, state.Identity.ExecutionID)
 		}
 	}
 	latest, err := store.LatestExecutionEventID(ctx, sessionID, workspaceID)

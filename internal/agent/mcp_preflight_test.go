@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -205,7 +204,7 @@ func TestMCPInvalidArgumentsFailBeforeApprovalAndDispatchThenCanBeCorrected(t *t
 	}
 }
 
-func TestMCPPostDispatchEffectfulErrorRemainsOutcomeUnknown(t *testing.T) {
+func TestMCPPostDispatchAnsweredErrorTerminatesAsFailed(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "calls")
 	registry := newMCPPreflightRegistry(t, marker)
 	client := &scriptedClient{responses: [][]llm.StreamChunk{
@@ -215,22 +214,26 @@ func TestMCPPostDispatchEffectfulErrorRemainsOutcomeUnknown(t *testing.T) {
 			}}},
 			Done: true,
 		}},
+		{{Text: "done", Done: true}},
 	}}
 	ledger := &fakeExecutionLedger{}
 	ag, _ := newLedgerAgent(t, client, registry, ledger)
-	err := ag.Run(context.Background(), &outputRecorder{})
-	var unresolved *UnresolvedExecutionError
-	if !errors.As(err, &unresolved) {
-		t.Fatalf("Run error = %T %v, want unresolved execution", err, err)
+	if err := ag.Run(context.Background(), &outputRecorder{}); err != nil {
+		t.Fatalf("answered MCP error stranded the session: %v", err)
 	}
 	wantEvents := []executionpkg.EventType{
 		executionpkg.EventRequested,
 		executionpkg.EventApproved,
 		executionpkg.EventStarted,
-		executionpkg.EventOutcomeUnknown,
+		executionpkg.EventFailed,
 	}
 	if got := executionEventTypes(ledger.snapshot()); !reflect.DeepEqual(got, wantEvents) {
 		t.Fatalf("events = %v, want %v", got, wantEvents)
+	}
+	for _, message := range ag.Messages() {
+		if message.Role == "tool" && strings.Contains(message.Content, "OUTCOME UNKNOWN") {
+			t.Fatalf("answered error wore the unverifiable-outcome framing: %#v", message)
+		}
 	}
 	data, readErr := os.ReadFile(marker)
 	if readErr != nil {

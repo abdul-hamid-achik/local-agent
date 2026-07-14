@@ -445,19 +445,42 @@ func TestExecutionApprovalTransitionsAndEffectiveArgumentHash(t *testing.T) {
 
 	failed := started
 	failed.Type = execution.EventFailed
-	if _, _, err := store.AppendExecutionEvent(context.Background(), failed); !errors.Is(err, ErrIllegalExecutionTransition) {
-		t.Fatalf("effectful post-dispatch failure error = %v", err)
-	}
+	failed.ResultReceipt = "backend answered: exit status 7"
+	failed.ResultSHA256 = execution.HashText(failed.ResultReceipt)
+	appendExecutionEvent(t, store, failed)
 	unknown := started
 	unknown.Type = execution.EventOutcomeUnknown
 	unknown.ResultReceipt = "backend result not durable"
 	unknown.ResultSHA256 = execution.HashText(unknown.ResultReceipt)
-	appendExecutionEvent(t, store, unknown)
+	if _, _, err := store.AppendExecutionEvent(context.Background(), unknown); !errors.Is(err, ErrIllegalExecutionTransition) {
+		t.Fatalf("terminal after answered failure error = %v", err)
+	}
 	completed := started
 	completed.Type = execution.EventCompleted
 	if _, _, err := store.AppendExecutionEvent(context.Background(), completed); !errors.Is(err, ErrIllegalExecutionTransition) {
 		t.Fatalf("second terminal error = %v", err)
 	}
+
+	// An unanswered dispatch still terminates as outcome_unknown.
+	unansweredRequested := executionTestEvent(t, session.ID, workspaceID, "effect-unanswered", execution.Effectful)
+	appendExecutionEvent(t, store, unansweredRequested)
+	unansweredApprovalRequested := unansweredRequested
+	unansweredApprovalRequested.Type = execution.EventApprovalRequested
+	unansweredApprovalRequested.Approval = execution.ApprovalRequested
+	appendExecutionEvent(t, store, unansweredApprovalRequested)
+	unansweredApproved := unansweredApprovalRequested
+	unansweredApproved.Type = execution.EventApproved
+	unansweredApproved.Approval = execution.ApprovalOnce
+	appendExecutionEvent(t, store, unansweredApproved)
+	unansweredStarted := unansweredApproved
+	unansweredStarted.Type = execution.EventStarted
+	unansweredStarted.Approval = execution.ApprovalNotApplicable
+	appendExecutionEvent(t, store, unansweredStarted)
+	unansweredUnknown := unansweredStarted
+	unansweredUnknown.Type = execution.EventOutcomeUnknown
+	unansweredUnknown.ResultReceipt = "backend result not durable"
+	unansweredUnknown.ResultSHA256 = execution.HashText(unansweredUnknown.ResultReceipt)
+	appendExecutionEvent(t, store, unansweredUnknown)
 }
 
 func TestExecutionRejectsIdentityScopeAndTransitionConflicts(t *testing.T) {

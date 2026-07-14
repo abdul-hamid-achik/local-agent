@@ -315,24 +315,24 @@ func listRawTurnReconciliationHazardsTx(ctx context.Context, tx *sql.Tx, session
 }
 
 func rejectCompletedPostCursorTx(ctx context.Context, tx *sql.Tx, sessionID int64, workspaceID string, cursor int64) error {
-	var executionID string
+	var executionID, eventType string
 	err := tx.QueryRowContext(ctx, `
 		WITH ranked AS (
 			SELECT e.*, ROW_NUMBER() OVER (PARTITION BY execution_id ORDER BY id DESC) AS latest_rank
 			  FROM execution_events e
 			 WHERE session_id = ? AND workspace_id = ?
 		)
-		SELECT execution_id FROM ranked
-		 WHERE latest_rank = 1 AND event_type = 'completed'
+		SELECT execution_id, event_type FROM ranked
+		 WHERE latest_rank = 1 AND event_type IN ('completed', 'failed')
 		   AND effect_class != 'read_only' AND id > ?
-		 ORDER BY id LIMIT 1`, sessionID, workspaceID, cursor).Scan(&executionID)
+		 ORDER BY id LIMIT 1`, sessionID, workspaceID, cursor).Scan(&executionID, &eventType)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("inspect completed post-cursor effects: %w", err)
+		return fmt.Errorf("inspect answered post-cursor effects: %w", err)
 	}
-	return fmt.Errorf("%w: execution %q completed after cursor %d", ErrReconciliationProjectionRequired, executionID, cursor)
+	return fmt.Errorf("%w: execution %q %s after cursor %d", ErrReconciliationProjectionRequired, executionID, eventType, cursor)
 }
 
 type reconciliationMemberDigest struct {

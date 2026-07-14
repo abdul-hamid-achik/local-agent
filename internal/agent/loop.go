@@ -622,7 +622,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 			}
 			effectiveHash, hashErr := executionPkg.HashCanonicalArguments(tc.Arguments)
 			if hashErr != nil {
-				reason := fmt.Sprintf("invalid effective tool arguments: %v", hashErr)
+				reason := capToolResultForContext(fmt.Sprintf("invalid effective tool arguments: %v", hashErr), turnNumCtx)
 				if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventFailed, executionPkg.ApprovalNotApplicable, reason, "effective argument hashing failed")); err != nil {
 					return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
 				}
@@ -632,6 +632,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 			tracked.effectiveHash = effectiveHash
 			toolCalls[toolIndex] = tc
 			if block {
+				reason = capToolResultForContext(reason, turnNumCtx)
 				if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventFailed, executionPkg.ApprovalHostRefused, reason, "host pre-tool hook refused request")); err != nil {
 					return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
 				}
@@ -659,7 +660,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 			}
 			if preflightErr != nil {
 				preflightRejections++
-				result := fmt.Sprintf("tool request failed preflight: %v", preflightErr)
+				result := capToolResultForContext(fmt.Sprintf("tool request failed preflight: %v", preflightErr), turnNumCtx)
 				if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventFailed, executionPkg.ApprovalNotApplicable, result, "preflight rejected request before dispatch")); err != nil {
 					return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
 				}
@@ -710,7 +711,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 					if code == "" {
 						code = "host_refused"
 					}
-					result := fmt.Sprintf("tool request refused by host [%s]: %s. Do not retry unchanged; change the request or approval renderer.", code, authorization.reason)
+					result := capToolResultForContext(fmt.Sprintf("tool request refused by host [%s]: %s. Do not retry unchanged; change the request or approval renderer.", code, authorization.reason), turnNumCtx)
 					if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventFailed, executionPkg.ApprovalHostRefused, result, "approval host refused request before dispatch")); err != nil {
 						return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
 					}
@@ -876,12 +877,20 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 			// host-trusted, bounded projections may enter the active provider turn;
 			// every durable boundary and the UI receive only the allowlisted receipt.
 			modelResult, durableResult := a.semanticToolContents(tc, projection, result, structured, isErr)
-			if isErr && tracked.identity.EffectClass != executionPkg.EffectReadOnly && !strings.HasPrefix(durableResult, "OUTCOME UNKNOWN:") {
+			answered := a.executionOutcomeAnswered(tc, kind, tracked.identity.EffectClass, result, transportErr, projection)
+			terminalType := terminalExecutionEventType(tracked.identity.EffectClass, isErr, answered, ctx.Err())
+			// Only a genuinely unverifiable outcome earns the OUTCOME UNKNOWN
+			// framing. A backend that answered with a domain error keeps its
+			// receipt intact so the model (and the ledger) see what it said.
+			if terminalType == executionPkg.EventOutcomeUnknown && !strings.HasPrefix(durableResult, outcomeUnknownReceiptPrefix) {
 				durableResult = dispatchedEffectErrorReceipt(tc.Name, durableResult, ctx.Err())
 				modelResult = durableResult
 			}
-
-			terminalType := terminalExecutionEventType(tracked.identity.EffectClass, isErr, ctx.Err())
+			// Cap before the durable append so the terminal event hashes exactly
+			// the receipt the session transcript will persist; the projection
+			// boundary compares those hashes when advancing the snapshot cursor.
+			durableResult = capToolResultForContext(durableResult, turnNumCtx)
+			modelResult = capToolResultForContext(modelResult, turnNumCtx)
 			terminalDetail := fmt.Sprintf("backend returned after %dms", duration.Milliseconds())
 			if err := appendExecutionEvent(ctx, execRuntime, executionEvent(*tracked, terminalType, executionPkg.ApprovalNotApplicable, durableResult, terminalDetail)); err != nil {
 				unresolved := a.unresolvedFor(*tracked, executionPkg.EventStarted, err)
@@ -893,8 +902,6 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 				return unresolved
 			}
 
-			durableResult = capToolResultForContext(durableResult, turnNumCtx)
-			modelResult = capToolResultForContext(modelResult, turnNumCtx)
 			if lg != nil {
 				lg.Debug("tool", "name", tc.Name, "kind", kind, "ms", duration.Milliseconds(), "error", isErr)
 			}
@@ -1111,14 +1118,14 @@ func memoryToolRequiresApproval(name string) bool {
 }
 
 func mcpDispatchErrorReceipt(name string, err error) string {
-	return fmt.Sprintf("OUTCOME UNKNOWN: tool %q ended without a result receipt and may have taken effect: %v", name, err)
+	return fmt.Sprintf(outcomeUnknownReceiptPrefix+" tool %q ended without a result receipt and may have taken effect: %v", name, err)
 }
 
 func dispatchedEffectErrorReceipt(name, backendResult string, contextErr error) string {
 	if contextErr != nil {
-		return fmt.Sprintf("OUTCOME UNKNOWN: tool %q was cancelled after dispatch and may have taken effect: %v\nBackend result: %s", name, contextErr, backendResult)
+		return fmt.Sprintf(outcomeUnknownReceiptPrefix+" tool %q was cancelled after dispatch and may have taken effect: %v\nBackend result: %s", name, contextErr, backendResult)
 	}
-	return fmt.Sprintf("OUTCOME UNKNOWN: tool %q returned an error after dispatch and may have partially taken effect. Do not retry automatically; inspect state first.\nBackend result: %s", name, backendResult)
+	return fmt.Sprintf(outcomeUnknownReceiptPrefix+" tool %q returned an error after dispatch and may have partially taken effect. Do not retry automatically; inspect state first.\nBackend result: %s", name, backendResult)
 }
 
 type builtinToolResult struct {

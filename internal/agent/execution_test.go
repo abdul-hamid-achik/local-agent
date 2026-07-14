@@ -887,10 +887,10 @@ func TestExecutionLedgerCancellationAfterIntentDoesNotStartBackend(t *testing.T)
 	}
 }
 
-func TestExecutionLedgerStartedEffectErrorIsUnknownBeforeReceipt(t *testing.T) {
+func TestExecutionLedgerHostKilledDispatchLatchesOutcomeUnknown(t *testing.T) {
 	client := &scriptedClient{responses: [][]llm.StreamChunk{
 		{{ToolCalls: []llm.ToolCall{
-			{ID: "bash", Name: "bash", Arguments: map[string]any{"command": "exit 7"}},
+			{ID: "bash", Name: "bash", Arguments: map[string]any{"command": "sleep 5", "timeout": 1}},
 			{ID: "write", Name: "write", Arguments: map[string]any{"path": "must-not-run", "content": "no"}},
 		}, Done: true}},
 		{{Text: "done", Done: true}},
@@ -920,10 +920,6 @@ func TestExecutionLedgerStartedEffectErrorIsUnknownBeforeReceipt(t *testing.T) {
 	if len(out.toolResults) != 2 || !strings.Contains(out.toolResults[0], "OUTCOME UNKNOWN") || !strings.Contains(out.toolResults[1], "NOT DISPATCHED") {
 		t.Fatalf("UI receipt = %#v", out.toolResults)
 	}
-	messages := ag.Messages()
-	if len(messages) < 3 || messages[2].Role != "tool" || !strings.Contains(messages[2].Content, "OUTCOME UNKNOWN") {
-		t.Fatalf("model receipt = %#v", messages)
-	}
 	if _, err := os.Stat(filepath.Join(workDir, "must-not-run")); !os.IsNotExist(err) {
 		t.Fatalf("later tool ran after unknown outcome: %v", err)
 	}
@@ -935,6 +931,47 @@ func TestExecutionLedgerStartedEffectErrorIsUnknownBeforeReceipt(t *testing.T) {
 	}
 	if client.calls != 1 {
 		t.Fatalf("latched provider continued: calls=%d", client.calls)
+	}
+}
+
+func TestExecutionLedgerAnsweredEffectErrorFailsWithoutStranding(t *testing.T) {
+	client := &scriptedClient{responses: [][]llm.StreamChunk{
+		{{ToolCalls: []llm.ToolCall{
+			{ID: "bash", Name: "bash", Arguments: map[string]any{"command": "exit 7"}},
+			{ID: "write", Name: "write", Arguments: map[string]any{"path": "still-runs", "content": "yes"}},
+		}, Done: true}},
+		{{Text: "done", Done: true}},
+	}}
+	ledger := &fakeExecutionLedger{}
+	ag, workDir := newLedgerAgent(t, client, nil, ledger)
+	out := &terminalOrderingOutput{ledger: ledger}
+	if err := ag.Run(context.Background(), out); err != nil {
+		t.Fatalf("answered backend error stranded the session: %v", err)
+	}
+	want := []executionpkg.EventType{
+		executionpkg.EventRequested,
+		executionpkg.EventRequested,
+		executionpkg.EventApproved,
+		executionpkg.EventStarted,
+		executionpkg.EventFailed,
+		executionpkg.EventApproved,
+		executionpkg.EventStarted,
+		executionpkg.EventCompleted,
+	}
+	if got := executionEventTypes(ledger.snapshot()); !reflect.DeepEqual(got, want) {
+		t.Fatalf("events = %v, want %v", got, want)
+	}
+	if out.resultBeforeTerminal {
+		t.Fatal("UI result was emitted before the terminal ledger append")
+	}
+	if len(out.toolResults) != 2 || strings.Contains(out.toolResults[0], "OUTCOME UNKNOWN") {
+		t.Fatalf("UI receipt = %#v", out.toolResults)
+	}
+	if data, err := os.ReadFile(filepath.Join(workDir, "still-runs")); err != nil || string(data) != "yes" {
+		t.Fatalf("later tool skipped after answered error: %q, %v", data, err)
+	}
+	if client.calls != 2 {
+		t.Fatalf("provider halted after answered error: calls=%d", client.calls)
 	}
 }
 

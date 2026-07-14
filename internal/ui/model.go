@@ -2605,7 +2605,7 @@ func (m *Model) snapshotExecutionCursor(ctx context.Context) (int64, error) {
 	}
 	messages := m.agent.Messages()
 	for _, state := range hazards {
-		if state.Latest.Type != execution.EventCompleted {
+		if state.Latest.Type != execution.EventCompleted && state.Latest.Type != execution.EventFailed {
 			return m.executionCursor, fmt.Errorf(
 				"execution %s remains %s/%s and cannot cross the snapshot boundary",
 				state.Identity.ExecutionID, state.Latest.Type, state.Identity.EffectClass,
@@ -2625,7 +2625,7 @@ func (m *Model) snapshotExecutionCursor(ctx context.Context) (int64, error) {
 			}
 		}
 		if !projected {
-			return m.executionCursor, fmt.Errorf("completed effect %s is absent from the session snapshot", state.Identity.ExecutionID)
+			return m.executionCursor, fmt.Errorf("%s effect %s is absent from the session snapshot", state.Latest.Type, state.Identity.ExecutionID)
 		}
 	}
 	latest, err := m.sessionStore.LatestExecutionEventID(ctx, m.sessionID, workspaceID)
@@ -2652,10 +2652,11 @@ func unresolvedExecutionWarning(states []execution.State) string {
 				"Recovery blocked: %s has a durable dispatch marker but no terminal receipt. Its outcome is unknown; use /recover to inspect and record exact evidence.",
 				toolName,
 			)
-		case state.Latest.Type == execution.EventCompleted && state.Identity.EffectClass != execution.EffectReadOnly:
+		case (state.Latest.Type == execution.EventCompleted || state.Latest.Type == execution.EventFailed) &&
+			state.Identity.EffectClass != execution.EffectReadOnly:
 			return fmt.Sprintf(
-				"Recovery blocked: %s completed after the last saved transcript. Continuation is disabled so the effect cannot be repeated; inspect the workspace before starting /new.",
-				toolName,
+				"Recovery blocked: %s %s after the last saved transcript. Continuation is disabled so the effect cannot be repeated; inspect the workspace before starting /new.",
+				toolName, state.Latest.Type,
 			)
 		}
 	}

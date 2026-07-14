@@ -84,8 +84,9 @@ func (s *Store) ResolveExecutionReconciliation(ctx context.Context, lease *Execu
 		return ReconciliationCommitReceipt{}, err
 	}
 	if state.Latest.ID != member.EventID || state.Latest.Type != member.EventType || state.Identity.EffectClass != member.EffectClass {
-		if state.Latest.Type == execution.EventCompleted && state.Identity.EffectClass != execution.EffectReadOnly && state.Latest.ID > group.SnapshotCursor {
-			return ReconciliationCommitReceipt{}, fmt.Errorf("%w: execution %q completed after group creation", ErrReconciliationProjectionRequired, member.ExecutionID)
+		if (state.Latest.Type == execution.EventCompleted || state.Latest.Type == execution.EventFailed) &&
+			state.Identity.EffectClass != execution.EffectReadOnly && state.Latest.ID > group.SnapshotCursor {
+			return ReconciliationCommitReceipt{}, fmt.Errorf("%w: execution %q %s after group creation", ErrReconciliationProjectionRequired, member.ExecutionID, state.Latest.Type)
 		}
 		return ReconciliationCommitReceipt{}, fmt.Errorf("%w: execution %q changed after group creation", ErrReconciliationStaleEvidence, member.ExecutionID)
 	}

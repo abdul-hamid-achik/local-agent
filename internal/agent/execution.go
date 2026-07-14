@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/jsonschema-go/jsonschema"
 
+	"github.com/abdul-hamid-achik/local-agent/internal/ecosystem"
 	executionpkg "github.com/abdul-hamid-achik/local-agent/internal/execution"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 	permissionPkg "github.com/abdul-hamid-achik/local-agent/internal/permission"
@@ -85,8 +86,9 @@ func (e *UnresolvedExecutionError) Unwrap() error {
 }
 
 // RecoveryInspectCommand returns the read-only CLI inspection command for an
-// ordinary execution-effect hazard. Completed post-snapshot effects require a
-// different projection repair and therefore intentionally return no command.
+// ordinary execution-effect hazard. Completed or failed post-snapshot effects
+// require a different projection repair and therefore intentionally return no
+// command.
 func (e *UnresolvedExecutionError) RecoveryInspectCommand() string {
 	if e == nil || e.SessionID <= 0 || strings.TrimSpace(e.ExecutionID) == "" {
 		return ""
@@ -237,15 +239,16 @@ func (a *Agent) executionRuntime(ctx context.Context) (executionRuntime, error) 
 	for _, state := range states {
 		unknownOutcome := state.Latest.Type == executionpkg.EventOutcomeUnknown
 		missingTerminal := state.Latest.Type == executionpkg.EventStarted && state.Identity.EffectClass != executionpkg.EffectReadOnly
-		completedAfterSnapshot := state.Latest.Type == executionpkg.EventCompleted && state.Identity.EffectClass != executionpkg.EffectReadOnly
-		if !unknownOutcome && !missingTerminal && !completedAfterSnapshot {
+		answeredAfterSnapshot := (state.Latest.Type == executionpkg.EventCompleted || state.Latest.Type == executionpkg.EventFailed) &&
+			state.Identity.EffectClass != executionpkg.EffectReadOnly
+		if !unknownOutcome && !missingTerminal && !answeredAfterSnapshot {
 			continue
 		}
 		reason := "durable state is started without a terminal receipt"
 		if unknownOutcome {
 			reason = "durable outcome is unknown and requires explicit reconciliation"
-		} else if completedAfterSnapshot {
-			reason = "completed effect is newer than the session snapshot and must be projected before provider work"
+		} else if answeredAfterSnapshot {
+			reason = fmt.Sprintf("%s effect is newer than the session snapshot and must be projected before provider work", state.Latest.Type)
 		}
 		unresolved := &UnresolvedExecutionError{
 			SessionID:      state.Identity.SessionID,
@@ -397,11 +400,63 @@ func (a *Agent) executionKindForCall(call llm.ToolCall) (executionpkg.Kind, exec
 // Only a future explicit host-owned trust policy may narrow this invariant.
 func mcpToolRequiresApproval() bool { return true }
 
-func terminalExecutionEventType(effect executionpkg.EffectClass, isError bool, contextErr error) executionpkg.EventType {
+// outcomeUnknownReceiptPrefix marks host-authored receipts for dispatches that
+// may have taken effect without a verifiable outcome (timeouts, mid-flight
+// kills, lost transports). Terminal classification treats any receipt bearing
+// it as unanswered.
+const outcomeUnknownReceiptPrefix = "OUTCOME UNKNOWN:"
+
+// executionOutcomeAnswered reports whether the terminal receipt came from the
+// effect owner itself. Transport failures are never answers. Host-authored
+// OUTCOME UNKNOWN receipts mark builtin/memory dispatches the host killed
+// mid-flight; server-controlled MCP text must not trigger that marker. A known
+// gateway namespace relays downstream servers, so for non-read-only calls its
+// reply counts as an answer only when the routed downstream is host-catalogued
+// and an exact parser recognized its typed envelope as the domain outcome —
+// generic IsError coercion never proves the downstream answered.
+func (a *Agent) executionOutcomeAnswered(
+	call llm.ToolCall,
+	kind executionpkg.Kind,
+	effect executionpkg.EffectClass,
+	rawResult string,
+	transportError bool,
+	projection ecosystem.ToolProjection,
+) bool {
+	if transportError {
+		return false
+	}
+	if kind != executionpkg.KindMCP {
+		return !strings.HasPrefix(rawResult, outcomeUnknownReceiptPrefix)
+	}
+	if effect == executionpkg.EffectReadOnly {
+		return true
+	}
+	if !a.isGatewayRoutedMCPCall(call.Name) {
+		// The connected server is the effect owner; its reply, even an
+		// application-level error, is a verifiable answer.
+		return true
+	}
+	server, ok := a.gatewayDownstreamServer(call)
+	if !ok {
+		return false
+	}
+	if _, catalogued := trustedGatewayContracts[server]; !catalogued {
+		return false
+	}
+	return projection.DomainTyped &&
+		(projection.Domain == ecosystem.DomainFailed || projection.Domain == ecosystem.DomainBlocked)
+}
+
+// terminalExecutionEventType classifies how a dispatched execution ends in the
+// durable ledger. An answered backend error — even an application-level one —
+// is a verifiable outcome and terminates as failed. An unanswered dispatch, or
+// a cancellation of a non-read-only call, remains outcome_unknown and requires
+// explicit reconciliation.
+func terminalExecutionEventType(effect executionpkg.EffectClass, isError, answered bool, contextErr error) executionpkg.EventType {
 	if !isError {
 		return executionpkg.EventCompleted
 	}
-	if effect != executionpkg.EffectReadOnly {
+	if effect != executionpkg.EffectReadOnly && (!answered || contextErr != nil) {
 		return executionpkg.EventOutcomeUnknown
 	}
 	if contextErr != nil {
@@ -792,7 +847,7 @@ func (a *Agent) unresolvedFor(tracked trackedToolExecution, eventType executionp
 }
 
 func terminalLedgerFailureReceipt(name string, err error) string {
-	return fmt.Sprintf("OUTCOME UNKNOWN: tool %q finished without a durable terminal receipt. Do not retry automatically; inspect state first. Ledger error: %v", name, err)
+	return fmt.Sprintf(outcomeUnknownReceiptPrefix+" tool %q finished without a durable terminal receipt. Do not retry automatically; inspect state first. Ledger error: %v", name, err)
 }
 
 func (a *Agent) stopBeforeDispatchAfterLedgerError(calls []llm.ToolCall, out Output, err error) error {
@@ -842,7 +897,7 @@ func (a *Agent) cancelCommittedDispatchIntent(ctx context.Context, runtime execu
 	result := fmt.Sprintf("CANCELLED: read-only tool %q did not enter its backend because the turn ended after dispatch intent: %v", call.Name, cause)
 	if tracked.identity.EffectClass != executionpkg.EffectReadOnly {
 		eventType = executionpkg.EventOutcomeUnknown
-		result = fmt.Sprintf("OUTCOME UNKNOWN: tool %q crossed the durable dispatch-intent barrier before cancellation. This process did not invoke the backend; do not retry automatically without reconciliation: %v", call.Name, cause)
+		result = fmt.Sprintf(outcomeUnknownReceiptPrefix+" tool %q crossed the durable dispatch-intent barrier before cancellation. This process did not invoke the backend; do not retry automatically without reconciliation: %v", call.Name, cause)
 	}
 	event := executionEvent(tracked, eventType, executionpkg.ApprovalNotApplicable, result, "cancellation observed after dispatch intent and before backend invocation")
 	if err := a.appendTerminalExecutionEvent(ctx, runtime, tracked, event); err != nil {

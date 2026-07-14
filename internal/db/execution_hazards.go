@@ -244,7 +244,7 @@ func queryRawExecutionProjectionPage(ctx context.Context, tx *sql.Tx, query effe
 			   AND (
 			       event_type = 'outcome_unknown'
 			       OR (event_type = 'started' AND effect_class != 'read_only')
-			       OR (event_type = 'completed' AND effect_class != 'read_only' AND id > ?)
+			       OR (event_type IN ('completed', 'failed') AND effect_class != 'read_only' AND id > ?)
 			   )
 			 ORDER BY CASE
 			              WHEN event_type = 'outcome_unknown' THEN 0
