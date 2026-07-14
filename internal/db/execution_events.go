@@ -206,6 +206,43 @@ func (s *Store) ListExecutionEvents(ctx context.Context, sessionID int64, worksp
 	return events, nil
 }
 
+// ListSessionExecutionEvents returns every immutable lifecycle edge recorded
+// for one session, in append order, across all executions. It is the audit
+// projection: a complete, read-only timeline for `session export`. The limit
+// is bounded so a runaway session cannot produce an unbounded export.
+func (s *Store) ListSessionExecutionEvents(ctx context.Context, sessionID int64, workspaceID string, limit int) ([]execution.Event, error) {
+	if err := validateExecutionListLimit(limit, maxExecutionEventList); err != nil {
+		return nil, err
+	}
+	if err := validateExecutionSessionScope(ctx, s.db, sessionID, workspaceID); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+executionEventColumns+`
+		   FROM execution_events
+		  WHERE session_id = ? AND workspace_id = ?
+		  ORDER BY id ASC LIMIT ?`,
+		sessionID, workspaceID, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list session execution events: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	events := make([]execution.Event, 0, 32)
+	for rows.Next() {
+		event, scanErr := scanExecutionEvent(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read session execution events: %w", err)
+	}
+	return events, nil
+}
+
 // ListUnresolvedExecutions returns bounded latest states that block automatic
 // continuation. This includes non-terminal lifecycles and the durable terminal
 // outcome_unknown state, which remains operationally unresolved until explicit

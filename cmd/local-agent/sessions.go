@@ -52,7 +52,9 @@ func handleSessionCommandIO(args []string, stdout, stderr io.Writer) int {
 		writeSessionUsage(stdout)
 		return 0
 	}
-	if args[0] != "repair" {
+	switch args[0] {
+	case "repair", "list", "export":
+	default:
 		executionFprintf(stderr, "session: unknown command %q\n", args[0])
 		writeSessionUsage(stderr)
 		return 2
@@ -76,7 +78,14 @@ func handleSessionCommandIO(args []string, stdout, stderr io.Writer) int {
 			executionFprintf(stderr, "session: close durable store: %v\n", err)
 		}
 	}()
-	return handleSessionRepair(store, workspace, args[1:], stdout, stderr)
+	switch args[0] {
+	case "list":
+		return handleSessionList(store, workspace, args[1:], stdout, stderr)
+	case "export":
+		return handleSessionExport(store, workspace, args[1:], stdout, stderr)
+	default:
+		return handleSessionRepair(store, workspace, args[1:], stdout, stderr)
+	}
 }
 
 func handleSessionRepair(store sessionRepairStore, workspace string, args []string, stdout, stderr io.Writer) int {
@@ -165,7 +174,14 @@ func handleSessionRepair(store sessionRepairStore, workspace string, args []stri
 
 func writeSessionUsage(writer io.Writer) {
 	executionFprintln(writer, "Usage:")
+	executionFprintln(writer, "  local-agent session list [--json] [--limit N]")
+	executionFprintln(writer, "  local-agent session export [--format jsonl|md|both] [--out DIR] SESSION_ID")
 	executionFprintln(writer, "  local-agent session repair [--json] SESSION_ID")
+	executionFprintln(writer)
+	executionFprintln(writer, "list exports nothing; it enumerates sessions in the current workspace.")
+	executionFprintln(writer, "export writes a read-only JSONL timeline and a markdown summary (execution")
+	executionFprintln(writer, "events, control records, token stats, file changes, and an open-issues table)")
+	executionFprintln(writer, "so a wedged session can be handed to another engineer or agent for debugging.")
 	executionFprintln(writer)
 	executionFprintln(writer, "Repair re-derives the session's execution snapshot cursor from the durable")
 	executionFprintln(writer, "ledger after a crash left answered terminal receipts newer than the saved")
