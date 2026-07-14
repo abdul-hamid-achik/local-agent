@@ -68,6 +68,71 @@ func TestPendingApprovalAcceptsUppercaseAllowOnce(t *testing.T) {
 	}
 }
 
+func TestUndersizedTerminalPausesApprovalAndDraftUntilResize(t *testing.T) {
+	m := newTestModel(t)
+	m.input.SetValue("preserved draft")
+	responses := make(chan permission.ApprovalResponse, 1)
+	m = openApprovalForTest(t, m, ToolApprovalMsg{
+		ToolName: "write_file",
+		Args:     map[string]any{"path": "review-before-allow.txt"},
+		Response: responses,
+	})
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: minTerminalWidth - 1, Height: 20})
+	m = updated.(*Model)
+	if visible := ansi.Strip(m.View().Content); !strings.Contains(visible, "Input paused") || strings.Contains(visible, "Permission") {
+		t.Fatalf("undersized frame exposed the hidden decision instead of pause state:\n%s", visible)
+	}
+
+	for _, input := range []tea.Msg{charKey('y'), charKey('n'), enterKey(), escKey(), tea.PasteMsg{Content: "hidden paste"}} {
+		updated, cmd := m.Update(input)
+		m = updated.(*Model)
+		if cmd != nil || m.pendingApproval == nil || m.approvalState == nil {
+			t.Fatalf("hidden input resolved approval: input=%T cmd=%v pending=%v", input, cmd != nil, m.pendingApproval != nil)
+		}
+		if m.input.Value() != "preserved draft" {
+			t.Fatalf("hidden input changed draft to %q", m.input.Value())
+		}
+		select {
+		case response := <-responses:
+			t.Fatalf("hidden input emitted decision %q", response.Normalize().Decision)
+		default:
+		}
+	}
+
+	updated, _ = m.Update(tea.WindowSizeMsg{Width: minTerminalWidth, Height: minTerminalHeight})
+	m = updated.(*Model)
+	visible := ansi.Strip(m.View().Content)
+	if !strings.Contains(visible, "Permission") || !strings.Contains(visible, "write_file") {
+		t.Fatalf("exact approval did not reappear after resize:\n%s", visible)
+	}
+	updated, _ = m.Update(charKey('y'))
+	m = updated.(*Model)
+	if m.pendingApproval != nil {
+		t.Fatal("visible approval remained pending after explicit allow")
+	}
+	if decision := (<-responses).Normalize().Decision; decision != permission.DecisionAllowOnce {
+		t.Fatalf("visible approval decision = %q, want allow once", decision)
+	}
+}
+
+func TestUndersizedTerminalStillAllowsGracefulQuitFromApproval(t *testing.T) {
+	m := newTestModel(t)
+	responses := make(chan permission.ApprovalResponse, 1)
+	m = openApprovalForTest(t, m, ToolApprovalMsg{ToolName: "bash", Response: responses})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 20, Height: 8})
+	m = updated.(*Model)
+
+	updated, cmd := m.Update(ctrlKey('c'))
+	m = updated.(*Model)
+	if cmd == nil || !m.shuttingDown || m.pendingApproval != nil {
+		t.Fatalf("Ctrl+C did not retain graceful shutdown: cmd=%v shuttingDown=%v pending=%v", cmd != nil, m.shuttingDown, m.pendingApproval != nil)
+	}
+	if decision := (<-responses).Normalize().Decision; decision != permission.DecisionCancelled {
+		t.Fatalf("shutdown approval decision = %q, want cancelled", decision)
+	}
+}
+
 func TestPendingApprovalSessionDecisionIsExplicit(t *testing.T) {
 	m := newTestModel(t)
 	responses := make(chan permission.ApprovalResponse, 1)

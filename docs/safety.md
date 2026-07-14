@@ -45,6 +45,10 @@ and creates atomic-write temporary files inside the pinned parent. A path
 component changed after validation therefore cannot redirect built-in file I/O
 outside the startup workspace. This boundary does not constrain an approved
 shell command or MCP process and does not turn Local Agent into an OS sandbox.
+It also inherits the operating system's mount namespace: content mounted below
+the workspace, including a bind mount to another tree, is visible as content of
+that workspace. Keep mounts that expose sensitive data outside approved roots,
+or run Local Agent inside a sandbox with the mount layout you intend to grant.
 
 ## Approval policy
 
@@ -66,7 +70,9 @@ process restarts.
 At the supported 30×12 minimum, a long file target is projected by its
 identifying tail rather than an indistinguishable path prefix. `pgdn` exposes
 the remaining preview and `d` switches to the exact arguments before a
-decision.
+decision. Below that minimum, Local Agent replaces interactive surfaces with a
+resize notice and pauses keyboard, mouse, and paste input except for `ctrl+c`.
+Restoring a supported size reveals the unchanged pending decision and draft.
 
 Databases created by older releases may contain broad per-tool `allow` rows.
 On upgrade, Local Agent retires those rows to `ask`; they never authorize a
@@ -134,6 +140,7 @@ Local Agent currently does not provide:
 
 - an OS-level filesystem, process, or network sandbox;
 - a kernel-enforced egress firewall;
+- detection or isolation of mount points created below an approved filesystem root;
 - argument-scoped persistent approvals;
 - automatic proof that an external side effect completed.
 

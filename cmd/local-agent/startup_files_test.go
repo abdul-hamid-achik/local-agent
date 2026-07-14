@@ -21,8 +21,13 @@ func TestApplyWorkspaceIgnoreFailsClosedForExistingUnsafeInput(t *testing.T) {
 }
 
 func TestApplyWorkspaceIgnoreAllowsMissingPolicy(t *testing.T) {
-	if err := applyWorkspaceIgnore(agent.New(nil, nil, 0), t.TempDir()); err != nil {
+	dir := t.TempDir()
+	ag := agent.New(nil, nil, 0)
+	if err := applyWorkspaceIgnore(ag, dir); err != nil {
 		t.Fatalf("missing .agentignore = %v", err)
+	}
+	if got := ag.WorkDir(); got != dir {
+		t.Fatalf("configured workspace = %q, want %q", got, dir)
 	}
 }
 

@@ -24,24 +24,28 @@ import (
 
 // Agent orchestrates the LLM and tools in a ReAct loop.
 type Agent struct {
-	mu               sync.RWMutex
-	llmClient        llm.Client
-	registry         *mcp.Registry
-	messages         []llm.Message
-	skillContent     string
-	skillLoader      SkillLoader
-	loadedCtx        string
-	numCtx           int
-	memoryStore      *memory.Store
-	iceEngine        *ice.Engine
-	router           config.ModelRouter
-	modePrefix       string
-	toolPolicy       ToolPolicy
-	authorityMode    AuthorityMode
-	workDir          string
-	ignoreContent    string
-	permChecker      *permission.Checker
-	approvalCallback func(permission.ApprovalRequest)
+	mu                  sync.RWMutex
+	llmClient           llm.Client
+	registry            *mcp.Registry
+	messages            []llm.Message
+	skillContent        string
+	skillLoader         SkillLoader
+	loadedCtx           string
+	numCtx              int
+	memoryStore         *memory.Store
+	iceEngine           *ice.Engine
+	router              config.ModelRouter
+	modePrefix          string
+	toolPolicy          ToolPolicy
+	authorityMode       AuthorityMode
+	workDir             string
+	ignoreContent       string
+	filesystemVersion   uint64
+	activeFilesystem    filesystemContext
+	filesystemPinned    bool
+	permChecker         *permission.Checker
+	approvalCallback    func(permission.ApprovalRequest)
+	approvalHostVersion uint64
 	// approvalGrants contains host-approved, exact-request grants for this Agent
 	// session. Keys bind workspace, tool and canonical arguments; they are never
 	// persisted as global tool-only policies.
@@ -518,29 +522,65 @@ func (a *Agent) ServerNames() []string {
 	return a.registry.ServerNames()
 }
 
-// SetWorkDir sets the working directory for environment context in the system prompt.
-func (a *Agent) SetWorkDir(dir string) {
-	a.workDir = dir
+// SetWorkspacePolicy atomically updates the workspace boundary and its ignore
+// policy for the next turn. Embeddings that reload both values should prefer
+// this method so a turn cannot snapshot a mixed pair between two setter calls.
+func (a *Agent) SetWorkspacePolicy(dir, ignoreContent string) {
+	a.mu.Lock()
+	if a.workDir != dir || a.ignoreContent != ignoreContent {
+		a.workDir = dir
+		a.ignoreContent = ignoreContent
+		a.filesystemVersion++
+	}
+	a.mu.Unlock()
 }
 
-// WorkDir returns the workspace boundary used by built-in tools.
+// SetWorkDir sets only the configured working directory. Use
+// SetWorkspacePolicy when the corresponding ignore policy changes too.
+func (a *Agent) SetWorkDir(dir string) {
+	a.mu.Lock()
+	if a.workDir != dir {
+		a.workDir = dir
+		a.filesystemVersion++
+	}
+	a.mu.Unlock()
+}
+
+// WorkDir returns the configured workspace boundary. A running turn keeps the
+// snapshot it admitted with; a value configured mid-turn applies next turn.
 func (a *Agent) WorkDir() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
 	return a.workDir
 }
 
-// SetIgnoreContent sets the raw .agentignore content for injection into the system prompt.
+// SetIgnoreContent sets only the configured .agentignore content. Use
+// SetWorkspacePolicy when changing the workspace and ignore policy together.
 func (a *Agent) SetIgnoreContent(content string) {
-	a.ignoreContent = content
+	a.mu.Lock()
+	if a.ignoreContent != content {
+		a.ignoreContent = content
+		a.filesystemVersion++
+	}
+	a.mu.Unlock()
 }
 
 // SetPermissionChecker sets the permission checker for tool approval.
 func (a *Agent) SetPermissionChecker(checker *permission.Checker) {
-	a.permChecker = checker
+	a.mu.Lock()
+	if a.permChecker != checker {
+		a.permChecker = checker
+		a.approvalHostVersion++
+	}
+	a.mu.Unlock()
 }
 
 // SetApprovalCallback sets the callback for requesting user approval.
 func (a *Agent) SetApprovalCallback(cb func(permission.ApprovalRequest)) {
+	a.mu.Lock()
 	a.approvalCallback = cb
+	a.approvalHostVersion++
+	a.mu.Unlock()
 }
 
 // SetICEEngine sets the ICE engine for cross-session context retrieval.

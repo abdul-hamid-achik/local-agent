@@ -21,7 +21,7 @@ const (
 )
 
 func (a *Agent) newApprovalRequest(ctx context.Context, tc llm.ToolCall, argumentsHash string) permissionpkg.ApprovalRequest {
-	workspace := a.workDir
+	workspace := a.filesystemContext().workDir
 	if workspace == "" {
 		workspace, _ = os.Getwd()
 	}
@@ -177,6 +177,24 @@ func (a *Agent) buildApprovalPreview(ctx context.Context, tc llm.ToolCall, argum
 		}
 	}
 	return preview
+}
+
+// revalidateApprovalPreview verifies the exact presentation contract the user
+// approved. It never substitutes a newly built preview: any changed path,
+// existence/content hash, diff, command, or bounded metadata fails closed and
+// requires a fresh modal.
+func (a *Agent) revalidateApprovalPreview(ctx context.Context, tc llm.ToolCall, request permissionpkg.ApprovalRequest) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	current := a.buildApprovalPreview(ctx, tc, request.ArgumentsSHA256)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if current != request.Preview {
+		return errors.New("approval preview changed while the request was open")
+	}
+	return nil
 }
 
 func mcpApprovalConsequence(behavior llm.ToolBehavior) string {

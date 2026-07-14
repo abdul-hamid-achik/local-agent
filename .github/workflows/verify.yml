@@ -71,7 +71,7 @@ jobs:
         run: go test ./internal/doclinks -count=1 -args -dist="${GITHUB_WORKSPACE}/docs/.vitepress/dist"
 
   glyphrun-cli:
-    name: Glyphrun release contracts
+    name: Glyphrun deterministic terminal suite
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -112,11 +112,18 @@ jobs:
             glyph spec verify "$spec" --format md
           done
 
-      - name: Verify release-critical CLI contracts
-        run: glyph run specs/cli_flags.yml specs/cli_skip_approvals.yml --format md --progress always --parallel 1
-
-      - name: Verify external-read terminal contract
-        run: glyph run specs/tui_external_read.yml --format md --progress always --parallel 1
+      - name: Verify complete deterministic terminal suite
+        run: |
+          set -eu
+          set --
+          for spec in specs/*.yml; do
+            if [ "$spec" = "specs/live_ollama_tool.yml" ]; then
+              continue
+            fi
+            set -- "$@" "$spec"
+          done
+          test "$#" -gt 0
+          glyph run "$@" --format md --progress always --parallel 1
 
   darwin-smoke:
     name: Darwin build and POSIX smoke tests

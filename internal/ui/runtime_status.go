@@ -106,8 +106,18 @@ func (m *Model) buildRuntimeStatusContent(width int) string {
 			lines = append(lines, m.runtimeStatusRow("Workspace", workspace, width))
 		}
 	}
+	lines = append(lines, m.runtimeStatusRow("Model", modelRuntime, width))
+	if m.ollamaOffline {
+		// Ping failure can mean either host transport or model selection/setup.
+		// Keep the recovery conditional rather than presenting transport success
+		// or failure as verified model availability.
+		lines = append(lines, m.runtimeStatusRow(
+			"Ollama",
+			"setup needed · ctrl+o select or install a model; run ollama serve if the host is unavailable",
+			width,
+		))
+	}
 	lines = append(lines,
-		m.runtimeStatusRow("Model", modelRuntime, width),
 		m.runtimeStatusRow("Profile", profile, width),
 		m.runtimeStatusRow("Mode", mode, width),
 		m.runtimeStatusRow("Approval", m.approvalPostureRuntimeLabel(), width),

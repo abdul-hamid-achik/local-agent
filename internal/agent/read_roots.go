@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
+	"golang.org/x/text/unicode/norm"
 )
 
 const (
@@ -847,7 +848,7 @@ func (a *Agent) closeReadRoots() {
 }
 
 func (a *Agent) canonicalWorkDir() (string, error) {
-	workDir := a.workDir
+	workDir := a.activeWorkDir()
 	if workDir == "" {
 		var err error
 		workDir, err = os.Getwd()
@@ -1007,11 +1008,10 @@ func physicalEntryName(directory, requested string, expected os.FileInfo) (strin
 	defer func() { _ = opened.Close() }()
 
 	var (
-		identicalName  string
-		identicalCount int
-		foldedName     string
-		foldedCount    int
+		matchingName  string
+		matchingCount int
 	)
+	normalizedRequested := norm.NFC.String(requested)
 	for {
 		entries, readErr := opened.ReadDir(readDirectoryBatchSize)
 		for _, entry := range entries {
@@ -1025,24 +1025,64 @@ func physicalEntryName(directory, requested string, expected os.FileInfo) (strin
 				}
 				return requested, nil
 			}
+			// Identity checks may require a syscall for every entry. Most aliases
+			// accepted by desktop filesystems differ only by case or Unicode
+			// normalization, so filter by that inexpensive spelling relation first.
+			if !strings.EqualFold(norm.NFC.String(entry.Name()), normalizedRequested) {
+				continue
+			}
+			info, infoErr := entry.Info()
+			if infoErr != nil || !os.SameFile(expected, info) {
+				continue
+			}
+			matchingName = entry.Name()
+			matchingCount++
+		}
+		switch {
+		case errors.Is(readErr, io.EOF):
+			if matchingCount == 1 {
+				return matchingName, nil
+			}
+			if matchingCount > 1 {
+				return "", errors.New("directory entry identity is ambiguous")
+			}
+			// Preserve compatibility with filesystem-specific alias rules that are
+			// neither Unicode normalization nor case folding. This slower fallback
+			// is exceptional; the common path avoids Info calls for unrelated names.
+			return physicalEntryNameByIdentity(directory, expected)
+		case readErr != nil:
+			return "", readErr
+		case len(entries) == 0:
+			return "", io.ErrNoProgress
+		}
+	}
+}
+
+func physicalEntryNameByIdentity(directory string, expected os.FileInfo) (string, error) {
+	opened, err := os.Open(directory)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = opened.Close() }()
+
+	var (
+		identicalName  string
+		identicalCount int
+	)
+	for {
+		entries, readErr := opened.ReadDir(readDirectoryBatchSize)
+		for _, entry := range entries {
 			info, infoErr := entry.Info()
 			if infoErr != nil || !os.SameFile(expected, info) {
 				continue
 			}
 			identicalName = entry.Name()
 			identicalCount++
-			if strings.EqualFold(entry.Name(), requested) {
-				foldedName = entry.Name()
-				foldedCount++
-			}
 		}
 		switch {
 		case errors.Is(readErr, io.EOF):
 			if identicalCount == 1 {
 				return identicalName, nil
-			}
-			if foldedCount == 1 {
-				return foldedName, nil
 			}
 			if identicalCount == 0 {
 				return "", errors.New("directory entry identity is unavailable")

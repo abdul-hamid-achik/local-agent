@@ -72,6 +72,9 @@ func (m *Model) chatContentWidth() int {
 // narrowTerminalHint returns a recovery-oriented empty state instead of
 // letting fixed-width components overflow or disappear.
 func (m *Model) narrowTerminalHint() string {
+	if m.height < minTerminalHeight && m.width < minTerminalWidth {
+		return fmt.Sprintf("Resize the terminal to at least %d columns × %d rows.", minTerminalWidth, minTerminalHeight)
+	}
 	if m.height < minTerminalHeight {
 		return fmt.Sprintf("Resize the terminal to at least %d rows.", minTerminalHeight)
 	}
@@ -79,4 +82,12 @@ func (m *Model) narrowTerminalHint() string {
 		return fmt.Sprintf("Resize the terminal to at least %d columns.", minTerminalWidth)
 	}
 	return ""
+}
+
+// terminalInteractionPaused keeps the undersized fallback honest: while the
+// decision/composer surfaces cannot be rendered, they cannot consume input.
+// Resize and asynchronous receipts are still processed by the parent model;
+// Ctrl+C deliberately falls through to the ordinary graceful-shutdown path.
+func (m *Model) terminalInteractionPaused() bool {
+	return m.ready && m.narrowTerminalHint() != ""
 }

@@ -226,7 +226,6 @@ func run() int {
 	// (small, local) context window. ~96KB is generous for code/output.
 	ag.AddToolHook(agent.NewSizeCapHook(96 * 1024))
 	if wd, err := os.Getwd(); err == nil {
-		ag.SetWorkDir(wd)
 		if err := applyWorkspaceIgnore(ag, wd); err != nil {
 			fmt.Fprintf(os.Stderr, "workspace policy: %v\n", err)
 			return 1
@@ -787,8 +786,12 @@ func applyWorkspaceIgnore(ag *agent.Agent, workDir string) error {
 	if err != nil {
 		return err
 	}
-	if ignore != nil && ag != nil {
-		ag.SetIgnoreContent(ignore.Raw())
+	if ag != nil {
+		ignoreContent := ""
+		if ignore != nil {
+			ignoreContent = ignore.Raw()
+		}
+		ag.SetWorkspacePolicy(workDir, ignoreContent)
 	}
 	return nil
 }

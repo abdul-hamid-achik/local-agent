@@ -242,7 +242,7 @@ func (a *Agent) authorityAutoApproves(mode AuthorityMode, call llm.ToolCall, kin
 	}
 	switch kind {
 	case executionpkg.KindBuiltin:
-		if strings.TrimSpace(a.workDir) == "" {
+		if strings.TrimSpace(a.activeWorkDir()) == "" {
 			return false
 		}
 		switch call.Name {
@@ -262,11 +262,12 @@ func (a *Agent) authorityAutoApproves(mode AuthorityMode, call llm.ToolCall, kin
 }
 
 func (a *Agent) authorityPermissionDenied(toolName string) bool {
-	return a.permChecker != nil && a.permChecker.ToCheckResult(toolName) == permissionpkg.CheckDeny
+	checker := a.permissionChecker()
+	return checker != nil && checker.ToCheckResult(toolName) == permissionpkg.CheckDeny
 }
 
 func (a *Agent) cortexWorkspaceWithinAuthority(call llm.ToolCall) bool {
-	if strings.TrimSpace(a.workDir) == "" {
+	if strings.TrimSpace(a.activeWorkDir()) == "" {
 		return false
 	}
 	args := call.Arguments

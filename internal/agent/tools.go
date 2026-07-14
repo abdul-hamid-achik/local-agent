@@ -125,7 +125,7 @@ func (a *Agent) handleGrep(ctx context.Context, args map[string]any) (string, bo
 		return "error: pattern is required", true
 	}
 
-	requestedPath := a.getArgString(args, "path", a.workDir)
+	requestedPath := a.getArgString(args, "path", a.activeWorkDir())
 	readable, err := a.resolveReadablePath(requestedPath)
 	if err != nil {
 		return fmt.Sprintf("error: %v", err), true
@@ -329,7 +329,7 @@ func (a *Agent) handleGlob(ctx context.Context, args map[string]any) (string, bo
 		return "error: pattern is required", true
 	}
 
-	requestedPath := a.getArgString(args, "path", a.workDir)
+	requestedPath := a.getArgString(args, "path", a.activeWorkDir())
 	readable, err := a.resolveReadablePath(requestedPath)
 	if err != nil {
 		return fmt.Sprintf("error: %v", err), true
@@ -417,7 +417,7 @@ func (a *Agent) handleBash(parent context.Context, args map[string]any) (string,
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	configureCommandProcessGroup(cmd)
 	cmd.WaitDelay = 2 * time.Second
-	cmd.Dir = a.workDir
+	cmd.Dir = a.activeWorkDir()
 	// Do not leak the parent process environment (which may hold API keys,
 	// tokens, DB passwords) to LLM-generated shell commands. Pass only a
 	// curated allowlist of variables a shell legitimately needs.
@@ -464,7 +464,7 @@ func (a *Agent) handleLs(ctx context.Context, args map[string]any) (string, bool
 	if err := ctx.Err(); err != nil {
 		return fmt.Sprintf("error: ls cancelled: %v", err), true
 	}
-	requestedPath := a.getArgString(args, "path", a.workDir)
+	requestedPath := a.getArgString(args, "path", a.activeWorkDir())
 	readable, err := a.resolveReadablePath(requestedPath)
 	if err != nil {
 		return fmt.Sprintf("error: %v", err), true
@@ -524,7 +524,7 @@ func (a *Agent) handleFind(ctx context.Context, args map[string]any) (string, bo
 		return "error: name is required", true
 	}
 
-	requestedPath := a.getArgString(args, "path", a.workDir)
+	requestedPath := a.getArgString(args, "path", a.activeWorkDir())
 	readable, err := a.resolveReadablePath(requestedPath)
 	if err != nil {
 		return fmt.Sprintf("error: %v", err), true
@@ -632,7 +632,8 @@ func (a *Agent) getArgInt(args map[string]any, key string, defaultValue int) int
 }
 
 func (a *Agent) resolvePath(path string) (string, error) {
-	lexicalRoot := a.workDir
+	filesystem := a.filesystemContext()
+	lexicalRoot := filesystem.workDir
 	if lexicalRoot == "" {
 		var err error
 		lexicalRoot, err = os.Getwd()
@@ -666,7 +667,7 @@ func (a *Agent) resolvePath(path string) (string, error) {
 	if !lexicalInside && !requestedAbsolute {
 		return "", fmt.Errorf("path %q escapes workspace %q", path, root)
 	}
-	if lexicalInside && a.pathIgnored(lexicalRel) {
+	if lexicalInside && pathIgnoredWithContent(filesystem.ignoreContent, lexicalRel) {
 		return "", fmt.Errorf("path %q is excluded by .agentignore", path)
 	}
 	candidate, err = resolveExistingAncestor(candidate)
@@ -681,7 +682,7 @@ func (a *Agent) resolvePath(path string) (string, error) {
 	if !inside {
 		return "", fmt.Errorf("path %q escapes workspace %q", path, root)
 	}
-	if a.pathIgnored(rel) {
+	if pathIgnoredWithContent(filesystem.ignoreContent, rel) {
 		return "", fmt.Errorf("path %q is excluded by .agentignore", path)
 	}
 	return filepath.Join(root, rel), nil
@@ -692,7 +693,8 @@ func (a *Agent) resolvePath(path string) (string, error) {
 // makes approval match the visible object: removing or moving `link` acts on
 // the symlink itself, not on the file or directory it points to.
 func (a *Agent) resolveDestructivePath(path string) (string, error) {
-	lexicalRoot := a.workDir
+	filesystem := a.filesystemContext()
+	lexicalRoot := filesystem.workDir
 	if lexicalRoot == "" {
 		var err error
 		lexicalRoot, err = os.Getwd()
@@ -725,7 +727,7 @@ func (a *Agent) resolveDestructivePath(path string) (string, error) {
 	if !lexicalInside && !requestedAbsolute {
 		return "", fmt.Errorf("path %q escapes workspace %q", path, root)
 	}
-	if lexicalInside && a.pathIgnored(lexicalRel) {
+	if lexicalInside && pathIgnoredWithContent(filesystem.ignoreContent, lexicalRel) {
 		return "", fmt.Errorf("path %q is excluded by .agentignore", path)
 	}
 	if filepath.Clean(candidate) == filepath.Clean(lexicalRoot) {
@@ -761,7 +763,7 @@ func (a *Agent) resolveDestructivePath(path string) (string, error) {
 		return "", fmt.Errorf("inspect destructive path %q: %w", path, statErr)
 	}
 	rel := filepath.Join(parentRel, name)
-	if a.pathIgnored(rel) {
+	if pathIgnoredWithContent(filesystem.ignoreContent, rel) {
 		return "", fmt.Errorf("path %q is excluded by .agentignore", path)
 	}
 	return filepath.Clean(candidate), nil
@@ -806,7 +808,7 @@ func resolveExistingAncestor(path string) (string, error) {
 }
 
 func (a *Agent) pathIgnored(path string) bool {
-	return pathIgnoredWithContent(a.ignoreContent, path)
+	return pathIgnoredWithContent(a.filesystemContext().ignoreContent, path)
 }
 
 func ignorePatternMatches(pattern, cleanPath string) bool {

@@ -165,6 +165,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 		out.Error(err.Error())
 		return err
 	}
+	turnFilesystem := a.pinTurnFilesystem()
 	turnCtx, turnCancel := context.WithCancel(ctx)
 	limitCancel := func() {}
 	if deadline, ok := limits.effectiveDeadline(time.Now()); ok {
@@ -184,6 +185,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 			a.turnCancel = nil
 			a.turnDone = nil
 		}
+		a.unpinTurnFilesystem()
 		a.turnRunning.Store(false)
 		a.turnMu.Unlock()
 	}()
@@ -242,7 +244,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 	if !capabilityActivity.NonTrivial && hasMessages && lastMsg.Role == "user" {
 		capabilityActivity = CapabilityActivityFromPrompt(
 			capabilityScopeID(execRuntime.sessionID, turnID), lastMsg.Content,
-			capabilityPhaseForAuthority(authorityMode), strings.TrimSpace(a.workDir) != "",
+			capabilityPhaseForAuthority(authorityMode), strings.TrimSpace(turnFilesystem.workDir) != "",
 		)
 	}
 	capabilityHintText, capabilityHint := a.resolveTurnCapabilityWithPolicy(ctx, out, capabilityActivity, turnToolPolicy.AllowMCP)
@@ -272,7 +274,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 	}
 	loadedContext := composeCapabilityContext(capabilityHintText, capabilityBaseContext)
 	readGrants := a.ReadGrants()
-	system := buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadGrants(ctx, modePrefix, tools, a.skillContent, skillCatalog, loadedContext, a.memoryStore, iceContext, a.workDir, a.ignoreContent, a.llmClient.Model(), turnNumCtx, readGrants)
+	system := buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadGrants(ctx, modePrefix, tools, a.skillContent, skillCatalog, loadedContext, a.memoryStore, iceContext, turnFilesystem.workDir, turnFilesystem.ignoreContent, a.llmClient.Model(), turnNumCtx, readGrants)
 
 	const maxRetries = 2
 	var lastPromptTokens int
@@ -315,7 +317,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 			lg.Info("compaction", "phase", "before_request", "prompt_tokens", estimated, "num_ctx", turnNumCtx)
 		}
 		if a.compactForContext(ctx, out, turnNumCtx) {
-			system = buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadGrants(ctx, modePrefix, tools, a.skillContent, skillCatalog, loadedContext, a.memoryStore, iceContext, a.workDir, a.ignoreContent, a.llmClient.Model(), turnNumCtx, readGrants)
+			system = buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadGrants(ctx, modePrefix, tools, a.skillContent, skillCatalog, loadedContext, a.memoryStore, iceContext, turnFilesystem.workDir, turnFilesystem.ignoreContent, a.llmClient.Model(), turnNumCtx, readGrants)
 		}
 	}
 
@@ -954,7 +956,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 				return err
 			}
 			loadedContext = composeCapabilityContext(capabilityHintText, capabilityBaseContext)
-			system = buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadGrants(ctx, modePrefix, tools, a.skillContent, skillCatalog, loadedContext, a.memoryStore, iceContext, a.workDir, a.ignoreContent, a.llmClient.Model(), turnNumCtx, readGrants)
+			system = buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadGrants(ctx, modePrefix, tools, a.skillContent, skillCatalog, loadedContext, a.memoryStore, iceContext, turnFilesystem.workDir, turnFilesystem.ignoreContent, a.llmClient.Model(), turnNumCtx, readGrants)
 		}
 
 		// Check if we should compact the conversation.
@@ -979,7 +981,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 			}
 			if a.compactForContext(ctx, out, turnNumCtx) {
 				// Rebuild system prompt after compaction (memory may have changed).
-				system = buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadGrants(ctx, modePrefix, tools, a.skillContent, skillCatalog, loadedContext, a.memoryStore, iceContext, a.workDir, a.ignoreContent, a.llmClient.Model(), turnNumCtx, readGrants)
+				system = buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadGrants(ctx, modePrefix, tools, a.skillContent, skillCatalog, loadedContext, a.memoryStore, iceContext, turnFilesystem.workDir, turnFilesystem.ignoreContent, a.llmClient.Model(), turnNumCtx, readGrants)
 			}
 		}
 

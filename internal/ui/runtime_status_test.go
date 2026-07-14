@@ -99,6 +99,24 @@ func TestRuntimeStatusSeparatesLocalToolsFromMCPServers(t *testing.T) {
 	}
 }
 
+func TestRuntimeStatusKeepsOllamaRecoveryConditionalAndActionable(t *testing.T) {
+	m := newTestModel(t)
+	m.ollamaOffline = true
+	content := strings.Join(strings.Fields(ansi.Strip(m.buildRuntimeStatusContent(58))), " ")
+	for _, want := range []string{
+		"Ollama setup needed",
+		"ctrl+o select or install a model",
+		"run ollama serve if the host is unavailable",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("Runtime omitted Ollama recovery %q:\n%s", want, content)
+		}
+	}
+	if strings.Contains(content, "host offline") {
+		t.Fatalf("Runtime promoted an unverified host diagnosis:\n%s", content)
+	}
+}
+
 func TestRuntimeStatusPluralizesVisibleCounters(t *testing.T) {
 	m := newTestModel(t)
 	m.sessionTurnCount = 1

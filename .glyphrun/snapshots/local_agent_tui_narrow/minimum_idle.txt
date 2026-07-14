@@ -1,10 +1,10 @@
+         LOCAL AGENT
+ Local-first · approval pro…
+    qwen3.5:2b · offline
+   enter · ctrl+p settings
+       ? help · / @ #
 
-  ollama: no model
-  selected
-  try: ollama serve ·
-  ollama pull
-  qwen3.5:2b
-
+  Ollama model · ctrl+o
 
 ─────────────────────────────
  ctrl+p settings · qwen3.5:2b

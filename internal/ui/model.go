@@ -726,6 +726,13 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			}
 			return m, nil
 		}
+		// View intentionally hides every interactive surface below the supported
+		// terminal size. Ignore all ordinary keys there so an unseen approval,
+		// read-scope decision, paste prompt, overlay, or composer cannot mutate.
+		// Ctrl+C falls through and retains the exact owner-specific shutdown path.
+		if m.terminalInteractionPaused() && !key.Matches(msg, m.keys.Quit) {
+			return m, nil
+		}
 
 		// Pending tool approval owns the keyboard before every other overlay.
 		// Decisions remain typed so a host failure cannot be reported as a human
@@ -1754,6 +1761,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			Kind:    "system",
 			Content: msg.Msg,
 		})
+		// The first startup/recovery notice can add a fixed Settings row at
+		// compact heights. Recompute the transcript allocation before painting.
+		m.recalcViewportHeight()
 		m.viewport.SetContent(m.renderEntries())
 		m.gotoBottomIfFollowing()
 
@@ -1776,6 +1786,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			Kind:    "error",
 			Content: msg.Msg,
 		})
+		m.recalcViewportHeight()
 		m.viewport.SetContent(m.renderEntries())
 		m.gotoBottomIfFollowing()
 
@@ -2316,6 +2327,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		m.appendShutdownQuit(&cmds)
 
 	case tea.MouseWheelMsg:
+		if m.terminalInteractionPaused() {
+			return m, nil
+		}
 		// Inline permission requests own wheel input just like document overlays,
 		// but remain in normal layout flow so the transcript stays visible. Scroll
 		// their bounded preview without moving or changing follow intent below it.
@@ -2370,6 +2384,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		return m, nil
 
 	case tea.MouseClickMsg:
+		if m.terminalInteractionPaused() {
+			return m, nil
+		}
 		// Modal and inline decision surfaces are intentionally keyboard-first.
 		// Until a child explicitly owns pointer interaction, clicks are swallowed
 		// rather than reaching ToolCards behind an authority-changing prompt.
@@ -2381,6 +2398,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		}
 
 	case tea.PasteMsg:
+		if m.terminalInteractionPaused() {
+			return m, nil
+		}
 		if m.composerEditable() {
 			draft := m.input.Value()
 			cursor := pasteCursorAt(draft, m.input.Line(), m.input.Column())

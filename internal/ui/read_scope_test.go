@@ -436,6 +436,72 @@ func TestReadScopePromptOwnsPointerInput(t *testing.T) {
 	}
 }
 
+func TestUndersizedTerminalPausesReadScopeDecisionAndDraftUntilResize(t *testing.T) {
+	base := t.TempDir()
+	workspace := filepath.Join(base, "workspace")
+	external := filepath.Join(base, "evidence.txt")
+	if err := os.Mkdir(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(external, []byte("review me"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m := newTestModel(t)
+	t.Cleanup(m.agent.Close)
+	m.agent.SetWorkDir(workspace)
+	inspection, err := m.agent.InspectReadPath(external)
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft := "Analyze the external evidence."
+	m.input.SetValue(draft)
+	m.readScopePrompt = &ReadScopePrompt{
+		Requested: external,
+		Canonical: inspection.Path,
+		Workspace: workspace,
+		Draft:     draft,
+		Kind:      agent.ReadGrantExactFile,
+		Grants:    []agent.ReadGrant{inspection.Grant()},
+		Operation: "add-intents",
+	}
+	m.recalcViewportHeight()
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: minTerminalWidth - 1, Height: minTerminalHeight - 1})
+	m = updated.(*Model)
+	if visible := ansi.Strip(m.View().Content); !strings.Contains(visible, "Input paused") || strings.Contains(visible, "evidence.txt") {
+		t.Fatalf("undersized frame exposed the hidden read decision instead of pause state:\n%s", visible)
+	}
+
+	for _, input := range []tea.Msg{charKey('y'), charKey('n'), enterKey(), escKey(), tea.PasteMsg{Content: "hidden paste"}} {
+		updated, cmd := m.Update(input)
+		m = updated.(*Model)
+		if cmd != nil || m.readScopePrompt == nil || m.readScopeOpRunning {
+			t.Fatalf("hidden input resolved read scope: input=%T cmd=%v prompt=%v running=%v", input, cmd != nil, m.readScopePrompt != nil, m.readScopeOpRunning)
+		}
+		if m.input.Value() != draft {
+			t.Fatalf("hidden input changed draft to %q", m.input.Value())
+		}
+		if grants := m.agent.ReadGrants(); len(grants) != 0 {
+			t.Fatalf("hidden input granted read authority: %#v", grants)
+		}
+	}
+
+	updated, _ = m.Update(tea.WindowSizeMsg{Width: minTerminalWidth, Height: minTerminalHeight})
+	m = updated.(*Model)
+	visible := ansi.Strip(m.View().Content)
+	for _, want := range []string{"exact file", "evidence.txt", "y allow"} {
+		if !strings.Contains(strings.ToLower(visible), strings.ToLower(want)) {
+			t.Fatalf("read-scope surface did not restore %q after resize:\n%s", want, visible)
+		}
+	}
+	updated, _ = m.Update(charKey('n'))
+	m = updated.(*Model)
+	if m.readScopePrompt != nil || m.input.Value() != draft {
+		t.Fatalf("visible denial did not restore exact draft: prompt=%#v draft=%q", m.readScopePrompt, m.input.Value())
+	}
+}
+
 func TestReadScopePromptFourGrantsFitsAccessibleMinimum(t *testing.T) {
 	t.Setenv("LOCAL_AGENT_REDUCED_MOTION", "1")
 	previous := noColor

@@ -50,8 +50,8 @@ The verification workflow has four independent jobs:
 - Linux Go verification: module diff, golangci-lint, vet, race tests, and
   govulncheck;
 - VitePress production build plus a test of links in the rendered site;
-- all committed Glyphrun contract hashes plus the fast release-critical CLI and
-  external-read contracts from `task glyphrun-cli`;
+- all committed Glyphrun contract hashes plus the complete deterministic
+  terminal suite from `task glyphrun`;
 - a macOS build, `--version` smoke test, and Darwin-sensitive package tests.
 
 ## Terminal behavior
@@ -65,10 +65,10 @@ task glyphrun
 ```
 
 `task glyphrun-contracts` verifies that every committed spec still matches its
-reviewed intent and outcomes. `task glyphrun-cli` runs the public flag,
-skip-approval, and exact external-file read contracts and is the execution
-subset enforced in CI. `task glyphrun` adds the complete 17-scenario
-deterministic terminal suite; the live Ollama proof remains opt-in.
+reviewed intent and outcomes. `task glyphrun-cli` is the fast local smoke suite
+for public flags, skip-approval behavior, and exact external-file reads.
+`task glyphrun` runs every deterministic spec and is the execution gate enforced
+in CI; `live_ollama_tool.yml` remains explicitly opt-in.
 
 Committed scenarios cover normal and minimum terminal sizes, authority modes,
 public CLI parsing, explicit external-file review, inline goal review and

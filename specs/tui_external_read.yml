@@ -1,12 +1,13 @@
 version: 1
-contractHash: sha256:80b1db7575de016c29e224466d9710391bc9cd2f4362a68e3ee0cb22f6191752
+contractHash: sha256:c98cb652dd8fae3a09c35734ab89906059e4ce5391ee2c9c3fe9f1562298806a
 name: local_agent_tui_external_read
 
 intent: |
   a prompt can name one existing file outside the startup workspace, pause
-  before model dispatch for an exact read-only review, and resume only after
-  the user grants temporary access without exposing sibling files or write
-  authority.
+  before model dispatch for an exact read-only review, ignore hidden decisions
+  while an undersized terminal masks that authority prompt, restore the exact
+  prompt after resize, and resume only after the user grants temporary access
+  without exposing sibling files or write authority.
 
 target:
   cmd:
@@ -48,6 +49,25 @@ steps:
   - wait:
       screen:
         contains: "exact files never include siblings"
+      timeoutMs: 2000
+  - resize:
+      cols: 29
+      rows: 11
+  - wait:
+      screen:
+        contains: "Input paused"
+      timeoutMs: 2000
+  - press: "y"
+  - resize:
+      cols: 90
+      rows: 28
+  - wait:
+      screen:
+        contains: "Allow exact external read-only file?"
+      timeoutMs: 2000
+  - wait:
+      screen:
+        contains: "bug.mp4"
       timeoutMs: 2000
   - press: "y"
   - wait:

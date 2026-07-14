@@ -630,17 +630,33 @@ type toolAuthorization struct {
 	refusalCode string
 }
 
+func staleApprovalAuthorization(err error) toolAuthorization {
+	reason := "approval state changed before dispatch"
+	if err != nil {
+		reason += ": " + err.Error()
+	}
+	return toolAuthorization{
+		hostRefused: true,
+		approval:    executionpkg.ApprovalHostRefused,
+		decision:    permissionPkg.DecisionHostRefuse,
+		refusalCode: "approval_state_changed",
+		reason:      reason,
+	}
+}
+
 func (a *Agent) decideToolAuthorization(ctx context.Context, tc llm.ToolCall, beforeAsk func() error) (toolAuthorization, error) {
 	if err := ctx.Err(); err != nil {
 		return toolAuthorization{cancelled: true, reason: err.Error()}, nil
 	}
-	if a.permChecker == nil {
+	state := a.approvalStateSnapshot()
+	checker := state.checker
+	if checker == nil {
 		return toolAuthorization{allowed: true, approval: executionpkg.ApprovalEmbedding}, nil
 	}
 
-	switch a.permChecker.ToCheckResult(tc.Name) {
+	switch checker.ToCheckResult(tc.Name) {
 	case permissionPkg.CheckAllow:
-		if !a.permChecker.SkipsApprovals() && a.approvalCallback == nil {
+		if !checker.SkipsApprovals() && state.callback == nil {
 			return toolAuthorization{
 				hostRefused: true,
 				approval:    executionpkg.ApprovalHostRefused,
@@ -650,7 +666,7 @@ func (a *Agent) decideToolAuthorization(ctx context.Context, tc llm.ToolCall, be
 			}, nil
 		}
 		approval := executionpkg.ApprovalPolicy
-		if a.permChecker.SkipsApprovals() {
+		if checker.SkipsApprovals() {
 			approval = executionpkg.ApprovalYolo
 		}
 		return toolAuthorization{allowed: true, approval: approval}, nil
@@ -673,6 +689,9 @@ func (a *Agent) decideToolAuthorization(ctx context.Context, tc llm.ToolCall, be
 		}
 		request := a.newApprovalRequest(ctx, tc, argumentsHash)
 		if a.hasSessionApproval(request) {
+			if err := a.revalidateInteractiveApproval(state, tc.Name); err != nil {
+				return staleApprovalAuthorization(err), nil
+			}
 			return toolAuthorization{
 				allowed:  true,
 				approval: executionpkg.ApprovalSession,
@@ -684,14 +703,32 @@ func (a *Agent) decideToolAuthorization(ctx context.Context, tc llm.ToolCall, be
 				return toolAuthorization{}, err
 			}
 		}
-		response := permissionPkg.ResolveApprovalContext(ctx, request, a.approvalCallback)
+		response := permissionPkg.ResolveApprovalContext(ctx, request, state.callback)
 		if err := ctx.Err(); err != nil {
 			return toolAuthorization{cancelled: true, approval: executionpkg.ApprovalCancelled, decision: permissionPkg.DecisionCancelled, reason: err.Error()}, nil
 		}
 		switch response.Decision {
 		case permissionPkg.DecisionAllowOnce:
+			if err := a.revalidateInteractiveApproval(state, tc.Name); err != nil {
+				return staleApprovalAuthorization(err), nil
+			}
+			if err := a.revalidateApprovalPreview(ctx, tc, request); err != nil {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return toolAuthorization{cancelled: true, approval: executionpkg.ApprovalCancelled, decision: permissionPkg.DecisionCancelled, reason: ctxErr.Error()}, nil
+				}
+				return staleApprovalAuthorization(err), nil
+			}
 			return toolAuthorization{allowed: true, approval: executionpkg.ApprovalOnce, decision: response.Decision}, nil
 		case permissionPkg.DecisionAllowSession:
+			if err := a.revalidateInteractiveApproval(state, tc.Name); err != nil {
+				return staleApprovalAuthorization(err), nil
+			}
+			if err := a.revalidateApprovalPreview(ctx, tc, request); err != nil {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return toolAuthorization{cancelled: true, approval: executionpkg.ApprovalCancelled, decision: permissionPkg.DecisionCancelled, reason: ctxErr.Error()}, nil
+				}
+				return staleApprovalAuthorization(err), nil
+			}
 			a.rememberSessionApproval(request)
 			return toolAuthorization{allowed: true, approval: executionpkg.ApprovalSession, decision: response.Decision}, nil
 		case permissionPkg.DecisionUserDeny:

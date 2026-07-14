@@ -2,6 +2,8 @@ package ui
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -18,6 +20,7 @@ func (m *Model) View() tea.View {
 		// full shell instead of flashing an unrelated debug placeholder.
 		v := tea.NewView("LOCAL AGENT\nStarting…")
 		v.AltScreen = true
+		v.WindowTitle = m.windowTitleBase()
 		return v
 	}
 	if hint := m.narrowTerminalHint(); hint != "" {
@@ -168,17 +171,20 @@ func (m *Model) View() tea.View {
 	v.MouseMode = tea.MouseModeCellMotion
 	v.Cursor = viewCursor
 
-	// Terminal title progress.
+	// Terminal title progress. The workspace basename differentiates several
+	// Local Agent tabs without exposing a full private path through terminal
+	// title integrations or window-manager history.
+	windowTitle := m.windowTitleBase()
 	switch m.state {
 	case StateWaiting:
-		v.WindowTitle = "LOCAL AGENT \u00b7 thinking..."
+		v.WindowTitle = windowTitle + " \u00b7 thinking..."
 	case StateStreaming:
-		v.WindowTitle = "LOCAL AGENT \u00b7 streaming..."
+		v.WindowTitle = windowTitle + " \u00b7 streaming..."
 	default:
 		if m.doneFlash {
-			v.WindowTitle = "LOCAL AGENT \u00b7 done"
+			v.WindowTitle = windowTitle + " \u00b7 done"
 		} else {
-			v.WindowTitle = "LOCAL AGENT"
+			v.WindowTitle = windowTitle
 		}
 	}
 
@@ -187,21 +193,73 @@ func (m *Model) View() tea.View {
 
 // renderNarrowTerminalView keeps tiny terminals recoverable.
 func (m *Model) renderNarrowTerminalView(hint string) tea.View {
-	contentW := max(1, m.width-4)
-	title := truncateDisplay("TERMINAL TOO NARROW", contentW)
-	body := m.styles.OverlayTitle.Render(title) + "\n\n" +
-		m.styles.StatusText.Render(wrapText(hint, contentW))
-	content := lipgloss.PlaceHorizontal(max(1, m.width), lipgloss.Center, body)
-	lineCount := strings.Count(content, "\n") + 1
-	top := (m.height - lineCount) / 2
+	terminalWidth := max(1, m.width)
+	terminalHeight := max(1, m.height)
+	contentW := max(1, terminalWidth-2)
+	titleText := "TERMINAL TOO SMALL"
+	if m.width < minTerminalWidth && m.height >= minTerminalHeight {
+		titleText = "TERMINAL TOO NARROW"
+	} else if m.height < minTerminalHeight && m.width >= minTerminalWidth {
+		titleText = "TERMINAL TOO SHORT"
+	}
+
+	rows := []string{m.styles.OverlayTitle.Render(truncateDisplay(titleText, contentW))}
+	if terminalHeight > 2 {
+		hintRows := strings.Split(wrapText(hint, contentW), "\n")
+		maximumHintRows := max(0, terminalHeight-2)
+		if len(hintRows) > maximumHintRows {
+			hintRows = hintRows[:maximumHintRows]
+		}
+		for _, row := range hintRows {
+			rows = append(rows, m.styles.StatusText.Render(truncateDisplay(row, contentW)))
+		}
+	}
+	if terminalHeight > 1 {
+		controlHint := "Input paused · ctrl+c quit"
+		if lipgloss.Width(controlHint) > contentW {
+			controlHint = "Paused · ctrl+c"
+		}
+		if lipgloss.Width(controlHint) > contentW {
+			controlHint = "ctrl+c"
+		}
+		rows = append(rows, m.styles.FocusIndicator.Render(truncateDisplay(controlHint, contentW)))
+	}
+	if len(rows) > terminalHeight {
+		rows = rows[:terminalHeight]
+	}
+	for index, row := range rows {
+		rows[index] = lipgloss.PlaceHorizontal(terminalWidth, lipgloss.Center, row)
+	}
+	content := strings.Join(rows, "\n")
+	top := (terminalHeight - len(rows)) / 2
 	if top > 0 {
 		content = strings.Repeat("\n", top) + content
 	}
 
 	v := tea.NewView(content)
 	v.AltScreen = true
-	v.WindowTitle = "LOCAL AGENT · resize terminal"
+	v.WindowTitle = m.windowTitleBase() + " · resize terminal"
 	return v
+}
+
+func (m *Model) windowTitleBase() string {
+	const product = "LOCAL AGENT"
+	workspace := ""
+	if m != nil && m.agent != nil {
+		workspace = strings.TrimSpace(m.agent.WorkDir())
+	}
+	if workspace == "" {
+		workspace, _ = os.Getwd()
+	}
+	workspace = filepath.Clean(workspace)
+	if workspace == "." || filepath.Dir(workspace) == workspace {
+		return product
+	}
+	name := sanitizeTerminalSingleLine(filepath.Base(workspace))
+	if name == "" || name == "." || name == string(filepath.Separator) {
+		return product
+	}
+	return truncateDisplay(product+" · "+name, 72)
 }
 
 func (m *Model) renderCompletionModal() string {
@@ -797,6 +855,10 @@ func (m *Model) renderEntries() string {
 			top := max(0, (m.viewport.Height()-lipgloss.Height(welcome))/2)
 			return strings.Repeat("\n", top) + welcome
 		}
+		// PlaceHorizontal owns a rectangular block and does not retain the
+		// welcome builder's trailing newline. Start notices on a real row so a
+		// long left padding cannot push their first line beyond the viewport.
+		b.WriteByte('\n')
 		// Append any system entries (e.g. failed server notices) below welcome
 		for _, e := range m.entries {
 			switch e.Kind {
@@ -804,7 +866,22 @@ func (m *Model) renderEntries() string {
 				b.WriteString(m.styles.SystemText.Render(wrapText(sanitizeTerminalMultiline(e.Content), contentW)))
 				b.WriteString("\n\n")
 			case "error":
-				m.renderEntryError(&b, e.Content, contentW)
+				if notice, ok := compactOllamaStartupNotice(e.Content, contentW, m.ollamaOffline); ok {
+					// At the supported 30-column tier the generic error frame can
+					// consume the whole viewport and hide the empty-state recovery
+					// paths. Keep the raw ChatEntry unchanged and project only this
+					// host-authored startup diagnostic into a bounded notice.
+					b.WriteString(m.styles.ErrorText.Render(notice))
+					b.WriteByte('\n')
+				} else if isOllamaStartupRecovery(e.Content, m.ollamaOffline) {
+					// Missing startup inventory is an actionable empty state, not a
+					// failed user operation. Preserve the detailed host recovery copy
+					// at ordinary widths without adding the generic red error label.
+					b.WriteString(m.styles.SystemText.Render(wrapText(sanitizeTerminalMultiline(e.Content), contentW)))
+					b.WriteString("\n\n")
+				} else {
+					m.renderEntryError(&b, e.Content, contentW)
+				}
 			}
 		}
 		return b.String()
@@ -989,6 +1066,29 @@ func (m *Model) renderEntryError(b *strings.Builder, content string, contentW in
 	b.WriteString("\n")
 	b.WriteString(m.styles.ToolErrorText.Render(indentBlock(wrapText(content, max(1, contentW-2)), "  ")))
 	b.WriteString("\n\n")
+}
+
+// compactOllamaStartupNotice is deliberately narrow: only the fixed startup
+// recovery message authored by the host is eligible, and only when the chat
+// pane would otherwise hide the welcome surface. Arbitrary provider/tool
+// errors retain the complete generic error presentation.
+func compactOllamaStartupNotice(content string, width int, unavailable bool) (string, bool) {
+	if width >= 28 || !isOllamaStartupRecovery(content, unavailable) {
+		return "", false
+	}
+	normalized := strings.ToLower(sanitizeTerminalSingleLine(content))
+	if strings.Contains(normalized, "no model selected") {
+		return truncateDisplay("Ollama model · ctrl+o", max(1, width)), true
+	}
+	return truncateDisplay("Ollama setup · Runtime", max(1, width)), true
+}
+
+func isOllamaStartupRecovery(content string, unavailable bool) bool {
+	if !unavailable {
+		return false
+	}
+	normalized := strings.ToLower(sanitizeTerminalSingleLine(content))
+	return strings.HasPrefix(normalized, "ollama:") && strings.Contains(normalized, "try: ollama serve")
 }
 
 // renderWelcome renders a compact empty-state orientation surface. Persistent

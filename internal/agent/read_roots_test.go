@@ -215,6 +215,152 @@ func TestPhysicalEntryNameRejectsChangedExactEntry(t *testing.T) {
 	}
 }
 
+func TestPhysicalEntryNameScansLargeDirectory(t *testing.T) {
+	directory := t.TempDir()
+	for index := 0; index < 1_024; index++ {
+		name := fmt.Sprintf("unrelated-%04d.txt", index)
+		if err := os.WriteFile(filepath.Join(directory, name), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	targetName := "zzzz-physical-target.txt"
+	targetPath := filepath.Join(directory, targetName)
+	if err := os.WriteFile(targetPath, []byte("target"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	expected, err := os.Stat(targetPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := physicalEntryName(directory, targetName, expected); err != nil || got != targetName {
+		t.Fatalf("physicalEntryName large directory = %q, %v", got, err)
+	}
+}
+
+func TestUnicodeNormalizationAliasUsesPhysicalEntryPolicy(t *testing.T) {
+	t.Run("workspace ignore", func(t *testing.T) {
+		workspace := t.TempDir()
+		actualPath, aliasPath, actualName, expected := normalizationAliasFixture(t, workspace)
+		if got, err := physicalEntryName(workspace, filepath.Base(aliasPath), expected); err != nil || got != actualName {
+			t.Fatalf("physical Unicode entry = %q, %v; want %q", got, err, actualName)
+		}
+
+		ag := New(nil, nil, 0)
+		ag.SetWorkDir(workspace)
+		ag.SetIgnoreContent(actualName + "\n")
+		t.Cleanup(ag.Close)
+		if result, isErr := ag.handleRead(map[string]any{"path": aliasPath}); !isErr || !strings.Contains(result, ".agentignore") {
+			t.Fatalf("normalization alias read = %q, error=%v", result, isErr)
+		}
+		if result, isErr := ag.handleRemove(map[string]any{"path": aliasPath}); !isErr || !strings.Contains(result, ".agentignore") {
+			t.Fatalf("normalization alias remove = %q, error=%v", result, isErr)
+		}
+		if data, err := os.ReadFile(actualPath); err != nil || string(data) != "normalized evidence" {
+			t.Fatalf("ignored normalized entry changed: %q, %v", data, err)
+		}
+	})
+
+	t.Run("exact read grant", func(t *testing.T) {
+		workspace := t.TempDir()
+		external := t.TempDir()
+		actualPath, aliasPath, _, _ := normalizationAliasFixture(t, external)
+
+		ag := New(nil, nil, 0)
+		ag.SetWorkDir(workspace)
+		t.Cleanup(ag.Close)
+		granted, err := ag.AddReadFile(actualPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		inspection, err := ag.InspectReadPath(aliasPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer inspection.Release()
+		if !inspection.AlreadyReadable || inspection.Kind != ReadGrantExactFile {
+			t.Fatalf("normalization alias inspection = %#v", inspection)
+		}
+		if result, isErr := ag.handleRead(map[string]any{"path": aliasPath}); isErr || result != "normalized evidence" {
+			t.Fatalf("normalization alias exact read = %q, error=%v", result, isErr)
+		}
+		if grants := ag.ReadGrants(); len(grants) != 1 || grants[0].Path != granted {
+			t.Fatalf("normalization alias duplicated authority: %#v", grants)
+		}
+	})
+}
+
+func normalizationAliasFixture(t *testing.T, directory string) (actualPath, aliasPath, actualName string, info os.FileInfo) {
+	t.Helper()
+	const (
+		composed   = "Caf\u00e9-evidence.txt"
+		decomposed = "Cafe\u0301-evidence.txt"
+	)
+	createdPath := filepath.Join(directory, composed)
+	if err := os.WriteFile(createdPath, []byte("normalized evidence"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	createdInfo, err := os.Stat(createdPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decomposedPath := filepath.Join(directory, decomposed)
+	aliasInfo, err := os.Stat(decomposedPath)
+	if err != nil || !os.SameFile(createdInfo, aliasInfo) {
+		t.Skip("filesystem does not resolve NFC and NFD as one directory entry")
+	}
+
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		entryInfo, infoErr := entry.Info()
+		if infoErr == nil && os.SameFile(createdInfo, entryInfo) {
+			actualName = entry.Name()
+			break
+		}
+	}
+	if actualName == "" {
+		t.Fatal("physical Unicode entry was not returned by ReadDir")
+	}
+	requestedName := decomposed
+	if requestedName == actualName {
+		requestedName = composed
+	}
+	aliasPath = filepath.Join(directory, requestedName)
+	aliasInfo, err = os.Stat(aliasPath)
+	if err != nil || !os.SameFile(createdInfo, aliasInfo) {
+		t.Fatalf("normalization alias %q did not resolve to %q: %v", requestedName, actualName, err)
+	}
+	return filepath.Join(directory, actualName), aliasPath, actualName, aliasInfo
+}
+
+func BenchmarkPhysicalEntryNameLargeDirectory(b *testing.B) {
+	directory := b.TempDir()
+	for index := 0; index < 4_096; index++ {
+		name := fmt.Sprintf("unrelated-%04d.txt", index)
+		if err := os.WriteFile(filepath.Join(directory, name), nil, 0o600); err != nil {
+			b.Fatal(err)
+		}
+	}
+	targetName := "zzzz-physical-target.txt"
+	targetPath := filepath.Join(directory, targetName)
+	if err := os.WriteFile(targetPath, nil, 0o600); err != nil {
+		b.Fatal(err)
+	}
+	expected, err := os.Stat(targetPath)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+	for b.Loop() {
+		if _, err := physicalEntryName(directory, targetName, expected); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func TestExactReadFileGrantDoesNotAuthorizeParentOrSiblingWrites(t *testing.T) {
 	base := t.TempDir()
 	workspace := filepath.Join(base, "workspace")

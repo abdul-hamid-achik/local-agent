@@ -67,8 +67,43 @@ func TestTrueMinimumWidthShowsResizeState(t *testing.T) {
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: minTerminalWidth - 1, Height: 20})
 	m = updated.(*Model)
 	view := m.View().Content
-	if !strings.Contains(view, "TERMINAL TOO NARROW") || !strings.Contains(view, "30 columns") {
+	if !strings.Contains(view, "TERMINAL TOO NARROW") || !strings.Contains(view, "30 columns") || !strings.Contains(view, "Input paused") {
 		t.Fatalf("minimum-width guidance missing:\n%s", view)
 	}
 	assertRenderedLinesFit(t, view, minTerminalWidth-1)
+}
+
+func TestUndersizedTerminalViewFitsEveryDeficientDimension(t *testing.T) {
+	tests := []struct {
+		name         string
+		width        int
+		height       int
+		wantTitle    string
+		wantGuidance string
+	}{
+		{name: "narrow", width: 29, height: 20, wantTitle: "TERMINAL TOO NARROW", wantGuidance: "30 columns"},
+		{name: "short", width: 80, height: 11, wantTitle: "TERMINAL TOO SHORT", wantGuidance: "12 rows"},
+		{name: "both", width: 20, height: 5, wantTitle: "TERMINAL TOO SMALL", wantGuidance: "30 columns"},
+		{name: "single cell", width: 1, height: 1, wantTitle: "…"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			m := newTestModel(t)
+			updated, _ := m.Update(tea.WindowSizeMsg{Width: test.width, Height: test.height})
+			m = updated.(*Model)
+			view := m.View().Content
+			if !strings.Contains(view, test.wantTitle) {
+				t.Fatalf("undersized title missing %q:\n%s", test.wantTitle, view)
+			}
+			if test.wantGuidance != "" && !strings.Contains(view, test.wantGuidance) {
+				t.Fatalf("undersized guidance missing %q:\n%s", test.wantGuidance, view)
+			}
+			if test.height > 1 && !strings.Contains(view, "ctrl+c") {
+				t.Fatalf("undersized view hid graceful quit:\n%s", view)
+			}
+			assertRenderedLinesFit(t, view, test.width)
+			assertRenderedHeightFits(t, view, test.height)
+		})
+	}
 }
