@@ -73,6 +73,68 @@ func TestBuiltin_Recover(t *testing.T) {
 	}
 }
 
+func TestBuiltin_ImageReturnsTypedAsyncActions(t *testing.T) {
+	r := newTestRegistry()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name       string
+		command    string
+		args       []string
+		wantAction Action
+		wantData   string
+		wantError  string
+	}{
+		{name: "attach relative path", command: "image", args: []string{"screenshots", "design review.png"}, wantAction: ActionAttachImage, wantData: "screenshots design review.png"},
+		{name: "attach alias", command: "attach", args: []string{"capture.png"}, wantAction: ActionAttachImage, wantData: "capture.png"},
+		{name: "expand home", command: "image", args: []string{"~/Desktop/capture.png"}, wantAction: ActionAttachImage, wantData: filepath.Join(home, "Desktop/capture.png")},
+		{name: "list", command: "image", args: []string{"list"}, wantAction: ActionListImages},
+		{name: "list alias", command: "image", args: []string{"ls"}, wantAction: ActionListImages},
+		{name: "clear", command: "image", args: []string{"clear"}, wantAction: ActionClearImages},
+		{name: "clear alias", command: "image", args: []string{"remove-all"}, wantAction: ActionClearImages},
+		{name: "forget history", command: "image", args: []string{"forget-history"}, wantAction: ActionForgetImageHistory},
+		{name: "forget history alias", command: "image", args: []string{"drop-history"}, wantAction: ActionForgetImageHistory},
+		{name: "missing path", command: "image", wantError: "usage:"},
+		{name: "list rejects suffix", command: "image", args: []string{"list", "unexpected"}, wantError: "usage: /image list"},
+		{name: "clear rejects suffix", command: "image", args: []string{"clear", "unexpected"}, wantError: "usage: /image clear"},
+		{name: "forget history rejects suffix", command: "image", args: []string{"forget-history", "unexpected"}, wantError: "usage: /image forget-history"},
+		{name: "reject terminal controls", command: "image", args: []string{"capture\x1b[31m.png"}, wantError: "control characters"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := r.Execute(nil, test.command, test.args)
+			if test.wantError != "" {
+				if !strings.Contains(result.Error, test.wantError) || result.Action != ActionNone || result.Data != "" || result.Text != "" {
+					t.Fatalf("result = %#v, want fail-closed error containing %q", result, test.wantError)
+				}
+				return
+			}
+			if result.Error != "" || result.Action != test.wantAction || result.Data != test.wantData || result.Text != "" {
+				t.Fatalf("result = %#v, want action=%d data=%q", result, test.wantAction, test.wantData)
+			}
+		})
+	}
+}
+
+func TestBuiltinImageIsDiscoverableWithoutExecutingIO(t *testing.T) {
+	r := newTestRegistry()
+	matches := r.Match("ima")
+	if len(matches) != 1 {
+		t.Fatalf("Match(image) = %#v", matches)
+	}
+	image := matches[0]
+	if image.Name != "image" || image.Usage != "/image <path>|list|clear|forget-history" || !strings.Contains(image.Description, "Attach") {
+		t.Fatalf("image metadata = %#v", image)
+	}
+	if result := r.Execute(nil, "attach", []string{"not-checked-here.png"}); result.Action != ActionAttachImage || result.Data != "not-checked-here.png" || result.Error != "" {
+		t.Fatalf("alias result = %#v", result)
+	}
+}
+
 func TestBuiltin_Goal(t *testing.T) {
 	r := newTestRegistry()
 
@@ -729,7 +791,7 @@ func TestBuiltinRegistrySurfaceIsUniqueAndExecutable(t *testing.T) {
 	r := newTestRegistry()
 	wantNames := []string{
 		"help", "clear", "plan", "goal", "model", "recover", "agent", "load",
-		"scope", "unload", "skill", "servers", "ice", "sessions", "artifacts",
+		"image", "scope", "unload", "skill", "servers", "ice", "sessions", "artifacts",
 		"changes", "commit", "stats", "export", "import", "checkpoint",
 		"checkpoints", "restore", "exit",
 	}

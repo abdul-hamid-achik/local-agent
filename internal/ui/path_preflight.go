@@ -63,7 +63,9 @@ func (m *Model) handlePromptPathPreflightResult(msg PromptPathPreflightResultMsg
 	if msg.MoreCandidates {
 		releaseReadGrants(msg.Grants)
 		m.input.SetValue(msg.Draft)
+		m.input.CursorEnd()
 		m.input.Focus()
+		_ = m.reflowInputViewport()
 		guidance := "External read preflight requires more than 4 new external read grants. Split the request into smaller groups; no path was authorized and nothing was sent."
 		if msg.CandidateLimitExceeded {
 			guidance = "External read preflight found more than 32 distinct path candidates. Split the request into smaller groups; no path was authorized and nothing was sent."

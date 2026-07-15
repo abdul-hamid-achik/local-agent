@@ -1,19 +1,19 @@
+
+  ✗ error
+  LLM request not started: inference not started: no
+  model selected
+
+  Goal saved · Cortex is not configured; starting one
   bounded local turn…
 
   ✗ error
-  LLM error: inference not started: no model selected
-
-  ⚠️ Model response failed: inference not started: no
+  LLM request not started: inference not started: no
   model selected
 
-  You can try:
-  - Checking if Ollama is running (`ollama ps`)
-  - Switching to a different model (ctrl+o)
-  - Reducing context size
+  Goal paused · unproductive turn: inference not
+  started: no model selected
 
-  Tool results are still available above.
-  Goal paused · unproductive turn: LLM response:
-  inference not started: no model selected
+
 ───────────────────────────────────────────────────────────
- [ AUTO ] · Ⅱ paused · ship a bounde… · 0s/30m · qwen3.5:2b
+ [ AUTO ] · Ⅱ paused · ship a b… · 0s/30m · S1 · qwen3.5:2b
 ▌❯ Ask, @mention files, or type /help

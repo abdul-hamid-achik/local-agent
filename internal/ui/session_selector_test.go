@@ -19,7 +19,7 @@ func canonicalSessionTestWorkspace(t *testing.T) string {
 }
 
 func TestParseSessionResumeSelector(t *testing.T) {
-	for _, value := range []string{"", "0", "-1", "+1", "01", " 1", "1 ", "1.5", "LATEST", "latest ", strings.Repeat("9", 40)} {
+	for _, value := range []string{"", "S", "S0", "0", "-1", "+1", "01", "S01", " 1", "1 ", "1.5", "LATEST", "latest ", strings.Repeat("9", 40)} {
 		t.Run("invalid_"+strings.ReplaceAll(value, " ", "_"), func(t *testing.T) {
 			if _, err := ParseSessionResumeSelector(value); err == nil {
 				t.Fatalf("ParseSessionResumeSelector(%q) succeeded", value)
@@ -30,6 +30,10 @@ func TestParseSessionResumeSelector(t *testing.T) {
 	exact, err := ParseSessionResumeSelector("42")
 	if err != nil || !exact.valid() || exact.latest || exact.sessionID != 42 {
 		t.Fatalf("exact selector = %#v, error=%v", exact, err)
+	}
+	alias, err := ParseSessionResumeSelector("s42")
+	if err != nil || !alias.valid() || alias.latest || alias.sessionID != 42 {
+		t.Fatalf("alias selector = %#v, error=%v", alias, err)
 	}
 	latest, err := ParseSessionResumeSelector("latest")
 	if err != nil || !latest.valid() || !latest.latest || latest.sessionID != 0 {

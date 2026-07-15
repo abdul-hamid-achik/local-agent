@@ -1,5 +1,5 @@
 version: 1
-contractHash: sha256:c98cb652dd8fae3a09c35734ab89906059e4ce5391ee2c9c3fe9f1562298806a
+contractHash: sha256:312d47a37b8dd356c3f0ff7a1cdd48a4d0fab1eaabce87b7285b1117c6a56a26
 name: local_agent_tui_external_read
 
 intent: |
@@ -85,8 +85,9 @@ steps:
       timeoutMs: 5000
   - wait:
       screen:
-        contains: "Ask, @mention files, or type /help"
+        contains: "▏❯ Analyze"
       timeoutMs: 5000
+  - press: "ctrl+u"
   - type: "/scope list"
   - press: "enter"
   - wait:
@@ -114,10 +115,10 @@ outcomes:
       screen:
         contains: "exact file ·"
   - id: approved_prompt_resumes
-    description: approval resumes the original video-analysis prompt and records one temporary explicit-path grant
+    description: approval resumes the original video-analysis prompt, creates its titled session, and records one temporary explicit-path grant
     verify:
       screen:
-        contains: "with vidtrace."
+        contains: "S1 · Analyze"
   - id: sibling_remains_unavailable
     description: the scope omits the neighboring fixture and approval changes no files
     verify:

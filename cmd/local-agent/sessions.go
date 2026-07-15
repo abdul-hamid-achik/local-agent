@@ -5,10 +5,10 @@ import (
 	"flag"
 	"io"
 	"os"
-	"strconv"
 	"strings"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
+	"github.com/abdul-hamid-achik/local-agent/internal/sessionref"
 )
 
 type sessionRepairStore interface {
@@ -109,9 +109,9 @@ func handleSessionRepair(store sessionRepairStore, workspace string, args []stri
 		executionFprintln(stderr, "session repair: provide SESSION_ID")
 		return 2
 	}
-	sessionID, err := strconv.ParseInt(flags.Arg(0), 10, 64)
-	if err != nil || sessionID <= 0 {
-		executionFprintf(stderr, "session repair: invalid session ID %q\n", flags.Arg(0))
+	sessionID, err := sessionref.Parse(flags.Arg(0))
+	if err != nil {
+		executionFprintf(stderr, "session repair: invalid session reference %q\n", flags.Arg(0))
 		return 2
 	}
 	lease, err := store.AcquireExecutionSessionLease(context.Background(), sessionID, workspace)
@@ -150,8 +150,8 @@ func handleSessionRepair(store sessionRepairStore, workspace string, args []stri
 		}
 		return 0
 	}
-	executionFprintf(stdout, "Repaired session %d projection: cursor %d -> %d @ revision %d.\n",
-		view.SessionID, view.PreviousCursor, view.NewCursor, view.SessionRevision)
+	executionFprintf(stdout, "Repaired session %s projection: cursor %d -> %d @ revision %d.\n",
+		sessionref.Format(view.SessionID), view.PreviousCursor, view.NewCursor, view.SessionRevision)
 	if view.AnsweredTotal == 0 {
 		executionFprintln(stdout, "No answered effects were missing; the cursor was only re-derived from durable state.")
 		return 0
@@ -178,6 +178,8 @@ func writeSessionUsage(writer io.Writer) {
 	executionFprintln(writer, "  local-agent session list [--json] [--limit N]")
 	executionFprintln(writer, "  local-agent session export [--format jsonl|md|both] [--out DIR] SESSION_ID")
 	executionFprintln(writer, "  local-agent session repair [--json] SESSION_ID")
+	executionFprintln(writer)
+	executionFprintln(writer, "SESSION_ID accepts either a short handle such as S7 or the compatible raw ID 7.")
 	executionFprintln(writer)
 	executionFprintln(writer, "list exports nothing; it enumerates sessions in the current workspace.")
 	executionFprintln(writer, "export writes a bounded JSONL audit projection and a markdown summary (execution")

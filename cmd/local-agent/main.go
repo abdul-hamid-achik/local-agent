@@ -15,6 +15,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/agent"
 	"github.com/abdul-hamid-achik/local-agent/internal/command"
@@ -24,11 +25,13 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/goal"
 	"github.com/abdul-hamid-achik/local-agent/internal/goaladvisor"
 	"github.com/abdul-hamid-achik/local-agent/internal/ice"
+	"github.com/abdul-hamid-achik/local-agent/internal/imageasset"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 	"github.com/abdul-hamid-achik/local-agent/internal/logging"
 	"github.com/abdul-hamid-achik/local-agent/internal/mcp"
 	"github.com/abdul-hamid-achik/local-agent/internal/memory"
 	"github.com/abdul-hamid-achik/local-agent/internal/permission"
+	"github.com/abdul-hamid-achik/local-agent/internal/runtimepref"
 	"github.com/abdul-hamid-achik/local-agent/internal/skill"
 	"github.com/abdul-hamid-achik/local-agent/internal/ui"
 )
@@ -130,6 +133,12 @@ func run() int {
 	if *agentProfileFlag != "" {
 		cfg.AgentProfile = *agentProfileFlag
 	}
+	var modelPreferenceStore *runtimepref.Store
+	if preferencePath, preferenceErr := runtimepref.DefaultPath(); preferenceErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: model preference persistence unavailable: %v\n", preferenceErr)
+	} else {
+		modelPreferenceStore = runtimepref.NewStore(preferencePath)
+	}
 
 	// Create router - use Qwen-optimized router if flag is set.
 	var router config.ModelRouter
@@ -140,11 +149,13 @@ func run() int {
 
 	modelName := cfg.Ollama.Model
 	modelPinned := shouldPinStartupModel(*modelFlag, cfg.Model.AutoSelect)
+	profileModelPinned := false
 	if cfg.AgentProfile != "" && agentsDir != nil {
 		if profile := agentsDir.GetAgent(cfg.AgentProfile); profile != nil {
 			if profile.Model != "" {
 				modelName = profile.Model
 				modelPinned = true
+				profileModelPinned = true
 			}
 		}
 	}
@@ -173,6 +184,22 @@ func run() int {
 	}
 	manualChatModels := manuallySelectableOllamaChatModels(ollamaInventory, cfg.Privacy.LocalOnly)
 	autoChatModels := autoRoutableOllamaChatModels(ollamaInventory)
+	if modelPreferenceStore != nil && shouldRestoreManualModelPreference(*modelFlag, profileModelPinned) {
+		preferred, saved, preferenceErr := modelPreferenceStore.LoadManualModel()
+		switch {
+		case preferenceErr != nil:
+			fmt.Fprintf(os.Stderr, "warning: saved model preference ignored: %v\n", preferenceErr)
+		case saved:
+			if restored, ok, warning := restoreManualModelPreference(
+				preferred, manualChatModels, autoChatModels, discoveryErr == nil,
+			); ok {
+				modelName = restored
+				modelPinned = true
+			} else if warning != "" {
+				fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
+			}
+		}
+	}
 	modelName, modelList, err := resolveStartupModel(
 		modelName,
 		modelPinned,
@@ -587,6 +614,14 @@ func run() int {
 	}
 
 	m := ui.New(ag, cmdReg, skillMgr, completer, modelManager, router, logger)
+	m.SetModelPreferenceStore(modelPreferenceStore)
+	if home, homeErr := os.UserHomeDir(); homeErr != nil {
+		log.Printf("warning: image attachments unavailable: %v", homeErr)
+	} else if imageStore, imageErr := imageasset.NewStore(filepath.Join(home, ".config", "local-agent", "images"), imageasset.DefaultLimits()); imageErr != nil {
+		log.Printf("warning: image attachments unavailable: %v", imageErr)
+	} else {
+		m.SetImageStore(imageStore)
+	}
 	if expertErr != nil {
 		m.SetExpertRuntimeSetupFailed()
 	}
@@ -817,7 +852,14 @@ func currentWorkspace() string {
 }
 
 func headlessSessionTitle(prompt string) string {
-	title := strings.TrimSpace(strings.SplitN(prompt, "\n", 2)[0])
+	title := ""
+	for _, line := range strings.Split(prompt, "\n") {
+		candidate := strings.Join(strings.Fields(terminalSafeGoalText(ansi.Strip(line))), " ")
+		if candidate != "" {
+			title = candidate
+			break
+		}
+	}
 	if title == "" {
 		title = "Headless session " + time.Now().Format("2006-01-02 15:04")
 	}

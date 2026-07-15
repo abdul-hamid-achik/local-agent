@@ -94,7 +94,7 @@ func (a *Agent) compactForContext(ctx context.Context, out Output, numCtx int) b
 
 	// Ask LLM to produce a compact summary.
 	var summaryBuf strings.Builder
-	err = a.llmClient.ChatStream(ctx, llm.ChatOptions{
+	err = a.chatStreamWithResolvedImages(ctx, llm.ChatOptions{
 		Messages: []llm.Message{
 			{Role: "user", Content: summary},
 		},
@@ -230,6 +230,9 @@ func summarizeMessages(msgs []llm.Message) string {
 		switch msg.Role {
 		case "user":
 			fmt.Fprintf(&b, "User: %s\n", msg.Content)
+			for _, image := range msg.Images {
+				fmt.Fprintf(&b, "User attached image %s (%s, %dx%d).\n", image.Name, image.MediaType, image.Width, image.Height)
+			}
 		case "assistant":
 			if msg.Content != "" {
 				fmt.Fprintf(&b, "Assistant: %s\n", msg.Content)

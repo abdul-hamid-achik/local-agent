@@ -21,6 +21,7 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/execution"
 	"github.com/abdul-hamid-achik/local-agent/internal/goal"
 	"github.com/abdul-hamid-achik/local-agent/internal/reconciliation"
+	"github.com/abdul-hamid-achik/local-agent/internal/sessionref"
 )
 
 func openGoalCommandTestStore(t *testing.T) *db.Store {
@@ -275,7 +276,7 @@ func TestGoalListAndShowRenderingAndJSON(t *testing.T) {
 	if code := handleGoalList(store, workspace, nil, &stdout, &stderr); code != 0 {
 		t.Fatalf("text list code=%d stderr=%q", code, stderr.String())
 	}
-	for _, want := range []string{"SESSION", "STATE", "A very useful Unicode 目标 goal with a compact second line"} {
+	for _, want := range []string{"SESSION", sessionref.Format(session.ID), "STATE", "A very useful Unicode 目标 goal with a compact second line"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("text list %q lacks %q", stdout.String(), want)
 		}
@@ -289,6 +290,15 @@ func TestGoalListAndShowRenderingAndJSON(t *testing.T) {
 	var snapshot goal.Snapshot
 	if err := json.Unmarshal(stdout.Bytes(), &snapshot); err != nil || snapshot.SessionID != session.ID {
 		t.Fatalf("show JSON=%q snapshot=%#v err=%v", stdout.String(), snapshot, err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := handleGoalShow(store, workspace, []string{sessionref.Format(session.ID)}, &stdout, &stderr); code != 0 {
+		t.Fatalf("text show code=%d stderr=%q", code, stderr.String())
+	}
+	if want := "Session: " + sessionref.Format(session.ID); !strings.Contains(stdout.String(), want) {
+		t.Fatalf("text show %q lacks %q", stdout.String(), want)
 	}
 }
 
@@ -324,16 +334,55 @@ func TestGoalOpenPersistsValidatedHeadlessRuntime(t *testing.T) {
 	}
 }
 
-func TestParseGoalRunArgsAcceptsFlagsAfterSessionID(t *testing.T) {
+func TestGoalOpenPrintsUsableShortHandleGuidance(t *testing.T) {
+	store := openGoalCommandTestStore(t)
+	workspace := t.TempDir()
 	var stdout, stderr bytes.Buffer
-	options, code := parseGoalRunArgs([]string{
-		"42", "--prompt", " continue safely ", "--skip-approvals", "--model=qwen3", "--agent", "reviewer",
-	}, &stdout, &stderr)
-	if code != 0 {
-		t.Fatalf("parse code=%d stderr=%q", code, stderr.String())
+	if code := handleGoalOpen(store, workspace, []string{
+		"--objective", "\n  Inspect the release\nwith supporting details",
+		"--criterion", "the release report is complete",
+	}, &stdout, &stderr); code != 0 {
+		t.Fatalf("goal open code=%d stderr=%q", code, stderr.String())
 	}
-	if options.SessionID != 42 || options.Prompt != "continue safely" || !options.SkipApprovals || options.Model != "qwen3" || options.AgentProfile != "reviewer" {
-		t.Fatalf("goal run options = %#v", options)
+	sessions, err := store.ListSessions(context.Background(), db.ListSessionsParams{WorkspaceID: workspace, Limit: 10})
+	if err != nil || len(sessions) != 1 {
+		t.Fatalf("list sessions = %#v, error=%v", sessions, err)
+	}
+	handle := sessionref.Format(sessions[0].ID)
+	if sessions[0].Title != "Inspect the release" {
+		t.Fatalf("session title = %q", sessions[0].Title)
+	}
+	for _, want := range []string{"session " + handle, "goal show --json " + handle} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("goal open output %q lacks %q", stdout.String(), want)
+		}
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := handleGoalShow(store, workspace, []string{"--json", handle}, &stdout, &stderr); code != 0 {
+		t.Fatalf("printed guidance is not executable: code=%d stderr=%q", code, stderr.String())
+	}
+	var snapshot goal.Snapshot
+	if err := json.Unmarshal(stdout.Bytes(), &snapshot); err != nil || snapshot.SessionID != sessions[0].ID {
+		t.Fatalf("guided show JSON=%q snapshot=%#v err=%v", stdout.String(), snapshot, err)
+	}
+}
+
+func TestParseGoalRunArgsAcceptsFlagsAfterSessionID(t *testing.T) {
+	for _, sessionReference := range []string{"42", "S42", "s42"} {
+		t.Run(sessionReference, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			options, code := parseGoalRunArgs([]string{
+				sessionReference, "--prompt", " continue safely ", "--skip-approvals", "--model=qwen3", "--agent", "reviewer",
+			}, &stdout, &stderr)
+			if code != 0 {
+				t.Fatalf("parse code=%d stderr=%q", code, stderr.String())
+			}
+			if options.SessionID != 42 || options.Prompt != "continue safely" || !options.SkipApprovals || options.Model != "qwen3" || options.AgentProfile != "reviewer" {
+				t.Fatalf("goal run options = %#v", options)
+			}
+		})
 	}
 }
 
@@ -499,11 +548,11 @@ func TestGoalPendingListsOnlyUnresolvedControlItems(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	if code := handleGoalPending(store, workspace, []string{"--json", formatSessionID(session.ID)}, &stdout, &stderr); code != 0 {
+	if code := handleGoalPending(store, workspace, []string{"--json", sessionref.Format(session.ID)}, &stdout, &stderr); code != 0 {
 		t.Fatalf("pending code=%d stderr=%q", code, stderr.String())
 	}
 	var states []pendingControlSummary
-	if err := json.Unmarshal(stdout.Bytes(), &states); err != nil || len(states) != 1 || states[0].ItemID != "ctrl_pending" {
+	if err := json.Unmarshal(stdout.Bytes(), &states); err != nil || len(states) != 1 || states[0].SessionID != session.ID || states[0].ItemID != "ctrl_pending" {
 		t.Fatalf("pending JSON=%q states=%#v err=%v", stdout.String(), states, err)
 	}
 	if strings.Contains(stdout.String(), privatePayload) || strings.Contains(strings.ToLower(stdout.String()), "payload") {
@@ -543,14 +592,14 @@ func TestGoalRecoverDryRunIsReadOnlyRedactedAndJSONStable(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	if code := handleGoalRecover(store, workspace, []string{formatSessionID(fixture.Session.ID), "--json"}, &stdout, &stderr); code != 0 {
+	if code := handleGoalRecover(store, workspace, []string{sessionref.Format(fixture.Session.ID), "--json"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("dry-run code=%d stderr=%q", code, stderr.String())
 	}
 	var view goalRecoveryDryRun
 	if err := json.Unmarshal(stdout.Bytes(), &view); err != nil {
 		t.Fatalf("dry-run JSON=%q error=%v", stdout.String(), err)
 	}
-	if !view.DryRun || view.SessionRevision != before.Revision || view.GroupItemID != fixture.Group.GroupItemID ||
+	if !view.DryRun || view.SessionID != fixture.Session.ID || view.SessionRevision != before.Revision || view.GroupItemID != fixture.Group.GroupItemID ||
 		len(view.Members) != 1 || len(view.UnresolvedExecutionItems) != 1 || view.Parent.Ready || view.Parent.Resolved {
 		t.Fatalf("dry-run projection = %#v", view)
 	}

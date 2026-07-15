@@ -543,7 +543,7 @@ func TestSessionExportAcceptsTrailingValueFlags(t *testing.T) {
 	store := &fakeSessionExportStore{session: db.Session{ID: 7, WorkspaceID: "/workspace/repo"}}
 	dir := t.TempDir()
 	var stdout, stderr bytes.Buffer
-	code := handleSessionExport(store, "/workspace/repo", []string{"7", "--format", "md", "--out", dir}, &stdout, &stderr)
+	code := handleSessionExport(store, "/workspace/repo", []string{"S7", "--format", "md", "--out", dir}, &stdout, &stderr)
 	if code != 0 || stderr.Len() != 0 {
 		t.Fatalf("trailing value flags exit=%d stderr=%q", code, stderr.String())
 	}
@@ -560,10 +560,19 @@ func TestSessionListRendersAndEmpties(t *testing.T) {
 	if code := handleSessionList(store, "/workspace/repo", nil, &stdout, &stderr); code != 0 {
 		t.Fatalf("list exit=%d stderr=%q", code, stderr.String())
 	}
-	for _, want := range []string{"ID", "investigate bob", "session export SESSION_ID"} {
+	for _, want := range []string{"SESSION", "S7", "investigate bob", "session export SESSION_ID"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("list output missing %q: %s", want, stdout.String())
 		}
+	}
+
+	stdout.Reset()
+	if code := handleSessionList(store, "/workspace/repo", []string{"--json"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("json list exit=%d stderr=%q", code, stderr.String())
+	}
+	var listed []db.Session
+	if err := json.Unmarshal(stdout.Bytes(), &listed); err != nil || len(listed) != 1 || listed[0].ID != 7 {
+		t.Fatalf("json list = %#v, error=%v; want numeric ID 7", listed, err)
 	}
 
 	empty := &fakeSessionExportStore{}

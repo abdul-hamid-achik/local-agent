@@ -16,6 +16,7 @@ workspace. A restored session includes both visible and model-facing state:
 - transcript and tool-call identities;
 - mode, model pin, and profile;
 - token counters and tool receipts;
+- path-free image attachment metadata for resumable vision turns;
 - bounded file.cheap artifact receipts;
 - durable goal state when present.
 
@@ -24,16 +25,31 @@ Loading a session replaces the active conversation. It does not merge two transc
 The same lossless restore path is available at TUI startup:
 
 ```bash
-local-agent --resume 42
+local-agent --resume S42
 local-agent --resume latest
 ```
 
-An exact ID must belong to the current canonical workspace. `latest` selects
+Each positive database ID has a derived short handle: session ID `42` is shown
+as `S42`. The Runtime view and session picker show the handle and generated
+title after the first submitted turn; the TUI footer includes that identity when
+the current responsive status layout has room. The title is derived from the
+first meaningful task text, including the reviewed Task field in guided PLAN
+mode. Commands accept either `S42` or the compatible raw `42` form, while JSON
+and export filenames retain numeric IDs.
+
+An exact session must belong to the current canonical workspace. `latest` selects
 that workspace's most recently updated session. The database title is restored
 with the session, and an active session lease prevents two Local Agent processes
 from resuming it concurrently. Startup restore retains the normal cloud-consent
 and recovery checks but does not submit a prompt or automatically resume a
 durable goal. `--resume` cannot be combined with headless `-p` or `--prompt`.
+
+List or export sessions outside the TUI with:
+
+```bash
+local-agent session list
+local-agent session export S42
+```
 
 `/artifacts` (or `/artifact`) lists completed file.cheap save receipts from the
 active or restored transcript. The durable projection contains a host-derived
@@ -83,8 +99,17 @@ When enabled, ICE can retrieve similar prior messages and run bounded background
 ~/.config/local-agent/conversations.json
 ~/.config/local-agent/memory/<workspace-hash>.json
 ~/.config/local-agent/local-agent.db
+~/.config/local-agent/images/
 ~/.config/local-agent/logs/
 ```
+
+The image directory is an owner-private, content-addressed object store. Session
+and checkpoint JSON keep the sanitized name, MIME type, byte size, dimensions,
+and full SHA-256 reference needed to rehydrate an attachment; they do not store
+the original path or raw bytes. `/image forget-history` removes references from
+conversation history but deliberately does not delete cached objects or pending
+attachments. Existing checkpoints remain immutable and can reintroduce their
+historical references if restored.
 
 SQLite migrations are applied transactionally and recorded with source
 checksums. Startup refuses a migration whose recorded checksum no longer

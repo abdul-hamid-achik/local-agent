@@ -100,8 +100,11 @@ func TestSessionRestoreRequestSanitizesPersistedTitleBeforeChat(t *testing.T) {
 	}
 	updated, _ := m.Update(receipt)
 	m = updated.(*Model)
-	if got, want := m.entries[len(m.entries)-1].Content, "Restored session: safelink evil"; got != want {
+	if got, want := m.entries[len(m.entries)-1].Content, "Restored session "+sessionDisplayLabel(session.ID, "safelink evil", 72); got != want {
 		t.Fatalf("restore entry = %q, want %q", got, want)
+	}
+	if m.activeSessionTitle != "safelink evil" {
+		t.Fatalf("active session title = %q", m.activeSessionTitle)
 	}
 	if err := m.ReleaseExecutionSessionLease(); err != nil {
 		t.Fatal(err)

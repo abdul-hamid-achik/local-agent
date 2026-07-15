@@ -17,7 +17,16 @@ import (
 func TestHeadlessSessionTitleUsesFirstPromptLine(t *testing.T) {
 	t.Parallel()
 
-	if got := headlessSessionTitle("  inspect the release\nthen summarize  "); got != "inspect the release" {
+	if got := headlessSessionTitle("\n \t\n  inspect the release\nthen summarize  "); got != "inspect the release" {
+		t.Fatalf("headlessSessionTitle() = %q", got)
+	}
+}
+
+func TestHeadlessSessionTitleSanitizesTerminalControls(t *testing.T) {
+	t.Parallel()
+
+	prompt := "\x1b[31m  inspect\t\u202ethe release  \x1b[0m\nthen summarize"
+	if got := headlessSessionTitle(prompt); got != "inspect the release" {
 		t.Fatalf("headlessSessionTitle() = %q", got)
 	}
 }

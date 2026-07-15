@@ -1,6 +1,12 @@
 package ui
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
+)
 
 func TestPushHistory_Basic(t *testing.T) {
 	m := newTestModel(t)
@@ -142,6 +148,32 @@ func TestNavigateHistory_DownNotBrowsing(t *testing.T) {
 	// Down without first pressing up should return false
 	if m.navigateHistory(1) {
 		t.Error("down when not browsing should return false")
+	}
+}
+
+func TestNavigateHistoryReflowsHeightAndKeepsTailVisible(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 20})
+	m = updated.(*Model)
+	long := strings.Repeat("history words ", 70) + "HISTORY-TAIL"
+	m.pushHistory("short")
+	m.pushHistory(long)
+
+	if !m.navigateHistory(-1) {
+		t.Fatal("could not navigate to long history entry")
+	}
+	if m.inputLines != composerVisibleRowLimit(m.height) || m.input.ScrollYOffset() <= 0 {
+		t.Fatalf("long history layout = rows %d offset %d", m.inputLines, m.input.ScrollYOffset())
+	}
+	if !strings.Contains(ansi.Strip(m.input.View()), "HISTORY-TAIL") {
+		t.Fatalf("long history hid the cursor tail:\n%s", m.input.View())
+	}
+
+	if !m.navigateHistory(-1) {
+		t.Fatal("could not navigate to short history entry")
+	}
+	if m.input.Value() != "short" || m.inputLines != 1 || m.input.Height() != 1 {
+		t.Fatalf("short history layout = %q, parent %d child %d", m.input.Value(), m.inputLines, m.input.Height())
 	}
 }
 

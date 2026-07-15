@@ -8,15 +8,18 @@ import "strings"
 type ActionID string
 
 const (
-	GoalActionNew         ActionID = "goal.new"
-	GoalActionInspect     ActionID = "goal.inspect"
-	GoalActionPause       ActionID = "goal.pause"
-	GoalActionResume      ActionID = "goal.resume"
-	GoalActionBudget      ActionID = "goal.budget"
-	GoalActionDrop        ActionID = "goal.drop"
-	ScopeActionAddRead    ActionID = "scope.add-read"
-	ScopeActionRemoveRead ActionID = "scope.remove-read"
-	ScopeActionClearRead  ActionID = "scope.clear-read"
+	GoalActionNew            ActionID = "goal.new"
+	GoalActionInspect        ActionID = "goal.inspect"
+	GoalActionPause          ActionID = "goal.pause"
+	GoalActionResume         ActionID = "goal.resume"
+	GoalActionBudget         ActionID = "goal.budget"
+	GoalActionDrop           ActionID = "goal.drop"
+	ScopeActionAddRead       ActionID = "scope.add-read"
+	ScopeActionRemoveRead    ActionID = "scope.remove-read"
+	ScopeActionClearRead     ActionID = "scope.clear-read"
+	ImageActionList          ActionID = "image.list"
+	ImageActionClear         ActionID = "image.clear"
+	ImageActionForgetHistory ActionID = "image.forget-history"
 )
 
 // ActionSpec is the bounded metadata needed to expose one command action in
@@ -260,6 +263,25 @@ func registerScopeActions(r *Registry) {
 		{
 			ID: ScopeActionClearRead, Command: "scope", Argument: "clear-read", Aliases: []string{"clear"},
 			Title: "Clear read grants", Description: "Revoke every temporary external read-only grant", Action: ActionClearReadRoots,
+		},
+	} {
+		r.RegisterAction(spec)
+	}
+}
+
+func registerImageActions(r *Registry) {
+	for _, spec := range []ActionSpec{
+		{
+			ID: ImageActionList, Command: "image", Argument: "list", Aliases: []string{"ls"},
+			Title: "List images", Description: "Show images attached to the pending prompt", Action: ActionListImages,
+		},
+		{
+			ID: ImageActionClear, Command: "image", Argument: "clear", Aliases: []string{"remove-all"},
+			Title: "Clear images", Description: "Remove every image from the pending prompt", Action: ActionClearImages, Destructive: true,
+		},
+		{
+			ID: ImageActionForgetHistory, Command: "image", Argument: "forget-history", Aliases: []string{"drop-history"},
+			Title: "Forget image history", Description: "Remove active conversation image references; checkpoints and cached objects remain", Action: ActionForgetImageHistory, Destructive: true,
 		},
 	} {
 		r.RegisterAction(spec)

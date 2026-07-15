@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"reflect"
@@ -34,6 +35,7 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/ecosystem"
 	"github.com/abdul-hamid-achik/local-agent/internal/execution"
 	"github.com/abdul-hamid-achik/local-agent/internal/goal"
+	"github.com/abdul-hamid-achik/local-agent/internal/imageasset"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 	"github.com/abdul-hamid-achik/local-agent/internal/permission"
 	"github.com/abdul-hamid-achik/local-agent/internal/safeio"
@@ -125,14 +127,15 @@ type ToolEntry struct {
 
 // ChatEntry is a single item in the chat log.
 type ChatEntry struct {
-	Kind              string // "user", "assistant", "tool_group", "error", "system"
-	Content           string // raw content
-	RenderedContent   string // cached Glamour output (set once on completion)
-	Name              string // tool name for tool entries
-	IsError           bool   // for tool_result
-	ToolIndex         int    // index into toolEntries for "tool_group" kind
-	ThinkingContent   string // extracted <think> content
-	ThinkingCollapsed bool   // default: true
+	Kind              string           // "user", "assistant", "tool_group", "error", "system"
+	Content           string           // raw content
+	RenderedContent   string           // cached Glamour output (set once on completion)
+	Name              string           // tool name for tool entries
+	IsError           bool             // for tool_result
+	ToolIndex         int              // index into toolEntries for "tool_group" kind
+	ThinkingContent   string           // extracted <think> content
+	ThinkingCollapsed bool             // default: true
+	Attachments       []imageasset.Ref // validated, path-free image metadata
 }
 
 // toolHitRegion is an exact, ordered transcript row target for one ToolCard
@@ -235,6 +238,7 @@ type Model struct {
 
 	// Session persistence
 	sessionID                    int64
+	activeSessionTitle           string
 	executionCursor              int64
 	executionLease               *db.ExecutionSessionLease
 	sessionStore                 *db.Store
@@ -253,6 +257,16 @@ type Model struct {
 	// Paste detection
 	pendingPaste *pendingPaste
 
+	// Image attachments are admitted into a private content-addressed store.
+	// Provider bytes remain transient; refs are safe to persist and render.
+	imageStore          *imageasset.Store
+	pendingImages       []pendingImageAttachment
+	turnImages          []pendingImageAttachment
+	imageAttachToken    uint64
+	imageAttachRunning  bool
+	imageAttachCancel   context.CancelFunc
+	imageAttachFallback string
+
 	// Responsive layout
 	forceCompact bool // user-toggled compact mode
 
@@ -263,6 +277,7 @@ type Model struct {
 	// Model management
 	modelManager             *llm.ModelManager
 	router                   config.ModelRouter
+	modelPreferenceStore     ModelPreferenceStore
 	modelPickerState         *ModelPickerState
 	cloudConsentState        *CloudConsentState
 	cloudRestoreAuthorized   string
@@ -393,12 +408,15 @@ type Model struct {
 	turnMessagesBefore []llm.Message
 	turnPrompt         string
 	turnPromptVisible  bool
+	turnEntryIndex     int
 	turnCheckpointSet  bool
 
 	// Prompt history
-	promptHistory []string // all submitted inputs
-	historyIndex  int      // -1 = not browsing, 0 = most recent
-	historySaved  string   // saved current input when entering history
+	promptHistory      []string // all submitted inputs
+	historyIndex       int      // -1 = not browsing, 0 = most recent
+	historySaved       string   // saved current input when entering history
+	clipboardRead      func() (string, error)
+	clipboardImageRead func(context.Context) (string, []byte, error)
 
 	// Help overlay viewport (scrollable)
 	helpViewport viewport.Model
@@ -411,6 +429,17 @@ func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, com
 	ta.Placeholder = "Ask, @mention files, or type /help"
 	ta.Focus()
 	ta.CharLimit = 32 * 1024
+	ta.DynamicHeight = true
+	ta.MinHeight = 1
+	ta.MaxHeight = maxComposerVisibleRows
+	// Keep the visible viewport cap separate from admission. Bubbles measures
+	// MaxContentHeight in wrapped visual rows, while Local Agent's paste guard
+	// owns the logical-line and character limits. A reachable visual-row cap can
+	// therefore truncate an otherwise accepted, heavily wrapped paste.
+	ta.MaxContentHeight = math.MaxInt
+	// Clipboard reads are parent-owned so Ctrl+V produces the same public
+	// tea.PasteMsg path as terminal bracketed paste and cannot bypass review.
+	ta.KeyMap.Paste.SetEnabled(false)
 	ta.SetHeight(1)
 	ta.ShowLineNumbers = false
 	// A single send marker followed by continuation rails makes multiline
@@ -425,6 +454,8 @@ func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, com
 
 	return &Model{
 		input:                   ta,
+		clipboardRead:           clipboard.ReadAll,
+		clipboardImageRead:      readClipboardImage,
 		spin:                    s,
 		scramble:                NewScrambleModel(true),
 		styles:                  initialStyles,
@@ -451,6 +482,7 @@ func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, com
 		toolCardMgr:             NewToolCardManager(true),
 		lastTurnToolIndex:       -1,
 		receiptInspectToolIndex: -1,
+		turnEntryIndex:          -1,
 		commitRunner:            runCommit,
 	}
 }
@@ -498,6 +530,9 @@ func (m *Model) beginShutdown() tea.Cmd {
 	}
 	m.fileOpToken++
 	m.fileLoading = false
+	if m.imageAttachCancel != nil {
+		m.imageAttachCancel()
+	}
 	if m.initCancel != nil {
 		m.initCancel()
 	}
@@ -530,7 +565,7 @@ func (m *Model) beginShutdown() tea.Cmd {
 
 func (m *Model) shutdownReady() bool {
 	return m.cancel == nil && !m.commitRunning && !m.exportRunning && !m.goalOperationRunning &&
-		!m.modelPullRunning && !m.sessionLoading && !m.ollamaInventoryCommitting && !m.readScopeOpRunning
+		!m.modelPullRunning && !m.sessionLoading && !m.imageAttachRunning && !m.ollamaInventoryCommitting && !m.readScopeOpRunning
 }
 
 func (m *Model) appendShutdownQuit(commands *[]tea.Cmd) {
@@ -734,6 +769,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		} else {
 			m.input.Placeholder = "Ask, @mention files, or type /help"
 		}
+		m.input.MaxHeight = composerVisibleRowLimit(msg.Height)
 		m.input.SetWidth(viewportWidth)
 		m.syncInputHeight()
 		m.restoreApprovalTranscriptAnchor(approvalAnchor)
@@ -933,6 +969,31 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.imageAttachRunning {
+			switch {
+			case key.Matches(msg, m.keys.Quit):
+				return m, m.beginShutdown()
+			case key.Matches(msg, m.keys.Cancel):
+				fallback := m.imageAttachFallback
+				if m.imageAttachCancel != nil {
+					m.imageAttachCancel()
+				}
+				m.imageAttachToken++
+				m.imageAttachRunning = false
+				m.imageAttachCancel = nil
+				m.imageAttachFallback = ""
+				m.input.Focus()
+				m.entries = append(m.entries, ChatEntry{Kind: "system", Content: "Image attachment cancelled."})
+				m.invalidateEntryCache()
+				m.viewport.SetContent(m.renderEntries())
+				m.gotoBottomIfFollowing()
+				m.recalcViewportHeight()
+				if fallback != "" && m.composerEditable() {
+					return m, m.insertPasteWithReview(fallback)
+				}
+			}
+			return m, nil
+		}
 		// Read-scope preview and commit are serialized host filesystem work. They
 		// are intentionally not cancellable halfway through validation/commit;
 		// quit waits for the tokened receipt and every other key is ignored.
@@ -986,6 +1047,12 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 				return m, m.beginShutdown()
 			case key.Matches(msg, m.keys.Cancel):
 				m.cancelGoalOperation("Goal operation cancelled; the goal is paused.")
+			case key.Matches(msg, m.keys.CycleMode) && m.goalRuntime != nil:
+				// A linked goal always retains AUTO authority. Cycling here changes
+				// only the ambient mode used after the goal, so it is safe while a
+				// host-owned Cortex/status operation settles and should not feel like
+				// a dead keyboard shortcut.
+				m.cycleMode()
 			}
 			return m, nil
 		}
@@ -1366,6 +1433,18 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			return m, nil
 		}
 
+		// Transcript paging is parent-owned and must never fall through to the
+		// composer. PgUp/PgDn always page the conversation. Ctrl+U/Ctrl+D retain
+		// their standard textarea editing behavior while a draft is present, and
+		// act as half-page transcript shortcuts only when the composer is empty or
+		// unavailable.
+		if m.transcriptOwnsScrollKey(msg) {
+			return m, m.updateTranscriptScroll(msg)
+		}
+		if msg.String() == "ctrl+v" && m.composerEditable() {
+			return m, m.readClipboardPaste()
+		}
+
 		switch {
 		case key.Matches(msg, m.keys.Quit):
 			return m, m.beginShutdown()
@@ -1606,6 +1685,12 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 
 	case ContextCompactedMsg:
 		m.promptTokens = 0
+		if err := m.reconcileVisibleImageProjection(m.agent.Messages()); err != nil {
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: "Context compaction could not reconcile image references: " + err.Error()})
+			m.invalidateEntryCache()
+			m.viewport.SetContent(m.renderEntries())
+			m.gotoBottomIfFollowing()
+		}
 
 	case ContextCompactionStartedMsg:
 		m.compactingContext = true
@@ -1847,7 +1932,8 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		}
 		var unresolved *agent.UnresolvedExecutionError
 		hasUnresolved := errors.As(msg.Err, &unresolved)
-		if hasUnresolved {
+		preDispatchRejected := errors.Is(msg.Err, llm.ErrInferenceNotStarted) || errors.Is(msg.Err, llm.ErrNoModelSelected)
+		if hasUnresolved || preDispatchRejected {
 			m.rollbackPreflightRejectedPrompt()
 		}
 		m.clearTurnMessageCheckpoint()
@@ -2191,6 +2277,12 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			m.resumeFollow()
 		}
 
+	case ImageAttachmentResultMsg:
+		if cmd := m.handleImageAttachmentResult(msg); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		m.appendShutdownQuit(&cmds)
+
 	case ReadScopeResultMsg:
 		if cmd := m.handleReadScopeResult(msg); cmd != nil {
 			cmds = append(cmds, cmd)
@@ -2362,7 +2454,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		m.clearCompletionSuppression()
 		m.input.SetValue(msg.Content)
 		m.input.CursorEnd()
-		m.syncInputHeight()
+		_ = m.reflowInputViewport()
 		m.input.Focus()
 
 	case DoneFlashExpiredMsg:
@@ -2465,23 +2557,26 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 
 	case tea.PasteMsg:
 		if m.composerEditable() {
-			draft := m.input.Value()
-			cursor := pasteCursorAt(draft, m.input.Line(), m.input.Column())
-			assessment := assessPaste(msg.Content, cursor, m.input.Length(), m.input.LineCount(), m.input.CharLimit)
-			if !assessment.PlainFits || assessment.NeedsReview {
-				m.pendingPaste = assessment
-				m.recalcViewportHeight()
-				// The parent owns the safety prompt. Do not forward this PasteMsg to
-				// the textarea before the user chooses fenced or plain insertion.
-				return m, nil
+			if path, ok := pastedImagePath(msg.Content); ok {
+				return m, m.beginImageFileAttachment(path, msg.Content)
 			}
-			m.clearCompletionSuppression()
-			m.input.InsertString(msg.Content)
-			m.syncInputHeight()
-			// The paste was inserted directly, so consume the message here instead
-			// of letting the common child update insert it a second time.
-			return m, m.reflowInputViewport()
+			// The parent owns insertion and any safety prompt. Do not forward this
+			// PasteMsg to the textarea or the child would insert it a second time.
+			return m, m.insertPasteWithReview(msg.Content)
 		}
+
+	case ClipboardImagePasteMsg:
+		if !m.composerEditable() {
+			break
+		}
+		if msg.Err != nil {
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: "Paste image: clipboard has no supported image data."})
+			m.invalidateEntryCache()
+			m.viewport.SetContent(m.renderEntries())
+			m.gotoBottomIfFollowing()
+			break
+		}
+		return m, m.beginImageBytesAttachment(msg.Name, msg.Data)
 	}
 
 	// Waiting owns the scramble clock. Once streaming starts (or the turn
@@ -2537,20 +2632,14 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		}
 	}
 
-	if keyMsg, ok := msg.(tea.KeyPressMsg); ok && m.transcriptScrollKey(keyMsg) {
-		m.cancelReceiptInspection(false)
-	}
-	beforeOffset := m.viewport.YOffset()
-	var cmd tea.Cmd
-	m.viewport, cmd = m.viewport.Update(msg)
-	cmds = append(cmds, cmd)
-
-	if keyMsg, ok := msg.(tea.KeyPressMsg); ok && m.transcriptScrollKey(keyMsg) {
-		if m.viewport.AtBottom() {
-			m.markFollowingLatest()
-		} else if m.viewport.YOffset() != beforeOffset {
-			m.pauseFollow()
-		}
+	// A transcript key that reaches this point belongs to the composer (the
+	// non-empty Ctrl+U/Ctrl+D case). Do not let the transcript consume it too.
+	keyMsg, isKey := msg.(tea.KeyPressMsg)
+	composerOwnedScrollKey := isKey && m.transcriptScrollKey(keyMsg)
+	if !composerOwnedScrollKey {
+		var cmd tea.Cmd
+		m.viewport, cmd = m.viewport.Update(msg)
+		cmds = append(cmds, cmd)
 	}
 	m.checkAutoScroll()
 
@@ -2813,6 +2902,7 @@ func (m *Model) navigateHistory(dir int) bool {
 		m.clearCompletionSuppression()
 		m.input.SetValue(m.promptHistory[m.historyIndex])
 		m.input.CursorEnd()
+		_ = m.reflowInputViewport()
 		return true
 	}
 
@@ -2825,12 +2915,14 @@ func (m *Model) navigateHistory(dir int) bool {
 			m.clearCompletionSuppression()
 			m.input.SetValue(m.promptHistory[m.historyIndex])
 			m.input.CursorEnd()
+			_ = m.reflowInputViewport()
 		} else {
 			// Past newest: restore saved input
 			m.historyIndex = -1
 			m.clearCompletionSuppression()
 			m.input.SetValue(m.historySaved)
 			m.input.CursorEnd()
+			_ = m.reflowInputViewport()
 		}
 		return true
 	}
@@ -2841,6 +2933,9 @@ func (m *Model) navigateHistory(dir int) bool {
 // submitInput takes the current input, handles slash commands, or starts the agent.
 func (m *Model) submitInput() tea.Cmd {
 	text := strings.TrimSpace(m.input.Value())
+	if text == "" && len(m.pendingImages) > 0 {
+		text = "Analyze the attached image."
+	}
 	if text == "" {
 		return nil
 	}
@@ -2883,7 +2978,7 @@ func (m *Model) submitPreparedInput(text string) tea.Cmd {
 
 	m.clearCompletionSuppression()
 	m.input.Reset()
-	m.input.SetHeight(1)
+	m.syncInputHeight()
 
 	// Handle slash commands.
 	if strings.HasPrefix(text, "/") {
@@ -3015,6 +3110,41 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 
 	case command.ActionAddReadRoot, command.ActionRemoveReadRoot, command.ActionClearReadRoots:
 		return m.beginReadScopeAction(result, draft)
+
+	case command.ActionAttachImage:
+		if m.goalRuntime != nil {
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: "Images cannot be attached to a host-owned goal continuation. Finish or drop the goal, then attach the image to an ordinary prompt."})
+			m.viewport.SetContent(m.renderEntries())
+			m.resumeFollow()
+			return nil
+		}
+		return m.beginImageFileAttachment(result.Data, "")
+
+	case command.ActionListImages:
+		if len(m.pendingImages) == 0 {
+			m.entries = append(m.entries, ChatEntry{Kind: "system", Content: "No images are attached to the pending prompt. Paste or drag an image file path, or run /image <path>."})
+		} else {
+			m.entries = append(m.entries, ChatEntry{Kind: "system", Content: sanitizeTerminalMultiline(m.renderPlainImageList())})
+		}
+		m.viewport.SetContent(m.renderEntries())
+		m.resumeFollow()
+		return nil
+
+	case command.ActionClearImages:
+		count := m.clearPendingImages()
+		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: fmt.Sprintf("Cleared %d pending image attachment%s.", count, pluralSuffix(count))})
+		m.viewport.SetContent(m.renderEntries())
+		m.resumeFollow()
+		return nil
+
+	case command.ActionForgetImageHistory:
+		if m.goalRuntime != nil {
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: "Image history cannot be changed while a durable goal is attached. Finish or drop the goal first."})
+			m.viewport.SetContent(m.renderEntries())
+			m.resumeFollow()
+			return nil
+		}
+		return m.forgetHistoricalImages()
 
 	case command.ActionLoadContext:
 		path := strings.TrimSpace(result.Data)
@@ -3397,6 +3527,15 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 
 func (m *Model) resetConversationSession() {
 	m.revokeOllamaCloudConsent()
+	if m.imageAttachCancel != nil {
+		m.imageAttachCancel()
+	}
+	m.imageAttachCancel = nil
+	m.imageAttachToken++
+	m.imageAttachRunning = false
+	m.imageAttachFallback = ""
+	m.clearPendingImages()
+	m.turnImages = nil
 	if m.goalOperationCancel != nil {
 		m.goalOperationCancel()
 	}
@@ -3422,6 +3561,7 @@ func (m *Model) resetConversationSession() {
 	m.cancelSessionLoad()
 	m.cancelSessionList()
 	m.sessionID = 0
+	m.activeSessionTitle = ""
 	m.executionCursor = 0
 	m.resetSessionStateRevision()
 	_ = m.releaseExecutionSessionLease()
@@ -3602,21 +3742,25 @@ func (m *Model) footerHeight() int {
 	return height + 1
 }
 
-// syncInputHeight adjusts textarea height to match content (1-5 lines)
-// and recalculates viewport if the height changed.
+// syncInputHeight mirrors Bubbles' visual-row-aware dynamic height into the
+// parent layout and recalculates the transcript allocation when it changes.
 func (m *Model) syncInputHeight() {
-	lines := m.input.LineCount()
-	if lines < 1 {
-		lines = 1
-	}
-	if lines > 5 {
-		lines = 5
-	}
+	lines := max(1, m.input.Height())
 	if lines != m.inputLines {
 		m.inputLines = lines
-		m.input.SetHeight(lines)
 		m.recalcViewportHeight()
 	}
+}
+
+const maxComposerVisibleRows = 8
+
+// composerVisibleRowLimit lets roomy terminals show more of a draft while
+// preserving the established five-row minimum-terminal contract.
+func composerVisibleRowLimit(terminalHeight int) int {
+	if terminalHeight <= 0 {
+		return maxComposerVisibleRows
+	}
+	return min(maxComposerVisibleRows, max(5, terminalHeight/3))
 }
 
 // reflowInputViewport lets Bubbles populate its internal viewport with content
@@ -3624,8 +3768,20 @@ func (m *Model) syncInputHeight() {
 // cursor. Without this no-op child update, a large accepted paste can clamp its
 // five-row viewport against stale pre-paste content and hide the closing rows.
 func (m *Model) reflowInputViewport() tea.Cmd {
+	wasFocused := m.input.Focused()
+	if !wasFocused {
+		// Textarea.Update intentionally ignores messages while blurred. Parent-
+		// owned completion and modal flows still need the same content/viewport
+		// reconciliation before focus returns, so focus only for this synchronous
+		// no-op update and restore the original presentation state immediately.
+		_ = m.input.Focus()
+	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(inputViewportReflowMsg{})
+	if !wasFocused {
+		m.input.Blur()
+	}
+	m.syncInputHeight()
 	return cmd
 }
 
@@ -3976,7 +4132,8 @@ func (m *Model) sendToAgent(text string) tea.Cmd {
 // Goal continuation permits are consumed before this call, so replacing the
 // ID here would sever crash recovery from the execution ledger.
 func (m *Model) sendToAgentTurn(text, turnID string) tea.Cmd {
-	return m.sendToAgentTurnPresentedWithMode(text, turnID, true, agent.TurnLimits{}, m.mode)
+	attachments := clonePendingImages(m.pendingImages)
+	return m.sendToAgentTurnPresentedWithAttachments(text, turnID, true, agent.TurnLimits{}, m.mode, agent.CapabilityActivity{}, attachments)
 }
 
 func (m *Model) sendGoalToAgentTurn(text, turnID string, limits agent.TurnLimits) tea.Cmd {
@@ -3996,12 +4153,31 @@ func (m *Model) sendToAgentTurnPresentedWithMode(text, turnID string, visible bo
 }
 
 func (m *Model) sendToAgentTurnPresentedWithCapability(text, turnID string, visible bool, limits agent.TurnLimits, authority Mode, capability agent.CapabilityActivity) tea.Cmd {
+	return m.sendToAgentTurnPresentedWithAttachments(text, turnID, visible, limits, authority, capability, nil)
+}
+
+func (m *Model) sendToAgentTurnPresentedWithAttachments(text, turnID string, visible bool, limits agent.TurnLimits, authority Mode, capability agent.CapabilityActivity, attachments []pendingImageAttachment) tea.Cmd {
+	messagesBeforeTurn := m.agent.Messages()
+	if err := validateImageConversationBudget(messagesBeforeTurn, attachmentRefs(attachments)); err != nil {
+		return m.failPresentedTurnBeforeRun(text, "Attach images: "+err.Error(), visible)
+	}
+	visionRequired := len(attachments) > 0 || messagesRequireVision(messagesBeforeTurn)
+	if visionRequired {
+		if err := m.ensureVisionModel(); err != nil {
+			return m.failPresentedTurnBeforeRun(text, "Attach images: "+err.Error(), visible)
+		}
+	}
+	if len(attachments) > 0 {
+		m.pendingImages = nil
+		m.turnImages = clonePendingImages(attachments)
+		m.recalcViewportHeight()
+	}
 	m.cancelSessionLoad()
 	m.cancelSessionList()
-	messagesBeforeTurn := m.agent.Messages()
 	m.turnMessagesBefore = append([]llm.Message(nil), messagesBeforeTurn...)
 	m.turnPrompt = text
 	m.turnPromptVisible = visible
+	m.turnEntryIndex = -1
 	m.turnCheckpointSet = true
 	createdSession := false
 	if authority < ModeNormal || authority > ModeAuto {
@@ -4027,22 +4203,28 @@ func (m *Model) sendToAgentTurnPresentedWithCapability(text, turnID string, visi
 
 	if visible {
 		m.entries = append(m.entries, ChatEntry{
-			Kind:    "user",
-			Content: text,
+			Kind:        "user",
+			Content:     text,
+			Attachments: attachmentRefs(attachments),
 		})
+		m.turnEntryIndex = len(m.entries) - 1
 	}
 	m.viewport.SetContent(m.renderEntries())
 	m.gotoBottomIfFollowing()
 
 	var sessionErr error
-	createdSession, sessionErr = m.ensureExecutionSession(text, cfg.Label)
+	sessionTitleSource := text
+	if text == "Analyze the attached image." && len(attachments) > 0 {
+		sessionTitleSource = imageOnlySessionTitle(attachments)
+	}
+	createdSession, sessionErr = m.ensureExecutionSession(sessionTitleSource, cfg.Label)
 	if sessionErr != nil {
 		return m.failPresentedTurnBeforeRun(text, sessionErr.Error(), visible)
 	}
 
 	// Set mode context on the agent.
 	m.setRouterMode(cfg.RouterMode)
-	if !m.modelPinned && m.router != nil && m.modelManager != nil {
+	if !visionRequired && !m.modelPinned && m.router != nil && m.modelManager != nil {
 		if newModel := m.router.SelectModelForMode(text, cfg.RouterMode); newModel != "" && newModel != m.model {
 			m.prepareModelSwitch()
 			if err := m.modelManager.SetCurrentModel(newModel); err == nil {
@@ -4057,7 +4239,18 @@ func (m *Model) sendToAgentTurnPresentedWithCapability(text, turnID string, visi
 			}
 		}
 	}
-	m.agent.AddUserMessage(text)
+	if err := m.agent.AddUserMessageWithImages(text, attachmentData(attachments)); err != nil {
+		m.agent.ReplaceMessages(messagesBeforeTurn)
+		var cleanupErr error
+		if createdSession {
+			cleanupErr = m.discardCreatedExecutionSession()
+		}
+		message := fmt.Sprintf("Attach images: %v", err)
+		if cleanupErr != nil {
+			message = fmt.Sprintf("%s (cleanup: %v)", message, cleanupErr)
+		}
+		return m.failPresentedTurnBeforeRun(text, message, visible)
+	}
 	m.agent.SetModeContext(cfg.SystemPromptPrefix, cfg.ToolPolicy)
 	m.agent.SetAuthorityMode(agentAuthorityMode(authority))
 	if m.sessionID > 0 && m.sessionStore != nil {
@@ -4067,17 +4260,7 @@ func (m *Model) sendToAgentTurnPresentedWithCapability(text, turnID string, visi
 		if err != nil {
 			m.agent.ReplaceMessages(messagesBeforeTurn)
 			if createdSession {
-				leaseErr := m.releaseExecutionSessionLease()
-				cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), time.Second)
-				cleanupErr := m.sessionStore.DeleteSession(cleanupCtx, m.sessionID)
-				cancelCleanup()
-				m.sessionID = 0
-				m.executionCursor = 0
-				m.resetSessionStateRevision()
-				m.agent.SetCheckpointSessionID(0)
-				m.agent.SetExecutionSessionID(0)
-				m.agent.SetExecutionSnapshotCursor(0)
-				if cleanupFailure := errors.Join(leaseErr, cleanupErr); cleanupFailure != nil {
+				if cleanupFailure := m.discardCreatedExecutionSession(); cleanupFailure != nil {
 					return m.failPresentedTurnBeforeRun(text, fmt.Sprintf("Save session: %v (cleanup: %v)", err, cleanupFailure), visible)
 				}
 			}
@@ -4119,6 +4302,11 @@ func (m *Model) sendToAgentTurnPresentedWithCapability(text, turnID string, visi
 }
 
 func (m *Model) failPresentedTurnBeforeRun(text, message string, visible bool) tea.Cmd {
+	presented := m.turnCheckpointSet
+	m.restoreTurnImages()
+	if visible && presented {
+		m.removePresentedTurnEntry()
+	}
 	m.clearTurnMessageCheckpoint()
 	if visible {
 		return m.failTurnBeforeRun(text, message)
@@ -4140,7 +4328,7 @@ func (m *Model) rollbackPreflightRejectedPrompt() bool {
 	}
 	current := m.agent.Messages()
 	before := m.turnMessagesBefore
-	if len(current) != len(before)+1 || !reflect.DeepEqual(current[:len(before)], before) {
+	if len(current) != len(before)+1 || (len(before) > 0 && !reflect.DeepEqual(current[:len(before)], before)) {
 		return false
 	}
 	last := current[len(current)-1]
@@ -4148,14 +4336,34 @@ func (m *Model) rollbackPreflightRejectedPrompt() bool {
 		return false
 	}
 	m.agent.ReplaceMessages(append([]llm.Message(nil), before...))
+	m.restoreTurnImages()
 	if m.turnPromptVisible {
-		if index := len(m.entries) - 1; index >= 0 && m.entries[index].Kind == "user" && m.entries[index].Content == m.turnPrompt {
-			m.entries = m.entries[:index]
-		}
+		m.removePresentedTurnEntry()
 		m.input.SetValue(m.turnPrompt)
 		m.input.CursorEnd()
+		_ = m.reflowInputViewport()
 		m.invalidateEntryCache()
 	}
+	return true
+}
+
+// removePresentedTurnEntry removes the exact user row admitted for the active
+// turn. Provider pre-dispatch errors are delivered before AgentDone, so the
+// row is not necessarily the last transcript entry by the time rollback runs.
+func (m *Model) removePresentedTurnEntry() bool {
+	if m == nil || !m.turnPromptVisible {
+		return false
+	}
+	index := m.turnEntryIndex
+	if index < 0 || index >= len(m.entries) {
+		return false
+	}
+	entry := m.entries[index]
+	if entry.Kind != "user" || entry.Content != m.turnPrompt {
+		return false
+	}
+	m.entries = append(m.entries[:index], m.entries[index+1:]...)
+	m.invalidateEntryCache()
 	return true
 }
 
@@ -4166,7 +4374,9 @@ func (m *Model) clearTurnMessageCheckpoint() {
 	m.turnMessagesBefore = nil
 	m.turnPrompt = ""
 	m.turnPromptVisible = false
+	m.turnEntryIndex = -1
 	m.turnCheckpointSet = false
+	m.turnImages = nil
 }
 
 // ensureExecutionSession creates or reacquires the durable session boundary
@@ -4198,8 +4408,9 @@ func (m *Model) ensureExecutionSession(title, modeLabel string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("create session: %w", err)
 	}
+	title = sessionTitle(title)
 	session, err := m.sessionStore.CreateSession(context.Background(), db.CreateSessionParams{
-		Title: sessionTitle(title), Model: m.model, Mode: modeLabel, WorkspaceID: workspaceID,
+		Title: title, Model: m.model, Mode: modeLabel, WorkspaceID: workspaceID,
 	})
 	if err != nil {
 		return false, fmt.Errorf("create session: %w", err)
@@ -4215,6 +4426,7 @@ func (m *Model) ensureExecutionSession(title, modeLabel string) (bool, error) {
 		return false, fmt.Errorf("lock session: %w", leaseErr)
 	}
 	m.sessionID = session.ID
+	m.activeSessionTitle = session.Title
 	m.executionCursor = 0
 	m.executionLease = lease
 	if err := m.initializeSessionStateRevision(0); err != nil {
@@ -4226,16 +4438,38 @@ func (m *Model) ensureExecutionSession(title, modeLabel string) (bool, error) {
 	return true, nil
 }
 
-func (m *Model) failTurnBeforeRun(text, message string) tea.Cmd {
-	if last := len(m.entries) - 1; last >= 0 && m.entries[last].Kind == "user" && m.entries[last].Content == text {
-		m.entries = m.entries[:last]
+// discardCreatedExecutionSession removes a session that failed before its
+// first turn became durable. The caller must use this only for a session it
+// created in the current send path; restored or pre-existing sessions must
+// never be deleted as error cleanup.
+func (m *Model) discardCreatedExecutionSession() error {
+	sessionID := m.sessionID
+	leaseErr := m.releaseExecutionSessionLease()
+	var deleteErr error
+	if m.sessionStore != nil && sessionID > 0 {
+		cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), time.Second)
+		deleteErr = m.sessionStore.DeleteSession(cleanupCtx, sessionID)
+		cancelCleanup()
 	}
+	m.sessionID = 0
+	m.activeSessionTitle = ""
+	m.executionCursor = 0
+	m.resetSessionStateRevision()
+	if m.agent != nil {
+		m.agent.SetCheckpointSessionID(0)
+		m.agent.SetExecutionSessionID(0)
+		m.agent.SetExecutionSnapshotCursor(0)
+	}
+	return errors.Join(leaseErr, deleteErr)
+}
+
+func (m *Model) failTurnBeforeRun(text, message string) tea.Cmd {
 	m.entries = append(m.entries, ChatEntry{Kind: "error", Content: message})
 	m.state = StateIdle
 	m.input.SetValue(text)
 	m.input.CursorEnd()
 	m.input.Focus()
-	m.syncInputHeight()
+	_ = m.reflowInputViewport()
 	m.recalcViewportHeight()
 	m.invalidateEntryCache()
 	m.viewport.SetContent(m.renderEntries())
@@ -4284,7 +4518,9 @@ func (m *Model) setMode(mode Mode) {
 
 	// The empty-state orientation already owns mode and model. Once a real
 	// conversation exists, retain a compact durable receipt for the transition.
-	if hadConversation {
+	// A linked goal is the other exception: its visible authority remains AUTO,
+	// so the receipt is the only way to expose the selected post-goal mode.
+	if hadConversation || m.goalRuntime != nil {
 		receipt := "Mode · " + ambientConfig.Label
 		if m.goalRuntime != nil {
 			receipt = "After goal · " + ambientConfig.Label + " · active goal · AUTO"
@@ -4391,6 +4627,7 @@ func (m *Model) switchSelectedModel(name string) bool {
 		// Enter/delivery events without re-preparing the provider or stacking
 		// identical `Model` receipts in the transcript.
 		m.modelPinned = true
+		m.saveManualModelPreference(name)
 		for index := range m.ollamaModels {
 			m.ollamaModels[index].Current = config.CanonicalModelName(m.ollamaModels[index].Name) == config.CanonicalModelName(name)
 		}
@@ -4422,6 +4659,7 @@ func (m *Model) switchSelectedModel(name string) bool {
 	m.setCurrentModelProjection(name)
 	m.ollamaOffline = false
 	m.modelPinned = true
+	m.saveManualModelPreference(name)
 	for index := range m.ollamaModels {
 		m.ollamaModels[index].Current = config.CanonicalModelName(m.ollamaModels[index].Name) == config.CanonicalModelName(name)
 	}
@@ -4530,6 +4768,37 @@ func (m *Model) copyToClipboard(text string) tea.Cmd {
 			return SystemMessageMsg{Msg: "Clipboard error: " + err.Error()}
 		}
 		return SystemMessageMsg{Msg: "Copied to clipboard."}
+	}
+}
+
+// readClipboardPaste keeps explicit Ctrl+V on the same inspected path as a
+// terminal bracketed-paste event. The textarea's private clipboard command is
+// disabled at construction because its internal message type would otherwise
+// insert directly and bypass the parent paste receipt.
+func (m *Model) readClipboardPaste() tea.Cmd {
+	read := m.clipboardRead
+	readImage := m.clipboardImageRead
+	return func() tea.Msg {
+		var content string
+		var textErr error
+		if read != nil {
+			content, textErr = read()
+		}
+		if strings.TrimSpace(content) != "" {
+			return tea.PasteMsg{Content: content}
+		}
+		if readImage != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			name, data, err := readImage(ctx)
+			if err == nil && len(data) > 0 {
+				return ClipboardImagePasteMsg{Name: name, Data: data}
+			}
+		}
+		if textErr != nil {
+			return SystemMessageMsg{Msg: "Clipboard text is unavailable and no supported image was found."}
+		}
+		return SystemMessageMsg{Msg: "Clipboard is empty or has no supported text, PNG, JPEG, or GIF image."}
 	}
 }
 

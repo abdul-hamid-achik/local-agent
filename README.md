@@ -69,14 +69,18 @@ Resume an exact saved session, or the newest one for the current canonical
 workspace, when opening the interactive TUI:
 
 ```bash
-local-agent --resume 42
+local-agent --resume S42
 local-agent --resume latest
 ```
 
-`--resume` accepts only a positive session ID or `latest` and cannot be combined
-with headless `-p`/`--prompt`. Loading restores the saved database title and conversation
-state after TUI startup; it does not submit a prompt or automatically continue a
-durable goal.
+`S42` is the short display handle for durable session ID `42`; either spelling
+is accepted by session, goal, and recovery commands. Active sessions appear as
+`S42 · title` in the Runtime view and session picker, and in the TUI footer when
+the current responsive status layout has room. Titles come from the first
+meaningful task text. `--resume` also accepts `latest` and cannot be combined
+with headless `-p`/`--prompt`. Loading restores the saved database title and
+conversation state after TUI startup; it does not submit a prompt or
+automatically continue a durable goal.
 
 No configuration file is required for the basic Ollama-only experience. To start from the annotated configuration:
 
@@ -132,7 +136,7 @@ The shipped memory guard is tuned for a 16 GB Apple-silicon machine:
 
 ### Automatic and pinned models
 
-The interactive TUI starts with automatic routing. Choosing a model or agent profile inside the TUI pins that model; `/model auto` releases the pin. Startup `--model` and profile model selections remain pinned in the TUI too.
+The interactive TUI starts with automatic routing. Choosing a verified local model inside the TUI pins it and remembers that choice for the next process start; `/model auto` releases the pin and clears the saved choice. An explicit startup `--model` or agent-profile model takes precedence. Cloud consent remains conversation-scoped and is never restored from the saved preference.
 
 ```text
 /model                     open the live Ollama inventory
@@ -515,7 +519,7 @@ ICE is still a flat JSON vector store rather than an ANN index, but its bounded 
 | `local-agent --auto --prompt "prompt"` | Run one proactive AUTO prompt; equivalent to `--mode auto`, with routine confined workspace actions pre-authorized |
 | `local-agent --model <name>` | Select the initial model; in headless mode this prevents auto-routing |
 | `local-agent --agent <name>` | Select an initial agent profile |
-| `local-agent --resume <id\|latest>` | Open the TUI and restore an exact or newest current-workspace session |
+| `local-agent --resume <S42\|42\|latest>` | Open the TUI and restore an exact or newest current-workspace session |
 | `local-agent --qwen-router` | Use the experimental Qwen-specific router |
 | `local-agent --skip-approvals` | Skip approval prompts while retaining explicit denies and host/tool boundaries |
 | `local-agent --yolo` | Deprecated compatibility alias for `--skip-approvals` |
@@ -530,6 +534,9 @@ ICE is still a flat JSON vector store rather than an ANN index, but its bounded 
 | `local-agent goal recover [--json] <session-id>` | Dry-run an existing validated reconciliation group without creating or changing it |
 | `local-agent goal recover --apply --item ID --observation VALUE --source VALUE --reference TEXT --summary TEXT --observed-at RFC3339 [--json] <session-id>` | Append exact typed recovery evidence through the shared atomic coordinator |
 | `local-agent execution recover [--json] <session-id> <execution-id>` | Inspect one outcome-unknown execution in an ordinary session without retrying it |
+| `local-agent session list [--json] [--limit N]` | List current-workspace sessions with short handles and titles |
+| `local-agent session export <S42\|42>` | Export one bounded session audit projection |
+| `local-agent session repair <S42\|42>` | Repair one session projection from its durable execution ledger |
 | `local-agent --version` | Print the build version |
 
 Source builds print `dev`. Tagged release artifacts print the tag version
@@ -579,6 +586,9 @@ by its help. It never retries the original tool.
 | `/model auto` | Resume automatic model routing |
 | `/agent [name\|list]` | List or switch profiles |
 | `/load <path>`, `/unload` | Asynchronously add or remove one regular, non-symlink markdown context file (32 KB maximum); quoted paths are supported |
+| `/image <path>`, `/attach <path>` | Validate a PNG, JPEG, or GIF and attach it to the pending ordinary prompt |
+| `/image list`, `/image clear` | Inspect or remove images attached to the pending prompt |
+| `/image forget-history` | Remove historical image references when old image context is no longer needed or its private object is unavailable; pending images and cached objects remain |
 | `/scope [list\|add-read <directory>\|remove-read <path>\|clear-read]` | Manage process-local read-only access outside the writable workspace; exact files are proposed automatically when referenced in a prompt |
 | `/skill`, `/skill list` | List discovered skills and their activation state |
 | `/skill activate <name>`, `/skill deactivate <name>` | Add or remove one skill from active prompt context |
@@ -604,8 +614,8 @@ by its help. It never retries the original tool.
 
 Slash commands use a small argument parser, not a shell. Single or double
 quotes and backslash-escaped whitespace can group an argument, while environment
-variables and command substitutions remain literal. `/load`, `/scope`, `/import`,
-and `/export` separately expand a leading `~/`. An unterminated quote is rejected
+variables and command substitutions remain literal. `/load`, `/image`, `/scope`,
+`/import`, and `/export` separately expand a leading `~/`. An unterminated quote is rejected
 before the command runs. Documented arity is enforced: commands with no
 arguments and `/goal show`, `/goal pause`, `/goal resume`, `/goal budget`, or
 `/goal drop` reject trailing fields, while `/restore` accepts exactly one
@@ -687,6 +697,45 @@ skipped-approval, unavailable-MCP, and Cloud/Remote boundaries; minimum-width
 file approvals keep an identifying target tail plus paging and exact-argument
 controls.
 
+The composer grows with visually wrapped text as you type, up to a bounded
+terminal-height-aware limit, then scrolls internally while keeping the cursor
+region visible. Ordinary bracketed text paste follows the same layout;
+large text pastes retain their existing review step. Mouse reporting is off by
+default so the terminal owns drag selection and copy. Use the keyboard tool and
+scroll bindings below when inspecting the transcript.
+
+Attach an image with `/image <path>` or its `/attach <path>` alias. You can also
+paste or drag a PNG, JPEG, or GIF file when the terminal inserts one quoted,
+shell-escaped, or `file://` path as text. Local Agent decodes and validates the
+complete file before attaching it; each ordinary prompt accepts up to four
+images. Use `/image list` to inspect pending attachments and `/image clear` to
+remove them. The active conversation is bounded to 12 image references, 40 MiB,
+and 48 million decoded pixels in aggregate so repeated vision turns cannot grow
+provider-request memory without limit.
+
+Each image can be at most 20 MiB, 16,384 pixels on either side, and 24 million
+pixels in total. Validated bytes are copied into the owner-private,
+content-addressed store at `~/.config/local-agent/images/`. Session and
+checkpoint JSON retain only a sanitized basename, MIME type, size, dimensions,
+and full SHA-256 reference—never the source path or raw image bytes. Restored
+turns resolve that reference from the private store and verify its digest before
+provider dispatch.
+
+An unpinned model switches to an admitted, auto-routable vision-capable Ollama
+model before the turn; a manual-only Cloud model is never selected implicitly.
+A pinned model that does not advertise vision is rejected locally so no provider
+request starts. On macOS, explicit `Ctrl+V` also reads a PNG image directly from
+the system pasteboard into the same private store. Bracketed terminal paste and
+other platforms can attach a saved image by dragging it or pasting its file path.
+
+If an older private image object was deleted or its context is no longer useful,
+run `/image forget-history`. Local Agent removes the historical references and
+their visible attachment badges together and saves that repair to the active
+session. Pending prompt images and private cached objects are intentionally left
+unchanged. Existing checkpoints are immutable snapshots and may restore their
+references later; delete the referenced private objects separately when actual
+data erasure is required.
+
 ## Keyboard shortcuts
 
 | Key | Action |
@@ -697,7 +746,8 @@ controls.
 | `ctrl+o` | Open Ollama model picker |
 | `tab` | Complete commands, files, and skills |
 | `up`, `down` | Browse input history |
-| `pgup`, `pgdown`, `ctrl+u`, `ctrl+d` | Scroll conversation |
+| `pgup`, `pgdown` | Scroll conversation without editing the draft |
+| `ctrl+u`, `ctrl+d` | Edit the draft; with an empty or unavailable composer, scroll by half a page |
 | `t`, `space` | Toggle all tool details / last tool |
 | `ctrl+t` | Toggle `<think>` tag display |
 | `ctrl+y` | Copy last response |

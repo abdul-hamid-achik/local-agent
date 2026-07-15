@@ -58,6 +58,15 @@ type SystemMessageMsg struct {
 	Msg string
 }
 
+// ClipboardImagePasteMsg carries one explicitly requested clipboard image only
+// until the parent can admit it to the private content-addressed store. Raw
+// bytes never enter Model state, transcript entries, or session persistence.
+type ClipboardImagePasteMsg struct {
+	Name string
+	Data []byte
+	Err  error
+}
+
 // CapabilityRouteMsg is an ephemeral host advisory. It must never be appended
 // to ChatEntry, ToolEntry, session state, or evidence receipts.
 type CapabilityRouteMsg struct {

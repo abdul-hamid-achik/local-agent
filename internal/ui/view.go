@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/abdul-hamid-achik/local-agent/internal/imageasset"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 )
 
@@ -174,7 +175,10 @@ func (m *Model) View() tea.View {
 
 	v := tea.NewView(content.String() + "\n")
 	v.AltScreen = true
-	v.MouseMode = tea.MouseModeCellMotion
+	// Selection is the common mouse action in a conversational terminal. Tool
+	// receipts and transcript navigation retain complete keyboard controls, so
+	// leave mouse reporting off and let the terminal own drag-to-copy.
+	v.MouseMode = tea.MouseModeNone
 	v.Cursor = viewCursor
 
 	// Terminal title progress. The workspace basename differentiates several
@@ -575,6 +579,9 @@ func (m *Model) renderStatusLine() string {
 			keyHint{Key: "/recover", Action: "inspect"},
 		)
 	}
+	if len(m.pendingImages) > 0 {
+		return m.renderPendingImagesStatus(paneW)
+	}
 	if summary, ok := m.goalStatusSummary(); ok {
 		return m.renderGoalFooterStatus(summary, paneW)
 	}
@@ -634,6 +641,9 @@ func (m *Model) renderStatusLine() string {
 			)
 		}
 	}
+	if session := sessionDisplayLabel(m.sessionID, m.activeSessionTitle, sessionStatusTitleLimit(paneW)); session != "" {
+		parts = append(parts, m.styles.StatusText.Render(session))
+	}
 
 	contextStatus := m.renderContextStatus(paneW < 80)
 	contextHigh := m.numCtx > 0 && m.promptTokens*100/m.numCtx >= 75
@@ -679,9 +689,19 @@ func (m *Model) renderStatusLine() string {
 			boundary := strings.Fields(m.currentModelSurfaceLabel(true))[0]
 			compact = append(compact, m.styles.StatusText.Render(boundary))
 		}
+		if session := sessionDisplayLabel(m.sessionID, "", 0); session != "" {
+			compact = append(compact, m.styles.StatusText.Render(session))
+		}
 		return renderPackedStatusRows(paneW, compact, separator)
 	}
 	return line
+}
+
+func sessionStatusTitleLimit(paneW int) int {
+	if paneW < 72 {
+		return 0
+	}
+	return min(32, max(16, paneW/3))
 }
 
 // renderGoalFooterStatus keeps Goal Runtime additive: progress joins the
@@ -732,8 +752,14 @@ func (m *Model) renderGoalFooterStatus(summary GoalSummary, paneW int) string {
 		}
 		required = append(required, metadataPart{view: m.styles.StatusText.Render(boundary)})
 	}
+	if session := sessionDisplayLabel(m.sessionID, "", 0); session != "" {
+		required = append(required, metadataPart{view: m.styles.StatusText.Render(session)})
+	}
 
-	optional := make([]metadataPart, 0, 4)
+	optional := make([]metadataPart, 0, 5)
+	// The goal label already names the work. At roomy widths add only the
+	// compact durable handle; repeating the session title would squeeze the
+	// goal phase, budget, and objective that matter more here.
 	if contextHigh && contextStatus != "" {
 		optional = append(optional, metadataPart{view: contextStatus})
 	}
@@ -884,7 +910,7 @@ func entriesFromMessages(msgs []llm.Message) []ChatEntry {
 		switch msg.Role {
 		case "user":
 			if msg.Content != "" {
-				entries = append(entries, ChatEntry{Kind: "user", Content: msg.Content})
+				entries = append(entries, ChatEntry{Kind: "user", Content: msg.Content, Attachments: imageRefsFromMessages(msg.Images)})
 			}
 		case "assistant":
 			if msg.Content != "" {
@@ -987,7 +1013,7 @@ func (m *Model) renderEntries() string {
 		switch entry.Kind {
 		case "user":
 			assistantStarted = false
-			m.renderUserMsg(&entryView, entry.Content, contentW)
+			m.renderUserMsg(&entryView, entry.Content, entry.Attachments, contentW)
 		case "assistant":
 			m.renderAssistantMsg(&entryView, entry, contentW, !assistantStarted)
 		case "tool_group":
@@ -1218,7 +1244,7 @@ func (m *Model) renderWelcome(b *strings.Builder) {
 }
 
 // renderUserMsg renders a user message block.
-func (m *Model) renderUserMsg(b *strings.Builder, content string, contentW int) {
+func (m *Model) renderUserMsg(b *strings.Builder, content string, attachments []imageasset.Ref, contentW int) {
 	content = sanitizeTerminalMultiline(content)
 	label := m.styles.UserLabel.Render("you")
 	labelW := lipgloss.Width(label)
@@ -1230,6 +1256,10 @@ func (m *Model) renderUserMsg(b *strings.Builder, content string, contentW int) 
 	b.WriteString("\n")
 	b.WriteString(m.styles.UserContent.Render(wrapText(content, contentW)))
 	b.WriteString("\n")
+	if len(attachments) > 0 {
+		b.WriteString(m.renderImageAttachmentSummary(attachments, contentW))
+		b.WriteString("\n")
+	}
 }
 
 // renderAssistantMsg renders a completed assistant message block.

@@ -46,6 +46,7 @@ type OllamaClient struct {
 type ollamaMessage struct {
 	Role       string           `json:"role"`
 	Content    string           `json:"content"`
+	Images     [][]byte         `json:"images,omitempty"`
 	Thinking   string           `json:"thinking,omitempty"`
 	ToolCalls  []ollamaToolCall `json:"tool_calls,omitempty"`
 	ToolName   string           `json:"tool_name,omitempty"`
@@ -247,6 +248,16 @@ func (o *OllamaClient) ChatStream(ctx context.Context, opts ChatOptions, fn func
 			Content:    message.Content,
 			ToolName:   message.ToolName,
 			ToolCallID: message.ToolCallID,
+		}
+		for imageIndex, image := range message.Images {
+			if err := image.Validate(); err != nil {
+				// Validation occurs before request construction, so downstream
+				// execution state must not treat this as an uncertain dispatch.
+				return inferenceNotStarted(fmt.Errorf("ollama message image %d: %w", imageIndex, err))
+			}
+			// Keep provider request ownership independent from the caller. JSON's
+			// []byte encoding emits the base64 strings required by /api/chat.
+			converted.Images = append(converted.Images, append([]byte(nil), image.Data...))
 		}
 		for index, call := range message.ToolCalls {
 			converted.ToolCalls = append(converted.ToolCalls, ollamaToolCall{

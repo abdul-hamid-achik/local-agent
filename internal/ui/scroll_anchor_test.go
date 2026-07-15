@@ -301,6 +301,69 @@ func TestEndPreservesNonemptyComposerAndOverlayOwnership(t *testing.T) {
 	}
 }
 
+func TestTranscriptPagingNeverMutatesComposerDraft(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m = updated.(*Model)
+	setScrollableTranscript(m)
+	m.resumeFollow()
+	m.input.SetValue("draft must remain byte exact")
+	m.input.CursorStart()
+	for range 8 {
+		updated, _ = m.Update(rightKey())
+		m = updated.(*Model)
+	}
+	wantValue, wantLine, wantColumn := m.input.Value(), m.input.Line(), m.input.Column()
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyPgUp})
+	m = updated.(*Model)
+	if m.viewport.AtBottom() {
+		t.Fatal("Page Up did not move the transcript")
+	}
+	if m.input.Value() != wantValue || m.input.Line() != wantLine || m.input.Column() != wantColumn {
+		t.Fatalf("Page Up changed draft/cursor: %q @ %d:%d", m.input.Value(), m.input.Line(), m.input.Column())
+	}
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	m = updated.(*Model)
+	if m.input.Value() != wantValue || m.input.Line() != wantLine || m.input.Column() != wantColumn {
+		t.Fatalf("Page Down changed draft/cursor: %q @ %d:%d", m.input.Value(), m.input.Line(), m.input.Column())
+	}
+}
+
+func TestComposerCtrlEditingDoesNotScrollTranscript(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m = updated.(*Model)
+	setScrollableTranscript(m)
+	m.viewport.GotoTop()
+	m.pauseFollow()
+	m.input.SetValue("abcdef")
+	m.input.CursorEnd()
+	wantOffset := m.viewport.YOffset()
+
+	updated, _ = m.Update(ctrlKey('u'))
+	m = updated.(*Model)
+	if m.input.Value() != "" {
+		t.Fatalf("Ctrl+U did not retain standard composer editing: %q", m.input.Value())
+	}
+	if got := m.viewport.YOffset(); got != wantOffset {
+		t.Fatalf("Ctrl+U moved transcript from %d to %d", wantOffset, got)
+	}
+
+	m.input.SetValue("abcdef")
+	m.input.CursorStart()
+	wantOffset = m.viewport.YOffset()
+	updated, _ = m.Update(ctrlKey('d'))
+	m = updated.(*Model)
+	if m.input.Value() != "bcdef" {
+		t.Fatalf("Ctrl+D did not delete one composer character: %q", m.input.Value())
+	}
+	if got := m.viewport.YOffset(); got != wantOffset {
+		t.Fatalf("Ctrl+D moved transcript from %d to %d", wantOffset, got)
+	}
+}
+
 func TestEndResumesFollowDuringOwnedBusyStates(t *testing.T) {
 	tests := []struct {
 		name  string

@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,6 +39,87 @@ func TestOllamaChatStreamPreservesNativeReasoning(t *testing.T) {
 	}
 	if got.Text != "answer" || got.Reasoning != "private work" {
 		t.Fatalf("stream chunk = %#v", got)
+	}
+}
+
+func TestOllamaChatStreamEncodesVisionImages(t *testing.T) {
+	first := []byte{0x89, 'P', 'N', 'G', 0x00}
+	second := []byte{0xff, 0xd8, 0xff, 0x00}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" || r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+		var request struct {
+			Messages []struct {
+				Role   string   `json:"role"`
+				Images []string `json:"images"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		if len(request.Messages) != 2 {
+			t.Errorf("message count = %d, want 2", len(request.Messages))
+			http.Error(w, "bad message count", http.StatusBadRequest)
+			return
+		}
+		if request.Messages[0].Images != nil {
+			t.Errorf("text-only message images = %#v, want omitted", request.Messages[0].Images)
+		}
+		got := request.Messages[1].Images
+		want := []string{
+			base64.StdEncoding.EncodeToString(first),
+			base64.StdEncoding.EncodeToString(second),
+		}
+		if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+			t.Errorf("wire images = %#v, want %#v", got, want)
+		}
+		_, _ = fmt.Fprintln(w, `{"message":{"role":"assistant","content":"two images"},"done":true}`)
+	}))
+	defer server.Close()
+
+	client, err := NewOllamaClient(server.URL, "vision-model", 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := ChatOptions{Messages: []Message{
+		{Role: "user", Content: "text only"},
+		{
+			Role:    "user",
+			Content: "compare these",
+			Images: []ImageData{
+				{MediaType: "image/png", Data: first},
+				{MediaType: "image/jpeg", Data: second},
+			},
+		},
+	}}
+	if err := client.ChatStream(context.Background(), options, func(StreamChunk) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOllamaChatStreamRejectsInvalidImageBeforeRequest(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("provider request dispatched for invalid image")
+		http.Error(w, "unexpected request", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	client, err := NewOllamaClient(server.URL, "vision-model", 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = client.ChatStream(context.Background(), ChatOptions{Messages: []Message{{
+		Role: "user", Images: []ImageData{{MediaType: "text/plain", Data: []byte("not an image")}},
+	}}}, func(StreamChunk) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "is not an image") {
+		t.Fatalf("invalid image error = %v", err)
+	}
+	if !errors.Is(err, ErrInferenceNotStarted) {
+		t.Fatalf("invalid image error = %v, want inference-not-started sentinel", err)
 	}
 }
 

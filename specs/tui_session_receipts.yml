@@ -59,6 +59,10 @@ steps:
       screen:
         contains: "Filter › recovery"
       timeoutMs: 2000
+  - wait:
+      screen:
+        contains: "Recovery receipt review"
+      timeoutMs: 2000
   - snapshot: sessions_filtered
   - press: "enter"
   - wait:

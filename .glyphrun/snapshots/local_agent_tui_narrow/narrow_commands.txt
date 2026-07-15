@@ -13,7 +13,7 @@
 │   /recover · Review a paused exec… │
 │   /agent · Show or switch agent p… │
 │   /load · Load a markdown file as… │
-│   /scope · List or manage tempora… │
+│   /image · Attach or manage pendi… │
 │ esc cancel · enter select · ↑/↓    │
 ╰────────────────────────────────────╯
 ▌❯ /

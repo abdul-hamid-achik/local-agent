@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -16,7 +17,9 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
 	"github.com/abdul-hamid-achik/local-agent/internal/ecosystem"
 	"github.com/abdul-hamid-achik/local-agent/internal/goal"
+	"github.com/abdul-hamid-achik/local-agent/internal/imageasset"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
+	"github.com/abdul-hamid-achik/local-agent/internal/sessionref"
 )
 
 var ErrSessionStateRevisionUnknown = errors.New("session state revision is unknown; reload the durable session before saving")
@@ -29,13 +32,14 @@ type SessionListItem struct {
 }
 
 type persistedChatEntry struct {
-	Kind              string `json:"kind"`
-	Content           string `json:"content,omitempty"`
-	Name              string `json:"name,omitempty"`
-	IsError           bool   `json:"is_error,omitempty"`
-	ToolIndex         int    `json:"tool_index,omitempty"`
-	ThinkingContent   string `json:"thinking_content,omitempty"`
-	ThinkingCollapsed bool   `json:"thinking_collapsed,omitempty"`
+	Kind              string           `json:"kind"`
+	Content           string           `json:"content,omitempty"`
+	Name              string           `json:"name,omitempty"`
+	IsError           bool             `json:"is_error,omitempty"`
+	ToolIndex         int              `json:"tool_index,omitempty"`
+	ThinkingContent   string           `json:"thinking_content,omitempty"`
+	ThinkingCollapsed bool             `json:"thinking_collapsed,omitempty"`
+	Attachments       []imageasset.Ref `json:"attachments,omitempty"`
 }
 
 // persistedToolEntry deliberately excludes RawArgs and BeforeContent. Those
@@ -88,7 +92,28 @@ type persistedSessionState struct {
 const currentPersistedSessionVersion = 2
 
 func sessionTitle(prompt string) string {
-	title := sanitizeTerminalSingleLine(strings.SplitN(prompt, "\n", 2)[0])
+	lines := strings.Split(prompt, "\n")
+	titleSource := ""
+	titleLine := -1
+	for index, line := range lines {
+		if strings.TrimSpace(line) != "" {
+			titleSource = line
+			titleLine = index
+			break
+		}
+	}
+	// Guided PLAN wraps the user's task in a host-authored prompt. Name the
+	// session after the reviewed task instead of the internal instruction line.
+	if strings.EqualFold(strings.TrimSpace(titleSource), "Plan the following task:") {
+		for _, line := range lines[titleLine+1:] {
+			label, value, found := strings.Cut(line, ":")
+			if found && strings.EqualFold(strings.TrimSpace(label), "Task") {
+				titleSource = value
+				break
+			}
+		}
+	}
+	title := sanitizeTerminalSingleLine(titleSource)
 	if title == "" {
 		title = "Local agent session " + time.Now().Format("2006-01-02 15:04")
 	}
@@ -97,6 +122,18 @@ func sessionTitle(prompt string) string {
 		title = string(runes[:69]) + "..."
 	}
 	return title
+}
+
+func sessionDisplayLabel(id int64, title string, titleLimit int) string {
+	handle := sessionref.Format(id)
+	if handle == "" {
+		return ""
+	}
+	title = sanitizeTerminalSingleLine(title)
+	if title == "" || titleLimit <= 0 {
+		return handle
+	}
+	return handle + " · " + truncateDisplay(title, titleLimit)
 }
 
 func boundedSessionText(value string, limit int) string {
@@ -279,6 +316,7 @@ func encodeSessionState(m *Model) (string, error) {
 			ToolIndex:         entry.ToolIndex,
 			ThinkingContent:   entry.ThinkingContent,
 			ThinkingCollapsed: entry.ThinkingCollapsed,
+			Attachments:       append([]imageasset.Ref(nil), entry.Attachments...),
 		}
 	}
 	manualSkills := m.manualSkills
@@ -453,6 +491,12 @@ func EncodeHeadlessGoalSessionState(messages []llm.Message, model, agentProfile 
 func marshalPersistedSessionState(state persistedSessionState) (string, error) {
 	state.Messages = agent.SanitizeMessagesForPersistence(state.Messages)
 	state.ToolEntries = sanitizePersistedToolEntryArgs(state.ToolEntries)
+	if err := validatePersistedImageAttachments(state.Entries); err != nil {
+		return "", err
+	}
+	if err := validatePersistedImageProjection(state.Messages, state.Entries); err != nil {
+		return "", err
+	}
 	data, err := json.Marshal(state)
 	if err != nil {
 		return "", fmt.Errorf("encode session state: %w", err)
@@ -474,7 +518,134 @@ func decodeSessionState(raw string) (persistedSessionState, error) {
 	}
 	state.Messages = agent.SanitizeMessagesForPersistence(state.Messages)
 	state.ToolEntries = sanitizePersistedToolEntryArgs(state.ToolEntries)
+	if err := validatePersistedImageAttachments(state.Entries); err != nil {
+		return state, err
+	}
+	if err := validatePersistedImageProjection(state.Messages, state.Entries); err != nil {
+		return state, err
+	}
 	return state, nil
+}
+
+func validatePersistedImageAttachments(entries []persistedChatEntry) error {
+	for entryIndex, entry := range entries {
+		if len(entry.Attachments) > maxPendingImages {
+			return fmt.Errorf("session entry %d has %d image attachments (limit %d)", entryIndex, len(entry.Attachments), maxPendingImages)
+		}
+		if len(entry.Attachments) > 0 && entry.Kind != "user" {
+			return fmt.Errorf("session entry %d attaches images to non-user content", entryIndex)
+		}
+		seen := make(map[string]struct{}, len(entry.Attachments))
+		for attachmentIndex, attachment := range entry.Attachments {
+			if err := attachment.Validate(); err != nil {
+				return fmt.Errorf("session entry %d image %d: %w", entryIndex, attachmentIndex, err)
+			}
+			if _, duplicate := seen[attachment.Digest]; duplicate {
+				return fmt.Errorf("session entry %d repeats image %s", entryIndex, attachment.Handle())
+			}
+			seen[attachment.Digest] = struct{}{}
+		}
+	}
+	return nil
+}
+
+func validatePersistedImageProjection(messages []llm.Message, entries []persistedChatEntry) error {
+	messageGroups := make([]persistedImageGroup, 0)
+	for messageIndex, message := range messages {
+		if len(message.Images) == 0 {
+			continue
+		}
+		if message.Role != "user" {
+			return fmt.Errorf("session message %d attaches images to non-user content", messageIndex)
+		}
+		if len(message.Images) > maxPendingImages {
+			return fmt.Errorf("session message %d has %d image attachments (limit %d)", messageIndex, len(message.Images), maxPendingImages)
+		}
+		group := make([]imageasset.Ref, len(message.Images))
+		seen := make(map[string]struct{}, len(message.Images))
+		for imageIndex, image := range message.Images {
+			if err := image.ValidateReference(); err != nil {
+				return fmt.Errorf("session message %d image %d: %w", messageIndex, imageIndex, err)
+			}
+			group[imageIndex] = imageasset.Ref{
+				Digest: image.SHA256, MIMEType: image.MediaType, Name: image.Name,
+				SizeBytes: image.Size, Width: image.Width, Height: image.Height,
+			}
+			if _, duplicate := seen[group[imageIndex].Digest]; duplicate {
+				return fmt.Errorf("session message %d repeats image %s", messageIndex, group[imageIndex].Handle())
+			}
+			seen[group[imageIndex].Digest] = struct{}{}
+		}
+		messageGroups = append(messageGroups, persistedImageGroup{Content: message.Content, Refs: group})
+	}
+
+	entryGroups := make([]persistedImageGroup, 0)
+	for _, entry := range entries {
+		if len(entry.Attachments) > 0 {
+			entryGroups = append(entryGroups, persistedImageGroup{Content: entry.Content, Refs: entry.Attachments})
+		}
+	}
+	if len(messageGroups) != len(entryGroups) {
+		return fmt.Errorf("session image transcript projection is inconsistent")
+	}
+	for groupIndex := range messageGroups {
+		if messageGroups[groupIndex].Content != entryGroups[groupIndex].Content || len(messageGroups[groupIndex].Refs) != len(entryGroups[groupIndex].Refs) {
+			return fmt.Errorf("session image transcript projection is inconsistent")
+		}
+		for imageIndex := range messageGroups[groupIndex].Refs {
+			if messageGroups[groupIndex].Refs[imageIndex] != entryGroups[groupIndex].Refs[imageIndex] {
+				return fmt.Errorf("session image transcript projection is inconsistent")
+			}
+		}
+	}
+	return nil
+}
+
+type persistedImageGroup struct {
+	Content string
+	Refs    []imageasset.Ref
+}
+
+// reconcileVisibleImageProjection removes image badges whose provider message
+// was summarized away during context compaction. The visible prose transcript
+// remains intact, while durable image metadata continues to be an exact
+// projection of the agent history that will be restored on restart.
+func (m *Model) reconcileVisibleImageProjection(messages []llm.Message) error {
+	desired := imageReferenceGroups(messages)
+	next := 0
+	for index := range m.entries {
+		if len(m.entries[index].Attachments) == 0 {
+			continue
+		}
+		if next < len(desired) && m.entries[index].Content == desired[next].Content && reflect.DeepEqual(m.entries[index].Attachments, desired[next].Refs) {
+			next++
+			continue
+		}
+		m.entries[index].Attachments = nil
+	}
+	if next != len(desired) {
+		return fmt.Errorf("retained image messages have no matching visible user entry")
+	}
+	m.invalidateEntryCache()
+	return nil
+}
+
+func imageReferenceGroups(messages []llm.Message) []persistedImageGroup {
+	groups := make([]persistedImageGroup, 0)
+	for _, message := range messages {
+		if message.Role != "user" || len(message.Images) == 0 {
+			continue
+		}
+		group := make([]imageasset.Ref, len(message.Images))
+		for index, image := range message.Images {
+			group[index] = imageasset.Ref{
+				Digest: image.SHA256, MIMEType: image.MediaType, Name: image.Name,
+				SizeBytes: image.Size, Width: image.Width, Height: image.Height,
+			}
+		}
+		groups = append(groups, persistedImageGroup{Content: message.Content, Refs: group})
+	}
+	return groups
 }
 
 func sanitizePersistedToolEntryArgs(entries []persistedToolEntry) []persistedToolEntry {
@@ -600,6 +771,12 @@ func (m *Model) restoreSessionState(state persistedSessionState) error {
 	// privacy boundary as JSON decoding before messages or cards enter the UI.
 	state.Messages = agent.SanitizeMessagesForPersistence(state.Messages)
 	state.ToolEntries = sanitizePersistedToolEntryArgs(state.ToolEntries)
+	if err := validatePersistedImageAttachments(state.Entries); err != nil {
+		return err
+	}
+	if err := validatePersistedImageProjection(state.Messages, state.Entries); err != nil {
+		return err
+	}
 	var targetGoal *goal.Runtime
 	if state.Goal != nil {
 		targetGoal, err = goal.Restore(*state.Goal)
@@ -686,6 +863,8 @@ func (m *Model) restoreSessionState(state persistedSessionState) error {
 
 	m.mode = state.Mode
 	m.modelPinned = state.ModelPinned
+	m.clearPendingImages()
+	m.turnImages = nil
 	m.agent.ReplaceMessages(append([]llm.Message(nil), state.Messages...))
 	m.entries = make([]ChatEntry, len(state.Entries))
 	for i, entry := range state.Entries {
@@ -697,6 +876,7 @@ func (m *Model) restoreSessionState(state persistedSessionState) error {
 			ToolIndex:         entry.ToolIndex,
 			ThinkingContent:   entry.ThinkingContent,
 			ThinkingCollapsed: entry.ThinkingCollapsed,
+			Attachments:       append([]imageasset.Ref(nil), entry.Attachments...),
 		}
 	}
 	m.toolEntries = restoreToolEntries(state.ToolEntries)
@@ -769,6 +949,10 @@ func serializeEntries(entries []ChatEntry) string {
 		case "user":
 			b.WriteString("## User\n\n")
 			b.WriteString(e.Content)
+			for _, attachment := range e.Attachments {
+				name := sanitizeTerminalSingleLine(attachment.Name)
+				fmt.Fprintf(&b, "\n\n[image: %s · %dx%d · %s]", name, attachment.Width, attachment.Height, attachment.Handle())
+			}
 			b.WriteString("\n\n")
 		case "assistant":
 			b.WriteString("## Assistant\n\n")

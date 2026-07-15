@@ -13,12 +13,12 @@
        │ Productive turns are progress signals, not acceptance proof.   │
        │                                                                │
        │ State                                                          │
-       │ paused · unproductive turn: LLM response: inference not        │
-       │ started: no model selected                                     │
+       │ paused · unproductive turn: inference not started: no model    │
+       │ selected                                                       │
        │                                                                │
        │ Last turn                                                      │
-       │ not productive · 0 eval · just now · LLM response: inference   │
-       │ not started: no model selected                                 │
+       │ not productive · 0 eval · just now · inference not started: no │
+       │ model selected                                                 │
        │ Actions · 2/4                                                  │
        │ Pause ×  › Resume  Budget  Drop                                │
        │ Resume or safely retry goal evaluation                         │
@@ -27,4 +27,4 @@
 
 
 ───────────────────────────────────────────────────────────────────────────────
- [ AUTO ] · Ⅱ paused · Ship a polish… · 0/8 auto turns · 0/12k tok · qwen3.5:2b
+ [ AUTO ] · Ⅱ paused · Ship a p… · 0/8 auto turns · 0/12k tok · S1 · qwen3.5:2b

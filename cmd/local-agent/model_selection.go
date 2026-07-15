@@ -2,12 +2,53 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
 )
 
 func shouldPinStartupModel(modelOverride string, autoSelect bool) bool {
 	return modelOverride != "" || !autoSelect
+}
+
+func shouldRestoreManualModelPreference(modelOverride string, profileModelPinned bool) bool {
+	return strings.TrimSpace(modelOverride) == "" && !profileModelPinned
+}
+
+// restoreManualModelPreference accepts a saved selection only when the current
+// Ollama inventory proves it is local and manually selectable. In particular,
+// a remembered Ollama Cloud name never carries its prior session consent into
+// a new process.
+func restoreManualModelPreference(
+	preferred string,
+	manuallySelectable []string,
+	localSelectable []string,
+	inventoryKnown bool,
+) (string, bool, string) {
+	preferred = strings.TrimSpace(preferred)
+	if preferred == "" {
+		return "", false, ""
+	}
+	if !inventoryKnown {
+		return "", false, fmt.Sprintf("saved model %q was not restored because Ollama inventory is unavailable", preferred)
+	}
+	if model, ok := matchingModel(localSelectable, preferred); ok {
+		return model, true, ""
+	}
+	if _, ok := matchingModel(manuallySelectable, preferred); ok {
+		return "", false, fmt.Sprintf("saved model %q needs a fresh explicit selection because it is not a verified local model", preferred)
+	}
+	return "", false, fmt.Sprintf("saved model %q is no longer available; using automatic or configured selection", preferred)
+}
+
+func matchingModel(models []string, wanted string) (string, bool) {
+	wanted = config.CanonicalModelName(wanted)
+	for _, model := range models {
+		if config.CanonicalModelName(model) == wanted {
+			return model, true
+		}
+	}
+	return "", false
 }
 
 // resolveStartupModel keeps the manual selection inventory separate from the

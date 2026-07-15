@@ -530,6 +530,7 @@ func (m *Model) discardExecutionSession() error {
 	deleteErr := m.sessionStore.DeleteSession(ctx, id)
 	cancel()
 	m.sessionID = 0
+	m.activeSessionTitle = ""
 	m.executionCursor = 0
 	m.resetSessionStateRevision()
 	m.agent.SetCheckpointSessionID(0)
@@ -1495,7 +1496,7 @@ func (m *Model) preserveGeneratedPrompt(prompt string) bool {
 		return false
 	}
 	m.input.CursorEnd()
-	m.syncInputHeight()
+	_ = m.reflowInputViewport()
 	return true
 }
 

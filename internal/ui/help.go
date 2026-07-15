@@ -49,6 +49,8 @@ func (m *Model) buildHelpContent(innerW int) string {
 
 	inputShortcuts := []helpRow{
 		{"@file / @agent", "Insert file or agent mention text"},
+		{"ctrl+v", "Paste text; on macOS attach a clipboard PNG"},
+		{"paste/drag image path", "Attach a PNG, JPEG, or GIF to the pending prompt"},
 		{"~/… or /…", "Review temporary read-only access; MCP tools require separate approval"},
 		{"#skill", "Insert skill mention text"},
 		{"/cmd", "Run slash command"},

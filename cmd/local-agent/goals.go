@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -18,6 +17,7 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
 	"github.com/abdul-hamid-achik/local-agent/internal/goal"
 	"github.com/abdul-hamid-achik/local-agent/internal/reconciliation"
+	"github.com/abdul-hamid-achik/local-agent/internal/sessionref"
 )
 
 const goalCommandLimit = 100
@@ -285,9 +285,9 @@ func parseGoalRunArgs(args []string, stdout, stderr io.Writer) (goalRunOptions, 
 		_, _ = fmt.Fprintln(stderr, "goal run: provide exactly one session ID")
 		return goalRunOptions{}, 2
 	}
-	sessionID, err := strconv.ParseInt(flags.Arg(0), 10, 64)
-	if err != nil || sessionID <= 0 {
-		_, _ = fmt.Fprintf(stderr, "goal run: invalid session ID %q\n", flags.Arg(0))
+	sessionID, err := sessionref.Parse(flags.Arg(0))
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "goal run: invalid session reference %q\n", flags.Arg(0))
 		return goalRunOptions{}, 2
 	}
 	promptText := strings.TrimSpace(*prompt)
@@ -335,7 +335,7 @@ func handleGoalOpen(store *db.Store, workspace string, args []string, stdout, st
 		return 2
 	}
 	session, err := store.CreateSession(context.Background(), db.CreateSessionParams{
-		Title: objectiveText, Model: "headless-goal", Mode: "AUTO", WorkspaceID: workspace,
+		Title: headlessSessionTitle(objectiveText), Model: "headless-goal", Mode: "AUTO", WorkspaceID: workspace,
 	})
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "goal open: create session: %v\n", err)
@@ -376,8 +376,9 @@ func handleGoalOpen(store *db.Store, workspace string, args []string, stdout, st
 		}
 		return 0
 	}
-	goalFprintf(stdout, "Opened goal %s in session %d.\n", terminalSafeGoalText(snapshot.ID), session.ID)
-	goalFprintf(stdout, "Inspect it with: local-agent goal show %d --json\n", session.ID)
+	handle := sessionref.Format(session.ID)
+	goalFprintf(stdout, "Opened goal %s in session %s.\n", terminalSafeGoalText(snapshot.ID), handle)
+	goalFprintf(stdout, "Inspect it with: local-agent goal show --json %s\n", handle)
 	return 0
 }
 
@@ -394,9 +395,9 @@ func handleGoalPending(store goalControlStore, workspace string, args []string, 
 		_, _ = fmt.Fprintln(stderr, "goal pending: provide exactly one session ID from `local-agent goal list`")
 		return 2
 	}
-	sessionID, err := strconv.ParseInt(flags.Arg(0), 10, 64)
-	if err != nil || sessionID <= 0 {
-		_, _ = fmt.Fprintf(stderr, "goal pending: invalid session ID %q\n", flags.Arg(0))
+	sessionID, err := sessionref.Parse(flags.Arg(0))
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "goal pending: invalid session reference %q\n", flags.Arg(0))
 		return 2
 	}
 	if *limit <= 0 || *limit > controlplane.MaxListLimit {
@@ -458,9 +459,9 @@ func handleGoalRecover(store goalRecoveryStore, workspace string, args []string,
 		_, _ = fmt.Fprintln(stderr, "goal recover: provide exactly one session ID")
 		return 2
 	}
-	sessionID, err := strconv.ParseInt(flags.Arg(0), 10, 64)
-	if err != nil || sessionID <= 0 {
-		_, _ = fmt.Fprintf(stderr, "goal recover: invalid session ID %q\n", flags.Arg(0))
+	sessionID, err := sessionref.Parse(flags.Arg(0))
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "goal recover: invalid session reference %q\n", flags.Arg(0))
 		return 2
 	}
 	provided := make(map[string]bool)
@@ -704,7 +705,7 @@ func projectGoalRecoveryApply(sessionID int64, receipt db.ReconciliationCommitRe
 
 func writeGoalRecoveryDryRun(writer io.Writer, view goalRecoveryDryRun) {
 	goalFprintln(writer, "Recovery dry run (read-only)")
-	goalFprintf(writer, "Session: %d @ revision %d\n", view.SessionID, view.SessionRevision)
+	goalFprintf(writer, "Session: %s @ revision %d\n", sessionref.Format(view.SessionID), view.SessionRevision)
 	goalFprintf(writer, "Goal: %s · %s\n", terminalSafeGoalText(view.GoalID), view.GoalState)
 	goalFprintf(writer, "Group: %s\n", terminalSafeGoalText(view.GroupItemID))
 	goalFprintf(writer, "Turn: %s · snapshot cursor %d\n", terminalSafeGoalText(view.TurnID), view.SnapshotCursor)
@@ -739,7 +740,7 @@ func writeGoalRecoveryApply(writer io.Writer, result goalRecoveryApplyResult) {
 	}
 	goalFprintf(writer, "Recovery evidence %s: %s\n", action, terminalSafeGoalText(result.ResolutionID))
 	goalFprintf(writer, "Group: %s · item %s\n", terminalSafeGoalText(result.GroupItemID), terminalSafeGoalText(result.ItemID))
-	goalFprintf(writer, "Session revision: %d\n", result.SessionRevision)
+	goalFprintf(writer, "Session: %s @ revision %d\n", sessionref.Format(result.SessionID), result.SessionRevision)
 	if result.GoalCleared {
 		goalFprintf(writer, "Goal state: %s\n", result.GoalState)
 	} else {
@@ -796,9 +797,9 @@ func handleGoalShow(store goalSessionStore, workspace string, args []string, std
 		_, _ = fmt.Fprintln(stderr, "goal show: provide exactly one session ID from `local-agent goal list`")
 		return 2
 	}
-	sessionID, err := strconv.ParseInt(flags.Arg(0), 10, 64)
-	if err != nil || sessionID <= 0 {
-		goalFprintf(stderr, "goal show: invalid session ID %q\n", flags.Arg(0))
+	sessionID, err := sessionref.Parse(flags.Arg(0))
+	if err != nil {
+		goalFprintf(stderr, "goal show: invalid session reference %q\n", flags.Arg(0))
 		return 2
 	}
 	summary, err := getGoalSummary(context.Background(), store, workspace, sessionID)
@@ -929,6 +930,7 @@ func writeGoalUsage(writer io.Writer) {
 	_, _ = fmt.Fprintln(writer, "  local-agent goal recover [--json] <session-id>")
 	_, _ = fmt.Fprintln(writer, "  local-agent goal recover --apply --item ID ... --observed-at RFC3339 <session-id>")
 	_, _ = fmt.Fprintln(writer)
+	writeGoalSessionReferenceHelp(writer)
 	_, _ = fmt.Fprintln(writer, "Safety:")
 	_, _ = fmt.Fprintln(writer, "  Recovery is read-only unless --apply is explicit.")
 	_, _ = fmt.Fprintln(writer, "  Recovery never resumes execution and has no force override.")
@@ -953,6 +955,7 @@ func writeGoalRunUsage(writer io.Writer) {
 	_, _ = fmt.Fprintln(writer, "Usage:")
 	_, _ = fmt.Fprintln(writer, "  local-agent goal run <session-id> --prompt TEXT [options]")
 	_, _ = fmt.Fprintln(writer)
+	writeGoalSessionReferenceHelp(writer)
 	_, _ = fmt.Fprintln(writer, "Options:")
 	_, _ = fmt.Fprintln(writer, "  --prompt TEXT       Instruction for this goal turn (required)")
 	_, _ = fmt.Fprintln(writer, "  --skip-approvals    Skip approval prompts; explicit denies still win")
@@ -975,6 +978,7 @@ func writeGoalShowUsage(writer io.Writer) {
 	_, _ = fmt.Fprintln(writer, "Usage:")
 	_, _ = fmt.Fprintln(writer, "  local-agent goal show [options] <session-id>")
 	_, _ = fmt.Fprintln(writer)
+	writeGoalSessionReferenceHelp(writer)
 	_, _ = fmt.Fprintln(writer, "Options:")
 	_, _ = fmt.Fprintln(writer, "  --json       Print the complete validated snapshot as JSON")
 	_, _ = fmt.Fprintln(writer, "  -h, --help   Show this help")
@@ -984,6 +988,7 @@ func writeGoalPendingUsage(writer io.Writer) {
 	_, _ = fmt.Fprintln(writer, "Usage:")
 	_, _ = fmt.Fprintln(writer, "  local-agent goal pending [options] <session-id>")
 	_, _ = fmt.Fprintln(writer)
+	writeGoalSessionReferenceHelp(writer)
 	_, _ = fmt.Fprintln(writer, "Options:")
 	_, _ = fmt.Fprintln(writer, "  --limit N    Maximum pending items to print (default 20; range 1-100)")
 	_, _ = fmt.Fprintln(writer, "  --json       Print machine-readable JSON")
@@ -995,6 +1000,7 @@ func writeGoalRecoverUsage(writer io.Writer) {
 	_, _ = fmt.Fprintln(writer, "  local-agent goal recover [--json] <session-id>")
 	_, _ = fmt.Fprintln(writer, "  local-agent goal recover --apply [evidence options] [--json] <session-id>")
 	_, _ = fmt.Fprintln(writer)
+	writeGoalSessionReferenceHelp(writer)
 	_, _ = fmt.Fprintln(writer, "Options:")
 	_, _ = fmt.Fprintln(writer, "  --json               Print machine-readable JSON")
 	_, _ = fmt.Fprintln(writer, "  --apply              Persist the exact typed evidence")
@@ -1017,6 +1023,11 @@ func writeGoalRecoverUsage(writer io.Writer) {
 	_, _ = fmt.Fprintln(writer, "  Inspection is read-only unless --apply is explicit.")
 	_, _ = fmt.Fprintln(writer, "  Applying requires every evidence option shown above.")
 	_, _ = fmt.Fprintln(writer, "  Recovery never resumes execution and has no force override.")
+}
+
+func writeGoalSessionReferenceHelp(writer io.Writer) {
+	_, _ = fmt.Fprintln(writer, "Session references accept either a short handle such as S7 or the compatible raw ID 7.")
+	_, _ = fmt.Fprintln(writer)
 }
 
 func projectPendingControlItems(states []controlplane.State, sessionID int64, workspaceID string) ([]pendingControlSummary, error) {
@@ -1085,8 +1096,8 @@ func writeGoalList(writer io.Writer, summaries []goalSummary) {
 	table := tabwriter.NewWriter(writer, 0, 4, 2, ' ', 0)
 	goalFprintln(table, "SESSION\tSTATE\tUPDATED\tOBJECTIVE")
 	for _, summary := range summaries {
-		goalFprintf(table, "%d\t%s\t%s\t%s\n",
-			summary.SessionID, summary.State, summary.UpdatedAt.Local().Format("2006-01-02 15:04"),
+		goalFprintf(table, "%s\t%s\t%s\t%s\n",
+			sessionref.Format(summary.SessionID), summary.State, summary.UpdatedAt.Local().Format("2006-01-02 15:04"),
 			compactGoalObjective(summary.Objective, 72),
 		)
 	}
@@ -1095,7 +1106,7 @@ func writeGoalList(writer io.Writer, summaries []goalSummary) {
 
 func writeGoalDetail(writer io.Writer, summary goalSummary) {
 	goalFprintf(writer, "Goal: %s\n", terminalSafeGoalText(summary.GoalID))
-	goalFprintf(writer, "Session: %d\n", summary.SessionID)
+	goalFprintf(writer, "Session: %s\n", sessionref.Format(summary.SessionID))
 	goalFprintf(writer, "State: %s\n", summary.State)
 	goalFprintf(writer, "Objective: %s\n", terminalSafeGoalText(summary.Objective))
 	if summary.Snapshot.StateReason != "" {

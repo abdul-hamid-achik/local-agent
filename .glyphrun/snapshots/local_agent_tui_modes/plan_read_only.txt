@@ -1,19 +1,19 @@
+                        LOCAL AGENT
+      Local-first · Ollama · approval prompts enabled
+                PLAN · qwen3.5:2b · offline
+    enter send · / commands · ctrl+p settings · ? help
+    shift+tab mode · ctrl+o models · @ files · # skills
 
-  you ─────────────────────────────────────────────
-  design a safe migration
+  ollama: no model selected
+  try: ollama serve · ollama pull qwen3.5:2b
 
   ✗ error
-  LLM error: inference not started: no model selected
-
-  ⚠️ Model response failed: inference not started: no
+  LLM request not started: inference not started: no
   model selected
 
-  You can try:
-  - Checking if Ollama is running (`ollama ps`)
-  - Switching to a different model (ctrl+o)
-  - Reducing context size
 
-  Tool results are still available above.
+
+
+
 ───────────────────────────────────────────────────────────
- [ PLAN ] · qwen3.5:2b · ctrl+p settings
-▌❯ Ask, @mention files, or type /help
+▌❯ design a safe migration

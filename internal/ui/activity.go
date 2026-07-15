@@ -89,6 +89,8 @@ func (m *Model) currentWorkingActivity() (workingActivity, bool) {
 		return workingActivity{label: "Restoring session", cancellable: true}, true
 	case m.fileLoading:
 		return workingActivity{label: "Reading local file", cancellable: true}, true
+	case m.imageAttachRunning:
+		return workingActivity{label: "Attaching image", detail: "validating private copy", cancellable: true}, true
 	case m.readScopeOpRunning:
 		label := m.readScopeOpLabel
 		if label == "" {
@@ -328,14 +330,27 @@ func (m *Model) renderWorkingLine() string {
 		leftPad = " "
 	}
 	textWidth := max(1, m.chatPaneWidth()-lipgloss.Width(leftPad)-lipgloss.Width(motion)-1)
+	session := ""
+	selectionWidth := textWidth
+	titleLimit := 0
+	if m.chatPaneWidth() >= 72 {
+		titleLimit = 24
+	}
+	session = sessionDisplayLabel(m.sessionID, m.activeSessionTitle, titleLimit)
+	if session != "" {
+		selectionWidth = max(1, textWidth-lipgloss.Width(" · ")-lipgloss.Width(session))
+	}
 	chosen := candidates[len(candidates)-1]
 	for _, candidate := range candidates {
-		if lipgloss.Width(candidate) <= textWidth {
+		if lipgloss.Width(candidate) <= selectionWidth {
 			chosen = candidate
 			break
 		}
 	}
-	chosen = truncateDisplay(chosen, textWidth)
+	chosen = truncateDisplay(chosen, selectionWidth)
+	if session != "" {
+		chosen += " · " + session
+	}
 	return leftPad + motion + " " + m.renderWorkingCandidate(chosen)
 }
 

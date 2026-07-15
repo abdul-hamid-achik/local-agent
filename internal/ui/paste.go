@@ -35,6 +35,7 @@ type pasteCursorContext struct {
 }
 
 func assessPaste(content string, cursor pasteCursorContext, currentLength, currentLines, charLimit int) *pendingPaste {
+	content = canonicalPasteContent(content)
 	fence := markdownFenceFor(content)
 	fenced := fencedPasteInsertion(content, fence, cursor)
 	return &pendingPaste{
@@ -46,6 +47,39 @@ func assessPaste(content string, cursor pasteCursorContext, currentLength, curre
 		PlainFits:   pasteInsertionFits(currentLength, currentLines, content, charLimit),
 		FencedFits:  pasteInsertionFits(currentLength, currentLines, fenced, charLimit),
 	}
+}
+
+// canonicalPasteContent applies the same text policy as the Bubbles textarea
+// before admission and review. Doing this once in the parent makes displayed
+// line/byte counts match the text that will actually be inserted, collapses a
+// platform CRLF sequence to one logical newline, and prevents consent to one
+// payload from silently producing a different draft in the child component.
+func canonicalPasteContent(content string) string {
+	var b strings.Builder
+	b.Grow(len(content))
+	runes := []rune(content)
+	for index := 0; index < len(runes); index++ {
+		r := runes[index]
+		switch {
+		case r == utf8.RuneError:
+			// Match Bubbles: invalid UTF-8 and literal replacement runes are
+			// omitted rather than entering the textarea backing grid.
+		case r == '\t':
+			b.WriteString("    ")
+		case r == '\r':
+			if index+1 < len(runes) && runes[index+1] == '\n' {
+				index++
+			}
+			b.WriteByte('\n')
+		case r == '\n':
+			b.WriteByte('\n')
+		case unicode.IsControl(r):
+			// Other terminal control characters never become prompt text.
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // pasteCursorAt reports whether the insertion point already has line

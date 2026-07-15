@@ -509,6 +509,39 @@ func TestInteractiveSessionCASRejectsStaleWriterWithoutRetry(t *testing.T) {
 	}
 }
 
+func TestExecutionSessionProjectsAndClearsGeneratedIdentity(t *testing.T) {
+	store, err := db.OpenPath(filepath.Join(t.TempDir(), "session-identity.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	workspace := t.TempDir()
+	m := newTestModel(t)
+	m.agent.SetWorkDir(workspace)
+	m.SetSessionStore(store)
+
+	created, err := m.ensureExecutionSession("\nPolish the composer\nwith more detail", "AUTO")
+	if err != nil || !created {
+		t.Fatalf("ensureExecutionSession() = created %v, error %v", created, err)
+	}
+	if m.sessionID <= 0 || m.activeSessionTitle != "Polish the composer" {
+		t.Fatalf("active session identity = id %d title %q", m.sessionID, m.activeSessionTitle)
+	}
+	durableID := m.sessionID
+	durable, err := store.GetSession(context.Background(), durableID)
+	if err != nil || durable.Title != m.activeSessionTitle {
+		t.Fatalf("durable identity = %#v, error %v", durable, err)
+	}
+
+	m.resetConversationSession()
+	if m.sessionID != 0 || m.activeSessionTitle != "" {
+		t.Fatalf("reset retained active identity = id %d title %q", m.sessionID, m.activeSessionTitle)
+	}
+	if _, err := store.GetSession(context.Background(), durableID); err != nil {
+		t.Fatalf("conversation reset deleted saved session: %v", err)
+	}
+}
+
 func modelWithCompletedExecution(t *testing.T) (*Model, *db.Store, execution.Event) {
 	t.Helper()
 	store, err := db.OpenPath(filepath.Join(t.TempDir(), "execution.db"))

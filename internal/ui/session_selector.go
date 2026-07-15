@@ -3,9 +3,9 @@ package ui
 import (
 	"context"
 	"fmt"
-	"strconv"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
+	"github.com/abdul-hamid-achik/local-agent/internal/sessionref"
 )
 
 // SessionResumeSelector identifies one exact saved session or the newest
@@ -19,19 +19,14 @@ type SessionResumeSelector struct {
 // ParseSessionResumeSelector parses the value accepted by --resume.
 func ParseSessionResumeSelector(value string) (SessionResumeSelector, error) {
 	if value == "" {
-		return SessionResumeSelector{}, fmt.Errorf("resume selector is required (use a positive session ID or latest)")
+		return SessionResumeSelector{}, fmt.Errorf("resume selector is required (use a handle like S7, a positive session ID, or latest)")
 	}
 	if value == "latest" {
 		return SessionResumeSelector{latest: true}, nil
 	}
-	for _, character := range value {
-		if character < '0' || character > '9' {
-			return SessionResumeSelector{}, fmt.Errorf("invalid resume selector %q (use a positive session ID or latest)", value)
-		}
-	}
-	id, err := strconv.ParseInt(value, 10, 64)
-	if err != nil || id <= 0 || strconv.FormatInt(id, 10) != value {
-		return SessionResumeSelector{}, fmt.Errorf("invalid resume selector %q (use a positive session ID or latest)", value)
+	id, err := sessionref.Parse(value)
+	if err != nil {
+		return SessionResumeSelector{}, fmt.Errorf("invalid resume selector %q (use a session handle like S7, a positive ID, or latest)", value)
 	}
 	return SessionResumeSelector{sessionID: id}, nil
 }

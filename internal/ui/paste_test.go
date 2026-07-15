@@ -25,6 +25,26 @@ func TestPasteMsg_SmallPaste(t *testing.T) {
 	}
 }
 
+func TestPasteMsgCanonicalizesPlatformNewlinesBeforeReviewAndInsertion(t *testing.T) {
+	m := newTestModel(t)
+	raw := "one\r\ntwo\rthree\tfour"
+	want := "one\ntwo\nthree    four"
+
+	updated, _ := m.Update(tea.PasteMsg{Content: raw})
+	m = updated.(*Model)
+	if m.pendingPaste != nil {
+		t.Fatalf("small canonical paste unexpectedly requires review: %#v", m.pendingPaste)
+	}
+	if got := m.input.Value(); got != want {
+		t.Fatalf("canonical paste = %q, want %q", got, want)
+	}
+
+	assessment := assessPaste(strings.Repeat("line\r\n", 10), pasteCursorAtEnd(""), 0, 1, m.input.CharLimit)
+	if assessment.Lines != 11 || !assessment.NeedsReview {
+		t.Fatalf("CRLF assessment = %d lines, review=%v", assessment.Lines, assessment.NeedsReview)
+	}
+}
+
 func TestPasteMsg_LargePaste(t *testing.T) {
 	m := newTestModel(t)
 	m.state = StateIdle
@@ -39,6 +59,28 @@ func TestPasteMsg_LargePaste(t *testing.T) {
 	}
 	if m.input.Value() != "" {
 		t.Fatalf("large paste reached the composer before consent: %q", m.input.Value())
+	}
+}
+
+func TestCtrlVPasteCannotBypassParentReview(t *testing.T) {
+	m := newTestModel(t)
+	content := strings.Repeat("line\n", 15)
+	m.clipboardRead = func() (string, error) { return content, nil }
+
+	updated, cmd := m.Update(ctrlKey('v'))
+	m = updated.(*Model)
+	if cmd == nil {
+		t.Fatal("Ctrl+V did not schedule the parent clipboard read")
+	}
+	message := cmd()
+	paste, ok := message.(tea.PasteMsg)
+	if !ok || paste.Content != content {
+		t.Fatalf("Ctrl+V command returned %#v, want public PasteMsg", message)
+	}
+	updated, _ = m.Update(paste)
+	m = updated.(*Model)
+	if m.pendingPaste == nil || !m.pendingPaste.NeedsReview || m.input.Value() != "" {
+		t.Fatalf("Ctrl+V bypassed review: pending=%#v input=%q", m.pendingPaste, m.input.Value())
 	}
 }
 
@@ -278,6 +320,33 @@ func TestPasteMsg_TextareaLineLimitCannotSilentlyClip(t *testing.T) {
 	}
 	if m.input.Value() != "" || m.input.LineCount() != 1 {
 		t.Fatal("refused high-line paste partially changed the composer")
+	}
+}
+
+func TestPendingPaste_HeavilyWrappedLogicalLimitPayloadIsByteExact(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 20})
+	m = updated.(*Model)
+	// Stay below both Local Agent admission ceilings while exceeding 10,000
+	// wrapped visual rows. Bubbles' content limit must not silently reinterpret
+	// the logical-line contract and clip the accepted tail.
+	content := strings.Repeat("x\n", pasteTextareaMaxLines-3) + strings.Repeat("tail ", 2_500)
+	if len(content) >= m.input.CharLimit || strings.Count(content, "\n")+1 >= pasteTextareaMaxLines {
+		t.Fatalf("invalid near-limit fixture: bytes=%d lines=%d", len(content), strings.Count(content, "\n")+1)
+	}
+
+	updated, _ = m.Update(tea.PasteMsg{Content: content})
+	m = updated.(*Model)
+	if m.pendingPaste == nil || !m.pendingPaste.PlainFits {
+		t.Fatalf("near-limit payload was not offered for exact acceptance: %#v", m.pendingPaste)
+	}
+	updated, _ = m.Update(charKey('n'))
+	m = updated.(*Model)
+	if got := m.input.Value(); got != content {
+		t.Fatalf("accepted near-limit payload changed: got %d bytes, want %d", len(got), len(content))
+	}
+	if !strings.HasSuffix(m.input.Value(), "tail ") {
+		t.Fatal("accepted near-limit payload lost its closing bytes")
 	}
 }
 

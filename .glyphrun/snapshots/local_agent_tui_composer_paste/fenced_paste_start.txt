@@ -20,12 +20,12 @@
 
 
 
-
-
-
 ─────────────────────────────────────────────────────────────────────────────────────────
 ▏❯ Review the first receipt.
  │ Keep the second line while I check Settings.
  │ ```
  │ fixture line 01
  │ fixture line 02
+ │ fixture line 03
+ │ fixture line 04
+ │ fixture line 05

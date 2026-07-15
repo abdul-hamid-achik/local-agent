@@ -355,7 +355,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 		copy(msgsSnapshot, a.messages)
 		a.mu.RUnlock()
 
-		err := a.llmClient.ChatStream(ctx, llm.ChatOptions{
+		err := a.chatStreamWithResolvedImages(ctx, llm.ChatOptions{
 			Messages:        msgsSnapshot,
 			Tools:           tools,
 			System:          system,
@@ -402,8 +402,15 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 		})
 
 		if err != nil {
+			if errors.Is(err, llm.ErrInferenceNotStarted) && !callbackSeen {
+				if lg != nil {
+					lg.Warn("llm request rejected before dispatch", "iter", i, "err", err)
+				}
+				out.Error(fmt.Sprintf("LLM request not started: %v", err))
+				return err
+			}
 			reservedEvalTokens := int64(0)
-			if !errors.Is(err, llm.ErrNoModelSelected) || callbackSeen {
+			if (!errors.Is(err, llm.ErrNoModelSelected) && !errors.Is(err, llm.ErrInferenceNotStarted)) || callbackSeen {
 				reservedEvalTokens = chargeUnknownEvalReservation(out, requestEvalLimit, reportedEvalTokens)
 			}
 			var reservationErr error

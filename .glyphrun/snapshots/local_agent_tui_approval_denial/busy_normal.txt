@@ -22,6 +22,6 @@
 
 
 ─────────────────────────────────────────────────────────────────────────────────────────
-   … Running · Routing unavailable · implementation · esc cancel · enter queue
+   … Running · esc cancel · enter queue · S1 · Create approval-probe.t…
 
 ▏❯ Write a follow-up · enter queue

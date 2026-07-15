@@ -34,6 +34,9 @@ func (m *Model) composerEditable() bool {
 
 func (m *Model) queueComposerFollowUp() tea.Cmd {
 	prompt := strings.TrimSpace(m.input.Value())
+	if prompt == "" && len(m.pendingImages) > 0 {
+		prompt = "Analyze the attached image."
+	}
 	if prompt == "" || m.queuedFollowUp != nil {
 		return nil
 	}
@@ -87,7 +90,7 @@ func (m *Model) editQueuedFollowUp() bool {
 	m.input.SetValue(prompt)
 	m.input.CursorEnd()
 	m.input.Focus()
-	m.syncInputHeight()
+	_ = m.reflowInputViewport()
 	m.recalcViewportHeight()
 	return true
 }
@@ -115,7 +118,7 @@ func (m *Model) restoreQueuedFollowUp() {
 	m.queuedFollowUp = nil
 	m.input.SetValue(prompt)
 	m.input.CursorEnd()
-	m.syncInputHeight()
+	_ = m.reflowInputViewport()
 }
 
 // dispatchQueuedFollowUp starts the one queued instruction only after the
@@ -128,6 +131,6 @@ func (m *Model) dispatchQueuedFollowUp() tea.Cmd {
 	m.queuedFollowUp = nil
 	m.input.SetValue(prompt)
 	m.input.CursorEnd()
-	m.syncInputHeight()
+	_ = m.reflowInputViewport()
 	return m.submitInput()
 }

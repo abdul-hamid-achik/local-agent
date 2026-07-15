@@ -1,11 +1,15 @@
                              ╭────────────────────────────────────────────────────────────╮
                              │ Help                                                       │
                              │                                                            │
-                             │   #skill            Insert skill mention text              │
+                             │   paste/drag imag…  Attach a PNG, JPEG, or GIF to the      │
+                             │                     pending prompt                         │
+                             │   ~/… or /…         Review temporary read-only access;     │
+  ollama: no model selected  │                     MCP tools require separate approval    │
+  try: ollama serve · ollama │   #skill            Insert skill mention text              │
                              │   /cmd              Run slash command                      │
                              │   team / swarm / …  Ask naturally for a read-only expert   │
-  ollama: no model selected  │                     consultation when enabled              │
-  try: ollama serve · ollama │   enter (running)   Queue one follow-up; it sends after    │
+                             │                     consultation when enabled              │
+                             │   enter (running)   Queue one follow-up; it sends after    │
                              │                     the current turn settles successfully  │
                              │   esc (running)     Cancel the turn; a queued follow-up    │
                              │                     returns to the composer                │
@@ -27,9 +31,5 @@
                              │   /model            Show, switch, or list models           │
                              │   /recover          Review a paused execution and record   │
                              │                     typed evidence                         │
-                             │   /agent            Show or switch agent profile           │
-                             │   /load             Load a markdown file as context        │
-                             │   /scope            List or manage temporary external      │
-                             │                     read-only grants                       │
-─────────────────────────────│ esc/q close · j/k scroll · pgup/pgdn page · 48%            │────────────────────────────
+─────────────────────────────│ esc/q close · j/k scroll · pgup/pgdn page · 40%            │────────────────────────────
                              ╰────────────────────────────────────────────────────────────╯

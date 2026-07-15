@@ -263,12 +263,19 @@ func (m *Model) switchToLocalFallback(name string) error {
 }
 
 func (m *Model) enableAutomaticModelRouting() error {
+	// Prove the cloud-to-local transition is possible before mutating the
+	// durable preference. Once this preflight passes, clearing the preference
+	// comes first so a failed provider switch cannot silently re-pin the model
+	// on the next process start.
+	if m.currentModelUsesOllamaCloud() && m.firstLocalAutoModel() == "" {
+		return fmt.Errorf("automatic routing needs an available local model; the current Ollama Cloud model remains pinned")
+	}
+	if err := m.clearManualModelPreference(); err != nil {
+		return err
+	}
 	if m.currentModelUsesOllamaCloud() {
 		cloudModel := m.model
 		fallback := m.firstLocalAutoModel()
-		if fallback == "" {
-			return fmt.Errorf("automatic routing needs an available local model; the current Ollama Cloud model remains pinned")
-		}
 		if err := m.switchToLocalFallback(fallback); err != nil {
 			return fmt.Errorf("switch to local automatic model: %w", err)
 		}

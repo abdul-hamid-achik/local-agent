@@ -2,11 +2,14 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/abdul-hamid-achik/local-agent/internal/sessionref"
 )
 
 // sessionItem implements list.DefaultItem for the sessions picker.
@@ -17,14 +20,27 @@ type sessionItem struct {
 }
 
 func (i sessionItem) Title() string {
-	return truncateDisplay(sanitizeTerminalSingleLine(i.title), 40)
+	title := sanitizeTerminalSingleLine(i.title)
+	if handle := sessionref.Format(i.id); handle != "" {
+		if title == "" {
+			return handle
+		}
+		title = fmt.Sprintf("%s · %s", handle, title)
+	}
+	return truncateDisplay(title, 40)
 }
 
 func (i sessionItem) Description() string {
 	return i.createdAt
 }
 
-func (i sessionItem) FilterValue() string { return sanitizeTerminalSingleLine(i.title) }
+func (i sessionItem) FilterValue() string {
+	title := sanitizeTerminalSingleLine(i.title)
+	if handle := sessionref.Format(i.id); handle != "" {
+		return fmt.Sprintf("%s %d %s", handle, i.id, title)
+	}
+	return title
+}
 
 // SessionsPickerState holds state for the sessions picker overlay.
 type SessionsPickerState struct {
@@ -164,7 +180,7 @@ func (m *Model) requestSessions() tea.Cmd {
 		if err != nil {
 			return SessionListMsg{ListToken: listToken, Err: err}
 		}
-		sessions, err := listPersistedSessions(context.Background(), m.sessionStore, workspaceID, 20)
+		sessions, err := listPersistedSessions(context.Background(), m.sessionStore, workspaceID, 100)
 		return SessionListMsg{ListToken: listToken, Sessions: sessions, Err: err}
 	}
 	return tea.Batch(m.startActivityCmd(), load)

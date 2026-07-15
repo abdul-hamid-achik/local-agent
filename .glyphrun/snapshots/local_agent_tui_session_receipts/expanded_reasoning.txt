@@ -21,7 +21,7 @@
 
     The read completed, the test failure is visible, and the interrupted effect needs inspection.
 
-  Restored session: Recovery receipt review
+  Restored session S41 · Recovery receipt review
 
   ✗ error
   Recovery blocked: write_file has a durable dispatch marker but no terminal receipt. Its outcome is

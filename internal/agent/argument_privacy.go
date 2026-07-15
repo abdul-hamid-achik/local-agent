@@ -73,6 +73,15 @@ func SanitizeMessagesForPersistence(messages []llm.Message) []llm.Message {
 	result := make([]llm.Message, len(messages))
 	for index, message := range messages {
 		result[index] = message
+		// Image bytes are provider-only inputs. Retain a fresh slice of complete,
+		// content-addressed metadata so a restored session can rehydrate it, but
+		// never let a transient or internally inconsistent reference cross the
+		// durable boundary.
+		if message.Role == "user" {
+			result[index].Images = durableImageReferences(message.Images)
+		} else {
+			result[index].Images = nil
+		}
 		if message.DurableContent != "" {
 			result[index].Content = message.DurableContent
 		}
@@ -85,6 +94,29 @@ func SanitizeMessagesForPersistence(messages []llm.Message) []llm.Message {
 			result[index].ToolCalls[callIndex] = call
 			result[index].ToolCalls[callIndex].Arguments = SafeToolArgsForPersistence(call.Name, call.Arguments)
 		}
+	}
+	return result
+}
+
+func durableImageReferences(images []llm.ImageData) []llm.ImageData {
+	if len(images) == 0 {
+		return nil
+	}
+	result := make([]llm.ImageData, 0, len(images))
+	for _, image := range images {
+		if err := image.ValidateReference(); err != nil {
+			continue
+		}
+		if len(image.Data) > 0 {
+			if err := image.Validate(); err != nil {
+				continue
+			}
+		}
+		image.Data = nil
+		result = append(result, image)
+	}
+	if len(result) == 0 {
+		return nil
 	}
 	return result
 }

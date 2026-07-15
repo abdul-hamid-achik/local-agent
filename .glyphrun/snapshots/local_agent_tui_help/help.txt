@@ -13,8 +13,8 @@
                              │   ctrl+y            Copy last response (empty input)       │
                              │   pgup              Scroll up                              │
                              │   pgdown            Scroll down                            │
-                             │   ctrl+u            Half page up                           │
-                             │   ctrl+d            Half page down                         │
+                             │   ctrl+u            Edit / half page up                    │
+                             │   ctrl+d            Edit / half page down                  │
                              │   end               Latest output (empty input)            │
                              │   shift+tab         Cycle mode (NORMAL/PLAN/AUTO)          │
                              │   ctrl+o            Open Ollama models                     │
@@ -29,7 +29,7 @@
                              │                                                            │
                              │ Input Shortcuts                                            │
                              │   @file / @agent    Insert file or agent mention text      │
-                             │   ~/… or /…         Review temporary read-only access;     │
-                             │                     MCP tools require separate approval    │
+                             │   ctrl+v            Paste text; on macOS attach a          │
+                             │                     clipboard PNG                          │
 ─────────────────────────────│ esc/q close · pgdn more · g/shift+g ends                   │────────────────────────────
                              ╰────────────────────────────────────────────────────────────╯

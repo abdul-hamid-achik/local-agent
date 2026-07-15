@@ -59,7 +59,7 @@ steps:
   - press: "enter"
   - wait:
       screen:
-        contains: "LLM error: inference not started: no model selected"
+        contains: "LLM request not started: inference not started: no"
       timeoutMs: 2000
   - wait:
       screen:
@@ -67,7 +67,7 @@ steps:
       timeoutMs: 2000
   - wait:
       screen:
-        contains: "▌❯ Ask"
+        contains: "▌❯ design a safe migration"
       timeoutMs: 2000
   - snapshot: plan_read_only
   - press: "shift+tab"
@@ -81,9 +81,10 @@ steps:
       timeoutMs: 2000
   - wait:
       screen:
-        contains: "▌❯ Ask"
+        contains: "▌❯ design a safe migration"
       timeoutMs: 2000
   - snapshot: auto_mode
+  - press: "ctrl+u"
   - type: "/goal 30m ship a bounded durable migration"
   - wait:
       screen:
@@ -96,13 +97,14 @@ steps:
       timeoutMs: 5000
   - wait:
       screen:
-        contains: "Ⅱ paused · ship a bounde"
+        contains: "Ⅱ paused · ship a b"
       timeoutMs: 2000
   - wait:
       screen:
         notContains: "Save goal"
       timeoutMs: 2000
   - snapshot: explicit_goal_direct
+  - press: "right"
   - press: "shift+tab"
   - wait:
       screen:

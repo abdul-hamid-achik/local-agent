@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 	"sort"
-	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -18,6 +17,7 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
 	"github.com/abdul-hamid-achik/local-agent/internal/execution"
 	"github.com/abdul-hamid-achik/local-agent/internal/reconciliation"
+	"github.com/abdul-hamid-achik/local-agent/internal/sessionref"
 )
 
 const (
@@ -138,9 +138,9 @@ func handleExecutionRecover(store executionRecoveryStore, workspace string, args
 		}
 		return 2
 	}
-	sessionID, err := strconv.ParseInt(flags.Arg(0), 10, 64)
-	if err != nil || sessionID <= 0 {
-		executionFprintf(stderr, "execution recover: invalid session ID %q\n", flags.Arg(0))
+	sessionID, err := sessionref.Parse(flags.Arg(0))
+	if err != nil {
+		executionFprintf(stderr, "execution recover: invalid session reference %q\n", flags.Arg(0))
 		return 2
 	}
 	provided := make(map[string]bool)
@@ -313,7 +313,7 @@ func listExecutionRecoveryPending(store executionRecoveryStore, workspace string
 		return 0
 	}
 	if view.Count == 0 {
-		executionFprintf(stdout, "No executions are pending reconciliation in session %d.\n", sessionID)
+		executionFprintf(stdout, "No executions are pending reconciliation in session %s.\n", sessionref.Format(sessionID))
 		return 0
 	}
 	table := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
@@ -327,7 +327,7 @@ func listExecutionRecoveryPending(store executionRecoveryStore, workspace string
 	executionFprintf(stdout, "\n%d execution(s) pending reconciliation.\n", view.Count)
 	executionFprintln(stdout, "Inspect each with the read-only command, or reconcile all with one verified observation:")
 	executionFprintf(stdout, "Reviewed-set digest: %s\n", view.SetDigest)
-	executionFprintf(stdout, "  local-agent execution recover %d --all --apply --set-digest %s --observation effect_not_applied --source verification_check --reference REF --summary SUMMARY --observed-at RFC3339\n", sessionID, view.SetDigest)
+	executionFprintf(stdout, "  local-agent execution recover %s --all --apply --set-digest %s --observation effect_not_applied --source verification_check --reference REF --summary SUMMARY --observed-at RFC3339\n", sessionref.Format(sessionID), view.SetDigest)
 	executionFprintln(stdout, "Only assert one shared disposition after verifying every listed execution independently.")
 	return 0
 }
@@ -484,14 +484,23 @@ func projectExecutionRecovery(inspection db.StandaloneExecutionReconciliationIns
 		ItemID: inspection.ItemID, Resolved: inspection.Resolved, ResolutionID: inspection.ResolutionID,
 	}
 	if !inspection.Resolved {
-		view.ApplyTemplate = fmt.Sprintf("local-agent execution recover --apply --revision %d --event-id %d --observation effect_not_applied --source verification_check --reference REF --summary SUMMARY --observed-at RFC3339 %d %s", inspection.SessionRevision, inspection.EventID, inspection.SessionID, inspection.ExecutionID)
+		view.ApplyTemplate = executionRecoveryApplyTemplate(
+			fmt.Sprintf("%d", inspection.SessionID), inspection.SessionRevision, inspection.EventID, inspection.ExecutionID,
+		)
 	}
 	return view
 }
 
+func executionRecoveryApplyTemplate(sessionReference string, revision, eventID int64, executionID string) string {
+	return fmt.Sprintf(
+		"local-agent execution recover --apply --revision %d --event-id %d --observation effect_not_applied --source verification_check --reference REF --summary SUMMARY --observed-at RFC3339 %s %s",
+		revision, eventID, sessionReference, executionID,
+	)
+}
+
 func writeExecutionRecovery(writer io.Writer, view executionRecoveryView) {
 	table := tabwriter.NewWriter(writer, 0, 4, 2, ' ', 0)
-	executionFprintf(table, "SESSION\t%d @ revision %d\n", view.SessionID, view.SessionRevision)
+	executionFprintf(table, "SESSION\t%s @ revision %d\n", sessionref.Format(view.SessionID), view.SessionRevision)
 	executionFprintf(table, "EXECUTION\t%s\n", terminalSafeGoalText(view.ExecutionID))
 	executionFprintf(table, "TOOL\t%s\n", terminalSafeGoalText(view.ToolName))
 	executionFprintf(table, "EVENT\t%d · %s · %s\n", view.EventID, view.EventType, view.EffectClass)
@@ -505,7 +514,9 @@ func writeExecutionRecovery(writer io.Writer, view executionRecoveryView) {
 	}
 	executionFprintln(writer, "Inspection is read-only. Verify the external effect independently before applying one disposition.")
 	executionFprintln(writer, "Apply template:")
-	executionFprintln(writer, "  "+view.ApplyTemplate)
+	executionFprintln(writer, "  "+executionRecoveryApplyTemplate(
+		sessionref.Format(view.SessionID), view.SessionRevision, view.EventID, terminalSafeGoalText(view.ExecutionID),
+	))
 }
 
 func writeExecutionUsage(writer io.Writer) {
@@ -514,6 +525,8 @@ func writeExecutionUsage(writer io.Writer) {
 	executionFprintln(writer, "  local-agent execution recover [--json] SESSION_ID --all")
 	executionFprintln(writer, "  local-agent execution recover --apply --revision N ... SESSION_ID EXECUTION_ID")
 	executionFprintln(writer, "  local-agent execution recover --all --apply --set-digest HASH [evidence options] SESSION_ID")
+	executionFprintln(writer)
+	executionFprintln(writer, "SESSION_ID accepts either a short handle such as S7 or the compatible raw ID 7.")
 	executionFprintln(writer)
 	executionFprintln(writer, "Safety:")
 	executionFprintln(writer, "  Inspection is read-only.")

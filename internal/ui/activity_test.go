@@ -568,3 +568,19 @@ func TestFormatWorkingElapsed(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkingLineKeepsActiveSessionHandleAtOrdinaryWidth(t *testing.T) {
+	for _, width := range []int{30, 40, 80} {
+		m := newTestModel(t)
+		m.width = width
+		m.state = StateWaiting
+		m.turnStartedAt = time.Now().Add(-2 * time.Second)
+		m.sessionID = 7
+		m.activeSessionTitle = "Composer polish"
+
+		line := ansi.Strip(m.renderWorkingLine())
+		if !strings.Contains(line, "S7") {
+			t.Fatalf("width %d working line omitted active session handle: %q", width, line)
+		}
+	}
+}

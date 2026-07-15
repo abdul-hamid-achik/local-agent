@@ -400,7 +400,7 @@ func (m *Model) restoreReadScopeDraft(draft string) {
 	m.input.SetValue(draft)
 	m.input.CursorEnd()
 	m.input.Focus()
-	m.syncInputHeight()
+	_ = m.reflowInputViewport()
 }
 
 func (m *Model) appendReadScopeError(message string) {

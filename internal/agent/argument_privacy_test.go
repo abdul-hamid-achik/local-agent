@@ -118,3 +118,76 @@ func TestSanitizeMessagesForPersistenceRedactsSensitiveArguments(t *testing.T) {
 		t.Fatal("message sanitization mutated live model history")
 	}
 }
+
+func TestSanitizeMessagesForPersistenceStripsTransientImages(t *testing.T) {
+	secret := []byte("SESSION_IMAGE_SECRET")
+	messages := []llm.Message{{
+		Role:    "user",
+		Content: "inspect this",
+		Images:  []llm.ImageData{{MediaType: "image/png", Data: secret}},
+	}}
+
+	safe := SanitizeMessagesForPersistence(messages)
+	if len(safe[0].Images) != 0 {
+		t.Fatalf("sanitized images = %#v, want none", safe[0].Images)
+	}
+	if len(messages[0].Images) != 1 || string(messages[0].Images[0].Data) != string(secret) {
+		t.Fatal("image sanitization mutated live model history")
+	}
+	encoded, err := json.Marshal(safe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), string(secret)) || strings.Contains(string(encoded), "images") {
+		t.Fatalf("persisted messages leaked image data: %s", encoded)
+	}
+}
+
+func TestSanitizeMessagesForPersistenceRetainsOnlyDurableImageMetadata(t *testing.T) {
+	data := []byte("DURABLE_IMAGE_BYTES")
+	referenced, err := llm.NewReferencedImageData("capture.png", "image/png", 320, 200, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalid := referenced
+	invalid.SHA256 = strings.Repeat("0", 64)
+	messages := []llm.Message{{
+		Role: "user",
+		Images: []llm.ImageData{
+			referenced,
+			{MediaType: "image/png", Data: []byte("transient")},
+			invalid,
+		},
+	}}
+
+	safe := SanitizeMessagesForPersistence(messages)
+	if len(safe[0].Images) != 1 {
+		t.Fatalf("durable images = %#v, want one valid reference", safe[0].Images)
+	}
+	if len(safe[0].Images[0].Data) != 0 || safe[0].Images[0].SHA256 != referenced.SHA256 {
+		t.Fatalf("sanitized reference = %#v", safe[0].Images[0])
+	}
+	if len(messages[0].Images[0].Data) == 0 || &safe[0].Images[0] == &messages[0].Images[0] {
+		t.Fatal("sanitization mutated or aliased live image history")
+	}
+	encoded, err := json.Marshal(safe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), string(data)) || !strings.Contains(string(encoded), referenced.SHA256) {
+		t.Fatalf("durable image JSON = %s", encoded)
+	}
+}
+
+func TestSanitizeMessagesForPersistenceDropsImagesFromNonUserRoles(t *testing.T) {
+	image, err := llm.NewReferencedImageData("capture.png", "image/png", 10, 10, []byte("image bytes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, role := range []string{"system", "assistant", "tool"} {
+		messages := SanitizeMessagesForPersistence([]llm.Message{{Role: role, Content: "content", Images: []llm.ImageData{image}}})
+		if len(messages) != 1 || len(messages[0].Images) != 0 {
+			t.Fatalf("role %q retained image metadata: %#v", role, messages)
+		}
+	}
+}

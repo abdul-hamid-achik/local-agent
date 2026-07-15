@@ -1,9 +1,9 @@
-  - Reducing context size
+  Goal saved · Cortex is not configured; starting one bounded local turn…
 
-  Tool results are still available above.
+  ✗ error
+  LLM request not started: inference not started: no model selected
 
-  Goal paused · unproductive turn: LLM response: inference not started: no
-  model selected
+  Goal paused · unproductive turn: inference not started: no model selected
 
 
 ───────────────────────────────────────────────────────────────────────────────

@@ -68,6 +68,22 @@ func TestGoalFooterPreservesCloudAndSkippedApprovalBoundaries(t *testing.T) {
 	}
 }
 
+func TestGoalFooterKeepsSessionHandleBesideGoalProgress(t *testing.T) {
+	m := newTestModel(t)
+	m.sessionID = 7
+	m.activeSessionTitle = "Ship a polished goal UI"
+	summary := GoalSummary{Objective: "Ship a polished goal UI", Phase: GoalPhaseActive}
+
+	ordinary := ansi.Strip(m.renderGoalFooterStatus(summary, 80))
+	if !strings.Contains(ordinary, "S7") || !strings.Contains(ordinary, "Ship a polished") {
+		t.Fatalf("ordinary goal footer lost progress or session identity: %q", ordinary)
+	}
+	roomy := ansi.Strip(m.renderGoalFooterStatus(summary, 120))
+	if !strings.Contains(roomy, "S7") {
+		t.Fatalf("roomy goal footer omitted compact session handle: %q", roomy)
+	}
+}
+
 func TestCurrentModelSurfaceLabelKeepsLegacyAndRemoteModelsTruthful(t *testing.T) {
 	m := newTestModel(t)
 	m.model = "legacy:latest"

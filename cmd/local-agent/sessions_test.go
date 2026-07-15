@@ -47,14 +47,14 @@ func TestSessionRepairRendersBoundedReceipt(t *testing.T) {
 		},
 	}}
 	var stdout, stderr bytes.Buffer
-	code := handleSessionRepair(store, "/workspace/repo", []string{"17", "--json"}, &stdout, &stderr)
+	code := handleSessionRepair(store, "/workspace/repo", []string{"S17", "--json"}, &stdout, &stderr)
 	if code != 0 || stderr.Len() != 0 {
 		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
 	}
 	if store.acquired != 1 || store.repaired != 1 {
 		t.Fatalf("store calls = %#v", store)
 	}
-	for _, want := range []string{`"answered_total": 2`, `"exec_crash"`, `"receipt_on_file": true`, `"new_cursor": 41`} {
+	for _, want := range []string{`"session_id": 17`, `"answered_total": 2`, `"exec_crash"`, `"receipt_on_file": true`, `"new_cursor": 41`} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("JSON receipt missing %q: %s", want, stdout.String())
 		}
@@ -66,12 +66,12 @@ func TestSessionRepairRendersBoundedReceipt(t *testing.T) {
 	}
 
 	stdout.Reset()
-	if code := handleSessionRepair(store, "/workspace/repo", []string{"17"}, &stdout, &stderr); code != 0 {
+	if code := handleSessionRepair(store, "/workspace/repo", []string{"S17"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("text render exit=%d stderr=%q", code, stderr.String())
 	}
 	out := stdout.String()
 	for _, want := range []string{
-		"cursor 3 -> 41 @ revision 9", "2 answered effect(s)", "exec_crash", "failed/unknown",
+		"Repaired session S17", "cursor 3 -> 41 @ revision 9", "2 answered effect(s)", "exec_crash", "failed/unknown",
 		"absent from the saved transcript", "already terminal", "Review the durable",
 	} {
 		if !strings.Contains(out, want) {

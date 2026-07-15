@@ -122,6 +122,34 @@ func TestAcceptCompletionReplacesOnlyAnchoredUnicodeSpan(t *testing.T) {
 	}
 }
 
+func TestAcceptCompletionKeepsCappedDraftTailVisibleWhileComposerWasBlurred(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 20})
+	m = updated.(*Model)
+	draft := strings.Repeat("long context ", 70) + "use #sk"
+	m.input.SetValue(draft)
+	m.input.CursorEnd()
+	_ = m.reflowInputViewport()
+	if m.input.ScrollYOffset() <= 0 {
+		t.Fatal("fixture did not scroll the capped composer")
+	}
+
+	m.triggerCompletion(m.input.Value())
+	if !m.isCompletionActive() || m.input.Focused() {
+		t.Fatal("completion did not own focus before acceptance")
+	}
+	m.acceptCompletion()
+	if !m.input.Focused() || m.input.ScrollYOffset() <= 0 {
+		t.Fatalf("accepted composer focus/offset = %v/%d", m.input.Focused(), m.input.ScrollYOffset())
+	}
+	if got := m.input.Value(); !strings.HasSuffix(got, "use #skill-a ") {
+		t.Fatalf("accepted completion changed tail: %q", got)
+	}
+	if !strings.Contains(ansi.Strip(m.input.View()), "#skill-a") {
+		t.Fatalf("accepted completion cursor tail is offscreen:\n%s", m.input.View())
+	}
+}
+
 func TestComposerUpdateAutoTriggersAtMidSentenceCursor(t *testing.T) {
 	m := newTestModel(t)
 	draft := "ask  later"
@@ -427,6 +455,38 @@ func TestCompletionPopupFitsFiveLineComposerAtMinimumSize(t *testing.T) {
 	assertViewCursorAfter(t, view, completionFilterPrompt+"ag")
 	assertRenderedLinesFit(t, view.Content, 30)
 	assertRenderedHeightFits(t, view.Content, 12)
+}
+
+func TestCompletionPopupFitsCappedWrappedComposer(t *testing.T) {
+	for _, size := range []struct {
+		width, height int
+	}{{30, 12}, {54, 18}} {
+		m := newTestModel(t)
+		updated, _ := m.Update(tea.WindowSizeMsg{Width: size.width, Height: size.height})
+		m = updated.(*Model)
+		m.viewport.SetContent("transcript anchor")
+		draft := strings.Repeat("wrapped context ", 30) + "@ag"
+		m.input.SetValue(draft)
+		m.input.CursorEnd()
+		_ = m.reflowInputViewport()
+		if m.inputLines != composerVisibleRowLimit(size.height) || m.input.ScrollYOffset() <= 0 {
+			t.Fatalf("%dx%d fixture was not capped at the tail: rows=%d offset=%d", size.width, size.height, m.inputLines, m.input.ScrollYOffset())
+		}
+		m.triggerCompletion(m.input.Value())
+
+		view := m.View()
+		plain := ansi.Strip(view.Content)
+		for _, marker := range []string{"transcript anchor", completionFilterPrompt + "ag", "@agent-x", "@ag"} {
+			if !strings.Contains(plain, marker) {
+				t.Fatalf("%dx%d wrapped completion lost %q:\n%s", size.width, size.height, marker, plain)
+			}
+		}
+		if m.input.Value() != draft {
+			t.Fatalf("%dx%d completion changed wrapped draft", size.width, size.height)
+		}
+		assertRenderedLinesFit(t, view.Content, size.width)
+		assertRenderedHeightFits(t, view.Content, size.height)
+	}
 }
 
 func TestCompletionOpenAndAcceptPreservePausedTranscriptAnchor(t *testing.T) {

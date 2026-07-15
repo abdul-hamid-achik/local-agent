@@ -52,6 +52,34 @@ func (m *Model) transcriptScrollKey(msg tea.KeyPressMsg) bool {
 		key.Matches(msg, m.keys.HalfPageDn)
 }
 
+// transcriptOwnsScrollKey keeps transcript navigation and composer editing
+// mutually exclusive. PgUp/PgDn are always transcript navigation. Ctrl+U and
+// Ctrl+D remain the textarea's conventional delete bindings while a draft is
+// editable and nonempty; otherwise they retain the established half-page
+// transcript shortcuts.
+func (m *Model) transcriptOwnsScrollKey(msg tea.KeyPressMsg) bool {
+	if key.Matches(msg, m.keys.PageUp) || key.Matches(msg, m.keys.PageDown) {
+		return true
+	}
+	if !key.Matches(msg, m.keys.HalfPageUp) && !key.Matches(msg, m.keys.HalfPageDn) {
+		return false
+	}
+	return !m.composerEditable() || m.input.Value() == ""
+}
+
+func (m *Model) updateTranscriptScroll(msg tea.KeyPressMsg) tea.Cmd {
+	m.cancelReceiptInspection(false)
+	beforeOffset := m.viewport.YOffset()
+	var cmd tea.Cmd
+	m.viewport, cmd = m.viewport.Update(msg)
+	if m.viewport.AtBottom() {
+		m.markFollowingLatest()
+	} else if m.viewport.YOffset() != beforeOffset {
+		m.pauseFollow()
+	}
+	return cmd
+}
+
 func (m *Model) canJumpToLatest() bool {
 	if m.overlay != OverlayNone || m.pendingApproval != nil || m.pendingPaste != nil {
 		return false

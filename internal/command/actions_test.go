@@ -76,3 +76,38 @@ func TestGoalActionStatesExplainUnsafeTransitions(t *testing.T) {
 		})
 	}
 }
+
+func TestImageActionsHaveStableSharedMetadata(t *testing.T) {
+	r := newTestRegistry()
+	states := r.Actions("image", nil)
+	want := []struct {
+		id          ActionID
+		action      Action
+		destructive bool
+	}{
+		{id: ImageActionList, action: ActionListImages},
+		{id: ImageActionClear, action: ActionClearImages, destructive: true},
+		{id: ImageActionForgetHistory, action: ActionForgetImageHistory, destructive: true},
+	}
+	if len(states) != len(want) {
+		t.Fatalf("image actions = %d, want %d", len(states), len(want))
+	}
+	for index, expected := range want {
+		got := states[index]
+		if got.Spec.ID != expected.id || got.Spec.Action != expected.action || got.Spec.Destructive != expected.destructive {
+			t.Fatalf("action %d = %#v, want id=%q action=%d destructive=%v", index, got.Spec, expected.id, expected.action, expected.destructive)
+		}
+		if got.Spec.CommandText() == "" || got.Spec.Title == "" || got.Spec.Description == "" || !got.Enabled {
+			t.Fatalf("action %q has incomplete metadata: %#v", got.Spec.ID, got)
+		}
+	}
+	if spec, ok := r.MatchAction("image", "ls"); !ok || spec.ID != ImageActionList {
+		t.Fatalf("list alias = %#v, %v", spec, ok)
+	}
+	if spec, ok := r.MatchAction("image", "remove-all"); !ok || spec.ID != ImageActionClear {
+		t.Fatalf("clear alias = %#v, %v", spec, ok)
+	}
+	if spec, ok := r.MatchAction("image", "drop-history"); !ok || spec.ID != ImageActionForgetHistory {
+		t.Fatalf("forget-history alias = %#v, %v", spec, ok)
+	}
+}

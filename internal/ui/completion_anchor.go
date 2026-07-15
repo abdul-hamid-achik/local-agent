@@ -197,7 +197,7 @@ func (m *Model) setComposerDraftAtRune(draft string, cursorRune int) {
 	m.input.SetValue(string(runes[cursorRune:]))
 	m.input.MoveToBegin()
 	m.input.InsertString(string(runes[:cursorRune]))
-	m.syncInputHeight()
+	_ = m.reflowInputViewport()
 }
 
 func completionInsertion(cs *CompletionState, suffixStartsWithSpace bool) string {

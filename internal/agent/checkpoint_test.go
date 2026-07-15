@@ -2,7 +2,9 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
@@ -56,6 +58,65 @@ func TestCheckpointRoundTrip(t *testing.T) {
 	}
 	if len(list) != 1 {
 		t.Fatalf("expected 1 checkpoint, got %d", len(list))
+	}
+}
+
+func TestCheckpointImageReferenceRoundTripStaysPathFreeAndResolvesLazily(t *testing.T) {
+	store, err := db.OpenPath(filepath.Join(t.TempDir(), "cp.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	raw := []byte("checkpoint image bytes")
+	image, err := llm.NewReferencedImageData("capture.png", "image/png", 12, 8, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ag := New(nil, nil, 8192)
+	ag.SetWorkDir(t.TempDir())
+	ag.SetCheckpointStore(store, 0)
+	if err := ag.AddUserMessageWithImages("inspect", []llm.ImageData{image}); err != nil {
+		t.Fatal(err)
+	}
+	id, err := ag.CreateCheckpoint(context.Background(), "image", db.CheckpointManual)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cp, err := store.GetCheckpoint(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(cp.Messages, string(raw)) || strings.Contains(cp.Messages, t.TempDir()) {
+		t.Fatalf("checkpoint leaked image bytes or a source path: %s", cp.Messages)
+	}
+	var persisted []llm.Message
+	if err := json.Unmarshal([]byte(cp.Messages), &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if len(persisted) != 1 || len(persisted[0].Images) != 1 || len(persisted[0].Images[0].Data) != 0 || persisted[0].Images[0].SHA256 != image.SHA256 {
+		t.Fatalf("checkpoint image projection = %#v", persisted)
+	}
+
+	ag.ReplaceMessages(nil)
+	if _, err := ag.RestoreCheckpoint(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	ag.SetImageResolver(func(_ context.Context, reference llm.ImageData) ([]byte, error) {
+		if reference.SHA256 != image.SHA256 || len(reference.Data) != 0 {
+			t.Fatalf("resolver reference = %#v", reference)
+		}
+		return raw, nil
+	})
+	resolved, err := ag.resolveProviderImages(context.Background(), ag.Messages())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(resolved[0].Images[0].Data); got != string(raw) {
+		t.Fatalf("resolved image = %q", got)
+	}
+	if len(ag.Messages()[0].Images[0].Data) != 0 {
+		t.Fatal("lazy resolution mutated restored checkpoint history")
 	}
 }
 

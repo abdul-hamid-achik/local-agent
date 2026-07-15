@@ -8,12 +8,14 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // RegisterBuiltins adds all built-in slash commands to the registry.
 func RegisterBuiltins(r *Registry) {
 	registerGoalActions(r)
 	registerScopeActions(r)
+	registerImageActions(r)
 
 	r.Register(&Command{
 		Name:        "help",
@@ -231,6 +233,36 @@ func RegisterBuiltins(r *Registry) {
 				Action: ActionLoadContext,
 				Data:   path,
 			}
+		},
+	})
+
+	r.Register(&Command{
+		Name:        "image",
+		Aliases:     []string{"attach"},
+		Description: "Attach or manage pending and historical images",
+		Usage:       "/image <path>|list|clear|forget-history",
+		Handler: func(_ *Context, args []string) Result {
+			if len(args) == 0 {
+				return Result{Error: "usage: /image <path>|list|clear|forget-history"}
+			}
+
+			if spec, ok := r.MatchAction("image", args[0]); ok {
+				if len(args) != 1 {
+					return Result{Error: "usage: " + spec.CommandText()}
+				}
+				return Result{Action: spec.Action}
+			}
+
+			path := expandHomePath(strings.TrimSpace(strings.Join(args, " ")))
+			if path == "" {
+				return Result{Error: "usage: /image <path>|list|clear|forget-history"}
+			}
+			for _, r := range path {
+				if unicode.IsControl(r) {
+					return Result{Error: "image path cannot contain control characters"}
+				}
+			}
+			return Result{Action: ActionAttachImage, Data: path}
 		},
 	})
 

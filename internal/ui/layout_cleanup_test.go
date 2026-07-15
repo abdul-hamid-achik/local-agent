@@ -30,6 +30,133 @@ func TestMultilineComposerCostsOneViewportRowPerLine(t *testing.T) {
 	}
 }
 
+func TestComposerGrowsForSoftWrappedTyping(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 24})
+	m = updated.(*Model)
+	initialViewportHeight := m.viewport.Height()
+
+	for _, character := range strings.Repeat("wrapped draft ", 9) {
+		updated, _ = m.Update(charKey(character))
+		m = updated.(*Model)
+	}
+
+	if got := m.input.LineCount(); got != 1 {
+		t.Fatalf("soft-wrapped draft has %d logical lines, want 1", got)
+	}
+	if m.inputLines <= 1 || m.inputLines != m.input.Height() {
+		t.Fatalf("soft-wrapped composer height = tracked %d, child %d; want > 1 and equal", m.inputLines, m.input.Height())
+	}
+	if got, want := m.viewport.Height(), initialViewportHeight-(m.inputLines-1); got != want {
+		t.Fatalf("soft-wrapped viewport height = %d, want %d", got, want)
+	}
+}
+
+func TestComposerReflowsDraftAcrossTerminalWidths(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 42, Height: 30})
+	m = updated.(*Model)
+	m.input.SetValue(strings.Repeat("reflow me ", 16))
+	m.syncInputHeight()
+	narrowRows := m.inputLines
+	if narrowRows <= 1 {
+		t.Fatalf("narrow composer height = %d, want wrapped rows", narrowRows)
+	}
+
+	updated, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(*Model)
+	if m.inputLines >= narrowRows {
+		t.Fatalf("wide composer height = %d, want less than narrow height %d", m.inputLines, narrowRows)
+	}
+
+	updated, _ = m.Update(tea.WindowSizeMsg{Width: 42, Height: 30})
+	m = updated.(*Model)
+	if m.inputLines != narrowRows {
+		t.Fatalf("restored narrow composer height = %d, want %d", m.inputLines, narrowRows)
+	}
+}
+
+func TestSingleLinePasteUsesWrappedComposerRowsOnce(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 44, Height: 24})
+	m = updated.(*Model)
+	content := strings.Repeat("pasted words ", 12)
+
+	updated, _ = m.Update(tea.PasteMsg{Content: content})
+	m = updated.(*Model)
+	if m.pendingPaste != nil {
+		t.Fatalf("small one-line paste unexpectedly requires review: %#v", m.pendingPaste)
+	}
+	if got := m.input.Value(); got != content {
+		t.Fatalf("paste inserted %d bytes, want exact %d-byte payload", len(got), len(content))
+	}
+	if m.input.LineCount() != 1 || m.inputLines <= 1 {
+		t.Fatalf("pasted composer logical lines=%d visible rows=%d, want 1 and >1", m.input.LineCount(), m.inputLines)
+	}
+}
+
+func TestComposerCapsVisibleRowsAndKeepsDraftTailVisible(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 20})
+	m = updated.(*Model)
+	limit := composerVisibleRowLimit(m.height)
+	m.input.SetValue(strings.Repeat("long draft ", 70) + "VISIBLE-TAIL")
+	_ = m.reflowInputViewport()
+	m.syncInputHeight()
+
+	if got := m.inputLines; got != limit {
+		t.Fatalf("capped composer height = %d, want %d", got, limit)
+	}
+	if got := m.input.ScrollYOffset(); got <= 0 {
+		t.Fatalf("capped composer scroll offset = %d, want > 0 at the draft tail", got)
+	}
+	view := m.View().Content
+	if got := lipgloss.Height(view); got > m.height {
+		t.Fatalf("capped composer view height = %d, want <= %d", got, m.height)
+	}
+	if !strings.Contains(ansi.Strip(m.input.View()), "VISIBLE-TAIL") {
+		t.Fatalf("capped composer hid the draft tail:\n%s", m.input.View())
+	}
+}
+
+func TestComposerShrinksAfterEditingDeletion(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 20})
+	m = updated.(*Model)
+	for _, character := range strings.Repeat("wrapped draft ", 20) {
+		updated, _ = m.Update(charKey(character))
+		m = updated.(*Model)
+	}
+	if m.inputLines <= 1 {
+		t.Fatal("fixture did not grow the composer")
+	}
+
+	updated, _ = m.Update(ctrlKey('u'))
+	m = updated.(*Model)
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("Ctrl+U left draft %q, want empty", got)
+	}
+	if m.inputLines != 1 || m.input.Height() != 1 {
+		t.Fatalf("deleted composer height = parent %d child %d, want 1", m.inputLines, m.input.Height())
+	}
+}
+
+func TestSubmittingTallSlashCommandResetsComposerAllocation(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 20})
+	m = updated.(*Model)
+	m.input.SetValue(strings.Repeat("/missing-command argument ", 20))
+	_ = m.reflowInputViewport()
+	if m.inputLines <= 1 {
+		t.Fatal("fixture did not grow the composer")
+	}
+
+	_ = m.submitPreparedInput(m.input.Value())
+	if m.input.Value() != "" || m.inputLines != 1 || m.input.Height() != 1 {
+		t.Fatalf("submitted composer = %q, parent height %d, child height %d", m.input.Value(), m.inputLines, m.input.Height())
+	}
+}
+
 func TestFiveRowComposerFitsTerminalAndKeepsTailVisible(t *testing.T) {
 	m := newTestModel(t)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 32})
@@ -108,6 +235,13 @@ func TestMouseHitTestingStartsAtViewportRowZero(t *testing.T) {
 	m.handleMouseClick(0, 0)
 	if m.toolEntries[0].Collapsed {
 		t.Fatal("scrolled row-zero tool card was not toggled")
+	}
+}
+
+func TestViewLeavesMouseToTerminalSelection(t *testing.T) {
+	m := newTestModel(t)
+	if got := m.View().MouseMode; got != tea.MouseModeNone {
+		t.Fatalf("mouse mode = %v, want terminal-owned selection", got)
 	}
 }
 

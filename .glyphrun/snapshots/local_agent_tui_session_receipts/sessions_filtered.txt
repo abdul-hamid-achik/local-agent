@@ -16,7 +16,7 @@
                         ╭────────────────────────────────────────────────────────────╮
                         │ Filter › recovery                                          │
                         │                                                            │
-                        │   Recovery receipt review                                  │
+                        │   S41 · Recovery receipt review                            │
                         │   Jul 11, 2026 · 12:00 UTC                                 │
                         │                                                            │
                         │                                                            │

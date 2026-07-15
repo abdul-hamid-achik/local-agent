@@ -79,11 +79,11 @@ func DefaultKeyMap() KeyMap {
 		),
 		HalfPageUp: key.NewBinding(
 			key.WithKeys("ctrl+u"),
-			key.WithHelp("ctrl+u", "half page up"),
+			key.WithHelp("ctrl+u", "edit / half page up"),
 		),
 		HalfPageDn: key.NewBinding(
 			key.WithKeys("ctrl+d"),
-			key.WithHelp("ctrl+d", "half page down"),
+			key.WithHelp("ctrl+d", "edit / half page down"),
 		),
 		JumpLatest: key.NewBinding(
 			key.WithKeys("end"),

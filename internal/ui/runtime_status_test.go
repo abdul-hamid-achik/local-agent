@@ -138,6 +138,21 @@ func TestRuntimeStatusPluralizesVisibleCounters(t *testing.T) {
 	}
 }
 
+func TestRuntimeStatusProjectsSessionIdentityAfterCreation(t *testing.T) {
+	m := newTestModel(t)
+	unsaved := strings.Join(strings.Fields(ansi.Strip(m.buildRuntimeStatusContent(58))), " ")
+	if strings.Contains(unsaved, "Session S") {
+		t.Fatalf("Runtime invented a durable session before the first turn:\n%s", unsaved)
+	}
+
+	m.sessionID = 7
+	m.activeSessionTitle = "Polish composer wrapping"
+	saved := strings.Join(strings.Fields(ansi.Strip(m.buildRuntimeStatusContent(58))), " ")
+	if !strings.Contains(saved, "Session S7 · Polish composer wrapping") {
+		t.Fatalf("Runtime omitted saved session identity:\n%s", saved)
+	}
+}
+
 func TestRuntimeStatusRetainsExpertStartupFailure(t *testing.T) {
 	m := newTestModel(t)
 	m.SetExpertRuntimeSetupFailed()

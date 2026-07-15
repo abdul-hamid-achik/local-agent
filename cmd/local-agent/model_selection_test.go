@@ -2,6 +2,7 @@ package main
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
@@ -222,6 +223,56 @@ func TestDisabledAutoSelectPinsConfiguredModelAcrossSurfaces(t *testing.T) {
 	}
 	if !shouldPinStartupModel("qwen3.5:2b", true) {
 		t.Fatal("explicit --model override was not pinned")
+	}
+}
+
+func TestRestoreManualModelPreferenceRequiresVerifiedLocalInventory(t *testing.T) {
+	tests := []struct {
+		name       string
+		preferred  string
+		manual     []string
+		local      []string
+		known      bool
+		want       string
+		wantOK     bool
+		wantDetail string
+	}{
+		{
+			name: "verified local alias", preferred: "local-code", manual: []string{"local-code:latest"},
+			local: []string{"local-code:latest"}, known: true, want: "local-code:latest", wantOK: true,
+		},
+		{
+			name: "cloud needs fresh consent", preferred: "cloud-code", manual: []string{"local-code", "cloud-code"},
+			local: []string{"local-code"}, known: true, wantDetail: "fresh explicit selection",
+		},
+		{
+			name: "removed model falls back", preferred: "removed-code", manual: []string{"local-code"},
+			local: []string{"local-code"}, known: true, wantDetail: "no longer available",
+		},
+		{
+			name: "offline inventory fails closed", preferred: "custom-code", known: false,
+			wantDetail: "inventory is unavailable",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok, detail := restoreManualModelPreference(test.preferred, test.manual, test.local, test.known)
+			if got != test.want || ok != test.wantOK || (test.wantDetail != "" && !strings.Contains(detail, test.wantDetail)) {
+				t.Fatalf("restore=%q ok=%v detail=%q", got, ok, detail)
+			}
+		})
+	}
+}
+
+func TestStartupModelAuthoritiesTakePrecedenceOverManualPreference(t *testing.T) {
+	if shouldRestoreManualModelPreference("qwen3.5:4b", false) {
+		t.Fatal("explicit --model allowed saved preference override")
+	}
+	if shouldRestoreManualModelPreference("", true) {
+		t.Fatal("agent-profile model allowed saved preference override")
+	}
+	if !shouldRestoreManualModelPreference("", false) {
+		t.Fatal("ordinary startup did not admit saved manual preference")
 	}
 }
 

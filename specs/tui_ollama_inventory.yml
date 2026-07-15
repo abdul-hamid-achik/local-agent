@@ -72,6 +72,10 @@ steps:
       timeoutMs: 2000
   - press: "enter"
   - press: "down"
+  - wait:
+      screen:
+        contains: "enter use"
+      timeoutMs: 2000
   - press: "enter"
   - wait:
       screen:

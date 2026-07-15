@@ -67,6 +67,7 @@ type Agent struct {
 	capabilityAdvisor capabilityAdviser
 	capabilityRetries map[capabilityRetryKey]struct{}
 	expertConsultant  ExpertConsultant
+	imageResolver     ImageResolver
 
 	checkpointStore     CheckpointStore
 	checkpointSessionID int64
@@ -149,6 +150,15 @@ func (a *Agent) SetExpertConsultant(consultant ExpertConsultant) {
 	a.mu.Unlock()
 }
 
+// SetImageResolver installs the path-free content-addressed lookup used to
+// rehydrate images restored from durable session state. A nil resolver removes
+// the lookup. The callback is always invoked without an Agent lock held.
+func (a *Agent) SetImageResolver(resolver ImageResolver) {
+	a.mu.Lock()
+	a.imageResolver = resolver
+	a.mu.Unlock()
+}
+
 // SetModeContext configures the mode prefix injected into the system prompt
 // and the tool policy for the current turn.
 func (a *Agent) SetModeContext(prefix string, policy ToolPolicy) {
@@ -213,12 +223,25 @@ func (a *Agent) MemoryStore() *memory.Store {
 
 // AddUserMessage appends a user message to the conversation.
 func (a *Agent) AddUserMessage(content string) {
+	_ = a.AddUserMessageWithImages(content, nil)
+}
+
+// AddUserMessageWithImages appends a user message with transient image bytes
+// and/or complete durable references. It validates and defensively copies every
+// image before publishing the message to concurrent readers.
+func (a *Agent) AddUserMessageWithImages(content string, images []llm.ImageData) error {
+	cloned, err := cloneValidatedImages(images)
+	if err != nil {
+		return err
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.messages = append(a.messages, llm.Message{
 		Role:    "user",
 		Content: content,
+		Images:  cloned,
 	})
+	return nil
 }
 
 // Messages returns a copy of the conversation history. A copy (not the live
@@ -227,9 +250,7 @@ func (a *Agent) AddUserMessage(content string) {
 func (a *Agent) Messages() []llm.Message {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	out := make([]llm.Message, len(a.messages))
-	copy(out, a.messages)
-	return out
+	return cloneMessagesWithImages(a.messages)
 }
 
 // ClearHistory resets the conversation history.
@@ -241,6 +262,7 @@ func (a *Agent) ClearHistory() {
 
 // AppendMessage appends a message to the conversation history.
 func (a *Agent) AppendMessage(msg llm.Message) {
+	msg.Images = cloneImages(msg.Images)
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.messages = append(a.messages, msg)
@@ -326,6 +348,7 @@ func (a *Agent) InstallDurableRecoveryContexts(contents []string) error {
 
 // ReplaceMessages replaces the entire conversation history.
 func (a *Agent) ReplaceMessages(msgs []llm.Message) {
+	msgs = cloneMessagesWithImages(msgs)
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.messages = msgs

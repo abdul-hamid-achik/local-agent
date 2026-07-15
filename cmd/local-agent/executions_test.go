@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -64,17 +65,31 @@ func TestExecutionRecoverInspectionIsReadOnlyAndPrintsExactApplyTokens(t *testin
 		ItemID: "ctrl_execution_timeout",
 	}}
 	var stdout, stderr bytes.Buffer
-	code := handleExecutionRecover(store, "/workspace/repo", []string{"17", "exec_timeout"}, &stdout, &stderr)
+	code := handleExecutionRecover(store, "/workspace/repo", []string{"S17", "exec_timeout"}, &stdout, &stderr)
 	if code != 0 || stderr.Len() != 0 || store.inspected != 1 || store.acquired != 0 {
 		t.Fatalf("code=%d inspected=%d acquired=%d stdout=%q stderr=%q", code, store.inspected, store.acquired, stdout.String(), stderr.String())
 	}
 	for _, want := range []string{
 		"Inspection is read-only", "--revision 4", "--event-id 29",
-		"17 exec_timeout", "effect_not_applied", "verification_check",
+		"S17 @ revision 4", "S17 exec_timeout", "effect_not_applied", "verification_check",
 	} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("inspection missing %q:\n%s", want, stdout.String())
 		}
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = handleExecutionRecover(store, "/workspace/repo", []string{"--json", "17", "exec_timeout"}, &stdout, &stderr)
+	if code != 0 || stderr.Len() != 0 {
+		t.Fatalf("JSON inspection code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	var view executionRecoveryView
+	if err := json.Unmarshal(stdout.Bytes(), &view); err != nil {
+		t.Fatalf("decode JSON inspection: %v (%s)", err, stdout.String())
+	}
+	if view.SessionID != 17 || !strings.Contains(view.ApplyTemplate, " 17 exec_timeout") || strings.Contains(view.ApplyTemplate, "S17") {
+		t.Fatalf("JSON inspection changed the numeric contract: %#v", view)
 	}
 }
 
@@ -104,7 +119,7 @@ func TestExecutionRecoverAllListsPendingReadOnly(t *testing.T) {
 		t.Fatalf("listing acquired a lease or skipped the query: %#v", store)
 	}
 	out := stdout.String()
-	for _, want := range []string{"exec_one", "exec_two", "2 execution(s) pending reconciliation", "Reviewed-set digest", "--all --apply --set-digest"} {
+	for _, want := range []string{"exec_one", "exec_two", "2 execution(s) pending reconciliation", "Reviewed-set digest", "execution recover S17 --all --apply --set-digest"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("listing missing %q: %s", want, out)
 		}
@@ -116,7 +131,7 @@ func TestExecutionRecoverAllListsPendingReadOnly(t *testing.T) {
 	if code := handleExecutionRecover(empty, "/workspace/repo", []string{"17", "--all"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("empty listing exit=%d stderr=%q", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "No executions are pending reconciliation") {
+	if !strings.Contains(stdout.String(), "No executions are pending reconciliation in session S17") {
 		t.Fatalf("empty listing output = %q", stdout.String())
 	}
 }

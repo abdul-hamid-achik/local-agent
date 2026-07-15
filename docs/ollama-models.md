@@ -36,7 +36,7 @@ The TUI starts with availability-aware automatic routing. It considers admitted 
 /model list         print the current admitted inventory
 ```
 
-Choosing a model from the picker also pins it. A startup `--model` flag and an agent profile model remain pinned until `/model auto`.
+Choosing a verified local model from the picker also pins it and remembers the choice across process restarts. `/model auto` clears that saved choice. An explicit startup `--model` flag or agent-profile model takes precedence, while Cloud consent remains limited to the current conversation and is never restored implicitly.
 
 ## Local and Cloud are different boundaries
 

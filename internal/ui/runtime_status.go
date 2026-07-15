@@ -125,6 +125,9 @@ func (m *Model) buildRuntimeStatusContent(width int) string {
 		m.runtimeStatusRow("Tools", toolSummary, width),
 		m.runtimeStatusRow("MCP", summarizeConnectionHealth(connections), width),
 	)
+	if label := sessionDisplayLabel(m.sessionID, m.activeSessionTitle, 72); label != "" {
+		lines = append(lines, m.runtimeStatusRow("Session", label, width))
+	}
 	contextRouting := contextRoutingRuntimeLabel(agent.CapabilityRoutingHostUnavailable)
 	experts := "disabled in configuration"
 	if m.agent != nil {
@@ -164,7 +167,7 @@ func (m *Model) buildRuntimeStatusContent(width int) string {
 		))
 	}
 	if m.sessionTurnCount > 0 {
-		lines = append(lines, m.runtimeStatusRow("Session",
+		lines = append(lines, m.runtimeStatusRow("Usage",
 			fmt.Sprintf("%d %s · %s output", m.sessionTurnCount, pluralizeNoun(m.sessionTurnCount, "turn", "turns"), formatTokens(m.sessionEvalTotal)),
 			width,
 		))

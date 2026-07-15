@@ -76,9 +76,12 @@ To reopen saved work directly, pass a positive session ID or select the newest
 session in the current canonical workspace:
 
 ```bash
-local-agent --resume 42
+local-agent --resume S42
 local-agent --resume latest
 ```
+
+The TUI shows session ID `42` as `S42 · title`. Commands accept both `S42` and
+the raw `42`; `latest` selects the newest current-workspace session.
 
 Startup resume is available only in the interactive TUI, so it cannot be
 combined with `-p` or `--prompt`. It restores state without sending a prompt or automatically
@@ -101,6 +104,31 @@ Inside the inline approval surface, use `y` to allow once, `n` to deny, `s` to
 allow the identical canonical request again during the current Agent process,
 or `d` to inspect exact arguments. Press `esc` to cancel the approval and the
 active turn. No broad allow-by-tool-name policy is persisted by this flow.
+
+## Attach an image
+
+Add a PNG, JPEG, or GIF to the next ordinary prompt with `/image` (or the
+`/attach` alias), then type the question you want to ask:
+
+```text
+/image ./screenshots/failing-layout.png
+What is causing the alignment problem?
+```
+
+You can also drag or paste a supported image file when the terminal inserts its
+path as text. Use `/image list` to inspect pending attachments and `/image clear`
+to remove them. An unpinned session selects an admitted, auto-routable
+vision-capable Ollama model without implicitly selecting a manual-only Cloud
+model; a pinned non-vision model fails locally before a provider request starts.
+If an older stored image is unavailable, the draft is restored; use
+`/image forget-history` to remove active historical image context before
+retrying. Existing checkpoints remain unchanged and can restore their refs.
+
+On macOS, press `Ctrl+V` to attach a PNG directly from the system pasteboard.
+Bracketed terminal paste and other platforms can attach a saved image by
+dragging it or pasting/copying its path. See
+[Image attachments](./reference.md#image-attachments) for formats, limits, and
+persistence details.
 
 ## Optional configuration
 

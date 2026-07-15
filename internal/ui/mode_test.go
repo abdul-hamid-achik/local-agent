@@ -205,6 +205,29 @@ func TestAttachedGoalPresentsAutoAuthorityWhileAmbientModeCycles(t *testing.T) {
 	assertSameColor(t, "post-goal composer rail", m.input.Styles().Focused.Prompt.GetForeground(), newSemanticPalette(m.isDark).Special)
 }
 
+func TestAttachedGoalAmbientModeCyclesDuringControlPlaneOperation(t *testing.T) {
+	m := newTestModel(t)
+	m.goalRuntime = newUIGoalRuntime(t, 43, goal.BudgetLimits{MaxContinuationTurns: 3})
+	m.goalOperation = "Checking goal"
+	m.goalOperationRunning = true
+
+	updated, _ := m.Update(shiftTabKey())
+	m = updated.(*Model)
+	if m.mode != ModePlan {
+		t.Fatalf("ambient mode = %v, want PLAN", m.mode)
+	}
+	if m.goalOperation != "Checking goal" || !m.goalOperationRunning {
+		t.Fatalf("mode cycle disturbed goal operation: label=%q running=%v", m.goalOperation, m.goalOperationRunning)
+	}
+	if got := m.presentedMode(); got != ModeAuto {
+		t.Fatalf("active goal authority = %v, want AUTO", got)
+	}
+	last := m.entries[len(m.entries)-1]
+	if last.Kind != "system" || !strings.Contains(last.Content, "After goal · PLAN · active goal · AUTO") {
+		t.Fatalf("ambient mode receipt = %#v", last)
+	}
+}
+
 func TestComposerModeRailIsImmediateAdaptiveAndCompact(t *testing.T) {
 	previous := noColor
 	noColor = false

@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -18,6 +17,7 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
 	"github.com/abdul-hamid-achik/local-agent/internal/execution"
 	"github.com/abdul-hamid-achik/local-agent/internal/safeio"
+	"github.com/abdul-hamid-achik/local-agent/internal/sessionref"
 )
 
 const (
@@ -167,10 +167,10 @@ func handleSessionList(store sessionExportStore, workspace string, args []string
 		return 0
 	}
 	table := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-	executionFprintf(table, "ID\tMODEL\tMODE\tUPDATED\tTITLE\n")
+	executionFprintf(table, "SESSION\tMODEL\tMODE\tUPDATED\tTITLE\n")
 	for _, session := range sessions {
-		executionFprintf(table, "%d\t%s\t%s\t%s\t%s\n",
-			session.ID, terminalSafeGoalText(session.Model), terminalSafeGoalText(session.Mode),
+		executionFprintf(table, "%s\t%s\t%s\t%s\t%s\n",
+			sessionref.Format(session.ID), terminalSafeGoalText(session.Model), terminalSafeGoalText(session.Mode),
 			terminalSafeGoalText(session.UpdatedAt), terminalSafeGoalText(sessionListTitle(session.Title)))
 	}
 	_ = table.Flush()
@@ -196,9 +196,9 @@ func handleSessionExport(store sessionExportStore, workspace string, args []stri
 		executionFprintln(stderr, "session export: provide SESSION_ID")
 		return 2
 	}
-	sessionID, err := strconv.ParseInt(flags.Arg(0), 10, 64)
-	if err != nil || sessionID <= 0 {
-		executionFprintf(stderr, "session export: invalid session ID %q\n", flags.Arg(0))
+	sessionID, err := sessionref.Parse(flags.Arg(0))
+	if err != nil {
+		executionFprintf(stderr, "session export: invalid session reference %q\n", flags.Arg(0))
 		return 2
 	}
 	wantJSONL, wantMD := false, false

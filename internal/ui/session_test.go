@@ -12,6 +12,7 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/ecosystem"
 	"github.com/abdul-hamid-achik/local-agent/internal/execution"
 	"github.com/abdul-hamid-achik/local-agent/internal/goal"
+	"github.com/abdul-hamid-achik/local-agent/internal/imageasset"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 	"github.com/abdul-hamid-achik/local-agent/internal/reconciliation"
 )
@@ -94,6 +95,20 @@ func TestSerializeEntries_MultilineContent(t *testing.T) {
 	}
 }
 
+func TestSerializeEntriesStripsBidirectionalControlsFromImageNames(t *testing.T) {
+	entries := []ChatEntry{{
+		Kind: "user", Content: "inspect",
+		Attachments: []imageasset.Ref{{
+			Digest: strings.Repeat("a", 64), MIMEType: "image/png", Name: "screen\u202egnp.png",
+			SizeBytes: 1, Width: 1, Height: 1,
+		}},
+	}}
+	serialized := serializeEntries(entries)
+	if strings.ContainsRune(serialized, '\u202e') || !strings.Contains(serialized, "screengnp.png") {
+		t.Fatalf("serialized session retained visual-order control: %q", serialized)
+	}
+}
+
 func TestSessionTitleIsBounded(t *testing.T) {
 	got := sessionTitle(strings.Repeat("x", 100))
 	if len([]rune(got)) != 72 || !strings.HasSuffix(got, "...") {
@@ -105,6 +120,28 @@ func TestSessionTitleSanitizesPromptControls(t *testing.T) {
 	got := sessionTitle("safe\x1b]8;;https://example.invalid\x07link\x1b]8;;\x07\u202eevil")
 	if got != "safelinkevil" {
 		t.Fatalf("session title = %q, want %q", got, "safelinkevil")
+	}
+}
+
+func TestSessionTitleUsesGuidedPlanTask(t *testing.T) {
+	prompt := "Plan the following task:\n\nTask: Improve composer wrapping and paste UX\nConstraints: preserve session data"
+	if got, want := sessionTitle(prompt), "Improve composer wrapping and paste UX"; got != want {
+		t.Fatalf("guided plan session title = %q, want %q", got, want)
+	}
+}
+
+func TestSessionTitleUsesFirstNonEmptyPromptLine(t *testing.T) {
+	if got, want := sessionTitle("\n  \nInvestigate the session footer\nmore context"), "Investigate the session footer"; got != want {
+		t.Fatalf("session title = %q, want %q", got, want)
+	}
+}
+
+func TestSessionDisplayLabelKeepsStableHandle(t *testing.T) {
+	if got, want := sessionDisplayLabel(7, "Composer polish", 72), "S7 · Composer polish"; got != want {
+		t.Fatalf("sessionDisplayLabel() = %q, want %q", got, want)
+	}
+	if got, want := sessionDisplayLabel(7, "Composer polish", 0), "S7"; got != want {
+		t.Fatalf("compact sessionDisplayLabel() = %q, want %q", got, want)
 	}
 }
 
