@@ -82,8 +82,8 @@ steps:
       cols: 110
       rows: 18
   - wait:
-      idle:
-        quietForMs: 50
+      screen:
+        contains: "Recovery paused · /recover inspect"
       timeoutMs: 2000
   - press: "pgup"
   - wait:
