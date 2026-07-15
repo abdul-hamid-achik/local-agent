@@ -155,6 +155,52 @@ func TestCapabilityHintComposesHitspecInlineFetchWithSeparatePersistence(t *test
 	}
 }
 
+func TestCapabilityHintDescribesHitspecCaptureAsDurableFileCheapStash(t *testing.T) {
+	agent := New(nil, nil, 0)
+	agent.SetModeContext("test", BuildToolPolicy())
+	activity := CapabilityActivity{DesiredOutcome: "A readable durable Markdown artifact"}
+	hint := capabilityadvisor.Hint{
+		Namespaced: "hitspec__hitspec_capture_webpage", Server: "hitspec", Tool: "hitspec_capture_webpage",
+	}
+
+	got := agent.formatCapabilityHint(activity, hint)
+	for _, expected := range []string{
+		"Known Hitspec v2.18 capture contract", "persists rendered Markdown as a durable file.cheap stash",
+		"compact artifact receipt", "rather than the page body", "Indexing is requested and reported separately",
+	} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("Hitspec capture hint missing %q:\n%s", expected, got)
+		}
+	}
+	if strings.Contains(got, "Markdown file.cheap stash") {
+		t.Fatalf("Hitspec capture hint retained the malformed wording:\n%s", got)
+	}
+}
+
+func TestAmbiguousHitspecWebRouteExplainsContractsWithoutSelectingCandidate(t *testing.T) {
+	activity := CapabilityActivity{DesiredOutcome: "A readable durable Markdown artifact"}
+	hint := capabilityadvisor.Hint{
+		Namespaced: "hitspec__hitspec_capture_webpage", Server: "hitspec", Tool: "hitspec_capture_webpage",
+		Alternatives: []string{"hitspec__hitspec_fetch", "hitspec__hitspec_search_web"}, Ambiguous: true,
+	}
+
+	got := formatCapabilityHint(activity, hint, true)
+	for _, expected := range []string{
+		"ambiguous route", "No capability has been selected", "hitspec_capture_webpage persists rendered Markdown as a durable file.cheap stash",
+		"reports indexing separately",
+		"hitspec_fetch returns bounded content inline and does not persist it",
+		"hitspec_search_web returns non-persisted discovery candidates, not verified evidence",
+		"requested outcome is durable", "route remains ambiguous", "mcphub_search_tools",
+	} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("ambiguous Hitspec hint missing %q:\n%s", expected, got)
+		}
+	}
+	if strings.Contains(got, "invoke it through the visible mcphub_call_tool gateway") {
+		t.Fatalf("ambiguous Hitspec hint selected a candidate:\n%s", got)
+	}
+}
+
 func TestAmbiguousCapabilityHintDoesNotEmitSelectedRoute(t *testing.T) {
 	client := &capabilityCaptureClient{}
 	advisor := &staticCapabilityAdviser{result: capabilityadvisor.Result{

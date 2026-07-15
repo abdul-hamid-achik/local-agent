@@ -614,6 +614,19 @@ func (a *Agent) MaxIterations() int {
 	return 10
 }
 
+// MaxIterationsForAuthority keeps interactive turns concise while giving AUTO
+// enough room for normal inspect/edit/verify loops. The limit remains bounded
+// so a provider that never settles cannot run forever.
+func (a *Agent) MaxIterationsForAuthority(mode AuthorityMode) int {
+	if mode == AuthorityAutoScoped {
+		if a.toolsConfig.AutoMaxIterations > 0 {
+			return a.toolsConfig.AutoMaxIterations
+		}
+		return 40
+	}
+	return a.MaxIterations()
+}
+
 // ToolTimeout returns the configured tool timeout, or default if not set.
 func (a *Agent) ToolTimeout() time.Duration {
 	if a.toolsConfig.Timeout != "" {

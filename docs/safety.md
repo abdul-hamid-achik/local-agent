@@ -56,12 +56,29 @@ or run Local Agent inside a sandbox with the mount layout you intend to grant.
 
 ## Approval policy
 
-The following requests require approval by default:
+The following requests require approval in NORMAL by default:
 
 - write, edit, copy, move, remove, and directory creation;
 - shell commands;
 - memory save, update, and delete;
 - every MCP tool call.
+
+AUTO narrows those prompts for routine work: validated workspace writes and
+directory creation, host-catalogued local MCP routes, and a static catalog of
+ordinary development commands are pre-authorized. Destructive commands,
+dynamic shell expansion, output redirection to files, external paths,
+network-facing or unknown commands, memory mutation, and uncatalogued MCP
+effects remain gated. This classification reduces interruptions; it does not
+turn the built-in shell into an operating-system sandbox.
+
+The classifier validates the outer command and its visible operands. Admitted
+commands such as `go test`, `npm run`, or `make` can still execute code and
+hooks supplied by the repository, which inherit the host process's filesystem
+and network access. Use AUTO only with a workspace whose build logic you trust.
+Raw Git is not in this automatic catalog: repository configuration, clean or
+text-conversion filters, filesystem monitors, signing, and hooks can execute
+programs even when the outer Git command appears read-only. `/changes` and
+`/commit` provide the corresponding host-owned inspection and commit paths.
 
 The inline approval surface replaces the composer while leaving the transcript
 visible. It shows the action, scope, target or command, and a bounded diff when

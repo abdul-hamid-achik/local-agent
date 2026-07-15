@@ -1,4 +1,3 @@
-  you ───────────────────────────────────
   Create approval-probe.txt with the exact
   text must not be written.
 
@@ -14,6 +13,7 @@
   │ tool call denied: user denied tool executi…
 
 
+    Denied safely. No file was changed.
 ─────────────────────────────────────────────────
- qwen3.5:0.8b · ctx 0%
+  Follow paused · end latest
 ▏❯ Ask, @mention files, or type /help

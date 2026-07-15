@@ -84,6 +84,23 @@ func projectSemanticToolReceipt(
 // may differ; every other typed MCP receipt stays as a bounded semantic
 // projection on both paths.
 func (a *Agent) semanticToolContents(call llm.ToolCall, projection ecosystem.ToolProjection, rawResult string, structured json.RawMessage, toolError bool) (modelResult, durableResult string) {
+	if projection.Specialist == "hitspec" &&
+		(projection.Operation == "hitspec_search_web" || projection.Operation == "hitspec_capture_webpage") {
+		durableResult = ecosystem.SafeReceiptText(projection)
+		if !toolError && projection.DomainTyped && projection.Operation == "hitspec_search_web" &&
+			projection.Domain == ecosystem.DomainSucceeded {
+			if transient, ok := ecosystem.TransientModelContent(projection, ecosystem.RawReceipt{
+				Text: rawResult, Structured: structured,
+			}); ok {
+				return transient, durableResult
+			}
+		}
+		// Search and capture can contain queries, URLs, snippets, titles, and
+		// downstream failure prose in TextContent as well as StructuredContent.
+		// Invalid, failed, or schema-drifted contracts therefore fail closed on
+		// both model and durable paths instead of falling back to raw text.
+		return durableResult, durableResult
+	}
 	if len(structured) == 0 {
 		return rawResult, rawResult
 	}

@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 func TestToolCallStartStoresSemanticSummaryForPersistence(t *testing.T) {
@@ -119,6 +121,137 @@ func TestSpaceKeyTogglesLastToolThroughBubbleTeaKeyName(t *testing.T) {
 	}
 	if m.input.Value() != "" {
 		t.Fatalf("ToolCard shortcut leaked a space into the composer: %q", m.input.Value())
+	}
+}
+
+func TestSpaceInspectionRevealsOffscreenReceiptAndRestoresFollow(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(ToolCallStartMsg{
+		ID: "inspect-1", Name: "bash", Args: map[string]any{"command": "go test ./..."}, StartTime: time.Now(),
+	})
+	m = updated.(*Model)
+	updated, _ = m.Update(ToolCallResultMsg{
+		ID: "inspect-1", Name: "bash", Result: "ok\nsecond detail", Duration: time.Millisecond,
+	})
+	m = updated.(*Model)
+	m.entries = append(m.entries, ChatEntry{Kind: "assistant", Content: strings.Repeat("A later answer keeps the receipt above the fold.\n", 40)})
+	m.lastTurnToolIndex = 0
+	m.doneFlash = true
+	m.invalidateEntryCache()
+	m.viewport.SetContent(m.renderEntries())
+	m.markFollowingLatest()
+	m.viewport.GotoBottom()
+	if len(m.toolHitRegions) != 1 {
+		t.Fatalf("tool hit regions = %#v", m.toolHitRegions)
+	}
+	toolRow := m.toolHitRegions[0].Row
+	if toolRow >= m.viewport.YOffset() {
+		t.Fatalf("test receipt was not offscreen: row=%d offset=%d", toolRow, m.viewport.YOffset())
+	}
+
+	updated, _ = m.Update(charKey(' '))
+	m = updated.(*Model)
+	if m.toolEntries[0].Collapsed || !m.followPaused() {
+		t.Fatalf("inspection did not expand and pause at receipt: collapsed=%v paused=%v", m.toolEntries[0].Collapsed, m.followPaused())
+	}
+	if toolRow < m.viewport.YOffset() || toolRow >= m.viewport.YOffset()+m.viewport.Height() {
+		t.Fatalf("expanded receipt header remains offscreen: row=%d offset=%d height=%d", toolRow, m.viewport.YOffset(), m.viewport.Height())
+	}
+
+	updated, _ = m.Update(charKey(' '))
+	m = updated.(*Model)
+	if !m.toolEntries[0].Collapsed || m.followPaused() || !m.viewport.AtBottom() {
+		t.Fatalf("hiding receipt did not restore latest-follow: collapsed=%v paused=%v bottom=%v", m.toolEntries[0].Collapsed, m.followPaused(), m.viewport.AtBottom())
+	}
+}
+
+func TestReceiptInspectionSettlesBeforeResizeOrBatchToggle(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		act  func(*Model) *Model
+	}{
+		{
+			name: "resize",
+			act: func(m *Model) *Model {
+				updated, _ := m.Update(tea.WindowSizeMsg{Width: 64, Height: 20})
+				return updated.(*Model)
+			},
+		},
+		{
+			name: "batch toggle",
+			act: func(m *Model) *Model {
+				updated, _ := m.Update(charKey('t'))
+				return updated.(*Model)
+			},
+		},
+		{
+			name: "jump latest",
+			act: func(m *Model) *Model {
+				updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnd})
+				return updated.(*Model)
+			},
+		},
+		{
+			name: "thinking toggle",
+			act: func(m *Model) *Model {
+				updated, _ := m.Update(ctrlKey('t'))
+				return updated.(*Model)
+			},
+		},
+		{
+			name: "clear view",
+			act: func(m *Model) *Model {
+				updated, _ := m.Update(ctrlKey('l'))
+				return updated.(*Model)
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			m := newTestModel(t)
+			m.entries = append(m.entries,
+				ChatEntry{Kind: "tool_group", ToolIndex: 0},
+				ChatEntry{Kind: "assistant", Content: strings.Repeat("later transcript row\n", 40)},
+			)
+			m.toolEntries = []ToolEntry{{Name: "bash", Status: ToolStatusDone, Collapsed: true}}
+			m.lastTurnToolIndex = 0
+			m.invalidateEntryCache()
+			m.viewport.SetContent(m.renderEntries())
+			m.markFollowingLatest()
+			m.viewport.GotoBottom()
+			updated, _ := m.Update(charKey(' '))
+			m = updated.(*Model)
+			if !m.receiptInspectActive || !m.followPaused() {
+				t.Fatal("precondition: keyboard receipt inspection did not activate")
+			}
+
+			m = test.act(m)
+			if m.receiptInspectActive || m.receiptInspectToolIndex != -1 {
+				t.Fatalf("%s retained stale receipt anchor: active=%v index=%d", test.name, m.receiptInspectActive, m.receiptInspectToolIndex)
+			}
+			if m.followPaused() || !m.viewport.AtBottom() {
+				t.Fatalf("%s did not restore latest-follow: paused=%v bottom=%v", test.name, m.followPaused(), m.viewport.AtBottom())
+			}
+		})
+	}
+}
+
+func TestReceiptInspectionSurvivesHeightOnlyResize(t *testing.T) {
+	m := newTestModel(t)
+	m.entries = append(m.entries, ChatEntry{Kind: "tool_group", ToolIndex: 0})
+	m.toolEntries = []ToolEntry{{Name: "bash", Status: ToolStatusDone, Collapsed: true}}
+	m.lastTurnToolIndex = 0
+	m.invalidateEntryCache()
+	m.viewport.SetContent(m.renderEntries())
+	updated, _ := m.Update(charKey(' '))
+	m = updated.(*Model)
+	if !m.receiptInspectActive {
+		t.Fatal("precondition: receipt inspection did not activate")
+	}
+
+	updated, _ = m.Update(tea.WindowSizeMsg{Width: m.width, Height: m.height + 3})
+	m = updated.(*Model)
+	if !m.receiptInspectActive || m.toolEntries[0].Collapsed {
+		t.Fatalf("height-only resize settled receipt inspection: active=%v collapsed=%v", m.receiptInspectActive, m.toolEntries[0].Collapsed)
 	}
 }
 

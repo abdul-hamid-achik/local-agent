@@ -69,6 +69,9 @@ type ToolCardStyles struct {
 	Warning         lipgloss.Style
 	Dimmed          lipgloss.Style
 	Elapsed         lipgloss.Style
+	DiffAdded       lipgloss.Style
+	DiffRemoved     lipgloss.Style
+	DiffHeader      lipgloss.Style
 }
 
 // NewToolCardStyles creates styles based on theme.
@@ -90,6 +93,9 @@ func NewToolCardStyles(isDark bool) ToolCardStyles {
 		Warning:         lipgloss.NewStyle().Foreground(palette.Warning),
 		Dimmed:          lipgloss.NewStyle().Foreground(palette.Dim),
 		Elapsed:         lipgloss.NewStyle().Foreground(palette.Accent2),
+		DiffAdded:       lipgloss.NewStyle().Foreground(palette.Success),
+		DiffRemoved:     lipgloss.NewStyle().Foreground(palette.Error),
+		DiffHeader:      lipgloss.NewStyle().Foreground(palette.Accent),
 	}
 }
 
@@ -252,6 +258,7 @@ func (c ToolCard) ViewWithActivity(width int, activityGlyph string, elapsed time
 	if projected := projection.SummaryText(); projected != "" && c.State != ToolCardRunning {
 		cardSummary = projected
 	}
+	cardSummary = toolCardSummaryWithoutRepeatedAction(cardSummary, projection.Operation)
 	summary := ""
 	summaryBudget := 0
 	if (c.State == ToolCardRunning || !c.Expanded) && cardSummary != "" && textBudget >= 7 {
@@ -327,8 +334,15 @@ func (c ToolCard) ViewWithActivity(width int, activityGlyph string, elapsed time
 	} else if c.Expanded && c.State != ToolCardRunning {
 		result := strings.TrimRight(safeResult, "\n")
 		if result != "" {
+			isDiff := looksLikeUnifiedDiff(result)
 			for _, resultLine := range strings.Split(result, "\n") {
-				lines = append(lines, c.Styles.Result.Render(truncateDisplay(resultLine, inner)))
+				line := truncateDisplay(resultLine, inner)
+				if isDiff {
+					line = c.renderUnifiedDiffResultLine(line)
+				} else {
+					line = c.Styles.Result.Render(line)
+				}
+				lines = append(lines, line)
 			}
 		}
 	}
@@ -343,6 +357,61 @@ func (c ToolCard) ViewWithActivity(width int, activityGlyph string, elapsed time
 		b.WriteString(bar + " " + ln)
 	}
 	return b.String()
+}
+
+// toolCardSummaryWithoutRepeatedAction keeps a routed tool's specialist or
+// target anchor while removing the action already expressed by its semantic
+// title. For example, "Capturing webpage artifact · Hitspec" is easier to
+// scan than "Capturing webpage artifact · Hitspec · capture webpage".
+func toolCardSummaryWithoutRepeatedAction(summary, operation string) string {
+	summary = strings.TrimSpace(summary)
+	action := strings.TrimSpace(friendlyRemoteAction(operation))
+	if summary == "" || action == "" || action == "tool" {
+		return summary
+	}
+	if strings.EqualFold(summary, action) {
+		return ""
+	}
+	suffix := " · " + action
+	if len(summary) >= len(suffix) && strings.EqualFold(summary[len(summary)-len(suffix):], suffix) {
+		return strings.TrimSpace(summary[:len(summary)-len(suffix)])
+	}
+	return summary
+}
+
+func looksLikeUnifiedDiff(result string) bool {
+	lines := strings.Split(result, "\n")
+	if len(lines) > 80 {
+		lines = lines[:80]
+	}
+	var oldHeader, newHeader, hunk bool
+	for _, line := range lines {
+		switch {
+		case strings.HasPrefix(line, "diff --git "):
+			return true
+		case strings.HasPrefix(line, "--- "):
+			oldHeader = true
+		case strings.HasPrefix(line, "+++ "):
+			newHeader = true
+		case strings.HasPrefix(line, "@@ "):
+			hunk = true
+		}
+	}
+	return oldHeader && newHeader && hunk
+}
+
+func (c ToolCard) renderUnifiedDiffResultLine(line string) string {
+	switch {
+	case strings.HasPrefix(line, "diff --git "), strings.HasPrefix(line, "index "),
+		strings.HasPrefix(line, "@@ "), strings.HasPrefix(line, "--- "), strings.HasPrefix(line, "+++ "):
+		return c.Styles.DiffHeader.Render(line)
+	case strings.HasPrefix(line, "+"):
+		return c.Styles.DiffAdded.Render(line)
+	case strings.HasPrefix(line, "-"):
+		return c.Styles.DiffRemoved.Render(line)
+	default:
+		return c.Styles.Result.Render(line)
+	}
 }
 
 func toolCardStateFromProjection(projection ecosystem.ToolProjection) ToolCardState {

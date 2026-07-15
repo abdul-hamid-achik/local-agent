@@ -286,7 +286,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 	var expertConsultations int
 	hostRefusalCounts := make(map[string]int)
 
-	maxIters := a.MaxIterations()
+	maxIters := a.MaxIterationsForAuthority(authorityMode)
 
 	// A process-independent turn ID threads through logs and every durable tool
 	// execution identity for this turn.
@@ -992,8 +992,9 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 			}
 		}
 
-		// Safety: warn if we're about to hit the iteration limit.
-		if i == maxIters-2 {
+		// Interactive modes surface their deliberately tight turn ceiling. AUTO
+		// has a larger host-owned safety budget and stays quiet while using it.
+		if authorityMode != AuthorityAutoScoped && i == maxIters-2 {
 			out.Error(fmt.Sprintf("approaching iteration limit (%d/%d)", i+2, maxIters))
 		}
 	}

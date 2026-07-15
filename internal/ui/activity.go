@@ -235,17 +235,53 @@ func (m *Model) renderWorkingLine() string {
 	if activity.detail != "" {
 		detail = " · " + activity.detail
 	}
+	authority := ""
+	if m.presentedMode() == ModeAuto {
+		// The ordinary idle footer is replaced while work is active. Keep AUTO's
+		// authority visible in the activity rail so a long-running turn never
+		// leaves the user guessing whether it is operating autonomously.
+		authority = " · AUTO"
+	}
 	queueAction := ""
 	if m.queuedFollowUp == nil && m.goalTurnID == "" && m.goalOperation == "" &&
 		(m.state == StateWaiting || m.state == StateStreaming) {
 		queueAction = " · enter queue"
 	}
 
-	candidates := []string{
-		activity.label + detail + elapsed + longCancel + queueAction,
-		activity.label + elapsed + longCancel + queueAction,
-		activity.label + longCancel + queueAction,
+	candidates := make([]string, 0, 24)
+	if authority != "" {
+		candidates = append(candidates,
+			activity.label+authority+detail+elapsed+longCancel+queueAction,
+			activity.label+authority+elapsed+longCancel+queueAction,
+			activity.label+authority+longCancel+queueAction,
+		)
+		if queueAction != "" {
+			candidates = append(candidates,
+				activity.label+authority+elapsed+shortCancel+" · queue",
+				activity.label+authority+shortCancel+" · queue",
+			)
+			if activity.compactLabel != "" {
+				candidates = append(candidates,
+					activity.compactLabel+authority+elapsed+shortCancel+" · queue",
+					activity.compactLabel+authority+shortCancel+" · queue",
+				)
+			}
+			candidates = append(candidates, "Run"+authority+shortCancel+" · queue")
+		} else {
+			if activity.compactLabel != "" {
+				candidates = append(candidates,
+					activity.compactLabel+authority+elapsed+shortCancel,
+					activity.compactLabel+authority+shortCancel,
+				)
+			}
+			candidates = append(candidates, "Run"+authority+shortCancel)
+		}
 	}
+	candidates = append(candidates,
+		activity.label+detail+elapsed+longCancel+queueAction,
+		activity.label+elapsed+longCancel+queueAction,
+		activity.label+longCancel+queueAction,
+	)
 	if queueAction != "" {
 		// Preserve the semantic activity label by shortening controls before
 		// falling back to the compact identity. This keeps typed routing states
@@ -278,12 +314,12 @@ func (m *Model) renderWorkingLine() string {
 	)
 	if m.followPaused() {
 		candidates = []string{
-			activity.label + detail + elapsed + longCancel + " · end latest",
-			activity.label + elapsed + longCancel + " · end latest",
-			activity.label + longCancel + " · end latest",
-			activity.label + shortCancel + " · end",
-			"Paused" + shortCancel + " · end",
-			"Paused · end",
+			activity.label + authority + detail + elapsed + longCancel + " · end latest",
+			activity.label + authority + elapsed + longCancel + " · end latest",
+			activity.label + authority + longCancel + " · end latest",
+			activity.label + authority + shortCancel + " · end",
+			"Paused" + authority + shortCancel + " · end",
+			"Paused" + authority + " · end",
 		}
 	}
 
@@ -300,7 +336,47 @@ func (m *Model) renderWorkingLine() string {
 		}
 	}
 	chosen = truncateDisplay(chosen, textWidth)
-	return leftPad + motion + " " + m.styles.StreamHint.Render(chosen)
+	return leftPad + motion + " " + m.renderWorkingCandidate(chosen)
+}
+
+// renderWorkingCandidate separates live state, authority, metadata, and keys
+// without changing the carefully selected responsive text budget above. This
+// keeps the footer scannable in both light and dark terminals while NO_COLOR
+// still receives the exact same plain-text grammar.
+func (m *Model) renderWorkingCandidate(candidate string) string {
+	segments := strings.Split(sanitizeTerminalSingleLine(candidate), " · ")
+	for index, segment := range segments {
+		segment = strings.TrimSpace(segment)
+		if segment == "" {
+			continue
+		}
+		switch {
+		case index == 0:
+			segments[index] = m.styles.ToolRunningText.Render(segment)
+		case segment == "AUTO":
+			segments[index] = m.styles.ModeBuild.Render(segment)
+		case workingControlKey(segment) != "":
+			keyLabel := workingControlKey(segment)
+			action := strings.TrimSpace(strings.TrimPrefix(segment, keyLabel))
+			segments[index] = m.styles.FocusIndicator.Render(keyLabel)
+			if action != "" {
+				segments[index] += " " + m.styles.StreamHint.Render(action)
+			}
+		default:
+			segments[index] = m.styles.StreamHint.Render(segment)
+		}
+	}
+	return strings.Join(segments, m.styles.StreamHint.Render(" · "))
+}
+
+func workingControlKey(segment string) string {
+	keyLabel, _, _ := strings.Cut(strings.TrimSpace(segment), " ")
+	switch keyLabel {
+	case "esc", "enter", "end":
+		return keyLabel
+	default:
+		return ""
+	}
 }
 
 func (m *Model) renderContextStatus(compact bool) string {

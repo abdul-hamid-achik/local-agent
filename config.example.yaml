@@ -30,6 +30,14 @@ ollama:
 privacy:
   local_only: true
 
+# Provider-loop budgets are independent so interactive turns stay concise while
+# AUTO has room to inspect, implement, and verify without a premature stop.
+tools:
+  timeout: 30s
+  max_grep_results: 500
+  max_iterations: 10
+  auto_max_iterations: 40
+
 # Auto-routing uses installed, non-exclusive compact tiers only. Qwen 9B,
 # Ornith 9B, and Gemma E2B remain available for an explicit deep-task profile.
 model:

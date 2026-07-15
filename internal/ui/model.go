@@ -210,6 +210,14 @@ type Model struct {
 	toolHitRegions []toolHitRegion
 	toolCardMgr    ToolCardManager
 	diffGeneration uint64
+	// Receipt inspection is an ephemeral affordance for the just-completed
+	// turn. It must never point at a stale tool from an earlier no-tool turn.
+	turnToolStartIndex          int
+	lastTurnToolIndex           int
+	receiptInspectActive        bool
+	receiptInspectToolIndex     int
+	receiptInspectAnchorPaused  bool
+	receiptInspectAnchorYOffset int
 
 	// Incremental rendering cache
 	cachedEntriesRender  string
@@ -416,32 +424,34 @@ func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, com
 	)
 
 	return &Model{
-		input:            ta,
-		spin:             s,
-		scramble:         NewScrambleModel(true),
-		styles:           initialStyles,
-		keys:             DefaultKeyMap(),
-		state:            StateIdle,
-		isDark:           true,
-		reducedMotion:    reducedMotion,
-		now:              time.Now,
-		inputLines:       1,
-		toolsCollapsed:   true,
-		initializing:     true,
-		approvalPosture:  ApprovalPosturePrompted,
-		mode:             ModeNormal,
-		modeConfigs:      DefaultModeConfigs(),
-		modelManager:     modelManager,
-		router:           router,
-		logger:           logger,
-		agent:            ag,
-		cmdRegistry:      cmdReg,
-		skillMgr:         skillMgr,
-		completer:        completer,
-		completionReader: newCompletionWorkspaceReader(),
-		historyIndex:     -1,
-		toolCardMgr:      NewToolCardManager(true),
-		commitRunner:     runCommit,
+		input:                   ta,
+		spin:                    s,
+		scramble:                NewScrambleModel(true),
+		styles:                  initialStyles,
+		keys:                    DefaultKeyMap(),
+		state:                   StateIdle,
+		isDark:                  true,
+		reducedMotion:           reducedMotion,
+		now:                     time.Now,
+		inputLines:              1,
+		toolsCollapsed:          true,
+		initializing:            true,
+		approvalPosture:         ApprovalPosturePrompted,
+		mode:                    ModeNormal,
+		modeConfigs:             DefaultModeConfigs(),
+		modelManager:            modelManager,
+		router:                  router,
+		logger:                  logger,
+		agent:                   ag,
+		cmdRegistry:             cmdReg,
+		skillMgr:                skillMgr,
+		completer:               completer,
+		completionReader:        newCompletionWorkspaceReader(),
+		historyIndex:            -1,
+		toolCardMgr:             NewToolCardManager(true),
+		lastTurnToolIndex:       -1,
+		receiptInspectToolIndex: -1,
+		commitRunner:            runCommit,
 	}
 }
 
@@ -618,11 +628,17 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		m.restoreApprovalTranscriptAnchor(approvalAnchor)
 
 	case tea.WindowSizeMsg:
+		widthChanged := msg.Width != m.width
+		if widthChanged {
+			// Width reflow invalidates both the inspected ToolCard row and the
+			// numeric offset saved before inspection. Settle that temporary
+			// disclosure first; height-only repaint events preserve it.
+			m.cancelReceiptInspection(true)
+		}
 		approvalAnchor := m.captureApprovalTranscriptAnchor()
 		completionAnchor := m.captureCompletionTranscriptAnchor()
 		inlineFormAnchor := m.captureInlineFormTranscriptAnchor()
 		wasUndersized := m.ready && m.narrowTerminalHint() != ""
-		widthChanged := msg.Width != m.width
 		m.width = msg.Width
 		m.height = msg.Height
 		isUndersized := m.narrowTerminalHint() != ""
@@ -869,6 +885,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		// guards so the advertised action cannot be swallowed by an in-flight
 		// session, file, export, or commit operation.
 		if key.Matches(msg, m.keys.JumpLatest) && m.canJumpToLatest() {
+			m.cancelReceiptInspection(true)
 			m.resumeFollow()
 			return m, nil
 		}
@@ -1377,12 +1394,14 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		case key.Matches(msg, m.keys.ToggleTools):
 			// Batch-toggle all tools when input is empty and idle.
 			if m.state == StateIdle && strings.TrimSpace(m.input.Value()) == "" {
+				m.cancelReceiptInspection(true)
 				m.toolsCollapsed = !m.toolsCollapsed
 				for i := range m.toolEntries {
 					m.toolEntries[i].Collapsed = m.toolsCollapsed
 				}
 				m.invalidateEntryCache()
 				m.viewport.SetContent(m.renderEntries())
+				m.gotoBottomIfFollowing()
 				return m, nil
 			}
 
@@ -1390,16 +1409,18 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			// Toggle last tool entry only when input is empty.
 			if m.state == StateIdle && strings.TrimSpace(m.input.Value()) == "" {
 				if len(m.toolEntries) > 0 {
-					last := len(m.toolEntries) - 1
-					m.toolEntries[last].Collapsed = !m.toolEntries[last].Collapsed
-					m.invalidateEntryCache()
-					m.viewport.SetContent(m.renderEntries())
+					target := len(m.toolEntries) - 1
+					if _, ok := m.inspectableToolReceiptAction(); ok {
+						target = m.lastTurnToolIndex
+					}
+					m.toggleToolReceipt(target, true)
 				}
 				return m, nil
 			}
 
 		case key.Matches(msg, m.keys.CompactToggle):
 			if m.state == StateIdle {
+				m.cancelReceiptInspection(true)
 				m.forceCompact = !m.forceCompact
 				m.invalidateEntryCache()
 				m.viewport.SetContent(m.renderEntries())
@@ -1410,6 +1431,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			// Every visible disclosure advertises the same shortcut, so one press
 			// applies the newest receipt's next state to all reasoning blocks.
 			if m.state == StateIdle && strings.TrimSpace(m.input.Value()) == "" {
+				m.cancelReceiptInspection(true)
 				targetCollapsed := false
 				found := false
 				for i := len(m.entries) - 1; i >= 0; i-- {
@@ -1445,6 +1467,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 
 		case key.Matches(msg, m.keys.ClearView):
 			if m.state == StateIdle {
+				m.cancelReceiptInspection(true)
 				m.viewport.SetContent(m.renderEntries())
 				m.resumeFollow()
 				return m, nil
@@ -1855,6 +1878,13 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		m.viewport.SetContent(m.renderEntries())
 		m.restoreFollowPosition(followWasPaused, followYOffset)
 		if msg.Err == nil {
+			m.lastTurnToolIndex = -1
+			for i := len(m.toolEntries) - 1; i >= m.turnToolStartIndex; i-- {
+				if m.toolEntries[i].Status != ToolStatusRunning {
+					m.lastTurnToolIndex = i
+					break
+				}
+			}
 			// Terminal title flash is a success receipt, not a generic stopped state.
 			m.doneFlash = true
 			cmds = append(cmds, tea.Tick(2*time.Second, func(time.Time) tea.Msg {
@@ -2411,6 +2441,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			return m, nil
 		}
 
+		m.cancelReceiptInspection(false)
 		beforeOffset := m.viewport.YOffset()
 		m.viewport, _ = m.viewport.Update(msg)
 
@@ -2506,6 +2537,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		}
 	}
 
+	if keyMsg, ok := msg.(tea.KeyPressMsg); ok && m.transcriptScrollKey(keyMsg) {
+		m.cancelReceiptInspection(false)
+	}
 	beforeOffset := m.viewport.YOffset()
 	var cmd tea.Cmd
 	m.viewport, cmd = m.viewport.Update(msg)
@@ -3409,6 +3443,9 @@ func (m *Model) resetTurnDiagnostics() {
 	m.turnPromptTotal = 0
 	m.capabilityRoute = nil
 	m.lastCapabilityRoute = nil
+	m.lastTurnToolIndex = -1
+	m.receiptInspectActive = false
+	m.receiptInspectToolIndex = -1
 }
 
 // ReleaseExecutionSessionLease releases the cross-process ownership held by
@@ -3515,6 +3552,9 @@ func (m *Model) footerHeight() int {
 	if status := m.renderStatusLine(); status != "" {
 		statusRows := lipgloss.Height(status)
 		height += statusRows
+		if m.activityComposerGap() {
+			height++
+		}
 		if statusRows > 1 {
 			// A decision-only footer ends with the top-level terminal safety row;
 			// reserve it so wrapped actions never push a 30x12 view past the edge.
@@ -3973,6 +4013,7 @@ func (m *Model) sendToAgentTurnPresentedWithCapability(text, turnID string, visi
 	m.input.Focus()
 	m.turnStartedAt = m.nowTime()
 	m.resetTurnDiagnostics()
+	m.turnToolStartIndex = len(m.toolEntries)
 	m.recalcViewportHeight()
 	m.streamBuf.Reset()
 
@@ -4489,10 +4530,65 @@ func (m *Model) handleMouseClick(x, y int) {
 	for _, region := range m.toolHitRegions {
 		if vpY == region.Row && x < region.EndCol {
 			if region.ToolIndex >= 0 && region.ToolIndex < len(m.toolEntries) {
-				m.toolEntries[region.ToolIndex].Collapsed = !m.toolEntries[region.ToolIndex].Collapsed
-				m.invalidateEntryCache()
-				m.viewport.SetContent(m.renderEntries())
+				m.toggleToolReceipt(region.ToolIndex, false)
 			}
+			return
+		}
+	}
+}
+
+// toggleToolReceipt keeps the disclosure and transcript anchor as one parent-
+// owned interaction. Keyboard inspection reveals the exact ToolCard header;
+// hiding it restores the user's previous follow intent and offset.
+func (m *Model) toggleToolReceipt(toolIndex int, reveal bool) {
+	if toolIndex < 0 || toolIndex >= len(m.toolEntries) {
+		return
+	}
+	if m.receiptInspectActive && m.receiptInspectToolIndex != toolIndex {
+		m.cancelReceiptInspection(false)
+	}
+	expanding := m.toolEntries[toolIndex].Collapsed
+	restoreInspectionAnchor := !expanding && m.receiptInspectActive && m.receiptInspectToolIndex == toolIndex
+	if expanding && reveal {
+		m.receiptInspectActive = true
+		m.receiptInspectToolIndex = toolIndex
+		m.receiptInspectAnchorPaused = m.followPaused()
+		m.receiptInspectAnchorYOffset = m.viewport.YOffset()
+	}
+	m.toolEntries[toolIndex].Collapsed = !m.toolEntries[toolIndex].Collapsed
+	m.invalidateEntryCache()
+	m.viewport.SetContent(m.renderEntries())
+	if expanding && reveal {
+		m.revealToolReceipt(toolIndex)
+		return
+	}
+	if restoreInspectionAnchor {
+		m.restoreFollowPosition(m.receiptInspectAnchorPaused, m.receiptInspectAnchorYOffset)
+		m.receiptInspectActive = false
+		m.receiptInspectToolIndex = -1
+	}
+}
+
+func (m *Model) cancelReceiptInspection(collapse bool) {
+	if !m.receiptInspectActive {
+		return
+	}
+	toolIndex := m.receiptInspectToolIndex
+	if collapse && toolIndex >= 0 && toolIndex < len(m.toolEntries) && !m.toolEntries[toolIndex].Collapsed {
+		m.toolEntries[toolIndex].Collapsed = true
+		m.invalidateEntryCache()
+		m.viewport.SetContent(m.renderEntries())
+	}
+	m.restoreFollowPosition(m.receiptInspectAnchorPaused, m.receiptInspectAnchorYOffset)
+	m.receiptInspectActive = false
+	m.receiptInspectToolIndex = -1
+}
+
+func (m *Model) revealToolReceipt(toolIndex int) {
+	for _, region := range m.toolHitRegions {
+		if region.ToolIndex == toolIndex {
+			m.viewport.SetYOffset(region.Row)
+			m.pauseFollow()
 			return
 		}
 	}

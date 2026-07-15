@@ -95,10 +95,18 @@ host file operation, then call `fcheap_save` separately.
 
 Hitspec 2.18 additionally supports optional `hitspec_search_web` and
 `hitspec_capture_webpage` surfaces when their server dependencies are configured.
+Local Agent interprets the bounded `hitspec_search_web` envelope as a completed
+discovery operation with candidate—not verified—evidence. Candidate URLs,
+titles, and snippets are available only to the active model turn; durable
+session state keeps a bounded receipt with the candidate count and source
+domains instead of retaining the private query or raw snippets.
+
 Local Agent recognizes the compact `hitspec_capture_webpage` structured receipt
 as a file.cheap artifact outcome while keeping webpage content, URLs, titles,
 tags, and downstream failure prose outside durable session state. Transport,
-storage, indexing, and evidence remain separate states.
+storage, indexing, and evidence remain separate states. The typed capture
+contract is accepted only when its one-file stash metrics match the rendered
+Markdown byte count and any successful indexing was explicitly requested.
 
 See the versioned [Hitspec MCP reference](https://hitspec.dev/reference/mcp) for
 the exact tool schemas and operator-owned startup requirements. MCPHub discovers

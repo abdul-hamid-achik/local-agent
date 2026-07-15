@@ -54,6 +54,9 @@ func (m *Model) View() tea.View {
 		if status := m.renderStatusLine(); status != "" {
 			content.WriteString(status)
 			content.WriteString("\n")
+			if m.activityComposerGap() {
+				content.WriteString("\n")
+			}
 		}
 
 		// Ordinary turns keep the composer available so the next instruction can be
@@ -192,6 +195,19 @@ func (m *Model) View() tea.View {
 	}
 
 	return v
+}
+
+// activityComposerGap gives the live activity rail one row of breathing room
+// before the draft surface. Prompt/form owners remain dense because their
+// controls already provide their own framing and exact height contract.
+func (m *Model) activityComposerGap() bool {
+	if _, active := m.currentWorkingActivity(); !active {
+		return false
+	}
+	if m.pendingApproval != nil || m.readScopePrompt != nil || m.pendingPaste != nil || m.overlay != OverlayNone {
+		return false
+	}
+	return m.queuedFollowUp != nil || m.composerEditable()
 }
 
 // renderNarrowTerminalView keeps tiny terminals recoverable.
@@ -610,6 +626,13 @@ func (m *Model) renderStatusLine() string {
 			done += " · " + formatWorkingElapsed(m.lastTurnDuration)
 		}
 		parts = append(parts, m.styles.StatusCheck.UnsetPaddingLeft().Render(done))
+		if receiptAction, ok := m.inspectableToolReceiptAction(); paneW >= 58 &&
+			strings.TrimSpace(m.input.Value()) == "" && ok {
+			parts = append(parts,
+				m.styles.FocusIndicator.Render(m.keys.ToggleFocusedTool.Help().Key)+
+					" "+m.styles.StatusText.Render(receiptAction),
+			)
+		}
 	}
 
 	contextStatus := m.renderContextStatus(paneW < 80)
@@ -817,6 +840,17 @@ func (m *Model) conversationStarted() bool {
 		}
 	}
 	return false
+}
+
+func (m *Model) inspectableToolReceiptAction() (string, bool) {
+	if m.lastTurnToolIndex < 0 || m.lastTurnToolIndex >= len(m.toolEntries) ||
+		m.toolEntries[m.lastTurnToolIndex].Status == ToolStatusRunning {
+		return "", false
+	}
+	if m.toolEntries[m.lastTurnToolIndex].Collapsed {
+		return "inspect receipt", true
+	}
+	return "hide receipt", true
 }
 
 func (m *Model) hasTranscriptNotice() bool {

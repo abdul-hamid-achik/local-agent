@@ -9,7 +9,7 @@ A local-first coding agent for the terminal, built in Go with Charm and powered 
 ```text
   NORMAL -> interactive work; changes require approval
   PLAN   -> inspect and design without mutations
-  AUTO   -> proactive work under the same approval policy
+  AUTO   -> proactive work with routine workspace actions pre-authorized
 ```
 
 ## What works today
@@ -153,16 +153,31 @@ Cycle modes with `shift+tab`.
 |---|---|---|
 | NORMAL | Routes for the interactive task | Read tools, writes, validated edits, shell, memory, and MCP; mutations remain approval-gated |
 | PLAN | Sends ordinary prompts directly under a read-only host policy | Workspace reads, search, listing, diff, existence checks, memory recall, and advisory expert consultation only |
-| AUTO | Sends ordinary prompts directly with proactive tool routing | The NORMAL tool surface under the same approval policy; no blanket approval |
+| AUTO | Sends ordinary prompts directly with proactive tool routing | The NORMAL tool surface; confined writes and catalogued local development commands proceed automatically, while dangerous or unknown effects remain gated |
 
 The mode policy is enforced by the host, not just by a prompt. A model-generated
 mutation in PLAN is returned as blocked. `shift+tab` only changes authority; it
 never opens a form or creates work. Ordinary prompts are sent immediately in all
-three modes. AUTO does not skip approvals: risky operations still follow the
-configured approval policy. A durable bounded run is created only through
+three modes. AUTO is autonomous for validated workspace writes, directory
+creation, host-catalogued local MCP routes, and a static catalog of ordinary
+build, test, lint, formatting, and inspection commands. It still asks before
+Git, deletion, dynamic shell expansion, file
+redirection, external paths, network-facing or unknown commands, memory
+mutation, human decisions, and uncatalogued MCP effects. AUTO uses a larger
+bounded provider-loop budget (40 iterations by default) and does not emit the
+interactive near-limit warning. A durable bounded run is created only through
 `/goal <duration> <prompt>` or `/goal new`, and an active goal is controlled
 through the Goal Inspector instead of accepting an ordinary prompt that could
 bypass its permit and budget.
+
+AUTO classifies the outer command and visible operands; it is not an OS
+sandbox. Repository-owned build scripts, tests, generators, and hooks can run
+code with the Local Agent process's filesystem and network access, so use AUTO
+only with workspaces whose development commands you trust.
+Raw Git remains approval-gated because repository configuration, filters, and
+hooks can execute programs even during apparently read-only commands. Use
+`/changes` for the host-owned change summary and `/commit` for the hardened
+commit path.
 Legacy ASK sessions restore as NORMAL. Legacy BUILD sessions restore as NORMAL
 unless they already carry a durable goal, in which case they restore as AUTO.
 
@@ -199,11 +214,14 @@ With that setting, `local-agent`:
 
 ### Approval policy
 
-The following operations require approval by default:
+The following operations require approval in NORMAL by default:
 
 - `write`, `edit`, `bash`, `mkdir`, `remove`, `copy`, and `move`
 - `memory_save`, `memory_update`, and `memory_delete`
 - Every MCP tool call
+
+AUTO pre-authorizes the confined subset described under Operating modes. The
+remaining risky or unknown requests still use the same inline approval surface.
 
 The TUI replaces the composer with an inline permission surface while keeping
 the transcript visible. It shows a bounded action preview, target or command,
@@ -347,6 +365,7 @@ tools:
   timeout: 30s
   max_grep_results: 500
   max_iterations: 10
+  auto_max_iterations: 40
 
 # Read-only Team, Swarm, and application-level MoE consultation.
 experts:
@@ -370,7 +389,8 @@ See [`config.example.yaml`](config.example.yaml) for the configured model catalo
 | `LOCAL_AGENT_AGENTS_DIR` | Override the agents directory |
 | `LOCAL_AGENT_TOOLS_TIMEOUT` | Override the built-in tool timeout |
 | `LOCAL_AGENT_TOOLS_MAX_GREP` | Override maximum grep results |
-| `LOCAL_AGENT_TOOLS_MAX_ITER` | Override maximum ReAct iterations |
+| `LOCAL_AGENT_TOOLS_MAX_ITER` | Override maximum NORMAL/PLAN provider iterations |
+| `LOCAL_AGENT_TOOLS_AUTO_MAX_ITER` | Override maximum AUTO provider iterations |
 | `LOCAL_AGENT_ICE_EMBED_MODEL` | Override the ICE embedding model |
 | `LOCAL_AGENT_LOCAL_ONLY` | Enable or disable local-machine endpoint enforcement |
 | `LOCAL_AGENT_ALLOW_LARGE_MODELS` | Bypass the 16 GB-oriented model/context guard |
@@ -489,7 +509,7 @@ ICE is still a flat JSON vector store rather than an ANN index, but its bounded 
 | `local-agent` | Open the TUI |
 | `local-agent -p "prompt"`, `local-agent --prompt "prompt"` | Run one user-directed NORMAL prompt and print text to stdout |
 | `local-agent --plan --prompt "prompt"` | Run one read-only PLAN prompt; equivalent to `--mode plan` |
-| `local-agent --auto --prompt "prompt"` | Run one proactive AUTO prompt; equivalent to `--mode auto` and does not skip approvals |
+| `local-agent --auto --prompt "prompt"` | Run one proactive AUTO prompt; equivalent to `--mode auto`, with routine confined workspace actions pre-authorized |
 | `local-agent --model <name>` | Select the initial model; in headless mode this prevents auto-routing |
 | `local-agent --agent <name>` | Select an initial agent profile |
 | `local-agent --resume <id\|latest>` | Open the TUI and restore an exact or newest current-workspace session |

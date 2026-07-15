@@ -25,7 +25,8 @@ const (
 	// policy. It never grants an automatic mutation by itself.
 	AuthorityPlan
 	// AuthorityAutoScoped permits only host-catalogued, workspace-scoped
-	// operations to bypass an interactive modal. Unknown, destructive, shell,
+	// operations to bypass an interactive modal. Ordinary local development
+	// commands are included; destructive, externally effectful, dynamic shell,
 	// and non-catalogued MCP calls still use the normal permission path.
 	AuthorityAutoScoped
 )
@@ -231,6 +232,9 @@ func (a *Agent) authorityAutoApproves(mode AuthorityMode, call llm.ToolCall, kin
 			}
 			_, err := a.resolvePath(path)
 			return err == nil
+		case "bash":
+			command, ok := call.Arguments["command"].(string)
+			return ok && a.autoScopedCommandAllowed(command)
 		default:
 			return false
 		}

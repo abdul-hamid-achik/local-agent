@@ -75,6 +75,7 @@ tools:
   timeout: 30s
   max_grep_results: 500
   max_iterations: 10
+  auto_max_iterations: 40
 
 experts:
   enabled: true
@@ -127,7 +128,8 @@ weight budget and remain serial because provider-side capacity is unknown.
 | `LOCAL_AGENT_AGENTS_DIR` | Override the agents directory |
 | `LOCAL_AGENT_TOOLS_TIMEOUT` | Override the built-in tool timeout |
 | `LOCAL_AGENT_TOOLS_MAX_GREP` | Override the maximum grep results |
-| `LOCAL_AGENT_TOOLS_MAX_ITER` | Override ReAct iterations |
+| `LOCAL_AGENT_TOOLS_MAX_ITER` | Override NORMAL/PLAN provider iterations |
+| `LOCAL_AGENT_TOOLS_AUTO_MAX_ITER` | Override AUTO provider iterations |
 | `LOCAL_AGENT_ICE_EMBED_MODEL` | Override the ICE embedding model |
 | `LOCAL_AGENT_LOCAL_ONLY` | Toggle local-machine endpoint enforcement |
 | `LOCAL_AGENT_TRUST_REPO_MCP` | Trust the exact digest printed for repository-local STDIO MCP authority |

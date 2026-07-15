@@ -59,9 +59,10 @@ type AgentsConfig struct {
 }
 
 type ToolsConfig struct {
-	Timeout        string `yaml:"timeout,omitempty"` // e.g., "30s", "2m"
-	MaxGrepResults int    `yaml:"max_grep_results,omitempty"`
-	MaxIterations  int    `yaml:"max_iterations,omitempty"`
+	Timeout           string `yaml:"timeout,omitempty"` // e.g., "30s", "2m"
+	MaxGrepResults    int    `yaml:"max_grep_results,omitempty"`
+	MaxIterations     int    `yaml:"max_iterations,omitempty"`
+	AutoMaxIterations int    `yaml:"auto_max_iterations,omitempty"`
 }
 
 // ExpertsConfig controls application-level read-only Team/Swarm/MoE
@@ -141,9 +142,10 @@ func defaults() Config {
 			AutoLoad: true,
 		},
 		Tools: ToolsConfig{
-			Timeout:        "30s",
-			MaxGrepResults: 500,
-			MaxIterations:  10,
+			Timeout:           "30s",
+			MaxGrepResults:    500,
+			MaxIterations:     10,
+			AutoMaxIterations: 40,
 		},
 		Experts: ExpertsConfig{
 			Enabled:       true,
@@ -661,6 +663,9 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("LOCAL_AGENT_TOOLS_MAX_ITER"); v != "" {
 		cfg.Tools.MaxIterations = parseEnvInt(v, cfg.Tools.MaxIterations)
+	}
+	if v := os.Getenv("LOCAL_AGENT_TOOLS_AUTO_MAX_ITER"); v != "" {
+		cfg.Tools.AutoMaxIterations = parseEnvInt(v, cfg.Tools.AutoMaxIterations)
 	}
 	if v := os.Getenv("LOCAL_AGENT_ICE_EMBED_MODEL"); v != "" {
 		cfg.ICE.EmbedModel = v

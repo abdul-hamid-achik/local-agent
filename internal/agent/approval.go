@@ -154,6 +154,7 @@ func (a *Agent) buildApprovalPreview(ctx context.Context, tc llm.ToolCall, argum
 	case "bash":
 		preview.Kind = permissionpkg.PreviewCommand
 		preview.Command, _ = tc.Arguments["command"].(string)
+		preview.Consequence = "Host policy did not pre-authorize this command for the current turn. Shell commands can change files, start processes, or contact external systems; inspect the exact command before allowing it."
 	case "copy":
 		preview.Kind = permissionpkg.PreviewFilesystem
 		preview.SourcePath = readablePathArg("source")

@@ -63,6 +63,41 @@ func TestMissingToolCardKeepsDomainUnknownOutOfSuccessState(t *testing.T) {
 	}
 }
 
+func TestHitspecSearchRendersSuccessfulCandidateEvidence(t *testing.T) {
+	projection := ecosystem.ProjectReceipt(
+		ecosystem.ProjectToolCall("mcphub__mcphub_call_tool", map[string]any{
+			"server": "hitspec", "tool": "hitspec_search_web",
+		}),
+		ecosystem.RawReceipt{Text: `{"kind":"discovery","query":"current docs","results":[{"title":"Docs","url":"https://docs.local-agent.dev/","domain":"docs.local-agent.dev","snippet":"candidate","citation_id":"source-01"}],"truncated":false}`},
+	)
+	card := NewToolCard("mcphub__mcphub_call_tool", ToolCardGeneric, true)
+	card.State = toolCardStateFromProjection(projection)
+	card.Projection = projection
+	card.Result = ecosystem.SafeReceiptText(projection)
+
+	if card.State != ToolCardSuccess {
+		t.Fatalf("Hitspec search card state = %v, want success for a completed candidate search", card.State)
+	}
+	collapsed := ansi.Strip(card.View(76))
+	for _, expected := range []string{"Found web candidates", "1 candidate source", "docs.local-agent.dev"} {
+		if !strings.Contains(collapsed, expected) {
+			t.Fatalf("collapsed Hitspec search receipt missing %q:\n%s", expected, collapsed)
+		}
+	}
+	card.Expanded = true
+	expanded := ansi.Strip(card.View(76))
+	for _, expected := range []string{"specialist: Hitspec · discovery", "domain: succeeded", "evidence: candidate"} {
+		if !strings.Contains(expanded, expected) {
+			t.Fatalf("expanded Hitspec search receipt missing %q:\n%s", expected, expanded)
+		}
+	}
+	for _, forbidden := range []string{"evidence: verified", "Outcome needs interpretation"} {
+		if strings.Contains(expanded, forbidden) {
+			t.Fatalf("Hitspec candidate receipt claimed %q:\n%s", forbidden, expanded)
+		}
+	}
+}
+
 func TestExpandedSemanticReceiptShowsDownstreamRouteAndEvidence(t *testing.T) {
 	card := NewToolCard("mcphub__cortex__cortex_investigate", ToolCardGeneric, true)
 	card.State = ToolCardSuccess

@@ -70,7 +70,7 @@ Try a read-only request first:
 Explain the request flow in this repository and identify the tests that cover it.
 ```
 
-Local Agent begins in **NORMAL** mode. Reads can proceed inside the workspace. Mutating tools such as edits, writes, shell commands, and MCP calls require approval by default.
+Local Agent begins in **NORMAL** mode. Reads can proceed inside the workspace. Mutating tools such as edits, writes, shell commands, and MCP calls require approval by default. Switch to **AUTO** when you want validated workspace writes and routine local build, test, lint, formatting, and inspection commands to proceed without repeated prompts. Git and dangerous, external, dynamic, or unknown effects remain gated.
 
 To reopen saved work directly, pass a positive session ID or select the newest
 session in the current canonical workspace:

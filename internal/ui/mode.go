@@ -50,7 +50,7 @@ func DefaultModeConfigs() [3]ModeConfig {
 		},
 		{ // ModeAuto
 			Label:               "AUTO",
-			SystemPromptPrefix:  "Work proactively toward the user's request. Workspace-confined file changes and host-catalogued local ecosystem operations may proceed automatically. Additional roots explicitly listed in Environment may be read but never mutated; unlisted external paths remain unavailable. Pause for shell commands, deletion, secrets, human decisions, and unknown tools.",
+			SystemPromptPrefix:  "Work proactively until the user's request is implemented and verified. Do not ask for progress confirmation when the objective and available evidence are clear. Workspace-confined file changes, host-catalogued local ecosystem operations, and static routine development commands for building, testing, linting, formatting, and inspection may proceed automatically. Additional roots explicitly listed in Environment may be read but never mutated; unlisted external paths remain unavailable. Pause only for Git, destructive or dynamic shell behavior, file redirection, external paths, network-facing or unknown commands, secrets, human decisions, and uncatalogued tools.",
 			ToolPolicy:          agent.BuildToolPolicy(),
 			PreferredCapability: config.CapabilityAdvanced,
 			RouterMode:          config.ModeBuildContext,

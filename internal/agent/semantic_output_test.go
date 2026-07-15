@@ -392,3 +392,87 @@ func TestEmitSemanticToolResultDoesNotForwardRawStructuredContent(t *testing.T) 
 		t.Fatalf("raw structured content crossed output boundary: projection=%s result=%q", encoded, recorder.result)
 	}
 }
+
+func TestSemanticToolContentsKeepsHitspecDiscoveryTransient(t *testing.T) {
+	const raw = `{
+		"kind":"discovery","query":"PRIVATE_SEARCH_QUERY",
+		"results":[{"title":"Candidate title","url":"https://docs.local-agent.dev/guide","domain":"docs.local-agent.dev","snippet":"UNTRUSTED_CANDIDATE_SNIPPET","citation_id":"source-01"}],
+		"truncated":false
+	}`
+	call := llm.ToolCall{
+		Name: "mcphub__mcphub_call_tool",
+		Arguments: map[string]any{
+			"server": "hitspec", "tool": "hitspec_search_web",
+			"arguments": map[string]any{"query": "PRIVATE_SEARCH_QUERY"},
+		},
+	}
+	projection := projectSemanticToolReceipt(call.Name, call.Arguments, raw, nil, nil, false, false, false)
+	if projection.Domain != ecosystem.DomainSucceeded || !projection.DomainTyped ||
+		projection.Evidence != ecosystem.EvidenceCandidate {
+		t.Fatalf("search projection = %#v", projection)
+	}
+
+	ag := New(nil, nil, 0)
+	modelResult, durableResult := ag.semanticToolContents(call, projection, raw, nil, false)
+	for _, expected := range []string{"transient", "candidate sources", "https://docs.local-agent.dev/guide", "UNTRUSTED_CANDIDATE_SNIPPET"} {
+		if !strings.Contains(modelResult, expected) {
+			t.Fatalf("model discovery result missing %q: %s", expected, modelResult)
+		}
+	}
+	if strings.Contains(modelResult, "PRIVATE_SEARCH_QUERY") {
+		t.Fatalf("model discovery result unnecessarily repeated the private query: %s", modelResult)
+	}
+	for _, forbidden := range []string{"PRIVATE_SEARCH_QUERY", "Candidate title", "/guide", "UNTRUSTED_CANDIDATE_SNIPPET"} {
+		if strings.Contains(durableResult, forbidden) {
+			t.Fatalf("durable discovery receipt retained %q: %s", forbidden, durableResult)
+		}
+	}
+	for _, expected := range []string{"domain=succeeded", "evidence=candidate", "1 candidate source", "docs.local-agent.dev"} {
+		if !strings.Contains(durableResult, expected) {
+			t.Fatalf("durable discovery receipt missing %q: %s", expected, durableResult)
+		}
+	}
+}
+
+func TestSemanticToolContentsNeverPersistsRawHitspecWebTextOnFailureOrSchemaDrift(t *testing.T) {
+	tests := []struct {
+		name      string
+		operation string
+		raw       string
+		toolError bool
+	}{
+		{
+			name: "search schema drift", operation: "hitspec_search_web",
+			raw: `{"kind":"discovery","query":"PRIVATE_QUERY","results":[],"truncated":false,"unexpected":"PRIVATE_URL"}`,
+		},
+		{
+			name: "capture malformed text", operation: "hitspec_capture_webpage",
+			raw: `{"url":"https://private.example/?token=PRIVATE_TOKEN","error":"PRIVATE_FAILURE"}`,
+		},
+		{
+			name: "search tool error", operation: "hitspec_search_web",
+			raw: "PRIVATE_QUERY failed at https://private.example/ with PRIVATE_FAILURE", toolError: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			call := llm.ToolCall{Name: "hitspec__" + test.operation}
+			projection := projectSemanticToolReceipt(
+				call.Name, nil, test.raw, nil, nil, false, test.toolError, false,
+			)
+			ag := New(nil, nil, 0)
+			modelResult, durableResult := ag.semanticToolContents(call, projection, test.raw, nil, test.toolError)
+			if modelResult != durableResult {
+				t.Fatalf("untyped Hitspec text escaped only to model context:\nmodel=%s\ndurable=%s", modelResult, durableResult)
+			}
+			for _, forbidden := range []string{"PRIVATE_QUERY", "PRIVATE_TOKEN", "PRIVATE_URL", "PRIVATE_FAILURE", "private.example"} {
+				if strings.Contains(durableResult, forbidden) {
+					t.Fatalf("Hitspec receipt persisted %q: %s", forbidden, durableResult)
+				}
+			}
+			if !strings.Contains(durableResult, "specialist=hitspec") {
+				t.Fatalf("bounded receipt lost Hitspec attribution: %s", durableResult)
+			}
+		})
+	}
+}

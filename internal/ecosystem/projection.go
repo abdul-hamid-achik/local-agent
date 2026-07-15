@@ -100,6 +100,7 @@ const (
 	DigestMCPHubUnavailable      ReceiptDigestKind = "mcphub_unavailable"
 	DigestMCPHubCursorOutOfRange ReceiptDigestKind = "mcphub_cursor_out_of_range"
 	DigestMCPHubError            ReceiptDigestKind = "mcphub_error"
+	DigestHitspecSearch          ReceiptDigestKind = "hitspec_search"
 	DigestCortexFailure          ReceiptDigestKind = "cortex_failure"
 	DigestCortexReceipt          ReceiptDigestKind = "cortex_receipt"
 )
@@ -130,6 +131,7 @@ type ReceiptDigest struct {
 	TotalBytes    int64             `json:"total_bytes,omitempty"`
 	PageBytes     int64             `json:"page_bytes,omitempty"`
 	Done          bool              `json:"done,omitempty"`
+	Truncated     bool              `json:"truncated,omitempty"`
 }
 
 // ToolProjection is the semantic, persistable projection of one tool call.
@@ -201,38 +203,57 @@ func ProjectToolCall(name string, args map[string]any) ToolProjection {
 		Domain:    DomainPending,
 	}
 
-	if operation == "mcphub_call_tool" {
+	// Parser authority depends on the exact routed identity, not merely a lossy
+	// canonicalization of attacker-controlled tool names or gateway arguments.
+	// We still retain bounded canonical route metadata for display, but malformed
+	// aliases never inherit a specialist's typed receipt parser.
+	routeShapeValid := false
+	routeIdentityExact := false
+	rawRouteServer := ""
+	if name == key && key == "mcphub__mcphub_call_tool" {
+		routeShapeValid = true
 		projection.Route.Gateway = "mcphub"
 		projection.Route.Lazy = true
+		rawServer := rawArgumentString(args, "server")
+		rawTool := rawArgumentString(args, "tool")
 		server := argumentIdentifier(args, "server")
 		tool := argumentIdentifier(args, "tool")
 		if server == "" {
 			if before, after, ok := strings.Cut(tool, "__"); ok {
 				server, tool = before, after
 			}
+			if before, after, ok := strings.Cut(rawTool, "__"); ok {
+				rawServer, rawTool = before, after
+			}
 		} else {
 			tool = strings.TrimPrefix(tool, server+"__")
+			rawTool = strings.TrimPrefix(rawTool, rawServer+"__")
 		}
+		rawRouteServer = rawServer
 		projection.Route.Server = canonicalIdentifier(server)
 		projection.Route.Tool = canonicalIdentifier(tool)
 		if projection.Route.Tool != "" {
 			projection.Operation = projection.Route.Tool
 		}
+		routeIdentityExact = rawRouteServer == projection.Route.Server &&
+			rawTool == projection.Route.Tool
 	} else {
-		projectNamedRoute(&projection, segments)
+		routeShapeValid = projectNamedRoute(&projection, segments)
+		rawRouteServer = rawNamedRouteServer(name, segments)
+		routeIdentityExact = routeShapeValid && name == key
 	}
 
 	if projection.Operation == "mcphub_get_result" {
 		projection.Route.CallID = argumentIdentifier(args, "callId", "call_id")
 	}
 
-	if projection.Route.Gateway != "" && projection.Route.Server != "" {
-		// The gateway names the downstream authoritatively. A non-specialist
-		// downstream must not gain a specialist's parsers (or its persisted
-		// digest attribution) merely by echoing that specialist's operation
-		// naming through the gateway.
-		projection.Specialist = specialistIdentity(projection.Route.Server)
-	} else {
+	if projection.Route.Server != "" && routeIdentityExact {
+		// Any explicit route server names the effect owner authoritatively. A
+		// non-specialist direct server or gateway downstream must not gain a
+		// specialist's parsers (or persisted attribution) merely by echoing that
+		// specialist's operation name.
+		projection.Specialist = exactSpecialistIdentity(rawRouteServer)
+	} else if projection.Route.Server == "" && routeShapeValid && routeIdentityExact {
 		projection.Specialist = inferSpecialist(projection.Route.Server, projection.Operation, segments)
 	}
 	projection.Role = specialistRoles[projection.Specialist]
@@ -251,23 +272,42 @@ func ProjectToolCall(name string, args map[string]any) ToolProjection {
 	return projection.Normalize()
 }
 
-func projectNamedRoute(projection *ToolProjection, segments []string) {
-	if len(segments) == 0 {
-		return
-	}
-	for index, segment := range segments {
-		if segment != "mcphub" {
-			continue
-		}
+func projectNamedRoute(projection *ToolProjection, segments []string) bool {
+	switch {
+	case len(segments) == 1:
+		return true
+	case len(segments) == 3 && segments[0] == "mcphub":
 		projection.Route.Gateway = "mcphub"
-		projection.Route.Lazy = len(segments) > index+2
-		if len(segments) > index+2 {
-			projection.Route.Server = segments[index+1]
-		}
-		return
+		projection.Route.Lazy = true
+		projection.Route.Server = segments[1]
+		return true
+	case len(segments) == 2:
+		projection.Route.Server = segments[0]
+		return true
+	default:
+		return false
 	}
-	if len(segments) > 1 {
-		projection.Route.Server = segments[len(segments)-2]
+}
+
+func exactSpecialistIdentity(value string) string {
+	if value == "" || value != canonicalIdentifier(value) {
+		return ""
+	}
+	if _, ok := specialistRoles[value]; ok {
+		return value
+	}
+	return ""
+}
+
+func rawNamedRouteServer(name string, segments []string) string {
+	rawSegments := strings.Split(name, "__")
+	switch {
+	case len(segments) == 3 && segments[0] == "mcphub" && len(rawSegments) == 3 && rawSegments[0] == "mcphub":
+		return rawSegments[1]
+	case len(segments) == 2 && len(rawSegments) == 2:
+		return rawSegments[0]
+	default:
+		return ""
 	}
 }
 
@@ -390,12 +430,17 @@ func ProjectReceipt(projection ToolProjection, receipt RawReceipt) ToolProjectio
 			projection.Artifact = nil
 		}
 	case "hitspec":
-		if domain, evidence, artifact, ok := projectHitspecReceipt(projection.Operation, receipt); ok {
+		if domain, evidence, digest, ok := projectHitspecSearchReceipt(projection.Operation, receipt); ok {
+			projection.Domain, projection.Evidence = domain, evidence
+			projection.Digest = digest
+			projection.DomainTyped = true
+		} else if domain, evidence, artifact, ok := projectHitspecReceipt(projection.Operation, receipt); ok {
 			projection.Domain, projection.Evidence = domain, evidence
 			projection.Artifact = artifact
 			projection.DomainTyped = true
 		} else {
 			projection.Domain, projection.Evidence = DomainUnknown, EvidenceNone
+			projection.Digest = nil
 			projection.Artifact = nil
 		}
 	case "cortex":
@@ -489,8 +534,10 @@ func finalizeToolReceipt(projection ToolProjection, toolError bool) ToolProjecti
 		if projection.Domain == DomainSucceeded || projection.Domain == DomainPending || projection.Domain == DomainUnknown || projection.Domain == "" {
 			projection.Domain = DomainFailed
 			projection.DomainTyped = false
-		}
-		if projection.Evidence == EvidenceVerified {
+			// The application-level error contradicts the optimistic typed
+			// outcome, so candidate/supported evidence from that same envelope
+			// cannot survive either. Parsers that already returned an explicit
+			// attention/failed/contradicted state keep their bounded evidence.
 			projection.Evidence = EvidenceNone
 		}
 	}
@@ -612,6 +659,15 @@ func (p ToolProjection) SummaryText() string {
 		return fmt.Sprintf("cursor %d is outside the stored result", digest.Cursor)
 	case DigestMCPHubError:
 		return "MCPHub reported an error"
+	case DigestHitspecSearch:
+		parts := []string{metricLabel(digest.Count, "candidate source", "candidate sources")}
+		if items := digestItemSummary(digest.Items, digest.Count); items != "" {
+			parts = append(parts, items)
+		}
+		if digest.Truncated {
+			parts = append(parts, "more results omitted")
+		}
+		return strings.Join(parts, " · ")
 	case DigestCortexFailure:
 		if digest.Target != "" {
 			return "Cortex rejected the request for " + digest.Target
@@ -880,7 +936,13 @@ func (p ToolProjection) Normalize() ToolProjection {
 	}
 	if p.Digest != nil {
 		digest := normalizeReceiptDigest(*p.Digest)
-		if digest.Kind == "" {
+		validContext := digest.Kind != ""
+		if digest.Kind == DigestHitspecSearch {
+			validContext = p.Specialist == "hitspec" && p.Operation == "hitspec_search_web" &&
+				p.Role == RoleDiscovery && p.Transport == TransportSucceeded &&
+				p.Domain == DomainSucceeded && p.Evidence == EvidenceCandidate
+		}
+		if !validContext {
 			p.Digest = nil
 		} else {
 			p.Digest = &digest
@@ -967,7 +1029,7 @@ func validReceiptDigestKind(value ReceiptDigestKind) bool {
 	case "", DigestMCPHubServers, DigestMCPHubSearch, DigestMCPHubDescribe,
 		DigestMCPHubResolve, DigestMCPHubStats, DigestMCPHubStored,
 		DigestMCPHubPage, DigestMCPHubUnavailable,
-		DigestMCPHubCursorOutOfRange, DigestMCPHubError, DigestCortexFailure,
+		DigestMCPHubCursorOutOfRange, DigestMCPHubError, DigestHitspecSearch, DigestCortexFailure,
 		DigestCortexReceipt:
 		return true
 	default:
@@ -995,6 +1057,11 @@ func argumentIdentifier(args map[string]any, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func rawArgumentString(args map[string]any, key string) string {
+	value, _ := args[key].(string)
+	return value
 }
 
 func canonicalIdentifier(value string) string {

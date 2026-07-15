@@ -2,9 +2,11 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
@@ -331,7 +333,9 @@ func TestAutoScopedAuthorityConfinesWritesAndCortexLifecycle(t *testing.T) {
 		{name: "parent escape prompts", mode: AuthorityAutoScoped, kind: executionpkg.KindBuiltin, call: llm.ToolCall{Name: "write", Arguments: map[string]any{"path": "../escape.txt"}}},
 		{name: "absolute escape prompts", mode: AuthorityAutoScoped, kind: executionpkg.KindBuiltin, call: llm.ToolCall{Name: "write", Arguments: map[string]any{"path": filepath.Join(outside, "escape.txt")}}},
 		{name: "symlink escape prompts", mode: AuthorityAutoScoped, kind: executionpkg.KindBuiltin, call: llm.ToolCall{Name: "write", Arguments: map[string]any{"path": filepath.Join("outside-link", "escape.txt")}}},
-		{name: "bash prompts", mode: AuthorityAutoScoped, kind: executionpkg.KindBuiltin, call: llm.ToolCall{Name: "bash", Arguments: map[string]any{"command": "true"}}},
+		{name: "auto routine bash", mode: AuthorityAutoScoped, kind: executionpkg.KindBuiltin, call: llm.ToolCall{Name: "bash", Arguments: map[string]any{"command": "true"}}, want: true},
+		{name: "normal routine bash prompts", mode: AuthorityNormal, kind: executionpkg.KindBuiltin, call: llm.ToolCall{Name: "bash", Arguments: map[string]any{"command": "true"}}},
+		{name: "auto destructive bash prompts", mode: AuthorityAutoScoped, kind: executionpkg.KindBuiltin, call: llm.ToolCall{Name: "bash", Arguments: map[string]any{"command": "rm -rf ."}}},
 		{name: "remove prompts", mode: AuthorityAutoScoped, kind: executionpkg.KindBuiltin, call: llm.ToolCall{Name: "remove", Arguments: map[string]any{"path": "ok.txt"}}},
 		{name: "copy prompts", mode: AuthorityAutoScoped, kind: executionpkg.KindBuiltin, call: llm.ToolCall{Name: "copy", Arguments: map[string]any{"source": "a", "destination": "b"}}},
 		{name: "move prompts", mode: AuthorityAutoScoped, kind: executionpkg.KindBuiltin, call: llm.ToolCall{Name: "move", Arguments: map[string]any{"source": "a", "destination": "b"}}},
@@ -369,7 +373,92 @@ func TestAutoScopedAuthorityConfinesWritesAndCortexLifecycle(t *testing.T) {
 	}
 }
 
+func TestIterationBudgetsSeparateInteractiveAndAutoAuthority(t *testing.T) {
+	ag := New(nil, nil, 4096)
+	ag.SetToolsConfig(config.ToolsConfig{MaxIterations: 12, AutoMaxIterations: 48})
+	if got := ag.MaxIterationsForAuthority(AuthorityNormal); got != 12 {
+		t.Fatalf("NORMAL max iterations = %d, want 12", got)
+	}
+	if got := ag.MaxIterationsForAuthority(AuthorityPlan); got != 12 {
+		t.Fatalf("PLAN max iterations = %d, want 12", got)
+	}
+	if got := ag.MaxIterationsForAuthority(AuthorityAutoScoped); got != 48 {
+		t.Fatalf("AUTO max iterations = %d, want 48", got)
+	}
+
+	ag.SetToolsConfig(config.ToolsConfig{})
+	if got := ag.MaxIterationsForAuthority(AuthorityAutoScoped); got != 40 {
+		t.Fatalf("default AUTO max iterations = %d, want 40", got)
+	}
+}
+
+func TestAutoIterationBudgetDoesNotEmitInteractiveNearLimitWarning(t *testing.T) {
+	runToLimit := func(t *testing.T, mode AuthorityMode) []string {
+		t.Helper()
+		responses := make([][]llm.StreamChunk, 3)
+		for index := range responses {
+			responses[index] = []llm.StreamChunk{{
+				ToolCalls: []llm.ToolCall{{
+					ID: fmt.Sprintf("exists-%d", index), Name: "exists",
+					Arguments: map[string]any{"path": "."},
+				}},
+				Done: true,
+			}}
+		}
+		ag := New(&scriptedClient{responses: responses}, nil, 4096)
+		ag.SetWorkDir(t.TempDir())
+		ag.SetToolsConfig(config.ToolsConfig{MaxIterations: 3, AutoMaxIterations: 3})
+		ag.SetAuthorityMode(mode)
+		out := &outputRecorder{}
+		err := ag.Run(context.Background(), out)
+		if err == nil || !strings.Contains(err.Error(), "reached max iterations (3)") {
+			t.Fatalf("limit error = %v", err)
+		}
+		return out.errors
+	}
+
+	autoErrors := runToLimit(t, AuthorityAutoScoped)
+	if joined := strings.Join(autoErrors, "\n"); strings.Contains(joined, "approaching iteration limit") {
+		t.Fatalf("AUTO exposed interactive near-limit warning: %s", joined)
+	}
+	if joined := strings.Join(runToLimit(t, AuthorityNormal), "\n"); !strings.Contains(joined, "approaching iteration limit (3/3)") {
+		t.Fatalf("NORMAL lost its near-limit warning: %s", joined)
+	}
+}
+
 func TestAutoScopedWorkspaceWriteSkipsModalButHonorsExplicitDeny(t *testing.T) {
+	t.Run("routine command is policy-authorized", func(t *testing.T) {
+		client := &scriptedClient{responses: [][]llm.StreamChunk{
+			{{ToolCalls: []llm.ToolCall{{ID: "bash", Name: "bash", Arguments: map[string]any{"command": "go version 2>&1"}}}, Done: true}},
+			{{Text: "done", Done: true}},
+		}}
+		ledger := &fakeExecutionLedger{}
+		ag, _ := newLedgerAgent(t, client, nil, ledger)
+		ag.SetAuthorityMode(AuthorityAutoScoped)
+		ag.SetPermissionChecker(permission.NewChecker(nil, false))
+		approvalAsked := false
+		ag.SetApprovalCallback(func(request permission.ApprovalRequest) {
+			approvalAsked = true
+			request.Response <- permission.Deny()
+		})
+		if err := ag.Run(context.Background(), &outputRecorder{}); err != nil {
+			t.Fatal(err)
+		}
+		if approvalAsked {
+			t.Fatal("routine AUTO command opened an approval modal")
+		}
+		events := ledger.snapshot()
+		if got, want := executionEventTypes(events), []executionpkg.EventType{
+			executionpkg.EventRequested, executionpkg.EventApproved,
+			executionpkg.EventStarted, executionpkg.EventCompleted,
+		}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("events = %v, want %v", got, want)
+		}
+		if events[1].Approval != executionpkg.ApprovalPolicy {
+			t.Fatalf("AUTO command audit = %q, want policy", events[1].Approval)
+		}
+	})
+
 	t.Run("safe write is policy-authorized", func(t *testing.T) {
 		client := &scriptedClient{responses: [][]llm.StreamChunk{
 			{{ToolCalls: []llm.ToolCall{{ID: "write", Name: "write", Arguments: map[string]any{"path": "auto.txt", "content": "safe"}}}, Done: true}},

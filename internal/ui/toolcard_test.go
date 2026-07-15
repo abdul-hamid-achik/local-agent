@@ -148,6 +148,37 @@ func TestToolCardCompletedReceiptShowsDisclosureState(t *testing.T) {
 	}
 }
 
+func TestExpandedBashUnifiedDiffUsesAdaptiveSemanticColors(t *testing.T) {
+	previous := noColor
+	noColor = false
+	t.Cleanup(func() { noColor = previous })
+
+	card := NewToolCard("bash", ToolCardBash, true)
+	card.State = ToolCardSuccess
+	card.Expanded = true
+	card.Result = "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1 +1 @@\n-old\n+new\n context"
+
+	view := card.View(72)
+	plain := ansi.Strip(view)
+	for _, want := range []string{"diff --git", "-old", "+new", " context"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("colored diff omitted %q:\n%s", want, plain)
+		}
+	}
+	if !hasANSIColor(view) {
+		t.Fatalf("expanded bash diff did not render semantic colors:\n%s", view)
+	}
+	if got := card.renderUnifiedDiffResultLine("+new"); got == card.renderUnifiedDiffResultLine("-old") {
+		t.Fatal("added and removed lines used the same semantic rendering")
+	}
+}
+
+func TestBashNonDiffOutputKeepsOrdinaryResultStyle(t *testing.T) {
+	if looksLikeUnifiedDiff("+ one line\n- another") {
+		t.Fatal("unstructured plus/minus output was mistaken for a unified diff")
+	}
+}
+
 func TestToolCardStatusGlyphsKeepUnknownDistinctAndSingleWidth(t *testing.T) {
 	tests := []struct {
 		name       string

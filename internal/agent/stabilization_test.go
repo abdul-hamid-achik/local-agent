@@ -43,6 +43,7 @@ func (c *scriptedClient) Embed(context.Context, string, []string) ([][]float32, 
 
 type outputRecorder struct {
 	toolResults []string
+	errors      []string
 }
 
 func (o *outputRecorder) StreamText(string)                            {}
@@ -53,7 +54,7 @@ func (o *outputRecorder) ToolCallResult(_ string, _ string, result string, _ boo
 	o.toolResults = append(o.toolResults, result)
 }
 func (o *outputRecorder) SystemMessage(string) {}
-func (o *outputRecorder) Error(string)         {}
+func (o *outputRecorder) Error(message string) { o.errors = append(o.errors, message) }
 
 type cancelAfterFirstToolHook struct {
 	cancel context.CancelFunc

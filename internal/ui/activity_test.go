@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -175,6 +176,170 @@ func TestToolCardUsesSharedSpinnerAndCompletedReceiptIsStable(t *testing.T) {
 	m = updated.(*Model)
 	if got := m.viewport.View(); got != stable {
 		t.Fatalf("completed card changed across an idle tick:\nbefore:\n%s\nafter:\n%s", stable, got)
+	}
+}
+
+func TestActiveToolFooterLeavesBreathingRowBeforeComposer(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = updated.(*Model)
+	m.state = StateStreaming
+	m.toolsPending = 1
+	m.reducedMotion = true
+	m.recalcViewportHeight()
+	m.viewport.SetContent(m.renderEntries())
+
+	view := ansi.Strip(m.View().Content)
+	statusAt := strings.Index(view, "Tool running")
+	composerAt := strings.Index(view, "Write a follow-up")
+	if statusAt < 0 || composerAt < 0 || statusAt >= composerAt {
+		t.Fatalf("activity/composer order is invalid: status=%d composer=%d\n%s", statusAt, composerAt, view)
+	}
+	between := view[statusAt:composerAt]
+	if !strings.Contains(between, "\n\n") {
+		t.Fatalf("activity rail has no breathing row before composer:\n%s", between)
+	}
+	assertRenderedHeightFits(t, m.View().Content, m.height)
+}
+
+func TestAutoActivityFooterSeparatesAuthorityAndKeyboardActions(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = updated.(*Model)
+	m.mode = ModeAuto
+	m.state = StateStreaming
+	m.reducedMotion = true
+	m.turnStartedAt = time.Now().Add(-2 * time.Second)
+
+	line := m.renderWorkingLine()
+	plain := ansi.Strip(line)
+	for _, want := range []string{"Running", "AUTO", "esc cancel", "enter queue"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("AUTO activity footer omitted %q: %q", want, plain)
+		}
+	}
+	for _, styled := range []string{
+		m.styles.ToolRunningText.Render("Running"),
+		m.styles.ModeBuild.Render("AUTO"),
+		m.styles.FocusIndicator.Render("esc"),
+		m.styles.FocusIndicator.Render("enter"),
+	} {
+		if !strings.Contains(line, styled) {
+			t.Fatalf("AUTO activity footer lost semantic styling %q:\n%s", ansi.Strip(styled), line)
+		}
+	}
+	if width := lipgloss.Width(line); width > m.chatPaneWidth() {
+		t.Fatalf("AUTO activity footer width = %d, pane = %d: %q", width, m.chatPaneWidth(), plain)
+	}
+}
+
+func TestMinimumAutoActivityKeepsAuthorityAndRecoveryKeys(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 30, Height: 12})
+	m = updated.(*Model)
+	m.mode = ModeAuto
+	m.state = StateStreaming
+	m.reducedMotion = true
+
+	line := m.renderWorkingLine()
+	plain := ansi.Strip(line)
+	for _, want := range []string{"Run", "AUTO", "esc", "queue"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("minimum AUTO footer omitted %q: %q", want, plain)
+		}
+	}
+	if width := lipgloss.Width(line); width > m.chatPaneWidth() {
+		t.Fatalf("minimum AUTO footer width = %d, pane = %d: %q", width, m.chatPaneWidth(), plain)
+	}
+}
+
+func TestAutoActivityRetainsAuthorityAcrossResponsiveVariants(t *testing.T) {
+	variants := []struct {
+		name  string
+		setup func(*Model)
+	}{
+		{name: "queue available", setup: func(*Model) {}},
+		{name: "goal owns queue", setup: func(m *Model) { m.goalTurnID = "goal-turn" }},
+		{name: "follow paused", setup: func(m *Model) { m.pauseFollow() }},
+	}
+	for _, width := range []int{30, 40, 58, 80} {
+		for _, variant := range variants {
+			t.Run(fmt.Sprintf("%s/%d", variant.name, width), func(t *testing.T) {
+				m := newTestModel(t)
+				m.width = width
+				m.mode = ModeAuto
+				m.state = StateStreaming
+				m.reducedMotion = true
+				variant.setup(m)
+
+				line := ansi.Strip(m.renderWorkingLine())
+				if !strings.Contains(line, "AUTO") {
+					t.Fatalf("width %d AUTO footer lost authority in %s: %q", width, variant.name, line)
+				}
+				if got := lipgloss.Width(line); got > m.chatPaneWidth() {
+					t.Fatalf("width %d AUTO footer is %d cells in %s: %q", width, got, variant.name, line)
+				}
+			})
+		}
+	}
+}
+
+func TestWorkingControlKeyRecognizesOnlyRealFooterKeys(t *testing.T) {
+	for _, test := range []struct {
+		segment string
+		want    string
+	}{
+		{segment: "esc cancel", want: "esc"},
+		{segment: "enter queue", want: "enter"},
+		{segment: "end latest", want: "end"},
+		{segment: "Route ambiguous", want: ""},
+		{segment: "queue", want: ""},
+	} {
+		if got := workingControlKey(test.segment); got != test.want {
+			t.Fatalf("workingControlKey(%q) = %q, want %q", test.segment, got, test.want)
+		}
+	}
+}
+
+func TestCompletedToolFlashAdvertisesInspectableReceipt(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = updated.(*Model)
+	m.doneFlash = true
+	m.toolEntries = []ToolEntry{{Name: "hitspec_capture_webpage", Status: ToolStatusDone, Collapsed: true}}
+	m.lastTurnToolIndex = 0
+
+	status := ansi.Strip(m.renderStatusLine())
+	if !strings.Contains(status, "Done") || !strings.Contains(status, "space inspect receipt") {
+		t.Fatalf("completed tool footer does not expose receipt inspection: %q", status)
+	}
+	m.toolEntries[0].Collapsed = false
+	if status = ansi.Strip(m.renderStatusLine()); !strings.Contains(status, "space hide receipt") {
+		t.Fatalf("expanded tool footer does not expose receipt collapse: %q", status)
+	}
+
+	m.input.SetValue("draft")
+	if status = ansi.Strip(m.renderStatusLine()); strings.Contains(status, "space inspect receipt") || strings.Contains(status, "space hide receipt") {
+		t.Fatalf("receipt shortcut was advertised while Space edits a draft: %q", status)
+	}
+}
+
+func TestCompletedNoToolTurnDoesNotAdvertiseStaleReceipt(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = updated.(*Model)
+	m.toolEntries = []ToolEntry{{Name: "read_file", Status: ToolStatusDone, Collapsed: true}}
+	m.turnToolStartIndex = len(m.toolEntries)
+	m.state = StateStreaming
+
+	updated, _ = m.Update(AgentDoneMsg{})
+	m = updated.(*Model)
+	status := ansi.Strip(m.renderStatusLine())
+	if !strings.Contains(status, "Done") {
+		t.Fatalf("successful no-tool turn lost completion status: %q", status)
+	}
+	if strings.Contains(status, "inspect receipt") || strings.Contains(status, "hide receipt") {
+		t.Fatalf("no-tool turn advertised an earlier tool receipt: %q", status)
 	}
 }
 

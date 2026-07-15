@@ -608,6 +608,37 @@ func TestApprovalSurfaceNamesActiveAuthority(t *testing.T) {
 	}
 }
 
+func TestCommandApprovalExplainsWhyAUTOPaused(t *testing.T) {
+	m := newTestModel(t)
+	m.mode = ModeAuto
+	m.width = 120
+	m.height = 36
+	m = openApprovalForTest(t, m, ToolApprovalMsg{
+		ToolName: "bash",
+		Args:     map[string]any{"command": "curl https://example.com"},
+		Preview: permission.ApprovalPreview{
+			Kind:        permission.PreviewCommand,
+			ActionLabel: "Run command",
+			Command:     "curl https://example.com",
+			Consequence: "Host policy did not pre-authorize this command for the current turn.",
+		},
+		Scope:    permission.ApprovalScope{Kind: permission.ScopeExactRequest},
+		Response: make(chan permission.ApprovalResponse, 1),
+	})
+
+	view := ansi.Strip(m.renderApproval())
+	for _, want := range []string{
+		"Permission · bash · AUTO",
+		"Impact",
+		"did not pre-authorize this command",
+		"curl https://example.com",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("AUTO approval omitted %q:\n%s", want, view)
+		}
+	}
+}
+
 func TestLargeWriteApprovalUsesViewportInsteadOfRefusal(t *testing.T) {
 	m := newTestModel(t)
 	responses := make(chan permission.ApprovalResponse, 1)

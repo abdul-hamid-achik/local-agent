@@ -1,10 +1,12 @@
 package agent
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
+	"github.com/abdul-hamid-achik/local-agent/internal/permission"
 )
 
 func TestMCPApprovalConsequenceExplainsWhyEffectfulCallsRemainGated(t *testing.T) {
@@ -35,6 +37,21 @@ func TestCortexStartTaskApprovalConsequenceIsConservative(t *testing.T) {
 	for _, want := range []string{"server metadata", "durable state"} {
 		if !strings.Contains(strings.ToLower(got), want) {
 			t.Fatalf("cortex_start_task consequence = %q, want %q", got, want)
+		}
+	}
+}
+
+func TestBashApprovalExplainsWhyTheCommandStillNeedsADecision(t *testing.T) {
+	ag := New(nil, nil, 0)
+	preview := ag.buildApprovalPreview(context.Background(), llm.ToolCall{
+		Name: "bash", Arguments: map[string]any{"command": "rm -rf build"},
+	}, "command-hash")
+	if preview.Kind != permission.PreviewCommand || preview.Command != "rm -rf build" {
+		t.Fatalf("bash preview = %#v", preview)
+	}
+	for _, want := range []string{"did not pre-authorize", "current turn", "change files", "external systems"} {
+		if !strings.Contains(preview.Consequence, want) {
+			t.Fatalf("bash consequence omitted %q: %q", want, preview.Consequence)
 		}
 	}
 }

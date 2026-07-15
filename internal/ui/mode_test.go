@@ -439,6 +439,16 @@ func TestDefaultModeConfigs(t *testing.T) {
 	if !configs[ModeAuto].ToolPolicy.AllowMCP {
 		t.Error("ModeAuto should allow tools under the configured permission policy")
 	}
+	for _, want := range []string{"implemented and verified", "Do not ask for progress confirmation", "routine development commands", "Pause only for Git"} {
+		if !strings.Contains(configs[ModeAuto].SystemPromptPrefix, want) {
+			t.Errorf("ModeAuto system prompt omitted %q: %q", want, configs[ModeAuto].SystemPromptPrefix)
+		}
+	}
+	for _, stale := range []string{"Pause for shell commands", "same approval policy"} {
+		if strings.Contains(configs[ModeAuto].SystemPromptPrefix, stale) {
+			t.Errorf("ModeAuto system prompt retained stale authority claim %q", stale)
+		}
+	}
 }
 
 func TestAgentAuthorityModeMapping(t *testing.T) {

@@ -40,6 +40,18 @@ func TestDefaults(t *testing.T) {
 	if !cfg.Experts.Enabled || cfg.Experts.MaxEvalTokens != 768 || cfg.Experts.Timeout != "90s" {
 		t.Errorf("Experts defaults = %#v", cfg.Experts)
 	}
+	if cfg.Tools.MaxIterations != 10 || cfg.Tools.AutoMaxIterations != 40 {
+		t.Errorf("Tools iteration defaults = normal:%d auto:%d, want 10/40", cfg.Tools.MaxIterations, cfg.Tools.AutoMaxIterations)
+	}
+}
+
+func TestAutoIterationEnvironmentOverride(t *testing.T) {
+	t.Setenv("LOCAL_AGENT_TOOLS_AUTO_MAX_ITER", "64")
+	cfg := defaults()
+	applyEnvOverrides(&cfg)
+	if cfg.Tools.AutoMaxIterations != 64 {
+		t.Fatalf("auto max iterations = %d, want 64", cfg.Tools.AutoMaxIterations)
+	}
 }
 
 func TestApplyEnvOverrides(t *testing.T) {

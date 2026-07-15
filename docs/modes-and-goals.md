@@ -22,7 +22,15 @@ Use PLAN to understand a repository, compare approaches, or produce a change pla
 
 ## AUTO
 
-AUTO sends ordinary prompts directly with proactive access to the NORMAL tool surface. It does not skip approvals or grant blanket authority: risky operations still follow the configured approval policy.
+AUTO sends ordinary prompts directly with proactive access to the NORMAL tool surface. Validated workspace writes and directory creation, exact trusted local MCP routes, and static ordinary development commands can proceed without interruption. The command catalog covers routine build, test, lint, format, and inspection work. Raw Git remains approval-gated because repository configuration, filters, and hooks can execute programs even during commands that look read-only; use `/changes` and `/commit` for the host-owned paths.
+
+AUTO is not blanket shell authority. Deletion, dynamic expansion, file
+redirection, external paths, network-facing or unknown commands, memory
+mutation, human decisions, and uncatalogued MCP effects still stop for approval.
+Its provider loop is bounded at 40 iterations by default instead of NORMAL's
+10, and the interactive near-limit warning is suppressed in AUTO. Configure
+the two ceilings independently with `tools.max_iterations` and
+`tools.auto_max_iterations`.
 
 Switching modes never creates durable work. To start a bounded foreground goal, use `/goal <duration> <prompt>` or `/goal new`. Every durable definition must have:
 

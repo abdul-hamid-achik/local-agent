@@ -430,6 +430,7 @@ func formatCapabilityHint(activity CapabilityActivity, hint capabilityadvisor.Hi
 		builder.WriteString("MCPHub reported an ambiguous route. No capability has been selected. Candidate identifiers: ")
 		candidates := append([]string{hint.Namespaced}, hint.Alternatives...)
 		builder.WriteString(strings.Join(candidates, ", "))
+		appendKnownAmbiguousCapabilityContracts(&builder, activity, hint)
 		if allowMCP {
 			builder.WriteString(". Use the visible mcphub_search_tools resolver companion before choosing a downstream tool.\n")
 		} else {
@@ -471,7 +472,44 @@ func appendKnownCapabilityContract(builder *strings.Builder, activity Capability
 			builder.WriteString("To satisfy this durable outcome, review the inline result, write the accepted content to a workspace file through a separately authorized host action, then describe and call fcheap_save separately. Fetch, file write, and artifact save are distinct effect and approval boundaries.\n")
 		}
 	case "hitspec_capture_webpage":
-		builder.WriteString("Known Hitspec v2.18 capture contract: when this optional tool is exposed, it persists a Markdown file.cheap stash and returns a compact artifact receipt rather than the page body.\n")
+		builder.WriteString("Known Hitspec v2.18 capture contract: when this optional tool is exposed, it persists rendered Markdown as a durable file.cheap stash and returns a compact artifact receipt rather than the page body. Indexing is requested and reported separately.\n")
+	}
+}
+
+// appendKnownAmbiguousCapabilityContracts keeps MCPHub's ambiguity intact while
+// supplying exact host-owned distinctions for the versioned Hitspec web
+// surfaces. This helps the model compare task fit without turning a candidate
+// into a selected route or granting any execution authority.
+func appendKnownAmbiguousCapabilityContracts(builder *strings.Builder, activity CapabilityActivity, hint capabilityadvisor.Hint) {
+	if builder == nil || !hint.Ambiguous {
+		return
+	}
+	candidates := append([]string{hint.Namespaced}, hint.Alternatives...)
+	hasCandidate := func(target string) bool {
+		for _, candidate := range candidates {
+			if strings.EqualFold(candidate, "hitspec__"+target) {
+				return true
+			}
+		}
+		return false
+	}
+	if !hasCandidate("hitspec_capture_webpage") && !hasCandidate("hitspec_fetch") && !hasCandidate("hitspec_search_web") {
+		return
+	}
+	builder.WriteString(". Host-known Hitspec contract distinctions: ")
+	parts := make([]string, 0, 3)
+	if hasCandidate("hitspec_capture_webpage") {
+		parts = append(parts, "hitspec_capture_webpage persists rendered Markdown as a durable file.cheap stash, returns a compact artifact receipt, and reports indexing separately")
+	}
+	if hasCandidate("hitspec_fetch") {
+		parts = append(parts, "hitspec_fetch returns bounded content inline and does not persist it")
+	}
+	if hasCandidate("hitspec_search_web") {
+		parts = append(parts, "hitspec_search_web returns non-persisted discovery candidates, not verified evidence")
+	}
+	builder.WriteString(strings.Join(parts, "; "))
+	if isDurableCapabilityOutcome(activity.DesiredOutcome) {
+		builder.WriteString(". The requested outcome is durable, but MCPHub's route remains ambiguous until the candidate contracts are compared")
 	}
 }
 

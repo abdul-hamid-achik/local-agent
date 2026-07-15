@@ -15,7 +15,7 @@ Local Agent has three operator surfaces: the interactive TUI, human-readable hea
 | `local-agent` | Open the TUI in the current workspace |
 | `local-agent -p "prompt"`, `local-agent --prompt "prompt"` | Run one human-readable NORMAL prompt |
 | `local-agent --plan --prompt "prompt"` | Run one read-only PLAN prompt; equivalent to `--mode plan` |
-| `local-agent --auto --prompt "prompt"` | Run one proactive AUTO prompt; equivalent to `--mode auto` and does not skip approvals |
+| `local-agent --auto --prompt "prompt"` | Run one proactive AUTO prompt; equivalent to `--mode auto`, with routine confined workspace actions pre-authorized |
 | `local-agent --mode <normal\|plan\|auto> --prompt "prompt"` | Select headless authority explicitly |
 | `local-agent --model <name>` | Select and pin the initial Ollama model |
 | `local-agent --agent <name>` | Select the initial agent profile |
@@ -31,8 +31,10 @@ Local Agent has three operator surfaces: the interactive TUI, human-readable hea
 `-p` and `--prompt` are exact aliases for a human-readable convenience surface,
 not a stable JSON event protocol. `--auto` and `--plan` require a non-empty
 prompt, are mutually exclusive, and reject a conflicting explicit `--mode`.
-AUTO does not imply `--skip-approvals`. An explicitly empty or whitespace-only
-prompt exits with status 2 before configuration, network, or provider startup.
+AUTO does not imply the broader `--skip-approvals` posture. It pre-authorizes a
+bounded catalog of confined workspace actions, while dangerous, external,
+dynamic, and unknown effects remain gated. An explicitly empty or
+whitespace-only prompt exits with status 2 before configuration, network, or provider startup.
 In headless mode, requests that need an approval fail closed by default because
 there is no approval UI.
 
