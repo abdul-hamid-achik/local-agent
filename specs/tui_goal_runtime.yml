@@ -106,6 +106,14 @@ steps:
       screen:
         contains: "paused · unproductive turn"
       timeoutMs: 2000
+  - wait:
+      screen:
+        contains: "not productive · 0 eval · just now"
+      timeoutMs: 2000
+  - wait:
+      idle:
+        quietForMs: 100
+      timeoutMs: 2000
   - snapshot: goal_paused_receipt
   - press: "esc"
   - wait:
