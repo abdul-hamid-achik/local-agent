@@ -189,6 +189,7 @@ type Model struct {
 	toolsPending        int
 	capabilityRoute     *agent.CapabilityRoute
 	lastCapabilityRoute *agent.CapabilityRoute
+	continuation        continuationActionState
 	inputLines          int
 	userScrolledUp      bool
 
@@ -635,6 +636,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		if m.cortexDecision != nil {
 			m.cortexDecision.SetTheme(m.isDark)
 			m.cortexDecision.reducedMotion = m.reducedMotion
+		}
+		if m.continuation.card != nil {
+			m.continuation.card.SetTheme(m.isDark)
 		}
 		if m.goalInspectorState != nil {
 			m.goalInspectorState.SetTheme(m.isDark)
@@ -1912,6 +1916,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			}
 		}
 
+	case ContinuationActionMsg:
+		m.handleContinuationAction(msg)
+
 	case ErrorMsg:
 		if m.logger != nil {
 			m.logger.Error("error", "msg", msg.Msg)
@@ -1941,6 +1948,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		followYOffset := m.viewport.YOffset()
 		m.flushStream()
 		m.settleGoalTurn(msg)
+		if msg.Err != nil {
+			m.clearContinuationAction()
+		}
 		if msg.Err == nil {
 			m.sessionTurnCount++
 		}
@@ -3591,6 +3601,7 @@ func (m *Model) resetTurnDiagnostics() {
 	m.turnPromptTotal = 0
 	m.capabilityRoute = nil
 	m.lastCapabilityRoute = nil
+	m.clearContinuationAction()
 	m.lastTurnToolIndex = -1
 	m.receiptInspectActive = false
 	m.receiptInspectToolIndex = -1
@@ -3696,6 +3707,9 @@ func (m *Model) footerHeight() int {
 	height := 1 // divider
 	if m.compactCompletionOwnsDivider() {
 		height = 0
+	}
+	if action := m.renderContinuationAction(); action != "" {
+		height += lipgloss.Height(action)
 	}
 	if status := m.renderStatusLine(); status != "" {
 		statusRows := lipgloss.Height(status)
@@ -4133,7 +4147,7 @@ func (m *Model) sendToAgent(text string) tea.Cmd {
 // ID here would sever crash recovery from the execution ledger.
 func (m *Model) sendToAgentTurn(text, turnID string) tea.Cmd {
 	attachments := clonePendingImages(m.pendingImages)
-	return m.sendToAgentTurnPresentedWithAttachments(text, turnID, true, agent.TurnLimits{}, m.mode, agent.CapabilityActivity{}, attachments)
+	return m.sendToAgentTurnPresentedWithAttachments(text, turnID, true, agent.TurnLimits{}, m.mode, agent.CapabilityActivity{}, nil, attachments)
 }
 
 func (m *Model) sendGoalToAgentTurn(text, turnID string, limits agent.TurnLimits) tea.Cmd {
@@ -4144,8 +4158,13 @@ func (m *Model) sendGoalToAgentTurn(text, turnID string, limits agent.TurnLimits
 	return m.sendToAgentTurnPresentedWithMode(text, turnID, false, limits, ModeAuto)
 }
 
-func (m *Model) sendGoalToAgentTurnWithCapability(text, turnID string, limits agent.TurnLimits, capability agent.CapabilityActivity) tea.Cmd {
-	return m.sendToAgentTurnPresentedWithCapability(text, turnID, false, limits, ModeAuto, capability)
+func (m *Model) sendGoalToAgentTurnWithCapability(
+	text, turnID string,
+	limits agent.TurnLimits,
+	capability agent.CapabilityActivity,
+	continuation *agent.ContinuationContext,
+) tea.Cmd {
+	return m.sendToAgentTurnPresentedWithAttachments(text, turnID, false, limits, ModeAuto, capability, continuation, nil)
 }
 
 func (m *Model) sendToAgentTurnPresentedWithMode(text, turnID string, visible bool, limits agent.TurnLimits, authority Mode) tea.Cmd {
@@ -4153,10 +4172,18 @@ func (m *Model) sendToAgentTurnPresentedWithMode(text, turnID string, visible bo
 }
 
 func (m *Model) sendToAgentTurnPresentedWithCapability(text, turnID string, visible bool, limits agent.TurnLimits, authority Mode, capability agent.CapabilityActivity) tea.Cmd {
-	return m.sendToAgentTurnPresentedWithAttachments(text, turnID, visible, limits, authority, capability, nil)
+	return m.sendToAgentTurnPresentedWithAttachments(text, turnID, visible, limits, authority, capability, nil, nil)
 }
 
-func (m *Model) sendToAgentTurnPresentedWithAttachments(text, turnID string, visible bool, limits agent.TurnLimits, authority Mode, capability agent.CapabilityActivity, attachments []pendingImageAttachment) tea.Cmd {
+func (m *Model) sendToAgentTurnPresentedWithAttachments(
+	text, turnID string,
+	visible bool,
+	limits agent.TurnLimits,
+	authority Mode,
+	capability agent.CapabilityActivity,
+	continuation *agent.ContinuationContext,
+	attachments []pendingImageAttachment,
+) tea.Cmd {
 	messagesBeforeTurn := m.agent.Messages()
 	if err := validateImageConversationBudget(messagesBeforeTurn, attachmentRefs(attachments)); err != nil {
 		return m.failPresentedTurnBeforeRun(text, "Attach images: "+err.Error(), visible)
@@ -4197,6 +4224,7 @@ func (m *Model) sendToAgentTurnPresentedWithAttachments(text, turnID string, vis
 	m.input.Focus()
 	m.turnStartedAt = m.nowTime()
 	m.resetTurnDiagnostics()
+	m.beginContinuationTurn(turnID)
 	m.turnToolStartIndex = len(m.toolEntries)
 	m.recalcViewportHeight()
 	m.streamBuf.Reset()
@@ -4289,7 +4317,7 @@ func (m *Model) sendToAgentTurnPresentedWithAttachments(text, turnID string, vis
 	runAgent := func() tea.Msg {
 		adapter := NewAdapter(p, m.agent.WorkDir())
 		err := m.agent.RunTurnWithOptions(ctx, adapter, turnID, agent.TurnOptions{
-			Limits: limits, Capability: capability,
+			Limits: limits, Capability: capability, Continuation: continuation,
 		})
 		return AgentDoneMsg{TurnID: turnID, Err: err}
 	}

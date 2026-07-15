@@ -115,6 +115,7 @@ func (a *Agent) SetTrustedLocalMCPServers(servers []config.ServerConfig) {
 	a.mu.Lock()
 	a.trustedMCP = trusted
 	a.mu.Unlock()
+	a.clearContinuationContracts()
 }
 
 func (a *Agent) trustedMCPServer(namespace string) (trustedMCPServer, bool) {

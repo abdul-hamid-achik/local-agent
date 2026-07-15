@@ -2,7 +2,6 @@ package ui
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -26,8 +25,8 @@ const (
 )
 
 // GoalAdvisor is the semantic Cortex seam. Implementations may discover it
-// directly or through MCPHub; returned actions are context only and are never
-// dispatched by the UI.
+// directly or through MCPHub. Typed continuation suggestions are owned by the
+// agent's exact registry/schema/policy interpreter, never this UI adapter.
 type GoalAdvisor interface {
 	Open(context.Context, goaladvisor.OpenRequest) (goaladvisor.Advice, error)
 	Status(context.Context, string) (goaladvisor.Advice, error)
@@ -730,12 +729,12 @@ func (m *Model) startGoalTurn(advice *goaladvisor.Advice, manual bool) tea.Cmd {
 
 	prompt := buildGoalPrompt(snapshot, advice, manual)
 	capability := agent.DurableGoalCapabilityActivity(
-		snapshot.ID, snapshot.Objective, goalCapabilityPhase(advice), goalCapabilityActivityDiscriminator(advice),
+		snapshot.ID, snapshot.Objective, goalCapabilityPhase(advice), "",
 	)
 	m.goalTurnID = turnID
 	m.goalTurnToolCalls = 0
 	m.goalTurnSuccesses = 0
-	command := m.sendGoalToAgentTurnWithCapability(prompt, turnID, limits, capability)
+	command := m.sendGoalToAgentTurnWithCapability(prompt, turnID, limits, capability, adviceContinuation(advice))
 	if m.state != StateWaiting {
 		if pending, snapErr := m.goalRuntime.Snapshot(context.Background()); snapErr == nil && pending.PendingContinuation != nil {
 			_ = m.goalRuntime.RecoverPendingContinuation(context.Background(), goal.PendingRecovery{
@@ -749,6 +748,13 @@ func (m *Model) startGoalTurn(advice *goaladvisor.Advice, manual bool) tea.Cmd {
 		return nil
 	}
 	return command
+}
+
+func adviceContinuation(advice *goaladvisor.Advice) *agent.ContinuationContext {
+	if advice == nil {
+		return nil
+	}
+	return advice.Continuation
 }
 
 func goalAgentTurnLimits(snapshot goal.Snapshot, now time.Time) (agent.TurnLimits, error) {
@@ -824,23 +830,6 @@ func buildGoalPrompt(snapshot goal.Snapshot, advice *goaladvisor.Advice, manual 
 		if advice.Summary != "" {
 			fmt.Fprintf(&builder, "Cortex status: %s\n", advice.Summary)
 		}
-		if len(advice.Actions) > 0 {
-			action := advice.Actions[0]
-			fmt.Fprintf(&builder, "Suggested next action: %s", fallbackGoalText(action.Tool, "continue"))
-			if action.Reason != "" {
-				fmt.Fprintf(&builder, " — %s", action.Reason)
-			}
-			builder.WriteString("\n")
-			if len(action.Inputs) > 0 {
-				fmt.Fprintf(&builder, "Still required: %s\n", strings.Join(action.Inputs, ", "))
-			}
-			if arguments := formatGoalActionArguments(action.Arguments); arguments != "" {
-				fmt.Fprintf(&builder, "Known action arguments: %s\n", arguments)
-			}
-			if len(action.BlockedBy) > 0 {
-				fmt.Fprintf(&builder, "Action blocked by: %s\n", strings.Join(action.BlockedBy, ", "))
-			}
-		}
 		if len(advice.MissingVerification) > 0 {
 			fmt.Fprintf(&builder, "Missing verification: %s\n", strings.Join(advice.MissingVerification, ", "))
 		}
@@ -862,17 +851,6 @@ func buildGoalPrompt(snapshot goal.Snapshot, advice *goaladvisor.Advice, manual 
 	fmt.Fprintf(&builder, "\nHost budget remaining: %s continuation turns · %s eval tokens.\n", remainingTurns, remainingTokens)
 	builder.WriteString("Use tools to make or verify concrete progress. Do not merely restate a plan. If you cannot make progress, explain the blocker and yield; a no-progress turn pauses the goal. Never claim completion from budget exhaustion or prose alone. Cortex-verified acceptance is authoritative when linked.")
 	return builder.String()
-}
-
-func formatGoalActionArguments(arguments map[string]any) string {
-	if len(arguments) == 0 {
-		return ""
-	}
-	encoded, err := json.Marshal(arguments)
-	if err != nil {
-		return ""
-	}
-	return boundedSessionText(string(encoded), 2*1024)
 }
 
 func (m *Model) settleGoalTurn(message AgentDoneMsg) {

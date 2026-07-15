@@ -270,6 +270,197 @@ func TestRegistryNamespacesDuplicateToolNamesByServer(t *testing.T) {
 	}
 }
 
+func TestRegistryToolSnapshotIsCoherentDetachedAndVersioned(t *testing.T) {
+	r := NewRegistry()
+	r.mu.Lock()
+	r.registerConnectedServerLocked("demo", &MCPClient{name: "demo"}, []llm.ToolDef{{
+		Name: "inspect",
+		Parameters: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"workspace": map[string]any{"type": "string"}},
+			"required":   []any{"workspace"},
+		},
+	}})
+	r.mu.Unlock()
+
+	first := r.SnapshotTools()
+	if first.Epoch <= 1 || len(first.Tools) != 1 || first.Tools[0].Name != "demo__inspect" {
+		t.Fatalf("first snapshot = %#v", first)
+	}
+	first.Tools[0].Parameters["type"] = "array"
+	first.Tools[0].Parameters["properties"].(map[string]any)["workspace"].(map[string]any)["type"] = "number"
+	second := r.SnapshotTools()
+	if second.Epoch != first.Epoch || second.Tools[0].Parameters["type"] != "object" ||
+		second.Tools[0].Parameters["properties"].(map[string]any)["workspace"].(map[string]any)["type"] != "string" {
+		t.Fatalf("caller mutated registry snapshot: %#v", second)
+	}
+
+	r.setFailedServer("demo", "connection lost")
+	failed := r.SnapshotTools()
+	if failed.Epoch <= second.Epoch || len(failed.Tools) != 1 || failed.ServerAvailable("demo") {
+		t.Fatalf("failure did not advance epoch: before=%d after=%d", second.Epoch, failed.Epoch)
+	}
+	r.mu.Lock()
+	r.registerConnectedServerLocked("demo", &MCPClient{name: "demo"}, []llm.ToolDef{{Name: "inspect"}})
+	r.mu.Unlock()
+	reconnected := r.SnapshotTools()
+	if reconnected.Epoch <= failed.Epoch {
+		t.Fatalf("reconnect did not advance epoch: before=%d after=%d", failed.Epoch, reconnected.Epoch)
+	}
+}
+
+func TestRegistryLateConnectionFailureCannotPoisonNewerSuccess(t *testing.T) {
+	r := NewRegistry()
+	t.Cleanup(r.Close)
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var calls atomic.Int32
+	newer := &MCPClient{name: "demo"}
+	r.testConnector = func(context.Context, config.ServerConfig) (*MCPClient, []llm.ToolDef, error) {
+		if calls.Add(1) == 1 {
+			close(firstStarted)
+			<-releaseFirst
+			return nil, nil, errors.New("stale connection failure")
+		}
+		return newer, []llm.ToolDef{{Name: "inspect"}}, nil
+	}
+
+	firstResult := make(chan error, 1)
+	go func() {
+		_, err := r.ConnectServer(context.Background(), config.ServerConfig{Name: "demo", Command: "demo"})
+		firstResult <- err
+	}()
+	<-firstStarted
+	if count, err := r.ConnectServer(context.Background(), config.ServerConfig{Name: "demo", Command: "demo"}); err != nil || count != 1 {
+		t.Fatalf("newer connection = count %d error %v", count, err)
+	}
+	close(releaseFirst)
+	if err := <-firstResult; !errors.Is(err, ErrConnectionSuperseded) || !strings.Contains(err.Error(), "stale connection failure") {
+		t.Fatalf("older attempt error = %v", err)
+	}
+	snapshot := r.SnapshotTools()
+	if !snapshot.ServerAvailable("demo") || len(snapshot.Tools) != 1 || len(r.FailedServers()) != 0 || r.clients["demo"] != newer {
+		t.Fatalf("late failure poisoned newer connection: snapshot=%#v failed=%#v client=%p", snapshot, r.FailedServers(), r.clients["demo"])
+	}
+}
+
+func TestRegistryLateConnectionSuccessCannotReplaceNewerSuccess(t *testing.T) {
+	r := NewRegistry()
+	t.Cleanup(r.Close)
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	oldClosed := make(chan struct{}, 1)
+	var calls atomic.Int32
+	older := &MCPClient{name: "demo-old"}
+	newer := &MCPClient{name: "demo-new"}
+	r.testConnector = func(context.Context, config.ServerConfig) (*MCPClient, []llm.ToolDef, error) {
+		if calls.Add(1) == 1 {
+			close(firstStarted)
+			<-releaseFirst
+			return older, []llm.ToolDef{{Name: "old"}}, nil
+		}
+		return newer, []llm.ToolDef{{Name: "new"}}, nil
+	}
+	r.testCloseClient = func(client *MCPClient) error {
+		if client == older {
+			oldClosed <- struct{}{}
+		}
+		return nil
+	}
+
+	firstResult := make(chan error, 1)
+	go func() {
+		_, err := r.ConnectServer(context.Background(), config.ServerConfig{Name: "demo", Command: "demo"})
+		firstResult <- err
+	}()
+	<-firstStarted
+	if count, err := r.ConnectServer(context.Background(), config.ServerConfig{Name: "demo", Command: "demo"}); err != nil || count != 1 {
+		t.Fatalf("newer connection = count %d error %v", count, err)
+	}
+	close(releaseFirst)
+	if err := <-firstResult; !errors.Is(err, ErrConnectionSuperseded) {
+		t.Fatalf("older attempt error = %v", err)
+	}
+	select {
+	case <-oldClosed:
+	default:
+		t.Fatal("superseded client was not closed")
+	}
+	snapshot := r.SnapshotTools()
+	if len(snapshot.Tools) != 1 || snapshot.Tools[0].Name != "demo__new" || r.clients["demo"] != newer {
+		t.Fatalf("late success replaced newer connection: snapshot=%#v client=%p", snapshot, r.clients["demo"])
+	}
+}
+
+func TestHealthMonitorStopsRetryingWhenReconnectIsSuperseded(t *testing.T) {
+	r := NewRegistry()
+	t.Cleanup(r.Close)
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	olderClosed := make(chan struct{}, 1)
+	var calls atomic.Int32
+	older := &MCPClient{name: "demo-old"}
+	newer := &MCPClient{name: "demo-new"}
+	r.testConnector = func(context.Context, config.ServerConfig) (*MCPClient, []llm.ToolDef, error) {
+		switch calls.Add(1) {
+		case 1:
+			close(firstStarted)
+			<-releaseFirst
+			return older, []llm.ToolDef{{Name: "old"}}, nil
+		case 2:
+			return newer, []llm.ToolDef{{Name: "new"}}, nil
+		default:
+			return nil, nil, errors.New("stale monitor retried after supersession")
+		}
+	}
+	r.testCloseClient = func(client *MCPClient) error {
+		if client == older {
+			olderClosed <- struct{}{}
+		}
+		return nil
+	}
+	r.mu.Lock()
+	r.serverConfigs["demo"] = config.ServerConfig{Name: "demo", Command: "demo"}
+	r.setFailedServerLocked("demo", "initial failure")
+	r.mu.Unlock()
+
+	roundDone := make(chan struct{})
+	go func() {
+		r.healthCheckRound(context.Background(), MonitorConfig{
+			MaxRetries:  2,
+			BackoffBase: time.Millisecond,
+		}, func(string) {})
+		close(roundDone)
+	}()
+	select {
+	case <-firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("health monitor reconnect did not start")
+	}
+	if count, err := r.ConnectServer(context.Background(), config.ServerConfig{Name: "demo", Command: "demo"}); err != nil || count != 1 {
+		t.Fatalf("newer connection = count %d error %v", count, err)
+	}
+	close(releaseFirst)
+	select {
+	case <-roundDone:
+	case <-time.After(time.Second):
+		t.Fatal("health monitor did not stop after supersession")
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("connector calls = %d, want stale monitor plus newer owner only", got)
+	}
+	select {
+	case <-olderClosed:
+	default:
+		t.Fatal("superseded monitor client was not closed")
+	}
+	snapshot := r.SnapshotTools()
+	if !snapshot.ServerAvailable("demo") || len(snapshot.Tools) != 1 ||
+		snapshot.Tools[0].Name != "demo__new" || len(r.FailedServers()) != 0 || r.clients["demo"] != newer {
+		t.Fatalf("monitor supersession damaged newer connection: snapshot=%#v failed=%#v client=%p", snapshot, r.FailedServers(), r.clients["demo"])
+	}
+}
+
 func TestRegistryRejectsAmbiguousServerNamespace(t *testing.T) {
 	r := NewRegistry()
 	_, err := r.ConnectServer(context.Background(), config.ServerConfig{

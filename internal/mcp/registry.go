@@ -36,8 +36,13 @@ type toolCaller interface {
 	CallTool(context.Context, string, map[string]any) (*ToolResult, error)
 }
 
-// ErrRegistryClosed reports an operation attempted after shutdown began.
-var ErrRegistryClosed = errors.New("MCP registry is closed")
+var (
+	// ErrRegistryClosed reports an operation attempted after shutdown began.
+	ErrRegistryClosed = errors.New("MCP registry is closed")
+	// ErrConnectionSuperseded reports that a newer connection attempt now owns
+	// the server generation. Callers must not retry the stale attempt unchanged.
+	ErrConnectionSuperseded = errors.New("MCP connection attempt superseded")
+)
 
 // Registry manages multiple MCP server connections and routes tool calls.
 type Registry struct {
@@ -50,6 +55,8 @@ type Registry struct {
 	serverConfigs  map[string]config.ServerConfig // name -> config for reconnection
 	callTimeout    time.Duration                  // per tool-call timeout (0 = default)
 	version        string                         // advertised MCP client implementation version
+	epoch          uint64                         // increments on every connection/catalog state transition
+	connectAttempt map[string]uint64              // latest admitted connection generation per server
 	localOnly      bool                           // enforce per-request local HTTP authority
 	closed         bool
 	lifecycleCtx   context.Context
@@ -94,6 +101,8 @@ func NewRegistryWithVersion(version string, options ...RegistryOption) *Registry
 		serverConfigs:  make(map[string]config.ServerConfig),
 		callTimeout:    defaultCallTimeout,
 		version:        clientImplementation(version).Version,
+		epoch:          1,
+		connectAttempt: make(map[string]uint64),
 		lifecycleCtx:   lifecycleCtx,
 		cancel:         cancel,
 	}
@@ -199,6 +208,8 @@ func (r *Registry) ConnectServer(ctx context.Context, srv config.ServerConfig) (
 		return 0, ErrRegistryClosed
 	}
 	r.serverConfigs[srv.Name] = srv
+	r.connectAttempt[srv.Name]++
+	attempt := r.connectAttempt[srv.Name]
 	r.mu.Unlock()
 
 	connCtx, cancel := context.WithTimeout(opCtx, connectTimeout)
@@ -210,7 +221,18 @@ func (r *Registry) ConnectServer(ctx context.Context, srv config.ServerConfig) (
 	}
 	client, serverDefs, err := connector(connCtx, srv)
 	if err != nil {
-		r.setFailedServer(srv.Name, err.Error())
+		r.mu.Lock()
+		superseded := r.connectAttempt[srv.Name] != attempt
+		if !r.closed && !superseded {
+			r.setFailedServerLocked(srv.Name, err.Error())
+		}
+		r.mu.Unlock()
+		if superseded {
+			return 0, fmt.Errorf(
+				"connect to %s failed after a newer attempt took ownership: %w",
+				srv.Name, errors.Join(ErrConnectionSuperseded, err),
+			)
+		}
 		return 0, fmt.Errorf("connect to %s: %w", srv.Name, err)
 	}
 	if ctxErr := connCtx.Err(); ctxErr != nil {
@@ -235,6 +257,15 @@ func (r *Registry) ConnectServer(ctx context.Context, srv config.ServerConfig) (
 			return 0, errors.Join(ErrRegistryClosed, fmt.Errorf("close late MCP connection: %w", closeErr))
 		}
 		return 0, ErrRegistryClosed
+	}
+	if r.connectAttempt[srv.Name] != attempt {
+		r.mu.Unlock()
+		closeErr := r.closeMCPClient(client)
+		err := fmt.Errorf("connect to %s: %w", srv.Name, ErrConnectionSuperseded)
+		if closeErr != nil {
+			return 0, errors.Join(err, fmt.Errorf("close superseded MCP connection: %w", closeErr))
+		}
+		return 0, err
 	}
 	existing := r.clients[srv.Name]
 	if existing != nil {
@@ -277,6 +308,63 @@ func (r *Registry) Tools() []llm.ToolDef {
 		toolDefs = append(toolDefs, r.serverTools[name]...)
 	}
 	return toolDefs
+}
+
+// ToolSnapshot is one coherent, immutable view of the connected MCP catalog.
+// Epoch changes whenever connection or advertised-tool state changes, allowing
+// consumers to invalidate ephemeral schema-derived suggestions safely.
+type ToolSnapshot struct {
+	Epoch              uint64
+	Tools              []llm.ToolDef
+	AvailableServers   []string
+	UnavailableServers []string
+}
+
+// ServerAvailable reports whether a server namespace was connected in this
+// exact snapshot. Definitions remain retained for truthful UI/catalog metrics,
+// but unavailable routes must not authorize a continuation dispatch.
+func (snapshot ToolSnapshot) ServerAvailable(name string) bool {
+	index := sort.SearchStrings(snapshot.AvailableServers, name)
+	return index < len(snapshot.AvailableServers) && snapshot.AvailableServers[index] == name
+}
+
+// SnapshotTools returns the current exposed definitions and epoch under one
+// registry lock. Tool parameter maps are detached so callers cannot mutate the
+// registry-owned catalog.
+func (r *Registry) SnapshotTools() ToolSnapshot {
+	if r == nil {
+		return ToolSnapshot{}
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	failed := make(map[string]struct{}, len(r.failedServers))
+	for _, receipt := range r.failedServers {
+		failed[receipt.Name] = struct{}{}
+	}
+	serverNames := make([]string, 0, len(r.serverTools))
+	for name := range r.serverTools {
+		serverNames = append(serverNames, name)
+	}
+	sort.Strings(serverNames)
+	snapshot := ToolSnapshot{
+		Epoch: r.epoch, AvailableServers: make([]string, 0, len(serverNames)),
+		UnavailableServers: make([]string, 0, len(failed)),
+	}
+	for name := range failed {
+		snapshot.UnavailableServers = append(snapshot.UnavailableServers, name)
+	}
+	for _, name := range serverNames {
+		if _, unavailable := failed[name]; !unavailable {
+			snapshot.AvailableServers = append(snapshot.AvailableServers, name)
+		}
+	}
+	sort.Strings(snapshot.UnavailableServers)
+	for _, name := range serverNames {
+		for _, definition := range r.serverTools[name] {
+			snapshot.Tools = append(snapshot.Tools, cloneToolDefinition(definition))
+		}
+	}
+	return snapshot
 }
 
 // ToolCount returns the total number of registered tools.
@@ -436,6 +524,8 @@ func (r *Registry) Close() {
 		r.serverGuidance = make(map[string]string)
 		r.failedServers = nil
 		r.serverConfigs = make(map[string]config.ServerConfig)
+		r.connectAttempt = make(map[string]uint64)
+		r.epoch++
 		r.mu.Unlock()
 
 		for _, client := range clients {
@@ -530,28 +620,43 @@ func (r *Registry) setFailedServer(name, reason string) {
 func (r *Registry) setFailedServerLocked(name, reason string) {
 	for i := range r.failedServers {
 		if r.failedServers[i].Name == name {
+			if r.failedServers[i].Reason != reason {
+				r.epoch++
+			}
 			r.failedServers[i].Reason = reason
 			return
 		}
 	}
 	r.failedServers = append(r.failedServers, FailedServer{Name: name, Reason: reason})
+	r.epoch++
 }
 
 func (r *Registry) clearFailedServerLocked(name string) {
 	var remaining []FailedServer
+	removed := false
 	for _, failed := range r.failedServers {
 		if failed.Name != name {
 			remaining = append(remaining, failed)
+		} else {
+			removed = true
 		}
 	}
 	r.failedServers = remaining
+	if removed {
+		r.epoch++
+	}
 }
 
 func (r *Registry) removeServerLocked(name string) {
+	_, hadClient := r.clients[name]
+	_, hadTools := r.serverTools[name]
 	delete(r.clients, name)
 	delete(r.serverTools, name)
 	delete(r.serverGuidance, name)
 	r.rebuildToolMapLocked()
+	if hadClient || hadTools {
+		r.epoch++
+	}
 }
 
 func (r *Registry) registerConnectedServerLocked(name string, client *MCPClient, defs []llm.ToolDef) bool {
@@ -570,6 +675,7 @@ func (r *Registry) registerConnectedServerLocked(name string, client *MCPClient,
 	}
 	r.clearFailedServerLocked(name)
 	r.rebuildToolMapLocked()
+	r.epoch++
 	return true
 }
 
@@ -593,6 +699,40 @@ func (r *Registry) rebuildToolMapLocked() {
 
 func namespacedToolName(server, tool string) string {
 	return server + "__" + tool
+}
+
+func cloneToolDefinition(definition llm.ToolDef) llm.ToolDef {
+	copy := definition
+	copy.Parameters = cloneJSONMap(definition.Parameters)
+	return copy
+}
+
+func cloneJSONMap(value map[string]any) map[string]any {
+	if value == nil {
+		return nil
+	}
+	copy := make(map[string]any, len(value))
+	for key, item := range value {
+		copy[key] = cloneJSONValue(item)
+	}
+	return copy
+}
+
+func cloneJSONValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return cloneJSONMap(typed)
+	case []any:
+		items := make([]any, len(typed))
+		for index, child := range typed {
+			items[index] = cloneJSONValue(child)
+		}
+		return items
+	case []string:
+		return append([]string(nil), typed...)
+	default:
+		return value
+	}
 }
 
 // MonitorConfig holds configuration for the health monitor.
@@ -695,6 +835,14 @@ func (r *Registry) healthCheckRound(ctx context.Context, cfg MonitorConfig, logF
 				break
 			}
 			r.emitConnectionSnapshot(cfg.OnSnapshot)
+			if errors.Is(err, ErrConnectionSuperseded) {
+				// A newer attempt owns recovery now. Retrying from this stale loop
+				// would steal ownership back and could replace or poison the newer
+				// connection, so leave any further recovery to that attempt (or the
+				// next monitor round if it ultimately fails).
+				logFn(fmt.Sprintf("server %s reconnect superseded by newer attempt", status.Name))
+				break
+			}
 
 			if attempt == cfg.MaxRetries {
 				logFn(fmt.Sprintf("server %s reconnection failed after %d attempts: %v", status.Name, cfg.MaxRetries, err))

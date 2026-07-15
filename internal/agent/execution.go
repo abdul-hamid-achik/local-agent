@@ -125,6 +125,7 @@ func (a *Agent) SetExecutionSessionID(sessionID int64) {
 	a.mu.Lock()
 	if a.executionSessionID != sessionID {
 		a.unresolvedExecution = nil
+		a.continuationHistory = newContinuationTurnState(0)
 	}
 	a.executionSessionID = sessionID
 	a.mu.Unlock()
@@ -492,23 +493,41 @@ func (a *Agent) mcpToolDefinition(name string) (llm.ToolDef, bool) {
 // exact schema advertised by the MCP server. Resolving without a Loader is
 // intentional: preflight must stay pure and must never fetch external schemas.
 func preflightMCPToolArguments(def llm.ToolDef, args map[string]any) error {
+	schema, err := resolvedMCPToolSchema(def)
+	if err != nil {
+		return err
+	}
+	if err := schema.resolved.Validate(args); err != nil {
+		return mcpArgumentSchemaMismatch(schema.source, args)
+	}
+	return nil
+}
+
+type resolvedMCPInputSchema struct {
+	source   *jsonschema.Schema
+	resolved *jsonschema.Resolved
+}
+
+func validateMCPToolSchema(def llm.ToolDef) error {
+	_, err := resolvedMCPToolSchema(def)
+	return err
+}
+
+func resolvedMCPToolSchema(def llm.ToolDef) (resolvedMCPInputSchema, error) {
 	schemaJSON, err := json.Marshal(def.Parameters)
 	if err != nil {
-		return errors.New("MCP tool exposes an invalid input schema")
+		return resolvedMCPInputSchema{}, errors.New("MCP tool exposes an invalid input schema")
 	}
 
 	var schema jsonschema.Schema
 	if err := json.Unmarshal(schemaJSON, &schema); err != nil {
-		return errors.New("MCP tool exposes an invalid input schema")
+		return resolvedMCPInputSchema{}, errors.New("MCP tool exposes an invalid input schema")
 	}
 	resolved, err := schema.Resolve(nil)
 	if err != nil {
-		return errors.New("MCP tool exposes an invalid or unsupported input schema")
+		return resolvedMCPInputSchema{}, errors.New("MCP tool exposes an invalid or unsupported input schema")
 	}
-	if err := resolved.Validate(args); err != nil {
-		return mcpArgumentSchemaMismatch(&schema, args)
-	}
-	return nil
+	return resolvedMCPInputSchema{source: &schema, resolved: resolved}, nil
 }
 
 const mcpArgumentSchemaMismatchMessage = "arguments do not satisfy the MCP tool input schema"

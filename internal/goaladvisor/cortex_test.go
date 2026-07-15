@@ -11,9 +11,21 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/abdul-hamid-achik/local-agent/internal/agent"
 	"github.com/abdul-hamid-achik/local-agent/internal/goal"
+	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 	"github.com/abdul-hamid-achik/local-agent/internal/mcp"
 )
+
+type fakeContinuationInterpreter struct {
+	call   llm.ToolCall
+	result *mcp.ToolResult
+}
+
+func (f *fakeContinuationInterpreter) InterpretContinuationResult(call llm.ToolCall, result *mcp.ToolResult) *agent.ContinuationContext {
+	f.call, f.result = call, result
+	return nil
+}
 
 type fakeRegistry struct {
 	routes  map[string]string
@@ -188,20 +200,22 @@ func TestCortexOpenRejectsInvalidImmutableCriteriaBeforeDispatch(t *testing.T) {
 	}
 }
 
-func TestCortexStatusPrefersDirectTool(t *testing.T) {
+func TestCortexStatusPrefersDirectToolAndDropsUnvalidatedActions(t *testing.T) {
+	interpreter := &fakeContinuationInterpreter{}
 	registry := &fakeRegistry{
 		routes: map[string]string{statusTool: "cortex__cortex_status", gatewayTool: "mcphub__mcphub_call_tool"},
 		result: &mcp.ToolResult{Content: `{"ok":true,"taskId":"task_1","revision":7,"phase":"verifying","verificationOutcome":"verified","actions":[{"tool":"cortex_remember","reason":"preserve"}]}` + "\nstructured: {}"},
 	}
-	advice, err := NewCortex(registry, "/work/repo", "").Status(context.Background(), "task_1")
+	advice, err := NewCortex(registry, "/work/repo", "", interpreter).Status(context.Background(), "task_1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if registry.name != "cortex__cortex_status" || advice.Revision != 7 || advice.VerificationOutcome != "verified" {
 		t.Fatalf("direct status = name %q advice %+v", registry.name, advice)
 	}
-	if !reflect.DeepEqual(advice.Actions, []Action{{Tool: "cortex_remember", Reason: "preserve"}}) {
-		t.Fatalf("actions = %#v", advice.Actions)
+	if interpreter.call.Name != "cortex__cortex_status" || interpreter.result != registry.result ||
+		interpreter.call.Arguments["taskId"] != "task_1" {
+		t.Fatalf("exact continuation boundary call = %#v result=%p", interpreter.call, interpreter.result)
 	}
 }
 
@@ -724,7 +738,7 @@ func TestPendingDecisionJSONRoundTripOmitsAnswerAndEvidence(t *testing.T) {
 	}
 }
 
-func TestParseAdvicePreservesBoundedVerificationContext(t *testing.T) {
+func TestParseAdvicePreservesBoundedVerificationContextWithoutActions(t *testing.T) {
 	advice, err := parseAdvice(`{
 		"ok":true,
 		"taskId":"task_1",
@@ -748,9 +762,33 @@ func TestParseAdvicePreservesBoundedVerificationContext(t *testing.T) {
 		!reflect.DeepEqual(advice.StaleVerification, []string{"old vet receipt"}) {
 		t.Fatalf("verification context = %+v", advice)
 	}
-	if len(advice.Actions) != 1 || advice.Actions[0].Arguments["taskId"] != "task_1" ||
-		!reflect.DeepEqual(advice.Actions[0].BlockedBy, []string{"approval"}) {
-		t.Fatalf("actions = %#v", advice.Actions)
+}
+
+func TestParseAdviceDoesNotRetainDownstreamActionPayload(t *testing.T) {
+	const secret = "must-not-enter-goal-prompt"
+	advice, err := parseAdvice(`{
+		"ok":true,
+		"taskId":"task_1",
+		"revision":9,
+		"phase":"investigating",
+		"actions":[{
+			"tool":"cortex_begin_change",
+			"command":"sh -c '` + secret + `'",
+			"reason":"` + secret + `",
+			"arguments":{"workspace":"/work/repo","payload":"` + secret + `"},
+			"inputs":["` + secret + `"],
+			"blockedBy":["` + secret + `"]
+		}]
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	persistable, err := json.Marshal(advice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(persistable), secret) {
+		t.Fatalf("downstream action payload survived advice projection: %s", persistable)
 	}
 }
 

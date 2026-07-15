@@ -319,6 +319,15 @@ func (a *Agent) semanticToolContents(call llm.ToolCall, projection ecosystem.Too
 		durableResult = ecosystem.SafeReceiptText(projection)
 		return durableResult, durableResult
 	}
+	if projection.Specialist == "cortex" && continuationSurfacePresent(projection, ecosystem.RawReceipt{
+		Text: rawResult, Structured: structured, ToolError: toolError,
+	}) {
+		// Cortex action contracts are interpreted only through the bounded LA-2
+		// parser. Suppress both raw surfaces even if StructuredContent and
+		// TextContent disagree or the action itself fails closed.
+		durableResult = ecosystem.SafeReceiptText(projection)
+		return durableResult, durableResult
+	}
 	if len(structured) == 0 {
 		return rawResult, rawResult
 	}

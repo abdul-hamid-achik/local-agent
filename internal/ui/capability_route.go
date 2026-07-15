@@ -163,21 +163,3 @@ func goalCapabilityPhase(advice *goaladvisor.Advice) string {
 		return "implementation"
 	}
 }
-
-// goalCapabilityActivityDiscriminator is local-only cache metadata. Cortex
-// prose, arguments, and tool output never enter the resolver query; a bounded
-// typed action identifier merely tells the host that work changed materially
-// within the same phase.
-func goalCapabilityActivityDiscriminator(advice *goaladvisor.Advice) string {
-	if advice == nil || len(advice.Actions) == 0 {
-		return ""
-	}
-	tool := strings.TrimSpace(advice.Actions[0].Tool)
-	if tool == "" {
-		return "action"
-	}
-	if len(tool) > 256 {
-		tool = tool[:256]
-	}
-	return tool
-}

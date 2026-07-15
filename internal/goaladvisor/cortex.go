@@ -11,7 +11,9 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/abdul-hamid-achik/local-agent/internal/agent"
 	"github.com/abdul-hamid-achik/local-agent/internal/goal"
+	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 	"github.com/abdul-hamid-achik/local-agent/internal/mcp"
 )
 
@@ -42,19 +44,31 @@ type Registry interface {
 // Cortex is a stateless adapter. Local Agent owns scheduling, cancellation,
 // budgets and approvals; Cortex only returns durable semantic state.
 type Cortex struct {
-	registry  Registry
-	workspace string
-	actor     string
-	revision  func(context.Context, string) (WorkspaceRevision, error)
+	registry    Registry
+	workspace   string
+	actor       string
+	interpreter ContinuationInterpreter
+	revision    func(context.Context, string) (WorkspaceRevision, error)
 }
 
-func NewCortex(registry Registry, workspace, actor string) *Cortex {
-	return &Cortex{
+// ContinuationInterpreter is the exact host boundary for Cortex actions. The
+// returned value is opaque and can only be consumed by the same Agent that
+// created it.
+type ContinuationInterpreter interface {
+	InterpretContinuationResult(llm.ToolCall, *mcp.ToolResult) *agent.ContinuationContext
+}
+
+func NewCortex(registry Registry, workspace, actor string, interpreters ...ContinuationInterpreter) *Cortex {
+	cortex := &Cortex{
 		registry:  registry,
 		workspace: strings.TrimSpace(workspace),
 		actor:     strings.TrimSpace(actor),
 		revision:  CurrentWorkspaceRevision,
 	}
+	if len(interpreters) > 0 {
+		cortex.interpreter = interpreters[0]
+	}
+	return cortex
 }
 
 // OpenRequest is the explicit user-approved creation/link request. GoalID is
@@ -90,8 +104,8 @@ type Advice struct {
 	PendingDecision     bool
 	Decision            *PendingDecision
 	Degraded            bool
-	Actions             []Action
 	Warnings            []string
+	Continuation        *agent.ContinuationContext `json:"-"`
 }
 
 // CriterionProof is the exact Cortex named-claim receipt bound to one local
@@ -101,14 +115,6 @@ type CriterionProof struct {
 	Evidence    []string
 	Revision    string
 	DirtyDigest string
-}
-
-type Action struct {
-	Tool      string         `json:"tool,omitempty"`
-	Reason    string         `json:"reason,omitempty"`
-	Arguments map[string]any `json:"arguments,omitempty"`
-	Inputs    []string       `json:"inputs,omitempty"`
-	BlockedBy []string       `json:"blockedBy,omitempty"`
 }
 
 // Open idempotently creates or resumes the Cortex case for a local goal.
@@ -144,8 +150,9 @@ func (c *Cortex) Open(ctx context.Context, request OpenRequest) (Advice, error) 
 	return advice, err
 }
 
-// Status reads the current Cortex case. It is the only automatic host call;
-// returned actions are prompt context, never executed by this adapter.
+// Status reads the current Cortex case. It is the only automatic host call.
+// Downstream actions stay behind the parser boundary because this adapter does
+// not own the current tool schemas or approval policy needed to validate them.
 func (c *Cortex) Status(ctx context.Context, taskID string) (Advice, error) {
 	if c == nil || c.registry == nil {
 		return Advice{}, ErrUnavailable
@@ -316,6 +323,10 @@ func (c *Cortex) call(ctx context.Context, tool string, args map[string]any) (Ad
 	if result == nil {
 		return Advice{}, fmt.Errorf("%w: %s returned no receipt", ErrUnavailable, tool)
 	}
+	var continuation *agent.ContinuationContext
+	if c.interpreter != nil {
+		continuation = c.interpreter.InterpretContinuationResult(llm.ToolCall{Name: exposed, Arguments: callArgs}, result)
+	}
 	document, documentErr := toolResultDocument(result)
 	if documentErr != nil {
 		return Advice{}, fmt.Errorf("%s response: %w", tool, documentErr)
@@ -324,6 +335,7 @@ func (c *Cortex) call(ctx context.Context, tool string, args map[string]any) (Ad
 	if parseErr != nil {
 		return Advice{}, fmt.Errorf("%w: %s response is invalid: %v", ErrRejected, tool, parseErr)
 	}
+	advice.Continuation = continuation
 	if result.IsError || !advice.OK {
 		detail := advice.Summary
 		if detail == "" {
@@ -347,7 +359,6 @@ type adviceEnvelope struct {
 	StaleVerification   []string        `json:"staleVerification"`
 	PendingDecision     json.RawMessage `json:"pendingDecision"`
 	Degraded            bool            `json:"degraded"`
-	Actions             []Action        `json:"actions"`
 	Warnings            []string        `json:"warnings"`
 }
 
@@ -388,7 +399,6 @@ func parseAdvice(content string) (Advice, error) {
 		PendingDecision:     decision != nil,
 		Decision:            decision,
 		Degraded:            envelope.Degraded,
-		Actions:             boundAdviceActions(envelope.Actions),
 		Warnings:            boundAdviceStrings(envelope.Warnings),
 	}, nil
 }
@@ -586,41 +596,6 @@ func primaryJSONContent(content string) string {
 		return strings.TrimSpace(strings.TrimPrefix(content, "structured: "))
 	}
 	return content
-}
-
-func boundAdviceActions(values []Action) []Action {
-	if len(values) == 0 {
-		return nil
-	}
-	if len(values) > maxAdviceItems {
-		values = values[:maxAdviceItems]
-	}
-	result := make([]Action, 0, len(values))
-	for _, value := range values {
-		value.Tool = boundAdviceText(strings.TrimSpace(value.Tool), maxAdviceTextBytes)
-		value.Reason = boundAdviceText(strings.TrimSpace(value.Reason), maxAdviceTextBytes)
-		value.Inputs = boundAdviceStrings(value.Inputs)
-		value.BlockedBy = boundAdviceStrings(value.BlockedBy)
-		// Arguments are already bounded by the MCP result cap. Clone the map so
-		// callers cannot mutate a reused decoder value; the host treats it only
-		// as prompt context and never dispatches it.
-		if value.Arguments != nil {
-			value.Arguments = cloneAdviceArguments(value.Arguments)
-		}
-		result = append(result, value)
-	}
-	return result
-}
-
-func cloneAdviceArguments(values map[string]any) map[string]any {
-	result := make(map[string]any, len(values))
-	for key, value := range values {
-		key = boundAdviceText(strings.TrimSpace(key), maxAdviceTextBytes)
-		if key != "" {
-			result[key] = value
-		}
-	}
-	return result
 }
 
 func boundAdviceStrings(values []string) []string {

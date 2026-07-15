@@ -15,6 +15,7 @@ import (
 	executionPkg "github.com/abdul-hamid-achik/local-agent/internal/execution"
 	"github.com/abdul-hamid-achik/local-agent/internal/expertteam"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
+	mcpPkg "github.com/abdul-hamid-achik/local-agent/internal/mcp"
 )
 
 const maxToolCallsPerResponse = 64
@@ -88,8 +89,9 @@ type TurnLimits struct {
 // activity to the same admitted turn. Keeping this data per-call avoids a
 // mutable "next turn" setter surviving a cancelled preflight.
 type TurnOptions struct {
-	Limits     TurnLimits
-	Capability CapabilityActivity
+	Limits       TurnLimits
+	Capability   CapabilityActivity
+	Continuation *ContinuationContext
 }
 
 func (limits TurnLimits) validate() error {
@@ -195,6 +197,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 	// checkpoint, or cursor projection can observe only the durable receipts.
 	defer a.settleTransientMessages()
 	defer a.mcphubResults.Reset()
+	defer a.clearContinuationContracts()
 	// A provider such as ModelManager may expose a different context window for
 	// each selected model. Resolve it exactly once so every budget decision in
 	// this turn stays coherent even if selection changes concurrently.
@@ -221,8 +224,10 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 	}
 
 	var tools []llm.ToolDef
+	var turnMCPSnapshot mcpPkg.ToolSnapshot
 	if turnToolPolicy.AllowMCP && a.registry != nil {
-		tools = append(tools, a.mcpTools()...)
+		turnMCPSnapshot = a.mcpToolSnapshot()
+		tools = append(tools, turnMCPSnapshot.Tools...)
 	}
 	// Merge memory built-in tools if available.
 	if a.memoryStore != nil {
@@ -275,6 +280,14 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 		}
 	}
 	loadedContext := composeCapabilityContext(capabilityHintText, capabilityBaseContext)
+	if turnToolPolicy.AllowMCP {
+		if continuationContext := a.continuationContextText(options.Continuation); continuationContext != "" {
+			if loadedContext != "" {
+				continuationContext += "\n\n"
+			}
+			loadedContext = continuationContext + loadedContext
+		}
+	}
 	readGrants := a.ReadGrants()
 	system := buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadGrants(ctx, modePrefix, tools, a.skillContent, skillCatalog, loadedContext, a.memoryStore, iceContext, turnFilesystem.workDir, turnFilesystem.ignoreContent, a.llmClient.Model(), turnNumCtx, readGrants)
 
@@ -287,6 +300,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 	var capabilityReroutes int
 	var expertConsultations int
 	hostRefusalCounts := make(map[string]int)
+	continuationState := newContinuationTurnState(turnMCPSnapshot.Epoch)
 
 	maxIters := a.MaxIterationsForAuthority(authorityMode)
 
@@ -878,8 +892,29 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 				tc, semanticText, structured, errorMeta,
 				transportErr, isErr, kind == executionPkg.KindBuiltin || kind == executionPkg.KindMemory,
 			)
+			// An explicitly requested, exact MCPHub describe result may seed the
+			// bounded ephemeral schema cache used by LA-2. This never dispatches a
+			// follow-up and never widens the host trust catalog.
+			a.rememberContinuationContract(tc, projection, structured, turnMCPSnapshot)
 			assembly := a.projectMCPHubResultAssembly(tc, projection, structured, isErr)
 			projection = assembly.Projection
+			continuationReceipt := ecosystemPkg.RawReceipt{
+				Text: semanticText, Structured: structured, ErrorMeta: errorMeta,
+				TransportError: transportErr, ToolError: isErr,
+			}
+			continuationCandidates := assembly.Actions
+			continuationSurface := assembly.ContinuationSurface
+			continuationSourceAuthorized := a.continuationSourceAuthorized(tc, assembly.Bound)
+			if !assembly.Bound {
+				if continuationSourceAuthorized {
+					continuationCandidates = ecosystemPkg.ProjectContinuationActions(projection, continuationReceipt)
+				}
+				continuationSurface = continuationSurfacePresent(projection, continuationReceipt)
+			}
+			continuation := a.selectContinuation(
+				tc, projection, continuationCandidates, turnMCPSnapshot,
+				continuationSourceAuthorized, turnToolPolicy.AllowMCP, continuationState,
+			)
 			if capabilityRouteOutcomeFailed(projection, isErr) &&
 				a.markCapabilityRouteFailed(capabilityActivity, tc.Name, tc.Arguments, capabilityHint) {
 				capabilityRouteFailed = true
@@ -898,6 +933,16 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 				if assembly.Complete && assembly.Transient != "" {
 					modelResult = assembly.Transient
 				}
+			}
+			if projection.Specialist == "cortex" && (continuation != nil || continuationSurface) {
+				// Once an exact action has been normalized, do not also feed Cortex's
+				// raw command/reason prose to a small model. The bounded semantic
+				// receipt plus tool+arguments contract is the authoritative context.
+				durableResult = ecosystemPkg.SafeReceiptText(projection)
+				modelResult = durableResult
+			}
+			if continuationContext := continuation.modelContext(); continuationContext != "" {
+				modelResult += "\n\n" + continuationContext
 			}
 			answered := a.executionOutcomeAnswered(tc, kind, tracked.identity.EffectClass, result, transportErr, projection)
 			terminalType := terminalExecutionEventType(tracked.identity.EffectClass, isErr, answered, ctx.Err())
@@ -930,6 +975,10 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 			emitSemanticToolResult(
 				out, tc.ID, tc.Name, durableResult, structured, isErr, transportErr, duration, projection,
 			)
+			continuationSequence := uint64(i+1)<<32 | uint64(toolIndex+1)
+			if continuation != nil || isContinuationSourceProjection(projection) {
+				emitContinuationSuggestion(out, turnID, continuationSequence, continuation)
+			}
 			toolMessage := llm.Message{
 				Role:       "tool",
 				Content:    modelResult,

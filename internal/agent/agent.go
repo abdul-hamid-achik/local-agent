@@ -70,6 +70,13 @@ type Agent struct {
 	expertConsultant  ExpertConsultant
 	imageResolver     ImageResolver
 	mcphubResults     *ecosystem.MCPHubResultAssembler
+	// continuationContracts is a bounded, ephemeral cache of exact downstream
+	// input schemas observed through a trusted MCPHub describe call. It is never
+	// serialized and never grants authority; the host trust catalog still owns
+	// route and effect classification.
+	continuationContracts map[string]continuationContract
+	continuationSequence  uint64
+	continuationHistory   *continuationTurnState
 
 	checkpointStore     CheckpointStore
 	checkpointSessionID int64
@@ -114,19 +121,21 @@ func (a *Agent) logTurn(turnID string) *log.Logger {
 func New(llmClient llm.Client, registry *mcp.Registry, numCtx int) *Agent {
 	runID, runIDErr := execution.NewRunID()
 	agent := &Agent{
-		llmClient:         llmClient,
-		registry:          registry,
-		numCtx:            numCtx,
-		toolPolicy:        DefaultToolPolicy(),
-		authorityMode:     AuthorityNormal,
-		executionRunID:    runID,
-		executionRunIDErr: runIDErr,
-		approvalGrants:    make(map[string]struct{}),
-		trustedMCP:        make(map[string]trustedMCPServer),
-		readRoots:         make(map[string]*additionalReadRoot),
-		readFiles:         make(map[string]*additionalReadFile),
-		capabilityRetries: make(map[capabilityRetryKey]struct{}),
-		mcphubResults:     ecosystem.NewMCPHubResultAssembler(),
+		llmClient:             llmClient,
+		registry:              registry,
+		numCtx:                numCtx,
+		toolPolicy:            DefaultToolPolicy(),
+		authorityMode:         AuthorityNormal,
+		executionRunID:        runID,
+		executionRunIDErr:     runIDErr,
+		approvalGrants:        make(map[string]struct{}),
+		trustedMCP:            make(map[string]trustedMCPServer),
+		readRoots:             make(map[string]*additionalReadRoot),
+		readFiles:             make(map[string]*additionalReadFile),
+		capabilityRetries:     make(map[capabilityRetryKey]struct{}),
+		mcphubResults:         ecosystem.NewMCPHubResultAssembler(),
+		continuationContracts: make(map[string]continuationContract),
+		continuationHistory:   newContinuationTurnState(0),
 		// Filesystem reads can enter OS syscalls that do not observe context
 		// cancellation. Allow at most one abandoned worker for the lifetime of
 		// an Agent; later reads wait on this slot and remain cancellable.
@@ -261,6 +270,7 @@ func (a *Agent) ClearHistory() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.messages = nil
+	a.continuationHistory = newContinuationTurnState(0)
 }
 
 // AppendMessage appends a message to the conversation history.
@@ -355,6 +365,7 @@ func (a *Agent) ReplaceMessages(msgs []llm.Message) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.messages = msgs
+	a.continuationHistory = newContinuationTurnState(0)
 }
 
 // SetSkillContent sets the combined content of active skills.
@@ -497,17 +508,21 @@ func (a *Agent) MCPServerScope() (names []string, restricted bool) {
 }
 
 func (a *Agent) mcpTools() []llm.ToolDef {
+	return a.mcpToolSnapshot().Tools
+}
+
+func (a *Agent) mcpToolSnapshot() mcp.ToolSnapshot {
 	if a.registry == nil {
-		return nil
+		return mcp.ToolSnapshot{}
 	}
-	tools := a.registry.Tools()
+	snapshot := a.registry.SnapshotTools()
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	if !a.mcpScopeSet {
-		return tools
+		return snapshot
 	}
-	filtered := make([]llm.ToolDef, 0, len(tools))
-	for _, tool := range tools {
+	filtered := make([]llm.ToolDef, 0, len(snapshot.Tools))
+	for _, tool := range snapshot.Tools {
 		server, _, namespaced := strings.Cut(tool.Name, "__")
 		if namespaced {
 			if _, allowed := a.mcpServerScope[server]; allowed {
@@ -515,7 +530,8 @@ func (a *Agent) mcpTools() []llm.ToolDef {
 			}
 		}
 	}
-	return filtered
+	snapshot.Tools = filtered
+	return snapshot
 }
 
 func (a *Agent) allowsMCPTool(toolName string) bool {
@@ -553,10 +569,14 @@ func (a *Agent) ServerNames() []string {
 // this method so a turn cannot snapshot a mixed pair between two setter calls.
 func (a *Agent) SetWorkspacePolicy(dir, ignoreContent string) {
 	a.mu.Lock()
+	workspaceChanged := a.workDir != dir
 	if a.workDir != dir || a.ignoreContent != ignoreContent {
 		a.workDir = dir
 		a.ignoreContent = ignoreContent
 		a.filesystemVersion++
+	}
+	if workspaceChanged {
+		a.continuationHistory = newContinuationTurnState(0)
 	}
 	a.mu.Unlock()
 }
@@ -568,6 +588,7 @@ func (a *Agent) SetWorkDir(dir string) {
 	if a.workDir != dir {
 		a.workDir = dir
 		a.filesystemVersion++
+		a.continuationHistory = newContinuationTurnState(0)
 	}
 	a.mu.Unlock()
 }
@@ -693,6 +714,7 @@ func (a *Agent) Close() {
 		<-done
 	}
 	a.mcphubResults.Reset()
+	a.clearContinuationContracts()
 	if a.iceEngine != nil {
 		_ = a.iceEngine.Close()
 	}

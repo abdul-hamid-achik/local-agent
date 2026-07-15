@@ -213,9 +213,4 @@ func TestGoalCapabilityPhaseUsesOnlyTypedPhase(t *testing.T) {
 	if got := goalCapabilityPhase(&goaladvisor.Advice{Phase: "verifying"}); got != "verification" {
 		t.Fatalf("verifying phase = %q", got)
 	}
-	first := goalCapabilityActivityDiscriminator(&goaladvisor.Advice{Actions: []goaladvisor.Action{{Tool: "cortex_edit"}}})
-	second := goalCapabilityActivityDiscriminator(&goaladvisor.Advice{Actions: []goaladvisor.Action{{Tool: "cortex_test"}}})
-	if first == "" || second == "" || first == second {
-		t.Fatalf("activity discriminators = %q, %q", first, second)
-	}
 }

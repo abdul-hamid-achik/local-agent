@@ -52,6 +52,10 @@ func (m *Model) View() tea.View {
 	} else if m.readScopePrompt != nil {
 		content.WriteString(m.renderReadScopePrompt())
 	} else {
+		if action := m.renderContinuationAction(); action != "" {
+			content.WriteString(action)
+			content.WriteString("\n")
+		}
 		if status := m.renderStatusLine(); status != "" {
 			content.WriteString(status)
 			content.WriteString("\n")

@@ -74,6 +74,20 @@ func (a *Adapter) CapabilityRoute(route agent.CapabilityRoute) {
 	sendMsg(a.program, CapabilityRouteMsg{Route: route})
 }
 
+// ContinuationSuggestion forwards only the already bounded presentation. Tool
+// arguments, workspace references, command strings, and raw receipt content
+// never cross into Bubble Tea state.
+func (a *Adapter) ContinuationSuggestion(turnID string, sequence uint64, suggestion *agent.ContinuationSuggestion) {
+	var presentation *ContinuationActionPresentation
+	if suggestion != nil {
+		presentation = &ContinuationActionPresentation{
+			Tool: suggestion.Tool, Inputs: append([]string(nil), suggestion.Inputs...),
+			BlockedBy: append([]string(nil), suggestion.BlockedBy...), ReasonCode: suggestion.ReasonCode,
+		}
+	}
+	sendMsg(a.program, ContinuationActionMsg{TurnID: turnID, Sequence: sequence, Action: presentation})
+}
+
 func (a *Adapter) ContextCompacted() {
 	sendMsg(a.program, ContextCompactedMsg{})
 }

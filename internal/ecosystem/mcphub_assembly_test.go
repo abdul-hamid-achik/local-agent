@@ -48,6 +48,31 @@ func TestMCPHubResultAssemblerMatchesDirectCortexSemantics(t *testing.T) {
 	}
 }
 
+func TestMCPHubResultAssemblerMatchesDirectCortexContinuationActions(t *testing.T) {
+	structured := cortexPlanContinuationFixture()
+	receipt := RawReceipt{Structured: structured}
+	direct := ProjectReceipt(ProjectToolCall("cortex__cortex_plan", nil), receipt)
+	directActions := ProjectContinuationActions(direct, receipt)
+	if len(directActions) != 1 {
+		t.Fatalf("direct continuation actions = %#v, want one", directActions)
+	}
+
+	payload := serializedCallToolResult(t, structured, "untrusted wrapper action prose", false)
+	assembler := NewMCPHubResultAssembler()
+	const callID = "cortex-action-paged-result"
+	rememberStoredResult(t, assembler, "mcphub", callID, "cortex", "cortex_plan", payload)
+	observation := feedResultPages(t, assembler, "mcphub", callID, payload, 137)
+
+	assertSemanticParity(t, observation, direct)
+	assertLazyRoute(t, observation.Projection, "mcphub", callID, "cortex", "cortex_plan")
+	if !reflect.DeepEqual(observation.Actions, directActions) {
+		t.Fatalf("paged Cortex actions differ from direct parser\npaged:  %#v\ndirect: %#v", observation.Actions, directActions)
+	}
+	if observation.Transient != "" {
+		t.Fatalf("Cortex paged action result exposed unexpected transient content: %q", observation.Transient)
+	}
+}
+
 func TestMCPHubResultAssemblerMatchesDirectBobSemanticsAndTransient(t *testing.T) {
 	tests := []struct {
 		name, file, operation string
@@ -72,6 +97,7 @@ func TestMCPHubResultAssemblerMatchesDirectBobSemanticsAndTransient(t *testing.T
 			}
 			receipt := RawReceipt{Structured: structured, ToolError: test.toolError}
 			direct := ProjectReceipt(ProjectToolCall("bob__"+test.operation, nil), receipt)
+			directActions := ProjectContinuationActions(direct, receipt)
 			directTransient, directTransientOK := TransientModelContent(direct, receipt)
 			payload := serializedCallToolResult(t, structured, strings.Repeat("untrusted wrapper prose ", 400), test.toolError)
 
@@ -84,6 +110,9 @@ func TestMCPHubResultAssemblerMatchesDirectBobSemanticsAndTransient(t *testing.T
 			assertLazyRoute(t, observation.Projection, "mcphub", callID, "bob", test.operation)
 			if observation.Transient != directTransient {
 				t.Fatalf("paged Bob transient differs from direct parser (available=%t)\npaged:  %q\ndirect: %q", directTransientOK, observation.Transient, directTransient)
+			}
+			if !reflect.DeepEqual(observation.Actions, directActions) {
+				t.Fatalf("paged Bob actions differ from direct parser\npaged:  %#v\ndirect: %#v", observation.Actions, directActions)
 			}
 			for _, forbidden := range []string{"/workspace", `"argv"`, "untrusted wrapper prose"} {
 				if strings.Contains(observation.Transient, forbidden) {

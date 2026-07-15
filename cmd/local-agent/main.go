@@ -631,7 +631,7 @@ func run() int {
 		m.SetApprovalPosture(ui.ApprovalPosturePrompted)
 	}
 	if goalAdvisorConfigured(servers) {
-		m.SetGoalAdvisor(goaladvisor.NewCortex(registry, ag.WorkDir(), "local-agent"))
+		m.SetGoalAdvisor(goaladvisor.NewCortex(registry, ag.WorkDir(), "local-agent", ag))
 	}
 	defer func() {
 		ag.Close()

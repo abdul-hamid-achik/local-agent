@@ -73,6 +73,27 @@ type CapabilityRouteMsg struct {
 	Route agent.CapabilityRoute
 }
 
+// ContinuationActionPresentation is the UI-facing projection of one validated
+// continuation suggestion. It deliberately excludes arguments, command text,
+// workspace references, and arbitrary downstream prose. The agent adapter may
+// populate it only after the exact continuation interpreter has accepted the
+// source contract.
+type ContinuationActionPresentation struct {
+	Tool       string
+	Inputs     []string
+	BlockedBy  []string
+	ReasonCode string
+}
+
+// ContinuationActionMsg atomically replaces the ephemeral suggestion for one
+// active turn. Sequence is monotonic within TurnID; a nil Action is an
+// authoritative clear. Neither the message nor its presentation is persisted.
+type ContinuationActionMsg struct {
+	TurnID   string
+	Sequence uint64
+	Action   *ContinuationActionPresentation
+}
+
 // ContextCompactedMsg invalidates the previous provider occupancy snapshot.
 // The retained history is smaller, but its next exact prompt size is not known
 // until Ollama reports the following request.
