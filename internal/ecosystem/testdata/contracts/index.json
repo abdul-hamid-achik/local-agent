@@ -3,6 +3,363 @@
   "reviewed_revision": "64b3da1cffbabd2732c47715a6692ffdf8207a8e",
   "cases": [
     {
+      "id": "bob-v040-context-clean",
+      "source": {
+        "product": "Bob",
+        "version": "v0.4.0 guidance schema_version=1",
+        "reference": "Bob commit 8639e51828ec1511ba6745a67b31e622470fa837 public consumer fixture"
+      },
+      "corpus": "bob_v040",
+      "document": "context-clean-v1.json",
+      "tool": "bob__bob_context",
+      "delivery": "structured",
+      "forbidden_persistence_markers": [
+        "/workspace",
+        "cmd/acme/main.go"
+      ],
+      "expected": {
+        "projection": {
+          "specialist": "bob",
+          "operation": "bob_context",
+          "role": "build",
+          "transport": "succeeded",
+          "domain": "succeeded",
+          "domainTyped": true,
+          "route": {
+            "server": "bob",
+            "tool": "bob_context"
+          },
+          "digest": {
+            "kind": "bob_context",
+            "items": [
+              "cli.command_files",
+              "domain.packages",
+              "terminal.additional_specs"
+            ],
+            "recipe_id": "go-agent-tool",
+            "recipe_version": 4,
+            "state": "clean",
+            "contract_digest": "sha256:2c565f3bd95682441a97d52db15765d5c4b2ee2fe3bc077066af1440740d2e4d",
+            "context_digest": "sha256:53d8fbfeeec21299e837eebaea50e2e5e2215ce25baeaed7ea3ce72cb3466f9c",
+            "plan_digest": "sha256:e6b5bf0443ee158baebcd0242153d2419bf3f74bc239b1e9c6f2ac9caa5fc7c7",
+            "managed_files": 30,
+            "capabilities": 14,
+            "extension_count": 3,
+            "playbook_count": 7
+          }
+        },
+        "safe_receipt_text": "tool receipt specialist=bob operation=bob_context transport=succeeded domain=succeeded\nsummary: Bob repository clean · go-agent-tool@4 · 30 managed files · 0 conflicts",
+        "transient_content": true
+      }
+    },
+    {
+      "id": "bob-v040-context-drift",
+      "source": {
+        "product": "Bob",
+        "version": "v0.4.0 guidance schema_version=1",
+        "reference": "Bob commit 8639e51828ec1511ba6745a67b31e622470fa837 public consumer fixture"
+      },
+      "corpus": "bob_v040",
+      "document": "context-drift-v1.json",
+      "tool": "bob__bob_context",
+      "delivery": "structured",
+      "forbidden_persistence_markers": [
+        "/workspace",
+        "cmd/acme/main.go"
+      ],
+      "expected": {
+        "projection": {
+          "specialist": "bob",
+          "operation": "bob_context",
+          "role": "build",
+          "transport": "succeeded",
+          "domain": "drift",
+          "domainTyped": true,
+          "route": {
+            "server": "bob",
+            "tool": "bob_context"
+          },
+          "digest": {
+            "kind": "bob_context",
+            "items": [
+              "cli.command_files",
+              "domain.packages",
+              "terminal.additional_specs"
+            ],
+            "recipe_id": "go-agent-tool",
+            "recipe_version": 4,
+            "state": "drifted",
+            "first_action": "review_plan",
+            "contract_digest": "sha256:2c565f3bd95682441a97d52db15765d5c4b2ee2fe3bc077066af1440740d2e4d",
+            "context_digest": "sha256:1329b47d3a81d2a7f34411a39c7a9e802d41435084c25e4f28a1fe785a654a9f",
+            "plan_digest": "sha256:ca6cd04c00940690322039e1d2106e08742fb1eda2caf48b1a0e79b0ff380e6a",
+            "managed_files": 30,
+            "capabilities": 14,
+            "extension_count": 3,
+            "playbook_count": 7
+          }
+        },
+        "safe_receipt_text": "tool receipt specialist=bob operation=bob_context transport=succeeded domain=drift\nsummary: Bob repository drifted · go-agent-tool@4 · 30 managed files · 0 conflicts · next review_plan",
+        "transient_content": true
+      }
+    },
+    {
+      "id": "bob-v040-context-conflict",
+      "source": {
+        "product": "Bob",
+        "version": "v0.4.0 guidance schema_version=1",
+        "reference": "Bob commit 8639e51828ec1511ba6745a67b31e622470fa837 public consumer fixture"
+      },
+      "corpus": "bob_v040",
+      "document": "context-conflict-v1.json",
+      "tool": "bob__bob_context",
+      "delivery": "structured",
+      "forbidden_persistence_markers": [
+        "/workspace",
+        "cmd/acme/main.go"
+      ],
+      "expected": {
+        "projection": {
+          "specialist": "bob",
+          "operation": "bob_context",
+          "role": "build",
+          "transport": "succeeded",
+          "domain": "conflict",
+          "domainTyped": true,
+          "route": {
+            "server": "bob",
+            "tool": "bob_context"
+          },
+          "digest": {
+            "kind": "bob_context",
+            "items": [
+              "cli.command_files",
+              "domain.packages",
+              "terminal.additional_specs"
+            ],
+            "recipe_id": "go-agent-tool",
+            "recipe_version": 4,
+            "state": "conflicted",
+            "first_action": "review_plan",
+            "contract_digest": "sha256:2c565f3bd95682441a97d52db15765d5c4b2ee2fe3bc077066af1440740d2e4d",
+            "context_digest": "sha256:ca6f00df7375cde65ab909aa9d2024a600f6d1d7ff6e05f212bdb8d85cfe9cec",
+            "plan_digest": "sha256:04fa5750c5f19fb73dffef4e78d0a3bff9286caa6e3152e23419af6a1f14278c",
+            "conflict_count": 1,
+            "managed_files": 30,
+            "capabilities": 14,
+            "extension_count": 3,
+            "playbook_count": 7
+          }
+        },
+        "safe_receipt_text": "tool receipt specialist=bob operation=bob_context transport=succeeded domain=conflict\nsummary: Bob repository conflicted · go-agent-tool@4 · 30 managed files · 1 conflict · next review_plan",
+        "transient_content": true
+      }
+    },
+    {
+      "id": "bob-v040-path-extension",
+      "source": {
+        "product": "Bob",
+        "version": "v0.4.0 guidance schema_version=1",
+        "reference": "Bob commit 8639e51828ec1511ba6745a67b31e622470fa837 public consumer fixture"
+      },
+      "corpus": "bob_v040",
+      "document": "path-extension-v1.json",
+      "tool": "bob__bob_path",
+      "delivery": "structured",
+      "forbidden_persistence_markers": [
+        "/workspace",
+        "internal/cli/hello.go"
+      ],
+      "expected": {
+        "projection": {
+          "specialist": "bob",
+          "operation": "bob_path",
+          "role": "build",
+          "transport": "succeeded",
+          "domain": "succeeded",
+          "domainTyped": true,
+          "route": {
+            "server": "bob",
+            "tool": "bob_path"
+          },
+          "digest": {
+            "kind": "bob_path",
+            "items": [
+              "cli.command_files",
+              "add-cli-command"
+            ],
+            "state": "extension_point",
+            "classification": "extension_point",
+            "effect": "outside_bob_ownership",
+            "first_action": "show_playbook:add-cli-command",
+            "extension_count": 1,
+            "playbook_count": 1
+          }
+        },
+        "safe_receipt_text": "tool receipt specialist=bob operation=bob_path transport=succeeded domain=succeeded\nsummary: Bob path extension_point · extension_point · outside_bob_ownership · next show_playbook:add-cli-command",
+        "transient_content": true
+      }
+    },
+    {
+      "id": "bob-v040-path-managed",
+      "source": {
+        "product": "Bob",
+        "version": "v0.4.0 guidance schema_version=1",
+        "reference": "Bob commit 8639e51828ec1511ba6745a67b31e622470fa837 public consumer fixture"
+      },
+      "corpus": "bob_v040",
+      "document": "path-managed-v1.json",
+      "tool": "bob__bob_path",
+      "delivery": "structured",
+      "forbidden_persistence_markers": [
+        "/workspace",
+        "internal/cli/root.go"
+      ],
+      "expected": {
+        "projection": {
+          "specialist": "bob",
+          "operation": "bob_path",
+          "role": "build",
+          "transport": "succeeded",
+          "domain": "attention",
+          "domainTyped": true,
+          "route": {
+            "server": "bob",
+            "tool": "bob_path"
+          },
+          "digest": {
+            "kind": "bob_path",
+            "items": [
+              "add-cli-command"
+            ],
+            "state": "managed_in_sync",
+            "classification": "managed",
+            "effect": "will_conflict",
+            "first_action": "show_playbook:add-cli-command",
+            "playbook_count": 1,
+            "exists": true
+          }
+        },
+        "safe_receipt_text": "tool receipt specialist=bob operation=bob_path transport=succeeded domain=attention\nsummary: Bob path managed · managed_in_sync · will_conflict · next show_playbook:add-cli-command",
+        "transient_content": true
+      }
+    },
+    {
+      "id": "bob-v040-playbook-ready",
+      "source": {
+        "product": "Bob",
+        "version": "v0.4.0 guidance schema_version=1",
+        "reference": "Bob commit 8639e51828ec1511ba6745a67b31e622470fa837 public consumer fixture"
+      },
+      "corpus": "bob_v040",
+      "document": "playbook-ready-v1.json",
+      "tool": "bob__bob_playbook",
+      "delivery": "structured",
+      "forbidden_persistence_markers": [
+        "/workspace",
+        "internal/cli/hello_test.go"
+      ],
+      "expected": {
+        "projection": {
+          "specialist": "bob",
+          "operation": "bob_playbook",
+          "role": "build",
+          "transport": "succeeded",
+          "domain": "succeeded",
+          "domainTyped": true,
+          "route": {
+            "server": "bob",
+            "tool": "bob_playbook"
+          },
+          "digest": {
+            "kind": "bob_playbook",
+            "count": 5,
+            "target": "add-cli-command",
+            "recipe_id": "go-agent-tool",
+            "recipe_version": 4,
+            "state": "ready",
+            "effect": "repository_mutation",
+            "scope": "small",
+            "risk": "medium",
+            "first_action": "create_command_file",
+            "available": true
+          }
+        },
+        "safe_receipt_text": "tool receipt specialist=bob operation=bob_playbook transport=succeeded domain=succeeded\nsummary: Bob playbook ready add-cli-command · small scope · medium risk · first create_command_file",
+        "transient_content": true
+      }
+    },
+    {
+      "id": "bob-v040-playbook-missing-input",
+      "source": {
+        "product": "Bob",
+        "version": "v0.4.0 guidance schema_version=1",
+        "reference": "Bob commit 8639e51828ec1511ba6745a67b31e622470fa837 public consumer fixture"
+      },
+      "corpus": "bob_v040",
+      "document": "playbook-missing-input-v1.json",
+      "tool": "bob__bob_playbook",
+      "delivery": "structured",
+      "tool_error": true,
+      "must_fail_closed": true,
+      "forbidden_persistence_markers": [
+        "/workspace",
+        "missing required inputs: command_name"
+      ],
+      "expected": {
+        "projection": {
+          "specialist": "bob",
+          "operation": "bob_playbook",
+          "role": "build",
+          "transport": "succeeded",
+          "domain": "blocked",
+          "domainTyped": true,
+          "route": {
+            "server": "bob",
+            "tool": "bob_playbook"
+          },
+          "digest": {
+            "kind": "bob_failure",
+            "target": "input_invalid"
+          }
+        },
+        "safe_receipt_text": "tool receipt specialist=bob operation=bob_playbook transport=succeeded domain=blocked\nsummary: Bob rejected the request with input_invalid",
+        "transient_content": false
+      }
+    },
+    {
+      "id": "bob-v040-future-schema",
+      "source": {
+        "product": "Bob",
+        "version": "v0.4.0 unsupported future fixture schema_version=2",
+        "reference": "Bob commit 8639e51828ec1511ba6745a67b31e622470fa837 public consumer fixture"
+      },
+      "corpus": "bob_v040",
+      "document": "error-unsupported-schema-v1.json",
+      "tool": "bob__bob_context",
+      "delivery": "structured",
+      "must_fail_closed": true,
+      "forbidden_persistence_markers": [
+        "/workspace",
+        "cmd/acme/main.go"
+      ],
+      "expected": {
+        "projection": {
+          "specialist": "bob",
+          "operation": "bob_context",
+          "role": "build",
+          "transport": "succeeded",
+          "domain": "unknown",
+          "route": {
+            "server": "bob",
+            "tool": "bob_context"
+          }
+        },
+        "safe_receipt_text": "tool receipt specialist=bob operation=bob_context transport=succeeded domain=unknown",
+        "transient_content": false
+      }
+    },
+    {
       "id": "bob-check-v1-success",
       "source": {
         "product": "Bob",
@@ -534,7 +891,6 @@
           "role": "gateway",
           "transport": "succeeded",
           "domain": "unknown",
-          "domainTyped": true,
           "route": {
             "server": "mcphub",
             "tool": "mcphub_get_result",
@@ -570,7 +926,6 @@
           "role": "gateway",
           "transport": "succeeded",
           "domain": "unknown",
-          "domainTyped": true,
           "route": {
             "server": "mcphub",
             "tool": "mcphub_get_result",

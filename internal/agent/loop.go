@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	ecosystemPkg "github.com/abdul-hamid-achik/local-agent/internal/ecosystem"
 	executionPkg "github.com/abdul-hamid-achik/local-agent/internal/execution"
 	"github.com/abdul-hamid-achik/local-agent/internal/expertteam"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
@@ -873,11 +874,12 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 			// into the execution ledger.
 			a.runPostHooks(ctx, tc, &result, isErr)
 			semanticText := result
-			projection := projectSemanticToolReceipt(
-				tc.Name, tc.Arguments, semanticText, structured, errorMeta,
+			projection := a.projectSemanticToolReceipt(
+				tc, semanticText, structured, errorMeta,
 				transportErr, isErr, kind == executionPkg.KindBuiltin || kind == executionPkg.KindMemory,
 			)
-			projection = a.projectMCPHubResultAssembly(tc, projection, structured, isErr)
+			assembly := a.projectMCPHubResultAssembly(tc, projection, structured, isErr)
+			projection = assembly.Projection
 			if capabilityRouteOutcomeFailed(projection, isErr) &&
 				a.markCapabilityRouteFailed(capabilityActivity, tc.Name, tc.Arguments, capabilityHint) {
 				capabilityRouteFailed = true
@@ -886,6 +888,17 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 			// host-trusted, bounded projections may enter the active provider turn;
 			// every durable boundary and the UI receive only the allowlisted receipt.
 			modelResult, durableResult := a.semanticToolContents(tc, projection, result, structured, isErr)
+			if assembly.Bound {
+				// Stored-result pages are serialized CallToolResult fragments, not
+				// downstream semantic documents. Keep every partial or rejected page
+				// behind the parser boundary. A complete exact route may expose only
+				// its validated, bounded model-only projection.
+				durableResult = ecosystemPkg.SafeReceiptText(projection)
+				modelResult = durableResult
+				if assembly.Complete && assembly.Transient != "" {
+					modelResult = assembly.Transient
+				}
+			}
 			answered := a.executionOutcomeAnswered(tc, kind, tracked.identity.EffectClass, result, transportErr, projection)
 			terminalType := terminalExecutionEventType(tracked.identity.EffectClass, isErr, answered, ctx.Err())
 			// Only a genuinely unverifiable outcome earns the OUTCOME UNKNOWN

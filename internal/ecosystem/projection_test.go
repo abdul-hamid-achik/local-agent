@@ -481,7 +481,7 @@ func TestProjectReceiptProjectsStaleCodemapAndStoredMCPHubResults(t *testing.T) 
 
 	hub := ProjectReceipt(ProjectToolCall("mcphub__mcphub_call_tool", map[string]any{
 		"server": "cortex", "tool": "cortex_verify",
-	}), RawReceipt{Structured: json.RawMessage(`{"status":"stored","callId":"call-123","originalBytes":90000}`)})
+	}), RawReceipt{Structured: json.RawMessage(`{"status":"stored","callId":"call-123","originalBytes":90000,"budgetBytes":8192}`)})
 	if hub.Domain != DomainAttention || hub.Route.CallID != "call-123" || hub.Evidence != EvidenceNone {
 		t.Fatalf("stored MCPHub projection = %#v", hub)
 	}

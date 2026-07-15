@@ -79,28 +79,202 @@ func projectSemanticToolReceipt(
 	})
 }
 
-func (a *Agent) projectMCPHubResultAssembly(call llm.ToolCall, projection ecosystem.ToolProjection, structured json.RawMessage, toolError bool) ecosystem.ToolProjection {
-	if toolError || projection.Digest == nil || a.mcphubResults == nil {
-		return projection
+// projectSemanticToolReceipt resolves parser authority through the host's exact
+// trust catalog before interpreting structured content. It is the only place a
+// configured namespace alias may be canonicalized to a specialist or MCPHub
+// route; ecosystem parsers continue to reject arbitrary lookalike names.
+func (a *Agent) projectSemanticToolReceipt(
+	call llm.ToolCall,
+	text string,
+	structured, errorMeta json.RawMessage,
+	transportError, toolError, trustedLocal bool,
+) ecosystem.ToolProjection {
+	receipt := ecosystem.RawReceipt{
+		Text: text, Structured: structured, ErrorMeta: errorMeta,
+		TransportError: transportError, ToolError: toolError, TrustedLocal: trustedLocal,
+	}
+	projection, restoreGateway, trusted := a.trustedSemanticToolProjection(call)
+	if !trusted {
+		return ecosystem.ProjectReceipt(ecosystem.ProjectToolCall(call.Name, call.Arguments), receipt)
+	}
+	projection = ecosystem.ProjectReceipt(projection, receipt)
+	if restoreGateway != "" {
+		projection.Route.Gateway = restoreGateway
+		projection = projection.Normalize()
+	}
+	return projection
+}
+
+func (a *Agent) trustedSemanticToolProjection(call llm.ToolCall) (ecosystem.ToolProjection, string, bool) {
+	if _, trusted := a.trustedMCPContract(call); !trusted {
+		return ecosystem.ToolProjection{}, "", false
+	}
+	parts := strings.Split(call.Name, "__")
+	if len(parts) < 2 {
+		return ecosystem.ToolProjection{}, "", false
+	}
+	server, ok := a.trustedMCPServer(parts[0])
+	if !ok {
+		return ecosystem.ToolProjection{}, "", false
+	}
+	if server.gateway == "" && len(parts) == 2 {
+		canonical, valid := safeMCPNamespacedIdentifier(server.localOwner + "__" + parts[1])
+		if !valid {
+			return ecosystem.ToolProjection{}, "", false
+		}
+		return ecosystem.ProjectToolCall(canonical, call.Arguments), "", true
+	}
+	if server.gateway != config.MCPTrustGatewayMCPHub {
+		return ecosystem.ToolProjection{}, "", false
+	}
+
+	if len(parts) == 2 && parts[1] != "mcphub_call_tool" {
+		canonical, valid := safeMCPNamespacedIdentifier("mcphub__" + parts[1])
+		if !valid {
+			return ecosystem.ToolProjection{}, "", false
+		}
+		return ecosystem.ProjectToolCall(canonical, call.Arguments), parts[0], true
+	}
+	_, downstream, tool, exact := a.trustedMCPHubDownstreamTarget(call)
+	if !exact {
+		return ecosystem.ToolProjection{}, "", false
+	}
+	canonical, valid := safeMCPNamespacedIdentifier(downstream + "__" + tool)
+	if !valid {
+		return ecosystem.ToolProjection{}, "", false
+	}
+	projection := ecosystem.ProjectToolCall(canonical, nil)
+	projection.Route = ecosystem.ToolRoute{
+		Gateway: "mcphub", Server: downstream, Tool: tool, Lazy: true,
+	}
+	return projection, parts[0], true
+}
+
+func (a *Agent) projectMCPHubResultAssembly(call llm.ToolCall, projection ecosystem.ToolProjection, structured json.RawMessage, toolError bool) ecosystem.MCPHubResultObservation {
+	observation := ecosystem.MCPHubResultObservation{Projection: projection}
+	// A stored receipt can preserve the downstream CallToolResult.IsError bit.
+	// It is still authoritative routing metadata and must be remembered even
+	// when the public tool result is marked as an application-level error.
+	if a.mcphubResults == nil {
+		return observation
 	}
 	parts := strings.Split(call.Name, "__")
 	if len(parts) < 2 || !a.isTrustedMCPHubNamespace(parts[0]) {
-		return projection
+		return observation
+	}
+	if projection.Digest != nil && projection.Digest.Kind == ecosystem.DigestMCPHubStored {
+		namespace, server, tool, trusted := a.trustedMCPHubDownstreamTarget(call)
+		if !trusted {
+			return observation
+		}
+		observation.Bound = a.mcphubResults.Remember(namespace, server, tool, projection)
+		return observation
+	}
+	if !a.trustedDirectMCPHubOperation(call, "mcphub_get_result") {
+		return observation
+	}
+	cursor, exact := exactMCPHubResultCursor(call.Arguments)
+	if !exact {
+		return observation
+	}
+	callID, exact := exactMCPHubResultCallID(call.Arguments, projection.Route.CallID)
+	if !exact {
+		return observation
+	}
+	// A transport failure is retryable because MCPHub did not answer. Any
+	// answered tool error or malformed/future page tears down and zeroes the
+	// exact bound chain before it can be resumed with attacker-controlled bytes.
+	if projection.Transport != ecosystem.TransportSucceeded {
+		return observation
+	}
+	if toolError || projection.Digest == nil {
+		return a.mcphubResults.RejectPage(parts[0], callID, projection)
 	}
 	switch projection.Digest.Kind {
-	case ecosystem.DigestMCPHubStored:
-		if _, trusted := a.trustedMCPContract(call); !trusted {
-			return projection
-		}
 	case ecosystem.DigestMCPHubPage, ecosystem.DigestMCPHubUnavailable,
 		ecosystem.DigestMCPHubCursorOutOfRange, ecosystem.DigestMCPHubError:
-		if !a.trustedDirectMCPHubOperation(call, "mcphub_get_result") {
-			return projection
+		return a.mcphubResults.ObservePage(parts[0], cursor, projection, ecosystem.RawReceipt{Structured: structured})
+	default:
+		return a.mcphubResults.RejectPage(parts[0], callID, projection)
+	}
+}
+
+func (a *Agent) trustedMCPHubDownstreamTarget(call llm.ToolCall) (namespace, server, tool string, ok bool) {
+	if _, trusted := a.trustedMCPContract(call); !trusted {
+		return "", "", "", false
+	}
+	parts := strings.Split(call.Name, "__")
+	if len(parts) < 2 || !a.isTrustedMCPHubNamespace(parts[0]) {
+		return "", "", "", false
+	}
+	namespace = parts[0]
+	switch {
+	case len(parts) == 3:
+		server, tool = parts[1], parts[2]
+	case len(parts) == 2 && parts[1] == "mcphub_call_tool":
+		var exact bool
+		server, tool, exact = exactLazyMCPHubTarget(call.Arguments)
+		if !exact {
+			return "", "", "", false
 		}
 	default:
-		return projection
+		return "", "", "", false
 	}
-	return a.mcphubResults.Observe(projection, ecosystem.RawReceipt{Structured: structured})
+	if server == "" || tool == "" {
+		return "", "", "", false
+	}
+	return namespace, server, tool, true
+}
+
+func exactMCPHubResultCursor(arguments map[string]any) (int64, bool) {
+	value, present := arguments["cursor"]
+	if !present || value == nil {
+		return 0, true
+	}
+	switch cursor := value.(type) {
+	case int:
+		if cursor < 0 {
+			return 0, false
+		}
+		return int64(cursor), true
+	case int32:
+		if cursor < 0 {
+			return 0, false
+		}
+		return int64(cursor), true
+	case int64:
+		return cursor, cursor >= 0
+	case uint:
+		if uint64(cursor) >= 1<<63 {
+			return 0, false
+		}
+		return int64(cursor), true
+	case uint32:
+		return int64(cursor), true
+	case uint64:
+		if cursor >= 1<<63 {
+			return 0, false
+		}
+		return int64(cursor), true
+	case float64:
+		if math.IsNaN(cursor) || math.IsInf(cursor, 0) || cursor < 0 || cursor >= 1<<63 || math.Trunc(cursor) != cursor {
+			return 0, false
+		}
+		return int64(cursor), true
+	case json.Number:
+		parsed, err := strconv.ParseInt(string(cursor), 10, 64)
+		return parsed, err == nil && parsed >= 0
+	default:
+		return 0, false
+	}
+}
+
+func exactMCPHubResultCallID(arguments map[string]any, projected string) (string, bool) {
+	raw, ok := arguments["callId"].(string)
+	if !ok || raw == "" || raw != strings.TrimSpace(raw) || raw != projected {
+		return "", false
+	}
+	return raw, true
 }
 
 // semanticToolContents separates active provider context from durable/display
@@ -125,16 +299,34 @@ func (a *Agent) semanticToolContents(call llm.ToolCall, projection ecosystem.Too
 		// both model and durable paths instead of falling back to raw text.
 		return durableResult, durableResult
 	}
+	if projection.Specialist == "bob" &&
+		(projection.Operation == "bob_context" || projection.Operation == "bob_path" || projection.Operation == "bob_playbook") {
+		durableResult = ecosystem.SafeReceiptText(projection)
+		_, trusted := a.trustedMCPContract(call)
+		if !toolError && projection.DomainTyped && trusted {
+			if transient, ok := ecosystem.TransientModelContent(projection, ecosystem.RawReceipt{
+				Text: rawResult, Structured: structured,
+			}); ok {
+				return transient, durableResult
+			}
+		}
+		return durableResult, durableResult
+	}
+	if projection.Operation == "mcphub_get_result" && a.trustedDirectMCPHubOperation(call, projection.Operation) {
+		// Result pages are serialized downstream fragments even when an older
+		// gateway duplicates them into TextContent instead of StructuredContent.
+		// Only the exact bound assembler may expose a complete sanitized result.
+		durableResult = ecosystem.SafeReceiptText(projection)
+		return durableResult, durableResult
+	}
 	if len(structured) == 0 {
 		return rawResult, rawResult
 	}
 	durableResult = ecosystem.SafeReceiptText(projection)
 	modelResult = durableResult
-	if projection.Operation == "mcphub_get_result" && !toolError && a.trustedDirectMCPHubOperation(call, projection.Operation) {
-		if transient, ok := ecosystem.TransientModelContent(projection, ecosystem.RawReceipt{Structured: structured}); ok {
-			return transient, durableResult
-		}
-	}
+	// Raw get_result pages are never model content on their own. Only the exact
+	// host-bound assembler may expose a complete downstream result after it has
+	// been reparsed and sanitized for that route.
 	if transient, ok := a.trustedMCPHubTransientContent(call, projection, structured, toolError); ok {
 		return transient, durableResult
 	}

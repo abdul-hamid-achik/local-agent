@@ -33,6 +33,7 @@ type contractFixtureSource struct {
 type contractFixtureCase struct {
 	ID             string                     `json:"id"`
 	Source         contractFixtureSource      `json:"source"`
+	Corpus         string                     `json:"corpus,omitempty"`
 	Document       string                     `json:"document"`
 	Tool           string                     `json:"tool"`
 	Arguments      map[string]any             `json:"arguments,omitempty"`
@@ -97,7 +98,7 @@ func loadContractFixtureManifest(t *testing.T, path string) contractFixtureManif
 func runExactContractFixture(t *testing.T, root string, fixture contractFixtureCase) {
 	t.Helper()
 	validateContractFixtureMetadata(t, fixture)
-	document := loadContractFixtureDocument(t, root, fixture.Document)
+	document := loadContractFixtureDocument(t, contractFixtureCorpusRoot(t, root, fixture.Corpus), fixture.Document)
 	receipt := contractFixtureReceipt(t, fixture, document)
 
 	projection := ProjectReceipt(ProjectToolCall(fixture.Tool, fixture.Arguments), receipt)
@@ -119,7 +120,8 @@ func runExactContractFixture(t *testing.T, root string, fixture contractFixtureC
 	if !available && transient != "" {
 		t.Fatalf("unavailable transient content was non-empty: %q", transient)
 	}
-	if available && !strings.Contains(transient, "transient; not saved") {
+	if available && !strings.HasPrefix(transient, "MCPHub result page (transient; not saved)\n") &&
+		!strings.HasPrefix(transient, "Bob guidance (validated transient content; not saved)\n") {
 		t.Fatalf("transient content omitted boundary notice: %q", transient)
 	}
 
@@ -142,6 +144,11 @@ func validateContractFixtureMetadata(t *testing.T, fixture contractFixtureCase) 
 	if fixture.Tool == "" || fixture.Document == "" {
 		t.Fatalf("fixture %q is missing tool or document", fixture.ID)
 	}
+	switch fixture.Corpus {
+	case "", "bob_v040":
+	default:
+		t.Fatalf("fixture %q selects unsupported corpus %q", fixture.ID, fixture.Corpus)
+	}
 	want := fixture.Expected.Projection
 	if want.Specialist == "" || want.Operation == "" || want.Role == "" ||
 		want.Transport == "" || want.Domain == "" || want.Route.Tool == "" {
@@ -149,6 +156,44 @@ func validateContractFixtureMetadata(t *testing.T, fixture contractFixtureCase) 
 	}
 	if fixture.Expected.SafeReceiptText == "" {
 		t.Fatalf("fixture %q does not assert persistence-safe receipt text", fixture.ID)
+	}
+}
+
+func contractFixtureCorpusRoot(t *testing.T, defaultRoot, corpus string) string {
+	t.Helper()
+	root, ok := resolveContractFixtureCorpusRoot(defaultRoot, corpus)
+	if !ok {
+		t.Fatalf("unsupported contract fixture corpus %q", corpus)
+	}
+	return root
+}
+
+func resolveContractFixtureCorpusRoot(defaultRoot, corpus string) (string, bool) {
+	switch corpus {
+	case "":
+		return defaultRoot, true
+	case "bob_v040":
+		return filepath.Join(filepath.Dir(defaultRoot), "bob_v040"), true
+	default:
+		return "", false
+	}
+}
+
+func TestContractFixtureCorpusRootAllowlist(t *testing.T) {
+	const root = "testdata/contracts"
+	for corpus, want := range map[string]string{
+		"":         root,
+		"bob_v040": "testdata/bob_v040",
+	} {
+		got, ok := resolveContractFixtureCorpusRoot(root, corpus)
+		if !ok || got != want {
+			t.Fatalf("resolveContractFixtureCorpusRoot(%q) = %q, %t; want %q, true", corpus, got, ok, want)
+		}
+	}
+	for _, corpus := range []string{"../bob_v040", "bob_v040/..", "/tmp/bob_v040", "contracts"} {
+		if got, ok := resolveContractFixtureCorpusRoot(root, corpus); ok || got != "" {
+			t.Fatalf("unsafe corpus %q resolved to %q", corpus, got)
+		}
 	}
 }
 

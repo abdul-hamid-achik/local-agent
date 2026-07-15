@@ -73,12 +73,15 @@ func projectMCPHubReceipt(projection ToolProjection, receipt RawReceipt) (ToolPr
 	}
 
 	if projection.Operation == "mcphub_get_result" {
+		if !exactMCPHubManagementRoute(projection) {
+			return projection, false
+		}
 		return projectMCPHubResultPage(projection, document), true
 	}
 	if projected, stored := projectMCPHubStoredReceipt(projection, document); stored {
 		return projected, true
 	}
-	if !isMCPHubManagementOperation(projection.Operation) {
+	if !isMCPHubManagementOperation(projection.Operation) || !exactMCPHubManagementRoute(projection) {
 		return projection, false
 	}
 	if projection.Operation == "mcphub_resolve_tool" {
@@ -105,6 +108,11 @@ func projectMCPHubReceipt(projection ToolProjection, receipt RawReceipt) (ToolPr
 	}
 }
 
+func exactMCPHubManagementRoute(projection ToolProjection) bool {
+	return projection.Specialist == "mcphub" && projection.Route.Gateway == "" &&
+		projection.Route.Server == "mcphub" && projection.Route.Tool == projection.Operation
+}
+
 func isMCPHubManagementOperation(operation string) bool {
 	switch operation {
 	case "mcphub_list_servers", "mcphub_search_tools", "mcphub_describe_tool",
@@ -116,11 +124,18 @@ func isMCPHubManagementOperation(operation string) bool {
 }
 
 func projectMCPHubStoredReceipt(projection ToolProjection, document json.RawMessage) (ToolProjection, bool) {
+	// A stored envelope has parser authority only on the exact canonical MCPHub
+	// gateway route. Agent-side trusted aliases are canonicalized to this route
+	// before entering ProjectReceipt, then restored for display afterwards.
+	if projection.Route.Gateway != "mcphub" {
+		return projection, false
+	}
 	var envelope struct {
 		Status        string `json:"status"`
 		CallID        string `json:"callId"`
 		Server        string `json:"server"`
 		Tool          string `json:"tool"`
+		Namespaced    string `json:"namespaced"`
 		OriginalBytes int64  `json:"originalBytes"`
 		BudgetBytes   int64  `json:"budgetBytes"`
 	}
@@ -128,17 +143,28 @@ func projectMCPHubStoredReceipt(projection ToolProjection, document json.RawMess
 		return projection, false
 	}
 	callID := canonicalIdentifier(envelope.CallID)
-	if callID == "" {
+	server := canonicalIdentifier(envelope.Server)
+	tool := canonicalIdentifier(envelope.Tool)
+	namespaced := canonicalIdentifier(envelope.Namespaced)
+	if callID == "" || callID != envelope.CallID || envelope.OriginalBytes <= 0 || envelope.BudgetBytes <= 0 ||
+		envelope.OriginalBytes <= envelope.BudgetBytes ||
+		(envelope.Server != "" && server != envelope.Server) || (envelope.Tool != "" && tool != envelope.Tool) ||
+		(envelope.Namespaced != "" && namespaced != envelope.Namespaced) ||
+		(server != "" && projection.Route.Server != "" && server != projection.Route.Server) ||
+		(tool != "" && projection.Route.Tool != "" && tool != projection.Route.Tool) ||
+		(namespaced != "" && server != "" && tool != "" && namespaced != server+"__"+tool) ||
+		(namespaced != "" && projection.Route.Server != "" && projection.Route.Tool != "" &&
+			namespaced != projection.Route.Server+"__"+projection.Route.Tool) {
 		projection.Domain = DomainUnknown
 		projection.Evidence = EvidenceNone
 		return projection, true
 	}
 	projection.Route.CallID = callID
 	if projection.Route.Server == "" {
-		projection.Route.Server = canonicalIdentifier(envelope.Server)
+		projection.Route.Server = server
 	}
 	if projection.Route.Tool == "" {
-		projection.Route.Tool = canonicalIdentifier(envelope.Tool)
+		projection.Route.Tool = tool
 	}
 	projection.Domain = DomainAttention
 	projection.Evidence = EvidenceNone
@@ -161,7 +187,7 @@ func projectMCPHubResultPage(projection ToolProjection, document json.RawMessage
 	// follow-up fetch target.
 	requestedID := canonicalIdentifier(projection.Route.CallID)
 	receivedID := canonicalIdentifier(envelope.CallID)
-	if requestedID == "" || receivedID == "" || requestedID != receivedID {
+	if requestedID == "" || receivedID == "" || receivedID != envelope.CallID || requestedID != receivedID {
 		projection.Domain = DomainFailed
 		projection.Evidence = EvidenceNone
 		projection.Digest = &ReceiptDigest{Kind: DigestMCPHubError}
@@ -183,13 +209,6 @@ func projectMCPHubResultPage(projection ToolProjection, document json.RawMessage
 		}
 		if *envelope.Done {
 			projection.Domain = DomainSucceeded
-			// A completed page may contain the downstream specialist's full
-			// envelope. Re-run that bounded document through the exact specialist
-			// parsers so pagination does not erase Bob/Cortex domain semantics.
-			if domain, evidence, ok := reparseCompletedMCPHubPage(page); ok {
-				projection.Domain = domain
-				projection.Evidence = evidence
-			}
 		} else {
 			// The page call completed, but the stored result still has a precise
 			// continuation cursor. Attention is terminal and avoids a fake spinner.
@@ -212,30 +231,6 @@ func projectMCPHubResultPage(projection ToolProjection, document json.RawMessage
 	return projection.Normalize()
 }
 
-func reparseCompletedMCPHubPage(page []byte) (DomainState, EvidenceState, bool) {
-	receipt, stored := storedCallToolReceipt(page)
-	if !stored {
-		receipt = RawReceipt{Structured: json.RawMessage(page)}
-	}
-	for operation := range cortexEnvelopeOperations {
-		if domain, _, ok := projectCortexReceipt(operation, receipt); ok {
-			if receipt.ToolError && domain == DomainSucceeded {
-				domain = DomainFailed
-			}
-			return domain, EvidenceNone, true
-		}
-	}
-	for _, operation := range []string{"bob_check", "bob_context", "bob_inspect", "bob_path", "bob_plan", "bob_playbook", "bob_recipe_describe", "bob_stats", "bob_validate_manifest"} {
-		if domain, ok := projectBobReceipt(operation, receipt); ok {
-			if receipt.ToolError && domain == DomainSucceeded {
-				domain = DomainFailed
-			}
-			return domain, EvidenceNone, true
-		}
-	}
-	return DomainUnknown, EvidenceNone, false
-}
-
 func decodeMCPHubResultPage(envelope mcphubResultPageEnvelope) ([]byte, bool) {
 	page, err := base64.StdEncoding.DecodeString(envelope.Data)
 	if err != nil || envelope.MediaType != "application/json" || envelope.Cursor == nil ||
@@ -244,6 +239,7 @@ func decodeMCPHubResultPage(envelope mcphubResultPageEnvelope) ([]byte, bool) {
 		*envelope.TotalBytes < *envelope.NextCursor ||
 		int64(len(page)) != *envelope.NextCursor-*envelope.Cursor ||
 		len(page) > maxMCPHubResultPageBytes ||
+		*envelope.Done != (*envelope.NextCursor == *envelope.TotalBytes) ||
 		(!*envelope.Done && *envelope.NextCursor == *envelope.Cursor) {
 		return nil, false
 	}
@@ -264,6 +260,8 @@ func TransientModelContent(projection ToolProjection, receipt RawReceipt) (strin
 		return transientMCPHubResultPage(projection, receipt)
 	case DigestHitspecSearch:
 		return transientHitspecSearch(projection, receipt)
+	case DigestBobContext, DigestBobPath, DigestBobPlaybook:
+		return transientBobGuidanceContent(projection, receipt)
 	default:
 		return "", false
 	}
@@ -770,20 +768,23 @@ type bobMCPReceipt struct {
 	} `json:"error"`
 }
 
-func projectBobReceipt(operation string, receipt RawReceipt) (DomainState, bool) {
+func projectBobReceipt(operation string, receipt RawReceipt) (DomainState, *ReceiptDigest, bool) {
 	switch operation {
 	case "bob_check", "bob_context", "bob_inspect", "bob_path", "bob_plan", "bob_playbook", "bob_recipe_describe", "bob_stats", "bob_validate_manifest":
 	default:
-		return "", false
+		return "", nil, false
+	}
+	if isBobGuidanceOperation(operation) && !receiptDocumentWithinLimit(receipt, maxBobGuidanceDocumentBytes) {
+		return "", nil, false
 	}
 	document, ok := receiptDocument(receipt)
 	if !ok {
-		return "", false
+		return "", nil, false
 	}
 	var output bobMCPReceipt
 	if json.Unmarshal(document, &output) != nil || output.SchemaVersion != 1 ||
 		jsonObjectHasKey(document, "command") || jsonObjectHasKey(document, "data") {
-		return "", false
+		return "", nil, false
 	}
 	if isBobGuidanceOperation(operation) {
 		return projectBobGuidanceReceipt(operation, document, output)
@@ -791,35 +792,48 @@ func projectBobReceipt(operation string, receipt RawReceipt) (DomainState, bool)
 	if output.Error != nil {
 		if output.OK || strings.TrimSpace(output.Error.Code) == "" || strings.TrimSpace(output.Error.Code) != output.Error.Code ||
 			strings.TrimSpace(output.Error.Message) == "" {
-			return "", false
+			return "", nil, false
 		}
-		return classifyBobErrorCode(output.Error.Code), true
+		return classifyBobErrorCode(output.Error.Code), nil, true
 	}
 	if !output.OK || !validBobMCPSuccess(operation, document, output) {
-		return "", false
+		return "", nil, false
 	}
 	if operation == "bob_inspect" {
 		inspection, ok := validBobInspectReport(output.Report, output.Workspace)
 		if !ok {
-			return "", false
+			return "", nil, false
 		}
-		return classifyBobInspection(inspection), true
+		return classifyBobInspection(inspection), nil, true
 	}
 	if operation != "bob_plan" && operation != "bob_check" {
-		return DomainSucceeded, true
+		return DomainSucceeded, nil, true
 	}
 	if output.ConflictCount != nil && *output.ConflictCount > 0 {
-		return DomainConflict, true
+		return DomainConflict, nil, true
 	}
 	for _, action := range output.Actions {
 		if IsBobConflictCode(action.Code) || action.Kind == "conflict" {
-			return DomainConflict, true
+			return DomainConflict, nil, true
 		}
 	}
 	if (output.LockChanged != nil && *output.LockChanged) || (output.Clean != nil && !*output.Clean) {
-		return DomainDrift, true
+		return DomainDrift, nil, true
 	}
-	return DomainSucceeded, true
+	return DomainSucceeded, nil, true
+}
+
+// receiptDocumentWithinLimit checks the selected parser input before
+// receiptDocument copies or unmarshals it. StructuredContent keeps precedence
+// over duplicated text, including for malformed structured values.
+func receiptDocumentWithinLimit(receipt RawReceipt, maximum int) bool {
+	if maximum <= 0 {
+		return false
+	}
+	if hasStructuredReceipt(receipt) {
+		return len(bytes.TrimSpace(receipt.Structured)) <= maximum
+	}
+	return len(strings.TrimSpace(receipt.Text)) <= maximum
 }
 
 func validBobMCPSuccess(operation string, document json.RawMessage, output bobMCPReceipt) bool {

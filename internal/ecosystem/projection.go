@@ -103,35 +103,58 @@ const (
 	DigestHitspecSearch          ReceiptDigestKind = "hitspec_search"
 	DigestCortexFailure          ReceiptDigestKind = "cortex_failure"
 	DigestCortexReceipt          ReceiptDigestKind = "cortex_receipt"
+	DigestBobContext             ReceiptDigestKind = "bob_context"
+	DigestBobPath                ReceiptDigestKind = "bob_path"
+	DigestBobPlaybook            ReceiptDigestKind = "bob_playbook"
+	DigestBobFailure             ReceiptDigestKind = "bob_failure"
 )
 
-// ReceiptDigest is a bounded allowlist of MCPHub management metadata. It must
-// never contain descriptions, schemas, queries, arguments, page data, previews,
-// error prose, or any other arbitrary server-controlled value. Items, Target,
-// Required, and Expose are canonical identifiers; numeric fields are bounded.
-// This lets the model and UI answer questions such as "how many servers?"
-// without copying raw StructuredContent into persistent session state.
+// ReceiptDigest is a bounded, product-specific allowlist of durable semantic
+// metadata. It must never contain descriptions, schemas, queries, arguments,
+// page data, previews, paths, commands, user values, error prose, or any other
+// arbitrary server-controlled value. Identifier and digest fields are
+// canonical and numeric fields are bounded. Kind controls which subset is
+// authoritative; unknown combinations are discarded by ToolProjection.Normalize.
 type ReceiptDigest struct {
-	Kind          ReceiptDigestKind `json:"kind,omitempty"`
-	Count         int64             `json:"count,omitempty"`
-	Connected     int64             `json:"connected,omitempty"`
-	TotalTools    int64             `json:"total_tools,omitempty"`
-	Calls         int64             `json:"calls,omitempty"`
-	Errors        int64             `json:"errors,omitempty"`
-	Estimated     int64             `json:"estimated_tokens,omitempty"`
-	Target        string            `json:"target,omitempty"`
-	Items         []string          `json:"items,omitempty"`
-	Required      []string          `json:"required,omitempty"`
-	Ambiguous     bool              `json:"ambiguous,omitempty"`
-	Expose        string            `json:"expose,omitempty"`
-	OriginalBytes int64             `json:"original_bytes,omitempty"`
-	BudgetBytes   int64             `json:"budget_bytes,omitempty"`
-	Cursor        int64             `json:"cursor,omitempty"`
-	NextCursor    int64             `json:"next_cursor,omitempty"`
-	TotalBytes    int64             `json:"total_bytes,omitempty"`
-	PageBytes     int64             `json:"page_bytes,omitempty"`
-	Done          bool              `json:"done,omitempty"`
-	Truncated     bool              `json:"truncated,omitempty"`
+	Kind           ReceiptDigestKind `json:"kind,omitempty"`
+	Count          int64             `json:"count,omitempty"`
+	Connected      int64             `json:"connected,omitempty"`
+	TotalTools     int64             `json:"total_tools,omitempty"`
+	Calls          int64             `json:"calls,omitempty"`
+	Errors         int64             `json:"errors,omitempty"`
+	Estimated      int64             `json:"estimated_tokens,omitempty"`
+	Target         string            `json:"target,omitempty"`
+	Items          []string          `json:"items,omitempty"`
+	Required       []string          `json:"required,omitempty"`
+	Ambiguous      bool              `json:"ambiguous,omitempty"`
+	Expose         string            `json:"expose,omitempty"`
+	OriginalBytes  int64             `json:"original_bytes,omitempty"`
+	BudgetBytes    int64             `json:"budget_bytes,omitempty"`
+	Cursor         int64             `json:"cursor,omitempty"`
+	NextCursor     int64             `json:"next_cursor,omitempty"`
+	TotalBytes     int64             `json:"total_bytes,omitempty"`
+	PageBytes      int64             `json:"page_bytes,omitempty"`
+	Done           bool              `json:"done,omitempty"`
+	Truncated      bool              `json:"truncated,omitempty"`
+	RecipeID       string            `json:"recipe_id,omitempty"`
+	RecipeVersion  int64             `json:"recipe_version,omitempty"`
+	State          string            `json:"state,omitempty"`
+	Classification string            `json:"classification,omitempty"`
+	Effect         string            `json:"effect,omitempty"`
+	Scope          string            `json:"scope,omitempty"`
+	Risk           string            `json:"risk,omitempty"`
+	FirstAction    string            `json:"first_action,omitempty"`
+	ContractDigest string            `json:"contract_digest,omitempty"`
+	ContextDigest  string            `json:"context_digest,omitempty"`
+	PlanDigest     string            `json:"plan_digest,omitempty"`
+	ConflictCount  int64             `json:"conflict_count,omitempty"`
+	ManagedFiles   int64             `json:"managed_files,omitempty"`
+	Capabilities   int64             `json:"capabilities,omitempty"`
+	ExtensionCount int64             `json:"extension_count,omitempty"`
+	PlaybookCount  int64             `json:"playbook_count,omitempty"`
+	Exists         bool              `json:"exists,omitempty"`
+	Available      bool              `json:"available,omitempty"`
+	Blocked        bool              `json:"blocked,omitempty"`
 }
 
 // ToolProjection is the semantic, persistable projection of one tool call.
@@ -364,7 +387,7 @@ func ProjectReceipt(projection ToolProjection, receipt RawReceipt) ToolProjectio
 		return finalizeToolReceipt(projection, receipt.ToolError)
 	}
 	if projected, recognized := projectMCPHubReceipt(projection, receipt); recognized {
-		projected.DomainTyped = true
+		projected.DomainTyped = projected.Domain != DomainUnknown
 		return finalizeToolReceipt(projected, receipt.ToolError)
 	}
 	if _, hasTypedError := exactJSONDocument(receipt.ErrorMeta); hasTypedError {
@@ -374,8 +397,13 @@ func ProjectReceipt(projection ToolProjection, receipt RawReceipt) ToolProjectio
 	}
 	switch projection.Specialist {
 	case "bob":
-		if domain, ok := projectBobReceipt(projection.Operation, receipt); ok {
+		// Bob proves repository-contract state, never application behavior.
+		// Clear any caller-seeded evidence before every success, failure, CLI
+		// fallback, or malformed-receipt path.
+		projection.Evidence = EvidenceNone
+		if domain, digest, ok := projectBobReceipt(projection.Operation, receipt); ok {
 			projection.Domain = domain
+			projection.Digest = digest
 			projection.DomainTyped = true
 		} else if !hasStructuredReceipt(receipt) {
 			if envelope, ok := ParseBobEnvelope(receipt.Text); ok {
@@ -682,6 +710,54 @@ func (p ToolProjection) SummaryText() string {
 			parts = append(parts, "phase "+digest.Items[0])
 		}
 		return strings.Join(parts, " · ")
+	case DigestBobContext:
+		parts := []string{"Bob repository " + digest.State}
+		if digest.RecipeID != "" && digest.RecipeVersion > 0 {
+			parts = append(parts, fmt.Sprintf("%s@%d", digest.RecipeID, digest.RecipeVersion))
+		}
+		parts = append(parts,
+			metricLabel(digest.ManagedFiles, "managed file", "managed files"),
+			metricLabel(digest.ConflictCount, "conflict", "conflicts"),
+		)
+		if digest.FirstAction != "" {
+			parts = append(parts, "next "+digest.FirstAction)
+		}
+		if digest.Truncated {
+			parts = append(parts, "bounded fields omitted")
+		}
+		return strings.Join(parts, " · ")
+	case DigestBobPath:
+		parts := []string{"Bob path " + digest.Classification, digest.State, digest.Effect}
+		if digest.FirstAction != "" {
+			parts = append(parts, "next "+digest.FirstAction)
+		}
+		if digest.Truncated {
+			parts = append(parts, "related IDs omitted")
+		}
+		return strings.Join(parts, " · ")
+	case DigestBobPlaybook:
+		parts := []string{"Bob playbook " + digest.State}
+		if digest.Target != "" {
+			parts[0] += " " + digest.Target
+		}
+		if digest.Scope != "" {
+			parts = append(parts, digest.Scope+" scope")
+		}
+		if digest.Risk != "" {
+			parts = append(parts, digest.Risk+" risk")
+		}
+		if len(digest.Required) > 0 {
+			parts = append(parts, "needs "+strings.Join(digest.Required, ", "))
+		}
+		if digest.FirstAction != "" {
+			parts = append(parts, "first "+digest.FirstAction)
+		}
+		if digest.Truncated {
+			parts = append(parts, "bounded fields omitted")
+		}
+		return strings.Join(parts, " · ")
+	case DigestBobFailure:
+		return "Bob rejected the request with " + digest.Target
 	default:
 		return ""
 	}
@@ -941,6 +1017,10 @@ func (p ToolProjection) Normalize() ToolProjection {
 			validContext = p.Specialist == "hitspec" && p.Operation == "hitspec_search_web" &&
 				p.Role == RoleDiscovery && p.Transport == TransportSucceeded &&
 				p.Domain == DomainSucceeded && p.Evidence == EvidenceCandidate
+		} else if isBobDigestKind(digest.Kind) {
+			validContext = p.Specialist == "bob" && isBobGuidanceOperation(p.Operation) &&
+				p.Role == RoleBuild && p.Transport == TransportSucceeded && p.DomainTyped &&
+				p.Evidence == EvidenceNone && validBobDigestContext(p.Operation, p.Domain, digest)
 		}
 		if !validContext {
 			p.Digest = nil
@@ -974,6 +1054,16 @@ func normalizeReceiptDigest(digest ReceiptDigest) ReceiptDigest {
 	}
 	digest.Target = canonicalIdentifier(digest.Target)
 	digest.Expose = canonicalIdentifier(digest.Expose)
+	digest.RecipeID = canonicalIdentifier(digest.RecipeID)
+	digest.State = canonicalIdentifier(digest.State)
+	digest.Classification = canonicalIdentifier(digest.Classification)
+	digest.Effect = canonicalIdentifier(digest.Effect)
+	digest.Scope = canonicalIdentifier(digest.Scope)
+	digest.Risk = canonicalIdentifier(digest.Risk)
+	digest.FirstAction = canonicalIdentifier(digest.FirstAction)
+	digest.ContractDigest = canonicalIdentifier(digest.ContractDigest)
+	digest.ContextDigest = canonicalIdentifier(digest.ContextDigest)
+	digest.PlanDigest = canonicalIdentifier(digest.PlanDigest)
 	digest.Items = normalizeDigestIdentifiers(digest.Items)
 	digest.Required = normalizeDigestIdentifiers(digest.Required)
 	digest.Count = boundedProjectionMetric(digest.Count)
@@ -988,7 +1078,43 @@ func normalizeReceiptDigest(digest ReceiptDigest) ReceiptDigest {
 	digest.NextCursor = boundedProjectionMetric(digest.NextCursor)
 	digest.TotalBytes = boundedProjectionMetric(digest.TotalBytes)
 	digest.PageBytes = boundedProjectionMetric(digest.PageBytes)
+	digest.RecipeVersion = boundedProjectionMetric(digest.RecipeVersion)
+	digest.ConflictCount = boundedProjectionMetric(digest.ConflictCount)
+	digest.ManagedFiles = boundedProjectionMetric(digest.ManagedFiles)
+	digest.Capabilities = boundedProjectionMetric(digest.Capabilities)
+	digest.ExtensionCount = boundedProjectionMetric(digest.ExtensionCount)
+	digest.PlaybookCount = boundedProjectionMetric(digest.PlaybookCount)
 	return digest
+}
+
+func isBobDigestKind(kind ReceiptDigestKind) bool {
+	switch kind {
+	case DigestBobContext, DigestBobPath, DigestBobPlaybook, DigestBobFailure:
+		return true
+	default:
+		return false
+	}
+}
+
+func validBobDigestContext(operation string, domain DomainState, digest ReceiptDigest) bool {
+	switch digest.Kind {
+	case DigestBobContext:
+		return operation == "bob_context" && digest.RecipeID != "" && digest.RecipeVersion > 0 &&
+			digest.State != "" && validPrefixedSHA256(digest.ContractDigest) &&
+			validPrefixedSHA256(digest.ContextDigest) && validPrefixedSHA256(digest.PlanDigest) &&
+			(domain == DomainSucceeded || domain == DomainDrift || domain == DomainConflict)
+	case DigestBobPath:
+		return operation == "bob_path" && digest.Classification != "" && digest.State != "" &&
+			digest.Effect != "" && (domain == DomainSucceeded || domain == DomainAttention)
+	case DigestBobPlaybook:
+		return operation == "bob_playbook" && digest.State != "" &&
+			(domain == DomainSucceeded || domain == DomainAttention || domain == DomainBlocked)
+	case DigestBobFailure:
+		return isBobGuidanceOperation(operation) && digest.Target != "" &&
+			(domain == DomainFailed || domain == DomainBlocked || domain == DomainConflict)
+	default:
+		return false
+	}
 }
 
 func normalizeDigestIdentifiers(values []string) []string {
@@ -1030,7 +1156,7 @@ func validReceiptDigestKind(value ReceiptDigestKind) bool {
 		DigestMCPHubResolve, DigestMCPHubStats, DigestMCPHubStored,
 		DigestMCPHubPage, DigestMCPHubUnavailable,
 		DigestMCPHubCursorOutOfRange, DigestMCPHubError, DigestHitspecSearch, DigestCortexFailure,
-		DigestCortexReceipt:
+		DigestCortexReceipt, DigestBobContext, DigestBobPath, DigestBobPlaybook, DigestBobFailure:
 		return true
 	default:
 		return false

@@ -3,6 +3,7 @@ package ecosystem
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -346,6 +347,51 @@ func TestMCPHubStoredAndPagedReceiptsSeparateTransientPayload(t *testing.T) {
 	}
 }
 
+func TestMCPHubContractsRequireExactCanonicalGatewayRoute(t *testing.T) {
+	const callID = "3f9a1c2e7b804d5e9f1a2b3c4d5e6f70"
+	payload := []byte(`{"content":[]}`)
+	page := json.RawMessage(`{"status":"ok","callId":"` + callID + `","mediaType":"application/json","data":"` +
+		base64.StdEncoding.EncodeToString(payload) + `","cursor":0,"nextCursor":14,"done":true,"totalBytes":14}`)
+	stored := json.RawMessage(`{"status":"stored","callId":"` + callID + `","server":"bob","tool":"bob_context","namespaced":"bob__bob_context","originalBytes":40960,"budgetBytes":32768}`)
+
+	for _, test := range []struct {
+		name       string
+		projection ToolProjection
+		receipt    json.RawMessage
+	}{
+		{name: "lookalike result page", projection: ProjectToolCall("evil__mcphub_get_result", map[string]any{"callId": callID}), receipt: page},
+		{name: "unrouted result page", projection: ProjectToolCall("mcphub_get_result", map[string]any{"callId": callID}), receipt: page},
+		{name: "lookalike management", projection: ProjectToolCall("evil__mcphub_stats", nil), receipt: json.RawMessage(`{"error":{"code":"future"}}`)},
+		{name: "unrouted management", projection: ProjectToolCall("mcphub_stats", nil), receipt: json.RawMessage(`{"error":{"code":"future"}}`)},
+		{name: "direct Bob cannot claim stored", projection: ProjectToolCall("bob__bob_context", nil), receipt: stored},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := ProjectReceipt(test.projection, RawReceipt{Structured: test.receipt})
+			if got.Domain != DomainUnknown || got.DomainTyped || got.Digest != nil || got.Evidence != EvidenceNone {
+				t.Fatalf("lookalike route gained MCPHub parser authority: %#v", got)
+			}
+		})
+	}
+}
+
+func TestMCPHubStoredReceiptRequiresPayloadToExceedBudget(t *testing.T) {
+	for _, test := range []struct {
+		name                  string
+		originalBytes, budget int
+	}{
+		{name: "equal", originalBytes: 8192, budget: 8192},
+		{name: "smaller", originalBytes: 4096, budget: 8192},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			document := json.RawMessage(fmt.Sprintf(`{"status":"stored","callId":"call-123","server":"bob","tool":"bob_context","namespaced":"bob__bob_context","originalBytes":%d,"budgetBytes":%d}`, test.originalBytes, test.budget))
+			got := ProjectReceipt(ProjectToolCall("mcphub__bob__bob_context", nil), RawReceipt{Structured: document})
+			if got.Domain != DomainUnknown || got.DomainTyped || got.Digest != nil {
+				t.Fatalf("invalid stored budget relation was accepted: %#v", got)
+			}
+		})
+	}
+}
+
 func TestMCPHubResultPageRejectsMismatchedAndOversizedPayloads(t *testing.T) {
 	const callID = "3f9a1c2e7b804d5e9f1a2b3c4d5e6f70"
 	projection := ProjectToolCall("mcphub__mcphub_get_result", map[string]any{"callId": callID})
@@ -371,15 +417,14 @@ func TestMCPHubResultPageRejectsMismatchedAndOversizedPayloads(t *testing.T) {
 	}
 }
 
-func TestMCPHubCompletedPageReparsesDownstreamSpecialistEnvelope(t *testing.T) {
+func TestMCPHubCompletedPageDoesNotGrantDownstreamParserAuthority(t *testing.T) {
 	for _, test := range []struct {
 		name string
 		body string
-		want DomainState
 	}{
-		{name: "cortex", body: `{"ok":true,"taskId":"task-1"}`, want: DomainSucceeded},
+		{name: "cortex", body: `{"ok":true,"taskId":"task-1"}`},
 		{name: "bob conflict", body: `{"schema_version":1,"ok":true,"workspace":"/repo","authority":` + bobTestAuthority +
-			` ,"plan_digest":"` + bobTestDigest + `","clean":false,"lock_changed":false,"conflict_count":2,"counts":{"create":0,"update":0,"adopt":0,"unchanged":0,"conflict":2},"warnings":[],"next_actions":[]}`, want: DomainConflict},
+			` ,"plan_digest":"` + bobTestDigest + `","clean":false,"lock_changed":false,"conflict_count":2,"counts":{"create":0,"update":0,"adopt":0,"unchanged":0,"conflict":2},"warnings":[],"next_actions":[]}`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			const callID = "3f9a1c2e7b804d5e9f1a2b3c4d5e6f70"
@@ -388,8 +433,9 @@ func TestMCPHubCompletedPageReparsesDownstreamSpecialistEnvelope(t *testing.T) {
 				base64.StdEncoding.EncodeToString(payload) + `","cursor":0,"nextCursor":` + strconv.Itoa(len(payload)) +
 				`,"done":true,"totalBytes":` + strconv.Itoa(len(payload)) + `}`
 			projection := ProjectReceipt(ProjectToolCall("mcphub__mcphub_get_result", map[string]any{"callId": callID}), RawReceipt{Structured: json.RawMessage(document)})
-			if projection.Domain != test.want || !projection.DomainTyped {
-				t.Fatalf("projection = %#v, want typed %s", projection, test.want)
+			if projection.Specialist != "mcphub" || projection.Domain != DomainSucceeded || !projection.DomainTyped ||
+				projection.Evidence != EvidenceNone || projection.Digest == nil || projection.Digest.Kind != DigestMCPHubPage {
+				t.Fatalf("bare completed page gained downstream parser authority: %#v", projection)
 			}
 		})
 	}

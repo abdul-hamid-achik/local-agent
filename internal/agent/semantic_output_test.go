@@ -18,7 +18,7 @@ type semanticOutputRecorder struct {
 	result     string
 }
 
-func TestSemanticToolContentsFeedsValidatedResultPageOnlyToActiveModel(t *testing.T) {
+func TestSemanticToolContentsSuppressesUnboundResultPageFromActiveModel(t *testing.T) {
 	const (
 		callID = "3f9a1c2e7b804d5e9f1a2b3c4d5e6f70"
 		secret = "SECRET_TRANSIENT_PAGE_CONTENT"
@@ -37,17 +37,38 @@ func TestSemanticToolContentsFeedsValidatedResultPageOnlyToActiveModel(t *testin
 	ag.SetTrustedLocalMCPServers([]config.ServerConfig{{Name: "mcphub", Command: "mcphub"}})
 	call := llm.ToolCall{Name: "mcphub__mcphub_get_result", Arguments: map[string]any{"callId": callID, "cursor": 0}}
 	modelResult, durableResult := ag.semanticToolContents(call, projection, "outer MCP text", structured, false)
-	if !strings.Contains(modelResult, secret) || !strings.Contains(modelResult, "transient; not saved") {
-		t.Fatalf("active model result = %q", modelResult)
-	}
-	if strings.Contains(durableResult, secret) || durableResult != ecosystem.SafeReceiptText(projection) {
-		t.Fatalf("durable result = %q", durableResult)
+	if modelResult != durableResult || strings.Contains(modelResult, secret) ||
+		durableResult != ecosystem.SafeReceiptText(projection) {
+		t.Fatalf("unbound page crossed parser boundary: model=%q durable=%q", modelResult, durableResult)
 	}
 	safe := SanitizeMessagesForPersistence([]llm.Message{{
 		Role: "tool", Content: modelResult, DurableContent: durableResult,
 	}})
 	if strings.Contains(safe[0].Content, secret) || safe[0].Content != durableResult {
 		t.Fatalf("persisted result = %#v", safe[0])
+	}
+}
+
+func TestSemanticToolContentsSuppressesTextOnlyUnboundResultPages(t *testing.T) {
+	const (
+		callID = "3f9a1c2e7b804d5e9f1a2b3c4d5e6f70"
+		secret = "SECRET_TEXT_ONLY_MCPHUB_PAGE"
+	)
+	ag := New(nil, nil, 8192)
+	ag.SetTrustedLocalMCPServers([]config.ServerConfig{{Name: "mcphub", Command: "mcphub"}})
+	call := llm.ToolCall{Name: "mcphub__mcphub_get_result", Arguments: map[string]any{"callId": callID, "cursor": 0}}
+	payload := []byte(`{"content":[{"type":"text","text":"` + secret + `"}]}`)
+	validPage := fmt.Sprintf(
+		`{"status":"ok","callId":%q,"mediaType":"application/json","data":%q,"cursor":0,"nextCursor":%d,"done":true,"totalBytes":%d}`,
+		callID, base64.StdEncoding.EncodeToString(payload), len(payload), len(payload),
+	)
+	for _, raw := range []string{validPage, "malformed " + secret} {
+		projection := ag.projectSemanticToolReceipt(call, raw, nil, nil, false, false, false)
+		modelResult, durableResult := ag.semanticToolContents(call, projection, raw, nil, false)
+		if modelResult != durableResult || durableResult != ecosystem.SafeReceiptText(projection) ||
+			strings.Contains(modelResult, secret) {
+			t.Fatalf("text-only page crossed parser boundary: model=%q durable=%q projection=%#v", modelResult, durableResult, projection)
+		}
 	}
 }
 
@@ -67,6 +88,55 @@ func TestSemanticToolContentsRequiresExactConfiguredMCPHubContract(t *testing.T)
 	modelResult, durableResult := ag.semanticToolContents(call, projection, "outer", structured, false)
 	if modelResult != durableResult || durableResult != ecosystem.SafeReceiptText(projection) || strings.Contains(modelResult, secret) {
 		t.Fatalf("unconfigured MCPHub contract crossed transient boundary: model=%q durable=%q", modelResult, durableResult)
+	}
+}
+
+func TestTrustedNamespaceAliasesReceiveExactBobParsingWithoutTrustingLookalikes(t *testing.T) {
+	structured := readAgentBobFixture(t, "context-clean-v1.json")
+	ag := New(nil, nil, 8192)
+	ag.SetTrustedLocalMCPServers([]config.ServerConfig{
+		{
+			Name: "builder", Command: "bob", Transport: "stdio",
+			Trust: &config.MCPTrustConfig{LocalOwner: "bob", ReadOnly: []string{"bob_context"}},
+		},
+		{
+			Name: "gateway", Command: "mcphub", Transport: "stdio",
+			Trust: &config.MCPTrustConfig{
+				LocalOwner: "mcphub", Gateway: config.MCPTrustGatewayMCPHub,
+				ReadOnly: []string{"bob__bob_context", "mcphub_get_result"},
+			},
+		},
+	})
+
+	trusted := []llm.ToolCall{
+		{Name: "builder__bob_context"},
+		{Name: "gateway__bob__bob_context"},
+		{Name: "gateway__mcphub_call_tool", Arguments: map[string]any{"server": "bob", "tool": "bob_context", "arguments": map[string]any{"workspace": "."}}},
+	}
+	for _, call := range trusted {
+		t.Run(call.Name, func(t *testing.T) {
+			projection := ag.projectSemanticToolReceipt(call, string(structured), structured, nil, false, false, false)
+			if projection.Specialist != "bob" || projection.Operation != "bob_context" ||
+				projection.Domain != ecosystem.DomainSucceeded || !projection.DomainTyped ||
+				projection.Digest == nil || projection.Digest.Kind != ecosystem.DigestBobContext {
+				t.Fatalf("trusted alias projection = %#v", projection)
+			}
+			modelResult, durableResult := ag.semanticToolContents(call, projection, string(structured), structured, false)
+			if !strings.Contains(modelResult, "Bob guidance (validated transient content; not saved)") ||
+				modelResult == durableResult || strings.Contains(durableResult, "/workspace") {
+				t.Fatalf("trusted alias content model=%q durable=%q", modelResult, durableResult)
+			}
+		})
+	}
+
+	for _, call := range []llm.ToolCall{{Name: "bob__bob_context"}, {Name: "evil__bob_context"}} {
+		t.Run("untrusted_"+call.Name, func(t *testing.T) {
+			projection := ag.projectSemanticToolReceipt(call, string(structured), structured, nil, false, false, false)
+			modelResult, durableResult := ag.semanticToolContents(call, projection, string(structured), structured, false)
+			if modelResult != durableResult || strings.Contains(modelResult, "/workspace") || strings.Contains(modelResult, "validated transient") {
+				t.Fatalf("untrusted lookalike crossed Bob transient boundary: model=%q durable=%q projection=%#v", modelResult, durableResult, projection)
+			}
+		})
 	}
 }
 
