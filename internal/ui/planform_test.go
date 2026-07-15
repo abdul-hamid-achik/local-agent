@@ -31,6 +31,15 @@ func TestPlanForm_NewPrefilled(t *testing.T) {
 	}
 }
 
+func TestPlanForm_PrefillPreservesComposerSizedTask(t *testing.T) {
+	task := strings.Repeat("界", 2048)
+	pf := NewPlanFormState(task)
+
+	if got := pf.Fields[0].Input.Value(); got != task {
+		t.Fatalf("prefilled task was truncated: got %d runes, want %d", len([]rune(got)), len([]rune(task)))
+	}
+}
+
 func TestPlanForm_AssemblePrompt(t *testing.T) {
 	pf := NewPlanFormState("build a REST API")
 	pf.Fields[1].OptionIndex = 1 // "module"
@@ -47,8 +56,45 @@ func TestPlanForm_AssemblePrompt(t *testing.T) {
 	if !strings.Contains(prompt, "keep backward compat") {
 		t.Error("prompt should contain focus")
 	}
-	if !strings.Contains(prompt, "step-by-step plan") {
-		t.Error("prompt should contain plan instruction")
+	for _, section := range []string{"Assumptions and open questions", "Ordered steps and dependencies", "Acceptance criteria", "Verification commands or checks"} {
+		if !strings.Contains(prompt, section) {
+			t.Errorf("prompt should require %q", section)
+		}
+	}
+}
+
+func TestPlanForm_RequiresTaskBeforeAdvancingOrSubmitting(t *testing.T) {
+	m := newTestModel(t)
+	m.openPlanForm("")
+
+	updated, cmd := m.Update(enterKey())
+	m = updated.(*Model)
+	if m.planFormState == nil {
+		t.Fatal("empty task closed the plan form")
+	}
+	if cmd != nil || m.planFormState.ActiveField != 0 {
+		t.Fatalf("empty task advanced or dispatched: cmd=%v field=%d", cmd != nil, m.planFormState.ActiveField)
+	}
+	if !strings.Contains(m.View().Content, "Task is required") {
+		t.Fatalf("empty task has no inline validation:\n%s", m.View().Content)
+	}
+
+	updated, _ = m.Update(charKey('x'))
+	m = updated.(*Model)
+	if m.planFormState.errorText != "" {
+		t.Fatalf("valid task retained error %q", m.planFormState.errorText)
+	}
+
+	// Clearing the task after tabbing forward must still prevent final submit.
+	m.planFormState.Fields[0].Input.SetValue("")
+	m.planFormState.ActiveField = len(m.planFormState.Fields) - 1
+	updated, cmd = m.Update(enterKey())
+	m = updated.(*Model)
+	if m.planFormState == nil {
+		t.Fatal("empty final submit closed the plan form")
+	}
+	if cmd != nil || m.planFormState.ActiveField != 0 || m.planFormState.errorText == "" {
+		t.Fatalf("empty final submit was not returned to Task: cmd=%v field=%d error=%q", cmd != nil, m.planFormState.ActiveField, m.planFormState.errorText)
 	}
 }
 

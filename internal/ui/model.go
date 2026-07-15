@@ -3328,6 +3328,14 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 		m.resumeFollow()
 		return nil
 
+	case command.ActionOpenPlan:
+		if m.goalRuntime != nil {
+			return m.rejectPromptWhileGoalAttached(result.Data, true)
+		}
+		m.setMode(ModePlan)
+		m.openPlanForm(result.Data)
+		return nil
+
 	case command.ActionOpenGoal:
 		var err error
 		var goalCmd tea.Cmd
@@ -4497,6 +4505,11 @@ func (m *Model) closePlanForm() {
 
 // submitPlanFormPrompt sends the assembled plan prompt to the agent.
 func (m *Model) submitPlanFormPrompt(prompt string) tea.Cmd {
+	// The form is a PLAN authority boundary, not a prompt template that can be
+	// dispatched under whichever conversational preset happens to be active.
+	// Reassert the read-only contract defensively before every submission,
+	// including legacy PlanFormCompletedMsg callers.
+	m.setMode(ModePlan)
 	return m.sendToAgent(prompt)
 }
 

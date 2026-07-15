@@ -44,6 +44,25 @@ func TestBuiltin_New(t *testing.T) {
 	}
 }
 
+func TestBuiltin_Plan(t *testing.T) {
+	r := newTestRegistry()
+	for _, test := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "empty task"},
+		{name: "prefilled task", args: []string{"refactor", "the", "router"}, want: "refactor the router"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result := r.Execute(&Context{}, "plan", test.args)
+			if result.Error != "" || result.Action != ActionOpenPlan || result.Data != test.want {
+				t.Fatalf("/plan %v = %#v", test.args, result)
+			}
+		})
+	}
+}
+
 func TestBuiltin_Recover(t *testing.T) {
 	r := newTestRegistry()
 	if result := r.Execute(&Context{}, "recover", nil); result.Error != "" || result.Action != ActionRecoverExecution {
@@ -709,7 +728,7 @@ func TestBuiltinScopeParsesProcessLocalReadRootActions(t *testing.T) {
 func TestBuiltinRegistrySurfaceIsUniqueAndExecutable(t *testing.T) {
 	r := newTestRegistry()
 	wantNames := []string{
-		"help", "clear", "goal", "model", "recover", "agent", "load",
+		"help", "clear", "plan", "goal", "model", "recover", "agent", "load",
 		"scope", "unload", "skill", "servers", "ice", "sessions", "artifacts",
 		"changes", "commit", "stats", "export", "import", "checkpoint",
 		"checkpoints", "restore", "exit",

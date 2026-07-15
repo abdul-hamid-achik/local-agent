@@ -7,13 +7,13 @@
 │ ────────────────────────────────── │
 │ ▸ /help · Show help overlay with … │
 │   /clear · Clear conversation his… │
+│   /plan · Open a guided read-only… │
 │   /goal · Create, inspect, pause,… │
 │   /model · Show, switch, or list … │
 │   /recover · Review a paused exec… │
 │   /agent · Show or switch agent p… │
 │   /load · Load a markdown file as… │
 │   /scope · List or manage tempora… │
-│   /unload · Remove loaded context… │
 │ esc cancel · enter select · ↑/↓    │
 ╰────────────────────────────────────╯
 ▌❯ /

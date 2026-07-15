@@ -24,7 +24,10 @@ type PlanFormField struct {
 type PlanFormState struct {
 	Fields      []PlanFormField
 	ActiveField int
+	errorText   string
 }
+
+const planTaskCharLimit = 32 * 1024
 
 // NewPlanFormState creates a plan form pre-filled with the user's task description.
 // Presentation options are ordered as theme-dark, then reduced-motion so older
@@ -42,7 +45,9 @@ func NewPlanFormState(task string, presentation ...bool) *PlanFormState {
 	taskInput.SetStyles(semanticTextInputStyles(isDark, reducedMotion))
 	taskInput.Placeholder = "Describe the task..."
 	taskInput.Prompt = ""
-	taskInput.CharLimit = 512
+	// Match the main composer bound so `/plan <task>` remains lossless when it
+	// moves into the reviewed form. Focus remains intentionally shorter.
+	taskInput.CharLimit = planTaskCharLimit
 	taskInput.SetValue(task)
 	taskInput.Focus()
 
@@ -87,8 +92,25 @@ func (pf *PlanFormState) AssemblePrompt() string {
 	if focus != "" {
 		fmt.Fprintf(&b, "Focus: %s\n", focus)
 	}
-	b.WriteString("\nProvide a step-by-step plan.")
+	b.WriteString("\nReturn an implementation-ready plan with these sections:\n")
+	b.WriteString("- Objective and constraints\n")
+	b.WriteString("- Assumptions and open questions\n")
+	b.WriteString("- Affected files or components\n")
+	b.WriteString("- Ordered steps and dependencies\n")
+	b.WriteString("- Risks and mitigations\n")
+	b.WriteString("- Acceptance criteria\n")
+	b.WriteString("- Verification commands or checks\n")
+	b.WriteString("Do not modify files or run mutating tools.")
 	return b.String()
+}
+
+func (pf *PlanFormState) taskValid() bool {
+	if strings.TrimSpace(pf.Fields[0].Input.Value()) != "" {
+		pf.errorText = ""
+		return true
+	}
+	pf.errorText = "Task is required"
+	return false
 }
 
 // updatePlanForm handles key events within the inline plan form.
@@ -107,7 +129,14 @@ func (m *Model) updatePlanForm(msg tea.KeyPressMsg) (bool, bool) {
 		return false, true
 
 	case msg.Code == tea.KeyEnter:
+		if pf.ActiveField == 0 && !pf.taskValid() {
+			return false, false
+		}
 		if pf.ActiveField == len(pf.Fields)-1 {
+			if !pf.taskValid() {
+				m.advancePlanFormField(-pf.ActiveField)
+				return false, false
+			}
 			// Submit
 			return true, false
 		}
@@ -159,6 +188,9 @@ func (m *Model) updatePlanForm(msg tea.KeyPressMsg) (bool, bool) {
 	// Forward other keys to active text field
 	if field.Kind == "text" {
 		field.Input, _ = field.Input.Update(msg)
+		if pf.ActiveField == 0 && strings.TrimSpace(field.Input.Value()) != "" {
+			pf.errorText = ""
+		}
 	}
 
 	return false, false
@@ -301,6 +333,10 @@ func (m *Model) renderCompactPlanFormView(pf *PlanFormState, contentWidth int) (
 		b.WriteString(fieldView)
 		cursor = offsetCursor(cursor, 0, controlY)
 	}
+	if pf.errorText != "" {
+		b.WriteString("\n")
+		b.WriteString(m.styles.ErrorText.UnsetPaddingLeft().Render(truncateDisplay("! "+pf.errorText, max(1, contentWidth-2))))
+	}
 
 	return renderInlineFormFrame(m.styles, b.String(), planFormFooter(pf, contentWidth), m.width), pickerFrameCursor(cursor)
 }
@@ -345,6 +381,10 @@ func (m *Model) renderPlanFormView() (string, *tea.Cursor) {
 			if active {
 				cursor = offsetCursor(fieldCursor, 0, controlY)
 			}
+		}
+		if i == 0 && pf.errorText != "" {
+			b.WriteString("\n")
+			b.WriteString(m.styles.ErrorText.UnsetPaddingLeft().Render(truncateDisplay("! "+pf.errorText, max(1, contentWidth-2))))
 		}
 		if i < len(pf.Fields)-1 {
 			b.WriteString("\n\n")

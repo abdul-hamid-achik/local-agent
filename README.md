@@ -158,7 +158,10 @@ Cycle modes with `shift+tab`.
 The mode policy is enforced by the host, not just by a prompt. A model-generated
 mutation in PLAN is returned as blocked. `shift+tab` only changes authority; it
 never opens a form or creates work. Ordinary prompts are sent immediately in all
-three modes. AUTO is autonomous for validated workspace writes, directory
+three modes. `/plan [task]` is the guided planning entrypoint: it switches to
+PLAN, opens the inline Task/Scope/Focus review, and submits an
+implementation-ready read-only planning request. It does not create a durable
+goal. AUTO is autonomous for validated workspace writes, directory
 creation, host-catalogued local MCP routes, and a static catalog of ordinary
 build, test, lint, formatting, and inspection commands. It still asks before
 Git, deletion, dynamic shell expansion, file
@@ -569,6 +572,7 @@ by its help. It never retries the original tool.
 |---|---|
 | `/help` | Open help |
 | `/clear`, `/new` | Clear conversation state |
+| `/plan [task]` | Enter PLAN and open the guided read-only Task/Scope/Focus form, optionally prefilled |
 | `/model` or `/models` | Open the model picker |
 | `/model list` | List admitted models from the live Ollama inventory |
 | `/model <name>` | Switch and pin an available Ollama model |

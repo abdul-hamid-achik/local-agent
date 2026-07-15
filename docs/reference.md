@@ -92,6 +92,7 @@ Inspection is read-only. Applying evidence requires the exact revision and event
 |---|---|
 | `/help` | Open keyboard and command help |
 | `/clear`, `/new` | Start a clean conversation |
+| `/plan [task]` | Enter PLAN and open the guided read-only Task/Scope/Focus form, optionally prefilled |
 | `/model`, `/models` | Open the live Ollama inventory |
 | `/model list` | List currently admitted models |
 | `/model <name>` | Switch to and pin a model |

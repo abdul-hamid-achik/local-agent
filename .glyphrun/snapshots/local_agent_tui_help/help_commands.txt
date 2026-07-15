@@ -14,6 +14,7 @@
                              │   /help             Show help overlay with shortcuts and   │
                              │                     commands                               │
                              │   /clear            Clear conversation history             │
+                             │   /plan             Open a guided read-only planning form  │
                              │   /goal             Create, inspect, pause, resume,        │
                              │                     budget, or drop a durable goal         │
                              │   /goal new         Define a durable objective,            │
@@ -30,6 +31,5 @@
                              │   /load             Load a markdown file as context        │
                              │   /scope            List or manage temporary external      │
                              │                     read-only grants                       │
-                             │   /scope add-read   Grant process-local read-only access   │
-─────────────────────────────│ esc/q close · j/k scroll · pgup/pgdn page · 49%            │────────────────────────────
+─────────────────────────────│ esc/q close · j/k scroll · pgup/pgdn page · 48%            │────────────────────────────
                              ╰────────────────────────────────────────────────────────────╯

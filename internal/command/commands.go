@@ -45,6 +45,18 @@ func RegisterBuiltins(r *Registry) {
 	})
 
 	r.Register(&Command{
+		Name:        "plan",
+		Description: "Open a guided read-only planning form",
+		Usage:       "/plan [task]",
+		Handler: func(_ *Context, args []string) Result {
+			return Result{
+				Action: ActionOpenPlan,
+				Data:   strings.TrimSpace(strings.Join(args, " ")),
+			}
+		},
+	})
+
+	r.Register(&Command{
 		Name:        "goal",
 		Aliases:     []string{"g"},
 		Description: "Create, inspect, pause, resume, budget, or drop a durable goal",

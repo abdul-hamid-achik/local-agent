@@ -147,6 +147,7 @@ const (
 	ActionCheckpoint               // Save a conversation checkpoint (Data = optional label)
 	ActionListCheckpoints          // List saved checkpoints
 	ActionRestoreCheckpoint        // Restore a checkpoint (Data = id)
+	ActionOpenPlan                 // Open the guided PLAN form (Data = optional task)
 	ActionOpenGoal                 // Open the goal form (Data = optional objective)
 	ActionShowGoal                 // Show the active goal summary
 	ActionPauseGoal                // Pause automatic goal continuation

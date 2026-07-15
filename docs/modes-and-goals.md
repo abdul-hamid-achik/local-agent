@@ -20,6 +20,12 @@ PLAN exposes workspace reads, search, listing, diff, existence checks, and memor
 
 Use PLAN to understand a repository, compare approaches, or produce a change plan without editing.
 
+Run `/plan [task]` for a guided entrypoint. It switches to PLAN and opens the
+inline Task/Scope/Focus form; submitting it requests an implementation-ready
+plan with assumptions, affected components, dependencies, risks, acceptance
+criteria, and verification checks. The host still exposes read-only authority,
+and the form does not create a durable goal.
+
 ## AUTO
 
 AUTO sends ordinary prompts directly with proactive access to the NORMAL tool surface. Validated workspace writes and directory creation, exact trusted local MCP routes, and static ordinary development commands can proceed without interruption. The command catalog covers routine build, test, lint, format, and inspection work. Raw Git remains approval-gated because repository configuration, filters, and hooks can execute programs even during commands that look read-only; use `/changes` and `/commit` for the host-owned paths.

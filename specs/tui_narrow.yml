@@ -1,12 +1,13 @@
 version: 1
-contractHash: sha256:378b7bf846d40ced5095db43594a23603610362f2a86a9245807bd60bc5763c9
+contractHash: sha256:c6d23e5a5513c6fe236899448c2950ffad41ab5f71b498f98b086bdbaadb6f60
 name: local_agent_tui_narrow
 
 intent: |
   a user can begin at the supported 30x12 minimum, then keep a full-width
   conversation at 40 columns while the mode rail, composer-owned command
-  completion, and nested settings, runtime, and help overlays remain legible
-  while strict slash-command parsing fails closed before quitting cleanly.
+  completion, guided PLAN form, and nested settings, runtime, and help overlays
+  remain legible while strict slash-command parsing fails closed before
+  quitting cleanly.
 
 target:
   cmd: ["${projectRoot}/bin/local-agent"]
@@ -68,6 +69,26 @@ steps:
         contains: "▌❯ Ask"
       timeoutMs: 2000
   - snapshot: minimum_plan_form
+  - wait:
+      screen:
+        notContains: "Plan · 1/3"
+      timeoutMs: 2000
+  - type: "/plan map API"
+  - wait:
+      screen:
+        notContains: "Commands"
+      timeoutMs: 2000
+  - press: "enter"
+  - wait:
+      screen:
+        contains: "Plan · 1/3"
+      timeoutMs: 2000
+  - wait:
+      screen:
+        contains: "map API"
+      timeoutMs: 2000
+  - snapshot: minimum_guided_plan
+  - press: "esc"
   - wait:
       screen:
         notContains: "Plan · 1/3"
@@ -192,6 +213,12 @@ outcomes:
     verify:
       snapshot:
         name: minimum_plan_form
+        mode: text
+  - id: minimum_guided_plan_is_usable
+    description: /plan opens a prefilled read-only planning form at the supported minimum
+    verify:
+      snapshot:
+        name: minimum_guided_plan
         mode: text
   - id: narrow_conversation_is_directly_usable
     description: the conversation keeps the complete narrow terminal width without persistent chrome
