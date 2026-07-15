@@ -1,0 +1,585 @@
+{
+  "schema_version": 1,
+  "reviewed_revision": "64b3da1cffbabd2732c47715a6692ffdf8207a8e",
+  "cases": [
+    {
+      "id": "bob-check-v1-success",
+      "source": {
+        "product": "Bob",
+        "version": "structured MCP receipt schema_version=1",
+        "reference": "existing exact Bob consumer contract at reviewed local-agent revision"
+      },
+      "document": "bob/check-v1-success.json",
+      "tool": "bob__bob_check",
+      "delivery": "structured",
+      "forbidden_persistence_markers": [
+        "SECRET_BOB_CHECK_WARNING",
+        "/repo"
+      ],
+      "expected": {
+        "projection": {
+          "specialist": "bob",
+          "operation": "bob_check",
+          "role": "build",
+          "transport": "succeeded",
+          "domain": "succeeded",
+          "domainTyped": true,
+          "route": {
+            "server": "bob",
+            "tool": "bob_check"
+          }
+        },
+        "safe_receipt_text": "tool receipt specialist=bob operation=bob_check transport=succeeded domain=succeeded",
+        "transient_content": false
+      }
+    },
+    {
+      "id": "bob-inspect-v1-success",
+      "source": {
+        "product": "Bob",
+        "version": "structured MCP receipt schema_version=1",
+        "reference": "existing exact Bob consumer contract at reviewed local-agent revision"
+      },
+      "document": "bob/inspect-v1-success.json",
+      "tool": "bob__bob_inspect",
+      "delivery": "structured",
+      "forbidden_persistence_markers": [
+        "SECRET_BOB_INSPECT_WARNING",
+        "/repo"
+      ],
+      "expected": {
+        "projection": {
+          "specialist": "bob",
+          "operation": "bob_inspect",
+          "role": "build",
+          "transport": "succeeded",
+          "domain": "succeeded",
+          "domainTyped": true,
+          "route": {
+            "server": "bob",
+            "tool": "bob_inspect"
+          }
+        },
+        "safe_receipt_text": "tool receipt specialist=bob operation=bob_inspect transport=succeeded domain=succeeded",
+        "transient_content": false
+      }
+    },
+    {
+      "id": "bob-plan-v1-success",
+      "source": {
+        "product": "Bob",
+        "version": "structured MCP receipt schema_version=1",
+        "reference": "existing exact Bob consumer contract at reviewed local-agent revision"
+      },
+      "document": "bob/plan-v1-success.json",
+      "tool": "bob__bob_plan",
+      "delivery": "structured",
+      "forbidden_persistence_markers": [
+        "SECRET_BOB_PLAN_WARNING",
+        "/repo"
+      ],
+      "expected": {
+        "projection": {
+          "specialist": "bob",
+          "operation": "bob_plan",
+          "role": "build",
+          "transport": "succeeded",
+          "domain": "succeeded",
+          "domainTyped": true,
+          "route": {
+            "server": "bob",
+            "tool": "bob_plan"
+          }
+        },
+        "safe_receipt_text": "tool receipt specialist=bob operation=bob_plan transport=succeeded domain=succeeded",
+        "transient_content": false
+      }
+    },
+    {
+      "id": "bob-validate-manifest-v1-success",
+      "source": {
+        "product": "Bob",
+        "version": "structured MCP receipt schema_version=1",
+        "reference": "existing exact Bob consumer contract at reviewed local-agent revision"
+      },
+      "document": "bob/validate-manifest-v1-success.json",
+      "tool": "bob__bob_validate_manifest",
+      "delivery": "structured",
+      "forbidden_persistence_markers": [
+        "SECRET_BOB_MANIFEST_DESCRIPTION",
+        "/repo"
+      ],
+      "expected": {
+        "projection": {
+          "specialist": "bob",
+          "operation": "bob_validate_manifest",
+          "role": "build",
+          "transport": "succeeded",
+          "domain": "succeeded",
+          "domainTyped": true,
+          "route": {
+            "server": "bob",
+            "tool": "bob_validate_manifest"
+          }
+        },
+        "safe_receipt_text": "tool receipt specialist=bob operation=bob_validate_manifest transport=succeeded domain=succeeded",
+        "transient_content": false
+      }
+    },
+    {
+      "id": "bob-recipe-describe-v1-success",
+      "source": {
+        "product": "Bob",
+        "version": "structured MCP receipt schema_version=1",
+        "reference": "existing exact Bob consumer contract at reviewed local-agent revision"
+      },
+      "document": "bob/recipe-describe-v1-success.json",
+      "tool": "bob__bob_recipe_describe",
+      "delivery": "structured",
+      "forbidden_persistence_markers": [
+        "SECRET_BOB_RECIPE_DESCRIPTION"
+      ],
+      "expected": {
+        "projection": {
+          "specialist": "bob",
+          "operation": "bob_recipe_describe",
+          "role": "build",
+          "transport": "succeeded",
+          "domain": "succeeded",
+          "domainTyped": true,
+          "route": {
+            "server": "bob",
+            "tool": "bob_recipe_describe"
+          }
+        },
+        "safe_receipt_text": "tool receipt specialist=bob operation=bob_recipe_describe transport=succeeded domain=succeeded",
+        "transient_content": false
+      }
+    },
+    {
+      "id": "bob-stats-v1-success",
+      "source": {
+        "product": "Bob",
+        "version": "structured MCP receipt schema_version=1",
+        "reference": "existing exact Bob consumer contract at reviewed local-agent revision"
+      },
+      "document": "bob/stats-v1-success.json",
+      "tool": "bob__bob_stats",
+      "delivery": "structured",
+      "forbidden_persistence_markers": [
+        "SECRET_BOB_STATS_NOTE",
+        "/repo"
+      ],
+      "expected": {
+        "projection": {
+          "specialist": "bob",
+          "operation": "bob_stats",
+          "role": "build",
+          "transport": "succeeded",
+          "domain": "succeeded",
+          "domainTyped": true,
+          "route": {
+            "server": "bob",
+            "tool": "bob_stats"
+          }
+        },
+        "safe_receipt_text": "tool receipt specialist=bob operation=bob_stats transport=succeeded domain=succeeded",
+        "transient_content": false
+      }
+    },
+    {
+      "id": "cortex-shared-envelope-v1-success",
+      "source": {
+        "product": "Cortex",
+        "version": "shared lifecycle envelope v1 at reviewed local-agent revision",
+        "reference": "existing exact Cortex consumer contract at reviewed local-agent revision"
+      },
+      "document": "cortex/shared-envelope-v1-success.json",
+      "tool": "mcphub__cortex__cortex_open_task",
+      "delivery": "structured",
+      "forbidden_persistence_markers": [
+        "SECRET_CORTEX_SUCCESS_SUMMARY"
+      ],
+      "expected": {
+        "projection": {
+          "specialist": "cortex",
+          "operation": "cortex_open_task",
+          "role": "coordination",
+          "transport": "succeeded",
+          "domain": "succeeded",
+          "domainTyped": true,
+          "route": {
+            "gateway": "mcphub",
+            "server": "cortex",
+            "tool": "cortex_open_task",
+            "lazy": true
+          },
+          "digest": {
+            "kind": "cortex_receipt",
+            "target": "task-fixture",
+            "items": [
+              "orient"
+            ]
+          }
+        },
+        "safe_receipt_text": "tool receipt specialist=cortex operation=cortex_open_task transport=succeeded domain=succeeded\nsummary: Cortex accepted the request for task-fixture · phase orient",
+        "transient_content": false
+      }
+    },
+    {
+      "id": "cortex-gate-rejection-v1",
+      "source": {
+        "product": "Cortex",
+        "version": "shared lifecycle envelope v1 at reviewed local-agent revision",
+        "reference": "existing exact Cortex consumer contract at reviewed local-agent revision"
+      },
+      "document": "cortex/gate-rejection-v1.json",
+      "tool": "mcphub__cortex__cortex_plan",
+      "delivery": "structured",
+      "forbidden_persistence_markers": [
+        "SECRET_CORTEX_GATE_REASON",
+        "SECRET_CORTEX_BLOCKER"
+      ],
+      "expected": {
+        "projection": {
+          "specialist": "cortex",
+          "operation": "cortex_plan",
+          "role": "coordination",
+          "transport": "succeeded",
+          "domain": "failed",
+          "domainTyped": true,
+          "route": {
+            "gateway": "mcphub",
+            "server": "cortex",
+            "tool": "cortex_plan",
+            "lazy": true
+          },
+          "digest": {
+            "kind": "cortex_failure",
+            "target": "task-fixture"
+          }
+        },
+        "safe_receipt_text": "tool receipt specialist=cortex operation=cortex_plan transport=succeeded domain=failed\nsummary: Cortex rejected the request for task-fixture",
+        "transient_content": false
+      }
+    },
+    {
+      "id": "mcphub-stored-v1",
+      "source": {
+        "product": "MCPHub",
+        "version": "stored result/page envelope v1 (2026-07-15 baseline)",
+        "reference": "existing exact MCPHub consumer contract at reviewed local-agent revision"
+      },
+      "document": "mcphub/stored-v1.json",
+      "tool": "mcphub__mcphub_call_tool",
+      "arguments": {
+        "server": "cortex",
+        "tool": "cortex_status"
+      },
+      "delivery": "structured",
+      "forbidden_persistence_markers": [
+        "SECRET_MCPHUB_STORED_PREVIEW",
+        "SECRET_MCPHUB_STORED_ACTION"
+      ],
+      "expected": {
+        "projection": {
+          "specialist": "cortex",
+          "operation": "cortex_status",
+          "role": "coordination",
+          "transport": "succeeded",
+          "domain": "attention",
+          "domainTyped": true,
+          "route": {
+            "gateway": "mcphub",
+            "server": "cortex",
+            "tool": "cortex_status",
+            "call_id": "3f9a1c2e7b804d5e9f1a2b3c4d5e6f70",
+            "lazy": true
+          },
+          "digest": {
+            "kind": "mcphub_stored",
+            "original_bytes": 40960,
+            "budget_bytes": 32768
+          }
+        },
+        "safe_receipt_text": "tool receipt specialist=cortex operation=cortex_status transport=succeeded domain=attention call_id=3f9a1c2e7b804d5e9f1a2b3c4d5e6f70\nsummary: result stored · 40960 bytes · fetch 3f9a1c2e7b804d5e9f1a2b3c4d5e6f70",
+        "transient_content": false
+      }
+    },
+    {
+      "id": "mcphub-complete-page-v1",
+      "source": {
+        "product": "MCPHub",
+        "version": "stored result/page envelope v1 (2026-07-15 baseline)",
+        "reference": "existing exact MCPHub consumer contract at reviewed local-agent revision"
+      },
+      "document": "mcphub/complete-page-v1.json",
+      "tool": "mcphub__mcphub_get_result",
+      "arguments": {
+        "callId": "3f9a1c2e7b804d5e9f1a2b3c4d5e6f70",
+        "cursor": 0
+      },
+      "delivery": "structured",
+      "forbidden_persistence_markers": [
+        "SECRET_MCPHUB_COMPLETE_PREVIEW"
+      ],
+      "expected": {
+        "projection": {
+          "specialist": "mcphub",
+          "operation": "mcphub_get_result",
+          "role": "gateway",
+          "transport": "succeeded",
+          "domain": "succeeded",
+          "domainTyped": true,
+          "route": {
+            "server": "mcphub",
+            "tool": "mcphub_get_result",
+            "call_id": "3f9a1c2e7b804d5e9f1a2b3c4d5e6f70"
+          },
+          "digest": {
+            "kind": "mcphub_page",
+            "next_cursor": 66,
+            "total_bytes": 66,
+            "page_bytes": 66,
+            "done": true
+          }
+        },
+        "safe_receipt_text": "tool receipt specialist=mcphub operation=mcphub_get_result transport=succeeded domain=succeeded call_id=3f9a1c2e7b804d5e9f1a2b3c4d5e6f70\nsummary: bytes 0–66 of 66 · final page · payload omitted from persistent context",
+        "transient_content": true
+      }
+    },
+    {
+      "id": "mcphub-call-id-mismatch-v1",
+      "source": {
+        "product": "MCPHub",
+        "version": "stored result/page envelope v1 (2026-07-15 baseline)",
+        "reference": "existing exact MCPHub consumer contract at reviewed local-agent revision"
+      },
+      "document": "mcphub/call-id-mismatch-v1.json",
+      "tool": "mcphub__mcphub_get_result",
+      "arguments": {
+        "callId": "3f9a1c2e7b804d5e9f1a2b3c4d5e6f70",
+        "cursor": 0
+      },
+      "delivery": "structured",
+      "must_fail_closed": true,
+      "forbidden_persistence_markers": [
+        "SECRET_MCPHUB_MISMATCH_PREVIEW"
+      ],
+      "expected": {
+        "projection": {
+          "specialist": "mcphub",
+          "operation": "mcphub_get_result",
+          "role": "gateway",
+          "transport": "succeeded",
+          "domain": "failed",
+          "domainTyped": true,
+          "route": {
+            "server": "mcphub",
+            "tool": "mcphub_get_result",
+            "call_id": "3f9a1c2e7b804d5e9f1a2b3c4d5e6f70"
+          },
+          "digest": {
+            "kind": "mcphub_error"
+          }
+        },
+        "safe_receipt_text": "tool receipt specialist=mcphub operation=mcphub_get_result transport=succeeded domain=failed call_id=3f9a1c2e7b804d5e9f1a2b3c4d5e6f70\nsummary: MCPHub reported an error",
+        "transient_content": false
+      }
+    },
+    {
+      "id": "unknown-structured-output-v1",
+      "source": {
+        "product": "local-agent",
+        "version": "LA-0 regression corpus v1",
+        "reference": "fail-closed parser-boundary regression case"
+      },
+      "document": "unknown/structured-output-v1.json",
+      "tool": "cortex__cortex_status",
+      "delivery": "structured",
+      "must_fail_closed": true,
+      "forbidden_persistence_markers": [
+        "SECRET_UNKNOWN_STRUCTURED_RESULT"
+      ],
+      "expected": {
+        "projection": {
+          "specialist": "cortex",
+          "operation": "cortex_status",
+          "role": "coordination",
+          "transport": "succeeded",
+          "domain": "unknown",
+          "route": {
+            "server": "cortex",
+            "tool": "cortex_status"
+          }
+        },
+        "safe_receipt_text": "tool receipt specialist=cortex operation=cortex_status transport=succeeded domain=unknown",
+        "transient_content": false
+      }
+    },
+    {
+      "id": "transport-failure-v1",
+      "source": {
+        "product": "local-agent",
+        "version": "LA-0 regression corpus v1",
+        "reference": "fail-closed parser-boundary regression case"
+      },
+      "document": "failure/transport-v1.json",
+      "tool": "bob__bob_check",
+      "delivery": "transport_failure",
+      "must_fail_closed": true,
+      "forbidden_persistence_markers": [
+        "SECRET_TRANSPORT_FAILURE_PROSE"
+      ],
+      "expected": {
+        "projection": {
+          "specialist": "bob",
+          "operation": "bob_check",
+          "role": "build",
+          "transport": "failed",
+          "domain": "failed",
+          "route": {
+            "server": "bob",
+            "tool": "bob_check"
+          }
+        },
+        "safe_receipt_text": "tool receipt specialist=bob operation=bob_check transport=failed domain=failed",
+        "transient_content": false
+      }
+    },
+    {
+      "id": "bob-malformed-missing-fields-v1",
+      "source": {
+        "product": "Bob",
+        "version": "structured MCP receipt schema_version=1",
+        "reference": "existing exact Bob consumer contract at reviewed local-agent revision"
+      },
+      "document": "bob/malformed-missing-fields-v1.json",
+      "tool": "bob__bob_check",
+      "delivery": "structured",
+      "must_fail_closed": true,
+      "forbidden_persistence_markers": [
+        "SECRET_BOB_MALFORMED_WARNING",
+        "/repo"
+      ],
+      "expected": {
+        "projection": {
+          "specialist": "bob",
+          "operation": "bob_check",
+          "role": "build",
+          "transport": "succeeded",
+          "domain": "unknown",
+          "route": {
+            "server": "bob",
+            "tool": "bob_check"
+          }
+        },
+        "safe_receipt_text": "tool receipt specialist=bob operation=bob_check transport=succeeded domain=unknown",
+        "transient_content": false
+      }
+    },
+    {
+      "id": "bob-future-schema-v2",
+      "source": {
+        "product": "Bob",
+        "version": "unsupported future structured MCP receipt schema_version=2",
+        "reference": "fail-closed future-schema regression derived from the Bob v1 consumer contract"
+      },
+      "document": "bob/future-schema-v2.json",
+      "tool": "bob__bob_check",
+      "delivery": "structured",
+      "must_fail_closed": true,
+      "forbidden_persistence_markers": [
+        "SECRET_BOB_FUTURE_WARNING",
+        "/repo"
+      ],
+      "expected": {
+        "projection": {
+          "specialist": "bob",
+          "operation": "bob_check",
+          "role": "build",
+          "transport": "succeeded",
+          "domain": "unknown",
+          "route": {
+            "server": "bob",
+            "tool": "bob_check"
+          }
+        },
+        "safe_receipt_text": "tool receipt specialist=bob operation=bob_check transport=succeeded domain=unknown",
+        "transient_content": false
+      }
+    },
+    {
+      "id": "mcphub-oversized-page-v1",
+      "source": {
+        "product": "MCPHub",
+        "version": "stored result/page envelope v1 (2026-07-15 baseline)",
+        "reference": "existing exact MCPHub consumer contract at reviewed local-agent revision"
+      },
+      "document": "mcphub/oversized-page-v1.json",
+      "tool": "mcphub__mcphub_get_result",
+      "arguments": {
+        "callId": "3f9a1c2e7b804d5e9f1a2b3c4d5e6f70",
+        "cursor": 0
+      },
+      "delivery": "structured",
+      "must_fail_closed": true,
+      "forbidden_persistence_markers": [
+        "SECRET_MCPHUB_OVERSIZED_PREVIEW"
+      ],
+      "expected": {
+        "projection": {
+          "specialist": "mcphub",
+          "operation": "mcphub_get_result",
+          "role": "gateway",
+          "transport": "succeeded",
+          "domain": "unknown",
+          "domainTyped": true,
+          "route": {
+            "server": "mcphub",
+            "tool": "mcphub_get_result",
+            "call_id": "3f9a1c2e7b804d5e9f1a2b3c4d5e6f70"
+          }
+        },
+        "safe_receipt_text": "tool receipt specialist=mcphub operation=mcphub_get_result transport=succeeded domain=unknown call_id=3f9a1c2e7b804d5e9f1a2b3c4d5e6f70",
+        "transient_content": false
+      }
+    },
+    {
+      "id": "mcphub-invalid-page-v1",
+      "source": {
+        "product": "MCPHub",
+        "version": "stored result/page envelope v1 (2026-07-15 baseline)",
+        "reference": "existing exact MCPHub consumer contract at reviewed local-agent revision"
+      },
+      "document": "mcphub/invalid-page-v1.json",
+      "tool": "mcphub__mcphub_get_result",
+      "arguments": {
+        "callId": "3f9a1c2e7b804d5e9f1a2b3c4d5e6f70",
+        "cursor": 0
+      },
+      "delivery": "structured",
+      "must_fail_closed": true,
+      "forbidden_persistence_markers": [
+        "SECRET_MCPHUB_INVALID_PREVIEW"
+      ],
+      "expected": {
+        "projection": {
+          "specialist": "mcphub",
+          "operation": "mcphub_get_result",
+          "role": "gateway",
+          "transport": "succeeded",
+          "domain": "unknown",
+          "domainTyped": true,
+          "route": {
+            "server": "mcphub",
+            "tool": "mcphub_get_result",
+            "call_id": "3f9a1c2e7b804d5e9f1a2b3c4d5e6f70"
+          }
+        },
+        "safe_receipt_text": "tool receipt specialist=mcphub operation=mcphub_get_result transport=succeeded domain=unknown call_id=3f9a1c2e7b804d5e9f1a2b3c4d5e6f70",
+        "transient_content": false
+      }
+    }
+  ]
+}
