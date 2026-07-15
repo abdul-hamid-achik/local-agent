@@ -79,6 +79,30 @@ func projectSemanticToolReceipt(
 	})
 }
 
+func (a *Agent) projectMCPHubResultAssembly(call llm.ToolCall, projection ecosystem.ToolProjection, structured json.RawMessage, toolError bool) ecosystem.ToolProjection {
+	if toolError || projection.Digest == nil || a.mcphubResults == nil {
+		return projection
+	}
+	parts := strings.Split(call.Name, "__")
+	if len(parts) < 2 || !a.isTrustedMCPHubNamespace(parts[0]) {
+		return projection
+	}
+	switch projection.Digest.Kind {
+	case ecosystem.DigestMCPHubStored:
+		if _, trusted := a.trustedMCPContract(call); !trusted {
+			return projection
+		}
+	case ecosystem.DigestMCPHubPage, ecosystem.DigestMCPHubUnavailable,
+		ecosystem.DigestMCPHubCursorOutOfRange, ecosystem.DigestMCPHubError:
+		if !a.trustedDirectMCPHubOperation(call, "mcphub_get_result") {
+			return projection
+		}
+	default:
+		return projection
+	}
+	return a.mcphubResults.Observe(projection, ecosystem.RawReceipt{Structured: structured})
+}
+
 // semanticToolContents separates active provider context from durable/display
 // context. Only a validated result from an exact host-trusted local contract
 // may differ; every other typed MCP receipt stays as a bounded semantic

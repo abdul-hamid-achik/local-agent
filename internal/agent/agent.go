@@ -13,6 +13,7 @@ import (
 
 	"github.com/abdul-hamid-achik/local-agent/internal/capabilityadvisor"
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
+	"github.com/abdul-hamid-achik/local-agent/internal/ecosystem"
 	"github.com/abdul-hamid-achik/local-agent/internal/execution"
 	"github.com/abdul-hamid-achik/local-agent/internal/expertteam"
 	"github.com/abdul-hamid-achik/local-agent/internal/ice"
@@ -68,6 +69,7 @@ type Agent struct {
 	capabilityRetries map[capabilityRetryKey]struct{}
 	expertConsultant  ExpertConsultant
 	imageResolver     ImageResolver
+	mcphubResults     *ecosystem.MCPHubResultAssembler
 
 	checkpointStore     CheckpointStore
 	checkpointSessionID int64
@@ -124,6 +126,7 @@ func New(llmClient llm.Client, registry *mcp.Registry, numCtx int) *Agent {
 		readRoots:         make(map[string]*additionalReadRoot),
 		readFiles:         make(map[string]*additionalReadFile),
 		capabilityRetries: make(map[capabilityRetryKey]struct{}),
+		mcphubResults:     ecosystem.NewMCPHubResultAssembler(),
 		// Filesystem reads can enter OS syscalls that do not observe context
 		// cancellation. Allow at most one abandoned worker for the lifetime of
 		// an Agent; later reads wait on this slot and remain cancellable.
@@ -689,6 +692,7 @@ func (a *Agent) Close() {
 	if done != nil {
 		<-done
 	}
+	a.mcphubResults.Reset()
 	if a.iceEngine != nil {
 		_ = a.iceEngine.Close()
 	}

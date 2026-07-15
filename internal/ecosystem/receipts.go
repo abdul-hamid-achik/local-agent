@@ -213,14 +213,23 @@ func projectMCPHubResultPage(projection ToolProjection, document json.RawMessage
 }
 
 func reparseCompletedMCPHubPage(page []byte) (DomainState, EvidenceState, bool) {
-	receipt := RawReceipt{Structured: json.RawMessage(page)}
+	receipt, stored := storedCallToolReceipt(page)
+	if !stored {
+		receipt = RawReceipt{Structured: json.RawMessage(page)}
+	}
 	for operation := range cortexEnvelopeOperations {
 		if domain, _, ok := projectCortexReceipt(operation, receipt); ok {
+			if receipt.ToolError && domain == DomainSucceeded {
+				domain = DomainFailed
+			}
 			return domain, EvidenceNone, true
 		}
 	}
 	for _, operation := range []string{"bob_check", "bob_context", "bob_inspect", "bob_path", "bob_plan", "bob_playbook", "bob_recipe_describe", "bob_stats", "bob_validate_manifest"} {
 		if domain, ok := projectBobReceipt(operation, receipt); ok {
+			if receipt.ToolError && domain == DomainSucceeded {
+				domain = DomainFailed
+			}
 			return domain, EvidenceNone, true
 		}
 	}

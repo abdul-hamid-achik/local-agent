@@ -193,6 +193,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 	// this turn. Settle them before RunTurn returns so a future user turn,
 	// checkpoint, or cursor projection can observe only the durable receipts.
 	defer a.settleTransientMessages()
+	defer a.mcphubResults.Reset()
 	// A provider such as ModelManager may expose a different context window for
 	// each selected model. Resolve it exactly once so every budget decision in
 	// this turn stays coherent even if selection changes concurrently.
@@ -876,6 +877,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 				tc.Name, tc.Arguments, semanticText, structured, errorMeta,
 				transportErr, isErr, kind == executionPkg.KindBuiltin || kind == executionPkg.KindMemory,
 			)
+			projection = a.projectMCPHubResultAssembly(tc, projection, structured, isErr)
 			if capabilityRouteOutcomeFailed(projection, isErr) &&
 				a.markCapabilityRouteFailed(capabilityActivity, tc.Name, tc.Arguments, capabilityHint) {
 				capabilityRouteFailed = true
