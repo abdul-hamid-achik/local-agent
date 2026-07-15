@@ -109,7 +109,10 @@ var toolActionRegistry = map[string]toolActionLabels{
 	// Bob exposes read-only inspection plus explicit repository-factory
 	// actions. Use repository language so effects remain unmistakable.
 	"bob_inspect":           {running: "Inspecting repository", success: "Inspected repository", attention: "Repository needs attention", failure: "Repository inspection failed"},
+	"bob_context":           {running: "Reading repository context", success: "Read repository context", attention: "Repository context needs attention", failure: "Repository context failed"},
+	"bob_path":              {running: "Classifying repository path", success: "Classified repository path", attention: "Repository path needs attention", failure: "Repository path classification failed"},
 	"bob_plan":              {running: "Planning repository", success: "Planned repository", attention: "Plan needs attention", failure: "Repository plan failed"},
+	"bob_playbook":          {running: "Reading repository playbook", success: "Read repository playbook", attention: "Repository playbook is blocked", failure: "Repository playbook failed"},
 	"bob_check":             {running: "Checking repository contract", success: "Checked repository contract", attention: "Repository needs convergence", failure: "Repository check failed"},
 	"bob_apply":             {running: "Applying repository plan", success: "Applied repository plan", failure: "Repository apply failed"},
 	"bob_validate_manifest": {running: "Validating Bob manifest", success: "Validated Bob manifest", failure: "Manifest validation failed"},

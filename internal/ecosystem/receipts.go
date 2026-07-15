@@ -219,7 +219,7 @@ func reparseCompletedMCPHubPage(page []byte) (DomainState, EvidenceState, bool) 
 			return domain, EvidenceNone, true
 		}
 	}
-	for _, operation := range []string{"bob_check", "bob_inspect", "bob_plan", "bob_recipe_describe", "bob_stats", "bob_validate_manifest"} {
+	for _, operation := range []string{"bob_check", "bob_context", "bob_inspect", "bob_path", "bob_plan", "bob_playbook", "bob_recipe_describe", "bob_stats", "bob_validate_manifest"} {
 		if domain, ok := projectBobReceipt(operation, receipt); ok {
 			return domain, EvidenceNone, true
 		}
@@ -749,7 +749,13 @@ type bobMCPReceipt struct {
 		Code string `json:"code"`
 		Kind string `json:"kind"`
 	} `json:"actions"`
-	Error *struct {
+	Context   json.RawMessage `json:"context"`
+	Path      json.RawMessage `json:"path"`
+	Operation string          `json:"operation"`
+	List      json.RawMessage `json:"list"`
+	Show      json.RawMessage `json:"show"`
+	Plan      json.RawMessage `json:"plan"`
+	Error     *struct {
 		Code    string `json:"code"`
 		Message string `json:"message"`
 	} `json:"error"`
@@ -757,7 +763,7 @@ type bobMCPReceipt struct {
 
 func projectBobReceipt(operation string, receipt RawReceipt) (DomainState, bool) {
 	switch operation {
-	case "bob_check", "bob_inspect", "bob_plan", "bob_recipe_describe", "bob_stats", "bob_validate_manifest":
+	case "bob_check", "bob_context", "bob_inspect", "bob_path", "bob_plan", "bob_playbook", "bob_recipe_describe", "bob_stats", "bob_validate_manifest":
 	default:
 		return "", false
 	}
@@ -769,6 +775,9 @@ func projectBobReceipt(operation string, receipt RawReceipt) (DomainState, bool)
 	if json.Unmarshal(document, &output) != nil || output.SchemaVersion != 1 ||
 		jsonObjectHasKey(document, "command") || jsonObjectHasKey(document, "data") {
 		return "", false
+	}
+	if isBobGuidanceOperation(operation) {
+		return projectBobGuidanceReceipt(operation, document, output)
 	}
 	if output.Error != nil {
 		if output.OK || strings.TrimSpace(output.Error.Code) == "" || strings.TrimSpace(output.Error.Code) != output.Error.Code ||
@@ -925,8 +934,14 @@ func validBobRecipeRef(raw json.RawMessage) (string, bool) {
 	if json.Unmarshal(raw, &recipe) != nil {
 		return "", false
 	}
-	wantVersion := map[string]int{"files": 1, "go-agent-tool": 3}[recipe.ID]
-	return recipe.ID, wantVersion != 0 && recipe.Version == wantVersion
+	switch recipe.ID {
+	case "files":
+		return recipe.ID, recipe.Version == 1
+	case "go-agent-tool":
+		return recipe.ID, recipe.Version == 3 || recipe.Version == 4
+	default:
+		return recipe.ID, false
+	}
 }
 
 type bobActionCountValues struct {

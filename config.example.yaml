@@ -130,8 +130,11 @@ servers:
       gateway: mcphub
       read_only:
         - bob__bob_check
+        - bob__bob_context
         - bob__bob_inspect
+        - bob__bob_path
         - bob__bob_plan
+        - bob__bob_playbook
         - bob__bob_recipe_describe
         - bob__bob_stats
         - bob__bob_validate_manifest

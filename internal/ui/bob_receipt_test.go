@@ -68,4 +68,8 @@ func TestBobToolPresentationLabels(t *testing.T) {
 	if p.label != "Repository apply failed" {
 		t.Errorf("unexpected label %q", p.label)
 	}
+	p = presentTool("bob__bob_context", ToolCardGeneric, ToolCardAttention)
+	if p.label != "Repository context needs attention" {
+		t.Errorf("unexpected label %q", p.label)
+	}
 }
