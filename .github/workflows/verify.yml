@@ -131,6 +131,15 @@ jobs:
           test "$#" -gt 0
           glyph run "$@" --format md --progress always --parallel 1
 
+      - name: Upload failed terminal diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: glyphrun-failure-${{ github.run_attempt }}
+          path: .glyphrun/runs
+          include-hidden-files: true
+          retention-days: 3
+
   darwin-smoke:
     name: Darwin build and POSIX smoke tests
     runs-on: macos-latest
