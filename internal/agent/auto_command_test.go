@@ -8,11 +8,27 @@ import (
 )
 
 func TestAutoScopedCommandAllowsRoutineWorkspaceDevelopment(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("AUTO shell catalog requires a POSIX shell")
+	}
 	workspace := t.TempDir()
 	nested := filepath.Join(workspace, "internal", "queue")
 	if err := os.MkdirAll(nested, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// Classification must not depend on which development tools happen to be
+	// preinstalled on the test host. Resolve every external command used below
+	// from a host-owned directory outside the workspace, matching the production
+	// provenance check without executing any fixture binary.
+	hostBin := t.TempDir()
+	for _, name := range []string{
+		"bun", "cargo", "date", "go", "gofmt", "grep", "head", "npm", "rg", "sed", "task",
+	} {
+		if err := os.WriteFile(filepath.Join(hostBin, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatalf("install host executable %s: %v", name, err)
+		}
+	}
+	t.Setenv("PATH", hostBin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	ag := New(nil, nil, 4096)
 	ag.SetWorkDir(workspace)
 
