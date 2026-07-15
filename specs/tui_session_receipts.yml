@@ -81,6 +81,10 @@ steps:
   - resize:
       cols: 110
       rows: 18
+  - wait:
+      idle:
+        quietForMs: 50
+      timeoutMs: 2000
   - press: "pgup"
   - wait:
       screen:
