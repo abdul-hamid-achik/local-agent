@@ -46,18 +46,14 @@ release:
   prerelease: auto
   name_template: "v{{.Version}}"
 
-brews:
+homebrew_casks:
   - name: local-agent
+    binaries:
+      - local-agent
     homepage: https://github.com/abdul-hamid-achik/local-agent
     description: "Local AI agent with TUI, powered by Ollama and MCP servers"
-    license: MIT
-    directory: Formula
     repository:
       owner: abdul-hamid-achik
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    install: |
-      bin.install "local-agent"
-    test: |
-      system "#{bin}/local-agent", "--version"
     skip_upload: "{{ if .Env.HOMEBREW_TAP_TOKEN }}false{{ else }}true{{ end }}"
