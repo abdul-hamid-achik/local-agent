@@ -12,6 +12,8 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/abdul-hamid-achik/local-agent/internal/command"
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
 	"github.com/abdul-hamid-achik/local-agent/internal/ice"
@@ -74,6 +76,9 @@ func TestRefreshEnrichesMissingCapabilitiesWithShow(t *testing.T) {
 func TestApplyInventoryRecomputesCurrentModelAtReceiptTime(t *testing.T) {
 	m := newTestModel(t)
 	m.model = "model-b"
+	m.modelPullState = NewModelPullState(false, true)
+	m.modelPullState.Name = "model-b"
+	m.modelPullState.Phase = ModelPullComplete
 	m.modelInventoryRequest = 3
 	m.applyOllamaInventory(OllamaModelInventoryMsg{RequestID: 3, Models: []OllamaModelDescriptor{
 		{Name: "model-a", Current: true, Selectable: true, Fit: true},
@@ -82,6 +87,30 @@ func TestApplyInventoryRecomputesCurrentModelAtReceiptTime(t *testing.T) {
 	if m.ollamaModels[0].Current || !m.ollamaModels[1].Current {
 		t.Fatalf("current projection = %#v", m.ollamaModels)
 	}
+	if got := m.modelPullState.Status; got != "Inventory refreshed" {
+		t.Fatalf("pull inventory receipt = %q", got)
+	}
+	if got := ansi.Strip(m.modelPullState.View(58)); !strings.Contains(got, "is available · Inventory refreshed") {
+		t.Fatalf("pull inventory receipt view = %q", got)
+	}
+	m.modelPullState.Name = "a-very-long-model-name"
+	regular, cursor := m.modelPullState.ViewWithCursor(58, false)
+	if cursor != nil {
+		t.Fatal("completed pull receipt retained an input cursor")
+	}
+	if got := ansi.Strip(regular); !strings.Contains(got, "a-very") || !strings.Contains(got, "is available · Inventory refreshed") {
+		t.Fatalf("regular pull inventory receipt view = %q", got)
+	}
+	assertRenderedLinesFit(t, regular, 58)
+
+	compact, cursor := m.modelPullState.ViewWithCursor(24, true)
+	if cursor != nil {
+		t.Fatal("completed pull receipt retained an input cursor")
+	}
+	if got := ansi.Strip(compact); !strings.Contains(got, "a-very") || !strings.Contains(got, "refreshed") {
+		t.Fatalf("compact pull inventory receipt view = %q", got)
+	}
+	assertRenderedLinesFit(t, compact, 24)
 }
 
 func TestInventoryCommitRunsOutsideUpdateDuringActiveTurn(t *testing.T) {

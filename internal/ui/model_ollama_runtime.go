@@ -299,6 +299,12 @@ func (m *Model) applyOllamaInventory(message OllamaModelInventoryMsg) {
 		m.syncEffectiveContext(false)
 	}
 	m.ollamaModels = models
+	if m.modelPullState != nil && m.modelPullState.Phase == ModelPullComplete {
+		// Pull completion means the daemon accepted the download. Only surface
+		// the stable refresh receipt after the exact inventory has also crossed
+		// the parent-owned authority commit boundary.
+		m.modelPullState.Status = "Inventory refreshed"
+	}
 	m.modelList = manuallySelectableOllamaModels(models)
 	autoModels := make([]string, 0, len(models))
 	for _, model := range models {

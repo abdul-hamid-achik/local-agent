@@ -117,6 +117,10 @@ steps:
       screen:
         contains: "tiny-code:latest is available"
       timeoutMs: 3000
+  - wait:
+      screen:
+        contains: "Inventory refreshed"
+      timeoutMs: 5000
   - snapshot: pull_complete
   - press: "esc"
   - wait:

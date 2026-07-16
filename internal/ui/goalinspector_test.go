@@ -279,6 +279,22 @@ func TestShowGoalUsesInspectorAndRestoresStableFooter(t *testing.T) {
 	}
 }
 
+func TestShowGoalCommandRequestsFullRepaint(t *testing.T) {
+	m := newGoalRuntimeTestModel(t, &goalCountingClient{})
+	m.goalRuntime = newUIGoalRuntime(t, 42, goal.BudgetLimits{MaxContinuationTurns: 4})
+
+	cmd := m.handleCommandAction(command.Result{Action: command.ActionShowGoal})
+	if cmd == nil {
+		t.Fatal("show goal command did not request a presentation repaint")
+	}
+	if msg := cmd(); msg == nil {
+		t.Fatal("show goal presentation command returned no message")
+	}
+	if m.overlay != OverlayGoalInspector || m.goalInspectorState == nil {
+		t.Fatalf("show goal command overlay=%d inspector=%v", m.overlay, m.goalInspectorState != nil)
+	}
+}
+
 func TestGoalInspectorRoutesBudgetIntentThroughSmartParent(t *testing.T) {
 	m := newGoalRuntimeTestModel(t, &goalCountingClient{})
 	m.width, m.height = 80, 24

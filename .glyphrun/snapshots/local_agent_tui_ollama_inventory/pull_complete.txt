@@ -11,7 +11,7 @@
                      Local-first · Ollama · approval prompts enabled
                ╭──────────────────────────────────────────────────────────╮
                │ Add Ollama model                                         │
-               │ ✓ tiny-code:latest is available                          │
+               │ ✓ tiny-code:latest is available · Inventory refreshed    │
                │ esc close                                                │
                ╰──────────────────────────────────────────────────────────╯
 
@@ -24,4 +24,3 @@
 
 
 ─────────────────────────────────────────────────────────────────────────────────────────
-   … Updating Ollama inventory · verifying model authority

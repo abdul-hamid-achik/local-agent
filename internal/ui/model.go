@@ -3567,7 +3567,12 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 		return nil
 
 	case command.ActionShowGoal:
-		return m.showGoal()
+		// Opening a centered modal over an asynchronously changing empty-state
+		// header can otherwise leave terminal cells from the previous frame in
+		// the modal gutter. Request one full Charm repaint at the ownership
+		// transition; the inspector remains a dumb child and any recovery load
+		// still runs beside the presentation command.
+		return tea.Batch(m.showGoal(), tea.ClearScreen)
 
 	case command.ActionPauseGoal:
 		m.pauseGoal()

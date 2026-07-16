@@ -243,6 +243,20 @@ func (s *ModelPullState) render(width int, compact, hardwareCursor bool) (string
 			body.WriteString("\n" + muted.Render(status))
 		}
 	case ModelPullComplete:
+		inventoryRefreshed := strings.EqualFold(s.Status, "Inventory refreshed")
+		if inventoryRefreshed {
+			// Preserve both the model identity and the stable receipt without
+			// adding height or overflowing either the regular or narrow modal.
+			availability, receipt := " is available", " · Inventory refreshed"
+			if compact {
+				availability, receipt = "", " · refreshed"
+			}
+			nameWidth := max(1, width-lipgloss.Width("✓ "+availability+receipt))
+			message := "✓ " + truncateDisplay(s.Name, nameWidth) + availability
+			body.WriteString(lipgloss.NewStyle().Foreground(palette.Success).Render(message))
+			body.WriteString(muted.Render(receipt))
+			break
+		}
 		message := "✓ " + s.Name + " is available"
 		if compact {
 			message = truncateDisplay(message, width)
