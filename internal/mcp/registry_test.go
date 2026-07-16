@@ -18,6 +18,15 @@ type deadlineToolCaller struct {
 	started chan struct{}
 }
 
+type recordingToolCaller struct {
+	calls atomic.Int64
+}
+
+func (c *recordingToolCaller) CallTool(context.Context, string, map[string]any) (*ToolResult, error) {
+	c.calls.Add(1)
+	return &ToolResult{Content: "ok"}, nil
+}
+
 func (c *deadlineToolCaller) CallTool(ctx context.Context, _ string, _ map[string]any) (*ToolResult, error) {
 	close(c.started)
 	<-ctx.Done()
@@ -79,6 +88,89 @@ func TestRegistryCallToolPreservesDispatchDeadline(t *testing.T) {
 	case <-caller.started:
 	default:
 		t.Fatal("MCP backend was not dispatched")
+	}
+}
+
+func TestRegistryCallToolAtEpochRejectsChangedCatalogBeforeDispatch(t *testing.T) {
+	r := NewRegistry()
+	caller := &recordingToolCaller{}
+	r.toolMap["srv__inspect"] = toolRoute{client: caller, remoteName: "inspect"}
+	epoch := r.SnapshotTools().Epoch
+
+	r.mu.Lock()
+	r.epoch++
+	r.mu.Unlock()
+
+	result, err := r.CallToolAtEpoch(context.Background(), epoch, "srv__inspect", nil)
+	if !errors.Is(err, ErrRegistryEpochChanged) || result != nil {
+		t.Fatalf("stale call result=%#v error=%v", result, err)
+	}
+	if caller.calls.Load() != 0 {
+		t.Fatal("stale catalog call reached the captured backend")
+	}
+}
+
+func TestRegistryCallToolAtEpochDispatchesCapturedCurrentRoute(t *testing.T) {
+	r := NewRegistry()
+	caller := &recordingToolCaller{}
+	r.toolMap["srv__inspect"] = toolRoute{client: caller, remoteName: "inspect"}
+	epoch := r.SnapshotTools().Epoch
+
+	result, err := r.CallToolAtEpoch(context.Background(), epoch, "srv__inspect", map[string]any{"scope": "safe"})
+	if err != nil || result == nil || result.Content != "ok" {
+		t.Fatalf("current call result=%#v error=%v", result, err)
+	}
+	if caller.calls.Load() != 1 {
+		t.Fatalf("current catalog backend calls = %d, want 1", caller.calls.Load())
+	}
+}
+
+func TestRegistryCallToolAtEpochRejectsDispatchAfterCloseAdmissionStops(t *testing.T) {
+	r := NewRegistry()
+	caller := &recordingToolCaller{}
+	r.toolMap["srv__inspect"] = toolRoute{client: caller, remoteName: "inspect"}
+	epoch := r.SnapshotTools().Epoch
+
+	// Hold one admitted lifecycle operation so Close remains in its intentional
+	// wait window after setting closed=true but before clearing routes/epoch.
+	_, finish, err := r.beginLifecycleOperation(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeDone := make(chan struct{})
+	go func() {
+		r.Close()
+		close(closeDone)
+	}()
+	deadline := time.After(time.Second)
+	for {
+		r.mu.RLock()
+		closed := r.closed
+		r.mu.RUnlock()
+		if closed {
+			break
+		}
+		select {
+		case <-deadline:
+			finish()
+			t.Fatal("Close did not stop lifecycle admission")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+
+	result, callErr := r.CallToolAtEpoch(context.Background(), epoch, "srv__inspect", nil)
+	if result != nil || !errors.Is(callErr, ErrRegistryClosed) {
+		t.Fatalf("close-in-progress call result=%#v error=%v, want ErrRegistryClosed", result, callErr)
+	}
+	if caller.calls.Load() != 0 {
+		t.Fatal("call admitted after registry shutdown began")
+	}
+	finish()
+	select {
+	case <-closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not finish after the held lifecycle operation settled")
 	}
 }
 

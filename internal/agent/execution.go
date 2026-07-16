@@ -126,6 +126,7 @@ func (a *Agent) SetExecutionSessionID(sessionID int64) {
 	if a.executionSessionID != sessionID {
 		a.unresolvedExecution = nil
 		a.continuationHistory = newContinuationTurnState(0)
+		a.resetAutoContinuationHistoryLocked()
 	}
 	a.executionSessionID = sessionID
 	a.mu.Unlock()
@@ -336,6 +337,32 @@ func executionEvent(tracked trackedToolExecution, eventType executionpkg.EventTy
 }
 
 func (a *Agent) newTrackedExecutions(ctx context.Context, runtime executionRuntime, turnID string, iteration int, calls []llm.ToolCall, providerIDs []string) ([]trackedToolExecution, error) {
+	return a.newTrackedExecutionsWithRequestDetail(
+		ctx, runtime, turnID, iteration, calls, providerIDs, "model requested tool execution",
+	)
+}
+
+func (a *Agent) newTrackedContinuationExecutions(
+	ctx context.Context,
+	runtime executionRuntime,
+	turnID string,
+	iteration int,
+	calls []llm.ToolCall,
+) ([]trackedToolExecution, error) {
+	return a.newTrackedExecutionsWithRequestDetail(
+		ctx, runtime, turnID, iteration, calls, nil, "host scheduled typed read-only continuation",
+	)
+}
+
+func (a *Agent) newTrackedExecutionsWithRequestDetail(
+	ctx context.Context,
+	runtime executionRuntime,
+	turnID string,
+	iteration int,
+	calls []llm.ToolCall,
+	providerIDs []string,
+	requestDetail string,
+) ([]trackedToolExecution, error) {
 	tracked := make([]trackedToolExecution, len(calls))
 	for i := range calls {
 		executionID, err := executionpkg.NewExecutionID()
@@ -373,7 +400,9 @@ func (a *Agent) newTrackedExecutions(ctx context.Context, runtime executionRunti
 			},
 			originalHash: argumentsHash,
 		}
-		if err := appendExecutionEvent(ctx, runtime, executionEvent(tracked[i], executionpkg.EventRequested, executionpkg.ApprovalNotApplicable, "", "model requested tool execution")); err != nil {
+		if err := appendExecutionEvent(ctx, runtime, executionEvent(
+			tracked[i], executionpkg.EventRequested, executionpkg.ApprovalNotApplicable, "", requestDetail,
+		)); err != nil {
 			return nil, err
 		}
 	}

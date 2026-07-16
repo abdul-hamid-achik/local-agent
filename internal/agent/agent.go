@@ -50,19 +50,24 @@ type Agent struct {
 	// approvalGrants contains host-approved, exact-request grants for this Agent
 	// session. Keys bind workspace, tool and canonical arguments; they are never
 	// persisted as global tool-only policies.
-	approvalGrants    map[string]struct{}
-	toolsConfig       config.ToolsConfig
-	logger            *log.Logger
-	turnRunning       atomic.Bool
-	turnMu            sync.Mutex
-	turnCancel        context.CancelFunc
-	turnDone          chan struct{}
-	closed            bool
-	readOnlySlots     chan struct{}
-	hooks             []ToolHook
-	mcpServerScope    map[string]struct{}
-	mcpScopeSet       bool
-	trustedMCP        map[string]trustedMCPServer
+	approvalGrants      map[string]struct{}
+	toolsConfig         config.ToolsConfig
+	continuationsConfig config.ContinuationsConfig
+	logger              *log.Logger
+	turnRunning         atomic.Bool
+	turnMu              sync.Mutex
+	turnCancel          context.CancelFunc
+	turnDone            chan struct{}
+	closed              bool
+	readOnlySlots       chan struct{}
+	hooks               []ToolHook
+	mcpServerScope      map[string]struct{}
+	mcpScopeSet         bool
+	trustedMCP          map[string]trustedMCPServer
+	// mcpRouteVersion changes only when exact MCP route trust or scope changes.
+	// It intentionally excludes approval-renderer churn so opaque continuation
+	// contexts survive the UI installing a per-turn callback.
+	mcpRouteVersion   uint64
 	readRoots         map[string]*additionalReadRoot
 	readFiles         map[string]*additionalReadFile
 	capabilityAdvisor capabilityAdviser
@@ -77,6 +82,12 @@ type Agent struct {
 	continuationContracts map[string]continuationContract
 	continuationSequence  uint64
 	continuationHistory   *continuationTurnState
+	// autoContinuationHistory is a separate, bounded session-scope reservation
+	// ledger. Suggesting an action never writes it; only an LA-3 schedule claim
+	// does. It prevents the same source revision/context from auto-running again
+	// across model turns.
+	autoContinuationHistory *autoContinuationHistory
+	continuationFreshness   *continuationFreshnessState
 
 	checkpointStore     CheckpointStore
 	checkpointSessionID int64
@@ -121,21 +132,27 @@ func (a *Agent) logTurn(turnID string) *log.Logger {
 func New(llmClient llm.Client, registry *mcp.Registry, numCtx int) *Agent {
 	runID, runIDErr := execution.NewRunID()
 	agent := &Agent{
-		llmClient:             llmClient,
-		registry:              registry,
-		numCtx:                numCtx,
-		toolPolicy:            DefaultToolPolicy(),
-		authorityMode:         AuthorityNormal,
-		executionRunID:        runID,
-		executionRunIDErr:     runIDErr,
-		approvalGrants:        make(map[string]struct{}),
-		trustedMCP:            make(map[string]trustedMCPServer),
-		readRoots:             make(map[string]*additionalReadRoot),
-		readFiles:             make(map[string]*additionalReadFile),
-		capabilityRetries:     make(map[capabilityRetryKey]struct{}),
-		mcphubResults:         ecosystem.NewMCPHubResultAssembler(),
-		continuationContracts: make(map[string]continuationContract),
-		continuationHistory:   newContinuationTurnState(0),
+		llmClient:               llmClient,
+		registry:                registry,
+		numCtx:                  numCtx,
+		toolPolicy:              DefaultToolPolicy(),
+		authorityMode:           AuthorityNormal,
+		executionRunID:          runID,
+		executionRunIDErr:       runIDErr,
+		approvalGrants:          make(map[string]struct{}),
+		trustedMCP:              make(map[string]trustedMCPServer),
+		readRoots:               make(map[string]*additionalReadRoot),
+		readFiles:               make(map[string]*additionalReadFile),
+		capabilityRetries:       make(map[capabilityRetryKey]struct{}),
+		mcphubResults:           ecosystem.NewMCPHubResultAssembler(),
+		continuationContracts:   make(map[string]continuationContract),
+		continuationHistory:     newContinuationTurnState(0),
+		autoContinuationHistory: newAutoContinuationHistory(),
+		continuationFreshness:   newContinuationFreshnessState(),
+		continuationsConfig: config.ContinuationsConfig{
+			Mode:         config.ContinuationSuggest,
+			MaxAutoSteps: config.MaxAutoContinuationSteps,
+		},
 		// Filesystem reads can enter OS syscalls that do not observe context
 		// cancellation. Allow at most one abandoned worker for the lifetime of
 		// an Agent; later reads wait on this slot and remain cancellable.
@@ -271,6 +288,7 @@ func (a *Agent) ClearHistory() {
 	defer a.mu.Unlock()
 	a.messages = nil
 	a.continuationHistory = newContinuationTurnState(0)
+	a.resetAutoContinuationHistoryLocked()
 }
 
 // AppendMessage appends a message to the conversation history.
@@ -361,11 +379,26 @@ func (a *Agent) InstallDurableRecoveryContexts(contents []string) error {
 
 // ReplaceMessages replaces the entire conversation history.
 func (a *Agent) ReplaceMessages(msgs []llm.Message) {
+	a.replaceMessages(msgs, true)
+}
+
+// ReplaceMessagesWithinSession atomically rewrites the transcript for
+// compaction or transactional rollback without erasing LA-2/LA-3 replay
+// history. Callers must use ReplaceMessages for a genuine restore, import, or
+// conversation boundary.
+func (a *Agent) ReplaceMessagesWithinSession(msgs []llm.Message) {
+	a.replaceMessages(msgs, false)
+}
+
+func (a *Agent) replaceMessages(msgs []llm.Message, resetContinuationHistory bool) {
 	msgs = cloneMessagesWithImages(msgs)
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.messages = msgs
-	a.continuationHistory = newContinuationTurnState(0)
+	if resetContinuationHistory {
+		a.continuationHistory = newContinuationTurnState(0)
+		a.resetAutoContinuationHistoryLocked()
+	}
 }
 
 // SetSkillContent sets the combined content of active skills.
@@ -467,6 +500,8 @@ func (a *Agent) ToolCount() int {
 func (a *Agent) SetMCPServerScope(serverNames []string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.approvalHostVersion++
+	a.mcpRouteVersion++
 	if len(serverNames) == 0 {
 		a.mcpServerScope = nil
 		a.mcpScopeSet = false
@@ -487,6 +522,8 @@ func (a *Agent) SetMCPServerScope(serverNames []string) {
 func (a *Agent) DenyAllMCPTools() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.approvalHostVersion++
+	a.mcpRouteVersion++
 	a.mcpScopeSet = true
 	a.mcpServerScope = make(map[string]struct{})
 }
@@ -577,6 +614,7 @@ func (a *Agent) SetWorkspacePolicy(dir, ignoreContent string) {
 	}
 	if workspaceChanged {
 		a.continuationHistory = newContinuationTurnState(0)
+		a.resetAutoContinuationHistoryLocked()
 	}
 	a.mu.Unlock()
 }
@@ -589,6 +627,7 @@ func (a *Agent) SetWorkDir(dir string) {
 		a.workDir = dir
 		a.filesystemVersion++
 		a.continuationHistory = newContinuationTurnState(0)
+		a.resetAutoContinuationHistoryLocked()
 	}
 	a.mu.Unlock()
 }
@@ -651,6 +690,30 @@ func (a *Agent) PrepareModelSwitch() {
 // SetToolsConfig sets the tools configuration.
 func (a *Agent) SetToolsConfig(cfg config.ToolsConfig) {
 	a.toolsConfig = cfg
+}
+
+// SetContinuationsConfig installs the host policy used by future turns.
+// Invalid embedded-caller input fails closed to off; command/config callers
+// normally validate before reaching this boundary.
+func (a *Agent) SetContinuationsConfig(cfg config.ContinuationsConfig) {
+	if !cfg.Mode.Valid() || cfg.MaxAutoSteps < 0 || cfg.MaxAutoSteps > config.MaxAutoContinuationSteps ||
+		(cfg.Mode == config.ContinuationAutoReadOnly && cfg.MaxAutoSteps == 0) {
+		cfg = config.ContinuationsConfig{Mode: config.ContinuationOff}
+	}
+	a.mu.Lock()
+	a.continuationsConfig = cfg
+	a.mu.Unlock()
+}
+
+func (a *Agent) continuationsConfigSnapshot() config.ContinuationsConfig {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	cfg := a.continuationsConfig
+	if !cfg.Mode.Valid() || cfg.MaxAutoSteps < 0 || cfg.MaxAutoSteps > config.MaxAutoContinuationSteps ||
+		(cfg.Mode == config.ContinuationAutoReadOnly && cfg.MaxAutoSteps == 0) {
+		return config.ContinuationsConfig{Mode: config.ContinuationOff}
+	}
+	return cfg
 }
 
 // MaxIterations returns the configured max iterations, or default if not set.

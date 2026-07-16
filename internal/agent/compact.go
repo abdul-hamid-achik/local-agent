@@ -149,7 +149,7 @@ func (a *Agent) compactForContext(ctx context.Context, out Output, numCtx int) b
 	})
 	compacted = append(compacted, durableRecoveryContexts...)
 	compacted = append(compacted, recent...)
-	a.ReplaceMessages(compacted)
+	a.ReplaceMessagesWithinSession(compacted)
 
 	if reporter, ok := out.(contextCompactionOutput); ok {
 		reporter.ContextCompacted()

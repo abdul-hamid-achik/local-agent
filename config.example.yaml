@@ -38,6 +38,15 @@ tools:
   max_iterations: 10
   auto_max_iterations: 40
 
+# Typed continuation actions are suggestions by default. auto_read_only may
+# follow only exact, fully specified, unblocked, registry-validated read-only
+# contracts; it never auto-runs shell, mutation, secreted execution, or a
+# generic gateway proxy. Every call still passes normal host trust, approval,
+# and execution-ledger checks. The runtime hard ceiling is two automatic steps.
+continuations:
+  mode: suggest # off | suggest | auto_read_only
+  max_auto_steps: 2
+
 # Auto-routing uses installed, non-exclusive compact tiers only. Qwen 9B,
 # Ornith 9B, and Gemma E2B remain available for an explicit deep-task profile.
 model:

@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/abdul-hamid-achik/local-agent/internal/config"
 	ecosystemPkg "github.com/abdul-hamid-achik/local-agent/internal/ecosystem"
 	executionPkg "github.com/abdul-hamid-achik/local-agent/internal/execution"
 	"github.com/abdul-hamid-achik/local-agent/internal/expertteam"
@@ -28,6 +29,16 @@ var (
 )
 
 const maxIdenticalHostRefusals = 2
+
+func prependContinuationContext(base, continuation string) string {
+	if continuation == "" {
+		return base
+	}
+	if base == "" {
+		return continuation
+	}
+	return continuation + "\n\n" + base
+}
 
 // RepeatedHostRefusalError stops an impossible approval loop without
 // misreporting the host's refusal as a user denial.
@@ -279,17 +290,25 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 			capabilityBaseContext = guidance + capabilityBaseContext
 		}
 	}
-	loadedContext := composeCapabilityContext(capabilityHintText, capabilityBaseContext)
-	if turnToolPolicy.AllowMCP {
-		if continuationContext := a.continuationContextText(options.Continuation); continuationContext != "" {
-			if loadedContext != "" {
-				continuationContext += "\n\n"
-			}
-			loadedContext = continuationContext + loadedContext
-		}
+	baseLoadedContext := composeCapabilityContext(capabilityHintText, capabilityBaseContext)
+	loadedContext := baseLoadedContext
+	continuationsConfig := a.continuationsConfigSnapshot()
+	var continuationPreview string
+	if turnToolPolicy.AllowMCP && continuationsConfig.Mode != config.ContinuationOff &&
+		(continuationsConfig.Mode != config.ContinuationAutoReadOnly || authorityMode != AuthorityAutoScoped) {
+		continuationPreview = a.previewContinuationContext(options.Continuation)
+		loadedContext = prependContinuationContext(baseLoadedContext, continuationPreview)
 	}
 	readGrants := a.ReadGrants()
-	system := buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadGrants(ctx, modePrefix, tools, a.skillContent, skillCatalog, loadedContext, a.memoryStore, iceContext, turnFilesystem.workDir, turnFilesystem.ignoreContent, a.llmClient.Model(), turnNumCtx, readGrants)
+	var system string
+	rebuildSystem := func() {
+		system = buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadGrants(
+			ctx, modePrefix, tools, a.skillContent, skillCatalog, loadedContext,
+			a.memoryStore, iceContext, turnFilesystem.workDir, turnFilesystem.ignoreContent,
+			a.llmClient.Model(), turnNumCtx, readGrants,
+		)
+	}
+	rebuildSystem()
 
 	const maxRetries = 2
 	var lastPromptTokens int
@@ -301,6 +320,12 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 	var expertConsultations int
 	hostRefusalCounts := make(map[string]int)
 	continuationState := newContinuationTurnState(turnMCPSnapshot.Epoch)
+	var autoContinuationState *autoContinuationState
+	if turnToolPolicy.AllowMCP && authorityMode == AuthorityAutoScoped &&
+		continuationsConfig.Mode == config.ContinuationAutoReadOnly {
+		autoContinuationState = newAutoContinuationState(turnMCPSnapshot.Epoch, continuationsConfig.MaxAutoSteps)
+	}
+	var queuedAutoContinuation *preparedAutoContinuation
 
 	maxIters := a.MaxIterationsForAuthority(authorityMode)
 
@@ -317,7 +342,11 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 	// from submitting an already oversized history to Ollama. Bounded turns may
 	// not spend an untracked provider generation on compaction, so fail before the
 	// first provider request with an explicit recovery path instead.
-	if estimated := a.estimatePromptTokens(system, tools); shouldCompactForContext(estimated, turnNumCtx) {
+	admitSystemPrompt := func() error {
+		estimated := a.estimatePromptTokens(system, tools)
+		if !shouldCompactForContext(estimated, turnNumCtx) {
+			return nil
+		}
 		if limits.bounded() {
 			err := &TurnContextBudgetError{
 				EstimatedPromptTokens: estimated,
@@ -333,7 +362,52 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 			lg.Info("compaction", "phase", "before_request", "prompt_tokens", estimated, "num_ctx", turnNumCtx)
 		}
 		if a.compactForContext(ctx, out, turnNumCtx) {
-			system = buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadGrants(ctx, modePrefix, tools, a.skillContent, skillCatalog, loadedContext, a.memoryStore, iceContext, turnFilesystem.workDir, turnFilesystem.ignoreContent, a.llmClient.Model(), turnNumCtx, readGrants)
+			rebuildSystem()
+		}
+		return nil
+	}
+	if err := admitSystemPrompt(); err != nil {
+		return err
+	}
+
+	// The preview above is non-consuming. Commit it only after context admission
+	// succeeds; if another caller consumed or invalidated it concurrently, remove
+	// the preview before the provider can observe stale host context.
+	if continuationPreview != "" {
+		committed := a.continuationContextText(options.Continuation)
+		if committed != continuationPreview {
+			loadedContext = prependContinuationContext(baseLoadedContext, committed)
+			rebuildSystem()
+		}
+	}
+
+	// Claim an opaque host continuation only after prompt admission succeeds, so
+	// a context-budget failure cannot burn its one-shot capability. If the exact
+	// action no longer qualifies for automatic read-only execution, preserve the
+	// existing suggestion path and rebuild the admitted prompt around that
+	// bounded model context.
+	if autoContinuationState != nil {
+		// An initial host read still needs one later provider iteration to
+		// interpret its result. With no room, retain the LA-2 suggestion path.
+		if maxIters >= 2 {
+			queuedAutoContinuation = a.claimAutoReadOnlyContinuationContextWithSnapshot(
+				options.Continuation, turnMCPSnapshot, authorityMode, autoContinuationState,
+			)
+		}
+		if queuedAutoContinuation == nil {
+			continuationPreview = a.previewContinuationContext(options.Continuation)
+			if continuationPreview != "" {
+				loadedContext = prependContinuationContext(baseLoadedContext, continuationPreview)
+				rebuildSystem()
+				if err := admitSystemPrompt(); err != nil {
+					return err
+				}
+				committed := a.continuationContextText(options.Continuation)
+				if committed != continuationPreview {
+					loadedContext = prependContinuationContext(baseLoadedContext, committed)
+					rebuildSystem()
+				}
+			}
 		}
 	}
 
@@ -357,134 +431,141 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 		// Stream LLM response.
 		var textBuf strings.Builder
 		var toolCalls []llm.ToolCall
-		llmStart := time.Now()
+		hostContinuationBatch := queuedAutoContinuation != nil
+		activeAutoContinuation := queuedAutoContinuation
 		lastEvalTokens = 0
 		doneSeen := false
 		callbackSeen := false
 		reportedEvalTokens := int64(0)
 
-		// Snapshot the message history under the lock: ChatStream runs while
-		// other goroutines may AppendMessage, and passing the live slice would
-		// race on the backing array (and could realloc mid-stream).
-		a.mu.RLock()
-		msgsSnapshot := make([]llm.Message, len(a.messages))
-		copy(msgsSnapshot, a.messages)
-		a.mu.RUnlock()
+		if hostContinuationBatch {
+			toolCalls = []llm.ToolCall{queuedAutoContinuation.detachedCall()}
+			queuedAutoContinuation = nil
+		} else {
+			llmStart := time.Now()
+			// Snapshot the message history under the lock: ChatStream runs while
+			// other goroutines may AppendMessage, and passing the live slice would
+			// race on the backing array (and could realloc mid-stream).
+			a.mu.RLock()
+			msgsSnapshot := make([]llm.Message, len(a.messages))
+			copy(msgsSnapshot, a.messages)
+			a.mu.RUnlock()
 
-		err := a.chatStreamWithResolvedImages(ctx, llm.ChatOptions{
-			Messages:        msgsSnapshot,
-			Tools:           tools,
-			System:          system,
-			MaxEvalTokens:   requestEvalLimit,
-			ExpectedContext: turnNumCtx,
-		}, func(chunk llm.StreamChunk) error {
-			callbackSeen = true
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			default:
-			}
-			if doneSeen {
-				return fmt.Errorf("provider streamed data after its terminal usage receipt")
-			}
+			err := a.chatStreamWithResolvedImages(ctx, llm.ChatOptions{
+				Messages:        msgsSnapshot,
+				Tools:           tools,
+				System:          system,
+				MaxEvalTokens:   requestEvalLimit,
+				ExpectedContext: turnNumCtx,
+			}, func(chunk llm.StreamChunk) error {
+				callbackSeen = true
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
+				}
+				if doneSeen {
+					return fmt.Errorf("provider streamed data after its terminal usage receipt")
+				}
 
-			if chunk.Text != "" {
-				textBuf.WriteString(chunk.Text)
-				out.StreamText(chunk.Text)
-			}
-			if chunk.Reasoning != "" {
-				out.StreamReasoning(chunk.Reasoning)
-			}
-			if len(chunk.ToolCalls) > 0 {
-				if len(chunk.ToolCalls) > maxToolCallsPerResponse-len(toolCalls) {
-					return fmt.Errorf("model streamed at least %d tool calls; maximum per response is %d", len(toolCalls)+len(chunk.ToolCalls), maxToolCallsPerResponse)
+				if chunk.Text != "" {
+					textBuf.WriteString(chunk.Text)
+					out.StreamText(chunk.Text)
 				}
-				toolCalls = append(toolCalls, chunk.ToolCalls...)
-			}
-			if chunk.Done {
-				if chunk.EvalCount < 0 || chunk.PromptEvalCount < 0 {
-					return fmt.Errorf("invalid provider token receipt: eval=%d prompt=%d", chunk.EvalCount, chunk.PromptEvalCount)
+				if chunk.Reasoning != "" {
+					out.StreamReasoning(chunk.Reasoning)
 				}
-				if int64(chunk.EvalCount) > math.MaxInt64-totalEvalTokens {
-					return fmt.Errorf("provider evaluation-token receipt %d overflows the parent turn counter", chunk.EvalCount)
+				if len(chunk.ToolCalls) > 0 {
+					if len(chunk.ToolCalls) > maxToolCallsPerResponse-len(toolCalls) {
+						return fmt.Errorf("model streamed at least %d tool calls; maximum per response is %d", len(toolCalls)+len(chunk.ToolCalls), maxToolCallsPerResponse)
+					}
+					toolCalls = append(toolCalls, chunk.ToolCalls...)
 				}
-				doneSeen = true
-				lastPromptTokens = chunk.PromptEvalCount
-				lastEvalTokens = chunk.EvalCount
-				reportedEvalTokens = int64(chunk.EvalCount)
-				out.StreamDone(chunk.EvalCount, chunk.PromptEvalCount)
-			}
-			return nil
-		})
+				if chunk.Done {
+					if chunk.EvalCount < 0 || chunk.PromptEvalCount < 0 {
+						return fmt.Errorf("invalid provider token receipt: eval=%d prompt=%d", chunk.EvalCount, chunk.PromptEvalCount)
+					}
+					if int64(chunk.EvalCount) > math.MaxInt64-totalEvalTokens {
+						return fmt.Errorf("provider evaluation-token receipt %d overflows the parent turn counter", chunk.EvalCount)
+					}
+					doneSeen = true
+					lastPromptTokens = chunk.PromptEvalCount
+					lastEvalTokens = chunk.EvalCount
+					reportedEvalTokens = int64(chunk.EvalCount)
+					out.StreamDone(chunk.EvalCount, chunk.PromptEvalCount)
+				}
+				return nil
+			})
 
-		if err != nil {
-			if errors.Is(err, llm.ErrInferenceNotStarted) && !callbackSeen {
+			if err != nil {
+				if errors.Is(err, llm.ErrInferenceNotStarted) && !callbackSeen {
+					if lg != nil {
+						lg.Warn("llm request rejected before dispatch", "iter", i, "err", err)
+					}
+					out.Error(fmt.Sprintf("LLM request not started: %v", err))
+					return err
+				}
+				reservedEvalTokens := int64(0)
+				if (!errors.Is(err, llm.ErrNoModelSelected) && !errors.Is(err, llm.ErrInferenceNotStarted)) || callbackSeen {
+					reservedEvalTokens = chargeUnknownEvalReservation(out, requestEvalLimit, reportedEvalTokens)
+				}
+				var reservationErr error
+				if reservedEvalTokens > 0 {
+					reservationErr = fmt.Errorf(
+						"%w: provider stream ended without a trustworthy terminal usage receipt; conservatively charged %d reserved token(s)",
+						ErrTurnEvalBudgetExhausted, reservedEvalTokens,
+					)
+				}
+				if ctx.Err() != nil {
+					return errors.Join(ctx.Err(), reservationErr)
+				}
+				if reservationErr != nil {
+					out.Error(reservationErr.Error())
+					return errors.Join(reservationErr, fmt.Errorf("LLM response: %w", err))
+				}
+				// Retry on transient JSON parse errors from small models.
+				if limits.MaxEvalTokens == 0 && retryCount < maxRetries && isRetryableError(err) {
+					retryCount++
+					if lg != nil {
+						lg.Warn("llm retry", "iter", i, "attempt", retryCount, "err", err)
+					}
+					out.Error(fmt.Sprintf("LLM produced malformed output, retrying (%d/%d)...", retryCount, maxRetries))
+					textBuf.Reset()
+					toolCalls = nil
+					continue
+				}
 				if lg != nil {
-					lg.Warn("llm request rejected before dispatch", "iter", i, "err", err)
+					lg.Error("llm error", "iter", i, "err", err)
 				}
-				out.Error(fmt.Sprintf("LLM request not started: %v", err))
-				return err
+				// Show error and provide a fallback response
+				out.Error(fmt.Sprintf("LLM error: %v", err))
+				// Send a system message explaining the error
+				out.SystemMessage(fmt.Sprintf("⚠️ Model response failed: %v\n\nYou can try:\n- Checking if Ollama is running (`ollama ps`)\n- Switching to a different model (ctrl+o)\n- Reducing context size\n\nTool results are still available above.", err))
+				return fmt.Errorf("LLM response: %w", err)
 			}
-			reservedEvalTokens := int64(0)
-			if (!errors.Is(err, llm.ErrNoModelSelected) && !errors.Is(err, llm.ErrInferenceNotStarted)) || callbackSeen {
-				reservedEvalTokens = chargeUnknownEvalReservation(out, requestEvalLimit, reportedEvalTokens)
-			}
-			var reservationErr error
-			if reservedEvalTokens > 0 {
-				reservationErr = fmt.Errorf(
-					"%w: provider stream ended without a trustworthy terminal usage receipt; conservatively charged %d reserved token(s)",
-					ErrTurnEvalBudgetExhausted, reservedEvalTokens,
-				)
-			}
-			if ctx.Err() != nil {
-				return errors.Join(ctx.Err(), reservationErr)
-			}
-			if reservationErr != nil {
-				out.Error(reservationErr.Error())
-				return errors.Join(reservationErr, fmt.Errorf("LLM response: %w", err))
-			}
-			// Retry on transient JSON parse errors from small models.
-			if limits.MaxEvalTokens == 0 && retryCount < maxRetries && isRetryableError(err) {
-				retryCount++
-				if lg != nil {
-					lg.Warn("llm retry", "iter", i, "attempt", retryCount, "err", err)
+			if !doneSeen {
+				reservedEvalTokens := chargeUnknownEvalReservation(out, requestEvalLimit, 0)
+				receiptErr := fmt.Errorf("provider stream ended without a terminal usage receipt")
+				if reservedEvalTokens > 0 {
+					budgetErr := fmt.Errorf(
+						"%w: provider stream ended without a terminal usage receipt; conservatively charged %d reserved token(s)",
+						ErrTurnEvalBudgetExhausted, reservedEvalTokens,
+					)
+					out.Error(budgetErr.Error())
+					return errors.Join(budgetErr, receiptErr)
 				}
-				out.Error(fmt.Sprintf("LLM produced malformed output, retrying (%d/%d)...", retryCount, maxRetries))
-				textBuf.Reset()
-				toolCalls = nil
-				continue
+				out.Error(receiptErr.Error())
+				return receiptErr
 			}
+			retryCount = 0 // reset on success
+			if lastEvalTokens < 0 || int64(lastEvalTokens) > math.MaxInt64-totalEvalTokens {
+				return fmt.Errorf("invalid provider evaluation-token receipt %d", lastEvalTokens)
+			}
+			totalEvalTokens += int64(lastEvalTokens)
 			if lg != nil {
-				lg.Error("llm error", "iter", i, "err", err)
+				lg.Info("llm response", "iter", i, "ms", time.Since(llmStart).Milliseconds(),
+					"prompt_tokens", lastPromptTokens, "eval_tokens", lastEvalTokens, "tool_calls", len(toolCalls))
 			}
-			// Show error and provide a fallback response
-			out.Error(fmt.Sprintf("LLM error: %v", err))
-			// Send a system message explaining the error
-			out.SystemMessage(fmt.Sprintf("⚠️ Model response failed: %v\n\nYou can try:\n- Checking if Ollama is running (`ollama ps`)\n- Switching to a different model (ctrl+o)\n- Reducing context size\n\nTool results are still available above.", err))
-			return fmt.Errorf("LLM response: %w", err)
-		}
-		if !doneSeen {
-			reservedEvalTokens := chargeUnknownEvalReservation(out, requestEvalLimit, 0)
-			receiptErr := fmt.Errorf("provider stream ended without a terminal usage receipt")
-			if reservedEvalTokens > 0 {
-				budgetErr := fmt.Errorf(
-					"%w: provider stream ended without a terminal usage receipt; conservatively charged %d reserved token(s)",
-					ErrTurnEvalBudgetExhausted, reservedEvalTokens,
-				)
-				out.Error(budgetErr.Error())
-				return errors.Join(budgetErr, receiptErr)
-			}
-			out.Error(receiptErr.Error())
-			return receiptErr
-		}
-		retryCount = 0 // reset on success
-		if lastEvalTokens < 0 || int64(lastEvalTokens) > math.MaxInt64-totalEvalTokens {
-			return fmt.Errorf("invalid provider evaluation-token receipt %d", lastEvalTokens)
-		}
-		totalEvalTokens += int64(lastEvalTokens)
-		if lg != nil {
-			lg.Info("llm response", "iter", i, "ms", time.Since(llmStart).Milliseconds(),
-				"prompt_tokens", lastPromptTokens, "eval_tokens", lastEvalTokens, "tool_calls", len(toolCalls))
 		}
 		if len(toolCalls) > maxToolCallsPerResponse {
 			err := fmt.Errorf("model returned %d tool calls; maximum per response is %d", len(toolCalls), maxToolCallsPerResponse)
@@ -509,22 +590,37 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 			out.Error(err.Error())
 			return err
 		}
-		providerCallIDs := make([]string, len(toolCalls))
-		for toolIndex := range toolCalls {
-			providerCallIDs[toolIndex] = toolCalls[toolIndex].ID
+		var providerCallIDs []string
+		if !hostContinuationBatch {
+			providerCallIDs = make([]string, len(toolCalls))
+			for toolIndex := range toolCalls {
+				providerCallIDs[toolIndex] = toolCalls[toolIndex].ID
+			}
 		}
 		a.ensureToolCallIDs(toolCalls, turnID, i+1)
-		trackedExecutions, err := a.newTrackedExecutions(ctx, execRuntime, turnID, i+1, toolCalls, providerCallIDs)
+		var trackedExecutions []trackedToolExecution
+		var err error
+		if hostContinuationBatch {
+			trackedExecutions, err = a.newTrackedContinuationExecutions(ctx, execRuntime, turnID, i+1, toolCalls)
+		} else {
+			trackedExecutions, err = a.newTrackedExecutions(ctx, execRuntime, turnID, i+1, toolCalls, providerCallIDs)
+		}
 		if err != nil {
 			out.Error(fmt.Sprintf("record requested tool execution: %v", err))
 			return fmt.Errorf("record requested tool execution: %w", err)
 		}
 
 		// Record assistant message in conversation history.
+		assistantToolCalls := toolCalls
+		if hostContinuationBatch {
+			assistantToolCalls = []llm.ToolCall{activeAutoContinuation.detachedCall()}
+			assistantToolCalls[0].ID = toolCalls[0].ID
+		}
 		assistantMsg := llm.Message{
 			Role:      "assistant",
 			Content:   textBuf.String(),
-			ToolCalls: toolCalls,
+			ToolCalls: assistantToolCalls,
+			HostOwned: hostContinuationBatch,
 		}
 		a.AppendMessage(assistantMsg)
 
@@ -632,12 +728,19 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 			}
 
 			originalID, originalName := tc.ID, tc.Name
-			block, reason := a.runPreHooks(ctx, &tc)
-			if tc.ID != originalID || tc.Name != originalName {
-				tc.ID, tc.Name = originalID, originalName
+			hookCall := tc
+			hookCall.Arguments = cloneApprovalArguments(tc.Arguments)
+			block, reason := a.runPreHooks(ctx, &hookCall)
+			if hookCall.ID != originalID || hookCall.Name != originalName {
+				hookCall.ID, hookCall.Name = originalID, originalName
 				block = true
 				reason = "tool hook attempted to change approved tool identity"
 			}
+			// A hook may retain the pointer or argument map it received. Detach the
+			// effective call immediately after the synchronous hook boundary so later
+			// mutation cannot alter the hash, approval, UI, or backend dispatch.
+			tc = hookCall
+			tc.Arguments = cloneApprovalArguments(hookCall.Arguments)
 			effectiveKind, effectiveEffect := a.executionKindForCall(tc)
 			if effectiveKind != tracked.identity.Kind || effectiveEffect != tracked.identity.EffectClass {
 				block = true
@@ -653,6 +756,23 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 				continue
 			}
 			tracked.effectiveHash = effectiveHash
+			autoContinuationStillEligible := func() bool {
+				if !hostContinuationBatch || activeAutoContinuation == nil ||
+					activeAutoContinuation.registryEpoch != turnMCPSnapshot.Epoch ||
+					activeAutoContinuation.authorityVersion != a.approvalStateSnapshot().hostVersion ||
+					!a.continuationFreshnessCurrent(
+						&activeAutoContinuation.continuation, activeAutoContinuation.freshnessSequence,
+					) ||
+					!a.autoReadOnlyContinuationEligible(&activeAutoContinuation.continuation, turnMCPSnapshot, authorityMode) {
+					return false
+				}
+				currentHash, err := executionPkg.HashCanonicalArguments(tc.Arguments)
+				return err == nil && currentHash == tracked.originalHash
+			}
+			if hostContinuationBatch && !autoContinuationStillEligible() {
+				block = true
+				reason = "host-scheduled continuation changed or lost read-only authority before dispatch"
+			}
 			toolCalls[toolIndex] = tc
 			if block {
 				reason = capToolResultForContext(reason, turnNumCtx)
@@ -695,6 +815,14 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 				a.authorityAutoApproves(authorityMode, tc, tracked.identity.Kind)
 			if autoApproved {
 				requiresApproval = false
+			}
+			if hostContinuationBatch && (!autoApproved || !autoContinuationStillEligible()) {
+				result := "host-scheduled continuation no longer qualifies for automatic read-only authorization"
+				if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventDenied, executionPkg.ApprovalPolicyDenied, result, "automatic continuation denied before dispatch")); err != nil {
+					return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
+				}
+				a.failedToolCall(tc, out, result, turnNumCtx)
+				continue
 			}
 			authorization := toolAuthorization{allowed: true, approval: executionPkg.ApprovalNotApplicable}
 			if autoApproved {
@@ -793,7 +921,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 				}
 				return ctxErr
 			}
-			out.ToolCallStart(tc.ID, tc.Name, tc.Arguments)
+			out.ToolCallStart(tc.ID, tc.Name, cloneApprovalArguments(tc.Arguments))
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				if err := a.cancelCommittedDispatchIntent(ctx, execRuntime, *tracked, tc, out, ctxErr, true, turnNumCtx); err != nil {
 					a.cancelUndispatchedToolCalls(toolCalls[toolIndex+1:], out, err)
@@ -811,6 +939,14 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 					return ledgerErr
 				}
 				return ctxErr
+			}
+			if hostContinuationBatch && !autoContinuationStillEligible() {
+				result := "host-scheduled continuation became stale before backend dispatch"
+				if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventFailed, executionPkg.ApprovalPolicyDenied, result, "automatic continuation stopped after final policy check")); err != nil {
+					return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
+				}
+				a.failedToolCall(tc, out, result, turnNumCtx)
+				continue
 			}
 			startTime := time.Now()
 
@@ -867,7 +1003,15 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 			case executionPkg.KindMemory:
 				result, isErr = a.handleMemoryTool(tc)
 			default:
-				toolResult, callErr := a.registry.CallTool(ctx, tc.Name, tc.Arguments)
+				var toolResult *mcpPkg.ToolResult
+				var callErr error
+				if hostContinuationBatch {
+					toolResult, callErr = a.registry.CallToolAtEpoch(
+						ctx, activeAutoContinuation.registryEpoch, tc.Name, cloneApprovalArguments(tc.Arguments),
+					)
+				} else {
+					toolResult, callErr = a.registry.CallTool(ctx, tc.Name, tc.Arguments)
+				}
 				if callErr != nil {
 					result = mcpDispatchErrorReceipt(tc.Name, callErr)
 					isErr = true
@@ -904,17 +1048,16 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 			}
 			continuationCandidates := assembly.Actions
 			continuationSurface := assembly.ContinuationSurface
-			continuationSourceAuthorized := a.continuationSourceAuthorized(tc, assembly.Bound)
+			sourceRouteVersion := a.mcpRouteVersionSnapshot()
+			continuationSourceAuthorized := a.continuationSourceAuthorized(tc, assembly.Bound) &&
+				a.allowsMCPTool(tc.Name) && !a.authorityPermissionDeniedForCall(tc)
 			if !assembly.Bound {
 				if continuationSourceAuthorized {
 					continuationCandidates = ecosystemPkg.ProjectContinuationActions(projection, continuationReceipt)
 				}
 				continuationSurface = continuationSurfacePresent(projection, continuationReceipt)
 			}
-			continuation := a.selectContinuation(
-				tc, projection, continuationCandidates, turnMCPSnapshot,
-				continuationSourceAuthorized, turnToolPolicy.AllowMCP, continuationState,
-			)
+			var continuation *ValidatedContinuation
 			if capabilityRouteOutcomeFailed(projection, isErr) &&
 				a.markCapabilityRouteFailed(capabilityActivity, tc.Name, tc.Arguments, capabilityHint) {
 				capabilityRouteFailed = true
@@ -934,15 +1077,12 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 					modelResult = assembly.Transient
 				}
 			}
-			if projection.Specialist == "cortex" && (continuation != nil || continuationSurface) {
+			if continuationSurface {
 				// Once an exact action has been normalized, do not also feed Cortex's
-				// raw command/reason prose to a small model. The bounded semantic
-				// receipt plus tool+arguments contract is the authoritative context.
+				// or Bob's raw command/reason payload to a small model. The bounded
+				// semantic receipt plus tool+arguments contract is authoritative.
 				durableResult = ecosystemPkg.SafeReceiptText(projection)
 				modelResult = durableResult
-			}
-			if continuationContext := continuation.modelContext(); continuationContext != "" {
-				modelResult += "\n\n" + continuationContext
 			}
 			answered := a.executionOutcomeAnswered(tc, kind, tracked.identity.EffectClass, result, transportErr, projection)
 			terminalType := terminalExecutionEventType(tracked.identity.EffectClass, isErr, answered, ctx.Err())
@@ -967,6 +1107,31 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 				a.AppendMessage(llm.Message{Role: "tool", Content: unknownResult, ToolName: tc.Name, ToolCallID: tc.ID})
 				a.cancelUndispatchedToolCalls(toolCalls[toolIndex+1:], out, unresolved)
 				return unresolved
+			}
+
+			// A continuation becomes schedulable only after the source outcome is
+			// durably terminal. Automatic chains are single-action, successful,
+			// exact-route reads and consume both a synthetic iteration and their
+			// separate hard two-step budget. Preserve one additional provider
+			// iteration after the read so its result can always be interpreted.
+			// Every failed auto admission falls back to LA-2 suggestion mode without
+			// granting authority.
+			if terminalType == executionPkg.EventCompleted && ctx.Err() == nil &&
+				len(toolCalls) == 1 && toolIndex == 0 && i < maxIters-2 && autoContinuationState != nil {
+				queuedAutoContinuation = a.selectAutoReadOnlyContinuation(
+					tc, projection, continuationCandidates, turnMCPSnapshot,
+					continuationSourceAuthorized, sourceRouteVersion, authorityMode, autoContinuationState,
+				)
+			}
+			if queuedAutoContinuation == nil && continuationsConfig.Mode != config.ContinuationOff {
+				continuation = a.selectContinuation(
+					tc, projection, continuationCandidates, turnMCPSnapshot,
+					continuationSourceAuthorized, turnToolPolicy.AllowMCP, continuationState,
+				)
+			}
+			if continuationContext := continuation.modelContext(); continuationContext != "" {
+				modelResult += "\n\n" + continuationContext
+				modelResult = capToolResultForContext(modelResult, turnNumCtx)
 			}
 
 			if lg != nil {
@@ -1014,15 +1179,17 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 				return ctxErr
 			}
 		}
-		if preflightRejections == len(toolCalls) {
-			malformedToolIterations++
-			if malformedToolIterations >= 2 {
-				err := fmt.Errorf("%w twice consecutively; switch to a larger model or retry with explicit tool arguments", ErrMalformedToolLoop)
-				out.Error(err.Error())
-				return err
+		if !hostContinuationBatch {
+			if preflightRejections == len(toolCalls) {
+				malformedToolIterations++
+				if malformedToolIterations >= 2 {
+					err := fmt.Errorf("%w twice consecutively; switch to a larger model or retry with explicit tool arguments", ErrMalformedToolLoop)
+					out.Error(err.Error())
+					return err
+				}
+			} else {
+				malformedToolIterations = 0
 			}
-		} else {
-			malformedToolIterations = 0
 		}
 		if err := ctx.Err(); err != nil {
 			return err
@@ -1037,29 +1204,34 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 			system = buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadGrants(ctx, modePrefix, tools, a.skillContent, skillCatalog, loadedContext, a.memoryStore, iceContext, turnFilesystem.workDir, turnFilesystem.ignoreContent, a.llmClient.Model(), turnNumCtx, readGrants)
 		}
 
-		// Check if we should compact the conversation.
-		estimatedPromptTokens := a.estimatePromptTokens(system, tools)
-		if estimatedPromptTokens < lastPromptTokens {
-			estimatedPromptTokens = lastPromptTokens
-		}
-		if shouldCompactForContext(estimatedPromptTokens, turnNumCtx) {
-			if limits.bounded() {
-				err := &TurnContextBudgetError{
-					EstimatedPromptTokens: estimatedPromptTokens,
-					ContextWindowTokens:   turnNumCtx,
+		// A queued host read executes before another provider request. Deferring
+		// compaction avoids inserting an untracked summarization generation between
+		// the source receipt and its exact continuation.
+		if queuedAutoContinuation == nil {
+			// Check if we should compact the conversation.
+			estimatedPromptTokens := a.estimatePromptTokens(system, tools)
+			if estimatedPromptTokens < lastPromptTokens {
+				estimatedPromptTokens = lastPromptTokens
+			}
+			if shouldCompactForContext(estimatedPromptTokens, turnNumCtx) {
+				if limits.bounded() {
+					err := &TurnContextBudgetError{
+						EstimatedPromptTokens: estimatedPromptTokens,
+						ContextWindowTokens:   turnNumCtx,
+					}
+					if lg != nil {
+						lg.Warn("context admission denied", "phase", "after_tools", "iter", i, "prompt_tokens", estimatedPromptTokens, "num_ctx", turnNumCtx, "bounded", true)
+					}
+					out.Error(err.Error())
+					return err
 				}
 				if lg != nil {
-					lg.Warn("context admission denied", "phase", "after_tools", "iter", i, "prompt_tokens", estimatedPromptTokens, "num_ctx", turnNumCtx, "bounded", true)
+					lg.Info("compaction", "iter", i, "prompt_tokens", estimatedPromptTokens, "num_ctx", turnNumCtx)
 				}
-				out.Error(err.Error())
-				return err
-			}
-			if lg != nil {
-				lg.Info("compaction", "iter", i, "prompt_tokens", estimatedPromptTokens, "num_ctx", turnNumCtx)
-			}
-			if a.compactForContext(ctx, out, turnNumCtx) {
-				// Rebuild system prompt after compaction (memory may have changed).
-				system = buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadGrants(ctx, modePrefix, tools, a.skillContent, skillCatalog, loadedContext, a.memoryStore, iceContext, turnFilesystem.workDir, turnFilesystem.ignoreContent, a.llmClient.Model(), turnNumCtx, readGrants)
+				if a.compactForContext(ctx, out, turnNumCtx) {
+					// Rebuild system prompt after compaction (memory may have changed).
+					system = buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadGrants(ctx, modePrefix, tools, a.skillContent, skillCatalog, loadedContext, a.memoryStore, iceContext, turnFilesystem.workDir, turnFilesystem.ignoreContent, a.llmClient.Model(), turnNumCtx, readGrants)
+				}
 			}
 		}
 

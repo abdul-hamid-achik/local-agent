@@ -308,7 +308,7 @@ func (m *Model) forgetHistoricalImages() tea.Cmd {
 		return nil
 	}
 
-	m.agent.ReplaceMessages(messages)
+	m.agent.ReplaceMessagesWithinSession(messages)
 	for index := range m.entries {
 		m.entries[index].Attachments = nil
 	}
@@ -325,7 +325,7 @@ func (m *Model) forgetHistoricalImages() tea.Cmd {
 		err := m.persistSessionState(ctx)
 		cancel()
 		if err != nil {
-			m.agent.ReplaceMessages(beforeMessages)
+			m.agent.ReplaceMessagesWithinSession(beforeMessages)
 			m.entries = beforeEntries
 			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: "Forget image history: saved session was not changed: " + sanitizeTerminalSingleLine(err.Error())})
 		}

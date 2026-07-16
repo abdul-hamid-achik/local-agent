@@ -27,9 +27,11 @@ const (
 	continuationArgumentsNeedInput
 )
 
-// ValidatedContinuation is an ephemeral host-owned suggestion. Call has passed
-// exact registry, schema, workspace, scope, trust, and deny-policy validation,
-// but LA-2 never dispatches it. Command prose is absent by construction.
+// ValidatedContinuation is an ephemeral host-owned continuation contract. Call
+// has passed exact registry, schema, workspace, scope, trust, and deny-policy
+// validation. LA-2 exposes it only as a suggestion; LA-3 applies additional
+// read-only eligibility and atomic reservation before it may be scheduled.
+// Command prose is absent by construction.
 type ValidatedContinuation struct {
 	Source          string
 	SourceOperation string
@@ -39,11 +41,13 @@ type ValidatedContinuation struct {
 	BlockedBy       []string
 	ReasonCode      string
 	Effect          executionpkg.EffectClass
+	SourceDomain    ecosystem.DomainState
 	Fingerprint     string
 	SourceTask      string
 	SourceRevision  uint64
 	ContextDigest   string
 	SchemaDigest    string
+	BehaviorDigest  string
 	WorkspaceRef    string
 }
 
@@ -62,11 +66,14 @@ type ContinuationSuggestion struct {
 // Its fields are private so UI/advisor code cannot forge arguments or persist a
 // downstream map; RunTurn revalidates it immediately before model use.
 type ContinuationContext struct {
-	mu            sync.Mutex
-	owner         *Agent
-	registryEpoch uint64
-	continuation  ValidatedContinuation
-	consumed      bool
+	mu                 sync.Mutex
+	owner              *Agent
+	registryEpoch      uint64
+	sourceRouteVersion uint64
+	issueSequence      uint64
+	sourceCall         llm.ToolCall
+	continuation       ValidatedContinuation
+	consumed           bool
 }
 
 // ContinuationOutput is optional so headless and test outputs retain the small
@@ -103,13 +110,15 @@ func (a *Agent) InterpretContinuationResult(call llm.ToolCall, result *mcp.ToolR
 	if a == nil || result == nil || a.registry == nil {
 		return nil
 	}
+	sourceRouteVersion := a.mcpRouteVersionSnapshot()
 	projection := a.projectSemanticToolReceipt(
 		call, result.Content, result.Structured, result.ErrorMeta, false, result.IsError, false,
 	)
 	receipt := ecosystem.RawReceipt{
 		Text: result.Content, Structured: result.Structured, ErrorMeta: result.ErrorMeta, ToolError: result.IsError,
 	}
-	sourceAuthorized := a.continuationSourceAuthorized(call, false)
+	sourceAuthorized := a.continuationSourceAuthorized(call, false) &&
+		a.allowsMCPTool(call.Name) && !a.authorityPermissionDeniedForCall(call)
 	var candidates []ecosystem.ContinuationAction
 	if sourceAuthorized {
 		candidates = ecosystem.ProjectContinuationActions(projection, receipt)
@@ -117,10 +126,17 @@ func (a *Agent) InterpretContinuationResult(call llm.ToolCall, result *mcp.ToolR
 	snapshot := a.mcpToolSnapshot()
 	state := newContinuationTurnState(snapshot.Epoch)
 	continuation := a.selectContinuationCandidate(call, projection, candidates, snapshot, sourceAuthorized, true, state, false)
-	if continuation == nil {
+	if continuation == nil || a.mcpRouteVersionSnapshot() != sourceRouteVersion {
 		return nil
 	}
-	return &ContinuationContext{owner: a, registryEpoch: snapshot.Epoch, continuation: *continuation}
+	issueSequence, ok := a.observeContinuationFreshness(continuation)
+	if !ok || a.mcpRouteVersionSnapshot() != sourceRouteVersion {
+		return nil
+	}
+	return &ContinuationContext{
+		owner: a, registryEpoch: snapshot.Epoch, sourceRouteVersion: sourceRouteVersion,
+		issueSequence: issueSequence, sourceCall: cloneContinuationToolCall(call), continuation: *continuation,
+	}
 }
 
 // continuationSourceAuthorized proves that the receipt which supplied an
@@ -161,25 +177,80 @@ func continuationSurfacePresent(projection ecosystem.ToolProjection, receipt eco
 }
 
 func (a *Agent) continuationContextText(context *ContinuationContext) string {
-	return consumeContinuationContext(a, context, func(continuation *ValidatedContinuation) string {
-		if a.registry == nil || context.registryEpoch == 0 {
-			return ""
-		}
-		snapshot := a.mcpToolSnapshot()
-		if snapshot.Epoch != context.registryEpoch || !a.continuationWorkspaceMatches(continuation.WorkspaceRef) ||
-			!a.allowsMCPTool(continuation.Call.Name) || a.authorityPermissionDeniedForCall(continuation.Call) {
-			return ""
-		}
-		contract, trusted := a.trustedMCPContract(continuation.Call)
-		_, effect := a.executionKindForCall(continuation.Call)
-		if !trusted || effect == executionpkg.EffectUnknown || effect != contract.effect || effect != continuation.Effect {
-			return ""
-		}
-		if !continuationSchemaStillCurrent(a, continuation, snapshot) {
-			return ""
-		}
-		return continuation.modelContext()
-	})
+	if a == nil || context == nil || context.owner != a {
+		return ""
+	}
+	context.mu.Lock()
+	defer context.mu.Unlock()
+	if context.consumed {
+		return ""
+	}
+	modelContext := a.validatedContinuationContextText(context, &context.continuation)
+	if modelContext == "" {
+		return ""
+	}
+
+	// Commit source freshness and the LA-2 replay reservation under one Agent
+	// lock. A newer Cortex revision/Bob digest or route-policy transition cannot
+	// slip between validation and consumption.
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if context.sourceRouteVersion != a.mcpRouteVersion || a.continuationFreshness == nil ||
+		!a.continuationFreshness.current(&context.continuation, context.issueSequence) {
+		return ""
+	}
+	if a.continuationHistory == nil {
+		a.continuationHistory = newContinuationTurnState(0)
+	}
+	if !a.continuationHistory.accept(&context.continuation) {
+		return ""
+	}
+	context.consumed = true
+	return modelContext
+}
+
+// previewContinuationContext validates the same bounded model projection as
+// continuationContextText without consuming the opaque capability or its
+// replay fingerprint. RunTurn uses the preview only for context admission and
+// commits it after the resulting prompt is known to fit.
+func (a *Agent) previewContinuationContext(context *ContinuationContext) string {
+	if a == nil || context == nil || context.owner != a {
+		return ""
+	}
+	context.mu.Lock()
+	defer context.mu.Unlock()
+	if context.consumed {
+		return ""
+	}
+	modelContext := a.validatedContinuationContextText(context, &context.continuation)
+	if modelContext == "" || !a.wouldAcceptContinuationHistory(&context.continuation) {
+		return ""
+	}
+	return modelContext
+}
+
+func (a *Agent) validatedContinuationContextText(context *ContinuationContext, continuation *ValidatedContinuation) string {
+	if a == nil || context == nil || continuation == nil || a.registry == nil || context.registryEpoch == 0 {
+		return ""
+	}
+	if !a.continuationContextSourceStillAuthorized(context) ||
+		!a.continuationFreshnessCurrent(continuation, context.issueSequence) {
+		return ""
+	}
+	snapshot := a.mcpToolSnapshot()
+	if snapshot.Epoch != context.registryEpoch || !a.continuationWorkspaceMatches(continuation.WorkspaceRef) ||
+		!a.allowsMCPTool(continuation.Call.Name) || a.authorityPermissionDeniedForCall(continuation.Call) {
+		return ""
+	}
+	contract, trusted := a.trustedMCPContract(continuation.Call)
+	_, effect := a.executionKindForCall(continuation.Call)
+	if !trusted || effect == executionpkg.EffectUnknown || effect != contract.effect || effect != continuation.Effect {
+		return ""
+	}
+	if !continuationSchemaStillCurrent(a, continuation, snapshot) {
+		return ""
+	}
+	return continuation.modelContext()
 }
 
 // consumeContinuationContext turns an already validated opaque context into a
@@ -268,6 +339,95 @@ type continuationTurnState struct {
 type continuationImmutable struct {
 	revision    uint64
 	fingerprint string
+}
+
+// continuationFreshnessState records the newest exact source state observed
+// for each Cortex task or Bob operation without spending the separate LA-2 or
+// LA-3 replay reservations. Opaque contexts carry the issue sequence so a
+// newer observed revision/digest invalidates an older unconsumed capability.
+type continuationFreshnessState struct {
+	next    uint64
+	records map[string]continuationFreshnessRecord
+	order   []string
+}
+
+type continuationFreshnessRecord struct {
+	sequence      uint64
+	revision      uint64
+	contextDigest string
+	fingerprint   string
+	retired       []string
+}
+
+func newContinuationFreshnessState() *continuationFreshnessState {
+	return &continuationFreshnessState{records: make(map[string]continuationFreshnessRecord)}
+}
+
+func (state *continuationFreshnessState) observe(action *ValidatedContinuation) (uint64, bool) {
+	if state == nil || action == nil || action.Fingerprint == "" {
+		return 0, false
+	}
+	key := continuationSourceLifecycleKey(action)
+	prior, exists := state.records[key]
+	if action.SourceTask != "" {
+		if exists && (action.SourceRevision < prior.revision ||
+			(action.SourceRevision == prior.revision && action.Fingerprint != prior.fingerprint)) {
+			return 0, false
+		}
+	} else {
+		if action.ContextDigest == "" {
+			return 0, false
+		}
+		if exists {
+			for _, retired := range prior.retired {
+				if action.ContextDigest == retired {
+					return 0, false
+				}
+			}
+			if action.ContextDigest == prior.contextDigest && action.Fingerprint != prior.fingerprint {
+				return 0, false
+			}
+		}
+	}
+
+	state.next++
+	if state.next == 0 {
+		// Overflow is practically unreachable, but sequence zero is reserved as
+		// invalid so a wrapped capability must fail closed.
+		return 0, false
+	}
+	record := continuationFreshnessRecord{
+		sequence: state.next, revision: action.SourceRevision,
+		contextDigest: action.ContextDigest, fingerprint: action.Fingerprint,
+	}
+	if exists && action.SourceTask == "" {
+		record.retired = append([]string(nil), prior.retired...)
+		if prior.contextDigest != "" && prior.contextDigest != action.ContextDigest {
+			record.retired = append(record.retired, prior.contextDigest)
+			if len(record.retired) > maxContinuationFingerprintHistory {
+				record.retired = record.retired[len(record.retired)-maxContinuationFingerprintHistory:]
+			}
+		}
+	}
+	if !exists {
+		state.order = append(state.order, key)
+	}
+	state.records[key] = record
+	for len(state.order) > maxContinuationFingerprintHistory {
+		oldest := state.order[0]
+		state.order = state.order[1:]
+		delete(state.records, oldest)
+	}
+	return record.sequence, true
+}
+
+func (state *continuationFreshnessState) current(action *ValidatedContinuation, sequence uint64) bool {
+	if state == nil || action == nil || sequence == 0 {
+		return false
+	}
+	record, ok := state.records[continuationSourceLifecycleKey(action)]
+	return ok && record.sequence == sequence && record.revision == action.SourceRevision &&
+		record.contextDigest == action.ContextDigest && record.fingerprint == action.Fingerprint
 }
 
 func newContinuationTurnState(registryEpoch uint64) *continuationTurnState {
@@ -372,6 +532,90 @@ func (a *Agent) acceptContinuationHistory(action *ValidatedContinuation) bool {
 	return a.continuationHistory.accept(action)
 }
 
+func (a *Agent) observeContinuationFreshness(action *ValidatedContinuation) (uint64, bool) {
+	if a == nil || action == nil {
+		return 0, false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.continuationFreshness == nil {
+		a.continuationFreshness = newContinuationFreshnessState()
+	}
+	return a.continuationFreshness.observe(action)
+}
+
+func (a *Agent) continuationFreshnessCurrent(action *ValidatedContinuation, sequence uint64) bool {
+	if a == nil || action == nil || sequence == 0 {
+		return false
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.continuationFreshness != nil && a.continuationFreshness.current(action, sequence)
+}
+
+func (a *Agent) continuationContextSourceStillAuthorized(context *ContinuationContext) bool {
+	if a == nil || context == nil || context.sourceRouteVersion != a.mcpRouteVersionSnapshot() {
+		return false
+	}
+	call := context.sourceCall
+	return a.continuationSourceAuthorized(call, false) && a.allowsMCPTool(call.Name) &&
+		!a.authorityPermissionDeniedForCall(call)
+}
+
+func cloneContinuationToolCall(call llm.ToolCall) llm.ToolCall {
+	clone := call
+	clone.Arguments = cloneApprovalArguments(call.Arguments)
+	return clone
+}
+
+// wouldAcceptContinuationHistory is the non-mutating counterpart used during
+// prompt admission. The state is tiny and bounded, so copying it avoids
+// reserving a fingerprint for a turn that may still fail its context budget.
+func (a *Agent) wouldAcceptContinuationHistory(action *ValidatedContinuation) bool {
+	if a == nil || action == nil {
+		return false
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	state := cloneContinuationTurnState(a.continuationHistory)
+	if state == nil {
+		state = newContinuationTurnState(0)
+	}
+	return state.accept(action)
+}
+
+func cloneContinuationTurnState(source *continuationTurnState) *continuationTurnState {
+	if source == nil {
+		return nil
+	}
+	clone := &continuationTurnState{
+		registryEpoch: source.registryEpoch,
+		seen:          append([]string(nil), source.seen...),
+		seenSet:       make(map[string]struct{}, len(source.seenSet)),
+		latest:        make(map[string]uint64, len(source.latest)),
+		immutable:     make(map[string]continuationImmutable, len(source.immutable)),
+		context:       make(map[string]string, len(source.context)),
+		retired:       make(map[string][]string, len(source.retired)),
+		sourceOrder:   append([]string(nil), source.sourceOrder...),
+	}
+	for key := range source.seenSet {
+		clone.seenSet[key] = struct{}{}
+	}
+	for key, value := range source.latest {
+		clone.latest[key] = value
+	}
+	for key, value := range source.immutable {
+		clone.immutable[key] = value
+	}
+	for key, value := range source.context {
+		clone.context[key] = value
+	}
+	for key, value := range source.retired {
+		clone.retired[key] = append([]string(nil), value...)
+	}
+	return clone
+}
+
 func (a *Agent) selectContinuation(
 	sourceCall llm.ToolCall,
 	projection ecosystem.ToolProjection,
@@ -401,7 +645,11 @@ func (a *Agent) selectContinuationCandidate(
 	}
 	for _, candidate := range candidates {
 		validated, ok := a.validateContinuation(sourceCall, projection, candidate, snapshot)
-		if ok && state.accept(validated) && (!recordHistory || a.acceptContinuationHistory(validated)) {
+		fresh := true
+		if ok && recordHistory {
+			_, fresh = a.observeContinuationFreshness(validated)
+		}
+		if ok && fresh && state.accept(validated) && (!recordHistory || a.acceptContinuationHistory(validated)) {
 			return validated
 		}
 	}
@@ -465,17 +713,19 @@ func (a *Agent) validateContinuation(
 	sort.Strings(inputs)
 	blockers := append([]string(nil), candidate.BlockedBy...)
 	sort.Strings(blockers)
+	behaviorDigest := autoContinuationBehaviorDigest(definition)
 	fingerprint := executionpkg.HashText(strings.Join([]string{
 		candidate.Source, candidate.SourceOperation, candidate.TaskID,
 		fmt.Sprint(candidate.SourceRevision), candidate.ContextDigest,
-		call.Name, argumentHash, strings.Join(inputs, ","), strings.Join(blockers, ","), schemaDigest,
+		string(projection.Domain), call.Name, argumentHash, strings.Join(inputs, ","), strings.Join(blockers, ","),
+		schemaDigest, behaviorDigest,
 	}, "\x00"))
 	return &ValidatedContinuation{
 		Source: candidate.Source, SourceOperation: candidate.SourceOperation, Tool: candidate.Tool,
 		Call: call, Inputs: append([]string(nil), candidate.Inputs...), BlockedBy: append([]string(nil), candidate.BlockedBy...),
-		ReasonCode: reasonCode, Effect: effect, Fingerprint: fingerprint,
+		ReasonCode: reasonCode, Effect: effect, SourceDomain: projection.Domain, Fingerprint: fingerprint,
 		SourceTask: candidate.TaskID, SourceRevision: candidate.SourceRevision,
-		ContextDigest: candidate.ContextDigest, SchemaDigest: schemaDigest,
+		ContextDigest: candidate.ContextDigest, SchemaDigest: schemaDigest, BehaviorDigest: behaviorDigest,
 		WorkspaceRef: candidate.WorkspaceRef,
 	}, true
 }

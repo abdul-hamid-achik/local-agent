@@ -245,6 +245,7 @@ func run() int {
 	// provider work without a scoped SQLite ledger.
 	ag.RequireExecutionLedger(true)
 	ag.SetToolsConfig(cfg.Tools)
+	ag.SetContinuationsConfig(cfg.Continuations)
 	ag.SetRouter(router)
 	expertConsultant, expertErr := newRuntimeExpertConsultant(cfg, modelManager, agentsDir, ollamaInventory)
 	if expertErr != nil {

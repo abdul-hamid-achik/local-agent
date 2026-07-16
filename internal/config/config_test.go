@@ -3,6 +3,8 @@ package config
 import (
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestDefaults(t *testing.T) {
@@ -43,12 +45,17 @@ func TestDefaults(t *testing.T) {
 	if cfg.Tools.MaxIterations != 10 || cfg.Tools.AutoMaxIterations != 40 {
 		t.Errorf("Tools iteration defaults = normal:%d auto:%d, want 10/40", cfg.Tools.MaxIterations, cfg.Tools.AutoMaxIterations)
 	}
+	if cfg.Continuations.Mode != ContinuationSuggest || cfg.Continuations.MaxAutoSteps != MaxAutoContinuationSteps {
+		t.Errorf("Continuations defaults = %#v, want mode=%q max_auto_steps=%d", cfg.Continuations, ContinuationSuggest, MaxAutoContinuationSteps)
+	}
 }
 
 func TestAutoIterationEnvironmentOverride(t *testing.T) {
 	t.Setenv("LOCAL_AGENT_TOOLS_AUTO_MAX_ITER", "64")
 	cfg := defaults()
-	applyEnvOverrides(&cfg)
+	if err := applyEnvOverrides(&cfg); err != nil {
+		t.Fatal(err)
+	}
 	if cfg.Tools.AutoMaxIterations != 64 {
 		t.Fatalf("auto max iterations = %d, want 64", cfg.Tools.AutoMaxIterations)
 	}
@@ -95,12 +102,132 @@ func TestApplyEnvOverrides(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv(tt.envKey, tt.envVal)
 			cfg := defaults()
-			applyEnvOverrides(&cfg)
+			if err := applyEnvOverrides(&cfg); err != nil {
+				t.Fatal(err)
+			}
 			got := tt.checkFn(&cfg)
 			if got != tt.want {
 				t.Errorf("after setting %s=%q, got %q, want %q", tt.envKey, tt.envVal, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestContinuationEnvironmentOverrides(t *testing.T) {
+	t.Run("valid", func(t *testing.T) {
+		t.Setenv("LOCAL_AGENT_CONTINUATIONS_MODE", "auto_read_only")
+		t.Setenv("LOCAL_AGENT_CONTINUATIONS_MAX_AUTO_STEPS", "1")
+		cfg := defaults()
+		if err := applyEnvOverrides(&cfg); err != nil {
+			t.Fatalf("apply overrides: %v", err)
+		}
+		if cfg.Continuations.Mode != ContinuationAutoReadOnly || cfg.Continuations.MaxAutoSteps != 1 {
+			t.Fatalf("continuation overrides = %#v", cfg.Continuations)
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("validate overrides: %v", err)
+		}
+	})
+
+	t.Run("invalid mode fails validation", func(t *testing.T) {
+		t.Setenv("LOCAL_AGENT_CONTINUATIONS_MODE", "automatic")
+		cfg := defaults()
+		if err := applyEnvOverrides(&cfg); err != nil {
+			t.Fatalf("apply overrides: %v", err)
+		}
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "continuations.mode") {
+			t.Fatalf("invalid mode error = %v", err)
+		}
+	})
+
+	t.Run("malformed max fails closed", func(t *testing.T) {
+		t.Setenv("LOCAL_AGENT_CONTINUATIONS_MAX_AUTO_STEPS", "many")
+		cfg := defaults()
+		if err := applyEnvOverrides(&cfg); err == nil || !strings.Contains(err.Error(), "LOCAL_AGENT_CONTINUATIONS_MAX_AUTO_STEPS") {
+			t.Fatalf("malformed max error = %v", err)
+		}
+	})
+}
+
+func TestContinuationsConfigValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		mode    ContinuationMode
+		steps   int
+		wantErr string
+	}{
+		{name: "off", mode: ContinuationOff, steps: 0},
+		{name: "suggest", mode: ContinuationSuggest, steps: MaxAutoContinuationSteps},
+		{name: "auto read only", mode: ContinuationAutoReadOnly, steps: 1},
+		{name: "unknown mode", mode: "automatic", steps: 1, wantErr: "continuations.mode"},
+		{name: "case sensitive mode", mode: "AUTO_READ_ONLY", steps: 1, wantErr: "continuations.mode"},
+		{name: "negative max", mode: ContinuationSuggest, steps: -1, wantErr: "continuations.max_auto_steps"},
+		{name: "above hard max", mode: ContinuationAutoReadOnly, steps: MaxAutoContinuationSteps + 1, wantErr: "continuations.max_auto_steps"},
+		{name: "auto requires budget", mode: ContinuationAutoReadOnly, steps: 0, wantErr: "at least 1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := defaults()
+			cfg.Continuations = ContinuationsConfig{Mode: tc.mode, MaxAutoSteps: tc.steps}
+			err := cfg.Validate()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Validate() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("Validate() error = %v, want substring %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestContinuationsConfigStrictYAML(t *testing.T) {
+	t.Run("omitted field retains host default", func(t *testing.T) {
+		cfg := defaults()
+		if err := yaml.Unmarshal([]byte("continuations:\n  mode: auto_read_only\n"), &cfg); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if cfg.Continuations.Mode != ContinuationAutoReadOnly || cfg.Continuations.MaxAutoSteps != MaxAutoContinuationSteps {
+			t.Fatalf("decoded continuations = %#v", cfg.Continuations)
+		}
+	})
+
+	for _, test := range []struct {
+		name     string
+		document string
+		wantErr  string
+	}{
+		{
+			name:     "explicit null mode",
+			document: "continuations:\n  mode: null\n",
+			wantErr:  "continuations.mode cannot be null",
+		},
+		{
+			name:     "explicit null max auto steps",
+			document: "continuations:\n  max_auto_steps: null\n",
+			wantErr:  "continuations.max_auto_steps cannot be null",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := defaults()
+			err := yaml.Unmarshal([]byte(test.document), &cfg)
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("decode error = %v, want substring %q", err, test.wantErr)
+			}
+		})
+	}
+
+	for _, document := range []string{
+		"continuations:\n  mode: suggest\n  max_auto_step: 1\n",
+		"continuations:\n  mode: suggest\n  mode: off\n",
+		"continuations: auto_read_only\n",
+		"continuations: null\n",
+	} {
+		cfg := defaults()
+		if err := yaml.Unmarshal([]byte(document), &cfg); err == nil {
+			t.Fatalf("invalid continuations YAML decoded:\n%s", document)
+		}
 	}
 }
 

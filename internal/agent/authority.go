@@ -114,8 +114,19 @@ func (a *Agent) SetTrustedLocalMCPServers(servers []config.ServerConfig) {
 	}
 	a.mu.Lock()
 	a.trustedMCP = trusted
+	a.approvalHostVersion++
+	a.mcpRouteVersion++
 	a.mu.Unlock()
 	a.clearContinuationContracts()
+}
+
+func (a *Agent) mcpRouteVersionSnapshot() uint64 {
+	if a == nil {
+		return 0
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.mcpRouteVersion
 }
 
 func (a *Agent) trustedMCPServer(namespace string) (trustedMCPServer, bool) {

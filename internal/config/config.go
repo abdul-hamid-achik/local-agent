@@ -38,12 +38,35 @@ type Config struct {
 	Servers    []ServerConfig `yaml:"servers,omitempty"`
 	// SkillsDir is decoded only to reject the retired split skill root with a
 	// clear migration error instead of silently ignoring an old configuration.
-	SkillsDir    string        `yaml:"skills_dir,omitempty"`
-	ICE          ICEConfig     `yaml:"ice,omitempty"`
-	AgentProfile string        `yaml:"agent_profile,omitempty"`
-	Tools        ToolsConfig   `yaml:"tools,omitempty"`
-	Experts      ExpertsConfig `yaml:"experts,omitempty"`
-	Privacy      PrivacyConfig `yaml:"privacy,omitempty"`
+	SkillsDir     string              `yaml:"skills_dir,omitempty"`
+	ICE           ICEConfig           `yaml:"ice,omitempty"`
+	AgentProfile  string              `yaml:"agent_profile,omitempty"`
+	Tools         ToolsConfig         `yaml:"tools,omitempty"`
+	Continuations ContinuationsConfig `yaml:"continuations,omitempty"`
+	Experts       ExpertsConfig       `yaml:"experts,omitempty"`
+	Privacy       PrivacyConfig       `yaml:"privacy,omitempty"`
+}
+
+// UnmarshalYAML rejects an explicit null continuation policy before it can be
+// mistaken for omission. Other top-level decoding remains backward-compatible;
+// strictness is intentionally scoped to this authority-sensitive subsection.
+func (c *Config) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.MappingNode {
+		return fmt.Errorf("config must be a mapping")
+	}
+	for index := 0; index < len(node.Content); index += 2 {
+		key, value := node.Content[index].Value, node.Content[index+1]
+		if key == "continuations" && value.ShortTag() == "!!null" {
+			return fmt.Errorf("continuations cannot be null; omit it to use safe defaults")
+		}
+	}
+	type plain Config
+	decoded := plain(*c)
+	if err := node.Decode(&decoded); err != nil {
+		return err
+	}
+	*c = Config(decoded)
+	return nil
 }
 
 type PrivacyConfig struct {
@@ -63,6 +86,73 @@ type ToolsConfig struct {
 	MaxGrepResults    int    `yaml:"max_grep_results,omitempty"`
 	MaxIterations     int    `yaml:"max_iterations,omitempty"`
 	AutoMaxIterations int    `yaml:"auto_max_iterations,omitempty"`
+}
+
+// MaxAutoContinuationSteps is a host-owned safety ceiling. Configuration may
+// lower the budget, but it cannot widen an automatic continuation chain beyond
+// this bound.
+const MaxAutoContinuationSteps = 2
+
+// ContinuationMode controls how validated, typed continuation actions are
+// surfaced. It does not grant tool authority; normal registry, trust, approval,
+// and execution-ledger checks still apply to every action.
+type ContinuationMode string
+
+const (
+	ContinuationOff          ContinuationMode = "off"
+	ContinuationSuggest      ContinuationMode = "suggest"
+	ContinuationAutoReadOnly ContinuationMode = "auto_read_only"
+)
+
+func (m ContinuationMode) Valid() bool {
+	switch m {
+	case ContinuationOff, ContinuationSuggest, ContinuationAutoReadOnly:
+		return true
+	default:
+		return false
+	}
+}
+
+// ContinuationsConfig configures host-controlled handling of typed
+// continuation contracts. Auto mode is intentionally limited to exact,
+// registry-validated, read-only actions; it never converts a downstream
+// suggestion into authority.
+type ContinuationsConfig struct {
+	Mode         ContinuationMode `yaml:"mode" json:"mode"`
+	MaxAutoSteps int              `yaml:"max_auto_steps" json:"max_auto_steps"`
+}
+
+// UnmarshalYAML makes this authority-sensitive subsection strict. A typo must
+// not silently select a more permissive default, and omitted fields retain the
+// host defaults established before decoding.
+func (c *ContinuationsConfig) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.MappingNode {
+		return fmt.Errorf("continuations must be a mapping")
+	}
+	allowed := map[string]bool{
+		"mode": true, "max_auto_steps": true,
+	}
+	seen := make(map[string]struct{}, len(allowed))
+	for index := 0; index < len(node.Content); index += 2 {
+		key, value := node.Content[index].Value, node.Content[index+1]
+		if !allowed[key] {
+			return fmt.Errorf("unknown continuations field %q", key)
+		}
+		if _, duplicate := seen[key]; duplicate {
+			return fmt.Errorf("duplicate continuations field %q", key)
+		}
+		if value.ShortTag() == "!!null" {
+			return fmt.Errorf("continuations.%s cannot be null; omit it to use the host default", key)
+		}
+		seen[key] = struct{}{}
+	}
+	type plain ContinuationsConfig
+	decoded := plain(*c)
+	if err := node.Decode(&decoded); err != nil {
+		return err
+	}
+	*c = ContinuationsConfig(decoded)
+	return nil
 }
 
 // ExpertsConfig controls application-level read-only Team/Swarm/MoE
@@ -147,6 +237,10 @@ func defaults() Config {
 			MaxIterations:     10,
 			AutoMaxIterations: 40,
 		},
+		Continuations: ContinuationsConfig{
+			Mode:         ContinuationSuggest,
+			MaxAutoSteps: MaxAutoContinuationSteps,
+		},
 		Experts: ExpertsConfig{
 			Enabled:       true,
 			MaxEvalTokens: 768,
@@ -188,7 +282,9 @@ func loadConfigAndAgents() (*Config, *AgentsDir, error) {
 	// Environment selection must be applied before loading the shared agents
 	// root. Otherwise LOCAL_AGENT_AGENTS_DIR changes the returned config but
 	// silently preloads metadata from a different directory.
-	applyEnvOverrides(&cfg)
+	if err := applyEnvOverrides(&cfg); err != nil {
+		return nil, nil, err
+	}
 	if os.Getenv("LOCAL_AGENT_AGENTS_DIR") != "" {
 		// Process environment is user-controlled startup authority. Do not
 		// attribute an environment-selected agents root to repository config.
@@ -432,6 +528,25 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("config: tools.timeout must be positive, got %s", c.Tools.Timeout)
 		}
 	}
+	if !c.Continuations.Mode.Valid() {
+		return fmt.Errorf(
+			"config: continuations.mode must be one of %q, %q, or %q, got %q",
+			ContinuationOff,
+			ContinuationSuggest,
+			ContinuationAutoReadOnly,
+			c.Continuations.Mode,
+		)
+	}
+	if c.Continuations.MaxAutoSteps < 0 || c.Continuations.MaxAutoSteps > MaxAutoContinuationSteps {
+		return fmt.Errorf(
+			"config: continuations.max_auto_steps must be 0..%d, got %d",
+			MaxAutoContinuationSteps,
+			c.Continuations.MaxAutoSteps,
+		)
+	}
+	if c.Continuations.Mode == ContinuationAutoReadOnly && c.Continuations.MaxAutoSteps == 0 {
+		return fmt.Errorf("config: continuations.max_auto_steps must be at least 1 in %q mode", ContinuationAutoReadOnly)
+	}
 	for name, value := range map[string]int{
 		"max_concurrent_inference":       c.Experts.MaxConcurrentInference,
 		"max_concurrent_distinct_models": c.Experts.MaxConcurrentDistinctModels,
@@ -645,7 +760,7 @@ func configFileCandidates() []string {
 	return candidates
 }
 
-func applyEnvOverrides(cfg *Config) {
+func applyEnvOverrides(cfg *Config) error {
 	if v := os.Getenv("OLLAMA_HOST"); v != "" {
 		cfg.Ollama.BaseURL = v
 	}
@@ -667,6 +782,16 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("LOCAL_AGENT_TOOLS_AUTO_MAX_ITER"); v != "" {
 		cfg.Tools.AutoMaxIterations = parseEnvInt(v, cfg.Tools.AutoMaxIterations)
 	}
+	if v := os.Getenv("LOCAL_AGENT_CONTINUATIONS_MODE"); v != "" {
+		cfg.Continuations.Mode = ContinuationMode(v)
+	}
+	if v := os.Getenv("LOCAL_AGENT_CONTINUATIONS_MAX_AUTO_STEPS"); v != "" {
+		steps, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("config: invalid LOCAL_AGENT_CONTINUATIONS_MAX_AUTO_STEPS %q: %w", v, err)
+		}
+		cfg.Continuations.MaxAutoSteps = steps
+	}
 	if v := os.Getenv("LOCAL_AGENT_ICE_EMBED_MODEL"); v != "" {
 		cfg.ICE.EmbedModel = v
 	}
@@ -675,6 +800,7 @@ func applyEnvOverrides(cfg *Config) {
 			cfg.Privacy.LocalOnly = localOnly
 		}
 	}
+	return nil
 }
 
 func parseEnvInt(v string, defaultVal int) int {

@@ -39,6 +39,10 @@ type toolCaller interface {
 var (
 	// ErrRegistryClosed reports an operation attempted after shutdown began.
 	ErrRegistryClosed = errors.New("MCP registry is closed")
+	// ErrRegistryEpochChanged reports that a caller's exact catalog snapshot is
+	// stale. CallToolAtEpoch checks and acquires the route under one registry
+	// lock, preventing a reconnect from redirecting an already validated call.
+	ErrRegistryEpochChanged = errors.New("MCP registry catalog changed")
 	// ErrConnectionSuperseded reports that a newer connection attempt now owns
 	// the server generation. Callers must not retry the stale attempt unchanged.
 	ErrConnectionSuperseded = errors.New("MCP connection attempt superseded")
@@ -133,7 +137,8 @@ const connectTimeout = 15 * time.Second
 const defaultCallTimeout = 60 * time.Second
 
 // beginLifecycleOperation prevents WaitGroup Add/Wait races by admitting new
-// work under the same mutex that Close uses to mark the registry closed.
+// connections and tool calls under the same mutex that Close uses to mark the
+// registry closed.
 func (r *Registry) beginLifecycleOperation(ctx context.Context) (context.Context, func(), error) {
 	r.mu.Lock()
 	if r.closed {
@@ -469,8 +474,35 @@ func (r *Registry) FailedServers() []FailedServer {
 
 // CallTool routes a tool call to the correct MCP server.
 func (r *Registry) CallTool(ctx context.Context, name string, args map[string]any) (*ToolResult, error) {
+	return r.callTool(ctx, 0, false, name, args)
+}
+
+// CallToolAtEpoch routes a tool only when the exact validated catalog remains
+// current. Lifecycle admission, epoch validation, and route acquisition happen
+// before dispatch; shutdown or a later reconnect cannot redirect the call to a
+// different client, schema, or remote tool.
+func (r *Registry) CallToolAtEpoch(ctx context.Context, expectedEpoch uint64, name string, args map[string]any) (*ToolResult, error) {
+	if expectedEpoch == 0 {
+		return nil, fmt.Errorf("%w: expected epoch must be non-zero", ErrRegistryEpochChanged)
+	}
+	return r.callTool(ctx, expectedEpoch, true, name, args)
+}
+
+func (r *Registry) callTool(ctx context.Context, expectedEpoch uint64, requireEpoch bool, name string, args map[string]any) (*ToolResult, error) {
+	opCtx, finish, err := r.beginLifecycleOperation(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer finish()
+
 	r.mu.RLock()
+	if requireEpoch && r.epoch != expectedEpoch {
+		actualEpoch := r.epoch
+		r.mu.RUnlock()
+		return nil, fmt.Errorf("%w: expected epoch %d, current epoch %d", ErrRegistryEpochChanged, expectedEpoch, actualEpoch)
+	}
 	route, ok := r.toolMap[name]
+	timeout := r.callTimeout
 	r.mu.RUnlock()
 
 	if !ok {
@@ -480,14 +512,11 @@ func (r *Registry) CallTool(ctx context.Context, name string, args map[string]an
 		}, nil
 	}
 
-	r.mu.RLock()
-	timeout := r.callTimeout
-	r.mu.RUnlock()
 	if timeout <= 0 {
 		timeout = defaultCallTimeout
 	}
 
-	callCtx, cancel := context.WithTimeout(ctx, timeout)
+	callCtx, cancel := context.WithTimeout(opCtx, timeout)
 	defer cancel()
 
 	result, err := route.client.CallTool(callCtx, route.remoteName, args)
@@ -510,7 +539,8 @@ func (r *Registry) Close() {
 		r.cancel()
 		r.mu.Unlock()
 
-		// Includes every health monitor and in-flight ConnectServer operation.
+		// Includes every health monitor, connection attempt, and in-flight tool
+		// call. Lifecycle cancellation bounds each join.
 		r.lifecycleWG.Wait()
 
 		r.mu.Lock()
