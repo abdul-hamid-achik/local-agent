@@ -217,6 +217,40 @@ func TestBobV040GuidanceTransientContentIsBoundedAndSanitized(t *testing.T) {
 	}
 }
 
+func TestBobContextWorkspaceIsTransientAndExact(t *testing.T) {
+	raw := readBobV040Fixture(t, "context-clean-v1.json")
+	receipt := RawReceipt{Structured: raw}
+	projection := ProjectReceipt(ProjectToolCall("bob__bob_context", nil), receipt)
+	workspace, ok := BobContextWorkspace(projection, receipt)
+	if !ok || workspace != "/workspace" {
+		t.Fatalf("workspace = %q, %t; want exact transient workspace", workspace, ok)
+	}
+	if strings.Contains(SafeReceiptText(projection), workspace) {
+		t.Fatalf("durable receipt leaked workspace: %q", SafeReceiptText(projection))
+	}
+
+	for name, mutate := range map[string]func(*ToolProjection, *RawReceipt){
+		"foreign projection": func(p *ToolProjection, _ *RawReceipt) { p.Specialist = "other" },
+		"digest mismatch": func(p *ToolProjection, _ *RawReceipt) {
+			p.Digest.ContextDigest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		},
+		"malformed receipt": func(_ *ToolProjection, r *RawReceipt) {
+			r.Structured = json.RawMessage(`{"schema_version":1,"ok":true}`)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := projection
+			digest := *projection.Digest
+			candidate.Digest = &digest
+			candidateReceipt := receipt
+			mutate(&candidate, &candidateReceipt)
+			if workspace, ok := BobContextWorkspace(candidate, candidateReceipt); ok || workspace != "" {
+				t.Fatalf("untrusted workspace = %q, %t", workspace, ok)
+			}
+		})
+	}
+}
+
 func TestBobV040ContextDigestAndTransientListsAreBounded(t *testing.T) {
 	document := decodeBobV040Fixture(t, "context-clean-v1.json")
 	context := document["context"].(map[string]any)

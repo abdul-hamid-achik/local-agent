@@ -208,6 +208,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 	// checkpoint, or cursor projection can observe only the durable receipts.
 	defer a.settleTransientMessages()
 	defer a.mcphubResults.Reset()
+	defer a.clearBobStoredAdmissions()
 	defer a.clearContinuationContracts()
 	// A provider such as ModelManager may expose a different context window for
 	// each selected model. Resolve it exactly once so every budget decision in
@@ -247,6 +248,13 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 	// Merge built-in file tools according to the active mode policy.
 	tools = append(tools, filterToolDefsByName(a.toolsBuiltinToolDefs(), turnToolPolicy.localTools)...)
 	skillCatalog := a.skillCatalogPrompt()
+	continuationsConfig := a.continuationsConfigSnapshot()
+	bobCandidate, bobContextCached := a.reconcileBobWorkspaceContext(out)
+	var bobBootstrap bobBootstrapPlan
+	var bobBootstrapAvailable bool
+	if turnToolPolicy.AllowMCP && !bobContextCached && continuationsConfig.Mode != config.ContinuationOff {
+		bobBootstrap, bobBootstrapAvailable = a.planBobWorkspaceBootstrap(bobCandidate, turnMCPSnapshot)
+	}
 
 	// ICE: index user message and assemble cross-session context.
 	var iceContext string
@@ -281,18 +289,26 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 		}
 	}
 
-	capabilityBaseContext := a.loadedCtx
+	capabilityBaseContextWithoutBob := a.loadedCtx
 	if turnToolPolicy.AllowMCP {
 		if guidance := a.mcpServerGuidance(); guidance != "" {
-			if capabilityBaseContext != "" {
+			if capabilityBaseContextWithoutBob != "" {
 				guidance += "\n\n"
 			}
-			capabilityBaseContext = guidance + capabilityBaseContext
+			capabilityBaseContextWithoutBob = guidance + capabilityBaseContextWithoutBob
 		}
 	}
+	capabilityBaseContext := capabilityBaseContextWithoutBob
+	if bobContext := a.bobWorkspaceContextPrompt(); bobContext != "" {
+		capabilityBaseContext = prependContinuationContext(capabilityBaseContext, bobContext)
+	}
 	baseLoadedContext := composeCapabilityContext(capabilityHintText, capabilityBaseContext)
+	bobBootstrapPreview := ""
+	if bobBootstrapAvailable {
+		bobBootstrapPreview = bobWorkspaceBootstrapHint(bobBootstrap)
+		baseLoadedContext = prependContinuationContext(baseLoadedContext, bobBootstrapPreview)
+	}
 	loadedContext := baseLoadedContext
-	continuationsConfig := a.continuationsConfigSnapshot()
 	var continuationPreview string
 	if turnToolPolicy.AllowMCP && continuationsConfig.Mode != config.ContinuationOff &&
 		(continuationsConfig.Mode != config.ContinuationAutoReadOnly || authorityMode != AuthorityAutoScoped) {
@@ -409,6 +425,27 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 				}
 			}
 		}
+		if queuedAutoContinuation == nil && bobBootstrapAvailable && maxIters >= 2 && !limits.bounded() {
+			queuedAutoContinuation = a.prepareBobWorkspaceBootstrap(
+				bobBootstrap, turnMCPSnapshot, authorityMode, autoContinuationState,
+			)
+			if queuedAutoContinuation != nil && bobBootstrapPreview != "" {
+				// The host-owned read is already queued. Remove the suggestion from
+				// the provider prompt so the model cannot repeat it after receiving
+				// the exact result.
+				baseLoadedContext = composeCapabilityContext(capabilityHintText, capabilityBaseContext)
+				loadedContext = baseLoadedContext
+				rebuildSystem()
+				if err := admitSystemPrompt(); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	if bobBootstrapAvailable && queuedAutoContinuation == nil {
+		emitContinuationSuggestion(out, turnID, 1, &ValidatedContinuation{
+			Tool: "bob_context", ReasonCode: "workspace_context",
+		})
 	}
 
 	for i := 0; i < maxIters; i++ {
@@ -903,6 +940,21 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 			if err := appendExecutionEvent(ctx, execRuntime, executionEvent(*tracked, executionPkg.EventStarted, executionPkg.ApprovalNotApplicable, "", "durable dispatch intent committed")); err != nil {
 				return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
 			}
+			// Once a mutation has a durable dispatch intent, any prior Bob
+			// convergence projection is stale even if the backend later fails or
+			// cancellation makes the outcome unknown. Read-only and memory metadata
+			// operations do not invalidate repository contract state.
+			if kind != executionPkg.KindMemory && tracked.identity.EffectClass != executionPkg.EffectReadOnly {
+				a.invalidateBobWorkspaceContext(out)
+				// The system prompt was assembled before this durable mutation. Remove
+				// both the cached Bob digest and any pre-mutation continuation hint
+				// before a later provider iteration can observe stale convergence.
+				capabilityBaseContext = capabilityBaseContextWithoutBob
+				baseLoadedContext = composeCapabilityContext(capabilityHintText, capabilityBaseContext)
+				loadedContext = baseLoadedContext
+				rebuildSystem()
+			}
+			bobAdmission := a.captureBobContextAdmission(tc)
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				if err := a.cancelCommittedDispatchIntent(ctx, execRuntime, *tracked, tc, out, ctxErr, false, turnNumCtx); err != nil {
 					a.cancelUndispatchedToolCalls(toolCalls[toolIndex+1:], out, err)
@@ -1042,6 +1094,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 			a.rememberContinuationContract(tc, projection, structured, turnMCPSnapshot)
 			assembly := a.projectMCPHubResultAssembly(tc, projection, structured, isErr)
 			projection = assembly.Projection
+			bobAdmission = a.resolveBobContextAdmission(bobAdmission, projection, assembly)
 			continuationReceipt := ecosystemPkg.RawReceipt{
 				Text: semanticText, Structured: structured, ErrorMeta: errorMeta,
 				TransportError: transportErr, ToolError: isErr,
@@ -1108,6 +1161,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 				a.cancelUndispatchedToolCalls(toolCalls[toolIndex+1:], out, unresolved)
 				return unresolved
 			}
+			a.settleBobContextAdmission(out, bobAdmission, projection, continuationReceipt, assembly, terminalType)
 
 			// A continuation becomes schedulable only after the source outcome is
 			// durably terminal. Automatic chains are single-action, successful,

@@ -905,6 +905,9 @@ func (m *Model) restoreSessionState(state persistedSessionState) error {
 	m.setRouterMode(m.modeConfigs[m.presentedMode()].RouterMode)
 
 	m.toolsPending = 0
+	// Workspace context is reconstructed from a fresh exact Bob receipt. It is
+	// never inherited from a durable transcript or a previously active session.
+	m.clearBobWorkspaceContext()
 	m.resetTurnDiagnostics()
 	m.toolCardMgr = NewToolCardManager(m.isDark)
 	for i := range m.toolEntries {

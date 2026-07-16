@@ -179,6 +179,17 @@ func (a *Agent) autoReadOnlyContinuationEligible(
 		!exactPinnedAutoContinuationTarget(a, continuation.Call) {
 		return false
 	}
+	if continuation.hostBootstrap != nil {
+		if continuation.Source != "local_agent" || continuation.SourceOperation != "bob_workspace_bootstrap" ||
+			continuation.Tool != "bob_context" || !a.bobBootstrapClaimCurrent(continuation.hostBootstrap) {
+			return false
+		}
+	} else if continuation.Source != "bob" && continuation.Source != "cortex" {
+		// Exact Bob and Cortex parsers are the only downstream authorities that
+		// may issue LA-3 continuations. Other sources cannot gain read authority by
+		// constructing a lookalike normalized value.
+		return false
+	}
 
 	kind, effect := a.executionKindForCall(continuation.Call)
 	contract, trusted := a.trustedMCPContract(continuation.Call)
@@ -268,6 +279,10 @@ func cloneValidatedContinuation(source *ValidatedContinuation) ValidatedContinua
 	clone.Call.Arguments = cloneApprovalArguments(source.Call.Arguments)
 	clone.Inputs = append([]string(nil), source.Inputs...)
 	clone.BlockedBy = append([]string(nil), source.BlockedBy...)
+	if source.hostBootstrap != nil {
+		claim := *source.hostBootstrap
+		clone.hostBootstrap = &claim
+	}
 	return clone
 }
 

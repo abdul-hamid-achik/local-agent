@@ -159,6 +159,43 @@ func transientBobGuidanceContent(projection ToolProjection, receipt RawReceipt) 
 	return transient, true
 }
 
+// BobContextWorkspace returns the exact transient workspace bound by a
+// validated bob_context receipt. The absolute path is intentionally excluded
+// from ToolProjection and every durable digest; callers may use this value only
+// to bind an in-memory cache admission to the workspace that requested it.
+func BobContextWorkspace(projection ToolProjection, receipt RawReceipt) (string, bool) {
+	projection = projection.Normalize()
+	if projection.Specialist != "bob" || projection.Operation != "bob_context" ||
+		projection.Role != RoleBuild || projection.Transport != TransportSucceeded ||
+		!projection.DomainTyped || projection.Evidence != EvidenceNone || projection.Digest == nil ||
+		projection.Digest.Kind != DigestBobContext {
+		return "", false
+	}
+	domain, digest, ok := projectBobReceipt("bob_context", receipt)
+	if !ok || digest == nil || domain != projection.Domain {
+		return "", false
+	}
+	normalized := normalizeReceiptDigest(*digest)
+	if !reflect.DeepEqual(projection.Digest, &normalized) {
+		return "", false
+	}
+	document, ok := receiptDocument(receipt)
+	if !ok {
+		return "", false
+	}
+	var output bobMCPReceipt
+	if json.Unmarshal(document, &output) != nil {
+		return "", false
+	}
+	var context struct {
+		Workspace string `json:"workspace"`
+	}
+	if json.Unmarshal(output.Context, &context) != nil || !validBobWorkspace(context.Workspace) {
+		return "", false
+	}
+	return context.Workspace, true
+}
+
 func buildTransientBobContext(raw json.RawMessage) (bobTransientContext, bool) {
 	var value struct {
 		ContractDigest string          `json:"contract_digest"`

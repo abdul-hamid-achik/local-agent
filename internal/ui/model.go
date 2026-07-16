@@ -190,6 +190,7 @@ type Model struct {
 	capabilityRoute     *agent.CapabilityRoute
 	lastCapabilityRoute *agent.CapabilityRoute
 	continuation        continuationActionState
+	bobWorkspaceContext bobWorkspaceContextState
 	inputLines          int
 	userScrolledUp      bool
 
@@ -639,6 +640,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		}
 		if m.continuation.card != nil {
 			m.continuation.card.SetTheme(m.isDark)
+		}
+		if m.bobWorkspaceContext.card != nil {
+			m.bobWorkspaceContext.card.SetTheme(m.isDark)
 		}
 		if m.goalInspectorState != nil {
 			m.goalInspectorState.SetTheme(m.isDark)
@@ -1918,6 +1922,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 
 	case ContinuationActionMsg:
 		m.handleContinuationAction(msg)
+
+	case BobWorkspaceContextMsg:
+		m.handleBobWorkspaceContext(msg)
 
 	case ErrorMsg:
 		if m.logger != nil {
@@ -3536,6 +3543,7 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 }
 
 func (m *Model) resetConversationSession() {
+	m.clearBobWorkspaceContext()
 	m.revokeOllamaCloudConsent()
 	if m.imageAttachCancel != nil {
 		m.imageAttachCancel()
@@ -3707,6 +3715,9 @@ func (m *Model) footerHeight() int {
 	height := 1 // divider
 	if m.compactCompletionOwnsDivider() {
 		height = 0
+	}
+	if bob := m.renderBobWorkspaceContext(); bob != "" {
+		height += lipgloss.Height(bob)
 	}
 	if action := m.renderContinuationAction(); action != "" {
 		height += lipgloss.Height(action)

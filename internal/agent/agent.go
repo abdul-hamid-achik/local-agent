@@ -88,6 +88,15 @@ type Agent struct {
 	// across model turns.
 	autoContinuationHistory *autoContinuationHistory
 	continuationFreshness   *continuationFreshnessState
+	// bobWorkspaceContext is a bounded, ephemeral session cache populated only
+	// by an exact typed bob_context receipt bound to the active workspace. Raw
+	// manifest or StructuredContent bytes never enter this state.
+	bobWorkspaceContext    *bobWorkspaceContextCache
+	bobWorkspaceGeneration uint64
+	// bobStoredAdmissions binds a turn-scoped MCPHub stored call ID to the
+	// exact workspace/generation admitted for bob_context. It is cleared when
+	// the turn ends and never serialized.
+	bobStoredAdmissions map[string]bobContextAdmission
 
 	checkpointStore     CheckpointStore
 	checkpointSessionID int64
@@ -149,6 +158,7 @@ func New(llmClient llm.Client, registry *mcp.Registry, numCtx int) *Agent {
 		continuationHistory:     newContinuationTurnState(0),
 		autoContinuationHistory: newAutoContinuationHistory(),
 		continuationFreshness:   newContinuationFreshnessState(),
+		bobWorkspaceGeneration:  1,
 		continuationsConfig: config.ContinuationsConfig{
 			Mode:         config.ContinuationSuggest,
 			MaxAutoSteps: config.MaxAutoContinuationSteps,
@@ -289,6 +299,7 @@ func (a *Agent) ClearHistory() {
 	a.messages = nil
 	a.continuationHistory = newContinuationTurnState(0)
 	a.resetAutoContinuationHistoryLocked()
+	a.invalidateBobWorkspaceContextLocked()
 }
 
 // AppendMessage appends a message to the conversation history.
@@ -398,6 +409,7 @@ func (a *Agent) replaceMessages(msgs []llm.Message, resetContinuationHistory boo
 	if resetContinuationHistory {
 		a.continuationHistory = newContinuationTurnState(0)
 		a.resetAutoContinuationHistoryLocked()
+		a.invalidateBobWorkspaceContextLocked()
 	}
 }
 
@@ -615,6 +627,7 @@ func (a *Agent) SetWorkspacePolicy(dir, ignoreContent string) {
 	if workspaceChanged {
 		a.continuationHistory = newContinuationTurnState(0)
 		a.resetAutoContinuationHistoryLocked()
+		a.invalidateBobWorkspaceContextLocked()
 	}
 	a.mu.Unlock()
 }
@@ -628,6 +641,7 @@ func (a *Agent) SetWorkDir(dir string) {
 		a.filesystemVersion++
 		a.continuationHistory = newContinuationTurnState(0)
 		a.resetAutoContinuationHistoryLocked()
+		a.invalidateBobWorkspaceContextLocked()
 	}
 	a.mu.Unlock()
 }

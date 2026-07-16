@@ -52,6 +52,10 @@ func (m *Model) View() tea.View {
 	} else if m.readScopePrompt != nil {
 		content.WriteString(m.renderReadScopePrompt())
 	} else {
+		if bob := m.renderBobWorkspaceContext(); bob != "" {
+			content.WriteString(bob)
+			content.WriteString("\n")
+		}
 		if action := m.renderContinuationAction(); action != "" {
 			content.WriteString(action)
 			content.WriteString("\n")

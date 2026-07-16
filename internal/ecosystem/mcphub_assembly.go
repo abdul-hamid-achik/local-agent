@@ -32,6 +32,10 @@ type mcphubResultAssembly struct {
 type MCPHubResultObservation struct {
 	Projection ToolProjection
 	Transient  string
+	// Workspace is an exact parser-validated Bob context workspace used only by
+	// the host's ephemeral cache admission. It must never be persisted or sent to
+	// presentation code.
+	Workspace string
 	// Actions is an ephemeral, bounded continuation projection derived before
 	// the assembled raw payload is zeroed. It is never part of ToolProjection or
 	// any persisted session shape.
@@ -162,7 +166,7 @@ func (a *MCPHubResultAssembler) ObservePage(namespace string, requestedCursor in
 	a.mu.Unlock()
 	defer clear(payload)
 
-	parsed, transient, actions, continuationSurface, typed := reparseStoredMCPHubResult(namespace, key.callID, server, tool, payload)
+	parsed, transient, workspace, actions, continuationSurface, typed := reparseStoredMCPHubResult(namespace, key.callID, server, tool, payload)
 	observation.Complete = true
 	if !typed {
 		parsed.Domain = DomainUnknown
@@ -171,6 +175,7 @@ func (a *MCPHubResultAssembler) ObservePage(namespace string, requestedCursor in
 	}
 	observation.Projection = parsed.Normalize()
 	observation.Transient = transient
+	observation.Workspace = workspace
 	observation.Actions = actions
 	observation.ContinuationSurface = continuationSurface
 	return observation
@@ -259,7 +264,7 @@ func assemblyFailure(projection ToolProjection) ToolProjection {
 	return projection.Normalize()
 }
 
-func reparseStoredMCPHubResult(namespace, callID, server, tool string, payload []byte) (ToolProjection, string, []ContinuationAction, bool, bool) {
+func reparseStoredMCPHubResult(namespace, callID, server, tool string, payload []byte) (ToolProjection, string, string, []ContinuationAction, bool, bool) {
 	receipt, ok := storedCallToolReceipt(payload)
 	parsed := ProjectToolCall(server+"__"+tool, nil)
 	parsed.Route = ToolRoute{Gateway: namespace, Server: server, Tool: tool, CallID: callID, Lazy: true}
@@ -267,7 +272,7 @@ func reparseStoredMCPHubResult(namespace, callID, server, tool string, payload [
 		parsed.Transport = TransportSucceeded
 		parsed.Domain = DomainUnknown
 		parsed.Evidence = EvidenceNone
-		return parsed.Normalize(), "", nil, false, false
+		return parsed.Normalize(), "", "", nil, false, false
 	}
 	parsed = ProjectReceipt(parsed, receipt)
 	parsed.Route = ToolRoute{Gateway: namespace, Server: server, Tool: tool, CallID: callID, Lazy: true}
@@ -278,11 +283,12 @@ func reparseStoredMCPHubResult(namespace, callID, server, tool string, payload [
 	// direct parser instead of converting an answered error into unknown.
 	answeredError := receipt.ToolError && parsed.Domain == DomainFailed
 	if (!parsed.DomainTyped && !answeredError) || parsed.Domain == DomainUnknown {
-		return parsed, "", nil, false, false
+		return parsed, "", "", nil, false, false
 	}
 	transient, _ := TransientModelContent(parsed, receipt)
+	workspace, _ := BobContextWorkspace(parsed, receipt)
 	actions := ProjectContinuationActions(parsed, receipt)
-	return parsed, transient, actions, ReceiptHasContinuationActions(parsed, receipt), true
+	return parsed, transient, workspace, actions, ReceiptHasContinuationActions(parsed, receipt), true
 }
 
 func storedCallToolReceipt(payload []byte) (RawReceipt, bool) {

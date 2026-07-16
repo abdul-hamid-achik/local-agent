@@ -71,6 +71,9 @@ func TestAgentBindsExactTrustedPinnedAndLazyMCPHubStoredResults(t *testing.T) {
 				!strings.Contains(final.Transient, "go-agent-tool") {
 				t.Fatalf("complete transient = %q", final.Transient)
 			}
+			if final.Workspace != "/workspace" {
+				t.Fatalf("complete transient workspace = %q", final.Workspace)
+			}
 			for _, forbidden := range []string{agentMCPHubRawSecret, "/workspace", "create_patterns", "argv"} {
 				if strings.Contains(final.Transient, forbidden) {
 					t.Fatalf("complete transient contains %q: %q", forbidden, final.Transient)

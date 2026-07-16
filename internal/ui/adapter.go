@@ -15,6 +15,8 @@ type Adapter struct {
 	workDir string
 }
 
+var _ agent.BobWorkspaceContextOutput = (*Adapter)(nil)
+
 // NewAdapter creates an Adapter that sends messages to the given program.
 func NewAdapter(p *tea.Program, workDir ...string) *Adapter {
 	dir := ""
@@ -86,6 +88,20 @@ func (a *Adapter) ContinuationSuggestion(turnID string, sequence uint64, suggest
 		}
 	}
 	sendMsg(a.program, ContinuationActionMsg{TurnID: turnID, Sequence: sequence, Action: presentation})
+}
+
+// BobWorkspaceContext forwards only the bounded semantic workspace digest.
+// The adapter detaches the value so an agent-side cache update cannot mutate a
+// message that Bubble Tea has not processed yet.
+func (a *Adapter) BobWorkspaceContext(state agent.BobWorkspaceContextState) {
+	var digest *ecosystem.ReceiptDigest
+	if state.Digest != nil {
+		copy := *state.Digest
+		copy.Items = append([]string(nil), state.Digest.Items...)
+		copy.Required = append([]string(nil), state.Digest.Required...)
+		digest = &copy
+	}
+	sendMsg(a.program, BobWorkspaceContextMsg{Generation: state.Generation, Digest: digest})
 }
 
 func (a *Adapter) ContextCompacted() {

@@ -127,6 +127,7 @@ func (a *Agent) SetExecutionSessionID(sessionID int64) {
 		a.unresolvedExecution = nil
 		a.continuationHistory = newContinuationTurnState(0)
 		a.resetAutoContinuationHistoryLocked()
+		a.invalidateBobWorkspaceContextLocked()
 	}
 	a.executionSessionID = sessionID
 	a.mu.Unlock()

@@ -49,6 +49,10 @@ type ValidatedContinuation struct {
 	SchemaDigest    string
 	BehaviorDigest  string
 	WorkspaceRef    string
+	// hostBootstrap is set only by the Agent's Bob workspace bootstrap. It is
+	// deliberately private: downstream action payloads and embedding callers
+	// cannot manufacture the extra authority needed for this host-owned read.
+	hostBootstrap *bobBootstrapClaim
 }
 
 // ContinuationSuggestion is the optional output surface consumed by the TUI.

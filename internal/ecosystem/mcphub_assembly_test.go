@@ -108,6 +108,13 @@ func TestMCPHubResultAssemblerMatchesDirectBobSemanticsAndTransient(t *testing.T
 
 			assertSemanticParity(t, observation, direct)
 			assertLazyRoute(t, observation.Projection, "mcphub", callID, "bob", test.operation)
+			if test.operation == "bob_context" && direct.DomainTyped && direct.Digest != nil && direct.Digest.Kind == DigestBobContext {
+				if observation.Workspace != "/workspace" {
+					t.Fatalf("paged Bob workspace = %q, want exact transient workspace", observation.Workspace)
+				}
+			} else if observation.Workspace != "" {
+				t.Fatalf("non-context result exposed workspace %q", observation.Workspace)
+			}
 			if observation.Transient != directTransient {
 				t.Fatalf("paged Bob transient differs from direct parser (available=%t)\npaged:  %q\ndirect: %q", directTransientOK, observation.Transient, directTransient)
 			}

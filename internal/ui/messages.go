@@ -94,6 +94,14 @@ type ContinuationActionMsg struct {
 	Action   *ContinuationActionPresentation
 }
 
+// BobWorkspaceContextMsg replaces the ephemeral bounded Bob workspace status.
+// Generation is monotonic for one Agent lifetime; a nil digest is an
+// authoritative clear. Raw Bob output never crosses into Bubble Tea state.
+type BobWorkspaceContextMsg struct {
+	Generation uint64
+	Digest     *ecosystem.ReceiptDigest
+}
+
 // ContextCompactedMsg invalidates the previous provider occupancy snapshot.
 // The retained history is smaller, but its next exact prompt size is not known
 // until Ollama reports the following request.
