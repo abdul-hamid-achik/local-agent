@@ -49,7 +49,7 @@ func (m *Model) buildHelpContent(innerW int) string {
 
 	inputShortcuts := []helpRow{
 		{"@file / @agent", "Insert file or agent mention text"},
-		{"ctrl+v", "Paste text; on macOS attach a clipboard PNG"},
+		{"ctrl+v", "Paste text; on macOS convert a clipboard image to PNG and attach it"},
 		{"paste/drag images", "Attach up to four PNG, JPEG, or GIF files to the pending prompt"},
 		{"shift+drag", "Use the terminal selection override while mouse scrolling is active"},
 		{"~/… or /…", "Review temporary read-only access; MCP tools require separate approval"},
@@ -57,7 +57,7 @@ func (m *Model) buildHelpContent(innerW int) string {
 		{"/cmd", "Run slash command"},
 		{"team / swarm / MoE", "Ask naturally for a read-only expert consultation when enabled"},
 		{"enter (running)", "Queue one follow-up; it sends after the current turn settles successfully"},
-		{"esc (running)", "Cancel the turn; a queued follow-up returns to the composer"},
+		{"esc (running)", "Clear a queued follow-up first; press again to cancel the turn"},
 	}
 
 	m.writeHelpRows(&b, inputShortcuts, innerW)

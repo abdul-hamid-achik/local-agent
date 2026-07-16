@@ -44,6 +44,13 @@ func (m *Model) handleSessionLoadedReceipt(message SessionLoadedMsg) tea.Cmd {
 		m.failLoadedSession(message, err)
 		return nil
 	}
+	// Bind an interactive switch to its exact settled target before a loaded
+	// cloud model can open a new authority surface. A receipt for another session
+	// fails closed without asking the user to authorize that session's model.
+	if err := m.validatePendingSessionSwitch(message); err != nil {
+		m.failLoadedSession(message, err)
+		return nil
+	}
 	if descriptor, ok := m.ollamaModelDescriptor(message.State.Model); ok && m.localOnly && descriptor.Source == OllamaModelCloud {
 		m.openCloudConsentForSession(descriptor, message)
 		return nil
@@ -68,6 +75,10 @@ func (m *Model) finishLoadedSession(message SessionLoadedMsg) (bool, tea.Cmd) {
 	}
 	if err := validateStandaloneReconciliationContexts(message.RecoveryContexts); err != nil {
 		m.failLoadedSession(message, fmt.Errorf("validate durable recovery context: %w", err))
+		return false, nil
+	}
+	if err := m.validatePendingSessionSwitch(message); err != nil {
+		m.failLoadedSession(message, err)
 		return false, nil
 	}
 	if err := m.restoreSessionState(message.State); err != nil {
@@ -100,6 +111,7 @@ func (m *Model) finishLoadedSession(message SessionLoadedMsg) (bool, tea.Cmd) {
 		m.failLoadedSession(message, fmt.Errorf("restore recovery context: %w", err))
 		return false, nil
 	}
+	m.applyPendingSessionSwitchSuccess(message)
 	var cmd tea.Cmd
 	if err := m.recoverRestoredGoal(); err != nil {
 		m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("Restore goal recovery: %v", err)})
@@ -141,6 +153,9 @@ func validateLoadedStandaloneRecoveryMetadata(message SessionLoadedMsg, workspac
 func (m *Model) failLoadedSession(message SessionLoadedMsg, err error) {
 	if message.ExecutionLease != nil {
 		_ = message.ExecutionLease.Close()
+	}
+	if m.pendingSessionSwitch != nil && (m.pendingSessionSwitch.LoadToken == 0 || m.pendingSessionSwitch.LoadToken == message.LoadToken) {
+		m.restoreAndClearPendingSessionSwitch()
 	}
 	m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("Load session: %v", err)})
 	m.viewport.SetContent(m.renderEntries())

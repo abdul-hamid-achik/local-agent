@@ -95,7 +95,8 @@ func TestHelpExplainsOneSlotFollowUpLifecycle(t *testing.T) {
 		"enter (running)",
 		"after the current turn settles successfully",
 		"esc (running)",
-		"returns to the composer",
+		"clear a queued follow-up first",
+		"press again to cancel",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("help omitted %q:\n%s", want, content)
@@ -118,6 +119,22 @@ func TestHelpDescribesMentionsAsComposerInsertions(t *testing.T) {
 		if strings.Contains(content, stale) {
 			t.Fatalf("help still claims unsupported action %q:\n%s", stale, content)
 		}
+	}
+}
+
+func TestHelpDescribesClipboardImageConversionAndFileFormats(t *testing.T) {
+	m := newTestModel(t)
+	content := strings.Join(strings.Fields(strings.ToLower(ansi.Strip(m.buildHelpContent(m.helpContentWidth())))), " ")
+	for _, want := range []string{
+		"on macos convert a clipboard image to png",
+		"attach up to four png, jpeg, or gif files",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("help omitted truthful image contract %q:\n%s", want, content)
+		}
+	}
+	if strings.Contains(content, "clipboard png, jpeg, or gif") {
+		t.Fatalf("help still claims the clipboard preserves its source format:\n%s", content)
 	}
 }
 

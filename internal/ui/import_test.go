@@ -142,3 +142,35 @@ func TestImportReplacesHiddenHistoryAndStartsFreshSession(t *testing.T) {
 		t.Fatalf("next provider request contained stale/unsafe history: %#v", client.messages)
 	}
 }
+
+func TestHeldFollowUpBlocksImportBeforeTranscriptReplacement(t *testing.T) {
+	m, liveImages, queuedImages := heldQueueBoundaryFixture(t)
+	m.sessionID = 7
+	m.activeSessionTitle = "old session"
+	m.agent.AddUserMessage("old model context")
+	m.entries = []ChatEntry{{Kind: "assistant", Content: "old visible context"}}
+	draft := "/import replacement.md"
+	m.input.SetValue(draft)
+
+	cmd := m.submitInput()
+	if cmd != nil || m.fileLoading {
+		t.Fatalf("held follow-up started import: cmd=%v loading=%v", cmd != nil, m.fileLoading)
+	}
+	if m.sessionID != 7 || m.activeSessionTitle != "old session" || len(m.agent.Messages()) != 1 {
+		t.Fatalf("blocked import changed old session: id=%d title=%q messages=%#v", m.sessionID, m.activeSessionTitle, m.agent.Messages())
+	}
+	if m.input.Value() != draft || !m.queuedFollowUpHeld() || m.queuedFollowUp.Prompt != "held follow-up" {
+		t.Fatalf("blocked import changed text owners: live=%q queue=%#v", m.input.Value(), m.queuedFollowUp)
+	}
+	assertPendingImagesEqual(t, m.pendingImages, liveImages)
+	assertPendingImagesEqual(t, m.queuedFollowUp.Images, queuedImages)
+	if len(m.entries) < 2 {
+		t.Fatalf("blocked import omitted notice: %#v", m.entries)
+	}
+	notice := m.entries[len(m.entries)-1].Content
+	for _, want := range []string{"importing another conversation", "↑ swap", "Esc clear"} {
+		if !strings.Contains(notice, want) {
+			t.Fatalf("blocked import notice omitted %q: %q", want, notice)
+		}
+	}
+}

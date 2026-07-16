@@ -4,7 +4,7 @@
                              │   paste/drag imag…  Attach up to four PNG, JPEG, or GIF    │
                              │                     files to the pending prompt            │
                              │   shift+drag        Use the terminal selection override    │
-  ollama: no model selected  │                     while mouse scrolling is active        │
+  notice · ollama: no model s│                     while mouse scrolling is active        │
   try: ollama serve · ollama │   ~/… or /…         Review temporary read-only access;     │
                              │                     MCP tools require separate approval    │
                              │   #skill            Insert skill mention text              │
@@ -13,8 +13,8 @@
                              │                     consultation when enabled              │
                              │   enter (running)   Queue one follow-up; it sends after    │
                              │                     the current turn settles successfully  │
-                             │   esc (running)     Cancel the turn; a queued follow-up    │
-                             │                     returns to the composer                │
+                             │   esc (running)     Clear a queued follow-up first; press  │
+                             │                     again to cancel the turn               │
                              │                                                            │
                              │ Slash Commands                                             │
                              │   /help             Show help overlay with shortcuts and   │

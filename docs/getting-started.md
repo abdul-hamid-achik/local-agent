@@ -117,8 +117,10 @@ conversation and a failed TUI run do not print a resume command.
 | `ctrl+c` | Quit |
 
 The composer grows with wrapped text up to a terminal-height-aware limit, then
-scrolls internally while keeping the cursor visible. Pasted text follows the
-same layout. The mouse wheel scrolls the conversation without moving the draft.
+scrolls internally while keeping the cursor visible. When earlier or later
+draft rows are outside the visible composer, a cue names the corresponding
+`ctrl+home` or `ctrl+end` jump. Typed and pasted text follow the same layout.
+The mouse wheel scrolls the conversation without moving the draft.
 
 Selecting a verified local model with `/model <name>` or the model picker saves
 the pin for the next process start. `/model auto` clears it. A CLI `--model`
@@ -152,7 +154,8 @@ If an older stored image is unavailable, the draft is restored; use
 `/image forget-history` to remove active historical image context before
 retrying. Existing checkpoints remain unchanged and can restore their refs.
 
-On macOS, press `Ctrl+V` to attach a PNG directly from the system pasteboard.
+On macOS, press `Ctrl+V` to read a clipboard image from the system pasteboard
+and attach its PNG representation.
 Bracketed terminal paste and other platforms can attach a saved image by
 dragging it or pasting/copying its path. See
 [Image attachments](./reference.md#image-attachments) for formats, limits, and

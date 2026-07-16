@@ -13,5 +13,5 @@
   │ package ui
   │
 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
-  Follow paused · end latest
+  S41 · Recovery receipt review · Follow paused · end latest
 ▏❯ Ask, @mention files, or type /help

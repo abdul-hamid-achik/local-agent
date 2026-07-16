@@ -1,13 +1,111 @@
 package ui
 
 import (
+	"errors"
 	"io"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 )
+
+func TestSplitEditorCommandSupportsQuotedPathsAndArgumentsWithoutShell(t *testing.T) {
+	tests := []struct {
+		value string
+		want  []string
+	}{
+		{value: "nvim -f", want: []string{"nvim", "-f"}},
+		{value: `"/Applications/Visual Editor/bin/editor" --wait`, want: []string{"/Applications/Visual Editor/bin/editor", "--wait"}},
+		{value: `editor --cmd 'set spell' ""`, want: []string{"editor", "--cmd", "set spell", ""}},
+		{value: `path\ with\ spaces --flag`, want: []string{"path with spaces", "--flag"}},
+	}
+	for _, test := range tests {
+		t.Run(test.value, func(t *testing.T) {
+			got, err := splitEditorCommand(test.value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("splitEditorCommand(%q) = %#v, want %#v", test.value, got, test.want)
+			}
+		})
+	}
+	for _, value := range []string{`editor "unterminated`, `editor trailing\`} {
+		if _, err := splitEditorCommand(value); err == nil {
+			t.Fatalf("splitEditorCommand(%q) accepted incomplete syntax", value)
+		}
+	}
+}
+
+func TestEditorResultMessageCanClearDraft(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "draft.md")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	message, ok := editorResultMessage(path, nil, 32*1024).(editorReturnMsg)
+	if !ok || message.Content != "" {
+		t.Fatalf("empty editor result = %#v, want an explicit empty return", message)
+	}
+
+	m := newTestModel(t)
+	m.input.SetValue("remove this draft")
+	updated, _ := m.Update(message)
+	m = updated.(*Model)
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("empty editor result left draft %q", got)
+	}
+
+	runErr := errors.New("editor stopped")
+	if message, ok := editorResultMessage(path, runErr, 32*1024).(ErrorMsg); !ok || !strings.Contains(message.Msg, runErr.Error()) {
+		t.Fatalf("editor failure result = %#v", message)
+	}
+}
+
+func TestEditorResultMessageRejectsOversizedDraftWithoutReplacingComposer(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		limit   int
+	}{
+		{name: "ascii", content: "123456", limit: 5},
+		{name: "multibyte", content: strings.Repeat("界", 6), limit: 5},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "draft.md")
+			if err := os.WriteFile(path, []byte(test.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			message, ok := editorResultMessage(path, nil, test.limit).(ErrorMsg)
+			if !ok || !strings.Contains(message.Msg, "exceeds") {
+				t.Fatalf("oversized editor result = %#v, want limit error", message)
+			}
+
+			m := newTestModel(t)
+			m.input.SetValue("keep this draft")
+			updated, _ := m.Update(message)
+			m = updated.(*Model)
+			if got := m.input.Value(); got != "keep this draft" {
+				t.Fatalf("oversized editor result replaced draft with %q", got)
+			}
+		})
+	}
+}
+
+func TestEditorResultMessageRejectsInvalidUTF8(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "draft.md")
+	if err := os.WriteFile(path, []byte{0xff, 0xfe}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	message, ok := editorResultMessage(path, nil, 32*1024).(ErrorMsg)
+	if !ok || !strings.Contains(message.Msg, "UTF-8") {
+		t.Fatalf("invalid UTF-8 editor result = %#v", message)
+	}
+}
 
 type blockingExecCommand struct {
 	started chan<- struct{}

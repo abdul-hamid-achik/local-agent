@@ -347,6 +347,73 @@ func TestEndPreservesNonemptyComposerAndOverlayOwnership(t *testing.T) {
 	}
 }
 
+func TestEndPreservesRunningFollowUpDraftOwnership(t *testing.T) {
+	for _, state := range []State{StateWaiting, StateStreaming} {
+		t.Run(fmt.Sprintf("state-%d", state), func(t *testing.T) {
+			m := newTestModel(t)
+			setScrollableTranscript(m)
+			m.viewport.GotoTop()
+			m.pauseFollow()
+			m.state = state
+			m.input.SetValue("running follow-up draft")
+			m.input.CursorStart()
+			wantOffset := m.viewport.YOffset()
+
+			updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnd})
+			m = updated.(*Model)
+			if m.input.Column() == 0 {
+				t.Fatal("End did not move the running draft cursor")
+			}
+			if !m.followPaused() || m.viewport.YOffset() != wantOffset {
+				t.Fatalf("End stole transcript ownership: paused=%v offset=%d want=%d", m.followPaused(), m.viewport.YOffset(), wantOffset)
+			}
+		})
+	}
+}
+
+func TestComposerReflowPreservesTranscriptFollowIntent(t *testing.T) {
+	t.Run("following stays at latest while composer grows and shrinks", func(t *testing.T) {
+		m := newTestModel(t)
+		updated, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 20})
+		m = updated.(*Model)
+		setScrollableTranscript(m)
+		m.resumeFollow()
+
+		m.input.SetValue(strings.Repeat("long draft ", 70))
+		_ = m.reflowInputViewport()
+		if m.followPaused() || !m.viewport.AtBottom() || m.viewport.PastBottom() {
+			t.Fatalf("growing composer lost latest follow: paused=%v bottom=%v past=%v", m.followPaused(), m.viewport.AtBottom(), m.viewport.PastBottom())
+		}
+
+		m.input.Reset()
+		_ = m.reflowInputViewport()
+		if m.followPaused() || !m.viewport.AtBottom() || m.viewport.PastBottom() {
+			t.Fatalf("shrinking composer lost latest follow: paused=%v bottom=%v past=%v", m.followPaused(), m.viewport.AtBottom(), m.viewport.PastBottom())
+		}
+	})
+
+	t.Run("paused reader keeps clamped offset", func(t *testing.T) {
+		m := newTestModel(t)
+		updated, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 20})
+		m = updated.(*Model)
+		setScrollableTranscript(m)
+		m.viewport.SetYOffset(5)
+		m.pauseFollow()
+
+		m.input.SetValue(strings.Repeat("long draft ", 70))
+		_ = m.reflowInputViewport()
+		if !m.followPaused() || m.viewport.YOffset() != 5 || m.viewport.PastBottom() {
+			t.Fatalf("growing composer moved paused reader: paused=%v offset=%d past=%v", m.followPaused(), m.viewport.YOffset(), m.viewport.PastBottom())
+		}
+
+		m.input.Reset()
+		_ = m.reflowInputViewport()
+		if !m.followPaused() || m.viewport.YOffset() != 5 || m.viewport.PastBottom() {
+			t.Fatalf("shrinking composer moved paused reader: paused=%v offset=%d past=%v", m.followPaused(), m.viewport.YOffset(), m.viewport.PastBottom())
+		}
+	})
+}
+
 func TestTranscriptPagingNeverMutatesComposerDraft(t *testing.T) {
 	m := newTestModel(t)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})

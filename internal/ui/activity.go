@@ -237,12 +237,21 @@ func (m *Model) renderWorkingLine() string {
 	if activity.detail != "" {
 		detail = " · " + activity.detail
 	}
+	if len(m.pendingImages) > 0 && m.queuedFollowUp == nil {
+		detail = fmt.Sprintf(" · + %d image%s", len(m.pendingImages), pluralSuffix(len(m.pendingImages))) + detail
+	}
 	authority := ""
-	if m.presentedMode() == ModeAuto {
+	switch m.presentedMode() {
+	case ModeAuto:
 		// The ordinary idle footer is replaced while work is active. Keep AUTO's
 		// authority visible in the activity rail so a long-running turn never
 		// leaves the user guessing whether it is operating autonomously.
 		authority = " · AUTO"
+	case ModePlan:
+		// PLAN is also an authority boundary: it may inspect and reason, but must
+		// not be mistaken for an ordinary implementation turn while the idle
+		// status row is replaced by live activity.
+		authority = " · PLAN"
 	}
 	queueAction := ""
 	if m.queuedFollowUp == nil && m.goalTurnID == "" && m.goalOperation == "" &&
@@ -268,7 +277,15 @@ func (m *Model) renderWorkingLine() string {
 					activity.compactLabel+authority+shortCancel+" · queue",
 				)
 			}
-			candidates = append(candidates, "Run"+authority+shortCancel+" · queue")
+			candidates = append(candidates,
+				"Run"+authority+shortCancel+" · queue",
+				// At the 30-column tier a visible session handle and the queue
+				// affordance cannot both fit with the execution authority. Preserve
+				// AUTO/PLAN and cancellation first; the focused composer still
+				// advertises Enter as the queue action.
+				"Run"+authority+shortCancel,
+				"Run"+authority,
+			)
 		} else {
 			if activity.compactLabel != "" {
 				candidates = append(candidates,
@@ -336,7 +353,17 @@ func (m *Model) renderWorkingLine() string {
 	if m.chatPaneWidth() >= 72 {
 		titleLimit = 24
 	}
-	session = sessionDisplayLabel(m.sessionID, m.activeSessionTitle, titleLimit)
+	sessionID := m.sessionID
+	sessionTitle := m.activeSessionTitle
+	if pending := m.pendingSessionSwitch; m.sessionLoading && pending != nil &&
+		pending.Choice != sessionSwitchUndecided && pending.LoadToken == m.sessionLoadToken {
+		// Until the tokened receipt commits, m.sessionID still names the source
+		// conversation. The activity rail must identify the target being restored,
+		// not imply that the source session is being reloaded.
+		sessionID = pending.TargetSessionID
+		sessionTitle = pending.TargetTitle
+	}
+	session = sessionDisplayLabel(sessionID, sessionTitle, titleLimit)
 	if session != "" {
 		selectionWidth = max(1, textWidth-lipgloss.Width(" · ")-lipgloss.Width(session))
 	}
@@ -370,6 +397,8 @@ func (m *Model) renderWorkingCandidate(candidate string) string {
 			segments[index] = m.styles.ToolRunningText.Render(segment)
 		case segment == "AUTO":
 			segments[index] = m.styles.ModeBuild.Render(segment)
+		case segment == "PLAN":
+			segments[index] = m.styles.ModePlan.Render(segment)
 		case workingControlKey(segment) != "":
 			keyLabel := workingControlKey(segment)
 			action := strings.TrimSpace(strings.TrimPrefix(segment, keyLabel))

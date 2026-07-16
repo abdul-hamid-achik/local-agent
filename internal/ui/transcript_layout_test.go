@@ -28,6 +28,22 @@ func TestTranscriptEntrySeparatorOwnsVerticalRhythm(t *testing.T) {
 	}
 }
 
+func TestSystemNoticesAreExplicitAndBounded(t *testing.T) {
+	m := newTestModel(t)
+	for _, width := range []int{30, 80} {
+		m.width = width
+		plain := ansi.Strip(m.renderSystemNotice("Model changed to local", width-2))
+		if !strings.Contains(plain, "notice · Model changed") {
+			t.Fatalf("%d-column host notice is indistinguishable:\n%s", width, plain)
+		}
+		for _, line := range strings.Split(plain, "\n") {
+			if len([]rune(line)) > width {
+				t.Fatalf("%d-column host notice overflowed: %q", width, line)
+			}
+		}
+	}
+}
+
 func TestRenderEntriesNestsReasoningAndDenselyStacksTools(t *testing.T) {
 	m := newTestModel(t)
 	m.entries = []ChatEntry{

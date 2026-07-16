@@ -87,7 +87,7 @@ steps:
       rows: 18
   - wait:
       screen:
-        contains: "Recovery paused · /recover inspect"
+        contains: "/recover inspect"
       timeoutMs: 2000
   - press: "pgup"
   - wait:

@@ -70,6 +70,30 @@ func TestSkippedApprovalSafetyTextIsResponsiveAndNoColorSafe(t *testing.T) {
 	}
 }
 
+func TestMinimumWelcomeUsesCompleteSafetyMicrocopy(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		posture ApprovalPosture
+		want    string
+	}{
+		{name: "prompted", posture: ApprovalPosturePrompted, want: "Local-first · prompts on"},
+		{name: "skipped", posture: ApprovalPostureSkipApprovals, want: "Local-first · prompts skipped"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			m := newTestModel(t)
+			m.width = minTerminalWidth
+			m.height = minTerminalHeight
+			m.SetApprovalPosture(test.posture)
+			var welcome strings.Builder
+			m.renderWelcome(&welcome)
+			plain := ansi.Strip(welcome.String())
+			if !strings.Contains(plain, test.want) || strings.Contains(plain, "…") {
+				t.Fatalf("minimum welcome safety copy = %q, want complete %q", plain, test.want)
+			}
+		})
+	}
+}
+
 func TestCompactFooterPreservesCombinedSafetyBoundaries(t *testing.T) {
 	m := newTestModel(t)
 	m.width = minTerminalWidth

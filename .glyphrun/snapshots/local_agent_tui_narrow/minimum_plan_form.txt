@@ -1,5 +1,5 @@
          LOCAL AGENT
- Local-first · approval pro…
+  Local-first · prompts on
  PLAN · qwen3.5:2b · offline
    enter · ctrl+p settings
        ? help · / @ #

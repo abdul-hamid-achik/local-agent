@@ -88,6 +88,9 @@ func (m *Model) closeCloudConsent() {
 		_ = m.cloudConsentState.PendingLoad.ExecutionLease.Close()
 		m.cloudConsentState.PendingLoad.ExecutionLease = nil
 	}
+	if m.pendingSessionSwitch != nil {
+		m.restoreAndClearPendingSessionSwitch()
+	}
 	m.cloudConsentState = nil
 	if m.modelPickerState != nil {
 		m.overlay = OverlayModelPicker
@@ -168,6 +171,7 @@ func (m *Model) cancelPendingCloudSessionRestore() {
 		m.cloudConsentState.PendingLoad.ExecutionLease = nil
 	}
 	m.cloudConsentState = nil
+	m.clearPendingSessionSwitchSnapshot()
 	if m.overlay == OverlayCloudConsent {
 		m.overlay = OverlayNone
 	}

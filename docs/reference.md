@@ -207,7 +207,7 @@ Use Go duration syntax such as `30m` or `1h30m`. Duration-shaped but invalid inp
 | `t`, `space` | Toggle all tool details or the latest tool |
 | `ctrl+t` | Toggle model thinking display |
 | `ctrl+y` | Copy the latest response |
-| `ctrl+e` | Edit input with `$EDITOR` |
+| `ctrl+e` | Edit input with `$VISUAL`, then `$EDITOR` |
 | `ctrl+k` | Toggle compact transcript layout |
 | `esc` | Close an overlay or inline form, cancel an approval, or cancel active generation |
 | `ctrl+n`, `ctrl+l` | New conversation or clear the view |
@@ -223,15 +223,23 @@ re-arm it; that gesture is consumed before the unchanged composer, overlay, or
 pending authority decision returns.
 
 The composer grows for soft-wrapped typing and text paste until its adaptive
-visible-row cap, then scrolls internally. The mouse wheel scrolls the transcript
-without moving the composer cursor or its internal viewport; a visible document
-overlay owns the wheel while it is open. Press `end` to resume following the
-latest output. Local Agent enables terminal mouse reporting so wheel events
-reach the transcript. Use the terminal's selection override, commonly
-`shift+drag`, to select transcript text; `ctrl+y` remains the application-level
-copy shortcut for the latest response. Use `pgup`/`pgdown`, `t`, and `space` for
-transcript and tool navigation. With an empty composer, `ctrl+u`/`ctrl+d` also
-scroll half a page; while drafting they retain their standard editing behavior.
+visible-row cap, then scrolls internally. A visible cue reports whether earlier
+or later draft rows are hidden and names the corresponding `ctrl+home` or
+`ctrl+end` jump. The mouse wheel scrolls the transcript without moving the
+composer cursor or its internal viewport; a visible document overlay owns the
+wheel while it is open. Press `end` to resume following the latest output only
+when the composer is empty or unavailable. Local Agent enables terminal mouse
+reporting so wheel events reach the transcript. Use the terminal's selection
+override, commonly `shift+drag`, to select transcript text; `ctrl+y` remains the
+application-level copy shortcut for the latest response. Use `pgup`/`pgdown`,
+`t`, and `space` for transcript and tool navigation. With an empty composer,
+`ctrl+u`/`ctrl+d` also scroll half a page; while drafting they retain their
+standard editing behavior.
+
+`ctrl+e` resolves `$VISUAL` before `$EDITOR`, accepts a quoted executable path
+and arguments without invoking a shell, and treats an empty saved file as an
+intentional draft clear. Invalid UTF-8 or output beyond the composer character
+limit is rejected without replacing the existing draft.
 
 ## Image attachments
 
@@ -252,6 +260,15 @@ draft text. Duplicate paths are removed before admission, and images with the
 same validated content are attached only once. At most the first four available
 slots are queued; Local Agent reports any additional files it skips.
 
+When a turn is already running, sending a follow-up moves its text and pending
+images into one visible queue item. Editing or an ordinary failed turn restores
+both to the composer in their original order; a successful dispatch consumes
+them together. If the active prompt is rejected before inference begins, Local
+Agent keeps that retry and the queued follow-up as two separate visible owners.
+Press Up to swap which one is editable or Escape to clear the held queue; it is
+never merged or auto-dispatched. Resolve that held queue before opening another
+saved session or starting a new conversation.
+
 Admission is bounded before provider dispatch:
 
 - at most four images per ordinary prompt;
@@ -268,10 +285,10 @@ reference. They do not contain the source path or raw bytes. A restored turn
 loads the referenced object from the private store and verifies its size and
 digest before sending it.
 
-On macOS, explicit `Ctrl+V` reads a PNG directly from the system pasteboard and
-admits it through the same limits and private store. A terminal bracketed-paste
-event contains text only; on other platforms, drag a saved image or paste its
-file path.
+On macOS, explicit `Ctrl+V` reads a clipboard image from the system pasteboard,
+normalizes it to PNG, and admits it through the same limits and private store.
+A terminal bracketed-paste event contains text only; on other platforms, drag a
+saved image or paste its file path.
 
 If a referenced private object is unavailable, provider inference does not
 start and the draft is restored. Run `/image forget-history` to remove every

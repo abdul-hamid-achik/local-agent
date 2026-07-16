@@ -257,15 +257,19 @@ func (m *Model) handleImageAttachmentResult(message ImageAttachmentResultMsg) te
 		m.gotoBottomIfFollowing()
 		m.recalcViewportHeight()
 	} else {
+		target := &m.pendingImages
+		if m.queuedFollowUpOwnsImageAdmission(message.Token) {
+			target = &m.queuedFollowUp.Images
+		}
 		duplicate := false
-		for _, existing := range m.pendingImages {
+		for _, existing := range *target {
 			if existing.Ref.Digest == message.Ref.Digest {
 				duplicate = true
 				break
 			}
 		}
 		if !duplicate {
-			refs := m.pendingImageRefs()
+			refs := attachmentRefs(*target)
 			refs = append(refs, message.Ref)
 			if err := validateImageConversationBudget(m.agent.Messages(), refs); err != nil {
 				stopQueue = true
@@ -274,7 +278,7 @@ func (m *Model) handleImageAttachmentResult(message ImageAttachmentResultMsg) te
 				m.viewport.SetContent(m.renderEntries())
 				m.gotoBottomIfFollowing()
 			} else {
-				m.pendingImages = append(m.pendingImages, pendingImageAttachment{Ref: message.Ref, Image: message.Image})
+				*target = append(*target, pendingImageAttachment{Ref: message.Ref, Image: message.Image})
 			}
 		}
 	}
@@ -286,6 +290,9 @@ func (m *Model) handleImageAttachmentResult(message ImageAttachmentResultMsg) te
 	if message.Preflight {
 		next := m.startNextImageFileAttachment()
 		if next == nil && !m.imageAttachRunning {
+			m.releaseQueuedImageAdmissionOwnership()
+		}
+		if next == nil && !m.imageAttachRunning {
 			m.input.Focus()
 		}
 		if message.Fallback != "" && next == nil && m.composerEditable() {
@@ -294,6 +301,9 @@ func (m *Model) handleImageAttachmentResult(message ImageAttachmentResultMsg) te
 		return next
 	}
 	next := m.startNextImageFileAttachment()
+	if next == nil && !m.imageAttachRunning {
+		m.releaseQueuedImageAdmissionOwnership()
+	}
 	if next == nil {
 		m.input.Focus()
 	}
@@ -379,6 +389,7 @@ func (m *Model) clearImageAttachmentQueue() {
 		m.imageAttachQueue[index] = imageFileAttachmentRequest{}
 	}
 	m.imageAttachQueue = nil
+	m.releaseQueuedImageAdmissionOwnership()
 }
 
 func (m *Model) forgetHistoricalImages() tea.Cmd {
@@ -538,6 +549,13 @@ func (m *Model) renderPendingImagesStatus(width int) string {
 	}
 	sort.Strings(names)
 	detail := fmt.Sprintf("%d/%d · %s", len(names), maxPendingImages, strings.Join(names, ", "))
+	titleLimit := 0
+	if width >= 72 {
+		titleLimit = 24
+	}
+	if session := sessionDisplayLabel(m.sessionID, m.activeSessionTitle, titleLimit); session != "" {
+		detail = session + " · " + detail
+	}
 	return m.renderDecisionPrompt(
 		"Images ready", truncateDisplay(detail, max(1, width-18)),
 		keyHint{Key: "/image clear", Action: "remove"},

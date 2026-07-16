@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -390,6 +391,120 @@ func TestImageTurnUsesTypedPayloadAndSafeTranscriptMetadata(t *testing.T) {
 	}
 }
 
+func TestQueuedFollowUpOwnsAndDisplaysItsImagesAtomically(t *testing.T) {
+	m, _ := newImageTestModel(t)
+	path := filepath.Join(t.TempDir(), "queued.png")
+	writeImageAttachmentFixture(t, path)
+	attachImageFixture(t, m, path, "")
+	wantDigest := m.pendingImages[0].Ref.Digest
+	m.state = StateStreaming
+	m.input.SetValue("inspect after the current turn")
+
+	m.queueComposerFollowUp()
+	if m.queuedFollowUp == nil || len(m.queuedFollowUp.Images) != 1 || len(m.pendingImages) != 0 {
+		t.Fatalf("queued image ownership = queue %#v pending %d", m.queuedFollowUp, len(m.pendingImages))
+	}
+	if got := m.queuedFollowUp.Images[0].Ref.Digest; got != wantDigest {
+		t.Fatalf("queued digest = %q, want %q", got, wantDigest)
+	}
+	if row := ansi.Strip(m.renderQueuedFollowUp()); !strings.Contains(row, "+ 1 image") {
+		t.Fatalf("queued receipt hid attachment count: %q", row)
+	}
+
+	if !m.editQueuedFollowUp() || len(m.pendingImages) != 1 || m.pendingImages[0].Ref.Digest != wantDigest {
+		t.Fatalf("editing queue did not restore exact attachment: pending=%#v", m.pendingImages)
+	}
+}
+
+func TestQueuedImagesRestoreAfterFailureAndDispatchAfterSuccess(t *testing.T) {
+	t.Run("failure", func(t *testing.T) {
+		m, _ := newImageTestModel(t)
+		path := filepath.Join(t.TempDir(), "failure.png")
+		writeImageAttachmentFixture(t, path)
+		attachImageFixture(t, m, path, "")
+		wantDigest := m.pendingImages[0].Ref.Digest
+		m.state = StateStreaming
+		m.input.SetValue("retry with the image")
+		m.queueComposerFollowUp()
+
+		updated, _ := m.Update(AgentDoneMsg{Err: errors.New("provider failed")})
+		m = updated.(*Model)
+		if m.queuedFollowUp != nil || m.input.Value() != "retry with the image" || len(m.pendingImages) != 1 || m.pendingImages[0].Ref.Digest != wantDigest {
+			t.Fatalf("failed queue restore = queue %#v draft %q pending %#v", m.queuedFollowUp, m.input.Value(), m.pendingImages)
+		}
+	})
+
+	t.Run("dispatch", func(t *testing.T) {
+		m, _ := newImageTestModel(t)
+		path := filepath.Join(t.TempDir(), "dispatch.png")
+		writeImageAttachmentFixture(t, path)
+		attachImageFixture(t, m, path, "")
+		wantDigest := m.pendingImages[0].Ref.Digest
+		m.state = StateStreaming
+		m.input.SetValue("send with image")
+		m.queueComposerFollowUp()
+		m.state = StateIdle
+
+		if cmd := m.dispatchQueuedFollowUp(); cmd == nil {
+			t.Fatal("queued image turn did not dispatch")
+		}
+		if len(m.turnImages) != 1 || m.turnImages[0].Ref.Digest != wantDigest || len(m.pendingImages) != 0 {
+			t.Fatalf("dispatched attachment ownership = turn %#v pending %#v", m.turnImages, m.pendingImages)
+		}
+	})
+}
+
+func TestImageAdmissionFinishingAfterQueueBindsToQueuedTurn(t *testing.T) {
+	m, _ := newImageTestModel(t)
+	firstPath := filepath.Join(t.TempDir(), "first.png")
+	secondPath := filepath.Join(t.TempDir(), "second.png")
+	writeImageAttachmentFixtureVariant(t, firstPath, 1)
+	writeImageAttachmentFixtureVariant(t, secondPath, 2)
+	attachImageFixture(t, m, firstPath, "")
+	wantFirst := m.pendingImages[0].Ref.Digest
+
+	m.state = StateStreaming
+	lateCmd := m.beginImageFileAttachment(secondPath, "")
+	m.input.SetValue("compare both images")
+	m.queueComposerFollowUp()
+	lateReceipt := awaitCommandMessage[ImageAttachmentResultMsg](t, commandMessages(lateCmd), 2*time.Second)
+	wantSecond := lateReceipt.Ref.Digest
+	updated, _ := m.Update(lateReceipt)
+	m = updated.(*Model)
+
+	if len(m.pendingImages) != 0 || m.queuedFollowUp == nil || len(m.queuedFollowUp.Images) != 2 {
+		t.Fatalf("late attachment ownership = pending %d queue %#v", len(m.pendingImages), m.queuedFollowUp)
+	}
+	if got := []string{m.queuedFollowUp.Images[0].Ref.Digest, m.queuedFollowUp.Images[1].Ref.Digest}; got[0] != wantFirst || got[1] != wantSecond {
+		t.Fatalf("queued digest order = %#v, want %#v", got, []string{wantFirst, wantSecond})
+	}
+	if row := ansi.Strip(m.renderQueuedFollowUp()); !strings.Contains(row, "+ 2 images") {
+		t.Fatalf("late queued image count is hidden: %q", row)
+	}
+}
+
+func TestImageAdmissionStartedBeforeRecoveryHoldStaysWithQueuedOwner(t *testing.T) {
+	m, _ := newImageTestModel(t)
+	firstPath := filepath.Join(t.TempDir(), "first.png")
+	secondPath := filepath.Join(t.TempDir(), "second.png")
+	writeImageAttachmentFixtureVariant(t, firstPath, 34)
+	writeImageAttachmentFixtureVariant(t, secondPath, 35)
+	attachImageFixture(t, m, firstPath, "")
+
+	m.state = StateStreaming
+	lateCmd := m.beginImageFileAttachment(secondPath, "")
+	m.input.SetValue("queued owner")
+	m.queueComposerFollowUp()
+	m.queuedFollowUp.RecoveryHeld = true
+	lateReceipt := awaitCommandMessage[ImageAttachmentResultMsg](t, commandMessages(lateCmd), 2*time.Second)
+	updated, _ := m.Update(lateReceipt)
+	m = updated.(*Model)
+
+	if len(m.pendingImages) != 0 || len(m.queuedFollowUp.Images) != 2 {
+		t.Fatalf("pre-hold admission changed owners: pending=%#v queue=%#v", m.pendingImages, m.queuedFollowUp)
+	}
+}
+
 func TestPinnedTextModelRejectsImageBeforeDispatchAndPreservesDraft(t *testing.T) {
 	m, _ := newImageTestModel(t)
 	path := filepath.Join(t.TempDir(), "capture.png")
@@ -525,6 +640,107 @@ func TestImageResolutionPreflightErrorReceiptDoesNotBlockRollback(t *testing.T) 
 		if entry.Kind == "user" {
 			t.Fatalf("pre-dispatch user entry remained after error receipt: %#v", m.entries)
 		}
+	}
+}
+
+func TestPreflightRejectedTurnKeepsRetryAndQueuedImageOwnersSeparate(t *testing.T) {
+	m, _ := newImageTestModel(t)
+	activePath := filepath.Join(t.TempDir(), "active.png")
+	queuedPath := filepath.Join(t.TempDir(), "queued.png")
+	writeImageAttachmentFixtureVariant(t, activePath, 31)
+	writeImageAttachmentFixtureVariant(t, queuedPath, 32)
+	attachImageFixture(t, m, activePath, "")
+	activeDigest := m.pendingImages[0].Ref.Digest
+	m.input.SetValue("retry the rejected turn")
+	if cmd := m.submitInput(); cmd == nil {
+		t.Fatal("active image prompt did not start")
+	}
+
+	attachImageFixture(t, m, queuedPath, "")
+	queuedDigest := m.pendingImages[0].Ref.Digest
+	m.input.SetValue("then inspect the queued image")
+	m.queueComposerFollowUp()
+
+	updated, _ := m.Update(AgentDoneMsg{Err: fmt.Errorf("asset missing: %w", llm.ErrInferenceNotStarted)})
+	m = updated.(*Model)
+	if !m.queuedFollowUpHeld() {
+		t.Fatalf("rejected turn queue was not held: %#v", m.queuedFollowUp)
+	}
+	if got := m.input.Value(); got != "retry the rejected turn" {
+		t.Fatalf("retry draft = %q", got)
+	}
+	if len(m.pendingImages) != 1 || m.pendingImages[0].Ref.Digest != activeDigest {
+		t.Fatalf("retry image owner = %#v", m.pendingImages)
+	}
+	if m.queuedFollowUp.Prompt != "then inspect the queued image" || len(m.queuedFollowUp.Images) != 1 || m.queuedFollowUp.Images[0].Ref.Digest != queuedDigest {
+		t.Fatalf("queued image owner = %#v", m.queuedFollowUp)
+	}
+	if len(m.pendingImages) > maxPendingImages || len(m.queuedFollowUp.Images) > maxPendingImages {
+		t.Fatalf("owner image caps exceeded: retry=%d queue=%d", len(m.pendingImages), len(m.queuedFollowUp.Images))
+	}
+	view := ansi.Strip(m.View().Content)
+	for _, want := range []string{"retry the rejected turn", "then inspect the queued image", "↑ swap"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("dual-owner footer omitted %q:\n%s", want, view)
+		}
+	}
+	if cmd := m.dispatchQueuedFollowUp(); cmd != nil {
+		t.Fatal("held recovery queue auto-dispatched")
+	}
+
+	updated, _ = m.Update(upKey())
+	m = updated.(*Model)
+	if m.input.Value() != "then inspect the queued image" || len(m.pendingImages) != 1 || m.pendingImages[0].Ref.Digest != queuedDigest {
+		t.Fatalf("first swap live owner = draft %q images %#v", m.input.Value(), m.pendingImages)
+	}
+	if !m.queuedFollowUpHeld() || m.queuedFollowUp.Prompt != "retry the rejected turn" || len(m.queuedFollowUp.Images) != 1 || m.queuedFollowUp.Images[0].Ref.Digest != activeDigest {
+		t.Fatalf("first swap held owner = %#v", m.queuedFollowUp)
+	}
+
+	updated, _ = m.Update(upKey())
+	m = updated.(*Model)
+	if m.input.Value() != "retry the rejected turn" || len(m.pendingImages) != 1 || m.pendingImages[0].Ref.Digest != activeDigest ||
+		!m.queuedFollowUpHeld() || m.queuedFollowUp.Prompt != "then inspect the queued image" || len(m.queuedFollowUp.Images) != 1 || m.queuedFollowUp.Images[0].Ref.Digest != queuedDigest {
+		t.Fatalf("second swap did not restore exact owners: live=%q pending=%#v queue=%#v", m.input.Value(), m.pendingImages, m.queuedFollowUp)
+	}
+}
+
+func TestHeldQueueRoutesNewImageAdmissionToEditableDraft(t *testing.T) {
+	m, _ := newImageTestModel(t)
+	m.queuedFollowUp = &queuedFollowUp{
+		Prompt:       "queued owner",
+		Images:       []pendingImageAttachment{{Ref: imageasset.Ref{Digest: strings.Repeat("a", 64)}}},
+		RecoveryHeld: true,
+	}
+	m.input.SetValue("editable retry")
+	path := filepath.Join(t.TempDir(), "new-active.png")
+	writeImageAttachmentFixtureVariant(t, path, 33)
+
+	attachImageFixture(t, m, path, "")
+	if len(m.pendingImages) != 1 || m.pendingImages[0].Ref.Name != "new-active.png" {
+		t.Fatalf("new admission did not follow editable owner: %#v", m.pendingImages)
+	}
+	if len(m.queuedFollowUp.Images) != 1 || m.queuedFollowUp.Images[0].Ref.Digest != strings.Repeat("a", 64) {
+		t.Fatalf("new admission mutated held owner: %#v", m.queuedFollowUp)
+	}
+}
+
+func TestQueueRestoreNeverMergesMoreThanFourImages(t *testing.T) {
+	m := newTestModel(t)
+	for i := 0; i < maxPendingImages; i++ {
+		m.pendingImages = append(m.pendingImages, pendingImageAttachment{Ref: imageasset.Ref{Digest: fmt.Sprintf("active-%d", i)}})
+	}
+	m.queuedFollowUp = &queuedFollowUp{
+		Prompt: "separate owner",
+		Images: []pendingImageAttachment{{Ref: imageasset.Ref{Digest: "queued"}}},
+	}
+
+	m.restoreQueuedFollowUp()
+	if len(m.pendingImages) != maxPendingImages {
+		t.Fatalf("active owner image count = %d, want %d", len(m.pendingImages), maxPendingImages)
+	}
+	if !m.queuedFollowUpHeld() || len(m.queuedFollowUp.Images) != 1 {
+		t.Fatalf("overflowing queue was merged or lost: %#v", m.queuedFollowUp)
 	}
 }
 

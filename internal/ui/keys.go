@@ -151,7 +151,7 @@ func DefaultKeyMap() KeyMap {
 		),
 		ExternalEditor: key.NewBinding(
 			key.WithKeys("ctrl+e"),
-			key.WithHelp("ctrl+e", "open in $EDITOR"),
+			key.WithHelp("ctrl+e", "open in $VISUAL/$EDITOR"),
 		),
 	}
 }

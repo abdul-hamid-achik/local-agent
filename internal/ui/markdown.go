@@ -1,9 +1,14 @@
 package ui
 
 import (
+	"fmt"
+	"image/color"
 	"strings"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/glamour/ansi"
+	glamourStyles "github.com/charmbracelet/glamour/styles"
 )
 
 // MarkdownRenderer handles markdown rendering with caching support.
@@ -29,14 +34,51 @@ func glamourStyle(isDark bool) string {
 	return "light"
 }
 
+func markdownStyleConfig(isDark bool) ansi.StyleConfig {
+	style := glamourStyles.LightStyleConfig
+	if isDark {
+		style = glamourStyles.DarkStyleConfig
+	}
+
+	// Glamour's standard themes use the same red foreground for inline code
+	// in both light and dark terminals. In a harness, red already means a
+	// failure or blocked action, so ordinary paths and commands looked like
+	// errors. Keep the standard Markdown grammar and code-block highlighting,
+	// but project inline code through Local Agent's adaptive text vocabulary;
+	// the background already gives code its distinct visual treatment.
+	palette := newSemanticPalette(isDark)
+	lightDark := lipgloss.LightDark(isDark)
+	foreground := colorHex(palette.Text)
+	background := colorHex(lightDark(
+		lipgloss.Color("#ECEFF4"),
+		lipgloss.Color("#3B4252"),
+	))
+	style.Code.Color = &foreground
+	style.Code.BackgroundColor = &background
+	return style
+}
+
+func colorHex(value color.Color) string {
+	r, g, b, _ := value.RGBA()
+	return fmt.Sprintf("#%02X%02X%02X", uint8(r>>8), uint8(g>>8), uint8(b>>8))
+}
+
+func newMarkdownTermRenderer(width int, isDark bool) (*glamour.TermRenderer, error) {
+	style := glamour.WithStyles(markdownStyleConfig(isDark))
+	if noColor {
+		style = glamour.WithStandardStyle(glamourStyle(isDark))
+	}
+	return glamour.NewTermRenderer(
+		style,
+		glamour.WithWordWrap(max(1, width-4)),
+	)
+}
+
 // NewMarkdownRenderer creates a renderer for the given terminal width and theme.
 func NewMarkdownRenderer(width int, isDark bool) *MarkdownRenderer {
 	// Use standard glamour style with word wrapping
 	// Glamour automatically handles syntax highlighting via Chroma
-	r, _ := glamour.NewTermRenderer(
-		glamour.WithStandardStyle(glamourStyle(isDark)),
-		glamour.WithWordWrap(width-4),
-	)
+	r, _ := newMarkdownTermRenderer(width, isDark)
 
 	return &MarkdownRenderer{
 		renderer: r,
@@ -154,10 +196,7 @@ func (mr *MarkdownRenderer) SetWidth(width int) {
 	mr.width = width
 	mr.cachedStreamPrefix = ""
 	mr.cachedStreamRender = ""
-	r, err := glamour.NewTermRenderer(
-		glamour.WithStandardStyle(glamourStyle(mr.isDark)),
-		glamour.WithWordWrap(width-4),
-	)
+	r, err := newMarkdownTermRenderer(width, mr.isDark)
 	if err == nil {
 		mr.renderer = r
 	}

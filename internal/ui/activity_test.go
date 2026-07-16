@@ -10,6 +10,7 @@ import (
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/abdul-hamid-achik/local-agent/internal/imageasset"
 	"github.com/abdul-hamid-achik/local-agent/internal/permission"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -582,5 +583,103 @@ func TestWorkingLineKeepsActiveSessionHandleAtOrdinaryWidth(t *testing.T) {
 		if !strings.Contains(line, "S7") {
 			t.Fatalf("width %d working line omitted active session handle: %q", width, line)
 		}
+	}
+}
+
+func TestSpecialFootersKeepActiveSessionHandle(t *testing.T) {
+	for _, width := range []int{30, 40, 80} {
+		m := newTestModel(t)
+		m.width = width
+		m.sessionID = 42
+		m.activeSessionTitle = "TUI polish"
+
+		m.pauseFollow()
+		if line := ansi.Strip(m.renderFollowPausedStatus(width)); !strings.Contains(line, "S42") || !strings.Contains(line, "end") {
+			t.Fatalf("width %d follow-paused footer = %q", width, line)
+		}
+
+		m.resumeFollow()
+		m.standaloneRecovery = &standaloneRecoveryState{}
+		if line := ansi.Strip(m.renderStatusLine()); !strings.Contains(line, "S42") || !strings.Contains(line, "/recover") {
+			t.Fatalf("width %d recovery footer = %q", width, line)
+		}
+
+		m.standaloneRecovery = nil
+		m.pendingImages = []pendingImageAttachment{{Ref: imageasset.Ref{Name: "screen.png"}}}
+		if line := ansi.Strip(m.renderStatusLine()); !strings.Contains(line, "S42") || !strings.Contains(line, "Images ready") {
+			t.Fatalf("width %d image footer = %q", width, line)
+		}
+	}
+}
+
+func TestWorkingAuthorityAndSessionIdentityCoexistAcrossWidths(t *testing.T) {
+	for _, mode := range []struct {
+		value Mode
+		label string
+	}{
+		{value: ModeAuto, label: "AUTO"},
+		{value: ModePlan, label: "PLAN"},
+	} {
+		for _, width := range []int{30, 40, 80} {
+			t.Run(fmt.Sprintf("%s/%d", mode.label, width), func(t *testing.T) {
+				m := newTestModel(t)
+				m.width = width
+				m.mode = mode.value
+				m.state = StateWaiting
+				m.reducedMotion = true
+				m.sessionID = 7
+				m.activeSessionTitle = "Composer polish"
+
+				line := ansi.Strip(m.renderWorkingLine())
+				for _, want := range []string{mode.label, "S7"} {
+					if !strings.Contains(line, want) {
+						t.Fatalf("width %d footer omitted %q: %q", width, want, line)
+					}
+				}
+				if got := lipgloss.Width(line); got > m.chatPaneWidth() {
+					t.Fatalf("width %d footer is %d cells, pane %d: %q", width, got, m.chatPaneWidth(), line)
+				}
+			})
+		}
+	}
+}
+
+func TestSessionRestoreActivityUsesPendingTargetIdentity(t *testing.T) {
+	for _, width := range []int{30, 40, 80} {
+		m := newTestModel(t)
+		m.width = width
+		m.reducedMotion = true
+		m.sessionID = 7
+		m.activeSessionTitle = "Source work"
+		m.sessionLoading = true
+		m.sessionLoadToken = 11
+		m.pendingSessionSwitch = &pendingSessionSwitch{
+			TargetSessionID: 42,
+			TargetTitle:     "Target work",
+			Choice:          sessionSwitchKeep,
+			LoadToken:       11,
+		}
+
+		line := ansi.Strip(m.renderWorkingLine())
+		if !strings.Contains(line, "S42") || strings.Contains(line, "S7") {
+			t.Fatalf("width %d restore activity used source identity: %q", width, line)
+		}
+		if width >= 72 && !strings.Contains(line, "Target work") {
+			t.Fatalf("width %d restore activity hid target title: %q", width, line)
+		}
+		if got := lipgloss.Width(line); got > m.chatPaneWidth() {
+			t.Fatalf("width %d restore activity is %d cells, pane %d: %q", width, got, m.chatPaneWidth(), line)
+		}
+	}
+}
+
+func TestWorkingFooterShowsUnqueuedDraftImages(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 80
+	m.state = StateWaiting
+	m.pendingImages = []pendingImageAttachment{{Ref: imageasset.Ref{Name: "screen.png"}}}
+	line := ansi.Strip(m.renderWorkingLine())
+	if !strings.Contains(line, "+ 1 image") {
+		t.Fatalf("working footer hid pending draft image: %q", line)
 	}
 }

@@ -84,6 +84,12 @@ func (m *Model) canJumpToLatest() bool {
 	if m.overlay != OverlayNone || m.pendingApproval != nil || m.pendingPaste != nil {
 		return false
 	}
+	// A visible draft owns ordinary textarea navigation even while an agent turn
+	// is waiting or streaming. End is only the transcript's "latest" shortcut
+	// when there is no editable text whose cursor can move.
+	if m.composerEditable() && m.input.Value() != "" {
+		return false
+	}
 	if m.state != StateIdle || m.composerIsBusy() {
 		return true
 	}
@@ -93,11 +99,23 @@ func (m *Model) canJumpToLatest() bool {
 }
 
 func (m *Model) renderFollowPausedStatus(width int) string {
-	candidates := []string{
+	titleLimit := 0
+	if width >= 72 {
+		titleLimit = 24
+	}
+	session := sessionDisplayLabel(m.sessionID, m.activeSessionTitle, titleLimit)
+	base := []string{
 		"Follow paused · end latest",
 		"Paused · end latest",
 		"Paused · end",
 	}
+	candidates := make([]string, 0, len(base)*2)
+	if session != "" {
+		for _, candidate := range base {
+			candidates = append(candidates, session+" · "+candidate)
+		}
+	}
+	candidates = append(candidates, base...)
 	available := max(1, width-2)
 	chosen := candidates[len(candidates)-1]
 	for _, candidate := range candidates {

@@ -24,3 +24,4 @@
 
 
 ─────────────────────────────────────────────────────────────────────────────────────────
+   … Updating Ollama inventory · verifying model authority

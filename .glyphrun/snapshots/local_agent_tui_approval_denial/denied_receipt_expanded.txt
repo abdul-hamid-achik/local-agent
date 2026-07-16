@@ -15,5 +15,5 @@
 
     Denied safely. No file was changed.
 ─────────────────────────────────────────────────
-  Follow paused · end latest
+  S1 · Follow paused · end latest
 ▏❯ Ask, @mention files, or type /help

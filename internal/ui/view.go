@@ -71,7 +71,7 @@ func (m *Model) View() tea.View {
 		// Ordinary turns keep the composer available so the next instruction can be
 		// drafted while work continues. Owned operations and a queued follow-up use
 		// the compact liveness line until authority returns to the textarea.
-		if m.pendingPaste != nil {
+		if m.pendingPaste != nil || m.pendingSessionSwitch != nil {
 			// The status prompt above owns the footer until the user answers.
 		} else if m.overlay == OverlayCortexDecision && m.cortexDecision != nil {
 			// Human decisions are full-width composer owners. They remain below the
@@ -109,12 +109,23 @@ func (m *Model) View() tea.View {
 			input := m.input
 			input.SetVirtualCursor(false)
 			content.WriteString(strings.Repeat("\n", max(0, lipgloss.Height(input.View())-1)))
-		} else if m.queuedFollowUp != nil {
+		} else if m.queuedFollowUp != nil && (!m.queuedFollowUpHeld() || !m.composerEditable()) {
 			// The queue owns one stable footer row until it dispatches, is restored
 			// after failure, or the user edits/clears it. Never hide pending input in
 			// model state with no visible recovery path.
 			content.WriteString(m.renderQueuedFollowUp())
 		} else if m.composerEditable() {
+			if m.queuedFollowUpHeld() {
+				// A rejected active turn and the next queued instruction remain two
+				// visible owners. Up swaps them atomically instead of concatenating
+				// prompts or attachment sets behind the user's back.
+				content.WriteString(m.renderQueuedFollowUp())
+				content.WriteString("\n")
+			}
+			if cue := m.renderComposerOverflowCue(); cue != "" {
+				content.WriteString(cue)
+				content.WriteString("\n")
+			}
 			// Render a local copy with Bubbles' virtual cursor disabled. The same
 			// copy supplies the one real cursor owned by this top-level view.
 			input := m.input
@@ -222,7 +233,7 @@ func (m *Model) activityComposerGap() bool {
 	if m.pendingApproval != nil || m.readScopePrompt != nil || m.pendingPaste != nil || m.overlay != OverlayNone {
 		return false
 	}
-	return m.queuedFollowUp != nil || m.composerEditable()
+	return m.queuedFollowUp != nil || (m.composerEditable() && m.renderComposerOverflowCue() == "")
 }
 
 // renderNarrowTerminalView keeps tiny terminals recoverable.
@@ -578,6 +589,9 @@ func (m *Model) renderStatusLine() string {
 			)
 		}
 	}
+	if m.pendingSessionSwitch != nil && m.pendingSessionSwitch.Choice == sessionSwitchUndecided {
+		return m.renderSessionSwitchPrompt(paneW)
+	}
 	if m.followPaused() && m.state == StateIdle && !m.composerIsBusy() {
 		return m.renderFollowPausedStatus(paneW)
 	}
@@ -585,8 +599,12 @@ func (m *Model) renderStatusLine() string {
 		return m.renderWorkingLine()
 	}
 	if m.standaloneRecovery != nil {
+		titleLimit := 0
+		if paneW >= 72 {
+			titleLimit = 24
+		}
 		return m.renderDecisionPrompt(
-			"Recovery paused", "",
+			"Recovery paused", sessionDisplayLabel(m.sessionID, m.activeSessionTitle, titleLimit),
 			keyHint{Key: "/recover", Action: "inspect"},
 		)
 	}
@@ -899,6 +917,13 @@ func (m *Model) hasTranscriptNotice() bool {
 	return false
 }
 
+func (m *Model) renderSystemNotice(content string, contentW int) string {
+	const label = "notice · "
+	available := max(1, contentW-m.styles.SystemText.GetPaddingLeft())
+	plain := label + sanitizeTerminalMultiline(content)
+	return m.styles.SystemText.Render(wrapText(plain, available))
+}
+
 // formatTokens formats a token count as "1.2k" or "8192".
 func formatTokens(n int) string {
 	if n >= 1000 {
@@ -966,7 +991,7 @@ func (m *Model) renderEntries() string {
 		for _, e := range m.entries {
 			switch e.Kind {
 			case "system":
-				b.WriteString(m.styles.SystemText.Render(wrapText(sanitizeTerminalMultiline(e.Content), contentW)))
+				b.WriteString(m.renderSystemNotice(e.Content, contentW))
 				b.WriteString("\n\n")
 			case "error":
 				if notice, ok := compactOllamaStartupNotice(e.Content, contentW, m.ollamaOffline); ok {
@@ -980,7 +1005,7 @@ func (m *Model) renderEntries() string {
 					// Missing startup inventory is an actionable empty state, not a
 					// failed user operation. Preserve the detailed host recovery copy
 					// at ordinary widths without adding the generic red error label.
-					b.WriteString(m.styles.SystemText.Render(wrapText(sanitizeTerminalMultiline(e.Content), contentW)))
+					b.WriteString(m.renderSystemNotice(e.Content, contentW))
 					b.WriteString("\n\n")
 				} else {
 					m.renderEntryError(&b, e.Content, contentW)
@@ -1032,7 +1057,7 @@ func (m *Model) renderEntries() string {
 		case "error":
 			m.renderEntryError(&entryView, entry.Content, contentW)
 		case "system":
-			entryView.WriteString(m.styles.SystemText.Render(wrapText(sanitizeTerminalMultiline(entry.Content), contentW)))
+			entryView.WriteString(m.renderSystemNotice(entry.Content, contentW))
 			entryView.WriteString("\n")
 		}
 		chunk := strings.TrimRight(entryView.String(), "\n")
@@ -1203,6 +1228,11 @@ func (m *Model) renderWelcome(b *strings.Builder) {
 	micro := contentWidth < 36
 	compact := contentWidth < 58
 	lineWidth := max(1, contentWidth-2)
+	if micro {
+		// The 30-column contract still has room for the complete safety label;
+		// use the full row instead of truncating one semantic word for padding.
+		lineWidth = contentWidth
+	}
 	writeLine := func(style lipgloss.Style, text string) {
 		wb.WriteString(style.Render(truncateDisplay(text, lineWidth)))
 		wb.WriteByte('\n')
@@ -1211,7 +1241,7 @@ func (m *Model) renderWelcome(b *strings.Builder) {
 	writeLine(m.styles.OverlayTitle, "LOCAL AGENT")
 	trust := "Local-first · Ollama · " + m.approvalPostureWelcomeLabel(false)
 	if micro {
-		trust = "Local-first · " + m.approvalPostureWelcomeLabel(true)
+		trust = "Local-first · " + m.approvalPostureWelcomeMicroLabel()
 	} else if compact {
 		trust = "Local-first · " + m.approvalPostureWelcomeLabel(true)
 	}

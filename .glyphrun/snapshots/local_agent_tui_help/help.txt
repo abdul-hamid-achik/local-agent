@@ -4,7 +4,7 @@
                              │ Keyboard Shortcuts                                         │
                              │   enter             Send / queue one follow-up             │
                              │   shift+enter       New line · ctrl+j/alt+enter also       │
-  ollama: no model selected  │   esc               Cancel / close overlay                 │
+  notice · ollama: no model s│   esc               Cancel / close overlay                 │
   try: ollama serve · ollama │   ctrl+c            Quit                                   │
                              │   ctrl+l            Clear screen                           │
                              │   ctrl+n            New conversation                       │
@@ -24,12 +24,12 @@
                              │   space             Toggle last tool (empty input)         │
                              │   ctrl+t            Toggle all reasoning (empty input)     │
                              │   ctrl+k            Toggle compact mode                    │
-                             │   ctrl+e            Open in $EDITOR                        │
+                             │   ctrl+e            Open in $VISUAL/$EDITOR                │
                              │   tab               Autocomplete                           │
                              │                                                            │
                              │ Input Shortcuts                                            │
                              │   @file / @agent    Insert file or agent mention text      │
-                             │   ctrl+v            Paste text; on macOS attach a          │
-                             │                     clipboard PNG                          │
+                             │   ctrl+v            Paste text; on macOS convert a         │
+                             │                     clipboard image to PNG and attach it   │
 ─────────────────────────────│ esc/q close · pgdn more · g/shift+g ends                   │────────────────────────────
                              ╰────────────────────────────────────────────────────────────╯

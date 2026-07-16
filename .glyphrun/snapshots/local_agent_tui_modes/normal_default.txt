@@ -4,7 +4,7 @@
     enter send · / commands · ctrl+p settings · ? help
     shift+tab mode · ctrl+o models · @ files · # skills
 
-  ollama: no model selected
+  notice · ollama: no model selected
   try: ollama serve · ollama pull qwen3.5:2b
 
 

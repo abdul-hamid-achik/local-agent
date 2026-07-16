@@ -1,17 +1,17 @@
-  LLM request not started: inference not started: no
   model selected
 
-  Goal saved · Cortex is not configured; starting one
-  bounded local turn…
+  notice · Goal saved · Cortex is not configured;
+  starting one bounded local turn…
 
   ✗ error
   LLM request not started: inference not started: no
   model selected
 
-  Goal paused · unproductive turn: inference not
-  started: no model selected
+  notice · Goal paused · unproductive turn: inference
+  not started: no model selected
 
-  After goal · NORMAL · active goal · AUTO · qwen3.5:2b
+  notice · After goal · NORMAL · active goal · AUTO ·
+  qwen3.5:2b
 
 
 ───────────────────────────────────────────────────────────

@@ -20,7 +20,12 @@ workspace. A restored session includes both visible and model-facing state:
 - bounded file.cheap artifact receipts;
 - durable goal state when present.
 
-Loading a session replaces the active conversation. It does not merge two transcripts.
+Loading a session replaces the active conversation. It does not merge two
+transcripts. If the current composer contains text or pending images, the TUI
+first presents one atomic choice: keep both with the restored session, discard
+both, or cancel. A failed restore leaves the original draft, cursor position,
+and image order unchanged. A separately held recovery follow-up must first be
+resolved with Up or Escape, so unsent work cannot cross session boundaries.
 
 The same lossless restore path is available at TUI startup:
 

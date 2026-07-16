@@ -3,7 +3,59 @@ package ui
 import (
 	"strings"
 	"testing"
+
+	"charm.land/lipgloss/v2"
 )
+
+func TestMarkdownStyleUsesAdaptiveNonErrorInlineCode(t *testing.T) {
+	tests := []struct {
+		name       string
+		isDark     bool
+		foreground string
+		background string
+	}{
+		{name: "light", foreground: "#3B4252", background: "#ECEFF4"},
+		{name: "dark", isDark: true, foreground: "#E5E9F0", background: "#3B4252"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			style := markdownStyleConfig(tt.isDark)
+			if style.Code.Color == nil || *style.Code.Color != tt.foreground {
+				t.Fatalf("inline code foreground = %v, want %s", style.Code.Color, tt.foreground)
+			}
+			if style.Code.BackgroundColor == nil || *style.Code.BackgroundColor != tt.background {
+				t.Fatalf("inline code background = %v, want %s", style.Code.BackgroundColor, tt.background)
+			}
+			if *style.Code.Color == "203" {
+				t.Fatal("inline code retained Glamour's error-like red foreground")
+			}
+		})
+	}
+}
+
+func TestMarkdownInlineCodeMeetsNormalTextContrast(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		isDark bool
+	}{
+		{name: "light"},
+		{name: "dark", isDark: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			style := markdownStyleConfig(test.isDark)
+			if style.Code.Color == nil || style.Code.BackgroundColor == nil {
+				t.Fatalf("inline code style is incomplete: foreground=%v background=%v", style.Code.Color, style.Code.BackgroundColor)
+			}
+			foreground := lipgloss.Color(*style.Code.Color)
+			background := lipgloss.Color(*style.Code.BackgroundColor)
+			const minimumContrast = 4.5
+			if ratio := contrastRatio(foreground, background); ratio < minimumContrast {
+				t.Fatalf("inline code contrast = %.2f:1, want >= %.1f:1 (foreground=%s background=%s)",
+					ratio, minimumContrast, *style.Code.Color, *style.Code.BackgroundColor)
+			}
+		})
+	}
+}
 
 func TestFindSafeMarkdownBoundary(t *testing.T) {
 	tests := []struct {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"os/exec"
@@ -168,31 +169,34 @@ type Model struct {
 	keys          KeyMap
 
 	// State
-	state               State
-	overlay             OverlayKind
-	overlayParent       OverlayKind
-	entries             []ChatEntry
-	streamBuf           strings.Builder
-	lastStreamPaint     time.Time // throttles per-token re-renders during streaming
-	turnStartedAt       time.Time
-	lastTurnDuration    time.Duration
-	now                 func() time.Time
-	width               int
-	height              int
-	ready               bool
-	isDark              bool
-	reducedMotion       bool
-	evalCount           int
-	promptTokens        int
-	turnEvalTotal       int
-	turnPromptTotal     int
-	toolsPending        int
-	capabilityRoute     *agent.CapabilityRoute
-	lastCapabilityRoute *agent.CapabilityRoute
-	continuation        continuationActionState
-	bobWorkspaceContext bobWorkspaceContextState
-	inputLines          int
-	userScrolledUp      bool
+	state                 State
+	overlay               OverlayKind
+	overlayParent         OverlayKind
+	entries               []ChatEntry
+	streamBuf             strings.Builder
+	lastStreamPaint       time.Time // throttles per-token re-renders during streaming
+	turnStartedAt         time.Time
+	lastTurnDuration      time.Duration
+	now                   func() time.Time
+	width                 int
+	height                int
+	ready                 bool
+	isDark                bool
+	reducedMotion         bool
+	evalCount             int
+	promptTokens          int
+	turnEvalTotal         int
+	turnPromptTotal       int
+	toolsPending          int
+	capabilityRoute       *agent.CapabilityRoute
+	lastCapabilityRoute   *agent.CapabilityRoute
+	continuation          continuationActionState
+	bobWorkspaceContext   bobWorkspaceContextState
+	inputLines            int
+	composerMeasureDigest [32]byte
+	composerMeasureW      int
+	composerMeasureRows   int
+	userScrolledUp        bool
 
 	// Scroll anchor system - prevents jitter during streaming.
 	anchorActive bool // true when user wants to stay at bottom
@@ -252,6 +256,7 @@ type Model struct {
 	sessionLoadToken             uint64
 	sessionLoading               bool
 	sessionLoadCancel            context.CancelFunc
+	pendingSessionSwitch         *pendingSessionSwitch
 	sessionListToken             uint64
 	sessionListing               bool
 	startupResumeSelector        *SessionResumeSelector
@@ -545,6 +550,7 @@ func (m *Model) beginShutdown() tea.Cmd {
 		m.resolvePendingApproval(permission.Cancelled("application is shutting down"))
 	}
 	m.pendingPaste = nil
+	m.clearPendingSessionSwitchSnapshot()
 	if m.readScopePrompt != nil {
 		releaseReadGrants(m.readScopePrompt.Grants)
 	}
@@ -876,6 +882,26 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 				m.resolveReadScopePrompt("denied")
 			case key.Matches(msg, m.keys.Cancel):
 				m.resolveReadScopePrompt("cancelled")
+			}
+			return m, nil
+		}
+
+		// Switching sessions must settle unsent text and images as one atomic
+		// draft. This host-owned decision precedes loading and never falls through
+		// to ordinary composer or overlay shortcuts.
+		if m.pendingSessionSwitch != nil && m.pendingSessionSwitch.Choice == sessionSwitchUndecided {
+			switch {
+			case key.Matches(msg, m.keys.Quit):
+				m.clearPendingSessionSwitchSnapshot()
+				return m, m.beginShutdown()
+			case key.Matches(msg, m.keys.Cancel):
+				m.clearPendingSessionSwitchSnapshot()
+				m.input.Focus()
+				m.recalcViewportHeight()
+			case strings.EqualFold(msg.String(), "k"):
+				return m, m.startPendingSessionSwitch(sessionSwitchKeep)
+			case strings.EqualFold(msg.String(), "d"):
+				return m, m.startPendingSessionSwitch(sessionSwitchDiscard)
 			}
 			return m, nil
 		}
@@ -1354,10 +1380,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 				if key.Matches(msg, m.keys.CompleteSelect) {
 					if item := m.sessionsPickerState.List.SelectedItem(); item != nil {
 						si := item.(sessionItem)
-						selector, _ := SessionIDResumeSelector(si.id)
-						m.overlayParent = OverlayNone
-						m.closeSessionsPicker()
-						return m, m.requestSessionRestore(selector)
+						return m, m.beginSessionSwitch(si.id, si.title)
 					}
 				} else {
 					var cmd tea.Cmd
@@ -1566,6 +1589,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 
 		case key.Matches(msg, m.keys.NewConvo):
 			if m.state == StateIdle {
+				if m.blockSessionReplacementForHeldFollowUp("starting a new conversation") {
+					return m, nil
+				}
 				m.agent.ClearHistory()
 				m.entries = nil
 				m.toolEntries = nil
@@ -1951,8 +1977,18 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		var unresolved *agent.UnresolvedExecutionError
 		hasUnresolved := errors.As(msg.Err, &unresolved)
 		preDispatchRejected := errors.Is(msg.Err, llm.ErrInferenceNotStarted) || errors.Is(msg.Err, llm.ErrNoModelSelected)
+		capturedFollowUp := false
+		rolledBackPrompt := false
 		if hasUnresolved || preDispatchRejected {
-			m.rollbackPreflightRejectedPrompt()
+			capturedFollowUp = m.captureComposerFollowUpForRollback()
+			rolledBackPrompt = m.rollbackPreflightRejectedPrompt()
+			if rolledBackPrompt {
+				m.holdQueuedFollowUpAfterRollback()
+			} else if capturedFollowUp {
+				// The exact pre-dispatch checkpoint could not be proven. Return the
+				// temporarily separated live draft to its ordinary owner.
+				m.restoreQueuedFollowUp()
+			}
 		}
 		m.clearTurnMessageCheckpoint()
 		followWasPaused := m.followPaused()
@@ -1971,7 +2007,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		}
 		m.lastTurnDuration = m.turnElapsed()
 		m.state = StateIdle
-		if msg.Err != nil {
+		if msg.Err != nil && !rolledBackPrompt {
 			m.restoreQueuedFollowUp()
 		}
 		m.input.Focus()
@@ -2086,7 +2122,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			m.restoreQueuedFollowUp()
 			m.recalcViewportHeight()
 		}
-		if msg.Err == nil && settledPersisted && !m.goalNeedsEvaluation && !m.shuttingDown && m.queuedFollowUp != nil {
+		if msg.Err == nil && settledPersisted && !m.goalNeedsEvaluation && !m.shuttingDown && m.queuedFollowUpAutoDispatchable() {
 			m.doneFlash = false
 			if cmd := m.dispatchQueuedFollowUp(); cmd != nil {
 				cmds = append(cmds, cmd)
@@ -2633,12 +2669,16 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 
 	// Update sub-components.
 	if m.composerEditable() {
+		hadOverflowCue := m.renderComposerOverflowCue() != ""
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		cmds = append(cmds, cmd)
 
 		// Auto-grow textarea based on content.
 		m.syncInputHeight()
+		if hadOverflowCue != (m.renderComposerOverflowCue() != "") {
+			m.recalcViewportHeight()
+		}
 
 		// Auto-trigger completion when user types /, @, or #
 		newInput := m.input.Value()
@@ -3111,6 +3151,16 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 		return nil
 
 	case command.ActionClear:
+		if m.queuedFollowUpHeld() {
+			// submitPreparedInput has already consumed the slash command. Restore
+			// it so resolving the old-session owner does not also lose the user's
+			// requested reset.
+			if draft != "" && strings.TrimSpace(m.input.Value()) == "" {
+				m.setComposerDraftAtRune(draft, utf8.RuneCountInString(draft))
+			}
+			m.blockSessionReplacementForHeldFollowUp("starting a new conversation")
+			return nil
+		}
 		m.agent.ClearHistory()
 		m.entries = nil
 		m.toolEntries = nil
@@ -3367,6 +3417,16 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 		return tea.Batch(m.startActivityCmd(), exportConversationCmd(workDir, path, content, force, token))
 
 	case command.ActionImport:
+		if m.queuedFollowUpHeld() {
+			// Import replaces both the visible and model transcripts. Keep the
+			// consumed slash command recoverable until the old-session follow-up
+			// owner is explicitly swapped or cleared.
+			if draft != "" && strings.TrimSpace(m.input.Value()) == "" {
+				m.setComposerDraftAtRune(draft, utf8.RuneCountInString(draft))
+			}
+			m.blockSessionReplacementForHeldFollowUp("importing another conversation")
+			return nil
+		}
 		path := result.Data
 		if path == "" {
 			m.entries = append(m.entries, ChatEntry{
@@ -3547,6 +3607,7 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 }
 
 func (m *Model) resetConversationSession() {
+	m.clearQueuedFollowUpForSessionReplacement()
 	m.clearBobWorkspaceContext()
 	m.revokeOllamaCloudConsent()
 	if m.imageAttachCancel != nil {
@@ -3645,6 +3706,9 @@ func (m *Model) cancelSessionLoad() {
 		m.sessionLoadToken++
 	}
 	m.sessionLoading = false
+	if m.pendingSessionSwitch != nil {
+		m.restoreAndClearPendingSessionSwitch()
+	}
 	if !m.sessionListing {
 		m.input.Focus()
 	}
@@ -3748,6 +3812,9 @@ func (m *Model) footerHeight() int {
 	if m.pendingPaste != nil {
 		return height
 	}
+	if m.pendingSessionSwitch != nil {
+		return height
+	}
 	if m.overlay == OverlayCortexDecision && m.cortexDecision != nil {
 		return height + lipgloss.Height(m.cortexDecision.View(m.cortexDecisionBusyMarker()))
 	}
@@ -3767,6 +3834,12 @@ func (m *Model) footerHeight() int {
 		return height + m.inputLines
 	}
 	if m.composerEditable() {
+		if m.queuedFollowUpHeld() {
+			height += lipgloss.Height(m.renderQueuedFollowUp())
+		}
+		if m.renderComposerOverflowCue() != "" {
+			height++
+		}
 		return height + m.inputLines
 	}
 	return height + 1
@@ -3798,6 +3871,7 @@ func composerVisibleRowLimit(terminalHeight int) int {
 // cursor. Without this no-op child update, a large accepted paste can clamp its
 // five-row viewport against stale pre-paste content and hide the closing rows.
 func (m *Model) reflowInputViewport() tea.Cmd {
+	hadOverflowCue := m.renderComposerOverflowCue() != ""
 	wasFocused := m.input.Focused()
 	if !wasFocused {
 		// Textarea.Update intentionally ignores messages while blurred. Parent-
@@ -3812,6 +3886,9 @@ func (m *Model) reflowInputViewport() tea.Cmd {
 		m.input.Blur()
 	}
 	m.syncInputHeight()
+	if hadOverflowCue != (m.renderComposerOverflowCue() != "") {
+		m.recalcViewportHeight()
+	}
 	return cmd
 }
 
@@ -3834,15 +3911,24 @@ func (m *Model) checkAutoScroll() {
 	}
 }
 
-// openExternalEditor opens $EDITOR with the current input text, then replaces
+// openExternalEditor opens $VISUAL/$EDITOR with the current input text, then replaces
 // the textarea content with whatever the user wrote. tea.ExecProcess owns this
 // interactive child synchronously: Bubble Tea cannot process a normal quit or
 // restore the terminal until the editor callback returns. Keep interactive
 // processes on this path rather than dispatching them as unjoined tea.Cmd work.
 func (m *Model) openExternalEditor() tea.Cmd {
-	editor := os.Getenv("EDITOR")
+	editor := strings.TrimSpace(os.Getenv("VISUAL"))
+	if editor == "" {
+		editor = strings.TrimSpace(os.Getenv("EDITOR"))
+	}
 	if editor == "" {
 		editor = "vi"
+	}
+	editorArgs, err := splitEditorCommand(editor)
+	if err != nil {
+		return func() tea.Msg {
+			return ErrorMsg{Msg: fmt.Sprintf("editor: %v", err)}
+		}
 	}
 
 	// Write current input to a temp file.
@@ -3869,22 +3955,110 @@ func (m *Model) openExternalEditor() tea.Cmd {
 		}
 	}
 
-	c := exec.Command(editor, tmpPath)
+	c := exec.Command(editorArgs[0], append(editorArgs[1:], tmpPath)...)
 	return tea.ExecProcess(c, func(err error) tea.Msg {
 		defer func() { _ = os.Remove(tmpPath) }()
-		if err != nil {
-			return ErrorMsg{Msg: fmt.Sprintf("editor: %v", err)}
-		}
-		data, err := os.ReadFile(tmpPath)
-		if err != nil {
-			return ErrorMsg{Msg: fmt.Sprintf("editor: %v", err)}
-		}
-		content := strings.TrimRight(string(data), "\n")
-		if content == "" {
-			return nil
-		}
-		return editorReturnMsg{Content: content}
+		return editorResultMessage(tmpPath, err, m.input.CharLimit)
 	})
+}
+
+// splitEditorCommand accepts the useful command+arguments subset of shell
+// words without invoking a shell. Quoted paths and flags work; expansions,
+// pipelines, and command substitution never gain execution authority here.
+func splitEditorCommand(value string) ([]string, error) {
+	var args []string
+	var current strings.Builder
+	var quote rune
+	escaped := false
+	started := false
+	flush := func() {
+		if !started {
+			return
+		}
+		args = append(args, current.String())
+		current.Reset()
+		started = false
+	}
+	for _, char := range value {
+		if escaped {
+			current.WriteRune(char)
+			escaped = false
+			started = true
+			continue
+		}
+		if char == '\\' && quote != '\'' {
+			escaped = true
+			started = true
+			continue
+		}
+		if quote != 0 {
+			if char == quote {
+				quote = 0
+			} else {
+				current.WriteRune(char)
+			}
+			started = true
+			continue
+		}
+		switch char {
+		case '\'', '"':
+			quote = char
+			started = true
+		case ' ', '\t', '\r', '\n':
+			flush()
+		default:
+			current.WriteRune(char)
+			started = true
+		}
+	}
+	if escaped {
+		return nil, errors.New("editor command ends with an incomplete escape")
+	}
+	if quote != 0 {
+		return nil, errors.New("editor command has an unterminated quote")
+	}
+	flush()
+	if len(args) == 0 || strings.TrimSpace(args[0]) == "" {
+		return nil, errors.New("editor command is empty")
+	}
+	return args, nil
+}
+
+func editorResultMessage(path string, runErr error, charLimit int) tea.Msg {
+	if runErr != nil {
+		return ErrorMsg{Msg: fmt.Sprintf("editor: %v", runErr)}
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return ErrorMsg{Msg: fmt.Sprintf("editor: %v", err)}
+	}
+	defer func() { _ = file.Close() }()
+
+	// A valid UTF-8 rune occupies at most utf8.UTFMax bytes. Allow one extra
+	// byte for the conventional trailing newline, but never read an unbounded
+	// editor file into the TUI. The textarea must not silently truncate content
+	// the user just edited outside Local Agent.
+	maxBytes := int64(1 << 20)
+	if charLimit > 0 {
+		maxBytes = int64(charLimit)*utf8.UTFMax + 1
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxBytes+1))
+	if err != nil {
+		return ErrorMsg{Msg: fmt.Sprintf("editor: %v", err)}
+	}
+	if int64(len(data)) > maxBytes {
+		return ErrorMsg{Msg: fmt.Sprintf("editor: edited draft exceeds the %d-character limit", charLimit)}
+	}
+	if !utf8.Valid(data) {
+		return ErrorMsg{Msg: "editor: edited draft is not valid UTF-8"}
+	}
+
+	content := strings.TrimRight(string(data), "\n")
+	if charLimit > 0 && utf8.RuneCountInString(content) > charLimit {
+		return ErrorMsg{Msg: fmt.Sprintf("editor: edited draft exceeds the %d-character limit", charLimit)}
+	}
+	// Empty output is intentional: clearing the file clears the draft.
+	return editorReturnMsg{Content: content}
 }
 
 // editorReturnMsg is sent when the external editor closes.
@@ -3897,7 +4071,13 @@ func (m *Model) recalcViewportHeight() {
 	if !m.ready || m.height == 0 {
 		return
 	}
+	paused := m.followPaused()
+	yOffset := m.viewport.YOffset()
 	m.viewport.SetHeight(m.viewportHeight())
+	// Footer reflow must not silently change transcript ownership. Following
+	// stays pinned to the newest row; a paused reader keeps the same logical
+	// offset, clamped by Bubbles if the new geometry has less scroll range.
+	m.restoreFollowPosition(paused, yOffset)
 }
 
 // viewportHeight is the single vertical-layout authority shared by terminal

@@ -59,3 +59,10 @@ func (m *Model) approvalPostureWelcomeLabel(compact bool) string {
 	}
 	return "approval prompts enabled"
 }
+
+func (m *Model) approvalPostureWelcomeMicroLabel() string {
+	if m.skipApprovalsEnabled() {
+		return "prompts skipped"
+	}
+	return "prompts on"
+}

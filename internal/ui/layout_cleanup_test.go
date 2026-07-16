@@ -47,7 +47,13 @@ func TestComposerGrowsForSoftWrappedTyping(t *testing.T) {
 	if m.inputLines <= 1 || m.inputLines != m.input.Height() {
 		t.Fatalf("soft-wrapped composer height = tracked %d, child %d; want > 1 and equal", m.inputLines, m.input.Height())
 	}
-	if got, want := m.viewport.Height(), initialViewportHeight-(m.inputLines-1); got != want {
+	// A capped draft owns one explicit overflow cue in addition to its visible
+	// rows; uncapped drafts retain the original one-row-to-one-row reflow.
+	cueRows := 0
+	if m.renderComposerOverflowCue() != "" {
+		cueRows = 1
+	}
+	if got, want := m.viewport.Height(), initialViewportHeight-(m.inputLines-1)-cueRows; got != want {
 		t.Fatalf("soft-wrapped viewport height = %d, want %d", got, want)
 	}
 }
@@ -116,6 +122,52 @@ func TestComposerCapsVisibleRowsAndKeepsDraftTailVisible(t *testing.T) {
 	}
 	if !strings.Contains(ansi.Strip(m.input.View()), "VISIBLE-TAIL") {
 		t.Fatalf("capped composer hid the draft tail:\n%s", m.input.View())
+	}
+	if cue := ansi.Strip(m.renderComposerOverflowCue()); !strings.Contains(cue, "earlier") || !strings.Contains(cue, "ctrl+home") {
+		t.Fatalf("capped composer has no earlier-draft recovery cue: %q", cue)
+	}
+}
+
+func TestComposerOverflowCueTracksTopMiddleAndTail(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 20})
+	m = updated.(*Model)
+	m.input.SetValue(strings.Repeat("draft row\n", 16))
+	_ = m.reflowInputViewport()
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyHome, Mod: tea.ModCtrl})
+	m = updated.(*Model)
+	if cue := ansi.Strip(m.renderComposerOverflowCue()); !strings.Contains(cue, "later") {
+		t.Fatalf("top cue = %q, want later rows", cue)
+	}
+
+	for range 8 {
+		updated, _ = m.Update(downKey())
+		m = updated.(*Model)
+	}
+	if cue := ansi.Strip(m.renderComposerOverflowCue()); !strings.Contains(cue, "earlier") || !strings.Contains(cue, "later") {
+		t.Fatalf("middle cue = %q, want both earlier and later rows", cue)
+	}
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnd, Mod: tea.ModCtrl})
+	m = updated.(*Model)
+	if cue := ansi.Strip(m.renderComposerOverflowCue()); !strings.Contains(cue, "earlier") {
+		t.Fatalf("tail cue = %q, want earlier rows", cue)
+	}
+}
+
+func TestComposerOverflowCueStaysHiddenWhenMultilineDraftFits(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 20})
+	m = updated.(*Model)
+	m.input.SetValue("first row\nsecond row\nthird row")
+	_ = m.reflowInputViewport()
+
+	if earlier, later := m.composerHiddenRows(); earlier != 0 || later != 0 {
+		t.Fatalf("fully visible draft hidden rows = earlier %d later %d", earlier, later)
+	}
+	if cue := ansi.Strip(m.renderComposerOverflowCue()); cue != "" {
+		t.Fatalf("fully visible multiline draft showed overflow cue %q", cue)
 	}
 }
 
