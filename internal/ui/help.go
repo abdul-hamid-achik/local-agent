@@ -50,7 +50,8 @@ func (m *Model) buildHelpContent(innerW int) string {
 	inputShortcuts := []helpRow{
 		{"@file / @agent", "Insert file or agent mention text"},
 		{"ctrl+v", "Paste text; on macOS attach a clipboard PNG"},
-		{"paste/drag image path", "Attach a PNG, JPEG, or GIF to the pending prompt"},
+		{"paste/drag images", "Attach up to four PNG, JPEG, or GIF files to the pending prompt"},
+		{"shift+drag", "Use the terminal selection override while mouse scrolling is active"},
 		{"~/… or /…", "Review temporary read-only access; MCP tools require separate approval"},
 		{"#skill", "Insert skill mention text"},
 		{"/cmd", "Run slash command"},
@@ -106,7 +107,7 @@ func (m *Model) keyHelpRows() []helpRow {
 // writeHelpRows renders aligned rows on normal terminals and stacked rows on
 // narrow ones. Descriptions wrap instead of being silently clipped.
 func (m *Model) writeHelpRows(b *strings.Builder, rows []helpRow, innerW int) {
-	if innerW < 28 {
+	if innerW < 34 {
 		for _, row := range rows {
 			b.WriteString("  ")
 			b.WriteString(m.styles.FocusIndicator.Render(truncateDisplay(row.key, max(1, innerW-3))))
@@ -123,8 +124,11 @@ func (m *Model) writeHelpRows(b *strings.Builder, rows []helpRow, innerW int) {
 	keyW := 16
 	if innerW < 44 {
 		keyW = 10
+		// Keep common multi-terminal alternatives intact at ordinary narrow
+		// widths while reserving enough room for a wrapped description.
+		keyCap := max(10, min(22, innerW-16))
 		for _, row := range rows {
-			keyW = min(16, max(keyW, lipgloss.Width(row.key)))
+			keyW = min(keyCap, max(keyW, lipgloss.Width(row.key)))
 		}
 	}
 	// Leave the terminal's final cell unused. Writing exactly to the edge can

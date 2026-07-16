@@ -801,7 +801,7 @@ func run() int {
 		})
 	}()
 
-	_, runErr := p.Run()
+	finalModel, runErr := p.Run()
 	signal.Stop(sigCh)
 	close(signalDone)
 	initCancel()
@@ -810,6 +810,7 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "tui: %v\n", runErr)
 		return 1
 	}
+	writeSessionResumeMessage(os.Stdout, finalModel, runErr)
 	return 0
 }
 

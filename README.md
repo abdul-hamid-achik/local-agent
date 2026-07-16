@@ -700,9 +700,10 @@ controls.
 The composer grows with visually wrapped text as you type, up to a bounded
 terminal-height-aware limit, then scrolls internally while keeping the cursor
 region visible. Ordinary bracketed text paste follows the same layout;
-large text pastes retain their existing review step. Mouse reporting is off by
-default so the terminal owns drag selection and copy. Use the keyboard tool and
-scroll bindings below when inspecting the transcript.
+large text pastes retain their existing review step. The mouse wheel scrolls the
+conversation without moving the composer. While mouse reporting is active, use
+your terminal's selection override (commonly Shift-drag) for native selection
+and copy; `ctrl+y` remains available for copying the last response.
 
 Attach an image with `/image <path>` or its `/attach <path>` alias. You can also
 paste or drag a PNG, JPEG, or GIF file when the terminal inserts one quoted,

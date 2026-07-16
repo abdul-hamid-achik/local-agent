@@ -114,6 +114,37 @@ func TestAdmitFileFollowsExplicitSourceAndDoesNotPersistPath(t *testing.T) {
 	}
 }
 
+func TestAdmitFileCheckedRejectsBeforePublishing(t *testing.T) {
+	directory := t.TempDir()
+	source := filepath.Join(directory, "private-source.png")
+	if err := os.WriteFile(source, encodePNG(t, 4, 3), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(filepath.Join(directory, "store"), DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rejected := errors.New("conversation budget rejected image")
+	var inspected Ref
+	_, err = store.AdmitFileChecked(context.Background(), source, func(ref Ref) error {
+		inspected = ref
+		if strings.Contains(ref.Name, directory) {
+			t.Fatalf("pre-publish reference leaked source path: %#v", ref)
+		}
+		return rejected
+	})
+	if !errors.Is(err, rejected) {
+		t.Fatalf("checked admission error = %v, want %v", err, rejected)
+	}
+	if inspected.Digest == "" {
+		t.Fatal("admission check did not receive the validated reference")
+	}
+	if _, err := os.Stat(store.objectPath(inspected.Digest)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rejected checked admission published an object: %v", err)
+	}
+}
+
 func TestAdmissionStripsBidirectionalControlsFromDisplayName(t *testing.T) {
 	store, err := NewStore(filepath.Join(t.TempDir(), "store"), DefaultLimits())
 	if err != nil {

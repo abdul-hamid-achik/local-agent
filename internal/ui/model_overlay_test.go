@@ -135,22 +135,31 @@ func TestOverlay_SuppressionClearsAfterComposerMutations(t *testing.T) {
 		}
 	})
 
-	t.Run("newline_is_an_edit", func(t *testing.T) {
-		m := newTestModel(t)
-		m.input.SetValue("/")
-		m.triggerCompletion("/")
-		updated, _ := m.Update(escKey())
-		m = updated.(*Model)
+	for _, test := range []struct {
+		name string
+		key  tea.KeyPressMsg
+	}{
+		{name: "shift_enter_newline_is_an_edit", key: tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift}},
+		{name: "ctrl_j_newline_is_an_edit", key: tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl}},
+		{name: "alt_enter_newline_is_an_edit", key: tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModAlt}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			m := newTestModel(t)
+			m.input.SetValue("/")
+			m.triggerCompletion("/")
+			updated, _ := m.Update(escKey())
+			m = updated.(*Model)
 
-		updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
-		m = updated.(*Model)
-		if got := m.completionSuppressedDraft; got != "" {
-			t.Fatalf("newline edit left stale suppression %q", got)
-		}
-		if got := m.input.Value(); got != "/\n" {
-			t.Fatalf("newline edit produced %q, want %q", got, "/\n")
-		}
-	})
+			updated, _ = m.Update(test.key)
+			m = updated.(*Model)
+			if got := m.completionSuppressedDraft; got != "" {
+				t.Fatalf("newline edit left stale suppression %q", got)
+			}
+			if got := m.input.Value(); got != "/\n" {
+				t.Fatalf("newline edit produced %q, want %q", got, "/\n")
+			}
+		})
+	}
 }
 
 func TestOverlay_BackspaceRemovesSuppressedTriggerWithoutReopening(t *testing.T) {

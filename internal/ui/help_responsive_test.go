@@ -60,14 +60,21 @@ func TestHelpMinimumFooterKeepsClosePageAndEndpointNavigation(t *testing.T) {
 }
 
 func TestHelpKeepsKeysAndContextTruthfulAtNarrowWidth(t *testing.T) {
-	m := newTestModel(t)
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 20})
-	m = updated.(*Model)
-	plain := ansi.Strip(m.buildHelpContent(m.helpContentWidth()))
-	if !strings.Contains(plain, "shift+enter") || strings.Contains(plain, "shift+ent…") {
-		t.Fatalf("narrow help truncated a key label:\n%s", plain)
+	for _, width := range []int{30, 34, 36, 39, 40} {
+		m := newTestModel(t)
+		updated, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: 20})
+		m = updated.(*Model)
+		plain := ansi.Strip(m.buildHelpContent(m.helpContentWidth()))
+		if !strings.Contains(plain, "shift+enter/ctrl+j") || strings.Contains(plain, "shift+ent…") {
+			t.Fatalf("width %d help truncated a key label:\n%s", width, plain)
+		}
+		compact := strings.Join(strings.Fields(plain), " ")
+		if !strings.Contains(compact, "shift+drag") || !strings.Contains(compact, "terminal selection override") {
+			t.Fatalf("width %d help omitted mouse selection guidance:\n%s", width, plain)
+		}
 	}
 
+	m := newTestModel(t)
 	foundContext := false
 	for _, row := range m.keyHelpRows() {
 		if row.key == "?" && strings.Contains(strings.ToLower(row.desc), "empty input") {

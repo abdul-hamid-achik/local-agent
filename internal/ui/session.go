@@ -31,6 +31,27 @@ type SessionListItem struct {
 	CreatedAt string `json:"created_at"`
 }
 
+// SessionResumeInfo is the minimal durable identity needed by the CLI after
+// Bubble Tea has restored the terminal. It deliberately excludes transcript
+// content and the user-derived title from the process-exit surface.
+type SessionResumeInfo struct {
+	Handle string
+}
+
+// SessionResumeInfo returns the active session's canonical short handle when
+// the model owns a session backed by the durable store. It is read-only and is
+// intended for the successful interactive-exit message.
+func (m *Model) SessionResumeInfo() (SessionResumeInfo, bool) {
+	if m == nil || m.sessionStore == nil || m.sessionID <= 0 {
+		return SessionResumeInfo{}, false
+	}
+	handle := sessionref.Format(m.sessionID)
+	if handle == "" {
+		return SessionResumeInfo{}, false
+	}
+	return SessionResumeInfo{Handle: handle}, true
+}
+
 type persistedChatEntry struct {
 	Kind              string           `json:"kind"`
 	Content           string           `json:"content,omitempty"`

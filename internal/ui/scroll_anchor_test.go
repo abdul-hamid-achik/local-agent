@@ -63,6 +63,52 @@ func TestScrollAnchor_MouseWheelUp(t *testing.T) {
 	}
 }
 
+func TestMouseWheelScrollsTranscriptWithoutMutatingComposer(t *testing.T) {
+	m := newTestModel(t)
+	m.input.SetValue(strings.Repeat("composer line\n", 12) + "composer tail")
+	m.input.CursorEnd()
+	_ = m.reflowInputViewport()
+	setScrollableTranscript(m)
+	m.viewport.GotoBottom()
+
+	wantValue := m.input.Value()
+	wantLine := m.input.Line()
+	wantColumn := m.input.Column()
+	wantScrollOffset := m.input.ScrollYOffset()
+	wantHeight := m.input.Height()
+	wantFocused := m.input.Focused()
+	beforeTranscript := m.viewport.YOffset()
+
+	updated, cmd := m.Update(tea.MouseWheelMsg{
+		X:      1,
+		Y:      max(0, m.viewport.Height()-1),
+		Button: tea.MouseWheelUp,
+	})
+	m = updated.(*Model)
+
+	if cmd != nil {
+		t.Fatal("transcript wheel unexpectedly scheduled a composer command")
+	}
+	if got := m.viewport.YOffset(); got >= beforeTranscript {
+		t.Fatalf("wheel did not move transcript upward: before=%d after=%d", beforeTranscript, got)
+	}
+	if got := m.input.Value(); got != wantValue {
+		t.Fatalf("wheel changed composer value: got %q want %q", got, wantValue)
+	}
+	if gotLine, gotColumn := m.input.Line(), m.input.Column(); gotLine != wantLine || gotColumn != wantColumn {
+		t.Fatalf("wheel moved composer cursor: got %d:%d want %d:%d", gotLine, gotColumn, wantLine, wantColumn)
+	}
+	if got := m.input.ScrollYOffset(); got != wantScrollOffset {
+		t.Fatalf("wheel moved composer viewport: got %d want %d", got, wantScrollOffset)
+	}
+	if got := m.input.Height(); got != wantHeight {
+		t.Fatalf("wheel changed composer height: got %d want %d", got, wantHeight)
+	}
+	if got := m.input.Focused(); got != wantFocused {
+		t.Fatalf("wheel changed composer focus: got %v want %v", got, wantFocused)
+	}
+}
+
 // TestScrollAnchor_MouseWheelDown re-enables anchor when scrolling to bottom
 func TestScrollAnchor_MouseWheelDown(t *testing.T) {
 	m := newTestModel(t)

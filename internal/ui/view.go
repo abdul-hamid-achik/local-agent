@@ -183,10 +183,13 @@ func (m *Model) View() tea.View {
 
 	v := tea.NewView(content.String() + "\n")
 	v.AltScreen = true
-	// Selection is the common mouse action in a conversational terminal. Tool
-	// receipts and transcript navigation retain complete keyboard controls, so
-	// leave mouse reporting off and let the terminal own drag-to-copy.
-	v.MouseMode = tea.MouseModeNone
+	// Cell-motion reporting is the smallest mouse mode that delivers wheel
+	// events. Without it, terminals commonly translate wheel input in the alt
+	// screen into arrow keys, which moves the focused composer instead of the
+	// transcript. Native selection remains available through the terminal's
+	// mouse-reporting override (commonly Shift-drag), and Ctrl+Y remains the
+	// application-level copy path.
+	v.MouseMode = tea.MouseModeCellMotion
 	v.Cursor = viewCursor
 
 	// Terminal title progress. The workspace basename differentiates several

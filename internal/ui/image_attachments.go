@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -24,12 +25,15 @@ const (
 	maxConversationImages      = 12
 	maxConversationImageBytes  = 40 << 20
 	maxConversationImagePixels = 48_000_000
+	maxImagePathPasteBytes     = 32 << 10
+	maxImagePathPasteFields    = 32
 )
 
 var (
 	errImageAttachmentBusy      = errors.New("another image attachment is still being validated")
 	errImageStoreUnavailable    = errors.New("private image storage is unavailable")
 	errPendingImageLimitReached = errors.New("pending image limit reached")
+	errImageConversationBudget  = errors.New("active conversation image budget reached")
 )
 
 // pendingImageAttachment keeps the provider payload paired with its durable,
@@ -39,9 +43,17 @@ type pendingImageAttachment struct {
 	Image llm.ImageData
 }
 
+// imageFileAttachmentRequest is intentionally ephemeral. Source paths live
+// only long enough to feed the private image store; transcript and session
+// projections receive the resulting path-free Ref instead.
+type imageFileAttachmentRequest struct {
+	Path string
+}
+
 // ImageAttachmentResultMsg completes one tokened asynchronous image admission.
-// Fallback is the original terminal paste; it is restored through the normal
-// paste-review path when a path-shaped paste is not a valid image.
+// Fallback is reserved for explicit single-file callers; terminal PasteMsg
+// image lists deliberately leave it empty so source paths never become prompt
+// or session text after an admission failure.
 type ImageAttachmentResultMsg struct {
 	Token     uint64
 	Preflight bool
@@ -79,19 +91,69 @@ func (m *Model) beginImageFileAttachment(path, fallback string) tea.Cmd {
 			return ImageAttachmentResultMsg{Token: token, Preflight: true, Name: llm.SanitizeImageName(path), Err: errImageAttachmentBusy}
 		}
 	}
+	return m.startImageFileAttachment(path, fallback)
+}
+
+// beginPastedImageFileAttachments admits one complete path-shaped paste as an
+// ordered, bounded queue. Once the parent recognizes the whole payload as an
+// image-path list it never re-inserts source paths into prompt text, including
+// when an individual file fails validation.
+func (m *Model) beginPastedImageFileAttachments(paths []string) tea.Cmd {
+	if len(paths) == 0 {
+		return nil
+	}
+	if m.imageAttachRunning {
+		token := m.imageAttachToken
+		return func() tea.Msg {
+			return ImageAttachmentResultMsg{Token: token, Preflight: true, Name: llm.SanitizeImageName(paths[0]), Err: errImageAttachmentBusy}
+		}
+	}
+
+	remaining := maxPendingImages - len(m.pendingImages)
+	if remaining < 0 {
+		remaining = 0
+	}
+	queued := min(len(paths), remaining)
+	for _, path := range paths[:queued] {
+		m.imageAttachQueue = append(m.imageAttachQueue, imageFileAttachmentRequest{Path: path})
+	}
+	if skipped := len(paths) - queued; skipped > 0 {
+		m.entries = append(m.entries, ChatEntry{Kind: "error", Content: imageAttachmentQueueLimitReceipt(skipped)})
+		m.invalidateEntryCache()
+		m.viewport.SetContent(m.renderEntries())
+		m.gotoBottomIfFollowing()
+		m.recalcViewportHeight()
+	}
+	return m.startNextImageFileAttachment()
+}
+
+func (m *Model) startNextImageFileAttachment() tea.Cmd {
+	if m.imageAttachRunning || len(m.imageAttachQueue) == 0 {
+		return nil
+	}
+	request := m.imageAttachQueue[0]
+	m.imageAttachQueue[0] = imageFileAttachmentRequest{}
+	m.imageAttachQueue = m.imageAttachQueue[1:]
+	return m.startImageFileAttachment(request.Path, "")
+}
+
+func (m *Model) startImageFileAttachment(path, fallback string) tea.Cmd {
 	m.imageAttachToken++
 	token := m.imageAttachToken
 	displayName := llm.SanitizeImageName(path)
-	if m.imageStore == nil {
-		return func() tea.Msg {
-			return ImageAttachmentResultMsg{Token: token, Preflight: true, Name: displayName, Fallback: fallback, Err: errImageStoreUnavailable}
-		}
-	}
 	if len(m.pendingImages) >= maxPendingImages {
 		return func() tea.Msg {
 			return ImageAttachmentResultMsg{Token: token, Preflight: true, Name: displayName, Fallback: fallback, Err: errPendingImageLimitReached}
 		}
 	}
+	if m.imageStore == nil {
+		return func() tea.Msg {
+			return ImageAttachmentResultMsg{Token: token, Preflight: true, Name: displayName, Fallback: fallback, Err: errImageStoreUnavailable}
+		}
+	}
+	m.imageAttachRunning = true
+	m.imageAttachFallback = fallback
+	m.input.Blur()
 	path = strings.TrimSpace(path)
 	if !filepath.IsAbs(path) && m.agent != nil && strings.TrimSpace(m.agent.WorkDir()) != "" {
 		path = filepath.Join(m.agent.WorkDir(), path)
@@ -101,12 +163,10 @@ func (m *Model) beginImageFileAttachment(path, fallback string) tea.Cmd {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	m.imageAttachCancel = cancel
-	m.imageAttachRunning = true
-	m.imageAttachFallback = fallback
-	m.input.Blur()
 	store := m.imageStore
+	checkBudget := m.imageAdmissionBudgetCheck()
 	return tea.Batch(m.startActivityCmd(), func() tea.Msg {
-		ref, err := store.AdmitFile(ctx, path)
+		ref, err := store.AdmitFileChecked(ctx, path, checkBudget)
 		if err != nil {
 			return ImageAttachmentResultMsg{Token: token, Name: displayName, Fallback: fallback, Err: err}
 		}
@@ -154,8 +214,9 @@ func (m *Model) beginImageBytesAttachment(name string, data []byte) tea.Cmd {
 	m.input.Blur()
 	store := m.imageStore
 	payload := append([]byte(nil), data...)
+	checkBudget := m.imageAdmissionBudgetCheck()
 	return tea.Batch(m.startActivityCmd(), func() tea.Msg {
-		ref, err := store.AdmitBytes(ctx, displayName, payload)
+		ref, err := store.AdmitBytesChecked(ctx, displayName, payload, checkBudget)
 		if err != nil {
 			return ImageAttachmentResultMsg{Token: token, Name: displayName, Err: err}
 		}
@@ -183,40 +244,67 @@ func (m *Model) handleImageAttachmentResult(message ImageAttachmentResultMsg) te
 		m.imageAttachFallback = ""
 	}
 	if m.shuttingDown {
+		m.clearImageAttachmentQueue()
 		return nil
 	}
-	m.input.Focus()
 
+	stopQueue := false
 	if message.Err != nil {
+		stopQueue = errors.Is(message.Err, errImageConversationBudget)
 		m.entries = append(m.entries, ChatEntry{Kind: "error", Content: imageAttachmentErrorReceipt(message.Name, message.Err)})
 		m.invalidateEntryCache()
 		m.viewport.SetContent(m.renderEntries())
 		m.gotoBottomIfFollowing()
 		m.recalcViewportHeight()
-		if message.Fallback != "" && m.composerEditable() {
+	} else {
+		duplicate := false
+		for _, existing := range m.pendingImages {
+			if existing.Ref.Digest == message.Ref.Digest {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			refs := m.pendingImageRefs()
+			refs = append(refs, message.Ref)
+			if err := validateImageConversationBudget(m.agent.Messages(), refs); err != nil {
+				stopQueue = true
+				m.entries = append(m.entries, ChatEntry{Kind: "error", Content: "Attach image " + sanitizeTerminalSingleLine(message.Ref.Name) + ": " + err.Error()})
+				m.invalidateEntryCache()
+				m.viewport.SetContent(m.renderEntries())
+				m.gotoBottomIfFollowing()
+			} else {
+				m.pendingImages = append(m.pendingImages, pendingImageAttachment{Ref: message.Ref, Image: message.Image})
+			}
+		}
+	}
+	m.recalcViewportHeight()
+	if stopQueue {
+		m.clearImageAttachmentQueue()
+	}
+
+	if message.Preflight {
+		next := m.startNextImageFileAttachment()
+		if next == nil && !m.imageAttachRunning {
+			m.input.Focus()
+		}
+		if message.Fallback != "" && next == nil && m.composerEditable() {
 			return m.insertPasteWithReview(message.Fallback)
 		}
-		return nil
+		return next
 	}
-	for _, existing := range m.pendingImages {
-		if existing.Ref.Digest == message.Ref.Digest {
-			m.recalcViewportHeight()
-			return nil
-		}
+	next := m.startNextImageFileAttachment()
+	if next == nil {
+		m.input.Focus()
 	}
-	refs := m.pendingImageRefs()
-	refs = append(refs, message.Ref)
-	if err := validateImageConversationBudget(m.agent.Messages(), refs); err != nil {
-		m.entries = append(m.entries, ChatEntry{Kind: "error", Content: "Attach image: " + err.Error()})
-		m.invalidateEntryCache()
-		m.viewport.SetContent(m.renderEntries())
-		m.gotoBottomIfFollowing()
-		m.recalcViewportHeight()
-		return nil
+	if message.Fallback != "" && next == nil && m.composerEditable() {
+		return m.insertPasteWithReview(message.Fallback)
 	}
-	m.pendingImages = append(m.pendingImages, pendingImageAttachment{Ref: message.Ref, Image: message.Image})
-	m.recalcViewportHeight()
-	return nil
+	return next
+}
+
+func imageAttachmentQueueLimitReceipt(skipped int) string {
+	return fmt.Sprintf("Attach images: %d file%s not queued; the pending prompt supports at most %d images.", skipped, pluralSuffix(skipped), maxPendingImages)
 }
 
 func imageAttachmentErrorReceipt(name string, err error) string {
@@ -233,6 +321,8 @@ func imageAttachmentErrorReceipt(name string, err error) string {
 		reason = "private image storage is unavailable"
 	case errors.Is(err, errPendingImageLimitReached):
 		reason = fmt.Sprintf("the pending prompt already has %d images; send it or run /image clear", maxPendingImages)
+	case errors.Is(err, errImageConversationBudget):
+		reason = "the active conversation image budget was reached; run /image forget-history before attaching more images"
 	case errors.Is(err, os.ErrNotExist):
 		reason = "file was not found"
 	case errors.Is(err, os.ErrPermission):
@@ -282,6 +372,13 @@ func (m *Model) clearPendingImages() int {
 	m.pendingImages = nil
 	m.recalcViewportHeight()
 	return count
+}
+
+func (m *Model) clearImageAttachmentQueue() {
+	for index := range m.imageAttachQueue {
+		m.imageAttachQueue[index] = imageFileAttachmentRequest{}
+	}
+	m.imageAttachQueue = nil
 }
 
 func (m *Model) forgetHistoricalImages() tea.Cmd {
@@ -357,6 +454,27 @@ func (m *Model) pendingImageRefs() []imageasset.Ref {
 		refs[index] = m.pendingImages[index].Ref
 	}
 	return refs
+}
+
+func (m *Model) imageAdmissionBudgetCheck() func(imageasset.Ref) error {
+	history := []llm.Message(nil)
+	if m.agent != nil {
+		history = m.agent.Messages()
+	}
+	pending := m.pendingImageRefs()
+	return func(candidate imageasset.Ref) error {
+		for _, existing := range pending {
+			if existing.Digest == candidate.Digest {
+				return nil
+			}
+		}
+		refs := append([]imageasset.Ref(nil), pending...)
+		refs = append(refs, candidate)
+		if err := validateImageConversationBudget(history, refs); err != nil {
+			return fmt.Errorf("%w: %v", errImageConversationBudget, err)
+		}
+		return nil
+	}
 }
 
 func clonePendingImages(images []pendingImageAttachment) []pendingImageAttachment {
@@ -458,33 +576,98 @@ func imageOnlySessionTitle(images []pendingImageAttachment) string {
 	return sanitizeTerminalSingleLine(title)
 }
 
-func pastedImagePath(content string) (string, bool) {
+func pastedImagePaths(content string) ([]string, bool) {
+	if len(content) > maxImagePathPasteBytes {
+		return nil, false
+	}
 	content = strings.TrimSpace(canonicalPasteContent(content))
-	if content == "" || strings.Contains(content, "\n") {
+	if len(content) > maxImagePathPasteBytes {
+		return nil, false
+	}
+	if content == "" {
+		return nil, false
+	}
+	fields, err := splitQuotedFields(content)
+	if err != nil || len(fields) == 0 || len(fields) > maxImagePathPasteFields {
+		return nil, false
+	}
+
+	paths := make([]string, 0, min(len(fields), maxPendingImages))
+	seen := make(map[string]struct{}, len(fields))
+	for _, field := range fields {
+		path, ok := pastedImageFieldPath(field)
+		if !ok {
+			return nil, false
+		}
+		key := filepath.Clean(path)
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		paths = append(paths, path)
+	}
+	return paths, len(paths) > 0
+}
+
+func pastedImageFieldPath(field string) (string, bool) {
+	field = strings.TrimSpace(field)
+	if field == "" {
 		return "", false
 	}
-	if strings.HasPrefix(strings.ToLower(content), "file://") {
-		parsed, err := url.Parse(content)
-		if err != nil || parsed.Scheme != "file" || parsed.Host != "" {
+	if strings.HasPrefix(strings.ToLower(field), "file:") {
+		parsed, err := url.Parse(field)
+		if err != nil || !strings.EqualFold(parsed.Scheme, "file") || parsed.Host != "" || parsed.Opaque != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
 			return "", false
 		}
-		content, err = url.PathUnescape(parsed.Path)
-		if err != nil {
+		field, err = url.PathUnescape(parsed.EscapedPath())
+		if err != nil || !filepath.IsAbs(field) {
 			return "", false
 		}
-	} else {
-		fields, err := splitQuotedFields(content)
-		if err != nil || len(fields) != 1 {
-			return "", false
-		}
-		content = fields[0]
+	} else if imagePathHasURIScheme(field) {
+		return "", false
 	}
-	switch strings.ToLower(filepath.Ext(content)) {
+	if field == "" || strings.ContainsFunc(field, unicode.IsControl) {
+		return "", false
+	}
+	switch strings.ToLower(filepath.Ext(field)) {
 	case ".png", ".jpg", ".jpeg", ".gif":
-		return content, true
+		return field, true
 	default:
 		return "", false
 	}
+}
+
+func imagePathHasURIScheme(value string) bool {
+	colon := strings.IndexByte(value, ':')
+	if colon <= 0 {
+		return false
+	}
+	// Keep Windows drive-qualified paths local even when parsing on Unix.
+	if colon == 1 && len(value) > 2 && isASCIIAlpha(value[0]) && (value[2] == '/' || value[2] == '\\') {
+		return false
+	}
+	if !isASCIIAlpha(value[0]) {
+		return false
+	}
+	for index := 1; index < colon; index++ {
+		character := value[index]
+		if !isASCIIAlpha(character) && (character < '0' || character > '9') && character != '+' && character != '-' && character != '.' {
+			return false
+		}
+	}
+	return true
+}
+
+func isASCIIAlpha(value byte) bool {
+	return value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z'
+}
+
+func pastedImagePath(content string) (string, bool) {
+	paths, ok := pastedImagePaths(content)
+	if !ok || len(paths) != 1 {
+		return "", false
+	}
+	return paths[0], true
 }
 
 func attachmentRefs(images []pendingImageAttachment) []imageasset.Ref {

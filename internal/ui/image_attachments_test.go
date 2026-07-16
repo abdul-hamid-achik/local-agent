@@ -3,6 +3,7 @@ package ui
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -41,11 +42,15 @@ func newImageTestModel(t *testing.T) (*Model, *imageasset.Store) {
 }
 
 func writeImageAttachmentFixture(t *testing.T, path string) []byte {
+	return writeImageAttachmentFixtureVariant(t, path, 0)
+}
+
+func writeImageAttachmentFixtureVariant(t *testing.T, path string, variant uint8) []byte {
 	t.Helper()
 	canvas := image.NewRGBA(image.Rect(0, 0, 18, 12))
 	for y := 0; y < 12; y++ {
 		for x := 0; x < 18; x++ {
-			canvas.Set(x, y, color.RGBA{R: uint8(x * 9), G: uint8(y * 13), B: 90, A: 255})
+			canvas.Set(x, y, color.RGBA{R: uint8(x*9) + variant, G: uint8(y*13) + variant, B: 90 + variant, A: 255})
 		}
 	}
 	var encoded bytes.Buffer
@@ -65,6 +70,17 @@ func attachImageFixture(t *testing.T, m *Model, path, fallback string) {
 	if updated.(*Model) != m {
 		t.Fatal("image receipt replaced the model pointer")
 	}
+}
+
+func settleImageAttachmentCommands(t *testing.T, m *Model, cmd tea.Cmd) *Model {
+	t.Helper()
+	for cmd != nil {
+		receipt := awaitCommandMessage[ImageAttachmentResultMsg](t, commandMessages(cmd), 2*time.Second)
+		updated, next := m.Update(receipt)
+		m = updated.(*Model)
+		cmd = next
+	}
+	return m
 }
 
 func TestPastedImagePathAttachesWithoutLeakingPathIntoComposer(t *testing.T) {
@@ -95,6 +111,168 @@ func TestPastedImagePathAttachesWithoutLeakingPathIntoComposer(t *testing.T) {
 	}
 	if strings.Contains(plain, filepath.Dir(path)) {
 		t.Fatalf("pending image UI leaked source directory:\n%s", plain)
+	}
+}
+
+func TestPastedImageListAdmitsQuotedNewlinePathsInOrder(t *testing.T) {
+	m, _ := newImageTestModel(t)
+	directory := t.TempDir()
+	first := filepath.Join(directory, "first screen.png")
+	second := filepath.Join(directory, "second screen.png")
+	writeImageAttachmentFixtureVariant(t, first, 1)
+	writeImageAttachmentFixtureVariant(t, second, 2)
+
+	content := fmt.Sprintf("%q\n%q", first, second)
+	updated, cmd := m.Update(tea.PasteMsg{Content: content})
+	m = settleImageAttachmentCommands(t, updated.(*Model), cmd)
+
+	if len(m.pendingImages) != 2 || m.pendingImages[0].Ref.Name != "first screen.png" || m.pendingImages[1].Ref.Name != "second screen.png" {
+		t.Fatalf("ordered image queue = %#v", m.pendingImages)
+	}
+	if m.input.Value() != "" || m.imageAttachRunning || len(m.imageAttachQueue) != 0 {
+		t.Fatalf("settled queue state: draft=%q running=%v queued=%d", m.input.Value(), m.imageAttachRunning, len(m.imageAttachQueue))
+	}
+	encoded, err := encodeSessionState(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(encoded, directory) {
+		t.Fatalf("session projection leaked source directory: %s", encoded)
+	}
+}
+
+func TestPastedImageListDeduplicatesByContent(t *testing.T) {
+	m, _ := newImageTestModel(t)
+	directory := t.TempDir()
+	first := filepath.Join(directory, "original.png")
+	duplicate := filepath.Join(directory, "duplicate.png")
+	writeImageAttachmentFixtureVariant(t, first, 3)
+	writeImageAttachmentFixtureVariant(t, duplicate, 3)
+
+	updated, cmd := m.Update(tea.PasteMsg{Content: fmt.Sprintf("%q\n%q", first, duplicate)})
+	m = settleImageAttachmentCommands(t, updated.(*Model), cmd)
+	if len(m.pendingImages) != 1 || m.pendingImages[0].Ref.Name != "original.png" {
+		t.Fatalf("content-addressed deduplication = %#v", m.pendingImages)
+	}
+}
+
+func TestMixedImagePathAndTextPasteRemainsText(t *testing.T) {
+	m, _ := newImageTestModel(t)
+	path := filepath.Join(t.TempDir(), "capture.png")
+	writeImageAttachmentFixture(t, path)
+	content := path + "\nplease compare this with the previous screen"
+
+	updated, cmd := m.Update(tea.PasteMsg{Content: content})
+	m = updated.(*Model)
+	if cmd != nil || len(m.pendingImages) != 0 || m.imageAttachRunning {
+		t.Fatalf("mixed text was treated as images: cmd=%v pending=%d running=%v", cmd != nil, len(m.pendingImages), m.imageAttachRunning)
+	}
+	if m.input.Value() != content {
+		t.Fatalf("mixed text paste = %q, want %q", m.input.Value(), content)
+	}
+}
+
+func TestPastedImageListContinuesAfterPerFileValidationFailure(t *testing.T) {
+	m, _ := newImageTestModel(t)
+	directory := t.TempDir()
+	first := filepath.Join(directory, "first.png")
+	missing := filepath.Join(directory, "missing private.png")
+	third := filepath.Join(directory, "third.png")
+	writeImageAttachmentFixtureVariant(t, first, 4)
+	writeImageAttachmentFixtureVariant(t, third, 5)
+
+	content := fmt.Sprintf("%q\n%q\n%q", first, missing, third)
+	updated, cmd := m.Update(tea.PasteMsg{Content: content})
+	m = settleImageAttachmentCommands(t, updated.(*Model), cmd)
+
+	if len(m.pendingImages) != 2 || m.pendingImages[0].Ref.Name != "first.png" || m.pendingImages[1].Ref.Name != "third.png" {
+		t.Fatalf("partial image queue result = %#v", m.pendingImages)
+	}
+	if m.input.Value() != "" {
+		t.Fatalf("failed list member leaked source paste into draft: %q", m.input.Value())
+	}
+	foundSafeError := false
+	for _, entry := range m.entries {
+		if entry.Kind == "error" && strings.Contains(entry.Content, "missing private.png") {
+			foundSafeError = true
+		}
+		if strings.Contains(entry.Content, directory) {
+			t.Fatalf("per-file receipt leaked source directory: %#v", entry)
+		}
+	}
+	if !foundSafeError {
+		t.Fatalf("missing per-file validation receipt: %#v", m.entries)
+	}
+}
+
+func TestPastedImageQueueIgnoresBusyAndStaleReceipts(t *testing.T) {
+	m, _ := newImageTestModel(t)
+	directory := t.TempDir()
+	first := filepath.Join(directory, "first.png")
+	second := filepath.Join(directory, "second.png")
+	third := filepath.Join(directory, "third.png")
+	writeImageAttachmentFixtureVariant(t, first, 6)
+	writeImageAttachmentFixtureVariant(t, second, 7)
+	writeImageAttachmentFixtureVariant(t, third, 8)
+
+	updated, firstCmd := m.Update(tea.PasteMsg{Content: fmt.Sprintf("%q\n%q", first, second)})
+	m = updated.(*Model)
+	busy := awaitCommandMessage[ImageAttachmentResultMsg](t, commandMessages(m.beginImageFileAttachment(third, "")), time.Second)
+	updated, _ = m.Update(busy)
+	m = updated.(*Model)
+	if !m.imageAttachRunning || len(m.imageAttachQueue) != 1 || len(m.pendingImages) != 0 {
+		t.Fatalf("busy receipt changed active queue: running=%v queued=%d pending=%d", m.imageAttachRunning, len(m.imageAttachQueue), len(m.pendingImages))
+	}
+
+	firstReceipt := awaitCommandMessage[ImageAttachmentResultMsg](t, commandMessages(firstCmd), 2*time.Second)
+	updated, secondCmd := m.Update(firstReceipt)
+	m = updated.(*Model)
+	if secondCmd == nil || !m.imageAttachRunning || len(m.pendingImages) != 1 {
+		t.Fatalf("first receipt did not advance queue: cmd=%v running=%v pending=%d", secondCmd != nil, m.imageAttachRunning, len(m.pendingImages))
+	}
+	updated, staleCmd := m.Update(firstReceipt)
+	m = updated.(*Model)
+	if staleCmd != nil || !m.imageAttachRunning || len(m.pendingImages) != 1 {
+		t.Fatalf("stale receipt changed second admission: cmd=%v running=%v pending=%d", staleCmd != nil, m.imageAttachRunning, len(m.pendingImages))
+	}
+	m = settleImageAttachmentCommands(t, m, secondCmd)
+	if len(m.pendingImages) != 2 || m.pendingImages[1].Ref.Name != "second.png" {
+		t.Fatalf("final image queue = %#v", m.pendingImages)
+	}
+}
+
+func TestPastedImageQueueHonorsPendingLimit(t *testing.T) {
+	m, _ := newImageTestModel(t)
+	directory := t.TempDir()
+	paths := make([]string, 5)
+	quoted := make([]string, len(paths))
+	for index := range paths {
+		paths[index] = filepath.Join(directory, fmt.Sprintf("screen-%d.png", index+1))
+		writeImageAttachmentFixtureVariant(t, paths[index], uint8(index+10))
+		quoted[index] = fmt.Sprintf("%q", paths[index])
+	}
+
+	updated, cmd := m.Update(tea.PasteMsg{Content: strings.Join(quoted, "\n")})
+	m = settleImageAttachmentCommands(t, updated.(*Model), cmd)
+	if len(m.pendingImages) != maxPendingImages {
+		t.Fatalf("pending image count = %d, want %d", len(m.pendingImages), maxPendingImages)
+	}
+	for index, attachment := range m.pendingImages {
+		if attachment.Ref.Name != filepath.Base(paths[index]) {
+			t.Fatalf("pending image %d = %q, want %q", index, attachment.Ref.Name, filepath.Base(paths[index]))
+		}
+	}
+	foundLimit := false
+	for _, entry := range m.entries {
+		if entry.Kind == "error" && strings.Contains(entry.Content, "1 file not queued") && strings.Contains(entry.Content, "at most 4") {
+			foundLimit = true
+		}
+		if strings.Contains(entry.Content, directory) {
+			t.Fatalf("limit receipt leaked source directory: %#v", entry)
+		}
+	}
+	if !foundLimit || m.input.Value() != "" {
+		t.Fatalf("limit result: found=%v draft=%q entries=%#v", foundLimit, m.input.Value(), m.entries)
 	}
 }
 
@@ -145,7 +323,7 @@ func TestCtrlVPastesClipboardImageIntoPrivateAttachmentStore(t *testing.T) {
 	}
 }
 
-func TestInvalidImagePathPasteReturnsOriginalTextThroughComposer(t *testing.T) {
+func TestInvalidImagePathPasteReportsWithoutLeakingSourcePath(t *testing.T) {
 	m, _ := newImageTestModel(t)
 	original := filepath.Join(t.TempDir(), "missing image.png")
 	updated, cmd := m.Update(tea.PasteMsg{Content: `"` + original + `"`})
@@ -154,11 +332,14 @@ func TestInvalidImagePathPasteReturnsOriginalTextThroughComposer(t *testing.T) {
 	updated, _ = m.Update(receipt)
 	m = updated.(*Model)
 
-	if len(m.pendingImages) != 0 || !strings.Contains(m.input.Value(), original) {
-		t.Fatalf("failed image paste lost fallback: pending=%d draft=%q", len(m.pendingImages), m.input.Value())
+	if len(m.pendingImages) != 0 || m.input.Value() != "" {
+		t.Fatalf("failed image paste leaked into draft: pending=%d draft=%q", len(m.pendingImages), m.input.Value())
 	}
 	if len(m.entries) == 0 || m.entries[len(m.entries)-1].Kind != "error" || !strings.Contains(m.entries[len(m.entries)-1].Content, "Attach image") {
 		t.Fatalf("failed image admission has no receipt: %#v", m.entries)
+	}
+	if strings.Contains(m.entries[len(m.entries)-1].Content, filepath.Dir(original)) {
+		t.Fatalf("failed image receipt leaked source path: %#v", m.entries[len(m.entries)-1])
 	}
 }
 
@@ -371,12 +552,148 @@ func TestPastedImagePathDetectionIsNarrow(t *testing.T) {
 		{input: "first.png\nsecond.png"},
 		{input: "/tmp/readme.md"},
 		{input: "please inspect capture.png"},
+		{input: "https://example.com/private.png"},
+		{input: "s3://private-bucket/capture.jpg"},
 	}
 	for _, test := range tests {
 		path, ok := pastedImagePath(test.input)
 		if path != test.path || ok != test.ok {
 			t.Errorf("pastedImagePath(%q) = %q, %v; want %q, %v", test.input, path, ok, test.path, test.ok)
 		}
+	}
+}
+
+func TestPastedImageFieldPathPreservesWindowsDrivePaths(t *testing.T) {
+	path := `C:\screenshots\design.png`
+	if got, ok := pastedImageFieldPath(path); !ok || got != path {
+		t.Fatalf("Windows drive path = %q, %v; want %q, true", got, ok, path)
+	}
+}
+
+func TestPastedImagePathsRecognizesOnlyCompleteImageLists(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  []string
+		ok    bool
+	}{
+		{
+			name:  "newline and quoted spaces",
+			input: `"/tmp/design one.png"` + "\n" + `'/tmp/design two.jpg'`,
+			want:  []string{"/tmp/design one.png", "/tmp/design two.jpg"},
+			ok:    true,
+		},
+		{
+			name:  "file URLs",
+			input: "file:///tmp/capture%20one.gif\nfile:///tmp/capture-two.jpeg",
+			want:  []string{"/tmp/capture one.gif", "/tmp/capture-two.jpeg"},
+			ok:    true,
+		},
+		{
+			name:  "exact duplicate",
+			input: "/tmp/one.png\n/tmp/one.png",
+			want:  []string{"/tmp/one.png"},
+			ok:    true,
+		},
+		{name: "mixed prose", input: "/tmp/one.png\nplease inspect this"},
+		{name: "mixed extension", input: "/tmp/one.png\n/tmp/readme.txt"},
+		{name: "remote file URL", input: "file://example.com/tmp/one.png"},
+		{name: "https URL", input: "https://example.com/one.png"},
+		{name: "too many fields", input: strings.Repeat("/tmp/one.png ", maxImagePathPasteFields+1)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			paths, ok := pastedImagePaths(test.input)
+			if ok != test.ok || !reflect.DeepEqual(paths, test.want) {
+				t.Fatalf("pastedImagePaths(%q) = %#v, %v; want %#v, %v", test.input, paths, ok, test.want, test.ok)
+			}
+		})
+	}
+}
+
+func TestOversizedImageLookingPasteUsesBoundedTextReview(t *testing.T) {
+	m, _ := newImageTestModel(t)
+	content := strings.Repeat("/tmp/private-image.png ", maxImagePathPasteBytes/8)
+	if len(content) <= maxImagePathPasteBytes {
+		t.Fatal("oversized paste fixture is not oversized")
+	}
+	updated, cmd := m.Update(tea.PasteMsg{Content: content})
+	m = updated.(*Model)
+	if cmd != nil || m.imageAttachRunning || len(m.imageAttachQueue) != 0 || len(m.pendingImages) != 0 {
+		t.Fatalf("oversized text entered image admission: cmd=%v running=%v queued=%d pending=%d", cmd != nil, m.imageAttachRunning, len(m.imageAttachQueue), len(m.pendingImages))
+	}
+	if m.pendingPaste == nil || m.pendingPaste.PlainFits {
+		t.Fatalf("oversized text did not reach the bounded paste review: %#v", m.pendingPaste)
+	}
+}
+
+func TestImageBudgetRejectionStopsQueueBeforePublishing(t *testing.T) {
+	m, store := newImageTestModel(t)
+	history := make([]llm.ImageData, maxConversationImages)
+	for index := range history {
+		history[index] = llm.ImageData{
+			SHA256: fmt.Sprintf("%064x", index+1), Name: fmt.Sprintf("history-%d.png", index+1),
+			MediaType: "image/png", Size: 1, Width: 1, Height: 1,
+		}
+	}
+	m.agent.ReplaceMessages([]llm.Message{{Role: "user", Content: "history", Images: history}})
+
+	directory := t.TempDir()
+	firstPath := filepath.Join(directory, "first rejected.png")
+	secondPath := filepath.Join(directory, "second never read.png")
+	firstData := writeImageAttachmentFixtureVariant(t, firstPath, 21)
+	secondData := writeImageAttachmentFixtureVariant(t, secondPath, 22)
+
+	updated, cmd := m.Update(tea.PasteMsg{Content: fmt.Sprintf("%q\n%q", firstPath, secondPath)})
+	m = updated.(*Model)
+	receipt := awaitCommandMessage[ImageAttachmentResultMsg](t, commandMessages(cmd), 2*time.Second)
+	updated, next := m.Update(receipt)
+	m = updated.(*Model)
+	if next != nil || m.imageAttachRunning || len(m.imageAttachQueue) != 0 || len(m.pendingImages) != 0 {
+		t.Fatalf("budget rejection did not stop queue: next=%v running=%v queued=%d pending=%d", next != nil, m.imageAttachRunning, len(m.imageAttachQueue), len(m.pendingImages))
+	}
+	if len(m.entries) == 0 || !strings.Contains(m.entries[len(m.entries)-1].Content, "conversation image budget") {
+		t.Fatalf("budget rejection receipt = %#v", m.entries)
+	}
+
+	for name, data := range map[string][]byte{"first rejected.png": firstData, "second never read.png": secondData} {
+		digest := sha256.Sum256(data)
+		ref := imageasset.Ref{
+			Digest: fmt.Sprintf("%x", digest), MIMEType: "image/png", Name: name,
+			SizeBytes: int64(len(data)), Width: 18, Height: 12,
+		}
+		if _, err := store.Load(context.Background(), ref); err == nil {
+			t.Fatalf("budget-rejected queue published %s", name)
+		}
+	}
+}
+
+func TestClipboardImageBudgetRejectionDoesNotPublish(t *testing.T) {
+	m, store := newImageTestModel(t)
+	history := make([]llm.ImageData, maxConversationImages)
+	for index := range history {
+		history[index] = llm.ImageData{
+			SHA256: fmt.Sprintf("%064x", index+1), Name: fmt.Sprintf("history-%d.png", index+1),
+			MediaType: "image/png", Size: 1, Width: 1, Height: 1,
+		}
+	}
+	m.agent.ReplaceMessages([]llm.Message{{Role: "user", Content: "history", Images: history}})
+
+	path := filepath.Join(t.TempDir(), "clipboard.png")
+	data := writeImageAttachmentFixtureVariant(t, path, 23)
+	receipt := awaitCommandMessage[ImageAttachmentResultMsg](t, commandMessages(m.beginImageBytesAttachment("clipboard.png", data)), 2*time.Second)
+	updated, next := m.Update(receipt)
+	m = updated.(*Model)
+	if next != nil || m.imageAttachRunning || len(m.pendingImages) != 0 {
+		t.Fatalf("clipboard budget rejection changed pending state: next=%v running=%v pending=%d", next != nil, m.imageAttachRunning, len(m.pendingImages))
+	}
+	digest := sha256.Sum256(data)
+	ref := imageasset.Ref{
+		Digest: fmt.Sprintf("%x", digest), MIMEType: "image/png", Name: "clipboard.png",
+		SizeBytes: int64(len(data)), Width: 18, Height: 12,
+	}
+	if _, err := store.Load(context.Background(), ref); err == nil {
+		t.Fatal("budget-rejected clipboard image was published")
 	}
 }
 
@@ -494,7 +811,7 @@ func TestStalePreflightReceiptCannotCancelNewImageAdmission(t *testing.T) {
 	}
 }
 
-func TestEscapeRestoresPastedImagePathAndIgnoresLateReceipt(t *testing.T) {
+func TestEscapeCancelsPastedImagePathWithoutRestoringSourcePath(t *testing.T) {
 	m, _ := newImageTestModel(t)
 	path := filepath.Join(t.TempDir(), "cancel me.png")
 	writeImageAttachmentFixture(t, path)
@@ -506,14 +823,14 @@ func TestEscapeRestoresPastedImagePathAndIgnoresLateReceipt(t *testing.T) {
 	}
 	updated, _ = m.Update(escKey())
 	m = updated.(*Model)
-	if m.imageAttachRunning || !strings.Contains(m.input.Value(), path) {
-		t.Fatalf("cancelled paste was not restored: running=%v draft=%q", m.imageAttachRunning, m.input.Value())
+	if m.imageAttachRunning || m.input.Value() != "" || len(m.imageAttachQueue) != 0 {
+		t.Fatalf("cancelled image paste leaked into draft: running=%v queued=%d draft=%q", m.imageAttachRunning, len(m.imageAttachQueue), m.input.Value())
 	}
 
 	late := awaitCommandMessage[ImageAttachmentResultMsg](t, commandMessages(cmd), 2*time.Second)
 	updated, _ = m.Update(late)
 	m = updated.(*Model)
-	if len(m.pendingImages) != 0 || !strings.Contains(m.input.Value(), path) {
+	if len(m.pendingImages) != 0 || m.input.Value() != "" {
 		t.Fatalf("late admission changed cancelled state: pending=%d draft=%q", len(m.pendingImages), m.input.Value())
 	}
 }

@@ -179,6 +179,14 @@ func NewStore(root string, limits Limits) (*Store, error) {
 // file selection follows a source symlink; the opened descriptor is still
 // validated as a regular file by safeio.
 func (s *Store) AdmitFile(ctx context.Context, path string) (Ref, error) {
+	return s.AdmitFileChecked(ctx, path, nil)
+}
+
+// AdmitFileChecked validates an explicitly selected image and invokes check
+// with its path-free reference before publishing bytes to the private object
+// store. A rejected check leaves no new object behind. The check must be
+// deterministic and must not retain the reference beyond the call.
+func (s *Store) AdmitFileChecked(ctx context.Context, path string, check func(Ref) error) (Ref, error) {
 	if err := s.ready(); err != nil {
 		return Ref{}, err
 	}
@@ -189,12 +197,19 @@ func (s *Store) AdmitFile(ctx context.Context, path string) (Ref, error) {
 	if err != nil {
 		return Ref{}, fmt.Errorf("read image input: %w", err)
 	}
-	return s.AdmitBytes(ctx, filepath.Base(path), data)
+	return s.AdmitBytesChecked(ctx, filepath.Base(path), data, check)
 }
 
 // AdmitBytes validates an in-memory image (for example, a future native
 // clipboard adapter), stores it privately, and returns a durable reference.
 func (s *Store) AdmitBytes(ctx context.Context, displayName string, data []byte) (Ref, error) {
+	return s.AdmitBytesChecked(ctx, displayName, data, nil)
+}
+
+// AdmitBytesChecked validates in-memory image bytes and invokes check with the
+// path-free reference before publication. A rejected check leaves no new
+// object behind.
+func (s *Store) AdmitBytesChecked(ctx context.Context, displayName string, data []byte, check func(Ref) error) (Ref, error) {
 	if err := s.ready(); err != nil {
 		return Ref{}, err
 	}
@@ -204,6 +219,11 @@ func (s *Store) AdmitBytes(ctx context.Context, displayName string, data []byte)
 	ref, err := inspect(displayName, data, s.limits)
 	if err != nil {
 		return Ref{}, err
+	}
+	if check != nil {
+		if err := check(ref); err != nil {
+			return Ref{}, err
+		}
 	}
 	if err := s.publish(ctx, ref.Digest, data); err != nil {
 		return Ref{}, err

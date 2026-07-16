@@ -15,6 +15,7 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/imageasset"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 	"github.com/abdul-hamid-achik/local-agent/internal/reconciliation"
+	"github.com/abdul-hamid-achik/local-agent/internal/sessionref"
 )
 
 func TestSerializeDeserialize_Roundtrip(t *testing.T) {
@@ -142,6 +143,36 @@ func TestSessionDisplayLabelKeepsStableHandle(t *testing.T) {
 	}
 	if got, want := sessionDisplayLabel(7, "Composer polish", 0), "S7"; got != want {
 		t.Fatalf("compact sessionDisplayLabel() = %q, want %q", got, want)
+	}
+}
+
+func TestSessionResumeInfoRequiresDurableSession(t *testing.T) {
+	m := newTestModel(t)
+	m.sessionID = 42
+	if info, ok := m.SessionResumeInfo(); ok || info.Handle != "" {
+		t.Fatalf("session without durable store returned resume info %#v", info)
+	}
+
+	store, err := db.OpenPath(filepath.Join(t.TempDir(), "resume-info.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	m.sessionStore = store
+	session, err := store.CreateSession(context.Background(), db.CreateSessionParams{
+		Title: "resume info", WorkspaceID: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.sessionID = session.ID
+	if info, ok := m.SessionResumeInfo(); !ok || info.Handle != sessionref.Format(session.ID) {
+		t.Fatalf("durable session resume info = %#v, ok=%v", info, ok)
+	}
+
+	m.sessionID = 0
+	if info, ok := m.SessionResumeInfo(); ok || info.Handle != "" {
+		t.Fatalf("zero session returned resume info %#v", info)
 	}
 }
 

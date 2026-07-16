@@ -268,6 +268,7 @@ type Model struct {
 	imageAttachRunning  bool
 	imageAttachCancel   context.CancelFunc
 	imageAttachFallback string
+	imageAttachQueue    []imageFileAttachmentRequest
 
 	// Responsive layout
 	forceCompact bool // user-toggled compact mode
@@ -535,6 +536,7 @@ func (m *Model) beginShutdown() tea.Cmd {
 	if m.imageAttachCancel != nil {
 		m.imageAttachCancel()
 	}
+	m.clearImageAttachmentQueue()
 	if m.initCancel != nil {
 		m.initCancel()
 	}
@@ -990,6 +992,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 				m.imageAttachRunning = false
 				m.imageAttachCancel = nil
 				m.imageAttachFallback = ""
+				m.clearImageAttachmentQueue()
 				m.input.Focus()
 				m.entries = append(m.entries, ChatEntry{Kind: "system", Content: "Image attachment cancelled."})
 				m.invalidateEntryCache()
@@ -2574,8 +2577,8 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 
 	case tea.PasteMsg:
 		if m.composerEditable() {
-			if path, ok := pastedImagePath(msg.Content); ok {
-				return m, m.beginImageFileAttachment(path, msg.Content)
+			if paths, ok := pastedImagePaths(msg.Content); ok {
+				return m, m.beginPastedImageFileAttachments(paths)
 			}
 			// The parent owns insertion and any safety prompt. Do not forward this
 			// PasteMsg to the textarea or the child would insert it a second time.
@@ -3552,6 +3555,7 @@ func (m *Model) resetConversationSession() {
 	m.imageAttachToken++
 	m.imageAttachRunning = false
 	m.imageAttachFallback = ""
+	m.clearImageAttachmentQueue()
 	m.clearPendingImages()
 	m.turnImages = nil
 	if m.goalOperationCancel != nil {

@@ -238,10 +238,10 @@ func TestMouseHitTestingStartsAtViewportRowZero(t *testing.T) {
 	}
 }
 
-func TestViewLeavesMouseToTerminalSelection(t *testing.T) {
+func TestViewEnablesCellMotionForTranscriptWheel(t *testing.T) {
 	m := newTestModel(t)
-	if got := m.View().MouseMode; got != tea.MouseModeNone {
-		t.Fatalf("mouse mode = %v, want terminal-owned selection", got)
+	if got := m.View().MouseMode; got != tea.MouseModeCellMotion {
+		t.Fatalf("mouse mode = %v, want cell motion", got)
 	}
 }
 
