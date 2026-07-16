@@ -294,6 +294,10 @@ func (m *Model) applyGoalFormWithAuthority(event GoalFormEvent, explicitGoalComm
 		m.appendGoalError("Save goal: " + err.Error())
 		return nil
 	}
+	// Materialize the runtime-derived checklist before Cortex linking or the
+	// first provider command can begin. Model-authored plan prose is never
+	// interpreted as host progress.
+	m.syncGoalPlan()
 	m.closeGoalForm()
 	if m.goalAdvisor == nil {
 		m.appendGoalSystem("Goal saved · Cortex is not configured; starting one bounded local turn…")

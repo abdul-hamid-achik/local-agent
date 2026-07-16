@@ -1,10 +1,15 @@
 package ui
 
 import (
+	"crypto/sha256"
 	"strings"
 
 	"charm.land/lipgloss/v2"
 )
+
+func reasoningReceiptDigest(content string) [sha256.Size]byte {
+	return sha256.Sum256([]byte(content))
+}
 
 // processStreamChunk processes a streaming chunk, extracting <think>...</think> tags.
 // It handles tag boundaries that may be split across chunks.

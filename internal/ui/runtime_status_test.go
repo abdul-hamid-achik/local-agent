@@ -197,6 +197,35 @@ func TestRuntimeStatusUsesNaturalSingularAuthorityLabels(t *testing.T) {
 	}
 }
 
+func TestRuntimeStatusDistinguishesTurnBoundTypedWriteFromShell(t *testing.T) {
+	m := newTestModel(t)
+	workspace := t.TempDir()
+	external := t.TempDir()
+	m.agent.SetWorkDir(workspace)
+
+	inspection, err := m.agent.InspectWritePath(external)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inspection.Release()
+	if _, err := m.agent.AddInspectedWriteGrant(inspection.Grant()); err != nil {
+		t.Fatal(err)
+	}
+
+	content := strings.Join(strings.Fields(ansi.Strip(m.buildRuntimeStatusContent(72))), " ")
+	for _, want := range []string{
+		"Turn-bound typed-write access",
+		"Directory",
+		"Built-in typed operations only",
+		"expires when this turn settles",
+		"raw shell remains confined to the startup workspace",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("Runtime omitted typed-write boundary %q:\n%s", want, content)
+		}
+	}
+}
+
 func TestRuntimeStatusRowsSanitizeConfigurableLabels(t *testing.T) {
 	m := newTestModel(t)
 	m.agentProfile = "reviewer\nApproval · disabled\x1b]52;c;payload\a\u202e"

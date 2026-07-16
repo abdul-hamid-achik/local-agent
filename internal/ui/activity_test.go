@@ -81,6 +81,17 @@ func TestMinimumTerminalWorkingStatesFit(t *testing.T) {
 	}
 }
 
+func TestAutoCheckpointActivityExplainsInvisibleContinuation(t *testing.T) {
+	m := newTestModel(t)
+	m.state = StateWaiting
+	m.autoCheckpoints.segmentsContinued = 2
+	activity, ok := m.currentWorkingActivity()
+	if !ok || activity.label != "Continuing automatically" ||
+		activity.detail != "checkpoint 2/8" || !activity.cancellable {
+		t.Fatalf("AUTO checkpoint activity = %#v, ok=%v", activity, ok)
+	}
+}
+
 func TestMinimumTerminalNoticeKeepsSettingsRecoveryVisible(t *testing.T) {
 	m := newTestModel(t)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 30, Height: 12})

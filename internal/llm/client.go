@@ -53,6 +53,12 @@ type ChatOptions struct {
 	Tools         []ToolDef
 	System        string
 	MaxEvalTokens int // zero leaves provider generation uncapped
+	// DisableReasoning asks providers with a native control to emit only the
+	// visible answer. It is used for bounded child-expert reports where private
+	// reasoning is neither a valid result nor safe durable content. Providers
+	// without such a control may ignore it; callers must still reject a terminal
+	// response that contains no visible text.
+	DisableReasoning bool
 	// NumThread is a host-only local inference cap. Zero leaves the provider
 	// default unchanged; positive values are sent as Ollama num_thread.
 	NumThread int

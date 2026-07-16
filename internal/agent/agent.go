@@ -69,9 +69,13 @@ type Agent struct {
 	// mcpRouteVersion changes only when exact MCP route trust or scope changes.
 	// It intentionally excludes approval-renderer churn so opaque continuation
 	// contexts survive the UI installing a per-turn callback.
-	mcpRouteVersion   uint64
-	readRoots         map[string]*additionalReadRoot
-	readFiles         map[string]*additionalReadFile
+	mcpRouteVersion uint64
+	readRoots       map[string]*additionalReadRoot
+	readFiles       map[string]*additionalReadFile
+	// writeAuthorities are temporary, host-inspected capabilities for exact
+	// external directories or files explicitly named by the user. They are
+	// process-local, identity-pinned, and never serialized into session state.
+	writeAuthorities  map[string]*additionalWriteAuthority
 	capabilityAdvisor capabilityAdviser
 	capabilityRetries map[capabilityRetryKey]struct{}
 	expertConsultant  ExpertConsultant
@@ -122,6 +126,13 @@ type Agent struct {
 // provider implementation.
 type ExpertConsultant interface {
 	Consult(context.Context, expertteam.Request) (expertteam.Result, error)
+}
+
+// ExpertProgressConsultant is an optional extension. Existing embedders keep
+// the stable ExpertConsultant surface; runtimes that implement this interface
+// can expose only the bounded host-owned progress projection.
+type ExpertProgressConsultant interface {
+	ConsultWithProgress(context.Context, expertteam.Request, expertteam.Observer) (expertteam.Result, error)
 }
 
 // contextWindowProvider is an optional capability implemented by clients that
@@ -189,6 +200,7 @@ func New(llmClient llm.Client, registry *mcp.Registry, numCtx int) *Agent {
 		trustedMCP:              make(map[string]trustedMCPServer),
 		readRoots:               make(map[string]*additionalReadRoot),
 		readFiles:               make(map[string]*additionalReadFile),
+		writeAuthorities:        make(map[string]*additionalWriteAuthority),
 		capabilityRetries:       make(map[capabilityRetryKey]struct{}),
 		mcphubResults:           ecosystem.NewMCPHubResultAssembler(),
 		continuationContracts:   make(map[string]continuationContract),
@@ -978,4 +990,5 @@ func (a *Agent) Close() {
 		a.registry.Close()
 	}
 	a.closeReadRoots()
+	a.closeWriteGrants()
 }

@@ -234,15 +234,11 @@ func (a *Agent) approvalExistingContent(path string) (content string, exists boo
 	if strings.TrimSpace(path) == "" {
 		return "", false, "target path is unavailable"
 	}
-	workspace, err := a.openWorkspaceRoot()
+	workspace, _, relative, err := a.openWritableRootForPath(path)
 	if err != nil {
 		return "", false, fmt.Sprintf("existing content unavailable: %v", err)
 	}
 	defer func() { _ = workspace.Close() }()
-	_, relative, err := workspace.resolve(a, path, false)
-	if err != nil {
-		return "", false, fmt.Sprintf("existing content unavailable: %v", err)
-	}
 	parent, name, err := workspace.openParent(relative, false)
 	if os.IsNotExist(err) {
 		return "", false, ""

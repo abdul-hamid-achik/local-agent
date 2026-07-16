@@ -78,9 +78,20 @@ The following requests require approval in NORMAL by default:
 AUTO narrows those prompts for routine work: validated workspace writes and
 directory creation, host-catalogued local MCP routes, and a static catalog of
 ordinary development commands are pre-authorized. Destructive commands,
-dynamic shell expansion, output redirection to files, external paths,
-network-facing or unknown commands, memory mutation, and uncatalogued MCP
-effects remain gated. This classification reduces interruptions; it does not
+dynamic shell expansion, output redirection to files, raw shell access to
+external paths, explicit network CLIs or endpoints, unknown commands, memory
+mutation, and uncatalogued MCP effects remain gated. Temporary external
+read/write scopes are consumed only by the exact typed host capability shown in
+the UI; they never widen raw shell authority. Generic path-qualified workspace
+executables are also gated. The one narrow AUTO exception is an exact Minerva
+query launched from the physical `<workspace>/bin/minerva` binary after the
+host verifies its Go main-package and module build identities. It is classified
+as effectful workspace execution, not as a pure read.
+
+That exception covers only the bounded query grammar. Minerva mutations,
+persistent `mcp serve`, and delegated or broad diagnostic surfaces remain
+approval-gated. Prefer Minerva's exact host-trusted MCPHub route for ordinary
+product integration. This classification reduces interruptions; it does not
 turn the built-in shell into an operating-system sandbox.
 
 The classifier validates the outer command and its visible operands. Admitted
@@ -119,62 +130,79 @@ Databases created by older releases may contain broad per-tool `allow` rows.
 On upgrade, Local Agent retires those rows to `ask`; they never authorize a
 new request. Persisted `deny` policies remain effective.
 
-## Reading external files and projects
+## External files and projects
 
-NORMAL, PLAN, and AUTO keep the startup workspace as the only writable root.
-In the interactive TUI, an ordinary prompt that explicitly names an existing
-absolute or `~/` path outside that workspace pauses before the agent turn. The
-confirmation grants only the named regular file, or the named directory when a
-directory was explicitly requested. Allowing it resumes the original draft
-once; denying or cancelling restores the draft unchanged.
+The startup workspace is the default typed writable root. In the interactive
+TUI, an ordinary prompt that explicitly names an existing absolute or `~/` path
+outside that workspace is inspected before the model sees the prompt.
+
+The mode determines the scope that may be prepared:
+
+- PLAN can prepare an exact read scope only.
+- NORMAL shows the exact scope for review. When the prompt explicitly asks to
+  mutate that path, the review can combine read access with a typed write scope.
+- AUTO commits the same safely inspected read or typed-write scope without an
+  extra decision modal and records the scope receipt in the transcript.
+
+If Local Agent cannot establish a requested mutation scope safely, it restores
+the draft, sends nothing to the model, and does not fall back to shell access.
+Allowing a NORMAL or PLAN review resumes the original draft once; denying or
+cancelling restores it unchanged.
 
 Single-, double-, or backtick-quoted path literals and macOS drag-and-drop paths
 with backslash-escaped whitespace are recognized without invoking a shell or
 evaluating substitutions. The scanner has a hard limit of 32 distinct explicit
 path candidates. After canonicalization, deduplication, and collapsing paths
-already covered by a requested directory, one prompt may require at most four
-**new** external read grants. Workspace paths and paths already covered by
-active read authority do not consume that four-grant budget. Exceeding either
-limit restores the draft, grants nothing, sends nothing to the model, and asks
-you to split the request.
+already covered by a requested directory, one prompt may add at most four new
+read scopes and, independently, at most four matching typed write scopes.
+Workspace paths and paths already covered by active read authority do not
+consume the read budget. Exceeding a limit restores the draft, grants nothing,
+sends nothing to the model, and asks you to split the request.
 
-For example, this asks for one exact-file read grant rather than access to all
+For example, this asks for one exact-file read scope rather than access to all
 of Downloads:
 
 ```text
 Analyze ~/Downloads/bug.mp4 with Vidtrace and explain the failure sequence.
 ```
 
-The approval surface shows the kind and canonical identity of every proposed
-grant. Terminal control characters are escaped for display without changing
-the authority value. If two paths become visually indistinguishable in a narrow
-terminal, confirmation is disabled until the terminal is wide enough to show
-distinct identities.
+The approval surface shows the kind, requested access, and canonical identity
+of every proposed scope. Terminal control characters are escaped for display
+without changing the authority value. If two paths become visually
+indistinguishable in a narrow terminal, confirmation is disabled until the
+terminal is wide enough to show distinct identities.
 
 Sibling files remain unavailable. Local Agent verifies that the object has not
-changed between inspection and approval. Exact-file reads recheck the authorized
-file identity, so replacing the file does not transfer authority to its
-replacement. Directory grants use a pinned `os.Root` boundary so relative
-operations and symlinks cannot escape the selected directory. When a task needs
-a whole source tree, grant that directory explicitly for the current process:
+changed between inspection and scope commit. Exact-file reads recheck the
+authorized file identity, so replacing the file does not transfer authority to
+its replacement. Directory scopes use a pinned `os.Root` boundary so relative
+operations and symlinks cannot escape the selected directory.
+
+A prompt-derived read scope is process-local and lasts until
+`/scope clear-read` or session exit. A prompt-derived typed write scope expires
+when that turn settles. It is limited to Local Agent's built-in write, edit, and
+mkdir operations plus exact trusted workspace MCP tools. It does not authorize
+Bash, remove, move, or a broader parent directory.
+
+When a task needs a whole source tree for reading, grant that directory
+explicitly for the current process:
 
 ```text
 /scope add-read ~/src/another-project
 ```
 
-Built-in list, read, grep, and copy-source operations can then use that root,
-while write, edit, move, remove, and copy destinations remain confined to the
-startup workspace. Directory grants combine the external root's `.agentignore`
-with the same host-owned secret exclusions used in the startup workspace; that
-root cannot negate the host defaults either. An approved exact-file grant is a
-deliberate exception for that one pinned file identity. Exact-file and directory
-grants are not saved in the session and can be revoked with
+Built-in list, read, grep, and copy-source operations can then use that root.
+Manual `/scope add-read` grants are read-only; they do not create typed write
+scope or shell authority. Directory read scopes combine the external root's
+`.agentignore` with the same host-owned secret exclusions used in the startup
+workspace; that root cannot negate the host defaults either. Exact-file and
+directory read scopes are not saved in the session and can be revoked with
 `/scope remove-read` or `/scope clear-read`.
 
-This grant governs Local Agent's built-in file readers. It does not silently
-authorize an MCP process: passing the path to Vidtrace or another MCP tool still
-produces that tool's separate approval request. Approved shell commands and
-trusted STDIO servers remain independent trust boundaries.
+An external scope does not silently authorize an MCP call. The exact route,
+trusted identity, advertised tool contract, and approval policy still apply.
+Approved shell commands and trusted STDIO servers remain independent trust
+boundaries.
 
 ## What local-only cannot guarantee
 

@@ -104,6 +104,13 @@ func buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadRoots(ctx cont
 }
 
 func buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadGrants(ctx context.Context, modePrefix string, tools []llm.ToolDef, skillContent, skillCatalog, loadedContext string, memStore *memory.Store, iceContext, workDir, ignoreContent string, modelName string, numCtx int, readGrants []ReadGrant) string {
+	return buildSystemPromptForModelBudgetContextWithSkillCatalogAndPathGrants(
+		ctx, modePrefix, tools, skillContent, skillCatalog, loadedContext, memStore,
+		iceContext, workDir, ignoreContent, modelName, numCtx, readGrants, nil,
+	)
+}
+
+func buildSystemPromptForModelBudgetContextWithSkillCatalogAndPathGrants(ctx context.Context, modePrefix string, tools []llm.ToolDef, skillContent, skillCatalog, loadedContext string, memStore *memory.Store, iceContext, workDir, ignoreContent string, modelName string, numCtx int, readGrants []ReadGrant, writeGrants []WriteGrant) string {
 	useSmallModel := isSmallModel(modelName)
 	if budget := optionalPromptBudget(numCtx); budget > 0 {
 		loadedContextShare := 50
@@ -132,7 +139,7 @@ func buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadGrants(ctx con
 		toolList = b.String()
 	}
 
-	envSection := buildEnvironmentSectionContextWithReadGrants(ctx, workDir, readGrants)
+	envSection := buildEnvironmentSectionContextWithPathGrants(ctx, workDir, readGrants, writeGrants)
 
 	var skillSection string
 	if skillContent != "" {
@@ -312,6 +319,10 @@ func requiredToolParameters(schema map[string]any) []string {
 }
 
 func buildEnvironmentSectionContextWithReadGrants(ctx context.Context, workDir string, readGrants []ReadGrant) string {
+	return buildEnvironmentSectionContextWithPathGrants(ctx, workDir, readGrants, nil)
+}
+
+func buildEnvironmentSectionContextWithPathGrants(ctx context.Context, workDir string, readGrants []ReadGrant, writeGrants []WriteGrant) string {
 	if workDir == "" {
 		return ""
 	}
@@ -323,7 +334,7 @@ func buildEnvironmentSectionContextWithReadGrants(ctx context.Context, workDir s
 	if len(readGrants) == 0 {
 		b.WriteString("Additional temporary read grants: none. Unlisted external paths are unavailable.\n")
 	} else {
-		b.WriteString("Additional temporary read grants (never valid write destinations):\n")
+		b.WriteString("Additional temporary read grants (read-only unless the same path is separately listed for typed write):\n")
 		for _, grant := range readGrants {
 			kind := "directory"
 			if grant.Kind == ReadGrantExactFile {
@@ -331,6 +342,19 @@ func buildEnvironmentSectionContextWithReadGrants(ctx context.Context, workDir s
 			}
 			fmt.Fprintf(&b, "- %s: %s\n", kind, strconv.QuoteToGraphic(grant.Path))
 		}
+	}
+	if len(writeGrants) == 0 {
+		b.WriteString("Additional temporary write grants: none.\n")
+	} else {
+		b.WriteString("Additional temporary typed-write grants (expire when this turn settles):\n")
+		for _, grant := range writeGrants {
+			kind := "directory; built-in write/edit/mkdir and exact trusted workspace tools only"
+			if grant.Kind == WriteGrantExactFile {
+				kind = "exact file only; built-in write/edit only; siblings remain unavailable"
+			}
+			fmt.Fprintf(&b, "- %s: %s\n", kind, strconv.QuoteToGraphic(grant.Path))
+		}
+		b.WriteString("Shell never receives these paths. Do not retry denied typed access through bash, cat/sed/cp, redirection, temp files, remove, or move; prefer an exact product CLI/MCP operation.\n")
 	}
 
 	// Auto-detect project type from marker files.

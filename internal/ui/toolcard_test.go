@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -176,6 +177,160 @@ func TestExpandedBashUnifiedDiffUsesAdaptiveSemanticColors(t *testing.T) {
 func TestBashNonDiffOutputKeepsOrdinaryResultStyle(t *testing.T) {
 	if looksLikeUnifiedDiff("+ one line\n- another") {
 		t.Fatal("unstructured plus/minus output was mistaken for a unified diff")
+	}
+}
+
+func TestExpandedFileReadUsesTrustedAdaptiveChroma(t *testing.T) {
+	previous := noColor
+	noColor = false
+	t.Cleanup(func() { noColor = previous })
+
+	const source = "package ui\n\nfunc answer() int { return 42 }"
+	views := make([]string, 0, 2)
+	for _, isDark := range []bool{false, true} {
+		card := NewToolCard("read_file", ToolCardFile, isDark)
+		card.State = ToolCardSuccess
+		card.Expanded = true
+		card.ResultLanguage = trustedResultLanguageFromPath("internal/ui/model.go")
+		card.Result = source
+		view := card.View(34)
+		views = append(views, view)
+		plain := ansi.Strip(view)
+		for _, want := range []string{"package ui", "func answer", "return 42"} {
+			if !strings.Contains(plain, want) {
+				t.Fatalf("theme dark=%v highlighted code omitted %q:\n%s", isDark, want, plain)
+			}
+		}
+		if !hasANSIColor(view) {
+			t.Fatalf("theme dark=%v emitted no semantic color:\n%s", isDark, view)
+		}
+		assertToolCardLinesFit(t, view, 34)
+	}
+	if views[0] == views[1] {
+		t.Fatal("light and dark code styles rendered identically")
+	}
+}
+
+func TestToolResultLanguageComesOnlyFromBoundedHostMetadata(t *testing.T) {
+	if got, want := trustedResultLanguageForTool("read_file", map[string]any{"path": "src/main.ts"}), "typescript"; got != want {
+		t.Fatalf("trusted language = %q, want %q", got, want)
+	}
+	for name, args := range map[string]map[string]any{
+		"write_file": {"path": "src/main.ts"},
+		"read_file":  {"path": "src/unknown.private"},
+		"bash":       {"path": "src/main.ts"},
+	} {
+		if got := trustedResultLanguageForTool(name, args); got != "" {
+			t.Fatalf("%s admitted untrusted language %q", name, got)
+		}
+	}
+	if got := normalizeTrustedResultLanguage("../../bash"); got != "" {
+		t.Fatalf("arbitrary lexer alias survived normalization: %q", got)
+	}
+}
+
+func TestExpandedSearchResultUsesSemanticPathLocationAndMatch(t *testing.T) {
+	previous := noColor
+	noColor = false
+	t.Cleanup(func() { noColor = previous })
+
+	card := NewToolCard("vecgrep_search", ToolCardSearch, true)
+	card.State = ToolCardSuccess
+	card.Expanded = true
+	card.Result = "internal/ui/model.go:42:7:func (m *Model) Update()\ninternal/ui/view.go:18:render transcript"
+
+	view := card.View(72)
+	plain := ansi.Strip(view)
+	for _, want := range []string{"internal/ui/model.go", ":42:7:", "func (m *Model)", "internal/ui/view.go", ":18:"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("semantic search output omitted %q:\n%s", want, plain)
+		}
+	}
+	if got, ordinary := card.renderSearchResultLine("internal/ui/model.go:42:match", 72), card.Styles.Result.Render("internal/ui/model.go:42:match"); got == ordinary {
+		t.Fatal("search path/location/match retained the ordinary single-style renderer")
+	}
+	assertToolCardLinesFit(t, view, 72)
+}
+
+func TestSemanticToolResultPreviewIsBoundedAndVisible(t *testing.T) {
+	card := NewToolCard("read_file", ToolCardFile, true)
+	card.State = ToolCardSuccess
+	card.Expanded = true
+	card.ResultLanguage = "go"
+	var result strings.Builder
+	for line := 0; line < maxToolResultPreviewLines+9; line++ {
+		result.WriteString("x\n")
+	}
+	card.Result = result.String()
+
+	plain := ansi.Strip(card.View(24))
+	if !strings.Contains(plain, "… 9 more lines") {
+		t.Fatalf("bounded preview omitted hidden-line receipt:\n%s", plain)
+	}
+	if got := strings.Count(plain, "\nx"); got > maxToolResultPreviewLines {
+		t.Fatalf("preview rendered %d content lines, want <= %d", got, maxToolResultPreviewLines)
+	}
+}
+
+func TestSemanticToolResultHonorsNoColorAndSanitizesBeforeHighlighting(t *testing.T) {
+	previous := noColor
+	noColor = true
+	t.Cleanup(func() { noColor = previous })
+
+	card := NewToolCard("read_file", ToolCardFile, true)
+	card.State = ToolCardSuccess
+	card.Expanded = true
+	card.ResultLanguage = "go"
+	card.Result = "package ui\n\x1b]0;owned\x07func safe() {}\u202e"
+	view := card.View(32)
+	if hasANSIColor(view) {
+		t.Fatalf("NO_COLOR semantic result emitted ANSI color: %q", view)
+	}
+	for _, forbidden := range []string{"owned", "\x1b]", "\u202e"} {
+		if strings.Contains(view, forbidden) {
+			t.Fatalf("unsafe result payload %q survived: %q", forbidden, view)
+		}
+	}
+	assertToolCardLinesFit(t, view, 32)
+}
+
+func TestSemanticToolResultUnknownLanguageFallsBackToPlainText(t *testing.T) {
+	card := NewToolCard("read_file", ToolCardFile, true)
+	card.ResultLanguage = "../../go"
+	got := card.renderSemanticResultLines("plain output", 40)
+	want := card.Styles.Result.Render("plain output")
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("plain fallback = %#v, want %q", got, want)
+	}
+}
+
+func TestSemanticToolResultCacheIsBoundedAndReturnsCopies(t *testing.T) {
+	semanticToolResultCache.Lock()
+	clear(semanticToolResultCache.entries)
+	semanticToolResultCache.Unlock()
+	t.Cleanup(func() {
+		semanticToolResultCache.Lock()
+		clear(semanticToolResultCache.entries)
+		semanticToolResultCache.Unlock()
+	})
+
+	card := NewToolCard("read_file", ToolCardFile, true)
+	card.ResultLanguage = "go"
+	for index := 0; index < maxToolResultRenderCache+17; index++ {
+		card.renderSemanticResultLines(fmt.Sprintf("package p%d", index), 40)
+	}
+	semanticToolResultCache.RLock()
+	cacheSize := len(semanticToolResultCache.entries)
+	semanticToolResultCache.RUnlock()
+	if cacheSize > maxToolResultRenderCache {
+		t.Fatalf("semantic result cache = %d entries, cap = %d", cacheSize, maxToolResultRenderCache)
+	}
+
+	first := card.renderSemanticResultLines("package stable", 40)
+	first[0] = "mutated caller copy"
+	second := card.renderSemanticResultLines("package stable", 40)
+	if len(second) != 1 || second[0] == first[0] {
+		t.Fatalf("cache exposed mutable backing storage: first=%#v second=%#v", first, second)
 	}
 }
 

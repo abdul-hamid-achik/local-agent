@@ -6,6 +6,7 @@ import (
 	"time"
 	"unicode"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -334,5 +335,115 @@ func TestToggleThinkingAppliesToEveryVisibleDisclosure(t *testing.T) {
 		if !entry.ThinkingCollapsed {
 			t.Fatalf("entry %d remained expanded after shared disclosure toggle", i)
 		}
+	}
+}
+
+func TestCompletedThoughtHeadersToggleOnlyClickedEntry(t *testing.T) {
+	m := newTestModel(t)
+	m.entries = []ChatEntry{
+		{Kind: "assistant", Content: "first", ThinkingContent: "inspect files", ThinkingCollapsed: true},
+		{Kind: "assistant", Content: "second", ThinkingContent: "compare behavior", ThinkingCollapsed: true},
+	}
+	m.invalidateEntryCache()
+	m.viewport.SetContent(m.renderEntries())
+
+	if len(m.thinkingHitRegions) != 2 {
+		t.Fatalf("thinking hit regions = %#v", m.thinkingHitRegions)
+	}
+	second := m.thinkingHitRegions[1]
+	m.handleMouseClick(second.EndCol, second.Row-m.viewport.YOffset())
+	if !m.entries[0].ThinkingCollapsed || !m.entries[1].ThinkingCollapsed {
+		t.Fatal("click immediately beyond Thought header toggled an entry")
+	}
+	m.handleMouseClick(second.EndCol-1, second.Row-m.viewport.YOffset())
+	if !m.entries[0].ThinkingCollapsed || m.entries[1].ThinkingCollapsed {
+		t.Fatalf("click toggled the wrong Thought: %#v", m.entries)
+	}
+}
+
+func TestThoughtHitRegionRejectsStaleEntryDigest(t *testing.T) {
+	m := newTestModel(t)
+	m.entries = []ChatEntry{{
+		Kind: "assistant", Content: "answer", ThinkingContent: "original reasoning", ThinkingCollapsed: true,
+	}}
+	m.invalidateEntryCache()
+	m.viewport.SetContent(m.renderEntries())
+	if len(m.thinkingHitRegions) != 1 {
+		t.Fatalf("thinking hit regions = %#v", m.thinkingHitRegions)
+	}
+	region := m.thinkingHitRegions[0]
+	m.entries[0].ThinkingContent = "replacement reasoning"
+	m.handleMouseClick(0, region.Row-m.viewport.YOffset())
+	if !m.entries[0].ThinkingCollapsed {
+		t.Fatal("stale Thought region toggled replacement content")
+	}
+}
+
+func TestLiveReasoningHasNoClickableDisclosureRegion(t *testing.T) {
+	m := newTestModel(t)
+	m.state = StateStreaming
+	m.thinkBuf.WriteString("live reasoning")
+	m.invalidateEntryCache()
+	m.viewport.SetContent(m.renderEntries())
+	if len(m.thinkingHitRegions) != 0 {
+		t.Fatalf("live reasoning created click regions: %#v", m.thinkingHitRegions)
+	}
+}
+
+func TestThoughtClickPreservesPausedScrollAnchorAtNarrowWidth(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 30, Height: 12})
+	m = updated.(*Model)
+	m.entries = []ChatEntry{
+		{Kind: "assistant", Content: "answer", ThinkingContent: strings.Repeat("reasoning detail ", 20), ThinkingCollapsed: true},
+		{Kind: "system", Content: strings.Repeat("later transcript rows ", 30)},
+	}
+	m.invalidateEntryCache()
+	m.viewport.SetContent(m.renderEntries())
+	if len(m.thinkingHitRegions) != 1 {
+		t.Fatalf("thinking hit regions = %#v", m.thinkingHitRegions)
+	}
+	region := m.thinkingHitRegions[0]
+	if region.EndCol <= 0 || region.EndCol > m.viewport.Width() {
+		t.Fatalf("narrow Thought region escaped viewport: %#v width=%d", region, m.viewport.Width())
+	}
+	m.viewport.SetYOffset(0)
+	m.pauseFollow()
+	before := m.viewport.YOffset()
+	m.handleMouseClick(region.EndCol-1, region.Row-before)
+	if m.entries[0].ThinkingCollapsed {
+		t.Fatal("narrow Thought header did not expand")
+	}
+	if !m.followPaused() || m.viewport.YOffset() != before {
+		t.Fatalf("Thought expansion moved paused anchor: paused=%v before=%d after=%d", m.followPaused(), before, m.viewport.YOffset())
+	}
+}
+
+func TestCtrlTTogglesSettledThoughtsDuringActiveTurnButLeavesDraftOwned(t *testing.T) {
+	m := newTestModel(t)
+	m.entries = []ChatEntry{{
+		Kind: "assistant", Content: "earlier answer", ThinkingContent: "settled reasoning", ThinkingCollapsed: true,
+	}}
+	m.state = StateStreaming
+	m.thinkBuf.WriteString("current live reasoning")
+
+	updated, _ := m.Update(ctrlKey('t'))
+	m = updated.(*Model)
+	if m.entries[0].ThinkingCollapsed {
+		t.Fatal("Ctrl+T did not inspect settled reasoning during active turn")
+	}
+	if got := m.thinkBuf.String(); got != "current live reasoning" {
+		t.Fatalf("Ctrl+T changed live reasoning: %q", got)
+	}
+
+	m.entries[0].ThinkingCollapsed = true
+	m.input.SetValue("draft stays owned")
+	updated, _ = m.Update(ctrlKey('t'))
+	m = updated.(*Model)
+	if !m.entries[0].ThinkingCollapsed {
+		t.Fatal("Ctrl+T stole a non-empty composer draft")
+	}
+	if got := m.input.Value(); got != "draft stays owned" {
+		t.Fatalf("Ctrl+T changed draft: %q", got)
 	}
 }

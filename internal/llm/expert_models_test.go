@@ -80,6 +80,42 @@ func TestExpertModelLeaseUsesLiveWeightsSnapshotsAllResidencyAndUnloadsOnlyNewEx
 	}
 }
 
+func TestExpertModelSelectionDoesNotGrantOllamaCloudConsent(t *testing.T) {
+	var chatRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tags":
+			_, _ = fmt.Fprint(w, `{"models":[{"name":"expert:cloud","model":"expert:cloud","size":0,"remote_model":"provider/expert","remote_host":"https://ollama.com","details":{"context_length":65536}}]}`)
+		case "/api/ps":
+			_, _ = fmt.Fprint(w, `{"models":[]}`)
+		case "/api/chat":
+			chatRequests.Add(1)
+			_, _ = fmt.Fprintln(w, `{"message":{"role":"assistant","content":"report"},"done":true,"eval_count":1}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	manager := NewModelManager(server.URL, 8192)
+	manager.ConfigureOllamaRuntimeInventory(true, []OllamaModel{{
+		Name: "expert:cloud", Location: OllamaModelLocationCloud, ContextLength: 65536,
+	}}, true)
+	snapshot, err := manager.PrepareExpertModels(context.Background(), []string{"expert:cloud"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ChatStreamForModel(context.Background(), "expert:cloud", ChatOptions{}, func(StreamChunk) error { return nil }); err == nil {
+		t.Fatal("selected expert model bypassed cloud consent")
+	}
+	if chatRequests.Load() != 0 {
+		t.Fatalf("unconsented cloud expert dispatched %d provider request(s)", chatRequests.Load())
+	}
+	if err := manager.ReleaseExpertModels(context.Background(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestExpertModelLeaseRefreshesWeightsForEveryConsultation(t *testing.T) {
 	var size atomic.Int64
 	size.Store(2 << 30)

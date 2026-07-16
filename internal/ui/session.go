@@ -31,11 +31,12 @@ type SessionListItem struct {
 	CreatedAt string `json:"created_at"`
 }
 
-// SessionResumeInfo is the minimal durable identity needed by the CLI after
-// Bubble Tea has restored the terminal. It deliberately excludes transcript
-// content and the user-derived title from the process-exit surface.
+// SessionResumeInfo is the bounded durable identity shown by the CLI after
+// Bubble Tea restores the terminal. Title is sanitized display metadata only;
+// Handle remains the sole input to the canonical resume command.
 type SessionResumeInfo struct {
 	Handle string
+	Title  string
 }
 
 // SessionResumeInfo returns the active session's canonical short handle when
@@ -49,7 +50,10 @@ func (m *Model) SessionResumeInfo() (SessionResumeInfo, bool) {
 	if handle == "" {
 		return SessionResumeInfo{}, false
 	}
-	return SessionResumeInfo{Handle: handle}, true
+	return SessionResumeInfo{
+		Handle: handle,
+		Title:  boundedSessionTitle(m.activeSessionTitle),
+	}, true
 }
 
 type persistedChatEntry struct {
@@ -67,18 +71,20 @@ type persistedChatEntry struct {
 // ephemeral fields may contain secrets or multi-megabyte file snapshots and
 // are not needed to render a completed tool card after resume.
 type persistedToolEntry struct {
-	ID         string                   `json:"id"`
-	Name       string                   `json:"name"`
-	Summary    string                   `json:"summary,omitempty"`
-	Args       string                   `json:"args,omitempty"`
-	Result     string                   `json:"result,omitempty"`
-	IsError    bool                     `json:"is_error,omitempty"`
-	Status     ToolStatus               `json:"status"`
-	StartTime  time.Time                `json:"start_time"`
-	Duration   time.Duration            `json:"duration,omitempty"`
-	Collapsed  bool                     `json:"collapsed,omitempty"`
-	DiffLines  []DiffLine               `json:"diff_lines,omitempty"`
-	Projection ecosystem.ToolProjection `json:"projection,omitempty"`
+	ID             string                   `json:"id"`
+	Name           string                   `json:"name"`
+	Summary        string                   `json:"summary,omitempty"`
+	Args           string                   `json:"args,omitempty"`
+	Result         string                   `json:"result,omitempty"`
+	ResultLanguage string                   `json:"result_language,omitempty"`
+	IsError        bool                     `json:"is_error,omitempty"`
+	Status         ToolStatus               `json:"status"`
+	StartTime      time.Time                `json:"start_time"`
+	Duration       time.Duration            `json:"duration,omitempty"`
+	Collapsed      bool                     `json:"collapsed,omitempty"`
+	DiffLines      []DiffLine               `json:"diff_lines,omitempty"`
+	Projection     ecosystem.ToolProjection `json:"projection,omitempty"`
+	ExpertProgress *ExpertProgressState     `json:"expert_progress,omitempty"`
 }
 
 const (
@@ -139,6 +145,11 @@ func sessionTitle(prompt string) string {
 	if title == "" {
 		title = "Local agent session " + time.Now().Format("2006-01-02 15:04")
 	}
+	return boundedSessionTitle(title)
+}
+
+func boundedSessionTitle(title string) string {
+	title = sanitizeTerminalSingleLine(title)
 	if len([]rune(title)) > 72 {
 		runes := []rune(title)
 		title = string(runes[:69]) + "..."
@@ -248,19 +259,30 @@ func encodedDiffLineBytes(line DiffLine) int {
 func persistToolEntries(entries []ToolEntry) []persistedToolEntry {
 	result := make([]persistedToolEntry, len(entries))
 	for i, entry := range entries {
+		args := boundedSessionText(entry.Args, maxPersistedToolArgsBytes)
+		toolResult := boundedSessionText(sanitizeTerminalMultiline(entry.Result), maxPersistedToolResultBytes)
+		resultLanguage := normalizeTrustedResultLanguage(entry.ResultLanguage)
+		progress := sanitizeExpertProgressState(entry.ExpertProgress, entry.Status != ToolStatusRunning)
+		if isExpertConsultTool(entry.Name) {
+			args = ""
+			toolResult = ""
+			resultLanguage = ""
+		}
 		result[i] = persistedToolEntry{
-			ID:         entry.ID,
-			Name:       entry.Name,
-			Summary:    boundedToolCardSummary(entry.Summary),
-			Args:       boundedSessionText(entry.Args, maxPersistedToolArgsBytes),
-			Result:     boundedSessionText(entry.Result, maxPersistedToolResultBytes),
-			IsError:    entry.IsError,
-			Status:     entry.Status,
-			StartTime:  entry.StartTime,
-			Duration:   entry.Duration,
-			Collapsed:  entry.Collapsed,
-			DiffLines:  persistDiffLines(entry.DiffLines),
-			Projection: entry.Projection.Normalize(),
+			ID:             entry.ID,
+			Name:           entry.Name,
+			Summary:        boundedToolCardSummary(entry.Summary),
+			Args:           args,
+			Result:         toolResult,
+			ResultLanguage: resultLanguage,
+			IsError:        entry.IsError,
+			Status:         entry.Status,
+			StartTime:      entry.StartTime,
+			Duration:       entry.Duration,
+			Collapsed:      entry.Collapsed,
+			DiffLines:      persistDiffLines(entry.DiffLines),
+			Projection:     entry.Projection.Normalize(),
+			ExpertProgress: progress,
 		}
 	}
 	return result
@@ -269,21 +291,43 @@ func persistToolEntries(entries []ToolEntry) []persistedToolEntry {
 func restoreToolEntries(entries []persistedToolEntry) []ToolEntry {
 	result := make([]ToolEntry, len(entries))
 	for i, entry := range entries {
+		wasRunning := entry.Status == ToolStatusRunning
+		progress := sanitizeExpertProgressState(entry.ExpertProgress, !wasRunning)
+		args := entry.Args
+		toolResult := boundedSessionText(sanitizeTerminalMultiline(entry.Result), maxPersistedToolResultBytes)
+		resultLanguage := normalizeTrustedResultLanguage(entry.ResultLanguage)
+		if isExpertConsultTool(entry.Name) {
+			args = ""
+			toolResult = ""
+			resultLanguage = ""
+		}
 		restored := ToolEntry{
-			ID:         entry.ID,
-			Name:       entry.Name,
-			Summary:    restoredToolSummary(entry),
-			Args:       entry.Args,
-			Result:     entry.Result,
-			IsError:    entry.IsError,
-			Status:     entry.Status,
-			StartTime:  entry.StartTime,
-			Duration:   entry.Duration,
-			Collapsed:  entry.Collapsed,
-			DiffLines:  persistDiffLines(entry.DiffLines),
-			Projection: entry.Projection.Normalize(),
+			ID:             entry.ID,
+			Name:           entry.Name,
+			Summary:        restoredToolSummary(entry),
+			Args:           args,
+			Result:         toolResult,
+			ResultLanguage: resultLanguage,
+			IsError:        entry.IsError,
+			Status:         entry.Status,
+			StartTime:      entry.StartTime,
+			Duration:       entry.Duration,
+			Collapsed:      entry.Collapsed,
+			DiffLines:      persistDiffLines(entry.DiffLines),
+			Projection:     entry.Projection.Normalize(),
+			ExpertProgress: progress,
+		}
+		if isExpertConsultTool(entry.Name) {
+			if progress != nil {
+				restored.Summary = boundedToolCardSummary(progress.summary())
+			} else {
+				restored.Summary = "expert consultation"
+			}
 		}
 		settleInterruptedToolEntry(&restored)
+		if wasRunning {
+			restored.ExpertProgress = nil
+		}
 		result[i] = restored
 	}
 	return result
@@ -712,6 +756,20 @@ func sanitizePersistedToolEntryArgs(entries []persistedToolEntry) []persistedToo
 		// Apply the same exact serialized diff ceiling to decoded and direct
 		// in-memory snapshots, not only snapshots produced by encodeSessionState.
 		result[index].DiffLines = persistDiffLines(result[index].DiffLines)
+		if isExpertConsultTool(result[index].Name) {
+			result[index].Args = ""
+			result[index].Result = ""
+			result[index].ResultLanguage = ""
+			result[index].ExpertProgress = sanitizeExpertProgressState(
+				result[index].ExpertProgress, result[index].Status != ToolStatusRunning,
+			)
+			if result[index].ExpertProgress != nil {
+				result[index].Summary = boundedToolCardSummary(result[index].ExpertProgress.summary())
+			} else {
+				result[index].Summary = "expert consultation"
+			}
+			continue
+		}
 		if !agent.ToolArgumentsRequirePrivacy(result[index].Name) {
 			continue
 		}
@@ -973,18 +1031,14 @@ func (m *Model) restoreSessionState(state persistedSessionState) error {
 	m.toolCardMgr = NewToolCardManager(m.isDark)
 	for i := range m.toolEntries {
 		entry := &m.toolEntries[i]
-		kind := ToolCardGeneric
-		switch classifyTool(entry.Name) {
-		case ToolTypeFileRead, ToolTypeFileWrite:
-			kind = ToolCardFile
-		case ToolTypeBash:
-			kind = ToolCardBash
-		}
+		kind := toolCardKindForTool(entry.Name)
 		m.toolCardMgr.AddCardWithID(entry.ID, entry.Name, kind, entry.StartTime)
 		card := &m.toolCardMgr.Cards[len(m.toolCardMgr.Cards)-1]
 		card.Args = entry.Args
 		card.SetSummary(entry.Summary)
+		card.ResultLanguage = entry.ResultLanguage
 		card.Projection = entry.Projection
+		card.setExpertProgress(entry.ExpertProgress, max(1, m.chatPaneWidth()-6))
 		card.Result = entry.Result
 		card.Duration = entry.Duration
 		switch entry.Status {
@@ -1001,6 +1055,7 @@ func (m *Model) restoreSessionState(state persistedSessionState) error {
 		default:
 			card.State = toolCardStateFromProjection(entry.Projection)
 		}
+		card.State = entry.ExpertProgress.cardState(card.State)
 	}
 	return nil
 }

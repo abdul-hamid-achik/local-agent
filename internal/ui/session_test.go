@@ -167,7 +167,8 @@ func TestSessionResumeInfoRequiresDurableSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.sessionID = session.ID
-	if info, ok := m.SessionResumeInfo(); !ok || info.Handle != sessionref.Format(session.ID) {
+	m.activeSessionTitle = "Resume\ninfo\x1b]0;owned\x07"
+	if info, ok := m.SessionResumeInfo(); !ok || info.Handle != sessionref.Format(session.ID) || info.Title != "Resume info" {
 		t.Fatalf("durable session resume info = %#v, ok=%v", info, ok)
 	}
 
@@ -826,6 +827,42 @@ func TestSessionToolSummaryRoundTripAndLegacyFallback(t *testing.T) {
 			t.Fatalf("collapsed legacy receipt omitted recovered context:\n%s", view)
 		}
 	})
+}
+
+func TestSessionToolResultLanguageRoundTripsOnlyAllowlistedAlias(t *testing.T) {
+	persisted := persistToolEntries([]ToolEntry{{
+		ID: "read-1", Name: "read_file", ResultLanguage: "go",
+	}})
+	if got := persisted[0].ResultLanguage; got != "go" {
+		t.Fatalf("persisted language = %q", got)
+	}
+	if got := restoreToolEntries(persisted)[0].ResultLanguage; got != "go" {
+		t.Fatalf("restored language = %q", got)
+	}
+	malicious := restoreToolEntries([]persistedToolEntry{{
+		ID: "read-2", Name: "read_file", ResultLanguage: "../../bash",
+	}})
+	if got := malicious[0].ResultLanguage; got != "" {
+		t.Fatalf("untrusted persisted language survived: %q", got)
+	}
+}
+
+func TestSessionToolResultStripsTerminalControlsBeforePersistenceAndRestore(t *testing.T) {
+	persisted := persistToolEntries([]ToolEntry{{
+		ID: "read-1", Name: "read_file",
+		Result: "safe\x1b]0;owned\x07\nnext\u202esecret",
+	}})
+	if got, want := persisted[0].Result, "safe\nnextsecret"; got != want {
+		t.Fatalf("persisted result = %q, want %q", got, want)
+	}
+
+	restored := restoreToolEntries([]persistedToolEntry{{
+		ID: "legacy-1", Name: "read_file", Status: ToolStatusDone,
+		Result: "before\x1b[31mred\x1b[0m\nafter\u2066",
+	}})
+	if got, want := restored[0].Result, "beforered\nafter"; got != want {
+		t.Fatalf("restored legacy result = %q, want %q", got, want)
+	}
 }
 
 func TestInterruptedToolRestoreSettlesSemanticProjectionIdempotently(t *testing.T) {

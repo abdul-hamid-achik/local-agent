@@ -73,6 +73,17 @@ func (*limitOutput) ToolCallResult(string, string, string, bool, time.Duration) 
 func (*limitOutput) SystemMessage(string)                                       {}
 func (*limitOutput) Error(string)                                               {}
 
+type expertProgressOutput struct {
+	limitOutput
+	callIDs []string
+	events  []expertteam.ProgressEvent
+}
+
+func (output *expertProgressOutput) ExpertProgress(callID string, event expertteam.ProgressEvent) {
+	output.callIDs = append(output.callIDs, callID)
+	output.events = append(output.events, event)
+}
+
 type contextBudgetOutput struct {
 	limitOutput
 	errors []string
@@ -472,12 +483,12 @@ func TestRunTurnWithLimitsChargesExpertChildrenToParentBudget(t *testing.T) {
 			Name: "critic", Model: "qwen:2b", Status: expertteam.ExpertCompleted,
 			Report: "bounded finding", EvalTokens: 3, PromptEvalTokens: 4, ChargedEvalTokens: 3,
 		}},
-	}}
+	}, events: []expertteam.ProgressEvent{{Sequence: 1, Phase: expertteam.ProgressPlanned, Total: 1, Queued: 1}}}
 	agent := New(client, nil, 4096)
 	agent.SetWorkDir(t.TempDir())
 	agent.SetExpertConsultant(consultant)
 	agent.AddUserMessage("Consult an expert, then synthesize within the goal budget.")
-	output := &limitOutput{}
+	output := &expertProgressOutput{}
 
 	if err := agent.RunTurnWithLimits(context.Background(), output, "turn_expert_budget", TurnLimits{MaxEvalTokens: 10}); err != nil {
 		t.Fatal(err)
@@ -490,6 +501,9 @@ func TestRunTurnWithLimitsChargesExpertChildrenToParentBudget(t *testing.T) {
 	}
 	if len(client.limits) != 2 || client.limits[0] != 10 || client.limits[1] != 5 {
 		t.Fatalf("parent request limits=%v", client.limits)
+	}
+	if len(output.callIDs) != 1 || output.callIDs[0] != "expert-consult" || len(output.events) != 1 || output.events[0].Phase != expertteam.ProgressPlanned {
+		t.Fatalf("correlated expert progress callIDs=%v events=%#v", output.callIDs, output.events)
 	}
 }
 

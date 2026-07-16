@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/sessionref"
 	"github.com/abdul-hamid-achik/local-agent/internal/ui"
@@ -38,5 +40,35 @@ func writeSessionResumeMessage(writer io.Writer, finalModel tea.Model, runErr er
 	if handle == "" {
 		return
 	}
-	_, _ = fmt.Fprintf(writer, "\nResume this session with:\n  local-agent --resume %s\n", handle)
+	label := "Session " + handle
+	if title := sanitizeExitSessionTitle(info.Title); title != "" {
+		label += " · " + title
+	}
+	_, _ = fmt.Fprintf(writer, "\n%s\nResume this session with:\n  local-agent --resume %s\n", label, handle)
+}
+
+func sanitizeExitSessionTitle(title string) string {
+	title = ansi.Strip(strings.ToValidUTF8(title, "�"))
+	title = strings.Map(func(value rune) rune {
+		if unicode.IsControl(value) || isExitBidiControl(value) {
+			return ' '
+		}
+		return value
+	}, title)
+	title = strings.Join(strings.Fields(title), " ")
+	if runes := []rune(title); len(runes) > 72 {
+		title = string(runes[:69]) + "..."
+	}
+	return title
+}
+
+func isExitBidiControl(value rune) bool {
+	switch value {
+	case '\u061c', '\u200e', '\u200f',
+		'\u202a', '\u202b', '\u202c', '\u202d', '\u202e',
+		'\u2066', '\u2067', '\u2068', '\u2069':
+		return true
+	default:
+		return false
+	}
 }

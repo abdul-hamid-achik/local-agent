@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -19,6 +20,7 @@ type fakeExpertConsultant struct {
 	err      error
 	calls    int
 	profiles int
+	events   []expertteam.ProgressEvent
 }
 
 func (consultant *fakeExpertConsultant) ProfileCount() int { return consultant.profiles }
@@ -26,6 +28,17 @@ func (consultant *fakeExpertConsultant) ProfileCount() int { return consultant.p
 func (consultant *fakeExpertConsultant) Consult(_ context.Context, request expertteam.Request) (expertteam.Result, error) {
 	consultant.calls++
 	consultant.request = request
+	return consultant.result, consultant.err
+}
+
+func (consultant *fakeExpertConsultant) ConsultWithProgress(_ context.Context, request expertteam.Request, observer expertteam.Observer) (expertteam.Result, error) {
+	consultant.calls++
+	consultant.request = request
+	for _, event := range consultant.events {
+		if observer != nil {
+			observer(event)
+		}
+	}
 	return consultant.result, consultant.err
 }
 
@@ -64,13 +77,31 @@ func TestExpertConsultationProfileCountUsesOptionalRuntimeSurface(t *testing.T) 
 func TestConsultExpertsPreflightRejectsInvalidShapeBeforeRuntime(t *testing.T) {
 	ag := New(nil, nil, 8192)
 	ag.SetExpertConsultant(&fakeExpertConsultant{})
+	tooManyOverrides := make([]any, expertselector.MaxSelectedExperts+1)
+	for index := range tooManyOverrides {
+		tooManyOverrides[index] = map[string]any{"expert": fmt.Sprintf("expert-%d", index), "model": "qwen"}
+	}
 	tests := []llm.ToolCall{
 		{Name: "consult_experts", Arguments: map[string]any{"strategy": "team"}},
 		{Name: "consult_experts", Arguments: map[string]any{"strategy": "invalid", "objective": "review"}},
 		{Name: "consult_experts", Arguments: map[string]any{"strategy": "team", "objective": "review", "extra": true}},
+		{Name: "consult_experts", Arguments: map[string]any{"strategy": "team", "objective": "review", "max_concurrent_inference": 8}},
+		{Name: "consult_experts", Arguments: map[string]any{"strategy": "team", "objective": "review", "experts": nil}},
 		{Name: "consult_experts", Arguments: map[string]any{"strategy": "team", "objective": "review", "experts": []any{"ok", 3}}},
 		{Name: "consult_experts", Arguments: map[string]any{"strategy": "team", "objective": strings.Repeat("x", maxExpertObjectiveBytes+1)}},
 		{Name: "consult_experts", Arguments: map[string]any{"strategy": "team", "objective": "review", "experts": []any{"bad\nname"}}},
+		{Name: "consult_experts", Arguments: map[string]any{"strategy": "team", "objective": "review", "experts": []any{"critic", "CRITIC"}}},
+		{Name: "consult_experts", Arguments: map[string]any{"strategy": "team", "objective": "review", "model": ""}},
+		{Name: "consult_experts", Arguments: map[string]any{"strategy": "team", "objective": "review", "model": " qwen"}},
+		{Name: "consult_experts", Arguments: map[string]any{"strategy": "team", "objective": "review", "model": strings.Repeat("m", 257)}},
+		{Name: "consult_experts", Arguments: map[string]any{"strategy": "team", "objective": "review", "model_overrides": nil}},
+		{Name: "consult_experts", Arguments: map[string]any{"strategy": "team", "objective": "review", "model_overrides": map[string]any{"critic": "qwen"}}},
+		{Name: "consult_experts", Arguments: map[string]any{"strategy": "team", "objective": "review", "model_overrides": []any{map[string]any{"expert": "critic"}}}},
+		{Name: "consult_experts", Arguments: map[string]any{"strategy": "team", "objective": "review", "model_overrides": []any{map[string]any{"expert": "critic", "model": "qwen", "extra": true}}}},
+		{Name: "consult_experts", Arguments: map[string]any{"strategy": "team", "objective": "review", "model_overrides": []any{
+			map[string]any{"expert": "critic", "model": "qwen"}, map[string]any{"expert": "CRITIC", "model": "flash"},
+		}}},
+		{Name: "consult_experts", Arguments: map[string]any{"strategy": "team", "objective": "review", "model_overrides": tooManyOverrides}},
 	}
 	for index, call := range tests {
 		if err := ag.preflightToolCall(execution.KindBuiltin, call); err == nil {
@@ -93,6 +124,7 @@ func TestConsultExpertsReturnsAdvisoryReceiptAndExactRequest(t *testing.T) {
 	ag.SetExpertConsultant(consultant)
 	call := llm.ToolCall{Name: "consult_experts", Arguments: map[string]any{
 		"strategy": "team", "objective": "Review the integration.", "experts": []any{"critic"},
+		"model": "qwen:2b", "model_overrides": []any{map[string]any{"expert": "critic", "model": "flash:cloud"}},
 	}}
 	if err := ag.preflightToolCall(execution.KindBuiltin, call); err != nil {
 		t.Fatal(err)
@@ -102,7 +134,9 @@ func TestConsultExpertsReturnsAdvisoryReceiptAndExactRequest(t *testing.T) {
 		t.Fatalf("receipt = %q, error=%v", content, isErr)
 	}
 	if consultant.request.Strategy != expertselector.StrategyTeam || consultant.request.Objective != "Review the integration." ||
-		len(consultant.request.ExpertNames) != 1 || consultant.request.ExpertNames[0] != "critic" {
+		len(consultant.request.ExpertNames) != 1 || consultant.request.ExpertNames[0] != "critic" ||
+		consultant.request.Model != "qwen:2b" || len(consultant.request.ModelOverrides) != 1 ||
+		consultant.request.ModelOverrides[0] != (expertteam.ModelOverride{Expert: "critic", Model: "flash:cloud"}) {
 		t.Fatalf("request = %#v", consultant.request)
 	}
 }

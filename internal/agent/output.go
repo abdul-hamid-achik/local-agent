@@ -1,6 +1,10 @@
 package agent
 
-import "time"
+import (
+	"time"
+
+	"github.com/abdul-hamid-achik/local-agent/internal/expertteam"
+)
 
 // Output is the interface the agent uses to stream results to the UI.
 type Output interface {
@@ -28,4 +32,11 @@ type Output interface {
 
 	// Error reports a non-fatal error to the user.
 	Error(msg string)
+}
+
+// ExpertProgressOutput is an optional output capability. Agent supplies the
+// tool call ID for correlation; ProgressEvent itself remains independent of
+// provider text, prompts, paths, reports, and reasoning.
+type ExpertProgressOutput interface {
+	ExpertProgress(callID string, event expertteam.ProgressEvent)
 }

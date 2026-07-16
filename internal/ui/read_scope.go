@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -17,14 +18,15 @@ import (
 // ReadScopePrompt is transient presentation authority for canonicalized
 // external paths. It is never serialized into session state.
 type ReadScopePrompt struct {
-	Requested  string
-	Canonical  string
-	Workspace  string
-	Draft      string
-	Kind       agent.ReadGrantKind
-	Grants     []agent.ReadGrant
-	Operation  string
-	AutoResume bool
+	Requested   string
+	Canonical   string
+	Workspace   string
+	Draft       string
+	Kind        agent.ReadGrantKind
+	Grants      []agent.ReadGrant
+	WriteGrants []agent.WriteGrant
+	Operation   string
+	AutoResume  bool
 }
 
 func (m *Model) beginReadScopeAction(result command.Result, draft string) tea.Cmd {
@@ -132,12 +134,12 @@ func (m *Model) confirmReadScopePrompt() tea.Cmd {
 	}
 	prompt := *m.readScopePrompt
 	m.readScopePrompt = nil
-	if len(prompt.Grants) > 0 {
+	if len(prompt.Grants) > 0 || len(prompt.WriteGrants) > 0 {
 		operation := prompt.Operation
 		if operation == "" {
 			operation = "add-intents"
 		}
-		return m.beginReadGrantMutation(prompt.Grants, prompt.Draft, prompt.AutoResume, operation)
+		return m.beginPathGrantMutation(prompt.Grants, prompt.WriteGrants, prompt.Draft, prompt.AutoResume, operation)
 	}
 	m.restoreReadScopeDraft(prompt.Draft)
 	m.appendReadScopeError("External read-path preview expired; inspect the path again.")
@@ -151,6 +153,7 @@ func (m *Model) resolveReadScopePrompt(outcome string) {
 	prompt := *m.readScopePrompt
 	m.readScopePrompt = nil
 	releaseReadGrants(prompt.Grants)
+	releaseWriteGrants(prompt.WriteGrants)
 	m.restoreReadScopeDraft(prompt.Draft)
 	message := "External read path denied; draft restored."
 	if outcome == "cancelled" {
@@ -163,24 +166,26 @@ func (m *Model) resolveReadScopePrompt(outcome string) {
 	m.recalcViewportHeight()
 }
 
-func (m *Model) beginReadGrantMutation(grants []agent.ReadGrant, draft string, autoResume bool, operation string) tea.Cmd {
+func (m *Model) beginPathGrantMutation(readGrants []agent.ReadGrant, writeGrants []agent.WriteGrant, draft string, autoResume bool, operation string) tea.Cmd {
 	m.readScopeOpToken++
 	token := m.readScopeOpToken
 	m.readScopeOpRunning = true
 	m.readScopeOpDraft = draft
-	m.readScopeOpLabel = "Granting approved read paths"
+	m.readScopeOpLabel = "Granting approved path scopes"
 	m.input.Blur()
 	m.recalcViewportHeight()
 
 	agentInstance := m.agent
-	approved := append([]agent.ReadGrant(nil), grants...)
+	approvedReads := append([]agent.ReadGrant(nil), readGrants...)
+	approvedWrites := append([]agent.WriteGrant(nil), writeGrants...)
 	mutate := func() tea.Msg {
 		msg := ReadScopeResultMsg{
 			Token: token, Operation: operation, AutoResume: autoResume,
 		}
-		msg.Grants, msg.RolledBack, msg.RollbackErr, msg.Err = applyPromptReadGrantsTransactional(agentInstance, approved)
-		msg.Count = len(msg.Grants)
-		if len(msg.Grants) == 1 {
+		msg.Grants, msg.WriteGrants, msg.Rollback, msg.Finalize, msg.RolledBack, msg.RollbackErr, msg.Err =
+			applyPromptPathGrantsTransactional(agentInstance, approvedReads, approvedWrites)
+		msg.Count = len(msg.Grants) + len(msg.WriteGrants)
+		if len(msg.Grants) == 1 && len(msg.WriteGrants) == 0 {
 			msg.Path = msg.Grants[0].Path
 			msg.Kind = string(msg.Grants[0].Kind)
 		}
@@ -214,6 +219,80 @@ func applyPromptReadGrantsTransactional(agentInstance *agent.Agent, approved []a
 		applied = append(applied, agent.ReadGrant{Path: canonical, Kind: grant.Kind})
 	}
 	return applied, 0, nil, nil
+}
+
+func applyPromptPathGrantsTransactional(agentInstance *agent.Agent, approvedReads []agent.ReadGrant, approvedWrites []agent.WriteGrant) ([]agent.ReadGrant, []agent.WriteGrant, func() (int, error), func(), int, error, error) {
+	if agentInstance == nil {
+		releaseReadGrants(approvedReads)
+		releaseWriteGrants(approvedWrites)
+		return nil, nil, nil, nil, 0, nil, errors.New("agent is unavailable")
+	}
+	defer releaseReadGrants(approvedReads)
+	defer releaseWriteGrants(approvedWrites)
+	beforeReads, snapshotErr := agentInstance.SnapshotReadGrants()
+	if snapshotErr != nil {
+		return nil, nil, nil, nil, 0, nil, fmt.Errorf("snapshot existing read grants: %w", snapshotErr)
+	}
+	beforeWrites := agentInstance.WriteGrants()
+
+	appliedReads := make([]agent.ReadGrant, 0, len(approvedReads))
+	for _, grant := range approvedReads {
+		canonical, err := agentInstance.AddInspectedReadGrant(grant)
+		if err != nil {
+			rolledBack, rollbackErr := rollbackPromptPathGrants(agentInstance, beforeReads, beforeWrites)
+			releaseReadGrants(beforeReads)
+			return nil, nil, nil, nil, rolledBack, rollbackErr, fmt.Errorf("grant %s read access: %w", grant.Kind, err)
+		}
+		appliedReads = append(appliedReads, agent.ReadGrant{Path: canonical, Kind: grant.Kind})
+	}
+
+	appliedWrites := make([]agent.WriteGrant, 0, len(approvedWrites))
+	for _, grant := range approvedWrites {
+		canonical, err := agentInstance.AddInspectedWriteGrant(grant)
+		if err != nil {
+			rolledBack, rollbackErr := rollbackPromptPathGrants(agentInstance, beforeReads, beforeWrites)
+			releaseReadGrants(beforeReads)
+			return nil, nil, nil, nil, rolledBack, rollbackErr, fmt.Errorf("grant %s typed-write access: %w", grant.Kind, err)
+		}
+		appliedWrites = append(appliedWrites, agent.WriteGrant{Path: canonical, Kind: grant.Kind})
+	}
+	var once sync.Once
+	var rollbackCount int
+	var rollbackErr error
+	rollback := func() (int, error) {
+		once.Do(func() {
+			rollbackCount, rollbackErr = rollbackPromptPathGrants(agentInstance, beforeReads, beforeWrites)
+			releaseReadGrants(beforeReads)
+		})
+		return rollbackCount, rollbackErr
+	}
+	finalize := func() {
+		once.Do(func() { releaseReadGrants(beforeReads) })
+	}
+	return appliedReads, appliedWrites, rollback, finalize, 0, nil, nil
+}
+
+func rollbackPromptPathGrants(agentInstance *agent.Agent, beforeReads []agent.ReadGrant, beforeWrites []agent.WriteGrant) (int, error) {
+	rolledBack, rollbackErr := restoreReadGrantSnapshot(agentInstance, beforeReads)
+	beforeWriteKeys := make(map[string]struct{}, len(beforeWrites))
+	for _, grant := range beforeWrites {
+		beforeWriteKeys[writeGrantKey(grant)] = struct{}{}
+	}
+	for _, grant := range agentInstance.WriteGrants() {
+		if _, existed := beforeWriteKeys[writeGrantKey(grant)]; existed {
+			continue
+		}
+		if _, err := agentInstance.RemoveWritePath(grant.Path); err != nil {
+			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("revoke new %s %q: %w", grant.Kind, grant.Path, err))
+		} else {
+			rolledBack++
+		}
+	}
+	return rolledBack, rollbackErr
+}
+
+func writeGrantKey(grant agent.WriteGrant) string {
+	return string(grant.Kind) + "\x00" + filepath.Clean(grant.Path)
 }
 
 func releaseReadGrants(grants []agent.ReadGrant) {
@@ -324,6 +403,11 @@ func (m *Model) beginReadScopeMutation(operation, path, draft string) tea.Cmd {
 
 func (m *Model) handleReadScopeResult(msg ReadScopeResultMsg) tea.Cmd {
 	if !m.readScopeOpRunning || msg.Token != m.readScopeOpToken {
+		if msg.Rollback != nil {
+			_, _ = msg.Rollback()
+		} else if msg.Finalize != nil {
+			msg.Finalize()
+		}
 		return nil
 	}
 	draft := m.readScopeOpDraft
@@ -331,14 +415,22 @@ func (m *Model) handleReadScopeResult(msg ReadScopeResultMsg) tea.Cmd {
 	m.readScopeOpLabel = ""
 	m.readScopeOpDraft = ""
 	if m.shuttingDown {
+		if msg.Rollback != nil {
+			_, _ = msg.Rollback()
+		} else if msg.Finalize != nil {
+			msg.Finalize()
+		}
 		return nil
+	}
+	if msg.Finalize != nil {
+		msg.Finalize()
 	}
 	m.input.Focus()
 	if msg.Err != nil {
 		m.restoreReadScopeDraft(draft)
 		prefix := fmt.Sprintf("/scope %s failed", msg.Operation)
-		if msg.Operation == "add-intents" {
-			prefix = "External read-path authorization failed"
+		if msg.Operation == "add-intents" || msg.Operation == "add-auto-intents" {
+			prefix = "External path authorization failed"
 		}
 		if msg.RollbackErr != nil {
 			prefix += fmt.Sprintf("; rollback could not fully restore the previous authority set: %v", msg.RollbackErr)
@@ -373,11 +465,9 @@ func (m *Model) handleReadScopeResult(msg ReadScopeResultMsg) tea.Cmd {
 			}
 			receipt = fmt.Sprintf("Cleared %d temporary read-only %s.", msg.Count, grantLabel)
 		case "add-intents":
-			pathLabel := "paths"
-			if msg.Count == 1 {
-				pathLabel = "path"
-			}
-			receipt = fmt.Sprintf("Granted temporary read-only access to %d explicit %s. Sibling files remain unavailable unless a directory was explicitly approved; write authority is unchanged.", msg.Count, pathLabel)
+			receipt = promptPathGrantReceipt("Granted", msg.Grants, msg.WriteGrants)
+		case "add-auto-intents":
+			receipt = promptPathGrantReceipt("AUTO accepted", msg.Grants, msg.WriteGrants)
 		default:
 			receipt = "Updated temporary read-only roots."
 		}
@@ -391,6 +481,24 @@ func (m *Model) handleReadScopeResult(msg ReadScopeResultMsg) tea.Cmd {
 		return m.submitPreparedInput(draft)
 	}
 	return nil
+}
+
+func promptPathGrantReceipt(prefix string, reads []agent.ReadGrant, writes []agent.WriteGrant) string {
+	pathSet := make(map[string]struct{}, len(reads)+len(writes))
+	for _, grant := range reads {
+		pathSet[filepath.Clean(grant.Path)] = struct{}{}
+	}
+	for _, grant := range writes {
+		pathSet[filepath.Clean(grant.Path)] = struct{}{}
+	}
+	pathLabel := "paths"
+	if len(pathSet) == 1 {
+		pathLabel = "path"
+	}
+	if len(writes) == 0 {
+		return fmt.Sprintf("%s temporary read-only access to %d explicit %s. Exact files never include siblings; grants are not saved with sessions.", prefix, len(pathSet), pathLabel)
+	}
+	return fmt.Sprintf("%s temporary scoped access to %d explicit %s (%d read, %d typed-write). Write is limited to built-in write/edit/mkdir and exact trusted workspace MCP tools; shell remains confined to the primary workspace. Write expires when this turn settles; read remains process-local until /scope clear-read or exit.", prefix, len(pathSet), pathLabel, len(reads), len(writes))
 }
 
 func (m *Model) restoreReadScopeDraft(draft string) {
@@ -503,6 +611,9 @@ func (m *Model) renderReadScopePrompt() string {
 	if m.readScopePrompt == nil {
 		return ""
 	}
+	if len(m.readScopePrompt.WriteGrants) > 0 {
+		return m.renderPathScopePrompt()
+	}
 	width := max(1, m.chatPaneWidth()-4)
 	prompt := m.readScopePrompt
 	workspace := compactWorkspacePath(prompt.Workspace, width)
@@ -565,6 +676,91 @@ func (m *Model) renderReadScopePrompt() string {
 	return indentApprovalSurface(strings.Join(lines, "\n"), 2, m.chatPaneWidth())
 }
 
+func (m *Model) renderPathScopePrompt() string {
+	prompt := m.readScopePrompt
+	if prompt == nil {
+		return ""
+	}
+	width := max(1, m.chatPaneWidth()-4)
+	compact := m.width <= 40 || m.height <= 16
+	grants, access := pathScopePromptDisplayGrants(prompt)
+	pathLabels, pathsDistinct := m.readScopePromptPathLabels(grants)
+	pathSet := make(map[string]struct{}, len(grants))
+	for _, grant := range grants {
+		pathSet[filepath.Clean(grant.Path)] = struct{}{}
+	}
+	subject := "temporary external path access"
+	if len(pathSet) > 1 {
+		subject = fmt.Sprintf("temporary access to %d external paths", len(pathSet))
+	}
+	lines := []string{m.styles.ApprovalPrompt.Render(truncateDisplay("Allow "+subject+"?", width))}
+	for index, grant := range grants {
+		kind := "directory"
+		kindLabel := "Directory"
+		if grant.Kind == agent.ReadGrantExactFile {
+			kind = "exact file"
+			kindLabel = "Exact file"
+		}
+		value := access[index] + " · " + pathLabels[index]
+		if compact {
+			lines = append(lines, m.styles.OverlayDim.Render(truncateDisplay(kind+" · "+value, width)))
+		} else {
+			lines = append(lines, m.runtimeStatusRow(kindLabel, value, width))
+		}
+	}
+	if compact {
+		lines = append(lines,
+			m.styles.StatusText.Render(truncateDisplay("Write: this turn · read: until cleared", width)),
+			m.styles.StatusText.Render(truncateDisplay("Shell stays in the primary workspace", width)),
+		)
+	} else {
+		lines = append(lines,
+			m.runtimeStatusRow("Lifetime", "Write expires when this turn settles; read remains process-local until /scope clear-read or exit", width),
+			m.runtimeStatusRow("Write", "Built-in write/edit/mkdir and exact trusted workspace MCP tools only; exact files exclude siblings", width),
+			m.runtimeStatusRow("Shell", "External writes are never granted to bash", width),
+		)
+	}
+	if !pathsDistinct {
+		lines = append(lines, m.styles.ApprovalPrompt.Render(truncateDisplay("Widen · y disabled", width)))
+	}
+	hints := []keyHint{{Key: "n", Action: "deny"}, {Key: "esc", Action: "cancel"}}
+	if pathsDistinct {
+		hints = append([]keyHint{{Key: "y", Action: "allow exact scope"}}, hints...)
+	}
+	if width < 36 && len(hints) == 3 {
+		lines = append(lines,
+			m.renderKeyHints(width, hints[0], hints[1]),
+			m.renderKeyHints(width, hints[2]),
+		)
+	} else {
+		lines = append(lines, m.renderKeyHints(width, hints...))
+	}
+	return indentApprovalSurface(strings.Join(lines, "\n"), 2, m.chatPaneWidth())
+}
+
+func pathScopePromptDisplayGrants(prompt *ReadScopePrompt) ([]agent.ReadGrant, []string) {
+	if prompt == nil {
+		return nil, nil
+	}
+	writeByPath := make(map[string]struct{}, len(prompt.WriteGrants))
+	grants := make([]agent.ReadGrant, 0, len(prompt.Grants)+len(prompt.WriteGrants))
+	access := make([]string, 0, cap(grants))
+	for _, grant := range prompt.WriteGrants {
+		path := filepath.Clean(grant.Path)
+		writeByPath[path] = struct{}{}
+		grants = append(grants, agent.ReadGrant{Path: grant.Path, Kind: agent.ReadGrantKind(grant.Kind)})
+		access = append(access, "read + typed write")
+	}
+	for _, grant := range prompt.Grants {
+		if _, writable := writeByPath[filepath.Clean(grant.Path)]; writable {
+			continue
+		}
+		grants = append(grants, grant)
+		access = append(access, "read only")
+	}
+	return grants, access
+}
+
 func readScopePromptGrants(prompt *ReadScopePrompt) []agent.ReadGrant {
 	if prompt == nil {
 		return nil
@@ -580,7 +776,11 @@ func (m *Model) readScopePromptPathsDistinct() bool {
 	if m == nil || m.readScopePrompt == nil {
 		return false
 	}
-	_, distinct := m.readScopePromptPathLabels(readScopePromptGrants(m.readScopePrompt))
+	grants := readScopePromptGrants(m.readScopePrompt)
+	if len(m.readScopePrompt.WriteGrants) > 0 {
+		grants, _ = pathScopePromptDisplayGrants(m.readScopePrompt)
+	}
+	_, distinct := m.readScopePromptPathLabels(grants)
 	return distinct
 }
 

@@ -2,8 +2,10 @@ package agent
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -453,5 +455,533 @@ func TestAutoScopedCommandRejectsWorkspaceExecutableShadowing(t *testing.T) {
 	ag.SetWorkDir(workspace)
 	if ag.autoScopedCommandAllowed("go version") {
 		t.Fatal("workspace executable shadow gained AUTO authority through PATH")
+	}
+}
+
+func TestAutoCommandAssessmentRejectsGenericWorkspaceExecutables(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("AUTO shell catalog requires a POSIX shell")
+	}
+	workspace := t.TempDir()
+	binDir := filepath.Join(workspace, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	minerva := filepath.Join(binDir, "minerva")
+	if err := os.WriteFile(minerva, []byte("\x7fELF-local-agent-test-fixture"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ag := New(nil, nil, 4096)
+	ag.SetWorkDir(workspace)
+
+	// A workspace executable controls its real effect; status/help-style argv is
+	// not a trustworthy contract. Exact local ecosystem operations must arrive
+	// through a host-trusted MCP/MCPHub route instead.
+	for _, command := range []string{
+		"./bin/minerva --version",
+		"./bin/minerva --help 2>&1",
+		"./bin/minerva stack check",
+		"./bin/minerva skill list",
+		"./bin/minerva suggest architecture",
+		"CI=1 ./bin/minerva status --json",
+		minerva + " doctor",
+		"./bin/minerva",
+		"./bin/minerva init",
+		"./bin/minerva skill activate test-skill",
+		"./bin/minerva deploy production",
+		"./bin/minerva status --url=https://example.test",
+		"./bin/minerva status --host example.test",
+		"./bin/minerva status --output report.json",
+		"./bin/minerva status /etc/passwd",
+		"./bin/minerva status --command='rm -rf /'",
+	} {
+		t.Run(command, func(t *testing.T) {
+			if assessment := ag.assessAutoScopedCommand(command); assessment.admitted() {
+				t.Fatalf("generic workspace executable invocation gained AUTO authority: %q (%#v)", command, assessment)
+			}
+		})
+	}
+}
+
+func TestAutoCommandAssessmentAllowsExactMinervaWorkspaceQueries(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("AUTO shell catalog requires POSIX executable paths")
+	}
+	workspace := buildAutoCommandMinervaFixture(t, minervaModulePath, "cmd/minerva")
+	ag := New(nil, nil, 4096)
+	ag.SetWorkDir(workspace)
+	minerva := filepath.Join(workspace, "bin", "minerva")
+	for _, command := range []string{
+		"./bin/minerva --version",
+		"./bin/minerva --help 2>&1",
+		"bin/minerva help stack check",
+		"./bin/minerva skill list",
+		"./bin/minerva skill list --json",
+		"./bin/minerva profile list",
+		"./bin/minerva stack check",
+		"./bin/minerva stack check --json",
+		"./bin/minerva analytics",
+		"./bin/minerva analytics --json",
+		"./bin/minerva suggest",
+		"./bin/minerva suggest --json",
+		"./bin/minerva template list --json",
+		"./bin/minerva template show code-reviewer",
+		"./bin/minerva evidence docs",
+		"CI=1 ./bin/minerva stack check",
+		"cd " + workspace + " && ./bin/minerva skill list",
+		"cd " + workspace + " && ./bin/minerva skill list 2>&1 | grep test-skill",
+		"./bin/minerva skill list | grep test-skill",
+		"./bin/minerva template show code-reviewer | head -20",
+		"./bin/minerva template show code-reviewer | head -n 20 | grep Prompt",
+		minerva + " profile list --json",
+	} {
+		t.Run(command, func(t *testing.T) {
+			assessment := ag.assessAutoScopedCommand(command)
+			if !assessment.admitted() || assessment.effect != autoCommandEffectWorkspaceExecution ||
+				!assessment.workspaceExecutable {
+				t.Fatalf("exact Minerva query assessment = %#v, want admitted workspace execution", assessment)
+			}
+		})
+	}
+}
+
+func TestAutoCommandAssessmentRejectsMinervaMutationAndAmbiguity(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("AUTO shell catalog requires POSIX executable paths")
+	}
+	workspace := buildAutoCommandMinervaFixture(t, minervaModulePath, "cmd/minerva")
+	ag := New(nil, nil, 4096)
+	ag.SetWorkDir(workspace)
+	for _, command := range []string{
+		"./bin/minerva",
+		"./bin/minerva init",
+		"./bin/minerva skill show agent-browser",
+		"./bin/minerva skill compare a b",
+		"./bin/minerva skill create a content",
+		"./bin/minerva skill activate agent-browser",
+		"./bin/minerva skill deactivate agent-browser",
+		"./bin/minerva skill delete agent-browser",
+		"./bin/minerva profile show default",
+		"./bin/minerva profile create default",
+		"./bin/minerva stack deep",
+		"./bin/minerva stack check /etc/passwd",
+		"./bin/minerva stack check --output report.json",
+		"./bin/minerva suggest --apply",
+		"./bin/minerva template show NOT_VALID",
+		"./bin/minerva template apply review",
+		"./bin/minerva evidence search minerva",
+		"./bin/minerva evidence save artifact",
+		"./bin/minerva mcp serve",
+		"./bin/minerva help init",
+		"../bin/minerva --version",
+		"./bin/minerva skill list | grep -f patterns.txt",
+		"./bin/minerva skill list | grep ../secret",
+		"./bin/minerva skill list | head -n 201",
+		"./bin/minerva skill list | head -n +1",
+		"./bin/minerva skill list | head --lines=+1",
+		"./bin/minerva skill list | head README.md",
+		"./bin/minerva skill list | python3 -c 'print(1)'",
+		"./bin/minerva skill list ; grep test-skill",
+	} {
+		t.Run(command, func(t *testing.T) {
+			if assessment := ag.assessAutoScopedCommand(command); assessment.admitted() {
+				t.Fatalf("mutation or ambiguous Minerva invocation gained AUTO authority: %#v", assessment)
+			}
+		})
+	}
+}
+
+func TestAutoCommandAssessmentAllowsExactMinervaBuildThenQuery(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("AUTO shell catalog requires POSIX executable paths")
+	}
+	workspace := prepareAutoCommandMinervaFixture(t, minervaModulePath, "cmd/minerva")
+	ag := New(nil, nil, 4096)
+	ag.SetWorkDir(workspace)
+	for _, command := range []string{
+		"go build -o bin/minerva ./cmd/minerva && ./bin/minerva --version",
+		"go build ./cmd/minerva -o=./bin/minerva && ./bin/minerva skill list",
+		"go vet ./... && go build -o ./bin/minerva ./cmd/minerva && ./bin/minerva --version",
+	} {
+		assessment := ag.assessAutoScopedCommand(command)
+		if !assessment.admitted() || assessment.effect != autoCommandEffectWorkspaceExecution ||
+			!assessment.workspaceExecutable {
+			t.Fatalf("exact Minerva build/query assessment for %q = %#v", command, assessment)
+		}
+	}
+}
+
+func TestAutoCommandAssessmentRejectsMinervaReplacementInSameShell(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("AUTO shell catalog requires POSIX executable paths")
+	}
+	workspace := buildAutoCommandMinervaFixture(t, minervaModulePath, "cmd/minerva")
+	otherDir := filepath.Join(workspace, "cmd", "anything")
+	if err := os.MkdirAll(otherDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(otherDir, "main.go"), []byte("package main\nfunc main() {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ag := New(nil, nil, 4096)
+	ag.SetWorkDir(workspace)
+	for _, command := range []string{
+		"go build -o bin/minerva ./cmd/anything && ./bin/minerva --version",
+		"touch bin/minerva && ./bin/minerva --version",
+		"go build -o bin/minerva ./cmd/minerva && touch bin/minerva && ./bin/minerva --version",
+		"go build -o bin/minerva ./cmd/anything || go build -o bin/minerva ./cmd/minerva && ./bin/minerva --version",
+	} {
+		if assessment := ag.assessAutoScopedCommand(command); assessment.admitted() {
+			t.Fatalf("same-shell Minerva replacement gained AUTO authority for %q: %#v", command, assessment)
+		}
+	}
+
+	withoutBinary := prepareAutoCommandMinervaFixture(t, minervaModulePath, "cmd/minerva")
+	anythingDir := filepath.Join(withoutBinary, "cmd", "anything")
+	if err := os.MkdirAll(anythingDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(anythingDir, "main.go"), []byte("package main\nfunc main() {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ag.SetWorkDir(withoutBinary)
+	command := "go build -o bin/minerva ./cmd/anything || go build -o bin/minerva ./cmd/minerva && ./bin/minerva --version"
+	if assessment := ag.assessAutoScopedCommand(command); assessment.admitted() {
+		t.Fatalf("branched planned build without a pre-existing binary gained AUTO authority: %#v", assessment)
+	}
+}
+
+func TestAutoCommandAssessmentPinsMinervaBuildIdentityAndLocation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("AUTO shell catalog requires POSIX executable paths")
+	}
+	workspace := buildAutoCommandMinervaFixture(t, "example.com/lookalike", "cmd/minerva")
+	ag := New(nil, nil, 4096)
+	ag.SetWorkDir(workspace)
+	if assessment := ag.assessAutoScopedCommand("./bin/minerva --version"); assessment.admitted() {
+		t.Fatalf("lookalike Go build identity gained AUTO authority: %#v", assessment)
+	}
+
+	wrongCommand := buildAutoCommandMinervaFixture(t, minervaModulePath, "other/minerva")
+	ag.SetWorkDir(wrongCommand)
+	if assessment := ag.assessAutoScopedCommand("./bin/minerva --version"); assessment.admitted() {
+		t.Fatalf("wrong Minerva main-package identity gained AUTO authority: %#v", assessment)
+	}
+
+	trusted := buildAutoCommandMinervaFixture(t, minervaModulePath, "cmd/minerva")
+	ag.SetWorkDir(trusted)
+	otherDir := filepath.Join(trusted, "tools")
+	if err := os.MkdirAll(otherDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(trusted, "bin", "minerva"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(otherDir, "minerva"), data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if assessment := ag.assessAutoScopedCommand("./tools/minerva --version"); assessment.admitted() {
+		t.Fatalf("trusted Minerva identity outside bin/minerva gained AUTO authority: %#v", assessment)
+	}
+	minerva := filepath.Join(trusted, "bin", "minerva")
+	if err := os.Chmod(minerva, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if assessment := ag.assessAutoScopedCommand("./bin/minerva --version"); assessment.admitted() {
+		t.Fatalf("group/world-writable Minerva gained AUTO authority: %#v", assessment)
+	}
+
+	symlinked := buildAutoCommandMinervaFixture(t, minervaModulePath, "cmd/minerva")
+	realMinerva := filepath.Join(symlinked, "bin", "real-minerva")
+	if err := os.Rename(filepath.Join(symlinked, "bin", "minerva"), realMinerva); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realMinerva, filepath.Join(symlinked, "bin", "minerva")); err != nil {
+		t.Fatal(err)
+	}
+	ag.SetWorkDir(symlinked)
+	if assessment := ag.assessAutoScopedCommand("./bin/minerva --version"); assessment.admitted() {
+		t.Fatalf("symlinked Minerva gained AUTO authority: %#v", assessment)
+	}
+
+	setID := buildAutoCommandMinervaFixture(t, minervaModulePath, "cmd/minerva")
+	setIDMinerva := filepath.Join(setID, "bin", "minerva")
+	if err := os.Chmod(setIDMinerva, 0o755|os.ModeSetuid); err != nil {
+		t.Fatal(err)
+	}
+	setIDInfo, err := os.Lstat(setIDMinerva)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if setIDInfo.Mode()&os.ModeSetuid == 0 {
+		t.Log("filesystem did not retain the set-ID bit; provenance check remains covered on supporting filesystems")
+	} else {
+		ag.SetWorkDir(setID)
+		if assessment := ag.assessAutoScopedCommand("./bin/minerva --version"); assessment.admitted() {
+			t.Fatalf("set-ID Minerva gained AUTO authority: %#v", assessment)
+		}
+	}
+
+	oversizedModule := prepareAutoCommandMinervaFixture(t, minervaModulePath, "cmd/minerva")
+	moduleBody := "module " + minervaModulePath + "\n// " + strings.Repeat("x", 1<<20)
+	if err := os.WriteFile(filepath.Join(oversizedModule, "go.mod"), []byte(moduleBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ag.SetWorkDir(oversizedModule)
+	if assessment := ag.assessAutoScopedCommand("go build -o bin/minerva ./cmd/minerva && ./bin/minerva --version"); assessment.admitted() {
+		t.Fatalf("oversized Minerva module declaration gained AUTO authority: %#v", assessment)
+	}
+}
+
+func prepareAutoCommandMinervaFixture(t *testing.T, modulePath, packageDir string) string {
+	t.Helper()
+	workspace := t.TempDir()
+	commandDir := filepath.Join(workspace, filepath.FromSlash(packageDir))
+	if err := os.MkdirAll(commandDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "go.mod"), []byte("module "+modulePath+"\n\ngo 1.25\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(commandDir, "main.go"), []byte("package main\nfunc main() {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	binDir := filepath.Join(workspace, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return workspace
+}
+
+func buildAutoCommandMinervaFixture(t *testing.T, modulePath, packageDir string) string {
+	t.Helper()
+	workspace := prepareAutoCommandMinervaFixture(t, modulePath, packageDir)
+	command := exec.Command("go", "build", "-o", filepath.Join(workspace, "bin", "minerva"), "./"+filepath.ToSlash(packageDir))
+	command.Dir = workspace
+	command.Env = append(os.Environ(), "GOWORK=off", "CGO_ENABLED=0")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build Minerva identity fixture %s: %v\n%s", packageDir, err, output)
+	}
+	return workspace
+}
+
+func TestAutoCommandAssessmentRejectsUntrustedWorkspaceExecutableProvenance(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("AUTO shell catalog requires POSIX executable modes and symlinks")
+	}
+	workspace := t.TempDir()
+	outside := t.TempDir()
+	binDir := filepath.Join(workspace, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeExecutable := func(path string, mode os.FileMode) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeExecutable(filepath.Join(binDir, "plain"), 0o644)
+	writeExecutable(filepath.Join(binDir, "scripted"), 0o755)
+	writeExecutable(filepath.Join(binDir, "git"), 0o755)
+	writeExecutable(filepath.Join(binDir, "task"), 0o755)
+	outsideExecutable := filepath.Join(outside, "minerva")
+	writeExecutable(outsideExecutable, 0o755)
+	if err := os.Symlink(outsideExecutable, filepath.Join(binDir, "outside-link")); err != nil {
+		t.Fatal(err)
+	}
+	realDir := filepath.Join(workspace, "real-bin")
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeExecutable(filepath.Join(realDir, "minerva"), 0o755)
+	if err := os.Symlink(realDir, filepath.Join(workspace, "linked-bin")); err != nil {
+		t.Fatal(err)
+	}
+	ag := New(nil, nil, 4096)
+	ag.SetWorkDir(workspace)
+	for _, command := range []string{
+		"./bin/plain status",
+		"./bin/scripted status",
+		"./bin/git status",
+		"./bin/task check",
+		"./bin/outside-link status",
+		"./linked-bin/minerva status",
+		outsideExecutable + " status",
+	} {
+		if assessment := ag.assessAutoScopedCommand(command); assessment.admitted() {
+			t.Errorf("untrusted executable provenance gained AUTO authority: %q (%#v)", command, assessment)
+		}
+	}
+}
+
+func TestAutoCommandAssessmentDoesNotWidenShellWithReadGrants(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("AUTO shell catalog requires a POSIX shell")
+	}
+	workspace := t.TempDir()
+	external := t.TempDir()
+	public := filepath.Join(external, "public.txt")
+	secret := filepath.Join(external, ".env")
+	if err := os.WriteFile(public, []byte("public\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(secret, []byte("TOKEN=secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hostBin := t.TempDir()
+	for _, name := range []string{"cat", "head", "sed", "touch"} {
+		if err := os.WriteFile(filepath.Join(hostBin, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", hostBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	ag := New(nil, nil, 4096)
+	ag.SetWorkDir(workspace)
+	addAutoCommandReadGrant(t, ag, external)
+
+	for _, command := range []string{
+		"cat " + public,
+		"head -n 1 " + public,
+		"sed -n '1p' " + public,
+		"cat " + public + " | head -n 1",
+	} {
+		assessment := ag.assessAutoScopedCommand(command)
+		if assessment.admitted() || assessment.usesReadGrant {
+			t.Errorf("typed read grant widened raw shell authority for %q: %#v", command, assessment)
+		}
+	}
+	for _, command := range []string{
+		"cat " + secret,
+		"touch " + filepath.Join(external, "new.txt"),
+		"go test " + external,
+	} {
+		if assessment := ag.assessAutoScopedCommand(command); assessment.admitted() {
+			t.Errorf("grant escaped read-only or secret boundary: %q (%#v)", command, assessment)
+		}
+	}
+
+	ungranted := filepath.Join(t.TempDir(), "private.txt")
+	if err := os.WriteFile(ungranted, []byte("private"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if assessment := ag.assessAutoScopedCommand("cat " + ungranted); assessment.admitted() {
+		t.Fatalf("ungranted external read gained AUTO authority: %#v", assessment)
+	}
+
+	// An exact grant remains available to host-owned read tools, but raw shell
+	// never inherits it, whether or not the target resembles a secret.
+	exactSecretAgent := New(nil, nil, 4096)
+	exactSecretAgent.SetWorkDir(t.TempDir())
+	addAutoCommandReadGrant(t, exactSecretAgent, secret)
+	if assessment := exactSecretAgent.assessAutoScopedCommand("cat " + secret); assessment.admitted() {
+		t.Fatalf("exact secret grant leaked into raw shell authority: %#v", assessment)
+	}
+}
+
+func TestAutoCommandAssessmentRejectsStaleExactReadGrant(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("AUTO shell catalog requires a POSIX shell")
+	}
+	workspace := t.TempDir()
+	external := t.TempDir()
+	target := filepath.Join(external, "public.txt")
+	if err := os.WriteFile(target, []byte("first"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ag := New(nil, nil, 4096)
+	ag.SetWorkDir(workspace)
+	addAutoCommandReadGrant(t, ag, target)
+	if assessment := ag.assessAutoScopedCommand("cat " + target); assessment.admitted() || assessment.usesReadGrant {
+		t.Fatalf("current exact grant widened raw shell authority: %#v", assessment)
+	}
+	if err := os.Rename(target, target+".old"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("replacement"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if assessment := ag.assessAutoScopedCommand("cat " + target); assessment.admitted() {
+		t.Fatalf("replacement inherited exact read authority: %#v", assessment)
+	}
+}
+
+func TestAutoCommandAssessmentRejectsShellStateAndEncodingBypasses(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("AUTO shell catalog requires a POSIX shell")
+	}
+	workspace := t.TempDir()
+	hostBin := t.TempDir()
+	for _, name := range []string{"go", "printf"} {
+		if err := os.WriteFile(filepath.Join(hostBin, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", hostBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	ag := New(nil, nil, 4096)
+	ag.SetWorkDir(workspace)
+
+	for _, command := range []string{
+		"printf -v PATH . && go version",
+		"printf -vPATH . && go version",
+		string([]byte{'g', 'o', ' ', 'v', 'e', 'r', 's', 'i', 'o', 'n', 0xff}),
+	} {
+		if assessment := ag.assessAutoScopedCommand(command); assessment.admitted() {
+			t.Fatalf("shell state/encoding bypass gained AUTO authority: %q (%#v)", command, assessment)
+		}
+	}
+}
+
+func TestAutoCommandAssessmentClassifiesSortOutputAsMutation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("AUTO shell catalog requires a POSIX shell")
+	}
+	workspace := t.TempDir()
+	hostBin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(hostBin, "sort"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", hostBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	ag := New(nil, nil, 4096)
+	ag.SetWorkDir(workspace)
+
+	for _, command := range []string{"sort -o out.txt input.txt", "sort --output=out.txt input.txt", "sort -boout.txt input.txt"} {
+		assessment := ag.assessAutoScopedCommand(command)
+		if !assessment.admitted() || assessment.effect != autoCommandEffectWorkspaceMutation {
+			t.Fatalf("sort output assessment for %q = %#v, want admitted workspace mutation", command, assessment)
+		}
+	}
+	assessment := ag.assessAutoScopedCommand("sort input.txt")
+	if !assessment.admitted() || assessment.effect != autoCommandEffectReadOnly {
+		t.Fatalf("read-only sort assessment = %#v", assessment)
+	}
+}
+
+func TestAutoCommandAssessmentIsBounded(t *testing.T) {
+	ag := New(nil, nil, 4096)
+	ag.SetWorkDir(t.TempDir())
+	commands := []string{
+		strings.Repeat("x", maxAutoCommandBytes+1),
+		strings.Repeat("echo x && ", maxAutoCommandSegments) + "echo x",
+		"echo " + strings.Repeat("x ", maxAutoCommandWords),
+	}
+	for _, command := range commands {
+		assessment := ag.assessAutoScopedCommand(command)
+		if assessment.admitted() || assessment.reason != autoCommandReasonBounds {
+			t.Fatalf("unbounded command assessment = %#v", assessment)
+		}
+	}
+}
+
+func addAutoCommandReadGrant(t *testing.T, ag *Agent, path string) {
+	t.Helper()
+	inspection, err := ag.InspectReadPath(path)
+	if err != nil {
+		t.Fatalf("inspect read grant: %v", err)
+	}
+	if _, err := ag.AddInspectedReadGrant(inspection.Grant()); err != nil {
+		t.Fatalf("add read grant: %v", err)
 	}
 }

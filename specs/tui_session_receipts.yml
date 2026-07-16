@@ -1,161 +1,190 @@
 version: 1
-contractHash: sha256:156f033818b065a2cc5bcb3efa1fd727b7967bf85bee25c032dbd409a43fa390
+contractHash: sha256:58eb31bfe64ac0af437c27ece239855b36e7244a366968eb54d498b8c038c91b
 name: local_agent_tui_session_receipts
-
 intent: |
-  a user can find and restore a saved workspace session, inspect compact and
-  expanded tool receipts, reveal saved reasoning, pause transcript following,
-  return to the latest output, and see an actionable block when an effect has a
-  durable dispatch marker without a terminal receipt.
-
+    a user can find and restore a saved workspace session, inspect compact and
+    expanded tool receipts, reveal saved reasoning, pause transcript following,
+    scroll the transcript without moving a non-empty draft, return to the latest
+    output, see an actionable block when an effect has a durable dispatch marker
+    without a terminal receipt, and leave with a copyable short resume command.
 target:
-  cmd: ["./bin/local-agent"]
-  cwd: "."
-  env:
-    HOME: "${projectRoot}/.glyphrun/tmp/session-receipts-home"
-    LOCAL_AGENT_AGENTS_DIR: "${projectRoot}/.glyphrun/tmp/session-receipts-agents"
-    LOCAL_AGENT_REDUCED_MOTION: "1"
-    OLLAMA_HOST: "http://127.0.0.1:1"
-
+    cmd: ["./bin/local-agent"]
+    cwd: "."
+    env:
+        HOME: "${projectRoot}/.glyphrun/tmp/session-receipts-home"
+        LOCAL_AGENT_AGENTS_DIR: "${projectRoot}/.glyphrun/tmp/session-receipts-agents"
+        LOCAL_AGENT_REDUCED_MOTION: "1"
+        OLLAMA_HOST: "http://127.0.0.1:1"
 terminal:
-  cols: 110
-  rows: 40
-
+    cols: 110
+    rows: 40
 preconditions:
-  commands:
-    - run: "rm -rf .glyphrun/tmp/session-receipts-home .glyphrun/tmp/session-receipts-agents && mkdir -p .glyphrun/tmp/session-receipts-home/.config/local-agent .glyphrun/tmp/session-receipts-agents && printf '%s\\n' 'model:' '  auto_select: false' > .glyphrun/tmp/session-receipts-home/.config/local-agent/config.yaml && go build -o ./bin/local-agent ./cmd/local-agent"
-      cwd: "."
-      timeoutMs: 30000
-    - run: "go run ./specs/fixtures/session_receipts .glyphrun/tmp/session-receipts-home/.config/local-agent/local-agent.db '${projectRoot}'"
-      cwd: "."
-      timeoutMs: 30000
-
+    commands:
+        - run: "rm -rf .glyphrun/tmp/session-receipts-home .glyphrun/tmp/session-receipts-agents && mkdir -p .glyphrun/tmp/session-receipts-home/.config/local-agent .glyphrun/tmp/session-receipts-agents && printf '%s\\n' 'model:' '  auto_select: false' > .glyphrun/tmp/session-receipts-home/.config/local-agent/config.yaml && go build -o ./bin/local-agent ./cmd/local-agent"
+          cwd: "."
+          timeoutMs: 30000
+        - run: "go run ./specs/fixtures/session_receipts .glyphrun/tmp/session-receipts-home/.config/local-agent/local-agent.db '${projectRoot}'"
+          cwd: "."
+          timeoutMs: 30000
 steps:
-  - wait:
-      screen:
-        contains: "Ask, @mention files, or type /help"
-      timeoutMs: 5000
-  - wait:
-      screen:
-        contains: "try: ollama serve"
-      timeoutMs: 5000
-  - press: "ctrl+p"
-  - wait:
-      screen:
-        contains: "Settings"
-      timeoutMs: 2000
-  - press: "down"
-  - press: "down"
-  - press: "down"
-  - press: "enter"
-  - wait:
-      screen:
-        contains: "Recovery receipt review"
-      timeoutMs: 3000
-  - snapshot: sessions
-  - press: "/"
-  - type: "recovery"
-  - wait:
-      screen:
-        contains: "Filter › recovery"
-      timeoutMs: 2000
-  - wait:
-      screen:
-        contains: "Recovery receipt review"
-      timeoutMs: 2000
-  - snapshot: sessions_filtered
-  - press: "enter"
-  - wait:
-      screen:
-        contains: "Recovery blocked: write_file has a durable dispatch marker"
-      timeoutMs: 3000
-  - snapshot: compact_receipts
-  - press: "t"
-  - wait:
-      screen:
-        contains: "package ui"
-      timeoutMs: 2000
-  - snapshot: expanded_receipts
-  - press: "ctrl+t"
-  - wait:
-      screen:
-        contains: "one successful read and one failed test command"
-      timeoutMs: 2000
-  - snapshot: expanded_reasoning
-  - resize:
-      cols: 110
-      rows: 18
-  - wait:
-      screen:
-        contains: "/recover inspect"
-      timeoutMs: 2000
-  - press: "pgup"
-  - wait:
-      screen:
-        contains: "Follow paused · end latest"
-      timeoutMs: 2000
-  - snapshot: follow_paused
-  - press: "end"
-  - wait:
-      screen:
-        notContains: "Follow paused"
-      timeoutMs: 2000
-  - wait:
-      screen:
-        contains: "Recovery blocked: write_file has a durable dispatch marker"
-      timeoutMs: 2000
-  - snapshot: follow_resumed
-  - press: "ctrl+c"
-  - wait:
-      process:
-        exitCode: 0
-      timeoutMs: 3000
-
+    - wait:
+        screen:
+            contains: "Ask, @mention files, or type /help"
+        timeoutMs: 5000
+    - wait:
+        screen:
+            contains: "try: ollama serve"
+        timeoutMs: 5000
+    - press: "ctrl+p"
+    - wait:
+        screen:
+            contains: "Settings"
+        timeoutMs: 2000
+    - press: "down"
+    - press: "down"
+    - press: "down"
+    - press: "enter"
+    - wait:
+        screen:
+            contains: "Recovery receipt review"
+        timeoutMs: 3000
+    - snapshot: sessions
+    - press: "/"
+    - wait:
+        screen:
+            contains: "Filter ›"
+        timeoutMs: 2000
+    - wait:
+        idle:
+            quietForMs: 50
+        timeoutMs: 2000
+    - type: "recovery"
+    - wait:
+        screen:
+            contains: "Filter › recovery"
+        timeoutMs: 2000
+    - wait:
+        screen:
+            contains: "Recovery receipt review"
+        timeoutMs: 2000
+    - snapshot: sessions_filtered
+    - press: "enter"
+    - wait:
+        screen:
+            contains: "Recovery blocked: write_file has a durable dispatch marker"
+        timeoutMs: 3000
+    - snapshot: compact_receipts
+    - press: "t"
+    - wait:
+        screen:
+            contains: "package ui"
+        timeoutMs: 2000
+    - snapshot: expanded_receipts
+    - press: "ctrl+t"
+    - wait:
+        screen:
+            contains: "one successful read and one failed test command"
+        timeoutMs: 2000
+    - snapshot: expanded_reasoning
+    - resize:
+        cols: 110
+        rows: 18
+    - wait:
+        screen:
+            contains: "/recover inspect"
+        timeoutMs: 2000
+    - type: "draft must stay unchanged while the transcript scrolls"
+    - mouse:
+        x: 10
+        y: 5
+        button: "wheelUp"
+    - wait:
+        screen:
+            contains: "Follow paused · end latest"
+        timeoutMs: 2000
+    - wait:
+        screen:
+            contains: "draft must stay unchanged while the transcript scrolls"
+        timeoutMs: 2000
+    - snapshot: wheel_preserves_draft
+    - press: "end"
+    - wait:
+        screen:
+            contains: "Follow paused · end latest"
+        timeoutMs: 2000
+    - wait:
+        screen:
+            contains: "draft must stay unchanged while the transcript scrolls"
+        timeoutMs: 2000
+    - press: "ctrl+u"
+    - press: "end"
+    - wait:
+        screen:
+            notContains: "Follow paused"
+        timeoutMs: 2000
+    - wait:
+        screen:
+            contains: "Recovery blocked: write_file has a durable dispatch marker"
+        timeoutMs: 2000
+    - snapshot: follow_resumed
+    - press: "ctrl+c"
+    - wait:
+        screen:
+            contains: "Session S41 · Recovery receipt review"
+        timeoutMs: 3000
+    - wait:
+        screen:
+            contains: "local-agent --resume S41"
+        timeoutMs: 3000
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 3000
 outcomes:
-  - id: saved_session_is_discoverable
-    description: the workspace session picker exposes the deterministic saved receipt fixture
-    verify:
-      snapshot:
-        name: sessions
-        mode: text
-  - id: saved_sessions_can_be_filtered
-    description: the Bubbles session filter keeps the matching recovery session selected
-    verify:
-      snapshot:
-        name: sessions_filtered
-        mode: text
-  - id: compact_receipts_preserve_failure_and_recovery_context
-    description: restored receipts show success, failure, and actionable no-retry recovery guidance
-    verify:
-      snapshot:
-        name: compact_receipts
-        mode: text
-  - id: tool_receipts_expand_together
-    description: the transcript exposes saved arguments and bounded results for inspection
-    verify:
-      snapshot:
-        name: expanded_receipts
-        mode: text
-  - id: saved_reasoning_is_inspectable
-    description: the reasoning disclosure can be opened independently from tool receipts
-    verify:
-      snapshot:
-        name: expanded_reasoning
-        mode: text
-  - id: transcript_follow_can_be_paused
-    description: Page Up preserves an earlier transcript position and exposes the End recovery action
-    verify:
-      snapshot:
-        name: follow_paused
-        mode: text
-  - id: transcript_follow_can_resume
-    description: End returns directly to the latest recovery receipt and removes the paused state
-    verify:
-      snapshot:
-        name: follow_resumed
-        mode: text
-  - id: receipt_flow_quits_cleanly
-    description: ctrl+c exits cleanly after restoring and inspecting a saved session
-    verify:
-      process:
-        exitCode: 0
+    - id: saved_session_is_discoverable
+      description: the workspace session picker exposes the deterministic saved receipt fixture
+      verify:
+        snapshot:
+            name: sessions
+            mode: text
+    - id: saved_sessions_can_be_filtered
+      description: the Bubbles session filter keeps the matching recovery session selected
+      verify:
+        snapshot:
+            name: sessions_filtered
+            mode: text
+    - id: compact_receipts_preserve_failure_and_recovery_context
+      description: restored receipts show success, failure, and actionable no-retry recovery guidance
+      verify:
+        snapshot:
+            name: compact_receipts
+            mode: text
+    - id: tool_receipts_expand_together
+      description: the transcript exposes saved arguments and bounded results for inspection
+      verify:
+        snapshot:
+            name: expanded_receipts
+            mode: text
+    - id: saved_reasoning_is_inspectable
+      description: the reasoning disclosure can be opened independently from tool receipts
+      verify:
+        snapshot:
+            name: expanded_reasoning
+            mode: text
+    - id: transcript_wheel_preserves_draft_ownership
+      description: mouse-wheel scrolling pauses transcript following while preserving the exact non-empty composer draft
+      verify:
+        snapshot:
+            name: wheel_preserves_draft
+            mode: text
+    - id: transcript_follow_can_resume
+      description: End returns directly to the latest recovery receipt and removes the paused state
+      verify:
+        snapshot:
+            name: follow_resumed
+            mode: text
+    - id: receipt_flow_quits_cleanly
+      description: ctrl+c exits cleanly with a titled short-handle resume receipt after restoring and inspecting a saved session
+      verify:
+        process:
+            exitCode: 0

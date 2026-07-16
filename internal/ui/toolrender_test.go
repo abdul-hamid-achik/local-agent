@@ -61,7 +61,7 @@ func TestClassifyTool(t *testing.T) {
 		{"forget_key", ToolTypeMemory},
 		{"list_tools", ToolTypeDefault},
 		{"unknown", ToolTypeDefault},
-		{"search", ToolTypeDefault},
+		{"search", ToolTypeSearch},
 	}
 
 	for _, tt := range tests {

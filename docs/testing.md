@@ -80,8 +80,23 @@ self-skip; this task is not a model-quality evaluation.
 Committed scenarios cover normal and minimum terminal sizes, authority modes,
 public CLI parsing, explicit external-file review, inline goal review and
 approvals, goal receipts, the Ollama inventory, composer paste behavior,
-sessions, and Help. Their fixtures are Go programs or repository data, so the
-suite does not require system `sqlite3`, `rg`, or a `scripts/` directory.
+session restore, receipt inspection, saved reasoning, transcript follow
+behavior, settings, and Help. Their fixtures are Go programs or repository
+data, so the suite does not require system `sqlite3`, `rg`, or a `scripts/`
+directory.
+
+When a scenario contract intentionally changes, verify and stamp only that
+changed spec:
+
+```bash
+glyph spec verify specs/<changed>.yml --stamp
+glyph spec verify specs/<changed>.yml --format md
+glyph run specs/<changed>.yml --format md --progress always --parallel 1
+```
+
+The contract hash covers `intent`, `outcomes`, `redaction`, and `coversSymbol`.
+Do not restamp a mismatch merely to make verification pass; review the changed
+contract first.
 
 Refresh snapshots only for an intentional visual change:
 

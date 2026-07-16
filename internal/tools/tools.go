@@ -329,24 +329,46 @@ func LoadSkillToolDef() llm.ToolDef {
 func ConsultExpertsToolDef() llm.ToolDef {
 	return llm.ToolDef{
 		Name:        "consult_experts",
-		Description: "Run a bounded read-only Team, Swarm, or application-level mixture of experts and return independent advisory reports. Use when the user explicitly requests experts or when multiple perspectives materially improve a difficult decision. Child experts cannot call tools or mutate files; the parent remains the coordinator and must verify their claims.",
+		Description: "Run a bounded read-only team, swarm, or application-level MoE of tool-free profiles. Use for explicit expert requests or hard decisions needing distinct perspectives; the parent verifies claims.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"strategy": map[string]any{
 					"type":        "string",
 					"enum":        []string{"team", "swarm", "moe"},
-					"description": "team uses a stable bounded group; swarm maximizes diverse perspectives; moe routes to the best matching profiles.",
+					"description": "team uses a stable group; swarm favors diversity; moe selects best matches.",
 				},
 				"objective": map[string]any{
 					"type":        "string",
-					"description": "The exact bounded question or objective every selected expert should analyze.",
+					"minLength":   1,
+					"maxLength":   32768,
+					"description": "Bounded question every selected expert analyzes.",
 				},
 				"experts": map[string]any{
 					"type":        "array",
-					"items":       map[string]any{"type": "string"},
+					"items":       map[string]any{"type": "string", "minLength": 1, "maxLength": 128},
 					"maxItems":    16,
-					"description": "Optional exact profile names. Team uses exactly these names; Swarm seeds them; MoE uses them as a no-match fallback.",
+					"description": "Optional exact profiles: team exact, swarm seeds, moe fallback.",
+				},
+				"model": map[string]any{
+					"type":        "string",
+					"minLength":   1,
+					"maxLength":   256,
+					"description": "Optional exact default model; host inventory, consent, and resource policy still apply.",
+				},
+				"model_overrides": map[string]any{
+					"type":     "array",
+					"maxItems": 16,
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"expert": map[string]any{"type": "string", "minLength": 1, "maxLength": 128},
+							"model":  map[string]any{"type": "string", "minLength": 1, "maxLength": 256},
+						},
+						"required":             []string{"expert", "model"},
+						"additionalProperties": false,
+					},
+					"description": "Optional exact per-profile models; host policy still applies.",
 				},
 			},
 			"required":             []string{"strategy", "objective"},

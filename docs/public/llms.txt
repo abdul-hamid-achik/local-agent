@@ -16,7 +16,7 @@ and execute reviewed durable goals. It is not an operating-system sandbox.
 - [Command reference](https://local-agent.dev/reference): CLI commands, slash commands, keyboard shortcuts, and automation boundaries.
 - [MCP integrations](https://local-agent.dev/mcp): Supported transports, namespaced tools, approvals, and bounded receipts.
 - [Sessions and memory](https://local-agent.dev/sessions-and-memory): SQLite resume, checkpoints, reasoning, and optional retrieval.
-- [Safety and privacy](https://local-agent.dev/safety): Approval gates, workspace and temporary external-read boundaries, local-only defaults, and known limitations.
+- [Safety and privacy](https://local-agent.dev/safety): Approval gates, workspace and temporary typed external-path boundaries, local-only defaults, and known limitations.
 - [Testing](https://local-agent.dev/testing): Go verification and Glyphrun terminal behavior specs.
 - [Architecture](https://local-agent.dev/architecture): Agent loop, model manager, tool policy, MCP registry, storage, goals, and UI.
 - [Ecosystem](https://local-agent.dev/ecosystem): Related local-first developer tools and evidence systems.

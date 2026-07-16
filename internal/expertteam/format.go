@@ -78,6 +78,9 @@ func (result Result) Format() string {
 	for _, warning := range result.Warnings {
 		collector.Append("resource warning: " + oneLine(warning) + "\n")
 	}
+	// Emit the complete bounded status projection before any advisory prose.
+	// A large early report can therefore never hide later expert outcomes when
+	// the overall tool result reaches its byte limit.
 	for _, expert := range result.Experts {
 		collector.Append(fmt.Sprintf("\n[%s · %s · %s · score %d]\n", oneLine(expert.Name), oneLine(expert.Model), expert.Status, expert.Score))
 		collector.Append("selection: " + oneLine(expert.Reason) + "\n")
@@ -93,8 +96,13 @@ func (result Result) Format() string {
 		}
 		if expert.Status != ExpertCompleted {
 			collector.Append("error: " + oneLine(expert.ErrorCode) + "\n")
+		}
+	}
+	for _, expert := range result.Experts {
+		if expert.Status != ExpertCompleted {
 			continue
 		}
+		collector.Append("\nreport: " + oneLine(expert.Name) + "\n")
 		collector.Append(expert.Report + "\n")
 	}
 	return strings.TrimSpace(collector.String())

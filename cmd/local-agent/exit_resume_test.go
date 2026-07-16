@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -28,12 +29,34 @@ func (m *exitResumeTestModel) SessionResumeInfo() (ui.SessionResumeInfo, bool) {
 func TestWriteSessionResumeMessageUsesCanonicalShortHandle(t *testing.T) {
 	var output bytes.Buffer
 	writeSessionResumeMessage(&output, &exitResumeTestModel{
-		info: ui.SessionResumeInfo{Handle: "s42"},
+		info: ui.SessionResumeInfo{Handle: "s42", Title: "Polish transcript UX"},
 		ok:   true,
 	}, nil)
 
-	if got, want := output.String(), "\nResume this session with:\n  local-agent --resume S42\n"; got != want {
+	if got, want := output.String(), "\nSession S42 · Polish transcript UX\nResume this session with:\n  local-agent --resume S42\n"; got != want {
 		t.Fatalf("resume message = %q, want %q", got, want)
+	}
+}
+
+func TestWriteSessionResumeMessageSanitizesTitleOutsideCommand(t *testing.T) {
+	var output bytes.Buffer
+	writeSessionResumeMessage(&output, &exitResumeTestModel{
+		info: ui.SessionResumeInfo{
+			Handle: "S7",
+			Title:  "Review\x1b]0;owned\x07\nthen deploy\u202e",
+		},
+		ok: true,
+	}, nil)
+
+	got := output.String()
+	if !strings.Contains(got, "Session S7 · Review then deploy") {
+		t.Fatalf("sanitized session label = %q", got)
+	}
+	if strings.Contains(got, "owned") || strings.Contains(got, "\x1b]") || strings.Contains(got, "\u202e") {
+		t.Fatalf("unsafe title content survived: %q", got)
+	}
+	if strings.Count(got, "local-agent --resume S7") != 1 {
+		t.Fatalf("canonical command changed: %q", got)
 	}
 }
 

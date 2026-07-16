@@ -56,20 +56,35 @@ func (a *Agent) preflightConsultExperts(arguments map[string]any) error {
 	if err != nil {
 		return err
 	}
-	if len(arguments) < 2 || len(arguments) > 3 {
-		return errors.New("consult_experts accepts only strategy, objective, and optional experts")
+	if len(arguments) < 2 || len(arguments) > 5 {
+		return errors.New("consult_experts accepts only strategy, objective, experts, model, and model_overrides")
 	}
 	for key := range arguments {
-		if key != "strategy" && key != "objective" && key != "experts" {
+		if key != "strategy" && key != "objective" && key != "experts" && key != "model" && key != "model_overrides" {
 			return errors.New("consult_experts contains an unknown argument")
 		}
 	}
 	if !boundedExpertText(request.Objective, maxExpertObjectiveBytes, false) {
 		return errors.New("objective is empty, invalid, or too large")
 	}
+	expertNamesSeen := make(map[string]struct{}, len(request.ExpertNames))
 	for _, name := range request.ExpertNames {
 		if !boundedExpertText(name, 128, true) || strings.TrimSpace(name) != name || strings.ContainsAny(name, "\r\n") {
 			return errors.New("experts contains an invalid profile name")
+		}
+		key := strings.ToLower(name)
+		if _, duplicate := expertNamesSeen[key]; duplicate {
+			return errors.New("experts contains a duplicate profile name")
+		}
+		expertNamesSeen[key] = struct{}{}
+	}
+	if request.Model != "" && (!boundedExpertText(request.Model, 256, true) || strings.TrimSpace(request.Model) != request.Model) {
+		return errors.New("model contains an invalid exact model name")
+	}
+	for _, override := range request.ModelOverrides {
+		if !boundedExpertText(override.Expert, 128, true) || strings.TrimSpace(override.Expert) != override.Expert ||
+			!boundedExpertText(override.Model, 256, true) || strings.TrimSpace(override.Model) != override.Model {
+			return errors.New("model_overrides contains an invalid expert or model name")
 		}
 	}
 	return nil
@@ -84,6 +99,10 @@ func (a *Agent) handleConsultExperts(ctx context.Context, arguments map[string]a
 }
 
 func (a *Agent) handleConsultExpertsWithBudget(ctx context.Context, arguments map[string]any, maxTotalEvalTokens int) (string, bool, expertteam.Usage, error) {
+	return a.handleConsultExpertsWithBudgetAndProgress(ctx, arguments, maxTotalEvalTokens, nil)
+}
+
+func (a *Agent) handleConsultExpertsWithBudgetAndProgress(ctx context.Context, arguments map[string]any, maxTotalEvalTokens int, observer expertteam.Observer) (string, bool, expertteam.Usage, error) {
 	request, err := expertRequest(arguments)
 	if err != nil {
 		return "error: " + err.Error(), true, expertteam.Usage{}, nil
@@ -95,7 +114,12 @@ func (a *Agent) handleConsultExpertsWithBudget(ctx context.Context, arguments ma
 	if consultant == nil {
 		return "error: expert consultation is unavailable", true, expertteam.Usage{}, nil
 	}
-	result, err := consultant.Consult(ctx, request)
+	var result expertteam.Result
+	if progressConsultant, ok := consultant.(ExpertProgressConsultant); ok {
+		result, err = progressConsultant.ConsultWithProgress(ctx, request, observer)
+	} else {
+		result, err = consultant.Consult(ctx, request)
+	}
 	usage, usageErr := result.ChargedUsage()
 	if usageErr != nil {
 		return "error: expert consultation returned an invalid usage receipt", true, expertteam.Usage{}, usageErr
@@ -136,11 +160,77 @@ func expertRequest(arguments map[string]any) (expertteam.Request, error) {
 	if !ok || strings.TrimSpace(objective) == "" {
 		return expertteam.Request{}, errors.New("objective must be a non-empty string")
 	}
-	names, err := expertNames(arguments["experts"])
+	expertsValue, expertsPresent := arguments["experts"]
+	if expertsPresent && expertsValue == nil {
+		return expertteam.Request{}, errors.New("experts must be an array of profile names")
+	}
+	names, err := expertNames(expertsValue)
 	if err != nil {
 		return expertteam.Request{}, err
 	}
-	return expertteam.Request{Strategy: strategy, Objective: objective, ExpertNames: names}, nil
+	model, err := expertModel(arguments, "model")
+	if err != nil {
+		return expertteam.Request{}, err
+	}
+	overrides, err := expertModelOverrides(arguments)
+	if err != nil {
+		return expertteam.Request{}, err
+	}
+	return expertteam.Request{
+		Strategy: strategy, Objective: objective, ExpertNames: names,
+		Model: model, ModelOverrides: overrides,
+	}, nil
+}
+
+func expertModel(arguments map[string]any, key string) (string, error) {
+	value, exists := arguments[key]
+	if !exists {
+		return "", nil
+	}
+	model, ok := value.(string)
+	if !ok || strings.TrimSpace(model) == "" {
+		return "", errors.New("model must be a non-empty exact model name")
+	}
+	return model, nil
+}
+
+func expertModelOverrides(arguments map[string]any) ([]expertteam.ModelOverride, error) {
+	value, exists := arguments["model_overrides"]
+	if !exists {
+		return nil, nil
+	}
+	values, ok := value.([]any)
+	if !ok {
+		return nil, errors.New("model_overrides must be an array")
+	}
+	if len(values) > expertselector.MaxSelectedExperts {
+		return nil, fmt.Errorf("model_overrides supports at most %d assignments", expertselector.MaxSelectedExperts)
+	}
+	result := make([]expertteam.ModelOverride, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		assignment, ok := value.(map[string]any)
+		if !ok || len(assignment) != 2 {
+			return nil, errors.New("model_overrides must contain only expert/model assignments")
+		}
+		for key := range assignment {
+			if key != "expert" && key != "model" {
+				return nil, errors.New("model_overrides contains an unknown field")
+			}
+		}
+		expert, expertOK := assignment["expert"].(string)
+		model, modelOK := assignment["model"].(string)
+		if !expertOK || !modelOK || strings.TrimSpace(expert) == "" || strings.TrimSpace(model) == "" {
+			return nil, errors.New("model_overrides requires non-empty expert and model strings")
+		}
+		key := strings.ToLower(strings.TrimSpace(expert))
+		if _, duplicate := seen[key]; duplicate {
+			return nil, errors.New("model_overrides contains a duplicate expert")
+		}
+		seen[key] = struct{}{}
+		result = append(result, expertteam.ModelOverride{Expert: expert, Model: model})
+	}
+	return result, nil
 }
 
 func expertNames(value any) ([]string, error) {

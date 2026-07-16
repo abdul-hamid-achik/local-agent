@@ -242,8 +242,11 @@ func (a *Agent) authorityAutoApproves(mode AuthorityMode, call llm.ToolCall, kin
 			if !ok || strings.TrimSpace(path) == "" {
 				return false
 			}
-			_, err := a.resolvePath(path)
-			return err == nil
+			if _, err := a.resolveWorkspacePath(path); err == nil {
+				return true
+			}
+			resolved, err := a.resolveAdditionalWritePath(path)
+			return err == nil && a.additionalWriteAllowsTool(resolved, call.Name)
 		case "bash":
 			command, ok := call.Arguments["command"].(string)
 			return ok && a.autoScopedCommandAllowed(command)
@@ -329,8 +332,11 @@ func (a *Agent) mcpWorkspaceWithinAuthority(call llm.ToolCall) bool {
 	if strings.TrimSpace(workspace) == "" {
 		return false
 	}
-	_, err := a.resolvePath(workspace)
-	return err == nil
+	if _, err := a.resolveWorkspacePath(workspace); err == nil {
+		return true
+	}
+	resolved, err := a.resolveAdditionalWritePath(workspace)
+	return err == nil && a.additionalWriteAllowsWorkspace(resolved)
 }
 
 func (a *Agent) isTrustedLazyMCPHubCall(name string) bool {

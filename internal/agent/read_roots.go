@@ -48,6 +48,7 @@ type ReadPathInspection struct {
 	External        bool
 	AlreadyReadable bool
 	identity        *readPathIdentity
+	physicalInfo    os.FileInfo
 }
 
 type readPathIdentity struct {
@@ -76,6 +77,15 @@ func (inspection *ReadPathInspection) Release() {
 	}
 	inspection.identity.release()
 	inspection.identity = nil
+}
+
+// SamePhysicalIdentity reports whether two successful preflight results name
+// the same existing filesystem object. It lets bounded host policy merge
+// aliases (including hard links and case-insensitive spellings) without
+// exposing inode data or performing a second path-based lookup.
+func (inspection ReadPathInspection) SamePhysicalIdentity(other ReadPathInspection) bool {
+	return inspection.physicalInfo != nil && other.physicalInfo != nil &&
+		os.SameFile(inspection.physicalInfo, other.physicalInfo)
 }
 
 // Release closes the opaque preview/snapshot identity carried by a grant. It
@@ -570,7 +580,7 @@ func (a *Agent) InspectReadPath(path string) (ReadPathInspection, error) {
 		return ReadPathInspection{}, fmt.Errorf("compare read path with writable workspace: %w", relErr)
 	} else if inside {
 		identity.release()
-		return ReadPathInspection{Path: canonical, Kind: kind, AlreadyReadable: true}, nil
+		return ReadPathInspection{Path: canonical, Kind: kind, AlreadyReadable: true, physicalInfo: info}, nil
 	}
 	if kind == ReadGrantDirectory {
 		overlaps, overlapErr := physicalPathsOverlap(workspace, canonical)
@@ -584,7 +594,7 @@ func (a *Agent) InspectReadPath(path string) (ReadPathInspection, error) {
 		}
 	}
 
-	inspection := ReadPathInspection{Path: canonical, Kind: kind, External: true, identity: identity}
+	inspection := ReadPathInspection{Path: canonical, Kind: kind, External: true, identity: identity, physicalInfo: info}
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	if kind == ReadGrantExactFile {
@@ -1169,7 +1179,7 @@ func (a *Agent) resolveReadablePath(path string) (readablePath, error) {
 	if err != nil {
 		return readablePath{}, err
 	}
-	resolved, workspaceErr := a.resolvePath(path)
+	resolved, workspaceErr := a.resolveWorkspacePath(path)
 	if workspaceErr == nil {
 		relative, relativeErr := pinnedWorkspace.relative(resolved)
 		if relativeErr != nil {
@@ -1179,6 +1189,18 @@ func (a *Agent) resolveReadablePath(path string) (readablePath, error) {
 		return readablePath{absolute: resolved, relative: relative, workspace: pinnedWorkspace}, nil
 	}
 	_ = pinnedWorkspace.Close()
+
+	// A temporary write authority necessarily includes read access to the same
+	// exact scope so edit previews, grep/read tools, and post-write verification
+	// can use the same pinned boundary. This does not make sibling paths under an
+	// exact-file grant readable.
+	if _, writeErr := a.resolveAdditionalWritePath(path); writeErr == nil {
+		writable, absolute, relative, openErr := a.openWritableRootForPath(path)
+		if openErr != nil {
+			return readablePath{}, openErr
+		}
+		return readablePath{absolute: absolute, relative: relative, workspace: writable}, nil
+	}
 
 	workspace, err := a.canonicalWorkDir()
 	if err != nil {

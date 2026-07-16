@@ -8,6 +8,7 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/agent"
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
 	"github.com/abdul-hamid-achik/local-agent/internal/ecosystem"
+	"github.com/abdul-hamid-achik/local-agent/internal/expertteam"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 	"github.com/abdul-hamid-achik/local-agent/internal/permission"
 )
@@ -46,6 +47,14 @@ type ToolCallResultMsg struct {
 	IsError    bool
 	Duration   time.Duration
 	Projection ecosystem.ToolProjection
+}
+
+// ExpertProgressMsg carries one already bounded scheduler event for the exact
+// consult_experts call identified by CallID. It contains no prompt, objective,
+// report, reasoning, provider error prose, or arbitrary metadata.
+type ExpertProgressMsg struct {
+	CallID string
+	Event  expertteam.ProgressEvent
 }
 
 // ErrorMsg reports an error.
@@ -115,8 +124,13 @@ type ContextCompactionFinishedMsg struct{}
 
 // AgentDoneMsg signals the agent loop has completed.
 type AgentDoneMsg struct {
-	TurnID string
-	Err    error
+	// TurnID is the logical user/Goal turn identity. SegmentTurnID is the
+	// execution-ledger identity used by the just-finished AUTO segment. They are
+	// equal for ordinary turns; a productive AUTO checkpoint keeps TurnID stable
+	// while continuing under a fresh SegmentTurnID.
+	TurnID        string
+	SegmentTurnID string
+	Err           error
 }
 
 // ShutdownMsg requests a graceful stop. Active turns are cancelled and joined
@@ -257,10 +271,15 @@ type ReadScopeResultMsg struct {
 	Kind        string
 	Count       int
 	Grants      []agent.ReadGrant
+	WriteGrants []agent.WriteGrant
 	AutoResume  bool
 	RolledBack  int
 	RollbackErr error
 	Err         error
+	// Rollback and Finalize are process-local transaction handles. They never
+	// enter transcript/session state; Update consumes exactly one of them.
+	Rollback func() (int, error)
+	Finalize func()
 }
 
 // ReadScopePreviewResultMsg completes canonicalization and read-only boundary
@@ -282,6 +301,9 @@ type PromptPathPreflightResultMsg struct {
 	Token                  uint64
 	Draft                  string
 	Grants                 []agent.ReadGrant
+	WriteGrants            []agent.WriteGrant
+	UnavailableWrites      []string
+	Authority              Mode
 	MoreCandidates         bool
 	CandidateLimitExceeded bool
 }

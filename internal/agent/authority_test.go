@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -33,6 +34,47 @@ func TestAuthorityModeFailsClosedAndSnapshotsTypedValues(t *testing.T) {
 	ag.SetAuthorityMode(AuthorityMode(255))
 	if got := ag.AuthorityMode(); got != AuthorityNormal {
 		t.Fatalf("invalid authority widened to %v", got)
+	}
+}
+
+func TestBuiltinShellExecutionKindUsesAdmittedHostEffect(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("AUTO shell catalog requires a POSIX shell")
+	}
+	workspace := t.TempDir()
+	hostBin := t.TempDir()
+	for _, name := range []string{"go", "mkdir", "sort"} {
+		if err := os.WriteFile(filepath.Join(hostBin, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", hostBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	ag := New(nil, nil, 4096)
+	ag.SetWorkDir(workspace)
+
+	tests := []struct {
+		command string
+		want    executionpkg.EffectClass
+	}{
+		{command: "pwd", want: executionpkg.EffectReadOnly},
+		{command: "sort input.txt", want: executionpkg.EffectReadOnly},
+		{command: "sort -o output.txt input.txt", want: executionpkg.Effectful},
+		{command: "mkdir generated", want: executionpkg.Effectful},
+		{command: "go test ./...", want: executionpkg.Effectful},
+		{command: "curl https://example.test", want: executionpkg.EffectUnknown},
+	}
+	for _, test := range tests {
+		kind, effect := ag.executionKindForCall(llm.ToolCall{
+			Name: "bash", Arguments: map[string]any{"command": test.command},
+		})
+		if kind != executionpkg.KindBuiltin || effect != test.want {
+			t.Errorf("bash %q = %s/%s, want builtin/%s", test.command, kind, effect, test.want)
+		}
+	}
+
+	_, effect := ag.executionKindForCall(llm.ToolCall{Name: "bash"})
+	if effect != executionpkg.EffectUnknown {
+		t.Fatalf("bash without an exact command = %s, want unknown", effect)
 	}
 }
 

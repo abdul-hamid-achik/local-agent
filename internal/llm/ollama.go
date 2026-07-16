@@ -81,6 +81,7 @@ type ollamaChatRequest struct {
 	Stream   bool            `json:"stream"`
 	Tools    []ollamaTool    `json:"tools,omitempty"`
 	Options  map[string]any  `json:"options,omitempty"`
+	Think    *bool           `json:"think,omitempty"`
 }
 
 type ollamaChatResponse struct {
@@ -288,6 +289,10 @@ func (o *OllamaClient) ChatStream(ctx context.Context, opts ChatOptions, fn func
 		Stream:   true,
 		Tools:    convertTools(opts.Tools),
 		Options:  options,
+	}
+	if opts.DisableReasoning {
+		disabled := false
+		request.Think = &disabled
 	}
 
 	sawDone := false

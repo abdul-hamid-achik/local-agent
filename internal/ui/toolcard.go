@@ -39,18 +39,29 @@ const (
 
 // ToolCard is a fancy tool execution display component.
 type ToolCard struct {
-	ID         string
-	Name       string
-	Kind       ToolCardKind
-	State      ToolCardState
-	Summary    string
-	Args       string
-	Result     string
-	StartTime  time.Time
-	Duration   time.Duration
-	Expanded   bool
-	Projection ecosystem.ToolProjection
-	Styles     ToolCardStyles
+	ID      string
+	Name    string
+	Kind    ToolCardKind
+	State   ToolCardState
+	Summary string
+	Args    string
+	Result  string
+	// ResultLanguage is a bounded lexer alias derived from trusted host metadata
+	// while the tool call is active. It never contains a path or result bytes.
+	ResultLanguage string
+	StartTime      time.Time
+	Duration       time.Duration
+	Expanded       bool
+	IsDark         bool
+	// ExpertProgress is the bounded host projection for the exact built-in
+	// consultation call. The adjacent cache avoids rebuilding its multi-line
+	// live surface on every spinner tick.
+	ExpertProgress              *ExpertProgressState
+	expertProgressCache         string
+	expertProgressCacheWidth    int
+	expertProgressCacheSequence uint64
+	Projection                  ecosystem.ToolProjection
+	Styles                      ToolCardStyles
 }
 
 // ToolCardStyles holds styles for the tool card.
@@ -72,6 +83,9 @@ type ToolCardStyles struct {
 	DiffAdded       lipgloss.Style
 	DiffRemoved     lipgloss.Style
 	DiffHeader      lipgloss.Style
+	SearchPath      lipgloss.Style
+	SearchLocation  lipgloss.Style
+	SearchMatch     lipgloss.Style
 }
 
 // NewToolCardStyles creates styles based on theme.
@@ -96,6 +110,9 @@ func NewToolCardStyles(isDark bool) ToolCardStyles {
 		DiffAdded:       lipgloss.NewStyle().Foreground(palette.Success),
 		DiffRemoved:     lipgloss.NewStyle().Foreground(palette.Error),
 		DiffHeader:      lipgloss.NewStyle().Foreground(palette.Accent),
+		SearchPath:      lipgloss.NewStyle().Foreground(palette.Accent),
+		SearchLocation:  lipgloss.NewStyle().Foreground(palette.Dim),
+		SearchMatch:     lipgloss.NewStyle().Foreground(palette.Special),
 	}
 }
 
@@ -105,13 +122,18 @@ func NewToolCard(name string, kind ToolCardKind, isDark bool) ToolCard {
 		Name:   name,
 		Kind:   kind,
 		State:  ToolCardRunning,
+		IsDark: isDark,
 		Styles: NewToolCardStyles(isDark),
 	}
 }
 
 // SetDark updates the theme.
 func (c *ToolCard) SetDark(isDark bool) {
+	c.IsDark = isDark
 	c.Styles = NewToolCardStyles(isDark)
+	if c.ExpertProgress != nil && c.expertProgressCacheWidth > 0 {
+		c.setExpertProgress(c.ExpertProgress, c.expertProgressCacheWidth)
+	}
 }
 
 // SetSummary stores a bounded, single-line semantic summary for compact and
@@ -220,6 +242,13 @@ func (c ToolCard) ViewWithActivity(width int, activityGlyph string, elapsed time
 		if glyph == "" || lipgloss.Width(glyph) > inner {
 			glyph = titleStyle.Render(c.statusGlyph())
 		}
+		if c.ExpertProgress != nil && inner >= lipgloss.Width(glyph)+2 {
+			disclosure := "▸"
+			if c.Expanded {
+				disclosure = "▾"
+			}
+			glyph = c.Styles.Dimmed.Render(disclosure) + " " + glyph
+		}
 		if elapsed > 0 {
 			meta = c.Styles.Elapsed.Render(formatDuration(elapsed))
 		}
@@ -289,6 +318,11 @@ func (c ToolCard) ViewWithActivity(width int, activityGlyph string, elapsed time
 
 	lines := []string{header}
 	safeResult := boundedToolCardResult(c.Result)
+	if c.Expanded && c.ExpertProgress != nil {
+		if details := c.expertProgressDetails(inner); details != "" {
+			lines = append(lines, strings.Split(details, "\n")...)
+		}
+	}
 
 	if c.Expanded && c.State != ToolCardRunning {
 		if presentation.differsFromRaw() {
@@ -335,14 +369,12 @@ func (c ToolCard) ViewWithActivity(width int, activityGlyph string, elapsed time
 		result := strings.TrimRight(safeResult, "\n")
 		if result != "" {
 			isDiff := looksLikeUnifiedDiff(result)
-			for _, resultLine := range strings.Split(result, "\n") {
-				line := truncateDisplay(resultLine, inner)
-				if isDiff {
-					line = c.renderUnifiedDiffResultLine(line)
-				} else {
-					line = c.Styles.Result.Render(line)
+			if isDiff {
+				for _, resultLine := range strings.Split(result, "\n") {
+					lines = append(lines, c.renderUnifiedDiffResultLine(truncateDisplay(resultLine, inner)))
 				}
-				lines = append(lines, line)
+			} else {
+				lines = append(lines, c.renderSemanticResultLines(result, inner)...)
 			}
 		}
 	}

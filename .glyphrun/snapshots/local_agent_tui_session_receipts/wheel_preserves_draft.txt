@@ -1,0 +1,17 @@
+  │ args: path=internal/ui/view.go
+  │ package ui
+  │
+  │ func renderFixture() string { return "ready" }
+  │ ▾ ✗ Run failed (310ms)
+  │ tool: bash
+  │ args: command=go test ./internal/ui
+  │ exit status 1: fixture regression
+
+
+    The read completed, the test failure is visible, and the interrupted effect needs inspection.
+
+  notice · Restored session S41 · Recovery receipt review
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  S41 · Recovery receipt review · Follow paused · end latest
+▏❯ draft must stay unchanged while the transcript scrolls

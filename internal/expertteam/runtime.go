@@ -28,6 +28,8 @@ const (
 	maxObjectiveBytes    = 32 * 1024
 	maxSystemPromptBytes = 16 * 1024
 	maxExpertNames       = expertselector.MaxSelectedExperts
+	maxExpertNameBytes   = 128
+	maxModelNameBytes    = 256
 )
 
 var (
@@ -79,10 +81,23 @@ type Request struct {
 	Strategy    expertselector.Strategy
 	Objective   string
 	ExpertNames []string
+	// Model is an optional exact default model for every selected expert. It is
+	// routing intent only: the ModelRunner still owns inventory, cloud consent,
+	// context, residency, and concurrency admission.
+	Model string
+	// ModelOverrides apply exact per-profile model choices. They are normalized
+	// and bounded host-owned values, never an arbitrary downstream map.
+	ModelOverrides []ModelOverride
 	// MaxTotalEvalTokens is a host-owned cap shared by every selected expert.
 	// Zero retains the runtime's ordinary per-expert caps. This field is never
 	// accepted from model tool arguments.
 	MaxTotalEvalTokens int
+}
+
+// ModelOverride assigns one exact model to one exact selected expert.
+type ModelOverride struct {
+	Expert string
+	Model  string
 }
 
 type ExpertStatus string
@@ -91,6 +106,44 @@ const (
 	ExpertCompleted ExpertStatus = "completed"
 	ExpertFailed    ExpertStatus = "failed"
 )
+
+// ProgressPhase is a host-authored lifecycle state for one bounded expert
+// consultation. It deliberately excludes provider text and private reasoning.
+type ProgressPhase string
+
+const (
+	ProgressPlanned   ProgressPhase = "planned"
+	ProgressStarted   ProgressPhase = "started"
+	ProgressCompleted ProgressPhase = "completed"
+	ProgressFailed    ProgressPhase = "failed"
+)
+
+// ProgressEvent is the complete persistence-safe progress projection. The
+// Agent adds tool-call correlation when forwarding it; the runtime never sees
+// or stores a call ID. No objective, report, prompt, path, raw provider error,
+// or reasoning content is represented here.
+type ProgressEvent struct {
+	Sequence    uint64
+	Phase       ProgressPhase
+	Strategy    expertselector.Strategy
+	Total       int
+	Parallelism int
+	Running     int
+	Queued      int
+	Completed   int
+	Failed      int
+	ExpertIndex int
+	Expert      string
+	Model       string
+	Location    llm.OllamaModelLocation
+	Status      ExpertStatus
+	ErrorCode   string
+	EvalTokens  int
+}
+
+// Observer receives monotonic, bounded progress events synchronously from the
+// consultation scheduler. Callers should return promptly.
+type Observer func(ProgressEvent)
 
 // ExpertReceipt is a bounded advisory result. ErrorCode is host-authored and
 // never contains raw provider errors, prompts, paths, or tool output.
@@ -194,6 +247,12 @@ func (r *Runtime) ProfileCount() int {
 // the selected reports with common cancellation. It returns partial receipts
 // when at least one expert completes.
 func (r *Runtime) Consult(ctx context.Context, request Request) (Result, error) {
+	return r.ConsultWithProgress(ctx, request, nil)
+}
+
+// ConsultWithProgress is Consult plus an optional host-owned progress sink.
+// Consult remains the stable compatibility surface for existing embedders.
+func (r *Runtime) ConsultWithProgress(ctx context.Context, request Request, observer Observer) (Result, error) {
 	if r == nil || r.runner == nil {
 		return Result{}, ErrUnavailable
 	}
@@ -244,29 +303,30 @@ func (r *Runtime) Consult(ctx context.Context, request Request) (Result, error) 
 	if err != nil {
 		return Result{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
 	}
+	if request.MaxTotalEvalTokens > 0 && len(selections) > request.MaxTotalEvalTokens {
+		// Every dispatched expert needs at least one evaluation token. Prefer the
+		// selector's deterministic ordering when the remaining parent budget cannot
+		// admit the full logical fanout. Model overrides are validated against this
+		// final selected set, so a dropped expert cannot retain a hidden assignment.
+		selections = selections[:request.MaxTotalEvalTokens]
+	}
 
 	selected := make([]selectedExpert, 0, len(selections))
+	overrides, err := validatedModelOverrides(request, byName, selections)
+	if err != nil {
+		return Result{}, err
+	}
 	for _, selection := range selections {
 		profile, ok := byName[profileKey(selection.Profile.Name)]
 		if !ok {
 			return Result{}, fmt.Errorf("%w: selected profile disappeared", ErrUnavailable)
 		}
-		model := strings.TrimSpace(profile.Model)
-		if model == "" {
-			model = currentModel
-		}
+		model := selectedModel(request, profile, overrides, currentModel)
 		selected = append(selected, selectedExpert{
 			profile: profile, model: model, location: llm.OllamaModelLocationUnknown,
 			reason: selection.Reason, score: selection.Score,
 		})
 	}
-	if request.MaxTotalEvalTokens > 0 && len(selected) > request.MaxTotalEvalTokens {
-		// Every dispatched expert needs at least one evaluation token. Prefer the
-		// selector's deterministic ordering when the remaining parent budget cannot
-		// admit the full logical fanout.
-		selected = selected[:request.MaxTotalEvalTokens]
-	}
-
 	modelSnapshot, err := r.runner.PrepareExpertModels(ctx, selectedModelNames(selected))
 	if err != nil {
 		return Result{}, fmt.Errorf("%w: live model snapshot failed: %v", ErrUnavailable, err)
@@ -309,8 +369,10 @@ func (r *Runtime) Consult(ctx context.Context, request Request) (Result, error) 
 	parallelism = max(1, min(parallelism, len(selected)))
 	distinctParallelism = max(1, min(distinctParallelism, distinctModelCount(selected)))
 	evalLimits := allocateEvalLimits(len(selected), request.MaxTotalEvalTokens, r.opts.MaxEvalTokens)
+	progress := newProgressEmitter(observer, request.Strategy, selected, parallelism)
+	progress.planned()
 
-	receipts, completed, err := r.runSelected(ctx, request.Objective, selected, evalLimits, parallelism, distinctParallelism, assessment.Profile.ThreadsPerInference)
+	receipts, completed, err := r.runSelected(ctx, request.Objective, selected, evalLimits, parallelism, distinctParallelism, assessment.Profile.ThreadsPerInference, progress)
 	warnings := append([]string(nil), assessment.Profile.Warnings...)
 	if fanoutReduced {
 		warnings = append(warnings, "expert fan-out was reduced to fit the current host resource budget")
@@ -332,6 +394,41 @@ func (r *Runtime) Consult(ctx context.Context, request Request) (Result, error) 
 		return result, ErrAllExpertsFailed
 	}
 	return result, nil
+}
+
+func selectedModel(request Request, profile Profile, overrides map[string]string, current string) string {
+	if model := overrides[profileKey(profile.Name)]; model != "" {
+		return model
+	}
+	if request.Model != "" {
+		return request.Model
+	}
+	if profile.Model != "" {
+		return profile.Model
+	}
+	return current
+}
+
+func validatedModelOverrides(request Request, profiles map[string]Profile, selections []expertselector.Selection) (map[string]string, error) {
+	if len(request.ModelOverrides) == 0 {
+		return nil, nil
+	}
+	selected := make(map[string]struct{}, len(selections))
+	for _, selection := range selections {
+		selected[profileKey(selection.Profile.Name)] = struct{}{}
+	}
+	overrides := make(map[string]string, len(request.ModelOverrides))
+	for _, override := range request.ModelOverrides {
+		key := profileKey(override.Expert)
+		if _, exists := profiles[key]; !exists {
+			return nil, fmt.Errorf("%w: model override names an unknown expert", ErrInvalidRequest)
+		}
+		if _, exists := selected[key]; !exists {
+			return nil, fmt.Errorf("%w: model override names an unselected expert", ErrInvalidRequest)
+		}
+		overrides[key] = override.Model
+	}
+	return overrides, nil
 }
 
 type selectedExpert struct {
@@ -430,7 +527,96 @@ type expertOutcome struct {
 	receipt ExpertReceipt
 }
 
-func (r *Runtime) runSelected(ctx context.Context, objective string, selected []selectedExpert, evalLimits []int, parallelism, distinctParallelism, numThread int) ([]ExpertReceipt, int, error) {
+type progressEmitter struct {
+	observer    Observer
+	sequence    uint64
+	strategy    expertselector.Strategy
+	selected    []selectedExpert
+	parallelism int
+	running     int
+	queued      int
+	completed   int
+	failed      int
+}
+
+func newProgressEmitter(observer Observer, strategy expertselector.Strategy, selected []selectedExpert, parallelism int) *progressEmitter {
+	return &progressEmitter{
+		observer: observer, strategy: strategy, selected: append([]selectedExpert(nil), selected...),
+		parallelism: parallelism, queued: len(selected),
+	}
+}
+
+func (emitter *progressEmitter) planned() {
+	if emitter == nil {
+		return
+	}
+	emitter.emit(ProgressEvent{Phase: ProgressPlanned, ExpertIndex: -1})
+}
+
+func (emitter *progressEmitter) started(index int) {
+	if emitter == nil {
+		return
+	}
+	emitter.queued = max(0, emitter.queued-1)
+	emitter.running++
+	emitter.emit(emitter.expertEvent(index, ProgressStarted, ExpertReceipt{}))
+}
+
+func (emitter *progressEmitter) settled(index int, receipt ExpertReceipt) {
+	if emitter == nil {
+		return
+	}
+	emitter.running = max(0, emitter.running-1)
+	phase := ProgressFailed
+	if receipt.Status == ExpertCompleted {
+		emitter.completed++
+		phase = ProgressCompleted
+	} else {
+		emitter.failed++
+	}
+	emitter.emit(emitter.expertEvent(index, phase, receipt))
+}
+
+func (emitter *progressEmitter) failedBeforeStart(index int, receipt ExpertReceipt) {
+	if emitter == nil {
+		return
+	}
+	emitter.queued = max(0, emitter.queued-1)
+	emitter.failed++
+	emitter.emit(emitter.expertEvent(index, ProgressFailed, receipt))
+}
+
+func (emitter *progressEmitter) expertEvent(index int, phase ProgressPhase, receipt ExpertReceipt) ProgressEvent {
+	event := ProgressEvent{Phase: phase, ExpertIndex: index}
+	if index >= 0 && index < len(emitter.selected) {
+		selected := emitter.selected[index]
+		event.Expert = selected.profile.Name
+		event.Model = selected.model
+		event.Location = selected.location
+	}
+	event.Status = receipt.Status
+	event.ErrorCode = receipt.ErrorCode
+	event.EvalTokens = receipt.ChargedEvalTokens
+	return event
+}
+
+func (emitter *progressEmitter) emit(event ProgressEvent) {
+	if emitter == nil || emitter.observer == nil {
+		return
+	}
+	emitter.sequence++
+	event.Sequence = emitter.sequence
+	event.Strategy = emitter.strategy
+	event.Total = len(emitter.selected)
+	event.Parallelism = emitter.parallelism
+	event.Running = emitter.running
+	event.Queued = emitter.queued
+	event.Completed = emitter.completed
+	event.Failed = emitter.failed
+	emitter.observer(event)
+}
+
+func (r *Runtime) runSelected(ctx context.Context, objective string, selected []selectedExpert, evalLimits []int, parallelism, distinctParallelism, numThread int, progress *progressEmitter) ([]ExpertReceipt, int, error) {
 	receipts := make([]ExpertReceipt, len(selected))
 	parallelism = max(1, min(parallelism, len(selected)))
 	distinctParallelism = max(1, min(distinctParallelism, distinctModelCount(selected)))
@@ -444,6 +630,7 @@ func (r *Runtime) runSelected(ctx context.Context, objective string, selected []
 	cancelPending := func(err error) {
 		for _, index := range pending {
 			receipts[index] = failedReceipt(selected[index], errorCode(err))
+			progress.failedBeforeStart(index, receipts[index])
 		}
 		pending = nil
 	}
@@ -462,6 +649,7 @@ func (r *Runtime) runSelected(ctx context.Context, objective string, selected []
 			modelKey := canonicalModelKey(selected[index].model)
 			active++
 			activeModels[modelKey]++
+			progress.started(index)
 			go func() {
 				outcomes <- expertOutcome{
 					index:   index,
@@ -488,6 +676,7 @@ func (r *Runtime) runSelected(ctx context.Context, objective string, selected []
 		}
 		receipts[outcome.index] = outcome.receipt
 		active--
+		progress.settled(outcome.index, outcome.receipt)
 		modelKey := canonicalModelKey(selected[outcome.index].model)
 		activeModels[modelKey]--
 		if activeModels[modelKey] == 0 {
@@ -530,7 +719,8 @@ func (r *Runtime) runExpert(parent context.Context, objective string, selected s
 	err := r.runner.ChatStreamForModel(ctx, selected.model, llm.ChatOptions{
 		System:   expertSystemPrompt(selected.profile),
 		Messages: []llm.Message{{Role: "user", Content: objective}},
-		Tools:    nil, MaxEvalTokens: maxEvalTokens, NumThread: numThread, ExpectedContext: expected,
+		Tools:    nil, MaxEvalTokens: maxEvalTokens, DisableReasoning: true,
+		NumThread: numThread, ExpectedContext: expected,
 	}, func(chunk llm.StreamChunk) error {
 		callbackSeen = true
 		if err := ctx.Err(); err != nil {
@@ -580,7 +770,10 @@ func (r *Runtime) runExpert(parent context.Context, objective string, selected s
 	}
 	receipt.Report = strings.TrimSpace(collector.String())
 	if receipt.Report == "" {
-		failed := failedReceipt(selected, "empty_report")
+		// Provider-native reasoning is never a report and is intentionally not
+		// collected. Even when a provider ignores DisableReasoning, fail with a
+		// host-owned code instead of exposing or persisting private reasoning.
+		failed := failedReceipt(selected, "no_visible_report")
 		failed.EvalTokens = receipt.EvalTokens
 		failed.PromptEvalTokens = receipt.PromptEvalTokens
 		failed.ChargedEvalTokens = receipt.ChargedEvalTokens
@@ -744,13 +937,37 @@ func validateRequest(request Request) error {
 	if len(request.ExpertNames) > maxExpertNames {
 		return fmt.Errorf("%w: too many expert names", ErrInvalidRequest)
 	}
+	if !boundedSingleLine(request.Model, maxModelNameBytes, true) {
+		return fmt.Errorf("%w: default model name is invalid", ErrInvalidRequest)
+	}
+	if len(request.ModelOverrides) > maxExpertNames {
+		return fmt.Errorf("%w: too many model overrides", ErrInvalidRequest)
+	}
 	if request.MaxTotalEvalTokens < 0 {
 		return fmt.Errorf("%w: total evaluation budget must not be negative", ErrInvalidRequest)
 	}
+	experts := make(map[string]struct{}, len(request.ExpertNames))
 	for _, name := range request.ExpertNames {
-		if !boundedSingleLine(name, 128, false) {
+		if !boundedSingleLine(name, maxExpertNameBytes, false) {
 			return fmt.Errorf("%w: expert name is invalid", ErrInvalidRequest)
 		}
+		key := profileKey(name)
+		if _, duplicate := experts[key]; duplicate {
+			return fmt.Errorf("%w: duplicate expert name", ErrInvalidRequest)
+		}
+		experts[key] = struct{}{}
+	}
+	overrides := make(map[string]struct{}, len(request.ModelOverrides))
+	for _, override := range request.ModelOverrides {
+		if !boundedSingleLine(override.Expert, maxExpertNameBytes, false) ||
+			!boundedSingleLine(override.Model, maxModelNameBytes, false) {
+			return fmt.Errorf("%w: model override is invalid", ErrInvalidRequest)
+		}
+		key := profileKey(override.Expert)
+		if _, duplicate := overrides[key]; duplicate {
+			return fmt.Errorf("%w: duplicate model override", ErrInvalidRequest)
+		}
+		overrides[key] = struct{}{}
 	}
 	return nil
 }

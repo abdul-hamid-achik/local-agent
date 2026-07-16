@@ -87,9 +87,9 @@ tasks:
       - go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 
   glyphrun-cli:
-    desc: Run release-critical CLI and external-read contracts with Glyphrun
+    desc: Run release-critical CLI, AUTO, and external-scope contracts with Glyphrun
     cmds:
-      - glyph run specs/cli_flags.yml specs/cli_skip_approvals.yml specs/tui_external_read.yml --format md --progress auto --parallel 1
+      - glyph run specs/cli_flags.yml specs/cli_skip_approvals.yml specs/tui_auto_commands.yml specs/tui_external_read.yml --format md --progress auto --parallel 1
 
   glyphrun-contracts:
     desc: Verify every committed Glyphrun contract hash

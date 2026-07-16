@@ -428,6 +428,21 @@ func (a *Agent) executionKindForCall(call llm.ToolCall) (executionpkg.Kind, exec
 		case "grep", "read", "glob", "ls", "find", "diff", "exists", "load_skill", "consult_experts":
 			return executionpkg.KindBuiltin, executionpkg.EffectReadOnly
 		case "bash":
+			// Shell remains approval-gated unless the separate AUTO policy admits
+			// its exact static command. Once admitted, retain that host-owned effect
+			// in the durable ledger instead of collapsing every shell dispatch to
+			// unknown. Hook-mutated arguments are reclassified before execution.
+			if command, ok := call.Arguments["command"].(string); ok {
+				assessment := a.assessAutoScopedCommand(command)
+				if assessment.admitted() {
+					switch assessment.effect {
+					case autoCommandEffectReadOnly:
+						return executionpkg.KindBuiltin, executionpkg.EffectReadOnly
+					case autoCommandEffectWorkspaceMutation, autoCommandEffectWorkspaceExecution:
+						return executionpkg.KindBuiltin, executionpkg.Effectful
+					}
+				}
+			}
 			return executionpkg.KindBuiltin, executionpkg.EffectUnknown
 		default:
 			return executionpkg.KindBuiltin, executionpkg.Effectful

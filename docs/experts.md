@@ -41,6 +41,32 @@ consultation. Skills and `mcp_servers` do not: expert calls deliberately receive
 no tools. The directory defaults to `~/.agents`; `agents.dir` and
 `LOCAL_AGENT_AGENTS_DIR` can select another shared root.
 
+## Exact model assignment
+
+An expert request can choose one model for the whole consultation with `model`
+and override individual selected profiles with `model_overrides`. Resolution is
+deterministic: a per-profile override wins, then the request-wide model, then
+the model configured on the profile, and finally the current parent model.
+
+```json
+{
+  "strategy": "team",
+  "objective": "Review the release boundary",
+  "experts": ["critic", "verifier"],
+  "model": "qwen3.5:2b",
+  "model_overrides": [
+    { "expert": "critic", "model": "qwen3.5:0.8b" }
+  ]
+}
+```
+
+Overrides must name known profiles selected in the same request. Unknown or
+unselected profile names fail closed. A requested model is routing intent, not
+an authority grant: it must still pass the current model inventory,
+`local_only` and remote-execution rules, Cloud consent, context admission, and
+resource admission. A natural-language request affects routing only when the
+parent model emits a valid exact `consult_experts` request.
+
 ## Resource adaptation
 
 Before each consultation, the host refreshes Ollama's live model inventory and
@@ -119,6 +145,13 @@ approvals, file authority, and verification.
 The Runtime overlay reports expert availability, profile count, and the
 read-only boundary explicitly. That status describes host capability only; it
 does not mean a consultation ran or produced verified evidence.
+
+An active consultation occupies one expandable transcript card. Its summary
+shows finished, active, and queued work; expanded details show each profile,
+exact model, host-verified execution location, status, and charged evaluation
+tokens. This progress projection is bounded: it does not contain the objective,
+report body, provider prose, or private reasoning. If the host cannot verify an
+execution location, the UI reports it as unknown.
 
 Reports are advisory tool output, not evidence. A completed expert inference
 does not prove that a claim is correct or that an external action succeeded.

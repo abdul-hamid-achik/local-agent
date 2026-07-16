@@ -323,13 +323,14 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 		loadedContext = prependContinuationContext(baseLoadedContext, continuationPreview)
 	}
 	readGrants := a.ReadGrants()
+	writeGrants := a.WriteGrants()
 	var system string
 	emptyTerminalRepairPending := false
 	rebuildSystem := func() {
-		system = buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadGrants(
+		system = buildSystemPromptForModelBudgetContextWithSkillCatalogAndPathGrants(
 			ctx, modePrefix, tools, a.skillContent, skillCatalog, loadedContext,
 			a.memoryStore, iceContext, turnFilesystem.workDir, turnFilesystem.ignoreContent,
-			turnModel, turnNumCtx, readGrants,
+			turnModel, turnNumCtx, readGrants, writeGrants,
 		)
 		if emptyTerminalRepairPending {
 			system += emptyTerminalRepairPrompt
@@ -361,6 +362,10 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 	var queuedAutoContinuation *preparedAutoContinuation
 
 	maxIters := a.MaxIterationsForAuthority(authorityMode)
+	var autoProgress *autoTurnProgress
+	if authorityMode == AuthorityAutoScoped {
+		autoProgress = newAutoTurnProgress()
+	}
 
 	// A process-independent turn ID threads through logs and every durable tool
 	// execution identity for this turn.
@@ -661,6 +666,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 			out.Error(err.Error())
 			return err
 		}
+		autoProgress.beginIteration(len(toolCalls))
 		if limits.MaxEvalTokens > 0 && totalEvalTokens > limits.MaxEvalTokens {
 			// A provider that violates num_predict has already crossed the requested
 			// generation boundary. Preserve only its text and stop before creating
@@ -1131,7 +1137,13 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 					}
 					var usage expertteam.Usage
 					var usageErr error
-					result, isErr, usage, usageErr = a.handleConsultExpertsWithBudget(ctx, tc.Arguments, remaining)
+					var progress expertteam.Observer
+					if progressOut, ok := out.(ExpertProgressOutput); ok {
+						progress = func(event expertteam.ProgressEvent) {
+							progressOut.ExpertProgress(tc.ID, event)
+						}
+					}
+					result, isErr, usage, usageErr = a.handleConsultExpertsWithBudgetAndProgress(ctx, tc.Arguments, remaining, progress)
 					if usageErr != nil {
 						if remaining > 0 {
 							out.StreamDone(remaining, 0)
@@ -1275,6 +1287,10 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 				a.cancelUndispatchedToolCalls(toolCalls[toolIndex+1:], out, unresolved)
 				return unresolved
 			}
+			autoProgress.settle(
+				tc.Name, tracked.argumentsHash(), tracked.identity.EffectClass,
+				terminalType, projection,
+			)
 			if kind == executionPkg.KindBuiltin && tracked.identity.EffectClass == executionPkg.EffectReadOnly {
 				completedBuiltinCalls[tc.Name+"\x00"+tracked.argumentsHash()] = struct{}{}
 			}
@@ -1372,7 +1388,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 				return err
 			}
 			loadedContext = composeCapabilityContext(capabilityHintText, capabilityBaseContext)
-			system = buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadGrants(ctx, modePrefix, tools, a.skillContent, skillCatalog, loadedContext, a.memoryStore, iceContext, turnFilesystem.workDir, turnFilesystem.ignoreContent, turnModel, turnNumCtx, readGrants)
+			system = buildSystemPromptForModelBudgetContextWithSkillCatalogAndPathGrants(ctx, modePrefix, tools, a.skillContent, skillCatalog, loadedContext, a.memoryStore, iceContext, turnFilesystem.workDir, turnFilesystem.ignoreContent, turnModel, turnNumCtx, readGrants, writeGrants)
 		}
 
 		// A queued host read executes before another provider request. Deferring
@@ -1397,7 +1413,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 				compacted := a.compactForContextAndModel(ctx, out, turnNumCtx, turnModel)
 				if compacted {
 					// Rebuild system prompt after compaction (memory may have changed).
-					system = buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadGrants(ctx, modePrefix, tools, a.skillContent, skillCatalog, loadedContext, a.memoryStore, iceContext, turnFilesystem.workDir, turnFilesystem.ignoreContent, turnModel, turnNumCtx, readGrants)
+					system = buildSystemPromptForModelBudgetContextWithSkillCatalogAndPathGrants(ctx, modePrefix, tools, a.skillContent, skillCatalog, loadedContext, a.memoryStore, iceContext, turnFilesystem.workDir, turnFilesystem.ignoreContent, turnModel, turnNumCtx, readGrants, writeGrants)
 				}
 				estimatedPromptTokens = a.estimatePromptTokens(system, tools)
 				if !compacted && estimatedPromptTokens < lastPromptTokens {
@@ -1429,6 +1445,18 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 
 	if lg != nil {
 		lg.Warn("turn end", "reason", "max_iterations", "iters", maxIters, "ms", time.Since(turnStart).Milliseconds())
+	}
+	if checkpoint := autoProgress.checkpoint(turnID, maxIters, totalEvalTokens, time.Since(turnStart)); checkpoint != nil {
+		if lg != nil {
+			lg.Info(
+				"AUTO iteration checkpoint",
+				"tool_calls", checkpoint.ToolCalls,
+				"successful_tools", checkpoint.SuccessfulToolCalls,
+				"distinct_successful_tools", checkpoint.DistinctSuccessfulCalls,
+				"eval_tokens", checkpoint.EvalTokens,
+			)
+		}
+		return checkpoint
 	}
 	limitErr := fmt.Errorf("reached max iterations (%d)", maxIters)
 	out.Error(limitErr.Error())

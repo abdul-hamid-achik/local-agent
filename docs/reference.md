@@ -37,8 +37,14 @@ not a stable JSON event protocol. `--auto` and `--plan` require a non-empty
 prompt, are mutually exclusive, and reject a conflicting explicit `--mode`.
 AUTO does not imply the broader `--skip-approvals` posture. It pre-authorizes a
 bounded catalog of confined workspace actions, while dangerous, external,
-dynamic, and unknown effects remain gated. An explicitly empty or
-whitespace-only prompt exits with status 2 before configuration, network, or provider startup.
+dynamic, and unknown effects remain gated. Generic path-qualified workspace
+executables remain outside that catalog. The sole exact exception is a bounded
+query through the identity-verified `<workspace>/bin/minerva`; the host treats
+that query as effectful workspace execution, not pure read. Minerva mutations,
+persistent `mcp serve`, and delegated or broad diagnostics remain gated and
+should use the exact trusted MCPHub route when available. An explicitly empty
+or whitespace-only prompt exits with status 2 before configuration, network,
+or provider startup.
 In headless mode, requests that need an approval fail closed by default because
 there is no approval UI.
 
@@ -235,6 +241,10 @@ application-level copy shortcut for the latest response. Use `pgup`/`pgdown`,
 `t`, and `space` for transcript and tool navigation. With an empty composer,
 `ctrl+u`/`ctrl+d` also scroll half a page; while drafting they retain their
 standard editing behavior.
+
+Click a completed `Thought` header to expand or collapse only that reasoning
+entry. `ctrl+t` toggles all completed model thinking. Expanding an entry
+preserves a paused transcript position.
 
 `ctrl+e` resolves `$VISUAL` before `$EDITOR`, accepts a quoted executable path
 and arguments without invoking a shell, and treats an empty saved file as an

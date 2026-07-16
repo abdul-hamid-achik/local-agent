@@ -363,7 +363,7 @@ func TestRuntimeStatusExposesTemporaryExactFileAuthority(t *testing.T) {
 	searchable := strings.Join(strings.Fields(runtimeView), " ")
 	for _, want := range []string{
 		"Read scope", "1 temporary external grant", "External read access", "Exact file",
-		"/scope clear-read revokes all", "writes remain workspace-only",
+		"/scope clear-read revokes all", "shell writes remain workspace-only", "typed-write grants expire with the turn",
 	} {
 		if !strings.Contains(searchable, want) {
 			t.Fatalf("Runtime omitted %q:\n%s", want, runtimeView)

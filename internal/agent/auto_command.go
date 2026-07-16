@@ -6,11 +6,83 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+	"unicode/utf8"
+
+	"github.com/abdul-hamid-achik/local-agent/internal/config"
 )
 
 var autoCommandAssignment = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=[^=]*$`)
 var autoCommandAssignmentValue = regexp.MustCompile(`^[A-Za-z0-9_.-]*$`)
 var autoSedPrintProgram = regexp.MustCompile(`^(?:[0-9]+|\$)(?:,(?:[0-9]+|\$))?[pP]$`)
+
+const (
+	maxAutoCommandBytes    = 16 * 1024
+	maxAutoCommandSegments = 16
+	maxAutoCommandWords    = 256
+)
+
+type autoCommandDisposition uint8
+
+const (
+	autoCommandRequiresApproval autoCommandDisposition = iota
+	autoCommandAdmitted
+)
+
+type autoCommandEffect uint8
+
+const (
+	autoCommandEffectNone autoCommandEffect = iota
+	autoCommandEffectReadOnly
+	autoCommandEffectWorkspaceMutation
+	autoCommandEffectWorkspaceExecution
+)
+
+type autoCommandReason uint8
+
+const (
+	autoCommandReasonAllowed autoCommandReason = iota
+	autoCommandReasonEmpty
+	autoCommandReasonBounds
+	autoCommandReasonDynamicSyntax
+	autoCommandReasonAmbiguousComposition
+	autoCommandReasonExecutable
+	autoCommandReasonArguments
+	autoCommandReasonPathAuthority
+)
+
+// autoCommandAssessment is the bounded host-owned projection of one AUTO
+// shell admission decision. It deliberately retains neither the raw command
+// nor its arguments: those may contain private values and already live on the
+// execution request. The typed effect and provenance flags keep the authority
+// boundary inspectable without turning arbitrary shell text into policy.
+type autoCommandAssessment struct {
+	disposition         autoCommandDisposition
+	effect              autoCommandEffect
+	reason              autoCommandReason
+	segments            int
+	usesReadGrant       bool
+	workspaceExecutable bool
+}
+
+func (assessment autoCommandAssessment) admitted() bool {
+	return assessment.disposition == autoCommandAdmitted
+}
+
+type autoSimpleCommandAssessment struct {
+	allowed             bool
+	effect              autoCommandEffect
+	reason              autoCommandReason
+	usesReadGrant       bool
+	workspaceExecutable bool
+}
+
+type autoPathAuthority uint8
+
+const (
+	autoPathDenied autoPathAuthority = iota
+	autoPathWorkspace
+	autoPathReadGrant
+)
 
 // autoScopedCommandAllowed recognizes a deliberately bounded shell subset for
 // AUTO. It is not a shell sandbox: the subprocess still runs under the host's
@@ -19,38 +91,139 @@ var autoSedPrintProgram = regexp.MustCompile(`^(?:[0-9]+|\$)(?:,(?:[0-9]+|\$))?[
 // destructive commands, network-facing CLIs, redirection to files, and
 // workspace escapes continue through interactive approval.
 func (a *Agent) autoScopedCommandAllowed(command string) bool {
-	if strings.TrimSpace(command) == "" || strings.ContainsRune(command, '\r') ||
+	return a.assessAutoScopedCommand(command).admitted()
+}
+
+func (a *Agent) assessAutoScopedCommand(command string) autoCommandAssessment {
+	assessment := autoCommandAssessment{disposition: autoCommandRequiresApproval}
+	// The policy scanner and the POSIX shell must observe the same character
+	// stream. Invalid UTF-8 can otherwise be normalized differently by rune
+	// iteration and by the child process, turning a rejected token boundary into
+	// an executable one.
+	if !utf8.ValidString(command) {
+		assessment.reason = autoCommandReasonDynamicSyntax
+		return assessment
+	}
+	if strings.TrimSpace(command) == "" {
+		assessment.reason = autoCommandReasonEmpty
+		return assessment
+	}
+	if len(command) > maxAutoCommandBytes {
+		assessment.reason = autoCommandReasonBounds
+		return assessment
+	}
+	if strings.ContainsRune(command, '\r') ||
 		hasShellLineContinuation(command) || hasDynamicShellSyntax(command) || hasUnquotedShellGlob(command) {
-		return false
+		assessment.reason = autoCommandReasonDynamicSyntax
+		return assessment
 	}
 	commands, separators, ok := splitStaticShellCommands(command)
-	if !ok || len(commands) == 0 {
-		return false
+	if !ok || len(commands) == 0 || len(commands) > maxAutoCommandSegments {
+		assessment.reason = autoCommandReasonBounds
+		return assessment
+	}
+	assessment.segments = len(commands)
+	for _, words := range commands {
+		if len(words) > maxAutoCommandWords {
+			assessment.reason = autoCommandReasonBounds
+			return assessment
+		}
 	}
 	if len(commands) > 1 && staticCommandsContainExecutable(commands, "cd") {
-		// A successful cd affects later commands only for the simple all-&& form
-		// we can model exactly. Pipelines isolate builtins, while `;`, newlines,
-		// and `||` may continue after a failed cd from the previous directory.
-		for _, separator := range separators {
-			if separator != "&&" {
-				return false
+		// A failed cd must not fall through to a later command. A pipeline after
+		// an &&-guarded command is safe (`cd x && query | bounded-filter`), but a
+		// cd that is itself a pipeline member runs in an isolated subshell and
+		// cannot establish the base directory modeled below.
+		for index, separator := range separators {
+			if separator == ";" || separator == "||" || separator == "|" &&
+				(staticCommandExecutable(commands[index]) == "cd" || staticCommandExecutable(commands[index+1]) == "cd") {
+				assessment.reason = autoCommandReasonAmbiguousComposition
+				return assessment
 			}
 		}
 	}
 	baseDir := a.activeWorkDir()
-	for _, words := range commands {
-		if !a.autoScopedSimpleCommandAllowed(words, baseDir) {
-			return false
+	plannedMinervaBuild := false
+	minervaPrefixEligible := true
+	minervaOutputPipeline := false
+	for index, words := range commands {
+		simple := a.assessAutoScopedSimpleCommand(words, baseDir)
+		isMinervaOutputFilter := false
+		if minervaOutputPipeline {
+			if index == 0 || separators[index-1] != "|" || !a.autoScopedMinervaOutputFilterAllowed(words) {
+				assessment.reason = autoCommandReasonAmbiguousComposition
+				return assessment
+			}
+			simple = autoSimpleCommandAssessment{
+				allowed: true, effect: autoCommandEffectReadOnly, reason: autoCommandReasonAllowed,
+			}
+			isMinervaOutputFilter = true
+		} else if !simple.allowed && plannedMinervaBuild && index > 0 && separators[index-1] == "&&" &&
+			a.autoScopedPlannedMinervaWorkspaceCommandAllowed(words, baseDir) {
+			simple = autoSimpleCommandAssessment{
+				allowed: true, effect: autoCommandEffectWorkspaceExecution,
+				reason: autoCommandReasonAllowed, workspaceExecutable: true,
+			}
 		}
-		if staticCommandExecutable(words) == "cd" {
+		if !simple.allowed {
+			assessment.reason = simple.reason
+			return assessment
+		}
+		if simple.workspaceExecutable {
+			// Minerva is a bounded query surface, not a generic pipeline source or
+			// filter. Accept only an optional leading cd or an immediately preceding
+			// exact Minerva build producer. No already-trusted binary may be replaced
+			// by a different command earlier in the same shell request.
+			for _, separator := range separators[:index] {
+				if separator != "&&" {
+					assessment.reason = autoCommandReasonAmbiguousComposition
+					return assessment
+				}
+			}
+			if !minervaPrefixEligible && !plannedMinervaBuild ||
+				index > 0 && separators[index-1] != "&&" {
+				assessment.reason = autoCommandReasonAmbiguousComposition
+				return assessment
+			}
+			if index != len(commands)-1 {
+				if separators[index] != "|" {
+					assessment.reason = autoCommandReasonAmbiguousComposition
+					return assessment
+				}
+				minervaOutputPipeline = true
+			}
+		} else if isMinervaOutputFilter {
+			if index != len(commands)-1 && separators[index] != "|" {
+				assessment.reason = autoCommandReasonAmbiguousComposition
+				return assessment
+			}
+		}
+		if simple.effect > assessment.effect {
+			assessment.effect = simple.effect
+		}
+		assessment.usesReadGrant = assessment.usesReadGrant || simple.usesReadGrant
+		assessment.workspaceExecutable = assessment.workspaceExecutable || simple.workspaceExecutable
+		isMinervaBuild := a.autoScopedMinervaBuildCommandAllowed(words, baseDir)
+		isCD := staticCommandExecutable(words) == "cd"
+		if !isCD && !isMinervaBuild && !simple.workspaceExecutable && !isMinervaOutputFilter {
+			minervaPrefixEligible = false
+		}
+		if isCD && plannedMinervaBuild {
+			minervaPrefixEligible = false
+		}
+		plannedMinervaBuild = isMinervaBuild
+		if isCD {
 			var cdOK bool
 			baseDir, cdOK = a.autoScopedCDTarget(words, baseDir)
 			if !cdOK {
-				return false
+				assessment.reason = autoCommandReasonPathAuthority
+				return assessment
 			}
 		}
 	}
-	return true
+	assessment.disposition = autoCommandAdmitted
+	assessment.reason = autoCommandReasonAllowed
+	return assessment
 }
 
 func hasShellLineContinuation(command string) bool {
@@ -307,107 +480,144 @@ func (a *Agent) autoScopedCDTarget(words []string, baseDir string) (string, bool
 	if !filepath.IsAbs(target) && baseDir != "" {
 		target = filepath.Join(baseDir, target)
 	}
-	resolved, err := a.resolvePath(target)
+	// Shell directory changes stay confined to the primary workspace. A
+	// temporary write grant is authority for typed host operations, not a way to
+	// turn an external directory into an ambient shell working directory.
+	resolved, err := a.resolveWorkspacePath(target)
 	return resolved, err == nil
 }
 
-func (a *Agent) autoScopedSimpleCommandAllowed(words []string, baseDir string) bool {
+func (a *Agent) assessAutoScopedSimpleCommand(words []string, baseDir string) autoSimpleCommandAssessment {
+	assessment := autoSimpleCommandAssessment{reason: autoCommandReasonExecutable}
 	for len(words) > 0 && autoCommandAssignmentAllowed(words[0]) {
 		words = words[1:]
 	}
 	if len(words) == 0 {
-		return false
+		return assessment
 	}
+	rawExecutable := words[0]
 	executable := filepath.Base(words[0])
-	// A path-qualified executable can impersonate a catalogued command (for
-	// example, ./git or /tmp/go). Keep executable provenance in the host PATH;
-	// only arguments may name workspace files.
-	if executable != words[0] {
-		return false
-	}
 	if executable == "." || executable == "source" || executable == "eval" || executable == "exec" || executable == "env" {
-		return false
+		return assessment
 	}
+	// A workspace Minerva binary is the one deliberately narrow exception
+	// to the host-path catalog. It is admitted only after physical workspace,
+	// Go build-identity, install-location, and exact query-argv validation. This
+	// lets AUTO verify the local CLI it just built while Minerva's ordinary
+	// product integration continues through its exact trusted MCPHub route.
+	if executable != rawExecutable {
+		if a.autoScopedMinervaWorkspaceCommandAllowed(rawExecutable, words[1:], baseDir) {
+			assessment.allowed = true
+			assessment.effect = autoCommandEffectWorkspaceExecution
+			assessment.reason = autoCommandReasonAllowed
+			assessment.workspaceExecutable = true
+		}
+		return assessment
+	}
+	// Every other AUTO shell executable must resolve through the host-owned
+	// catalog. A generic path-qualified workspace binary can hide mutation or
+	// networking behind an innocent-looking argument and remains approval-gated.
 	if !a.autoCommandExecutableAllowed(executable) {
-		return false
+		return assessment
 	}
+	assessment.effect = autoCommandEffectForExecutable(executable, words[1:])
 	args := words[1:]
+	// Temporary external scopes are typed host capabilities. They intentionally
+	// never become ambient raw-shell authority, even for otherwise read-only
+	// commands such as cat or sed.
+	allowReadGrants := false
 	for index, word := range args {
 		if autoCommandNonPathArgument(executable, args, index) {
 			continue
 		}
-		if !a.autoCommandPathAllowed(word, baseDir) {
-			return false
+		authority := a.autoCommandPathAssessment(word, baseDir, allowReadGrants)
+		if authority == autoPathDenied {
+			assessment.reason = autoCommandReasonPathAuthority
+			return assessment
 		}
+		assessment.usesReadGrant = assessment.usesReadGrant || authority == autoPathReadGrant
 	}
 
-	if !a.autoScopedAttachedPathOptionsAllowed(executable, args, baseDir) {
-		return false
+	attachedAuthority, attachedOK := a.autoScopedAttachedPathOptionsAssessment(executable, args, baseDir, allowReadGrants)
+	if !attachedOK {
+		assessment.reason = autoCommandReasonPathAuthority
+		return assessment
 	}
+	assessment.usesReadGrant = assessment.usesReadGrant || attachedAuthority == autoPathReadGrant
+	allowed := false
 	switch executable {
 	case "cd":
 		if len(args) == 2 && args[0] == "--" {
 			args = args[1:]
 		}
-		return len(args) == 1 && a.autoCommandCandidatePathAllowed(args[0], baseDir)
+		allowed = len(args) == 1 && a.autoCommandCandidatePathAssessment(args[0], baseDir, false) != autoPathDenied
 	case "go":
-		return autoScopedGoCommandAllowed(args)
+		allowed = autoScopedGoCommandAllowed(args)
 	case "git":
-		return false
+		allowed = false
 	case "npm":
-		return autoScopedPackageCommandAllowed(args, "test")
+		allowed = autoScopedPackageCommandAllowed(args, "test")
 	case "pnpm", "yarn":
-		return autoScopedPackageCommandAllowed(args, "test", "build", "lint", "check", "typecheck")
+		allowed = autoScopedPackageCommandAllowed(args, "test", "build", "lint", "check", "typecheck")
 	case "bun":
-		return autoScopedPackageCommandAllowed(args, "test", "lint")
+		allowed = autoScopedPackageCommandAllowed(args, "test", "lint")
 	case "cargo":
-		return autoScopedCargoCommandAllowed(args)
+		allowed = autoScopedCargoCommandAllowed(args)
 	case "swift":
-		return autoScopedSwiftCommandAllowed(args)
+		allowed = autoScopedSwiftCommandAllowed(args)
 	case "sed":
-		return autoScopedSedCommandAllowed(args)
+		allowed = autoScopedSedCommandAllowed(args)
 	case "find", "rg", "grep", "tree", "du", "ls":
 		// Recursive shell inspection can discover or read descendants that the
 		// host-owned ignore policy excludes (for example `rg --no-ignore .`,
 		// `tree -a .`, or `ls -Ra .`). Built-in list/grep/read operations enforce
 		// that policy, so raw search and directory-enumeration processes remain
 		// approval-gated in AUTO even for workspace operands.
-		return false
+		allowed = false
 	case "sort":
-		return !containsLongOptionPrefix(args, "--compress-program", "--files0-from")
+		allowed = !containsLongOptionPrefix(args, "--compress-program", "--files0-from")
+	case "printf":
+		allowed = autoScopedPrintfCommandAllowed(args)
 	case "file":
-		return !containsArg(args, "-C", "-S", "-f", "-z", "-Z", "-m", "-M") &&
+		allowed = !containsArg(args, "-C", "-S", "-f", "-z", "-Z", "-m", "-M") &&
 			!containsLongOptionPrefix(args, "--compile", "--files-from", "--magic-file", "--no-sandbox", "--uncompress", "--uncompress-noreport") &&
 			!containsClusteredShortOption(args, "CSfzZmM", "P")
 	case "date":
-		return len(args) == 0
+		allowed = len(args) == 0
 	case "wc":
-		return !containsLongOptionPrefix(args, "--files0-from")
+		allowed = !containsLongOptionPrefix(args, "--files0-from")
 	case "diff":
 		// Directory comparison follows nested symlinks by default on BSD/GNU,
 		// and pagination can launch `pr`. The built-in diff and /changes paths
 		// provide host-confined inspection, so raw diff stays approval-gated.
-		return false
+		allowed = false
 	case "mkdir", "touch":
-		return len(args) > 0 && !argumentContainsPath(args, "/dev/null")
+		allowed = len(args) > 0 && !argumentContainsPath(args, "/dev/null")
 	case "eslint":
-		return !containsArg(args, "--inspect-config", "--init", "--mcp")
+		allowed = !containsArg(args, "--inspect-config", "--init", "--mcp")
 	case "prettier":
-		return !containsArg(args, "--plugin")
+		allowed = !containsArg(args, "--plugin")
 	case "tail":
-		return !containsArg(args, "-f", "-F") &&
+		allowed = !containsArg(args, "-f", "-F") &&
 			!containsLongOptionPrefix(args, "--follow", "--retry") &&
 			!containsClusteredShortOption(args, "fF", "")
 	case "tsc":
-		return autoScopedTSCCommandAllowed(args)
+		allowed = autoScopedTSCCommandAllowed(args)
 	case "golangci-lint":
-		return autoScopedGolangCILintCommandAllowed(args)
+		allowed = autoScopedGolangCILintCommandAllowed(args)
 	case "gofmt", "staticcheck",
-		"pwd", "cat", "head", "uniq", "cut", "tr", "stat", "which", "basename", "dirname", "realpath", "printf", "echo", "true", "false", "test", "cmp":
-		return true
+		"pwd", "cat", "head", "uniq", "cut", "tr", "stat", "which", "basename", "dirname", "realpath", "echo", "true", "false", "test", "cmp":
+		allowed = true
 	default:
-		return false
+		allowed = false
 	}
+	if !allowed {
+		assessment.reason = autoCommandReasonArguments
+		return assessment
+	}
+	assessment.allowed = true
+	assessment.reason = autoCommandReasonAllowed
+	return assessment
 }
 
 func autoCommandNonPathArgument(executable string, args []string, index int) bool {
@@ -597,7 +807,52 @@ func (a *Agent) autoCommandExecutableAllowed(executable string) bool {
 	return !a.pathWithinWorkspace(resolved)
 }
 
-func (a *Agent) autoScopedAttachedPathOptionsAllowed(executable string, args []string, baseDir string) bool {
+func autoCommandEffectForExecutable(executable string, args []string) autoCommandEffect {
+	switch executable {
+	case "mkdir", "touch":
+		return autoCommandEffectWorkspaceMutation
+	case "sort":
+		if autoSortWritesOutput(args) {
+			return autoCommandEffectWorkspaceMutation
+		}
+		return autoCommandEffectReadOnly
+	case "gofmt":
+		if containsArg(args, "-w") {
+			return autoCommandEffectWorkspaceMutation
+		}
+		return autoCommandEffectReadOnly
+	case "go", "npm", "pnpm", "yarn", "bun", "cargo", "swift", "eslint", "prettier", "tsc", "golangci-lint", "staticcheck":
+		return autoCommandEffectWorkspaceExecution
+	default:
+		return autoCommandEffectReadOnly
+	}
+}
+
+func autoSortWritesOutput(args []string) bool {
+	for _, argument := range args {
+		if argument == "-o" || strings.HasPrefix(argument, "--out") {
+			return true
+		}
+		if len(argument) > 2 && argument[0] == '-' && argument[1] != '-' && strings.ContainsRune(argument[1:], 'o') {
+			return true
+		}
+	}
+	return false
+}
+
+func autoScopedPrintfCommandAllowed(args []string) bool {
+	for _, argument := range args {
+		// printf is commonly a shell builtin. In Bash and Zsh, -v assigns a shell
+		// variable; changing PATH can make the following catalogued command resolve
+		// to attacker-controlled workspace code.
+		if argument == "-v" || strings.HasPrefix(argument, "-v") {
+			return false
+		}
+	}
+	return true
+}
+
+func (a *Agent) autoScopedAttachedPathOptionsAssessment(executable string, args []string, baseDir string, allowReadGrants bool) (autoPathAuthority, bool) {
 	var options []string
 	switch executable {
 	case "find", "make", "just", "rg", "grep":
@@ -627,11 +882,18 @@ func (a *Agent) autoScopedAttachedPathOptionsAllowed(executable string, args []s
 	}
 	for _, argument := range args {
 		value, attached := clusteredShortOptionValue(argument, options)
-		if attached && !a.autoCommandPathAllowed(value, baseDir) {
-			return false
+		if !attached {
+			continue
+		}
+		authority := a.autoCommandPathAssessment(value, baseDir, allowReadGrants)
+		if authority == autoPathDenied {
+			return autoPathDenied, false
+		}
+		if authority == autoPathReadGrant {
+			return autoPathReadGrant, true
 		}
 	}
-	return true
+	return autoPathWorkspace, true
 }
 
 func clusteredShortOptionValue(argument string, options []string) (string, bool) {
@@ -744,32 +1006,54 @@ func autoCommandAssignmentAllowed(assignment string) bool {
 	return stringIn(name, "CI", "NO_COLOR", "FORCE_COLOR") && autoCommandAssignmentValue.MatchString(value)
 }
 
-func (a *Agent) autoCommandPathAllowed(word, baseDir string) bool {
-	allowed := func(candidate string) bool {
-		return a.autoCommandCandidatePathAllowed(candidate, baseDir)
-	}
-	if !allowed(word) {
-		return false
+func (a *Agent) autoCommandPathAssessment(word, baseDir string, allowReadGrants bool) autoPathAuthority {
+	result := a.autoCommandCandidatePathAssessment(word, baseDir, allowReadGrants)
+	if result == autoPathDenied {
+		return autoPathDenied
 	}
 	if _, value, found := strings.Cut(word, "="); found {
-		return allowed(value)
+		valueResult := a.autoCommandCandidatePathAssessment(value, baseDir, allowReadGrants)
+		if valueResult == autoPathDenied {
+			return autoPathDenied
+		}
+		if valueResult == autoPathReadGrant {
+			result = autoPathReadGrant
+		}
 	}
-	return true
+	return result
 }
 
-func (a *Agent) autoCommandCandidatePathAllowed(candidate, baseDir string) bool {
+func (a *Agent) autoCommandCandidatePathAssessment(candidate, baseDir string, allowReadGrants bool) autoPathAuthority {
 	if candidate == "" || candidate == "/dev/null" {
-		return true
+		return autoPathWorkspace
 	}
 	if strings.HasPrefix(candidate, "~") || rawPathHasParentTraversal(candidate) {
-		return false
+		return autoPathDenied
 	}
 	if !filepath.IsAbs(candidate) && baseDir != "" {
 		candidate = filepath.Join(baseDir, candidate)
 	}
 	// Resolve even relative operands so a workspace symlink cannot turn an
 	// apparently confined shell command into an external read or write.
-	return a.pathWithinWorkspace(candidate)
+	if a.pathWithinWorkspace(candidate) {
+		return autoPathWorkspace
+	}
+	if !allowReadGrants {
+		return autoPathDenied
+	}
+	readable, err := a.resolveReadablePath(candidate)
+	if err != nil {
+		return autoPathDenied
+	}
+	defer func() { _ = readable.close() }()
+	// Exact-file grants are intentionally capable of naming sensitive files for
+	// host-owned read tools after explicit consent. Raw shell execution is a
+	// weaker boundary, so conventional secret paths stay approval-gated even
+	// when an exact read grant exists.
+	if config.HostSecretPathIgnored(readable.absolute) {
+		return autoPathDenied
+	}
+	return autoPathReadGrant
 }
 
 func rawPathHasParentTraversal(path string) bool {
@@ -787,7 +1071,10 @@ func (a *Agent) pathWithinWorkspace(path string) bool {
 	if strings.TrimSpace(path) == "" {
 		return false
 	}
-	_, err := a.resolvePath(path)
+	// Keep shell authority narrower than typed write grants. Explicit external
+	// write scopes are consumed by built-in write/edit/mkdir and trusted routed
+	// workspace tools; they never make a raw shell operand "workspace-local".
+	_, err := a.resolveWorkspacePath(path)
 	return err == nil
 }
 

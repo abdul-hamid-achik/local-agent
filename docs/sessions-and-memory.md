@@ -53,6 +53,7 @@ After a clean interactive exit, Local Agent restores the terminal and prints a
 copyable resume command when the conversation has a durable session:
 
 ```text
+Session S42 · Polish transcript UX
 Resume this session with:
   local-agent --resume S42
 ```

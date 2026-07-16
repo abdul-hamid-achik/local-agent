@@ -106,6 +106,9 @@ func (m *Model) currentWorkingActivity() (workingActivity, bool) {
 	case m.compactingContext:
 		return workingActivity{label: "Preparing context", detail: "summarizing earlier turns", cancellable: true}, true
 	case m.toolsPending > 0:
+		if activity, ok := m.runningExpertActivity(); ok {
+			return activity, true
+		}
 		// The running ToolCard is the single animated, detailed surface for tool
 		// work. The footer keeps only the global cancellation affordance.
 		activity := workingActivity{label: "Tool running", cancellable: true, static: true}
@@ -113,6 +116,13 @@ func (m *Model) currentWorkingActivity() (workingActivity, bool) {
 			activity.label = fmt.Sprintf("%d tools running", m.toolsPending)
 		}
 		return activity, true
+	case m.autoCheckpoints.segmentsContinued > 0 && (m.state == StateWaiting || m.state == StateStreaming):
+		return workingActivity{
+			label:        "Continuing automatically",
+			compactLabel: "AUTO continuing",
+			detail:       fmt.Sprintf("checkpoint %d/%d", m.autoCheckpoints.segmentsContinued, maxAutoCheckpointSegments),
+			cancellable:  true,
+		}, true
 	case m.capabilityRoute != nil && (m.state == StateWaiting || m.state == StateStreaming):
 		route := *m.capabilityRoute
 		if route.Status != agent.CapabilityRouteResolved {

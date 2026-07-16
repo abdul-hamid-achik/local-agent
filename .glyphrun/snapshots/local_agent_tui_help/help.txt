@@ -22,7 +22,7 @@
                              │   ↑                 Previous input (empty input)           │
                              │   ↓                 Next input (history active)            │
                              │   space             Toggle last tool (empty input)         │
-                             │   ctrl+t            Toggle all reasoning (empty input)     │
+                             │   ctrl+t            Toggle all thoughts (empty draft)      │
                              │   ctrl+k            Toggle compact mode                    │
                              │   ctrl+e            Open in $VISUAL/$EDITOR                │
                              │   tab               Autocomplete                           │

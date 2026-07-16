@@ -79,6 +79,42 @@ func TestBuildRuntimeExpertConsultantUsesProfilesAndCaps(t *testing.T) {
 	}
 }
 
+func TestBuildRuntimeExpertConsultantHonorsBoundedRequestModelOverride(t *testing.T) {
+	cfg := &config.Config{
+		Ollama:  config.OllamaConfig{NumCtx: 8192},
+		Experts: config.ExpertsConfig{Enabled: true, MaxConcurrentInference: 1, MaxTeamExperts: 1, Timeout: "5s"},
+	}
+	agents := &config.AgentsDir{Agents: map[string]config.AgentProfile{
+		"critic": {Name: "critic", Model: "profile:2b", Description: "configured critic"},
+	}}
+	runner := &expertRuntimeRunner{}
+	runtime, err := buildRuntimeExpertConsultant(cfg, runner, agents, []llm.OllamaModel{
+		{Name: "profile:2b", Location: llm.OllamaModelLocationLocal, SizeBytes: 2 << 30},
+		{Name: "override:1b", Location: llm.OllamaModelLocationLocal, SizeBytes: 1 << 30},
+	}, resource.ProbeFunc(func(context.Context) (resource.HostSnapshot, error) {
+		return resource.HostSnapshot{LogicalCPU: 8, TotalRAMBytes: 16 << 30, AvailableRAMBytes: 10 << 30}, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runtime.Consult(context.Background(), expertteam.Request{
+		Strategy: expertselector.StrategyTeam, Objective: "Review with an exact model.",
+		ExpertNames: []string{"critic"}, Model: "request:2b",
+		ModelOverrides: []expertteam.ModelOverride{{Expert: "critic", Model: "override:1b"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Experts) != 1 || result.Experts[0].Model != "override:1b" {
+		t.Fatalf("override result = %#v", result)
+	}
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	if len(runner.models) != 1 || runner.models[0] != "override:1b" || len(runner.options) != 1 || !runner.options[0].DisableReasoning {
+		t.Fatalf("override dispatch models=%v options=%#v", runner.models, runner.options)
+	}
+}
+
 func TestBuildRuntimeExpertConsultantCanBeDisabled(t *testing.T) {
 	runtime, err := buildRuntimeExpertConsultant(&config.Config{}, &expertRuntimeRunner{}, nil, nil, resource.SystemProbe{})
 	if err != nil || runtime != nil {

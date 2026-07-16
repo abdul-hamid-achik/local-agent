@@ -29,7 +29,10 @@ type fakeModelRunner struct {
 	prepareErr        error
 	releaseErr        error
 	failAfterCallback map[string]error
+	reasoningFor      map[string]string
+	reasoningOnly     map[string]string
 	prepared          int
+	preparedModels    []string
 	released          int
 	useLimit          bool
 	omitDone          bool
@@ -46,6 +49,7 @@ func (runner *fakeModelRunner) PrepareExpertModels(_ context.Context, selected [
 	runner.mu.Lock()
 	defer runner.mu.Unlock()
 	runner.prepared++
+	runner.preparedModels = append([]string(nil), selected...)
 	if runner.prepareErr != nil {
 		return llm.ExpertModelSnapshot{}, runner.prepareErr
 	}
@@ -117,6 +121,17 @@ func (runner *fakeModelRunner) ChatStreamForModel(ctx context.Context, model str
 		}
 		return callback(llm.StreamChunk{Text: "late uncharged text"})
 	}
+	if reasoning := runner.reasoningFor[model]; reasoning != "" {
+		if err := callback(llm.StreamChunk{Reasoning: reasoning}); err != nil {
+			return err
+		}
+	}
+	if reasoning := runner.reasoningOnly[model]; reasoning != "" {
+		if err := callback(llm.StreamChunk{Reasoning: reasoning}); err != nil {
+			return err
+		}
+		return callback(llm.StreamChunk{Done: true, EvalCount: evalTokens, PromptEvalCount: 24})
+	}
 	if err := callback(llm.StreamChunk{Text: response, Done: !runner.omitDone, EvalCount: evalTokens, PromptEvalCount: 24}); err != nil {
 		return err
 	}
@@ -178,11 +193,246 @@ func TestConsultTeamRunsBoundedExpertsInParallelWithoutTools(t *testing.T) {
 		t.Fatalf("max active inference = %d, want 3", maxActive)
 	}
 	for _, option := range options {
-		if len(option.Tools) != 0 || option.MaxEvalTokens != DefaultMaxEvalTokens || option.NumThread != resource.DefaultThreadsPerInference || option.ExpectedContext != 8192 {
+		if len(option.Tools) != 0 || option.MaxEvalTokens != DefaultMaxEvalTokens || !option.DisableReasoning || option.NumThread != resource.DefaultThreadsPerInference || option.ExpectedContext != 8192 {
 			t.Fatalf("unsafe/unbounded expert options = %#v", option)
 		}
 		if !strings.Contains(option.System, "no tools") || !strings.Contains(option.System, "not verified") {
 			t.Fatalf("expert contract missing from system prompt: %q", option.System)
+		}
+	}
+}
+
+func TestConsultModelRoutingPrecedence(t *testing.T) {
+	runner := &fakeModelRunner{current: "parent:2b"}
+	runtime, err := New(runner, Options{
+		Probe: highCapacityProbe(), DefaultNumCtx: 8192,
+		Profiles: []Profile{
+			{Name: "critic", Model: "profile-critic:2b", Description: "configured critic"},
+			{Name: "architect", Model: "profile-architect:2b", Description: "configured architect"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := runtime.Consult(context.Background(), Request{
+		Strategy: expertselector.StrategyTeam, Objective: "Review model routing.",
+		ExpertNames: []string{"critic", "architect", "explorer"}, Model: "request:2b",
+		ModelOverrides: []ModelOverride{{Expert: "critic", Model: "override:2b"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	models := make(map[string]string, len(result.Experts))
+	for _, receipt := range result.Experts {
+		models[receipt.Name] = receipt.Model
+	}
+	if models["critic"] != "override:2b" || models["architect"] != "request:2b" || models["explorer"] != "request:2b" {
+		t.Fatalf("request routing = %#v", models)
+	}
+
+	result, err = runtime.Consult(context.Background(), Request{
+		Strategy: expertselector.StrategyTeam, Objective: "Review fallback routing.",
+		ExpertNames: []string{"critic", "generalist"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	models = make(map[string]string, len(result.Experts))
+	for _, receipt := range result.Experts {
+		models[receipt.Name] = receipt.Model
+	}
+	if models["critic"] != "profile-critic:2b" || models["generalist"] != "parent:2b" {
+		t.Fatalf("fallback routing = %#v", models)
+	}
+}
+
+func TestConsultRejectsInvalidModelRoutingBeforeProviderAdmission(t *testing.T) {
+	tests := []struct {
+		name    string
+		request Request
+	}{
+		{name: "duplicate experts", request: Request{Strategy: expertselector.StrategyTeam, Objective: "review", ExpertNames: []string{"critic", "CRITIC"}}},
+		{name: "invalid default", request: Request{Strategy: expertselector.StrategyTeam, Objective: "review", Model: " bad"}},
+		{name: "duplicate overrides", request: Request{Strategy: expertselector.StrategyTeam, Objective: "review", ExpertNames: []string{"critic"}, ModelOverrides: []ModelOverride{{Expert: "critic", Model: "one"}, {Expert: "CRITIC", Model: "two"}}}},
+		{name: "unknown override", request: Request{Strategy: expertselector.StrategyTeam, Objective: "review", ExpertNames: []string{"critic"}, ModelOverrides: []ModelOverride{{Expert: "unknown", Model: "one"}}}},
+		{name: "unselected override", request: Request{Strategy: expertselector.StrategyTeam, Objective: "review", ExpertNames: []string{"critic"}, ModelOverrides: []ModelOverride{{Expert: "architect", Model: "one"}}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runner := &fakeModelRunner{current: "parent:2b"}
+			runtime, err := New(runner, Options{Probe: highCapacityProbe(), DefaultNumCtx: 8192})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = runtime.Consult(context.Background(), test.request)
+			if !errors.Is(err, ErrInvalidRequest) {
+				t.Fatalf("error=%v, want ErrInvalidRequest", err)
+			}
+			runner.mu.Lock()
+			prepared := runner.prepared
+			runner.mu.Unlock()
+			if prepared != 0 {
+				t.Fatalf("invalid request prepared %d model snapshots", prepared)
+			}
+		})
+	}
+}
+
+func TestConsultUnavailableOverrideFailsClosedBeforeDispatch(t *testing.T) {
+	runner := &fakeModelRunner{
+		current: "parent:2b",
+		modelState: llm.ExpertModelSnapshot{InventoryVerified: true, Models: []llm.ExpertModelResource{
+			{Name: "missing:2b", Selected: true, Location: llm.OllamaModelLocationUnknown},
+		}},
+	}
+	runtime, err := New(runner, Options{Probe: highCapacityProbe(), DefaultNumCtx: 8192})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = runtime.Consult(context.Background(), Request{
+		Strategy: expertselector.StrategyTeam, Objective: "Review with an unavailable model.",
+		ExpertNames: []string{"critic"}, Model: "missing:2b",
+	})
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("error=%v, want ErrUnavailable", err)
+	}
+	_, _, models := runner.snapshot()
+	if len(models) != 0 {
+		t.Fatalf("unavailable model dispatched: %v", models)
+	}
+}
+
+func TestConsultReasoningNeverBecomesExpertReport(t *testing.T) {
+	t.Run("reasoning only fails with typed code", func(t *testing.T) {
+		runner := &fakeModelRunner{
+			current: "reasoner:2b", useLimit: true,
+			reasoningOnly: map[string]string{"reasoner:2b": "private chain of thought must not leak"},
+		}
+		runtime, err := New(runner, Options{Probe: highCapacityProbe(), DefaultNumCtx: 8192})
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := runtime.Consult(context.Background(), Request{
+			Strategy: expertselector.StrategyTeam, Objective: "Return a visible review.",
+		})
+		if !errors.Is(err, ErrAllExpertsFailed) {
+			t.Fatalf("error=%v, want ErrAllExpertsFailed", err)
+		}
+		for _, receipt := range result.Experts {
+			if receipt.Status != ExpertFailed || receipt.ErrorCode != "no_visible_report" || receipt.Report != "" {
+				t.Fatalf("reasoning-only receipt = %#v", receipt)
+			}
+		}
+		if formatted := result.Format(); strings.Contains(formatted, "private chain") || strings.Contains(formatted, "thought") {
+			t.Fatalf("private reasoning leaked into result: %q", formatted)
+		}
+		_, options, _ := runner.snapshot()
+		for _, option := range options {
+			if !option.DisableReasoning {
+				t.Fatalf("expert request did not disable reasoning: %#v", option)
+			}
+		}
+	})
+
+	t.Run("visible text succeeds while reasoning stays transient", func(t *testing.T) {
+		runner := &fakeModelRunner{
+			current: "reasoner:2b", reasoningFor: map[string]string{"reasoner:2b": "private analysis"},
+			responseFor: map[string]string{"reasoner:2b": "visible bounded finding"},
+		}
+		runtime, err := New(runner, Options{Probe: highCapacityProbe(), DefaultNumCtx: 8192})
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := runtime.Consult(context.Background(), Request{
+			Strategy: expertselector.StrategyTeam, Objective: "Return a visible review.",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, receipt := range result.Experts {
+			if receipt.Report != "visible bounded finding" || strings.Contains(receipt.Report, "private") {
+				t.Fatalf("mixed receipt = %#v", receipt)
+			}
+		}
+	})
+}
+
+func TestConsultProgressIsMonotonicBoundedAndSchedulerOwned(t *testing.T) {
+	runner := &fakeModelRunner{current: "qwen:2b"}
+	runtime, err := New(runner, Options{
+		Probe: highCapacityProbe(), DefaultNumCtx: 8192,
+		ResourceOverrides: resource.Overrides{MaxConcurrentInference: 1, MaxConcurrentDistinctModels: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []ProgressEvent
+	result, err := runtime.ConsultWithProgress(context.Background(), Request{
+		Strategy: expertselector.StrategyTeam, Objective: "sensitive objective must not enter progress",
+	}, func(event ProgressEvent) {
+		events = append(events, event)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1+2*len(result.Experts) {
+		t.Fatalf("events=%#v", events)
+	}
+	if events[0].Phase != ProgressPlanned || events[0].ExpertIndex != -1 || events[0].Queued != len(result.Experts) || events[0].Parallelism != 1 {
+		t.Fatalf("planned event=%#v", events[0])
+	}
+	for index, event := range events {
+		if event.Sequence != uint64(index+1) || event.Total != len(result.Experts) || event.Strategy != expertselector.StrategyTeam {
+			t.Fatalf("event[%d]=%#v", index, event)
+		}
+		if strings.Contains(event.Expert, "sensitive") || strings.Contains(event.Model, "sensitive") || strings.Contains(event.ErrorCode, "sensitive") {
+			t.Fatalf("objective leaked into event=%#v", event)
+		}
+	}
+	for index := 0; index < len(result.Experts); index++ {
+		started := events[1+2*index]
+		completed := events[2+2*index]
+		if started.Phase != ProgressStarted || started.Running != 1 || completed.Phase != ProgressCompleted || completed.Running != 0 ||
+			started.ExpertIndex != completed.ExpertIndex || completed.Completed != index+1 {
+			t.Fatalf("expert event pair start=%#v complete=%#v", started, completed)
+		}
+	}
+}
+
+func TestConsultProgressReportsTypedFailuresWithoutProviderText(t *testing.T) {
+	runner := &fakeModelRunner{
+		current: "qwen:2b",
+		fail:    map[string]error{"qwen:2b": errors.New("provider failed with password=do-not-leak")},
+	}
+	runtime, err := New(runner, Options{
+		Probe: highCapacityProbe(), DefaultNumCtx: 8192,
+		ResourceOverrides: resource.Overrides{MaxConcurrentInference: 1, MaxConcurrentDistinctModels: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []ProgressEvent
+	result, err := runtime.ConsultWithProgress(context.Background(), Request{
+		Strategy: expertselector.StrategyTeam, Objective: "secret objective must remain transient",
+	}, func(event ProgressEvent) {
+		events = append(events, event)
+	})
+	if !errors.Is(err, ErrAllExpertsFailed) {
+		t.Fatalf("error=%v, want ErrAllExpertsFailed", err)
+	}
+	if len(events) != 1+2*len(result.Experts) {
+		t.Fatalf("events=%#v", events)
+	}
+	last := events[len(events)-1]
+	if last.Phase != ProgressFailed || last.Status != ExpertFailed || last.ErrorCode != "inference_failed" ||
+		last.Failed != len(result.Experts) || last.Completed != 0 || last.Running != 0 || last.Queued != 0 {
+		t.Fatalf("last failure event=%#v", last)
+	}
+	for _, event := range events {
+		formatted := fmt.Sprintf("%#v", event)
+		if strings.Contains(formatted, "password") || strings.Contains(formatted, "do-not-leak") || strings.Contains(formatted, "secret objective") {
+			t.Fatalf("sensitive provider content leaked into event: %s", formatted)
 		}
 	}
 }
@@ -951,6 +1201,8 @@ func TestConsultReturnsBoundedPartialReceiptsWithoutRawProviderErrors(t *testing
 	}
 	if strings.Contains(formatted, "do-not-leak") || !strings.Contains(formatted, "experts: total=2 · completed=1 · failed=1") ||
 		!strings.Contains(formatted, "inference_failed") ||
+		!strings.Contains(formatted, "[broken · broken:2b · failed") ||
+		!strings.Contains(formatted, "[ok · ok:2b · completed") ||
 		!strings.Contains(formatted, "truncated by host") {
 		t.Fatalf("unsafe or incomplete partial receipt:\n%s", formatted)
 	}

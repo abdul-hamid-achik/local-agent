@@ -9,6 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/imageasset"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
@@ -52,11 +53,15 @@ func (m *Model) View() tea.View {
 	} else if m.readScopePrompt != nil {
 		content.WriteString(m.renderReadScopePrompt())
 	} else {
+		if plan := m.renderGoalPlan(); plan != "" {
+			content.WriteString(plan)
+			content.WriteString("\n")
+		}
 		if bob := m.renderBobWorkspaceContext(); bob != "" {
 			content.WriteString(bob)
 			content.WriteString("\n")
 		}
-		if action := m.renderContinuationAction(); action != "" {
+		if action := m.renderContinuationAction(); action != "" && !m.goalPlanOwnsContinuation() {
 			content.WriteString(action)
 			content.WriteString("\n")
 		}
@@ -1019,6 +1024,7 @@ func (m *Model) renderEntries() string {
 	// the cached prefix and only re-render the streaming tail.
 	if m.entryCacheValid && len(m.entries) == m.cachedEntryCount {
 		m.toolHitRegions = append(m.toolHitRegions[:0], m.cachedToolHitRegions...)
+		m.thinkingHitRegions = append(m.thinkingHitRegions[:0], m.cachedThinkingHitRegions...)
 		if m.hasVisibleLiveTurn() {
 			var b strings.Builder
 			b.WriteString(m.cachedEntriesRender)
@@ -1039,12 +1045,13 @@ func (m *Model) renderEntries() string {
 	// Full render: iterate all entries.
 	var b strings.Builder
 	m.toolHitRegions = m.toolHitRegions[:0]
+	m.thinkingHitRegions = m.thinkingHitRegions[:0]
 	renderedLines := 0
 	previousKind := ""
 	renderedAny := false
 	assistantStarted := false
 
-	for _, entry := range m.entries {
+	for entryIndex, entry := range m.entries {
 		var entryView strings.Builder
 		switch entry.Kind {
 		case "user":
@@ -1081,6 +1088,16 @@ func (m *Model) renderEntries() string {
 				EndCol:    lipgloss.Width(header),
 			})
 		}
+		if entry.Kind == "assistant" && strings.TrimSpace(entry.ThinkingContent) != "" {
+			if rowOffset, endCol, ok := completedThinkingHeaderRegion(chunk); ok {
+				m.thinkingHitRegions = append(m.thinkingHitRegions, thinkingHitRegion{
+					EntryIndex: entryIndex,
+					Row:        renderedLines + rowOffset,
+					EndCol:     endCol,
+					Digest:     reasoningReceiptDigest(entry.ThinkingContent),
+				})
+			}
+		}
 		b.WriteString(chunk)
 		renderedLines += strings.Count(chunk, "\n")
 		previousKind = entry.Kind
@@ -1091,6 +1108,7 @@ func (m *Model) renderEntries() string {
 	m.cachedEntriesRender = b.String()
 	m.cachedEntryCount = len(m.entries)
 	m.cachedToolHitRegions = append(m.cachedToolHitRegions[:0], m.toolHitRegions...)
+	m.cachedThinkingHitRegions = append(m.cachedThinkingHitRegions[:0], m.thinkingHitRegions...)
 	m.entryCacheValid = true
 
 	// Render current streaming content (plain text, no Glamour). Provider calls
@@ -1111,6 +1129,16 @@ func (m *Model) renderEntries() string {
 	}
 
 	return b.String()
+}
+
+func completedThinkingHeaderRegion(rendered string) (rowOffset, endCol int, ok bool) {
+	for row, line := range strings.Split(rendered, "\n") {
+		plain := strings.TrimLeft(ansi.Strip(line), " ")
+		if strings.HasPrefix(plain, "│ ▸") || strings.HasPrefix(plain, "│ ▾") {
+			return row, lipgloss.Width(line), true
+		}
+	}
+	return 0, 0, false
 }
 
 func (m *Model) hasLiveTurn() bool {
@@ -1433,6 +1461,11 @@ func (m *Model) renderToolGroup(b *strings.Builder, toolIdx int) {
 		// Keep the card inside the actual viewport; the two-column left indent is
 		// applied immediately below.
 		availableWidth := max(4, m.chatPaneWidth()-4)
+		if card.ExpertProgress != nil &&
+			(card.expertProgressCacheWidth != availableWidth-2 ||
+				card.expertProgressCacheSequence != card.ExpertProgress.Sequence) {
+			card.setExpertProgress(card.ExpertProgress, availableWidth-2)
+		}
 		cardView := card.View(availableWidth)
 		if card.State == ToolCardRunning {
 			glyph := "…"
@@ -1471,22 +1504,19 @@ func (m *Model) renderToolGroup(b *strings.Builder, toolIdx int) {
 			// projection. In particular, transport success with an unknown domain
 			// outcome remains attention-colored instead of falling through to the
 			// legacy green completion receipt.
-			kind := ToolCardGeneric
-			switch tt {
-			case ToolTypeFileRead, ToolTypeFileWrite:
-				kind = ToolCardFile
-			case ToolTypeBash:
-				kind = ToolCardBash
-			}
+			kind := toolCardKindForTool(te.Name)
 			fallback := NewToolCard(te.Name, kind, m.isDark)
 			fallback.ID = te.ID
 			fallback.State = projectedState
 			fallback.SetSummary(te.Summary)
 			fallback.Args = te.Args
+			fallback.ResultLanguage = te.ResultLanguage
 			fallback.Result = te.Result
 			fallback.Duration = te.Duration
 			fallback.Expanded = !te.Collapsed
 			fallback.Projection = te.Projection
+			fallback.setExpertProgress(te.ExpertProgress, max(1, m.chatPaneWidth()-6))
+			fallback.State = te.ExpertProgress.cardState(fallback.State)
 			cardView := fallback.View(max(4, m.chatPaneWidth()-4))
 			if fallback.Expanded {
 				var diffView string

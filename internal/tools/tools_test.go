@@ -203,6 +203,35 @@ func TestConsultExpertsToolDef(t *testing.T) {
 	if !ok || experts["maxItems"] != 16 {
 		t.Fatalf("experts schema = %#v", properties["experts"])
 	}
+	model, ok := properties["model"].(map[string]any)
+	if !ok || model["type"] != "string" || model["minLength"] != 1 || model["maxLength"] != 256 {
+		t.Fatalf("model schema = %#v", properties["model"])
+	}
+	overrides, ok := properties["model_overrides"].(map[string]any)
+	if !ok || overrides["type"] != "array" || overrides["maxItems"] != 16 {
+		t.Fatalf("model_overrides schema = %#v", properties["model_overrides"])
+	}
+	assignment, ok := overrides["items"].(map[string]any)
+	if !ok {
+		t.Fatalf("model override item = %#v", overrides["items"])
+	}
+	assignmentProperties, ok := assignment["properties"].(map[string]any)
+	if !ok || len(assignmentProperties) != 2 {
+		t.Fatalf("model override properties = %#v", assignment["properties"])
+	}
+	for name, limit := range map[string]int{"expert": 128, "model": 256} {
+		property, ok := assignmentProperties[name].(map[string]any)
+		if !ok || property["minLength"] != 1 || property["maxLength"] != limit {
+			t.Fatalf("model override %s property = %#v", name, assignmentProperties[name])
+		}
+	}
+	if additional, ok := assignment["additionalProperties"].(bool); !ok || additional {
+		t.Fatalf("model override additionalProperties = %#v", assignment["additionalProperties"])
+	}
+	assignmentRequired, ok := assignment["required"].([]string)
+	if !ok || len(assignmentRequired) != 2 || assignmentRequired[0] != "expert" || assignmentRequired[1] != "model" {
+		t.Fatalf("model override required = %#v", assignment["required"])
+	}
 	required, ok := tool.Parameters["required"].([]string)
 	if !ok || len(required) != 2 || required[0] != "strategy" || required[1] != "objective" {
 		t.Fatalf("required = %#v", tool.Parameters["required"])

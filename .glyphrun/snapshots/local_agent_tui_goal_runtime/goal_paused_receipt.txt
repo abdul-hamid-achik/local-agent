@@ -1,7 +1,6 @@
                                   LOCAL AGENT
                 Local-first · Ollama · approval prompts enabled
                           AUTO · qwen3.5:2b · offline
-              enter send · / commands · ctrl+p settings · ? help
        ╭────────────────────────────────────────────────────────────────╮
        │ Goal inspector · 0/1 verified                                  │
        │ Ⅱ paused · Ship a polished goal UI                             │
@@ -24,7 +23,6 @@
        │ Resume or safely retry goal evaluation                         │
        │ esc close · ←/→ action · enter select · j/k scroll             │
        ╰────────────────────────────────────────────────────────────────╯
-
 
 ───────────────────────────────────────────────────────────────────────────────
  [ AUTO ] · Ⅱ paused · Ship a p… · 0/8 auto turns · 0/12k tok · S1 · qwen3.5:2b

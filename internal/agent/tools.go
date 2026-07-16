@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -294,15 +295,11 @@ func (a *Agent) handleWrite(args map[string]any) (string, bool) {
 	if requestedPath == "" {
 		return "error: path is required", true
 	}
-	workspace, err := a.openWorkspaceRoot()
+	workspace, path, relative, err := a.openWritableRootForPath(requestedPath)
 	if err != nil {
 		return fmt.Sprintf("error: %v", err), true
 	}
 	defer func() { _ = workspace.Close() }()
-	path, relative, err := workspace.resolve(a, requestedPath, false)
-	if err != nil {
-		return fmt.Sprintf("error: %v", err), true
-	}
 	parent, name, err := workspace.openParent(relative, true)
 	if err != nil {
 		return fmt.Sprintf("error creating directory: %v", err), true
@@ -632,6 +629,21 @@ func (a *Agent) getArgInt(args map[string]any, key string, defaultValue int) int
 }
 
 func (a *Agent) resolvePath(path string) (string, error) {
+	resolved, workspaceErr := a.resolveWorkspacePath(path)
+	if workspaceErr == nil {
+		return resolved, nil
+	}
+	resolved, additionalErr := a.resolveAdditionalWritePath(path)
+	if additionalErr == nil {
+		return resolved, nil
+	}
+	if !errors.Is(additionalErr, errOutsideAdditionalWriteAuthority) {
+		return "", additionalErr
+	}
+	return "", workspaceErr
+}
+
+func (a *Agent) resolveWorkspacePath(path string) (string, error) {
 	filesystem := a.filesystemContext()
 	lexicalRoot := filesystem.workDir
 	if lexicalRoot == "" {
@@ -1057,15 +1069,11 @@ func (a *Agent) handleEdit(args map[string]any) (string, bool) {
 		return "error: patch is required", true
 	}
 
-	workspace, err := a.openWorkspaceRoot()
+	workspace, path, relative, err := a.openWritableRootForPath(requestedPath)
 	if err != nil {
 		return fmt.Sprintf("error: %v", err), true
 	}
 	defer func() { _ = workspace.Close() }()
-	path, relative, err := workspace.resolve(a, requestedPath, false)
-	if err != nil {
-		return fmt.Sprintf("error: %v", err), true
-	}
 	parent, name, err := workspace.openParent(relative, false)
 	if err != nil {
 		return fmt.Sprintf("error reading file: %v", err), true
@@ -1096,15 +1104,11 @@ func (a *Agent) handleMkdir(args map[string]any) (string, bool) {
 	if requestedPath == "" {
 		return "error: path is required", true
 	}
-	workspace, err := a.openWorkspaceRoot()
+	workspace, path, relative, err := a.openWritableRootForPath(requestedPath)
 	if err != nil {
 		return fmt.Sprintf("error: %v", err), true
 	}
 	defer func() { _ = workspace.Close() }()
-	path, relative, err := workspace.resolve(a, requestedPath, false)
-	if err != nil {
-		return fmt.Sprintf("error: %v", err), true
-	}
 	if err := workspace.mkdirAll(relative); err != nil {
 		return fmt.Sprintf("error creating directory: %v", err), true
 	}
@@ -1175,7 +1179,7 @@ func (a *Agent) handleCopy(args map[string]any) (string, bool) {
 	if source == "" || destination == "" {
 		return "error: source and destination are required", true
 	}
-	workspace, err := a.openWorkspaceRoot()
+	workspace, destination, destinationRelative, err := a.openWritableRootForPath(destination)
 	if err != nil {
 		return fmt.Sprintf("error: destination: %v", err), true
 	}
@@ -1187,11 +1191,6 @@ func (a *Agent) handleCopy(args map[string]any) (string, bool) {
 	}
 	defer func() { _ = readableSource.close() }()
 	source = readableSource.absolute
-	destination, destinationRelative, err := workspace.resolve(a, destination, false)
-	if err != nil {
-		return fmt.Sprintf("error: destination: %v", err), true
-	}
-
 	info, err := readableSource.stat()
 	if err != nil {
 		return fmt.Sprintf("error: %v", err), true

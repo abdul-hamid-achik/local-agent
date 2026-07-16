@@ -7,6 +7,7 @@ import (
 
 	"github.com/abdul-hamid-achik/local-agent/internal/agent"
 	"github.com/abdul-hamid-achik/local-agent/internal/ecosystem"
+	"github.com/abdul-hamid-achik/local-agent/internal/expertteam"
 )
 
 // Adapter bridges the agent.Output interface to BubbleTea messages.
@@ -16,6 +17,7 @@ type Adapter struct {
 }
 
 var _ agent.BobWorkspaceContextOutput = (*Adapter)(nil)
+var _ agent.ExpertProgressOutput = (*Adapter)(nil)
 
 // NewAdapter creates an Adapter that sends messages to the given program.
 func NewAdapter(p *tea.Program, workDir ...string) *Adapter {
@@ -58,6 +60,13 @@ func newToolCallStartMsg(callID, name string, args map[string]any, workDir strin
 
 func (a *Adapter) ToolCallResult(callID, name string, result string, isError bool, duration time.Duration) {
 	sendMsg(a.program, ToolCallResultMsg{ID: callID, Name: name, Result: result, IsError: isError, Duration: duration})
+}
+
+// ExpertProgress forwards only the host-owned bounded scheduler event. The
+// expert runtime deliberately keeps objectives, reports, reasoning, and raw
+// provider errors on its transient side of this boundary.
+func (a *Adapter) ExpertProgress(callID string, event expertteam.ProgressEvent) {
+	sendMsg(a.program, ExpertProgressMsg{CallID: callID, Event: event})
 }
 
 // ToolCallSemanticResult carries only the bounded host projection into the UI;

@@ -38,6 +38,9 @@ func TestNewToolCardStylesUsesLightDarkPalette(t *testing.T) {
 				"diff added":       "#477f33",
 				"diff removed":     "#c34848",
 				"diff header":      "#447c7c",
+				"search path":      "#447c7c",
+				"search location":  "#5b6779",
+				"search match":     "#7b5a83",
 			},
 		},
 		{
@@ -61,6 +64,9 @@ func TestNewToolCardStylesUsesLightDarkPalette(t *testing.T) {
 				"diff added":       "#a3be8c",
 				"diff removed":     "#bf616a",
 				"diff header":      "#88c0d0",
+				"search path":      "#88c0d0",
+				"search location":  "#8b97ad",
+				"search match":     "#b48ead",
 			},
 		},
 	}
@@ -86,6 +92,9 @@ func TestNewToolCardStylesUsesLightDarkPalette(t *testing.T) {
 				"diff added":       styles.DiffAdded,
 				"diff removed":     styles.DiffRemoved,
 				"diff header":      styles.DiffHeader,
+				"search path":      styles.SearchPath,
+				"search location":  styles.SearchLocation,
+				"search match":     styles.SearchMatch,
 			}
 
 			for name, style := range got {

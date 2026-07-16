@@ -236,6 +236,9 @@ func TestOllamaChatStreamOmitsZeroContextAllocation(t *testing.T) {
 		if _, exists := envelope["options"]; exists {
 			t.Errorf("empty local options leaked to cloud request: %s", body)
 		}
+		if _, exists := envelope["think"]; exists {
+			t.Errorf("default reasoning control leaked to request: %s", body)
+		}
 		_, _ = fmt.Fprintln(w, `{"message":{"role":"assistant","content":"answer"},"done":true,"eval_count":1,"prompt_eval_count":2}`)
 	}))
 	defer server.Close()
@@ -245,6 +248,33 @@ func TestOllamaChatStreamOmitsZeroContextAllocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := client.ChatStream(context.Background(), ChatOptions{}, func(StreamChunk) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOllamaChatStreamCanDisableProviderReasoning(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" || r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+		var request ollamaChatRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		if request.Think == nil || *request.Think {
+			t.Errorf("think control = %#v, want explicit false", request.Think)
+		}
+		_, _ = fmt.Fprintln(w, `{"message":{"role":"assistant","content":"visible report"},"done":true,"eval_count":1,"prompt_eval_count":2}`)
+	}))
+	defer server.Close()
+
+	client, err := NewOllamaClient(server.URL, "qwen", 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.ChatStream(context.Background(), ChatOptions{DisableReasoning: true}, func(StreamChunk) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -113,6 +113,7 @@ type ToolEntry struct {
 	Args                    string         // formatted args string
 	RawArgs                 map[string]any `json:"-"` // ephemeral original args
 	Result                  string
+	ResultLanguage          string // bounded lexer alias derived from trusted call metadata
 	IsError                 bool
 	Status                  ToolStatus
 	StartTime               time.Time
@@ -124,6 +125,7 @@ type ToolEntry struct {
 	DiffPending             bool                     `json:"-"` // post-write read/LCS is running outside Update
 	DiffGeneration          uint64                   `json:"-"` // accepts exactly one matching asynchronous result
 	Projection              ecosystem.ToolProjection // bounded semantic role, route, and outcome
+	ExpertProgress          *ExpertProgressState     // bounded consult_experts lifecycle projection
 }
 
 // ChatEntry is a single item in the chat log.
@@ -146,6 +148,16 @@ type toolHitRegion struct {
 	ToolIndex int
 	Row       int
 	EndCol    int
+}
+
+// thinkingHitRegion identifies one completed assistant reasoning disclosure.
+// The digest prevents an old cached row from toggling a replacement entry that
+// happens to occupy the same slice index.
+type thinkingHitRegion struct {
+	EntryIndex int
+	Row        int
+	EndCol     int
+	Digest     [32]byte
 }
 
 // startupItem tracks the progress of a single startup task.
@@ -214,11 +226,12 @@ type Model struct {
 	completionReader          *completionWorkspaceReader
 
 	// Tool display
-	toolEntries    []ToolEntry
-	toolsCollapsed bool
-	toolHitRegions []toolHitRegion
-	toolCardMgr    ToolCardManager
-	diffGeneration uint64
+	toolEntries        []ToolEntry
+	toolsCollapsed     bool
+	toolHitRegions     []toolHitRegion
+	thinkingHitRegions []thinkingHitRegion
+	toolCardMgr        ToolCardManager
+	diffGeneration     uint64
 	// Receipt inspection is an ephemeral affordance for the just-completed
 	// turn. It must never point at a stale tool from an earlier no-tool turn.
 	turnToolStartIndex          int
@@ -229,10 +242,11 @@ type Model struct {
 	receiptInspectAnchorYOffset int
 
 	// Incremental rendering cache
-	cachedEntriesRender  string
-	cachedEntryCount     int
-	cachedToolHitRegions []toolHitRegion
-	entryCacheValid      bool
+	cachedEntriesRender      string
+	cachedEntryCount         int
+	cachedToolHitRegions     []toolHitRegion
+	cachedThinkingHitRegions []thinkingHitRegion
+	entryCacheValid          bool
 
 	// Thinking state
 	thinkBuf       strings.Builder
@@ -303,6 +317,7 @@ type Model struct {
 	planFormState            *PlanFormState
 	goalFormState            *GoalForm
 	goalInspectorState       *GoalInspector
+	goalPlan                 *goalPlanCard
 	goalRecoveryState        *GoalRecovery
 	goalRecoveryProjection   goalRecoveryProjection
 	goalRecoveryLoadToken    uint64
@@ -419,6 +434,12 @@ type Model struct {
 	turnPromptVisible  bool
 	turnEntryIndex     int
 	turnCheckpointSet  bool
+	turnRunContext     context.Context
+	turnRunOptions     agent.TurnOptions
+	turnLogicalID      string
+	turnSegmentID      string
+	turnAuthority      Mode
+	autoCheckpoints    autoCheckpointSupervisor
 
 	// Prompt history
 	promptHistory      []string // all submitted inputs
@@ -553,6 +574,7 @@ func (m *Model) beginShutdown() tea.Cmd {
 	m.clearPendingSessionSwitchSnapshot()
 	if m.readScopePrompt != nil {
 		releaseReadGrants(m.readScopePrompt.Grants)
+		releaseWriteGrants(m.readScopePrompt.WriteGrants)
 	}
 	m.readScopePrompt = nil
 	if m.sessionLoading {
@@ -657,6 +679,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			m.goalInspectorState.SetTheme(m.isDark)
 			m.goalInspectorState.SetReducedMotion(m.reducedMotion)
 		}
+		if m.goalPlan != nil {
+			m.goalPlan.SetTheme(m.isDark)
+		}
 		if m.goalRecoveryState != nil {
 			m.goalRecoveryState.SetTheme(m.isDark)
 			m.goalRecoveryState.SetReducedMotion(m.reducedMotion)
@@ -706,6 +731,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		if m.goalFormState != nil {
 			m.goalFormState.SetSize(m.width, m.height)
 		}
+		if m.goalPlan != nil {
+			m.goalPlan.SetSize(m.chatPaneWidth(), m.height)
+		}
 		if m.cortexDecision != nil {
 			m.cortexDecision.SetSize(m.width, m.height)
 		}
@@ -747,6 +775,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			m.markFollowingLatest()
 			// Hit regions are populated by the transcript renderer.
 			m.toolHitRegions = nil
+			m.thinkingHitRegions = nil
 		} else {
 			m.viewport.SetWidth(viewportWidth)
 			m.viewport.SetHeight(contentH)
@@ -1542,30 +1571,17 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			}
 
 		case key.Matches(msg, m.keys.ToggleThinking):
-			// Every visible disclosure advertises the same shortcut, so one press
-			// applies the newest receipt's next state to all reasoning blocks.
-			if m.state == StateIdle && strings.TrimSpace(m.input.Value()) == "" {
-				m.cancelReceiptInspection(true)
-				targetCollapsed := false
-				found := false
-				for i := len(m.entries) - 1; i >= 0; i-- {
-					if m.entries[i].Kind == "assistant" && strings.TrimSpace(m.entries[i].ThinkingContent) != "" {
-						targetCollapsed = !m.entries[i].ThinkingCollapsed
-						found = true
-						break
-					}
-				}
-				if found {
-					for i := range m.entries {
-						if m.entries[i].Kind == "assistant" && strings.TrimSpace(m.entries[i].ThinkingContent) != "" {
-							m.entries[i].ThinkingCollapsed = targetCollapsed
-						}
-					}
-					m.invalidateEntryCache()
-					m.viewport.SetContent(m.renderEntries())
-				}
+			// Completed reasoning remains inspectable while the next turn runs. A
+			// non-empty draft retains ownership of every control key, and a live
+			// Thinking row is never part of this batch operation.
+			if m.input.Value() != "" {
+				// Bubbles treats Ctrl+T as transpose. This application-level
+				// disclosure shortcut must never silently rewrite a draft.
 				return m, nil
 			}
+			m.cancelReceiptInspection(true)
+			m.toggleAllThinkingReceipts()
+			return m, nil
 
 		case key.Matches(msg, m.keys.ExternalEditor):
 			if m.state == StateIdle {
@@ -1750,17 +1766,34 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			m.state = StateStreaming
 		}
 		projection := ecosystem.ProjectToolCall(msg.Name, msg.Args)
-		te := ToolEntry{
-			ID:         msg.ID,
-			Name:       msg.Name,
-			Args:       agent.FormatToolArgsForTool(msg.Name, msg.Args),
-			RawArgs:    agent.SafeToolArgsForPersistence(msg.Name, msg.Args),
-			Status:     ToolStatusRunning,
-			StartTime:  msg.StartTime,
-			Collapsed:  m.toolsCollapsed,
-			Projection: projection,
+		args := agent.FormatToolArgsForTool(msg.Name, msg.Args)
+		rawArgs := agent.SafeToolArgsForPersistence(msg.Name, msg.Args)
+		resultLanguage := trustedResultLanguageForTool(msg.Name, msg.Args)
+		collapsed := m.toolsCollapsed
+		if isExpertConsultTool(msg.Name) {
+			// The consultation objective belongs only to the transient runtime.
+			// Its live UI is populated exclusively by bounded progress events.
+			args = ""
+			rawArgs = nil
+			resultLanguage = ""
+			collapsed = false
 		}
-		te.Summary = boundedToolCardSummary(toolSummary(classifyTool(msg.Name), te))
+		te := ToolEntry{
+			ID:             msg.ID,
+			Name:           msg.Name,
+			Args:           args,
+			RawArgs:        rawArgs,
+			Status:         ToolStatusRunning,
+			StartTime:      msg.StartTime,
+			Collapsed:      collapsed,
+			Projection:     projection,
+			ResultLanguage: resultLanguage,
+		}
+		if isExpertConsultTool(msg.Name) {
+			te.Summary = "awaiting expert plan"
+		} else {
+			te.Summary = boundedToolCardSummary(toolSummary(classifyTool(msg.Name), te))
+		}
 		if classifyTool(msg.Name) == ToolTypeFileWrite {
 			// The Adapter captured this before returning control to the tool
 			// execution path. Update only installs the immutable result.
@@ -1774,18 +1807,13 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		}
 
 		// Create tool card for fancy display
-		kind := ToolCardGeneric
-		switch classifyTool(msg.Name) {
-		case ToolTypeFileRead, ToolTypeFileWrite:
-			kind = ToolCardFile
-		case ToolTypeBash:
-			kind = ToolCardBash
-		}
+		kind := toolCardKindForTool(msg.Name)
 		m.toolCardMgr.AddCardWithID(msg.ID, msg.Name, kind, msg.StartTime)
 		if len(m.toolCardMgr.Cards) > 0 {
 			card := &m.toolCardMgr.Cards[len(m.toolCardMgr.Cards)-1]
 			card.Args = te.Args
 			card.SetSummary(te.Summary)
+			card.ResultLanguage = te.ResultLanguage
 			card.Projection = te.Projection
 		}
 
@@ -1799,6 +1827,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		})
 		m.viewport.SetContent(m.renderEntries())
 		m.gotoBottomIfFollowing()
+
+	case ExpertProgressMsg:
+		m.handleExpertProgress(msg)
 
 	case PlanFormCompletedMsg:
 		return m, m.submitPlanFormPrompt(msg.Prompt)
@@ -1818,16 +1849,26 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			m.logger.Info("tool call", "name", msg.Name, "duration", msg.Duration, "error", msg.IsError)
 		}
 		matched := false
+		matchedIndex := -1
+		expertResult := isExpertConsultTool(msg.Name)
 		result := boundedToolCardResult(msg.Result)
+		if expertResult {
+			// The aggregate report and provider failures stay transient. The
+			// settled card is driven by the bounded per-expert projection.
+			result = ""
+		}
 		// Bob envelopes carry stable conflict/error codes and copy-pasteable
 		// corrective commands; keep that digest visible ahead of the raw JSON.
-		if digest := bobReceiptDigest(msg.Name, msg.Result); digest != "" {
-			result = boundedToolCardResult(digest + "\n" + msg.Result)
+		if !expertResult {
+			if digest := bobReceiptDigest(msg.Name, msg.Result); digest != "" {
+				result = boundedToolCardResult(digest + "\n" + msg.Result)
+			}
 		}
 		var diffCmd tea.Cmd
 		for i := len(m.toolEntries) - 1; i >= 0; i-- {
 			if toolCallMatches(msg.ID, msg.Name, m.toolEntries[i].ID, m.toolEntries[i].Name) && m.toolEntries[i].Status == ToolStatusRunning {
 				matched = true
+				matchedIndex = i
 				projection := msg.Projection.Normalize()
 				if projection.Transport == "" {
 					projection = ecosystem.ProjectToolResult(m.toolEntries[i].Projection, msg.Result, msg.IsError)
@@ -1879,6 +1920,23 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		if !matched {
 			break
 		}
+		if expertResult && matchedIndex >= 0 {
+			entry := &m.toolEntries[matchedIndex]
+			entry.ExpertProgress = sanitizeExpertProgressState(entry.ExpertProgress, true)
+			if entry.ExpertProgress != nil {
+				entry.Summary = boundedToolCardSummary(entry.ExpertProgress.summary())
+			} else {
+				entry.Summary = "expert progress unavailable"
+			}
+			for cardIndex := len(m.toolCardMgr.Cards) - 1; cardIndex >= 0; cardIndex-- {
+				card := &m.toolCardMgr.Cards[cardIndex]
+				if toolCallMatches(msg.ID, msg.Name, card.ID, card.Name) && card.State == ToolCardRunning {
+					card.SetSummary(entry.Summary)
+					card.setExpertProgress(entry.ExpertProgress, max(1, m.chatPaneWidth()-6))
+					break
+				}
+			}
+		}
 		var completedProjection ecosystem.ToolProjection
 		for i := len(m.toolEntries) - 1; i >= 0; i-- {
 			if toolCallMatches(msg.ID, msg.Name, m.toolEntries[i].ID, m.toolEntries[i].Name) {
@@ -1891,6 +1949,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		}
 		// Update tool card
 		cardState := toolCardStateFromProjection(completedProjection)
+		if matchedIndex >= 0 {
+			cardState = m.toolEntries[matchedIndex].ExpertProgress.cardState(cardState)
+		}
 		m.toolCardMgr.UpdateCardSemanticWithID(msg.ID, msg.Name, cardState, result, msg.Duration, completedProjection)
 
 		if m.toolsPending > 0 {
@@ -1969,6 +2030,19 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		m.gotoBottomIfFollowing()
 
 	case AgentDoneMsg:
+		if command, handled, replacement := m.handleAutoIterationCheckpoint(msg); handled {
+			if command != nil {
+				cmds = append(cmds, command)
+			}
+			break
+		} else if replacement != nil {
+			msg.Err = replacement
+		}
+		if err := m.revokeTemporaryWriteScopes(); err != nil {
+			m.entries = append(m.entries, ChatEntry{
+				Kind: "error", Content: "Temporary external write scope cleanup failed: " + sanitizeTerminalSingleLine(err.Error()),
+			})
+		}
 		m.compactingContext = false
 		m.capabilityRoute = nil
 		if m.logger != nil {
@@ -3638,6 +3712,7 @@ func (m *Model) resetConversationSession() {
 	m.standaloneRecovery = nil
 	m.goalOperationToken++
 	m.goalRuntime = nil
+	m.goalPlan = nil
 	m.syncComposerAuthority()
 	m.goalFormState = nil
 	m.goalInspectorState = nil
@@ -3666,6 +3741,7 @@ func (m *Model) resetConversationSession() {
 	m.fileChanges = nil
 	m.toolsPending = 0
 	m.toolCardMgr.Cards = nil
+	_ = m.revokeTemporaryWriteScopes()
 }
 
 // resetTurnDiagnostics clears presentation derived from the previous turn.
@@ -3790,10 +3866,13 @@ func (m *Model) footerHeight() int {
 	if m.compactCompletionOwnsDivider() {
 		height = 0
 	}
+	if plan := m.renderGoalPlan(); plan != "" {
+		height += lipgloss.Height(plan)
+	}
 	if bob := m.renderBobWorkspaceContext(); bob != "" {
 		height += lipgloss.Height(bob)
 	}
-	if action := m.renderContinuationAction(); action != "" {
+	if action := m.renderContinuationAction(); action != "" && !m.goalPlanOwnsContinuation() {
 		height += lipgloss.Height(action)
 	}
 	if status := m.renderStatusLine(); status != "" {
@@ -3906,6 +3985,7 @@ func (m *Model) invalidateEntryCache() {
 	m.cachedEntriesRender = ""
 	m.cachedEntryCount = 0
 	m.cachedToolHitRegions = nil
+	m.cachedThinkingHitRegions = nil
 }
 
 // checkAutoScroll resets scroll anchor when the viewport is at the bottom,
@@ -4506,6 +4586,16 @@ func (m *Model) sendToAgentTurnPresentedWithAttachments(
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
+	options := agent.TurnOptions{
+		Limits: limits, Capability: capability, Continuation: continuation,
+	}
+	options.Limits = normalizeLogicalTurnLimits(options.Limits, m.nowTime())
+	m.turnRunContext = ctx
+	m.turnRunOptions = options
+	m.turnLogicalID = turnID
+	m.turnSegmentID = turnID
+	m.turnAuthority = authority
+	m.autoCheckpoints.reset(turnID, m.turnStartedAt)
 
 	p := m.program
 
@@ -4522,13 +4612,9 @@ func (m *Model) sendToAgentTurnPresentedWithAttachments(
 		})
 	})
 
-	runAgent := func() tea.Msg {
-		adapter := NewAdapter(p, m.agent.WorkDir())
-		err := m.agent.RunTurnWithOptions(ctx, adapter, turnID, agent.TurnOptions{
-			Limits: limits, Capability: capability, Continuation: continuation,
-		})
-		return AgentDoneMsg{TurnID: turnID, Err: err}
-	}
+	runAgent := newAgentSegmentCmd(
+		m.agent, p, ctx, turnID, turnID, options,
+	)
 
 	m.scramble.Reset()
 	if m.reducedMotion {
@@ -4619,6 +4705,12 @@ func (m *Model) clearTurnMessageCheckpoint() {
 	m.turnEntryIndex = -1
 	m.turnCheckpointSet = false
 	m.turnImages = nil
+	m.turnRunContext = nil
+	m.turnRunOptions = agent.TurnOptions{}
+	m.turnLogicalID = ""
+	m.turnSegmentID = ""
+	m.turnAuthority = ModeNormal
+	m.autoCheckpoints.clear()
 }
 
 // ensureExecutionSession creates or reacquires the durable session boundary
@@ -4706,6 +4798,7 @@ func (m *Model) discardCreatedExecutionSession() error {
 }
 
 func (m *Model) failTurnBeforeRun(text, message string) tea.Cmd {
+	_ = m.revokeTemporaryWriteScopes()
 	m.entries = append(m.entries, ChatEntry{Kind: "error", Content: message})
 	m.state = StateIdle
 	m.input.SetValue(text)
@@ -5044,7 +5137,8 @@ func (m *Model) readClipboardPaste() tea.Cmd {
 	}
 }
 
-// handleMouseClick hit-tests tool entries and toggles their collapsed state.
+// handleMouseClick hit-tests completed transcript disclosures. Live reasoning
+// intentionally has no region and remains non-interactive until it settles.
 func (m *Model) handleMouseClick(x, y int) {
 	if x < 0 || x >= m.viewport.Width() || y < 0 || y >= m.viewport.Height() {
 		return
@@ -5059,6 +5153,63 @@ func (m *Model) handleMouseClick(x, y int) {
 			return
 		}
 	}
+	for _, region := range m.thinkingHitRegions {
+		if vpY != region.Row || x >= region.EndCol {
+			continue
+		}
+		if region.EntryIndex < 0 || region.EntryIndex >= len(m.entries) {
+			return
+		}
+		entry := m.entries[region.EntryIndex]
+		if entry.Kind != "assistant" || strings.TrimSpace(entry.ThinkingContent) == "" ||
+			reasoningReceiptDigest(entry.ThinkingContent) != region.Digest {
+			return
+		}
+		m.toggleThinkingReceipt(region.EntryIndex)
+		return
+	}
+}
+
+func (m *Model) toggleThinkingReceipt(entryIndex int) bool {
+	if entryIndex < 0 || entryIndex >= len(m.entries) {
+		return false
+	}
+	entry := &m.entries[entryIndex]
+	if entry.Kind != "assistant" || strings.TrimSpace(entry.ThinkingContent) == "" {
+		return false
+	}
+	paused, yOffset := m.followPaused(), m.viewport.YOffset()
+	entry.ThinkingCollapsed = !entry.ThinkingCollapsed
+	m.invalidateEntryCache()
+	m.viewport.SetContent(m.renderEntries())
+	m.restoreFollowPosition(paused, yOffset)
+	return true
+}
+
+func (m *Model) toggleAllThinkingReceipts() bool {
+	targetCollapsed := false
+	found := false
+	for i := len(m.entries) - 1; i >= 0; i-- {
+		entry := m.entries[i]
+		if entry.Kind == "assistant" && strings.TrimSpace(entry.ThinkingContent) != "" {
+			targetCollapsed = !entry.ThinkingCollapsed
+			found = true
+			break
+		}
+	}
+	if !found {
+		return false
+	}
+	paused, yOffset := m.followPaused(), m.viewport.YOffset()
+	for i := range m.entries {
+		if m.entries[i].Kind == "assistant" && strings.TrimSpace(m.entries[i].ThinkingContent) != "" {
+			m.entries[i].ThinkingCollapsed = targetCollapsed
+		}
+	}
+	m.invalidateEntryCache()
+	m.viewport.SetContent(m.renderEntries())
+	m.restoreFollowPosition(paused, yOffset)
+	return true
 }
 
 // toggleToolReceipt keeps the disclosure and transcript anchor as one parent-

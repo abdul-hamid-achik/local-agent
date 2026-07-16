@@ -13,6 +13,7 @@ const (
 	ToolTypeBash
 	ToolTypeFileRead
 	ToolTypeFileWrite
+	ToolTypeSearch
 	ToolTypeWeb
 	ToolTypeMemory
 )
@@ -23,16 +24,31 @@ func classifyTool(name string) ToolType {
 	switch {
 	case strings.Contains(lower, "bash") || strings.Contains(lower, "exec") || strings.Contains(lower, "shell") || strings.Contains(lower, "command"):
 		return ToolTypeBash
+	case strings.Contains(lower, "web") || strings.Contains(lower, "fetch") || strings.Contains(lower, "http") || strings.Contains(lower, "curl") || strings.Contains(lower, "browse"):
+		return ToolTypeWeb
+	case strings.Contains(lower, "search") || strings.Contains(lower, "grep") || strings.Contains(lower, "find"):
+		return ToolTypeSearch
 	case strings.Contains(lower, "read") || strings.Contains(lower, "view") || strings.Contains(lower, "cat"):
 		return ToolTypeFileRead
 	case strings.Contains(lower, "write") || strings.Contains(lower, "edit") || strings.Contains(lower, "create_file") || strings.Contains(lower, "patch"):
 		return ToolTypeFileWrite
-	case strings.Contains(lower, "web") || strings.Contains(lower, "fetch") || strings.Contains(lower, "http") || strings.Contains(lower, "curl") || strings.Contains(lower, "browse"):
-		return ToolTypeWeb
 	case strings.Contains(lower, "memory") || strings.Contains(lower, "remember") || strings.Contains(lower, "forget"):
 		return ToolTypeMemory
 	default:
 		return ToolTypeDefault
+	}
+}
+
+func toolCardKindForTool(name string) ToolCardKind {
+	switch classifyTool(name) {
+	case ToolTypeFileRead, ToolTypeFileWrite:
+		return ToolCardFile
+	case ToolTypeBash:
+		return ToolCardBash
+	case ToolTypeSearch:
+		return ToolCardSearch
+	default:
+		return ToolCardGeneric
 	}
 }
 

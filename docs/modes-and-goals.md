@@ -28,15 +28,37 @@ and the form does not create a durable goal.
 
 ## AUTO
 
-AUTO sends ordinary prompts directly with proactive access to the NORMAL tool surface. Validated workspace writes and directory creation, exact trusted local MCP routes, and a static catalog of direct ordinary toolchain commands can proceed without interruption. Task runners, package `run` targets, raw `find`, `rg`, `grep`, `tree`, `du`, and `ls` shell commands, and `go generate` remain approval-gated; use the host-owned read, list, and grep tools for ignore-aware repository inspection. Raw Git also remains approval-gated because repository configuration, filters, and hooks can execute programs even during commands that look read-only; use `/changes` and `/commit` for the host-owned paths.
+AUTO sends ordinary prompts directly with proactive access to the NORMAL tool
+surface. Validated workspace writes and directory creation, exact trusted local
+MCP routes, and a static catalog of direct ordinary toolchain commands can
+proceed without interruption. Task runners, package `run` targets, generic
+path-qualified workspace executables, raw `find`, `rg`, `grep`, `tree`, `du`,
+and `ls` shell commands, and `go generate` remain approval-gated; use the
+host-owned read, list, and grep tools for ignore-aware repository inspection.
+
+Minerva has one deliberately narrow exception for local CLI verification. AUTO
+may run a bounded query only from the physical `<workspace>/bin/minerva` binary
+after verifying its exact Go main-package and module build identities. The host
+classifies the call as effectful workspace execution, not a pure read, because
+it still runs repository-owned code with Local Agent's process access. Mutation
+commands, persistent `mcp serve`, and delegated or broad diagnostics remain
+approval-gated. Ordinary Minerva product integration should use its exact
+host-trusted MCPHub contract.
+
+Raw Git also remains approval-gated because repository configuration, filters,
+and hooks can execute programs even during commands that look read-only; use
+`/changes` and `/commit` for the host-owned paths.
 
 AUTO is not blanket shell authority. Deletion, dynamic expansion, file
-redirection, external paths, network-facing or unknown commands, memory
-mutation, human decisions, and uncatalogued MCP effects still stop for approval.
-Its provider loop is bounded at 40 iterations by default instead of NORMAL's
-10, and the interactive near-limit warning is suppressed in AUTO. Configure
-the two ceilings independently with `tools.max_iterations` and
-`tools.auto_max_iterations`.
+redirection, external shell paths, explicit network CLIs or endpoints, unknown
+commands, memory mutation, human decisions, and uncatalogued MCP effects still
+stop for approval. Explicit external paths named in the prompt may receive a
+temporary exact typed read/write scope; that scope never becomes shell
+authority. AUTO uses a 40-iteration segment by default instead of NORMAL's 10.
+Productive work reaching that watchdog emits a bounded continuation checkpoint
+and resumes in a fresh segment; repeated/no-progress behavior still stops.
+Configure the two segment ceilings independently with `tools.max_iterations`
+and `tools.auto_max_iterations`.
 
 AUTO classifies the outer command and visible operands; it is not process
 containment. An admitted compiler or test command can still execute

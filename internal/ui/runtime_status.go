@@ -78,10 +78,12 @@ func (m *Model) buildRuntimeStatusContent(width int) string {
 	lines := make([]string, 0, 18)
 	toolSummary := fmt.Sprintf("%d visible", m.toolCount)
 	var readGrants []agent.ReadGrant
+	var writeGrants []agent.WriteGrant
 	serverNames, failedServers, serverToolCounts := m.mcpRuntimeProjection()
 	if m.agent != nil {
 		toolSummary = runtimeToolAvailabilityLabel(m.agent.ToolAvailability())
 		readGrants = m.agent.ReadGrants()
+		writeGrants = m.agent.WriteGrants()
 	}
 	readScope := "workspace only"
 	if len(readGrants) > 0 {
@@ -214,7 +216,20 @@ func (m *Model) buildRuntimeStatusContent(width int) string {
 			lines = append(lines, m.runtimeStatusRow(label, displayWorkspacePath(grant.Path), width))
 		}
 		lines = append(lines, m.styles.OverlayDim.Render(
-			wrapText("Temporary and not saved with sessions · /scope clear-read revokes all · writes remain workspace-only", max(1, width)),
+			wrapText("Temporary and not saved with sessions · /scope clear-read revokes all · shell writes remain workspace-only; typed-write grants expire with the turn", max(1, width)),
+		))
+	}
+	if len(writeGrants) > 0 {
+		lines = append(lines, "", m.styles.OverlayAccent.Render("Turn-bound typed-write access"))
+		for _, grant := range writeGrants {
+			label := "Directory"
+			if grant.Kind == agent.WriteGrantExactFile {
+				label = "Exact file"
+			}
+			lines = append(lines, m.runtimeStatusRow(label, displayWorkspacePath(grant.Path), width))
+		}
+		lines = append(lines, m.styles.OverlayDim.Render(
+			wrapText("Built-in typed operations only · expires when this turn settles · raw shell remains confined to the startup workspace", max(1, width)),
 		))
 	}
 	return strings.Join(lines, "\n")
