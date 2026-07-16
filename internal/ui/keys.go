@@ -45,7 +45,7 @@ func DefaultKeyMap() KeyMap {
 			// Ctrl+J works on terminals that cannot distinguish Shift+Enter from
 			// Enter; Alt+Enter is a second ergonomic fallback on enhanced terminals.
 			key.WithKeys("shift+enter", "ctrl+j", "alt+enter"),
-			key.WithHelp("shift+enter/ctrl+j", "new line"),
+			key.WithHelp("shift+enter", "new line · ctrl+j/alt+enter also"),
 		),
 		Cancel: key.NewBinding(
 			key.WithKeys("esc"),

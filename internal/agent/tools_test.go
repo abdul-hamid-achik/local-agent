@@ -73,6 +73,82 @@ func TestResolvePathEnforcesAgentIgnore(t *testing.T) {
 	}
 }
 
+func TestDefaultWorkspacePolicyRejectsSecretPathsWithoutAgentIgnore(t *testing.T) {
+	root := t.TempDir()
+	for _, path := range []string{".env", ".env.production", "deploy.pem", ".aws/credentials"} {
+		absolute := filepath.Join(root, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(absolute), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(absolute, []byte("must-not-read"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ag := New(nil, nil, 0)
+	ag.SetWorkDir(root)
+	for _, path := range []string{".env", ".env.production", "deploy.pem", ".aws/credentials"} {
+		result, isErr := ag.handleRead(map[string]any{"path": path})
+		if !isErr || !strings.Contains(result, "excluded by .agentignore") || strings.Contains(result, "must-not-read") {
+			t.Fatalf("default-secret read %q result=%q error=%v", path, result, isErr)
+		}
+	}
+}
+
+func TestDefaultWorkspacePolicyAllowsConventionalEnvExample(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, ".env.example")
+	if err := os.WriteFile(path, []byte("SAFE_EXAMPLE=1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ag := New(nil, nil, 0)
+	ag.SetWorkDir(root)
+	if result, isErr := ag.handleRead(map[string]any{"path": ".env.example"}); isErr || result != "SAFE_EXAMPLE=1" {
+		t.Fatalf("safe example result=%q error=%v", result, isErr)
+	}
+}
+
+func TestWorkspacePolicyCanExcludeConventionalEnvExample(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, ".env.example")
+	if err := os.WriteFile(path, []byte("REAL_SECRET=1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ag := New(nil, nil, 0)
+	ag.SetWorkspacePolicy(root, ".env.example")
+	if result, isErr := ag.handleRead(map[string]any{"path": ".env.example"}); !isErr || !strings.Contains(result, "excluded by .agentignore") || strings.Contains(result, "REAL_SECRET") {
+		t.Fatalf("workspace policy did not protect .env.example: result=%q error=%v", result, isErr)
+	}
+}
+
+func TestDefaultWorkspacePolicyRejectsDescendantsOfEnvExampleDirectory(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, ".env.example", "private-secret")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("MUST_STAY_PRIVATE=1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ag := New(nil, nil, 0)
+	ag.SetWorkDir(root)
+	if result, isErr := ag.handleRead(map[string]any{"path": ".env.example/private-secret"}); !isErr || !strings.Contains(result, "excluded by .agentignore") || strings.Contains(result, "MUST_STAY_PRIVATE") {
+		t.Fatalf("template-directory descendant bypassed host policy: result=%q error=%v", result, isErr)
+	}
+}
+
+func TestWorkspacePolicyCannotNegateHostSecretDefault(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".env"), []byte("MUST_STAY_PRIVATE=1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ag := New(nil, nil, 0)
+	ag.SetWorkspacePolicy(root, "!.env")
+	if result, isErr := ag.handleRead(map[string]any{"path": ".env"}); !isErr || !strings.Contains(result, "excluded by .agentignore") || strings.Contains(result, "MUST_STAY_PRIVATE") {
+		t.Fatalf("repository negation bypassed host secret policy: result=%q error=%v", result, isErr)
+	}
+}
+
 func TestAgentIgnoreBlocksDescendantsOfWildcardDirectory(t *testing.T) {
 	root := t.TempDir()
 	ag := New(nil, nil, 0)

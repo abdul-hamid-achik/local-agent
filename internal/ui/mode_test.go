@@ -38,7 +38,7 @@ func (r *modeAuthorityRouter) GetModelForCapability(capability config.ModelCapab
 
 func (c *modeAuthorityCaptureClient) ChatStream(_ context.Context, options llm.ChatOptions, emit func(llm.StreamChunk) error) error {
 	c.options <- options
-	return emit(llm.StreamChunk{Done: true})
+	return emit(llm.StreamChunk{Text: "done", Done: true, EvalCount: 1, PromptEvalCount: 1})
 }
 
 func (*modeAuthorityCaptureClient) Ping() error   { return nil }

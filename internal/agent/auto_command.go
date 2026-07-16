@@ -366,13 +366,13 @@ func (a *Agent) autoScopedSimpleCommandAllowed(words []string, baseDir string) b
 		return autoScopedSwiftCommandAllowed(args)
 	case "sed":
 		return autoScopedSedCommandAllowed(args)
-	case "find":
-		return !containsArg(args, "-delete", "-exec", "-execdir", "-ok", "-okdir", "-L", "-follow", "-files0-from") &&
-			!containsClusteredShortOption(args, "L", "f")
-	case "rg":
-		return !containsArg(args, "-z", "-L") &&
-			!containsLongOptionPrefix(args, "--pre", "--search-zip", "--hostname-bin", "--follow") &&
-			!containsClusteredShortOption(args, "zL", "ABCEMTdefgjmrt")
+	case "find", "rg", "grep", "tree", "du", "ls":
+		// Recursive shell inspection can discover or read descendants that the
+		// host-owned ignore policy excludes (for example `rg --no-ignore .`,
+		// `tree -a .`, or `ls -Ra .`). Built-in list/grep/read operations enforce
+		// that policy, so raw search and directory-enumeration processes remain
+		// approval-gated in AUTO even for workspace operands.
+		return false
 	case "sort":
 		return !containsLongOptionPrefix(args, "--compress-program", "--files0-from")
 	case "file":
@@ -381,20 +381,6 @@ func (a *Agent) autoScopedSimpleCommandAllowed(words []string, baseDir string) b
 			!containsClusteredShortOption(args, "CSfzZmM", "P")
 	case "date":
 		return len(args) == 0
-	case "tree":
-		return !containsArg(args, "-l") && !containsClusteredShortOption(args, "l", "ILPo")
-	case "du":
-		return !containsArg(args, "-L") &&
-			!containsLongOptionPrefix(args, "--dereference", "--files0-from") &&
-			!containsClusteredShortOption(args, "L", "Bdt")
-	case "grep":
-		return !containsArg(args, "-R", "-S") &&
-			!containsLongOptionPrefix(args, "--dereference-recursive") &&
-			!containsClusteredShortOption(args, "RS", "ABCDefm")
-	case "ls":
-		return !containsArg(args, "-L") &&
-			!containsLongOptionPrefix(args, "--dereference") &&
-			!containsClusteredShortOption(args, "L", "")
 	case "wc":
 		return !containsLongOptionPrefix(args, "--files0-from")
 	case "diff":
@@ -414,8 +400,6 @@ func (a *Agent) autoScopedSimpleCommandAllowed(words []string, baseDir string) b
 			!containsClusteredShortOption(args, "fF", "")
 	case "tsc":
 		return autoScopedTSCCommandAllowed(args)
-	case "make", "task", "just":
-		return autoScopedTaskRunnerAllowed(args)
 	case "golangci-lint":
 		return autoScopedGolangCILintCommandAllowed(args)
 	case "gofmt", "staticcheck",
@@ -670,72 +654,11 @@ func clusteredShortOptionValue(argument string, options []string) (string, bool)
 }
 
 func autoScopedPackageCommandAllowed(args []string, direct ...string) bool {
-	if len(args) == 1 && firstArgIn(args, direct...) {
-		return true
-	}
-	return len(args) == 2 && args[0] == "run" && autoRoutineTargetAllowed(args[1])
-}
-
-func autoScopedTaskRunnerAllowed(args []string) bool {
-	if len(args) == 0 {
-		return false
-	}
-	// Task-runner options and variable assignments are code-bearing surfaces:
-	// GNU make's --eval/-E can define a recipe, and project runners commonly
-	// forward arbitrary trailing arguments. Keep AUTO to one or more explicit,
-	// routine target names; richer invocations remain approval-gated.
-	for _, target := range args {
-		if !autoRoutineTargetAllowed(target) {
-			return false
-		}
-	}
-	return true
-}
-
-func autoRoutineTargetAllowed(target string) bool {
-	if target == "" || target != strings.TrimSpace(target) || target != strings.ToLower(target) ||
-		strings.HasPrefix(target, "-") || strings.Contains(target, "=") {
-		return false
-	}
-	parts := strings.FieldsFunc(target, func(character rune) bool {
-		return !unicode.IsLetter(character) && !unicode.IsNumber(character)
-	})
-	if len(parts) == 0 {
-		return false
-	}
-	if stringIn(parts[0], "site", "docs") {
-		if len(parts) < 2 || !sliceContainsAny(parts[1:], "build", "check", "codegen", "compile", "generate", "lint", "test", "verify") {
-			return false
-		}
-	} else if !stringIn(parts[0],
-		"build", "check", "ci", "codegen", "compile", "coverage", "doc", "fix", "fmt", "format",
-		"generate", "integration", "lint", "smoke", "test", "tidy", "typecheck", "unit", "verify", "vet",
-	) {
-		return false
-	}
-	for _, part := range parts {
-		if stringIn(part,
-			"clean", "daemon", "debug", "delete", "deploy", "destroy", "dev", "hot", "inspect", "install", "interactive",
-			"mcp", "open", "preview", "publish", "push", "release", "remove", "reset", "rollback", "serve", "server",
-			"start", "ui", "uninstall", "upload", "watch",
-		) {
-			return false
-		}
-	}
-	return true
-}
-
-func sliceContainsAny(values []string, allowed ...string) bool {
-	for _, value := range values {
-		if stringIn(value, allowed...) {
-			return true
-		}
-	}
-	return false
+	return len(args) == 1 && firstArgIn(args, direct...)
 }
 
 func autoScopedGoCommandAllowed(args []string) bool {
-	if !firstArgIn(args, "build", "test", "vet", "list", "env", "version", "doc", "fmt", "generate") &&
+	if !firstArgIn(args, "build", "test", "vet", "list", "env", "version", "doc", "fmt") &&
 		(len(args) < 2 || args[0] != "mod" || !stringIn(args[1], "tidy", "verify", "why", "graph")) {
 		return false
 	}

@@ -1,11 +1,13 @@
                              ╭────────────────────────────────────────────────────────────╮
                              │ Help                                                       │
                              │                                                            │
-                             │   paste/drag imag…  Attach a PNG, JPEG, or GIF to the      │
-                             │                     pending prompt                         │
-                             │   ~/… or /…         Review temporary read-only access;     │
-  ollama: no model selected  │                     MCP tools require separate approval    │
-  try: ollama serve · ollama │   #skill            Insert skill mention text              │
+                             │   paste/drag imag…  Attach up to four PNG, JPEG, or GIF    │
+                             │                     files to the pending prompt            │
+                             │   shift+drag        Use the terminal selection override    │
+  ollama: no model selected  │                     while mouse scrolling is active        │
+  try: ollama serve · ollama │   ~/… or /…         Review temporary read-only access;     │
+                             │                     MCP tools require separate approval    │
+                             │   #skill            Insert skill mention text              │
                              │   /cmd              Run slash command                      │
                              │   team / swarm / …  Ask naturally for a read-only expert   │
                              │                     consultation when enabled              │
@@ -29,7 +31,5 @@
                              │   /goal budget      Unavailable · No goal is configured.   │
                              │   /goal drop        Unavailable · No goal is configured.   │
                              │   /model            Show, switch, or list models           │
-                             │   /recover          Review a paused execution and record   │
-                             │                     typed evidence                         │
-─────────────────────────────│ esc/q close · j/k scroll · pgup/pgdn page · 40%            │────────────────────────────
+─────────────────────────────│ esc/q close · j/k scroll · pgup/pgdn page · 39%            │────────────────────────────
                              ╰────────────────────────────────────────────────────────────╯

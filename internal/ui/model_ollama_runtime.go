@@ -19,6 +19,9 @@ import (
 func (m *Model) setCurrentModelProjection(name string) {
 	changed := config.CanonicalModelName(m.model) != config.CanonicalModelName(name)
 	m.model = name
+	if changed && m.agent != nil {
+		m.agent.CommitModelSwitch()
+	}
 	m.syncEffectiveContext(changed)
 }
 

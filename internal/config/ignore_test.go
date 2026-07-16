@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -172,6 +173,60 @@ func TestIgnorePatterns_Raw_NilReceiver(t *testing.T) {
 	var ip *IgnorePatterns
 	if ip.Raw() != "" {
 		t.Error("nil IgnorePatterns Raw() should return empty string")
+	}
+}
+
+func TestIgnorePatternsEffectiveRawKeepsHostDefaultsAuthoritative(t *testing.T) {
+	var missing *IgnorePatterns
+	defaults := missing.EffectiveRaw()
+	for _, pattern := range []string{".env", ".env.*", "*.pem", ".aws/**", ".ssh/**"} {
+		if !strings.Contains(defaults, pattern) {
+			t.Fatalf("default enforcement policy is missing %q: %q", pattern, defaults)
+		}
+	}
+	workspace, hasHostDefaults := IgnorePolicyLayers(defaults)
+	if workspace != "" || !hasHostDefaults {
+		t.Fatalf("default policy layers = (%q, %v), want empty workspace plus host defaults", workspace, hasHostDefaults)
+	}
+
+	policy := (&IgnorePatterns{raw: "!.env\nprivate/**"}).EffectiveRaw()
+	workspace, hasHostDefaults = IgnorePolicyLayers(policy)
+	if workspace != "!.env\nprivate/**" || !hasHostDefaults {
+		t.Fatalf("effective policy layers = (%q, %v), want repository policy plus host defaults", workspace, hasHostDefaults)
+	}
+	if EffectiveIgnoreContent(policy) != policy {
+		t.Fatalf("effective policy composition must be idempotent: %q", EffectiveIgnoreContent(policy))
+	}
+}
+
+func TestHostSecretPathIgnoredUsesExactTemplateLeafExceptions(t *testing.T) {
+	tests := map[string]bool{
+		".env":                         true,
+		"nested/.env.production":       true,
+		"nested/deploy.pem":            true,
+		"nested/.aws/credentials":      true,
+		".env.example":                 false,
+		"nested/.env.sample":           false,
+		".env.example/private-secret":  true,
+		"nested/.env.dist/credentials": true,
+		"src/main.go":                  false,
+	}
+	for path, want := range tests {
+		if got := HostSecretPathIgnored(path); got != want {
+			t.Errorf("HostSecretPathIgnored(%q) = %v, want %v", path, got, want)
+		}
+	}
+}
+
+func TestEffectiveIgnoreContentPreservesForgedBoundaryAndLaterWorkspaceRules(t *testing.T) {
+	workspace := effectiveIgnoreBoundary + "\nprivate/**"
+	if parsed, hasHostDefaults := IgnorePolicyLayers(workspace); parsed != workspace || hasHostDefaults {
+		t.Fatalf("untrusted boundary parsed as host policy: (%q, %v)", parsed, hasHostDefaults)
+	}
+	effective := EffectiveIgnoreContent(workspace)
+	parsed, hasHostDefaults := IgnorePolicyLayers(effective)
+	if parsed != workspace || !hasHostDefaults {
+		t.Fatalf("effective forged-boundary policy = (%q, %v), want complete workspace plus host layer", parsed, hasHostDefaults)
 	}
 }
 

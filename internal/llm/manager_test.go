@@ -170,6 +170,35 @@ func TestModelManagerRejectsTurnWhenExpectedContextChanged(t *testing.T) {
 	}
 }
 
+func TestModelManagerRejectsTurnWhenExpectedModelChangedAtSameContext(t *testing.T) {
+	chatCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/chat" {
+			chatCalls++
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	manager := NewModelManager(server.URL, 16_384)
+	manager.ConfigureOllamaRuntimeInventory(false, []OllamaModel{
+		{Name: "first:latest", Location: OllamaModelLocationLocal, SizeBytes: 1 << 30, ContextLength: 262_144},
+		{Name: "second:latest", Location: OllamaModelLocationLocal, SizeBytes: 1 << 30, ContextLength: 262_144},
+	}, true)
+	if err := manager.SetCurrentModel("second"); err != nil {
+		t.Fatal(err)
+	}
+	err := manager.ChatStream(context.Background(), ChatOptions{
+		ExpectedModel: "first", ExpectedContext: 16_384,
+	}, func(StreamChunk) error { return nil })
+	if !errors.Is(err, ErrInferenceNotStarted) || !strings.Contains(err.Error(), "model changed before inference") {
+		t.Fatalf("model mismatch error = %v", err)
+	}
+	if chatCalls != 0 {
+		t.Fatalf("provider received %d request(s), want none", chatCalls)
+	}
+}
+
 func TestModelManagerRuntimeInventoryCommitWaitsForInferenceAndRevokesLocalAdmission(t *testing.T) {
 	chatStarted := make(chan struct{}, 1)
 	releaseChat := make(chan struct{})

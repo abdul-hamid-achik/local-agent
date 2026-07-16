@@ -47,8 +47,8 @@ the CI versions above when reproducing CI exactly.
 
 The verification workflow has four independent jobs:
 
-- Linux Go verification: module diff, golangci-lint, vet, race tests, and
-  govulncheck;
+- Linux Go verification: module diff, golangci-lint, vet, race tests,
+  integration-tag compile-only coverage, and govulncheck;
 - VitePress production build plus a test of links in the rendered site;
 - all committed Glyphrun contract hashes plus the complete deterministic
   terminal suite from `task glyphrun`;
@@ -62,6 +62,7 @@ The verification workflow has four independent jobs:
 task glyphrun-contracts
 task glyphrun-cli
 task glyphrun
+task test:integration
 ```
 
 `task glyphrun-contracts` verifies that every committed spec still matches its
@@ -69,8 +70,12 @@ reviewed intent and outcomes. `task glyphrun-cli` is the fast local smoke suite
 for public flags, skip-approval behavior, and exact external-file reads.
 `task glyphrun` prebuilds Local Agent once, then runs every deterministic spec;
 this keeps a cold dependency build outside the bounded per-spec terminal
-timeouts. The same execution gate runs in CI, while `live_ollama_tool.yml`
-remains explicitly opt-in.
+timeouts. The same execution gate runs in CI, while specs under `specs/live/`
+remain explicitly opt-in.
+
+`task test:integration` keeps the build-tagged integration package compiling
+and runs its host-side checks. Tests whose live dependency is unavailable
+self-skip; this task is not a model-quality evaluation.
 
 Committed scenarios cover normal and minimum terminal sizes, authority modes,
 public CLI parsing, explicit external-file review, inline goal review and
@@ -87,15 +92,25 @@ git diff -- .glyphrun/snapshots
 
 Snapshots are evidence of rendering; they are not a substitute for outcome assertions.
 
-## Optional live Ollama proof
+## Optional live Ollama smoke
 
-With `qwen3.5:0.8b` installed, run the opt-in constrained-model tool scenario separately:
+With a running local Ollama and the documented default `qwen3.5:2b` already installed, run the constrained-model tool scenario separately:
 
 ```bash
-glyph run specs/live_ollama_tool.yml --format md
+task eval
+EVAL_REPEATS=5 task eval
 ```
 
-This proof depends on a live local model and is intentionally outside the deterministic default suite.
+The task checks the configured `OLLAMA_HOST` (loopback by default) for an
+already-installed `qwen3.5:2b`, then repeats the exact tool-call contract three
+times by default and reports Glyphrun's structured stability result. It exits
+if the model is unavailable and never runs `ollama pull` or downloads weights.
+This is a narrow live smoke—not a repository task-completion benchmark—and is
+intentionally outside the deterministic hosted-CI suite.
+Any failed repeat makes `task eval` exit nonzero. The structured result and the
+corresponding `.glyphrun/runs/` artifact distinguish tool dispatch, final-answer
+grounding, and process completion instead of collapsing a model miss into a
+generic timeout.
 
 ## Related evidence tools
 

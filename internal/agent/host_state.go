@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 
+	"github.com/abdul-hamid-achik/local-agent/internal/config"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 	permissionpkg "github.com/abdul-hamid-achik/local-agent/internal/permission"
 )
@@ -24,7 +25,7 @@ func (a *Agent) filesystemContext() filesystemContext {
 	}
 	return filesystemContext{
 		workDir:       a.workDir,
-		ignoreContent: a.ignoreContent,
+		ignoreContent: config.EffectiveIgnoreContent(a.ignoreContent),
 		version:       a.filesystemVersion,
 	}
 }
@@ -34,7 +35,7 @@ func (a *Agent) pinTurnFilesystem() filesystemContext {
 	defer a.mu.Unlock()
 	snapshot := filesystemContext{
 		workDir:       a.workDir,
-		ignoreContent: a.ignoreContent,
+		ignoreContent: config.EffectiveIgnoreContent(a.ignoreContent),
 		version:       a.filesystemVersion,
 	}
 	a.activeFilesystem = snapshot

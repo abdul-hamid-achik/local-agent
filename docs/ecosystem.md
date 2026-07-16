@@ -22,7 +22,7 @@ The shared transcript vocabulary keeps those ownership boundaries legible:
 | file.cheap | Artifact storage | Preserves evidence; does not create truth by itself |
 | TinyVault | Secret boundary | Security state, never evidence content |
 | Monitor | Ambient and requested observability | Operational support |
-| Bob | Repository contract and convergence | Clean, drift, conflict, blocked, or failed |
+| Bob | Repository contract and convergence | No evidence upgrade; clean, drift, conflict, blocked, or failed domain state |
 | VecLite | Vector storage | Internal capability, not an independent claim |
 
 Local Agent shows these as semantic tool receipts in one chronological transcript. A green transport receipt is never substituted for a domain result or verification outcome.
@@ -32,6 +32,11 @@ Local Agent shows these as semantic tool receipts in one chronological transcrip
 ### [Cortex](https://cortexai.tools/)
 
 An evidence-guided engineering kernel for durable task state, bounded changes, and verification. Local Agent can use Cortex as the optional semantic advisor for durable goals, directly or through MCPHub. Local acceptance IDs and statements cross that boundary as typed, immutable `acceptanceCriteria`; they are never flattened into goal prose.
+
+Exact Cortex actions can become bounded next-step suggestions. Local Agent
+still owns tool resolution, schemas, effect classification, approval, budgets,
+loop prevention, scheduling, and cancellation; it does not reproduce Cortex's
+task lifecycle or evidence ledger.
 
 ### [MCPHub](https://mcphubcli.dev/)
 
@@ -87,7 +92,44 @@ A deterministic, model-free repository factory that turns a `bob.yaml` contract 
 
 Bob is built to be driven by agents. Run `bob learn --json` once at the start of a session for a machine-readable onboarding brief: every command, the exit-code contract (0 success, 2 conflicts, 3 drift without conflicts, 4 invalid input; `plan` always exits 0), the stable `data.error.code` values, and the recipe catalog. Every `--json` failure envelope carries copy-pasteable corrective commands in `next_actions`, and every plan action carries a stable `code` field for branching without parsing prose.
 
-Bob's `files` recipe lets an agent declare an arbitrary file tree in `bob.yaml` — paths, modes, contents, and literal `${vars.key}` substitution — and scaffold or reconcile any repository through Bob's plan/apply/lock conflict safety; `bob recipe show files --json` returns the schema with an example. When Bob is reached as a configured MCP tool, Local Agent reads its versioned structured result and keeps transport separate from clean, drift, conflict, blocked, and failed repository states.
+Bob's `files` recipe lets an agent declare an arbitrary file tree in `bob.yaml` — paths, modes, contents, and literal `${vars.key}` substitution — and scaffold or reconcile any repository through Bob's plan/apply/lock conflict safety; `bob recipe show files --json` returns the schema with an example.
+
+When Bob is reached through an exact trusted MCP route, Local Agent parses
+`bob_context`, `bob_path`, and `bob_playbook` through their supported versioned
+schemas. Context reports bounded repository and capability state; path reports
+ownership and human-edit effects; playbook reports availability, blockers,
+required inputs, scope, risk, and bounded steps. A lookalike route, malformed
+document, future schema, or unknown closed value fails closed.
+
+Every Bob result carries `EvidenceNone`: no evidence assessment. Bob can prove
+whether repository files converge on its contract, but not whether application
+behavior is correct. A Bob `clean` state is therefore visually and semantically
+distinct from verified evidence or Cortex task completion.
+
+Raw Bob structured output stays inside the parser boundary. Saved session state
+contains only a bounded semantic digest; absolute workspace paths, arbitrary
+reasons or commands, user values, manifests, previews, and file contents are
+not persisted. A smaller validated projection may be supplied transiently to
+the active model turn. Direct Bob calls and complete MCPHub stored results use
+the same parser after the gateway pages have been bounded and matched to the
+exact original call ID and route.
+
+At session work time, a regular root `bob.yaml` is only a cheap candidate
+signal. If one unambiguous eligible registered `bob_context` read is available,
+Local Agent can suggest the compact read and cache its bounded digest. A unique
+direct route is preferred; otherwise exactly one pinned MCPHub route is
+required. With explicitly configured `auto_read_only` and an
+AUTO turn, it may perform the read only if the current host policy proves the
+target is read-only, non-destructive, idempotent, closed-world, workspace-bound,
+and not denied. The automatic continuation budget never exceeds two calls.
+
+Bob and Cortex actions share a bounded host projection, not product authority.
+In the default suggestion mode, Local Agent exposes a valid next tool, named
+missing inputs, and blockers without executing it. Optional read-only
+auto-follow revalidates the route, current tool schema, workspace, effect,
+approval policy, staleness, and replay fingerprint before each dispatch. Shell,
+mutation, secreted, unresolved proxy, and prose-derived actions remain gated or
+unsupported.
 
 The [Bob website](https://bobcli.dev/) and [source repository](https://github.com/abdul-hamid-achik/bob) document its repository contracts and build workflow; the [agent guide](https://bobcli.dev/agents) is the onboarding reference for coding agents.
 

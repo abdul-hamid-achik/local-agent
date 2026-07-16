@@ -86,6 +86,71 @@ func TestBuildSystemPrompt(t *testing.T) {
 	})
 }
 
+func TestSystemPromptMemoryGuidelinesMatchAdvertisedTools(t *testing.T) {
+	store := memory.NewStore(filepath.Join(t.TempDir(), "test-memories.json"))
+	_, _ = store.Save("user prefers dark mode", []string{"preference"})
+
+	tests := []struct {
+		name        string
+		tools       []llm.ToolDef
+		model       string
+		wantTools   []string
+		absentTools []string
+	}{
+		{
+			name:        "narrowed headless read keeps facts without memory authority",
+			tools:       []llm.ToolDef{{Name: "read", Description: "Read a file."}},
+			model:       "qwen3.5:2b",
+			absentTools: []string{"memory_save", "memory_recall", "memory_list", "memory_update", "memory_delete"},
+		},
+		{
+			name:        "plan policy names recall only",
+			tools:       []llm.ToolDef{memoryToolDef(t, "memory_recall")},
+			wantTools:   []string{"memory_recall"},
+			absentTools: []string{"memory_save", "memory_list", "memory_update", "memory_delete"},
+		},
+		{
+			name:        "save only does not claim recall",
+			tools:       []llm.ToolDef{memoryToolDef(t, "memory_save")},
+			wantTools:   []string{"memory_save"},
+			absentTools: []string{"memory_recall", "memory_list", "memory_update", "memory_delete"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prompt := buildSystemPromptForModel("", tt.tools, "", "", store, "", "", "", tt.model)
+			if !strings.Contains(prompt, "Remembered Facts") || !strings.Contains(prompt, "user prefers dark mode") {
+				t.Fatalf("prompt lost bounded remembered context:\n%s", prompt)
+			}
+			for _, name := range tt.wantTools {
+				if !strings.Contains(prompt, name) {
+					t.Errorf("prompt omitted advertised memory tool %q:\n%s", name, prompt)
+				}
+			}
+			for _, name := range tt.absentTools {
+				if strings.Contains(prompt, name) {
+					t.Errorf("prompt named unavailable memory tool %q:\n%s", name, prompt)
+				}
+			}
+			if len(tt.wantTools) == 0 && strings.Contains(prompt, "Memory Guidelines") {
+				t.Errorf("prompt emitted memory guidance without advertised memory tools:\n%s", prompt)
+			}
+		})
+	}
+}
+
+func memoryToolDef(t *testing.T, name string) llm.ToolDef {
+	t.Helper()
+	for _, definition := range memory.BuiltinToolDefs() {
+		if definition.Name == name {
+			return definition
+		}
+	}
+	t.Fatalf("missing built-in memory definition %q", name)
+	return llm.ToolDef{}
+}
+
 func TestSimplifyToolsForSmallModelIncludesRequiredArguments(t *testing.T) {
 	prompt := simplifyToolsForSmallModel([]llm.ToolDef{{
 		Name:        "bash",

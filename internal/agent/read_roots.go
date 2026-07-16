@@ -237,9 +237,11 @@ func (a *Agent) addReadRoot(path string, expected *readPathIdentity) (string, er
 		_ = root.Close()
 		return "", err
 	}
-	grant := &additionalReadRoot{path: canonical, root: root, info: pinned}
-	if ignore != nil {
-		grant.ignoreContent = ignore.Raw()
+	grant := &additionalReadRoot{
+		path:          canonical,
+		root:          root,
+		info:          pinned,
+		ignoreContent: ignore.EffectiveRaw(),
 	}
 
 	// Authority is immutable while a provider turn is active. Check only at the
@@ -1555,7 +1557,11 @@ func validateBoundedFileInfo(info os.FileInfo, limit int64) error {
 }
 
 func pathIgnoredWithContent(ignoreContent, path string) bool {
-	if strings.TrimSpace(ignoreContent) == "" {
+	workspacePolicy, hasHostDefaults := config.IgnorePolicyLayers(ignoreContent)
+	if hasHostDefaults && config.HostSecretPathIgnored(path) {
+		return true
+	}
+	if strings.TrimSpace(workspacePolicy) == "" {
 		return false
 	}
 	cleanPath := strings.TrimSuffix(filepath.ToSlash(filepath.Clean(path)), "/")
@@ -1564,7 +1570,7 @@ func pathIgnoredWithContent(ignoreContent, path string) bool {
 		ancestors = append(ancestors, parent)
 	}
 	ignored := false
-	for _, line := range strings.Split(ignoreContent, "\n") {
+	for _, line := range strings.Split(workspacePolicy, "\n") {
 		pattern := strings.TrimSpace(line)
 		if pattern == "" || strings.HasPrefix(pattern, "#") {
 			continue

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -205,6 +206,165 @@ func TestLosslessSessionStateRestoresAgentHistory(t *testing.T) {
 	}
 	if !target.modelPinned {
 		t.Fatal("saved model pin state was not restored")
+	}
+}
+
+func TestContextPromptFloorInteractivePersistenceRoundTrip(t *testing.T) {
+	floor := agent.ContextPromptFloor{
+		Tokens:        2_950,
+		HostTokens:    725,
+		MessageTokens: 2_025,
+		Model:         "test-model",
+	}
+	messages := []llm.Message{
+		{Role: "user", Content: "inspect the release"},
+		{Role: "assistant", Content: "the release is ready"},
+	}
+
+	source := newTestModel(t)
+	source.agent = agent.New(&importCaptureClient{}, nil, 4_096)
+	t.Cleanup(source.agent.Close)
+	source.model = floor.Model
+	source.agent.ReplaceMessages(messages)
+	if err := source.agent.RestoreContextPromptFloor(floor); err != nil {
+		t.Fatalf("install source context prompt floor: %v", err)
+	}
+	source.entries = []ChatEntry{
+		{Kind: "user", Content: messages[0].Content},
+		{Kind: "assistant", Content: messages[1].Content},
+	}
+
+	raw, err := encodeSessionState(source)
+	if err != nil {
+		t.Fatalf("encode session: %v", err)
+	}
+	decoded, err := decodeSessionState(raw)
+	if err != nil {
+		t.Fatalf("decode session: %v", err)
+	}
+	if decoded.ContextPromptFloor != floor {
+		t.Fatalf("decoded context prompt floor = %#v, want %#v", decoded.ContextPromptFloor, floor)
+	}
+
+	target := newTestModel(t)
+	target.agent = agent.New(&importCaptureClient{}, nil, 4_096)
+	t.Cleanup(target.agent.Close)
+	target.model = floor.Model
+	if err := target.restoreSessionState(decoded); err != nil {
+		t.Fatalf("restore session: %v", err)
+	}
+	if got := target.agent.ContextPromptFloor(); got != floor {
+		t.Fatalf("restored context prompt floor = %#v, want %#v", got, floor)
+	}
+	if got := target.agent.Messages(); len(got) != len(messages) || got[1].Content != messages[1].Content {
+		t.Fatalf("restored messages = %#v", got)
+	}
+}
+
+func TestContextPromptFloorLegacySnapshotWithoutFieldRemainsResumable(t *testing.T) {
+	raw := `{"version":1,"messages":[{"role":"user","content":"continue"}],"entries":[{"kind":"user","content":"continue"}],"mode":2,"model":"test-model"}`
+	state, err := decodeSessionState(raw)
+	if err != nil {
+		t.Fatalf("decode legacy session: %v", err)
+	}
+	if state.ContextPromptFloor != (agent.ContextPromptFloor{}) {
+		t.Fatalf("legacy session synthesized context prompt floor %#v", state.ContextPromptFloor)
+	}
+
+	target := newTestModel(t)
+	target.agent = agent.New(&importCaptureClient{}, nil, 4_096)
+	t.Cleanup(target.agent.Close)
+	target.model = "test-model"
+	if err := target.restoreSessionState(state); err != nil {
+		t.Fatalf("restore legacy session: %v", err)
+	}
+	if got := target.agent.ContextPromptFloor(); got != (agent.ContextPromptFloor{}) {
+		t.Fatalf("restored legacy context prompt floor = %#v", got)
+	}
+}
+
+func TestContextPromptFloorPersistenceRejectsMismatchedModel(t *testing.T) {
+	floor := agent.ContextPromptFloor{
+		Tokens: 2_950, HostTokens: 725, MessageTokens: 2_025, Model: "other-model",
+	}
+	if _, err := marshalPersistedSessionState(persistedSessionState{
+		Version:            currentPersistedSessionVersion,
+		Mode:               ModeNormal,
+		Model:              "test-model",
+		ContextPromptFloor: floor,
+	}); err == nil || !strings.Contains(err.Error(), "model does not match") {
+		t.Fatalf("mismatched model encode error = %v", err)
+	}
+
+	raw := `{"version":2,"messages":[],"entries":[],"mode":2,"model":"test-model","context_prompt_floor":{"tokens":2950,"host_tokens":725,"message_tokens":2025,"model":"other-model"}}`
+	if _, err := decodeSessionState(raw); err == nil || !strings.Contains(err.Error(), "model does not match") {
+		t.Fatalf("mismatched model decode error = %v", err)
+	}
+}
+
+func TestContextPromptFloorPersistenceRejectsPartialAndUnboundedNumbers(t *testing.T) {
+	tooLarge := agent.MaxContextPromptFloorTokens + 1
+	tests := []struct {
+		name  string
+		floor string
+	}{
+		{name: "tokens without model", floor: `{"tokens":2950,"host_tokens":725,"message_tokens":2025}`},
+		{name: "host tokens without total", floor: `{"host_tokens":725,"model":"test-model"}`},
+		{name: "message tokens without total", floor: `{"message_tokens":2025,"model":"test-model"}`},
+		{name: "negative host tokens", floor: `{"tokens":2950,"host_tokens":-1,"message_tokens":2025,"model":"test-model"}`},
+		{name: "oversized total", floor: fmt.Sprintf(`{"tokens":%d,"host_tokens":1,"message_tokens":1,"model":"test-model"}`, tooLarge)},
+		{name: "oversized host", floor: fmt.Sprintf(`{"tokens":2950,"host_tokens":%d,"message_tokens":1,"model":"test-model"}`, tooLarge)},
+		{name: "oversized message", floor: fmt.Sprintf(`{"tokens":2950,"host_tokens":1,"message_tokens":%d,"model":"test-model"}`, tooLarge)},
+		{name: "fractional total", floor: `{"tokens":1.5,"host_tokens":1,"message_tokens":1,"model":"test-model"}`},
+		{name: "integer overflow", floor: `{"tokens":999999999999999999999999999999,"host_tokens":1,"message_tokens":1,"model":"test-model"}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			raw := `{"version":2,"messages":[],"entries":[],"mode":2,"model":"test-model","context_prompt_floor":` + test.floor + `}`
+			if _, err := decodeSessionState(raw); err == nil {
+				t.Fatalf("decode accepted invalid context prompt floor %s", test.floor)
+			}
+		})
+	}
+}
+
+func TestHeadlessSessionTerminalAndErrorSnapshotsPreserveContextPromptFloor(t *testing.T) {
+	floor := agent.ContextPromptFloor{
+		Tokens: 2_950, HostTokens: 725, MessageTokens: 2_025, Model: "test-model",
+	}
+	tests := []struct {
+		name     string
+		messages []llm.Message
+	}{
+		{
+			name: "terminal answer",
+			messages: []llm.Message{
+				{Role: "user", Content: "inspect the release"},
+				{Role: "assistant", Content: "the release is ready"},
+			},
+		},
+		{
+			name:     "provider error after dispatch",
+			messages: []llm.Message{{Role: "user", Content: "inspect the release"}},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			raw, err := EncodeHeadlessSessionStateWithContextFloor(test.messages, floor.Model, "", true, 0, floor)
+			if err != nil {
+				t.Fatalf("encode headless session: %v", err)
+			}
+			state, err := decodeSessionState(raw)
+			if err != nil {
+				t.Fatalf("decode headless session: %v", err)
+			}
+			if state.ContextPromptFloor != floor {
+				t.Fatalf("saved context prompt floor = %#v, want %#v", state.ContextPromptFloor, floor)
+			}
+			if len(state.Messages) != len(test.messages) {
+				t.Fatalf("saved messages = %#v, want %d", state.Messages, len(test.messages))
+			}
+		})
 	}
 }
 

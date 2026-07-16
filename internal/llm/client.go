@@ -60,6 +60,10 @@ type ChatOptions struct {
 	// managers use it to reject a turn whose model policy changed after the
 	// agent took its budget snapshot. Direct clients may ignore it.
 	ExpectedContext int
+	// ExpectedModel pins the tokenizer/model identity paired with the prompt
+	// estimate. ModelManager validates it atomically before dispatch; direct
+	// clients may ignore it.
+	ExpectedModel string
 }
 
 // Message represents a conversation message.

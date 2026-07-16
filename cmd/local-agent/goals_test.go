@@ -16,12 +16,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/abdul-hamid-achik/local-agent/internal/agent"
 	"github.com/abdul-hamid-achik/local-agent/internal/controlplane"
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
 	"github.com/abdul-hamid-achik/local-agent/internal/execution"
 	"github.com/abdul-hamid-achik/local-agent/internal/goal"
+	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 	"github.com/abdul-hamid-achik/local-agent/internal/reconciliation"
 	"github.com/abdul-hamid-achik/local-agent/internal/sessionref"
+	"github.com/abdul-hamid-achik/local-agent/internal/ui"
 )
 
 func openGoalCommandTestStore(t *testing.T) *db.Store {
@@ -331,6 +334,100 @@ func TestGoalOpenPersistsValidatedHeadlessRuntime(t *testing.T) {
 	_, restored, state, record, err := loadHeadlessGoalState(context.Background(), store, workspace, result.SessionID)
 	if err != nil || restored == nil || state.Goal == nil || record.Revision != 1 {
 		t.Fatalf("headless goal load runtime=%v state=%#v revision=%d err=%v", restored, state, record.Revision, err)
+	}
+}
+
+func TestLoadHeadlessGoalStateRestoresContextPromptFloorFromSQLite(t *testing.T) {
+	store := openGoalCommandTestStore(t)
+	workspace := t.TempDir()
+	session, snapshot := createGoalSession(t, store, workspace, "Resume the bounded goal")
+	floor := agent.ContextPromptFloor{
+		Tokens:        2_950,
+		HostTokens:    725,
+		MessageTokens: 2_025,
+		Model:         "test",
+	}
+	messages := []llm.Message{
+		{Role: "user", Content: "continue the goal"},
+		{Role: "assistant", Content: "the bounded step is complete"},
+	}
+	raw, err := ui.EncodeHeadlessGoalSessionStateWithContextFloor(
+		messages, floor.Model, "", true, 9, snapshot, floor,
+	)
+	if err != nil {
+		t.Fatalf("encode headless goal session: %v", err)
+	}
+	before, err := store.GetSessionStateRecord(context.Background(), session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	written, err := store.SaveSessionStateCAS(context.Background(), session.ID, before.Revision, raw)
+	if err != nil {
+		t.Fatalf("save headless goal session: %v", err)
+	}
+
+	loadedSession, restored, state, record, err := loadHeadlessGoalState(context.Background(), store, workspace, session.ID)
+	if err != nil {
+		t.Fatalf("load headless goal session: %v", err)
+	}
+	if loadedSession.ID != session.ID || restored == nil || state.Goal == nil || state.Goal.SessionID != session.ID {
+		t.Fatalf("loaded headless goal session=%#v runtime=%v state=%#v", loadedSession, restored, state)
+	}
+	if record.Revision != written.Revision || state.ExecutionCursor != 9 {
+		t.Fatalf("loaded revision/cursor = %d/%d, want %d/9", record.Revision, state.ExecutionCursor, written.Revision)
+	}
+	if state.ContextPromptFloor != floor {
+		t.Fatalf("loaded context prompt floor = %#v, want %#v", state.ContextPromptFloor, floor)
+	}
+	if len(state.Messages) != len(messages) || state.Messages[1].Content != messages[1].Content {
+		t.Fatalf("loaded messages = %#v", state.Messages)
+	}
+}
+
+func TestLoadHeadlessGoalStateRejectsInvalidContextPromptFloor(t *testing.T) {
+	tests := []struct {
+		name  string
+		model string
+		floor agent.ContextPromptFloor
+	}{
+		{
+			name:  "mismatched model",
+			model: "test",
+			floor: agent.ContextPromptFloor{Tokens: 2_950, HostTokens: 725, MessageTokens: 2_025, Model: "other-model"},
+		},
+		{
+			name:  "partial numeric projection",
+			model: "test",
+			floor: agent.ContextPromptFloor{HostTokens: 725, Model: "test"},
+		},
+		{
+			name:  "oversized numeric projection",
+			model: "test",
+			floor: agent.ContextPromptFloor{Tokens: agent.MaxContextPromptFloorTokens + 1, HostTokens: 1, MessageTokens: 1, Model: "test"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := openGoalCommandTestStore(t)
+			workspace := t.TempDir()
+			session, snapshot := createGoalSession(t, store, workspace, "Reject "+test.name)
+			payload, err := json.Marshal(headlessGoalState{
+				Version:            2,
+				Model:              test.model,
+				Messages:           []llm.Message{{Role: "user", Content: "continue"}},
+				ContextPromptFloor: test.floor,
+				Goal:               &snapshot,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.SaveSessionState(context.Background(), session.ID, string(payload)); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, _, _, err := loadHeadlessGoalState(context.Background(), store, workspace, session.ID); err == nil {
+				t.Fatalf("load accepted invalid context prompt floor %#v", test.floor)
+			}
+		})
 	}
 }
 

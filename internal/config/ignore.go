@@ -3,6 +3,7 @@ package config
 import (
 	"bufio"
 	"bytes"
+	_ "embed"
 	"errors"
 	"fmt"
 	"os"
@@ -14,7 +15,19 @@ import (
 
 const maxAgentIgnoreBytes int64 = 256 << 10
 
+const effectiveIgnoreBoundary = "# --- Local Agent host secret policy (repository rules cannot override) ---"
+
+var publicEnvTemplateNames = map[string]struct{}{
+	".env.dist":     {},
+	".env.example":  {},
+	".env.sample":   {},
+	".env.template": {},
+}
+
 var agentIgnoreReader = safeio.NewReader()
+
+//go:embed default_agentignore
+var defaultAgentIgnoreContent string
 
 // IgnorePatterns holds parsed .agentignore patterns.
 type IgnorePatterns struct {
@@ -113,6 +126,80 @@ func (ip *IgnorePatterns) Raw() string {
 		return ""
 	}
 	return ip.raw
+}
+
+// EffectiveIgnoreContent combines one workspace policy with Local Agent's
+// host-owned secret exclusions. A boundary keeps the two policies independent:
+// repository rules may make access stricter, but cannot negate a host deny.
+func EffectiveIgnoreContent(workspacePolicy string) string {
+	if workspace, hasHostDefaults := IgnorePolicyLayers(workspacePolicy); hasHostDefaults {
+		workspacePolicy = workspace
+	}
+	parts := make([]string, 0, 3)
+	if workspacePolicy = strings.TrimSpace(workspacePolicy); workspacePolicy != "" {
+		parts = append(parts, workspacePolicy)
+	}
+	parts = append(parts, effectiveIgnoreBoundary)
+	if defaults := strings.TrimSpace(defaultAgentIgnoreContent); defaults != "" {
+		parts = append(parts, defaults)
+	}
+	return strings.Join(parts, "\n")
+}
+
+// IgnorePolicyLayers separates an effective policy into the repository-owned
+// portion and a flag indicating that host secret defaults must be enforced.
+// A boundary is trusted only when the complete embedded host suffix follows it;
+// a repository-controlled lookalike line therefore remains ordinary policy.
+func IgnorePolicyLayers(content string) (workspacePolicy string, hasHostDefaults bool) {
+	normalized := strings.TrimSpace(content)
+	hostSuffix := effectiveIgnoreBoundary
+	if defaults := strings.TrimSpace(defaultAgentIgnoreContent); defaults != "" {
+		hostSuffix += "\n" + defaults
+	}
+	if normalized != hostSuffix && !strings.HasSuffix(normalized, "\n"+hostSuffix) {
+		return content, false
+	}
+	workspacePolicy = strings.TrimSpace(strings.TrimSuffix(normalized, hostSuffix))
+	return workspacePolicy, true
+}
+
+// HostSecretPathIgnored reports whether path is denied by Local Agent's
+// non-overridable secret policy. Conventional environment templates are exact
+// leaf-file exceptions only: a repository may still exclude them, and a
+// directory named .env.example never makes its descendants readable.
+func HostSecretPathIgnored(path string) bool {
+	cleanPath := strings.Trim(filepath.ToSlash(filepath.Clean(path)), "/")
+	if cleanPath == "" || cleanPath == "." {
+		return false
+	}
+	parts := strings.Split(cleanPath, "/")
+	for i, part := range parts {
+		if part == "" || part == "." {
+			continue
+		}
+		if strings.HasPrefix(part, ".env.") {
+			_, publicTemplate := publicEnvTemplateNames[part]
+			if !publicTemplate || i != len(parts)-1 {
+				return true
+			}
+			continue
+		}
+		if part == ".env" || part == ".npmrc" || part == ".netrc" || part == "credentials" || part == ".aws" || part == ".ssh" {
+			return true
+		}
+		for _, pattern := range []string{"*.pem", "*.key", "id_rsa*", "id_ed25519*", "*.p12", "*.keystore"} {
+			if matched, _ := filepath.Match(pattern, part); matched {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// EffectiveRaw returns the enforcement policy used for workspace file access.
+// Raw StructuredContent and file contents never enter this policy.
+func (ip *IgnorePatterns) EffectiveRaw() string {
+	return EffectiveIgnoreContent(ip.Raw())
 }
 
 // Patterns returns the list of patterns.

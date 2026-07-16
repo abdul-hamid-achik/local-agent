@@ -15,7 +15,7 @@ Run Local Agent in a clean Git worktree, read approval requests, and review the 
 ## Requirements
 
 - macOS or Linux
-- [Go 1.25.12 or newer](https://go.dev/dl/)
+- [Go 1.25.12 or newer](https://go.dev/dl/) when installing from source
 - [Ollama](https://ollama.com/) running on the same machine
 - A Git worktree for work you want the agent to inspect or change
 
@@ -23,7 +23,13 @@ Windows release binaries are not published yet.
 
 ## Install
 
-Install the latest tagged Go release:
+On macOS, install the release cask:
+
+```bash
+brew install --cask abdul-hamid-achik/tap/local-agent
+```
+
+Or install the latest tagged Go release:
 
 ```bash
 go install github.com/abdul-hamid-achik/local-agent/cmd/local-agent@latest
@@ -70,7 +76,13 @@ Try a read-only request first:
 Explain the request flow in this repository and identify the tests that cover it.
 ```
 
-Local Agent begins in **NORMAL** mode. Reads can proceed inside the workspace. Mutating tools such as edits, writes, shell commands, and MCP calls require approval by default. Switch to **AUTO** when you want validated workspace writes and routine local build, test, lint, formatting, and inspection commands to proceed without repeated prompts. Git and dangerous, external, dynamic, or unknown effects remain gated.
+Local Agent begins in **NORMAL** mode. Reads can proceed inside the workspace.
+Mutating tools such as edits, writes, shell commands, and MCP calls require
+approval by default. Switch to **AUTO** when you want validated workspace writes
+and catalogued direct build, test, lint, formatting, and inspection commands to
+proceed without repeated prompts. Task runners, package `run` targets, raw
+`find`, `rg`, and `grep` shell commands, `go generate`, Git, and dangerous,
+external, dynamic, or unknown effects remain gated.
 
 To reopen saved work directly, pass a positive session ID or select the newest
 session in the current canonical workspace:
@@ -87,18 +99,31 @@ Startup resume is available only in the interactive TUI, so it cannot be
 combined with `-p` or `--prompt`. It restores state without sending a prompt or automatically
 continuing a durable goal.
 
+After a clean interactive exit, Local Agent prints the exact
+`local-agent --resume S…` command for the active saved session. An unsaved
+conversation and a failed TUI run do not print a resume command.
+
 ## Essential controls
 
 | Key | Action |
 |---|---|
-| `enter` | Send the prompt |
-| `shift+enter` | Insert a newline |
+| `enter` | Send the prompt, or queue one follow-up while a turn is running |
+| `shift+enter`, `ctrl+j`, `alt+enter` | Insert a newline; use `ctrl+j` when the terminal cannot distinguish `shift+enter` |
 | `shift+tab` | Cycle NORMAL, PLAN, and AUTO |
 | `ctrl+o` | Open the live Ollama model picker |
 | `ctrl+p` | Open session settings |
 | `tab` | Complete commands, paths, and skills |
 | `esc` | Close an overlay or inline form, cancel an approval, or cancel active work |
 | `ctrl+c` | Quit |
+
+The composer grows with wrapped text up to a terminal-height-aware limit, then
+scrolls internally while keeping the cursor visible. Pasted text follows the
+same layout. The mouse wheel scrolls the conversation without moving the draft.
+
+Selecting a verified local model with `/model <name>` or the model picker saves
+the pin for the next process start. `/model auto` clears it. A CLI `--model`
+selection and agent-profile selections take precedence, and conversation-only
+Cloud consent is never saved.
 
 Inside the inline approval surface, use `y` to allow once, `n` to deny, `s` to
 allow the identical canonical request again during the current Agent process,
@@ -115,11 +140,14 @@ Add a PNG, JPEG, or GIF to the next ordinary prompt with `/image` (or the
 What is causing the alignment problem?
 ```
 
-You can also drag or paste a supported image file when the terminal inserts its
-path as text. Use `/image list` to inspect pending attachments and `/image clear`
-to remove them. An unpinned session selects an admitted, auto-routable
-vision-capable Ollama model without implicitly selecting a manual-only Cloud
-model; a pinned non-vision model fails locally before a provider request starts.
+You can also drag or paste one supported image path, or a complete
+space/newline-separated list of paths. Local Agent validates the complete list,
+keeps attachment order, and de-duplicates identical image content; mixed prose
+remains draft text. Each prompt accepts up to four images. Use `/image list` to
+inspect pending attachments and `/image clear` to remove them. An unpinned
+session selects an admitted, auto-routable vision-capable Ollama model without
+implicitly selecting a manual-only Cloud model; a pinned non-vision model fails
+locally before a provider request starts.
 If an older stored image is unavailable, the draft is restored; use
 `/image forget-history` to remove active historical image context before
 retrying. Existing checkpoints remain unchanged and can restore their refs.

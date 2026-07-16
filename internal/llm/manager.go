@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -424,6 +425,9 @@ func (m *ModelManager) ChatStream(ctx context.Context, opts ChatOptions, fn func
 	if model == "" {
 		return inferenceNotStarted(ErrNoModelSelected)
 	}
+	if err := validateExpectedModel(model, opts.ExpectedModel); err != nil {
+		return inferenceNotStarted(err)
+	}
 	if err := m.validateExpectedContext(model, opts.ExpectedContext); err != nil {
 		return inferenceNotStarted(err)
 	}
@@ -437,6 +441,19 @@ func (m *ModelManager) ChatStream(ctx context.Context, opts ChatOptions, fn func
 	m.markNonExpertActivityLocked(model)
 	m.mu.Unlock()
 	return client.ChatStream(ctx, opts, fn)
+}
+
+func validateExpectedModel(model, expected string) error {
+	if strings.TrimSpace(expected) == "" {
+		return nil
+	}
+	if config.CanonicalModelName(model) != config.CanonicalModelName(expected) {
+		return fmt.Errorf(
+			"model changed before inference: turn expected %q, current selection is %q; retry the turn",
+			expected, model,
+		)
+	}
+	return nil
 }
 
 func (m *ModelManager) validateExpectedContext(model string, expected int) error {
@@ -463,6 +480,9 @@ func (m *ModelManager) ChatStreamForModel(ctx context.Context, model string, opt
 	defer m.admission.releaseExpert()
 	m.inferenceMu.RLock()
 	defer m.inferenceMu.RUnlock()
+	if err := validateExpectedModel(model, opts.ExpectedModel); err != nil {
+		return inferenceNotStarted(err)
+	}
 	if err := m.validateExpectedContext(model, opts.ExpectedContext); err != nil {
 		return inferenceNotStarted(err)
 	}

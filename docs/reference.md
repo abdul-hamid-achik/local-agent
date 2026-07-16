@@ -17,6 +17,7 @@ Local Agent has three operator surfaces: the interactive TUI, human-readable hea
 | `local-agent --plan --prompt "prompt"` | Run one read-only PLAN prompt; equivalent to `--mode plan` |
 | `local-agent --auto --prompt "prompt"` | Run one proactive AUTO prompt; equivalent to `--mode auto`, with routine confined workspace actions pre-authorized |
 | `local-agent --mode <normal\|plan\|auto> --prompt "prompt"` | Select headless authority explicitly |
+| `local-agent --tools read,diff --plan --prompt "prompt"` | Narrow one headless turn to the named built-in tools |
 | `local-agent --model <name>` | Select and pin the initial Ollama model |
 | `local-agent --agent <name>` | Select the initial agent profile |
 | `local-agent --resume <S42\|42\|latest>` | Open the TUI and restore an exact or newest current-workspace session |
@@ -27,8 +28,8 @@ Local Agent has three operator surfaces: the interactive TUI, human-readable hea
 | `local-agent logs` | List recent structured logs |
 | `local-agent logs -f` | Follow the latest log |
 | `local-agent session list [--json] [--limit N]` | List sessions with short handles and titles |
-| `local-agent session export <S42\|42>` | Export one bounded session audit projection |
-| `local-agent session repair <S42\|42>` | Repair one session projection from durable execution records |
+| `local-agent session export [--format jsonl\|md\|both] [--out DIR] <S42\|42>` | Export one bounded session audit projection |
+| `local-agent session repair [--json] <S42\|42>` | Repair one session projection from durable execution records |
 | `local-agent --version` | Print the build version |
 
 `-p` and `--prompt` are exact aliases for a human-readable convenience surface,
@@ -40,6 +41,13 @@ dynamic, and unknown effects remain gated. An explicitly empty or
 whitespace-only prompt exits with status 2 before configuration, network, or provider startup.
 In headless mode, requests that need an approval fail closed by default because
 there is no approval UI.
+
+`--tools` is headless-only and accepts an exact comma-separated list. Every
+name must be a built-in tool already allowed by the selected mode; empty,
+duplicate, unknown, and mode-disallowed names fail before configuration or
+provider startup. The resulting turn exposes only that built-in subset, with
+memory tools and MCP routes disabled. It is a tool-surface restriction, not an
+authority grant.
 
 `--resume` is interactive-only and cannot be combined with `-p` or `--prompt`.
 Session ID `42` is displayed as the short handle `S42`; session, goal, and
@@ -87,9 +95,27 @@ An ordinary session with an outcome-unknown tool receipt uses a separate exact-e
 
 ```bash
 local-agent execution recover <session-id> <execution-id>
+local-agent execution recover <session-id> --all
 ```
 
 Inspection is read-only. Applying evidence requires the exact revision and event ID printed by inspection plus a typed observation, source, reference, summary, and observation time. It records an immutable reconciliation receipt; it never retries the tool or rewrites its original outcome.
+
+`--all` lists the bounded pending set and an exact set digest. To record the
+same typed evidence for the reviewed set, use the complete command it prints:
+`--all --apply --set-digest HASH` plus every evidence field. The operation
+aborts atomically if the pending set changed. A batch is limited to 100 pending
+executions; larger backlogs must be recovered individually first.
+
+`session export` defaults to `both` formats under `./local-agent-audit-N/`,
+writing `session-N.jsonl` and `session-N-summary.md`. The Markdown Open Issues
+table and JSONL `open_issue` records contain exact recovery or projection-repair
+commands. Review exports before sharing because bounded raw session state,
+receipt detail, and paths may be present.
+
+`session repair` re-derives a stale execution projection from terminal durable
+ledger events. Close the interactive session and reconcile all outcome-unknown
+executions first. It never retries tools or rewrites ledger history. Goal-owned
+sessions instead use `goal show` and `goal recover`.
 
 ## Conversation commands
 
@@ -122,7 +148,7 @@ Inspection is read-only. Applying evidence requires the exact revision and event
 | `/checkpoints` | List checkpoints |
 | `/restore <id>` | Restore a checkpoint from the active session |
 | `/recover` | Review the current session's outcome-unknown execution and record typed evidence |
-| `/exit` | Quit |
+| `/exit` | Quit gracefully; when the session is resumable, print its resume command after restoring the terminal |
 
 Manual selections of verified local models are remembered across process
 restarts. `/model auto` clears that preference. An explicit `--model` or
@@ -168,7 +194,8 @@ Use Go duration syntax such as `30m` or `1h30m`. Duration-shaped but invalid inp
 
 | Key | Action |
 |---|---|
-| `enter`, `shift+enter` | Send or insert a newline |
+| `enter` | Send the draft, or queue one follow-up while a turn is active |
+| `shift+enter`, `ctrl+j`, `alt+enter` | Insert a newline without sending |
 | `shift+tab` | Cycle NORMAL, PLAN, and AUTO without opening a form |
 | `ctrl+p` | Open session settings |
 | `ctrl+o` | Open the Ollama model picker |
@@ -176,6 +203,7 @@ Use Go duration syntax such as `30m` or `1h30m`. Duration-shaped but invalid inp
 | `up`, `down` | Browse input history |
 | `pgup`, `pgdown` | Scroll the conversation without editing the draft |
 | `ctrl+u`, `ctrl+d` | Edit the draft; with an empty or unavailable composer, scroll by half a page |
+| `end` | Jump to the latest conversation output when the composer is empty or unavailable |
 | `t`, `space` | Toggle all tool details or the latest tool |
 | `ctrl+t` | Toggle model thinking display |
 | `ctrl+y` | Copy the latest response |
@@ -195,10 +223,15 @@ re-arm it; that gesture is consumed before the unchanged composer, overlay, or
 pending authority decision returns.
 
 The composer grows for soft-wrapped typing and text paste until its adaptive
-visible-row cap, then scrolls internally. Native terminal drag selection is the
-default; use `pgup`/`pgdown`, `t`, and `space` for transcript and tool
-navigation. With an empty composer, `ctrl+u`/`ctrl+d` also scroll half a page;
-while drafting they retain their standard editing behavior.
+visible-row cap, then scrolls internally. The mouse wheel scrolls the transcript
+without moving the composer cursor or its internal viewport; a visible document
+overlay owns the wheel while it is open. Press `end` to resume following the
+latest output. Local Agent enables terminal mouse reporting so wheel events
+reach the transcript. Use the terminal's selection override, commonly
+`shift+drag`, to select transcript text; `ctrl+y` remains the application-level
+copy shortcut for the latest response. Use `pgup`/`pgdown`, `t`, and `space` for
+transcript and tool navigation. With an empty composer, `ctrl+u`/`ctrl+d` also
+scroll half a page; while drafting they retain their standard editing behavior.
 
 ## Image attachments
 
@@ -210,9 +243,14 @@ Attach an image to the pending ordinary prompt with either command:
 ```
 
 `/image list` shows pending attachments; `/image clear` removes them. Local
-Agent also recognizes a single PNG, JPEG, or GIF path delivered by terminal
-paste. That includes quoted paths, shell-escaped paths, and `file://` paths, so
-dragging a file works when the terminal inserts its path as text.
+Agent also recognizes an ordered list of PNG, JPEG, or GIF paths delivered in
+one terminal paste. Paths may be separated by whitespace or newlines and may be
+quoted, shell-escaped, or expressed as local `file://` URLs, so dragging one or
+several files works when the terminal inserts their paths as text. The complete
+paste must contain image paths only: a path mixed with prose remains ordinary
+draft text. Duplicate paths are removed before admission, and images with the
+same validated content are attached only once. At most the first four available
+slots are queued; Local Agent reports any additional files it skips.
 
 Admission is bounded before provider dispatch:
 

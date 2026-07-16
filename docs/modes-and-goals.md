@@ -28,7 +28,7 @@ and the form does not create a durable goal.
 
 ## AUTO
 
-AUTO sends ordinary prompts directly with proactive access to the NORMAL tool surface. Validated workspace writes and directory creation, exact trusted local MCP routes, and static ordinary development commands can proceed without interruption. The command catalog covers routine build, test, lint, format, and inspection work. Raw Git remains approval-gated because repository configuration, filters, and hooks can execute programs even during commands that look read-only; use `/changes` and `/commit` for the host-owned paths.
+AUTO sends ordinary prompts directly with proactive access to the NORMAL tool surface. Validated workspace writes and directory creation, exact trusted local MCP routes, and a static catalog of direct ordinary toolchain commands can proceed without interruption. Task runners, package `run` targets, raw `find`, `rg`, `grep`, `tree`, `du`, and `ls` shell commands, and `go generate` remain approval-gated; use the host-owned read, list, and grep tools for ignore-aware repository inspection. Raw Git also remains approval-gated because repository configuration, filters, and hooks can execute programs even during commands that look read-only; use `/changes` and `/commit` for the host-owned paths.
 
 AUTO is not blanket shell authority. Deletion, dynamic expansion, file
 redirection, external paths, network-facing or unknown commands, memory
@@ -37,6 +37,27 @@ Its provider loop is bounded at 40 iterations by default instead of NORMAL's
 10, and the interactive near-limit warning is suppressed in AUTO. Configure
 the two ceilings independently with `tools.max_iterations` and
 `tools.auto_max_iterations`.
+
+AUTO classifies the outer command and visible operands; it is not process
+containment. An admitted compiler or test command can still execute
+repository-owned code with Local Agent's process access, so use AUTO only in
+workspaces whose development commands you trust.
+
+## Typed continuation actions
+
+Trusted Bob and Cortex contracts can return an exact next action. Local Agent
+normalizes the action into bounded host-owned fields, validates the tool and
+arguments against the current registry, and preserves named missing inputs and
+blockers. A downstream command string is never treated as shell authority.
+
+The default `suggest` mode presents a valid action to the model and UI without
+dispatching it. Optional `auto_read_only` can follow at most two exact, fully
+specified, unblocked, registry-validated read-only actions while AUTO authority
+is active. Shell, mutation, secreted execution, unresolved gateway proxy calls,
+stale actions, and repeated action fingerprints never qualify. Every eligible
+call still passes current route trust, workspace, permission, replay, and ledger
+checks. These actions are suggestions or contracts; they do not grant authority
+or make Local Agent reproduce Bob's ownership logic or Cortex's task state.
 
 Switching modes never creates durable work. To start a bounded foreground goal, use `/goal <duration> <prompt>` or `/goal new`. Every durable definition must have:
 

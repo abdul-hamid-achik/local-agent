@@ -659,7 +659,7 @@ func newAutoLoopAgent(
 	continuations config.ContinuationsConfig,
 ) *Agent {
 	t.Helper()
-	agent := New(client, registry, 4096)
+	agent := New(client, registry, 8192)
 	t.Cleanup(agent.Close)
 	agent.SetWorkDir(workspace)
 	agent.SetModeContext("test", BuildToolPolicy())

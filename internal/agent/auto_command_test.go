@@ -22,7 +22,7 @@ func TestAutoScopedCommandAllowsRoutineWorkspaceDevelopment(t *testing.T) {
 	// provenance check without executing any fixture binary.
 	hostBin := t.TempDir()
 	for _, name := range []string{
-		"bun", "cargo", "date", "go", "gofmt", "grep", "head", "npm", "rg", "sed", "task",
+		"bun", "cargo", "date", "go", "gofmt", "grep", "head", "npm", "rg", "sed",
 	} {
 		if err := os.WriteFile(filepath.Join(hostBin, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 			t.Fatalf("install host executable %s: %v", name, err)
@@ -41,13 +41,9 @@ func TestAutoScopedCommandAllowsRoutineWorkspaceDevelopment(t *testing.T) {
 		"sed -n '$p' internal/queue/policy.go",
 		"sed -n '1p' -- internal/queue/policy.go",
 		"go test -run 'Test(Foo|Bar)' ./...",
-		"rg 'value?' .",
-		"rg '/api/v1' .",
-		"grep '/healthz' README.md",
 		"go test -run=/subtest ./...",
-		"bun run build | head -20",
-		"npm run site:build",
-		"task site:verify",
+		"npm test",
+		"bun test",
 		"CI=1 cargo check",
 		"date",
 	} {
@@ -110,6 +106,10 @@ func TestAutoScopedCommandGatesDynamicDestructiveAndExternalEffects(t *testing.T
 		"grep -e '' /etc/passwd",
 		`rg -e "" /etc/passwd`,
 		"rg --files /etc",
+		"rg --hidden --no-ignore TOKEN .",
+		"rg TOKEN",
+		"grep -r TOKEN .",
+		"find .",
 		"file -bf" + filepath.Join(outside, "files.txt") + " /dev/null",
 		"file -f file-list.txt",
 		"file --files-fr=file-list.txt",
@@ -166,6 +166,14 @@ func TestAutoScopedCommandGatesDynamicDestructiveAndExternalEffects(t *testing.T
 		"touch " + filepath.Join(outside, "pwn=foo"),
 		"touch /dev/null",
 		"touch -r /dev/null target",
+		"make test",
+		"task site:verify",
+		"just test",
+		"npm run site:build",
+		"pnpm run test",
+		"yarn run lint",
+		"bun run build",
+		"go generate ./...",
 		"mkdir /dev/null",
 		"mkdir " + filepath.Join(outside, "dir=x"),
 		"sort -o " + filepath.Join(outside, "out=x") + " input",
@@ -316,6 +324,50 @@ func TestAutoScopedCommandGatesDynamicDestructiveAndExternalEffects(t *testing.T
 	}
 }
 
+func TestAutoScopedCommandRejectsDefaultSecretPaths(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, ".env"), []byte("TOKEN=secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ag := New(nil, nil, 4096)
+	ag.SetWorkDir(workspace)
+	if ag.autoScopedCommandAllowed("cat .env") {
+		t.Fatal("AUTO approved a shell read of a default-secret path")
+	}
+}
+
+func TestAutoScopedCommandGatesRawDirectoryEnumerators(t *testing.T) {
+	workspace := t.TempDir()
+	hostBin := t.TempDir()
+	for _, name := range []string{"du", "ls", "tree"} {
+		if err := os.WriteFile(filepath.Join(hostBin, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", hostBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if err := os.MkdirAll(filepath.Join(workspace, "private"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, ".env"), []byte("TOKEN=secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "private", "credentials.txt"), []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ag := New(nil, nil, 4096)
+	ag.SetWorkspacePolicy(workspace, "private/**\n")
+
+	for _, command := range []string{
+		"tree .", "tree -a .",
+		"du .", "du -a .",
+		"ls .", "ls -A .", "ls -Ra .", "ls -alR .", "ls --recursive .",
+	} {
+		if ag.autoScopedCommandAllowed(command) {
+			t.Errorf("raw directory enumerator gained AUTO authority: %q", command)
+		}
+	}
+}
+
 func TestSplitStaticShellCommandsRejectsAmbiguousSyntax(t *testing.T) {
 	for _, command := range []string{"go test &", "go test &&", "'unterminated", "go test < input"} {
 		if _, _, ok := splitStaticShellCommands(command); ok {
@@ -353,16 +405,6 @@ func TestAutoCommandPolicyHelpersRejectDelegationAndPersistentModes(t *testing.T
 		if autoScopedTSCCommandAllowed(args) {
 			t.Fatalf("TypeScript delegated or persistent mode admitted: %#v", args)
 		}
-	}
-	for _, target := range []string{
-		"site", "site:dev", "docs:serve", "build:watch", "test:ui", "test:open", "test:debug", "lint:inspect", "lint:mcp", "VERIFY", "test ",
-	} {
-		if autoRoutineTargetAllowed(target) {
-			t.Fatalf("persistent or ambiguous task target admitted: %q", target)
-		}
-	}
-	if !autoRoutineTargetAllowed("site:build") || !autoRoutineTargetAllowed("test:unit") {
-		t.Fatal("finite routine task target was rejected")
 	}
 	if autoScopedPackageCommandAllowed([]string{"run", "format", "--", "--plugin=file:///tmp/plugin.mjs"}, "test") {
 		t.Fatal("package-script trailing arguments were admitted")

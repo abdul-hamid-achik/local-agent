@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/abdul-hamid-achik/local-agent/internal/config"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 	permissionpkg "github.com/abdul-hamid-achik/local-agent/internal/permission"
 )
@@ -19,11 +20,13 @@ func TestTurnFilesystemSnapshotPinsEmbeddingUpdatesForNextTurn(t *testing.T) {
 	ag.SetIgnoreContent("first/**\n")
 	pinned := ag.pinTurnFilesystem()
 	t.Cleanup(ag.unpinTurnFilesystem)
+	firstPolicy := config.EffectiveIgnoreContent("first/**\n")
+	secondPolicy := config.EffectiveIgnoreContent("second/**\n")
 
 	ag.SetWorkDir(second)
 	ag.SetIgnoreContent("second/**\n")
 	active := ag.filesystemContext()
-	if active.workDir != first || active.ignoreContent != "first/**\n" || active.version != pinned.version {
+	if active.workDir != first || active.ignoreContent != firstPolicy || active.version != pinned.version {
 		t.Fatalf("active filesystem context changed: %#v", active)
 	}
 	if ag.WorkDir() != second {
@@ -43,7 +46,7 @@ func TestTurnFilesystemSnapshotPinsEmbeddingUpdatesForNextTurn(t *testing.T) {
 
 	ag.unpinTurnFilesystem()
 	next := ag.filesystemContext()
-	if next.workDir != second || next.ignoreContent != "second/**\n" {
+	if next.workDir != second || next.ignoreContent != secondPolicy {
 		t.Fatalf("next filesystem context = %#v", next)
 	}
 }
@@ -262,8 +265,8 @@ func TestSetWorkspacePolicyNeverSnapshotsMixedPair(t *testing.T) {
 		defer workers.Done()
 		for index := 0; index < 2_000; index++ {
 			snapshot := ag.filesystemContext()
-			valid := (snapshot.workDir == pairs[0].dir && snapshot.ignoreContent == pairs[0].ignore) ||
-				(snapshot.workDir == pairs[1].dir && snapshot.ignoreContent == pairs[1].ignore)
+			valid := (snapshot.workDir == pairs[0].dir && snapshot.ignoreContent == config.EffectiveIgnoreContent(pairs[0].ignore)) ||
+				(snapshot.workDir == pairs[1].dir && snapshot.ignoreContent == config.EffectiveIgnoreContent(pairs[1].ignore))
 			if !valid {
 				t.Errorf("mixed workspace policy snapshot: %#v", snapshot)
 				return

@@ -77,6 +77,10 @@ tools:
   max_iterations: 10
   auto_max_iterations: 40
 
+continuations:
+  mode: suggest # off | suggest | auto_read_only
+  max_auto_steps: 2
+
 experts:
   enabled: true
   max_concurrent_inference: 0
@@ -92,6 +96,23 @@ ice:
 
 servers: []
 ```
+
+`continuations.mode` controls exact typed next actions from trusted Cortex and
+Bob contracts. `suggest` is the default and never dispatches the action itself.
+`auto_read_only` can follow only fully specified, unblocked,
+registry-and-schema-validated read-only actions under current route trust,
+workspace, deny-policy, replay, and ledger checks. Shell commands, mutations,
+secreted execution, and unresolved generic gateway calls never qualify. It can
+dispatch only while AUTO authority is active. The hard automatic ceiling is two
+steps; configuration values above two are rejected.
+
+Local Agent conservatively estimates text, structured tool schemas, and vision
+patches before provider dispatch, and targets the final 25% of the active
+`num_ctx` window as a generation reserve. If compaction cannot bring that
+estimate below the admission threshold—before the first request or after tool
+results—the turn stops with a recovery message instead of knowingly sending an
+overfilled request. Provider tokenization remains model-specific, so this is an
+admission guard rather than an exact tokenizer.
 
 Start from the annotated [`config.example.yaml`](https://github.com/abdul-hamid-achik/local-agent/blob/main/config.example.yaml) when you need the complete model and MCP examples.
 
@@ -130,11 +151,23 @@ weight budget and remain serial because provider-side capacity is unknown.
 | `LOCAL_AGENT_TOOLS_MAX_GREP` | Override the maximum grep results |
 | `LOCAL_AGENT_TOOLS_MAX_ITER` | Override NORMAL/PLAN provider iterations |
 | `LOCAL_AGENT_TOOLS_AUTO_MAX_ITER` | Override AUTO provider iterations |
+| `LOCAL_AGENT_CONTINUATIONS_MODE` | Set typed continuation handling to `off`, `suggest`, or `auto_read_only` |
+| `LOCAL_AGENT_CONTINUATIONS_MAX_AUTO_STEPS` | Set the bounded read-only auto-follow budget, from 0 to 2 (`auto_read_only` requires at least 1) |
 | `LOCAL_AGENT_ICE_EMBED_MODEL` | Override the ICE embedding model |
 | `LOCAL_AGENT_LOCAL_ONLY` | Toggle local-machine endpoint enforcement |
 | `LOCAL_AGENT_TRUST_REPO_MCP` | Trust the exact digest printed for repository-local STDIO MCP authority |
 | `LOCAL_AGENT_ALLOW_LARGE_MODELS` | Bypass the 16 GB-oriented admission guard |
 | `LOCAL_AGENT_REDUCED_MOTION` | Replace animated TUI activity with static glyphs |
+
+## Runtime model preference
+
+An explicit local model selected through `/model <name>` or the model picker is
+stored separately from repository configuration in the owner-private
+`~/.config/local-agent/runtime-preferences.json`. It is restored on the next
+process start only when Ollama still advertises the model and current policy
+admits it. `/model auto` clears the saved pin. A CLI `--model` selection and
+agent-profile models take precedence, and conversation-scoped Cloud consent is
+never saved.
 
 ## Repository instructions
 

@@ -459,7 +459,9 @@ func TestInteractiveSessionCASRejectsStaleWriterWithoutRetry(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = lease.Close() })
 
-	m := newTestModel(t)
+	client := &standaloneRecoveryClient{}
+	m := newGoalRuntimeTestModel(t, client)
+	m.model = client.Model()
 	m.agent.SetWorkDir(workspace)
 	m.SetSessionStore(store)
 	m.sessionID = session.ID
@@ -480,6 +482,12 @@ func TestInteractiveSessionCASRejectsStaleWriterWithoutRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	wantPromptFloor := agent.ContextPromptFloor{
+		Tokens: 12_000, HostTokens: 1_000, MessageTokens: 200, Model: client.Model(),
+	}
+	if err := m.agent.RestoreContextPromptFloor(wantPromptFloor); err != nil {
+		t.Fatal(err)
+	}
 
 	if cmd := m.sendToAgent("do not dispatch"); cmd != nil {
 		t.Fatal("stale interactive writer returned a provider command")
@@ -493,6 +501,9 @@ func TestInteractiveSessionCASRejectsStaleWriterWithoutRetry(t *testing.T) {
 	messages := m.agent.Messages()
 	if len(messages) != 1 || messages[0].Content != "already durable" {
 		t.Fatalf("stale save changed agent history: %#v", messages)
+	}
+	if got := m.agent.ContextPromptFloor(); got != wantPromptFloor {
+		t.Fatalf("stale save rollback lost context prompt floor: got %#v, want %#v", got, wantPromptFloor)
 	}
 	if m.input.Value() != "do not dispatch" || m.state != StateIdle {
 		t.Fatalf("stale save lost retry draft: state=%v draft=%q", m.state, m.input.Value())

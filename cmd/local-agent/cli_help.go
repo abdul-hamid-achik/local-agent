@@ -21,6 +21,7 @@ func writeRootUsage(writer io.Writer, program string) {
 	_, _ = fmt.Fprintln(writer)
 	_, _ = fmt.Fprintln(writer, "Options:")
 	_, _ = fmt.Fprintln(writer, "  -p, --prompt <text>       Run one non-interactive prompt, print the response, and exit")
+	_, _ = fmt.Fprintln(writer, "      --tools <names>       Expose only these built-in tools in headless mode (comma-separated)")
 	_, _ = fmt.Fprintln(writer, "      --mode <mode>         Headless authority: normal, plan, or auto (default: normal)")
 	_, _ = fmt.Fprintln(writer, "      --auto                Shortcut for --mode auto (requires --prompt)")
 	_, _ = fmt.Fprintln(writer, "      --plan                Shortcut for --mode plan (requires --prompt)")

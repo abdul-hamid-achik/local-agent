@@ -90,24 +90,25 @@ const (
 )
 
 type persistedSessionState struct {
-	Version               int                    `json:"version"`
-	Messages              []llm.Message          `json:"messages"`
-	Entries               []persistedChatEntry   `json:"entries"`
-	ToolEntries           []persistedToolEntry   `json:"tool_entries,omitempty"`
-	Mode                  Mode                   `json:"mode"`
-	Model                 string                 `json:"model,omitempty"`
-	ModelPinned           bool                   `json:"model_pinned,omitempty"`
-	AgentProfile          string                 `json:"agent_profile,omitempty"`
-	LoadedFile            string                 `json:"loaded_file,omitempty"`
-	ManualLoadedContext   string                 `json:"manual_loaded_context,omitempty"`
-	ManualSkills          []string               `json:"manual_skills,omitempty"`
-	SessionEvalTotal      int                    `json:"session_eval_total,omitempty"`
-	SessionPromptTotal    int                    `json:"session_prompt_total,omitempty"`
-	SessionTurnCount      int                    `json:"session_turn_count,omitempty"`
-	ExecutionCursor       int64                  `json:"execution_cursor,omitempty"`
-	FileChanges           map[string]int         `json:"file_changes,omitempty"`
-	Goal                  *goal.Snapshot         `json:"goal,omitempty"`
-	CortexDecisionAttempt *cortexDecisionAttempt `json:"cortex_decision_attempt,omitempty"`
+	Version               int                      `json:"version"`
+	Messages              []llm.Message            `json:"messages"`
+	Entries               []persistedChatEntry     `json:"entries"`
+	ToolEntries           []persistedToolEntry     `json:"tool_entries,omitempty"`
+	Mode                  Mode                     `json:"mode"`
+	Model                 string                   `json:"model,omitempty"`
+	ModelPinned           bool                     `json:"model_pinned,omitempty"`
+	AgentProfile          string                   `json:"agent_profile,omitempty"`
+	LoadedFile            string                   `json:"loaded_file,omitempty"`
+	ManualLoadedContext   string                   `json:"manual_loaded_context,omitempty"`
+	ManualSkills          []string                 `json:"manual_skills,omitempty"`
+	SessionEvalTotal      int                      `json:"session_eval_total,omitempty"`
+	SessionPromptTotal    int                      `json:"session_prompt_total,omitempty"`
+	SessionTurnCount      int                      `json:"session_turn_count,omitempty"`
+	ContextPromptFloor    agent.ContextPromptFloor `json:"context_prompt_floor,omitempty"`
+	ExecutionCursor       int64                    `json:"execution_cursor,omitempty"`
+	FileChanges           map[string]int           `json:"file_changes,omitempty"`
+	Goal                  *goal.Snapshot           `json:"goal,omitempty"`
+	CortexDecisionAttempt *cortexDecisionAttempt   `json:"cortex_decision_attempt,omitempty"`
 }
 
 const currentPersistedSessionVersion = 2
@@ -367,6 +368,7 @@ func encodeSessionState(m *Model) (string, error) {
 		SessionEvalTotal:      m.sessionEvalTotal,
 		SessionPromptTotal:    m.sessionPromptTotal,
 		SessionTurnCount:      m.sessionTurnCount,
+		ContextPromptFloor:    m.agent.ContextPromptFloor(),
 		ExecutionCursor:       m.executionCursor,
 		FileChanges:           m.fileChanges,
 		Goal:                  goalSnapshot,
@@ -456,6 +458,12 @@ func (m *Model) persistSessionState(ctx context.Context) error {
 // in model history, while the visible transcript stays focused on user and
 // assistant text because headless mode has no persisted ToolCard state.
 func EncodeHeadlessSessionState(messages []llm.Message, model, agentProfile string, modelPinned bool, executionCursor int64) (string, error) {
+	return EncodeHeadlessSessionStateWithContextFloor(messages, model, agentProfile, modelPinned, executionCursor, agent.ContextPromptFloor{})
+}
+
+// EncodeHeadlessSessionStateWithContextFloor preserves the exact bounded
+// provider-receipt floor when a headless session may later be resumed.
+func EncodeHeadlessSessionStateWithContextFloor(messages []llm.Message, model, agentProfile string, modelPinned bool, executionCursor int64, floor agent.ContextPromptFloor) (string, error) {
 	if executionCursor < 0 {
 		return "", fmt.Errorf("encode session state: execution cursor must not be negative")
 	}
@@ -472,20 +480,27 @@ func EncodeHeadlessSessionState(messages []llm.Message, model, agentProfile stri
 		}
 	}
 	return marshalPersistedSessionState(persistedSessionState{
-		Version:         currentPersistedSessionVersion,
-		Messages:        append([]llm.Message(nil), messages...),
-		Entries:         entries,
-		Mode:            ModeNormal,
-		Model:           model,
-		ModelPinned:     modelPinned,
-		AgentProfile:    agentProfile,
-		ExecutionCursor: executionCursor,
+		Version:            currentPersistedSessionVersion,
+		Messages:           append([]llm.Message(nil), messages...),
+		Entries:            entries,
+		Mode:               ModeNormal,
+		Model:              model,
+		ModelPinned:        modelPinned,
+		AgentProfile:       agentProfile,
+		ContextPromptFloor: floor,
+		ExecutionCursor:    executionCursor,
 	})
 }
 
 // EncodeHeadlessGoalSessionState persists one headless turn together with the
 // exact Goal Runtime snapshot that admitted and settled it.
 func EncodeHeadlessGoalSessionState(messages []llm.Message, model, agentProfile string, modelPinned bool, executionCursor int64, snapshot goal.Snapshot) (string, error) {
+	return EncodeHeadlessGoalSessionStateWithContextFloor(messages, model, agentProfile, modelPinned, executionCursor, snapshot, agent.ContextPromptFloor{})
+}
+
+// EncodeHeadlessGoalSessionStateWithContextFloor persists a goal turn and its
+// exact bounded provider-receipt floor as one session CAS payload.
+func EncodeHeadlessGoalSessionStateWithContextFloor(messages []llm.Message, model, agentProfile string, modelPinned bool, executionCursor int64, snapshot goal.Snapshot, floor agent.ContextPromptFloor) (string, error) {
 	if executionCursor < 0 {
 		return "", fmt.Errorf("encode goal session state: execution cursor must not be negative")
 	}
@@ -505,13 +520,16 @@ func EncodeHeadlessGoalSessionState(messages []llm.Message, model, agentProfile 
 	return marshalPersistedSessionState(persistedSessionState{
 		Version: currentPersistedSessionVersion, Messages: append([]llm.Message(nil), messages...), Entries: entries,
 		Mode: ModeAuto, Model: model, ModelPinned: modelPinned, AgentProfile: agentProfile,
-		ExecutionCursor: executionCursor, Goal: &copy,
+		ContextPromptFloor: floor, ExecutionCursor: executionCursor, Goal: &copy,
 	})
 }
 
 func marshalPersistedSessionState(state persistedSessionState) (string, error) {
 	state.Messages = agent.SanitizeMessagesForPersistence(state.Messages)
 	state.ToolEntries = sanitizePersistedToolEntryArgs(state.ToolEntries)
+	if err := validatePersistedContextPromptFloor(state); err != nil {
+		return "", err
+	}
 	if err := validatePersistedImageAttachments(state.Entries); err != nil {
 		return "", err
 	}
@@ -539,6 +557,9 @@ func decodeSessionState(raw string) (persistedSessionState, error) {
 	}
 	state.Messages = agent.SanitizeMessagesForPersistence(state.Messages)
 	state.ToolEntries = sanitizePersistedToolEntryArgs(state.ToolEntries)
+	if err := validatePersistedContextPromptFloor(state); err != nil {
+		return state, err
+	}
 	if err := validatePersistedImageAttachments(state.Entries); err != nil {
 		return state, err
 	}
@@ -546,6 +567,19 @@ func decodeSessionState(raw string) (persistedSessionState, error) {
 		return state, err
 	}
 	return state, nil
+}
+
+func validatePersistedContextPromptFloor(state persistedSessionState) error {
+	if err := state.ContextPromptFloor.Validate(); err != nil {
+		return fmt.Errorf("saved context prompt floor: %w", err)
+	}
+	if state.ContextPromptFloor.Tokens == 0 {
+		return nil
+	}
+	if config.CanonicalModelName(state.ContextPromptFloor.Model) != config.CanonicalModelName(state.Model) {
+		return fmt.Errorf("saved context prompt floor model does not match session model")
+	}
+	return nil
 }
 
 func validatePersistedImageAttachments(entries []persistedChatEntry) error {
@@ -792,6 +826,9 @@ func (m *Model) restoreSessionState(state persistedSessionState) error {
 	// privacy boundary as JSON decoding before messages or cards enter the UI.
 	state.Messages = agent.SanitizeMessagesForPersistence(state.Messages)
 	state.ToolEntries = sanitizePersistedToolEntryArgs(state.ToolEntries)
+	if err := validatePersistedContextPromptFloor(state); err != nil {
+		return err
+	}
 	if err := validatePersistedImageAttachments(state.Entries); err != nil {
 		return err
 	}
@@ -887,6 +924,9 @@ func (m *Model) restoreSessionState(state persistedSessionState) error {
 	m.clearPendingImages()
 	m.turnImages = nil
 	m.agent.ReplaceMessages(append([]llm.Message(nil), state.Messages...))
+	if err := m.agent.RestoreContextPromptFloor(state.ContextPromptFloor); err != nil {
+		return fmt.Errorf("restore context prompt floor: %w", err)
+	}
 	m.entries = make([]ChatEntry, len(state.Entries))
 	for i, entry := range state.Entries {
 		m.entries[i] = ChatEntry{

@@ -20,10 +20,22 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/abdul-hamid-achik/local-agent/internal/agent"
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
 	"github.com/abdul-hamid-achik/local-agent/internal/imageasset"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 )
+
+type imageAttachmentTestClient struct{}
+
+func (*imageAttachmentTestClient) ChatStream(context.Context, llm.ChatOptions, func(llm.StreamChunk) error) error {
+	return nil
+}
+func (*imageAttachmentTestClient) Ping() error   { return nil }
+func (*imageAttachmentTestClient) Model() string { return "vision-model" }
+func (*imageAttachmentTestClient) Embed(context.Context, string, []string) ([][]float32, error) {
+	return nil, nil
+}
 
 func newImageTestModel(t *testing.T) (*Model, *imageasset.Store) {
 	t.Helper()
@@ -918,7 +930,10 @@ func TestForgetHistoricalImagesPersistsRecovery(t *testing.T) {
 }
 
 func TestForgetHistoricalImagesRollsBackWhenSessionSaveFails(t *testing.T) {
-	m, _ := newImageTestModel(t)
+	m, imageStore := newImageTestModel(t)
+	client := &imageAttachmentTestClient{}
+	m.agent = agent.New(client, nil, 16_384)
+	m.SetImageStore(imageStore)
 	store, err := db.OpenPath(filepath.Join(t.TempDir(), "sessions.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -938,6 +953,12 @@ func TestForgetHistoricalImagesRollsBackWhenSessionSaveFails(t *testing.T) {
 	}
 	updated, _ := m.Update(AgentDoneMsg{})
 	m = updated.(*Model)
+	wantPromptFloor := agent.ContextPromptFloor{
+		Tokens: 12_000, HostTokens: 1_000, MessageTokens: 200, Model: client.Model(),
+	}
+	if err := m.agent.RestoreContextPromptFloor(wantPromptFloor); err != nil {
+		t.Fatal(err)
+	}
 	beforeMessages := m.agent.Messages()
 	beforeAttachments := append([]imageasset.Ref(nil), m.entries[0].Attachments...)
 	recordBefore, err := store.GetSessionStateRecord(context.Background(), m.sessionID)
@@ -949,6 +970,9 @@ func TestForgetHistoricalImagesRollsBackWhenSessionSaveFails(t *testing.T) {
 	m.forgetHistoricalImages()
 	if !reflect.DeepEqual(m.agent.Messages(), beforeMessages) || !reflect.DeepEqual(m.entries[0].Attachments, beforeAttachments) {
 		t.Fatalf("failed forget did not restore live state: messages=%#v entries=%#v", m.agent.Messages(), m.entries)
+	}
+	if got := m.agent.ContextPromptFloor(); got != wantPromptFloor {
+		t.Fatalf("failed forget rollback lost context prompt floor: got %#v, want %#v", got, wantPromptFloor)
 	}
 	recordAfter, err := store.GetSessionStateRecord(context.Background(), m.sessionID)
 	if err != nil {

@@ -386,6 +386,7 @@ func (m *Model) forgetHistoricalImages() tea.Cmd {
 		return nil
 	}
 	beforeMessages := m.agent.Messages()
+	beforePromptFloor := m.agent.ContextPromptFloor()
 	beforeEntries := append([]ChatEntry(nil), m.entries...)
 	messages := cloneMessagesWithoutImageData(beforeMessages)
 	removed := 0
@@ -422,9 +423,13 @@ func (m *Model) forgetHistoricalImages() tea.Cmd {
 		err := m.persistSessionState(ctx)
 		cancel()
 		if err != nil {
-			m.agent.ReplaceMessagesWithinSession(beforeMessages)
+			rollbackErr := m.agent.RestoreMessagesWithinSession(beforeMessages, beforePromptFloor)
 			m.entries = beforeEntries
-			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: "Forget image history: saved session was not changed: " + sanitizeTerminalSingleLine(err.Error())})
+			message := "Forget image history: saved session was not changed: " + sanitizeTerminalSingleLine(err.Error())
+			if rollbackErr != nil {
+				message += " (rollback: " + sanitizeTerminalSingleLine(rollbackErr.Error()) + ")"
+			}
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: message})
 		}
 	}
 	m.invalidateEntryCache()

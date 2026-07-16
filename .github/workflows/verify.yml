@@ -36,6 +36,9 @@ jobs:
       - name: Run tests
         run: go test ./... -count=1 -race
 
+      - name: Compile integration-tag suite
+        run: go test -tags=integration ./internal/integration -run '^$' -count=1
+
       - name: Run govulncheck
         env:
           GOTOOLCHAIN: local
@@ -111,7 +114,9 @@ jobs:
 
       - name: Verify every Glyphrun contract hash
         run: |
-          for spec in specs/*.yml; do
+          test -f specs/live/ollama_tool.yml
+          for spec in specs/*.yml specs/live/*.yml; do
+            test -f "$spec" || continue
             glyph spec verify "$spec" --format md
           done
 
@@ -123,9 +128,6 @@ jobs:
           set -eu
           set --
           for spec in specs/*.yml; do
-            if [ "$spec" = "specs/live_ollama_tool.yml" ]; then
-              continue
-            fi
             set -- "$@" "$spec"
           done
           test "$#" -gt 0

@@ -19,11 +19,17 @@ import (
 	mcpPkg "github.com/abdul-hamid-achik/local-agent/internal/mcp"
 )
 
-const maxToolCallsPerResponse = 64
+const (
+	maxToolCallsPerResponse   = 64
+	maxEmptyTerminalRepairs   = 1
+	emptyTerminalRepairPrompt = "\n\nThe preceding provider response ended without visible text after a tool result. Produce a concise, visible final answer grounded in the latest tool result. Do not emit reasoning without visible text."
+	repeatedBuiltinCorrection = "SUPPRESSED — NOT DISPATCHED: this identical read-only built-in tool request already returned a terminal result in the current turn, and no state-changing tool has been dispatched since. Reuse the prior result or change the tool arguments."
+)
 
 var (
 	ErrTurnEvalBudgetExhausted   = errors.New("turn evaluation-token budget exhausted")
 	ErrTurnContextBudgetExceeded = errors.New("turn context budget exceeded")
+	ErrEmptyTerminalResponse     = errors.New("provider returned an empty terminal assistant response")
 	ErrMalformedToolLoop         = errors.New("model repeatedly returned malformed tool requests")
 	ErrRepeatedHostRefusal       = errors.New("model repeatedly submitted an identical request refused by the approval host")
 )
@@ -73,7 +79,7 @@ func (e *TurnContextBudgetError) Error() string {
 		return ErrTurnContextBudgetExceeded.Error()
 	}
 	return fmt.Sprintf(
-		"%v: estimated prompt uses %d of %d tokens; compact history or start a new conversation, then retry the bounded turn",
+		"%v: estimated prompt uses %d of %d tokens; reduce prompt or tool context, compact history, or switch to a model with a larger context window, then retry",
 		ErrTurnContextBudgetExceeded, e.EstimatedPromptTokens, e.ContextWindowTokens,
 	)
 }
@@ -214,6 +220,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 	// each selected model. Resolve it exactly once so every budget decision in
 	// this turn stays coherent even if selection changes concurrently.
 	turnNumCtx := a.NumCtx()
+	turnModel := a.llmClient.Model()
 	authorityMode := a.AuthorityMode()
 	modePrefix, turnToolPolicy := a.modeContext()
 	execRuntime, err := a.executionRuntime(ctx)
@@ -317,12 +324,16 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 	}
 	readGrants := a.ReadGrants()
 	var system string
+	emptyTerminalRepairPending := false
 	rebuildSystem := func() {
 		system = buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadGrants(
 			ctx, modePrefix, tools, a.skillContent, skillCatalog, loadedContext,
 			a.memoryStore, iceContext, turnFilesystem.workDir, turnFilesystem.ignoreContent,
-			a.llmClient.Model(), turnNumCtx, readGrants,
+			turnModel, turnNumCtx, readGrants,
 		)
+		if emptyTerminalRepairPending {
+			system += emptyTerminalRepairPrompt
+		}
 	}
 	rebuildSystem()
 
@@ -331,10 +342,16 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 	var lastEvalTokens int
 	var totalEvalTokens int64
 	var retryCount int
+	var emptyTerminalRepairs int
+	previousIterationEndedWithToolResult := false
 	var malformedToolIterations int
 	var capabilityReroutes int
 	var expertConsultations int
 	hostRefusalCounts := make(map[string]int)
+	// Bind exact, completed read-only built-ins to the state observed in this
+	// turn. A later non-read-only dispatch clears the set before entering its
+	// backend because that call may change what a subsequent read observes.
+	completedBuiltinCalls := make(map[string]struct{})
 	continuationState := newContinuationTurnState(turnMCPSnapshot.Epoch)
 	var autoContinuationState *autoContinuationState
 	if turnToolPolicy.AllowMCP && authorityMode == AuthorityAutoScoped &&
@@ -350,7 +367,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 	lg := a.logTurn(turnID)
 	turnStart := time.Now()
 	if lg != nil {
-		lg.Info("turn start", "model", a.llmClient.Model(), "num_ctx", turnNumCtx, "tools", len(tools), "max_iters", maxIters)
+		lg.Info("turn start", "model", turnModel, "num_ctx", turnNumCtx, "tools", len(tools), "max_iters", maxIters)
 	}
 
 	// Compact before the next provider request as well as after responses. This
@@ -358,27 +375,41 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 	// from submitting an already oversized history to Ollama. Bounded turns may
 	// not spend an untracked provider generation on compaction, so fail before the
 	// first provider request with an explicit recovery path instead.
+	rejectContextPrompt := func(estimated int, bounded bool, attributes ...any) error {
+		err := &TurnContextBudgetError{
+			EstimatedPromptTokens: estimated,
+			ContextWindowTokens:   turnNumCtx,
+		}
+		if lg != nil {
+			fields := []any{"prompt_tokens", estimated, "num_ctx", turnNumCtx, "bounded", bounded}
+			lg.Warn("context admission denied", append(fields, attributes...)...)
+		}
+		out.Error(err.Error())
+		return err
+	}
 	admitSystemPrompt := func() error {
 		estimated := a.estimatePromptTokens(system, tools)
+		if receiptFloor := a.contextPromptFloorEstimate(turnModel, estimateHostPromptTokens(system, tools)); estimated < receiptFloor {
+			estimated = receiptFloor
+		}
 		if !shouldCompactForContext(estimated, turnNumCtx) {
 			return nil
 		}
 		if limits.bounded() {
-			err := &TurnContextBudgetError{
-				EstimatedPromptTokens: estimated,
-				ContextWindowTokens:   turnNumCtx,
-			}
-			if lg != nil {
-				lg.Warn("context admission denied", "prompt_tokens", estimated, "num_ctx", turnNumCtx, "bounded", true)
-			}
-			out.Error(err.Error())
-			return err
+			return rejectContextPrompt(estimated, true)
 		}
 		if lg != nil {
 			lg.Info("compaction", "phase", "before_request", "prompt_tokens", estimated, "num_ctx", turnNumCtx)
 		}
-		if a.compactForContext(ctx, out, turnNumCtx) {
+		if a.compactForContextAndModel(ctx, out, turnNumCtx, turnModel) {
 			rebuildSystem()
+		}
+		estimated = a.estimatePromptTokens(system, tools)
+		if receiptFloor := a.contextPromptFloorEstimate(turnModel, estimateHostPromptTokens(system, tools)); estimated < receiptFloor {
+			estimated = receiptFloor
+		}
+		if shouldCompactForContext(estimated, turnNumCtx) {
+			return rejectContextPrompt(estimated, false)
 		}
 		return nil
 	}
@@ -462,7 +493,14 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 			if remainingEvalTokens <= 0 {
 				return fmt.Errorf("%w: used %d of %d", ErrTurnEvalBudgetExhausted, totalEvalTokens, limits.MaxEvalTokens)
 			}
-			requestEvalLimit = boundedEvalLimit(remainingEvalTokens)
+			effectivePromptTokens := a.estimatePromptTokens(system, tools)
+			if receiptFloor := a.contextPromptFloorEstimate(turnModel, estimateHostPromptTokens(system, tools)); effectivePromptTokens < receiptFloor {
+				effectivePromptTokens = receiptFloor
+			}
+			requestEvalLimit = contextReservedEvalLimit(remainingEvalTokens, effectivePromptTokens, turnNumCtx)
+			if requestEvalLimit <= 0 {
+				return rejectContextPrompt(effectivePromptTokens, true, "phase", "before_provider", "iter", i)
+			}
 		}
 
 		// Stream LLM response.
@@ -474,6 +512,9 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 		doneSeen := false
 		callbackSeen := false
 		reportedEvalTokens := int64(0)
+		requestHostTokens := 0
+		requestMessageTokens := 0
+		repairRequest := emptyTerminalRepairPending
 
 		if hostContinuationBatch {
 			toolCalls = []llm.ToolCall{queuedAutoContinuation.detachedCall()}
@@ -487,6 +528,8 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 			msgsSnapshot := make([]llm.Message, len(a.messages))
 			copy(msgsSnapshot, a.messages)
 			a.mu.RUnlock()
+			requestHostTokens = estimateHostPromptTokens(system, tools)
+			requestMessageTokens = estimateMessagesPromptTokens(msgsSnapshot)
 
 			err := a.chatStreamWithResolvedImages(ctx, llm.ChatOptions{
 				Messages:        msgsSnapshot,
@@ -494,6 +537,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 				System:          system,
 				MaxEvalTokens:   requestEvalLimit,
 				ExpectedContext: turnNumCtx,
+				ExpectedModel:   turnModel,
 			}, func(chunk llm.StreamChunk) error {
 				callbackSeen = true
 				select {
@@ -561,7 +605,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 					return errors.Join(reservationErr, fmt.Errorf("LLM response: %w", err))
 				}
 				// Retry on transient JSON parse errors from small models.
-				if limits.MaxEvalTokens == 0 && retryCount < maxRetries && isRetryableError(err) {
+				if !repairRequest && limits.MaxEvalTokens == 0 && retryCount < maxRetries && isRetryableError(err) {
 					retryCount++
 					if lg != nil {
 						lg.Warn("llm retry", "iter", i, "attempt", retryCount, "err", err)
@@ -599,6 +643,14 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 				return fmt.Errorf("invalid provider evaluation-token receipt %d", lastEvalTokens)
 			}
 			totalEvalTokens += int64(lastEvalTokens)
+			a.recordContextPromptFloor(lastPromptTokens, requestHostTokens, requestMessageTokens, turnModel)
+			if repairRequest {
+				// The correction belongs to exactly one provider request. Rebuild the
+				// ordinary system prompt before any tool call from the repaired response
+				// can lead to another iteration.
+				emptyTerminalRepairPending = false
+				rebuildSystem()
+			}
 			if lg != nil {
 				lg.Info("llm response", "iter", i, "ms", time.Since(llmStart).Milliseconds(),
 					"prompt_tokens", lastPromptTokens, "eval_tokens", lastEvalTokens, "tool_calls", len(toolCalls))
@@ -618,12 +670,54 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 			out.Error(err.Error())
 			return err
 		}
+		if requestEvalLimit > 0 && lastEvalTokens > requestEvalLimit {
+			a.AppendMessage(llm.Message{Role: "assistant", Content: textBuf.String()})
+			err := fmt.Errorf("%w: provider reported %d used token(s) for a %d-token context-reserved request limit", ErrTurnEvalBudgetExhausted, lastEvalTokens, requestEvalLimit)
+			out.Error(err.Error())
+			return err
+		}
 		if limits.MaxEvalTokens > 0 && totalEvalTokens == limits.MaxEvalTokens && len(toolCalls) > 0 {
 			// The provider may return tool requests on the response that consumes
 			// the final token allowance. Keep its text, but never create durable
 			// dispatch intents or execute effects after the hard boundary.
 			a.AppendMessage(llm.Message{Role: "assistant", Content: textBuf.String()})
 			err := fmt.Errorf("%w before tool dispatch: used %d of %d", ErrTurnEvalBudgetExhausted, totalEvalTokens, limits.MaxEvalTokens)
+			out.Error(err.Error())
+			return err
+		}
+		if !hostContinuationBatch && len(toolCalls) == 0 && strings.TrimSpace(textBuf.String()) == "" {
+			if previousIterationEndedWithToolResult && emptyTerminalRepairs < maxEmptyTerminalRepairs && i < maxIters-1 {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				if limits.MaxEvalTokens > 0 && totalEvalTokens >= limits.MaxEvalTokens {
+					err := fmt.Errorf("%w before empty-terminal repair: used %d of %d", ErrTurnEvalBudgetExhausted, totalEvalTokens, limits.MaxEvalTokens)
+					out.Error(err.Error())
+					return err
+				}
+				emptyTerminalRepairs++
+				previousIterationEndedWithToolResult = false
+				emptyTerminalRepairPending = true
+				rebuildSystem()
+				if err := admitSystemPrompt(); err != nil {
+					return err
+				}
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				if lg != nil {
+					lg.Warn("empty terminal response after tool result; retrying once", "iter", i, "eval_tokens", lastEvalTokens)
+				}
+				out.SystemMessage("Model returned no visible answer after the tool result; retrying once.")
+				continue
+			}
+			err := fmt.Errorf(
+				"%w: provider completed after %d evaluation token(s) without visible text or a tool call",
+				ErrEmptyTerminalResponse, lastEvalTokens,
+			)
+			if lg != nil {
+				lg.Warn("empty terminal response", "iter", i, "eval_tokens", lastEvalTokens)
+			}
 			out.Error(err.Error())
 			return err
 		}
@@ -691,11 +785,14 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 			if estimatedPromptTokens < lastPromptTokens {
 				estimatedPromptTokens = lastPromptTokens
 			}
+			if receiptFloor := a.contextPromptFloorEstimate(turnModel, estimateHostPromptTokens(system, tools)); estimatedPromptTokens < receiptFloor {
+				estimatedPromptTokens = receiptFloor
+			}
 			if !limits.bounded() && shouldCompactForContext(estimatedPromptTokens, turnNumCtx) {
 				if lg != nil {
 					lg.Info("compaction", "phase", "direct_response", "prompt_tokens", estimatedPromptTokens, "num_ctx", turnNumCtx)
 				}
-				a.compactForContext(ctx, out, turnNumCtx)
+				a.compactForContextAndModel(ctx, out, turnNumCtx, turnModel)
 			}
 			if err := ctx.Err(); err != nil {
 				return err
@@ -847,6 +944,20 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 				a.failedToolCall(tc, out, result, turnNumCtx)
 				continue
 			}
+			if kind == executionPkg.KindBuiltin && effectiveEffect == executionPkg.EffectReadOnly {
+				fingerprint := tc.Name + "\x00" + tracked.argumentsHash()
+				if _, duplicate := completedBuiltinCalls[fingerprint]; duplicate {
+					result := capToolResultForContext(repeatedBuiltinCorrection, turnNumCtx)
+					if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(
+						*tracked, executionPkg.EventFailed, executionPkg.ApprovalNotApplicable, result,
+						"identical read-only built-in request suppressed before dispatch",
+					)); err != nil {
+						return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
+					}
+					a.failedToolCall(tc, out, result, turnNumCtx)
+					continue
+				}
+			}
 
 			autoApproved := requiresApproval &&
 				a.authorityAutoApproves(authorityMode, tc, tracked.identity.Kind)
@@ -939,6 +1050,9 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 
 			if err := appendExecutionEvent(ctx, execRuntime, executionEvent(*tracked, executionPkg.EventStarted, executionPkg.ApprovalNotApplicable, "", "durable dispatch intent committed")); err != nil {
 				return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
+			}
+			if tracked.identity.EffectClass != executionPkg.EffectReadOnly {
+				clear(completedBuiltinCalls)
 			}
 			// Once a mutation has a durable dispatch intent, any prior Bob
 			// convergence projection is stale even if the backend later fails or
@@ -1161,6 +1275,9 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 				a.cancelUndispatchedToolCalls(toolCalls[toolIndex+1:], out, unresolved)
 				return unresolved
 			}
+			if kind == executionPkg.KindBuiltin && tracked.identity.EffectClass == executionPkg.EffectReadOnly {
+				completedBuiltinCalls[tc.Name+"\x00"+tracked.argumentsHash()] = struct{}{}
+			}
 			a.settleBobContextAdmission(out, bobAdmission, projection, continuationReceipt, assembly, terminalType)
 
 			// A continuation becomes schedulable only after the source outcome is
@@ -1255,7 +1372,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 				return err
 			}
 			loadedContext = composeCapabilityContext(capabilityHintText, capabilityBaseContext)
-			system = buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadGrants(ctx, modePrefix, tools, a.skillContent, skillCatalog, loadedContext, a.memoryStore, iceContext, turnFilesystem.workDir, turnFilesystem.ignoreContent, a.llmClient.Model(), turnNumCtx, readGrants)
+			system = buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadGrants(ctx, modePrefix, tools, a.skillContent, skillCatalog, loadedContext, a.memoryStore, iceContext, turnFilesystem.workDir, turnFilesystem.ignoreContent, turnModel, turnNumCtx, readGrants)
 		}
 
 		// A queued host read executes before another provider request. Deferring
@@ -1267,27 +1384,41 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 			if estimatedPromptTokens < lastPromptTokens {
 				estimatedPromptTokens = lastPromptTokens
 			}
+			if receiptFloor := a.contextPromptFloorEstimate(turnModel, estimateHostPromptTokens(system, tools)); estimatedPromptTokens < receiptFloor {
+				estimatedPromptTokens = receiptFloor
+			}
 			if shouldCompactForContext(estimatedPromptTokens, turnNumCtx) {
 				if limits.bounded() {
-					err := &TurnContextBudgetError{
-						EstimatedPromptTokens: estimatedPromptTokens,
-						ContextWindowTokens:   turnNumCtx,
-					}
-					if lg != nil {
-						lg.Warn("context admission denied", "phase", "after_tools", "iter", i, "prompt_tokens", estimatedPromptTokens, "num_ctx", turnNumCtx, "bounded", true)
-					}
-					out.Error(err.Error())
-					return err
+					return rejectContextPrompt(estimatedPromptTokens, true, "phase", "after_tools", "iter", i)
 				}
 				if lg != nil {
 					lg.Info("compaction", "iter", i, "prompt_tokens", estimatedPromptTokens, "num_ctx", turnNumCtx)
 				}
-				if a.compactForContext(ctx, out, turnNumCtx) {
+				compacted := a.compactForContextAndModel(ctx, out, turnNumCtx, turnModel)
+				if compacted {
 					// Rebuild system prompt after compaction (memory may have changed).
-					system = buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadGrants(ctx, modePrefix, tools, a.skillContent, skillCatalog, loadedContext, a.memoryStore, iceContext, turnFilesystem.workDir, turnFilesystem.ignoreContent, a.llmClient.Model(), turnNumCtx, readGrants)
+					system = buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadGrants(ctx, modePrefix, tools, a.skillContent, skillCatalog, loadedContext, a.memoryStore, iceContext, turnFilesystem.workDir, turnFilesystem.ignoreContent, turnModel, turnNumCtx, readGrants)
+				}
+				estimatedPromptTokens = a.estimatePromptTokens(system, tools)
+				if !compacted && estimatedPromptTokens < lastPromptTokens {
+					// The provider receipt is authoritative for the unchanged prompt.
+					// A failed or inapplicable compaction may not erase that floor.
+					estimatedPromptTokens = lastPromptTokens
+				}
+				if receiptFloor := a.contextPromptFloorEstimate(turnModel, estimateHostPromptTokens(system, tools)); estimatedPromptTokens < receiptFloor {
+					estimatedPromptTokens = receiptFloor
+				}
+				if shouldCompactForContext(estimatedPromptTokens, turnNumCtx) {
+					return rejectContextPrompt(estimatedPromptTokens, false, "phase", "after_tools", "iter", i)
 				}
 			}
 		}
+		previousIterationEndedWithToolResult = false
+		a.mu.RLock()
+		if messageCount := len(a.messages); messageCount > 0 {
+			previousIterationEndedWithToolResult = a.messages[messageCount-1].Role == "tool"
+		}
+		a.mu.RUnlock()
 
 		// Interactive modes surface their deliberately tight turn ceiling. AUTO
 		// has a larger host-owned safety budget and stays quiet while using it.
@@ -1313,6 +1444,20 @@ func boundedEvalLimit(remaining int64) int {
 		return int(maxInt)
 	}
 	return int(remaining)
+}
+
+func contextReservedEvalLimit(remaining int64, promptTokens, numCtx int) int {
+	if remaining <= 0 || numCtx <= 0 || promptTokens < 0 {
+		return 0
+	}
+	reserve := numCtx / 4
+	if available := numCtx - promptTokens; available < reserve {
+		reserve = available
+	}
+	if reserve <= 0 {
+		return 0
+	}
+	return min(boundedEvalLimit(remaining), reserve)
 }
 
 // chargeUnknownEvalReservation propagates a fail-closed usage receipt when a
@@ -1356,19 +1501,76 @@ func capToolResultForContext(result string, numCtx int) string {
 }
 
 func (a *Agent) estimatePromptTokens(system string, tools []llm.ToolDef) int {
-	characters := len(system)
-	if encoded, err := json.Marshal(tools); err == nil {
-		characters += len(encoded)
-	}
 	a.mu.RLock()
-	for _, message := range a.messages {
-		characters += len(message.Content) + len(message.ToolName) + len(message.ToolCallID) + 12
+	messageTokens := estimateMessagesPromptTokens(a.messages)
+	a.mu.RUnlock()
+	return estimateHostPromptTokens(system, tools) + messageTokens
+}
+
+func estimateHostPromptTokens(system string, tools []llm.ToolDef) int {
+	tokens := estimateTextPromptTokens(system)
+	if encoded, err := json.Marshal(tools); err == nil {
+		tokens += estimateTextPromptTokens(string(encoded))
+	}
+	return tokens + 1
+}
+
+func estimateMessagesPromptTokens(messages []llm.Message) int {
+	tokens := 0
+	for _, message := range messages {
+		// Role/framing metadata consumes a few provider tokens even when the
+		// visible fields are empty.
+		tokens += 4
+		tokens += estimateTextPromptTokens(message.Content)
+		tokens += estimateTextPromptTokens(message.ToolName)
+		tokens += estimateTextPromptTokens(message.ToolCallID)
 		if encoded, err := json.Marshal(message.ToolCalls); err == nil {
-			characters += len(encoded)
+			tokens += estimateTextPromptTokens(string(encoded))
+		}
+		for _, image := range message.Images {
+			tokens += estimateImagePromptTokens(image)
 		}
 	}
-	a.mu.RUnlock()
-	return characters/4 + 1
+	return tokens
+}
+
+// estimateTextPromptTokens uses the model-agnostic chars/4 heuristic for ASCII
+// while charging non-ASCII input at the tokenizer byte-fallback upper bound.
+// It is an admission estimate rather than an exact tokenizer; the separate
+// generation reserve and image-patch budget provide the remaining safety margin.
+func estimateTextPromptTokens(text string) int {
+	if text == "" {
+		return 0
+	}
+	asciiBytes := 0
+	nonASCIIBytes := 0
+	for len(text) > 0 {
+		r, size := utf8.DecodeRuneInString(text)
+		if r < utf8.RuneSelf {
+			asciiBytes++
+		} else {
+			nonASCIIBytes += size
+		}
+		text = text[size:]
+	}
+	return (asciiBytes+3)/4 + nonASCIIBytes
+}
+
+// estimateImagePromptTokens reserves vision-patch context before raw image
+// bytes cross the provider boundary. Referenced images have verified dimensions;
+// legacy transient images without them receive a fixed conservative reserve.
+func estimateImagePromptTokens(image llm.ImageData) int {
+	const (
+		visionPatchSize       = 28
+		minimumVisionTokens   = 256
+		unknownImageTokenCost = 1_024
+	)
+	if image.Width <= 0 || image.Height <= 0 {
+		return unknownImageTokenCost
+	}
+	patchesWide := (image.Width + visionPatchSize - 1) / visionPatchSize
+	patchesHigh := (image.Height + visionPatchSize - 1) / visionPatchSize
+	return max(minimumVisionTokens, patchesWide*patchesHigh)
 }
 
 func filterToolDefsByName(defs []llm.ToolDef, allowed map[string]struct{}) []llm.ToolDef {

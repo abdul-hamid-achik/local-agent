@@ -4,7 +4,9 @@
  │ Keyboard Shortcuts                 │
  │   enter        Send / queue one    │
  │                follow-up           │
- │   shift+enter  New line            │
+ │   shift+enter  New line ·          │
+ │                ctrl+j/alt+enter    │
+ │                also                │
  │   esc          Cancel / close      │
  │                overlay             │
  │   ctrl+c       Quit                │
@@ -13,7 +15,5 @@
  │   ?            Show help (empty    │
  │                input)              │
  │   t            Toggle all tools    │
- │                (empty input)       │
- │   ctrl+y       Copy last response  │
  │ esc/q close · pgdn · g/shift+g     │
  ╰────────────────────────────────────╯

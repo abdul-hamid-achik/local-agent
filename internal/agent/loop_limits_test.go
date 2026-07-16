@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"path/filepath"
 	"strconv"
@@ -40,6 +41,22 @@ func (c *limitedTurnClient) ChatStream(ctx context.Context, options llm.ChatOpti
 func (*limitedTurnClient) Ping() error   { return nil }
 func (*limitedTurnClient) Model() string { return "limited-test" }
 func (*limitedTurnClient) Embed(context.Context, string, []string) ([][]float32, error) {
+	return nil, nil
+}
+
+type contextReserveClient struct {
+	options llm.ChatOptions
+}
+
+func (c *contextReserveClient) ChatStream(_ context.Context, options llm.ChatOptions, emit func(llm.StreamChunk) error) error {
+	c.options = options
+	return emit(llm.StreamChunk{Text: "ok", Done: true, EvalCount: 1, PromptEvalCount: 100})
+}
+
+func (*contextReserveClient) Ping() error   { return nil }
+func (*contextReserveClient) Model() string { return "context-reserve-test" }
+func (*contextReserveClient) NumCtx() int   { return 4_096 }
+func (*contextReserveClient) Embed(context.Context, string, []string) ([][]float32, error) {
 	return nil, nil
 }
 
@@ -113,16 +130,18 @@ func (*callbackThenNoModelClient) Embed(context.Context, string, []string) ([][]
 }
 
 type overflowingParentReceiptClient struct {
-	calls atomic.Int64
+	calls       atomic.Int64
+	secondLimit atomic.Int64
 }
 
-func (client *overflowingParentReceiptClient) ChatStream(_ context.Context, _ llm.ChatOptions, emit func(llm.StreamChunk) error) error {
+func (client *overflowingParentReceiptClient) ChatStream(_ context.Context, options llm.ChatOptions, emit func(llm.StreamChunk) error) error {
 	if client.calls.Add(1) == 1 {
 		return emit(llm.StreamChunk{
 			Done: true, EvalCount: 2,
 			ToolCalls: []llm.ToolCall{{ID: "list-before-overflow", Name: "ls", Arguments: map[string]any{}}},
 		})
 	}
+	client.secondLimit.Store(int64(options.MaxEvalTokens))
 	return emit(llm.StreamChunk{Done: true, EvalCount: int(^uint(0) >> 1)})
 }
 
@@ -183,6 +202,72 @@ func (*boundedToolResultClient) Embed(context.Context, string, []string) ([][]fl
 	return nil, nil
 }
 
+type aggregateToolResultClient struct {
+	calls atomic.Int64
+}
+
+func (c *aggregateToolResultClient) ChatStream(_ context.Context, _ llm.ChatOptions, emit func(llm.StreamChunk) error) error {
+	call := c.calls.Add(1)
+	if call > 1 {
+		return emit(llm.StreamChunk{Text: "must not be requested", Done: true, EvalCount: 1})
+	}
+	toolCalls := make([]llm.ToolCall, 4)
+	for index := range toolCalls {
+		toolCalls[index] = llm.ToolCall{
+			ID: fmt.Sprintf("expand-result-%d", index), Name: "exists", Arguments: map[string]any{"path": "."},
+		}
+	}
+	return emit(llm.StreamChunk{Done: true, EvalCount: 1, ToolCalls: toolCalls})
+}
+
+func (*aggregateToolResultClient) Ping() error   { return nil }
+func (*aggregateToolResultClient) Model() string { return "aggregate-tool-result-test" }
+func (*aggregateToolResultClient) NumCtx() int   { return 1_200 }
+func (*aggregateToolResultClient) Embed(context.Context, string, []string) ([][]float32, error) {
+	return nil, nil
+}
+
+type authoritativePromptReceiptClient struct {
+	calls atomic.Int64
+}
+
+func (c *authoritativePromptReceiptClient) ChatStream(_ context.Context, _ llm.ChatOptions, emit func(llm.StreamChunk) error) error {
+	if call := c.calls.Add(1); call != 1 {
+		return fmt.Errorf("unexpected provider request %d", call)
+	}
+	return emit(llm.StreamChunk{
+		Done: true, EvalCount: 1, PromptEvalCount: 3_001,
+		ToolCalls: []llm.ToolCall{{ID: "receipt-floor", Name: "exists", Arguments: map[string]any{"path": "."}}},
+	})
+}
+
+func (*authoritativePromptReceiptClient) Ping() error   { return nil }
+func (*authoritativePromptReceiptClient) Model() string { return "authoritative-prompt-receipt-test" }
+func (*authoritativePromptReceiptClient) NumCtx() int   { return 4_000 }
+func (*authoritativePromptReceiptClient) Embed(context.Context, string, []string) ([][]float32, error) {
+	return nil, nil
+}
+
+type crossTurnPromptFloorClient struct {
+	calls atomic.Int64
+}
+
+func (c *crossTurnPromptFloorClient) ChatStream(_ context.Context, _ llm.ChatOptions, emit func(llm.StreamChunk) error) error {
+	if call := c.calls.Add(1); call != 1 {
+		return fmt.Errorf("unexpected provider request %d", call)
+	}
+	return emit(llm.StreamChunk{
+		Text: strings.Repeat("a", 100), Done: true, EvalCount: 25, PromptEvalCount: 2_950,
+	})
+}
+
+func (*crossTurnPromptFloorClient) Ping() error   { return nil }
+func (*crossTurnPromptFloorClient) Model() string { return "cross-turn-prompt-floor-test" }
+func (*crossTurnPromptFloorClient) NumCtx() int   { return 4_000 }
+func (*crossTurnPromptFloorClient) Embed(context.Context, string, []string) ([][]float32, error) {
+	return nil, nil
+}
+
 type expandToolResultHook struct{}
 
 func (*expandToolResultHook) Name() string { return "expand-tool-result" }
@@ -235,6 +320,56 @@ func (*postTerminalTurnClient) ChatStream(_ context.Context, _ llm.ChatOptions, 
 func (*postTerminalTurnClient) Ping() error   { return nil }
 func (*postTerminalTurnClient) Model() string { return "post-terminal-test" }
 func (*postTerminalTurnClient) Embed(context.Context, string, []string) ([][]float32, error) {
+	return nil, nil
+}
+
+type reasoningOnlyTerminalClient struct {
+	calls atomic.Int64
+}
+
+func (c *reasoningOnlyTerminalClient) ChatStream(_ context.Context, _ llm.ChatOptions, emit func(llm.StreamChunk) error) error {
+	c.calls.Add(1)
+	if err := emit(llm.StreamChunk{Reasoning: "I should answer, but emit no visible content."}); err != nil {
+		return err
+	}
+	return emit(llm.StreamChunk{Done: true, EvalCount: 63, PromptEvalCount: 7})
+}
+
+func (*reasoningOnlyTerminalClient) Ping() error   { return nil }
+func (*reasoningOnlyTerminalClient) Model() string { return "reasoning-only-terminal-test" }
+func (*reasoningOnlyTerminalClient) Embed(context.Context, string, []string) ([][]float32, error) {
+	return nil, nil
+}
+
+type emptyTerminalRepairClient struct {
+	calls          atomic.Int64
+	emptyResponses int
+	systems        []string
+}
+
+func (c *emptyTerminalRepairClient) ChatStream(_ context.Context, options llm.ChatOptions, emit func(llm.StreamChunk) error) error {
+	call := int(c.calls.Add(1))
+	c.systems = append(c.systems, options.System)
+	if call == 1 {
+		return emit(llm.StreamChunk{
+			Done: true, EvalCount: 1, PromptEvalCount: 10,
+			ToolCalls: []llm.ToolCall{{
+				ID: "repair-source", Name: "exists", Arguments: map[string]any{"path": "."},
+			}},
+		})
+	}
+	if call <= c.emptyResponses+1 {
+		if err := emit(llm.StreamChunk{Reasoning: "The tool result is clear, but no answer was emitted."}); err != nil {
+			return err
+		}
+		return emit(llm.StreamChunk{Done: true, EvalCount: call, PromptEvalCount: 20 + call})
+	}
+	return emit(llm.StreamChunk{Text: "The workspace exists.", Done: true, EvalCount: call, PromptEvalCount: 20 + call})
+}
+
+func (*emptyTerminalRepairClient) Ping() error   { return nil }
+func (*emptyTerminalRepairClient) Model() string { return "empty-terminal-repair-test" }
+func (*emptyTerminalRepairClient) Embed(context.Context, string, []string) ([][]float32, error) {
 	return nil, nil
 }
 
@@ -308,6 +443,24 @@ func TestRunTurnWithLimitsCapsProviderAndStopsBeforeToolDispatch(t *testing.T) {
 	}
 	if output.toolStarts.Load() != 0 {
 		t.Fatalf("hard token boundary dispatched %d tools", output.toolStarts.Load())
+	}
+}
+
+func TestRunTurnWithLimitsCapsProviderRequestToContextReserve(t *testing.T) {
+	client := &contextReserveClient{}
+	ag := New(client, nil, 4_096)
+	ag.SetWorkDir(t.TempDir())
+	ag.SetModeContext("", NewToolPolicy(nil, nil, false))
+	ag.AddUserMessage("Answer briefly.")
+
+	if err := ag.RunTurnWithLimits(context.Background(), &limitOutput{}, "turn_context_reserve", TurnLimits{MaxEvalTokens: 12_000}); err != nil {
+		t.Fatal(err)
+	}
+	if got := client.options.MaxEvalTokens; got != 1_024 {
+		t.Fatalf("provider MaxEvalTokens = %d, want 25%% context reserve 1024", got)
+	}
+	if client.options.ExpectedContext != 4_096 || client.options.ExpectedModel != client.Model() {
+		t.Fatalf("request admission pins = context %d model %q", client.options.ExpectedContext, client.options.ExpectedModel)
 	}
 }
 
@@ -465,8 +618,12 @@ func TestRunTurnValidatesParentUsageBeforeEmittingIt(t *testing.T) {
 	if !errors.Is(err, ErrTurnEvalBudgetExhausted) {
 		t.Fatalf("error=%v, want conservative budget exhaustion", err)
 	}
-	if got := output.evalTokens.Load(); got != maxEval {
-		t.Fatalf("validated conservative charge=%d, want %d", got, maxEval)
+	secondLimit := client.secondLimit.Load()
+	if secondLimit <= 0 || secondLimit > 4096/4 {
+		t.Fatalf("second request limit=%d, want a positive context-reserved cap <= %d", secondLimit, 4096/4)
+	}
+	if got, want := output.evalTokens.Load(), int64(2)+secondLimit; got != want {
+		t.Fatalf("validated conservative charge=%d, want first receipt plus second reservation=%d", got, want)
 	}
 	if calls := client.calls.Load(); calls != 2 {
 		t.Fatalf("parent calls=%d, want overflow on second request", calls)
@@ -488,6 +645,126 @@ func TestRunTurnRejectsChunksAfterTerminalReceipt(t *testing.T) {
 	}
 	if output.textChunks.Load() != 0 {
 		t.Fatalf("accepted %d post-terminal text chunks", output.textChunks.Load())
+	}
+}
+
+func TestRunTurnRejectsReasoningOnlyTerminalResponse(t *testing.T) {
+	client := &reasoningOnlyTerminalClient{}
+	agent := New(client, nil, 16_384)
+	agent.SetWorkDir(t.TempDir())
+	agent.AddUserMessage("Return a visible answer.")
+	output := &contextBudgetOutput{}
+
+	err := agent.RunTurn(context.Background(), output, "turn_reasoning_only")
+	if !errors.Is(err, ErrEmptyTerminalResponse) {
+		t.Fatalf("error = %v, want ErrEmptyTerminalResponse", err)
+	}
+	if got := output.evalTokens.Load(); got != 63 {
+		t.Fatalf("charged evaluation tokens = %d, want 63", got)
+	}
+	if got := client.calls.Load(); got != 1 {
+		t.Fatalf("provider calls = %d, want no retry without a preceding tool result", got)
+	}
+	if len(output.errors) != 1 || !strings.Contains(output.errors[0], "without visible text or a tool call") {
+		t.Fatalf("output errors = %q", output.errors)
+	}
+	for _, message := range agent.Messages() {
+		if message.Role == "assistant" {
+			t.Fatalf("reasoning-only completion persisted an empty assistant message: %#v", message)
+		}
+	}
+}
+
+func TestRunTurnRepairsOneEmptyTerminalResponseAfterToolResult(t *testing.T) {
+	client := &emptyTerminalRepairClient{emptyResponses: 1}
+	agent := New(client, nil, 16_384)
+	agent.SetWorkDir(t.TempDir())
+	agent.SetModeContext("test", NewToolPolicy([]string{"exists"}, nil, false))
+	agent.AddUserMessage("Check whether the workspace exists, then answer visibly.")
+	output := &contextBudgetOutput{}
+
+	if err := agent.RunTurn(context.Background(), output, "turn_empty_terminal_repair"); err != nil {
+		t.Fatalf("run turn: %v", err)
+	}
+	if got := client.calls.Load(); got != 3 {
+		t.Fatalf("provider calls = %d, want tool, empty terminal, and one repair", got)
+	}
+	if got := output.evalTokens.Load(); got != 6 {
+		t.Fatalf("charged evaluation tokens = %d, want all three receipts", got)
+	}
+	if len(output.errors) != 0 {
+		t.Fatalf("output errors = %q", output.errors)
+	}
+	if len(client.systems) != 3 || strings.Contains(client.systems[0], emptyTerminalRepairPrompt) ||
+		strings.Contains(client.systems[1], emptyTerminalRepairPrompt) ||
+		!strings.Contains(client.systems[2], emptyTerminalRepairPrompt) {
+		t.Fatalf("repair prompt scope = %#v", client.systems)
+	}
+
+	messages := agent.Messages()
+	if got := messages[len(messages)-1]; got.Role != "assistant" || got.Content != "The workspace exists." {
+		t.Fatalf("terminal message = %#v", got)
+	}
+	assertNoDurableEmptyTerminalAssistant(t, messages)
+}
+
+func TestRunTurnStopsAfterOneEmptyTerminalRepair(t *testing.T) {
+	client := &emptyTerminalRepairClient{emptyResponses: 2}
+	agent := New(client, nil, 16_384)
+	agent.SetWorkDir(t.TempDir())
+	agent.SetModeContext("test", NewToolPolicy([]string{"exists"}, nil, false))
+	agent.AddUserMessage("Check whether the workspace exists, then answer visibly.")
+	output := &contextBudgetOutput{}
+
+	err := agent.RunTurn(context.Background(), output, "turn_empty_terminal_repair_once")
+	if !errors.Is(err, ErrEmptyTerminalResponse) {
+		t.Fatalf("error = %v, want ErrEmptyTerminalResponse", err)
+	}
+	if got := client.calls.Load(); got != 3 {
+		t.Fatalf("provider calls = %d, want exactly one request after the first empty terminal response", got)
+	}
+	if got := output.evalTokens.Load(); got != 6 {
+		t.Fatalf("charged evaluation tokens = %d, want all three receipts", got)
+	}
+	if len(output.errors) != 1 || !strings.Contains(output.errors[0], "without visible text or a tool call") {
+		t.Fatalf("output errors = %q", output.errors)
+	}
+	if len(client.systems) != 3 || !strings.Contains(client.systems[2], emptyTerminalRepairPrompt) {
+		t.Fatalf("repair prompt scope = %#v", client.systems)
+	}
+	assertNoDurableEmptyTerminalAssistant(t, agent.Messages())
+}
+
+func TestRunTurnDoesNotRepairPastEvaluationBudget(t *testing.T) {
+	client := &emptyTerminalRepairClient{emptyResponses: 1}
+	agent := New(client, nil, 16_384)
+	agent.SetWorkDir(t.TempDir())
+	agent.SetModeContext("test", NewToolPolicy([]string{"exists"}, nil, false))
+	agent.AddUserMessage("Check whether the workspace exists, then answer visibly.")
+	output := &contextBudgetOutput{}
+
+	err := agent.RunTurnWithLimits(context.Background(), output, "turn_empty_terminal_repair_budget", TurnLimits{MaxEvalTokens: 3})
+	if !errors.Is(err, ErrTurnEvalBudgetExhausted) {
+		t.Fatalf("error = %v, want ErrTurnEvalBudgetExhausted", err)
+	}
+	if got := client.calls.Load(); got != 2 {
+		t.Fatalf("provider calls = %d, want no repair request past the evaluation budget", got)
+	}
+	if got := output.evalTokens.Load(); got != 3 {
+		t.Fatalf("charged evaluation tokens = %d, want the full budget", got)
+	}
+	if len(client.systems) != 2 || strings.Contains(client.systems[1], emptyTerminalRepairPrompt) {
+		t.Fatalf("unexpected repair request systems = %#v", client.systems)
+	}
+	assertNoDurableEmptyTerminalAssistant(t, agent.Messages())
+}
+
+func assertNoDurableEmptyTerminalAssistant(t *testing.T, messages []llm.Message) {
+	t.Helper()
+	for _, message := range messages {
+		if message.Role == "assistant" && strings.TrimSpace(message.Content) == "" && len(message.ToolCalls) == 0 {
+			t.Fatalf("empty terminal assistant response was persisted: %#v", message)
+		}
 	}
 }
 
@@ -638,6 +915,47 @@ func TestRunTurnWithLimitsRejectsOversizedPromptBeforeProvider(t *testing.T) {
 	}
 }
 
+func TestRunRejectsUncompactableOversizedPromptBeforeProvider(t *testing.T) {
+	client := &boundedSideGenerationClient{}
+	agent := New(client, nil, 1_200)
+	agent.SetWorkDir(t.TempDir())
+	agent.SetModeContext("", ToolPolicy{})
+	agent.AddUserMessage(strings.Repeat("oversized first-message paste ", 300))
+	output := &contextBudgetOutput{}
+
+	err := agent.Run(context.Background(), output)
+	if !errors.Is(err, ErrTurnContextBudgetExceeded) {
+		t.Fatalf("error = %v, want context-budget error", err)
+	}
+	if calls := client.calls.Load(); calls != 0 {
+		t.Fatalf("uncompactable oversized prompt made %d provider call(s), want zero", calls)
+	}
+	if len(output.errors) != 1 || !strings.Contains(output.errors[0], "reduce prompt or tool context") || !strings.Contains(output.errors[0], "larger context window") {
+		t.Fatalf("recovery message = %#v", output.errors)
+	}
+}
+
+func TestContextAdmissionPreservesGenerationReserveBoundary(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		promptTokens int
+		numCtx       int
+		wantReject   bool
+	}{
+		{name: "at threshold", promptTokens: 900, numCtx: 1_200, wantReject: false},
+		{name: "above threshold", promptTokens: 901, numCtx: 1_200, wantReject: true},
+		{name: "ninety nine percent", promptTokens: 1_188, numCtx: 1_200, wantReject: true},
+		{name: "exactly full", promptTokens: 1_200, numCtx: 1_200, wantReject: true},
+		{name: "overfull", promptTokens: 1_201, numCtx: 1_200, wantReject: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := shouldCompactForContext(test.promptTokens, test.numCtx); got != test.wantReject {
+				t.Fatalf("shouldCompactForContext(%d, %d) = %v, want %v", test.promptTokens, test.numCtx, got, test.wantReject)
+			}
+		})
+	}
+}
+
 func TestRunTurnWithLimitsRejectsOversizedToolResultBeforeSecondProviderCall(t *testing.T) {
 	client := &boundedToolResultClient{}
 	agent := New(client, nil, 1_200)
@@ -660,6 +978,99 @@ func TestRunTurnWithLimitsRejectsOversizedToolResultBeforeSecondProviderCall(t *
 	var detail *TurnContextBudgetError
 	if !errors.As(err, &detail) || detail.EstimatedPromptTokens <= 0 || detail.ContextWindowTokens != 1_200 {
 		t.Fatalf("typed context error = %#v", detail)
+	}
+}
+
+func TestRunRejectsUncompactableToolResultBeforeSecondProviderCall(t *testing.T) {
+	client := &aggregateToolResultClient{}
+	agent := New(client, nil, 1_200)
+	agent.SetWorkDir(t.TempDir())
+	agent.SetModeContext("test", NewToolPolicy([]string{"exists"}, nil, false))
+	agent.AddToolHook(&expandToolResultHook{})
+	agent.AddUserMessage("Check whether the workspace exists, then continue.")
+	output := &contextBudgetOutput{}
+
+	err := agent.Run(context.Background(), output)
+	if !errors.Is(err, ErrTurnContextBudgetExceeded) {
+		t.Fatalf("error = %v, provider calls = %d; want context-budget error", err, client.calls.Load())
+	}
+	if calls := client.calls.Load(); calls != 1 {
+		t.Fatalf("provider calls = %d, want exactly one before the tool result filled context", calls)
+	}
+	if starts := output.toolStarts.Load(); starts != 4 {
+		t.Fatalf("tool starts = %d, want four", starts)
+	}
+}
+
+func TestRunPreservesAuthoritativePromptReceiptWhenCompactionIsInapplicable(t *testing.T) {
+	client := &authoritativePromptReceiptClient{}
+	ag := New(client, nil, 4_000)
+	ag.SetWorkDir(t.TempDir())
+	ag.SetModeContext("test", NewToolPolicy([]string{"exists"}, nil, false))
+	ag.AddUserMessage("Check whether this workspace exists.")
+	out := &contextBudgetOutput{}
+
+	err := ag.Run(context.Background(), out)
+	if !errors.Is(err, ErrTurnContextBudgetExceeded) {
+		t.Fatalf("error = %v, want context-budget error", err)
+	}
+	if calls := client.calls.Load(); calls != 1 {
+		t.Fatalf("provider calls = %d, want exactly one", calls)
+	}
+	if len(out.errors) != 1 || !strings.Contains(out.errors[0], "estimated prompt uses ") ||
+		!strings.Contains(out.errors[0], " of 4000 tokens") {
+		t.Fatalf("context admission output = %#v", out.errors)
+	}
+}
+
+func TestRunCarriesPromptReceiptAndSuffixGrowthAcrossTurns(t *testing.T) {
+	client := &crossTurnPromptFloorClient{}
+	ag := New(client, nil, 4_000)
+	ag.SetWorkDir(t.TempDir())
+	ag.SetModeContext("", NewToolPolicy(nil, nil, false))
+	ag.AddUserMessage("Give a short direct answer.")
+	firstOutput := &contextBudgetOutput{}
+	if err := ag.Run(context.Background(), firstOutput); err != nil {
+		t.Fatalf("first turn: %v", err)
+	}
+	if floor := ag.ContextPromptFloor(); floor.Tokens != 2_950 || floor.MessageTokens <= 0 || floor.Model != client.Model() {
+		t.Fatalf("recorded floor = %#v", floor)
+	}
+
+	ag.AddUserMessage(strings.Repeat("next ", 80))
+	secondOutput := &contextBudgetOutput{}
+	err := ag.Run(context.Background(), secondOutput)
+	if !errors.Is(err, ErrTurnContextBudgetExceeded) {
+		t.Fatalf("second turn error = %v, want context-budget error", err)
+	}
+	if calls := client.calls.Load(); calls != 1 {
+		t.Fatalf("provider calls = %d, want only the admitted first turn", calls)
+	}
+	if len(secondOutput.errors) != 1 || !strings.Contains(secondOutput.errors[0], "turn context budget exceeded") {
+		t.Fatalf("second turn admission output = %#v", secondOutput.errors)
+	}
+}
+
+func TestRunCarriesPromptReceiptAndHostContextGrowthAcrossTurns(t *testing.T) {
+	client := &crossTurnPromptFloorClient{}
+	ag := New(client, nil, 4_000)
+	ag.SetWorkDir(t.TempDir())
+	ag.SetModeContext("", NewToolPolicy(nil, nil, false))
+	ag.AddUserMessage("Give a short direct answer.")
+	if err := ag.Run(context.Background(), &contextBudgetOutput{}); err != nil {
+		t.Fatalf("first turn: %v", err)
+	}
+
+	// Grow only host-owned context between turns. The exact receipt dominates
+	// the heuristic, so this positive host-component delta must still be charged.
+	ag.SetLoadedContext(strings.Repeat("host context ", 40))
+	ag.AddUserMessage("Continue.")
+	err := ag.Run(context.Background(), &contextBudgetOutput{})
+	if !errors.Is(err, ErrTurnContextBudgetExceeded) {
+		t.Fatalf("second turn error = %v, want context-budget error", err)
+	}
+	if calls := client.calls.Load(); calls != 1 {
+		t.Fatalf("provider calls = %d, want only the admitted first turn", calls)
 	}
 }
 

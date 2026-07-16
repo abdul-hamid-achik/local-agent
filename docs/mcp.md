@@ -134,7 +134,102 @@ Servers connect concurrently at startup. One failed server does not prevent the 
 
 [Cortex](https://cortexai.tools/) is an optional evidence-guided kernel. When reachable directly or through MCPHub, the Goal Runtime can link one stable Cortex case and read its semantic status between productive turns.
 
-Cortex does not own Local Agent's budgets, approval prompts, scheduling, or cancellation. Its structured next action is bounded prompt context; it is never executed directly by the host.
+Cortex does not own Local Agent's budgets, approval prompts, scheduling, or
+cancellation. Local Agent consumes Cortex task state only through its exact
+versioned envelope; it does not reproduce Cortex phases, leases, evidence
+ledgers, or completion assessment.
+
+## Bob repository contracts
+
+[Bob](https://bobcli.dev/) reports repository contract and convergence state.
+Local Agent has exact structured parsers for these read-only Bob operations:
+
+| Operation | Host interpretation |
+| --- | --- |
+| `bob_context` | Recipe, bounded capability and extension summaries, and clean, drifted, or conflicted repository state |
+| `bob_path` | Path classification, ownership effect, and related extension or playbook IDs |
+| `bob_playbook` | Available or blocked playbooks, named required inputs, scope, risk, and the first bounded step |
+
+Parser authority comes from the exact trusted Bob route and supported schema,
+not a similar tool name or prose. A malformed result, unsupported schema
+version, route mismatch, unknown enum, or oversized result fails closed instead
+of becoming domain success.
+
+Bob results always carry `EvidenceNone`: no evidence assessment. `clean` means
+that the repository matches Bob's contract; it does not mean the application
+is tested or the current task is verified. Behavioral evidence must still come
+from an exact verifier contract, and Cortex remains responsible for task proof
+assessment when a durable goal uses it.
+
+After validation, durable session state keeps only a bounded semantic digest.
+Raw structured output, absolute workspace paths, arbitrary reasons and
+commands, user values, manifests, previews, and file contents are not saved.
+Local Agent may give the active model a smaller validated Bob projection for
+the current turn, under a separate byte and item cap; that transient content is
+discarded after the turn.
+
+The same parser handles direct Bob results and a complete MCPHub stored result.
+For a stored result, Local Agent first binds the exact call ID, downstream
+server, and tool from the original dispatch. It then accepts only a bounded,
+contiguous page chain for that call ID. Partial pages remain incomplete;
+mismatched, reordered, oversized, or malformed pages fail closed. Only the
+complete serialized result reaches the Bob parser, and the assembled bytes are
+discarded afterward.
+
+### Bob workspace bootstrap
+
+A regular, non-symlink `bob.yaml` at the workspace root marks the repository as
+a Bob candidate; the filename alone is not a valid contract. If one
+unambiguous eligible trusted `bob_context` read is registered, Local Agent
+suggests a compact context read. A unique direct route is preferred; otherwise
+exactly one pinned MCPHub route is required. In
+`auto_read_only` mode, AUTO may perform that same read only after all automatic
+continuation checks pass.
+
+The host caches the validated bounded digest for the active agent and
+invalidates it when the workspace marker or filesystem generation changes.
+Prompts receive the compact cached projection rather than a full Bob document.
+Non-Bob repositories and Bob repositories without an eligible tool continue
+normally.
+
+## Typed continuation actions
+
+Exact Cortex and Bob results can include machine-readable next actions. Local
+Agent converts supported actions into bounded host-owned fields, then validates
+the target against the current tool registry and advertised input schema. It
+also preserves named missing inputs, blockers, source revision or context
+digest, and workspace identity. Downstream command text is display data, not
+shell authority, and downstream effect labels never override the host's effect
+classification.
+
+The default `suggest` mode shows the first valid action to the model and TUI
+without dispatching it. The host can therefore ask only for named missing
+inputs and expose blockers without making the model reconstruct state from
+prose. `off` disables this projection.
+
+Optional `auto_read_only` applies only during AUTO turns. It can follow at most
+two actions in one automatic chain, and only when each action is:
+
+- produced by an exact trusted Cortex or Bob contract with a successful domain
+  result;
+- fully specified, unblocked, current, and bound to the active workspace;
+- resolved to one exact registered direct or pinned tool whose schema still
+  matches;
+- host-classified as read-only and declared non-destructive, idempotent, and
+  closed-world; and
+- allowed by current route trust, MCP scope, approval policy, replay checks,
+  and the execution ledger.
+
+Shell commands, Bob apply, other mutations, secreted execution, unresolved
+generic MCPHub proxy calls, prose-derived actions, stale actions, and repeated
+action fingerprints never auto-run. An explicit deny still wins. If any check
+changes before dispatch, Local Agent stops the automatic path and retains the
+bounded suggestion when it is still valid.
+
+Continuation actions are contracts for a possible next call, not authority
+grants. Local Agent does not merge Bob's ownership engine with Cortex's task
+state machine. See [Configuration](./configuration.md) for `off`, `suggest`, and
+`auto_read_only` settings.
 
 ## Security boundary
 

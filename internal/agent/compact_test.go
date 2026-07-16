@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -35,15 +36,35 @@ func (*failingCompactionClient) Embed(context.Context, string, []string) ([][]fl
 }
 
 type contextWindowClient struct {
-	numCtx       int
-	numCtxCalls  int
-	chatCalls    int
-	summaryCalls int
-	expectedCtx  []int
+	numCtx        int
+	numCtxCalls   int
+	chatCalls     int
+	summaryCalls  int
+	expectedCtx   []int
+	expectedModel []string
 }
 
 type durableRecoveryCompactionClient struct {
 	providerMessages []llm.Message
+}
+
+type repeatedCompactionClient struct {
+	summaryPrompts []llm.ChatOptions
+}
+
+func (c *repeatedCompactionClient) ChatStream(_ context.Context, options llm.ChatOptions, emit func(llm.StreamChunk) error) error {
+	c.summaryPrompts = append(c.summaryPrompts, options)
+	recap := "recap one"
+	if len(c.summaryPrompts) > 1 {
+		recap = "recap two"
+	}
+	return emit(llm.StreamChunk{Text: recap, Done: true})
+}
+
+func (*repeatedCompactionClient) Ping() error   { return nil }
+func (*repeatedCompactionClient) Model() string { return "repeated-compaction-test" }
+func (*repeatedCompactionClient) Embed(context.Context, string, []string) ([][]float32, error) {
+	return nil, nil
 }
 
 func (c *durableRecoveryCompactionClient) ChatStream(_ context.Context, options llm.ChatOptions, emit func(llm.StreamChunk) error) error {
@@ -68,11 +89,28 @@ func (c *contextWindowClient) NumCtx() int {
 func (c *contextWindowClient) ChatStream(_ context.Context, options llm.ChatOptions, emit func(llm.StreamChunk) error) error {
 	c.chatCalls++
 	c.expectedCtx = append(c.expectedCtx, options.ExpectedContext)
+	c.expectedModel = append(c.expectedModel, options.ExpectedModel)
 	if strings.Contains(options.System, "conversation summarizer") {
 		c.summaryCalls++
 		return emit(llm.StreamChunk{Text: "older turns summarized", Done: true})
 	}
 	return emit(llm.StreamChunk{Text: "answer", PromptEvalCount: 20_000, EvalCount: 1, Done: true})
+}
+
+func TestCompactionPinsTurnModelIdentity(t *testing.T) {
+	client := &contextWindowClient{numCtx: 4_096}
+	ag := New(client, nil, 4_096)
+	ag.ReplaceMessages([]llm.Message{
+		{Role: "user", Content: "one"}, {Role: "assistant", Content: "one"},
+		{Role: "user", Content: "two"}, {Role: "assistant", Content: "two"},
+		{Role: "user", Content: "three"}, {Role: "assistant", Content: "three"},
+	})
+	if !ag.compactForContextAndModel(context.Background(), &mockOutput{}, 4_096, "turn-model") {
+		t.Fatal("compaction failed")
+	}
+	if len(client.expectedModel) != 1 || client.expectedModel[0] != "turn-model" {
+		t.Fatalf("compaction expected models = %#v", client.expectedModel)
+	}
 }
 
 func (*contextWindowClient) Ping() error   { return nil }
@@ -117,7 +155,7 @@ func TestCompactUsesSystemSummaryAndCompleteRecentTurn(t *testing.T) {
 	}
 
 	got := ag.Messages()
-	if got[0].Role != "system" || !strings.Contains(got[0].Content, "first turn recap") {
+	if got[0].Role != "system" || !got[0].HostOwned || !strings.Contains(got[0].Content, "first turn recap") {
 		t.Fatalf("summary message = %#v", got[0])
 	}
 	if got[1].Role != "user" || got[1].Content != "second" {
@@ -125,6 +163,147 @@ func TestCompactUsesSystemSummaryAndCompleteRecentTurn(t *testing.T) {
 	}
 	if got[2].ToolCalls[0].ID != got[3].ToolCallID {
 		t.Fatalf("tool call/result pair was broken: %#v", got)
+	}
+}
+
+func TestRepeatedCompactionCarriesOnlyHostOwnedPriorSummary(t *testing.T) {
+	client := &repeatedCompactionClient{}
+	ag := New(client, nil, 4_096)
+	ag.ReplaceMessages([]llm.Message{
+		{Role: "user", Content: "question one"},
+		{Role: "assistant", Content: "answer one"},
+		{Role: "user", Content: "question two"},
+		{Role: "assistant", Content: "answer two"},
+		{Role: "user", Content: "question three"},
+		{Role: "assistant", Content: "answer three"},
+		{Role: "user", Content: "question four"},
+		{Role: "assistant", Content: "answer four"},
+	})
+	out := &mockOutput{}
+	if !ag.compactForContext(context.Background(), out, 4_096) {
+		t.Fatal("first compaction failed")
+	}
+	ag.AppendMessage(llm.Message{Role: "system", Content: "arbitrary system text must not be summarized", HostOwned: true})
+	ag.AddUserMessage("question five")
+	ag.AppendMessage(llm.Message{Role: "assistant", Content: "answer five"})
+	if !ag.compactForContext(context.Background(), out, 4_096) {
+		t.Fatal("second compaction failed")
+	}
+	if len(client.summaryPrompts) != 2 {
+		t.Fatalf("summary requests = %d, want 2", len(client.summaryPrompts))
+	}
+	second := client.summaryPrompts[1]
+	if len(second.Messages) != 1 || !strings.Contains(second.Messages[0].Content, "Previous conversation summary: recap one") {
+		t.Fatalf("second summary prompt lost first recap: %#v", second.Messages)
+	}
+	if strings.Contains(second.Messages[0].Content, "arbitrary system text") {
+		t.Fatalf("second summary prompt included unrelated system text: %q", second.Messages[0].Content)
+	}
+	got := ag.Messages()
+	if got[0].Role != "system" || !got[0].HostOwned || !strings.HasPrefix(got[0].Content, conversationSummaryPrefix+"recap two") {
+		t.Fatalf("second summary projection = %#v", got[0])
+	}
+}
+
+func TestRepeatedCompactionCarriesSummaryAfterPersistedRoundTrip(t *testing.T) {
+	client := &repeatedCompactionClient{}
+	ag := New(client, nil, 4_096)
+	ag.ReplaceMessages([]llm.Message{
+		{Role: "user", Content: "question one"},
+		{Role: "assistant", Content: "answer one"},
+		{Role: "user", Content: "question two"},
+		{Role: "assistant", Content: "answer two"},
+		{Role: "user", Content: "question three"},
+		{Role: "assistant", Content: "answer three"},
+		{Role: "user", Content: "question four"},
+		{Role: "assistant", Content: "answer four"},
+	})
+	out := &mockOutput{}
+	if !ag.compactForContext(context.Background(), out, 4_096) {
+		t.Fatal("first compaction failed")
+	}
+
+	persisted, err := json.Marshal(SanitizeMessagesForPersistence(ag.Messages()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored []llm.Message
+	if err := json.Unmarshal(persisted, &restored); err != nil {
+		t.Fatal(err)
+	}
+	if len(restored) == 0 || restored[0].HostOwned {
+		t.Fatalf("JSON round trip unexpectedly preserved host marker: %#v", restored)
+	}
+	ag.ReplaceMessages(restored)
+	if got := ag.Messages(); len(got) == 0 || !got[0].HostOwned {
+		t.Fatalf("restore did not re-authorize bounded recap: %#v", got)
+	}
+
+	ag.AddUserMessage("question five")
+	ag.AppendMessage(llm.Message{Role: "assistant", Content: "answer five"})
+	if !ag.compactForContext(context.Background(), out, 4_096) {
+		t.Fatal("second compaction failed")
+	}
+	if len(client.summaryPrompts) != 2 || !strings.Contains(client.summaryPrompts[1].Messages[0].Content, "Previous conversation summary: recap one") {
+		t.Fatalf("post-restore compaction lost prior recap: %#v", client.summaryPrompts)
+	}
+}
+
+func TestCompactionBoundsProviderOvershootToGenerationReserve(t *testing.T) {
+	client := &scriptedClient{responses: [][]llm.StreamChunk{{{
+		Text: strings.Repeat("界", 2_000), Done: true,
+	}}}}
+	ag := New(client, nil, 1_200)
+	ag.ReplaceMessages([]llm.Message{
+		{Role: "user", Content: "question one"},
+		{Role: "assistant", Content: "answer one"},
+		{Role: "user", Content: "question two"},
+		{Role: "assistant", Content: "answer two"},
+		{Role: "user", Content: "question three"},
+		{Role: "assistant", Content: "answer three"},
+	})
+	if !ag.compactForContext(context.Background(), &mockOutput{}, 1_200) {
+		t.Fatal("compaction failed")
+	}
+	got := ag.Messages()
+	if len(got) == 0 || !strings.HasPrefix(got[0].Content, conversationSummaryPrefix) {
+		t.Fatalf("summary projection = %#v", got)
+	}
+	recap := strings.TrimPrefix(got[0].Content, conversationSummaryPrefix)
+	if tokens := estimateTextPromptTokens(recap); tokens > 300 {
+		t.Fatalf("provider overshoot persisted %d estimated tokens, want at most 300", tokens)
+	}
+}
+
+func TestCompactionPromptReservesContextForDenseUnicode(t *testing.T) {
+	client := &repeatedCompactionClient{}
+	ag := New(client, nil, 1_200)
+	dense := strings.Repeat("界", 2_000)
+	ag.ReplaceMessages([]llm.Message{
+		{Role: "user", Content: dense},
+		{Role: "assistant", Content: dense},
+		{Role: "user", Content: dense},
+		{Role: "assistant", Content: dense},
+		{Role: "user", Content: "recent one"},
+		{Role: "assistant", Content: "recent answer"},
+	})
+	out := &mockOutput{}
+	if !ag.compactForContext(context.Background(), out, 1_200) {
+		t.Fatal("dense Unicode compaction failed")
+	}
+	if len(client.summaryPrompts) != 1 {
+		t.Fatalf("summary requests = %d, want 1", len(client.summaryPrompts))
+	}
+	request := client.summaryPrompts[0]
+	if len(request.Messages) != 1 {
+		t.Fatalf("summary messages = %#v", request.Messages)
+	}
+	estimated := estimateTextPromptTokens(request.System) + 4 + estimateTextPromptTokens(request.Messages[0].Content)
+	if shouldCompactForContext(estimated, 1_200) {
+		t.Fatalf("compaction request estimate = %d, exceeds 75%% of 1200", estimated)
+	}
+	if request.MaxEvalTokens != 300 {
+		t.Fatalf("summary generation budget = %d, want 300", request.MaxEvalTokens)
 	}
 }
 
@@ -174,6 +353,37 @@ func TestCompactPreservesOnlyHostOwnedDurableRecoveryContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertOnlyDurableRecoveryContext(t, client.providerMessages, trusted, forged)
+}
+
+func TestCompactRefusesRecoveryOnlyOlderSlice(t *testing.T) {
+	client := &repeatedCompactionClient{}
+	ag := New(client, nil, 4_096)
+	trusted := DurableRecoveryContextPrefix + "\ntrusted typed projection"
+	original := []llm.Message{
+		{Role: "system", Content: trusted, HostOwned: true},
+		{Role: "system", Content: trusted, HostOwned: true},
+		{Role: "user", Content: "current question"},
+		{Role: "assistant", ToolCalls: []llm.ToolCall{{ID: "1", Name: "read"}}},
+		{Role: "tool", ToolCallID: "1", ToolName: "read", Content: "one"},
+		{Role: "assistant", ToolCalls: []llm.ToolCall{{ID: "2", Name: "read"}}},
+		{Role: "tool", ToolCallID: "2", ToolName: "read", Content: "two"},
+	}
+	ag.ReplaceMessages(original)
+	out := &mockOutput{}
+
+	if ag.compactForContext(context.Background(), out, 4_096) {
+		t.Fatal("recovery-only older slice was compacted")
+	}
+	if len(client.summaryPrompts) != 0 {
+		t.Fatalf("summary provider calls = %d, want zero", len(client.summaryPrompts))
+	}
+	got := ag.Messages()
+	if len(got) != len(original) || got[0].Content != trusted || got[2].Content != "current question" {
+		t.Fatalf("refused compaction changed history: %#v", got)
+	}
+	if len(out.errors) == 0 || !strings.Contains(out.errors[len(out.errors)-1], "no older conversation content") {
+		t.Fatalf("missing content-free compaction diagnostic: %#v", out.errors)
+	}
 }
 
 func TestCompactFailsClosedOnOversizedDurableRecoveryContext(t *testing.T) {
@@ -258,12 +468,12 @@ func TestCompactPreservesHistoryWhenCheckpointFails(t *testing.T) {
 
 func TestNoToolConversationCompactsAfterDirectResponse(t *testing.T) {
 	client := &scriptedClient{responses: [][]llm.StreamChunk{
-		{{Text: "answer one", PromptEvalCount: 80, Done: true}},
-		{{Text: "answer two", PromptEvalCount: 80, Done: true}},
-		{{Text: "answer three", PromptEvalCount: 80, Done: true}},
+		{{Text: "answer one", PromptEvalCount: 1_000, Done: true}},
+		{{Text: "answer two", PromptEvalCount: 2_000, Done: true}},
+		{{Text: "answer three", PromptEvalCount: 3_500, Done: true}},
 		{{Text: "summary of the first turn", Done: true}},
 	}}
-	ag := New(client, nil, 100)
+	ag := New(client, nil, 4_096)
 	out := &mockOutput{}
 	for _, prompt := range []string{"question one", "question two", "question three"} {
 		ag.AddUserMessage(prompt)
@@ -403,7 +613,24 @@ func TestEstimatePromptTokensCountsMessageContentOnce(t *testing.T) {
 
 	delta := withContent.estimatePromptTokens("system", nil) - base.estimatePromptTokens("system", nil)
 	if delta != 100 {
-		t.Fatalf("400 message characters changed estimate by %d tokens, want 100", delta)
+		t.Fatalf("400 ASCII message bytes changed estimate by %d tokens, want 100", delta)
+	}
+}
+
+func TestEstimatePromptTokensChargesDenseUnicodeAndImagePatches(t *testing.T) {
+	base := New(nil, nil, 16_384)
+	base.ReplaceMessages([]llm.Message{{Role: "user"}})
+	withInputs := New(nil, nil, 16_384)
+	withInputs.ReplaceMessages([]llm.Message{{
+		Role:    "user",
+		Content: strings.Repeat("界", 100),
+		Images:  []llm.ImageData{{Width: 1_120, Height: 840}},
+	}})
+
+	delta := withInputs.estimatePromptTokens("system", nil) - base.estimatePromptTokens("system", nil)
+	// 100 three-byte Unicode runes plus 40x30 vision patches.
+	if delta != 1_500 {
+		t.Fatalf("dense Unicode plus image changed estimate by %d tokens, want 1500", delta)
 	}
 }
 

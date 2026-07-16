@@ -30,7 +30,7 @@ A local-first coding agent for the terminal, built in Go with Charm and powered 
 
 ### Prerequisites
 
-- [Go 1.25.12 or newer](https://go.dev/dl/)
+- [Go 1.25.12 or newer](https://go.dev/dl/) when installing from source
 - [Ollama](https://ollama.com/) running on the same machine
 - [Task](https://taskfile.dev/) for repository development commands (optional)
 - MCPHub, Cortex, Obsidian, or other MCP servers only if you want those tools
@@ -52,7 +52,14 @@ ollama pull qwen3.5:2b
 ollama pull qwen3.5:4b
 ```
 
-Install and launch:
+On macOS, install the release cask and launch:
+
+```bash
+brew install --cask abdul-hamid-achik/tap/local-agent
+local-agent
+```
+
+Or install the latest tagged Go release and launch:
 
 ```bash
 go install github.com/abdul-hamid-achik/local-agent/cmd/local-agent@latest
@@ -136,7 +143,7 @@ The shipped memory guard is tuned for a 16 GB Apple-silicon machine:
 
 ### Automatic and pinned models
 
-The interactive TUI starts with automatic routing. Choosing a verified local model inside the TUI pins it and remembers that choice for the next process start; `/model auto` releases the pin and clears the saved choice. An explicit startup `--model` or agent-profile model takes precedence. Cloud consent remains conversation-scoped and is never restored from the saved preference.
+The interactive TUI starts with automatic routing. Choosing a verified local model inside the TUI pins it and remembers that choice for the next process start in the owner-private `~/.config/local-agent/runtime-preferences.json`; `/model auto` releases the pin and clears the saved choice. An explicit startup `--model` or agent-profile model takes precedence. Cloud consent remains conversation-scoped and is never restored from the saved preference.
 
 ```text
 /model                     open the live Ollama inventory
@@ -166,9 +173,11 @@ three modes. `/plan [task]` is the guided planning entrypoint: it switches to
 PLAN, opens the inline Task/Scope/Focus review, and submits an
 implementation-ready read-only planning request. It does not create a durable
 goal. AUTO is autonomous for validated workspace writes, directory
-creation, host-catalogued local MCP routes, and a static catalog of ordinary
-build, test, lint, formatting, and inspection commands. It still asks before
-Git, deletion, dynamic shell expansion, file
+creation, host-catalogued local MCP routes, and a static catalog of direct,
+ordinary toolchain commands. Task runners, package `run` targets, raw `find`,
+`rg`, and `grep` shell commands, and `go generate` remain approval-gated; the host-owned
+read/list/grep tools provide ignore-aware repository inspection. AUTO still
+asks before Git, deletion, dynamic shell expansion, file
 redirection, external paths, network-facing or unknown commands, memory
 mutation, human decisions, and uncatalogued MCP effects. AUTO uses a larger
 bounded provider-loop budget (40 iterations by default) and does not emit the
@@ -215,7 +224,7 @@ With that setting, `local-agent`:
 - Rejects SSE and Streamable HTTP MCP URLs outside those local-machine hosts.
 - Shows Ollama Cloud entries for explicit selection, asks before crossing the boundary, and excludes them from automatic routing.
 - Canonicalizes built-in file paths, resolves symlinks, and requires a temporary exact-file or directory read grant outside the startup workspace.
-- Applies `.agentignore` to built-in file operations.
+- Applies host-owned secret exclusions plus `.agentignore` to built-in file operations and external directory grants. Repository negation cannot disable the host defaults; the host layer permits conventional template leaf names such as `.env.example`, while a repository may still exclude them explicitly.
 - Removes most parent-process environment variables before running the built-in shell tool.
 - Starts STDIO MCP servers with a minimal environment and deterministic local executable lookup.
 
@@ -240,9 +249,10 @@ and an inline diff for supported file changes. Respond with:
 - `d` to switch between the preview and exact arguments
 - `esc` to cancel the approval and active turn
 
-Read/search tools stay inside the workspace but do not prompt. The `s` grant is
-bound to the exact canonical arguments and is not persisted across process
-restarts. There is no broad per-tool “always allow” choice in the TUI.
+Read/search tools stay inside the workspace or an explicitly granted read scope
+but do not prompt. The `s` grant is bound to the exact canonical arguments and
+is not persisted across process restarts. There is no broad per-tool “always
+allow” choice in the TUI.
 
 ### What local-only does not guarantee
 
@@ -374,6 +384,10 @@ tools:
   max_iterations: 10
   auto_max_iterations: 40
 
+continuations:
+  mode: suggest # off | suggest | auto_read_only
+  max_auto_steps: 2
+
 # Read-only Team, Swarm, and application-level MoE consultation.
 experts:
   enabled: true
@@ -398,6 +412,8 @@ See [`config.example.yaml`](config.example.yaml) for the configured model catalo
 | `LOCAL_AGENT_TOOLS_MAX_GREP` | Override maximum grep results |
 | `LOCAL_AGENT_TOOLS_MAX_ITER` | Override maximum NORMAL/PLAN provider iterations |
 | `LOCAL_AGENT_TOOLS_AUTO_MAX_ITER` | Override maximum AUTO provider iterations |
+| `LOCAL_AGENT_CONTINUATIONS_MODE` | Set typed continuation handling to `off`, `suggest`, or `auto_read_only` |
+| `LOCAL_AGENT_CONTINUATIONS_MAX_AUTO_STEPS` | Set the read-only auto-follow budget from 0 to the hard maximum of 2 |
 | `LOCAL_AGENT_ICE_EMBED_MODEL` | Override the ICE embedding model |
 | `LOCAL_AGENT_LOCAL_ONLY` | Enable or disable local-machine endpoint enforcement |
 | `LOCAL_AGENT_ALLOW_LARGE_MODELS` | Bypass the 16 GB-oriented model/context guard |
@@ -496,10 +512,11 @@ When enabled, ICE:
 Current storage locations:
 
 ```text
-~/.config/local-agent/conversations.json  # ICE entries; every entry carries a workspace ID
-~/.config/local-agent/memory/<hash>.json  # workspace-scoped structured memories
-~/.config/local-agent/local-agent.db      # sessions, permissions, checkpoints, usage
-~/.config/local-agent/logs/               # structured session logs
+~/.config/local-agent/conversations.json       # ICE entries; every entry carries a workspace ID
+~/.config/local-agent/memory/<hash>.json       # workspace-scoped structured memories
+~/.config/local-agent/local-agent.db           # sessions, permissions, checkpoints, usage
+~/.config/local-agent/runtime-preferences.json # remembered local model pin
+~/.config/local-agent/logs/                    # structured session logs
 ```
 
 Leaving `ice.store_path` empty uses the managed global ICE file shown above.
@@ -517,6 +534,7 @@ ICE is still a flat JSON vector store rather than an ANN index, but its bounded 
 | `local-agent -p "prompt"`, `local-agent --prompt "prompt"` | Run one user-directed NORMAL prompt and print text to stdout |
 | `local-agent --plan --prompt "prompt"` | Run one read-only PLAN prompt; equivalent to `--mode plan` |
 | `local-agent --auto --prompt "prompt"` | Run one proactive AUTO prompt; equivalent to `--mode auto`, with routine confined workspace actions pre-authorized |
+| `local-agent --tools read,diff --plan --prompt "prompt"` | Narrow one headless turn to the named built-in tools |
 | `local-agent --model <name>` | Select the initial model; in headless mode this prevents auto-routing |
 | `local-agent --agent <name>` | Select an initial agent profile |
 | `local-agent --resume <S42\|42\|latest>` | Open the TUI and restore an exact or newest current-workspace session |
@@ -534,9 +552,10 @@ ICE is still a flat JSON vector store rather than an ANN index, but its bounded 
 | `local-agent goal recover [--json] <session-id>` | Dry-run an existing validated reconciliation group without creating or changing it |
 | `local-agent goal recover --apply --item ID --observation VALUE --source VALUE --reference TEXT --summary TEXT --observed-at RFC3339 [--json] <session-id>` | Append exact typed recovery evidence through the shared atomic coordinator |
 | `local-agent execution recover [--json] <session-id> <execution-id>` | Inspect one outcome-unknown execution in an ordinary session without retrying it |
+| `local-agent execution recover [--json] <session-id> --all` | Inspect the complete bounded pending-reconciliation set and its exact set digest |
 | `local-agent session list [--json] [--limit N]` | List current-workspace sessions with short handles and titles |
-| `local-agent session export <S42\|42>` | Export one bounded session audit projection |
-| `local-agent session repair <S42\|42>` | Repair one session projection from its durable execution ledger |
+| `local-agent session export [--format jsonl\|md\|both] [--out DIR] <S42\|42>` | Export one bounded session audit projection |
+| `local-agent session repair [--json] <S42\|42>` | Repair one session projection from its durable execution ledger |
 | `local-agent --version` | Print the build version |
 
 Source builds print `dev`. Tagged release artifacts print the tag version
@@ -548,6 +567,12 @@ not a stable JSON automation protocol. `--auto` and `--plan` require a
 non-empty prompt and are mutually exclusive. Passing an explicit empty or
 whitespace-only prompt exits with status 2 before configuration, network, or
 provider initialization.
+
+`--tools` accepts an exact comma-separated list only with a headless prompt.
+It can select only built-in tools already permitted by the chosen mode and
+replaces that turn's tool surface with the requested subset. Memory tools and
+MCP routes are unavailable for the narrowed turn, so this flag cannot grant
+additional authority.
 
 `goal open` creates only durable state. `goal run` restores that exact state,
 records an admission before provider dispatch, runs one AUTO-authority turn, and
@@ -571,7 +596,21 @@ the store, but foreground approval prompts do not currently enqueue that type.
 Ordinary sessions without a durable goal use `execution recover`; its default
 inspection is read-only, while applying evidence requires the exact revision,
 event ID, typed observation, source, reference, summary, and timestamp printed
-by its help. It never retries the original tool.
+by its help. `execution recover SESSION_ID --all` inspects up to 100 pending
+executions together and prints a digest for that exact reviewed set. Batch apply
+requires `--all --apply --set-digest HASH` plus the same complete typed evidence;
+it aborts without recording anything if the set changed. Neither form retries
+the original tool.
+
+`session export` writes `session-N.jsonl` and `session-N-summary.md` by default
+under `./local-agent-audit-N/`. Its bounded Open Issues projection names each
+unresolved or unprojected execution and the exact recovery or repair command.
+Exports can contain session content, receipt detail, and paths, so review them
+before sharing. `session repair` is only for terminal ledger effects newer than
+the saved transcript: close the TUI first, reconcile every outcome-unknown
+execution, then run repair under the exclusive session lease. Repair never
+retries a tool or rewrites the immutable ledger, and goal-owned sessions use the
+separate `goal show`/`goal recover` flow.
 
 ## Slash commands
 
@@ -629,6 +668,10 @@ required.
 
 Session snapshots preserve model-facing messages, tool-call IDs, tool cards, mode, model, profile, counters, and bounded artifact receipts. Loading one replaces both the visible transcript and the hidden model conversation. Checkpoints are validated against the active session. `/artifacts` shows only host-normalized stash URIs, counts, timestamps, hashes, and static warning flags; raw file.cheap manifests, paths, and provider prose do not enter session state.
 
+After a clean interactive exit, Local Agent restores the terminal and prints an
+exact `local-agent --resume S…` command for the active durable session. It does
+not print a command for an unsaved conversation or after a failed TUI run.
+
 ### Durable goals and bounded continuation
 
 `/goal <duration> <prompt>` is the compact path: it deterministically infers a
@@ -668,9 +711,14 @@ stable Cortex case and asks for semantic status between productive turns.
 Cortex receives each local acceptance ID and statement through its typed,
 immutable `acceptanceCriteria` field; criteria are never embedded into free-form
 goal prose.
-Cortex's structured next action is bounded prompt context for the model—it is
-never executed directly by the host and still passes through normal tool
-policy and approval. Local Agent owns scheduling, budgets, cancellation,
+Cortex's or Bob's exact structured next action is normalized into bounded,
+host-owned context. The default `suggest` mode shows it to the model and UI
+without executing it. Optional `auto_read_only` may follow at most two exact,
+fully specified, unblocked, registry-validated read-only actions; shell,
+mutation, secreted execution, and unresolved gateway proxies never qualify.
+Every eligible call still passes current route trust, schema, workspace,
+permission, ledger, replay, and staleness checks. Local Agent owns scheduling,
+budgets, cancellation,
 session persistence, and the execution ledger. A goal reaches `completed` only
 when the linked Cortex case is `complete` with a current canonical `verified`
 assessment and no missing, stale, or degraded verification. Every local
@@ -706,10 +754,11 @@ your terminal's selection override (commonly Shift-drag) for native selection
 and copy; `ctrl+y` remains available for copying the last response.
 
 Attach an image with `/image <path>` or its `/attach <path>` alias. You can also
-paste or drag a PNG, JPEG, or GIF file when the terminal inserts one quoted,
-shell-escaped, or `file://` path as text. Local Agent decodes and validates the
-complete file before attaching it; each ordinary prompt accepts up to four
-images. Use `/image list` to inspect pending attachments and `/image clear` to
+paste or drag one file path or a complete space/newline-separated list of PNG,
+JPEG, or GIF paths when the terminal inserts quoted, shell-escaped, or
+`file://` text. Mixed prose remains ordinary draft text. Local Agent decodes
+and validates every complete file before attaching it in order; each ordinary
+prompt accepts up to four images. Use `/image list` to inspect pending attachments and `/image clear` to
 remove them. The active conversation is bounded to 12 image references, 40 MiB,
 and 48 million decoded pixels in aggregate so repeated vision turns cannot grow
 provider-request memory without limit.
@@ -741,7 +790,8 @@ data erasure is required.
 
 | Key | Action |
 |---|---|
-| `enter`, `shift+enter` | Send / insert a newline |
+| `enter` | Send the prompt, or queue one follow-up while a turn is running |
+| `shift+enter`, `ctrl+j`, `alt+enter` | Insert a newline (`ctrl+j` is the fallback for terminals that cannot distinguish Shift+Enter) |
 | `shift+tab` | Cycle NORMAL, PLAN, AUTO |
 | `ctrl+p` | Open session settings (model, profile, mode, sessions, layout, runtime) |
 | `ctrl+o` | Open Ollama model picker |
@@ -838,10 +888,12 @@ task dev                # go run ./cmd/local-agent
 task test               # go test ./...
 task lint               # golangci-lint run ./...
 task verify             # Go verification plus production website build
+task test:integration   # optional integration-tag suite; live dependencies self-skip
 task glyphrun-contracts  # verify every committed spec contract hash
 task glyphrun-cli        # fast release-critical terminal contracts
 task glyphrun           # complete deterministic terminal suite
 task glyphrun-snapshots # refresh intentional TUI snapshots
+task eval               # repeat the opt-in live qwen3.5:2b tool smoke
 task site               # local documentation development server
 task site:build         # production website build
 task site:preview       # build and preview the production website
@@ -861,11 +913,17 @@ read review, goal recovery, the normal-width launch, the 30×12 minimum,
 canonical command discovery, model and approval flows, saved-session receipts,
 and clean quits.
 
-With `qwen3.5:0.8b` installed in Ollama, run the opt-in live constrained-model/tool proof separately:
+With a running local Ollama and the documented default `qwen3.5:2b` already installed, run the opt-in live constrained-model/tool smoke separately:
 
 ```bash
-glyph run specs/live_ollama_tool.yml --format md
+task eval                         # three repetitions by default
+EVAL_REPEATS=5 task eval          # explicit stability sample
 ```
+
+This is a narrow tool-call stability smoke, not a repository task-completion
+benchmark. It checks the configured `OLLAMA_HOST` for an already-installed
+`qwen3.5:2b`, exits if the model is unavailable, and never runs `ollama pull` or
+downloads weights. It remains outside hosted CI.
 
 ## License
 

@@ -1058,6 +1058,47 @@ func TestAdditionalReadRootEnforcesItsAgentIgnore(t *testing.T) {
 	}
 }
 
+func TestAdditionalReadRootEnforcesDefaultSecretPolicy(t *testing.T) {
+	workspace := t.TempDir()
+	external := t.TempDir()
+	secret := filepath.Join(external, ".env")
+	if err := os.WriteFile(secret, []byte("EXTERNAL_SECRET=1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ag := New(nil, nil, 0)
+	ag.SetWorkDir(workspace)
+	defer ag.Close()
+	if _, err := ag.AddReadRoot(external); err != nil {
+		t.Fatal(err)
+	}
+	if result, isErr := ag.handleRead(map[string]any{"path": secret}); !isErr || !strings.Contains(result, ".agentignore") || strings.Contains(result, "EXTERNAL_SECRET") {
+		t.Fatalf("default-secret external read = %q, error=%v", result, isErr)
+	}
+}
+
+func TestAdditionalReadRootCanReadmitDefaultExamplePath(t *testing.T) {
+	workspace := t.TempDir()
+	external := t.TempDir()
+	if err := os.WriteFile(filepath.Join(external, ".agentignore"), []byte("!.env.example\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	example := filepath.Join(external, ".env.example")
+	if err := os.WriteFile(example, []byte("SAFE_EXAMPLE=1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ag := New(nil, nil, 0)
+	ag.SetWorkDir(workspace)
+	defer ag.Close()
+	if _, err := ag.AddReadRoot(external); err != nil {
+		t.Fatal(err)
+	}
+	if result, isErr := ag.handleRead(map[string]any{"path": example}); isErr || result != "SAFE_EXAMPLE=1" {
+		t.Fatalf("re-admitted external example read = %q, error=%v", result, isErr)
+	}
+}
+
 func TestAdditionalReadRootRejectsSymlinkEscape(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink permissions vary on Windows")

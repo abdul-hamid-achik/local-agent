@@ -3,11 +3,13 @@ package agent
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/log"
 
@@ -97,6 +99,11 @@ type Agent struct {
 	// exact workspace/generation admitted for bob_context. It is cleared when
 	// the turn ends and never serialized.
 	bobStoredAdmissions map[string]bobContextAdmission
+	// contextPromptFloor preserves the last exact provider prompt-token receipt
+	// as a lower bound across user turns. It is keyed to the provider model and
+	// survives session persistence, preventing the model-agnostic estimator from
+	// re-admitting an unchanged over-capacity transcript on the next turn.
+	contextPromptFloor ContextPromptFloor
 
 	checkpointStore     CheckpointStore
 	checkpointSessionID int64
@@ -121,6 +128,36 @@ type ExpertConsultant interface {
 // can report the context window of their currently selected model.
 type contextWindowProvider interface {
 	NumCtx() int
+}
+
+// ContextPromptFloor is the bounded durable projection of one exact provider
+// prompt-token receipt. MessageTokens is the host estimate for the message
+// prefix that produced Tokens; later message growth is added conservatively.
+// It contains no prompt text, tool payload, or provider transcript.
+type ContextPromptFloor struct {
+	Tokens        int    `json:"tokens,omitempty"`
+	HostTokens    int    `json:"host_tokens,omitempty"`
+	MessageTokens int    `json:"message_tokens,omitempty"`
+	Model         string `json:"model,omitempty"`
+}
+
+// MaxContextPromptFloorTokens is a serialization and arithmetic bound, not a
+// configured model limit. It sits far above supported context windows while
+// preventing a tampered session from installing a permanent MaxInt denial.
+const MaxContextPromptFloorTokens = 16 * 1024 * 1024
+
+// Validate rejects partial or unbounded durable prompt-floor projections.
+func (floor ContextPromptFloor) Validate() error {
+	if floor.Tokens == 0 && floor.HostTokens == 0 && floor.MessageTokens == 0 && floor.Model == "" {
+		return nil
+	}
+	model := strings.TrimSpace(floor.Model)
+	if floor.Tokens <= 0 || floor.Tokens > MaxContextPromptFloorTokens || floor.HostTokens < 0 ||
+		floor.HostTokens > MaxContextPromptFloorTokens || floor.MessageTokens < 0 ||
+		floor.MessageTokens > MaxContextPromptFloorTokens || model == "" || len(model) > 512 || !utf8.ValidString(model) {
+		return fmt.Errorf("invalid context prompt floor")
+	}
+	return nil
 }
 
 // SetLogger sets the structured logger used for observability. Safe to leave
@@ -297,6 +334,7 @@ func (a *Agent) ClearHistory() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.messages = nil
+	a.contextPromptFloor = ContextPromptFloor{}
 	a.continuationHistory = newContinuationTurnState(0)
 	a.resetAutoContinuationHistoryLocked()
 	a.invalidateBobWorkspaceContextLocked()
@@ -348,6 +386,9 @@ func (a *Agent) AppendDurableRecoveryContext(content string) error {
 	if _, err := collectDurableRecoveryContexts(next); err != nil {
 		return err
 	}
+	if !reflect.DeepEqual(a.messages, next) {
+		a.contextPromptFloor = ContextPromptFloor{}
+	}
 	a.messages = next
 	return nil
 }
@@ -384,6 +425,9 @@ func (a *Agent) InstallDurableRecoveryContexts(contents []string) error {
 		next = append(next, message)
 	}
 	next = append(next, nextContexts...)
+	if !reflect.DeepEqual(a.messages, next) {
+		a.contextPromptFloor = ContextPromptFloor{}
+	}
 	a.messages = next
 	return nil
 }
@@ -401,16 +445,144 @@ func (a *Agent) ReplaceMessagesWithinSession(msgs []llm.Message) {
 	a.replaceMessages(msgs, false)
 }
 
+// RestoreMessagesWithinSession atomically rolls back an exact transcript and
+// the bounded provider receipt that described it. It is intentionally distinct
+// from ReplaceMessagesWithinSession, whose arbitrary rewrites invalidate that
+// receipt. A model change clears the non-portable floor while still restoring
+// the transcript.
+func (a *Agent) RestoreMessagesWithinSession(msgs []llm.Message, floor ContextPromptFloor) error {
+	if err := floor.Validate(); err != nil {
+		return err
+	}
+	currentModel := ""
+	if a.llmClient != nil {
+		currentModel = a.llmClient.Model()
+	}
+	if floor.Tokens > 0 && config.CanonicalModelName(floor.Model) != config.CanonicalModelName(currentModel) {
+		floor = ContextPromptFloor{}
+	}
+	msgs = cloneMessagesWithImages(msgs)
+	a.mu.Lock()
+	a.messages = msgs
+	a.contextPromptFloor = floor
+	a.mu.Unlock()
+	return nil
+}
+
 func (a *Agent) replaceMessages(msgs []llm.Message, resetContinuationHistory bool) {
 	msgs = cloneMessagesWithImages(msgs)
+	if resetContinuationHistory {
+		msgs = restoreConversationSummaryOwnership(msgs)
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.messages = msgs
+	// Any transcript rewrite invalidates the exact message prefix attached to a
+	// provider receipt. Restore paths explicitly reinstall a validated durable
+	// floor after replacing messages.
+	a.contextPromptFloor = ContextPromptFloor{}
 	if resetContinuationHistory {
 		a.continuationHistory = newContinuationTurnState(0)
 		a.resetAutoContinuationHistoryLocked()
 		a.invalidateBobWorkspaceContextLocked()
 	}
+}
+
+// ContextPromptFloor returns the current bounded provider-receipt projection
+// for session persistence.
+func (a *Agent) ContextPromptFloor() ContextPromptFloor {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.contextPromptFloor
+}
+
+// RestoreContextPromptFloor installs a validated persisted receipt only when it
+// belongs to the currently selected provider model. A model mismatch clears it:
+// token counts are not portable across tokenizers.
+func (a *Agent) RestoreContextPromptFloor(floor ContextPromptFloor) error {
+	if err := floor.Validate(); err != nil {
+		return err
+	}
+	currentModel := ""
+	if a.llmClient != nil {
+		currentModel = a.llmClient.Model()
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if floor.Tokens == 0 || config.CanonicalModelName(floor.Model) != config.CanonicalModelName(currentModel) {
+		a.contextPromptFloor = ContextPromptFloor{}
+		return nil
+	}
+	floor.Model = strings.TrimSpace(floor.Model)
+	a.contextPromptFloor = floor
+	return nil
+}
+
+func (a *Agent) recordContextPromptFloor(tokens, hostTokens, messageTokens int, model string) {
+	floor := ContextPromptFloor{Tokens: tokens, HostTokens: hostTokens, MessageTokens: messageTokens, Model: strings.TrimSpace(model)}
+	if tokens <= 0 || floor.Validate() != nil {
+		return
+	}
+	a.mu.Lock()
+	a.contextPromptFloor = floor
+	a.mu.Unlock()
+}
+
+func (a *Agent) clearContextPromptFloor() {
+	a.mu.Lock()
+	a.contextPromptFloor = ContextPromptFloor{}
+	a.mu.Unlock()
+}
+
+func (a *Agent) contextPromptFloorEstimate(model string, currentHostTokens int) int {
+	a.mu.RLock()
+	floor := a.contextPromptFloor
+	currentMessageTokens := estimateMessagesPromptTokens(a.messages)
+	a.mu.RUnlock()
+	if floor.Tokens <= 0 || config.CanonicalModelName(floor.Model) != config.CanonicalModelName(model) {
+		return 0
+	}
+	estimate := floor.Tokens
+	if currentHostTokens > floor.HostTokens {
+		estimate = saturatingPromptTokenAdd(estimate, currentHostTokens-floor.HostTokens)
+	}
+	if currentMessageTokens > floor.MessageTokens {
+		estimate = saturatingPromptTokenAdd(estimate, currentMessageTokens-floor.MessageTokens)
+	}
+	return estimate
+}
+
+func saturatingPromptTokenAdd(value, delta int) int {
+	maxInt := int(^uint(0) >> 1)
+	if delta > maxInt-value {
+		return maxInt
+	}
+	return value + delta
+}
+
+// restoreConversationSummaryOwnership re-marks the single bounded recap that
+// compaction persists across a JSON/session/checkpoint boundary. Unlike durable
+// recovery receipts, this text grants no execution or reconciliation authority;
+// HostOwned only allows a later compaction to carry the recap forward. Malformed,
+// empty, oversized, and duplicate projections are removed rather than promoted.
+func restoreConversationSummaryOwnership(messages []llm.Message) []llm.Message {
+	next := make([]llm.Message, 0, len(messages))
+	seen := false
+	for _, message := range messages {
+		if message.Role != "system" || !strings.HasPrefix(message.Content, conversationSummaryPrefix) {
+			next = append(next, message)
+			continue
+		}
+		recap := strings.TrimSpace(strings.TrimPrefix(message.Content, conversationSummaryPrefix))
+		if seen || recap == "" || !utf8.ValidString(recap) || estimateTextPromptTokens(recap) > maxConversationSummaryTokens {
+			continue
+		}
+		seen = true
+		message.Content = conversationSummaryPrefix + recap
+		message.HostOwned = true
+		next = append(next, message)
+	}
+	return next
 }
 
 // SetSkillContent sets the combined content of active skills.
@@ -699,6 +871,13 @@ func (a *Agent) PrepareModelSwitch() {
 	if a.iceEngine != nil {
 		a.iceEngine.StopAutoMemory()
 	}
+}
+
+// CommitModelSwitch invalidates tokenizer-specific admission receipts only
+// after the host has successfully committed a different model. Failed switch
+// attempts leave the old model and its exact floor intact.
+func (a *Agent) CommitModelSwitch() {
+	a.clearContextPromptFloor()
 }
 
 // SetToolsConfig sets the tools configuration.

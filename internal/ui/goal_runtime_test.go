@@ -75,7 +75,7 @@ func (*goalCountingClient) Embed(context.Context, string, []string) ([][]float32
 func newGoalRuntimeTestModel(t *testing.T, client llm.Client) *Model {
 	t.Helper()
 	m := newTestModel(t)
-	m.agent = agent.New(client, nil, 4096)
+	m.agent = agent.New(client, nil, 16_384)
 	m.agent.SetWorkDir(t.TempDir())
 	m.reducedMotion = true
 	return m

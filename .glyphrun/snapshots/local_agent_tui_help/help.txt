@@ -3,7 +3,7 @@
                              │                                                            │
                              │ Keyboard Shortcuts                                         │
                              │   enter             Send / queue one follow-up             │
-                             │   shift+enter       New line                               │
+                             │   shift+enter       New line · ctrl+j/alt+enter also       │
   ollama: no model selected  │   esc               Cancel / close overlay                 │
   try: ollama serve · ollama │   ctrl+c            Quit                                   │
                              │   ctrl+l            Clear screen                           │

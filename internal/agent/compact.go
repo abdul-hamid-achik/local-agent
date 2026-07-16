@@ -13,6 +13,14 @@ import (
 const compactThreshold = 0.75 // Trigger compaction at 75% of context window
 const keepMessages = 4        // Keep the last N messages intact
 
+const (
+	conversationSummaryPrefix         = "Conversation summary:\n"
+	maxConversationSummaryTokens      = 1_024
+	compactionPromptBudgetNumerator   = 3
+	compactionPromptBudgetDenominator = 4
+	compactionSystemPrompt            = "You are a conversation summarizer. Produce a concise summary of the conversation so far, capturing all key facts, decisions, tool results, and user requests. Keep it under 500 words and within the available response budget. Output only the summary, no preamble."
+)
+
 type contextCompactionOutput interface {
 	ContextCompacted()
 }
@@ -51,6 +59,14 @@ func (a *Agent) compact(ctx context.Context, out Output) bool {
 // compactForContext compacts using the immutable context-window snapshot for
 // the active turn.
 func (a *Agent) compactForContext(ctx context.Context, out Output, numCtx int) bool {
+	model := ""
+	if a.llmClient != nil {
+		model = a.llmClient.Model()
+	}
+	return a.compactForContextAndModel(ctx, out, numCtx, model)
+}
+
+func (a *Agent) compactForContextAndModel(ctx context.Context, out Output, numCtx int, expectedModel string) bool {
 	a.mu.RLock()
 	messages := make([]llm.Message, len(a.messages))
 	copy(messages, a.messages)
@@ -81,10 +97,16 @@ func (a *Agent) compactForContext(ctx context.Context, out Output, numCtx int) b
 	// host-owned receipts validated above.
 	older = stripDurableRecoveryPrefixMessages(older)
 	recent = stripDurableRecoveryPrefixMessages(recent)
+	if !hasSummarizableConversationContent(older) {
+		out.Error("compaction preserved full history because no older conversation content can be summarized")
+		return false
+	}
 
 	summary := summarizeMessages(older)
-	if budget := optionalPromptBudget(numCtx); budget > 0 {
-		summary = boundPromptText(summary, budget)
+	summary, maxSummaryTokens, ok := boundCompactionPrompt(summary, numCtx)
+	if !ok {
+		out.Error("compaction preserved full history because the summarizer prompt cannot reserve generation space in the active context window")
+		return false
 	}
 
 	if reporter, ok := out.(contextCompactionLifecycleOutput); ok {
@@ -96,10 +118,12 @@ func (a *Agent) compactForContext(ctx context.Context, out Output, numCtx int) b
 	var summaryBuf strings.Builder
 	err = a.chatStreamWithResolvedImages(ctx, llm.ChatOptions{
 		Messages: []llm.Message{
-			{Role: "user", Content: summary},
+			{Role: "user", Content: summary, HostOwned: true},
 		},
-		System:          "You are a conversation summarizer. Produce a concise summary of the conversation so far, capturing all key facts, decisions, tool results, and user requests. Keep it under 500 words. Output only the summary, no preamble.",
+		System:          compactionSystemPrompt,
+		MaxEvalTokens:   maxSummaryTokens,
 		ExpectedContext: numCtx,
+		ExpectedModel:   expectedModel,
 	}, func(chunk llm.StreamChunk) error {
 		if chunk.Text != "" {
 			summaryBuf.WriteString(chunk.Text)
@@ -112,7 +136,11 @@ func (a *Agent) compactForContext(ctx context.Context, out Output, numCtx int) b
 		return false
 	}
 
-	summaryText := summaryBuf.String()
+	summaryText := strings.TrimSpace(summaryBuf.String())
+	// Providers are not trusted to honor MaxEvalTokens. Keep the durable recap
+	// inside both the global projection bound and the generation reserve for this
+	// exact context window.
+	summaryText = boundPromptTextByEstimatedTokens(summaryText, min(maxConversationSummaryTokens, maxSummaryTokens))
 	if summaryText == "" {
 		return false
 	}
@@ -144,18 +172,71 @@ func (a *Agent) compactForContext(ctx context.Context, out Output, numCtx int) b
 	// Replace messages with summary + validated durable receipts + recent.
 	compacted := make([]llm.Message, 0, 1+len(durableRecoveryContexts)+len(recent))
 	compacted = append(compacted, llm.Message{
-		Role:    "system",
-		Content: fmt.Sprintf("Conversation summary:\n%s", summaryText),
+		Role:      "system",
+		Content:   conversationSummaryPrefix + summaryText,
+		HostOwned: true,
 	})
 	compacted = append(compacted, durableRecoveryContexts...)
 	compacted = append(compacted, recent...)
 	a.ReplaceMessagesWithinSession(compacted)
+	a.clearContextPromptFloor()
 
 	if reporter, ok := out.(contextCompactionOutput); ok {
 		reporter.ContextCompacted()
 	}
 	out.SystemMessage(fmt.Sprintf("Context compacted: %d messages summarized, %d kept", len(older), len(recent)+len(durableRecoveryContexts)))
 	return true
+}
+
+// boundCompactionPrompt keeps the summarizer request beneath the same 75%
+// admission threshold as an ordinary provider request. The remaining context
+// is an explicit generation reserve, capped because summaries are bounded host
+// projections rather than open-ended assistant turns.
+func boundCompactionPrompt(summary string, numCtx int) (bounded string, maxSummaryTokens int, ok bool) {
+	if numCtx <= 0 || summary == "" {
+		return "", 0, false
+	}
+	promptLimit := numCtx * compactionPromptBudgetNumerator / compactionPromptBudgetDenominator
+	fixedTokens := estimateTextPromptTokens(compactionSystemPrompt) + 4 // one message frame
+	inputBudget := promptLimit - fixedTokens
+	if inputBudget <= 0 {
+		return "", 0, false
+	}
+	bounded = boundPromptTextByEstimatedTokens(summary, inputBudget)
+	if bounded == "" || estimateTextPromptTokens(bounded)+fixedTokens > promptLimit {
+		return "", 0, false
+	}
+	maxSummaryTokens = numCtx - promptLimit
+	if maxSummaryTokens > maxConversationSummaryTokens {
+		maxSummaryTokens = maxConversationSummaryTokens
+	}
+	if maxSummaryTokens <= 0 {
+		return "", 0, false
+	}
+	return bounded, maxSummaryTokens, true
+}
+
+func boundPromptTextByEstimatedTokens(text string, maxTokens int) string {
+	if text == "" || maxTokens <= 0 {
+		return ""
+	}
+	if estimateTextPromptTokens(text) <= maxTokens {
+		return text
+	}
+	runes := []rune(text)
+	low, high := 1, len(runes)
+	best := ""
+	for low <= high {
+		mid := low + (high-low)/2
+		candidate := boundPromptText(text, mid)
+		if estimateTextPromptTokens(candidate) <= maxTokens {
+			best = candidate
+			low = mid + 1
+		} else {
+			high = mid - 1
+		}
+	}
+	return best
 }
 
 func collectDurableRecoveryContexts(messages []llm.Message) ([]llm.Message, error) {
@@ -196,6 +277,35 @@ func stripDurableRecoveryPrefixMessages(messages []llm.Message) []llm.Message {
 	return filtered
 }
 
+// hasSummarizableConversationContent prevents a recovery-only prefix from
+// becoming a model-authored conversation recap. Durable recovery receipts are
+// reinserted separately after compaction, so once they are stripped there must
+// be actual conversation state (or a prior host-owned recap) to summarize.
+func hasSummarizableConversationContent(messages []llm.Message) bool {
+	for _, message := range messages {
+		switch message.Role {
+		case "system":
+			if message.HostOwned && strings.HasPrefix(message.Content, conversationSummaryPrefix) &&
+				strings.TrimSpace(strings.TrimPrefix(message.Content, conversationSummaryPrefix)) != "" {
+				return true
+			}
+		case "user":
+			if strings.TrimSpace(message.Content) != "" || len(message.Images) > 0 {
+				return true
+			}
+		case "assistant":
+			if strings.TrimSpace(message.Content) != "" || len(message.ToolCalls) > 0 {
+				return true
+			}
+		case "tool":
+			// Even an empty tool result carries a call identity and outcome in the
+			// conversation sequence, so it is semantic input to the recap.
+			return true
+		}
+	}
+	return false
+}
+
 // recentConversationBoundary chooses a user-turn boundary so an assistant
 // tool call is never separated from its tool result. Prefer the next user turn
 // after the raw keep-N split; otherwise retain the current turn in full.
@@ -228,6 +338,14 @@ func summarizeMessages(msgs []llm.Message) string {
 
 	for _, msg := range msgs {
 		switch msg.Role {
+		case "system":
+			if !msg.HostOwned || !strings.HasPrefix(msg.Content, conversationSummaryPrefix) {
+				continue
+			}
+			recap := strings.TrimSpace(strings.TrimPrefix(msg.Content, conversationSummaryPrefix))
+			if recap != "" {
+				fmt.Fprintf(&b, "Previous conversation summary: %s\n", boundPromptTextByEstimatedTokens(recap, maxConversationSummaryTokens))
+			}
 		case "user":
 			fmt.Fprintf(&b, "User: %s\n", msg.Content)
 			for _, image := range msg.Images {

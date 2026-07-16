@@ -409,6 +409,7 @@ type Model struct {
 	approvalState      *ApprovalState
 	queuedFollowUp     *queuedFollowUp
 	turnMessagesBefore []llm.Message
+	turnPromptFloor    agent.ContextPromptFloor
 	turnPrompt         string
 	turnPromptVisible  bool
 	turnEntryIndex     int
@@ -4217,6 +4218,7 @@ func (m *Model) sendToAgentTurnPresentedWithAttachments(
 	m.cancelSessionLoad()
 	m.cancelSessionList()
 	m.turnMessagesBefore = append([]llm.Message(nil), messagesBeforeTurn...)
+	m.turnPromptFloor = m.agent.ContextPromptFloor()
 	m.turnPrompt = text
 	m.turnPromptVisible = visible
 	m.turnEntryIndex = -1
@@ -4283,12 +4285,15 @@ func (m *Model) sendToAgentTurnPresentedWithAttachments(
 		}
 	}
 	if err := m.agent.AddUserMessageWithImages(text, attachmentData(attachments)); err != nil {
-		m.agent.ReplaceMessagesWithinSession(messagesBeforeTurn)
+		rollbackErr := m.agent.RestoreMessagesWithinSession(messagesBeforeTurn, m.turnPromptFloor)
 		var cleanupErr error
 		if createdSession {
 			cleanupErr = m.discardCreatedExecutionSession()
 		}
 		message := fmt.Sprintf("Attach images: %v", err)
+		if rollbackErr != nil {
+			message = fmt.Sprintf("%s (rollback: %v)", message, rollbackErr)
+		}
 		if cleanupErr != nil {
 			message = fmt.Sprintf("%s (cleanup: %v)", message, cleanupErr)
 		}
@@ -4301,11 +4306,14 @@ func (m *Model) sendToAgentTurnPresentedWithAttachments(
 		err := m.persistSessionState(ctx)
 		cancel()
 		if err != nil {
-			m.agent.ReplaceMessagesWithinSession(messagesBeforeTurn)
+			rollbackErr := m.agent.RestoreMessagesWithinSession(messagesBeforeTurn, m.turnPromptFloor)
 			if createdSession {
 				if cleanupFailure := m.discardCreatedExecutionSession(); cleanupFailure != nil {
 					return m.failPresentedTurnBeforeRun(text, fmt.Sprintf("Save session: %v (cleanup: %v)", err, cleanupFailure), visible)
 				}
+			}
+			if rollbackErr != nil {
+				return m.failPresentedTurnBeforeRun(text, fmt.Sprintf("Save session: %v (rollback: %v)", err, rollbackErr), visible)
 			}
 			return m.failPresentedTurnBeforeRun(text, fmt.Sprintf("Save session: %v", err), visible)
 		}
@@ -4378,7 +4386,12 @@ func (m *Model) rollbackPreflightRejectedPrompt() bool {
 	if last.Role != "user" || last.Content != m.turnPrompt || len(last.ToolCalls) != 0 || last.ToolName != "" || last.ToolCallID != "" {
 		return false
 	}
-	m.agent.ReplaceMessagesWithinSession(append([]llm.Message(nil), before...))
+	if err := m.agent.RestoreMessagesWithinSession(append([]llm.Message(nil), before...), m.turnPromptFloor); err != nil {
+		if m.logger != nil {
+			m.logger.Error("restore preflight-rejected prompt", "err", err)
+		}
+		return false
+	}
 	m.restoreTurnImages()
 	if m.turnPromptVisible {
 		m.removePresentedTurnEntry()
@@ -4415,6 +4428,7 @@ func (m *Model) clearTurnMessageCheckpoint() {
 		return
 	}
 	m.turnMessagesBefore = nil
+	m.turnPromptFloor = agent.ContextPromptFloor{}
 	m.turnPrompt = ""
 	m.turnPromptVisible = false
 	m.turnEntryIndex = -1

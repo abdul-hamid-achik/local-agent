@@ -65,6 +65,11 @@ tasks:
     cmds:
       - go test ./...
 
+  'test:integration':
+    desc: Compile and run the opt-in integration-tag suite (live dependencies self-skip when absent)
+    cmds:
+      - go test -tags=integration ./internal/integration -count=1
+
   sqlc:
     desc: Regenerate typed SQLite query and schema models
     dir: internal/db
@@ -91,7 +96,9 @@ tasks:
     cmds:
       - |
         set -eu
-        for spec in specs/*.yml; do
+        test -f specs/live/ollama_tool.yml
+        for spec in specs/*.yml specs/live/*.yml; do
+          test -f "$spec" || continue
           glyph spec verify "$spec" --format md
         done
 
@@ -103,13 +110,27 @@ tasks:
         set -eu
         set --
         for spec in specs/*.yml; do
-          if [ "$spec" = "specs/live_ollama_tool.yml" ]; then
-            continue
-          fi
           set -- "$@" "$spec"
         done
         test "$#" -gt 0
         glyph run "$@" --format md --progress auto --parallel 1
+
+  eval:
+    desc: Repeat the opt-in live default-model tool smoke (requires local Ollama; never pulls models)
+    cmds:
+      - |
+        set -eu
+        export OLLAMA_HOST="${OLLAMA_HOST:-http://127.0.0.1:11434}"
+        if ! ollama show qwen3.5:2b >/dev/null 2>&1; then
+          echo "eval requires a running local Ollama with qwen3.5:2b already installed" >&2
+          exit 1
+        fi
+        repeats="${EVAL_REPEATS:-3}"
+        case "$repeats" in
+          ''|*[!0-9]*) echo "EVAL_REPEATS must be a positive integer" >&2; exit 1 ;;
+        esac
+        test "$repeats" -ge 1
+        glyph run specs/live/ollama_tool.yml --format json --progress always --parallel 1 --repeat "$repeats"
 
   glyphrun-snapshots:
     desc: Refresh committed Glyphrun terminal snapshots

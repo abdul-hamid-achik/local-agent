@@ -15,6 +15,7 @@ type rootOptions struct {
 	model          string
 	agentProfile   string
 	prompt         string
+	tools          string
 	mode           string
 	auto           bool
 	plan           bool
@@ -22,6 +23,7 @@ type rootOptions struct {
 	legacyYolo     bool
 	version        bool
 	promptProvided bool
+	toolsProvided  bool
 	modeProvided   bool
 	resume         resumeFlagValue
 	arguments      []string
@@ -37,6 +39,7 @@ func parseRootOptions(program string, args []string, stderr, stdout io.Writer) (
 	flags.StringVar(&options.agentProfile, "agent", "", "override agent profile")
 	flags.StringVar(&options.prompt, "p", "", "shorthand for --prompt")
 	flags.StringVar(&options.prompt, "prompt", "", "run one non-interactive prompt, print the response, and exit")
+	flags.StringVar(&options.tools, "tools", "", "expose only these built-in tools in headless mode (comma-separated)")
 	flags.StringVar(&options.mode, "mode", "normal", "headless authority: normal, plan, or auto")
 	flags.BoolVar(&options.auto, "auto", false, "shortcut for --mode auto (requires --prompt)")
 	flags.BoolVar(&options.plan, "plan", false, "shortcut for --mode plan (requires --prompt)")
@@ -53,6 +56,8 @@ func parseRootOptions(program string, args []string, stderr, stdout io.Writer) (
 		switch visited.Name {
 		case "p", "prompt":
 			options.promptProvided = true
+		case "tools":
+			options.toolsProvided = true
 		case "mode":
 			options.modeProvided = true
 		}

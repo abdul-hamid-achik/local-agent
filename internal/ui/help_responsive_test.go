@@ -65,10 +65,10 @@ func TestHelpKeepsKeysAndContextTruthfulAtNarrowWidth(t *testing.T) {
 		updated, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: 20})
 		m = updated.(*Model)
 		plain := ansi.Strip(m.buildHelpContent(m.helpContentWidth()))
-		if !strings.Contains(plain, "shift+enter/ctrl+j") || strings.Contains(plain, "shift+ent…") {
-			t.Fatalf("width %d help truncated a key label:\n%s", width, plain)
-		}
 		compact := strings.Join(strings.Fields(plain), " ")
+		if !strings.Contains(compact, "shift+enter New line · ctrl+j/alt+enter also") || strings.Contains(plain, "shift+ent…") {
+			t.Fatalf("width %d help omitted or truncated newline fallbacks:\n%s", width, plain)
+		}
 		if !strings.Contains(compact, "shift+drag") || !strings.Contains(compact, "terminal selection override") {
 			t.Fatalf("width %d help omitted mouse selection guidance:\n%s", width, plain)
 		}

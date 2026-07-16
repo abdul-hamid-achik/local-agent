@@ -44,12 +44,47 @@ from resuming it concurrently. Startup restore retains the normal cloud-consent
 and recovery checks but does not submit a prompt or automatically resume a
 durable goal. `--resume` cannot be combined with headless `-p` or `--prompt`.
 
+After a clean interactive exit, Local Agent restores the terminal and prints a
+copyable resume command when the conversation has a durable session:
+
+```text
+Resume this session with:
+  local-agent --resume S42
+```
+
+The message is omitted when no resumable session exists or the TUI exits with
+an error.
+
 List or export sessions outside the TUI with:
 
 ```bash
 local-agent session list
-local-agent session export S42
+local-agent session export --format both S42
 ```
+
+The default export directory is `./local-agent-audit-42/`, containing
+`session-42.jsonl` and `session-42-summary.md`. The Markdown Open Issues table
+and JSONL `open_issue` records identify unresolved executions and give the exact
+`execution recover` or `session repair` command. Exports are bounded debugging
+artifacts and can include raw session content, receipt detail, and paths; review
+them before sharing.
+
+For an ordinary session with uncertain tool effects, inspect either one receipt
+or the bounded pending set without retrying anything:
+
+```bash
+local-agent execution recover S42 EXECUTION_ID
+local-agent execution recover S42 --all
+```
+
+The batch listing prints an exact pending-set digest. Batch apply requires the
+complete `--all --apply --set-digest HASH` command and typed evidence printed by
+the inspection; it aborts atomically if the set changed. If terminal ledger
+effects are newer than the saved transcript, first reconcile every uncertain
+execution, close the TUI, then run `local-agent session repair S42`. Repair
+re-derives the projection under an exclusive lease; it never retries a tool or
+rewrites the immutable ledger. Goal-owned sessions use `goal show` and
+`goal recover` instead.
 
 `/artifacts` (or `/artifact`) lists completed file.cheap save receipts from the
 active or restored transcript. The durable projection contains a host-derived
@@ -68,6 +103,24 @@ Checkpoints snapshot the current agent message history inside the active session
 ```
 
 Restore validates that the checkpoint belongs to the active session.
+
+## Saved model preference
+
+An explicit local-model selection made with `/model`, the model picker, or the
+equivalent settings surface is remembered across process restarts. The
+preference is user-scoped rather than workspace- or session-scoped and is
+stored in the owner-private file:
+
+```text
+~/.config/local-agent/runtime-preferences.json
+```
+
+At startup, Local Agent restores the preference only when the current Ollama
+inventory verifies that the model is local and manually selectable. An explicit
+`--model` flag or agent-profile model takes precedence. A previous Ollama Cloud
+selection never restores its conversation-only consent in a new process.
+`/model auto` clears the saved manual preference before returning to automatic
+local routing.
 
 ## Structured memory
 
@@ -99,6 +152,7 @@ When enabled, ICE can retrieve similar prior messages and run bounded background
 ~/.config/local-agent/conversations.json
 ~/.config/local-agent/memory/<workspace-hash>.json
 ~/.config/local-agent/local-agent.db
+~/.config/local-agent/runtime-preferences.json
 ~/.config/local-agent/images/
 ~/.config/local-agent/logs/
 ```

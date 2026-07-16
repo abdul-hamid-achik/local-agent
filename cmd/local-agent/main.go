@@ -86,6 +86,7 @@ func run() int {
 	modelFlag := &options.model
 	agentProfileFlag := &options.agentProfile
 	promptFlag := options.prompt
+	toolsFlag := options.tools
 	modeFlag := &options.mode
 	autoFlag := &options.auto
 	planFlag := &options.plan
@@ -95,6 +96,10 @@ func run() int {
 	promptProvided := options.promptProvided
 	if promptProvided && strings.TrimSpace(promptFlag) == "" {
 		fmt.Fprintln(os.Stderr, "prompt: -p/--prompt requires a non-empty value")
+		return 2
+	}
+	if options.toolsProvided && !promptProvided {
+		fmt.Fprintln(os.Stderr, "tools: --tools requires a headless prompt via -p/--prompt")
 		return 2
 	}
 	resumeSelector, resumeRequested, err := resumeFlag.selector()
@@ -120,6 +125,15 @@ func run() int {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "mode: %v\n", err)
 		return 2
+	}
+	var narrowedHeadlessToolPolicy agent.ToolPolicy
+	if options.toolsProvided {
+		modeConfig := ui.DefaultModeConfigs()[headlessMode]
+		narrowedHeadlessToolPolicy, err = narrowHeadlessToolPolicy(modeConfig.ToolPolicy, toolsFlag)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "tools: %v\n", err)
+			return 2
+		}
 	}
 
 	cfg, agentsDir, err := config.LoadWithAgentsDir()
@@ -355,6 +369,10 @@ func run() int {
 			return 1
 		}
 		modeConfig := ui.DefaultModeConfigs()[headlessMode]
+		if options.toolsProvided {
+			modeConfig.ToolPolicy = narrowedHeadlessToolPolicy
+			modeConfig.SystemPromptPrefix = narrowHeadlessSystemPrompt(modeConfig.SystemPromptPrefix, narrowedHeadlessToolPolicy)
+		}
 		if explicitRouter, ok := router.(interface{ SetModeContext(config.ModeContext) }); ok {
 			explicitRouter.SetModeContext(modeConfig.RouterMode)
 		}
@@ -432,6 +450,10 @@ func run() int {
 				return 1
 			}
 			ag.ReplaceMessages(state.Messages)
+			if restoreErr := ag.RestoreContextPromptFloor(state.ContextPromptFloor); restoreErr != nil {
+				fmt.Fprintf(os.Stderr, "goal run: restore context admission floor: %v\n", restoreErr)
+				return 1
+			}
 			executionCursor = state.ExecutionCursor
 			sessionStateRevision = record.Revision
 		} else {
@@ -504,9 +526,9 @@ func run() int {
 				if snapshotErr != nil {
 					return snapshotErr
 				}
-				stateJSON, encodeErr = ui.EncodeHeadlessGoalSessionState(ag.Messages(), modelName, cfg.AgentProfile, modelPinned, executionCursor, snapshot)
+				stateJSON, encodeErr = ui.EncodeHeadlessGoalSessionStateWithContextFloor(ag.Messages(), modelName, cfg.AgentProfile, modelPinned, executionCursor, snapshot, ag.ContextPromptFloor())
 			} else {
-				stateJSON, encodeErr = ui.EncodeHeadlessSessionState(ag.Messages(), modelName, cfg.AgentProfile, modelPinned, executionCursor)
+				stateJSON, encodeErr = ui.EncodeHeadlessSessionStateWithContextFloor(ag.Messages(), modelName, cfg.AgentProfile, modelPinned, executionCursor, ag.ContextPromptFloor())
 			}
 			if encodeErr != nil {
 				return encodeErr
@@ -923,11 +945,7 @@ func applyWorkspaceIgnore(ag *agent.Agent, workDir string) error {
 		return err
 	}
 	if ag != nil {
-		ignoreContent := ""
-		if ignore != nil {
-			ignoreContent = ignore.Raw()
-		}
-		ag.SetWorkspacePolicy(workDir, ignoreContent)
+		ag.SetWorkspacePolicy(workDir, ignore.Raw())
 	}
 	return nil
 }

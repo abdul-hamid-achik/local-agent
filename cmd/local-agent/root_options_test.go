@@ -184,6 +184,7 @@ func TestParseRootOptionsHelpIsSideEffectFree(t *testing.T) {
 		"-p, --prompt <text>",
 		"--auto",
 		"--plan",
+		"--tools",
 		"--skip-approvals",
 		"--version",
 	} {
@@ -197,6 +198,59 @@ func TestParseRootOptionsHelpIsSideEffectFree(t *testing.T) {
 		}
 	}
 	assertHelpLinesAtMost(t, help, 100)
+}
+
+func TestParseRootOptionsTracksHeadlessToolsPresence(t *testing.T) {
+	tests := []struct {
+		name  string
+		args  []string
+		value string
+	}{
+		{name: "comma separated", args: []string{"--tools", "read,diff", "--prompt", "work"}, value: "read,diff"},
+		{name: "explicit empty", args: []string{"--tools=", "--prompt", "work"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			options, err := parseRootOptions("local-agent", test.args, &bytes.Buffer{}, &bytes.Buffer{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !options.toolsProvided || options.tools != test.value {
+				t.Fatalf("tools = %q provided=%v, want %q/true", options.tools, options.toolsProvided, test.value)
+			}
+		})
+	}
+}
+
+func TestRunValidatesHeadlessToolsBeforeConfiguration(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workDir, "local-agent.yaml"), []byte("ollama: [\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(workDir)
+
+	runWithArgs := func(args ...string) int {
+		t.Helper()
+		previous := os.Args
+		os.Args = append([]string{"local-agent"}, args...)
+		defer func() { os.Args = previous }()
+		return run()
+	}
+
+	for _, args := range [][]string{
+		{"--tools", "read"},
+		{"--tools=", "--prompt", "work"},
+		{"--tools", "read,read", "--prompt", "work"},
+		{"--tools", "not_a_tool", "--prompt", "work"},
+		{"--plan", "--tools", "write", "--prompt", "work"},
+	} {
+		if code := runWithArgs(args...); code != 2 {
+			t.Fatalf("invalid tools invocation %q exit = %d, want usage exit 2", args, code)
+		}
+	}
+	if code := runWithArgs("--plan", "--tools", "read,diff", "--prompt", "work"); code != 1 {
+		t.Fatalf("valid narrowed invocation exit = %d, want invalid-config exit 1", code)
+	}
 }
 
 func TestParseRootOptionsErrorsStayOnStderr(t *testing.T) {

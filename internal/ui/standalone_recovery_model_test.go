@@ -108,6 +108,7 @@ func TestStandaloneRecoveryUsesHeldLeaseAndExplicitlyRechecksAgent(t *testing.T)
 
 	client := &standaloneRecoveryClient{}
 	m := newGoalRuntimeTestModel(t, client)
+	m.model = client.Model()
 	m.agent.SetWorkDir(workspace)
 	m.agent.SetExecutionLedger(store)
 	m.agent.SetExecutionSessionID(session.ID)
@@ -125,7 +126,14 @@ func TestStandaloneRecoveryUsesHeldLeaseAndExplicitlyRechecksAgent(t *testing.T)
 
 	appendGoalRecoveryStartedExecution(t, store, session.ID, workspace, "turn_standalone", 0,
 		time.Date(2026, time.July, 13, 8, 0, 0, 0, time.UTC))
+	wantPromptFloor := agent.ContextPromptFloor{
+		Tokens: 12_000, HostTokens: 1_000, MessageTokens: 200, Model: client.Model(),
+	}
+	if err := m.agent.RestoreContextPromptFloor(wantPromptFloor); err != nil {
+		t.Fatal(err)
+	}
 	m.turnMessagesBefore = m.agent.Messages()
+	m.turnPromptFloor = wantPromptFloor
 	m.turnPrompt = "continue safely"
 	m.turnPromptVisible = true
 	m.turnCheckpointSet = true
@@ -149,6 +157,9 @@ func TestStandaloneRecoveryUsesHeldLeaseAndExplicitlyRechecksAgent(t *testing.T)
 	}
 	if m.input.Value() != "continue safely" {
 		t.Fatalf("preflight-rejected prompt was not restored to composer: %q", m.input.Value())
+	}
+	if got := m.agent.ContextPromptFloor(); got != wantPromptFloor {
+		t.Fatalf("preflight rollback lost context prompt floor: got %#v, want %#v", got, wantPromptFloor)
 	}
 	entriesBeforeRedirect := len(m.entries)
 	redirect := m.submitInput()

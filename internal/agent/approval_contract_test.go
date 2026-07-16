@@ -24,6 +24,7 @@ func TestLargeWriteApprovalCarriesBoundedPreviewAndWritesAtomically(t *testing.T
 	}}
 	ledger := &fakeExecutionLedger{}
 	ag, workDir := newLedgerAgent(t, client, nil, ledger)
+	ag.numCtx = 16_384
 	ag.SetPermissionChecker(permission.NewChecker(nil, false))
 	var prompts atomic.Int64
 	ag.SetApprovalCallback(func(request permission.ApprovalRequest) {

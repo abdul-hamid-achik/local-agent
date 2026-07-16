@@ -8,16 +8,19 @@ import (
 	"unicode/utf8"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/agent"
+	"github.com/abdul-hamid-achik/local-agent/internal/config"
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
 	"github.com/abdul-hamid-achik/local-agent/internal/goal"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 )
 
 type headlessGoalState struct {
-	Version         int            `json:"version"`
-	Messages        []llm.Message  `json:"messages"`
-	ExecutionCursor int64          `json:"execution_cursor"`
-	Goal            *goal.Snapshot `json:"goal"`
+	Version            int                      `json:"version"`
+	Model              string                   `json:"model"`
+	Messages           []llm.Message            `json:"messages"`
+	ContextPromptFloor agent.ContextPromptFloor `json:"context_prompt_floor"`
+	ExecutionCursor    int64                    `json:"execution_cursor"`
+	Goal               *goal.Snapshot           `json:"goal"`
 }
 
 func boundedHeadlessGoalError(err error) string {
@@ -57,6 +60,12 @@ func loadHeadlessGoalState(ctx context.Context, store *db.Store, workspace strin
 	}
 	if state.ExecutionCursor < 0 || state.Goal == nil || state.Goal.SessionID != sessionID {
 		return db.Session{}, nil, headlessGoalState{}, db.SessionStateRecord{}, fmt.Errorf("session %d does not contain a valid bound goal snapshot", sessionID)
+	}
+	if err := state.ContextPromptFloor.Validate(); err != nil {
+		return db.Session{}, nil, headlessGoalState{}, db.SessionStateRecord{}, fmt.Errorf("session %d has invalid context prompt floor: %w", sessionID, err)
+	}
+	if state.ContextPromptFloor.Tokens > 0 && config.CanonicalModelName(state.ContextPromptFloor.Model) != config.CanonicalModelName(state.Model) {
+		return db.Session{}, nil, headlessGoalState{}, db.SessionStateRecord{}, fmt.Errorf("session %d context prompt floor model does not match saved model", sessionID)
 	}
 	runtime, err := goal.Restore(*state.Goal)
 	if err != nil {

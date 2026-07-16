@@ -157,17 +157,11 @@ func buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadGrants(ctx con
 		memorySection = boundPromptText(memorySection, budget*25/100)
 	}
 
-	var memoryGuidelines string
-	if memStore != nil {
-		memoryGuidelines = `
-## Memory Guidelines
-- You have access to persistent memory via memory_save and memory_recall tools.
-- Proactively save important user preferences, project facts, and key decisions.
-- When the user shares personal information (name, preferences, etc.), save it.
-- Use memory_recall to look up previously saved information when relevant.
-- Don't save trivial or session-specific information.
-`
-	}
+	// A project memory store may still contribute bounded remembered context when
+	// the active mode does not grant memory-tool authority. Keep those two
+	// concerns separate: instructions may name only definitions that this exact
+	// provider turn advertises.
+	memoryGuidelines := buildMemoryGuidelines(tools)
 
 	var ignoreSection string
 	if ignoreContent != "" {
@@ -206,6 +200,42 @@ func buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadGrants(ctx con
 		toolList,
 		memoryGuidelines,
 	)
+}
+
+// buildMemoryGuidelines describes only the exact built-in memory definitions
+// advertised to the current provider turn. A store can exist while Ask, Plan,
+// or a narrowed headless policy withholds some or all memory tools; naming a
+// withheld tool encourages invalid calls and makes the prompt contradict its
+// own tool schema.
+func buildMemoryGuidelines(tools []llm.ToolDef) string {
+	available := make(map[string]struct{}, len(tools))
+	for _, tool := range tools {
+		if memory.IsBuiltinTool(tool.Name) {
+			available[tool.Name] = struct{}{}
+		}
+	}
+	if len(available) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("\n## Memory Guidelines\n")
+	if _, ok := available["memory_save"]; ok {
+		b.WriteString("- Use memory_save for important durable user preferences, project facts, and key decisions; do not save trivial or session-specific information.\n")
+	}
+	if _, ok := available["memory_recall"]; ok {
+		b.WriteString("- Use memory_recall to look up previously saved information when relevant.\n")
+	}
+	if _, ok := available["memory_list"]; ok {
+		b.WriteString("- Use memory_list to inspect stored memories and their IDs.\n")
+	}
+	if _, ok := available["memory_update"]; ok {
+		b.WriteString("- Use memory_update to correct an existing memory by ID.\n")
+	}
+	if _, ok := available["memory_delete"]; ok {
+		b.WriteString("- Use memory_delete to remove an existing memory by ID.\n")
+	}
+	return b.String()
 }
 
 // optionalPromptBudget reserves most of the context window for the tool

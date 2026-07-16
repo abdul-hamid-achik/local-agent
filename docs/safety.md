@@ -23,7 +23,8 @@ With this setting, Local Agent treats `localhost`, loopback IPs, and unspecified
 - excludes Ollama Cloud from automatic routing and requires exact conversation-only consent for manual selection;
 - canonicalizes built-in file paths, resolves symlinks, and rejects paths outside the startup workspace unless a temporary read grant covers them;
 - permits explicit, process-local external exact-file or directory read grants without widening write authority;
-- applies `.agentignore` to built-in file operations;
+- applies host-owned secret-name exclusions plus the workspace's
+  `.agentignore` to built-in file operations;
 - removes most inherited environment variables before built-in shell execution;
 - refuses to start repository-supplied STDIO MCP processes until their exact executable configuration is trusted;
 - starts STDIO MCP servers with a minimal environment and deterministic local executable lookup.
@@ -41,6 +42,17 @@ Separately, an exact trust contract in the trusted local-STDIO configuration
 can classify specific routes as read-only or workspace-effectful. Those
 contracts are host-owned, bound to the executable identity, and do not trust
 MCP annotations; all other routes remain on the normal approval path.
+
+The host policy excludes conventional secret-bearing names even when a
+workspace has no `.agentignore`: `.env`, `.env.*`, `*.pem`, `*.key`,
+`id_rsa*`, `id_ed25519*`, `.npmrc`, `.netrc`, `credentials`, `.aws/**`,
+`.ssh/**`, `*.p12`, and `*.keystore`. A repository may add patterns for other
+paths, but its `.agentignore` cannot negate these host exclusions. The host
+policy itself does not deny the exact conventional template leaf names
+`.env.example`, `.env.sample`, `.env.template`, and `.env.dist` from the broad
+`.env.*` rule. A repository rule may still exclude any of those files. These
+exceptions only describe filename policy; review template contents before
+sharing them.
 
 Built-in workspace reads and approved file mutations execute relative to a
 workspace directory handle pinned for that operation. Local Agent rechecks the
@@ -72,13 +84,18 @@ effects remain gated. This classification reduces interruptions; it does not
 turn the built-in shell into an operating-system sandbox.
 
 The classifier validates the outer command and its visible operands. Admitted
-commands such as `go test`, `npm run`, or `make` can still execute code and
-hooks supplied by the repository, which inherit the host process's filesystem
-and network access. Use AUTO only with a workspace whose build logic you trust.
-Raw Git is not in this automatic catalog: repository configuration, clean or
-text-conversion filters, filesystem monitors, signing, and hooks can execute
-programs even when the outer Git command appears read-only. `/changes` and
-`/commit` provide the corresponding host-owned inspection and commit paths.
+commands such as `go test`, `go build`, `npm test`, or `bun test` can still
+execute code and hooks supplied by the repository, which inherit the host
+process's filesystem and network access. Use AUTO only with a workspace whose
+build logic you trust. Task runners such as `make`, `task`, and `just`,
+package-script delegation such as `npm run`, `go generate`, and raw shell
+`find`, `grep`, or `rg` searches remain approval-gated; use Local Agent's
+built-in ignore-aware list, read, and grep tools for routine inspection. Raw Git
+is also outside the automatic catalog:
+repository configuration, clean or text-conversion filters, filesystem
+monitors, signing, and hooks can execute programs even when the outer Git
+command appears read-only. `/changes` and `/commit` provide the corresponding
+host-owned inspection and commit paths.
 
 The inline approval surface replaces the composer while leaving the transcript
 visible. It shows the action, scope, target or command, and a bounded diff when
@@ -147,9 +164,12 @@ a whole source tree, grant that directory explicitly for the current process:
 
 Built-in list, read, grep, and copy-source operations can then use that root,
 while write, edit, move, remove, and copy destinations remain confined to the
-startup workspace. Directory grants observe the external root's `.agentignore`.
-Exact-file and directory grants are not saved in the session and can be revoked
-with `/scope remove-read` or `/scope clear-read`.
+startup workspace. Directory grants combine the external root's `.agentignore`
+with the same host-owned secret exclusions used in the startup workspace; that
+root cannot negate the host defaults either. An approved exact-file grant is a
+deliberate exception for that one pinned file identity. Exact-file and directory
+grants are not saved in the session and can be revoked with
+`/scope remove-read` or `/scope clear-read`.
 
 This grant governs Local Agent's built-in file readers. It does not silently
 authorize an MCP process: passing the path to Vidtrace or another MCP tool still
