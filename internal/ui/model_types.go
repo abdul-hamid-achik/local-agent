@@ -80,6 +80,7 @@ type ToolEntry struct {
 	Args                    string         // formatted args string
 	RawArgs                 map[string]any `json:"-"` // ephemeral original args
 	Result                  string
+	ResultDisplay           string `json:"-"` // transient raw-ANSI display variant for render-time remap; never persisted or restored
 	ResultLanguage          string // bounded lexer alias derived from trusted call metadata
 	IsError                 bool
 	Status                  ToolStatus

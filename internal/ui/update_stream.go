@@ -188,10 +188,17 @@ func (m *Model) handleToolCallResult(msg ToolCallResultMsg, cmds []tea.Cmd) []te
 	matchedIndex := -1
 	expertResult := isExpertConsultTool(msg.Name)
 	result := boundedToolCardResult(msg.Result)
+	resultDisplay := ""
+	if strings.ContainsRune(msg.Result, '\x1b') {
+		// Raw bytes are retained only for the render-time ANSI-16 remap; the
+		// sanitized result above stays the only persisted representation.
+		resultDisplay = boundedToolCardResultDisplay(msg.Result)
+	}
 	if expertResult {
 		// The aggregate report and provider failures stay transient. The
 		// settled card is driven by the bounded per-expert projection.
 		result = ""
+		resultDisplay = ""
 	}
 	// Bob envelopes carry stable conflict/error codes and copy-pasteable
 	// corrective commands; keep that digest visible ahead of the raw JSON.
@@ -211,6 +218,7 @@ func (m *Model) handleToolCallResult(msg ToolCallResultMsg, cmds []tea.Cmd) []te
 			}
 			m.toolEntries[i].Projection = projection
 			m.toolEntries[i].Result = result
+			m.toolEntries[i].ResultDisplay = resultDisplay
 			m.toolEntries[i].IsError = projection.Transport == ecosystem.TransportFailed || projection.Domain == ecosystem.DomainFailed
 			m.toolEntries[i].Duration = msg.Duration
 			if m.toolEntries[i].IsError {
@@ -288,7 +296,7 @@ func (m *Model) handleToolCallResult(msg ToolCallResultMsg, cmds []tea.Cmd) []te
 	if matchedIndex >= 0 {
 		cardState = m.toolEntries[matchedIndex].ExpertProgress.cardState(cardState)
 	}
-	m.toolCardMgr.UpdateCardSemanticWithID(msg.ID, msg.Name, cardState, result, msg.Duration, completedProjection)
+	m.toolCardMgr.UpdateCardSemanticWithID(msg.ID, msg.Name, cardState, result, resultDisplay, msg.Duration, completedProjection)
 
 	if m.toolsPending > 0 {
 		m.toolsPending--

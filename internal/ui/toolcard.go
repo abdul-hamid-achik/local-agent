@@ -14,6 +14,10 @@ const (
 	maxToolCardSummaryWidth = 96
 	maxToolCardSummaryBytes = 512
 	maxToolCardResultBytes  = 2000
+	// maxToolCardResultDisplayBytes bounds the raw ANSI display variant. Escape
+	// sequences inflate byte counts over visible text, so the ceiling is a
+	// multiple of the sanitized result bound.
+	maxToolCardResultDisplayBytes = 4 * maxToolCardResultBytes
 )
 
 // ToolCardKind represents the type of tool operation.
@@ -46,6 +50,11 @@ type ToolCard struct {
 	Summary string
 	Args    string
 	Result  string
+	// ResultDisplay is a transient display-only variant of Result, retained
+	// only when the raw tool output carried ANSI escapes. It is re-rendered
+	// through remapANSI16Line and must never be persisted or written to the
+	// terminal directly; the sanitized Result stays the only durable copy.
+	ResultDisplay string
 	// ResultLanguage is a bounded lexer alias derived from trusted host metadata
 	// while the tool call is active. It never contains a path or result bytes.
 	ResultLanguage string
@@ -358,8 +367,9 @@ func (c ToolCard) ViewWithActivity(width int, activityGlyph string, elapsed time
 	} else if c.State == ToolCardAttention {
 		lines = append(lines, c.Styles.Warning.Render(truncateDisplay(compactToolAttention(c.Projection), inner)))
 		if c.Expanded {
-			result := strings.TrimRight(safeResult, "\n")
-			if result != "" {
+			if displayLines := c.remappedDisplayResultLines(inner); len(displayLines) > 0 {
+				lines = append(lines, displayLines...)
+			} else if result := strings.TrimRight(safeResult, "\n"); result != "" {
 				for _, resultLine := range strings.Split(result, "\n") {
 					lines = append(lines, c.Styles.Result.Render(truncateDisplay(resultLine, inner)))
 				}
@@ -561,6 +571,23 @@ func boundedToolCardSummary(summary string) string {
 	return truncateDisplay(summary, maxToolCardSummaryWidth)
 }
 
+// boundedToolCardResultDisplay bounds the raw ANSI display variant without
+// sanitizing it; remapANSI16Line re-derives safe styled output at render time
+// and drops every unrecognized or unterminated escape, so a byte-boundary cut
+// inside a sequence cannot leak. Newlines are normalized the same way as the
+// sanitized path to keep the two variants line-aligned.
+func boundedToolCardResultDisplay(result string) string {
+	result = strings.ReplaceAll(strings.ReplaceAll(strings.ToValidUTF8(result, "�"), "\r\n", "\n"), "\r", "\n")
+	if len(result) <= maxToolCardResultDisplayBytes {
+		return result
+	}
+	cut := maxToolCardResultDisplayBytes
+	for cut > 0 && !utf8.RuneStart(result[cut]) {
+		cut--
+	}
+	return result[:cut]
+}
+
 func boundedToolCardResult(result string) string {
 	result = sanitizeTerminalMultiline(result)
 	if len(result) <= maxToolCardResultBytes {
@@ -598,16 +625,19 @@ func (m *ToolCardManager) AddCardWithID(id, name string, kind ToolCardKind, star
 // UpdateCardWithID completes the exact invocation, even when multiple running
 // calls use the same tool name.
 func (m *ToolCardManager) UpdateCardWithID(id, name string, state ToolCardState, result string, duration time.Duration) {
-	m.UpdateCardSemanticWithID(id, name, state, result, duration, ecosystem.ToolProjection{})
+	m.UpdateCardSemanticWithID(id, name, state, result, "", duration, ecosystem.ToolProjection{})
 }
 
 // UpdateCardSemanticWithID completes a card and attaches the bounded semantic
 // projection derived before raw structured MCP data was discarded.
-func (m *ToolCardManager) UpdateCardSemanticWithID(id, name string, state ToolCardState, result string, duration time.Duration, projection ecosystem.ToolProjection) {
+// resultDisplay is the transient raw-ANSI display variant; it never reaches
+// persistence, which reads only ToolEntry state.
+func (m *ToolCardManager) UpdateCardSemanticWithID(id, name string, state ToolCardState, result, resultDisplay string, duration time.Duration, projection ecosystem.ToolProjection) {
 	for i := len(m.Cards) - 1; i >= 0; i-- {
 		if toolCallMatches(id, name, m.Cards[i].ID, m.Cards[i].Name) && m.Cards[i].State == ToolCardRunning {
 			m.Cards[i].State = state
 			m.Cards[i].Result = result
+			m.Cards[i].ResultDisplay = resultDisplay
 			m.Cards[i].Duration = duration
 			m.Cards[i].Projection = projection.Normalize()
 			break

@@ -35,6 +35,9 @@ type toolResultRenderCacheKey struct {
 	Width    int
 	Dark     bool
 	NoColor  bool
+	// Display marks the ANSI-16 remapped variant so a cached plain render can
+	// never be served for the colored body or vice versa.
+	Display bool
 }
 
 // Tool result highlighting is an ephemeral presentation cache. Keys contain a
@@ -72,19 +75,58 @@ var trustedResultLanguages = func() map[string]struct{} {
 	return result
 }()
 
+// resultRenderKind classifies the result body exactly as the semantic render
+// path does; only the plain kind may use the ANSI-16 display variant.
+func (c ToolCard) resultRenderKind() toolResultRenderKind {
+	switch {
+	case c.Kind == ToolCardSearch:
+		return toolResultSearch
+	case c.Kind == ToolCardFile && normalizeTrustedResultLanguage(c.ResultLanguage) != "":
+		return toolResultCode
+	default:
+		return toolResultPlain
+	}
+}
+
+// remappedDisplayResultLines regenerates the ANSI-16 display variant of a
+// plain result body from the raw bytes retained at intake. It returns nil
+// when no display variant applies so callers fall back to the sanitized
+// plain rendering.
+func (c ToolCard) remappedDisplayResultLines(width int) []string {
+	if noColor || width <= 0 || c.resultRenderKind() != toolResultPlain {
+		return nil
+	}
+	display := strings.TrimRight(c.ResultDisplay, "\n")
+	if display == "" {
+		return nil
+	}
+	all := strings.Split(display, "\n")
+	hidden := 0
+	if len(all) > maxToolResultPreviewLines {
+		hidden = len(all) - maxToolResultPreviewLines
+		all = all[:maxToolResultPreviewLines]
+	}
+	palette := newSemanticPalette(c.IsDark)
+	rendered := make([]string, 0, len(all)+1)
+	for _, line := range all {
+		rendered = append(rendered, remapANSI16Line(line, palette, width))
+	}
+	if hidden > 0 {
+		rendered = append(rendered, c.Styles.Dimmed.Render(
+			truncateDisplay(fmt.Sprintf("… %d more lines", hidden), width),
+		))
+	}
+	return rendered
+}
+
 func (c ToolCard) renderSemanticResultLines(result string, width int) []string {
 	if width <= 0 || strings.TrimSpace(result) == "" {
 		return nil
 	}
 
 	language := normalizeTrustedResultLanguage(c.ResultLanguage)
-	kind := toolResultPlain
-	switch {
-	case c.Kind == ToolCardSearch:
-		kind = toolResultSearch
-	case c.Kind == ToolCardFile && language != "":
-		kind = toolResultCode
-	}
+	kind := c.resultRenderKind()
+	displayVariant := kind == toolResultPlain && !noColor && c.ResultDisplay != ""
 	key := toolResultRenderCacheKey{
 		Digest:   sha256.Sum256([]byte(result)),
 		Kind:     kind,
@@ -92,34 +134,44 @@ func (c ToolCard) renderSemanticResultLines(result string, width int) []string {
 		Width:    width,
 		Dark:     c.IsDark,
 		NoColor:  noColor,
+		Display:  displayVariant,
+	}
+	if displayVariant {
+		key.Digest = sha256.Sum256([]byte(c.ResultDisplay))
 	}
 	if cached, ok := cachedSemanticToolResult(key); ok {
 		return cached
 	}
 
-	plainLines, hidden := boundedToolResultPreview(result, width)
-	rendered := make([]string, 0, len(plainLines)+1)
-	switch kind {
-	case toolResultCode:
-		if !noColor {
-			if highlighted, ok := highlightToolCode(plainLines, language, c.IsDark); ok {
-				rendered = highlighted
-			}
-		}
-	case toolResultSearch:
-		for _, line := range plainLines {
-			rendered = append(rendered, c.renderSearchResultLine(line, width))
-		}
+	var rendered []string
+	if displayVariant {
+		rendered = c.remappedDisplayResultLines(width)
 	}
 	if len(rendered) == 0 {
-		for _, line := range plainLines {
-			rendered = append(rendered, c.Styles.Result.Render(line))
+		plainLines, hidden := boundedToolResultPreview(result, width)
+		rendered = make([]string, 0, len(plainLines)+1)
+		switch kind {
+		case toolResultCode:
+			if !noColor {
+				if highlighted, ok := highlightToolCode(plainLines, language, c.IsDark); ok {
+					rendered = highlighted
+				}
+			}
+		case toolResultSearch:
+			for _, line := range plainLines {
+				rendered = append(rendered, c.renderSearchResultLine(line, width))
+			}
 		}
-	}
-	if hidden > 0 {
-		rendered = append(rendered, c.Styles.Dimmed.Render(
-			truncateDisplay(fmt.Sprintf("… %d more lines", hidden), width),
-		))
+		if len(rendered) == 0 {
+			for _, line := range plainLines {
+				rendered = append(rendered, c.Styles.Result.Render(line))
+			}
+		}
+		if hidden > 0 {
+			rendered = append(rendered, c.Styles.Dimmed.Render(
+				truncateDisplay(fmt.Sprintf("… %d more lines", hidden), width),
+			))
+		}
 	}
 	cacheSemanticToolResult(key, rendered)
 	return append([]string(nil), rendered...)
