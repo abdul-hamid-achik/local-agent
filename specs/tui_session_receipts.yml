@@ -1,6 +1,9 @@
 version: 1
 contractHash: sha256:58eb31bfe64ac0af437c27ece239855b36e7244a366968eb54d498b8c038c91b
 name: local_agent_tui_session_receipts
+# Runner note (2026-07-16): under a loaded full local suite, the filtered
+# session view has occasionally rendered after the former 2 s budget. The
+# isolated contract and CI pass, so retain the assertion with a 5 s allowance.
 intent: |
     a user can find and restore a saved workspace session, inspect compact and
     expanded tool receipts, reveal saved reasoning, pause transcript following,
@@ -66,7 +69,7 @@ steps:
     - wait:
         screen:
             contains: "Recovery receipt review"
-        timeoutMs: 2000
+        timeoutMs: 5000
     - snapshot: sessions_filtered
     - press: "enter"
     - wait:

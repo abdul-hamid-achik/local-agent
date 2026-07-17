@@ -42,6 +42,9 @@ release:
   github:
     owner: abdul-hamid-achik
     name: local-agent
+  # A transient SCM failure can leave a complete release but an unpublished tap.
+  # Keep retries idempotent so GoReleaser can finish the remaining publishers.
+  replace_existing_artifacts: true
   draft: false
   prerelease: auto
   name_template: "v{{.Version}}"
