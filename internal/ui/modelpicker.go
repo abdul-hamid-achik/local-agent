@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -450,4 +451,177 @@ func compactCapabilities(values []string) string {
 		}
 	}
 	return strings.Join(result, "+")
+}
+
+// openModelPicker shows the model picker overlay.
+func (m *Model) openModelPicker() {
+	if m.router == nil {
+		return
+	}
+	if len(m.ollamaModels) > 0 {
+		m.modelPickerState = newOllamaModelPickerState(m.ollamaModels, m.model, m.width, m.height, m.isDark, m.reducedMotion)
+		if m.ollamaVersion != "" {
+			m.modelPickerState.List.Title = ollamaModelPickerTitle(m.ollamaVersion)
+		}
+		m.overlay = OverlayModelPicker
+		m.input.Blur()
+		return
+	}
+	if m.ollamaInventoryAttempted {
+		m.modelPickerState = newOllamaModelPickerState(nil, m.model, m.width, m.height, m.isDark, m.reducedMotion)
+		if m.ollamaVersion != "" {
+			m.modelPickerState.List.Title = ollamaModelPickerTitle(m.ollamaVersion)
+		}
+		m.overlay = OverlayModelPicker
+		m.input.Blur()
+		return
+	}
+	catalog := m.router.ListModels()
+	byName := make(map[string]config.Model, len(catalog))
+	for _, model := range catalog {
+		byName[model.Name] = model
+	}
+	models := catalog
+	if len(m.modelList) > 0 {
+		models = make([]config.Model, 0, len(m.modelList))
+		for _, name := range m.modelList {
+			if model, ok := byName[name]; ok {
+				models = append(models, model)
+			} else {
+				models = append(models, config.Model{
+					Name: name, DisplayName: name, Size: "local", Capability: config.CapabilityMedium,
+				})
+			}
+		}
+	}
+	if len(models) == 0 {
+		return
+	}
+
+	m.modelPickerState = newModelPickerState(models, m.model, m.width, m.height, m.isDark, m.reducedMotion)
+	m.overlay = OverlayModelPicker
+	m.input.Blur()
+}
+
+// selectModel switches to the given model and closes the picker.
+func (m *Model) selectModel(name string) {
+	if descriptor, ok := m.ollamaModelDescriptor(name); ok {
+		if !descriptor.Selectable || !descriptor.Fit {
+			reason := descriptor.Reason
+			if reason == "" {
+				reason = "model is not admitted by the current Ollama policy"
+			}
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: reason})
+			m.closeModelPicker()
+			m.viewport.SetContent(m.renderEntries())
+			m.resumeFollow()
+			return
+		}
+		if descriptor.RequiresConsent && !descriptor.ConsentGranted {
+			m.openCloudConsent(descriptor)
+			return
+		}
+	} else if err := config.CheckModelMemorySafe(name); err != nil {
+		m.entries = append(m.entries, ChatEntry{Kind: "error", Content: err.Error()})
+		m.closeModelPicker()
+		m.viewport.SetContent(m.renderEntries())
+		m.resumeFollow()
+		return
+	}
+	m.switchSelectedModel(name)
+}
+
+// switchSelectedModel commits a model switch after all admission and consent
+// checks have succeeded. Ollama Cloud grants remain exact and session-scoped.
+func (m *Model) switchSelectedModel(name string) bool {
+	old := m.model
+	if config.CanonicalModelName(old) == config.CanonicalModelName(name) && strings.TrimSpace(old) != "" {
+		// Selecting the active model is idempotent. This also absorbs duplicate
+		// Enter/delivery events without re-preparing the provider or stacking
+		// identical `Model` receipts in the transcript.
+		m.modelPinned = true
+		m.saveManualModelPreference(name)
+		for index := range m.ollamaModels {
+			m.ollamaModels[index].Current = config.CanonicalModelName(m.ollamaModels[index].Name) == config.CanonicalModelName(name)
+		}
+		m.cloudConsentState = nil
+		m.closeModelPicker()
+		m.viewport.SetContent(m.renderEntries())
+		m.resumeFollow()
+		return true
+	}
+	if m.modelManager != nil {
+		m.prepareModelSwitch()
+		if err := m.modelManager.SetCurrentModel(name); err != nil {
+			if descriptor, ok := m.ollamaModelDescriptor(name); ok && descriptor.ConsentGranted {
+				m.modelManager.RevokeOllamaCloudModel(name)
+				m.setCloudConsentProjection(name, false)
+			}
+			if m.overlay == OverlayCloudConsent && m.cloudConsentState != nil {
+				m.cloudConsentState.Error = fmt.Sprintf("Could not switch: %v", err)
+				return false
+			}
+			m.entries = append(m.entries, ChatEntry{
+				Kind:    "error",
+				Content: fmt.Sprintf("Failed to switch model: %v", err),
+			})
+			m.closeModelPicker()
+			return false
+		}
+	}
+	m.setCurrentModelProjection(name)
+	m.ollamaOffline = false
+	m.modelPinned = true
+	m.saveManualModelPreference(name)
+	for index := range m.ollamaModels {
+		m.ollamaModels[index].Current = config.CanonicalModelName(m.ollamaModels[index].Name) == config.CanonicalModelName(name)
+	}
+	if m.logger != nil {
+		m.logger.Info("model switched", "from", old, "to", name)
+	}
+	// Empty state and the fixed status line already own the current model. Once
+	// a conversation exists, retain one compact transition receipt.
+	if m.conversationStarted() {
+		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: "Model · " + m.currentModelSurfaceLabel(false)})
+	}
+	m.cloudConsentState = nil
+	m.closeModelPicker()
+	m.viewport.SetContent(m.renderEntries())
+	m.resumeFollow()
+	return true
+}
+
+func (m *Model) ollamaModelDescriptor(name string) (OllamaModelDescriptor, bool) {
+	wanted := config.CanonicalModelName(name)
+	for _, descriptor := range m.ollamaModels {
+		if config.CanonicalModelName(descriptor.Name) == wanted {
+			return descriptor, true
+		}
+	}
+	return OllamaModelDescriptor{}, false
+}
+
+func (m *Model) validateModelAdmission(name string) error {
+	if descriptor, ok := m.ollamaModelDescriptor(name); ok {
+		if descriptor.Source == OllamaModelCloud && m.localOnly && !descriptor.ConsentGranted {
+			return fmt.Errorf("model %q requires Ollama Cloud confirmation for this conversation", name)
+		}
+		if descriptor.Selectable && descriptor.Fit {
+			return nil
+		}
+		if descriptor.Reason != "" {
+			return errors.New(descriptor.Reason)
+		}
+		return fmt.Errorf("model %q is not admitted by the current Ollama policy", name)
+	}
+	if m.ollamaInventoryAttempted {
+		return fmt.Errorf("model %q is absent from the current Ollama inventory", name)
+	}
+	return config.CheckModelMemorySafe(name)
+}
+
+// closeModelPicker dismisses the model picker overlay.
+func (m *Model) closeModelPicker() {
+	m.modelPickerState = nil
+	m.closeOverlayToParent()
 }

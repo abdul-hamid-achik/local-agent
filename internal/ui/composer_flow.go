@@ -418,3 +418,150 @@ func (m *Model) restoreQueuedImages(images []pendingImageAttachment) bool {
 	m.pendingImages = combined
 	return true
 }
+
+// pushHistory appends text to history, deduplicating consecutive entries, capping at 100.
+func (m *Model) pushHistory(text string) {
+	if text == "" {
+		return
+	}
+	// Dedup consecutive
+	if len(m.promptHistory) > 0 && m.promptHistory[len(m.promptHistory)-1] == text {
+		return
+	}
+	m.promptHistory = append(m.promptHistory, text)
+	if len(m.promptHistory) > 100 {
+		m.promptHistory = m.promptHistory[len(m.promptHistory)-100:]
+	}
+	m.historyIndex = -1
+}
+
+// navigateHistory moves through history. dir=-1 = older (up), dir=1 = newer (down).
+// Returns true if navigation happened.
+func (m *Model) navigateHistory(dir int) bool {
+	if len(m.promptHistory) == 0 {
+		return false
+	}
+
+	if dir == -1 { // Up - go to older
+		if m.historyIndex == -1 {
+			// First time pressing up: save current input and go to newest history
+			m.historySaved = m.input.Value()
+			m.historyIndex = len(m.promptHistory) - 1
+		} else if m.historyIndex > 0 {
+			m.historyIndex--
+		} else {
+			return false // already at oldest
+		}
+		m.clearCompletionSuppression()
+		m.input.SetValue(m.promptHistory[m.historyIndex])
+		m.input.CursorEnd()
+		_ = m.reflowInputViewport()
+		return true
+	}
+
+	if dir == 1 { // Down - go to newer
+		if m.historyIndex == -1 {
+			return false // not browsing
+		}
+		if m.historyIndex < len(m.promptHistory)-1 {
+			m.historyIndex++
+			m.clearCompletionSuppression()
+			m.input.SetValue(m.promptHistory[m.historyIndex])
+			m.input.CursorEnd()
+			_ = m.reflowInputViewport()
+		} else {
+			// Past newest: restore saved input
+			m.historyIndex = -1
+			m.clearCompletionSuppression()
+			m.input.SetValue(m.historySaved)
+			m.input.CursorEnd()
+			_ = m.reflowInputViewport()
+		}
+		return true
+	}
+
+	return false
+}
+
+// submitInput takes the current input, handles slash commands, or starts the agent.
+func (m *Model) submitInput() tea.Cmd {
+	text := strings.TrimSpace(m.input.Value())
+	if text == "" && len(m.pendingImages) > 0 {
+		text = "Analyze the attached image."
+	}
+	if text == "" {
+		return nil
+	}
+	if m.readScopeOpRunning || m.readScopePrompt != nil {
+		return nil
+	}
+	// An ordinary outcome-unknown execution owns the next safety decision. Do
+	// not send the same (or a new) prompt back through Agent just to rediscover
+	// the durable latch and render another error. Keep the draft visible and
+	// explain the explicit /recover action; silently replacing Enter with a
+	// five-step wizard makes an ordinary question look swallowed.
+	if m.standaloneRecovery != nil && m.goalRuntime == nil && !strings.HasPrefix(text, "/") {
+		m.remindStandaloneRecoveryDraftPreserved()
+		return nil
+	}
+	// A durable Goal Runtime exclusively owns agent turns until it is dropped or
+	// the conversation is reset. Keep ordinary drafts intact and route the user
+	// to the inspector instead of starting an unbounded side turn.
+	if m.goalRuntime != nil && !strings.HasPrefix(text, "/") {
+		return m.rejectPromptWhileGoalAttached(text, false)
+	}
+	if !strings.HasPrefix(text, "/") {
+		if cmd, started := m.beginPromptPathPreflight(text); started {
+			return cmd
+		}
+	}
+	return m.submitPreparedInput(text)
+}
+
+// submitPreparedInput consumes a draft after host preflight has either found
+// no new authority or committed the exact approved grants. It deliberately
+// does not invoke path preflight again, which makes auto-resume single-shot.
+func (m *Model) submitPreparedInput(text string) tea.Cmd {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+
+	m.pushHistory(text)
+
+	m.clearCompletionSuppression()
+	m.input.Reset()
+	m.syncInputHeight()
+
+	// Handle slash commands.
+	if strings.HasPrefix(text, "/") {
+		name, args, err := parseSlashCommandInput(text)
+		if err != nil {
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("command parse error: %v", err)})
+			m.viewport.SetContent(m.renderEntries())
+			m.resumeFollow()
+			return nil
+		}
+
+		ctx := m.buildCommandContext()
+		result := m.cmdRegistry.Execute(ctx, name, args)
+
+		// Handle command result.
+		if result.Error != "" {
+			m.entries = append(m.entries, ChatEntry{
+				Kind:    "error",
+				Content: result.Error,
+			})
+			m.viewport.SetContent(m.renderEntries())
+			m.resumeFollow()
+			return nil
+		}
+
+		return m.handleCommandActionWithDraft(result, text)
+	}
+
+	// Every conversational preset sends the draft immediately. PLAN applies its
+	// read-only tool policy in sendToAgentTurnPresented; AUTO applies its normal
+	// routing and approval policy. Durable work remains an explicit /goal flow.
+	return m.sendToAgent(text)
+}

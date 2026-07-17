@@ -393,3 +393,41 @@ func (m *Model) renderPlanFormView() (string, *tea.Cursor) {
 
 	return renderInlineFormFrame(m.styles, b.String(), planFormFooter(pf, contentWidth), m.width), pickerFrameCursor(cursor)
 }
+
+// openPlanForm gives the inline Plan form temporary composer ownership.
+func (m *Model) openPlanForm(task string) {
+	anchor := m.captureInlineFormTranscriptAnchor()
+	if !m.prepareInlineFormOpen() {
+		return
+	}
+	m.planFormState = NewPlanFormState(task, m.isDark, m.reducedMotion)
+	m.restylePickerOverlays()
+	m.overlay = OverlayPlanForm
+	m.input.Blur()
+	m.refreshInlineFormLayout(anchor)
+}
+
+// closePlanForm releases composer ownership without changing its saved draft.
+func (m *Model) closePlanForm() {
+	anchor := m.captureInlineFormTranscriptAnchor()
+	m.planFormState = nil
+	if m.overlay == OverlayPlanForm {
+		m.overlay = OverlayNone
+	}
+	if m.composerEditable() {
+		m.input.Focus()
+	} else {
+		m.input.Blur()
+	}
+	m.refreshInlineFormLayout(anchor)
+}
+
+// submitPlanFormPrompt sends the assembled plan prompt to the agent.
+func (m *Model) submitPlanFormPrompt(prompt string) tea.Cmd {
+	// The form is a PLAN authority boundary, not a prompt template that can be
+	// dispatched under whichever conversational preset happens to be active.
+	// Reassert the read-only contract defensively before every submission,
+	// including legacy PlanFormCompletedMsg callers.
+	m.setMode(ModePlan)
+	return m.sendToAgent(prompt)
+}

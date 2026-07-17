@@ -90,3 +90,66 @@ func (m *Model) syncComposerAuthority() {
 	}
 	configureComposerMode(&m.input, m.isDark, m.presentedMode(), m.reducedMotion)
 }
+
+// cycleMode advances through NORMAL -> PLAN -> AUTO -> NORMAL.
+func (m *Model) cycleMode() {
+	m.setMode((m.mode + 1) % 3)
+}
+
+// setMode commits one mode transition. Picker navigation never calls this;
+// the route, model, and durable transcript change only on selection.
+func (m *Model) setMode(mode Mode) {
+	if mode < ModeNormal || mode > ModeAuto || mode == m.mode {
+		return
+	}
+	hadConversation := m.conversationStarted()
+	m.mode = mode
+	ambientConfig := m.modeConfigs[mode]
+	m.syncComposerAuthority()
+	// With a Goal Runtime attached, Shift+Tab only prepares the ambient mode for
+	// work after the goal. The active router/model authority remains AUTO, just
+	// like the rail and footer. Otherwise a visible AUTO goal could silently
+	// inherit PLAN routing until its next continuation reasserted authority.
+	authorityConfig := m.modeConfigs[m.presentedMode()]
+	m.setRouterMode(authorityConfig.RouterMode)
+
+	// Auto-select model via router.
+	if !m.modelPinned && m.router != nil {
+		newModel := m.router.GetModelForCapability(authorityConfig.PreferredCapability)
+		if newModel != "" && newModel != m.model {
+			if m.modelManager != nil {
+				m.prepareModelSwitch()
+				if err := m.modelManager.SetCurrentModel(newModel); err == nil {
+					m.setCurrentModelProjection(newModel)
+				}
+			}
+		}
+	}
+
+	if m.logger != nil {
+		m.logger.Info("mode switched", "mode", ambientConfig.Label, "authority", authorityConfig.Label, "model", m.model)
+	}
+
+	// The empty-state orientation already owns mode and model. Once a real
+	// conversation exists, retain a compact durable receipt for the transition.
+	// A linked goal is the other exception: its visible authority remains AUTO,
+	// so the receipt is the only way to expose the selected post-goal mode.
+	if hadConversation || m.goalRuntime != nil {
+		receipt := "Mode · " + ambientConfig.Label
+		if m.goalRuntime != nil {
+			receipt = "After goal · " + ambientConfig.Label + " · active goal · AUTO"
+		}
+		if m.model != "" {
+			receipt += " · " + m.model
+		}
+		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: receipt})
+	}
+	m.viewport.SetContent(m.renderEntries())
+	m.resumeFollow()
+	if m.overlay == OverlaySettings && m.settingsPickerState != nil {
+		// Mode picker selection returns to Settings before this transition is
+		// committed. Refresh again so the visible row never reports the mode we
+		// just left.
+		m.refreshSettingsPicker()
+	}
+}
