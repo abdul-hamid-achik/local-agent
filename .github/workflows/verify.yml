@@ -99,7 +99,7 @@ jobs:
           GOMODCACHE: ${{ runner.temp }}/glyphrun/gomodcache
           GOCACHE: ${{ runner.temp }}/glyphrun/build-cache
         run: |
-          go install github.com/abdul-hamid-achik/glyphrun/cmd/glyph@v0.14.0
+          go install github.com/abdul-hamid-achik/glyphrun/cmd/glyph@v0.14.3
           echo "${GOBIN}" >> "${GITHUB_PATH}"
 
       # Glyphrun currently needs Go 1.26 to build, but the application contract
