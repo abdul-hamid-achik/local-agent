@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -23,6 +24,9 @@ const (
 	maxDiffInputLines    = 50_000
 	maxDiffCells         = 4_000_000
 	diffContextLines     = 3
+	// Below this many terminal cells the old/new number columns are omitted so
+	// narrow panes keep their full content budget for the diff text itself.
+	diffGutterNumbersMinWidth = 72
 )
 
 var diffSnapshotSlots = make(chan struct{}, 1)
@@ -404,7 +408,7 @@ func renderUnifiedDiffAtWidth(path string, lines []DiffLine, styles Styles, maxL
 	b.WriteByte('\n')
 
 	displayed := 0
-	oldWidth, newWidth := diffLineNumberWidths(lines)
+	gutter := resolveDiffGutter(lines, styles, width)
 	for index, line := range lines {
 		if maxLines > 0 && displayed >= maxLines {
 			b.WriteString(renderDiffMetaLine(
@@ -416,11 +420,11 @@ func renderUnifiedDiffAtWidth(path string, lines []DiffLine, styles Styles, maxL
 
 		switch line.Kind {
 		case DiffAdded:
-			b.WriteString(renderDiffBodyLine(line, "+", oldWidth, newWidth, styles.DiffAdded, width))
+			b.WriteString(renderDiffBodyLine(line, "+", gutter.numberAt(index), gutter, styles.DiffAdded, width))
 		case DiffRemoved:
-			b.WriteString(renderDiffBodyLine(line, "-", oldWidth, newWidth, styles.DiffRemoved, width))
+			b.WriteString(renderDiffBodyLine(line, "-", gutter.numberAt(index), gutter, styles.DiffRemoved, width))
 		case DiffContext:
-			b.WriteString(renderDiffBodyLine(line, " ", oldWidth, newWidth, styles.DiffContext, width))
+			b.WriteString(renderDiffBodyLine(line, " ", gutter.numberAt(index), gutter, styles.DiffContext, width))
 		case DiffHunkHeader:
 			header := line.Content
 			if line.Hunk != nil {
@@ -490,21 +494,29 @@ func renderDiffStatus(status string, styles Styles) string {
 	return styles.DiffHeader.PaddingLeft(0).Render(status)
 }
 
-func renderDiffBodyLine(line DiffLine, marker string, oldWidth, newWidth int, style lipgloss.Style, width int) string {
-	oldNumber := ""
-	if line.OldLine > 0 {
-		oldNumber = strconv.Itoa(line.OldLine)
+func renderDiffBodyLine(line DiffLine, marker string, numbers diffGutterNumbers, gutter diffGutter, style lipgloss.Style, width int) string {
+	prefix := ""
+	if gutter.withNumbers {
+		oldNumber := ""
+		if numbers.old > 0 {
+			oldNumber = strconv.Itoa(numbers.old)
+		}
+		newNumber := ""
+		if numbers.new > 0 {
+			newNumber = strconv.Itoa(numbers.new)
+		}
+		prefix = fmt.Sprintf("%*s %*s ", gutter.oldWidth, oldNumber, gutter.newWidth, newNumber)
 	}
-	newNumber := ""
-	if line.NewLine > 0 {
-		newNumber = strconv.Itoa(line.NewLine)
-	}
-	gutter := fmt.Sprintf("%*s %*s │ %s ", oldWidth, oldNumber, newWidth, newNumber, marker)
+	body := "│ " + marker + " "
 	content := sanitizeTerminalLine(line.Content)
 	if width > 0 {
-		content = truncateDisplay(content, max(0, width-lipglossWidth(gutter)))
+		content = truncateDisplay(content, max(0, width-lipglossWidth(prefix+body)))
 	}
-	return style.PaddingLeft(0).Render(gutter + content)
+	rendered := style.PaddingLeft(0).Render(body + content)
+	if prefix == "" {
+		return rendered
+	}
+	return gutter.numberStyle.PaddingLeft(0).Render(prefix) + rendered
 }
 
 func renderDiffMetaLine(content string, styles Styles, width int) string {
@@ -515,13 +527,169 @@ func renderDiffMetaLine(content string, styles Styles, width int) string {
 	return styles.DiffHeader.PaddingLeft(0).Render(content)
 }
 
-func diffLineNumberWidths(lines []DiffLine) (int, int) {
-	maxOld, maxNew := 1, 1
-	for _, line := range lines {
-		maxOld = max(maxOld, line.OldLine)
-		maxNew = max(maxNew, line.NewLine)
+// diffGutterNumbers is the resolved old/new coordinate pair for one body line.
+// A zero side renders as a blank column (the line has no counterpart there).
+type diffGutterNumbers struct {
+	old int
+	new int
+}
+
+// diffGutter is the per-render gutter plan: whether number columns are shown,
+// their right-aligned widths, and the dimmed style applied to numbers only.
+type diffGutter struct {
+	withNumbers bool
+	numbers     []diffGutterNumbers
+	oldWidth    int
+	newWidth    int
+	numberStyle lipgloss.Style
+}
+
+func (g diffGutter) numberAt(index int) diffGutterNumbers {
+	if !g.withNumbers || index >= len(g.numbers) {
+		return diffGutterNumbers{}
 	}
-	return len(strconv.Itoa(maxOld)), len(strconv.Itoa(maxNew))
+	return g.numbers[index]
+}
+
+func resolveDiffGutter(lines []DiffLine, styles Styles, width int) diffGutter {
+	if width > 0 && width < diffGutterNumbersMinWidth {
+		return diffGutter{}
+	}
+	numbers, ok := resolveDiffGutterNumbers(lines)
+	if !ok {
+		return diffGutter{}
+	}
+	gutter := diffGutter{withNumbers: true, numbers: numbers, numberStyle: styles.Dimmed}
+	maxOld, maxNew := 1, 1
+	for _, n := range numbers {
+		maxOld = max(maxOld, n.old)
+		maxNew = max(maxNew, n.new)
+	}
+	gutter.oldWidth = len(strconv.Itoa(maxOld))
+	gutter.newWidth = len(strconv.Itoa(maxNew))
+	return gutter
+}
+
+var diffHunkHeaderPattern = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@`)
+
+// parseDiffHunkHeader recovers a typed hunk range from unified-diff header
+// text. Counts default to 1 when the short `@@ -a +c @@` form omits them.
+func parseDiffHunkHeader(content string) (DiffHunk, bool) {
+	groups := diffHunkHeaderPattern.FindStringSubmatch(strings.TrimSpace(content))
+	if groups == nil {
+		return DiffHunk{}, false
+	}
+	numbers := [4]int{0, 1, 0, 1}
+	for i, group := range groups[1:] {
+		if group == "" {
+			continue
+		}
+		value, err := strconv.Atoi(group)
+		if err != nil {
+			return DiffHunk{}, false
+		}
+		numbers[i] = value
+	}
+	return DiffHunk{
+		OldStart: numbers[0], OldCount: numbers[1], NewStart: numbers[2], NewCount: numbers[3],
+	}, true
+}
+
+func diffHunkFromHeader(line DiffLine) (DiffHunk, bool) {
+	if line.Hunk != nil {
+		hunk := *line.Hunk
+		if hunk.OldStart < 0 || hunk.OldCount < 0 || hunk.NewStart < 0 || hunk.NewCount < 0 {
+			return DiffHunk{}, false
+		}
+		return hunk, true
+	}
+	return parseDiffHunkHeader(line.Content)
+}
+
+// resolveDiffGutterNumbers assigns old/new coordinates to every body line.
+// Typed per-line coordinates win; lines without them (older persisted
+// sessions) are counted forward from the enclosing hunk header. Any line
+// whose coordinates cannot be derived — a missing or garbled header, or more
+// counted lines than the header budgeted — fails the whole resolution so the
+// renderer falls back to numberless output instead of miscounting silently.
+func resolveDiffGutterNumbers(lines []DiffLine) ([]diffGutterNumbers, bool) {
+	numbers := make([]diffGutterNumbers, len(lines))
+	oldNext, newNext := 0, 0
+	// Remaining header-budgeted lines per side; -1 disables the budget check
+	// after typed coordinates re-anchor the counters mid-hunk.
+	oldLeft, newLeft := 0, 0
+	counters := false
+
+	takeOld := func(typed int) (int, bool) {
+		if typed > 0 {
+			oldNext, oldLeft = typed+1, -1
+			return typed, true
+		}
+		if !counters || oldNext <= 0 || oldLeft == 0 {
+			return 0, false
+		}
+		value := oldNext
+		oldNext++
+		if oldLeft > 0 {
+			oldLeft--
+		}
+		return value, true
+	}
+	takeNew := func(typed int) (int, bool) {
+		if typed > 0 {
+			newNext, newLeft = typed+1, -1
+			return typed, true
+		}
+		if !counters || newNext <= 0 || newLeft == 0 {
+			return 0, false
+		}
+		value := newNext
+		newNext++
+		if newLeft > 0 {
+			newLeft--
+		}
+		return value, true
+	}
+
+	for index, line := range lines {
+		switch line.Kind {
+		case DiffHunkHeader:
+			hunk, ok := diffHunkFromHeader(line)
+			if !ok {
+				return nil, false
+			}
+			oldNext, newNext = hunk.OldStart, hunk.NewStart
+			oldLeft, newLeft = hunk.OldCount, hunk.NewCount
+			counters = true
+		case DiffEllipsis, DiffOmitted:
+			// Skipped or truncated regions consume an unknown number of lines;
+			// counting may only resume from a later header or typed coordinates.
+			counters = false
+		case DiffContext:
+			oldNumber, okOld := takeOld(line.OldLine)
+			newNumber, okNew := takeNew(line.NewLine)
+			if !okOld || !okNew {
+				return nil, false
+			}
+			if line.OldLine > 0 && line.NewLine > 0 {
+				counters = true
+			}
+			numbers[index] = diffGutterNumbers{old: oldNumber, new: newNumber}
+		case DiffAdded:
+			newNumber, ok := takeNew(line.NewLine)
+			if !ok {
+				return nil, false
+			}
+			numbers[index] = diffGutterNumbers{new: newNumber}
+		case DiffRemoved:
+			oldNumber, ok := takeOld(line.OldLine)
+			if !ok {
+				return nil, false
+			}
+			numbers[index] = diffGutterNumbers{old: oldNumber}
+		}
+	}
+	return numbers, true
 }
 
 func diffTotals(lines []DiffLine) (added, removed int, known bool) {

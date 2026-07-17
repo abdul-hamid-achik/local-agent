@@ -316,6 +316,123 @@ func TestRenderUnifiedDiffFitsNarrowAndUsesWideOldNewGutters(t *testing.T) {
 	}
 }
 
+func TestResolveDiffGutterNumbersCountsForwardFromHunkHeaders(t *testing.T) {
+	// No typed per-line coordinates, as in sessions persisted before line
+	// coordinates existed: numbering must come from the hunk headers alone.
+	lines := []DiffLine{
+		{Kind: DiffHunkHeader, Content: "@@ -3,3 +3,4 @@"},
+		{Kind: DiffContext, Content: "ctx-a"},
+		{Kind: DiffRemoved, Content: "gone-1"},
+		{Kind: DiffAdded, Content: "new-1"},
+		{Kind: DiffAdded, Content: "new-2"},
+		{Kind: DiffContext, Content: "ctx-b"},
+		{Kind: DiffEllipsis, Content: "… unchanged lines"},
+		{Kind: DiffHunkHeader, Content: "@@ -40,3 +41,2 @@"},
+		{Kind: DiffContext, Content: "ctx-c"},
+		{Kind: DiffRemoved, Content: "gone-2"},
+		{Kind: DiffContext, Content: "ctx-d"},
+	}
+
+	numbers, ok := resolveDiffGutterNumbers(lines)
+	if !ok {
+		t.Fatal("header-derived numbering failed")
+	}
+	want := []diffGutterNumbers{
+		{}, {old: 3, new: 3}, {old: 4}, {new: 4}, {new: 5}, {old: 5, new: 6},
+		{}, {}, {old: 40, new: 41}, {old: 41}, {old: 42, new: 42},
+	}
+	for i, expected := range want {
+		if numbers[i] != expected {
+			t.Fatalf("line %d numbers = %+v, want %+v", i, numbers[i], expected)
+		}
+	}
+
+	plain := ansi.Strip(renderUnifiedDiffAtWidth("example.go", lines, NewStyles(true), 0, 100))
+	for _, want := range []string{" 3  3 │   ctx-a", " 4    │ - gone-1", "    4 │ + new-1", "41    │ - gone-2"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("rendered patch missing %q:\n%s", want, plain)
+		}
+	}
+}
+
+func TestRenderUnifiedDiffOmitsNumberColumnsUnderMinWidth(t *testing.T) {
+	lines := computeDiff("line-01\nline-02\nline-03\n", "line-01\nchanged-02\nline-03\n")
+
+	narrow := ansi.Strip(renderUnifiedDiffAtWidth("example.go", lines, NewStyles(true), 0, diffGutterNumbersMinWidth-1))
+	for _, renderedLine := range strings.Split(narrow, "\n") {
+		if strings.Contains(renderedLine, "│") && !strings.HasPrefix(renderedLine, "│") {
+			t.Fatalf("narrow body line still carries number columns: %q", renderedLine)
+		}
+	}
+	for _, want := range []string{"│ - line-02", "│ + changed-02"} {
+		if !strings.Contains(narrow, want) {
+			t.Fatalf("narrow rendering missing %q:\n%s", want, narrow)
+		}
+	}
+
+	wide := ansi.Strip(renderUnifiedDiffAtWidth("example.go", lines, NewStyles(true), 0, diffGutterNumbersMinWidth))
+	if !strings.Contains(wide, "2   │ - line-02") || !strings.Contains(wide, "  2 │ + changed-02") {
+		t.Fatalf("min-width rendering lost number columns:\n%s", wide)
+	}
+}
+
+func TestRenderUnifiedDiffFallsBackNumberlessOnMalformedOrTruncatedHunks(t *testing.T) {
+	cases := map[string][]DiffLine{
+		"garbled header": {
+			{Kind: DiffHunkHeader, Content: "@@ garbled @@"},
+			{Kind: DiffContext, Content: "ctx"},
+			{Kind: DiffAdded, Content: "plus"},
+		},
+		"missing header": {
+			{Kind: DiffAdded, Content: "plus"},
+			{Kind: DiffRemoved, Content: "minus"},
+		},
+		"body exceeds header budget": {
+			{Kind: DiffHunkHeader, Content: "@@ -1,1 +1,1 @@"},
+			{Kind: DiffContext, Content: "ctx-1"},
+			{Kind: DiffContext, Content: "ctx-2"},
+		},
+		"body after omission marker": {
+			{Kind: DiffHunkHeader, Content: "@@ -1,5 +1,5 @@"},
+			{Kind: DiffOmitted, Content: "[diff truncated for session persistence]"},
+			{Kind: DiffContext, Content: "ctx"},
+		},
+	}
+	for name, lines := range cases {
+		if _, ok := resolveDiffGutterNumbers(lines); ok {
+			t.Fatalf("%s: numbering resolved instead of failing closed", name)
+		}
+		plain := ansi.Strip(renderUnifiedDiffAtWidth("example.go", lines, NewStyles(true), 0, 100))
+		for _, renderedLine := range strings.Split(plain, "\n") {
+			if strings.Contains(renderedLine, "│") && !strings.HasPrefix(renderedLine, "│") {
+				t.Fatalf("%s: body line was numbered: %q", name, renderedLine)
+			}
+		}
+	}
+}
+
+func TestParseDiffHunkHeader(t *testing.T) {
+	cases := []struct {
+		content string
+		want    DiffHunk
+		ok      bool
+	}{
+		{"@@ -3,4 +5,6 @@", DiffHunk{OldStart: 3, OldCount: 4, NewStart: 5, NewCount: 6}, true},
+		{"@@ -3 +5 @@", DiffHunk{OldStart: 3, OldCount: 1, NewStart: 5, NewCount: 1}, true},
+		{"@@ -0,0 +1,3 @@", DiffHunk{OldStart: 0, OldCount: 0, NewStart: 1, NewCount: 3}, true},
+		{"@@ -3,4 +5,6 @@ func main() {", DiffHunk{OldStart: 3, OldCount: 4, NewStart: 5, NewCount: 6}, true},
+		{"@@ -a,b +c,d @@", DiffHunk{}, false},
+		{"@@ -3,4 @@", DiffHunk{}, false},
+		{"not a header", DiffHunk{}, false},
+	}
+	for _, tc := range cases {
+		hunk, ok := parseDiffHunkHeader(tc.content)
+		if ok != tc.ok || hunk != tc.want {
+			t.Fatalf("parseDiffHunkHeader(%q) = %+v, %v; want %+v, %v", tc.content, hunk, ok, tc.want, tc.ok)
+		}
+	}
+}
+
 func TestFilterContext_EmptyInput(t *testing.T) {
 	result := filterContext(nil, 3)
 	if result != nil {
