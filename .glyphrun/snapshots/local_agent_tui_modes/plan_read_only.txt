@@ -7,7 +7,7 @@
   notice · ollama: no model selected
   try: ollama serve · ollama pull qwen3.5:2b
 
-  ✗ error
+   ✗ error
   LLM request not started: inference not started: no
   model selected
 

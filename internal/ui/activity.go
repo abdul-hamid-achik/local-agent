@@ -255,8 +255,12 @@ func (m *Model) renderWorkingLine() string {
 	case ModeAuto:
 		// The ordinary idle footer is replaced while work is active. Keep AUTO's
 		// authority visible in the activity rail so a long-running turn never
-		// leaves the user guessing whether it is operating autonomously.
+		// leaves the user guessing whether it is operating autonomously. A
+		// multi-segment continuation also surfaces which segment is running.
 		authority = " · AUTO"
+		if continued := m.autoCheckpoints.segmentsContinued; continued > 0 {
+			authority = fmt.Sprintf(" · AUTO · seg %d", continued+1)
+		}
 	case ModePlan:
 		// PLAN is also an authority boundary: it may inspect and reason, but must
 		// not be mistaken for an ordinary implementation turn while the idle

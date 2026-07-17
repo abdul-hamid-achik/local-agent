@@ -15,7 +15,7 @@
 
   notice · Restored session S41 · Recovery receipt review
 
-  ✗ error
+   ✗ error
   Recovery blocked: write_file has a durable dispatch marker but no terminal receipt. Its outcome is
   unknown; use /recover to inspect and record exact evidence.
 

@@ -3,7 +3,7 @@
   notice · Goal saved · Cortex is not configured;
   starting one bounded local turn…
 
-  ✗ error
+   ✗ error
   LLM request not started: inference not started: no
   model selected
 

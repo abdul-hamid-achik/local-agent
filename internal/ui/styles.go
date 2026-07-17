@@ -121,6 +121,7 @@ type Styles struct {
 	ApprovalPrompt lipgloss.Style
 	StreamHint     lipgloss.Style
 	ErrorText      lipgloss.Style
+	ErrorChip      lipgloss.Style
 	Dimmed         lipgloss.Style
 
 	// System messages
@@ -201,6 +202,9 @@ func adaptiveStyles(isDark bool) Styles {
 	colorSpecial := palette.Special
 	colorWarning := palette.Warning
 	colorBorder := palette.Border
+	// Inverse-chip text sits on a saturated state background, so it needs a
+	// near-paper foreground in both themes rather than the ordinary text color.
+	colorChipText := lipgloss.LightDark(isDark)(lipgloss.Color("#FBF7F5"), lipgloss.Color("#ECEFF4"))
 
 	return Styles{
 		HeaderTitle: lipgloss.NewStyle().
@@ -285,6 +289,13 @@ func adaptiveStyles(isDark bool) Styles {
 			Foreground(colorError).
 			Bold(true).
 			PaddingLeft(2),
+		// An inverse chip marks failed operations without relying on red text
+		// alone, which long tool output can visually bury.
+		ErrorChip: lipgloss.NewStyle().
+			Foreground(colorChipText).
+			Background(colorError).
+			Bold(true).
+			Padding(0, 1),
 		Dimmed: lipgloss.NewStyle().
 			Foreground(colorDim),
 
@@ -423,6 +434,7 @@ func plainStyles() Styles {
 		ApprovalPrompt: b,
 		StreamHint:     p.Italic(true),
 		ErrorText:      b.PaddingLeft(2),
+		ErrorChip:      b.Padding(0, 1),
 		Dimmed:         p,
 
 		SystemText:  p.PaddingLeft(2).Italic(true),

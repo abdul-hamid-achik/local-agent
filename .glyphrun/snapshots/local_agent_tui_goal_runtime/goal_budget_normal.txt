@@ -1,5 +1,5 @@
 
-  ✗ error
+   ✗ error
   LLM request not started: inference not started: no model selected
 
   notice · Goal paused · unproductive turn: inference not started: no

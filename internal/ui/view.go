@@ -1256,7 +1256,7 @@ func (m *Model) renderEntryError(b *strings.Builder, content string, contentW in
 	if content == "" {
 		content = "The operation failed without an error message."
 	}
-	b.WriteString(m.styles.ErrorText.Render("✗ error"))
+	b.WriteString("  " + m.styles.ErrorChip.Render("✗ error"))
 	b.WriteString("\n")
 	b.WriteString(m.styles.ToolErrorText.Render(indentBlock(wrapText(content, max(1, contentW-2)), "  ")))
 	b.WriteString("\n\n")

@@ -167,6 +167,17 @@ func (m *Model) handleAutoIterationCheckpoint(message AgentDoneMsg) (tea.Cmd, bo
 	if err != nil {
 		return nil, false, fmt.Errorf("AUTO continuation identity: %w", err)
 	}
+	// A continuation is invisible provider plumbing, but a long autonomous run
+	// must stay legible: leave one bounded counters-only receipt in the
+	// transcript. No arguments, paths, tool output, or prose cross this line.
+	m.entries = append(m.entries, ChatEntry{
+		Kind: "system",
+		Content: fmt.Sprintf(
+			"AUTO checkpoint · continuing segment %d · %d/%d tools ok · %s",
+			m.autoCheckpoints.segmentsContinued+1, checkpoint.SuccessfulToolCalls,
+			checkpoint.ToolCalls, formatWorkingElapsed(checkpoint.Elapsed),
+		),
+	})
 	m.flushStream()
 	m.compactingContext = false
 	m.capabilityRoute = nil

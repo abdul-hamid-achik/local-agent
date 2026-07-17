@@ -154,6 +154,18 @@ func TestAgentDoneProductiveAutoCheckpointContinuesWithoutSettlement(t *testing.
 			t.Fatalf("productive checkpoint rendered as error: %#v", m.entries)
 		}
 	}
+	receipt := false
+	for _, entry := range m.entries {
+		if entry.Kind == "system" && strings.Contains(entry.Content, "continuing segment 2") {
+			receipt = true
+			if strings.Contains(entry.Content, "/") && !strings.Contains(entry.Content, "tools ok") {
+				t.Fatalf("segment receipt lost its counters grammar: %q", entry.Content)
+			}
+		}
+	}
+	if !receipt {
+		t.Fatalf("continuation left no bounded segment receipt: %#v", m.entries)
+	}
 }
 
 func TestAgentDoneRepeatedAutoCheckpointStopsAndSettles(t *testing.T) {
