@@ -7,7 +7,66 @@ import (
 	"time"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/agent"
+	"github.com/abdul-hamid-achik/local-agent/internal/goal"
 )
+
+func TestGoalTurnAutoCheckpointSettlesThroughGoalRuntimeNotSupervisor(t *testing.T) {
+	client := &goalCountingClient{}
+	m := newGoalRuntimeTestModel(t, client)
+	m.goalRuntime = newUIGoalRuntime(t, 42, goal.BudgetLimits{MaxContinuationTurns: 3})
+	if _, err := m.goalRuntime.BeginTurn(context.Background(), "turn_goal_checkpoint", goal.AdmissionInitial); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
+	m.now = func() time.Time { return started.Add(time.Minute) }
+	m.goalTurnID = "turn_goal_checkpoint"
+	m.goalTurnToolCalls = 6
+	m.goalTurnSuccesses = 5
+	m.turnEvalTotal = 40
+	m.state = StateStreaming
+	// A live goal turn arms exactly this plain-AUTO supervisor state; the
+	// checkpoint must still settle through the durable goal runtime.
+	m.turnStartedAt = started
+	m.turnLogicalID = "turn_goal_checkpoint"
+	m.turnSegmentID = "turn_goal_checkpoint"
+	m.turnAuthority = ModeAuto
+	m.turnRunContext = context.Background()
+	m.autoCheckpoints.reset("turn_goal_checkpoint", started)
+
+	updated, _ := m.Update(AgentDoneMsg{
+		TurnID: "turn_goal_checkpoint", SegmentTurnID: "turn_goal_checkpoint",
+		Err: &agent.AutoIterationCheckpointError{
+			TurnID: "turn_goal_checkpoint", Iterations: 40, ToolCalls: 6,
+			SuccessfulToolCalls: 5, DistinctSuccessfulCalls: 5,
+			ProgressDigest: "digest-goal-a", EvalTokens: 40,
+		},
+	})
+	m = updated.(*Model)
+
+	// A supervisor continuation would leave StateWaiting with a fresh segment
+	// identity; goal settlement returns to idle and clears the segment.
+	if m.state != StateIdle {
+		t.Fatalf("goal checkpoint continued as plain AUTO: state=%v segment=%q", m.state, m.turnSegmentID)
+	}
+	if got := client.calls.Load(); got != 0 {
+		t.Fatalf("goal checkpoint dispatched %d provider calls outside goal admission", got)
+	}
+	if m.goalTurnID != "" {
+		t.Fatalf("goal turn did not settle: %q", m.goalTurnID)
+	}
+	snapshot := snapshotUIGoal(t, m.goalRuntime)
+	if snapshot.LastTurn == nil || !snapshot.LastTurn.Productive {
+		t.Fatalf("productive AUTO checkpoint recorded as unproductive goal turn: %#v", snapshot.LastTurn)
+	}
+	if snapshot.PendingContinuation != nil {
+		t.Fatalf("checkpoint settlement left the goal permit open: %#v", snapshot.PendingContinuation)
+	}
+	// Without linked Cortex evidence the runtime deliberately pauses a settled
+	// productive turn for explicit review; it must never resume as plain AUTO.
+	if snapshot.State != goal.StateActive && snapshot.State != goal.StatePaused {
+		t.Fatalf("goal state after checkpoint settlement = %s", snapshot.State)
+	}
+}
 
 func TestAutoCheckpointSupervisorRequiresNewBoundedProgress(t *testing.T) {
 	started := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)

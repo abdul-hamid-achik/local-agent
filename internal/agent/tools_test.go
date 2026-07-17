@@ -563,3 +563,22 @@ func TestCappedBufferBoundsCapturedOutput(t *testing.T) {
 		t.Fatalf("missing truncation marker: %q", buffer.String())
 	}
 }
+
+func TestSanitizedEnvPassesVersionManagerRootsAndBlocksSecrets(t *testing.T) {
+	t.Setenv("ASDF_DATA_DIR", "/home/user/.asdf")
+	t.Setenv("MISE_DATA_DIR", "/home/user/.local/share/mise")
+	t.Setenv("SOME_API_KEY", "secret-value")
+	t.Setenv("DATABASE_URL", "postgres://user:pass@host/db")
+
+	env := sanitizedEnv()
+	joined := strings.Join(env, "\n")
+	if !strings.Contains(joined, "ASDF_DATA_DIR=/home/user/.asdf") {
+		t.Fatalf("asdf data dir missing; version-manager shims exit 126 without it: %q", joined)
+	}
+	if !strings.Contains(joined, "MISE_DATA_DIR=/home/user/.local/share/mise") {
+		t.Fatalf("mise data dir missing: %q", joined)
+	}
+	if strings.Contains(joined, "SOME_API_KEY") || strings.Contains(joined, "DATABASE_URL") {
+		t.Fatalf("secret leaked into subprocess env: %q", joined)
+	}
+}

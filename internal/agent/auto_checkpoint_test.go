@@ -170,6 +170,129 @@ func TestAutoIterationCheckpointRequiresExactSuccessfulDomain(t *testing.T) {
 	}
 }
 
+func TestAutoCheckpointAllowsMixedFinalIteration(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "present.txt"), []byte("ok"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ag := New(&scriptedClient{responses: [][]llm.StreamChunk{{{
+		ToolCalls: []llm.ToolCall{
+			{ID: "ok-call", Name: "exists", Arguments: map[string]any{"path": "present.txt"}},
+			{ID: "bad-call", Name: "read", Arguments: map[string]any{"path": "missing.txt"}},
+		},
+		Done: true, EvalCount: 1,
+	}}}}, nil, 4096)
+	ag.SetWorkDir(workspace)
+	ag.SetAuthorityMode(AuthorityAutoScoped)
+	ag.SetToolsConfig(config.ToolsConfig{MaxIterations: 1, AutoMaxIterations: 1})
+	err := ag.Run(context.Background(), &outputRecorder{})
+
+	var checkpoint *AutoIterationCheckpointError
+	if !errors.As(err, &checkpoint) {
+		t.Fatalf("mixed final iteration error = %T %v, want AUTO checkpoint", err, err)
+	}
+	if checkpoint.SuccessfulToolCalls != 1 || checkpoint.DistinctSuccessfulCalls != 1 || checkpoint.ToolCalls != 2 {
+		t.Fatalf("checkpoint counters = %#v", checkpoint)
+	}
+}
+
+func TestAutoEmptyTerminalFallsBackToSegmentCheckpoint(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "present.txt"), []byte("ok"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ag := New(&scriptedClient{responses: [][]llm.StreamChunk{
+		{{
+			ToolCalls: []llm.ToolCall{{ID: "ok-call", Name: "exists", Arguments: map[string]any{"path": "present.txt"}}},
+			Done:      true, EvalCount: 1,
+		}},
+		{{Done: true, EvalCount: 1}},
+		{{Done: true, EvalCount: 1}},
+	}}, nil, 4096)
+	ag.SetWorkDir(workspace)
+	ag.SetAuthorityMode(AuthorityAutoScoped)
+	ag.SetToolsConfig(config.ToolsConfig{MaxIterations: 5, AutoMaxIterations: 5})
+	out := &outputRecorder{}
+	err := ag.Run(context.Background(), out)
+
+	var checkpoint *AutoIterationCheckpointError
+	if !errors.As(err, &checkpoint) {
+		t.Fatalf("empty terminal after progress error = %T %v, want AUTO segment checkpoint", err, err)
+	}
+	if checkpoint.DistinctSuccessfulCalls != 1 {
+		t.Fatalf("checkpoint counters = %#v", checkpoint)
+	}
+	if joined := strings.Join(out.errors, "\n"); strings.Contains(joined, "empty terminal") {
+		t.Fatalf("segment checkpoint still rendered the empty-terminal failure: %s", joined)
+	}
+}
+
+func TestAutoEmptyTerminalWithoutProgressRemainsTerminal(t *testing.T) {
+	ag := New(&scriptedClient{responses: [][]llm.StreamChunk{
+		{{Done: true, EvalCount: 1}},
+	}}, nil, 4096)
+	ag.SetWorkDir(t.TempDir())
+	ag.SetAuthorityMode(AuthorityAutoScoped)
+	ag.SetToolsConfig(config.ToolsConfig{MaxIterations: 5, AutoMaxIterations: 5})
+	err := ag.Run(context.Background(), &outputRecorder{})
+	if !errors.Is(err, ErrEmptyTerminalResponse) {
+		t.Fatalf("empty first response error = %T %v, want ErrEmptyTerminalResponse", err, err)
+	}
+}
+
+func TestAutoMalformedToolLoopFallsBackToSegmentCheckpoint(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "present.txt"), []byte("ok"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	malformed := []llm.StreamChunk{{
+		ToolCalls: []llm.ToolCall{{Name: "read", Arguments: map[string]any{}}},
+		Done:      true, EvalCount: 1,
+	}}
+	ag := New(&scriptedClient{responses: [][]llm.StreamChunk{
+		{{
+			ToolCalls: []llm.ToolCall{{ID: "ok-call", Name: "exists", Arguments: map[string]any{"path": "present.txt"}}},
+			Done:      true, EvalCount: 1,
+		}},
+		malformed,
+		malformed,
+	}}, nil, 4096)
+	ag.SetWorkDir(workspace)
+	ag.SetAuthorityMode(AuthorityAutoScoped)
+	ag.SetToolsConfig(config.ToolsConfig{MaxIterations: 6, AutoMaxIterations: 6})
+	err := ag.Run(context.Background(), &outputRecorder{})
+
+	var checkpoint *AutoIterationCheckpointError
+	if !errors.As(err, &checkpoint) {
+		t.Fatalf("malformed loop after progress error = %T %v, want AUTO segment checkpoint", err, err)
+	}
+	if checkpoint.DistinctSuccessfulCalls != 1 {
+		t.Fatalf("checkpoint counters = %#v", checkpoint)
+	}
+}
+
+func TestInteractiveEmptyTerminalRemainsTerminal(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "present.txt"), []byte("ok"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ag := New(&scriptedClient{responses: [][]llm.StreamChunk{
+		{{
+			ToolCalls: []llm.ToolCall{{ID: "ok-call", Name: "exists", Arguments: map[string]any{"path": "present.txt"}}},
+			Done:      true, EvalCount: 1,
+		}},
+		{{Done: true, EvalCount: 1}},
+		{{Done: true, EvalCount: 1}},
+	}}, nil, 4096)
+	ag.SetWorkDir(workspace)
+	ag.SetAuthorityMode(AuthorityNormal)
+	ag.SetToolsConfig(config.ToolsConfig{MaxIterations: 5, AutoMaxIterations: 5})
+	err := ag.Run(context.Background(), &outputRecorder{})
+	if !errors.Is(err, ErrEmptyTerminalResponse) {
+		t.Fatalf("interactive empty terminal error = %T %v, want ErrEmptyTerminalResponse", err, err)
+	}
+}
+
 func TestInteractiveIterationLimitRemainsTerminal(t *testing.T) {
 	ag := New(&scriptedClient{responses: [][]llm.StreamChunk{{{
 		ToolCalls: []llm.ToolCall{{ID: "exists", Name: "exists", Arguments: map[string]any{"path": "."}}},

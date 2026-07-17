@@ -117,6 +117,7 @@ type Styles struct {
 	StatusText     lipgloss.Style
 	StatusCheck    lipgloss.Style
 	StatusError    lipgloss.Style
+	StatusWarning  lipgloss.Style
 	ApprovalPrompt lipgloss.Style
 	StreamHint     lipgloss.Style
 	ErrorText      lipgloss.Style
@@ -270,6 +271,10 @@ func adaptiveStyles(isDark bool) Styles {
 		StatusError: lipgloss.NewStyle().
 			Foreground(colorError).
 			PaddingLeft(1),
+		// An expected operational posture (for example AUTO's skipped approval
+		// prompts) is not a failure; red is reserved for errors and blockers.
+		StatusWarning: lipgloss.NewStyle().
+			Foreground(colorWarning),
 		ApprovalPrompt: lipgloss.NewStyle().
 			Foreground(colorAccent).
 			Bold(true),
@@ -414,6 +419,7 @@ func plainStyles() Styles {
 		StatusText:     p,
 		StatusCheck:    p.PaddingLeft(1),
 		StatusError:    p.PaddingLeft(1),
+		StatusWarning:  p,
 		ApprovalPrompt: b,
 		StreamHint:     p.Italic(true),
 		ErrorText:      b.PaddingLeft(2),

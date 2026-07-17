@@ -121,12 +121,42 @@ func (p *autoTurnProgress) checkpoint(
 	evalTokens int64,
 	elapsed time.Duration,
 ) *AutoIterationCheckpointError {
+	// The final iteration must contain at least one verified success so a
+	// segment that devolved into repeated or refused work stays terminal, but a
+	// mixed final iteration (one failure among real progress) may continue. The
+	// supervisor's cross-segment progress digest rejects a continuation that
+	// merely replays the same distinct work.
 	if p == nil || p.lastIterationCalls <= 0 ||
-		p.lastIterationSucceeded != p.lastIterationCalls ||
-		p.lastIterationDistinct != p.lastIterationCalls ||
+		p.lastIterationSucceeded <= 0 ||
 		p.distinctSuccessfulCalls <= 0 {
 		return nil
 	}
+	return p.receipt(turnID, iterations, evalTokens, elapsed)
+}
+
+// segmentCheckpoint reports distinct verified progress anywhere in the
+// segment, regardless of the final iteration's shape. It backs the AUTO
+// breaker fallbacks, where the terminal provider response was degenerate
+// (empty or malformed) but earlier work in the segment was real; a fresh
+// segment re-prompts the model instead of abandoning that work.
+func (p *autoTurnProgress) segmentCheckpoint(
+	turnID string,
+	iterations int,
+	evalTokens int64,
+	elapsed time.Duration,
+) *AutoIterationCheckpointError {
+	if p == nil || p.distinctSuccessfulCalls <= 0 {
+		return nil
+	}
+	return p.receipt(turnID, iterations, evalTokens, elapsed)
+}
+
+func (p *autoTurnProgress) receipt(
+	turnID string,
+	iterations int,
+	evalTokens int64,
+	elapsed time.Duration,
+) *AutoIterationCheckpointError {
 	return &AutoIterationCheckpointError{
 		TurnID:                  turnID,
 		Iterations:              iterations,

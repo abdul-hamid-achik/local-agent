@@ -648,7 +648,7 @@ func (m *Model) renderStatusLine() string {
 		parts = append(parts, modeStyle.Render(modeLabel))
 	}
 	if m.skipApprovalsEnabled() {
-		parts = append(parts, m.styles.ErrorText.UnsetPaddingLeft().Render("approval prompts skipped"))
+		parts = append(parts, m.styles.StatusWarning.Render("approval prompts skipped"))
 	}
 	if !conversationStarted && noticeNeedsRecovery {
 		// Startup and recovery notices can push the empty-state hints out of a
@@ -714,7 +714,7 @@ func (m *Model) renderStatusLine() string {
 			compact = append(compact, modeStyle.Render(cfg.Label))
 		}
 		if m.skipApprovalsEnabled() {
-			compact = append(compact, m.styles.ErrorText.UnsetPaddingLeft().Render("no prompts"))
+			compact = append(compact, m.styles.StatusWarning.Render("no prompts"))
 		}
 		if len(m.failedServers) > 0 {
 			compact = append(compact, m.styles.ErrorText.UnsetPaddingLeft().Render("MCP unavailable"))
@@ -768,7 +768,7 @@ func (m *Model) renderGoalFooterStatus(summary GoalSummary, paneW int) string {
 		if paneW < 58 {
 			label = "no prompts"
 		}
-		required = append(required, metadataPart{view: m.styles.ErrorText.UnsetPaddingLeft().Render(label)})
+		required = append(required, metadataPart{view: m.styles.StatusWarning.Render(label)})
 	}
 	contextStatus := m.renderContextStatus(paneW < 80)
 	contextHigh := m.numCtx > 0 && m.promptTokens*100/m.numCtx >= 75
@@ -1020,115 +1020,163 @@ func (m *Model) renderEntries() string {
 		return b.String()
 	}
 
-	// Fast path: if entry cache is valid and entry count matches, reuse
-	// the cached prefix and only re-render the streaming tail.
+	// Fast path: the cached stable prefix is current. Only live entries (a
+	// still-running tool group and anything after it) and the streaming tail
+	// render per frame, so spinner ticks and stream chunks never walk the
+	// whole transcript again.
 	if m.entryCacheValid && len(m.entries) == m.cachedEntryCount {
 		m.toolHitRegions = append(m.toolHitRegions[:0], m.cachedToolHitRegions...)
 		m.thinkingHitRegions = append(m.thinkingHitRegions[:0], m.cachedThinkingHitRegions...)
-		if m.hasVisibleLiveTurn() {
-			var b strings.Builder
-			b.WriteString(m.cachedEntriesRender)
-			if m.cachedEntriesRender != "" && len(m.entries) > 0 {
-				last := m.entries[len(m.entries)-1]
-				b.WriteString(transcriptEntrySeparator(last.Kind, "assistant"))
-			}
-			if m.hasLiveTurnContent() {
-				m.renderStreamingMsg(&b, m.streamBuf.String(), contentW, !assistantTurnStarted(m.entries))
-			} else {
-				m.renderInlineTurnActivity(&b, m.inlineTurnActivity(), contentW, !assistantTurnStarted(m.entries))
-			}
-			return b.String()
+		var b strings.Builder
+		b.WriteString(m.cachedEntriesRender)
+		state := m.cachedPrefixState
+		for index := m.cachedStableCount; index < len(m.entries); index++ {
+			m.renderEntryInto(&b, index, contentW, &state)
 		}
-		return m.cachedEntriesRender
+		m.renderLiveTail(&b, contentW, &state)
+		return b.String()
 	}
 
-	// Full render: iterate all entries.
+	// Full render: cache the stable prefix (everything before the first
+	// still-running tool group, whose card animates a glyph and elapsed time),
+	// then render live entries and the streaming tail outside the cache.
+	stableCount := m.stableEntryPrefixLen()
 	var b strings.Builder
 	m.toolHitRegions = m.toolHitRegions[:0]
 	m.thinkingHitRegions = m.thinkingHitRegions[:0]
-	renderedLines := 0
-	previousKind := ""
-	renderedAny := false
-	assistantStarted := false
+	var state entryRenderState
+	snapshotPrefix := func() {
+		m.cachedEntriesRender = b.String()
+		m.cachedEntryCount = len(m.entries)
+		m.cachedStableCount = stableCount
+		m.cachedPrefixState = state
+		m.cachedToolHitRegions = append(m.cachedToolHitRegions[:0], m.toolHitRegions...)
+		m.cachedThinkingHitRegions = append(m.cachedThinkingHitRegions[:0], m.thinkingHitRegions...)
+		m.entryCacheValid = true
+	}
+	for index := range m.entries {
+		if index == stableCount {
+			snapshotPrefix()
+		}
+		m.renderEntryInto(&b, index, contentW, &state)
+	}
+	if stableCount == len(m.entries) {
+		snapshotPrefix()
+	}
+	m.renderLiveTail(&b, contentW, &state)
+	return b.String()
+}
 
-	for entryIndex, entry := range m.entries {
-		var entryView strings.Builder
-		switch entry.Kind {
-		case "user":
-			assistantStarted = false
-			m.renderUserMsg(&entryView, entry.Content, entry.Attachments, contentW)
-		case "assistant":
-			m.renderAssistantMsg(&entryView, entry, contentW, !assistantStarted)
-		case "tool_group":
-			m.renderToolGroup(&entryView, entry.ToolIndex)
-		case "error":
-			m.renderEntryError(&entryView, entry.Content, contentW)
-		case "system":
-			entryView.WriteString(m.renderSystemNotice(entry.Content, contentW))
-			entryView.WriteString("\n")
-		}
-		chunk := strings.TrimRight(entryView.String(), "\n")
-		if chunk == "" {
-			continue
-		}
-		if entry.Kind == "assistant" {
-			assistantStarted = true
-		}
+// entryRenderState carries the transcript loop state across the cached stable
+// prefix so live entries and the streaming tail continue the exact separator,
+// role-header, and hit-region arithmetic of a full render.
+type entryRenderState struct {
+	renderedLines    int
+	previousKind     string
+	renderedAny      bool
+	assistantStarted bool
+}
 
-		if renderedAny {
-			separator := transcriptEntrySeparator(previousKind, entry.Kind)
-			b.WriteString(separator)
-			renderedLines += strings.Count(separator, "\n")
+// stableEntryPrefixLen returns how many leading entries render identically
+// between appends. Everything from the first still-running tool group on is
+// live: its card animates every spinner tick and must stay out of the cache.
+func (m *Model) stableEntryPrefixLen() int {
+	for index, entry := range m.entries {
+		if entry.Kind == "tool_group" && m.toolGroupLive(entry.ToolIndex) {
+			return index
 		}
-		if entry.Kind == "tool_group" {
-			header, _, _ := strings.Cut(chunk, "\n")
-			m.toolHitRegions = append(m.toolHitRegions, toolHitRegion{
-				ToolIndex: entry.ToolIndex,
-				Row:       renderedLines,
-				EndCol:    lipgloss.Width(header),
+	}
+	return len(m.entries)
+}
+
+func (m *Model) toolGroupLive(toolIdx int) bool {
+	if toolIdx < 0 || toolIdx >= len(m.toolEntries) {
+		return false
+	}
+	te := m.toolEntries[toolIdx]
+	if te.Status == ToolStatusRunning {
+		return true
+	}
+	for i := len(m.toolCardMgr.Cards) - 1; i >= 0; i-- {
+		card := &m.toolCardMgr.Cards[i]
+		if toolCallMatches(te.ID, te.Name, card.ID, card.Name) {
+			return card.State == ToolCardRunning
+		}
+	}
+	return false
+}
+
+func (m *Model) renderEntryInto(b *strings.Builder, entryIndex, contentW int, state *entryRenderState) {
+	entry := m.entries[entryIndex]
+	var entryView strings.Builder
+	switch entry.Kind {
+	case "user":
+		state.assistantStarted = false
+		m.renderUserMsg(&entryView, entry.Content, entry.Attachments, contentW)
+	case "assistant":
+		m.renderAssistantMsg(&entryView, entry, contentW, !state.assistantStarted)
+	case "tool_group":
+		m.renderToolGroup(&entryView, entry.ToolIndex)
+	case "error":
+		m.renderEntryError(&entryView, entry.Content, contentW)
+	case "system":
+		entryView.WriteString(m.renderSystemNotice(entry.Content, contentW))
+		entryView.WriteString("\n")
+	}
+	chunk := strings.TrimRight(entryView.String(), "\n")
+	if chunk == "" {
+		return
+	}
+	if entry.Kind == "assistant" {
+		state.assistantStarted = true
+	}
+
+	if state.renderedAny {
+		separator := transcriptEntrySeparator(state.previousKind, entry.Kind)
+		b.WriteString(separator)
+		state.renderedLines += strings.Count(separator, "\n")
+	}
+	if entry.Kind == "tool_group" {
+		header, _, _ := strings.Cut(chunk, "\n")
+		m.toolHitRegions = append(m.toolHitRegions, toolHitRegion{
+			ToolIndex: entry.ToolIndex,
+			Row:       state.renderedLines,
+			EndCol:    lipgloss.Width(header),
+		})
+	}
+	if entry.Kind == "assistant" && strings.TrimSpace(entry.ThinkingContent) != "" {
+		if rowOffset, endCol, ok := completedThinkingHeaderRegion(chunk); ok {
+			m.thinkingHitRegions = append(m.thinkingHitRegions, thinkingHitRegion{
+				EntryIndex: entryIndex,
+				Row:        state.renderedLines + rowOffset,
+				EndCol:     endCol,
+				Digest:     reasoningReceiptDigest(entry.ThinkingContent),
 			})
 		}
-		if entry.Kind == "assistant" && strings.TrimSpace(entry.ThinkingContent) != "" {
-			if rowOffset, endCol, ok := completedThinkingHeaderRegion(chunk); ok {
-				m.thinkingHitRegions = append(m.thinkingHitRegions, thinkingHitRegion{
-					EntryIndex: entryIndex,
-					Row:        renderedLines + rowOffset,
-					EndCol:     endCol,
-					Digest:     reasoningReceiptDigest(entry.ThinkingContent),
-				})
-			}
-		}
-		b.WriteString(chunk)
-		renderedLines += strings.Count(chunk, "\n")
-		previousKind = entry.Kind
-		renderedAny = true
 	}
+	b.WriteString(chunk)
+	state.renderedLines += strings.Count(chunk, "\n")
+	state.previousKind = entry.Kind
+	state.renderedAny = true
+}
 
-	// Cache the rendered entries prefix and exact ToolCard header targets.
-	m.cachedEntriesRender = b.String()
-	m.cachedEntryCount = len(m.entries)
-	m.cachedToolHitRegions = append(m.cachedToolHitRegions[:0], m.toolHitRegions...)
-	m.cachedThinkingHitRegions = append(m.cachedThinkingHitRegions[:0], m.thinkingHitRegions...)
-	m.entryCacheValid = true
-
-	// Render current streaming content (plain text, no Glamour). Provider calls
-	// can legitimately produce no tokens while compacting, awaiting permission,
-	// or continuing after a tool receipt. Keep that phase next to the last
-	// transcript event instead of making the user scan a tall blank viewport for
-	// the footer.
+// renderLiveTail renders the in-flight provider turn (streaming text or the
+// inline waiting label). Provider calls can legitimately produce no tokens
+// while compacting, awaiting permission, or continuing after a tool receipt;
+// keeping that phase next to the last transcript event avoids a tall blank
+// viewport above the footer.
+func (m *Model) renderLiveTail(b *strings.Builder, contentW int, state *entryRenderState) {
 	if m.hasLiveTurnContent() {
-		if renderedAny {
-			b.WriteString(transcriptEntrySeparator(previousKind, "assistant"))
+		if state.renderedAny {
+			b.WriteString(transcriptEntrySeparator(state.previousKind, "assistant"))
 		}
-		m.renderStreamingMsg(&b, m.streamBuf.String(), contentW, !assistantStarted)
+		m.renderStreamingMsg(b, m.streamBuf.String(), contentW, !state.assistantStarted)
 	} else if label := m.inlineTurnActivity(); label != "" {
-		if renderedAny {
-			b.WriteString(transcriptEntrySeparator(previousKind, "assistant"))
+		if state.renderedAny {
+			b.WriteString(transcriptEntrySeparator(state.previousKind, "assistant"))
 		}
-		m.renderInlineTurnActivity(&b, label, contentW, !assistantStarted)
+		m.renderInlineTurnActivity(b, label, contentW, !state.assistantStarted)
 	}
-
-	return b.String()
 }
 
 func completedThinkingHeaderRegion(rendered string) (rowOffset, endCol int, ok bool) {
@@ -1179,25 +1227,6 @@ func (m *Model) renderInlineTurnActivity(b *strings.Builder, label string, conte
 	}
 	b.WriteString(indentBlock(m.styles.StreamHint.Render(label), "  "))
 	b.WriteString("\n")
-}
-
-// assistantTurnStarted reports whether the current user turn already owns an
-// assistant header. Tool receipts can split provider output into several
-// durable transcript segments; they must not create a new role header each
-// time reasoning resumes.
-func assistantTurnStarted(entries []ChatEntry) bool {
-	for index := len(entries) - 1; index >= 0; index-- {
-		switch entries[index].Kind {
-		case "user":
-			return false
-		case "assistant":
-			if strings.TrimSpace(entries[index].Content) != "" ||
-				strings.TrimSpace(entries[index].ThinkingContent) != "" {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // transcriptEntrySeparator is the single owner of vertical rhythm between

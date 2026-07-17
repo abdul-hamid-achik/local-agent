@@ -891,7 +891,12 @@ func (m *Model) settleGoalTurn(message AgentDoneMsg) {
 		return
 	}
 
-	productive := message.Err == nil && m.goalTurnSuccesses > 0
+	// An AUTO iteration checkpoint is a scheduler signal, not a failure: the
+	// segment hit its iteration watchdog after verified distinct progress. The
+	// goal records it as a productive turn and its own budgets and evaluation
+	// decide whether another admitted turn continues the work.
+	checkpointSignal := errors.Is(message.Err, agent.ErrAutoIterationCheckpoint)
+	productive := (message.Err == nil || checkpointSignal) && m.goalTurnSuccesses > 0
 	summary := goalTurnSummary(message.Err, m.goalTurnToolCalls, m.goalTurnSuccesses, m.lastAssistantContent())
 	report := goal.TurnReport{
 		TurnID: turnID, EvalTokens: int64(max(0, m.turnEvalTotal)),

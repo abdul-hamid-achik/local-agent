@@ -244,6 +244,8 @@ type Model struct {
 	// Incremental rendering cache
 	cachedEntriesRender      string
 	cachedEntryCount         int
+	cachedStableCount        int
+	cachedPrefixState        entryRenderState
 	cachedToolHitRegions     []toolHitRegion
 	cachedThinkingHitRegions []thinkingHitRegion
 	entryCacheValid          bool
@@ -2725,7 +2727,8 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		m.spin, cmd = m.spin.Update(msg)
 		cmds = append(cmds, cmd)
 		if m.toolsPending > 0 && m.ready {
-			m.invalidateEntryCache()
+			// The running tool card renders outside the cached stable prefix, so
+			// animating it never invalidates or re-renders the whole transcript.
 			m.viewport.SetContent(m.renderEntries())
 			m.gotoBottomIfFollowing()
 		}
@@ -3984,6 +3987,8 @@ func (m *Model) invalidateEntryCache() {
 	m.entryCacheValid = false
 	m.cachedEntriesRender = ""
 	m.cachedEntryCount = 0
+	m.cachedStableCount = 0
+	m.cachedPrefixState = entryRenderState{}
 	m.cachedToolHitRegions = nil
 	m.cachedThinkingHitRegions = nil
 }

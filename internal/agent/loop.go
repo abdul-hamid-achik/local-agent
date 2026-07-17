@@ -724,6 +724,15 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 			if lg != nil {
 				lg.Warn("empty terminal response", "iter", i, "eval_tokens", lastEvalTokens)
 			}
+			// A degenerate terminal response must not abandon a segment that made
+			// verified distinct progress. The host supervisor re-prompts under its
+			// own segment, digest, and time budgets instead of surfacing a failure.
+			if checkpoint := autoProgress.segmentCheckpoint(turnID, i+1, totalEvalTokens, time.Since(turnStart)); checkpoint != nil {
+				if lg != nil {
+					lg.Info("AUTO segment checkpoint after empty terminal response", "iter", i)
+				}
+				return checkpoint
+			}
 			out.Error(err.Error())
 			return err
 		}
@@ -1371,6 +1380,15 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 				malformedToolIterations++
 				if malformedToolIterations >= 2 {
 					err := fmt.Errorf("%w twice consecutively; switch to a larger model or retry with explicit tool arguments", ErrMalformedToolLoop)
+					// A malformed-tool spiral ends this segment, but verified distinct
+					// progress earlier in it belongs to the logical turn. Let the host
+					// supervisor re-prompt within its segment and digest budgets.
+					if checkpoint := autoProgress.segmentCheckpoint(turnID, i+1, totalEvalTokens, time.Since(turnStart)); checkpoint != nil {
+						if lg != nil {
+							lg.Info("AUTO segment checkpoint after malformed tool loop", "iter", i)
+						}
+						return checkpoint
+					}
 					out.Error(err.Error())
 					return err
 				}
@@ -1754,9 +1772,15 @@ func (a *Agent) cancelUndispatchedToolCalls(calls []llm.ToolCall, out Output, ca
 	}
 }
 
-// isRetryableError returns true for transient LLM errors that are worth retrying,
-// such as JSON parse failures from malformed tool call output.
+// isRetryableError returns true for transient LLM errors that are worth
+// retrying: malformed JSON from small models, and transport failures such as
+// connection loss, truncated streams, provider 5xx, or an idle-stream
+// watchdog. Retry happens before any tool dispatch, so resending the same
+// request cannot double-execute effects.
 func isRetryableError(err error) bool {
+	if llm.IsRetryableTransport(err) {
+		return true
+	}
 	msg := err.Error()
 	return strings.Contains(msg, "parse JSON") || strings.Contains(msg, "unexpected end of JSON")
 }

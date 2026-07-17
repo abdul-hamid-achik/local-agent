@@ -847,9 +847,12 @@ func ignorePatternMatches(pattern, cleanPath string) bool {
 var envAllowlist = []string{
 	"PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE",
 	"TERM", "TMPDIR", "PWD", "TZ",
-	// Common toolchain roots that are paths, not secrets.
+	// Common toolchain roots that are paths, not secrets. Version-manager
+	// shims (asdf, mise) silently fail with exit 126 without their data dirs,
+	// which breaks every toolchain command an AUTO turn runs on such machines.
 	"GOPATH", "GOROOT", "GOCACHE", "GOMODCACHE",
 	"NVM_DIR", "PYENV_ROOT", "RBENV_ROOT", "CARGO_HOME", "RUSTUP_HOME",
+	"ASDF_DIR", "ASDF_DATA_DIR", "MISE_DATA_DIR", "MISE_CACHE_DIR",
 	"XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME",
 }
 

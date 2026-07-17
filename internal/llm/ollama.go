@@ -31,6 +31,38 @@ const (
 	maxOllamaErrorBytes        = 1 << 20
 )
 
+// streamIdleTimeout bounds the silence between stream records (and before
+// the first one). It must stay generous: loading a multi-gigabyte model
+// from disk and evaluating a large prompt both legitimately produce long
+// gaps before the first token on constrained hardware. It exists so a hung
+// server fails the turn instead of wedging a spinner forever. A variable
+// only so tests can exercise the watchdog without waiting minutes.
+var streamIdleTimeout = 5 * time.Minute
+
+// ErrStreamIdle reports that an accepted provider stream stopped producing
+// data for longer than the idle watchdog allows. It is retryable.
+var ErrStreamIdle = errors.New("provider stream produced no data within the idle timeout")
+
+// IsRetryableTransport reports whether err looks like a transient provider
+// transport failure (connection loss, truncated stream, server-side 5xx, or
+// an idle-stream watchdog) that a caller may retry with the same request.
+// Deliberate cancellation and admission deadlines are never retryable.
+func IsRetryableTransport(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	if errors.Is(err, ErrStreamIdle) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+		return true
+	}
+	var httpErr *ollamaHTTPError
+	if errors.As(err, &httpErr) {
+		return httpErr.StatusCode >= http.StatusInternalServerError ||
+			httpErr.StatusCode == http.StatusTooManyRequests
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr)
+}
+
 // OllamaClient is a deliberately small HTTP adapter for the local Ollama API.
 // Keeping the wire client here avoids linking Ollama's server/runtime graph
 // (GPU runners, archives, SSH helpers, and registry code) into this CLI.
@@ -430,13 +462,29 @@ func (o *OllamaClient) doJSON(ctx context.Context, method, route string, payload
 }
 
 func (o *OllamaClient) streamJSON(ctx context.Context, route string, payload any, fn func([]byte) error) error {
-	request, err := o.newRequest(ctx, http.MethodPost, route, payload, "application/x-ndjson")
+	// The idle watchdog turns a silently hung stream into a typed, retryable
+	// failure. It cancels the request context, so the blocked read below
+	// returns instead of holding the turn (and its spinner) open forever.
+	streamCtx, cancelStream := context.WithCancelCause(ctx)
+	defer cancelStream(nil)
+	idle := time.AfterFunc(streamIdleTimeout, func() {
+		cancelStream(fmt.Errorf("%w (%s)", ErrStreamIdle, streamIdleTimeout))
+	})
+	defer idle.Stop()
+	streamCause := func(err error) error {
+		if cause := context.Cause(streamCtx); errors.Is(cause, ErrStreamIdle) && ctx.Err() == nil {
+			return cause
+		}
+		return err
+	}
+
+	request, err := o.newRequest(streamCtx, http.MethodPost, route, payload, "application/x-ndjson")
 	if err != nil {
 		return err
 	}
 	response, err := o.httpClient.Do(request)
 	if err != nil {
-		return err
+		return streamCause(err)
 	}
 	defer func() {
 		// Stream completion/error is established while reading; a later close
@@ -447,7 +495,7 @@ func (o *OllamaClient) streamJSON(ctx context.Context, route string, payload any
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		body, readErr := readBoundedBody(response.Body, maxOllamaErrorBytes)
 		if readErr != nil {
-			return fmt.Errorf("read Ollama error response: %w", readErr)
+			return fmt.Errorf("read Ollama error response: %w", streamCause(readErr))
 		}
 		return ollamaStatusError(response, body)
 	}
@@ -455,6 +503,7 @@ func (o *OllamaClient) streamJSON(ctx context.Context, route string, payload any
 	scanner := bufio.NewScanner(response.Body)
 	scanner.Buffer(make([]byte, 64<<10), maxOllamaStreamRecordBytes)
 	for scanner.Scan() {
+		idle.Reset(streamIdleTimeout)
 		record := bytes.TrimSpace(scanner.Bytes())
 		if len(record) == 0 {
 			continue
@@ -471,7 +520,7 @@ func (o *OllamaClient) streamJSON(ctx context.Context, route string, payload any
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("read Ollama stream: %w", err)
+		return fmt.Errorf("read Ollama stream: %w", streamCause(err))
 	}
 	return nil
 }

@@ -115,6 +115,12 @@ func (m *Model) handleAutoIterationCheckpoint(message AgentDoneMsg) (tea.Cmd, bo
 	if !errors.As(message.Err, &checkpoint) || !errors.Is(message.Err, agent.ErrAutoIterationCheckpoint) {
 		return nil, false, nil
 	}
+	// A goal turn settles through the durable Goal Runtime: RecordTurn,
+	// budget accounting, and Cortex evaluation own its continuation. Plain-AUTO
+	// segment chaining must never bypass that per-turn re-admission.
+	if m.goalRuntime != nil && m.goalTurnID != "" {
+		return nil, false, nil
+	}
 	logicalTurnID := message.TurnID
 	if logicalTurnID == "" {
 		logicalTurnID = m.turnLogicalID

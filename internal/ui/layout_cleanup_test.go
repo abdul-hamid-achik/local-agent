@@ -3,6 +3,7 @@ package ui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -268,6 +269,62 @@ func TestHeightOnlyResizePreservesRenderedCaches(t *testing.T) {
 	}
 	if !m.entryCacheValid {
 		t.Fatal("height-only resize invalidated the transcript entry cache")
+	}
+}
+
+func TestRunningToolGroupRendersOutsideStablePrefixCache(t *testing.T) {
+	m := newTestModel(t)
+	m.ready = true
+	m.now = func() time.Time { return time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC) }
+	m.entries = []ChatEntry{
+		{Kind: "user", Content: "hola"},
+		{Kind: "assistant", Content: "working", RenderedContent: "working"},
+		{Kind: "tool_group", ToolIndex: 0},
+	}
+	m.toolEntries = []ToolEntry{{ID: "t1", Name: "bash", Status: ToolStatusRunning}}
+	m.toolsPending = 1
+
+	first := m.renderEntries()
+	if !m.entryCacheValid {
+		t.Fatal("full render did not cache the stable prefix")
+	}
+	if m.cachedStableCount != 2 {
+		t.Fatalf("stable prefix length = %d, want 2 (running tool group must stay live)", m.cachedStableCount)
+	}
+	cachedPrefix := m.cachedEntriesRender
+
+	// A spinner-tick re-render takes the fast path: identical output, cache
+	// untouched, and only the live tool group re-rendered.
+	second := m.renderEntries()
+	if second != first {
+		t.Fatalf("fast path diverged from full render:\n--- full ---\n%s\n--- fast ---\n%s", first, second)
+	}
+	if m.cachedEntriesRender != cachedPrefix || m.cachedStableCount != 2 {
+		t.Fatal("fast path mutated the cached stable prefix")
+	}
+
+	// The full/fast outputs must also agree hit-region arithmetic.
+	fastRegions := append([]toolHitRegion(nil), m.toolHitRegions...)
+	m.invalidateEntryCache()
+	if full := m.renderEntries(); full != second {
+		t.Fatalf("invalidated full render diverged from fast path:\n--- full ---\n%s\n--- fast ---\n%s", full, second)
+	}
+	if len(fastRegions) != len(m.toolHitRegions) {
+		t.Fatalf("hit regions diverged: fast %d full %d", len(fastRegions), len(m.toolHitRegions))
+	}
+	for i := range fastRegions {
+		if fastRegions[i] != m.toolHitRegions[i] {
+			t.Fatalf("hit region %d diverged: fast %#v full %#v", i, fastRegions[i], m.toolHitRegions[i])
+		}
+	}
+
+	// Once the tool settles, the whole transcript becomes cacheable again.
+	m.toolEntries[0].Status = ToolStatusDone
+	m.toolsPending = 0
+	m.invalidateEntryCache()
+	_ = m.renderEntries()
+	if m.cachedStableCount != len(m.entries) {
+		t.Fatalf("settled transcript stable prefix = %d, want %d", m.cachedStableCount, len(m.entries))
 	}
 }
 
