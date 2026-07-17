@@ -174,7 +174,7 @@ func (m *Model) renderCompletionModalView() (string, *tea.Cursor) {
 	filterCursor := offsetCursor(filter.Cursor(), filterX, filterY)
 
 	if showDivider {
-		b.WriteString(m.styles.FocusIndicator.Render(strings.Repeat("─", contentW)))
+		b.WriteString(m.styles.Divider.Render(strings.Repeat("─", contentW)))
 		b.WriteString("\n")
 	}
 
@@ -227,9 +227,14 @@ func (m *Model) renderCompletionModalView() (string, *tea.Cursor) {
 
 			category := ""
 			if cs.Kind == "attachments" {
-				category = "  " + displayCategory
+				category = completionCategoryDisplay(displayCategory)
 			}
-			labelWidth := max(1, contentW-2-lipgloss.Width(category)-lipgloss.Width(selectedMark))
+			categoryWidth := 0
+			if category != "" {
+				// Right-aligned category column with a two-cell gutter.
+				categoryWidth = lipgloss.Width(category) + 2
+			}
+			labelWidth := max(1, contentW-2-categoryWidth-lipgloss.Width(selectedMark))
 			label := truncateDisplay(displayLabel, labelWidth)
 			description := ""
 			if cs.Kind == "command" && displayDescription != "" {
@@ -238,14 +243,17 @@ func (m *Model) renderCompletionModalView() (string, *tea.Cursor) {
 					description = " · " + truncateDisplay(displayDescription, remaining-3)
 				}
 			}
-			cat := m.styles.CompletionCategory.Render(category)
 			desc := m.styles.CompletionCategory.Render(description)
 
+			row := prefix + label + desc + selectedMark
 			if i == cs.Index {
-				b.WriteString(prefix + m.styles.FocusIndicator.Render(label) + desc + cat + selectedMark)
-			} else {
-				b.WriteString(prefix + label + desc + cat + selectedMark)
+				row = prefix + m.styles.FocusIndicator.Render(label) + desc + selectedMark
 			}
+			if category != "" {
+				gap := max(1, contentW-lipgloss.Width(row)-lipgloss.Width(category))
+				row += strings.Repeat(" ", gap) + m.styles.CompletionCategory.Render(category)
+			}
+			b.WriteString(row)
 			b.WriteString("\n")
 		}
 		for row := end - start; row < itemRows; row++ {
@@ -283,6 +291,14 @@ func (m *Model) renderCompletionModalView() (string, *tea.Cursor) {
 		hints = append(hints, keyHint{Key: m.keys.CompleteToggle.Help().Key, Action: "toggle"})
 	}
 	return m.renderPickerFrame(b.String(), 60, m.renderKeyHints(contentW, hints...)), pickerFrameCursor(filterCursor)
+}
+
+// completionCategoryDisplay keeps machine category tokens out of the UI.
+func completionCategoryDisplay(category string) string {
+	if category == "search_result" {
+		return "search"
+	}
+	return category
 }
 
 func completionPopupHeight(terminalHeight, inputLines int) int {

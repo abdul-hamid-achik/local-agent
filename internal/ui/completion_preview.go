@@ -340,7 +340,7 @@ func (m *Model) renderCompletionPreview(width, rows int) string {
 	if rows == 1 {
 		return m.styles.CompletionCategory.Render(truncateDisplay(meta, width))
 	}
-	lines := []string{m.styles.FocusIndicator.Render(strings.Repeat("─", max(1, width)))}
+	lines := []string{m.styles.Divider.Render(strings.Repeat("─", max(1, width)))}
 	lines = append(lines, m.styles.CompletionCategory.Render(truncateDisplay(meta, width)))
 	if preview.State == completionPreviewReady && rows > 2 {
 		contentLines := strings.Split(preview.Content, "\n")
