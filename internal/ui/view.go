@@ -694,7 +694,16 @@ func (m *Model) renderStatusLine() string {
 		parts = append(parts, contextStatus)
 	}
 	if paneW >= 58 && conversationStarted {
-		parts = append(parts, m.styles.FocusIndicator.Render("ctrl+p settings"))
+		// Persistent, compact discoverability: the welcome hints vanish after
+		// the first turn, so the idle footer keeps the highest-value controls
+		// visible. Width-tier packing below drops these before safety posture.
+		parts = append(parts, m.styles.FocusIndicator.Render("ctrl+p")+" "+m.styles.StatusText.Render("settings"))
+		if paneW >= 88 {
+			parts = append(parts, m.styles.FocusIndicator.Render("/")+" "+m.styles.StatusText.Render("commands"))
+		}
+		if paneW >= 100 {
+			parts = append(parts, m.styles.FocusIndicator.Render("?")+" "+m.styles.StatusText.Render("help"))
+		}
 	}
 
 	separator := m.styles.StatusText.Render(" · ")
@@ -1341,19 +1350,19 @@ func (m *Model) renderWelcome(b *strings.Builder) {
 	b.WriteString(centered)
 }
 
-// renderUserMsg renders a user message block.
+// renderUserMsg renders a user message block: a compact role label above an
+// accent-guttered content block. The gutter, not a full-width rule, carries
+// the visual identity so the transcript keeps a calm vertical rhythm.
 func (m *Model) renderUserMsg(b *strings.Builder, content string, attachments []imageasset.Ref, contentW int) {
 	content = sanitizeTerminalMultiline(content)
-	label := m.styles.UserLabel.Render("you")
-	labelW := lipgloss.Width(label)
-	ruleW := contentW - labelW - 3
-	if ruleW < 4 {
-		ruleW = 4
+	b.WriteString(m.styles.UserLabel.Render("you"))
+	b.WriteString("\n")
+	gutter := "  " + m.styles.UserGutter.Render("▌") + " "
+	text := m.styles.UserContent.UnsetPaddingLeft()
+	for _, line := range strings.Split(wrapText(content, max(10, contentW-4)), "\n") {
+		b.WriteString(gutter + text.Render(line))
+		b.WriteString("\n")
 	}
-	b.WriteString(label + " " + m.styles.RoleRule.Render(rule(ruleW)))
-	b.WriteString("\n")
-	b.WriteString(m.styles.UserContent.Render(wrapText(content, contentW)))
-	b.WriteString("\n")
 	if len(attachments) > 0 {
 		b.WriteString(m.renderImageAttachmentSummary(attachments, contentW))
 		b.WriteString("\n")
@@ -1455,14 +1464,12 @@ func (m *Model) renderStreamingMsg(b *strings.Builder, content string, contentW 
 	}
 }
 
-func (m *Model) renderAssistantHeader(b *strings.Builder, contentW int) {
-	label := m.styles.AsstLabel.Render("assistant")
+func (m *Model) renderAssistantHeader(b *strings.Builder, _ int) {
 	// The operational footer owns the one active animation. Keeping the role
 	// header static makes streamed reasoning feel like transcript content rather
-	// than a second competing progress indicator.
-	labelW := lipgloss.Width(label)
-	ruleW := max(4, contentW-labelW-3)
-	b.WriteString(label + " " + m.styles.RoleRule.Render(rule(ruleW)))
+	// than a second competing progress indicator. A compact label without a
+	// full-width rule keeps consecutive turns readable without heavy chrome.
+	b.WriteString(m.styles.AsstLabel.Render("assistant"))
 	b.WriteString("\n")
 }
 

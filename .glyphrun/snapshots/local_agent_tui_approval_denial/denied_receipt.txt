@@ -1,8 +1,8 @@
-  you ───────────────────────────────────
-  Create approval-probe.txt with the exact
-  text must not be written.
+  you
+  ▌ Create approval-probe.txt with the
+  ▌ exact text must not be written.
 
-  assistant ─────────────────────────────
+  assistant
   │ ▸ Thought
 
   │ ▸ ✗ Write failed · approval-probe.txt

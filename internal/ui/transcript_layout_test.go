@@ -66,13 +66,13 @@ func TestRenderEntriesNestsReasoningAndDenselyStacksTools(t *testing.T) {
 	}
 
 	plain := ansi.Strip(m.renderEntries())
-	assistantAt := strings.Index(plain, "assistant ")
+	assistantAt := strings.Index(plain, "assistant\n")
 	reasoningAt := strings.Index(plain, "Thought")
 	startingAt := strings.Index(plain, "starting")
 	if assistantAt < 0 || reasoningAt < assistantAt || startingAt < reasoningAt {
 		t.Fatalf("assistant turn ownership is unclear:\n%s", plain)
 	}
-	if got := strings.Count(plain, "assistant "); got != 1 {
+	if got := strings.Count(plain, "assistant\n"); got != 1 {
 		t.Fatalf("tool boundaries split one assistant turn into %d role headers:\n%s", got, plain)
 	}
 	if !strings.Contains(plain, "Read (10ms)\n  │") {

@@ -1,7 +1,7 @@
-  you ───────────────────────────────────────────────────────────────────────────
-  Write session-grant.txt with the exact text session scoped approval.
+  you
+  ▌ Write session-grant.txt with the exact text session scoped approval.
 
-  assistant ─────────────────────────────────────────────────────────────────────
+  assistant
   Waiting for model…
 
 

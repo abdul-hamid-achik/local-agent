@@ -1,7 +1,7 @@
-  you ───────────────────────────────────────────────────────────────────────────────────────────────
-  Review the release receipts.
+  you
+  ▌ Review the release receipts.
 
-  assistant ─────────────────────────────────────────────────────────────────────────────────────────
+  assistant
   │ ▾ Thought
   │ The saved run includes one successful read and one failed test command.
 

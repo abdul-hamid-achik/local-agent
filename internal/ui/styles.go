@@ -94,9 +94,9 @@ type Styles struct {
 	// Messages
 	UserLabel    lipgloss.Style
 	UserContent  lipgloss.Style
+	UserGutter   lipgloss.Style
 	AsstLabel    lipgloss.Style
 	AsstContent  lipgloss.Style
-	RoleRule     lipgloss.Style
 	StreamCursor lipgloss.Style
 
 	// Tools
@@ -220,6 +220,8 @@ func adaptiveStyles(isDark bool) Styles {
 		UserContent: lipgloss.NewStyle().
 			Foreground(colorText).
 			PaddingLeft(2),
+		UserGutter: lipgloss.NewStyle().
+			Foreground(colorAccent2),
 		AsstLabel: lipgloss.NewStyle().
 			Bold(true).
 			Foreground(colorSuccess).
@@ -227,8 +229,6 @@ func adaptiveStyles(isDark bool) Styles {
 		AsstContent: lipgloss.NewStyle().
 			Foreground(colorText).
 			PaddingLeft(4),
-		RoleRule: lipgloss.NewStyle().
-			Foreground(colorBorder),
 		StreamCursor: lipgloss.NewStyle().
 			Foreground(colorAccent).
 			Bold(true),
@@ -398,9 +398,9 @@ func plainStyles() Styles {
 
 		UserLabel:    b.PaddingLeft(2),
 		UserContent:  pl2,
+		UserGutter:   p,
 		AsstLabel:    b.PaddingLeft(2),
 		AsstContent:  pl2,
-		RoleRule:     p,
 		StreamCursor: b,
 
 		ToolCallIcon:    pl4,
