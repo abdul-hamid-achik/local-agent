@@ -2,18 +2,13 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"math"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
-	ecosystemPkg "github.com/abdul-hamid-achik/local-agent/internal/ecosystem"
 	executionPkg "github.com/abdul-hamid-achik/local-agent/internal/execution"
-	"github.com/abdul-hamid-achik/local-agent/internal/expertteam"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 	mcpPkg "github.com/abdul-hamid-achik/local-agent/internal/mcp"
 )
@@ -226,55 +221,57 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 	}
 	readGrants := a.ReadGrants()
 	writeGrants := a.WriteGrants()
-	var system string
-	emptyTerminalRepairPending := false
-	rebuildSystem := func() {
-		system = buildSystemPromptForModelBudgetContextWithSkillCatalogAndPathGrants(
-			ctx, modePrefix, tools, a.skillContent, skillCatalog, loadedContext,
-			a.memoryStore, iceContext, turnFilesystem.workDir, turnFilesystem.ignoreContent,
-			turnModel, turnNumCtx, readGrants, writeGrants,
-		)
-		if emptyTerminalRepairPending {
-			system += emptyTerminalRepairPrompt
-		}
+	rt := &turnRuntime{
+		a:                               a,
+		out:                             out,
+		turnID:                          turnID,
+		limits:                          limits,
+		turnNumCtx:                      turnNumCtx,
+		turnModel:                       turnModel,
+		authorityMode:                   authorityMode,
+		modePrefix:                      modePrefix,
+		turnToolPolicy:                  turnToolPolicy,
+		execRuntime:                     execRuntime,
+		turnFilesystem:                  turnFilesystem,
+		tools:                           tools,
+		turnMCPSnapshot:                 turnMCPSnapshot,
+		skillCatalog:                    skillCatalog,
+		continuationsConfig:             continuationsConfig,
+		iceContext:                      iceContext,
+		readGrants:                      readGrants,
+		writeGrants:                     writeGrants,
+		capabilityActivity:              capabilityActivity,
+		capabilityHintText:              capabilityHintText,
+		capabilityHint:                  capabilityHint,
+		capabilityBaseContextWithoutBob: capabilityBaseContextWithoutBob,
+		capabilityBaseContext:           capabilityBaseContext,
+		baseLoadedContext:               baseLoadedContext,
+		loadedContext:                   loadedContext,
 	}
-	rebuildSystem()
+	rt.rebuildSystem(ctx)
 
-	const maxRetries = 2
-	var lastPromptTokens int
-	var lastEvalTokens int
-	var totalEvalTokens int64
-	var retryCount int
-	var emptyTerminalRepairs int
-	previousIterationEndedWithToolResult := false
-	var malformedToolIterations int
-	var capabilityReroutes int
-	var expertConsultations int
-	hostRefusalCounts := make(map[string]int)
+	rt.hostRefusalCounts = make(map[string]int)
 	// Bind exact, completed read-only built-ins to the state observed in this
 	// turn. A later non-read-only dispatch clears the set before entering its
 	// backend because that call may change what a subsequent read observes.
-	completedBuiltinCalls := make(map[string]struct{})
-	continuationState := newContinuationTurnState(turnMCPSnapshot.Epoch)
-	var autoContinuationState *autoContinuationState
+	rt.completedBuiltinCalls = make(map[string]struct{})
+	rt.continuationState = newContinuationTurnState(turnMCPSnapshot.Epoch)
 	if turnToolPolicy.AllowMCP && authorityMode == AuthorityAutoScoped &&
 		continuationsConfig.Mode == config.ContinuationAutoReadOnly {
-		autoContinuationState = newAutoContinuationState(turnMCPSnapshot.Epoch, continuationsConfig.MaxAutoSteps)
+		rt.autoContinuationState = newAutoContinuationState(turnMCPSnapshot.Epoch, continuationsConfig.MaxAutoSteps)
 	}
-	var queuedAutoContinuation *preparedAutoContinuation
 
-	maxIters := a.MaxIterationsForAuthority(authorityMode)
-	var autoProgress *autoTurnProgress
+	rt.maxIters = a.MaxIterationsForAuthority(authorityMode)
 	if authorityMode == AuthorityAutoScoped {
-		autoProgress = newAutoTurnProgress()
+		rt.autoProgress = newAutoTurnProgress()
 	}
 
 	// A process-independent turn ID threads through logs and every durable tool
 	// execution identity for this turn.
-	lg := a.logTurn(turnID)
-	turnStart := time.Now()
-	if lg != nil {
-		lg.Info("turn start", "model", turnModel, "num_ctx", turnNumCtx, "tools", len(tools), "max_iters", maxIters)
+	rt.lg = a.logTurn(turnID)
+	rt.turnStart = time.Now()
+	if rt.lg != nil {
+		rt.lg.Info("turn start", "model", turnModel, "num_ctx", turnNumCtx, "tools", len(tools), "max_iters", rt.maxIters)
 	}
 
 	// Compact before the next provider request as well as after responses. This
@@ -282,50 +279,13 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 	// from submitting an already oversized history to Ollama. Bounded turns may
 	// not spend an untracked provider generation on compaction, so fail before the
 	// first provider request with an explicit recovery path instead.
-	rejectContextPrompt := func(estimated int, bounded bool, attributes ...any) error {
-		err := &TurnContextBudgetError{
-			EstimatedPromptTokens: estimated,
-			ContextWindowTokens:   turnNumCtx,
-		}
-		if lg != nil {
-			fields := []any{"prompt_tokens", estimated, "num_ctx", turnNumCtx, "bounded", bounded}
-			lg.Warn("context admission denied", append(fields, attributes...)...)
-		}
-		out.Error(err.Error())
-		return err
-	}
+	//
 	// Compaction admission is an eval-token accounting decision: a turn with a
 	// hard generation budget may not spend an untracked summarization
 	// generation. A wall-clock deadline alone does not forbid compaction — the
 	// deadline naturally bounds it — so wall-limited AUTO turns still compact.
-	compactionForbidden := limits.MaxEvalTokens > 0
-	admitSystemPrompt := func() error {
-		estimated := a.estimatePromptTokens(system, tools)
-		if receiptFloor := a.contextPromptFloorEstimate(turnModel, estimateHostPromptTokens(system, tools)); estimated < receiptFloor {
-			estimated = receiptFloor
-		}
-		if !shouldCompactForContext(estimated, turnNumCtx) {
-			return nil
-		}
-		if compactionForbidden {
-			return rejectContextPrompt(estimated, true)
-		}
-		if lg != nil {
-			lg.Info("compaction", "phase", "before_request", "prompt_tokens", estimated, "num_ctx", turnNumCtx)
-		}
-		if a.compactForContextAndModel(ctx, out, turnNumCtx, turnModel) {
-			rebuildSystem()
-		}
-		estimated = a.estimatePromptTokens(system, tools)
-		if receiptFloor := a.contextPromptFloorEstimate(turnModel, estimateHostPromptTokens(system, tools)); estimated < receiptFloor {
-			estimated = receiptFloor
-		}
-		if shouldCompactForContext(estimated, turnNumCtx) {
-			return rejectContextPrompt(estimated, false)
-		}
-		return nil
-	}
-	if err := admitSystemPrompt(); err != nil {
+	rt.compactionForbidden = limits.MaxEvalTokens > 0
+	if err := rt.admitSystemPrompt(ctx); err != nil {
 		return err
 	}
 
@@ -335,8 +295,8 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 	if continuationPreview != "" {
 		committed := a.continuationContextText(options.Continuation)
 		if committed != continuationPreview {
-			loadedContext = prependContinuationContext(baseLoadedContext, committed)
-			rebuildSystem()
+			rt.loadedContext = prependContinuationContext(rt.baseLoadedContext, committed)
+			rt.rebuildSystem(ctx)
 		}
 	}
 
@@ -345,1054 +305,96 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 	// action no longer qualifies for automatic read-only execution, preserve the
 	// existing suggestion path and rebuild the admitted prompt around that
 	// bounded model context.
-	if autoContinuationState != nil {
+	if rt.autoContinuationState != nil {
 		// An initial host read still needs one later provider iteration to
 		// interpret its result. With no room, retain the LA-2 suggestion path.
-		if maxIters >= 2 {
-			queuedAutoContinuation = a.claimAutoReadOnlyContinuationContextWithSnapshot(
-				options.Continuation, turnMCPSnapshot, authorityMode, autoContinuationState,
+		if rt.maxIters >= 2 {
+			rt.queuedAutoContinuation = a.claimAutoReadOnlyContinuationContextWithSnapshot(
+				options.Continuation, turnMCPSnapshot, authorityMode, rt.autoContinuationState,
 			)
 		}
-		if queuedAutoContinuation == nil {
+		if rt.queuedAutoContinuation == nil {
 			continuationPreview = a.previewContinuationContext(options.Continuation)
 			if continuationPreview != "" {
-				loadedContext = prependContinuationContext(baseLoadedContext, continuationPreview)
-				rebuildSystem()
-				if err := admitSystemPrompt(); err != nil {
+				rt.loadedContext = prependContinuationContext(rt.baseLoadedContext, continuationPreview)
+				rt.rebuildSystem(ctx)
+				if err := rt.admitSystemPrompt(ctx); err != nil {
 					return err
 				}
 				committed := a.continuationContextText(options.Continuation)
 				if committed != continuationPreview {
-					loadedContext = prependContinuationContext(baseLoadedContext, committed)
-					rebuildSystem()
+					rt.loadedContext = prependContinuationContext(rt.baseLoadedContext, committed)
+					rt.rebuildSystem(ctx)
 				}
 			}
 		}
 		// The optional host bootstrap spends provider iterations, which only a
 		// hard generation budget forbids; a wall deadline bounds it naturally.
-		if queuedAutoContinuation == nil && bobBootstrapAvailable && maxIters >= 2 && limits.MaxEvalTokens == 0 {
-			queuedAutoContinuation = a.prepareBobWorkspaceBootstrap(
-				bobBootstrap, turnMCPSnapshot, authorityMode, autoContinuationState,
+		if rt.queuedAutoContinuation == nil && bobBootstrapAvailable && rt.maxIters >= 2 && limits.MaxEvalTokens == 0 {
+			rt.queuedAutoContinuation = a.prepareBobWorkspaceBootstrap(
+				bobBootstrap, turnMCPSnapshot, authorityMode, rt.autoContinuationState,
 			)
-			if queuedAutoContinuation != nil && bobBootstrapPreview != "" {
+			if rt.queuedAutoContinuation != nil && bobBootstrapPreview != "" {
 				// The host-owned read is already queued. Remove the suggestion from
 				// the provider prompt so the model cannot repeat it after receiving
 				// the exact result.
-				baseLoadedContext = composeCapabilityContext(capabilityHintText, capabilityBaseContext)
-				loadedContext = baseLoadedContext
-				rebuildSystem()
-				if err := admitSystemPrompt(); err != nil {
+				rt.baseLoadedContext = composeCapabilityContext(rt.capabilityHintText, rt.capabilityBaseContext)
+				rt.loadedContext = rt.baseLoadedContext
+				rt.rebuildSystem(ctx)
+				if err := rt.admitSystemPrompt(ctx); err != nil {
 					return err
 				}
 			}
 		}
 	}
-	if bobBootstrapAvailable && queuedAutoContinuation == nil {
+	if bobBootstrapAvailable && rt.queuedAutoContinuation == nil {
 		emitContinuationSuggestion(out, turnID, 1, &ValidatedContinuation{
 			Tool: "bob_context", ReasonCode: "workspace_context",
 		})
 	}
 
-	for i := 0; i < maxIters; i++ {
+	for i := 0; i < rt.maxIters; i++ {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
 		}
 
-		remainingEvalTokens := int64(0)
-		requestEvalLimit := 0
-		if limits.MaxEvalTokens > 0 {
-			remainingEvalTokens = limits.MaxEvalTokens - totalEvalTokens
-			if remainingEvalTokens <= 0 {
-				return fmt.Errorf("%w: used %d of %d", ErrTurnEvalBudgetExhausted, totalEvalTokens, limits.MaxEvalTokens)
-			}
-			effectivePromptTokens := a.estimatePromptTokens(system, tools)
-			if receiptFloor := a.contextPromptFloorEstimate(turnModel, estimateHostPromptTokens(system, tools)); effectivePromptTokens < receiptFloor {
-				effectivePromptTokens = receiptFloor
-			}
-			requestEvalLimit = contextReservedEvalLimit(remainingEvalTokens, effectivePromptTokens, turnNumCtx)
-			if requestEvalLimit <= 0 {
-				return rejectContextPrompt(effectivePromptTokens, true, "phase", "before_provider", "iter", i)
-			}
-		}
-
-		// Stream LLM response.
-		var textBuf strings.Builder
-		var toolCalls []llm.ToolCall
-		hostContinuationBatch := queuedAutoContinuation != nil
-		activeAutoContinuation := queuedAutoContinuation
-		lastEvalTokens = 0
-		doneSeen := false
-		callbackSeen := false
-		reportedEvalTokens := int64(0)
-		requestHostTokens := 0
-		requestMessageTokens := 0
-		repairRequest := emptyTerminalRepairPending
-
-		if hostContinuationBatch {
-			toolCalls = []llm.ToolCall{queuedAutoContinuation.detachedCall()}
-			queuedAutoContinuation = nil
-		} else {
-			llmStart := time.Now()
-			// Snapshot the message history under the lock: ChatStream runs while
-			// other goroutines may AppendMessage, and passing the live slice would
-			// race on the backing array (and could realloc mid-stream).
-			a.mu.RLock()
-			msgsSnapshot := make([]llm.Message, len(a.messages))
-			copy(msgsSnapshot, a.messages)
-			a.mu.RUnlock()
-			requestHostTokens = estimateHostPromptTokens(system, tools)
-			requestMessageTokens = estimateMessagesPromptTokens(msgsSnapshot)
-
-			err := a.chatStreamWithResolvedImages(ctx, llm.ChatOptions{
-				Messages:        msgsSnapshot,
-				Tools:           tools,
-				System:          system,
-				MaxEvalTokens:   requestEvalLimit,
-				ExpectedContext: turnNumCtx,
-				ExpectedModel:   turnModel,
-			}, func(chunk llm.StreamChunk) error {
-				callbackSeen = true
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				default:
-				}
-				if doneSeen {
-					return fmt.Errorf("provider streamed data after its terminal usage receipt")
-				}
-
-				if chunk.Text != "" {
-					textBuf.WriteString(chunk.Text)
-					out.StreamText(chunk.Text)
-				}
-				if chunk.Reasoning != "" {
-					out.StreamReasoning(chunk.Reasoning)
-				}
-				if len(chunk.ToolCalls) > 0 {
-					if len(chunk.ToolCalls) > maxToolCallsPerResponse-len(toolCalls) {
-						return fmt.Errorf("model streamed at least %d tool calls; maximum per response is %d", len(toolCalls)+len(chunk.ToolCalls), maxToolCallsPerResponse)
-					}
-					toolCalls = append(toolCalls, chunk.ToolCalls...)
-				}
-				if chunk.Done {
-					if chunk.EvalCount < 0 || chunk.PromptEvalCount < 0 {
-						return fmt.Errorf("invalid provider token receipt: eval=%d prompt=%d", chunk.EvalCount, chunk.PromptEvalCount)
-					}
-					if int64(chunk.EvalCount) > math.MaxInt64-totalEvalTokens {
-						return fmt.Errorf("provider evaluation-token receipt %d overflows the parent turn counter", chunk.EvalCount)
-					}
-					doneSeen = true
-					lastPromptTokens = chunk.PromptEvalCount
-					lastEvalTokens = chunk.EvalCount
-					reportedEvalTokens = int64(chunk.EvalCount)
-					out.StreamDone(chunk.EvalCount, chunk.PromptEvalCount)
-				}
-				return nil
-			})
-
-			if err != nil {
-				if errors.Is(err, llm.ErrInferenceNotStarted) && !callbackSeen {
-					if lg != nil {
-						lg.Warn("llm request rejected before dispatch", "iter", i, "err", err)
-					}
-					out.Error(fmt.Sprintf("LLM request not started: %v", err))
-					return err
-				}
-				reservedEvalTokens := int64(0)
-				if (!errors.Is(err, llm.ErrNoModelSelected) && !errors.Is(err, llm.ErrInferenceNotStarted)) || callbackSeen {
-					reservedEvalTokens = chargeUnknownEvalReservation(out, requestEvalLimit, reportedEvalTokens)
-				}
-				var reservationErr error
-				if reservedEvalTokens > 0 {
-					// The unknown portion of the reservation is durably charged either
-					// way; count it against this turn before deciding whether the
-					// remaining budget can absorb a retry of the same request.
-					totalEvalTokens += reservedEvalTokens
-					if ctx.Err() == nil && !repairRequest && retryCount < maxRetries &&
-						isRetryableError(err) && totalEvalTokens < limits.MaxEvalTokens {
-						retryCount++
-						if lg != nil {
-							lg.Warn("llm retry after charged reservation", "iter", i, "attempt", retryCount, "reserved", reservedEvalTokens, "err", err)
-						}
-						out.Error(fmt.Sprintf("LLM transport failed, retrying (%d/%d) after charging %d reserved token(s)...", retryCount, maxRetries, reservedEvalTokens))
-						textBuf.Reset()
-						toolCalls = nil
-						continue
-					}
-					reservationErr = fmt.Errorf(
-						"%w: provider stream ended without a trustworthy terminal usage receipt; conservatively charged %d reserved token(s)",
-						ErrTurnEvalBudgetExhausted, reservedEvalTokens,
-					)
-				}
-				if ctx.Err() != nil {
-					return errors.Join(ctx.Err(), reservationErr)
-				}
-				if reservationErr != nil {
-					out.Error(reservationErr.Error())
-					return errors.Join(reservationErr, fmt.Errorf("LLM response: %w", err))
-				}
-				// Retry on transient provider errors from small models.
-				if !repairRequest && limits.MaxEvalTokens == 0 && retryCount < maxRetries && isRetryableError(err) {
-					retryCount++
-					if lg != nil {
-						lg.Warn("llm retry", "iter", i, "attempt", retryCount, "err", err)
-					}
-					out.Error(fmt.Sprintf("LLM produced malformed output, retrying (%d/%d)...", retryCount, maxRetries))
-					textBuf.Reset()
-					toolCalls = nil
-					continue
-				}
-				if lg != nil {
-					lg.Error("llm error", "iter", i, "err", err)
-				}
-				// Show error and provide a fallback response
-				out.Error(fmt.Sprintf("LLM error: %v", err))
-				// Send a system message explaining the error
-				out.SystemMessage(fmt.Sprintf("⚠️ Model response failed: %v\n\nYou can try:\n- Checking if Ollama is running (`ollama ps`)\n- Switching to a different model (ctrl+o)\n- Reducing context size\n\nTool results are still available above.", err))
-				return fmt.Errorf("LLM response: %w", err)
-			}
-			if !doneSeen {
-				reservedEvalTokens := chargeUnknownEvalReservation(out, requestEvalLimit, 0)
-				receiptErr := fmt.Errorf("provider stream ended without a terminal usage receipt")
-				if reservedEvalTokens > 0 {
-					budgetErr := fmt.Errorf(
-						"%w: provider stream ended without a terminal usage receipt; conservatively charged %d reserved token(s)",
-						ErrTurnEvalBudgetExhausted, reservedEvalTokens,
-					)
-					out.Error(budgetErr.Error())
-					return errors.Join(budgetErr, receiptErr)
-				}
-				out.Error(receiptErr.Error())
-				return receiptErr
-			}
-			retryCount = 0 // reset on success
-			if lastEvalTokens < 0 || int64(lastEvalTokens) > math.MaxInt64-totalEvalTokens {
-				return fmt.Errorf("invalid provider evaluation-token receipt %d", lastEvalTokens)
-			}
-			totalEvalTokens += int64(lastEvalTokens)
-			a.recordContextPromptFloor(lastPromptTokens, requestHostTokens, requestMessageTokens, turnModel)
-			if repairRequest {
-				// The correction belongs to exactly one provider request. Rebuild the
-				// ordinary system prompt before any tool call from the repaired response
-				// can lead to another iteration.
-				emptyTerminalRepairPending = false
-				rebuildSystem()
-			}
-			if lg != nil {
-				lg.Info("llm response", "iter", i, "ms", time.Since(llmStart).Milliseconds(),
-					"prompt_tokens", lastPromptTokens, "eval_tokens", lastEvalTokens, "tool_calls", len(toolCalls))
-			}
-		}
-		if len(toolCalls) > maxToolCallsPerResponse {
-			err := fmt.Errorf("model returned %d tool calls; maximum per response is %d", len(toolCalls), maxToolCallsPerResponse)
-			out.Error(err.Error())
-			return err
-		}
-		autoProgress.beginIteration(len(toolCalls))
-		if limits.MaxEvalTokens > 0 && totalEvalTokens > limits.MaxEvalTokens {
-			// A provider that violates num_predict has already crossed the requested
-			// generation boundary. Preserve only its text and stop before creating
-			// any durable execution intents.
-			a.AppendMessage(llm.Message{Role: "assistant", Content: textBuf.String()})
-			err := fmt.Errorf("%w: provider reported %d used token(s) for a %d-token limit", ErrTurnEvalBudgetExhausted, totalEvalTokens, limits.MaxEvalTokens)
-			out.Error(err.Error())
-			return err
-		}
-		if requestEvalLimit > 0 && lastEvalTokens > requestEvalLimit {
-			a.AppendMessage(llm.Message{Role: "assistant", Content: textBuf.String()})
-			err := fmt.Errorf("%w: provider reported %d used token(s) for a %d-token context-reserved request limit", ErrTurnEvalBudgetExhausted, lastEvalTokens, requestEvalLimit)
-			out.Error(err.Error())
-			return err
-		}
-		if limits.MaxEvalTokens > 0 && totalEvalTokens == limits.MaxEvalTokens && len(toolCalls) > 0 {
-			// The provider may return tool requests on the response that consumes
-			// the final token allowance. Keep its text, but never create durable
-			// dispatch intents or execute effects after the hard boundary.
-			a.AppendMessage(llm.Message{Role: "assistant", Content: textBuf.String()})
-			err := fmt.Errorf("%w before tool dispatch: used %d of %d", ErrTurnEvalBudgetExhausted, totalEvalTokens, limits.MaxEvalTokens)
-			out.Error(err.Error())
-			return err
-		}
-		if !hostContinuationBatch && len(toolCalls) == 0 && strings.TrimSpace(textBuf.String()) == "" {
-			if previousIterationEndedWithToolResult && emptyTerminalRepairs < maxEmptyTerminalRepairs && i < maxIters-1 {
-				if err := ctx.Err(); err != nil {
-					return err
-				}
-				if limits.MaxEvalTokens > 0 && totalEvalTokens >= limits.MaxEvalTokens {
-					err := fmt.Errorf("%w before empty-terminal repair: used %d of %d", ErrTurnEvalBudgetExhausted, totalEvalTokens, limits.MaxEvalTokens)
-					out.Error(err.Error())
-					return err
-				}
-				emptyTerminalRepairs++
-				previousIterationEndedWithToolResult = false
-				emptyTerminalRepairPending = true
-				rebuildSystem()
-				if err := admitSystemPrompt(); err != nil {
-					return err
-				}
-				if err := ctx.Err(); err != nil {
-					return err
-				}
-				if lg != nil {
-					lg.Warn("empty terminal response after tool result; retrying once", "iter", i, "eval_tokens", lastEvalTokens)
-				}
-				out.SystemMessage("Model returned no visible answer after the tool result; retrying once.")
-				continue
-			}
-			err := fmt.Errorf(
-				"%w: provider completed after %d evaluation token(s) without visible text or a tool call",
-				ErrEmptyTerminalResponse, lastEvalTokens,
-			)
-			if lg != nil {
-				lg.Warn("empty terminal response", "iter", i, "eval_tokens", lastEvalTokens)
-			}
-			// A degenerate terminal response must not abandon a segment that made
-			// verified distinct progress. The host supervisor re-prompts under its
-			// own segment, digest, and time budgets instead of surfacing a failure.
-			if checkpoint := autoProgress.segmentCheckpoint(turnID, i+1, totalEvalTokens, time.Since(turnStart)); checkpoint != nil {
-				if lg != nil {
-					lg.Info("AUTO segment checkpoint after empty terminal response", "iter", i)
-				}
-				return checkpoint
-			}
-			out.Error(err.Error())
-			return err
-		}
-		var providerCallIDs []string
-		if !hostContinuationBatch {
-			providerCallIDs = make([]string, len(toolCalls))
-			for toolIndex := range toolCalls {
-				providerCallIDs[toolIndex] = toolCalls[toolIndex].ID
-			}
-		}
-		a.ensureToolCallIDs(toolCalls, turnID, i+1)
-		var trackedExecutions []trackedToolExecution
-		var err error
-		if hostContinuationBatch {
-			trackedExecutions, err = a.newTrackedContinuationExecutions(ctx, execRuntime, turnID, i+1, toolCalls)
-		} else {
-			trackedExecutions, err = a.newTrackedExecutions(ctx, execRuntime, turnID, i+1, toolCalls, providerCallIDs)
-		}
+		text, toolCalls, signal, err := rt.providerStage(ctx, i)
 		if err != nil {
-			out.Error(fmt.Sprintf("record requested tool execution: %v", err))
-			return fmt.Errorf("record requested tool execution: %w", err)
+			return err
+		}
+		if signal == stageNextIteration {
+			continue
 		}
 
-		// Record assistant message in conversation history.
-		assistantToolCalls := toolCalls
-		if hostContinuationBatch {
-			assistantToolCalls = []llm.ToolCall{activeAutoContinuation.detachedCall()}
-			assistantToolCalls[0].ID = toolCalls[0].ID
-		}
-		assistantMsg := llm.Message{
-			Role:      "assistant",
-			Content:   textBuf.String(),
-			ToolCalls: assistantToolCalls,
-			HostOwned: hostContinuationBatch,
-		}
-		a.AppendMessage(assistantMsg)
-
-		// ICE: index assistant message.
-		if a.iceEngine != nil && assistantMsg.Content != "" {
-			if err := a.iceEngine.IndexMessage(ctx, "assistant", assistantMsg.Content); err != nil {
-				out.Error(fmt.Sprintf("ICE indexing failed: %v", err))
-			}
+		trackedExecutions, err := rt.recordAssistantTurn(ctx, i, text, toolCalls)
+		if err != nil {
+			return err
 		}
 
 		// If no tool calls, we're done.
 		if len(toolCalls) == 0 {
-			// ICE: detect auto-memories from the exchange.
-			a.mu.RLock()
-			hasEnoughMessages := len(a.messages) >= 2
-			var userContent string
-			if hasEnoughMessages {
-				for idx := len(a.messages) - 2; idx >= 0; idx-- {
-					if a.messages[idx].Role == "user" {
-						userContent = a.messages[idx].Content
-						break
-					}
-				}
-			}
-			a.mu.RUnlock()
-
-			// Background auto-memory is an untracked optional generation, which
-			// only an eval-token budget forbids; wall-limited turns keep it.
-			if limits.MaxEvalTokens == 0 && a.iceEngine != nil && hasEnoughMessages && userContent != "" {
-				a.iceEngine.DetectAutoMemory(ctx, userContent, assistantMsg.Content)
-			}
-			estimatedPromptTokens := a.estimatePromptTokens(system, tools)
-			if estimatedPromptTokens < lastPromptTokens {
-				estimatedPromptTokens = lastPromptTokens
-			}
-			if receiptFloor := a.contextPromptFloorEstimate(turnModel, estimateHostPromptTokens(system, tools)); estimatedPromptTokens < receiptFloor {
-				estimatedPromptTokens = receiptFloor
-			}
-			if !compactionForbidden && shouldCompactForContext(estimatedPromptTokens, turnNumCtx) {
-				if lg != nil {
-					lg.Info("compaction", "phase", "direct_response", "prompt_tokens", estimatedPromptTokens, "num_ctx", turnNumCtx)
-				}
-				a.compactForContextAndModel(ctx, out, turnNumCtx, turnModel)
-			}
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			if lg != nil {
-				lg.Info("turn end", "reason", "complete", "iters", i+1, "ms", time.Since(turnStart).Milliseconds())
-			}
-			return nil
+			return rt.finishDirectResponse(ctx, i, text)
 		}
 
 		// Execute tool calls in provider order. Requested/approval/dispatch and
 		// terminal transitions are committed synchronously around the backend.
-		preflightRejections := 0
-		capabilityRouteFailed := false
-		for toolIndex, tc := range toolCalls {
-			tracked := &trackedExecutions[toolIndex]
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				if ledgerErr := a.cancelTrackedToolCalls(ctx, execRuntime, trackedExecutions[toolIndex:], toolCalls[toolIndex:], out, ctxErr); ledgerErr != nil {
-					return ledgerErr
-				}
-				return ctxErr
-			}
-
-			kind := tracked.identity.Kind
-			requiresApproval := true
-
-			// Classify policy/scope before hooks. Hooks may normalize arguments but
-			// may not change identity; final arguments are hashed and approved below.
-			switch kind {
-			case executionPkg.KindMemory:
-				if !turnToolPolicy.AllowsMemory(tc.Name) {
-					if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventDenied, executionPkg.ApprovalPolicyDenied, "", "blocked by active mode")); err != nil {
-						return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
-					}
-					a.blockedToolCall(tc, out)
-					continue
-				}
-				requiresApproval = memoryToolRequiresApproval(tc.Name)
-			case executionPkg.KindBuiltin:
-				if !turnToolPolicy.AllowsBuiltin(tc.Name) {
-					if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventDenied, executionPkg.ApprovalPolicyDenied, "", "blocked by active mode")); err != nil {
-						return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
-					}
-					a.blockedToolCall(tc, out)
-					continue
-				}
-				requiresApproval = builtinToolRequiresApproval(tc.Name)
-			case executionPkg.KindMCP:
-				if !turnToolPolicy.AllowMCP {
-					if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventDenied, executionPkg.ApprovalPolicyDenied, "", "MCP blocked by active mode")); err != nil {
-						return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
-					}
-					a.blockedToolCall(tc, out)
-					continue
-				}
-				if !a.allowsMCPTool(tc.Name) {
-					if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventDenied, executionPkg.ApprovalPolicyDenied, "", "blocked by active agent profile MCP scope")); err != nil {
-						return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
-					}
-					a.deniedToolCall(tc, out, "tool call blocked by active agent profile MCP scope")
-					continue
-				}
-				// MCP annotations are untrusted display metadata. All MCP calls
-				// remain on the normal authorization path so explicit policy and
-				// Skip-approval decisions retain their durable audit reason.
-				requiresApproval = mcpToolRequiresApproval()
-			}
-
-			originalID, originalName := tc.ID, tc.Name
-			hookCall := tc
-			hookCall.Arguments = cloneApprovalArguments(tc.Arguments)
-			block, reason := a.runPreHooks(ctx, &hookCall)
-			if hookCall.ID != originalID || hookCall.Name != originalName {
-				hookCall.ID, hookCall.Name = originalID, originalName
-				block = true
-				reason = "tool hook attempted to change approved tool identity"
-			}
-			// A hook may retain the pointer or argument map it received. Detach the
-			// effective call immediately after the synchronous hook boundary so later
-			// mutation cannot alter the hash, approval, UI, or backend dispatch.
-			tc = hookCall
-			tc.Arguments = cloneApprovalArguments(hookCall.Arguments)
-			effectiveKind, effectiveEffect := a.executionKindForCall(tc)
-			if effectiveKind != tracked.identity.Kind || effectiveEffect != tracked.identity.EffectClass {
-				block = true
-				reason = "tool hook attempted to change durable execution effect"
-			}
-			effectiveHash, hashErr := executionPkg.HashCanonicalArguments(tc.Arguments)
-			if hashErr != nil {
-				reason := capToolResultForContext(fmt.Sprintf("invalid effective tool arguments: %v", hashErr), turnNumCtx)
-				if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventFailed, executionPkg.ApprovalNotApplicable, reason, "effective argument hashing failed")); err != nil {
-					return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
-				}
-				a.failedToolCall(tc, out, reason, turnNumCtx)
-				continue
-			}
-			tracked.effectiveHash = effectiveHash
-			autoContinuationStillEligible := func() bool {
-				if !hostContinuationBatch || activeAutoContinuation == nil ||
-					activeAutoContinuation.registryEpoch != turnMCPSnapshot.Epoch ||
-					activeAutoContinuation.authorityVersion != a.approvalStateSnapshot().hostVersion ||
-					!a.continuationFreshnessCurrent(
-						&activeAutoContinuation.continuation, activeAutoContinuation.freshnessSequence,
-					) ||
-					!a.autoReadOnlyContinuationEligible(&activeAutoContinuation.continuation, turnMCPSnapshot, authorityMode) {
-					return false
-				}
-				currentHash, err := executionPkg.HashCanonicalArguments(tc.Arguments)
-				return err == nil && currentHash == tracked.originalHash
-			}
-			if hostContinuationBatch && !autoContinuationStillEligible() {
-				block = true
-				reason = "host-scheduled continuation changed or lost read-only authority before dispatch"
-			}
-			toolCalls[toolIndex] = tc
-			if block {
-				reason = capToolResultForContext(reason, turnNumCtx)
-				if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventFailed, executionPkg.ApprovalHostRefused, reason, "host pre-tool hook refused request")); err != nil {
-					return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
-				}
-				a.failedToolCall(tc, out, reason, turnNumCtx)
-				if ctxErr := ctx.Err(); ctxErr != nil {
-					if ledgerErr := a.cancelTrackedToolCalls(ctx, execRuntime, trackedExecutions[toolIndex+1:], toolCalls[toolIndex+1:], out, ctxErr); ledgerErr != nil {
-						return ledgerErr
-					}
-					return ctxErr
-				}
-				continue
-			}
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				if ledgerErr := a.cancelTrackedToolCalls(ctx, execRuntime, trackedExecutions[toolIndex:], toolCalls[toolIndex:], out, ctxErr); ledgerErr != nil {
-					return ledgerErr
-				}
-				return ctxErr
-			}
-
-			var preflightErr error
-			if tc.Name == "consult_experts" && expertConsultations >= 1 {
-				preflightErr = errors.New("consult_experts may be dispatched at most once per parent turn")
-			} else {
-				preflightErr = a.preflightToolCall(kind, tc)
-			}
-			if preflightErr != nil {
-				preflightRejections++
-				result := capToolResultForContext(fmt.Sprintf("tool request failed preflight: %v", preflightErr), turnNumCtx)
-				if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventFailed, executionPkg.ApprovalNotApplicable, result, "preflight rejected request before dispatch")); err != nil {
-					return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
-				}
-				a.failedToolCall(tc, out, result, turnNumCtx)
-				continue
-			}
-			if kind == executionPkg.KindBuiltin && effectiveEffect == executionPkg.EffectReadOnly {
-				fingerprint := tc.Name + "\x00" + tracked.argumentsHash()
-				if _, duplicate := completedBuiltinCalls[fingerprint]; duplicate {
-					result := capToolResultForContext(repeatedBuiltinCorrection, turnNumCtx)
-					if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(
-						*tracked, executionPkg.EventFailed, executionPkg.ApprovalNotApplicable, result,
-						"identical read-only built-in request suppressed before dispatch",
-					)); err != nil {
-						return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
-					}
-					a.failedToolCall(tc, out, result, turnNumCtx)
-					continue
-				}
-			}
-
-			autoApproved := requiresApproval &&
-				a.authorityAutoApproves(authorityMode, tc, tracked.identity.Kind)
-			if autoApproved {
-				requiresApproval = false
-			}
-			if hostContinuationBatch && (!autoApproved || !autoContinuationStillEligible()) {
-				result := "host-scheduled continuation no longer qualifies for automatic read-only authorization"
-				if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventDenied, executionPkg.ApprovalPolicyDenied, result, "automatic continuation denied before dispatch")); err != nil {
-					return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
-				}
-				a.failedToolCall(tc, out, result, turnNumCtx)
-				continue
-			}
-			authorization := toolAuthorization{allowed: true, approval: executionPkg.ApprovalNotApplicable}
-			if autoApproved {
-				authorization.approval = executionPkg.ApprovalPolicy
-			}
-			if requiresApproval {
-				var authorizationErr error
-				authorization, authorizationErr = a.decideToolAuthorization(ctx, tc, func() error {
-					return appendExecutionEvent(ctx, execRuntime, executionEvent(*tracked, executionPkg.EventApprovalRequested, executionPkg.ApprovalRequested, "", "interactive approval requested"))
-				})
-				if authorizationErr != nil {
-					return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, authorizationErr)
-				}
-			} else if tracked.identity.EffectClass != executionPkg.EffectReadOnly {
-				// memory_recall persists LastUsed metadata but remains implicitly
-				// allowed by the built-in tool policy.
-				authorization.approval = executionPkg.ApprovalPolicy
-			}
-			if authorization.cancelled {
-				cancelErr := ctx.Err()
-				if cancelErr == nil {
-					cancelErr = context.Canceled
-				}
-				result := fmt.Sprintf("CANCELLED — NOT DISPATCHED: approval for tool %q was cancelled: %s", tc.Name, authorization.reason)
-				if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventCancelled, executionPkg.ApprovalCancelled, result, "interactive approval cancelled before dispatch")); err != nil {
-					return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
-				}
-				a.failedToolCall(tc, out, result, turnNumCtx)
-				if ledgerErr := a.cancelTrackedToolCalls(ctx, execRuntime, trackedExecutions[toolIndex+1:], toolCalls[toolIndex+1:], out, cancelErr); ledgerErr != nil {
-					return ledgerErr
-				}
-				return cancelErr
-			}
-			if !authorization.allowed {
-				if authorization.hostRefused {
-					code := authorization.refusalCode
-					if code == "" {
-						code = "host_refused"
-					}
-					result := capToolResultForContext(fmt.Sprintf("tool request refused by host [%s]: %s. Do not retry unchanged; change the request or approval renderer.", code, authorization.reason), turnNumCtx)
-					if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventFailed, executionPkg.ApprovalHostRefused, result, "approval host refused request before dispatch")); err != nil {
-						return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
-					}
-					a.failedToolCall(tc, out, result, turnNumCtx)
-					key := tc.Name + "\x00" + tracked.argumentsHash() + "\x00" + code
-					hostRefusalCounts[key]++
-					if hostRefusalCounts[key] >= maxIdenticalHostRefusals {
-						loopErr := &RepeatedHostRefusalError{
-							ToolName:      tc.Name,
-							ArgumentsHash: tracked.argumentsHash(),
-							Code:          code,
-							Attempts:      hostRefusalCounts[key],
-						}
-						if ledgerErr := a.cancelTrackedToolCalls(ctx, execRuntime, trackedExecutions[toolIndex+1:], toolCalls[toolIndex+1:], out, loopErr); ledgerErr != nil {
-							return ledgerErr
-						}
-						out.Error(loopErr.Error())
-						return loopErr
-					}
-					continue
-				}
-				if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventDenied, authorization.approval, authorization.reason, "authorization denied before dispatch")); err != nil {
-					return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
-				}
-				a.deniedToolCall(tc, out, "tool call denied: "+authorization.reason)
-				continue
-			}
-			if err := appendExecutionEvent(ctx, execRuntime, executionEvent(*tracked, executionPkg.EventApproved, authorization.approval, "", "tool execution authorized")); err != nil {
-				return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
-			}
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				if ledgerErr := a.cancelTrackedToolCalls(ctx, execRuntime, trackedExecutions[toolIndex:], toolCalls[toolIndex:], out, ctxErr); ledgerErr != nil {
-					return ledgerErr
-				}
-				return ctxErr
-			}
-
-			if err := appendExecutionEvent(ctx, execRuntime, executionEvent(*tracked, executionPkg.EventStarted, executionPkg.ApprovalNotApplicable, "", "durable dispatch intent committed")); err != nil {
-				return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
-			}
-			if tracked.identity.EffectClass != executionPkg.EffectReadOnly {
-				clear(completedBuiltinCalls)
-			}
-			// Once a mutation has a durable dispatch intent, any prior Bob
-			// convergence projection is stale even if the backend later fails or
-			// cancellation makes the outcome unknown. Read-only and memory metadata
-			// operations do not invalidate repository contract state.
-			if kind != executionPkg.KindMemory && tracked.identity.EffectClass != executionPkg.EffectReadOnly {
-				a.invalidateBobWorkspaceContext(out)
-				// The system prompt was assembled before this durable mutation. Remove
-				// both the cached Bob digest and any pre-mutation continuation hint
-				// before a later provider iteration can observe stale convergence.
-				capabilityBaseContext = capabilityBaseContextWithoutBob
-				baseLoadedContext = composeCapabilityContext(capabilityHintText, capabilityBaseContext)
-				loadedContext = baseLoadedContext
-				rebuildSystem()
-			}
-			bobAdmission := a.captureBobContextAdmission(tc)
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				if err := a.cancelCommittedDispatchIntent(ctx, execRuntime, *tracked, tc, out, ctxErr, false, turnNumCtx); err != nil {
-					a.cancelUndispatchedToolCalls(toolCalls[toolIndex+1:], out, err)
-					return err
-				}
-				if tracked.identity.EffectClass != executionPkg.EffectReadOnly && execRuntime.ledger != nil {
-					unresolved := a.unresolvedFor(*tracked, executionPkg.EventOutcomeUnknown, fmt.Errorf("durable dispatch intent for tool %q has an unknown outcome", tc.Name))
-					a.latchUnresolvedExecution(unresolved)
-					if ledgerErr := a.cancelTrackedToolCalls(ctx, execRuntime, trackedExecutions[toolIndex+1:], toolCalls[toolIndex+1:], out, unresolved); ledgerErr != nil {
-						return ledgerErr
-					}
-					return unresolved
-				}
-				if ledgerErr := a.cancelTrackedToolCalls(ctx, execRuntime, trackedExecutions[toolIndex+1:], toolCalls[toolIndex+1:], out, ctxErr); ledgerErr != nil {
-					return ledgerErr
-				}
-				return ctxErr
-			}
-			out.ToolCallStart(tc.ID, tc.Name, cloneApprovalArguments(tc.Arguments))
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				if err := a.cancelCommittedDispatchIntent(ctx, execRuntime, *tracked, tc, out, ctxErr, true, turnNumCtx); err != nil {
-					a.cancelUndispatchedToolCalls(toolCalls[toolIndex+1:], out, err)
-					return err
-				}
-				if tracked.identity.EffectClass != executionPkg.EffectReadOnly && execRuntime.ledger != nil {
-					unresolved := a.unresolvedFor(*tracked, executionPkg.EventOutcomeUnknown, fmt.Errorf("durable dispatch intent for tool %q has an unknown outcome", tc.Name))
-					a.latchUnresolvedExecution(unresolved)
-					if ledgerErr := a.cancelTrackedToolCalls(ctx, execRuntime, trackedExecutions[toolIndex+1:], toolCalls[toolIndex+1:], out, unresolved); ledgerErr != nil {
-						return ledgerErr
-					}
-					return unresolved
-				}
-				if ledgerErr := a.cancelTrackedToolCalls(ctx, execRuntime, trackedExecutions[toolIndex+1:], toolCalls[toolIndex+1:], out, ctxErr); ledgerErr != nil {
-					return ledgerErr
-				}
-				return ctxErr
-			}
-			if hostContinuationBatch && !autoContinuationStillEligible() {
-				result := "host-scheduled continuation became stale before backend dispatch"
-				if err := a.appendTerminalExecutionEvent(ctx, execRuntime, *tracked, executionEvent(*tracked, executionPkg.EventFailed, executionPkg.ApprovalPolicyDenied, result, "automatic continuation stopped after final policy check")); err != nil {
-					return a.stopBeforeDispatchAfterLedgerError(toolCalls[toolIndex:], out, err)
-				}
-				a.failedToolCall(tc, out, result, turnNumCtx)
-				continue
-			}
-			startTime := time.Now()
-
-			var result string
-			var isErr bool
-			var structured, errorMeta json.RawMessage
-			transportErr := false
-			var stopAfterTool error
-			switch kind {
-			case executionPkg.KindBuiltin:
-				if tc.Name == "consult_experts" {
-					expertConsultations++
-					remaining := 0
-					if limits.MaxEvalTokens > 0 {
-						remaining = boundedEvalLimit(limits.MaxEvalTokens - totalEvalTokens)
-					}
-					var usage expertteam.Usage
-					var usageErr error
-					var progress expertteam.Observer
-					if progressOut, ok := out.(ExpertProgressOutput); ok {
-						progress = func(event expertteam.ProgressEvent) {
-							progressOut.ExpertProgress(tc.ID, event)
-						}
-					}
-					result, isErr, usage, usageErr = a.handleConsultExpertsWithBudgetAndProgress(ctx, tc.Arguments, remaining, progress)
-					if usageErr != nil {
-						if remaining > 0 {
-							out.StreamDone(remaining, 0)
-							totalEvalTokens += int64(remaining)
-							stopAfterTool = fmt.Errorf("%w: expert consultation returned an invalid usage receipt; conservatively charged %d reserved token(s)", ErrTurnEvalBudgetExhausted, remaining)
-						} else {
-							stopAfterTool = errors.New("expert consultation usage could not be validated")
-						}
-						isErr = true
-					} else if usage.EvalTokens > 0 || usage.PromptEvalTokens > 0 {
-						if int64(usage.EvalTokens) > math.MaxInt64-totalEvalTokens {
-							if remaining > 0 {
-								out.StreamDone(remaining, 0)
-								totalEvalTokens += int64(remaining)
-								stopAfterTool = fmt.Errorf("%w: expert consultation usage overflowed the parent counter; conservatively charged %d reserved token(s)", ErrTurnEvalBudgetExhausted, remaining)
-							} else {
-								stopAfterTool = errors.New("expert consultation usage overflowed the parent turn counter")
-							}
-							isErr = true
-						} else {
-							out.StreamDone(usage.EvalTokens, usage.PromptEvalTokens)
-							totalEvalTokens += int64(usage.EvalTokens)
-							if limits.MaxEvalTokens > 0 && totalEvalTokens >= limits.MaxEvalTokens {
-								stopAfterTool = fmt.Errorf("%w after expert consultation: used %d of %d", ErrTurnEvalBudgetExhausted, totalEvalTokens, limits.MaxEvalTokens)
-								if totalEvalTokens > limits.MaxEvalTokens {
-									isErr = true
-									result = "error: expert provider exceeded the remaining evaluation-token budget\n" + result
-								}
-							}
-						}
-					}
-				} else {
-					result, isErr = a.handleBuiltinToolWithCancellation(ctx, tc, tracked.identity.EffectClass != executionPkg.EffectReadOnly)
-				}
-			case executionPkg.KindMemory:
-				result, isErr = a.handleMemoryTool(tc)
-			default:
-				var toolResult *mcpPkg.ToolResult
-				var callErr error
-				if hostContinuationBatch {
-					toolResult, callErr = a.registry.CallToolAtEpoch(
-						ctx, activeAutoContinuation.registryEpoch, tc.Name, cloneApprovalArguments(tc.Arguments),
-					)
-				} else {
-					toolResult, callErr = a.registry.CallTool(ctx, tc.Name, tc.Arguments)
-				}
-				if callErr != nil {
-					result = mcpDispatchErrorReceipt(tc.Name, callErr)
-					isErr = true
-					transportErr = true
-				} else if toolResult == nil {
-					result, isErr = "ERROR: MCP tool returned no result", true
-					transportErr = true
-				} else {
-					result = toolResult.Content
-					isErr = toolResult.IsError
-					structured = toolResult.Structured
-					errorMeta = toolResult.ErrorMeta
-				}
-			}
-			duration := time.Since(startTime)
-			// Hooks are the result-redaction boundary. Apply them before the
-			// durable receipt so secrets removed from UI/model text are not copied
-			// into the execution ledger.
-			a.runPostHooks(ctx, tc, &result, isErr)
-			semanticText := result
-			projection := a.projectSemanticToolReceipt(
-				tc, semanticText, structured, errorMeta,
-				transportErr, isErr, kind == executionPkg.KindBuiltin || kind == executionPkg.KindMemory,
-			)
-			// An explicitly requested, exact MCPHub describe result may seed the
-			// bounded ephemeral schema cache used by LA-2. This never dispatches a
-			// follow-up and never widens the host trust catalog.
-			a.rememberContinuationContract(tc, projection, structured, turnMCPSnapshot)
-			assembly := a.projectMCPHubResultAssembly(tc, projection, structured, isErr)
-			projection = assembly.Projection
-			bobAdmission = a.resolveBobContextAdmission(bobAdmission, projection, assembly)
-			continuationReceipt := ecosystemPkg.RawReceipt{
-				Text: semanticText, Structured: structured, ErrorMeta: errorMeta,
-				TransportError: transportErr, ToolError: isErr,
-			}
-			continuationCandidates := assembly.Actions
-			continuationSurface := assembly.ContinuationSurface
-			sourceRouteVersion := a.mcpRouteVersionSnapshot()
-			continuationSourceAuthorized := a.continuationSourceAuthorized(tc, assembly.Bound) &&
-				a.allowsMCPTool(tc.Name) && !a.authorityPermissionDeniedForCall(tc)
-			if !assembly.Bound {
-				if continuationSourceAuthorized {
-					continuationCandidates = ecosystemPkg.ProjectContinuationActions(projection, continuationReceipt)
-				}
-				continuationSurface = continuationSurfacePresent(projection, continuationReceipt)
-			}
-			var continuation *ValidatedContinuation
-			if capabilityRouteOutcomeFailed(projection, isErr) &&
-				a.markCapabilityRouteFailed(capabilityActivity, tc.Name, tc.Arguments, capabilityHint) {
-				capabilityRouteFailed = true
-			}
-			// Typed MCP payloads stay inside the parser boundary. Only exact,
-			// host-trusted, bounded projections may enter the active provider turn;
-			// every durable boundary and the UI receive only the allowlisted receipt.
-			modelResult, durableResult := a.semanticToolContents(tc, projection, result, structured, isErr)
-			if assembly.Bound {
-				// Stored-result pages are serialized CallToolResult fragments, not
-				// downstream semantic documents. Keep every partial or rejected page
-				// behind the parser boundary. A complete exact route may expose only
-				// its validated, bounded model-only projection.
-				durableResult = ecosystemPkg.SafeReceiptText(projection)
-				modelResult = durableResult
-				if assembly.Complete && assembly.Transient != "" {
-					modelResult = assembly.Transient
-				}
-			}
-			if continuationSurface {
-				// Once an exact action has been normalized, do not also feed Cortex's
-				// or Bob's raw command/reason payload to a small model. The bounded
-				// semantic receipt plus tool+arguments contract is authoritative.
-				durableResult = ecosystemPkg.SafeReceiptText(projection)
-				modelResult = durableResult
-			}
-			answered := a.executionOutcomeAnswered(tc, kind, tracked.identity.EffectClass, result, transportErr, projection)
-			terminalType := terminalExecutionEventType(tracked.identity.EffectClass, isErr, answered, ctx.Err())
-			// Only a genuinely unverifiable outcome earns the OUTCOME UNKNOWN
-			// framing. A backend that answered with a domain error keeps its
-			// receipt intact so the model (and the ledger) see what it said.
-			if terminalType == executionPkg.EventOutcomeUnknown && !strings.HasPrefix(durableResult, outcomeUnknownReceiptPrefix) {
-				durableResult = dispatchedEffectErrorReceipt(tc.Name, durableResult, ctx.Err())
-				modelResult = durableResult
-			}
-			// Cap before the durable append so the terminal event hashes exactly
-			// the receipt the session transcript will persist; the projection
-			// boundary compares those hashes when advancing the snapshot cursor.
-			durableResult = capToolResultForContext(durableResult, turnNumCtx)
-			modelResult = capToolResultForContext(modelResult, turnNumCtx)
-			terminalDetail := fmt.Sprintf("backend returned after %dms", duration.Milliseconds())
-			if err := appendExecutionEvent(ctx, execRuntime, executionEvent(*tracked, terminalType, executionPkg.ApprovalNotApplicable, durableResult, terminalDetail)); err != nil {
-				unresolved := a.unresolvedFor(*tracked, executionPkg.EventStarted, err)
-				a.latchUnresolvedExecution(unresolved)
-				unknownResult := capToolResultForContext(terminalLedgerFailureReceipt(tc.Name, err), turnNumCtx)
-				out.ToolCallResult(tc.ID, tc.Name, unknownResult, true, duration)
-				a.AppendMessage(llm.Message{Role: "tool", Content: unknownResult, ToolName: tc.Name, ToolCallID: tc.ID})
-				a.cancelUndispatchedToolCalls(toolCalls[toolIndex+1:], out, unresolved)
-				return unresolved
-			}
-			autoProgress.settle(
-				tc.Name, tracked.argumentsHash(), tracked.identity.EffectClass,
-				terminalType, projection,
-			)
-			if kind == executionPkg.KindBuiltin && tracked.identity.EffectClass == executionPkg.EffectReadOnly {
-				completedBuiltinCalls[tc.Name+"\x00"+tracked.argumentsHash()] = struct{}{}
-			}
-			a.settleBobContextAdmission(out, bobAdmission, projection, continuationReceipt, assembly, terminalType)
-
-			// A continuation becomes schedulable only after the source outcome is
-			// durably terminal. Automatic chains are single-action, successful,
-			// exact-route reads and consume both a synthetic iteration and their
-			// separate hard two-step budget. Preserve one additional provider
-			// iteration after the read so its result can always be interpreted.
-			// Every failed auto admission falls back to LA-2 suggestion mode without
-			// granting authority.
-			if terminalType == executionPkg.EventCompleted && ctx.Err() == nil &&
-				len(toolCalls) == 1 && toolIndex == 0 && i < maxIters-2 && autoContinuationState != nil {
-				queuedAutoContinuation = a.selectAutoReadOnlyContinuation(
-					tc, projection, continuationCandidates, turnMCPSnapshot,
-					continuationSourceAuthorized, sourceRouteVersion, authorityMode, autoContinuationState,
-				)
-			}
-			if queuedAutoContinuation == nil && continuationsConfig.Mode != config.ContinuationOff {
-				continuation = a.selectContinuation(
-					tc, projection, continuationCandidates, turnMCPSnapshot,
-					continuationSourceAuthorized, turnToolPolicy.AllowMCP, continuationState,
-				)
-			}
-			if continuationContext := continuation.modelContext(); continuationContext != "" {
-				modelResult += "\n\n" + continuationContext
-				modelResult = capToolResultForContext(modelResult, turnNumCtx)
-			}
-
-			if lg != nil {
-				lg.Debug("tool", "name", tc.Name, "kind", kind, "ms", duration.Milliseconds(), "error", isErr)
-			}
-			emitSemanticToolResult(
-				out, tc.ID, tc.Name, durableResult, structured, isErr, transportErr, duration, projection,
-			)
-			continuationSequence := uint64(i+1)<<32 | uint64(toolIndex+1)
-			if continuation != nil || isContinuationSourceProjection(projection) {
-				emitContinuationSuggestion(out, turnID, continuationSequence, continuation)
-			}
-			toolMessage := llm.Message{
-				Role:       "tool",
-				Content:    modelResult,
-				ToolName:   tc.Name,
-				ToolCallID: tc.ID,
-			}
-			if modelResult != durableResult {
-				toolMessage.DurableContent = durableResult
-			}
-			a.AppendMessage(toolMessage)
-			if terminalType == executionPkg.EventOutcomeUnknown && execRuntime.ledger != nil {
-				unresolved := a.unresolvedFor(*tracked, executionPkg.EventOutcomeUnknown, fmt.Errorf("durable outcome for tool %q is unknown and requires explicit reconciliation", tc.Name))
-				a.latchUnresolvedExecution(unresolved)
-				if ledgerErr := a.cancelTrackedToolCalls(ctx, execRuntime, trackedExecutions[toolIndex+1:], toolCalls[toolIndex+1:], out, unresolved); ledgerErr != nil {
-					return ledgerErr
-				}
-				return unresolved
-			}
-			if stopAfterTool != nil {
-				if ctxErr := ctx.Err(); ctxErr != nil {
-					stopAfterTool = errors.Join(ctxErr, stopAfterTool)
-				}
-				if ledgerErr := a.cancelTrackedToolCalls(ctx, execRuntime, trackedExecutions[toolIndex+1:], toolCalls[toolIndex+1:], out, stopAfterTool); ledgerErr != nil {
-					return ledgerErr
-				}
-				out.Error(stopAfterTool.Error())
-				return stopAfterTool
-			}
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				if ledgerErr := a.cancelTrackedToolCalls(ctx, execRuntime, trackedExecutions[toolIndex+1:], toolCalls[toolIndex+1:], out, ctxErr); ledgerErr != nil {
-					return ledgerErr
-				}
-				return ctxErr
-			}
-		}
-		if !hostContinuationBatch {
-			if preflightRejections == len(toolCalls) {
-				malformedToolIterations++
-				if malformedToolIterations >= 2 {
-					err := fmt.Errorf("%w twice consecutively; switch to a larger model or retry with explicit tool arguments", ErrMalformedToolLoop)
-					// A malformed-tool spiral ends this segment, but verified distinct
-					// progress earlier in it belongs to the logical turn. Let the host
-					// supervisor re-prompt within its segment and digest budgets.
-					if checkpoint := autoProgress.segmentCheckpoint(turnID, i+1, totalEvalTokens, time.Since(turnStart)); checkpoint != nil {
-						if lg != nil {
-							lg.Info("AUTO segment checkpoint after malformed tool loop", "iter", i)
-						}
-						return checkpoint
-					}
-					out.Error(err.Error())
-					return err
-				}
-			} else {
-				malformedToolIterations = 0
-			}
-		}
-		if err := ctx.Err(); err != nil {
+		outcome, err := rt.dispatchStage(ctx, i, toolCalls, trackedExecutions)
+		if err != nil {
 			return err
 		}
-		if capabilityRouteFailed && capabilityReroutes < maxCapabilityReroutesPerTurn && i < maxIters-1 {
-			capabilityReroutes++
-			capabilityHintText, capabilityHint = a.resolveTurnCapabilityWithPolicy(ctx, out, capabilityActivity, turnToolPolicy.AllowMCP)
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			loadedContext = composeCapabilityContext(capabilityHintText, capabilityBaseContext)
-			system = buildSystemPromptForModelBudgetContextWithSkillCatalogAndPathGrants(ctx, modePrefix, tools, a.skillContent, skillCatalog, loadedContext, a.memoryStore, iceContext, turnFilesystem.workDir, turnFilesystem.ignoreContent, turnModel, turnNumCtx, readGrants, writeGrants)
-		}
-
-		// A queued host read executes before another provider request. Deferring
-		// compaction avoids inserting an untracked summarization generation between
-		// the source receipt and its exact continuation.
-		if queuedAutoContinuation == nil {
-			// Check if we should compact the conversation.
-			estimatedPromptTokens := a.estimatePromptTokens(system, tools)
-			if estimatedPromptTokens < lastPromptTokens {
-				estimatedPromptTokens = lastPromptTokens
-			}
-			if receiptFloor := a.contextPromptFloorEstimate(turnModel, estimateHostPromptTokens(system, tools)); estimatedPromptTokens < receiptFloor {
-				estimatedPromptTokens = receiptFloor
-			}
-			if shouldCompactForContext(estimatedPromptTokens, turnNumCtx) {
-				if compactionForbidden {
-					return rejectContextPrompt(estimatedPromptTokens, true, "phase", "after_tools", "iter", i)
-				}
-				if lg != nil {
-					lg.Info("compaction", "iter", i, "prompt_tokens", estimatedPromptTokens, "num_ctx", turnNumCtx)
-				}
-				compacted := a.compactForContextAndModel(ctx, out, turnNumCtx, turnModel)
-				if compacted {
-					// Rebuild system prompt after compaction (memory may have changed).
-					system = buildSystemPromptForModelBudgetContextWithSkillCatalogAndPathGrants(ctx, modePrefix, tools, a.skillContent, skillCatalog, loadedContext, a.memoryStore, iceContext, turnFilesystem.workDir, turnFilesystem.ignoreContent, turnModel, turnNumCtx, readGrants, writeGrants)
-				}
-				estimatedPromptTokens = a.estimatePromptTokens(system, tools)
-				if !compacted && estimatedPromptTokens < lastPromptTokens {
-					// The provider receipt is authoritative for the unchanged prompt.
-					// A failed or inapplicable compaction may not erase that floor.
-					estimatedPromptTokens = lastPromptTokens
-				}
-				if receiptFloor := a.contextPromptFloorEstimate(turnModel, estimateHostPromptTokens(system, tools)); estimatedPromptTokens < receiptFloor {
-					estimatedPromptTokens = receiptFloor
-				}
-				if shouldCompactForContext(estimatedPromptTokens, turnNumCtx) {
-					return rejectContextPrompt(estimatedPromptTokens, false, "phase", "after_tools", "iter", i)
-				}
-			}
-		}
-		previousIterationEndedWithToolResult = false
-		a.mu.RLock()
-		if messageCount := len(a.messages); messageCount > 0 {
-			previousIterationEndedWithToolResult = a.messages[messageCount-1].Role == "tool"
-		}
-		a.mu.RUnlock()
-
-		// Interactive modes surface their deliberately tight turn ceiling. AUTO
-		// has a larger host-owned safety budget and stays quiet while using it.
-		if authorityMode != AuthorityAutoScoped && i == maxIters-2 {
-			out.Error(fmt.Sprintf("approaching iteration limit (%d/%d)", i+2, maxIters))
+		if err := rt.settleIteration(ctx, i, len(toolCalls), outcome); err != nil {
+			return err
 		}
 	}
 
-	if lg != nil {
-		lg.Warn("turn end", "reason", "max_iterations", "iters", maxIters, "ms", time.Since(turnStart).Milliseconds())
+	if rt.lg != nil {
+		rt.lg.Warn("turn end", "reason", "max_iterations", "iters", rt.maxIters, "ms", time.Since(rt.turnStart).Milliseconds())
 	}
-	if checkpoint := autoProgress.checkpoint(turnID, maxIters, totalEvalTokens, time.Since(turnStart)); checkpoint != nil {
-		if lg != nil {
-			lg.Info(
+	if checkpoint := rt.autoProgress.checkpoint(turnID, rt.maxIters, rt.totalEvalTokens, time.Since(rt.turnStart)); checkpoint != nil {
+		if rt.lg != nil {
+			rt.lg.Info(
 				"AUTO iteration checkpoint",
 				"tool_calls", checkpoint.ToolCalls,
 				"successful_tools", checkpoint.SuccessfulToolCalls,
@@ -1402,7 +404,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 		}
 		return checkpoint
 	}
-	limitErr := fmt.Errorf("reached max iterations (%d)", maxIters)
+	limitErr := fmt.Errorf("reached max iterations (%d)", rt.maxIters)
 	out.Error(limitErr.Error())
 	return limitErr
 }

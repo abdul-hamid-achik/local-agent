@@ -1,0 +1,327 @@
+package agent
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/abdul-hamid-achik/local-agent/internal/capabilityadvisor"
+	"github.com/abdul-hamid-achik/local-agent/internal/config"
+	"github.com/abdul-hamid-achik/local-agent/internal/llm"
+	mcpPkg "github.com/abdul-hamid-achik/local-agent/internal/mcp"
+	"github.com/charmbracelet/log"
+)
+
+// turnStageSignal tells the RunTurnWithOptions iteration loop how to proceed
+// after a stage that used to "continue" the loop inline.
+type turnStageSignal int
+
+const (
+	// stageProceed continues with the next statement in the iteration body.
+	stageProceed turnStageSignal = iota
+	// stageNextIteration advances to the next loop iteration.
+	stageNextIteration
+)
+
+// turnRuntime carries the loop-scoped state a single RunTurnWithOptions turn
+// shares between its provider and dispatch stages.
+type turnRuntime struct {
+	a *Agent
+
+	out    Output
+	lg     *log.Logger
+	turnID string
+	limits TurnLimits
+
+	turnNumCtx     int
+	turnModel      string
+	authorityMode  AuthorityMode
+	modePrefix     string
+	turnToolPolicy ToolPolicy
+	execRuntime    executionRuntime
+	turnFilesystem filesystemContext
+
+	tools           []llm.ToolDef
+	turnMCPSnapshot mcpPkg.ToolSnapshot
+	skillCatalog    string
+
+	continuationsConfig config.ContinuationsConfig
+
+	iceContext  string
+	readGrants  []ReadGrant
+	writeGrants []WriteGrant
+
+	capabilityActivity              CapabilityActivity
+	capabilityHintText              string
+	capabilityHint                  *capabilityadvisor.Hint
+	capabilityBaseContextWithoutBob string
+	capabilityBaseContext           string
+	baseLoadedContext               string
+	loadedContext                   string
+
+	system                     string
+	emptyTerminalRepairPending bool
+	compactionForbidden        bool
+
+	maxIters     int
+	autoProgress *autoTurnProgress
+	turnStart    time.Time
+
+	lastPromptTokens                     int
+	lastEvalTokens                       int
+	totalEvalTokens                      int64
+	retryCount                           int
+	emptyTerminalRepairs                 int
+	previousIterationEndedWithToolResult bool
+	malformedToolIterations              int
+	capabilityReroutes                   int
+	expertConsultations                  int
+	hostRefusalCounts                    map[string]int
+	completedBuiltinCalls                map[string]struct{}
+
+	continuationState      *continuationTurnState
+	autoContinuationState  *autoContinuationState
+	queuedAutoContinuation *preparedAutoContinuation
+	hostContinuationBatch  bool
+	activeAutoContinuation *preparedAutoContinuation
+}
+
+// rebuildSystem reassembles the system prompt from the turn's current bounded
+// context, appending the one-shot empty-terminal repair correction when armed.
+func (t *turnRuntime) rebuildSystem(ctx context.Context) {
+	t.system = buildSystemPromptForModelBudgetContextWithSkillCatalogAndPathGrants(
+		ctx, t.modePrefix, t.tools, t.a.skillContent, t.skillCatalog, t.loadedContext,
+		t.a.memoryStore, t.iceContext, t.turnFilesystem.workDir, t.turnFilesystem.ignoreContent,
+		t.turnModel, t.turnNumCtx, t.readGrants, t.writeGrants,
+	)
+	if t.emptyTerminalRepairPending {
+		t.system += emptyTerminalRepairPrompt
+	}
+}
+
+// rejectContextPrompt surfaces a context-budget admission failure.
+func (t *turnRuntime) rejectContextPrompt(estimated int, bounded bool, attributes ...any) error {
+	err := &TurnContextBudgetError{
+		EstimatedPromptTokens: estimated,
+		ContextWindowTokens:   t.turnNumCtx,
+	}
+	if t.lg != nil {
+		fields := []any{"prompt_tokens", estimated, "num_ctx", t.turnNumCtx, "bounded", bounded}
+		t.lg.Warn("context admission denied", append(fields, attributes...)...)
+	}
+	t.out.Error(err.Error())
+	return err
+}
+
+// admitSystemPrompt gates the admitted prompt against the context window,
+// compacting once when allowed. Compaction admission is an eval-token
+// accounting decision: a turn with a hard generation budget may not spend an
+// untracked summarization generation.
+func (t *turnRuntime) admitSystemPrompt(ctx context.Context) error {
+	estimated := t.a.estimatePromptTokens(t.system, t.tools)
+	if receiptFloor := t.a.contextPromptFloorEstimate(t.turnModel, estimateHostPromptTokens(t.system, t.tools)); estimated < receiptFloor {
+		estimated = receiptFloor
+	}
+	if !shouldCompactForContext(estimated, t.turnNumCtx) {
+		return nil
+	}
+	if t.compactionForbidden {
+		return t.rejectContextPrompt(estimated, true)
+	}
+	if t.lg != nil {
+		t.lg.Info("compaction", "phase", "before_request", "prompt_tokens", estimated, "num_ctx", t.turnNumCtx)
+	}
+	if t.a.compactForContextAndModel(ctx, t.out, t.turnNumCtx, t.turnModel) {
+		t.rebuildSystem(ctx)
+	}
+	estimated = t.a.estimatePromptTokens(t.system, t.tools)
+	if receiptFloor := t.a.contextPromptFloorEstimate(t.turnModel, estimateHostPromptTokens(t.system, t.tools)); estimated < receiptFloor {
+		estimated = receiptFloor
+	}
+	if shouldCompactForContext(estimated, t.turnNumCtx) {
+		return t.rejectContextPrompt(estimated, false)
+	}
+	return nil
+}
+
+// recordAssistantTurn commits the durable requested-execution records for the
+// iteration's tool calls and appends the assistant message to history.
+func (t *turnRuntime) recordAssistantTurn(ctx context.Context, i int, text string, toolCalls []llm.ToolCall) ([]trackedToolExecution, error) {
+	var providerCallIDs []string
+	if !t.hostContinuationBatch {
+		providerCallIDs = make([]string, len(toolCalls))
+		for toolIndex := range toolCalls {
+			providerCallIDs[toolIndex] = toolCalls[toolIndex].ID
+		}
+	}
+	t.a.ensureToolCallIDs(toolCalls, t.turnID, i+1)
+	var trackedExecutions []trackedToolExecution
+	var err error
+	if t.hostContinuationBatch {
+		trackedExecutions, err = t.a.newTrackedContinuationExecutions(ctx, t.execRuntime, t.turnID, i+1, toolCalls)
+	} else {
+		trackedExecutions, err = t.a.newTrackedExecutions(ctx, t.execRuntime, t.turnID, i+1, toolCalls, providerCallIDs)
+	}
+	if err != nil {
+		t.out.Error(fmt.Sprintf("record requested tool execution: %v", err))
+		return nil, fmt.Errorf("record requested tool execution: %w", err)
+	}
+
+	// Record assistant message in conversation history.
+	assistantToolCalls := toolCalls
+	if t.hostContinuationBatch {
+		assistantToolCalls = []llm.ToolCall{t.activeAutoContinuation.detachedCall()}
+		assistantToolCalls[0].ID = toolCalls[0].ID
+	}
+	assistantMsg := llm.Message{
+		Role:      "assistant",
+		Content:   text,
+		ToolCalls: assistantToolCalls,
+		HostOwned: t.hostContinuationBatch,
+	}
+	t.a.AppendMessage(assistantMsg)
+
+	// ICE: index assistant message.
+	if t.a.iceEngine != nil && assistantMsg.Content != "" {
+		if err := t.a.iceEngine.IndexMessage(ctx, "assistant", assistantMsg.Content); err != nil {
+			t.out.Error(fmt.Sprintf("ICE indexing failed: %v", err))
+		}
+	}
+	return trackedExecutions, nil
+}
+
+// finishDirectResponse settles a turn whose provider response carried no tool
+// calls: optional auto-memory detection, final compaction, and turn-end
+// logging.
+func (t *turnRuntime) finishDirectResponse(ctx context.Context, i int, assistantContent string) error {
+	// ICE: detect auto-memories from the exchange.
+	t.a.mu.RLock()
+	hasEnoughMessages := len(t.a.messages) >= 2
+	var userContent string
+	if hasEnoughMessages {
+		for idx := len(t.a.messages) - 2; idx >= 0; idx-- {
+			if t.a.messages[idx].Role == "user" {
+				userContent = t.a.messages[idx].Content
+				break
+			}
+		}
+	}
+	t.a.mu.RUnlock()
+
+	// Background auto-memory is an untracked optional generation, which
+	// only an eval-token budget forbids; wall-limited turns keep it.
+	if t.limits.MaxEvalTokens == 0 && t.a.iceEngine != nil && hasEnoughMessages && userContent != "" {
+		t.a.iceEngine.DetectAutoMemory(ctx, userContent, assistantContent)
+	}
+	estimatedPromptTokens := t.a.estimatePromptTokens(t.system, t.tools)
+	if estimatedPromptTokens < t.lastPromptTokens {
+		estimatedPromptTokens = t.lastPromptTokens
+	}
+	if receiptFloor := t.a.contextPromptFloorEstimate(t.turnModel, estimateHostPromptTokens(t.system, t.tools)); estimatedPromptTokens < receiptFloor {
+		estimatedPromptTokens = receiptFloor
+	}
+	if !t.compactionForbidden && shouldCompactForContext(estimatedPromptTokens, t.turnNumCtx) {
+		if t.lg != nil {
+			t.lg.Info("compaction", "phase", "direct_response", "prompt_tokens", estimatedPromptTokens, "num_ctx", t.turnNumCtx)
+		}
+		t.a.compactForContextAndModel(ctx, t.out, t.turnNumCtx, t.turnModel)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if t.lg != nil {
+		t.lg.Info("turn end", "reason", "complete", "iters", i+1, "ms", time.Since(t.turnStart).Milliseconds())
+	}
+	return nil
+}
+
+// settleIteration runs the post-dispatch bookkeeping for iteration i:
+// malformed-tool accounting, capability rerouting, compaction, and the
+// iteration-limit warning.
+func (t *turnRuntime) settleIteration(ctx context.Context, i int, toolCallCount int, outcome dispatchOutcome) error {
+	if !t.hostContinuationBatch {
+		if outcome.preflightRejections == toolCallCount {
+			t.malformedToolIterations++
+			if t.malformedToolIterations >= 2 {
+				err := fmt.Errorf("%w twice consecutively; switch to a larger model or retry with explicit tool arguments", ErrMalformedToolLoop)
+				// A malformed-tool spiral ends this segment, but verified distinct
+				// progress earlier in it belongs to the logical turn. Let the host
+				// supervisor re-prompt within its segment and digest budgets.
+				if checkpoint := t.autoProgress.segmentCheckpoint(t.turnID, i+1, t.totalEvalTokens, time.Since(t.turnStart)); checkpoint != nil {
+					if t.lg != nil {
+						t.lg.Info("AUTO segment checkpoint after malformed tool loop", "iter", i)
+					}
+					return checkpoint
+				}
+				t.out.Error(err.Error())
+				return err
+			}
+		} else {
+			t.malformedToolIterations = 0
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if outcome.capabilityRouteFailed && t.capabilityReroutes < maxCapabilityReroutesPerTurn && i < t.maxIters-1 {
+		t.capabilityReroutes++
+		t.capabilityHintText, t.capabilityHint = t.a.resolveTurnCapabilityWithPolicy(ctx, t.out, t.capabilityActivity, t.turnToolPolicy.AllowMCP)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		t.loadedContext = composeCapabilityContext(t.capabilityHintText, t.capabilityBaseContext)
+		t.system = buildSystemPromptForModelBudgetContextWithSkillCatalogAndPathGrants(ctx, t.modePrefix, t.tools, t.a.skillContent, t.skillCatalog, t.loadedContext, t.a.memoryStore, t.iceContext, t.turnFilesystem.workDir, t.turnFilesystem.ignoreContent, t.turnModel, t.turnNumCtx, t.readGrants, t.writeGrants)
+	}
+
+	// A queued host read executes before another provider request. Deferring
+	// compaction avoids inserting an untracked summarization generation between
+	// the source receipt and its exact continuation.
+	if t.queuedAutoContinuation == nil {
+		// Check if we should compact the conversation.
+		estimatedPromptTokens := t.a.estimatePromptTokens(t.system, t.tools)
+		if estimatedPromptTokens < t.lastPromptTokens {
+			estimatedPromptTokens = t.lastPromptTokens
+		}
+		if receiptFloor := t.a.contextPromptFloorEstimate(t.turnModel, estimateHostPromptTokens(t.system, t.tools)); estimatedPromptTokens < receiptFloor {
+			estimatedPromptTokens = receiptFloor
+		}
+		if shouldCompactForContext(estimatedPromptTokens, t.turnNumCtx) {
+			if t.compactionForbidden {
+				return t.rejectContextPrompt(estimatedPromptTokens, true, "phase", "after_tools", "iter", i)
+			}
+			if t.lg != nil {
+				t.lg.Info("compaction", "iter", i, "prompt_tokens", estimatedPromptTokens, "num_ctx", t.turnNumCtx)
+			}
+			compacted := t.a.compactForContextAndModel(ctx, t.out, t.turnNumCtx, t.turnModel)
+			if compacted {
+				// Rebuild system prompt after compaction (memory may have changed).
+				t.system = buildSystemPromptForModelBudgetContextWithSkillCatalogAndPathGrants(ctx, t.modePrefix, t.tools, t.a.skillContent, t.skillCatalog, t.loadedContext, t.a.memoryStore, t.iceContext, t.turnFilesystem.workDir, t.turnFilesystem.ignoreContent, t.turnModel, t.turnNumCtx, t.readGrants, t.writeGrants)
+			}
+			estimatedPromptTokens = t.a.estimatePromptTokens(t.system, t.tools)
+			if !compacted && estimatedPromptTokens < t.lastPromptTokens {
+				// The provider receipt is authoritative for the unchanged prompt.
+				// A failed or inapplicable compaction may not erase that floor.
+				estimatedPromptTokens = t.lastPromptTokens
+			}
+			if receiptFloor := t.a.contextPromptFloorEstimate(t.turnModel, estimateHostPromptTokens(t.system, t.tools)); estimatedPromptTokens < receiptFloor {
+				estimatedPromptTokens = receiptFloor
+			}
+			if shouldCompactForContext(estimatedPromptTokens, t.turnNumCtx) {
+				return t.rejectContextPrompt(estimatedPromptTokens, false, "phase", "after_tools", "iter", i)
+			}
+		}
+	}
+	t.previousIterationEndedWithToolResult = false
+	t.a.mu.RLock()
+	if messageCount := len(t.a.messages); messageCount > 0 {
+		t.previousIterationEndedWithToolResult = t.a.messages[messageCount-1].Role == "tool"
+	}
+	t.a.mu.RUnlock()
+
+	// Interactive modes surface their deliberately tight turn ceiling. AUTO
+	// has a larger host-owned safety budget and stays quiet while using it.
+	if t.authorityMode != AuthorityAutoScoped && i == t.maxIters-2 {
+		t.out.Error(fmt.Sprintf("approaching iteration limit (%d/%d)", i+2, t.maxIters))
+	}
+	return nil
+}
