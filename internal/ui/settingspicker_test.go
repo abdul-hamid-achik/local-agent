@@ -315,8 +315,8 @@ func TestSettingsCompactRowsShowOnlySelectedSingleLineDetail(t *testing.T) {
 	if !state.Compact || state.ItemHeight != 1 {
 		t.Fatalf("compact state = compact %v height %d, want true/1", state.Compact, state.ItemHeight)
 	}
-	if got := len(state.List.Items()); got != 7 {
-		t.Fatalf("settings item count = %d, want 7", got)
+	if got := len(state.List.Items()); got != 8 {
+		t.Fatalf("settings item count = %d, want 8", got)
 	}
 	if got := state.List.Height(); got >= 16 {
 		t.Fatalf("compact list height = %d, want denser than the normal 16 rows", got)
@@ -394,10 +394,15 @@ func TestSettingsCompactRowsFitMinimumWithLabelsAndFooter(t *testing.T) {
 	if !strings.Contains(plain, "esc close") || !strings.Contains(plain, "enter") || !strings.Contains(plain, "↑/↓") {
 		t.Fatalf("minimum settings lost actionable navigation:\n%s", rendered)
 	}
-	for _, label := range []string{"Model", "Agent profile", "Mode", "Sessions", "Compact layout", "Runtime status", "Help"} {
+	for _, label := range []string{"Model", "Provider", "Agent profile", "Mode", "Sessions", "Compact layout", "Runtime status"} {
 		if !strings.Contains(rendered, label) {
 			t.Fatalf("minimum settings hid %q behind prose:\n%s", label, rendered)
 		}
+	}
+	// With Provider added, Help can sit one viewport step down at the minimum size.
+	m.settingsPickerState.List.Select(int(settingsHelp))
+	if !strings.Contains(m.renderSettingsPicker(), "Help") {
+		t.Fatalf("Help setting missing after scroll:\n%s", m.renderSettingsPicker())
 	}
 	assertRenderedLinesFit(t, rendered, minTerminalWidth)
 	assertRenderedHeightFits(t, rendered, minTerminalHeight)

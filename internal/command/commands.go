@@ -167,6 +167,63 @@ func RegisterBuiltins(r *Registry) {
 	})
 
 	r.Register(&Command{
+		Name:        "provider",
+		Aliases:     []string{"providers", "prov"},
+		Description: "Show or switch inference provider profiles",
+		Usage:       "/provider [name|list]",
+		Handler: func(ctx *Context, args []string) Result {
+			if len(args) > 1 {
+				return Result{Error: "usage: /provider [name|list]"}
+			}
+			names := ctx.ProviderList
+			if len(names) == 0 {
+				names = []string{"ollama"}
+			}
+			if len(args) == 0 {
+				return Result{Action: ActionShowProviderPicker}
+			}
+			if args[0] == "list" || args[0] == "ls" {
+				var b strings.Builder
+				b.WriteString("Inference providers:\n")
+				for _, name := range names {
+					marker := "  "
+					if name == ctx.Provider {
+						marker = "* "
+					}
+					fmt.Fprintf(&b, "  %s%s\n", marker, name)
+				}
+				if ctx.Provider != "" {
+					fmt.Fprintf(&b, "\n* = current (%s)\n", ctx.Provider)
+				} else {
+					b.WriteString("\n* = current\n")
+				}
+				b.WriteString("Keys stay in the process env (tvault run --only KEY).")
+				return Result{Text: b.String()}
+			}
+			target := args[0]
+			for _, name := range names {
+				if name == target || strings.EqualFold(name, target) {
+					return Result{
+						Text:   fmt.Sprintf("Switching to provider: %s", name),
+						Action: ActionSwitchProvider,
+						Data:   name,
+					}
+				}
+			}
+			// Allow switching to a known type even if not listed (flat catalog).
+			switch strings.ToLower(target) {
+			case "ollama", "xai", "openai_compatible":
+				return Result{
+					Text:   fmt.Sprintf("Switching to provider: %s", target),
+					Action: ActionSwitchProvider,
+					Data:   target,
+				}
+			}
+			return Result{Error: fmt.Sprintf("Unknown provider: %s (use /provider list)", target)}
+		},
+	})
+
+	r.Register(&Command{
 		Name:        "recover",
 		Description: "Review a paused execution and record typed evidence",
 		Usage:       "/recover",

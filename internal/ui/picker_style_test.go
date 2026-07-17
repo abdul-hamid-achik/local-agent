@@ -79,10 +79,15 @@ func TestTransientInputsAndCompactDensitySurviveThemeChange(t *testing.T) {
 	assertSameColor(t, "completion cursor", m.completionState.Filter.Styles().Cursor.Color, palette.Accent)
 
 	rendered := m.renderSettingsPicker()
-	for _, label := range []string{"Model", "Agent profile", "Mode", "Sessions", "Compact layout", "Runtime status", "Help"} {
+	for _, label := range []string{"Model", "Provider", "Agent profile", "Mode", "Sessions", "Compact layout", "Runtime status"} {
 		if !strings.Contains(rendered, label) {
 			t.Fatalf("theme change hid compact setting %q:\n%s", label, rendered)
 		}
+	}
+	// Help remains in the list; at min height it may sit one scroll step below.
+	m.settingsPickerState.List.Select(int(settingsHelp))
+	if !strings.Contains(m.renderSettingsPicker(), "Help") {
+		t.Fatalf("Help setting missing after scroll:\n%s", m.renderSettingsPicker())
 	}
 	assertRenderedLinesFit(t, rendered, minTerminalWidth)
 	assertRenderedHeightFits(t, rendered, minTerminalHeight)

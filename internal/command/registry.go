@@ -23,6 +23,8 @@ type Command struct {
 type Context struct {
 	Model            string
 	ModelList        []string
+	Provider         string   // active inference provider profile name
+	ProviderList     []string // configured provider profile names
 	AgentProfile     string
 	AgentList        []string
 	ToolCount        int
@@ -137,6 +139,8 @@ const (
 	ActionDeactivateSkill           // Deactivate skill (Data = name)
 	ActionSwitchModel               // Switch model (Data = model name)
 	ActionEnableAutoModel           // Resume availability-aware automatic routing
+	ActionSwitchProvider            // Switch inference provider profile (Data = profile name)
+	ActionShowProviderPicker        // Open provider profile picker overlay
 	ActionSwitchAgent               // Switch agent profile (Data = agent name)
 	ActionShowSessions              // Open sessions picker
 	ActionShowModelPicker           // Open model picker overlay

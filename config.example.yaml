@@ -25,8 +25,46 @@ ollama:
   # forcing swap or an OOM kill.
   num_ctx: 16384
 
+# Optional inference provider(s). Default is Ollama only.
+# Secrets are NEVER written here — only environment variable NAMES. Prefer
+# TinyVault:
+#   tvault set -p local-agent XAI_API_KEY
+#   tvault set -p local-agent OPENAI_API_KEY
+#   tvault run -p local-agent --only XAI_API_KEY,OPENAI_API_KEY -- local-agent
+#
+# Multi-profile catalog (switch with /provider <name> or LOCAL_AGENT_PROVIDER):
+# provider:
+#   active: ollama
+#   profiles:
+#     ollama:
+#       type: ollama
+#     xai:
+#       type: xai
+#       model: grok-4.5
+#       # base_url defaults to https://api.x.ai/v1
+#       # api_key_env defaults to XAI_API_KEY
+#     openai:
+#       type: openai_compatible
+#       base_url: https://api.openai.com/v1
+#       model: gpt-4.1
+#       api_key_env: OPENAI_API_KEY
+#       context_size: 128000
+#     openrouter:
+#       type: openai_compatible
+#       base_url: https://openrouter.ai/api/v1
+#       model: anthropic/claude-sonnet-4
+#       api_key_env: OPENROUTER_API_KEY
+#
+# Flat single-provider form (still supported):
+# provider:
+#   type: xai
+#   model: grok-4.5
+#
+# Remote profiles require privacy.local_only: false (or LOCAL_AGENT_LOCAL_ONLY=false).
+
 # Enforce local-machine-only Ollama and remote MCP endpoints. Approved shell tools
 # remain an explicit network-capable boundary until OS sandboxing lands.
+# Set false when using a remote provider (xAI, OpenAI, OpenRouter, …).
 privacy:
   local_only: true
 

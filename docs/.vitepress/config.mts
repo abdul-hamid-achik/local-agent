@@ -163,6 +163,7 @@ export default defineConfig({
         text: 'Use local-agent',
         items: [
           { text: 'Ollama Models', link: '/ollama-models' },
+          { text: 'Remote Providers', link: '/providers' },
           { text: 'Modes and Goals', link: '/modes-and-goals' },
           { text: 'Expert Teams', link: '/experts' },
           { text: 'Sessions and Memory', link: '/sessions-and-memory' },
@@ -188,6 +189,7 @@ export default defineConfig({
           { text: 'Overview', link: '/' },
           { text: 'Getting Started', link: '/getting-started' },
           { text: 'Ollama Models', link: '/ollama-models' },
+          { text: 'Remote Providers', link: '/providers' },
         ],
       },
       {

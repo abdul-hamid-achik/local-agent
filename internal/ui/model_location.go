@@ -10,6 +10,17 @@ func (m *Model) currentModelSurfaceLabel(compact bool) string {
 		return ""
 	}
 	name := sanitizeTerminalSingleLine(m.model)
+	if m.modelManager != nil && m.modelManager.RemoteProvider() {
+		provider := sanitizeTerminalSingleLine(m.activeProviderName())
+		if provider == "" {
+			provider = "remote"
+		}
+		boundary := strings.ToUpper(provider) + " · remote prompts"
+		if compact || name == "" {
+			return boundary
+		}
+		return strings.Join([]string{boundary, name}, " · ")
+	}
 	descriptor, ok := m.ollamaModelDescriptor(m.model)
 	if !ok {
 		return name
@@ -33,6 +44,9 @@ func (m *Model) currentModelSurfaceLabel(compact bool) string {
 func (m *Model) currentModelIsNonLocal() bool {
 	if m == nil {
 		return false
+	}
+	if m.modelManager != nil && m.modelManager.RemoteProvider() {
+		return true
 	}
 	descriptor, ok := m.ollamaModelDescriptor(m.model)
 	return ok && descriptor.Source != OllamaModelLocal

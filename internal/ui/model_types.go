@@ -33,6 +33,7 @@ const (
 	OverlaySessionsPicker
 	OverlaySettings
 	OverlayAgentPicker
+	OverlayProviderPicker
 	OverlayModePicker
 	OverlayGoalForm
 	OverlayRuntimeStatus

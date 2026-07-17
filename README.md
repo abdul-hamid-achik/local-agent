@@ -864,7 +864,7 @@ Top-level built-in, memory, and MCP calls execute deterministically in model ord
 
 Known boundaries are documented here so the TUI does not promise more than the runtime provides:
 
-- Ollama is the only implemented inference adapter. llama.cpp, MLX, and generic local OpenAI-compatible endpoints are not implemented.
+- Ollama is the default inference adapter. Optional OpenAI-compatible remote chat (including xAI Grok) is supported via `provider` config and env-sourced API keys (prefer TinyVault `tvault run --only …`). SuperGrok OAuth is not implemented.
 - Model routing remains heuristic. Expert fan-out uses measured CPU and memory, including process-visible Linux cgroup limits, where the host exposes them; it has no portable discrete-VRAM or model-specific KV-allocation telemetry. General model admission still uses the conservative 16 GB-oriented guard.
 - Small models can emit malformed or repetitive tool calls. Keep important work versioned and inspect every diff.
 - `privacy.local_only` validates endpoints but does not sandbox approved shell or STDIO MCP processes.

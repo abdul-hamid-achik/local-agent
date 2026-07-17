@@ -186,6 +186,7 @@ type Model struct {
 	modelInventoryRequest    uint64
 	settingsPickerState      *SettingsPickerState
 	agentPickerState         *AgentPickerState
+	providerPickerState      *ProviderPickerState
 	modePickerState          *ModePickerState
 	runtimeStatusState       *RuntimeStatusState
 	planFormState            *PlanFormState
@@ -822,6 +823,12 @@ func (m *Model) updateActiveOverlayMessage(msg tea.Msg) tea.Cmd {
 		if m.agentPickerState != nil {
 			var cmd tea.Cmd
 			m.agentPickerState.List, cmd = m.agentPickerState.List.Update(msg)
+			return cmd
+		}
+	case OverlayProviderPicker:
+		if m.providerPickerState != nil {
+			var cmd tea.Cmd
+			m.providerPickerState.List, cmd = m.providerPickerState.List.Update(msg)
 			return cmd
 		}
 	case OverlayModePicker:

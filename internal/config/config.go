@@ -33,9 +33,14 @@ type Config struct {
 	// precedence. It is runtime metadata only and is never serialized.
 	SourcePath string         `yaml:"-" json:"-"`
 	Ollama     OllamaConfig   `yaml:"ollama"`
-	Model      ModelConfig    `yaml:"model,omitempty"`
-	Agents     AgentsConfig   `yaml:"agents,omitempty"`
-	Servers    []ServerConfig `yaml:"servers,omitempty"`
+	// Provider selects the inference adapter. Empty/ollama keeps the existing
+	// Ollama path. Multi-profile catalogs use active + profiles; flat type/
+	// base_url/model remains supported. Credentials are env names only.
+	// Prefer TinyVault: tvault run --only KEY -- local-agent.
+	Provider      ProviderConfig      `yaml:"provider,omitempty"`
+	Model         ModelConfig         `yaml:"model,omitempty"`
+	Agents        AgentsConfig        `yaml:"agents,omitempty"`
+	Servers       []ServerConfig      `yaml:"servers,omitempty"`
 	// SkillsDir is decoded only to reject the retired split skill root with a
 	// clear migration error instead of silently ignoring an old configuration.
 	SkillsDir     string              `yaml:"skills_dir,omitempty"`
@@ -495,10 +500,15 @@ func (c *Config) Validate() error {
 	if strings.TrimSpace(c.SkillsDir) != "" {
 		return errors.New("config: skills_dir is no longer supported; move skills under the selected agents directory at skills/<name>/SKILL.md")
 	}
-	if c.Ollama.Model == "" {
+	if err := c.validateProvider(); err != nil {
+		return err
+	}
+	_, activeProfile, activeErr := c.Provider.ActiveProfile()
+	activeRemote := activeErr == nil && activeProfile.IsRemote()
+	if c.Ollama.Model == "" && !activeRemote {
 		return fmt.Errorf("config: ollama.model is empty (set a model, e.g. qwen3.5:2b)")
 	}
-	if c.Privacy.LocalOnly {
+	if c.Privacy.LocalOnly && !activeRemote {
 		if err := CheckLocalModelNameMemorySafe(c.Ollama.Model); err != nil {
 			return fmt.Errorf("config: %w", err)
 		}
@@ -764,8 +774,52 @@ func applyEnvOverrides(cfg *Config) error {
 	if v := os.Getenv("OLLAMA_HOST"); v != "" {
 		cfg.Ollama.BaseURL = v
 	}
+	// Provider selection first so model overrides can target the remote profile.
+	if v := os.Getenv("LOCAL_AGENT_PROVIDER"); v != "" {
+		// Prefer multi-profile active name when a catalog exists; otherwise treat
+		// the value as a flat type (xai / openai_compatible / ollama).
+		if cfg.Provider.HasProfiles() {
+			if _, ok := cfg.Provider.LookupProfile(v); ok {
+				cfg.Provider.Active = v
+			} else {
+				// Still allow setting active to an unknown name so Validate fails clearly,
+				// or fall back to flat type when no catalog match.
+				cfg.Provider.Active = v
+			}
+		} else {
+			cfg.Provider.Type = v
+			cfg.Provider.Active = v
+		}
+	}
+	if v := os.Getenv("LOCAL_AGENT_PROVIDER_BASE_URL"); v != "" {
+		cfg.Provider.BaseURL = v
+		applyActiveProfileField(cfg, func(p *ProviderProfile) { p.BaseURL = v })
+	}
+	if v := os.Getenv("LOCAL_AGENT_PROVIDER_MODEL"); v != "" {
+		cfg.Provider.Model = v
+		applyActiveProfileField(cfg, func(p *ProviderProfile) { p.Model = v })
+	}
+	if v := os.Getenv("LOCAL_AGENT_PROVIDER_API_KEY_ENV"); v != "" {
+		cfg.Provider.APIKeyEnv = v
+		applyActiveProfileField(cfg, func(p *ProviderProfile) { p.APIKeyEnv = v })
+	}
+	if v := os.Getenv("LOCAL_AGENT_PROVIDER_CONTEXT_SIZE"); v != "" {
+		size := parseEnvInt(v, cfg.Provider.ContextSize)
+		cfg.Provider.ContextSize = size
+		applyActiveProfileField(cfg, func(p *ProviderProfile) { p.ContextSize = size })
+	}
 	if v := os.Getenv("LOCAL_AGENT_MODEL"); v != "" {
 		cfg.Ollama.Model = v
+		if active, profile, err := cfg.Provider.ActiveProfile(); err == nil && profile.IsRemote() {
+			cfg.Provider.Model = v
+			if cfg.Provider.HasProfiles() {
+				p := cfg.Provider.Profiles[active]
+				p.Model = v
+				cfg.Provider.Profiles[active] = p
+			}
+		} else if cfg.Provider.IsRemote() {
+			cfg.Provider.Model = v
+		}
 	}
 	if v := os.Getenv("LOCAL_AGENT_AGENTS_DIR"); v != "" {
 		cfg.Agents.Dir = v
@@ -801,6 +855,24 @@ func applyEnvOverrides(cfg *Config) error {
 		}
 	}
 	return nil
+}
+
+// applyActiveProfileField mutates the active multi-profile entry when a catalog
+// is present so env overrides land on the profile that will actually run.
+func applyActiveProfileField(cfg *Config, mutate func(*ProviderProfile)) {
+	if cfg == nil || !cfg.Provider.HasProfiles() || mutate == nil {
+		return
+	}
+	name := cfg.Provider.ActiveName()
+	profile, ok := cfg.Provider.LookupProfile(name)
+	if !ok {
+		return
+	}
+	mutate(&profile)
+	if cfg.Provider.Profiles == nil {
+		cfg.Provider.Profiles = make(map[string]ProviderProfile)
+	}
+	cfg.Provider.Profiles[name] = profile
 }
 
 func parseEnvInt(v string, defaultVal int) int {

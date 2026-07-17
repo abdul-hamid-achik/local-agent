@@ -12,6 +12,7 @@ type settingsAction int
 
 const (
 	settingsModel settingsAction = iota
+	settingsProvider
 	settingsAgent
 	settingsMode
 	settingsSessions
@@ -266,6 +267,19 @@ func (m *Model) settingsItems() []settingsItem {
 	if len(m.ollamaModels) > 0 {
 		modelDescription = ollamaInventorySummary(m.ollamaModels)
 	}
+	providerValue := m.activeProviderName()
+	if providerValue == "" {
+		providerValue = "ollama"
+	}
+	if m.modelManager != nil && m.modelManager.RemoteProvider() {
+		providerValue += " · remote"
+	} else {
+		providerValue += " · local"
+	}
+	providerDescription := "Switch Ollama or OpenAI-compatible remote profiles"
+	if names := m.providerNames(); len(names) > 1 {
+		providerDescription = fmt.Sprintf("%d profiles · /provider", len(names))
+	}
 	runtimeDescription := "Inspect model, approval posture, tools, servers, and failures"
 	if len(m.mcpServers) > 0 {
 		runtimeDescription = fmt.Sprintf("%d %s · %d connected · %d unavailable · inspect approval and runtime details",
@@ -280,6 +294,7 @@ func (m *Model) settingsItems() []settingsItem {
 	}
 	return []settingsItem{
 		{action: settingsModel, title: "Model", value: modelValue, description: modelDescription},
+		{action: settingsProvider, title: "Provider", value: providerValue, description: providerDescription},
 		{action: settingsAgent, title: "Agent profile", value: profile, description: "Change prompt, skills, model, and MCP scope"},
 		{action: settingsMode, title: modeTitle, value: m.modeConfigs[m.mode].Label, description: modeDescription},
 		{action: settingsSessions, title: "Sessions", value: "Resume", description: "Open a saved workspace session"},
@@ -316,6 +331,8 @@ func (m *Model) activateSettings(action settingsAction) tea.Cmd {
 	switch action {
 	case settingsModel:
 		m.openSettingsChild(m.openModelPicker)
+	case settingsProvider:
+		m.openSettingsChild(m.openProviderPicker)
 	case settingsAgent:
 		m.openSettingsChild(m.openAgentPicker)
 	case settingsMode:

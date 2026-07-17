@@ -1,0 +1,84 @@
+package llm
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/abdul-hamid-achik/local-agent/internal/config"
+)
+
+func TestSwitchProviderRemoteAndBack(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":[{"id":"grok-4.5"}]}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	t.Setenv("XAI_API_KEY", "test-key")
+
+	manager := NewModelManager("http://127.0.0.1:9", 4096)
+	defer manager.Close()
+	manager.ConfigureProviderCatalog(config.ProviderConfig{
+		Active: "ollama",
+		Profiles: map[string]config.ProviderProfile{
+			"ollama": {Type: config.ProviderTypeOllama},
+			"xai": {
+				Type:    config.ProviderTypeXAI,
+				BaseURL: server.URL + "/v1",
+				Model:   "grok-4.5",
+			},
+		},
+	}, false, "qwen3.5:2b")
+
+	if err := manager.SwitchProvider("xai"); err != nil {
+		t.Fatal(err)
+	}
+	if !manager.RemoteProvider() || manager.Model() != "grok-4.5" {
+		t.Fatalf("remote state: remote=%v model=%q", manager.RemoteProvider(), manager.Model())
+	}
+	if manager.ActiveProviderName() != "xai" {
+		t.Fatalf("active = %q", manager.ActiveProviderName())
+	}
+
+	if err := manager.SwitchProvider("ollama"); err != nil {
+		t.Fatal(err)
+	}
+	if manager.RemoteProvider() {
+		t.Fatal("expected ollama path")
+	}
+	if manager.Model() != "qwen3.5:2b" {
+		t.Fatalf("restored model = %q", manager.Model())
+	}
+}
+
+func TestSwitchProviderMissingKey(t *testing.T) {
+	t.Setenv("XAI_API_KEY", "")
+	manager := NewModelManager("http://127.0.0.1:9", 4096)
+	defer manager.Close()
+	manager.ConfigureProviderCatalog(config.ProviderConfig{
+		Profiles: map[string]config.ProviderProfile{
+			"xai": {Type: config.ProviderTypeXAI},
+		},
+	}, false, "qwen3.5:2b")
+	err := manager.SwitchProvider("xai")
+	if err == nil || !contains(err.Error(), "XAI_API_KEY") {
+		t.Fatalf("expected missing key error, got %v", err)
+	}
+}
+
+func contains(s, sub string) bool {
+	return len(s) >= len(sub) && (s == sub || len(sub) == 0 ||
+		(len(s) > 0 && (func() bool {
+			for i := 0; i+len(sub) <= len(s); i++ {
+				if s[i:i+len(sub)] == sub {
+					return true
+				}
+			}
+			return false
+		})()))
+}

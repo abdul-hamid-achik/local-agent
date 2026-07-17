@@ -19,6 +19,8 @@ func (m *Model) buildCommandContext() *command.Context {
 	ctx := &command.Context{
 		Model:              m.model,
 		ModelList:          m.modelList,
+		Provider:           m.activeProviderName(),
+		ProviderList:       m.providerNames(),
 		AgentProfile:       m.agentProfile,
 		AgentList:          m.agentList,
 		ToolCount:          m.toolCount,
@@ -248,6 +250,27 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 			m.router.RecordOverride(query, result.Data)
 		}
 		m.selectModel(result.Data)
+		return nil
+
+	case command.ActionSwitchProvider:
+		if err := m.switchProvider(result.Data); err != nil {
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: err.Error()})
+		} else {
+			text := result.Text
+			if text == "" {
+				text = fmt.Sprintf("Provider: %s · model %s", m.activeProviderName(), m.model)
+			} else {
+				text = fmt.Sprintf("%s · model %s", text, m.model)
+			}
+			m.entries = append(m.entries, ChatEntry{Kind: "system", Content: text})
+		}
+		m.viewport.SetContent(m.renderEntries())
+		m.resumeFollow()
+		return nil
+
+	case command.ActionShowProviderPicker:
+		m.overlayParent = OverlayNone
+		m.openProviderPicker()
 		return nil
 
 	case command.ActionEnableAutoModel:

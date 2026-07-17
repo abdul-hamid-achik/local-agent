@@ -42,6 +42,29 @@ func TestManualModelRoundTripAndClear(t *testing.T) {
 	}
 }
 
+func TestManualProviderPreservesModelPreference(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "preferences.json")
+	store := NewStore(path)
+	if err := store.SetManualModel("qwen3.5:2b"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetManualProvider("xai"); err != nil {
+		t.Fatal(err)
+	}
+	if model, ok, err := NewStore(path).LoadManualModel(); err != nil || !ok || model != "qwen3.5:2b" {
+		t.Fatalf("model after provider set = %q ok=%v err=%v", model, ok, err)
+	}
+	if provider, ok, err := NewStore(path).LoadManualProvider(); err != nil || !ok || provider != "xai" {
+		t.Fatalf("provider = %q ok=%v err=%v", provider, ok, err)
+	}
+	if err := store.ClearManualModel(); err != nil {
+		t.Fatal(err)
+	}
+	if provider, ok, err := NewStore(path).LoadManualProvider(); err != nil || !ok || provider != "xai" {
+		t.Fatalf("provider after model clear = %q ok=%v err=%v", provider, ok, err)
+	}
+}
+
 func TestMissingPreferenceDirectoryLoadsAsEmpty(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "not-created", "preferences.json")
 	model, ok, err := NewStore(path).LoadManualModel()

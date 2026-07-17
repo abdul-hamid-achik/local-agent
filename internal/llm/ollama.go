@@ -59,6 +59,11 @@ func IsRetryableTransport(err error) bool {
 		return httpErr.StatusCode >= http.StatusInternalServerError ||
 			httpErr.StatusCode == http.StatusTooManyRequests
 	}
+	var openAIErr *openAIHTTPError
+	if errors.As(err, &openAIErr) {
+		return openAIErr.StatusCode >= http.StatusInternalServerError ||
+			openAIErr.StatusCode == http.StatusTooManyRequests
+	}
 	var netErr net.Error
 	return errors.As(err, &netErr)
 }

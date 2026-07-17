@@ -24,6 +24,7 @@ type Completer struct {
 	registry       *command.Registry
 	commands       []*command.Command
 	models         []string
+	providers      []string
 	skills         []string
 	agents         []string
 	workDir        string
@@ -109,6 +110,12 @@ func (c *Completer) completeCommandAction(commandName, prefix string) []Completi
 	commandName = strings.ToLower(strings.TrimSpace(commandName))
 	if commandName == "g" {
 		commandName = "goal"
+	}
+	switch commandName {
+	case "provider", "providers", "prov":
+		return c.completeProviderArgs(prefix)
+	case "model", "models", "m", "ml":
+		return c.completeModelArgs(prefix)
 	}
 	states := c.registry.Actions(commandName, nil)
 	completions := make([]Completion, 0, len(states))
@@ -547,12 +554,89 @@ func (c *Completer) UpdateModels(models []string) {
 	c.models = models
 }
 
+func (c *Completer) UpdateProviders(providers []string) {
+	c.providers = providers
+}
+
 func (c *Completer) UpdateSkills(skills []string) {
 	c.skills = skills
 }
 
 func (c *Completer) UpdateAgents(agents []string) {
 	c.agents = agents
+}
+
+func (c *Completer) completeProviderArgs(prefix string) []Completion {
+	prefix = strings.ToLower(strings.TrimSpace(prefix))
+	fixed := []struct {
+		arg, desc string
+	}{
+		{"list", "List configured provider profiles"},
+	}
+	var out []Completion
+	for _, item := range fixed {
+		if prefix != "" && !strings.HasPrefix(item.arg, prefix) {
+			continue
+		}
+		out = append(out, Completion{
+			Label:       "/provider " + item.arg,
+			Insert:      "/provider " + item.arg + " ",
+			Category:    "action",
+			Description: item.desc,
+			SearchTerms: item.arg,
+		})
+	}
+	for _, name := range c.providers {
+		lower := strings.ToLower(name)
+		if prefix != "" && !strings.HasPrefix(lower, prefix) {
+			continue
+		}
+		out = append(out, Completion{
+			Label:       "/provider " + name,
+			Insert:      "/provider " + name + " ",
+			Category:    "provider",
+			Description: "Switch inference provider",
+			SearchTerms: name,
+		})
+	}
+	return out
+}
+
+func (c *Completer) completeModelArgs(prefix string) []Completion {
+	prefix = strings.ToLower(strings.TrimSpace(prefix))
+	fixed := []struct {
+		arg, desc string
+	}{
+		{"list", "List admitted models"},
+		{"auto", "Resume automatic local model routing"},
+	}
+	var out []Completion
+	for _, item := range fixed {
+		if prefix != "" && !strings.HasPrefix(item.arg, prefix) {
+			continue
+		}
+		out = append(out, Completion{
+			Label:       "/model " + item.arg,
+			Insert:      "/model " + item.arg + " ",
+			Category:    "action",
+			Description: item.desc,
+			SearchTerms: item.arg,
+		})
+	}
+	for _, name := range c.models {
+		lower := strings.ToLower(name)
+		if prefix != "" && !strings.HasPrefix(lower, prefix) {
+			continue
+		}
+		out = append(out, Completion{
+			Label:       "/model " + name,
+			Insert:      "/model " + name + " ",
+			Category:    "model",
+			Description: "Switch model",
+			SearchTerms: name,
+		})
+	}
+	return out
 }
 
 // SetIgnorePatterns sets the ignore patterns used to filter file completions.

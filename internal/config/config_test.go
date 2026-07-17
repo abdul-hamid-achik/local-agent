@@ -61,6 +61,128 @@ func TestAutoIterationEnvironmentOverride(t *testing.T) {
 	}
 }
 
+func TestProviderXAIDefaultsAndValidation(t *testing.T) {
+	cfg := defaults()
+	cfg.Provider = ProviderConfig{Type: ProviderTypeXAI}
+	cfg.Privacy.LocalOnly = false
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	resolved := cfg.Provider.Resolve()
+	if resolved.BaseURL != "https://api.x.ai/v1" {
+		t.Fatalf("base_url = %q", resolved.BaseURL)
+	}
+	if resolved.APIKeyEnv != "XAI_API_KEY" {
+		t.Fatalf("api_key_env = %q", resolved.APIKeyEnv)
+	}
+	if resolved.Model != "grok-4.5" {
+		t.Fatalf("model = %q", resolved.Model)
+	}
+}
+
+func TestProviderMultiProfileCatalog(t *testing.T) {
+	cfg := defaults()
+	cfg.Privacy.LocalOnly = false
+	cfg.Provider = ProviderConfig{
+		Active: "xai",
+		Profiles: map[string]ProviderProfile{
+			"ollama": {Type: ProviderTypeOllama},
+			"xai":    {Type: ProviderTypeXAI, Model: "grok-4.5"},
+			"openai": {
+				Type:      ProviderTypeOpenAICompatible,
+				BaseURL:   "https://api.openai.com/v1",
+				Model:     "gpt-4.1",
+				APIKeyEnv: "OPENAI_API_KEY",
+			},
+		},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	name, profile, err := cfg.Provider.ActiveProfile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != "xai" || profile.APIKeyEnv != "XAI_API_KEY" {
+		t.Fatalf("active = %q %#v", name, profile)
+	}
+	envs := cfg.Provider.AllAPIKeyEnvs()
+	if len(envs) != 2 {
+		t.Fatalf("api key envs = %#v", envs)
+	}
+	names := cfg.Provider.ProfileNames()
+	if len(names) != 3 {
+		t.Fatalf("profiles = %#v", names)
+	}
+}
+
+func TestProviderActiveMissingProfile(t *testing.T) {
+	cfg := defaults()
+	cfg.Privacy.LocalOnly = false
+	cfg.Provider = ProviderConfig{
+		Active: "missing",
+		Profiles: map[string]ProviderProfile{
+			"ollama": {Type: ProviderTypeOllama},
+		},
+	}
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "active") {
+		t.Fatalf("expected active error, got %v", err)
+	}
+}
+
+func TestProviderRemoteRejectedWhenLocalOnly(t *testing.T) {
+	cfg := defaults()
+	cfg.Provider = ProviderConfig{Type: ProviderTypeXAI}
+	cfg.Privacy.LocalOnly = true
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "local_only") {
+		t.Fatalf("expected local_only rejection, got %v", err)
+	}
+}
+
+func TestProviderAPIKeyFromEnv(t *testing.T) {
+	t.Setenv("XAI_API_KEY", "secret-value")
+	cfg := ProviderConfig{Type: ProviderTypeXAI}
+	got, err := cfg.ResolveAPIKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "secret-value" {
+		t.Fatalf("key = %q", got)
+	}
+}
+
+func TestProviderAPIKeyMissingHintsTinyVault(t *testing.T) {
+	t.Setenv("XAI_API_KEY", "")
+	cfg := ProviderConfig{Type: ProviderTypeXAI}
+	_, err := cfg.ResolveAPIKey()
+	if err == nil || !strings.Contains(err.Error(), "tvault run") {
+		t.Fatalf("expected tvault hint, got %v", err)
+	}
+}
+
+func TestProviderEnvOverrides(t *testing.T) {
+	t.Setenv("LOCAL_AGENT_PROVIDER", "openai_compatible")
+	t.Setenv("LOCAL_AGENT_PROVIDER_BASE_URL", "https://openrouter.ai/api/v1")
+	t.Setenv("LOCAL_AGENT_PROVIDER_MODEL", "anthropic/claude-sonnet-4")
+	t.Setenv("LOCAL_AGENT_PROVIDER_API_KEY_ENV", "OPENROUTER_API_KEY")
+	t.Setenv("LOCAL_AGENT_LOCAL_ONLY", "false")
+	cfg := defaults()
+	if err := applyEnvOverrides(&cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Provider.Type != "openai_compatible" || cfg.Provider.Model != "anthropic/claude-sonnet-4" {
+		t.Fatalf("provider = %#v", cfg.Provider)
+	}
+	if cfg.Privacy.LocalOnly {
+		t.Fatal("expected local_only false")
+	}
+}
+
 func TestApplyEnvOverrides(t *testing.T) {
 	tests := []struct {
 		name    string

@@ -2,8 +2,10 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -34,6 +36,17 @@ type ModelManager struct {
 	cloudModels  map[string]struct{}
 	cloudGrants  map[string]struct{}
 	nativeCtx    map[string]int
+	// remote, when non-nil, routes ChatStream/Ping/Model through an
+	// OpenAI-compatible provider instead of Ollama. Embeddings still use
+	// Ollama when ICE is enabled.
+	remote        *OpenAICompatibleClient
+	remoteContext int
+	remoteLabel   string
+	// Provider catalog for multi-profile switching (/provider).
+	providerCatalog config.ProviderConfig
+	providerActive  string
+	ollamaFallback  string // model restored when switching back to ollama
+	privacyLocalOnly bool
 }
 
 const localInventoryTTL = 30 * time.Second
@@ -74,6 +87,280 @@ func NewModelManager(baseURL string, numCtx int) *ModelManager {
 		cloudGrants: make(map[string]struct{}),
 		nativeCtx:   make(map[string]int),
 	}
+}
+
+// ConfigureProviderCatalog installs the multi-profile provider definitions used
+// by /provider. localOnly is the host privacy gate for remote base URLs.
+func (m *ModelManager) ConfigureProviderCatalog(catalog config.ProviderConfig, localOnly bool, ollamaModel string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.providerCatalog = catalog
+	m.privacyLocalOnly = localOnly
+	if strings.TrimSpace(ollamaModel) != "" {
+		m.ollamaFallback = ollamaModel
+	}
+	if m.providerActive == "" {
+		m.providerActive = catalog.ActiveName()
+	}
+}
+
+// ConfigureRemoteProvider attaches an OpenAI-compatible chat backend. When set,
+// ordinary chat, ping, and model selection use the remote client. Local Ollama
+// inventory, admission guards, and embeddings remain available for ICE.
+func (m *ModelManager) ConfigureRemoteProvider(client *OpenAICompatibleClient, contextSize int, label string) error {
+	if client == nil {
+		return errors.New("remote provider client is nil")
+	}
+	if contextSize <= 0 {
+		contextSize = 128000
+	}
+	if strings.TrimSpace(label) == "" {
+		label = "remote"
+	}
+	m.inferenceMu.Lock()
+	defer m.inferenceMu.Unlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.attachRemoteLocked(client, contextSize, label)
+}
+
+func (m *ModelManager) attachRemoteLocked(client *OpenAICompatibleClient, contextSize int, label string) error {
+	m.remote = client
+	m.remoteContext = contextSize
+	m.remoteLabel = label
+	m.providerActive = label
+	m.currentModel = client.Model()
+	m.localMu.Lock()
+	m.cloudKnown = true
+	if m.cloudModels == nil {
+		m.cloudModels = make(map[string]struct{})
+	}
+	m.cloudModels[config.CanonicalModelName(client.Model())] = struct{}{}
+	if m.nativeCtx == nil {
+		m.nativeCtx = make(map[string]int)
+	}
+	m.nativeCtx[config.CanonicalModelName(client.Model())] = contextSize
+	if m.cloudGrants == nil {
+		m.cloudGrants = make(map[string]struct{})
+	}
+	m.cloudGrants[config.CanonicalModelName(client.Model())] = struct{}{}
+	m.localMu.Unlock()
+	return nil
+}
+
+// ClearRemoteProvider returns chat inference to the local Ollama path.
+func (m *ModelManager) ClearRemoteProvider() {
+	m.inferenceMu.Lock()
+	defer m.inferenceMu.Unlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.remote = nil
+	m.remoteContext = 0
+	m.remoteLabel = ""
+	if m.providerActive == "" || m.providerActive != ProviderTypeOllamaName(m.providerCatalog) {
+		m.providerActive = "ollama"
+	}
+}
+
+func ProviderTypeOllamaName(catalog config.ProviderConfig) string {
+	if catalog.HasProfiles() {
+		if _, ok := catalog.LookupProfile("ollama"); ok {
+			return "ollama"
+		}
+	}
+	return "ollama"
+}
+
+// SwitchProvider activates a named profile from the installed catalog.
+// Remote profiles resolve API keys from the process environment at switch time.
+func (m *ModelManager) SwitchProvider(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return errors.New("provider name is empty")
+	}
+	if err := m.admission.acquireOrdinary(context.Background()); err != nil {
+		return err
+	}
+	defer m.admission.releaseOrdinary()
+
+	m.switchMu.Lock()
+	defer m.switchMu.Unlock()
+	m.inferenceMu.Lock()
+	defer m.inferenceMu.Unlock()
+
+	m.mu.Lock()
+	catalog := m.providerCatalog
+	localOnly := m.privacyLocalOnly
+	fallback := m.ollamaFallback
+	current := m.currentModel
+	m.mu.Unlock()
+
+	profileName, profile, err := resolveSwitchTarget(catalog, name)
+	if err != nil {
+		return err
+	}
+	if err := config.ValidateProviderProfile(profileName, profile, localOnly); err != nil {
+		return err
+	}
+
+	if !profile.IsRemote() {
+		restore := fallback
+		if restore == "" {
+			restore = current
+		}
+		if strings.TrimSpace(profile.Model) != "" {
+			// Optional model pin on an ollama profile
+			restore = profile.Model
+		}
+		if restore == "" {
+			return errors.New("no Ollama model available to restore; set ollama.model")
+		}
+		m.mu.Lock()
+		m.remote = nil
+		m.remoteContext = 0
+		m.remoteLabel = ""
+		m.providerActive = profileName
+		m.mu.Unlock()
+		inventoryCtx, cancelInventory := context.WithTimeout(context.Background(), 2*time.Second)
+		_ = m.ensureModelLocalFresh(inventoryCtx, restore)
+		cancelInventory()
+		m.mu.Lock()
+		m.currentModel = restore
+		m.mu.Unlock()
+		return nil
+	}
+
+	apiKey, err := profile.ResolveAPIKey()
+	if err != nil {
+		return err
+	}
+	client, err := NewOpenAICompatibleClient(OpenAICompatibleOptions{
+		BaseURL: profile.BaseURL,
+		Model:   profile.Model,
+		APIKey:  apiKey,
+	})
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	if m.remote == nil && current != "" {
+		m.ollamaFallback = current
+	}
+	err = m.attachRemoteLocked(client, profile.ContextSize, profileName)
+	m.mu.Unlock()
+	return err
+}
+
+func resolveSwitchTarget(catalog config.ProviderConfig, name string) (string, config.ProviderProfile, error) {
+	if catalog.HasProfiles() || catalog.Type != "" || catalog.Active != "" {
+		if profileName, profile, err := catalog.ResolveProfile(name); err == nil {
+			return profileName, profile, nil
+		} else if catalog.HasProfiles() {
+			return "", config.ProviderProfile{}, err
+		}
+	}
+	// Flat / ad-hoc: treat name as a provider type.
+	profile := config.ProviderProfile{Type: name}.Resolve()
+	switch config.NormalizedProviderType(profile.Type) {
+	case config.ProviderTypeOllama, config.ProviderTypeXAI, config.ProviderTypeOpenAICompatible:
+		return name, profile, nil
+	default:
+		return "", config.ProviderProfile{}, fmt.Errorf("unknown provider %q", name)
+	}
+}
+
+// RemoteProvider reports whether chat inference uses a non-Ollama adapter.
+func (m *ModelManager) RemoteProvider() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.remote != nil
+}
+
+// RemoteProviderLabel is a short UI/startup label (for example "xai").
+func (m *ModelManager) RemoteProviderLabel() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.remoteLabel != "" {
+		return m.remoteLabel
+	}
+	return m.providerActive
+}
+
+// ActiveProviderName is the catalog profile currently selected.
+func (m *ModelManager) ActiveProviderName() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.providerActive != "" {
+		return m.providerActive
+	}
+	if m.remote != nil {
+		return m.remoteLabel
+	}
+	return "ollama"
+}
+
+// ProviderNames lists configured profile names for /provider list.
+func (m *ModelManager) ProviderNames() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	names := m.providerCatalog.ProfileNames()
+	if len(names) == 0 {
+		return []string{"ollama"}
+	}
+	return names
+}
+
+// ProviderDescriptor is a UI-safe view of one catalog profile. It never
+// includes secret values — only whether the configured env var is currently set.
+type ProviderDescriptor struct {
+	Name       string
+	Type       string
+	Model      string
+	APIKeyEnv  string
+	BaseURL    string
+	Remote     bool
+	Active     bool
+	KeyPresent bool // process env has a non-empty value for APIKeyEnv
+}
+
+// ProviderCatalog returns descriptors for every installed profile.
+func (m *ModelManager) ProviderCatalog() []ProviderDescriptor {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	names := m.providerCatalog.ProfileNames()
+	if len(names) == 0 {
+		names = []string{"ollama"}
+	}
+	active := m.providerActive
+	if active == "" {
+		if m.remote != nil {
+			active = m.remoteLabel
+		} else {
+			active = "ollama"
+		}
+	}
+	out := make([]ProviderDescriptor, 0, len(names))
+	for _, name := range names {
+		profileName, profile, err := resolveSwitchTarget(m.providerCatalog, name)
+		if err != nil {
+			continue
+		}
+		keyPresent := false
+		if profile.IsRemote() && strings.TrimSpace(profile.APIKeyEnv) != "" {
+			keyPresent = strings.TrimSpace(os.Getenv(profile.APIKeyEnv)) != ""
+		}
+		out = append(out, ProviderDescriptor{
+			Name:       profileName,
+			Type:       config.NormalizedProviderType(profile.Type),
+			Model:      profile.Model,
+			APIKeyEnv:  profile.APIKeyEnv,
+			BaseURL:    profile.BaseURL,
+			Remote:     profile.IsRemote(),
+			Active:     profileName == active,
+			KeyPresent: keyPresent,
+		})
+	}
+	return out
 }
 
 // ConfigureOllamaInventory installs the context and execution-location facts
@@ -320,6 +607,37 @@ func (m *ModelManager) SetCurrentModel(model string) error {
 	m.inferenceMu.Lock()
 	defer m.inferenceMu.Unlock()
 
+	if m.remote != nil {
+		if err := m.remote.SetModel(model); err != nil {
+			return err
+		}
+		m.mu.Lock()
+		previous := m.currentModel
+		m.currentModel = model
+		if previous != "" && previous != model {
+			m.active[previous] = false
+			delete(m.activity, modelResourceKey(previous))
+		}
+		m.mu.Unlock()
+		m.localMu.Lock()
+		if m.cloudModels == nil {
+			m.cloudModels = make(map[string]struct{})
+		}
+		m.cloudModels[config.CanonicalModelName(model)] = struct{}{}
+		if m.nativeCtx == nil {
+			m.nativeCtx = make(map[string]int)
+		}
+		if m.remoteContext > 0 {
+			m.nativeCtx[config.CanonicalModelName(model)] = m.remoteContext
+		}
+		if m.cloudGrants == nil {
+			m.cloudGrants = make(map[string]struct{})
+		}
+		m.cloudGrants[config.CanonicalModelName(model)] = struct{}{}
+		m.localMu.Unlock()
+		return nil
+	}
+
 	// Admission and policy selection must share the same inference snapshot.
 	// Otherwise a verified refresh could reclassify local weights as cloud after
 	// the local check but before the client is created.
@@ -420,6 +738,7 @@ func (m *ModelManager) ChatStream(ctx context.Context, opts ChatOptions, fn func
 	defer m.inferenceMu.RUnlock()
 	m.mu.RLock()
 	model := m.currentModel
+	remote := m.remote
 	m.mu.RUnlock()
 
 	if model == "" {
@@ -430,6 +749,14 @@ func (m *ModelManager) ChatStream(ctx context.Context, opts ChatOptions, fn func
 	}
 	if err := m.validateExpectedContext(model, opts.ExpectedContext); err != nil {
 		return inferenceNotStarted(err)
+	}
+
+	if remote != nil {
+		m.mu.Lock()
+		m.active[model] = true
+		m.markNonExpertActivityLocked(model)
+		m.mu.Unlock()
+		return remote.ChatStream(ctx, opts, fn)
 	}
 
 	client, err := m.getClient(ctx, model)
@@ -486,6 +813,16 @@ func (m *ModelManager) ChatStreamForModel(ctx context.Context, model string, opt
 	if err := m.validateExpectedContext(model, opts.ExpectedContext); err != nil {
 		return inferenceNotStarted(err)
 	}
+	m.mu.RLock()
+	remote := m.remote
+	m.mu.RUnlock()
+	if remote != nil {
+		// Experts on a single remote profile share the configured client model.
+		if config.CanonicalModelName(model) != config.CanonicalModelName(remote.Model()) {
+			return inferenceNotStarted(fmt.Errorf("remote provider only serves model %q", remote.Model()))
+		}
+		return remote.ChatStream(ctx, opts, fn)
+	}
 	client, err := m.getClient(ctx, model)
 	if err != nil {
 		return inferenceNotStarted(err)
@@ -502,10 +839,14 @@ func (m *ModelManager) Ping() error {
 	defer m.inferenceMu.RUnlock()
 	m.mu.RLock()
 	model := m.currentModel
+	remote := m.remote
 	m.mu.RUnlock()
 
 	if model == "" {
 		return ErrNoModelSelected
+	}
+	if remote != nil {
+		return remote.Ping()
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -520,6 +861,15 @@ func (m *ModelManager) Ping() error {
 func (m *ModelManager) PingModel(ctx context.Context, model string) error {
 	m.inferenceMu.RLock()
 	defer m.inferenceMu.RUnlock()
+	m.mu.RLock()
+	remote := m.remote
+	m.mu.RUnlock()
+	if remote != nil {
+		if config.CanonicalModelName(model) != config.CanonicalModelName(remote.Model()) {
+			return fmt.Errorf("remote provider only serves model %q", remote.Model())
+		}
+		return remote.PingContext(ctx)
+	}
 	client, err := m.getClient(ctx, model)
 	if err != nil {
 		return err

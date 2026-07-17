@@ -176,4 +176,4 @@ mkdir -p ~/.config/local-agent
 cp config.example.yaml ~/.config/local-agent/config.yaml
 ```
 
-Continue with [Ollama models](./ollama-models.md), [authority modes and goals](./modes-and-goals.md), or the complete [configuration reference](./configuration.md).
+Continue with [Ollama models](./ollama-models.md), [remote providers](./providers.md) (xAI Grok / OpenAI-compatible + TinyVault), [authority modes and goals](./modes-and-goals.md), or the complete [configuration reference](./configuration.md).

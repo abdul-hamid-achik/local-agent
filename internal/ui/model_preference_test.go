@@ -7,11 +7,15 @@ import (
 )
 
 type modelPreferenceStoreStub struct {
-	model      string
-	setCalls   int
-	clearCalls int
-	setErr     error
-	clearErr   error
+	model          string
+	provider       string
+	setCalls       int
+	clearCalls     int
+	providerSets   int
+	providerClears int
+	setErr         error
+	clearErr       error
+	providerSetErr error
 }
 
 func (s *modelPreferenceStoreStub) SetManualModel(model string) error {
@@ -29,6 +33,21 @@ func (s *modelPreferenceStoreStub) ClearManualModel() error {
 		return s.clearErr
 	}
 	s.model = ""
+	return nil
+}
+
+func (s *modelPreferenceStoreStub) SetManualProvider(name string) error {
+	s.providerSets++
+	if s.providerSetErr != nil {
+		return s.providerSetErr
+	}
+	s.provider = name
+	return nil
+}
+
+func (s *modelPreferenceStoreStub) ClearManualProvider() error {
+	s.providerClears++
+	s.provider = ""
 	return nil
 }
 

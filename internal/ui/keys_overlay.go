@@ -59,6 +59,8 @@ func (m *Model) handleOverlayKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 			m.closeSettingsPicker()
 		case OverlayAgentPicker:
 			m.closeAgentPicker()
+		case OverlayProviderPicker:
+			m.closeProviderPicker()
 		case OverlayModePicker:
 			m.closeModePicker()
 		case OverlayRuntimeStatus:
@@ -131,6 +133,19 @@ func (m *Model) handleOverlayKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		} else {
 			var cmd tea.Cmd
 			m.agentPickerState.List, cmd = m.agentPickerState.List.Update(msg)
+			cmds = append(cmds, cmd)
+		}
+		return tea.Batch(cmds...), true
+	}
+
+	if m.overlay == OverlayProviderPicker && m.providerPickerState != nil {
+		if key.Matches(msg, m.keys.CompleteSelect) {
+			if item := m.providerPickerState.List.SelectedItem(); item != nil {
+				m.selectProviderProfile(item.(providerItem).descriptor.Name)
+			}
+		} else {
+			var cmd tea.Cmd
+			m.providerPickerState.List, cmd = m.providerPickerState.List.Update(msg)
 			cmds = append(cmds, cmd)
 		}
 		return tea.Batch(cmds...), true

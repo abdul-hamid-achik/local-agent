@@ -134,7 +134,10 @@ sessions instead use `goal show` and `goal recover`.
 | `/model list` | List currently admitted models |
 | `/model <name>` | Switch to and pin a model |
 | `/model auto` | Release the pin and resume local automatic routing |
-| `/agent [name\|list]` | List or switch profiles |
+| `/provider` | Open the inference provider picker |
+| `/provider list` | List configured provider profiles |
+| `/provider <name>` | Switch provider profile (persisted for restart) |
+| `/agent [name\|list]` | List or switch agent profiles |
 | `/skill`, `/skill list` | List discovered skills and their activation state |
 | `/skill activate <name>`, `/skill deactivate <name>` | Add or remove one skill from active prompt context |
 | `/load <path>`, `/unload` | Add or remove one bounded Markdown context file |

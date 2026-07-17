@@ -145,7 +145,12 @@ weight budget and remain serial because provider-side capacity is unknown.
 | Variable | Purpose |
 |---|---|
 | `OLLAMA_HOST` | Override `ollama.base_url` |
-| `LOCAL_AGENT_MODEL` | Override the initial model |
+| `LOCAL_AGENT_MODEL` | Override the initial model (also remote provider model when remote is active) |
+| `LOCAL_AGENT_PROVIDER` | Select inference adapter: `ollama`, `xai`, or `openai_compatible` |
+| `LOCAL_AGENT_PROVIDER_BASE_URL` | Override remote provider base URL |
+| `LOCAL_AGENT_PROVIDER_MODEL` | Override remote provider model id |
+| `LOCAL_AGENT_PROVIDER_API_KEY_ENV` | Env var **name** that holds the API key (never the secret value) |
+| `LOCAL_AGENT_PROVIDER_CONTEXT_SIZE` | Host-side context budget for remote models |
 | `LOCAL_AGENT_AGENTS_DIR` | Override the agents directory |
 | `LOCAL_AGENT_TOOLS_TIMEOUT` | Override the built-in tool timeout |
 | `LOCAL_AGENT_TOOLS_MAX_GREP` | Override the maximum grep results |

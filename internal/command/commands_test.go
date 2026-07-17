@@ -320,6 +320,31 @@ func TestBuiltin_Models(t *testing.T) {
 	}
 }
 
+func TestBuiltin_Provider(t *testing.T) {
+	r := newTestRegistry()
+	ctx := &Context{
+		Provider:     "ollama",
+		ProviderList: []string{"ollama", "xai", "openai"},
+		Model:        "qwen3.5:2b",
+	}
+	open := r.Execute(ctx, "provider", nil)
+	if open.Action != ActionShowProviderPicker {
+		t.Fatalf("empty args = %#v, want picker", open)
+	}
+	list := r.Execute(ctx, "provider", []string{"list"})
+	if list.Error != "" || !strings.Contains(list.Text, "xai") {
+		t.Fatalf("list = %#v", list)
+	}
+	sw := r.Execute(ctx, "provider", []string{"xai"})
+	if sw.Action != ActionSwitchProvider || sw.Data != "xai" {
+		t.Fatalf("switch = %#v", sw)
+	}
+	bad := r.Execute(ctx, "provider", []string{"nope"})
+	if bad.Error == "" {
+		t.Fatal("expected unknown provider error")
+	}
+}
+
 func TestBuiltinChangesUsesStablePathOrder(t *testing.T) {
 	r := newTestRegistry()
 	result := r.Execute(&Context{FileChanges: map[string]int{
@@ -790,7 +815,7 @@ func TestBuiltinScopeParsesProcessLocalReadRootActions(t *testing.T) {
 func TestBuiltinRegistrySurfaceIsUniqueAndExecutable(t *testing.T) {
 	r := newTestRegistry()
 	wantNames := []string{
-		"help", "clear", "plan", "goal", "model", "recover", "agent", "load",
+		"help", "clear", "plan", "goal", "model", "provider", "recover", "agent", "load",
 		"image", "scope", "unload", "skill", "servers", "ice", "sessions", "artifacts",
 		"changes", "commit", "stats", "export", "import", "checkpoint",
 		"checkpoints", "restore", "exit",

@@ -74,7 +74,7 @@ top-level consultations and keeps responsibility for effects and verification.
 
 ## Current limitations
 
-- Ollama is the only inference adapter.
+- Ollama is the default inference adapter. Optional OpenAI-compatible remote providers (including xAI) are config-selected and credentialed via process environment / TinyVault injection.
 - General model routing uses heuristics and a 16 GB-oriented admission guard. Expert concurrency separately uses live host telemetry where available and falls back to serial inference when memory confidence is insufficient.
 - MCP support is currently tool-focused.
 - ICE uses a flat workspace-scoped JSON store.

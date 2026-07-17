@@ -22,6 +22,7 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
 	executionpkg "github.com/abdul-hamid-achik/local-agent/internal/execution"
+	"github.com/abdul-hamid-achik/local-agent/internal/expertteam"
 	"github.com/abdul-hamid-achik/local-agent/internal/goal"
 	"github.com/abdul-hamid-achik/local-agent/internal/goaladvisor"
 	"github.com/abdul-hamid-achik/local-agent/internal/ice"
@@ -153,6 +154,29 @@ func run() int {
 	} else {
 		modelPreferenceStore = runtimepref.NewStore(preferencePath)
 	}
+	// Restore last /provider selection when the user did not pass
+	// LOCAL_AGENT_PROVIDER for this process. Config profiles remain the catalog;
+	// the saved name only chooses among defined profiles.
+	if modelPreferenceStore != nil && strings.TrimSpace(os.Getenv("LOCAL_AGENT_PROVIDER")) == "" {
+		if preferred, ok, prefErr := modelPreferenceStore.LoadManualProvider(); prefErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: saved provider preference ignored: %v\n", prefErr)
+		} else if ok {
+			if _, _, resolveErr := cfg.Provider.ResolveProfile(preferred); resolveErr == nil {
+				cfg.Provider.Active = preferred
+			} else if !cfg.Provider.HasProfiles() {
+				// Flat catalog: accept known type names as active preference.
+				switch config.NormalizedProviderType(preferred) {
+				case config.ProviderTypeOllama, config.ProviderTypeXAI, config.ProviderTypeOpenAICompatible:
+					cfg.Provider.Type = preferred
+					cfg.Provider.Active = preferred
+				default:
+					fmt.Fprintf(os.Stderr, "warning: saved provider %q is not available; using configured default\n", preferred)
+				}
+			} else {
+				fmt.Fprintf(os.Stderr, "warning: saved provider %q is not in the catalog; using configured default\n", preferred)
+			}
+		}
+	}
 
 	// Create router - use Qwen-optimized router if flag is set.
 	var router config.ModelRouter
@@ -161,7 +185,17 @@ func run() int {
 	}
 	router = newModelRouter(&cfg.Model, *qwenRouterFlag)
 
+	providerName, providerProfile, providerErr := cfg.Provider.ActiveProfile()
+	if providerErr != nil {
+		// Empty/default ollama when provider block is absent.
+		providerName = "ollama"
+		providerProfile = config.ProviderProfile{Type: config.ProviderTypeOllama}.Resolve()
+	}
+	provider := providerProfile.Resolve()
 	modelName := cfg.Ollama.Model
+	if provider.IsRemote() && strings.TrimSpace(provider.Model) != "" {
+		modelName = provider.Model
+	}
 	modelPinned := shouldPinStartupModel(*modelFlag, cfg.Model.AutoSelect)
 	profileModelPinned := false
 	if cfg.AgentProfile != "" && agentsDir != nil {
@@ -173,69 +207,117 @@ func run() int {
 			}
 		}
 	}
-	// Ollama owns model availability. Local Agent applies privacy, capability,
-	// and memory policy to that inventory instead of inventing availability from
-	// a static catalog.
+	if *modelFlag != "" {
+		modelName = *modelFlag
+		modelPinned = true
+	}
+	// Ollama owns model availability for the local path. Remote providers use a
+	// configured model id and env-sourced API key (typically via TinyVault).
 	modelManager := llm.NewModelManager(cfg.Ollama.BaseURL, cfg.Ollama.NumCtx)
 	defer modelManager.Close()
-	discoveryCtx, cancelDiscovery := context.WithTimeout(context.Background(), 2*time.Second)
-	ollamaInventory, discoveryErr := modelManager.ListOllamaModels(discoveryCtx)
-	cancelDiscovery()
-	if discoveryErr == nil {
-		enrichCtx, cancelEnrich := context.WithTimeout(context.Background(), 2*time.Second)
-		ollamaInventory = enrichOllamaCapabilities(enrichCtx, modelManager, ollamaInventory, &cfg.Model)
-		cancelEnrich()
-	}
-	modelManager.ConfigureOllamaRuntimeInventory(cfg.Privacy.LocalOnly, ollamaInventory, discoveryErr == nil)
-	if discoveryErr != nil && cfg.Privacy.LocalOnly && promptFlag != "" {
-		fmt.Fprintf(os.Stderr, "model: local-only mode could not verify Ollama local weights: %v\n", discoveryErr)
-		return 1
-	}
-	awareRouter, ok := router.(availabilityAwareRouter)
-	if !ok {
-		fmt.Fprintln(os.Stderr, "model router does not support local inventory")
-		return 1
-	}
-	manualChatModels := manuallySelectableOllamaChatModels(ollamaInventory, cfg.Privacy.LocalOnly)
-	autoChatModels := autoRoutableOllamaChatModels(ollamaInventory)
-	if modelPreferenceStore != nil && shouldRestoreManualModelPreference(*modelFlag, profileModelPinned) {
-		preferred, saved, preferenceErr := modelPreferenceStore.LoadManualModel()
-		switch {
-		case preferenceErr != nil:
-			fmt.Fprintf(os.Stderr, "warning: saved model preference ignored: %v\n", preferenceErr)
-		case saved:
-			if restored, ok, warning := restoreManualModelPreference(
-				preferred, manualChatModels, autoChatModels, discoveryErr == nil,
-			); ok {
-				modelName = restored
-				modelPinned = true
-			} else if warning != "" {
-				fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
-			}
-		}
-	}
-	modelName, modelList, err := resolveStartupModel(
-		modelName,
-		modelPinned,
-		cfg.Privacy.LocalOnly,
-		&cfg.Model,
-		manualChatModels,
-		autoChatModels,
-		discoveryErr == nil,
-		awareRouter,
-	)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "model: %v\n", err)
-		return 1
-	}
-	if discoveryErr != nil {
-		fmt.Fprintf(os.Stderr, "warning: Ollama model discovery failed: %v\n", discoveryErr)
-	}
+	modelManager.ConfigureProviderCatalog(cfg.Provider, cfg.Privacy.LocalOnly, cfg.Ollama.Model)
 
-	if discoveryErr == nil || !cfg.Privacy.LocalOnly {
+	var (
+		ollamaInventory  []llm.OllamaModel
+		discoveryErr     error
+		modelList        []string
+		autoChatModels   []string
+		manualChatModels []string
+	)
+	if provider.IsRemote() {
+		apiKey, keyErr := provider.ResolveAPIKey()
+		if keyErr != nil {
+			fmt.Fprintf(os.Stderr, "provider: %v\n", keyErr)
+			return 1
+		}
+		remoteClient, clientErr := llm.NewOpenAICompatibleClient(llm.OpenAICompatibleOptions{
+			BaseURL: provider.BaseURL,
+			Model:   modelName,
+			APIKey:  apiKey,
+		})
+		if clientErr != nil {
+			fmt.Fprintf(os.Stderr, "provider: %v\n", clientErr)
+			return 1
+		}
+		if err := modelManager.ConfigureRemoteProvider(remoteClient, provider.ContextSize, providerName); err != nil {
+			fmt.Fprintf(os.Stderr, "provider: %v\n", err)
+			return 1
+		}
+		modelList = []string{modelName}
+		modelPinned = true
+		// Best-effort Ollama inventory for ICE/embeddings only.
+		discoveryCtx, cancelDiscovery := context.WithTimeout(context.Background(), 2*time.Second)
+		ollamaInventory, discoveryErr = modelManager.ListOllamaModels(discoveryCtx)
+		cancelDiscovery()
+		if discoveryErr == nil {
+			modelManager.ConfigureOllamaRuntimeInventory(false, ollamaInventory, true)
+		}
 		if err := modelManager.SetCurrentModel(modelName); err != nil {
 			fmt.Fprintf(os.Stderr, "set current model: %v\n", err)
 			return 1
+		}
+		fmt.Fprintf(os.Stderr, "provider: %s (%s) model %s (api key from $%s)\n", providerName, provider.Type, modelName, provider.APIKeyEnv)
+	} else {
+		discoveryCtx, cancelDiscovery := context.WithTimeout(context.Background(), 2*time.Second)
+		ollamaInventory, discoveryErr = modelManager.ListOllamaModels(discoveryCtx)
+		cancelDiscovery()
+		if discoveryErr == nil {
+			enrichCtx, cancelEnrich := context.WithTimeout(context.Background(), 2*time.Second)
+			ollamaInventory = enrichOllamaCapabilities(enrichCtx, modelManager, ollamaInventory, &cfg.Model)
+			cancelEnrich()
+		}
+		modelManager.ConfigureOllamaRuntimeInventory(cfg.Privacy.LocalOnly, ollamaInventory, discoveryErr == nil)
+		if discoveryErr != nil && cfg.Privacy.LocalOnly && promptFlag != "" {
+			fmt.Fprintf(os.Stderr, "model: local-only mode could not verify Ollama local weights: %v\n", discoveryErr)
+			return 1
+		}
+		awareRouter, ok := router.(availabilityAwareRouter)
+		if !ok {
+			fmt.Fprintln(os.Stderr, "model router does not support local inventory")
+			return 1
+		}
+		manualChatModels = manuallySelectableOllamaChatModels(ollamaInventory, cfg.Privacy.LocalOnly)
+		autoChatModels = autoRoutableOllamaChatModels(ollamaInventory)
+		if modelPreferenceStore != nil && shouldRestoreManualModelPreference(*modelFlag, profileModelPinned) {
+			preferred, saved, preferenceErr := modelPreferenceStore.LoadManualModel()
+			switch {
+			case preferenceErr != nil:
+				fmt.Fprintf(os.Stderr, "warning: saved model preference ignored: %v\n", preferenceErr)
+			case saved:
+				if restored, ok, warning := restoreManualModelPreference(
+					preferred, manualChatModels, autoChatModels, discoveryErr == nil,
+				); ok {
+					modelName = restored
+					modelPinned = true
+				} else if warning != "" {
+					fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
+				}
+			}
+		}
+		var resolveErr error
+		modelName, modelList, resolveErr = resolveStartupModel(
+			modelName,
+			modelPinned,
+			cfg.Privacy.LocalOnly,
+			&cfg.Model,
+			manualChatModels,
+			autoChatModels,
+			discoveryErr == nil,
+			awareRouter,
+		)
+		if resolveErr != nil {
+			fmt.Fprintf(os.Stderr, "model: %v\n", resolveErr)
+			return 1
+		}
+		if discoveryErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: Ollama model discovery failed: %v\n", discoveryErr)
+		}
+
+		if discoveryErr == nil || !cfg.Privacy.LocalOnly {
+			if err := modelManager.SetCurrentModel(modelName); err != nil {
+				fmt.Fprintf(os.Stderr, "set current model: %v\n", err)
+				return 1
+			}
 		}
 	}
 
@@ -249,7 +331,11 @@ func run() int {
 	registry := mcp.NewRegistryWithVersion(version, mcp.WithLocalOnly(cfg.Privacy.LocalOnly))
 	defer registry.Close()
 
-	ag := agent.New(modelManager, registry, cfg.Ollama.NumCtx)
+	agentContext := cfg.Ollama.NumCtx
+	if provider.IsRemote() && provider.ContextSize > 0 {
+		agentContext = provider.ContextSize
+	}
+	ag := agent.New(modelManager, registry, agentContext)
 	// Derive any reduced-friction MCP contracts from the same host-owned server
 	// configuration the registry will connect. Server annotations and model tool
 	// names alone never establish trust.
@@ -261,11 +347,20 @@ func run() int {
 	ag.SetToolsConfig(cfg.Tools)
 	ag.SetContinuationsConfig(cfg.Continuations)
 	ag.SetRouter(router)
-	expertConsultant, expertErr := newRuntimeExpertConsultant(cfg, modelManager, agentsDir, ollamaInventory)
-	if expertErr != nil {
-		fmt.Fprintf(os.Stderr, "warning: expert consultation disabled: %v\n", expertErr)
-	} else if expertConsultant != nil {
-		ag.SetExpertConsultant(expertConsultant)
+	var (
+		expertConsultant *expertteam.Runtime
+		expertErr        error
+	)
+	if provider.IsRemote() {
+		expertErr = fmt.Errorf("expert consultation requires local Ollama multi-model inventory; disabled for remote provider %q", providerName)
+		fmt.Fprintf(os.Stderr, "warning: %v\n", expertErr)
+	} else {
+		expertConsultant, expertErr = newRuntimeExpertConsultant(cfg, modelManager, agentsDir, ollamaInventory)
+		if expertErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: expert consultation disabled: %v\n", expertErr)
+		} else if expertConsultant != nil {
+			ag.SetExpertConsultant(expertConsultant)
+		}
 	}
 	// Cap any single tool result so a runaway read/command can't blow the
 	// (small, local) context window. ~96KB is generous for code/output.
@@ -376,29 +471,39 @@ func run() int {
 		if explicitRouter, ok := router.(interface{ SetModeContext(config.ModeContext) }); ok {
 			explicitRouter.SetModeContext(modeConfig.RouterMode)
 		}
-		routedModel := selectHeadlessModel(modelName, promptFlag, modelPinned, router, modeConfig.RouterMode)
-		if routedModel != modelName {
-			modelName = routedModel
-			if modelName == "" {
-				fmt.Fprintln(os.Stderr, "model routing failed: no compatible local chat model is installed")
-				return 1
-			}
-			if discoveryErr == nil {
-				if !containsModel(autoChatModels, modelName) {
-					fmt.Fprintf(os.Stderr, "model routing failed: model %q is not admitted for automatic local routing\n", modelName)
+		if !provider.IsRemote() {
+			routedModel := selectHeadlessModel(modelName, promptFlag, modelPinned, router, modeConfig.RouterMode)
+			if routedModel != modelName {
+				modelName = routedModel
+				if modelName == "" {
+					fmt.Fprintln(os.Stderr, "model routing failed: no compatible local chat model is installed")
+					return 1
+				}
+				if discoveryErr == nil {
+					if !containsModel(autoChatModels, modelName) {
+						fmt.Fprintf(os.Stderr, "model routing failed: model %q is not admitted for automatic local routing\n", modelName)
+						return 1
+					}
+				}
+				if err := modelManager.SetCurrentModel(modelName); err != nil {
+					fmt.Fprintf(os.Stderr, "model routing failed: %v\n", err)
 					return 1
 				}
 			}
-			if err := modelManager.SetCurrentModel(modelName); err != nil {
-				fmt.Fprintf(os.Stderr, "model routing failed: %v\n", err)
-				return 1
-			}
 		}
 
-		// Ping Ollama synchronously.
-		fmt.Fprintf(os.Stderr, "connecting to Ollama (%s)...\n", modelName)
+		// Ping the configured inference provider.
+		if modelManager.RemoteProvider() {
+			fmt.Fprintf(os.Stderr, "connecting to %s (%s)...\n", modelManager.RemoteProviderLabel(), modelName)
+		} else {
+			fmt.Fprintf(os.Stderr, "connecting to Ollama (%s)...\n", modelName)
+		}
 		if err := modelManager.Ping(); err != nil {
-			fmt.Fprintf(os.Stderr, "ollama: %v\ntry: ollama serve · ollama pull %s\n", err, modelName)
+			if modelManager.RemoteProvider() {
+				fmt.Fprintf(os.Stderr, "provider: %v\ncheck API key (tvault run --only %s) and base URL\n", err, provider.APIKeyEnv)
+			} else {
+				fmt.Fprintf(os.Stderr, "ollama: %v\ntry: ollama serve · ollama pull %s\n", err, modelName)
+			}
 			return 1
 		}
 
@@ -619,6 +724,7 @@ func run() int {
 	}
 
 	completer := ui.NewCompleter(cmdReg, modelList, skillMgr.Names(), agentList, registry)
+	completer.UpdateProviders(modelManager.ProviderNames())
 
 	logger, logFile, err := logging.NewSessionLogger()
 	if err != nil {
@@ -702,14 +808,24 @@ func run() int {
 	go func() {
 		defer close(initDone)
 
-		// 1. Ping Ollama.
-		p.Send(ui.StartupStatusMsg{ID: "ollama", Label: "Ollama (" + modelName + ")", Status: "connecting"})
+		// 1. Ping configured inference provider.
+		providerLabel := "Ollama (" + modelName + ")"
+		providerID := "ollama"
+		if modelManager.RemoteProvider() {
+			providerID = "provider"
+			providerLabel = modelManager.RemoteProviderLabel() + " (" + modelName + ")"
+		}
+		p.Send(ui.StartupStatusMsg{ID: providerID, Label: providerLabel, Status: "connecting"})
 		if err := modelManager.Ping(); err != nil {
-			p.Send(ui.StartupStatusMsg{ID: "ollama", Label: "Ollama (" + modelName + ")", Status: "failed", Detail: err.Error()})
-			p.Send(ui.ErrorMsg{Msg: fmt.Sprintf("ollama: %v\ntry: ollama serve · ollama pull %s", err, modelName)})
+			p.Send(ui.StartupStatusMsg{ID: providerID, Label: providerLabel, Status: "failed", Detail: err.Error()})
+			if modelManager.RemoteProvider() {
+				p.Send(ui.ErrorMsg{Msg: fmt.Sprintf("provider: %v\ncheck API key (tvault run --only %s) and base URL", err, provider.APIKeyEnv)})
+			} else {
+				p.Send(ui.ErrorMsg{Msg: fmt.Sprintf("ollama: %v\ntry: ollama serve · ollama pull %s", err, modelName)})
+			}
 			// Continue — non-fatal for TUI, user can see the error.
 		} else {
-			p.Send(ui.StartupStatusMsg{ID: "ollama", Label: "Ollama (" + modelName + ")", Status: "connected"})
+			p.Send(ui.StartupStatusMsg{ID: providerID, Label: providerLabel, Status: "connected"})
 		}
 
 		// 2. Connect MCP servers in parallel.

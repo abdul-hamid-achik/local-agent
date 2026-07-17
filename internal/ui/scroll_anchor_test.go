@@ -627,6 +627,7 @@ func TestOtherOverlaysSwallowMouseWheel(t *testing.T) {
 		OverlaySessionsPicker,
 		OverlaySettings,
 		OverlayAgentPicker,
+		OverlayProviderPicker,
 		OverlayModePicker,
 		OverlayGoalForm,
 	}
@@ -681,6 +682,8 @@ func overlayName(overlay OverlayKind) string {
 		return "settings"
 	case OverlayAgentPicker:
 		return "agent"
+	case OverlayProviderPicker:
+		return "provider"
 	case OverlayModePicker:
 		return "mode"
 	case OverlayGoalForm:
