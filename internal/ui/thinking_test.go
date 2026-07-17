@@ -207,22 +207,85 @@ func TestLiveReasoningStaysInsideAssistantTurnUntilAnswerStarts(t *testing.T) {
 	}
 }
 
-func TestLiveReasoningSummarySanitizesTerminalAndBidiControls(t *testing.T) {
+func TestLiveReasoningTailSanitizesTerminalAndBidiControls(t *testing.T) {
 	unsafe := "earlier\n\x1b]52;c;REASONING_SECRET\x07inspect\x1b[2J\tfiles\u202e\u2066"
-	summary := liveThinkingSummary(unsafe)
-	if strings.Contains(summary, "REASONING_SECRET") || !strings.Contains(summary, "inspect files") {
-		t.Fatalf("sanitized live reasoning summary = %q", summary)
+	tail := liveThinkingTail(unsafe, 60)
+	if len(tail) != 2 || tail[0] != "earlier" || !strings.Contains(tail[1], "inspect files") {
+		t.Fatalf("sanitized live reasoning tail = %#v", tail)
 	}
-	for _, character := range summary {
-		if unicode.IsControl(character) || isBidiControl(character) {
-			t.Fatalf("unsafe rune %U survived live reasoning summary: %q", character, summary)
+	for _, line := range tail {
+		if strings.Contains(line, "REASONING_SECRET") {
+			t.Fatalf("secret survived live reasoning tail: %q", line)
+		}
+		for _, character := range line {
+			if unicode.IsControl(character) || isBidiControl(character) {
+				t.Fatalf("unsafe rune %U survived live reasoning tail: %q", character, line)
+			}
 		}
 	}
 
 	m := newTestModel(t)
 	rendered := ansi.Strip(m.renderLiveThinkingBox(unsafe))
-	if strings.Contains(rendered, "REASONING_SECRET") || !strings.Contains(rendered, "Thinking… · inspect files") {
-		t.Fatalf("unsafe live reasoning header = %q", rendered)
+	if strings.Contains(rendered, "REASONING_SECRET") || !strings.Contains(rendered, "inspect files") {
+		t.Fatalf("unsafe live reasoning window = %q", rendered)
+	}
+}
+
+func TestRenderLiveThinkingBoxSingleLineKeepsInlineSummary(t *testing.T) {
+	m := newTestModel(t)
+	rendered := ansi.Strip(m.renderLiveThinkingBox("inspect files"))
+	if rendered != "│ Thinking… · inspect files" {
+		t.Fatalf("single-line live reasoning = %q", rendered)
+	}
+}
+
+func TestRenderLiveThinkingBoxShowsBoundedTailWindow(t *testing.T) {
+	m := newTestModel(t)
+	rendered := ansi.Strip(m.renderLiveThinkingBox("one\ntwo\nthree\nfour\nfive"))
+	lines := strings.Split(rendered, "\n")
+	if len(lines) != 1+liveThinkingTailRows {
+		t.Fatalf("live tail window rows = %d, want %d:\n%s", len(lines), 1+liveThinkingTailRows, rendered)
+	}
+	if lines[0] != "│ Thinking…" {
+		t.Fatalf("tail window header duplicated the summary: %q", lines[0])
+	}
+	for i, want := range []string{"│ three", "│ four", "│ five"} {
+		if lines[i+1] != want {
+			t.Fatalf("tail row %d = %q, want %q", i+1, lines[i+1], want)
+		}
+	}
+}
+
+func TestRenderLiveThinkingBoxSlicesAfterWrapping(t *testing.T) {
+	m := newTestModel(t)
+	inner := max(1, max(4, m.chatContentWidth()-2)-2)
+	long := strings.TrimSpace(strings.Repeat("steady reasoning stream ", 20))
+
+	rendered := ansi.Strip(m.renderLiveThinkingBox(long))
+	lines := strings.Split(rendered, "\n")
+	if len(lines) != 1+liveThinkingTailRows {
+		t.Fatalf("wrapped tail rows = %d, want %d:\n%s", len(lines), 1+liveThinkingTailRows, rendered)
+	}
+	wrapped := strings.Split(wrapText(long, inner), "\n")
+	for i, want := range wrapped[len(wrapped)-liveThinkingTailRows:] {
+		if lines[i+1] != "│ "+want {
+			t.Fatalf("tail row %d = %q, want %q", i+1, lines[i+1], "│ "+want)
+		}
+	}
+}
+
+func TestLiveThinkingWindowHeightIsStableOnceGrown(t *testing.T) {
+	m := newTestModel(t)
+	buffer := "one\ntwo\nthree"
+	grown := len(strings.Split(ansi.Strip(m.renderLiveThinkingBox(buffer)), "\n"))
+	if grown != 1+liveThinkingTailRows {
+		t.Fatalf("grown live window rows = %d, want %d", grown, 1+liveThinkingTailRows)
+	}
+	for _, chunk := range []string{" and", "\nfour", " tokens keep streaming", "\nfive\nsix\nseven\neight"} {
+		buffer += chunk
+		if rows := len(strings.Split(ansi.Strip(m.renderLiveThinkingBox(buffer)), "\n")); rows != grown {
+			t.Fatalf("live window oscillated to %d rows after %q, want %d", rows, chunk, grown)
+		}
 	}
 }
 

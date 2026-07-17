@@ -536,7 +536,7 @@ func (m *Model) renderStreamingMsg(b *strings.Builder, content string, contentW 
 	}
 
 	// Live reasoning uses the same assistant-owned hierarchy as the completed
-	// disclosure. Keeping it compact prevents token-by-token height jitter; the
+	// disclosure. A bounded tail window keeps token-by-token height stable; the
 	// full receipt becomes expandable only after the turn settles.
 	if hasThinking {
 		b.WriteString(indentBlock(m.renderLiveThinkingBox(m.thinkBuf.String()), "  "))

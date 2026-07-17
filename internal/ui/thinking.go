@@ -120,32 +120,87 @@ func (m *Model) renderThinkingBox(content string, collapsed bool) string {
 	return b.String()
 }
 
+// Live reasoning shows a bounded tail window rather than the whole buffer.
+// Slicing happens after wrapping so mid-word artifacts do not jitter between
+// repaints, and only the final raw lines are wrapped so per-token repaints
+// stay O(tail) on long reasoning streams.
+const (
+	liveThinkingTailRows     = 3
+	liveThinkingTailRawLines = 6
+)
+
 // renderLiveThinkingBox is the stable in-progress counterpart to a completed
 // reasoning disclosure. Thinking belongs to the assistant transcript; the
 // footer is reserved for operational controls such as cancel and queue.
 func (m *Model) renderLiveThinkingBox(content string) string {
 	width := max(4, m.chatContentWidth()-2)
 	inner := max(1, width-2)
-	summary := liveThinkingSummary(content)
+	tail := liveThinkingTail(content, inner)
+
 	header := "Thinking…"
-	if summary != "" {
-		header += " · " + summary
+	if len(tail) == 1 {
+		// A buffer that wraps to a single line reads best inline; a one-row
+		// tail window below would only duplicate it.
+		header += " · " + tail[0]
+		tail = nil
 	}
 	if lipgloss.Width(header) > inner {
 		header = truncateDisplay(header, inner)
 	}
-	return m.styles.ThinkingBorder.Render("│") + " " +
-		m.styles.ThinkingHeader.Render(header)
+
+	bar := m.styles.ThinkingBorder.Render("│")
+	var b strings.Builder
+	b.WriteString(bar)
+	b.WriteByte(' ')
+	b.WriteString(m.styles.ThinkingHeader.Render(header))
+	for _, line := range tail {
+		b.WriteByte('\n')
+		b.WriteString(bar)
+		b.WriteByte(' ')
+		b.WriteString(m.styles.ThinkingContent.UnsetPaddingLeft().Render(line))
+	}
+	return b.String()
 }
 
-func liveThinkingSummary(content string) string {
-	lines := strings.Split(strings.TrimSpace(content), "\n")
-	for index := len(lines) - 1; index >= 0; index-- {
-		if summary := sanitizeTerminalSingleLine(lines[index]); summary != "" {
-			return summary
+// liveThinkingTail returns the trailing wrapped lines of the reasoning
+// buffer, bounded to liveThinkingTailRows. The window only ever grows toward
+// its bound as the buffer streams, so the live surface does not oscillate in
+// height per token.
+func liveThinkingTail(content string, inner int) []string {
+	content = lastRawLines(strings.TrimRight(content, "\r\n"), liveThinkingTailRawLines)
+	content = sanitizeTerminalMultiline(content)
+	content = strings.Trim(strings.ReplaceAll(content, "\t", " "), "\n")
+	if strings.TrimSpace(content) == "" {
+		return nil
+	}
+	var tail []string
+	for _, sourceLine := range strings.Split(content, "\n") {
+		wrapped := wrapText(sourceLine, inner)
+		if wrapped == "" {
+			wrapped = " "
+		}
+		tail = append(tail, strings.Split(wrapped, "\n")...)
+	}
+	if len(tail) > liveThinkingTailRows {
+		tail = tail[len(tail)-liveThinkingTailRows:]
+	}
+	return tail
+}
+
+// lastRawLines bounds the text considered per repaint to the final count raw
+// lines without scanning the whole buffer.
+func lastRawLines(content string, count int) string {
+	seen := 0
+	for index := len(content) - 1; index >= 0; index-- {
+		if content[index] != '\n' {
+			continue
+		}
+		seen++
+		if seen >= count {
+			return content[index+1:]
 		}
 	}
-	return ""
+	return content
 }
 
 func thinkingHeader(direction string, width int) string {
