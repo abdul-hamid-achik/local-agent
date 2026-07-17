@@ -381,7 +381,7 @@ func TestRestoreSessionClearsPreviousTurnDiagnostics(t *testing.T) {
 	m.evalCount = 256
 	m.turnPromptTotal = 4_096
 	m.turnEvalTotal = 256
-	m.doneFlash = true
+	m.footerNotice = &footerNotice{text: "✓ Done", severity: noticeSuccess}
 	m.lastTurnDuration = 3 * time.Second
 
 	if err := m.restoreSessionState(persistedSessionState{
@@ -398,8 +398,8 @@ func TestRestoreSessionClearsPreviousTurnDiagnostics(t *testing.T) {
 		t.Fatalf("restore retained token diagnostics: prompt=%d eval=%d turn_prompt=%d turn_eval=%d",
 			m.promptTokens, m.evalCount, m.turnPromptTotal, m.turnEvalTotal)
 	}
-	if m.doneFlash || m.lastTurnDuration != 0 {
-		t.Fatalf("restore retained completion receipt: done=%v duration=%s", m.doneFlash, m.lastTurnDuration)
+	if m.footerNotice != nil || m.lastTurnDuration != 0 {
+		t.Fatalf("restore retained completion receipt: notice=%#v duration=%s", m.footerNotice, m.lastTurnDuration)
 	}
 }
 

@@ -136,7 +136,7 @@ func TestSpaceInspectionRevealsOffscreenReceiptAndRestoresFollow(t *testing.T) {
 	m = updated.(*Model)
 	m.entries = append(m.entries, ChatEntry{Kind: "assistant", Content: strings.Repeat("A later answer keeps the receipt above the fold.\n", 40)})
 	m.lastTurnToolIndex = 0
-	m.doneFlash = true
+	m.footerNotice = &footerNotice{text: "✓ Done", severity: noticeSuccess}
 	m.invalidateEntryCache()
 	m.viewport.SetContent(m.renderEntries())
 	m.markFollowingLatest()

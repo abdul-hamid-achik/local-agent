@@ -212,9 +212,6 @@ type PlanFormCompletedMsg struct {
 	Prompt string
 }
 
-// DoneFlashExpiredMsg clears the "done" terminal title after a timeout.
-type DoneFlashExpiredMsg struct{}
-
 // SessionListMsg delivers the list of saved SQLite sessions.
 type SessionListMsg struct {
 	ListToken uint64

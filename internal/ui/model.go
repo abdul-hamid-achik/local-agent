@@ -126,8 +126,9 @@ type Model struct {
 	inThinking     bool
 	thinkSearchBuf string
 
-	// Terminal title
-	doneFlash bool
+	// Single transient status-line slot (see notice.go). Also drives the
+	// terminal-title "done" receipt while a success notice is active.
+	footerNotice *footerNotice
 
 	// Session persistence
 	sessionID                    int64
@@ -702,8 +703,8 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 	case editorReturnMsg:
 		m.handleEditorReturn(msg)
 
-	case DoneFlashExpiredMsg:
-		m.doneFlash = false
+	case footerNoticeExpiredMsg:
+		m.handleFooterNoticeExpired(msg)
 
 	case SessionListMsg:
 		m.handleSessionList(msg)
@@ -987,7 +988,7 @@ func configureComposerMode(input *textarea.Model, isDark bool, mode Mode, reduce
 // new conversation or a session restore would mislabel the active transcript.
 func (m *Model) resetTurnDiagnostics() {
 	m.lastTurnDuration = 0
-	m.doneFlash = false
+	m.footerNotice = nil
 	m.evalCount = 0
 	m.promptTokens = 0
 	m.turnEvalTotal = 0

@@ -71,7 +71,7 @@ func TestOverlay_ESC_SuppressesOnlyExactUnchangedDraft(t *testing.T) {
 
 	// A later non-editing update still runs the automatic discovery check, but
 	// the exact dismissed draft must remain quiet.
-	updated, _ = m.Update(DoneFlashExpiredMsg{})
+	updated, _ = m.Update(footerNoticeExpiredMsg{})
 	m = updated.(*Model)
 	if m.isCompletionActive() {
 		t.Error("completion should not re-trigger for the exact dismissed draft")

@@ -317,7 +317,7 @@ func TestCompletedToolFlashAdvertisesInspectableReceipt(t *testing.T) {
 	m := newTestModel(t)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
 	m = updated.(*Model)
-	m.doneFlash = true
+	m.footerNotice = &footerNotice{text: "✓ Done", severity: noticeSuccess}
 	m.toolEntries = []ToolEntry{{Name: "hitspec_capture_webpage", Status: ToolStatusDone, Collapsed: true}}
 	m.lastTurnToolIndex = 0
 
@@ -471,7 +471,10 @@ func TestCompletedTurnShowsShortUsefulReceipt(t *testing.T) {
 		}
 	}
 
-	updated, _ = m.Update(DoneFlashExpiredMsg{})
+	if m.footerNotice == nil {
+		t.Fatal("completed turn did not arm the footer notice")
+	}
+	updated, _ = m.Update(footerNoticeExpiredMsg{deadline: m.footerNotice.expiresAt})
 	m = updated.(*Model)
 	if strings.Contains(m.renderStatusLine(), "Done") {
 		t.Fatal("completion receipt did not settle back to idle status")

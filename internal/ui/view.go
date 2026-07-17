@@ -212,7 +212,7 @@ func (m *Model) View() tea.View {
 	case StateStreaming:
 		v.WindowTitle = windowTitle + " \u00b7 streaming..."
 	default:
-		if m.doneFlash {
+		if m.hasSuccessFooterNotice() {
 			v.WindowTitle = windowTitle + " \u00b7 done"
 		} else {
 			v.WindowTitle = windowTitle

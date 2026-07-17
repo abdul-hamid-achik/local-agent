@@ -329,7 +329,7 @@ func TestAgentDoneFailureIsNotRenderedAsCompletedTurn(t *testing.T) {
 	m := newTestModel(t)
 	m.state = StateStreaming
 	m.sessionTurnCount = 3
-	m.doneFlash = true
+	m.footerNotice = &footerNotice{text: "✓ Done", severity: noticeSuccess}
 
 	updated, _ := m.Update(AgentDoneMsg{Err: &agent.UnresolvedExecutionError{
 		SessionID:   7,
@@ -342,8 +342,8 @@ func TestAgentDoneFailureIsNotRenderedAsCompletedTurn(t *testing.T) {
 	if m.sessionTurnCount != 3 {
 		t.Fatalf("failed turn count = %d, want 3", m.sessionTurnCount)
 	}
-	if m.doneFlash {
-		t.Fatal("failed turn retained the success flash")
+	if m.footerNotice != nil {
+		t.Fatal("failed turn retained the success notice")
 	}
 	if len(m.entries) == 0 || !strings.Contains(m.entries[len(m.entries)-1].Content, "Recovery paused · bash") ||
 		!strings.Contains(m.entries[len(m.entries)-1].Content, "/recover") {
@@ -846,9 +846,9 @@ func TestHandleCommandAction(t *testing.T) {
 				if m.entries[0].Kind != "system" {
 					t.Errorf("expected system entry, got %q", m.entries[0].Kind)
 				}
-				if m.capabilityRoute != nil || m.lastCapabilityRoute != nil || m.promptTokens != 0 || m.doneFlash {
-					t.Fatalf("clear retained prior-turn diagnostics: active=%#v last=%#v prompt=%d done=%v",
-						m.capabilityRoute, m.lastCapabilityRoute, m.promptTokens, m.doneFlash)
+				if m.capabilityRoute != nil || m.lastCapabilityRoute != nil || m.promptTokens != 0 || m.footerNotice != nil {
+					t.Fatalf("clear retained prior-turn diagnostics: active=%#v last=%#v prompt=%d notice=%#v",
+						m.capabilityRoute, m.lastCapabilityRoute, m.promptTokens, m.footerNotice)
 				}
 			},
 		},
@@ -930,7 +930,7 @@ func TestHandleCommandAction(t *testing.T) {
 				m.capabilityRoute = &route
 				m.lastCapabilityRoute = &route
 				m.promptTokens = 4_096
-				m.doneFlash = true
+				m.footerNotice = &footerNotice{text: "✓ Done", severity: noticeSuccess}
 			}
 			// Pre-populate loadedFile for unload test.
 			if tt.result.Action == command.ActionUnloadContext {

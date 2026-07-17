@@ -412,13 +412,15 @@ func (m *Model) handleAgentDone(msg AgentDoneMsg, cmds []tea.Cmd) []tea.Cmd {
 				break
 			}
 		}
-		// Terminal title flash is a success receipt, not a generic stopped state.
-		m.doneFlash = true
-		cmds = append(cmds, tea.Tick(2*time.Second, func(time.Time) tea.Msg {
-			return DoneFlashExpiredMsg{}
-		}))
+		// The success notice is a completion receipt, not a generic stopped
+		// state; it also flashes the terminal title while active.
+		doneText := "✓ Done"
+		if m.lastTurnDuration > 0 {
+			doneText += " · " + formatWorkingElapsed(m.lastTurnDuration)
+		}
+		cmds = append(cmds, m.setFooterNotice(noticeSuccess, doneText, 2*time.Second))
 	} else {
-		m.doneFlash = false
+		m.footerNotice = nil
 		switch {
 		case hasUnresolved:
 			m.entries, _ = appendExecutionRecoveryNotice(m.entries, unresolved)
@@ -487,7 +489,7 @@ func (m *Model) handleAgentDone(msg AgentDoneMsg, cmds []tea.Cmd) []tea.Cmd {
 	}
 	if m.goalNeedsEvaluation && !m.shuttingDown {
 		if settledPersisted {
-			m.doneFlash = false
+			m.footerNotice = nil
 			if cmd := m.beginGoalEvaluation(false); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
@@ -507,7 +509,7 @@ func (m *Model) handleAgentDone(msg AgentDoneMsg, cmds []tea.Cmd) []tea.Cmd {
 		m.recalcViewportHeight()
 	}
 	if msg.Err == nil && settledPersisted && !m.goalNeedsEvaluation && !m.shuttingDown && m.queuedFollowUpAutoDispatchable() {
-		m.doneFlash = false
+		m.footerNotice = nil
 		if cmd := m.dispatchQueuedFollowUp(); cmd != nil {
 			cmds = append(cmds, cmd)
 		}

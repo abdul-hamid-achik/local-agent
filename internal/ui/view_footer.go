@@ -87,7 +87,7 @@ func (m *Model) renderStatusLine() string {
 	conversationStarted := m.conversationStarted()
 	hasNotice := m.hasTranscriptNotice()
 	noticeNeedsRecovery := hasNotice && (paneW < 36 || m.height < 16)
-	if !conversationStarted && !noticeNeedsRecovery && len(m.failedServers) == 0 && !m.skipApprovalsEnabled() && !m.doneFlash && (m.promptTokens <= 0 || m.numCtx <= 0) {
+	if !conversationStarted && !noticeNeedsRecovery && len(m.failedServers) == 0 && !m.skipApprovalsEnabled() && m.footerNotice == nil && (m.promptTokens <= 0 || m.numCtx <= 0) {
 		// The empty-state orientation already carries mode, model, and Settings.
 		// Repeating them immediately above the composer only adds visual noise.
 		return ""
@@ -126,14 +126,10 @@ func (m *Model) renderStatusLine() string {
 		label := mcpUnavailableStatusLabel(failures)
 		parts = append(parts, m.styles.ErrorText.UnsetPaddingLeft().Render(label))
 	}
-	if m.doneFlash {
-		done := "✓ Done"
-		if m.lastTurnDuration > 0 {
-			done += " · " + formatWorkingElapsed(m.lastTurnDuration)
-		}
-		parts = append(parts, m.styles.StatusCheck.UnsetPaddingLeft().Render(done))
-		if receiptAction, ok := m.inspectableToolReceiptAction(); paneW >= 58 &&
-			strings.TrimSpace(m.input.Value()) == "" && ok {
+	if notice := m.footerNotice; notice != nil {
+		parts = append(parts, m.footerNoticeStyle(notice.severity).Render(notice.text))
+		if receiptAction, ok := m.inspectableToolReceiptAction(); notice.severity == noticeSuccess &&
+			paneW >= 58 && strings.TrimSpace(m.input.Value()) == "" && ok {
 			parts = append(parts,
 				m.styles.FocusIndicator.Render(m.keys.ToggleFocusedTool.Help().Key)+
 					" "+m.styles.StatusText.Render(receiptAction),
@@ -277,12 +273,8 @@ func (m *Model) renderGoalFooterStatus(summary GoalSummary, paneW int) string {
 	if !contextHigh && contextStatus != "" {
 		optional = append(optional, metadataPart{view: contextStatus})
 	}
-	if m.doneFlash {
-		done := "✓ Done"
-		if m.lastTurnDuration > 0 {
-			done += " · " + formatWorkingElapsed(m.lastTurnDuration)
-		}
-		optional = append(optional, metadataPart{view: m.styles.StatusCheck.UnsetPaddingLeft().Render(done)})
+	if notice := m.footerNotice; notice != nil {
+		optional = append(optional, metadataPart{view: m.footerNoticeStyle(notice.severity).Render(notice.text)})
 	}
 
 	const minimumGoalWidth = 12
