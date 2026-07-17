@@ -163,3 +163,17 @@ func goalCapabilityPhase(advice *goaladvisor.Advice) string {
 		return "implementation"
 	}
 }
+
+// handleCapabilityRoute records a renderable capability route while a turn is
+// active.
+func (m *Model) handleCapabilityRoute(msg CapabilityRouteMsg) {
+	if m.state == StateWaiting || m.state == StateStreaming {
+		m.capabilityRoute = nil
+		route := sanitizeCapabilityRoute(msg.Route)
+		if capabilityRouteRenderable(route) {
+			m.capabilityRoute = &route
+			last := route
+			m.lastCapabilityRoute = &last
+		}
+	}
+}

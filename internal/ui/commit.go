@@ -246,3 +246,34 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 	}
 	return originalLength, nil
 }
+
+// handleCommitResult applies a tokened /commit receipt.
+func (m *Model) handleCommitResult(msg CommitResultMsg, cmds []tea.Cmd) []tea.Cmd {
+	if !m.commitRunning || msg.Token != m.commitToken {
+		return cmds
+	}
+	m.commitRunning = false
+	if m.commitCancel != nil {
+		m.commitCancel()
+		m.commitCancel = nil
+	}
+	if !m.shuttingDown {
+		m.input.Focus()
+	}
+	if msg.Err != nil {
+		m.entries = append(m.entries, ChatEntry{
+			Kind:    "error",
+			Content: fmt.Sprintf("Commit failed: %v", msg.Err),
+		})
+	} else {
+		m.entries = append(m.entries, ChatEntry{
+			Kind:    "system",
+			Content: fmt.Sprintf("Committed with message:\n%s", msg.Message),
+		})
+	}
+	m.invalidateEntryCache()
+	m.viewport.SetContent(m.renderEntries())
+	m.gotoBottomIfFollowing()
+	m.appendShutdownQuit(&cmds)
+	return cmds
+}

@@ -1,0 +1,209 @@
+package ui
+
+import (
+	"strings"
+
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
+)
+
+// handleIdleKey routes keyboard input once no approval, owned operation, or
+// overlay owns the keyboard. The second return value reports whether the key
+// was consumed here; unhandled keys fall through to the composer and
+// transcript sub-components in Update.
+func (m *Model) handleIdleKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
+	// Transcript paging is parent-owned and must never fall through to the
+	// composer. PgUp/PgDn always page the conversation. Ctrl+U/Ctrl+D retain
+	// their standard textarea editing behavior while a draft is present, and
+	// act as half-page transcript shortcuts only when the composer is empty or
+	// unavailable.
+	if m.transcriptOwnsScrollKey(msg) {
+		return m.updateTranscriptScroll(msg), true
+	}
+	if msg.String() == "ctrl+v" && m.composerEditable() {
+		return m.readClipboardPaste(), true
+	}
+
+	switch {
+	case key.Matches(msg, m.keys.Quit):
+		return m.beginShutdown(), true
+
+	case key.Matches(msg, m.keys.Cancel):
+		// A visible queued follow-up owns the first Escape. Clearing the queue
+		// must not also cancel the active run; a later Escape still reaches the
+		// ordinary cancellation path below.
+		if m.clearQueuedFollowUp() {
+			return nil, true
+		}
+		if (m.state == StateStreaming || m.state == StateWaiting) && m.cancel != nil {
+			m.cancel()
+		}
+
+	case key.Matches(msg, m.keys.Help):
+		// Only toggle help when input is empty.
+		if m.state == StateIdle && strings.TrimSpace(m.input.Value()) == "" {
+			m.overlayParent = OverlayNone
+			m.overlay = OverlayHelp
+			m.initHelpViewport()
+			m.input.Blur()
+			return nil, true
+		}
+
+	case key.Matches(msg, m.keys.ToggleTools):
+		// Batch-toggle all tools when input is empty and idle.
+		if m.state == StateIdle && strings.TrimSpace(m.input.Value()) == "" {
+			m.cancelReceiptInspection(true)
+			m.toolsCollapsed = !m.toolsCollapsed
+			for i := range m.toolEntries {
+				m.toolEntries[i].Collapsed = m.toolsCollapsed
+			}
+			m.invalidateEntryCache()
+			m.viewport.SetContent(m.renderEntries())
+			m.gotoBottomIfFollowing()
+			return nil, true
+		}
+
+	case key.Matches(msg, m.keys.ToggleFocusedTool):
+		// Toggle last tool entry only when input is empty.
+		if m.state == StateIdle && strings.TrimSpace(m.input.Value()) == "" {
+			if len(m.toolEntries) > 0 {
+				target := len(m.toolEntries) - 1
+				if _, ok := m.inspectableToolReceiptAction(); ok {
+					target = m.lastTurnToolIndex
+				}
+				m.toggleToolReceipt(target, true)
+			}
+			return nil, true
+		}
+
+	case key.Matches(msg, m.keys.CompactToggle):
+		if m.state == StateIdle {
+			m.cancelReceiptInspection(true)
+			m.forceCompact = !m.forceCompact
+			m.invalidateEntryCache()
+			m.viewport.SetContent(m.renderEntries())
+			return nil, true
+		}
+
+	case key.Matches(msg, m.keys.ToggleThinking):
+		// Completed reasoning remains inspectable while the next turn runs. A
+		// non-empty draft retains ownership of every control key, and a live
+		// Thinking row is never part of this batch operation.
+		if m.input.Value() != "" {
+			// Bubbles treats Ctrl+T as transpose. This application-level
+			// disclosure shortcut must never silently rewrite a draft.
+			return nil, true
+		}
+		m.cancelReceiptInspection(true)
+		m.toggleAllThinkingReceipts()
+		return nil, true
+
+	case key.Matches(msg, m.keys.ExternalEditor):
+		if m.state == StateIdle {
+			return m.openExternalEditor(), true
+		}
+
+	case key.Matches(msg, m.keys.CopyLast):
+		if m.state == StateIdle && strings.TrimSpace(m.input.Value()) == "" {
+			if content := m.lastAssistantContent(); content != "" {
+				return m.copyToClipboard(content), true
+			}
+		}
+
+	case key.Matches(msg, m.keys.ClearView):
+		if m.state == StateIdle {
+			m.cancelReceiptInspection(true)
+			m.viewport.SetContent(m.renderEntries())
+			m.resumeFollow()
+			return nil, true
+		}
+
+	case key.Matches(msg, m.keys.NewConvo):
+		if m.state == StateIdle {
+			if m.blockSessionReplacementForHeldFollowUp("starting a new conversation") {
+				return nil, true
+			}
+			m.agent.ClearHistory()
+			m.entries = nil
+			m.toolEntries = nil
+			m.resetConversationSession()
+			m.invalidateEntryCache()
+			m.entries = append(m.entries, ChatEntry{
+				Kind:    "system",
+				Content: "New conversation started.",
+			})
+			m.viewport.SetContent(m.renderEntries())
+			m.resumeFollow()
+			return nil, true
+		}
+
+	case key.Matches(msg, m.keys.CycleMode):
+		if m.state == StateIdle {
+			m.cycleMode()
+			return nil, true
+		}
+
+	case key.Matches(msg, m.keys.ModelPicker):
+		if m.state == StateIdle {
+			m.overlayParent = OverlayNone
+			m.openModelPicker()
+			return nil, true
+		}
+
+	case key.Matches(msg, m.keys.SettingsPicker):
+		if m.state == StateIdle {
+			m.openSettingsPicker()
+			return nil, true
+		}
+
+	case key.Matches(msg, m.keys.NewLine):
+		// Insert newline in textarea (shift+enter).
+		if m.composerEditable() {
+			m.clearCompletionSuppression()
+			m.input.InsertString("\n")
+			m.syncInputHeight()
+			return nil, true
+		}
+
+	case key.Matches(msg, m.keys.Send):
+		if m.state == StateIdle {
+			return m.submitInput(), true
+		}
+		if m.composerEditable() {
+			return m.queueComposerFollowUp(), true
+		}
+
+	case key.Matches(msg, m.keys.Complete):
+		// Tab key for autocomplete
+		if m.composerEditable() && m.completer != nil && !m.isCompletionActive() {
+			// Explicit completion always overrides an earlier Escape dismissal.
+			m.completionSuppressedDraft = ""
+			return m.triggerCompletion(m.input.Value()), true
+		}
+
+	case key.Matches(msg, m.keys.HistoryUp):
+		// During an active turn, Up edits the one visible queued follow-up
+		// before it can be mistaken for ordinary prompt-history navigation.
+		if m.editQueuedFollowUp() {
+			return nil, true
+		}
+		if m.state == StateIdle && m.overlay == OverlayNone {
+			if strings.TrimSpace(m.input.Value()) == "" || m.historyIndex != -1 {
+				if m.navigateHistory(-1) {
+					return nil, true
+				}
+			}
+		}
+
+	case key.Matches(msg, m.keys.HistoryDown):
+		if m.state == StateIdle && m.overlay == OverlayNone {
+			if m.historyIndex != -1 {
+				if m.navigateHistory(1) {
+					return nil, true
+				}
+			}
+		}
+	}
+
+	return nil, false
+}

@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -506,4 +507,118 @@ func manuallySelectableOllamaModels(models []OllamaModelDescriptor) []string {
 		}
 	}
 	return result
+}
+
+// handleModelPullRequested starts a model download and its spinner clock.
+func (m *Model) handleModelPullRequested(msg OllamaModelPullRequestedMsg, cmds []tea.Cmd) []tea.Cmd {
+	cmds = append(cmds, m.startModelPull(msg.Name))
+	if m.modelPullState != nil && !m.reducedMotion {
+		cmds = append(cmds, m.modelPullState.Spinner.Tick)
+	}
+	return cmds
+}
+
+// handleModelPullCancelRequested cancels an in-flight model download.
+func (m *Model) handleModelPullCancelRequested(msg OllamaModelPullCancelRequestedMsg) {
+	m.cancelModelPull()
+	if m.modelPullState != nil {
+		m.modelPullState.Apply(OllamaModelPullProgressMsg{Name: msg.Name, Err: errors.New("model download cancelled")})
+	}
+}
+
+// handleModelPullProgress applies a tokened model download progress receipt.
+func (m *Model) handleModelPullProgress(msg OllamaModelPullProgressMsg, cmds []tea.Cmd) []tea.Cmd {
+	if msg.RequestID != m.modelPullRequest {
+		return cmds
+	}
+	if m.modelPullState == nil {
+		if msg.Done || msg.Err != nil {
+			m.modelPullRunning = false
+			m.cancelModelPull()
+			m.appendShutdownQuit(&cmds)
+		}
+		return cmds
+	}
+	cmds = append(cmds, m.modelPullState.Apply(msg))
+	if msg.Done && msg.Err == nil {
+		m.modelPullRunning = false
+		m.cancelModelPull()
+		cmds = append(cmds, m.refreshOllamaInventory())
+		m.appendShutdownQuit(&cmds)
+	} else if msg.Err != nil {
+		m.modelPullRunning = false
+		m.cancelModelPull()
+		m.appendShutdownQuit(&cmds)
+	} else if m.modelPullProgress != nil {
+		cmds = append(cmds, waitModelPullProgress(m.modelPullProgress))
+	}
+	return cmds
+}
+
+// handleOllamaModelInventory routes a tokened inventory snapshot either
+// directly into projections or through the serialized commit path.
+func (m *Model) handleOllamaModelInventory(msg OllamaModelInventoryMsg, cmds []tea.Cmd) []tea.Cmd {
+	if msg.RequestID != m.modelInventoryRequest {
+		return cmds
+	}
+	if msg.Err != nil || m.modelManager == nil {
+		m.applyOllamaInventory(msg)
+		return cmds
+	}
+	if m.ollamaInventoryCommitting {
+		copy := msg
+		m.pendingOllamaInventory = &copy
+		return cmds
+	}
+	cmds = append(cmds, m.commitOllamaInventory(msg))
+	return cmds
+}
+
+// handleOllamaInventoryCommitted reconciles a committed inventory snapshot
+// with the current model selection and any pending refresh.
+func (m *Model) handleOllamaInventoryCommitted(msg ollamaModelInventoryCommittedMsg, cmds []tea.Cmd) []tea.Cmd {
+	if msg.Inventory.RequestID != m.ollamaInventoryCommitID {
+		return cmds
+	}
+	m.ollamaInventoryCommitting = false
+	if !m.shuttingDown && msg.Inventory.RequestID == m.modelInventoryRequest {
+		m.applyOllamaInventory(msg.Inventory)
+		switch {
+		case msg.SelectionChanged:
+			m.setCurrentModelProjection(msg.SelectedModel)
+			if msg.SelectedModel != "" {
+				m.modelPinned = false
+			}
+			for index := range m.ollamaModels {
+				m.ollamaModels[index].Current = config.CanonicalModelName(m.ollamaModels[index].Name) == config.CanonicalModelName(msg.SelectedModel) && msg.SelectedModel != ""
+			}
+			detail := msg.SelectionReason
+			if msg.SelectionErr != nil {
+				detail += fmt.Sprintf("; reconciliation warning: %v", msg.SelectionErr)
+			}
+			if msg.SelectedModel != "" {
+				m.appendGoalSystem(fmt.Sprintf("Ollama inventory changed · %s · resumed automatic routing on local model %s", detail, msg.SelectedModel))
+			} else {
+				m.appendGoalError(fmt.Sprintf("Ollama inventory changed · %s. Model %q was cleared; select a verified model before the next turn.", detail, msg.PreviousModel))
+			}
+		case msg.RecoveryErr != nil:
+			detail := fmt.Sprintf("Ollama inventory recovered, but model %q could not be activated: %v", m.model, msg.RecoveryErr)
+			m.appendGoalError(detail)
+			if m.modelPickerState != nil {
+				m.modelPickerState.Notice = detail
+			}
+		case msg.RecoveredModel != "":
+			m.setCurrentModelProjection(msg.RecoveredModel)
+			m.appendGoalSystem(fmt.Sprintf("Ollama reconnected · %s ready", msg.RecoveredModel))
+		}
+	}
+	if !m.shuttingDown && m.pendingOllamaInventory != nil {
+		pending := *m.pendingOllamaInventory
+		m.pendingOllamaInventory = nil
+		if pending.RequestID == m.modelInventoryRequest {
+			cmds = append(cmds, m.commitOllamaInventory(pending))
+		}
+	}
+	m.appendShutdownQuit(&cmds)
+	return cmds
 }

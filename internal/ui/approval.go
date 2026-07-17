@@ -626,3 +626,35 @@ func formatApprovalBytes(size int64) string {
 	}
 	return fmt.Sprintf("%.1f MiB", float64(size)/(1024*1024))
 }
+
+// handleToolApprovalRequest opens the interactive approval prompt, or settles
+// the request as host cancellation when the application is shutting down.
+func (m *Model) handleToolApprovalRequest(msg ToolApprovalMsg) {
+	if m.shuttingDown {
+		// A callback may cross the shutdown boundary after the active turn has
+		// already been cancelled. Never reopen interactive authority while the
+		// host is joining receipts, and never mislabel host cancellation as a
+		// human denial. Production response channels are buffered; the
+		// non-blocking send also keeps malformed or already-settled adapters from
+		// freezing the Bubble Tea parent during shutdown.
+		if msg.Response != nil {
+			select {
+			case msg.Response <- permission.Cancelled("application is shutting down"):
+			default:
+			}
+		}
+		return
+	}
+	if err := m.openApproval(msg); err != nil {
+		if msg.Response != nil {
+			msg.Response <- permission.Refuse("approval_preview_unavailable", err.Error())
+		}
+		m.entries = append(m.entries, ChatEntry{
+			Kind:    "error",
+			Content: "Approval preview unavailable: " + err.Error(),
+		})
+		m.invalidateRenderedCache()
+		m.viewport.SetContent(m.renderEntries())
+		m.gotoBottomIfFollowing()
+	}
+}

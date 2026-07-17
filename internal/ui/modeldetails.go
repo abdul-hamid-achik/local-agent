@@ -4,6 +4,8 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+
+	"github.com/abdul-hamid-achik/local-agent/internal/config"
 )
 
 // renderCompactOllamaModelDetails keeps the minimum terminal actionable. It
@@ -141,4 +143,17 @@ func renderOllamaModelDetails(model OllamaModelDescriptor, width int, isDark boo
 		b.WriteString(lipgloss.NewStyle().Foreground(palette.Dim).Render("Prompts leave this machine through Ollama."))
 	}
 	return lipgloss.NewStyle().Width(width).Render(b.String())
+}
+
+// handleOllamaModelDetailsResult applies a details receipt to the open
+// model-details overlay.
+func (m *Model) handleOllamaModelDetailsResult(msg OllamaModelDetailsResultMsg) {
+	if m.modelDetailsState != nil && config.CanonicalModelName(m.modelDetailsState.Name) == config.CanonicalModelName(msg.Model.Name) {
+		if msg.Err != nil {
+			m.modelDetailsState.Reason = "Details unavailable: " + msg.Err.Error()
+		} else {
+			copy := msg.Model
+			m.modelDetailsState = &copy
+		}
+	}
 }

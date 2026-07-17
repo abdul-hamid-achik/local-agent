@@ -652,3 +652,32 @@ func splitDiffTextLines(s string) []diffTextLine {
 	}
 	return result
 }
+
+// handleDiffBuildResult applies an asynchronously built diff receipt to its
+// matching pending tool entry.
+func (m *Model) handleDiffBuildResult(msg diffBuildResultMsg) {
+	matched := false
+	for i := len(m.toolEntries) - 1; i >= 0; i-- {
+		entry := &m.toolEntries[i]
+		if !toolCallMatches(msg.ToolID, msg.ToolName, entry.ID, entry.Name) ||
+			!entry.DiffPending || entry.DiffGeneration != msg.Generation {
+			continue
+		}
+		entry.DiffPending = false
+		entry.DiffGeneration = 0
+		if msg.Available {
+			// The live card and persisted session share one explicit bound. This
+			// keeps every retained row inspectable while oversized patches end in
+			// a typed omission marker instead of a renderer-only dead end.
+			entry.DiffLines = persistDiffLines(msg.Lines)
+		}
+		matched = true
+		break
+	}
+	if !matched {
+		return
+	}
+	m.invalidateEntryCache()
+	m.viewport.SetContent(m.renderEntries())
+	m.gotoBottomIfFollowing()
+}

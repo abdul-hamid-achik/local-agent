@@ -173,3 +173,47 @@ func replaceCompletionItems(cs *CompletionState, items []Completion) {
 	cs.FilteredItems = FilterCompletions(items, cs.Filter.Value())
 	cs.Index = max(0, min(cs.Index, len(cs.FilteredItems)-1))
 }
+
+// handleCompletionDebounceTick begins the debounced completion search when
+// the tick still matches the active completion generation.
+func (m *Model) handleCompletionDebounceTick(msg CompletionDebounceTickMsg) (tea.Cmd, bool) {
+	if m.isCompletionActive() &&
+		m.completionState.Generation == msg.Generation &&
+		m.completionState.DebounceTag == msg.Tag {
+		return m.beginCompletionSearch(msg.Generation, msg.Tag, msg.Query, msg.Path), true
+	}
+	return nil, false
+}
+
+// handleCompletionSearchResult merges asynchronous completion search results
+// into the active completion state.
+func (m *Model) handleCompletionSearchResult(msg CompletionSearchResultMsg, cmds []tea.Cmd) []tea.Cmd {
+	if m.isCompletionActive() &&
+		m.completionState.Generation == msg.Generation &&
+		m.completionState.DebounceTag == msg.Tag {
+		anchor := m.captureCompletionTranscriptAnchor()
+		cs := m.completionState
+		cs.Searching = false
+		cs.SearchCancel = nil
+		replaceCompletionItems(cs, mergeCompletionItems(cs.BaseItems, msg.Results))
+		cmds = append(cmds, m.refreshCompletionPreview())
+		m.recalcViewportHeight()
+		m.restoreCompletionTranscriptAnchor(anchor)
+	}
+	return cmds
+}
+
+// handleCompletionPreviewResult applies a tokened attachment preview to the
+// active completion state.
+func (m *Model) handleCompletionPreviewResult(msg completionPreviewResultMsg) {
+	if m.isCompletionActive() &&
+		m.completionState.Kind == "attachments" &&
+		m.completionState.Generation == msg.Generation &&
+		m.completionState.PreviewToken == msg.Token {
+		anchor := m.captureCompletionTranscriptAnchor()
+		m.completionState.PreviewCancel = nil
+		m.completionState.Preview = msg.Preview
+		m.recalcViewportHeight()
+		m.restoreCompletionTranscriptAnchor(anchor)
+	}
+}

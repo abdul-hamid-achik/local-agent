@@ -166,3 +166,13 @@ func editorResultMessage(path string, runErr error, charLimit int) tea.Msg {
 type editorReturnMsg struct {
 	Content string
 }
+
+// handleEditorReturn restores the composer draft produced by the external
+// editor.
+func (m *Model) handleEditorReturn(msg editorReturnMsg) {
+	m.clearCompletionSuppression()
+	m.input.SetValue(msg.Content)
+	m.input.CursorEnd()
+	_ = m.reflowInputViewport()
+	m.input.Focus()
+}

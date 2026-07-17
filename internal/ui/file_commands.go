@@ -266,3 +266,25 @@ func splitQuotedFields(input string) ([]string, error) {
 	flush()
 	return fields, nil
 }
+
+// handleContextLoadResult applies a tokened context-load receipt.
+func (m *Model) handleContextLoadResult(msg ContextLoadResultMsg) {
+	if !m.fileLoading || msg.Token != m.fileOpToken {
+		return
+	}
+	m.fileLoading = false
+	if !m.shuttingDown {
+		m.input.Focus()
+	}
+	if msg.Err != nil {
+		m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("Load failed: %v", msg.Err)})
+	} else {
+		m.loadedFile = msg.Path
+		m.manualLoadedContext = msg.Data
+		m.syncLoadedContext()
+		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: fmt.Sprintf("Loaded context: %s (%d bytes)", msg.Path, len(msg.Data))})
+	}
+	m.invalidateEntryCache()
+	m.viewport.SetContent(m.renderEntries())
+	m.gotoBottomIfFollowing()
+}
