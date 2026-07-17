@@ -33,7 +33,6 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/command"
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
-	"github.com/abdul-hamid-achik/local-agent/internal/ecosystem"
 	"github.com/abdul-hamid-achik/local-agent/internal/execution"
 	"github.com/abdul-hamid-achik/local-agent/internal/goal"
 	"github.com/abdul-hamid-achik/local-agent/internal/imageasset"
@@ -42,131 +41,6 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/safeio"
 	"github.com/abdul-hamid-achik/local-agent/internal/skill"
 )
-
-// State represents the TUI's two possible states.
-type State int
-
-const (
-	StateIdle      State = iota // waiting for user input
-	StateWaiting                // sent to LLM, waiting for first token
-	StateStreaming              // LLM is generating a response
-)
-
-// OverlayKind represents what overlay (if any) is currently shown.
-type OverlayKind int
-
-const (
-	OverlayNone OverlayKind = iota
-	OverlayHelp
-	OverlayCompletion
-	OverlayModelPicker
-	OverlayCloudConsent
-	OverlayPlanForm
-	OverlayCortexDecision
-	OverlaySessionsPicker
-	OverlaySettings
-	OverlayAgentPicker
-	OverlayModePicker
-	OverlayGoalForm
-	OverlayRuntimeStatus
-	OverlayGoalInspector
-	OverlayGoalRecovery
-	OverlayModelDetails
-	OverlayModelPull
-)
-
-// CompletionState holds all state for the composer-owned completion popup.
-type CompletionState struct {
-	Kind          string          // "command", "attachments", "skills"
-	Filter        textinput.Model // inline filter field
-	Anchor        completionAnchor
-	CommandPrefix string       // exact `/command ` prefix for registry action completion
-	BaseItems     []Completion // non-workspace items retained across async searches
-	AllItems      []Completion // full unfiltered list
-	FilteredItems []Completion // items matching current filter
-	Index         int          // cursor in FilteredItems
-	Selected      map[int]bool // multi-select (keys = AllItems indices)
-	CurrentPath   string       // for @ file browsing: relative dir path
-	Searching     bool         // true while vecgrep is in flight
-	Generation    uint64       // guards results across close/reopen cycles
-	DebounceTag   int          // cancel stale searches
-	SearchCancel  context.CancelFunc
-	Preview       completionPreview
-	PreviewToken  uint64
-	PreviewCancel context.CancelFunc
-}
-
-// ToolStatus represents the state of a tool execution.
-type ToolStatus int
-
-const (
-	ToolStatusRunning ToolStatus = iota
-	ToolStatusDone
-	ToolStatusError
-)
-
-// ToolEntry tracks the lifecycle of a single tool call.
-type ToolEntry struct {
-	ID                      string
-	Name                    string
-	Summary                 string         // bounded semantic context for compact/restored receipts
-	Args                    string         // formatted args string
-	RawArgs                 map[string]any `json:"-"` // ephemeral original args
-	Result                  string
-	ResultLanguage          string // bounded lexer alias derived from trusted call metadata
-	IsError                 bool
-	Status                  ToolStatus
-	StartTime               time.Time
-	Duration                time.Duration
-	Collapsed               bool                     // per-entry collapse state
-	BeforeContent           string                   `json:"-"` // ephemeral snapshot before file write
-	BeforeSnapshotAvailable bool                     `json:"-"` // false when the bounded pre-write read was unavailable
-	DiffLines               []DiffLine               // computed diff (nil = not a file write)
-	DiffPending             bool                     `json:"-"` // post-write read/LCS is running outside Update
-	DiffGeneration          uint64                   `json:"-"` // accepts exactly one matching asynchronous result
-	Projection              ecosystem.ToolProjection // bounded semantic role, route, and outcome
-	ExpertProgress          *ExpertProgressState     // bounded consult_experts lifecycle projection
-}
-
-// ChatEntry is a single item in the chat log.
-type ChatEntry struct {
-	Kind              string           // "user", "assistant", "tool_group", "error", "system"
-	Content           string           // raw content
-	RenderedContent   string           // cached Glamour output (set once on completion)
-	Name              string           // tool name for tool entries
-	IsError           bool             // for tool_result
-	ToolIndex         int              // index into toolEntries for "tool_group" kind
-	ThinkingContent   string           // extracted <think> content
-	ThinkingCollapsed bool             // default: true
-	Attachments       []imageasset.Ref // validated, path-free image metadata
-}
-
-// toolHitRegion is an exact, ordered transcript row target for one ToolCard
-// header. Dense receipts can be adjacent, so hit testing must never infer a
-// fixed card height or iterate an unordered map.
-type toolHitRegion struct {
-	ToolIndex int
-	Row       int
-	EndCol    int
-}
-
-// thinkingHitRegion identifies one completed assistant reasoning disclosure.
-// The digest prevents an old cached row from toggling a replacement entry that
-// happens to occupy the same slice index.
-type thinkingHitRegion struct {
-	EntryIndex int
-	Row        int
-	EndCol     int
-	Digest     [32]byte
-}
-
-// startupItem tracks the progress of a single startup task.
-type startupItem struct {
-	ID     string
-	Label  string
-	Status string // "connecting", "connected", "failed"
-	Detail string
-}
 
 // Model is the BubbleTea model for the chat interface.
 type Model struct {
@@ -652,177 +526,10 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.BackgroundColorMsg:
-		approvalAnchor := m.captureApprovalTranscriptAnchor()
-		inlineFormAnchor := m.captureInlineFormTranscriptAnchor()
-		m.isDark = msg.IsDark()
-		m.styles = NewStyles(m.isDark)
-		// Update spinner style for theme.
-		m.spin.Style = m.styles.StatusDot
-		m.syncComposerAuthority()
-		m.scramble.SetDark(msg.IsDark())
-		// Update tool card styles for theme.
-		m.toolCardMgr.SetDark(msg.IsDark())
-		m.restylePickerOverlays()
-		if m.goalFormState != nil {
-			m.goalFormState.SetTheme(m.isDark)
-			m.goalFormState.SetReducedMotion(m.reducedMotion)
-		}
-		if m.cortexDecision != nil {
-			m.cortexDecision.SetTheme(m.isDark)
-			m.cortexDecision.reducedMotion = m.reducedMotion
-		}
-		if m.continuation.card != nil {
-			m.continuation.card.SetTheme(m.isDark)
-		}
-		if m.bobWorkspaceContext.card != nil {
-			m.bobWorkspaceContext.card.SetTheme(m.isDark)
-		}
-		if m.goalInspectorState != nil {
-			m.goalInspectorState.SetTheme(m.isDark)
-			m.goalInspectorState.SetReducedMotion(m.reducedMotion)
-		}
-		if m.goalPlan != nil {
-			m.goalPlan.SetTheme(m.isDark)
-		}
-		if m.goalRecoveryState != nil {
-			m.goalRecoveryState.SetTheme(m.isDark)
-			m.goalRecoveryState.SetReducedMotion(m.reducedMotion)
-		}
-		if m.pendingApproval != nil && m.approvalState != nil {
-			// Approval previews live in a cached Bubbles viewport. Rebuild its
-			// styled content immediately so a live theme switch cannot leave the
-			// body on the old palette while the title and choices change.
-			m.resizeApproval(true)
-		}
-		// Recreate markdown renderer for new theme.
-		if m.width > 0 {
-			m.markdownWidth = m.chatContentWidth()
-			m.md = NewMarkdownRenderer(m.markdownWidth, m.isDark)
-			m.invalidateRenderedCache()
-		}
-		if m.ready {
-			m.viewport.SetContent(m.renderEntries())
-		}
-		m.refreshInlineFormLayout(inlineFormAnchor)
-		m.restoreApprovalTranscriptAnchor(approvalAnchor)
+		m.handleThemeChange(msg)
 
 	case tea.WindowSizeMsg:
-		widthChanged := msg.Width != m.width
-		if widthChanged {
-			// Width reflow invalidates both the inspected ToolCard row and the
-			// numeric offset saved before inspection. Settle that temporary
-			// disclosure first; height-only repaint events preserve it.
-			m.cancelReceiptInspection(true)
-		}
-		approvalAnchor := m.captureApprovalTranscriptAnchor()
-		completionAnchor := m.captureCompletionTranscriptAnchor()
-		inlineFormAnchor := m.captureInlineFormTranscriptAnchor()
-		wasUndersized := m.ready && m.narrowTerminalHint() != ""
-		m.width = msg.Width
-		m.height = msg.Height
-		isUndersized := m.narrowTerminalHint() != ""
-		switch {
-		case isUndersized:
-			m.resetHiddenApprovalChoice()
-			m.cancelTerminalInputResume()
-		case wasUndersized:
-			cmds = append(cmds, m.armTerminalInputResume())
-		case m.terminalInputResumeActive():
-			cmds = append(cmds, m.armTerminalInputResume())
-		}
-		if m.goalFormState != nil {
-			m.goalFormState.SetSize(m.width, m.height)
-		}
-		if m.goalPlan != nil {
-			m.goalPlan.SetSize(m.chatPaneWidth(), m.height)
-		}
-		if m.cortexDecision != nil {
-			m.cortexDecision.SetSize(m.width, m.height)
-		}
-
-		// The conversation always owns the full terminal width. Infrequent
-		// controls are presented in overlays.
-		viewportWidth := msg.Width - 1
-		if viewportWidth < 20 {
-			viewportWidth = 20
-		}
-
-		contentWidth := m.chatContentWidth()
-		markdownChanged := m.md == nil || contentWidth != m.markdownWidth
-		if markdownChanged {
-			m.markdownWidth = contentWidth
-			m.md = NewMarkdownRenderer(contentWidth, m.isDark)
-		}
-
-		// Recalculate content height
-		contentH := m.viewportHeight()
-
-		if !m.ready {
-			m.viewport = viewport.New(
-				viewport.WithWidth(viewportWidth),
-				viewport.WithHeight(contentH),
-			)
-			// Override viewport KeyMap: keep only pgup/pgdown/ctrl+u/ctrl+d
-			m.viewport.KeyMap.PageDown = key.NewBinding(key.WithKeys("pgdown"))
-			m.viewport.KeyMap.PageUp = key.NewBinding(key.WithKeys("pgup"))
-			m.viewport.KeyMap.HalfPageUp = key.NewBinding(key.WithKeys("ctrl+u"))
-			m.viewport.KeyMap.HalfPageDown = key.NewBinding(key.WithKeys("ctrl+d"))
-			m.viewport.KeyMap.Up = key.NewBinding(key.WithDisabled())
-			m.viewport.KeyMap.Down = key.NewBinding(key.WithDisabled())
-			m.viewport.KeyMap.Left = key.NewBinding(key.WithDisabled())
-			m.viewport.KeyMap.Right = key.NewBinding(key.WithDisabled())
-			m.viewport.SetContent(m.renderEntries())
-			m.ready = true
-			// Initialize scroll follow intent at the newest transcript row.
-			m.markFollowingLatest()
-			// Hit regions are populated by the transcript renderer.
-			m.toolHitRegions = nil
-			m.thinkingHitRegions = nil
-		} else {
-			m.viewport.SetWidth(viewportWidth)
-			m.viewport.SetHeight(contentH)
-			if markdownChanged {
-				// Re-wrap completed assistant messages only when the actual
-				// markdown width changes. Height-only resizes preserve caches.
-				m.invalidateRenderedCache()
-			} else if widthChanged {
-				m.invalidateEntryCache()
-			}
-			if markdownChanged || widthChanged {
-				m.viewport.SetContent(m.renderEntries())
-			}
-			// Maintain scroll position - if anchor is active, stay at bottom.
-			m.gotoBottomIfFollowing()
-		}
-
-		// Resize help viewport if it's open.
-		if m.overlay == OverlayHelp {
-			m.resizeHelpViewport(true)
-		}
-		m.resizePickerOverlays()
-		if m.pendingApproval != nil && m.approvalState != nil {
-			m.resizeApproval(true)
-			m.recalcViewportHeight()
-		}
-		if m.goalInspectorState != nil {
-			m.goalInspectorState.SetSize(m.width, m.height)
-		}
-		if m.goalRecoveryState != nil {
-			m.goalRecoveryState.SetSize(m.width, m.height)
-		}
-
-		// Input width matches viewport exactly - they're one unified area
-		if msg.Width < 36 {
-			m.input.Placeholder = "Ask or type / for commands"
-		} else {
-			m.input.Placeholder = "Ask, @mention files, or type /help"
-		}
-		m.input.MaxHeight = composerVisibleRowLimit(msg.Height)
-		m.input.SetWidth(viewportWidth)
-		m.syncInputHeight()
-		m.restoreApprovalTranscriptAnchor(approvalAnchor)
-		m.restoreCompletionTranscriptAnchor(completionAnchor)
-		m.restoreInlineFormTranscriptAnchor(inlineFormAnchor)
+		cmds = m.handleWindowSize(msg, cmds)
 
 	case goalRecoveryLoadResultMsg:
 		if cmd := m.handleGoalRecoveryLoadResult(msg); cmd != nil {
@@ -1693,142 +1400,25 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		}
 
 	case StreamTextMsg:
-		if m.state == StateWaiting {
-			m.state = StateStreaming
-			cmds = append(cmds, m.startActivityCmd())
-		}
-		// Route through thinking tag parser.
-		mainText, thinkText, outInThinking, outSearchBuf := processStreamChunk(
-			msg.Text, m.inThinking, m.thinkSearchBuf,
-		)
-		m.inThinking = outInThinking
-		m.thinkSearchBuf = outSearchBuf
-		if mainText != "" {
-			m.streamBuf.WriteString(mainText)
-		}
-		if thinkText != "" {
-			m.thinkBuf.WriteString(thinkText)
-		}
-		// Coalesce repaints to ~30fps. Fast local models emit tokens faster
-		// than the terminal can usefully redraw; repainting every token wastes
-		// CPU and causes flicker. StreamDoneMsg always repaints, so the final
-		// partial is never dropped.
-		if now := time.Now(); now.Sub(m.lastStreamPaint) >= 33*time.Millisecond {
-			m.lastStreamPaint = now
-			m.viewport.SetContent(m.renderEntries())
-			m.gotoBottomIfFollowing()
-		}
+		cmds = m.handleStreamText(msg, cmds)
 
 	case StreamThinkingMsg:
-		if m.state == StateWaiting {
-			m.state = StateStreaming
-			cmds = append(cmds, m.startActivityCmd())
-		}
-		m.thinkBuf.WriteString(msg.Text)
-		if now := time.Now(); now.Sub(m.lastStreamPaint) >= 33*time.Millisecond {
-			m.lastStreamPaint = now
-			m.viewport.SetContent(m.renderEntries())
-			m.gotoBottomIfFollowing()
-		}
+		cmds = m.handleStreamThinking(msg, cmds)
 
 	case StreamDoneMsg:
-		m.evalCount = msg.EvalCount
-		m.promptTokens = msg.PromptTokens
-		m.turnEvalTotal += msg.EvalCount
-		m.turnPromptTotal += msg.PromptTokens
-		m.sessionEvalTotal += msg.EvalCount
-		m.sessionPromptTotal += msg.PromptTokens
+		m.handleStreamDone(msg)
 
 	case ContextCompactedMsg:
-		m.promptTokens = 0
-		if err := m.reconcileVisibleImageProjection(m.agent.Messages()); err != nil {
-			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: "Context compaction could not reconcile image references: " + err.Error()})
-			m.invalidateEntryCache()
-			m.viewport.SetContent(m.renderEntries())
-			m.gotoBottomIfFollowing()
-		}
+		m.handleContextCompacted(msg)
 
 	case ContextCompactionStartedMsg:
-		m.compactingContext = true
-		m.viewport.SetContent(m.renderEntries())
-		m.gotoBottomIfFollowing()
-		cmds = append(cmds, m.startActivityCmd())
+		cmds = m.handleContextCompactionStarted(msg, cmds)
 
 	case ContextCompactionFinishedMsg:
-		m.compactingContext = false
-		m.viewport.SetContent(m.renderEntries())
-		m.gotoBottomIfFollowing()
+		m.handleContextCompactionFinished(msg)
 
 	case ToolCallStartMsg:
-		if m.goalTurnID != "" {
-			m.goalTurnToolCalls++
-		}
-		startToolSpinner := m.state != StateStreaming && m.toolsPending == 0
-		if m.state == StateWaiting {
-			m.state = StateStreaming
-		}
-		projection := ecosystem.ProjectToolCall(msg.Name, msg.Args)
-		args := agent.FormatToolArgsForTool(msg.Name, msg.Args)
-		rawArgs := agent.SafeToolArgsForPersistence(msg.Name, msg.Args)
-		resultLanguage := trustedResultLanguageForTool(msg.Name, msg.Args)
-		collapsed := m.toolsCollapsed
-		if isExpertConsultTool(msg.Name) {
-			// The consultation objective belongs only to the transient runtime.
-			// Its live UI is populated exclusively by bounded progress events.
-			args = ""
-			rawArgs = nil
-			resultLanguage = ""
-			collapsed = false
-		}
-		te := ToolEntry{
-			ID:             msg.ID,
-			Name:           msg.Name,
-			Args:           args,
-			RawArgs:        rawArgs,
-			Status:         ToolStatusRunning,
-			StartTime:      msg.StartTime,
-			Collapsed:      collapsed,
-			Projection:     projection,
-			ResultLanguage: resultLanguage,
-		}
-		if isExpertConsultTool(msg.Name) {
-			te.Summary = "awaiting expert plan"
-		} else {
-			te.Summary = boundedToolCardSummary(toolSummary(classifyTool(msg.Name), te))
-		}
-		if classifyTool(msg.Name) == ToolTypeFileWrite {
-			// The Adapter captured this before returning control to the tool
-			// execution path. Update only installs the immutable result.
-			te.BeforeContent = msg.BeforeContent
-			te.BeforeSnapshotAvailable = msg.BeforeSnapshotAvailable
-		}
-		m.toolEntries = append(m.toolEntries, te)
-		m.toolsPending++
-		if startToolSpinner {
-			cmds = append(cmds, m.startActivityCmd())
-		}
-
-		// Create tool card for fancy display
-		kind := toolCardKindForTool(msg.Name)
-		m.toolCardMgr.AddCardWithID(msg.ID, msg.Name, kind, msg.StartTime)
-		if len(m.toolCardMgr.Cards) > 0 {
-			card := &m.toolCardMgr.Cards[len(m.toolCardMgr.Cards)-1]
-			card.Args = te.Args
-			card.SetSummary(te.Summary)
-			card.ResultLanguage = te.ResultLanguage
-			card.Projection = te.Projection
-		}
-
-		// Settle the assistant segment before its tool receipt so transcript order
-		// remains reasoning/prose → tool. Thinking-only segments render as one
-		// compact disclosure without an empty assistant block.
-		m.flushStream()
-		m.entries = append(m.entries, ChatEntry{
-			Kind:      "tool_group",
-			ToolIndex: len(m.toolEntries) - 1,
-		})
-		m.viewport.SetContent(m.renderEntries())
-		m.gotoBottomIfFollowing()
+		cmds = m.handleToolCallStart(msg, cmds)
 
 	case ExpertProgressMsg:
 		m.handleExpertProgress(msg)
@@ -1846,124 +1436,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		return m, m.handleCortexDecisionAnswerResult(msg)
 
 	case ToolCallResultMsg:
-		m.invalidateEntryCache()
-		if m.logger != nil {
-			m.logger.Info("tool call", "name", msg.Name, "duration", msg.Duration, "error", msg.IsError)
-		}
-		matched := false
-		matchedIndex := -1
-		expertResult := isExpertConsultTool(msg.Name)
-		result := boundedToolCardResult(msg.Result)
-		if expertResult {
-			// The aggregate report and provider failures stay transient. The
-			// settled card is driven by the bounded per-expert projection.
-			result = ""
-		}
-		// Bob envelopes carry stable conflict/error codes and copy-pasteable
-		// corrective commands; keep that digest visible ahead of the raw JSON.
-		if !expertResult {
-			if digest := bobReceiptDigest(msg.Name, msg.Result); digest != "" {
-				result = boundedToolCardResult(digest + "\n" + msg.Result)
-			}
-		}
-		var diffCmd tea.Cmd
-		for i := len(m.toolEntries) - 1; i >= 0; i-- {
-			if toolCallMatches(msg.ID, msg.Name, m.toolEntries[i].ID, m.toolEntries[i].Name) && m.toolEntries[i].Status == ToolStatusRunning {
-				matched = true
-				matchedIndex = i
-				projection := msg.Projection.Normalize()
-				if projection.Transport == "" {
-					projection = ecosystem.ProjectToolResult(m.toolEntries[i].Projection, msg.Result, msg.IsError)
-				}
-				m.toolEntries[i].Projection = projection
-				m.toolEntries[i].Result = result
-				m.toolEntries[i].IsError = projection.Transport == ecosystem.TransportFailed || projection.Domain == ecosystem.DomainFailed
-				m.toolEntries[i].Duration = msg.Duration
-				if m.toolEntries[i].IsError {
-					m.toolEntries[i].Status = ToolStatusError
-				} else {
-					m.toolEntries[i].Status = ToolStatusDone
-				}
-				// Successful file writes schedule the bounded post-write read and LCS
-				// outside Update. The command owns only the path and pre-write bytes;
-				// raw arguments and entry snapshots are cleared before Update returns.
-				if classifyTool(m.toolEntries[i].Name) == ToolTypeFileWrite && projection.Successful() {
-					path := toolSummary(ToolTypeFileWrite, m.toolEntries[i])
-					if path != "" {
-						if m.fileChanges == nil {
-							m.fileChanges = make(map[string]int)
-						}
-						m.fileChanges[path]++
-					}
-					beforeAvailable := m.toolEntries[i].BeforeSnapshotAvailable || m.toolEntries[i].BeforeContent != ""
-					if diffPath := diffPathFromArgs(m.toolEntries[i].RawArgs); diffPath != "" && beforeAvailable {
-						m.diffGeneration++
-						m.toolEntries[i].DiffPending = true
-						m.toolEntries[i].DiffGeneration = m.diffGeneration
-						diffCmd = buildFileDiffCmd(diffBuildRequest{
-							Generation:      m.diffGeneration,
-							ToolID:          m.toolEntries[i].ID,
-							ToolName:        m.toolEntries[i].Name,
-							Path:            diffPath,
-							WorkDir:         m.agent.WorkDir(),
-							Before:          m.toolEntries[i].BeforeContent,
-							BeforeAvailable: beforeAvailable,
-						})
-					}
-				}
-				// Raw arguments and pre-write snapshots are needed only while the
-				// call is active. Do not retain them in memory or session state.
-				m.toolEntries[i].RawArgs = nil
-				m.toolEntries[i].BeforeContent = ""
-				m.toolEntries[i].BeforeSnapshotAvailable = false
-				break
-			}
-		}
-		if !matched {
-			break
-		}
-		if expertResult && matchedIndex >= 0 {
-			entry := &m.toolEntries[matchedIndex]
-			entry.ExpertProgress = sanitizeExpertProgressState(entry.ExpertProgress, true)
-			if entry.ExpertProgress != nil {
-				entry.Summary = boundedToolCardSummary(entry.ExpertProgress.summary())
-			} else {
-				entry.Summary = "expert progress unavailable"
-			}
-			for cardIndex := len(m.toolCardMgr.Cards) - 1; cardIndex >= 0; cardIndex-- {
-				card := &m.toolCardMgr.Cards[cardIndex]
-				if toolCallMatches(msg.ID, msg.Name, card.ID, card.Name) && card.State == ToolCardRunning {
-					card.SetSummary(entry.Summary)
-					card.setExpertProgress(entry.ExpertProgress, max(1, m.chatPaneWidth()-6))
-					break
-				}
-			}
-		}
-		var completedProjection ecosystem.ToolProjection
-		for i := len(m.toolEntries) - 1; i >= 0; i-- {
-			if toolCallMatches(msg.ID, msg.Name, m.toolEntries[i].ID, m.toolEntries[i].Name) {
-				completedProjection = m.toolEntries[i].Projection
-				break
-			}
-		}
-		if m.goalTurnID != "" && completedProjection.Successful() {
-			m.goalTurnSuccesses++
-		}
-		// Update tool card
-		cardState := toolCardStateFromProjection(completedProjection)
-		if matchedIndex >= 0 {
-			cardState = m.toolEntries[matchedIndex].ExpertProgress.cardState(cardState)
-		}
-		m.toolCardMgr.UpdateCardSemanticWithID(msg.ID, msg.Name, cardState, result, msg.Duration, completedProjection)
-
-		if m.toolsPending > 0 {
-			m.toolsPending--
-		}
-		if diffCmd != nil {
-			cmds = append(cmds, diffCmd)
-		}
-		m.viewport.SetContent(m.renderEntries())
-		m.gotoBottomIfFollowing()
+		cmds = m.handleToolCallResult(msg, cmds)
 
 	case diffBuildResultMsg:
 		matched := false
@@ -1992,15 +1465,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		m.gotoBottomIfFollowing()
 
 	case SystemMessageMsg:
-		m.entries = append(m.entries, ChatEntry{
-			Kind:    "system",
-			Content: msg.Msg,
-		})
-		// The first startup/recovery notice can add a fixed Settings row at
-		// compact heights. Recompute the transcript allocation before painting.
-		m.recalcViewportHeight()
-		m.viewport.SetContent(m.renderEntries())
-		m.gotoBottomIfFollowing()
+		m.handleSystemMessage(msg)
 
 	case CapabilityRouteMsg:
 		if m.state == StateWaiting || m.state == StateStreaming {
@@ -2020,191 +1485,10 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		m.handleBobWorkspaceContext(msg)
 
 	case ErrorMsg:
-		if m.logger != nil {
-			m.logger.Error("error", "msg", msg.Msg)
-		}
-		m.entries = append(m.entries, ChatEntry{
-			Kind:    "error",
-			Content: msg.Msg,
-		})
-		m.recalcViewportHeight()
-		m.viewport.SetContent(m.renderEntries())
-		m.gotoBottomIfFollowing()
+		m.handleErrorMsg(msg)
 
 	case AgentDoneMsg:
-		if command, handled, replacement := m.handleAutoIterationCheckpoint(msg); handled {
-			if command != nil {
-				cmds = append(cmds, command)
-			}
-			break
-		} else if replacement != nil {
-			msg.Err = replacement
-		}
-		if err := m.revokeTemporaryWriteScopes(); err != nil {
-			m.entries = append(m.entries, ChatEntry{
-				Kind: "error", Content: "Temporary external write scope cleanup failed: " + sanitizeTerminalSingleLine(err.Error()),
-			})
-		}
-		m.compactingContext = false
-		m.capabilityRoute = nil
-		if m.logger != nil {
-			m.logger.Info("agent done", "eval_tokens", m.evalCount, "err", msg.Err)
-		}
-		var unresolved *agent.UnresolvedExecutionError
-		hasUnresolved := errors.As(msg.Err, &unresolved)
-		preDispatchRejected := errors.Is(msg.Err, llm.ErrInferenceNotStarted) || errors.Is(msg.Err, llm.ErrNoModelSelected)
-		capturedFollowUp := false
-		rolledBackPrompt := false
-		if hasUnresolved || preDispatchRejected {
-			capturedFollowUp = m.captureComposerFollowUpForRollback()
-			rolledBackPrompt = m.rollbackPreflightRejectedPrompt()
-			if rolledBackPrompt {
-				m.holdQueuedFollowUpAfterRollback()
-			} else if capturedFollowUp {
-				// The exact pre-dispatch checkpoint could not be proven. Return the
-				// temporarily separated live draft to its ordinary owner.
-				m.restoreQueuedFollowUp()
-			}
-		}
-		m.clearTurnMessageCheckpoint()
-		followWasPaused := m.followPaused()
-		followYOffset := m.viewport.YOffset()
-		m.flushStream()
-		m.settleGoalTurn(msg)
-		if msg.Err != nil {
-			m.clearContinuationAction()
-		}
-		if msg.Err == nil {
-			m.sessionTurnCount++
-		}
-		if m.cancel != nil {
-			m.cancel()
-			m.cancel = nil
-		}
-		m.lastTurnDuration = m.turnElapsed()
-		m.state = StateIdle
-		if msg.Err != nil && !rolledBackPrompt {
-			m.restoreQueuedFollowUp()
-		}
-		m.input.Focus()
-		if m.queuedFollowUp == nil && strings.TrimSpace(m.input.Value()) == "" {
-			m.input.SetHeight(1)
-			m.inputLines = 1
-		} else {
-			m.syncInputHeight()
-		}
-		m.recalcViewportHeight()
-		m.viewport.SetContent(m.renderEntries())
-		m.restoreFollowPosition(followWasPaused, followYOffset)
-		if msg.Err == nil {
-			m.lastTurnToolIndex = -1
-			for i := len(m.toolEntries) - 1; i >= m.turnToolStartIndex; i-- {
-				if m.toolEntries[i].Status != ToolStatusRunning {
-					m.lastTurnToolIndex = i
-					break
-				}
-			}
-			// Terminal title flash is a success receipt, not a generic stopped state.
-			m.doneFlash = true
-			cmds = append(cmds, tea.Tick(2*time.Second, func(time.Time) tea.Msg {
-				return DoneFlashExpiredMsg{}
-			}))
-		} else {
-			m.doneFlash = false
-			switch {
-			case hasUnresolved:
-				m.entries, _ = appendExecutionRecoveryNotice(m.entries, unresolved)
-				m.rememberStandaloneRecovery(unresolved)
-			case errors.Is(msg.Err, context.Canceled) && !m.shuttingDown:
-				m.entries = append(m.entries, ChatEntry{Kind: "system", Content: "Turn cancelled."})
-			}
-			m.viewport.SetContent(m.renderEntries())
-			m.restoreFollowPosition(followWasPaused, followYOffset)
-		}
-		// Persist a lossless state snapshot after every settled attempt. Failed
-		// turns may contain cancellation or unknown-outcome receipts that must
-		// survive restart even though they do not count as completed turns.
-		settledPersisted := m.sessionID <= 0 || m.sessionStore == nil
-		if m.sessionID > 0 && m.sessionStore != nil {
-			previousCursor := m.executionCursor
-			var cursorErr error
-			cursorStoppedAtRecovery := false
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			if m.executionLease == nil {
-				cursorErr = errors.New("execution session lease is unavailable; snapshot cursor was not advanced")
-			} else {
-				m.executionCursor, cursorErr = m.snapshotExecutionCursor(ctx)
-				// An unresolved execution deliberately keeps the snapshot cursor on
-				// the safe side of the effect. The transcript can still be saved at
-				// that old cursor; presenting the expected boundary stop as a second
-				// "Save session" failure makes one recovery condition look like data
-				// loss and floods the chat with duplicate red errors.
-				cursorStoppedAtRecovery = hasUnresolved && cursorErr != nil
-			}
-			saveErr := m.persistSessionState(ctx)
-			if saveErr != nil {
-				m.executionCursor = previousCursor
-			} else if cursorErr == nil {
-				m.agent.SetExecutionSnapshotCursor(m.executionCursor)
-			}
-			var usageErr error
-			if saveErr == nil && msg.Err == nil {
-				_, usageErr = m.sessionStore.RecordTokenUsage(ctx, db.RecordTokenUsageParams{
-					SessionID: m.sessionID, Turn: int64(m.sessionTurnCount), EvalCount: int64(m.turnEvalTotal),
-					PromptTokens: int64(m.turnPromptTotal), Model: m.model,
-				})
-			}
-			cancel()
-			persistErr := errors.Join(saveErr, usageErr)
-			if !cursorStoppedAtRecovery {
-				persistErr = errors.Join(cursorErr, persistErr)
-			}
-			if persistErr != nil {
-				settledPersisted = false
-				if m.goalRuntime != nil {
-					m.goalPersistenceDirty = true
-				}
-				m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("Save session: %v", persistErr)})
-				m.viewport.SetContent(m.renderEntries())
-				m.restoreFollowPosition(followWasPaused, followYOffset)
-			} else {
-				settledPersisted = true
-				if m.goalRuntime != nil {
-					m.goalPersistenceDirty = false
-				}
-				if cmd := m.ensureCurrentGoalRecoveryProjection(false); cmd != nil {
-					cmds = append(cmds, cmd)
-				}
-			}
-		}
-		if m.goalNeedsEvaluation && !m.shuttingDown {
-			if settledPersisted {
-				m.doneFlash = false
-				if cmd := m.beginGoalEvaluation(false); cmd != nil {
-					cmds = append(cmds, cmd)
-				}
-			} else if m.goalRuntime != nil {
-				m.goalNeedsEvaluation = false
-				if snapshot, err := m.goalRuntime.Snapshot(context.Background()); err == nil && snapshot.State == goal.StateActive {
-					_ = m.goalRuntime.Pause(context.Background(), "settled goal turn could not be persisted")
-				}
-				m.appendGoalError("Goal continuation stopped because the settled turn was not durably saved.")
-			}
-		}
-		if msg.Err == nil && !settledPersisted {
-			// A queued follow-up may only cross a durable settlement boundary.
-			// Return it to the composer when saving fails so it cannot dispatch
-			// unexpectedly after some later, unrelated turn.
-			m.restoreQueuedFollowUp()
-			m.recalcViewportHeight()
-		}
-		if msg.Err == nil && settledPersisted && !m.goalNeedsEvaluation && !m.shuttingDown && m.queuedFollowUpAutoDispatchable() {
-			m.doneFlash = false
-			if cmd := m.dispatchQueuedFollowUp(); cmd != nil {
-				cmds = append(cmds, cmd)
-			}
-		}
-		m.appendShutdownQuit(&cmds)
+		cmds = m.handleAgentDone(msg, cmds)
 
 	case OllamaModelPullRequestedMsg:
 		cmds = append(cmds, m.startModelPull(msg.Name))
@@ -2623,93 +1907,22 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		m.appendShutdownQuit(&cmds)
 
 	case tea.MouseWheelMsg:
-		// Inline permission requests own wheel input just like document overlays,
-		// but remain in normal layout flow so the transcript stays visible. Scroll
-		// their bounded preview without moving or changing follow intent below it.
-		if m.pendingApproval != nil {
-			if m.approvalState != nil {
-				m.approvalState.Viewport, _ = m.approvalState.Viewport.Update(msg)
-			}
-			return m, nil
-		}
-		// The external read-scope prompt is an authority-changing inline
-		// decision. It is keyboard-first and owns pointer input just like an
-		// approval, so the transcript cannot move behind it.
-		if m.readScopePrompt != nil {
-			return m, nil
-		}
-		// A visible overlay owns pointer input. Scroll document overlays through
-		// their own Bubbles viewports and swallow wheel events for all other
-		// overlays so the hidden transcript cannot move underneath a modal.
-		if m.overlay != OverlayNone {
-			switch m.overlay {
-			case OverlayCortexDecision:
-				if m.cortexDecision != nil {
-					m.cortexDecision.detail, _ = m.cortexDecision.detail.Update(msg)
-					m.cortexDecision.cacheValid = false
-				}
-			case OverlayHelp:
-				m.helpViewport, _ = m.helpViewport.Update(msg)
-			case OverlayRuntimeStatus:
-				if m.runtimeStatusState != nil {
-					m.runtimeStatusState.Viewport, _ = m.runtimeStatusState.Viewport.Update(msg)
-				}
-			case OverlayGoalInspector:
-				if m.goalInspectorState != nil {
-					m.goalInspectorState.updateViewport(msg)
-				}
-			case OverlayGoalRecovery:
-				if m.goalRecoveryState != nil {
-					_, _ = m.goalRecoveryState.Update(msg)
-				}
-			}
-			return m, nil
-		}
-
-		m.cancelReceiptInspection(false)
-		beforeOffset := m.viewport.YOffset()
-		m.viewport, _ = m.viewport.Update(msg)
-
-		if m.viewport.AtBottom() {
-			m.markFollowingLatest()
-		} else if m.viewport.YOffset() != beforeOffset {
-			m.pauseFollow()
-		}
-		return m, nil
+		return m, m.handleMouseWheel(msg)
 
 	case tea.MouseClickMsg:
-		// Modal and inline decision surfaces are intentionally keyboard-first.
-		// Until a child explicitly owns pointer interaction, clicks are swallowed
-		// rather than reaching ToolCards behind an authority-changing prompt.
-		if m.overlay != OverlayNone || m.pendingApproval != nil || m.readScopePrompt != nil {
-			return m, nil
-		}
-		if msg.Button == tea.MouseLeft {
-			m.handleMouseClick(msg.X, msg.Y)
+		if cmd, handled := m.handleMouseClickMsg(msg); handled {
+			return m, cmd
 		}
 
 	case tea.PasteMsg:
-		if m.composerEditable() {
-			if paths, ok := pastedImagePaths(msg.Content); ok {
-				return m, m.beginPastedImageFileAttachments(paths)
-			}
-			// The parent owns insertion and any safety prompt. Do not forward this
-			// PasteMsg to the textarea or the child would insert it a second time.
-			return m, m.insertPasteWithReview(msg.Content)
+		if cmd, handled := m.handlePasteMsg(msg); handled {
+			return m, cmd
 		}
 
 	case ClipboardImagePasteMsg:
-		if !m.composerEditable() {
-			break
+		if cmd, handled := m.handleClipboardImagePaste(msg); handled {
+			return m, cmd
 		}
-		if msg.Err != nil {
-			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: "Paste image: clipboard has no supported image data."})
-			m.invalidateEntryCache()
-			m.viewport.SetContent(m.renderEntries())
-			m.gotoBottomIfFollowing()
-			break
-		}
-		return m, m.beginImageBytesAttachment(msg.Name, msg.Data)
 	}
 
 	// Waiting owns the scramble clock. Once streaming starts (or the turn
