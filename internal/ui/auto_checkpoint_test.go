@@ -105,6 +105,50 @@ func TestAutoCheckpointSupervisorBoundsSegmentsAndElapsedTime(t *testing.T) {
 	}
 }
 
+func TestDefaultPlainAutoTurnLimitsBoundsOnlyUnboundedAuto(t *testing.T) {
+	unbounded := agent.TurnLimits{}
+	if got := defaultPlainAutoTurnLimits(unbounded, ModeAuto); got.MaxWallTime != maxAutoCheckpointElapsed {
+		t.Fatalf("plain AUTO wall ceiling = %v, want %v", got.MaxWallTime, maxAutoCheckpointElapsed)
+	}
+	if got := defaultPlainAutoTurnLimits(unbounded, ModeNormal); got != (agent.TurnLimits{}) {
+		t.Fatalf("interactive NORMAL turn was bounded: %#v", got)
+	}
+	if got := defaultPlainAutoTurnLimits(unbounded, ModePlan); got != (agent.TurnLimits{}) {
+		t.Fatalf("interactive PLAN turn was bounded: %#v", got)
+	}
+	goalBounded := agent.TurnLimits{MaxEvalTokens: 500}
+	if got := defaultPlainAutoTurnLimits(goalBounded, ModeAuto); got != goalBounded {
+		t.Fatalf("already-bounded AUTO turn was rewritten: %#v", got)
+	}
+	deadlineBounded := agent.TurnLimits{Deadline: time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)}
+	if got := defaultPlainAutoTurnLimits(deadlineBounded, ModeAuto); got != deadlineBounded {
+		t.Fatalf("deadline-bounded AUTO turn was rewritten: %#v", got)
+	}
+}
+
+func TestAutoCheckpointSupervisorAllowsRepeatedEffectfulWork(t *testing.T) {
+	started := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	var supervisor autoCheckpointSupervisor
+	supervisor.reset("turn-root", started)
+
+	first := &agent.AutoIterationCheckpointError{ProgressDigest: "build-test-set", EffectfulSuccessfulCalls: 2}
+	if err := supervisor.admit("turn-root", first, started.Add(time.Minute)); err != nil {
+		t.Fatalf("first segment refused: %v", err)
+	}
+	// The same work set including verified effects (for example a repeated
+	// build/test cycle) may legitimately recur inside the bounded budgets.
+	repeatedEffectful := &agent.AutoIterationCheckpointError{ProgressDigest: "build-test-set", EffectfulSuccessfulCalls: 1}
+	if err := supervisor.admit("turn-root", repeatedEffectful, started.Add(2*time.Minute)); err != nil {
+		t.Fatalf("repeated effectful segment refused: %v", err)
+	}
+	// A read-only replay of the same set remains a stall.
+	repeatedReadOnly := &agent.AutoIterationCheckpointError{ProgressDigest: "build-test-set"}
+	if err := supervisor.admit("turn-root", repeatedReadOnly, started.Add(3*time.Minute)); err == nil ||
+		!strings.Contains(err.Error(), "repeated without new progress") {
+		t.Fatalf("read-only replay admitted: %v", err)
+	}
+}
+
 func TestNormalizeLogicalTurnLimitsDoesNotRebaseAcrossSegments(t *testing.T) {
 	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
 	limits := normalizeLogicalTurnLimits(agent.TurnLimits{MaxWallTime: 5 * time.Minute}, now)

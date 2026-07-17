@@ -4594,6 +4594,7 @@ func (m *Model) sendToAgentTurnPresentedWithAttachments(
 	options := agent.TurnOptions{
 		Limits: limits, Capability: capability, Continuation: continuation,
 	}
+	options.Limits = defaultPlainAutoTurnLimits(options.Limits, authority)
 	options.Limits = normalizeLogicalTurnLimits(options.Limits, m.nowTime())
 	m.turnRunContext = ctx
 	m.turnRunOptions = options

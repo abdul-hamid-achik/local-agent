@@ -28,6 +28,10 @@ type AutoIterationCheckpointError struct {
 	ToolCalls               int
 	SuccessfulToolCalls     int
 	DistinctSuccessfulCalls int
+	// EffectfulSuccessfulCalls counts verified successes whose effect class
+	// was not read-only. A supervisor may use it to distinguish a read-only
+	// replay (a stall) from a legitimately repeated build/test cycle.
+	EffectfulSuccessfulCalls int
 	// ProgressDigest is an opaque, order-independent digest over the exact
 	// successful tool+argument fingerprints observed in this AUTO segment. It
 	// lets a supervisor detect a stalled cross-turn continuation without
@@ -61,16 +65,17 @@ func (e *AutoIterationCheckpointError) Unwrap() error {
 // qualifying for automatic continuation merely because its transport keeps
 // answering successfully.
 type autoTurnProgress struct {
-	toolCalls               int
-	successfulToolCalls     int
-	distinctSuccessfulCalls int
-	lastIterationCalls      int
-	lastIterationSucceeded  int
-	lastIterationDistinct   int
-	lastTool                string
-	lastEffect              executionpkg.EffectClass
-	lastDomain              ecosystem.DomainState
-	seen                    map[string]struct{}
+	toolCalls                int
+	successfulToolCalls      int
+	distinctSuccessfulCalls  int
+	effectfulSuccessfulCalls int
+	lastIterationCalls       int
+	lastIterationSucceeded   int
+	lastIterationDistinct    int
+	lastTool                 string
+	lastEffect               executionpkg.EffectClass
+	lastDomain               ecosystem.DomainState
+	seen                     map[string]struct{}
 }
 
 func newAutoTurnProgress() *autoTurnProgress {
@@ -102,6 +107,9 @@ func (p *autoTurnProgress) settle(
 
 	p.successfulToolCalls++
 	p.lastIterationSucceeded++
+	if effect != executionpkg.EffectReadOnly {
+		p.effectfulSuccessfulCalls++
+	}
 	p.lastTool = toolName
 	p.lastEffect = effect
 	p.lastDomain = projection.Domain
@@ -158,17 +166,18 @@ func (p *autoTurnProgress) receipt(
 	elapsed time.Duration,
 ) *AutoIterationCheckpointError {
 	return &AutoIterationCheckpointError{
-		TurnID:                  turnID,
-		Iterations:              iterations,
-		ToolCalls:               p.toolCalls,
-		SuccessfulToolCalls:     p.successfulToolCalls,
-		DistinctSuccessfulCalls: p.distinctSuccessfulCalls,
-		ProgressDigest:          autoProgressDigest(p.seen),
-		EvalTokens:              evalTokens,
-		Elapsed:                 elapsed,
-		LastTool:                p.lastTool,
-		LastEffect:              p.lastEffect,
-		LastDomain:              p.lastDomain,
+		TurnID:                   turnID,
+		Iterations:               iterations,
+		ToolCalls:                p.toolCalls,
+		SuccessfulToolCalls:      p.successfulToolCalls,
+		DistinctSuccessfulCalls:  p.distinctSuccessfulCalls,
+		EffectfulSuccessfulCalls: p.effectfulSuccessfulCalls,
+		ProgressDigest:           autoProgressDigest(p.seen),
+		EvalTokens:               evalTokens,
+		Elapsed:                  elapsed,
+		LastTool:                 p.lastTool,
+		LastEffect:               p.lastEffect,
+		LastDomain:               p.lastDomain,
 	}
 }
 

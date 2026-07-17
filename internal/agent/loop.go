@@ -392,6 +392,11 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 		out.Error(err.Error())
 		return err
 	}
+	// Compaction admission is an eval-token accounting decision: a turn with a
+	// hard generation budget may not spend an untracked summarization
+	// generation. A wall-clock deadline alone does not forbid compaction — the
+	// deadline naturally bounds it — so wall-limited AUTO turns still compact.
+	compactionForbidden := limits.MaxEvalTokens > 0
 	admitSystemPrompt := func() error {
 		estimated := a.estimatePromptTokens(system, tools)
 		if receiptFloor := a.contextPromptFloorEstimate(turnModel, estimateHostPromptTokens(system, tools)); estimated < receiptFloor {
@@ -400,7 +405,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 		if !shouldCompactForContext(estimated, turnNumCtx) {
 			return nil
 		}
-		if limits.bounded() {
+		if compactionForbidden {
 			return rejectContextPrompt(estimated, true)
 		}
 		if lg != nil {
@@ -461,7 +466,9 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 				}
 			}
 		}
-		if queuedAutoContinuation == nil && bobBootstrapAvailable && maxIters >= 2 && !limits.bounded() {
+		// The optional host bootstrap spends provider iterations, which only a
+		// hard generation budget forbids; a wall deadline bounds it naturally.
+		if queuedAutoContinuation == nil && bobBootstrapAvailable && maxIters >= 2 && limits.MaxEvalTokens == 0 {
 			queuedAutoContinuation = a.prepareBobWorkspaceBootstrap(
 				bobBootstrap, turnMCPSnapshot, authorityMode, autoContinuationState,
 			)
@@ -597,6 +604,21 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 				}
 				var reservationErr error
 				if reservedEvalTokens > 0 {
+					// The unknown portion of the reservation is durably charged either
+					// way; count it against this turn before deciding whether the
+					// remaining budget can absorb a retry of the same request.
+					totalEvalTokens += reservedEvalTokens
+					if ctx.Err() == nil && !repairRequest && retryCount < maxRetries &&
+						isRetryableError(err) && totalEvalTokens < limits.MaxEvalTokens {
+						retryCount++
+						if lg != nil {
+							lg.Warn("llm retry after charged reservation", "iter", i, "attempt", retryCount, "reserved", reservedEvalTokens, "err", err)
+						}
+						out.Error(fmt.Sprintf("LLM transport failed, retrying (%d/%d) after charging %d reserved token(s)...", retryCount, maxRetries, reservedEvalTokens))
+						textBuf.Reset()
+						toolCalls = nil
+						continue
+					}
 					reservationErr = fmt.Errorf(
 						"%w: provider stream ended without a trustworthy terminal usage receipt; conservatively charged %d reserved token(s)",
 						ErrTurnEvalBudgetExhausted, reservedEvalTokens,
@@ -609,7 +631,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 					out.Error(reservationErr.Error())
 					return errors.Join(reservationErr, fmt.Errorf("LLM response: %w", err))
 				}
-				// Retry on transient JSON parse errors from small models.
+				// Retry on transient provider errors from small models.
 				if !repairRequest && limits.MaxEvalTokens == 0 && retryCount < maxRetries && isRetryableError(err) {
 					retryCount++
 					if lg != nil {
@@ -793,7 +815,9 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 			}
 			a.mu.RUnlock()
 
-			if !limits.bounded() && a.iceEngine != nil && hasEnoughMessages && userContent != "" {
+			// Background auto-memory is an untracked optional generation, which
+			// only an eval-token budget forbids; wall-limited turns keep it.
+			if limits.MaxEvalTokens == 0 && a.iceEngine != nil && hasEnoughMessages && userContent != "" {
 				a.iceEngine.DetectAutoMemory(ctx, userContent, assistantMsg.Content)
 			}
 			estimatedPromptTokens := a.estimatePromptTokens(system, tools)
@@ -803,7 +827,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 			if receiptFloor := a.contextPromptFloorEstimate(turnModel, estimateHostPromptTokens(system, tools)); estimatedPromptTokens < receiptFloor {
 				estimatedPromptTokens = receiptFloor
 			}
-			if !limits.bounded() && shouldCompactForContext(estimatedPromptTokens, turnNumCtx) {
+			if !compactionForbidden && shouldCompactForContext(estimatedPromptTokens, turnNumCtx) {
 				if lg != nil {
 					lg.Info("compaction", "phase", "direct_response", "prompt_tokens", estimatedPromptTokens, "num_ctx", turnNumCtx)
 				}
@@ -1422,7 +1446,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 				estimatedPromptTokens = receiptFloor
 			}
 			if shouldCompactForContext(estimatedPromptTokens, turnNumCtx) {
-				if limits.bounded() {
+				if compactionForbidden {
 					return rejectContextPrompt(estimatedPromptTokens, true, "phase", "after_tools", "iter", i)
 				}
 				if lg != nil {

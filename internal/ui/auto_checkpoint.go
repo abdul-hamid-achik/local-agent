@@ -54,7 +54,12 @@ func (s *autoCheckpointSupervisor) admit(
 	if digest == "" {
 		return errors.New("checkpoint has no progress identity")
 	}
-	if digest == s.lastDigest {
+	if digest == s.lastDigest && checkpoint.EffectfulSuccessfulCalls == 0 {
+		// A read-only replay of the previous segment's exact work set is a
+		// stall. A repeated set that includes verified effects (for example a
+		// build/test cycle run again after new edits landed earlier in the
+		// logical turn) may legitimately recur; the segment and time budgets
+		// still bound it.
 		return errors.New("the last AUTO segment repeated without new progress")
 	}
 	if s.segmentsContinued >= maxAutoCheckpointSegments {
@@ -66,6 +71,23 @@ func (s *autoCheckpointSupervisor) admit(
 	s.segmentsContinued++
 	s.lastDigest = digest
 	return nil
+}
+
+// defaultPlainAutoTurnLimits gives an otherwise-unbounded AUTO turn the same
+// wall ceiling the checkpoint supervisor already enforces across segments.
+// Without it, one wedged segment — for example an approval prompt that never
+// receives an answer — could hold the logical turn open forever. Goals and
+// other bounded callers keep their own budgets; interactive NORMAL and PLAN
+// turns stay unbounded because the user is watching them.
+func defaultPlainAutoTurnLimits(limits agent.TurnLimits, authority Mode) agent.TurnLimits {
+	if authority != ModeAuto {
+		return limits
+	}
+	if limits.MaxEvalTokens > 0 || !limits.Deadline.IsZero() || limits.MaxWallTime > 0 {
+		return limits
+	}
+	limits.MaxWallTime = maxAutoCheckpointElapsed
+	return limits
 }
 
 func normalizeLogicalTurnLimits(limits agent.TurnLimits, now time.Time) agent.TurnLimits {
