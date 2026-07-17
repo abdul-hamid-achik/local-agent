@@ -115,6 +115,12 @@ type Model struct {
 	cachedThinkingHitRegions []thinkingHitRegion
 	entryCacheValid          bool
 
+	// Per-entry render memo: a settled entry re-renders only when its
+	// composite key changes, so full transcript walks stay cheap. Live
+	// (running) tool groups bypass the memo entirely.
+	entryMemo    map[int]entryRenderMemo
+	entryMemoLen int
+
 	// Thinking state
 	thinkBuf       strings.Builder
 	inThinking     bool
@@ -1166,6 +1172,15 @@ func (m *Model) invalidateEntryCache() {
 	m.cachedPrefixState = entryRenderState{}
 	m.cachedToolHitRegions = nil
 	m.cachedThinkingHitRegions = nil
+}
+
+// resetEntryMemo drops every per-entry memoized chunk. It runs only when the
+// entries slice is replaced wholesale (new conversation, import, session
+// restore) or shrinks; ordinary invalidation keeps the memo because each key
+// self-validates against the entry it was rendered from.
+func (m *Model) resetEntryMemo() {
+	clear(m.entryMemo)
+	m.entryMemoLen = 0
 }
 
 // checkAutoScroll resets scroll anchor when the viewport is at the bottom,

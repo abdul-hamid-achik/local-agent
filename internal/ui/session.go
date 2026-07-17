@@ -985,6 +985,7 @@ func (m *Model) restoreSessionState(state persistedSessionState) error {
 	if err := m.agent.RestoreContextPromptFloor(state.ContextPromptFloor); err != nil {
 		return fmt.Errorf("restore context prompt floor: %w", err)
 	}
+	m.resetEntryMemo()
 	m.entries = make([]ChatEntry, len(state.Entries))
 	for i, entry := range state.Entries {
 		m.entries[i] = ChatEntry{

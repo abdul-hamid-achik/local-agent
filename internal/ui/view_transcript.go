@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"hash/fnv"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -45,6 +46,14 @@ func entriesFromMessages(msgs []llm.Message) []ChatEntry {
 
 func (m *Model) renderEntries() string {
 	contentW := m.chatContentWidth()
+
+	// The memo is keyed by entry index, so a shrunken slice may leave stale
+	// higher-index chunks behind. Keys self-validate, but drop them wholesale
+	// so the map never outgrows the transcript it describes.
+	if len(m.entries) < m.entryMemoLen {
+		m.resetEntryMemo()
+	}
+	m.entryMemoLen = len(m.entries)
 
 	// Welcome message when no user messages yet
 	hasUserMsg := false
@@ -187,31 +196,66 @@ func (m *Model) toolGroupLive(toolIdx int) bool {
 	return false
 }
 
+// entryRenderMemo is one settled entry's rendered chunk plus the composite
+// key it was rendered under. A key mismatch means the memo is stale and the
+// entry renders fresh; hit regions are recomputed from the chunk either way.
+type entryRenderMemo struct {
+	key   string
+	chunk string
+}
+
 func (m *Model) renderEntryInto(b *strings.Builder, entryIndex, contentW int, state *entryRenderState) {
 	entry := m.entries[entryIndex]
-	var entryView strings.Builder
-	switch entry.Kind {
-	case "user":
-		state.assistantStarted = false
-		m.renderUserMsg(&entryView, entry.Content, entry.Attachments, contentW)
-	case "assistant":
-		m.renderAssistantMsg(&entryView, entry, contentW, !state.assistantStarted)
-	case "tool_group":
-		m.renderToolGroup(&entryView, entry.ToolIndex)
-	case "error":
-		m.renderEntryError(&entryView, entry.Content, contentW)
-	case "system":
-		entryView.WriteString(m.renderSystemNotice(entry.Content, contentW))
-		entryView.WriteString("\n")
+	showHeader := !state.assistantStarted
+	memoKey := m.entryMemoKey(entry, contentW, showHeader)
+	var chunk string
+	hit := false
+	if memoKey != "" {
+		if memo, ok := m.entryMemo[entryIndex]; ok && memo.key == memoKey {
+			chunk = memo.chunk
+			hit = true
+		}
 	}
-	chunk := strings.TrimRight(entryView.String(), "\n")
+	if !hit {
+		var entryView strings.Builder
+		switch entry.Kind {
+		case "user":
+			m.renderUserMsg(&entryView, entry.Content, entry.Attachments, contentW)
+		case "assistant":
+			m.renderAssistantMsg(&entryView, entry, contentW, showHeader)
+		case "tool_group":
+			m.renderToolGroup(&entryView, entry.ToolIndex)
+		case "error":
+			m.renderEntryError(&entryView, entry.Content, contentW)
+		case "system":
+			entryView.WriteString(m.renderSystemNotice(entry.Content, contentW))
+			entryView.WriteString("\n")
+		}
+		chunk = strings.TrimRight(entryView.String(), "\n")
+		if memoKey != "" {
+			if m.entryMemo == nil {
+				m.entryMemo = make(map[int]entryRenderMemo)
+			}
+			m.entryMemo[entryIndex] = entryRenderMemo{key: memoKey, chunk: chunk}
+		}
+	}
+	if entry.Kind == "user" {
+		state.assistantStarted = false
+	}
 	if chunk == "" {
 		return
 	}
 	if entry.Kind == "assistant" {
 		state.assistantStarted = true
 	}
+	m.appendEntryChunk(b, entryIndex, entry, chunk, state)
+}
 
+// appendEntryChunk applies one rendered entry chunk to the transcript
+// builder: separator, hit regions derived from the chunk and the running
+// line count, and loop-state bookkeeping. Fresh renders and memo hits share
+// this path exactly, so a memoized frame is byte- and region-identical.
+func (m *Model) appendEntryChunk(b *strings.Builder, entryIndex int, entry ChatEntry, chunk string, state *entryRenderState) {
 	if state.renderedAny {
 		separator := transcriptEntrySeparator(state.previousKind, entry.Kind)
 		b.WriteString(separator)
@@ -239,6 +283,86 @@ func (m *Model) renderEntryInto(b *strings.Builder, entryIndex, contentW int, st
 	state.renderedLines += strings.Count(chunk, "\n")
 	state.previousKind = entry.Kind
 	state.renderedAny = true
+}
+
+func fnv64(parts ...string) uint64 {
+	h := fnv.New64a()
+	for _, part := range parts {
+		_, _ = h.Write([]byte(part))
+	}
+	return h.Sum64()
+}
+
+// entryMemoKey builds the composite key capturing every input that affects
+// one entry's rendered chunk. An empty key means the entry must not be
+// memoized this frame (a live tool group animates every spinner tick).
+func (m *Model) entryMemoKey(entry ChatEntry, contentW int, showHeader bool) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s|%d|%t|%t", entry.Kind, contentW, m.isDark, m.toolsCollapsed)
+	switch entry.Kind {
+	case "user":
+		fmt.Fprintf(&b, "|%d|%x|%d", len(entry.Content), fnv64(entry.Content), len(entry.Attachments))
+	case "assistant":
+		fmt.Fprintf(&b, "|%x|%t|%t|%t",
+			fnv64(entry.Content, "\x00", entry.ThinkingContent),
+			entry.ThinkingCollapsed, entry.RenderedContent != "", showHeader)
+	case "tool_group":
+		toolKey, ok := m.toolGroupMemoKey(entry.ToolIndex)
+		if !ok {
+			return ""
+		}
+		b.WriteString(toolKey)
+	case "error", "system":
+		fmt.Fprintf(&b, "|%x", fnv64(entry.Content))
+	}
+	return b.String()
+}
+
+// toolGroupMemoKey summarizes every ToolEntry and matched-card input that
+// renderToolGroup reads for a settled receipt. It reports ok=false for live
+// groups, which must re-render every frame for the spinner and elapsed time.
+func (m *Model) toolGroupMemoKey(toolIdx int) (string, bool) {
+	if toolIdx < 0 || toolIdx >= len(m.toolEntries) {
+		return "", false
+	}
+	te := m.toolEntries[toolIdx]
+	if te.Status == ToolStatusRunning {
+		return "", false
+	}
+	var card *ToolCard
+	for i := len(m.toolCardMgr.Cards) - 1; i >= 0; i-- {
+		if toolCallMatches(te.ID, te.Name, m.toolCardMgr.Cards[i].ID, m.toolCardMgr.Cards[i].Name) {
+			card = &m.toolCardMgr.Cards[i]
+			break
+		}
+	}
+	if card != nil && card.State == ToolCardRunning {
+		return "", false
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "|%x|%d|%t|%d|%t|%t|%d|%d|%d|%d",
+		fnv64(te.ID, "\x00", te.Name, "\x00", te.Summary),
+		te.Status, te.Collapsed, te.Duration, te.IsError, te.DiffPending,
+		te.DiffGeneration, len(te.DiffLines), len(te.Result), m.chatPaneWidth())
+	p := te.Projection
+	fmt.Fprintf(&b, "|%s|%s|%s|%s|%s|%t|%s|%+v",
+		p.Specialist, p.Operation, p.Role, p.Transport, p.Domain, p.DomainTyped, p.Evidence, p.Route)
+	if p.Digest != nil {
+		fmt.Fprintf(&b, "|%+v", *p.Digest)
+	}
+	if p.Artifact != nil {
+		fmt.Fprintf(&b, "|%+v", *p.Artifact)
+	}
+	if te.ExpertProgress != nil {
+		fmt.Fprintf(&b, "|ep%d", te.ExpertProgress.Sequence)
+	}
+	if card != nil {
+		fmt.Fprintf(&b, "|c%d|%t", card.State, card.Expanded)
+		if card.ExpertProgress != nil {
+			fmt.Fprintf(&b, "|cep%d", card.ExpertProgress.Sequence)
+		}
+	}
+	return b.String(), true
 }
 
 // renderLiveTail renders the in-flight provider turn (streaming text or the

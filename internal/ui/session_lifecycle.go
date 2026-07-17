@@ -136,6 +136,7 @@ func (m *Model) snapshotExecutionCursor(ctx context.Context) (int64, error) {
 }
 
 func (m *Model) resetConversationSession() {
+	m.resetEntryMemo()
 	m.clearQueuedFollowUpForSessionReplacement()
 	m.clearBobWorkspaceContext()
 	m.revokeOllamaCloudConsent()
