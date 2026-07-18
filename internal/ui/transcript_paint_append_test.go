@@ -123,6 +123,170 @@ func TestTranscriptPaintMutationInvalidatesAppendReuse(t *testing.T) {
 	assertTranscriptPaintReferenceParity(t, m)
 }
 
+func TestFlushStreamPromotesOnlyLiveTail(t *testing.T) {
+	m := newTestModel(t)
+	const historyEntries = 256
+	m.entries = make([]ChatEntry, 0, historyEntries+1)
+	for index := 0; index < historyEntries; index++ {
+		m.entries = append(m.entries, ChatEntry{
+			Kind:    "user",
+			Content: fmt.Sprintf("stable history %03d", index),
+		})
+	}
+	m.state = StateStreaming
+	m.appendTranscriptStreamText(
+		strings.Repeat("settling semantic row\n", 80) + "final marker",
+	)
+	m.invalidateEntryCache()
+	m.refreshTranscript()
+
+	cache := &m.transcriptPaint.cache
+	if !cache.valid || cache.entryCount != historyEntries {
+		t.Fatalf(
+			"live cache prefix = {valid:%t entries:%d}, want %d stable entries",
+			cache.valid,
+			cache.entryCount,
+			historyEntries,
+		)
+	}
+	live := m.transcriptLayout.Records[len(m.transcriptLayout.Records)-1]
+	m.setTranscriptYOffset(live.StartRow + 20)
+	m.pauseFollow()
+	capture := m.captureTranscriptReflowAnchor()
+	if capture.Intent.Manual.BlockID != live.BlockID {
+		t.Fatalf(
+			"captured block = %q, want live block %q",
+			capture.Intent.Manual.BlockID,
+			live.BlockID,
+		)
+	}
+
+	prefixLineIndexes := make([]*int, len(cache.stableBlocks))
+	for index := range cache.stableBlocks {
+		if len(cache.stableBlocks[index].lineStarts) == 0 {
+			t.Fatalf("stable block %d has no line index", index)
+		}
+		prefixLineIndexes[index] = &cache.stableBlocks[index].lineStarts[0]
+	}
+
+	m.flushStream()
+	m.state = StateIdle
+	if !cache.valid {
+		t.Fatal("flush invalidated the append-aware paint prefix")
+	}
+	if !m.transcriptReconcileValid ||
+		m.transcriptReconciledCount != historyEntries {
+		t.Fatalf(
+			"flush discarded reconciliation prefix: valid=%t count=%d",
+			m.transcriptReconcileValid,
+			m.transcriptReconciledCount,
+		)
+	}
+
+	probe := &transcriptRenderProbe{}
+	m.transcriptRenderProbe = probe
+	m.refreshTranscript()
+
+	if got := probe.blocksMeasured; got != 1 {
+		t.Fatalf("flush promotion measured %d blocks, want only settled tail", got)
+	}
+	if got := probe.semanticDigestCalls; got != 1 {
+		t.Fatalf("flush promotion admitted %d entries, want only settled tail", got)
+	}
+	if cache.entryCount != historyEntries+1 ||
+		len(cache.stableBlocks) != historyEntries+1 {
+		t.Fatalf(
+			"promoted cache = entries:%d blocks:%d, want %d",
+			cache.entryCount,
+			len(cache.stableBlocks),
+			historyEntries+1,
+		)
+	}
+	for index, lineIndex := range prefixLineIndexes {
+		if got := &cache.stableBlocks[index].lineStarts[0]; got != lineIndex {
+			t.Fatalf("flush rebuilt stable line index %d", index)
+		}
+	}
+	settled := m.transcriptLayout.Records[len(m.transcriptLayout.Records)-1]
+	if settled.BlockID != live.BlockID || settled.TurnID != live.TurnID {
+		t.Fatalf(
+			"settled identity = %q/%q, want live %q/%q",
+			settled.BlockID,
+			settled.TurnID,
+			live.BlockID,
+			live.TurnID,
+		)
+	}
+	resolution, err := ResolveTranscriptAnchor(
+		capture.Intent,
+		capture.Previous,
+		m.transcriptLayout,
+		max(1, m.viewport.Height()),
+	)
+	if err != nil {
+		t.Fatalf("resolve promoted live anchor: %v", err)
+	}
+	if resolution.BlockID != live.BlockID ||
+		resolution.Reason != AnchorResolutionExactBlock {
+		t.Fatalf(
+			"promoted anchor resolved %q/%v, want %q/%v",
+			resolution.BlockID,
+			resolution.Reason,
+			live.BlockID,
+			AnchorResolutionExactBlock,
+		)
+	}
+	if !m.followPaused() {
+		t.Fatal("flush promotion resumed a paused reader")
+	}
+	assertTranscriptPaintReferenceParity(t, m)
+}
+
+func TestFlushWhitespacePreservesStablePaintAndReconciliation(t *testing.T) {
+	m := newTestModel(t)
+	m.entries = []ChatEntry{
+		{Kind: "user", Content: "stable prompt"},
+		{Kind: "assistant", Content: "stable answer"},
+	}
+	m.invalidateEntryCache()
+	m.refreshTranscript()
+
+	cache := &m.transcriptPaint.cache
+	if !cache.valid || !m.transcriptReconcileValid {
+		t.Fatal("fixture did not establish stable paint and reconciliation")
+	}
+	stableBlocks := cache.stableBlocks
+	reconcileEpoch := m.transcriptReconcileEpoch
+
+	m.appendTranscriptStreamText(" \n\t ")
+	m.thinkBuf.WriteString("\n ")
+	m.flushStream()
+	probe := &transcriptRenderProbe{}
+	m.transcriptRenderProbe = probe
+	m.refreshTranscript()
+
+	if !cache.valid {
+		t.Fatal("whitespace flush invalidated the paint prefix")
+	}
+	if len(cache.stableBlocks) > 0 && &cache.stableBlocks[0] != &stableBlocks[0] {
+		t.Fatal("whitespace flush replaced stable paint blocks")
+	}
+	if got := probe.blocksMeasured; got != 0 {
+		t.Fatalf("whitespace flush measured %d blocks, want none", got)
+	}
+	if got := probe.semanticDigestCalls; got != 0 {
+		t.Fatalf("whitespace flush admitted %d entries, want none", got)
+	}
+	if m.transcriptReconcileEpoch != reconcileEpoch {
+		t.Fatalf(
+			"whitespace flush advanced reconcile epoch from %d to %d",
+			reconcileEpoch,
+			m.transcriptReconcileEpoch,
+		)
+	}
+	assertTranscriptPaintReferenceParity(t, m)
+}
+
 func assertTranscriptPaintReferenceParity(t *testing.T, m *Model) {
 	t.Helper()
 

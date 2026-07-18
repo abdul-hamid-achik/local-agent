@@ -116,6 +116,10 @@ type Model struct {
 	completionGeneration      uint64
 	completionSearch          func(context.Context, string, string) []Completion
 	completionReader          *completionWorkspaceReader
+	// Transcript search owns a bounded, safe projection of the virtualized
+	// transcript while its footer surface is open. It never retains raw tool
+	// payloads or reasoning content.
+	transcriptSearch *TranscriptSearchState
 
 	// Tool display
 	toolEntries        []ToolEntry
@@ -894,6 +898,8 @@ func (m *Model) updateActiveOverlayMessage(msg tea.Msg) tea.Cmd {
 			m.completionState.Filter, cmd = m.completionState.Filter.Update(msg)
 			return cmd
 		}
+	case OverlayTranscriptSearch:
+		return m.updateTranscriptSearchMessage(msg)
 	case OverlaySettings:
 		if m.settingsPickerState != nil {
 			var cmd tea.Cmd
@@ -1110,17 +1116,22 @@ func (m *Model) resetTurnDiagnostics() {
 func (m *Model) flushStream() {
 	content := sanitizeTerminalMultiline(m.streamBuf.String())
 	thinking := strings.Trim(sanitizeTerminalMultiline(m.thinkBuf.String()), "\r\n")
+	hasSettledContent := strings.TrimSpace(content) != "" ||
+		strings.TrimSpace(thinking) != ""
 	var settledBlockID BlockID
 	var settledTurnID TurnID
-	if (strings.TrimSpace(content) != "" || strings.TrimSpace(thinking) != "") &&
-		m.liveTailLayoutVisible {
+	if hasSettledContent && m.liveTailLayoutVisible {
 		// Preserve the transient block identity across raw-stream → settled
 		// Markdown projection. Semantic reflow can then keep a paused reader on
 		// the same logical marker even when Glamour changes the row geometry.
 		settledBlockID, settledTurnID = m.liveTailLayoutIdentity()
 	}
-	m.invalidateEntryCache()
-	if strings.TrimSpace(content) != "" || strings.TrimSpace(thinking) != "" {
+	if hasSettledContent {
+		// The paint cache ends immediately before the live tail, so promoting
+		// that tail to one settled append does not invalidate any stable block or
+		// reconciliation identity. The reference renderer still owns a monolithic
+		// string cache and is invalidated independently.
+		m.invalidateLegacyEntryRenderCache()
 		var rendered string
 		if m.md != nil && strings.TrimSpace(content) != "" {
 			rendered = m.md.RenderFull(content)
@@ -1146,7 +1157,7 @@ func (m *Model) flushStream() {
 	// was nothing worth presenting, otherwise a later segment can inherit a
 	// phantom live/assistant block.
 	m.resetTranscriptStreamText()
-	m.thinkBuf.Reset()
+	m.resetTranscriptThinkingText()
 	m.inThinking = false
 	m.thinkSearchBuf = ""
 }
@@ -1215,13 +1226,21 @@ type inputViewportReflowMsg struct{}
 // invalidateEntryCache marks the incremental entry render cache as stale,
 // forcing a full re-render on the next renderEntries() call.
 func (m *Model) invalidateEntryCache() {
-	m.entryCacheValid = false
+	m.invalidateLegacyEntryRenderCache()
 	m.transcriptPaint.cache.valid = false
 	m.transcriptPaint.liveCache.valid = false
 	m.transcriptReconcileValid = false
 	m.transcriptReconciledCount = 0
 	m.transcriptReconciledTurnID = ""
 	m.transcriptReconciledBlockIDs = nil
+}
+
+// invalidateLegacyEntryRenderCache clears only renderEntries' complete-string
+// snapshot. The virtualized paint cache and transcript reconciliation have
+// stricter append-aware contracts and may remain valid when a live tail is
+// promoted to a settled entry.
+func (m *Model) invalidateLegacyEntryRenderCache() {
+	m.entryCacheValid = false
 	m.cachedEntriesRender = ""
 	m.cachedEntryCount = 0
 	m.cachedStableCount = 0

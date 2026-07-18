@@ -152,6 +152,7 @@ tasks:
       - glyph snapshot update specs/tui_session_receipts.yml --format md
       - glyph snapshot update specs/tui_help.yml --format md
       - glyph snapshot update specs/tui_agents.yml --format md
+      - glyph snapshot update specs/tui_transcript_search.yml --format md
 
   clean:
     desc: Clean build artifacts

@@ -15,6 +15,12 @@ import (
 // every event. The bound is intentionally independent of transcript length.
 const transcriptPaintOverscanRows = 4
 
+// transcriptStreamAppendHeadroomBytes keeps ordinary token deltas from
+// immediately growing and copying the complete strings.Builder after a large
+// append. The builder remains the canonical source; this is bounded amortized
+// storage headroom, independent from the wrapping checkpoint.
+const transcriptStreamAppendHeadroomBytes = 4 * 1024
+
 // transcriptPaintBlock is one already-measured transcript fragment. Content
 // remains owned by the per-entry renderer/memo; lineStarts lets paint extract a
 // row inside a very large block without splitting or joining that whole block.
@@ -141,12 +147,19 @@ type transcriptPaintState struct {
 	windowStart         int
 	windowEnd           int
 	windowHeight        int
+	windowHighlightRow  int
 	cache               transcriptPaintCache
 	liveCache           transcriptLivePaintCache
 	streamSourceEpoch   uint64
 	streamSourceRev     uint64
 	streamSourceLen     int
+	streamSourceValue   string
 	streamSourceTracked bool
+	thinkSourceEpoch    uint64
+	thinkSourceRev      uint64
+	thinkSourceLen      int
+	thinkSourceValue    string
+	thinkSourceTracked  bool
 }
 
 type transcriptPaintBuild struct {
@@ -154,27 +167,33 @@ type transcriptPaintBuild struct {
 	dirtyStart int
 }
 
-// transcriptLivePaintCache owns the append-only, plain-text projection of the
-// provider's live tail. Each visible row is an independent measured fragment,
-// so appending a token only replaces the current raw line and adds newly
-// wrapped rows. Stable rows, their line index, and semantic coordinates remain
-// shared with the previous paint.
+// transcriptLivePaintCache owns an append-only projection of the provider's
+// live tail. A cold build first renders through renderStreamingMsg and admits
+// the result only when its mutable plain-text suffix matches byte-for-byte.
+// Everything before that suffix (assistant chrome, a frozen reasoning window,
+// and a stable Glamour Markdown prefix) remains an immutable measured prefix.
+// Appending a token then replaces only the final wrapped suffix row.
 //
-// Structured Markdown, reasoning, terminal-unsafe input, geometry changes, and
-// non-append mutations deliberately miss this cache and use renderLiveTail.
-// That keeps this optimization a narrow implementation detail rather than a
-// second, incomplete Markdown renderer.
+// Terminal-unsafe input, geometry/theme/renderer changes, untrusted source
+// mutations, a resumed reasoning stream, and Markdown boundary changes all
+// rebuild through the canonical renderer instead of extending stale rows.
 type transcriptLivePaintCache struct {
 	valid               bool
 	streamSourceEpoch   uint64
 	streamSourceRev     uint64
+	thinkSourceEpoch    uint64
+	thinkSourceRev      uint64
+	thinkRawLen         int
 	rawLen              int
+	tailRawStart        int
 	startRow            int
 	contentWidth        int
 	wrapWidth           int
 	usesWorkWidth       bool
+	workWidthMutable    bool
 	showHeader          bool
 	isDark              bool
+	glyphProfile        GlyphProfile
 	markdownRenderer    *MarkdownRenderer
 	blockID             BlockID
 	turnID              TurnID
@@ -187,6 +206,27 @@ type transcriptLivePaintCache struct {
 	lastBlockStart      int
 	lastLineMapStart    int
 	previousLineHasPipe bool
+	lastLineWrapped     bool
+	wrapRawStart        int
+	wrapRawLogical      int
+	wrapPrefixCellWidth int
+	wrapRenderedStart   int
+	wrapBlockStart      int
+	wrapLineMapStart    int
+}
+
+type plainLiveTailProjection struct {
+	rows                []string
+	lastRenderedStart   int
+	previousLineHasPipe bool
+	lastLineWrapped     bool
+	wrapRawStart        int
+	wrapRenderedStart   int
+}
+
+type plainLiveWrapChunk struct {
+	text     string
+	rawStart int
 }
 
 // refreshTranscript is the only production boundary that remeasures semantic
@@ -524,14 +564,14 @@ func (m *Model) renderIncrementalPlainLiveTail(
 	contentW int,
 	state *entryRenderState,
 ) ([]transcriptPaintBlock, bool) {
-	if state == nil ||
-		strings.TrimSpace(m.thinkBuf.String()) != "" {
+	if state == nil {
 		return nil, false
 	}
 	raw := m.streamBuf.String()
 	if raw == "" {
 		return nil, false
 	}
+	thinking := m.thinkBuf.String()
 
 	separatorRows := 0
 	if state.renderedAny {
@@ -544,12 +584,15 @@ func (m *Model) renderIncrementalPlainLiveTail(
 	showHeader := !state.assistantStarted
 
 	appendTrusted := m.syncTranscriptStreamSource()
+	thinkingTrusted := m.syncTranscriptThinkingSource()
 	m.beginLiveTailLayoutEpisode()
 	blockID, turnID := m.liveTailLayoutIdentity()
 	cache := &m.transcriptPaint.liveCache
 	if cache.valid &&
-		!appendTrusted &&
-		cache.streamSourceEpoch != m.transcriptPaint.streamSourceEpoch {
+		((!appendTrusted &&
+			cache.streamSourceEpoch != m.transcriptPaint.streamSourceEpoch) ||
+			(!thinkingTrusted &&
+				cache.thinkSourceEpoch != m.transcriptPaint.thinkSourceEpoch)) {
 		// A direct builder mutation is not an append proof. Let the canonical
 		// renderer rebuild this frame instead of deriving a segmented suffix
 		// from untrusted provenance.
@@ -557,10 +600,14 @@ func (m *Model) renderIncrementalPlainLiveTail(
 	}
 	sameProjection := cache.valid &&
 		cache.streamSourceEpoch == m.transcriptPaint.streamSourceEpoch &&
+		cache.thinkSourceEpoch == m.transcriptPaint.thinkSourceEpoch &&
+		cache.thinkSourceRev == m.transcriptPaint.thinkSourceRev &&
+		cache.thinkRawLen == len(thinking) &&
 		cache.startRow == startRow &&
 		cache.contentWidth == contentW &&
 		cache.showHeader == showHeader &&
 		cache.isDark == m.isDark &&
+		cache.glyphProfile == m.glyphProfile &&
 		cache.markdownRenderer == m.md &&
 		cache.blockID == blockID &&
 		cache.turnID == turnID
@@ -581,26 +628,46 @@ func (m *Model) renderIncrementalPlainLiveTail(
 	default:
 		if strings.TrimSpace(raw) == "" ||
 			sanitizeTerminalMultiline(raw) != raw ||
-			findSafeMarkdownBoundary(raw) > 0 {
+			sanitizeTerminalMultiline(thinking) != thinking {
 			return nil, false
 		}
 		messageWidth := min(contentW, m.chatProseWidth())
-		usesWorkWidth := markdownUsesWorkWidth(raw)
+		usesWorkWidth, workWidthMutable :=
+			transcriptLiveWorkWidthClassification(raw)
 		if usesWorkWidth {
 			messageWidth = contentW
 		}
 		wrapWidth := max(10, messageWidth-2)
-		m.buildIncrementalPlainLiveTail(
-			cache,
-			raw,
-			startRow,
-			contentW,
-			wrapWidth,
-			usesWorkWidth,
-			showHeader,
-			blockID,
-			turnID,
-		)
+		tail := raw
+		if m.md != nil {
+			_, tail = m.md.RenderStreamingFormatted(raw)
+		}
+		if strings.TrimSpace(tail) == "" {
+			// There is no mutable visible suffix to checkpoint yet. The next
+			// non-blank append can establish one through a canonical rebuild.
+			return nil, false
+		}
+		tailRawStart := len(raw) - len(tail)
+		if tailRawStart < 0 ||
+			tailRawStart > len(raw) ||
+			raw[tailRawStart:] != tail ||
+			!m.buildIncrementalPlainLiveTail(
+				cache,
+				raw,
+				thinking,
+				tail,
+				tailRawStart,
+				startRow,
+				contentW,
+				wrapWidth,
+				usesWorkWidth,
+				workWidthMutable,
+				showHeader,
+				blockID,
+				turnID,
+			) {
+			return nil, false
+		}
 	}
 
 	if state.renderedAny {
@@ -624,21 +691,53 @@ func (m *Model) renderIncrementalPlainLiveTail(
 func (m *Model) buildIncrementalPlainLiveTail(
 	cache *transcriptLivePaintCache,
 	raw string,
+	thinking string,
+	tail string,
+	tailRawStart int,
 	startRow, contentW, wrapWidth int,
-	usesWorkWidth, showHeader bool,
+	usesWorkWidth, workWidthMutable, showHeader bool,
 	blockID BlockID,
 	turnID TurnID,
-) {
-	rows, lastRenderedStart, previousLineHasPipe := m.plainLiveTailRows(
-		raw,
+) bool {
+	projection := m.plainLiveTailRows(
+		tail,
 		wrapWidth,
-		showHeader,
+		false,
+		false,
 	)
+
+	var canonical strings.Builder
+	m.renderStreamingMsg(&canonical, raw, contentW, showHeader)
+	canonicalText := strings.TrimSuffix(canonical.String(), "\n")
+	if canonicalText == "" {
+		return false
+	}
+	canonicalRows := strings.Split(canonicalText, "\n")
+	if len(projection.rows) == 0 ||
+		len(projection.rows) > len(canonicalRows) {
+		return false
+	}
+	prefixRows := len(canonicalRows) - len(projection.rows)
+	for index := range projection.rows {
+		if canonicalRows[prefixRows+index] != projection.rows[index] {
+			// The incremental path is deliberately not an alternative
+			// Markdown/reasoning renderer. If the canonical suffix is not the
+			// exact plain projection, keep the complete canonical block.
+			return false
+		}
+	}
+	rows := reservePlainLiveRows(canonicalRows)
 	blocks := make([]transcriptPaintBlock, 0, len(rows))
-	lastBlockStart := 0
+	lastRenderedStart := prefixRows + projection.lastRenderedStart
+	wrapRenderedStart := prefixRows + projection.wrapRenderedStart
+	lastBlockStart := len(blocks)
+	wrapBlockStart := len(blocks)
 	for index, row := range rows {
 		if index == lastRenderedStart {
 			lastBlockStart = len(blocks)
+		}
+		if index == wrapRenderedStart {
+			wrapBlockStart = len(blocks)
 		}
 		if row != "" {
 			blocks = append(
@@ -650,11 +749,21 @@ func (m *Model) buildIncrementalPlainLiveTail(
 	if lastRenderedStart == len(rows) {
 		lastBlockStart = len(blocks)
 	}
+	if wrapRenderedStart == len(rows) {
+		wrapBlockStart = len(blocks)
+	}
+	blocks = reservePlainLiveBlocks(blocks)
 
 	mapRows := trimTrailingTranscriptPaintRows(rows)
+	semanticSource := raw
+	rawLogicalBase := 0
+	if strings.TrimSpace(thinking) != "" {
+		semanticSource = thinking + "\n" + raw
+		rawLogicalBase = uniseg.GraphemeClusterCount(thinking + "\n")
+	}
 	lineMap := semanticTranscriptLineMapFromSource(
 		strings.Join(mapRows, "\n"),
-		raw,
+		semanticSource,
 	)
 	// Most token appends only add semantic rows. Keep spare immutable tail
 	// capacity so extending the map does not repeatedly copy its stable prefix.
@@ -665,32 +774,58 @@ func (m *Model) buildIncrementalPlainLiveTail(
 		reservedLineMap,
 		lastRenderedStart,
 	)
-	lastRawStart := strings.LastIndex(raw, "\n") + 1
+	wrapLineMapStart := transcriptLineMapRowStart(
+		reservedLineMap,
+		wrapRenderedStart,
+	)
+	lastRawRelative := strings.LastIndex(tail, "\n") + 1
+	lastRawStart := tailRawStart + lastRawRelative
+	tailLogicalBase := rawLogicalBase +
+		uniseg.GraphemeClusterCount(raw[:tailRawStart])
 
 	*cache = transcriptLivePaintCache{
-		valid:               true,
-		streamSourceEpoch:   m.transcriptPaint.streamSourceEpoch,
-		streamSourceRev:     m.transcriptPaint.streamSourceRev,
-		rawLen:              len(raw),
-		startRow:            startRow,
-		contentWidth:        contentW,
-		wrapWidth:           wrapWidth,
-		usesWorkWidth:       usesWorkWidth,
-		showHeader:          showHeader,
-		isDark:              m.isDark,
-		markdownRenderer:    m.md,
-		blockID:             blockID,
-		turnID:              turnID,
-		rows:                rows,
-		blocks:              blocks,
-		lineMap:             reservedLineMap,
-		lastRawStart:        lastRawStart,
-		lastRawLogical:      uniseg.GraphemeClusterCount(raw[:lastRawStart]),
+		valid:             true,
+		streamSourceEpoch: m.transcriptPaint.streamSourceEpoch,
+		streamSourceRev:   m.transcriptPaint.streamSourceRev,
+		thinkSourceEpoch:  m.transcriptPaint.thinkSourceEpoch,
+		thinkSourceRev:    m.transcriptPaint.thinkSourceRev,
+		thinkRawLen:       len(thinking),
+		rawLen:            len(raw),
+		tailRawStart:      tailRawStart,
+		startRow:          startRow,
+		contentWidth:      contentW,
+		wrapWidth:         wrapWidth,
+		usesWorkWidth:     usesWorkWidth,
+		workWidthMutable:  workWidthMutable,
+		showHeader:        showHeader,
+		isDark:            m.isDark,
+		glyphProfile:      m.glyphProfile,
+		markdownRenderer:  m.md,
+		blockID:           blockID,
+		turnID:            turnID,
+		rows:              rows,
+		blocks:            blocks,
+		lineMap:           reservedLineMap,
+		lastRawStart:      lastRawStart,
+		lastRawLogical: tailLogicalBase +
+			uniseg.GraphemeClusterCount(tail[:lastRawRelative]),
 		lastRenderedStart:   lastRenderedStart,
 		lastBlockStart:      lastBlockStart,
 		lastLineMapStart:    lastLineMapStart,
-		previousLineHasPipe: previousLineHasPipe,
+		previousLineHasPipe: projection.previousLineHasPipe,
+		lastLineWrapped:     projection.lastLineWrapped,
+		wrapRawStart:        tailRawStart + projection.wrapRawStart,
+		wrapRawLogical: tailLogicalBase + uniseg.GraphemeClusterCount(
+			tail[:projection.wrapRawStart],
+		),
+		wrapPrefixCellWidth: lipgloss.Width(
+			tail[lastRawRelative:projection.wrapRawStart],
+		),
+		wrapRenderedStart: wrapRenderedStart,
+		wrapBlockStart:    wrapBlockStart,
+		wrapLineMapStart:  wrapLineMapStart,
 	}
+	return true
 }
 
 func (m *Model) updateIncrementalPlainLiveTail(
@@ -701,14 +836,26 @@ func (m *Model) updateIncrementalPlainLiveTail(
 		!cache.valid ||
 		cache.rawLen < 0 ||
 		cache.rawLen >= len(raw) ||
+		cache.tailRawStart < 0 ||
+		cache.tailRawStart > cache.rawLen ||
 		cache.lastRawStart < 0 ||
+		cache.lastRawStart < cache.tailRawStart ||
 		cache.lastRawStart > cache.rawLen ||
 		cache.lastRenderedStart < 0 ||
 		cache.lastRenderedStart > len(cache.rows) ||
 		cache.lastBlockStart < 0 ||
 		cache.lastBlockStart > len(cache.blocks) ||
 		cache.lastLineMapStart < 0 ||
-		cache.lastLineMapStart > len(cache.lineMap) {
+		cache.lastLineMapStart > len(cache.lineMap) ||
+		cache.wrapRawStart < cache.lastRawStart ||
+		cache.wrapRawStart > cache.rawLen ||
+		cache.wrapPrefixCellWidth < 0 ||
+		cache.wrapRenderedStart < cache.lastRenderedStart ||
+		cache.wrapRenderedStart > len(cache.rows) ||
+		cache.wrapBlockStart < cache.lastBlockStart ||
+		cache.wrapBlockStart > len(cache.blocks) ||
+		cache.wrapLineMapStart < cache.lastLineMapStart ||
+		cache.wrapLineMapStart > len(cache.lineMap) {
 		return false
 	}
 	delta := raw[cache.rawLen:]
@@ -721,36 +868,74 @@ func (m *Model) updateIncrementalPlainLiveTail(
 		return false
 	}
 
-	sourceSuffix := raw[cache.lastRawStart:]
-	// At prose widths the work/prose renderers have the same measure. At wider
-	// terminals, inspect only the mutable raw-line suffix (plus the preceding
-	// table signal) before trusting the prior renderer choice.
-	if !cache.usesWorkWidth && cache.contentWidth > m.chatProseWidth() {
-		workProbe := sourceSuffix
-		if cache.previousLineHasPipe {
-			workProbe = "|\n" + workProbe
-		}
-		if markdownUsesWorkWidth(workProbe) {
+	deltaHasNewline := strings.Contains(delta, "\n")
+	nextUsesWorkWidth := cache.usesWorkWidth
+	nextWorkWidthMutable := cache.workWidthMutable
+	if deltaHasNewline {
+		nextUsesWorkWidth, nextWorkWidthMutable =
+			transcriptLiveWorkWidthClassification(raw)
+		if nextUsesWorkWidth != cache.usesWorkWidth {
 			return false
 		}
+	} else if !cache.usesWorkWidth &&
+		transcriptLiveLineNowUsesWorkWidth(raw[cache.lastRawStart:]) {
+		// A fence opener or four-space/tab indentation can emerge one token at
+		// a time on the mutable line. Rebuild before changing from prose to work
+		// width; inspecting the bounded line prefix avoids a document scan.
+		return false
+	} else if cache.workWidthMutable {
+		// The only non-monotonic work-width cause is a table delimiter in
+		// the mutable line (or a prefix which can still become one). Any append
+		// can change that classification in either direction, so force the cold
+		// whole-document classification/build path.
+		return false
 	}
 
-	suffixRows, nextLastRenderedRelative, previousLineHasPipe :=
-		m.plainLiveTailRows(sourceSuffix, cache.wrapWidth, false)
-	if !strings.Contains(sourceSuffix, "\n") {
-		previousLineHasPipe = cache.previousLineHasPipe
+	restartRawStart := cache.lastRawStart
+	restartRawLogical := cache.lastRawLogical
+	restartRenderedStart := cache.lastRenderedStart
+	restartBlockStart := cache.lastBlockStart
+	restartLineMapStart := cache.lastLineMapStart
+	if !deltaHasNewline {
+		restartRawStart = cache.wrapRawStart
+		restartRawLogical = cache.wrapRawLogical
+		restartRenderedStart = cache.wrapRenderedStart
+		restartBlockStart = cache.wrapBlockStart
+		restartLineMapStart = cache.wrapLineMapStart
 	}
-	nextLastRenderedStart := cache.lastRenderedStart + nextLastRenderedRelative
-	mapRows := trimTrailingTranscriptPaintRows(suffixRows)
+	sourceSuffix := raw[restartRawStart:]
+	if !deltaHasNewline &&
+		cache.lastLineWrapped &&
+		cache.wrapPrefixCellWidth+lipgloss.Width(sourceSuffix) <= cache.wrapWidth {
+		// A variation selector or another grapheme continuation can reduce the
+		// final cluster's cell width. If that makes the complete line fit again,
+		// canonical wrapLine preserves its raw whitespace and the prior wrapped
+		// rows must be rebuilt as one line.
+		return false
+	}
+	projection := m.plainLiveTailRows(
+		sourceSuffix,
+		cache.wrapWidth,
+		false,
+		cache.lastLineWrapped,
+	)
+	if !deltaHasNewline {
+		projection.previousLineHasPipe = cache.previousLineHasPipe
+	}
+	nextLastRenderedStart := restartRenderedStart +
+		projection.lastRenderedStart
+	nextWrapRenderedStart := restartRenderedStart +
+		projection.wrapRenderedStart
+	mapRows := trimTrailingTranscriptPaintRows(projection.rows)
 	suffixLineMap := semanticTranscriptLineMapFromSource(
 		strings.Join(mapRows, "\n"),
 		sourceSuffix,
 	)
 	for index := range suffixLineMap {
-		suffixLineMap[index].Row += cache.lastRenderedStart
-		suffixLineMap[index].LogicalOffset += cache.lastRawLogical
+		suffixLineMap[index].Row += restartRenderedStart
+		suffixLineMap[index].LogicalOffset += restartRawLogical
 	}
-	previousSuffixMap := cache.lineMap[cache.lastLineMapStart:]
+	previousSuffixMap := cache.lineMap[restartLineMapStart:]
 	if len(suffixLineMap) < len(previousSuffixMap) ||
 		!transcriptLineMapPrefixEqual(suffixLineMap, previousSuffixMap) {
 		return false
@@ -758,37 +943,61 @@ func (m *Model) updateIncrementalPlainLiveTail(
 
 	nextLineMap := cache.lineMap
 	nextLineMap = append(nextLineMap, suffixLineMap[len(previousSuffixMap):]...)
-	nextRows := cache.rows[:cache.lastRenderedStart]
-	nextRows = append(nextRows, suffixRows...)
-	nextBlocks := cache.blocks[:cache.lastBlockStart]
+	nextRows := cache.rows[:restartRenderedStart]
+	nextRows = append(nextRows, projection.rows...)
+	nextBlocks := cache.blocks[:restartBlockStart]
 	nextLastBlockStart := len(nextBlocks)
-	for relativeRow, row := range suffixRows {
-		if relativeRow == nextLastRenderedRelative {
+	nextWrapBlockStart := len(nextBlocks)
+	for relativeRow, row := range projection.rows {
+		if relativeRow == projection.lastRenderedStart {
 			nextLastBlockStart = len(nextBlocks)
+		}
+		if relativeRow == projection.wrapRenderedStart {
+			nextWrapBlockStart = len(nextBlocks)
 		}
 		if row != "" {
 			nextBlocks = append(
 				nextBlocks,
 				m.measureTranscriptPaintBlock(
-					cache.startRow+cache.lastRenderedStart+relativeRow,
+					cache.startRow+restartRenderedStart+relativeRow,
 					row,
 				),
 			)
 		}
 	}
-	if nextLastRenderedRelative == len(suffixRows) {
+	if projection.lastRenderedStart == len(projection.rows) {
 		nextLastBlockStart = len(nextBlocks)
+	}
+	if projection.wrapRenderedStart == len(projection.rows) {
+		nextWrapBlockStart = len(nextBlocks)
 	}
 
 	nextLastRawRelative := strings.LastIndex(sourceSuffix, "\n") + 1
-	nextLastRawLogical := cache.lastRawLogical +
+	nextLastRawStart := restartRawStart + nextLastRawRelative
+	nextLastRawLogical := restartRawLogical +
 		uniseg.GraphemeClusterCount(sourceSuffix[:nextLastRawRelative])
+	if !deltaHasNewline {
+		nextLastRawStart = cache.lastRawStart
+		nextLastRawLogical = cache.lastRawLogical
+		nextLastRenderedStart = cache.lastRenderedStart
+		nextLastBlockStart = cache.lastBlockStart
+	}
+	nextWrapRawStart := restartRawStart + projection.wrapRawStart
+	nextWrapRawLogical := restartRawLogical +
+		uniseg.GraphemeClusterCount(sourceSuffix[:projection.wrapRawStart])
+	nextWrapPrefixCellWidth := cache.wrapPrefixCellWidth +
+		lipgloss.Width(sourceSuffix[:projection.wrapRawStart])
+	if deltaHasNewline {
+		nextWrapPrefixCellWidth = lipgloss.Width(
+			raw[nextLastRawStart:nextWrapRawStart],
+		)
+	}
 	cache.streamSourceRev = m.transcriptPaint.streamSourceRev
 	cache.rawLen = len(raw)
 	cache.rows = nextRows
 	cache.blocks = nextBlocks
 	cache.lineMap = nextLineMap
-	cache.lastRawStart += nextLastRawRelative
+	cache.lastRawStart = nextLastRawStart
 	cache.lastRawLogical = nextLastRawLogical
 	cache.lastRenderedStart = nextLastRenderedStart
 	cache.lastBlockStart = nextLastBlockStart
@@ -796,36 +1005,275 @@ func (m *Model) updateIncrementalPlainLiveTail(
 		nextLineMap,
 		nextLastRenderedStart,
 	)
-	cache.previousLineHasPipe = previousLineHasPipe
+	cache.previousLineHasPipe = projection.previousLineHasPipe
+	cache.lastLineWrapped = projection.lastLineWrapped
+	cache.wrapRawStart = nextWrapRawStart
+	cache.wrapRawLogical = nextWrapRawLogical
+	cache.wrapPrefixCellWidth = nextWrapPrefixCellWidth
+	cache.wrapRenderedStart = nextWrapRenderedStart
+	cache.wrapBlockStart = nextWrapBlockStart
+	cache.wrapLineMapStart = transcriptLineMapRowStart(
+		nextLineMap,
+		nextWrapRenderedStart,
+	)
+	cache.usesWorkWidth = nextUsesWorkWidth
+	cache.workWidthMutable = nextWorkWidthMutable
 	return true
+}
+
+func transcriptLiveLineNowUsesWorkWidth(line string) bool {
+	if line == "" {
+		return false
+	}
+	if line[0] == '\t' || strings.HasPrefix(line, "    ") {
+		return true
+	}
+	markerStart := 0
+	for markerStart < len(line) &&
+		markerStart < 4 &&
+		line[markerStart] == ' ' {
+		markerStart++
+	}
+	if markerStart > 3 || markerStart+3 > len(line) {
+		return false
+	}
+	marker := line[markerStart : markerStart+3]
+	return marker == "```" || marker == "~~~"
 }
 
 func (m *Model) plainLiveTailRows(
 	raw string,
 	wrapWidth int,
 	showHeader bool,
-) ([]string, int, bool) {
+	forceFirstLineWrap bool,
+) plainLiveTailProjection {
 	rawLines := strings.Split(raw, "\n")
 	rows := make([]string, 0, len(rawLines)+1)
 	if showHeader {
 		rows = append(rows, m.styles.AsstLabel.Render("assistant"))
 	}
 	lastRenderedStart := len(rows)
+	wrapRawStart := 0
+	wrapRenderedStart := lastRenderedStart
+	rawStart := 0
+	lastLineWrapped := false
 	for index, rawLine := range rawLines {
 		if index == len(rawLines)-1 {
 			lastRenderedStart = len(rows)
 		}
-		wrapped := wrapLine(rawLine, wrapWidth)
-		for _, row := range strings.Split(wrapped, "\n") {
+		lineRows, checkpointRaw, checkpointRow, wrapped :=
+			plainLiveWrappedLine(
+				rawLine,
+				wrapWidth,
+				index == 0 && forceFirstLineWrap,
+			)
+		if index == len(rawLines)-1 {
+			wrapRawStart = rawStart + checkpointRaw
+			wrapRenderedStart = len(rows) + checkpointRow
+			lastLineWrapped = wrapped
+		}
+		for _, row := range lineRows {
 			if row != "" {
 				row = "  " + row
 			}
 			rows = append(rows, row)
 		}
+		rawStart += len(rawLine) + 1
 	}
 	previousLineHasPipe := len(rawLines) > 1 &&
 		strings.Contains(rawLines[len(rawLines)-2], "|")
-	return rows, lastRenderedStart, previousLineHasPipe
+	return plainLiveTailProjection{
+		rows:                rows,
+		lastRenderedStart:   lastRenderedStart,
+		previousLineHasPipe: previousLineHasPipe,
+		lastLineWrapped:     lastLineWrapped,
+		wrapRawStart:        wrapRawStart,
+		wrapRenderedStart:   wrapRenderedStart,
+	}
+}
+
+// plainLiveWrappedLine mirrors wrapLine and additionally records the raw byte
+// and rendered-row start of its final row. Once a line has entered wrap mode,
+// forceWrap preserves wrapLine's field-normalization semantics when only that
+// bounded final-row suffix is reprocessed.
+func plainLiveWrappedLine(
+	line string,
+	width int,
+	forceWrap bool,
+) (rows []string, checkpointRaw, checkpointRow int, wrapped bool) {
+	if width <= 0 {
+		return []string{line}, 0, 0, false
+	}
+	if !forceWrap && lipgloss.Width(line) <= width {
+		return []string{line}, 0, 0, false
+	}
+	words := strings.Fields(line)
+	if len(words) == 0 {
+		return []string{""}, len(line), 0, true
+	}
+
+	lines := make([]plainLiveWrapChunk, 0, len(words))
+	current := plainLiveWrapChunk{}
+	searchStart := 0
+	for _, word := range words {
+		relative := strings.Index(line[searchStart:], word)
+		if relative < 0 {
+			// strings.Fields returns substrings of line, so this is defensive.
+			return strings.Split(wrapLine(line, width), "\n"), 0, 0, true
+		}
+		wordStart := searchStart + relative
+		searchStart = wordStart + len(word)
+		if current.text != "" &&
+			lipgloss.Width(current.text)+1+lipgloss.Width(word) <= width {
+			current.text += " " + word
+			continue
+		}
+		if current.text != "" {
+			lines = append(lines, current)
+			current = plainLiveWrapChunk{}
+		}
+
+		chunks := splitPlainLiveWrapChunks(word, wordStart, width)
+		if len(chunks) == 0 {
+			continue
+		}
+		if len(chunks) > 1 {
+			lines = append(lines, chunks[:len(chunks)-1]...)
+		}
+		current = chunks[len(chunks)-1]
+	}
+	if current.text != "" {
+		lines = append(lines, current)
+	}
+	if len(lines) == 0 {
+		return []string{""}, len(line), 0, true
+	}
+
+	rows = make([]string, len(lines))
+	for index := range lines {
+		rows[index] = lines[index].text
+	}
+	checkpointRow = len(lines) - 1
+	checkpointRaw = lines[checkpointRow].rawStart
+	return rows, checkpointRaw, checkpointRow, true
+}
+
+func splitPlainLiveWrapChunks(
+	word string,
+	wordStart int,
+	width int,
+) []plainLiveWrapChunk {
+	if word == "" || width <= 0 {
+		return nil
+	}
+	var chunks []plainLiveWrapChunk
+	var chunk strings.Builder
+	chunkStart := 0
+	used := 0
+	graphemes := uniseg.NewGraphemes(word)
+	for graphemes.Next() {
+		start, _ := graphemes.Positions()
+		cluster := graphemes.Str()
+		clusterWidth := lipgloss.Width(cluster)
+		if used > 0 && used+clusterWidth > width {
+			chunks = append(chunks, plainLiveWrapChunk{
+				text:     chunk.String(),
+				rawStart: wordStart + chunkStart,
+			})
+			chunk.Reset()
+			chunkStart = start
+			used = 0
+		}
+		if chunk.Len() == 0 {
+			chunkStart = start
+		}
+		chunk.WriteString(cluster)
+		used += clusterWidth
+		if used >= width {
+			chunks = append(chunks, plainLiveWrapChunk{
+				text:     chunk.String(),
+				rawStart: wordStart + chunkStart,
+			})
+			chunk.Reset()
+			used = 0
+		}
+	}
+	if chunk.Len() > 0 {
+		chunks = append(chunks, plainLiveWrapChunk{
+			text:     chunk.String(),
+			rawStart: wordStart + chunkStart,
+		})
+	}
+	return chunks
+}
+
+func reservePlainLiveRows(rows []string) []string {
+	headroom := max(64, min(4096, max(1, len(rows)/8)))
+	reserved := make([]string, len(rows), len(rows)+headroom)
+	copy(reserved, rows)
+	return reserved
+}
+
+func reservePlainLiveBlocks(
+	blocks []transcriptPaintBlock,
+) []transcriptPaintBlock {
+	headroom := max(64, min(4096, max(1, len(blocks)/8)))
+	reserved := make(
+		[]transcriptPaintBlock,
+		len(blocks),
+		len(blocks)+headroom,
+	)
+	copy(reserved, blocks)
+	return reserved
+}
+
+// transcriptLiveWorkWidthClassification separates append-stable causes
+// (fences, indentation, or a table before the mutable line) from a delimiter
+// in the mutable last line. The latter can flip in either direction on append
+// and therefore must fall back to canonical whole-document classification.
+func transcriptLiveWorkWidthClassification(content string) (uses, mutable bool) {
+	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+	last := len(lines) - 1
+	for index, line := range lines {
+		if _, ok := markdownFenceMarkerStart(line); ok {
+			trimmed := strings.TrimLeft(line, " ")
+			if len(trimmed) >= 3 &&
+				(strings.HasPrefix(trimmed, "```") ||
+					strings.HasPrefix(trimmed, "~~~")) {
+				return true, false
+			}
+		}
+		if strings.HasPrefix(line, "\t") ||
+			strings.HasPrefix(line, "    ") {
+			return true, false
+		}
+		if index == 0 || !strings.Contains(lines[index-1], "|") {
+			continue
+		}
+		if markdownTableDelimiterLine(line) {
+			if index < last {
+				return true, false
+			}
+			uses = true
+			mutable = true
+			continue
+		}
+		if index == last && transcriptTableDelimiterMayChange(line) {
+			mutable = true
+		}
+	}
+	return uses, mutable
+}
+
+func transcriptTableDelimiterMayChange(line string) bool {
+	for _, char := range line {
+		switch char {
+		case ' ', '\t', '\r', ':', '-', '|':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func trimTrailingTranscriptPaintRows(rows []string) []string {
@@ -904,8 +1352,10 @@ func (m *Model) syncTranscriptPaintWindow() {
 	paint.top = min(max(0, paint.top), m.transcriptMaxTop())
 	height := max(1, m.viewport.Height())
 	visibleEnd := min(paint.document.totalRows, paint.top+height)
+	highlightRow := m.transcriptSearchHighlightRow()
 	if paint.windowGeneration == paint.documentGeneration &&
 		paint.windowHeight == height &&
+		paint.windowHighlightRow == highlightRow &&
 		paint.windowStart <= paint.top &&
 		visibleEnd <= paint.windowEnd {
 		m.viewport.SetYOffset(paint.top - paint.windowStart)
@@ -918,11 +1368,13 @@ func (m *Model) syncTranscriptPaintWindow() {
 		paint.top+height+transcriptPaintOverscanRows,
 	)
 	rows, blocksPainted := paint.document.materializeRows(start, end)
+	m.styleTranscriptSearchWindowRows(rows, start, highlightRow)
 	m.viewport.SetContentLines(rows)
 	m.viewport.SetYOffset(paint.top - start)
 	paint.windowStart = start
 	paint.windowEnd = end
 	paint.windowHeight = height
+	paint.windowHighlightRow = highlightRow
 	paint.windowGeneration = paint.documentGeneration
 
 	if m.transcriptRenderProbe != nil {
@@ -996,15 +1448,20 @@ func (m *Model) scrollTranscriptBy(delta int) {
 }
 
 // appendTranscriptStreamText is the sole production writer for provider prose.
-// Tracking the buffer length at this boundary lets paint prove append-only
-// growth without comparing or hashing the complete accumulated response.
+// Generation and a zero-copy Builder snapshot prove append-only growth. Normal
+// paints compare the same string storage in constant time; a direct replacement
+// pays a content comparison once and is adopted only as a cold source episode.
 func (m *Model) appendTranscriptStreamText(value string) {
 	if value == "" {
 		return
 	}
 	m.adoptTranscriptStreamSource()
+	if available := m.streamBuf.Cap() - m.streamBuf.Len(); available < len(value) {
+		m.streamBuf.Grow(len(value) + transcriptStreamAppendHeadroomBytes)
+	}
 	m.streamBuf.WriteString(value)
 	m.transcriptPaint.streamSourceLen += len(value)
+	m.transcriptPaint.streamSourceValue = m.streamBuf.String()
 	incrementTranscriptPaintGeneration(&m.transcriptPaint.streamSourceRev)
 }
 
@@ -1017,6 +1474,7 @@ func (m *Model) resetTranscriptStreamText() {
 	incrementTranscriptPaintGeneration(&m.transcriptPaint.streamSourceRev)
 	m.transcriptPaint.streamSourceTracked = true
 	m.transcriptPaint.streamSourceLen = 0
+	m.transcriptPaint.streamSourceValue = ""
 	m.transcriptPaint.liveCache.valid = false
 }
 
@@ -1026,11 +1484,15 @@ func (m *Model) resetTranscriptStreamText() {
 // than being trusted as append-only.
 func (m *Model) syncTranscriptStreamSource() bool {
 	paint := &m.transcriptPaint
-	if !paint.streamSourceTracked || paint.streamSourceLen != m.streamBuf.Len() {
+	current := m.streamBuf.String()
+	if !paint.streamSourceTracked ||
+		paint.streamSourceLen != len(current) ||
+		paint.streamSourceValue != current {
 		incrementTranscriptPaintGeneration(&paint.streamSourceEpoch)
 		incrementTranscriptPaintGeneration(&paint.streamSourceRev)
 		paint.streamSourceTracked = true
-		paint.streamSourceLen = m.streamBuf.Len()
+		paint.streamSourceLen = len(current)
+		paint.streamSourceValue = current
 		return false
 	}
 	return true
@@ -1038,13 +1500,79 @@ func (m *Model) syncTranscriptStreamSource() bool {
 
 func (m *Model) adoptTranscriptStreamSource() {
 	paint := &m.transcriptPaint
-	if paint.streamSourceTracked && paint.streamSourceLen == m.streamBuf.Len() {
+	current := m.streamBuf.String()
+	if paint.streamSourceTracked &&
+		paint.streamSourceLen == len(current) &&
+		paint.streamSourceValue == current {
 		return
 	}
 	incrementTranscriptPaintGeneration(&paint.streamSourceEpoch)
 	incrementTranscriptPaintGeneration(&paint.streamSourceRev)
 	paint.streamSourceTracked = true
-	paint.streamSourceLen = m.streamBuf.Len()
+	paint.streamSourceLen = len(current)
+	paint.streamSourceValue = current
+	paint.liveCache.valid = false
+}
+
+// appendTranscriptThinkingText is the sole production writer for native or
+// tag-derived reasoning. The live cache can reuse a rendered reasoning prefix
+// only while this provenance remains byte-for-byte unchanged.
+func (m *Model) appendTranscriptThinkingText(value string) {
+	if value == "" {
+		return
+	}
+	m.adoptTranscriptThinkingSource()
+	if available := m.thinkBuf.Cap() - m.thinkBuf.Len(); available < len(value) {
+		m.thinkBuf.Grow(len(value) + transcriptStreamAppendHeadroomBytes)
+	}
+	m.thinkBuf.WriteString(value)
+	m.transcriptPaint.thinkSourceLen += len(value)
+	m.transcriptPaint.thinkSourceValue = m.thinkBuf.String()
+	incrementTranscriptPaintGeneration(&m.transcriptPaint.thinkSourceRev)
+}
+
+// resetTranscriptThinkingText starts a new reasoning provenance episode.
+func (m *Model) resetTranscriptThinkingText() {
+	m.thinkBuf.Reset()
+	incrementTranscriptPaintGeneration(&m.transcriptPaint.thinkSourceEpoch)
+	incrementTranscriptPaintGeneration(&m.transcriptPaint.thinkSourceRev)
+	m.transcriptPaint.thinkSourceTracked = true
+	m.transcriptPaint.thinkSourceLen = 0
+	m.transcriptPaint.thinkSourceValue = ""
+	m.transcriptPaint.liveCache.valid = false
+}
+
+// syncTranscriptThinkingSource reports whether every reasoning mutation since
+// the previous paint passed through appendTranscriptThinkingText.
+func (m *Model) syncTranscriptThinkingSource() bool {
+	paint := &m.transcriptPaint
+	current := m.thinkBuf.String()
+	if !paint.thinkSourceTracked ||
+		paint.thinkSourceLen != len(current) ||
+		paint.thinkSourceValue != current {
+		incrementTranscriptPaintGeneration(&paint.thinkSourceEpoch)
+		incrementTranscriptPaintGeneration(&paint.thinkSourceRev)
+		paint.thinkSourceTracked = true
+		paint.thinkSourceLen = len(current)
+		paint.thinkSourceValue = current
+		return false
+	}
+	return true
+}
+
+func (m *Model) adoptTranscriptThinkingSource() {
+	paint := &m.transcriptPaint
+	current := m.thinkBuf.String()
+	if paint.thinkSourceTracked &&
+		paint.thinkSourceLen == len(current) &&
+		paint.thinkSourceValue == current {
+		return
+	}
+	incrementTranscriptPaintGeneration(&paint.thinkSourceEpoch)
+	incrementTranscriptPaintGeneration(&paint.thinkSourceRev)
+	paint.thinkSourceTracked = true
+	paint.thinkSourceLen = len(current)
+	paint.thinkSourceValue = current
 	paint.liveCache.valid = false
 }
 

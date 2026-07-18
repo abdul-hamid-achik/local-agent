@@ -46,8 +46,10 @@ func (m *Model) View() tea.View {
 	}
 
 	// Infrequent controls remain centered overlays. Composer-owned completion,
-	// Plan, and Goal surfaces were already rendered in the normal footer flow.
+	// transcript search, Plan, and Goal surfaces were already rendered in the
+	// normal footer flow.
 	if m.overlay != OverlayNone && m.overlay != OverlayCompletion &&
+		m.overlay != OverlayTranscriptSearch &&
 		m.overlay != OverlayCortexDecision &&
 		m.overlay != OverlayPlanForm && m.overlay != OverlayGoalForm {
 		var overlay string

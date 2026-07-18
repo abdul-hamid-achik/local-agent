@@ -1,11 +1,12 @@
                              ╭────────────────────────────────────────────────────────────╮
                              │ Help                                                       │
                              │                                                            │
+                             │   ctrl+v            Paste text; on macOS convert a         │
                              │                     clipboard image to PNG and attach it   │
                              │   paste/drag imag…  Attach up to four PNG, JPEG, or GIF    │
-                             │                     files to the pending prompt            │
-  notice · ollama: no model s│   shift+drag        Use the terminal selection override    │
-  try: ollama serve · ollama │                     while mouse scrolling is active        │
+  notice · ollama: no model s│                     files to the pending prompt            │
+  try: ollama serve · ollama │   shift+drag        Use the terminal selection override    │
+                             │                     while mouse scrolling is active        │
                              │   ~/… or /…         Review temporary read-only access;     │
                              │                     MCP tools require separate approval    │
                              │   #skill            Insert skill mention text              │
@@ -30,6 +31,5 @@
                              │   /goal pause       Unavailable · No goal is configured.   │
                              │   /goal resume      Unavailable · No goal is configured.   │
                              │   /goal budget      Unavailable · No goal is configured.   │
-                             │   /goal drop        Unavailable · No goal is configured.   │
-─────────────────────────────│ esc/q close · j/k scroll · pgup/pgdn page · 37%            │────────────────────────────
+─────────────────────────────│ esc/q close · j/k scroll · pgup/pgdn page · 36%            │────────────────────────────
                              ╰────────────────────────────────────────────────────────────╯

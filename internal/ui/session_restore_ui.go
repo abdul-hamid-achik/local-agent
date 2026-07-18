@@ -81,6 +81,7 @@ func (m *Model) finishLoadedSession(message SessionLoadedMsg) (bool, tea.Cmd) {
 		m.failLoadedSession(message, err)
 		return false, nil
 	}
+	m.preemptTranscriptSearch()
 	if err := m.restoreSessionState(message.State); err != nil {
 		m.failLoadedSession(message, err)
 		return false, nil

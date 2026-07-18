@@ -62,6 +62,12 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		m.resumeFollow()
 		return nil, true
 	}
+	// Transcript search is a read-only, non-printable global gesture. It stays
+	// available while a turn streams or a background operation owns the
+	// composer, but never preempts host decisions, viewers, or another overlay.
+	if m.overlay == OverlayNone && key.Matches(msg, m.keys.TranscriptSearch) {
+		return m.openTranscriptSearch(), true
+	}
 	if cmd, handled := m.handleBusyOperationKey(msg); handled {
 		return cmd, true
 	}

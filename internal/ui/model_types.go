@@ -42,6 +42,7 @@ const (
 	OverlayModelDetails
 	OverlayModelPull
 	OverlayAgents
+	OverlayTranscriptSearch
 )
 
 // CompletionState holds all state for the composer-owned completion popup.

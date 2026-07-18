@@ -1490,6 +1490,7 @@ func (m *Model) preserveGeneratedPrompt(prompt string) bool {
 }
 
 func (m *Model) renderGoalInspector(snapshot goal.Snapshot) {
+	m.preemptTranscriptSearch()
 	// A newly attached/restored goal adds one stable status row. Reconcile the
 	// transcript height before centering the inspector so a 30x12 view retains
 	// the terminal safety row.

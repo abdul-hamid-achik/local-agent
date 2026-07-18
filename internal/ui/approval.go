@@ -82,6 +82,7 @@ func (m *Model) openApproval(request ToolApprovalMsg) error {
 		return fmt.Errorf("encode exact arguments: %w", err)
 	}
 
+	m.preemptTranscriptSearch()
 	anchor := m.captureApprovalTranscriptAnchor()
 	m.clearViewerModals(false)
 	// Approval has the highest input authority. If a host request arrives while

@@ -33,7 +33,7 @@ func (m *Model) handleStreamText(msg StreamTextMsg, cmds []tea.Cmd) []tea.Cmd {
 		m.appendTranscriptStreamText(mainText)
 	}
 	if thinkText != "" {
-		m.thinkBuf.WriteString(thinkText)
+		m.appendTranscriptThinkingText(thinkText)
 	}
 	// Coalesce repaints to ~30fps. Fast local models emit tokens faster
 	// than the terminal can usefully redraw; repainting every token wastes
@@ -54,7 +54,7 @@ func (m *Model) handleStreamThinking(msg StreamThinkingMsg, cmds []tea.Cmd) []te
 		m.state = StateStreaming
 		cmds = append(cmds, m.startActivityCmd())
 	}
-	m.thinkBuf.WriteString(msg.Text)
+	m.appendTranscriptThinkingText(msg.Text)
 	if now := time.Now(); now.Sub(m.lastStreamPaint) >= 33*time.Millisecond {
 		m.lastStreamPaint = now
 		m.refreshTranscript()

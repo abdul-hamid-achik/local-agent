@@ -20,6 +20,8 @@ func (m *Model) handleOverlayKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		switch m.overlay {
 		case OverlayCompletion:
 			m.dismissCompletion()
+		case OverlayTranscriptSearch:
+			return m.closeTranscriptSearch(true), true
 		case OverlayModelPicker:
 			if m.modelPickerState != nil && m.modelPickerState.List.FilterState() != list.Unfiltered {
 				var cmd tea.Cmd
@@ -90,6 +92,10 @@ func (m *Model) handleOverlayKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 			m.dismissOverlay()
 		}
 		return tea.ClearScreen, true
+	}
+
+	if m.overlay == OverlayTranscriptSearch {
+		return m.handleTranscriptSearchKey(msg), true
 	}
 
 	// Help overlay: scroll keys forwarded to helpViewport, ? or q to dismiss.

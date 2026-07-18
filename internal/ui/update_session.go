@@ -20,6 +20,7 @@ func (m *Model) handleSessionList(msg SessionListMsg) {
 		}
 		return
 	}
+	m.preemptTranscriptSearch()
 	if msg.Err != nil {
 		m.sessionsPickerState = newSessionsMessageState(sessionsFailed, msg.Err.Error())
 		m.overlay = OverlaySessionsPicker

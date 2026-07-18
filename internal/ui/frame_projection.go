@@ -231,6 +231,11 @@ func (m *Model) projectFooterWithOptions(options footerProjectionOptions) footer
 		input.SetVirtualCursor(false)
 		content.WriteString(input.View())
 		p.cursor = offsetCursor(popupCursor, 0, popupY)
+	case m.overlay == OverlayTranscriptSearch && m.transcriptSearch != nil:
+		searchY := strings.Count(content.String(), "\n")
+		search, searchCursor := m.renderTranscriptSearchView()
+		content.WriteString(search)
+		p.cursor = offsetCursor(searchCursor, 0, searchY)
 	case m.overlay == OverlayPlanForm && m.planFormState != nil:
 		formY := strings.Count(content.String(), "\n")
 		form, formCursor := m.renderPlanFormView()

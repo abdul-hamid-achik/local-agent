@@ -23,6 +23,10 @@ func (m *Model) renderStatusLine() string {
 	if m.overlay == OverlayCompletion && m.isCompletionActive() {
 		return ""
 	}
+	// Search owns a fixed footer surface with its own result count and keys.
+	if m.overlay == OverlayTranscriptSearch && m.transcriptSearch != nil {
+		return ""
+	}
 	// The Cortex decision frame carries its own state and key guidance, including
 	// in-flight liveness, so no competing working/status footer is rendered.
 	if m.cortexDecisionActive() {

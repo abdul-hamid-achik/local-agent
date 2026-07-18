@@ -801,6 +801,7 @@ data erasure is required.
 | `ctrl+p` | Open session settings (model, profile, mode, sessions, layout, runtime) |
 | `ctrl+o` | Open Ollama model picker |
 | `ctrl+g` | Open the Agent Hub |
+| `ctrl+f` | Search the bounded safe transcript projection |
 | `f1`, `ctrl+h` | Open Help when the composer is empty (`f1` is unambiguous on legacy terminals) |
 | `tab` | Complete commands, files, and skills |
 | `up`, `down` | Browse input history |
@@ -815,6 +816,10 @@ data erasure is required.
 | `esc` | Close an overlay or inline form, cancel an approval, or cancel active generation |
 | `ctrl+n`, `ctrl+l` | New conversation / clear view |
 | `ctrl+c` | Quit |
+
+Transcript search never indexes private model reasoning, raw tool
+arguments/results, or raw MCP structured content. Closing it restores the
+existing draft and reading position.
 
 ## Architecture
 

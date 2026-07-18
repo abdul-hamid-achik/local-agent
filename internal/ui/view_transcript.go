@@ -1017,6 +1017,22 @@ func (m *Model) renderStreamingMsg(b *strings.Builder, content string, contentW 
 		return
 	}
 
+	m.renderStreamingAnswer(b, content, contentW)
+}
+
+// renderStreamingAnswer owns the canonical answer-only projection. Reasoning
+// and role chrome stay in renderStreamingMsg so consumers such as transcript
+// search can derive a safe exact suffix without ever receiving thinkBuf.
+func (m *Model) renderStreamingAnswer(
+	b *strings.Builder,
+	content string,
+	contentW int,
+) {
+	content = sanitizeTerminalMultiline(content)
+	if strings.TrimSpace(content) == "" {
+		return
+	}
+
 	// During streaming: render the stable markdown prefix with Glamour (cached)
 	// and only the trailing partial paragraph as plain wrapped text. This shows
 	// formatted output live instead of popping into shape on completion, while

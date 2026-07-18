@@ -300,7 +300,7 @@ func TestLayoutTailPublicationPreservesCapturedAnchorSemantics(t *testing.T) {
 	})
 }
 
-func TestIncrementalPlainLiveTailRejectsUntrackedMutationAndMarkdownBoundary(t *testing.T) {
+func TestIncrementalPlainLiveTailRejectsUntrackedMutationAndRebuildsMarkdownBoundary(t *testing.T) {
 	t.Run("untracked builder mutation", func(t *testing.T) {
 		m := newTestModel(t)
 		m.entries = []ChatEntry{{Kind: "user", Content: "do not trust a reset"}}
@@ -309,8 +309,9 @@ func TestIncrementalPlainLiveTailRejectsUntrackedMutationAndMarkdownBoundary(t *
 		m.invalidateEntryCache()
 		m.refreshTranscript()
 
+		replacementLen := m.streamBuf.Len()
 		m.streamBuf.Reset()
-		m.streamBuf.WriteString(strings.Repeat("replacement row\n", 30) + "replacement tail")
+		m.streamBuf.WriteString(strings.Repeat("x", replacementLen))
 		probe := &transcriptRenderProbe{}
 		m.transcriptRenderProbe = probe
 		m.refreshTranscript()
@@ -334,11 +335,19 @@ func TestIncrementalPlainLiveTailRejectsUntrackedMutationAndMarkdownBoundary(t *
 		m.appendTranscriptStreamText(strings.Repeat("plain row\n", 40) + "paragraph")
 		m.invalidateEntryCache()
 		m.refreshTranscript()
+		beforeBoundary := m.transcriptPaint.liveCache.tailRawStart
 
 		m.appendTranscriptStreamText("\n\n**formatted block**")
 		m.refreshTranscript()
-		if m.transcriptPaint.liveCache.valid {
-			t.Fatal("structured Markdown reused the plain live-tail projection")
+		if !m.transcriptPaint.liveCache.valid {
+			t.Fatal("Markdown boundary rebuild did not install a segmented cache")
+		}
+		if got := m.transcriptPaint.liveCache.tailRawStart; got <= beforeBoundary {
+			t.Fatalf(
+				"Markdown boundary did not advance stable prefix: before=%d after=%d",
+				beforeBoundary,
+				got,
+			)
 		}
 		assertIncrementalLiveTailParity(t, m)
 	})

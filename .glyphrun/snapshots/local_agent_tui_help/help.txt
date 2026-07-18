@@ -20,6 +20,7 @@
                              │   ctrl+o            Open Ollama models                     │
                              │   ctrl+p            Open settings                          │
                              │   ctrl+g            Open agents                            │
+                             │   ctrl+f            Search transcript                      │
                              │   ↑                 Previous input (empty input)           │
                              │   ↓                 Next input (history active)            │
                              │   ctrl+r            Toggle last tool (empty input)         │
@@ -30,6 +31,5 @@
                              │                                                            │
                              │ Input Shortcuts                                            │
                              │   @file / @agent    Insert file or agent mention text      │
-                             │   ctrl+v            Paste text; on macOS convert a         │
 ─────────────────────────────│ esc/q close · pgdn more · g/shift+g ends                   │────────────────────────────
                              ╰────────────────────────────────────────────────────────────╯

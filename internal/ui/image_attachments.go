@@ -247,6 +247,10 @@ func (m *Model) handleImageAttachmentResult(message ImageAttachmentResultMsg) te
 		m.clearImageAttachmentQueue()
 		return nil
 	}
+	// Attachment admission can restore a fallback paste and open its review
+	// owner. It also changes pending composer state and focus, so settle search
+	// first even when the receipt is an ordinary success.
+	m.preemptTranscriptSearch()
 
 	stopQueue := false
 	if message.Err != nil {

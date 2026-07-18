@@ -137,6 +137,7 @@ func (m *Model) activateCortexDecision() {
 		m.pendingApproval != nil || m.pendingPaste != nil {
 		return
 	}
+	m.preemptTranscriptSearch()
 	anchor := m.captureInlineFormTranscriptAnchor()
 	m.clearViewerModals(false)
 	if m.isCompletionActive() {

@@ -149,6 +149,7 @@ func (m *Model) handleStandaloneRecoveryInspect(message standaloneRecoveryInspec
 		m.resumeFollow()
 		return nil
 	}
+	m.preemptTranscriptSearch()
 	state.inspection = message.inspection
 	item := GoalRecoveryItem{
 		ItemID: message.inspection.ItemID, Kind: GoalRecoveryExecutionEffect,

@@ -27,6 +27,7 @@ type KeyMap struct {
 	ModelPicker       key.Binding
 	SettingsPicker    key.Binding
 	AgentHub          key.Binding
+	TranscriptSearch  key.Binding
 	HistoryUp         key.Binding
 	HistoryDown       key.Binding
 	ToggleFocusedTool key.Binding
@@ -137,6 +138,10 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("ctrl+g"),
 			key.WithHelp("ctrl+g", "open agents"),
 		),
+		TranscriptSearch: key.NewBinding(
+			key.WithKeys("ctrl+f"),
+			key.WithHelp("ctrl+f", "search transcript"),
+		),
 		HistoryUp: key.NewBinding(
 			key.WithKeys("up"),
 			key.WithHelp("↑", "previous input (empty input)"),
@@ -175,7 +180,7 @@ func (k KeyMap) FullHelp() [][]key.Binding {
 		{k.Send, k.NewLine, k.Cancel, k.Quit},
 		{k.ClearView, k.NewConvo, k.Help, k.ToggleTools, k.CopyLast},
 		{k.PageUp, k.PageDown, k.HalfPageUp, k.HalfPageDn, k.JumpLatest},
-		{k.CycleMode, k.ModelPicker, k.SettingsPicker, k.AgentHub},
+		{k.CycleMode, k.ModelPicker, k.SettingsPicker, k.AgentHub, k.TranscriptSearch},
 		{k.HistoryUp, k.HistoryDown},
 		{k.ToggleFocusedTool, k.ToggleThinking, k.CompactToggle, k.ExternalEditor, k.Complete},
 	}

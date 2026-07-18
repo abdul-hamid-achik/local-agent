@@ -21,6 +21,7 @@ func (m *Model) handleThemeChange(msg tea.BackgroundColorMsg) {
 	m.restylePickerOverlays()
 	m.restyleAgentHub()
 	m.restyleViewerModals()
+	m.restyleTranscriptSearch()
 	if m.goalFormState != nil {
 		m.goalFormState.SetTheme(m.isDark)
 		m.goalFormState.SetReducedMotion(m.reducedMotion)
@@ -123,6 +124,7 @@ func (m *Model) handleWindowSize(msg tea.WindowSizeMsg, cmds []tea.Cmd) []tea.Cm
 
 	// Recalculate content height
 	contentH := m.viewportHeight()
+	oldViewportHeight := m.viewport.Height()
 
 	if !m.ready {
 		m.viewport = viewport.New(
@@ -154,14 +156,15 @@ func (m *Model) handleWindowSize(msg tea.WindowSizeMsg, cmds []tea.Cmd) []tea.Cm
 			m.invalidateRenderedCache()
 		} else if widthChanged {
 			m.invalidateEntryCache()
+		} else if heightChanged &&
+			m.transcriptGeometryDependsOnHeight(oldViewportHeight, contentH) {
+			// Most transcript blocks depend only on width. Preserve their
+			// measured prefix across an ordinary vertical resize; only the
+			// centered welcome projection and expanded diff row budgets require
+			// a semantic rebuild.
+			m.invalidateEntryCache()
 		}
 		if markdownChanged || widthChanged || heightChanged {
-			// Expanded inline diffs and the centered welcome projection consume
-			// the transcript row budget. A vertical resize therefore changes
-			// document geometry even when Markdown width stays constant.
-			if heightChanged && !markdownChanged && !widthChanged {
-				m.invalidateEntryCache()
-			}
 			m.refreshTranscript()
 		}
 	}
@@ -173,6 +176,7 @@ func (m *Model) handleWindowSize(msg tea.WindowSizeMsg, cmds []tea.Cmd) []tea.Cm
 	m.resizePickerOverlays()
 	m.resizeAgentHub()
 	m.resizeViewerModals()
+	m.resizeTranscriptSearch()
 	if m.pendingApproval != nil && m.approvalState != nil {
 		m.resizeApproval(true)
 		m.recalcViewportHeight()

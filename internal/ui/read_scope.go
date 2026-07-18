@@ -106,6 +106,10 @@ func (m *Model) handleReadScopePreviewResult(msg ReadScopePreviewResultMsg) {
 		m.readScopeOpDraft = ""
 		return
 	}
+	// Preview completion either installs the host-owned scope decision or
+	// restores the held draft after an error. Do not let either settle behind a
+	// search footer that opened while the read inspection was running.
+	m.preemptTranscriptSearch()
 	if msg.Err != nil {
 		msg.Grant.Release()
 		m.restoreReadScopeDraft(msg.Draft)
@@ -422,6 +426,9 @@ func (m *Model) handleReadScopeResult(msg ReadScopeResultMsg) tea.Cmd {
 		}
 		return nil
 	}
+	// Mutation completion restores/submits the held draft and changes composer
+	// focus. Search may have opened while the scoped filesystem mutation ran.
+	m.preemptTranscriptSearch()
 	if msg.Finalize != nil {
 		msg.Finalize()
 	}
