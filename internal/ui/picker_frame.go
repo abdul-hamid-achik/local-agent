@@ -8,14 +8,26 @@ import (
 
 const defaultPickerItemHeight = 2
 
+var asciiPickerTextReplacer = strings.NewReplacer(
+	"↑/↓", "j/k",
+	"↑", "^",
+	"↓", "v",
+	"←", "<",
+	"→", ">",
+	" · ", " | ",
+	"…", "~",
+)
+
 func (m *Model) renderPickerFrame(content string, maximum int, footer string) string {
 	width := pickerContentWidth(m.width, maximum)
 	content = strings.TrimRight(content, "\n")
+	content = pickerTextForGlyphProfile(content, m.glyphProfile)
 	if footer != "" {
+		footer = pickerTextForGlyphProfile(footer, m.glyphProfile)
 		content += "\n" + m.styles.OverlayDim.Render(footer)
 	}
 	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
+		Border(borderForGlyphProfile(m.glyphProfile)).
 		BorderForeground(m.styles.FocusIndicator.GetForeground()).
 		Padding(0, 1).
 		Width(width + 2).
@@ -27,10 +39,30 @@ func (m *Model) pickerNavigationFooter(maximum int, filterable bool) string {
 	hints := []keyHint{
 		{Key: m.keys.Cancel.Help().Key, Action: m.overlayCloseLabel()},
 		{Key: m.keys.CompleteSelect.Help().Key, Action: "select"},
-		{Key: "↑/↓", Action: "move"},
+		{Key: pickerMoveKey(m.glyphProfile), Action: "move"},
 	}
 	if filterable {
 		hints = append(hints, keyHint{Key: "/", Action: "filter"})
 	}
-	return m.renderKeyHints(width, hints...)
+	return pickerTextForGlyphProfile(
+		m.renderKeyHints(width, hints...),
+		m.glyphProfile,
+	)
+}
+
+func pickerMoveKey(profile GlyphProfile) string {
+	if resolveGlyphProfile(profile) == GlyphASCII {
+		return "j/k"
+	}
+	return "↑/↓"
+}
+
+// pickerTextForGlyphProfile closes the final ASCII gap after Bubbles has
+// rendered styled list text. Every replacement is cell-width preserving, so
+// the already-measured picker frame remains exact.
+func pickerTextForGlyphProfile(value string, profile GlyphProfile) string {
+	if resolveGlyphProfile(profile) != GlyphASCII {
+		return value
+	}
+	return asciiPickerTextReplacer.Replace(value)
 }

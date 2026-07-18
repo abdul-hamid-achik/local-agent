@@ -28,7 +28,9 @@ steps:
       screen:
         contains: "try: ollama serve"
       timeoutMs: 5000
-  - press: "?"
+  # Glyph v0.14.3 does not yet name F1; ESC OP is its terminal sequence.
+  - send:
+      bytes: "\\x1bOP"
   - wait:
       screen:
         contains: "Keyboard Shortcuts"

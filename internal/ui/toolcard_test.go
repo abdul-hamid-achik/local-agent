@@ -264,11 +264,15 @@ func TestSemanticToolResultPreviewIsBoundedAndVisible(t *testing.T) {
 	card.Result = result.String()
 
 	plain := ansi.Strip(card.View(24))
-	if !strings.Contains(plain, "… 9 more lines") {
+	if !strings.Contains(plain, "… 81 more lines") {
 		t.Fatalf("bounded preview omitted hidden-line receipt:\n%s", plain)
 	}
-	if got := strings.Count(plain, "\nx"); got > maxToolResultPreviewLines {
-		t.Fatalf("preview rendered %d content lines, want <= %d", got, maxToolResultPreviewLines)
+	if got := strings.Count(plain, "\nx"); got > readPreviewHeadRows+readPreviewTailRows {
+		t.Fatalf(
+			"preview rendered %d content lines, want <= %d",
+			got,
+			readPreviewHeadRows+readPreviewTailRows,
+		)
 	}
 }
 
@@ -298,9 +302,8 @@ func TestSemanticToolResultUnknownLanguageFallsBackToPlainText(t *testing.T) {
 	card := NewToolCard("read_file", ToolCardFile, true)
 	card.ResultLanguage = "../../go"
 	got := card.renderSemanticResultLines("plain output", 40)
-	want := card.Styles.Result.Render("plain output")
-	if len(got) != 1 || got[0] != want {
-		t.Fatalf("plain fallback = %#v, want %q", got, want)
+	if len(got) != 1 || ansi.Strip(got[0]) != "1 │ plain output" {
+		t.Fatalf("numbered plain fallback = %#v, want one source row", got)
 	}
 }
 
@@ -331,6 +334,38 @@ func TestSemanticToolResultCacheIsBoundedAndReturnsCopies(t *testing.T) {
 	second := card.renderSemanticResultLines("package stable", 40)
 	if len(second) != 1 || second[0] == first[0] {
 		t.Fatalf("cache exposed mutable backing storage: first=%#v second=%#v", first, second)
+	}
+}
+
+func TestSemanticToolResultCacheSeparatesGlyphProfiles(t *testing.T) {
+	semanticToolResultCache.Lock()
+	clear(semanticToolResultCache.entries)
+	semanticToolResultCache.Unlock()
+	t.Cleanup(func() {
+		semanticToolResultCache.Lock()
+		clear(semanticToolResultCache.entries)
+		semanticToolResultCache.Unlock()
+	})
+
+	unicodeCard := NewToolCard("read_file", ToolCardFile, true, GlyphUnicode)
+	unicodeCard.PreviewMode = ToolPreviewRead
+	asciiCard := NewToolCard("read_file", ToolCardFile, true, GlyphASCII)
+	asciiCard.PreviewMode = ToolPreviewRead
+
+	const result = "first\nsecond"
+	unicodeView := ansi.Strip(strings.Join(
+		unicodeCard.renderSemanticResultLines(result, 24),
+		"\n",
+	))
+	asciiView := ansi.Strip(strings.Join(
+		asciiCard.renderSemanticResultLines(result, 24),
+		"\n",
+	))
+	if !strings.Contains(unicodeView, "1 │ first") || strings.Contains(unicodeView, " | ") {
+		t.Fatalf("Unicode cache projection lost its gutter: %q", unicodeView)
+	}
+	if !strings.Contains(asciiView, "1 | first") || strings.Contains(asciiView, "│") {
+		t.Fatalf("ASCII projection reused Unicode cache content: %q", asciiView)
 	}
 }
 
@@ -463,6 +498,84 @@ func TestToolCardAttentionHonorsNoColor(t *testing.T) {
 	rendered := card.View(48)
 	if hasANSIColor(rendered) {
 		t.Fatalf("NO_COLOR attention receipt emitted ANSI color: %q", rendered)
+	}
+}
+
+func TestASCIIExpandedRoutedAttentionCardUsesProfileAwareChrome(t *testing.T) {
+	projection := ecosystem.ToolProjection{
+		Specialist: "cortex",
+		Operation:  "cortex_start_task",
+		Role:       ecosystem.RoleCoordination,
+		Transport:  ecosystem.TransportSucceeded,
+		Domain:     ecosystem.DomainAttention,
+		Route: ecosystem.ToolRoute{
+			Gateway: "mcphub",
+			Server:  "cortex",
+			Tool:    "cortex_start_task",
+			CallID:  "call-ascii-17",
+			Lazy:    true,
+		},
+		Digest: &ecosystem.ReceiptDigest{
+			Kind:          ecosystem.DigestMCPHubStored,
+			OriginalBytes: 4096,
+			BudgetBytes:   1024,
+		},
+	}
+	card := NewToolCard("mcphub__mcphub_call_tool", ToolCardGeneric, true, GlyphASCII)
+	card.State = ToolCardAttention
+	card.Lifecycle = ToolLifecycleAttention
+	card.Expanded = true
+	card.Duration = 2 * time.Millisecond
+	card.Projection = projection
+
+	rendered := ansi.Strip(card.View(42))
+	for _, forbidden := range []string{"…", "·"} {
+		if strings.Contains(rendered, forbidden) {
+			t.Fatalf("ASCII routed attention card retained %q:\n%s", forbidden, rendered)
+		}
+	}
+	for _, want := range []string{
+		"v ! Result stored",
+		"specialist: Cortex | coordination",
+		"route: Local Agent > MCPHub > Cortex |",
+		"result stored | 4096 bytes | fetch",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("ASCII routed attention card omitted %q:\n%s", want, rendered)
+		}
+	}
+	assertToolCardLinesFit(t, rendered, 42)
+
+	asciiDetails := strings.Join(toolProjectionDetails(projection, GlyphASCII), "\n")
+	asciiAttention := compactToolAttention(projection, GlyphASCII)
+	asciiSummary := boundedToolCardSummary(projection.SummaryText(), GlyphASCII)
+	for label, value := range map[string]string{
+		"details":   asciiDetails,
+		"attention": asciiAttention,
+		"summary":   asciiSummary,
+	} {
+		for _, forbidden := range []string{"…", "·"} {
+			if strings.Contains(value, forbidden) {
+				t.Fatalf("ASCII %s retained %q: %q", label, forbidden, value)
+			}
+		}
+	}
+	if !strings.Contains(asciiDetails, " | lazy") ||
+		!strings.Contains(asciiAttention, "result stored | 4096 bytes | fetch call-ascii-17") ||
+		!strings.Contains(asciiSummary, "result stored | 4096 bytes | fetch call-ascii-17") {
+		t.Fatalf(
+			"ASCII semantic projections lost profile-aware separators:\ndetails=%s\nattention=%s\nsummary=%s",
+			asciiDetails,
+			asciiAttention,
+			asciiSummary,
+		)
+	}
+
+	if unicodeAttention := compactToolAttention(projection, GlyphUnicode); !strings.Contains(unicodeAttention, " · ") {
+		t.Fatalf("Unicode attention punctuation changed: %q", unicodeAttention)
+	}
+	if unicodeDetails := strings.Join(toolProjectionDetails(projection, GlyphUnicode), "\n"); !strings.Contains(unicodeDetails, " · ") {
+		t.Fatalf("Unicode projection punctuation changed: %q", unicodeDetails)
 	}
 }
 

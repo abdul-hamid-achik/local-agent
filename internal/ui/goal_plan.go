@@ -76,6 +76,7 @@ type goalPlanCard struct {
 	width        int
 	height       int
 	isDark       bool
+	glyphProfile GlyphProfile
 	styles       goalPlanStyles
 
 	cachedKey    string
@@ -85,17 +86,18 @@ type goalPlanCard struct {
 	renders      int
 }
 
-func newGoalPlanCard(snapshot goal.Snapshot, isDark bool) (*goalPlanCard, bool) {
+func newGoalPlanCard(snapshot goal.Snapshot, isDark bool, profiles ...GlyphProfile) (*goalPlanCard, bool) {
 	if !validGoalPlanSnapshot(snapshot) {
 		return nil, false
 	}
 	phase := goalPlanPhaseForSnapshot(snapshot)
 	return &goalPlanCard{
-		snapshot: cloneGoalPlanSnapshot(snapshot),
-		width:    1,
-		height:   goalPlanCompactHeight,
-		isDark:   isDark,
-		styles:   newGoalPlanStyles(isDark, phase),
+		snapshot:     cloneGoalPlanSnapshot(snapshot),
+		width:        1,
+		height:       goalPlanCompactHeight,
+		isDark:       isDark,
+		glyphProfile: resolveGlyphProfile(profiles...),
+		styles:       newGoalPlanStyles(isDark, phase),
 	}, true
 }
 
@@ -224,7 +226,7 @@ func (c *goalPlanCard) View() string {
 	if c == nil {
 		return ""
 	}
-	key := goalPlanSnapshotKey(c.snapshot) + "\x1d" + goalPlanContinuationKey(c.continuation)
+	key := fmt.Sprintf("%s\x1d%s\x1d%d", goalPlanSnapshotKey(c.snapshot), goalPlanContinuationKey(c.continuation), c.glyphProfile)
 	if c.cachedView != "" && c.cachedKey == key && c.cachedWidth == c.width && c.cachedHeight == c.height {
 		return c.cachedView
 	}
@@ -272,19 +274,27 @@ func (c *goalPlanCard) expandedView() string {
 	)
 	rows := []string{truncateDisplay(header, c.width)}
 	results := goalPlanAcceptanceResults(c.snapshot)
+	glyphs := glyphSet(c.glyphProfile)
 	visible := min(len(c.snapshot.AcceptanceCriteria), goalPlanMaxCriteria)
 	for _, criterion := range c.snapshot.AcceptanceCriteria[:visible] {
 		_, isVerified := results[criterion.ID]
 		label, style := "□ pending", c.styles.pending
+		if c.glyphProfile == GlyphASCII {
+			label = glyphs.Unselected + " pending"
+		}
 		if isVerified {
-			label, style = "✓ verified", c.styles.verified
+			label, style = glyphs.Success+" verified", c.styles.verified
 		}
 		description := sanitizeTerminalSingleLine(criterion.Description)
 		line := "  " + label + " · " + description
 		rows = append(rows, style.Render(truncateDisplay(line, c.width)))
 	}
 	if hidden := len(c.snapshot.AcceptanceCriteria) - visible; hidden > 0 {
-		rows = append(rows, c.styles.pending.Render(truncateDisplay(fmt.Sprintf("  … +%d criteria", hidden), c.width)))
+		omission := fmt.Sprintf("  … +%d criteria", hidden)
+		if c.glyphProfile == GlyphASCII {
+			omission = fmt.Sprintf("  ~ +%d criteria", hidden)
+		}
+		rows = append(rows, c.styles.pending.Render(truncateDisplayWithGlyphProfile(omission, c.width, c.glyphProfile)))
 	}
 	if c.continuation != nil {
 		rows = append(rows, renderContinuationField(c.width, "next:", c.continuation.Tool, c.styles.nextLabel, c.styles.value))
@@ -392,7 +402,7 @@ func (m *Model) syncGoalPlan() {
 		return
 	}
 	if m.goalPlan == nil || m.goalPlan.snapshot.ID != snapshot.ID {
-		card, ok := newGoalPlanCard(snapshot, m.isDark)
+		card, ok := newGoalPlanCard(snapshot, m.isDark, m.glyphProfile)
 		if !ok {
 			m.goalPlan = nil
 			return

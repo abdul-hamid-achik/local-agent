@@ -11,6 +11,27 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 )
 
+// RemoteInferenceFailureCopy is the only provider-failure prose allowed to
+// cross from a dispatched remote inference request into transcript/session
+// state. Raw HTTP bodies, SSE error messages, endpoints, and provider paths
+// remain transient diagnostics inside the agent.
+const RemoteInferenceFailureCopy = "Remote model response failed. Check the provider profile and credential environment, then retry or switch providers."
+
+// ErrRemoteInferenceFailed is the stable error identity for a safely projected
+// remote failure. Its technical identity stays independent from presentation
+// copy and punctuation.
+var ErrRemoteInferenceFailed = errors.New("remote inference failed")
+
+type remoteInferenceBoundaryError struct{}
+
+func (remoteInferenceBoundaryError) Error() string {
+	return RemoteInferenceFailureCopy
+}
+
+func (remoteInferenceBoundaryError) Is(target error) bool {
+	return target == ErrRemoteInferenceFailed
+}
+
 // providerStage runs one provider request for iteration i: eval-budget
 // reservation, streaming, token-receipt validation, retry after a charged
 // reservation, and empty-terminal repair. It returns the assistant text, the
@@ -112,12 +133,13 @@ func (t *turnRuntime) providerStage(ctx context.Context, i int) (string, []llm.T
 		})
 
 		if err != nil {
+			boundaryErr := providerBoundaryError(err)
 			if errors.Is(err, llm.ErrInferenceNotStarted) && !callbackSeen {
 				if t.lg != nil {
-					t.lg.Warn("llm request rejected before dispatch", "iter", i, "err", err)
+					t.lg.Warn("llm request rejected before dispatch", "iter", i, "err", boundaryErr)
 				}
-				t.out.Error(fmt.Sprintf("LLM request not started: %v", err))
-				return "", nil, stageProceed, err
+				t.out.Error(fmt.Sprintf("LLM request not started: %v", boundaryErr))
+				return "", nil, stageProceed, boundaryErr
 			}
 			reservedEvalTokens := int64(0)
 			if (!errors.Is(err, llm.ErrNoModelSelected) && !errors.Is(err, llm.ErrInferenceNotStarted)) || callbackSeen {
@@ -133,7 +155,7 @@ func (t *turnRuntime) providerStage(ctx context.Context, i int) (string, []llm.T
 					isRetryableError(err) && t.totalEvalTokens < t.limits.MaxEvalTokens {
 					t.retryCount++
 					if t.lg != nil {
-						t.lg.Warn("llm retry after charged reservation", "iter", i, "attempt", t.retryCount, "reserved", reservedEvalTokens, "err", err)
+						t.lg.Warn("llm retry after charged reservation", "iter", i, "attempt", t.retryCount, "reserved", reservedEvalTokens, "err", boundaryErr)
 					}
 					t.out.Error(fmt.Sprintf("LLM transport failed, retrying (%d/%d) after charging %d reserved token(s)...", t.retryCount, maxRetries, reservedEvalTokens))
 					return "", nil, stageNextIteration, nil
@@ -148,25 +170,29 @@ func (t *turnRuntime) providerStage(ctx context.Context, i int) (string, []llm.T
 			}
 			if reservationErr != nil {
 				t.out.Error(reservationErr.Error())
-				return "", nil, stageProceed, errors.Join(reservationErr, fmt.Errorf("LLM response: %w", err))
+				return "", nil, stageProceed, errors.Join(reservationErr, fmt.Errorf("LLM response: %w", boundaryErr))
 			}
 			// Retry on transient provider errors from small models.
 			if !repairRequest && t.limits.MaxEvalTokens == 0 && t.retryCount < maxRetries && isRetryableError(err) {
 				t.retryCount++
 				if t.lg != nil {
-					t.lg.Warn("llm retry", "iter", i, "attempt", t.retryCount, "err", err)
+					t.lg.Warn("llm retry", "iter", i, "attempt", t.retryCount, "err", boundaryErr)
 				}
 				t.out.Error(fmt.Sprintf("LLM produced malformed output, retrying (%d/%d)...", t.retryCount, maxRetries))
 				return "", nil, stageNextIteration, nil
 			}
 			if t.lg != nil {
-				t.lg.Error("llm error", "iter", i, "err", err)
+				t.lg.Error("llm error", "iter", i, "err", boundaryErr)
 			}
 			// Show error and provide a fallback response
-			t.out.Error(fmt.Sprintf("LLM error: %v", err))
-			// Send a system message explaining the error
-			t.out.SystemMessage(fmt.Sprintf("⚠️ Model response failed: %v\n\nYou can try:\n- Checking if Ollama is running (`ollama ps`)\n- Switching to a different model (ctrl+o)\n- Reducing context size\n\nTool results are still available above.", err))
-			return "", nil, stageProceed, fmt.Errorf("LLM response: %w", err)
+			t.out.Error(fmt.Sprintf("LLM error: %v", boundaryErr))
+			if errors.Is(boundaryErr, ErrRemoteInferenceFailed) {
+				t.out.SystemMessage("⚠️ " + RemoteInferenceFailureCopy + "\n\nTool results are still available above.")
+			} else {
+				// Exact local provenance keeps Ollama diagnostics actionable.
+				t.out.SystemMessage(fmt.Sprintf("⚠️ Model response failed: %v\n\nYou can try:\n- Checking if Ollama is running (`ollama ps`)\n- Switching to a different model (ctrl+o)\n- Reducing context size\n\nTool results are still available above.", boundaryErr))
+			}
+			return "", nil, stageProceed, fmt.Errorf("LLM response: %w", boundaryErr)
 		}
 		if !doneSeen {
 			reservedEvalTokens := chargeUnknownEvalReservation(t.out, requestEvalLimit, 0)
@@ -276,4 +302,11 @@ func (t *turnRuntime) providerStage(ctx context.Context, i int) (string, []llm.T
 		return "", nil, stageProceed, err
 	}
 	return textBuf.String(), toolCalls, stageProceed, nil
+}
+
+func providerBoundaryError(err error) error {
+	if llm.IsRemoteInferenceError(err) {
+		return remoteInferenceBoundaryError{}
+	}
+	return err
 }

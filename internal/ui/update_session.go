@@ -20,6 +20,7 @@ func (m *Model) handleSessionList(msg SessionListMsg) {
 		}
 		return
 	}
+	m.preemptTranscriptSearch()
 	if msg.Err != nil {
 		m.sessionsPickerState = newSessionsMessageState(sessionsFailed, msg.Err.Error())
 		m.overlay = OverlaySessionsPicker
@@ -28,6 +29,7 @@ func (m *Model) handleSessionList(msg SessionListMsg) {
 		m.overlay = OverlaySessionsPicker
 	} else {
 		m.sessionsPickerState = newSessionsPickerState(msg.Sessions, m.width, m.height, m.isDark, m.reducedMotion)
+		m.restylePickerOverlays()
 		m.overlay = OverlaySessionsPicker
 	}
 	m.input.Blur()
@@ -45,7 +47,7 @@ func (m *Model) handleImportResult(msg ImportResultMsg) {
 	if msg.Err != nil {
 		m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("Import failed: %v", msg.Err)})
 		m.invalidateEntryCache()
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		m.gotoBottomIfFollowing()
 		return
 	}
@@ -62,7 +64,7 @@ func (m *Model) handleImportResult(msg ImportResultMsg) {
 		len(msg.Messages), msg.UIOnlySections, msg.ToolSections,
 	)})
 	m.invalidateEntryCache()
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	m.resumeFollow()
 }
 
@@ -83,7 +85,7 @@ func (m *Model) handleExportResult(msg ExportResultMsg, cmds []tea.Cmd) []tea.Cm
 			m.entries = append(m.entries, ChatEntry{Kind: "system", Content: fmt.Sprintf("Exported conversation to: %s", msg.Path)})
 		}
 		m.invalidateEntryCache()
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		m.gotoBottomIfFollowing()
 	}
 	m.appendShutdownQuit(&cmds)

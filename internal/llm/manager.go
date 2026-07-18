@@ -333,7 +333,6 @@ type ProviderDescriptor struct {
 	Type       string
 	Model      string
 	APIKeyEnv  string
-	BaseURL    string
 	Remote     bool
 	Active     bool
 	KeyPresent bool // process env has a non-empty value for APIKeyEnv
@@ -370,7 +369,6 @@ func (m *ModelManager) ProviderCatalog() []ProviderDescriptor {
 			Type:       config.NormalizedProviderType(profile.Type),
 			Model:      profile.Model,
 			APIKeyEnv:  profile.APIKeyEnv,
-			BaseURL:    profile.BaseURL,
 			Remote:     profile.IsRemote(),
 			Active:     profileName == active,
 			KeyPresent: keyPresent,

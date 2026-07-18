@@ -2,7 +2,7 @@
   Local-first · prompts on
     qwen3.5:2b · offline
    enter · ctrl+p settings
-       ? help · / @ #
+       f1 help · / @ #
 
   Ollama model · ctrl+o
 

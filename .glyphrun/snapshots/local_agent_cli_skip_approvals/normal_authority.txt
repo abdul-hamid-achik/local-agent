@@ -1,7 +1,7 @@
                                             LOCAL AGENT
            Local-first · Ollama · Approval prompts skipped · host/tool boundaries apply
                                        qwen3.5:2b · offline
-                        enter send · / commands · ctrl+p settings · ? help
+                        enter send · / commands · ctrl+p settings · f1 help
                         shift+tab mode · ctrl+o models · @ files · # skills
 
   notice · ollama: no model selected

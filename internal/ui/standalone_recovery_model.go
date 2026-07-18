@@ -145,10 +145,11 @@ func (m *Model) handleStandaloneRecoveryInspect(message standaloneRecoveryInspec
 		}
 		m.standaloneRecovery = nil
 		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: "Recovery evidence already exists · durable context restored · the next prompt will recheck execution state."})
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		m.resumeFollow()
 		return nil
 	}
+	m.preemptTranscriptSearch()
 	state.inspection = message.inspection
 	item := GoalRecoveryItem{
 		ItemID: message.inspection.ItemID, Kind: GoalRecoveryExecutionEffect,
@@ -160,7 +161,7 @@ func (m *Model) handleStandaloneRecoveryInspect(message standaloneRecoveryInspec
 	}
 	m.goalRecoveryState = NewGoalRecovery([]GoalRecoveryItem{item}, GoalRecoveryOptions{
 		Width: m.width, Height: m.height, IsDark: m.isDark,
-		ReducedMotion: m.reducedMotion, Standalone: true,
+		ReducedMotion: m.reducedMotion, GlyphProfile: m.glyphProfile, Standalone: true,
 	})
 	m.overlayParent = OverlayNone
 	m.overlay = OverlayGoalRecovery
@@ -194,7 +195,7 @@ func (m *Model) remindStandaloneRecoveryDraftPreserved() {
 		}
 	}
 	m.entries = append(m.entries, ChatEntry{Kind: "system", Content: message})
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	m.resumeFollow()
 }
 
@@ -321,7 +322,7 @@ func (m *Model) handleStandaloneRecoveryApply(message standaloneRecoveryApplyRes
 		completion += fmt.Sprintf(" %d executions remain pending reconciliation · run /recover again.", message.remaining)
 	}
 	m.entries = append(m.entries, ChatEntry{Kind: "system", Content: completion})
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	m.resumeFollow()
 	return tea.ClearScreen
 }
@@ -355,6 +356,6 @@ func (m *Model) appendStandaloneRecoveryError(message string) {
 		return
 	}
 	m.entries = append(m.entries, ChatEntry{Kind: "error", Content: "Recovery · " + message})
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	m.resumeFollow()
 }

@@ -175,7 +175,7 @@ func TestContinuationActionFooterOwnsExactRowsAndPreservesPausedTranscript(t *te
 	m := newTestModel(t)
 	initialHeight := m.viewport.Height()
 	setScrollableTranscript(m)
-	m.viewport.SetYOffset(5)
+	m.setTranscriptYOffset(5)
 	m.pauseFollow()
 	m.beginContinuationTurn("turn-layout")
 	action := ContinuationActionPresentation{
@@ -187,7 +187,7 @@ func TestContinuationActionFooterOwnsExactRowsAndPreservesPausedTranscript(t *te
 	if got, want := m.viewport.Height(), initialHeight-cardHeight; got != want {
 		t.Fatalf("viewport height with action = %d, want %d", got, want)
 	}
-	if got := m.viewport.YOffset(); got != 5 || !m.followPaused() {
+	if got := m.transcriptYOffset(); got != 5 || !m.followPaused() {
 		t.Fatalf("action replacement moved paused transcript: offset=%d paused=%v", got, m.followPaused())
 	}
 

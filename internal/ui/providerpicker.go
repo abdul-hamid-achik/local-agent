@@ -11,24 +11,23 @@ import (
 )
 
 type providerItem struct {
-	descriptor llm.ProviderDescriptor
+	presentation ProviderOptionPresentation
 }
 
 func (i providerItem) Title() string {
-	title := sanitizeTerminalSingleLine(i.descriptor.Name)
+	title := i.presentation.Label
 	if title == "" {
 		title = "Unnamed provider"
 	}
-	if i.descriptor.Active {
-		title += "  ✓"
+	if i.presentation.Active {
+		title += "  active"
 	}
 	return title
 }
 
 func (i providerItem) Description() string {
-	providerType := sanitizeTerminalSingleLine(i.descriptor.Type)
-	model := sanitizeTerminalSingleLine(i.descriptor.Model)
-	apiKeyEnv := sanitizeTerminalSingleLine(i.descriptor.APIKeyEnv)
+	providerType := i.presentation.KindLabel
+	model := i.presentation.ModelLabel
 	parts := make([]string, 0, 3)
 	if providerType != "" {
 		parts = append(parts, providerType)
@@ -36,13 +35,13 @@ func (i providerItem) Description() string {
 	if model != "" {
 		parts = append(parts, model)
 	}
-	if i.descriptor.Remote {
-		if i.descriptor.KeyPresent {
+	if i.presentation.Locality == ProviderRemote {
+		if i.presentation.Credential == ProviderCredentialReady {
 			parts = append(parts, "key ready")
-		} else if apiKeyEnv != "" {
-			parts = append(parts, "missing $"+apiKeyEnv)
+		} else if i.presentation.CredentialHint != "" {
+			parts = append(parts, "missing "+i.presentation.CredentialHint)
 		} else {
-			parts = append(parts, "remote")
+			parts = append(parts, i.presentation.DisabledReason)
 		}
 	} else {
 		parts = append(parts, "local")
@@ -52,7 +51,8 @@ func (i providerItem) Description() string {
 
 func (i providerItem) FilterValue() string {
 	return sanitizeTerminalSingleLine(
-		i.descriptor.Name + " " + i.descriptor.Type + " " + i.descriptor.Model + " " + i.descriptor.APIKeyEnv,
+		i.presentation.Label + " " + i.presentation.KindLabel + " " +
+			i.presentation.ModelLabel + " " + i.presentation.CredentialHint,
 	)
 }
 
@@ -64,22 +64,24 @@ type ProviderPickerState struct {
 }
 
 func newProviderPickerState(catalog []llm.ProviderDescriptor, current string, terminalWidth, terminalHeight int, isDark bool, reducedMotion ...bool) *ProviderPickerState {
-	items := make([]list.Item, 0, len(catalog))
+	presentations := providerOptionPresentations(catalog)
+	items := make([]list.Item, 0, len(presentations))
 	selected := 0
-	for _, descriptor := range catalog {
-		if strings.TrimSpace(descriptor.Name) == "" {
-			continue
-		}
-		if descriptor.Name == current || descriptor.Active {
+	for _, presentation := range presentations {
+		if string(presentation.ProfileID) == current || presentation.Active {
 			selected = len(items)
 		}
-		items = append(items, providerItem{descriptor: descriptor})
+		items = append(items, providerItem{presentation: presentation})
 	}
 	if len(items) == 0 {
-		items = append(items, providerItem{descriptor: llm.ProviderDescriptor{
-			Name:   "ollama",
-			Type:   "ollama",
-			Active: true,
+		items = append(items, providerItem{presentation: ProviderOptionPresentation{
+			ProfileID:  "ollama",
+			Label:      "ollama",
+			KindLabel:  "ollama",
+			Locality:   ProviderLocal,
+			Credential: ProviderCredentialNotRequired,
+			Active:     true,
+			Selectable: true,
 		}})
 	}
 
@@ -115,6 +117,11 @@ func (m *Model) openProviderPicker() {
 		m.isDark,
 		m.reducedMotion,
 	)
+	delegate := newPickerDelegate(m.isDark, false, m.glyphProfile)
+	m.providerPickerState.List.SetDelegate(delegate)
+	m.providerPickerState.ItemHeight = delegate.Height()
+	m.providerPickerState.ItemSpacing = delegate.Spacing()
+	configurePickerListGlyphProfile(&m.providerPickerState.List, m.glyphProfile)
 	m.overlay = OverlayProviderPicker
 	m.input.Blur()
 }
@@ -127,6 +134,26 @@ func (m *Model) closeProviderPicker() {
 func (m *Model) selectProviderProfile(name string) tea.Cmd {
 	m.closeProviderPicker()
 	return m.beginProviderSwitch(name, "")
+}
+
+func (m *Model) activateProviderItem(item providerItem) tea.Cmd {
+	if m.providerPickerState == nil {
+		return nil
+	}
+	if !item.presentation.Selectable {
+		reason := strings.TrimSpace(item.presentation.DisabledReason)
+		if reason == "" {
+			reason = "unavailable"
+		}
+		m.providerPickerState.List.Title = "Provider · " + reason
+		return nil
+	}
+	profileID := string(item.presentation.ProfileID)
+	if strings.TrimSpace(profileID) == "" {
+		m.providerPickerState.List.Title = "Provider · unavailable"
+		return nil
+	}
+	return m.selectProviderProfile(profileID)
 }
 
 func (m *Model) renderProviderPicker() string {
@@ -239,7 +266,7 @@ func (m *Model) providerPickerItemAt(x, y int) (providerItem, int, bool) {
 		return providerItem{}, 0, false
 	}
 	item, ok := visible[index].(providerItem)
-	if !ok || strings.TrimSpace(item.descriptor.Name) == "" {
+	if !ok || strings.TrimSpace(string(item.presentation.ProfileID)) == "" {
 		return providerItem{}, 0, false
 	}
 	return item, index, true
@@ -268,5 +295,5 @@ func (m *Model) selectProviderPickerPointer(msg tea.MouseClickMsg) tea.Cmd {
 		return nil
 	}
 	m.providerPickerState.List.Select(index)
-	return m.selectProviderProfile(item.descriptor.Name)
+	return m.activateProviderItem(item)
 }

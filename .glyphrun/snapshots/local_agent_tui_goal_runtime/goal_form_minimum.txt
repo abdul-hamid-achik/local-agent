@@ -1,6 +1,6 @@
+
   Ollama model · ctrl+o
 
-─────────────────────────────
 ╭───────────────────────────╮
 │ Goal · 2/6                │
 │ Acceptance criteria       │

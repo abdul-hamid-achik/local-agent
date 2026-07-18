@@ -39,13 +39,13 @@ func TestCheckpointTranscriptRestoresCausalToolReceiptWithoutRawPayload(t *testi
 
 	m := newTestModel(t)
 	m.entries, m.toolEntries = entries, tools
-	m.rebuildToolCardsFromEntries()
 	rendered := ansi.Strip(m.renderEntries())
 	if strings.Contains(rendered, "CHECKPOINT_RAW_SECRET") {
 		t.Fatalf("rendered checkpoint leaked raw payload:\n%s", rendered)
 	}
-	if len(m.toolCardMgr.Cards) != 1 || m.toolCardMgr.Cards[0].State != ToolCardAttention {
-		t.Fatalf("restored untyped receipt was not attention: %#v", m.toolCardMgr.Cards)
+	card := testProjectedToolCard(t, m, 0)
+	if card.State != ToolCardAttention {
+		t.Fatalf("restored untyped receipt was not attention: %#v", card)
 	}
 }
 

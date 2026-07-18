@@ -408,8 +408,11 @@ func TestReadScopePromptResponsiveNoColorAndReducedMotion(t *testing.T) {
 	m.readScopePrompt = nil
 	m.readScopeOpRunning = true
 	m.readScopeOpLabel = "Checking external read root"
-	if m.needsSpinner() || m.startActivityCmd() != nil {
-		t.Fatal("reduced-motion read-scope activity started an animation clock")
+	if m.needsSpinner() || m.needsScramble() {
+		t.Fatal("reduced-motion read-scope activity started a decorative animation clock")
+	}
+	if m.startActivityCmd() == nil || !m.activityHeartbeatPending {
+		t.Fatal("reduced-motion read-scope activity omitted its informational heartbeat")
 	}
 	if line := m.renderWorkingLine(); !strings.Contains(line, "…") {
 		t.Fatalf("reduced-motion activity lost static unfinished marker: %q", line)
@@ -418,15 +421,15 @@ func TestReadScopePromptResponsiveNoColorAndReducedMotion(t *testing.T) {
 
 func TestReadScopePromptOwnsPointerInput(t *testing.T) {
 	m := newTestModel(t)
-	m.viewport.SetContent(strings.Repeat("transcript line\n", 80))
-	m.viewport.GotoTop()
+	m.setTestTranscriptContent(strings.Repeat("transcript line\n", 80))
+	m.transcriptGotoTop()
 	m.toolEntries = []ToolEntry{{Collapsed: true}}
 	m.toolHitRegions = []toolHitRegion{{ToolIndex: 0, Row: 0, EndCol: 12}}
 	m.readScopePrompt = &ReadScopePrompt{Canonical: "/external", Workspace: "/workspace"}
 
 	updated, _ := m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown})
 	m = updated.(*Model)
-	if got := m.viewport.YOffset(); got != 0 {
+	if got := m.transcriptYOffset(); got != 0 {
 		t.Fatalf("read-scope wheel moved transcript to %d", got)
 	}
 	updated, _ = m.Update(tea.MouseClickMsg{X: 0, Y: 0, Button: tea.MouseLeft})

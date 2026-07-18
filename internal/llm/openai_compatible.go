@@ -60,7 +60,17 @@ func NewOpenAICompatibleClient(opts OpenAICompatibleOptions) (*OpenAICompatibleC
 	}
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme == "" || u.Host == "" {
-		return nil, fmt.Errorf("invalid openai-compatible base url %q", opts.BaseURL)
+		return nil, errors.New("invalid openai-compatible base url")
+	}
+	if u.User != nil || u.RawQuery != "" || u.ForceQuery || strings.Contains(raw, "#") {
+		return nil, errors.New("openai-compatible base url must not contain user information, a query, or a fragment")
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return nil, errors.New("openai-compatible base url must use http or https")
+	}
+	if scheme == "http" && !netpolicy.IsLocalHost(u.Hostname()) {
+		return nil, errors.New("openai-compatible remote base url requires https")
 	}
 	u.Path = strings.TrimRight(u.Path, "/")
 	client := newOpenAIHTTPClient(u)
@@ -232,7 +242,7 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, opts ChatOption
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("provider chat stream: %w", err)
+		return markRemoteInferenceError(fmt.Errorf("provider chat stream: %w", err))
 	}
 	defer func() {
 		// Stream completion/error is established while reading; a later close
@@ -241,10 +251,10 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, opts ChatOption
 	}()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := readBoundedBody(resp.Body, maxOpenAIErrorBytes)
-		return openAIStatusError(resp, body)
+		return markRemoteInferenceError(openAIStatusError(resp, body))
 	}
 
-	return c.consumeSSE(resp.Body, fn)
+	return markRemoteInferenceError(c.consumeSSE(resp.Body, fn))
 }
 
 func (c *OpenAICompatibleClient) consumeSSE(body io.Reader, fn func(StreamChunk) error) error {

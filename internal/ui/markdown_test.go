@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestMarkdownStyleUsesAdaptiveNonErrorInlineCode(t *testing.T) {
@@ -57,11 +58,62 @@ func TestMarkdownInlineCodeMeetsNormalTextContrast(t *testing.T) {
 	}
 }
 
+func TestMarkdownReadableMeasurePreservesWideWorkBlocks(t *testing.T) {
+	renderer := NewMarkdownRenderer(160, true)
+	if renderer.proseWidth != ProseTargetCandidate {
+		t.Fatalf("prose width = %d, want %d", renderer.proseWidth, ProseTargetCandidate)
+	}
+
+	prose := strings.Repeat("A readable paragraph should not span the entire terminal. ", 20)
+	renderedProse := ansi.Strip(renderer.RenderFull(prose))
+	if width := widestDisplayLine(renderedProse); width > ProseTargetCandidate {
+		t.Fatalf("prose line width = %d, want <= %d:\n%s", width, ProseTargetCandidate, renderedProse)
+	}
+
+	code := "```text\n" + strings.Repeat("x", 120) + "\n```"
+	renderedCode := ansi.Strip(renderer.RenderFull(code))
+	if width := widestDisplayLine(renderedCode); width <= ProseTargetCandidate {
+		t.Fatalf("code line width = %d, want work surface wider than prose measure:\n%s", width, renderedCode)
+	}
+}
+
+func TestMarkdownWorkWidthClassification(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{name: "plain prose", content: "A paragraph with `inline code`.", want: false},
+		{name: "pipe in prose", content: "Choose red | blue in prose.", want: false},
+		{name: "fenced code", content: "```go\nfmt.Println()\n```", want: true},
+		{name: "tilde fence", content: "  ~~~sh\nmake test\n  ~~~", want: true},
+		{name: "indented code", content: "Paragraph\n\n    make test", want: true},
+		{name: "table", content: "Name | State\n--- | :---:\nA | ready", want: true},
+		{name: "not a table delimiter", content: "Name | State\none | two", want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := markdownUsesWorkWidth(test.content); got != test.want {
+				t.Fatalf("markdownUsesWorkWidth(%q) = %t, want %t", test.content, got, test.want)
+			}
+		})
+	}
+}
+
+func widestDisplayLine(content string) int {
+	widest := 0
+	for _, line := range strings.Split(content, "\n") {
+		widest = max(widest, lipgloss.Width(line))
+	}
+	return widest
+}
+
 func TestFindSafeMarkdownBoundary(t *testing.T) {
 	tests := []struct {
 		name    string
 		content string
-		// wantPrefix is the substring expected before the boundary; "" means no boundary (0).
+		// wantPrefix is an explicit fixture, independent from the production
+		// parser. An empty prefix means no safe boundary.
 		wantPrefix string
 	}{
 		{
@@ -104,6 +156,56 @@ func TestFindSafeMarkdownBoundary(t *testing.T) {
 			content:    "```\na\n```\n\ntext\n\n```\nb\n```\n\ntail",
 			wantPrefix: "```\na\n```\n\ntext\n\n```\nb\n```",
 		},
+		{
+			name:       "up to three spaces of fence indentation are accepted",
+			content:    "   ````go\ncode\n   `````\n\nTail partial",
+			wantPrefix: "   ````go\ncode\n   `````",
+		},
+		{
+			name:       "four spaces do not open a fence",
+			content:    "    ```go\nordinary text\n\nTail partial",
+			wantPrefix: "    ```go\nordinary text",
+		},
+		{
+			name:       "closing run shorter than opener stays inside fence",
+			content:    "Intro.\n\n````\ncode\n```\n\nstill code",
+			wantPrefix: "Intro.",
+		},
+		{
+			name:       "closing run may be longer than opener",
+			content:    "````\ncode\n``````\n\nTail partial",
+			wantPrefix: "````\ncode\n``````",
+		},
+		{
+			name:       "closing fence rejects trailing content",
+			content:    "Intro.\n\n```\ncode\n``` not a close\n\nstill code",
+			wantPrefix: "Intro.",
+		},
+		{
+			name:       "different marker character cannot close fence",
+			content:    "Intro.\n\n```\ncode\n~~~\n\nstill code",
+			wantPrefix: "Intro.",
+		},
+		{
+			name:       "backtick in backtick info string prevents opening",
+			content:    "```lang`variant\nordinary text\n\nTail partial",
+			wantPrefix: "```lang`variant\nordinary text",
+		},
+		{
+			name:       "backticks are allowed in tilde info string",
+			content:    "~~~ markdown`variant\ncode\n~~~\n\nTail partial",
+			wantPrefix: "~~~ markdown`variant\ncode\n~~~",
+		},
+		{
+			name:       "closer indented by four spaces stays inside fence",
+			content:    "Intro.\n\n```\ncode\n    ```\n\nstill code",
+			wantPrefix: "Intro.",
+		},
+		{
+			name:       "closing fence accepts trailing horizontal whitespace",
+			content:    "```\ncode\n``` \t\r\n\nTail partial",
+			wantPrefix: "```\ncode\n``` \t\r",
+		},
 	}
 
 	for _, tt := range tests {
@@ -122,68 +224,24 @@ func TestFindSafeMarkdownBoundary(t *testing.T) {
 			if got != tt.wantPrefix {
 				t.Fatalf("prefix mismatch:\n got: %q\nwant: %q", got, tt.wantPrefix)
 			}
-			// Critical invariant: the prefix must have balanced code fences.
-			if strings.Count(got, "```")%2 != 0 {
-				t.Fatalf("boundary split inside an open code fence: %q", got)
-			}
 		})
 	}
 }
 
-// referenceSafeBoundary is a deliberately simple (re-scan per candidate)
-// implementation used to cross-check the optimized single-pass version.
-func referenceSafeBoundary(content string) int {
-	insideFence := func(s string) bool {
-		open := false
-		var fc byte
-		for _, line := range strings.Split(s, "\n") {
-			t := strings.TrimSpace(line)
-			if len(t) < 3 || (t[0] != '`' && t[0] != '~') {
-				continue
-			}
-			c := t[0]
-			n := 0
-			for n < len(t) && t[n] == c {
-				n++
-			}
-			if n < 3 {
-				continue
-			}
-			if !open {
-				open, fc = true, c
-			} else if c == fc {
-				open = false
-			}
-		}
-		return open
+func TestMarkdownFenceStateRemembersOpeningMarker(t *testing.T) {
+	var state markdownFenceState
+	state.applyLine("```go")
+	if !state.open || state.char != '`' || state.length != 3 {
+		t.Fatalf("three-backtick opener state = %+v", state)
 	}
-	idx := strings.LastIndex(content, "\n\n")
-	for idx > 0 {
-		if !insideFence(content[:idx]) {
-			return idx
-		}
-		idx = strings.LastIndex(content[:idx], "\n\n")
+	state.applyLine("~~~~")
+	state.applyLine("``")
+	state.applyLine("``` trailing")
+	if !state.open || state.char != '`' || state.length != 3 {
+		t.Fatalf("incompatible closers changed state = %+v", state)
 	}
-	return 0
-}
-
-func TestFindSafeMarkdownBoundaryMatchesReference(t *testing.T) {
-	inputs := []string{
-		"",
-		"single line",
-		"a\n\nb",
-		"a\n\nb\n\nc partial",
-		"```\nopen fence\n\nstill open",
-		"```\nx\n```\n\nafter",
-		"~~~\ny\n\nstill in tilde",
-		"text `inline` more\n\nnext",
-		"p1\n\n```\ncode\n\nmore code\n```\n\np2\n\np3 partial",
-		"\n\n\n\n",
-		"no blanks at all just words and words",
-	}
-	for _, in := range inputs {
-		if got, want := findSafeMarkdownBoundary(in), referenceSafeBoundary(in); got != want {
-			t.Errorf("findSafeMarkdownBoundary(%q) = %d, reference = %d", in, got, want)
-		}
+	state.applyLine("````")
+	if state.open || state.char != 0 || state.length != 0 {
+		t.Fatalf("compatible longer closer did not reset state = %+v", state)
 	}
 }

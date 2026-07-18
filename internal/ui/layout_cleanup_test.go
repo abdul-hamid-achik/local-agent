@@ -251,9 +251,9 @@ func TestHeightOnlyResizePreservesRenderedCaches(t *testing.T) {
 	m.entries = []ChatEntry{{
 		Kind: "assistant", Content: "cached answer", RenderedContent: "cached answer",
 	}}
-	m.viewport.SetContent(m.renderEntries())
-	if !m.entryCacheValid {
-		t.Fatal("precondition: entry cache should be valid")
+	m.refreshTranscript()
+	if !m.transcriptPaint.cache.valid {
+		t.Fatal("precondition: transcript paint cache should be valid")
 	}
 	markdown := m.md
 	rendered := m.entries[0].RenderedContent
@@ -267,12 +267,12 @@ func TestHeightOnlyResizePreservesRenderedCaches(t *testing.T) {
 	if m.entries[0].RenderedContent != rendered {
 		t.Fatal("height-only resize rebuilt completed assistant markdown")
 	}
-	if !m.entryCacheValid {
-		t.Fatal("height-only resize invalidated the transcript entry cache")
+	if !m.transcriptPaint.cache.valid {
+		t.Fatal("height-only resize invalidated the transcript paint cache")
 	}
 }
 
-func TestRunningToolGroupRendersOutsideStablePrefixCache(t *testing.T) {
+func TestRunningToolGroupIsPartOfStableEventDrivenCache(t *testing.T) {
 	m := newTestModel(t)
 	m.ready = true
 	m.now = func() time.Time { return time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC) }
@@ -288,18 +288,18 @@ func TestRunningToolGroupRendersOutsideStablePrefixCache(t *testing.T) {
 	if !m.entryCacheValid {
 		t.Fatal("full render did not cache the stable prefix")
 	}
-	if m.cachedStableCount != 2 {
-		t.Fatalf("stable prefix length = %d, want 2 (running tool group must stay live)", m.cachedStableCount)
+	if m.cachedStableCount != len(m.entries) {
+		t.Fatalf("stable prefix length = %d, want every event-driven entry %d", m.cachedStableCount, len(m.entries))
 	}
 	cachedPrefix := m.cachedEntriesRender
 
-	// A spinner-tick re-render takes the fast path: identical output, cache
-	// untouched, and only the live tool group re-rendered.
+	// An ordinary warm render takes the fast path with byte-identical output
+	// and leaves the complete event-driven prefix untouched.
 	second := m.renderEntries()
 	if second != first {
 		t.Fatalf("fast path diverged from full render:\n--- full ---\n%s\n--- fast ---\n%s", first, second)
 	}
-	if m.cachedEntriesRender != cachedPrefix || m.cachedStableCount != 2 {
+	if m.cachedEntriesRender != cachedPrefix || m.cachedStableCount != len(m.entries) {
 		t.Fatal("fast path mutated the cached stable prefix")
 	}
 
@@ -318,7 +318,7 @@ func TestRunningToolGroupRendersOutsideStablePrefixCache(t *testing.T) {
 		}
 	}
 
-	// Once the tool settles, the whole transcript becomes cacheable again.
+	// A real lifecycle event invalidates and replaces the cached tool receipt.
 	m.toolEntries[0].Status = ToolStatusDone
 	m.toolsPending = 0
 	m.invalidateEntryCache()
@@ -337,8 +337,8 @@ func TestMouseHitTestingStartsAtViewportRowZero(t *testing.T) {
 		t.Fatal("row-zero tool card was not toggled")
 	}
 
-	m.viewport.SetContent(strings.Repeat("line\n", 100))
-	m.viewport.SetYOffset(3)
+	m.setTestTranscriptContent(strings.Repeat("line\n", 100))
+	m.setTranscriptYOffset(3)
 	m.toolEntries[0].Collapsed = true
 	m.toolHitRegions[0].Row = 3
 	m.handleMouseClick(0, 0)

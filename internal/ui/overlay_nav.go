@@ -25,6 +25,10 @@ func (m *Model) closeOverlayToParent() {
 }
 
 func (m *Model) dismissOverlay() {
+	if m.overlay == OverlayTranscriptSearch && m.transcriptSearch != nil {
+		_ = m.closeTranscriptSearch(true)
+		return
+	}
 	m.overlayParent = OverlayNone
 	m.overlay = OverlayNone
 	m.input.Focus()

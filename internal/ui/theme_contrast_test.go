@@ -1,41 +1,70 @@
 package ui
 
 import (
+	"fmt"
 	"image/color"
 	"math"
 	"testing"
 )
 
-func TestLightSemanticForegroundsMeetNormalTextContrast(t *testing.T) {
+func TestSemanticForegroundsMeetNormalTextContrastInBothThemes(t *testing.T) {
 	previous := noColor
 	noColor = false
 	t.Cleanup(func() { noColor = previous })
 
-	palette := newSemanticPalette(false)
-	foregrounds := []struct {
-		name  string
-		color color.Color
+	themes := []struct {
+		name       string
+		isDark     bool
+		background color.Color
 	}{
-		{name: "dim", color: palette.Dim},
-		{name: "muted", color: palette.Muted},
-		{name: "text", color: palette.Text},
-		{name: "accent", color: palette.Accent},
-		{name: "accent2", color: palette.Accent2},
-		{name: "error", color: palette.Error},
-		{name: "success", color: palette.Success},
-		{name: "special", color: palette.Special},
-		{name: "warning", color: palette.Warning},
+		{name: "light", background: color.White},
+		// Local Agent does not paint over the terminal background. Nord's
+		// darkest surface is the conservative reference used by the dark
+		// palette instead of assuming pure black.
+		{name: "dark", isDark: true, background: hexColor(t, "#2E3440")},
 	}
 
-	for _, foreground := range foregrounds {
-		t.Run(foreground.name, func(t *testing.T) {
-			const minimumContrast = 4.5
-			ratio := contrastRatio(foreground.color, color.White)
-			if ratio < minimumContrast {
-				t.Fatalf("light %s contrast on white = %.2f:1, want >= %.1f:1", foreground.name, ratio, minimumContrast)
+	for _, theme := range themes {
+		t.Run(theme.name, func(t *testing.T) {
+			palette := newSemanticPalette(theme.isDark)
+			foregrounds := []struct {
+				name  string
+				color color.Color
+			}{
+				{name: "dim", color: palette.Dim},
+				{name: "muted", color: palette.Muted},
+				{name: "text", color: palette.Text},
+				{name: "accent", color: palette.Accent},
+				{name: "accent2", color: palette.Accent2},
+				{name: "error", color: palette.Error},
+				{name: "success", color: palette.Success},
+				{name: "special", color: palette.Special},
+				{name: "warning", color: palette.Warning},
+			}
+			for _, foreground := range foregrounds {
+				t.Run(foreground.name, func(t *testing.T) {
+					const minimumContrast = 4.5
+					ratio := contrastRatio(foreground.color, theme.background)
+					if ratio < minimumContrast {
+						t.Fatalf("%s %s contrast = %.2f:1, want >= %.1f:1",
+							theme.name, foreground.name, ratio, minimumContrast)
+					}
+				})
 			}
 		})
 	}
+}
+
+func hexColor(t *testing.T, value string) color.Color {
+	t.Helper()
+	if len(value) != 7 || value[0] != '#' {
+		t.Fatalf("invalid test color %q", value)
+	}
+	var red, green, blue uint8
+	if _, err := fmt.Sscanf(value, "#%02x%02x%02x", &red, &green, &blue); err != nil {
+		t.Fatalf("parse test color %q: %v", value, err)
+	}
+	return color.RGBA{R: red, G: green, B: blue, A: 0xff}
 }
 
 func contrastRatio(a, b color.Color) float64 {

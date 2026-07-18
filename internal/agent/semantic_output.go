@@ -39,6 +39,45 @@ type SemanticToolOutput interface {
 	ToolCallSemanticResult(callID, name, result string, isError bool, duration time.Duration, projection ecosystem.ToolProjection)
 }
 
+// ToolOutputDetail is a process-local, post-redaction result that was complete
+// at the tool-handler boundary. It is never provider, ledger, transcript, or
+// session content. Interactive hosts may synchronously admit a bounded,
+// terminal-safe prefix and retain only an opaque ephemeral capability plus
+// scalar digest.
+type ToolOutputDetail struct {
+	Text     string
+	Complete bool
+}
+
+// SemanticToolDetailOutput is the optional interactive extension of
+// SemanticToolOutput. Structured MCP content and parser-private transient
+// surfaces never receive a detail payload.
+type SemanticToolDetailOutput interface {
+	ToolCallSemanticResultWithDetail(
+		callID, name, result string,
+		isError bool,
+		duration time.Duration,
+		projection ecosystem.ToolProjection,
+		detail *ToolOutputDetail,
+	)
+}
+
+func completeToolOutputDetail(
+	toolName string,
+	completePostRedaction string,
+	contextResult string,
+	durableResult string,
+	structured json.RawMessage,
+) *ToolOutputDetail {
+	if toolName == "consult_experts" ||
+		completePostRedaction == "" ||
+		len(structured) > 0 ||
+		durableResult != contextResult {
+		return nil
+	}
+	return &ToolOutputDetail{Text: completePostRedaction, Complete: true}
+}
+
 func emitSemanticToolResult(
 	out Output,
 	callID, name string,
@@ -47,7 +86,28 @@ func emitSemanticToolResult(
 	toolError, transportError bool,
 	duration time.Duration,
 	projection ecosystem.ToolProjection,
+	detail *ToolOutputDetail,
 ) {
+	if name == "consult_experts" {
+		detail = nil
+	}
+	if semantic, ok := out.(SemanticToolDetailOutput); ok {
+		displayResult := result
+		if len(structured) > 0 {
+			displayResult = ecosystem.SafeReceiptText(projection)
+			detail = nil
+		}
+		semantic.ToolCallSemanticResultWithDetail(
+			callID,
+			name,
+			displayResult,
+			toolError || transportError,
+			duration,
+			projection,
+			detail,
+		)
+		return
+	}
 	if semantic, ok := out.(SemanticToolOutput); ok {
 		displayResult := result
 		if len(structured) > 0 {

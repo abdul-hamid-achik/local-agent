@@ -106,6 +106,10 @@ func (m *Model) handleReadScopePreviewResult(msg ReadScopePreviewResultMsg) {
 		m.readScopeOpDraft = ""
 		return
 	}
+	// Preview completion either installs the host-owned scope decision or
+	// restores the held draft after an error. Do not let either settle behind a
+	// search footer that opened while the read inspection was running.
+	m.preemptTranscriptSearch()
 	if msg.Err != nil {
 		msg.Grant.Release()
 		m.restoreReadScopeDraft(msg.Draft)
@@ -161,7 +165,7 @@ func (m *Model) resolveReadScopePrompt(outcome string) {
 	}
 	m.entries = append(m.entries, ChatEntry{Kind: "system", Content: message})
 	m.invalidateEntryCache()
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	m.gotoBottomIfFollowing()
 	m.recalcViewportHeight()
 }
@@ -422,6 +426,9 @@ func (m *Model) handleReadScopeResult(msg ReadScopeResultMsg) tea.Cmd {
 		}
 		return nil
 	}
+	// Mutation completion restores/submits the held draft and changes composer
+	// focus. Search may have opened while the scoped filesystem mutation ran.
+	m.preemptTranscriptSearch()
 	if msg.Finalize != nil {
 		msg.Finalize()
 	}
@@ -474,7 +481,7 @@ func (m *Model) handleReadScopeResult(msg ReadScopeResultMsg) tea.Cmd {
 		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: receipt})
 	}
 	m.invalidateEntryCache()
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	m.gotoBottomIfFollowing()
 	m.recalcViewportHeight()
 	if msg.Err == nil && msg.AutoResume && strings.TrimSpace(draft) != "" {
@@ -514,7 +521,7 @@ func (m *Model) restoreReadScopeDraft(draft string) {
 func (m *Model) appendReadScopeError(message string) {
 	m.entries = append(m.entries, ChatEntry{Kind: "error", Content: sanitizeTerminalSingleLine(message)})
 	m.invalidateEntryCache()
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	m.resumeFollow()
 }
 

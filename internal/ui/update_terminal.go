@@ -18,10 +18,10 @@ func (m *Model) handleThemeChange(msg tea.BackgroundColorMsg) {
 	m.spin.Style = m.styles.StatusDot
 	m.syncComposerAuthority()
 	m.scramble.SetDark(msg.IsDark())
-	// Update tool card styles for theme.
-	m.toolCardMgr.SetDark(msg.IsDark())
 	m.restylePickerOverlays()
 	m.restyleAgentHub()
+	m.restyleViewerModals()
+	m.restyleTranscriptSearch()
 	if m.goalFormState != nil {
 		m.goalFormState.SetTheme(m.isDark)
 		m.goalFormState.SetReducedMotion(m.reducedMotion)
@@ -60,7 +60,7 @@ func (m *Model) handleThemeChange(msg tea.BackgroundColorMsg) {
 		m.invalidateRenderedCache()
 	}
 	if m.ready {
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 	}
 	m.refreshInlineFormLayout(inlineFormAnchor)
 	m.restoreApprovalTranscriptAnchor(approvalAnchor)
@@ -71,6 +71,7 @@ func (m *Model) handleThemeChange(msg tea.BackgroundColorMsg) {
 // returns the accumulated commands slice.
 func (m *Model) handleWindowSize(msg tea.WindowSizeMsg, cmds []tea.Cmd) []tea.Cmd {
 	widthChanged := msg.Width != m.width
+	heightChanged := msg.Height != m.height
 	if widthChanged {
 		// Width reflow invalidates both the inspected ToolCard row and the
 		// numeric offset saved before inspection. Settle that temporary
@@ -123,6 +124,7 @@ func (m *Model) handleWindowSize(msg tea.WindowSizeMsg, cmds []tea.Cmd) []tea.Cm
 
 	// Recalculate content height
 	contentH := m.viewportHeight()
+	oldViewportHeight := m.viewport.Height()
 
 	if !m.ready {
 		m.viewport = viewport.New(
@@ -138,7 +140,7 @@ func (m *Model) handleWindowSize(msg tea.WindowSizeMsg, cmds []tea.Cmd) []tea.Cm
 		m.viewport.KeyMap.Down = key.NewBinding(key.WithDisabled())
 		m.viewport.KeyMap.Left = key.NewBinding(key.WithDisabled())
 		m.viewport.KeyMap.Right = key.NewBinding(key.WithDisabled())
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		m.ready = true
 		// Initialize scroll follow intent at the newest transcript row.
 		m.markFollowingLatest()
@@ -154,9 +156,16 @@ func (m *Model) handleWindowSize(msg tea.WindowSizeMsg, cmds []tea.Cmd) []tea.Cm
 			m.invalidateRenderedCache()
 		} else if widthChanged {
 			m.invalidateEntryCache()
+		} else if heightChanged &&
+			m.transcriptGeometryDependsOnHeight(oldViewportHeight, contentH) {
+			// Most transcript blocks depend only on width. Preserve their
+			// measured prefix across an ordinary vertical resize; only the
+			// centered welcome projection and expanded diff row budgets require
+			// a semantic rebuild.
+			m.invalidateEntryCache()
 		}
-		if markdownChanged || widthChanged {
-			m.viewport.SetContent(m.renderEntries())
+		if markdownChanged || widthChanged || heightChanged {
+			m.refreshTranscript()
 		}
 	}
 
@@ -166,6 +175,8 @@ func (m *Model) handleWindowSize(msg tea.WindowSizeMsg, cmds []tea.Cmd) []tea.Cm
 	}
 	m.resizePickerOverlays()
 	m.resizeAgentHub()
+	m.resizeViewerModals()
+	m.resizeTranscriptSearch()
 	if m.pendingApproval != nil && m.approvalState != nil {
 		m.resizeApproval(true)
 		m.recalcViewportHeight()
@@ -211,6 +222,9 @@ func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
 	if m.readScopePrompt != nil {
 		return nil
 	}
+	if m.viewerModalActive() {
+		return m.handleViewerWheel(msg)
+	}
 	// A visible overlay owns pointer input. Scroll document overlays through
 	// their own Bubbles viewports, deliver picker input to the active Bubbles
 	// child, and swallow wheel events for all other overlays so the hidden
@@ -247,21 +261,29 @@ func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
 	}
 
 	m.cancelReceiptInspection(false)
-	beforeOffset := m.viewport.YOffset()
-	m.viewport, _ = m.viewport.Update(msg)
+	beforeOffset := m.transcriptYOffset()
+	cmd := m.updateTranscriptViewport(msg)
 
-	if m.viewport.AtBottom() {
+	if m.transcriptAtBottom() {
 		m.markFollowingLatest()
-	} else if m.viewport.YOffset() != beforeOffset {
+	} else if m.transcriptYOffset() != beforeOffset {
 		m.pauseFollow()
 	}
-	return nil
+	return cmd
 }
 
 // handleMouseClickMsg swallows clicks behind modal surfaces and forwards
 // left clicks to transcript hit testing. handled reports whether Update must
 // return immediately without running the shared component tail.
 func (m *Model) handleMouseClickMsg(msg tea.MouseClickMsg) (cmd tea.Cmd, handled bool) {
+	if m.pendingApproval != nil || m.readScopePrompt != nil {
+		return nil, true
+	}
+	if m.viewerModalActive() {
+		// The exact viewer frame owns pointer focus and diff-row selection.
+		// Every click remains consumed even when it lands on modal chrome.
+		return m.handleViewerClick(msg), true
+	}
 	// Provider selection is a Bubbles list and explicitly owns pointer
 	// interaction while visible.
 	if m.overlay == OverlayProviderPicker && m.providerPickerState != nil {
@@ -273,11 +295,11 @@ func (m *Model) handleMouseClickMsg(msg tea.MouseClickMsg) (cmd tea.Cmd, handled
 	// Other modal and inline decision surfaces are intentionally keyboard-first.
 	// Until a child explicitly owns pointer interaction, clicks are swallowed
 	// rather than reaching ToolCards behind an authority-changing prompt.
-	if m.overlay != OverlayNone || m.pendingApproval != nil || m.readScopePrompt != nil {
+	if m.overlay != OverlayNone {
 		return nil, true
 	}
 	if msg.Button == tea.MouseLeft {
-		m.handleMouseClick(msg.X, msg.Y)
+		return m.handleMouseClick(msg.X, msg.Y), true
 	}
 	return nil, false
 }
@@ -307,7 +329,7 @@ func (m *Model) handleClipboardImagePaste(msg ClipboardImagePasteMsg) (cmd tea.C
 	if msg.Err != nil {
 		m.entries = append(m.entries, ChatEntry{Kind: "error", Content: "Paste image: clipboard has no supported image data."})
 		m.invalidateEntryCache()
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		m.gotoBottomIfFollowing()
 		return nil, false
 	}

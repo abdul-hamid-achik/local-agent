@@ -118,6 +118,7 @@ func (m *Model) openGoalRequestForm(request command.GoalRequest) (tea.Cmd, error
 	m.goalFormState = NewGoalForm(values, GoalFormOptions{
 		Width: m.width, Height: m.height, IsDark: m.isDark,
 		ReducedMotion: m.reducedMotion, DraftFromPrompt: true, FollowUpPrompt: followUp,
+		GlyphProfile: m.glyphProfile,
 	})
 	if followUp != "" {
 		m.goalFormState.focusField(followUpField)
@@ -162,6 +163,7 @@ func (m *Model) openGoalFormInternal(objective string, budgetOnly bool) error {
 	m.goalFormState = NewGoalForm(values, GoalFormOptions{
 		Width: m.width, Height: m.height, IsDark: m.isDark,
 		ReducedMotion: m.reducedMotion, BudgetOnly: budgetOnly,
+		GlyphProfile: m.glyphProfile,
 	})
 	m.overlayParent = OverlayNone
 	m.overlay = OverlayGoalForm
@@ -548,7 +550,7 @@ func (m *Model) appendGoalSystem(message string) {
 	}
 	m.entries = append(m.entries, ChatEntry{Kind: "system", Content: message})
 	m.invalidateEntryCache()
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	m.resumeFollow()
 }
 
@@ -558,7 +560,7 @@ func (m *Model) appendGoalError(message string) {
 	}
 	m.entries = append(m.entries, ChatEntry{Kind: "error", Content: message})
 	m.invalidateEntryCache()
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	m.resumeFollow()
 }
 
@@ -1488,6 +1490,7 @@ func (m *Model) preserveGeneratedPrompt(prompt string) bool {
 }
 
 func (m *Model) renderGoalInspector(snapshot goal.Snapshot) {
+	m.preemptTranscriptSearch()
 	// A newly attached/restored goal adds one stable status row. Reconcile the
 	// transcript height before centering the inspector so a 30x12 view retains
 	// the terminal safety row.
@@ -1505,7 +1508,7 @@ func (m *Model) renderGoalInspector(snapshot goal.Snapshot) {
 	m.goalInspectorState = NewGoalInspector(snapshot, actions, GoalInspectorOptions{
 		Width: m.width, Height: m.height, IsDark: m.isDark,
 		ReducedMotion: m.reducedMotion, Now: m.nowTime(), PersistenceDirty: m.goalPersistenceDirty,
-		RecoveryStatus: recoveryStatus,
+		RecoveryStatus: recoveryStatus, GlyphProfile: m.glyphProfile,
 	})
 	m.overlayParent = OverlayNone
 	m.overlay = OverlayGoalInspector

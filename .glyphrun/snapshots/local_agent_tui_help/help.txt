@@ -8,8 +8,8 @@
   try: ollama serve · ollama │   ctrl+c            Quit                                   │
                              │   ctrl+l            Clear screen                           │
                              │   ctrl+n            New conversation                       │
-                             │   ?                 Show help (empty input)                │
-                             │   t                 Toggle all tools (empty input)         │
+                             │   f1                Show help (empty input)                │
+                             │   ctrl+b            Toggle all tools (empty input)         │
                              │   ctrl+y            Copy last response (empty input)       │
                              │   pgup              Scroll up                              │
                              │   pgdown            Scroll down                            │
@@ -20,9 +20,10 @@
                              │   ctrl+o            Open Ollama models                     │
                              │   ctrl+p            Open settings                          │
                              │   ctrl+g            Open agents                            │
+                             │   ctrl+f            Search transcript                      │
                              │   ↑                 Previous input (empty input)           │
                              │   ↓                 Next input (history active)            │
-                             │   space             Toggle last tool (empty input)         │
+                             │   ctrl+r            Toggle last tool (empty input)         │
                              │   ctrl+t            Toggle all thoughts (empty draft)      │
                              │   ctrl+k            Toggle compact mode                    │
                              │   ctrl+e            Open in $VISUAL/$EDITOR                │
@@ -30,6 +31,5 @@
                              │                                                            │
                              │ Input Shortcuts                                            │
                              │   @file / @agent    Insert file or agent mention text      │
-                             │   ctrl+v            Paste text; on macOS convert a         │
 ─────────────────────────────│ esc/q close · pgdn more · g/shift+g ends                   │────────────────────────────
                              ╰────────────────────────────────────────────────────────────╯

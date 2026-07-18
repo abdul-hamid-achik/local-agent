@@ -125,3 +125,31 @@ func TestCopyLast_OnlyWhenIdleAndEmpty(t *testing.T) {
 		}
 	})
 }
+
+func TestCopyLastReceiptIsTransientAndDoesNotPolluteTranscript(t *testing.T) {
+	m := newTestModel(t)
+	m.entries = []ChatEntry{{Kind: "assistant", Content: "response text"}}
+	m.input.SetValue("")
+	var copied string
+	m.clipboardWrite = func(value string) error {
+		copied = value
+		return nil
+	}
+	before := len(m.entries)
+
+	updated, command := m.Update(ctrlKey('y'))
+	m = updated.(*Model)
+	message := command()
+	updated, _ = m.Update(message)
+	m = updated.(*Model)
+
+	if copied != "response text" {
+		t.Fatalf("clipboard content = %q", copied)
+	}
+	if len(m.entries) != before {
+		t.Fatalf("copy mutated transcript: entries=%d, want %d", len(m.entries), before)
+	}
+	if m.footerNotice == nil || m.footerNotice.text != "Copied to clipboard." {
+		t.Fatalf("copy footer receipt = %#v", m.footerNotice)
+	}
+}

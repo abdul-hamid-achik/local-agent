@@ -56,6 +56,64 @@ func TestBashApprovalExplainsWhyTheCommandStillNeedsADecision(t *testing.T) {
 	}
 }
 
+func TestBuiltinApprovalPreviewsUseExactFilesystemVerbsAndConsequences(t *testing.T) {
+	ag := New(nil, nil, 0)
+	ag.SetWorkDir(t.TempDir())
+
+	tests := []struct {
+		name            string
+		tool            string
+		args            map[string]any
+		wantAction      string
+		wantConsequence []string
+	}{
+		{
+			name:            "copy",
+			tool:            "copy",
+			args:            map[string]any{"source": "source.txt", "destination": "copy.txt"},
+			wantAction:      "Copy file",
+			wantConsequence: []string{"destination file", "source remains unchanged"},
+		},
+		{
+			name:            "move",
+			tool:            "move",
+			args:            map[string]any{"source": "source.txt", "destination": "moved.txt"},
+			wantAction:      "Move path",
+			wantConsequence: []string{"source to the destination", "no longer exist"},
+		},
+		{
+			name:            "remove recursively",
+			tool:            "remove",
+			args:            map[string]any{"path": "tree", "recursive": true},
+			wantAction:      "Remove path",
+			wantConsequence: []string{"target and its descendants"},
+		},
+		{
+			name:            "create directory",
+			tool:            "mkdir",
+			args:            map[string]any{"path": "nested/dir"},
+			wantAction:      "Create directory",
+			wantConsequence: []string{"missing parent directories"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			preview := ag.buildApprovalPreview(context.Background(), llm.ToolCall{
+				Name: tt.tool, Arguments: tt.args,
+			}, "request-hash")
+			if preview.Kind != permission.PreviewFilesystem || preview.ActionLabel != tt.wantAction {
+				t.Fatalf("preview identity = %#v", preview)
+			}
+			for _, want := range tt.wantConsequence {
+				if !strings.Contains(preview.Consequence, want) {
+					t.Fatalf("consequence omitted %q: %q", want, preview.Consequence)
+				}
+			}
+		})
+	}
+}
+
 func TestBoundApprovalLabelIsUTF8SafeAndBounded(t *testing.T) {
 	got := boundApprovalLabel(strings.Repeat("界", 100))
 	if len(got) > 160 || !strings.HasSuffix(got, "...") {

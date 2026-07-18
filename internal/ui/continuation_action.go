@@ -249,7 +249,7 @@ func (m *Model) handleContinuationAction(message ContinuationActionMsg) {
 	}
 
 	followWasPaused := m.followPaused()
-	followYOffset := m.viewport.YOffset()
+	followYOffset := m.transcriptYOffset()
 	m.continuation.sequence = message.Sequence
 	m.continuation.card = nil
 	if message.Action != nil {
@@ -260,7 +260,7 @@ func (m *Model) handleContinuationAction(message ContinuationActionMsg) {
 	}
 	if m.ready {
 		m.recalcViewportHeight()
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		m.restoreFollowPosition(followWasPaused, followYOffset)
 	}
 }

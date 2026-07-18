@@ -356,22 +356,40 @@ func TestCompletionPreviewReportsUnsupportedSecureTraversal(t *testing.T) {
 }
 
 func TestCompletionPreviewFitsMinimumTerminalInEveryState(t *testing.T) {
-	states := []completionPreview{
-		{State: completionPreviewLoading, Path: "internal/ui/completion_preview.go", Message: "Loading…"},
-		{State: completionPreviewReady, Path: "README.md", Size: 42, Content: "# Local Agent\nUseful local harness"},
-		{State: completionPreviewBinary, Path: "image.png", Size: 4096, Message: "Binary file"},
-		{State: completionPreviewError, Path: "gone.txt", Message: "File no longer exists"},
+	states := []struct {
+		preview completionPreview
+		want    string
+	}{
+		{
+			preview: completionPreview{State: completionPreviewLoading, Path: "internal/ui/completion_preview.go", Message: "Loading…"},
+			want:    "loading",
+		},
+		{
+			preview: completionPreview{State: completionPreviewReady, Path: "README.md", Size: 42, Content: "# Local Agent\nUseful local harness"},
+			want:    "42 B",
+		},
+		{
+			preview: completionPreview{State: completionPreviewBinary, Path: "image.png", Size: 4096, Message: "Binary file"},
+			want:    "binary",
+		},
+		{
+			preview: completionPreview{State: completionPreviewError, Path: "gone.txt", Message: "File no longer exists"},
+			want:    "error",
+		},
 	}
-	for _, preview := range states {
+	for _, state := range states {
 		m := openCompletionPreviewFixture(t, "README.md")
 		updated, _ := m.Update(tea.WindowSizeMsg{Width: 30, Height: 12})
 		m = updated.(*Model)
-		m.completionState.Preview = preview
+		m.completionState.Preview = state.preview
 		rendered := m.renderCompletionModal()
 		assertRenderedLinesFit(t, rendered, 30)
 		assertRenderedHeightFits(t, rendered, 12)
-		if !strings.Contains(ansi.Strip(rendered), "Preview") {
-			t.Fatalf("minimum modal hid preview state:\n%s", ansi.Strip(rendered))
+		plain := ansi.Strip(rendered)
+		for _, want := range []string{"Preview", state.want} {
+			if !strings.Contains(plain, want) {
+				t.Fatalf("minimum modal hid preview state %q:\n%s", want, plain)
+			}
 		}
 	}
 }

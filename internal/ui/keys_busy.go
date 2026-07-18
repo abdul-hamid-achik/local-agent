@@ -61,7 +61,7 @@ func (m *Model) handleBusyOperationKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 			m.input.Focus()
 			m.entries = append(m.entries, ChatEntry{Kind: "system", Content: "File operation cancelled; any late read result will be ignored."})
 			m.invalidateEntryCache()
-			m.viewport.SetContent(m.renderEntries())
+			m.refreshTranscript()
 			m.gotoBottomIfFollowing()
 		}
 		return nil, true
@@ -83,7 +83,7 @@ func (m *Model) handleBusyOperationKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 			m.input.Focus()
 			m.entries = append(m.entries, ChatEntry{Kind: "system", Content: "Image attachment cancelled."})
 			m.invalidateEntryCache()
-			m.viewport.SetContent(m.renderEntries())
+			m.refreshTranscript()
 			m.gotoBottomIfFollowing()
 			m.recalcViewportHeight()
 			if fallback != "" && m.composerEditable() {

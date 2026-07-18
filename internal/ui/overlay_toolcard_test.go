@@ -17,11 +17,8 @@ func TestLiveToolCardRetainsInspectableArguments(t *testing.T) {
 	m = updated.(*Model)
 	updated, _ = m.Update(ToolCallResultMsg{ID: "call-1", Name: "write", Result: "done", Duration: time.Millisecond})
 	m = updated.(*Model)
-	if len(m.toolCardMgr.Cards) != 1 {
-		t.Fatalf("cards = %d", len(m.toolCardMgr.Cards))
-	}
-	card := &m.toolCardMgr.Cards[0]
-	card.Expanded = true
+	m.toolEntries[0].Collapsed = false
+	card := testProjectedToolCard(t, m, 0)
 	if view := card.View(100); !strings.Contains(view, "visible.txt") {
 		t.Fatalf("expanded live card hid arguments: %q", view)
 	}
@@ -370,13 +367,18 @@ func TestDuplicateRestoredToolIDUsesNewestReceipt(t *testing.T) {
 	}
 
 	m := newTestModel(t)
-	m.toolCardMgr = mgr
-	m.toolEntries = []ToolEntry{{ID: "restored-id", Name: "read", Status: ToolStatusDone}}
-	m.entries = []ChatEntry{{Kind: "tool_group", ToolIndex: 0}}
+	m.toolEntries = []ToolEntry{
+		{ID: "read-1", Name: "read", Result: "OLD RECEIPT", Status: ToolStatusDone},
+		{ID: "read-2", Name: "read", Result: "NEW RECEIPT", Status: ToolStatusDone},
+	}
+	m.entries = []ChatEntry{
+		testToolChatEntry(0),
+		testToolChatEntry(1),
+	}
 	m.ready = true
 	m.width, m.height = 100, 40
 	var renderedBuilder strings.Builder
-	m.renderToolGroup(&renderedBuilder, 0)
+	m.renderToolGroup(&renderedBuilder, m.entries[1])
 	rendered := renderedBuilder.String()
 	if !strings.Contains(rendered, "NEW RECEIPT") || strings.Contains(rendered, "OLD RECEIPT") {
 		t.Fatalf("tool entry rendered stale duplicate receipt:\n%s", rendered)

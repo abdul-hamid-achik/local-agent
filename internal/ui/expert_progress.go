@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/abdul-hamid-achik/local-agent/internal/ecosystem"
 	"github.com/abdul-hamid-achik/local-agent/internal/expertselector"
 	"github.com/abdul-hamid-achik/local-agent/internal/expertteam"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
@@ -302,20 +303,31 @@ func (state *ExpertProgressState) summary() string {
 	return strings.Join(parts, " · ")
 }
 
-func (state *ExpertProgressState) cardState(fallback ToolCardState) ToolCardState {
+// projectionWithExpertProgressOutcome folds the exact bounded host-owned
+// consultation result into the durable semantic projection. This removes the
+// old need for ToolCard to carry an independent state override.
+func projectionWithExpertProgressOutcome(
+	projection ecosystem.ToolProjection,
+	state *ExpertProgressState,
+) ecosystem.ToolProjection {
+	projection = projection.Normalize()
 	if state == nil || state.Running > 0 || state.Queued > 0 {
-		return fallback
+		return projection
 	}
-	if state.Completed == 0 && state.Failed > 0 {
-		return ToolCardError
+	switch {
+	case state.Completed == 0 && state.Failed > 0:
+		projection.Domain = ecosystem.DomainFailed
+		projection.DomainTyped = true
+		projection.Evidence = ecosystem.EvidenceNone
+	case state.Failed > 0:
+		projection.Domain = ecosystem.DomainAttention
+		projection.DomainTyped = true
+		projection.Evidence = ecosystem.EvidenceNone
 	}
-	if state.Failed > 0 {
-		return ToolCardAttention
-	}
-	return fallback
+	return projection.Normalize()
 }
 
-func (state *ExpertProgressState) renderDetails(width int, styles ToolCardStyles) string {
+func (state *ExpertProgressState) renderDetails(width int, styles ToolCardStyles, profiles ...GlyphProfile) string {
 	if state == nil {
 		return ""
 	}
@@ -323,7 +335,13 @@ func (state *ExpertProgressState) renderDetails(width int, styles ToolCardStyles
 	if !ok {
 		return ""
 	}
+	nodes = presentedWorkNodes(nodes)
 	width = max(1, width)
+	profile := resolveGlyphProfile(profiles...)
+	separator := agentHubSeparator(profile)
+	truncate := func(value string) string {
+		return truncateDisplayWithGlyphProfile(value, width, profile)
+	}
 	lines := make([]string, 0, maxExpertProgressDetailRows+1)
 	known, queued := 0, 0
 	for _, node := range nodes {
@@ -343,12 +361,12 @@ func (state *ExpertProgressState) renderDetails(width int, styles ToolCardStyles
 			queueRendered = true
 			label := fmt.Sprintf("%d more queued", queued)
 			if known == 0 {
-				label = fmt.Sprintf("%d experts queued · %d at a time", queued, state.Parallelism)
+				label = fmt.Sprintf("%d experts queued%s%d at a time", queued, separator, state.Parallelism)
 			}
-			lines = append(lines, styles.Dimmed.Render(truncateDisplay(label, width)))
+			lines = append(lines, styles.Dimmed.Render(truncate(label)))
 			continue
 		}
-		nodeLines := renderExpertProgressNode(node, width, styles)
+		nodeLines := renderExpertProgressNode(node, width, styles, profile)
 		reservedRows := 0
 		if queued > 0 && !queueRendered {
 			// The aggregate represents every untouched queue slot. Reserve its
@@ -363,40 +381,59 @@ func (state *ExpertProgressState) renderDetails(width int, styles ToolCardStyles
 		lines = append(lines, nodeLines...)
 	}
 	if hidden > 0 {
-		label := fmt.Sprintf("+%d more · Ctrl+G Agents", hidden)
-		lines = append(lines, styles.Dimmed.Render(truncateDisplay(label, width)))
+		label := fmt.Sprintf("+%d more%sCtrl+G Agents", hidden, separator)
+		lines = append(lines, styles.Dimmed.Render(truncate(label)))
 	}
 	return strings.Join(lines, "\n")
 }
 
-func renderExpertProgressNode(node WorkNode, width int, styles ToolCardStyles) []string {
+func renderExpertProgressNode(node WorkNode, width int, styles ToolCardStyles, profiles ...GlyphProfile) []string {
 	width = max(1, width)
+	profile := resolveGlyphProfile(profiles...)
+	glyphs := glyphSet(profile)
+	separator := agentHubSeparator(profile)
+	truncate := func(value string) string {
+		return truncateDisplayWithGlyphProfile(value, width, profile)
+	}
 	glyph, status, style := "…", "running", styles.TitleRunning
+	if profile == GlyphASCII {
+		glyph = glyphs.Running
+	}
 	switch node.Status {
 	case WorkNodeWaiting:
-		glyph, status, style = "○", "waiting", styles.TitleAttention
+		glyph, status, style = glyphs.Waiting, "waiting", styles.TitleAttention
 	case WorkNodeCompleted:
-		glyph, status, style = "✓", "completed", styles.TitleSuccess
+		glyph, status, style = glyphs.Success, "completed", styles.TitleSuccess
 	case WorkNodeAttention:
 		glyph, status, style = "!", expertFailureLabel(node.FailureCode), styles.TitleAttention
 	case WorkNodeFailed:
-		glyph, status, style = "✗", expertFailureLabel(node.FailureCode), styles.TitleError
+		glyph, status, style = glyphs.Error, expertFailureLabel(node.FailureCode), styles.TitleError
 	case WorkNodeCancelled:
-		glyph, status, style = "–", "cancelled", styles.Dimmed
+		glyph, status, style = glyphs.Cancelled, "cancelled", styles.Dimmed
 	}
 	tokens := ""
 	if node.EvalTokens > 0 {
-		tokens = fmt.Sprintf(" · %d tok", node.EvalTokens)
+		tokens = fmt.Sprintf("%s%d tok", separator, node.EvalTokens)
 	}
-	roleLine := glyph + " " + node.Label + " · " + status + tokens
-	modelLine := node.Model + " · " + string(node.Location)
+	roleLine := glyph + " " + node.Label + separator + status + tokens
+	modelLine := node.Model + separator + string(node.Location)
+	activityLine := workNodeActivitySummary(node, profile)
 	if width >= 54 {
-		line := roleLine + " · " + modelLine
-		return []string{style.Render(truncateDisplay(line, width))}
+		line := roleLine
+		if activityLine != "" {
+			line += separator + activityLine
+		}
+		line += separator + modelLine
+		return []string{style.Render(truncate(line))}
 	}
-	lines := []string{style.Render(truncateDisplay(roleLine, width))}
+	lines := []string{style.Render(truncate(roleLine))}
 	if width >= 12 {
-		lines = append(lines, styles.Dimmed.Render(truncateDisplay("  "+modelLine, width)))
+		detailLine := activityLine
+		if detailLine != "" {
+			detailLine += separator
+		}
+		detailLine += modelLine
+		lines = append(lines, styles.Dimmed.Render(truncate("  "+detailLine)))
 	}
 	return lines
 }
@@ -428,13 +465,15 @@ func (card *ToolCard) setExpertProgress(state *ExpertProgressState, width int) {
 	card.expertProgressCache = ""
 	card.expertProgressCacheWidth = 0
 	card.expertProgressCacheSequence = 0
+	card.expertProgressCacheProfile = resolveGlyphProfile(card.GlyphProfile)
 	if state == nil {
 		return
 	}
 	width = max(1, width)
-	card.expertProgressCache = state.renderDetails(width, card.Styles)
+	card.expertProgressCache = state.renderDetails(width, card.Styles, card.GlyphProfile)
 	card.expertProgressCacheWidth = width
 	card.expertProgressCacheSequence = state.Sequence
+	card.expertProgressCacheProfile = resolveGlyphProfile(card.GlyphProfile)
 }
 
 func (card ToolCard) expertProgressDetails(width int) string {
@@ -442,10 +481,12 @@ func (card ToolCard) expertProgressDetails(width int) string {
 		return ""
 	}
 	width = max(1, width)
-	if card.expertProgressCacheWidth == width && card.expertProgressCacheSequence == card.ExpertProgress.Sequence {
+	if card.expertProgressCacheWidth == width &&
+		card.expertProgressCacheSequence == card.ExpertProgress.Sequence &&
+		card.expertProgressCacheProfile == resolveGlyphProfile(card.GlyphProfile) {
 		return card.expertProgressCache
 	}
-	return card.ExpertProgress.renderDetails(width, card.Styles)
+	return card.ExpertProgress.renderDetails(width, card.Styles, card.GlyphProfile)
 }
 
 func (m *Model) handleExpertProgress(msg ExpertProgressMsg) tea.Cmd {
@@ -475,16 +516,8 @@ func (m *Model) handleExpertProgress(msg ExpertProgressMsg) tea.Cmd {
 		// The live expert surface starts open so keyboard-only users do not need
 		// a running-state-only shortcut to discover role/model status.
 		entry.Collapsed = false
-		for cardIndex := len(m.toolCardMgr.Cards) - 1; cardIndex >= 0; cardIndex-- {
-			card := &m.toolCardMgr.Cards[cardIndex]
-			if card.ID == msg.CallID && isExpertConsultTool(card.Name) && card.State == ToolCardRunning {
-				card.SetSummary(entry.Summary)
-				card.setExpertProgress(next, max(1, m.chatPaneWidth()-6))
-				break
-			}
-		}
 		m.invalidateEntryCache()
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		cmd := m.refreshAgentHub()
 		m.gotoBottomIfFollowing()
 		return cmd
@@ -493,7 +526,8 @@ func (m *Model) handleExpertProgress(msg ExpertProgressMsg) tea.Cmd {
 }
 
 func (m *Model) runningExpertActivity() (workingActivity, bool) {
-	for index := len(m.toolEntries) - 1; index >= 0; index-- {
+	start := min(max(0, m.turnToolStartIndex), len(m.toolEntries))
+	for index := len(m.toolEntries) - 1; index >= start; index-- {
 		entry := m.toolEntries[index]
 		if entry.Status != ToolStatusRunning || !isExpertConsultTool(entry.Name) {
 			continue

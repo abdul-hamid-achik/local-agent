@@ -1,0 +1,17 @@
+  you
+  ▌ Review the release receipts.
+
+  assistant
+
+    I checked the saved verification receipts.
+
+  │ ▸ ✓ Read · path=internal/ui/view.go (42ms)
+  │ ▸ ✗ Run failed · command=go test ./internal/ui (310ms)
+  │ exit status 1: fixture regression
+
+
+    The read completed, the test failure is visible, and the interrupted effect needs
+    inspection.
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  S41 · Recovery receipt review · Follow paused · end latest
+▏❯ draft survives transcript search

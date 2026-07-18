@@ -20,6 +20,8 @@ func (m *Model) handleOverlayKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		switch m.overlay {
 		case OverlayCompletion:
 			m.dismissCompletion()
+		case OverlayTranscriptSearch:
+			return m.closeTranscriptSearch(true), true
 		case OverlayModelPicker:
 			if m.modelPickerState != nil && m.modelPickerState.List.FilterState() != list.Unfiltered {
 				var cmd tea.Cmd
@@ -92,6 +94,10 @@ func (m *Model) handleOverlayKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		return tea.ClearScreen, true
 	}
 
+	if m.overlay == OverlayTranscriptSearch {
+		return m.handleTranscriptSearchKey(msg), true
+	}
+
 	// Help overlay: scroll keys forwarded to helpViewport, ? or q to dismiss.
 	if m.overlay == OverlayHelp {
 		switch msg.String() {
@@ -150,7 +156,7 @@ func (m *Model) handleOverlayKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	if m.overlay == OverlayProviderPicker && m.providerPickerState != nil {
 		if key.Matches(msg, m.keys.CompleteSelect) {
 			if item := m.providerPickerState.List.SelectedItem(); item != nil {
-				cmds = append(cmds, m.selectProviderProfile(item.(providerItem).descriptor.Name))
+				cmds = append(cmds, m.activateProviderItem(item.(providerItem)))
 			}
 		} else {
 			var cmd tea.Cmd

@@ -41,12 +41,13 @@ type ToolCallStartMsg struct {
 
 // ToolCallResultMsg delivers the result of a tool call.
 type ToolCallResultMsg struct {
-	ID         string
-	Name       string
-	Result     string
-	IsError    bool
-	Duration   time.Duration
-	Projection ecosystem.ToolProjection
+	ID           string
+	Name         string
+	Result       string
+	IsError      bool
+	Duration     time.Duration
+	Projection   ecosystem.ToolProjection
+	OutputDetail OutputDetailReceipt
 }
 
 // ExpertProgressMsg carries one already bounded scheduler event for the exact

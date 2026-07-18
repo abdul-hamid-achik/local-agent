@@ -15,10 +15,13 @@ type transcriptReflowAnchor struct {
 func (m *Model) captureTranscriptReflowAnchor() transcriptReflowAnchor {
 	capture := transcriptReflowAnchor{
 		Intent: FollowLatestAnchor(),
-		// Published transcript snapshots are immutable. Capture retains the
-		// exact previous frame without cloning every record and LineMap.
+		// Structural publication is copy-on-write, so identity/order remain an
+		// exact previous frame without cloning every record and LineMap. The
+		// renderer may advance geometry in an identity-stable tail in place;
+		// ResolveTranscriptAnchor intentionally reads previous geometry only
+		// after a block disappears, which forces structural publication.
 		Previous:        m.transcriptLayout,
-		FallbackYOffset: m.viewport.YOffset(),
+		FallbackYOffset: m.transcriptYOffset(),
 		Valid:           m.ready,
 	}
 	if !m.followPaused() {
@@ -30,7 +33,7 @@ func (m *Model) captureTranscriptReflowAnchor() transcriptReflowAnchor {
 		capture.Valid = false
 		return capture
 	}
-	top := max(0, m.viewport.YOffset())
+	top := max(0, m.transcriptYOffset())
 	recordIndex := sort.Search(len(records), func(index int) bool {
 		record := records[index]
 		return record.StartRow+record.Height > top
@@ -105,10 +108,10 @@ func (m *Model) restoreTranscriptReflowAnchor(capture transcriptReflowAnchor) {
 		if m.logger != nil {
 			m.logger.Error("restore transcript anchor", "error", err)
 		}
-		m.viewport.SetYOffset(capture.FallbackYOffset)
+		m.setTranscriptYOffset(capture.FallbackYOffset)
 		m.pauseFollow()
 		return
 	}
-	m.viewport.SetYOffset(resolution.ViewportTop)
+	m.setTranscriptYOffset(resolution.ViewportTop)
 	m.pauseFollow()
 }

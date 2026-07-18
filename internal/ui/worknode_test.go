@@ -6,14 +6,17 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/abdul-hamid-achik/local-agent/internal/ecosystem"
 	"github.com/abdul-hamid-achik/local-agent/internal/expertteam"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 )
 
 func TestWorkNodeValidationIsBoundedAndStatusSpecific(t *testing.T) {
 	valid := WorkNode{
-		ID: "expert-00", Index: 0, Label: "critic", Model: "qwen3.5:2b",
-		Location: llm.OllamaModelLocationLocal, Status: WorkNodeRunning,
+		ID: "expert-00", Index: 0, Kind: WorkNodeKindExpert,
+		Label: "critic", Model: "qwen3.5:2b",
+		Location: WorkNodeLocationLocal, Status: WorkNodeRunning,
+		Activity: WorkNodeActivityRunning, Revision: 2,
 	}
 	if !valid.valid(2) {
 		t.Fatal("valid running node rejected")
@@ -24,6 +27,11 @@ func TestWorkNodeValidationIsBoundedAndStatusSpecific(t *testing.T) {
 		edit func(*WorkNode)
 	}{
 		{"unknown status", func(node *WorkNode) { node.Status = 0 }},
+		{"unknown kind", func(node *WorkNode) { node.Kind = "" }},
+		{"activity mismatch", func(node *WorkNode) { node.Activity = WorkNodeActivityWaiting }},
+		{"revision mismatch", func(node *WorkNode) { node.Revision = 1 }},
+		{"negative elapsed", func(node *WorkNode) { node.Elapsed = -1 }},
+		{"unread beyond revision", func(node *WorkNode) { node.Unread = 3 }},
 		{"invalid id", func(node *WorkNode) { node.ID = "private/path" }},
 		{"out of range index", func(node *WorkNode) { node.Index = 2 }},
 		{"oversized label", func(node *WorkNode) { node.Label = strings.Repeat("x", maxWorkNodeLabelBytes+1) }},
@@ -44,8 +52,9 @@ func TestWorkNodeValidationIsBoundedAndStatusSpecific(t *testing.T) {
 	}
 
 	queued := WorkNode{
-		ID: "expert-01", Index: 1, Status: WorkNodeQueued,
-		Location: llm.OllamaModelLocationUnknown,
+		ID: "expert-01", Index: 1, Kind: WorkNodeKindExpert,
+		Status: WorkNodeQueued, Location: WorkNodeLocationUnknown,
+		Activity: WorkNodeActivityQueued, Revision: 1,
 	}
 	if !queued.valid(2) {
 		t.Fatal("valid queued node rejected")
@@ -86,6 +95,22 @@ func TestExpertProgressAdapterIsPureSafeAndIndexStable(t *testing.T) {
 	if nodes[0].ID != "expert-00" || nodes[2].ID != "expert-02" {
 		t.Fatalf("IDs are not host-derived and stable: %#v", nodes)
 	}
+	if nodes[0].Kind != WorkNodeKindExpert || nodes[1].Kind != WorkNodeKindExpert {
+		t.Fatalf("adapter did not assign the host-owned kind: %#v", nodes)
+	}
+	for _, node := range nodes {
+		if node.Revision != workNodeRevisionForStatus(node.Status) ||
+			node.Activity != workNodeActivityForStatus(node.Status) ||
+			node.ParentID != "" || node.Elapsed != 0 || node.Unread != 0 ||
+			node.ReportRef != nil {
+			t.Fatalf("adapter invented or omitted generic work metadata: %#v", node)
+		}
+	}
+	if nodes[0].Location != WorkNodeLocationLocal ||
+		nodes[1].Location != WorkNodeLocationCloud ||
+		nodes[3].Location != WorkNodeLocationRemoteHost {
+		t.Fatalf("adapter location projection = %#v", nodes)
+	}
 }
 
 func TestWorkNodeOrderingStaysStableAcrossStatusChanges(t *testing.T) {
@@ -106,10 +131,39 @@ func TestWorkNodeOrderingStaysStableAcrossStatusChanges(t *testing.T) {
 	}
 }
 
+func TestWorkNodePresentationPrioritizesLiveWorkWithoutMutatingCanonicalOrder(t *testing.T) {
+	nodes := []WorkNode{
+		{ID: "completed-0", Index: 0, Status: WorkNodeCompleted},
+		{ID: "queued-1", Index: 1, Status: WorkNodeQueued},
+		{ID: "failed-2", Index: 2, Status: WorkNodeFailed},
+		{ID: "attention-3", Index: 3, Status: WorkNodeAttention},
+		{ID: "waiting-4", Index: 4, Status: WorkNodeWaiting},
+		{ID: "running-5", Index: 5, Status: WorkNodeRunning},
+		{ID: "completed-6", Index: 6, Status: WorkNodeCompleted},
+	}
+
+	presented := presentedWorkNodes(nodes)
+	got := make([]string, len(presented))
+	for index := range presented {
+		got[index] = presented[index].ID
+	}
+	want := []string{
+		"attention-3", "waiting-4", "running-5",
+		"queued-1",
+		"completed-0", "failed-2", "completed-6",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("presented IDs = %v, want %v", got, want)
+	}
+	if nodes[0].ID != "completed-0" || nodes[3].ID != "attention-3" {
+		t.Fatalf("presentation order mutated canonical caller slice: %#v", nodes)
+	}
+}
+
 func TestWorkNodeProjectionHasNoPrivateAuthority(t *testing.T) {
 	typ := reflect.TypeOf(WorkNode{})
 	forbiddenFields := map[string]bool{
-		"prompt": true, "objective": true, "report": true, "reasoning": true,
+		"prompt": true, "objective": true, "reporttext": true, "reasoning": true,
 		"error": true, "path": true, "transcript": true, "metadata": true,
 	}
 	for index := 0; index < typ.NumField(); index++ {
@@ -120,8 +174,10 @@ func TestWorkNodeProjectionHasNoPrivateAuthority(t *testing.T) {
 	}
 
 	encoded, err := json.Marshal(WorkNode{
-		ID: "expert-00", Index: 0, Label: "critic", Model: "safe-model",
-		Location: llm.OllamaModelLocationLocal, Status: WorkNodeFailed,
+		ID: "expert-00", Index: 0, Kind: WorkNodeKindExpert,
+		Label: "critic", Model: "safe-model",
+		Location: WorkNodeLocationLocal, Status: WorkNodeFailed,
+		Activity: WorkNodeActivityFailed, Revision: 3,
 		FailureCode: "timed_out",
 	})
 	if err != nil {
@@ -131,6 +187,117 @@ func TestWorkNodeProjectionHasNoPrivateAuthority(t *testing.T) {
 		if strings.Contains(string(encoded), forbidden) {
 			t.Fatalf("safe projection serialized forbidden authority %q: %s", forbidden, encoded)
 		}
+	}
+}
+
+func TestWorkNodeParentRevisionActivityAndUnreadAreBounded(t *testing.T) {
+	node := WorkNode{
+		ID:       "node-safe",
+		ParentID: "group-safe",
+		Index:    0,
+		Kind:     WorkNodeKindExpert,
+		Label:    "critic",
+		Model:    "safe-model",
+		Location: WorkNodeLocationLocal,
+		Status:   WorkNodeCompleted,
+		Activity: WorkNodeActivityCompleted,
+		Unread:   2,
+		Revision: 3,
+	}
+	if !node.valid(1) {
+		t.Fatalf("valid hierarchical node rejected: %#v", node)
+	}
+	for _, edit := range []func(*WorkNode){
+		func(candidate *WorkNode) { candidate.ParentID = "private/path" },
+		func(candidate *WorkNode) { candidate.Activity = WorkNodeActivityRunning },
+		func(candidate *WorkNode) { candidate.Revision = 0 },
+		func(candidate *WorkNode) { candidate.Unread = 4 },
+	} {
+		candidate := node
+		edit(&candidate)
+		if candidate.valid(1) {
+			t.Fatalf("invalid hierarchical metadata survived: %#v", candidate)
+		}
+	}
+}
+
+func TestWorkReportRefRequiresExactSupportedArtifactEvidence(t *testing.T) {
+	artifact := ecosystem.ArtifactDigest{
+		Kind:          ecosystem.ArtifactDigestFileCheapStash,
+		ID:            "report-stash",
+		URI:           "fcheap://stash/report-stash",
+		SchemaVersion: "1.0",
+		ContentSHA256: strings.Repeat("a", 64),
+		FileCount:     1,
+		TotalSize:     42,
+		CreatedAt:     "2026-07-18T12:00:00Z",
+	}
+	projection := ecosystem.ToolProjection{
+		Specialist: "filecheap",
+		Operation:  "filecheap_save",
+		Role:       ecosystem.RoleArtifact,
+		Transport:  ecosystem.TransportSucceeded,
+		Domain:     ecosystem.DomainSucceeded,
+		Evidence:   ecosystem.EvidenceSupported,
+		Artifact:   &artifact,
+	}
+	ref, ok := workReportRefFromProjection(projection)
+	if !ok || ref == nil || !reflect.DeepEqual(*ref, artifact) {
+		t.Fatalf("supported report artifact was rejected: %#v, ok=%v", ref, ok)
+	}
+	node := WorkNode{
+		ID:        "node-safe",
+		ParentID:  "group-safe",
+		Index:     0,
+		Kind:      WorkNodeKindExpert,
+		Label:     "critic",
+		Model:     "safe-model",
+		Location:  WorkNodeLocationLocal,
+		Status:    WorkNodeCompleted,
+		Activity:  WorkNodeActivityCompleted,
+		Revision:  3,
+		ReportRef: ref,
+	}
+	if !node.valid(1) {
+		t.Fatalf("node rejected exact report artifact: %#v", node)
+	}
+
+	tampered := artifact
+	tampered.URI = "file:///private/report"
+	node.ReportRef = &tampered
+	if node.valid(1) {
+		t.Fatal("node accepted a caller-authored report URI")
+	}
+	projection.Evidence = ecosystem.EvidenceCandidate
+	if ref, ok := workReportRefFromProjection(projection); ok || ref != nil {
+		t.Fatalf("candidate evidence became a report ref: %#v, ok=%v", ref, ok)
+	}
+}
+
+func TestWorkNodeLocationAdapterIsExhaustiveAndFailsClosed(t *testing.T) {
+	tests := []struct {
+		source llm.OllamaModelLocation
+		want   WorkNodeLocation
+	}{
+		{llm.OllamaModelLocationUnknown, WorkNodeLocationUnknown},
+		{llm.OllamaModelLocationLocal, WorkNodeLocationLocal},
+		{llm.OllamaModelLocationCloud, WorkNodeLocationCloud},
+		{llm.OllamaModelLocationRemote, WorkNodeLocationRemoteHost},
+	}
+	for _, test := range tests {
+		got, ok := workNodeLocationFromExpertSource(test.source)
+		if !ok || got != test.want {
+			t.Fatalf("location %q = %q, %v; want %q, true", test.source, got, ok, test.want)
+		}
+	}
+	if got, ok := workNodeLocationFromExpertSource(llm.OllamaModelLocation("provider-private")); ok || got != "" {
+		t.Fatalf("unknown source location survived as %q, %v", got, ok)
+	}
+
+	typ := reflect.TypeOf(WorkNode{})
+	field, ok := typ.FieldByName("Location")
+	if !ok || field.Type != reflect.TypeOf(WorkNodeLocation("")) {
+		t.Fatalf("WorkNode location type = %v, want UI-owned WorkNodeLocation", field.Type)
 	}
 }
 

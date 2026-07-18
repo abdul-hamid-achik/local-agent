@@ -17,11 +17,11 @@
   ◇ Permission · write · NORMAL
   Action     Write 19 B
   Target     <temp>/local-agent-glyphrun-approval-workdir/approval-probe.txt
+  Impact     Creates or replaces the target file with the proposed content.
   Scope      Identical request only · current Agent session
   Request    80109752db71
 
   Proposed change
   +must not be written
-
   › n deny ·   y once ·   s identical request · current session
-  esc cancel · enter select · ↑/↓/j/k move · d arguments · pgup/dn scroll
+  esc cancel turn · enter select · ↑/↓/j/k move · d arguments · pgup/dn scroll

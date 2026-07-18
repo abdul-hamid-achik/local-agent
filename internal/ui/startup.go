@@ -40,7 +40,7 @@ func (m *Model) handleStartupStatus(msg StartupStatusMsg) {
 		m.startupItems = append(m.startupItems, startupItem(msg))
 	}
 	if m.ready {
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 	}
 }
 
@@ -90,7 +90,7 @@ func (m *Model) handleInitComplete(msg InitCompleteMsg, cmds []tea.Cmd) []tea.Cm
 	// Reflow immediately so the first usable frame does not keep a stale blank
 	// row until the next resize or input event.
 	m.recalcViewportHeight()
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	if m.startupResumeSelector != nil {
 		selector := *m.startupResumeSelector
 		m.startupResumeSelector = nil

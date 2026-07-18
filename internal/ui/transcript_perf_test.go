@@ -10,7 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-func TestWarmLiveToolRenderDoesNotRehashOrRepublishStableHistory(t *testing.T) {
+func TestWarmStaticRunningToolRenderDoesNotRehashOrRepublishStableHistory(t *testing.T) {
 	m := newTestModel(t)
 	m.ready = true
 	m.now = func() time.Time {
@@ -39,8 +39,8 @@ func TestWarmLiveToolRenderDoesNotRehashOrRepublishStableHistory(t *testing.T) {
 	m.toolsPending = 1
 
 	cold := m.renderEntries()
-	if m.cachedStableCount != historyEntries {
-		t.Fatalf("stable prefix = %d, want %d", m.cachedStableCount, historyEntries)
+	if m.cachedStableCount != len(m.entries) {
+		t.Fatalf("stable prefix = %d, want every event-driven entry %d", m.cachedStableCount, len(m.entries))
 	}
 	if len(m.transcriptLayout.Records) != len(m.entries) {
 		t.Fatalf("layout records = %d, want %d", len(m.transcriptLayout.Records), len(m.entries))
@@ -64,16 +64,159 @@ func TestWarmLiveToolRenderDoesNotRehashOrRepublishStableHistory(t *testing.T) {
 	if probe.layoutRecordsMaterialized != 0 {
 		t.Fatalf("warm paint materialized %d layout records, want 0", probe.layoutRecordsMaterialized)
 	}
-	// The immutable 320-block prefix is shared. Only the thawed final prefix
-	// record and the running ToolCard record need equality checks.
-	if probe.layoutRecordComparisons > 2 {
-		t.Fatalf("warm paint compared %d layout records, want at most 2", probe.layoutRecordComparisons)
+	// The immutable transcript is shared. Closing the cached layout needs to
+	// compare only its final record; the running ToolCard itself is memoized.
+	if probe.layoutRecordComparisons > 1 {
+		t.Fatalf("warm paint compared %d layout records, want at most 1", probe.layoutRecordComparisons)
 	}
 	if recordsAddress != &m.transcriptLayout.Records[0] {
 		t.Fatal("warm paint replaced the immutable transcript snapshot")
 	}
 	if lineMapAddress != &m.transcriptLayout.Records[0].LineMap[0] {
 		t.Fatal("warm paint cloned the stable prefix LineMap")
+	}
+}
+
+func TestActivityClocksDoNotPaintTenThousandEntryTranscript(t *testing.T) {
+	t.Run("spinner tick is footer-only and tool result repaints", func(t *testing.T) {
+		m := largeRunningToolTranscript(t, "read_file", false)
+		beforeTranscript := m.viewport.GetContent()
+		beforeFooter := m.renderWorkingLine()
+		probe := &transcriptRenderProbe{}
+		m.transcriptRenderProbe = probe
+
+		updated, next := m.Update(m.spin.Tick())
+		m = updated.(*Model)
+		if next == nil {
+			t.Fatal("active tool spinner did not continue its footer clock")
+		}
+		assertNoTranscriptPaint(t, probe, "spinner tick")
+		if after := m.viewport.GetContent(); after != beforeTranscript {
+			t.Fatal("spinner tick changed transcript content")
+		}
+		if afterFooter := m.renderWorkingLine(); afterFooter == beforeFooter {
+			t.Fatal("spinner tick did not advance the footer-owned activity")
+		}
+
+		probe = &transcriptRenderProbe{}
+		m.transcriptRenderProbe = probe
+		updated, _ = m.Update(ToolCallResultMsg{
+			ID: "active-tool", Name: "read_file", Result: "ok", Duration: 2 * time.Second,
+		})
+		m = updated.(*Model)
+		assertTranscriptPainted(t, probe, "tool result")
+		if m.toolEntries[0].Status != ToolStatusDone {
+			t.Fatalf("tool result left status %v", m.toolEntries[0].Status)
+		}
+		if after := m.viewport.GetContent(); after == beforeTranscript {
+			t.Fatal("real tool result did not update transcript content")
+		}
+	})
+
+	t.Run("reduced-motion heartbeat is footer-only and expert progress repaints", func(t *testing.T) {
+		m := largeRunningToolTranscript(t, "consult_experts", true)
+		beforeTranscript := m.viewport.GetContent()
+		if cmd := m.startActivityCmd(); cmd == nil || !m.activityHeartbeatPending {
+			t.Fatal("reduced-motion tool did not start its informational heartbeat")
+		}
+		token := m.activityHeartbeatToken
+		probe := &transcriptRenderProbe{}
+		m.transcriptRenderProbe = probe
+
+		updated, next := m.Update(activityHeartbeatMsg{Token: token})
+		m = updated.(*Model)
+		if next == nil || !m.activityHeartbeatPending {
+			t.Fatal("active reduced-motion heartbeat did not continue")
+		}
+		assertNoTranscriptPaint(t, probe, "reduced-motion heartbeat")
+		if after := m.viewport.GetContent(); after != beforeTranscript {
+			t.Fatal("reduced-motion heartbeat changed transcript content")
+		}
+
+		probe = &transcriptRenderProbe{}
+		m.transcriptRenderProbe = probe
+		updated, _ = m.Update(ExpertProgressMsg{
+			CallID: "active-tool",
+			Event:  expertProgressEvent(1, "planned", -1),
+		})
+		m = updated.(*Model)
+		assertTranscriptPainted(t, probe, "expert progress")
+		if progress := m.toolEntries[0].ExpertProgress; progress == nil || progress.Sequence != 1 {
+			t.Fatalf("real expert progress was not projected: %#v", progress)
+		}
+		if after := m.viewport.GetContent(); after == beforeTranscript {
+			t.Fatal("real expert progress did not update transcript content")
+		}
+	})
+}
+
+func largeRunningToolTranscript(t *testing.T, toolName string, reducedMotion bool) *Model {
+	t.Helper()
+	m := newTestModel(t)
+	base := time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)
+	m.now = func() time.Time { return base.Add(2500 * time.Millisecond) }
+	m.state = StateStreaming
+	m.reducedMotion = reducedMotion
+
+	const historyEntries = 10_000
+	m.entries = make([]ChatEntry, 0, historyEntries+1)
+	for index := 0; index < historyEntries; index++ {
+		m.entries = append(m.entries, ChatEntry{
+			BlockID:   BlockID(fmt.Sprintf("history_%05d", index)),
+			TurnID:    TurnID(fmt.Sprintf("turn_history_%05d", index)),
+			Revision:  1,
+			Lifecycle: BlockSettled,
+			Kind:      "user",
+			Content:   "history",
+		})
+	}
+	collapsed := toolName != "consult_experts"
+	summary := "internal/ui/model.go"
+	if !collapsed {
+		summary = "awaiting expert plan"
+	}
+	m.toolEntries = []ToolEntry{{
+		ID: "active-tool", Name: toolName, Summary: summary,
+		Status: ToolStatusRunning, StartTime: base, Collapsed: collapsed,
+	}}
+	m.entries = append(m.entries, ChatEntry{
+		BlockID:   "active_tool_block",
+		TurnID:    "active_tool_turn",
+		Revision:  1,
+		Lifecycle: BlockLive,
+		Kind:      "tool_group",
+		ToolIndex: 0,
+	})
+	m.toolsPending = 1
+	m.invalidateEntryCache()
+	m.refreshTranscript()
+	m.transcriptGotoBottom()
+	return m
+}
+
+func assertNoTranscriptPaint(t *testing.T, probe *transcriptRenderProbe, operation string) {
+	t.Helper()
+	if probe.renderEntriesCalls != 0 ||
+		probe.transcriptBytesMaterialized != 0 ||
+		probe.documentBuilds != 0 ||
+		probe.measureBytesMaterialized != 0 ||
+		probe.lineIndexRowsBuilt != 0 ||
+		probe.semanticDigestCalls != 0 ||
+		probe.layoutRecordsMaterialized != 0 ||
+		probe.layoutRecordComparisons != 0 ||
+		probe.blocksMeasured != 0 ||
+		probe.blocksPainted != 0 ||
+		probe.paintRowsStaged != 0 ||
+		probe.paintBytesStaged != 0 ||
+		probe.viewportRowsStaged != 0 {
+		t.Fatalf("%s performed transcript work: %#v", operation, probe)
+	}
+}
+
+func assertTranscriptPainted(t *testing.T, probe *transcriptRenderProbe, operation string) {
+	t.Helper()
+	if probe.documentBuilds == 0 || probe.paintRowsStaged == 0 {
+		t.Fatalf("%s did not paint the transcript: %#v", operation, probe)
 	}
 }
 
@@ -90,7 +233,7 @@ func TestPausedStreamingTailKeepsTransientBlockAcrossResizeAndTheme(t *testing.T
 		)
 	}
 	m.invalidateEntryCache()
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 
 	if got, want := len(m.transcriptLayout.Records), len(m.entries)+1; got != want {
 		t.Fatalf("live layout records = %d, want %d (one transient live-tail block)", got, want)
@@ -103,7 +246,7 @@ func TestPausedStreamingTailKeepsTransientBlockAcrossResizeAndTheme(t *testing.T
 		t.Fatalf("live-tail LineMap has %d rows, want enough to pause inside it", len(live.LineMap))
 	}
 
-	m.viewport.SetYOffset(live.StartRow + 8)
+	m.setTranscriptYOffset(live.StartRow + 8)
 	m.pauseFollow()
 	resizeCapture := m.captureTranscriptReflowAnchor()
 	if resizeCapture.Intent.Manual.BlockID != live.BlockID {
@@ -114,7 +257,7 @@ func TestPausedStreamingTailKeepsTransientBlockAcrossResizeAndTheme(t *testing.T
 	assertCapturedTranscriptPosition(t, m, resizeCapture, live.BlockID, "width resize")
 
 	current := transcriptLayoutRecordByID(t, m.transcriptLayout, live.BlockID)
-	m.viewport.SetYOffset(current.StartRow + 6)
+	m.setTranscriptYOffset(current.StartRow + 6)
 	m.pauseFollow()
 	themeCapture := m.captureTranscriptReflowAnchor()
 	if themeCapture.Intent.Manual.BlockID != live.BlockID {
@@ -146,7 +289,7 @@ func TestLiveTailIdentityAvoidsPersistedCollisionAndEmptyTurnReuse(t *testing.T)
 		m.state = StateStreaming
 		m.streamBuf.WriteString("live response")
 
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		live := m.transcriptLayout.Records[len(m.transcriptLayout.Records)-1]
 		if live.BlockID == collision {
 			t.Fatalf("transient live block reused persisted ID %q", collision)
@@ -204,11 +347,11 @@ func assertCapturedTranscriptPosition(
 	if resolution.BlockID != blockID {
 		t.Fatalf("%s resolved block = %q, want %q", operation, resolution.BlockID, blockID)
 	}
-	if got := m.viewport.YOffset(); got != resolution.ViewportTop {
+	if got := m.transcriptYOffset(); got != resolution.ViewportTop {
 		t.Fatalf("%s viewport top = %d, semantic resolution = %d", operation, got, resolution.ViewportTop)
 	}
 	current := transcriptLayoutRecordByID(t, m.transcriptLayout, blockID)
-	if top := m.viewport.YOffset(); top < current.StartRow || top >= current.StartRow+current.Height {
+	if top := m.transcriptYOffset(); top < current.StartRow || top >= current.StartRow+current.Height {
 		t.Fatalf(
 			"%s viewport top %d escaped live block rows [%d,%d)",
 			operation,

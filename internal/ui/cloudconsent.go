@@ -38,7 +38,8 @@ type CloudConsentState struct {
 	PriorGrant  bool
 }
 
-func newCloudConsentState(model OllamaModelDescriptor, terminalWidth, terminalHeight int, isDark bool) *CloudConsentState {
+func newCloudConsentState(model OllamaModelDescriptor, terminalWidth, terminalHeight int, isDark bool, profiles ...GlyphProfile) *CloudConsentState {
+	profile := resolveGlyphProfile(profiles...)
 	displayName := modelDisplayName(model)
 	items := []list.Item{
 		cloudConsentItem{
@@ -53,11 +54,12 @@ func newCloudConsentState(model OllamaModelDescriptor, terminalWidth, terminalHe
 		},
 	}
 	compact := terminalWidth <= 40 || terminalHeight <= 14
-	delegate := newPickerDelegate(isDark, compact)
+	delegate := newPickerDelegate(isDark, compact, profile)
 	width := pickerListWidth(terminalWidth, 62)
 	height := len(items)*delegate.Height() + 1
 	choices := list.New(items, delegate, width, height)
 	configurePickerList(&choices, isDark)
+	configurePickerListGlyphProfile(&choices, profile)
 	choices.SetShowTitle(false)
 	choices.SetShowStatusBar(false)
 	choices.SetShowHelp(false)
@@ -69,13 +71,13 @@ func newCloudConsentState(model OllamaModelDescriptor, terminalWidth, terminalHe
 }
 
 func (m *Model) openCloudConsent(model OllamaModelDescriptor) {
-	m.cloudConsentState = newCloudConsentState(model, m.width, m.height, m.isDark)
+	m.cloudConsentState = newCloudConsentState(model, m.width, m.height, m.isDark, m.glyphProfile)
 	m.overlay = OverlayCloudConsent
 	m.input.Blur()
 }
 
 func (m *Model) openCloudConsentForSession(model OllamaModelDescriptor, message SessionLoadedMsg) {
-	m.cloudConsentState = newCloudConsentState(model, m.width, m.height, m.isDark)
+	m.cloudConsentState = newCloudConsentState(model, m.width, m.height, m.isDark, m.glyphProfile)
 	m.cloudConsentState.PendingLoad = &message
 	m.cloudConsentState.PriorGrant = model.ConsentGranted
 	m.overlayParent = OverlayNone

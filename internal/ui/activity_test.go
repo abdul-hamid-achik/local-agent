@@ -10,6 +10,7 @@ import (
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/abdul-hamid-achik/local-agent/internal/ecosystem"
 	"github.com/abdul-hamid-achik/local-agent/internal/imageasset"
 	"github.com/abdul-hamid-achik/local-agent/internal/permission"
 	"github.com/charmbracelet/x/ansi"
@@ -57,7 +58,7 @@ func TestMinimumTerminalWorkingStatesFit(t *testing.T) {
 			m = updated.(*Model)
 			tt.set(m)
 			m.recalcViewportHeight()
-			m.viewport.SetContent(m.renderEntries())
+			m.refreshTranscript()
 
 			view := m.View().Content
 			if !strings.Contains(view, tt.want) {
@@ -79,6 +80,7 @@ func TestMinimumTerminalWorkingStatesFit(t *testing.T) {
 			}
 		})
 	}
+
 }
 
 func TestAutoCheckpointActivityExplainsInvisibleContinuation(t *testing.T) {
@@ -99,8 +101,8 @@ func TestMinimumTerminalNoticeKeepsSettingsRecoveryVisible(t *testing.T) {
 	m.entries = append(m.entries, ChatEntry{Kind: "error", Content: "local runtime unavailable"})
 	m.invalidateEntryCache()
 	m.recalcViewportHeight()
-	m.viewport.SetContent(m.renderEntries())
-	m.viewport.GotoBottom()
+	m.refreshTranscript()
+	m.transcriptGotoBottom()
 
 	view := ansi.Strip(m.View().Content)
 	if !strings.Contains(view, "ctrl+p settings") {
@@ -138,7 +140,7 @@ func TestAnimationClocksStopOutsideTheirPhase(t *testing.T) {
 	}
 }
 
-func TestToolCardUsesSharedSpinnerAndCompletedReceiptIsStable(t *testing.T) {
+func TestRunningToolCardIsStaticAndFooterOwnsSharedSpinner(t *testing.T) {
 	m := newTestModel(t)
 	base := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)
 	m.now = func() time.Time { return base.Add(1500 * time.Millisecond) }
@@ -146,15 +148,13 @@ func TestToolCardUsesSharedSpinnerAndCompletedReceiptIsStable(t *testing.T) {
 	m.toolsPending = 1
 	m.toolEntries = []ToolEntry{{
 		ID: "call-1", Name: "read_file", Args: `{"path":"internal/ui/view.go"}`,
-		Status: ToolStatusRunning, StartTime: base, Collapsed: true,
+		Summary: "internal/ui/view.go", Status: ToolStatusRunning, StartTime: base, Collapsed: true,
 	}}
 	m.entries = []ChatEntry{
 		{Kind: "user", Content: "inspect the UI"},
 		{Kind: "tool_group", ToolIndex: 0},
 	}
-	m.toolCardMgr.AddCardWithID("call-1", "read_file", ToolCardFile, base)
-	m.toolCardMgr.Cards[0].SetSummary("internal/ui/view.go")
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	before := m.viewport.View()
 	footerBefore := m.renderWorkingLine()
 
@@ -163,24 +163,27 @@ func TestToolCardUsesSharedSpinnerAndCompletedReceiptIsStable(t *testing.T) {
 	m = updated.(*Model)
 	after := m.viewport.View()
 	footerAfter := m.renderWorkingLine()
-	if before == after {
-		t.Fatalf("shared spinner tick did not repaint the running card:\n%s", after)
+	if before != after {
+		t.Fatalf("footer spinner tick repainted the running ToolCard:\nbefore:\n%s\nafter:\n%s", before, after)
 	}
-	if footerBefore != footerAfter || !strings.Contains(footerAfter, "Tool running") || strings.Contains(footerAfter, "internal/ui") {
-		t.Fatalf("tool footer competed with the animated card: before=%q after=%q", footerBefore, footerAfter)
+	if footerBefore == footerAfter || !strings.Contains(footerAfter, "Tool running") ||
+		!strings.Contains(footerAfter, "1.5s") || strings.Contains(footerAfter, "internal/ui") {
+		t.Fatalf("tool footer did not own live activity: before=%q after=%q", footerBefore, footerAfter)
 	}
-	for _, want := range []string{"Reading", "internal/ui", "1.5s"} {
+	for _, want := range []string{"Reading", "internal/ui", "…"} {
 		if !strings.Contains(after, want) {
 			t.Fatalf("running tool receipt missing %q:\n%s", want, after)
 		}
 	}
+	if strings.Contains(after, "1.5s") {
+		t.Fatalf("running ToolCard retained live elapsed time:\n%s", after)
+	}
 
 	m.toolsPending = 0
 	m.toolEntries[0].Status = ToolStatusDone
-	m.toolCardMgr.Cards[0].State = ToolCardSuccess
-	m.toolCardMgr.Cards[0].Duration = 2 * time.Second
+	m.toolEntries[0].Duration = 2 * time.Second
 	m.invalidateEntryCache()
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	stable := m.viewport.View()
 
 	foreign := spinner.TickMsg{Time: base}
@@ -188,6 +191,62 @@ func TestToolCardUsesSharedSpinnerAndCompletedReceiptIsStable(t *testing.T) {
 	m = updated.(*Model)
 	if got := m.viewport.View(); got != stable {
 		t.Fatalf("completed card changed across an idle tick:\nbefore:\n%s\nafter:\n%s", stable, got)
+	}
+}
+
+func TestRunningToolActivityIsScopedToCurrentTurn(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)
+	m := newTestModel(t)
+	m.now = func() time.Time { return base.Add(10 * time.Second) }
+	m.toolsPending = 1
+	m.toolEntries = []ToolEntry{
+		{
+			ID: "old-running", Name: "read_file",
+			Status: ToolStatusRunning, StartTime: base.Add(-time.Hour),
+		},
+		{
+			ID: "old-experts", Name: "consult_experts",
+			Status: ToolStatusRunning, StartTime: base.Add(-time.Minute),
+		},
+		{
+			ID: "current-running", Name: "read_file",
+			Status: ToolStatusRunning, StartTime: base,
+		},
+	}
+	m.turnToolStartIndex = 2
+
+	if got := m.runningToolElapsed(); got != 10*time.Second {
+		t.Fatalf("current-turn elapsed = %s, want 10s", got)
+	}
+	if activity, ok := m.runningExpertActivity(); ok {
+		t.Fatalf("historical expert escaped the current-turn boundary: %#v", activity)
+	}
+}
+
+func BenchmarkCurrentWorkingActivityWithLargeToolHistory(b *testing.B) {
+	base := time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)
+	m := newTestModelB(b)
+	m.now = func() time.Time { return base.Add(10 * time.Second) }
+	m.toolsPending = 1
+	m.toolEntries = make([]ToolEntry, 10_001)
+	for index := 0; index < 10_000; index++ {
+		m.toolEntries[index] = ToolEntry{
+			ID:   fmt.Sprintf("history-%05d", index),
+			Name: "read_file", Status: ToolStatusDone,
+		}
+	}
+	m.turnToolStartIndex = 10_000
+	m.toolEntries[m.turnToolStartIndex] = ToolEntry{
+		ID: "current", Name: "read_file",
+		Status: ToolStatusRunning, StartTime: base,
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = m.currentWorkingActivity()
 	}
 }
 
@@ -199,7 +258,7 @@ func TestActiveToolFooterLeavesBreathingRowBeforeComposer(t *testing.T) {
 	m.toolsPending = 1
 	m.reducedMotion = true
 	m.recalcViewportHeight()
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 
 	view := ansi.Strip(m.View().Content)
 	statusAt := strings.Index(view, "Tool running")
@@ -322,17 +381,17 @@ func TestCompletedToolFlashAdvertisesInspectableReceipt(t *testing.T) {
 	m.lastTurnToolIndex = 0
 
 	status := ansi.Strip(m.renderStatusLine())
-	if !strings.Contains(status, "Done") || !strings.Contains(status, "space inspect receipt") {
+	if !strings.Contains(status, "Done") || !strings.Contains(status, "ctrl+r inspect receipt") {
 		t.Fatalf("completed tool footer does not expose receipt inspection: %q", status)
 	}
 	m.toolEntries[0].Collapsed = false
-	if status = ansi.Strip(m.renderStatusLine()); !strings.Contains(status, "space hide receipt") {
+	if status = ansi.Strip(m.renderStatusLine()); !strings.Contains(status, "ctrl+r hide receipt") {
 		t.Fatalf("expanded tool footer does not expose receipt collapse: %q", status)
 	}
 
 	m.input.SetValue("draft")
-	if status = ansi.Strip(m.renderStatusLine()); strings.Contains(status, "space inspect receipt") || strings.Contains(status, "space hide receipt") {
-		t.Fatalf("receipt shortcut was advertised while Space edits a draft: %q", status)
+	if status = ansi.Strip(m.renderStatusLine()); strings.Contains(status, "inspect receipt") || strings.Contains(status, "hide receipt") {
+		t.Fatalf("receipt shortcut was advertised while the composer owns a draft: %q", status)
 	}
 }
 
@@ -340,7 +399,10 @@ func TestCompletedNoToolTurnDoesNotAdvertiseStaleReceipt(t *testing.T) {
 	m := newTestModel(t)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
 	m = updated.(*Model)
-	m.toolEntries = []ToolEntry{{Name: "read_file", Status: ToolStatusDone, Collapsed: true}}
+	m.toolEntries = []ToolEntry{
+		{Name: "old_failed_read", Status: ToolStatusError, IsError: true, Collapsed: true},
+		{Name: "old_successful_read", Status: ToolStatusDone, Collapsed: true},
+	}
 	m.turnToolStartIndex = len(m.toolEntries)
 	m.state = StateStreaming
 
@@ -352,6 +414,142 @@ func TestCompletedNoToolTurnDoesNotAdvertiseStaleReceipt(t *testing.T) {
 	}
 	if strings.Contains(status, "inspect receipt") || strings.Contains(status, "hide receipt") {
 		t.Fatalf("no-tool turn advertised an earlier tool receipt: %q", status)
+	}
+}
+
+func TestCurrentTurnToolReceiptOutcomeFailsClosed(t *testing.T) {
+	successfulProjection := ecosystem.ToolProjection{
+		Transport: ecosystem.TransportSucceeded,
+		Domain:    ecosystem.DomainSucceeded,
+	}
+	tests := []struct {
+		name       string
+		entry      *ToolEntry
+		successful bool
+	}{
+		{name: "no tools", successful: true},
+		{name: "semantic success", entry: &ToolEntry{
+			Status: ToolStatusDone, Projection: successfulProjection,
+		}, successful: true},
+		{name: "running", entry: &ToolEntry{
+			Status: ToolStatusRunning, Projection: successfulProjection,
+		}},
+		{name: "error", entry: &ToolEntry{
+			Status: ToolStatusError, IsError: true, Projection: successfulProjection,
+		}},
+		{name: "cancelled", entry: &ToolEntry{
+			Status: ToolStatusCancelled, Projection: successfulProjection,
+		}},
+		{name: "domain attention", entry: &ToolEntry{
+			Status: ToolStatusDone,
+			Projection: ecosystem.ToolProjection{
+				Transport: ecosystem.TransportSucceeded,
+				Domain:    ecosystem.DomainAttention,
+			},
+		}},
+		{name: "domain unknown", entry: &ToolEntry{
+			Status: ToolStatusDone,
+			Projection: ecosystem.ToolProjection{
+				Transport: ecosystem.TransportSucceeded,
+				Domain:    ecosystem.DomainUnknown,
+			},
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			m := newTestModel(t)
+			m.toolEntries = []ToolEntry{{
+				Name: "historical_failure", Status: ToolStatusError, IsError: true,
+			}}
+			m.turnToolStartIndex = len(m.toolEntries)
+			if test.entry != nil {
+				m.toolEntries = append(m.toolEntries, *test.entry)
+			}
+
+			last, successful := m.currentTurnToolReceiptOutcome()
+			if successful != test.successful {
+				t.Fatalf("successful = %v, want %v", successful, test.successful)
+			}
+			wantLast := -1
+			if test.entry != nil && test.entry.Status != ToolStatusRunning {
+				wantLast = 1
+			}
+			if last != wantLast {
+				t.Fatalf("last terminal receipt = %d, want %d", last, wantLast)
+			}
+		})
+	}
+
+	t.Run("invalid turn boundary", func(t *testing.T) {
+		m := newTestModel(t)
+		m.toolEntries = []ToolEntry{{
+			Status: ToolStatusDone, Projection: successfulProjection,
+		}}
+		m.turnToolStartIndex = len(m.toolEntries) + 1
+		last, successful := m.currentTurnToolReceiptOutcome()
+		if last != -1 || successful {
+			t.Fatalf("invalid boundary outcome = last %d, successful %v", last, successful)
+		}
+	})
+}
+
+func TestDeniedToolFollowedByModelResponseDoesNotFlashTurnSuccess(t *testing.T) {
+	base := time.Date(2026, 7, 18, 23, 20, 29, 0, time.UTC)
+	m := newTestModel(t)
+	m.now = func() time.Time { return base.Add(3300 * time.Millisecond) }
+	m.turnStartedAt = base
+	m.state = StateStreaming
+	m.turnToolStartIndex = len(m.toolEntries)
+
+	updated, _ := m.Update(ToolCallStartMsg{
+		ID:        "approval-denied-write",
+		Name:      "write",
+		Args:      map[string]any{"path": "approval-probe.txt", "content": "must not be written"},
+		StartTime: base,
+	})
+	m = updated.(*Model)
+	updated, _ = m.Update(ToolCallResultMsg{
+		ID:       "approval-denied-write",
+		Name:     "write",
+		Result:   "tool call denied: user denied tool execution",
+		IsError:  true,
+		Duration: 300 * time.Millisecond,
+	})
+	m = updated.(*Model)
+	updated, _ = m.Update(StreamTextMsg{
+		Text: "Denied safely. No file was changed.",
+	})
+	m = updated.(*Model)
+	updated, _ = m.Update(StreamDoneMsg{EvalCount: 7, PromptTokens: 19})
+	m = updated.(*Model)
+	updated, _ = m.Update(AgentDoneMsg{})
+	m = updated.(*Model)
+
+	if m.state != StateIdle {
+		t.Fatalf("denied-tool turn state = %v, want idle", m.state)
+	}
+	if len(m.toolEntries) != 1 ||
+		m.toolEntries[0].Status != ToolStatusError ||
+		!m.toolEntries[0].IsError {
+		t.Fatalf("denied tool receipt = %#v", m.toolEntries)
+	}
+	if transcript := ansi.Strip(m.renderEntries()); !strings.Contains(
+		transcript,
+		"Denied safely. No file was changed.",
+	) {
+		t.Fatalf("settled turn omitted the model response:\n%s", transcript)
+	}
+	status := ansi.Strip(m.renderStatusLine())
+	success := glyphSet(m.glyphProfile).Success + " Done"
+	if m.footerNotice != nil {
+		t.Fatalf("denied-tool turn armed a duplicate notice %#v; footer=%q",
+			m.footerNotice, status)
+	}
+	if strings.Contains(status, success) {
+		t.Fatalf("denied-tool turn rendered misleading success footer %q", status)
+	}
+	if m.sessionTurnCount != 1 {
+		t.Fatalf("settled denial turn count = %d, want 1", m.sessionTurnCount)
 	}
 }
 
@@ -498,6 +696,140 @@ func TestReducedMotionUsesStaticWorkingGlyph(t *testing.T) {
 	if cmd := m.startSpinnerCmd(); cmd != nil {
 		t.Fatal("reduced motion scheduled a spinner clock")
 	}
+	if m.needsSpinner() || m.needsScramble() {
+		t.Fatal("reduced motion admitted a decorative activity clock")
+	}
+	if cmd := m.startActivityCmd(); cmd == nil || !m.activityHeartbeatPending {
+		t.Fatal("reduced motion omitted its low-frequency informational heartbeat")
+	}
+}
+
+func TestReducedMotionActivityHeartbeatHasOnePendingChain(t *testing.T) {
+	m := newTestModel(t)
+	m.reducedMotion = true
+	m.state = StateStreaming
+
+	first := m.startActivityCmd()
+	if first == nil || !m.activityHeartbeatPending {
+		t.Fatal("first active state did not schedule a heartbeat")
+	}
+	firstToken := m.activityHeartbeatToken
+	if duplicate := m.startActivityCmd(); duplicate != nil {
+		t.Fatal("active state scheduled a duplicate heartbeat")
+	}
+	if m.activityHeartbeatToken != firstToken {
+		t.Fatalf("duplicate start advanced token from %d to %d", firstToken, m.activityHeartbeatToken)
+	}
+
+	updated, cmd := m.Update(activityHeartbeatMsg{Token: firstToken - 1})
+	m = updated.(*Model)
+	if cmd != nil || !m.activityHeartbeatPending || m.activityHeartbeatToken != firstToken {
+		t.Fatal("stale heartbeat disturbed the live chain")
+	}
+}
+
+func TestReducedMotionActivityHeartbeatStopsWhenIdle(t *testing.T) {
+	m := newTestModel(t)
+	m.reducedMotion = true
+	m.state = StateStreaming
+	if cmd := m.startActivityCmd(); cmd == nil {
+		t.Fatal("active state did not schedule a heartbeat")
+	}
+	token := m.activityHeartbeatToken
+	m.state = StateIdle
+
+	updated, cmd := m.Update(activityHeartbeatMsg{Token: token})
+	m = updated.(*Model)
+	if cmd != nil {
+		t.Fatal("idle heartbeat scheduled another receipt")
+	}
+	if m.activityHeartbeatPending {
+		t.Fatal("idle heartbeat remained pending")
+	}
+}
+
+func TestReducedMotionActivityHeartbeatRefreshesElapsedInformation(t *testing.T) {
+	base := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)
+
+	t.Run("provider footer", func(t *testing.T) {
+		now := base.Add(500 * time.Millisecond)
+		m := newTestModel(t)
+		m.reducedMotion = true
+		m.state = StateWaiting
+		m.turnStartedAt = base
+		m.now = func() time.Time { return now }
+
+		if line := ansi.Strip(m.renderWorkingLine()); strings.Contains(line, "0.5s") {
+			t.Fatalf("sub-second provider footer exposed a noisy timer: %q", line)
+		}
+		if cmd := m.startActivityCmd(); cmd == nil {
+			t.Fatal("provider activity did not schedule a heartbeat")
+		}
+		token := m.activityHeartbeatToken
+		now = base.Add(1500 * time.Millisecond)
+
+		updated, next := m.Update(activityHeartbeatMsg{Token: token})
+		m = updated.(*Model)
+		if next == nil || !m.activityHeartbeatPending {
+			t.Fatal("active provider heartbeat did not continue")
+		}
+		if line := ansi.Strip(m.renderWorkingLine()); !strings.Contains(line, "1.5s") {
+			t.Fatalf("provider elapsed time did not advance: %q", line)
+		}
+		if m.needsSpinner() || m.needsScramble() {
+			t.Fatal("provider heartbeat enabled decorative motion")
+		}
+	})
+
+	t.Run("running tool card", func(t *testing.T) {
+		now := base.Add(1200 * time.Millisecond)
+		m := newTestModel(t)
+		m.reducedMotion = true
+		m.state = StateStreaming
+		m.turnStartedAt = base
+		m.now = func() time.Time { return now }
+		m.toolsPending = 1
+		m.toolEntries = []ToolEntry{{
+			ID: "call-heartbeat", Name: "read_file", Summary: "internal/ui/activity.go",
+			Status: ToolStatusRunning, StartTime: base, Collapsed: true,
+		}}
+		m.entries = []ChatEntry{
+			{Kind: "user", Content: "inspect the activity timer"},
+			testToolChatEntry(0),
+		}
+		m.invalidateEntryCache()
+		m.refreshTranscript()
+		m.transcriptGotoBottom()
+		beforeTranscript := m.viewport.View()
+		if strings.Contains(ansi.Strip(beforeTranscript), "1.2s") {
+			t.Fatalf("running ToolCard exposed live elapsed time:\n%s", beforeTranscript)
+		}
+		if beforeFooter := ansi.Strip(m.renderWorkingLine()); !strings.Contains(beforeFooter, "1.2s") {
+			t.Fatalf("tool footer omitted initial elapsed time: %q", beforeFooter)
+		}
+		if cmd := m.startActivityCmd(); cmd == nil {
+			t.Fatal("running tool did not schedule a heartbeat")
+		}
+		token := m.activityHeartbeatToken
+		now = base.Add(3200 * time.Millisecond)
+
+		updated, next := m.Update(activityHeartbeatMsg{Token: token})
+		m = updated.(*Model)
+		if next == nil {
+			t.Fatal("running tool heartbeat did not continue")
+		}
+		afterTranscript := m.viewport.View()
+		if afterTranscript != beforeTranscript {
+			t.Fatalf("running tool heartbeat repainted the transcript:\nbefore:\n%s\nafter:\n%s", beforeTranscript, afterTranscript)
+		}
+		afterFooter := ansi.Strip(m.renderWorkingLine())
+		if !strings.Contains(afterFooter, "3.2s") || strings.Contains(afterFooter, "1.2s") {
+			t.Fatalf("tool footer elapsed time did not advance: %q", afterFooter)
+		}
+		if after := ansi.Strip(afterTranscript); strings.Contains(after, "•") || !strings.Contains(after, "…") {
+			t.Fatalf("running tool heartbeat changed the static receipt glyph:\n%s", after)
+		}
+	})
 }
 
 func TestReducedMotionUsesStaticRunningToolGlyph(t *testing.T) {
@@ -515,19 +847,18 @@ func TestReducedMotionUsesStaticRunningToolGlyph(t *testing.T) {
 
 	t.Run("tool card", func(t *testing.T) {
 		m := newRunningModel(t)
-		m.toolCardMgr.AddCardWithID("call-1", "read_file", ToolCardFile, base)
 		var rendered strings.Builder
-		m.renderToolGroup(&rendered, 0)
+		m.renderToolGroup(&rendered, testToolChatEntry(0))
 		view := ansi.Strip(rendered.String())
 		if !strings.Contains(view, "…") || strings.Contains(view, "•") {
 			t.Fatalf("reduced-motion tool card used an ambiguous activity glyph: %q", view)
 		}
 	})
 
-	t.Run("fallback receipt", func(t *testing.T) {
+	t.Run("strict projection", func(t *testing.T) {
 		m := newRunningModel(t)
 		var rendered strings.Builder
-		m.renderToolGroup(&rendered, 0)
+		m.renderToolGroup(&rendered, testToolChatEntry(0))
 		view := ansi.Strip(rendered.String())
 		if !strings.Contains(view, "…") || strings.Contains(view, "•") {
 			t.Fatalf("reduced-motion fallback receipt used an ambiguous activity glyph: %q", view)

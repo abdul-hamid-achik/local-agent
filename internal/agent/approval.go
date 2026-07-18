@@ -115,6 +115,7 @@ func (a *Agent) buildApprovalPreview(ctx context.Context, tc llm.ToolCall, argum
 	switch tc.Name {
 	case "write":
 		preview.Kind = permissionpkg.PreviewFileWrite
+		preview.Consequence = "Creates or replaces the target file with the proposed content."
 		preview.Path = pathArg("path", false)
 		content, _ := tc.Arguments["content"].(string)
 		preview.ByteSize = int64(len(content))
@@ -130,6 +131,7 @@ func (a *Agent) buildApprovalPreview(ctx context.Context, tc llm.ToolCall, argum
 		preview.Diff, preview.DiffTruncated, preview.DiffOmittedReason = approvalDiff(ctx, before, content)
 	case "edit":
 		preview.Kind = permissionpkg.PreviewFilePatch
+		preview.Consequence = "Changes the target file according to the proposed patch."
 		preview.Path = pathArg("path", false)
 		patch, _ := tc.Arguments["patch"].(string)
 		preview.Diff = patch
@@ -157,17 +159,29 @@ func (a *Agent) buildApprovalPreview(ctx context.Context, tc llm.ToolCall, argum
 		preview.Consequence = "Host policy did not pre-authorize this command for the current turn. Shell commands can change files, start processes, or contact external systems; inspect the exact command before allowing it."
 	case "copy":
 		preview.Kind = permissionpkg.PreviewFilesystem
+		preview.ActionLabel = "Copy file"
+		preview.Consequence = "Creates or replaces the destination file with a copy; the source remains unchanged."
 		preview.SourcePath = readablePathArg("source")
 		preview.DestinationPath = pathArg("destination", false)
 	case "move":
 		preview.Kind = permissionpkg.PreviewFilesystem
+		preview.ActionLabel = "Move path"
+		preview.Consequence = "Moves the source to the destination; the source path will no longer exist."
 		preview.SourcePath = pathArg("source", true)
 		preview.DestinationPath = pathArg("destination", true)
 	case "remove":
 		preview.Kind = permissionpkg.PreviewFilesystem
+		preview.ActionLabel = "Remove path"
+		if a.getArgBool(tc.Arguments, "recursive", false) {
+			preview.Consequence = "Deletes the target and its descendants from the workspace."
+		} else {
+			preview.Consequence = "Deletes the target; non-empty directories are refused without recursive removal."
+		}
 		preview.Path = pathArg("path", true)
 	case "mkdir":
 		preview.Kind = permissionpkg.PreviewFilesystem
+		preview.ActionLabel = "Create directory"
+		preview.Consequence = "Creates the directory path, including missing parent directories."
 		preview.Path = pathArg("path", false)
 	default:
 		for _, key := range []string{"path", "file_path", "filename", "file"} {

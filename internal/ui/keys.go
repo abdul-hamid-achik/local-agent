@@ -27,6 +27,7 @@ type KeyMap struct {
 	ModelPicker       key.Binding
 	SettingsPicker    key.Binding
 	AgentHub          key.Binding
+	TranscriptSearch  key.Binding
 	HistoryUp         key.Binding
 	HistoryDown       key.Binding
 	ToggleFocusedTool key.Binding
@@ -65,12 +66,15 @@ func DefaultKeyMap() KeyMap {
 			key.WithHelp("ctrl+n", "new conversation"),
 		),
 		Help: key.NewBinding(
-			key.WithKeys("?"),
-			key.WithHelp("?", "show help (empty input)"),
+			// F1 is the unambiguous primary gesture. Ctrl+H remains an
+			// enhanced-terminal fallback, but legacy terminals may decode the
+			// same control byte as Backspace.
+			key.WithKeys("f1", "ctrl+h"),
+			key.WithHelp("f1", "show help (empty input)"),
 		),
 		ToggleTools: key.NewBinding(
-			key.WithKeys("t"),
-			key.WithHelp("t", "toggle all tools (empty input)"),
+			key.WithKeys("ctrl+b"),
+			key.WithHelp("ctrl+b", "toggle all tools (empty input)"),
 		),
 		PageUp: key.NewBinding(
 			key.WithKeys("pgup"),
@@ -134,6 +138,10 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("ctrl+g"),
 			key.WithHelp("ctrl+g", "open agents"),
 		),
+		TranscriptSearch: key.NewBinding(
+			key.WithKeys("ctrl+f"),
+			key.WithHelp("ctrl+f", "search transcript"),
+		),
 		HistoryUp: key.NewBinding(
 			key.WithKeys("up"),
 			key.WithHelp("↑", "previous input (empty input)"),
@@ -143,8 +151,8 @@ func DefaultKeyMap() KeyMap {
 			key.WithHelp("↓", "next input (history active)"),
 		),
 		ToggleFocusedTool: key.NewBinding(
-			key.WithKeys("space"),
-			key.WithHelp("space", "toggle last tool (empty input)"),
+			key.WithKeys("ctrl+r"),
+			key.WithHelp("ctrl+r", "toggle last tool (empty input)"),
 		),
 		ToggleThinking: key.NewBinding(
 			key.WithKeys("ctrl+t"),
@@ -172,7 +180,7 @@ func (k KeyMap) FullHelp() [][]key.Binding {
 		{k.Send, k.NewLine, k.Cancel, k.Quit},
 		{k.ClearView, k.NewConvo, k.Help, k.ToggleTools, k.CopyLast},
 		{k.PageUp, k.PageDown, k.HalfPageUp, k.HalfPageDn, k.JumpLatest},
-		{k.CycleMode, k.ModelPicker, k.SettingsPicker, k.AgentHub},
+		{k.CycleMode, k.ModelPicker, k.SettingsPicker, k.AgentHub, k.TranscriptSearch},
 		{k.HistoryUp, k.HistoryDown},
 		{k.ToggleFocusedTool, k.ToggleThinking, k.CompactToggle, k.ExternalEditor, k.Complete},
 	}

@@ -12,6 +12,15 @@ import (
 // was consumed here; unhandled keys fall through to the composer and
 // transcript sub-components in Update.
 func (m *Model) handleIdleKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
+	// A focused editable composer owns every printable key, including the
+	// first character of an empty draft. Key.Text is Bubble Tea's explicit
+	// printable-character signal and remains empty for application chords.
+	// Keep this guard before every global shortcut so future printable
+	// bindings cannot silently steal the start of a prompt.
+	if m.composerEditable() && m.input.Focused() && msg.Text != "" {
+		return nil, false
+	}
+
 	// Transcript paging is parent-owned and must never fall through to the
 	// composer. PgUp/PgDn always page the conversation. Ctrl+U/Ctrl+D retain
 	// their standard textarea editing behavior while a draft is present, and
@@ -22,6 +31,14 @@ func (m *Model) handleIdleKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	}
 	if msg.String() == "ctrl+v" && m.composerEditable() {
 		return m.readClipboardPaste(), true
+	}
+	if _, ok := m.currentInspectedToolTarget(); ok {
+		switch msg.String() {
+		case "alt+o":
+			return m.dispatchInspectedToolAction(toolOpenOutputActionID), true
+		case "alt+d":
+			return m.dispatchInspectedToolAction(toolOpenDiffActionID), true
+		}
 	}
 
 	switch {
@@ -69,7 +86,7 @@ func (m *Model) handleIdleKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 				m.toolEntries[i].Collapsed = m.toolsCollapsed
 			}
 			m.invalidateEntryCache()
-			m.viewport.SetContent(m.renderEntries())
+			m.refreshTranscript()
 			m.restoreTranscriptReflowAnchor(anchor)
 			return nil, true
 		}
@@ -82,6 +99,16 @@ func (m *Model) handleIdleKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 				if _, ok := m.inspectableToolReceiptAction(); ok {
 					target = m.lastTurnToolIndex
 				}
+				if entity, ok := m.toolActionTarget(target); ok {
+					return m.dispatchUIAction(UIActionRequest{
+						ActionID: toolToggleActionID,
+						Target:   entity,
+						Source:   UIActionSourceKeyboard,
+					}), true
+				}
+				// Keep the shortcut usable during the narrow pre-reconciliation
+				// interval; once a transcript BlockID exists, the registry path
+				// above is the sole production dispatcher.
 				m.toggleToolReceipt(target, true)
 			}
 			return nil, true
@@ -93,7 +120,7 @@ func (m *Model) handleIdleKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 			anchor := m.captureTranscriptReflowAnchor()
 			m.forceCompact = !m.forceCompact
 			m.invalidateEntryCache()
-			m.viewport.SetContent(m.renderEntries())
+			m.refreshTranscript()
 			m.restoreTranscriptReflowAnchor(anchor)
 			return nil, true
 		}
@@ -126,7 +153,7 @@ func (m *Model) handleIdleKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	case key.Matches(msg, m.keys.ClearView):
 		if m.state == StateIdle {
 			m.cancelReceiptInspection(true)
-			m.viewport.SetContent(m.renderEntries())
+			m.refreshTranscript()
 			m.resumeFollow()
 			return nil, true
 		}
@@ -145,7 +172,7 @@ func (m *Model) handleIdleKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 				Kind:    "system",
 				Content: "New conversation started.",
 			})
-			m.viewport.SetContent(m.renderEntries())
+			m.refreshTranscript()
 			m.resumeFollow()
 			return nil, true
 		}

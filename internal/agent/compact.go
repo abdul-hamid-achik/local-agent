@@ -132,7 +132,7 @@ func (a *Agent) compactForContextAndModel(ctx context.Context, out Output, numCt
 	})
 
 	if err != nil {
-		out.Error(fmt.Sprintf("compaction failed: %v", err))
+		out.Error(fmt.Sprintf("compaction failed: %v", providerBoundaryError(err)))
 		return false
 	}
 

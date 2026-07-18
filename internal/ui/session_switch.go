@@ -60,7 +60,7 @@ func (m *Model) startPendingSessionSwitch(choice sessionSwitchChoice) tea.Cmd {
 	if err != nil {
 		m.restoreAndClearPendingSessionSwitch()
 		m.entries = append(m.entries, ChatEntry{Kind: "error", Content: "Load session: " + err.Error()})
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		m.resumeFollow()
 		return nil
 	}

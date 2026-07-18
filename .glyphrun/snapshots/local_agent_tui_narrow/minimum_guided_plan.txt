@@ -1,4 +1,4 @@
-       ? help · / @ #
+       f1 help · / @ #
 
   Ollama model · ctrl+o
 

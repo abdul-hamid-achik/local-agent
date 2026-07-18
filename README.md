@@ -1,6 +1,8 @@
 # local-agent
 
-A local-first coding agent for the terminal, built in Go with Charm and powered by local Ollama models.
+A local-first coding agent for the terminal, built in Go with Charm. It uses
+local Ollama models by default and supports explicitly selected
+OpenAI-compatible remote provider profiles.
 
 [Website](https://local-agent.dev/) · [Getting started](https://local-agent.dev/getting-started) · [Safety](https://local-agent.dev/safety) · [Ecosystem](https://local-agent.dev/ecosystem) · [Expert teams](https://local-agent.dev/experts)
 
@@ -15,7 +17,8 @@ A local-first coding agent for the terminal, built in Go with Charm and powered 
 ## What works today
 
 - A responsive terminal UI built with Bubble Tea v2, Bubbles v2, Lip Gloss v2, and Glamour.
-- Streaming chat through Ollama with an availability-aware local model router.
+- Streaming chat through Ollama with an availability-aware local model router,
+  plus opt-in xAI and generic OpenAI-compatible provider profiles.
 - Qwen 3.5, Phi-4 Mini, and manually selected Ornith/Gemma/Qwen exclusive profiles.
 - Read, search, diff, validated patch, atomic write, file-management, and shell tools.
 - NORMAL, PLAN, and AUTO authority with approval prompts for risky operations.
@@ -559,7 +562,7 @@ ICE is still a flat JSON vector store rather than an ANN index, but its bounded 
 | `local-agent --version` | Print the build version |
 
 Source builds print `dev`. Tagged release artifacts print the tag version
-(for example, `0.4.0`), and MCP client handshakes advertise that same build
+(for example, `0.17.0`), and MCP client handshakes advertise that same build
 version.
 
 `-p` and `--prompt` are exact aliases for a human-readable convenience mode,
@@ -623,6 +626,8 @@ separate `goal show`/`goal recover` flow.
 | `/model list` | List admitted models from the live Ollama inventory |
 | `/model <name>` | Switch and pin an available Ollama model |
 | `/model auto` | Resume automatic model routing |
+| `/provider`, `/provider list` | Open the provider picker or list configured provider profiles |
+| `/provider <name>` | Switch provider profile and persist that preference for restart |
 | `/agent [name\|list]` | List or switch profiles |
 | `/load <path>`, `/unload` | Asynchronously add or remove one regular, non-symlink markdown context file (32 KB maximum); quoted paths are supported |
 | `/image <path>`, `/attach <path>` | Validate a PNG, JPEG, or GIF and attach it to the pending ordinary prompt |
@@ -795,11 +800,15 @@ data erasure is required.
 | `shift+tab` | Cycle NORMAL, PLAN, AUTO |
 | `ctrl+p` | Open session settings (model, profile, mode, sessions, layout, runtime) |
 | `ctrl+o` | Open Ollama model picker |
+| `ctrl+g` | Open the Agent Hub |
+| `ctrl+f` | Search the bounded safe transcript projection |
+| `f1`, `ctrl+h` | Open Help when the composer is empty (`f1` is unambiguous on legacy terminals) |
 | `tab` | Complete commands, files, and skills |
 | `up`, `down` | Browse input history |
 | `pgup`, `pgdown` | Scroll conversation without editing the draft |
 | `ctrl+u`, `ctrl+d` | Edit the draft; with an empty or unavailable composer, scroll by half a page |
-| `t`, `space` | Toggle all tool details / last tool |
+| `ctrl+b`, `ctrl+r` | Toggle all tool details / the focused or latest tool |
+| `alt+o`, `alt+d` | Open retained output / diff for the inspected tool when available |
 | `ctrl+t` | Toggle `<think>` tag display |
 | `ctrl+y` | Copy last response |
 | `ctrl+e` | Edit input with `$EDITOR` |
@@ -807,6 +816,10 @@ data erasure is required.
 | `esc` | Close an overlay or inline form, cancel an approval, or cancel active generation |
 | `ctrl+n`, `ctrl+l` | New conversation / clear view |
 | `ctrl+c` | Quit |
+
+Transcript search never indexes private model reasoning, raw tool
+arguments/results, or raw MCP structured content. Closing it restores the
+existing draft and reading position.
 
 ## Architecture
 

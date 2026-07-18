@@ -57,13 +57,6 @@ func TestRenderEntriesNestsReasoningAndDenselyStacksTools(t *testing.T) {
 		{ID: "one", Name: "read_file", Status: ToolStatusDone, Duration: 10 * time.Millisecond, Collapsed: true},
 		{ID: "two", Name: "bash", Status: ToolStatusDone, Duration: 20 * time.Millisecond, Collapsed: true},
 	}
-	m.toolCardMgr = NewToolCardManager(m.isDark)
-	for i, entry := range m.toolEntries {
-		m.toolCardMgr.AddCardWithID(entry.ID, entry.Name, ToolCardGeneric, time.Time{})
-		card := &m.toolCardMgr.Cards[i]
-		card.State = ToolCardSuccess
-		card.Duration = entry.Duration
-	}
 
 	plain := ansi.Strip(m.renderEntries())
 	assistantAt := strings.Index(plain, "assistant\n")
@@ -87,12 +80,44 @@ func TestRenderEntriesNestsReasoningAndDenselyStacksTools(t *testing.T) {
 	if m.toolHitRegions[1].EndCol <= 0 {
 		t.Fatalf("ToolCard header has no horizontal hit bound: %#v", m.toolHitRegions[1])
 	}
-	m.handleMouseClick(m.toolHitRegions[1].EndCol, m.toolHitRegions[1].Row)
+	secondRegion := m.toolHitRegions[1]
+	if secondRegion.StartCol <= 0 || secondRegion.StartCol >= secondRegion.EndCol {
+		t.Fatalf("ToolCard header does not exclude its left margin: %#v", secondRegion)
+	}
+	m.handleMouseClick(secondRegion.EndCol, secondRegion.Row)
 	if !m.toolEntries[0].Collapsed || !m.toolEntries[1].Collapsed {
 		t.Fatal("clicking immediately beyond a rendered header toggled a receipt")
 	}
-	m.handleMouseClick(0, m.toolHitRegions[1].Row)
+	m.handleMouseClick(secondRegion.StartCol-1, secondRegion.Row)
+	if !m.toolEntries[0].Collapsed || !m.toolEntries[1].Collapsed {
+		t.Fatal("clicking immediately before a rendered header toggled a receipt")
+	}
+	m.handleMouseClick(secondRegion.StartCol, secondRegion.Row)
 	if !m.toolEntries[0].Collapsed || m.toolEntries[1].Collapsed {
-		t.Fatalf("clicking the second rendered header toggled the wrong receipt: %#v", m.toolEntries)
+		t.Fatalf("clicking the first rendered header cell toggled the wrong receipt: %#v", m.toolEntries)
+	}
+	m.toolEntries[1].Collapsed = true
+	m.invalidateEntryCache()
+	m.refreshTranscript()
+	secondRegion = m.toolHitRegions[1]
+	m.handleMouseClick(secondRegion.EndCol-1, secondRegion.Row)
+	if !m.toolEntries[0].Collapsed || m.toolEntries[1].Collapsed {
+		t.Fatalf("clicking the last rendered header cell toggled the wrong receipt: %#v", m.toolEntries)
+	}
+	m.toolEntries[1].Collapsed = true
+	m.invalidateEntryCache()
+	m.refreshTranscript()
+	secondRegion = m.toolHitRegions[1]
+	m.handleMouseClick(secondRegion.StartCol, secondRegion.Row-1)
+	if m.toolEntries[0].Collapsed || !m.toolEntries[1].Collapsed {
+		t.Fatal("clicking the preceding dense header did not target only that ToolCard")
+	}
+	m.toolEntries[0].Collapsed = true
+	m.invalidateEntryCache()
+	m.refreshTranscript()
+	secondRegion = m.toolHitRegions[1]
+	m.handleMouseClick(secondRegion.StartCol, secondRegion.Row+1)
+	if !m.toolEntries[0].Collapsed || !m.toolEntries[1].Collapsed {
+		t.Fatal("clicking below a rendered ToolCard header toggled a receipt")
 	}
 }

@@ -18,6 +18,7 @@ The verification task runs:
 
 - the VitePress production website build and rendered internal-link check;
 - `go mod tidy -diff`;
+- the portable TinyVault provider-wrapper smoke test using synthetic metadata;
 - `golangci-lint`;
 - `go vet`;
 - the complete Go test suite with the race detector;
@@ -38,7 +39,7 @@ The repository currently fixes these versions or version ranges:
 | Website packages | VitePress 1.6.4 and Vue 3.5.39 |
 | CI linter | golangci-lint 2.12.2 |
 | Vulnerability scanner | govulncheck 1.6.0 in `Taskfile.yml` and CI |
-| Terminal contracts | Glyphrun 0.14.0 in CI, installed with Go 1.26.x; local-agent is then rebuilt with the Go 1.25.12 application toolchain |
+| Terminal contracts | Glyphrun 0.14.3 in CI, installed with Go 1.26.x; local-agent is then rebuilt with the Go 1.25.12 application toolchain |
 
 The local `golangci-lint` and `glyph` tasks use the executables on `PATH`; use
 the CI versions above when reproducing CI exactly.
@@ -48,11 +49,13 @@ the CI versions above when reproducing CI exactly.
 The verification workflow has four independent jobs:
 
 - Linux Go verification: module diff, golangci-lint, vet, race tests,
-  integration-tag compile-only coverage, and govulncheck;
+  integration-tag compile-only coverage, the provider-wrapper smoke test, and
+  govulncheck;
 - VitePress production build plus a test of links in the rendered site;
 - all committed Glyphrun contract hashes plus the complete deterministic
   terminal suite from `task glyphrun`;
-- a macOS build, `--version` smoke test, and Darwin-sensitive package tests.
+- a macOS build, `--version` and provider-wrapper smoke tests, and
+  Darwin-sensitive package tests.
 
 ## Terminal behavior
 

@@ -336,12 +336,19 @@ func (m *Model) renderCompletionPreview(width, rows int) string {
 		return ""
 	}
 	preview := cs.Preview
-	meta := completionPreviewMeta(preview)
+	meta := completionPreviewMeta(preview, m.glyphProfile)
 	if rows == 1 {
-		return m.styles.CompletionCategory.Render(truncateDisplay(meta, width))
+		return m.styles.CompletionCategory.Render(
+			truncateDisplayWithGlyphProfile(meta, width, m.glyphProfile),
+		)
 	}
-	lines := []string{m.styles.Divider.Render(strings.Repeat("─", max(1, width)))}
-	lines = append(lines, m.styles.CompletionCategory.Render(truncateDisplay(meta, width)))
+	glyphs := glyphSet(m.glyphProfile)
+	lines := []string{m.styles.Divider.Render(
+		strings.Repeat(glyphs.Horizontal, max(1, width)),
+	)}
+	lines = append(lines, m.styles.CompletionCategory.Render(
+		truncateDisplayWithGlyphProfile(meta, width, m.glyphProfile),
+	))
 	if preview.State == completionPreviewReady && rows > 2 {
 		contentLines := strings.Split(preview.Content, "\n")
 		if len(contentLines) == 0 || strings.TrimSpace(preview.Content) == "" {
@@ -352,13 +359,21 @@ func (m *Model) renderCompletionPreview(width, rows int) string {
 				break
 			}
 			contentLine = strings.ReplaceAll(contentLine, "\t", "    ")
-			lines = append(lines, m.styles.StatusText.Render(truncateDisplay("│ "+contentLine, width)))
+			lines = append(lines, m.styles.StatusText.Render(
+				truncateDisplayWithGlyphProfile(
+					glyphs.Vertical+" "+contentLine,
+					width,
+					m.glyphProfile,
+				),
+			))
 		}
 	}
 	return strings.Join(lines[:min(rows, len(lines))], "\n")
 }
 
-func completionPreviewMeta(preview completionPreview) string {
+func completionPreviewMeta(preview completionPreview, profiles ...GlyphProfile) string {
+	profile := resolveGlyphProfile(profiles...)
+	separator := glyphSeparator(profile)
 	path := sanitizeCompletionPreviewPath(preview.Path)
 	if path == "" {
 		path = "selection"
@@ -366,23 +381,23 @@ func completionPreviewMeta(preview completionPreview) string {
 	var state string
 	switch preview.State {
 	case completionPreviewLoading:
-		state = "loading…"
+		state = "loading" + glyphEllipsis(profile)
 	case completionPreviewReady:
 		state = formatCompletionPreviewBytes(preview.Size)
 		if preview.Truncated {
-			state += " · first 8 KiB"
+			state += separator + "first 8 KiB"
 		} else if preview.Message != "" {
-			state += " · " + preview.Message
+			state += separator + preview.Message
 		}
 	case completionPreviewBinary:
-		state = fmt.Sprintf("binary · %s", formatCompletionPreviewBytes(preview.Size))
+		state = "binary" + separator + formatCompletionPreviewBytes(preview.Size)
 		if preview.Message != "" && preview.Message != "Binary file" {
-			state = preview.Message + " · " + formatCompletionPreviewBytes(preview.Size)
+			state = preview.Message + separator + formatCompletionPreviewBytes(preview.Size)
 		}
 	case completionPreviewError:
 		state = preview.Message
 	case completionPreviewFolder:
-		state = "folder · " + preview.Message
+		state = "folder" + separator + preview.Message
 	case completionPreviewAgent:
 		state = preview.Message
 	default:
@@ -391,7 +406,7 @@ func completionPreviewMeta(preview completionPreview) string {
 	if strings.TrimSpace(state) == "" {
 		state = "preview unavailable"
 	}
-	return lipgloss.JoinHorizontal(lipgloss.Left, "Preview · ", path, " · ", state)
+	return lipgloss.JoinHorizontal(lipgloss.Left, "Preview", separator, path, separator, state)
 }
 
 func formatCompletionPreviewBytes(size int64) string {

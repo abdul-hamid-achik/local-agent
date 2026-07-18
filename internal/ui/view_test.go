@@ -4,8 +4,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 func TestFormatTokens(t *testing.T) {
@@ -51,7 +53,7 @@ func TestFormatDuration(t *testing.T) {
 	}
 }
 
-func TestTruncate(t *testing.T) {
+func TestTruncateDisplay(t *testing.T) {
 	tests := []struct {
 		name  string
 		input string
@@ -60,15 +62,27 @@ func TestTruncate(t *testing.T) {
 	}{
 		{"within_limit", "hello", 10, "hello"},
 		{"exact_limit", "hello", 5, "hello"},
-		{"over_limit", "hello world", 8, "hello..."},
-		{"much_over", "this is a long string", 10, "this is..."},
+		{"ascii_over_limit", "hello world", 8, "hello w…"},
+		{"cjk_uses_cell_width", "模型abcdef", 5, "模型…"},
+		{"zwj_emoji_stays_whole", "A👨‍👩‍👧‍👦BC", 4, "A👨‍👩‍👧‍👦…"},
+		{"combining_mark_stays_attached", "e\u0301clair", 4, "e\u0301cl…"},
+		{"cluster_wider_than_budget_is_not_split", "界a", 2, "…"},
+		{"one_cell_budget", "模型", 1, "…"},
+		{"zero_width_budget", "hello", 0, ""},
+		{"negative_width_budget", "hello", -1, ""},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := truncate(tt.input, tt.max)
+			got := truncateDisplay(tt.input, tt.max)
 			if got != tt.want {
-				t.Errorf("truncate(%q, %d) = %q, want %q", tt.input, tt.max, got, tt.want)
+				t.Errorf("truncateDisplay(%q, %d) = %q, want %q", tt.input, tt.max, got, tt.want)
+			}
+			if !utf8.ValidString(got) {
+				t.Fatalf("truncateDisplay returned invalid UTF-8: %q", got)
+			}
+			if tt.max > 0 && lipgloss.Width(got) > tt.max {
+				t.Fatalf("truncateDisplay width = %d, want <= %d: %q", lipgloss.Width(got), tt.max, got)
 			}
 		})
 	}

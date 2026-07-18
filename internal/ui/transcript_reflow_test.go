@@ -71,10 +71,10 @@ func TestWidthReflowKeepsPausedBlockAtItsScreenRow(t *testing.T) {
 		})
 	}
 	m.invalidateEntryCache()
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 
 	anchored := m.transcriptLayout.Records[4]
-	m.viewport.SetYOffset(anchored.StartRow)
+	m.setTranscriptYOffset(anchored.StartRow)
 	m.pauseFollow()
 
 	m.handleWindowSize(tea.WindowSizeMsg{Width: 46, Height: 14}, nil)
@@ -93,9 +93,9 @@ func TestWidthReflowKeepsPausedBlockAtItsScreenRow(t *testing.T) {
 	if m.anchorActive || !m.userScrolledUp {
 		t.Fatal("width reflow stole paused-follow ownership")
 	}
-	if screenRow := current.StartRow - m.viewport.YOffset(); screenRow != 0 {
+	if screenRow := current.StartRow - m.transcriptYOffset(); screenRow != 0 {
 		t.Fatalf("anchored block screen row = %d, want 0 (start=%d offset=%d)",
-			screenRow, current.StartRow, m.viewport.YOffset())
+			screenRow, current.StartRow, m.transcriptYOffset())
 	}
 }
 
@@ -109,22 +109,22 @@ func TestSemanticAnchorSurvivesInsertionBeforeBlock(t *testing.T) {
 		})
 	}
 	m.invalidateEntryCache()
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	anchored := m.transcriptLayout.Records[3]
-	m.viewport.SetYOffset(anchored.StartRow)
+	m.setTranscriptYOffset(anchored.StartRow)
 	m.pauseFollow()
 	capture := m.captureTranscriptReflowAnchor()
 
 	m.entries = append([]ChatEntry{{Kind: "system", Content: "inserted before history"}}, m.entries...)
 	m.invalidateEntryCache()
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	m.restoreTranscriptReflowAnchor(capture)
 
 	for _, record := range m.transcriptLayout.Records {
 		if record.BlockID != anchored.BlockID {
 			continue
 		}
-		if screenRow := record.StartRow - m.viewport.YOffset(); screenRow != 0 {
+		if screenRow := record.StartRow - m.transcriptYOffset(); screenRow != 0 {
 			t.Fatalf("inserted block moved semantic anchor to screen row %d", screenRow)
 		}
 		return
@@ -145,11 +145,10 @@ func TestToolDisclosureBeforeViewportPreservesSemanticReadingPosition(t *testing
 			Kind: "assistant", Content: strings.Repeat("reader block ", 7),
 		})
 	}
-	m.rebuildToolCardsFromEntries()
 	m.invalidateEntryCache()
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	anchored := m.transcriptLayout.Records[4]
-	m.viewport.SetYOffset(anchored.StartRow)
+	m.setTranscriptYOffset(anchored.StartRow)
 	m.pauseFollow()
 
 	m.toggleToolReceipt(0, false)
@@ -158,7 +157,7 @@ func TestToolDisclosureBeforeViewportPreservesSemanticReadingPosition(t *testing
 		if record.BlockID != anchored.BlockID {
 			continue
 		}
-		if screenRow := record.StartRow - m.viewport.YOffset(); screenRow != 0 {
+		if screenRow := record.StartRow - m.transcriptYOffset(); screenRow != 0 {
 			t.Fatalf("tool expansion moved anchored block to screen row %d", screenRow)
 		}
 		if !m.followPaused() {

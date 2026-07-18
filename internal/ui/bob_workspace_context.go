@@ -165,7 +165,7 @@ func (m *Model) handleBobWorkspaceContext(message BobWorkspaceContextMsg) {
 		return
 	}
 	followWasPaused := m.followPaused()
-	followYOffset := m.viewport.YOffset()
+	followYOffset := m.transcriptYOffset()
 	m.bobWorkspaceContext = bobWorkspaceContextState{generation: message.Generation}
 	if context, ok := normalizeBobWorkspaceContext(message.Digest); ok {
 		m.bobWorkspaceContext.card = newBobWorkspaceContextCard(context, m.isDark)
@@ -173,7 +173,7 @@ func (m *Model) handleBobWorkspaceContext(message BobWorkspaceContextMsg) {
 	}
 	if m.ready {
 		m.recalcViewportHeight()
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		m.restoreFollowPosition(followWasPaused, followYOffset)
 	}
 }

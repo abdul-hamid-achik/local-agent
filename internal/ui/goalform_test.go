@@ -562,7 +562,7 @@ func TestGoalFormIntegratedInlineFitsAndOwnsCursor(t *testing.T) {
 			m := newTestModel(t)
 			updated, _ := m.Update(tea.WindowSizeMsg{Width: size.width, Height: size.height})
 			m = updated.(*Model)
-			m.viewport.SetContent("TRANSCRIPT SENTINEL\ntranscript tail")
+			m.setTestTranscriptContent("TRANSCRIPT SENTINEL\ntranscript tail")
 			m.input.SetValue("saved composer draft")
 			if err := m.openGoalForm("integrated goal", false); err != nil {
 				t.Fatalf("open goal form: %v", err)

@@ -84,7 +84,13 @@ func (m *Model) composerHiddenRows() (earlier, later int) {
 		probe.MaxHeight = 0
 		probe.MaxContentHeight = m.input.MaxContentHeight
 		probe.ShowLineNumbers = m.input.ShowLineNumbers
-		configureComposerMode(&probe, m.isDark, m.presentedMode(), m.reducedMotion)
+		configureComposerModeWithGlyphProfile(
+			&probe,
+			m.isDark,
+			m.presentedMode(),
+			m.reducedMotion,
+			m.glyphProfile,
+		)
 		probe.SetWidth(width)
 		probe.SetValue(value)
 		total = max(1, probe.Height())
@@ -106,7 +112,8 @@ func (m *Model) queuedFollowUpHeld() bool {
 // because their completion may replace the active conversation authority.
 func (m *Model) composerEditable() bool {
 	if m.initializing || m.shuttingDown || m.overlay != OverlayNone ||
-		m.pendingApproval != nil || m.pendingPaste != nil || m.pendingSessionSwitch != nil || m.readScopePrompt != nil {
+		m.viewerModalActive() || m.pendingApproval != nil || m.pendingPaste != nil ||
+		m.pendingSessionSwitch != nil || m.readScopePrompt != nil {
 		return false
 	}
 	if m.state == StateIdle {
@@ -348,7 +355,7 @@ func (m *Model) blockSessionReplacementForHeldFollowUp(action string) bool {
 		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: notice})
 	}
 	m.invalidateEntryCache()
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	m.resumeFollow()
 	m.input.Focus()
 	m.recalcViewportHeight()
@@ -538,7 +545,7 @@ func (m *Model) submitPreparedInput(text string) tea.Cmd {
 		name, args, err := parseSlashCommandInput(text)
 		if err != nil {
 			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("command parse error: %v", err)})
-			m.viewport.SetContent(m.renderEntries())
+			m.refreshTranscript()
 			m.resumeFollow()
 			return nil
 		}
@@ -552,7 +559,7 @@ func (m *Model) submitPreparedInput(text string) tea.Cmd {
 				Kind:    "error",
 				Content: result.Error,
 			})
-			m.viewport.SetContent(m.renderEntries())
+			m.refreshTranscript()
 			m.resumeFollow()
 			return nil
 		}

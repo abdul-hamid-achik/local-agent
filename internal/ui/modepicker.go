@@ -9,11 +9,12 @@ type modeItem struct {
 	title       string
 	description string
 	current     bool
+	profile     GlyphProfile
 }
 
 func (i modeItem) Title() string {
 	if i.current {
-		return i.title + "  ✓"
+		return i.title + "  " + glyphSet(i.profile).Success
 	}
 	return i.title
 }
@@ -25,7 +26,8 @@ type ModePickerState struct {
 	List list.Model
 }
 
-func newModePickerState(current Mode, terminalWidth, terminalHeight int, isDark bool) *ModePickerState {
+func newModePickerState(current Mode, terminalWidth, terminalHeight int, isDark bool, profiles ...GlyphProfile) *ModePickerState {
+	profile := resolveGlyphProfile(profiles...)
 	definitions := []modeItem{
 		{mode: ModeNormal, title: "NORMAL", description: "Interactive work with approval-gated changes"},
 		{mode: ModePlan, title: "PLAN", description: "Explore and design without mutations"},
@@ -35,17 +37,19 @@ func newModePickerState(current Mode, terminalWidth, terminalHeight int, isDark 
 	selected := 0
 	for i := range definitions {
 		definitions[i].current = definitions[i].mode == current
+		definitions[i].profile = profile
 		if definitions[i].current {
 			selected = i
 		}
 		items[i] = definitions[i]
 	}
 
-	delegate := newPickerDelegate(isDark, false)
+	delegate := newPickerDelegate(isDark, false, profile)
 	width := pickerListWidth(terminalWidth, 52)
 	height := pickerListHeight(terminalHeight, len(items)*delegate.Height()+2, 4)
 	l := list.New(items, delegate, width, height)
 	configurePickerList(&l, isDark)
+	configurePickerListGlyphProfile(&l, profile)
 	l.Title = "Mode"
 	l.SetShowStatusBar(false)
 	l.SetShowHelp(false)
@@ -57,7 +61,7 @@ func newModePickerState(current Mode, terminalWidth, terminalHeight int, isDark 
 }
 
 func (m *Model) openModePicker() {
-	m.modePickerState = newModePickerState(m.mode, m.width, m.height, m.isDark)
+	m.modePickerState = newModePickerState(m.mode, m.width, m.height, m.isDark, m.glyphProfile)
 	m.overlay = OverlayModePicker
 	m.input.Blur()
 }

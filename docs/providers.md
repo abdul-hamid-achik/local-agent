@@ -17,6 +17,8 @@ Local Agent defaults to **Ollama on the local machine**. Remote chat is opt-in t
 | `openai_compatible` | Any OpenAI-style chat API (OpenAI, OpenRouter, local vLLM, …) |
 
 Remote profiles require **`privacy.local_only: false`** (or `LOCAL_AGENT_LOCAL_ONLY=false`).
+Their `base_url` must use HTTPS; plain HTTP is accepted only for
+`localhost` or literal loopback/unspecified addresses used by local servers.
 
 SuperGrok / X Premium chat subscriptions are **not** API credentials. Create a key at [console.x.ai](https://console.x.ai). No X Platform developer app is required.
 
@@ -89,11 +91,28 @@ tvault list -p local-agent --names-only
 ### Optional PATH wrapper (`scripts/local-agent-wrapper`)
 
 For day-to-day use you can install a transparent launcher so plain `local-agent`
-injects provider keys when TinyVault is available, and otherwise runs normally:
+injects provider keys when TinyVault is available, and otherwise runs normally.
+The helper is included under `scripts/` in Local Agent release archives and
+source checkouts; Homebrew installs only the main binary. A release-archive
+installation keeps the real binary in `~/.local/libexec/` so the wrapper can
+occupy the `local-agent` name on `PATH` without resolving itself.
 
 ```bash
-install -m 755 scripts/local-agent-wrapper ~/.local/bin/local-agent
-export PATH="$HOME/.local/bin:$HOME/go/bin:$PATH"   # ahead of Homebrew
+# Run these commands from an extracted Local Agent release archive.
+mkdir -p "$HOME/.local/bin" "$HOME/.local/libexec"
+install -m 755 local-agent "$HOME/.local/libexec/local-agent"
+install -m 755 scripts/local-agent-wrapper "$HOME/.local/bin/local-agent"
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+If the real binary already comes from `go install` or Homebrew, install only
+the wrapper; it also discovers `~/go/bin/local-agent`, Apple-silicon Homebrew,
+and ordinary `PATH` installations:
+
+```bash
+mkdir -p "$HOME/.local/bin"
+install -m 755 scripts/local-agent-wrapper "$HOME/.local/bin/local-agent"
+export PATH="$HOME/.local/bin:$HOME/go/bin:$PATH"
 ```
 
 Then:
@@ -146,7 +165,7 @@ API key **values** are read only from `os.Getenv(api_key_env)` (for example
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `LOCAL_AGENT_BIN` | auto | Absolute path to the real Local Agent binary |
+| `LOCAL_AGENT_BIN` | auto | Absolute path to the real Local Agent binary. An explicitly set invalid or relative path fails closed instead of falling back to another installation |
 | `LOCAL_AGENT_NO_VAULT` | `0` | `1` = never call TinyVault; always bare exec |
 | `LOCAL_AGENT_VAULT_PROJECT` | `local-agent` | TinyVault project name for key lookup / inject |
 | `LOCAL_AGENT_VAULT_KEYS` | `XAI_API_KEY,OPENAI_API_KEY,OPENROUTER_API_KEY,ANTHROPIC_API_KEY` | Comma-separated key names to inject if present |

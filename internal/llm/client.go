@@ -31,6 +31,39 @@ func inferenceNotStarted(err error) error {
 	return fmt.Errorf("%w: %w", ErrInferenceNotStarted, err)
 }
 
+// remoteInferenceError marks an error produced after a non-Ollama provider
+// request crossed the dispatch boundary. Its text remains available to the
+// agent for transient diagnostics, while IsRemoteInferenceError lets the agent
+// replace that text before crossing a transcript or durable-session boundary.
+// The concrete type is private so arbitrary clients cannot forge remote
+// provenance and accidentally hide useful local Ollama diagnostics.
+type remoteInferenceError struct {
+	cause error
+}
+
+func (err *remoteInferenceError) Error() string {
+	return err.cause.Error()
+}
+
+func (err *remoteInferenceError) Unwrap() error {
+	return err.cause
+}
+
+func markRemoteInferenceError(err error) error {
+	if err == nil || IsRemoteInferenceError(err) {
+		return err
+	}
+	return &remoteInferenceError{cause: err}
+}
+
+// IsRemoteInferenceError reports whether err carries exact provenance from a
+// dispatched OpenAI-compatible inference request. It deliberately does not
+// classify Ollama or host-side preflight failures by matching error strings.
+func IsRemoteInferenceError(err error) bool {
+	var remoteErr *remoteInferenceError
+	return errors.As(err, &remoteErr)
+}
+
 // Client is the interface for LLM providers.
 type Client interface {
 	// ChatStream sends messages to the LLM and streams the response.

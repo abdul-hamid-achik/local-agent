@@ -12,39 +12,72 @@ const (
 	minTerminalHeight = 12
 )
 
-// layoutConfig holds adaptive layout parameters based on terminal size.
+// layoutConfig holds adaptive parameters selected from one measured component.
 type layoutConfig struct {
+	Capabilities   LayoutCapabilities
 	ToolIndent     string
 	ToolSummaryMax int
 	ArgsTruncMax   int
 	ResultTruncMax int
 }
 
-// currentLayout returns layout parameters adapted to the current terminal size
-// and user compact preference.
+// currentLayout returns layout parameters derived from the transcript
+// component's final work rectangle and the explicit compact preference.
 func (m *Model) currentLayout() layoutConfig {
-	if m.forceCompact || m.width < 80 || m.height < 24 {
+	return layoutConfigFor(m.transcriptLayoutCapabilities())
+}
+
+func layoutConfigFor(capabilities LayoutCapabilities) layoutConfig {
+	switch capabilities.Density {
+	case LayoutDensityCompact:
 		return layoutConfig{
+			Capabilities:   capabilities,
 			ToolIndent:     "  ",
 			ToolSummaryMax: 40,
 			ArgsTruncMax:   100,
 			ResultTruncMax: 150,
 		}
-	}
-	if m.width > 120 {
+	case LayoutDensitySpacious:
 		return layoutConfig{
+			Capabilities:   capabilities,
 			ToolIndent:     "      ",
 			ToolSummaryMax: 80,
 			ArgsTruncMax:   300,
 			ResultTruncMax: 500,
 		}
+	default:
+		return layoutConfig{
+			Capabilities:   capabilities,
+			ToolIndent:     "      ",
+			ToolSummaryMax: 60,
+			ArgsTruncMax:   200,
+			ResultTruncMax: 300,
+		}
 	}
-	return layoutConfig{
-		ToolIndent:     "      ",
-		ToolSummaryMax: 60,
-		ArgsTruncMax:   200,
-		ResultTruncMax: 300,
+}
+
+// transcriptLayoutCapabilities evaluates the allocated transcript viewport,
+// not the outer terminal. The viewport dimensions are authoritative once the
+// Bubble Tea parent has measured it. Before that, only the parent's planned
+// pane width is known; height remains zero so presentation fails safe.
+func (m *Model) transcriptLayoutCapabilities() LayoutCapabilities {
+	paneWidth := m.viewport.Width()
+	workHeight := m.viewport.Height()
+	if paneWidth <= 0 {
+		paneWidth = m.chatPaneWidth()
 	}
+
+	workRect := transcriptWorkRect(NewCellRect(0, 0, paneWidth, workHeight))
+	return DeriveLayoutCapabilities(workRect, LayoutCapabilityOptions{
+		ForceCompact: m.forceCompact,
+	})
+}
+
+// transcriptWorkRect applies the transcript's complete horizontal chrome to
+// an already allocated viewport rectangle. Callers must split the parent frame
+// first; this helper never infers capacity from the outer terminal.
+func transcriptWorkRect(viewportRect CellRect) CellRect {
+	return Inset(viewportRect, Insets{Right: transcriptContentChromeColumns})
 }
 
 // chatPaneWidth is the width owned by the viewport component. Keep this in one
@@ -58,15 +91,25 @@ func (m *Model) chatPaneWidth() int {
 	return w
 }
 
-// chatContentWidth is the single wrapping width used by both Glamour and the
-// transcript renderer. Keeping it stable across height-only resizes preserves
-// completed-message caches and avoids unnecessary full transcript work.
+// chatContentWidth is the transcript WorkWidth used by wide structures and by
+// the current Markdown migration. Readable prose must use
+// transcriptLayoutCapabilities().ProseWidth once the renderer can distinguish
+// prose blocks from fences and tables; applying that cap here would incorrectly
+// narrow every transcript surface. Keeping WorkWidth stable across height-only
+// resizes preserves completed-message caches.
 func (m *Model) chatContentWidth() int {
-	width := m.chatPaneWidth() - 6
-	if width < 14 {
-		width = 14
+	width := m.chatPaneWidth() - transcriptContentChromeColumns
+	if width < transcriptMinimumWorkColumns {
+		width = transcriptMinimumWorkColumns
 	}
 	return width
+}
+
+// chatProseWidth is the readable measure for conversational text. It is
+// intentionally narrower than WorkWidth on large terminals; structural
+// surfaces continue to use chatContentWidth.
+func (m *Model) chatProseWidth() int {
+	return max(1, min(m.chatContentWidth(), m.transcriptLayoutCapabilities().ProseWidth))
 }
 
 // narrowTerminalHint returns a recovery-oriented empty state instead of

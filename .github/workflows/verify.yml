@@ -11,6 +11,11 @@ jobs:
     name: Go 1.25 verification
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      # setup-go v6 prefers go.mod's toolchain directive. Pin the minimum
+      # supported application toolchain and prevent an automatic upgrade so
+      # this job proves the advertised Go 1.25 contract.
+      GOTOOLCHAIN: local
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -18,12 +23,15 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
-          go-version-file: go.mod
+          go-version: '1.25.12'
           cache: true
           cache-dependency-path: go.sum
 
       - name: Check module files
         run: go mod tidy -diff
+
+      - name: Test portable provider wrapper
+        run: sh scripts/local-agent-wrapper_test.sh
 
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
@@ -48,6 +56,8 @@ jobs:
     name: VitePress site verification
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      GOTOOLCHAIN: local
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -55,7 +65,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
-          go-version-file: go.mod
+          go-version: '1.25.12'
           cache: true
           cache-dependency-path: go.sum
 
@@ -80,6 +90,8 @@ jobs:
     name: Glyphrun deterministic terminal suite
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      GOTOOLCHAIN: local
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -108,7 +120,7 @@ jobs:
       - name: Set up application Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
-          go-version-file: go.mod
+          go-version: '1.25.12'
           cache: true
           cache-dependency-path: go.sum
 
@@ -146,6 +158,8 @@ jobs:
     name: Darwin build and POSIX smoke tests
     runs-on: macos-latest
     timeout-minutes: 10
+    env:
+      GOTOOLCHAIN: local
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -153,7 +167,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
-          go-version-file: go.mod
+          go-version: '1.25.12'
           cache: true
           cache-dependency-path: go.sum
 
@@ -164,6 +178,9 @@ jobs:
 
       - name: Run binary smoke test
         run: '"${RUNNER_TEMP}/local-agent" --version'
+
+      - name: Test portable provider wrapper
+        run: sh scripts/local-agent-wrapper_test.sh
 
       - name: Run Darwin-sensitive package tests
         run: go test ./cmd/local-agent ./internal/agent ./internal/config ./internal/db ./internal/mcp ./internal/safeio -count=1

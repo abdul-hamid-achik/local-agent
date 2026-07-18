@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -611,6 +612,55 @@ func TestRenderUnifiedDiffBudgetLabelsOnlyVisibleFacts(t *testing.T) {
 	}
 }
 
+func TestRenderUnifiedDiffASCIIChromeCoversHeaderMetaAndContinuation(t *testing.T) {
+	styles := NewStyles(true)
+	metaLines := []DiffLine{
+		{Kind: DiffEllipsis, Content: "… unchanged lines"},
+		{Kind: DiffOmitted, Content: "… bounded omission · open viewer"},
+	}
+	meta := ansi.Strip(renderUnifiedDiffAtWidth(
+		"internal/ui/a-very-long-component-name.go",
+		metaLines,
+		styles,
+		0,
+		28,
+		GlyphASCII,
+	))
+	for _, forbidden := range []string{"…", "·"} {
+		if strings.Contains(meta, forbidden) {
+			t.Fatalf("ASCII diff meta retained %q:\n%s", forbidden, meta)
+		}
+	}
+	for _, want := range []string{"~", "... unchanged lines", "... bounded omission |"} {
+		if !strings.Contains(meta, want) {
+			t.Fatalf("ASCII diff meta omitted %q:\n%s", want, meta)
+		}
+	}
+	assertRenderedLinesFit(t, meta, 28)
+
+	wrappedLines := []DiffLine{
+		{Kind: DiffAdded, Content: strings.Repeat("wrapped-value-", 12), NewLine: 1},
+		{Kind: DiffAdded, Content: "later", NewLine: 2},
+	}
+	continuation := ansi.Strip(renderUnifiedDiffAtWidth(
+		"internal/ui/a-very-long-component-name.go",
+		wrappedLines,
+		styles,
+		3,
+		38,
+		GlyphASCII,
+	))
+	for _, forbidden := range []string{"…", "·"} {
+		if strings.Contains(continuation, forbidden) {
+			t.Fatalf("ASCII diff continuation retained %q:\n%s", forbidden, continuation)
+		}
+	}
+	if !strings.Contains(continuation, "... line continues | 1 more lines") {
+		t.Fatalf("ASCII diff lost its bounded continuation receipt:\n%s", continuation)
+	}
+	assertRenderedLinesFit(t, continuation, 38)
+}
+
 func TestResolveDiffGutterNumbersRejectsInconsistentTypedCoordinates(t *testing.T) {
 	tests := map[string][]DiffLine{
 		"jump inside hunk": {
@@ -719,7 +769,7 @@ func TestFileWriteDiffRunsAsyncClearsSnapshotsAndDiscardsStaleResult(t *testing.
 		t.Fatalf("pending diff retained ephemeral state: %#v", entry)
 	}
 	var loadingView strings.Builder
-	m.renderToolGroup(&loadingView, 0)
+	m.renderToolGroup(&loadingView, testToolChatEntry(0))
 	loading := strings.ToLower(ansi.Strip(loadingView.String()))
 	if !strings.Contains(loading, "diff loading") || strings.Contains(loading, "verified") {
 		t.Fatalf("pending card is not a static truthful loading receipt:\n%s", loading)
@@ -741,7 +791,7 @@ func TestFileWriteDiffRunsAsyncClearsSnapshotsAndDiscardsStaleResult(t *testing.
 		t.Fatalf("matching diff result was not installed: %#v", m.toolEntries[0])
 	}
 	var completedView strings.Builder
-	m.renderToolGroup(&completedView, 0)
+	m.renderToolGroup(&completedView, testToolChatEntry(0))
 	rendered := ansi.Strip(completedView.String())
 	for _, want := range []string{"sample.go", "+1 -1", "@@ -", "const Value = 1", "const Value = 2"} {
 		if !strings.Contains(rendered, want) {
@@ -876,22 +926,25 @@ func TestLiveDiffInstallationKeepsRowsBeyondThirtyInspectableAndMarksOversize(t 
 		ID: "write-many", Name: "write_file", Summary: "many.txt", Status: ToolStatusDone,
 		DiffPending: true, DiffGeneration: 7,
 	}}
-	m.toolCardMgr = NewToolCardManager(m.isDark)
-	m.toolCardMgr.AddCardWithID("write-many", "write_file", ToolCardFile, time.Now())
-	m.toolCardMgr.Cards[0].State = ToolCardSuccess
 
 	updated, _ := m.Update(diffBuildResultMsg{
 		Generation: 7, ToolID: "write-many", ToolName: "write_file", Lines: patch, Available: true,
 	})
 	m = updated.(*Model)
 	var expanded strings.Builder
-	m.renderToolGroup(&expanded, 0)
-	if plain := ansi.Strip(expanded.String()); !strings.Contains(plain, "after-31") {
-		t.Fatalf("expanded bounded patch hid row 31:\n%s", plain)
+	m.renderToolGroup(&expanded, testToolChatEntry(0))
+	if plain := ansi.Strip(expanded.String()); strings.Contains(plain, "after-31") ||
+		!strings.Contains(plain, "more lines") {
+		t.Fatalf("inline patch did not defer deep rows with an honest receipt:\n%s", plain)
+	}
+	if !slices.ContainsFunc(m.toolEntries[0].DiffLines, func(line DiffLine) bool {
+		return strings.Contains(line.Content, "after-31")
+	}) {
+		t.Fatal("viewer projection lost a retained diff row beyond the inline cap")
 	}
 	m.toolEntries[0].Collapsed = true
 	var collapsed strings.Builder
-	m.renderToolGroup(&collapsed, 0)
+	m.renderToolGroup(&collapsed, testToolChatEntry(0))
 	if strings.Contains(ansi.Strip(collapsed.String()), "after-31") {
 		t.Fatalf("collapsed card leaked patch body:\n%s", ansi.Strip(collapsed.String()))
 	}

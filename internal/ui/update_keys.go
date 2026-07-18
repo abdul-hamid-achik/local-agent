@@ -44,6 +44,15 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	if m.cortexDecisionActive() {
 		return m.updateCortexDecisionKey(msg), true
 	}
+	// Stacked viewers own every key except the already-handled host authority
+	// surfaces and graceful global quit. The transcript and composer must not
+	// react behind the modal.
+	if m.viewerModalActive() {
+		if key.Matches(msg, m.keys.Quit) {
+			return m.beginShutdown(), true
+		}
+		return m.handleViewerKey(msg), true
+	}
 	// End is the transcript's explicit recovery action whenever the composer
 	// is empty or temporarily unavailable. Handle it before owned busy-state
 	// guards so the advertised action cannot be swallowed by an in-flight
@@ -52,6 +61,12 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		m.cancelReceiptInspection(true)
 		m.resumeFollow()
 		return nil, true
+	}
+	// Transcript search is a read-only, non-printable global gesture. It stays
+	// available while a turn streams or a background operation owns the
+	// composer, but never preempts host decisions, viewers, or another overlay.
+	if m.overlay == OverlayNone && key.Matches(msg, m.keys.TranscriptSearch) {
+		return m.openTranscriptSearch(), true
 	}
 	if cmd, handled := m.handleBusyOperationKey(msg); handled {
 		return cmd, true

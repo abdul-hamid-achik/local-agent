@@ -77,7 +77,7 @@ func TestHelpKeepsKeysAndContextTruthfulAtNarrowWidth(t *testing.T) {
 	m := newTestModel(t)
 	foundContext := false
 	for _, row := range m.keyHelpRows() {
-		if row.key == "?" && strings.Contains(strings.ToLower(row.desc), "empty input") {
+		if row.key == "f1" && strings.Contains(strings.ToLower(row.desc), "empty input") {
 			foundContext = true
 			break
 		}

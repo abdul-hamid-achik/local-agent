@@ -3,6 +3,8 @@ package ui
 import (
 	"fmt"
 	"strings"
+
+	"github.com/abdul-hamid-achik/local-agent/internal/ecosystem"
 )
 
 // ToolType represents the category of a tool for rendering.
@@ -18,29 +20,92 @@ const (
 	ToolTypeMemory
 )
 
-// classifyTool returns the ToolType based on the tool name.
-func classifyTool(name string) ToolType {
-	lower := strings.ToLower(name)
-	switch {
-	case strings.Contains(lower, "bash") || strings.Contains(lower, "exec") || strings.Contains(lower, "shell") || strings.Contains(lower, "command"):
-		return ToolTypeBash
-	case strings.Contains(lower, "web") || strings.Contains(lower, "fetch") || strings.Contains(lower, "http") || strings.Contains(lower, "curl") || strings.Contains(lower, "browse"):
-		return ToolTypeWeb
-	case strings.Contains(lower, "search") || strings.Contains(lower, "grep") || strings.Contains(lower, "find"):
-		return ToolTypeSearch
-	case strings.Contains(lower, "read") || strings.Contains(lower, "view") || strings.Contains(lower, "cat"):
-		return ToolTypeFileRead
-	case strings.Contains(lower, "write") || strings.Contains(lower, "edit") || strings.Contains(lower, "create_file") || strings.Contains(lower, "patch"):
-		return ToolTypeFileWrite
-	case strings.Contains(lower, "memory") || strings.Contains(lower, "remember") || strings.Contains(lower, "forget"):
-		return ToolTypeMemory
-	default:
-		return ToolTypeDefault
-	}
+var exactToolTypes = map[string]ToolType{
+	// Local Agent built-ins and exact compatibility aliases.
+	"bash":         ToolTypeBash,
+	"exec":         ToolTypeBash,
+	"exec_command": ToolTypeBash,
+	"execute_bash": ToolTypeBash,
+	"run_command":  ToolTypeBash,
+	"shell":        ToolTypeBash,
+	"shell_exec":   ToolTypeBash,
+
+	"read":      ToolTypeFileRead,
+	"read_file": ToolTypeFileRead,
+	"file_view": ToolTypeFileRead,
+	"view_file": ToolTypeFileRead,
+	"cat_file":  ToolTypeFileRead,
+
+	"write":       ToolTypeFileWrite,
+	"write_file":  ToolTypeFileWrite,
+	"edit":        ToolTypeFileWrite,
+	"edit_file":   ToolTypeFileWrite,
+	"create_file": ToolTypeFileWrite,
+	"apply_patch": ToolTypeFileWrite,
+	"patch":       ToolTypeFileWrite,
+
+	"grep":                ToolTypeSearch,
+	"search":              ToolTypeSearch,
+	"find":                ToolTypeSearch,
+	"glob":                ToolTypeSearch,
+	"rg":                  ToolTypeSearch,
+	"ripgrep":             ToolTypeSearch,
+	"vecgrep_search":      ToolTypeSearch,
+	"veclite_search":      ToolTypeSearch,
+	"hitspec_search_web":  ToolTypeSearch,
+	"mcphub_search_tools": ToolTypeSearch,
+
+	"web_search":  ToolTypeWeb,
+	"fetch":       ToolTypeWeb,
+	"fetch_url":   ToolTypeWeb,
+	"http_get":    ToolTypeWeb,
+	"curl":        ToolTypeWeb,
+	"browse_page": ToolTypeWeb,
+
+	"memory_store":  ToolTypeMemory,
+	"memory_save":   ToolTypeMemory,
+	"remember_fact": ToolTypeMemory,
+	"forget_key":    ToolTypeMemory,
 }
 
-func toolCardKindForTool(name string) ToolCardKind {
-	switch classifyTool(name) {
+// classifyTool returns the ToolType for an exact, local operation name. It
+// deliberately rejects namespaced calls: their visible name is
+// provider-controlled and may only acquire semantics through a normalized
+// ecosystem route.
+func classifyTool(name string) ToolType {
+	if strings.Contains(name, "__") {
+		return ToolTypeDefault
+	}
+	return classifyExactToolOperation(name)
+}
+
+// classifyProjectedTool admits a namespaced operation only when the
+// ecosystem parser produced an exact normalized route for it. Unknown
+// discovery/build/general tools stay generic rather than inheriting behavior
+// from suggestive substrings.
+func classifyProjectedTool(name string, projection ecosystem.ToolProjection) ToolType {
+	if !strings.Contains(name, "__") {
+		return classifyTool(name)
+	}
+	projection = projection.Normalize()
+	if projection.Route.Server == "" || projection.Route.Tool == "" ||
+		projection.Operation != projection.Route.Tool {
+		return ToolTypeDefault
+	}
+	return classifyExactToolOperation(projection.Route.Tool)
+}
+
+func classifyExactToolOperation(operation string) ToolType {
+	operation = strings.ToLower(strings.TrimSpace(operation))
+	operation = strings.ReplaceAll(operation, "-", "_")
+	if toolType, ok := exactToolTypes[operation]; ok {
+		return toolType
+	}
+	return ToolTypeDefault
+}
+
+func toolCardKindForProjectedTool(name string, projection ecosystem.ToolProjection) ToolCardKind {
+	switch classifyProjectedTool(name, projection) {
 	case ToolTypeFileRead, ToolTypeFileWrite:
 		return ToolCardFile
 	case ToolTypeBash:
@@ -52,8 +117,48 @@ func toolCardKindForTool(name string) ToolCardKind {
 	}
 }
 
+func previewModeForProjectedTool(
+	name string,
+	projection ecosystem.ToolProjection,
+) ToolPreviewMode {
+	operation := name
+	if strings.Contains(name, "__") {
+		normalized := projection.Normalize()
+		if normalized.Route.Server == "" || normalized.Route.Tool == "" ||
+			normalized.Operation != normalized.Route.Tool {
+			return ToolPreviewGeneric
+		}
+		operation = normalized.Route.Tool
+	}
+	normalizedOperation := strings.ReplaceAll(
+		strings.ToLower(strings.TrimSpace(operation)),
+		"-",
+		"_",
+	)
+	// A diff is read-only in the execution policy, but its result body still
+	// benefits from the edit/diff preview budget.
+	if normalizedOperation == "diff" {
+		return ToolPreviewEdit
+	}
+	switch classifyExactToolOperation(operation) {
+	case ToolTypeFileRead:
+		return ToolPreviewRead
+	case ToolTypeBash:
+		return ToolPreviewExec
+	case ToolTypeSearch:
+		return ToolPreviewSearch
+	case ToolTypeFileWrite:
+		return ToolPreviewEdit
+	default:
+		return ToolPreviewGeneric
+	}
+}
+
 // toolIcon returns a type-specific icon for the tool.
 func toolIcon(tt ToolType, status ToolStatus) string {
+	if status == ToolStatusCancelled {
+		return "–"
+	}
 	if status == ToolStatusError {
 		return "✗"
 	}

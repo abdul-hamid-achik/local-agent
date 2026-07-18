@@ -64,7 +64,7 @@ func (m *Model) captureCompletionTranscriptAnchor() completionTranscriptAnchor {
 	if m == nil || !m.ready {
 		return completionTranscriptAnchor{}
 	}
-	return completionTranscriptAnchor{valid: true, paused: m.followPaused(), yOffset: m.viewport.YOffset()}
+	return completionTranscriptAnchor{valid: true, paused: m.followPaused(), yOffset: m.transcriptYOffset()}
 }
 
 func (m *Model) restoreCompletionTranscriptAnchor(anchor completionTranscriptAnchor) {

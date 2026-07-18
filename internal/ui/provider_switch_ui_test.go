@@ -88,6 +88,44 @@ func TestProviderSwitchCancellationFailsClosedBeforeMutation(t *testing.T) {
 	}
 }
 
+func TestProviderSwitchFailureUsesSafeCopyAndCannotPersistRawError(t *testing.T) {
+	m := newTestModel(t)
+	m.providerSwitchRunning = true
+	m.providerSwitchToken = 41
+	secretURL := "https://user:super-secret@example.com/v1?token=super-secret#private"
+
+	updated, _ := m.Update(providerSwitchResultMsg{
+		Token: 41,
+		Name:  "remote",
+		Err:   errors.New("provider rejected " + secretURL),
+	})
+	m = updated.(*Model)
+	if m.providerSwitchRunning {
+		t.Fatal("failed receipt left provider switch running")
+	}
+	if len(m.entries) == 0 {
+		t.Fatal("failed receipt did not append host-owned copy")
+	}
+	entry := m.entries[len(m.entries)-1]
+	if entry.Kind != "error" || entry.Content != ProviderFailureCopy {
+		t.Fatalf("provider failure entry = %#v", entry)
+	}
+	if strings.Contains(entry.Content, "super-secret") || strings.Contains(entry.Content, secretURL) {
+		t.Fatalf("raw provider error entered transcript: %q", entry.Content)
+	}
+
+	raw, err := encodeSessionState(m)
+	if err != nil {
+		t.Fatalf("encode failed provider session: %v", err)
+	}
+	if strings.Contains(raw, "super-secret") || strings.Contains(raw, secretURL) {
+		t.Fatalf("raw provider error entered session snapshot: %s", raw)
+	}
+	if !strings.Contains(raw, ProviderFailureCopy) {
+		t.Fatalf("safe provider failure copy missing from session: %s", raw)
+	}
+}
+
 func TestProviderSwitchIgnoresStaleReceipt(t *testing.T) {
 	m := newTestModel(t)
 	m.modelManager = providerSwitchTestManager(t)

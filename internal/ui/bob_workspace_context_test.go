@@ -119,7 +119,7 @@ func TestBobWorkspaceContextFooterRowsThemeAndPausedFollowAnchor(t *testing.T) {
 	m := newTestModel(t)
 	initialHeight := m.viewport.Height()
 	setScrollableTranscript(m)
-	m.viewport.SetYOffset(5)
+	m.setTranscriptYOffset(5)
 	m.pauseFollow()
 
 	updated, _ := m.Update(BobWorkspaceContextMsg{Generation: 1, Digest: testBobWorkspaceDigest("go-agent-tool", "clean", 0)})
@@ -127,7 +127,7 @@ func TestBobWorkspaceContextFooterRowsThemeAndPausedFollowAnchor(t *testing.T) {
 	if got, want := m.viewport.Height(), initialHeight-1; got != want {
 		t.Fatalf("viewport height with Bob row = %d, want %d", got, want)
 	}
-	if got := m.viewport.YOffset(); got != 5 || !m.followPaused() {
+	if got := m.transcriptYOffset(); got != 5 || !m.followPaused() {
 		t.Fatalf("Bob row moved paused transcript: offset=%d paused=%v", got, m.followPaused())
 	}
 

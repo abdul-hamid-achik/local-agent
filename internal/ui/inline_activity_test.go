@@ -29,7 +29,7 @@ func TestInlineLivenessExplainsCompactionAndPermission(t *testing.T) {
 	}
 
 	m.pendingApproval = &ToolApprovalMsg{ToolName: "bash"}
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	if got := ansi.Strip(m.renderEntries()); !strings.Contains(got, "Waiting for permission below…") {
 		t.Fatalf("permission liveness = %q", got)
 	}

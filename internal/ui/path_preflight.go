@@ -70,6 +70,11 @@ func (m *Model) handlePromptPathPreflightResult(msg PromptPathPreflightResultMsg
 		releaseWriteGrants(msg.WriteGrants)
 		return nil
 	}
+	// The preflight receipt may install an external-scope decision or restore
+	// and submit the held draft. Search can have opened while the filesystem
+	// inspection was in flight, so release it before either path changes focus
+	// or footer authority.
+	m.preemptTranscriptSearch()
 	if msg.MoreCandidates {
 		releaseReadGrants(msg.Grants)
 		releaseWriteGrants(msg.WriteGrants)
@@ -86,7 +91,7 @@ func (m *Model) handlePromptPathPreflightResult(msg PromptPathPreflightResultMsg
 			Content: guidance,
 		})
 		m.recalcViewportHeight()
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		m.gotoBottomIfFollowing()
 		return nil
 	}
@@ -108,7 +113,7 @@ func (m *Model) handlePromptPathPreflightResult(msg PromptPathPreflightResultMsg
 		})
 		m.invalidateEntryCache()
 		m.recalcViewportHeight()
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		m.gotoBottomIfFollowing()
 		return nil
 	}

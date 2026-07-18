@@ -441,8 +441,10 @@ func (m *Model) openGoalRecovery() {
 		m.renderGoalInspector(snapshot)
 		return
 	}
+	m.preemptTranscriptSearch()
 	m.goalRecoveryState = NewGoalRecovery(projection.items, GoalRecoveryOptions{
 		Width: m.width, Height: m.height, IsDark: m.isDark, ReducedMotion: m.reducedMotion,
+		GlyphProfile: m.glyphProfile,
 	})
 	m.overlayParent = OverlayGoalInspector
 	m.overlay = OverlayGoalRecovery

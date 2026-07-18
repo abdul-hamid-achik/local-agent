@@ -23,13 +23,13 @@ func TestSinglePaneWidthTracksTerminal(t *testing.T) {
 			}
 			m.entries = []ChatEntry{{Kind: "assistant", Content: strings.Repeat("longword ", 80)}}
 			m.invalidateEntryCache()
-			m.viewport.SetContent(m.renderEntries())
+			m.refreshTranscript()
 			assertRenderedLinesFit(t, m.View().Content, width)
 		})
 	}
 }
 
-func TestWideTranscriptUsesAvailableTerminalWidth(t *testing.T) {
+func TestWideTranscriptSeparatesReadableProseFromWorkWidth(t *testing.T) {
 	const terminalWidth = 200
 	m := newTestModel(t)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: terminalWidth, Height: 30})
@@ -54,11 +54,23 @@ func TestWideTranscriptUsesAvailableTerminalWidth(t *testing.T) {
 			usedWidth = max(usedWidth, lipgloss.Width(line))
 		}
 	}
-	if usedWidth <= 120 {
-		t.Fatalf("wide assistant prose used only %d columns; transcript still appears capped:\n%s", usedWidth, rendered)
+	if usedWidth < 60 || usedWidth > ProseTargetCandidate {
+		t.Fatalf("wide assistant prose used %d columns; want a readable measure in [60,%d]:\n%s",
+			usedWidth, ProseTargetCandidate, rendered)
 	}
 	if usedWidth > m.chatPaneWidth() {
 		t.Fatalf("wide assistant prose overflowed pane: used=%d pane=%d", usedWidth, m.chatPaneWidth())
+	}
+
+	m.entries = []ChatEntry{{
+		Kind:    "assistant",
+		Content: "```text\n" + strings.Repeat("x", 120) + "\n```",
+	}}
+	m.invalidateRenderedCache()
+	rendered = ansi.Strip(m.renderEntries())
+	if used := widestDisplayLine(rendered); used <= ProseTargetCandidate || used > m.chatPaneWidth() {
+		t.Fatalf("wide work block used %d columns; want (%d,%d]:\n%s",
+			used, ProseTargetCandidate, m.chatPaneWidth(), rendered)
 	}
 }
 

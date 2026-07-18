@@ -1,9 +1,9 @@
  ╭──────────────────────────╮
  │ Agent Viewer             │
- │ Consultation · active    │
+ │ Consultation #<digest> … │
  │ Subagents                │
  │ … generalist · running   │
- │   qwen3.5:0.8b · local   │
+ │   consulting · qwen3.5:… │
  │                          │
  │ Activity                 │
  │ No public child events … │

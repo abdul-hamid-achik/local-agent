@@ -141,6 +141,7 @@ func (m *Model) renderCompletionModalView() (string, *tea.Cursor) {
 		previewRows = min(6, max(1, (remainingRows+1)/2))
 	}
 	itemRows := max(1, remainingRows-previewRows)
+	inlinePreview := cs.Kind == "attachments" && previewRows == 0
 
 	var b strings.Builder
 
@@ -150,7 +151,11 @@ func (m *Model) renderCompletionModalView() (string, *tea.Cursor) {
 		case "command":
 			title = "Commands"
 		case "attachments":
-			title = "Attach Files & Agents"
+			if inlinePreview {
+				title = "Attach Files · Preview"
+			} else {
+				title = "Attach Files & Agents"
+			}
 		case "skills":
 			title = "Skills"
 		default:
@@ -167,14 +172,17 @@ func (m *Model) renderCompletionModalView() (string, *tea.Cursor) {
 	}
 
 	filterY := strings.Count(b.String(), "\n")
-	b.WriteString(m.styles.FocusIndicator.Render(completionFilterPrompt))
-	filterX := lipgloss.Width(completionFilterPrompt)
+	filterPrompt := completionFilterPromptForGlyphProfile(m.glyphProfile)
+	b.WriteString(m.styles.FocusIndicator.Render(filterPrompt))
+	filterX := lipgloss.Width(filterPrompt)
 	b.WriteString(filter.View())
 	b.WriteString("\n")
 	filterCursor := offsetCursor(filter.Cursor(), filterX, filterY)
 
 	if showDivider {
-		b.WriteString(m.styles.Divider.Render(strings.Repeat("─", contentW)))
+		b.WriteString(m.styles.Divider.Render(
+			strings.Repeat(glyphSet(m.glyphProfile).Horizontal, contentW),
+		))
 		b.WriteString("\n")
 	}
 
@@ -201,6 +209,7 @@ func (m *Model) renderCompletionModalView() (string, *tea.Cursor) {
 			start = max(0, end-itemRows)
 		}
 
+		glyphs := glyphSet(m.glyphProfile)
 		for i := start; i < end; i++ {
 			item := items[i]
 			displayLabel := sanitizeTerminalSingleLine(item.Label)
@@ -208,7 +217,7 @@ func (m *Model) renderCompletionModalView() (string, *tea.Cursor) {
 			displayDescription := sanitizeTerminalSingleLine(item.Description)
 			prefix := "  "
 			if i == cs.Index {
-				prefix = m.styles.FocusIndicator.Render("▸ ")
+				prefix = m.styles.FocusIndicator.Render(glyphs.Collapsed + " ")
 			}
 
 			// Check if selected (for multi-select)
@@ -218,7 +227,7 @@ func (m *Model) renderCompletionModalView() (string, *tea.Cursor) {
 				for oi, orig := range cs.AllItems {
 					if orig.Label == item.Label && orig.Insert == item.Insert {
 						if cs.Selected[oi] {
-							selectedMark = m.styles.FocusIndicator.Render(" ✓")
+							selectedMark = m.styles.FocusIndicator.Render(" " + glyphs.Success)
 						}
 						break
 					}
@@ -228,6 +237,9 @@ func (m *Model) renderCompletionModalView() (string, *tea.Cursor) {
 			category := ""
 			if cs.Kind == "attachments" {
 				category = completionCategoryDisplay(displayCategory)
+				if inlinePreview {
+					category = compactCompletionPreviewState(cs.Preview, category)
+				}
 			}
 			categoryWidth := 0
 			if category != "" {
@@ -301,29 +313,50 @@ func completionCategoryDisplay(category string) string {
 	return category
 }
 
+// compactCompletionPreviewState keeps the selected item's preview state
+// visible when the minimum-height popup has no dedicated preview row.
+func compactCompletionPreviewState(preview completionPreview, fallback string) string {
+	switch preview.State {
+	case completionPreviewLoading:
+		return "loading"
+	case completionPreviewReady:
+		return formatCompletionPreviewBytes(preview.Size)
+	case completionPreviewBinary:
+		return "binary"
+	case completionPreviewError:
+		return "error"
+	case completionPreviewFolder:
+		return "folder"
+	case completionPreviewAgent:
+		return "agent"
+	default:
+		return fallback
+	}
+}
+
 func completionPopupHeight(terminalHeight, inputLines int) int {
 	if terminalHeight <= 0 {
 		terminalHeight = 24
 	}
 	inputLines = max(1, inputLines)
-	// Prefer two visible transcript rows. Multiline drafts may borrow one of
-	// them at the supported minimum size so the popup and full textarea remain
-	// visible together.
-	available := terminalHeight - 1 - inputLines - 2 // divider + transcript
-	if available < 5 {
-		available = terminalHeight - 1 - inputLines - 1
+	// Reserve the terminal safety row, the complete composer, and the
+	// transcript's four-row reading floor. Popups of six rows or fewer own
+	// their top boundary and omit the redundant shared divider; roomier popups
+	// reserve that divider explicitly.
+	available := terminalHeight - 1 - inputLines - minTranscriptRows
+	if available > 6 {
+		available--
 	}
 	return min(15, max(5, available))
 }
 
-// At the minimum height with a five-line draft, the popup's top border is the
-// transcript/composer boundary. Omitting the redundant rule preserves one
-// transcript row plus the top-level terminal safety row without hiding draft
-// lines or completion controls.
+// The compact popup's top border is already a transcript/composer boundary.
+// Omitting the redundant rule preserves one additional transcript row without
+// hiding draft lines or completion controls.
 func (m *Model) compactCompletionOwnsDivider() bool {
 	return m.overlay == OverlayCompletion &&
 		m.isCompletionActive() &&
-		completionPopupHeight(m.height, m.inputLines) == 5
+		completionPopupHeight(m.height, m.inputLines) <= 6
 }
 
 // compactOllamaStartupNotice is deliberately narrow: only the fixed startup
@@ -400,12 +433,14 @@ func (m *Model) renderWelcome(b *strings.Builder) {
 
 	if micro {
 		writeLine(m.styles.WelcomeHint, "enter · ctrl+p settings")
-		writeLine(m.styles.StatusText, "? help · / @ #")
+		writeLine(m.styles.StatusText, m.keys.Help.Help().Key+" help · / @ #")
 	} else if compact {
-		writeLine(m.styles.WelcomeHint, "enter send · ctrl+p settings · ? help")
-		writeLine(m.styles.StatusText, "/ commands · @ files · # skills")
+		writeLine(m.styles.WelcomeHint, "enter send · ctrl+p settings")
+		writeLine(m.styles.StatusText, "/ commands · "+m.keys.Help.Help().Key+" help · @/#")
 	} else {
-		writeLine(m.styles.WelcomeHint, "enter send · / commands · ctrl+p settings · ? help")
+		writeLine(m.styles.WelcomeHint,
+			"enter send · / commands · ctrl+p settings · "+m.keys.Help.Help().Key+" help",
+		)
 		writeLine(m.styles.StatusText, "shift+tab mode · ctrl+o models · @ files · # skills")
 	}
 

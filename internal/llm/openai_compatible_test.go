@@ -9,6 +9,140 @@ import (
 	"testing"
 )
 
+func TestOpenAICompatibleRejectsSensitiveBaseURLWithoutEchoingIt(t *testing.T) {
+	tests := []struct {
+		name    string
+		baseURL string
+	}{
+		{name: "userinfo", baseURL: "https://user:super-secret@example.com/v1"},
+		{name: "query", baseURL: "https://example.com/v1?token=super-secret"},
+		{name: "empty query", baseURL: "https://example.com/v1?"},
+		{name: "fragment", baseURL: "https://example.com/v1#super-secret"},
+		{name: "empty fragment", baseURL: "https://example.com/v1#"},
+		{name: "invalid", baseURL: "://super-secret"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := NewOpenAICompatibleClient(OpenAICompatibleOptions{
+				BaseURL: test.baseURL,
+				Model:   "test-model",
+				APIKey:  "test-key",
+			})
+			if err == nil {
+				t.Fatal("sensitive base URL was accepted")
+			}
+			if strings.Contains(err.Error(), "super-secret") || strings.Contains(err.Error(), test.baseURL) {
+				t.Fatalf("base URL leaked through client error: %v", err)
+			}
+		})
+	}
+}
+
+func TestOpenAICompatibleRequiresTLSForRemoteHosts(t *testing.T) {
+	tests := []struct {
+		name    string
+		baseURL string
+	}{
+		{name: "public hostname", baseURL: "http://api.example.test/v1"},
+		{name: "private network address", baseURL: "http://192.168.1.10:8000/v1"},
+		{name: "unsupported scheme", baseURL: "ftp://api.example.test/v1"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := NewOpenAICompatibleClient(OpenAICompatibleOptions{
+				BaseURL: test.baseURL,
+				Model:   "test-model",
+				APIKey:  "test-key",
+			})
+			if err == nil {
+				t.Fatal("cleartext or unsupported remote base URL was accepted")
+			}
+			if strings.Contains(err.Error(), test.baseURL) {
+				t.Fatalf("base URL leaked through validation error: %v", err)
+			}
+		})
+	}
+
+	for _, localURL := range []string{
+		"http://localhost:8000/v1",
+		"http://127.0.0.1:8000/v1",
+		"http://[::1]:8000/v1",
+	} {
+		if _, err := NewOpenAICompatibleClient(OpenAICompatibleOptions{
+			BaseURL: localURL,
+			Model:   "local-model",
+		}); err != nil {
+			t.Fatalf("local cleartext base URL %q rejected: %v", localURL, err)
+		}
+	}
+}
+
+func TestOpenAICompatibleInferenceErrorsCarryRemoteProvenance(t *testing.T) {
+	const providerSecret = "REMOTE_PROVIDER_SECRET /Users/remote/private.key"
+	tests := []struct {
+		name    string
+		handler http.HandlerFunc
+	}{
+		{
+			name: "http error body",
+			handler: func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusBadRequest)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"error": map[string]any{"message": providerSecret},
+				})
+			},
+		},
+		{
+			name: "sse error event",
+			handler: func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				payload, _ := json.Marshal(map[string]any{
+					"error": map[string]any{"message": providerSecret},
+				})
+				frame := append([]byte("data: "), payload...)
+				frame = append(frame, '\n', '\n')
+				_, _ = w.Write(frame)
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(test.handler)
+			defer server.Close()
+
+			client, err := NewOpenAICompatibleClient(OpenAICompatibleOptions{
+				BaseURL: server.URL,
+				Model:   "grok-test",
+				APIKey:  "test-key",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = client.ChatStream(context.Background(), ChatOptions{}, func(StreamChunk) error {
+				return nil
+			})
+			if err == nil || !IsRemoteInferenceError(err) {
+				t.Fatalf("ChatStream error = %v, want exact remote provenance", err)
+			}
+			if !strings.Contains(err.Error(), providerSecret) {
+				t.Fatalf("transient llm error lost provider diagnostics: %v", err)
+			}
+		})
+	}
+
+	client, err := NewOpenAICompatibleClient(OpenAICompatibleOptions{
+		BaseURL: "http://127.0.0.1:1",
+		Model:   "grok-test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = client.ChatStream(context.Background(), ChatOptions{}, nil)
+	if err == nil || IsRemoteInferenceError(err) {
+		t.Fatalf("pre-dispatch callback validation acquired remote provenance: %v", err)
+	}
+}
+
 func TestOpenAICompatibleChatStreamText(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/chat/completions" || r.Method != http.MethodPost {

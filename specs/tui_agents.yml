@@ -28,6 +28,24 @@ normalize:
   replace:
     - regex: 'Done · [0-9]+\.[0-9]+s'
       with: 'Done · <elapsed>'
+    - regex: 'Consultation #[0-9a-f]{8}'
+      with: 'Consultation #<digest>'
+    - regex: 'Consultation #[0-9a-f]{7}'
+      with: 'Consultation #<short>'
+    - regex: '[0-9]{5}m[0-9]{2}s'
+      with: 'xxxxxmxxs'
+    - regex: '[0-9]{4}m[0-9]{2}s'
+      with: 'xxxxmxxs'
+    - regex: '[0-9]{3}m[0-9]{2}s'
+      with: 'xxxmxxs'
+    - regex: '[0-9]{2}m[0-9]{2}s'
+      with: 'xxmxxs'
+    - regex: '[0-9]m[0-9]{2}s'
+      with: 'xmxxs'
+    - regex: '[0-9]{2}s'
+      with: 'xxs'
+    - regex: '[0-9]\.[0-9]s'
+      with: 'x.xs'
 
 preconditions:
   commands:
@@ -72,7 +90,7 @@ steps:
   - press: "ctrl+g"
   - wait:
       screen:
-        contains: "Consultation 1 · active"
+        contains: "Consultation #"
       timeoutMs: 3000
   - press: "enter"
   - wait:
@@ -116,7 +134,7 @@ steps:
   - press: "esc"
   - wait:
       screen:
-        contains: "Consultation 1"
+        contains: "esc close · enter view"
       timeoutMs: 3000
   - wait:
       idle:
@@ -128,7 +146,7 @@ steps:
       rows: 24
   - wait:
       screen:
-        contains: "Consultation 1 · settled"
+        contains: "· settled"
       timeoutMs: 15000
   - wait:
       idle:
@@ -152,14 +170,18 @@ steps:
   - press: "enter"
   - wait:
       screen:
-        contains: "Consultation 1 · settled"
+        contains: "· settled"
+      timeoutMs: 3000
+  - wait:
+      screen:
+        contains: "esc close · enter view"
       timeoutMs: 3000
   - resize:
       cols: 30
       rows: 12
   - wait:
       screen:
-        contains: "Consultation 1"
+        contains: "Consultation #"
       timeoutMs: 3000
   - wait:
       idle:

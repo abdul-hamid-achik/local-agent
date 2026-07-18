@@ -1,8 +1,8 @@
               LOCAL AGENT
    Local-first · approval prompts on
       PLAN · qwen3.5:2b · offline
- enter send · ctrl+p settings · ? help
-    / commands · @ files · # skills
+     enter send · ctrl+p settings
+      / commands · f1 help · @/#
 
   notice · ollama: no model
   selected

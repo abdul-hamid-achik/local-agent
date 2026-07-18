@@ -75,6 +75,161 @@ func TestToolViewModelFromToolEntryProjectsOnlyBoundedSafeFields(t *testing.T) {
 	}
 }
 
+func TestToolRenderModelAdapterExcludesEphemeralAndStructuredSurfaces(t *testing.T) {
+	const (
+		rawArgSecret = "RAW_ARG_SECRET_MUST_NOT_CROSS"
+		beforeSecret = "BEFORE_SNAPSHOT_SECRET_MUST_NOT_CROSS"
+		oscSecret    = "OSC_SECRET_MUST_NOT_CROSS"
+	)
+	entry := ToolEntry{
+		ID:      "call-private-1",
+		Name:    "read_file",
+		Summary: "safe summary",
+		Args:    "path=safe.txt",
+		RawArgs: map[string]any{"token": rawArgSecret},
+		Result:  "safe result",
+		ResultDisplay: "\x1b[32msafe result\x1b[0m" +
+			"\x1b]0;" + oscSecret + "\x07",
+		Status:        ToolStatusDone,
+		BeforeContent: beforeSecret,
+		Projection: ecosystem.ToolProjection{
+			Operation: "read_file",
+			Transport: ecosystem.TransportSucceeded,
+			Domain:    ecosystem.DomainSucceeded,
+			Evidence:  ecosystem.EvidenceNone,
+		}.Normalize(),
+	}
+	model, err := ToolRenderModelFromEntry(
+		ChatEntry{BlockID: "block-private-1", Revision: 3, Kind: "tool_group"},
+		entry,
+	)
+	if err != nil {
+		t.Fatalf("project render model: %v", err)
+	}
+	card, err := ToolCardFromRenderModel(model, true)
+	if err != nil {
+		t.Fatalf("construct card: %v", err)
+	}
+	if card.ID != entry.ID || card.Result != "safe result" || card.Args != "path=safe.txt" {
+		t.Fatalf("bounded card projection = %#v", card)
+	}
+
+	encoded, err := json.Marshal(model)
+	if err != nil {
+		t.Fatalf("marshal render model: %v", err)
+	}
+	payload := string(encoded)
+	for _, forbidden := range []string{
+		rawArgSecret, beforeSecret, oscSecret,
+		"RawArgs", "BeforeContent", "StructuredContent", "ResultDisplay",
+	} {
+		if strings.Contains(payload, forbidden) {
+			t.Fatalf("render model exposed %q: %s", forbidden, payload)
+		}
+	}
+}
+
+func TestToolRenderModelUsesBlockIdentityForDuplicateToolNames(t *testing.T) {
+	projection := ecosystem.ToolProjection{
+		Operation: "read_file",
+		Transport: ecosystem.TransportSucceeded,
+		Domain:    ecosystem.DomainSucceeded,
+	}.Normalize()
+	first, err := ToolRenderModelFromEntry(
+		ChatEntry{BlockID: "block-read-1", Revision: 1},
+		ToolEntry{ID: "call-read-1", Name: "read_file", Result: "first", Status: ToolStatusDone, Projection: projection},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := ToolRenderModelFromEntry(
+		ChatEntry{BlockID: "block-read-2", Revision: 1},
+		ToolEntry{ID: "call-read-2", Name: "read_file", Result: "second", Status: ToolStatusDone, Projection: projection},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.BlockID == second.BlockID || first.InvocationID == second.InvocationID ||
+		first.Preview.Result != "first" || second.Preview.Result != "second" {
+		t.Fatalf("duplicate-name projections lost identity: %#v %#v", first, second)
+	}
+}
+
+func TestToolRenderModelReprojectsPrivateToolArgumentsFromTypedRoute(t *testing.T) {
+	const secret = "PRIVATE_GATEWAY_ARGUMENT_MUST_NOT_CROSS"
+	projection := ecosystem.ToolProjection{
+		Specialist: "cortex",
+		Operation:  "cortex_status",
+		Role:       ecosystem.RoleCoordination,
+		Transport:  ecosystem.TransportRunning,
+		Domain:     ecosystem.DomainPending,
+		Route: ecosystem.ToolRoute{
+			Gateway: "mcphub",
+			Server:  "cortex",
+			Tool:    "cortex_status",
+			CallID:  "stored-1",
+			Lazy:    true,
+		},
+	}.Normalize()
+	model, err := ToolRenderModelFromEntry(
+		ChatEntry{BlockID: "block-private-route", Revision: 1},
+		ToolEntry{
+			ID: "call-private-route", Name: "mcphub__mcphub_call_tool",
+			Args:   `server=cortex tool=cortex_status arguments={"token":"` + secret + `"}`,
+			Status: ToolStatusRunning, Projection: projection,
+		},
+	)
+	if err != nil {
+		t.Fatalf("project private route: %v", err)
+	}
+	if strings.Contains(model.Preview.Arguments, secret) {
+		t.Fatalf("private argument crossed render boundary: %q", model.Preview.Arguments)
+	}
+	for _, want := range []string{"cortex", "cortex_status"} {
+		if !strings.Contains(model.Preview.Arguments, want) {
+			t.Fatalf("bounded route omitted %q: %q", want, model.Preview.Arguments)
+		}
+	}
+}
+
+func TestToolRenderModelDerivesThemeWithoutMutableCardState(t *testing.T) {
+	previousNoColor := noColor
+	noColor = false
+	t.Cleanup(func() { noColor = previousNoColor })
+
+	entry := ToolEntry{
+		ID: "call-theme-1", Name: "read_file", Status: ToolStatusDone,
+		Projection: ecosystem.ToolProjection{
+			Operation: "read_file",
+			Transport: ecosystem.TransportSucceeded,
+			Domain:    ecosystem.DomainSucceeded,
+		}.Normalize(),
+	}
+	model, err := ToolRenderModelFromEntry(
+		ChatEntry{BlockID: "block-theme-1", Revision: 1},
+		entry,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	light, err := ToolCardFromRenderModel(model, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dark, err := ToolCardFromRenderModel(model, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if light.ID != dark.ID || light.State != dark.State || light.Projection.Operation != dark.Projection.Operation {
+		t.Fatalf("theme changed semantic identity: light=%#v dark=%#v", light, dark)
+	}
+	lightR, lightG, lightB, lightA := light.Styles.TitleRunning.GetForeground().RGBA()
+	darkR, darkG, darkB, darkA := dark.Styles.TitleRunning.GetForeground().RGBA()
+	if lightR == darkR && lightG == darkG && lightB == darkB && lightA == darkA {
+		t.Fatal("theme did not derive fresh card styles")
+	}
+}
+
 func TestToolViewModelAdaptersFailClosedOnInvalidIdentity(t *testing.T) {
 	entry := ToolEntry{ID: "call\nspoof", Name: "read_file", Status: ToolStatusDone}
 	if _, err := ToolViewModelFromToolEntry(ChatEntry{BlockID: "block-1", Revision: 1}, entry); err == nil {

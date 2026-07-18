@@ -88,7 +88,6 @@ func TestImportReplacesHiddenHistoryAndStartsFreshSession(t *testing.T) {
 	m.sessionID = 77
 	m.sessionTurnCount = 9
 	m.toolEntries = []ToolEntry{{ID: "old-tool", Name: "write"}}
-	m.toolCardMgr.Cards = []ToolCard{{ID: "old-tool"}}
 
 	path := filepath.Join(t.TempDir(), "conversation.md")
 	exportModel := newTestModel(t)
@@ -120,8 +119,8 @@ func TestImportReplacesHiddenHistoryAndStartsFreshSession(t *testing.T) {
 			t.Fatalf("unsafe hidden state survived import: %#v", messages)
 		}
 	}
-	if m.sessionID != 0 || m.sessionTurnCount != 0 || len(m.toolEntries) != 0 || len(m.toolCardMgr.Cards) != 0 {
-		t.Fatalf("import reused prior session runtime: session=%d turns=%d tools=%d cards=%d", m.sessionID, m.sessionTurnCount, len(m.toolEntries), len(m.toolCardMgr.Cards))
+	if m.sessionID != 0 || m.sessionTurnCount != 0 || len(m.toolEntries) != 0 {
+		t.Fatalf("import reused prior session runtime: session=%d turns=%d tools=%d", m.sessionID, m.sessionTurnCount, len(m.toolEntries))
 	}
 	if note := m.entries[len(m.entries)-1].Content; !strings.Contains(note, "new session") || !strings.Contains(note, "tool sections were omitted") {
 		t.Fatalf("missing import limitation receipt: %q", note)

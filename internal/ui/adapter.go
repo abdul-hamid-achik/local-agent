@@ -1,31 +1,54 @@
 package ui
 
 import (
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/rivo/uniseg"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/agent"
 	"github.com/abdul-hamid-achik/local-agent/internal/ecosystem"
 	"github.com/abdul-hamid-achik/local-agent/internal/expertteam"
 )
 
+const (
+	maxAdapterErrorNoticeBytes       = 4 * 1024
+	maxAdapterErrorNoticeGraphemes   = 512
+	maxAdapterSystemNoticeBytes      = 16 * 1024
+	maxAdapterSystemNoticeGraphemes  = 2 * 1024
+	adapterNoticeInputExpansionLimit = 4
+	adapterNoticeTruncatedMarker     = "\n...[notice truncated]"
+)
+
 // Adapter bridges the agent.Output interface to BubbleTea messages.
 type Adapter struct {
-	program *tea.Program
-	workDir string
+	program       *tea.Program
+	workDir       string
+	outputDetails *OutputDetailStore
 }
 
 var _ agent.BobWorkspaceContextOutput = (*Adapter)(nil)
 var _ agent.ExpertProgressOutput = (*Adapter)(nil)
+var _ agent.SemanticToolOutput = (*Adapter)(nil)
+var _ agent.SemanticToolDetailOutput = (*Adapter)(nil)
 
 // NewAdapter creates an Adapter that sends messages to the given program.
 func NewAdapter(p *tea.Program, workDir ...string) *Adapter {
+	return NewAdapterWithOutputDetails(p, nil, workDir...)
+}
+
+// NewAdapterWithOutputDetails creates an Adapter that can retain a bounded,
+// terminal-safe, post-redaction prefix of ordinary unstructured tool output
+// for the process-local viewer. Expert reports and parser-private semantic
+// payloads deliberately never cross this boundary.
+func NewAdapterWithOutputDetails(p *tea.Program, store *OutputDetailStore, workDir ...string) *Adapter {
 	dir := ""
 	if len(workDir) > 0 {
 		dir = workDir[0]
 	}
-	return &Adapter{program: p, workDir: dir}
+	return &Adapter{program: p, workDir: dir, outputDetails: store}
 }
 
 func (a *Adapter) StreamText(text string) {
@@ -59,7 +82,16 @@ func newToolCallStartMsg(callID, name string, args map[string]any, workDir strin
 }
 
 func (a *Adapter) ToolCallResult(callID, name string, result string, isError bool, duration time.Duration) {
-	sendMsg(a.program, ToolCallResultMsg{ID: callID, Name: name, Result: result, IsError: isError, Duration: duration})
+	sendMsg(a.program, a.toolCallResultMsg(
+		callID,
+		name,
+		result,
+		isError,
+		duration,
+		ecosystem.ToolProjection{},
+		"",
+		false,
+	))
 }
 
 // ExpertProgress forwards only the host-owned bounded scheduler event. The
@@ -72,13 +104,75 @@ func (a *Adapter) ExpertProgress(callID string, event expertteam.ProgressEvent) 
 // ToolCallSemanticResult carries only the bounded host projection into the UI;
 // raw StructuredContent remains inside the agent parser boundary.
 func (a *Adapter) ToolCallSemanticResult(callID, name string, result string, isError bool, duration time.Duration, projection ecosystem.ToolProjection) {
-	sendMsg(a.program, ToolCallResultMsg{
-		ID: callID, Name: name, Result: result, IsError: isError, Duration: duration, Projection: projection,
-	})
+	sendMsg(a.program, a.toolCallResultMsg(
+		callID,
+		name,
+		result,
+		isError,
+		duration,
+		projection,
+		"",
+		false,
+	))
+}
+
+// ToolCallSemanticResultWithDetail admits only an explicit complete,
+// post-redaction unstructured payload. The payload is consumed synchronously by
+// the bounded process-local store; Bubble Tea receives only an opaque
+// capability and scalar digest.
+func (a *Adapter) ToolCallSemanticResultWithDetail(
+	callID, name string,
+	result string,
+	isError bool,
+	duration time.Duration,
+	projection ecosystem.ToolProjection,
+	detail *agent.ToolOutputDetail,
+) {
+	detailText := ""
+	admitDetail := detail != nil && detail.Complete
+	if admitDetail {
+		detailText = detail.Text
+	}
+	sendMsg(a.program, a.toolCallResultMsg(
+		callID,
+		name,
+		result,
+		isError,
+		duration,
+		projection,
+		detailText,
+		admitDetail,
+	))
+}
+
+func (a *Adapter) toolCallResultMsg(
+	callID string,
+	name string,
+	result string,
+	isError bool,
+	duration time.Duration,
+	projection ecosystem.ToolProjection,
+	outputDetail string,
+	admitDetail bool,
+) ToolCallResultMsg {
+	msg := ToolCallResultMsg{
+		ID: callID, Name: name, Result: result, IsError: isError,
+		Duration: duration, Projection: projection,
+	}
+	if a != nil && a.outputDetails != nil && admitDetail && !isExpertConsultTool(name) {
+		if receipt, err := a.outputDetails.Admit(outputDetail); err == nil {
+			msg.OutputDetail = receipt
+		}
+	}
+	return msg
 }
 
 func (a *Adapter) SystemMessage(msg string) {
-	sendMsg(a.program, SystemMessageMsg{Msg: msg})
+	sendMsg(a.program, SystemMessageMsg{Msg: boundedAdapterNotice(
+		msg,
+		maxAdapterSystemNoticeBytes,
+		maxAdapterSystemNoticeGraphemes,
+	)})
 }
 
 func (a *Adapter) CapabilityRoute(route agent.CapabilityRoute) {
@@ -126,9 +220,70 @@ func (a *Adapter) ContextCompactionFinished() {
 }
 
 func (a *Adapter) Error(msg string) {
-	// Log error for debugging
-	if len(msg) > 100 {
-		msg = msg[:97] + "..."
+	sendMsg(a.program, ErrorMsg{Msg: boundedAdapterNotice(
+		msg,
+		maxAdapterErrorNoticeBytes,
+		maxAdapterErrorNoticeGraphemes,
+	)})
+}
+
+// boundedAdapterNotice is the final defensive boundary for agent-originated
+// transcript notices. It bounds the amount of untrusted input scanned, removes
+// terminal/visual-order controls, and caps the resulting UTF-8 by both bytes
+// and grapheme clusters so combining/ZWJ sequences are never split.
+func boundedAdapterNotice(value string, byteLimit, graphemeLimit int) string {
+	if byteLimit <= 0 || graphemeLimit <= 0 {
+		return ""
 	}
-	sendMsg(a.program, ErrorMsg{Msg: msg})
+	scanLimit := byteLimit * adapterNoticeInputExpansionLimit
+	if scanLimit < byteLimit {
+		scanLimit = byteLimit
+	}
+	prefix, inputTruncated := adapterNoticeUTF8Prefix(value, scanLimit)
+	safe := sanitizeTerminalMultiline(prefix)
+	safeGraphemes := uniseg.GraphemeClusterCount(safe)
+	if !inputTruncated && len(safe) <= byteLimit && safeGraphemes <= graphemeLimit {
+		// Detach even a small substring from caller-owned backing storage before
+		// Bubble Tea can retain it in transcript/session state.
+		return strings.Clone(safe)
+	}
+
+	marker := adapterNoticeTruncatedMarker
+	markerGraphemes := uniseg.GraphemeClusterCount(marker)
+	if len(marker) > byteLimit || markerGraphemes > graphemeLimit {
+		return ""
+	}
+	contentByteLimit := byteLimit - len(marker)
+	contentGraphemeLimit := graphemeLimit - markerGraphemes
+	var bounded strings.Builder
+	bounded.Grow(min(len(safe), contentByteLimit) + len(marker))
+	graphemes := uniseg.NewGraphemes(safe)
+	usedBytes := 0
+	usedGraphemes := 0
+	for graphemes.Next() {
+		cluster := graphemes.Str()
+		if usedGraphemes >= contentGraphemeLimit ||
+			usedBytes+len(cluster) > contentByteLimit {
+			break
+		}
+		bounded.WriteString(cluster)
+		usedBytes += len(cluster)
+		usedGraphemes++
+	}
+	bounded.WriteString(marker)
+	return bounded.String()
+}
+
+func adapterNoticeUTF8Prefix(value string, limit int) (string, bool) {
+	if limit <= 0 {
+		return "", value != ""
+	}
+	if len(value) <= limit {
+		return value, false
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(value[cut]) {
+		cut--
+	}
+	return value[:cut], true
 }

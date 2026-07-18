@@ -525,13 +525,13 @@ func TestGoalRecoveryThemeResizeMouseAndSessionReset(t *testing.T) {
 		t.Fatalf("Recovery resize = %dx%d compact=%v", fixture.m.goalRecoveryState.width, fixture.m.goalRecoveryState.height, fixture.m.goalRecoveryState.compact())
 	}
 	fixture.m.viewport.SetHeight(2)
-	fixture.m.viewport.SetContent(strings.Repeat("transcript line\n", 40))
-	fixture.m.viewport.SetYOffset(10)
-	before := fixture.m.viewport.YOffset()
+	fixture.m.setTestTranscriptContent(strings.Repeat("transcript line\n", 40))
+	fixture.m.setTranscriptYOffset(10)
+	before := fixture.m.transcriptYOffset()
 	updated, _ = fixture.m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown})
 	fixture.m = updated.(*Model)
-	if fixture.m.viewport.YOffset() != before {
-		t.Fatalf("hidden transcript moved under Recovery: before=%d after=%d", before, fixture.m.viewport.YOffset())
+	if fixture.m.transcriptYOffset() != before {
+		t.Fatalf("hidden transcript moved under Recovery: before=%d after=%d", before, fixture.m.transcriptYOffset())
 	}
 	fixture.m.resetConversationSession()
 	if fixture.m.goalRecoveryState != nil || fixture.m.goalRecoveryProjection.goalID != "" ||
