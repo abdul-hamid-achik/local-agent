@@ -69,9 +69,10 @@ func TestEntryMemoWarmRenderIsByteIdentical(t *testing.T) {
 
 	// Prove the warm walk consumed the memo rather than re-rendering: a
 	// tampered chunk under an unchanged key must surface verbatim.
-	memo := m.entryMemo[4]
+	systemID := m.entries[4].BlockID
+	memo := m.entryMemo[systemID]
 	memo.chunk = strings.Replace(memo.chunk, "test-model", "memo-sentinel", 1)
-	m.entryMemo[4] = memo
+	m.entryMemo[systemID] = memo
 	m.invalidateEntryCache()
 	if tampered := m.renderEntries(); !strings.Contains(tampered, "memo-sentinel") {
 		t.Fatal("full walk re-rendered a settled entry instead of using its memo")
@@ -84,7 +85,8 @@ func TestEntryMemoToolMutationChangesKeyAndRerenders(t *testing.T) {
 	mixedMemoTranscript(m)
 
 	collapsed := m.renderEntries()
-	before, ok := m.entryMemo[2]
+	toolID := m.entries[2].BlockID
+	before, ok := m.entryMemo[toolID]
 	if !ok {
 		t.Fatal("settled tool group was not memoized")
 	}
@@ -92,7 +94,7 @@ func TestEntryMemoToolMutationChangesKeyAndRerenders(t *testing.T) {
 	m.toolEntries[0].Collapsed = false
 	m.invalidateEntryCache()
 	expanded := m.renderEntries()
-	afterCollapse, ok := m.entryMemo[2]
+	afterCollapse, ok := m.entryMemo[toolID]
 	if !ok {
 		t.Fatal("expanded tool group was not memoized")
 	}
@@ -103,10 +105,15 @@ func TestEntryMemoToolMutationChangesKeyAndRerenders(t *testing.T) {
 		t.Fatal("toggling Collapsed did not re-render the transcript")
 	}
 
-	m.toolEntries[0].Status = ToolStatusError
-	m.invalidateEntryCache()
-	errored := m.renderEntries()
-	afterStatus, ok := m.entryMemo[2]
+	// Terminal transcript lifecycles are monotonic, so exercise the error
+	// variant on a fresh entry instead of rewriting a settled receipt.
+	errorModel := newTestModel(t)
+	errorModel.ready = true
+	mixedMemoTranscript(errorModel)
+	errorModel.toolEntries[0].Collapsed = false
+	errorModel.toolEntries[0].Status = ToolStatusError
+	errored := errorModel.renderEntries()
+	afterStatus, ok := errorModel.entryMemo[errorModel.entries[2].BlockID]
 	if !ok {
 		t.Fatal("errored tool group was not memoized")
 	}
@@ -126,7 +133,8 @@ func TestEntryMemoSkipsLiveToolGroupAndClearsOnShrink(t *testing.T) {
 	m.toolsPending = 1
 
 	_ = m.renderEntries()
-	if _, ok := m.entryMemo[2]; ok {
+	toolID := m.entries[2].BlockID
+	if _, ok := m.entryMemo[toolID]; ok {
 		t.Fatal("live tool group must bypass the memo (it re-renders every frame)")
 	}
 
@@ -134,18 +142,18 @@ func TestEntryMemoSkipsLiveToolGroupAndClearsOnShrink(t *testing.T) {
 	m.toolsPending = 0
 	m.invalidateEntryCache()
 	_ = m.renderEntries()
-	if _, ok := m.entryMemo[2]; !ok {
+	if _, ok := m.entryMemo[toolID]; !ok {
 		t.Fatal("settled tool group was not memoized after the turn completed")
 	}
 
-	// A shrunken entries slice drops the index-keyed memo wholesale.
+	// A shrunken entries slice prunes only identities that no longer survive.
 	m.entries = m.entries[:2]
 	m.invalidateEntryCache()
 	_ = m.renderEntries()
 	if len(m.entryMemo) != 2 {
 		t.Fatalf("memo holds %d entries after shrink, want 2", len(m.entryMemo))
 	}
-	if _, ok := m.entryMemo[2]; ok {
+	if _, ok := m.entryMemo[toolID]; ok {
 		t.Fatal("stale memo entry survived a transcript shrink")
 	}
 }

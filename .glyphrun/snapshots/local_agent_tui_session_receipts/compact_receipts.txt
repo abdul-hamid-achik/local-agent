@@ -2,7 +2,6 @@
   ▌ Review the release receipts.
 
   assistant
-  │ ▸ Thought
 
     I checked the saved verification receipts.
 
@@ -18,6 +17,7 @@
    ✗ error
   Recovery blocked: write_file has a durable dispatch marker but no terminal receipt. Its outcome is
   unknown; use /recover to inspect and record exact evidence.
+
 
 
 

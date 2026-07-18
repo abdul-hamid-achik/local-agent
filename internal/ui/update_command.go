@@ -253,24 +253,16 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 		return nil
 
 	case command.ActionSwitchProvider:
-		if err := m.switchProvider(result.Data); err != nil {
-			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: err.Error()})
-		} else {
-			text := result.Text
-			if text == "" {
-				text = fmt.Sprintf("Provider: %s · model %s", m.activeProviderName(), m.model)
-			} else {
-				text = fmt.Sprintf("%s · model %s", text, m.model)
-			}
-			m.entries = append(m.entries, ChatEntry{Kind: "system", Content: text})
-		}
-		m.viewport.SetContent(m.renderEntries())
-		m.resumeFollow()
-		return nil
+		return m.beginProviderSwitch(result.Data, result.Text)
 
 	case command.ActionShowProviderPicker:
 		m.overlayParent = OverlayNone
 		m.openProviderPicker()
+		return nil
+
+	case command.ActionShowAgents:
+		m.overlayParent = OverlayNone
+		m.openAgentHub()
 		return nil
 
 	case command.ActionEnableAutoModel:
@@ -489,9 +481,12 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 			m.resumeFollow()
 			return nil
 		}
-		// Rebuild the visible transcript from the restored agent history.
-		m.entries = entriesFromMessages(m.agent.Messages())
-		m.toolEntries = nil
+		// Rebuild the visible transcript from bounded checkpoint facts. Tool
+		// receipts retain causal placement and an inspectable attention state,
+		// while raw result/argument content stays inside the agent boundary.
+		m.entries, m.toolEntries = checkpointTranscriptFromMessages(m.agent.Messages())
+		m.rebuildToolCardsFromEntries()
+		m.resetEntryMemo()
 		m.invalidateEntryCache()
 		m.entries = append(m.entries, ChatEntry{
 			Kind:    "system",

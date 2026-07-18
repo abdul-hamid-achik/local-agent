@@ -1,0 +1,11 @@
+ ╭──────────────────────────╮
+ │ Agent Viewer             │
+ │ Consultation · active    │
+ │ Subagents                │
+ │ … generalist · running   │
+ │   qwen3.5:0.8b · local   │
+ │                          │
+ │ Activity                 │
+ │ No public child events … │
+ │ esc back · enter jump    │
+ ╰──────────────────────────╯

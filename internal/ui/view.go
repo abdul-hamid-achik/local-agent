@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/rivo/uniseg"
 )
 
 func (m *Model) View() tea.View {
@@ -26,117 +27,21 @@ func (m *Model) View() tea.View {
 		return m.renderTerminalInputResumeView()
 	}
 
-	// The conversation, status, and composer own the complete terminal width.
-	// Infrequent controls are exposed through overlays instead of persistent
-	// chrome that competes with code and tool output.
-	paneWidth := m.chatPaneWidth()
+	// The conversation and the active footer owner consume one shared geometry
+	// snapshot. Infrequent controls remain overlays over these stable base
+	// rectangles.
+	frame := m.projectFrame()
 	var content strings.Builder
-	var viewCursor *tea.Cursor
 	content.WriteString(m.viewport.View())
 	content.WriteString("\n")
-	if !m.compactCompletionOwnsDivider() {
-		content.WriteString(m.styles.Divider.Render(rule(paneWidth)))
-		content.WriteString("\n")
-	}
-
-	// Permission requests replace the composer in-flow. They deliberately do
-	// not use overlayOnContent: the transcript stays visible, code keeps the
-	// terminal width, and the decision reads as the next conversational action.
-	if m.pendingApproval != nil {
-		content.WriteString(m.renderApproval())
-	} else if m.readScopePrompt != nil {
-		content.WriteString(m.renderReadScopePrompt())
-	} else {
-		if plan := m.renderGoalPlan(); plan != "" {
-			content.WriteString(plan)
-			content.WriteString("\n")
-		}
-		if bob := m.renderBobWorkspaceContext(); bob != "" {
-			content.WriteString(bob)
-			content.WriteString("\n")
-		}
-		if action := m.renderContinuationAction(); action != "" && !m.goalPlanOwnsContinuation() {
-			content.WriteString(action)
-			content.WriteString("\n")
-		}
-		if status := m.renderStatusLine(); status != "" {
-			content.WriteString(status)
-			content.WriteString("\n")
-			if m.activityComposerGap() {
-				content.WriteString("\n")
-			}
-		}
-
-		// Ordinary turns keep the composer available so the next instruction can be
-		// drafted while work continues. Owned operations and a queued follow-up use
-		// the compact liveness line until authority returns to the textarea.
-		if m.pendingPaste != nil || m.pendingSessionSwitch != nil {
-			// The status prompt above owns the footer until the user answers.
-		} else if m.overlay == OverlayCortexDecision && m.cortexDecision != nil {
-			// Human decisions are full-width composer owners. They remain below the
-			// visible transcript and never mask it with an overlay.
-			content.WriteString(m.cortexDecision.View(m.cortexDecisionBusyMarker()))
-		} else if m.overlay == OverlayCompletion && m.isCompletionActive() {
-			// Completion is owned by the composer: the popup sits immediately above
-			// the unchanged textarea, and only its Bubbles filter owns the terminal
-			// cursor. Keeping the draft visible makes the replacement span legible.
-			popupY := strings.Count(content.String(), "\n")
-			popup, popupCursor := m.renderCompletionModalView()
-			content.WriteString(popup)
-			content.WriteString("\n")
-			input := m.input
-			input.SetVirtualCursor(false)
-			content.WriteString(input.View())
-			viewCursor = offsetCursor(popupCursor, 0, popupY)
-		} else if m.overlay == OverlayPlanForm && m.planFormState != nil {
-			// Structured planning temporarily owns the composer rows. The transcript
-			// remains immediately above this full-width inline form.
-			formY := strings.Count(content.String(), "\n")
-			form, formCursor := m.renderPlanFormView()
-			content.WriteString(form)
-			viewCursor = offsetCursor(formCursor, 0, formY)
-		} else if m.overlay == OverlayGoalForm && m.goalFormState != nil {
-			// Goal definition follows the same composer contract as Plan: one typed
-			// inline owner, no transcript mask, and one translated Bubbles cursor.
-			formY := strings.Count(content.String(), "\n")
-			form, formCursor := m.goalFormState.ViewWithCursor()
-			content.WriteString(form)
-			viewCursor = offsetCursor(formCursor, 0, formY)
-		} else if m.overlay != OverlayNone {
-			// Preserve the composer's row allocation behind centered overlays so the
-			// transcript does not shift when transient navigation opens.
-			input := m.input
-			input.SetVirtualCursor(false)
-			content.WriteString(strings.Repeat("\n", max(0, lipgloss.Height(input.View())-1)))
-		} else if m.queuedFollowUp != nil && (!m.queuedFollowUpHeld() || !m.composerEditable()) {
-			// The queue owns one stable footer row until it dispatches, is restored
-			// after failure, or the user edits/clears it. Never hide pending input in
-			// model state with no visible recovery path.
-			content.WriteString(m.renderQueuedFollowUp())
-		} else if m.composerEditable() {
-			if m.queuedFollowUpHeld() {
-				// A rejected active turn and the next queued instruction remain two
-				// visible owners. Up swaps them atomically instead of concatenating
-				// prompts or attachment sets behind the user's back.
-				content.WriteString(m.renderQueuedFollowUp())
-				content.WriteString("\n")
-			}
-			if cue := m.renderComposerOverflowCue(); cue != "" {
-				content.WriteString(cue)
-				content.WriteString("\n")
-			}
-			// Render a local copy with Bubbles' virtual cursor disabled. The same
-			// copy supplies the one real cursor owned by this top-level view.
-			input := m.input
-			if m.state != StateIdle {
-				input.Placeholder = "Write a follow-up · enter queue"
-			}
-			input.SetVirtualCursor(false)
-			inputView := input.View()
-			composerY := strings.Count(content.String(), "\n")
-			content.WriteString(inputView)
-			viewCursor = offsetCursor(input.Cursor(), 0, composerY)
-		}
+	paintedFooterY := strings.Count(content.String(), "\n")
+	content.WriteString(frame.Footer.Content)
+	viewCursor := frame.Cursor
+	if viewCursor != nil && paintedFooterY != frame.Footer.Rect.MinY {
+		// Tests and a few setup paths can replace an owner immediately before a
+		// viewport reflow. Keep the single projected local cursor, but translate
+		// it to the footer's actually painted origin for that transitional frame.
+		viewCursor = offsetCursor(viewCursor, 0, paintedFooterY-frame.Footer.Rect.MinY)
 	}
 
 	// Infrequent controls remain centered overlays. Composer-owned completion,
@@ -172,6 +77,8 @@ func (m *Model) View() tea.View {
 			overlay = m.renderAgentPicker()
 		case OverlayProviderPicker:
 			overlay = m.renderProviderPicker()
+		case OverlayAgents:
+			overlay = m.renderAgentHub()
 		case OverlayModePicker:
 			overlay = m.renderModePicker()
 		case OverlayRuntimeStatus:
@@ -298,13 +205,15 @@ func truncateDisplay(s string, maxWidth int) string {
 	budget := maxWidth - lipgloss.Width(ellipsis)
 	var b strings.Builder
 	used := 0
-	for _, r := range s {
-		rw := lipgloss.Width(string(r))
-		if used+rw > budget {
+	graphemes := uniseg.NewGraphemes(s)
+	for graphemes.Next() {
+		cluster := graphemes.Str()
+		clusterWidth := lipgloss.Width(cluster)
+		if used+clusterWidth > budget {
 			break
 		}
-		b.WriteRune(r)
-		used += rw
+		b.WriteString(cluster)
+		used += clusterWidth
 	}
 	return b.String() + ellipsis
 }
@@ -373,15 +282,17 @@ func splitDisplayChunks(word string, width int) []string {
 	var chunks []string
 	var chunk strings.Builder
 	used := 0
-	for _, r := range word {
-		rw := lipgloss.Width(string(r))
-		if used > 0 && used+rw > width {
+	graphemes := uniseg.NewGraphemes(word)
+	for graphemes.Next() {
+		cluster := graphemes.Str()
+		clusterWidth := lipgloss.Width(cluster)
+		if used > 0 && used+clusterWidth > width {
 			chunks = append(chunks, chunk.String())
 			chunk.Reset()
 			used = 0
 		}
-		chunk.WriteRune(r)
-		used += rw
+		chunk.WriteString(cluster)
+		used += clusterWidth
 		if used >= width {
 			chunks = append(chunks, chunk.String())
 			chunk.Reset()

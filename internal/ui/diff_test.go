@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/ecosystem"
@@ -509,6 +510,140 @@ func TestRenderDiff_MaxLines(t *testing.T) {
 	// Should contain "more lines" indicator.
 	if !strings.Contains(result, "more lines") {
 		t.Error("should show 'more lines' when truncating")
+	}
+	bodyRows := strings.Split(strings.TrimSuffix(ansi.Strip(result), "\n"), "\n")[1:]
+	if len(bodyRows) != 3 {
+		t.Fatalf("bounded preview rendered %d body rows, want 3:\n%s", len(bodyRows), result)
+	}
+}
+
+func TestRenderUnifiedDiffWrapsWithContinuationGutter(t *testing.T) {
+	lines := []DiffLine{
+		{Kind: DiffHunkHeader, Hunk: &DiffHunk{OldStart: 41, OldCount: 0, NewStart: 42, NewCount: 1}},
+		{Kind: DiffAdded, Content: "界🙂" + strings.Repeat("abcdef", 8), NewLine: 42},
+	}
+	const width = 28
+	rendered := ansi.Strip(renderUnifiedDiffAtWidth("wide.go", lines, NewStyles(true), 0, width))
+	rows := strings.Split(strings.TrimSuffix(rendered, "\n"), "\n")
+	foundContinuation := false
+	for _, row := range rows {
+		if lipgloss.Width(row) > width {
+			t.Fatalf("wrapped diff row width = %d, want <= %d: %q", lipgloss.Width(row), width, row)
+		}
+		if strings.Contains(row, "│ ↳ ") {
+			foundContinuation = true
+			if strings.Contains(row, "42") {
+				t.Fatalf("continuation repeated a line-number gutter: %q", row)
+			}
+		}
+	}
+	if !foundContinuation {
+		t.Fatalf("long diff line did not expose a continuation gutter:\n%s", rendered)
+	}
+}
+
+func TestRenderUnifiedDiffRowBudgetCountsWrappedRows(t *testing.T) {
+	lines := []DiffLine{
+		{Kind: DiffAdded, Content: strings.Repeat("long-value-", 12), NewLine: 1},
+		{Kind: DiffAdded, Content: "second", NewLine: 2},
+	}
+	rendered := ansi.Strip(renderUnifiedDiffAtWidth("budget.go", lines, NewStyles(true), 4, 24))
+	rows := strings.Split(strings.TrimSuffix(rendered, "\n"), "\n")
+	if bodyRows := len(rows) - 1; bodyRows != 4 {
+		t.Fatalf("rendered %d bounded body rows, want 4:\n%s", bodyRows, rendered)
+	}
+	if !strings.Contains(rendered, "line continues") {
+		t.Fatalf("wrapped truncation has no explicit continuation receipt:\n%s", rendered)
+	}
+}
+
+func TestRenderUnifiedDiffGeometryAcrossSupportedWidths(t *testing.T) {
+	lines := []DiffLine{
+		{Kind: DiffHunkHeader, Hunk: &DiffHunk{OldStart: 999_998, OldCount: 2, NewStart: 999_998, NewCount: 2}},
+		{Kind: DiffContext, Content: "\t界🙂e\u0301 " + strings.Repeat("segment-", 20), OldLine: 999_998, NewLine: 999_998},
+		{Kind: DiffRemoved, Content: strings.Repeat("before-", 18), OldLine: 999_999},
+		{Kind: DiffAdded, Content: strings.Repeat("after-", 18), NewLine: 999_999},
+	}
+	styles := NewStyles(true)
+
+	for width := 30; width <= 200; width++ {
+		rendered := ansi.Strip(renderUnifiedDiffAtWidth("界/very/long/component.go", lines, styles, 0, width))
+		for rowIndex, row := range strings.Split(strings.TrimSuffix(rendered, "\n"), "\n") {
+			if got := lipgloss.Width(row); got > width {
+				t.Fatalf("width=%d row=%d cells=%d: %q", width, rowIndex, got, row)
+			}
+			if strings.ContainsRune(row, '\t') {
+				t.Fatalf("width=%d row=%d retained a geometry-dependent tab: %q", width, rowIndex, row)
+			}
+		}
+	}
+}
+
+func TestRenderUnifiedDiffBudgetLabelsOnlyVisibleFacts(t *testing.T) {
+	styles := NewStyles(true)
+
+	singleRows := []DiffLine{
+		{Kind: DiffAdded, Content: "first"},
+		{Kind: DiffAdded, Content: "second"},
+	}
+	rendered := ansi.Strip(renderUnifiedDiffAtWidth("budget.go", singleRows, styles, 1, 30))
+	if !strings.Contains(rendered, "… 2 more lines") || strings.Contains(rendered, "line continues") {
+		t.Fatalf("wholly omitted source lines were mislabeled:\n%s", rendered)
+	}
+
+	wrappedRows := []DiffLine{
+		{Kind: DiffAdded, Content: strings.Repeat("wrapped-", 20)},
+		{Kind: DiffAdded, Content: "later"},
+	}
+	rendered = ansi.Strip(renderUnifiedDiffAtWidth("budget.go", wrappedRows, styles, 3, 30))
+	if !strings.Contains(rendered, "… line continues · 1 more") {
+		t.Fatalf("partially visible wrapped line lacks a truthful continuation:\n%s", rendered)
+	}
+
+	unbounded := ansi.Strip(renderUnifiedDiffAtWidth("budget.go", wrappedRows, styles, 0, 30))
+	totalBodyRows := len(strings.Split(strings.TrimSuffix(unbounded, "\n"), "\n")) - 1
+	for budget := 1; budget <= totalBodyRows+1; budget++ {
+		bounded := ansi.Strip(renderUnifiedDiffAtWidth("budget.go", wrappedRows, styles, budget, 30))
+		bodyRows := len(strings.Split(strings.TrimSuffix(bounded, "\n"), "\n")) - 1
+		if want := min(budget, totalBodyRows); bodyRows != want {
+			t.Fatalf("budget=%d rendered body rows=%d, want %d:\n%s", budget, bodyRows, want, bounded)
+		}
+	}
+}
+
+func TestResolveDiffGutterNumbersRejectsInconsistentTypedCoordinates(t *testing.T) {
+	tests := map[string][]DiffLine{
+		"jump inside hunk": {
+			{Kind: DiffHunkHeader, Hunk: &DiffHunk{OldStart: 10, OldCount: 1, NewStart: 10, NewCount: 1}},
+			{Kind: DiffContext, Content: "ctx", OldLine: 99, NewLine: 10},
+		},
+		"coordinate exceeds hunk budget": {
+			{Kind: DiffHunkHeader, Hunk: &DiffHunk{OldStart: 10, OldCount: 1, NewStart: 10, NewCount: 2}},
+			{Kind: DiffContext, Content: "ctx", OldLine: 10, NewLine: 10},
+			{Kind: DiffRemoved, Content: "extra", OldLine: 11},
+		},
+		"coordinate on wrong side": {
+			{Kind: DiffHunkHeader, Hunk: &DiffHunk{OldStart: 10, OldCount: 0, NewStart: 10, NewCount: 1}},
+			{Kind: DiffAdded, Content: "plus", OldLine: 10, NewLine: 10},
+		},
+		"negative coordinate": {
+			{Kind: DiffHunkHeader, Hunk: &DiffHunk{OldStart: 10, OldCount: 1, NewStart: 10, NewCount: 1}},
+			{Kind: DiffContext, Content: "ctx", OldLine: -1, NewLine: 10},
+		},
+	}
+
+	for name, lines := range tests {
+		t.Run(name, func(t *testing.T) {
+			if numbers, ok := resolveDiffGutterNumbers(lines); ok {
+				t.Fatalf("inconsistent coordinates produced gutters: %#v", numbers)
+			}
+			rendered := ansi.Strip(renderUnifiedDiffAtWidth("bad.go", lines, NewStyles(true), 0, 100))
+			for _, row := range strings.Split(rendered, "\n") {
+				if strings.Contains(row, "│") && !strings.HasPrefix(row, "│") {
+					t.Fatalf("renderer invented a numbered gutter: %q", row)
+				}
+			}
+		})
 	}
 }
 

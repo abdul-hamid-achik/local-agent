@@ -28,6 +28,16 @@ func (m *Model) handleIdleKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	case key.Matches(msg, m.keys.Quit):
 		return m.beginShutdown(), true
 
+	case key.Matches(msg, m.keys.AgentHub):
+		// Agent activity remains inspectable while a foreground turn is
+		// running, but an unsent draft retains ownership of application
+		// shortcuts so opening a modal never hides text unexpectedly.
+		if m.input.Value() == "" {
+			m.overlayParent = OverlayNone
+			m.openAgentHub()
+		}
+		return nil, true
+
 	case key.Matches(msg, m.keys.Cancel):
 		// A visible queued follow-up owns the first Escape. Clearing the queue
 		// must not also cancel the active run; a later Escape still reaches the
@@ -53,13 +63,14 @@ func (m *Model) handleIdleKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		// Batch-toggle all tools when input is empty and idle.
 		if m.state == StateIdle && strings.TrimSpace(m.input.Value()) == "" {
 			m.cancelReceiptInspection(true)
+			anchor := m.captureTranscriptReflowAnchor()
 			m.toolsCollapsed = !m.toolsCollapsed
 			for i := range m.toolEntries {
 				m.toolEntries[i].Collapsed = m.toolsCollapsed
 			}
 			m.invalidateEntryCache()
 			m.viewport.SetContent(m.renderEntries())
-			m.gotoBottomIfFollowing()
+			m.restoreTranscriptReflowAnchor(anchor)
 			return nil, true
 		}
 
@@ -79,9 +90,11 @@ func (m *Model) handleIdleKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	case key.Matches(msg, m.keys.CompactToggle):
 		if m.state == StateIdle {
 			m.cancelReceiptInspection(true)
+			anchor := m.captureTranscriptReflowAnchor()
 			m.forceCompact = !m.forceCompact
 			m.invalidateEntryCache()
 			m.viewport.SetContent(m.renderEntries())
+			m.restoreTranscriptReflowAnchor(anchor)
 			return nil, true
 		}
 

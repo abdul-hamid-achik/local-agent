@@ -410,42 +410,62 @@ func renderUnifiedDiffAtWidth(path string, lines []DiffLine, styles Styles, maxL
 	displayed := 0
 	gutter := resolveDiffGutter(lines, styles, width)
 	for index, line := range lines {
-		if maxLines > 0 && displayed >= maxLines {
-			b.WriteString(renderDiffMetaLine(
-				fmt.Sprintf("… %d more lines", len(lines)-index), styles, width,
-			))
-			b.WriteString("\n")
-			break
-		}
-
+		var renderedRows []string
 		switch line.Kind {
 		case DiffAdded:
-			b.WriteString(renderDiffBodyLine(line, "+", gutter.numberAt(index), gutter, styles.DiffAdded, width))
+			renderedRows = renderDiffBodyRows(line, "+", gutter.numberAt(index), gutter, styles.DiffAdded, width)
 		case DiffRemoved:
-			b.WriteString(renderDiffBodyLine(line, "-", gutter.numberAt(index), gutter, styles.DiffRemoved, width))
+			renderedRows = renderDiffBodyRows(line, "-", gutter.numberAt(index), gutter, styles.DiffRemoved, width)
 		case DiffContext:
-			b.WriteString(renderDiffBodyLine(line, " ", gutter.numberAt(index), gutter, styles.DiffContext, width))
+			renderedRows = renderDiffBodyRows(line, " ", gutter.numberAt(index), gutter, styles.DiffContext, width)
 		case DiffHunkHeader:
 			header := line.Content
 			if line.Hunk != nil {
 				header = formatDiffHunk(*line.Hunk)
 			}
-			b.WriteString(renderDiffMetaLine(header, styles, width))
+			renderedRows = []string{renderDiffMetaLine(header, styles, width)}
 		case DiffEllipsis:
 			content := line.Content
 			if content == "" {
 				content = "… unchanged lines"
 			}
-			b.WriteString(renderDiffMetaLine(content, styles, width))
+			renderedRows = []string{renderDiffMetaLine(content, styles, width)}
 		case DiffOmitted:
-			b.WriteString(renderDiffMetaLine(line.Content, styles, width))
+			renderedRows = []string{renderDiffMetaLine(line.Content, styles, width)}
 		case DiffNoNewline:
-			b.WriteString(renderDiffMetaLine(diffNoNewlineContent, styles, width))
+			renderedRows = []string{renderDiffMetaLine(diffNoNewlineContent, styles, width)}
 		default:
-			b.WriteString(renderDiffMetaLine(line.Content, styles, width))
+			renderedRows = []string{renderDiffMetaLine(line.Content, styles, width)}
 		}
-		b.WriteString("\n")
-		displayed++
+
+		if maxLines > 0 {
+			remaining := maxLines - displayed
+			needsMarker := len(renderedRows) > remaining ||
+				(len(renderedRows) == remaining && index < len(lines)-1)
+			if needsMarker {
+				visible := max(0, remaining-1)
+				visible = min(visible, len(renderedRows))
+				for _, row := range renderedRows[:visible] {
+					b.WriteString(row)
+					b.WriteByte('\n')
+					displayed++
+				}
+				if remaining > 0 {
+					b.WriteString(renderDiffMetaLine(
+						diffContinuationLabel(visible, len(renderedRows), len(lines)-index-1),
+						styles,
+						width,
+					))
+					b.WriteByte('\n')
+				}
+				break
+			}
+		}
+		for _, row := range renderedRows {
+			b.WriteString(row)
+			b.WriteByte('\n')
+			displayed++
+		}
 	}
 
 	return b.String()
@@ -495,6 +515,10 @@ func renderDiffStatus(status string, styles Styles) string {
 }
 
 func renderDiffBodyLine(line DiffLine, marker string, numbers diffGutterNumbers, gutter diffGutter, style lipgloss.Style, width int) string {
+	return strings.Join(renderDiffBodyRows(line, marker, numbers, gutter, style, width), "\n")
+}
+
+func renderDiffBodyRows(line DiffLine, marker string, numbers diffGutterNumbers, gutter diffGutter, style lipgloss.Style, width int) []string {
 	prefix := ""
 	if gutter.withNumbers {
 		oldNumber := ""
@@ -508,15 +532,51 @@ func renderDiffBodyLine(line DiffLine, marker string, numbers diffGutterNumbers,
 		prefix = fmt.Sprintf("%*s %*s ", gutter.oldWidth, oldNumber, gutter.newWidth, newNumber)
 	}
 	body := "│ " + marker + " "
-	content := sanitizeTerminalLine(line.Content)
+	// Literal tabs do not have an intrinsic cell width: the terminal expands
+	// them from the current cursor column. Normalize them before measuring so
+	// wrapping has the same geometry in every terminal and code indentation
+	// remains visible.
+	content := strings.ReplaceAll(sanitizeTerminalLine(line.Content), "\t", "    ")
+	contentWidth := 0
 	if width > 0 {
-		content = truncateDisplay(content, max(0, width-lipglossWidth(prefix+body)))
+		contentWidth = max(1, width-lipglossWidth(prefix+body))
 	}
-	rendered := style.PaddingLeft(0).Render(body + content)
-	if prefix == "" {
-		return rendered
+	chunks := []string{content}
+	if contentWidth > 0 && lipglossWidth(content) > contentWidth {
+		chunks = splitDisplayChunks(content, contentWidth)
 	}
-	return gutter.numberStyle.PaddingLeft(0).Render(prefix) + rendered
+	if len(chunks) == 0 {
+		chunks = []string{""}
+	}
+	rows := make([]string, 0, len(chunks))
+	for index, chunk := range chunks {
+		rowPrefix := prefix
+		rowBody := body
+		if index > 0 {
+			rowPrefix = strings.Repeat(" ", lipglossWidth(prefix))
+			rowBody = "│ ↳ "
+		}
+		rendered := style.PaddingLeft(0).Render(rowBody + chunk)
+		if rowPrefix != "" {
+			rendered = gutter.numberStyle.PaddingLeft(0).Render(rowPrefix) + rendered
+		}
+		rows = append(rows, rendered)
+	}
+	return rows
+}
+
+func diffContinuationLabel(visibleRows, currentRows, remainingSourceLines int) string {
+	switch {
+	case visibleRows > 0 && visibleRows < currentRows && remainingSourceLines > 0:
+		return fmt.Sprintf("… line continues · %d more lines", remainingSourceLines)
+	case visibleRows > 0 && visibleRows < currentRows:
+		return "… line continues"
+	default:
+		// No part of the current source line was shown. Count it alongside
+		// later source lines rather than claiming that an unseen line
+		// "continues".
+		return fmt.Sprintf("… %d more lines", remainingSourceLines+1)
+	}
 }
 
 func renderDiffMetaLine(content string, styles Styles, width int) string {
@@ -615,14 +675,18 @@ func diffHunkFromHeader(line DiffLine) (DiffHunk, bool) {
 func resolveDiffGutterNumbers(lines []DiffLine) ([]diffGutterNumbers, bool) {
 	numbers := make([]diffGutterNumbers, len(lines))
 	oldNext, newNext := 0, 0
-	// Remaining header-budgeted lines per side; -1 disables the budget check
-	// after typed coordinates re-anchor the counters mid-hunk.
 	oldLeft, newLeft := 0, 0
 	counters := false
 
 	takeOld := func(typed int) (int, bool) {
 		if typed > 0 {
-			oldNext, oldLeft = typed+1, -1
+			if counters && (oldLeft == 0 || oldNext <= 0 || typed != oldNext) {
+				return 0, false
+			}
+			oldNext = typed + 1
+			if counters && oldLeft > 0 {
+				oldLeft--
+			}
 			return typed, true
 		}
 		if !counters || oldNext <= 0 || oldLeft == 0 {
@@ -637,7 +701,13 @@ func resolveDiffGutterNumbers(lines []DiffLine) ([]diffGutterNumbers, bool) {
 	}
 	takeNew := func(typed int) (int, bool) {
 		if typed > 0 {
-			newNext, newLeft = typed+1, -1
+			if counters && (newLeft == 0 || newNext <= 0 || typed != newNext) {
+				return 0, false
+			}
+			newNext = typed + 1
+			if counters && newLeft > 0 {
+				newLeft--
+			}
 			return typed, true
 		}
 		if !counters || newNext <= 0 || newLeft == 0 {
@@ -652,6 +722,9 @@ func resolveDiffGutterNumbers(lines []DiffLine) ([]diffGutterNumbers, bool) {
 	}
 
 	for index, line := range lines {
+		if line.OldLine < 0 || line.NewLine < 0 {
+			return nil, false
+		}
 		switch line.Kind {
 		case DiffHunkHeader:
 			hunk, ok := diffHunkFromHeader(line)
@@ -671,17 +744,20 @@ func resolveDiffGutterNumbers(lines []DiffLine) ([]diffGutterNumbers, bool) {
 			if !okOld || !okNew {
 				return nil, false
 			}
-			if line.OldLine > 0 && line.NewLine > 0 {
-				counters = true
-			}
 			numbers[index] = diffGutterNumbers{old: oldNumber, new: newNumber}
 		case DiffAdded:
+			if line.OldLine != 0 {
+				return nil, false
+			}
 			newNumber, ok := takeNew(line.NewLine)
 			if !ok {
 				return nil, false
 			}
 			numbers[index] = diffGutterNumbers{new: newNumber}
 		case DiffRemoved:
+			if line.NewLine != 0 {
+				return nil, false
+			}
 			oldNumber, ok := takeOld(line.OldLine)
 			if !ok {
 				return nil, false

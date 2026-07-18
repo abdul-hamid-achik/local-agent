@@ -173,6 +173,11 @@ func (m *Model) handleToolCallStart(msg ToolCallStartMsg, cmds []tea.Cmd) []tea.
 		ToolIndex: len(m.toolEntries) - 1,
 	})
 	m.viewport.SetContent(m.renderEntries())
+	if isExpertConsultTool(msg.Name) {
+		if cmd := m.refreshAgentHub(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
 	m.gotoBottomIfFollowing()
 	return cmds
 }
@@ -305,6 +310,11 @@ func (m *Model) handleToolCallResult(msg ToolCallResultMsg, cmds []tea.Cmd) []te
 		cmds = append(cmds, diffCmd)
 	}
 	m.viewport.SetContent(m.renderEntries())
+	if expertResult {
+		if cmd := m.refreshAgentHub(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
 	m.gotoBottomIfFollowing()
 	return cmds
 }

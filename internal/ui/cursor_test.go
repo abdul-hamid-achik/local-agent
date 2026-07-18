@@ -181,6 +181,12 @@ func TestViewCursorHiddenWithoutTextOwnership(t *testing.T) {
 			},
 		},
 		{
+			name: "agent_hub_hides_composer",
+			setup: func(m *Model) {
+				m.openAgentHub()
+			},
+		},
+		{
 			name: "plan_select_has_no_text_cursor",
 			setup: func(m *Model) {
 				m.openPlanForm("task")

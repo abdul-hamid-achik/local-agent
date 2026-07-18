@@ -9,6 +9,7 @@ import (
 // handleThemeChange applies a terminal background color change to every
 // themed surface without disturbing transcript anchors.
 func (m *Model) handleThemeChange(msg tea.BackgroundColorMsg) {
+	transcriptAnchor := m.captureTranscriptReflowAnchor()
 	approvalAnchor := m.captureApprovalTranscriptAnchor()
 	inlineFormAnchor := m.captureInlineFormTranscriptAnchor()
 	m.isDark = msg.IsDark()
@@ -20,6 +21,7 @@ func (m *Model) handleThemeChange(msg tea.BackgroundColorMsg) {
 	// Update tool card styles for theme.
 	m.toolCardMgr.SetDark(msg.IsDark())
 	m.restylePickerOverlays()
+	m.restyleAgentHub()
 	if m.goalFormState != nil {
 		m.goalFormState.SetTheme(m.isDark)
 		m.goalFormState.SetReducedMotion(m.reducedMotion)
@@ -62,6 +64,7 @@ func (m *Model) handleThemeChange(msg tea.BackgroundColorMsg) {
 	}
 	m.refreshInlineFormLayout(inlineFormAnchor)
 	m.restoreApprovalTranscriptAnchor(approvalAnchor)
+	m.restoreTranscriptReflowAnchor(transcriptAnchor)
 }
 
 // handleWindowSize reflows every sized surface for a terminal resize and
@@ -74,6 +77,10 @@ func (m *Model) handleWindowSize(msg tea.WindowSizeMsg, cmds []tea.Cmd) []tea.Cm
 		// disclosure first; height-only repaint events preserve it.
 		m.cancelReceiptInspection(true)
 	}
+	// Capture after settling a width-invalidated receipt inspector: closing
+	// that temporary disclosure restores its pre-inspection follow intent,
+	// which is the semantic position the resize must preserve.
+	transcriptAnchor := m.captureTranscriptReflowAnchor()
 	approvalAnchor := m.captureApprovalTranscriptAnchor()
 	completionAnchor := m.captureCompletionTranscriptAnchor()
 	inlineFormAnchor := m.captureInlineFormTranscriptAnchor()
@@ -151,8 +158,6 @@ func (m *Model) handleWindowSize(msg tea.WindowSizeMsg, cmds []tea.Cmd) []tea.Cm
 		if markdownChanged || widthChanged {
 			m.viewport.SetContent(m.renderEntries())
 		}
-		// Maintain scroll position - if anchor is active, stay at bottom.
-		m.gotoBottomIfFollowing()
 	}
 
 	// Resize help viewport if it's open.
@@ -160,6 +165,7 @@ func (m *Model) handleWindowSize(msg tea.WindowSizeMsg, cmds []tea.Cmd) []tea.Cm
 		m.resizeHelpViewport(true)
 	}
 	m.resizePickerOverlays()
+	m.resizeAgentHub()
 	if m.pendingApproval != nil && m.approvalState != nil {
 		m.resizeApproval(true)
 		m.recalcViewportHeight()
@@ -183,6 +189,7 @@ func (m *Model) handleWindowSize(msg tea.WindowSizeMsg, cmds []tea.Cmd) []tea.Cm
 	m.restoreApprovalTranscriptAnchor(approvalAnchor)
 	m.restoreCompletionTranscriptAnchor(completionAnchor)
 	m.restoreInlineFormTranscriptAnchor(inlineFormAnchor)
+	m.restoreTranscriptReflowAnchor(transcriptAnchor)
 	return cmds
 }
 
@@ -205,8 +212,9 @@ func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
 		return nil
 	}
 	// A visible overlay owns pointer input. Scroll document overlays through
-	// their own Bubbles viewports and swallow wheel events for all other
-	// overlays so the hidden transcript cannot move underneath a modal.
+	// their own Bubbles viewports, deliver picker input to the active Bubbles
+	// child, and swallow wheel events for all other overlays so the hidden
+	// transcript cannot move underneath a modal.
 	if m.overlay != OverlayNone {
 		switch m.overlay {
 		case OverlayCortexDecision:
@@ -228,6 +236,12 @@ func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
 			if m.goalRecoveryState != nil {
 				_, _ = m.goalRecoveryState.Update(msg)
 			}
+		case OverlayProviderPicker:
+			if m.providerPickerState != nil {
+				m.updateProviderPickerWheel(msg)
+			}
+		case OverlayAgents:
+			return m.updateAgentHubWheel(msg)
 		}
 		return nil
 	}
@@ -248,7 +262,15 @@ func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
 // left clicks to transcript hit testing. handled reports whether Update must
 // return immediately without running the shared component tail.
 func (m *Model) handleMouseClickMsg(msg tea.MouseClickMsg) (cmd tea.Cmd, handled bool) {
-	// Modal and inline decision surfaces are intentionally keyboard-first.
+	// Provider selection is a Bubbles list and explicitly owns pointer
+	// interaction while visible.
+	if m.overlay == OverlayProviderPicker && m.providerPickerState != nil {
+		return m.selectProviderPickerPointer(msg), true
+	}
+	if m.overlay == OverlayAgents {
+		return m.selectAgentHubPointer(msg), true
+	}
+	// Other modal and inline decision surfaces are intentionally keyboard-first.
 	// Until a child explicitly owns pointer interaction, clicks are swallowed
 	// rather than reaching ToolCards behind an authority-changing prompt.
 	if m.overlay != OverlayNone || m.pendingApproval != nil || m.readScopePrompt != nil {

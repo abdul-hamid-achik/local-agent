@@ -10,10 +10,10 @@
 │   /plan · Open a guided read-only… │
 │   /goal · Create, inspect, pause,… │
 │   /model · Show, switch, or list … │
+│   /provider · Show or switch infe… │
 │   /recover · Review a paused exec… │
 │   /agent · Show or switch agent p… │
-│   /load · Load a markdown file as… │
-│   /image · Attach or manage pendi… │
+│   /agents · Open the read-only ag… │
 │ esc cancel · enter select · ↑/↓    │
 ╰────────────────────────────────────╯
 ▌❯ /

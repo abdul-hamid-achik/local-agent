@@ -242,6 +242,11 @@ func (c ToolCard) ViewWithActivity(width int, activityGlyph string, elapsed time
 			presentation.label = "Result cursor invalid"
 		}
 	}
+	headerDuration := c.Duration
+	if c.State == ToolCardRunning {
+		headerDuration = elapsed
+	}
+	viewModel := toolViewModelForCardHeader(c, headerDuration)
 
 	// Leading glyph and trailing timing meta. Running animation is supplied by
 	// the parent so every card can share one Bubbles spinner tick chain.
@@ -258,8 +263,8 @@ func (c ToolCard) ViewWithActivity(width int, activityGlyph string, elapsed time
 			}
 			glyph = c.Styles.Dimmed.Render(disclosure) + " " + glyph
 		}
-		if elapsed > 0 {
-			meta = c.Styles.Elapsed.Render(formatDuration(elapsed))
+		if viewModel.Duration > 0 {
+			meta = c.Styles.Elapsed.Render(formatDuration(viewModel.Duration))
 		}
 	} else {
 		glyph = titleStyle.Render(c.statusGlyph())
@@ -274,52 +279,35 @@ func (c ToolCard) ViewWithActivity(width int, activityGlyph string, elapsed time
 			}
 			glyph = c.Styles.Dimmed.Render(disclosure) + " " + glyph
 		}
-		if c.Duration > 0 {
-			meta = c.Styles.Dimmed.Render("(" + formatDuration(c.Duration) + ")")
+		if viewModel.Duration > 0 {
+			meta = c.Styles.Dimmed.Render("(" + formatDuration(viewModel.Duration) + ")")
 		}
 	}
 
-	// Keep at least a small, readable name. Timing yields first, then the summary,
-	// when the terminal is too narrow for all semantic header fields.
-	glyphW := lipgloss.Width(glyph)
-	metaW := lipgloss.Width(meta)
-	if meta != "" && inner-glyphW-metaW-2 < 1 {
+	// Project the header into terminal-cell budgets before applying styles.
+	// Duration is tertiary metadata and disappears first under pressure; the
+	// summary starts with at most half and may use only cells a short operation
+	// leaves otherwise empty.
+	cardSummary := toolCardSummaryWithoutRepeatedAction(viewModel.Summary, projection.Operation)
+	wantSummary := (c.State == ToolCardRunning || !c.Expanded) && cardSummary != ""
+	budget := projectToolHeaderCellBudget(
+		inner,
+		lipgloss.Width(glyph),
+		lipgloss.Width(presentation.label),
+		lipgloss.Width(cardSummary),
+		lipgloss.Width(meta),
+		wantSummary,
+	)
+	if !budget.ShowDuration {
 		meta = ""
-		metaW = 0
 	}
-	textBudget := inner - glyphW - 1
-	if meta != "" {
-		textBudget -= metaW + 1
-	}
-	nameBudget := max(0, textBudget)
-	cardSummary := c.Summary
-	if projected := projection.SummaryText(); projected != "" && c.State != ToolCardRunning {
-		cardSummary = projected
-	}
-	cardSummary = toolCardSummaryWithoutRepeatedAction(cardSummary, projection.Operation)
-	summary := ""
-	summaryBudget := 0
-	if (c.State == ToolCardRunning || !c.Expanded) && cardSummary != "" && textBudget >= 7 {
-		summary = boundedToolCardSummary(cardSummary)
-		summaryW := lipgloss.Width(summary)
-		summaryBudget = min(summaryW, max(1, textBudget/2))
-		nameBudget = textBudget - summaryBudget - 3 // " · "
-		if nameBudget < 1 {
-			summary = ""
-			summaryBudget = 0
-			nameBudget = max(0, textBudget)
-		} else if nameW := lipgloss.Width(presentation.label); nameW < nameBudget {
-			summaryBudget = min(summaryW, summaryBudget+(nameBudget-nameW))
-			nameBudget = nameW
-		}
-	}
-	name := truncateDisplay(presentation.label, max(0, nameBudget))
+	name := truncateDisplay(presentation.label, budget.NameCells)
 	header := glyph
 	if name != "" {
 		header += " " + titleStyle.Render(name)
 	}
-	if summary != "" && summaryBudget > 0 {
-		header += c.Styles.Dimmed.Render(" · " + truncateDisplay(summary, summaryBudget))
+	if budget.SummaryCells > 0 {
+		header += c.Styles.Dimmed.Render(" · " + truncateDisplay(cardSummary, budget.SummaryCells))
 	}
 	if meta != "" {
 		header += " " + meta

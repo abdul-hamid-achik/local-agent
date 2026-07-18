@@ -41,6 +41,7 @@ const (
 	OverlayGoalRecovery
 	OverlayModelDetails
 	OverlayModelPull
+	OverlayAgents
 )
 
 // CompletionState holds all state for the composer-owned completion popup.
@@ -99,6 +100,10 @@ type ToolEntry struct {
 
 // ChatEntry is a single item in the chat log.
 type ChatEntry struct {
+	BlockID           BlockID          // stable semantic identity across reflow and restore
+	TurnID            TurnID           // causal turn identity; independent of slice position
+	Revision          uint64           // semantic/lifecycle revision, never a layout revision
+	Lifecycle         BlockLifecycle   // monotonic semantic lifecycle
 	Kind              string           // "user", "assistant", "tool_group", "error", "system"
 	Content           string           // raw content
 	RenderedContent   string           // cached Glamour output (set once on completion)
@@ -108,6 +113,7 @@ type ChatEntry struct {
 	ThinkingContent   string           // extracted <think> content
 	ThinkingCollapsed bool             // default: true
 	Attachments       []imageasset.Ref // validated, path-free image metadata
+	semanticDigest    [32]byte         // transient detector for semantic revision changes
 }
 
 // toolHitRegion is an exact, ordered transcript row target for one ToolCard

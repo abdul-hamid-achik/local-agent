@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -57,14 +58,20 @@ func (m *Model) SessionResumeInfo() (SessionResumeInfo, bool) {
 }
 
 type persistedChatEntry struct {
-	Kind              string           `json:"kind"`
-	Content           string           `json:"content,omitempty"`
-	Name              string           `json:"name,omitempty"`
-	IsError           bool             `json:"is_error,omitempty"`
-	ToolIndex         int              `json:"tool_index,omitempty"`
+	Kind      string `json:"kind"`
+	Content   string `json:"content,omitempty"`
+	Name      string `json:"name,omitempty"`
+	IsError   bool   `json:"is_error,omitempty"`
+	ToolIndex int    `json:"tool_index,omitempty"`
+	// ThinkingContent is decode-only compatibility for legacy snapshots.
+	// Provider reasoning is never written or restored.
 	ThinkingContent   string           `json:"thinking_content,omitempty"`
 	ThinkingCollapsed bool             `json:"thinking_collapsed,omitempty"`
 	Attachments       []imageasset.Ref `json:"attachments,omitempty"`
+	BlockID           BlockID          `json:"block_id,omitempty"`
+	TurnID            TurnID           `json:"turn_id,omitempty"`
+	Revision          uint64           `json:"revision,omitempty"`
+	Lifecycle         BlockLifecycle   `json:"lifecycle,omitempty"`
 }
 
 // persistedToolEntry deliberately excludes RawArgs and BeforeContent. Those
@@ -100,6 +107,7 @@ type persistedSessionState struct {
 	Messages              []llm.Message            `json:"messages"`
 	Entries               []persistedChatEntry     `json:"entries"`
 	ToolEntries           []persistedToolEntry     `json:"tool_entries,omitempty"`
+	Provider              *persistedProviderRef    `json:"provider,omitempty"`
 	Mode                  Mode                     `json:"mode"`
 	Model                 string                   `json:"model,omitempty"`
 	ModelPinned           bool                     `json:"model_pinned,omitempty"`
@@ -117,7 +125,19 @@ type persistedSessionState struct {
 	CortexDecisionAttempt *cortexDecisionAttempt   `json:"cortex_decision_attempt,omitempty"`
 }
 
-const currentPersistedSessionVersion = 2
+type persistedProviderRef struct {
+	Profile  string `json:"profile"`
+	Model    string `json:"model,omitempty"`
+	Locality string `json:"locality"`
+}
+
+const (
+	currentPersistedSessionVersion = 3
+	persistedProviderLocal         = "local"
+	persistedProviderRemote        = "remote"
+	maxPersistedProviderNameBytes  = 128
+	maxPersistedProviderModelBytes = 512
+)
 
 func sessionTitle(prompt string) string {
 	lines := strings.Split(prompt, "\n")
@@ -372,6 +392,9 @@ func restoredToolSummary(entry persistedToolEntry) string {
 }
 
 func encodeSessionState(m *Model) (string, error) {
+	if err := m.reconcileTranscriptEntries(); err != nil {
+		return "", fmt.Errorf("reconcile transcript identity: %w", err)
+	}
 	entries := make([]persistedChatEntry, len(m.entries))
 	for i, entry := range m.entries {
 		entries[i] = persistedChatEntry{
@@ -380,9 +403,12 @@ func encodeSessionState(m *Model) (string, error) {
 			Name:              entry.Name,
 			IsError:           entry.IsError,
 			ToolIndex:         entry.ToolIndex,
-			ThinkingContent:   entry.ThinkingContent,
 			ThinkingCollapsed: entry.ThinkingCollapsed,
 			Attachments:       append([]imageasset.Ref(nil), entry.Attachments...),
+			BlockID:           entry.BlockID,
+			TurnID:            entry.TurnID,
+			Revision:          entry.Revision,
+			Lifecycle:         entry.Lifecycle,
 		}
 	}
 	manualSkills := m.manualSkills
@@ -402,6 +428,7 @@ func encodeSessionState(m *Model) (string, error) {
 		Messages:              m.agent.Messages(),
 		Entries:               entries,
 		ToolEntries:           persistToolEntries(m.toolEntries),
+		Provider:              m.persistedProviderReference(),
 		Mode:                  m.mode,
 		Model:                 m.model,
 		ModelPinned:           m.modelPinned,
@@ -571,6 +598,22 @@ func EncodeHeadlessGoalSessionStateWithContextFloor(messages []llm.Message, mode
 func marshalPersistedSessionState(state persistedSessionState) (string, error) {
 	state.Messages = agent.SanitizeMessagesForPersistence(state.Messages)
 	state.ToolEntries = sanitizePersistedToolEntryArgs(state.ToolEntries)
+	state.Entries = withoutPersistedThinkingContent(state.Entries)
+	if len(state.Entries) > 0 && !persistedTranscriptHasIdentity(state.Entries) {
+		// Internal/headless callers construct the DTO directly. Complete their
+		// identity before encoding; a decoded v3 envelope never gets this
+		// compatibility path and therefore fails closed when identity is absent.
+		hydrateLegacyTranscriptIdentity(&state)
+	}
+	if err := validatePersistedTranscriptIdentity(state.Entries); err != nil {
+		return "", err
+	}
+	if err := validatePersistedToolTranscriptState(state); err != nil {
+		return "", err
+	}
+	if err := validatePersistedProviderReference(state); err != nil {
+		return "", err
+	}
 	if err := validatePersistedContextPromptFloor(state); err != nil {
 		return "", err
 	}
@@ -601,6 +644,16 @@ func decodeSessionState(raw string) (persistedSessionState, error) {
 	}
 	state.Messages = agent.SanitizeMessagesForPersistence(state.Messages)
 	state.ToolEntries = sanitizePersistedToolEntryArgs(state.ToolEntries)
+	state.Entries = withoutPersistedThinkingContent(state.Entries)
+	if err := validatePersistedTranscriptIdentity(state.Entries); err != nil {
+		return state, err
+	}
+	if err := validatePersistedToolTranscriptState(state); err != nil {
+		return state, err
+	}
+	if err := validatePersistedProviderReference(state); err != nil {
+		return state, err
+	}
 	if err := validatePersistedContextPromptFloor(state); err != nil {
 		return state, err
 	}
@@ -789,7 +842,266 @@ func sanitizePersistedToolEntryArgs(entries []persistedToolEntry) []persistedToo
 	return result
 }
 
+func withoutPersistedThinkingContent(entries []persistedChatEntry) []persistedChatEntry {
+	if len(entries) == 0 {
+		return nil
+	}
+	result := append([]persistedChatEntry(nil), entries...)
+	for index := range result {
+		result[index].ThinkingContent = ""
+	}
+	return result
+}
+
+func validatePersistedTranscriptIdentity(entries []persistedChatEntry) error {
+	if len(entries) > 0 && !persistedTranscriptHasIdentity(entries) {
+		return fmt.Errorf("session transcript identity is missing")
+	}
+
+	seen := make(map[BlockID]struct{}, len(entries))
+	for index, entry := range entries {
+		if entry.BlockID == "" || entry.Revision == 0 {
+			return fmt.Errorf("session transcript identity is mixed or incomplete at entry %d", index)
+		}
+		if !entry.BlockID.Valid() {
+			return fmt.Errorf("session entry %d has invalid block ID", index)
+		}
+		if _, duplicate := seen[entry.BlockID]; duplicate {
+			return fmt.Errorf("session entry %d repeats block ID %q", index, entry.BlockID)
+		}
+		seen[entry.BlockID] = struct{}{}
+		if !entry.Lifecycle.Valid() {
+			return fmt.Errorf("session entry %d has invalid lifecycle %d", index, entry.Lifecycle)
+		}
+		if !validPersistedEntryLifecycle(entry.Kind, entry.Lifecycle) {
+			return fmt.Errorf(
+				"session entry %d kind %q has incompatible lifecycle %d",
+				index,
+				entry.Kind,
+				entry.Lifecycle,
+			)
+		}
+		if persistedEntryNeedsTurn(entry.Kind) && entry.TurnID == "" {
+			return fmt.Errorf("session entry %d is missing a turn ID", index)
+		}
+		if entry.TurnID != "" && !entry.TurnID.Valid() {
+			return fmt.Errorf("session entry %d has invalid turn ID", index)
+		}
+	}
+	return nil
+}
+
+func persistedTranscriptHasIdentity(entries []persistedChatEntry) bool {
+	for _, entry := range entries {
+		if entry.BlockID != "" || entry.TurnID != "" || entry.Revision != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func validPersistedEntryLifecycle(kind string, lifecycle BlockLifecycle) bool {
+	switch kind {
+	case "user", "assistant", "system":
+		return lifecycle == BlockSettled
+	case "error":
+		return lifecycle == BlockFailed
+	case "tool_group":
+		return lifecycle == BlockLive || lifecycle == BlockSettling ||
+			lifecycle == BlockSettled || lifecycle == BlockFailed ||
+			lifecycle == BlockCancelled
+	default:
+		return false
+	}
+}
+
+func persistedEntryNeedsTurn(kind string) bool {
+	switch kind {
+	case "user", "assistant", "tool_group":
+		return true
+	default:
+		return false
+	}
+}
+
+// validatePersistedToolTranscriptState checks the cross-record invariants that
+// entry-local identity validation cannot prove. A v3 tool block must point at
+// an admitted ToolEntry whose status agrees with the block lifecycle; otherwise
+// restore would accept the envelope and fail later in the renderer after part
+// of the session had already been committed.
+func validatePersistedToolTranscriptState(state persistedSessionState) error {
+	for index, tool := range state.ToolEntries {
+		switch tool.Status {
+		case ToolStatusRunning, ToolStatusDone, ToolStatusError:
+		default:
+			return fmt.Errorf("session tool entry %d has invalid status %d", index, tool.Status)
+		}
+	}
+	for index, entry := range state.Entries {
+		if entry.Kind != "tool_group" {
+			continue
+		}
+		if entry.ToolIndex < 0 || entry.ToolIndex >= len(state.ToolEntries) {
+			return fmt.Errorf(
+				"session entry %d references missing tool index %d",
+				index,
+				entry.ToolIndex,
+			)
+		}
+		var expected BlockLifecycle
+		switch state.ToolEntries[entry.ToolIndex].Status {
+		case ToolStatusRunning:
+			expected = BlockLive
+		case ToolStatusDone:
+			expected = BlockSettled
+		case ToolStatusError:
+			expected = BlockFailed
+		}
+		if entry.Lifecycle != expected {
+			return fmt.Errorf(
+				"session entry %d tool lifecycle %d does not match status %d",
+				index,
+				entry.Lifecycle,
+				state.ToolEntries[entry.ToolIndex].Status,
+			)
+		}
+	}
+	return nil
+}
+
+func hydrateLegacyTranscriptIdentity(state *persistedSessionState) {
+	if state == nil {
+		return
+	}
+	var currentTurn TurnID
+	for index := range state.Entries {
+		entry := &state.Entries[index]
+		entry.BlockID = deterministicLegacyBlockID(index, entry.Kind)
+		switch {
+		case entry.Kind == "user":
+			currentTurn = deterministicLegacyTurnID(index, entry.Kind)
+			entry.TurnID = currentTurn
+		case persistedEntryNeedsTurn(entry.Kind):
+			if currentTurn == "" {
+				currentTurn = deterministicLegacyTurnID(index, entry.Kind)
+			}
+			entry.TurnID = currentTurn
+		default:
+			entry.TurnID = ""
+		}
+		entry.Revision = 1
+		entry.Lifecycle = legacyPersistedEntryLifecycle(*state, *entry)
+		entry.ThinkingContent = ""
+	}
+}
+
+func deterministicLegacyBlockID(ordinal int, kind string) BlockID {
+	return BlockID(deterministicLegacyTranscriptID("blk_legacy_", ordinal, kind))
+}
+
+func deterministicLegacyTurnID(ordinal int, kind string) TurnID {
+	return TurnID(deterministicLegacyTranscriptID("turn_legacy_", ordinal, kind))
+}
+
+func deterministicLegacyTranscriptID(prefix string, ordinal int, kind string) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%d\x00%s", ordinal, kind)))
+	return fmt.Sprintf("%s%x", prefix, sum[:16])
+}
+
+func legacyPersistedEntryLifecycle(state persistedSessionState, entry persistedChatEntry) BlockLifecycle {
+	switch entry.Kind {
+	case "error":
+		return BlockFailed
+	case "tool_group":
+		if entry.ToolIndex < 0 || entry.ToolIndex >= len(state.ToolEntries) {
+			return BlockFailed
+		}
+		switch state.ToolEntries[entry.ToolIndex].Status {
+		case ToolStatusRunning:
+			return BlockLive
+		case ToolStatusError:
+			return BlockFailed
+		default:
+			return BlockSettled
+		}
+	default:
+		return BlockSettled
+	}
+}
+
+func (m *Model) persistedProviderReference() *persistedProviderRef {
+	if m == nil {
+		return nil
+	}
+	locality := persistedProviderLocal
+	if m.modelManager != nil && m.modelManager.RemoteProvider() {
+		locality = persistedProviderRemote
+	}
+	return &persistedProviderRef{
+		Profile:  m.activeProviderName(),
+		Model:    m.model,
+		Locality: locality,
+	}
+}
+
+func validatePersistedProviderReference(state persistedSessionState) error {
+	ref := state.Provider
+	if ref == nil {
+		return nil
+	}
+	if ref.Profile == "" || len(ref.Profile) > maxPersistedProviderNameBytes ||
+		ref.Profile != sanitizeTerminalSingleLine(ref.Profile) {
+		return fmt.Errorf("saved provider profile is invalid")
+	}
+	if len(ref.Model) > maxPersistedProviderModelBytes ||
+		ref.Model != sanitizeTerminalSingleLine(ref.Model) {
+		return fmt.Errorf("saved provider model is invalid")
+	}
+	if ref.Locality != persistedProviderLocal && ref.Locality != persistedProviderRemote {
+		return fmt.Errorf("saved provider locality %q is invalid", ref.Locality)
+	}
+	if config.CanonicalModelName(ref.Model) != config.CanonicalModelName(state.Model) {
+		return fmt.Errorf("saved provider model does not match session model")
+	}
+	return nil
+}
+
+func (m *Model) validateRestoredProviderReference(state persistedSessionState) error {
+	if err := validatePersistedProviderReference(state); err != nil {
+		return err
+	}
+	ref := state.Provider
+	if ref == nil {
+		return nil
+	}
+	actualProfile := m.activeProviderName()
+	actualLocality := persistedProviderLocal
+	if m.modelManager != nil && m.modelManager.RemoteProvider() {
+		actualLocality = persistedProviderRemote
+	}
+	if actualProfile != ref.Profile || actualLocality != ref.Locality {
+		return fmt.Errorf(
+			"restore provider: session requires %s provider %q; current provider is %s %q",
+			ref.Locality,
+			ref.Profile,
+			actualLocality,
+			actualProfile,
+		)
+	}
+	// Remote profiles bind their configured model to the adapter. Refuse a
+	// silent same-name fallback with a different model; local Ollama models
+	// continue through the existing admission and SetCurrentModel transaction.
+	if ref.Locality == persistedProviderRemote {
+		if m.modelManager == nil ||
+			config.CanonicalModelName(m.modelManager.Model()) != config.CanonicalModelName(ref.Model) {
+			return fmt.Errorf("restore provider: current provider model does not match saved model %q", ref.Model)
+		}
+	}
+	return nil
+}
+
 func migratePersistedSessionState(state persistedSessionState) (persistedSessionState, error) {
+	state.Entries = append([]persistedChatEntry(nil), state.Entries...)
 	switch state.Version {
 	case 1:
 		if state.Mode < ModeNormal || state.Mode > ModeAuto {
@@ -802,6 +1114,16 @@ func migratePersistedSessionState(state persistedSessionState) (persistedSession
 		} else if state.Mode == ModeBuild {
 			state.Mode = ModeNormal
 		}
+		hydrateLegacyTranscriptIdentity(&state)
+		state.Version = currentPersistedSessionVersion
+	case 2:
+		if state.Mode < ModeNormal || state.Mode > ModeAuto {
+			return state, fmt.Errorf("invalid saved mode %d", state.Mode)
+		}
+		if state.Goal != nil {
+			state.Mode = ModeAuto
+		}
+		hydrateLegacyTranscriptIdentity(&state)
 		state.Version = currentPersistedSessionVersion
 	case currentPersistedSessionVersion:
 		if state.Mode < ModeNormal || state.Mode > ModeAuto {
@@ -813,6 +1135,7 @@ func migratePersistedSessionState(state persistedSessionState) (persistedSession
 	default:
 		return state, fmt.Errorf("unsupported session state version %d", state.Version)
 	}
+	state.Entries = withoutPersistedThinkingContent(state.Entries)
 	return state, nil
 }
 
@@ -884,6 +1207,23 @@ func (m *Model) restoreSessionState(state persistedSessionState) error {
 	// privacy boundary as JSON decoding before messages or cards enter the UI.
 	state.Messages = agent.SanitizeMessagesForPersistence(state.Messages)
 	state.ToolEntries = sanitizePersistedToolEntryArgs(state.ToolEntries)
+	state.Entries = withoutPersistedThinkingContent(state.Entries)
+	if len(state.Entries) > 0 && !persistedTranscriptHasIdentity(state.Entries) {
+		// Direct in-memory callers have not crossed the JSON decoder, so they
+		// may still carry the all-zero DTO shape used by internal recovery
+		// projections. Complete that shape deterministically. Decoded v3 JSON
+		// remains strict in decodeSessionState and never reaches this path.
+		hydrateLegacyTranscriptIdentity(&state)
+	}
+	if err := validatePersistedTranscriptIdentity(state.Entries); err != nil {
+		return err
+	}
+	if err := validatePersistedToolTranscriptState(state); err != nil {
+		return err
+	}
+	if err := m.validateRestoredProviderReference(state); err != nil {
+		return err
+	}
 	if err := validatePersistedContextPromptFloor(state); err != nil {
 		return err
 	}
@@ -994,9 +1334,12 @@ func (m *Model) restoreSessionState(state persistedSessionState) error {
 			Name:              entry.Name,
 			IsError:           entry.IsError,
 			ToolIndex:         entry.ToolIndex,
-			ThinkingContent:   entry.ThinkingContent,
 			ThinkingCollapsed: entry.ThinkingCollapsed,
 			Attachments:       append([]imageasset.Ref(nil), entry.Attachments...),
+			BlockID:           entry.BlockID,
+			TurnID:            entry.TurnID,
+			Revision:          entry.Revision,
+			Lifecycle:         entry.Lifecycle,
 		}
 	}
 	m.toolEntries = restoreToolEntries(state.ToolEntries)
@@ -1024,40 +1367,11 @@ func (m *Model) restoreSessionState(state persistedSessionState) error {
 	m.syncComposerAuthority()
 	m.setRouterMode(m.modeConfigs[m.presentedMode()].RouterMode)
 
-	m.toolsPending = 0
 	// Workspace context is reconstructed from a fresh exact Bob receipt. It is
 	// never inherited from a durable transcript or a previously active session.
 	m.clearBobWorkspaceContext()
 	m.resetTurnDiagnostics()
-	m.toolCardMgr = NewToolCardManager(m.isDark)
-	for i := range m.toolEntries {
-		entry := &m.toolEntries[i]
-		kind := toolCardKindForTool(entry.Name)
-		m.toolCardMgr.AddCardWithID(entry.ID, entry.Name, kind, entry.StartTime)
-		card := &m.toolCardMgr.Cards[len(m.toolCardMgr.Cards)-1]
-		card.Args = entry.Args
-		card.SetSummary(entry.Summary)
-		card.ResultLanguage = entry.ResultLanguage
-		card.Projection = entry.Projection
-		card.setExpertProgress(entry.ExpertProgress, max(1, m.chatPaneWidth()-6))
-		card.Result = entry.Result
-		card.Duration = entry.Duration
-		switch entry.Status {
-		case ToolStatusRunning:
-			settleInterruptedToolEntry(entry)
-			card.State = ToolCardError
-			card.Result = entry.Result
-			card.Projection = entry.Projection
-		case ToolStatusError:
-			card.State = toolCardStateFromProjection(entry.Projection)
-			if card.State == ToolCardSuccess {
-				card.State = ToolCardError
-			}
-		default:
-			card.State = toolCardStateFromProjection(entry.Projection)
-		}
-		card.State = entry.ExpertProgress.cardState(card.State)
-	}
+	m.rebuildToolCardsFromEntries()
 	return nil
 }
 

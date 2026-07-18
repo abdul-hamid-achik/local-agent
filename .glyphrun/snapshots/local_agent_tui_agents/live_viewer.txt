@@ -1,0 +1,23 @@
+     ╭────────────────────────────────────────────────────────────────────╮
+     │ Agent Viewer                                                       │
+     │ Consultation · active                                              │
+     │ Status · active                                                    │
+     │ team · 1 agent · 1 active                                          │
+     │                                                                    │
+     │ Subagents                                                          │
+     │ … generalist · running · qwen3.5:0.8b · local                      │
+     │                                                                    │
+     │ Activity                                                           │
+     │ No public child events are available for this runtime.             │
+     │                                                                    │
+     │                                                                    │
+     │                                                                    │
+     │                                                                    │
+     │                                                                    │
+     │                                                                    │
+     │                                                                    │
+     │                                                                    │
+     │                                                                    │
+     │                                                                    │
+     │ esc back · enter jump · j/k scroll · pgup/pgdn page                │
+     ╰────────────────────────────────────────────────────────────────────╯

@@ -1,6 +1,8 @@
 package llm
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -68,6 +70,41 @@ func TestSwitchProviderMissingKey(t *testing.T) {
 	err := manager.SwitchProvider("xai")
 	if err == nil || !contains(err.Error(), "XAI_API_KEY") {
 		t.Fatalf("expected missing key error, got %v", err)
+	}
+}
+
+func TestSwitchProviderContextCanceledBeforeMutation(t *testing.T) {
+	t.Setenv("XAI_API_KEY", "test-key")
+	manager := NewModelManager("http://127.0.0.1:9", 4096)
+	defer manager.Close()
+	manager.ConfigureProviderCatalog(config.ProviderConfig{
+		Active: "ollama",
+		Profiles: map[string]config.ProviderProfile{
+			"ollama": {Type: config.ProviderTypeOllama},
+			"xai": {
+				Type:    config.ProviderTypeXAI,
+				BaseURL: "https://api.x.ai/v1",
+				Model:   "grok-4.5",
+			},
+		},
+	}, false, "qwen3.5:2b")
+	originalProvider := manager.ActiveProviderName()
+	originalModel := manager.Model()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := manager.SwitchProviderContext(ctx, "xai")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("SwitchProviderContext error = %v, want context.Canceled", err)
+	}
+	if manager.RemoteProvider() {
+		t.Fatal("canceled switch mutated the active provider")
+	}
+	if got := manager.ActiveProviderName(); got != originalProvider {
+		t.Fatalf("active provider = %q, want unchanged %q", got, originalProvider)
+	}
+	if got := manager.Model(); got != originalModel {
+		t.Fatalf("model = %q, want unchanged %q", got, originalModel)
 	}
 }
 

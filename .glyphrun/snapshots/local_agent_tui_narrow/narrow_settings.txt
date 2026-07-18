@@ -1,9 +1,9 @@
               LOCAL AGENT
    Local-first · approval prompts on
-      PLAN · qwen3.5:2b · offline
  ╭────────────────────────────────────╮
  │ Settings                           │
  │ │ Model · Pinned · qwen3.5:2b      │
+ │   Provider · ollama · local        │
  │   Agent profile · Default          │
  │   Mode · PLAN                      │
  │   Sessions · Resume                │

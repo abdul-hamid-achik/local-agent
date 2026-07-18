@@ -55,7 +55,7 @@ func loadHeadlessGoalState(ctx context.Context, store *db.Store, workspace strin
 	if err := json.Unmarshal([]byte(record.StateJSON), &state); err != nil {
 		return db.Session{}, nil, headlessGoalState{}, db.SessionStateRecord{}, fmt.Errorf("decode goal session state: %w", err)
 	}
-	if state.Version != 1 && state.Version != 2 {
+	if state.Version < 1 || state.Version > 3 {
 		return db.Session{}, nil, headlessGoalState{}, db.SessionStateRecord{}, fmt.Errorf("session %d has unsupported state version %d", sessionID, state.Version)
 	}
 	if state.ExecutionCursor < 0 || state.Goal == nil || state.Goal.SessionID != sessionID {

@@ -1,0 +1,10 @@
+  you
+ ╭──────────────────────────╮
+ │ Agents · 1 consultatio…  │
+ │ │ Consultation 1 · acti… │
+ │                          │
+ │                          │
+ │                          │
+ │ esc close · enter view   │
+ ╰──────────────────────────╯
+  … Run · esc · queue · S1

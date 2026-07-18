@@ -124,6 +124,13 @@ func (m *Model) restylePickerOverlays() {
 		state.List.SetDelegate(newPickerDelegate(m.isDark, false))
 		configurePickerList(&state.List, m.isDark, m.reducedMotion)
 	}
+	if state := m.providerPickerState; state != nil {
+		delegate := newPickerDelegate(m.isDark, false)
+		state.List.SetDelegate(delegate)
+		state.ItemHeight = delegate.Height()
+		state.ItemSpacing = delegate.Spacing()
+		configurePickerList(&state.List, m.isDark, m.reducedMotion)
+	}
 	if state := m.modePickerState; state != nil {
 		state.List.SetDelegate(newPickerDelegate(m.isDark, false))
 		configurePickerList(&state.List, m.isDark, m.reducedMotion)

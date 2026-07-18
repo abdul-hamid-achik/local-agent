@@ -34,6 +34,20 @@ func (m *Model) handleBusyOperationKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		}
 		return nil, true
 	}
+	// Provider switching can wait on runtime admission and a bounded local
+	// inventory refresh. It runs outside Update, owns the composer until its
+	// tokened receipt arrives, and exposes cancellation through Escape.
+	if m.providerSwitchRunning {
+		switch {
+		case key.Matches(msg, m.keys.Quit):
+			return m.beginShutdown(), true
+		case key.Matches(msg, m.keys.Cancel):
+			if m.providerSwitchCancel != nil {
+				m.providerSwitchCancel()
+			}
+		}
+		return nil, true
+	}
 	// Context loads and transcript imports replace prompt authority. Keep
 	// input disabled until their tokened result arrives; Escape invalidates
 	// a late result without blocking the UI on filesystem cancellation.

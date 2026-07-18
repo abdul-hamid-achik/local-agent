@@ -104,6 +104,7 @@ steps:
     - snapshot: narrow_settings
     - press: "down"
     - press: "down"
+    - press: "down"
     - press: "enter"
     - wait:
         screen:

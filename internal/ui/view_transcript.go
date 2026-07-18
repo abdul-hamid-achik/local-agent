@@ -1,12 +1,15 @@
 package ui
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"hash/fnv"
 	"strings"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/rivo/uniseg"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/imageasset"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
@@ -46,14 +49,25 @@ func entriesFromMessages(msgs []llm.Message) []ChatEntry {
 
 func (m *Model) renderEntries() string {
 	contentW := m.chatContentWidth()
-
-	// The memo is keyed by entry index, so a shrunken slice may leave stale
-	// higher-index chunks behind. Keys self-validate, but drop them wholesale
-	// so the map never outgrows the transcript it describes.
-	if len(m.entries) < m.entryMemoLen {
+	identityReady := true
+	reconciled, err := m.reconcileTranscriptEntriesForRender()
+	if err != nil {
+		identityReady = false
 		m.resetEntryMemo()
+		if m.logger != nil {
+			m.logger.Error("reconcile transcript identity", "error", err)
+		}
+	} else if reconciled {
+		liveIDs := make(map[BlockID]struct{}, len(m.entries))
+		for _, entry := range m.entries {
+			liveIDs[entry.BlockID] = struct{}{}
+		}
+		for id := range m.entryMemo {
+			if _, live := liveIDs[id]; !live {
+				delete(m.entryMemo, id)
+			}
+		}
 	}
-	m.entryMemoLen = len(m.entries)
 
 	// Welcome message when no user messages yet
 	hasUserMsg := false
@@ -76,6 +90,8 @@ func (m *Model) renderEntries() string {
 		if !hasNotice {
 			welcome := strings.TrimRight(b.String(), "\n")
 			top := max(0, (m.viewport.Height()-lipgloss.Height(welcome))/2)
+			m.endLiveTailLayoutEpisode()
+			m.publishTranscriptLayout(nil)
 			return strings.Repeat("\n", top) + welcome
 		}
 		// PlaceHorizontal owns a rectangular block and does not retain the
@@ -107,6 +123,8 @@ func (m *Model) renderEntries() string {
 				}
 			}
 		}
+		m.endLiveTailLayoutEpisode()
+		m.publishTranscriptLayout(nil)
 		return b.String()
 	}
 
@@ -121,10 +139,13 @@ func (m *Model) renderEntries() string {
 		b.WriteString(m.cachedEntriesRender)
 		state := m.cachedPrefixState
 		for index := m.cachedStableCount; index < len(m.entries); index++ {
-			m.renderEntryInto(&b, index, contentW, &state)
+			m.renderEntryInto(&b, index, contentW, identityReady, &state)
 		}
 		m.renderLiveTail(&b, contentW, &state)
-		return b.String()
+		rendered := b.String()
+		m.finalizeTranscriptLayout(&state, rendered)
+		m.bindCachedTranscriptLayoutPrefix()
+		return rendered
 	}
 
 	// Full render: cache the stable prefix (everything before the first
@@ -136,9 +157,11 @@ func (m *Model) renderEntries() string {
 	m.thinkingHitRegions = m.thinkingHitRegions[:0]
 	var state entryRenderState
 	snapshotPrefix := func() {
+		state.freezeLayoutPrefix()
 		m.cachedEntriesRender = b.String()
 		m.cachedEntryCount = len(m.entries)
 		m.cachedStableCount = stableCount
+		m.cachedPrefixLayoutCount = state.layoutLen()
 		m.cachedPrefixState = state
 		m.cachedToolHitRegions = append(m.cachedToolHitRegions[:0], m.toolHitRegions...)
 		m.cachedThinkingHitRegions = append(m.cachedThinkingHitRegions[:0], m.thinkingHitRegions...)
@@ -148,13 +171,16 @@ func (m *Model) renderEntries() string {
 		if index == stableCount {
 			snapshotPrefix()
 		}
-		m.renderEntryInto(&b, index, contentW, &state)
+		m.renderEntryInto(&b, index, contentW, identityReady, &state)
 	}
 	if stableCount == len(m.entries) {
 		snapshotPrefix()
 	}
 	m.renderLiveTail(&b, contentW, &state)
-	return b.String()
+	rendered := b.String()
+	m.finalizeTranscriptLayout(&state, rendered)
+	m.bindCachedTranscriptLayoutPrefix()
+	return rendered
 }
 
 // entryRenderState carries the transcript loop state across the cached stable
@@ -165,6 +191,63 @@ type entryRenderState struct {
 	previousKind     string
 	renderedAny      bool
 	assistantStarted bool
+	// layoutBase is an immutable prefix, normally sharing the current
+	// published snapshot. layoutRecords is the small mutable tail. Rendering
+	// a live ToolCard thaws only the previous record plus that live suffix.
+	layoutBase    []TranscriptLayoutRecord
+	layoutRecords []TranscriptLayoutRecord
+}
+
+func (state *entryRenderState) layoutLen() int {
+	if state == nil {
+		return 0
+	}
+	return len(state.layoutBase) + len(state.layoutRecords)
+}
+
+// freezeLayoutPrefix transfers the currently owned contiguous records into an
+// immutable, capacity-clamped prefix. Subsequent appends must allocate a tail
+// and cannot mutate the frozen cache or a previously published anchor frame.
+func (state *entryRenderState) freezeLayoutPrefix() {
+	if state == nil || len(state.layoutRecords) == 0 {
+		return
+	}
+	if len(state.layoutBase) != 0 {
+		combined := make([]TranscriptLayoutRecord, 0, state.layoutLen())
+		combined = append(combined, state.layoutBase...)
+		combined = append(combined, state.layoutRecords...)
+		state.layoutBase = combined[:len(combined):len(combined)]
+		state.layoutRecords = nil
+		return
+	}
+	state.layoutBase = state.layoutRecords[:len(state.layoutRecords):len(state.layoutRecords)]
+	state.layoutRecords = nil
+}
+
+// thawLayoutTail copies only the last immutable record because adding the next
+// block finalizes that previous record's separator-inclusive height.
+func (state *entryRenderState) thawLayoutTail() {
+	if state == nil || len(state.layoutRecords) != 0 || len(state.layoutBase) == 0 {
+		return
+	}
+	lastIndex := len(state.layoutBase) - 1
+	last := state.layoutBase[lastIndex]
+	state.layoutBase = state.layoutBase[:lastIndex:lastIndex]
+	state.layoutRecords = append(state.layoutRecords, last)
+}
+
+func (state *entryRenderState) closeLayoutAt(endRow int) {
+	if state == nil || state.layoutLen() == 0 {
+		return
+	}
+	state.thawLayoutTail()
+	last := &state.layoutRecords[len(state.layoutRecords)-1]
+	last.Height = max(1, endRow-last.StartRow)
+}
+
+func (state *entryRenderState) appendLayoutRecord(record TranscriptLayoutRecord) {
+	state.closeLayoutAt(record.StartRow)
+	state.layoutRecords = append(state.layoutRecords, record)
 }
 
 // stableEntryPrefixLen returns how many leading entries render identically
@@ -204,14 +287,14 @@ type entryRenderMemo struct {
 	chunk string
 }
 
-func (m *Model) renderEntryInto(b *strings.Builder, entryIndex, contentW int, state *entryRenderState) {
+func (m *Model) renderEntryInto(b *strings.Builder, entryIndex, contentW int, memoAllowed bool, state *entryRenderState) {
 	entry := m.entries[entryIndex]
 	showHeader := !state.assistantStarted
 	memoKey := m.entryMemoKey(entry, contentW, showHeader)
 	var chunk string
 	hit := false
-	if memoKey != "" {
-		if memo, ok := m.entryMemo[entryIndex]; ok && memo.key == memoKey {
+	if memoAllowed && memoKey != "" {
+		if memo, ok := m.entryMemo[entry.BlockID]; ok && memo.key == memoKey {
 			chunk = memo.chunk
 			hit = true
 		}
@@ -232,11 +315,11 @@ func (m *Model) renderEntryInto(b *strings.Builder, entryIndex, contentW int, st
 			entryView.WriteString("\n")
 		}
 		chunk = strings.TrimRight(entryView.String(), "\n")
-		if memoKey != "" {
+		if memoAllowed && memoKey != "" {
 			if m.entryMemo == nil {
-				m.entryMemo = make(map[int]entryRenderMemo)
+				m.entryMemo = make(map[BlockID]entryRenderMemo)
 			}
-			m.entryMemo[entryIndex] = entryRenderMemo{key: memoKey, chunk: chunk}
+			m.entryMemo[entry.BlockID] = entryRenderMemo{key: memoKey, chunk: chunk}
 		}
 	}
 	if entry.Kind == "user" {
@@ -261,6 +344,15 @@ func (m *Model) appendEntryChunk(b *strings.Builder, entryIndex int, entry ChatE
 		b.WriteString(separator)
 		state.renderedLines += strings.Count(separator, "\n")
 	}
+	state.appendLayoutRecord(TranscriptLayoutRecord{
+		BlockID:  entry.BlockID,
+		TurnID:   entry.TurnID,
+		Revision: entry.Revision,
+		Height:   max(1, lipgloss.Height(chunk)),
+		StartRow: state.renderedLines,
+		Exact:    false,
+		LineMap:  semanticTranscriptLineMap(chunk),
+	})
 	if entry.Kind == "tool_group" {
 		header, _, _ := strings.Cut(chunk, "\n")
 		m.toolHitRegions = append(m.toolHitRegions, toolHitRegion{
@@ -285,6 +377,200 @@ func (m *Model) appendEntryChunk(b *strings.Builder, entryIndex int, entry ChatE
 	state.renderedAny = true
 }
 
+// semanticTranscriptLineMap gives reflow a renderer-owned logical coordinate
+// for every visible row. It uses ANSI-free grapheme counts rather than byte
+// offsets. Repeated rails and indentation are removed from the coordinate so
+// width changes do not make presentation chrome look like message content.
+//
+// Glamour can transform Markdown, so the map is deliberately marked inexact
+// by its TranscriptLayoutRecord. The resolver still preserves block identity
+// and the closest stable content coordinate instead of a document-wide row.
+func semanticTranscriptLineMap(chunk string) LineMap {
+	lines := strings.Split(chunk, "\n")
+	if len(lines) == 0 {
+		return nil
+	}
+	lineMap := make(LineMap, 0, len(lines))
+	logicalOffset := 0
+	for row, line := range lines {
+		lineMap = append(lineMap, TranscriptLinePoint{
+			LogicalOffset: logicalOffset,
+			Row:           row,
+		})
+		semantic := strings.TrimSpace(ansi.Strip(line))
+		for _, rail := range []string{"│ ", "▌ ", "↳ "} {
+			semantic = strings.TrimSpace(strings.TrimPrefix(semantic, rail))
+		}
+		logicalOffset += max(1, uniseg.GraphemeClusterCount(semantic)+1)
+	}
+	return lineMap
+}
+
+func (m *Model) finalizeTranscriptLayout(state *entryRenderState, rendered string) {
+	if state == nil || state.layoutLen() == 0 {
+		m.publishTranscriptLayout(nil)
+		return
+	}
+	totalHeight := max(1, lipgloss.Height(rendered))
+	state.closeLayoutAt(totalHeight)
+	m.publishTranscriptLayoutSegments(state.layoutBase, state.layoutRecords)
+}
+
+func (m *Model) publishTranscriptLayout(records []TranscriptLayoutRecord) {
+	m.publishTranscriptLayoutSegments(nil, records)
+}
+
+// publishTranscriptLayoutSegments reuses the current immutable snapshot when
+// only paint changed (for example a spinner glyph or elapsed-time tick). A new
+// contiguous snapshot is materialized only when geometry or semantic identity
+// actually changed. LineMap slices are immutable and intentionally shared.
+func (m *Model) publishTranscriptLayoutSegments(base, tail []TranscriptLayoutRecord) {
+	sessionID := max(int64(0), m.sessionID)
+	if m.transcriptLayoutMatchesSegments(sessionID, base, tail) {
+		return
+	}
+	records := make([]TranscriptLayoutRecord, len(base)+len(tail))
+	copy(records, base)
+	copy(records[len(base):], tail)
+	m.transcriptLayout = TranscriptLayoutSnapshot{
+		SessionID: sessionID,
+		Records:   records,
+	}
+	if m.transcriptRenderProbe != nil {
+		m.transcriptRenderProbe.layoutRecordsMaterialized += len(records)
+	}
+}
+
+func (m *Model) transcriptLayoutMatchesSegments(
+	sessionID int64,
+	base, tail []TranscriptLayoutRecord,
+) bool {
+	current := m.transcriptLayout
+	if current.SessionID != sessionID || len(current.Records) != len(base)+len(tail) {
+		return false
+	}
+	baseShared := len(base) == 0
+	if len(base) > 0 && len(current.Records) >= len(base) {
+		baseShared = &base[0] == &current.Records[0]
+	}
+	if !baseShared {
+		for index := range base {
+			if !m.transcriptLayoutRecordEqual(base[index], current.Records[index]) {
+				return false
+			}
+		}
+	}
+	for index := range tail {
+		if !m.transcriptLayoutRecordEqual(tail[index], current.Records[len(base)+index]) {
+			return false
+		}
+	}
+	return true
+}
+
+func (m *Model) transcriptLayoutRecordEqual(left, right TranscriptLayoutRecord) bool {
+	if m.transcriptRenderProbe != nil {
+		m.transcriptRenderProbe.layoutRecordComparisons++
+	}
+	if left.BlockID != right.BlockID ||
+		left.TurnID != right.TurnID ||
+		left.Revision != right.Revision ||
+		left.Height != right.Height ||
+		left.StartRow != right.StartRow ||
+		left.Exact != right.Exact ||
+		len(left.LineMap) != len(right.LineMap) {
+		return false
+	}
+	for index := range left.LineMap {
+		if left.LineMap[index] != right.LineMap[index] {
+			return false
+		}
+	}
+	return true
+}
+
+// bindCachedTranscriptLayoutPrefix makes the next visual tick share the exact
+// immutable prefix of the snapshot just published. The mutable state keeps its
+// line count and role/header arithmetic, but no longer owns a clone of every
+// record or LineMap.
+func (m *Model) bindCachedTranscriptLayoutPrefix() {
+	if !m.entryCacheValid ||
+		m.cachedPrefixLayoutCount < 0 ||
+		m.cachedPrefixLayoutCount > len(m.transcriptLayout.Records) {
+		return
+	}
+	count := m.cachedPrefixLayoutCount
+	m.cachedPrefixState.layoutBase = m.transcriptLayout.Records[:count:count]
+	m.cachedPrefixState.layoutRecords = nil
+}
+
+func (m *Model) liveTailLayoutIdentity() (BlockID, TurnID) {
+	var turnID TurnID
+	for index := len(m.entries) - 1; index >= 0; index-- {
+		if m.entries[index].TurnID != "" {
+			turnID = m.entries[index].TurnID
+			break
+		}
+	}
+	sessionID := max(int64(0), m.sessionID)
+	if m.liveTailLayoutID != "" &&
+		m.liveTailLayoutSessionID == sessionID &&
+		m.liveTailLayoutTurnID == turnID &&
+		m.liveTailLayoutReconcile == m.transcriptReconcileEpoch {
+		return m.liveTailLayoutID, turnID
+	}
+
+	occupied := make(map[BlockID]struct{}, len(m.entries))
+	for _, entry := range m.entries {
+		if entry.BlockID != "" {
+			occupied[entry.BlockID] = struct{}{}
+		}
+	}
+	var candidate BlockID
+	for attempt := uint64(0); ; attempt++ {
+		candidate = liveTailLayoutCandidate(sessionID, turnID, m.liveTailLayoutEpoch, attempt)
+		if _, collision := occupied[candidate]; !collision {
+			break
+		}
+	}
+	m.liveTailLayoutID = candidate
+	m.liveTailLayoutTurnID = turnID
+	m.liveTailLayoutSessionID = sessionID
+	m.liveTailLayoutReconcile = m.transcriptReconcileEpoch
+	return candidate, turnID
+}
+
+func liveTailLayoutCandidate(sessionID int64, turnID TurnID, episode, attempt uint64) BlockID {
+	seed := fmt.Sprintf(
+		"local-agent.transcript.live-layout.v1\x00%d\x00%s\x00%d\x00%d",
+		sessionID,
+		turnID,
+		episode,
+		attempt,
+	)
+	digest := sha256.Sum256([]byte(seed))
+	return BlockID("transient_live_" + hex.EncodeToString(digest[:16]))
+}
+
+func (m *Model) beginLiveTailLayoutEpisode() {
+	if m.liveTailLayoutVisible {
+		return
+	}
+	m.liveTailLayoutVisible = true
+	if m.liveTailLayoutEpoch < ^uint64(0) {
+		m.liveTailLayoutEpoch++
+	}
+	m.liveTailLayoutID = ""
+}
+
+func (m *Model) endLiveTailLayoutEpisode() {
+	if !m.liveTailLayoutVisible {
+		return
+	}
+	m.liveTailLayoutVisible = false
+	m.liveTailLayoutID = ""
+}
+
 func fnv64(parts ...string) uint64 {
 	h := fnv.New64a()
 	for _, part := range parts {
@@ -298,7 +584,7 @@ func fnv64(parts ...string) uint64 {
 // memoized this frame (a live tool group animates every spinner tick).
 func (m *Model) entryMemoKey(entry ChatEntry, contentW int, showHeader bool) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s|%d|%t|%t", entry.Kind, contentW, m.isDark, m.toolsCollapsed)
+	fmt.Fprintf(&b, "%s|%d|%d|%t|%t", entry.Kind, entry.Revision, contentW, m.isDark, m.toolsCollapsed)
 	switch entry.Kind {
 	case "user":
 		fmt.Fprintf(&b, "|%d|%x|%d", len(entry.Content), fnv64(entry.Content), len(entry.Attachments))
@@ -371,17 +657,38 @@ func (m *Model) toolGroupMemoKey(toolIdx int) (string, bool) {
 // keeping that phase next to the last transcript event avoids a tall blank
 // viewport above the footer.
 func (m *Model) renderLiveTail(b *strings.Builder, contentW int, state *entryRenderState) {
+	var tail strings.Builder
 	if m.hasLiveTurnContent() {
-		if state.renderedAny {
-			b.WriteString(transcriptEntrySeparator(state.previousKind, "assistant"))
-		}
-		m.renderStreamingMsg(b, m.streamBuf.String(), contentW, !state.assistantStarted)
+		m.renderStreamingMsg(&tail, m.streamBuf.String(), contentW, !state.assistantStarted)
 	} else if label := m.inlineTurnActivity(); label != "" {
-		if state.renderedAny {
-			b.WriteString(transcriptEntrySeparator(state.previousKind, "assistant"))
-		}
-		m.renderInlineTurnActivity(b, label, contentW, !state.assistantStarted)
+		m.renderInlineTurnActivity(&tail, label, contentW, !state.assistantStarted)
 	}
+	tailRendered := tail.String()
+	if tailRendered == "" {
+		m.endLiveTailLayoutEpisode()
+		return
+	}
+	m.beginLiveTailLayoutEpisode()
+	if state.renderedAny {
+		separator := transcriptEntrySeparator(state.previousKind, "assistant")
+		b.WriteString(separator)
+		state.renderedLines += strings.Count(separator, "\n")
+	}
+	semanticChunk := strings.TrimRight(tailRendered, "\n")
+	blockID, turnID := m.liveTailLayoutIdentity()
+	state.appendLayoutRecord(TranscriptLayoutRecord{
+		BlockID:  blockID,
+		TurnID:   turnID,
+		Revision: 1,
+		Height:   max(1, lipgloss.Height(semanticChunk)),
+		StartRow: state.renderedLines,
+		Exact:    false,
+		LineMap:  semanticTranscriptLineMap(semanticChunk),
+	})
+	b.WriteString(tailRendered)
+	state.renderedLines += strings.Count(tailRendered, "\n")
+	state.previousKind = "assistant"
+	state.renderedAny = true
 }
 
 func completedThinkingHeaderRegion(rendered string) (rowOffset, endCol int, ok bool) {

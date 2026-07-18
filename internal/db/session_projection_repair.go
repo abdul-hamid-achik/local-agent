@@ -187,7 +187,7 @@ func decodeSessionExecutionCursor(stateJSON string) (int64, error) {
 	var version int
 	if raw := fields["version"]; len(raw) == 0 {
 		return 0, errors.New("session envelope has no version")
-	} else if err := json.Unmarshal(raw, &version); err != nil || version != persistedSessionEnvelopeVersion {
+	} else if err := json.Unmarshal(raw, &version); err != nil || !supportedReconciliationEnvelopeVersion(version) {
 		return 0, fmt.Errorf("unsupported session envelope version %d", version)
 	}
 	cursor := int64(0)

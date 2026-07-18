@@ -16,6 +16,7 @@ require (
 	github.com/google/jsonschema-go v0.4.2
 	github.com/lucasb-eyer/go-colorful v1.4.0
 	github.com/modelcontextprotocol/go-sdk v1.4.1
+	github.com/rivo/uniseg v0.4.7
 	golang.org/x/net v0.55.0
 	golang.org/x/sys v0.45.0
 	golang.org/x/text v0.37.0
@@ -50,7 +51,6 @@ require (
 	github.com/muesli/termenv v0.16.0 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/sahilm/fuzzy v0.1.3 // indirect
 	github.com/segmentio/asm v1.1.3 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect

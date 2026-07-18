@@ -83,6 +83,12 @@ func (m *Model) currentWorkingActivity() (workingActivity, bool) {
 			detail += fmt.Sprintf(" · %d/%d", settled, len(m.startupItems))
 		}
 		return workingActivity{label: "Starting", detail: detail}, true
+	case m.providerSwitchRunning:
+		detail := sanitizeTerminalSingleLine(m.providerSwitchName)
+		if detail == "" {
+			detail = "runtime profile"
+		}
+		return workingActivity{label: "Switching provider", detail: detail, cancellable: true}, true
 	case m.sessionListing:
 		return workingActivity{label: "Loading sessions", cancellable: true}, true
 	case m.sessionLoading:

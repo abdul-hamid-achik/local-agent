@@ -45,7 +45,7 @@ func InspectSessionRecoveryState(sessionID int64, stateJSON string) (SessionReco
 	if err := json.Unmarshal(versionRaw, &version); err != nil {
 		return SessionRecoveryState{}, fmt.Errorf("decode session envelope version: %w", err)
 	}
-	if version != 1 && version != persistedSessionEnvelopeVersion {
+	if version != 1 && !supportedReconciliationEnvelopeVersion(version) {
 		return SessionRecoveryState{}, fmt.Errorf("unsupported session envelope version %d", version)
 	}
 

@@ -77,6 +77,24 @@ type Model struct {
 
 	// Scroll anchor system - prevents jitter during streaming.
 	anchorActive bool // true when user wants to stay at bottom
+	// transcriptLayout is the last renderer-owned semantic geometry snapshot.
+	// It is independent of viewport position and is replaced atomically after
+	// each transcript render.
+	transcriptLayout TranscriptLayoutSnapshot
+
+	// Transcript identity reconciliation is semantic work, not paint work.
+	// invalidateEntryCache clears this admission cache; ordinary spinner and
+	// streaming paints reuse the already-reconciled entries.
+	transcriptReconcileValid  bool
+	transcriptReconciledCount int
+	transcriptReconcileEpoch  uint64
+	transcriptRenderProbe     *transcriptRenderProbe
+	liveTailLayoutID          BlockID
+	liveTailLayoutTurnID      TurnID
+	liveTailLayoutSessionID   int64
+	liveTailLayoutEpoch       uint64
+	liveTailLayoutReconcile   uint64
+	liveTailLayoutVisible     bool
 
 	// Startup
 	initializing bool
@@ -105,11 +123,13 @@ type Model struct {
 	receiptInspectToolIndex     int
 	receiptInspectAnchorPaused  bool
 	receiptInspectAnchorYOffset int
+	receiptInspectReflowAnchor  transcriptReflowAnchor
 
 	// Incremental rendering cache
 	cachedEntriesRender      string
 	cachedEntryCount         int
 	cachedStableCount        int
+	cachedPrefixLayoutCount  int
 	cachedPrefixState        entryRenderState
 	cachedToolHitRegions     []toolHitRegion
 	cachedThinkingHitRegions []thinkingHitRegion
@@ -118,8 +138,7 @@ type Model struct {
 	// Per-entry render memo: a settled entry re-renders only when its
 	// composite key changes, so full transcript walks stay cheap. Live
 	// (running) tool groups bypass the memo entirely.
-	entryMemo    map[int]entryRenderMemo
-	entryMemoLen int
+	entryMemo map[BlockID]entryRenderMemo
 
 	// Thinking state
 	thinkBuf       strings.Builder
@@ -187,6 +206,11 @@ type Model struct {
 	settingsPickerState      *SettingsPickerState
 	agentPickerState         *AgentPickerState
 	providerPickerState      *ProviderPickerState
+	agentHubState            *AgentHubState
+	providerSwitchToken      uint64
+	providerSwitchRunning    bool
+	providerSwitchName       string
+	providerSwitchCancel     context.CancelFunc
 	modePickerState          *ModePickerState
 	runtimeStatusState       *RuntimeStatusState
 	planFormState            *PlanFormState
@@ -430,6 +454,9 @@ func (m *Model) beginShutdown() tea.Cmd {
 	m.cancelTerminalInputResume()
 	m.pendingOllamaInventory = nil
 	m.cancelPendingCloudSessionRestore()
+	if m.providerSwitchCancel != nil {
+		m.providerSwitchCancel()
+	}
 	if m.goalOperationCancel != nil {
 		m.goalOperationCancel()
 	}
@@ -473,7 +500,8 @@ func (m *Model) beginShutdown() tea.Cmd {
 
 func (m *Model) shutdownReady() bool {
 	return m.cancel == nil && !m.commitRunning && !m.exportRunning && !m.goalOperationRunning &&
-		!m.modelPullRunning && !m.sessionLoading && !m.imageAttachRunning && !m.ollamaInventoryCommitting && !m.readScopeOpRunning
+		!m.modelPullRunning && !m.sessionLoading && !m.imageAttachRunning && !m.ollamaInventoryCommitting &&
+		!m.readScopeOpRunning && !m.providerSwitchRunning
 }
 
 func (m *Model) appendShutdownQuit(commands *[]tea.Cmd) {
@@ -585,7 +613,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		cmds = m.handleToolCallStart(msg, cmds)
 
 	case ExpertProgressMsg:
-		m.handleExpertProgress(msg)
+		if cmd := m.handleExpertProgress(msg); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 
 	case PlanFormCompletedMsg:
 		return m, m.submitPlanFormPrompt(msg.Prompt)
@@ -637,6 +667,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 
 	case ollamaModelInventoryCommittedMsg:
 		cmds = m.handleOllamaInventoryCommitted(msg, cmds)
+
+	case providerSwitchResultMsg:
+		cmds = m.handleProviderSwitchResult(msg, cmds)
 
 	case OllamaModelDetailsResultMsg:
 		m.handleOllamaModelDetailsResult(msg)
@@ -831,6 +864,8 @@ func (m *Model) updateActiveOverlayMessage(msg tea.Msg) tea.Cmd {
 			m.providerPickerState.List, cmd = m.providerPickerState.List.Update(msg)
 			return cmd
 		}
+	case OverlayAgents:
+		return m.updateAgentHubMessage(msg)
 	case OverlayModePicker:
 		if m.modePickerState != nil {
 			var cmd tea.Cmd
@@ -1052,75 +1087,6 @@ func (m *Model) invalidateRenderedCache() {
 	m.invalidateEntryCache()
 }
 
-// footerHeight returns the total height of the footer area (divider + status + input/hint).
-func (m *Model) footerHeight() int {
-	height := 1 // divider
-	if m.compactCompletionOwnsDivider() {
-		height = 0
-	}
-	if plan := m.renderGoalPlan(); plan != "" {
-		height += lipgloss.Height(plan)
-	}
-	if bob := m.renderBobWorkspaceContext(); bob != "" {
-		height += lipgloss.Height(bob)
-	}
-	if action := m.renderContinuationAction(); action != "" && !m.goalPlanOwnsContinuation() {
-		height += lipgloss.Height(action)
-	}
-	if status := m.renderStatusLine(); status != "" {
-		statusRows := lipgloss.Height(status)
-		height += statusRows
-		if m.activityComposerGap() {
-			height++
-		}
-		if statusRows > 1 {
-			// A decision-only footer ends with the top-level terminal safety row;
-			// reserve it so wrapped actions never push a 30x12 view past the edge.
-			height++
-		}
-	}
-	if m.pendingApproval != nil {
-		return height + lipgloss.Height(m.renderApproval())
-	}
-	if m.readScopePrompt != nil {
-		return height + lipgloss.Height(m.renderReadScopePrompt())
-	}
-	if m.pendingPaste != nil {
-		return height
-	}
-	if m.pendingSessionSwitch != nil {
-		return height
-	}
-	if m.overlay == OverlayCortexDecision && m.cortexDecision != nil {
-		return height + lipgloss.Height(m.cortexDecision.View(m.cortexDecisionBusyMarker()))
-	}
-	if m.overlay == OverlayCompletion && m.isCompletionActive() {
-		popup, _ := m.renderCompletionModalView()
-		return height + lipgloss.Height(popup) + m.inputLines
-	}
-	if m.overlay == OverlayPlanForm && m.planFormState != nil {
-		form, _ := m.renderPlanFormView()
-		return height + lipgloss.Height(form)
-	}
-	if m.overlay == OverlayGoalForm && m.goalFormState != nil {
-		form, _ := m.goalFormState.ViewWithCursor()
-		return height + lipgloss.Height(form)
-	}
-	if m.overlay != OverlayNone {
-		return height + m.inputLines
-	}
-	if m.composerEditable() {
-		if m.queuedFollowUpHeld() {
-			height += lipgloss.Height(m.renderQueuedFollowUp())
-		}
-		if m.renderComposerOverflowCue() != "" {
-			height++
-		}
-		return height + m.inputLines
-	}
-	return height + 1
-}
-
 // syncInputHeight mirrors Bubbles' visual-row-aware dynamic height into the
 // parent layout and recalculates the transcript allocation when it changes.
 func (m *Model) syncInputHeight() {
@@ -1174,9 +1140,12 @@ type inputViewportReflowMsg struct{}
 // forcing a full re-render on the next renderEntries() call.
 func (m *Model) invalidateEntryCache() {
 	m.entryCacheValid = false
+	m.transcriptReconcileValid = false
+	m.transcriptReconciledCount = 0
 	m.cachedEntriesRender = ""
 	m.cachedEntryCount = 0
 	m.cachedStableCount = 0
+	m.cachedPrefixLayoutCount = 0
 	m.cachedPrefixState = entryRenderState{}
 	m.cachedToolHitRegions = nil
 	m.cachedThinkingHitRegions = nil
@@ -1188,7 +1157,10 @@ func (m *Model) invalidateEntryCache() {
 // self-validates against the entry it was rendered from.
 func (m *Model) resetEntryMemo() {
 	clear(m.entryMemo)
-	m.entryMemoLen = 0
+	// Every caller replaces, clears, or rejects the semantic entry set. Keep
+	// the render-prefix and reconciliation caches under the same ownership
+	// boundary so a same-length session restore cannot reuse an old snapshot.
+	m.invalidateEntryCache()
 }
 
 // checkAutoScroll resets scroll anchor when the viewport is at the bottom,
@@ -1204,20 +1176,19 @@ func (m *Model) recalcViewportHeight() {
 	if !m.ready || m.height == 0 {
 		return
 	}
-	paused := m.followPaused()
-	yOffset := m.viewport.YOffset()
+	anchor := m.captureTranscriptReflowAnchor()
 	m.viewport.SetHeight(m.viewportHeight())
 	// Footer reflow must not silently change transcript ownership. Following
-	// stays pinned to the newest row; a paused reader keeps the same logical
-	// offset, clamped by Bubbles if the new geometry has less scroll range.
-	m.restoreFollowPosition(paused, yOffset)
+	// stays pinned to the newest row; a paused reader keeps the same semantic
+	// block coordinate and screen row when the document geometry permits it.
+	m.restoreTranscriptReflowAnchor(anchor)
 }
 
 // viewportHeight is the single vertical-layout authority shared by terminal
 // resize and multiline-composer reflow. The one extra row accounts for the
 // newline separating the viewport from the footer.
 func (m *Model) viewportHeight() int {
-	return max(1, m.height-1-m.footerHeight())
+	return max(1, m.projectFrame().Transcript.Rect.Height())
 }
 
 // FormatToolArgs formats tool arguments as a compact JSON string for display.
@@ -1551,11 +1522,11 @@ func (m *Model) toggleThinkingReceipt(entryIndex int) bool {
 	if entry.Kind != "assistant" || strings.TrimSpace(entry.ThinkingContent) == "" {
 		return false
 	}
-	paused, yOffset := m.followPaused(), m.viewport.YOffset()
+	anchor := m.captureTranscriptReflowAnchor()
 	entry.ThinkingCollapsed = !entry.ThinkingCollapsed
 	m.invalidateEntryCache()
 	m.viewport.SetContent(m.renderEntries())
-	m.restoreFollowPosition(paused, yOffset)
+	m.restoreTranscriptReflowAnchor(anchor)
 	return true
 }
 
@@ -1573,7 +1544,7 @@ func (m *Model) toggleAllThinkingReceipts() bool {
 	if !found {
 		return false
 	}
-	paused, yOffset := m.followPaused(), m.viewport.YOffset()
+	anchor := m.captureTranscriptReflowAnchor()
 	for i := range m.entries {
 		if m.entries[i].Kind == "assistant" && strings.TrimSpace(m.entries[i].ThinkingContent) != "" {
 			m.entries[i].ThinkingCollapsed = targetCollapsed
@@ -1581,7 +1552,7 @@ func (m *Model) toggleAllThinkingReceipts() bool {
 	}
 	m.invalidateEntryCache()
 	m.viewport.SetContent(m.renderEntries())
-	m.restoreFollowPosition(paused, yOffset)
+	m.restoreTranscriptReflowAnchor(anchor)
 	return true
 }
 
@@ -1595,6 +1566,7 @@ func (m *Model) toggleToolReceipt(toolIndex int, reveal bool) {
 	if m.receiptInspectActive && m.receiptInspectToolIndex != toolIndex {
 		m.cancelReceiptInspection(false)
 	}
+	anchor := m.captureTranscriptReflowAnchor()
 	expanding := m.toolEntries[toolIndex].Collapsed
 	restoreInspectionAnchor := !expanding && m.receiptInspectActive && m.receiptInspectToolIndex == toolIndex
 	if expanding && reveal {
@@ -1602,6 +1574,7 @@ func (m *Model) toggleToolReceipt(toolIndex int, reveal bool) {
 		m.receiptInspectToolIndex = toolIndex
 		m.receiptInspectAnchorPaused = m.followPaused()
 		m.receiptInspectAnchorYOffset = m.viewport.YOffset()
+		m.receiptInspectReflowAnchor = anchor
 	}
 	m.toolEntries[toolIndex].Collapsed = !m.toolEntries[toolIndex].Collapsed
 	m.invalidateEntryCache()
@@ -1611,10 +1584,13 @@ func (m *Model) toggleToolReceipt(toolIndex int, reveal bool) {
 		return
 	}
 	if restoreInspectionAnchor {
-		m.restoreFollowPosition(m.receiptInspectAnchorPaused, m.receiptInspectAnchorYOffset)
+		m.restoreTranscriptReflowAnchor(m.receiptInspectReflowAnchor)
 		m.receiptInspectActive = false
 		m.receiptInspectToolIndex = -1
+		m.receiptInspectReflowAnchor = transcriptReflowAnchor{}
+		return
 	}
+	m.restoreTranscriptReflowAnchor(anchor)
 }
 
 func (m *Model) cancelReceiptInspection(collapse bool) {
@@ -1627,9 +1603,14 @@ func (m *Model) cancelReceiptInspection(collapse bool) {
 		m.invalidateEntryCache()
 		m.viewport.SetContent(m.renderEntries())
 	}
-	m.restoreFollowPosition(m.receiptInspectAnchorPaused, m.receiptInspectAnchorYOffset)
+	if m.receiptInspectReflowAnchor.Valid {
+		m.restoreTranscriptReflowAnchor(m.receiptInspectReflowAnchor)
+	} else {
+		m.restoreFollowPosition(m.receiptInspectAnchorPaused, m.receiptInspectAnchorYOffset)
+	}
 	m.receiptInspectActive = false
 	m.receiptInspectToolIndex = -1
+	m.receiptInspectReflowAnchor = transcriptReflowAnchor{}
 }
 
 func (m *Model) revealToolReceipt(toolIndex int) {

@@ -13,7 +13,15 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/reconciliation"
 )
 
-const persistedSessionEnvelopeVersion = 2
+const (
+	persistedSessionEnvelopeVersion     = 3
+	oldestReconciliationEnvelopeVersion = 2
+)
+
+func supportedReconciliationEnvelopeVersion(version int) bool {
+	return version >= oldestReconciliationEnvelopeVersion &&
+		version <= persistedSessionEnvelopeVersion
+}
 
 type reconciliationSession struct {
 	record          SessionStateRecord
@@ -39,7 +47,7 @@ func decodeReconciliationSession(record SessionStateRecord) (reconciliationSessi
 	var version int
 	if raw := fields["version"]; len(raw) == 0 {
 		return reconciliationSession{}, errors.New("reconciliation session envelope has no version")
-	} else if err := json.Unmarshal(raw, &version); err != nil || version != persistedSessionEnvelopeVersion {
+	} else if err := json.Unmarshal(raw, &version); err != nil || !supportedReconciliationEnvelopeVersion(version) {
 		return reconciliationSession{}, fmt.Errorf("unsupported reconciliation session envelope version %d", version)
 	}
 	goalRaw := fields["goal"]

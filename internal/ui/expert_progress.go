@@ -6,6 +6,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/abdul-hamid-achik/local-agent/internal/expertselector"
 	"github.com/abdul-hamid-achik/local-agent/internal/expertteam"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
@@ -16,6 +18,7 @@ const (
 	maxExpertProgressNameBytes  = 128
 	maxExpertProgressModelBytes = 256
 	maxExpertProgressTokens     = 10_000_000
+	maxExpertProgressDetailRows = 6
 )
 
 // ExpertProgressItem is the bounded, host-owned UI projection for one expert.
@@ -316,44 +319,86 @@ func (state *ExpertProgressState) renderDetails(width int, styles ToolCardStyles
 	if state == nil {
 		return ""
 	}
+	nodes, ok := workNodesFromExpertProgress(state)
+	if !ok {
+		return ""
+	}
 	width = max(1, width)
-	lines := make([]string, 0, state.Total*2+1)
-	known := 0
-	for _, item := range state.Experts {
-		if item.Expert == "" {
+	lines := make([]string, 0, maxExpertProgressDetailRows+1)
+	known, queued := 0, 0
+	for _, node := range nodes {
+		if node.Status == WorkNodeQueued {
+			queued++
 			continue
 		}
 		known++
-		glyph, status, style := "…", "running", styles.TitleRunning
-		switch item.Phase {
-		case expertteam.ProgressCompleted:
-			glyph, status, style = "✓", "completed", styles.TitleSuccess
-		case expertteam.ProgressFailed:
-			glyph, status, style = "✗", expertFailureLabel(item.FailureCode), styles.TitleError
-		}
-		tokens := ""
-		if item.EvalTokens > 0 {
-			tokens = fmt.Sprintf(" · %d tok", item.EvalTokens)
-		}
-		roleLine := glyph + " " + item.Expert + " · " + status + tokens
-		modelLine := item.Model + " · " + string(item.Location)
-		if width >= 54 {
-			line := roleLine + " · " + modelLine
-			lines = append(lines, style.Render(truncateDisplay(line, width)))
+	}
+	queueRendered := false
+	hidden := 0
+	for _, node := range nodes {
+		if node.Status == WorkNodeQueued {
+			if queueRendered {
+				continue
+			}
+			queueRendered = true
+			label := fmt.Sprintf("%d more queued", queued)
+			if known == 0 {
+				label = fmt.Sprintf("%d experts queued · %d at a time", queued, state.Parallelism)
+			}
+			lines = append(lines, styles.Dimmed.Render(truncateDisplay(label, width)))
 			continue
 		}
-		lines = append(lines, style.Render(truncateDisplay(roleLine, width)))
-		if width >= 12 {
-			lines = append(lines, styles.Dimmed.Render(truncateDisplay("  "+modelLine, width)))
+		nodeLines := renderExpertProgressNode(node, width, styles)
+		reservedRows := 0
+		if queued > 0 && !queueRendered {
+			// The aggregate represents every untouched queue slot. Reserve its
+			// stable position instead of letting earlier completed nodes crowd it
+			// out of the bounded inline surface.
+			reservedRows = 1
 		}
+		if len(lines)+len(nodeLines) > maxExpertProgressDetailRows-reservedRows {
+			hidden++
+			continue
+		}
+		lines = append(lines, nodeLines...)
 	}
-	if known == 0 {
-		label := fmt.Sprintf("%d experts queued · %d at a time", state.Queued, state.Parallelism)
+	if hidden > 0 {
+		label := fmt.Sprintf("+%d more · Ctrl+G Agents", hidden)
 		lines = append(lines, styles.Dimmed.Render(truncateDisplay(label, width)))
-	} else if state.Queued > 0 {
-		lines = append(lines, styles.Dimmed.Render(truncateDisplay(fmt.Sprintf("%d more queued", state.Queued), width)))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func renderExpertProgressNode(node WorkNode, width int, styles ToolCardStyles) []string {
+	width = max(1, width)
+	glyph, status, style := "…", "running", styles.TitleRunning
+	switch node.Status {
+	case WorkNodeWaiting:
+		glyph, status, style = "○", "waiting", styles.TitleAttention
+	case WorkNodeCompleted:
+		glyph, status, style = "✓", "completed", styles.TitleSuccess
+	case WorkNodeAttention:
+		glyph, status, style = "!", expertFailureLabel(node.FailureCode), styles.TitleAttention
+	case WorkNodeFailed:
+		glyph, status, style = "✗", expertFailureLabel(node.FailureCode), styles.TitleError
+	case WorkNodeCancelled:
+		glyph, status, style = "–", "cancelled", styles.Dimmed
+	}
+	tokens := ""
+	if node.EvalTokens > 0 {
+		tokens = fmt.Sprintf(" · %d tok", node.EvalTokens)
+	}
+	roleLine := glyph + " " + node.Label + " · " + status + tokens
+	modelLine := node.Model + " · " + string(node.Location)
+	if width >= 54 {
+		line := roleLine + " · " + modelLine
+		return []string{style.Render(truncateDisplay(line, width))}
+	}
+	lines := []string{style.Render(truncateDisplay(roleLine, width))}
+	if width >= 12 {
+		lines = append(lines, styles.Dimmed.Render(truncateDisplay("  "+modelLine, width)))
+	}
+	return lines
 }
 
 func expertFailureLabel(code string) string {
@@ -403,10 +448,10 @@ func (card ToolCard) expertProgressDetails(width int) string {
 	return card.ExpertProgress.renderDetails(width, card.Styles)
 }
 
-func (m *Model) handleExpertProgress(msg ExpertProgressMsg) {
+func (m *Model) handleExpertProgress(msg ExpertProgressMsg) tea.Cmd {
 	event, ok := normalizeExpertProgressEvent(msg.Event)
 	if !ok || msg.CallID == "" {
-		return
+		return nil
 	}
 	for index := len(m.toolEntries) - 1; index >= 0; index-- {
 		entry := &m.toolEntries[index]
@@ -417,12 +462,12 @@ func (m *Model) handleExpertProgress(msg ExpertProgressMsg) {
 		if entry.ExpertProgress == nil {
 			next = newExpertProgressState(event)
 			if next == nil {
-				return
+				return nil
 			}
 		} else {
 			next = cloneExpertProgressState(entry.ExpertProgress)
 			if !next.apply(event) {
-				return
+				return nil
 			}
 		}
 		entry.ExpertProgress = next
@@ -440,9 +485,11 @@ func (m *Model) handleExpertProgress(msg ExpertProgressMsg) {
 		}
 		m.invalidateEntryCache()
 		m.viewport.SetContent(m.renderEntries())
+		cmd := m.refreshAgentHub()
 		m.gotoBottomIfFollowing()
-		return
+		return cmd
 	}
+	return nil
 }
 
 func (m *Model) runningExpertActivity() (workingActivity, bool) {

@@ -43,9 +43,9 @@ type ModelManager struct {
 	remoteContext int
 	remoteLabel   string
 	// Provider catalog for multi-profile switching (/provider).
-	providerCatalog config.ProviderConfig
-	providerActive  string
-	ollamaFallback  string // model restored when switching back to ollama
+	providerCatalog  config.ProviderConfig
+	providerActive   string
+	ollamaFallback   string // model restored when switching back to ollama
 	privacyLocalOnly bool
 }
 
@@ -174,11 +174,23 @@ func ProviderTypeOllamaName(catalog config.ProviderConfig) string {
 // SwitchProvider activates a named profile from the installed catalog.
 // Remote profiles resolve API keys from the process environment at switch time.
 func (m *ModelManager) SwitchProvider(name string) error {
+	return m.SwitchProviderContext(context.Background(), name)
+}
+
+// SwitchProviderContext activates a named profile while allowing callers to
+// cancel admission and bounded local-inventory refresh work. Once the provider
+// mutation begins it is committed atomically under the manager locks; a
+// cancellation that arrives during the best-effort inventory refresh only
+// shortens that refresh and does not report a half-applied switch.
+func (m *ModelManager) SwitchProviderContext(ctx context.Context, name string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return errors.New("provider name is empty")
 	}
-	if err := m.admission.acquireOrdinary(context.Background()); err != nil {
+	if err := m.admission.acquireOrdinary(ctx); err != nil {
 		return err
 	}
 	defer m.admission.releaseOrdinary()
@@ -187,6 +199,10 @@ func (m *ModelManager) SwitchProvider(name string) error {
 	defer m.switchMu.Unlock()
 	m.inferenceMu.Lock()
 	defer m.inferenceMu.Unlock()
+
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	m.mu.Lock()
 	catalog := m.providerCatalog
@@ -221,7 +237,7 @@ func (m *ModelManager) SwitchProvider(name string) error {
 		m.remoteLabel = ""
 		m.providerActive = profileName
 		m.mu.Unlock()
-		inventoryCtx, cancelInventory := context.WithTimeout(context.Background(), 2*time.Second)
+		inventoryCtx, cancelInventory := context.WithTimeout(ctx, 2*time.Second)
 		_ = m.ensureModelLocalFresh(inventoryCtx, restore)
 		cancelInventory()
 		m.mu.Lock()

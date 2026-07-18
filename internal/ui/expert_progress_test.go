@@ -230,6 +230,95 @@ func TestExpertProgressCardIsNarrowAndCached(t *testing.T) {
 	}
 }
 
+func TestExpertProgressDetailsCapVisualRowsAndReportHiddenNodes(t *testing.T) {
+	state := &ExpertProgressState{
+		Sequence:    17,
+		Strategy:    expertselector.StrategyTeam,
+		Total:       8,
+		Parallelism: 2,
+		Completed:   8,
+		Experts:     make([]ExpertProgressItem, 8),
+	}
+	for index := range state.Experts {
+		state.Experts[index] = ExpertProgressItem{
+			Index: index, Expert: "expert-" + string(rune('a'+index)), Model: "model-" + string(rune('a'+index)),
+			Location: llm.OllamaModelLocationLocal, Phase: expertteam.ProgressCompleted,
+			Status: expertteam.ExpertCompleted,
+		}
+	}
+
+	wide := state.renderDetails(80, NewToolCardStyles(true))
+	wideLines := strings.Split(wide, "\n")
+	if len(wideLines) != maxExpertProgressDetailRows+1 {
+		t.Fatalf("wide detail rows = %d, want %d:\n%s", len(wideLines), maxExpertProgressDetailRows+1, wide)
+	}
+	for _, want := range []string{"expert-a", "expert-f", "+2 more · Ctrl+G Agents"} {
+		if !strings.Contains(wide, want) {
+			t.Fatalf("bounded wide detail missing %q:\n%s", want, wide)
+		}
+	}
+	for _, hidden := range []string{"expert-g", "expert-h"} {
+		if strings.Contains(wide, hidden) {
+			t.Fatalf("bounded wide detail exposed hidden node %q:\n%s", hidden, wide)
+		}
+	}
+
+	narrow := state.renderDetails(30, NewToolCardStyles(true))
+	narrowLines := strings.Split(narrow, "\n")
+	if len(narrowLines) != maxExpertProgressDetailRows+1 {
+		t.Fatalf("narrow detail rows = %d, want %d:\n%s", len(narrowLines), maxExpertProgressDetailRows+1, narrow)
+	}
+	for _, want := range []string{"expert-a", "expert-c", "+5 more · Ctrl+G Agents"} {
+		if !strings.Contains(narrow, want) {
+			t.Fatalf("bounded narrow detail missing %q:\n%s", want, narrow)
+		}
+	}
+	if strings.Contains(narrow, "expert-d") {
+		t.Fatalf("narrow detail exceeded its visual row budget:\n%s", narrow)
+	}
+	for _, line := range narrowLines {
+		if got := lipgloss.Width(line); got > 30 {
+			t.Fatalf("narrow detail line width = %d: %q", got, line)
+		}
+	}
+}
+
+func TestExpertProgressDetailsPreserveQueuedAggregateWithinCap(t *testing.T) {
+	state := &ExpertProgressState{
+		Sequence:    17,
+		Strategy:    expertselector.StrategySwarm,
+		Total:       10,
+		Parallelism: 2,
+		Queued:      2,
+		Completed:   8,
+		Experts:     make([]ExpertProgressItem, 10),
+	}
+	for index := range state.Experts {
+		if index == 1 || index == 7 {
+			continue
+		}
+		state.Experts[index] = ExpertProgressItem{
+			Index: index, Expert: "expert-" + string(rune('a'+index)), Model: "model-" + string(rune('a'+index)),
+			Location: llm.OllamaModelLocationLocal, Phase: expertteam.ProgressCompleted,
+			Status: expertteam.ExpertCompleted,
+		}
+	}
+
+	view := state.renderDetails(80, NewToolCardStyles(true))
+	runningAt := strings.Index(view, "expert-a")
+	queuedAt := strings.Index(view, "2 more queued")
+	nextAt := strings.Index(view, "expert-c")
+	if runningAt < 0 || queuedAt < 0 || nextAt < 0 || !(runningAt < queuedAt && queuedAt < nextAt) {
+		t.Fatalf("queued aggregate lost stable index order:\n%s", view)
+	}
+	if !strings.Contains(view, "+3 more · Ctrl+G Agents") {
+		t.Fatalf("hidden-node receipt is not honest:\n%s", view)
+	}
+	if got := len(strings.Split(view, "\n")); got != maxExpertProgressDetailRows+1 {
+		t.Fatalf("queued detail rows = %d, want %d:\n%s", got, maxExpertProgressDetailRows+1, view)
+	}
+}
+
 type expertProgressProbe struct {
 	ready    chan struct{}
 	messages chan ExpertProgressMsg

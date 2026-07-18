@@ -19,6 +19,7 @@
                              │   shift+tab         Cycle mode (NORMAL/PLAN/AUTO)          │
                              │   ctrl+o            Open Ollama models                     │
                              │   ctrl+p            Open settings                          │
+                             │   ctrl+g            Open agents                            │
                              │   ↑                 Previous input (empty input)           │
                              │   ↓                 Next input (history active)            │
                              │   space             Toggle last tool (empty input)         │
@@ -30,6 +31,5 @@
                              │ Input Shortcuts                                            │
                              │   @file / @agent    Insert file or agent mention text      │
                              │   ctrl+v            Paste text; on macOS convert a         │
-                             │                     clipboard image to PNG and attach it   │
 ─────────────────────────────│ esc/q close · pgdn more · g/shift+g ends                   │────────────────────────────
                              ╰────────────────────────────────────────────────────────────╯

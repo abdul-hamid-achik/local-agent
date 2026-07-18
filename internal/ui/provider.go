@@ -1,11 +1,22 @@
 package ui
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
 )
+
+type providerSwitchResultMsg struct {
+	Token uint64
+	Name  string
+	Text  string
+	Err   error
+}
 
 func (m *Model) activeProviderName() string {
 	if m.modelManager == nil {
@@ -44,6 +55,95 @@ func (m *Model) switchProvider(name string) error {
 	if err := m.modelManager.SwitchProvider(name); err != nil {
 		return err
 	}
+	m.applySwitchedProvider(name)
+	return nil
+}
+
+// beginProviderSwitch moves provider admission and local inventory refresh out
+// of Bubble Tea's event loop. A token prevents a late cancelled result from
+// repainting a newer selection.
+func (m *Model) beginProviderSwitch(name, receiptText string) tea.Cmd {
+	name = strings.TrimSpace(name)
+	if m.providerSwitchCancel != nil {
+		m.providerSwitchCancel()
+	}
+	m.providerSwitchToken++
+	token := m.providerSwitchToken
+	ctx, cancel := context.WithCancel(context.Background())
+	m.providerSwitchCancel = cancel
+	m.providerSwitchRunning = true
+	m.providerSwitchName = sanitizeTerminalSingleLine(name)
+	m.input.Blur()
+	// The busy activity rail is a footer owner. Reproject immediately so the
+	// transcript cannot paint into rows that changed ownership in this Update.
+	m.recalcViewportHeight()
+
+	manager := m.modelManager
+	run := func() tea.Msg {
+		var err error
+		switch {
+		case name == "":
+			err = fmt.Errorf("provider name is empty")
+		case manager == nil:
+			err = fmt.Errorf("model manager is unavailable")
+		default:
+			err = manager.SwitchProviderContext(ctx, name)
+		}
+		return providerSwitchResultMsg{
+			Token: token,
+			Name:  name,
+			Text:  receiptText,
+			Err:   err,
+		}
+	}
+	return tea.Batch(m.startActivityCmd(), run)
+}
+
+func (m *Model) handleProviderSwitchResult(msg providerSwitchResultMsg, cmds []tea.Cmd) []tea.Cmd {
+	if !m.providerSwitchRunning || msg.Token != m.providerSwitchToken {
+		return cmds
+	}
+	m.providerSwitchRunning = false
+	m.providerSwitchName = ""
+	if m.providerSwitchCancel != nil {
+		m.providerSwitchCancel()
+		m.providerSwitchCancel = nil
+	}
+
+	followWasPaused := m.followPaused()
+	followYOffset := m.viewport.YOffset()
+	if !m.shuttingDown {
+		switch {
+		case errors.Is(msg.Err, context.Canceled):
+			m.entries = append(m.entries, ChatEntry{Kind: "system", Content: "Provider switch cancelled."})
+		case msg.Err != nil:
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: sanitizeTerminalSingleLine(msg.Err.Error())})
+		default:
+			m.applySwitchedProvider(msg.Name)
+			text := sanitizeTerminalSingleLine(strings.TrimSpace(msg.Text))
+			if text == "" {
+				text = fmt.Sprintf("Provider: %s", sanitizeTerminalSingleLine(m.activeProviderName()))
+			}
+			m.entries = append(m.entries, ChatEntry{
+				Kind:    "system",
+				Content: fmt.Sprintf("%s · model %s", text, sanitizeTerminalSingleLine(m.model)),
+			})
+		}
+		m.input.Focus()
+		m.invalidateEntryCache()
+		if m.ready {
+			m.viewport.SetContent(m.renderEntries())
+			m.restoreFollowPosition(followWasPaused, followYOffset)
+		}
+		m.recalcViewportHeight()
+	}
+	m.appendShutdownQuit(&cmds)
+	return cmds
+}
+
+// applySwitchedProvider reconciles presentation state after ModelManager has
+// atomically committed the provider runtime.
+func (m *Model) applySwitchedProvider(name string) {
 	m.model = m.modelManager.Model()
 	m.modelPinned = true
 	if m.modelManager.RemoteProvider() {
@@ -73,5 +173,4 @@ func (m *Model) switchProvider(name string) error {
 		}
 	}
 	m.saveManualProviderPreference(name)
-	return nil
 }

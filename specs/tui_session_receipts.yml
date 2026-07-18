@@ -1,15 +1,16 @@
 version: 1
-contractHash: sha256:58eb31bfe64ac0af437c27ece239855b36e7244a366968eb54d498b8c038c91b
+contractHash: sha256:f7726e8afb773284737de4326e06652a71a9693231474e3b494319659aad1289
 name: local_agent_tui_session_receipts
 # Runner note (2026-07-16): under a loaded full local suite, the filtered
 # session view has occasionally rendered after the former 2 s budget. The
 # isolated contract and CI pass, so retain the assertion with a 5 s allowance.
 intent: |
     a user can find and restore a saved workspace session, inspect compact and
-    expanded tool receipts, reveal saved reasoning, pause transcript following,
-    scroll the transcript without moving a non-empty draft, return to the latest
-    output, see an actionable block when an effect has a durable dispatch marker
-    without a terminal receipt, and leave with a copyable short resume command.
+    expanded tool receipts, keep private provider reasoning out of restored
+    state, pause transcript following, scroll the transcript without moving a
+    non-empty draft, return to the latest output, see an actionable block when
+    an effect has a durable dispatch marker without a terminal receipt, and
+    leave with a copyable short resume command.
 target:
     cmd: ["./bin/local-agent"]
     cwd: "."
@@ -43,6 +44,7 @@ steps:
         screen:
             contains: "Settings"
         timeoutMs: 2000
+    - press: "down"
     - press: "down"
     - press: "down"
     - press: "down"
@@ -86,9 +88,8 @@ steps:
     - press: "ctrl+t"
     - wait:
         screen:
-            contains: "one successful read and one failed test command"
+            notContains: "one successful read and one failed test command"
         timeoutMs: 2000
-    - snapshot: expanded_reasoning
     - resize:
         cols: 110
         rows: 18
@@ -168,12 +169,11 @@ outcomes:
         snapshot:
             name: expanded_receipts
             mode: text
-    - id: saved_reasoning_is_inspectable
-      description: the reasoning disclosure can be opened independently from tool receipts
+    - id: private_reasoning_is_not_restored
+      description: legacy provider reasoning does not re-enter the restored transcript
       verify:
-        snapshot:
-            name: expanded_reasoning
-            mode: text
+        screen:
+            notContains: "one successful read and one failed test command"
     - id: transcript_wheel_preserves_draft_ownership
       description: mouse-wheel scrolling pauses transcript following while preserving the exact non-empty composer draft
       verify:

@@ -1,0 +1,10 @@
+
+ ╭──────────────────────────╮
+ │ Agents · 1 consultatio…  │
+ │ │ Consultation 1 · sett… │
+ │                          │
+ │                          │
+ │                          │
+ │ esc close · enter view   │
+ ╰──────────────────────────╯
+ ✓ Done · 8.1s · S1

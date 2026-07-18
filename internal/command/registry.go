@@ -166,6 +166,7 @@ const (
 	ActionListImages                // Show images attached to the pending prompt
 	ActionClearImages               // Remove every image from the pending prompt
 	ActionForgetImageHistory        // Remove image references from active conversation history; checkpoints remain
+	ActionShowAgents                // Open the read-only agent activity hub
 )
 
 // Registry holds all registered slash commands.

@@ -166,6 +166,16 @@ func (m *Model) resizePickerOverlays() {
 			pickerListHeight(m.height, len(state.List.Items())*defaultPickerItemHeight+2, 4),
 		)
 	}
+	if state := m.providerPickerState; state != nil {
+		state.List.SetSize(
+			pickerListWidth(m.width, 56),
+			pickerListHeight(
+				m.height,
+				len(state.List.Items())*(state.ItemHeight+max(0, state.ItemSpacing))+2,
+				4,
+			),
+		)
+	}
 	if state := m.modePickerState; state != nil {
 		state.List.SetSize(
 			pickerListWidth(m.width, 52),
