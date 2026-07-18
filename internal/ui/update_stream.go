@@ -408,20 +408,23 @@ func (m *Model) handleAgentDone(msg AgentDoneMsg, cmds []tea.Cmd) []tea.Cmd {
 	m.recalcViewportHeight()
 	m.refreshTranscript()
 	if msg.Err == nil {
-		m.lastTurnToolIndex = -1
-		for i := len(m.toolEntries) - 1; i >= m.turnToolStartIndex; i-- {
-			if m.toolEntries[i].Status != ToolStatusRunning {
-				m.lastTurnToolIndex = i
-				break
+		var toolReceiptsSuccessful bool
+		m.lastTurnToolIndex, toolReceiptsSuccessful = m.currentTurnToolReceiptOutcome()
+		if toolReceiptsSuccessful {
+			// The success notice is a completion receipt, not a generic stopped
+			// state; it also flashes the terminal title while active.
+			doneText := glyphSet(m.glyphProfile).Success + " Done"
+			if m.lastTurnDuration > 0 {
+				doneText += " · " + formatWorkingElapsed(m.lastTurnDuration)
 			}
+			cmds = append(cmds, m.setFooterNotice(noticeSuccess, doneText, 2*time.Second))
+		} else {
+			// AgentDone without an error proves only that the provider loop
+			// settled. A failed, cancelled, incomplete, or semantically
+			// non-successful tool receipt must not become a global green outcome.
+			// The durable ToolCard already presents the exact typed state.
+			m.footerNotice = nil
 		}
-		// The success notice is a completion receipt, not a generic stopped
-		// state; it also flashes the terminal title while active.
-		doneText := glyphSet(m.glyphProfile).Success + " Done"
-		if m.lastTurnDuration > 0 {
-			doneText += " · " + formatWorkingElapsed(m.lastTurnDuration)
-		}
-		cmds = append(cmds, m.setFooterNotice(noticeSuccess, doneText, 2*time.Second))
 	} else {
 		m.footerNotice = nil
 		switch {
@@ -517,6 +520,32 @@ func (m *Model) handleAgentDone(msg AgentDoneMsg, cmds []tea.Cmd) []tea.Cmd {
 	}
 	m.appendShutdownQuit(&cmds)
 	return cmds
+}
+
+// currentTurnToolReceiptOutcome returns the last terminal receipt owned by the
+// active logical turn and whether every receipt in that turn is semantically
+// successful. An empty turn is successful. The validated start boundary keeps
+// restored or historical receipts from affecting the current completion.
+func (m *Model) currentTurnToolReceiptOutcome() (lastTerminal int, successful bool) {
+	lastTerminal = -1
+	successful = true
+	start := m.turnToolStartIndex
+	if start < 0 || start > len(m.toolEntries) {
+		// This boundary is host-owned and set exactly when a turn is admitted.
+		// Corrupt state must omit a green receipt instead of treating the
+		// unknown slice as an empty successful turn.
+		return lastTerminal, false
+	}
+	for index := start; index < len(m.toolEntries); index++ {
+		entry := m.toolEntries[index]
+		if entry.Status != ToolStatusRunning {
+			lastTerminal = index
+		}
+		if entry.Status != ToolStatusDone || entry.IsError || !entry.Projection.Successful() {
+			successful = false
+		}
+	}
+	return lastTerminal, successful
 }
 
 // settleCancelledToolEntries terminates only the still-running invocations

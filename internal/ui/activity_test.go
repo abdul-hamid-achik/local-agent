@@ -10,6 +10,7 @@ import (
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/abdul-hamid-achik/local-agent/internal/ecosystem"
 	"github.com/abdul-hamid-achik/local-agent/internal/imageasset"
 	"github.com/abdul-hamid-achik/local-agent/internal/permission"
 	"github.com/charmbracelet/x/ansi"
@@ -79,6 +80,7 @@ func TestMinimumTerminalWorkingStatesFit(t *testing.T) {
 			}
 		})
 	}
+
 }
 
 func TestAutoCheckpointActivityExplainsInvisibleContinuation(t *testing.T) {
@@ -397,7 +399,10 @@ func TestCompletedNoToolTurnDoesNotAdvertiseStaleReceipt(t *testing.T) {
 	m := newTestModel(t)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
 	m = updated.(*Model)
-	m.toolEntries = []ToolEntry{{Name: "read_file", Status: ToolStatusDone, Collapsed: true}}
+	m.toolEntries = []ToolEntry{
+		{Name: "old_failed_read", Status: ToolStatusError, IsError: true, Collapsed: true},
+		{Name: "old_successful_read", Status: ToolStatusDone, Collapsed: true},
+	}
 	m.turnToolStartIndex = len(m.toolEntries)
 	m.state = StateStreaming
 
@@ -409,6 +414,142 @@ func TestCompletedNoToolTurnDoesNotAdvertiseStaleReceipt(t *testing.T) {
 	}
 	if strings.Contains(status, "inspect receipt") || strings.Contains(status, "hide receipt") {
 		t.Fatalf("no-tool turn advertised an earlier tool receipt: %q", status)
+	}
+}
+
+func TestCurrentTurnToolReceiptOutcomeFailsClosed(t *testing.T) {
+	successfulProjection := ecosystem.ToolProjection{
+		Transport: ecosystem.TransportSucceeded,
+		Domain:    ecosystem.DomainSucceeded,
+	}
+	tests := []struct {
+		name       string
+		entry      *ToolEntry
+		successful bool
+	}{
+		{name: "no tools", successful: true},
+		{name: "semantic success", entry: &ToolEntry{
+			Status: ToolStatusDone, Projection: successfulProjection,
+		}, successful: true},
+		{name: "running", entry: &ToolEntry{
+			Status: ToolStatusRunning, Projection: successfulProjection,
+		}},
+		{name: "error", entry: &ToolEntry{
+			Status: ToolStatusError, IsError: true, Projection: successfulProjection,
+		}},
+		{name: "cancelled", entry: &ToolEntry{
+			Status: ToolStatusCancelled, Projection: successfulProjection,
+		}},
+		{name: "domain attention", entry: &ToolEntry{
+			Status: ToolStatusDone,
+			Projection: ecosystem.ToolProjection{
+				Transport: ecosystem.TransportSucceeded,
+				Domain:    ecosystem.DomainAttention,
+			},
+		}},
+		{name: "domain unknown", entry: &ToolEntry{
+			Status: ToolStatusDone,
+			Projection: ecosystem.ToolProjection{
+				Transport: ecosystem.TransportSucceeded,
+				Domain:    ecosystem.DomainUnknown,
+			},
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			m := newTestModel(t)
+			m.toolEntries = []ToolEntry{{
+				Name: "historical_failure", Status: ToolStatusError, IsError: true,
+			}}
+			m.turnToolStartIndex = len(m.toolEntries)
+			if test.entry != nil {
+				m.toolEntries = append(m.toolEntries, *test.entry)
+			}
+
+			last, successful := m.currentTurnToolReceiptOutcome()
+			if successful != test.successful {
+				t.Fatalf("successful = %v, want %v", successful, test.successful)
+			}
+			wantLast := -1
+			if test.entry != nil && test.entry.Status != ToolStatusRunning {
+				wantLast = 1
+			}
+			if last != wantLast {
+				t.Fatalf("last terminal receipt = %d, want %d", last, wantLast)
+			}
+		})
+	}
+
+	t.Run("invalid turn boundary", func(t *testing.T) {
+		m := newTestModel(t)
+		m.toolEntries = []ToolEntry{{
+			Status: ToolStatusDone, Projection: successfulProjection,
+		}}
+		m.turnToolStartIndex = len(m.toolEntries) + 1
+		last, successful := m.currentTurnToolReceiptOutcome()
+		if last != -1 || successful {
+			t.Fatalf("invalid boundary outcome = last %d, successful %v", last, successful)
+		}
+	})
+}
+
+func TestDeniedToolFollowedByModelResponseDoesNotFlashTurnSuccess(t *testing.T) {
+	base := time.Date(2026, 7, 18, 23, 20, 29, 0, time.UTC)
+	m := newTestModel(t)
+	m.now = func() time.Time { return base.Add(3300 * time.Millisecond) }
+	m.turnStartedAt = base
+	m.state = StateStreaming
+	m.turnToolStartIndex = len(m.toolEntries)
+
+	updated, _ := m.Update(ToolCallStartMsg{
+		ID:        "approval-denied-write",
+		Name:      "write",
+		Args:      map[string]any{"path": "approval-probe.txt", "content": "must not be written"},
+		StartTime: base,
+	})
+	m = updated.(*Model)
+	updated, _ = m.Update(ToolCallResultMsg{
+		ID:       "approval-denied-write",
+		Name:     "write",
+		Result:   "tool call denied: user denied tool execution",
+		IsError:  true,
+		Duration: 300 * time.Millisecond,
+	})
+	m = updated.(*Model)
+	updated, _ = m.Update(StreamTextMsg{
+		Text: "Denied safely. No file was changed.",
+	})
+	m = updated.(*Model)
+	updated, _ = m.Update(StreamDoneMsg{EvalCount: 7, PromptTokens: 19})
+	m = updated.(*Model)
+	updated, _ = m.Update(AgentDoneMsg{})
+	m = updated.(*Model)
+
+	if m.state != StateIdle {
+		t.Fatalf("denied-tool turn state = %v, want idle", m.state)
+	}
+	if len(m.toolEntries) != 1 ||
+		m.toolEntries[0].Status != ToolStatusError ||
+		!m.toolEntries[0].IsError {
+		t.Fatalf("denied tool receipt = %#v", m.toolEntries)
+	}
+	if transcript := ansi.Strip(m.renderEntries()); !strings.Contains(
+		transcript,
+		"Denied safely. No file was changed.",
+	) {
+		t.Fatalf("settled turn omitted the model response:\n%s", transcript)
+	}
+	status := ansi.Strip(m.renderStatusLine())
+	success := glyphSet(m.glyphProfile).Success + " Done"
+	if m.footerNotice != nil {
+		t.Fatalf("denied-tool turn armed a duplicate notice %#v; footer=%q",
+			m.footerNotice, status)
+	}
+	if strings.Contains(status, success) {
+		t.Fatalf("denied-tool turn rendered misleading success footer %q", status)
+	}
+	if m.sessionTurnCount != 1 {
+		t.Fatalf("settled denial turn count = %d, want 1", m.sessionTurnCount)
 	}
 }
 
