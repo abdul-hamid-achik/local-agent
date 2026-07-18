@@ -19,9 +19,7 @@ type transcriptRenderProbe struct {
 
 // reconcileTranscriptEntriesForRender keeps semantic admission out of visual
 // ticks. Entry mutation paths invalidate the render cache; append-only paths
-// are also detected by the reconciled length. A direct semantic projection
-// such as transcriptBlocks still calls reconcileTranscriptEntries itself and
-// therefore never relies on this paint cache.
+// are also detected by the reconciled length.
 func (m *Model) reconcileTranscriptEntriesForRender() (bool, error) {
 	if m.transcriptReconcileValid && m.transcriptReconciledCount == len(m.entries) {
 		return false, nil
@@ -195,44 +193,4 @@ func (m *Model) chatEntrySemanticDigest(entry ChatEntry) [32]byte {
 func writeTranscriptDigestPart(digest hash.Hash, value string) {
 	_, _ = digest.Write([]byte(value))
 	_, _ = digest.Write([]byte{0})
-}
-
-// transcriptBlocks returns the provider-neutral semantic projection admitted
-// to persistence, search, and future virtualized layout. Provider reasoning,
-// raw MCP StructuredContent, credentials, and transient ANSI never enter it.
-func (m *Model) transcriptBlocks() ([]TranscriptBlock, error) {
-	if err := m.reconcileTranscriptEntries(); err != nil {
-		return nil, err
-	}
-	blocks := make([]TranscriptBlock, 0, len(m.entries))
-	for _, entry := range m.entries {
-		var (
-			payload BlockPayload
-			err     error
-		)
-		if entry.Kind == "tool_group" && entry.ToolIndex >= 0 && entry.ToolIndex < len(m.toolEntries) {
-			tool := m.toolEntries[entry.ToolIndex]
-			payload, err = NewHostProjectedBlockPayload(
-				sanitizeTerminalSingleLine(tool.Name),
-				boundedToolCardSummary(tool.Summary),
-			)
-		} else {
-			payload, err = NewVisibleTextBlockPayload(sanitizeTerminalMultiline(entry.Content))
-		}
-		if err != nil {
-			return nil, fmt.Errorf("block %q payload: %w", entry.BlockID, err)
-		}
-		blocks = append(blocks, TranscriptBlock{
-			ID:        entry.BlockID,
-			TurnID:    entry.TurnID,
-			Kind:      blockKindForChatEntry(entry),
-			Revision:  entry.Revision,
-			Lifecycle: entry.Lifecycle,
-			Payload:   payload,
-		})
-	}
-	if err := ValidateTranscriptBlocks(blocks); err != nil {
-		return nil, err
-	}
-	return blocks, nil
 }

@@ -42,23 +42,6 @@ func (m *Model) providerNames() []string {
 	return names
 }
 
-// switchProvider activates a named provider profile and refreshes the UI model
-// identity. API keys are resolved from the process environment at switch time.
-func (m *Model) switchProvider(name string) error {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return fmt.Errorf("provider name is empty")
-	}
-	if m.modelManager == nil {
-		return fmt.Errorf("model manager is unavailable")
-	}
-	if err := m.modelManager.SwitchProvider(name); err != nil {
-		return err
-	}
-	m.applySwitchedProvider(name)
-	return nil
-}
-
 // beginProviderSwitch moves provider admission and local inventory refresh out
 // of Bubble Tea's event loop. A token prevents a late cancelled result from
 // repainting a newer selection.

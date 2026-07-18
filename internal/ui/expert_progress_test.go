@@ -308,7 +308,8 @@ func TestExpertProgressDetailsPreserveQueuedAggregateWithinCap(t *testing.T) {
 	runningAt := strings.Index(view, "expert-a")
 	queuedAt := strings.Index(view, "2 more queued")
 	nextAt := strings.Index(view, "expert-c")
-	if runningAt < 0 || queuedAt < 0 || nextAt < 0 || !(runningAt < queuedAt && queuedAt < nextAt) {
+	if runningAt < 0 || queuedAt < 0 || nextAt < 0 ||
+		runningAt >= queuedAt || queuedAt >= nextAt {
 		t.Fatalf("queued aggregate lost stable index order:\n%s", view)
 	}
 	if !strings.Contains(view, "+3 more · Ctrl+G Agents") {

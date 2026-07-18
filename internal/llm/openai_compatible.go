@@ -144,7 +144,11 @@ func (c *OpenAICompatibleClient) pingModels(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("provider models: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		// The bounded read below determines the operation result. Closing a
+		// fully consumed response body cannot make that response unsuccessful.
+		_ = resp.Body.Close()
+	}()
 	body, err := readBoundedBody(resp.Body, maxOpenAIResponseBytes)
 	if err != nil {
 		return err
@@ -230,7 +234,11 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, opts ChatOption
 	if err != nil {
 		return fmt.Errorf("provider chat stream: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		// Stream completion/error is established while reading; a later close
+		// error carries no additional provider outcome information.
+		_ = resp.Body.Close()
+	}()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := readBoundedBody(resp.Body, maxOpenAIErrorBytes)
 		return openAIStatusError(resp, body)
@@ -273,7 +281,6 @@ func (c *OpenAICompatibleClient) consumeSSE(body io.Reader, fn func(StreamChunk)
 		}
 		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if data == "[DONE]" {
-			sawDone = true
 			chunk := StreamChunk{Done: true, ToolCalls: finalizeToolCalls(toolAccum)}
 			return fn(chunk)
 		}
@@ -593,7 +600,11 @@ func (c *OpenAICompatibleClient) doJSON(ctx context.Context, method, route strin
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		// The bounded read below determines the operation result. Closing a
+		// fully consumed response body cannot make that response unsuccessful.
+		_ = resp.Body.Close()
+	}()
 	body, err := readBoundedBody(resp.Body, maxOpenAIResponseBytes)
 	if err != nil {
 		return err
@@ -644,4 +655,3 @@ func joinURLPath(basePath, route string) string {
 	}
 	return basePath + route
 }
-

@@ -514,10 +514,6 @@ func renderDiffStatus(status string, styles Styles) string {
 	return styles.DiffHeader.PaddingLeft(0).Render(status)
 }
 
-func renderDiffBodyLine(line DiffLine, marker string, numbers diffGutterNumbers, gutter diffGutter, style lipgloss.Style, width int) string {
-	return strings.Join(renderDiffBodyRows(line, marker, numbers, gutter, style, width), "\n")
-}
-
 func renderDiffBodyRows(line DiffLine, marker string, numbers diffGutterNumbers, gutter diffGutter, style lipgloss.Style, width int) []string {
 	prefix := ""
 	if gutter.withNumbers {

@@ -83,8 +83,8 @@ func validWorkNodeID(value string) bool {
 		return false
 	}
 	for _, r := range value {
-		if unicode.IsControl(r) || !(r >= 'a' && r <= 'z') &&
-			!(r >= 'A' && r <= 'Z') && !(r >= '0' && r <= '9') &&
+		if unicode.IsControl(r) || (r < 'a' || r > 'z') &&
+			(r < 'A' || r > 'Z') && (r < '0' || r > '9') &&
 			r != '-' && r != '_' && r != ':' {
 			return false
 		}

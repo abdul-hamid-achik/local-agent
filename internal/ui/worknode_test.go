@@ -146,7 +146,8 @@ func TestExpertProgressDetailsKeepIndexOrderWithoutChangingGrammar(t *testing.T)
 	}
 	view := state.renderDetails(80, NewToolCardStyles(true))
 	failedAt, runningAt, queuedAt := strings.Index(view, "failed"), strings.Index(view, "active"), strings.Index(view, "1 more queued")
-	if failedAt < 0 || runningAt < 0 || queuedAt < 0 || !(runningAt < queuedAt && queuedAt < failedAt) {
+	if failedAt < 0 || runningAt < 0 || queuedAt < 0 ||
+		runningAt >= queuedAt || queuedAt >= failedAt {
 		t.Fatalf("unexpected work-node order or grammar:\n%s", view)
 	}
 }
