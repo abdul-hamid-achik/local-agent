@@ -86,7 +86,7 @@ func (m *Model) handlePromptPathPreflightResult(msg PromptPathPreflightResultMsg
 			Content: guidance,
 		})
 		m.recalcViewportHeight()
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		m.gotoBottomIfFollowing()
 		return nil
 	}
@@ -108,7 +108,7 @@ func (m *Model) handlePromptPathPreflightResult(msg PromptPathPreflightResultMsg
 		})
 		m.invalidateEntryCache()
 		m.recalcViewportHeight()
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		m.gotoBottomIfFollowing()
 		return nil
 	}

@@ -16,6 +16,7 @@ import (
 type semanticOutputRecorder struct {
 	projection ecosystem.ToolProjection
 	result     string
+	detail     *ToolOutputDetail
 }
 
 func TestSemanticToolContentsSuppressesUnboundResultPageFromActiveModel(t *testing.T) {
@@ -472,6 +473,17 @@ func (r *semanticOutputRecorder) ToolCallResult(_ string, _ string, result strin
 func (r *semanticOutputRecorder) ToolCallSemanticResult(_ string, _ string, result string, _ bool, _ time.Duration, projection ecosystem.ToolProjection) {
 	r.result, r.projection = result, projection
 }
+func (r *semanticOutputRecorder) ToolCallSemanticResultWithDetail(
+	_ string,
+	_ string,
+	result string,
+	_ bool,
+	_ time.Duration,
+	projection ecosystem.ToolProjection,
+	detail *ToolOutputDetail,
+) {
+	r.result, r.projection, r.detail = result, projection, detail
+}
 
 func TestEmitSemanticToolResultDoesNotForwardRawStructuredContent(t *testing.T) {
 	recorder := &semanticOutputRecorder{}
@@ -483,7 +495,9 @@ func TestEmitSemanticToolResultDoesNotForwardRawStructuredContent(t *testing.T) 
 	emitSemanticToolResult(
 		recorder,
 		"call-1", "bob__bob_check", "repository checked", structured,
-		false, false, time.Millisecond, projection,
+		false, false, time.Millisecond, projection, &ToolOutputDetail{
+			Text: "SECRET_DETAIL_MUST_NOT_CROSS", Complete: true,
+		},
 	)
 	if recorder.projection.Domain != ecosystem.DomainDrift || recorder.projection.Transport != ecosystem.TransportSucceeded {
 		t.Fatalf("semantic projection = %#v", recorder.projection)
@@ -494,6 +508,88 @@ func TestEmitSemanticToolResultDoesNotForwardRawStructuredContent(t *testing.T) 
 	}
 	if recorder.result != ecosystem.SafeReceiptText(projection) || strings.Contains(string(encoded), secret) || strings.Contains(recorder.result, secret) {
 		t.Fatalf("raw structured content crossed output boundary: projection=%s result=%q", encoded, recorder.result)
+	}
+	if recorder.detail != nil {
+		t.Fatalf("structured result crossed ephemeral detail boundary: %#v", recorder.detail)
+	}
+}
+
+func TestCompleteToolOutputDetailAdmitsOnlyOrdinaryUnstructuredResults(t *testing.T) {
+	t.Parallel()
+
+	const complete = "complete post-redaction output"
+	if detail := completeToolOutputDetail(
+		"read_file",
+		complete,
+		"complete post-red",
+		"complete post-red",
+		nil,
+	); detail == nil || !detail.Complete || detail.Text != complete {
+		t.Fatalf("ordinary context-capped result lost complete detail: %#v", detail)
+	}
+	if detail := completeToolOutputDetail(
+		"mcp__typed",
+		complete,
+		"domain=succeeded",
+		"domain=succeeded",
+		json.RawMessage(`{"private":"value"}`),
+	); detail != nil {
+		t.Fatalf("structured result gained detail capability: %#v", detail)
+	}
+	if detail := completeToolOutputDetail(
+		"cortex__action",
+		complete,
+		"raw transient action",
+		"domain=succeeded evidence=none",
+		nil,
+	); detail != nil {
+		t.Fatalf("semantic replacement gained raw detail capability: %#v", detail)
+	}
+	if detail := completeToolOutputDetail("read_file", "", "", "", nil); detail != nil {
+		t.Fatalf("empty result gained detail capability: %#v", detail)
+	}
+	if detail := completeToolOutputDetail(
+		"consult_experts",
+		complete,
+		"bounded expert receipt",
+		"bounded expert receipt",
+		nil,
+	); detail != nil {
+		t.Fatalf("expert report gained detail capability: %#v", detail)
+	}
+}
+
+func TestEmitSemanticToolResultDropsExpertDetailBeforeOutputBoundary(t *testing.T) {
+	t.Parallel()
+
+	recorder := &semanticOutputRecorder{}
+	projection := projectSemanticToolReceipt(
+		"consult_experts",
+		nil,
+		"bounded consultation receipt",
+		nil,
+		nil,
+		false,
+		false,
+		true,
+	)
+	emitSemanticToolResult(
+		recorder,
+		"expert-call",
+		"consult_experts",
+		"bounded consultation receipt",
+		nil,
+		false,
+		false,
+		time.Second,
+		projection,
+		&ToolOutputDetail{Text: "PRIVATE EXPERT REPORT", Complete: true},
+	)
+	if recorder.detail != nil {
+		t.Fatalf("expert detail crossed output interface: %#v", recorder.detail)
+	}
+	if recorder.result != "bounded consultation receipt" {
+		t.Fatalf("expert display receipt changed: %q", recorder.result)
 	}
 }
 

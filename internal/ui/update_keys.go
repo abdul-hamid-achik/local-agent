@@ -44,6 +44,15 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	if m.cortexDecisionActive() {
 		return m.updateCortexDecisionKey(msg), true
 	}
+	// Stacked viewers own every key except the already-handled host authority
+	// surfaces and graceful global quit. The transcript and composer must not
+	// react behind the modal.
+	if m.viewerModalActive() {
+		if key.Matches(msg, m.keys.Quit) {
+			return m.beginShutdown(), true
+		}
+		return m.handleViewerKey(msg), true
+	}
 	// End is the transcript's explicit recovery action whenever the composer
 	// is empty or temporarily unavailable. Handle it before owned busy-state
 	// guards so the advertised action cannot be swallowed by an in-flight

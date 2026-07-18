@@ -163,6 +163,7 @@ weight budget and remain serial because provider-side capacity is unknown.
 | `LOCAL_AGENT_TRUST_REPO_MCP` | Trust the exact digest printed for repository-local STDIO MCP authority |
 | `LOCAL_AGENT_ALLOW_LARGE_MODELS` | Bypass the 16 GB-oriented admission guard |
 | `LOCAL_AGENT_REDUCED_MOTION` | Replace animated TUI activity with static glyphs |
+| `LOCAL_AGENT_GLYPHS` | Set to `ascii` to replace Unicode UI glyphs independently of color and reduced motion |
 
 Remote providers (`LOCAL_AGENT_PROVIDER`, API key env names, optional TinyVault
 PATH wrapper variables such as `LOCAL_AGENT_NO_VAULT` and

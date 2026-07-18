@@ -88,7 +88,13 @@ func (m *Model) syncComposerAuthority() {
 	if m == nil {
 		return
 	}
-	configureComposerMode(&m.input, m.isDark, m.presentedMode(), m.reducedMotion)
+	configureComposerModeWithGlyphProfile(
+		&m.input,
+		m.isDark,
+		m.presentedMode(),
+		m.reducedMotion,
+		m.glyphProfile,
+	)
 }
 
 // cycleMode advances through NORMAL -> PLAN -> AUTO -> NORMAL.
@@ -144,7 +150,7 @@ func (m *Model) setMode(mode Mode) {
 		}
 		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: receipt})
 	}
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	m.resumeFollow()
 	if m.overlay == OverlaySettings && m.settingsPickerState != nil {
 		// Mode picker selection returns to Settings before this transition is

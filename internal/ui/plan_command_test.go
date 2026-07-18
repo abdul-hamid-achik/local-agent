@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/abdul-hamid-achik/local-agent/internal/agent"
@@ -62,7 +63,8 @@ func TestPlanCommandSubmissionUsesStructuredReadOnlyTurn(t *testing.T) {
 		t.Fatalf("submitted prompt = %#v, want %q", m.entries, wantPrompt)
 	}
 
-	if done, ok := cmd().(AgentDoneMsg); !ok || done.Err != nil {
+	done := awaitCommandMessage[AgentDoneMsg](t, commandMessages(cmd), 2*time.Second)
+	if done.Err != nil {
 		t.Fatalf("plan provider result = %#v", done)
 	}
 	options := <-client.options

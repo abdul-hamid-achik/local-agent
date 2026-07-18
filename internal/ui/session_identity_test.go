@@ -1,8 +1,13 @@
 package ui
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/abdul-hamid-achik/local-agent/internal/agent"
+	"github.com/abdul-hamid-achik/local-agent/internal/ecosystem"
+	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 )
 
 func TestSessionV3PersistsTranscriptIdentityWithoutPrivateThinking(t *testing.T) {
@@ -190,6 +195,16 @@ func TestSessionV3ToolLifecycleMustMatchPersistedStatus(t *testing.T) {
 	if _, err := marshalPersistedSessionState(base); err != nil {
 		t.Fatalf("valid tool transcript rejected: %v", err)
 	}
+	cancelled := base
+	cancelled.Entries = append([]persistedChatEntry(nil), base.Entries...)
+	cancelled.ToolEntries = append([]persistedToolEntry(nil), base.ToolEntries...)
+	cancelled.Entries[0].Lifecycle = BlockCancelled
+	cancelled.ToolEntries[0].Status = ToolStatusCancelled
+	cancelled.ToolEntries[0].Result = cancelledToolResult
+	cancelled.ToolEntries[0].Projection = canonicalCancelledProjectionForTest("read_file")
+	if _, err := marshalPersistedSessionState(cancelled); err != nil {
+		t.Fatalf("valid cancelled tool transcript rejected: %v", err)
+	}
 
 	tests := []struct {
 		name string
@@ -239,6 +254,147 @@ func TestSessionV3ToolLifecycleMustMatchPersistedStatus(t *testing.T) {
 	}
 }
 
+func TestSessionV3RejectsAdversarialCancelledToolState(t *testing.T) {
+	validState := func() persistedSessionState {
+		return persistedSessionState{
+			Version: currentPersistedSessionVersion,
+			Mode:    ModeNormal,
+			Entries: []persistedChatEntry{{
+				Kind: "tool_group", ToolIndex: 0,
+				BlockID: "block-cancelled", TurnID: "turn-cancelled", Revision: 1,
+				Lifecycle: BlockCancelled,
+			}},
+			ToolEntries: []persistedToolEntry{{
+				ID:         "call-cancelled",
+				Name:       "read_file",
+				Result:     cancelledToolResult,
+				Status:     ToolStatusCancelled,
+				Projection: canonicalCancelledProjectionForTest("read_file"),
+			}},
+		}
+	}
+	if raw, err := json.Marshal(validState()); err != nil {
+		t.Fatal(err)
+	} else if _, err := decodeSessionState(string(raw)); err != nil {
+		t.Fatalf("canonical cancelled JSON rejected: %v", err)
+	}
+
+	validOutput := OutputDetailDigest{
+		TotalRows: 1, RetainedRows: 1, TotalBytes: 1, RetainedBytes: 1,
+	}
+	tests := []struct {
+		name string
+		want string
+		edit func(*persistedToolEntry)
+	}{
+		{
+			name: "successful verified projection",
+			want: "must be transport failed",
+			edit: func(tool *persistedToolEntry) {
+				tool.Projection.Transport = ecosystem.TransportSucceeded
+				tool.Projection.Domain = ecosystem.DomainSucceeded
+				tool.Projection.DomainTyped = true
+				tool.Projection.Evidence = ecosystem.EvidenceVerified
+			},
+		},
+		{
+			name: "typed unknown domain",
+			want: "must be transport failed",
+			edit: func(tool *persistedToolEntry) {
+				tool.Projection.DomainTyped = true
+			},
+		},
+		{
+			name: "receipt digest",
+			want: "digest or artifact",
+			edit: func(tool *persistedToolEntry) {
+				tool.Projection.Digest = &ecosystem.ReceiptDigest{}
+			},
+		},
+		{
+			name: "artifact digest",
+			want: "digest or artifact",
+			edit: func(tool *persistedToolEntry) {
+				tool.Projection.Artifact = &ecosystem.ArtifactDigest{}
+			},
+		},
+		{
+			name: "output detail",
+			want: "output detail",
+			edit: func(tool *persistedToolEntry) {
+				digest := validOutput
+				tool.OutputDetail = &digest
+			},
+		},
+		{
+			name: "expert progress",
+			want: "expert progress",
+			edit: func(tool *persistedToolEntry) {
+				tool.ExpertProgress = &ExpertProgressState{}
+			},
+		},
+		{
+			name: "arbitrary result output",
+			want: "result output",
+			edit: func(tool *persistedToolEntry) {
+				tool.Result = "late success"
+			},
+		},
+		{
+			name: "result language",
+			want: "result language",
+			edit: func(tool *persistedToolEntry) {
+				tool.ResultLanguage = "go"
+			},
+		},
+		{
+			name: "diff output",
+			want: "diff output",
+			edit: func(tool *persistedToolEntry) {
+				tool.DiffLines = []DiffLine{{Content: "+late success"}}
+			},
+		},
+		{
+			name: "error flag",
+			want: "marked as an error",
+			edit: func(tool *persistedToolEntry) {
+				tool.IsError = true
+			},
+		},
+		{
+			name: "unnormalized projection",
+			want: "not normalized",
+			edit: func(tool *persistedToolEntry) {
+				tool.Projection.Transport = ecosystem.TransportState("invented")
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			state := validState()
+			test.edit(&state.ToolEntries[0])
+			raw, err := json.Marshal(state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := decodeSessionState(string(raw)); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("decode error = %v, want %q; JSON=%s", err, test.want, raw)
+			}
+		})
+	}
+}
+
+func canonicalCancelledProjectionForTest(name string) ecosystem.ToolProjection {
+	projection := ecosystem.ProjectToolCall(name, nil).Normalize()
+	projection.Transport = ecosystem.TransportFailed
+	projection.Domain = ecosystem.DomainUnknown
+	projection.DomainTyped = false
+	projection.Evidence = ecosystem.EvidenceNone
+	projection.Digest = nil
+	projection.Artifact = nil
+	return projection.Normalize()
+}
+
 func TestSessionProviderReferenceIsSafeAndRestoreMismatchIsNonMutating(t *testing.T) {
 	t.Setenv("XAI_API_KEY", "super-secret-test-key")
 	manager := providerSwitchTestManager(t)
@@ -277,5 +433,60 @@ func TestSessionProviderReferenceIsSafeAndRestoreMismatchIsNonMutating(t *testin
 	}
 	if target.model != "keep-model" || len(target.entries) != 1 || target.entries[0].Content != "keep transcript" {
 		t.Fatalf("provider mismatch mutated target: model=%q entries=%#v", target.model, target.entries)
+	}
+}
+
+func TestLegacySessionWithoutProviderIdentityCannotRestoreUnderRemoteProvider(t *testing.T) {
+	t.Setenv("XAI_API_KEY", "test-key")
+	manager := providerSwitchTestManager(t)
+	if err := manager.SwitchProvider("xai"); err != nil {
+		t.Fatalf("switch test provider: %v", err)
+	}
+	state := persistedSessionState{
+		Version: currentPersistedSessionVersion,
+		Mode:    ModeNormal,
+		Model:   manager.Model(),
+		Entries: []persistedChatEntry{{
+			Kind: "user", Content: "local-only legacy history",
+			BlockID: "legacy-block", TurnID: "legacy-turn", Revision: 1,
+			Lifecycle: BlockSettled,
+		}},
+	}
+	target := newTestModel(t)
+	target.modelManager = manager
+	target.model = manager.Model()
+	target.entries = []ChatEntry{{Kind: "system", Content: "keep transcript"}}
+
+	err := target.restoreSessionState(state)
+	if err == nil || !strings.Contains(err.Error(), "legacy session has no provider identity") {
+		t.Fatalf("legacy remote restore error = %v", err)
+	}
+	if len(target.entries) != 1 || target.entries[0].Content != "keep transcript" {
+		t.Fatalf("rejected legacy restore mutated transcript: %#v", target.entries)
+	}
+}
+
+func TestHeadlessRemoteSessionPersistsExactProviderIdentity(t *testing.T) {
+	raw, err := EncodeHeadlessSessionStateWithProvider(
+		[]llm.Message{{Role: "user", Content: "remote turn"}},
+		"grok-test",
+		"",
+		true,
+		7,
+		agent.ContextPromptFloor{},
+		SessionProviderIdentity{Profile: "xai", Remote: true},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := decodeSessionState(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Provider == nil ||
+		state.Provider.Profile != "xai" ||
+		state.Provider.Model != "grok-test" ||
+		state.Provider.Locality != persistedProviderRemote {
+		t.Fatalf("headless provider identity = %#v", state.Provider)
 	}
 }

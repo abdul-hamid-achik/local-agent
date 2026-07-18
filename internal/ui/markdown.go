@@ -13,9 +13,11 @@ import (
 
 // MarkdownRenderer handles markdown rendering with caching support.
 type MarkdownRenderer struct {
-	renderer *glamour.TermRenderer
-	width    int
-	isDark   bool
+	renderer      *glamour.TermRenderer
+	proseRenderer *glamour.TermRenderer
+	width         int
+	proseWidth    int
+	isDark        bool
 
 	// Stable-prefix streaming cache: the rendered output of the last stable
 	// markdown prefix, reused across paints so we only re-render when a new
@@ -76,14 +78,20 @@ func newMarkdownTermRenderer(width int, isDark bool) (*glamour.TermRenderer, err
 
 // NewMarkdownRenderer creates a renderer for the given terminal width and theme.
 func NewMarkdownRenderer(width int, isDark bool) *MarkdownRenderer {
-	// Use standard glamour style with word wrapping
-	// Glamour automatically handles syntax highlighting via Chroma
-	r, _ := newMarkdownTermRenderer(width, isDark)
+	workWidth := max(1, width)
+	proseWidth := min(ProseTargetCandidate, workWidth)
+	workRenderer, _ := newMarkdownTermRenderer(workWidth, isDark)
+	proseRenderer := workRenderer
+	if proseWidth != workWidth {
+		proseRenderer, _ = newMarkdownTermRenderer(proseWidth, isDark)
+	}
 
 	return &MarkdownRenderer{
-		renderer: r,
-		width:    width,
-		isDark:   isDark,
+		renderer:      workRenderer,
+		proseRenderer: proseRenderer,
+		width:         workWidth,
+		proseWidth:    proseWidth,
+		isDark:        isDark,
 	}
 }
 
@@ -94,12 +102,61 @@ func (mr *MarkdownRenderer) RenderFull(content string) string {
 		return content
 	}
 
-	rendered, err := mr.renderer.Render(content)
+	renderer := mr.proseRenderer
+	if renderer == nil || markdownUsesWorkWidth(content) {
+		renderer = mr.renderer
+	}
+	rendered, err := renderer.Render(content)
 	if err != nil {
 		return content
 	}
 
 	return strings.TrimRight(rendered, "\n")
+}
+
+// markdownUsesWorkWidth keeps structural work surfaces out of the readable
+// prose measure. A mixed document currently stays on the work renderer as one
+// semantic unit; this avoids narrowing code, tables, or indented logs while a
+// future AST renderer can assign measures block by block.
+func markdownUsesWorkWidth(content string) bool {
+	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+	for index, line := range lines {
+		if _, ok := markdownFenceMarkerStart(line); ok {
+			trimmed := strings.TrimLeft(line, " ")
+			if len(trimmed) >= 3 &&
+				(strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~")) {
+				return true
+			}
+		}
+		if strings.HasPrefix(line, "\t") || strings.HasPrefix(line, "    ") {
+			return true
+		}
+		if index > 0 && strings.Contains(lines[index-1], "|") && markdownTableDelimiterLine(line) {
+			return true
+		}
+	}
+	return false
+}
+
+func markdownTableDelimiterLine(line string) bool {
+	line = strings.TrimSpace(line)
+	if line == "" || !strings.Contains(line, "-") {
+		return false
+	}
+	line = strings.Trim(line, "|")
+	cells := strings.Split(line, "|")
+	if len(cells) == 0 {
+		return false
+	}
+	for _, cell := range cells {
+		cell = strings.TrimSpace(cell)
+		cell = strings.TrimPrefix(cell, ":")
+		cell = strings.TrimSuffix(cell, ":")
+		if len(cell) < 3 || strings.Trim(cell, "-") != "" {
+			return false
+		}
+	}
+	return true
 }
 
 // RenderStreaming renders content during streaming (plain text, no Glamour).
@@ -143,12 +200,10 @@ func (mr *MarkdownRenderer) RenderStreamingFormatted(content string) (formatted,
 //
 // It runs in a single linear pass: fence state is tracked line-by-line as we
 // scan, and each "\n\n" is recorded as the latest safe boundary whenever the
-// fence is currently closed. Both ``` and ~~~ fences are tracked (a fence only
-// closes with the character that opened it), and fence markers must be at the
-// start of a line, so inline code like `foo` mid-sentence never counts.
+// fence is currently closed. Both ``` and ~~~ fences are tracked. A closing
+// fence must use the opening character and at least the opening run length.
 func findSafeMarkdownBoundary(content string) int {
-	fenceOpen := false
-	var fenceChar byte
+	var fence markdownFenceState
 	lineStart := 0
 	lastSafe := 0
 
@@ -157,10 +212,10 @@ func findSafeMarkdownBoundary(content string) int {
 			continue
 		}
 		// The line content[lineStart:i] is now complete; fold it into fence state.
-		applyFenceLine(content[lineStart:i], &fenceOpen, &fenceChar)
+		fence.applyLine(content[lineStart:i])
 		// A blank line (a second '\n') marks a paragraph boundary at i. It is
 		// safe to split there only if no code fence is currently open.
-		if i+1 < len(content) && content[i+1] == '\n' && !fenceOpen {
+		if i+1 < len(content) && content[i+1] == '\n' && !fence.open {
 			lastSafe = i
 		}
 		lineStart = i + 1
@@ -168,27 +223,70 @@ func findSafeMarkdownBoundary(content string) int {
 	return lastSafe
 }
 
-// applyFenceLine toggles fence state if line is a fence marker (a leading run of
-// >=3 backticks or tildes). A fence only closes with the char that opened it.
-func applyFenceLine(line string, open *bool, fenceChar *byte) {
-	t := strings.TrimSpace(line)
-	if len(t) < 3 || (t[0] != '`' && t[0] != '~') {
+type markdownFenceState struct {
+	open   bool
+	char   byte
+	length int
+}
+
+// applyLine recognizes the CommonMark fence rules that affect streaming
+// boundaries. Openers and closers may be indented by up to three spaces.
+// Closers must use the opening character, contain at least as many markers, and
+// have no trailing content. Backtick info strings may not contain a backtick.
+func (state *markdownFenceState) applyLine(line string) {
+	markerStart, ok := markdownFenceMarkerStart(line)
+	if !ok || markerStart >= len(line) {
 		return
 	}
-	c := t[0]
-	n := 0
-	for n < len(t) && t[n] == c {
-		n++
-	}
-	if n < 3 {
+	char := line[markerStart]
+	if char != '`' && char != '~' {
 		return
 	}
-	switch {
-	case !*open:
-		*open, *fenceChar = true, c
-	case c == *fenceChar:
-		*open = false
+	runLength := 0
+	for markerStart+runLength < len(line) && line[markerStart+runLength] == char {
+		runLength++
 	}
+	if runLength < 3 {
+		return
+	}
+
+	rest := line[markerStart+runLength:]
+	if !state.open {
+		if char == '`' && strings.ContainsRune(rest, '`') {
+			return
+		}
+		state.open = true
+		state.char = char
+		state.length = runLength
+		return
+	}
+
+	if char != state.char || runLength < state.length || !markdownFenceClosingSuffix(rest) {
+		return
+	}
+	*state = markdownFenceState{}
+}
+
+func markdownFenceMarkerStart(line string) (int, bool) {
+	indent := 0
+	for indent < len(line) && line[indent] == ' ' {
+		indent++
+		if indent > 3 {
+			return 0, false
+		}
+	}
+	return indent, true
+}
+
+func markdownFenceClosingSuffix(s string) bool {
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case ' ', '\t', '\r':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // SetWidth updates the renderer for a new terminal width.

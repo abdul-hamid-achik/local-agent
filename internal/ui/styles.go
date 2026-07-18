@@ -21,10 +21,10 @@ var (
 	nord4 = "#D8DEE9" // primary text
 	nord5 = "#E5E9F0" // secondary text
 	// Aurora (dark theme accents)
-	nord7  = "#BF616A" // red (errors/warnings)
+	nord7  = "#ED7A84" // accessible red (errors/warnings)
 	nord9  = "#EBCB8B" // yellow (warnings/highlights)
 	nord10 = "#A3BE8C" // green (success)
-	nord11 = "#B48EAD" // purple (special)
+	nord11 = "#C18CB9" // accessible purple (special)
 	nord12 = "#88C0D0" // cyan (primary accent)
 	nord13 = "#81A1C1" // blue (secondary accent)
 )
@@ -58,7 +58,7 @@ type semanticPalette struct {
 func newSemanticPalette(isDark bool) semanticPalette {
 	ld := lipgloss.LightDark(isDark)
 	return semanticPalette{
-		Dim:   ld(lipgloss.Color("#5B6779"), lipgloss.Color("#8B97AD")),
+		Dim:   ld(lipgloss.Color("#5B6779"), lipgloss.Color("#96A2B8")),
 		Muted: ld(lipgloss.Color(nordLight4), lipgloss.Color(nord4)),
 		Text:  ld(lipgloss.Color(nordLight5), lipgloss.Color(nord5)),
 		// Light semantic foregrounds retain the Nord-adjacent hues while clearing
@@ -483,10 +483,9 @@ func plainStyles() Styles {
 	}
 }
 
-// rule generates a horizontal line of the given width using a thin character.
-func rule(width int) string {
+func ruleWithGlyphProfile(width int, profile GlyphProfile) string {
 	if width < 1 {
 		return ""
 	}
-	return strings.Repeat("─", width)
+	return strings.Repeat(glyphSet(resolveGlyphProfile(profile)).Horizontal, width)
 }

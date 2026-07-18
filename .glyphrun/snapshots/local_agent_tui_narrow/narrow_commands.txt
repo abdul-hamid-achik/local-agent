@@ -1,3 +1,5 @@
+  try: ollama serve · ollama pull
+  qwen3.5:2b
 
 
 ───────────────────────────────────────
@@ -12,8 +14,6 @@
 │   /model · Show, switch, or list … │
 │   /provider · Show or switch infe… │
 │   /recover · Review a paused exec… │
-│   /agent · Show or switch agent p… │
-│   /agents · Open the read-only ag… │
 │ esc cancel · enter select · ↑/↓    │
 ╰────────────────────────────────────╯
 ▌❯ /

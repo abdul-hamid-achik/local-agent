@@ -130,6 +130,16 @@ func runCommitWithGit(
 			return CommitResultMsg{Token: token, Err: fmt.Errorf("LLM error: %w", messageContextErr)}
 		}
 		if err != nil {
+			if llm.IsRemoteInferenceError(err) {
+				// OpenAI-compatible response bodies and SSE errors are useful
+				// transient diagnostics inside the provider adapter, but they
+				// must not cross into CommitResultMsg: handleCommitResult writes
+				// that receipt to the transcript and durable session state.
+				return CommitResultMsg{
+					Token: token,
+					Err:   fmt.Errorf("LLM error: %s", ProviderFailureCopy),
+				}
+			}
 			return CommitResultMsg{Token: token, Err: fmt.Errorf("LLM error: %w", err)}
 		}
 		if err := ctx.Err(); err != nil {
@@ -272,7 +282,7 @@ func (m *Model) handleCommitResult(msg CommitResultMsg, cmds []tea.Cmd) []tea.Cm
 		})
 	}
 	m.invalidateEntryCache()
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	m.gotoBottomIfFollowing()
 	m.appendShutdownQuit(&cmds)
 	return cmds

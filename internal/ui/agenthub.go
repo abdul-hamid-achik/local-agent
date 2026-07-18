@@ -1,7 +1,10 @@
 package ui
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"strings"
 	"unicode/utf8"
 
@@ -13,6 +16,7 @@ import (
 )
 
 const agentHubMaximumWidth = 68
+const agentHubASCIIListTitleReserve = 3
 
 type agentHubMode uint8
 
@@ -22,20 +26,22 @@ const (
 )
 
 type agentHubItem struct {
-	ordinal int
-	group   AgentGroupProjection
+	displayID    string
+	group        AgentGroupProjection
+	glyphProfile GlyphProfile
 }
 
 func (item agentHubItem) Title() string {
 	return sanitizeTerminalSingleLine(fmt.Sprintf(
-		"Consultation %d · %s",
-		item.ordinal,
+		"Consultation #%s%s%s",
+		item.displayID,
+		agentHubSeparator(item.glyphProfile),
 		agentGroupStatusLabel(item.group),
 	))
 }
 
 func (item agentHubItem) Description() string {
-	return sanitizeTerminalSingleLine(agentGroupSummary(item.group))
+	return sanitizeTerminalSingleLine(agentGroupSummary(item.group, item.glyphProfile))
 }
 
 func (item agentHubItem) FilterValue() string {
@@ -45,9 +51,76 @@ func (item agentHubItem) FilterValue() string {
 		string(item.group.Strategy),
 	}
 	for _, node := range item.group.Nodes {
-		parts = append(parts, node.Label, node.Model, node.FailureCode, string(node.Location))
+		parts = append(
+			parts,
+			node.Label,
+			node.Model,
+			node.FailureCode,
+			string(node.Location),
+		)
 	}
 	return sanitizeTerminalSingleLine(strings.Join(parts, " "))
+}
+
+// agentHubDelegate keeps Bubbles list behavior while replacing its fixed
+// Unicode truncation mark in ASCII mode. The wrapper supplies already-bounded
+// item text; Bubbles still owns selection, filtering, pagination, and styling.
+type agentHubDelegate struct {
+	list.DefaultDelegate
+	glyphProfile GlyphProfile
+}
+
+type agentHubRenderItem struct {
+	item        list.Item
+	title       string
+	description string
+}
+
+func (item agentHubRenderItem) Title() string       { return item.title }
+func (item agentHubRenderItem) Description() string { return item.description }
+func (item agentHubRenderItem) FilterValue() string { return item.item.FilterValue() }
+
+func newAgentHubDelegate(isDark, compact bool, profile GlyphProfile) agentHubDelegate {
+	return agentHubDelegate{
+		DefaultDelegate: newPickerDelegate(isDark, compact, profile),
+		glyphProfile:    resolveGlyphProfile(profile),
+	}
+}
+
+func (delegate agentHubDelegate) Render(
+	writer io.Writer,
+	model list.Model,
+	index int,
+	item list.Item,
+) {
+	if delegate.glyphProfile != GlyphASCII {
+		delegate.DefaultDelegate.Render(writer, model, index, item)
+		return
+	}
+	defaultItem, ok := item.(list.DefaultItem)
+	if !ok {
+		return
+	}
+	textWidth := model.Width() -
+		delegate.Styles.NormalTitle.GetPaddingLeft() -
+		delegate.Styles.NormalTitle.GetPaddingRight()
+	descriptionLines := strings.Split(defaultItem.Description(), "\n")
+	for lineIndex := range descriptionLines {
+		descriptionLines[lineIndex] = truncateDisplayWithGlyphProfile(
+			descriptionLines[lineIndex],
+			textWidth,
+			delegate.glyphProfile,
+		)
+	}
+	delegate.DefaultDelegate.Render(writer, model, index, agentHubRenderItem{
+		item: item,
+		title: truncateDisplayWithGlyphProfile(
+			defaultItem.Title(),
+			textWidth,
+			delegate.glyphProfile,
+		),
+		description: strings.Join(descriptionLines, "\n"),
+	})
 }
 
 // AgentHubState is a presentation-only Bubbles surface. The parent Model owns
@@ -65,9 +138,11 @@ type AgentHubState struct {
 	height           int
 	isDark           bool
 	reducedMotion    bool
+	glyphProfile     GlyphProfile
 	compact          bool
 	viewerContentKey string
 	viewerRows       []agentViewerRowAnchor
+	seenNodeRevision map[string]uint64
 }
 
 // agentViewerRowAnchor keeps scroll ownership attached to semantic work rather
@@ -91,17 +166,20 @@ func newAgentHubState(
 	terminalHeight int,
 	isDark bool,
 	reducedMotion bool,
+	profiles ...GlyphProfile,
 ) *AgentHubState {
-	if !surface.valid() {
+	if !agentSurfaceProjectionInputValid(surface) {
 		surface = AgentSurfaceProjection{}
 		unavailable = true
 	}
 	surface = cloneAgentSurfaceProjection(surface)
-	items := agentHubItems(surface)
+	profile := resolveGlyphProfile(profiles...)
+	items := agentHubItems(surface, profile)
 	compact := compactAgentHub(terminalWidth, terminalHeight)
-	delegate := newPickerDelegate(isDark, compact)
+	delegate := newAgentHubDelegate(isDark, compact, profile)
 	l := list.New(items, delegate, 1, 1)
 	configurePickerList(&l, isDark, reducedMotion)
+	configurePickerListGlyphProfile(&l, profile)
 	l.SetShowStatusBar(false)
 	l.SetShowHelp(false)
 	l.SetFilteringEnabled(len(items) > 0)
@@ -109,23 +187,54 @@ func newAgentHubState(
 	l.SetStatusBarItemName("agent consultation", "agent consultations")
 
 	state := &AgentHubState{
-		List:          l,
-		Viewer:        viewport.New(viewport.WithWidth(1), viewport.WithHeight(1)),
-		Mode:          agentHubListMode,
-		Surface:       surface,
-		Unavailable:   unavailable,
-		ItemHeight:    delegate.Height(),
-		ItemSpacing:   delegate.Spacing(),
-		width:         terminalWidth,
-		height:        terminalHeight,
-		isDark:        isDark,
-		reducedMotion: reducedMotion,
-		compact:       compact,
+		List:             l,
+		Viewer:           viewport.New(viewport.WithWidth(1), viewport.WithHeight(1)),
+		Mode:             agentHubListMode,
+		Surface:          surface,
+		Unavailable:      unavailable,
+		ItemHeight:       delegate.Height(),
+		ItemSpacing:      delegate.Spacing(),
+		width:            terminalWidth,
+		height:           terminalHeight,
+		isDark:           isDark,
+		reducedMotion:    reducedMotion,
+		glyphProfile:     profile,
+		compact:          compact,
+		seenNodeRevision: make(map[string]uint64),
 	}
+	state.admitInitialNodeRevisions()
 	state.configureListTitle()
 	state.SetSize(terminalWidth, terminalHeight)
 	state.selectDefaultGroup()
 	return state
+}
+
+func agentSurfaceProjectionInputValid(surface AgentSurfaceProjection) bool {
+	if !surface.valid() {
+		return false
+	}
+	for _, group := range surface.Groups {
+		for _, node := range group.Nodes {
+			if node.Unread != 0 {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func (state *AgentHubState) admitInitialNodeRevisions() {
+	if state == nil {
+		return
+	}
+	if state.seenNodeRevision == nil {
+		state.seenNodeRevision = make(map[string]uint64)
+	}
+	for _, group := range state.Surface.Groups {
+		for _, node := range group.Nodes {
+			state.seenNodeRevision[node.ID] = node.Revision
+		}
+	}
 }
 
 func cloneAgentSurfaceProjection(surface AgentSurfaceProjection) AgentSurfaceProjection {
@@ -136,16 +245,37 @@ func cloneAgentSurfaceProjection(surface AgentSurfaceProjection) AgentSurfacePro
 	for index, group := range surface.Groups {
 		cloned.Groups[index] = group
 		cloned.Groups[index].Nodes = append([]WorkNode(nil), group.Nodes...)
+		for nodeIndex := range cloned.Groups[index].Nodes {
+			node := &cloned.Groups[index].Nodes[nodeIndex]
+			if node.ReportRef != nil {
+				reportRef := *node.ReportRef
+				node.ReportRef = &reportRef
+			}
+		}
 	}
 	return cloned
 }
 
-func agentHubItems(surface AgentSurfaceProjection) []list.Item {
+func agentHubItems(surface AgentSurfaceProjection, profiles ...GlyphProfile) []list.Item {
+	profile := resolveGlyphProfile(profiles...)
 	items := make([]list.Item, len(surface.Groups))
 	for index, group := range surface.Groups {
-		items[index] = agentHubItem{ordinal: index + 1, group: group}
+		items[index] = agentHubItem{
+			displayID:    agentGroupDisplayID(group.ID),
+			group:        group,
+			glyphProfile: profile,
+		}
 	}
 	return items
+}
+
+// agentGroupDisplayID is a stable, presentation-only handle for an opaque
+// durable group identity. A list ordinal would change whenever the bounded
+// Agent Hub omits old history, while this handle survives truncation, filtering,
+// lifecycle refresh, and restore without adding another persisted field.
+func agentGroupDisplayID(id BlockID) string {
+	digest := sha256.Sum256([]byte("local-agent.agent-group-label.v1\x00" + string(id)))
+	return hex.EncodeToString(digest[:4])
 }
 
 func compactAgentHub(width, height int) bool {
@@ -158,12 +288,27 @@ func (state *AgentHubState) configureListTitle() {
 	}
 	title := "Agents"
 	if count := len(state.Surface.Groups); count > 0 {
-		title = fmt.Sprintf("Agents · %d %s", count, pluralizeNoun(count, "consultation", "consultations"))
+		title = fmt.Sprintf(
+			"Agents%s%d %s",
+			agentHubSeparator(state.glyphProfile),
+			count,
+			pluralizeNoun(count, "consultation", "consultations"),
+		)
 	}
 	if state.Surface.OmittedGroups > 0 {
-		title += fmt.Sprintf(" · +%d older", state.Surface.OmittedGroups)
+		title += fmt.Sprintf("%s+%d older", agentHubSeparator(state.glyphProfile), state.Surface.OmittedGroups)
 	}
-	state.List.Title = title
+	titleWidth := pickerListWidth(max(1, state.width), agentHubMaximumWidth)
+	if state.glyphProfile == GlyphASCII {
+		// Bubbles reserves one spinner cell plus a two-cell status gap in the
+		// title row even while both are visually empty.
+		titleWidth = max(1, titleWidth-agentHubASCIIListTitleReserve)
+	}
+	state.List.Title = truncateDisplayWithGlyphProfile(
+		title,
+		titleWidth,
+		state.glyphProfile,
+	)
 	setSettingsTitleDensity(&state.List, state.compact)
 }
 
@@ -171,7 +316,7 @@ func (state *AgentHubState) SetProjection(surface AgentSurfaceProjection, unavai
 	if state == nil {
 		return nil
 	}
-	if !surface.valid() {
+	if !agentSurfaceProjectionInputValid(surface) {
 		surface = AgentSurfaceProjection{}
 		unavailable = true
 	}
@@ -182,9 +327,13 @@ func (state *AgentHubState) SetProjection(surface AgentSurfaceProjection, unavai
 	filterText := state.List.FilterInput.Value()
 	filterCursor := state.List.FilterInput.Position()
 
+	if !unavailable && !state.decorateNodeUnread(&surface, viewerID) {
+		surface = AgentSurfaceProjection{}
+		unavailable = true
+	}
 	state.Surface = surface
 	state.Unavailable = unavailable
-	items := agentHubItems(surface)
+	items := agentHubItems(surface, state.glyphProfile)
 	state.List.SetFilteringEnabled(len(items) > 0)
 	_ = state.List.SetItems(items)
 	if len(items) == 0 {
@@ -220,6 +369,51 @@ func (state *AgentHubState) SetProjection(surface AgentSurfaceProjection, unavai
 	return nil
 }
 
+// decorateNodeUnread derives process-local unread counts from monotonic node
+// revisions. New nodes and semantic transitions count as unread while the Hub
+// list is open; a group currently visible in the Viewer is admitted as read.
+// A revision regression fails closed instead of turning a replay into fresh
+// activity.
+func (state *AgentHubState) decorateNodeUnread(
+	surface *AgentSurfaceProjection,
+	viewerID BlockID,
+) bool {
+	if state == nil || surface == nil {
+		return false
+	}
+	if state.seenNodeRevision == nil {
+		state.seenNodeRevision = make(map[string]uint64)
+	}
+	retained := make(map[string]struct{})
+	for groupIndex := range surface.Groups {
+		group := &surface.Groups[groupIndex]
+		for nodeIndex := range group.Nodes {
+			node := &group.Nodes[nodeIndex]
+			retained[node.ID] = struct{}{}
+			seen, known := state.seenNodeRevision[node.ID]
+			if known && node.Revision < seen {
+				return false
+			}
+			if group.ID == viewerID {
+				state.seenNodeRevision[node.ID] = node.Revision
+				node.Unread = 0
+				continue
+			}
+			if known {
+				node.Unread = int(node.Revision - seen)
+			} else {
+				node.Unread = int(node.Revision)
+			}
+		}
+	}
+	for id := range state.seenNodeRevision {
+		if _, ok := retained[id]; !ok {
+			delete(state.seenNodeRevision, id)
+		}
+	}
+	return surface.valid()
+}
+
 func (state *AgentHubState) SetSize(terminalWidth, terminalHeight int) {
 	if state == nil {
 		return
@@ -229,7 +423,7 @@ func (state *AgentHubState) SetSize(terminalWidth, terminalHeight int) {
 	compact := compactAgentHub(state.width, state.height)
 	if compact != state.compact {
 		state.compact = compact
-		delegate := newPickerDelegate(state.isDark, compact)
+		delegate := newAgentHubDelegate(state.isDark, compact, state.glyphProfile)
 		state.List.SetDelegate(delegate)
 		state.ItemHeight = delegate.Height()
 		state.ItemSpacing = delegate.Spacing()
@@ -253,11 +447,12 @@ func (state *AgentHubState) SetTheme(isDark bool, reducedMotion bool) {
 	}
 	state.isDark = isDark
 	state.reducedMotion = reducedMotion
-	delegate := newPickerDelegate(isDark, state.compact)
+	delegate := newAgentHubDelegate(isDark, state.compact, state.glyphProfile)
 	state.List.SetDelegate(delegate)
 	state.ItemHeight = delegate.Height()
 	state.ItemSpacing = delegate.Spacing()
 	configurePickerList(&state.List, isDark, reducedMotion)
+	configurePickerListGlyphProfile(&state.List, state.glyphProfile)
 	state.configureListTitle()
 	state.rebuildViewerContent(true)
 }
@@ -351,11 +546,43 @@ func (state *AgentHubState) openSelectedViewer() bool {
 	if !ok {
 		return false
 	}
+	state.markAgentGroupRead(group.ID)
+	group, ok = state.groupByID(group.ID)
+	if !ok {
+		return false
+	}
 	state.Mode = agentHubViewerMode
 	state.ViewerGroupID = group.ID
 	state.Viewer.GotoTop()
 	state.rebuildViewerContent(false)
 	return true
+}
+
+func (state *AgentHubState) markAgentGroupRead(id BlockID) {
+	if state == nil || id == "" {
+		return
+	}
+	groupIndex := state.groupIndex(id)
+	if groupIndex < 0 {
+		return
+	}
+	group := &state.Surface.Groups[groupIndex]
+	for nodeIndex := range group.Nodes {
+		node := &group.Nodes[nodeIndex]
+		state.seenNodeRevision[node.ID] = node.Revision
+		node.Unread = 0
+	}
+	items := state.List.Items()
+	if groupIndex < len(items) {
+		items[groupIndex] = agentHubItem{
+			displayID:    agentGroupDisplayID(group.ID),
+			group:        *group,
+			glyphProfile: state.glyphProfile,
+		}
+		if state.List.FilterState() != list.Unfiltered {
+			state.applyCurrentFilterSynchronously()
+		}
+	}
 }
 
 // Back consumes Escape when it first needs to clear a filter or return from
@@ -479,12 +706,20 @@ func (state *AgentHubState) rebuildViewerContent(preserveOffset bool) {
 		state.viewerRows = nil
 		return
 	}
-	key := fmt.Sprintf("%s:%d:%d:%t:%t", group.ID, group.Revision, state.Viewer.Width(), state.isDark, noColor)
+	key := fmt.Sprintf(
+		"%s:%d:%d:%t:%t:%d",
+		group.ID,
+		group.Revision,
+		state.Viewer.Width(),
+		state.isDark,
+		noColor,
+		state.glyphProfile,
+	)
 	if key == state.viewerContentKey && len(state.viewerRows) > 0 {
 		state.Viewer.SetYOffset(offset)
 		return
 	}
-	layout := renderAgentViewerLayout(group, state.Viewer.Width(), state.isDark)
+	layout := renderAgentViewerLayout(group, state.Viewer.Width(), state.isDark, state.glyphProfile)
 	state.Viewer.SetContent(layout.content)
 	state.viewerContentKey = key
 	state.viewerRows = layout.rows
@@ -494,12 +729,22 @@ func (state *AgentHubState) rebuildViewerContent(preserveOffset bool) {
 	state.Viewer.SetYOffset(offset)
 }
 
-func renderAgentViewerBody(group AgentGroupProjection, width int, isDark bool) string {
-	return renderAgentViewerLayout(group, width, isDark).content
+func renderAgentViewerBody(group AgentGroupProjection, width int, isDark bool, profiles ...GlyphProfile) string {
+	return renderAgentViewerLayout(group, width, isDark, profiles...).content
 }
 
-func renderAgentViewerLayout(group AgentGroupProjection, width int, isDark bool) agentViewerLayout {
+func renderAgentViewerLayout(
+	group AgentGroupProjection,
+	width int,
+	isDark bool,
+	profiles ...GlyphProfile,
+) agentViewerLayout {
 	width = max(1, width)
+	profile := resolveGlyphProfile(profiles...)
+	separator := agentHubSeparator(profile)
+	truncate := func(value string) string {
+		return truncateDisplayWithGlyphProfile(value, width, profile)
+	}
 	styles := NewStyles(isDark)
 	nodeStyles := NewToolCardStyles(isDark)
 	lines := make([]string, 0, 10+len(group.Nodes)*2)
@@ -509,60 +754,77 @@ func renderAgentViewerLayout(group AgentGroupProjection, width int, isDark bool)
 		rows = append(rows, row)
 	}
 	appendRow(
-		styles.OverlayAccent.Render(truncateDisplay("Status · "+agentGroupStatusLabel(group), width)),
+		styles.OverlayAccent.Render(truncate(agentViewerStatusLine(group, profile))),
 		agentViewerRowAnchor{key: "status"},
 	)
 	appendRow(
-		styles.OverlayDim.Render(truncateDisplay(agentGroupSummary(group), width)),
+		styles.OverlayDim.Render(truncate(agentGroupSummary(group, profile))),
 		agentViewerRowAnchor{key: "summary"},
 	)
 	if group.Interrupted {
-		appendRow(styles.StatusWarning.Render(truncateDisplay(
+		appendRow(styles.StatusWarning.Render(truncate(
 			"Restored after interruption; child outcomes are unknown.",
-			width,
 		)), agentViewerRowAnchor{key: "interrupted"})
 	}
 	appendRow("", agentViewerRowAnchor{key: "before-subagents"})
 	appendRow(
-		styles.OverlayAccent.Render(truncateDisplay("Subagents", width)),
+		styles.OverlayAccent.Render(truncate("Subagents")),
 		agentViewerRowAnchor{key: "subagents"},
 	)
 
 	if !group.ProgressAvailable {
-		appendRow(styles.OverlayDim.Render(truncateDisplay(
+		appendRow(styles.OverlayDim.Render(truncate(
 			"No public subagent progress is available.",
-			width,
 		)), agentViewerRowAnchor{key: "no-progress"})
 	} else {
 		for _, node := range group.Nodes {
-			glyph, status, style := agentNodePresentation(node, nodeStyles)
+			glyph, status, style := agentNodePresentation(node, nodeStyles, profile)
 			label := node.Label
 			if node.Status == WorkNodeQueued {
 				label = fmt.Sprintf("Agent %d", node.Index+1)
 			}
-			role := fmt.Sprintf("%s %s · %s", glyph, label, status)
+			role := fmt.Sprintf("%s %s%s%s", glyph, label, separator, status)
 			if node.EvalTokens > 0 {
-				role += fmt.Sprintf(" · %d tok", node.EvalTokens)
+				role += fmt.Sprintf("%s%d tok", separator, node.EvalTokens)
 			}
+			activity := workNodeActivitySummary(node)
 			meta := ""
 			if node.Status != WorkNodeQueued {
-				meta = node.Model + " · " + string(node.Location)
+				meta = node.Model + separator + string(node.Location)
 			}
-			if width >= 54 && meta != "" {
+			if width >= 72 && meta != "" {
+				line := role
+				if activity != "" {
+					line += separator + activity
+				}
+				line += separator + meta
 				appendRow(
-					style.Render(truncateDisplay(role+" · "+meta, width)),
+					style.Render(truncate(line)),
 					agentViewerRowAnchor{nodeID: node.ID},
 				)
-				continue
-			}
-			appendRow(
-				style.Render(truncateDisplay(role, width)),
-				agentViewerRowAnchor{nodeID: node.ID},
-			)
-			if meta != "" && width >= 12 {
+			} else {
 				appendRow(
-					styles.OverlayDim.Render(truncateDisplay("  "+meta, width)),
-					agentViewerRowAnchor{nodeID: node.ID, subrow: 1},
+					style.Render(truncate(role)),
+					agentViewerRowAnchor{nodeID: node.ID},
+				)
+				if width >= 12 && (activity != "" || meta != "") {
+					detail := activity
+					if detail != "" && meta != "" {
+						detail += separator
+					}
+					detail += meta
+					appendRow(
+						styles.OverlayDim.Render(truncate("  "+detail)),
+						agentViewerRowAnchor{nodeID: node.ID, subrow: 1},
+					)
+				}
+			}
+			if node.ReportRef != nil && validWorkReportRef(*node.ReportRef) {
+				appendRow(
+					styles.OverlayDim.Render(truncate(
+						"  report artifact"+separator+node.ReportRef.URI,
+					)),
+					agentViewerRowAnchor{nodeID: node.ID, subrow: 2},
 				)
 			}
 		}
@@ -570,17 +832,28 @@ func renderAgentViewerLayout(group AgentGroupProjection, width int, isDark bool)
 
 	appendRow("", agentViewerRowAnchor{key: "before-activity"})
 	appendRow(
-		styles.OverlayAccent.Render(truncateDisplay("Activity", width)),
+		styles.OverlayAccent.Render(truncate("Activity")),
 		agentViewerRowAnchor{key: "activity"},
 	)
 	appendRow(
-		styles.OverlayDim.Render(truncateDisplay(
+		styles.OverlayDim.Render(truncate(
 			"No public child events are available for this runtime.",
-			width,
 		)),
 		agentViewerRowAnchor{key: "no-events"},
 	)
 	return agentViewerLayout{content: strings.Join(lines, "\n"), rows: rows}
+}
+
+func agentViewerStatusLine(group AgentGroupProjection, profiles ...GlyphProfile) string {
+	parts := []string{
+		"Status",
+		agentGroupStatusLabel(group),
+	}
+	if group.Elapsed > 0 {
+		parts = append(parts, formatWorkingElapsed(group.Elapsed))
+	}
+	parts = append(parts, fmt.Sprintf("revision %d", group.Revision))
+	return strings.Join(parts, agentHubSeparator(resolveGlyphProfile(profiles...)))
 }
 
 func resolveAgentViewerRowOffset(
@@ -614,22 +887,31 @@ func resolveAgentViewerRowOffset(
 	return min(max(0, fallback), max(0, len(rows)-1))
 }
 
-func agentNodePresentation(node WorkNode, styles ToolCardStyles) (string, string, lipgloss.Style) {
+func agentNodePresentation(
+	node WorkNode,
+	styles ToolCardStyles,
+	profiles ...GlyphProfile,
+) (string, string, lipgloss.Style) {
+	profile := resolveGlyphProfile(profiles...)
+	glyphs := glyphSet(profile)
 	switch node.Status {
 	case WorkNodeQueued:
-		return "○", "queued", styles.Dimmed
+		return glyphs.Queued, "queued", styles.Dimmed
 	case WorkNodeRunning:
+		if profile == GlyphASCII {
+			return glyphs.Running, "running", styles.TitleRunning
+		}
 		return "…", "running", styles.TitleRunning
 	case WorkNodeWaiting:
-		return "○", "waiting", styles.TitleAttention
+		return glyphs.Waiting, "waiting", styles.TitleAttention
 	case WorkNodeCompleted:
-		return "✓", "completed", styles.TitleSuccess
+		return glyphs.Success, "completed", styles.TitleSuccess
 	case WorkNodeAttention:
 		return "!", expertFailureLabel(node.FailureCode), styles.TitleAttention
 	case WorkNodeFailed:
-		return "✗", expertFailureLabel(node.FailureCode), styles.TitleError
+		return glyphs.Error, expertFailureLabel(node.FailureCode), styles.TitleError
 	case WorkNodeCancelled:
-		return "–", "cancelled", styles.Dimmed
+		return glyphs.Cancelled, "cancelled", styles.Dimmed
 	default:
 		return "?", "unknown", styles.Dimmed
 	}
@@ -649,14 +931,21 @@ func agentGroupStatusLabel(group AgentGroupProjection) string {
 		return "settled"
 	case BlockFailed:
 		return "failed"
+	case BlockCancelled:
+		return "cancelled"
 	default:
 		return "unknown"
 	}
 }
 
-func agentGroupSummary(group AgentGroupProjection) string {
+func agentGroupSummary(group AgentGroupProjection, profiles ...GlyphProfile) string {
+	separator := agentHubSeparator(resolveGlyphProfile(profiles...))
 	if !group.ProgressAvailable {
-		return "No public subagent progress yet"
+		parts := []string{"No public subagent progress yet"}
+		if group.Elapsed > 0 {
+			parts = append(parts, formatWorkingElapsed(group.Elapsed))
+		}
+		return strings.Join(parts, separator)
 	}
 	parts := []string{
 		string(group.Strategy),
@@ -678,7 +967,28 @@ func agentGroupSummary(group AgentGroupProjection) string {
 			parts = append(parts, fmt.Sprintf("%d %s", count.value, count.label))
 		}
 	}
-	return strings.Join(parts, " · ")
+	if unread := agentGroupUnread(group); unread > 0 {
+		parts = append(parts, fmt.Sprintf("%d unread", unread))
+	}
+	if group.Elapsed > 0 {
+		parts = append(parts, formatWorkingElapsed(group.Elapsed))
+	}
+	return strings.Join(parts, separator)
+}
+
+func agentHubSeparator(profile GlyphProfile) string {
+	if resolveGlyphProfile(profile) == GlyphASCII {
+		return " | "
+	}
+	return " · "
+}
+
+func agentGroupUnread(group AgentGroupProjection) int {
+	unread := 0
+	for _, node := range group.Nodes {
+		unread += node.Unread
+	}
+	return unread
 }
 
 func (state *AgentHubState) hubContent(styles Styles) string {
@@ -719,10 +1029,20 @@ func (state *AgentHubState) viewerContent(styles Styles) string {
 		return styles.ErrorText.Render("Agent activity is unavailable.")
 	}
 	width := state.Viewer.Width()
-	title := styles.OverlayTitle.Render(truncateDisplay("Agent Viewer", width))
-	subtitle := styles.OverlayDim.Render(truncateDisplay(
-		fmt.Sprintf("Consultation · %s", agentGroupStatusLabel(group)),
+	title := styles.OverlayTitle.Render(truncateDisplayWithGlyphProfile(
+		"Agent Viewer",
 		width,
+		state.glyphProfile,
+	))
+	subtitle := styles.OverlayDim.Render(truncateDisplayWithGlyphProfile(
+		fmt.Sprintf(
+			"Consultation #%s%s%s",
+			agentGroupDisplayID(group.ID),
+			agentHubSeparator(state.glyphProfile),
+			agentGroupStatusLabel(group),
+		),
+		width,
+		state.glyphProfile,
 	))
 	return title + "\n" + subtitle + "\n" + state.Viewer.View()
 }
@@ -740,6 +1060,7 @@ func (m *Model) openAgentHub() {
 		m.height,
 		m.isDark,
 		m.reducedMotion,
+		m.glyphProfile,
 	)
 	m.overlay = OverlayAgents
 	m.input.Blur()
@@ -765,7 +1086,7 @@ func (m *Model) agentSurfaceProjection() (AgentSurfaceProjection, error) {
 	if err := m.reconcileTranscriptEntries(); err != nil {
 		return AgentSurfaceProjection{}, err
 	}
-	return projectAgentSurface(m.entries, m.toolEntries)
+	return projectAgentSurfaceAt(m.entries, m.toolEntries, m.nowTime())
 }
 
 // refreshedAgentSurfaceProjection is used only after transcript mutation paths
@@ -777,7 +1098,7 @@ func (m *Model) refreshedAgentSurfaceProjection() (AgentSurfaceProjection, error
 	if _, err := m.reconcileTranscriptEntriesForRender(); err != nil {
 		return AgentSurfaceProjection{}, err
 	}
-	return projectAgentSurface(m.entries, m.toolEntries)
+	return projectAgentSurfaceAt(m.entries, m.toolEntries, m.nowTime())
 }
 
 func (m *Model) refreshAgentHub() tea.Cmd {
@@ -832,13 +1153,13 @@ func (m *Model) renderAgentHub() string {
 			hints = []keyHint{
 				{Key: "esc", Action: "clear"},
 				{Key: "enter", Action: "view"},
-				{Key: "↑/↓", Action: "move"},
+				{Key: pickerMoveKey(m.glyphProfile), Action: "move"},
 			}
 		default:
 			hints = []keyHint{
 				{Key: "esc", Action: "close"},
 				{Key: "enter", Action: "view"},
-				{Key: "↑/↓", Action: "move"},
+				{Key: pickerMoveKey(m.glyphProfile), Action: "move"},
 				{Key: "/", Action: "filter"},
 			}
 		}
@@ -918,7 +1239,7 @@ func (m *Model) jumpToAgentGroup(group AgentGroupProjection) bool {
 	if err != nil || resolution.BlockID != group.ID {
 		return false
 	}
-	m.viewport.SetYOffset(resolution.ViewportTop)
+	m.setTranscriptYOffset(resolution.ViewportTop)
 	m.pauseFollow()
 	return true
 }

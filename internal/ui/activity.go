@@ -12,6 +12,15 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/agent"
 )
 
+const reducedMotionActivityHeartbeatInterval = time.Second
+
+// activityHeartbeatMsg is the receipt for the single low-frequency repaint
+// chain used when reduced motion disables the spinner and scramble clocks.
+// Tokening makes a late receipt from an older chain harmless.
+type activityHeartbeatMsg struct {
+	Token uint64
+}
+
 type workingActivity struct {
 	label        string
 	compactLabel string
@@ -112,12 +121,18 @@ func (m *Model) currentWorkingActivity() (workingActivity, bool) {
 	case m.compactingContext:
 		return workingActivity{label: "Preparing context", detail: "summarizing earlier turns", cancellable: true}, true
 	case m.toolsPending > 0:
+		elapsed := m.runningToolElapsed()
 		if activity, ok := m.runningExpertActivity(); ok {
+			// The footer owns the one live activity indicator. Expert rows and
+			// their transcript receipt advance only on real scheduler events.
+			activity.static = false
+			activity.elapsed = elapsed
 			return activity, true
 		}
-		// The running ToolCard is the single animated, detailed surface for tool
-		// work. The footer keeps only the global cancellation affordance.
-		activity := workingActivity{label: "Tool running", cancellable: true, static: true}
+		// Running ToolCards are stable transcript receipts. Keep animation,
+		// elapsed time, and the global cancellation affordance in this one
+		// footer-owned activity row.
+		activity := workingActivity{label: "Tool running", elapsed: elapsed, cancellable: true}
 		if m.toolsPending > 1 {
 			activity.label = fmt.Sprintf("%d tools running", m.toolsPending)
 		}
@@ -166,6 +181,28 @@ func (m *Model) currentWorkingActivity() (workingActivity, bool) {
 	}
 }
 
+func (m *Model) runningToolElapsed() time.Duration {
+	var startedAt time.Time
+	start := min(max(0, m.turnToolStartIndex), len(m.toolEntries))
+	for index := start; index < len(m.toolEntries); index++ {
+		entry := m.toolEntries[index]
+		if entry.Status != ToolStatusRunning || entry.StartTime.IsZero() {
+			continue
+		}
+		if startedAt.IsZero() || entry.StartTime.Before(startedAt) {
+			startedAt = entry.StartTime
+		}
+	}
+	if startedAt.IsZero() {
+		return 0
+	}
+	elapsed := m.nowTime().Sub(startedAt)
+	if elapsed < 0 {
+		return 0
+	}
+	return elapsed
+}
+
 func (m *Model) composerIsBusy() bool {
 	_, busy := m.currentWorkingActivity()
 	return busy
@@ -179,11 +216,11 @@ func (m *Model) needsSpinner() bool {
 		return false
 	}
 	activity, active := m.currentWorkingActivity()
-	return active && !activity.waiting
+	return active && (!activity.waiting || m.glyphProfile == GlyphASCII) && !activity.static
 }
 
 func (m *Model) needsScramble() bool {
-	if m.reducedMotion {
+	if m.reducedMotion || m.glyphProfile == GlyphASCII {
 		return false
 	}
 	activity, active := m.currentWorkingActivity()
@@ -191,10 +228,48 @@ func (m *Model) needsScramble() bool {
 }
 
 func (m *Model) startActivityCmd() tea.Cmd {
+	if m.reducedMotion {
+		return m.startActivityHeartbeatCmd()
+	}
 	if m.needsScramble() {
 		return m.scramble.Tick()
 	}
 	return m.startSpinnerCmd()
+}
+
+func (m *Model) needsActivityHeartbeat() bool {
+	if m == nil || !m.reducedMotion {
+		return false
+	}
+	_, active := m.currentWorkingActivity()
+	return active
+}
+
+func (m *Model) startActivityHeartbeatCmd() tea.Cmd {
+	if !m.needsActivityHeartbeat() || m.activityHeartbeatPending {
+		return nil
+	}
+	m.activityHeartbeatToken++
+	token := m.activityHeartbeatToken
+	m.activityHeartbeatPending = true
+	return tea.Tick(reducedMotionActivityHeartbeatInterval, func(time.Time) tea.Msg {
+		return activityHeartbeatMsg{Token: token}
+	})
+}
+
+// handleActivityHeartbeat repaints only footer information that changes with
+// time. The static reduced-motion glyph never advances, transcript receipts
+// remain event-driven, and the next receipt is scheduled only while an
+// activity still owns the footer.
+func (m *Model) handleActivityHeartbeat(msg activityHeartbeatMsg) tea.Cmd {
+	if !m.activityHeartbeatPending || msg.Token != m.activityHeartbeatToken {
+		return nil
+	}
+	m.activityHeartbeatPending = false
+	if !m.needsActivityHeartbeat() {
+		return nil
+	}
+	return m.startActivityHeartbeatCmd()
 }
 
 func (m *Model) startSpinnerCmd() tea.Cmd {
@@ -219,16 +294,23 @@ func (m *Model) renderWorkingLine() string {
 	// A single-cell ellipsis communicates unfinished work even when animation is
 	// disabled. Unlike a filled dot it cannot be mistaken for a settled status
 	// marker, and it keeps reduced-motion and static operations width-stable.
-	motion := m.styles.StatusDot.Render("…")
+	motion := m.styles.StatusDot.Render(glyphEllipsis(m.glyphProfile))
+	if m.glyphProfile == GlyphASCII {
+		motion = m.styles.StatusDot.Render(glyphSet(GlyphASCII).Running)
+	}
 	if !m.reducedMotion && !activity.static {
 		if activity.waiting {
-			cells := 1
-			if m.chatPaneWidth() >= 58 {
-				cells = 6
-			}
-			motion = m.scramble.ViewN(cells)
-			if motion == "" {
-				motion = m.styles.StatusDot.Render("…")
+			if m.glyphProfile == GlyphASCII {
+				motion = m.spin.View()
+			} else {
+				cells := 1
+				if m.chatPaneWidth() >= 58 {
+					cells = 6
+				}
+				motion = m.scramble.ViewN(cells)
+				if motion == "" {
+					motion = m.styles.StatusDot.Render(glyphEllipsis(m.glyphProfile))
+				}
 			}
 		} else {
 			motion = m.spin.View()
@@ -394,7 +476,7 @@ func (m *Model) renderWorkingLine() string {
 			break
 		}
 	}
-	chosen = truncateDisplay(chosen, selectionWidth)
+	chosen = truncateDisplayWithGlyphProfile(chosen, selectionWidth, m.glyphProfile)
 	if session != "" {
 		chosen += " · " + session
 	}
@@ -430,7 +512,7 @@ func (m *Model) renderWorkingCandidate(candidate string) string {
 			segments[index] = m.styles.StreamHint.Render(segment)
 		}
 	}
-	return strings.Join(segments, m.styles.StreamHint.Render(" · "))
+	return strings.Join(segments, m.styles.StreamHint.Render(glyphSeparator(m.glyphProfile)))
 }
 
 func workingControlKey(segment string) string {
@@ -469,6 +551,10 @@ func (m *Model) renderContextStatus(compact bool) string {
 	if filled > 5 {
 		filled = 5
 	}
-	meter := strings.Repeat("▮", filled) + strings.Repeat("▯", 5-filled)
+	filledGlyph, emptyGlyph := "▮", "▯"
+	if m.glyphProfile == GlyphASCII {
+		filledGlyph, emptyGlyph = "#", "-"
+	}
+	meter := strings.Repeat(filledGlyph, filled) + strings.Repeat(emptyGlyph, 5-filled)
 	return style.Render(fmt.Sprintf("ctx %s %d%%", meter, percent))
 }

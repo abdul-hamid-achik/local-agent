@@ -408,19 +408,49 @@ func TestCompletedThoughtHeadersToggleOnlyClickedEntry(t *testing.T) {
 		{Kind: "assistant", Content: "second", ThinkingContent: "compare behavior", ThinkingCollapsed: true},
 	}
 	m.invalidateEntryCache()
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 
 	if len(m.thinkingHitRegions) != 2 {
 		t.Fatalf("thinking hit regions = %#v", m.thinkingHitRegions)
 	}
 	second := m.thinkingHitRegions[1]
-	m.handleMouseClick(second.EndCol, second.Row-m.viewport.YOffset())
+	visibleRow := second.Row - m.transcriptYOffset()
+	if second.StartCol <= 0 || second.StartCol >= second.EndCol {
+		t.Fatalf("Thought header does not exclude its left margin: %#v", second)
+	}
+	m.handleMouseClick(second.EndCol, visibleRow)
 	if !m.entries[0].ThinkingCollapsed || !m.entries[1].ThinkingCollapsed {
 		t.Fatal("click immediately beyond Thought header toggled an entry")
 	}
-	m.handleMouseClick(second.EndCol-1, second.Row-m.viewport.YOffset())
+	m.handleMouseClick(second.StartCol-1, visibleRow)
+	if !m.entries[0].ThinkingCollapsed || !m.entries[1].ThinkingCollapsed {
+		t.Fatal("click immediately before Thought header toggled an entry")
+	}
+	m.handleMouseClick(second.StartCol, visibleRow)
 	if !m.entries[0].ThinkingCollapsed || m.entries[1].ThinkingCollapsed {
-		t.Fatalf("click toggled the wrong Thought: %#v", m.entries)
+		t.Fatalf("click on first Thought header cell toggled the wrong entry: %#v", m.entries)
+	}
+	m.entries[1].ThinkingCollapsed = true
+	m.invalidateEntryCache()
+	m.refreshTranscript()
+	second = m.thinkingHitRegions[1]
+	visibleRow = second.Row - m.transcriptYOffset()
+	m.handleMouseClick(second.EndCol-1, visibleRow)
+	if !m.entries[0].ThinkingCollapsed || m.entries[1].ThinkingCollapsed {
+		t.Fatalf("click on last Thought header cell toggled the wrong entry: %#v", m.entries)
+	}
+	m.entries[1].ThinkingCollapsed = true
+	m.invalidateEntryCache()
+	m.refreshTranscript()
+	second = m.thinkingHitRegions[1]
+	visibleRow = second.Row - m.transcriptYOffset()
+	m.handleMouseClick(second.StartCol, visibleRow-1)
+	if !m.entries[0].ThinkingCollapsed || !m.entries[1].ThinkingCollapsed {
+		t.Fatal("click above Thought header toggled an entry")
+	}
+	m.handleMouseClick(second.StartCol, visibleRow+1)
+	if !m.entries[0].ThinkingCollapsed || !m.entries[1].ThinkingCollapsed {
+		t.Fatal("click below Thought header toggled an entry")
 	}
 }
 
@@ -430,13 +460,13 @@ func TestThoughtHitRegionRejectsStaleEntryDigest(t *testing.T) {
 		Kind: "assistant", Content: "answer", ThinkingContent: "original reasoning", ThinkingCollapsed: true,
 	}}
 	m.invalidateEntryCache()
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	if len(m.thinkingHitRegions) != 1 {
 		t.Fatalf("thinking hit regions = %#v", m.thinkingHitRegions)
 	}
 	region := m.thinkingHitRegions[0]
 	m.entries[0].ThinkingContent = "replacement reasoning"
-	m.handleMouseClick(0, region.Row-m.viewport.YOffset())
+	m.handleMouseClick(region.StartCol, region.Row-m.transcriptYOffset())
 	if !m.entries[0].ThinkingCollapsed {
 		t.Fatal("stale Thought region toggled replacement content")
 	}
@@ -447,7 +477,7 @@ func TestLiveReasoningHasNoClickableDisclosureRegion(t *testing.T) {
 	m.state = StateStreaming
 	m.thinkBuf.WriteString("live reasoning")
 	m.invalidateEntryCache()
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	if len(m.thinkingHitRegions) != 0 {
 		t.Fatalf("live reasoning created click regions: %#v", m.thinkingHitRegions)
 	}
@@ -462,23 +492,24 @@ func TestThoughtClickPreservesPausedScrollAnchorAtNarrowWidth(t *testing.T) {
 		{Kind: "system", Content: strings.Repeat("later transcript rows ", 30)},
 	}
 	m.invalidateEntryCache()
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	if len(m.thinkingHitRegions) != 1 {
 		t.Fatalf("thinking hit regions = %#v", m.thinkingHitRegions)
 	}
 	region := m.thinkingHitRegions[0]
-	if region.EndCol <= 0 || region.EndCol > m.viewport.Width() {
+	if region.StartCol <= 0 || region.StartCol >= region.EndCol ||
+		region.EndCol > m.viewport.Width() {
 		t.Fatalf("narrow Thought region escaped viewport: %#v width=%d", region, m.viewport.Width())
 	}
-	m.viewport.SetYOffset(0)
+	m.setTranscriptYOffset(0)
 	m.pauseFollow()
-	before := m.viewport.YOffset()
+	before := m.transcriptYOffset()
 	m.handleMouseClick(region.EndCol-1, region.Row-before)
 	if m.entries[0].ThinkingCollapsed {
 		t.Fatal("narrow Thought header did not expand")
 	}
-	if !m.followPaused() || m.viewport.YOffset() != before {
-		t.Fatalf("Thought expansion moved paused anchor: paused=%v before=%d after=%d", m.followPaused(), before, m.viewport.YOffset())
+	if !m.followPaused() || m.transcriptYOffset() != before {
+		t.Fatalf("Thought expansion moved paused anchor: paused=%v before=%d after=%d", m.followPaused(), before, m.transcriptYOffset())
 	}
 }
 

@@ -135,7 +135,9 @@ steps:
         screen:
             notContains: "Settings"
         timeoutMs: 2000
-    - press: "?"
+    # Glyph v0.14.3 does not yet name F1; ESC OP is its terminal sequence.
+    - send:
+        bytes: "\\x1bOP"
     - wait:
         screen:
             contains: "Keyboard Shortcuts"

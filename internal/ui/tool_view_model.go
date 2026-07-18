@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/abdul-hamid-achik/local-agent/internal/agent"
 	"github.com/abdul-hamid-achik/local-agent/internal/ecosystem"
 )
 
@@ -65,6 +66,7 @@ func (lifecycle ToolLifecycle) Terminal() bool {
 type ToolViewModel struct {
 	InvocationID string
 	BlockID      BlockID
+	ToolName     string
 	Kind         ToolKind
 	Operation    string
 	Target       string
@@ -76,6 +78,56 @@ type ToolViewModel struct {
 	Duration     time.Duration
 	Revision     uint64
 	Artifact     *ecosystem.ArtifactDigest
+	// Projection is already normalized by internal/ecosystem and contains only
+	// bounded routing, digest, artifact, and semantic-state facts. It is kept so
+	// the dumb ToolCard can render specialist receipts without reaching back
+	// into ToolEntry or raw provider output.
+	Projection ecosystem.ToolProjection
+}
+
+// ToolPreview is the bounded, terminal-safe body admitted to a tool card.
+// RawArgs, BeforeContent, provider StructuredContent, and arbitrary metadata
+// intentionally have no representation here.
+type ToolPreview struct {
+	Mode            ToolPreviewMode
+	Arguments       string
+	Result          string
+	ResultLanguage  string
+	OutputDigest    OutputDetailDigest
+	OutputAvailable bool
+	StartedAt       time.Time
+	Expanded        bool
+	DiffLines       []DiffLine
+	DiffPending     bool
+	ExpertProgress  *ExpertProgressState
+	ansiResultLines [][]ansiRemapSegment
+	ansiHiddenLines int
+}
+
+// ToolPreviewMode selects a bounded result-body policy without exposing raw
+// arguments or asking the visual component to infer semantics from a
+// provider-controlled name.
+type ToolPreviewMode uint8
+
+const (
+	ToolPreviewUnknown ToolPreviewMode = iota
+	ToolPreviewRead
+	ToolPreviewExec
+	ToolPreviewSearch
+	ToolPreviewEdit
+	ToolPreviewGeneric
+)
+
+func (mode ToolPreviewMode) Valid() bool {
+	return mode >= ToolPreviewRead && mode <= ToolPreviewGeneric
+}
+
+// ToolRenderModel is the only production input to tool rendering. ToolEntry
+// remains the durable lifecycle state; this strict projection is rebuilt at
+// the transcript boundary and ToolCard stays a dumb, ephemeral component.
+type ToolRenderModel struct {
+	ToolViewModel
+	Preview ToolPreview
 }
 
 // Validate fails closed before a projected invocation enters transcript UI.
@@ -135,6 +187,74 @@ func (view ToolViewModel) validatePresentation() error {
 			return errors.New("tool artifact reference is invalid for its typed projection")
 		}
 	}
+	projection := view.Projection.Normalize()
+	if !reflect.DeepEqual(projection, view.Projection) {
+		return errors.New("tool projection is not normalized")
+	}
+	if view.Lifecycle == ToolLifecycleCancelled {
+		if err := validateCanonicalCancelledToolProjection(projection); err != nil {
+			return err
+		}
+	}
+	if projection.Transport != view.Transport || projection.Domain != view.Domain || projection.Evidence != view.Evidence {
+		return errors.New("tool projection contradicts its semantic states")
+	}
+	if projection.Artifact != nil {
+		if view.Artifact == nil || !reflect.DeepEqual(*projection.Artifact, *view.Artifact) {
+			return errors.New("tool projection contradicts its artifact reference")
+		}
+	} else if view.Artifact != nil {
+		return errors.New("tool artifact has no typed projection")
+	}
+	return nil
+}
+
+// Validate rejects any preview that did not pass through the strict bounded
+// constructor. It intentionally checks values rather than trusting callers in
+// the ui package because restored state is attacker-controlled input.
+func (model ToolRenderModel) Validate() error {
+	if err := model.ToolViewModel.Validate(); err != nil {
+		return err
+	}
+	if model.ToolName == "" || model.ToolName != safeToolIdentifier(model.ToolName) {
+		return errors.New("tool name is empty or unsafe")
+	}
+	preview := model.Preview
+	if !preview.Mode.Valid() {
+		return errors.New("tool preview mode is invalid")
+	}
+	if expected := previewModeForProjectedTool(model.ToolName, model.Projection); preview.Mode != expected {
+		return errors.New("tool preview mode contradicts its typed operation")
+	}
+	if preview.Arguments != boundedToolPreviewArguments(model.ToolName, preview.Arguments, model.Projection) {
+		return errors.New("tool preview arguments are unsafe or exceed their bound")
+	}
+	if preview.Result != boundedToolCardResult(preview.Result) {
+		return errors.New("tool preview result is unsafe or exceeds its bound")
+	}
+	if preview.ResultLanguage != normalizeTrustedResultLanguage(preview.ResultLanguage) {
+		return errors.New("tool preview language is not trusted")
+	}
+	if preview.OutputDigest != (OutputDetailDigest{}) && !preview.OutputDigest.Valid() {
+		return errors.New("tool output digest is invalid")
+	}
+	if preview.OutputAvailable && preview.OutputDigest == (OutputDetailDigest{}) {
+		return errors.New("tool output availability has no digest")
+	}
+	if isExpertConsultTool(model.ToolName) &&
+		(preview.OutputAvailable || preview.OutputDigest != (OutputDetailDigest{})) {
+		return errors.New("expert output cannot enter the tool preview")
+	}
+	if !reflect.DeepEqual(preview.DiffLines, boundedToolPreviewDiff(preview.DiffLines)) {
+		return errors.New("tool preview diff is unsafe or exceeds its bound")
+	}
+	requireSettled := model.Lifecycle.Terminal()
+	if !reflect.DeepEqual(preview.ExpertProgress, sanitizeExpertProgressState(preview.ExpertProgress, requireSettled)) {
+		return errors.New("tool expert preview is invalid")
+	}
+	if err := validateANSIResultPreview(preview.ansiResultLines, preview.ansiHiddenLines); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -145,11 +265,22 @@ func ToolViewModelFromToolEntry(chat ChatEntry, entry ToolEntry) (ToolViewModel,
 	if err := validateToolEntryProjectionConsistency(entry, projection); err != nil {
 		return ToolViewModel{}, err
 	}
+	invocationID := entry.ID
+	if invocationID == "" && chat.BlockID.Valid() {
+		// Older local-only tools did not always receive a provider call ID. The
+		// transcript block is already unique and durable, so derive an explicit
+		// invocation identity instead of falling back to name correlation.
+		invocationID = "invocation-" + string(chat.BlockID)
+	}
+	name := entry.Name
+	if name == "" {
+		name = "tool"
+	}
 	view := newToolViewModel(
 		chat,
-		entry.ID,
-		toolKindFromCardKind(toolCardKindForTool(entry.Name)),
-		entry.Name,
+		invocationID,
+		toolKindFromCardKind(toolCardKindForProjectedTool(entry.Name, projection)),
+		name,
 		entry.Summary,
 		entry.Duration,
 		toolLifecycleFromEntry(entry, projection),
@@ -159,6 +290,42 @@ func ToolViewModelFromToolEntry(chat ChatEntry, entry ToolEntry) (ToolViewModel,
 		return ToolViewModel{}, err
 	}
 	return view, nil
+}
+
+// ToolRenderModelFromEntry is the strict production adapter from transcript
+// state into tool UI. Every copied body field is bounded and sanitized here;
+// ephemeral arguments/snapshots and raw MCP StructuredContent cannot cross
+// because ToolPreview has no fields capable of retaining them.
+func ToolRenderModelFromEntry(chat ChatEntry, entry ToolEntry) (ToolRenderModel, error) {
+	view, err := ToolViewModelFromToolEntry(chat, entry)
+	if err != nil {
+		return ToolRenderModel{}, err
+	}
+	ansiLines, ansiHidden := sanitizedANSIResultPreview(entry.ResultDisplay)
+	preview := ToolPreview{
+		Mode:            previewModeForProjectedTool(entry.Name, entry.Projection),
+		Arguments:       boundedToolPreviewArguments(entry.Name, entry.Args, entry.Projection),
+		Result:          boundedToolCardResult(entry.Result),
+		ResultLanguage:  normalizeTrustedResultLanguage(entry.ResultLanguage),
+		OutputDigest:    entry.OutputDetail.Digest,
+		OutputAvailable: entry.OutputDetail.Ref.Valid() && entry.OutputDetail.Digest.Valid(),
+		StartedAt:       entry.StartTime,
+		Expanded:        !entry.Collapsed,
+		DiffLines:       boundedToolPreviewDiff(entry.DiffLines),
+		DiffPending:     entry.DiffPending,
+		ExpertProgress:  sanitizeExpertProgressState(entry.ExpertProgress, view.Lifecycle.Terminal()),
+		ansiResultLines: ansiLines,
+		ansiHiddenLines: ansiHidden,
+	}
+	if isExpertConsultTool(entry.Name) {
+		preview.OutputDigest = OutputDetailDigest{}
+		preview.OutputAvailable = false
+	}
+	model := ToolRenderModel{ToolViewModel: view, Preview: preview}
+	if err := model.Validate(); err != nil {
+		return ToolRenderModel{}, err
+	}
+	return model, nil
 }
 
 // ToolViewModelFromToolCard projects the card compatibility model through the
@@ -184,27 +351,6 @@ func ToolViewModelFromToolCard(chat ChatEntry, card ToolCard) (ToolViewModel, er
 	return view, nil
 }
 
-// toolViewModelForCardHeader is the identity-free projection used while a
-// legacy ToolCard is rendered. The transcript adapter above remains strict;
-// the renderer cannot invent a BlockID or revision merely to plan cells.
-func toolViewModelForCardHeader(card ToolCard, duration time.Duration) ToolViewModel {
-	projection := card.Projection.Normalize()
-	view := newToolViewModel(
-		ChatEntry{},
-		card.ID,
-		toolKindFromCardKind(card.Kind),
-		card.Name,
-		card.Summary,
-		duration,
-		toolLifecycleFromCard(card, projection),
-		projection,
-	)
-	if view.Duration < 0 || view.Duration > maxToolViewDuration {
-		view.Duration = 0
-	}
-	return view
-}
-
 func newToolViewModel(
 	chat ChatEntry,
 	invocationID string,
@@ -220,7 +366,8 @@ func newToolViewModel(
 	if operation == "" {
 		operation = name
 	}
-	if projected := projection.SummaryText(); projected != "" && lifecycle != ToolLifecycleRunning {
+	if projected := projection.SummaryText(); projected != "" &&
+		lifecycle != ToolLifecycleRunning && lifecycle != ToolLifecycleCancelled {
 		summary = projected
 	}
 	var artifact *ecosystem.ArtifactDigest
@@ -231,6 +378,7 @@ func newToolViewModel(
 	return ToolViewModel{
 		InvocationID: invocationID,
 		BlockID:      chat.BlockID,
+		ToolName:     boundedToolViewOperation(name),
 		Kind:         kind,
 		Operation:    boundedToolViewOperation(operation),
 		Target:       projectedToolTarget(projection),
@@ -242,7 +390,98 @@ func newToolViewModel(
 		Duration:     duration,
 		Revision:     chat.Revision,
 		Artifact:     artifact,
+		Projection:   projection,
 	}
+}
+
+func boundedToolPreviewArguments(
+	name, arguments string,
+	projection ecosystem.ToolProjection,
+) string {
+	if agent.ToolArgumentsRequirePrivacy(name) {
+		projection = projection.Normalize()
+		routeArgs := make(map[string]any, 3)
+		if projection.Route.Server != "" {
+			routeArgs["server"] = projection.Route.Server
+		}
+		if projection.Route.Tool != "" {
+			routeArgs["tool"] = projection.Route.Tool
+		}
+		if projection.Route.CallID != "" {
+			routeArgs["call_id"] = projection.Route.CallID
+		}
+		arguments = agent.FormatToolArgsForTool(name, routeArgs)
+	}
+	arguments = sanitizeTerminalSingleLine(arguments)
+	if len(arguments) > maxPersistedToolArgsBytes {
+		arguments = truncateUTF8Bytes(arguments, maxPersistedToolArgsBytes)
+	}
+	return arguments
+}
+
+func boundedToolPreviewDiff(lines []DiffLine) []DiffLine {
+	lines = persistDiffLines(lines)
+	if len(lines) == 0 {
+		return nil
+	}
+	result := make([]DiffLine, len(lines))
+	for index, line := range lines {
+		result[index] = line
+		result[index].Content = sanitizeTerminalLine(line.Content)
+		if line.Hunk != nil {
+			hunk := *line.Hunk
+			result[index].Hunk = &hunk
+		}
+	}
+	return result
+}
+
+func sanitizedANSIResultPreview(result string) ([][]ansiRemapSegment, int) {
+	result = boundedToolCardResultDisplay(result)
+	if result == "" {
+		return nil, 0
+	}
+	rawLines := strings.Split(strings.TrimRight(result, "\n"), "\n")
+	hidden := 0
+	if len(rawLines) > maxToolResultPreviewLines {
+		hidden = len(rawLines) - maxToolResultPreviewLines
+		rawLines = rawLines[:maxToolResultPreviewLines]
+	}
+	lines := make([][]ansiRemapSegment, 0, len(rawLines))
+	for _, rawLine := range rawLines {
+		parsed := parseANSI16Segments(rawLine)
+		safe := make([]ansiRemapSegment, 0, len(parsed))
+		for _, segment := range parsed {
+			text := strings.ReplaceAll(sanitizeTerminalLine(segment.text), "\t", "    ")
+			if text == "" {
+				continue
+			}
+			safe = append(safe, ansiRemapSegment{text: text, bold: segment.bold, fg: segment.fg})
+		}
+		lines = append(lines, safe)
+	}
+	return lines, hidden
+}
+
+func validateANSIResultPreview(lines [][]ansiRemapSegment, hidden int) error {
+	if hidden < 0 || hidden > maxToolCardResultDisplayBytes || len(lines) > maxToolResultPreviewLines {
+		return errors.New("tool ANSI preview exceeds its row bound")
+	}
+	total := 0
+	for _, line := range lines {
+		for _, segment := range line {
+			if segment.fg < ansiRemapDefaultFg || segment.fg > 7 ||
+				segment.text == "" ||
+				segment.text != strings.ReplaceAll(sanitizeTerminalLine(segment.text), "\t", "    ") {
+				return errors.New("tool ANSI preview contains an unsafe segment")
+			}
+			total += len(segment.text)
+			if total > maxToolCardResultDisplayBytes {
+				return errors.New("tool ANSI preview exceeds its byte bound")
+			}
+		}
+	}
+	return nil
 }
 
 func boundedToolViewOperation(operation string) string {
@@ -315,6 +554,9 @@ func toolKindFromCardKind(kind ToolCardKind) ToolKind {
 }
 
 func toolLifecycleFromEntry(entry ToolEntry, projection ecosystem.ToolProjection) ToolLifecycle {
+	if entry.Status == ToolStatusCancelled {
+		return ToolLifecycleCancelled
+	}
 	if entry.IsError || entry.Status == ToolStatusError {
 		return ToolLifecycleFailed
 	}
@@ -328,8 +570,12 @@ func toolLifecycleFromEntry(entry ToolEntry, projection ecosystem.ToolProjection
 }
 
 func validateToolEntryProjectionConsistency(entry ToolEntry, projection ecosystem.ToolProjection) error {
-	if entry.Status != ToolStatusRunning && entry.Status != ToolStatusDone && entry.Status != ToolStatusError {
+	if entry.Status != ToolStatusRunning && entry.Status != ToolStatusDone &&
+		entry.Status != ToolStatusError && entry.Status != ToolStatusCancelled {
 		return errors.New("tool entry status is invalid")
+	}
+	if entry.Status == ToolStatusCancelled {
+		return validateCanonicalCancelledToolProjection(projection)
 	}
 	if !toolProjectionHasSemanticState(projection) {
 		return nil
@@ -356,6 +602,12 @@ func validateToolEntryProjectionConsistency(entry ToolEntry, projection ecosyste
 }
 
 func validateToolCardProjectionConsistency(card ToolCard, projection ecosystem.ToolProjection) error {
+	if card.Lifecycle == ToolLifecycleCancelled {
+		if card.State != ToolCardAttention {
+			return errors.New("cancelled tool card is not in the attention state")
+		}
+		return validateCanonicalCancelledToolProjection(projection)
+	}
 	if !toolProjectionHasSemanticState(projection) {
 		return nil
 	}
@@ -385,14 +637,42 @@ func toolProjectionHasSemanticState(projection ecosystem.ToolProjection) bool {
 		projection.Evidence != ecosystem.EvidenceNone
 }
 
+// validateCanonicalCancelledToolProjection enforces the sole semantic shape
+// produced when the host cancels an in-flight tool. Routing identity may remain
+// so the receipt can still identify the invocation, but cancellation can never
+// carry a successful domain result, evidence, or a result/artifact digest.
+func validateCanonicalCancelledToolProjection(projection ecosystem.ToolProjection) error {
+	if projection.Digest != nil || projection.Artifact != nil {
+		return errors.New("cancelled tool projection cannot contain a digest or artifact")
+	}
+	if normalized := projection.Normalize(); !reflect.DeepEqual(normalized, projection) {
+		return errors.New("cancelled tool projection is not normalized")
+	}
+	if projection.Transport != ecosystem.TransportFailed ||
+		projection.Domain != ecosystem.DomainUnknown ||
+		projection.DomainTyped ||
+		projection.Evidence != ecosystem.EvidenceNone {
+		return errors.New("cancelled tool projection must be transport failed, domain unknown, untyped, and evidence none")
+	}
+	return nil
+}
+
 func toolViewLifecycleMatchesProjection(lifecycle ToolLifecycle, projection ecosystem.ToolProjection) bool {
-	if lifecycle == ToolLifecycleCancelled || !toolProjectionHasSemanticState(projection) {
+	if lifecycle == ToolLifecycleCancelled {
+		return projection.Transport == ecosystem.TransportFailed &&
+			projection.Domain == ecosystem.DomainUnknown &&
+			projection.Evidence == ecosystem.EvidenceNone
+	}
+	if !toolProjectionHasSemanticState(projection) {
 		return true
 	}
 	return lifecycle == toolLifecycleFromProjection(projection)
 }
 
 func toolLifecycleFromCard(card ToolCard, projection ecosystem.ToolProjection) ToolLifecycle {
+	if card.Lifecycle == ToolLifecycleCancelled {
+		return ToolLifecycleCancelled
+	}
 	if toolProjectionHasSemanticState(projection) {
 		return toolLifecycleFromProjection(projection)
 	}

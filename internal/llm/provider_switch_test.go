@@ -73,6 +73,35 @@ func TestSwitchProviderMissingKey(t *testing.T) {
 	}
 }
 
+func TestSwitchProviderLocalOnlyErrorDoesNotExposeBaseURL(t *testing.T) {
+	manager := NewModelManager("http://127.0.0.1:9", 4096)
+	defer manager.Close()
+	secretURL := "https://example.com/private/super-secret"
+	manager.ConfigureProviderCatalog(config.ProviderConfig{
+		Active: "ollama",
+		Profiles: map[string]config.ProviderProfile{
+			"ollama": {Type: config.ProviderTypeOllama},
+			"remote": {
+				Type:      config.ProviderTypeOpenAICompatible,
+				BaseURL:   secretURL,
+				Model:     "test-model",
+				APIKeyEnv: "TEST_PROVIDER_API_KEY",
+			},
+		},
+	}, true, "qwen3.5:2b")
+
+	err := manager.SwitchProvider("remote")
+	if err == nil || !contains(err.Error(), "local_only") {
+		t.Fatalf("expected local_only error, got %v", err)
+	}
+	if contains(err.Error(), "super-secret") || contains(err.Error(), secretURL) {
+		t.Fatalf("provider switch error exposed base URL: %v", err)
+	}
+	if manager.RemoteProvider() || manager.ActiveProviderName() != "ollama" {
+		t.Fatal("rejected provider switch mutated manager state")
+	}
+}
+
 func TestSwitchProviderContextCanceledBeforeMutation(t *testing.T) {
 	t.Setenv("XAI_API_KEY", "test-key")
 	manager := NewModelManager("http://127.0.0.1:9", 4096)

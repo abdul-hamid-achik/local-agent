@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 )
@@ -12,8 +14,11 @@ import (
 // for audit logging, argument validation/redaction, and policy side effects,
 // without the agent loop having to special-case any of them.
 //
-// Hooks run in registration order. They must be safe for concurrent use:
-// MCP and memory tools execute in parallel goroutines.
+// Pre hooks and ordinary post hooks run in registration order. Host-owned
+// context-only limiters are applied after every policy/redaction post hook so a
+// bounded interactive store can synchronously admit the complete safe result.
+// Hooks must be safe for concurrent use: MCP and memory tools execute in
+// parallel goroutines.
 type ToolHook interface {
 	// Name identifies the hook in logs.
 	Name() string
@@ -48,11 +53,44 @@ func (a *Agent) runPreHooks(ctx context.Context, call *llm.ToolCall) (block bool
 	return false, ""
 }
 
-// runPostHooks invokes every PostToolUse hook, letting each rewrite the result.
-func (a *Agent) runPostHooks(ctx context.Context, call llm.ToolCall, result *string, isErr bool) {
+// contextOnlyToolResultHook marks a hook that limits provider, ledger, and
+// transcript context but must not destroy the complete post-redaction result
+// before an interactive output host can admit a bounded ephemeral prefix.
+//
+// The unexported marker deliberately reserves this lifecycle distinction for
+// host-owned hooks. Arbitrary third-party hooks remain redaction/policy hooks
+// and therefore run before the ephemeral detail boundary.
+type contextOnlyToolResultHook interface {
+	contextOnlyToolResultHook()
+}
+
+// runPostHooks invokes policy/redaction hooks first, captures the complete safe
+// result, and then applies context-only limiters. The returned string is
+// ephemeral: callers may offer it only to a process-local bounded store, never
+// to provider context, the execution ledger, transcript text, or session state.
+func (a *Agent) runPostHooks(
+	ctx context.Context,
+	call llm.ToolCall,
+	result *string,
+	isErr bool,
+) string {
 	for _, h := range a.hooks {
+		if _, contextOnly := h.(contextOnlyToolResultHook); contextOnly {
+			continue
+		}
 		h.PostToolUse(ctx, call, result, isErr)
 	}
+	complete := ""
+	if result != nil {
+		complete = *result
+	}
+	for _, h := range a.hooks {
+		if _, contextOnly := h.(contextOnlyToolResultHook); !contextOnly {
+			continue
+		}
+		h.PostToolUse(ctx, call, result, isErr)
+	}
+	return complete
 }
 
 // SizeCapHook truncates oversized tool results so a single runaway tool (a
@@ -67,14 +105,54 @@ func NewSizeCapHook(maxBytes int) *SizeCapHook { return &SizeCapHook{MaxBytes: m
 
 func (h *SizeCapHook) Name() string { return "size-cap" }
 
+func (*SizeCapHook) contextOnlyToolResultHook() {}
+
 func (h *SizeCapHook) PreToolUse(ctx context.Context, call *llm.ToolCall) (bool, string) {
 	return false, ""
 }
 
 func (h *SizeCapHook) PostToolUse(ctx context.Context, call llm.ToolCall, result *string, isErr bool) {
-	if h.MaxBytes <= 0 || result == nil || len(*result) <= h.MaxBytes {
+	if h.MaxBytes <= 0 || result == nil {
 		return
 	}
-	truncated := (*result)[:h.MaxBytes]
-	*result = truncated + fmt.Sprintf("\n\n... [output truncated: %d of %d bytes shown]", h.MaxBytes, len(*result))
+	if len(*result) <= h.MaxBytes && utf8.ValidString(*result) {
+		return
+	}
+	total := len(*result)
+	prefix, consumed := boundedValidUTF8Prefix(*result, h.MaxBytes)
+	if consumed == total {
+		*result = prefix
+		return
+	}
+	*result = prefix + fmt.Sprintf(
+		"\n\n... [output truncated: %d of %d bytes shown]",
+		consumed,
+		total,
+	)
+}
+
+// boundedValidUTF8Prefix converts invalid source bytes to the replacement rune
+// while scanning no more source than can fit in the bounded result. It returns
+// the number of original source bytes represented by the safe prefix, keeping
+// the truncation receipt honest without an unbounded allocation.
+func boundedValidUTF8Prefix(value string, maxBytes int) (string, int) {
+	if value == "" || maxBytes <= 0 {
+		return "", 0
+	}
+	var result strings.Builder
+	result.Grow(min(maxBytes, len(value)))
+	consumed := 0
+	for consumed < len(value) {
+		character, size := utf8.DecodeRuneInString(value[consumed:])
+		if character == utf8.RuneError && size == 1 {
+			character = '\uFFFD'
+		}
+		characterBytes := utf8.RuneLen(character)
+		if characterBytes < 0 || result.Len()+characterBytes > maxBytes {
+			break
+		}
+		result.WriteRune(character)
+		consumed += size
+	}
+	return result.String(), consumed
 }

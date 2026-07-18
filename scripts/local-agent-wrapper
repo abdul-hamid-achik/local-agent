@@ -1,49 +1,129 @@
-#!/bin/zsh
+#!/bin/sh
 # Transparent Local Agent launcher with optional TinyVault secret injection.
 #
-# Install (optional PATH helper):
-#   install -m 755 scripts/local-agent-wrapper ~/.local/bin/local-agent
-#   # ensure ~/.local/bin is first on PATH (ahead of Homebrew)
+# Install from a release archive:
+#   mkdir -p "$HOME/.local/bin" "$HOME/.local/libexec"
+#   install -m 755 local-agent "$HOME/.local/libexec/local-agent"
+#   install -m 755 scripts/local-agent-wrapper "$HOME/.local/bin/local-agent"
+#   # ensure ~/.local/bin is first on PATH
 #
 # Behavior:
 #   - If TinyVault (tvault) is missing, uninitialized, locked without agent,
-#     or has no known provider keys → run the real binary with no inject and
+#     or has no known provider keys, run the real binary with no injection and
 #     without changing LOCAL_AGENT_LOCAL_ONLY.
-#   - If provider keys exist in the vault project → inject only those keys and
+#   - If provider keys exist in the vault project, inject only those keys and
 #     default LOCAL_AGENT_LOCAL_ONLY=false so /provider remote profiles work.
 #
 # Environment variables are documented in docs/providers.md (Launcher section).
 
-set -euo pipefail
+set -eu
 
 log() {
-  if [[ "${LOCAL_AGENT_VAULT_VERBOSE:-0}" == "1" ]]; then
-    echo "local-agent: $*" >&2
+  if [ "${LOCAL_AGENT_VAULT_VERBOSE:-0}" = "1" ]; then
+    printf 'local-agent: %s\n' "$*" >&2
   fi
 }
 
-# --- resolve real binary (never re-exec this wrapper) --------------------------
-if [[ -n "${LOCAL_AGENT_BIN:-}" && -x "${LOCAL_AGENT_BIN}" ]]; then
-  REAL="$LOCAL_AGENT_BIN"
-elif [[ -x "$HOME/go/bin/local-agent" ]]; then
-  REAL="$HOME/go/bin/local-agent"
-elif [[ -x /opt/homebrew/bin/local-agent ]]; then
+die_no_binary() {
+  printf '%s\n' \
+    "local-agent: no real binary found; install it at \$HOME/.local/libexec/local-agent or set LOCAL_AGENT_BIN" >&2
+  exit 127
+}
+
+# Return the physical directory containing a path. The input's final component
+# does not have to exist.
+physical_dir() {
+  path_dir=$(dirname "$1") || return 1
+  CDPATH='' cd -P "$path_dir" 2>/dev/null && pwd -P
+}
+
+# Build a PATH without the directory containing this wrapper. This prevents
+# command -v from selecting the wrapper again, including through a relative
+# PATH entry. Empty entries retain their standard meaning of the current
+# directory.
+path_without_wrapper() {
+  source_path=${PATH:-}
+  result=
+  first=1
+
+  while :; do
+    case $source_path in
+      *:*)
+        entry=${source_path%%:*}
+        source_path=${source_path#*:}
+        more=1
+        ;;
+      *)
+        entry=$source_path
+        more=0
+        ;;
+    esac
+
+    if [ -z "$entry" ]; then
+      entry=.
+    fi
+    entry_dir=$(physical_dir "$entry/placeholder" 2>/dev/null || printf '%s\n' "$entry")
+
+    if [ "$entry_dir" != "$WRAPPER_DIR" ]; then
+      if [ "$first" -eq 1 ]; then
+        result=$entry
+        first=0
+      else
+        result=$result:$entry
+      fi
+    fi
+
+    [ "$more" -eq 1 ] || break
+  done
+
+  if [ "$first" -eq 1 ]; then
+    # An empty PATH means "current directory" on several shells, which could
+    # select the wrapper. Use a guaranteed non-directory sentinel instead.
+    result=/dev/null
+  fi
+  printf '%s\n' "$result"
+}
+
+# --- resolve real binary (never re-exec this wrapper) -------------------------
+WRAPPER_DIR=$(physical_dir "$0") || {
+  printf 'local-agent: cannot resolve wrapper directory: %s\n' "$0" >&2
+  exit 127
+}
+
+REAL=
+if [ "${LOCAL_AGENT_BIN+x}" = "x" ]; then
+  case ${LOCAL_AGENT_BIN:-} in
+    /*)
+      if [ ! -f "$LOCAL_AGENT_BIN" ] || [ ! -x "$LOCAL_AGENT_BIN" ]; then
+        printf 'local-agent: LOCAL_AGENT_BIN is not an executable file: %s\n' "$LOCAL_AGENT_BIN" >&2
+        exit 127
+      fi
+      REAL=$LOCAL_AGENT_BIN
+      ;;
+    *)
+      printf 'local-agent: LOCAL_AGENT_BIN must be an absolute executable path\n' >&2
+      exit 127
+      ;;
+  esac
+elif [ -n "${HOME:-}" ] && [ -x "$HOME/.local/libexec/local-agent" ]; then
+  REAL=$HOME/.local/libexec/local-agent
+elif [ -n "${HOME:-}" ] && [ -x "$HOME/go/bin/local-agent" ]; then
+  REAL=$HOME/go/bin/local-agent
+elif [ -x /opt/homebrew/bin/local-agent ]; then
   REAL=/opt/homebrew/bin/local-agent
 else
-  # Strip this script's directory so `command -v` cannot resolve to ourselves.
-  wrapper_dir="${0:A:h}"
-  cleaned_path="$(print -R "$PATH" | tr ':' '\n' | grep -vxF "$wrapper_dir" | grep -v '/.local/bin$' | paste -sd: -)"
-  REAL="$(PATH="$cleaned_path" command -v local-agent 2>/dev/null || true)"
+  CLEANED_PATH=$(path_without_wrapper)
+  REAL=$(PATH=$CLEANED_PATH command -v local-agent 2>/dev/null || :)
 fi
 
-if [[ -z "${REAL:-}" || ! -x "$REAL" ]]; then
-  echo "local-agent: no real binary found (try: go install ./cmd/local-agent)" >&2
-  exit 127
+if [ -z "$REAL" ] || [ ! -f "$REAL" ] || [ ! -x "$REAL" ]; then
+  die_no_binary
 fi
 
-# Avoid infinite loop if REAL somehow points at this file.
-if [[ "${REAL:A}" == "${0:A}" ]]; then
-  echo "local-agent: refusing to exec self; set LOCAL_AGENT_BIN to the real binary" >&2
+# -ef compares the underlying files, so symlinked and relative spellings of the
+# wrapper cannot create an exec loop on supported macOS and Linux /bin/sh.
+if [ "$REAL" -ef "$0" ] 2>/dev/null; then
+  printf 'local-agent: refusing to exec self; set LOCAL_AGENT_BIN to the real binary\n' >&2
   exit 127
 fi
 
@@ -51,8 +131,8 @@ run_bare() {
   exec "$REAL" "$@"
 }
 
-# --- opt-out / no TinyVault ---------------------------------------------------
-if [[ "${LOCAL_AGENT_NO_VAULT:-0}" == "1" ]]; then
+# --- opt-out / no TinyVault --------------------------------------------------
+if [ "${LOCAL_AGENT_NO_VAULT:-0}" = "1" ]; then
   log "LOCAL_AGENT_NO_VAULT=1; skipping vault inject"
   run_bare "$@"
 fi
@@ -62,73 +142,103 @@ if ! command -v tvault >/dev/null 2>&1; then
   run_bare "$@"
 fi
 
-PROJECT="${LOCAL_AGENT_VAULT_PROJECT:-local-agent}"
+PROJECT=${LOCAL_AGENT_VAULT_PROJECT:-local-agent}
 
-# status --json is lock-free. Fail closed (no inject) if vault is unavailable.
-# Collapse whitespace so multi-line JSON still matches with grep.
-status_json="$(tvault status --json 2>/dev/null | tr -d '\n' || true)"
-if [[ -z "$status_json" ]]; then
+# status --json is lock-free. Fail closed (no injection) if the vault is
+# unavailable. Collapse newlines so formatted JSON still matches.
+status_json=$(tvault status --json 2>/dev/null || :)
+status_json=$(printf '%s' "$status_json" | tr -d '\n' || :)
+if [ -z "$status_json" ]; then
   log "tvault status unavailable; running without secret inject"
   run_bare "$@"
 fi
 
-if ! print -R "$status_json" | grep -q '"initialized"[[:space:]]*:[[:space:]]*true'; then
+if ! printf '%s\n' "$status_json" |
+  grep -q '"initialized"[[:space:]]*:[[:space:]]*true'; then
   log "vault not initialized; running without secret inject"
   run_bare "$@"
 fi
 
 # If locked and no agent, inject only when unlock can succeed without a hang:
-# interactive TTY (prompt), TVAULT_PASSPHRASE, or user forced unlocked-only skip.
+# interactive TTY, TVAULT_PASSPHRASE, or an already-running vault agent.
 locked=false
 agent_running=false
-print -R "$status_json" | grep -q '"locked"[[:space:]]*:[[:space:]]*true' && locked=true
-print -R "$status_json" | grep -q '"agent_running"[[:space:]]*:[[:space:]]*true' && agent_running=true
-if [[ "$locked" == "true" && "$agent_running" != "true" ]]; then
+if printf '%s\n' "$status_json" |
+  grep -q '"locked"[[:space:]]*:[[:space:]]*true'; then
+  locked=true
+fi
+if printf '%s\n' "$status_json" |
+  grep -q '"agent_running"[[:space:]]*:[[:space:]]*true'; then
+  agent_running=true
+fi
+if [ "$locked" = "true" ] && [ "$agent_running" != "true" ]; then
   can_unlock=false
-  [[ -t 0 ]] && can_unlock=true
-  [[ -n "${TVAULT_PASSPHRASE:-}" ]] && can_unlock=true
-  if [[ "${LOCAL_AGENT_VAULT_REQUIRE_UNLOCKED:-0}" == "1" || "$can_unlock" != "true" ]]; then
+  if [ -t 0 ] || [ -n "${TVAULT_PASSPHRASE:-}" ]; then
+    can_unlock=true
+  fi
+  if [ "${LOCAL_AGENT_VAULT_REQUIRE_UNLOCKED:-0}" = "1" ] ||
+    [ "$can_unlock" != "true" ]; then
     log "vault locked (no agent / no non-interactive unlock); running without secret inject"
     run_bare "$@"
   fi
 fi
 
 # Discover known provider keys only (never inject the whole project by default).
-# Override the list with LOCAL_AGENT_VAULT_KEYS=comma,separated,NAMES
-if [[ -n "${LOCAL_AGENT_VAULT_KEYS:-}" ]]; then
-  candidate_keys=("${(@s:,:)LOCAL_AGENT_VAULT_KEYS}")
-else
-  candidate_keys=(XAI_API_KEY OPENAI_API_KEY OPENROUTER_API_KEY ANTHROPIC_API_KEY)
-fi
+# Override the list with LOCAL_AGENT_VAULT_KEYS=comma,separated,NAMES.
+candidate_csv=${LOCAL_AGENT_VAULT_KEYS:-XAI_API_KEY,OPENAI_API_KEY,OPENROUTER_API_KEY,ANTHROPIC_API_KEY}
 
-names="$(tvault list -p "$PROJECT" --names-only 2>/dev/null || true)"
-if [[ -z "$names" ]]; then
+names=$(tvault list -p "$PROJECT" --names-only 2>/dev/null || :)
+if [ -z "$names" ]; then
   log "project $PROJECT has no secrets or is missing; running without secret inject"
   run_bare "$@"
 fi
 
-keys=()
-for k in $candidate_keys; do
-  k="${k// /}"
-  [[ -z "$k" ]] && continue
-  if print -R "$names" | grep -qx "$k"; then
-    keys+=("$k")
-  fi
+only_arg=
+key_count=0
+while :; do
+  case $candidate_csv in
+    *,*)
+      key=${candidate_csv%%,*}
+      candidate_csv=${candidate_csv#*,}
+      more=1
+      ;;
+    *)
+      key=$candidate_csv
+      more=0
+      ;;
+  esac
+
+  key=$(printf '%s' "$key" | tr -d '[:space:]')
+  case $key in
+    "" | [!A-Za-z_]* | *[!A-Za-z0-9_]*)
+      ;;
+    *)
+      if printf '%s\n' "$names" | grep -Fqx "$key"; then
+        if [ -z "$only_arg" ]; then
+          only_arg=$key
+        else
+          only_arg=$only_arg,$key
+        fi
+        key_count=$((key_count + 1))
+      fi
+      ;;
+  esac
+
+  [ "$more" -eq 1 ] || break
 done
 
-if (( ${#keys[@]} == 0 )); then
+if [ "$key_count" -eq 0 ]; then
   log "no provider keys in project $PROJECT; running without secret inject"
   run_bare "$@"
 fi
 
-# Only open remote privacy when we actually inject provider credentials, unless
-# the user already set LOCAL_AGENT_LOCAL_ONLY explicitly for this process.
-if [[ -z "${LOCAL_AGENT_LOCAL_ONLY+x}" ]]; then
+# Only open remote privacy when provider credentials are actually injected,
+# unless the user already set LOCAL_AGENT_LOCAL_ONLY for this process.
+if [ "${LOCAL_AGENT_LOCAL_ONLY+x}" != "x" ]; then
   export LOCAL_AGENT_LOCAL_ONLY=false
-  log "injecting ${#keys[@]} key(s); LOCAL_AGENT_LOCAL_ONLY=false"
+  log "injecting $key_count key(s); LOCAL_AGENT_LOCAL_ONLY=false"
 else
-  log "injecting ${#keys[@]} key(s); LOCAL_AGENT_LOCAL_ONLY=$LOCAL_AGENT_LOCAL_ONLY (user-set)"
+  log "injecting $key_count key(s); LOCAL_AGENT_LOCAL_ONLY=$LOCAL_AGENT_LOCAL_ONLY (user-set)"
 fi
 
-only_arg="${(j:,:)keys}"
 exec tvault run -p "$PROJECT" --only "$only_arg" -- "$REAL" "$@"

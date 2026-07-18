@@ -46,7 +46,7 @@ func TestProviderPickerResizeThemeAndReducedMotion(t *testing.T) {
 		t.Fatal("reduced motion left the provider filter cursor blinking")
 	}
 	m.providerPickerState.List.Select(5)
-	selected := m.providerPickerState.List.SelectedItem().(providerItem).descriptor.Name
+	selected := m.providerPickerState.List.SelectedItem().(providerItem).presentation.ProfileID
 
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 36, Height: 12})
 	m = updated.(*Model)
@@ -56,7 +56,7 @@ func TestProviderPickerResizeThemeAndReducedMotion(t *testing.T) {
 	if got, want := m.providerPickerState.List.Height(), pickerListHeight(12, 8*defaultPickerItemHeight+2, 4); got != want {
 		t.Fatalf("provider list height after resize = %d, want %d", got, want)
 	}
-	if got := m.providerPickerState.List.SelectedItem().(providerItem).descriptor.Name; got != selected {
+	if got := m.providerPickerState.List.SelectedItem().(providerItem).presentation.ProfileID; got != selected {
 		t.Fatalf("resize changed provider selection from %q to %q", selected, got)
 	}
 
@@ -87,8 +87,8 @@ func TestProviderPickerWheelMovesVisibleCursorWithoutScrollingTranscript(t *test
 	}
 	m.providerPickerState = newProviderPickerState(descriptors, "", m.width, m.height, m.isDark)
 	m.overlay = OverlayProviderPicker
-	m.viewport.SetContent("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten")
-	m.viewport.GotoTop()
+	m.setTestTranscriptContent("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten")
+	m.transcriptGotoTop()
 
 	x, y := providerPickerItemPoint(t, m, 0)
 	updated, _ := m.Update(tea.MouseWheelMsg{X: x, Y: y, Button: tea.MouseWheelDown})
@@ -96,7 +96,7 @@ func TestProviderPickerWheelMovesVisibleCursorWithoutScrollingTranscript(t *test
 	if got := m.providerPickerState.List.Index(); got != 1 {
 		t.Fatalf("provider cursor after wheel = %d, want 1", got)
 	}
-	if got := m.viewport.YOffset(); got != 0 {
+	if got := m.transcriptYOffset(); got != 0 {
 		t.Fatalf("provider wheel moved hidden transcript to offset %d", got)
 	}
 
@@ -111,7 +111,7 @@ func TestProviderPickerWheelMovesVisibleCursorWithoutScrollingTranscript(t *test
 	if got := m.providerPickerState.List.Index(); got != 1 {
 		t.Fatalf("wheel outside overlay changed provider cursor to %d", got)
 	}
-	if got := m.viewport.YOffset(); got != 0 {
+	if got := m.transcriptYOffset(); got != 0 {
 		t.Fatalf("outside provider wheel moved hidden transcript to offset %d", got)
 	}
 }
@@ -150,8 +150,8 @@ func TestProviderPickerClickActivatesExactFilteredUnicodeItem(t *testing.T) {
 		t.Fatalf("filtered providers = %d, want 1", len(visible))
 	}
 	item := visible[0].(providerItem)
-	if item.descriptor.Name != targetName {
-		t.Fatalf("filtered provider identity = %q, want %q", item.descriptor.Name, targetName)
+	if item.presentation.ProfileID != ProviderProfileID(targetName) {
+		t.Fatalf("filtered provider identity = %q, want %q", item.presentation.ProfileID, targetName)
 	}
 
 	x, y := providerPickerItemPoint(t, m, 0)
@@ -217,9 +217,14 @@ func TestProviderItemSanitizesTerminalControlsWithoutChangingIdentity(t *testing
 	rawModel := "grok-4\x1b]0;MODEL_SECRET\x07\tfast\u2066"
 	rawType := "xai\x1b[2J\nTYPE_SPOOF\u202d"
 	rawAPIKeyEnv := "XAI_API_KEY\x1b]8;;https://ENV_SECRET.invalid\x07link\x1b]8;;\x07\nENV_SPOOF\u2069"
-	item := providerItem{descriptor: llm.ProviderDescriptor{
+	descriptor := llm.ProviderDescriptor{
 		Name: rawName, Model: rawModel, Type: rawType, APIKeyEnv: rawAPIKeyEnv, Remote: true,
-	}}
+	}
+	presentations := providerOptionPresentations([]llm.ProviderDescriptor{descriptor})
+	if len(presentations) != 1 {
+		t.Fatalf("provider presentations = %d, want 1", len(presentations))
+	}
+	item := providerItem{presentation: presentations[0]}
 
 	for label, value := range map[string]string{
 		"title": item.Title(), "description": item.Description(), "filter": item.FilterValue(),
@@ -238,13 +243,15 @@ func TestProviderItemSanitizesTerminalControlsWithoutChangingIdentity(t *testing
 			}
 		}
 	}
-	if item.descriptor.Name != rawName || item.descriptor.Model != rawModel ||
-		item.descriptor.Type != rawType || item.descriptor.APIKeyEnv != rawAPIKeyEnv {
-		t.Fatal("display sanitization changed provider selection identity")
+	if item.presentation.ProfileID != ProviderProfileID(rawName) {
+		t.Fatal("display sanitization changed opaque provider selection identity")
+	}
+	if item.presentation.CredentialHint != "" {
+		t.Fatalf("unsafe credential hint crossed UI boundary: %q", item.presentation.CredentialHint)
 	}
 
 	m := newTestModel(t)
-	m.providerPickerState = newProviderPickerState([]llm.ProviderDescriptor{item.descriptor}, "", m.width, m.height, m.isDark)
+	m.providerPickerState = newProviderPickerState([]llm.ProviderDescriptor{descriptor}, "", m.width, m.height, m.isDark)
 	m.overlay = OverlayProviderPicker
 	plain := ansi.Strip(m.renderProviderPicker())
 	for _, secret := range []string{"NAME_SECRET", "MODEL_SECRET", "ENV_SECRET"} {
@@ -270,7 +277,7 @@ func TestProviderPickerUnicodeHitTestingAtMinimumTerminal(t *testing.T) {
 	assertRenderedHeightFits(t, rendered, minTerminalHeight)
 	x, y := providerPickerItemPoint(t, m, 0)
 	item, index, ok := m.providerPickerItemAt(x, y)
-	if !ok || index != 0 || item.descriptor.Name != "日本語🤖" {
+	if !ok || index != 0 || item.presentation.ProfileID != "日本語🤖" {
 		t.Fatalf("minimum-terminal hit = item %#v index %d ok %v", item, index, ok)
 	}
 	projection, _ := m.projectProviderPickerPointer()
@@ -303,10 +310,10 @@ func TestProviderPickerHitTestingUsesVisiblePageOffset(t *testing.T) {
 	x, y := providerPickerItemPoint(t, m, 1)
 	item, index, ok := m.providerPickerItemAt(x, y)
 	wantIndex := perPage + 1
-	if !ok || index != wantIndex || item.descriptor.Name != descriptors[wantIndex].Name {
+	if !ok || index != wantIndex || item.presentation.ProfileID != ProviderProfileID(descriptors[wantIndex].Name) {
 		t.Fatalf(
 			"page-offset hit = item %q index %d ok %v, want item %q index %d",
-			item.descriptor.Name,
+			item.presentation.ProfileID,
 			index,
 			ok,
 			descriptors[wantIndex].Name,
@@ -343,13 +350,13 @@ func TestProviderPickerPreservesPausedTranscriptAnchor(t *testing.T) {
 		})
 	}
 	m.invalidateEntryCache()
-	m.viewport.SetContent(m.renderEntries())
-	m.viewport.SetYOffset(7)
+	m.refreshTranscript()
+	m.setTranscriptYOffset(7)
 	m.pauseFollow()
 
 	assertAnchor := func(stage string) {
 		t.Helper()
-		if got := m.viewport.YOffset(); got != 7 || !m.followPaused() {
+		if got := m.transcriptYOffset(); got != 7 || !m.followPaused() {
 			t.Fatalf("%s moved paused transcript: offset=%d paused=%v", stage, got, m.followPaused())
 		}
 	}

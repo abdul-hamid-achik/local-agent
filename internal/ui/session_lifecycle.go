@@ -136,6 +136,8 @@ func (m *Model) snapshotExecutionCursor(ctx context.Context) (int64, error) {
 }
 
 func (m *Model) resetConversationSession() {
+	m.clearViewerModals(false)
+	m.outputDetails = NewOutputDetailStore()
 	m.resetEntryMemo()
 	m.clearQueuedFollowUpForSessionReplacement()
 	m.clearBobWorkspaceContext()
@@ -191,7 +193,6 @@ func (m *Model) resetConversationSession() {
 	m.resetTurnDiagnostics()
 	m.fileChanges = nil
 	m.toolsPending = 0
-	m.toolCardMgr.Cards = nil
 	_ = m.revokeTemporaryWriteScopes()
 }
 

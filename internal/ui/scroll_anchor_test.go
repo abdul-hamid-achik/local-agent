@@ -40,18 +40,18 @@ func TestScrollAnchor_MouseWheelUp(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		longContent += "line " + string(rune(i)) + "\n"
 	}
-	m.viewport.SetContent(longContent)
-	m.viewport.GotoBottom()
+	m.setTestTranscriptContent(longContent)
+	m.transcriptGotoBottom()
 
-	if !m.viewport.AtBottom() {
+	if !m.transcriptAtBottom() {
 		t.Fatal("viewport should be at bottom before scroll")
 	}
-	before := m.viewport.YOffset()
+	before := m.transcriptYOffset()
 	delta := m.viewport.MouseWheelDelta
 
 	updated, _ := m.Update(tea.MouseWheelMsg{X: 0, Y: 0, Button: tea.MouseWheelUp})
 	m = updated.(*Model)
-	if got := before - m.viewport.YOffset(); got != delta {
+	if got := before - m.transcriptYOffset(); got != delta {
 		t.Fatalf("one wheel notch moved %d rows, want %d", got, delta)
 	}
 
@@ -69,7 +69,7 @@ func TestMouseWheelScrollsTranscriptWithoutMutatingComposer(t *testing.T) {
 	m.input.CursorEnd()
 	_ = m.reflowInputViewport()
 	setScrollableTranscript(m)
-	m.viewport.GotoBottom()
+	m.transcriptGotoBottom()
 
 	wantValue := m.input.Value()
 	wantLine := m.input.Line()
@@ -77,7 +77,7 @@ func TestMouseWheelScrollsTranscriptWithoutMutatingComposer(t *testing.T) {
 	wantScrollOffset := m.input.ScrollYOffset()
 	wantHeight := m.input.Height()
 	wantFocused := m.input.Focused()
-	beforeTranscript := m.viewport.YOffset()
+	beforeTranscript := m.transcriptYOffset()
 
 	updated, cmd := m.Update(tea.MouseWheelMsg{
 		X:      1,
@@ -89,7 +89,7 @@ func TestMouseWheelScrollsTranscriptWithoutMutatingComposer(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("transcript wheel unexpectedly scheduled a composer command")
 	}
-	if got := m.viewport.YOffset(); got >= beforeTranscript {
+	if got := m.transcriptYOffset(); got >= beforeTranscript {
 		t.Fatalf("wheel did not move transcript upward: before=%d after=%d", beforeTranscript, got)
 	}
 	if got := m.input.Value(); got != wantValue {
@@ -116,7 +116,7 @@ func TestScrollAnchor_MouseWheelDown(t *testing.T) {
 	m.userScrolledUp = true
 
 	// Minimal content - viewport at bottom
-	m.viewport.SetContent("short content")
+	m.setTestTranscriptContent("short content")
 
 	updated, _ := m.Update(tea.MouseWheelMsg{X: 0, Y: 0, Button: tea.MouseWheelDown})
 	m = updated.(*Model)
@@ -136,7 +136,7 @@ func TestScrollAnchor_StreamTextMsg(t *testing.T) {
 	m.entries = []ChatEntry{
 		{Kind: "assistant", Content: "Initial response"},
 	}
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 
 	// Test with anchor active - should auto-scroll
 	m.anchorActive = true
@@ -144,20 +144,20 @@ func TestScrollAnchor_StreamTextMsg(t *testing.T) {
 	m = updated.(*Model)
 
 	// Viewport should be at bottom when anchor is active
-	if !m.viewport.AtBottom() {
+	if !m.transcriptAtBottom() {
 		t.Error("viewport should be at bottom when anchor is active")
 	}
 
 	// Test with anchor inactive - should not force scroll
 	m.anchorActive = false
-	m.viewport.GotoTop() // Scroll to top
+	m.transcriptGotoTop() // Scroll to top
 
 	updated, _ = m.Update(StreamTextMsg{Text: "even more"})
 	m = updated.(*Model)
 
 	// When anchor is inactive, viewport should stay near top
 	// (implementation may vary, but should not force GotoBottom)
-	if m.viewport.AtBottom() {
+	if m.transcriptAtBottom() {
 		t.Log("Note: viewport scrolled to bottom even with anchor inactive")
 	}
 }
@@ -166,7 +166,7 @@ func TestScrollAnchor_StreamTextMsg(t *testing.T) {
 func TestScrollAnchor_AgentDoneMsg(t *testing.T) {
 	m := newTestModel(t)
 	setScrollableTranscript(m)
-	m.viewport.GotoTop()
+	m.transcriptGotoTop()
 	m.state = StateStreaming
 	m.pauseFollow()
 
@@ -259,8 +259,8 @@ func TestCheckAutoScroll_ReenablesAnchorAtBottom(t *testing.T) {
 	m.userScrolledUp = true
 
 	// Set viewport to bottom
-	m.viewport.SetContent("short content")
-	m.viewport.GotoBottom()
+	m.setTestTranscriptContent("short content")
+	m.transcriptGotoBottom()
 
 	m.checkAutoScroll()
 
@@ -278,11 +278,11 @@ func TestKeyboardScrollPausesFollowAndEndResumesLatest(t *testing.T) {
 	m = updated.(*Model)
 	setScrollableTranscript(m)
 	m.resumeFollow()
-	bottom := m.viewport.YOffset()
+	bottom := m.transcriptYOffset()
 
 	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyPgUp})
 	m = updated.(*Model)
-	pausedOffset := m.viewport.YOffset()
+	pausedOffset := m.transcriptYOffset()
 	if !m.followPaused() || pausedOffset >= bottom {
 		t.Fatalf("Page Up did not pause transcript follow: offset=%d bottom=%d", pausedOffset, bottom)
 	}
@@ -293,13 +293,13 @@ func TestKeyboardScrollPausesFollowAndEndResumesLatest(t *testing.T) {
 	m.state = StateStreaming
 	updated, _ = m.Update(StreamTextMsg{Text: "new streamed output"})
 	m = updated.(*Model)
-	if got := m.viewport.YOffset(); got != pausedOffset {
+	if got := m.transcriptYOffset(); got != pausedOffset {
 		t.Fatalf("next token snapped paused viewport from %d to %d", pausedOffset, got)
 	}
 
 	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnd})
 	m = updated.(*Model)
-	if m.followPaused() || !m.viewport.AtBottom() {
+	if m.followPaused() || !m.transcriptAtBottom() {
 		t.Fatal("End did not resume follow at the latest output")
 	}
 }
@@ -312,7 +312,7 @@ func TestAgentDonePreservesPausedViewportOffset(t *testing.T) {
 	m.resumeFollow()
 	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyPgUp})
 	m = updated.(*Model)
-	pausedOffset := m.viewport.YOffset()
+	pausedOffset := m.transcriptYOffset()
 	m.state = StateStreaming
 	m.streamBuf.WriteString("settling answer")
 
@@ -321,7 +321,7 @@ func TestAgentDonePreservesPausedViewportOffset(t *testing.T) {
 	if !m.followPaused() {
 		t.Fatal("turn completion resumed follow without user intent")
 	}
-	if got := m.viewport.YOffset(); got != pausedOffset {
+	if got := m.transcriptYOffset(); got != pausedOffset {
 		t.Fatalf("turn completion moved paused viewport from %d to %d", pausedOffset, got)
 	}
 }
@@ -329,6 +329,7 @@ func TestAgentDonePreservesPausedViewportOffset(t *testing.T) {
 func TestEndPreservesNonemptyComposerAndOverlayOwnership(t *testing.T) {
 	m := newTestModel(t)
 	setScrollableTranscript(m)
+	m.transcriptGotoTop()
 	m.pauseFollow()
 	m.input.SetValue("draft")
 	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnd})
@@ -352,20 +353,20 @@ func TestEndPreservesRunningFollowUpDraftOwnership(t *testing.T) {
 		t.Run(fmt.Sprintf("state-%d", state), func(t *testing.T) {
 			m := newTestModel(t)
 			setScrollableTranscript(m)
-			m.viewport.GotoTop()
+			m.transcriptGotoTop()
 			m.pauseFollow()
 			m.state = state
 			m.input.SetValue("running follow-up draft")
 			m.input.CursorStart()
-			wantOffset := m.viewport.YOffset()
+			wantOffset := m.transcriptYOffset()
 
 			updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnd})
 			m = updated.(*Model)
 			if m.input.Column() == 0 {
 				t.Fatal("End did not move the running draft cursor")
 			}
-			if !m.followPaused() || m.viewport.YOffset() != wantOffset {
-				t.Fatalf("End stole transcript ownership: paused=%v offset=%d want=%d", m.followPaused(), m.viewport.YOffset(), wantOffset)
+			if !m.followPaused() || m.transcriptYOffset() != wantOffset {
+				t.Fatalf("End stole transcript ownership: paused=%v offset=%d want=%d", m.followPaused(), m.transcriptYOffset(), wantOffset)
 			}
 		})
 	}
@@ -381,14 +382,14 @@ func TestComposerReflowPreservesTranscriptFollowIntent(t *testing.T) {
 
 		m.input.SetValue(strings.Repeat("long draft ", 70))
 		_ = m.reflowInputViewport()
-		if m.followPaused() || !m.viewport.AtBottom() || m.viewport.PastBottom() {
-			t.Fatalf("growing composer lost latest follow: paused=%v bottom=%v past=%v", m.followPaused(), m.viewport.AtBottom(), m.viewport.PastBottom())
+		if m.followPaused() || !m.transcriptAtBottom() || m.transcriptPastBottom() {
+			t.Fatalf("growing composer lost latest follow: paused=%v bottom=%v past=%v", m.followPaused(), m.transcriptAtBottom(), m.transcriptPastBottom())
 		}
 
 		m.input.Reset()
 		_ = m.reflowInputViewport()
-		if m.followPaused() || !m.viewport.AtBottom() || m.viewport.PastBottom() {
-			t.Fatalf("shrinking composer lost latest follow: paused=%v bottom=%v past=%v", m.followPaused(), m.viewport.AtBottom(), m.viewport.PastBottom())
+		if m.followPaused() || !m.transcriptAtBottom() || m.transcriptPastBottom() {
+			t.Fatalf("shrinking composer lost latest follow: paused=%v bottom=%v past=%v", m.followPaused(), m.transcriptAtBottom(), m.transcriptPastBottom())
 		}
 	})
 
@@ -397,19 +398,19 @@ func TestComposerReflowPreservesTranscriptFollowIntent(t *testing.T) {
 		updated, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 20})
 		m = updated.(*Model)
 		setScrollableTranscript(m)
-		m.viewport.SetYOffset(5)
+		m.setTranscriptYOffset(5)
 		m.pauseFollow()
 
 		m.input.SetValue(strings.Repeat("long draft ", 70))
 		_ = m.reflowInputViewport()
-		if !m.followPaused() || m.viewport.YOffset() != 5 || m.viewport.PastBottom() {
-			t.Fatalf("growing composer moved paused reader: paused=%v offset=%d past=%v", m.followPaused(), m.viewport.YOffset(), m.viewport.PastBottom())
+		if !m.followPaused() || m.transcriptYOffset() != 5 || m.transcriptPastBottom() {
+			t.Fatalf("growing composer moved paused reader: paused=%v offset=%d past=%v", m.followPaused(), m.transcriptYOffset(), m.transcriptPastBottom())
 		}
 
 		m.input.Reset()
 		_ = m.reflowInputViewport()
-		if !m.followPaused() || m.viewport.YOffset() != 5 || m.viewport.PastBottom() {
-			t.Fatalf("shrinking composer moved paused reader: paused=%v offset=%d past=%v", m.followPaused(), m.viewport.YOffset(), m.viewport.PastBottom())
+		if !m.followPaused() || m.transcriptYOffset() != 5 || m.transcriptPastBottom() {
+			t.Fatalf("shrinking composer moved paused reader: paused=%v offset=%d past=%v", m.followPaused(), m.transcriptYOffset(), m.transcriptPastBottom())
 		}
 	})
 }
@@ -430,7 +431,7 @@ func TestTranscriptPagingNeverMutatesComposerDraft(t *testing.T) {
 
 	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyPgUp})
 	m = updated.(*Model)
-	if m.viewport.AtBottom() {
+	if m.transcriptAtBottom() {
 		t.Fatal("Page Up did not move the transcript")
 	}
 	if m.input.Value() != wantValue || m.input.Line() != wantLine || m.input.Column() != wantColumn {
@@ -449,30 +450,30 @@ func TestComposerCtrlEditingDoesNotScrollTranscript(t *testing.T) {
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
 	m = updated.(*Model)
 	setScrollableTranscript(m)
-	m.viewport.GotoTop()
+	m.transcriptGotoTop()
 	m.pauseFollow()
 	m.input.SetValue("abcdef")
 	m.input.CursorEnd()
-	wantOffset := m.viewport.YOffset()
+	wantOffset := m.transcriptYOffset()
 
 	updated, _ = m.Update(ctrlKey('u'))
 	m = updated.(*Model)
 	if m.input.Value() != "" {
 		t.Fatalf("Ctrl+U did not retain standard composer editing: %q", m.input.Value())
 	}
-	if got := m.viewport.YOffset(); got != wantOffset {
+	if got := m.transcriptYOffset(); got != wantOffset {
 		t.Fatalf("Ctrl+U moved transcript from %d to %d", wantOffset, got)
 	}
 
 	m.input.SetValue("abcdef")
 	m.input.CursorStart()
-	wantOffset = m.viewport.YOffset()
+	wantOffset = m.transcriptYOffset()
 	updated, _ = m.Update(ctrlKey('d'))
 	m = updated.(*Model)
 	if m.input.Value() != "bcdef" {
 		t.Fatalf("Ctrl+D did not delete one composer character: %q", m.input.Value())
 	}
-	if got := m.viewport.YOffset(); got != wantOffset {
+	if got := m.transcriptYOffset(); got != wantOffset {
 		t.Fatalf("Ctrl+D moved transcript from %d to %d", wantOffset, got)
 	}
 }
@@ -492,7 +493,7 @@ func TestEndResumesFollowDuringOwnedBusyStates(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			m := newTestModel(t)
 			setScrollableTranscript(m)
-			m.viewport.GotoTop()
+			m.transcriptGotoTop()
 			m.pauseFollow()
 			tt.setup(m)
 			if working := ansi.Strip(m.renderWorkingLine()); !strings.Contains(working, "end") {
@@ -501,7 +502,7 @@ func TestEndResumesFollowDuringOwnedBusyStates(t *testing.T) {
 
 			updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnd})
 			m = updated.(*Model)
-			if m.followPaused() || !m.viewport.AtBottom() {
+			if m.followPaused() || !m.transcriptAtBottom() {
 				t.Fatal("owned busy-state guard swallowed End")
 			}
 		})
@@ -520,11 +521,11 @@ func TestReceiptActionsKeepFollowIntentAligned(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			m := newTestModel(t)
 			setScrollableTranscript(m)
-			m.viewport.GotoTop()
+			m.transcriptGotoTop()
 			m.pauseFollow()
 
 			tt.act(m)
-			if m.followPaused() || !m.viewport.AtBottom() {
+			if m.followPaused() || !m.transcriptAtBottom() {
 				t.Fatal("explicit receipt jumped without resuming follow intent")
 			}
 		})
@@ -537,7 +538,7 @@ func setScrollableTranscript(m *Model) {
 		m.entries = append(m.entries, ChatEntry{Kind: "user", Content: fmt.Sprintf("transcript row %02d", i)})
 	}
 	m.invalidateEntryCache()
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 }
 
 // TestScrollAnchor_ViewportAtBottom helper
@@ -545,9 +546,9 @@ func TestScrollAnchor_ViewportAtBottom(t *testing.T) {
 	m := newTestModel(t)
 
 	// Short content - should be at bottom
-	m.viewport.SetContent("line1\nline2\nline3")
+	m.setTestTranscriptContent("line1\nline2\nline3")
 
-	if !m.viewport.AtBottom() {
+	if !m.transcriptAtBottom() {
 		t.Error("viewport should be at bottom with short content")
 	}
 
@@ -556,17 +557,17 @@ func TestScrollAnchor_ViewportAtBottom(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		longContent += "line " + string(rune(i)) + "\n"
 	}
-	m.viewport.SetContent(longContent)
-	m.viewport.GotoBottom()
+	m.setTestTranscriptContent(longContent)
+	m.transcriptGotoBottom()
 
-	if !m.viewport.AtBottom() {
+	if !m.transcriptAtBottom() {
 		t.Error("viewport should be at bottom after GotoBottom()")
 	}
 
 	// Scroll up - should not be at bottom
-	m.viewport.GotoTop()
+	m.transcriptGotoTop()
 
-	if m.viewport.AtBottom() {
+	if m.transcriptAtBottom() {
 		t.Error("viewport should not be at bottom after scrolling to top")
 	}
 }
@@ -575,9 +576,9 @@ func TestOverlayMouseWheelScrollsDocumentInsteadOfTranscript(t *testing.T) {
 	for _, overlay := range []OverlayKind{OverlayHelp, OverlayRuntimeStatus, OverlayGoalInspector} {
 		t.Run(overlayName(overlay), func(t *testing.T) {
 			m := newTestModel(t)
-			m.viewport.SetContent(strings.Repeat("transcript line\n", 80))
-			m.viewport.GotoTop()
-			transcriptOffset := m.viewport.YOffset()
+			m.setTestTranscriptContent(strings.Repeat("transcript line\n", 80))
+			m.transcriptGotoTop()
+			transcriptOffset := m.transcriptYOffset()
 
 			var modalOffset func() int
 			var modalDelta int
@@ -609,7 +610,7 @@ func TestOverlayMouseWheelScrollsDocumentInsteadOfTranscript(t *testing.T) {
 			if got := modalOffset(); got != modalDelta {
 				t.Fatalf("modal wheel moved %d rows, want %d", got, modalDelta)
 			}
-			if got := m.viewport.YOffset(); got != transcriptOffset {
+			if got := m.transcriptYOffset(); got != transcriptOffset {
 				t.Fatalf("hidden transcript moved from %d to %d", transcriptOffset, got)
 			}
 			if !m.anchorActive || m.userScrolledUp {
@@ -634,15 +635,15 @@ func TestOtherOverlaysSwallowMouseWheel(t *testing.T) {
 	for _, overlay := range overlays {
 		t.Run(overlayName(overlay), func(t *testing.T) {
 			m := newTestModel(t)
-			m.viewport.SetContent(strings.Repeat("transcript line\n", 80))
-			m.viewport.GotoTop()
+			m.setTestTranscriptContent(strings.Repeat("transcript line\n", 80))
+			m.transcriptGotoTop()
 			m.toolEntries = []ToolEntry{{Collapsed: true}}
 			m.toolHitRegions = []toolHitRegion{{ToolIndex: 0, Row: 0, EndCol: 12}}
 			m.overlay = overlay
 
 			updated, _ := m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown})
 			m = updated.(*Model)
-			if got := m.viewport.YOffset(); got != 0 {
+			if got := m.transcriptYOffset(); got != 0 {
 				t.Fatalf("overlay wheel moved hidden transcript to %d", got)
 			}
 		})
@@ -706,11 +707,11 @@ func BenchmarkScrollAnchor_Performance(b *testing.B) {
 	for i := 0; i < 100; i++ {
 		longContent += "line " + string(rune(i)) + "\n"
 	}
-	m.viewport.SetContent(longContent)
+	m.setTestTranscriptContent(longContent)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = m.viewport.AtBottom()
+		_ = m.transcriptAtBottom()
 	}
 }
 

@@ -116,6 +116,60 @@ func TestProviderMultiProfileCatalog(t *testing.T) {
 	}
 }
 
+func TestProviderCatalogRejectsIdentityThatSessionCannotPersist(t *testing.T) {
+	validRemote := ProviderProfile{
+		Type:      ProviderTypeOpenAICompatible,
+		BaseURL:   "https://api.example.com/v1",
+		Model:     "grok-test",
+		APIKeyEnv: "TEST_PROVIDER_API_KEY",
+	}
+	tests := []struct {
+		name        string
+		profileName string
+		model       string
+	}{
+		{name: "profile newline", profileName: "remote\nprod", model: validRemote.Model},
+		{name: "profile ansi", profileName: "remote\x1b[31m", model: validRemote.Model},
+		{name: "profile bidi", profileName: "remote\u202eprod", model: validRemote.Model},
+		{name: "profile noncanonical spaces", profileName: "remote  prod", model: validRemote.Model},
+		{name: "profile too long", profileName: strings.Repeat("p", MaxProviderProfileNameBytes+1), model: validRemote.Model},
+		{name: "model newline", profileName: "remote", model: "grok\nsecret"},
+		{name: "model ansi", profileName: "remote", model: "grok\x1b[31m"},
+		{name: "model bidi", profileName: "remote", model: "grok\u202esecret"},
+		{name: "model noncanonical spaces", profileName: "remote", model: "grok  test"},
+		{name: "model too long", profileName: "remote", model: strings.Repeat("m", MaxProviderModelNameBytes+1)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			profile := validRemote
+			profile.Model = test.model
+			cfg := defaults()
+			cfg.Privacy.LocalOnly = false
+			cfg.Provider = ProviderConfig{
+				Active: test.profileName,
+				Profiles: map[string]ProviderProfile{
+					test.profileName: profile,
+				},
+			}
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("configuration admitted provider identity that durable session state rejects")
+			}
+		})
+	}
+
+	cfg := defaults()
+	cfg.Privacy.LocalOnly = false
+	cfg.Provider = ProviderConfig{
+		Active: "remote\nprod",
+		Profiles: map[string]ProviderProfile{
+			"remote": validRemote,
+		},
+	}
+	if err := cfg.Validate(); err == nil || strings.Contains(err.Error(), "\nprod") {
+		t.Fatalf("unsafe active profile validation error = %v", err)
+	}
+}
+
 func TestProviderActiveMissingProfile(t *testing.T) {
 	cfg := defaults()
 	cfg.Privacy.LocalOnly = false
@@ -138,6 +192,96 @@ func TestProviderRemoteRejectedWhenLocalOnly(t *testing.T) {
 	err := cfg.Validate()
 	if err == nil || !strings.Contains(err.Error(), "local_only") {
 		t.Fatalf("expected local_only rejection, got %v", err)
+	}
+}
+
+func TestProviderBaseURLRejectsSensitiveComponentsWithoutEchoingThem(t *testing.T) {
+	baseProfile := ProviderProfile{
+		Type:      ProviderTypeOpenAICompatible,
+		Model:     "test-model",
+		APIKeyEnv: "TEST_PROVIDER_API_KEY",
+	}
+	tests := []struct {
+		name    string
+		baseURL string
+	}{
+		{name: "userinfo", baseURL: "https://user:super-secret@example.com/v1"},
+		{name: "query", baseURL: "https://example.com/v1?token=super-secret"},
+		{name: "empty query", baseURL: "https://example.com/v1?"},
+		{name: "fragment", baseURL: "https://example.com/v1#super-secret"},
+		{name: "empty fragment", baseURL: "https://example.com/v1#"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			profile := baseProfile
+			profile.BaseURL = test.baseURL
+			err := ValidateProviderProfile("remote", profile, false)
+			if err == nil || !strings.Contains(err.Error(), "must not contain") {
+				t.Fatalf("sensitive base_url error = %v", err)
+			}
+			if strings.Contains(err.Error(), "super-secret") || strings.Contains(err.Error(), test.baseURL) {
+				t.Fatalf("base_url leaked through validation error: %v", err)
+			}
+		})
+	}
+
+	profile := baseProfile
+	profile.BaseURL = "://super-secret"
+	if err := ValidateProviderProfile("remote", profile, false); err == nil {
+		t.Fatal("invalid base_url was accepted")
+	} else if strings.Contains(err.Error(), "super-secret") || strings.Contains(err.Error(), profile.BaseURL) {
+		t.Fatalf("invalid base_url leaked through validation error: %v", err)
+	}
+}
+
+func TestProviderBaseURLRequiresTLSForRemoteHosts(t *testing.T) {
+	baseProfile := ProviderProfile{
+		Type:      ProviderTypeOpenAICompatible,
+		Model:     "test-model",
+		APIKeyEnv: "TEST_PROVIDER_API_KEY",
+	}
+	for _, baseURL := range []string{
+		"http://api.example.test/v1",
+		"http://192.168.1.10:8000/v1",
+		"ftp://api.example.test/v1",
+	} {
+		profile := baseProfile
+		profile.BaseURL = baseURL
+		err := ValidateProviderProfile("remote", profile, false)
+		if err == nil {
+			t.Fatalf("unsafe base URL %q was accepted", baseURL)
+		}
+		if strings.Contains(err.Error(), baseURL) {
+			t.Fatalf("unsafe base URL leaked through validation error: %v", err)
+		}
+	}
+
+	for _, baseURL := range []string{
+		"http://localhost:8000/v1",
+		"http://127.0.0.1:8000/v1",
+		"http://[::1]:8000/v1",
+	} {
+		profile := baseProfile
+		profile.BaseURL = baseURL
+		if err := ValidateProviderProfile("local", profile, false); err != nil {
+			t.Fatalf("local cleartext base URL %q rejected: %v", baseURL, err)
+		}
+	}
+}
+
+func TestProviderLocalOnlyErrorDoesNotEchoBaseURL(t *testing.T) {
+	profile := ProviderProfile{
+		Type:      ProviderTypeOpenAICompatible,
+		BaseURL:   "https://example.com/private/super-secret",
+		Model:     "test-model",
+		APIKeyEnv: "TEST_PROVIDER_API_KEY",
+	}
+	err := ValidateProviderProfile("remote", profile, true)
+	if err == nil || !strings.Contains(err.Error(), "local_only") {
+		t.Fatalf("local_only error = %v", err)
+	}
+	if strings.Contains(err.Error(), "super-secret") || strings.Contains(err.Error(), profile.BaseURL) {
+		t.Fatalf("local_only error leaked base_url: %v", err)
 	}
 }
 

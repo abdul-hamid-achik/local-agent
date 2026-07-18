@@ -74,7 +74,7 @@ func run() int {
 		return 2
 	}
 	if options.version {
-		fmt.Println(version)
+		fmt.Println(effectiveVersion())
 		return 0
 	}
 	if len(options.arguments) > 0 {
@@ -328,7 +328,7 @@ func run() int {
 		servers = agentsDir.GetMCPServers()
 	}
 
-	registry := mcp.NewRegistryWithVersion(version, mcp.WithLocalOnly(cfg.Privacy.LocalOnly))
+	registry := mcp.NewRegistryWithVersion(effectiveVersion(), mcp.WithLocalOnly(cfg.Privacy.LocalOnly))
 	defer registry.Close()
 
 	agentContext := cfg.Ollama.NumCtx
@@ -500,7 +500,7 @@ func run() int {
 		}
 		if err := modelManager.Ping(); err != nil {
 			if modelManager.RemoteProvider() {
-				fmt.Fprintf(os.Stderr, "provider: %v\ncheck API key (tvault run --only %s) and base URL\n", err, provider.APIKeyEnv)
+				fmt.Fprintln(os.Stderr, ui.ProviderFailureCopy)
 			} else {
 				fmt.Fprintf(os.Stderr, "ollama: %v\ntry: ollama serve · ollama pull %s\n", err, modelName)
 			}
@@ -626,14 +626,35 @@ func run() int {
 		persistHeadlessState := func(saveCtx context.Context, executionCursor int64) error {
 			var stateJSON string
 			var encodeErr error
+			providerIdentity := ui.SessionProviderIdentity{
+				Profile: modelManager.ActiveProviderName(),
+				Remote:  modelManager.RemoteProvider(),
+			}
 			if goalRuntime != nil {
 				snapshot, snapshotErr := goalRuntime.Snapshot(saveCtx)
 				if snapshotErr != nil {
 					return snapshotErr
 				}
-				stateJSON, encodeErr = ui.EncodeHeadlessGoalSessionStateWithContextFloor(ag.Messages(), modelName, cfg.AgentProfile, modelPinned, executionCursor, snapshot, ag.ContextPromptFloor())
+				stateJSON, encodeErr = ui.EncodeHeadlessGoalSessionStateWithProvider(
+					ag.Messages(),
+					modelName,
+					cfg.AgentProfile,
+					modelPinned,
+					executionCursor,
+					snapshot,
+					ag.ContextPromptFloor(),
+					providerIdentity,
+				)
 			} else {
-				stateJSON, encodeErr = ui.EncodeHeadlessSessionStateWithContextFloor(ag.Messages(), modelName, cfg.AgentProfile, modelPinned, executionCursor, ag.ContextPromptFloor())
+				stateJSON, encodeErr = ui.EncodeHeadlessSessionStateWithProvider(
+					ag.Messages(),
+					modelName,
+					cfg.AgentProfile,
+					modelPinned,
+					executionCursor,
+					ag.ContextPromptFloor(),
+					providerIdentity,
+				)
 			}
 			if encodeErr != nil {
 				return encodeErr
@@ -817,10 +838,11 @@ func run() int {
 		}
 		p.Send(ui.StartupStatusMsg{ID: providerID, Label: providerLabel, Status: "connecting"})
 		if err := modelManager.Ping(); err != nil {
-			p.Send(ui.StartupStatusMsg{ID: providerID, Label: providerLabel, Status: "failed", Detail: err.Error()})
 			if modelManager.RemoteProvider() {
-				p.Send(ui.ErrorMsg{Msg: fmt.Sprintf("provider: %v\ncheck API key (tvault run --only %s) and base URL", err, provider.APIKeyEnv)})
+				p.Send(ui.StartupStatusMsg{ID: providerID, Label: providerLabel, Status: "failed", Detail: ui.ProviderFailureCopy})
+				p.Send(ui.ErrorMsg{Msg: ui.ProviderFailureCopy})
 			} else {
+				p.Send(ui.StartupStatusMsg{ID: providerID, Label: providerLabel, Status: "failed", Detail: err.Error()})
 				p.Send(ui.ErrorMsg{Msg: fmt.Sprintf("ollama: %v\ntry: ollama serve · ollama pull %s", err, modelName)})
 			}
 			// Continue — non-fatal for TUI, user can see the error.

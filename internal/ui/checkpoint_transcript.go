@@ -59,39 +59,3 @@ func checkpointTranscriptFromMessages(msgs []llm.Message) ([]ChatEntry, []ToolEn
 	}
 	return entries, tools
 }
-
-// rebuildToolCardsFromEntries gives session and checkpoint restore one
-// fail-closed card reconstruction path. Live receipts become interrupted;
-// partial semantic projections never inherit the legacy all-green fallback.
-func (m *Model) rebuildToolCardsFromEntries() {
-	m.toolsPending = 0
-	m.toolCardMgr = NewToolCardManager(m.isDark)
-	for index := range m.toolEntries {
-		entry := &m.toolEntries[index]
-		kind := toolCardKindForTool(entry.Name)
-		m.toolCardMgr.AddCardWithID(entry.ID, entry.Name, kind, entry.StartTime)
-		card := &m.toolCardMgr.Cards[len(m.toolCardMgr.Cards)-1]
-		card.Args = entry.Args
-		card.SetSummary(entry.Summary)
-		card.ResultLanguage = entry.ResultLanguage
-		card.Projection = entry.Projection.Normalize()
-		card.setExpertProgress(entry.ExpertProgress, max(1, m.chatPaneWidth()-6))
-		card.Result = entry.Result
-		card.Duration = entry.Duration
-		switch entry.Status {
-		case ToolStatusRunning:
-			settleInterruptedToolEntry(entry)
-			card.State = ToolCardError
-			card.Result = entry.Result
-			card.Projection = entry.Projection
-		case ToolStatusError:
-			card.State = toolCardStateFromProjection(entry.Projection)
-			if card.State == ToolCardSuccess {
-				card.State = ToolCardError
-			}
-		default:
-			card.State = toolCardStateFromProjection(entry.Projection)
-		}
-		card.State = entry.ExpertProgress.cardState(card.State)
-	}
-}

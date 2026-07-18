@@ -79,7 +79,7 @@ steps:
             contains: "Recovery blocked: write_file has a durable dispatch marker"
         timeoutMs: 3000
     - snapshot: compact_receipts
-    - press: "t"
+    - press: "ctrl+b"
     - wait:
         screen:
             contains: "package ui"

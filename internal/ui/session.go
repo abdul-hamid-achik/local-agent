@@ -84,6 +84,7 @@ type persistedToolEntry struct {
 	Args           string                   `json:"args,omitempty"`
 	Result         string                   `json:"result,omitempty"`
 	ResultLanguage string                   `json:"result_language,omitempty"`
+	OutputDetail   *OutputDetailDigest      `json:"output_detail,omitempty"`
 	IsError        bool                     `json:"is_error,omitempty"`
 	Status         ToolStatus               `json:"status"`
 	StartTime      time.Time                `json:"start_time"`
@@ -131,12 +132,19 @@ type persistedProviderRef struct {
 	Locality string `json:"locality"`
 }
 
+// SessionProviderIdentity is the bounded provider provenance attached to a
+// headless session snapshot. Remote is explicit so a session created through
+// an OpenAI-compatible adapter can never be restored under a same-named local
+// model (or vice versa) merely because the model strings happen to match.
+type SessionProviderIdentity struct {
+	Profile string
+	Remote  bool
+}
+
 const (
 	currentPersistedSessionVersion = 3
 	persistedProviderLocal         = "local"
 	persistedProviderRemote        = "remote"
-	maxPersistedProviderNameBytes  = 128
-	maxPersistedProviderModelBytes = 512
 )
 
 func sessionTitle(prompt string) string {
@@ -288,6 +296,13 @@ func persistToolEntries(entries []ToolEntry) []persistedToolEntry {
 			toolResult = ""
 			resultLanguage = ""
 		}
+		var outputDetail *OutputDetailDigest
+		if !isExpertConsultTool(entry.Name) &&
+			entry.OutputDetail.Digest != (OutputDetailDigest{}) &&
+			entry.OutputDetail.Digest.Valid() {
+			digest := entry.OutputDetail.Digest
+			outputDetail = &digest
+		}
 		result[i] = persistedToolEntry{
 			ID:             entry.ID,
 			Name:           entry.Name,
@@ -295,6 +310,7 @@ func persistToolEntries(entries []ToolEntry) []persistedToolEntry {
 			Args:           args,
 			Result:         toolResult,
 			ResultLanguage: resultLanguage,
+			OutputDetail:   outputDetail,
 			IsError:        entry.IsError,
 			Status:         entry.Status,
 			StartTime:      entry.StartTime,
@@ -321,6 +337,10 @@ func restoreToolEntries(entries []persistedToolEntry) []ToolEntry {
 			toolResult = ""
 			resultLanguage = ""
 		}
+		var outputDetail OutputDetailReceipt
+		if !isExpertConsultTool(entry.Name) && entry.OutputDetail != nil && entry.OutputDetail.Valid() {
+			outputDetail.Digest = *entry.OutputDetail
+		}
 		restored := ToolEntry{
 			ID:             entry.ID,
 			Name:           entry.Name,
@@ -328,6 +348,7 @@ func restoreToolEntries(entries []persistedToolEntry) []ToolEntry {
 			Args:           args,
 			Result:         toolResult,
 			ResultLanguage: resultLanguage,
+			OutputDetail:   outputDetail,
 			IsError:        entry.IsError,
 			Status:         entry.Status,
 			StartTime:      entry.StartTime,
@@ -524,17 +545,45 @@ func (m *Model) persistSessionState(ctx context.Context) error {
 	return nil
 }
 
-// EncodeHeadlessSessionState creates a version-1 snapshot that the interactive
+// EncodeHeadlessSessionState creates a current-version snapshot that the interactive
 // session picker can restore after a non-interactive run. Tool messages remain
 // in model history, while the visible transcript stays focused on user and
 // assistant text because headless mode has no persisted ToolCard state.
 func EncodeHeadlessSessionState(messages []llm.Message, model, agentProfile string, modelPinned bool, executionCursor int64) (string, error) {
-	return EncodeHeadlessSessionStateWithContextFloor(messages, model, agentProfile, modelPinned, executionCursor, agent.ContextPromptFloor{})
+	return EncodeHeadlessSessionStateWithContextFloor(
+		messages,
+		model,
+		agentProfile,
+		modelPinned,
+		executionCursor,
+		agent.ContextPromptFloor{},
+	)
 }
 
 // EncodeHeadlessSessionStateWithContextFloor preserves the exact bounded
 // provider-receipt floor when a headless session may later be resumed.
 func EncodeHeadlessSessionStateWithContextFloor(messages []llm.Message, model, agentProfile string, modelPinned bool, executionCursor int64, floor agent.ContextPromptFloor) (string, error) {
+	return EncodeHeadlessSessionStateWithProvider(
+		messages,
+		model,
+		agentProfile,
+		modelPinned,
+		executionCursor,
+		floor,
+		SessionProviderIdentity{Profile: config.ProviderTypeOllama},
+	)
+}
+
+// EncodeHeadlessSessionStateWithProvider preserves provider provenance for a
+// session created outside the interactive Model.
+func EncodeHeadlessSessionStateWithProvider(
+	messages []llm.Message,
+	model, agentProfile string,
+	modelPinned bool,
+	executionCursor int64,
+	floor agent.ContextPromptFloor,
+	provider SessionProviderIdentity,
+) (string, error) {
 	if executionCursor < 0 {
 		return "", fmt.Errorf("encode session state: execution cursor must not be negative")
 	}
@@ -554,6 +603,7 @@ func EncodeHeadlessSessionStateWithContextFloor(messages []llm.Message, model, a
 		Version:            currentPersistedSessionVersion,
 		Messages:           append([]llm.Message(nil), messages...),
 		Entries:            entries,
+		Provider:           persistedProviderReferenceForHeadless(provider, model),
 		Mode:               ModeNormal,
 		Model:              model,
 		ModelPinned:        modelPinned,
@@ -566,12 +616,43 @@ func EncodeHeadlessSessionStateWithContextFloor(messages []llm.Message, model, a
 // EncodeHeadlessGoalSessionState persists one headless turn together with the
 // exact Goal Runtime snapshot that admitted and settled it.
 func EncodeHeadlessGoalSessionState(messages []llm.Message, model, agentProfile string, modelPinned bool, executionCursor int64, snapshot goal.Snapshot) (string, error) {
-	return EncodeHeadlessGoalSessionStateWithContextFloor(messages, model, agentProfile, modelPinned, executionCursor, snapshot, agent.ContextPromptFloor{})
+	return EncodeHeadlessGoalSessionStateWithContextFloor(
+		messages,
+		model,
+		agentProfile,
+		modelPinned,
+		executionCursor,
+		snapshot,
+		agent.ContextPromptFloor{},
+	)
 }
 
 // EncodeHeadlessGoalSessionStateWithContextFloor persists a goal turn and its
 // exact bounded provider-receipt floor as one session CAS payload.
 func EncodeHeadlessGoalSessionStateWithContextFloor(messages []llm.Message, model, agentProfile string, modelPinned bool, executionCursor int64, snapshot goal.Snapshot, floor agent.ContextPromptFloor) (string, error) {
+	return EncodeHeadlessGoalSessionStateWithProvider(
+		messages,
+		model,
+		agentProfile,
+		modelPinned,
+		executionCursor,
+		snapshot,
+		floor,
+		SessionProviderIdentity{Profile: config.ProviderTypeOllama},
+	)
+}
+
+// EncodeHeadlessGoalSessionStateWithProvider is the provider-bound Goal
+// Runtime variant of EncodeHeadlessSessionStateWithProvider.
+func EncodeHeadlessGoalSessionStateWithProvider(
+	messages []llm.Message,
+	model, agentProfile string,
+	modelPinned bool,
+	executionCursor int64,
+	snapshot goal.Snapshot,
+	floor agent.ContextPromptFloor,
+	provider SessionProviderIdentity,
+) (string, error) {
 	if executionCursor < 0 {
 		return "", fmt.Errorf("encode goal session state: execution cursor must not be negative")
 	}
@@ -590,9 +671,22 @@ func EncodeHeadlessGoalSessionStateWithContextFloor(messages []llm.Message, mode
 	copy := snapshot
 	return marshalPersistedSessionState(persistedSessionState{
 		Version: currentPersistedSessionVersion, Messages: append([]llm.Message(nil), messages...), Entries: entries,
-		Mode: ModeAuto, Model: model, ModelPinned: modelPinned, AgentProfile: agentProfile,
+		Provider: persistedProviderReferenceForHeadless(provider, model),
+		Mode:     ModeAuto, Model: model, ModelPinned: modelPinned, AgentProfile: agentProfile,
 		ContextPromptFloor: floor, ExecutionCursor: executionCursor, Goal: &copy,
 	})
+}
+
+func persistedProviderReferenceForHeadless(identity SessionProviderIdentity, model string) *persistedProviderRef {
+	locality := persistedProviderLocal
+	if identity.Remote {
+		locality = persistedProviderRemote
+	}
+	return &persistedProviderRef{
+		Profile:  identity.Profile,
+		Model:    model,
+		Locality: locality,
+	}
 }
 
 func marshalPersistedSessionState(state persistedSessionState) (string, error) {
@@ -933,8 +1027,20 @@ func validatePersistedToolTranscriptState(state persistedSessionState) error {
 	for index, tool := range state.ToolEntries {
 		switch tool.Status {
 		case ToolStatusRunning, ToolStatusDone, ToolStatusError:
+		case ToolStatusCancelled:
+			if err := validatePersistedCancelledToolEntry(tool); err != nil {
+				return fmt.Errorf("session tool entry %d: %w", index, err)
+			}
 		default:
 			return fmt.Errorf("session tool entry %d has invalid status %d", index, tool.Status)
+		}
+		if tool.OutputDetail != nil {
+			if isExpertConsultTool(tool.Name) {
+				return fmt.Errorf("session expert tool entry %d contains output detail", index)
+			}
+			if !tool.OutputDetail.Valid() {
+				return fmt.Errorf("session tool entry %d has invalid output detail digest", index)
+			}
 		}
 	}
 	for index, entry := range state.Entries {
@@ -956,6 +1062,8 @@ func validatePersistedToolTranscriptState(state persistedSessionState) error {
 			expected = BlockSettled
 		case ToolStatusError:
 			expected = BlockFailed
+		case ToolStatusCancelled:
+			expected = BlockCancelled
 		}
 		if entry.Lifecycle != expected {
 			return fmt.Errorf(
@@ -965,6 +1073,37 @@ func validatePersistedToolTranscriptState(state persistedSessionState) error {
 				state.ToolEntries[entry.ToolIndex].Status,
 			)
 		}
+	}
+	return nil
+}
+
+func validatePersistedCancelledToolEntry(tool persistedToolEntry) error {
+	if tool.IsError {
+		return errors.New("cancelled tool cannot be marked as an error")
+	}
+	expectedResult := cancelledToolResult
+	if isExpertConsultTool(tool.Name) {
+		// Expert prose never crosses the persistence boundary, including the
+		// host-owned cancellation sentence used by the live card.
+		expectedResult = ""
+	}
+	if tool.Result != expectedResult {
+		return errors.New("cancelled tool has non-canonical result output")
+	}
+	if tool.ResultLanguage != "" {
+		return errors.New("cancelled tool cannot retain a result language")
+	}
+	if tool.OutputDetail != nil {
+		return errors.New("cancelled tool cannot retain output detail")
+	}
+	if len(tool.DiffLines) != 0 {
+		return errors.New("cancelled tool cannot retain diff output")
+	}
+	if tool.ExpertProgress != nil {
+		return errors.New("cancelled tool cannot retain expert progress")
+	}
+	if err := validateCanonicalCancelledToolProjection(tool.Projection); err != nil {
+		return err
 	}
 	return nil
 }
@@ -1021,6 +1160,8 @@ func legacyPersistedEntryLifecycle(state persistedSessionState, entry persistedC
 			return BlockLive
 		case ToolStatusError:
 			return BlockFailed
+		case ToolStatusCancelled:
+			return BlockCancelled
 		default:
 			return BlockSettled
 		}
@@ -1049,11 +1190,11 @@ func validatePersistedProviderReference(state persistedSessionState) error {
 	if ref == nil {
 		return nil
 	}
-	if ref.Profile == "" || len(ref.Profile) > maxPersistedProviderNameBytes ||
+	if ref.Profile == "" || len(ref.Profile) > config.MaxProviderProfileNameBytes ||
 		ref.Profile != sanitizeTerminalSingleLine(ref.Profile) {
 		return fmt.Errorf("saved provider profile is invalid")
 	}
-	if len(ref.Model) > maxPersistedProviderModelBytes ||
+	if len(ref.Model) > config.MaxProviderModelNameBytes ||
 		ref.Model != sanitizeTerminalSingleLine(ref.Model) {
 		return fmt.Errorf("saved provider model is invalid")
 	}
@@ -1070,14 +1211,19 @@ func (m *Model) validateRestoredProviderReference(state persistedSessionState) e
 	if err := validatePersistedProviderReference(state); err != nil {
 		return err
 	}
-	ref := state.Provider
-	if ref == nil {
-		return nil
-	}
 	actualProfile := m.activeProviderName()
 	actualLocality := persistedProviderLocal
 	if m.modelManager != nil && m.modelManager.RemoteProvider() {
 		actualLocality = persistedProviderRemote
+	}
+	ref := state.Provider
+	if ref == nil {
+		if actualLocality == persistedProviderRemote {
+			return fmt.Errorf(
+				"restore provider: legacy session has no provider identity; switch to a local provider before restoring it",
+			)
+		}
+		return nil
 	}
 	if actualProfile != ref.Profile || actualLocality != ref.Locality {
 		return fmt.Errorf(
@@ -1297,6 +1443,8 @@ func (m *Model) restoreSessionState(state persistedSessionState) error {
 		}
 		return fmt.Errorf("restore session skills: %w", err)
 	}
+	m.clearViewerModals(false)
+	m.outputDetails = NewOutputDetailStore()
 	m.loadedFile = state.LoadedFile
 	m.manualLoadedContext = state.ManualLoadedContext
 	m.agentProfile = state.AgentProfile
@@ -1343,6 +1491,7 @@ func (m *Model) restoreSessionState(state persistedSessionState) error {
 		}
 	}
 	m.toolEntries = restoreToolEntries(state.ToolEntries)
+	m.toolsPending = 0
 	m.sessionEvalTotal = state.SessionEvalTotal
 	m.sessionPromptTotal = state.SessionPromptTotal
 	m.sessionTurnCount = state.SessionTurnCount
@@ -1371,7 +1520,6 @@ func (m *Model) restoreSessionState(state persistedSessionState) error {
 	// never inherited from a durable transcript or a previously active session.
 	m.clearBobWorkspaceContext()
 	m.resetTurnDiagnostics()
-	m.rebuildToolCardsFromEntries()
 	return nil
 }
 

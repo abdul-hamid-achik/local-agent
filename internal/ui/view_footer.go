@@ -163,11 +163,14 @@ func (m *Model) renderStatusLine() string {
 			parts = append(parts, m.styles.FocusIndicator.Render("/")+" "+m.styles.StatusText.Render("commands"))
 		}
 		if paneW >= 100 {
-			parts = append(parts, m.styles.FocusIndicator.Render("?")+" "+m.styles.StatusText.Render("help"))
+			parts = append(parts,
+				m.styles.FocusIndicator.Render(m.keys.Help.Help().Key)+
+					" "+m.styles.StatusText.Render("help"),
+			)
 		}
 	}
 
-	separator := m.styles.StatusText.Render(" · ")
+	separator := m.styles.StatusText.Render(glyphSeparator(m.glyphProfile))
 	line := " " + strings.Join(parts, separator)
 	// Drop optional metadata from the right. Mode and operational failure are
 	// first, so they survive every supported width tier.
@@ -227,7 +230,7 @@ func (m *Model) renderGoalFooterStatus(summary GoalSummary, paneW int) string {
 		modeLabel = "[ " + modeLabel + " ]"
 	}
 	modePart := modeStyle.Render(modeLabel)
-	separator := m.styles.StatusText.Render(" · ")
+	separator := m.styles.StatusText.Render(glyphSeparator(m.glyphProfile))
 
 	type metadataPart struct {
 		view string
@@ -268,7 +271,9 @@ func (m *Model) renderGoalFooterStatus(summary GoalSummary, paneW int) string {
 		optional = append(optional, metadataPart{view: contextStatus})
 	}
 	if model := m.currentModelSurfaceLabel(false); model != "" && !m.currentModelIsNonLocal() {
-		optional = append(optional, metadataPart{view: m.styles.StatusText.Render(truncateDisplay(model, 20))})
+		optional = append(optional, metadataPart{view: m.styles.StatusText.Render(
+			truncateDisplayWithGlyphProfile(model, 20, m.glyphProfile),
+		)})
 	}
 	if !contextHigh && contextStatus != "" {
 		optional = append(optional, metadataPart{view: contextStatus})
@@ -288,12 +293,13 @@ func (m *Model) renderGoalFooterStatus(summary GoalSummary, paneW int) string {
 	}
 	if len(required) > 0 && available-fixedWidth-requiredWidth < minimumGoalWidth {
 		goalWidth := max(1, available-fixedWidth)
-		core := " " + strings.Join([]string{modePart, RenderGoalStatusLine(summary, goalWidth, m.isDark)}, separator)
+		core := " " + strings.Join([]string{modePart, RenderGoalStatusLine(summary, goalWidth, m.isDark, m.glyphProfile)}, separator)
 		safety := make([]string, 0, len(required))
 		for _, candidate := range required {
 			safety = append(safety, candidate.view)
 		}
-		return truncateDisplay(core, paneW) + "\n" + renderPackedStatusRows(paneW, safety, separator)
+		return truncateDisplayWithGlyphProfile(core, paneW, m.glyphProfile) +
+			"\n" + renderPackedStatusRows(paneW, safety, separator)
 	}
 
 	selected := make([]string, 0, len(required)+len(optional))
@@ -310,7 +316,7 @@ func (m *Model) renderGoalFooterStatus(summary GoalSummary, paneW int) string {
 		fixedWidth += cost
 	}
 	goalWidth := max(1, available-fixedWidth)
-	goalPart := RenderGoalStatusLine(summary, goalWidth, m.isDark)
+	goalPart := RenderGoalStatusLine(summary, goalWidth, m.isDark, m.glyphProfile)
 	parts := make([]string, 0, 2+len(selected))
 	if modePart != "" {
 		parts = append(parts, modePart)
@@ -318,7 +324,7 @@ func (m *Model) renderGoalFooterStatus(summary GoalSummary, paneW int) string {
 	parts = append(parts, goalPart)
 	parts = append(parts, selected...)
 	line := " " + strings.Join(parts, separator)
-	return truncateDisplay(line, paneW)
+	return truncateDisplayWithGlyphProfile(line, paneW, m.glyphProfile)
 }
 
 // renderPackedStatusRows keeps short host-authored status tokens intact while

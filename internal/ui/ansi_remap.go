@@ -25,6 +25,10 @@ type ansiRemapSegment struct {
 }
 
 func remapANSI16Line(line string, palette semanticPalette, width int) string {
+	return remapANSI16LineWithGlyphProfile(line, palette, width, GlyphUnicode)
+}
+
+func remapANSI16LineWithGlyphProfile(line string, palette semanticPalette, width int, profile GlyphProfile) string {
 	if width <= 0 {
 		return ""
 	}
@@ -40,7 +44,21 @@ func remapANSI16Line(line string, palette semanticPalette, width int) string {
 		segment.text = text
 		segments = append(segments, segment)
 	}
+	return renderANSI16SegmentsWithGlyphProfile(segments, palette, width, profile)
+}
 
+// renderANSI16Segments renders only adapter-sanitized plain text and
+// allowlisted style tokens. Unlike remapANSI16Line it never receives or parses
+// terminal escape bytes.
+func renderANSI16SegmentsWithGlyphProfile(
+	segments []ansiRemapSegment,
+	palette semanticPalette,
+	width int,
+	profile GlyphProfile,
+) string {
+	if width <= 0 {
+		return ""
+	}
 	totalWidth := 0
 	for _, segment := range segments {
 		totalWidth += lipgloss.Width(segment.text)
@@ -53,7 +71,10 @@ func remapANSI16Line(line string, palette semanticPalette, width int) string {
 		return b.String()
 	}
 
-	const ellipsis = "…"
+	ellipsis := "…"
+	if resolveGlyphProfile(profile) == GlyphASCII {
+		ellipsis = "~"
+	}
 	defaultStyle := ansiRemapStyle(false, ansiRemapDefaultFg, palette)
 	if width <= lipgloss.Width(ellipsis) {
 		return defaultStyle.Render(ellipsis)

@@ -27,12 +27,12 @@ func (m *Model) markFollowingLatest() {
 
 func (m *Model) resumeFollow() {
 	m.markFollowingLatest()
-	m.viewport.GotoBottom()
+	m.transcriptGotoBottom()
 }
 
 func (m *Model) gotoBottomIfFollowing() {
 	if m.anchorActive {
-		m.viewport.GotoBottom()
+		m.transcriptGotoBottom()
 	}
 }
 
@@ -41,7 +41,7 @@ func (m *Model) restoreFollowPosition(paused bool, yOffset int) {
 		m.resumeFollow()
 		return
 	}
-	m.viewport.SetYOffset(yOffset)
+	m.setTranscriptYOffset(yOffset)
 	m.pauseFollow()
 }
 
@@ -69,12 +69,11 @@ func (m *Model) transcriptOwnsScrollKey(msg tea.KeyPressMsg) bool {
 
 func (m *Model) updateTranscriptScroll(msg tea.KeyPressMsg) tea.Cmd {
 	m.cancelReceiptInspection(false)
-	beforeOffset := m.viewport.YOffset()
-	var cmd tea.Cmd
-	m.viewport, cmd = m.viewport.Update(msg)
-	if m.viewport.AtBottom() {
+	beforeOffset := m.transcriptYOffset()
+	cmd := m.updateTranscriptViewport(msg)
+	if m.transcriptAtBottom() {
 		m.markFollowingLatest()
-	} else if m.viewport.YOffset() != beforeOffset {
+	} else if m.transcriptYOffset() != beforeOffset {
 		m.pauseFollow()
 	}
 	return cmd

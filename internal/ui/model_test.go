@@ -9,11 +9,13 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/agent"
 	"github.com/abdul-hamid-achik/local-agent/internal/command"
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
+	"github.com/abdul-hamid-achik/local-agent/internal/ecosystem"
 	"github.com/abdul-hamid-achik/local-agent/internal/execution"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 )
@@ -27,57 +29,74 @@ func TestSubmitInput_EmptyReturnsNil(t *testing.T) {
 	}
 }
 
-func TestHelp_OnlyWhenIdleAndEmpty(t *testing.T) {
-	t.Run("idle_empty_opens_help", func(t *testing.T) {
+func TestHelpChordOnlyWhenIdleAndEmpty(t *testing.T) {
+	for _, shortcut := range []struct {
+		name string
+		key  tea.KeyPressMsg
+	}{
+		{name: "f1_primary", key: f1Key()},
+		{name: "ctrl_h_fallback", key: ctrlKey('h')},
+	} {
+		t.Run("idle_empty_opens_help_"+shortcut.name, func(t *testing.T) {
+			m := newTestModel(t)
+			m.state = StateIdle
+			// Input is empty.
+
+			updated, _ := m.Update(shortcut.key)
+			m = updated.(*Model)
+
+			if m.overlay != OverlayHelp {
+				t.Errorf("%s with idle+empty should open help, got overlay=%d", shortcut.name, m.overlay)
+			}
+		})
+
+		t.Run("idle_nonempty_no_help_"+shortcut.name, func(t *testing.T) {
+			m := newTestModel(t)
+			m.state = StateIdle
+			m.input.SetValue("hello")
+
+			updated, _ := m.Update(shortcut.key)
+			m = updated.(*Model)
+
+			if m.overlay == OverlayHelp {
+				t.Errorf("%s with non-empty input should not open help", shortcut.name)
+			}
+		})
+
+		t.Run("waiting_no_help_"+shortcut.name, func(t *testing.T) {
+			m := newTestModel(t)
+			m.state = StateWaiting
+
+			updated, _ := m.Update(shortcut.key)
+			m = updated.(*Model)
+
+			if m.overlay == OverlayHelp {
+				t.Errorf("%s in StateWaiting should not open help", shortcut.name)
+			}
+		})
+	}
+
+	t.Run("legacy_backspace_does_not_open_help", func(t *testing.T) {
 		m := newTestModel(t)
-		m.state = StateIdle
-		// Input is empty.
-
-		updated, _ := m.Update(charKey('?'))
+		updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
 		m = updated.(*Model)
-
-		if m.overlay != OverlayHelp {
-			t.Errorf("? with idle+empty should open help, got overlay=%d", m.overlay)
-		}
-	})
-
-	t.Run("idle_nonempty_no_help", func(t *testing.T) {
-		m := newTestModel(t)
-		m.state = StateIdle
-		m.input.SetValue("hello")
-
-		updated, _ := m.Update(charKey('?'))
-		m = updated.(*Model)
-
 		if m.overlay == OverlayHelp {
-			t.Error("? with non-empty input should not open help")
-		}
-	})
-
-	t.Run("waiting_no_help", func(t *testing.T) {
-		m := newTestModel(t)
-		m.state = StateWaiting
-
-		updated, _ := m.Update(charKey('?'))
-		m = updated.(*Model)
-
-		if m.overlay == OverlayHelp {
-			t.Error("? in StateWaiting should not open help")
+			t.Error("legacy Backspace alias opened help")
 		}
 	})
 }
 
-func TestToggleTools_OnlyWhenIdleAndEmpty(t *testing.T) {
+func TestToggleToolsChordOnlyWhenIdleAndEmpty(t *testing.T) {
 	t.Run("idle_empty_toggles", func(t *testing.T) {
 		m := newTestModel(t)
 		m.state = StateIdle
 		before := m.toolsCollapsed
 
-		updated, _ := m.Update(charKey('t'))
+		updated, _ := m.Update(ctrlKey('b'))
 		m = updated.(*Model)
 
 		if m.toolsCollapsed == before {
-			t.Error("'t' with idle+empty should toggle toolsCollapsed")
+			t.Error("Ctrl+B with idle+empty should toggle toolsCollapsed")
 		}
 	})
 
@@ -87,11 +106,11 @@ func TestToggleTools_OnlyWhenIdleAndEmpty(t *testing.T) {
 		m.input.SetValue("hello")
 		before := m.toolsCollapsed
 
-		updated, _ := m.Update(charKey('t'))
+		updated, _ := m.Update(ctrlKey('b'))
 		m = updated.(*Model)
 
 		if m.toolsCollapsed != before {
-			t.Error("'t' with non-empty input should not toggle tools")
+			t.Error("Ctrl+B with non-empty input should not toggle tools")
 		}
 	})
 }
@@ -302,15 +321,18 @@ func TestToolCallResultsCorrelateDuplicateNamesByID(t *testing.T) {
 	if m.toolEntries[0].Result != "first" || m.toolEntries[1].Result != "second" {
 		t.Fatalf("tool results were swapped: %#v", m.toolEntries)
 	}
-	if m.toolCardMgr.Cards[0].Result != "first" || m.toolCardMgr.Cards[1].Result != "second" {
-		t.Fatalf("tool cards were swapped: %#v", m.toolCardMgr.Cards)
+	first := testProjectedToolCard(t, m, 0)
+	second := testProjectedToolCard(t, m, 1)
+	if first.Result != "first" || second.Result != "second" ||
+		first.ID != "call-1" || second.ID != "call-2" {
+		t.Fatalf("tool projections were swapped: %#v %#v", first, second)
 	}
 }
 
 func TestAgentDoneMsg(t *testing.T) {
 	m := newTestModel(t)
 	setScrollableTranscript(m)
-	m.viewport.GotoTop()
+	m.transcriptGotoTop()
 	m.state = StateStreaming
 	m.pauseFollow()
 
@@ -322,6 +344,82 @@ func TestAgentDoneMsg(t *testing.T) {
 	}
 	if !m.userScrolledUp || m.anchorActive {
 		t.Error("completion should preserve an explicit paused-follow intent")
+	}
+}
+
+func TestAgentDoneCancellationSettlesRunningToolsAsCancelled(t *testing.T) {
+	m := newTestModel(t)
+	started := time.Date(2026, time.July, 18, 12, 0, 0, 0, time.UTC)
+	m.now = func() time.Time { return started.Add(3 * time.Second) }
+	m.state = StateStreaming
+	m.turnToolStartIndex = 0
+	m.toolsPending = 1
+	outputDetail, err := m.outputDetails.Admit("stale output")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.toolEntries = []ToolEntry{{
+		ID:                      "call-cancelled",
+		Name:                    "read_file",
+		Args:                    "path=README.md",
+		RawArgs:                 map[string]any{"path": "README.md"},
+		ResultLanguage:          "text",
+		OutputDetail:            outputDetail,
+		Status:                  ToolStatusRunning,
+		StartTime:               started,
+		BeforeContent:           "ephemeral",
+		BeforeSnapshotAvailable: true,
+		DiffLines:               []DiffLine{{Content: "+stale"}},
+		ExpertProgress:          &ExpertProgressState{},
+		Projection:              ecosystem.ProjectToolCall("read_file", nil),
+	}}
+	m.entries = append(m.entries, ChatEntry{Kind: "tool_group", ToolIndex: 0})
+
+	updated, _ := m.Update(AgentDoneMsg{Err: context.Canceled})
+	m = updated.(*Model)
+
+	entry := m.toolEntries[0]
+	if entry.Status != ToolStatusCancelled || entry.IsError {
+		t.Fatalf("cancelled tool lifecycle = status %d error=%t", entry.Status, entry.IsError)
+	}
+	if entry.Duration != 3*time.Second || entry.Result != "Cancelled by user before completion" {
+		t.Fatalf("cancelled tool receipt = duration %s result %q", entry.Duration, entry.Result)
+	}
+	if entry.RawArgs != nil || entry.BeforeContent != "" || entry.BeforeSnapshotAvailable {
+		t.Fatalf("cancelled tool retained ephemeral input: %#v", entry)
+	}
+	if entry.ResultLanguage != "" || entry.OutputDetail != (OutputDetailReceipt{}) ||
+		len(entry.DiffLines) != 0 || entry.ExpertProgress != nil {
+		t.Fatalf("cancelled tool retained incompatible output state: %#v", entry)
+	}
+	if m.outputDetails.Available(outputDetail.Ref) {
+		t.Fatal("cancelled tool retained its stale output capability")
+	}
+	projection := entry.Projection.Normalize()
+	if projection.Transport != ecosystem.TransportFailed ||
+		projection.Domain != ecosystem.DomainUnknown ||
+		projection.Evidence != ecosystem.EvidenceNone {
+		t.Fatalf("cancelled semantic projection = %#v", projection)
+	}
+	if m.toolsPending != 0 {
+		t.Fatalf("cancelled turn retained %d pending tools", m.toolsPending)
+	}
+	card := testProjectedToolCard(t, m, 0)
+	if card.Lifecycle != ToolLifecycleCancelled || card.State != ToolCardAttention {
+		t.Fatalf("cancelled render model = lifecycle %d state %d", card.Lifecycle, card.State)
+	}
+	if rendered := ansi.Strip(card.View(80)); !strings.Contains(rendered, "Cancelled before completion") ||
+		strings.Contains(rendered, "✗") {
+		t.Fatalf("cancelled receipt was painted as a failure:\n%s", rendered)
+	}
+
+	updated, _ = m.Update(ToolCallResultMsg{
+		ID: "call-cancelled", Name: "read_file", Result: "late success",
+	})
+	m = updated.(*Model)
+	if m.toolEntries[0].Status != ToolStatusCancelled ||
+		m.toolEntries[0].Result != "Cancelled by user before completion" {
+		t.Fatalf("late result overwrote cancelled receipt: %#v", m.toolEntries[0])
 	}
 }
 

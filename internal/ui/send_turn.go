@@ -112,7 +112,7 @@ func (m *Model) sendToAgentTurnPresentedWithAttachments(
 	m.beginContinuationTurn(turnID)
 	m.turnToolStartIndex = len(m.toolEntries)
 	m.recalcViewportHeight()
-	m.streamBuf.Reset()
+	m.resetTranscriptStreamText()
 
 	if visible {
 		m.entries = append(m.entries, ChatEntry{
@@ -122,7 +122,7 @@ func (m *Model) sendToAgentTurnPresentedWithAttachments(
 		})
 		m.turnEntryIndex = len(m.entries) - 1
 	}
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	m.gotoBottomIfFollowing()
 
 	var sessionErr error
@@ -147,7 +147,7 @@ func (m *Model) sendToAgentTurnPresentedWithAttachments(
 					Kind:    "error",
 					Content: fmt.Sprintf("Failed to switch routed model: %v", err),
 				})
-				m.viewport.SetContent(m.renderEntries())
+				m.refreshTranscript()
 				m.gotoBottomIfFollowing()
 			}
 		}
@@ -217,14 +217,11 @@ func (m *Model) sendToAgentTurnPresentedWithAttachments(
 	})
 
 	runAgent := newAgentSegmentCmd(
-		m.agent, p, ctx, turnID, turnID, options,
+		m.agent, p, m.outputDetails, ctx, turnID, turnID, options,
 	)
 
 	m.scramble.Reset()
-	if m.reducedMotion {
-		return runAgent
-	}
-	return tea.Batch(m.scramble.Tick(), runAgent)
+	return tea.Batch(m.startActivityCmd(), runAgent)
 }
 
 func (m *Model) failPresentedTurnBeforeRun(text, message string, visible bool) tea.Cmd {
@@ -243,7 +240,7 @@ func (m *Model) failPresentedTurnBeforeRun(text, message string, visible bool) t
 	m.syncInputHeight()
 	m.recalcViewportHeight()
 	m.invalidateEntryCache()
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	m.resumeFollow()
 	return nil
 }
@@ -327,7 +324,7 @@ func (m *Model) failTurnBeforeRun(text, message string) tea.Cmd {
 	_ = m.reflowInputViewport()
 	m.recalcViewportHeight()
 	m.invalidateEntryCache()
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	m.resumeFollow()
 	return nil
 }

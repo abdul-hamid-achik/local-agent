@@ -60,7 +60,7 @@ func (m *Model) captureApprovalTranscriptAnchor() approvalTranscriptAnchor {
 	return approvalTranscriptAnchor{
 		valid:   true,
 		paused:  m.followPaused(),
-		yOffset: m.viewport.YOffset(),
+		yOffset: m.transcriptYOffset(),
 	}
 }
 
@@ -83,6 +83,7 @@ func (m *Model) openApproval(request ToolApprovalMsg) error {
 	}
 
 	anchor := m.captureApprovalTranscriptAnchor()
+	m.clearViewerModals(false)
 	// Approval has the highest input authority. If a host request arrives while
 	// a composer-owned form is visible, cancel that transient form instead of
 	// retaining inaccessible state behind the decision surface.
@@ -250,8 +251,15 @@ func (m *Model) renderApproval() string {
 	// Keep the tool identity ahead of the mode so narrow terminals preserve the
 	// action being authorized. The authority mode remains explicit whenever the
 	// available width permits it.
-	titleText := "◇ Permission · " + toolName + " · " + mode
-	title := m.styles.ApprovalPrompt.Render(truncateDisplay(titleText, contentWidth))
+	permissionGlyph := "◇"
+	if m.glyphProfile == GlyphASCII {
+		permissionGlyph = "?"
+	}
+	separator := glyphSeparator(m.glyphProfile)
+	titleText := permissionGlyph + " Permission" + separator + toolName + separator + mode
+	title := m.styles.ApprovalPrompt.Render(
+		truncateDisplayWithGlyphProfile(titleText, contentWidth, m.glyphProfile),
+	)
 	sections := []string{title}
 	if saved := m.renderApprovalComposerReceipt(contentWidth); saved != "" {
 		sections = append(sections, saved)
@@ -262,7 +270,7 @@ func (m *Model) renderApproval() string {
 		detailAction = "preview"
 	}
 	hints := m.renderKeyHints(contentWidth,
-		keyHint{Key: "esc", Action: "cancel"},
+		keyHint{Key: "esc", Action: "cancel turn"},
 		keyHint{Key: "enter", Action: "select"},
 		keyHint{Key: "↑/↓/j/k", Action: "move"},
 		keyHint{Key: "d", Action: detailAction},
@@ -270,7 +278,7 @@ func (m *Model) renderApproval() string {
 	)
 	if contentWidth < 40 {
 		hints = m.renderKeyHints(contentWidth,
-			keyHint{Key: "esc", Action: "cancel"},
+			keyHint{Key: "esc", Action: "cancel turn"},
 			keyHint{Key: "enter", Action: "select"},
 		)
 		detailHints := []keyHint{{Key: "d", Action: detailAction}}
@@ -283,7 +291,12 @@ func (m *Model) renderApproval() string {
 		hints += "\n" + m.renderKeyHints(contentWidth, detailHints...)
 	}
 	sections = append(sections, hints)
-	return indentApprovalSurface(strings.Join(sections, "\n"), 2, m.chatPaneWidth())
+	return indentApprovalSurface(
+		strings.Join(sections, "\n"),
+		2,
+		m.chatPaneWidth(),
+		m.glyphProfile,
+	)
 }
 
 func (m *Model) renderApprovalComposerReceipt(width int) string {
@@ -309,7 +322,12 @@ func (m *Model) renderApprovalComposerReceipt(width int) string {
 			break
 		}
 	}
-	return m.styles.OverlayDim.Render(truncateDisplay(chosen, max(1, width)))
+	if m.glyphProfile == GlyphASCII {
+		chosen = strings.ReplaceAll(chosen, " · ", glyphSeparator(GlyphASCII))
+	}
+	return m.styles.OverlayDim.Render(
+		truncateDisplayWithGlyphProfile(chosen, max(1, width), m.glyphProfile),
+	)
 }
 
 func (m *Model) renderApprovalChoices(width int) string {
@@ -327,8 +345,15 @@ func (m *Model) renderApprovalChoices(width int) string {
 		if compact {
 			label = choice.CompactLabel
 		}
+		if m.glyphProfile == GlyphASCII {
+			label = strings.ReplaceAll(label, " · ", glyphSeparator(GlyphASCII))
+		}
 		if active {
-			indicator = m.styles.FocusIndicator.Render("› ")
+			indicatorGlyph := "›"
+			if m.glyphProfile == GlyphASCII {
+				indicatorGlyph = glyphSet(GlyphASCII).Right
+			}
+			indicator = m.styles.FocusIndicator.Render(indicatorGlyph + " ")
 		}
 		keyView := m.styles.FocusIndicator.Render(choice.Key)
 		labelView := m.styles.OverlayDim.Render(label)
@@ -338,7 +363,7 @@ func (m *Model) renderApprovalChoices(width int) string {
 	wide := make([]string, 0, len(approvalChoices)*2-1)
 	for index, choice := range approvalChoices {
 		if index > 0 {
-			wide = append(wide, m.styles.OverlayDim.Render(" · "))
+			wide = append(wide, m.styles.OverlayDim.Render(glyphSeparator(m.glyphProfile)))
 		}
 		wide = append(wide, choiceView(choice, index == selected, false))
 	}
@@ -351,18 +376,25 @@ func (m *Model) renderApprovalChoices(width int) string {
 		secondChoice := strings.TrimLeft(choiceView(approvalChoices[1], selected == 1, true), " ")
 		first := lipgloss.JoinHorizontal(lipgloss.Top,
 			firstChoice,
-			m.styles.OverlayDim.Render(" · "),
+			m.styles.OverlayDim.Render(glyphSeparator(m.glyphProfile)),
 			secondChoice,
 		)
 		second := choiceView(approvalChoices[2], selected == 2, true)
 		return lipgloss.JoinVertical(lipgloss.Left,
-			truncateDisplay(first, width), truncateDisplay(second, width),
+			truncateDisplayWithGlyphProfile(first, width, m.glyphProfile),
+			truncateDisplayWithGlyphProfile(second, width, m.glyphProfile),
 		)
 	}
 
 	rows := make([]string, 0, len(approvalChoices))
 	for index, choice := range approvalChoices {
-		rows = append(rows, truncateDisplay(choiceView(choice, index == selected, true), width))
+		rows = append(rows,
+			truncateDisplayWithGlyphProfile(
+				choiceView(choice, index == selected, true),
+				width,
+				m.glyphProfile,
+			),
+		)
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
@@ -391,12 +423,13 @@ func (m *Model) approvalBodyHeight() int {
 	}
 }
 
-func indentApprovalSurface(value string, indent, width int) string {
+func indentApprovalSurface(value string, indent, width int, profiles ...GlyphProfile) string {
+	profile := resolveGlyphProfile(profiles...)
 	prefix := strings.Repeat(" ", max(0, indent))
 	lineWidth := max(1, width-lipgloss.Width(prefix))
 	lines := strings.Split(value, "\n")
 	for index, line := range lines {
-		lines[index] = prefix + truncateDisplay(line, lineWidth)
+		lines[index] = prefix + truncateDisplayWithGlyphProfile(line, lineWidth, profile)
 	}
 	return strings.Join(lines, "\n")
 }
@@ -661,7 +694,7 @@ func (m *Model) handleToolApprovalRequest(msg ToolApprovalMsg) {
 			Content: "Approval preview unavailable: " + err.Error(),
 		})
 		m.invalidateRenderedCache()
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		m.gotoBottomIfFollowing()
 	}
 }

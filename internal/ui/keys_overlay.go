@@ -150,7 +150,7 @@ func (m *Model) handleOverlayKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	if m.overlay == OverlayProviderPicker && m.providerPickerState != nil {
 		if key.Matches(msg, m.keys.CompleteSelect) {
 			if item := m.providerPickerState.List.SelectedItem(); item != nil {
-				cmds = append(cmds, m.selectProviderProfile(item.(providerItem).descriptor.Name))
+				cmds = append(cmds, m.activateProviderItem(item.(providerItem)))
 			}
 		} else {
 			var cmd tea.Cmd

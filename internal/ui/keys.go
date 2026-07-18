@@ -65,12 +65,15 @@ func DefaultKeyMap() KeyMap {
 			key.WithHelp("ctrl+n", "new conversation"),
 		),
 		Help: key.NewBinding(
-			key.WithKeys("?"),
-			key.WithHelp("?", "show help (empty input)"),
+			// F1 is the unambiguous primary gesture. Ctrl+H remains an
+			// enhanced-terminal fallback, but legacy terminals may decode the
+			// same control byte as Backspace.
+			key.WithKeys("f1", "ctrl+h"),
+			key.WithHelp("f1", "show help (empty input)"),
 		),
 		ToggleTools: key.NewBinding(
-			key.WithKeys("t"),
-			key.WithHelp("t", "toggle all tools (empty input)"),
+			key.WithKeys("ctrl+b"),
+			key.WithHelp("ctrl+b", "toggle all tools (empty input)"),
 		),
 		PageUp: key.NewBinding(
 			key.WithKeys("pgup"),
@@ -143,8 +146,8 @@ func DefaultKeyMap() KeyMap {
 			key.WithHelp("↓", "next input (history active)"),
 		),
 		ToggleFocusedTool: key.NewBinding(
-			key.WithKeys("space"),
-			key.WithHelp("space", "toggle last tool (empty input)"),
+			key.WithKeys("ctrl+r"),
+			key.WithHelp("ctrl+r", "toggle last tool (empty input)"),
 		),
 		ToggleThinking: key.NewBinding(
 			key.WithKeys("ctrl+t"),

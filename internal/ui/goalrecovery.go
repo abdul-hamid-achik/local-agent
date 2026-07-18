@@ -124,6 +124,7 @@ type GoalRecoveryOptions struct {
 	Height        int
 	IsDark        bool
 	ReducedMotion bool
+	GlyphProfile  GlyphProfile
 	// Standalone adapts the already-designed evidence review for an ordinary
 	// goal-less session. Persistence and authority remain parent-owned.
 	Standalone bool
@@ -217,6 +218,7 @@ type GoalRecovery struct {
 	height        int
 	isDark        bool
 	reducedMotion bool
+	glyphProfile  GlyphProfile
 	standalone    bool
 	styles        Styles
 	cache         goalRecoveryRenderCache
@@ -232,9 +234,11 @@ func NewGoalRecovery(items []GoalRecoveryItem, options GoalRecoveryOptions) *Goa
 		options.Height = 24
 	}
 
-	delegate := newPickerDelegate(options.IsDark, false)
+	profile := resolveGlyphProfile(options.GlyphProfile)
+	delegate := newPickerDelegate(options.IsDark, false, profile)
 	itemList := list.New(nil, delegate, 1, 1)
 	configurePickerList(&itemList, options.IsDark)
+	configurePickerListGlyphProfile(&itemList, profile)
 	itemList.SetShowTitle(false)
 	itemList.SetShowStatusBar(false)
 	itemList.SetShowHelp(false)
@@ -265,6 +269,7 @@ func NewGoalRecovery(items []GoalRecoveryItem, options GoalRecoveryOptions) *Goa
 		height:           max(minTerminalHeight, options.Height),
 		isDark:           options.IsDark,
 		reducedMotion:    options.ReducedMotion,
+		glyphProfile:     profile,
 		standalone:       options.Standalone,
 		styles:           NewStyles(options.IsDark),
 	}
@@ -480,6 +485,7 @@ func (r *GoalRecovery) applyStyles() {
 	r.reference.SetStyles(inputStyles)
 	r.summary.SetStyles(goalTextareaStyles(r.isDark, r.reducedMotion))
 	configurePickerList(&r.itemList, r.isDark)
+	configurePickerListGlyphProfile(&r.itemList, r.glyphProfile)
 	palette := outputSemanticPalette(r.isDark)
 	r.detail.Style = lipgloss.NewStyle().Foreground(palette.Muted)
 }
@@ -487,7 +493,7 @@ func (r *GoalRecovery) applyStyles() {
 func (r *GoalRecovery) resizeComponents() {
 	width := r.contentWidth()
 	bubbleWidth := max(1, width-2)
-	delegate := newPickerDelegate(r.isDark, r.compact())
+	delegate := newPickerDelegate(r.isDark, r.compact(), r.glyphProfile)
 	r.itemList.SetDelegate(delegate)
 	listHeight := 1
 	if !r.compact() {
@@ -1242,16 +1248,19 @@ func (r *GoalRecovery) renderSourceChoice() string {
 func renderGoalRecoveryChoices[T ~string](r *GoalRecovery, choices []goalRecoveryChoice[T], selected int) string {
 	width := r.contentWidth()
 	selected = min(max(0, selected), len(choices)-1)
+	glyphs := glyphSet(r.glyphProfile)
 	if r.compact() {
 		choice := choices[selected]
 		left, right := "", ""
 		if selected > 0 {
-			left = "← "
+			left = glyphs.Left + " "
 		}
 		if selected < len(choices)-1 {
-			right = " →"
+			right = " " + glyphs.Right
 		}
-		return r.styles.FocusIndicator.Render(truncateDisplay(left+"▸ "+choice.Label+right, width)) + "\n" +
+		return r.styles.FocusIndicator.Render(truncateDisplayWithGlyphProfile(
+			left+glyphs.Collapsed+" "+choice.Label+right, width, r.glyphProfile,
+		)) + "\n" +
 			r.styles.OverlayDim.Render(truncateDisplay(choice.Description, width))
 	}
 
@@ -1260,7 +1269,7 @@ func renderGoalRecoveryChoices[T ~string](r *GoalRecovery, choices []goalRecover
 		marker := "  "
 		style := r.styles.OverlayDim
 		if index == selected {
-			marker = "▸ "
+			marker = glyphs.Collapsed + " "
 			style = r.styles.FocusIndicator
 		}
 		lines = append(lines, style.Render(truncateDisplay(marker+choice.Label, width)))
@@ -1316,11 +1325,12 @@ func (r *GoalRecovery) renderConfirmationActions(width int) string {
 	}
 	labels := []string{"Back", "Record evidence"}
 	parts := make([]string, 0, len(labels))
+	glyphs := glyphSet(r.glyphProfile)
 	for index, label := range labels {
 		marker := "  "
 		style := r.styles.OverlayDim
 		if index == r.confirmationIndex {
-			marker = "▸ "
+			marker = glyphs.Collapsed + " "
 			style = r.styles.FocusIndicator
 			if index == 1 {
 				style = r.errorStyle()
@@ -1367,6 +1377,10 @@ type goalRecoveryHint struct {
 }
 
 func (r *GoalRecovery) renderFooter(width int) string {
+	horizontalKeys := "←/→"
+	if r.glyphProfile == GlyphASCII {
+		horizontalKeys = "left/right"
+	}
 	if r.busyText != "" {
 		action := "back"
 		if r.stage == GoalRecoveryStageList {
@@ -1398,13 +1412,13 @@ func (r *GoalRecovery) renderFooter(width int) string {
 		case GoalRecoveryStageConfirmation:
 			return r.renderHints(width,
 				goalRecoveryHint{key: "esc", action: "back"},
-				goalRecoveryHint{key: "←/→", action: "choose"},
+				goalRecoveryHint{key: horizontalKeys, action: "choose"},
 				goalRecoveryHint{key: "enter", action: "select"},
 			)
 		default:
 			return r.renderHints(width,
 				goalRecoveryHint{key: "esc", action: "back"},
-				goalRecoveryHint{key: "←/→", action: "choose"},
+				goalRecoveryHint{key: horizontalKeys, action: "choose"},
 				goalRecoveryHint{key: "enter", action: "next"},
 			)
 		}
@@ -1432,7 +1446,7 @@ func (r *GoalRecovery) renderFooter(width int) string {
 	case GoalRecoveryStageConfirmation:
 		return r.renderHints(width,
 			goalRecoveryHint{key: "esc", action: "back"},
-			goalRecoveryHint{key: "←/→", action: "choose"},
+			goalRecoveryHint{key: horizontalKeys, action: "choose"},
 			goalRecoveryHint{key: "enter", action: "select"},
 			goalRecoveryHint{key: "j/k", action: "details"},
 		)
@@ -1476,7 +1490,7 @@ func (r *GoalRecovery) renderFrame(content, footer string) string {
 		content = strings.TrimRight(content, "\n") + "\n" + footer
 	}
 	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
+		Border(borderForGlyphProfile(r.glyphProfile)).
 		BorderForeground(r.styles.OverlayBorder).
 		Padding(0, 1).
 		Width(r.contentWidth() + 2).

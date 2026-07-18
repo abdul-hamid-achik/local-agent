@@ -229,9 +229,9 @@ func newOllamaModelPickerState(models []OllamaModelDescriptor, currentModel stri
 
 	compact := compactModelPicker(terminalWidth, terminalHeight)
 	// Model identity and decision state belong to the navigable row; the
-	// selected-detail strip below owns metadata. A single-line delegate avoids
-	// repeating size/capability/context for every visible item and keeps the
-	// inventory scannable at both regular and compact sizes.
+	// selected-detail strip below owns metadata. Model rows intentionally stay
+	// single-line at every terminal size so metadata is not repeated and mixed
+	// local/cloud inventories remain simultaneously scannable.
 	delegate := newPickerDelegate(isDark, true)
 	pickerW := pickerListWidth(terminalWidth, modelPickerMaximumWidth)
 	pickerH := modelPickerListHeight(terminalHeight, len(items), delegate.Height())
@@ -460,6 +460,7 @@ func (m *Model) openModelPicker() {
 	}
 	if len(m.ollamaModels) > 0 {
 		m.modelPickerState = newOllamaModelPickerState(m.ollamaModels, m.model, m.width, m.height, m.isDark, m.reducedMotion)
+		m.restylePickerOverlays()
 		if m.ollamaVersion != "" {
 			m.modelPickerState.List.Title = ollamaModelPickerTitle(m.ollamaVersion)
 		}
@@ -469,6 +470,7 @@ func (m *Model) openModelPicker() {
 	}
 	if m.ollamaInventoryAttempted {
 		m.modelPickerState = newOllamaModelPickerState(nil, m.model, m.width, m.height, m.isDark, m.reducedMotion)
+		m.restylePickerOverlays()
 		if m.ollamaVersion != "" {
 			m.modelPickerState.List.Title = ollamaModelPickerTitle(m.ollamaVersion)
 		}
@@ -499,6 +501,7 @@ func (m *Model) openModelPicker() {
 	}
 
 	m.modelPickerState = newModelPickerState(models, m.model, m.width, m.height, m.isDark, m.reducedMotion)
+	m.restylePickerOverlays()
 	m.overlay = OverlayModelPicker
 	m.input.Blur()
 }
@@ -513,7 +516,7 @@ func (m *Model) selectModel(name string) {
 			}
 			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: reason})
 			m.closeModelPicker()
-			m.viewport.SetContent(m.renderEntries())
+			m.refreshTranscript()
 			m.resumeFollow()
 			return
 		}
@@ -524,7 +527,7 @@ func (m *Model) selectModel(name string) {
 	} else if err := config.CheckModelMemorySafe(name); err != nil {
 		m.entries = append(m.entries, ChatEntry{Kind: "error", Content: err.Error()})
 		m.closeModelPicker()
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		m.resumeFollow()
 		return
 	}
@@ -546,7 +549,7 @@ func (m *Model) switchSelectedModel(name string) bool {
 		}
 		m.cloudConsentState = nil
 		m.closeModelPicker()
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		m.resumeFollow()
 		return true
 	}
@@ -586,7 +589,7 @@ func (m *Model) switchSelectedModel(name string) bool {
 	}
 	m.cloudConsentState = nil
 	m.closeModelPicker()
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	m.resumeFollow()
 	return true
 }

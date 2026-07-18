@@ -7,6 +7,8 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Provider types. Ollama remains the default local runtime.
@@ -14,6 +16,12 @@ const (
 	ProviderTypeOllama           = "ollama"
 	ProviderTypeOpenAICompatible = "openai_compatible"
 	ProviderTypeXAI              = "xai"
+
+	// MaxProviderProfileNameBytes and MaxProviderModelNameBytes are the shared
+	// configuration/session identity bounds. Configuration must reject values
+	// that durable session state could not later encode.
+	MaxProviderProfileNameBytes = 128
+	MaxProviderModelNameBytes   = 512
 )
 
 // ProviderConfig selects the chat inference adapter. Secrets are never stored
@@ -28,11 +36,11 @@ const (
 //
 //  2. Multi-profile (named catalog + active):
 //     provider:
-//       active: xai
-//       profiles:
-//         ollama: { type: ollama }
-//         xai:    { type: xai, model: grok-4.5 }
-//         openai: { type: openai_compatible, base_url: https://api.openai.com/v1, model: gpt-4.1, api_key_env: OPENAI_API_KEY }
+//     active: xai
+//     profiles:
+//     ollama: { type: ollama }
+//     xai:    { type: xai, model: grok-4.5 }
+//     openai: { type: openai_compatible, base_url: https://api.openai.com/v1, model: gpt-4.1, api_key_env: OPENAI_API_KEY }
 type ProviderConfig struct {
 	// Active is the profile name in use when Profiles is non-empty.
 	// LOCAL_AGENT_PROVIDER overrides this and also accepts a type for the flat form.
@@ -325,6 +333,11 @@ func (p ProviderProfile) ResolveAPIKey() (string, error) {
 }
 
 func (c *Config) validateProvider() error {
+	if c.Provider.Active != "" {
+		if err := validateProviderIdentityField(c.Provider.Active, MaxProviderProfileNameBytes, false); err != nil {
+			return fmt.Errorf("config: provider.active: %w", err)
+		}
+	}
 	if c.Provider.HasProfiles() {
 		if len(c.Provider.Profiles) == 0 {
 			return fmt.Errorf("config: provider.profiles is empty")
@@ -372,6 +385,15 @@ func validateProviderProfile(name string, profile ProviderProfile, localOnly boo
 	if label == "" {
 		label = profile.Type
 	}
+	if err := validateProviderIdentityField(label, MaxProviderProfileNameBytes, false); err != nil {
+		return fmt.Errorf("config: provider profile name: %w", err)
+	}
+	if err := validateProviderIdentityField(profile.Model, MaxProviderModelNameBytes, true); err != nil {
+		return fmt.Errorf("config: provider profile %q model: %w", label, err)
+	}
+	if profile.ContextSize < 0 {
+		return fmt.Errorf("config: provider profile %q context_size cannot be negative", label)
+	}
 	switch NormalizedProviderType(profile.Type) {
 	case ProviderTypeOllama:
 		return nil
@@ -379,12 +401,11 @@ func validateProviderProfile(name string, profile ProviderProfile, localOnly boo
 		// ok
 	default:
 		return fmt.Errorf(
-			"config: provider profile %q type must be %q, %q, or %q, got %q",
+			"config: provider profile %q type must be %q, %q, or %q",
 			label,
 			ProviderTypeOllama,
 			ProviderTypeOpenAICompatible,
 			ProviderTypeXAI,
-			profile.Type,
 		)
 	}
 	if strings.TrimSpace(profile.BaseURL) == "" {
@@ -396,14 +417,31 @@ func validateProviderProfile(name string, profile ProviderProfile, localOnly boo
 	}
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme == "" || u.Host == "" {
-		return fmt.Errorf("config: provider profile %q has invalid base_url %q", label, profile.BaseURL)
+		return fmt.Errorf("config: provider profile %q has an invalid base_url", label)
+	}
+	if u.User != nil || u.RawQuery != "" || u.ForceQuery || strings.Contains(raw, "#") {
+		return fmt.Errorf(
+			"config: provider profile %q base_url must not contain user information, a query, or a fragment",
+			label,
+		)
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return fmt.Errorf(
+			"config: provider profile %q base_url must use http or https",
+			label,
+		)
+	}
+	if scheme == "http" && !isLocalHost(u.Hostname()) {
+		return fmt.Errorf(
+			"config: provider profile %q requires https for a non-local base_url",
+			label,
+		)
 	}
 	if localOnly && !isLocalHost(u.Hostname()) {
 		return fmt.Errorf(
-			"config: privacy.local_only rejects remote provider profile %q (%s); set privacy.local_only: false or LOCAL_AGENT_LOCAL_ONLY=false, and launch with tvault run --only %s",
+			"config: privacy.local_only rejects remote provider profile %q; set privacy.local_only: false or LOCAL_AGENT_LOCAL_ONLY=false, then launch with the configured credential environment",
 			label,
-			profile.BaseURL,
-			profile.APIKeyEnv,
 		)
 	}
 	if strings.TrimSpace(profile.Model) == "" {
@@ -415,8 +453,29 @@ func validateProviderProfile(name string, profile ProviderProfile, localOnly boo
 	if err := validateEnvVarName(profile.APIKeyEnv); err != nil {
 		return fmt.Errorf("config: provider profile %q api_key_env: %w", label, err)
 	}
-	if profile.ContextSize < 0 {
-		return fmt.Errorf("config: provider profile %q context_size cannot be negative", label)
+	return nil
+}
+
+func validateProviderIdentityField(value string, limit int, allowEmpty bool) error {
+	if value == "" && allowEmpty {
+		return nil
+	}
+	if strings.TrimSpace(value) == "" {
+		return errors.New("is empty")
+	}
+	if !utf8.ValidString(value) {
+		return errors.New("is not valid UTF-8")
+	}
+	if len(value) > limit {
+		return fmt.Errorf("exceeds %d bytes", limit)
+	}
+	if strings.TrimSpace(value) != value || strings.Join(strings.Fields(value), " ") != value {
+		return errors.New("contains non-canonical whitespace")
+	}
+	for _, character := range value {
+		if unicode.IsControl(character) || unicode.In(character, unicode.Bidi_Control) {
+			return errors.New("contains control characters")
+		}
 	}
 	return nil
 }
@@ -432,10 +491,10 @@ func validateEnvVarName(name string) error {
 			continue
 		case r >= '0' && r <= '9':
 			if i == 0 {
-				return fmt.Errorf("%q must not start with a digit", name)
+				return errors.New("must not start with a digit")
 			}
 		default:
-			return fmt.Errorf("%q is not a valid environment variable name", name)
+			return errors.New("contains an invalid environment variable character")
 		}
 	}
 	return nil

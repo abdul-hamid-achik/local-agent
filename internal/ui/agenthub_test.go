@@ -2,8 +2,10 @@ package ui
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
@@ -11,6 +13,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/command"
+	"github.com/abdul-hamid-achik/local-agent/internal/ecosystem"
 	"github.com/abdul-hamid-achik/local-agent/internal/expertselector"
 	"github.com/abdul-hamid-achik/local-agent/internal/expertteam"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
@@ -36,7 +39,7 @@ func installAgentHubFixture(t *testing.T, m *Model) (BlockID, BlockID) {
 	m.entries = []ChatEntry{liveEntry, settledEntry}
 	m.toolEntries = []ToolEntry{liveTool, settledTool}
 	m.invalidateEntryCache()
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	return liveEntry.BlockID, settledEntry.BlockID
 }
 
@@ -112,6 +115,83 @@ func TestAgentHubEmptyAndResponsiveSurfacesFit(t *testing.T) {
 			assertRenderedLinesFit(t, view, size.width)
 			assertRenderedHeightFits(t, view, size.height)
 		})
+	}
+}
+
+func TestAgentHubConsultationIdentitySurvivesBoundedHistoryShift(t *testing.T) {
+	olderEntry, olderTool := agentGroupFixture(
+		0,
+		BlockSettled,
+		ToolStatusDone,
+		settledAgentProgress("older"),
+	)
+	targetEntry, targetTool := agentGroupFixture(
+		1,
+		BlockSettled,
+		ToolStatusDone,
+		settledAgentProgress("target"),
+	)
+	surface, err := projectAgentSurface(
+		[]ChatEntry{olderEntry, targetEntry},
+		[]ToolEntry{olderTool, targetTool},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := agentHubItems(surface)[1].(agentHubItem).Title()
+
+	// Model the same surviving group after older bounded history has left the
+	// surface and a newer group has arrived. Its list position changes, but its
+	// durable block identity does not.
+	newerEntry, newerTool := agentGroupFixture(
+		2,
+		BlockSettled,
+		ToolStatusDone,
+		settledAgentProgress("newer"),
+	)
+	shiftedTargetEntry := targetEntry
+	shiftedTargetEntry.ToolIndex = 0
+	newerEntry.ToolIndex = 1
+	newerSurface, err := projectAgentSurface(
+		[]ChatEntry{shiftedTargetEntry, newerEntry},
+		[]ToolEntry{targetTool, newerTool},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newerSurface.OmittedGroups = 1
+	after := agentHubItems(newerSurface)[0].(agentHubItem).Title()
+	if before != after {
+		t.Fatalf("stable consultation label changed after history shift:\nbefore %q\nafter  %q", before, after)
+	}
+	if !strings.Contains(before, agentGroupDisplayID(targetEntry.BlockID)) {
+		t.Fatalf("consultation title lacks stable group handle: %q", before)
+	}
+}
+
+func TestAgentHubHonorsNoColorInListAndViewer(t *testing.T) {
+	previous := noColor
+	noColor = true
+	t.Cleanup(func() { noColor = previous })
+
+	m := newTestModel(t)
+	installAgentHubFixture(t, m)
+	m.openAgentHub()
+	hub := m.renderAgentHub()
+	if hasANSIColor(hub) {
+		t.Fatalf("NO_COLOR Agent Hub emitted ANSI color sequences: %q", hub)
+	}
+	if !m.agentHubState.openSelectedViewer() {
+		t.Fatal("could not open Agent Viewer")
+	}
+	viewer := m.renderAgentHub()
+	if hasANSIColor(viewer) {
+		t.Fatalf("NO_COLOR Agent Viewer emitted ANSI color sequences: %q", viewer)
+	}
+	for _, want := range []string{"Agents", "Consultation", "Agent Viewer"} {
+		if !strings.Contains(ansi.Strip(hub+"\n"+viewer), want) {
+			t.Fatalf("NO_COLOR agent surfaces lost %q", want)
+		}
 	}
 }
 
@@ -222,6 +302,139 @@ func TestAgentHubViewerTracksStableGroupAcrossLifecycleRefresh(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatalf("settled Viewer missing %q:\n%s", want, body)
 		}
+	}
+}
+
+func TestAgentHubUnreadIsRevisionDerivedAndViewerOwned(t *testing.T) {
+	entry, tool := agentGroupFixture(0, BlockLive, ToolStatusRunning, liveAgentProgress("critic"))
+	live, err := projectAgentSurface([]ChatEntry{entry}, []ToolEntry{tool})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := newAgentHubState(live, false, 72, 24, true, false)
+	if unread := agentGroupUnread(state.Surface.Groups[0]); unread != 0 {
+		t.Fatalf("initial projection was incorrectly unread: %d", unread)
+	}
+
+	entry.Lifecycle = BlockSettled
+	entry.Revision++
+	tool.Status = ToolStatusDone
+	tool.ExpertProgress = &ExpertProgressState{
+		Sequence: 5, Strategy: expertselector.StrategySwarm, Total: 2, Parallelism: 1,
+		Completed: 1, Failed: 1,
+		Experts: []ExpertProgressItem{
+			{
+				Index: 0, Expert: "critic", Model: "safe-model",
+				Location: llm.OllamaModelLocationCloud,
+				Phase:    expertteam.ProgressCompleted, Status: expertteam.ExpertCompleted,
+			},
+			{
+				Index: 1, Expert: "verifier", Model: "safe-model",
+				Location: llm.OllamaModelLocationRemote,
+				Phase:    expertteam.ProgressFailed, Status: expertteam.ExpertFailed,
+				FailureCode: "timed_out",
+			},
+		},
+	}
+	settled, err := projectAgentSurface([]ChatEntry{entry}, []ToolEntry{tool})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = state.SetProjection(settled, false)
+	group := state.Surface.Groups[0]
+	if got := []int{group.Nodes[0].Unread, group.Nodes[1].Unread}; !reflect.DeepEqual(got, []int{1, 2}) {
+		t.Fatalf("revision-derived unread = %v, want [1 2]", got)
+	}
+	if summary := agentGroupSummary(group); !strings.Contains(summary, "3 unread") {
+		t.Fatalf("Hub summary omitted unread revisions: %q", summary)
+	}
+
+	if !state.openSelectedViewer() {
+		t.Fatal("could not open updated group")
+	}
+	if unread := agentGroupUnread(state.Surface.Groups[0]); unread != 0 {
+		t.Fatalf("Viewer did not acknowledge visible revisions: %d", unread)
+	}
+	body := ansi.Strip(state.Viewer.View())
+	for _, want := range []string{
+		"revision 2",
+		"consultation complete",
+		"consultation failed",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("Viewer omitted %q:\n%s", want, body)
+		}
+	}
+	_ = state.SetProjection(settled, false)
+	if unread := agentGroupUnread(state.Surface.Groups[0]); unread != 0 {
+		t.Fatalf("visible unchanged projection became unread: %d", unread)
+	}
+
+	// A stale replay cannot lower a node revision and masquerade as new work.
+	_ = state.SetProjection(live, false)
+	if !state.Unavailable || len(state.Surface.Groups) != 0 {
+		t.Fatalf("revision regression was retained: %#v", state.Surface)
+	}
+}
+
+func TestAgentViewerRendersOnlyValidatedReportArtifactReferences(t *testing.T) {
+	artifact := ecosystem.ArtifactDigest{
+		Kind:          ecosystem.ArtifactDigestFileCheapStash,
+		ID:            "expert-report",
+		URI:           "fcheap://stash/expert-report",
+		SchemaVersion: "1.0",
+		ContentSHA256: strings.Repeat("b", 64),
+		FileCount:     1,
+		TotalSize:     128,
+		CreatedAt:     "2026-07-18T12:00:00Z",
+	}
+	groupID := BlockID("report_group")
+	group := AgentGroupProjection{
+		ID:                groupID,
+		TurnID:            "report_turn",
+		Revision:          4,
+		Lifecycle:         BlockSettled,
+		Elapsed:           2 * time.Second,
+		Strategy:          expertselector.StrategyTeam,
+		Total:             1,
+		Completed:         1,
+		ProgressAvailable: true,
+		ToolIndex:         0,
+		Nodes: []WorkNode{{
+			ID:        agentNodeID(groupID, 0),
+			ParentID:  groupID,
+			Index:     0,
+			Kind:      WorkNodeKindExpert,
+			Label:     "critic",
+			Model:     "safe-model",
+			Location:  WorkNodeLocationLocal,
+			Status:    WorkNodeCompleted,
+			Activity:  WorkNodeActivityCompleted,
+			Revision:  3,
+			ReportRef: &artifact,
+		}},
+	}
+	surface := AgentSurfaceProjection{Groups: []AgentGroupProjection{group}}
+	if !surface.valid() {
+		t.Fatalf("valid report surface rejected: %#v", surface)
+	}
+	state := newAgentHubState(surface, false, 72, 24, true, false)
+	if !state.openSelectedViewer() {
+		t.Fatal("could not open report Viewer")
+	}
+	artifact.URI = "file:///private/tamper"
+	body := ansi.Strip(state.Viewer.View())
+	for _, want := range []string{
+		"revision 4",
+		"2.0s",
+		"report artifact · fcheap://stash/expert-report",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("Viewer omitted %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "file:///private") {
+		t.Fatalf("Viewer retained mutable artifact alias:\n%s", body)
 	}
 }
 
@@ -435,18 +648,18 @@ func TestAgentHubResizeThemeAndActiveGeometryPreserveState(t *testing.T) {
 		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: "history row"})
 	}
 	m.invalidateEntryCache()
-	m.viewport.SetContent(m.renderEntries())
-	m.viewport.SetYOffset(4)
+	m.refreshTranscript()
+	m.setTranscriptYOffset(4)
 	m.pauseFollow()
 	m.state = StateStreaming
-	beforeOffset := m.viewport.YOffset()
+	beforeOffset := m.transcriptYOffset()
 
 	m.openAgentHub()
 	if got, want := m.viewport.Height(), m.projectFrame().Transcript.Rect.Height(); got != want {
 		t.Fatalf("open geometry height = %d, want %d", got, want)
 	}
-	if m.viewport.YOffset() != beforeOffset || !m.followPaused() {
-		t.Fatalf("open moved transcript anchor: offset=%d/%d paused=%v", m.viewport.YOffset(), beforeOffset, m.followPaused())
+	if m.transcriptYOffset() != beforeOffset || !m.followPaused() {
+		t.Fatalf("open moved transcript anchor: offset=%d/%d paused=%v", m.transcriptYOffset(), beforeOffset, m.followPaused())
 	}
 	m.agentHubState.openSelectedViewer()
 	groupID := m.agentHubState.ViewerGroupID
@@ -485,8 +698,8 @@ func TestAgentHubResizeThemeAndActiveGeometryPreserveState(t *testing.T) {
 func TestAgentHubMouseOwnsOnlyExactRowsAndNeverMovesTranscript(t *testing.T) {
 	m := newTestModel(t)
 	liveID, settledID := installAgentHubFixture(t, m)
-	m.viewport.SetContent(strings.Repeat("transcript\n", 80))
-	m.viewport.SetYOffset(5)
+	m.setTestTranscriptContent(strings.Repeat("transcript\n", 80))
+	m.setTranscriptYOffset(5)
 	m.pauseFollow()
 	m.openAgentHub()
 
@@ -503,7 +716,7 @@ func TestAgentHubMouseOwnsOnlyExactRowsAndNeverMovesTranscript(t *testing.T) {
 		t.Fatalf("test coordinate (%d,%d) outside row %#v", x, y, row)
 	}
 
-	transcriptOffset := m.viewport.YOffset()
+	transcriptOffset := m.transcriptYOffset()
 	updated, _ := m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseRight})
 	m = updated.(*Model)
 	if m.agentHubState.selectedGroupID() != liveID {
@@ -521,8 +734,8 @@ func TestAgentHubMouseOwnsOnlyExactRowsAndNeverMovesTranscript(t *testing.T) {
 	}
 	updated, _ = m.Update(tea.MouseWheelMsg{X: x, Y: y, Button: tea.MouseWheelUp})
 	m = updated.(*Model)
-	if m.viewport.YOffset() != transcriptOffset {
-		t.Fatalf("Hub wheel moved hidden transcript from %d to %d", transcriptOffset, m.viewport.YOffset())
+	if m.transcriptYOffset() != transcriptOffset {
+		t.Fatalf("Hub wheel moved hidden transcript from %d to %d", transcriptOffset, m.transcriptYOffset())
 	}
 }
 
@@ -630,6 +843,65 @@ func TestAgentViewerBodyCellWidthIsBounded(t *testing.T) {
 				t.Fatalf("width %d rendered %d cells: %q", width, got, line)
 			}
 		}
+	}
+}
+
+func TestAgentHubASCIIProfileCoversTitlesViewerAndNavigationChrome(t *testing.T) {
+	entry, tool := agentGroupFixture(
+		0,
+		BlockLive,
+		ToolStatusRunning,
+		liveAgentProgress("critic"),
+	)
+	surface, err := projectAgentSurface([]ChatEntry{entry}, []ToolEntry{tool})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := newAgentHubState(surface, false, 80, 24, true, true, GlyphASCII)
+	item, ok := state.List.Items()[0].(agentHubItem)
+	if !ok {
+		t.Fatalf("list item type = %T", state.List.Items()[0])
+	}
+	for label, value := range map[string]string{
+		"title":       state.List.Title,
+		"item title":  item.Title(),
+		"description": item.Description(),
+	} {
+		if !strings.Contains(value, " | ") {
+			t.Fatalf("%s omitted ASCII separator: %q", label, value)
+		}
+		if strings.ContainsAny(value, "…·↑↓←→") {
+			t.Fatalf("%s leaked Unicode chrome: %q", label, value)
+		}
+	}
+
+	m := newTestModel(t)
+	m.glyphProfile = GlyphASCII
+	m.width, m.height = 80, 24
+	m.agentHubState = state
+	listView := ansi.Strip(m.renderAgentHub())
+	if !strings.Contains(listView, "j/k move") || !strings.Contains(listView, " | ") {
+		t.Fatalf("ASCII Hub navigation footer is incomplete:\n%s", listView)
+	}
+	if strings.ContainsAny(listView, "…·↑↓←→╭╮╰╯│●○") {
+		t.Fatalf("ASCII Hub list leaked Unicode chrome:\n%s", listView)
+	}
+
+	state.SetSize(24, 16)
+	narrow := ansi.Strip(state.List.View())
+	if !strings.Contains(narrow, "~") || strings.Contains(narrow, "…") {
+		t.Fatalf("narrow ASCII Hub did not use ASCII truncation:\n%s", narrow)
+	}
+
+	if !state.openSelectedViewer() {
+		t.Fatal("could not open ASCII Agent Viewer")
+	}
+	viewer := ansi.Strip(state.viewerContent(m.styles))
+	if !strings.Contains(viewer, " | ") {
+		t.Fatalf("ASCII Agent Viewer omitted separators:\n%s", viewer)
+	}
+	if strings.ContainsAny(viewer, "…·↑↓←→") {
+		t.Fatalf("ASCII Agent Viewer leaked Unicode chrome:\n%s", viewer)
 	}
 }
 

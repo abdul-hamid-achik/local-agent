@@ -1,15 +1,15 @@
      ╭────────────────────────────────────────────────────────────────────╮
      │ Agent Viewer                                                       │
-     │ Consultation · active                                              │
-     │ Status · active                                                    │
-     │ team · 1 agent · 1 active                                          │
+     │ Consultation #<digest> · active                                    │
+     │ Status · active · x.xs · revision 3                                │
+     │ team · 1 agent · 1 active · x.xs                                   │
      │                                                                    │
      │ Subagents                                                          │
-     │ … generalist · running · qwen3.5:0.8b · local                      │
+     │ … generalist · running                                             │
+     │   consulting · qwen3.5:0.8b · local                                │
      │                                                                    │
      │ Activity                                                           │
      │ No public child events are available for this runtime.             │
-     │                                                                    │
      │                                                                    │
      │                                                                    │
      │                                                                    │

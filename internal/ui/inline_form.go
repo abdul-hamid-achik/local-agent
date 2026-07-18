@@ -21,7 +21,7 @@ func (m *Model) captureInlineFormTranscriptAnchor() inlineFormTranscriptAnchor {
 	return inlineFormTranscriptAnchor{
 		valid:   true,
 		paused:  m.followPaused(),
-		yOffset: m.viewport.YOffset(),
+		yOffset: m.transcriptYOffset(),
 	}
 }
 
@@ -70,13 +70,13 @@ func inlineFormContentWidth(terminalWidth int) int {
 	return max(1, terminalWidth-5)
 }
 
-func renderInlineFormFrame(styles Styles, content, footer string, terminalWidth int) string {
+func renderInlineFormFrame(styles Styles, content, footer string, terminalWidth int, profiles ...GlyphProfile) string {
 	content = strings.TrimRight(content, "\n")
 	if footer != "" {
 		content += "\n" + styles.OverlayDim.Render(footer)
 	}
 	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
+		Border(borderForGlyphProfile(resolveGlyphProfile(profiles...))).
 		BorderForeground(styles.OverlayBorder).
 		Padding(0, 1).
 		Width(max(1, terminalWidth-1)).

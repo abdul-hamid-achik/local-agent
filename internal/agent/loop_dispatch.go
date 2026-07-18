@@ -425,7 +425,7 @@ func (t *turnRuntime) dispatchStage(ctx context.Context, i int, toolCalls []llm.
 		// Hooks are the result-redaction boundary. Apply them before the
 		// durable receipt so secrets removed from UI/model text are not copied
 		// into the execution ledger.
-		t.a.runPostHooks(ctx, tc, &result, isErr)
+		completePostRedactionResult := t.a.runPostHooks(ctx, tc, &result, isErr)
 		semanticText := result
 		projection := t.a.projectSemanticToolReceipt(
 			tc, semanticText, structured, errorMeta,
@@ -489,6 +489,17 @@ func (t *turnRuntime) dispatchStage(ctx context.Context, i int, toolCalls []llm.
 			durableResult = dispatchedEffectErrorReceipt(tc.Name, durableResult, ctx.Err())
 			modelResult = durableResult
 		}
+		// Only an ordinary unstructured result whose durable projection is
+		// still the post-hook result may cross this ephemeral boundary.
+		// Parser-private MCP text, action surfaces, unknown-outcome receipts,
+		// and semantic replacements all fail closed.
+		outputDetail := completeToolOutputDetail(
+			tc.Name,
+			completePostRedactionResult,
+			result,
+			durableResult,
+			structured,
+		)
 		// Cap before the durable append so the terminal event hashes exactly
 		// the receipt the session transcript will persist; the projection
 		// boundary compares those hashes when advancing the snapshot cursor.
@@ -543,6 +554,7 @@ func (t *turnRuntime) dispatchStage(ctx context.Context, i int, toolCalls []llm.
 		}
 		emitSemanticToolResult(
 			t.out, tc.ID, tc.Name, durableResult, structured, isErr, transportErr, duration, projection,
+			outputDetail,
 		)
 		continuationSequence := uint64(i+1)<<32 | uint64(toolIndex+1)
 		if continuation != nil || isContinuationSourceProjection(projection) {

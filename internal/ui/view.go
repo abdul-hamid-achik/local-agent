@@ -30,6 +30,7 @@ func (m *Model) View() tea.View {
 	// The conversation and the active footer owner consume one shared geometry
 	// snapshot. Infrequent controls remain overlays over these stable base
 	// rectangles.
+	m.syncTranscriptPaintWindow()
 	frame := m.projectFrame()
 	var content strings.Builder
 	content.WriteString(m.viewport.View())
@@ -97,6 +98,14 @@ func (m *Model) View() tea.View {
 			content.Reset()
 			content.WriteString(m.overlayOnContent(base, overlay))
 			viewCursor = overlayCursor(base, overlay, m.width, localCursor)
+		}
+	}
+	if m.viewerModalActive() {
+		viewCursor = nil
+		if composed, modalCursor, ok := m.composeViewerModal(content.String()); ok {
+			content.Reset()
+			content.WriteString(composed)
+			viewCursor = modalCursor
 		}
 	}
 
@@ -181,28 +190,28 @@ func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%.1fs", d.Seconds())
 }
 
-func truncate(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max-3] + "..."
-}
-
 // truncateDisplay truncates plain text by terminal cell width instead of byte
 // count, so model names, paths, and tool output containing Unicode stay valid.
 func truncateDisplay(s string, maxWidth int) string {
+	return truncateDisplayWithGlyphProfile(s, maxWidth, GlyphUnicode)
+}
+
+func truncateDisplayWithGlyphProfile(s string, maxWidth int, profile GlyphProfile) string {
 	if maxWidth <= 0 {
 		return ""
 	}
 	if lipgloss.Width(s) <= maxWidth {
 		return s
 	}
-	const ellipsis = "…"
-	if maxWidth <= lipgloss.Width(ellipsis) {
-		return ellipsis
+	marker := "…"
+	if resolveGlyphProfile(profile) == GlyphASCII {
+		marker = "~"
+	}
+	if maxWidth <= lipgloss.Width(marker) {
+		return marker
 	}
 
-	budget := maxWidth - lipgloss.Width(ellipsis)
+	budget := maxWidth - lipgloss.Width(marker)
 	var b strings.Builder
 	used := 0
 	graphemes := uniseg.NewGraphemes(s)
@@ -215,7 +224,7 @@ func truncateDisplay(s string, maxWidth int) string {
 		b.WriteString(cluster)
 		used += clusterWidth
 	}
-	return b.String() + ellipsis
+	return b.String() + marker
 }
 
 // wrapText wraps text to the given width, breaking long words if needed.

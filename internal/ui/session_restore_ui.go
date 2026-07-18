@@ -127,7 +127,7 @@ func (m *Model) finishLoadedSession(message SessionLoadedMsg) (bool, tea.Cmd) {
 	if message.RecoveryWarning != "" {
 		m.entries = append(m.entries, ChatEntry{Kind: "error", Content: message.RecoveryWarning})
 	}
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	m.resumeFollow()
 	return true, cmd
 }
@@ -158,6 +158,6 @@ func (m *Model) failLoadedSession(message SessionLoadedMsg, err error) {
 		m.restoreAndClearPendingSessionSwitch()
 	}
 	m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("Load session: %v", err)})
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	m.resumeFollow()
 }

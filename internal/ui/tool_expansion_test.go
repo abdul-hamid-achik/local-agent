@@ -16,13 +16,13 @@ func TestToolCallStartStoresSemanticSummaryForPersistence(t *testing.T) {
 	})
 	m = updated.(*Model)
 
-	if len(m.toolEntries) != 1 || len(m.toolCardMgr.Cards) != 1 {
-		t.Fatalf("tool lifecycle was not created: entries=%d cards=%d", len(m.toolEntries), len(m.toolCardMgr.Cards))
+	if len(m.toolEntries) != 1 {
+		t.Fatalf("tool lifecycle was not created: entries=%d", len(m.toolEntries))
 	}
 	if got, want := m.toolEntries[0].Summary, "internal/ui/session.go"; got != want {
 		t.Fatalf("stored tool summary = %q, want %q", got, want)
 	}
-	if got, want := m.toolCardMgr.Cards[0].Summary, m.toolEntries[0].Summary; got != want {
+	if got, want := testProjectedToolCard(t, m, 0).Summary, m.toolEntries[0].Summary; got != want {
 		t.Fatalf("live card summary = %q, want stored summary %q", got, want)
 	}
 
@@ -77,7 +77,7 @@ func TestBatchToggleAll(t *testing.T) {
 		{Name: "c", Status: ToolStatusDone, Collapsed: false},
 	}
 
-	// Toggle all (t key) should flip toolsCollapsed and apply to all.
+	// A batch toggle should flip toolsCollapsed and apply to all.
 	m.toolsCollapsed = !m.toolsCollapsed // false now
 	for i := range m.toolEntries {
 		m.toolEntries[i].Collapsed = m.toolsCollapsed
@@ -110,21 +110,21 @@ func TestToggleLastTool(t *testing.T) {
 	}
 }
 
-func TestSpaceKeyTogglesLastToolThroughBubbleTeaKeyName(t *testing.T) {
+func TestCtrlRTogglesLastToolThroughBubbleTeaKeyName(t *testing.T) {
 	m := newTestModel(t)
 	m.toolEntries = []ToolEntry{{Name: "write", Status: ToolStatusError, Collapsed: true}}
 
-	updated, _ := m.Update(charKey(' '))
+	updated, _ := m.Update(ctrlKey('r'))
 	m = updated.(*Model)
 	if m.toolEntries[0].Collapsed {
-		t.Fatal("PTY space key did not expand the advertised last ToolCard")
+		t.Fatal("Ctrl+R did not expand the advertised last ToolCard")
 	}
 	if m.input.Value() != "" {
-		t.Fatalf("ToolCard shortcut leaked a space into the composer: %q", m.input.Value())
+		t.Fatalf("ToolCard chord leaked into the composer: %q", m.input.Value())
 	}
 }
 
-func TestSpaceInspectionRevealsOffscreenReceiptAndRestoresFollow(t *testing.T) {
+func TestCtrlRInspectionRevealsOffscreenReceiptAndRestoresFollow(t *testing.T) {
 	m := newTestModel(t)
 	updated, _ := m.Update(ToolCallStartMsg{
 		ID: "inspect-1", Name: "bash", Args: map[string]any{"command": "go test ./..."}, StartTime: time.Now(),
@@ -138,30 +138,30 @@ func TestSpaceInspectionRevealsOffscreenReceiptAndRestoresFollow(t *testing.T) {
 	m.lastTurnToolIndex = 0
 	m.footerNotice = &footerNotice{text: "✓ Done", severity: noticeSuccess}
 	m.invalidateEntryCache()
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	m.markFollowingLatest()
-	m.viewport.GotoBottom()
+	m.transcriptGotoBottom()
 	if len(m.toolHitRegions) != 1 {
 		t.Fatalf("tool hit regions = %#v", m.toolHitRegions)
 	}
 	toolRow := m.toolHitRegions[0].Row
-	if toolRow >= m.viewport.YOffset() {
-		t.Fatalf("test receipt was not offscreen: row=%d offset=%d", toolRow, m.viewport.YOffset())
+	if toolRow >= m.transcriptYOffset() {
+		t.Fatalf("test receipt was not offscreen: row=%d offset=%d", toolRow, m.transcriptYOffset())
 	}
 
-	updated, _ = m.Update(charKey(' '))
+	updated, _ = m.Update(ctrlKey('r'))
 	m = updated.(*Model)
 	if m.toolEntries[0].Collapsed || !m.followPaused() {
 		t.Fatalf("inspection did not expand and pause at receipt: collapsed=%v paused=%v", m.toolEntries[0].Collapsed, m.followPaused())
 	}
-	if toolRow < m.viewport.YOffset() || toolRow >= m.viewport.YOffset()+m.viewport.Height() {
-		t.Fatalf("expanded receipt header remains offscreen: row=%d offset=%d height=%d", toolRow, m.viewport.YOffset(), m.viewport.Height())
+	if toolRow < m.transcriptYOffset() || toolRow >= m.transcriptYOffset()+m.viewport.Height() {
+		t.Fatalf("expanded receipt header remains offscreen: row=%d offset=%d height=%d", toolRow, m.transcriptYOffset(), m.viewport.Height())
 	}
 
-	updated, _ = m.Update(charKey(' '))
+	updated, _ = m.Update(ctrlKey('r'))
 	m = updated.(*Model)
-	if !m.toolEntries[0].Collapsed || m.followPaused() || !m.viewport.AtBottom() {
-		t.Fatalf("hiding receipt did not restore latest-follow: collapsed=%v paused=%v bottom=%v", m.toolEntries[0].Collapsed, m.followPaused(), m.viewport.AtBottom())
+	if !m.toolEntries[0].Collapsed || m.followPaused() || !m.transcriptAtBottom() {
+		t.Fatalf("hiding receipt did not restore latest-follow: collapsed=%v paused=%v bottom=%v", m.toolEntries[0].Collapsed, m.followPaused(), m.transcriptAtBottom())
 	}
 }
 
@@ -180,7 +180,7 @@ func TestReceiptInspectionSettlesBeforeResizeOrBatchToggle(t *testing.T) {
 		{
 			name: "batch toggle",
 			act: func(m *Model) *Model {
-				updated, _ := m.Update(charKey('t'))
+				updated, _ := m.Update(ctrlKey('b'))
 				return updated.(*Model)
 			},
 		},
@@ -215,10 +215,10 @@ func TestReceiptInspectionSettlesBeforeResizeOrBatchToggle(t *testing.T) {
 			m.toolEntries = []ToolEntry{{Name: "bash", Status: ToolStatusDone, Collapsed: true}}
 			m.lastTurnToolIndex = 0
 			m.invalidateEntryCache()
-			m.viewport.SetContent(m.renderEntries())
+			m.refreshTranscript()
 			m.markFollowingLatest()
-			m.viewport.GotoBottom()
-			updated, _ := m.Update(charKey(' '))
+			m.transcriptGotoBottom()
+			updated, _ := m.Update(ctrlKey('r'))
 			m = updated.(*Model)
 			if !m.receiptInspectActive || !m.followPaused() {
 				t.Fatal("precondition: keyboard receipt inspection did not activate")
@@ -228,8 +228,8 @@ func TestReceiptInspectionSettlesBeforeResizeOrBatchToggle(t *testing.T) {
 			if m.receiptInspectActive || m.receiptInspectToolIndex != -1 {
 				t.Fatalf("%s retained stale receipt anchor: active=%v index=%d", test.name, m.receiptInspectActive, m.receiptInspectToolIndex)
 			}
-			if m.followPaused() || !m.viewport.AtBottom() {
-				t.Fatalf("%s did not restore latest-follow: paused=%v bottom=%v", test.name, m.followPaused(), m.viewport.AtBottom())
+			if m.followPaused() || !m.transcriptAtBottom() {
+				t.Fatalf("%s did not restore latest-follow: paused=%v bottom=%v", test.name, m.followPaused(), m.transcriptAtBottom())
 			}
 		})
 	}
@@ -241,8 +241,8 @@ func TestReceiptInspectionSurvivesHeightOnlyResize(t *testing.T) {
 	m.toolEntries = []ToolEntry{{Name: "bash", Status: ToolStatusDone, Collapsed: true}}
 	m.lastTurnToolIndex = 0
 	m.invalidateEntryCache()
-	m.viewport.SetContent(m.renderEntries())
-	updated, _ := m.Update(charKey(' '))
+	m.refreshTranscript()
+	updated, _ := m.Update(ctrlKey('r'))
 	m = updated.(*Model)
 	if !m.receiptInspectActive {
 		t.Fatal("precondition: receipt inspection did not activate")

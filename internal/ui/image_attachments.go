@@ -120,7 +120,7 @@ func (m *Model) beginPastedImageFileAttachments(paths []string) tea.Cmd {
 	if skipped := len(paths) - queued; skipped > 0 {
 		m.entries = append(m.entries, ChatEntry{Kind: "error", Content: imageAttachmentQueueLimitReceipt(skipped)})
 		m.invalidateEntryCache()
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		m.gotoBottomIfFollowing()
 		m.recalcViewportHeight()
 	}
@@ -253,7 +253,7 @@ func (m *Model) handleImageAttachmentResult(message ImageAttachmentResultMsg) te
 		stopQueue = errors.Is(message.Err, errImageConversationBudget)
 		m.entries = append(m.entries, ChatEntry{Kind: "error", Content: imageAttachmentErrorReceipt(message.Name, message.Err)})
 		m.invalidateEntryCache()
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		m.gotoBottomIfFollowing()
 		m.recalcViewportHeight()
 	} else {
@@ -275,7 +275,7 @@ func (m *Model) handleImageAttachmentResult(message ImageAttachmentResultMsg) te
 				stopQueue = true
 				m.entries = append(m.entries, ChatEntry{Kind: "error", Content: "Attach image " + sanitizeTerminalSingleLine(message.Ref.Name) + ": " + err.Error()})
 				m.invalidateEntryCache()
-				m.viewport.SetContent(m.renderEntries())
+				m.refreshTranscript()
 				m.gotoBottomIfFollowing()
 			} else {
 				*target = append(*target, pendingImageAttachment{Ref: message.Ref, Image: message.Image})
@@ -412,7 +412,7 @@ func (m *Model) forgetHistoricalImages() tea.Cmd {
 	if removed == 0 && visibleRemoved == 0 {
 		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: "No historical image references are present. Pending prompt images were left unchanged."})
 		m.invalidateEntryCache()
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		m.resumeFollow()
 		return nil
 	}
@@ -444,7 +444,7 @@ func (m *Model) forgetHistoricalImages() tea.Cmd {
 		}
 	}
 	m.invalidateEntryCache()
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	m.resumeFollow()
 	m.recalcViewportHeight()
 	return nil

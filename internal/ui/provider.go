@@ -18,6 +18,11 @@ type providerSwitchResultMsg struct {
 	Err   error
 }
 
+// ProviderFailureCopy is host-owned presentation for provider failures. Raw
+// provider/configuration errors can contain endpoints or backend prose and must
+// never be sent to the transcript boundary.
+const ProviderFailureCopy = "Provider unavailable. Check the provider profile and credential environment."
+
 func (m *Model) activeProviderName() string {
 	if m.modelManager == nil {
 		return "ollama"
@@ -94,13 +99,16 @@ func (m *Model) handleProviderSwitchResult(msg providerSwitchResultMsg, cmds []t
 	}
 
 	followWasPaused := m.followPaused()
-	followYOffset := m.viewport.YOffset()
+	followYOffset := m.transcriptYOffset()
 	if !m.shuttingDown {
 		switch {
 		case errors.Is(msg.Err, context.Canceled):
 			m.entries = append(m.entries, ChatEntry{Kind: "system", Content: "Provider switch cancelled."})
 		case msg.Err != nil:
-			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: sanitizeTerminalSingleLine(msg.Err.Error())})
+			// Manager/configuration errors may carry transport URLs or provider
+			// prose. Keep the raw error transient and render only host-owned copy so
+			// credentials can never enter the transcript or session snapshot.
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: ProviderFailureCopy})
 		default:
 			m.applySwitchedProvider(msg.Name)
 			text := sanitizeTerminalSingleLine(strings.TrimSpace(msg.Text))
@@ -115,7 +123,7 @@ func (m *Model) handleProviderSwitchResult(msg providerSwitchResultMsg, cmds []t
 		m.input.Focus()
 		m.invalidateEntryCache()
 		if m.ready {
-			m.viewport.SetContent(m.renderEntries())
+			m.refreshTranscript()
 			m.restoreFollowPosition(followWasPaused, followYOffset)
 		}
 		m.recalcViewportHeight()

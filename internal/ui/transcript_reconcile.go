@@ -12,29 +12,67 @@ import (
 // tests. Production models leave it nil, so normal rendering pays only a
 // predictable nil branch at semantic digest and layout publication seams.
 type transcriptRenderProbe struct {
-	semanticDigestCalls       int
-	layoutRecordComparisons   int
-	layoutRecordsMaterialized int
+	renderEntriesCalls          int
+	transcriptBytesMaterialized int
+	documentBuilds              int
+	measureBytesMaterialized    int
+	lineIndexRowsBuilt          int
+	semanticDigestCalls         int
+	layoutRecordComparisons     int
+	layoutRecordsMaterialized   int
+	layoutRecordsUpdated        int
+	blocksMeasured              int
+	blocksPainted               int
+	paintRowsStaged             int
+	paintBytesStaged            int
+	viewportRowsStaged          int
+	windowStart                 int
+	windowEnd                   int
 }
 
 // reconcileTranscriptEntriesForRender keeps semantic admission out of visual
-// ticks. Entry mutation paths invalidate the render cache; append-only paths
-// are also detected by the reconciled length.
+// ticks. Entry mutation paths invalidate the render cache and force a complete
+// admission pass. With a valid prefix, append-only growth admits only the new
+// suffix while reusing its causal turn and duplicate-ID set.
+//
+// The bool result reports whether existing memo identities may need pruning.
+// Pure append-only growth returns false because no admitted identity disappeared.
 func (m *Model) reconcileTranscriptEntriesForRender() (bool, error) {
 	if m.transcriptReconcileValid && m.transcriptReconciledCount == len(m.entries) {
 		return false, nil
 	}
-	if err := m.reconcileTranscriptEntries(); err != nil {
+
+	appendOnly := m.transcriptReconcileValid &&
+		m.transcriptReconciledCount >= 0 &&
+		m.transcriptReconciledCount < len(m.entries) &&
+		len(m.transcriptReconciledBlockIDs) == m.transcriptReconciledCount
+	start := 0
+	currentTurn := TurnID("")
+	var seen map[BlockID]struct{}
+	if appendOnly {
+		start = m.transcriptReconciledCount
+		currentTurn = m.transcriptReconciledTurnID
+		seen = m.transcriptReconciledBlockIDs
+	} else {
+		seen = make(map[BlockID]struct{}, len(m.entries))
+	}
+
+	currentTurn, seen, err := m.reconcileTranscriptEntryRange(start, currentTurn, seen)
+	if err != nil {
 		m.transcriptReconcileValid = false
 		m.transcriptReconciledCount = 0
+		m.transcriptReconciledTurnID = ""
+		m.transcriptReconciledBlockIDs = nil
 		return true, err
 	}
 	m.transcriptReconcileValid = true
 	m.transcriptReconciledCount = len(m.entries)
+	m.transcriptReconciledTurnID = currentTurn
+	m.transcriptReconciledBlockIDs = seen
 	if m.transcriptReconcileEpoch < math.MaxUint64 {
 		m.transcriptReconcileEpoch++
 	}
-	return true, nil
+	return !appendOnly, nil
 }
 
 // reconcileTranscriptEntries is the migration seam between the existing
@@ -43,23 +81,52 @@ func (m *Model) reconcileTranscriptEntriesForRender() (bool, error) {
 // lifecycles, and updates semantic revisions without treating theme or width
 // changes as content changes.
 func (m *Model) reconcileTranscriptEntries() error {
-	seen := make(map[BlockID]struct{}, len(m.entries))
-	var currentTurn TurnID
+	_, _, err := m.reconcileTranscriptEntryRange(
+		0,
+		"",
+		make(map[BlockID]struct{}, len(m.entries)),
+	)
+	return err
+}
 
-	for index := range m.entries {
+func (m *Model) reconcileTranscriptEntryRange(
+	start int,
+	currentTurn TurnID,
+	seen map[BlockID]struct{},
+) (TurnID, map[BlockID]struct{}, error) {
+	if start < 0 || start > len(m.entries) {
+		return currentTurn, seen, fmt.Errorf(
+			"transcript reconciliation start %d outside 0..%d",
+			start,
+			len(m.entries),
+		)
+	}
+	if seen == nil {
+		seen = make(map[BlockID]struct{}, len(m.entries)-start)
+	}
+
+	for index := start; index < len(m.entries); index++ {
 		entry := &m.entries[index]
 		if entry.BlockID == "" {
 			id, err := NewBlockID()
 			if err != nil {
-				return fmt.Errorf("entry %d: %w", index, err)
+				return currentTurn, seen, fmt.Errorf("entry %d: %w", index, err)
 			}
 			entry.BlockID = id
 		}
 		if !entry.BlockID.Valid() {
-			return fmt.Errorf("entry %d has invalid block ID %q", index, entry.BlockID)
+			return currentTurn, seen, fmt.Errorf(
+				"entry %d has invalid block ID %q",
+				index,
+				entry.BlockID,
+			)
 		}
 		if _, duplicate := seen[entry.BlockID]; duplicate {
-			return fmt.Errorf("entry %d repeats block ID %q", index, entry.BlockID)
+			return currentTurn, seen, fmt.Errorf(
+				"entry %d repeats block ID %q",
+				index,
+				entry.BlockID,
+			)
 		}
 		seen[entry.BlockID] = struct{}{}
 
@@ -70,7 +137,7 @@ func (m *Model) reconcileTranscriptEntries() error {
 			if entry.TurnID == "" {
 				turnID, err := NewTurnID()
 				if err != nil {
-					return fmt.Errorf("entry %d: %w", index, err)
+					return currentTurn, seen, fmt.Errorf("entry %d: %w", index, err)
 				}
 				entry.TurnID = turnID
 			}
@@ -79,7 +146,7 @@ func (m *Model) reconcileTranscriptEntries() error {
 			if currentTurn == "" {
 				turnID, err := NewTurnID()
 				if err != nil {
-					return fmt.Errorf("entry %d: %w", index, err)
+					return currentTurn, seen, fmt.Errorf("entry %d: %w", index, err)
 				}
 				currentTurn = turnID
 			}
@@ -88,7 +155,11 @@ func (m *Model) reconcileTranscriptEntries() error {
 			currentTurn = entry.TurnID
 		}
 		if entry.TurnID != "" && !entry.TurnID.Valid() {
-			return fmt.Errorf("entry %d has invalid turn ID %q", index, entry.TurnID)
+			return currentTurn, seen, fmt.Errorf(
+				"entry %d has invalid turn ID %q",
+				index,
+				entry.TurnID,
+			)
 		}
 
 		nextLifecycle := m.chatEntryLifecycle(*entry)
@@ -98,7 +169,7 @@ func (m *Model) reconcileTranscriptEntries() error {
 		} else {
 			lifecycleChanged := entry.Lifecycle != nextLifecycle
 			if lifecycleChanged && !entry.Lifecycle.CanTransitionTo(nextLifecycle) {
-				return fmt.Errorf(
+				return currentTurn, seen, fmt.Errorf(
 					"entry %d block %q lifecycle cannot move from %d to %d",
 					index,
 					entry.BlockID,
@@ -109,7 +180,11 @@ func (m *Model) reconcileTranscriptEntries() error {
 			semanticChanged := entry.semanticDigest != ([32]byte{}) && entry.semanticDigest != digest
 			if lifecycleChanged || semanticChanged {
 				if entry.Revision == math.MaxUint64 {
-					return fmt.Errorf("entry %d block %q exhausted its semantic revision", index, entry.BlockID)
+					return currentTurn, seen, fmt.Errorf(
+						"entry %d block %q exhausted its semantic revision",
+						index,
+						entry.BlockID,
+					)
 				}
 				entry.Revision++
 			}
@@ -117,7 +192,7 @@ func (m *Model) reconcileTranscriptEntries() error {
 		entry.Lifecycle = nextLifecycle
 		entry.semanticDigest = digest
 	}
-	return nil
+	return currentTurn, seen, nil
 }
 
 func blockKindForChatEntry(entry ChatEntry) BlockKind {
@@ -148,6 +223,8 @@ func (m *Model) chatEntryLifecycle(entry ChatEntry) BlockLifecycle {
 				return BlockLive
 			case ToolStatusError:
 				return BlockFailed
+			case ToolStatusCancelled:
+				return BlockCancelled
 			default:
 				return BlockSettled
 			}

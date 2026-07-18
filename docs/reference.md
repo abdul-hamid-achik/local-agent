@@ -208,12 +208,15 @@ Use Go duration syntax such as `30m` or `1h30m`. Duration-shaped but invalid inp
 | `shift+tab` | Cycle NORMAL, PLAN, and AUTO without opening a form |
 | `ctrl+p` | Open session settings |
 | `ctrl+o` | Open the Ollama model picker |
+| `ctrl+g` | Open the Agent Hub |
+| `f1`, `ctrl+h` | Open Help when the composer is empty (`f1` is unambiguous on legacy terminals) |
 | `tab` | Complete commands, files, and skills |
 | `up`, `down` | Browse input history |
 | `pgup`, `pgdown` | Scroll the conversation without editing the draft |
 | `ctrl+u`, `ctrl+d` | Edit the draft; with an empty or unavailable composer, scroll by half a page |
 | `end` | Jump to the latest conversation output when the composer is empty or unavailable |
-| `t`, `space` | Toggle all tool details or the latest tool |
+| `ctrl+b`, `ctrl+r` | Toggle all tool details or the focused/latest tool |
+| `alt+o`, `alt+d` | Open retained output or a diff for the inspected tool when available |
 | `ctrl+t` | Toggle model thinking display |
 | `ctrl+y` | Copy the latest response |
 | `ctrl+e` | Edit input with `$VISUAL`, then `$EDITOR` |
@@ -241,7 +244,7 @@ when the composer is empty or unavailable. Local Agent enables terminal mouse
 reporting so wheel events reach the transcript. Use the terminal's selection
 override, commonly `shift+drag`, to select transcript text; `ctrl+y` remains the
 application-level copy shortcut for the latest response. Use `pgup`/`pgdown`,
-`t`, and `space` for transcript and tool navigation. With an empty composer,
+`ctrl+b` and `ctrl+r` for transcript and tool navigation. With an empty composer,
 `ctrl+u`/`ctrl+d` also scroll half a page; while drafting they retain their
 standard editing behavior.
 

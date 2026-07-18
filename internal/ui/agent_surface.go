@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/ecosystem"
 	"github.com/abdul-hamid-achik/local-agent/internal/expertselector"
@@ -40,6 +41,7 @@ type AgentGroupProjection struct {
 	TurnID            TurnID                  `json:"turn_id"`
 	Revision          uint64                  `json:"revision"`
 	Lifecycle         BlockLifecycle          `json:"lifecycle"`
+	Elapsed           time.Duration           `json:"elapsed,omitempty"`
 	Strategy          expertselector.Strategy `json:"strategy,omitempty"`
 	Total             int                     `json:"total,omitempty"`
 	Queued            int                     `json:"queued,omitempty"`
@@ -66,6 +68,17 @@ type indexedAgentGroup struct {
 // the bounded surface, all live groups survive and the newest terminal groups
 // fill the remaining slots.
 func projectAgentSurface(entries []ChatEntry, tools []ToolEntry) (AgentSurfaceProjection, error) {
+	return projectAgentSurfaceAt(entries, tools, time.Time{})
+}
+
+// projectAgentSurfaceAt derives live consultation elapsed time from the
+// host-owned tool start receipt. Passing a zero clock preserves the last
+// admitted duration and keeps pure callers deterministic.
+func projectAgentSurfaceAt(
+	entries []ChatEntry,
+	tools []ToolEntry,
+	now time.Time,
+) (AgentSurfaceProjection, error) {
 	var (
 		active         []indexedAgentGroup
 		recentSettled  []indexedAgentGroup
@@ -96,7 +109,7 @@ func projectAgentSurface(entries []ChatEntry, tools []ToolEntry) (AgentSurfacePr
 			return AgentSurfaceProjection{}, fmt.Errorf("agent surface repeats tool index %d", entry.ToolIndex)
 		}
 
-		group, err := projectAgentGroup(entry, tool)
+		group, err := projectAgentGroupAt(entry, tool, now)
 		if err != nil {
 			return AgentSurfaceProjection{}, fmt.Errorf("agent surface entry %d: %w", entryIndex, err)
 		}
@@ -152,7 +165,11 @@ func appendBoundedAgentGroup(groups []indexedAgentGroup, group indexedAgentGroup
 	return groups
 }
 
-func projectAgentGroup(entry ChatEntry, tool ToolEntry) (AgentGroupProjection, error) {
+func projectAgentGroupAt(
+	entry ChatEntry,
+	tool ToolEntry,
+	now time.Time,
+) (AgentGroupProjection, error) {
 	if !entry.BlockID.Valid() {
 		return AgentGroupProjection{}, fmt.Errorf("group block identity is missing or invalid")
 	}
@@ -172,8 +189,12 @@ func projectAgentGroup(entry ChatEntry, tool ToolEntry) (AgentGroupProjection, e
 		TurnID:      entry.TurnID,
 		Revision:    entry.Revision,
 		Lifecycle:   lifecycle,
+		Elapsed:     projectedAgentGroupElapsed(tool, now),
 		Interrupted: interrupted,
 		ToolIndex:   entry.ToolIndex,
+	}
+	if group.Elapsed < 0 || group.Elapsed > maxToolViewDuration {
+		return AgentGroupProjection{}, fmt.Errorf("agent group elapsed time is invalid")
 	}
 
 	if tool.ExpertProgress == nil {
@@ -200,7 +221,7 @@ func projectAgentGroup(entry ChatEntry, tool ToolEntry) (AgentGroupProjection, e
 	if safe == nil {
 		return AgentGroupProjection{}, fmt.Errorf("expert progress projection is invalid")
 	}
-	nodes, ok := workNodesFromExpertProgress(safe)
+	nodes, ok := workNodesFromExpertProgressForParent(safe, group.ID)
 	if !ok || len(nodes) != safe.Total {
 		return AgentGroupProjection{}, fmt.Errorf("expert progress could not be projected")
 	}
@@ -213,7 +234,8 @@ func projectAgentGroup(entry ChatEntry, tool ToolEntry) (AgentGroupProjection, e
 	for index, source := range nodes {
 		node := source
 		node.ID = agentNodeID(group.ID, node.Index)
-		if !node.valid(group.Total) {
+		if !node.valid(group.Total) || node.ParentID != group.ID ||
+			node.Unread != 0 || node.ReportRef != nil || node.Elapsed != 0 {
 			return AgentGroupProjection{}, fmt.Errorf("projected work node %d is invalid", index)
 		}
 		if _, duplicate := seenNodeIDs[node.ID]; duplicate {
@@ -250,6 +272,20 @@ func projectAgentGroup(entry ChatEntry, tool ToolEntry) (AgentGroupProjection, e
 	return group, nil
 }
 
+func projectedAgentGroupElapsed(tool ToolEntry, now time.Time) time.Duration {
+	if tool.Duration < 0 || tool.Duration > maxToolViewDuration {
+		return -1
+	}
+	elapsed := tool.Duration
+	if tool.Status == ToolStatusRunning && !tool.StartTime.IsZero() && !now.IsZero() {
+		elapsed = now.Sub(tool.StartTime)
+	}
+	if elapsed < 0 {
+		return -1
+	}
+	return min(elapsed, maxToolViewDuration)
+}
+
 func projectedAgentGroupLifecycle(entry ChatEntry, tool ToolEntry) (BlockLifecycle, bool, error) {
 	switch tool.Status {
 	case ToolStatusRunning:
@@ -270,6 +306,11 @@ func projectedAgentGroupLifecycle(entry ChatEntry, tool ToolEntry) (BlockLifecyc
 			return BlockFailed, false, nil
 		}
 		return BlockPending, false, fmt.Errorf("failed consultation is not a failed transcript block")
+	case ToolStatusCancelled:
+		if entry.Lifecycle != BlockCancelled {
+			return BlockPending, false, fmt.Errorf("cancelled consultation is not a cancelled transcript block")
+		}
+		return BlockCancelled, false, nil
 	default:
 		return BlockPending, false, fmt.Errorf("consultation has invalid tool status %d", tool.Status)
 	}
@@ -323,11 +364,12 @@ func (surface AgentSurfaceProjection) valid() bool {
 }
 
 func (group AgentGroupProjection) valid() bool {
-	if !group.ID.Valid() || !group.TurnID.Valid() || group.Revision == 0 || group.ToolIndex < 0 {
+	if !group.ID.Valid() || !group.TurnID.Valid() || group.Revision == 0 ||
+		group.ToolIndex < 0 || group.Elapsed < 0 || group.Elapsed > maxToolViewDuration {
 		return false
 	}
 	switch group.Lifecycle {
-	case BlockLive, BlockSettled, BlockFailed:
+	case BlockLive, BlockSettled, BlockFailed, BlockCancelled:
 	default:
 		return false
 	}
@@ -357,7 +399,8 @@ func (group AgentGroupProjection) valid() bool {
 	seenIndexes := make(map[int]struct{}, len(group.Nodes))
 	for index, node := range group.Nodes {
 		if !node.valid(group.Total) || node.Index != index ||
-			node.ID != agentNodeID(group.ID, node.Index) {
+			node.ID != agentNodeID(group.ID, node.Index) ||
+			node.ParentID != group.ID {
 			return false
 		}
 		if _, duplicate := seenIDs[node.ID]; duplicate {

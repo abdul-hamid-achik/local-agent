@@ -2,6 +2,7 @@ package ui
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -77,8 +78,7 @@ func TestExpertProgressProducesOneBoundedInspectableSurface(t *testing.T) {
 	if progress == nil || progress.Sequence != 5 || progress.Completed != 1 || progress.Failed != 1 {
 		t.Fatalf("unexpected final progress: %#v", progress)
 	}
-	cardView := m.toolCardMgr.Cards[0]
-	cardView.Expanded = !m.toolEntries[0].Collapsed
+	cardView := testProjectedToolCard(t, m, 0)
 	view := cardView.View(96)
 	for _, want := range []string{"critic", "qwen3.5:2b", "42 tok", "verifier", "flash:cloud", "no visible report"} {
 		if !strings.Contains(view, want) {
@@ -115,7 +115,7 @@ func TestExpertProgressProducesOneBoundedInspectableSurface(t *testing.T) {
 	if entry.Result != "" || entry.Args != "" || entry.ExpertProgress == nil {
 		t.Fatalf("settled expert entry retained raw data or lost projection: %#v", entry)
 	}
-	if card := m.toolCardMgr.Cards[0]; card.Result != "" || card.State != ToolCardAttention {
+	if card := testProjectedToolCard(t, m, 0); card.Result != "" || card.State != ToolCardAttention {
 		t.Fatalf("settled expert card = %#v", card)
 	}
 	// Progress arriving after settlement is stale, even with the right call ID.
@@ -197,7 +197,7 @@ func TestExpertResultDropsIncompleteProgressProjection(t *testing.T) {
 	if entry.ExpertProgress != nil || entry.Summary != "expert progress unavailable" || entry.Result != "" {
 		t.Fatalf("incomplete progress was painted as settled: %#v", entry)
 	}
-	card := m.toolCardMgr.Cards[0]
+	card := testProjectedToolCard(t, m, 0)
 	if card.ExpertProgress != nil || card.Result != "" {
 		t.Fatalf("incomplete card retained progress or raw result: %#v", card)
 	}
@@ -283,6 +283,49 @@ func TestExpertProgressDetailsCapVisualRowsAndReportHiddenNodes(t *testing.T) {
 	}
 }
 
+func TestExpertProgressDetailsKeepLateActiveNodeInsideInlineCap(t *testing.T) {
+	state := &ExpertProgressState{
+		Sequence:    9,
+		Strategy:    expertselector.StrategyTeam,
+		Total:       8,
+		Parallelism: 1,
+		Running:     1,
+		Queued:      1,
+		Completed:   6,
+		Experts:     make([]ExpertProgressItem, 8),
+	}
+	for index := 0; index < 6; index++ {
+		state.Experts[index] = ExpertProgressItem{
+			Index: index, Expert: fmt.Sprintf("settled-%d", index), Model: "safe-model",
+			Location: llm.OllamaModelLocationLocal, Phase: expertteam.ProgressCompleted,
+			Status: expertteam.ExpertCompleted,
+		}
+	}
+	state.Experts[6] = ExpertProgressItem{
+		Index: 6, Expert: "active-last", Model: "safe-model",
+		Location: llm.OllamaModelLocationCloud, Phase: expertteam.ProgressStarted,
+	}
+
+	for _, width := range []int{30, 80} {
+		view := state.renderDetails(width, NewToolCardStyles(true))
+		activeAt := strings.Index(view, "active-last")
+		queueAt := strings.Index(view, "1 more queued")
+		settledAt := strings.Index(view, "settled-0")
+		if activeAt < 0 || queueAt < 0 || settledAt < 0 ||
+			activeAt >= queueAt || queueAt >= settledAt {
+			t.Fatalf("width %d let settled history crowd out live work:\n%s", width, view)
+		}
+		if !strings.Contains(view, "more · Ctrl+G Agents") {
+			t.Fatalf("width %d omitted the honest hidden-node receipt:\n%s", width, view)
+		}
+		for _, line := range strings.Split(view, "\n") {
+			if got := lipgloss.Width(line); got > width {
+				t.Fatalf("width %d rendered %d cells: %q", width, got, line)
+			}
+		}
+	}
+}
+
 func TestExpertProgressDetailsPreserveQueuedAggregateWithinCap(t *testing.T) {
 	state := &ExpertProgressState{
 		Sequence:    17,
@@ -305,12 +348,12 @@ func TestExpertProgressDetailsPreserveQueuedAggregateWithinCap(t *testing.T) {
 	}
 
 	view := state.renderDetails(80, NewToolCardStyles(true))
-	runningAt := strings.Index(view, "expert-a")
+	firstSettledAt := strings.Index(view, "expert-a")
 	queuedAt := strings.Index(view, "2 more queued")
 	nextAt := strings.Index(view, "expert-c")
-	if runningAt < 0 || queuedAt < 0 || nextAt < 0 ||
-		runningAt >= queuedAt || queuedAt >= nextAt {
-		t.Fatalf("queued aggregate lost stable index order:\n%s", view)
+	if firstSettledAt < 0 || queuedAt < 0 || nextAt < 0 ||
+		queuedAt >= firstSettledAt || firstSettledAt >= nextAt {
+		t.Fatalf("queued aggregate was crowded out by settled history:\n%s", view)
 	}
 	if !strings.Contains(view, "+3 more · Ctrl+G Agents") {
 		t.Fatalf("hidden-node receipt is not honest:\n%s", view)

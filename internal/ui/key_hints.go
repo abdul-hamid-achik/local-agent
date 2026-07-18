@@ -33,7 +33,7 @@ func (m *Model) renderKeyHints(width int, hints ...keyHint) string {
 			}
 		}
 	}
-	return truncateDisplay(m.renderKeyHintSet(hints[:1], 0), width)
+	return truncateDisplayWithGlyphProfile(m.renderKeyHintSet(hints[:1], 0), width, m.glyphProfile)
 }
 
 // actionLimit is -1 for every action, 0 for none, or a positive count of
@@ -44,6 +44,8 @@ func (m *Model) renderKeyHintSet(hints []keyHint, actionLimit int) string {
 	for index, hint := range hints {
 		keyLabel := strings.ToLower(strings.TrimSpace(hint.Key))
 		action := strings.ToLower(strings.TrimSpace(hint.Action))
+		keyLabel = pickerTextForGlyphProfile(keyLabel, m.glyphProfile)
+		action = pickerTextForGlyphProfile(action, m.glyphProfile)
 		if keyLabel == "" && action == "" {
 			continue
 		}
@@ -59,5 +61,5 @@ func (m *Model) renderKeyHintSet(hints []keyHint, actionLimit int) string {
 		}
 		parts = append(parts, part)
 	}
-	return strings.Join(parts, m.styles.OverlayDim.Render(" · "))
+	return strings.Join(parts, m.styles.OverlayDim.Render(glyphSeparator(m.glyphProfile)))
 }

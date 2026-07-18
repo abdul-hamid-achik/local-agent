@@ -79,6 +79,21 @@ func TestEntryMemoWarmRenderIsByteIdentical(t *testing.T) {
 	}
 }
 
+func TestEntryMemoKeyIncludesReadableProseMeasure(t *testing.T) {
+	m := newTestModel(t)
+	entry := ChatEntry{
+		BlockID:  "memo-prose",
+		Revision: 1,
+		Kind:     "user",
+		Content:  strings.Repeat("readable prose ", 20),
+	}
+	wide := m.entryMemoKey(entry, 160, 96, false)
+	narrow := m.entryMemoKey(entry, 160, 72, false)
+	if wide == "" || narrow == "" || wide == narrow {
+		t.Fatalf("memo key ignored prose geometry: wide=%q narrow=%q", wide, narrow)
+	}
+}
+
 func TestEntryMemoToolMutationChangesKeyAndRerenders(t *testing.T) {
 	m := newTestModel(t)
 	m.ready = true
@@ -125,7 +140,7 @@ func TestEntryMemoToolMutationChangesKeyAndRerenders(t *testing.T) {
 	}
 }
 
-func TestEntryMemoSkipsLiveToolGroupAndClearsOnShrink(t *testing.T) {
+func TestEntryMemoCachesEventDrivenRunningToolAndClearsOnShrink(t *testing.T) {
 	m := newTestModel(t)
 	m.ready = true
 	mixedMemoTranscript(m)
@@ -134,16 +149,21 @@ func TestEntryMemoSkipsLiveToolGroupAndClearsOnShrink(t *testing.T) {
 
 	_ = m.renderEntries()
 	toolID := m.entries[2].BlockID
-	if _, ok := m.entryMemo[toolID]; ok {
-		t.Fatal("live tool group must bypass the memo (it re-renders every frame)")
+	running, ok := m.entryMemo[toolID]
+	if !ok {
+		t.Fatal("event-driven running ToolCard was not memoized")
 	}
 
 	m.toolEntries[0].Status = ToolStatusDone
 	m.toolsPending = 0
 	m.invalidateEntryCache()
 	_ = m.renderEntries()
-	if _, ok := m.entryMemo[toolID]; !ok {
+	settled, ok := m.entryMemo[toolID]
+	if !ok {
 		t.Fatal("settled tool group was not memoized after the turn completed")
+	}
+	if settled.key == running.key {
+		t.Fatal("running-to-settled lifecycle event did not change the memo key")
 	}
 
 	// A shrunken entries slice prunes only identities that no longer survive.

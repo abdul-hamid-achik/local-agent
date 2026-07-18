@@ -398,13 +398,21 @@ func renderDiffAtWidth(lines []DiffLine, styles Styles, maxLines, width int) str
 
 // renderUnifiedDiffAtWidth renders a full-width unified patch with a file
 // header, typed hunk headers, and old/new line-number gutters.
-func renderUnifiedDiffAtWidth(path string, lines []DiffLine, styles Styles, maxLines, width int) string {
+func renderUnifiedDiffAtWidth(
+	path string,
+	lines []DiffLine,
+	styles Styles,
+	maxLines,
+	width int,
+	profiles ...GlyphProfile,
+) string {
 	if len(lines) == 0 {
 		return ""
 	}
+	profile := resolveGlyphProfile(profiles...)
 
 	var b strings.Builder
-	b.WriteString(renderDiffFileHeader(path, lines, styles, width))
+	b.WriteString(renderDiffFileHeader(path, lines, styles, width, profile))
 	b.WriteByte('\n')
 
 	displayed := 0
@@ -413,29 +421,29 @@ func renderUnifiedDiffAtWidth(path string, lines []DiffLine, styles Styles, maxL
 		var renderedRows []string
 		switch line.Kind {
 		case DiffAdded:
-			renderedRows = renderDiffBodyRows(line, "+", gutter.numberAt(index), gutter, styles.DiffAdded, width)
+			renderedRows = renderDiffBodyRows(line, "+", gutter.numberAt(index), gutter, styles.DiffAdded, width, profiles...)
 		case DiffRemoved:
-			renderedRows = renderDiffBodyRows(line, "-", gutter.numberAt(index), gutter, styles.DiffRemoved, width)
+			renderedRows = renderDiffBodyRows(line, "-", gutter.numberAt(index), gutter, styles.DiffRemoved, width, profiles...)
 		case DiffContext:
-			renderedRows = renderDiffBodyRows(line, " ", gutter.numberAt(index), gutter, styles.DiffContext, width)
+			renderedRows = renderDiffBodyRows(line, " ", gutter.numberAt(index), gutter, styles.DiffContext, width, profiles...)
 		case DiffHunkHeader:
 			header := line.Content
 			if line.Hunk != nil {
 				header = formatDiffHunk(*line.Hunk)
 			}
-			renderedRows = []string{renderDiffMetaLine(header, styles, width)}
+			renderedRows = []string{renderDiffMetaLine(header, styles, width, profile)}
 		case DiffEllipsis:
 			content := line.Content
 			if content == "" {
 				content = "… unchanged lines"
 			}
-			renderedRows = []string{renderDiffMetaLine(content, styles, width)}
+			renderedRows = []string{renderDiffMetaLine(content, styles, width, profile)}
 		case DiffOmitted:
-			renderedRows = []string{renderDiffMetaLine(line.Content, styles, width)}
+			renderedRows = []string{renderDiffMetaLine(line.Content, styles, width, profile)}
 		case DiffNoNewline:
-			renderedRows = []string{renderDiffMetaLine(diffNoNewlineContent, styles, width)}
+			renderedRows = []string{renderDiffMetaLine(diffNoNewlineContent, styles, width, profile)}
 		default:
-			renderedRows = []string{renderDiffMetaLine(line.Content, styles, width)}
+			renderedRows = []string{renderDiffMetaLine(line.Content, styles, width, profile)}
 		}
 
 		if maxLines > 0 {
@@ -452,9 +460,10 @@ func renderUnifiedDiffAtWidth(path string, lines []DiffLine, styles Styles, maxL
 				}
 				if remaining > 0 {
 					b.WriteString(renderDiffMetaLine(
-						diffContinuationLabel(visible, len(renderedRows), len(lines)-index-1),
+						diffContinuationLabel(visible, len(renderedRows), len(lines)-index-1, profile),
 						styles,
 						width,
+						profile,
 					))
 					b.WriteByte('\n')
 				}
@@ -471,20 +480,32 @@ func renderUnifiedDiffAtWidth(path string, lines []DiffLine, styles Styles, maxL
 	return b.String()
 }
 
-func renderDiffLoadingAtWidth(path string, styles Styles, width int) string {
-	return renderDiffHeaderStatus(path, "diff loading", styles, width)
+func renderDiffLoadingAtWidth(path string, styles Styles, width int, profiles ...GlyphProfile) string {
+	return renderDiffHeaderStatus(path, "diff loading", styles, width, profiles...)
 }
 
-func renderDiffFileHeader(path string, lines []DiffLine, styles Styles, width int) string {
+func renderDiffFileHeader(
+	path string,
+	lines []DiffLine,
+	styles Styles,
+	width int,
+	profiles ...GlyphProfile,
+) string {
 	added, removed, known := diffTotals(lines)
 	status := fmt.Sprintf("+%d -%d", added, removed)
 	if !known {
 		status = "+? -?"
 	}
-	return renderDiffHeaderStatus(path, status, styles, width)
+	return renderDiffHeaderStatus(path, status, styles, width, profiles...)
 }
 
-func renderDiffHeaderStatus(path, status string, styles Styles, width int) string {
+func renderDiffHeaderStatus(
+	path, status string,
+	styles Styles,
+	width int,
+	profiles ...GlyphProfile,
+) string {
+	profile := resolveGlyphProfile(profiles...)
 	path = sanitizeTerminalSingleLine(path)
 	if path == "" {
 		path = "patch"
@@ -497,10 +518,10 @@ func renderDiffHeaderStatus(path, status string, styles Styles, width int) strin
 	}
 	statusWidth := lipglossWidth(status)
 	if statusWidth >= width {
-		return pathStyle.Render(truncateDisplay(status, width))
+		return pathStyle.Render(truncateDisplayWithGlyphProfile(status, width, profile))
 	}
 	pathBudget := max(1, width-statusWidth-1)
-	path = truncateDisplay(path, pathBudget)
+	path = truncateDisplayWithGlyphProfile(path, pathBudget, profile)
 	gap := max(1, width-lipglossWidth(path)-statusWidth)
 	return pathStyle.Render(path) + strings.Repeat(" ", gap) + renderDiffStatus(status, styles)
 }
@@ -514,7 +535,15 @@ func renderDiffStatus(status string, styles Styles) string {
 	return styles.DiffHeader.PaddingLeft(0).Render(status)
 }
 
-func renderDiffBodyRows(line DiffLine, marker string, numbers diffGutterNumbers, gutter diffGutter, style lipgloss.Style, width int) []string {
+func renderDiffBodyRows(
+	line DiffLine,
+	marker string,
+	numbers diffGutterNumbers,
+	gutter diffGutter,
+	style lipgloss.Style,
+	width int,
+	profiles ...GlyphProfile,
+) []string {
 	prefix := ""
 	if gutter.withNumbers {
 		oldNumber := ""
@@ -527,7 +556,8 @@ func renderDiffBodyRows(line DiffLine, marker string, numbers diffGutterNumbers,
 		}
 		prefix = fmt.Sprintf("%*s %*s ", gutter.oldWidth, oldNumber, gutter.newWidth, newNumber)
 	}
-	body := "│ " + marker + " "
+	glyphs := glyphSet(resolveGlyphProfile(profiles...))
+	body := glyphs.Vertical + " " + marker + " "
 	// Literal tabs do not have an intrinsic cell width: the terminal expands
 	// them from the current cursor column. Normalize them before measuring so
 	// wrapping has the same geometry in every terminal and code indentation
@@ -550,7 +580,7 @@ func renderDiffBodyRows(line DiffLine, marker string, numbers diffGutterNumbers,
 		rowBody := body
 		if index > 0 {
 			rowPrefix = strings.Repeat(" ", lipglossWidth(prefix))
-			rowBody = "│ ↳ "
+			rowBody = glyphs.Vertical + " " + glyphs.Continuation + " "
 		}
 		rendered := style.PaddingLeft(0).Render(rowBody + chunk)
 		if rowPrefix != "" {
@@ -561,24 +591,53 @@ func renderDiffBodyRows(line DiffLine, marker string, numbers diffGutterNumbers,
 	return rows
 }
 
-func diffContinuationLabel(visibleRows, currentRows, remainingSourceLines int) string {
+func diffContinuationLabel(
+	visibleRows,
+	currentRows,
+	remainingSourceLines int,
+	profiles ...GlyphProfile,
+) string {
+	prefix := "…"
+	separator := " · "
+	if resolveGlyphProfile(profiles...) == GlyphASCII {
+		prefix = "..."
+		separator = " | "
+	}
 	switch {
 	case visibleRows > 0 && visibleRows < currentRows && remainingSourceLines > 0:
-		return fmt.Sprintf("… line continues · %d more lines", remainingSourceLines)
+		return fmt.Sprintf(
+			"%s line continues%s%d more lines",
+			prefix,
+			separator,
+			remainingSourceLines,
+		)
 	case visibleRows > 0 && visibleRows < currentRows:
-		return "… line continues"
+		return prefix + " line continues"
 	default:
 		// No part of the current source line was shown. Count it alongside
 		// later source lines rather than claiming that an unseen line
 		// "continues".
-		return fmt.Sprintf("… %d more lines", remainingSourceLines+1)
+		return fmt.Sprintf("%s %d more lines", prefix, remainingSourceLines+1)
 	}
 }
 
-func renderDiffMetaLine(content string, styles Styles, width int) string {
+func renderDiffMetaLine(
+	content string,
+	styles Styles,
+	width int,
+	profiles ...GlyphProfile,
+) string {
+	profile := resolveGlyphProfile(profiles...)
 	content = sanitizeTerminalSingleLine(content)
+	if profile == GlyphASCII {
+		// Diff meta is host-owned chrome, unlike body content. Translate the
+		// semantic punctuation here so a typed omission restored from an older
+		// Unicode session still respects the active terminal profile.
+		content = strings.ReplaceAll(content, "…", "...")
+		content = strings.ReplaceAll(content, "·", "|")
+	}
 	if width > 0 {
-		content = truncateDisplay(content, width)
+		content = truncateDisplayWithGlyphProfile(content, width, profile)
 	}
 	return styles.DiffHeader.PaddingLeft(0).Render(content)
 }
@@ -918,6 +977,6 @@ func (m *Model) handleDiffBuildResult(msg diffBuildResultMsg) {
 		return
 	}
 	m.invalidateEntryCache()
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	m.gotoBottomIfFollowing()
 }

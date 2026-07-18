@@ -3,6 +3,8 @@ package ui
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -156,6 +158,69 @@ func TestRunCommitPanicStillReturnsOwnedReceipt(t *testing.T) {
 	)().(CommitResultMsg)
 	if msg.Token != 11 || msg.Err == nil || !strings.Contains(msg.Err.Error(), "provider exploded") {
 		t.Fatalf("panic receipt = %#v", msg)
+	}
+}
+
+func TestRunCommitRemoteProviderFailureCannotEnterTranscriptOrSession(t *testing.T) {
+	const providerSecret = "REMOTE_COMMIT_SECRET /Users/provider/private.key"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, providerSecret, http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	client, err := llm.NewOpenAICompatibleClient(llm.OpenAICompatibleOptions{
+		BaseURL: server.URL,
+		Model:   "grok-test",
+		APIKey:  "test-key",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var commitCalls atomic.Int32
+	git := commitTestGit{
+		diff: func(context.Context) (string, error) {
+			return "file.go | 1 +\n\ndiff --git a/file.go b/file.go", nil
+		},
+		commit: func(context.Context, string) error {
+			commitCalls.Add(1)
+			return nil
+		},
+	}
+	msg := runCommitWithGit(
+		context.Background(),
+		client,
+		"grok-test",
+		"",
+		17,
+		git,
+		commitTimeouts{diff: time.Second, message: time.Second, commit: time.Second},
+	)().(CommitResultMsg)
+	if msg.Err == nil || !strings.Contains(msg.Err.Error(), ProviderFailureCopy) {
+		t.Fatalf("remote commit receipt = %#v, want host-owned provider copy", msg)
+	}
+	if strings.Contains(msg.Err.Error(), providerSecret) {
+		t.Fatalf("remote provider body crossed CommitResultMsg: %v", msg.Err)
+	}
+	if got := commitCalls.Load(); got != 0 {
+		t.Fatalf("git commit dispatched %d times after provider failure", got)
+	}
+
+	m := newTestModel(t)
+	m.commitRunning = true
+	m.commitToken = msg.Token
+	m.handleCommitResult(msg, nil)
+	if len(m.entries) != 1 || !strings.Contains(m.entries[0].Content, ProviderFailureCopy) {
+		t.Fatalf("commit transcript entry = %#v", m.entries)
+	}
+	state, err := encodeSessionState(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(state, providerSecret) {
+		t.Fatalf("remote provider body crossed durable session boundary: %s", state)
+	}
+	if !strings.Contains(state, ProviderFailureCopy) {
+		t.Fatalf("durable session omitted host-owned provider failure: %s", state)
 	}
 }
 

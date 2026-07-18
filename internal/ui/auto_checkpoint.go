@@ -106,6 +106,7 @@ func normalizeLogicalTurnLimits(limits agent.TurnLimits, now time.Time) agent.Tu
 func newAgentSegmentCmd(
 	agentInstance *agent.Agent,
 	program *tea.Program,
+	outputDetails *OutputDetailStore,
 	ctx context.Context,
 	logicalTurnID string,
 	segmentTurnID string,
@@ -122,7 +123,7 @@ func newAgentSegmentCmd(
 				Err: errors.New("agent is unavailable"),
 			}
 		}
-		adapter := NewAdapter(program, workDir)
+		adapter := NewAdapterWithOutputDetails(program, outputDetails, workDir)
 		err := agentInstance.RunTurnWithOptions(ctx, adapter, segmentTurnID, options)
 		return AgentDoneMsg{TurnID: logicalTurnID, SegmentTurnID: segmentTurnID, Err: err}
 	}
@@ -209,14 +210,11 @@ func (m *Model) handleAutoIterationCheckpoint(message AgentDoneMsg) (tea.Cmd, bo
 	m.state = StateWaiting
 	m.scramble.Reset()
 	m.recalcViewportHeight()
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	m.gotoBottomIfFollowing()
 
 	command := newAgentSegmentCmd(
-		m.agent, m.program, m.turnRunContext, logicalTurnID, newSegmentID, m.turnRunOptions,
+		m.agent, m.program, m.outputDetails, m.turnRunContext, logicalTurnID, newSegmentID, m.turnRunOptions,
 	)
-	if m.reducedMotion {
-		return command, true, nil
-	}
-	return tea.Batch(m.scramble.Tick(), command), true, nil
+	return tea.Batch(m.startActivityCmd(), command), true, nil
 }

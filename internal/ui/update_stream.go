@@ -30,7 +30,7 @@ func (m *Model) handleStreamText(msg StreamTextMsg, cmds []tea.Cmd) []tea.Cmd {
 	m.inThinking = outInThinking
 	m.thinkSearchBuf = outSearchBuf
 	if mainText != "" {
-		m.streamBuf.WriteString(mainText)
+		m.appendTranscriptStreamText(mainText)
 	}
 	if thinkText != "" {
 		m.thinkBuf.WriteString(thinkText)
@@ -41,7 +41,7 @@ func (m *Model) handleStreamText(msg StreamTextMsg, cmds []tea.Cmd) []tea.Cmd {
 	// partial is never dropped.
 	if now := time.Now(); now.Sub(m.lastStreamPaint) >= 33*time.Millisecond {
 		m.lastStreamPaint = now
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		m.gotoBottomIfFollowing()
 	}
 	return cmds
@@ -57,7 +57,7 @@ func (m *Model) handleStreamThinking(msg StreamThinkingMsg, cmds []tea.Cmd) []te
 	m.thinkBuf.WriteString(msg.Text)
 	if now := time.Now(); now.Sub(m.lastStreamPaint) >= 33*time.Millisecond {
 		m.lastStreamPaint = now
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		m.gotoBottomIfFollowing()
 	}
 	return cmds
@@ -80,7 +80,7 @@ func (m *Model) handleContextCompacted(msg ContextCompactedMsg) {
 	if err := m.reconcileVisibleImageProjection(m.agent.Messages()); err != nil {
 		m.entries = append(m.entries, ChatEntry{Kind: "error", Content: "Context compaction could not reconcile image references: " + err.Error()})
 		m.invalidateEntryCache()
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		m.gotoBottomIfFollowing()
 	}
 }
@@ -89,7 +89,7 @@ func (m *Model) handleContextCompacted(msg ContextCompactedMsg) {
 // returns the accumulated commands slice.
 func (m *Model) handleContextCompactionStarted(msg ContextCompactionStartedMsg, cmds []tea.Cmd) []tea.Cmd {
 	m.compactingContext = true
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	m.gotoBottomIfFollowing()
 	cmds = append(cmds, m.startActivityCmd())
 	return cmds
@@ -98,7 +98,7 @@ func (m *Model) handleContextCompactionStarted(msg ContextCompactionStartedMsg, 
 // handleContextCompactionFinished clears the compaction status line.
 func (m *Model) handleContextCompactionFinished(msg ContextCompactionFinishedMsg) {
 	m.compactingContext = false
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	m.gotoBottomIfFollowing()
 }
 
@@ -153,17 +153,6 @@ func (m *Model) handleToolCallStart(msg ToolCallStartMsg, cmds []tea.Cmd) []tea.
 		cmds = append(cmds, m.startActivityCmd())
 	}
 
-	// Create tool card for fancy display
-	kind := toolCardKindForTool(msg.Name)
-	m.toolCardMgr.AddCardWithID(msg.ID, msg.Name, kind, msg.StartTime)
-	if len(m.toolCardMgr.Cards) > 0 {
-		card := &m.toolCardMgr.Cards[len(m.toolCardMgr.Cards)-1]
-		card.Args = te.Args
-		card.SetSummary(te.Summary)
-		card.ResultLanguage = te.ResultLanguage
-		card.Projection = te.Projection
-	}
-
 	// Settle the assistant segment before its tool receipt so transcript order
 	// remains reasoning/prose → tool. Thinking-only segments render as one
 	// compact disclosure without an empty assistant block.
@@ -172,7 +161,7 @@ func (m *Model) handleToolCallStart(msg ToolCallStartMsg, cmds []tea.Cmd) []tea.
 		Kind:      "tool_group",
 		ToolIndex: len(m.toolEntries) - 1,
 	})
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	if isExpertConsultTool(msg.Name) {
 		if cmd := m.refreshAgentHub(); cmd != nil {
 			cmds = append(cmds, cmd)
@@ -192,6 +181,19 @@ func (m *Model) handleToolCallResult(msg ToolCallResultMsg, cmds []tea.Cmd) []te
 	matched := false
 	matchedIndex := -1
 	expertResult := isExpertConsultTool(msg.Name)
+	outputDetail := msg.OutputDetail
+	if !outputDetail.Ref.Valid() || !outputDetail.Digest.Valid() {
+		if outputDetail.Ref.Valid() && m.outputDetails != nil {
+			m.outputDetails.Drop(outputDetail.Ref)
+		}
+		outputDetail = OutputDetailReceipt{}
+	}
+	if expertResult {
+		if outputDetail.Ref.Valid() && m.outputDetails != nil {
+			m.outputDetails.Drop(outputDetail.Ref)
+		}
+		outputDetail = OutputDetailReceipt{}
+	}
 	result := boundedToolCardResult(msg.Result)
 	resultDisplay := ""
 	if strings.ContainsRune(msg.Result, '\x1b') {
@@ -224,6 +226,7 @@ func (m *Model) handleToolCallResult(msg ToolCallResultMsg, cmds []tea.Cmd) []te
 			m.toolEntries[i].Projection = projection
 			m.toolEntries[i].Result = result
 			m.toolEntries[i].ResultDisplay = resultDisplay
+			m.toolEntries[i].OutputDetail = outputDetail
 			m.toolEntries[i].IsError = projection.Transport == ecosystem.TransportFailed || projection.Domain == ecosystem.DomainFailed
 			m.toolEntries[i].Duration = msg.Duration
 			if m.toolEntries[i].IsError {
@@ -267,6 +270,9 @@ func (m *Model) handleToolCallResult(msg ToolCallResultMsg, cmds []tea.Cmd) []te
 		}
 	}
 	if !matched {
+		if outputDetail.Ref.Valid() && m.outputDetails != nil {
+			m.outputDetails.Drop(outputDetail.Ref)
+		}
 		return cmds
 	}
 	if expertResult && matchedIndex >= 0 {
@@ -274,16 +280,9 @@ func (m *Model) handleToolCallResult(msg ToolCallResultMsg, cmds []tea.Cmd) []te
 		entry.ExpertProgress = sanitizeExpertProgressState(entry.ExpertProgress, true)
 		if entry.ExpertProgress != nil {
 			entry.Summary = boundedToolCardSummary(entry.ExpertProgress.summary())
+			entry.Projection = projectionWithExpertProgressOutcome(entry.Projection, entry.ExpertProgress)
 		} else {
 			entry.Summary = "expert progress unavailable"
-		}
-		for cardIndex := len(m.toolCardMgr.Cards) - 1; cardIndex >= 0; cardIndex-- {
-			card := &m.toolCardMgr.Cards[cardIndex]
-			if toolCallMatches(msg.ID, msg.Name, card.ID, card.Name) && card.State == ToolCardRunning {
-				card.SetSummary(entry.Summary)
-				card.setExpertProgress(entry.ExpertProgress, max(1, m.chatPaneWidth()-6))
-				break
-			}
 		}
 	}
 	var completedProjection ecosystem.ToolProjection
@@ -296,20 +295,13 @@ func (m *Model) handleToolCallResult(msg ToolCallResultMsg, cmds []tea.Cmd) []te
 	if m.goalTurnID != "" && completedProjection.Successful() {
 		m.goalTurnSuccesses++
 	}
-	// Update tool card
-	cardState := toolCardStateFromProjection(completedProjection)
-	if matchedIndex >= 0 {
-		cardState = m.toolEntries[matchedIndex].ExpertProgress.cardState(cardState)
-	}
-	m.toolCardMgr.UpdateCardSemanticWithID(msg.ID, msg.Name, cardState, result, resultDisplay, msg.Duration, completedProjection)
-
 	if m.toolsPending > 0 {
 		m.toolsPending--
 	}
 	if diffCmd != nil {
 		cmds = append(cmds, diffCmd)
 	}
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	if expertResult {
 		if cmd := m.refreshAgentHub(); cmd != nil {
 			cmds = append(cmds, cmd)
@@ -328,7 +320,7 @@ func (m *Model) handleSystemMessage(msg SystemMessageMsg) {
 	// The first startup/recovery notice can add a fixed Settings row at
 	// compact heights. Recompute the transcript allocation before painting.
 	m.recalcViewportHeight()
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	m.gotoBottomIfFollowing()
 }
 
@@ -342,7 +334,7 @@ func (m *Model) handleErrorMsg(msg ErrorMsg) {
 		Content: msg.Msg,
 	})
 	m.recalcViewportHeight()
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	m.gotoBottomIfFollowing()
 }
 
@@ -370,6 +362,7 @@ func (m *Model) handleAgentDone(msg AgentDoneMsg, cmds []tea.Cmd) []tea.Cmd {
 	}
 	var unresolved *agent.UnresolvedExecutionError
 	hasUnresolved := errors.As(msg.Err, &unresolved)
+	turnCancelled := errors.Is(msg.Err, context.Canceled) && !hasUnresolved
 	preDispatchRejected := errors.Is(msg.Err, llm.ErrInferenceNotStarted) || errors.Is(msg.Err, llm.ErrNoModelSelected)
 	capturedFollowUp := false
 	rolledBackPrompt := false
@@ -385,9 +378,10 @@ func (m *Model) handleAgentDone(msg AgentDoneMsg, cmds []tea.Cmd) []tea.Cmd {
 		}
 	}
 	m.clearTurnMessageCheckpoint()
-	followWasPaused := m.followPaused()
-	followYOffset := m.viewport.YOffset()
 	m.flushStream()
+	if turnCancelled {
+		m.settleCancelledToolEntries()
+	}
 	m.settleGoalTurn(msg)
 	if msg.Err != nil {
 		m.clearContinuationAction()
@@ -412,8 +406,7 @@ func (m *Model) handleAgentDone(msg AgentDoneMsg, cmds []tea.Cmd) []tea.Cmd {
 		m.syncInputHeight()
 	}
 	m.recalcViewportHeight()
-	m.viewport.SetContent(m.renderEntries())
-	m.restoreFollowPosition(followWasPaused, followYOffset)
+	m.refreshTranscript()
 	if msg.Err == nil {
 		m.lastTurnToolIndex = -1
 		for i := len(m.toolEntries) - 1; i >= m.turnToolStartIndex; i-- {
@@ -424,7 +417,7 @@ func (m *Model) handleAgentDone(msg AgentDoneMsg, cmds []tea.Cmd) []tea.Cmd {
 		}
 		// The success notice is a completion receipt, not a generic stopped
 		// state; it also flashes the terminal title while active.
-		doneText := "✓ Done"
+		doneText := glyphSet(m.glyphProfile).Success + " Done"
 		if m.lastTurnDuration > 0 {
 			doneText += " · " + formatWorkingElapsed(m.lastTurnDuration)
 		}
@@ -435,11 +428,10 @@ func (m *Model) handleAgentDone(msg AgentDoneMsg, cmds []tea.Cmd) []tea.Cmd {
 		case hasUnresolved:
 			m.entries, _ = appendExecutionRecoveryNotice(m.entries, unresolved)
 			m.rememberStandaloneRecovery(unresolved)
-		case errors.Is(msg.Err, context.Canceled) && !m.shuttingDown:
+		case turnCancelled && !m.shuttingDown:
 			m.entries = append(m.entries, ChatEntry{Kind: "system", Content: "Turn cancelled."})
 		}
-		m.viewport.SetContent(m.renderEntries())
-		m.restoreFollowPosition(followWasPaused, followYOffset)
+		m.refreshTranscript()
 	}
 	// Persist a lossless state snapshot after every settled attempt. Failed
 	// turns may contain cancellation or unknown-outcome receipts that must
@@ -485,8 +477,7 @@ func (m *Model) handleAgentDone(msg AgentDoneMsg, cmds []tea.Cmd) []tea.Cmd {
 				m.goalPersistenceDirty = true
 			}
 			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("Save session: %v", persistErr)})
-			m.viewport.SetContent(m.renderEntries())
-			m.restoreFollowPosition(followWasPaused, followYOffset)
+			m.refreshTranscript()
 		} else {
 			settledPersisted = true
 			if m.goalRuntime != nil {
@@ -526,4 +517,63 @@ func (m *Model) handleAgentDone(msg AgentDoneMsg, cmds []tea.Cmd) []tea.Cmd {
 	}
 	m.appendShutdownQuit(&cmds)
 	return cmds
+}
+
+// settleCancelledToolEntries terminates only the still-running invocations
+// owned by the current turn. Cancellation is a durable lifecycle distinct from
+// tool failure: transport stopped, the domain outcome is unknown, and no
+// evidence may be inferred. Late results cannot overwrite this terminal state
+// because result matching admits only ToolStatusRunning.
+func (m *Model) settleCancelledToolEntries() int {
+	start := max(0, min(m.turnToolStartIndex, len(m.toolEntries)))
+	now := time.Now()
+	if m.now != nil {
+		now = m.now()
+	}
+	settled := 0
+	for index := start; index < len(m.toolEntries); index++ {
+		entry := &m.toolEntries[index]
+		if entry.Status != ToolStatusRunning {
+			continue
+		}
+		entry.Status = ToolStatusCancelled
+		entry.IsError = false
+		entry.Result = cancelledToolResult
+		entry.ResultDisplay = ""
+		entry.ResultLanguage = ""
+		if entry.OutputDetail.Ref.Valid() && m.outputDetails != nil {
+			m.outputDetails.Drop(entry.OutputDetail.Ref)
+		}
+		entry.OutputDetail = OutputDetailReceipt{}
+		entry.RawArgs = nil
+		entry.BeforeContent = ""
+		entry.BeforeSnapshotAvailable = false
+		entry.DiffLines = nil
+		entry.DiffPending = false
+		entry.DiffGeneration = 0
+		entry.ExpertProgress = nil
+		if !entry.StartTime.IsZero() {
+			entry.Duration = min(now.Sub(entry.StartTime), maxToolViewDuration)
+			if entry.Duration < 0 {
+				entry.Duration = 0
+			}
+		}
+		projection := entry.Projection.Normalize()
+		if projection.Transport == "" && projection.Domain == "" {
+			projection = ecosystem.ProjectToolCall(entry.Name, nil)
+		}
+		projection.Transport = ecosystem.TransportFailed
+		projection.Domain = ecosystem.DomainUnknown
+		projection.DomainTyped = false
+		projection.Evidence = ecosystem.EvidenceNone
+		projection.Digest = nil
+		projection.Artifact = nil
+		entry.Projection = projection.Normalize()
+		settled++
+	}
+	if settled > 0 {
+		m.toolsPending = max(0, m.toolsPending-settled)
+		m.invalidateEntryCache()
+	}
+	return settled
 }

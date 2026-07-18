@@ -53,7 +53,7 @@ func assertInlineViewCursorInBounds(t *testing.T, view tea.View) {
 func seedLongInlineFormTranscript(m *Model) {
 	m.entries = []ChatEntry{{Kind: "system", Content: strings.Repeat("transcript row\n", 120)}}
 	m.invalidateEntryCache()
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 }
 
 func TestPlanFormRendersInlineAfterTranscriptAtSupportedSizes(t *testing.T) {
@@ -67,7 +67,7 @@ func TestPlanFormRendersInlineAfterTranscriptAtSupportedSizes(t *testing.T) {
 	} {
 		t.Run(size.name, func(t *testing.T) {
 			m := resizeInlineFormTestModel(t, size.width, size.height)
-			m.viewport.SetContent("TRANSCRIPT SENTINEL\ntranscript tail")
+			m.setTestTranscriptContent("TRANSCRIPT SENTINEL\ntranscript tail")
 			m.input.SetValue("unchanged composer draft")
 			m.openPlanForm("plan this exact task")
 
@@ -96,7 +96,7 @@ func TestInlineFormsFitEveryActiveFieldAtMinimumSize(t *testing.T) {
 	t.Run("plan", func(t *testing.T) {
 		for active := 0; active < 3; active++ {
 			m := resizeInlineFormTestModel(t, minTerminalWidth, minTerminalHeight)
-			m.viewport.SetContent("visible transcript")
+			m.setTestTranscriptContent("visible transcript")
 			m.openPlanForm("minimum plan")
 			for m.planFormState.ActiveField < active {
 				updated, _ := m.Update(tabKey())
@@ -122,7 +122,7 @@ func TestInlineFormsFitEveryActiveFieldAtMinimumSize(t *testing.T) {
 	t.Run("goal", func(t *testing.T) {
 		for field := GoalFieldObjective; field < goalFormFieldCount; field++ {
 			m := resizeInlineFormTestModel(t, minTerminalWidth, minTerminalHeight)
-			m.viewport.SetContent("visible transcript")
+			m.setTestTranscriptContent("visible transcript")
 			if err := m.openGoalForm("minimum goal", false); err != nil {
 				t.Fatalf("open goal: %v", err)
 			}
@@ -160,7 +160,7 @@ func TestInlineFormsFitEveryActiveFieldAtMinimumSize(t *testing.T) {
 func TestInlineFormLifecyclePreservesPausedTranscriptAndDraft(t *testing.T) {
 	assertAnchor := func(t *testing.T, m *Model, want int, stage string) {
 		t.Helper()
-		if got := m.viewport.YOffset(); got != want || !m.followPaused() {
+		if got := m.transcriptYOffset(); got != want || !m.followPaused() {
 			t.Fatalf("%s moved paused anchor to %d (want %d), paused=%v", stage, got, want, m.followPaused())
 		}
 	}
@@ -168,7 +168,7 @@ func TestInlineFormLifecyclePreservesPausedTranscriptAndDraft(t *testing.T) {
 	t.Run("plan_open_field_resize_theme_cancel", func(t *testing.T) {
 		m := newTestModel(t)
 		seedLongInlineFormTranscript(m)
-		m.viewport.SetYOffset(7)
+		m.setTranscriptYOffset(7)
 		m.pauseFollow()
 		m.input.SetValue("composer draft survives")
 
@@ -194,7 +194,7 @@ func TestInlineFormLifecyclePreservesPausedTranscriptAndDraft(t *testing.T) {
 	t.Run("plan_submit_exact", func(t *testing.T) {
 		m := newTestModel(t)
 		seedLongInlineFormTranscript(m)
-		m.viewport.SetYOffset(9)
+		m.setTranscriptYOffset(9)
 		m.pauseFollow()
 		m.input.SetValue("next composer draft")
 		m.openPlanForm("submit this plan")
@@ -219,7 +219,7 @@ func TestInlineFormLifecyclePreservesPausedTranscriptAndDraft(t *testing.T) {
 	t.Run("goal_field_validation_resize_cancel", func(t *testing.T) {
 		m := newTestModel(t)
 		seedLongInlineFormTranscript(m)
-		m.viewport.SetYOffset(11)
+		m.setTranscriptYOffset(11)
 		m.pauseFollow()
 		m.input.SetValue("goal composer draft")
 		if err := m.openGoalForm("anchored goal", false); err != nil {

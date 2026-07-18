@@ -719,6 +719,9 @@ func TestInlineApprovalFitsMinimumTerminalAndKeepsDecisionKeys(t *testing.T) {
 			t.Fatalf("minimum inline approval lost %q:\n%s", want, inline)
 		}
 	}
+	if !strings.Contains(inline, "esc cancel turn") {
+		t.Fatalf("minimum approval did not disclose Escape scope:\n%s", inline)
+	}
 	if got := lipgloss.Height(m.View().Content); got > m.height {
 		t.Fatalf("minimum approval view height = %d (surface %d), want <= %d:\n%s", got, lipgloss.Height(m.renderApproval()), m.height, inline)
 	}
@@ -737,9 +740,9 @@ func TestApprovalPreservesPausedTranscriptAcrossOpenDetailsResizeAndResolve(t *t
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = updated.(*Model)
 	setScrollableTranscript(m)
-	m.viewport.SetYOffset(6)
+	m.setTranscriptYOffset(6)
 	m.pauseFollow()
-	wantOffset := m.viewport.YOffset()
+	wantOffset := m.transcriptYOffset()
 	responses := make(chan permission.ApprovalResponse, 1)
 	m.state = StateStreaming
 	m = openApprovalForTest(t, m, ToolApprovalMsg{
@@ -757,7 +760,7 @@ func TestApprovalPreservesPausedTranscriptAcrossOpenDetailsResizeAndResolve(t *t
 	})
 	assertPausedApprovalTranscript := func(stage string) {
 		t.Helper()
-		if got := m.viewport.YOffset(); got != wantOffset {
+		if got := m.transcriptYOffset(); got != wantOffset {
 			t.Fatalf("%s moved transcript from %d to %d", stage, wantOffset, got)
 		}
 		if !m.followPaused() || !m.userScrolledUp {
@@ -803,7 +806,7 @@ func TestApprovalThemeChangeRebuildsCachedBodyAndPreservesOffsets(t *testing.T) 
 
 	m := newTestModel(t)
 	setScrollableTranscript(m)
-	m.viewport.SetYOffset(6)
+	m.setTranscriptYOffset(6)
 	m.pauseFollow()
 	m = openApprovalForTest(t, m, ToolApprovalMsg{
 		ToolName: "write_file",
@@ -815,7 +818,7 @@ func TestApprovalThemeChangeRebuildsCachedBodyAndPreservesOffsets(t *testing.T) 
 		Response: make(chan permission.ApprovalResponse, 1),
 	})
 	m.approvalState.Viewport.SetYOffset(2)
-	wantTranscriptOffset := m.viewport.YOffset()
+	wantTranscriptOffset := m.transcriptYOffset()
 	wantApprovalOffset := m.approvalState.Viewport.YOffset()
 	labelWidth := min(10, max(6, m.approvalContentWidth()/5))
 	oldStyledLabel := m.styles.OverlayAccent.Width(labelWidth).Render("Impact")
@@ -830,7 +833,7 @@ func TestApprovalThemeChangeRebuildsCachedBodyAndPreservesOffsets(t *testing.T) 
 	if !strings.Contains(cachedBody, newStyledLabel) || strings.Contains(cachedBody, oldStyledLabel) {
 		t.Fatalf("approval body retained stale theme styles:\n%s", cachedBody)
 	}
-	if got := m.viewport.YOffset(); got != wantTranscriptOffset || !m.followPaused() {
+	if got := m.transcriptYOffset(); got != wantTranscriptOffset || !m.followPaused() {
 		t.Fatalf("theme change moved paused transcript: offset=%d want=%d paused=%v", got, wantTranscriptOffset, m.followPaused())
 	}
 	if got := m.approvalState.Viewport.YOffset(); got != wantApprovalOffset {
@@ -844,7 +847,7 @@ func TestApprovalUsesInlineComposerWidthAndShowsDiff(t *testing.T) {
 	m = updated.(*Model)
 	m.entries = append(m.entries, ChatEntry{Kind: "user", Content: "conversation remains visible"})
 	m.invalidateEntryCache()
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	m = openApprovalForTest(t, m, ToolApprovalMsg{
 		ToolName: "edit",
 		Args:     map[string]any{"path": "internal/ui/view.go"},

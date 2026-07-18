@@ -399,7 +399,7 @@ func TestCompletionPopupIsInlineAboveVisibleComposerAtSupportedSizes(t *testing.
 			m := newTestModel(t)
 			updated, _ := m.Update(tea.WindowSizeMsg{Width: size.width, Height: size.height})
 			m = updated.(*Model)
-			m.viewport.SetContent("transcript anchor")
+			m.setTestTranscriptContent("transcript anchor")
 			m.input.SetValue("ask @ag")
 			m.input.CursorEnd()
 			m.triggerCompletion(m.input.Value())
@@ -428,7 +428,7 @@ func TestCompletionPopupFitsFiveLineComposerAtMinimumSize(t *testing.T) {
 	m := newTestModel(t)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 30, Height: 12})
 	m = updated.(*Model)
-	m.viewport.SetContent("transcript anchor")
+	m.setTestTranscriptContent("transcript anchor")
 	m.input.SetValue("one\ntwo\nthree\nfour\n@ag")
 	m.input.CursorEnd()
 	m.syncInputHeight()
@@ -464,7 +464,7 @@ func TestCompletionPopupFitsCappedWrappedComposer(t *testing.T) {
 		m := newTestModel(t)
 		updated, _ := m.Update(tea.WindowSizeMsg{Width: size.width, Height: size.height})
 		m = updated.(*Model)
-		m.viewport.SetContent("transcript anchor")
+		m.setTestTranscriptContent("transcript anchor")
 		draft := strings.Repeat("wrapped context ", 30) + "@ag"
 		m.input.SetValue(draft)
 		m.input.CursorEnd()
@@ -491,17 +491,17 @@ func TestCompletionPopupFitsCappedWrappedComposer(t *testing.T) {
 
 func TestCompletionOpenAndAcceptPreservePausedTranscriptAnchor(t *testing.T) {
 	m := newTestModel(t)
-	m.viewport.SetContent(strings.Repeat("transcript\n", 100))
-	m.viewport.SetYOffset(7)
+	m.setTestTranscriptContent(strings.Repeat("transcript\n", 100))
+	m.setTranscriptYOffset(7)
 	m.pauseFollow()
 	m.input.SetValue("#sk")
 	m.input.CursorEnd()
 	m.triggerCompletion(m.input.Value())
-	if got := m.viewport.YOffset(); got != 7 || !m.followPaused() {
+	if got := m.transcriptYOffset(); got != 7 || !m.followPaused() {
 		t.Fatalf("open moved paused anchor to %d paused=%v", got, m.followPaused())
 	}
 	m.acceptCompletion()
-	if got := m.viewport.YOffset(); got != 7 || !m.followPaused() {
+	if got := m.transcriptYOffset(); got != 7 || !m.followPaused() {
 		t.Fatalf("accept moved paused anchor to %d paused=%v", got, m.followPaused())
 	}
 }

@@ -84,7 +84,7 @@ func (m *Model) applyMCPStatusSnapshot(servers []MCPServerStatus) {
 	}
 	if m.ready && !m.initializing {
 		m.recalcViewportHeight()
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		m.gotoBottomIfFollowing()
 	}
 }

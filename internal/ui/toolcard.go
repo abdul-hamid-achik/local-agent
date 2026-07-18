@@ -55,13 +55,27 @@ type ToolCard struct {
 	// through remapANSI16Line and must never be persisted or written to the
 	// terminal directly; the sanitized Result stays the only durable copy.
 	ResultDisplay string
+	// resultDisplayLines is the production render path: the strict
+	// ToolRenderModel adapter has already removed every escape sequence and
+	// retained only plain segments plus allowlisted ANSI-16 style tokens.
+	// ResultDisplay remains solely for isolated ToolCard compatibility tests.
+	resultDisplayLines  [][]ansiRemapSegment
+	resultDisplayHidden int
 	// ResultLanguage is a bounded lexer alias derived from trusted host metadata
 	// while the tool call is active. It never contains a path or result bytes.
 	ResultLanguage string
-	StartTime      time.Time
-	Duration       time.Duration
-	Expanded       bool
-	IsDark         bool
+	// OutputDigest is the scalar, persistable description of the original
+	// terminal-safe output. OutputAvailable grants no access by itself; it only
+	// reports whether the parent still owns a process-local viewer capability.
+	OutputDigest    OutputDetailDigest
+	OutputAvailable bool
+	PreviewMode     ToolPreviewMode
+	StartTime       time.Time
+	Duration        time.Duration
+	Expanded        bool
+	IsDark          bool
+	GlyphProfile    GlyphProfile
+	Lifecycle       ToolLifecycle
 	// ExpertProgress is the bounded host projection for the exact built-in
 	// consultation call. The adjacent cache avoids rebuilding its multi-line
 	// live surface on every spinner tick.
@@ -69,6 +83,7 @@ type ToolCard struct {
 	expertProgressCache         string
 	expertProgressCacheWidth    int
 	expertProgressCacheSequence uint64
+	expertProgressCacheProfile  GlyphProfile
 	Projection                  ecosystem.ToolProjection
 	Styles                      ToolCardStyles
 }
@@ -126,14 +141,97 @@ func NewToolCardStyles(isDark bool) ToolCardStyles {
 }
 
 // NewToolCard creates a new tool card.
-func NewToolCard(name string, kind ToolCardKind, isDark bool) ToolCard {
-	return ToolCard{
-		Name:   name,
-		Kind:   kind,
-		State:  ToolCardRunning,
-		IsDark: isDark,
-		Styles: NewToolCardStyles(isDark),
+func NewToolCard(name string, kind ToolCardKind, isDark bool, profiles ...GlyphProfile) ToolCard {
+	previewMode := ToolPreviewGeneric
+	switch kind {
+	case ToolCardBash:
+		previewMode = ToolPreviewExec
+	case ToolCardSearch:
+		previewMode = ToolPreviewSearch
+	case ToolCardFile:
+		if classifyTool(name) == ToolTypeFileWrite {
+			previewMode = ToolPreviewEdit
+		} else {
+			previewMode = ToolPreviewRead
+		}
 	}
+	return ToolCard{
+		Name:         name,
+		Kind:         kind,
+		State:        ToolCardRunning,
+		PreviewMode:  previewMode,
+		IsDark:       isDark,
+		GlyphProfile: resolveGlyphProfile(profiles...),
+		Lifecycle:    ToolLifecycleRunning,
+		Styles:       NewToolCardStyles(isDark),
+	}
+}
+
+// ToolCardFromRenderModel constructs the dumb visual component exclusively
+// from the strict render projection. It never reads ToolEntry or Model state.
+func ToolCardFromRenderModel(model ToolRenderModel, isDark bool, profiles ...GlyphProfile) (ToolCard, error) {
+	if err := model.Validate(); err != nil {
+		return ToolCard{}, err
+	}
+	card := NewToolCard(model.ToolName, toolCardKindFromViewKind(model.Kind), isDark, profiles...)
+	card.ID = model.InvocationID
+	card.State = toolCardStateFromLifecycle(model.Lifecycle)
+	card.Lifecycle = model.Lifecycle
+	card.SetSummary(model.Summary)
+	card.Args = model.Preview.Arguments
+	card.Result = model.Preview.Result
+	card.ResultLanguage = model.Preview.ResultLanguage
+	card.OutputDigest = model.Preview.OutputDigest
+	card.OutputAvailable = model.Preview.OutputAvailable
+	card.PreviewMode = model.Preview.Mode
+	card.StartTime = model.Preview.StartedAt
+	card.Duration = model.Duration
+	card.Expanded = model.Preview.Expanded
+	card.ExpertProgress = cloneExpertProgressState(model.Preview.ExpertProgress)
+	card.Projection = model.Projection.Normalize()
+	card.Projection.Operation = model.Operation
+	card.resultDisplayLines = cloneANSIResultPreview(model.Preview.ansiResultLines)
+	card.resultDisplayHidden = model.Preview.ansiHiddenLines
+	return card, nil
+}
+
+func toolCardKindFromViewKind(kind ToolKind) ToolCardKind {
+	switch kind {
+	case ToolKindFile:
+		return ToolCardFile
+	case ToolKindShell:
+		return ToolCardBash
+	case ToolKindSearch:
+		return ToolCardSearch
+	case ToolKindGit:
+		return ToolCardGit
+	default:
+		return ToolCardGeneric
+	}
+}
+
+func toolCardStateFromLifecycle(lifecycle ToolLifecycle) ToolCardState {
+	switch lifecycle {
+	case ToolLifecycleSucceeded:
+		return ToolCardSuccess
+	case ToolLifecycleAttention, ToolLifecycleCancelled:
+		return ToolCardAttention
+	case ToolLifecycleFailed:
+		return ToolCardError
+	default:
+		return ToolCardRunning
+	}
+}
+
+func cloneANSIResultPreview(lines [][]ansiRemapSegment) [][]ansiRemapSegment {
+	if len(lines) == 0 {
+		return nil
+	}
+	result := make([][]ansiRemapSegment, len(lines))
+	for index := range lines {
+		result[index] = append([]ansiRemapSegment(nil), lines[index]...)
+	}
+	return result
 }
 
 // SetDark updates the theme.
@@ -149,16 +247,20 @@ func (c *ToolCard) SetDark(isDark bool) {
 // running headers. Callers should prefer this over assigning Summary directly;
 // rendering applies the same bound defensively either way.
 func (c *ToolCard) SetSummary(summary string) {
-	c.Summary = boundedToolCardSummary(summary)
+	c.Summary = boundedToolCardSummary(summary, c.GlyphProfile)
 }
 
 // statusGlyph returns a clean, single-width fallback glyph (no emoji — emoji
 // are double-width in some terminals and clash with the Nord aesthetic). The
 // parent may replace the running glyph through ViewWithActivity.
 func (c ToolCard) statusGlyph() string {
+	glyphs := glyphSet(resolveGlyphProfile(c.GlyphProfile))
+	if c.Lifecycle == ToolLifecycleCancelled {
+		return glyphs.Cancelled
+	}
 	switch c.State {
 	case ToolCardSuccess:
-		return "✓"
+		return glyphs.Success
 	case ToolCardAttention:
 		// Unknown means the bounded domain projection could not establish an
 		// outcome. Keep that visibly distinct from a known conflict, stale
@@ -169,8 +271,11 @@ func (c ToolCard) statusGlyph() string {
 		}
 		return "!"
 	case ToolCardError:
-		return "✗"
+		return glyphs.Error
 	default:
+		if c.GlyphProfile == GlyphASCII {
+			return glyphs.Running
+		}
 		return "…"
 	}
 }
@@ -222,6 +327,11 @@ func (c ToolCard) ViewWithActivity(width int, activityGlyph string, elapsed time
 		width = 4
 	}
 	inner := width - 2 // gutter is "│ "
+	glyphs := glyphSet(resolveGlyphProfile(c.GlyphProfile))
+	truncate := func(value string, cells int) string {
+		return truncateDisplayWithGlyphProfile(value, cells, c.GlyphProfile)
+	}
+	summarySeparator := toolCardSeparator(c.GlyphProfile)
 
 	titleStyle := c.getTitleStyle()
 	presentationName := c.Name
@@ -246,7 +356,10 @@ func (c ToolCard) ViewWithActivity(width int, activityGlyph string, elapsed time
 	if c.State == ToolCardRunning {
 		headerDuration = elapsed
 	}
-	viewModel := toolViewModelForCardHeader(c, headerDuration)
+	headerSummary := boundedToolCardSummary(c.Summary, c.GlyphProfile)
+	if projected := projection.SummaryText(); projected != "" && c.State != ToolCardRunning {
+		headerSummary = boundedToolCardSummary(projected, c.GlyphProfile)
+	}
 
 	// Leading glyph and trailing timing meta. Running animation is supplied by
 	// the parent so every card can share one Bubbles spinner tick chain.
@@ -257,14 +370,14 @@ func (c ToolCard) ViewWithActivity(width int, activityGlyph string, elapsed time
 			glyph = titleStyle.Render(c.statusGlyph())
 		}
 		if c.ExpertProgress != nil && inner >= lipgloss.Width(glyph)+2 {
-			disclosure := "▸"
+			disclosure := glyphs.Collapsed
 			if c.Expanded {
-				disclosure = "▾"
+				disclosure = glyphs.Expanded
 			}
 			glyph = c.Styles.Dimmed.Render(disclosure) + " " + glyph
 		}
-		if viewModel.Duration > 0 {
-			meta = c.Styles.Elapsed.Render(formatDuration(viewModel.Duration))
+		if headerDuration > 0 {
+			meta = c.Styles.Elapsed.Render(formatDuration(headerDuration))
 		}
 	} else {
 		glyph = titleStyle.Render(c.statusGlyph())
@@ -273,14 +386,14 @@ func (c ToolCard) ViewWithActivity(width int, activityGlyph string, elapsed time
 		// instruction to every tool row. Preserve the lifecycle glyph, and omit
 		// only the disclosure mark when the card has fewer than three inner cells.
 		if inner >= lipgloss.Width(glyph)+2 {
-			disclosure := "▸"
+			disclosure := glyphs.Collapsed
 			if c.Expanded {
-				disclosure = "▾"
+				disclosure = glyphs.Expanded
 			}
 			glyph = c.Styles.Dimmed.Render(disclosure) + " " + glyph
 		}
-		if viewModel.Duration > 0 {
-			meta = c.Styles.Dimmed.Render("(" + formatDuration(viewModel.Duration) + ")")
+		if headerDuration > 0 {
+			meta = c.Styles.Dimmed.Render("(" + formatDuration(headerDuration) + ")")
 		}
 	}
 
@@ -288,7 +401,11 @@ func (c ToolCard) ViewWithActivity(width int, activityGlyph string, elapsed time
 	// Duration is tertiary metadata and disappears first under pressure; the
 	// summary starts with at most half and may use only cells a short operation
 	// leaves otherwise empty.
-	cardSummary := toolCardSummaryWithoutRepeatedAction(viewModel.Summary, projection.Operation)
+	cardSummary := toolCardSummaryWithoutRepeatedAction(
+		headerSummary,
+		projection.Operation,
+		c.GlyphProfile,
+	)
 	wantSummary := (c.State == ToolCardRunning || !c.Expanded) && cardSummary != ""
 	budget := projectToolHeaderCellBudget(
 		inner,
@@ -301,13 +418,13 @@ func (c ToolCard) ViewWithActivity(width int, activityGlyph string, elapsed time
 	if !budget.ShowDuration {
 		meta = ""
 	}
-	name := truncateDisplay(presentation.label, budget.NameCells)
+	name := truncate(presentation.label, budget.NameCells)
 	header := glyph
 	if name != "" {
 		header += " " + titleStyle.Render(name)
 	}
 	if budget.SummaryCells > 0 {
-		header += c.Styles.Dimmed.Render(" · " + truncateDisplay(cardSummary, budget.SummaryCells))
+		header += c.Styles.Dimmed.Render(summarySeparator + truncate(cardSummary, budget.SummaryCells))
 	}
 	if meta != "" {
 		header += " " + meta
@@ -323,14 +440,14 @@ func (c ToolCard) ViewWithActivity(width int, activityGlyph string, elapsed time
 
 	if c.Expanded && c.State != ToolCardRunning {
 		if presentation.differsFromRaw() {
-			lines = append(lines, c.Styles.Dimmed.Render(truncateDisplay("tool: "+presentation.raw, inner)))
+			lines = append(lines, c.Styles.Dimmed.Render(truncate("tool: "+presentation.raw, inner)))
 		}
 		if c.Args != "" {
 			args := sanitizeTerminalSingleLine(c.Args)
-			lines = append(lines, c.Styles.Dimmed.Render(truncateDisplay("args: "+args, inner)))
+			lines = append(lines, c.Styles.Dimmed.Render(truncate("args: "+args, inner)))
 		}
-		for _, detail := range toolProjectionDetails(c.Projection) {
-			lines = append(lines, c.Styles.Dimmed.Render(truncateDisplay(detail, inner)))
+		for _, detail := range toolProjectionDetails(c.Projection, c.GlyphProfile) {
+			lines = append(lines, c.Styles.Dimmed.Render(truncate(detail, inner)))
 		}
 	}
 	if c.State == ToolCardError {
@@ -340,27 +457,39 @@ func (c ToolCard) ViewWithActivity(width int, activityGlyph string, elapsed time
 		}
 		if compact != "" {
 			for _, resultLine := range strings.Split(compact, "\n") {
-				lines = append(lines, c.Styles.Error.Render(truncateDisplay(resultLine, inner)))
+				lines = append(lines, c.Styles.Error.Render(truncate(resultLine, inner)))
 			}
 		}
 		if c.Expanded {
 			raw := strings.TrimRight(safeResult, "\n")
 			if raw != "" && sanitizeVisibleText(raw) != sanitizeVisibleText(compact) {
-				lines = append(lines, c.Styles.Dimmed.Render(truncateDisplay("details:", inner)))
-				for _, resultLine := range strings.Split(raw, "\n") {
-					lines = append(lines, c.Styles.Error.Render(truncateDisplay(resultLine, inner)))
-				}
+				lines = append(lines, c.Styles.Dimmed.Render(truncate("details:", inner)))
+				lines = append(lines, c.renderStyledResultPreview(
+					raw,
+					inner,
+					func(resultLine string) string {
+						return c.Styles.Error.Render(truncate(resultLine, inner))
+					},
+				)...)
 			}
 		}
 	} else if c.State == ToolCardAttention {
-		lines = append(lines, c.Styles.Warning.Render(truncateDisplay(compactToolAttention(c.Projection), inner)))
+		attention := compactToolAttention(c.Projection, c.GlyphProfile)
+		if c.Lifecycle == ToolLifecycleCancelled {
+			attention = "Cancelled before completion"
+		}
+		lines = append(lines, c.Styles.Warning.Render(truncate(attention, inner)))
 		if c.Expanded {
 			if displayLines := c.remappedDisplayResultLines(inner); len(displayLines) > 0 {
 				lines = append(lines, displayLines...)
 			} else if result := strings.TrimRight(safeResult, "\n"); result != "" {
-				for _, resultLine := range strings.Split(result, "\n") {
-					lines = append(lines, c.Styles.Result.Render(truncateDisplay(resultLine, inner)))
-				}
+				lines = append(lines, c.renderStyledResultPreview(
+					result,
+					inner,
+					func(resultLine string) string {
+						return c.Styles.Result.Render(truncate(resultLine, inner))
+					},
+				)...)
 			}
 		}
 	} else if c.Expanded && c.State != ToolCardRunning {
@@ -368,9 +497,13 @@ func (c ToolCard) ViewWithActivity(width int, activityGlyph string, elapsed time
 		if result != "" {
 			isDiff := looksLikeUnifiedDiff(result)
 			if isDiff {
-				for _, resultLine := range strings.Split(result, "\n") {
-					lines = append(lines, c.renderUnifiedDiffResultLine(truncateDisplay(resultLine, inner)))
-				}
+				lines = append(lines, c.renderStyledResultPreview(
+					result,
+					inner,
+					func(resultLine string) string {
+						return c.renderUnifiedDiffResultLine(truncate(resultLine, inner))
+					},
+				)...)
 			} else {
 				lines = append(lines, c.renderSemanticResultLines(result, inner)...)
 			}
@@ -378,7 +511,7 @@ func (c ToolCard) ViewWithActivity(width int, activityGlyph string, elapsed time
 	}
 
 	// Prefix every line with a state-colored gutter bar.
-	bar := c.getBorderStyle().Render("│")
+	bar := c.getBorderStyle().Render(glyphs.Vertical)
 	var b strings.Builder
 	for i, ln := range lines {
 		if i > 0 {
@@ -393,8 +526,13 @@ func (c ToolCard) ViewWithActivity(width int, activityGlyph string, elapsed time
 // target anchor while removing the action already expressed by its semantic
 // title. For example, "Capturing webpage artifact · Hitspec" is easier to
 // scan than "Capturing webpage artifact · Hitspec · capture webpage".
-func toolCardSummaryWithoutRepeatedAction(summary, operation string) string {
-	summary = strings.TrimSpace(summary)
+func toolCardSummaryWithoutRepeatedAction(
+	summary,
+	operation string,
+	profiles ...GlyphProfile,
+) string {
+	profile := resolveGlyphProfile(profiles...)
+	summary = toolCardTextForGlyphProfile(strings.TrimSpace(summary), profile)
 	action := strings.TrimSpace(friendlyRemoteAction(operation))
 	if summary == "" || action == "" || action == "tool" {
 		return summary
@@ -402,7 +540,7 @@ func toolCardSummaryWithoutRepeatedAction(summary, operation string) string {
 	if strings.EqualFold(summary, action) {
 		return ""
 	}
-	suffix := " · " + action
+	suffix := toolCardSeparator(profile) + action
 	if len(summary) >= len(suffix) && strings.EqualFold(summary[len(summary)-len(suffix):], suffix) {
 		return strings.TrimSpace(summary[:len(summary)-len(suffix)])
 	}
@@ -467,17 +605,22 @@ func toolCardStateFromProjection(projection ecosystem.ToolProjection) ToolCardSt
 	return ToolCardAttention
 }
 
-func compactToolAttention(projection ecosystem.ToolProjection) string {
+func compactToolAttention(
+	projection ecosystem.ToolProjection,
+	profiles ...GlyphProfile,
+) string {
 	projection = projection.Normalize()
+	profile := resolveGlyphProfile(profiles...)
+	separator := toolCardSeparator(profile)
 	if deferredMCPHubResult(projection) {
 		if summary := projection.SummaryText(); summary != "" {
-			return summary
+			return toolCardTextForGlyphProfile(summary, profile)
 		}
-		return "Result stored · fetch " + projection.Route.CallID
+		return "Result stored" + separator + "fetch " + projection.Route.CallID
 	}
 	if projection.Operation == "mcphub_get_result" && projection.Digest != nil {
 		if summary := projection.SummaryText(); summary != "" {
-			return summary
+			return toolCardTextForGlyphProfile(summary, profile)
 		}
 	}
 
@@ -485,17 +628,17 @@ func compactToolAttention(projection ecosystem.ToolProjection) string {
 	// available only in expanded details and must never replace this state line.
 	switch projection.Domain {
 	case ecosystem.DomainConflict:
-		return "Conflict reported · expand for remediation details"
+		return "Conflict reported" + separator + "expand for remediation details"
 	case ecosystem.DomainDrift:
-		return "Drift reported · review the proposed convergence"
+		return "Drift reported" + separator + "review the proposed convergence"
 	case ecosystem.DomainBlocked:
-		return "Blocked · inspect the requirement before retrying"
+		return "Blocked" + separator + "inspect the requirement before retrying"
 	case ecosystem.DomainUnknown:
-		return "Outcome needs interpretation · inspect details before relying on it"
+		return "Outcome needs interpretation" + separator + "inspect details before relying on it"
 	case ecosystem.DomainAttention:
-		return "Attention reported · inspect details before continuing"
+		return "Attention reported" + separator + "inspect details before continuing"
 	default:
-		return "Needs attention · inspect details before continuing"
+		return "Needs attention" + separator + "inspect details before continuing"
 	}
 }
 
@@ -507,23 +650,26 @@ func deferredMCPHubResult(projection ecosystem.ToolProjection) bool {
 		projection.Operation != "mcphub_get_result"
 }
 
-func toolProjectionDetails(projection ecosystem.ToolProjection) []string {
+func toolProjectionDetails(projection ecosystem.ToolProjection, profiles ...GlyphProfile) []string {
 	projection = projection.Normalize()
 	if projection.Transport == "" {
 		return nil
 	}
+	profile := resolveGlyphProfile(profiles...)
+	separator := toolCardSeparator(profile)
 	details := make([]string, 0, 8)
 	if projection.Specialist != "" {
 		label := describeEcosystemServer(projection.Specialist).label
-		details = append(details, "specialist: "+label+" · "+string(projection.Role))
+		details = append(details, "specialist: "+label+separator+string(projection.Role))
 	}
 	if projection.Route.Gateway != "" {
-		route := "route: Local Agent → " + describeEcosystemServer(projection.Route.Gateway).label
+		right := glyphSet(profile).Right
+		route := "route: Local Agent " + right + " " + describeEcosystemServer(projection.Route.Gateway).label
 		if projection.Route.Server != "" && projection.Route.Server != projection.Route.Gateway {
-			route += " → " + describeEcosystemServer(projection.Route.Server).label
+			route += " " + right + " " + describeEcosystemServer(projection.Route.Server).label
 		}
 		if projection.Route.Lazy {
-			route += " · lazy"
+			route += separator + "lazy"
 		}
 		details = append(details, route)
 	}
@@ -542,13 +688,30 @@ func toolProjectionDetails(projection ecosystem.ToolProjection) []string {
 		details = append(details, "stored result: "+projection.Route.CallID)
 	}
 	if summary := projection.SummaryText(); summary != "" {
-		details = append(details, "receipt: "+summary)
+		details = append(details, "receipt: "+toolCardTextForGlyphProfile(summary, profile))
 	}
 	return details
 }
 
-func boundedToolCardSummary(summary string) string {
+func toolCardSeparator(profile GlyphProfile) string {
+	if resolveGlyphProfile(profile) == GlyphASCII {
+		return " | "
+	}
+	return " · "
+}
+
+func toolCardTextForGlyphProfile(value string, profile GlyphProfile) string {
+	if resolveGlyphProfile(profile) != GlyphASCII {
+		return value
+	}
+	value = strings.ReplaceAll(value, "…", "...")
+	return strings.ReplaceAll(value, "·", "|")
+}
+
+func boundedToolCardSummary(summary string, profiles ...GlyphProfile) string {
+	profile := resolveGlyphProfile(profiles...)
 	summary = sanitizeTerminalSingleLine(summary)
+	summary = toolCardTextForGlyphProfile(summary, profile)
 	if len(summary) > maxToolCardSummaryBytes {
 		cut := maxToolCardSummaryBytes
 		for cut > 0 && !utf8.RuneStart(summary[cut]) {
@@ -556,7 +719,7 @@ func boundedToolCardSummary(summary string) string {
 		}
 		summary = summary[:cut]
 	}
-	return truncateDisplay(summary, maxToolCardSummaryWidth)
+	return truncateDisplayWithGlyphProfile(summary, maxToolCardSummaryWidth, profile)
 }
 
 // boundedToolCardResultDisplay bounds the raw ANSI display variant without
@@ -588,62 +751,9 @@ func boundedToolCardResult(result string) string {
 	return result[:cut] + "..."
 }
 
-// ToolCardManager manages tool-card receipts correlated by invocation ID.
-type ToolCardManager struct {
-	Cards  []ToolCard
-	IsDark bool
-}
-
-// NewToolCardManager creates a new manager.
-func NewToolCardManager(isDark bool) ToolCardManager {
-	return ToolCardManager{
-		Cards:  []ToolCard{},
-		IsDark: isDark,
-	}
-}
-
-// AddCardWithID adds a card correlated to one concrete tool invocation.
-func (m *ToolCardManager) AddCardWithID(id, name string, kind ToolCardKind, startTime time.Time) {
-	card := NewToolCard(name, kind, m.IsDark)
-	card.ID = id
-	card.StartTime = startTime
-	m.Cards = append(m.Cards, card)
-}
-
-// UpdateCardWithID completes the exact invocation, even when multiple running
-// calls use the same tool name.
-func (m *ToolCardManager) UpdateCardWithID(id, name string, state ToolCardState, result string, duration time.Duration) {
-	m.UpdateCardSemanticWithID(id, name, state, result, "", duration, ecosystem.ToolProjection{})
-}
-
-// UpdateCardSemanticWithID completes a card and attaches the bounded semantic
-// projection derived before raw structured MCP data was discarded.
-// resultDisplay is the transient raw-ANSI display variant; it never reaches
-// persistence, which reads only ToolEntry state.
-func (m *ToolCardManager) UpdateCardSemanticWithID(id, name string, state ToolCardState, result, resultDisplay string, duration time.Duration, projection ecosystem.ToolProjection) {
-	for i := len(m.Cards) - 1; i >= 0; i-- {
-		if toolCallMatches(id, name, m.Cards[i].ID, m.Cards[i].Name) && m.Cards[i].State == ToolCardRunning {
-			m.Cards[i].State = state
-			m.Cards[i].Result = result
-			m.Cards[i].ResultDisplay = resultDisplay
-			m.Cards[i].Duration = duration
-			m.Cards[i].Projection = projection.Normalize()
-			break
-		}
-	}
-}
-
 func toolCallMatches(id, name, candidateID, candidateName string) bool {
 	if id != "" || candidateID != "" {
 		return id != "" && id == candidateID
 	}
 	return name == candidateName
-}
-
-// SetDark updates theme for all cards.
-func (m *ToolCardManager) SetDark(isDark bool) {
-	m.IsDark = isDark
-	for i := range m.Cards {
-		m.Cards[i].SetDark(isDark)
-	}
 }

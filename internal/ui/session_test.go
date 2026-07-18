@@ -820,10 +820,11 @@ func TestSessionToolSummaryRoundTripAndLegacyFallback(t *testing.T) {
 		if got, want := m.toolEntries[0].Summary, "command=go test ./internal/ui"; got != want {
 			t.Fatalf("legacy entry summary = %q, want args fallback %q", got, want)
 		}
-		if got, want := m.toolCardMgr.Cards[0].Summary, m.toolEntries[0].Summary; got != want {
+		card := testProjectedToolCard(t, m, 0)
+		if got, want := card.Summary, m.toolEntries[0].Summary; got != want {
 			t.Fatalf("restored card summary = %q, want %q", got, want)
 		}
-		if view := m.toolCardMgr.Cards[0].View(64); !strings.Contains(view, "go test ./internal/ui") {
+		if view := card.View(64); !strings.Contains(view, "go test ./internal/ui") {
 			t.Fatalf("collapsed legacy receipt omitted recovered context:\n%s", view)
 		}
 	})
@@ -896,6 +897,7 @@ func TestInterruptedToolRestoreSettlesSemanticProjectionIdempotently(t *testing.
 	assertSettled("second restore", second[0])
 
 	m := newTestModel(t)
+	m.toolsPending = 9
 	state := persistedSessionState{
 		Version:     currentPersistedSessionVersion,
 		Mode:        ModeNormal,
@@ -905,10 +907,50 @@ func TestInterruptedToolRestoreSettlesSemanticProjectionIdempotently(t *testing.
 	if err := m.restoreSessionState(state); err != nil {
 		t.Fatal(err)
 	}
-	if len(m.toolCardMgr.Cards) != 1 || m.toolCardMgr.Cards[0].State != ToolCardError {
-		t.Fatalf("double-restored card revived as non-error: %#v", m.toolCardMgr.Cards)
+	if card := testProjectedToolCard(t, m, 0); card.State != ToolCardError {
+		t.Fatalf("double-restored card revived as non-error: %#v", card)
+	}
+	if m.toolsPending != 0 {
+		t.Fatalf("restore retained %d pending tools without resumable work", m.toolsPending)
 	}
 	assertSettled("model restore", m.toolEntries[0])
+}
+
+func TestCancelledToolRoundTripPreservesDistinctLifecycle(t *testing.T) {
+	projection := ecosystem.ProjectToolCall("read_file", nil)
+	projection.Transport = ecosystem.TransportFailed
+	projection.Domain = ecosystem.DomainUnknown
+	projection.Evidence = ecosystem.EvidenceNone
+	projection = projection.Normalize()
+
+	persisted := persistToolEntries([]ToolEntry{{
+		ID:         "tool-cancelled",
+		Name:       "read_file",
+		Summary:    "README.md",
+		Result:     "Cancelled by user before completion",
+		Status:     ToolStatusCancelled,
+		Duration:   2 * time.Second,
+		Projection: projection,
+	}})
+	restored := restoreToolEntries(persisted)
+	if len(restored) != 1 {
+		t.Fatalf("restored tools = %d, want 1", len(restored))
+	}
+	entry := restored[0]
+	if entry.Status != ToolStatusCancelled || entry.IsError ||
+		entry.Result != "Cancelled by user before completion" {
+		t.Fatalf("cancelled lifecycle changed across restore: %#v", entry)
+	}
+	view, err := ToolViewModelFromToolEntry(
+		ChatEntry{BlockID: "block-cancelled", Revision: 1, Lifecycle: BlockCancelled, Kind: "tool_group"},
+		entry,
+	)
+	if err != nil {
+		t.Fatalf("project cancelled restore: %v", err)
+	}
+	if view.Lifecycle != ToolLifecycleCancelled {
+		t.Fatalf("restored lifecycle = %d, want cancelled", view.Lifecycle)
+	}
 }
 
 func TestLoadPersistedSessionRejectsDifferentCanonicalWorkspace(t *testing.T) {

@@ -40,7 +40,7 @@ func TestCompactWelcomeFitsActualChatPane(t *testing.T) {
 	if strings.Contains(got, "╦") {
 		t.Fatal("compact welcome should omit the wide ASCII logo")
 	}
-	for _, want := range []string{"LOCAL AGENT", "Local-first", "? help", "/ commands"} {
+	for _, want := range []string{"LOCAL AGENT", "Local-first", "f1 help", "/ commands"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("compact welcome missing %q:\n%s", want, got)
 		}
@@ -215,7 +215,7 @@ func TestAdaptiveStatusTextUsesReadableMutedColor(t *testing.T) {
 		want   string
 	}{
 		{name: "light", isDark: false, want: "#5B6779"},
-		{name: "dark", isDark: true, want: "#8B97AD"},
+		{name: "dark", isDark: true, want: "#96A2B8"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

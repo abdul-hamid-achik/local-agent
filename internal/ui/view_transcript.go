@@ -48,7 +48,11 @@ func entriesFromMessages(msgs []llm.Message) []ChatEntry {
 }
 
 func (m *Model) renderEntries() string {
+	if m.transcriptRenderProbe != nil {
+		m.transcriptRenderProbe.renderEntriesCalls++
+	}
 	contentW := m.chatContentWidth()
+	proseW := m.chatProseWidth()
 	identityReady := true
 	reconciled, err := m.reconcileTranscriptEntriesForRender()
 	if err != nil {
@@ -92,7 +96,7 @@ func (m *Model) renderEntries() string {
 			top := max(0, (m.viewport.Height()-lipgloss.Height(welcome))/2)
 			m.endLiveTailLayoutEpisode()
 			m.publishTranscriptLayout(nil)
-			return strings.Repeat("\n", top) + welcome
+			return m.recordTranscriptRender(strings.Repeat("\n", top) + welcome)
 		}
 		// PlaceHorizontal owns a rectangular block and does not retain the
 		// welcome builder's trailing newline. Start notices on a real row so a
@@ -102,7 +106,7 @@ func (m *Model) renderEntries() string {
 		for _, e := range m.entries {
 			switch e.Kind {
 			case "system":
-				b.WriteString(m.renderSystemNotice(e.Content, contentW))
+				b.WriteString(m.renderSystemNotice(e.Content, proseW))
 				b.WriteString("\n\n")
 			case "error":
 				if notice, ok := compactOllamaStartupNotice(e.Content, contentW, m.ollamaOffline); ok {
@@ -116,7 +120,7 @@ func (m *Model) renderEntries() string {
 					// Missing startup inventory is an actionable empty state, not a
 					// failed user operation. Preserve the detailed host recovery copy
 					// at ordinary widths without adding the generic red error label.
-					b.WriteString(m.renderSystemNotice(e.Content, contentW))
+					b.WriteString(m.renderSystemNotice(e.Content, proseW))
 					b.WriteString("\n\n")
 				} else {
 					m.renderEntryError(&b, e.Content, contentW)
@@ -125,13 +129,11 @@ func (m *Model) renderEntries() string {
 		}
 		m.endLiveTailLayoutEpisode()
 		m.publishTranscriptLayout(nil)
-		return b.String()
+		return m.recordTranscriptRender(b.String())
 	}
 
-	// Fast path: the cached stable prefix is current. Only live entries (a
-	// still-running tool group and anything after it) and the streaming tail
-	// render per frame, so spinner ticks and stream chunks never walk the
-	// whole transcript again.
+	// Fast path: the cached stable transcript is current. Running ToolCards are
+	// event-driven, so only a streaming tail renders between semantic events.
 	if m.entryCacheValid && len(m.entries) == m.cachedEntryCount {
 		m.toolHitRegions = append(m.toolHitRegions[:0], m.cachedToolHitRegions...)
 		m.thinkingHitRegions = append(m.thinkingHitRegions[:0], m.cachedThinkingHitRegions...)
@@ -145,12 +147,12 @@ func (m *Model) renderEntries() string {
 		rendered := b.String()
 		m.finalizeTranscriptLayout(&state, rendered)
 		m.bindCachedTranscriptLayoutPrefix()
-		return rendered
+		return m.recordTranscriptRender(rendered)
 	}
 
-	// Full render: cache the stable prefix (everything before the first
-	// still-running tool group, whose card animates a glyph and elapsed time),
-	// then render live entries and the streaming tail outside the cache.
+	// Full render: cache every settled or running transcript entry. Tool and
+	// expert progress handlers invalidate this cache on real lifecycle events;
+	// clocks never make a transcript entry live.
 	stableCount := m.stableEntryPrefixLen()
 	var b strings.Builder
 	m.toolHitRegions = m.toolHitRegions[:0]
@@ -180,6 +182,13 @@ func (m *Model) renderEntries() string {
 	rendered := b.String()
 	m.finalizeTranscriptLayout(&state, rendered)
 	m.bindCachedTranscriptLayoutPrefix()
+	return m.recordTranscriptRender(rendered)
+}
+
+func (m *Model) recordTranscriptRender(rendered string) string {
+	if m.transcriptRenderProbe != nil {
+		m.transcriptRenderProbe.transcriptBytesMaterialized += len(rendered)
+	}
 	return rendered
 }
 
@@ -251,32 +260,10 @@ func (state *entryRenderState) appendLayoutRecord(record TranscriptLayoutRecord)
 }
 
 // stableEntryPrefixLen returns how many leading entries render identically
-// between appends. Everything from the first still-running tool group on is
-// live: its card animates every spinner tick and must stay out of the cache.
+// between semantic events. Running ToolCards are static transcript receipts;
+// their progress handlers invalidate the cache explicitly.
 func (m *Model) stableEntryPrefixLen() int {
-	for index, entry := range m.entries {
-		if entry.Kind == "tool_group" && m.toolGroupLive(entry.ToolIndex) {
-			return index
-		}
-	}
 	return len(m.entries)
-}
-
-func (m *Model) toolGroupLive(toolIdx int) bool {
-	if toolIdx < 0 || toolIdx >= len(m.toolEntries) {
-		return false
-	}
-	te := m.toolEntries[toolIdx]
-	if te.Status == ToolStatusRunning {
-		return true
-	}
-	for i := len(m.toolCardMgr.Cards) - 1; i >= 0; i-- {
-		card := &m.toolCardMgr.Cards[i]
-		if toolCallMatches(te.ID, te.Name, card.ID, card.Name) {
-			return card.State == ToolCardRunning
-		}
-	}
-	return false
 }
 
 // entryRenderMemo is one settled entry's rendered chunk plus the composite
@@ -290,7 +277,8 @@ type entryRenderMemo struct {
 func (m *Model) renderEntryInto(b *strings.Builder, entryIndex, contentW int, memoAllowed bool, state *entryRenderState) {
 	entry := m.entries[entryIndex]
 	showHeader := !state.assistantStarted
-	memoKey := m.entryMemoKey(entry, contentW, showHeader)
+	proseW := min(contentW, m.chatProseWidth())
+	memoKey := m.entryMemoKey(entry, contentW, proseW, showHeader)
 	var chunk string
 	hit := false
 	if memoAllowed && memoKey != "" {
@@ -303,15 +291,15 @@ func (m *Model) renderEntryInto(b *strings.Builder, entryIndex, contentW int, me
 		var entryView strings.Builder
 		switch entry.Kind {
 		case "user":
-			m.renderUserMsg(&entryView, entry.Content, entry.Attachments, contentW)
+			m.renderUserMsg(&entryView, entry.Content, entry.Attachments, proseW)
 		case "assistant":
 			m.renderAssistantMsg(&entryView, entry, contentW, showHeader)
 		case "tool_group":
-			m.renderToolGroup(&entryView, entry.ToolIndex)
+			m.renderToolGroup(&entryView, entry)
 		case "error":
 			m.renderEntryError(&entryView, entry.Content, contentW)
 		case "system":
-			entryView.WriteString(m.renderSystemNotice(entry.Content, contentW))
+			entryView.WriteString(m.renderSystemNotice(entry.Content, proseW))
 			entryView.WriteString("\n")
 		}
 		chunk = strings.TrimRight(entryView.String(), "\n")
@@ -351,21 +339,25 @@ func (m *Model) appendEntryChunk(b *strings.Builder, entryIndex int, entry ChatE
 		Height:   max(1, lipgloss.Height(chunk)),
 		StartRow: state.renderedLines,
 		Exact:    false,
-		LineMap:  semanticTranscriptLineMap(chunk),
+		LineMap:  semanticTranscriptLineMapForEntry(entry, chunk),
 	})
 	if entry.Kind == "tool_group" {
 		header, _, _ := strings.Cut(chunk, "\n")
-		m.toolHitRegions = append(m.toolHitRegions, toolHitRegion{
-			ToolIndex: entry.ToolIndex,
-			Row:       state.renderedLines,
-			EndCol:    lipgloss.Width(header),
-		})
+		if startCol, endCol, ok := renderedLineHorizontalBounds(header); ok {
+			m.toolHitRegions = append(m.toolHitRegions, toolHitRegion{
+				ToolIndex: entry.ToolIndex,
+				Row:       state.renderedLines,
+				StartCol:  startCol,
+				EndCol:    endCol,
+			})
+		}
 	}
 	if entry.Kind == "assistant" && strings.TrimSpace(entry.ThinkingContent) != "" {
-		if rowOffset, endCol, ok := completedThinkingHeaderRegion(chunk); ok {
+		if rowOffset, startCol, endCol, ok := completedThinkingHeaderRegion(chunk, m.glyphProfile); ok {
 			m.thinkingHitRegions = append(m.thinkingHitRegions, thinkingHitRegion{
 				EntryIndex: entryIndex,
 				Row:        state.renderedLines + rowOffset,
+				StartCol:   startCol,
 				EndCol:     endCol,
 				Digest:     reasoningReceiptDigest(entry.ThinkingContent),
 			})
@@ -398,7 +390,7 @@ func semanticTranscriptLineMap(chunk string) LineMap {
 			Row:           row,
 		})
 		semantic := strings.TrimSpace(ansi.Strip(line))
-		for _, rail := range []string{"│ ", "▌ ", "↳ "} {
+		for _, rail := range []string{"│ ", "▌ ", "↳ ", "| ", "> "} {
 			semantic = strings.TrimSpace(strings.TrimPrefix(semantic, rail))
 		}
 		logicalOffset += max(1, uniseg.GraphemeClusterCount(semantic)+1)
@@ -406,12 +398,93 @@ func semanticTranscriptLineMap(chunk string) LineMap {
 	return lineMap
 }
 
+func semanticTranscriptLineMapForEntry(entry ChatEntry, chunk string) LineMap {
+	switch entry.Kind {
+	case "user", "system", "error":
+		return semanticTranscriptLineMapFromSource(chunk, entry.Content)
+	case "assistant":
+		source := entry.Content
+		if strings.TrimSpace(entry.ThinkingContent) != "" {
+			source = entry.ThinkingContent + "\n" + source
+		}
+		return semanticTranscriptLineMapFromSource(chunk, source)
+	default:
+		return semanticTranscriptLineMap(chunk)
+	}
+}
+
+// semanticTranscriptLineMapFromSource anchors rendered rows to the message
+// source rather than to presentation bytes. Glamour may remove Markdown
+// punctuation, wrap links into extra rows, or add chrome; source coordinates
+// remain stable across the live/plain and settled/Markdown projections.
+func semanticTranscriptLineMapFromSource(chunk, source string) LineMap {
+	source = sanitizeTerminalMultiline(source)
+	if source == "" {
+		return semanticTranscriptLineMap(chunk)
+	}
+	lines := strings.Split(chunk, "\n")
+	lineMap := make(LineMap, 0, len(lines))
+	searchByte := 0
+	logicalAtSearch := 0
+	previousLogical := -1
+	for row, line := range lines {
+		semantic := transcriptSemanticRow(line)
+		logical := previousLogical + 1
+		if semantic != "" && searchByte <= len(source) {
+			if relative := strings.Index(source[searchByte:], semantic); relative >= 0 {
+				matchStart := searchByte + relative
+				coordinateStart := markdownSourceConstructStart(source, matchStart, semantic)
+				sourceOffset := logicalAtSearch +
+					uniseg.GraphemeClusterCount(source[searchByte:coordinateStart])
+				// Reserve logical zero for leading presentation chrome such as
+				// the assistant label. Source byte zero therefore maps to one.
+				logical = sourceOffset + 1
+				matchEnd := matchStart + len(semantic)
+				logicalAtSearch += uniseg.GraphemeClusterCount(source[searchByte:matchEnd])
+				searchByte = matchEnd
+			}
+		}
+		if logical <= previousLogical {
+			logical = previousLogical + 1
+		}
+		lineMap = append(lineMap, TranscriptLinePoint{
+			LogicalOffset: logical,
+			Row:           row,
+		})
+		previousLogical = logical
+	}
+	return lineMap
+}
+
+func transcriptSemanticRow(line string) string {
+	semantic := strings.TrimSpace(ansi.Strip(line))
+	for _, rail := range []string{"│ ", "▌ ", "↳ ", "| ", "> "} {
+		semantic = strings.TrimSpace(strings.TrimPrefix(semantic, rail))
+	}
+	return semantic
+}
+
+func markdownSourceConstructStart(source string, matchStart int, semantic string) int {
+	if matchStart <= 0 || source[matchStart-1] != '[' {
+		return matchStart
+	}
+	matchEnd := matchStart + len(semantic)
+	if matchEnd+1 < len(source) && source[matchEnd] == ']' && source[matchEnd+1] == '(' {
+		return matchStart - 1
+	}
+	return matchStart
+}
+
 func (m *Model) finalizeTranscriptLayout(state *entryRenderState, rendered string) {
+	m.finalizeTranscriptLayoutHeight(state, max(1, lipgloss.Height(rendered)))
+}
+
+func (m *Model) finalizeTranscriptLayoutHeight(state *entryRenderState, totalHeight int) {
 	if state == nil || state.layoutLen() == 0 {
 		m.publishTranscriptLayout(nil)
 		return
 	}
-	totalHeight := max(1, lipgloss.Height(rendered))
+	totalHeight = max(1, totalHeight)
 	state.closeLayoutAt(totalHeight)
 	m.publishTranscriptLayoutSegments(state.layoutBase, state.layoutRecords)
 }
@@ -420,13 +493,21 @@ func (m *Model) publishTranscriptLayout(records []TranscriptLayoutRecord) {
 	m.publishTranscriptLayoutSegments(nil, records)
 }
 
-// publishTranscriptLayoutSegments reuses the current immutable snapshot when
-// only paint changed (for example a spinner glyph or elapsed-time tick). A new
-// contiguous snapshot is materialized only when geometry or semantic identity
-// actually changed. LineMap slices are immutable and intentionally shared.
+// publishTranscriptLayoutSegments reuses the current contiguous snapshot when
+// paint did not change. When a shared prefix proves that only the renderer-owned
+// tail changed, it updates that tail in place instead of copying the entire
+// history. Identity/order changes and full reflows still publish a new snapshot,
+// so any previous frame needed for deletion fallback remains independent.
+//
+// LineMap slices are append-only inside the incremental live-tail cache and are
+// intentionally shared. Replacing the tail record publishes its current slice
+// length without copying the stable semantic points.
 func (m *Model) publishTranscriptLayoutSegments(base, tail []TranscriptLayoutRecord) {
 	sessionID := max(int64(0), m.sessionID)
 	if m.transcriptLayoutMatchesSegments(sessionID, base, tail) {
+		return
+	}
+	if m.updateTranscriptLayoutTail(sessionID, base, tail) {
 		return
 	}
 	records := make([]TranscriptLayoutRecord, len(base)+len(tail))
@@ -439,6 +520,56 @@ func (m *Model) publishTranscriptLayoutSegments(base, tail []TranscriptLayoutRec
 	if m.transcriptRenderProbe != nil {
 		m.transcriptRenderProbe.layoutRecordsMaterialized += len(records)
 	}
+}
+
+// updateTranscriptLayoutTail preserves the public contiguous Records contract
+// while making publication proportional to the changed suffix. A non-empty
+// base must be the exact current backing prefix; the tiny all-tail case covers
+// a transcript containing only the transient live block (and its predecessor).
+//
+// The semantic anchor resolver uses a previous frame only for identity/order.
+// Those fields are required to match before an in-place geometry update, so a
+// captured frame may observe newer tail geometry without losing deletion or
+// turn-move evidence. Any identity/order change falls through to copy-on-write.
+func (m *Model) updateTranscriptLayoutTail(
+	sessionID int64,
+	base, tail []TranscriptLayoutRecord,
+) bool {
+	current := &m.transcriptLayout
+	if current.SessionID != sessionID ||
+		len(tail) == 0 ||
+		len(current.Records) != len(base)+len(tail) {
+		return false
+	}
+	switch {
+	case len(base) > 0:
+		if len(current.Records) < len(base) ||
+			&base[0] != &current.Records[0] {
+			return false
+		}
+	case len(tail) > 2:
+		// A nil base normally denotes a cold/full render. Updating a large
+		// all-tail frame would mutate structural history rather than a bounded
+		// renderer suffix.
+		return false
+	}
+
+	offset := len(base)
+	for index := range tail {
+		previous := current.Records[offset+index]
+		next := tail[index]
+		if previous.BlockID != next.BlockID ||
+			previous.TurnID != next.TurnID ||
+			previous.Revision != next.Revision ||
+			previous.Exact != next.Exact {
+			return false
+		}
+	}
+	copy(current.Records[offset:], tail)
+	if m.transcriptRenderProbe != nil {
+		m.transcriptRenderProbe.layoutRecordsUpdated += len(tail)
+	}
+	return true
 }
 
 func (m *Model) transcriptLayoutMatchesSegments(
@@ -480,6 +611,9 @@ func (m *Model) transcriptLayoutRecordEqual(left, right TranscriptLayoutRecord) 
 		left.Exact != right.Exact ||
 		len(left.LineMap) != len(right.LineMap) {
 		return false
+	}
+	if len(left.LineMap) == 0 || &left.LineMap[0] == &right.LineMap[0] {
+		return true
 	}
 	for index := range left.LineMap {
 		if left.LineMap[index] != right.LineMap[index] {
@@ -580,11 +714,12 @@ func fnv64(parts ...string) uint64 {
 }
 
 // entryMemoKey builds the composite key capturing every input that affects
-// one entry's rendered chunk. An empty key means the entry must not be
-// memoized this frame (a live tool group animates every spinner tick).
-func (m *Model) entryMemoKey(entry ChatEntry, contentW int, showHeader bool) string {
+// one entry's rendered chunk. An empty key means the entry cannot be projected
+// safely enough to memoize.
+func (m *Model) entryMemoKey(entry ChatEntry, contentW, proseW int, showHeader bool) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s|%d|%d|%t|%t", entry.Kind, entry.Revision, contentW, m.isDark, m.toolsCollapsed)
+	fmt.Fprintf(&b, "%s|%d|%d|%d|%t|%t|%d",
+		entry.Kind, entry.Revision, contentW, proseW, m.isDark, m.toolsCollapsed, m.glyphProfile)
 	switch entry.Kind {
 	case "user":
 		fmt.Fprintf(&b, "|%d|%x|%d", len(entry.Content), fnv64(entry.Content), len(entry.Attachments))
@@ -593,7 +728,7 @@ func (m *Model) entryMemoKey(entry ChatEntry, contentW int, showHeader bool) str
 			fnv64(entry.Content, "\x00", entry.ThinkingContent),
 			entry.ThinkingCollapsed, entry.RenderedContent != "", showHeader)
 	case "tool_group":
-		toolKey, ok := m.toolGroupMemoKey(entry.ToolIndex)
+		toolKey, ok := m.toolGroupMemoKey(entry)
 		if !ok {
 			return ""
 		}
@@ -604,48 +739,48 @@ func (m *Model) entryMemoKey(entry ChatEntry, contentW int, showHeader bool) str
 	return b.String()
 }
 
-// toolGroupMemoKey summarizes every ToolEntry and matched-card input that
-// renderToolGroup reads for a settled receipt. It reports ok=false for live
-// groups, which must re-render every frame for the spinner and elapsed time.
-func (m *Model) toolGroupMemoKey(toolIdx int) (string, bool) {
-	if toolIdx < 0 || toolIdx >= len(m.toolEntries) {
+// toolGroupMemoKey summarizes the strict render projection consumed by a tool
+// receipt. Running receipts are cacheable because clocks live only in the
+// footer; lifecycle and expert-progress events change this key explicitly.
+func (m *Model) toolGroupMemoKey(chat ChatEntry) (string, bool) {
+	if chat.ToolIndex < 0 || chat.ToolIndex >= len(m.toolEntries) {
 		return "", false
 	}
-	te := m.toolEntries[toolIdx]
-	if te.Status == ToolStatusRunning {
-		return "", false
-	}
-	var card *ToolCard
-	for i := len(m.toolCardMgr.Cards) - 1; i >= 0; i-- {
-		if toolCallMatches(te.ID, te.Name, m.toolCardMgr.Cards[i].ID, m.toolCardMgr.Cards[i].Name) {
-			card = &m.toolCardMgr.Cards[i]
-			break
-		}
-	}
-	if card != nil && card.State == ToolCardRunning {
-		return "", false
+	model, err := m.projectToolRenderModel(chat)
+	if err != nil {
+		return "|invalid-tool-projection", true
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "|%x|%d|%t|%d|%t|%t|%d|%d|%d|%d",
-		fnv64(te.ID, "\x00", te.Name, "\x00", te.Summary),
-		te.Status, te.Collapsed, te.Duration, te.IsError, te.DiffPending,
-		te.DiffGeneration, len(te.DiffLines), len(te.Result), m.chatPaneWidth())
-	p := te.Projection
+	fmt.Fprintf(&b, "|%x|%d|%t|%d|%t|%d|%d",
+		fnv64(
+			model.InvocationID, "\x00", model.ToolName, "\x00",
+			model.Operation, "\x00", model.Target, "\x00", model.Summary,
+			"\x00", model.Preview.Arguments, "\x00", model.Preview.Result,
+		),
+		model.Lifecycle, model.Preview.Expanded, model.Duration,
+		model.Preview.DiffPending, m.chatPaneWidth(), m.inlineDiffPreviewRows())
+	fmt.Fprintf(&b, "|%+v|%t", model.Preview.OutputDigest, model.Preview.OutputAvailable)
+	p := model.Projection
 	fmt.Fprintf(&b, "|%s|%s|%s|%s|%s|%t|%s|%+v",
-		p.Specialist, p.Operation, p.Role, p.Transport, p.Domain, p.DomainTyped, p.Evidence, p.Route)
+		p.Specialist, p.Operation, p.Role, model.Transport, model.Domain, p.DomainTyped, model.Evidence, p.Route)
 	if p.Digest != nil {
 		fmt.Fprintf(&b, "|%+v", *p.Digest)
 	}
-	if p.Artifact != nil {
-		fmt.Fprintf(&b, "|%+v", *p.Artifact)
+	if model.Artifact != nil {
+		fmt.Fprintf(&b, "|%+v", *model.Artifact)
 	}
-	if te.ExpertProgress != nil {
-		fmt.Fprintf(&b, "|ep%d", te.ExpertProgress.Sequence)
+	for _, line := range model.Preview.DiffLines {
+		fmt.Fprintf(&b, "|d%d:%d:%d:%x", line.Kind, line.OldLine, line.NewLine, fnv64(line.Content))
+		if line.Hunk != nil {
+			fmt.Fprintf(&b, ":%+v", *line.Hunk)
+		}
 	}
-	if card != nil {
-		fmt.Fprintf(&b, "|c%d|%t", card.State, card.Expanded)
-		if card.ExpertProgress != nil {
-			fmt.Fprintf(&b, "|cep%d", card.ExpertProgress.Sequence)
+	if model.Preview.ExpertProgress != nil {
+		fmt.Fprintf(&b, "|ep%d", model.Preview.ExpertProgress.Sequence)
+	}
+	for _, line := range model.Preview.ansiResultLines {
+		for _, segment := range line {
+			fmt.Fprintf(&b, "|a%t:%d:%x", segment.bold, segment.fg, fnv64(segment.text))
 		}
 	}
 	return b.String(), true
@@ -683,7 +818,7 @@ func (m *Model) renderLiveTail(b *strings.Builder, contentW int, state *entryRen
 		Height:   max(1, lipgloss.Height(semanticChunk)),
 		StartRow: state.renderedLines,
 		Exact:    false,
-		LineMap:  semanticTranscriptLineMap(semanticChunk),
+		LineMap:  semanticTranscriptLineMapFromSource(semanticChunk, m.liveTailSemanticSource()),
 	})
 	b.WriteString(tailRendered)
 	state.renderedLines += strings.Count(tailRendered, "\n")
@@ -691,14 +826,43 @@ func (m *Model) renderLiveTail(b *strings.Builder, contentW int, state *entryRen
 	state.renderedAny = true
 }
 
-func completedThinkingHeaderRegion(rendered string) (rowOffset, endCol int, ok bool) {
+func (m *Model) liveTailSemanticSource() string {
+	source := m.streamBuf.String()
+	if strings.TrimSpace(m.thinkBuf.String()) != "" {
+		source = m.thinkBuf.String() + "\n" + source
+	}
+	return source
+}
+
+func completedThinkingHeaderRegion(
+	rendered string,
+	profiles ...GlyphProfile,
+) (rowOffset, startCol, endCol int, ok bool) {
+	glyphs := glyphSet(resolveGlyphProfile(profiles...))
 	for row, line := range strings.Split(rendered, "\n") {
 		plain := strings.TrimLeft(ansi.Strip(line), " ")
-		if strings.HasPrefix(plain, "│ ▸") || strings.HasPrefix(plain, "│ ▾") {
-			return row, lipgloss.Width(line), true
+		if strings.HasPrefix(plain, glyphs.Vertical+" "+glyphs.Collapsed) ||
+			strings.HasPrefix(plain, glyphs.Vertical+" "+glyphs.Expanded) {
+			startCol, endCol, ok := renderedLineHorizontalBounds(line)
+			return row, startCol, endCol, ok
 		}
 	}
-	return 0, 0, false
+	return 0, 0, 0, false
+}
+
+// renderedLineHorizontalBounds projects the exact painted cells of one
+// transcript header. Transcript indentation is layout whitespace rather than
+// part of the interactive disclosure, so pointer ownership starts at the first
+// rendered non-space cell and ends immediately after the last rendered cell.
+func renderedLineHorizontalBounds(rendered string) (startCol, endCol int, ok bool) {
+	plain := ansi.Strip(rendered)
+	content := strings.TrimLeft(plain, " ")
+	if content == "" {
+		return 0, 0, false
+	}
+	endCol = lipgloss.Width(plain)
+	startCol = endCol - lipgloss.Width(content)
+	return startCol, endCol, startCol < endCol
 }
 
 func (m *Model) hasLiveTurn() bool {
@@ -759,7 +923,7 @@ func (m *Model) renderEntryError(b *strings.Builder, content string, contentW in
 	if content == "" {
 		content = "The operation failed without an error message."
 	}
-	b.WriteString("  " + m.styles.ErrorChip.Render("✗ error"))
+	b.WriteString("  " + m.styles.ErrorChip.Render(glyphSet(m.glyphProfile).Error+" error"))
 	b.WriteString("\n")
 	b.WriteString(m.styles.ToolErrorText.Render(indentBlock(wrapText(content, max(1, contentW-2)), "  ")))
 	b.WriteString("\n\n")
@@ -772,7 +936,7 @@ func (m *Model) renderUserMsg(b *strings.Builder, content string, attachments []
 	content = sanitizeTerminalMultiline(content)
 	b.WriteString(m.styles.UserLabel.Render("you"))
 	b.WriteString("\n")
-	gutter := "  " + m.styles.UserGutter.Render("▌") + " "
+	gutter := "  " + m.styles.UserGutter.Render(glyphSet(m.glyphProfile).UserRail) + " "
 	text := m.styles.UserContent.UnsetPaddingLeft()
 	for _, line := range strings.Split(wrapText(content, max(10, contentW-4)), "\n") {
 		b.WriteString(gutter + text.Render(line))
@@ -857,7 +1021,11 @@ func (m *Model) renderStreamingMsg(b *strings.Builder, content string, contentW 
 	// and only the trailing partial paragraph as plain wrapped text. This shows
 	// formatted output live instead of popping into shape on completion, while
 	// avoiding the jitter of re-rendering incomplete markdown.
-	wrapWidth := contentW - 2
+	messageWidth := min(contentW, m.chatProseWidth())
+	if markdownUsesWorkWidth(content) {
+		messageWidth = contentW
+	}
+	wrapWidth := messageWidth - 2
 	if wrapWidth < 10 {
 		wrapWidth = 10
 	}
@@ -890,178 +1058,97 @@ func (m *Model) renderAssistantHeader(b *strings.Builder, _ int) {
 
 // renderToolGroup renders one tight tool receipt. The parent transcript owns
 // all spacing between this block and its neighbors.
-func (m *Model) renderToolGroup(b *strings.Builder, toolIdx int) {
-	if toolIdx < 0 || toolIdx >= len(m.toolEntries) {
+func (m *Model) renderToolGroup(b *strings.Builder, chat ChatEntry) {
+	if chat.ToolIndex < 0 || chat.ToolIndex >= len(m.toolEntries) {
 		return
 	}
-	te := m.toolEntries[toolIdx]
-	layout := m.currentLayout()
-
-	// Find corresponding tool card
-	var card *ToolCard
-	for i := len(m.toolCardMgr.Cards) - 1; i >= 0; i-- {
-		if toolCallMatches(te.ID, te.Name, m.toolCardMgr.Cards[i].ID, m.toolCardMgr.Cards[i].Name) {
-			card = &m.toolCardMgr.Cards[i]
-			break
+	model, err := m.projectToolRenderModel(chat)
+	if err != nil {
+		b.WriteString(indentBlock(
+			m.styles.ToolErrorText.Render(
+				glyphSet(m.glyphProfile).Vertical+" "+
+					glyphSet(m.glyphProfile).Error+" Invalid tool receipt",
+			),
+			"  ",
+		))
+		return
+	}
+	card, err := ToolCardFromRenderModel(model, m.isDark, m.glyphProfile)
+	if err != nil {
+		b.WriteString(indentBlock(
+			m.styles.ToolErrorText.Render(
+				glyphSet(m.glyphProfile).Vertical+" "+
+					glyphSet(m.glyphProfile).Error+" Invalid tool receipt",
+			),
+			"  ",
+		))
+		return
+	}
+	availableWidth := max(4, m.chatPaneWidth()-4)
+	cardView := card.View(availableWidth)
+	if model.Preview.Expanded && model.Lifecycle.Terminal() {
+		var diffView string
+		if model.Preview.DiffPending {
+			diffView = renderDiffLoadingAtWidth(
+				model.Summary,
+				m.styles,
+				availableWidth,
+				m.glyphProfile,
+			)
+		} else if len(model.Preview.DiffLines) > 0 {
+			diffView = strings.TrimRight(
+				renderUnifiedDiffAtWidth(
+					model.Summary,
+					model.Preview.DiffLines,
+					m.styles,
+					m.inlineDiffPreviewRows(),
+					availableWidth,
+					m.glyphProfile,
+				),
+				"\n",
+			)
+		}
+		if diffView != "" {
+			cardView += "\n" + diffView
 		}
 	}
-
-	if card != nil {
-		// Use fancy tool card rendering
-		card.Expanded = !te.Collapsed
-		// Keep the card inside the actual viewport; the two-column left indent is
-		// applied immediately below.
-		availableWidth := max(4, m.chatPaneWidth()-4)
-		if card.ExpertProgress != nil &&
-			(card.expertProgressCacheWidth != availableWidth-2 ||
-				card.expertProgressCacheSequence != card.ExpertProgress.Sequence) {
-			card.setExpertProgress(card.ExpertProgress, availableWidth-2)
-		}
-		cardView := card.View(availableWidth)
-		if card.State == ToolCardRunning {
-			glyph := "…"
-			if !m.reducedMotion {
-				glyph = m.spin.View()
-			}
-			elapsed := m.nowTime().Sub(card.StartTime)
-			if elapsed < 0 {
-				elapsed = 0
-			}
-			cardView = card.ViewWithActivity(availableWidth, glyph, elapsed)
-		}
-		if card.Expanded && card.State != ToolCardRunning {
-			var diffView string
-			if te.DiffPending {
-				diffView = renderDiffLoadingAtWidth(te.Summary, m.styles, availableWidth)
-			} else if len(te.DiffLines) > 0 {
-				diffView = strings.TrimRight(
-					renderUnifiedDiffAtWidth(te.Summary, te.DiffLines, m.styles, 0, availableWidth), "\n",
-				)
-			}
-			if diffView != "" {
-				cardView += "\n" + diffView
-			}
-		}
-		// Add left padding to align with message content
-		cardView = indentBlock(cardView, "  ")
-		b.WriteString(cardView)
-	} else {
-		// Fallback to basic rendering if no card exists
-		tt := classifyTool(te.Name)
-		toolName := safeToolIdentifier(te.Name)
-		projectedState := toolCardStateFromProjection(te.Projection)
-		if te.Status == ToolStatusDone && projectedState != ToolCardSuccess {
-			// A missing live/restored card must not erase the bounded semantic
-			// projection. In particular, transport success with an unknown domain
-			// outcome remains attention-colored instead of falling through to the
-			// legacy green completion receipt.
-			kind := toolCardKindForTool(te.Name)
-			fallback := NewToolCard(te.Name, kind, m.isDark)
-			fallback.ID = te.ID
-			fallback.State = projectedState
-			fallback.SetSummary(te.Summary)
-			fallback.Args = te.Args
-			fallback.ResultLanguage = te.ResultLanguage
-			fallback.Result = te.Result
-			fallback.Duration = te.Duration
-			fallback.Expanded = !te.Collapsed
-			fallback.Projection = te.Projection
-			fallback.setExpertProgress(te.ExpertProgress, max(1, m.chatPaneWidth()-6))
-			fallback.State = te.ExpertProgress.cardState(fallback.State)
-			cardView := fallback.View(max(4, m.chatPaneWidth()-4))
-			if fallback.Expanded {
-				var diffView string
-				if te.DiffPending {
-					diffView = renderDiffLoadingAtWidth(te.Summary, m.styles, max(4, m.chatPaneWidth()-4))
-				} else if len(te.DiffLines) > 0 {
-					diffView = strings.TrimRight(renderUnifiedDiffAtWidth(
-						te.Summary, te.DiffLines, m.styles, 0, max(4, m.chatPaneWidth()-4),
-					), "\n")
-				}
-				if diffView != "" {
-					cardView += "\n" + diffView
-				}
-			}
-			b.WriteString(indentBlock(cardView, "  "))
-			return
-		}
-
-		switch te.Status {
-		case ToolStatusRunning:
-			// Running: show spinner with type-specific icon
-			icon := m.styles.ToolCallIcon.Render(toolIcon(tt, te.Status))
-			spinView := "…"
-			if !m.reducedMotion {
-				spinView = m.spin.View()
-			}
-			text := m.styles.ToolCallText.Render(fmt.Sprintf(" %s ", toolName))
-			hint := m.styles.ToolRunningText.Render(spinView + " running...")
-			b.WriteString(icon + text + hint)
-			// For running bash tools, show command inline
-			if tt == ToolTypeBash {
-				if summary := sanitizeTerminalSingleLine(toolSummary(tt, te)); summary != "" {
-					b.WriteString("\n")
-					b.WriteString(m.styles.ToolBashCmd.Render(layout.ToolIndent + "$ " + summary))
-				}
-			}
-			b.WriteString("\n")
-
-		case ToolStatusDone:
-			dur := formatDuration(te.Duration)
-			icon := m.styles.ToolDoneIcon.Render(toolIcon(tt, te.Status))
-			if te.Collapsed {
-				// Collapsed: single line with type-specific summary
-				text := m.styles.ToolDoneText.Render(fmt.Sprintf(" %s (%s)", toolName, dur))
-				b.WriteString(icon + text)
-				if summary := sanitizeTerminalSingleLine(toolSummary(tt, te)); summary != "" {
-					summ := truncate(summary, layout.ToolSummaryMax)
-					b.WriteString(m.styles.ToolBashCmd.Render(" " + summ))
-				}
-				b.WriteString("\n")
-			} else {
-				// Expanded: show args + result (or diff for file writes)
-				text := m.styles.ToolDoneText.Render(fmt.Sprintf(" %s (%s)", toolName, dur))
-				b.WriteString(icon + text)
-				b.WriteString("\n")
-				// Args
-				args := truncate(sanitizeTerminalSingleLine(te.Args), layout.ArgsTruncMax)
-				b.WriteString(m.styles.ToolDetailText.Render(layout.ToolIndent + "args: " + args))
-				b.WriteString("\n")
-				// Diff or result
-				diffWidth := max(1, m.chatPaneWidth()-4)
-				if te.DiffPending {
-					b.WriteString(renderDiffLoadingAtWidth(te.Summary, m.styles, diffWidth))
-					b.WriteString("\n")
-				} else if len(te.DiffLines) > 0 {
-					b.WriteString(renderUnifiedDiffAtWidth(te.Summary, te.DiffLines, m.styles, 0, diffWidth))
-				} else {
-					// Use smart result formatting with truncation
-					result := formatToolResult(te.Result, 20, layout.ResultTruncMax)
-					resultLines := strings.Count(result, "\n") + 1
-					if resultLines > 20 {
-						b.WriteString(m.styles.ToolDetailText.Render(layout.ToolIndent + "result (truncated, expand to see more):\n"))
-						b.WriteString(m.styles.ToolDetailText.Render(indentBlock(truncate(result, layout.ResultTruncMax), layout.ToolIndent)))
-					} else {
-						b.WriteString(m.styles.ToolDetailText.Render(layout.ToolIndent + "result:\n"))
-						b.WriteString(m.styles.ToolDetailText.Render(indentBlock(result, layout.ToolIndent)))
-					}
-					b.WriteString("\n")
-				}
-			}
-
-		case ToolStatusError:
-			// Error: always expanded regardless of collapse state
-			dur := formatDuration(te.Duration)
-			icon := m.styles.ToolErrorIcon.Render(toolIcon(tt, te.Status))
-			text := m.styles.ToolErrorText.Render(fmt.Sprintf(" %s (%s)", toolName, dur))
-			b.WriteString(icon + text)
-			b.WriteString("\n")
-			// Error result always shown
-			result := truncate(sanitizeTerminalMultiline(te.Result), layout.ResultTruncMax)
-			b.WriteString(m.styles.ToolErrorText.Render(layout.ToolIndent + result))
-			b.WriteString("\n")
+	if model.Preview.Expanded {
+		if hint := m.toolViewerActionHint(chat); hint != "" {
+			cardView += "\n" + m.styles.Dimmed.Render(
+				glyphSet(m.glyphProfile).Vertical+" "+hint,
+			)
 		}
 	}
+	b.WriteString(indentBlock(cardView, "  "))
+}
+
+func (m *Model) inlineDiffPreviewRows() int {
+	if m == nil {
+		return inlineDiffPreviewRowsForHeight(0)
+	}
+	return inlineDiffPreviewRowsForHeight(m.viewport.Height())
+}
+
+func inlineDiffPreviewRowsForHeight(height int) int {
+	if height <= 0 {
+		return 16
+	}
+	// Keep an expanded patch within one transcript viewport whenever possible.
+	// The final budgeted row is an explicit omission receipt; the Diff Viewer
+	// owns deeper inspection without inflating transcript geometry.
+	return max(minTranscriptRows, min(32, height))
+}
+
+func (m *Model) projectToolRenderModel(chat ChatEntry) (ToolRenderModel, error) {
+	model, err := ToolRenderModelFromEntry(chat, m.toolEntries[chat.ToolIndex])
+	if err != nil {
+		return ToolRenderModel{}, err
+	}
+	ref := m.toolEntries[chat.ToolIndex].OutputDetail.Ref
+	if !m.outputDetails.Available(ref) {
+		model.Preview.OutputAvailable = false
+	}
+	return model, nil
 }
 
 // indentBlock adds a prefix to each line of a multi-line string.

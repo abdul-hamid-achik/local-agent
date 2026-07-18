@@ -42,14 +42,15 @@ type goalStatusMetric struct {
 // RenderGoalStatusLine renders a single adaptive, width-safe status row for
 // headers, composer chrome, or transient receipts. State is always conveyed by
 // a glyph and text, never color alone.
-func RenderGoalStatusLine(summary GoalSummary, width int, isDark bool) string {
+func RenderGoalStatusLine(summary GoalSummary, width int, isDark bool, profiles ...GlyphProfile) string {
 	if width <= 0 {
 		return ""
 	}
 
 	styles := NewStyles(isDark)
 	palette := outputSemanticPalette(isDark)
-	glyph, label, phaseColor := goalPhasePresentation(summary.Phase, palette)
+	profile := resolveGlyphProfile(profiles...)
+	glyph, label, phaseColor := goalPhasePresentation(summary.Phase, palette, profile)
 	phase := lipgloss.NewStyle().
 		Foreground(phaseColor).
 		Bold(summary.Phase == GoalPhaseActive || summary.Phase == GoalPhaseExhausted || summary.Phase == GoalPhaseBlocked).
@@ -63,20 +64,21 @@ func RenderGoalStatusLine(summary GoalSummary, width int, isDark bool) string {
 		objective = "untitled goal"
 	}
 	metrics := goalStatusMetrics(summary)
-	separator := styles.StatusText.Render(" · ")
+	separatorText := goalStatusSeparator(profile)
+	separator := styles.StatusText.Render(separatorText)
 
 	// Preserve a useful objective before progressively adding budget detail.
 	const minimumObjectiveWidth = 7
 	visibleMetrics := make([]goalStatusMetric, 0, len(metrics))
 	for _, metric := range metrics {
 		candidate := append(append([]goalStatusMetric(nil), visibleMetrics...), metric)
-		metricWidth := goalMetricsWidth(candidate)
+		metricWidth := goalMetricsWidth(candidate, profile)
 		if lipgloss.Width(phase)+lipgloss.Width(separator)*2+minimumObjectiveWidth+metricWidth <= width {
 			visibleMetrics = candidate
 		}
 	}
 
-	right := renderGoalMetrics(visibleMetrics, palette)
+	right := renderGoalMetrics(visibleMetrics, palette, profile)
 	objectiveWidth := width - lipgloss.Width(phase) - lipgloss.Width(separator)
 	if right != "" {
 		objectiveWidth -= lipgloss.Width(separator) + lipgloss.Width(right)
@@ -92,23 +94,38 @@ func RenderGoalStatusLine(summary GoalSummary, width int, isDark bool) string {
 	return truncateDisplay(line, width)
 }
 
-func goalPhasePresentation(phase GoalPhase, palette semanticPalette) (glyph, label string, foreground color.Color) {
+func goalPhasePresentation(phase GoalPhase, palette semanticPalette, profiles ...GlyphProfile) (glyph, label string, foreground color.Color) {
+	profile := resolveGlyphProfile(profiles...)
+	glyphs := glyphSet(profile)
 	switch phase {
 	case GoalPhaseActive:
-		return "●", "active", palette.Accent
+		return glyphs.Selected, "active", palette.Accent
 	case GoalPhasePaused:
+		if profile == GlyphASCII {
+			return "=", "paused", palette.Warning
+		}
 		return "Ⅱ", "paused", palette.Warning
 	case GoalPhaseExhausted:
 		return "!", "exhausted", palette.Warning
 	case GoalPhaseCompleted:
-		return "✓", "completed", palette.Success
+		return glyphs.Success, "completed", palette.Success
 	case GoalPhaseDropped:
+		if profile == GlyphASCII {
+			return "x", "dropped", palette.Muted
+		}
 		return "×", "dropped", palette.Muted
 	case GoalPhaseBlocked:
 		return "!", "blocked", palette.Error
 	default:
-		return "○", "goal", palette.Muted
+		return glyphs.Unselected, "goal", palette.Muted
 	}
+}
+
+func goalStatusSeparator(profile GlyphProfile) string {
+	if resolveGlyphProfile(profile) == GlyphASCII {
+		return " - "
+	}
+	return " · "
 }
 
 func goalStatusMetrics(summary GoalSummary) []goalStatusMetric {
@@ -138,7 +155,7 @@ func goalStatusMetrics(summary GoalSummary) []goalStatusMetric {
 	return metrics
 }
 
-func goalMetricsWidth(metrics []goalStatusMetric) int {
+func goalMetricsWidth(metrics []goalStatusMetric, profiles ...GlyphProfile) int {
 	if len(metrics) == 0 {
 		return 0
 	}
@@ -146,10 +163,10 @@ func goalMetricsWidth(metrics []goalStatusMetric) int {
 	for index := range metrics {
 		parts[index] = metrics[index].text
 	}
-	return lipgloss.Width(strings.Join(parts, " · "))
+	return lipgloss.Width(strings.Join(parts, goalStatusSeparator(resolveGlyphProfile(profiles...))))
 }
 
-func renderGoalMetrics(metrics []goalStatusMetric, palette semanticPalette) string {
+func renderGoalMetrics(metrics []goalStatusMetric, palette semanticPalette, profiles ...GlyphProfile) string {
 	parts := make([]string, 0, len(metrics))
 	for _, metric := range metrics {
 		color := palette.Dim
@@ -158,7 +175,9 @@ func renderGoalMetrics(metrics []goalStatusMetric, palette semanticPalette) stri
 		}
 		parts = append(parts, lipgloss.NewStyle().Foreground(color).Render(metric.text))
 	}
-	return strings.Join(parts, lipgloss.NewStyle().Foreground(palette.Border).Render(" · "))
+	return strings.Join(parts, lipgloss.NewStyle().Foreground(palette.Border).Render(
+		goalStatusSeparator(resolveGlyphProfile(profiles...)),
+	))
 }
 
 func formatGoalTokens(tokens int64) string {

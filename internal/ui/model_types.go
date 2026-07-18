@@ -72,7 +72,10 @@ const (
 	ToolStatusRunning ToolStatus = iota
 	ToolStatusDone
 	ToolStatusError
+	ToolStatusCancelled
 )
+
+const cancelledToolResult = "Cancelled by user before completion"
 
 // ToolEntry tracks the lifecycle of a single tool call.
 type ToolEntry struct {
@@ -84,6 +87,7 @@ type ToolEntry struct {
 	Result                  string
 	ResultDisplay           string `json:"-"` // transient raw-ANSI display variant for render-time remap; never persisted or restored
 	ResultLanguage          string // bounded lexer alias derived from trusted call metadata
+	OutputDetail            OutputDetailReceipt
 	IsError                 bool
 	Status                  ToolStatus
 	StartTime               time.Time
@@ -122,7 +126,12 @@ type ChatEntry struct {
 type toolHitRegion struct {
 	ToolIndex int
 	Row       int
+	StartCol  int
 	EndCol    int
+}
+
+func (region toolHitRegion) contains(x, y int) bool {
+	return NewCellRect(region.StartCol, region.Row, region.EndCol, region.Row+1).Contains(x, y)
 }
 
 // thinkingHitRegion identifies one completed assistant reasoning disclosure.
@@ -131,8 +140,13 @@ type toolHitRegion struct {
 type thinkingHitRegion struct {
 	EntryIndex int
 	Row        int
+	StartCol   int
 	EndCol     int
 	Digest     [32]byte
+}
+
+func (region thinkingHitRegion) contains(x, y int) bool {
+	return NewCellRect(region.StartCol, region.Row, region.EndCol, region.Row+1).Contains(x, y)
 }
 
 // startupItem tracks the progress of a single startup task.

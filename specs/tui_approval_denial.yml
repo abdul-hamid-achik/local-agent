@@ -1,5 +1,5 @@
 version: 1
-contractHash: sha256:0e4796092c907803f0ac4ec75968d6d9cd57ec69a5a4ed20aa6616d7382ec875
+contractHash: sha256:391061436e0effad39e1027e5e94ad4d1d2d568654e098604b90f8ee9ad2dc9a
 name: local_agent_tui_approval_denial
 
 # Runner note (2026-07-16): a restricted sandbox can deny the wrapper's
@@ -136,7 +136,7 @@ steps:
         notContains: "✓ Done"
       timeoutMs: 4000
   - snapshot: denied_receipt
-  - press: "space"
+  - press: "ctrl+r"
   - wait:
       screen:
         contains: "tool: write"
@@ -180,7 +180,7 @@ outcomes:
         name: denied_receipt
         mode: text
   - id: denied_receipt_is_keyboard_inspectable
-    description: Space expands the denied receipt to show safe tool identity, redacted arguments, and transport/domain/evidence state
+    description: ctrl+r expands the denied receipt to show safe tool identity, redacted arguments, and transport/domain/evidence state
     verify:
       snapshot:
         name: denied_receipt_expanded

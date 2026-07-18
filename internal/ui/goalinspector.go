@@ -23,6 +23,7 @@ type GoalInspectorOptions struct {
 	Height           int
 	IsDark           bool
 	ReducedMotion    bool
+	GlyphProfile     GlyphProfile
 	Now              time.Time
 	PersistenceDirty bool
 	RecoveryStatus   string
@@ -47,6 +48,7 @@ type GoalInspector struct {
 	height           int
 	isDark           bool
 	reducedMotion    bool
+	glyphProfile     GlyphProfile
 	now              time.Time
 	persistenceDirty bool
 	recoveryStatus   string
@@ -74,6 +76,7 @@ func NewGoalInspector(snapshot goal.Snapshot, actions []command.ActionState, opt
 		height:           max(minTerminalHeight, options.Height),
 		isDark:           options.IsDark,
 		reducedMotion:    options.ReducedMotion,
+		glyphProfile:     resolveGlyphProfile(options.GlyphProfile),
 		now:              now,
 		persistenceDirty: options.PersistenceDirty,
 		recoveryStatus:   strings.TrimSpace(options.RecoveryStatus),
@@ -254,7 +257,7 @@ func (i *GoalInspector) View() string {
 	phase := RenderGoalStatusLine(GoalSummary{
 		Objective: i.snapshot.Objective,
 		Phase:     GoalPhase(i.snapshot.State),
-	}, width, i.isDark)
+	}, width, i.isDark, i.glyphProfile)
 	var b strings.Builder
 	title := fmt.Sprintf("Goal inspector · %d/%d verified", verified, total)
 	if i.compact() {
@@ -276,7 +279,7 @@ func (i *GoalInspector) View() string {
 	b.WriteString(i.renderFooter(width))
 
 	view := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
+		Border(borderForGlyphProfile(i.glyphProfile)).
 		BorderForeground(i.styles.OverlayBorder).
 		Padding(0, 1).
 		Width(pickerListWidth(i.width, goalInspectorMaximumWidth) + 2).
@@ -293,14 +296,15 @@ func (i *GoalInspector) buildDocument() string {
 	i.writeSection(&b, "Objective", i.snapshot.Objective, width)
 
 	results := goalAcceptanceResults(i.snapshot)
+	glyphs := glyphSet(i.glyphProfile)
 	b.WriteString(i.styles.OverlayAccent.Render("Acceptance criteria"))
 	b.WriteByte('\n')
 	for _, criterion := range i.snapshot.AcceptanceCriteria {
 		result, verified := results[criterion.ID]
-		marker := "○ pending"
+		marker := glyphs.Unselected + " pending"
 		style := i.styles.OverlayDim
 		if verified {
-			marker = "✓ verified"
+			marker = glyphs.Success + " verified"
 			style = i.styles.StatusCheck
 		}
 		line := marker + " · " + criterion.Description
@@ -389,7 +393,11 @@ func (i *GoalInspector) renderActionRail(width int) string {
 	}
 	if i.compact() {
 		selected := i.actions[i.selected]
-		label := "‹ " + selected.Spec.Title + " ›"
+		left, right := "‹", "›"
+		if i.glyphProfile == GlyphASCII {
+			left, right = glyphSet(i.glyphProfile).Left, glyphSet(i.glyphProfile).Right
+		}
+		label := left + " " + selected.Spec.Title + " " + right
 		if !selected.Enabled {
 			label += " · unavailable"
 		}
@@ -397,13 +405,19 @@ func (i *GoalInspector) renderActionRail(width int) string {
 	}
 
 	parts := make([]string, 0, len(i.actions))
+	selectedMarker := "›"
+	disabledMarker := "×"
+	if i.glyphProfile == GlyphASCII {
+		selectedMarker = glyphSet(i.glyphProfile).Right
+		disabledMarker = glyphSet(i.glyphProfile).Error
+	}
 	for index, action := range i.actions {
 		label := action.Spec.Title
 		if !action.Enabled {
-			label += " ×"
+			label += " " + disabledMarker
 		}
 		if index == i.selected {
-			label = "› " + label
+			label = selectedMarker + " " + label
 			if action.Spec.Destructive {
 				parts = append(parts, i.styles.ErrorText.Render(label))
 			} else {
@@ -416,7 +430,13 @@ func (i *GoalInspector) renderActionRail(width int) string {
 	rail := strings.Join(parts, i.styles.OverlayDim.Render("  "))
 	if lipgloss.Width(rail) > width {
 		selected := i.actions[i.selected]
-		return i.styles.FocusIndicator.Render(truncateDisplay("‹ "+selected.Spec.Title+" ›", width))
+		left, right := "‹", "›"
+		if i.glyphProfile == GlyphASCII {
+			left, right = glyphSet(i.glyphProfile).Left, glyphSet(i.glyphProfile).Right
+		}
+		return i.styles.FocusIndicator.Render(truncateDisplayWithGlyphProfile(
+			left+" "+selected.Spec.Title+" "+right, width, i.glyphProfile,
+		))
 	}
 	return rail
 }
@@ -449,9 +469,13 @@ func (i *GoalInspector) renderActionDetail(width int) string {
 }
 
 func (i *GoalInspector) renderFooter(width int) string {
+	horizontal := "←/→"
+	if i.glyphProfile == GlyphASCII {
+		horizontal = "left/right"
+	}
 	hints := []keyHint{
 		{Key: "esc", Action: "close"},
-		{Key: "←/→", Action: "action"},
+		{Key: horizontal, Action: "action"},
 		{Key: "enter", Action: "select"},
 		{Key: "j/k", Action: "scroll"},
 	}

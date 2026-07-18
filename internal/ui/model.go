@@ -46,34 +46,37 @@ type Model struct {
 	keys          KeyMap
 
 	// State
-	state                 State
-	overlay               OverlayKind
-	overlayParent         OverlayKind
-	entries               []ChatEntry
-	streamBuf             strings.Builder
-	lastStreamPaint       time.Time // throttles per-token re-renders during streaming
-	turnStartedAt         time.Time
-	lastTurnDuration      time.Duration
-	now                   func() time.Time
-	width                 int
-	height                int
-	ready                 bool
-	isDark                bool
-	reducedMotion         bool
-	evalCount             int
-	promptTokens          int
-	turnEvalTotal         int
-	turnPromptTotal       int
-	toolsPending          int
-	capabilityRoute       *agent.CapabilityRoute
-	lastCapabilityRoute   *agent.CapabilityRoute
-	continuation          continuationActionState
-	bobWorkspaceContext   bobWorkspaceContextState
-	inputLines            int
-	composerMeasureDigest [32]byte
-	composerMeasureW      int
-	composerMeasureRows   int
-	userScrolledUp        bool
+	state                    State
+	overlay                  OverlayKind
+	overlayParent            OverlayKind
+	entries                  []ChatEntry
+	streamBuf                strings.Builder
+	lastStreamPaint          time.Time // throttles per-token re-renders during streaming
+	turnStartedAt            time.Time
+	lastTurnDuration         time.Duration
+	now                      func() time.Time
+	activityHeartbeatToken   uint64
+	activityHeartbeatPending bool
+	width                    int
+	height                   int
+	ready                    bool
+	isDark                   bool
+	reducedMotion            bool
+	glyphProfile             GlyphProfile
+	evalCount                int
+	promptTokens             int
+	turnEvalTotal            int
+	turnPromptTotal          int
+	toolsPending             int
+	capabilityRoute          *agent.CapabilityRoute
+	lastCapabilityRoute      *agent.CapabilityRoute
+	continuation             continuationActionState
+	bobWorkspaceContext      bobWorkspaceContextState
+	inputLines               int
+	composerMeasureDigest    [32]byte
+	composerMeasureW         int
+	composerMeasureRows      int
+	userScrolledUp           bool
 
 	// Scroll anchor system - prevents jitter during streaming.
 	anchorActive bool // true when user wants to stay at bottom
@@ -81,20 +84,26 @@ type Model struct {
 	// It is independent of viewport position and is replaced atomically after
 	// each transcript render.
 	transcriptLayout TranscriptLayoutSnapshot
+	// transcriptPaint owns the logical document offset and bounded Bubbles
+	// staging window. The viewport's private YOffset is local to that window
+	// and must never be interpreted as a document coordinate.
+	transcriptPaint transcriptPaintState
 
 	// Transcript identity reconciliation is semantic work, not paint work.
 	// invalidateEntryCache clears this admission cache; ordinary spinner and
 	// streaming paints reuse the already-reconciled entries.
-	transcriptReconcileValid  bool
-	transcriptReconciledCount int
-	transcriptReconcileEpoch  uint64
-	transcriptRenderProbe     *transcriptRenderProbe
-	liveTailLayoutID          BlockID
-	liveTailLayoutTurnID      TurnID
-	liveTailLayoutSessionID   int64
-	liveTailLayoutEpoch       uint64
-	liveTailLayoutReconcile   uint64
-	liveTailLayoutVisible     bool
+	transcriptReconcileValid     bool
+	transcriptReconciledCount    int
+	transcriptReconciledTurnID   TurnID
+	transcriptReconciledBlockIDs map[BlockID]struct{}
+	transcriptReconcileEpoch     uint64
+	transcriptRenderProbe        *transcriptRenderProbe
+	liveTailLayoutID             BlockID
+	liveTailLayoutTurnID         TurnID
+	liveTailLayoutSessionID      int64
+	liveTailLayoutEpoch          uint64
+	liveTailLayoutReconcile      uint64
+	liveTailLayoutVisible        bool
 
 	// Startup
 	initializing bool
@@ -110,10 +119,13 @@ type Model struct {
 
 	// Tool display
 	toolEntries        []ToolEntry
+	outputDetails      *OutputDetailStore
+	modalStack         ModalStack
+	outputViewers      map[OverlayID]*OutputViewer
+	diffViewers        map[OverlayID]*DiffViewer
 	toolsCollapsed     bool
 	toolHitRegions     []toolHitRegion
 	thinkingHitRegions []thinkingHitRegion
-	toolCardMgr        ToolCardManager
 	diffGeneration     uint64
 	// Receipt inspection is an ephemeral affordance for the just-completed
 	// turn. It must never point at a stale tool from an earlier no-tool turn.
@@ -345,6 +357,7 @@ type Model struct {
 	historyIndex       int      // -1 = not browsing, 0 = most recent
 	historySaved       string   // saved current input when entering history
 	clipboardRead      func() (string, error)
+	clipboardWrite     func(string) error
 	clipboardImageRead func(context.Context) (string, []byte, error)
 
 	// Help overlay viewport (scrollable)
@@ -354,6 +367,7 @@ type Model struct {
 // New creates a new TUI Model.
 func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, completer *Completer, modelManager *llm.ModelManager, router config.ModelRouter, logger *log.Logger) *Model {
 	reducedMotion := reducedMotionRequested()
+	glyphProfile := requestedGlyphProfile()
 	ta := textarea.New()
 	ta.Placeholder = "Ask, @mention files, or type /help"
 	ta.Focus()
@@ -373,17 +387,22 @@ func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, com
 	ta.ShowLineNumbers = false
 	// A single send marker followed by continuation rails makes multiline
 	// drafts read as one composer instead of several submitted messages.
-	configureComposerMode(&ta, true, ModeNormal, reducedMotion)
+	configureComposerModeWithGlyphProfile(&ta, true, ModeNormal, reducedMotion, glyphProfile)
 
 	initialStyles := NewStyles(true)
+	mainSpinner := spinner.MiniDot
+	if glyphProfile == GlyphASCII {
+		mainSpinner = spinner.Line
+	}
 	s := spinner.New(
-		spinner.WithSpinner(spinner.MiniDot),
+		spinner.WithSpinner(mainSpinner),
 		spinner.WithStyle(initialStyles.StatusDot),
 	)
 
 	return &Model{
 		input:                   ta,
 		clipboardRead:           clipboard.ReadAll,
+		clipboardWrite:          clipboard.WriteAll,
 		clipboardImageRead:      readClipboardImage,
 		spin:                    s,
 		scramble:                NewScrambleModel(true),
@@ -392,8 +411,12 @@ func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, com
 		state:                   StateIdle,
 		isDark:                  true,
 		reducedMotion:           reducedMotion,
+		glyphProfile:            glyphProfile,
 		now:                     time.Now,
 		inputLines:              1,
+		outputDetails:           NewOutputDetailStore(),
+		outputViewers:           make(map[OverlayID]*OutputViewer),
+		diffViewers:             make(map[OverlayID]*DiffViewer),
 		toolsCollapsed:          true,
 		initializing:            true,
 		approvalPosture:         ApprovalPosturePrompted,
@@ -408,7 +431,6 @@ func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, com
 		completer:               completer,
 		completionReader:        newCompletionWorkspaceReader(),
 		historyIndex:            -1,
-		toolCardMgr:             NewToolCardManager(true),
 		lastTurnToolIndex:       -1,
 		receiptInspectToolIndex: -1,
 		turnEntryIndex:          -1,
@@ -515,8 +537,8 @@ func (m *Model) Init() tea.Cmd {
 		textarea.Blink,
 		tea.RequestBackgroundColor,
 	}
-	if m.needsSpinner() {
-		cmds = append(cmds, m.spin.Tick)
+	if cmd := m.startActivityCmd(); cmd != nil {
+		cmds = append(cmds, cmd)
 	}
 	return tea.Batch(cmds...)
 }
@@ -534,7 +556,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 				Kind:    "error",
 				Content: fmt.Sprintf("internal error (recovered): %v", r),
 			})
-			m.viewport.SetContent(m.renderEntries())
+			m.refreshTranscript()
 			retModel = m
 			retCmd = nil
 		}
@@ -586,6 +608,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			cmds = append(cmds, cmd)
 		}
 
+	case activityHeartbeatMsg:
+		return m, m.handleActivityHeartbeat(msg)
+
 	case tea.KeyPressMsg:
 		if cmd, handled := m.handleKeyPress(msg); handled {
 			return m, cmd
@@ -631,6 +656,25 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 
 	case ToolCallResultMsg:
 		cmds = m.handleToolCallResult(msg, cmds)
+
+	case outputViewerPageResultMsg:
+		m.handleOutputViewerPageResult(msg)
+
+	case viewerClipboardResultMsg:
+		if cmd := m.handleViewerClipboardResult(msg); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+
+	case clipboardResultMsg:
+		if msg.Err != nil {
+			cmds = append(cmds, m.setFooterNotice(
+				noticeWarning, "Clipboard is unavailable.", 2*time.Second,
+			))
+		} else {
+			cmds = append(cmds, m.setFooterNotice(
+				noticeSuccess, "Copied to clipboard.", 2*time.Second,
+			))
+		}
 
 	case diffBuildResultMsg:
 		m.handleDiffBuildResult(msg)
@@ -775,17 +819,12 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 	}
 
 	// The parent owns one Bubbles spinner clock for startup, streaming, tools,
-	// and owned operations. Static idle/overlay views schedule no repaint loop.
+	// and owned operations. It advances the footer only: transcript receipts
+	// are stable until a real stream, tool, or expert-progress event arrives.
 	if _, ok := msg.(spinner.TickMsg); ok && m.needsSpinner() {
 		var cmd tea.Cmd
 		m.spin, cmd = m.spin.Update(msg)
 		cmds = append(cmds, cmd)
-		if m.toolsPending > 0 && m.ready {
-			// The running tool card renders outside the cached stable prefix, so
-			// animating it never invalidates or re-renders the whole transcript.
-			m.viewport.SetContent(m.renderEntries())
-			m.gotoBottomIfFollowing()
-		}
 	}
 
 	// Visible Charm children own their non-key lifecycle messages (cursor
@@ -794,6 +833,11 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 	// actions cannot be hidden inside presentation components.
 	if _, isKey := msg.(tea.KeyPressMsg); !isKey && m.overlay != OverlayNone {
 		if cmd := m.updateActiveOverlayMessage(msg); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	if _, isKey := msg.(tea.KeyPressMsg); !isKey && m.viewerModalActive() {
+		if cmd := m.updateViewerMessage(msg); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
 	}
@@ -829,11 +873,15 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 	keyMsg, isKey := msg.(tea.KeyPressMsg)
 	composerOwnedScrollKey := isKey && m.transcriptScrollKey(keyMsg)
 	if !composerOwnedScrollKey {
-		var cmd tea.Cmd
-		m.viewport, cmd = m.viewport.Update(msg)
-		cmds = append(cmds, cmd)
+		cmds = append(cmds, m.updateTranscriptViewport(msg))
 	}
-	m.checkAutoScroll()
+	// A resize can make the entire document fit and therefore make its only
+	// logical top also "bottom". That geometric coincidence is not user intent:
+	// keep a manually paused reader paused until explicit navigation resumes
+	// follow.
+	if _, resized := msg.(tea.WindowSizeMsg); !resized {
+		m.checkAutoScroll()
+	}
 
 	return m, tea.Batch(cmds...)
 }
@@ -1011,17 +1059,32 @@ func agentTextareaStylesForMode(isDark bool, mode Mode) textarea.Styles {
 }
 
 func configureComposerMode(input *textarea.Model, isDark bool, mode Mode, reducedMotion ...bool) {
+	staticCursor := len(reducedMotion) > 0 && reducedMotion[0]
+	configureComposerModeWithGlyphProfile(input, isDark, mode, staticCursor, GlyphUnicode)
+}
+
+func configureComposerModeWithGlyphProfile(
+	input *textarea.Model,
+	isDark bool,
+	mode Mode,
+	reducedMotion bool,
+	profile GlyphProfile,
+) {
 	styles := agentTextareaStylesForMode(isDark, mode)
-	styles.Cursor.Blink = len(reducedMotion) == 0 || !reducedMotion[0]
+	styles.Cursor.Blink = !reducedMotion
 	input.SetStyles(styles)
+	glyphs := glyphSet(resolveGlyphProfile(profile))
 	input.SetPromptFunc(3, func(info textarea.PromptInfo) string {
 		if info.LineNumber == 0 {
+			if profile == GlyphASCII {
+				return glyphs.UserRail + "> "
+			}
 			if mode == ModeNormal {
 				return "▏❯ "
 			}
-			return "▌❯ "
+			return glyphs.UserRail + "❯ "
 		}
-		return " │ "
+		return " " + glyphs.Vertical + " "
 	})
 }
 
@@ -1045,15 +1108,28 @@ func (m *Model) resetTurnDiagnostics() {
 
 // flushStream moves accumulated stream text into a chat entry with cached rendering.
 func (m *Model) flushStream() {
-	m.invalidateEntryCache()
 	content := sanitizeTerminalMultiline(m.streamBuf.String())
 	thinking := strings.Trim(sanitizeTerminalMultiline(m.thinkBuf.String()), "\r\n")
+	var settledBlockID BlockID
+	var settledTurnID TurnID
+	if (strings.TrimSpace(content) != "" || strings.TrimSpace(thinking) != "") &&
+		m.liveTailLayoutVisible {
+		// Preserve the transient block identity across raw-stream → settled
+		// Markdown projection. Semantic reflow can then keep a paused reader on
+		// the same logical marker even when Glamour changes the row geometry.
+		settledBlockID, settledTurnID = m.liveTailLayoutIdentity()
+	}
+	m.invalidateEntryCache()
 	if strings.TrimSpace(content) != "" || strings.TrimSpace(thinking) != "" {
 		var rendered string
 		if m.md != nil && strings.TrimSpace(content) != "" {
 			rendered = m.md.RenderFull(content)
 		}
 		entry := ChatEntry{
+			BlockID:         settledBlockID,
+			TurnID:          settledTurnID,
+			Revision:        1,
+			Lifecycle:       BlockSettled,
 			Kind:            "assistant",
 			Content:         content,
 			RenderedContent: rendered,
@@ -1069,7 +1145,7 @@ func (m *Model) flushStream() {
 	// Clear whitespace-only buffers and partial tag search state even when there
 	// was nothing worth presenting, otherwise a later segment can inherit a
 	// phantom live/assistant block.
-	m.streamBuf.Reset()
+	m.resetTranscriptStreamText()
 	m.thinkBuf.Reset()
 	m.inThinking = false
 	m.thinkSearchBuf = ""
@@ -1140,8 +1216,12 @@ type inputViewportReflowMsg struct{}
 // forcing a full re-render on the next renderEntries() call.
 func (m *Model) invalidateEntryCache() {
 	m.entryCacheValid = false
+	m.transcriptPaint.cache.valid = false
+	m.transcriptPaint.liveCache.valid = false
 	m.transcriptReconcileValid = false
 	m.transcriptReconciledCount = 0
+	m.transcriptReconciledTurnID = ""
+	m.transcriptReconciledBlockIDs = nil
 	m.cachedEntriesRender = ""
 	m.cachedEntryCount = 0
 	m.cachedStableCount = 0
@@ -1166,7 +1246,7 @@ func (m *Model) resetEntryMemo() {
 // checkAutoScroll resets scroll anchor when the viewport is at the bottom,
 // allowing auto-scroll to resume during streaming.
 func (m *Model) checkAutoScroll() {
-	if m.viewport.AtBottom() {
+	if m.transcriptAtBottom() {
 		m.markFollowingLatest()
 	}
 }
@@ -1177,11 +1257,45 @@ func (m *Model) recalcViewportHeight() {
 		return
 	}
 	anchor := m.captureTranscriptReflowAnchor()
-	m.viewport.SetHeight(m.viewportHeight())
+	oldHeight := m.viewport.Height()
+	newHeight := m.viewportHeight()
+	m.viewport.SetHeight(newHeight)
+	if oldHeight != newHeight && m.transcriptGeometryDependsOnHeight(oldHeight, newHeight) {
+		// The welcome block is vertically centered, and an expanded inline diff
+		// is explicitly budgeted from transcript rows. Footer/composer/inline
+		// form reflow therefore needs the same semantic repaint contract as a
+		// terminal-height resize when either projection is visible.
+		m.invalidateEntryCache()
+		m.refreshTranscript()
+	}
 	// Footer reflow must not silently change transcript ownership. Following
 	// stays pinned to the newest row; a paused reader keeps the same semantic
 	// block coordinate and screen row when the document geometry permits it.
 	m.restoreTranscriptReflowAnchor(anchor)
+}
+
+func (m *Model) transcriptGeometryDependsOnHeight(oldHeight, newHeight int) bool {
+	if !m.transcriptVirtualized() {
+		return false
+	}
+	if !m.transcriptHasConversation() && !m.hasVisibleLiveTurn() {
+		return true
+	}
+	if inlineDiffPreviewRowsForHeight(oldHeight) == inlineDiffPreviewRowsForHeight(newHeight) {
+		return false
+	}
+	for _, entry := range m.entries {
+		if entry.Kind != "tool_group" ||
+			entry.ToolIndex < 0 ||
+			entry.ToolIndex >= len(m.toolEntries) {
+			continue
+		}
+		tool := m.toolEntries[entry.ToolIndex]
+		if !tool.Collapsed && tool.Status != ToolStatusRunning && len(tool.DiffLines) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // viewportHeight is the single vertical-layout authority shared by terminal
@@ -1440,13 +1554,19 @@ func (m *Model) lastAssistantContent() string {
 	return ""
 }
 
-// copyToClipboard copies text to the system clipboard and returns a status message.
+type clipboardResultMsg struct {
+	Err error
+}
+
+// copyToClipboard copies text to the system clipboard. Its receipt is a
+// transient footer notice; copy affordances must never mutate or persist chat.
 func (m *Model) copyToClipboard(text string) tea.Cmd {
+	write := m.clipboardWrite
 	return func() tea.Msg {
-		if err := clipboard.WriteAll(text); err != nil {
-			return SystemMessageMsg{Msg: "Clipboard error: " + err.Error()}
+		if write == nil {
+			return clipboardResultMsg{Err: context.Canceled}
 		}
-		return SystemMessageMsg{Msg: "Copied to clipboard."}
+		return clipboardResultMsg{Err: write(text)}
 	}
 }
 
@@ -1483,35 +1603,47 @@ func (m *Model) readClipboardPaste() tea.Cmd {
 
 // handleMouseClick hit-tests completed transcript disclosures. Live reasoning
 // intentionally has no region and remains non-interactive until it settles.
-func (m *Model) handleMouseClick(x, y int) {
+func (m *Model) handleMouseClick(x, y int) tea.Cmd {
 	if x < 0 || x >= m.viewport.Width() || y < 0 || y >= m.viewport.Height() {
-		return
+		return nil
 	}
 	// The viewport starts at terminal row zero in the sidebar-free layout.
-	vpY := y + m.viewport.YOffset()
+	vpY := y + m.transcriptYOffset()
 	for _, region := range m.toolHitRegions {
-		if vpY == region.Row && x < region.EndCol {
+		if region.contains(x, vpY) {
 			if region.ToolIndex >= 0 && region.ToolIndex < len(m.toolEntries) {
-				m.toggleToolReceipt(region.ToolIndex, false)
+				if target, ok := m.toolActionTarget(region.ToolIndex); ok {
+					return m.dispatchUIAction(UIActionRequest{
+						ActionID: toolToggleActionID,
+						Target:   target,
+						Source:   UIActionSourceMouse,
+					})
+				}
+				// Geometry-only fixtures and a pre-reconciliation startup frame
+				// may not yet have a canonical BlockID. Production transcript
+				// actions always take the typed path above; preserve the legacy
+				// disclosure locally until identity is available.
+				m.toggleToolReceipt(region.ToolIndex, true)
 			}
-			return
+			return nil
 		}
 	}
 	for _, region := range m.thinkingHitRegions {
-		if vpY != region.Row || x >= region.EndCol {
+		if !region.contains(x, vpY) {
 			continue
 		}
 		if region.EntryIndex < 0 || region.EntryIndex >= len(m.entries) {
-			return
+			return nil
 		}
 		entry := m.entries[region.EntryIndex]
 		if entry.Kind != "assistant" || strings.TrimSpace(entry.ThinkingContent) == "" ||
 			reasoningReceiptDigest(entry.ThinkingContent) != region.Digest {
-			return
+			return nil
 		}
 		m.toggleThinkingReceipt(region.EntryIndex)
-		return
+		return nil
 	}
+	return nil
 }
 
 func (m *Model) toggleThinkingReceipt(entryIndex int) bool {
@@ -1525,7 +1657,7 @@ func (m *Model) toggleThinkingReceipt(entryIndex int) bool {
 	anchor := m.captureTranscriptReflowAnchor()
 	entry.ThinkingCollapsed = !entry.ThinkingCollapsed
 	m.invalidateEntryCache()
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	m.restoreTranscriptReflowAnchor(anchor)
 	return true
 }
@@ -1551,7 +1683,7 @@ func (m *Model) toggleAllThinkingReceipts() bool {
 		}
 	}
 	m.invalidateEntryCache()
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	m.restoreTranscriptReflowAnchor(anchor)
 	return true
 }
@@ -1573,12 +1705,12 @@ func (m *Model) toggleToolReceipt(toolIndex int, reveal bool) {
 		m.receiptInspectActive = true
 		m.receiptInspectToolIndex = toolIndex
 		m.receiptInspectAnchorPaused = m.followPaused()
-		m.receiptInspectAnchorYOffset = m.viewport.YOffset()
+		m.receiptInspectAnchorYOffset = m.transcriptYOffset()
 		m.receiptInspectReflowAnchor = anchor
 	}
 	m.toolEntries[toolIndex].Collapsed = !m.toolEntries[toolIndex].Collapsed
 	m.invalidateEntryCache()
-	m.viewport.SetContent(m.renderEntries())
+	m.refreshTranscript()
 	if expanding && reveal {
 		m.revealToolReceipt(toolIndex)
 		return
@@ -1601,7 +1733,7 @@ func (m *Model) cancelReceiptInspection(collapse bool) {
 	if collapse && toolIndex >= 0 && toolIndex < len(m.toolEntries) && !m.toolEntries[toolIndex].Collapsed {
 		m.toolEntries[toolIndex].Collapsed = true
 		m.invalidateEntryCache()
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 	}
 	if m.receiptInspectReflowAnchor.Valid {
 		m.restoreTranscriptReflowAnchor(m.receiptInspectReflowAnchor)
@@ -1616,7 +1748,7 @@ func (m *Model) cancelReceiptInspection(collapse bool) {
 func (m *Model) revealToolReceipt(toolIndex int) {
 	for _, region := range m.toolHitRegions {
 		if region.ToolIndex == toolIndex {
-			m.viewport.SetYOffset(region.Row)
+			m.setTranscriptYOffset(region.Row)
 			m.pauseFollow()
 			return
 		}

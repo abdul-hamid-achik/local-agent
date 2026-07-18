@@ -111,7 +111,7 @@ func TestCortexDecisionRendersInlineAtSupportedSizesWithoutPreselection(t *testi
 	} {
 		t.Run(size.name, func(t *testing.T) {
 			m := resizeInlineFormTestModel(t, size.width, size.height)
-			m.viewport.SetContent("VISIBLE TRANSCRIPT")
+			m.setTestTranscriptContent("VISIBLE TRANSCRIPT")
 			m.input.SetValue("preserved draft")
 			presentation, err := newCortexDecisionPresentation(
 				"task_decision", *cortexDecisionFixture("display"),

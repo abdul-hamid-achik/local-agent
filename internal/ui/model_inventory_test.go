@@ -206,6 +206,31 @@ func TestOllamaModelPickerFitsWideAndMinimumTerminals(t *testing.T) {
 	}
 }
 
+func TestOllamaModelPickerRestyleKeepsLocalAndCloudRowsVisible(t *testing.T) {
+	models := []OllamaModelDescriptor{
+		{Name: "qwen3.5:2b", Source: OllamaModelLocal, Current: true, Running: true, Selectable: true, Fit: true},
+		{Name: "kimi-code:cloud", Source: OllamaModelCloud, Selectable: true, Fit: true, RequiresConsent: true},
+	}
+	m := newTestModel(t)
+	m.width, m.height = 90, 28
+	m.modelPickerState = newOllamaModelPickerState(models, models[0].Name, m.width, m.height, m.isDark)
+
+	// Opening an overlay restyles it for the active glyph profile. Its geometry
+	// must already agree with that delegate density.
+	m.restylePickerOverlays()
+	m.overlay = OverlayModelPicker
+
+	if m.modelPickerState.ItemHeight != 1 {
+		t.Fatalf("restyled model row height = %d, want 1", m.modelPickerState.ItemHeight)
+	}
+	plain := ansi.Strip(m.renderModelPicker())
+	for _, want := range []string{"LOCAL · qwen3.5:2b", "CLOUD · kimi-code:cloud"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("restyled picker omitted %q:\n%s", want, plain)
+		}
+	}
+}
+
 func TestOllamaModelPickerEscapeClearsFilterBeforeClosing(t *testing.T) {
 	m := newTestModel(t)
 	m.modelPickerState = newOllamaModelPickerState([]OllamaModelDescriptor{{Name: "qwen", Source: OllamaModelLocal, Selectable: true, Fit: true}}, "", m.width, m.height, m.isDark)

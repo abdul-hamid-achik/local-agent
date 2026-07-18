@@ -113,7 +113,7 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 				Content: result.Text,
 			})
 		}
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		m.resumeFollow()
 		return nil
 
@@ -126,7 +126,7 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 	case command.ActionAttachImage:
 		if m.goalRuntime != nil {
 			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: "Images cannot be attached to a host-owned goal continuation. Finish or drop the goal, then attach the image to an ordinary prompt."})
-			m.viewport.SetContent(m.renderEntries())
+			m.refreshTranscript()
 			m.resumeFollow()
 			return nil
 		}
@@ -138,21 +138,21 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 		} else {
 			m.entries = append(m.entries, ChatEntry{Kind: "system", Content: sanitizeTerminalMultiline(m.renderPlainImageList())})
 		}
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		m.resumeFollow()
 		return nil
 
 	case command.ActionClearImages:
 		count := m.clearPendingImages()
 		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: fmt.Sprintf("Cleared %d pending image attachment%s.", count, pluralSuffix(count))})
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		m.resumeFollow()
 		return nil
 
 	case command.ActionForgetImageHistory:
 		if m.goalRuntime != nil {
 			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: "Image history cannot be changed while a durable goal is attached. Finish or drop the goal first."})
-			m.viewport.SetContent(m.renderEntries())
+			m.refreshTranscript()
 			m.resumeFollow()
 			return nil
 		}
@@ -162,7 +162,7 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 		path := strings.TrimSpace(result.Data)
 		if path == "" {
 			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: "load: no path specified"})
-			m.viewport.SetContent(m.renderEntries())
+			m.refreshTranscript()
 			m.resumeFollow()
 			return nil
 		}
@@ -172,7 +172,7 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 		m.input.Blur()
 		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: fmt.Sprintf("Loading context from: %s (Esc cancels)", path)})
 		m.invalidateEntryCache()
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		m.resumeFollow()
 		load := func() tea.Msg {
 			data, err := safeio.ReadRegularFileNoFollow(path, maxLoadedContextBytes, safeio.StartupReadTimeout)
@@ -190,7 +190,7 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 				Content: result.Text,
 			})
 		}
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		m.resumeFollow()
 		return nil
 
@@ -208,7 +208,7 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 				})
 			}
 		}
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		m.resumeFollow()
 		return nil
 
@@ -226,7 +226,7 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 				})
 			}
 		}
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		m.resumeFollow()
 		return nil
 
@@ -271,7 +271,7 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 		} else {
 			m.entries = append(m.entries, ChatEntry{Kind: "system", Content: result.Text})
 		}
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		m.resumeFollow()
 		return nil
 
@@ -295,7 +295,7 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 				Kind:    "error",
 				Content: "A commit is already in progress. Wait for it to finish before starting another.",
 			})
-			m.viewport.SetContent(m.renderEntries())
+			m.refreshTranscript()
 			m.resumeFollow()
 			return nil
 		}
@@ -303,7 +303,7 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 			Kind:    "system",
 			Content: "Generating commit message from staged changes. Automated /commit disables Git hooks, signing, fsmonitor, and background maintenance.",
 		})
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		m.resumeFollow()
 		m.commitToken++
 		ctx, cancel := context.WithCancel(context.Background())
@@ -336,7 +336,7 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 				Content: result.Text,
 			})
 		}
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		m.resumeFollow()
 		return nil
 
@@ -347,13 +347,13 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 				Kind:    "error",
 				Content: "export: no path specified",
 			})
-			m.viewport.SetContent(m.renderEntries())
+			m.refreshTranscript()
 			m.resumeFollow()
 			return nil
 		}
 		if m.exportRunning {
 			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: "An export is already in progress. Wait for its receipt before starting another."})
-			m.viewport.SetContent(m.renderEntries())
+			m.refreshTranscript()
 			m.resumeFollow()
 			return nil
 		}
@@ -366,7 +366,7 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 		m.input.Blur()
 		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: fmt.Sprintf("Exporting conversation to: %s", path)})
 		m.invalidateEntryCache()
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		m.resumeFollow()
 		return tea.Batch(m.startActivityCmd(), exportConversationCmd(workDir, path, content, force, token))
 
@@ -387,7 +387,7 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 				Kind:    "error",
 				Content: "import: no path specified",
 			})
-			m.viewport.SetContent(m.renderEntries())
+			m.refreshTranscript()
 			m.resumeFollow()
 			return nil
 		}
@@ -397,7 +397,7 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 		m.input.Blur()
 		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: fmt.Sprintf("Importing conversation from: %s (Esc cancels)", path)})
 		m.invalidateEntryCache()
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		m.resumeFollow()
 		load := func() tea.Msg {
 			data, err := safeio.ReadRegularFile(path, maxImportBytes, safeio.StartupReadTimeout)
@@ -440,7 +440,7 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 			note = fmt.Sprintf("saved checkpoint #%d%s — restore with /restore %d", id, label, id)
 		}
 		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: note})
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		m.resumeFollow()
 		return nil
 
@@ -462,7 +462,7 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 			}
 		}
 		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: strings.TrimRight(b.String(), "\n")})
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		m.resumeFollow()
 		return nil
 
@@ -470,14 +470,14 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 		id, perr := strconv.ParseInt(strings.TrimSpace(result.Data), 10, 64)
 		if perr != nil {
 			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("restore: %q is not a valid checkpoint id", result.Data)})
-			m.viewport.SetContent(m.renderEntries())
+			m.refreshTranscript()
 			m.resumeFollow()
 			return nil
 		}
 		n, err := m.agent.RestoreCheckpoint(context.Background(), id)
 		if err != nil {
 			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("restore failed: %v", err)})
-			m.viewport.SetContent(m.renderEntries())
+			m.refreshTranscript()
 			m.resumeFollow()
 			return nil
 		}
@@ -485,14 +485,14 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 		// receipts retain causal placement and an inspectable attention state,
 		// while raw result/argument content stays inside the agent boundary.
 		m.entries, m.toolEntries = checkpointTranscriptFromMessages(m.agent.Messages())
-		m.rebuildToolCardsFromEntries()
+		m.toolsPending = 0
 		m.resetEntryMemo()
 		m.invalidateEntryCache()
 		m.entries = append(m.entries, ChatEntry{
 			Kind:    "system",
 			Content: fmt.Sprintf("restored checkpoint #%d — conversation rewound to %d messages", id, n),
 		})
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		m.resumeFollow()
 		return nil
 
@@ -551,7 +551,7 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 				Kind:    "error",
 				Content: fmt.Sprintf("unsupported command action: %d", result.Action),
 			})
-			m.viewport.SetContent(m.renderEntries())
+			m.refreshTranscript()
 			m.resumeFollow()
 			return nil
 		}
@@ -561,7 +561,7 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 				Kind:    "system",
 				Content: result.Text,
 			})
-			m.viewport.SetContent(m.renderEntries())
+			m.refreshTranscript()
 			m.resumeFollow()
 		}
 		return nil
@@ -575,7 +575,7 @@ func (m *Model) handleCommandResult(msg CommandResultMsg) {
 			Kind:    "system",
 			Content: msg.Text,
 		})
-		m.viewport.SetContent(m.renderEntries())
+		m.refreshTranscript()
 		m.resumeFollow()
 	}
 }

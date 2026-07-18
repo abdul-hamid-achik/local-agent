@@ -28,10 +28,11 @@ func TestSemanticToolReceiptDoesNotPaintBobDriftGreen(t *testing.T) {
 	if len(m.toolEntries) != 1 || m.toolEntries[0].Status != ToolStatusDone || m.toolEntries[0].IsError {
 		t.Fatalf("transport state was collapsed into an error: %#v", m.toolEntries)
 	}
-	if len(m.toolCardMgr.Cards) != 1 || m.toolCardMgr.Cards[0].State != ToolCardAttention {
-		t.Fatalf("Bob drift card = %#v", m.toolCardMgr.Cards)
+	card := testProjectedToolCard(t, m, 0)
+	if card.State != ToolCardAttention {
+		t.Fatalf("Bob drift card = %#v", card)
 	}
-	plain := ansi.Strip(m.toolCardMgr.Cards[0].View(72))
+	plain := ansi.Strip(card.View(72))
 	for _, want := range []string{"!", "Repository needs convergence", "Drift reported"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("attention receipt missing %q:\n%s", want, plain)
@@ -39,7 +40,7 @@ func TestSemanticToolReceiptDoesNotPaintBobDriftGreen(t *testing.T) {
 	}
 }
 
-func TestMissingToolCardKeepsDomainUnknownOutOfSuccessState(t *testing.T) {
+func TestStrictToolProjectionKeepsDomainUnknownOutOfSuccessState(t *testing.T) {
 	m := newTestModel(t)
 	m.toolEntries = []ToolEntry{{
 		ID: "cortex-status-1", Name: "cortex__cortex_status", Status: ToolStatusDone,
@@ -51,14 +52,14 @@ func TestMissingToolCardKeepsDomainUnknownOutOfSuccessState(t *testing.T) {
 	}}
 
 	var rendered strings.Builder
-	m.renderToolGroup(&rendered, 0)
+	m.renderToolGroup(&rendered, testToolChatEntry(0))
 	plain := ansi.Strip(rendered.String())
 	if !strings.Contains(plain, "?") || !strings.Contains(plain, "Needs attention") {
-		t.Fatalf("cardless domain-unknown receipt lost its attention state:\n%s", plain)
+		t.Fatalf("domain-unknown receipt lost its attention state:\n%s", plain)
 	}
 	for _, forbidden := range []string{"✓", "Checked Cortex"} {
 		if strings.Contains(plain, forbidden) {
-			t.Fatalf("cardless domain-unknown receipt claimed success with %q:\n%s", forbidden, plain)
+			t.Fatalf("domain-unknown receipt claimed success with %q:\n%s", forbidden, plain)
 		}
 	}
 }

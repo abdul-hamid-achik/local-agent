@@ -521,7 +521,8 @@ func TestConversationalPresetSubmitDispatchesImmediately(t *testing.T) {
 			if m.state != StateWaiting || len(m.entries) == 0 || m.entries[len(m.entries)-1].Kind != "user" {
 				t.Fatalf("submit presentation: state=%v entries=%#v", m.state, m.entries)
 			}
-			if done, ok := cmd().(AgentDoneMsg); !ok || done.TurnID == "" {
+			done := awaitCommandMessage[AgentDoneMsg](t, commandMessages(cmd), 2*time.Second)
+			if done.TurnID == "" {
 				t.Fatalf("provider result = %#v", done)
 			}
 			if got := client.calls.Load(); got != 1 {
@@ -618,7 +619,8 @@ func TestGoalTurnAuthorityRemainsAutoAfterConversationalModeCycle(t *testing.T) 
 	if cmd == nil || m.state != StateWaiting {
 		t.Fatalf("goal turn did not reach provider boundary: cmd=%v state=%v", cmd != nil, m.state)
 	}
-	if done, ok := cmd().(AgentDoneMsg); !ok || done.Err != nil {
+	done := awaitCommandMessage[AgentDoneMsg](t, commandMessages(cmd), 2*time.Second)
+	if done.Err != nil {
 		t.Fatalf("goal provider result = %#v", done)
 	}
 	options := <-client.options

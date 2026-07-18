@@ -33,6 +33,7 @@ type cortexDecisionPresentation struct {
 	height        int
 	isDark        bool
 	reducedMotion bool
+	glyphProfile  GlyphProfile
 	styles        Styles
 	warningStyle  lipgloss.Style
 	detail        viewport.Model
@@ -45,6 +46,7 @@ func newCortexDecisionPresentation(
 	decision goaladvisor.PendingDecision,
 	width, height int,
 	isDark, reducedMotion bool,
+	profiles ...GlyphProfile,
 ) (*cortexDecisionPresentation, error) {
 	requestSHA256, err := decision.RequestBindingSHA256(taskID)
 	if err != nil {
@@ -60,6 +62,7 @@ func newCortexDecisionPresentation(
 	presentation := &cortexDecisionPresentation{
 		TaskID: taskID, Decision: decision, RequestSHA256: requestSHA256,
 		Selected: -1, width: width, height: height, isDark: isDark, reducedMotion: reducedMotion,
+		glyphProfile: resolveGlyphProfile(profiles...),
 	}
 	presentation.SetTheme(isDark)
 	presentation.resizeDetail(false)
@@ -167,7 +170,7 @@ func (p *cortexDecisionPresentation) confirm() (goaladvisor.DecisionOption, bool
 	}
 	option, ok := p.selectedOption()
 	if !ok {
-		p.Notice = "Choose an option with ↑/↓ or j/k first."
+		p.Notice = p.staticText("Choose an option with ↑/↓ or j/k first.")
 		p.cacheValid = false
 		return goaladvisor.DecisionOption{}, false
 	}
@@ -203,7 +206,7 @@ func (p *cortexDecisionPresentation) setOutcomeUnknown() {
 	p.Answering = false
 	p.Refreshing = false
 	p.OutcomeUnknown = true
-	p.Notice = "Outcome unknown — refresh Cortex status"
+	p.Notice = p.staticText("Outcome unknown — refresh Cortex status")
 	p.cacheValid = false
 }
 
@@ -240,7 +243,7 @@ func (p *cortexDecisionPresentation) View(busyMarker string) string {
 		return p.cache
 	}
 	content := p.renderContent(busyMarker)
-	view := renderInlineFormFrame(p.styles, content, p.renderFooter(), p.width)
+	view := renderInlineFormFrame(p.styles, content, p.renderFooter(), p.width, p.glyphProfile)
 	if !animated {
 		p.cache = view
 		p.cacheValid = true
@@ -253,15 +256,15 @@ func (p *cortexDecisionPresentation) renderContent(busyMarker string) string {
 	var body strings.Builder
 	title := "Cortex decision"
 	if p.Decision.Sensitive {
-		title += " · " + p.warningStyle.Render("sensitive")
+		title += p.separator() + p.warningStyle.Render("sensitive")
 	}
 	body.WriteString(p.styles.OverlayTitle.Render(title))
 	body.WriteString("\n")
-	question := "Q · " + p.Decision.Question
+	question := "Q" + p.separator() + p.Decision.Question
 	if p.compact() {
-		body.WriteString(p.styles.StatusText.Render(truncateDisplay(question, width)))
+		body.WriteString(p.styles.StatusText.Render(p.truncate(question, width)))
 	} else {
-		body.WriteString(p.styles.StatusText.Render(limitWrappedRows(question, width, 2)))
+		body.WriteString(p.styles.StatusText.Render(limitWrappedRows(question, width, 2, p.glyphProfile)))
 	}
 	body.WriteString("\n")
 
@@ -280,11 +283,11 @@ func (p *cortexDecisionPresentation) renderContent(busyMarker string) string {
 	status := ""
 	switch {
 	case p.Answering:
-		status = "Recording answer…"
+		status = p.staticText("Recording answer…")
 	case p.Refreshing:
-		status = "Refreshing Cortex status…"
+		status = p.staticText("Refreshing Cortex status…")
 	case p.OutcomeUnknown:
-		status = "Outcome unknown — refresh Cortex status"
+		status = p.staticText("Outcome unknown — refresh Cortex status")
 	case p.Notice != "":
 		status = p.Notice
 	}
@@ -297,18 +300,19 @@ func (p *cortexDecisionPresentation) renderContent(busyMarker string) string {
 		if p.OutcomeUnknown && !p.Refreshing {
 			style = p.styles.ErrorText
 		}
-		body.WriteString(style.Render(truncateDisplay(status, width)))
+		body.WriteString(style.Render(p.truncate(status, width)))
 	}
 	return body.String()
 }
 
 func (p *cortexDecisionPresentation) renderCurrentOption(width int) string {
 	option, ok := p.selectedOption()
+	glyphs := glyphSet(p.glyphProfile)
 	if !ok {
-		return p.styles.OverlayDim.Render(truncateDisplay("○ No option selected", width))
+		return p.styles.OverlayDim.Render(p.truncate(glyphs.Unselected+" No option selected", width))
 	}
-	text := fmt.Sprintf("● %s · %s", option.ID, option.Label)
-	return p.styles.FocusIndicator.Render(truncateDisplay(text, width))
+	text := fmt.Sprintf("%s %s%s%s", glyphs.Selected, option.ID, p.separator(), option.Label)
+	return p.styles.FocusIndicator.Render(p.truncate(text, width))
 }
 
 func (p *cortexDecisionPresentation) renderOptionWindow(width int) string {
@@ -322,39 +326,71 @@ func (p *cortexDecisionPresentation) renderOptionWindow(width int) string {
 	}
 	end := min(len(options), start+cortexDecisionOptionWindow)
 	rows := make([]string, 0, end-start)
+	glyphs := glyphSet(p.glyphProfile)
 	for index := start; index < end; index++ {
-		marker := "○"
+		marker := glyphs.Unselected
 		style := p.styles.StatusText
 		if index == p.Selected {
-			marker = "●"
+			marker = glyphs.Selected
 			style = p.styles.FocusIndicator
 		}
-		row := fmt.Sprintf("%s %s · %s", marker, options[index].ID, options[index].Label)
-		rows = append(rows, style.Render(truncateDisplay(row, width)))
+		row := fmt.Sprintf("%s %s%s%s", marker, options[index].ID, p.separator(), options[index].Label)
+		rows = append(rows, style.Render(p.truncate(row, width)))
 	}
 	return strings.Join(rows, "\n")
 }
 
 func (p *cortexDecisionPresentation) renderFooter() string {
 	width := p.contentWidth()
+	separator := strings.TrimSpace(p.separator())
+	vertical := "↑/↓"
+	if p.glyphProfile == GlyphASCII {
+		vertical = "up/down"
+	}
 	switch {
 	case p.Answering || p.Refreshing:
-		return truncateDisplay("esc hide · operation continues", width)
+		return p.truncate("esc hide "+separator+" operation continues", width)
 	case p.OutcomeUnknown:
-		return truncateDisplay("r refresh status · esc hide", width)
+		return p.truncate("r refresh status "+separator+" esc hide", width)
 	case p.compact():
-		return "↑/↓ j/k choose\n" + truncateDisplay("enter confirm · esc hide", width)
+		return vertical + " j/k choose\n" + p.truncate("enter confirm "+separator+" esc hide", width)
 	default:
-		return truncateDisplay("↑/↓ or j/k choose · enter confirm · pgup/pgdn details · esc hide", width)
+		return p.truncate(vertical+" or j/k choose "+separator+" enter confirm "+separator+" pgup/pgdn details "+separator+" esc hide", width)
 	}
 }
 
-func limitWrappedRows(value string, width, maxRows int) string {
+func (p *cortexDecisionPresentation) separator() string {
+	if p != nil && p.glyphProfile == GlyphASCII {
+		return " - "
+	}
+	return " · "
+}
+
+func (p *cortexDecisionPresentation) staticText(value string) string {
+	if p != nil && p.glyphProfile == GlyphASCII {
+		return strings.NewReplacer("…", "...", "—", "-", "↑/↓", "up/down").Replace(value)
+	}
+	return value
+}
+
+func (p *cortexDecisionPresentation) truncate(value string, width int) string {
+	if p == nil {
+		return truncateDisplay(value, width)
+	}
+	return truncateDisplayWithGlyphProfile(value, width, p.glyphProfile)
+}
+
+func limitWrappedRows(value string, width, maxRows int, profiles ...GlyphProfile) string {
 	rows := strings.Split(wrapText(value, width), "\n")
 	if len(rows) <= maxRows {
 		return strings.Join(rows, "\n")
 	}
 	rows = rows[:maxRows]
-	rows[maxRows-1] = truncateDisplay(rows[maxRows-1], max(1, width-1)) + "…"
+	profile := resolveGlyphProfile(profiles...)
+	ellipsis := "…"
+	if profile == GlyphASCII {
+		ellipsis = "~"
+	}
+	rows[maxRows-1] = truncateDisplayWithGlyphProfile(rows[maxRows-1], max(1, width-1), profile) + ellipsis
 	return strings.Join(rows, "\n")
 }

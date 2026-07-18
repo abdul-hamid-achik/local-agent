@@ -70,6 +70,11 @@ tasks:
     cmds:
       - go test -tags=integration ./internal/integration -count=1
 
+  'test:wrapper':
+    desc: Verify the portable TinyVault provider wrapper without real secrets
+    cmds:
+      - sh scripts/local-agent-wrapper_test.sh
+
   sqlc:
     desc: Regenerate typed SQLite query and schema models
     dir: internal/db
@@ -78,7 +83,7 @@ tasks:
 
   verify:
     desc: Run the local code and documentation verification gates
-    deps: ['site:verify']
+    deps: ['site:verify', 'test:wrapper']
     cmds:
       - go mod tidy -diff
       - golangci-lint run ./...

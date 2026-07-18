@@ -12,8 +12,8 @@
  │   ctrl+c       Quit                │
  │   ctrl+l       Clear screen        │
  │   ctrl+n       New conversation    │
- │   ?            Show help (empty    │
+ │   f1           Show help (empty    │
  │                input)              │
- │   t            Toggle all tools    │
+ │   ctrl+b       Toggle all tools    │
  │ esc/q close · pgdn · g/shift+g     │
  ╰────────────────────────────────────╯

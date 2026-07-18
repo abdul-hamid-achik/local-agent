@@ -85,13 +85,14 @@ func (m *Model) renderThinkingBox(content string, collapsed bool) string {
 	// edge on wide screens.
 	width := max(4, m.chatContentWidth()-2)
 	inner := max(1, width-2) // left rail plus one separating space
-	direction := "▸"
+	glyphs := glyphSet(m.glyphProfile)
+	direction := glyphs.Collapsed
 	if !collapsed {
-		direction = "▾"
+		direction = glyphs.Expanded
 	}
 	header := thinkingHeader(direction, inner)
 
-	bar := m.styles.ThinkingBorder.Render("│")
+	bar := m.styles.ThinkingBorder.Render(glyphs.Vertical)
 	var b strings.Builder
 	b.WriteString(bar)
 	b.WriteByte(' ')
@@ -148,7 +149,7 @@ func (m *Model) renderLiveThinkingBox(content string) string {
 		header = truncateDisplay(header, inner)
 	}
 
-	bar := m.styles.ThinkingBorder.Render("│")
+	bar := m.styles.ThinkingBorder.Render(glyphSet(m.glyphProfile).Vertical)
 	var b strings.Builder
 	b.WriteString(bar)
 	b.WriteByte(' ')

@@ -7,6 +7,8 @@ import (
 	"unicode/utf8"
 
 	"charm.land/lipgloss/v2"
+
+	"github.com/abdul-hamid-achik/local-agent/internal/ecosystem"
 )
 
 func TestFormatToolResultSanitizesFallbackOutput(t *testing.T) {
@@ -71,6 +73,48 @@ func TestClassifyTool(t *testing.T) {
 				t.Errorf("classifyTool(%q) = %d, want %d", tt.name, got, tt.expected)
 			}
 		})
+	}
+}
+
+func TestClassifyToolRejectsSuggestiveLookalikesAndUnprojectedRoutes(t *testing.T) {
+	for _, name := range []string{
+		"command_status",
+		"readiness_probe",
+		"fetcher",
+		"findings",
+		"writeup",
+		"memory_pressure",
+		"evil__read_file",
+		"server__exec_command",
+	} {
+		if got := classifyTool(name); got != ToolTypeDefault {
+			t.Fatalf("classifyTool(%q) = %d, want conservative default", name, got)
+		}
+	}
+}
+
+func TestClassifyProjectedToolUsesOnlyExactNormalizedRoute(t *testing.T) {
+	readRoute := ecosystem.ProjectToolCall("files__read-file", nil)
+	if got := classifyProjectedTool("files__read-file", readRoute); got != ToolTypeFileRead {
+		t.Fatalf("exact projected read route = %d, want %d", got, ToolTypeFileRead)
+	}
+
+	lazyExec := ecosystem.ProjectToolCall("mcphub__mcphub_call_tool", map[string]any{
+		"server": "runner",
+		"tool":   "exec_command",
+	})
+	if got := classifyProjectedTool("mcphub__mcphub_call_tool", lazyExec); got != ToolTypeBash {
+		t.Fatalf("exact lazy exec route = %d, want %d", got, ToolTypeBash)
+	}
+
+	untyped := ecosystem.ToolProjection{Operation: "read_file"}.Normalize()
+	if got := classifyProjectedTool("files__read_file", untyped); got != ToolTypeDefault {
+		t.Fatalf("unrouted namespaced read = %d, want conservative default", got)
+	}
+
+	lookalike := ecosystem.ProjectToolCall("files__readiness_probe", nil)
+	if got := classifyProjectedTool("files__readiness_probe", lookalike); got != ToolTypeDefault {
+		t.Fatalf("projected lookalike = %d, want conservative default", got)
 	}
 }
 

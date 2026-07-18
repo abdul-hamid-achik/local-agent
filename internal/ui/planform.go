@@ -254,9 +254,10 @@ func (m *Model) renderPlanSelectField(field PlanFormField, active, compact bool,
 		return m.styles.OverlayDim.Render("(no choices)")
 	}
 	selected := min(max(0, field.OptionIndex), len(field.Options)-1)
+	glyphs := glyphSet(m.glyphProfile)
 	if compact {
-		control := "← " + field.Options[selected] + " →"
-		return m.styles.FocusIndicator.Render(truncateDisplay(control, width))
+		control := glyphs.Left + " " + field.Options[selected] + " " + glyphs.Right
+		return m.styles.FocusIndicator.Render(truncateDisplayWithGlyphProfile(control, width, m.glyphProfile))
 	}
 
 	lines := make([]string, 0, len(field.Options))
@@ -264,9 +265,9 @@ func (m *Model) renderPlanSelectField(field PlanFormField, active, compact bool,
 		prefix := "  "
 		style := m.styles.OverlayDim
 		if i == selected {
-			prefix = "● "
+			prefix = glyphs.Selected + " "
 			if active {
-				prefix = "▸ "
+				prefix = glyphs.Collapsed + " "
 				style = m.styles.FocusIndicator
 			}
 		}
@@ -275,32 +276,41 @@ func (m *Model) renderPlanSelectField(field PlanFormField, active, compact bool,
 	return strings.Join(lines, "\n")
 }
 
-func planFormFooter(pf *PlanFormState, width int) string {
+func planFormFooter(pf *PlanFormState, width int, profiles ...GlyphProfile) string {
 	if pf == nil || len(pf.Fields) == 0 {
 		return "esc cancel"
 	}
 	active := min(max(0, pf.ActiveField), len(pf.Fields)-1)
 	field := pf.Fields[active]
 	last := active == len(pf.Fields)-1
+	profile := resolveGlyphProfile(profiles...)
+	horizontal := "←/→"
+	horizontalCompact := "←→"
+	separator := " · "
+	if profile == GlyphASCII {
+		horizontal = "left/right"
+		horizontalCompact = "left/right"
+		separator = " - "
+	}
 
 	if width >= 42 {
 		switch {
 		case last:
-			return "esc cancel · enter submit · shift+tab back"
+			return strings.Join([]string{"esc cancel", "enter submit", "shift+tab back"}, separator)
 		case field.Kind == "select":
-			return "esc cancel · enter/tab next · ←/→ choose"
+			return strings.Join([]string{"esc cancel", "enter/tab next", horizontal + " choose"}, separator)
 		default:
-			return "esc cancel · enter/tab next"
+			return strings.Join([]string{"esc cancel", "enter/tab next"}, separator)
 		}
 	}
 	if width >= 24 {
 		switch {
 		case last:
-			return "esc cancel\nenter submit · shift+tab back"
+			return "esc cancel\n" + strings.Join([]string{"enter submit", "shift+tab back"}, separator)
 		case field.Kind == "select":
-			return "esc cancel\nenter next · ←/→ choose"
+			return "esc cancel\n" + strings.Join([]string{"enter next", horizontal + " choose"}, separator)
 		default:
-			return "esc cancel · enter next"
+			return strings.Join([]string{"esc cancel", "enter next"}, separator)
 		}
 	}
 
@@ -308,7 +318,7 @@ func planFormFooter(pf *PlanFormState, width int) string {
 	case last:
 		return "esc cancel\nenter submit\nshift+tab back"
 	case field.Kind == "select":
-		return "esc cancel\nenter next\n←→ choose"
+		return "esc cancel\nenter next\n" + horizontalCompact + " choose"
 	default:
 		return "esc cancel\nenter next"
 	}
@@ -338,7 +348,7 @@ func (m *Model) renderCompactPlanFormView(pf *PlanFormState, contentWidth int) (
 		b.WriteString(m.styles.ErrorText.UnsetPaddingLeft().Render(truncateDisplay("! "+pf.errorText, max(1, contentWidth-2))))
 	}
 
-	return renderInlineFormFrame(m.styles, b.String(), planFormFooter(pf, contentWidth), m.width), pickerFrameCursor(cursor)
+	return renderInlineFormFrame(m.styles, b.String(), planFormFooter(pf, contentWidth, m.glyphProfile), m.width, m.glyphProfile), pickerFrameCursor(cursor)
 }
 
 // renderPlanForm renders a responsive parent-owned form. Compact terminals show
@@ -391,7 +401,7 @@ func (m *Model) renderPlanFormView() (string, *tea.Cursor) {
 		}
 	}
 
-	return renderInlineFormFrame(m.styles, b.String(), planFormFooter(pf, contentWidth), m.width), pickerFrameCursor(cursor)
+	return renderInlineFormFrame(m.styles, b.String(), planFormFooter(pf, contentWidth, m.glyphProfile), m.width, m.glyphProfile), pickerFrameCursor(cursor)
 }
 
 // openPlanForm gives the inline Plan form temporary composer ownership.

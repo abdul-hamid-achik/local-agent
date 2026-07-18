@@ -118,6 +118,7 @@ func (m *Model) presentCortexDecision(advice goaladvisor.Advice) error {
 	}
 	presentation, err := newCortexDecisionPresentation(
 		advice.TaskID, *advice.Decision, m.width, m.height, m.isDark, m.reducedMotion,
+		m.glyphProfile,
 	)
 	if err != nil {
 		return fmt.Errorf("prepare Cortex decision: %w", err)
@@ -137,6 +138,7 @@ func (m *Model) activateCortexDecision() {
 		return
 	}
 	anchor := m.captureInlineFormTranscriptAnchor()
+	m.clearViewerModals(false)
 	if m.isCompletionActive() {
 		m.dismissCompletion()
 	}

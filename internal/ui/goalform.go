@@ -76,6 +76,7 @@ type GoalFormOptions struct {
 	Height        int
 	IsDark        bool
 	ReducedMotion bool
+	GlyphProfile  GlyphProfile
 	// DraftFromPrompt tells the form that the initial definition was inferred
 	// from the user's composer text. The draft remains fully editable.
 	DraftFromPrompt bool
@@ -114,6 +115,7 @@ type GoalForm struct {
 	height          int
 	isDark          bool
 	reducedMotion   bool
+	glyphProfile    GlyphProfile
 	budgetOnly      bool
 	draftFromPrompt bool
 	followUpPrompt  string
@@ -144,6 +146,7 @@ func NewGoalForm(initial GoalFormValues, options GoalFormOptions) *GoalForm {
 		height:          options.Height,
 		isDark:          options.IsDark,
 		reducedMotion:   options.ReducedMotion,
+		glyphProfile:    resolveGlyphProfile(options.GlyphProfile),
 		budgetOnly:      options.BudgetOnly,
 		draftFromPrompt: options.DraftFromPrompt,
 		followUpPrompt:  strings.TrimSpace(options.FollowUpPrompt),
@@ -1046,21 +1049,22 @@ func (f *GoalForm) renderActionControl(width int, compact bool) string {
 	}
 	selected := min(max(0, f.choiceIndex), len(f.choices)-1)
 	choice := f.choices[selected]
+	glyphs := glyphSet(f.glyphProfile)
 	if compact {
 		left := ""
 		right := ""
 		if selected > 0 {
-			left = "← "
+			left = glyphs.Left + " "
 		}
 		if selected < len(f.choices)-1 {
-			right = " →"
+			right = " " + glyphs.Right
 		}
-		label := left + "▸ " + choice.Label + right
+		label := left + glyphs.Collapsed + " " + choice.Label + right
 		style := f.styles.FocusIndicator
 		if choice.Destructive {
 			style = f.styles.ErrorText
 		}
-		result := style.Render(truncateDisplay(label, width))
+		result := style.Render(truncateDisplayWithGlyphProfile(label, width, f.glyphProfile))
 		if description := strings.TrimSpace(choice.Description); description != "" && !f.minimumHeightLayout() {
 			result += "\n" + f.styles.OverlayDim.Render(truncateDisplay(description, max(1, width-1)))
 		}
@@ -1072,7 +1076,7 @@ func (f *GoalForm) renderActionControl(width int, compact bool) string {
 		marker := "  "
 		style := f.styles.OverlayDim
 		if index == selected {
-			marker = "▸ "
+			marker = glyphs.Collapsed + " "
 			style = f.styles.FocusIndicator
 			if option.Destructive {
 				style = f.styles.ErrorText
@@ -1119,13 +1123,13 @@ func (f *GoalForm) renderFooter(width int) string {
 		}
 	}
 
-	separator := f.styles.OverlayDim.Render(" · ")
+	separator := f.styles.OverlayDim.Render(goalStatusSeparator(f.glyphProfile))
 	rows := make([]string, 0, 2)
 	current := ""
 	for _, hint := range hints {
-		part := f.styles.FocusIndicator.Render(hint.key)
+		part := f.styles.FocusIndicator.Render(f.staticChrome(hint.key))
 		if hint.action != "" {
-			part += " " + f.styles.OverlayDim.Render(hint.action)
+			part += " " + f.styles.OverlayDim.Render(f.staticChrome(hint.action))
 		}
 		candidate := part
 		if current != "" {
@@ -1185,13 +1189,20 @@ func (f *GoalForm) renderMinimumFooter(width int) string {
 }
 
 func (f *GoalForm) renderMinimumHint(width int, keyText, action string) string {
-	line := f.styles.FocusIndicator.Render(keyText)
+	line := f.styles.FocusIndicator.Render(f.staticChrome(keyText))
 	if action != "" {
-		line += " " + f.styles.OverlayDim.Render(action)
+		line += " " + f.styles.OverlayDim.Render(f.staticChrome(action))
 	}
-	return truncateDisplay(line, width)
+	return truncateDisplayWithGlyphProfile(line, width, f.glyphProfile)
+}
+
+func (f *GoalForm) staticChrome(value string) string {
+	if f != nil && f.glyphProfile == GlyphASCII {
+		return strings.NewReplacer("⇧", "shift+", " · ", " - ").Replace(value)
+	}
+	return value
 }
 
 func (f *GoalForm) renderFrame(content, footer string) string {
-	return renderInlineFormFrame(f.styles, content, footer, f.width)
+	return renderInlineFormFrame(f.styles, content, footer, f.width, f.glyphProfile)
 }
