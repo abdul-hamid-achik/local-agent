@@ -164,6 +164,10 @@ weight budget and remain serial because provider-side capacity is unknown.
 | `LOCAL_AGENT_ALLOW_LARGE_MODELS` | Bypass the 16 GB-oriented admission guard |
 | `LOCAL_AGENT_REDUCED_MOTION` | Replace animated TUI activity with static glyphs |
 
+Remote providers (`LOCAL_AGENT_PROVIDER`, API key env names, optional TinyVault
+PATH wrapper variables such as `LOCAL_AGENT_NO_VAULT` and
+`LOCAL_AGENT_VAULT_PROJECT`) are documented in [Remote providers](./providers.md).
+
 ## Runtime model preference
 
 An explicit local model selected through `/model <name>` or the model picker is

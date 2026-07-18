@@ -1,0 +1,134 @@
+#!/bin/zsh
+# Transparent Local Agent launcher with optional TinyVault secret injection.
+#
+# Install (optional PATH helper):
+#   install -m 755 scripts/local-agent-wrapper ~/.local/bin/local-agent
+#   # ensure ~/.local/bin is first on PATH (ahead of Homebrew)
+#
+# Behavior:
+#   - If TinyVault (tvault) is missing, uninitialized, locked without agent,
+#     or has no known provider keys → run the real binary with no inject and
+#     without changing LOCAL_AGENT_LOCAL_ONLY.
+#   - If provider keys exist in the vault project → inject only those keys and
+#     default LOCAL_AGENT_LOCAL_ONLY=false so /provider remote profiles work.
+#
+# Environment variables are documented in docs/providers.md (Launcher section).
+
+set -euo pipefail
+
+log() {
+  if [[ "${LOCAL_AGENT_VAULT_VERBOSE:-0}" == "1" ]]; then
+    echo "local-agent: $*" >&2
+  fi
+}
+
+# --- resolve real binary (never re-exec this wrapper) --------------------------
+if [[ -n "${LOCAL_AGENT_BIN:-}" && -x "${LOCAL_AGENT_BIN}" ]]; then
+  REAL="$LOCAL_AGENT_BIN"
+elif [[ -x "$HOME/go/bin/local-agent" ]]; then
+  REAL="$HOME/go/bin/local-agent"
+elif [[ -x /opt/homebrew/bin/local-agent ]]; then
+  REAL=/opt/homebrew/bin/local-agent
+else
+  # Strip this script's directory so `command -v` cannot resolve to ourselves.
+  wrapper_dir="${0:A:h}"
+  cleaned_path="$(print -R "$PATH" | tr ':' '\n' | grep -vxF "$wrapper_dir" | grep -v '/.local/bin$' | paste -sd: -)"
+  REAL="$(PATH="$cleaned_path" command -v local-agent 2>/dev/null || true)"
+fi
+
+if [[ -z "${REAL:-}" || ! -x "$REAL" ]]; then
+  echo "local-agent: no real binary found (try: go install ./cmd/local-agent)" >&2
+  exit 127
+fi
+
+# Avoid infinite loop if REAL somehow points at this file.
+if [[ "${REAL:A}" == "${0:A}" ]]; then
+  echo "local-agent: refusing to exec self; set LOCAL_AGENT_BIN to the real binary" >&2
+  exit 127
+fi
+
+run_bare() {
+  exec "$REAL" "$@"
+}
+
+# --- opt-out / no TinyVault ---------------------------------------------------
+if [[ "${LOCAL_AGENT_NO_VAULT:-0}" == "1" ]]; then
+  log "LOCAL_AGENT_NO_VAULT=1; skipping vault inject"
+  run_bare "$@"
+fi
+
+if ! command -v tvault >/dev/null 2>&1; then
+  log "tvault not on PATH; running without secret inject"
+  run_bare "$@"
+fi
+
+PROJECT="${LOCAL_AGENT_VAULT_PROJECT:-local-agent}"
+
+# status --json is lock-free. Fail closed (no inject) if vault is unavailable.
+# Collapse whitespace so multi-line JSON still matches with grep.
+status_json="$(tvault status --json 2>/dev/null | tr -d '\n' || true)"
+if [[ -z "$status_json" ]]; then
+  log "tvault status unavailable; running without secret inject"
+  run_bare "$@"
+fi
+
+if ! print -R "$status_json" | grep -q '"initialized"[[:space:]]*:[[:space:]]*true'; then
+  log "vault not initialized; running without secret inject"
+  run_bare "$@"
+fi
+
+# If locked and no agent, inject only when unlock can succeed without a hang:
+# interactive TTY (prompt), TVAULT_PASSPHRASE, or user forced unlocked-only skip.
+locked=false
+agent_running=false
+print -R "$status_json" | grep -q '"locked"[[:space:]]*:[[:space:]]*true' && locked=true
+print -R "$status_json" | grep -q '"agent_running"[[:space:]]*:[[:space:]]*true' && agent_running=true
+if [[ "$locked" == "true" && "$agent_running" != "true" ]]; then
+  can_unlock=false
+  [[ -t 0 ]] && can_unlock=true
+  [[ -n "${TVAULT_PASSPHRASE:-}" ]] && can_unlock=true
+  if [[ "${LOCAL_AGENT_VAULT_REQUIRE_UNLOCKED:-0}" == "1" || "$can_unlock" != "true" ]]; then
+    log "vault locked (no agent / no non-interactive unlock); running without secret inject"
+    run_bare "$@"
+  fi
+fi
+
+# Discover known provider keys only (never inject the whole project by default).
+# Override the list with LOCAL_AGENT_VAULT_KEYS=comma,separated,NAMES
+if [[ -n "${LOCAL_AGENT_VAULT_KEYS:-}" ]]; then
+  candidate_keys=("${(@s:,:)LOCAL_AGENT_VAULT_KEYS}")
+else
+  candidate_keys=(XAI_API_KEY OPENAI_API_KEY OPENROUTER_API_KEY ANTHROPIC_API_KEY)
+fi
+
+names="$(tvault list -p "$PROJECT" --names-only 2>/dev/null || true)"
+if [[ -z "$names" ]]; then
+  log "project $PROJECT has no secrets or is missing; running without secret inject"
+  run_bare "$@"
+fi
+
+keys=()
+for k in $candidate_keys; do
+  k="${k// /}"
+  [[ -z "$k" ]] && continue
+  if print -R "$names" | grep -qx "$k"; then
+    keys+=("$k")
+  fi
+done
+
+if (( ${#keys[@]} == 0 )); then
+  log "no provider keys in project $PROJECT; running without secret inject"
+  run_bare "$@"
+fi
+
+# Only open remote privacy when we actually inject provider credentials, unless
+# the user already set LOCAL_AGENT_LOCAL_ONLY explicitly for this process.
+if [[ -z "${LOCAL_AGENT_LOCAL_ONLY+x}" ]]; then
+  export LOCAL_AGENT_LOCAL_ONLY=false
+  log "injecting ${#keys[@]} key(s); LOCAL_AGENT_LOCAL_ONLY=false"
+else
+  log "injecting ${#keys[@]} key(s); LOCAL_AGENT_LOCAL_ONLY=$LOCAL_AGENT_LOCAL_ONLY (user-set)"
+fi
+
+only_arg="${(j:,:)keys}"
+exec tvault run -p "$PROJECT" --only "$only_arg" -- "$REAL" "$@"

@@ -86,45 +86,102 @@ tvault set -p local-agent OPENROUTER_API_KEY   # optional
 tvault list -p local-agent --names-only
 ```
 
-Launch with every key you might switch to:
+### Optional PATH wrapper (`scripts/local-agent-wrapper`)
+
+For day-to-day use you can install a transparent launcher so plain `local-agent`
+injects provider keys when TinyVault is available, and otherwise runs normally:
 
 ```bash
-tvault run -p local-agent --only XAI_API_KEY,OPENAI_API_KEY,OPENROUTER_API_KEY -- \
-  env LOCAL_AGENT_LOCAL_ONLY=false local-agent
+install -m 755 scripts/local-agent-wrapper ~/.local/bin/local-agent
+export PATH="$HOME/.local/bin:$HOME/go/bin:$PATH"   # ahead of Homebrew
 ```
 
-Or only the keys for the active remote:
+Then:
+
+```bash
+local-agent                 # inject if possible; pick /provider xai inside
+/provider xai               # in the TUI
+```
+
+**Smart inject rules (wrapper):**
+
+| Condition | Behavior |
+| --- | --- |
+| `tvault` not on `PATH` | No inject; run bare binary (no warning unless verbose) |
+| Vault not initialized | No inject |
+| Vault locked, no `tvault agent`, and no interactive unlock | No inject (avoids hanging headless runs). Interactive TTY or `TVAULT_PASSPHRASE` can still unlock for inject |
+| No known provider keys in the project | No inject |
+| Provider keys present and unlock possible | Inject only those keys; default `LOCAL_AGENT_LOCAL_ONLY=false` unless already set |
+
+It does **not** inject the whole TinyVault project (Obsidian, Tavily, …)—only known
+provider key names (or `LOCAL_AGENT_VAULT_KEYS`).
+
+Manual launch without the wrapper:
 
 ```bash
 tvault run -p local-agent --only XAI_API_KEY -- env \
-  LOCAL_AGENT_PROVIDER=xai \
   LOCAL_AGENT_LOCAL_ONLY=false \
   local-agent
 ```
 
-## Environment overrides
+## Environment variables
+
+### Local Agent process (built-in)
 
 | Variable | Purpose |
 | --- | --- |
 | `LOCAL_AGENT_PROVIDER` | Profile name (multi) or type (flat): `ollama`, `xai`, `openai_compatible`, … |
 | `LOCAL_AGENT_PROVIDER_BASE_URL` | Override active profile `base_url` |
 | `LOCAL_AGENT_PROVIDER_MODEL` | Override active profile `model` |
-| `LOCAL_AGENT_PROVIDER_API_KEY_ENV` | Override env var **name** for the key |
-| `LOCAL_AGENT_PROVIDER_CONTEXT_SIZE` | Host-side context budget |
-| `LOCAL_AGENT_LOCAL_ONLY` | Must be `false` for non-loopback remotes |
+| `LOCAL_AGENT_PROVIDER_API_KEY_ENV` | Env var **name** that holds the API key (never the secret value) |
+| `LOCAL_AGENT_PROVIDER_CONTEXT_SIZE` | Host-side context budget for remote models |
+| `LOCAL_AGENT_LOCAL_ONLY` | Toggle local-machine endpoint enforcement (`false` required for remote Grok) |
 | `LOCAL_AGENT_MODEL` | Also sets the remote model when a remote profile is active |
+| `OLLAMA_HOST` | Override `ollama.base_url` |
 
-API key **values** are read only from `os.Getenv(api_key_env)`.
+API key **values** are read only from `os.Getenv(api_key_env)` (for example
+`XAI_API_KEY`). Never put the value in YAML.
+
+### PATH wrapper only (`scripts/local-agent-wrapper`)
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `LOCAL_AGENT_BIN` | auto | Absolute path to the real Local Agent binary |
+| `LOCAL_AGENT_NO_VAULT` | `0` | `1` = never call TinyVault; always bare exec |
+| `LOCAL_AGENT_VAULT_PROJECT` | `local-agent` | TinyVault project name for key lookup / inject |
+| `LOCAL_AGENT_VAULT_KEYS` | `XAI_API_KEY,OPENAI_API_KEY,OPENROUTER_API_KEY,ANTHROPIC_API_KEY` | Comma-separated key names to inject if present |
+| `LOCAL_AGENT_VAULT_VERBOSE` | `0` | `1` = log inject / skip reasons on stderr |
+| `LOCAL_AGENT_VAULT_REQUIRE_UNLOCKED` | `0` | `1` = never prompt to unlock; skip inject when locked |
+| `LOCAL_AGENT_LOCAL_ONLY` | unset | If **unset** and inject runs → wrapper sets `false`. If you set it, the wrapper keeps your value |
+
+### Provider secret env names (values from TinyVault)
+
+| Variable | Typical use |
+| --- | --- |
+| `XAI_API_KEY` | xAI / Grok (`provider.type: xai`) |
+| `OPENAI_API_KEY` | OpenAI-compatible OpenAI host |
+| `OPENROUTER_API_KEY` | OpenRouter |
+| `ANTHROPIC_API_KEY` | Reserved for a future Anthropic adapter / shared vault convention |
+
+### Related TinyVault process env (optional)
+
+| Variable | Purpose |
+| --- | --- |
+| `TVAULT_PASSPHRASE` | Non-interactive unlock (prefer `tvault agent` for daily use) |
+| `TVAULT_DIR` | Vault directory (default `~/.tvault`) |
+| `TVAULT_NO_AGENT` | Bypass a running `tvault agent` |
 
 ## What stays local
 
 - Default remains Ollama with `privacy.local_only: true` until you open remote profiles.
+- Without TinyVault installed, the optional wrapper is a pure passthrough.
 - ICE embeddings still use Ollama when ICE is enabled.
 - Expert Team/Swarm/MoE stays local-Ollama multi-model and is disabled while a **remote** profile is active.
-- TinyVault MCP is optional for secret tools; provider credentials should use `tvault run --only …`.
+- TinyVault MCP is optional for secret *tools*; credentials for providers should use inject (`tvault run` or the wrapper), not `vault_get_secret` into the model context.
 
 ## Safety notes
 
-- Prefer `tvault run --only KEY1,KEY2` over dumping the whole vault into the shell.
+- Prefer least-privilege inject (`--only` / known provider key names) over dumping the whole vault into the shell.
 - Do not put API keys in YAML, git, or shell history.
 - Remote inference sends prompts and tool receipts to the selected provider once `local_only` is false.
+- SuperGrok chat subscriptions are separate from API billing; Local Agent uses the API-key path today.
