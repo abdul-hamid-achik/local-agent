@@ -312,6 +312,31 @@ func TestTrivialChatAndResolverFailureDoNotBlockProvider(t *testing.T) {
 		}
 	})
 
+	t.Run("MCP-disabled turn skips advisor", func(t *testing.T) {
+		client := &capabilityCaptureClient{}
+		advisor := &staticCapabilityAdviser{result: capabilityadvisor.Result{
+			Status:    capabilityadvisor.StatusResolved,
+			Attempted: true,
+			Hint: &capabilityadvisor.Hint{
+				Namespaced: "bob__bob_plan", Server: "bob", Tool: "bob_plan",
+			},
+		}}
+		agent := New(client, nil, 0)
+		agent.capabilityAdvisor = advisor
+		agent.SetModeContext("test", AskToolPolicy())
+		agent.AddUserMessage("investigate the repository failure and verify the cause")
+		output := &capabilityOutputRecorder{}
+		if err := agent.Run(context.Background(), output); err != nil {
+			t.Fatal(err)
+		}
+		if advisor.callCount() != 0 || len(output.routes) != 0 || strings.Contains(client.system(), "Host capability advisory") {
+			t.Fatalf(
+				"MCP-disabled turn resolved capabilities: calls=%d routes=%#v system=%q",
+				advisor.callCount(), output.routes, client.system(),
+			)
+		}
+	})
+
 	t.Run("resolver unavailable continues", func(t *testing.T) {
 		client := &capabilityCaptureClient{}
 		advisor := &staticCapabilityAdviser{result: capabilityadvisor.Result{Status: capabilityadvisor.StatusUnavailable, Attempted: true}}

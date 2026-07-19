@@ -45,6 +45,7 @@ type OllamaModelDescriptor struct {
 	Selectable       bool
 	Fit              bool
 	AutoRoutable     bool
+	ManualOnly       bool
 	RequiresConsent  bool
 	ConsentGranted   bool
 	Reason           string
@@ -295,6 +296,8 @@ func modelRowState(model OllamaModelDescriptor, legacyCurrent, legacyUnsafe bool
 		return "current"
 	case model.Running:
 		return "running"
+	case model.Source == OllamaModelLocal && model.ManualOnly:
+		return "manual"
 	default:
 		return "available"
 	}
@@ -313,6 +316,11 @@ func modelDecisionReason(model OllamaModelDescriptor) string {
 			return reason
 		}
 		return "model is unavailable under the current Ollama policy"
+	case model.Source == OllamaModelLocal && model.ManualOnly:
+		if reason != "" {
+			return reason
+		}
+		return "manual-only profile; automatic routing will not select it"
 	default:
 		return ""
 	}
@@ -345,6 +353,8 @@ func modelSelectionState(model OllamaModelDescriptor) string {
 		parts = append(parts, "current")
 	case model.Running:
 		parts = append(parts, "running")
+	case model.Source == OllamaModelLocal && model.ManualOnly:
+		parts = append(parts, "manual-only")
 	default:
 		parts = append(parts, "available")
 	}

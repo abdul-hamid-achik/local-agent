@@ -215,6 +215,22 @@ func (s *Store) CountScoped(projectID string) int {
 	return count
 }
 
+func (s *Store) maxTurnIndexScoped(projectID, sessionID string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if projectID == "" || sessionID == "" || !s.refreshLocked() {
+		return 0
+	}
+	maxTurnIndex := 0
+	for i := range s.entries {
+		entry := s.entries[i]
+		if entry.ProjectID == projectID && entry.SessionID == sessionID && entry.TurnIndex > maxTurnIndex {
+			maxTurnIndex = entry.TurnIndex
+		}
+	}
+	return maxTurnIndex
+}
+
 func (s *Store) snapshot() ([]ConversationEntry, int, bool) {
 	entries := make([]ConversationEntry, len(s.entries))
 	for i := range s.entries {

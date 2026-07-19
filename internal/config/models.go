@@ -138,6 +138,10 @@ func DefaultModels() []Model {
 			Description: "Capable model for complex reasoning and code analysis",
 			Default:     false,
 		},
+		// Ollama advertises native tools for this profile, but the current
+		// behavioral harness has not verified a valid native tool call. Keep it
+		// visible for explicit selection and tool-free expert use without
+		// placing it on an automatic agent path.
 		{
 			Name:        "phi4-mini:latest",
 			Family:      FamilyPhi,
@@ -147,9 +151,10 @@ func DefaultModels() []Model {
 			ContextSize: 16384,
 			Capability:  CapabilityMedium,
 			Speed:       1.8,
-			UseCases:    []string{"alternate_reasoning", "tool_calling", "code_review"},
-			Description: "Alternative compact reasoning and tool-use profile",
+			UseCases:    []string{"alternate_reasoning", "code_review", "explicit_profile"},
+			Description: "Alternative compact reasoning profile; manual-only pending behavioral tool verification",
 			Default:     false,
+			Exclusive:   true,
 		},
 		// These tiers fit only as exclusive profiles on a 16GB machine. They are
 		// visible and manually selectable, but the auto-router never loads them.
@@ -217,7 +222,7 @@ func DefaultModelConfig() ModelConfig {
 	return ModelConfig{
 		Models:        models,
 		DefaultModel:  "qwen3.5:2b",
-		FallbackChain: []string{"qwen3.5:2b", "phi4-mini:latest", "qwen3.5:0.8b", "qwen3.5:4b"},
+		FallbackChain: []string{"qwen3.5:2b", "qwen3.5:0.8b", "qwen3.5:4b"},
 		AutoSelect:    true,
 		EmbedModel:    "nomic-embed-text",
 	}

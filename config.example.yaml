@@ -106,6 +106,7 @@ model:
       family: "phi"
       size: "2.5GB"
       capability: "medium"
+      exclusive: true            # manual-only until behavioral tool verification
     - name: "qwen3.5:9b"
       family: "qwen3.5"
       size: "6.6GB"
@@ -124,7 +125,7 @@ model:
       capability: "medium"
       exclusive: true
   default_model: "qwen3.5:2b"
-  fallback_chain: ["qwen3.5:2b", "phi4-mini:latest", "qwen3.5:0.8b", "qwen3.5:4b"]
+  fallback_chain: ["qwen3.5:2b", "qwen3.5:0.8b", "qwen3.5:4b"]
   auto_select: true
   embed_model: "nomic-embed-text"
 

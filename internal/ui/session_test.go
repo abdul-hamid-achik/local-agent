@@ -612,6 +612,45 @@ func TestEscapeInvalidatesSessionLoad(t *testing.T) {
 	}
 }
 
+func TestCancelSessionListCancelsOwnedLookup(t *testing.T) {
+	m := newTestModel(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	m.sessionListing = true
+	m.sessionListToken = 4
+	m.sessionListCancel = cancel
+
+	m.cancelSessionList()
+
+	if m.sessionListing || m.sessionListToken != 5 || m.sessionListCancel != nil {
+		t.Fatalf("session list was not invalidated: listing=%v token=%d cancel=%v", m.sessionListing, m.sessionListToken, m.sessionListCancel != nil)
+	}
+	select {
+	case <-ctx.Done():
+	default:
+		t.Fatal("session list cancellation did not reach the owned lookup")
+	}
+}
+
+func TestSessionListReceiptReleasesOwnedLookup(t *testing.T) {
+	m := newTestModel(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	m.sessionListing = true
+	m.sessionListToken = 7
+	m.sessionListCancel = cancel
+
+	updated, _ := m.Update(SessionListMsg{ListToken: 7})
+	m = updated.(*Model)
+
+	if m.sessionListing || m.sessionListCancel != nil {
+		t.Fatalf("session list receipt retained lookup ownership: listing=%v cancel=%v", m.sessionListing, m.sessionListCancel != nil)
+	}
+	select {
+	case <-ctx.Done():
+	default:
+		t.Fatal("session list receipt did not release the owned lookup")
+	}
+}
+
 func TestShutdownWaitsForSessionLoadCancellationReceipt(t *testing.T) {
 	m := newTestModel(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -632,6 +671,32 @@ func TestShutdownWaitsForSessionLoadCancellationReceipt(t *testing.T) {
 	m = updated.(*Model)
 	if quit == nil || !m.shutdownReady() || m.sessionLoading {
 		t.Fatalf("cancellation receipt did not release shutdown: quit=%v ready=%v loading=%v", quit != nil, m.shutdownReady(), m.sessionLoading)
+	}
+}
+
+func TestShutdownWaitsForSessionListCancellationReceipt(t *testing.T) {
+	m := newTestModel(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	m.sessionListing = true
+	m.sessionListToken = 13
+	m.sessionListCancel = cancel
+
+	cmd := m.beginShutdown()
+	if cmd == nil || m.shutdownReady() || !m.sessionListing {
+		t.Fatalf("shutdown did not retain list ownership: cmd=%v ready=%v listing=%v", cmd != nil, m.shutdownReady(), m.sessionListing)
+	}
+	select {
+	case <-ctx.Done():
+	default:
+		t.Fatal("shutdown did not cancel session list context")
+	}
+	updated, quit := m.Update(SessionListMsg{ListToken: 13, Err: context.Canceled})
+	m = updated.(*Model)
+	if quit == nil || !m.shutdownReady() || m.sessionListing {
+		t.Fatalf("cancellation receipt did not release shutdown: quit=%v ready=%v listing=%v", quit != nil, m.shutdownReady(), m.sessionListing)
+	}
+	if m.overlay == OverlaySessionsPicker || m.sessionsPickerState != nil {
+		t.Fatal("shutdown receipt reopened the sessions picker")
 	}
 }
 

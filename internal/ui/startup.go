@@ -48,7 +48,7 @@ func (m *Model) handleStartupStatus(msg StartupStatusMsg) {
 // the startup phase.
 func (m *Model) handleInitComplete(msg InitCompleteMsg, cmds []tea.Cmd) []tea.Cmd {
 	m.setCurrentModelProjection(msg.Model)
-	m.ollamaModels = append([]OllamaModelDescriptor(nil), msg.OllamaModels...)
+	m.ollamaModels = m.applyModelRoutingPolicy(msg.OllamaModels)
 	m.modelList = append([]string(nil), msg.ModelList...)
 	if selectable := manuallySelectableOllamaModels(m.ollamaModels); len(selectable) > 0 {
 		m.modelList = selectable

@@ -2,9 +2,11 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -21,6 +23,7 @@ import (
 const (
 	mcpPreflightHelperEnv   = "LOCAL_AGENT_TEST_MCP_PREFLIGHT_HELPER"
 	mcpPreflightMarkerEnv   = "LOCAL_AGENT_TEST_MCP_PREFLIGHT_MARKER"
+	mcpPreflightPaddingEnv  = "LOCAL_AGENT_TEST_MCP_PREFLIGHT_PADDING"
 	mcpPreflightServerName  = "schema"
 	mcpPreflightSuccessTool = "schema__investigate"
 	mcpPreflightFailingTool = "schema__fail"
@@ -68,6 +71,44 @@ func runMCPPreflightHelper() {
 			IsError: true,
 		}, nil, nil
 	})
+	padding, _ := strconv.Atoi(os.Getenv(mcpPreflightPaddingEnv))
+	if padding > 0 {
+		metaTools := []string{
+			"mcphub_resolve_tool",
+			"mcphub_search_tools",
+			"mcphub_describe_tool",
+			"mcphub_call_tool",
+			"mcphub_get_result",
+			"mcphub_poll_result",
+		}
+		for _, name := range metaTools {
+			toolName := name
+			mcp.AddTool(server, &mcp.Tool{
+				Name:        toolName,
+				Description: "Bounded MCPHub gateway operation used by the large-catalog context-admission fixture.",
+			}, func(_ context.Context, _ *mcp.CallToolRequest, _ mcpPreflightArgs) (*mcp.CallToolResult, any, error) {
+				if err := recordCall(toolName); err != nil {
+					return nil, nil, err
+				}
+				return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "ok"}}}, nil, nil
+			})
+		}
+		for i := 0; i < padding; i++ {
+			toolName := fmt.Sprintf("catalog_%02d", i)
+			mcp.AddTool(server, &mcp.Tool{
+				Name: toolName,
+				Description: strings.Repeat(
+					"Specialist contract detail retained only to reproduce a realistically large MCP catalog. ",
+					12,
+				),
+			}, func(_ context.Context, _ *mcp.CallToolRequest, _ mcpPreflightArgs) (*mcp.CallToolResult, any, error) {
+				if err := recordCall(toolName); err != nil {
+					return nil, nil, err
+				}
+				return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "ok"}}}, nil, nil
+			})
+		}
+	}
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		os.Exit(2)
 	}
@@ -245,6 +286,10 @@ func TestMCPPostDispatchAnsweredErrorTerminatesAsFailed(t *testing.T) {
 }
 
 func newMCPPreflightRegistry(t *testing.T, marker string) *registrypkg.Registry {
+	return newMCPPreflightRegistryWithPadding(t, marker, 0)
+}
+
+func newMCPPreflightRegistryWithPadding(t *testing.T, marker string, padding int) *registrypkg.Registry {
 	t.Helper()
 	executable, err := os.Executable()
 	if err != nil {
@@ -259,13 +304,18 @@ func newMCPPreflightRegistry(t *testing.T, marker string) *registrypkg.Registry 
 		Env: []string{
 			mcpPreflightHelperEnv + "=1",
 			mcpPreflightMarkerEnv + "=" + marker,
+			mcpPreflightPaddingEnv + "=" + strconv.Itoa(padding),
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if count != 2 {
-		t.Fatalf("discovered tools = %d, want 2", count)
+	wantCount := 2
+	if padding > 0 {
+		wantCount += padding + 6
+	}
+	if count != wantCount {
+		t.Fatalf("discovered tools = %d, want %d", count, wantCount)
 	}
 	return registry
 }

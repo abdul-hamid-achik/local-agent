@@ -275,7 +275,7 @@ func (m *Model) applyOllamaInventory(message OllamaModelInventoryMsg) {
 	}
 	m.ollamaOffline = false
 	m.ollamaInventoryAttempted = true
-	models := append([]OllamaModelDescriptor(nil), message.Models...)
+	models := m.applyModelRoutingPolicy(message.Models)
 	granted := make(map[string]bool, len(m.ollamaModels))
 	for _, previous := range m.ollamaModels {
 		if previous.ConsentGranted {
@@ -333,6 +333,20 @@ func (m *Model) applyOllamaInventory(message OllamaModelInventoryMsg) {
 	if m.settingsPickerState != nil {
 		m.refreshSettingsPicker()
 	}
+}
+
+func (m *Model) applyModelRoutingPolicy(models []OllamaModelDescriptor) []OllamaModelDescriptor {
+	result := append([]OllamaModelDescriptor(nil), models...)
+	for index := range result {
+		if result[index].Source != OllamaModelLocal {
+			continue
+		}
+		if _, manualOnly := m.manualOnlyModels[config.CanonicalModelName(result[index].Name)]; manualOnly {
+			result[index].AutoRoutable = false
+			result[index].ManualOnly = true
+		}
+	}
+	return result
 }
 
 // commitOllamaInventory serializes the manager's privacy/context snapshot on a
@@ -563,6 +577,7 @@ func (m *Model) handleOllamaModelInventory(msg OllamaModelInventoryMsg, cmds []t
 	if msg.RequestID != m.modelInventoryRequest {
 		return cmds
 	}
+	msg.Models = m.applyModelRoutingPolicy(msg.Models)
 	if msg.Err != nil || m.modelManager == nil {
 		m.applyOllamaInventory(msg)
 		return cmds

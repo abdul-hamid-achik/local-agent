@@ -65,7 +65,6 @@ model:
   default_model: qwen3.5:2b
   fallback_chain:
     - qwen3.5:2b
-    - phi4-mini:latest
     - qwen3.5:0.8b
     - qwen3.5:4b
   auto_select: true
@@ -113,6 +112,21 @@ estimate below the admission threshold—before the first request or after tool
 results—the turn stops with a recovery message instead of knowingly sending an
 overfilled request. Provider tokenization remains model-specific, so this is an
 admission guard rather than an exact tokenizer.
+
+For effective context windows of 16K or less, Local Agent applies a stricter
+character budget to optional prompt material: loaded context, active skill
+content and catalog entries, ICE retrieval, and ignore patterns. Bounded
+content can be truncated with a marker before request assembly. Native tool
+schemas and host authorization are governed separately, so this budget neither
+removes a tool from the registry nor grants a call.
+
+When tool schemas are the pressure source, Local Agent can reduce only the
+turn-local provider projection. It keeps each retained definition complete and
+does not change the connected MCP registry, call authority, or saved session.
+For a lazy MCPHub gateway it favors a complete resolve-and-call path rather
+than exposing only half of it. Configure the gateway's per-agent `pin` and
+`tool_schema_budget` first; see [MCP tools and MCPHub](/mcp#small-model-gateway-profile)
+for a compact profile.
 
 Start from the annotated [`config.example.yaml`](https://github.com/abdul-hamid-achik/local-agent/blob/main/config.example.yaml) when you need the complete model and MCP examples.
 

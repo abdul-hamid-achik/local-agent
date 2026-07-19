@@ -111,11 +111,13 @@ Approximate artifact sizes vary by Ollama build and quantization:
 |---|---:|---|---|
 | `qwen3.5:0.8b` | 1.0 GB | Very short answers and lightweight classification; weak autonomous tool use | Eligible |
 | `qwen3.5:2b` | 2.7 GB | Compact interactive answers and modest tool chains | Eligible |
-| `phi4-mini:latest` | 2.5 GB | Alternative compact reasoning/tool profile | Fallback eligible |
+| `phi4-mini:latest` | 2.5 GB | Alternative compact reasoning profile | No; exclusive |
 | `qwen3.5:4b` | 3.4 GB | Preferred coding, debugging, review, and multi-step tools | Eligible |
 | `qwen3.5:9b` | 6.6 GB | Deep manual profile | No; exclusive |
 | `ornith:latest` | 5.6 GB | Agentic coding and independent deep verification | No; exclusive |
 | `gemma4:e2b` | 7.2 GB | Alternative manual reasoning/tool profile | No; exclusive |
+
+The shipped Phi profile is manual-only because its advertised Ollama metadata has not been backed by behavioral tool-use verification in this harness. Its size is not the reason for the restriction.
 
 Pull whichever profiles you intend to use:
 
@@ -123,9 +125,11 @@ Pull whichever profiles you intend to use:
 ollama pull qwen3.5:0.8b
 ollama pull qwen3.5:2b
 ollama pull qwen3.5:4b
+
+# Manual-only pending behavioral tool verification:
 ollama pull phi4-mini:latest
 
-# Manual exclusive profiles on a 16 GB machine:
+# Large manual exclusive profiles on a 16 GB machine:
 ollama pull qwen3.5:9b
 ollama pull ornith:latest
 ollama pull gemma4:e2b
@@ -375,7 +379,6 @@ model:
   default_model: qwen3.5:2b
   fallback_chain:
     - qwen3.5:2b
-    - phi4-mini:latest
     - qwen3.5:0.8b
     - qwen3.5:4b
   auto_select: true

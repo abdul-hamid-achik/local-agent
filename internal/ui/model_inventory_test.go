@@ -672,6 +672,39 @@ func TestModelPullStateRequestProgressAndFailure(t *testing.T) {
 	}
 }
 
+func TestModelPullSanitizesAndBoundsUntrustedProgress(t *testing.T) {
+	state := NewModelPullState(true, true)
+	state.Name, state.Phase = "qwen", ModelPullRunning
+	status := "\x1b]0;forged-title\x07pulling\r\nmanifest\u202e" + strings.Repeat("x", 2_000)
+	failure := errors.New("\x1b[2Jregistry failed\u2066\nsecond row")
+
+	state.Apply(OllamaModelPullProgressMsg{Name: "qwen", Status: status, Err: failure})
+
+	for label, value := range map[string]string{
+		"status": state.Status,
+		"error":  state.Err.Error(),
+	} {
+		if strings.ContainsAny(value, "\r\n\t\x1b") {
+			t.Fatalf("%s retained terminal control characters: %q", label, value)
+		}
+		for _, r := range value {
+			if unicode.IsControl(r) || isBidiControl(r) {
+				t.Fatalf("%s retained unsafe rune %U: %q", label, r, value)
+			}
+		}
+	}
+	if got := ansi.StringWidth(state.Status); got > maxModelPullStatusCells {
+		t.Fatalf("status width = %d, max %d", got, maxModelPullStatusCells)
+	}
+	if got := ansi.StringWidth(state.Err.Error()); got > maxModelPullErrorCells {
+		t.Fatalf("error width = %d, max %d", got, maxModelPullErrorCells)
+	}
+	plain := ansi.Strip(state.View(80))
+	if strings.Contains(plain, "forged-title") || strings.Contains(plain, "\x1b") {
+		t.Fatalf("rendered pull state retained terminal injection: %q", plain)
+	}
+}
+
 func TestModelPullReducedMotionUsesUnfinishedStaticGlyph(t *testing.T) {
 	state := NewModelPullState(true, true)
 	state.Name = "qwen"

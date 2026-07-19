@@ -25,9 +25,9 @@ func TestBudgetConfig_Calculate(t *testing.T) {
 			promptTokens: 500,
 			// available = int(8192*0.75) - 1500 - 2000 - 500 = 6144 - 4000 = 2144
 			wantTotal:  2144,
-			wantConv:   857,  // int(2144 * 0.40) = 857
-			wantMemory: 428,  // int(2144 * 0.20) = 428
-			wantCode:   857,  // int(2144 * 0.40) = 857
+			wantConv:   857, // int(2144 * 0.40) = 857
+			wantMemory: 428, // int(2144 * 0.20) = 428
+			wantCode:   857, // int(2144 * 0.40) = 857
 		},
 		{
 			name: "large prompt clamps to zero",
@@ -86,6 +86,41 @@ func TestBudgetConfig_Calculate(t *testing.T) {
 				t.Errorf("Recent = %d, want %d", b.Recent, tt.cfg.RecentReserve)
 			}
 		})
+	}
+}
+
+func TestBudgetConfig_CalculatePromptRemainder(t *testing.T) {
+	cfg := DefaultBudgetConfig(16_384)
+
+	budget := cfg.CalculatePromptRemainder(10_000)
+	// The host count already includes system and recent-message tokens:
+	// int(16384*0.75) - 10000 = 2288.
+	if budget.Total != 2_288 {
+		t.Fatalf("Total = %d, want 2288", budget.Total)
+	}
+	if budget.Conversation != 915 {
+		t.Errorf("Conversation = %d, want 915", budget.Conversation)
+	}
+	if budget.Memory != 457 {
+		t.Errorf("Memory = %d, want 457", budget.Memory)
+	}
+	if budget.Code != 915 {
+		t.Errorf("Code = %d, want 915", budget.Code)
+	}
+
+	exhausted := cfg.CalculatePromptRemainder(12_288)
+	if exhausted.Total != 0 || exhausted.Conversation != 0 || exhausted.Memory != 0 || exhausted.Code != 0 {
+		t.Fatalf("exhausted budget = %#v, want zero optional allocation", exhausted)
+	}
+}
+
+func TestBudgetConfig_NegativePromptDoesNotIncreaseAllocation(t *testing.T) {
+	cfg := DefaultBudgetConfig(8_192)
+	if got, want := cfg.Calculate(-100).Total, cfg.Calculate(0).Total; got != want {
+		t.Fatalf("legacy negative prompt allocation = %d, want %d", got, want)
+	}
+	if got, want := cfg.CalculatePromptRemainder(-100).Total, cfg.CalculatePromptRemainder(0).Total; got != want {
+		t.Fatalf("authoritative negative prompt allocation = %d, want %d", got, want)
 	}
 }
 

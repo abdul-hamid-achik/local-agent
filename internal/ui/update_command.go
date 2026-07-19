@@ -40,6 +40,9 @@ func (m *Model) buildCommandContext() *command.Context {
 		FileChanges:        m.fileChanges,
 	}
 	if m.agent != nil {
+		if sessionID := m.agent.ICESessionID(); sessionID != "" {
+			ctx.ICESessionID = sessionID
+		}
 		ctx.Servers = m.commandMCPServers()
 		_, _, ctx.MCPToolCount = m.mcpStatusCounts()
 		if len(ctx.Servers) == 0 {

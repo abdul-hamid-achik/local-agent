@@ -11,7 +11,14 @@ func (m *Model) handleSessionList(msg SessionListMsg) {
 	if !m.sessionListing || msg.ListToken != m.sessionListToken {
 		return
 	}
+	if m.sessionListCancel != nil {
+		m.sessionListCancel()
+		m.sessionListCancel = nil
+	}
 	m.sessionListing = false
+	if m.shuttingDown {
+		return
+	}
 	if m.state != StateIdle {
 		m.sessionsPickerState = nil
 		if m.overlay == OverlaySessionsPicker {

@@ -23,8 +23,17 @@ type Assembler struct {
 // Assemble retrieves relevant past conversations and memories for the query,
 // ranks them, and returns a formatted context string.
 func (a *Assembler) Assemble(ctx context.Context, query string) (string, error) {
-	budget := a.budgetCfg.Calculate(0)
+	return a.assemble(ctx, query, a.budgetCfg.Calculate(0))
+}
 
+// AssembleWithPromptTokens retrieves optional context using an authoritative
+// count of all prompt tokens already admitted by the host. Assemble remains as
+// a compatibility path for callers that do not yet have that count.
+func (a *Assembler) AssembleWithPromptTokens(ctx context.Context, query string, promptTokens int) (string, error) {
+	return a.assemble(ctx, query, a.budgetCfg.CalculatePromptRemainder(promptTokens))
+}
+
+func (a *Assembler) assemble(ctx context.Context, query string, budget Budget) (string, error) {
 	type convResult struct {
 		chunks []ContextChunk
 		err    error

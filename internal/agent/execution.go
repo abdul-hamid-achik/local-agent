@@ -15,6 +15,7 @@ import (
 
 	"github.com/abdul-hamid-achik/local-agent/internal/ecosystem"
 	executionpkg "github.com/abdul-hamid-achik/local-agent/internal/execution"
+	"github.com/abdul-hamid-achik/local-agent/internal/ice"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 	permissionPkg "github.com/abdul-hamid-achik/local-agent/internal/permission"
 )
@@ -123,11 +124,25 @@ func (a *Agent) SetExecutionLedger(ledger ExecutionLedger) {
 // different durable scope.
 func (a *Agent) SetExecutionSessionID(sessionID int64) {
 	a.mu.Lock()
-	if a.executionSessionID != sessionID {
+	changed := a.executionSessionID != sessionID
+	if changed {
 		a.unresolvedExecution = nil
 		a.continuationHistory = newContinuationTurnState(0)
 		a.resetAutoContinuationHistoryLocked()
 		a.invalidateBobWorkspaceContextLocked()
+		if sessionID > 0 {
+			a.iceSessionScope = "db:" + strconv.FormatInt(sessionID, 10)
+		} else {
+			// A cleared durable ID starts a new conversation scope. The
+			// cryptographic runtime ID prevents cross-process collisions and the
+			// generation distinguishes multiple fresh conversations in one run.
+			a.iceSessionGeneration++
+			owner := a.executionRunID
+			if owner == "" {
+				owner = strconv.FormatInt(time.Now().UnixNano(), 10)
+			}
+			a.iceSessionScope = fmt.Sprintf("transient:%s:%d", owner, a.iceSessionGeneration)
+		}
 	}
 	a.executionSessionID = sessionID
 	a.mu.Unlock()
@@ -184,6 +199,8 @@ type executionRuntime struct {
 	runID          string
 	snapshotCursor int64
 	required       bool
+	iceEngine      *ice.Engine
+	iceSessionID   string
 }
 
 type trackedToolExecution struct {
@@ -207,6 +224,8 @@ func (a *Agent) executionRuntime(ctx context.Context) (executionRuntime, error) 
 		runID:          a.executionRunID,
 		snapshotCursor: a.executionCursor,
 		required:       a.requireExecutionLog,
+		iceEngine:      a.iceEngine,
+		iceSessionID:   a.iceSessionScope,
 	}
 	runIDErr := a.executionRunIDErr
 	latched := a.unresolvedExecution

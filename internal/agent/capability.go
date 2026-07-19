@@ -313,7 +313,7 @@ func (a *Agent) resolveTurnCapability(ctx context.Context, out Output, activity 
 }
 
 func (a *Agent) resolveTurnCapabilityWithPolicy(ctx context.Context, out Output, activity CapabilityActivity, allowMCP bool) (string, *capabilityadvisor.Hint) {
-	if a == nil || a.capabilityAdvisor == nil || !activity.NonTrivial {
+	if a == nil || a.capabilityAdvisor == nil || !activity.NonTrivial || !allowMCP {
 		return "", nil
 	}
 	activity.ScopeID = strings.TrimSpace(activity.ScopeID)

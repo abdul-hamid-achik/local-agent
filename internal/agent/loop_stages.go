@@ -2,11 +2,13 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/capabilityadvisor"
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
+	"github.com/abdul-hamid-achik/local-agent/internal/ice"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 	mcpPkg "github.com/abdul-hamid-achik/local-agent/internal/mcp"
 	"github.com/charmbracelet/log"
@@ -41,15 +43,29 @@ type turnRuntime struct {
 	execRuntime    executionRuntime
 	turnFilesystem filesystemContext
 
+	// availableTools is the immutable provider catalog captured at turn start.
+	// tools is the context-admitted projection for the next provider request.
+	// Keeping both lets a successful compaction restore schemas that earlier
+	// pressure temporarily omitted.
+	availableTools  []llm.ToolDef
 	tools           []llm.ToolDef
 	turnMCPSnapshot mcpPkg.ToolSnapshot
 	skillCatalog    string
 
 	continuationsConfig config.ContinuationsConfig
 
-	iceContext  string
-	readGrants  []ReadGrant
-	writeGrants []WriteGrant
+	iceEngine  *ice.Engine
+	iceContext string
+	// Persist the user message only after a provider or host-continuation
+	// iteration succeeds, so every preflight failure remains reversible.
+	iceUserContent string
+	iceUserIndexed bool
+	readGrants     []ReadGrant
+	writeGrants    []WriteGrant
+	// trustedMCPHubNamespaces is a host-owned turn snapshot. A remote server
+	// cannot become a lazy-gateway bootstrap candidate merely by advertising
+	// MCPHub-shaped operation names.
+	trustedMCPHubNamespaces map[string]struct{}
 
 	capabilityActivity              CapabilityActivity
 	capabilityHintText              string
@@ -118,10 +134,8 @@ func (t *turnRuntime) rejectContextPrompt(estimated int, bounded bool, attribute
 // accounting decision: a turn with a hard generation budget may not spend an
 // untracked summarization generation.
 func (t *turnRuntime) admitSystemPrompt(ctx context.Context) error {
-	estimated := t.a.estimatePromptTokens(t.system, t.tools)
-	if receiptFloor := t.a.contextPromptFloorEstimate(t.turnModel, estimateHostPromptTokens(t.system, t.tools)); estimated < receiptFloor {
-		estimated = receiptFloor
-	}
+	t.admitToolSchemasForContext(ctx)
+	estimated := t.estimatedPromptTokens()
 	if !shouldCompactForContext(estimated, t.turnNumCtx) {
 		return nil
 	}
@@ -131,13 +145,11 @@ func (t *turnRuntime) admitSystemPrompt(ctx context.Context) error {
 	if t.lg != nil {
 		t.lg.Info("compaction", "phase", "before_request", "prompt_tokens", estimated, "num_ctx", t.turnNumCtx)
 	}
-	if t.a.compactForContextAndModel(ctx, t.out, t.turnNumCtx, t.turnModel) {
+	if t.a.compactForContextAndModelWithICE(ctx, t.out, t.turnNumCtx, t.turnModel, t.iceEngine) {
 		t.rebuildSystem(ctx)
+		t.admitToolSchemasForContext(ctx)
 	}
-	estimated = t.a.estimatePromptTokens(t.system, t.tools)
-	if receiptFloor := t.a.contextPromptFloorEstimate(t.turnModel, estimateHostPromptTokens(t.system, t.tools)); estimated < receiptFloor {
-		estimated = receiptFloor
-	}
+	estimated = t.estimatedPromptTokens()
 	if shouldCompactForContext(estimated, t.turnNumCtx) {
 		return t.rejectContextPrompt(estimated, false)
 	}
@@ -166,6 +178,7 @@ func (t *turnRuntime) recordAssistantTurn(ctx context.Context, i int, text strin
 		t.out.Error(fmt.Sprintf("record requested tool execution: %v", err))
 		return nil, fmt.Errorf("record requested tool execution: %w", err)
 	}
+	t.indexICEUserMessage(ctx)
 
 	// Record assistant message in conversation history.
 	assistantToolCalls := toolCalls
@@ -182,12 +195,31 @@ func (t *turnRuntime) recordAssistantTurn(ctx context.Context, i int, text strin
 	t.a.AppendMessage(assistantMsg)
 
 	// ICE: index assistant message.
-	if t.a.iceEngine != nil && assistantMsg.Content != "" {
-		if err := t.a.iceEngine.IndexMessage(ctx, "assistant", assistantMsg.Content); err != nil {
-			t.out.Error(fmt.Sprintf("ICE indexing failed: %v", err))
+	if t.iceEngine != nil && assistantMsg.Content != "" {
+		if err := t.iceEngine.IndexMessage(ctx, "assistant", assistantMsg.Content); err != nil {
+			reportOptionalICEError(ctx, t.out, "assistant indexing", err)
+			if errors.Is(err, ice.ErrICESessionChanged) {
+				t.iceEngine = nil
+			}
 		}
 	}
 	return trackedExecutions, nil
+}
+
+func (t *turnRuntime) indexICEUserMessage(ctx context.Context) {
+	if t.iceEngine == nil || t.iceUserIndexed || t.iceUserContent == "" {
+		return
+	}
+	if err := t.iceEngine.IndexMessage(ctx, "user", t.iceUserContent); err != nil {
+		reportOptionalICEError(ctx, t.out, "user indexing", err)
+		if errors.Is(err, ice.ErrICESessionChanged) {
+			t.iceEngine = nil
+		} else {
+			t.iceUserIndexed = true
+		}
+		return
+	}
+	t.iceUserIndexed = true
 }
 
 // finishDirectResponse settles a turn whose provider response carried no tool
@@ -210,8 +242,8 @@ func (t *turnRuntime) finishDirectResponse(ctx context.Context, i int, assistant
 
 	// Background auto-memory is an untracked optional generation, which
 	// only an eval-token budget forbids; wall-limited turns keep it.
-	if t.limits.MaxEvalTokens == 0 && t.a.iceEngine != nil && hasEnoughMessages && userContent != "" {
-		t.a.iceEngine.DetectAutoMemory(ctx, userContent, assistantContent)
+	if t.limits.MaxEvalTokens == 0 && t.iceEngine != nil && hasEnoughMessages && userContent != "" {
+		t.iceEngine.DetectAutoMemory(ctx, userContent, assistantContent)
 	}
 	estimatedPromptTokens := t.a.estimatePromptTokens(t.system, t.tools)
 	if estimatedPromptTokens < t.lastPromptTokens {
@@ -224,7 +256,7 @@ func (t *turnRuntime) finishDirectResponse(ctx context.Context, i int, assistant
 		if t.lg != nil {
 			t.lg.Info("compaction", "phase", "direct_response", "prompt_tokens", estimatedPromptTokens, "num_ctx", t.turnNumCtx)
 		}
-		t.a.compactForContextAndModel(ctx, t.out, t.turnNumCtx, t.turnModel)
+		t.a.compactForContextAndModelWithICE(ctx, t.out, t.turnNumCtx, t.turnModel, t.iceEngine)
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -270,7 +302,11 @@ func (t *turnRuntime) settleIteration(ctx context.Context, i int, toolCallCount 
 			return err
 		}
 		t.loadedContext = composeCapabilityContext(t.capabilityHintText, t.capabilityBaseContext)
-		t.system = buildSystemPromptForModelBudgetContextWithSkillCatalogAndPathGrants(ctx, t.modePrefix, t.tools, t.a.skillContent, t.skillCatalog, t.loadedContext, t.a.memoryStore, t.iceContext, t.turnFilesystem.workDir, t.turnFilesystem.ignoreContent, t.turnModel, t.turnNumCtx, t.readGrants, t.writeGrants)
+		t.rebuildSystem(ctx)
+		// Re-rank the immutable turn catalog around the new capability hint.
+		// A route selected after a failed call may have been omitted from the
+		// previous provider projection under context pressure.
+		t.admitToolSchemasForContext(ctx)
 	}
 
 	// A queued host read executes before another provider request. Deferring
@@ -292,10 +328,14 @@ func (t *turnRuntime) settleIteration(ctx context.Context, i int, toolCallCount 
 			if t.lg != nil {
 				t.lg.Info("compaction", "iter", i, "prompt_tokens", estimatedPromptTokens, "num_ctx", t.turnNumCtx)
 			}
-			compacted := t.a.compactForContextAndModel(ctx, t.out, t.turnNumCtx, t.turnModel)
+			compacted := t.a.compactForContextAndModelWithICE(ctx, t.out, t.turnNumCtx, t.turnModel, t.iceEngine)
 			if compacted {
 				// Rebuild system prompt after compaction (memory may have changed).
-				t.system = buildSystemPromptForModelBudgetContextWithSkillCatalogAndPathGrants(ctx, t.modePrefix, t.tools, t.a.skillContent, t.skillCatalog, t.loadedContext, t.a.memoryStore, t.iceContext, t.turnFilesystem.workDir, t.turnFilesystem.ignoreContent, t.turnModel, t.turnNumCtx, t.readGrants, t.writeGrants)
+				t.rebuildSystem(ctx)
+				// Compaction may have freed enough room for the complete catalog.
+				// Re-admit from availableTools instead of carrying a stale,
+				// pressure-narrowed projection into the next provider request.
+				t.admitToolSchemasForContext(ctx)
 			}
 			estimatedPromptTokens = t.a.estimatePromptTokens(t.system, t.tools)
 			if !compacted && estimatedPromptTokens < t.lastPromptTokens {

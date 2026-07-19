@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -53,6 +54,12 @@ type ModelPullState struct {
 	reducedMotion bool
 }
 
+const (
+	maxModelPullNameCells   = 256
+	maxModelPullStatusCells = 512
+	maxModelPullErrorCells  = 512
+)
+
 func NewModelPullState(isDark, reducedMotion bool) *ModelPullState {
 	input := textinput.New()
 	input.Prompt = "Model › "
@@ -96,7 +103,7 @@ func (s *ModelPullState) Update(msg tea.Msg) tea.Cmd {
 	if key, ok := msg.(tea.KeyPressMsg); ok && s.Phase == ModelPullEntry {
 		switch key.String() {
 		case "enter":
-			name := strings.TrimSpace(s.Input.Value())
+			name := safeModelPullText(s.Input.Value(), maxModelPullNameCells)
 			if name == "" {
 				return nil
 			}
@@ -146,9 +153,11 @@ func (s *ModelPullState) Apply(msg OllamaModelPullProgressMsg) tea.Cmd {
 		return nil
 	}
 	if msg.Name != "" {
-		s.Name = msg.Name
+		s.Name = safeModelPullText(msg.Name, maxModelPullNameCells)
 	}
-	s.Status, s.Completed, s.Total, s.Err = strings.TrimSpace(msg.Status), msg.Completed, msg.Total, msg.Err
+	s.Status = safeModelPullText(msg.Status, maxModelPullStatusCells)
+	s.Completed, s.Total = msg.Completed, msg.Total
+	s.Err = safeModelPullError(msg.Err)
 	if msg.Err != nil {
 		s.Phase = ModelPullFailed
 		return nil
@@ -211,7 +220,7 @@ func (s *ModelPullState) render(width int, compact, hardwareCursor bool) (string
 		}
 		body.WriteString(muted.Render(helper))
 	case ModelPullRunning:
-		name := s.Name
+		name := safeModelPullText(s.Name, maxModelPullNameCells)
 		if compact {
 			name = truncateDisplay(name, width)
 		}
@@ -236,7 +245,7 @@ func (s *ModelPullState) render(width int, compact, hardwareCursor bool) (string
 			body.WriteString(indicator + " " + muted.Render("Connecting to Ollama…"))
 		}
 		if s.Status != "" {
-			status := s.Status
+			status := safeModelPullText(s.Status, maxModelPullStatusCells)
 			if compact {
 				status = boundedPullText(status, width, 1)
 			}
@@ -252,18 +261,18 @@ func (s *ModelPullState) render(width int, compact, hardwareCursor bool) (string
 				availability, receipt = "", " · refreshed"
 			}
 			nameWidth := max(1, width-lipgloss.Width("✓ "+availability+receipt))
-			message := "✓ " + truncateDisplay(s.Name, nameWidth) + availability
+			message := "✓ " + truncateDisplay(safeModelPullText(s.Name, maxModelPullNameCells), nameWidth) + availability
 			body.WriteString(lipgloss.NewStyle().Foreground(palette.Success).Render(message))
 			body.WriteString(muted.Render(receipt))
 			break
 		}
-		message := "✓ " + s.Name + " is available"
+		message := "✓ " + safeModelPullText(s.Name, maxModelPullNameCells) + " is available"
 		if compact {
 			message = truncateDisplay(message, width)
 		}
 		body.WriteString(lipgloss.NewStyle().Foreground(palette.Success).Render(message))
 		if s.Status != "" && !strings.EqualFold(s.Status, "success") {
-			status := s.Status
+			status := safeModelPullText(s.Status, maxModelPullStatusCells)
 			if compact {
 				status = boundedPullText(status, width, 1)
 			}
@@ -272,7 +281,7 @@ func (s *ModelPullState) render(width int, compact, hardwareCursor bool) (string
 	case ModelPullFailed:
 		message := "Pull failed"
 		if s.Err != nil {
-			message = s.Err.Error()
+			message = safeModelPullText(s.Err.Error(), maxModelPullErrorCells)
 		}
 		message = "! " + message
 		if compact {
@@ -280,7 +289,7 @@ func (s *ModelPullState) render(width int, compact, hardwareCursor bool) (string
 		}
 		body.WriteString(lipgloss.NewStyle().Foreground(palette.Error).Render(message))
 		if s.Status != "" {
-			status := s.Status
+			status := safeModelPullText(s.Status, maxModelPullStatusCells)
 			if compact {
 				status = boundedPullText(status, width, 1)
 			}
@@ -290,8 +299,19 @@ func (s *ModelPullState) render(width int, compact, hardwareCursor bool) (string
 	return body.String(), viewCursor
 }
 
+func safeModelPullText(value string, maxCells int) string {
+	return truncateDisplay(sanitizeTerminalSingleLine(value), maxCells)
+}
+
+func safeModelPullError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return errors.New(safeModelPullText(err.Error(), maxModelPullErrorCells))
+}
+
 func boundedPullText(value string, width, maxLines int) string {
-	value = strings.TrimSpace(value)
+	value = sanitizeTerminalSingleLine(value)
 	if value == "" || width <= 0 || maxLines <= 0 {
 		return ""
 	}

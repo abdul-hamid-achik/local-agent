@@ -182,6 +182,7 @@ type Model struct {
 	pendingSessionSwitch         *pendingSessionSwitch
 	sessionListToken             uint64
 	sessionListing               bool
+	sessionListCancel            context.CancelFunc
 	startupResumeSelector        *SessionResumeSelector
 
 	// Paste detection
@@ -219,6 +220,7 @@ type Model struct {
 	modelPullRequest         uint64
 	modelPullRunning         bool
 	modelInventoryRequest    uint64
+	manualOnlyModels         map[string]struct{}
 	settingsPickerState      *SettingsPickerState
 	agentPickerState         *AgentPickerState
 	providerPickerState      *ProviderPickerState
@@ -453,6 +455,23 @@ func (m *Model) SetModelPinned(pinned bool) {
 	m.modelPinned = pinned
 }
 
+// SetModelRoutingCatalog installs the host-owned manual-only model policy used
+// by later asynchronous Ollama inventory refreshes. Availability still comes
+// exclusively from Ollama; this catalog can only remove automatic-routing
+// authority from a discovered local model.
+func (m *Model) SetModelRoutingCatalog(models []config.Model) {
+	manualOnly := make(map[string]struct{})
+	for _, model := range models {
+		if !model.Exclusive {
+			continue
+		}
+		if canonical := config.CanonicalModelName(model.Name); canonical != "" {
+			manualOnly[canonical] = struct{}{}
+		}
+	}
+	m.manualOnlyModels = manualOnly
+}
+
 // SetSessionStore enables private SQLite-backed, lossless session resume.
 func (m *Model) SetSessionStore(store *db.Store) {
 	m.sessionStore = store
@@ -509,7 +528,7 @@ func (m *Model) beginShutdown() tea.Cmd {
 		m.cancelSessionLoadForShutdown()
 	}
 	if m.sessionListing {
-		m.cancelSessionList()
+		m.cancelSessionListForShutdown()
 	}
 	if m.commitCancel != nil {
 		m.commitCancel()
@@ -526,7 +545,7 @@ func (m *Model) beginShutdown() tea.Cmd {
 
 func (m *Model) shutdownReady() bool {
 	return m.cancel == nil && !m.commitRunning && !m.exportRunning && !m.goalOperationRunning &&
-		!m.modelPullRunning && !m.sessionLoading && !m.imageAttachRunning && !m.ollamaInventoryCommitting &&
+		!m.modelPullRunning && !m.sessionLoading && !m.sessionListing && !m.imageAttachRunning && !m.ollamaInventoryCommitting &&
 		!m.readScopeOpRunning && !m.providerSwitchRunning
 }
 
@@ -790,6 +809,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 
 	case SessionListMsg:
 		m.handleSessionList(msg)
+		m.appendShutdownQuit(&cmds)
 
 	case SessionLoadedMsg:
 		cmds = append(cmds, m.handleSessionLoadedReceipt(msg))

@@ -27,9 +27,61 @@ With a gateway:
 - Local Agent owns the final user approval and transcript.
 - Cortex and other tools appear as namespaced MCP calls.
 
-MCPHub's lazy mode intentionally advertises only pinned tools plus its discovery and routing tools. Unpinned tools are not missing: the normal flow is `search → describe or resolve → call`. Local Agent keeps the outer MCPHub namespace for safe routing, but the transcript presents the downstream specialist and action. It does not flatten the entire downstream catalog into every model request.
+MCPHub's lazy mode intentionally advertises its eight management tools plus any
+chosen pins. Unpinned tools are not missing: the normal flow is
+`resolve (or search) → describe when needed → call`. Local Agent keeps the
+outer MCPHub namespace for safe routing, but the transcript presents the
+downstream specialist and action. It does not flatten the entire downstream
+catalog into every model request.
 
 Large lazy results may return a stored-result receipt. Retrieve its bounded pages explicitly with `mcphub_get_result`; Local Agent does not inject every page into the conversation automatically. Treat stored TinyVault results as sensitive because the gateway stores the exact downstream result for its configured retention period.
+
+### Small-model gateway profile
+
+For a small local model, keep the local-agent connection above and configure
+the corresponding MCPHub agent in `mcphub.yaml` as a gateway with no directly
+advertised downstream schemas:
+
+```yaml
+expose: lazy
+
+agents:
+  local-agent:
+    type: local-agent
+    path: ~/.config/local-agent/config.yaml
+    mode: gateway
+    pin: []
+    tool_schema_budget: "0"
+```
+
+`pin: []` prevents the agent from inheriting global pins. A schema budget of
+`"0"` leaves the eight MCPHub management tools available and keeps every allowed
+downstream tool discoverable and callable through the lazy workflow. This
+changes advertisement, not authorization: use `servers` and `tools` in the
+same agent entry when you also need to limit which downstream capabilities may
+be called. Run `mcphub sync` to preview the harness entry, apply with
+`mcphub sync --write`, then restart Local Agent.
+
+Use a small nonzero `tool_schema_budget` only when a directly mounted tool is
+worth its recurring schema cost. MCPHub admits complete definitions that fit;
+it never truncates a schema. See the [MCPHub routing guide](https://mcphubcli.dev/guide/routing)
+for the exact scope and budget rules.
+
+### Local schema admission
+
+MCPHub controls the catalog it advertises. Local Agent adds a second, turn-local
+guard before it sends a provider request. If the estimated prompt is already
+near the active context limit, it keeps complete native definitions that fit a
+bounded schema budget and rebuilds the prompt. The registry, execution
+authority, and saved session state do not change.
+
+For a lazy gateway, Local Agent gives priority to a usable path: local `read`
+and `grep`, plus the matching `mcphub_resolve_tool` and `mcphub_call_tool`
+definitions. It does not expose a partial resolve/call pair. If even that
+complete set cannot fit, the provider request is refused with a recovery
+message rather than sent knowingly over budget. Treat this as a safety valve,
+not a replacement for a lean MCPHub policy or an appropriately sized
+`ollama.num_ctx`.
 
 ## Contextual MCP selection
 
@@ -112,6 +164,13 @@ See the versioned [Hitspec MCP reference](https://hitspec.dev/reference/mcp) for
 the exact tool schemas and operator-owned startup requirements. MCPHub discovers
 only the tools the running Hitspec server actually advertises, so a 2.17 server
 does not gain the optional 2.18 surfaces through Local Agent configuration.
+
+When web discovery needs a secret but retrieval does not, MCPHub can register
+separate core and protected Hitspec processes. A locked vault then removes only
+the protected extension instead of the non-secret core. This is an
+operator-owned capability split, not a Local Agent permission bypass; see
+[MCPHub's Hitspec guide](https://mcphubcli.dev/guide/hitspec#split-core-capabilities-from-protected-web-discovery)
+for the exact current flags and boundary.
 
 ## Direct servers
 

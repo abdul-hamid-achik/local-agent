@@ -35,8 +35,8 @@ func TestBuildSystemPrompt(t *testing.T) {
 			tools: []llm.ToolDef{
 				{Name: "test_tool", Description: "does stuff"},
 			},
-			contains:    []string{"test_tool", "does stuff"},
-			notContains: []string{"No tools currently available."},
+			contains:    []string{"1 tool available through the native tool schemas"},
+			notContains: []string{"No tools currently available.", "test_tool", "does stuff"},
 		},
 		{
 			name:         "with skills",
@@ -151,17 +151,19 @@ func memoryToolDef(t *testing.T, name string) llm.ToolDef {
 	return llm.ToolDef{}
 }
 
-func TestSimplifyToolsForSmallModelIncludesRequiredArguments(t *testing.T) {
-	prompt := simplifyToolsForSmallModel([]llm.ToolDef{{
+func TestNativeToolPromptSummaryDoesNotDuplicateProviderSchemas(t *testing.T) {
+	prompt := nativeToolPromptSummary([]llm.ToolDef{{
 		Name:        "bash",
 		Description: "Execute a shell command.",
-		Parameters: map[string]any{
-			"type":     "object",
-			"required": []any{"timeout", "command"},
-		},
+		Parameters:  map[string]any{"type": "object", "required": []any{"command"}},
 	}})
-	if !strings.Contains(prompt, "bash (required: command, timeout)") {
-		t.Fatalf("small-model tool prompt omitted required arguments: %q", prompt)
+	for _, duplicated := range []string{"bash", "Execute a shell command", "command"} {
+		if strings.Contains(prompt, duplicated) {
+			t.Fatalf("native tool summary duplicated %q: %q", duplicated, prompt)
+		}
+	}
+	if !strings.Contains(prompt, "native tool schemas") {
+		t.Fatalf("native tool summary omitted provider contract: %q", prompt)
 	}
 }
 
@@ -327,6 +329,49 @@ func TestSystemPromptBoundsOptionalContext(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "Guidelines:") {
 		t.Fatal("prompt truncation removed core guidelines")
+	}
+}
+
+func TestConstrainedPromptWindowReservesSpaceFromOptionalContext(t *testing.T) {
+	const numCtx = 16 * 1024
+	if got, want := optionalPromptBudget(numCtx), 12_288; got != want {
+		t.Fatalf("constrained optional budget = %d, want %d", got, want)
+	}
+	if got, want := optionalPromptBudget(32*1024), 43_690; got != want {
+		t.Fatalf("large-window optional budget = %d, want historical %d", got, want)
+	}
+
+	large := "BEGIN\n" + strings.Repeat("optional bounded context ", 20_000) + "\nEND"
+	skillCatalog := "\n## Available Skills (load on demand)\n" + large
+	tools := []llm.ToolDef{{
+		Name:        "exact_schema",
+		Description: "A schema that must remain provider-visible verbatim.",
+		Parameters:  map[string]any{"type": "object", "properties": map[string]any{"value": map[string]any{"type": "string"}}},
+	}}
+	legacy := buildSystemPromptForModelBudgetContextWithSkillCatalogAndPathGrantsBudget(
+		context.Background(), "", tools, large, skillCatalog, large, nil, large, "/workspace", large,
+		"ornith:latest", numCtx, nil, nil, numCtx*4/3,
+	)
+	constrained := buildSystemPromptForModelBudgetContextWithSkillCatalogAndPathGrantsBudget(
+		context.Background(), "", tools, large, skillCatalog, large, nil, large, "/workspace", large,
+		"ornith:latest", numCtx, nil, nil, optionalPromptBudget(numCtx),
+	)
+	legacyTokens := estimateTextPromptTokens(legacy)
+	constrainedTokens := estimateTextPromptTokens(constrained)
+	t.Logf("16K optional context: legacy=%d constrained=%d saved=%d tokens", legacyTokens, constrainedTokens, legacyTokens-constrainedTokens)
+	if saved := legacyTokens - constrainedTokens; saved < 2_000 {
+		t.Fatalf("constrained prompt saved %d tokens, want at least 2000 (legacy=%d constrained=%d)", saved, legacyTokens, constrainedTokens)
+	}
+	for _, want := range []string{
+		"context characters omitted",
+		"Filesystem authority: the working directory is the writable workspace.",
+	} {
+		if !strings.Contains(constrained, want) {
+			t.Fatalf("constrained prompt lost required section %q", want)
+		}
+	}
+	if strings.Contains(constrained, "exact_schema") {
+		t.Fatalf("system prompt duplicated a native tool schema: %q", constrained)
 	}
 }
 

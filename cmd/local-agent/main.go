@@ -277,7 +277,7 @@ func run() int {
 			return 1
 		}
 		manualChatModels = manuallySelectableOllamaChatModels(ollamaInventory, cfg.Privacy.LocalOnly)
-		autoChatModels = autoRoutableOllamaChatModels(ollamaInventory)
+		autoChatModels = autoRoutableOllamaChatModels(ollamaInventory, &cfg.Model)
 		if modelPreferenceStore != nil && shouldRestoreManualModelPreference(*modelFlag, profileModelPinned) {
 			preferred, saved, preferenceErr := modelPreferenceStore.LoadManualModel()
 			switch {
@@ -507,19 +507,22 @@ func run() int {
 			return 1
 		}
 
-		// Connect MCP servers synchronously.
-		var wg sync.WaitGroup
-		for _, srv := range servers {
-			wg.Add(1)
-			go func(s config.ServerConfig) {
-				defer wg.Done()
-				fmt.Fprintf(os.Stderr, "connecting MCP server %s...\n", s.Name)
-				if _, err := registry.ConnectServer(ctx, s); err != nil {
-					fmt.Fprintf(os.Stderr, "MCP server %s failed: %v\n", s.Name, err)
-				}
-			}(srv)
+		// A PLAN turn or an explicit --tools narrowing has no MCP authority.
+		// Do not launch downstream processes that the turn cannot call.
+		if modeConfig.ToolPolicy.AllowMCP {
+			var wg sync.WaitGroup
+			for _, srv := range servers {
+				wg.Add(1)
+				go func(s config.ServerConfig) {
+					defer wg.Done()
+					fmt.Fprintf(os.Stderr, "connecting MCP server %s...\n", s.Name)
+					if _, err := registry.ConnectServer(ctx, s); err != nil {
+						fmt.Fprintf(os.Stderr, "MCP server %s failed: %v\n", s.Name, err)
+					}
+				}(srv)
+			}
+			wg.Wait()
 		}
-		wg.Wait()
 
 		// ICE setup.
 		if cfg.ICE.Enabled && workspace != "" {
@@ -764,6 +767,7 @@ func run() int {
 	}
 
 	m := ui.New(ag, cmdReg, skillMgr, completer, modelManager, router, logger)
+	m.SetModelRoutingCatalog(cfg.Model.Models)
 	m.SetModelPreferenceStore(modelPreferenceStore)
 	if home, homeErr := os.UserHomeDir(); homeErr != nil {
 		log.Printf("warning: image attachments unavailable: %v", homeErr)

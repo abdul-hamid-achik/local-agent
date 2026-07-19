@@ -171,16 +171,23 @@ func (m *Model) closeSessionsPicker() {
 // requestSessions starts the existing tokened workspace-session lookup. Both
 // the slash command and Settings use this single authority path.
 func (m *Model) requestSessions() tea.Cmd {
+	if m.sessionListCancel != nil {
+		m.sessionListCancel()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	m.sessionListCancel = cancel
 	m.sessionListToken++
 	listToken := m.sessionListToken
 	m.sessionListing = true
 	m.input.Blur()
+	store := m.sessionStore
+	workDir := m.agent.WorkDir()
 	load := func() tea.Msg {
-		workspaceID, err := canonicalWorkspaceID(m.agent.WorkDir())
+		workspaceID, err := canonicalWorkspaceID(workDir)
 		if err != nil {
 			return SessionListMsg{ListToken: listToken, Err: err}
 		}
-		sessions, err := listPersistedSessions(context.Background(), m.sessionStore, workspaceID, 100)
+		sessions, err := listPersistedSessions(ctx, store, workspaceID, 100)
 		return SessionListMsg{ListToken: listToken, Sessions: sessions, Err: err}
 	}
 	return tea.Batch(m.startActivityCmd(), load)

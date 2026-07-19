@@ -28,8 +28,28 @@ func (bc BudgetConfig) Calculate(promptTokens int) Budget {
 	available := int(float64(bc.NumCtx) * 0.75)
 	available -= bc.SystemReserve
 	available -= bc.RecentReserve
+	if promptTokens < 0 {
+		promptTokens = 0
+	}
 	available -= promptTokens
 
+	return bc.allocate(available)
+}
+
+// CalculatePromptRemainder allocates ICE's optional context from an
+// authoritative count of the prompt that has already been admitted. Unlike
+// Calculate, promptTokens is expected to include the system prompt, tool
+// schemas, and recent/history messages, so their configured reserves are not
+// subtracted a second time.
+func (bc BudgetConfig) CalculatePromptRemainder(promptTokens int) Budget {
+	if promptTokens < 0 {
+		promptTokens = 0
+	}
+	available := int(float64(bc.NumCtx)*0.75) - promptTokens
+	return bc.allocate(available)
+}
+
+func (bc BudgetConfig) allocate(available int) Budget {
 	if available < 0 {
 		available = 0
 	}

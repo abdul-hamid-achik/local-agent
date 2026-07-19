@@ -81,10 +81,15 @@ func (a *Agent) estimatePromptTokens(system string, tools []llm.ToolDef) int {
 
 func estimateHostPromptTokens(system string, tools []llm.ToolDef) int {
 	tokens := estimateTextPromptTokens(system)
-	if encoded, err := json.Marshal(tools); err == nil {
-		tokens += estimateTextPromptTokens(string(encoded))
-	}
+	tokens += estimateToolDefinitionsPromptTokens(tools)
 	return tokens + 1
+}
+
+func estimateToolDefinitionsPromptTokens(tools []llm.ToolDef) int {
+	if encoded, err := json.Marshal(tools); err == nil {
+		return estimateTextPromptTokens(string(encoded))
+	}
+	return 0
 }
 
 func estimateMessagesPromptTokens(messages []llm.Message) int {

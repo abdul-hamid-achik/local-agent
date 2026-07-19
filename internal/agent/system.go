@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -111,8 +110,21 @@ func buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadGrants(ctx con
 }
 
 func buildSystemPromptForModelBudgetContextWithSkillCatalogAndPathGrants(ctx context.Context, modePrefix string, tools []llm.ToolDef, skillContent, skillCatalog, loadedContext string, memStore *memory.Store, iceContext, workDir, ignoreContent string, modelName string, numCtx int, readGrants []ReadGrant, writeGrants []WriteGrant) string {
+	return buildSystemPromptForModelBudgetContextWithSkillCatalogAndPathGrantsBudget(
+		ctx, modePrefix, tools, skillContent, skillCatalog, loadedContext, memStore,
+		iceContext, workDir, ignoreContent, modelName, numCtx, readGrants, writeGrants,
+		optionalPromptBudget(numCtx),
+	)
+}
+
+// buildSystemPromptForModelBudgetContextWithSkillCatalogAndPathGrantsBudget
+// is the testable assembly primitive behind the production prompt builder.
+// optionalBudget applies only to bounded optional text (skills, loaded
+// instructions, ICE, and ignores); it never modifies the tool definitions
+// supplied separately to the provider or the host's authority model.
+func buildSystemPromptForModelBudgetContextWithSkillCatalogAndPathGrantsBudget(ctx context.Context, modePrefix string, tools []llm.ToolDef, skillContent, skillCatalog, loadedContext string, memStore *memory.Store, iceContext, workDir, ignoreContent string, modelName string, numCtx int, readGrants []ReadGrant, writeGrants []WriteGrant, optionalBudget int) string {
 	useSmallModel := isSmallModel(modelName)
-	if budget := optionalPromptBudget(numCtx); budget > 0 {
+	if budget := optionalBudget; budget > 0 {
 		loadedContextShare := 50
 		if skillCatalog != "" {
 			loadedContextShare = 40
@@ -124,20 +136,7 @@ func buildSystemPromptForModelBudgetContextWithSkillCatalogAndPathGrants(ctx con
 		ignoreContent = boundPromptText(ignoreContent, budget*5/100)
 	}
 
-	var toolList string
-	if len(tools) == 0 {
-		toolList = "No tools currently available.\n"
-	} else if useSmallModel {
-		// Simplified tool list for small models
-		toolList = simplifyToolsForSmallModel(tools)
-	} else {
-		// Full tool list for larger models
-		var b strings.Builder
-		for _, t := range tools {
-			fmt.Fprintf(&b, "- **%s**: %s\n", t.Name, t.Description)
-		}
-		toolList = b.String()
-	}
+	toolList := nativeToolPromptSummary(tools)
 
 	envSection := buildEnvironmentSectionContextWithPathGrants(ctx, workDir, readGrants, writeGrants)
 
@@ -160,7 +159,7 @@ func buildSystemPromptForModelBudgetContextWithSkillCatalogAndPathGrants(ctx con
 	} else if memStore != nil {
 		memorySection = buildMemorySection(memStore)
 	}
-	if budget := optionalPromptBudget(numCtx); budget > 0 && iceContext == "" {
+	if budget := optionalBudget; budget > 0 && iceContext == "" {
 		memorySection = boundPromptText(memorySection, budget*25/100)
 	}
 
@@ -209,6 +208,23 @@ func buildSystemPromptForModelBudgetContextWithSkillCatalogAndPathGrants(ctx con
 	)
 }
 
+// nativeToolPromptSummary avoids paying for tool names and descriptions twice:
+// provider requests already carry the exact native definitions and JSON
+// schemas. The system prompt states only the bounded contract for using them.
+func nativeToolPromptSummary(tools []llm.ToolDef) string {
+	if len(tools) == 0 {
+		return "No tools currently available.\n"
+	}
+	noun := "tools"
+	if len(tools) == 1 {
+		noun = "tool"
+	}
+	return fmt.Sprintf(
+		"%d %s available through the native tool schemas attached to this request. Use only those advertised names and argument schemas; do not invent tools or parameters.\n",
+		len(tools), noun,
+	)
+}
+
 // buildMemoryGuidelines describes only the exact built-in memory definitions
 // advertised to the current provider turn. A store can exist while Ask, Plan,
 // or a narrowed headless policy withholds some or all memory tools; naming a
@@ -245,12 +261,22 @@ func buildMemoryGuidelines(tools []llm.ToolDef) string {
 	return b.String()
 }
 
-// optionalPromptBudget reserves most of the context window for the tool
-// schemas, conversation, and generated answer. Four characters per token is a
-// rough English/code estimate; one third of that window is allocated here.
+// optionalPromptBudget bounds context that is useful but non-authoritative:
+// loaded instructions, active skills, the on-demand skill catalog, ICE, and
+// ignored paths. Tool schemas remain complete provider definitions and are
+// budgeted separately by turn admission. On constrained local windows (16K or
+// below), keeping this optional material to roughly 3/16 of the window leaves
+// room for complete schemas, conversation, and generation on first turn.
 func optionalPromptBudget(numCtx int) int {
 	if numCtx <= 0 {
 		return 0
+	}
+	if numCtx <= 16*1024 {
+		budget := numCtx * 3 / 4
+		if budget < 2048 {
+			return 2048
+		}
+		return budget
 	}
 	budget := numCtx * 4 / 3
 	if budget < 4096 {
@@ -278,44 +304,6 @@ func boundPromptText(text string, maxRunes int) string {
 	head := available * 3 / 4
 	tail := available - head
 	return string(runes[:head]) + string(marker) + string(runes[len(runes)-tail:])
-}
-
-// simplifyToolsForSmallModel creates a condensed tool list for small models.
-func simplifyToolsForSmallModel(tools []llm.ToolDef) string {
-	var b strings.Builder
-	for _, t := range tools {
-		// Truncate long descriptions
-		desc := t.Description
-		if len(desc) > 50 {
-			desc = desc[:47] + "..."
-		}
-		required := requiredToolParameters(t.Parameters)
-		if len(required) > 0 {
-			fmt.Fprintf(&b, "- %s (required: %s): %s\n", t.Name, strings.Join(required, ", "), desc)
-			continue
-		}
-		fmt.Fprintf(&b, "- %s: %s\n", t.Name, desc)
-	}
-	return b.String()
-}
-
-func requiredToolParameters(schema map[string]any) []string {
-	if len(schema) == 0 {
-		return nil
-	}
-	var required []string
-	switch values := schema["required"].(type) {
-	case []string:
-		required = append(required, values...)
-	case []any:
-		for _, value := range values {
-			if name, ok := value.(string); ok {
-				required = append(required, name)
-			}
-		}
-	}
-	sort.Strings(required)
-	return required
 }
 
 func buildEnvironmentSectionContextWithReadGrants(ctx context.Context, workDir string, readGrants []ReadGrant) string {

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
 	executionPkg "github.com/abdul-hamid-achik/local-agent/internal/execution"
+	"github.com/abdul-hamid-achik/local-agent/internal/ice"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 	mcpPkg "github.com/abdul-hamid-achik/local-agent/internal/mcp"
 )
@@ -28,6 +30,13 @@ func prependContinuationContext(base, continuation string) string {
 		return continuation
 	}
 	return continuation + "\n\n" + base
+}
+
+func reportOptionalICEError(ctx context.Context, out Output, operation string, err error) {
+	if err == nil || ctx.Err() != nil || errors.Is(err, ice.ErrICESessionChanged) {
+		return
+	}
+	out.Error(fmt.Sprintf("ICE %s failed: %v", operation, err))
 }
 
 // Run executes the ReAct loop: query -> LLM -> tool calls -> observe -> repeat.
@@ -125,17 +134,27 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 		out.Error(err.Error())
 		return err
 	}
-	if a.iceEngine != nil {
+	turnICEEngine := execRuntime.iceEngine
+	if turnICEEngine != nil {
 		if limits.bounded() {
 			// A bounded turn must not overlap an optional provider generation that
 			// was launched by the previous turn. Cancel and join it before the main
 			// request; the absolute deadline already covers this admission work.
-			a.iceEngine.StopAutoMemory()
+			turnICEEngine.StopAutoMemory()
 		} else {
-			a.iceEngine.CancelAutoMemory()
+			turnICEEngine.CancelAutoMemory()
 		}
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		if execRuntime.iceSessionID != "" {
+			if err := turnICEEngine.SetSessionID(ctx, execRuntime.iceSessionID); err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				reportOptionalICEError(ctx, out, "session binding", err)
+				turnICEEngine = nil
+			}
 		}
 	}
 
@@ -160,7 +179,8 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 		bobBootstrap, bobBootstrapAvailable = a.planBobWorkspaceBootstrap(bobCandidate, turnMCPSnapshot)
 	}
 
-	// ICE: index user message and assemble cross-session context.
+	// ICE context is assembled only after schemas are admitted. The current
+	// user message is indexed only after a provider/host iteration succeeds.
 	var iceContext string
 	a.mu.RLock()
 	hasMessages := len(a.messages) > 0
@@ -180,17 +200,6 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 	capabilityHintText, capabilityHint := a.resolveTurnCapabilityWithPolicy(ctx, out, capabilityActivity, turnToolPolicy.AllowMCP)
 	if err := ctx.Err(); err != nil {
 		return err
-	}
-
-	if a.iceEngine != nil && hasMessages {
-		if lastMsg.Role == "user" {
-			if err := a.iceEngine.IndexMessage(ctx, "user", lastMsg.Content); err != nil {
-				out.Error(fmt.Sprintf("ICE indexing failed: %v", err))
-			}
-			if assembled, err := a.iceEngine.AssembleContext(ctx, lastMsg.Content); err == nil {
-				iceContext = assembled
-			}
-		}
 	}
 
 	capabilityBaseContextWithoutBob := a.loadedCtx
@@ -221,6 +230,7 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 	}
 	readGrants := a.ReadGrants()
 	writeGrants := a.WriteGrants()
+	trustedMCPHubNamespaces := a.trustedMCPHubNamespaces()
 	rt := &turnRuntime{
 		a:                               a,
 		out:                             out,
@@ -233,13 +243,16 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 		turnToolPolicy:                  turnToolPolicy,
 		execRuntime:                     execRuntime,
 		turnFilesystem:                  turnFilesystem,
-		tools:                           tools,
+		availableTools:                  append([]llm.ToolDef(nil), tools...),
+		tools:                           append([]llm.ToolDef(nil), tools...),
 		turnMCPSnapshot:                 turnMCPSnapshot,
 		skillCatalog:                    skillCatalog,
 		continuationsConfig:             continuationsConfig,
+		iceEngine:                       turnICEEngine,
 		iceContext:                      iceContext,
 		readGrants:                      readGrants,
 		writeGrants:                     writeGrants,
+		trustedMCPHubNamespaces:         trustedMCPHubNamespaces,
 		capabilityActivity:              capabilityActivity,
 		capabilityHintText:              capabilityHintText,
 		capabilityHint:                  capabilityHint,
@@ -247,6 +260,9 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 		capabilityBaseContext:           capabilityBaseContext,
 		baseLoadedContext:               baseLoadedContext,
 		loadedContext:                   loadedContext,
+	}
+	if hasMessages && lastMsg.Role == "user" {
+		rt.iceUserContent = lastMsg.Content
 	}
 	rt.rebuildSystem(ctx)
 
@@ -272,6 +288,25 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 	rt.turnStart = time.Now()
 	if rt.lg != nil {
 		rt.lg.Info("turn start", "model", turnModel, "num_ctx", turnNumCtx, "tools", len(tools), "max_iters", rt.maxIters)
+	}
+	if rt.iceEngine != nil && hasMessages && lastMsg.Role == "user" {
+		// Admit the native schema projection first, then give ICE an
+		// authoritative count of system + schemas + messages. Optional retrieved
+		// context can no longer consume space already reserved by the host.
+		rt.admitToolSchemasForContext(ctx)
+		basePromptTokens := rt.estimatedPromptTokens()
+		assembled, assembleErr := rt.iceEngine.AssembleContextWithPromptTokens(ctx, lastMsg.Content, basePromptTokens)
+		switch {
+		case assembleErr == nil && assembled != "":
+			rt.iceContext = assembled
+			rt.rebuildSystem(ctx)
+		case errors.Is(assembleErr, ice.ErrICESessionChanged):
+			rt.iceEngine = nil
+		case assembleErr != nil && ctx.Err() == nil && !errors.Is(assembleErr, ice.ErrICESessionChanged):
+			if rt.lg != nil {
+				rt.lg.Warn("ICE context assembly failed", "error", assembleErr)
+			}
+		}
 	}
 
 	// Compact before the next provider request as well as after responses. This
@@ -352,7 +387,6 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 			Tool: "bob_context", ReasonCode: "workspace_context",
 		})
 	}
-
 	for i := 0; i < rt.maxIters; i++ {
 		select {
 		case <-ctx.Done():

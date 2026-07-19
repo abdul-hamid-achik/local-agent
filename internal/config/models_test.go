@@ -148,6 +148,29 @@ func TestDefaultModelsIncludeOrnithManualExclusiveProfile(t *testing.T) {
 	}
 }
 
+func TestDefaultModelsQuarantinePhiFromAgentRouting(t *testing.T) {
+	cfg := DefaultModelConfig()
+	model, err := cfg.GetModel("phi4-mini:latest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model.Default || !model.Exclusive {
+		t.Fatalf("Phi quarantine flags = default:%v exclusive:%v", model.Default, model.Exclusive)
+	}
+	wantUseCases := []string{"alternate_reasoning", "code_review", "explicit_profile"}
+	if !reflect.DeepEqual(model.UseCases, wantUseCases) {
+		t.Fatalf("Phi use cases = %#v, want %#v", model.UseCases, wantUseCases)
+	}
+	if model.Description != "Alternative compact reasoning profile; manual-only pending behavioral tool verification" {
+		t.Fatalf("Phi description = %q", model.Description)
+	}
+	for _, fallback := range cfg.FallbackChain {
+		if CanonicalModelName(fallback) == CanonicalModelName(model.Name) {
+			t.Fatalf("manual-only Phi remained in automatic fallback chain %#v", cfg.FallbackChain)
+		}
+	}
+}
+
 func TestModelConfig_GetDefaultModel(t *testing.T) {
 	tests := []struct {
 		name string

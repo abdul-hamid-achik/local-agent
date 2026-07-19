@@ -911,6 +911,67 @@ func TestConsultAdaptivelyKeepsBestSelectorOrderSubsetUsingOneHostProbe(t *testi
 	}
 }
 
+func TestConsultOn16GBHostDoesNotAdmitOrnithAndGemmaTogether(t *testing.T) {
+	const gib = int64(1 << 30)
+	runner := &fakeModelRunner{
+		current: "phi4-mini:latest",
+		modelState: llm.ExpertModelSnapshot{InventoryVerified: true, Models: []llm.ExpertModelResource{
+			{
+				Name: "phi4-mini:latest", WeightBytes: 5 * gib / 2, ResidentBytes: 5 * gib / 2,
+				Resident: true, Current: true, Location: llm.OllamaModelLocationLocal,
+			},
+			{
+				Name: "ornith:latest", WeightBytes: 56 * gib / 10,
+				Selected: true, Location: llm.OllamaModelLocationLocal,
+			},
+			{
+				Name: "gemma4:e2b", WeightBytes: 72 * gib / 10,
+				Selected: true, Location: llm.OllamaModelLocationLocal,
+			},
+		}},
+	}
+	runtime, err := New(runner, Options{
+		DefaultNumCtx: 16_384,
+		Profiles: []Profile{
+			{Name: "ornith-reviewer", Model: "ornith:latest", Description: "first local reviewer"},
+			{Name: "gemma-reviewer", Model: "gemma4:e2b", Description: "second local reviewer"},
+		},
+		Probe: resource.ProbeFunc(func(context.Context) (resource.HostSnapshot, error) {
+			// Darwin deliberately uses total-only planning because it has no
+			// stable MemAvailable equivalent.
+			return resource.HostSnapshot{LogicalCPU: 10, TotalRAMBytes: 16 * gib}, nil
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := runtime.Consult(context.Background(), Request{
+		Strategy:  expertselector.StrategyTeam,
+		Objective: "Review within the 16 GB local residency budget.",
+		ExpertNames: []string{
+			"ornith-reviewer",
+			"gemma-reviewer",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Experts) != 1 || result.Experts[0].Model != "ornith:latest" {
+		t.Fatalf("16 GB admitted experts = %#v, want only the first fitting model", result.Experts)
+	}
+	if !strings.Contains(strings.Join(result.Warnings, "\n"), "fan-out was reduced") {
+		t.Fatalf("16 GB warnings = %q, want an explicit fan-out reduction", result.Warnings)
+	}
+	runner.mu.Lock()
+	dispatched := append([]string(nil), runner.models...)
+	maxActive := runner.maxActive
+	runner.mu.Unlock()
+	if len(dispatched) != 1 || dispatched[0] != "ornith:latest" || maxActive != 1 {
+		t.Fatalf("16 GB dispatch = %v max_active=%d, want one Ornith inference", dispatched, maxActive)
+	}
+}
+
 func TestConsultPreservesVerifiedExternalLocationWithoutLocalRAMDenial(t *testing.T) {
 	for _, test := range []struct {
 		name     string

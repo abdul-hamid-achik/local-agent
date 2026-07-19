@@ -363,7 +363,9 @@ func (m *Model) handleAgentDone(msg AgentDoneMsg, cmds []tea.Cmd) []tea.Cmd {
 	var unresolved *agent.UnresolvedExecutionError
 	hasUnresolved := errors.As(msg.Err, &unresolved)
 	turnCancelled := errors.Is(msg.Err, context.Canceled) && !hasUnresolved
-	preDispatchRejected := errors.Is(msg.Err, llm.ErrInferenceNotStarted) || errors.Is(msg.Err, llm.ErrNoModelSelected)
+	preDispatchRejected := errors.Is(msg.Err, llm.ErrInferenceNotStarted) ||
+		errors.Is(msg.Err, llm.ErrNoModelSelected) ||
+		errors.Is(msg.Err, agent.ErrTurnContextBudgetExceeded)
 	capturedFollowUp := false
 	rolledBackPrompt := false
 	if hasUnresolved || preDispatchRejected {

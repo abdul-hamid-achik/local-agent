@@ -93,9 +93,31 @@ func manuallySelectableOllamaChatModels(models []llm.OllamaModel, localOnly bool
 }
 
 // autoRoutableOllamaChatModels applies the strict local admission projection
-// regardless of privacy mode. Ollama Cloud remains a manual-only choice.
-func autoRoutableOllamaChatModels(models []llm.OllamaModel) []string {
-	return manuallySelectableOllamaChatModels(models, true)
+// regardless of privacy mode. Ollama Cloud and configured exclusive profiles
+// remain manual-only choices even when their local weights are installed.
+func autoRoutableOllamaChatModels(models []llm.OllamaModel, modelConfig *config.ModelConfig) []string {
+	candidates := manuallySelectableOllamaChatModels(models, true)
+	result := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		if configuredExclusiveModel(modelConfig, candidate) {
+			continue
+		}
+		result = append(result, candidate)
+	}
+	return result
+}
+
+func configuredExclusiveModel(modelConfig *config.ModelConfig, name string) bool {
+	if modelConfig == nil {
+		return false
+	}
+	wanted := config.CanonicalModelName(name)
+	for _, model := range modelConfig.Models {
+		if config.CanonicalModelName(model.Name) == wanted {
+			return model.Exclusive
+		}
+	}
+	return false
 }
 
 func ollamaCapability(capabilities []string, wanted string) bool {

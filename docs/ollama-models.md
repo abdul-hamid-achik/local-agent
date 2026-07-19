@@ -58,6 +58,14 @@ Local Agent reconciles the live model's native context with the configured local
 
 This keeps session statistics aligned with the request that was actually sent.
 
+`num_ctx` is a request and KV-cache allocation, not a promise that the whole
+native model maximum is practical on the machine. For example, a model can
+report a much larger native limit while Local Agent correctly sends the smaller
+configured value. Start at `16384` for the documented compact 2B/4B tiers and
+raise it only after accounting for model weights, the embedding model, and
+other local processes. Pair small models with a lazy MCPHub profile so the
+first provider request does not include every downstream tool schema.
+
 ## Suggested local tiers
 
 Artifact sizes vary by Ollama build and quantization. The shipped guard is tuned for a 16 GB Apple-silicon machine, not measured free memory.
@@ -66,14 +74,33 @@ Artifact sizes vary by Ollama build and quantization. The shipped guard is tuned
 |---|---|---|
 | `qwen3.5:0.8b` | Short answers and lightweight classification | Eligible |
 | `qwen3.5:2b` | Compact interactive work and modest tool chains | Eligible |
-| `phi4-mini:latest` | Alternative compact reasoning profile | Fallback eligible |
+| `phi4-mini:latest` | Alternative compact reasoning profile | Exclusive |
 | `qwen3.5:4b` | Coding, debugging, review, and multi-step tools | Eligible |
 | `qwen3.5:9b` | Deeper manual profile | Exclusive |
 | `ornith:latest` | Manual agentic coding and verification profile | Exclusive |
 
+The shipped Phi profile is manual-only because its advertised Ollama metadata has not been backed by behavioral tool-use verification in this harness. Its size is not the reason for the restriction.
+
 Large-model admission can be overridden with `LOCAL_AGENT_ALLOW_LARGE_MODELS=1`, but the override does not add memory isolation or make an oversized model safe for the machine.
 
 ## Troubleshooting
+
+### The first request already fills the context window
+
+Check the active `ollama.num_ctx` and model with `/model list`. A large native
+context advertised by Ollama does not override the configured request limit.
+Then reduce the recurring MCP schema surface: use MCPHub gateway mode with
+`expose: lazy`, set the Local Agent MCPHub entry to `pin: []` and
+`tool_schema_budget: "0"`, and restart the agent after syncing the change. The
+[MCP guide](/mcp#small-model-gateway-profile) shows the complete public
+configuration.
+
+Local Agent estimates prompts before dispatch and may compact tool definitions
+for one pressured turn. If it still cannot keep the prompt below the admission
+threshold, it stops instead of sending an overfilled request. Lower the amount
+of loaded context or use a model and `num_ctx` combination that fits available
+memory; raising a model's advertised maximum does not solve an oversized first
+prompt.
 
 If the picker is empty or stale:
 

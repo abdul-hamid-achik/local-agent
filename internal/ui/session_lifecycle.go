@@ -245,8 +245,23 @@ func (m *Model) cancelSessionList() {
 	if m.sessionListing {
 		m.sessionListToken++
 	}
+	if m.sessionListCancel != nil {
+		m.sessionListCancel()
+		m.sessionListCancel = nil
+	}
 	m.sessionListing = false
 	if !m.sessionLoading {
 		m.input.Focus()
 	}
+}
+
+func (m *Model) cancelSessionListForShutdown() {
+	if m.sessionListCancel != nil {
+		m.sessionListCancel()
+		m.sessionListCancel = nil
+		return
+	}
+	// Tests and embedders can mark a synthetic lookup without installing an
+	// owned command. There is nothing to join in that case.
+	m.sessionListing = false
 }

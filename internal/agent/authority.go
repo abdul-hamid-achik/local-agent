@@ -141,6 +141,24 @@ func (a *Agent) isTrustedMCPHubNamespace(namespace string) bool {
 	return ok && server.gateway == config.MCPTrustGatewayMCPHub
 }
 
+// trustedMCPHubNamespaces snapshots the host-configured MCPHub namespaces for
+// one turn. Tool names and MCP descriptions are remote presentation data, so
+// schema admission must never infer this authority from an operation suffix.
+func (a *Agent) trustedMCPHubNamespaces() map[string]struct{} {
+	if a == nil {
+		return nil
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	trusted := make(map[string]struct{})
+	for namespace, server := range a.trustedMCP {
+		if server.gateway == config.MCPTrustGatewayMCPHub {
+			trusted[namespace] = struct{}{}
+		}
+	}
+	return trusted
+}
+
 // trustedMCPContract resolves only exact host-configured direct or MCPHub
 // routes. Suffix matching is forbidden: `evil__cortex_status` must never gain
 // authority merely by resembling a configured operation. MCP annotations and

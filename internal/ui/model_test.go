@@ -29,6 +29,37 @@ func TestSubmitInput_EmptyReturnsNil(t *testing.T) {
 	}
 }
 
+func TestContextAdmissionPreflightFailureRestoresDraft(t *testing.T) {
+	m := newTestModel(t)
+	const prompt = "review the context budget"
+	m.input.SetValue(prompt)
+
+	if cmd := m.submitPreparedInput(prompt); cmd == nil {
+		t.Fatal("prompt did not start")
+	}
+	if len(m.agent.Messages()) != 1 {
+		t.Fatalf("precondition messages = %d, want 1", len(m.agent.Messages()))
+	}
+
+	updated, _ := m.Update(AgentDoneMsg{Err: &agent.TurnContextBudgetError{
+		EstimatedPromptTokens: 21_134,
+		ContextWindowTokens:   16_384,
+	}})
+	m = updated.(*Model)
+
+	if got := m.input.Value(); got != prompt {
+		t.Fatalf("restored draft = %q, want %q", got, prompt)
+	}
+	if len(m.agent.Messages()) != 0 {
+		t.Fatalf("preflight-rejected prompt remained in agent history: %#v", m.agent.Messages())
+	}
+	for _, entry := range m.entries {
+		if entry.Kind == "user" {
+			t.Fatalf("preflight-rejected prompt remained in transcript: %#v", entry)
+		}
+	}
+}
+
 func TestHelpChordOnlyWhenIdleAndEmpty(t *testing.T) {
 	for _, shortcut := range []struct {
 		name string

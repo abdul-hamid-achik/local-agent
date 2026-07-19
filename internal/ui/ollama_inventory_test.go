@@ -304,6 +304,41 @@ func TestCloudStaysManuallySelectableWhileRouterReceivesOnlyLocals(t *testing.T)
 	}
 }
 
+func TestInventoryRefreshKeepsExclusiveLocalModelsManualOnly(t *testing.T) {
+	m := newTestModel(t)
+	router := &inventoryAvailabilityRouter{}
+	m.router = router
+	m.SetModelRoutingCatalog([]config.Model{
+		{Name: "qwen3.5:2b"},
+		{Name: "phi4-mini:latest", Exclusive: true},
+		{Name: "ornith:latest", Exclusive: true},
+		{Name: "gemma4:e2b", Exclusive: true},
+	})
+	m.modelInventoryRequest = 9
+	m.applyOllamaInventory(OllamaModelInventoryMsg{RequestID: 9, Models: []OllamaModelDescriptor{
+		{Name: "qwen3.5:2b", Source: OllamaModelLocal, Selectable: true, Fit: true, AutoRoutable: true},
+		{Name: "phi4-mini:latest", Source: OllamaModelLocal, Selectable: true, Fit: true, AutoRoutable: true},
+		{Name: "ornith:latest", Source: OllamaModelLocal, Selectable: true, Fit: true, AutoRoutable: true},
+		{Name: "gemma4:e2b", Source: OllamaModelLocal, Selectable: true, Fit: true, AutoRoutable: true},
+	}})
+
+	if got := strings.Join(m.modelList, ","); got != "qwen3.5:2b,phi4-mini:latest,ornith:latest,gemma4:e2b" {
+		t.Fatalf("manual model list = %q, want all locally selectable profiles", got)
+	}
+	if got := strings.Join(router.available, ","); got != "qwen3.5:2b" {
+		t.Fatalf("automatic router inventory = %q, want only non-exclusive Qwen", got)
+	}
+	for _, model := range m.ollamaModels {
+		wantAuto := model.Name == "qwen3.5:2b"
+		if model.AutoRoutable != wantAuto {
+			t.Errorf("%s AutoRoutable = %v, want %v", model.Name, model.AutoRoutable, wantAuto)
+		}
+		if model.ManualOnly == wantAuto {
+			t.Errorf("%s ManualOnly = %v, want %v", model.Name, model.ManualOnly, !wantAuto)
+		}
+	}
+}
+
 func TestRefreshedCurrentModelReconciliationKeepsCloudManualOnly(t *testing.T) {
 	localCurrent := OllamaModelDescriptor{
 		Name: "same", Source: OllamaModelLocal, Selectable: true, Fit: true, AutoRoutable: true,

@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
+	"github.com/abdul-hamid-achik/local-agent/internal/ice"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 )
 
@@ -67,6 +68,10 @@ func (a *Agent) compactForContext(ctx context.Context, out Output, numCtx int) b
 }
 
 func (a *Agent) compactForContextAndModel(ctx context.Context, out Output, numCtx int, expectedModel string) bool {
+	return a.compactForContextAndModelWithICE(ctx, out, numCtx, expectedModel, a.ICEEngine())
+}
+
+func (a *Agent) compactForContextAndModelWithICE(ctx context.Context, out Output, numCtx int, expectedModel string, iceEngine *ice.Engine) bool {
 	a.mu.RLock()
 	messages := make([]llm.Message, len(a.messages))
 	copy(messages, a.messages)
@@ -146,10 +151,8 @@ func (a *Agent) compactForContextAndModel(ctx context.Context, out Output, numCt
 	}
 
 	// ICE: persist summary for cross-session retrieval.
-	if a.iceEngine != nil {
-		if err := a.iceEngine.IndexSummary(ctx, summaryText); err != nil {
-			out.Error(fmt.Sprintf("ICE summary indexing failed: %v", err))
-		}
+	if iceEngine != nil {
+		reportOptionalICEError(ctx, out, "summary indexing", iceEngine.IndexSummary(ctx, summaryText))
 	}
 
 	// Snapshot the full pre-compaction history first so compaction is

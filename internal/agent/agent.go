@@ -27,28 +27,30 @@ import (
 
 // Agent orchestrates the LLM and tools in a ReAct loop.
 type Agent struct {
-	mu                  sync.RWMutex
-	llmClient           llm.Client
-	registry            *mcp.Registry
-	messages            []llm.Message
-	skillContent        string
-	skillLoader         SkillLoader
-	loadedCtx           string
-	numCtx              int
-	memoryStore         *memory.Store
-	iceEngine           *ice.Engine
-	router              config.ModelRouter
-	modePrefix          string
-	toolPolicy          ToolPolicy
-	authorityMode       AuthorityMode
-	workDir             string
-	ignoreContent       string
-	filesystemVersion   uint64
-	activeFilesystem    filesystemContext
-	filesystemPinned    bool
-	permChecker         *permission.Checker
-	approvalCallback    func(permission.ApprovalRequest)
-	approvalHostVersion uint64
+	mu                   sync.RWMutex
+	llmClient            llm.Client
+	registry             *mcp.Registry
+	messages             []llm.Message
+	skillContent         string
+	skillLoader          SkillLoader
+	loadedCtx            string
+	numCtx               int
+	memoryStore          *memory.Store
+	iceEngine            *ice.Engine
+	iceSessionScope      string
+	iceSessionGeneration uint64
+	router               config.ModelRouter
+	modePrefix           string
+	toolPolicy           ToolPolicy
+	authorityMode        AuthorityMode
+	workDir              string
+	ignoreContent        string
+	filesystemVersion    uint64
+	activeFilesystem     filesystemContext
+	filesystemPinned     bool
+	permChecker          *permission.Checker
+	approvalCallback     func(permission.ApprovalRequest)
+	approvalHostVersion  uint64
 	// approvalGrants contains host-approved, exact-request grants for this Agent
 	// session. Keys bind workspace, tool and canonical arguments; they are never
 	// persisted as global tool-only policies.
@@ -869,19 +871,41 @@ func (a *Agent) SetApprovalCallback(cb func(permission.ApprovalRequest)) {
 
 // SetICEEngine sets the ICE engine for cross-session context retrieval.
 func (a *Agent) SetICEEngine(engine *ice.Engine) {
+	a.mu.Lock()
 	a.iceEngine = engine
+	a.mu.Unlock()
 }
 
 // ICEEngine returns the ICE engine, or nil if not enabled.
 func (a *Agent) ICEEngine() *ice.Engine {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
 	return a.iceEngine
+}
+
+// ICESessionID returns the session scope selected for the next turn. Before a
+// durable session exists it falls back to the engine's generated transient
+// scope. This is a bounded status projection; RunTurn remains the sole owner of
+// applying the desired scope to the mutable engine.
+func (a *Agent) ICESessionID() string {
+	a.mu.RLock()
+	scope := a.iceSessionScope
+	engine := a.iceEngine
+	a.mu.RUnlock()
+	if scope != "" {
+		return scope
+	}
+	if engine != nil {
+		return engine.SessionID()
+	}
+	return ""
 }
 
 // PrepareModelSwitch cancels and joins background ICE inference so the model
 // manager can unload/switch without racing a stream on the previous model.
 func (a *Agent) PrepareModelSwitch() {
-	if a.iceEngine != nil {
-		a.iceEngine.StopAutoMemory()
+	if engine := a.ICEEngine(); engine != nil {
+		engine.StopAutoMemory()
 	}
 }
 
@@ -983,8 +1007,8 @@ func (a *Agent) Close() {
 	}
 	a.mcphubResults.Reset()
 	a.clearContinuationContracts()
-	if a.iceEngine != nil {
-		_ = a.iceEngine.Close()
+	if engine := a.ICEEngine(); engine != nil {
+		_ = engine.Close()
 	}
 	if a.registry != nil {
 		a.registry.Close()

@@ -34,8 +34,23 @@ func TestOllamaChatModelSetsKeepCloudManualAndAutomaticRoutingLocal(t *testing.T
 	if got := manuallySelectableOllamaChatModels(models, false); !reflect.DeepEqual(got, []string{"custom-code", "cloud-code"}) {
 		t.Fatalf("manual mixed models = %#v", got)
 	}
-	if got := autoRoutableOllamaChatModels(models); !reflect.DeepEqual(got, []string{"custom-code"}) {
+	if got := autoRoutableOllamaChatModels(models, nil); !reflect.DeepEqual(got, []string{"custom-code"}) {
 		t.Fatalf("automatic models = %#v, want local only", got)
+	}
+}
+
+func TestAutoRoutableOllamaChatModelsExcludeConfiguredExclusiveProfiles(t *testing.T) {
+	models := []llm.OllamaModel{
+		{Name: "qwen3.5:2b", Location: llm.OllamaModelLocationLocal, SizeBytes: 2 << 30, Capabilities: []string{"completion", "tools"}},
+		{Name: "phi4-mini:latest", Location: llm.OllamaModelLocationLocal, SizeBytes: 2 << 30, Capabilities: []string{"completion", "tools"}},
+		{Name: "ornith:latest", Location: llm.OllamaModelLocationLocal, SizeBytes: 5 << 30, Capabilities: []string{"completion", "tools"}},
+		{Name: "gemma4:e2b", Location: llm.OllamaModelLocationLocal, SizeBytes: 7 << 30, Capabilities: []string{"completion", "tools"}},
+	}
+	cfg := config.DefaultModelConfig()
+
+	got := autoRoutableOllamaChatModels(models, &cfg)
+	if !reflect.DeepEqual(got, []string{"qwen3.5:2b"}) {
+		t.Fatalf("automatic models = %#v, want only non-exclusive Qwen", got)
 	}
 }
 
