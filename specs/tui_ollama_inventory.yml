@@ -26,7 +26,7 @@ terminal:
 
 preconditions:
   commands:
-    - run: "rm -rf .glyphrun/tmp/ollama-inventory-home .glyphrun/tmp/ollama-inventory-agents .glyphrun/tmp/ollama-inventory-workdir && mkdir -p .glyphrun/tmp/ollama-inventory-home/.config/local-agent .glyphrun/tmp/ollama-inventory-agents .glyphrun/tmp/ollama-inventory-workdir && printf '%s\n' 'model:' '  auto_select: false' > .glyphrun/tmp/ollama-inventory-home/.config/local-agent/config.yaml && go build -o .glyphrun/tmp/fake-ollama-inventory ./specs/fixtures/fake_ollama_inventory && go build -o ./bin/local-agent ./cmd/local-agent"
+    - run: "rm -rf .glyphrun/tmp/ollama-inventory-home .glyphrun/tmp/ollama-inventory-agents .glyphrun/tmp/ollama-inventory-workdir && mkdir -p .glyphrun/tmp/ollama-inventory-home/.config/local-agent .glyphrun/tmp/ollama-inventory-agents .glyphrun/tmp/ollama-inventory-workdir && printf '%s\n' 'model:' '  auto_select: false' 'ice:' '  enabled: false' > .glyphrun/tmp/ollama-inventory-home/.config/local-agent/config.yaml && go build -o .glyphrun/tmp/fake-ollama-inventory ./specs/fixtures/fake_ollama_inventory && go build -o ./bin/local-agent ./cmd/local-agent"
       cwd: "."
       timeoutMs: 30000
 

@@ -30,7 +30,7 @@ terminal:
 
 preconditions:
   commands:
-    - run: "rm -rf .glyphrun/tmp/approval-home .glyphrun/tmp/approval-agents .glyphrun/tmp/approval-protocol.txt .glyphrun/tmp/fake-ollama-approval /tmp/local-agent-glyphrun-approval-workdir && mkdir -p .glyphrun/tmp/approval-home/.config/local-agent .glyphrun/tmp/approval-agents /tmp/local-agent-glyphrun-approval-workdir && printf '%s\\n' 'model:' '  auto_select: false' > .glyphrun/tmp/approval-home/.config/local-agent/config.yaml && go build -o ./bin/local-agent ./cmd/local-agent && go build -o .glyphrun/tmp/fake-ollama-approval ./specs/fixtures/fake_ollama_approval"
+    - run: "rm -rf .glyphrun/tmp/approval-home .glyphrun/tmp/approval-agents .glyphrun/tmp/approval-protocol.txt .glyphrun/tmp/fake-ollama-approval /tmp/local-agent-glyphrun-approval-workdir && mkdir -p .glyphrun/tmp/approval-home/.config/local-agent .glyphrun/tmp/approval-agents /tmp/local-agent-glyphrun-approval-workdir && printf '%s\\n' 'model:' '  auto_select: false' 'ice:' '  enabled: false' > .glyphrun/tmp/approval-home/.config/local-agent/config.yaml && go build -o ./bin/local-agent ./cmd/local-agent && go build -o .glyphrun/tmp/fake-ollama-approval ./specs/fixtures/fake_ollama_approval"
       cwd: "."
       timeoutMs: 30000
 

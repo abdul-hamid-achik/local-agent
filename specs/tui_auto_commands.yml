@@ -26,7 +26,7 @@ terminal:
     rows: 30
 preconditions:
     commands:
-        - run: "rm -rf .glyphrun/tmp/auto-commands-home .glyphrun/tmp/auto-commands-agents .glyphrun/tmp/auto-commands-protocol.txt .glyphrun/tmp/fake-ollama-auto .glyphrun/tmp/auto-minerva-workspace && mkdir -p .glyphrun/tmp/auto-commands-home/.config/local-agent .glyphrun/tmp/auto-commands-agents .glyphrun/tmp/auto-minerva-workspace/bin && cp -R specs/fixtures/minerva_workspace/. .glyphrun/tmp/auto-minerva-workspace/ && printf '%s\\n' 'model:' '  auto_select: false' > .glyphrun/tmp/auto-commands-home/.config/local-agent/config.yaml && go build -o ./bin/local-agent ./cmd/local-agent && go build -o .glyphrun/tmp/fake-ollama-auto ./specs/fixtures/fake_ollama_auto && (cd .glyphrun/tmp/auto-minerva-workspace && go build -o bin/minerva ./cmd/minerva)"
+        - run: "rm -rf .glyphrun/tmp/auto-commands-home .glyphrun/tmp/auto-commands-agents .glyphrun/tmp/auto-commands-protocol.txt .glyphrun/tmp/fake-ollama-auto .glyphrun/tmp/auto-minerva-workspace && mkdir -p .glyphrun/tmp/auto-commands-home/.config/local-agent .glyphrun/tmp/auto-commands-agents .glyphrun/tmp/auto-minerva-workspace/bin && cp -R specs/fixtures/minerva_workspace/. .glyphrun/tmp/auto-minerva-workspace/ && printf '%s\\n' 'model:' '  auto_select: false' 'ice:' '  enabled: false' > .glyphrun/tmp/auto-commands-home/.config/local-agent/config.yaml && go build -o ./bin/local-agent ./cmd/local-agent && go build -o .glyphrun/tmp/fake-ollama-auto ./specs/fixtures/fake_ollama_auto && (cd .glyphrun/tmp/auto-minerva-workspace && go build -o bin/minerva ./cmd/minerva)"
           cwd: "."
           timeoutMs: 30000
 steps:

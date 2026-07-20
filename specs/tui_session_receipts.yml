@@ -24,7 +24,7 @@ terminal:
     rows: 40
 preconditions:
     commands:
-        - run: "rm -rf .glyphrun/tmp/session-receipts-home .glyphrun/tmp/session-receipts-agents && mkdir -p .glyphrun/tmp/session-receipts-home/.config/local-agent .glyphrun/tmp/session-receipts-agents && printf '%s\\n' 'model:' '  auto_select: false' > .glyphrun/tmp/session-receipts-home/.config/local-agent/config.yaml && go build -o ./bin/local-agent ./cmd/local-agent"
+        - run: "rm -rf .glyphrun/tmp/session-receipts-home .glyphrun/tmp/session-receipts-agents && mkdir -p .glyphrun/tmp/session-receipts-home/.config/local-agent .glyphrun/tmp/session-receipts-agents && printf '%s\\n' 'model:' '  auto_select: false' 'ice:' '  enabled: false' > .glyphrun/tmp/session-receipts-home/.config/local-agent/config.yaml && go build -o ./bin/local-agent ./cmd/local-agent"
           cwd: "."
           timeoutMs: 30000
         - run: "go run ./specs/fixtures/session_receipts .glyphrun/tmp/session-receipts-home/.config/local-agent/local-agent.db '${projectRoot}'"
