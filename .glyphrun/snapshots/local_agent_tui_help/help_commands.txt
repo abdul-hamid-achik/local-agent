@@ -31,5 +31,5 @@
                              │   /goal pause       Unavailable · No goal is configured.   │
                              │   /goal resume      Unavailable · No goal is configured.   │
                              │   /goal budget      Unavailable · No goal is configured.   │
-─────────────────────────────│ esc/q close · j/k scroll · pgup/pgdn page · 35%            │────────────────────────────
+─────────────────────────────│ esc/q close · j/k scroll · pgup/pgdn page · 27%            │────────────────────────────
                              ╰────────────────────────────────────────────────────────────╯

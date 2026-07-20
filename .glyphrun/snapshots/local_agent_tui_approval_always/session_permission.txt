@@ -8,20 +8,20 @@
 
 
 
-
-
-
-
-
 ─────────────────────────────────────────────────────────────────────────────────────────
   ◇ Permission · write · NORMAL
   Action     Write 23 B
   Target     <temp>/local-agent-glyphrun-approval-always-workdir/session-grant.txt
   Impact     Creates or replaces the target file with the proposed content.
-  Scope      Identical request only · current Agent session
+  Scope      Exact arguments · this process only
   Request    309302e8b9f8
 
   Proposed change
   +session scoped approval
-  › n deny ·   y once ·   s identical request · current session
+  › n deny
+    y once
+    s same/session
+    a tool/session
+    p path · session-grant.txt
+    w save · session-grant.txt
   esc cancel turn · enter select · ↑/↓/j/k move · d arguments · pgup/dn scroll

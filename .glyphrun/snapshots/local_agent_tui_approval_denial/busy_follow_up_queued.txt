@@ -22,6 +22,6 @@
 
 
 ─────────────────────────────────────────────────────────────────────────────────────────
-   … Running · esc cancel · S1 · Create approval-probe.t…
+   … Running · esc cancel · <session> · Create approval-probe.t…
 
   queued › Summarize after the probe. · ↑ edit · esc clear

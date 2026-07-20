@@ -134,11 +134,11 @@ steps:
     - press: "ctrl+c"
     - wait:
         screen:
-            contains: "Session S41 · Recovery receipt review"
+            contains: "Session <session> · Recovery receipt review"
         timeoutMs: 3000
     - wait:
         screen:
-            contains: "local-agent --resume S41"
+            contains: "local-agent --resume <session>"
         timeoutMs: 3000
     - wait:
         process:

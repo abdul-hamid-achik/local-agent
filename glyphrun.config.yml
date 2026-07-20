@@ -18,6 +18,11 @@ terminal:
     replace:
       - regex: "/(?:private/)?tmp/local-agent-glyphrun"
         with: "<temp>/local-agent-glyphrun"
+      # Session public IDs are random 7-char hex handles. Normalize them so
+      # committed snapshots stay stable across runs while still covering the
+      # handle shape in screen text.
+      - regex: "\\b[0-9a-f]{7}\\b"
+        with: "<session>"
 
 artifacts:
   rawLog: true

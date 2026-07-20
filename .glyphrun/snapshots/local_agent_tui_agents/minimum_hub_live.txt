@@ -1,10 +1,10 @@
   you
  ╭──────────────────────────╮
  │ Agents · 1 consultatio…  │
- │ │ Consultation #<short>… │
+ │ │ Consultation #<session>… │
  │                          │
  │                          │
  │                          │
  │ esc close · enter view   │
  ╰──────────────────────────╯
-  … Run · esc · queue · S1
+  … Experts · esc · <session>

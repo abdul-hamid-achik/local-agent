@@ -13,5 +13,5 @@
     The read completed, the test failure is visible, and the interrupted effect needs
     inspection.
 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
-  S41 · Recovery receipt review · Follow paused · end latest
+  <session> · Recovery receipt review · Follow paused · end latest
 ▏❯ draft survives transcript search

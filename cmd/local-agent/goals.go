@@ -484,15 +484,10 @@ func handleGoalRecover(store goalRecoveryStore, workspace string, args []string,
 		_, _ = fmt.Fprintln(stderr, "goal recover: provide exactly one session ID")
 		return 2
 	}
-	session, err := resolveSessionArg(context.Background(), store, flags.Arg(0))
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "goal recover: %v\n", err)
-		return 2
-	}
-	sessionID := session.ID
-	sessionHandle := sessionDisplayHandle(session)
 	provided := make(map[string]bool)
 	flags.Visit(func(value *flag.Flag) { provided[value.Name] = true })
+	// Validate flag shape before touching the durable session ledger so users
+	// get actionable --apply errors even when the session handle is unknown.
 	if !*apply {
 		for name := range provided {
 			if name != "json" && name != "apply" {
@@ -500,6 +495,26 @@ func handleGoalRecover(store goalRecoveryStore, workspace string, args []string,
 				return 2
 			}
 		}
+	} else {
+		required := map[string]string{
+			"item": *itemID, "observation": *observation, "source": *source,
+			"reference": *reference, "summary": *summary, "observed-at": *observedAtText,
+		}
+		for _, name := range []string{"item", "observation", "source", "reference", "summary", "observed-at"} {
+			if !provided[name] || strings.TrimSpace(required[name]) == "" {
+				_, _ = fmt.Fprintf(stderr, "goal recover: --apply requires non-empty --%s\n", name)
+				return 2
+			}
+		}
+	}
+	session, err := resolveSessionArg(context.Background(), store, flags.Arg(0))
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "goal recover: %v\n", err)
+		return 2
+	}
+	sessionID := session.ID
+	sessionHandle := sessionDisplayHandle(session)
+	if !*apply {
 		inspection, err := store.InspectReconciliationGroup(context.Background(), sessionID, workspace)
 		if err != nil {
 			if errors.Is(err, db.ErrReconciliationGroupNotFound) {
@@ -520,17 +535,6 @@ func handleGoalRecover(store goalRecoveryStore, workspace string, args []string,
 			writeGoalRecoveryDryRun(stdout, projection)
 		}
 		return 0
-	}
-
-	required := map[string]string{
-		"item": *itemID, "observation": *observation, "source": *source,
-		"reference": *reference, "summary": *summary, "observed-at": *observedAtText,
-	}
-	for _, name := range []string{"item", "observation", "source", "reference", "summary", "observed-at"} {
-		if !provided[name] || strings.TrimSpace(required[name]) == "" {
-			_, _ = fmt.Fprintf(stderr, "goal recover: --apply requires non-empty --%s\n", name)
-			return 2
-		}
 	}
 	observedAt, err := time.Parse(time.RFC3339, *observedAtText)
 	if err != nil {

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/abdul-hamid-achik/local-agent/internal/db"
 	_ "modernc.org/sqlite"
 )
 
@@ -30,6 +31,16 @@ func run(args []string) (resultErr error) {
 	if err := os.MkdirAll(filepath.Dir(databasePath), 0o700); err != nil {
 		return err
 	}
+	// Open through the application store so every migration (including
+	// public_id) is applied and recorded in schema_migrations.
+	store, err := db.OpenPath(databasePath)
+	if err != nil {
+		return fmt.Errorf("open store: %w", err)
+	}
+	if err := store.Close(); err != nil {
+		return fmt.Errorf("close store: %w", err)
+	}
+
 	database, err := sql.Open("sqlite", databasePath+"?_foreign_keys=ON")
 	if err != nil {
 		return err
@@ -40,21 +51,13 @@ func run(args []string) (resultErr error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	for _, path := range []string{
-		"internal/db/migrations/001_init.sql",
-		"internal/db/migrations/002_checkpoints.sql",
-		"internal/db/migrations/003_session_state.sql",
-		"internal/db/migrations/004_execution_events.sql",
-		"specs/fixtures/session_receipts.sql",
-	} {
-		contents, readErr := os.ReadFile(path)
-		if readErr != nil {
-			return fmt.Errorf("read %s: %w", path, readErr)
-		}
-		statement := strings.ReplaceAll(string(contents), "__PROJECT_ROOT__", projectRoot)
-		if _, execErr := database.ExecContext(ctx, statement); execErr != nil {
-			return fmt.Errorf("apply %s: %w", path, execErr)
-		}
+	contents, readErr := os.ReadFile("specs/fixtures/session_receipts.sql")
+	if readErr != nil {
+		return fmt.Errorf("read session_receipts.sql: %w", readErr)
+	}
+	statement := strings.ReplaceAll(string(contents), "__PROJECT_ROOT__", projectRoot)
+	if _, execErr := database.ExecContext(ctx, statement); execErr != nil {
+		return fmt.Errorf("apply session_receipts.sql: %w", execErr)
 	}
 	return nil
 }

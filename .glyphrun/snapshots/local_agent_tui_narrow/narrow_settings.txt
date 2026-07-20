@@ -9,10 +9,10 @@
  │   Sessions · Resume                │
  │   Compact layout · Auto            │
  │   Runtime status · 21 ready tools… │
+ │   Permissions · 0 session · 0 rul… │
  │   Help · Shortcuts                 │
  │                                    │
  │   Choose an installed local model… │
  │ esc close · enter select · ↑/↓     │
  ╰────────────────────────────────────╯
-
 ───────────────────────────────────────

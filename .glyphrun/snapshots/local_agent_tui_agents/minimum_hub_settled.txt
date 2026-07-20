@@ -1,10 +1,10 @@
 
  ╭──────────────────────────╮
  │ Agents · 1 consultatio…  │
- │ │ Consultation #<short>… │
+ │ │ Consultation #<session>… │
  │                          │
  │                          │
  │                          │
  │ esc close · enter view   │
  ╰──────────────────────────╯
- ✓ Done · <elapsed> · S1
+ ✓ Done · <elapsed> · <session>

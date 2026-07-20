@@ -15,5 +15,5 @@
 
 
 ─────────────────────────────────────────────────
- S1 · qwen3.5:0.8b · ctx 0%
+ <session> · qwen3.5:0.8b · ctx 0%
 ▏❯ Ask, @mention files, or type /help

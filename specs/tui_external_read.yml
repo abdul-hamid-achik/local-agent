@@ -1,5 +1,5 @@
 version: 1
-contractHash: sha256:d205071e8dc3daf9b546113f703279092a429b8bd69ef29ecf41d858e29ce1d0
+contractHash: sha256:ce67026f46365eaa3235d546ccd77919c50a129d157791c01407d80b3e482926
 name: local_agent_tui_external_read
 intent: |
     a prompt can name one existing file outside the startup workspace, pause
@@ -146,7 +146,7 @@ outcomes:
       description: approval resumes the original video-analysis prompt, creates its titled session, and records one temporary explicit-path grant
       verify:
         screen:
-            contains: "S1 · Analyze"
+            contains: " · Analyze"
     - id: sibling_remains_unavailable
       description: the scope omits the neighboring fixture and approval changes no files
       verify:

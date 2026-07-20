@@ -5,7 +5,7 @@ intent: |
     a reader can search the safe transcript projection, navigate matches, and
     close search without changing an existing draft or paused reading intent.
 target:
-    cmd: ["./bin/local-agent", "--resume", "S41"]
+    cmd: ["./bin/local-agent", "--resume", "c0ffee1"]
     cwd: "."
     env:
         HOME: "${projectRoot}/.glyphrun/tmp/transcript-search-home"

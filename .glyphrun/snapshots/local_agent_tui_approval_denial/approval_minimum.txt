@@ -1,4 +1,3 @@
-  │ Checking workspace
   │ policy before the
   │ write.
 
@@ -6,6 +5,7 @@
   Action Write 19 B
   Target …/approval-probe.txt
   › n deny · y once
-    s identical/session
+  s same/session · a…
+  p path · approval-pro…
   esc cancel turn · enter
   pgdn more · d arguments

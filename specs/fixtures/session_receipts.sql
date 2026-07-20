@@ -1,7 +1,7 @@
 PRAGMA foreign_keys = ON;
 
 INSERT INTO sessions (
-    id, title, model, mode, workspace_id, created_at, updated_at
+    id, title, model, mode, workspace_id, created_at, updated_at, public_id
 ) VALUES (
     41,
     'Recovery receipt review',
@@ -9,7 +9,8 @@ INSERT INTO sessions (
     'BUILD',
     '__PROJECT_ROOT__',
     '2026-07-11T12:00:00.000Z',
-    '2026-07-11T12:00:00.000Z'
+    '2026-07-11T12:00:00.000Z',
+    'c0ffee1'
 );
 
 INSERT INTO session_state (session_id, state_json, updated_at) VALUES (

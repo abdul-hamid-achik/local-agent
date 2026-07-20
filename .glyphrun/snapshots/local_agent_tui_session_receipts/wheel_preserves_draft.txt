@@ -10,8 +10,8 @@
     The read completed, the test failure is visible, and the interrupted effect needs
     inspection.
 
-  notice · Restored session S41 · Recovery receipt review
+  notice · Restored session <session> · Recovery receipt review
 
 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
-  S41 · Recovery receipt review · Follow paused · end latest
+  <session> · Recovery receipt review · Follow paused · end latest
 ▏❯ draft must stay unchanged while the transcript scrolls
