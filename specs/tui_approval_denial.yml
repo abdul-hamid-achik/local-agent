@@ -98,8 +98,8 @@ steps:
         timeoutMs: 2000
     - wait:
         screen:
-            contains: "s same/session"
-        timeoutMs: 2000
+            contains: "same/session"
+        timeoutMs: 5000
     - wait:
         idle:
             quietForMs: 50

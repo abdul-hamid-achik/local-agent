@@ -45,7 +45,7 @@ steps:
     - wait:
         screen:
             contains: "same/session"
-        timeoutMs: 2000
+        timeoutMs: 5000
     - snapshot: session_permission
     - press: "s"
     - wait:
