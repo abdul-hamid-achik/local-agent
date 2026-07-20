@@ -458,11 +458,60 @@ func TestMCPServerScopeFailsClosedOutsideProfile(t *testing.T) {
 func TestToolResultContextCapIsBoundedAndUTF8Safe(t *testing.T) {
 	result := strings.Repeat("界", 10_000)
 	got := capToolResultForContext(result, 4096)
-	if len(got) > 8*1024 {
-		t.Fatalf("tool result cap = %d bytes", len(got))
+	// 4k windows use the tighter small-window budget (numCtx/12 tokens * 4 bytes).
+	if want := toolResultByteLimit(4096); len(got) > want {
+		t.Fatalf("tool result cap = %d bytes, want <= %d", len(got), want)
 	}
 	if !utf8.ValidString(got) || !strings.Contains(got, "truncated") {
 		t.Fatalf("capped result is invalid or undisclosed: %q", got[len(got)-80:])
+	}
+}
+
+func TestToolResultByteLimitScalesWithContextWindow(t *testing.T) {
+	// 16k must not equate tokens to bytes 1:1 (that allowed ~16KB ≈ 4k tokens
+	// per result and blew after_tools admission on ornith-sized windows).
+	if got := toolResultByteLimit(16_384); got >= 16_384 {
+		t.Fatalf("16k byte limit = %d, want a fraction of the window", got)
+	}
+	if got := toolResultByteLimit(16_384); got != 8_192 {
+		t.Fatalf("16k byte limit = %d, want 8192 (numCtx/8 tokens * 4)", got)
+	}
+	if got := toolResultByteLimit(4_096); got != 2_048 {
+		t.Fatalf("4k byte limit = %d, want 2048 floor/small-window budget", got)
+	}
+	if got := toolResultByteLimit(131_072); got != 65_536 {
+		t.Fatalf("128k byte limit = %d, want 65536", got)
+	}
+}
+
+func TestShrinkToolResultsForContextRecoversOversizedHistory(t *testing.T) {
+	ag := New(nil, nil, 16_384)
+	// Simulate the 68b9f1a failure shape: several large recent tool receipts
+	// already past the ordinary per-result cap floor of a prior looser policy.
+	large := strings.Repeat("x", 16_000)
+	ag.AppendMessage(llm.Message{Role: "user", Content: "review the tests"})
+	ag.AppendMessage(llm.Message{Role: "assistant", Content: "", ToolCalls: []llm.ToolCall{{ID: "c1", Name: "read"}}})
+	ag.AppendMessage(llm.Message{Role: "tool", Content: large, ToolName: "read", ToolCallID: "c1"})
+	ag.AppendMessage(llm.Message{Role: "tool", Content: large, ToolName: "read", ToolCallID: "c2"})
+
+	if !ag.shrinkToolResultsForContext(16_384) {
+		t.Fatal("expected tool results to shrink")
+	}
+	limit := emergencyToolResultByteLimit(16_384)
+	for _, msg := range ag.Messages() {
+		if msg.Role != "tool" {
+			continue
+		}
+		if len(msg.Content) > limit {
+			t.Fatalf("tool content still %d bytes, want <= %d", len(msg.Content), limit)
+		}
+		if !strings.Contains(msg.Content, "truncated") {
+			t.Fatalf("shrunk tool result missing marker: %q", msg.Content[len(msg.Content)-80:])
+		}
+	}
+	// A second pass is a no-op once content is at the emergency ceiling.
+	if ag.shrinkToolResultsForContext(16_384) {
+		t.Fatal("second shrink should not change already-capped results")
 	}
 }
 

@@ -995,6 +995,87 @@ func TestRunTurnWithLimitsRejectsOversizedToolResultBeforeSecondProviderCall(t *
 	}
 }
 
+// multiLargeReadClient mimics session 68b9f1a: several large read-like tool
+// results on a 16k window, then a final textual answer if admission allows.
+type multiLargeReadClient struct {
+	calls atomic.Int64
+}
+
+func (c *multiLargeReadClient) ChatStream(_ context.Context, _ llm.ChatOptions, emit func(llm.StreamChunk) error) error {
+	call := c.calls.Add(1)
+	switch call {
+	case 1:
+		// Distinct paths so the host does not suppress identical read-only
+		// builtins; each result still expands to a legacy-sized payload.
+		return emit(llm.StreamChunk{
+			Done: true, EvalCount: 40, PromptEvalCount: 6_000,
+			ToolCalls: []llm.ToolCall{
+				{ID: "r1", Name: "exists", Arguments: map[string]any{"path": "."}},
+				{ID: "r2", Name: "exists", Arguments: map[string]any{"path": "a"}},
+				{ID: "r3", Name: "exists", Arguments: map[string]any{"path": "b"}},
+			},
+		})
+	case 2:
+		return emit(llm.StreamChunk{Text: "review complete", Done: true, EvalCount: 20, PromptEvalCount: 9_000})
+	default:
+		return fmt.Errorf("unexpected provider request %d", call)
+	}
+}
+
+func (*multiLargeReadClient) Ping() error   { return nil }
+func (*multiLargeReadClient) Model() string { return "ornith-like-16k" }
+func (*multiLargeReadClient) NumCtx() int   { return 16_384 }
+func (*multiLargeReadClient) Embed(context.Context, string, []string) ([][]float32, error) {
+	return nil, nil
+}
+
+// expandToLegacyLooseCapHook inflates each tool result to the old 1:1
+// tokens≈bytes ceiling (~16KB on a 16k window) that used to trip after_tools.
+type expandToLegacyLooseCapHook struct{}
+
+func (*expandToLegacyLooseCapHook) Name() string { return "expand-legacy-loose-cap" }
+func (*expandToLegacyLooseCapHook) PreToolUse(context.Context, *llm.ToolCall) (bool, string) {
+	return false, ""
+}
+func (*expandToLegacyLooseCapHook) PostToolUse(_ context.Context, _ llm.ToolCall, result *string, _ bool) {
+	*result = strings.Repeat("legacy-large-read-payload ", 700) // ~16KB
+}
+
+func TestRunContinuesAfterMultipleLargeToolResultsOn16kWindow(t *testing.T) {
+	client := &multiLargeReadClient{}
+	ag := New(client, nil, 16_384)
+	ag.SetWorkDir(t.TempDir())
+	ag.SetModeContext("test", NewToolPolicy([]string{"exists"}, nil, false))
+	ag.AddToolHook(&expandToLegacyLooseCapHook{})
+	ag.AddUserMessage("review the codebase tests and give a short opinion")
+	output := &contextBudgetOutput{}
+
+	err := ag.Run(context.Background(), output)
+	if err != nil {
+		t.Fatalf("turn failed under proportional tool caps: %v (errors=%#v)", err, output.errors)
+	}
+	if calls := client.calls.Load(); calls != 2 {
+		t.Fatalf("provider calls = %d, want 2 (tool round + final answer)", calls)
+	}
+	// Each inflated result must have been capped well below the old 16KB ceiling.
+	capLimit := toolResultByteLimit(16_384)
+	large := 0
+	for _, msg := range ag.Messages() {
+		if msg.Role != "tool" {
+			continue
+		}
+		if len(msg.Content) > capLimit {
+			t.Fatalf("tool content %d bytes exceeds proportional cap %d", len(msg.Content), capLimit)
+		}
+		if strings.Contains(msg.Content, "truncated") {
+			large++
+		}
+	}
+	if large < 3 {
+		t.Fatalf("truncated large tool results = %d, want 3", large)
+	}
+}
+
 func TestRunRejectsUncompactableToolResultBeforeSecondProviderCall(t *testing.T) {
 	client := &aggregateToolResultClient{}
 	agent := New(client, nil, 1_200)

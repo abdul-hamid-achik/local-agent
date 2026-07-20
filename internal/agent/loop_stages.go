@@ -161,6 +161,14 @@ func (t *turnRuntime) admitSystemPrompt(ctx context.Context) error {
 	}
 	estimated = t.estimatedPromptTokens()
 	if shouldCompactForContext(estimated, t.turnNumCtx) {
+		// Compaction keeps the newest messages intact. Recent oversized tool
+		// receipts can still trip the threshold; shrink them before hard-fail.
+		if t.a.shrinkToolResultsForContext(t.turnNumCtx) {
+			estimated = t.estimatedPromptTokens()
+			if !shouldCompactForContext(estimated, t.turnNumCtx) {
+				return nil
+			}
+		}
 		return t.rejectContextPrompt(estimated, false)
 	}
 	return nil
@@ -349,6 +357,20 @@ func (t *turnRuntime) settleIteration(ctx context.Context, i int, toolCallCount 
 				estimatedPromptTokens = receiptFloor
 			}
 			if shouldCompactForContext(estimatedPromptTokens, t.turnNumCtx) {
+				// keepMessages leaves the newest tool receipts intact. When those
+				// receipts are what blew the budget (large reads on 16k windows),
+				// shrink them in place before hard-rejecting the turn. Re-estimate
+				// from the shrunk history only — provider/receipt floors describe
+				// the pre-shrink prompt and must not undo the recovery.
+				if t.a.shrinkToolResultsForContext(t.turnNumCtx) {
+					if t.lg != nil {
+						t.lg.Info("tool result shrink", "phase", "after_tools", "iter", i, "num_ctx", t.turnNumCtx)
+					}
+					estimatedPromptTokens = t.a.estimatePromptTokens(t.system, t.tools)
+					if !shouldCompactForContext(estimatedPromptTokens, t.turnNumCtx) {
+						return nil
+					}
+				}
 				return t.rejectContextPrompt(estimatedPromptTokens, false, "phase", "after_tools", "iter", i)
 			}
 		}

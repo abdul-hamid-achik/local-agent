@@ -50,26 +50,91 @@ func chargeUnknownEvalReservation(out Output, requestLimit int, reported int64) 
 	return missing
 }
 
-func capToolResultForContext(result string, numCtx int) string {
+// toolResultByteLimit returns the maximum UTF-8 byte length admitted for one
+// tool result under a context window of numCtx tokens.
+//
+// The old 1:1 mapping of tokens→bytes let a single read claim the whole window
+// on 16k models (numCtx bytes ≈ numCtx/4 tokens). The chars/4 admission
+// estimate treats ~4 ASCII bytes as one token, so the byte budget is
+// tokenBudget*4. Per-result budget is a fraction of the window so a few
+// concurrent reads cannot exhaust the 25% generation reserve.
+func toolResultByteLimit(numCtx int) int {
 	if numCtx <= 0 {
-		return result
+		return 0
 	}
-	limit := numCtx
+	// Default: 1/8 of the window per result. On small windows, tighten to 1/12
+	// so host prompt + a few tools still leave generation headroom.
+	tokenBudget := numCtx / 8
+	if numCtx <= 8_192 {
+		tokenBudget = numCtx / 12
+	}
+	if tokenBudget < 512 {
+		tokenBudget = 512
+	}
+	limit := tokenBudget * 4
 	if limit < 2*1024 {
 		limit = 2 * 1024
 	}
 	if limit > 96*1024 {
 		limit = 96 * 1024
 	}
-	const marker = "\n... [tool result truncated to protect model context]"
-	if len(result) <= limit {
+	return limit
+}
+
+// emergencyToolResultByteLimit is a tighter post-compaction ceiling used when
+// the ordinary per-result cap still left the prompt over the admission
+// threshold (common after several large reads on 16k windows).
+func emergencyToolResultByteLimit(numCtx int) int {
+	limit := toolResultByteLimit(numCtx) / 2
+	if limit < 1024 {
+		limit = 1024
+	}
+	return limit
+}
+
+func capToolResultForContext(result string, numCtx int) string {
+	return capToolResultToByteLimit(result, toolResultByteLimit(numCtx))
+}
+
+func capToolResultToByteLimit(result string, limit int) string {
+	if limit <= 0 || len(result) <= limit {
 		return result
 	}
+	const marker = "\n... [tool result truncated to protect model context]"
 	cut := limit - len(marker)
+	if cut < 0 {
+		cut = 0
+	}
 	for cut > 0 && !utf8.ValidString(result[:cut]) {
 		cut--
 	}
 	return result[:cut] + marker
+}
+
+// shrinkToolResultsForContext re-caps tool-role messages already in history to
+// a tighter byte limit. Compaction keeps the newest messages intact, so large
+// recent tool receipts can still trip after_tools admission; this is the
+// fail-soft path before hard-rejecting the turn. Returns true when any content
+// shrank.
+func (a *Agent) shrinkToolResultsForContext(numCtx int) bool {
+	limit := emergencyToolResultByteLimit(numCtx)
+	if limit <= 0 {
+		return false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	shrunk := false
+	for i := range a.messages {
+		if a.messages[i].Role != "tool" {
+			continue
+		}
+		capped := capToolResultToByteLimit(a.messages[i].Content, limit)
+		if capped != a.messages[i].Content {
+			a.messages[i].Content = capped
+			shrunk = true
+		}
+	}
+	return shrunk
 }
 
 func (a *Agent) estimatePromptTokens(system string, tools []llm.ToolDef) int {
