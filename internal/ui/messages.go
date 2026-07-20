@@ -343,3 +343,10 @@ type modelLoadCheckMsg struct {
 	Running bool
 	Detail  string
 }
+
+// systemNoticeMsg appends a system or error entry to the transcript from
+// an async operation (e.g. MCP reconnect).
+type systemNoticeMsg struct {
+	Text    string
+	IsError bool
+}

@@ -125,6 +125,7 @@ func (m *Model) commandMCPServers() []command.ServerInfo {
 	for _, server := range m.mcpServers {
 		servers = append(servers, command.ServerInfo{
 			Name: server.Name, Connected: server.Connected, ToolCount: server.ToolCount,
+			Detail: server.Detail,
 		})
 	}
 	return servers

@@ -818,6 +818,45 @@ func (a *Agent) ServerNames() []string {
 	return a.registry.ServerNames()
 }
 
+// ReconnectMCPServer attempts to reconnect a named MCP server and returns
+// the number of tools discovered on success.
+func (a *Agent) ReconnectMCPServer(ctx context.Context, name string) (int, error) {
+	if a.registry == nil {
+		return 0, fmt.Errorf("no MCP registry configured")
+	}
+	return a.registry.ReconnectServer(ctx, name)
+}
+
+// MCPToolSummary is a bounded, read-only view of one MCP tool for /tools.
+type MCPToolSummary struct {
+	Name        string
+	Description string
+	Server      string
+}
+
+// MCPToolSummaries returns a bounded list of discovered MCP tools with
+// their server origin parsed from the namespaced name.
+func (a *Agent) MCPToolSummaries() []MCPToolSummary {
+	tools := a.mcpTools()
+	summaries := make([]MCPToolSummary, 0, len(tools))
+	for _, td := range tools {
+		server := ""
+		if idx := strings.Index(td.Name, "__"); idx > 0 {
+			server = td.Name[:idx]
+		}
+		desc := td.Description
+		if len(desc) > 80 {
+			desc = desc[:77] + "..."
+		}
+		summaries = append(summaries, MCPToolSummary{
+			Name:        td.Name,
+			Description: desc,
+			Server:      server,
+		})
+	}
+	return summaries
+}
+
 // SetWorkspacePolicy atomically updates the workspace boundary and its ignore
 // policy for the next turn. Embeddings that reload both values should prefer
 // this method so a turn cannot snapshot a mixed pair between two setter calls.

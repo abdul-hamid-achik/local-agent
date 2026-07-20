@@ -42,6 +42,8 @@ type Context struct {
 	// Memory store summary for the /memory command.
 	Memories     []MemoryInfo
 	MemoryCount  int
+	// MCP tool summaries for the /tools command.
+	MCPTools []ToolSummary
 	// Token stats
 	SessionEvalTotal   int
 	SessionPromptTotal int
@@ -103,6 +105,13 @@ type MemoryInfo struct {
 	Auto    bool // true if extracted automatically by ICE
 }
 
+// ToolSummary is a bounded, read-only view of one MCP tool for /tools.
+type ToolSummary struct {
+	Name        string
+	Description string
+	Server      string
+}
+
 // ServerInfo is the bounded, read-only MCP connection projection exposed to
 // slash commands. It intentionally excludes transport error strings so command
 // output can be persisted without retaining raw server failures.
@@ -110,6 +119,7 @@ type ServerInfo struct {
 	Name      string
 	Connected bool
 	ToolCount int
+	Detail    string // last error or status detail (bounded)
 }
 
 // ReadGrantInfo is the typed temporary filesystem authority shown by /scope.
@@ -179,6 +189,7 @@ const (
 	ActionForgetImageHistory        // Remove image references from active conversation history; checkpoints remain
 	ActionShowAgents                // Open the read-only agent activity hub
 	ActionDeleteMemory              // Delete one persistent memory entry (Data = id)
+	ActionMCPReconnect              // Reconnect an MCP server (Data = server name)
 )
 
 // Registry holds all registered slash commands.

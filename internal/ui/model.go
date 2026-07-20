@@ -750,6 +750,15 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 			}
 		}
 
+	case systemNoticeMsg:
+		kind := "system"
+		if msg.IsError {
+			kind = "error"
+		}
+		m.entries = append(m.entries, ChatEntry{Kind: kind, Content: msg.Text})
+		m.refreshTranscript()
+		m.resumeFollow()
+
 	case providerSwitchResultMsg:
 		cmds = m.handleProviderSwitchResult(msg, cmds)
 

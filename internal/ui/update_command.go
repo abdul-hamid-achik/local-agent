@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
@@ -96,6 +97,13 @@ func (m *Model) buildCommandContext() *command.Context {
 					Auto:    auto,
 				})
 			}
+		}
+		for _, ts := range m.agent.MCPToolSummaries() {
+			ctx.MCPTools = append(ctx.MCPTools, command.ToolSummary{
+				Name:        ts.Name,
+				Description: ts.Description,
+				Server:      ts.Server,
+			})
 		}
 	}
 
@@ -305,6 +313,24 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 		}
 		m.refreshTranscript()
 		m.resumeFollow()
+		return nil
+
+	case command.ActionMCPReconnect:
+		if m.agent != nil && result.Data != "" {
+			name := result.Data
+			agent := m.agent
+			p := m.program
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				defer cancel()
+				tools, err := agent.ReconnectMCPServer(ctx, name)
+				if err != nil {
+					sendMsg(p, systemNoticeMsg{Text: fmt.Sprintf("MCP reconnect %s: %v", name, err), IsError: true})
+				} else {
+					sendMsg(p, systemNoticeMsg{Text: fmt.Sprintf("MCP server %s reconnected · %d tools", name, tools)})
+				}
+			}()
+		}
 		return nil
 
 	case command.ActionEnableAutoModel:

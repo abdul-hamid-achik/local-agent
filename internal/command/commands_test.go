@@ -830,7 +830,7 @@ func TestBuiltinRegistrySurfaceIsUniqueAndExecutable(t *testing.T) {
 	r := newTestRegistry()
 	wantNames := []string{
 		"help", "clear", "plan", "goal", "model", "provider", "recover", "agent", "agents", "load",
-		"image", "scope", "unload", "skill", "servers", "ice", "memory", "sessions", "artifacts",
+		"image", "scope", "unload", "skill", "servers", "mcp", "tools", "ice", "memory", "sessions", "artifacts",
 		"changes", "commit", "stats", "export", "import", "checkpoint",
 		"checkpoints", "restore", "exit",
 	}

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -147,6 +148,10 @@ func (t *turnRuntime) admitToolSchemasForContext(ctx context.Context) toolAdmiss
 			"schema_tokens_before", breakdown.SchemaTokensBefore,
 			"schema_tokens_after", breakdown.SchemaTokensAfter,
 		)
+	}
+	if breakdown.OmittedTools > 0 && t.out != nil {
+		t.out.SystemMessage(fmt.Sprintf("Context pressure · %d of %d tools admitted this turn · %d omitted to fit context",
+			breakdown.AdmittedTools, breakdown.AvailableTools, breakdown.OmittedTools))
 	}
 	return breakdown
 }

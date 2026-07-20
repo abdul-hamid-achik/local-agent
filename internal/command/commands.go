@@ -504,6 +504,138 @@ func RegisterBuiltins(r *Registry) {
 	})
 
 	r.Register(&Command{
+		Name:        "mcp",
+		Description: "Manage MCP server connections",
+		Usage:       "/mcp [reconnect <name> | <name>]",
+		Handler: func(ctx *Context, args []string) Result {
+			if len(args) >= 2 && args[0] == "reconnect" {
+				name := args[1]
+				found := false
+				for _, s := range ctx.Servers {
+					if strings.EqualFold(s.Name, name) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					return Result{Error: fmt.Sprintf("unknown MCP server %q", name)}
+				}
+				return Result{Action: ActionMCPReconnect, Data: name, Text: fmt.Sprintf("Reconnecting %s…", name)}
+			}
+			if len(args) == 1 {
+				name := args[0]
+				for _, s := range ctx.Servers {
+					if strings.EqualFold(s.Name, name) {
+						var b strings.Builder
+						fmt.Fprintf(&b, "MCP server: %s\n", s.Name)
+						if s.Connected {
+							fmt.Fprintf(&b, "  Status: connected · %d tools\n", s.ToolCount)
+						} else {
+							b.WriteString("  Status: unavailable\n")
+						}
+						if s.Detail != "" {
+							fmt.Fprintf(&b, "  Detail: %s\n", s.Detail)
+						}
+						if !s.Connected {
+							b.WriteString("\nReconnect with: /mcp reconnect " + s.Name)
+						}
+						return Result{Text: b.String()}
+					}
+				}
+				return Result{Error: fmt.Sprintf("unknown MCP server %q", name)}
+			}
+			if len(args) > 0 {
+				return Result{Error: "usage: /mcp [reconnect <name> | <name>]"}
+			}
+			if len(ctx.Servers) == 0 {
+				return Result{Text: "No MCP servers configured. Add servers in local-agent.yaml or the XDG config."}
+			}
+			servers := append([]ServerInfo(nil), ctx.Servers...)
+			sort.SliceStable(servers, func(i, j int) bool {
+				return strings.ToLower(servers[i].Name) < strings.ToLower(servers[j].Name)
+			})
+			var b strings.Builder
+			connected := 0
+			for _, s := range servers {
+				if s.Connected {
+					connected++
+				}
+			}
+			fmt.Fprintf(&b, "MCP servers · %d/%d connected\n\n", connected, len(servers))
+			for _, s := range servers {
+				if s.Connected {
+					fmt.Fprintf(&b, "  ✓ %s · %d tools\n", s.Name, s.ToolCount)
+				} else {
+					fmt.Fprintf(&b, "  ✗ %s · unavailable", s.Name)
+					if s.Detail != "" {
+						detail := s.Detail
+						if len(detail) > 60 {
+							detail = detail[:57] + "..."
+						}
+						fmt.Fprintf(&b, " · %s", detail)
+					}
+					b.WriteString("\n")
+				}
+			}
+			b.WriteString("\nDetails: /mcp <name> · Reconnect: /mcp reconnect <name>")
+			return Result{Text: b.String()}
+		},
+	})
+
+	r.Register(&Command{
+		Name:        "tools",
+		Description: "Browse discovered MCP tools",
+		Usage:       "/tools [server]",
+		Handler: func(ctx *Context, args []string) Result {
+			if len(args) > 1 {
+				return Result{Error: "usage: /tools [server]"}
+			}
+			tools := ctx.MCPTools
+			if len(args) == 1 {
+				server := args[0]
+				var filtered []ToolSummary
+				for _, t := range tools {
+					if strings.EqualFold(t.Server, server) {
+						filtered = append(filtered, t)
+					}
+				}
+				tools = filtered
+				if len(tools) == 0 {
+					return Result{Text: fmt.Sprintf("No tools discovered for server %q.", server)}
+				}
+			}
+			if len(tools) == 0 {
+				return Result{Text: "No MCP tools discovered. Connect MCP servers first (/mcp)."}
+			}
+			sort.SliceStable(tools, func(i, j int) bool {
+				if tools[i].Server != tools[j].Server {
+					return tools[i].Server < tools[j].Server
+				}
+				return tools[i].Name < tools[j].Name
+			})
+			var b strings.Builder
+			fmt.Fprintf(&b, "MCP tools (%d discovered)\n\n", len(tools))
+			currentServer := ""
+			for _, t := range tools {
+				if t.Server != currentServer {
+					currentServer = t.Server
+					fmt.Fprintf(&b, "  [%s]\n", currentServer)
+				}
+				name := t.Name
+				if idx := strings.Index(name, "__"); idx > 0 {
+					name = name[idx+2:]
+				}
+				if t.Description != "" {
+					fmt.Fprintf(&b, "    %s — %s\n", name, t.Description)
+				} else {
+					fmt.Fprintf(&b, "    %s\n", name)
+				}
+			}
+			return Result{Text: b.String()}
+		},
+	})
+
+	r.Register(&Command{
 		Name:        "ice",
 		Description: "Show Infinite Context Engine status",
 		Usage:       "/ice",
