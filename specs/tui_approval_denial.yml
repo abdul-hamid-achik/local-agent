@@ -96,10 +96,12 @@ steps:
         screen:
             contains: "Action Write 19 B"
         timeoutMs: 2000
+    # At 30x12 the choice row truncates "same/session" to "s …"; keep waits that
+    # still appear after the compact reflow.
     - wait:
         screen:
-            contains: "same/session"
-        timeoutMs: 5000
+            contains: "n deny"
+        timeoutMs: 2000
     - wait:
         idle:
             quietForMs: 50
