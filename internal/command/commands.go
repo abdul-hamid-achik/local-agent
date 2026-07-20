@@ -16,6 +16,7 @@ func RegisterBuiltins(r *Registry) {
 	registerGoalActions(r)
 	registerScopeActions(r)
 	registerImageActions(r)
+	registerPermissionsActions(r)
 
 	r.Register(&Command{
 		Name:        "help",
@@ -402,6 +403,130 @@ func RegisterBuiltins(r *Registry) {
 				return Result{Action: spec.Action}
 			default:
 				return Result{Error: "unsupported scope action"}
+			}
+		},
+	})
+
+	r.Register(&Command{
+		Name:        "permissions",
+		Aliases:     []string{"perms"},
+		Description: "Show approval posture, session grants, and workspace rules",
+		Usage:       "/permissions [panel|export [path]|import [--replace] <path>|accept-edits on|off|clear|clear-rules|revoke|allow-*|forget-*]",
+		Handler: func(ctx *Context, args []string) Result {
+			if ctx == nil {
+				ctx = &Context{}
+			}
+			if len(args) == 0 || (len(args) == 1 && (args[0] == "list" || args[0] == "ls" || args[0] == "status" || args[0] == "rules")) {
+				return Result{Text: formatPermissionsStatus(ctx)}
+			}
+			if args[0] == "panel" || args[0] == "ui" || args[0] == "manage" {
+				if len(args) != 1 {
+					return Result{Error: "usage: /permissions panel"}
+				}
+				return Result{Action: ActionPermissionsPanel}
+			}
+			if args[0] == "export" {
+				path := ""
+				if len(args) > 1 {
+					path = strings.Join(args[1:], " ")
+				}
+				return Result{Action: ActionPermissionsExport, Data: path}
+			}
+			if args[0] == "import" {
+				if len(args) < 2 {
+					return Result{Error: "usage: /permissions import [--replace] <path>"}
+				}
+				replace := false
+				rest := args[1:]
+				if rest[0] == "--replace" || rest[0] == "replace" {
+					replace = true
+					rest = rest[1:]
+				}
+				if len(rest) == 0 {
+					return Result{Error: "usage: /permissions import [--replace] <path>"}
+				}
+				path := strings.Join(rest, " ")
+				data := path
+				if replace {
+					data = "replace|" + path
+				}
+				return Result{Action: ActionPermissionsImport, Data: data}
+			}
+			if args[0] == "clear-rules" {
+				if len(args) != 1 {
+					return Result{Error: "usage: /permissions clear-rules"}
+				}
+				return Result{Action: ActionPermissionsClearRules}
+			}
+			// accept-edits on|off is a two-token form handled before action match
+			// so "on"/"off" are not registered as independent slash actions.
+			if args[0] == "accept-edits" || args[0] == "accept_edits" {
+				if len(args) != 2 {
+					return Result{Error: "usage: /permissions accept-edits on|off"}
+				}
+				switch strings.ToLower(strings.TrimSpace(args[1])) {
+				case "on", "true", "1":
+					return Result{Action: ActionPermissionsAcceptEdits, Data: "on"}
+				case "off", "false", "0":
+					return Result{Action: ActionPermissionsAcceptEdits, Data: "off"}
+				default:
+					return Result{Error: "usage: /permissions accept-edits on|off"}
+				}
+			}
+			// allow-bash / forget-bash / allow-path take the remainder (may contain spaces).
+			switch args[0] {
+			case "allow-bash":
+				if len(args) < 2 {
+					return Result{Error: "usage: /permissions allow-bash <pattern>  (e.g. go test  or  git status *)"}
+				}
+				return Result{Action: ActionPermissionsAllowBash, Data: strings.Join(args[1:], " ")}
+			case "forget-bash":
+				if len(args) < 2 {
+					return Result{Error: "usage: /permissions forget-bash <pattern>"}
+				}
+				return Result{Action: ActionPermissionsForgetBash, Data: strings.Join(args[1:], " ")}
+			case "allow-mcp":
+				if len(args) != 2 {
+					return Result{Error: "usage: /permissions allow-mcp <server__tool>"}
+				}
+				return Result{Action: ActionPermissionsAllowMCP, Data: strings.TrimSpace(args[1])}
+			case "forget-mcp":
+				if len(args) != 2 {
+					return Result{Error: "usage: /permissions forget-mcp <server__tool>"}
+				}
+				return Result{Action: ActionPermissionsForgetMCP, Data: strings.TrimSpace(args[1])}
+			case "allow-path":
+				if len(args) < 2 {
+					return Result{Error: "usage: /permissions allow-path <path>"}
+				}
+				return Result{Action: ActionPermissionsAllowPath, Data: strings.Join(args[1:], " ")}
+			case "forget-path":
+				if len(args) < 2 {
+					return Result{Error: "usage: /permissions forget-path <path>"}
+				}
+				return Result{Action: ActionPermissionsForgetPath, Data: strings.Join(args[1:], " ")}
+			}
+			spec, ok := r.MatchAction("permissions", args[0])
+			if !ok {
+				return Result{Error: "usage: /permissions [panel|export|import|accept-edits|clear|clear-rules|revoke|allow-*|forget-*]"}
+			}
+			switch spec.ID {
+			case PermissionsActionClear:
+				if len(args) != 1 {
+					return Result{Error: "usage: " + spec.CommandText()}
+				}
+				return Result{Action: spec.Action}
+			case PermissionsActionRevoke:
+				if len(args) > 2 {
+					return Result{Error: "usage: " + spec.CommandText() + " [tool]"}
+				}
+				tool := ""
+				if len(args) == 2 {
+					tool = strings.TrimSpace(args[1])
+				}
+				return Result{Action: spec.Action, Data: tool}
+			default:
+				return Result{Error: "unsupported permissions action"}
 			}
 		},
 	})
@@ -915,6 +1040,69 @@ func RegisterBuiltins(r *Registry) {
 			return Result{Action: ActionQuit}
 		},
 	})
+}
+
+func formatPermissionsStatus(ctx *Context) string {
+	if ctx == nil {
+		ctx = &Context{}
+	}
+	var b strings.Builder
+	b.WriteString("Approval posture\n")
+	switch strings.TrimSpace(ctx.ApprovalPosture) {
+	case "skip_approvals":
+		b.WriteString("  Posture: approval prompts skipped (host/tool boundaries still apply)\n")
+	case "accept_workspace_edits":
+		b.WriteString("  Posture: accept workspace edits (write/edit/mkdir auto in workspace)\n")
+	default:
+		b.WriteString("  Posture: prompted for approval-gated tools\n")
+	}
+	b.WriteString("  Toggle:  /permissions accept-edits on|off\n")
+	b.WriteString("  Panel:   /permissions panel  ·  Settings → Permissions\n")
+	b.WriteString("\n")
+	if len(ctx.SessionApprovals) == 0 {
+		b.WriteString("Session grants: none (process-local; lost on restart)\n")
+	} else {
+		fmt.Fprintf(&b, "Session grants (%d, process-local; not persisted):\n", len(ctx.SessionApprovals))
+		for _, grant := range ctx.SessionApprovals {
+			fmt.Fprintf(&b, "  - %s\n", grant)
+		}
+		b.WriteString("Revoke with: /permissions revoke [tool] · clear all: /permissions clear\n")
+	}
+	b.WriteString("\n")
+	if len(ctx.WorkspaceBashPrefixes) == 0 && len(ctx.WorkspaceMCPTools) == 0 && len(ctx.WorkspaceWritePaths) == 0 {
+		b.WriteString("Workspace rules: none\n")
+		b.WriteString("Add with: /permissions allow-bash <pattern> · allow-mcp <server__tool> · allow-path <path>\n")
+	} else {
+		b.WriteString("Workspace rules (durable for this workspace):\n")
+		if len(ctx.WorkspaceBashPrefixes) == 0 {
+			b.WriteString("  bash patterns: none\n")
+		} else {
+			b.WriteString("  bash patterns (prefix or trailing *):\n")
+			for _, prefix := range ctx.WorkspaceBashPrefixes {
+				fmt.Fprintf(&b, "    - %q\n", prefix)
+			}
+		}
+		if len(ctx.WorkspaceMCPTools) == 0 {
+			b.WriteString("  MCP tools: none\n")
+		} else {
+			b.WriteString("  MCP tools:\n")
+			for _, tool := range ctx.WorkspaceMCPTools {
+				fmt.Fprintf(&b, "    - %s\n", tool)
+			}
+		}
+		if len(ctx.WorkspaceWritePaths) == 0 {
+			b.WriteString("  write paths: none\n")
+		} else {
+			b.WriteString("  write paths (write/edit/mkdir):\n")
+			for _, path := range ctx.WorkspaceWritePaths {
+				fmt.Fprintf(&b, "    - %s\n", path)
+			}
+		}
+		b.WriteString("Remove with: /permissions forget-bash · forget-mcp · forget-path · clear-rules\n")
+	}
+	b.WriteString("\n")
+	b.WriteString("Portable transfer: /permissions export [path] · /permissions import [--replace] <path>\n")
+	return strings.TrimRight(b.String(), "\n")
 }
 
 func noArguments(args []string, usage string) string {

@@ -147,6 +147,7 @@ type Session struct {
 	WorkspaceID string `json:"workspace_id"`
 	CreatedAt   string `json:"created_at"`
 	UpdatedAt   string `json:"updated_at"`
+	PublicID    string `json:"public_id"`
 }
 
 type SessionMessage struct {

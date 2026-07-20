@@ -186,7 +186,7 @@ func TestBobWorkspaceContextCacheIsBoundedGenerationFencedAndSessionScoped(t *te
 	admission = bobContextAdmission{candidate: candidate, generation: fixture.ag.bobWorkspaceGeneration, valid: true}
 	fixture.ag.mu.RUnlock()
 	fixture.ag.settleBobContextAdmission(nil, admission, projection, receipt, ecosystem.MCPHubResultObservation{}, executionpkg.EventCompleted)
-	fixture.ag.SetExecutionSessionID(42)
+	fixture.ag.SetExecutionSessionID(42, "")
 	fixture.ag.mu.RLock()
 	leaked := fixture.ag.bobWorkspaceContext != nil
 	fixture.ag.mu.RUnlock()

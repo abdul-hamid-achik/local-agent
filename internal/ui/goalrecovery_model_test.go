@@ -63,7 +63,7 @@ func newGoalRecoveryCoordinatorFixture(t *testing.T, width, height, members int)
 	m := newGoalRuntimeTestModel(t, client)
 	m.agent.SetWorkDir(workspaceID)
 	m.agent.SetExecutionLedger(store)
-	m.agent.SetExecutionSessionID(session.ID)
+	m.agent.SetExecutionSessionID(session.ID, "")
 	m.agent.SetExecutionSnapshotCursor(0)
 	m.SetSessionStore(store)
 	m.sessionID = session.ID

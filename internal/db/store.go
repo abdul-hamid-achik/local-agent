@@ -209,7 +209,10 @@ func runMigrationFS(conn *sql.DB, source fs.ReadDirFS, directory string) error {
 	if err := ensureCheckpointWorkspaceColumn(conn); err != nil {
 		return err
 	}
-	return ensureSessionStateRevisionColumn(conn)
+	if err := ensureSessionStateRevisionColumn(conn); err != nil {
+		return err
+	}
+	return ensureSessionPublicIDs(conn)
 }
 
 func applyMigration(conn *sql.DB, name string, data []byte) error {

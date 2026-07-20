@@ -705,7 +705,7 @@ func modelWithCompletedExecution(t *testing.T) (*Model, *db.Store, execution.Eve
 	m := newTestModel(t)
 	m.agent.SetWorkDir(workspace)
 	m.agent.SetExecutionLedger(store)
-	m.agent.SetExecutionSessionID(session.ID)
+	m.agent.SetExecutionSessionID(session.ID, "")
 	m.SetSessionStore(store)
 	m.sessionID = session.ID
 	m.executionLease = lease

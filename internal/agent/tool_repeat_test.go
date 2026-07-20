@@ -56,7 +56,7 @@ func TestRunSuppressesIdenticalBuiltinReadWithoutStateChange(t *testing.T) {
 	ag.SetWorkDir(workDir)
 	ag.SetModeContext("test", BuildToolPolicy())
 	ag.SetExecutionLedger(ledger)
-	ag.SetExecutionSessionID(42)
+	ag.SetExecutionSessionID(42, "")
 	ag.AddToolHook(counter)
 	ag.AddUserMessage("Read probe.txt and report its value.")
 	out := &outputRecorder{}

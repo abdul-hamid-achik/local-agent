@@ -455,17 +455,17 @@ func (m *Model) renderWorkingLine() string {
 	if m.chatPaneWidth() >= 72 {
 		titleLimit = 24
 	}
-	sessionID := m.sessionID
+	sessionPublicID := m.sessionPublicID
 	sessionTitle := m.activeSessionTitle
 	if pending := m.pendingSessionSwitch; m.sessionLoading && pending != nil &&
 		pending.Choice != sessionSwitchUndecided && pending.LoadToken == m.sessionLoadToken {
 		// Until the tokened receipt commits, m.sessionID still names the source
 		// conversation. The activity rail must identify the target being restored,
 		// not imply that the source session is being reloaded.
-		sessionID = pending.TargetSessionID
+		sessionPublicID = pending.TargetPublicID
 		sessionTitle = pending.TargetTitle
 	}
-	session = sessionDisplayLabel(sessionID, sessionTitle, titleLimit)
+	session = sessionDisplayLabel(sessionPublicID, sessionTitle, titleLimit)
 	if session != "" {
 		selectionWidth = max(1, textWidth-lipgloss.Width(" · ")-lipgloss.Width(session))
 	}

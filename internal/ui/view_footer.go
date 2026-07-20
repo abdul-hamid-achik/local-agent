@@ -78,7 +78,7 @@ func (m *Model) renderStatusLine() string {
 			titleLimit = 24
 		}
 		return m.renderDecisionPrompt(
-			"Recovery paused", sessionDisplayLabel(m.sessionID, m.activeSessionTitle, titleLimit),
+			"Recovery paused", sessionDisplayLabel(m.sessionPublicID, m.activeSessionTitle, titleLimit),
 			keyHint{Key: "/recover", Action: "inspect"},
 		)
 	}
@@ -118,6 +118,8 @@ func (m *Model) renderStatusLine() string {
 	}
 	if m.skipApprovalsEnabled() {
 		parts = append(parts, m.styles.StatusWarning.Render("approval prompts skipped"))
+	} else if m.acceptWorkspaceEditsEnabled() {
+		parts = append(parts, m.styles.StatusWarning.Render("accept workspace edits"))
 	}
 	if !conversationStarted && noticeNeedsRecovery {
 		// Startup and recovery notices can push the empty-state hints out of a
@@ -140,7 +142,7 @@ func (m *Model) renderStatusLine() string {
 			)
 		}
 	}
-	if session := sessionDisplayLabel(m.sessionID, m.activeSessionTitle, sessionStatusTitleLimit(paneW)); session != "" {
+	if session := sessionDisplayLabel(m.sessionPublicID, m.activeSessionTitle, sessionStatusTitleLimit(paneW)); session != "" {
 		parts = append(parts, m.styles.StatusText.Render(session))
 	}
 
@@ -192,6 +194,8 @@ func (m *Model) renderStatusLine() string {
 		}
 		if m.skipApprovalsEnabled() {
 			compact = append(compact, m.styles.StatusWarning.Render("no prompts"))
+		} else if m.acceptWorkspaceEditsEnabled() {
+			compact = append(compact, m.styles.StatusWarning.Render("accept edits"))
 		}
 		if len(m.failedServers) > 0 {
 			compact = append(compact, m.styles.ErrorText.UnsetPaddingLeft().Render("MCP unavailable"))
@@ -200,7 +204,7 @@ func (m *Model) renderStatusLine() string {
 			boundary := strings.Fields(m.currentModelSurfaceLabel(true))[0]
 			compact = append(compact, m.styles.StatusText.Render(boundary))
 		}
-		if session := sessionDisplayLabel(m.sessionID, "", 0); session != "" {
+		if session := sessionDisplayLabel(m.sessionPublicID, "", 0); session != "" {
 			compact = append(compact, m.styles.StatusText.Render(session))
 		}
 		return renderPackedStatusRows(paneW, compact, separator)
@@ -246,6 +250,12 @@ func (m *Model) renderGoalFooterStatus(summary GoalSummary, paneW int) string {
 			label = "no prompts"
 		}
 		required = append(required, metadataPart{view: m.styles.StatusWarning.Render(label)})
+	} else if m.acceptWorkspaceEditsEnabled() {
+		label := "accept workspace edits"
+		if paneW < 58 {
+			label = "accept edits"
+		}
+		required = append(required, metadataPart{view: m.styles.StatusWarning.Render(label)})
 	}
 	contextStatus := m.renderContextStatus(paneW < 80)
 	contextHigh := m.numCtx > 0 && m.promptTokens*100/m.numCtx >= 75
@@ -263,7 +273,7 @@ func (m *Model) renderGoalFooterStatus(summary GoalSummary, paneW int) string {
 		}
 		required = append(required, metadataPart{view: m.styles.StatusText.Render(boundary)})
 	}
-	if session := sessionDisplayLabel(m.sessionID, "", 0); session != "" {
+	if session := sessionDisplayLabel(m.sessionPublicID, "", 0); session != "" {
 		required = append(required, metadataPart{view: m.styles.StatusText.Render(session)})
 	}
 

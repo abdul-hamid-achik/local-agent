@@ -31,6 +31,55 @@ const (
 	AuthorityAutoScoped
 )
 
+// ApprovalPosture is process-local approval UX policy on the Agent. It does
+// not replace permission deny policies or the host skip-approvals posture, and
+// it is never persisted.
+type ApprovalPosture uint8
+
+const (
+	// ApprovalPosturePrompted is the default: approval-gated tools prompt
+	// unless another authority path (AUTO scope, session grant) applies.
+	ApprovalPosturePrompted ApprovalPosture = iota
+	// ApprovalPostureAcceptWorkspaceEdits auto-approves write/edit/mkdir when
+	// the target resolves inside the workspace or an explicit write grant,
+	// including under AuthorityNormal. bash, remove, MCP, and memory stay gated.
+	ApprovalPostureAcceptWorkspaceEdits
+)
+
+// Valid reports whether posture is a supported process-local approval posture.
+func (p ApprovalPosture) Valid() bool {
+	switch p {
+	case ApprovalPosturePrompted, ApprovalPostureAcceptWorkspaceEdits:
+		return true
+	default:
+		return false
+	}
+}
+
+// SetApprovalPosture installs process-local approval UX policy. Invalid values
+// fail closed to prompted. Explicit tool denies still win.
+func (a *Agent) SetApprovalPosture(posture ApprovalPosture) {
+	if a == nil {
+		return
+	}
+	if !posture.Valid() {
+		posture = ApprovalPosturePrompted
+	}
+	a.mu.Lock()
+	a.approvalPosture = posture
+	a.mu.Unlock()
+}
+
+// ApprovalPosture returns the process-local approval UX policy.
+func (a *Agent) ApprovalPosture() ApprovalPosture {
+	if a == nil {
+		return ApprovalPosturePrompted
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.approvalPosture
+}
+
 // Valid reports whether mode is a supported host authority.
 func (mode AuthorityMode) Valid() bool {
 	switch mode {
@@ -246,6 +295,14 @@ func (a *Agent) authorityAutoApproves(mode AuthorityMode, call llm.ToolCall, kin
 		}
 		return !contract.workspaceScoped || a.mcpWorkspaceWithinAuthority(call)
 	}
+	// Process-local "accept workspace edits" posture auto-approves only the
+	// write/edit/mkdir built-ins when the path is workspace- or grant-scoped.
+	// Deny policies above still win; bash/remove/MCP/memory never qualify.
+	if a.ApprovalPosture() == ApprovalPostureAcceptWorkspaceEdits &&
+		kind == executionpkg.KindBuiltin &&
+		a.workspaceEditPathAutoApproved(call) {
+		return true
+	}
 	if mode != AuthorityAutoScoped {
 		return false
 	}
@@ -256,15 +313,7 @@ func (a *Agent) authorityAutoApproves(mode AuthorityMode, call llm.ToolCall, kin
 		}
 		switch call.Name {
 		case "write", "edit", "mkdir":
-			path, ok := call.Arguments["path"].(string)
-			if !ok || strings.TrimSpace(path) == "" {
-				return false
-			}
-			if _, err := a.resolveWorkspacePath(path); err == nil {
-				return true
-			}
-			resolved, err := a.resolveAdditionalWritePath(path)
-			return err == nil && a.additionalWriteAllowsTool(resolved, call.Name)
+			return a.workspaceEditPathAutoApproved(call)
 		case "bash":
 			command, ok := call.Arguments["command"].(string)
 			return ok && a.autoScopedCommandAllowed(command)
@@ -274,6 +323,28 @@ func (a *Agent) authorityAutoApproves(mode AuthorityMode, call llm.ToolCall, kin
 	default:
 		return false
 	}
+}
+
+// workspaceEditPathAutoApproved reports whether a write/edit/mkdir call targets
+// a path that resolves inside the active workspace or an explicit write grant.
+func (a *Agent) workspaceEditPathAutoApproved(call llm.ToolCall) bool {
+	switch call.Name {
+	case "write", "edit", "mkdir":
+	default:
+		return false
+	}
+	if strings.TrimSpace(a.activeWorkDir()) == "" {
+		return false
+	}
+	path, ok := call.Arguments["path"].(string)
+	if !ok || strings.TrimSpace(path) == "" {
+		return false
+	}
+	if _, err := a.resolveWorkspacePath(path); err == nil {
+		return true
+	}
+	resolved, err := a.resolveAdditionalWritePath(path)
+	return err == nil && a.additionalWriteAllowsTool(resolved, call.Name)
 }
 
 func (a *Agent) authorityPermissionDenied(toolName string) bool {

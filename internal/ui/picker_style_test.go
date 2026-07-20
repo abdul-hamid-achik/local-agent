@@ -84,7 +84,11 @@ func TestTransientInputsAndCompactDensitySurviveThemeChange(t *testing.T) {
 			t.Fatalf("theme change hid compact setting %q:\n%s", label, rendered)
 		}
 	}
-	// Help remains in the list; at min height it may sit one scroll step below.
+	// Permissions/Help may sit one scroll step below at min height.
+	m.settingsPickerState.List.Select(int(settingsPermissions))
+	if !strings.Contains(m.renderSettingsPicker(), "Permissions") {
+		t.Fatalf("Permissions setting missing after scroll:\n%s", m.renderSettingsPicker())
+	}
 	m.settingsPickerState.List.Select(int(settingsHelp))
 	if !strings.Contains(m.renderSettingsPicker(), "Help") {
 		t.Fatalf("Help setting missing after scroll:\n%s", m.renderSettingsPicker())

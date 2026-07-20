@@ -102,7 +102,7 @@ func (m *Model) renderFollowPausedStatus(width int) string {
 	if width >= 72 {
 		titleLimit = 24
 	}
-	session := sessionDisplayLabel(m.sessionID, m.activeSessionTitle, titleLimit)
+	session := sessionDisplayLabel(m.sessionPublicID, m.activeSessionTitle, titleLimit)
 	base := []string{
 		"Follow paused · end latest",
 		"Paused · end latest",

@@ -369,7 +369,7 @@ func TestContinuationHistoryResetsAtConversationSessionAndWorkspaceBoundaries(t 
 		reset func(*Agent)
 	}{
 		{name: "replace conversation", reset: func(agent *Agent) { agent.ReplaceMessages(nil) }},
-		{name: "change durable session", reset: func(agent *Agent) { agent.SetExecutionSessionID(42) }},
+		{name: "change durable session", reset: func(agent *Agent) { agent.SetExecutionSessionID(42, "") }},
 		{name: "change workspace", reset: func(agent *Agent) { agent.SetWorkspacePolicy("/other-repo", "") }},
 	}
 	for _, test := range tests {

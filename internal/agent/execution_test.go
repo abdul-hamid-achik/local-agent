@@ -156,7 +156,7 @@ func newLedgerAgent(t *testing.T, client llm.Client, registry *mcp.Registry, led
 	ag.SetModeContext("test", BuildToolPolicy())
 	ag.SetPermissionChecker(permission.NewChecker(nil, true))
 	ag.SetExecutionLedger(ledger)
-	ag.SetExecutionSessionID(42)
+	ag.SetExecutionSessionID(42, "")
 	ag.RequireExecutionLedger(true)
 	ag.AddUserMessage("execute the test tool")
 	return ag, workDir
@@ -552,7 +552,7 @@ func TestExecutionLedgerPreservesDuplicateProviderIDs(t *testing.T) {
 	ag.SetModeContext("test", BuildToolPolicy())
 	ag.SetPermissionChecker(permission.NewChecker(nil, true))
 	ag.SetExecutionLedger(ledger)
-	ag.SetExecutionSessionID(42)
+	ag.SetExecutionSessionID(42, "")
 	ag.RequireExecutionLedger(true)
 	ag.AddUserMessage("read both")
 	if err := ag.Run(context.Background(), &outputRecorder{}); err != nil {
@@ -764,7 +764,7 @@ func TestRecheckExecutionRecoveryRejectsActiveTurnAndSchedulesNothing(t *testing
 	ag.SetModeContext("test", BuildToolPolicy())
 	ag.SetPermissionChecker(permission.NewChecker(nil, true))
 	ag.SetExecutionLedger(ledger)
-	ag.SetExecutionSessionID(42)
+	ag.SetExecutionSessionID(42, "")
 	ag.RequireExecutionLedger(true)
 	ag.AddUserMessage("wait at recovery query")
 
@@ -1012,7 +1012,7 @@ func TestExecutionLedgerTerminalFailureStopsBatchAndLatchesSession(t *testing.T)
 		t.Fatalf("provider resumed in latched session: calls=%d", client.calls)
 	}
 
-	ag.SetExecutionSessionID(43)
+	ag.SetExecutionSessionID(43, "")
 	if err := ag.Run(context.Background(), &outputRecorder{}); err != nil {
 		t.Fatalf("new session did not clear terminal latch: %v", err)
 	}
@@ -1080,7 +1080,7 @@ func TestRequireExecutionLedgerFailsBeforeProviderWithoutLedger(t *testing.T) {
 	ag := New(client, nil, 4096)
 	ag.SetWorkDir(t.TempDir())
 	ag.RequireExecutionLedger(true)
-	ag.SetExecutionSessionID(42)
+	ag.SetExecutionSessionID(42, "")
 	ag.AddUserMessage("hello")
 	err := ag.Run(context.Background(), &outputRecorder{})
 	if !errors.Is(err, ErrExecutionLedgerRequired) {
@@ -1114,7 +1114,7 @@ func TestExecutionLedgerDBStoreConformsToAgentContract(t *testing.T) {
 	ag.SetModeContext("test", BuildToolPolicy())
 	ag.SetPermissionChecker(permission.NewChecker(nil, true))
 	ag.SetExecutionLedger(store)
-	ag.SetExecutionSessionID(session.ID)
+	ag.SetExecutionSessionID(session.ID, "")
 	ag.RequireExecutionLedger(true)
 	ag.AddUserMessage("write")
 	if err := ag.Run(context.Background(), &outputRecorder{}); err != nil {

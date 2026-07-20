@@ -1,8 +1,11 @@
 -- name: CreateSession :one
-INSERT INTO sessions (title, model, mode, workspace_id) VALUES (?, ?, ?, ?) RETURNING *;
+INSERT INTO sessions (title, model, mode, workspace_id, public_id) VALUES (?, ?, ?, ?, ?) RETURNING *;
 
 -- name: GetSession :one
 SELECT * FROM sessions WHERE id = ?;
+
+-- name: GetSessionByPublicID :one
+SELECT * FROM sessions WHERE public_id = ?;
 
 -- name: ListSessions :many
 SELECT * FROM sessions WHERE workspace_id = ? ORDER BY updated_at DESC, id DESC LIMIT ?;

@@ -667,7 +667,7 @@ func newAutoLoopAgent(
 	agent.SetContinuationsConfig(continuations)
 	agent.SetPermissionChecker(permission.NewChecker(nil, false))
 	agent.SetExecutionLedger(ledger)
-	agent.SetExecutionSessionID(42)
+	agent.SetExecutionSessionID(42, "")
 	agent.RequireExecutionLedger(true)
 	agent.AddUserMessage("exercise exact typed continuation handling")
 

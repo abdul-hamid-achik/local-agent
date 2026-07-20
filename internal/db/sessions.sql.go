@@ -21,7 +21,7 @@ func (q *Queries) CountSessions(ctx context.Context) (int64, error) {
 }
 
 const createSession = `-- name: CreateSession :one
-INSERT INTO sessions (title, model, mode, workspace_id) VALUES (?, ?, ?, ?) RETURNING id, title, model, mode, workspace_id, created_at, updated_at
+INSERT INTO sessions (title, model, mode, workspace_id, public_id) VALUES (?, ?, ?, ?, ?) RETURNING id, title, model, mode, workspace_id, created_at, updated_at, public_id
 `
 
 type CreateSessionParams struct {
@@ -29,6 +29,7 @@ type CreateSessionParams struct {
 	Model       string `json:"model"`
 	Mode        string `json:"mode"`
 	WorkspaceID string `json:"workspace_id"`
+	PublicID    string `json:"public_id"`
 }
 
 func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (Session, error) {
@@ -37,6 +38,7 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (S
 		arg.Model,
 		arg.Mode,
 		arg.WorkspaceID,
+		arg.PublicID,
 	)
 	var i Session
 	err := row.Scan(
@@ -47,6 +49,7 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (S
 		&i.WorkspaceID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PublicID,
 	)
 	return i, err
 }
@@ -101,7 +104,7 @@ func (q *Queries) DeleteSession(ctx context.Context, id int64) error {
 }
 
 const getSession = `-- name: GetSession :one
-SELECT id, title, model, mode, workspace_id, created_at, updated_at FROM sessions WHERE id = ?
+SELECT id, title, model, mode, workspace_id, created_at, updated_at, public_id FROM sessions WHERE id = ?
 `
 
 func (q *Queries) GetSession(ctx context.Context, id int64) (Session, error) {
@@ -115,6 +118,27 @@ func (q *Queries) GetSession(ctx context.Context, id int64) (Session, error) {
 		&i.WorkspaceID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PublicID,
+	)
+	return i, err
+}
+
+const getSessionByPublicID = `-- name: GetSessionByPublicID :one
+SELECT id, title, model, mode, workspace_id, created_at, updated_at, public_id FROM sessions WHERE public_id = ?
+`
+
+func (q *Queries) GetSessionByPublicID(ctx context.Context, publicID string) (Session, error) {
+	row := q.db.QueryRowContext(ctx, getSessionByPublicID, publicID)
+	var i Session
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Model,
+		&i.Mode,
+		&i.WorkspaceID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.PublicID,
 	)
 	return i, err
 }
@@ -157,7 +181,7 @@ func (q *Queries) GetSessionMessages(ctx context.Context, sessionID int64) ([]Se
 }
 
 const listSessions = `-- name: ListSessions :many
-SELECT id, title, model, mode, workspace_id, created_at, updated_at FROM sessions WHERE workspace_id = ? ORDER BY updated_at DESC, id DESC LIMIT ?
+SELECT id, title, model, mode, workspace_id, created_at, updated_at, public_id FROM sessions WHERE workspace_id = ? ORDER BY updated_at DESC, id DESC LIMIT ?
 `
 
 type ListSessionsParams struct {
@@ -182,6 +206,7 @@ func (q *Queries) ListSessions(ctx context.Context, arg ListSessionsParams) ([]S
 			&i.WorkspaceID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.PublicID,
 		); err != nil {
 			return nil, err
 		}

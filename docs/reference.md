@@ -20,7 +20,7 @@ Local Agent has three operator surfaces: the interactive TUI, human-readable hea
 | `local-agent --tools read,diff --plan --prompt "prompt"` | Narrow one headless turn to the named built-in tools |
 | `local-agent --model <name>` | Select and pin the initial Ollama model |
 | `local-agent --agent <name>` | Select the initial agent profile |
-| `local-agent --resume <S42\|42\|latest>` | Open the TUI and restore an exact or newest current-workspace session |
+| `local-agent --resume <a1b2c3d\|latest>` | Open the TUI and restore an exact or newest current-workspace session |
 | `local-agent --qwen-router` | Enable the experimental Qwen-specific router |
 | `local-agent --skip-approvals` | Skip approval prompts while preserving explicit denies and host/tool boundaries |
 | `local-agent --yolo` | Deprecated compatibility alias for `--skip-approvals` |
@@ -28,8 +28,8 @@ Local Agent has three operator surfaces: the interactive TUI, human-readable hea
 | `local-agent logs` | List recent structured logs |
 | `local-agent logs -f` | Follow the latest log |
 | `local-agent session list [--json] [--limit N]` | List sessions with short handles and titles |
-| `local-agent session export [--format jsonl\|md\|both] [--out DIR] <S42\|42>` | Export one bounded session audit projection |
-| `local-agent session repair [--json] <S42\|42>` | Repair one session projection from durable execution records |
+| `local-agent session export [--format jsonl\|md\|both] [--out DIR] <a1b2c3d>` | Export one bounded session audit projection |
+| `local-agent session repair [--json] <a1b2c3d>` | Repair one session projection from durable execution records |
 | `local-agent --version` | Print the build version |
 
 `-p` and `--prompt` are exact aliases for a human-readable convenience surface,
@@ -56,8 +56,9 @@ memory tools and MCP routes disabled. It is a tool-surface restriction, not an
 authority grant.
 
 `--resume` is interactive-only and cannot be combined with `-p` or `--prompt`.
-Session ID `42` is displayed as the short handle `S42`; session, goal, and
-recovery commands accept either spelling. JSON remains numeric. `latest`
+Sessions are displayed with a random 7-character hex handle such as `a1b2c3d`;
+session, goal, and recovery commands accept that handle. JSON remains numeric.
+`latest`
 selects the most recently updated session
 whose canonical workspace matches the startup workspace. The restore runs after
 TUI initialization and does not dispatch provider work by itself.

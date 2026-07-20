@@ -32,11 +32,12 @@ func writeSessionResumeMessage(writer io.Writer, finalModel tea.Model, runErr er
 	if !ok {
 		return
 	}
-	id, err := sessionref.Parse(strings.TrimSpace(info.Handle))
+	// Parse normalizes case; Format is the identity for a valid public id.
+	publicID, err := sessionref.Parse(strings.TrimSpace(info.Handle))
 	if err != nil {
 		return
 	}
-	handle := sessionref.Format(id)
+	handle := sessionref.Format(publicID)
 	if handle == "" {
 		return
 	}

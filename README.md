@@ -101,14 +101,14 @@ Resume an exact saved session, or the newest one for the current canonical
 workspace, when opening the interactive TUI:
 
 ```bash
-local-agent --resume S42
+local-agent --resume a1b2c3d
 local-agent --resume latest
 ```
 
-`S42` is the short display handle for durable session ID `42`; either spelling
-is accepted by session, goal, and recovery commands. Active sessions appear as
-`S42 · title` in the Runtime view and session picker, and in the TUI footer when
-the current responsive status layout has room. Titles come from the first
+Each durable session has a random 7-character hex public handle (for example
+`a1b2c3d`). Session, goal, and recovery commands accept that handle. Active
+sessions appear as `a1b2c3d · title` in the Runtime view and session picker, and
+in the TUI footer when the current responsive status layout has room. Titles come from the first
 meaningful task text. `--resume` also accepts `latest` and cannot be combined
 with headless `-p`/`--prompt`. Loading restores the saved database title and
 conversation state after TUI startup; it does not submit a prompt or
@@ -272,16 +272,24 @@ The TUI replaces the composer with an inline permission surface while keeping
 the transcript visible. It shows a bounded action preview, target or command,
 and an inline diff for supported file changes. Respond with:
 
+- `n` to deny (Enter selects deny by default)
 - `y` to allow once
-- `n` to deny
-- `s` to allow the identical request again during the current Agent process
+- `s` to allow the same request again this session (exact arguments)
+- `a` context-sensitive: tool again (`write`/`edit`/`mkdir`), bash prefix, or MCP tool again
+- `p` this path again this session (`write`/`edit`/`mkdir`)
+- `w` save durable bash prefix or MCP tool allow for this workspace
 - `d` to switch between the preview and exact arguments
 - `esc` to cancel the approval and active turn
 
 Read/search tools stay inside the workspace or an explicitly granted read scope
-but do not prompt. The `s` grant is bound to the exact canonical arguments and
-is not persisted across process restarts. There is no broad per-tool “always
-allow” choice in the TUI.
+but do not prompt. Session grants are process-local. Durable workspace rules
+(`w`, `/permissions allow-bash|allow-mcp|allow-path`, Settings → Permissions)
+live under `~/.config/local-agent/workspace-rules/` and never reintroduce a
+global tool allow policy. Bash rules accept trailing globs such as
+`git status *`. Path rules cover write/edit/mkdir for that relative path only.
+Export/import with `/permissions export|import` for portable JSON between
+machines. `/permissions accept-edits on` auto-approves workspace file edits;
+remove and memory still prompt. Explicit tool denies win.
 
 ### What local-only does not guarantee
 
@@ -572,7 +580,7 @@ ICE is still a flat JSON vector store rather than an ANN index, but its bounded 
 | `local-agent --tools read,diff --plan --prompt "prompt"` | Narrow one headless turn to the named built-in tools |
 | `local-agent --model <name>` | Select the initial model; in headless mode this prevents auto-routing |
 | `local-agent --agent <name>` | Select an initial agent profile |
-| `local-agent --resume <S42\|42\|latest>` | Open the TUI and restore an exact or newest current-workspace session |
+| `local-agent --resume <a1b2c3d\|latest>` | Open the TUI and restore an exact or newest current-workspace session |
 | `local-agent --qwen-router` | Use the experimental Qwen-specific router |
 | `local-agent --skip-approvals` | Skip approval prompts while retaining explicit denies and host/tool boundaries |
 | `local-agent --yolo` | Deprecated compatibility alias for `--skip-approvals` |
@@ -589,8 +597,8 @@ ICE is still a flat JSON vector store rather than an ANN index, but its bounded 
 | `local-agent execution recover [--json] <session-id> <execution-id>` | Inspect one outcome-unknown execution in an ordinary session without retrying it |
 | `local-agent execution recover [--json] <session-id> --all` | Inspect the complete bounded pending-reconciliation set and its exact set digest |
 | `local-agent session list [--json] [--limit N]` | List current-workspace sessions with short handles and titles |
-| `local-agent session export [--format jsonl\|md\|both] [--out DIR] <S42\|42>` | Export one bounded session audit projection |
-| `local-agent session repair [--json] <S42\|42>` | Repair one session projection from its durable execution ledger |
+| `local-agent session export [--format jsonl\|md\|both] [--out DIR] <a1b2c3d>` | Export one bounded session audit projection |
+| `local-agent session repair [--json] <a1b2c3d>` | Repair one session projection from its durable execution ledger |
 | `local-agent --version` | Print the build version |
 
 Source builds print `dev`. Tagged release artifacts print the tag version
@@ -706,7 +714,7 @@ required.
 Session snapshots preserve model-facing messages, tool-call IDs, tool cards, mode, model, profile, counters, and bounded artifact receipts. Loading one replaces both the visible transcript and the hidden model conversation. Checkpoints are validated against the active session. `/artifacts` shows only host-normalized stash URIs, counts, timestamps, hashes, and static warning flags; raw file.cheap manifests, paths, and provider prose do not enter session state.
 
 After a clean interactive exit, Local Agent restores the terminal and prints an
-exact `local-agent --resume S…` command for the active durable session. It does
+exact `local-agent --resume <handle>` command for the active durable session. It does
 not print a command for an unsaved conversation or after a failed TUI run.
 
 ### Durable goals and bounded continuation

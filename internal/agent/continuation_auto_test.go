@@ -492,7 +492,7 @@ func TestAutoContinuationHistoryResetsOnlyAtConversationSessionWorkspaceBoundari
 	}{
 		{name: "clear history", reset: func(agent *Agent) { agent.ClearHistory() }},
 		{name: "replace messages", reset: func(agent *Agent) { agent.ReplaceMessages(nil) }},
-		{name: "durable session", reset: func(agent *Agent) { agent.SetExecutionSessionID(42) }},
+		{name: "durable session", reset: func(agent *Agent) { agent.SetExecutionSessionID(42, "") }},
 		{name: "workspace policy", reset: func(agent *Agent) { agent.SetWorkspacePolicy("/other", "") }},
 		{name: "workdir", reset: func(agent *Agent) { agent.SetWorkDir("/other") }},
 	}

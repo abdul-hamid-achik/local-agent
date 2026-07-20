@@ -232,18 +232,19 @@ func TestContextUsageInComposerStatus(t *testing.T) {
 func TestComposerStatusProjectsActiveSessionHandleAndTitle(t *testing.T) {
 	m := newTestModel(t)
 	m.sessionID = 7
+	m.sessionPublicID = "aaaaaa7"
 	m.activeSessionTitle = "Polish composer wrapping"
 	m.entries = []ChatEntry{{Kind: "user", Content: "polish the composer"}}
 
 	status := m.renderStatusLine()
-	if !strings.Contains(status, "S7 · Polish composer wrapping") {
+	if !strings.Contains(status, "aaaaaa7 · Polish composer wrapping") {
 		t.Fatalf("status omitted active session identity: %q", status)
 	}
 
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 20})
 	m = updated.(*Model)
 	status = m.renderStatusLine()
-	if !strings.Contains(status, "S7") || strings.Contains(status, "Polish composer wrapping") {
+	if !strings.Contains(status, "aaaaaa7") || strings.Contains(status, "Polish composer wrapping") {
 		t.Fatalf("compact status session identity = %q, want handle without title", status)
 	}
 }

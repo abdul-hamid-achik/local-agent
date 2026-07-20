@@ -154,6 +154,14 @@ func (m *Model) restylePickerOverlays() {
 		configurePickerListGlyphProfile(&state.List, m.glyphProfile)
 		setSettingsTitleDensity(&state.List, state.Compact)
 	}
+	if state := m.permissionsPanelState; state != nil {
+		delegate := newPickerDelegate(m.isDark, state.Compact, m.glyphProfile)
+		state.List.SetDelegate(delegate)
+		state.ItemHeight = delegate.Height()
+		configurePickerList(&state.List, m.isDark, m.reducedMotion)
+		configurePickerListGlyphProfile(&state.List, m.glyphProfile)
+		setSettingsTitleDensity(&state.List, state.Compact)
+	}
 	if state := m.agentPickerState; state != nil {
 		state.List.SetDelegate(newPickerDelegate(m.isDark, false, m.glyphProfile))
 		configurePickerList(&state.List, m.isDark, m.reducedMotion)

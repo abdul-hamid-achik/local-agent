@@ -335,7 +335,7 @@ func (m *Model) blockGoalCreationDuringStandaloneRecovery() error {
 	if len(projection.Hazards) == 0 {
 		return nil
 	}
-	m.rememberStandaloneRecovery(standaloneRecoveryTarget(projection.Hazards, m.executionCursor))
+	m.rememberStandaloneRecovery(standaloneRecoveryTarget(projection.Hazards, m.executionCursor, m.sessionPublicID))
 	return errors.New(guidance)
 }
 
@@ -535,11 +535,12 @@ func (m *Model) discardExecutionSession() error {
 	deleteErr := m.sessionStore.DeleteSession(ctx, id)
 	cancel()
 	m.sessionID = 0
+	m.sessionPublicID = ""
 	m.activeSessionTitle = ""
 	m.executionCursor = 0
 	m.resetSessionStateRevision()
 	m.agent.SetCheckpointSessionID(0)
-	m.agent.SetExecutionSessionID(0)
+	m.agent.SetExecutionSessionID(0, "")
 	m.agent.SetExecutionSnapshotCursor(0)
 	return errors.Join(leaseErr, deleteErr)
 }

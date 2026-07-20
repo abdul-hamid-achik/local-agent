@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
 	"github.com/abdul-hamid-achik/local-agent/internal/execution"
+	"github.com/abdul-hamid-achik/local-agent/internal/sessionref"
 )
 
 type fakeSessionRepairStore struct {
@@ -17,6 +19,43 @@ type fakeSessionRepairStore struct {
 	leaseErr  error
 	acquired  int
 	repaired  int
+	publicID  string
+}
+
+func (s *fakeSessionRepairStore) resolvePublicID() string {
+	if s.publicID != "" {
+		return s.publicID
+	}
+	switch s.receipt.SessionID {
+	case 5:
+		return "bbbbb05"
+	default:
+		return "bbbbb17"
+	}
+}
+
+func (s *fakeSessionRepairStore) ResolveSessionRef(_ context.Context, ref string) (db.Session, error) {
+	publicID, err := sessionref.Parse(ref)
+	if err != nil {
+		return db.Session{}, err
+	}
+	id := s.receipt.SessionID
+	if id == 0 {
+		id = 17
+	}
+	pid := s.resolvePublicID()
+	if publicID != pid {
+		// Error-path tests may resolve any valid handle before the lease fails.
+		if s.leaseErr != nil || s.repairErr != nil {
+			return db.Session{ID: id, PublicID: publicID, WorkspaceID: "/workspace/repo"}, nil
+		}
+		return db.Session{}, fmt.Errorf("session %s: not found", publicID)
+	}
+	return db.Session{ID: id, PublicID: pid, WorkspaceID: s.receipt.WorkspaceID}, nil
+}
+
+func (s *fakeSessionRepairStore) SessionHandle(_ context.Context, sessionID int64) (string, error) {
+	return s.resolvePublicID(), nil
 }
 
 func (s *fakeSessionRepairStore) AcquireExecutionSessionLease(context.Context, int64, string) (*db.ExecutionSessionLease, error) {
@@ -47,7 +86,7 @@ func TestSessionRepairRendersBoundedReceipt(t *testing.T) {
 		},
 	}}
 	var stdout, stderr bytes.Buffer
-	code := handleSessionRepair(store, "/workspace/repo", []string{"S17", "--json"}, &stdout, &stderr)
+	code := handleSessionRepair(store, "/workspace/repo", []string{"bbbbb17", "--json"}, &stdout, &stderr)
 	if code != 0 || stderr.Len() != 0 {
 		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
 	}
@@ -61,17 +100,17 @@ func TestSessionRepairRendersBoundedReceipt(t *testing.T) {
 	}
 
 	stdout.Reset()
-	if code := handleSessionRepair(store, "/workspace/repo", []string{"--json", "17"}, &stdout, &stderr); code != 0 {
+	if code := handleSessionRepair(store, "/workspace/repo", []string{"--json", "bbbbb17"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("flag-first parse exit=%d stderr=%q", code, stderr.String())
 	}
 
 	stdout.Reset()
-	if code := handleSessionRepair(store, "/workspace/repo", []string{"S17"}, &stdout, &stderr); code != 0 {
+	if code := handleSessionRepair(store, "/workspace/repo", []string{"bbbbb17"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("text render exit=%d stderr=%q", code, stderr.String())
 	}
 	out := stdout.String()
 	for _, want := range []string{
-		"Repaired session S17", "cursor 3 -> 41 @ revision 9", "2 answered effect(s)", "exec_crash", "failed/unknown",
+		"Repaired session bbbbb17", "cursor 3 -> 41 @ revision 9", "2 answered effect(s)", "exec_crash", "failed/unknown",
 		"absent from the saved transcript", "already terminal", "Review the durable",
 	} {
 		if !strings.Contains(out, want) {
@@ -93,7 +132,7 @@ func TestSessionRepairReportsTruncatedTotalsAndCleanCursor(t *testing.T) {
 		}},
 	}}
 	var stdout, stderr bytes.Buffer
-	if code := handleSessionRepair(truncated, "/workspace/repo", []string{"5"}, &stdout, &stderr); code != 0 {
+	if code := handleSessionRepair(truncated, "/workspace/repo", []string{"bbbbb05"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit stderr=%q", stderr.String())
 	}
 	for _, want := range []string{"107 answered effect(s)", "...and 106 more", "durable execution ledger"} {
@@ -106,7 +145,7 @@ func TestSessionRepairReportsTruncatedTotalsAndCleanCursor(t *testing.T) {
 		SessionID: 5, SessionRevision: 2, PreviousCursor: 3, NewCursor: 9,
 	}}
 	stdout.Reset()
-	if code := handleSessionRepair(clean, "/workspace/repo", []string{"5"}, &stdout, &stderr); code != 0 {
+	if code := handleSessionRepair(clean, "/workspace/repo", []string{"bbbbb05"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("clean repair exit stderr=%q", stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "No answered effects were missing") {
@@ -132,14 +171,14 @@ func TestSessionRepairRejectsInvalidInputAndSurfacesStoreErrors(t *testing.T) {
 
 	busy := &fakeSessionRepairStore{leaseErr: errors.New("session lease is busy")}
 	stderr.Reset()
-	if code := handleSessionRepair(busy, "/workspace/repo", []string{"1"}, &stdout, &stderr); code != 1 ||
+	if code := handleSessionRepair(busy, "/workspace/repo", []string{"aaaaa11"}, &stdout, &stderr); code != 1 ||
 		!strings.Contains(stderr.String(), "session lease is busy") {
 		t.Fatalf("busy lease exit=%d stderr=%q", code, stderr.String())
 	}
 
 	refused := &fakeSessionRepairStore{repairErr: db.ErrSessionProjectionReconcileFirst}
 	stderr.Reset()
-	if code := handleSessionRepair(refused, "/workspace/repo", []string{"1"}, &stdout, &stderr); code != 1 ||
+	if code := handleSessionRepair(refused, "/workspace/repo", []string{"aaaaa11"}, &stdout, &stderr); code != 1 ||
 		!strings.Contains(stderr.String(), "pending reconciliation") {
 		t.Fatalf("reconcile-first exit=%d stderr=%q", code, stderr.String())
 	}

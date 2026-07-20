@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -190,9 +189,9 @@ func createGoalRecoveryFixture(t *testing.T, store *db.Store, workspace string, 
 	return fixture
 }
 
-func goalRecoveryApplyArgs(sessionID int64, itemID, observation, summary string) []string {
+func goalRecoveryApplyArgs(sessionPublicID, itemID, observation, summary string) []string {
 	return []string{
-		formatSessionID(sessionID), "--apply", "--item", itemID,
+		sessionref.Format(sessionPublicID), "--apply", "--item", itemID,
 		"--observation", observation, "--source", string(reconciliation.SourceOperatorObservation),
 		"--reference", "operator-check:cli", "--summary", summary,
 		"--observed-at", "2026-07-12T17:30:00Z", "--json",
@@ -279,7 +278,7 @@ func TestGoalListAndShowRenderingAndJSON(t *testing.T) {
 	if code := handleGoalList(store, workspace, nil, &stdout, &stderr); code != 0 {
 		t.Fatalf("text list code=%d stderr=%q", code, stderr.String())
 	}
-	for _, want := range []string{"SESSION", sessionref.Format(session.ID), "STATE", "A very useful Unicode 目标 goal with a compact second line"} {
+	for _, want := range []string{"SESSION", sessionref.Format(session.PublicID), "STATE", "A very useful Unicode 目标 goal with a compact second line"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("text list %q lacks %q", stdout.String(), want)
 		}
@@ -287,7 +286,7 @@ func TestGoalListAndShowRenderingAndJSON(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := handleGoalShow(store, workspace, []string{"--json", formatSessionID(session.ID)}, &stdout, &stderr); code != 0 {
+	if code := handleGoalShow(store, workspace, []string{"--json", sessionref.Format(session.PublicID)}, &stdout, &stderr); code != 0 {
 		t.Fatalf("show code=%d stderr=%q", code, stderr.String())
 	}
 	var snapshot goal.Snapshot
@@ -297,10 +296,10 @@ func TestGoalListAndShowRenderingAndJSON(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := handleGoalShow(store, workspace, []string{sessionref.Format(session.ID)}, &stdout, &stderr); code != 0 {
+	if code := handleGoalShow(store, workspace, []string{sessionref.Format(session.PublicID)}, &stdout, &stderr); code != 0 {
 		t.Fatalf("text show code=%d stderr=%q", code, stderr.String())
 	}
-	if want := "Session: " + sessionref.Format(session.ID); !strings.Contains(stdout.String(), want) {
+	if want := "Session: " + sessionref.Format(session.PublicID); !strings.Contains(stdout.String(), want) {
 		t.Fatalf("text show %q lacks %q", stdout.String(), want)
 	}
 }
@@ -445,7 +444,7 @@ func TestGoalOpenPrintsUsableShortHandleGuidance(t *testing.T) {
 	if err != nil || len(sessions) != 1 {
 		t.Fatalf("list sessions = %#v, error=%v", sessions, err)
 	}
-	handle := sessionref.Format(sessions[0].ID)
+	handle := sessionref.Format(sessions[0].PublicID)
 	if sessions[0].Title != "Inspect the release" {
 		t.Fatalf("session title = %q", sessions[0].Title)
 	}
@@ -467,7 +466,7 @@ func TestGoalOpenPrintsUsableShortHandleGuidance(t *testing.T) {
 }
 
 func TestParseGoalRunArgsAcceptsFlagsAfterSessionID(t *testing.T) {
-	for _, sessionReference := range []string{"42", "S42", "s42"} {
+	for _, sessionReference := range []string{"a1b2c3d", "A1B2C3D"} {
 		t.Run(sessionReference, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			options, code := parseGoalRunArgs([]string{
@@ -476,7 +475,7 @@ func TestParseGoalRunArgsAcceptsFlagsAfterSessionID(t *testing.T) {
 			if code != 0 {
 				t.Fatalf("parse code=%d stderr=%q", code, stderr.String())
 			}
-			if options.SessionID != 42 || options.Prompt != "continue safely" || !options.SkipApprovals || options.Model != "qwen3" || options.AgentProfile != "reviewer" {
+			if options.SessionPublicID != "a1b2c3d" || options.Prompt != "continue safely" || !options.SkipApprovals || options.Model != "qwen3" || options.AgentProfile != "reviewer" {
 				t.Fatalf("goal run options = %#v", options)
 			}
 		})
@@ -485,7 +484,7 @@ func TestParseGoalRunArgsAcceptsFlagsAfterSessionID(t *testing.T) {
 
 func TestParseGoalRunArgsRejectsMissingPrompt(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	_, code := parseGoalRunArgs([]string{"42"}, &stdout, &stderr)
+	_, code := parseGoalRunArgs([]string{"a1b2c3d"}, &stdout, &stderr)
 	if code != 2 || !strings.Contains(stderr.String(), "--prompt is required") {
 		t.Fatalf("parse code=%d stderr=%q", code, stderr.String())
 	}
@@ -538,12 +537,16 @@ func TestGoalRunExecutesAndSettlesDurableTurn(t *testing.T) {
 	if err := json.Unmarshal(openOut.Bytes(), &opened); err != nil {
 		t.Fatal(err)
 	}
+	openedSession, err := store.GetSession(context.Background(), opened.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
 
 	var usageOut, usageErr bytes.Buffer
-	if code := handleGoalRun([]string{strconv.FormatInt(opened.SessionID, 10), "--prompt", "perform one verified turn"}, &usageOut, &usageErr); code != 0 {
+	if code := handleGoalRun([]string{openedSession.PublicID, "--prompt", "perform one verified turn"}, &usageOut, &usageErr); code != 0 {
 		t.Fatalf("goal run code=%d usage stderr=%q", code, usageErr.String())
 	}
 
@@ -572,7 +575,7 @@ func TestGoalRunExecutesAndSettlesDurableTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if code := handleGoalRun([]string{strconv.FormatInt(opened.SessionID, 10), "--prompt", "try a known failing turn"}, &usageOut, &usageErr); code != 1 {
+	if code := handleGoalRun([]string{openedSession.PublicID, "--prompt", "try a known failing turn"}, &usageOut, &usageErr); code != 1 {
 		t.Fatalf("known-failure goal run code=%d, want 1", code)
 	}
 	store, err = db.Open()
@@ -645,7 +648,7 @@ func TestGoalPendingListsOnlyUnresolvedControlItems(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	if code := handleGoalPending(store, workspace, []string{"--json", sessionref.Format(session.ID)}, &stdout, &stderr); code != 0 {
+	if code := handleGoalPending(store, workspace, []string{"--json", sessionref.Format(session.PublicID)}, &stdout, &stderr); code != 0 {
 		t.Fatalf("pending code=%d stderr=%q", code, stderr.String())
 	}
 	var states []pendingControlSummary
@@ -671,7 +674,7 @@ func TestGoalPendingListsOnlyUnresolvedControlItems(t *testing.T) {
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if code := handleGoalPending(store, workspace, []string{formatSessionID(session.ID)}, &stdout, &stderr); code != 0 {
+	if code := handleGoalPending(store, workspace, []string{sessionref.Format(session.PublicID)}, &stdout, &stderr); code != 0 {
 		t.Fatalf("resolved pending code=%d stderr=%q", code, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "No pending") {
@@ -689,7 +692,7 @@ func TestGoalRecoverDryRunIsReadOnlyRedactedAndJSONStable(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	if code := handleGoalRecover(store, workspace, []string{sessionref.Format(fixture.Session.ID), "--json"}, &stdout, &stderr); code != 0 {
+	if code := handleGoalRecover(store, workspace, []string{sessionref.Format(fixture.Session.PublicID), "--json"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("dry-run code=%d stderr=%q", code, stderr.String())
 	}
 	var view goalRecoveryDryRun
@@ -719,7 +722,7 @@ func TestGoalRecoverDryRunNeverEnsuresMissingGroup(t *testing.T) {
 	workspace := "/workspace/recover-no-ensure"
 	fixture := createGoalRecoveryFixture(t, store, workspace, false, false)
 	var stdout, stderr bytes.Buffer
-	if code := handleGoalRecover(store, workspace, []string{formatSessionID(fixture.Session.ID)}, &stdout, &stderr); code != 1 {
+	if code := handleGoalRecover(store, workspace, []string{sessionref.Format(fixture.Session.PublicID)}, &stdout, &stderr); code != 1 {
 		t.Fatalf("missing-group dry-run code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	if !strings.Contains(stderr.String(), "dry-run never creates") {
@@ -739,7 +742,7 @@ func TestGoalRecoverApplyZeroToolEnsuresPausesAndExactlyReplays(t *testing.T) {
 	workspace := "/workspace/recover-zero-apply"
 	fixture := createGoalRecoveryFixture(t, store, workspace, false, false)
 	args := goalRecoveryApplyArgs(
-		fixture.Session.ID, fixture.ExpectedGroup,
+		fixture.Session.PublicID, fixture.ExpectedGroup,
 		string(reconciliation.TurnAbandonedAfterInspection), "Inspected the abandoned provider turn and found no execution lifecycle.",
 	)
 	var stdout, stderr bytes.Buffer
@@ -792,7 +795,7 @@ func TestGoalRecoverMemberThenParentGating(t *testing.T) {
 	fixture := createGoalRecoveryFixture(t, store, workspace, true, true)
 	member := fixture.Group.Members[0]
 	parentArgs := goalRecoveryApplyArgs(
-		fixture.Session.ID, fixture.Group.GroupItemID,
+		fixture.Session.PublicID, fixture.Group.GroupItemID,
 		string(reconciliation.TurnAbandonedAfterInspection), "Inspected the abandoned turn and every execution member.",
 	)
 	var stdout, stderr bytes.Buffer
@@ -804,7 +807,7 @@ func TestGoalRecoverMemberThenParentGating(t *testing.T) {
 	}
 
 	memberArgs := goalRecoveryApplyArgs(
-		fixture.Session.ID, member.ControlItemID,
+		fixture.Session.PublicID, member.ControlItemID,
 		string(reconciliation.DispositionEffectNotApplied), "Verified that the external effect was not applied.",
 	)
 	stdout.Reset()
@@ -819,7 +822,7 @@ func TestGoalRecoverMemberThenParentGating(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := handleGoalRecover(store, workspace, []string{"--json", formatSessionID(fixture.Session.ID)}, &stdout, &stderr); code != 0 {
+	if code := handleGoalRecover(store, workspace, []string{"--json", sessionref.Format(fixture.Session.PublicID)}, &stdout, &stderr); code != 0 {
 		t.Fatalf("post-member dry-run code=%d stderr=%q", code, stderr.String())
 	}
 	var view goalRecoveryDryRun
@@ -858,7 +861,7 @@ func TestGoalRecoverApplyRequiresLeaseAndRejectsInvalidOrStaleFlags(t *testing.T
 			t.Fatal(err)
 		}
 		defer func() { _ = lease.Close() }()
-		args := goalRecoveryApplyArgs(fixture.Session.ID, fixture.Group.GroupItemID, string(reconciliation.TurnAbandonedAfterInspection), "Inspected busy recovery turn.")
+		args := goalRecoveryApplyArgs(fixture.Session.PublicID, fixture.Group.GroupItemID, string(reconciliation.TurnAbandonedAfterInspection), "Inspected busy recovery turn.")
 		var stdout, stderr bytes.Buffer
 		if code := handleGoalRecover(second, workspace, args, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), "busy") {
 			t.Fatalf("busy lease code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -870,7 +873,7 @@ func TestGoalRecoverApplyRequiresLeaseAndRejectsInvalidOrStaleFlags(t *testing.T
 		workspace := "/workspace/recover-invalid"
 		fixture := createGoalRecoveryFixture(t, store, workspace, false, false)
 		var stdout, stderr bytes.Buffer
-		if code := handleGoalRecover(store, workspace, []string{formatSessionID(fixture.Session.ID), "--apply", "--item", fixture.ExpectedGroup}, &stdout, &stderr); code != 2 {
+		if code := handleGoalRecover(store, workspace, []string{sessionref.Format(fixture.Session.PublicID), "--apply", "--item", fixture.ExpectedGroup}, &stdout, &stderr); code != 2 {
 			t.Fatalf("missing evidence code=%d stderr=%q", code, stderr.String())
 		}
 		if _, err := store.InspectReconciliationGroup(context.Background(), fixture.Session.ID, workspace); !errors.Is(err, db.ErrReconciliationGroupNotFound) {
@@ -878,10 +881,10 @@ func TestGoalRecoverApplyRequiresLeaseAndRejectsInvalidOrStaleFlags(t *testing.T
 		}
 		stdout.Reset()
 		stderr.Reset()
-		if code := handleGoalRecover(store, workspace, []string{formatSessionID(fixture.Session.ID), "--force"}, &stdout, &stderr); code != 2 {
+		if code := handleGoalRecover(store, workspace, []string{sessionref.Format(fixture.Session.PublicID), "--force"}, &stdout, &stderr); code != 2 {
 			t.Fatalf("force flag code=%d stderr=%q", code, stderr.String())
 		}
-		invalidTime := goalRecoveryApplyArgs(fixture.Session.ID, fixture.ExpectedGroup, string(reconciliation.TurnAbandonedAfterInspection), "Inspected invalid timestamp turn.")
+		invalidTime := goalRecoveryApplyArgs(fixture.Session.PublicID, fixture.ExpectedGroup, string(reconciliation.TurnAbandonedAfterInspection), "Inspected invalid timestamp turn.")
 		invalidTime = replaceGoalRecoverFlag(invalidTime, "--observed-at", "yesterday")
 		stdout.Reset()
 		stderr.Reset()
@@ -895,7 +898,7 @@ func TestGoalRecoverApplyRequiresLeaseAndRejectsInvalidOrStaleFlags(t *testing.T
 		workspace := "/workspace/recover-stale"
 		fixture := createGoalRecoveryFixture(t, store, workspace, false, true)
 		wrapped := &staleGoalRecoveryStore{Store: store}
-		args := goalRecoveryApplyArgs(fixture.Session.ID, fixture.Group.GroupItemID, string(reconciliation.TurnAbandonedAfterInspection), "Inspected stale recovery turn.")
+		args := goalRecoveryApplyArgs(fixture.Session.PublicID, fixture.Group.GroupItemID, string(reconciliation.TurnAbandonedAfterInspection), "Inspected stale recovery turn.")
 		var stdout, stderr bytes.Buffer
 		if code := handleGoalRecover(wrapped, workspace, args, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), "revision") {
 			t.Fatalf("stale revision code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -972,4 +975,3 @@ func TestDecodeGoalSummaryRefreshesElapsedWallBudget(t *testing.T) {
 	}
 }
 
-func formatSessionID(id int64) string { return strconv.FormatInt(id, 10) }

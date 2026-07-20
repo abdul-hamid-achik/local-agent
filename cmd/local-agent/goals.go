@@ -31,6 +31,8 @@ type goalSessionStore interface {
 	ListSessions(context.Context, db.ListSessionsParams) ([]db.Session, error)
 	GetSession(context.Context, int64) (db.Session, error)
 	GetSessionState(context.Context, int64) (string, error)
+	ResolveSessionRef(context.Context, string) (db.Session, error)
+	SessionHandle(context.Context, int64) (string, error)
 }
 
 type goalControlStore interface {
@@ -45,12 +47,15 @@ type goalRecoveryStore interface {
 	EnsureReconciliationGroup(context.Context, *db.ExecutionSessionLease, db.EnsureReconciliationGroupRequest) (db.ReconciliationGroup, bool, error)
 	ResolveExecutionReconciliation(context.Context, *db.ExecutionSessionLease, db.ResolveExecutionReconciliationRequest) (db.ReconciliationCommitReceipt, error)
 	ResolveReconciliationParent(context.Context, *db.ExecutionSessionLease, db.ResolveReconciliationParentRequest) (db.ReconciliationCommitReceipt, error)
+	ResolveSessionRef(context.Context, string) (db.Session, error)
+	SessionHandle(context.Context, int64) (string, error)
 }
 
 // goalSummary is the stable read model printed by `local-agent goal list`.
 // The full validated snapshot remains available to the show command.
 type goalSummary struct {
 	SessionID       int64         `json:"session_id"`
+	PublicID        string        `json:"-"`
 	GoalID          string        `json:"goal_id"`
 	State           goal.State    `json:"state"`
 	Objective       string        `json:"objective"`
@@ -103,6 +108,7 @@ type goalRecoveryParentSummary struct {
 type goalRecoveryDryRun struct {
 	DryRun                   bool                        `json:"dry_run"`
 	SessionID                int64                       `json:"session_id"`
+	SessionHandle            string                      `json:"-"`
 	SessionRevision          int64                       `json:"session_revision"`
 	GoalID                   string                      `json:"goal_id"`
 	GoalState                goal.State                  `json:"goal_state"`
@@ -123,6 +129,7 @@ type goalRecoveryApplyResult struct {
 	Applied             bool       `json:"applied"`
 	Inserted            bool       `json:"inserted"`
 	SessionID           int64      `json:"session_id"`
+	SessionHandle       string     `json:"-"`
 	SessionRevision     int64      `json:"session_revision"`
 	GroupItemID         string     `json:"group_item_id"`
 	ItemID              string     `json:"item_id"`
@@ -147,11 +154,12 @@ type goalRunInvocation struct {
 }
 
 type goalRunOptions struct {
-	SessionID     int64
-	Prompt        string
-	SkipApprovals bool
-	Model         string
-	AgentProfile  string
+	SessionPublicID string
+	SessionID       int64
+	Prompt          string
+	SkipApprovals   bool
+	Model           string
+	AgentProfile    string
 }
 
 var activeGoalRun *goalRunInvocation
@@ -241,6 +249,22 @@ func handleGoalRun(args []string, stdout, stderr io.Writer) int {
 	if code != 0 {
 		return code
 	}
+	store, err := db.Open()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "goal run: open durable store: %v\n", err)
+		return 1
+	}
+	session, err := resolveSessionArg(context.Background(), store, options.SessionPublicID)
+	closeErr := store.Close()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "goal run: %v\n", err)
+		return 1
+	}
+	if closeErr != nil {
+		_, _ = fmt.Fprintf(stderr, "goal run: close durable store: %v\n", closeErr)
+		return 1
+	}
+	options.SessionID = session.ID
 	rootArgs := []string{os.Args[0], "--prompt", options.Prompt, "--mode", "auto"}
 	if options.SkipApprovals {
 		rootArgs = append(rootArgs, "--skip-approvals")
@@ -285,7 +309,7 @@ func parseGoalRunArgs(args []string, stdout, stderr io.Writer) (goalRunOptions, 
 		_, _ = fmt.Fprintln(stderr, "goal run: provide exactly one session ID")
 		return goalRunOptions{}, 2
 	}
-	sessionID, err := sessionref.Parse(flags.Arg(0))
+	publicID, err := sessionref.Parse(flags.Arg(0))
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "goal run: invalid session reference %q\n", flags.Arg(0))
 		return goalRunOptions{}, 2
@@ -296,7 +320,7 @@ func parseGoalRunArgs(args []string, stdout, stderr io.Writer) (goalRunOptions, 
 		return goalRunOptions{}, 2
 	}
 	return goalRunOptions{
-		SessionID: sessionID, Prompt: promptText, SkipApprovals: *skipApprovals,
+		SessionPublicID: publicID, Prompt: promptText, SkipApprovals: *skipApprovals,
 		Model: strings.TrimSpace(*model), AgentProfile: strings.TrimSpace(*agentProfile),
 	}, 0
 }
@@ -376,7 +400,7 @@ func handleGoalOpen(store *db.Store, workspace string, args []string, stdout, st
 		}
 		return 0
 	}
-	handle := sessionref.Format(session.ID)
+	handle := sessionDisplayHandle(session)
 	goalFprintf(stdout, "Opened goal %s in session %s.\n", terminalSafeGoalText(snapshot.ID), handle)
 	goalFprintf(stdout, "Inspect it with: local-agent goal show --json %s\n", handle)
 	return 0
@@ -395,11 +419,12 @@ func handleGoalPending(store goalControlStore, workspace string, args []string, 
 		_, _ = fmt.Fprintln(stderr, "goal pending: provide exactly one session ID from `local-agent goal list`")
 		return 2
 	}
-	sessionID, err := sessionref.Parse(flags.Arg(0))
+	session, err := resolveSessionArg(context.Background(), store, flags.Arg(0))
 	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "goal pending: invalid session reference %q\n", flags.Arg(0))
+		_, _ = fmt.Fprintf(stderr, "goal pending: %v\n", err)
 		return 2
 	}
+	sessionID := session.ID
 	if *limit <= 0 || *limit > controlplane.MaxListLimit {
 		_, _ = fmt.Fprintf(stderr, "goal pending: limit must be between 1 and %d\n", controlplane.MaxListLimit)
 		return 2
@@ -459,11 +484,13 @@ func handleGoalRecover(store goalRecoveryStore, workspace string, args []string,
 		_, _ = fmt.Fprintln(stderr, "goal recover: provide exactly one session ID")
 		return 2
 	}
-	sessionID, err := sessionref.Parse(flags.Arg(0))
+	session, err := resolveSessionArg(context.Background(), store, flags.Arg(0))
 	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "goal recover: invalid session reference %q\n", flags.Arg(0))
+		_, _ = fmt.Fprintf(stderr, "goal recover: %v\n", err)
 		return 2
 	}
+	sessionID := session.ID
+	sessionHandle := sessionDisplayHandle(session)
 	provided := make(map[string]bool)
 	flags.Visit(func(value *flag.Flag) { provided[value.Name] = true })
 	if !*apply {
@@ -483,6 +510,7 @@ func handleGoalRecover(store goalRecoveryStore, workspace string, args []string,
 			return 1
 		}
 		projection := projectGoalRecoveryDryRun(inspection)
+		projection.SessionHandle = sessionHandle
 		if *jsonOutput {
 			if err := writeJSON(stdout, projection); err != nil {
 				_, _ = fmt.Fprintf(stderr, "goal recover: %v\n", err)
@@ -604,6 +632,7 @@ func handleGoalRecover(store goalRecoveryStore, workspace string, args []string,
 		return 1
 	}
 	result := projectGoalRecoveryApply(sessionID, receipt)
+	result.SessionHandle = sessionHandle
 	if *jsonOutput {
 		if err := writeJSON(stdout, result); err != nil {
 			_, _ = fmt.Fprintf(stderr, "goal recover: %v\n", err)
@@ -705,7 +734,11 @@ func projectGoalRecoveryApply(sessionID int64, receipt db.ReconciliationCommitRe
 
 func writeGoalRecoveryDryRun(writer io.Writer, view goalRecoveryDryRun) {
 	goalFprintln(writer, "Recovery dry run (read-only)")
-	goalFprintf(writer, "Session: %s @ revision %d\n", sessionref.Format(view.SessionID), view.SessionRevision)
+	handle := view.SessionHandle
+	if handle == "" {
+		handle = "?"
+	}
+	goalFprintf(writer, "Session: %s @ revision %d\n", handle, view.SessionRevision)
 	goalFprintf(writer, "Goal: %s · %s\n", terminalSafeGoalText(view.GoalID), view.GoalState)
 	goalFprintf(writer, "Group: %s\n", terminalSafeGoalText(view.GroupItemID))
 	goalFprintf(writer, "Turn: %s · snapshot cursor %d\n", terminalSafeGoalText(view.TurnID), view.SnapshotCursor)
@@ -740,7 +773,11 @@ func writeGoalRecoveryApply(writer io.Writer, result goalRecoveryApplyResult) {
 	}
 	goalFprintf(writer, "Recovery evidence %s: %s\n", action, terminalSafeGoalText(result.ResolutionID))
 	goalFprintf(writer, "Group: %s · item %s\n", terminalSafeGoalText(result.GroupItemID), terminalSafeGoalText(result.ItemID))
-	goalFprintf(writer, "Session: %s @ revision %d\n", sessionref.Format(result.SessionID), result.SessionRevision)
+	handle := result.SessionHandle
+	if handle == "" {
+		handle = "?"
+	}
+	goalFprintf(writer, "Session: %s @ revision %d\n", handle, result.SessionRevision)
 	if result.GoalCleared {
 		goalFprintf(writer, "Goal state: %s\n", result.GoalState)
 	} else {
@@ -797,11 +834,12 @@ func handleGoalShow(store goalSessionStore, workspace string, args []string, std
 		_, _ = fmt.Fprintln(stderr, "goal show: provide exactly one session ID from `local-agent goal list`")
 		return 2
 	}
-	sessionID, err := sessionref.Parse(flags.Arg(0))
+	session, err := resolveSessionArg(context.Background(), store, flags.Arg(0))
 	if err != nil {
-		goalFprintf(stderr, "goal show: invalid session reference %q\n", flags.Arg(0))
+		goalFprintf(stderr, "goal show: %v\n", err)
 		return 2
 	}
+	sessionID := session.ID
 	summary, err := getGoalSummary(context.Background(), store, workspace, sessionID)
 	if err != nil {
 		goalFprintf(stderr, "goal show: %v\n", err)
@@ -901,6 +939,7 @@ func decodeGoalSummary(session db.Session, raw string) (goalSummary, bool, error
 	}
 	return goalSummary{
 		SessionID:       session.ID,
+		PublicID:        session.PublicID,
 		GoalID:          snapshot.ID,
 		State:           snapshot.State,
 		Objective:       snapshot.Objective,
@@ -1026,7 +1065,7 @@ func writeGoalRecoverUsage(writer io.Writer) {
 }
 
 func writeGoalSessionReferenceHelp(writer io.Writer) {
-	_, _ = fmt.Fprintln(writer, "Session references accept either a short handle such as S7 or the compatible raw ID 7.")
+	_, _ = fmt.Fprintln(writer, "Session references accept a 7-character hex handle such as a1b2c3d.")
 	_, _ = fmt.Fprintln(writer)
 }
 
@@ -1096,8 +1135,12 @@ func writeGoalList(writer io.Writer, summaries []goalSummary) {
 	table := tabwriter.NewWriter(writer, 0, 4, 2, ' ', 0)
 	goalFprintln(table, "SESSION\tSTATE\tUPDATED\tOBJECTIVE")
 	for _, summary := range summaries {
+		handle := sessionref.Format(summary.PublicID)
+		if handle == "" {
+			handle = "?"
+		}
 		goalFprintf(table, "%s\t%s\t%s\t%s\n",
-			sessionref.Format(summary.SessionID), summary.State, summary.UpdatedAt.Local().Format("2006-01-02 15:04"),
+			handle, summary.State, summary.UpdatedAt.Local().Format("2006-01-02 15:04"),
 			compactGoalObjective(summary.Objective, 72),
 		)
 	}
@@ -1105,8 +1148,12 @@ func writeGoalList(writer io.Writer, summaries []goalSummary) {
 }
 
 func writeGoalDetail(writer io.Writer, summary goalSummary) {
+	handle := sessionref.Format(summary.PublicID)
+	if handle == "" {
+		handle = "?"
+	}
 	goalFprintf(writer, "Goal: %s\n", terminalSafeGoalText(summary.GoalID))
-	goalFprintf(writer, "Session: %s\n", sessionref.Format(summary.SessionID))
+	goalFprintf(writer, "Session: %s\n", handle)
 	goalFprintf(writer, "State: %s\n", summary.State)
 	goalFprintf(writer, "Objective: %s\n", terminalSafeGoalText(summary.Objective))
 	if summary.Snapshot.StateReason != "" {

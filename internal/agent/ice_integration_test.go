@@ -77,7 +77,7 @@ func TestExecutionSessionIDBindsDurableAndFreshTransientICEScopes(t *testing.T) 
 	workspace := t.TempDir()
 	ag := New(client, nil, 16_384)
 	ag.SetWorkDir(workspace)
-	ag.SetExecutionSessionID(42)
+	ag.SetExecutionSessionID(42, "")
 	engine := newAgentICEEngine(t, client, workspace)
 	ag.SetICEEngine(engine)
 	ag.SetModeContext("", NewToolPolicy(nil, nil, false))
@@ -94,7 +94,7 @@ func TestExecutionSessionIDBindsDurableAndFreshTransientICEScopes(t *testing.T) 
 		t.Fatalf("ICE session = %q, want db:42", got)
 	}
 
-	ag.SetExecutionSessionID(0)
+	ag.SetExecutionSessionID(0, "")
 	if got := ag.ICESessionID(); !strings.HasPrefix(got, "transient:") {
 		t.Fatalf("cleared ICE status scope = %q, want transient", got)
 	}
@@ -106,12 +106,12 @@ func TestExecutionSessionIDBindsDurableAndFreshTransientICEScopes(t *testing.T) 
 	if !strings.HasPrefix(transient, "transient:") {
 		t.Fatalf("cleared durable session reused %q, want fresh transient scope", transient)
 	}
-	ag.SetExecutionSessionID(0)
+	ag.SetExecutionSessionID(0, "")
 	if got := engine.SessionID(); got != transient {
 		t.Fatalf("idempotent session clear changed ICE scope from %q to %q", transient, got)
 	}
 
-	ag.SetExecutionSessionID(43)
+	ag.SetExecutionSessionID(43, "")
 	ag.AddUserMessage("bind the resumed durable ICE scope")
 	if err := ag.RunTurnWithLimits(context.Background(), &outputRecorder{}, "turn_bind_43", TurnLimits{MaxEvalTokens: 8}); err != nil {
 		t.Fatal(err)
@@ -157,7 +157,7 @@ func TestExecutionSessionChangeDuringTurnAppliesOnlyToNextICEBoundTurn(t *testin
 	ag := New(client, nil, 16_384)
 	ag.SetWorkDir(workspace)
 	ag.SetModeContext("", NewToolPolicy(nil, nil, false))
-	ag.SetExecutionSessionID(42)
+	ag.SetExecutionSessionID(42, "")
 	engine := newAgentICEEngine(t, client, workspace)
 	ag.SetICEEngine(engine)
 	t.Cleanup(ag.Close)
@@ -169,7 +169,7 @@ func TestExecutionSessionChangeDuringTurnAppliesOnlyToNextICEBoundTurn(t *testin
 	}()
 	<-client.started
 
-	ag.SetExecutionSessionID(43)
+	ag.SetExecutionSessionID(43, "")
 	if got := engine.SessionID(); got != "db:42" {
 		t.Fatalf("mid-turn setter rebound ICE to %q, want immutable db:42", got)
 	}

@@ -11,6 +11,7 @@ import (
 
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
 	"github.com/abdul-hamid-achik/local-agent/internal/execution"
+	"github.com/abdul-hamid-achik/local-agent/internal/sessionref"
 )
 
 type fakeExecutionRecoveryStore struct {
@@ -25,6 +26,43 @@ type fakeExecutionRecoveryStore struct {
 	listed      int
 	receipts    map[string]db.StandaloneExecutionReconciliationReceipt
 	resolved    []db.ResolveStandaloneExecutionReconciliationRequest
+	publicID    string
+	sessionID   int64
+}
+
+func (s *fakeExecutionRecoveryStore) ResolveSessionRef(_ context.Context, ref string) (db.Session, error) {
+	publicID, err := sessionref.Parse(ref)
+	if err != nil {
+		return db.Session{}, err
+	}
+	id := s.sessionID
+	if id == 0 {
+		id = s.inspection.SessionID
+	}
+	if id == 0 && len(s.pending) > 0 {
+		id = s.pending[0].Identity.SessionID
+	}
+	if id == 0 {
+		id = 17
+	}
+	// Tests use a fixed public handle; accept it or an explicit store override.
+	pid := s.publicID
+	if pid == "" {
+		pid = "aaaaa11"
+	}
+	if publicID != pid && publicID != "aaaaa11" {
+		// Still allow arbitrary valid handles so error-path tests can resolve first.
+		return db.Session{ID: id, PublicID: publicID, WorkspaceID: "/workspace/repo"}, nil
+	}
+	return db.Session{ID: id, PublicID: pid, WorkspaceID: "/workspace/repo"}, nil
+}
+
+func (s *fakeExecutionRecoveryStore) SessionHandle(_ context.Context, sessionID int64) (string, error) {
+	pid := s.publicID
+	if pid == "" {
+		pid = "aaaaa11"
+	}
+	return pid, nil
 }
 
 func (s *fakeExecutionRecoveryStore) ListStandaloneExecutionReconciliationPending(context.Context, int64, string, int) ([]execution.State, error) {
@@ -65,13 +103,13 @@ func TestExecutionRecoverInspectionIsReadOnlyAndPrintsExactApplyTokens(t *testin
 		ItemID: "ctrl_execution_timeout",
 	}}
 	var stdout, stderr bytes.Buffer
-	code := handleExecutionRecover(store, "/workspace/repo", []string{"S17", "exec_timeout"}, &stdout, &stderr)
+	code := handleExecutionRecover(store, "/workspace/repo", []string{"aaaaa11", "exec_timeout"}, &stdout, &stderr)
 	if code != 0 || stderr.Len() != 0 || store.inspected != 1 || store.acquired != 0 {
 		t.Fatalf("code=%d inspected=%d acquired=%d stdout=%q stderr=%q", code, store.inspected, store.acquired, stdout.String(), stderr.String())
 	}
 	for _, want := range []string{
 		"Inspection is read-only", "--revision 4", "--event-id 29",
-		"S17 @ revision 4", "S17 exec_timeout", "effect_not_applied", "verification_check",
+		"aaaaa11 @ revision 4", "aaaaa11 exec_timeout", "effect_not_applied", "verification_check",
 	} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("inspection missing %q:\n%s", want, stdout.String())
@@ -80,7 +118,7 @@ func TestExecutionRecoverInspectionIsReadOnlyAndPrintsExactApplyTokens(t *testin
 
 	stdout.Reset()
 	stderr.Reset()
-	code = handleExecutionRecover(store, "/workspace/repo", []string{"--json", "17", "exec_timeout"}, &stdout, &stderr)
+	code = handleExecutionRecover(store, "/workspace/repo", []string{"--json", "aaaaa11", "exec_timeout"}, &stdout, &stderr)
 	if code != 0 || stderr.Len() != 0 {
 		t.Fatalf("JSON inspection code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
@@ -88,7 +126,7 @@ func TestExecutionRecoverInspectionIsReadOnlyAndPrintsExactApplyTokens(t *testin
 	if err := json.Unmarshal(stdout.Bytes(), &view); err != nil {
 		t.Fatalf("decode JSON inspection: %v (%s)", err, stdout.String())
 	}
-	if view.SessionID != 17 || !strings.Contains(view.ApplyTemplate, " 17 exec_timeout") || strings.Contains(view.ApplyTemplate, "S17") {
+	if view.SessionID != 17 || !strings.Contains(view.ApplyTemplate, " 17 exec_timeout") || strings.Contains(view.ApplyTemplate, "aaaaa11") {
 		t.Fatalf("JSON inspection changed the numeric contract: %#v", view)
 	}
 }
@@ -111,7 +149,7 @@ func TestExecutionRecoverAllListsPendingReadOnly(t *testing.T) {
 		},
 	}}
 	var stdout, stderr bytes.Buffer
-	code := handleExecutionRecover(store, "/workspace/repo", []string{"17", "--all"}, &stdout, &stderr)
+	code := handleExecutionRecover(store, "/workspace/repo", []string{"aaaaa11", "--all"}, &stdout, &stderr)
 	if code != 0 || stderr.Len() != 0 {
 		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
 	}
@@ -119,7 +157,7 @@ func TestExecutionRecoverAllListsPendingReadOnly(t *testing.T) {
 		t.Fatalf("listing acquired a lease or skipped the query: %#v", store)
 	}
 	out := stdout.String()
-	for _, want := range []string{"exec_one", "exec_two", "2 execution(s) pending reconciliation", "Reviewed-set digest", "execution recover S17 --all --apply --set-digest"} {
+	for _, want := range []string{"exec_one", "exec_two", "2 execution(s) pending reconciliation", "Reviewed-set digest", "execution recover aaaaa11 --all --apply --set-digest"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("listing missing %q: %s", want, out)
 		}
@@ -128,10 +166,10 @@ func TestExecutionRecoverAllListsPendingReadOnly(t *testing.T) {
 	empty := &fakeExecutionRecoveryStore{}
 	stdout.Reset()
 	stderr.Reset()
-	if code := handleExecutionRecover(empty, "/workspace/repo", []string{"17", "--all"}, &stdout, &stderr); code != 0 {
+	if code := handleExecutionRecover(empty, "/workspace/repo", []string{"aaaaa11", "--all"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("empty listing exit=%d stderr=%q", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "No executions are pending reconciliation in session S17") {
+	if !strings.Contains(stdout.String(), "No executions are pending reconciliation in session aaaaa11") {
 		t.Fatalf("empty listing output = %q", stdout.String())
 	}
 }
@@ -139,7 +177,7 @@ func TestExecutionRecoverAllListsPendingReadOnly(t *testing.T) {
 func TestExecutionRecoverAllListingFailsClosedOnOverflow(t *testing.T) {
 	store := &fakeExecutionRecoveryStore{pendingErr: fmt.Errorf("%w: more than 100 effective hazards", db.ErrExecutionHazardOverflow)}
 	var stdout, stderr bytes.Buffer
-	code := handleExecutionRecover(store, "/workspace/repo", []string{"17", "--all"}, &stdout, &stderr)
+	code := handleExecutionRecover(store, "/workspace/repo", []string{"aaaaa11", "--all"}, &stdout, &stderr)
 	if code != 1 || stdout.Len() != 0 {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
@@ -173,7 +211,7 @@ func TestExecutionRecoverAllApplyProcessesEntireBoundedBacklog(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	setDigest := executionRecoverySetDigest(17, "/workspace/repo", states)
 	code := handleExecutionRecover(store, "/workspace/repo", []string{
-		"17", "--all", "--apply", "--set-digest", setDigest, "--observation", "effect_not_applied",
+		"aaaaa11", "--all", "--apply", "--set-digest", setDigest, "--observation", "effect_not_applied",
 		"--source", "verification_check", "--reference", "ref", "--summary", "sum",
 		"--observed-at", "2026-07-14T10:00:00Z",
 	}, &stdout, &stderr)
@@ -197,7 +235,7 @@ func TestExecutionRecoverAllApplyFailsClosedBeforeMutationOnOverflow(t *testing.
 	}
 	var stdout, stderr bytes.Buffer
 	code := handleExecutionRecover(store, "/workspace/repo", []string{
-		"17", "--all", "--apply", "--set-digest", strings.Repeat("a", 64), "--observation", "effect_not_applied",
+		"aaaaa11", "--all", "--apply", "--set-digest", strings.Repeat("a", 64), "--observation", "effect_not_applied",
 		"--source", "verification_check", "--reference", "ref", "--summary", "sum",
 		"--observed-at", "2026-07-14T10:00:00Z",
 	}, &stdout, &stderr)
@@ -226,7 +264,7 @@ func TestExecutionRecoverAllApplyRejectsChangedPendingSetBeforeEvidence(t *testi
 	store := &fakeExecutionRecoveryStore{lease: &db.ExecutionSessionLease{}, pending: current}
 	var stdout, stderr bytes.Buffer
 	code := handleExecutionRecover(store, "/workspace/repo", []string{
-		"17", "--all", "--apply", "--set-digest", executionRecoverySetDigest(17, "/workspace/repo", reviewed),
+		"aaaaa11", "--all", "--apply", "--set-digest", executionRecoverySetDigest(17, "/workspace/repo", reviewed),
 		"--observation", "effect_not_applied", "--source", "verification_check",
 		"--reference", "ref", "--summary", "sum", "--observed-at", "2026-07-14T10:00:00Z",
 	}, &stdout, &stderr)
@@ -243,7 +281,7 @@ func TestExecutionRecoverAllApplyRequiresReviewedSetDigest(t *testing.T) {
 	store := &fakeExecutionRecoveryStore{}
 	var stdout, stderr bytes.Buffer
 	code := handleExecutionRecover(store, "/workspace/repo", []string{
-		"17", "--all", "--apply", "--observation", "effect_not_applied",
+		"aaaaa11", "--all", "--apply", "--observation", "effect_not_applied",
 		"--source", "verification_check", "--reference", "ref", "--summary", "sum",
 		"--observed-at", "2026-07-14T10:00:00Z",
 	}, &stdout, &stderr)
@@ -259,7 +297,7 @@ func TestExecutionRecoverAllApplyRejectsPerExecutionTokens(t *testing.T) {
 	store := &fakeExecutionRecoveryStore{}
 	var stdout, stderr bytes.Buffer
 	code := handleExecutionRecover(store, "/workspace/repo", []string{
-		"17", "--all", "--apply", "--revision", "4", "--event-id", "29",
+		"aaaaa11", "--all", "--apply", "--revision", "4", "--event-id", "29",
 		"--observation", "effect_not_applied", "--source", "verification_check",
 		"--reference", "ref", "--summary", "sum", "--observed-at", "2026-07-14T10:00:00Z",
 	}, &stdout, &stderr)
@@ -277,7 +315,7 @@ func TestExecutionRecoverApplyRequiresPriorInspectionTokens(t *testing.T) {
 	code := handleExecutionRecover(store, "/workspace/repo", []string{
 		"--apply", "--observation", "effect_not_applied", "--source", "verification_check",
 		"--reference", "check:absent", "--summary", "Verified effect absence.",
-		"--observed-at", "2026-07-13T12:00:00Z", "17", "exec_timeout",
+		"--observed-at", "2026-07-13T12:00:00Z", "aaaaa11", "exec_timeout",
 	}, &stdout, &stderr)
 	if code != 2 || !strings.Contains(stderr.String(), "--revision") || store.acquired != 0 {
 		t.Fatalf("code=%d acquired=%d stdout=%q stderr=%q", code, store.acquired, stdout.String(), stderr.String())
@@ -285,11 +323,11 @@ func TestExecutionRecoverApplyRequiresPriorInspectionTokens(t *testing.T) {
 }
 
 func TestNormalizeExecutionRecoverArgsKeepsInterspersedFlags(t *testing.T) {
-	got, err := normalizeExecutionRecoverArgs([]string{"17", "exec_timeout", "--revision", "4", "--event-id=29", "--apply"})
+	got, err := normalizeExecutionRecoverArgs([]string{"aaaaa11", "exec_timeout", "--revision", "4", "--event-id=29", "--apply"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"--revision", "4", "--event-id=29", "--apply", "17", "exec_timeout"}
+	want := []string{"--revision", "4", "--event-id=29", "--apply", "aaaaa11", "exec_timeout"}
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("normalized = %#v, want %#v", got, want)
 	}

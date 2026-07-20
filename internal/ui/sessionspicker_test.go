@@ -21,12 +21,12 @@ func TestSessionTitleTruncationPreservesUnicode(t *testing.T) {
 }
 
 func TestSessionItemSanitizesPersistedTitle(t *testing.T) {
-	item := sessionItem{id: 7, title: "safe\x1b]8;;https://example.invalid\x07link\x1b]8;;\x07\n\u202eevil"}
+	item := sessionItem{id: 7, publicID: "a1b2c3d", title: "safe\x1b]8;;https://example.invalid\x07link\x1b]8;;\x07\n\u202eevil"}
 
-	if got, want := item.Title(), "S7 · safelink evil"; got != want {
+	if got, want := item.Title(), "a1b2c3d · safelink evil"; got != want {
 		t.Fatalf("session title = %q, want %q", got, want)
 	}
-	if got, want := item.FilterValue(), "S7 7 safelink evil"; got != want {
+	if got, want := item.FilterValue(), "a1b2c3d 7 safelink evil"; got != want {
 		t.Fatalf("session filter value = %q, want %q", got, want)
 	}
 }

@@ -209,13 +209,54 @@ type ApprovalPreview struct {
 // decision. ScopeExactRequest intentionally starts narrower than path or
 // command-prefix grants: it binds the grant to workspace, tool and canonical
 // arguments while leaving room for audited scope kinds later.
+// ScopeSessionTool is a process-local grant for the same workspace+tool for
+// the rest of the Agent session (write/edit/mkdir only).
 type ApprovalScope struct {
 	Kind      string
 	Workspace string
 	Resource  string
 }
 
-const ScopeExactRequest = "exact_request"
+const (
+	ScopeExactRequest = "exact_request"
+	// ScopeSessionTool grants the named tool for the remainder of the Agent
+	// session within the same workspace. Resource is empty; argument changes
+	// do not re-prompt. It is process-local and never persisted.
+	ScopeSessionTool = "session_tool"
+	// ScopeSessionPath grants write/edit/mkdir for one canonical path for the
+	// rest of the process. Resource is the absolute path. The grant is shared
+	// across the write-family tools (write, edit, mkdir).
+	ScopeSessionPath = "session_path"
+	// ScopeSessionBashPrefix grants bash commands that share a safe prefix for
+	// the rest of the process. Resource is the prefix string. Compound shell
+	// commands never match. Process-local only.
+	ScopeSessionBashPrefix = "session_bash_prefix"
+	// ScopeSessionMCPTool grants one exact namespaced MCP tool (any args) for
+	// the rest of the process. Resource is empty. Process-local only.
+	ScopeSessionMCPTool = "session_mcp_tool"
+
+	// SessionPathFamily is the grant-key tool slot for path-scoped session
+	// grants so write, edit, and mkdir share one path approval.
+	SessionPathFamily = "write|edit|mkdir"
+
+	// Durable scope kinds carried by the UI for workspace-persisted rules.
+	// They are not stored as grant keys; the host saves then remembers the
+	// corresponding process-local session scope.
+	DurableBashPrefix = "workspace_bash_prefix"
+	DurableMCPTool    = "workspace_mcp_tool"
+	DurableWritePath  = "workspace_write_path"
+)
+
+// KnownSessionScopeKind reports whether kind is a supported AllowSession scope.
+func KnownSessionScopeKind(kind string) bool {
+	switch strings.TrimSpace(kind) {
+	case "", ScopeExactRequest, ScopeSessionTool, ScopeSessionPath,
+		ScopeSessionBashPrefix, ScopeSessionMCPTool:
+		return true
+	default:
+		return false
+	}
+}
 
 // ApprovalRequest represents a tool requesting user approval.
 type ApprovalRequest struct {
@@ -234,6 +275,11 @@ type ApprovalResponse struct {
 	Code     string
 	Message  string
 
+	// ScopeKind narrows an AllowSession decision. Empty means ScopeExactRequest
+	// (the historical default). ScopeSessionTool is only honored for eligible
+	// tools by the agent authorization path; it is never persisted globally.
+	ScopeKind string
+
 	// Allowed and Always are a temporary source-compatibility bridge for older
 	// embedding callbacks. New code must set Decision. Legacy Always maps to a
 	// session-scoped exact-request grant and is never persisted globally.
@@ -247,6 +293,48 @@ func AllowOnce() ApprovalResponse {
 
 func AllowSession() ApprovalResponse {
 	return ApprovalResponse{Decision: DecisionAllowSession, Allowed: true, Always: true}
+}
+
+// AllowSessionTool returns a session-scoped tool grant response. The agent
+// only remembers this wider grant for write/edit/mkdir; other tools fall back
+// to an exact-request grant.
+func AllowSessionTool() ApprovalResponse {
+	return ApprovalResponse{
+		Decision:  DecisionAllowSession,
+		Allowed:   true,
+		Always:    true,
+		ScopeKind: ScopeSessionTool,
+	}
+}
+
+// AllowSessionPath returns a path-scoped session grant for write/edit/mkdir.
+func AllowSessionPath() ApprovalResponse {
+	return ApprovalResponse{
+		Decision:  DecisionAllowSession,
+		Allowed:   true,
+		Always:    true,
+		ScopeKind: ScopeSessionPath,
+	}
+}
+
+// AllowSessionBashPrefix returns a bash-prefix session grant response.
+func AllowSessionBashPrefix() ApprovalResponse {
+	return ApprovalResponse{
+		Decision:  DecisionAllowSession,
+		Allowed:   true,
+		Always:    true,
+		ScopeKind: ScopeSessionBashPrefix,
+	}
+}
+
+// AllowSessionMCPTool returns a session grant for one MCP tool (any args).
+func AllowSessionMCPTool() ApprovalResponse {
+	return ApprovalResponse{
+		Decision:  DecisionAllowSession,
+		Allowed:   true,
+		Always:    true,
+		ScopeKind: ScopeSessionMCPTool,
+	}
 }
 
 func Deny() ApprovalResponse {
@@ -283,10 +371,19 @@ func (r ApprovalResponse) Normalize() ApprovalResponse {
 	switch r.Decision {
 	case DecisionAllowOnce:
 		r.Allowed, r.Always = true, false
+		r.ScopeKind = ""
 	case DecisionAllowSession:
 		r.Allowed, r.Always = true, true
+		// Empty ScopeKind means exact_request. Unknown kinds fail closed.
+		switch r.ScopeKind {
+		case ScopeSessionTool, ScopeSessionPath, ScopeSessionBashPrefix, ScopeSessionMCPTool:
+			// keep
+		default:
+			r.ScopeKind = ""
+		}
 	default:
 		r.Allowed, r.Always = false, false
+		r.ScopeKind = ""
 	}
 	if r.Decision == DecisionHostRefuse && strings.TrimSpace(r.Code) == "" {
 		r.Code = "host_refused"

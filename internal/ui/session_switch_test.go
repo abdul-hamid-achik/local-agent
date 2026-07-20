@@ -17,7 +17,9 @@ import (
 
 func TestSessionSwitchBoundaryProtectsDraftAndImagesOnCancel(t *testing.T) {
 	m, _ := newImageTestModel(t)
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 30, Height: 12})
+	// Hex handles are 7 characters, so the compact decision row needs a bit more
+	// width than the old S-prefix labels to keep "1 image" fully visible.
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 12})
 	m = updated.(*Model)
 	path := filepath.Join(t.TempDir(), "switch.png")
 	writeImageAttachmentFixture(t, path)
@@ -26,14 +28,14 @@ func TestSessionSwitchBoundaryProtectsDraftAndImagesOnCancel(t *testing.T) {
 	draft := "first line\nsecond line"
 	m.setComposerDraftAtRune(draft, 5)
 
-	if cmd := m.beginSessionSwitch(42, "Saved work"); cmd != nil {
+	if cmd := m.beginSessionSwitch(42, "aaaaa2a", "Saved work"); cmd != nil {
 		t.Fatal("nonempty composer bypassed the session-switch decision")
 	}
 	if m.pendingSessionSwitch == nil || m.composerEditable() {
 		t.Fatalf("session decision ownership = pending %#v editable %v", m.pendingSessionSwitch, m.composerEditable())
 	}
 	view := ansi.Strip(m.View().Content)
-	for _, want := range []string{"Open S42?", "2 lines", "1 image", "keep both", "discard both", "esc"} {
+	for _, want := range []string{"Open aaaaa2a?", "2 lines", "1 image", "keep both", "discard both", "esc"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("minimum switch decision omitted %q:\n%s", want, view)
 		}
@@ -57,10 +59,10 @@ func TestSessionSwitchPromptKeepsTargetIdentityAcrossWidths(t *testing.T) {
 		updated, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: 24})
 		m = updated.(*Model)
 		m.input.SetValue("carry this draft")
-		m.beginSessionSwitch(42, "Saved work")
+		m.beginSessionSwitch(42, "aaaaa2a", "Saved work")
 
 		prompt := ansi.Strip(m.renderSessionSwitchPrompt(m.chatPaneWidth()))
-		if !strings.Contains(prompt, "S42") {
+		if !strings.Contains(prompt, "aaaaa2a") {
 			t.Fatalf("width %d switch prompt hid target handle: %q", width, prompt)
 		}
 		if width >= 72 && !strings.Contains(prompt, "Saved work") {
@@ -126,9 +128,10 @@ func TestSessionSwitchTargetMismatchRestoresOriginalDraft(t *testing.T) {
 				Name: "qwen:cloud", Source: OllamaModelCloud, Selectable: true, Fit: true, RequiresConsent: true,
 			})
 			m.sessionID = 7
+			m.sessionPublicID = "aaaaaa7"
 			m.activeSessionTitle = "Source session"
 			m.setComposerDraftAtRune("preserve exact draft", 8)
-			m.beginSessionSwitch(42, "Expected target")
+			m.beginSessionSwitch(42, "aaaaa2a", "Expected target")
 			m.pendingSessionSwitch.Choice = choice
 			m.pendingSessionSwitch.LoadToken = 7
 			m.sessionLoadToken = 7
@@ -188,7 +191,7 @@ func TestSessionSwitchKeepAndDiscardCommitAtomicallyAfterSuccess(t *testing.T) {
 			attachImageFixture(t, m, path, "")
 			wantImages := clonePendingImages(m.pendingImages)
 			m.setComposerDraftAtRune("carry this draft", 6)
-			m.beginSessionSwitch(target.ID, target.Title)
+			m.beginSessionSwitch(target.ID, target.PublicID, target.Title)
 
 			cmd := m.startPendingSessionSwitch(choice)
 			if cmd == nil || !m.sessionLoading {
@@ -234,7 +237,7 @@ func TestSessionSwitchFailureAndLoadCancelPreservePayload(t *testing.T) {
 			attachImageFixture(t, m, path, "")
 			wantImages := clonePendingImages(m.pendingImages)
 			m.setComposerDraftAtRune("preserve me", 4)
-			m.beginSessionSwitch(7, "missing")
+			m.beginSessionSwitch(7, "aaaaaa7", "missing")
 			m.startPendingSessionSwitch(sessionSwitchDiscard)
 			test.settle(m)
 
@@ -277,7 +280,7 @@ func TestCloudConsentKeepsSessionSwitchBoundaryAtomic(t *testing.T) {
 			{Name: "qwen:cloud", Source: OllamaModelCloud, Selectable: true, Fit: true, RequiresConsent: true},
 		}
 		m.setComposerDraftAtRune("cloud-bound draft", 5)
-		m.beginSessionSwitch(42, "cloud target")
+		m.beginSessionSwitch(42, "aaaaa2a", "cloud target")
 		m.pendingSessionSwitch.Choice = sessionSwitchKeep
 		m.sessionLoadToken = 7
 		m.sessionLoading = true
@@ -314,7 +317,7 @@ func TestCloudConsentKeepsSessionSwitchBoundaryAtomic(t *testing.T) {
 func TestPendingSessionSwitchIsNotPersisted(t *testing.T) {
 	m := newTestModel(t)
 	m.input.SetValue("SWITCH_DRAFT_SECRET")
-	m.beginSessionSwitch(42, "target")
+	m.beginSessionSwitch(42, "aaaaa2a", "target")
 	raw, err := encodeSessionState(m)
 	if err != nil {
 		t.Fatal(err)
@@ -327,11 +330,12 @@ func TestPendingSessionSwitchIsNotPersisted(t *testing.T) {
 func TestHeldFollowUpBlocksSessionSwitchWithoutCrossingOwners(t *testing.T) {
 	m, liveImages, queuedImages := heldQueueBoundaryFixture(t)
 	m.sessionID = 7
+	m.sessionPublicID = "aaaaaa7"
 	m.activeSessionTitle = "old session"
 	m.agent.AddUserMessage("old model context")
 	m.entries = []ChatEntry{{Kind: "assistant", Content: "old visible context"}}
 
-	if cmd := m.beginSessionSwitch(42, "other session"); cmd != nil {
+	if cmd := m.beginSessionSwitch(42, "aaaaa2a", "other session"); cmd != nil {
 		t.Fatal("held follow-up started a session load")
 	}
 	if m.pendingSessionSwitch != nil || m.sessionLoading || m.sessionID != 7 {
@@ -368,6 +372,7 @@ func TestHeldFollowUpBlocksNewConversationReset(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			m, liveImages, queuedImages := heldQueueBoundaryFixture(t)
 			m.sessionID = 7
+			m.sessionPublicID = "aaaaaa7"
 			m.activeSessionTitle = "old session"
 			m.agent.AddUserMessage("old model context")
 			m.entries = []ChatEntry{{Kind: "assistant", Content: "old visible context"}}

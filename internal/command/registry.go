@@ -71,6 +71,14 @@ type Context struct {
 	GoalExhausted        bool
 	GoalPersistenceDirty bool
 	GoalBusy             bool
+	// Process-local approval posture and session grants for /permissions.
+	// ApprovalPosture is one of: prompted, accept_workspace_edits, skip_approvals.
+	ApprovalPosture  string
+	SessionApprovals []string
+	// Durable workspace rules (user config; not repository files).
+	WorkspaceBashPrefixes []string
+	WorkspaceMCPTools     []string
+	WorkspaceWritePaths   []string
 }
 
 // MaxContextArtifacts bounds the number of artifact summaries exposed to one
@@ -190,6 +198,19 @@ const (
 	ActionShowAgents                // Open the read-only agent activity hub
 	ActionDeleteMemory              // Delete one persistent memory entry (Data = id)
 	ActionMCPReconnect              // Reconnect an MCP server (Data = server name)
+	ActionPermissionsAcceptEdits    // Toggle accept-workspace-edits posture (Data = on|off)
+	ActionPermissionsClear          // Clear every process-local session approval grant
+	ActionPermissionsRevoke         // Revoke session grants for one tool (Data = tool; empty = all)
+	ActionPermissionsAllowBash      // Persist workspace bash prefix/pattern (Data = pattern)
+	ActionPermissionsAllowMCP       // Persist exact MCP tool allow (Data = tool)
+	ActionPermissionsAllowPath      // Persist write/edit/mkdir path (Data = path)
+	ActionPermissionsForgetBash     // Remove workspace bash prefix (Data = prefix)
+	ActionPermissionsForgetMCP      // Remove exact MCP tool allow (Data = tool)
+	ActionPermissionsForgetPath     // Remove write path allow (Data = path)
+	ActionPermissionsExport         // Export durable rules (Data = path; empty = default)
+	ActionPermissionsImport         // Import durable rules (Data = path[|replace])
+	ActionPermissionsClearRules     // Clear all durable workspace rules
+	ActionPermissionsPanel          // Open the interactive permissions panel
 )
 
 // Registry holds all registered slash commands.

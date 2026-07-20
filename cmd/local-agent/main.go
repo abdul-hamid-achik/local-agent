@@ -589,7 +589,7 @@ func run() int {
 			}
 		}()
 		ag.SetCheckpointSessionID(session.ID)
-		ag.SetExecutionSessionID(session.ID)
+		ag.SetExecutionSessionID(session.ID, session.PublicID)
 		ag.SetExecutionSnapshotCursor(executionCursor)
 
 		// Run the agent synchronously.

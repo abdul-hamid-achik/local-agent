@@ -224,6 +224,7 @@ type SessionListMsg struct {
 type SessionLoadedMsg struct {
 	LoadToken        uint64
 	SessionID        int64
+	SessionPublicID  string
 	State            persistedSessionState
 	StateRecord      db.SessionStateRecord
 	Title            string

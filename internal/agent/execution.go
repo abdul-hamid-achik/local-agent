@@ -18,6 +18,7 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/ice"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 	permissionPkg "github.com/abdul-hamid-achik/local-agent/internal/permission"
+	"github.com/abdul-hamid-achik/local-agent/internal/sessionref"
 )
 
 const executionLedgerTimeout = 5 * time.Second
@@ -54,14 +55,15 @@ type ExecutionLedger interface {
 // active session is latched until the session scope changes or a host that has
 // committed durable reconciliation explicitly requests a recovery recheck.
 type UnresolvedExecutionError struct {
-	SessionID      int64
-	WorkspaceID    string
-	SnapshotCursor int64
-	TurnID         string
-	ExecutionID    string
-	ToolName       string
-	EventType      executionpkg.EventType
-	Cause          error
+	SessionID       int64
+	SessionPublicID string
+	WorkspaceID     string
+	SnapshotCursor  int64
+	TurnID          string
+	ExecutionID     string
+	ToolName        string
+	EventType       executionpkg.EventType
+	Cause           error
 	// PendingReconciliations counts every execution in the session that still
 	// requires reconciliation evidence, including this one, so hosts can report
 	// the full backlog instead of revealing it one recovery at a time.
@@ -101,7 +103,11 @@ func (e *UnresolvedExecutionError) RecoveryInspectCommand() string {
 	if e.EventType != executionpkg.EventOutcomeUnknown && e.EventType != executionpkg.EventStarted {
 		return ""
 	}
-	return fmt.Sprintf("local-agent execution recover %d %s", e.SessionID, shellQuoteRecoveryArgument(e.ExecutionID))
+	handle := strconv.FormatInt(e.SessionID, 10)
+	if sessionref.Valid(e.SessionPublicID) {
+		handle = sessionref.Format(e.SessionPublicID)
+	}
+	return fmt.Sprintf("local-agent execution recover %s %s", handle, shellQuoteRecoveryArgument(e.ExecutionID))
 }
 
 func shellQuoteRecoveryArgument(value string) string {
@@ -121,8 +127,10 @@ func (a *Agent) SetExecutionLedger(ledger ExecutionLedger) {
 
 // SetExecutionSessionID sets the durable session scope. Changing sessions
 // clears an unresolved-execution latch because the old hazard belongs to a
-// different durable scope.
-func (a *Agent) SetExecutionSessionID(sessionID int64) {
+// different durable scope. When publicID is a valid 7-char hex handle, ICE
+// scopes as db:<publicID>; otherwise ICE falls back to db:<sessionID> so tests
+// and callers without a public id keep stable numeric scopes.
+func (a *Agent) SetExecutionSessionID(sessionID int64, publicID string) {
 	a.mu.Lock()
 	changed := a.executionSessionID != sessionID
 	if changed {
@@ -131,7 +139,11 @@ func (a *Agent) SetExecutionSessionID(sessionID int64) {
 		a.resetAutoContinuationHistoryLocked()
 		a.invalidateBobWorkspaceContextLocked()
 		if sessionID > 0 {
-			a.iceSessionScope = "db:" + strconv.FormatInt(sessionID, 10)
+			if sessionref.Valid(publicID) {
+				a.iceSessionScope = "db:" + sessionref.Format(publicID)
+			} else {
+				a.iceSessionScope = "db:" + strconv.FormatInt(sessionID, 10)
+			}
 		} else {
 			// A cleared durable ID starts a new conversation scope. The
 			// cryptographic runtime ID prevents cross-process collisions and the
@@ -285,14 +297,15 @@ func (a *Agent) executionRuntime(ctx context.Context) (executionRuntime, error) 
 			reason = fmt.Sprintf("%s effect is newer than the session snapshot and must be projected before provider work", state.Latest.Type)
 		}
 		firstUnresolved = &UnresolvedExecutionError{
-			SessionID:      state.Identity.SessionID,
-			WorkspaceID:    state.Identity.WorkspaceID,
-			SnapshotCursor: runtime.snapshotCursor,
-			TurnID:         state.Identity.TurnID,
-			ExecutionID:    state.Identity.ExecutionID,
-			ToolName:       state.Identity.ToolName,
-			EventType:      state.Latest.Type,
-			Cause:          errors.New(reason),
+			SessionID:       state.Identity.SessionID,
+			SessionPublicID: a.executionSessionPublicID(),
+			WorkspaceID:     state.Identity.WorkspaceID,
+			SnapshotCursor:  runtime.snapshotCursor,
+			TurnID:          state.Identity.TurnID,
+			ExecutionID:     state.Identity.ExecutionID,
+			ToolName:        state.Identity.ToolName,
+			EventType:       state.Latest.Type,
+			Cause:           errors.New(reason),
 		}
 	}
 	if firstUnresolved != nil {
@@ -515,6 +528,14 @@ func (a *Agent) executionOutcomeAnswered(
 		// The connected server is the effect owner; its reply, even an
 		// application-level error, is a verifiable answer.
 		return true
+	}
+	// Lazy call_tool with incomplete/unroutable target never reached a
+	// downstream effect owner. A gateway-level rejection is therefore an
+	// answered failure, not a partial-effect hazard requiring reconciliation.
+	if a.isTrustedLazyMCPHubCall(call.Name) {
+		if _, _, exact := exactLazyMCPHubTarget(call.Arguments); !exact {
+			return true
+		}
 	}
 	if _, ok := a.gatewayDownstreamServer(call); !ok {
 		return false
@@ -759,14 +780,31 @@ func (a *Agent) preflightToolCall(kind executionpkg.Kind, tc llm.ToolCall) error
 			return errors.New("MCP registry is unavailable")
 		}
 		resolved, ok := a.registry.ResolveToolName(tc.Name)
-		if !ok || resolved != tc.Name {
+		if !ok {
 			return fmt.Errorf("unknown MCP tool %q", tc.Name)
+		}
+		// Bare remote names may uniquely resolve to one exposed server__tool
+		// form. Suggest that exact spelling without rewriting the call identity;
+		// the model must re-issue the namespaced name for a clean audit trail.
+		if resolved != tc.Name {
+			return fmt.Errorf("unknown MCP tool %q; use exact namespaced name %q", tc.Name, resolved)
 		}
 		def, ok := a.mcpToolDefinition(tc.Name)
 		if !ok {
 			return fmt.Errorf("unknown MCP tool %q", tc.Name)
 		}
-		return preflightMCPToolArguments(def, tc.Arguments)
+		if err := preflightMCPToolArguments(def, tc.Arguments); err != nil {
+			return err
+		}
+		// Lazy MCPHub call_tool with incomplete routing never reaches a
+		// downstream effect owner. Fail closed before approval so the gateway
+		// is not asked to invent a partial dispatch from partial args.
+		if a.isTrustedLazyMCPHubCall(tc.Name) {
+			if _, _, exact := exactLazyMCPHubTarget(tc.Arguments); !exact {
+				return errors.New("mcphub_call_tool requires exact server and tool (or tool as server__tool)")
+			}
+		}
+		return nil
 	default:
 		return fmt.Errorf("unknown execution kind %q", kind)
 	}
@@ -850,6 +888,18 @@ func (a *Agent) decideToolAuthorization(ctx context.Context, tc llm.ToolCall, be
 				decision: permissionPkg.DecisionAllowSession,
 			}, nil
 		}
+		// Durable workspace rules (bash prefix / exact MCP tool) are
+		// user-authored, workspace-scoped allows — not broad tool-name policy.
+		if a.hasWorkspaceRuleApproval(tc) {
+			if err := a.revalidateInteractiveApproval(state, tc); err != nil {
+				return staleApprovalAuthorization(err), nil
+			}
+			return toolAuthorization{
+				allowed:  true,
+				approval: executionpkg.ApprovalPolicy,
+				decision: permissionPkg.DecisionAllowSession,
+			}, nil
+		}
 		if beforeAsk != nil {
 			if err := beforeAsk(); err != nil {
 				return toolAuthorization{}, err
@@ -881,6 +931,9 @@ func (a *Agent) decideToolAuthorization(ctx context.Context, tc llm.ToolCall, be
 				}
 				return staleApprovalAuthorization(err), nil
 			}
+			// Default session grants stay exact-request scoped. Wider scopes are
+			// applied only when the tool is eligible and resources can be bound.
+			applySessionScope(&request, response.ScopeKind)
 			a.rememberSessionApproval(request)
 			return toolAuthorization{allowed: true, approval: executionpkg.ApprovalSession, decision: response.Decision}, nil
 		case permissionPkg.DecisionUserDeny:
@@ -930,17 +983,38 @@ func (a *Agent) decideToolAuthorization(ctx context.Context, tc llm.ToolCall, be
 func (a *Agent) unresolvedFor(tracked trackedToolExecution, eventType executionpkg.EventType, cause error) *UnresolvedExecutionError {
 	a.mu.RLock()
 	cursor := a.executionCursor
+	publicID := executionPublicIDFromScope(a.iceSessionScope)
 	a.mu.RUnlock()
 	return &UnresolvedExecutionError{
-		SessionID:      tracked.identity.SessionID,
-		WorkspaceID:    tracked.identity.WorkspaceID,
-		SnapshotCursor: cursor,
-		TurnID:         tracked.identity.TurnID,
-		ExecutionID:    tracked.identity.ExecutionID,
-		ToolName:       tracked.identity.ToolName,
-		EventType:      eventType,
-		Cause:          cause,
+		SessionID:       tracked.identity.SessionID,
+		SessionPublicID: publicID,
+		WorkspaceID:     tracked.identity.WorkspaceID,
+		SnapshotCursor:  cursor,
+		TurnID:          tracked.identity.TurnID,
+		ExecutionID:     tracked.identity.ExecutionID,
+		ToolName:        tracked.identity.ToolName,
+		EventType:       eventType,
+		Cause:           cause,
 	}
+}
+
+func (a *Agent) executionSessionPublicID() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return executionPublicIDFromScope(a.iceSessionScope)
+}
+
+// executionPublicIDFromScope returns the public handle encoded in an ICE
+// session scope when SetExecutionSessionID was given a valid public id.
+func executionPublicIDFromScope(scope string) string {
+	if !strings.HasPrefix(scope, "db:") {
+		return ""
+	}
+	publicID := strings.TrimPrefix(scope, "db:")
+	if sessionref.Valid(publicID) {
+		return sessionref.Format(publicID)
+	}
+	return ""
 }
 
 func terminalLedgerFailureReceipt(name string, err error) string {

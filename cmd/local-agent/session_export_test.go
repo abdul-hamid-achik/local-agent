@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"bufio"
 	"bytes"
 	"context"
@@ -15,6 +16,7 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/controlplane"
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
 	"github.com/abdul-hamid-achik/local-agent/internal/execution"
+	"github.com/abdul-hamid-achik/local-agent/internal/sessionref"
 	"github.com/abdul-hamid-achik/local-agent/internal/goal"
 	"github.com/abdul-hamid-achik/local-agent/internal/safeio"
 )
@@ -35,6 +37,50 @@ type fakeSessionExportStore struct {
 	cpErr    error
 	leaseErr error
 	leases   int
+}
+
+
+
+
+func (s *fakeSessionExportStore) ResolveSessionRef(_ context.Context, ref string) (db.Session, error) {
+	publicID, err := sessionref.Parse(ref)
+	if err != nil {
+		return db.Session{}, err
+	}
+	candidates := make([]db.Session, 0, 1+len(s.sessions))
+	if s.session.ID != 0 {
+		candidates = append(candidates, s.session)
+	}
+	candidates = append(candidates, s.sessions...)
+	for _, session := range candidates {
+		pid := session.PublicID
+		if pid == "" {
+			pid = fmt.Sprintf("%07x", session.ID)
+		}
+		if publicID == pid {
+			session.PublicID = pid
+			return session, nil
+		}
+	}
+	return db.Session{}, fmt.Errorf("session %s: not found", publicID)
+}
+
+func (s *fakeSessionExportStore) SessionHandle(_ context.Context, sessionID int64) (string, error) {
+	if s.session.ID == sessionID {
+		if s.session.PublicID != "" {
+			return s.session.PublicID, nil
+		}
+		return fmt.Sprintf("%07x", sessionID), nil
+	}
+	for _, session := range s.sessions {
+		if session.ID == sessionID {
+			if session.PublicID != "" {
+				return session.PublicID, nil
+			}
+			return fmt.Sprintf("%07x", sessionID), nil
+		}
+	}
+	return fmt.Sprintf("%07x", sessionID), nil
 }
 
 func (s *fakeSessionExportStore) AcquireExecutionSessionLease(context.Context, int64, string) (*db.ExecutionSessionLease, error) {
@@ -145,7 +191,7 @@ func TestSessionExportWritesJSONLAndMarkdownWithOpenIssues(t *testing.T) {
 	}
 	dir := t.TempDir()
 	var stdout, stderr bytes.Buffer
-	code := handleSessionExport(store, "/workspace/repo", []string{"--out", dir, "7"}, &stdout, &stderr)
+	code := handleSessionExport(store, "/workspace/repo", []string{"--out", dir, "0000007"}, &stdout, &stderr)
 	if code != 0 || stderr.Len() != 0 {
 		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
 	}
@@ -250,7 +296,7 @@ func TestSessionExportFlagsUnprojectedAnsweredEffect(t *testing.T) {
 	}
 	dir := t.TempDir()
 	var stdout, stderr bytes.Buffer
-	if code := handleSessionExport(store, "/workspace/repo", []string{"--format", "md", "--out", dir, "3"}, &stdout, &stderr); code != 0 {
+	if code := handleSessionExport(store, "/workspace/repo", []string{"--format", "md", "--out", dir, "0000003"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit stderr=%q", stderr.String())
 	}
 	md, err := os.ReadFile(filepath.Join(dir, "session-3-summary.md"))
@@ -285,7 +331,7 @@ func TestSessionExportGoalOwnedHazardsUseGoalRecoveryInspector(t *testing.T) {
 	}
 	dir := t.TempDir()
 	var stdout, stderr bytes.Buffer
-	if code := handleSessionExport(store, "/workspace/repo", []string{"--format", "md", "--out", dir, "11"}, &stdout, &stderr); code != 0 {
+	if code := handleSessionExport(store, "/workspace/repo", []string{"--format", "md", "--out", dir, "000000b"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
 	}
 	md, err := os.ReadFile(filepath.Join(dir, "session-11-summary.md"))
@@ -315,7 +361,7 @@ func TestSessionExportRejectsCursorBeyondDurableExecutionLedger(t *testing.T) {
 		events:   []execution.Event{event},
 	}
 	var stdout, stderr bytes.Buffer
-	code := handleSessionExport(store, "/workspace/repo", []string{"--out", t.TempDir(), "7"}, &stdout, &stderr)
+	code := handleSessionExport(store, "/workspace/repo", []string{"--out", t.TempDir(), "0000007"}, &stdout, &stderr)
 	if code != 1 || !strings.Contains(stderr.String(), "cursor 10 exceeds latest durable execution event 9") {
 		t.Fatalf("over-cursor exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
@@ -331,7 +377,7 @@ func TestSessionExportRejectsCursorOwnedByAnotherSession(t *testing.T) {
 		},
 	}
 	var stdout, stderr bytes.Buffer
-	code := handleSessionExport(store, "/workspace/repo", []string{"--out", t.TempDir(), "7"}, &stdout, &stderr)
+	code := handleSessionExport(store, "/workspace/repo", []string{"--out", t.TempDir(), "0000007"}, &stdout, &stderr)
 	if code != 1 || !strings.Contains(stderr.String(), "cursor 5 does not identify a durable execution event in this session/workspace") {
 		t.Fatalf("foreign-cursor exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
@@ -351,7 +397,7 @@ func TestSessionExportMakesReachedBoundsVisible(t *testing.T) {
 	}
 	dir := t.TempDir()
 	var stdout, stderr bytes.Buffer
-	if code := handleSessionExport(store, "/workspace/repo", []string{"--out", dir, "12"}, &stdout, &stderr); code != 0 {
+	if code := handleSessionExport(store, "/workspace/repo", []string{"--out", dir, "000000c"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "additional records may be omitted") {
@@ -400,12 +446,12 @@ func TestFailClosedOpenIssueBoundDoesNotClaimOmission(t *testing.T) {
 func TestSessionExportRejectsForeignWorkspaceAndBadFormat(t *testing.T) {
 	store := &fakeSessionExportStore{session: db.Session{ID: 7, WorkspaceID: "/workspace/other"}}
 	var stdout, stderr bytes.Buffer
-	if code := handleSessionExport(store, "/workspace/repo", []string{"7"}, &stdout, &stderr); code != 1 ||
+	if code := handleSessionExport(store, "/workspace/repo", []string{"0000007"}, &stdout, &stderr); code != 1 ||
 		!strings.Contains(stderr.String(), "different workspace") {
 		t.Fatalf("foreign workspace exit=%d stderr=%q", code, stderr.String())
 	}
 	stderr.Reset()
-	if code := handleSessionExport(store, "/workspace/repo", []string{"--format", "pdf", "7"}, &stdout, &stderr); code != 2 ||
+	if code := handleSessionExport(store, "/workspace/repo", []string{"--format", "pdf", "0000007"}, &stdout, &stderr); code != 2 ||
 		!strings.Contains(stderr.String(), "unknown --format") {
 		t.Fatalf("bad format exit=%d stderr=%q", code, stderr.String())
 	}
@@ -441,7 +487,7 @@ func TestSessionExportFailsClosedWhenAuditInputsCannotBeRead(t *testing.T) {
 			}
 			test.set(store)
 			var stdout, stderr bytes.Buffer
-			code := handleSessionExport(store, "/workspace/repo", []string{"--out", t.TempDir(), "7"}, &stdout, &stderr)
+			code := handleSessionExport(store, "/workspace/repo", []string{"--out", t.TempDir(), "0000007"}, &stdout, &stderr)
 			if code != 1 || !strings.Contains(stderr.String(), test.want) {
 				t.Fatalf("exit=%d stderr=%q, want %q", code, stderr.String(), test.want)
 			}
@@ -463,7 +509,7 @@ func TestSessionExportPublishesOwnerOnlyFilesWithoutFollowingSymlinks(t *testing
 		}
 	}
 	var stdout, stderr bytes.Buffer
-	if code := handleSessionExport(store, "/workspace/repo", []string{"--out", directory, "7"}, &stdout, &stderr); code != 0 {
+	if code := handleSessionExport(store, "/workspace/repo", []string{"--out", directory, "0000007"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("replace export exit=%d stderr=%q", code, stderr.String())
 	}
 	for _, path := range []string{jsonl, markdown} {
@@ -492,7 +538,7 @@ func TestSessionExportPublishesOwnerOnlyFilesWithoutFollowingSymlinks(t *testing
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if code := handleSessionExport(store, "/workspace/repo", []string{"--format", "jsonl", "--out", directory, "7"}, &stdout, &stderr); code != 1 ||
+	if code := handleSessionExport(store, "/workspace/repo", []string{"--format", "jsonl", "--out", directory, "0000007"}, &stdout, &stderr); code != 1 ||
 		!strings.Contains(stderr.String(), "symbolic links") {
 		t.Fatalf("symlink export exit=%d stderr=%q", code, stderr.String())
 	}
@@ -540,10 +586,10 @@ func TestPrepareSessionExportDirectoryDoesNotChangeExistingPermissions(t *testin
 
 func TestSessionExportAcceptsTrailingValueFlags(t *testing.T) {
 	// SESSION_ID before a value-taking flag must keep the flag bound to its value.
-	store := &fakeSessionExportStore{session: db.Session{ID: 7, WorkspaceID: "/workspace/repo"}}
+	store := &fakeSessionExportStore{session: db.Session{ID: 7, PublicID: "0000007", WorkspaceID: "/workspace/repo"}}
 	dir := t.TempDir()
 	var stdout, stderr bytes.Buffer
-	code := handleSessionExport(store, "/workspace/repo", []string{"S7", "--format", "md", "--out", dir}, &stdout, &stderr)
+	code := handleSessionExport(store, "/workspace/repo", []string{"0000007", "--format", "md", "--out", dir}, &stdout, &stderr)
 	if code != 0 || stderr.Len() != 0 {
 		t.Fatalf("trailing value flags exit=%d stderr=%q", code, stderr.String())
 	}
@@ -554,13 +600,13 @@ func TestSessionExportAcceptsTrailingValueFlags(t *testing.T) {
 
 func TestSessionListRendersAndEmpties(t *testing.T) {
 	store := &fakeSessionExportStore{sessions: []db.Session{
-		{ID: 7, Model: "qwen", Mode: "AUTO", UpdatedAt: "2026-07-14T09:52:00Z", Title: "investigate bob"},
+		{ID: 7, PublicID: "0000007", Model: "qwen", Mode: "AUTO", UpdatedAt: "2026-07-14T09:52:00Z", Title: "investigate bob"},
 	}}
 	var stdout, stderr bytes.Buffer
 	if code := handleSessionList(store, "/workspace/repo", nil, &stdout, &stderr); code != 0 {
 		t.Fatalf("list exit=%d stderr=%q", code, stderr.String())
 	}
-	for _, want := range []string{"SESSION", "S7", "investigate bob", "session export SESSION_ID"} {
+	for _, want := range []string{"SESSION", "0000007", "investigate bob", "session export SESSION_ID"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("list output missing %q: %s", want, stdout.String())
 		}

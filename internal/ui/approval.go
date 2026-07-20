@@ -3,6 +3,7 @@ package ui
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"unicode/utf8"
 
@@ -31,20 +32,185 @@ type approvalChoice struct {
 	Key          string
 	Label        string
 	CompactLabel string
+	// ScopeKind narrows an AllowSession choice. Empty means exact_request.
+	ScopeKind string
 }
 
 // Keep the safe outcome first: Enter on a newly opened permission request
 // denies it unless the user deliberately moves to an allow choice. Direct
-// y/n/s shortcuts remain available regardless of the focused row.
-var approvalChoices = [...]approvalChoice{
+// y/n/s (and a when offered) shortcuts remain available regardless of focus.
+var baseApprovalChoices = [...]approvalChoice{
 	{Decision: permission.DecisionUserDeny, Key: "n", Label: "deny", CompactLabel: "deny"},
 	{Decision: permission.DecisionAllowOnce, Key: "y", Label: "once", CompactLabel: "once"},
 	{
 		Decision:     permission.DecisionAllowSession,
 		Key:          "s",
-		Label:        "identical request · current session",
-		CompactLabel: "identical/session",
+		Label:        "same request again this session",
+		CompactLabel: "same/session",
 	},
+}
+
+// approvalChoicesFor returns the decision rows for a tool. Wider session
+// scopes are offered only when the tool can bind them safely. Labels include
+// derived path/prefix hints when available so the user sees what "a"/"p"/"w" mean.
+func approvalChoicesFor(toolName string, preview permission.ApprovalPreview) []approvalChoice {
+	choices := make([]approvalChoice, 0, len(baseApprovalChoices)+3)
+	choices = append(choices, baseApprovalChoices[:]...)
+	switch {
+	case sessionToolScopeEligibleUI(toolName):
+		choices = append(choices, approvalChoice{
+			Decision:     permission.DecisionAllowSession,
+			Key:          "a",
+			Label:        "this tool again this session",
+			CompactLabel: "tool/session",
+			ScopeKind:    permission.ScopeSessionTool,
+		})
+		if path := strings.TrimSpace(preview.Path); path != "" {
+			pathHint := compactApprovalHint(path, 28)
+			pathLabel := "this path again this session"
+			pathCompact := "path/session"
+			if pathHint != "" {
+				pathLabel = "path again this session · " + pathHint
+				pathCompact = "path · " + pathHint
+			}
+			choices = append(choices, approvalChoice{
+				Decision:     permission.DecisionAllowSession,
+				Key:          "p",
+				Label:        pathLabel,
+				CompactLabel: pathCompact,
+				ScopeKind:    permission.ScopeSessionPath,
+			})
+			saveLabel := "save this path for this workspace"
+			saveCompact := "path/workspace"
+			if pathHint != "" {
+				saveLabel = "save path for workspace · " + pathHint
+				saveCompact = "save · " + pathHint
+			}
+			choices = append(choices, approvalChoice{
+				Decision:     permission.DecisionAllowSession,
+				Key:          "w",
+				Label:        saveLabel,
+				CompactLabel: saveCompact,
+				ScopeKind:    permission.DurableWritePath,
+			})
+		}
+	case toolName == "bash":
+		if prefix, ok := permission.DeriveBashPrefix(preview.Command); ok {
+			prefixHint := compactApprovalHint(prefix, 24)
+			sessionLabel := "command prefix this session"
+			sessionCompact := "bash/session"
+			if prefixHint != "" {
+				sessionLabel = "prefix this session · " + prefixHint
+				sessionCompact = "bash · " + prefixHint
+			}
+			choices = append(choices, approvalChoice{
+				Decision:     permission.DecisionAllowSession,
+				Key:          "a",
+				Label:        sessionLabel,
+				CompactLabel: sessionCompact,
+				ScopeKind:    permission.ScopeSessionBashPrefix,
+			})
+			// Durable form uses trailing * when the approved command has more args.
+			durable := prefix
+			if fields := strings.Fields(strings.TrimSpace(preview.Command)); len(fields) > len(strings.Fields(prefix)) {
+				durable = prefix + " *"
+			}
+			durableHint := compactApprovalHint(durable, 24)
+			saveLabel := "save bash pattern for this workspace"
+			saveCompact := "bash/workspace"
+			if durableHint != "" {
+				saveLabel = "save for workspace · " + durableHint
+				saveCompact = "save · " + durableHint
+			}
+			choices = append(choices, approvalChoice{
+				Decision:     permission.DecisionAllowSession,
+				Key:          "w",
+				Label:        saveLabel,
+				CompactLabel: saveCompact,
+				ScopeKind:    permission.DurableBashPrefix,
+			})
+		}
+	case sessionMCPToolScopeEligibleUI(toolName):
+		toolHint := compactApprovalHint(toolName, 28)
+		sessionLabel := "this MCP tool again this session"
+		sessionCompact := "mcp/session"
+		if toolHint != "" {
+			sessionLabel = "MCP tool this session · " + toolHint
+			sessionCompact = "mcp · " + toolHint
+		}
+		choices = append(choices, approvalChoice{
+			Decision:     permission.DecisionAllowSession,
+			Key:          "a",
+			Label:        sessionLabel,
+			CompactLabel: sessionCompact,
+			ScopeKind:    permission.ScopeSessionMCPTool,
+		})
+		saveLabel := "save MCP tool for this workspace"
+		saveCompact := "mcp/workspace"
+		if toolHint != "" {
+			saveLabel = "save MCP for workspace · " + toolHint
+			saveCompact = "save · " + toolHint
+		}
+		choices = append(choices, approvalChoice{
+			Decision:     permission.DecisionAllowSession,
+			Key:          "w",
+			Label:        saveLabel,
+			CompactLabel: saveCompact,
+			ScopeKind:    permission.DurableMCPTool,
+		})
+	}
+	return choices
+}
+
+func compactApprovalHint(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if strings.Contains(value, "/") || strings.Contains(value, `\`) {
+		value = filepath.Base(value)
+	}
+	if limit > 0 && len(value) > limit {
+		if limit <= 3 {
+			return value[:limit]
+		}
+		return value[:limit-3] + "..."
+	}
+	return value
+}
+
+func sessionToolScopeEligibleUI(toolName string) bool {
+	switch strings.TrimSpace(toolName) {
+	case "write", "edit", "mkdir":
+		return true
+	default:
+		return false
+	}
+}
+
+func sessionMCPToolScopeEligibleUI(toolName string) bool {
+	_, ok := permission.NormalizeMCPToolName(toolName)
+	return ok
+}
+
+func (m *Model) currentApprovalChoices() []approvalChoice {
+	toolName := ""
+	var preview permission.ApprovalPreview
+	if m != nil && m.pendingApproval != nil {
+		toolName = m.pendingApproval.ToolName
+		preview = m.pendingApproval.Preview
+		if preview.Command == "" {
+			if cmd, ok := m.pendingApproval.Args["command"].(string); ok {
+				preview.Command = cmd
+			}
+		}
+		if preview.Path == "" {
+			if path, ok := m.pendingApproval.Args["path"].(string); ok {
+				preview.Path = path
+			}
+		}
+	}
+	return approvalChoicesFor(toolName, preview)
 }
 
 type approvalTranscriptAnchor struct {
@@ -125,7 +291,24 @@ func (m *Model) openApproval(request ToolApprovalMsg) error {
 }
 
 func (m *Model) resolvePendingApproval(response permission.ApprovalResponse) {
+	m.resolvePendingApprovalWithScope(response, "")
+}
+
+func (m *Model) resolvePendingApprovalWithScope(response permission.ApprovalResponse, scopeKind string) {
 	anchor := m.captureApprovalTranscriptAnchor()
+	if scopeKind == permission.DurableBashPrefix || scopeKind == permission.DurableMCPTool || scopeKind == permission.DurableWritePath {
+		if err := m.persistWorkspaceRuleFromApproval(scopeKind); err != nil {
+			m.entries = append(m.entries, ChatEntry{
+				Kind:    "error",
+				Content: "Could not save workspace rule: " + err.Error(),
+			})
+		} else {
+			m.entries = append(m.entries, ChatEntry{
+				Kind:    "system",
+				Content: "Saved durable workspace rule. Future sessions in this workspace will reuse it until removed with /permissions.",
+			})
+		}
+	}
 	if m.pendingApproval != nil && m.pendingApproval.Response != nil {
 		m.pendingApproval.Response <- response
 	}
@@ -153,14 +336,15 @@ func (m *Model) toggleApprovalDetails() {
 }
 
 func (m *Model) moveApprovalChoice(delta int) {
-	if m.approvalState == nil || len(approvalChoices) == 0 || delta == 0 {
+	choices := m.currentApprovalChoices()
+	if m.approvalState == nil || len(choices) == 0 || delta == 0 {
 		return
 	}
 	index := m.approvalState.ChoiceIndex + delta
 	if index < 0 {
-		index = len(approvalChoices) - 1
+		index = len(choices) - 1
 	}
-	if index >= len(approvalChoices) {
+	if index >= len(choices) {
 		index = 0
 	}
 	m.approvalState.ChoiceIndex = index
@@ -172,18 +356,83 @@ func (m *Model) resetHiddenApprovalChoice() {
 	}
 }
 
-func (m *Model) selectedApprovalResponse() permission.ApprovalResponse {
+func (m *Model) selectedApprovalResponseAndScope() (permission.ApprovalResponse, string) {
+	choices := m.currentApprovalChoices()
 	if m.approvalState == nil || m.approvalState.ChoiceIndex < 0 ||
-		m.approvalState.ChoiceIndex >= len(approvalChoices) {
-		return permission.Deny()
+		m.approvalState.ChoiceIndex >= len(choices) {
+		return permission.Deny(), ""
 	}
-	switch approvalChoices[m.approvalState.ChoiceIndex].Decision {
+	choice := choices[m.approvalState.ChoiceIndex]
+	switch choice.Decision {
 	case permission.DecisionAllowOnce:
-		return permission.AllowOnce()
+		return permission.AllowOnce(), ""
 	case permission.DecisionAllowSession:
-		return permission.AllowSession()
+		return approvalResponseForScope(choice.ScopeKind), choice.ScopeKind
 	default:
-		return permission.Deny()
+		return permission.Deny(), ""
+	}
+}
+
+func approvalResponseForScope(scopeKind string) permission.ApprovalResponse {
+	switch scopeKind {
+	case permission.ScopeSessionTool:
+		return permission.AllowSessionTool()
+	case permission.ScopeSessionPath:
+		return permission.AllowSessionPath()
+	case permission.ScopeSessionBashPrefix, permission.DurableBashPrefix:
+		// Workspace durable save is applied by the UI before the response is
+		// delivered; the agent still receives a process-local bash-prefix grant.
+		return permission.AllowSessionBashPrefix()
+	case permission.ScopeSessionMCPTool, permission.DurableMCPTool:
+		return permission.AllowSessionMCPTool()
+	case permission.DurableWritePath:
+		// Durable path save + process-local path grant for this turn.
+		return permission.AllowSessionPath()
+	default:
+		return permission.AllowSession()
+	}
+}
+
+// persistWorkspaceRuleFromApproval writes durable rules when the user chose
+// the workspace ("w") option. Failures are returned for system messaging; the
+// session grant still proceeds via the response.
+func (m *Model) persistWorkspaceRuleFromApproval(scopeKind string) error {
+	if m == nil || m.agent == nil || m.pendingApproval == nil {
+		return nil
+	}
+	switch scopeKind {
+	case permission.DurableBashPrefix:
+		command := m.pendingApproval.Preview.Command
+		if command == "" {
+			command, _ = m.pendingApproval.Args["command"].(string)
+		}
+		// Prefer a trailing-glob form so "go test ./pkg" variants keep matching.
+		prefix, ok := permission.DeriveBashPrefix(command)
+		if !ok {
+			return fmt.Errorf("command cannot form a durable bash prefix")
+		}
+		// Store as "prefix *" when the approved command has extra args, so the
+		// durable rule behaves like Claude's Bash(prefix *).
+		if fields := strings.Fields(strings.TrimSpace(command)); len(fields) > len(strings.Fields(prefix)) {
+			prefix = prefix + " *"
+		}
+		_, err := m.agent.AddWorkspaceBashPrefix(prefix)
+		return err
+	case permission.DurableMCPTool:
+		_, err := m.agent.AddWorkspaceMCPTool(m.pendingApproval.ToolName)
+		return err
+	case permission.DurableWritePath:
+		path := m.pendingApproval.Preview.Path
+		if path == "" {
+			path, _ = m.pendingApproval.Args["path"].(string)
+		}
+		if strings.TrimSpace(path) == "" {
+			return fmt.Errorf("approval has no path to save")
+		}
+		_, err := m.agent.AddWorkspaceWritePath(path)
+		return err
+	default:
+		return nil
 	}
 }
 
@@ -335,8 +584,12 @@ func (m *Model) renderApprovalChoices(width int) string {
 	if m.approvalState == nil || width <= 0 {
 		return ""
 	}
+	choices := m.currentApprovalChoices()
+	if len(choices) == 0 {
+		return ""
+	}
 	selected := m.approvalState.ChoiceIndex
-	if selected < 0 || selected >= len(approvalChoices) {
+	if selected < 0 || selected >= len(choices) {
 		selected = 0
 	}
 
@@ -361,8 +614,8 @@ func (m *Model) renderApprovalChoices(width int) string {
 		return indicator + keyView + " " + labelView
 	}
 
-	wide := make([]string, 0, len(approvalChoices)*2-1)
-	for index, choice := range approvalChoices {
+	wide := make([]string, 0, len(choices)*2-1)
+	for index, choice := range choices {
 		if index > 0 {
 			wide = append(wide, m.styles.OverlayDim.Render(glyphSeparator(m.glyphProfile)))
 		}
@@ -373,22 +626,26 @@ func (m *Model) renderApprovalChoices(width int) string {
 		return wideView
 	}
 	if width < 40 {
-		firstChoice := strings.TrimLeft(choiceView(approvalChoices[0], selected == 0, true), " ")
-		secondChoice := strings.TrimLeft(choiceView(approvalChoices[1], selected == 1, true), " ")
-		first := lipgloss.JoinHorizontal(lipgloss.Top,
-			firstChoice,
-			m.styles.OverlayDim.Render(glyphSeparator(m.glyphProfile)),
-			secondChoice,
-		)
-		second := choiceView(approvalChoices[2], selected == 2, true)
-		return lipgloss.JoinVertical(lipgloss.Left,
-			truncateDisplayWithGlyphProfile(first, width, m.glyphProfile),
-			truncateDisplayWithGlyphProfile(second, width, m.glyphProfile),
-		)
+		rows := make([]string, 0, (len(choices)+1)/2)
+		for index := 0; index < len(choices); index += 2 {
+			left := strings.TrimLeft(choiceView(choices[index], selected == index, true), " ")
+			if index+1 >= len(choices) {
+				rows = append(rows, truncateDisplayWithGlyphProfile(left, width, m.glyphProfile))
+				break
+			}
+			right := strings.TrimLeft(choiceView(choices[index+1], selected == index+1, true), " ")
+			row := lipgloss.JoinHorizontal(lipgloss.Top,
+				left,
+				m.styles.OverlayDim.Render(glyphSeparator(m.glyphProfile)),
+				right,
+			)
+			rows = append(rows, truncateDisplayWithGlyphProfile(row, width, m.glyphProfile))
+		}
+		return lipgloss.JoinVertical(lipgloss.Left, rows...)
 	}
 
-	rows := make([]string, 0, len(approvalChoices))
-	for index, choice := range approvalChoices {
+	rows := make([]string, 0, len(choices))
+	for index, choice := range choices {
 		rows = append(rows,
 			truncateDisplayWithGlyphProfile(
 				choiceView(choice, index == selected, true),
@@ -641,10 +898,26 @@ func approvalWrappedLines(value string, width int) []string {
 }
 
 func approvalScopeLabel(scope permission.ApprovalScope) string {
-	if scope.Kind == permission.ScopeExactRequest {
-		return "Identical request only · current Agent session"
+	switch scope.Kind {
+	case permission.ScopeExactRequest:
+		return "Exact arguments · this process only"
+	case permission.ScopeSessionTool:
+		return "This tool · any args · this process"
+	case permission.ScopeSessionPath:
+		if resource := strings.TrimSpace(scope.Resource); resource != "" {
+			return "Path " + compactApprovalHint(resource, 40) + " · write/edit/mkdir · this process"
+		}
+		return "This path · write/edit/mkdir · this process"
+	case permission.ScopeSessionBashPrefix:
+		if resource := strings.TrimSpace(scope.Resource); resource != "" {
+			return "Bash pattern " + compactApprovalHint(resource, 32) + " · this process"
+		}
+		return "Bash prefix · this process"
+	case permission.ScopeSessionMCPTool:
+		return "This MCP tool · any args · this process"
+	default:
+		return "This request only"
 	}
-	return "This request only"
 }
 
 func shortApprovalDigest(digest string) string {

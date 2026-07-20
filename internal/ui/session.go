@@ -28,6 +28,7 @@ var ErrSessionStateRevisionUnknown = errors.New("session state revision is unkno
 // SessionListItem represents a session in the list.
 type SessionListItem struct {
 	ID        int64  `json:"id"`
+	PublicID  string `json:"public_id,omitempty"`
 	Title     string `json:"title"`
 	CreatedAt string `json:"created_at"`
 }
@@ -47,7 +48,7 @@ func (m *Model) SessionResumeInfo() (SessionResumeInfo, bool) {
 	if m == nil || m.sessionStore == nil || m.sessionID <= 0 {
 		return SessionResumeInfo{}, false
 	}
-	handle := sessionref.Format(m.sessionID)
+	handle := sessionref.Format(m.sessionPublicID)
 	if handle == "" {
 		return SessionResumeInfo{}, false
 	}
@@ -185,8 +186,8 @@ func boundedSessionTitle(title string) string {
 	return title
 }
 
-func sessionDisplayLabel(id int64, title string, titleLimit int) string {
-	handle := sessionref.Format(id)
+func sessionDisplayLabel(publicID, title string, titleLimit int) string {
+	handle := sessionref.Format(publicID)
 	if handle == "" {
 		return ""
 	}
@@ -1316,7 +1317,10 @@ func listPersistedSessions(ctx context.Context, store *db.Store, workspaceID str
 	}
 	items := make([]SessionListItem, len(sessions))
 	for i, session := range sessions {
-		items[i] = SessionListItem{ID: session.ID, Title: session.Title, CreatedAt: session.UpdatedAt}
+		items[i] = SessionListItem{
+			ID: session.ID, PublicID: session.PublicID,
+			Title: session.Title, CreatedAt: session.UpdatedAt,
+		}
 	}
 	return items, nil
 }

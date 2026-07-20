@@ -438,15 +438,19 @@ func TestPendingApprovalSessionDecisionIsExplicit(t *testing.T) {
 func TestApprovalChoiceSelectionDefaultsToDenyAndSupportsArrowsAndVim(t *testing.T) {
 	tests := []struct {
 		name         string
+		toolName     string
 		move         []tea.KeyPressMsg
 		wantIndex    int
 		wantDecision permission.ApprovalDecision
+		wantScope    string
 	}{
-		{name: "safe default", wantIndex: 0, wantDecision: permission.DecisionUserDeny},
-		{name: "down to once", move: []tea.KeyPressMsg{downKey()}, wantIndex: 1, wantDecision: permission.DecisionAllowOnce},
-		{name: "vim to session", move: []tea.KeyPressMsg{charKey('j'), charKey('j')}, wantIndex: 2, wantDecision: permission.DecisionAllowSession},
-		{name: "up wraps to session", move: []tea.KeyPressMsg{upKey()}, wantIndex: 2, wantDecision: permission.DecisionAllowSession},
-		{name: "vim up wraps to session", move: []tea.KeyPressMsg{charKey('k')}, wantIndex: 2, wantDecision: permission.DecisionAllowSession},
+		{name: "safe default", toolName: "write_file", wantIndex: 0, wantDecision: permission.DecisionUserDeny},
+		{name: "down to once", toolName: "write_file", move: []tea.KeyPressMsg{downKey()}, wantIndex: 1, wantDecision: permission.DecisionAllowOnce},
+		{name: "vim to session", toolName: "write_file", move: []tea.KeyPressMsg{charKey('j'), charKey('j')}, wantIndex: 2, wantDecision: permission.DecisionAllowSession},
+		{name: "up wraps to session", toolName: "write_file", move: []tea.KeyPressMsg{upKey()}, wantIndex: 2, wantDecision: permission.DecisionAllowSession},
+		{name: "vim up wraps to session", toolName: "write_file", move: []tea.KeyPressMsg{charKey('k')}, wantIndex: 2, wantDecision: permission.DecisionAllowSession},
+		// write offers tool + path + durable path rows; wrap from deny goes to last (workspace path).
+		{name: "write up wraps to workspace path", toolName: "write", move: []tea.KeyPressMsg{upKey()}, wantIndex: 5, wantDecision: permission.DecisionAllowSession, wantScope: permission.ScopeSessionPath},
 	}
 
 	for _, tt := range tests {
@@ -454,10 +458,11 @@ func TestApprovalChoiceSelectionDefaultsToDenyAndSupportsArrowsAndVim(t *testing
 			m := newTestModel(t)
 			responses := make(chan permission.ApprovalResponse, 1)
 			m = openApprovalForTest(t, m, ToolApprovalMsg{
-				ToolName: "write_file",
+				ToolName: tt.toolName,
 				Args:     map[string]any{"path": "selection.txt"},
 				Response: responses,
 			})
+			choices := approvalChoicesFor(tt.toolName, permission.ApprovalPreview{Path: "selection.txt"})
 
 			for _, move := range tt.move {
 				updated, _ := m.Update(move)
@@ -467,7 +472,7 @@ func TestApprovalChoiceSelectionDefaultsToDenyAndSupportsArrowsAndVim(t *testing
 				t.Fatalf("choice index = %d, want %d", got, tt.wantIndex)
 			}
 			selected := ansi.Strip(m.renderApprovalChoices(m.approvalContentWidth()))
-			if !strings.Contains(selected, "› "+approvalChoices[tt.wantIndex].Key) {
+			if !strings.Contains(selected, "› "+choices[tt.wantIndex].Key) {
 				t.Fatalf("selected choice has no visible focus indicator:\n%s", selected)
 			}
 
@@ -476,10 +481,79 @@ func TestApprovalChoiceSelectionDefaultsToDenyAndSupportsArrowsAndVim(t *testing
 			if m.pendingApproval != nil {
 				t.Fatal("Enter did not resolve the selected permission choice")
 			}
-			if got := (<-responses).Normalize().Decision; got != tt.wantDecision {
-				t.Fatalf("Enter decision = %q, want %q", got, tt.wantDecision)
+			response := (<-responses).Normalize()
+			if response.Decision != tt.wantDecision {
+				t.Fatalf("Enter decision = %q, want %q", response.Decision, tt.wantDecision)
+			}
+			if response.ScopeKind != tt.wantScope {
+				t.Fatalf("Enter scope = %q, want %q", response.ScopeKind, tt.wantScope)
 			}
 		})
+	}
+}
+
+func TestApprovalSessionToolChoiceOfferedOnlyForWriteEditMkdir(t *testing.T) {
+	for _, tool := range []string{"write", "edit", "mkdir"} {
+		choices := approvalChoicesFor(tool, permission.ApprovalPreview{Path: "f.txt"})
+		if len(choices) < 4 || choices[3].Key != "a" || choices[3].ScopeKind != permission.ScopeSessionTool {
+			t.Fatalf("%s choices = %#v, want session-tool row", tool, choices)
+		}
+		if len(choices) < 5 || choices[4].Key != "p" || choices[4].ScopeKind != permission.ScopeSessionPath {
+			t.Fatalf("%s choices = %#v, want session-path row", tool, choices)
+		}
+		if len(choices) < 6 || choices[5].Key != "w" || choices[5].ScopeKind != permission.DurableWritePath {
+			t.Fatalf("%s choices = %#v, want durable path row", tool, choices)
+		}
+	}
+	bashChoices := approvalChoicesFor("bash", permission.ApprovalPreview{Command: "go test ./..."})
+	if len(bashChoices) < 4 || bashChoices[3].Key != "a" || bashChoices[3].ScopeKind != permission.ScopeSessionBashPrefix {
+		t.Fatalf("bash choices = %#v, want bash-prefix row", bashChoices)
+	}
+	for _, tool := range []string{"remove", "write_file"} {
+		choices := approvalChoicesFor(tool, permission.ApprovalPreview{})
+		if len(choices) != 3 {
+			t.Fatalf("%s choices = %#v, want base three only", tool, choices)
+		}
+	}
+}
+
+func TestPendingApprovalSessionToolShortcut(t *testing.T) {
+	m := newTestModel(t)
+	responses := make(chan permission.ApprovalResponse, 1)
+	m = openApprovalForTest(t, m, ToolApprovalMsg{
+		ToolName: "write",
+		Scope:    permission.ApprovalScope{Kind: permission.ScopeExactRequest},
+		Response: responses,
+	})
+
+	updated, _ := m.Update(charKey('a'))
+	m = updated.(*Model)
+	if m.pendingApproval != nil {
+		t.Fatal("approval remained pending after a")
+	}
+	response := (<-responses).Normalize()
+	if response.Decision != permission.DecisionAllowSession || response.ScopeKind != permission.ScopeSessionTool {
+		t.Fatalf("a decision = %#v, want allow session_tool", response)
+	}
+}
+
+func TestPendingApprovalSessionToolShortcutIgnoredForBash(t *testing.T) {
+	m := newTestModel(t)
+	responses := make(chan permission.ApprovalResponse, 1)
+	m = openApprovalForTest(t, m, ToolApprovalMsg{
+		ToolName: "bash",
+		Response: responses,
+	})
+
+	updated, _ := m.Update(charKey('a'))
+	m = updated.(*Model)
+	if m.pendingApproval == nil {
+		t.Fatal("bash approval resolved on a shortcut")
+	}
+	select {
+	case response := <-responses:
+		t.Fatalf("bash a shortcut emitted decision %#v", response)
+	default:
 	}
 }
 
@@ -714,7 +788,7 @@ func TestInlineApprovalFitsMinimumTerminalAndKeepsDecisionKeys(t *testing.T) {
 	})
 
 	inline := ansi.Strip(m.renderApproval())
-	for _, want := range []string{"write_file", "Draft + queue saved", "approval-probe.txt", "esc", "enter", "n deny", "y once", "s identical/session", "pgdn more", "d arguments"} {
+	for _, want := range []string{"write_file", "Draft + queue saved", "approval-probe.txt", "esc", "enter", "n deny", "y once", "s same/session", "pgdn more", "d arguments"} {
 		if !strings.Contains(inline, want) {
 			t.Fatalf("minimum inline approval lost %q:\n%s", want, inline)
 		}

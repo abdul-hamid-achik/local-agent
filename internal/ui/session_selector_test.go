@@ -19,7 +19,7 @@ func canonicalSessionTestWorkspace(t *testing.T) string {
 }
 
 func TestParseSessionResumeSelector(t *testing.T) {
-	for _, value := range []string{"", "S", "S0", "0", "-1", "+1", "01", "S01", " 1", "1 ", "1.5", "LATEST", "latest ", strings.Repeat("9", 40)} {
+	for _, value := range []string{"", "S", "S0", "0", "-1", "+1", "01", "S01", " 1", "1 ", "1.5", "LATEST", "latest ", "42", "S42", "s42", "a1b2c3", "a1b2c3de", strings.Repeat("9", 40)} {
 		t.Run("invalid_"+strings.ReplaceAll(value, " ", "_"), func(t *testing.T) {
 			if _, err := ParseSessionResumeSelector(value); err == nil {
 				t.Fatalf("ParseSessionResumeSelector(%q) succeeded", value)
@@ -27,16 +27,16 @@ func TestParseSessionResumeSelector(t *testing.T) {
 		})
 	}
 
-	exact, err := ParseSessionResumeSelector("42")
-	if err != nil || !exact.valid() || exact.latest || exact.sessionID != 42 {
+	exact, err := ParseSessionResumeSelector("a1b2c3d")
+	if err != nil || !exact.valid() || exact.latest || exact.sessionID != 0 || exact.publicID != "a1b2c3d" {
 		t.Fatalf("exact selector = %#v, error=%v", exact, err)
 	}
-	alias, err := ParseSessionResumeSelector("s42")
-	if err != nil || !alias.valid() || alias.latest || alias.sessionID != 42 {
+	alias, err := ParseSessionResumeSelector("A1B2C3D")
+	if err != nil || !alias.valid() || alias.latest || alias.publicID != "a1b2c3d" {
 		t.Fatalf("alias selector = %#v, error=%v", alias, err)
 	}
 	latest, err := ParseSessionResumeSelector("latest")
-	if err != nil || !latest.valid() || !latest.latest || latest.sessionID != 0 {
+	if err != nil || !latest.valid() || !latest.latest || latest.sessionID != 0 || latest.publicID != "" {
 		t.Fatalf("latest selector = %#v, error=%v", latest, err)
 	}
 	if _, err := SessionIDResumeSelector(0); err == nil {
@@ -86,7 +86,23 @@ func TestLatestSessionResumeSelectorUsesCanonicalWorkspaceNewest(t *testing.T) {
 	if err != nil || len(listed) != 2 || listed[0].ID != newer.ID || listed[1].ID != older.ID {
 		t.Fatalf("deterministic picker order = %#v, error=%v", listed, err)
 	}
+	if listed[0].PublicID == "" || listed[1].PublicID == "" {
+		t.Fatalf("list items missing public ids: %#v", listed)
+	}
 	if _, err := selector.resolve(context.Background(), store, canonicalSessionTestWorkspace(t)); err == nil || !strings.Contains(err.Error(), "no saved sessions") {
 		t.Fatalf("empty workspace latest error = %v", err)
+	}
+
+	// Public-id selector resolves and enforces workspace.
+	byPublic, err := ParseSessionResumeSelector(newer.PublicID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := byPublic.resolve(context.Background(), store, workspace)
+	if err != nil || resolved != newer.ID {
+		t.Fatalf("public resolve id=%d err=%v want %d", resolved, err, newer.ID)
+	}
+	if _, err := byPublic.resolve(context.Background(), store, otherWorkspace); err == nil {
+		t.Fatal("foreign workspace public resolve succeeded")
 	}
 }

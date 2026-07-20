@@ -17,7 +17,6 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
 	"github.com/abdul-hamid-achik/local-agent/internal/execution"
 	"github.com/abdul-hamid-achik/local-agent/internal/reconciliation"
-	"github.com/abdul-hamid-achik/local-agent/internal/sessionref"
 )
 
 const (
@@ -30,6 +29,8 @@ type executionRecoveryStore interface {
 	AcquireExecutionSessionLease(context.Context, int64, string) (*db.ExecutionSessionLease, error)
 	ResolveStandaloneExecutionReconciliation(context.Context, *db.ExecutionSessionLease, db.ResolveStandaloneExecutionReconciliationRequest) (db.StandaloneExecutionReconciliationReceipt, error)
 	ListStandaloneExecutionReconciliationPending(context.Context, int64, string, int) ([]execution.State, error)
+	ResolveSessionRef(context.Context, string) (db.Session, error)
+	SessionHandle(context.Context, int64) (string, error)
 }
 
 type executionRecoveryView struct {
@@ -138,11 +139,13 @@ func handleExecutionRecover(store executionRecoveryStore, workspace string, args
 		}
 		return 2
 	}
-	sessionID, err := sessionref.Parse(flags.Arg(0))
+	session, err := resolveSessionArg(context.Background(), store, flags.Arg(0))
 	if err != nil {
-		executionFprintf(stderr, "execution recover: invalid session reference %q\n", flags.Arg(0))
+		executionFprintf(stderr, "execution recover: %v\n", err)
 		return 2
 	}
+	sessionID := session.ID
+	sessionHandle := sessionDisplayHandle(session)
 	provided := make(map[string]bool)
 	flags.Visit(func(value *flag.Flag) { provided[value.Name] = true })
 	if !*apply {
@@ -153,7 +156,7 @@ func handleExecutionRecover(store executionRecoveryStore, workspace string, args
 			}
 		}
 		if *all {
-			return listExecutionRecoveryPending(store, workspace, sessionID, *jsonOutput, stdout, stderr)
+			return listExecutionRecoveryPending(store, workspace, sessionID, sessionHandle, *jsonOutput, stdout, stderr)
 		}
 		inspection, err := store.InspectStandaloneExecutionReconciliation(context.Background(), sessionID, workspace, flags.Arg(1))
 		if err != nil {
@@ -167,7 +170,7 @@ func handleExecutionRecover(store executionRecoveryStore, workspace string, args
 				return 1
 			}
 		} else {
-			writeExecutionRecovery(stdout, view)
+			writeExecutionRecovery(stdout, view, sessionHandle)
 		}
 		return 0
 	}
@@ -286,7 +289,10 @@ type executionRecoveryItemView struct {
 	InspectCommand string `json:"inspect_command"`
 }
 
-func listExecutionRecoveryPending(store executionRecoveryStore, workspace string, sessionID int64, jsonOutput bool, stdout, stderr io.Writer) int {
+func listExecutionRecoveryPending(store executionRecoveryStore, workspace string, sessionID int64, sessionHandle string, jsonOutput bool, stdout, stderr io.Writer) int {
+	if sessionHandle == "" {
+		sessionHandle = sessionHandleOrLookup(context.Background(), store, sessionID, "")
+	}
 	states, err := store.ListStandaloneExecutionReconciliationPending(context.Background(), sessionID, workspace, executionRecoveryAllLimit)
 	if err != nil {
 		writeExecutionRecoveryPendingError(stderr, err, false)
@@ -298,11 +304,15 @@ func listExecutionRecoveryPending(store executionRecoveryStore, workspace string
 		Pending: make([]executionRecoveryItemView, 0, len(states)),
 	}
 	for _, state := range states {
+		handle := sessionHandle
+		if handle == "" {
+			handle = fmt.Sprintf("%d", sessionID)
+		}
 		view.Pending = append(view.Pending, executionRecoveryItemView{
 			ExecutionID: state.Identity.ExecutionID, ToolName: state.Identity.ToolName,
 			EventID: state.Latest.ID, EventType: string(state.Latest.Type),
 			EffectClass: string(state.Identity.EffectClass), TurnID: state.Identity.TurnID,
-			InspectCommand: fmt.Sprintf("local-agent execution recover %d %s", sessionID, state.Identity.ExecutionID),
+			InspectCommand: fmt.Sprintf("local-agent execution recover %s %s", handle, state.Identity.ExecutionID),
 		})
 	}
 	if jsonOutput {
@@ -313,7 +323,11 @@ func listExecutionRecoveryPending(store executionRecoveryStore, workspace string
 		return 0
 	}
 	if view.Count == 0 {
-		executionFprintf(stdout, "No executions are pending reconciliation in session %s.\n", sessionref.Format(sessionID))
+		handle := sessionHandle
+		if handle == "" {
+			handle = "?"
+		}
+		executionFprintf(stdout, "No executions are pending reconciliation in session %s.\n", handle)
 		return 0
 	}
 	table := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
@@ -327,7 +341,11 @@ func listExecutionRecoveryPending(store executionRecoveryStore, workspace string
 	executionFprintf(stdout, "\n%d execution(s) pending reconciliation.\n", view.Count)
 	executionFprintln(stdout, "Inspect each with the read-only command, or reconcile all with one verified observation:")
 	executionFprintf(stdout, "Reviewed-set digest: %s\n", view.SetDigest)
-	executionFprintf(stdout, "  local-agent execution recover %s --all --apply --set-digest %s --observation effect_not_applied --source verification_check --reference REF --summary SUMMARY --observed-at RFC3339\n", sessionref.Format(sessionID), view.SetDigest)
+	handle := sessionHandle
+	if handle == "" {
+		handle = "?"
+	}
+	executionFprintf(stdout, "  local-agent execution recover %s --all --apply --set-digest %s --observation effect_not_applied --source verification_check --reference REF --summary SUMMARY --observed-at RFC3339\n", handle, view.SetDigest)
 	executionFprintln(stdout, "Only assert one shared disposition after verifying every listed execution independently.")
 	return 0
 }
@@ -484,6 +502,8 @@ func projectExecutionRecovery(inspection db.StandaloneExecutionReconciliationIns
 		ItemID: inspection.ItemID, Resolved: inspection.Resolved, ResolutionID: inspection.ResolutionID,
 	}
 	if !inspection.Resolved {
+		// JSON apply template keeps the durable numeric session id so machine
+		// consumers have a stable contract; the human text path uses the public handle.
 		view.ApplyTemplate = executionRecoveryApplyTemplate(
 			fmt.Sprintf("%d", inspection.SessionID), inspection.SessionRevision, inspection.EventID, inspection.ExecutionID,
 		)
@@ -498,9 +518,12 @@ func executionRecoveryApplyTemplate(sessionReference string, revision, eventID i
 	)
 }
 
-func writeExecutionRecovery(writer io.Writer, view executionRecoveryView) {
+func writeExecutionRecovery(writer io.Writer, view executionRecoveryView, sessionHandle string) {
+	if sessionHandle == "" {
+		sessionHandle = "?"
+	}
 	table := tabwriter.NewWriter(writer, 0, 4, 2, ' ', 0)
-	executionFprintf(table, "SESSION\t%s @ revision %d\n", sessionref.Format(view.SessionID), view.SessionRevision)
+	executionFprintf(table, "SESSION\t%s @ revision %d\n", sessionHandle, view.SessionRevision)
 	executionFprintf(table, "EXECUTION\t%s\n", terminalSafeGoalText(view.ExecutionID))
 	executionFprintf(table, "TOOL\t%s\n", terminalSafeGoalText(view.ToolName))
 	executionFprintf(table, "EVENT\t%d · %s · %s\n", view.EventID, view.EventType, view.EffectClass)
@@ -515,7 +538,7 @@ func writeExecutionRecovery(writer io.Writer, view executionRecoveryView) {
 	executionFprintln(writer, "Inspection is read-only. Verify the external effect independently before applying one disposition.")
 	executionFprintln(writer, "Apply template:")
 	executionFprintln(writer, "  "+executionRecoveryApplyTemplate(
-		sessionref.Format(view.SessionID), view.SessionRevision, view.EventID, terminalSafeGoalText(view.ExecutionID),
+		sessionHandle, view.SessionRevision, view.EventID, terminalSafeGoalText(view.ExecutionID),
 	))
 }
 
@@ -526,7 +549,7 @@ func writeExecutionUsage(writer io.Writer) {
 	executionFprintln(writer, "  local-agent execution recover --apply --revision N ... SESSION_ID EXECUTION_ID")
 	executionFprintln(writer, "  local-agent execution recover --all --apply --set-digest HASH [evidence options] SESSION_ID")
 	executionFprintln(writer)
-	executionFprintln(writer, "SESSION_ID accepts either a short handle such as S7 or the compatible raw ID 7.")
+	executionFprintln(writer, "SESSION_ID accepts a 7-character hex handle such as a1b2c3d.")
 	executionFprintln(writer)
 	executionFprintln(writer, "Safety:")
 	executionFprintln(writer, "  Inspection is read-only.")

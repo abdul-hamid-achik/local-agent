@@ -786,6 +786,68 @@ func TestBuiltinRestoreRequiresCanonicalPositiveID(t *testing.T) {
 	}
 }
 
+func TestBuiltinPermissionsParsesAcceptEditsAndStatus(t *testing.T) {
+	r := newTestRegistry()
+
+	status := r.Execute(&Context{ApprovalPosture: "accept_workspace_edits", SessionApprovals: []string{"write · session_tool"}}, "permissions", nil)
+	if status.Error != "" || status.Action != ActionNone || !strings.Contains(status.Text, "accept workspace edits") || !strings.Contains(status.Text, "write · session_tool") {
+		t.Fatalf("/permissions status = %#v", status)
+	}
+	on := r.Execute(&Context{}, "permissions", []string{"accept-edits", "on"})
+	if on.Error != "" || on.Action != ActionPermissionsAcceptEdits || on.Data != "on" {
+		t.Fatalf("/permissions accept-edits on = %#v", on)
+	}
+	off := r.Execute(&Context{}, "permissions", []string{"accept-edits", "off"})
+	if off.Error != "" || off.Action != ActionPermissionsAcceptEdits || off.Data != "off" {
+		t.Fatalf("/permissions accept-edits off = %#v", off)
+	}
+	clear := r.Execute(&Context{}, "permissions", []string{"clear"})
+	if clear.Error != "" || clear.Action != ActionPermissionsClear {
+		t.Fatalf("/permissions clear = %#v", clear)
+	}
+	revoke := r.Execute(&Context{}, "permissions", []string{"revoke", "write"})
+	if revoke.Error != "" || revoke.Action != ActionPermissionsRevoke || revoke.Data != "write" {
+		t.Fatalf("/permissions revoke write = %#v", revoke)
+	}
+	allowBash := r.Execute(&Context{}, "permissions", []string{"allow-bash", "git", "status", "*"})
+	if allowBash.Error != "" || allowBash.Action != ActionPermissionsAllowBash || allowBash.Data != "git status *" {
+		t.Fatalf("/permissions allow-bash = %#v", allowBash)
+	}
+	allowPath := r.Execute(&Context{}, "permissions", []string{"allow-path", "src/app.go"})
+	if allowPath.Error != "" || allowPath.Action != ActionPermissionsAllowPath || allowPath.Data != "src/app.go" {
+		t.Fatalf("/permissions allow-path = %#v", allowPath)
+	}
+	panel := r.Execute(&Context{}, "permissions", []string{"panel"})
+	if panel.Error != "" || panel.Action != ActionPermissionsPanel {
+		t.Fatalf("/permissions panel = %#v", panel)
+	}
+	export := r.Execute(&Context{}, "permissions", []string{"export", "/tmp/rules.json"})
+	if export.Error != "" || export.Action != ActionPermissionsExport || export.Data != "/tmp/rules.json" {
+		t.Fatalf("/permissions export = %#v", export)
+	}
+	imp := r.Execute(&Context{}, "permissions", []string{"import", "--replace", "/tmp/rules.json"})
+	if imp.Error != "" || imp.Action != ActionPermissionsImport || imp.Data != "replace|/tmp/rules.json" {
+		t.Fatalf("/permissions import = %#v", imp)
+	}
+	clearRules := r.Execute(&Context{}, "permissions", []string{"clear-rules"})
+	if clearRules.Error != "" || clearRules.Action != ActionPermissionsClearRules {
+		t.Fatalf("/permissions clear-rules = %#v", clearRules)
+	}
+	statusRules := r.Execute(&Context{
+		WorkspaceBashPrefixes: []string{"git status *"},
+		WorkspaceWritePaths:   []string{"src/app.go"},
+		WorkspaceMCPTools:     []string{"mcphub__mcphub_list_servers"},
+	}, "permissions", []string{"rules"})
+	if statusRules.Error != "" || !strings.Contains(statusRules.Text, "git status *") || !strings.Contains(statusRules.Text, "src/app.go") || !strings.Contains(statusRules.Text, "mcphub__mcphub_list_servers") {
+		t.Fatalf("/permissions rules = %#v", statusRules)
+	}
+	for _, args := range [][]string{{"accept-edits"}, {"accept-edits", "maybe"}, {"clear", "extra"}, {"unknown"}, {"allow-path"}, {"allow-bash"}} {
+		if result := r.Execute(&Context{}, "permissions", args); result.Error == "" || result.Action != ActionNone {
+			t.Fatalf("/permissions %v = %#v, want usage error", args, result)
+		}
+	}
+}
+
 func TestBuiltinScopeParsesProcessLocalReadRootActions(t *testing.T) {
 	r := newTestRegistry()
 
@@ -830,7 +892,7 @@ func TestBuiltinRegistrySurfaceIsUniqueAndExecutable(t *testing.T) {
 	r := newTestRegistry()
 	wantNames := []string{
 		"help", "clear", "plan", "goal", "model", "provider", "recover", "agent", "agents", "load",
-		"image", "scope", "unload", "skill", "servers", "mcp", "tools", "ice", "memory", "sessions", "artifacts",
+		"image", "scope", "permissions", "unload", "skill", "servers", "mcp", "tools", "ice", "memory", "sessions", "artifacts",
 		"changes", "commit", "stats", "export", "import", "checkpoint",
 		"checkpoints", "restore", "exit",
 	}

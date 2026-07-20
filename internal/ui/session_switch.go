@@ -19,6 +19,7 @@ const (
 // composer state. It never enters SessionLoadedMsg or durable session JSON.
 type pendingSessionSwitch struct {
 	TargetSessionID int64
+	TargetPublicID  string
 	TargetTitle     string
 	Draft           string
 	CursorRune      int
@@ -27,7 +28,7 @@ type pendingSessionSwitch struct {
 	LoadToken       uint64
 }
 
-func (m *Model) beginSessionSwitch(targetID int64, targetTitle string) tea.Cmd {
+func (m *Model) beginSessionSwitch(targetID int64, targetPublicID, targetTitle string) tea.Cmd {
 	m.overlayParent = OverlayNone
 	m.closeSessionsPicker()
 	if m.blockSessionReplacementForHeldFollowUp("opening a saved session") {
@@ -39,6 +40,7 @@ func (m *Model) beginSessionSwitch(targetID int64, targetTitle string) tea.Cmd {
 	}
 	m.pendingSessionSwitch = &pendingSessionSwitch{
 		TargetSessionID: targetID,
+		TargetPublicID:  targetPublicID,
 		TargetTitle:     sanitizeTerminalSingleLine(targetTitle),
 		Draft:           m.input.Value(),
 		CursorRune:      textareaCursorRuneOffset(m.input.Value(), m.input.Line(), m.input.Column()),
@@ -79,7 +81,7 @@ func (m *Model) renderSessionSwitchPrompt(width int) string {
 	if width >= 72 {
 		titleLimit = 24
 	}
-	handle := sessionDisplayLabel(pending.TargetSessionID, pending.TargetTitle, titleLimit)
+	handle := sessionDisplayLabel(pending.TargetPublicID, pending.TargetTitle, titleLimit)
 	subject := "Open saved session?"
 	details := []string{handle}
 	compact := width < 40
@@ -91,7 +93,7 @@ func (m *Model) renderSessionSwitchPrompt(width int) string {
 		subject = "Open " + handle + "?"
 		details = nil
 	} else if compact {
-		subject = "Open " + sessionDisplayLabel(pending.TargetSessionID, "", 0) + "?"
+		subject = "Open " + sessionDisplayLabel(pending.TargetPublicID, "", 0) + "?"
 		details = nil
 	}
 	if pending.Draft != "" {
@@ -128,8 +130,8 @@ func (m *Model) validatePendingSessionSwitch(message SessionLoadedMsg) error {
 	if pending.TargetSessionID <= 0 || pending.TargetSessionID != message.SessionID {
 		return fmt.Errorf(
 			"session switch target %s does not match loaded %s",
-			sessionDisplayLabel(pending.TargetSessionID, "", 0),
-			sessionDisplayLabel(message.SessionID, "", 0),
+			sessionDisplayLabel(pending.TargetPublicID, "", 0),
+			sessionDisplayLabel(message.SessionPublicID, "", 0),
 		)
 	}
 	if pending.Choice != sessionSwitchKeep {

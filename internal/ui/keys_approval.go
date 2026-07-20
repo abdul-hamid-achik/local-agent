@@ -12,7 +12,7 @@ import (
 // handlePendingApprovalKey resolves keyboard input while a tool approval is
 // pending. Pending tool approval owns the keyboard before every other overlay.
 // Decisions remain typed so a host failure cannot be reported as a human
-// denial, and session authority stays exact-request scoped.
+// denial. Wider scopes (a/p/w) are only honored when offered for the tool.
 func (m *Model) handlePendingApprovalKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	resumeActivity := false
 	switch {
@@ -31,10 +31,20 @@ func (m *Model) handlePendingApprovalKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		m.resolvePendingApproval(permission.Deny())
 		resumeActivity = true
 	case strings.EqualFold(msg.String(), "s"):
+		// Exact-request session grant: same tool + same canonical arguments only.
 		m.resolvePendingApproval(permission.AllowSession())
 		resumeActivity = true
+	case strings.EqualFold(msg.String(), "a"), strings.EqualFold(msg.String(), "p"), strings.EqualFold(msg.String(), "w"):
+		keyName := strings.ToLower(msg.String())
+		if choice, ok := m.approvalChoiceByKey(keyName); ok {
+			m.resolvePendingApprovalWithScope(approvalResponseForScope(choice.ScopeKind), choice.ScopeKind)
+			resumeActivity = true
+			break
+		}
+		m.navigateApprovalViewport(msg.String())
 	case key.Matches(msg, m.keys.CompleteSelect):
-		m.resolvePendingApproval(m.selectedApprovalResponse())
+		resp, scope := m.selectedApprovalResponseAndScope()
+		m.resolvePendingApprovalWithScope(resp, scope)
 		resumeActivity = true
 	case key.Matches(msg, m.keys.CompleteUp), strings.EqualFold(msg.String(), "k"):
 		m.moveApprovalChoice(-1)
@@ -49,6 +59,15 @@ func (m *Model) handlePendingApprovalKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		return m.startActivityCmd(), true
 	}
 	return nil, true
+}
+
+func (m *Model) approvalChoiceByKey(keyName string) (approvalChoice, bool) {
+	for _, choice := range m.currentApprovalChoices() {
+		if strings.EqualFold(choice.Key, keyName) {
+			return choice, true
+		}
+	}
+	return approvalChoice{}, false
 }
 
 // handleReadScopePromptKey resolves keyboard input while an external

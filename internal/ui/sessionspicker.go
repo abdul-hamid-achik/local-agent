@@ -15,13 +15,14 @@ import (
 // sessionItem implements list.DefaultItem for the sessions picker.
 type sessionItem struct {
 	id        int64
+	publicID  string
 	title     string
 	createdAt string
 }
 
 func (i sessionItem) Title() string {
 	title := sanitizeTerminalSingleLine(i.title)
-	if handle := sessionref.Format(i.id); handle != "" {
+	if handle := sessionref.Format(i.publicID); handle != "" {
 		if title == "" {
 			return handle
 		}
@@ -36,7 +37,7 @@ func (i sessionItem) Description() string {
 
 func (i sessionItem) FilterValue() string {
 	title := sanitizeTerminalSingleLine(i.title)
-	if handle := sessionref.Format(i.id); handle != "" {
+	if handle := sessionref.Format(i.publicID); handle != "" {
 		return fmt.Sprintf("%s %d %s", handle, i.id, title)
 	}
 	return title
@@ -69,6 +70,7 @@ func newSessionsPickerState(sessions []SessionListItem, width, height int, isDar
 	for i, s := range sessions {
 		items[i] = sessionItem{
 			id:        s.ID,
+			publicID:  s.PublicID,
 			title:     s.Title,
 			createdAt: formatSessionTimestamp(s.CreatedAt),
 		}

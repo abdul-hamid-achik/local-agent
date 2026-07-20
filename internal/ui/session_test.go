@@ -139,10 +139,10 @@ func TestSessionTitleUsesFirstNonEmptyPromptLine(t *testing.T) {
 }
 
 func TestSessionDisplayLabelKeepsStableHandle(t *testing.T) {
-	if got, want := sessionDisplayLabel(7, "Composer polish", 72), "S7 · Composer polish"; got != want {
+	if got, want := sessionDisplayLabel("abcdef0", "Composer polish", 72), "abcdef0 · Composer polish"; got != want {
 		t.Fatalf("sessionDisplayLabel() = %q, want %q", got, want)
 	}
-	if got, want := sessionDisplayLabel(7, "Composer polish", 0), "S7"; got != want {
+	if got, want := sessionDisplayLabel("abcdef0", "Composer polish", 0), "abcdef0"; got != want {
 		t.Fatalf("compact sessionDisplayLabel() = %q, want %q", got, want)
 	}
 }
@@ -167,8 +167,9 @@ func TestSessionResumeInfoRequiresDurableSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.sessionID = session.ID
+	m.sessionPublicID = session.PublicID
 	m.activeSessionTitle = "Resume\ninfo\x1b]0;owned\x07"
-	if info, ok := m.SessionResumeInfo(); !ok || info.Handle != sessionref.Format(session.ID) || info.Title != "Resume info" {
+	if info, ok := m.SessionResumeInfo(); !ok || info.Handle != sessionref.Format(session.PublicID) || info.Title != "Resume info" {
 		t.Fatalf("durable session resume info = %#v, ok=%v", info, ok)
 	}
 

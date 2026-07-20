@@ -127,7 +127,7 @@ func (m *Model) buildRuntimeStatusContent(width int) string {
 		m.runtimeStatusRow("Tools", toolSummary, width),
 		m.runtimeStatusRow("MCP", summarizeConnectionHealth(connections), width),
 	)
-	if label := sessionDisplayLabel(m.sessionID, m.activeSessionTitle, 72); label != "" {
+	if label := sessionDisplayLabel(m.sessionPublicID, m.activeSessionTitle, 72); label != "" {
 		lines = append(lines, m.runtimeStatusRow("Session", label, width))
 	}
 	contextRouting := contextRoutingRuntimeLabel(agent.CapabilityRoutingHostUnavailable)

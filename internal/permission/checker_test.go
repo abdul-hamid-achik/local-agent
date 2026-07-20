@@ -274,4 +274,22 @@ func TestLegacyAlwaysNormalizesToSessionOnly(t *testing.T) {
 	if response.Decision != DecisionAllowSession || !response.Allowed || !response.Always {
 		t.Fatalf("response = %#v", response)
 	}
+	if response.ScopeKind != "" {
+		t.Fatalf("legacy always retained scope kind %q", response.ScopeKind)
+	}
+}
+
+func TestAllowSessionToolNormalizesWithScopeKind(t *testing.T) {
+	response := AllowSessionTool().Normalize()
+	if response.Decision != DecisionAllowSession || !response.Allowed || !response.Always {
+		t.Fatalf("response = %#v", response)
+	}
+	if response.ScopeKind != ScopeSessionTool {
+		t.Fatalf("scope kind = %q, want %q", response.ScopeKind, ScopeSessionTool)
+	}
+	// Unknown scope kinds fail closed to exact-request.
+	cleared := (ApprovalResponse{Decision: DecisionAllowSession, ScopeKind: "path_prefix"}).Normalize()
+	if cleared.ScopeKind != "" {
+		t.Fatalf("unknown scope retained: %#v", cleared)
+	}
 }

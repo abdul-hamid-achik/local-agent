@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -308,20 +309,613 @@ func approvalGrantKey(request permissionpkg.ApprovalRequest) string {
 	return request.Scope.Workspace + "\x00" + request.ToolName + "\x00" + request.Scope.Kind + "\x00" + request.Scope.Resource
 }
 
-func (a *Agent) hasSessionApproval(request permissionpkg.ApprovalRequest) bool {
-	key := approvalGrantKey(request)
-	a.mu.RLock()
-	_, ok := a.approvalGrants[key]
-	a.mu.RUnlock()
+func sessionToolGrantKey(workspace, toolName string) string {
+	return workspace + "\x00" + toolName + "\x00" + permissionpkg.ScopeSessionTool + "\x00"
+}
+
+func sessionPathGrantKey(workspace, path string) string {
+	// Shared across write/edit/mkdir so approving a path once covers the
+	// whole file-mutation family for that path (matches durable write paths).
+	return workspace + "\x00" + permissionpkg.SessionPathFamily + "\x00" + permissionpkg.ScopeSessionPath + "\x00" + path
+}
+
+func sessionBashPrefixGrantKey(workspace, prefix string) string {
+	return workspace + "\x00" + "bash" + "\x00" + permissionpkg.ScopeSessionBashPrefix + "\x00" + prefix
+}
+
+func sessionMCPToolGrantKey(workspace, toolName string) string {
+	return workspace + "\x00" + toolName + "\x00" + permissionpkg.ScopeSessionMCPTool + "\x00"
+}
+
+// sessionToolScopeEligible reports whether a tool may receive a process-local
+// session-wide tool grant. Only workspace edit built-ins qualify.
+func sessionToolScopeEligible(toolName string) bool {
+	switch strings.TrimSpace(toolName) {
+	case "write", "edit", "mkdir":
+		return true
+	default:
+		return false
+	}
+}
+
+func sessionPathScopeEligible(toolName string) bool {
+	return sessionToolScopeEligible(toolName)
+}
+
+func sessionMCPToolScopeEligible(toolName string) bool {
+	_, ok := permissionpkg.NormalizeMCPToolName(toolName)
 	return ok
+}
+
+func (a *Agent) hasSessionApproval(request permissionpkg.ApprovalRequest) bool {
+	exactKey := approvalGrantKey(request)
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if _, exact := a.approvalGrants[exactKey]; exact {
+		return true
+	}
+	workspace := request.Scope.Workspace
+	tool := request.ToolName
+
+	// session_tool: any args for write/edit/mkdir
+	if sessionToolScopeEligible(tool) {
+		if _, ok := a.approvalGrants[sessionToolGrantKey(workspace, tool)]; ok {
+			return true
+		}
+	}
+
+	// session_path: write/edit/mkdir on the same canonical path (tool-family).
+	if sessionPathScopeEligible(tool) {
+		if path := approvalPathResource(request); path != "" {
+			if _, ok := a.approvalGrants[sessionPathGrantKey(workspace, path)]; ok {
+				return true
+			}
+		}
+	}
+
+	// session_bash_prefix (literal or trailing glob patterns)
+	if tool == "bash" {
+		command, _ := request.Args["command"].(string)
+		for key := range a.approvalGrants {
+			parts := strings.Split(key, "\x00")
+			if len(parts) < 4 || parts[0] != workspace || parts[1] != "bash" || parts[2] != permissionpkg.ScopeSessionBashPrefix {
+				continue
+			}
+			if permissionpkg.BashPatternMatches(command, parts[3]) {
+				return true
+			}
+		}
+	}
+
+	// session_mcp_tool: any args for this exact MCP tool name
+	if sessionMCPToolScopeEligible(tool) {
+		if _, ok := a.approvalGrants[sessionMCPToolGrantKey(workspace, tool)]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func approvalPathResource(request permissionpkg.ApprovalRequest) string {
+	if path := strings.TrimSpace(request.Preview.Path); path != "" {
+		return filepath.Clean(path)
+	}
+	if raw, ok := request.Args["path"].(string); ok {
+		return filepath.Clean(strings.TrimSpace(raw))
+	}
+	return ""
 }
 
 func (a *Agent) rememberSessionApproval(request permissionpkg.ApprovalRequest) {
 	key := approvalGrantKey(request)
+	// Path grants are shared across write/edit/mkdir for the same path.
+	if request.Scope.Kind == permissionpkg.ScopeSessionPath && request.Scope.Resource != "" {
+		key = sessionPathGrantKey(request.Scope.Workspace, request.Scope.Resource)
+	}
+	if request.Scope.Kind == permissionpkg.ScopeSessionBashPrefix {
+		key = sessionBashPrefixGrantKey(request.Scope.Workspace, request.Scope.Resource)
+	}
 	a.mu.Lock()
 	if a.approvalGrants == nil {
 		a.approvalGrants = make(map[string]struct{})
 	}
 	a.approvalGrants[key] = struct{}{}
 	a.mu.Unlock()
+}
+
+// applySessionScope widens request.Scope from a typed AllowSession response.
+// Ineligible widen attempts fall back to exact_request (caller's default).
+func applySessionScope(request *permissionpkg.ApprovalRequest, scopeKind string) {
+	if request == nil {
+		return
+	}
+	switch scopeKind {
+	case permissionpkg.ScopeSessionTool:
+		if !sessionToolScopeEligible(request.ToolName) {
+			return
+		}
+		request.Scope.Kind = permissionpkg.ScopeSessionTool
+		request.Scope.Resource = ""
+	case permissionpkg.ScopeSessionPath:
+		if !sessionPathScopeEligible(request.ToolName) {
+			return
+		}
+		path := approvalPathResource(*request)
+		if path == "" {
+			return
+		}
+		request.Scope.Kind = permissionpkg.ScopeSessionPath
+		request.Scope.Resource = path
+	case permissionpkg.ScopeSessionBashPrefix:
+		if request.ToolName != "bash" {
+			return
+		}
+		command, _ := request.Args["command"].(string)
+		prefix, ok := permissionpkg.DeriveBashPrefix(command)
+		if !ok {
+			return
+		}
+		request.Scope.Kind = permissionpkg.ScopeSessionBashPrefix
+		request.Scope.Resource = prefix
+	case permissionpkg.ScopeSessionMCPTool:
+		if !sessionMCPToolScopeEligible(request.ToolName) {
+			return
+		}
+		request.Scope.Kind = permissionpkg.ScopeSessionMCPTool
+		request.Scope.Resource = ""
+	}
+}
+
+// hasWorkspaceRuleApproval reports a durable workspace rule match. Deny and
+// skip-approvals are handled by the caller before this check.
+func (a *Agent) hasWorkspaceRuleApproval(tc llm.ToolCall) bool {
+	if a == nil {
+		return false
+	}
+	a.mu.RLock()
+	rules := a.workspaceRules
+	a.mu.RUnlock()
+	switch {
+	case tc.Name == "bash":
+		command, _ := tc.Arguments["command"].(string)
+		return rules.AllowsBash(command)
+	case sessionMCPToolScopeEligible(tc.Name):
+		return rules.AllowsMCPTool(tc.Name)
+	case sessionPathScopeEligible(tc.Name):
+		path, _ := tc.Arguments["path"].(string)
+		if strings.TrimSpace(path) == "" {
+			return false
+		}
+		// Prefer host-resolved workspace path so relative args still match.
+		resolved, err := a.resolveWorkspacePath(path)
+		if err != nil {
+			// Fall back to preview-style absolute join if resolve fails closed
+			// for non-workspace targets (rule must never authorize outside).
+			return false
+		}
+		workspace, err := a.checkpointWorkspaceID()
+		if err != nil {
+			return false
+		}
+		return rules.AllowsWritePath(workspace, resolved)
+	default:
+		return false
+	}
+}
+
+// ReloadWorkspaceRules loads durable rules for the current workDir.
+func (a *Agent) ReloadWorkspaceRules() error {
+	if a == nil {
+		return nil
+	}
+	workspace, err := a.checkpointWorkspaceID()
+	if err != nil {
+		return err
+	}
+	store, err := a.ensureWorkspaceRulesStore()
+	if err != nil {
+		return err
+	}
+	rules, err := store.Load(workspace)
+	if err != nil {
+		return err
+	}
+	a.mu.Lock()
+	a.workspaceRules = rules
+	// Loading rules for a workdir change does not bump approvalHostVersion:
+	// a pinned turn keeps its filesystem/host snapshot, and SetWorkDir may
+	// legitimately prepare the next turn while an approval is open. Explicit
+	// rule mutations (Add/Remove) bump the host version instead.
+	a.mu.Unlock()
+	return nil
+}
+
+func (a *Agent) ensureWorkspaceRulesStore() (*permissionpkg.WorkspaceRulesStore, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.workspaceRulesStore != nil {
+		return a.workspaceRulesStore, nil
+	}
+	store, err := permissionpkg.NewWorkspaceRulesStore("")
+	if err != nil {
+		return nil, err
+	}
+	a.workspaceRulesStore = store
+	return store, nil
+}
+
+// SetWorkspaceRulesStore installs a rules store (tests and custom roots).
+func (a *Agent) SetWorkspaceRulesStore(store *permissionpkg.WorkspaceRulesStore) {
+	if a == nil {
+		return
+	}
+	a.mu.Lock()
+	a.workspaceRulesStore = store
+	a.mu.Unlock()
+}
+
+// WorkspaceRulesSnapshot returns a copy of the loaded durable rules.
+func (a *Agent) WorkspaceRulesSnapshot() permissionpkg.WorkspaceRules {
+	if a == nil {
+		return permissionpkg.WorkspaceRules{}
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	rules := a.workspaceRules
+	rules.BashPrefixes = append([]string(nil), rules.BashPrefixes...)
+	rules.MCPTools = append([]string(nil), rules.MCPTools...)
+	rules.WritePaths = append([]string(nil), rules.WritePaths...)
+	return rules
+}
+
+// AddWorkspaceBashPrefix persists a durable bash prefix for this workspace.
+func (a *Agent) AddWorkspaceBashPrefix(prefix string) (permissionpkg.WorkspaceRules, error) {
+	workspace, err := a.checkpointWorkspaceID()
+	if err != nil {
+		return permissionpkg.WorkspaceRules{}, err
+	}
+	store, err := a.ensureWorkspaceRulesStore()
+	if err != nil {
+		return permissionpkg.WorkspaceRules{}, err
+	}
+	rules, err := store.AddBashPrefix(workspace, prefix)
+	if err != nil {
+		return permissionpkg.WorkspaceRules{}, err
+	}
+	a.mu.Lock()
+	a.workspaceRules = rules
+	a.approvalHostVersion++
+	a.mu.Unlock()
+	return rules, nil
+}
+
+// RemoveWorkspaceBashPrefix removes a durable bash prefix.
+func (a *Agent) RemoveWorkspaceBashPrefix(prefix string) (permissionpkg.WorkspaceRules, bool, error) {
+	workspace, err := a.checkpointWorkspaceID()
+	if err != nil {
+		return permissionpkg.WorkspaceRules{}, false, err
+	}
+	store, err := a.ensureWorkspaceRulesStore()
+	if err != nil {
+		return permissionpkg.WorkspaceRules{}, false, err
+	}
+	rules, removed, err := store.RemoveBashPrefix(workspace, prefix)
+	if err != nil {
+		return permissionpkg.WorkspaceRules{}, false, err
+	}
+	a.mu.Lock()
+	a.workspaceRules = rules
+	a.approvalHostVersion++
+	a.mu.Unlock()
+	return rules, removed, nil
+}
+
+// AddWorkspaceMCPTool persists a durable exact MCP tool allow.
+func (a *Agent) AddWorkspaceMCPTool(tool string) (permissionpkg.WorkspaceRules, error) {
+	workspace, err := a.checkpointWorkspaceID()
+	if err != nil {
+		return permissionpkg.WorkspaceRules{}, err
+	}
+	store, err := a.ensureWorkspaceRulesStore()
+	if err != nil {
+		return permissionpkg.WorkspaceRules{}, err
+	}
+	rules, err := store.AddMCPTool(workspace, tool)
+	if err != nil {
+		return permissionpkg.WorkspaceRules{}, err
+	}
+	a.mu.Lock()
+	a.workspaceRules = rules
+	a.approvalHostVersion++
+	a.mu.Unlock()
+	return rules, nil
+}
+
+// RemoveWorkspaceMCPTool removes a durable MCP tool allow.
+func (a *Agent) RemoveWorkspaceMCPTool(tool string) (permissionpkg.WorkspaceRules, bool, error) {
+	workspace, err := a.checkpointWorkspaceID()
+	if err != nil {
+		return permissionpkg.WorkspaceRules{}, false, err
+	}
+	store, err := a.ensureWorkspaceRulesStore()
+	if err != nil {
+		return permissionpkg.WorkspaceRules{}, false, err
+	}
+	rules, removed, err := store.RemoveMCPTool(workspace, tool)
+	if err != nil {
+		return permissionpkg.WorkspaceRules{}, false, err
+	}
+	a.mu.Lock()
+	a.workspaceRules = rules
+	a.approvalHostVersion++
+	a.mu.Unlock()
+	return rules, removed, nil
+}
+
+// AddWorkspaceWritePath persists a durable write/edit/mkdir path for this workspace.
+func (a *Agent) AddWorkspaceWritePath(path string) (permissionpkg.WorkspaceRules, error) {
+	workspace, err := a.checkpointWorkspaceID()
+	if err != nil {
+		return permissionpkg.WorkspaceRules{}, err
+	}
+	// Resolve through the host workspace boundary when possible so relative
+	// paths from approvals become portable relative grants.
+	if resolved, resolveErr := a.resolveWorkspacePath(path); resolveErr == nil {
+		path = resolved
+	}
+	store, err := a.ensureWorkspaceRulesStore()
+	if err != nil {
+		return permissionpkg.WorkspaceRules{}, err
+	}
+	rules, err := store.AddWritePath(workspace, path)
+	if err != nil {
+		return permissionpkg.WorkspaceRules{}, err
+	}
+	a.mu.Lock()
+	a.workspaceRules = rules
+	a.approvalHostVersion++
+	a.mu.Unlock()
+	return rules, nil
+}
+
+// RemoveWorkspaceWritePath removes a durable write path allow.
+func (a *Agent) RemoveWorkspaceWritePath(path string) (permissionpkg.WorkspaceRules, bool, error) {
+	workspace, err := a.checkpointWorkspaceID()
+	if err != nil {
+		return permissionpkg.WorkspaceRules{}, false, err
+	}
+	if resolved, resolveErr := a.resolveWorkspacePath(path); resolveErr == nil {
+		path = resolved
+	}
+	store, err := a.ensureWorkspaceRulesStore()
+	if err != nil {
+		return permissionpkg.WorkspaceRules{}, false, err
+	}
+	rules, removed, err := store.RemoveWritePath(workspace, path)
+	if err != nil {
+		return permissionpkg.WorkspaceRules{}, false, err
+	}
+	a.mu.Lock()
+	a.workspaceRules = rules
+	a.approvalHostVersion++
+	a.mu.Unlock()
+	return rules, removed, nil
+}
+
+// ExportWorkspaceRules returns a portable rules document for the current workspace.
+func (a *Agent) ExportWorkspaceRules() (permissionpkg.WorkspaceRulesExport, error) {
+	if a == nil {
+		return permissionpkg.WorkspaceRulesExport{}, fmt.Errorf("agent is unavailable")
+	}
+	if err := a.ReloadWorkspaceRules(); err != nil {
+		return permissionpkg.WorkspaceRulesExport{}, err
+	}
+	return a.WorkspaceRulesSnapshot().ExportDocument(), nil
+}
+
+// ExportWorkspaceRulesToFile writes the portable document to path.
+func (a *Agent) ExportWorkspaceRulesToFile(path string) (permissionpkg.WorkspaceRulesExport, error) {
+	doc, err := a.ExportWorkspaceRules()
+	if err != nil {
+		return permissionpkg.WorkspaceRulesExport{}, err
+	}
+	if err := permissionpkg.WriteExportFile(path, doc); err != nil {
+		return permissionpkg.WorkspaceRulesExport{}, err
+	}
+	return doc, nil
+}
+
+// ImportWorkspaceRules merges or replaces durable rules from a portable document.
+func (a *Agent) ImportWorkspaceRules(doc permissionpkg.WorkspaceRulesExport, replace bool) (permissionpkg.WorkspaceRules, int, error) {
+	workspace, err := a.checkpointWorkspaceID()
+	if err != nil {
+		return permissionpkg.WorkspaceRules{}, 0, err
+	}
+	store, err := a.ensureWorkspaceRulesStore()
+	if err != nil {
+		return permissionpkg.WorkspaceRules{}, 0, err
+	}
+	rules, added, err := store.Import(workspace, doc, replace)
+	if err != nil {
+		return permissionpkg.WorkspaceRules{}, 0, err
+	}
+	a.mu.Lock()
+	a.workspaceRules = rules
+	a.approvalHostVersion++
+	a.mu.Unlock()
+	return rules, added, nil
+}
+
+// ImportWorkspaceRulesFromFile loads a portable export and imports it.
+func (a *Agent) ImportWorkspaceRulesFromFile(path string, replace bool) (permissionpkg.WorkspaceRules, int, error) {
+	doc, err := permissionpkg.ReadExportFile(path)
+	if err != nil {
+		return permissionpkg.WorkspaceRules{}, 0, err
+	}
+	return a.ImportWorkspaceRules(doc, replace)
+}
+
+// ClearWorkspaceRules removes every durable rule for the current workspace.
+func (a *Agent) ClearWorkspaceRules() (permissionpkg.WorkspaceRules, error) {
+	workspace, err := a.checkpointWorkspaceID()
+	if err != nil {
+		return permissionpkg.WorkspaceRules{}, err
+	}
+	store, err := a.ensureWorkspaceRulesStore()
+	if err != nil {
+		return permissionpkg.WorkspaceRules{}, err
+	}
+	rules, err := store.ClearAll(workspace)
+	if err != nil {
+		return permissionpkg.WorkspaceRules{}, err
+	}
+	a.mu.Lock()
+	a.workspaceRules = rules
+	a.approvalHostVersion++
+	a.mu.Unlock()
+	return rules, nil
+}
+
+// DefaultWorkspaceRulesExportPath returns workdir/local-agent-permissions.json.
+func (a *Agent) DefaultWorkspaceRulesExportPath() string {
+	if a == nil {
+		return permissionpkg.DefaultExportFileName
+	}
+	workDir := strings.TrimSpace(a.WorkDir())
+	if workDir == "" {
+		return permissionpkg.DefaultExportFileName
+	}
+	return filepath.Join(workDir, permissionpkg.DefaultExportFileName)
+}
+
+// ListSessionApprovalSummary returns process-local session grants as stable
+// labels for host status surfaces. Path and bash grants include a short resource.
+func (a *Agent) ListSessionApprovalSummary() []string {
+	if a == nil {
+		return nil
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if len(a.approvalGrants) == 0 {
+		return nil
+	}
+	summaries := make([]string, 0, len(a.approvalGrants))
+	for key := range a.approvalGrants {
+		if label := formatSessionGrantSummary(key); label != "" {
+			summaries = append(summaries, label)
+		}
+	}
+	sort.Strings(summaries)
+	return summaries
+}
+
+func formatSessionGrantSummary(key string) string {
+	parts := strings.Split(key, "\x00")
+	if len(parts) < 3 {
+		return ""
+	}
+	tool := parts[1]
+	kind := parts[2]
+	resource := ""
+	if len(parts) >= 4 {
+		resource = parts[3]
+	}
+	if tool == "" {
+		tool = "(unknown tool)"
+	}
+	if kind == "" {
+		kind = permissionpkg.ScopeExactRequest
+	}
+	label := tool + " · " + kind
+	switch kind {
+	case permissionpkg.ScopeSessionPath:
+		if resource != "" {
+			label += " · " + compactGrantResource(resource, 48)
+		}
+	case permissionpkg.ScopeSessionBashPrefix:
+		if resource != "" {
+			label += " · " + compactGrantResource(resource, 40)
+		}
+	case permissionpkg.ScopeExactRequest:
+		if resource != "" {
+			// Arguments hash: show short digest only.
+			label += " · " + compactGrantResource(resource, 12)
+		}
+	}
+	return label
+}
+
+func compactGrantResource(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if value == "" || limit <= 0 {
+		return value
+	}
+	// Prefer basename for absolute paths in summaries.
+	if strings.Contains(value, string(filepath.Separator)) || strings.Contains(value, "/") {
+		base := filepath.Base(value)
+		if base != "" && base != "." && base != string(filepath.Separator) {
+			// Keep a short parent when space allows.
+			parent := filepath.Base(filepath.Dir(value))
+			if parent != "" && parent != "." && len(parent)+1+len(base) <= limit {
+				value = parent + "/" + base
+			} else {
+				value = base
+			}
+		}
+	}
+	if len(value) <= limit {
+		return value
+	}
+	if limit <= 3 {
+		return value[:limit]
+	}
+	return value[:limit-3] + "..."
+}
+
+// RevokeSessionApprovals removes process-local session grants. When tool is
+// empty every grant is cleared; otherwise grants for that tool name are
+// removed. write/edit/mkdir also clear shared path-family grants.
+func (a *Agent) RevokeSessionApprovals(tool string) int {
+	if a == nil {
+		return 0
+	}
+	tool = strings.TrimSpace(tool)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if len(a.approvalGrants) == 0 {
+		return 0
+	}
+	if tool == "" {
+		n := len(a.approvalGrants)
+		a.approvalGrants = make(map[string]struct{})
+		return n
+	}
+	removed := 0
+	clearPathFamily := tool == "write" || tool == "edit" || tool == "mkdir" || tool == permissionpkg.SessionPathFamily
+	for key := range a.approvalGrants {
+		parts := strings.Split(key, "\x00")
+		if len(parts) < 2 {
+			continue
+		}
+		grantTool := parts[1]
+		grantKind := ""
+		if len(parts) >= 3 {
+			grantKind = parts[2]
+		}
+		match := grantTool == tool
+		if clearPathFamily && grantKind == permissionpkg.ScopeSessionPath {
+			match = true
+		}
+		if !match {
+			continue
+		}
+		delete(a.approvalGrants, key)
+		removed++
+	}
+	return removed
+}
+
+// ClearSessionApprovals drops every process-local session approval grant.
+func (a *Agent) ClearSessionApprovals() {
+	_ = a.RevokeSessionApprovals("")
 }

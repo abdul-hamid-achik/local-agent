@@ -30,17 +30,17 @@ resolved with Up or Escape, so unsent work cannot cross session boundaries.
 The same lossless restore path is available at TUI startup:
 
 ```bash
-local-agent --resume S42
+local-agent --resume a1b2c3d
 local-agent --resume latest
 ```
 
-Each positive database ID has a derived short handle: session ID `42` is shown
-as `S42`. The Runtime view and session picker show the handle and generated
+Each durable session has a random 7-character hex public handle (for example
+`a1b2c3d`). The Runtime view and session picker show the handle and generated
 title after the first submitted turn; the TUI footer includes that identity when
 the current responsive status layout has room. The title is derived from the
 first meaningful task text, including the reviewed Task field in guided PLAN
-mode. Commands accept either `S42` or the compatible raw `42` form, while JSON
-and export filenames retain numeric IDs.
+mode. Commands accept the hex handle; bare integers and legacy `S`-prefixed ids
+are rejected. JSON and export filenames retain numeric IDs.
 
 An exact session must belong to the current canonical workspace. `latest` selects
 that workspace's most recently updated session. The database title is restored
@@ -53,9 +53,9 @@ After a clean interactive exit, Local Agent restores the terminal and prints a
 copyable resume command when the conversation has a durable session:
 
 ```text
-Session S42 · Polish transcript UX
+Session a1b2c3d · Polish transcript UX
 Resume this session with:
-  local-agent --resume S42
+  local-agent --resume a1b2c3d
 ```
 
 The message is omitted when no resumable session exists or the TUI exits with
@@ -65,12 +65,13 @@ List or export sessions outside the TUI with:
 
 ```bash
 local-agent session list
-local-agent session export --format both S42
+local-agent session export --format both a1b2c3d
 ```
 
-The default export directory is `./local-agent-audit-42/`, containing
-`session-42.jsonl` and `session-42-summary.md`. The Markdown Open Issues table
-and JSONL `open_issue` records identify unresolved executions and give the exact
+The default export directory is `./local-agent-audit-<public-id>/`, containing
+`session-<id>.jsonl` and `session-<id>-summary.md` (numeric internal IDs remain
+in export filenames). The Markdown Open Issues table and JSONL `open_issue`
+records identify unresolved executions and give the exact
 `execution recover` or `session repair` command. Exports are bounded debugging
 artifacts and can include raw session content, receipt detail, and paths; review
 them before sharing.
@@ -79,15 +80,15 @@ For an ordinary session with uncertain tool effects, inspect either one receipt
 or the bounded pending set without retrying anything:
 
 ```bash
-local-agent execution recover S42 EXECUTION_ID
-local-agent execution recover S42 --all
+local-agent execution recover a1b2c3d EXECUTION_ID
+local-agent execution recover a1b2c3d --all
 ```
 
 The batch listing prints an exact pending-set digest. Batch apply requires the
 complete `--all --apply --set-digest HASH` command and typed evidence printed by
 the inspection; it aborts atomically if the set changed. If terminal ledger
 effects are newer than the saved transcript, first reconcile every uncertain
-execution, close the TUI, then run `local-agent session repair S42`. Repair
+execution, close the TUI, then run `local-agent session repair a1b2c3d`. Repair
 re-derives the projection under an exclusive lease; it never retries a tool or
 rewrites the immutable ledger. Goal-owned sessions use `goal show` and
 `goal recover` instead.

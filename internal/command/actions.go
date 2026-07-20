@@ -20,6 +20,18 @@ const (
 	ImageActionList          ActionID = "image.list"
 	ImageActionClear         ActionID = "image.clear"
 	ImageActionForgetHistory ActionID = "image.forget-history"
+	PermissionsActionClear      ActionID = "permissions.clear"
+	PermissionsActionRevoke     ActionID = "permissions.revoke"
+	PermissionsActionAllowBash   ActionID = "permissions.allow-bash"
+	PermissionsActionAllowMCP    ActionID = "permissions.allow-mcp"
+	PermissionsActionAllowPath   ActionID = "permissions.allow-path"
+	PermissionsActionForgetBash  ActionID = "permissions.forget-bash"
+	PermissionsActionForgetMCP   ActionID = "permissions.forget-mcp"
+	PermissionsActionForgetPath  ActionID = "permissions.forget-path"
+	PermissionsActionExport      ActionID = "permissions.export"
+	PermissionsActionImport      ActionID = "permissions.import"
+	PermissionsActionClearRules  ActionID = "permissions.clear-rules"
+	PermissionsActionPanel       ActionID = "permissions.panel"
 )
 
 // ActionSpec is the bounded metadata needed to expose one command action in
@@ -282,6 +294,61 @@ func registerImageActions(r *Registry) {
 		{
 			ID: ImageActionForgetHistory, Command: "image", Argument: "forget-history", Aliases: []string{"drop-history"},
 			Title: "Forget image history", Description: "Remove active conversation image references; checkpoints and cached objects remain", Action: ActionForgetImageHistory, Destructive: true,
+		},
+	} {
+		r.RegisterAction(spec)
+	}
+}
+
+func registerPermissionsActions(r *Registry) {
+	for _, spec := range []ActionSpec{
+		{
+			ID: PermissionsActionClear, Command: "permissions", Argument: "clear",
+			Title: "Clear session approvals", Description: "Drop every process-local session approval grant", Action: ActionPermissionsClear, Destructive: true,
+		},
+		{
+			ID: PermissionsActionRevoke, Command: "permissions", Argument: "revoke",
+			Title: "Revoke session approvals", Description: "Drop process-local session grants for one tool, or all when omitted", Action: ActionPermissionsRevoke, Destructive: true,
+		},
+		{
+			ID: PermissionsActionAllowBash, Command: "permissions", Argument: "allow-bash",
+			Title: "Allow bash prefix", Description: "Save a durable bash command prefix for this workspace", Action: ActionPermissionsAllowBash,
+		},
+		{
+			ID: PermissionsActionAllowMCP, Command: "permissions", Argument: "allow-mcp",
+			Title: "Allow MCP tool", Description: "Save a durable exact MCP tool allow for this workspace", Action: ActionPermissionsAllowMCP,
+		},
+		{
+			ID: PermissionsActionAllowPath, Command: "permissions", Argument: "allow-path",
+			Title: "Allow write path", Description: "Save a durable write/edit/mkdir path for this workspace", Action: ActionPermissionsAllowPath,
+		},
+		{
+			ID: PermissionsActionForgetBash, Command: "permissions", Argument: "forget-bash",
+			Title: "Forget bash prefix", Description: "Remove a durable bash prefix from this workspace", Action: ActionPermissionsForgetBash, Destructive: true,
+		},
+		{
+			ID: PermissionsActionForgetMCP, Command: "permissions", Argument: "forget-mcp",
+			Title: "Forget MCP tool", Description: "Remove a durable MCP tool allow from this workspace", Action: ActionPermissionsForgetMCP, Destructive: true,
+		},
+		{
+			ID: PermissionsActionForgetPath, Command: "permissions", Argument: "forget-path",
+			Title: "Forget write path", Description: "Remove a durable write path from this workspace", Action: ActionPermissionsForgetPath, Destructive: true,
+		},
+		{
+			ID: PermissionsActionExport, Command: "permissions", Argument: "export",
+			Title: "Export rules", Description: "Write durable workspace rules to a portable JSON file", Action: ActionPermissionsExport,
+		},
+		{
+			ID: PermissionsActionImport, Command: "permissions", Argument: "import",
+			Title: "Import rules", Description: "Merge durable rules from a portable JSON file", Action: ActionPermissionsImport,
+		},
+		{
+			ID: PermissionsActionClearRules, Command: "permissions", Argument: "clear-rules",
+			Title: "Clear workspace rules", Description: "Remove every durable bash/MCP/path rule for this workspace", Action: ActionPermissionsClearRules, Destructive: true,
+		},
+		{
+			ID: PermissionsActionPanel, Command: "permissions", Argument: "panel", Aliases: []string{"ui", "manage"},
+			Title: "Permissions panel", Description: "Open the interactive permissions manager", Action: ActionPermissionsPanel,
 		},
 	} {
 		r.RegisterAction(spec)

@@ -60,10 +60,20 @@ type Agent struct {
 	permChecker          *permission.Checker
 	approvalCallback     func(permission.ApprovalRequest)
 	approvalHostVersion  uint64
-	// approvalGrants contains host-approved, exact-request grants for this Agent
-	// session. Keys bind workspace, tool and canonical arguments; they are never
-	// persisted as global tool-only policies.
-	approvalGrants      map[string]struct{}
+	// approvalGrants contains host-approved session grants for this Agent
+	// process. Keys bind workspace, tool, scope kind, and (for exact-request)
+	// canonical arguments. Wider scopes use documented resources. Grants
+	// are never persisted as global tool-only policies.
+	approvalGrants map[string]struct{}
+	// workspaceRules are durable, workspace-scoped bash prefix and exact MCP
+	// tool allows loaded from the user config directory. They never reintroduce
+	// broad tool_permissions.allow rows.
+	workspaceRules      permission.WorkspaceRules
+	workspaceRulesStore *permission.WorkspaceRulesStore
+	// approvalPosture is process-local approval UX policy (e.g. accept
+	// workspace edits without per-call prompts). It never broadens deny
+	// policies or skip-approvals host posture.
+	approvalPosture ApprovalPosture
 	toolsConfig         config.ToolsConfig
 	continuationsConfig config.ContinuationsConfig
 	logger              *log.Logger
@@ -880,7 +890,8 @@ func (a *Agent) SetWorkspacePolicy(dir, ignoreContent string) {
 // SetWorkspacePolicy when the corresponding ignore policy changes too.
 func (a *Agent) SetWorkDir(dir string) {
 	a.mu.Lock()
-	if a.workDir != dir {
+	changed := a.workDir != dir
+	if changed {
 		a.workDir = dir
 		a.filesystemVersion++
 		a.continuationHistory = newContinuationTurnState(0)
@@ -888,6 +899,9 @@ func (a *Agent) SetWorkDir(dir string) {
 		a.invalidateBobWorkspaceContextLocked()
 	}
 	a.mu.Unlock()
+	if changed {
+		_ = a.ReloadWorkspaceRules()
+	}
 }
 
 // WorkDir returns the configured workspace boundary. A running turn keeps the

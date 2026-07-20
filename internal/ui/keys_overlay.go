@@ -59,6 +59,8 @@ func (m *Model) handleOverlayKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 			m.closeSessionsPicker()
 		case OverlaySettings:
 			m.closeSettingsPicker()
+		case OverlayPermissions:
+			m.closePermissionsPanel()
 		case OverlayAgentPicker:
 			m.closeAgentPicker()
 		case OverlayProviderPicker:
@@ -135,6 +137,19 @@ func (m *Model) handleOverlayKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		} else {
 			var cmd tea.Cmd
 			m.settingsPickerState.List, cmd = m.settingsPickerState.List.Update(msg)
+			cmds = append(cmds, cmd)
+		}
+		return tea.Batch(cmds...), true
+	}
+
+	if m.overlay == OverlayPermissions && m.permissionsPanelState != nil {
+		if key.Matches(msg, m.keys.CompleteSelect) {
+			if item := m.permissionsPanelState.List.SelectedItem(); item != nil {
+				cmds = append(cmds, m.activatePermissionsItem(item.(permissionsItem)))
+			}
+		} else {
+			var cmd tea.Cmd
+			m.permissionsPanelState.List, cmd = m.permissionsPanelState.List.Update(msg)
 			cmds = append(cmds, cmd)
 		}
 		return tea.Batch(cmds...), true
@@ -322,7 +337,7 @@ func (m *Model) handleOverlayKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		if key.Matches(msg, m.keys.CompleteSelect) {
 			if item := m.sessionsPickerState.List.SelectedItem(); item != nil {
 				si := item.(sessionItem)
-				return m.beginSessionSwitch(si.id, si.title), true
+				return m.beginSessionSwitch(si.id, si.publicID, si.title), true
 			}
 		} else {
 			var cmd tea.Cmd

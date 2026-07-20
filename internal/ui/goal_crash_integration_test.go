@@ -111,7 +111,7 @@ func TestGoalExecutionCrashHelperProcess(t *testing.T) {
 	ag.SetModeContext("test", agent.BuildToolPolicy())
 	ag.SetPermissionChecker(permission.NewChecker(nil, true))
 	ag.SetExecutionLedger(&goalCrashLedger{store: store})
-	ag.SetExecutionSessionID(sessionID)
+	ag.SetExecutionSessionID(sessionID, "")
 	ag.SetExecutionSnapshotCursor(0)
 	ag.RequireExecutionLedger(true)
 	ag.AddUserMessage("write once under the admitted goal turn")

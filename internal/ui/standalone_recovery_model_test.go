@@ -111,7 +111,7 @@ func TestStandaloneRecoveryUsesHeldLeaseAndExplicitlyRechecksAgent(t *testing.T)
 	m.model = client.Model()
 	m.agent.SetWorkDir(workspace)
 	m.agent.SetExecutionLedger(store)
-	m.agent.SetExecutionSessionID(session.ID)
+	m.agent.SetExecutionSessionID(session.ID, "")
 	m.agent.SetExecutionSnapshotCursor(0)
 	m.agent.RequireExecutionLedger(true)
 	m.SetSessionStore(store)
@@ -214,7 +214,7 @@ func TestStandaloneRecoveryUsesHeldLeaseAndExplicitlyRechecksAgent(t *testing.T)
 	restarted := agent.New(&standaloneRecoveryClient{}, nil, 4096)
 	restarted.SetWorkDir(workspace)
 	restarted.SetExecutionLedger(store)
-	restarted.SetExecutionSessionID(session.ID)
+	restarted.SetExecutionSessionID(session.ID, "")
 	restarted.SetExecutionSnapshotCursor(saved.ExecutionCursor)
 	restarted.RequireExecutionLedger(true)
 	restarted.AddUserMessage("restart must still block")
@@ -323,7 +323,7 @@ func TestSessionLoadHydratesStandaloneRecoveryBeforeProviderTurn(t *testing.T) {
 	if err != nil || len(projection.Hazards) != 1 {
 		t.Fatalf("recovery projection = %#v, error=%v", projection, err)
 	}
-	target := standaloneRecoveryTarget(projection.Hazards, state.ExecutionCursor)
+	target := standaloneRecoveryTarget(projection.Hazards, state.ExecutionCursor, session.PublicID)
 	if target == nil {
 		t.Fatal("started effect did not produce a standalone recovery target")
 	}

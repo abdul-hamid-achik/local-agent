@@ -99,10 +99,11 @@ func (m *Model) finishLoadedSession(message SessionLoadedMsg) (bool, tea.Cmd) {
 		m.executionLease = message.ExecutionLease
 	}
 	m.sessionID = message.SessionID
+	m.sessionPublicID = message.SessionPublicID
 	m.activeSessionTitle = sanitizeTerminalSingleLine(message.Title)
 	_ = m.initializeSessionStateRevision(message.StateRecord.Revision)
 	m.agent.SetCheckpointSessionID(message.SessionID)
-	m.agent.SetExecutionSessionID(message.SessionID)
+	m.agent.SetExecutionSessionID(message.SessionID, message.SessionPublicID)
 	m.agent.SetExecutionSnapshotCursor(m.executionCursor)
 	m.standaloneRecovery = nil
 	if m.goalRuntime == nil {
@@ -123,7 +124,7 @@ func (m *Model) finishLoadedSession(message SessionLoadedMsg) (bool, tea.Cmd) {
 		}
 	}
 	m.entries = append(m.entries, ChatEntry{Kind: "system", Content: fmt.Sprintf(
-		"Restored session %s", sessionDisplayLabel(message.SessionID, m.activeSessionTitle, 72),
+		"Restored session %s", sessionDisplayLabel(message.SessionPublicID, m.activeSessionTitle, 72),
 	)})
 	if message.RecoveryWarning != "" {
 		m.entries = append(m.entries, ChatEntry{Kind: "error", Content: message.RecoveryWarning})

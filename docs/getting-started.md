@@ -88,19 +88,20 @@ To reopen saved work directly, pass a positive session ID or select the newest
 session in the current canonical workspace:
 
 ```bash
-local-agent --resume S42
+local-agent --resume a1b2c3d
 local-agent --resume latest
 ```
 
-The TUI shows session ID `42` as `S42 · title`. Commands accept both `S42` and
-the raw `42`; `latest` selects the newest current-workspace session.
+The TUI shows each session as a random 7-character hex handle such as
+`a1b2c3d · title`. Commands accept that handle; `latest` selects the newest
+current-workspace session.
 
 Startup resume is available only in the interactive TUI, so it cannot be
 combined with `-p` or `--prompt`. It restores state without sending a prompt or automatically
 continuing a durable goal.
 
 After a clean interactive exit, Local Agent prints the exact
-`local-agent --resume S…` command for the active saved session. An unsaved
+`local-agent --resume <handle>` command for the active saved session. An unsaved
 conversation and a failed TUI run do not print a resume command.
 
 ## Essential controls
@@ -127,10 +128,58 @@ the pin for the next process start. `/model auto` clears it. A CLI `--model`
 selection and agent-profile selections take precedence, and conversation-only
 Cloud consent is never saved.
 
-Inside the inline approval surface, use `y` to allow once, `n` to deny, `s` to
-allow the identical canonical request again during the current Agent process,
-or `d` to inspect exact arguments. Press `esc` to cancel the approval and the
-active turn. No broad allow-by-tool-name policy is persisted by this flow.
+Inside the inline approval surface:
+
+| Key | Decision |
+|---|---|
+| `n` | Deny (default when you press Enter) |
+| `y` | Allow once |
+| `s` | Allow the same request again this process (exact arguments) |
+| `a` | Context-sensitive widen: tool again (`write`/`edit`/`mkdir`), bash command prefix, or this MCP tool again (process-local) |
+| `p` | For `write`/`edit`/`mkdir`: this path again this process |
+| `w` | For bash/MCP: save a durable workspace rule (survives restarts for this workspace) |
+| `d` | Inspect exact arguments |
+| `esc` | Cancel the approval and the active turn |
+
+Use `/permissions accept-edits on` when you want workspace file edits to stop
+prompting for the rest of this process without enabling shell or MCP bypass.
+`/permissions` lists posture, session grants, and durable workspace rules.
+
+Durable workspace rules (Claude-style “don’t ask again” for this repo):
+
+```text
+/permissions allow-bash go test
+/permissions allow-bash "git status *"
+/permissions allow-mcp mcphub__mcphub_list_servers
+/permissions allow-path src/app.go
+/permissions forget-bash "git status *"
+/permissions forget-mcp mcphub__mcphub_list_servers
+/permissions forget-path src/app.go
+```
+
+On an approval prompt, `w` saves a durable rule for the current action:
+
+- bash → prefix or `prefix *` when there are extra args
+- MCP → exact `server__tool` name
+- write/edit/mkdir → that workspace-relative path (covers write, edit, and mkdir)
+
+Rules live under `~/.config/local-agent/workspace-rules/` (not in the repo).
+They never reintroduce a broad permanent tool-name allow. Bash globs only allow
+a trailing `*`; compound commands with `&&`, pipes, or `$` still prompt.
+
+Manage interactively via **Settings → Permissions**, or:
+
+```text
+/permissions panel
+/permissions export                         # → ./local-agent-permissions.json
+/permissions export ~/Desktop/rules.json
+/permissions import ~/Desktop/rules.json
+/permissions import --replace ~/Desktop/rules.json
+/permissions clear-rules
+```
+
+Export files are portable JSON (bash patterns, MCP tools, relative write paths).
+Import merges by default; `--replace` swaps the workspace rule set.
 
 ## Attach an image
 

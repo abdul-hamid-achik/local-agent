@@ -18,6 +18,7 @@ const (
 	settingsSessions
 	settingsCompact
 	settingsRuntime
+	settingsPermissions
 	settingsHelp
 )
 
@@ -275,6 +276,8 @@ func (m *Model) settingsItems() []settingsItem {
 	}
 	if m.skipApprovalsEnabled() {
 		runtime += " · no approval prompts"
+	} else if m.acceptWorkspaceEditsEnabled() {
+		runtime += " · accept workspace edits"
 	}
 
 	modelDescription := "Choose an installed local model or Ollama Cloud model"
@@ -300,6 +303,21 @@ func (m *Model) settingsItems() []settingsItem {
 			len(m.mcpServers), pluralizeServer(len(m.mcpServers)), connected, unavailable,
 		)
 	}
+	permissionsValue := "Manage"
+	permissionsDescription := "Accept-edits, session grants, durable rules, export/import"
+	if m.agent != nil {
+		sessionN := len(m.agent.ListSessionApprovalSummary())
+		rules := m.agent.WorkspaceRulesSnapshot()
+		ruleN := len(rules.BashPrefixes) + len(rules.MCPTools) + len(rules.WritePaths)
+		switch {
+		case m.acceptWorkspaceEditsEnabled():
+			permissionsValue = fmt.Sprintf("accept-edits · %d session · %d rules", sessionN, ruleN)
+		case m.skipApprovalsEnabled():
+			permissionsValue = fmt.Sprintf("prompts skipped · %d session · %d rules", sessionN, ruleN)
+		default:
+			permissionsValue = fmt.Sprintf("%d session · %d rules", sessionN, ruleN)
+		}
+	}
 	modeTitle := "Mode"
 	modeDescription := "NORMAL, PLAN, or AUTO authority"
 	if m.goalRuntime != nil {
@@ -314,6 +332,7 @@ func (m *Model) settingsItems() []settingsItem {
 		{action: settingsSessions, title: "Sessions", value: "Resume", description: "Open a saved workspace session"},
 		{action: settingsCompact, title: "Compact layout", value: compact, description: "Toggle the explicit compact transcript preference"},
 		{action: settingsRuntime, title: "Runtime status", value: runtime, description: runtimeDescription},
+		{action: settingsPermissions, title: "Permissions", value: permissionsValue, description: permissionsDescription},
 		{action: settingsHelp, title: "Help", value: "Shortcuts", description: "Keyboard reference and slash commands"},
 	}
 }
@@ -361,6 +380,8 @@ func (m *Model) activateSettings(action settingsAction) tea.Cmd {
 		m.refreshSettingsPicker()
 	case settingsRuntime:
 		m.openSettingsChild(m.openRuntimeStatus)
+	case settingsPermissions:
+		m.openSettingsChild(m.openPermissionsPanel)
 	case settingsHelp:
 		m.openSettingsChild(func() {
 			m.overlay = OverlayHelp

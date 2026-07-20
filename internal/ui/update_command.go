@@ -53,6 +53,19 @@ func (m *Model) buildCommandContext() *command.Context {
 		for _, grant := range m.agent.ReadGrants() {
 			ctx.ReadGrants = append(ctx.ReadGrants, command.ReadGrantInfo{Path: grant.Path, Kind: string(grant.Kind)})
 		}
+		ctx.SessionApprovals = m.agent.ListSessionApprovalSummary()
+		rules := m.agent.WorkspaceRulesSnapshot()
+		ctx.WorkspaceBashPrefixes = append([]string(nil), rules.BashPrefixes...)
+		ctx.WorkspaceMCPTools = append([]string(nil), rules.MCPTools...)
+		ctx.WorkspaceWritePaths = append([]string(nil), rules.WritePaths...)
+	}
+	switch {
+	case m.skipApprovalsEnabled():
+		ctx.ApprovalPosture = string(ApprovalPostureSkipApprovals)
+	case m.acceptWorkspaceEditsEnabled():
+		ctx.ApprovalPosture = string(ApprovalPostureAcceptWorkspaceEdits)
+	default:
+		ctx.ApprovalPosture = string(ApprovalPosturePrompted)
 	}
 	if m.goalRuntime != nil {
 		if snapshot, err := m.goalRuntime.Snapshot(context.Background()); err == nil {
@@ -612,6 +625,215 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 
 	case command.ActionRecoverExecution:
 		return m.openStandaloneRecovery()
+
+	case command.ActionPermissionsAcceptEdits:
+		switch strings.ToLower(strings.TrimSpace(result.Data)) {
+		case "on":
+			m.SetApprovalPosture(ApprovalPostureAcceptWorkspaceEdits)
+			m.entries = append(m.entries, ChatEntry{
+				Kind:    "system",
+				Content: "Accept workspace edits enabled. write/edit/mkdir inside the workspace (or an explicit write grant) no longer prompt. bash, remove, MCP, and memory still require approval. Process-local; lost on restart.",
+			})
+		case "off":
+			m.SetApprovalPosture(ApprovalPosturePrompted)
+			m.entries = append(m.entries, ChatEntry{
+				Kind:    "system",
+				Content: "Accept workspace edits disabled. Approval-gated tools prompt again.",
+			})
+		default:
+			m.entries = append(m.entries, ChatEntry{
+				Kind:    "error",
+				Content: "usage: /permissions accept-edits on|off",
+			})
+		}
+		m.refreshTranscript()
+		m.resumeFollow()
+		return nil
+
+	case command.ActionPermissionsClear:
+		count := 0
+		if m.agent != nil {
+			count = m.agent.RevokeSessionApprovals("")
+		}
+		m.entries = append(m.entries, ChatEntry{
+			Kind:    "system",
+			Content: fmt.Sprintf("Cleared %d process-local session approval grant%s.", count, pluralSuffix(count)),
+		})
+		m.refreshTranscript()
+		m.resumeFollow()
+		return nil
+
+	case command.ActionPermissionsRevoke:
+		tool := strings.TrimSpace(result.Data)
+		count := 0
+		if m.agent != nil {
+			count = m.agent.RevokeSessionApprovals(tool)
+		}
+		var note string
+		switch {
+		case tool == "" && count == 0:
+			note = "No process-local session approval grants to revoke."
+		case tool == "":
+			note = fmt.Sprintf("Revoked %d process-local session approval grant%s.", count, pluralSuffix(count))
+		case count == 0:
+			note = fmt.Sprintf("No process-local session approval grants for tool %q.", tool)
+		default:
+			note = fmt.Sprintf("Revoked %d process-local session approval grant%s for tool %q.", count, pluralSuffix(count), tool)
+		}
+		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: note})
+		m.refreshTranscript()
+		m.resumeFollow()
+		return nil
+
+	case command.ActionPermissionsAllowBash:
+		if m.agent == nil {
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: "Agent is unavailable."})
+			m.refreshTranscript()
+			m.resumeFollow()
+			return nil
+		}
+		rules, err := m.agent.AddWorkspaceBashPrefix(result.Data)
+		if err != nil {
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: err.Error()})
+		} else {
+			m.entries = append(m.entries, ChatEntry{
+				Kind:    "system",
+				Content: fmt.Sprintf("Saved durable bash prefix for this workspace (%d total).", len(rules.BashPrefixes)),
+			})
+		}
+		m.refreshTranscript()
+		m.resumeFollow()
+		return nil
+
+	case command.ActionPermissionsAllowMCP:
+		if m.agent == nil {
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: "Agent is unavailable."})
+			m.refreshTranscript()
+			m.resumeFollow()
+			return nil
+		}
+		rules, err := m.agent.AddWorkspaceMCPTool(result.Data)
+		if err != nil {
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: err.Error()})
+		} else {
+			m.entries = append(m.entries, ChatEntry{
+				Kind:    "system",
+				Content: fmt.Sprintf("Saved durable MCP tool allow for this workspace (%d total).", len(rules.MCPTools)),
+			})
+		}
+		m.refreshTranscript()
+		m.resumeFollow()
+		return nil
+
+	case command.ActionPermissionsForgetBash:
+		if m.agent == nil {
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: "Agent is unavailable."})
+			m.refreshTranscript()
+			m.resumeFollow()
+			return nil
+		}
+		_, removed, err := m.agent.RemoveWorkspaceBashPrefix(result.Data)
+		switch {
+		case err != nil:
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: err.Error()})
+		case !removed:
+			m.entries = append(m.entries, ChatEntry{Kind: "system", Content: "No matching durable bash prefix."})
+		default:
+			m.entries = append(m.entries, ChatEntry{Kind: "system", Content: "Removed durable bash prefix."})
+		}
+		m.refreshTranscript()
+		m.resumeFollow()
+		return nil
+
+	case command.ActionPermissionsForgetMCP:
+		if m.agent == nil {
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: "Agent is unavailable."})
+			m.refreshTranscript()
+			m.resumeFollow()
+			return nil
+		}
+		_, removed, err := m.agent.RemoveWorkspaceMCPTool(result.Data)
+		switch {
+		case err != nil:
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: err.Error()})
+		case !removed:
+			m.entries = append(m.entries, ChatEntry{Kind: "system", Content: "No matching durable MCP tool allow."})
+		default:
+			m.entries = append(m.entries, ChatEntry{Kind: "system", Content: "Removed durable MCP tool allow."})
+		}
+		m.refreshTranscript()
+		m.resumeFollow()
+		return nil
+
+	case command.ActionPermissionsAllowPath:
+		if m.agent == nil {
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: "Agent is unavailable."})
+			m.refreshTranscript()
+			m.resumeFollow()
+			return nil
+		}
+		rules, err := m.agent.AddWorkspaceWritePath(result.Data)
+		if err != nil {
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: err.Error()})
+		} else {
+			m.entries = append(m.entries, ChatEntry{
+				Kind:    "system",
+				Content: fmt.Sprintf("Saved durable write path for this workspace (%d total). Covers write/edit/mkdir only.", len(rules.WritePaths)),
+			})
+		}
+		m.refreshTranscript()
+		m.resumeFollow()
+		return nil
+
+	case command.ActionPermissionsForgetPath:
+		if m.agent == nil {
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: "Agent is unavailable."})
+			m.refreshTranscript()
+			m.resumeFollow()
+			return nil
+		}
+		_, removed, err := m.agent.RemoveWorkspaceWritePath(result.Data)
+		switch {
+		case err != nil:
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: err.Error()})
+		case !removed:
+			m.entries = append(m.entries, ChatEntry{Kind: "system", Content: "No matching durable write path."})
+		default:
+			m.entries = append(m.entries, ChatEntry{Kind: "system", Content: "Removed durable write path."})
+		}
+		m.refreshTranscript()
+		m.resumeFollow()
+		return nil
+
+	case command.ActionPermissionsPanel:
+		m.preemptTranscriptSearch()
+		m.clearViewerModals(false)
+		m.overlayParent = OverlayNone
+		m.openPermissionsPanel()
+		return nil
+
+	case command.ActionPermissionsExport:
+		return m.exportWorkspaceRules(result.Data)
+
+	case command.ActionPermissionsImport:
+		return m.importWorkspaceRules(result.Data)
+
+	case command.ActionPermissionsClearRules:
+		if m.agent == nil {
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: "Agent is unavailable."})
+			m.refreshTranscript()
+			m.resumeFollow()
+			return nil
+		}
+		if _, err := m.agent.ClearWorkspaceRules(); err != nil {
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: err.Error()})
+		} else {
+			m.entries = append(m.entries, ChatEntry{Kind: "system", Content: "Cleared all durable workspace rules."})
+		}
+		m.refreshTranscript()
+		m.refreshPermissionsPanel()
+		m.resumeFollow()
+		return nil
 
 	default:
 		if result.Action != command.ActionNone {

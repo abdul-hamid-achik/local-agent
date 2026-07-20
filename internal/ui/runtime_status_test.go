@@ -146,9 +146,11 @@ func TestRuntimeStatusProjectsSessionIdentityAfterCreation(t *testing.T) {
 	}
 
 	m.sessionID = 7
+
+	m.sessionPublicID = "aaaaaa7"
 	m.activeSessionTitle = "Polish composer wrapping"
 	saved := strings.Join(strings.Fields(ansi.Strip(m.buildRuntimeStatusContent(58))), " ")
-	if !strings.Contains(saved, "Session S7 · Polish composer wrapping") {
+	if !strings.Contains(saved, "Session aaaaaa7 · Polish composer wrapping") {
 		t.Fatalf("Runtime omitted saved session identity:\n%s", saved)
 	}
 }

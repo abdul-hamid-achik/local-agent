@@ -76,6 +76,8 @@ func (m *Model) View() tea.View {
 			}
 		case OverlaySettings:
 			overlay = m.renderSettingsPicker()
+		case OverlayPermissions:
+			overlay = m.renderPermissionsPanel()
 		case OverlayAgentPicker:
 			overlay = m.renderAgentPicker()
 		case OverlayProviderPicker:

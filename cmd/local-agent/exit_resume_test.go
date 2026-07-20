@@ -29,11 +29,11 @@ func (m *exitResumeTestModel) SessionResumeInfo() (ui.SessionResumeInfo, bool) {
 func TestWriteSessionResumeMessageUsesCanonicalShortHandle(t *testing.T) {
 	var output bytes.Buffer
 	writeSessionResumeMessage(&output, &exitResumeTestModel{
-		info: ui.SessionResumeInfo{Handle: "s42", Title: "Polish transcript UX"},
+		info: ui.SessionResumeInfo{Handle: "a1b2c3d", Title: "Polish transcript UX"},
 		ok:   true,
 	}, nil)
 
-	if got, want := output.String(), "\nSession S42 · Polish transcript UX\nResume this session with:\n  local-agent --resume S42\n"; got != want {
+	if got, want := output.String(), "\nSession a1b2c3d · Polish transcript UX\nResume this session with:\n  local-agent --resume a1b2c3d\n"; got != want {
 		t.Fatalf("resume message = %q, want %q", got, want)
 	}
 }
@@ -42,20 +42,20 @@ func TestWriteSessionResumeMessageSanitizesTitleOutsideCommand(t *testing.T) {
 	var output bytes.Buffer
 	writeSessionResumeMessage(&output, &exitResumeTestModel{
 		info: ui.SessionResumeInfo{
-			Handle: "S7",
+			Handle: "deadbee",
 			Title:  "Review\x1b]0;owned\x07\nthen deploy\u202e",
 		},
 		ok: true,
 	}, nil)
 
 	got := output.String()
-	if !strings.Contains(got, "Session S7 · Review then deploy") {
+	if !strings.Contains(got, "Session deadbee · Review then deploy") {
 		t.Fatalf("sanitized session label = %q", got)
 	}
 	if strings.Contains(got, "owned") || strings.Contains(got, "\x1b]") || strings.Contains(got, "\u202e") {
 		t.Fatalf("unsafe title content survived: %q", got)
 	}
-	if strings.Count(got, "local-agent --resume S7") != 1 {
+	if strings.Count(got, "local-agent --resume deadbee") != 1 {
 		t.Fatalf("canonical command changed: %q", got)
 	}
 }
@@ -68,8 +68,8 @@ func TestWriteSessionResumeMessageSuppressesUnavailableOrFailedExit(t *testing.T
 	}{
 		{name: "no final model"},
 		{name: "no durable session", model: &exitResumeTestModel{}},
-		{name: "invalid handle", model: &exitResumeTestModel{info: ui.SessionResumeInfo{Handle: "S42\nrm -rf /"}, ok: true}},
-		{name: "tui error", model: &exitResumeTestModel{info: ui.SessionResumeInfo{Handle: "S42"}, ok: true}, err: errors.New("terminal restore failed")},
+		{name: "invalid handle", model: &exitResumeTestModel{info: ui.SessionResumeInfo{Handle: "a1b2c3d\nrm -rf /"}, ok: true}},
+		{name: "tui error", model: &exitResumeTestModel{info: ui.SessionResumeInfo{Handle: "a1b2c3d"}, ok: true}, err: errors.New("terminal restore failed")},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

@@ -245,6 +245,7 @@ func TestFrameProjectionFooterOwnersPreserveFloorOrDeclareCriticalPriority(t *te
 			setup: func(m *Model) {
 				m.pendingSessionSwitch = &pendingSessionSwitch{
 					TargetSessionID: 7,
+					TargetPublicID: "aaaaaa7",
 					TargetTitle:     "Saved work",
 					Draft:           "preserve draft",
 				}

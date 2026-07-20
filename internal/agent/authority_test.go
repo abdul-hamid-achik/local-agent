@@ -801,6 +801,24 @@ func TestExecutionOutcomeAnsweredRequiresEffectOwnerReceipt(t *testing.T) {
 			result: "failed to call downstream: connection reset by peer", want: false,
 		},
 		{
+			name: "lazy call missing server and tool is an answered gateway failure",
+			call: llm.ToolCall{
+				Name:      "mcphub__mcphub_call_tool",
+				Arguments: map[string]any{},
+			},
+			kind: executionpkg.KindMCP, effect: executionpkg.EffectUnknown,
+			result: "need server and tool", want: true,
+		},
+		{
+			name: "lazy call with bare tool and no server is an answered gateway failure",
+			call: llm.ToolCall{
+				Name:      "mcphub__mcphub_call_tool",
+				Arguments: map[string]any{"tool": "cortex_status"},
+			},
+			kind: executionpkg.KindMCP, effect: executionpkg.EffectUnknown,
+			result: "need server and tool", want: true,
+		},
+		{
 			name: "gateway read-only error is an answer", call: llm.ToolCall{Name: "mcphub__bob__bob_check"},
 			kind: executionpkg.KindMCP, effect: executionpkg.EffectReadOnly,
 			result: "input_invalid", want: true,

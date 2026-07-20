@@ -17,7 +17,6 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
 	"github.com/abdul-hamid-achik/local-agent/internal/execution"
 	"github.com/abdul-hamid-achik/local-agent/internal/safeio"
-	"github.com/abdul-hamid-achik/local-agent/internal/sessionref"
 )
 
 const (
@@ -30,6 +29,8 @@ type sessionExportStore interface {
 	AcquireExecutionSessionLease(context.Context, int64, string) (*db.ExecutionSessionLease, error)
 	ListSessions(context.Context, db.ListSessionsParams) ([]db.Session, error)
 	GetSession(context.Context, int64) (db.Session, error)
+	ResolveSessionRef(context.Context, string) (db.Session, error)
+	SessionHandle(context.Context, int64) (string, error)
 	GetSessionStateForExport(context.Context, int64, int) (string, error)
 	ListSessionExecutionEvents(context.Context, int64, string, int) ([]execution.Event, error)
 	SessionExecutionEventExists(context.Context, int64, string, int64) (bool, error)
@@ -170,7 +171,7 @@ func handleSessionList(store sessionExportStore, workspace string, args []string
 	executionFprintf(table, "SESSION\tMODEL\tMODE\tUPDATED\tTITLE\n")
 	for _, session := range sessions {
 		executionFprintf(table, "%s\t%s\t%s\t%s\t%s\n",
-			sessionref.Format(session.ID), terminalSafeGoalText(session.Model), terminalSafeGoalText(session.Mode),
+			sessionDisplayHandle(session), terminalSafeGoalText(session.Model), terminalSafeGoalText(session.Mode),
 			terminalSafeGoalText(session.UpdatedAt), terminalSafeGoalText(sessionListTitle(session.Title)))
 	}
 	_ = table.Flush()
@@ -196,11 +197,12 @@ func handleSessionExport(store sessionExportStore, workspace string, args []stri
 		executionFprintln(stderr, "session export: provide SESSION_ID")
 		return 2
 	}
-	sessionID, err := sessionref.Parse(flags.Arg(0))
+	session, err := resolveSessionArg(context.Background(), store, flags.Arg(0))
 	if err != nil {
-		executionFprintf(stderr, "session export: invalid session reference %q\n", flags.Arg(0))
+		executionFprintf(stderr, "session export: %v\n", err)
 		return 2
 	}
+	sessionID := session.ID
 	wantJSONL, wantMD := false, false
 	switch strings.ToLower(strings.TrimSpace(*format)) {
 	case "both", "":

@@ -557,7 +557,7 @@ func (m *Model) renderPendingImagesStatus(width int) string {
 	if width >= 72 {
 		titleLimit = 24
 	}
-	if session := sessionDisplayLabel(m.sessionID, m.activeSessionTitle, titleLimit); session != "" {
+	if session := sessionDisplayLabel(m.sessionPublicID, m.activeSessionTitle, titleLimit); session != "" {
 		detail = session + " · " + detail
 	}
 	return m.renderDecisionPrompt(

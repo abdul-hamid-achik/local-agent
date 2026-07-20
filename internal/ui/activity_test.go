@@ -922,10 +922,11 @@ func TestWorkingLineKeepsActiveSessionHandleAtOrdinaryWidth(t *testing.T) {
 		m.state = StateWaiting
 		m.turnStartedAt = time.Now().Add(-2 * time.Second)
 		m.sessionID = 7
+		m.sessionPublicID = "aaaaaa7"
 		m.activeSessionTitle = "Composer polish"
 
 		line := ansi.Strip(m.renderWorkingLine())
-		if !strings.Contains(line, "S7") {
+		if !strings.Contains(line, "aaaaaa7") {
 			t.Fatalf("width %d working line omitted active session handle: %q", width, line)
 		}
 	}
@@ -936,22 +937,23 @@ func TestSpecialFootersKeepActiveSessionHandle(t *testing.T) {
 		m := newTestModel(t)
 		m.width = width
 		m.sessionID = 42
+		m.sessionPublicID = "aaaaa2a"
 		m.activeSessionTitle = "TUI polish"
 
 		m.pauseFollow()
-		if line := ansi.Strip(m.renderFollowPausedStatus(width)); !strings.Contains(line, "S42") || !strings.Contains(line, "end") {
+		if line := ansi.Strip(m.renderFollowPausedStatus(width)); !strings.Contains(line, "aaaaa2a") || !strings.Contains(line, "end") {
 			t.Fatalf("width %d follow-paused footer = %q", width, line)
 		}
 
 		m.resumeFollow()
 		m.standaloneRecovery = &standaloneRecoveryState{}
-		if line := ansi.Strip(m.renderStatusLine()); !strings.Contains(line, "S42") || !strings.Contains(line, "/recover") {
+		if line := ansi.Strip(m.renderStatusLine()); !strings.Contains(line, "aaaaa2a") || !strings.Contains(line, "/recover") {
 			t.Fatalf("width %d recovery footer = %q", width, line)
 		}
 
 		m.standaloneRecovery = nil
 		m.pendingImages = []pendingImageAttachment{{Ref: imageasset.Ref{Name: "screen.png"}}}
-		if line := ansi.Strip(m.renderStatusLine()); !strings.Contains(line, "S42") || !strings.Contains(line, "Images ready") {
+		if line := ansi.Strip(m.renderStatusLine()); !strings.Contains(line, "aaaaa2a") || !strings.Contains(line, "Images ready") {
 			t.Fatalf("width %d image footer = %q", width, line)
 		}
 	}
@@ -973,10 +975,11 @@ func TestWorkingAuthorityAndSessionIdentityCoexistAcrossWidths(t *testing.T) {
 				m.state = StateWaiting
 				m.reducedMotion = true
 				m.sessionID = 7
+				m.sessionPublicID = "aaaaaa7"
 				m.activeSessionTitle = "Composer polish"
 
 				line := ansi.Strip(m.renderWorkingLine())
-				for _, want := range []string{mode.label, "S7"} {
+				for _, want := range []string{mode.label, "aaaaaa7"} {
 					if !strings.Contains(line, want) {
 						t.Fatalf("width %d footer omitted %q: %q", width, want, line)
 					}
@@ -995,18 +998,20 @@ func TestSessionRestoreActivityUsesPendingTargetIdentity(t *testing.T) {
 		m.width = width
 		m.reducedMotion = true
 		m.sessionID = 7
+		m.sessionPublicID = "aaaaaa7"
 		m.activeSessionTitle = "Source work"
 		m.sessionLoading = true
 		m.sessionLoadToken = 11
 		m.pendingSessionSwitch = &pendingSessionSwitch{
 			TargetSessionID: 42,
+			TargetPublicID: "aaaaa2a",
 			TargetTitle:     "Target work",
 			Choice:          sessionSwitchKeep,
 			LoadToken:       11,
 		}
 
 		line := ansi.Strip(m.renderWorkingLine())
-		if !strings.Contains(line, "S42") || strings.Contains(line, "S7") {
+		if !strings.Contains(line, "aaaaa2a") || strings.Contains(line, "aaaaaa7") {
 			t.Fatalf("width %d restore activity used source identity: %q", width, line)
 		}
 		if width >= 72 && !strings.Contains(line, "Target work") {

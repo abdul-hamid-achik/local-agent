@@ -75,6 +75,43 @@ The following requests require approval in NORMAL by default:
 - memory save, update, and delete;
 - every MCP tool call.
 
+Interactive approvals stay process-local. Choices are:
+
+- **once** — this call only;
+- **same request again this session** — exact tool and arguments for the rest of
+  this process;
+- **this tool again this session** — offered only for `write` / `edit` /
+  `mkdir`; any arguments for that tool, still revalidated against the workspace;
+- **deny**.
+
+`/permissions accept-edits on` is the Claude-style middle ground for coding:
+workspace `write` / `edit` / `mkdir` skip prompts in NORMAL without auto-approving
+shell, remove, memory mutation, or MCP. Explicit deny policies still win.
+
+Additional process-local scopes:
+
+- **path session** — further `write`/`edit`/`mkdir` on the same path (one
+  approval covers the whole write family for that path);
+- **bash prefix session** — further simple bash commands sharing a safe prefix
+  (compound shell commands with `&&`, pipes, or `$` never match);
+- **MCP tool session** — further calls to the same namespaced MCP tool with any
+  arguments (preflight and route trust still apply).
+
+Durable workspace rules (user config only, not repository files) can save:
+
+- bash patterns — literal prefixes or Claude-style trailing globs
+  (`git status *`, `go test *`);
+- exact namespaced MCP tools (`server__tool`);
+- exact workspace-relative write paths for `write` / `edit` / `mkdir` only.
+
+Use `/permissions allow-bash|allow-mcp|allow-path`, the approval `w` key, or
+**Settings → Permissions**. Export/import (`/permissions export|import`) moves
+rules between machines as portable JSON; write paths stay workspace-relative.
+They are never rewritten into `tool_permissions.policy = allow`. Path grants
+reject targets outside the workspace. Bash patterns never match compound shell
+commands. Session grants and accept-edits remain process-local unless you
+explicitly save a workspace rule.
+
 AUTO narrows those prompts for routine work: validated workspace writes and
 directory creation, host-catalogued local MCP routes, and a static catalog of
 ordinary development commands are pre-authorized. Destructive commands,

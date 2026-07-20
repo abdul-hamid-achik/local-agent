@@ -57,6 +57,7 @@ func (m *Model) ensureExecutionSession(title, modeLabel string) (bool, error) {
 		return false, fmt.Errorf("lock session: %w", leaseErr)
 	}
 	m.sessionID = session.ID
+	m.sessionPublicID = session.PublicID
 	m.activeSessionTitle = session.Title
 	m.executionCursor = 0
 	m.executionLease = lease
@@ -64,7 +65,7 @@ func (m *Model) ensureExecutionSession(title, modeLabel string) (bool, error) {
 		return false, fmt.Errorf("initialize session state revision: %w", err)
 	}
 	m.agent.SetCheckpointSessionID(session.ID)
-	m.agent.SetExecutionSessionID(session.ID)
+	m.agent.SetExecutionSessionID(session.ID, session.PublicID)
 	m.agent.SetExecutionSnapshotCursor(0)
 	return true, nil
 }
@@ -83,12 +84,13 @@ func (m *Model) discardCreatedExecutionSession() error {
 		cancelCleanup()
 	}
 	m.sessionID = 0
+	m.sessionPublicID = ""
 	m.activeSessionTitle = ""
 	m.executionCursor = 0
 	m.resetSessionStateRevision()
 	if m.agent != nil {
 		m.agent.SetCheckpointSessionID(0)
-		m.agent.SetExecutionSessionID(0)
+		m.agent.SetExecutionSessionID(0, "")
 		m.agent.SetExecutionSnapshotCursor(0)
 	}
 	return errors.Join(leaseErr, deleteErr)
@@ -179,13 +181,14 @@ func (m *Model) resetConversationSession() {
 	m.cancelSessionLoad()
 	m.cancelSessionList()
 	m.sessionID = 0
+	m.sessionPublicID = ""
 	m.activeSessionTitle = ""
 	m.executionCursor = 0
 	m.resetSessionStateRevision()
 	_ = m.releaseExecutionSessionLease()
 	if m.agent != nil {
 		m.agent.SetCheckpointSessionID(0)
-		m.agent.SetExecutionSessionID(0)
+		m.agent.SetExecutionSessionID(0, "")
 		m.agent.SetExecutionSnapshotCursor(0)
 	}
 	m.sessionEvalTotal = 0

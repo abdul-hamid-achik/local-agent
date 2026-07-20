@@ -56,7 +56,7 @@ func TestBuildCommandContextProjectsCompletedArtifactsInTranscriptOrder(t *testi
 func TestBuildCommandContextUsesCurrentAgentICESession(t *testing.T) {
 	m := newTestModel(t)
 	m.iceSessionID = "startup-scope"
-	m.agent.SetExecutionSessionID(42)
+	m.agent.SetExecutionSessionID(42, "")
 
 	if got, want := m.buildCommandContext().ICESessionID, "db:42"; got != want {
 		t.Fatalf("ICE session ID = %q, want %q", got, want)

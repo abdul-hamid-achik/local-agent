@@ -26,7 +26,7 @@ func writeRootUsage(writer io.Writer, program string) {
 	_, _ = fmt.Fprintln(writer, "      --auto                Shortcut for --mode auto (requires --prompt)")
 	_, _ = fmt.Fprintln(writer, "      --plan                Shortcut for --mode plan (requires --prompt)")
 	_, _ = fmt.Fprintln(writer, "      --skip-approvals      Skip approval prompts; host, scope, and tool boundaries still apply")
-	_, _ = fmt.Fprintln(writer, "      --resume <S42|42|latest>  Restore a saved interactive session")
+	_, _ = fmt.Fprintln(writer, "      --resume <a1b2c3d|latest>  Restore a saved interactive session")
 	_, _ = fmt.Fprintln(writer, "      --model <name>        Override the Ollama model")
 	_, _ = fmt.Fprintln(writer, "      --agent <name>        Override the agent profile")
 	_, _ = fmt.Fprintln(writer, "      --qwen-router         Use the optimized Qwen model router (experimental)")

@@ -320,6 +320,100 @@ func newMCPPreflightRegistryWithPadding(t *testing.T, marker string, padding int
 	return registry
 }
 
+func TestPreflightUnknownMCPToolSuggestsUniqueNamespacedName(t *testing.T) {
+	registry := newMCPPreflightRegistry(t, filepath.Join(t.TempDir(), "calls"))
+	ag := New(nil, registry, 4096)
+	t.Cleanup(ag.Close)
+
+	err := ag.preflightToolCall(executionpkg.KindMCP, llm.ToolCall{Name: "investigate"})
+	if err == nil {
+		t.Fatal("expected bare remote name to fail preflight")
+	}
+	wantSuggestion := `unknown MCP tool "investigate"; use exact namespaced name "schema__investigate"`
+	if err.Error() != wantSuggestion {
+		t.Fatalf("preflight error = %q, want %q", err.Error(), wantSuggestion)
+	}
+
+	// Do not rewrite identity: exact namespaced name must still be required.
+	if err := ag.preflightToolCall(executionpkg.KindMCP, llm.ToolCall{
+		Name: "schema__investigate",
+		Arguments: map[string]any{
+			"taskId": "task-1", "question": "why",
+		},
+	}); err != nil {
+		t.Fatalf("exact namespaced tool failed preflight: %v", err)
+	}
+
+	err = ag.preflightToolCall(executionpkg.KindMCP, llm.ToolCall{Name: "totally_missing_tool"})
+	if err == nil {
+		t.Fatal("expected completely unknown tool to fail")
+	}
+	if !strings.Contains(err.Error(), `unknown MCP tool "totally_missing_tool"`) {
+		t.Fatalf("preflight error = %v, want plain unknown", err)
+	}
+	if strings.Contains(err.Error(), "use exact namespaced name") {
+		t.Fatalf("unresolvable tool should not invent a suggestion: %v", err)
+	}
+}
+
+func TestPreflightLazyMCPHubCallRequiresExactTarget(t *testing.T) {
+	// Padding installs schema__mcphub_call_tool with a taskId/question object
+	// schema. Host trust treats that namespace as MCPHub so the lazy-target
+	// gate runs after schema validation — without rewriting the call name.
+	registry := newMCPPreflightRegistryWithPadding(t, filepath.Join(t.TempDir(), "calls"), 1)
+	ag := New(nil, registry, 4096)
+	t.Cleanup(ag.Close)
+	ag.SetTrustedLocalMCPServers([]config.ServerConfig{{
+		Name:    mcpPreflightServerName,
+		Command: "/opt/homebrew/bin/mcphub",
+	}})
+
+	callName := mcpPreflightServerName + "__mcphub_call_tool"
+	// Schema-valid args still lack an exact lazy MCPHub target (server+tool).
+	err := ag.preflightToolCall(executionpkg.KindMCP, llm.ToolCall{
+		Name:      callName,
+		Arguments: map[string]any{"taskId": "task-1", "question": "route me"},
+	})
+	if err == nil {
+		t.Fatal("expected incomplete lazy call_tool target to fail preflight")
+	}
+	if !strings.Contains(err.Error(), "mcphub_call_tool requires exact server and tool") {
+		t.Fatalf("preflight error = %v, want exact target requirement", err)
+	}
+
+	// Without gateway trust the host lazy gate does not fire; schema alone
+	// accepts these args (the padding helper has no server/tool fields).
+	untrusted := New(nil, registry, 4096)
+	t.Cleanup(untrusted.Close)
+	if err := untrusted.preflightToolCall(executionpkg.KindMCP, llm.ToolCall{
+		Name:      callName,
+		Arguments: map[string]any{"taskId": "task-1", "question": "route me"},
+	}); err != nil {
+		t.Fatalf("untrusted call_tool spelling should only face schema: %v", err)
+	}
+}
+
+func TestLazyMCPHubMissingTargetTerminalIsFailedNotOutcomeUnknown(t *testing.T) {
+	ag := New(nil, nil, 4096)
+	ag.SetTrustedLocalMCPServers([]config.ServerConfig{
+		{Name: "mcphub", Command: "/opt/homebrew/bin/mcphub"},
+	})
+	call := llm.ToolCall{
+		Name:      "mcphub__mcphub_call_tool",
+		Arguments: map[string]any{"tool": "cortex_status"},
+	}
+	projection := projectSemanticToolReceipt(
+		call.Name, call.Arguments, "need server and tool", nil, nil, false, true, false,
+	)
+	if !ag.executionOutcomeAnswered(call, executionpkg.KindMCP, executionpkg.EffectUnknown, "need server and tool", false, projection) {
+		t.Fatal("incomplete lazy call_tool error should be an answered gateway failure")
+	}
+	terminal := terminalExecutionEventType(executionpkg.EffectUnknown, true, true, nil)
+	if terminal != executionpkg.EventFailed {
+		t.Fatalf("terminal = %s, want failed (not outcome_unknown)", terminal)
+	}
+}
+
 func TestToolAvailabilitySeparatesLocalAndConnectedMCPTools(t *testing.T) {
 	registry := newMCPPreflightRegistry(t, filepath.Join(t.TempDir(), "calls.log"))
 	ag := New(&capabilityCaptureClient{}, registry, 4096)

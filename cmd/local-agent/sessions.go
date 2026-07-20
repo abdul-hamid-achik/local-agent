@@ -8,12 +8,13 @@ import (
 	"strings"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
-	"github.com/abdul-hamid-achik/local-agent/internal/sessionref"
 )
 
 type sessionRepairStore interface {
 	AcquireExecutionSessionLease(context.Context, int64, string) (*db.ExecutionSessionLease, error)
 	RepairSessionProjection(context.Context, *db.ExecutionSessionLease, int64, string) (db.SessionProjectionRepairReceipt, error)
+	ResolveSessionRef(context.Context, string) (db.Session, error)
+	SessionHandle(context.Context, int64) (string, error)
 }
 
 type sessionRepairView struct {
@@ -109,11 +110,13 @@ func handleSessionRepair(store sessionRepairStore, workspace string, args []stri
 		executionFprintln(stderr, "session repair: provide SESSION_ID")
 		return 2
 	}
-	sessionID, err := sessionref.Parse(flags.Arg(0))
+	session, err := resolveSessionArg(context.Background(), store, flags.Arg(0))
 	if err != nil {
-		executionFprintf(stderr, "session repair: invalid session reference %q\n", flags.Arg(0))
+		executionFprintf(stderr, "session repair: %v\n", err)
 		return 2
 	}
+	sessionID := session.ID
+	sessionHandle := sessionDisplayHandle(session)
 	lease, err := store.AcquireExecutionSessionLease(context.Background(), sessionID, workspace)
 	if err != nil {
 		executionFprintf(stderr, "session repair: acquire exact session lease: %v\n", err)
@@ -151,7 +154,7 @@ func handleSessionRepair(store sessionRepairStore, workspace string, args []stri
 		return 0
 	}
 	executionFprintf(stdout, "Repaired session %s projection: cursor %d -> %d @ revision %d.\n",
-		sessionref.Format(view.SessionID), view.PreviousCursor, view.NewCursor, view.SessionRevision)
+		sessionHandle, view.PreviousCursor, view.NewCursor, view.SessionRevision)
 	if view.AnsweredTotal == 0 {
 		executionFprintln(stdout, "No answered effects were missing; the cursor was only re-derived from durable state.")
 		return 0
@@ -179,7 +182,7 @@ func writeSessionUsage(writer io.Writer) {
 	executionFprintln(writer, "  local-agent session export [--format jsonl|md|both] [--out DIR] SESSION_ID")
 	executionFprintln(writer, "  local-agent session repair [--json] SESSION_ID")
 	executionFprintln(writer)
-	executionFprintln(writer, "SESSION_ID accepts either a short handle such as S7 or the compatible raw ID 7.")
+	executionFprintln(writer, "SESSION_ID accepts a 7-character hex handle such as a1b2c3d.")
 	executionFprintln(writer)
 	executionFprintln(writer, "list exports nothing; it enumerates sessions in the current workspace.")
 	executionFprintln(writer, "export writes a bounded JSONL audit projection and a markdown summary (execution")

@@ -167,6 +167,7 @@ type Model struct {
 
 	// Session persistence
 	sessionID                    int64
+	sessionPublicID              string
 	activeSessionTitle           string
 	executionCursor              int64
 	executionLease               *db.ExecutionSessionLease
@@ -222,6 +223,7 @@ type Model struct {
 	modelInventoryRequest    uint64
 	manualOnlyModels         map[string]struct{}
 	settingsPickerState      *SettingsPickerState
+	permissionsPanelState    *PermissionsPanelState
 	agentPickerState         *AgentPickerState
 	providerPickerState      *ProviderPickerState
 	agentHubState            *AgentHubState
@@ -950,6 +952,12 @@ func (m *Model) updateActiveOverlayMessage(msg tea.Msg) tea.Cmd {
 			m.settingsPickerState.List, cmd = m.settingsPickerState.List.Update(msg)
 			return cmd
 		}
+	case OverlayPermissions:
+		if m.permissionsPanelState != nil {
+			var cmd tea.Cmd
+			m.permissionsPanelState.List, cmd = m.permissionsPanelState.List.Update(msg)
+			return cmd
+		}
 	case OverlayAgentPicker:
 		if m.agentPickerState != nil {
 			var cmd tea.Cmd
@@ -1049,14 +1057,15 @@ func unresolvedExecutionWarning(states []execution.State, goalOwned bool) string
 	return ""
 }
 
-func standaloneRecoveryTarget(states []execution.State, snapshotCursor int64) *agent.UnresolvedExecutionError {
+func standaloneRecoveryTarget(states []execution.State, snapshotCursor int64, sessionPublicID string) *agent.UnresolvedExecutionError {
 	for _, state := range states {
 		if state.Latest.Type != execution.EventOutcomeUnknown &&
 			(state.Latest.Type != execution.EventStarted || state.Identity.EffectClass == execution.EffectReadOnly) {
 			continue
 		}
 		return &agent.UnresolvedExecutionError{
-			SessionID: state.Identity.SessionID, WorkspaceID: state.Identity.WorkspaceID,
+			SessionID: state.Identity.SessionID, SessionPublicID: sessionPublicID,
+			WorkspaceID:    state.Identity.WorkspaceID,
 			SnapshotCursor: snapshotCursor, TurnID: state.Identity.TurnID,
 			ExecutionID: state.Identity.ExecutionID, ToolName: state.Identity.ToolName,
 			EventType: state.Latest.Type,

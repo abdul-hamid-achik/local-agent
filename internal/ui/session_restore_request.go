@@ -9,6 +9,7 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/agent"
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
 	"github.com/abdul-hamid-achik/local-agent/internal/execution"
+	"github.com/abdul-hamid-achik/local-agent/internal/sessionref"
 )
 
 // requestSessionRestore is the sole asynchronous session-read authority for
@@ -77,7 +78,7 @@ func (m *Model) requestSessionRestore(selector SessionResumeSelector) tea.Cmd {
 				return SessionLoadedMsg{LoadToken: loadToken, Err: fmt.Errorf("project execution recovery: %w", projectErr)}
 			}
 			unresolved, recoveryContexts = projection.Hazards, projection.Contexts
-			recoveryTarget = standaloneRecoveryTarget(unresolved, state.ExecutionCursor)
+			recoveryTarget = standaloneRecoveryTarget(unresolved, state.ExecutionCursor, session.PublicID)
 		} else {
 			unresolved, unresolvedErr = store.ListExecutionRecoveryHazards(loadCtx, session.ID, workspaceID, state.ExecutionCursor, 100)
 		}
@@ -85,8 +86,11 @@ func (m *Model) requestSessionRestore(selector SessionResumeSelector) tea.Cmd {
 		if unresolvedErr != nil {
 			warning = fmt.Sprintf("Recovery check failed: %v. This session will remain blocked until durable execution state can be verified.", unresolvedErr)
 		}
+		if recoveryTarget != nil && sessionref.Valid(session.PublicID) {
+			recoveryTarget.SessionPublicID = session.PublicID
+		}
 		return SessionLoadedMsg{
-			LoadToken: loadToken, SessionID: session.ID, State: state,
+			LoadToken: loadToken, SessionID: session.ID, SessionPublicID: session.PublicID, State: state,
 			StateRecord: stateRecord, Title: sanitizeTerminalSingleLine(session.Title), RecoveryWarning: warning,
 			RecoveryTarget: recoveryTarget, RecoveryContexts: recoveryContexts, ExecutionLease: lease,
 		}

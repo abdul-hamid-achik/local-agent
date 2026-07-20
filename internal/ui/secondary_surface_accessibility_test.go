@@ -175,7 +175,7 @@ func TestASCIIProfileCoversApprovalActivityAndCompletionChrome(t *testing.T) {
 	statusModel.promptTokens = 50
 	statusModel.numCtx = 100
 	statusModel.sessionID = 7
-
+	statusModel.sessionPublicID = "aaaaaa7"
 	completionModel := newTestModel(t)
 	completionModel.glyphProfile = GlyphASCII
 	completionModel.completionState = newCompletionState(
