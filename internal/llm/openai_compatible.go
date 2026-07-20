@@ -254,21 +254,30 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, opts ChatOption
 		return markRemoteInferenceError(openAIStatusError(resp, body))
 	}
 
-	return markRemoteInferenceError(c.consumeSSE(resp.Body, fn))
+	return markRemoteInferenceError(c.consumeSSE(ctx, resp.Body, fn))
 }
 
-func (c *OpenAICompatibleClient) consumeSSE(body io.Reader, fn func(StreamChunk) error) error {
+func (c *OpenAICompatibleClient) consumeSSE(ctx context.Context, body io.ReadCloser, fn func(StreamChunk) error) error {
+	// Mirror the Ollama watchdog: a timer closes the body on idle silence so
+	// a blocked ReadString returns instead of holding the turn open forever.
+	streamCtx, cancelStream := context.WithCancelCause(ctx)
+	defer cancelStream(nil)
+	idle := time.AfterFunc(streamIdleTimeout, func() {
+		cancelStream(fmt.Errorf("%w (%s)", ErrStreamIdle, streamIdleTimeout))
+		_ = body.Close()
+	})
+	defer idle.Stop()
+
 	reader := bufio.NewReaderSize(body, 64*1024)
 	toolAccum := map[int]*toolCallBuilder{}
 	sawDone := false
-	idle := time.Now()
 
 	for {
-		if time.Since(idle) > streamIdleTimeout {
-			return ErrStreamIdle
-		}
 		line, err := reader.ReadString('\n')
 		if err != nil {
+			if cause := context.Cause(streamCtx); errors.Is(cause, ErrStreamIdle) && ctx.Err() == nil {
+				return cause
+			}
 			if errors.Is(err, io.EOF) {
 				if !sawDone {
 					// Some servers close without a terminal chunk after the last delta.
@@ -281,7 +290,7 @@ func (c *OpenAICompatibleClient) consumeSSE(body io.Reader, fn func(StreamChunk)
 			}
 			return fmt.Errorf("read provider stream: %w", err)
 		}
-		idle = time.Now()
+		idle.Reset(streamIdleTimeout)
 		line = strings.TrimRight(line, "\r\n")
 		if line == "" || strings.HasPrefix(line, ":") {
 			continue

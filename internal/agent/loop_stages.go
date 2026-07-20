@@ -105,11 +105,21 @@ type turnRuntime struct {
 // rebuildSystem reassembles the system prompt from the turn's current bounded
 // context, appending the one-shot empty-terminal repair correction when armed.
 func (t *turnRuntime) rebuildSystem(ctx context.Context) {
-	t.system = buildSystemPromptForModelBudgetContextWithSkillCatalogAndPathGrants(
-		ctx, t.modePrefix, t.tools, t.a.skillContent, t.skillCatalog, t.loadedContext,
-		t.a.memoryStore, t.iceContext, t.turnFilesystem.workDir, t.turnFilesystem.ignoreContent,
-		t.turnModel, t.turnNumCtx, t.readGrants, t.writeGrants,
-	)
+	t.system = buildSystemPrompt(ctx, systemPromptOptions{
+		ModePrefix:    t.modePrefix,
+		Tools:         t.tools,
+		SkillContent:  t.a.skillContent,
+		SkillCatalog:  t.skillCatalog,
+		LoadedContext: t.loadedContext,
+		MemStore:      t.a.memoryStore,
+		ICEContext:    t.iceContext,
+		WorkDir:       t.turnFilesystem.workDir,
+		IgnoreContent: t.turnFilesystem.ignoreContent,
+		ModelName:     t.turnModel,
+		NumCtx:        t.turnNumCtx,
+		ReadGrants:    t.readGrants,
+		WriteGrants:   t.writeGrants,
+	})
 	if t.emptyTerminalRepairPending {
 		t.system += emptyTerminalRepairPrompt
 	}
@@ -245,13 +255,7 @@ func (t *turnRuntime) finishDirectResponse(ctx context.Context, i int, assistant
 	if t.limits.MaxEvalTokens == 0 && t.iceEngine != nil && hasEnoughMessages && userContent != "" {
 		t.iceEngine.DetectAutoMemory(ctx, userContent, assistantContent)
 	}
-	estimatedPromptTokens := t.a.estimatePromptTokens(t.system, t.tools)
-	if estimatedPromptTokens < t.lastPromptTokens {
-		estimatedPromptTokens = t.lastPromptTokens
-	}
-	if receiptFloor := t.a.contextPromptFloorEstimate(t.turnModel, estimateHostPromptTokens(t.system, t.tools)); estimatedPromptTokens < receiptFloor {
-		estimatedPromptTokens = receiptFloor
-	}
+	estimatedPromptTokens := t.estimatedPromptTokens()
 	if !t.compactionForbidden && shouldCompactForContext(estimatedPromptTokens, t.turnNumCtx) {
 		if t.lg != nil {
 			t.lg.Info("compaction", "phase", "direct_response", "prompt_tokens", estimatedPromptTokens, "num_ctx", t.turnNumCtx)
@@ -314,13 +318,7 @@ func (t *turnRuntime) settleIteration(ctx context.Context, i int, toolCallCount 
 	// the source receipt and its exact continuation.
 	if t.queuedAutoContinuation == nil {
 		// Check if we should compact the conversation.
-		estimatedPromptTokens := t.a.estimatePromptTokens(t.system, t.tools)
-		if estimatedPromptTokens < t.lastPromptTokens {
-			estimatedPromptTokens = t.lastPromptTokens
-		}
-		if receiptFloor := t.a.contextPromptFloorEstimate(t.turnModel, estimateHostPromptTokens(t.system, t.tools)); estimatedPromptTokens < receiptFloor {
-			estimatedPromptTokens = receiptFloor
-		}
+		estimatedPromptTokens := t.estimatedPromptTokens()
 		if shouldCompactForContext(estimatedPromptTokens, t.turnNumCtx) {
 			if t.compactionForbidden {
 				return t.rejectContextPrompt(estimatedPromptTokens, true, "phase", "after_tools", "iter", i)

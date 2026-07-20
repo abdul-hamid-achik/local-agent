@@ -1344,11 +1344,6 @@ func (m *Model) viewportHeight() int {
 	return max(1, m.projectFrame().Transcript.Rect.Height())
 }
 
-// FormatToolArgs formats tool arguments as a compact JSON string for display.
-func FormatToolArgs(args map[string]any) string {
-	return agent.FormatToolArgs(args)
-}
-
 // isCompletionActive returns true when the completion modal is open.
 func (m *Model) isCompletionActive() bool {
 	return m.completionState != nil

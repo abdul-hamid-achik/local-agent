@@ -10,7 +10,6 @@ func TestBudgetConfig_Calculate(t *testing.T) {
 		wantTotal    int
 		wantConv     int
 		wantMemory   int
-		wantCode     int
 	}{
 		{
 			name: "normal allocation",
@@ -18,16 +17,14 @@ func TestBudgetConfig_Calculate(t *testing.T) {
 				NumCtx:          8192,
 				SystemReserve:   1500,
 				RecentReserve:   2000,
-				ConversationPct: 0.40,
-				MemoryPct:       0.20,
-				CodePct:         0.40,
+				ConversationPct: 0.65,
+				MemoryPct:       0.35,
 			},
 			promptTokens: 500,
 			// available = int(8192*0.75) - 1500 - 2000 - 500 = 6144 - 4000 = 2144
 			wantTotal:  2144,
-			wantConv:   857, // int(2144 * 0.40) = 857
-			wantMemory: 428, // int(2144 * 0.20) = 428
-			wantCode:   857, // int(2144 * 0.40) = 857
+			wantConv:   1393, // int(2144 * 0.65) = 1393
+			wantMemory: 750,  // int(2144 * 0.35) = 750
 		},
 		{
 			name: "large prompt clamps to zero",
@@ -35,15 +32,13 @@ func TestBudgetConfig_Calculate(t *testing.T) {
 				NumCtx:          8192,
 				SystemReserve:   1500,
 				RecentReserve:   2000,
-				ConversationPct: 0.40,
-				MemoryPct:       0.20,
-				CodePct:         0.40,
+				ConversationPct: 0.65,
+				MemoryPct:       0.35,
 			},
 			promptTokens: 99999,
 			wantTotal:    0,
 			wantConv:     0,
 			wantMemory:   0,
-			wantCode:     0,
 		},
 		{
 			name: "exact boundary available is zero",
@@ -51,16 +46,14 @@ func TestBudgetConfig_Calculate(t *testing.T) {
 				NumCtx:          8192,
 				SystemReserve:   1500,
 				RecentReserve:   2000,
-				ConversationPct: 0.40,
-				MemoryPct:       0.20,
-				CodePct:         0.40,
+				ConversationPct: 0.65,
+				MemoryPct:       0.35,
 			},
 			// int(8192*0.75) - 1500 - 2000 = 2644
 			promptTokens: 2644,
 			wantTotal:    0,
 			wantConv:     0,
 			wantMemory:   0,
-			wantCode:     0,
 		},
 	}
 
@@ -75,9 +68,6 @@ func TestBudgetConfig_Calculate(t *testing.T) {
 			}
 			if b.Memory != tt.wantMemory {
 				t.Errorf("Memory = %d, want %d", b.Memory, tt.wantMemory)
-			}
-			if b.Code != tt.wantCode {
-				t.Errorf("Code = %d, want %d", b.Code, tt.wantCode)
 			}
 			if b.System != tt.cfg.SystemReserve {
 				t.Errorf("System = %d, want %d", b.System, tt.cfg.SystemReserve)
@@ -98,18 +88,15 @@ func TestBudgetConfig_CalculatePromptRemainder(t *testing.T) {
 	if budget.Total != 2_288 {
 		t.Fatalf("Total = %d, want 2288", budget.Total)
 	}
-	if budget.Conversation != 915 {
-		t.Errorf("Conversation = %d, want 915", budget.Conversation)
+	if budget.Conversation != 1487 {
+		t.Errorf("Conversation = %d, want 1487", budget.Conversation)
 	}
-	if budget.Memory != 457 {
-		t.Errorf("Memory = %d, want 457", budget.Memory)
-	}
-	if budget.Code != 915 {
-		t.Errorf("Code = %d, want 915", budget.Code)
+	if budget.Memory != 800 {
+		t.Errorf("Memory = %d, want 800", budget.Memory)
 	}
 
 	exhausted := cfg.CalculatePromptRemainder(12_288)
-	if exhausted.Total != 0 || exhausted.Conversation != 0 || exhausted.Memory != 0 || exhausted.Code != 0 {
+	if exhausted.Total != 0 || exhausted.Conversation != 0 || exhausted.Memory != 0 {
 		t.Fatalf("exhausted budget = %#v, want zero optional allocation", exhausted)
 	}
 }

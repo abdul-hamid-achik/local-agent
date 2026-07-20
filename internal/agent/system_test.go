@@ -58,7 +58,7 @@ func TestBuildSystemPrompt(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := buildSystemPrompt("", tt.tools, tt.skillContent, tt.loadedCtx, tt.memStore, tt.iceContext, "", "")
+			result := buildSystemPrompt(context.Background(), systemPromptOptions{Tools: tt.tools, SkillContent: tt.skillContent, LoadedContext: tt.loadedCtx, MemStore: tt.memStore, ICEContext: tt.iceContext})
 			for _, want := range tt.contains {
 				if !strings.Contains(result, want) {
 					t.Errorf("buildSystemPrompt() missing %q", want)
@@ -76,7 +76,7 @@ func TestBuildSystemPrompt(t *testing.T) {
 	t.Run("with memory store entries", func(t *testing.T) {
 		store := memory.NewStore(filepath.Join(t.TempDir(), "test-memories.json"))
 		_, _ = store.Save("user prefers dark mode", []string{"preference"})
-		result := buildSystemPrompt("", nil, "", "", store, "", "", "")
+		result := buildSystemPrompt(context.Background(), systemPromptOptions{MemStore: store})
 		if !strings.Contains(result, "Remembered Facts") {
 			t.Error("expected Remembered Facts section")
 		}
@@ -119,7 +119,7 @@ func TestSystemPromptMemoryGuidelinesMatchAdvertisedTools(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			prompt := buildSystemPromptForModel("", tt.tools, "", "", store, "", "", "", tt.model)
+			prompt := buildSystemPrompt(context.Background(), systemPromptOptions{Tools: tt.tools, MemStore: store, ModelName: tt.model})
 			if !strings.Contains(prompt, "Remembered Facts") || !strings.Contains(prompt, "user prefers dark mode") {
 				t.Fatalf("prompt lost bounded remembered context:\n%s", prompt)
 			}
@@ -168,7 +168,7 @@ func TestNativeToolPromptSummaryDoesNotDuplicateProviderSchemas(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_WithWorkDir(t *testing.T) {
-	result := buildSystemPrompt("", nil, "", "", nil, "", "/home/user/myproject", "")
+	result := buildSystemPrompt(context.Background(), systemPromptOptions{WorkDir: "/home/user/myproject"})
 	if !strings.Contains(result, `Working directory: "/home/user/myproject"`) {
 		t.Error("expected working directory in prompt")
 	}
@@ -178,10 +178,10 @@ func TestBuildSystemPrompt_WithWorkDir(t *testing.T) {
 }
 
 func TestBuildSystemPromptShowsAdditionalReadOnlyRoots(t *testing.T) {
-	result := buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadRoots(
-		context.Background(), "", nil, "", "", "", nil, "", "/workspace", "", "", 0,
-		[]string{"/projects/mcphub", "/projects/shared docs"},
-	)
+	result := buildSystemPrompt(context.Background(), systemPromptOptions{
+		WorkDir:    "/workspace",
+		ReadGrants: []ReadGrant{{Path: "/projects/mcphub", Kind: ReadGrantDirectory}, {Path: "/projects/shared docs", Kind: ReadGrantDirectory}},
+	})
 	for _, want := range []string{
 		"Filesystem authority: the working directory is the writable workspace.",
 		"Additional temporary read grants",
@@ -263,7 +263,7 @@ func TestBuildEnvironmentSectionProjectsTypedWriteAuthorityWithoutShell(t *testi
 }
 
 func TestBuildSystemPrompt_EmptyWorkDir(t *testing.T) {
-	result := buildSystemPrompt("", nil, "", "", nil, "", "", "")
+	result := buildSystemPrompt(context.Background(), systemPromptOptions{})
 	if strings.Contains(result, "Working directory") {
 		t.Error("should not include working directory when empty")
 	}
@@ -271,7 +271,7 @@ func TestBuildSystemPrompt_EmptyWorkDir(t *testing.T) {
 
 func TestBuildSystemPrompt_WithIgnoreContent(t *testing.T) {
 	ignoreContent := "- node_modules\n- *.log\n- build/"
-	result := buildSystemPrompt("", nil, "", "", nil, "", "", ignoreContent)
+	result := buildSystemPrompt(context.Background(), systemPromptOptions{IgnoreContent: ignoreContent})
 	if !strings.Contains(result, "Ignored Paths") {
 		t.Error("expected Ignored Paths section header")
 	}
@@ -284,24 +284,22 @@ func TestBuildSystemPrompt_WithIgnoreContent(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_EmptyIgnoreContent(t *testing.T) {
-	result := buildSystemPrompt("", nil, "", "", nil, "", "", "")
+	result := buildSystemPrompt(context.Background(), systemPromptOptions{})
 	if strings.Contains(result, "Ignored Paths") {
 		t.Error("should not include Ignored Paths when content is empty")
 	}
 }
 
 func TestSmallModelPromptPreservesInstructionsAndMemory(t *testing.T) {
-	prompt := buildSystemPromptForModel(
-		"BUILD MODE",
-		nil,
-		"use the project skill",
-		"follow AGENTS.md",
-		nil,
-		"retrieved project memory",
-		"/tmp/project",
-		"secrets/**",
-		"qwen3.5:2b",
-	)
+	prompt := buildSystemPrompt(context.Background(), systemPromptOptions{
+		ModePrefix:    "BUILD MODE",
+		SkillContent:  "use the project skill",
+		LoadedContext: "follow AGENTS.md",
+		ICEContext:    "retrieved project memory",
+		WorkDir:       "/tmp/project",
+		IgnoreContent: "secrets/**",
+		ModelName:     "qwen3.5:2b",
+	})
 
 	for _, want := range []string{
 		"BUILD MODE",
@@ -318,9 +316,16 @@ func TestSmallModelPromptPreservesInstructionsAndMemory(t *testing.T) {
 
 func TestSystemPromptBoundsOptionalContext(t *testing.T) {
 	huge := "BEGIN\n" + strings.Repeat("project-context ", 20_000) + "\nEND"
-	prompt := buildSystemPromptForModelBudget(
-		"BUILD MODE", nil, huge, huge, nil, huge, "/tmp/project", huge, "qwen3.5:2b", 4096,
-	)
+	prompt := buildSystemPrompt(context.Background(), systemPromptOptions{
+		ModePrefix:    "BUILD MODE",
+		LoadedContext: huge,
+		SkillContent:  huge,
+		ICEContext:    huge,
+		WorkDir:       "/tmp/project",
+		IgnoreContent: huge,
+		ModelName:     "qwen3.5:2b",
+		NumCtx:        4096,
+	})
 	if len([]rune(prompt)) > 12_000 {
 		t.Fatalf("bounded system prompt is still excessive: %d characters", len([]rune(prompt)))
 	}
@@ -348,14 +353,16 @@ func TestConstrainedPromptWindowReservesSpaceFromOptionalContext(t *testing.T) {
 		Description: "A schema that must remain provider-visible verbatim.",
 		Parameters:  map[string]any{"type": "object", "properties": map[string]any{"value": map[string]any{"type": "string"}}},
 	}}
-	legacy := buildSystemPromptForModelBudgetContextWithSkillCatalogAndPathGrantsBudget(
-		context.Background(), "", tools, large, skillCatalog, large, nil, large, "/workspace", large,
-		"ornith:latest", numCtx, nil, nil, numCtx*4/3,
-	)
-	constrained := buildSystemPromptForModelBudgetContextWithSkillCatalogAndPathGrantsBudget(
-		context.Background(), "", tools, large, skillCatalog, large, nil, large, "/workspace", large,
-		"ornith:latest", numCtx, nil, nil, optionalPromptBudget(numCtx),
-	)
+	legacy := buildSystemPrompt(context.Background(), systemPromptOptions{
+		Tools: tools, LoadedContext: large, SkillContent: large, SkillCatalog: skillCatalog,
+		ICEContext: large, WorkDir: "/workspace", IgnoreContent: large,
+		ModelName: "ornith:latest", NumCtx: numCtx, OptionalBudget: numCtx * 4 / 3,
+	})
+	constrained := buildSystemPrompt(context.Background(), systemPromptOptions{
+		Tools: tools, LoadedContext: large, SkillContent: large, SkillCatalog: skillCatalog,
+		ICEContext: large, WorkDir: "/workspace", IgnoreContent: large,
+		ModelName: "ornith:latest", NumCtx: numCtx, OptionalBudget: optionalPromptBudget(numCtx),
+	})
 	legacyTokens := estimateTextPromptTokens(legacy)
 	constrainedTokens := estimateTextPromptTokens(constrained)
 	t.Logf("16K optional context: legacy=%d constrained=%d saved=%d tokens", legacyTokens, constrainedTokens, legacyTokens-constrainedTokens)

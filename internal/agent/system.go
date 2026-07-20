@@ -15,6 +15,21 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/memory"
 )
 
+// Optional prompt budget shares (percentages of the optional budget).
+// The shares should sum to ~100% across all optional sections.
+const (
+	budgetShareLoadedContextDefault    = 50 // loaded context when no skill catalog
+	budgetShareLoadedContextWithCatalog = 40 // loaded context when skill catalog present
+	budgetShareSkillCatalog            = 10
+	budgetShareSkillContent            = 20
+	budgetShareICEOrMemory             = 25
+	budgetShareIgnoreContent           = 5
+)
+
+// gitProbeTimeout bounds filesystem and git probes during prompt assembly so
+// a hung network mount or slow repository cannot stall the turn.
+const gitProbeTimeout = 750 * time.Millisecond
+
 const systemTemplate = `You are a helpful personal assistant running locally on the user's machine.
 You have access to tools via MCP servers. You MUST use tools to accomplish tasks — do not guess or make up answers when a tool can provide the real information.
 %s
@@ -68,72 +83,59 @@ func isSmallModel(modelName string) bool {
 }
 
 // buildSystemPrompt generates the system prompt with current tool info,
-// active skills, loaded context, memory, optional ICE context, and ignore patterns.
-// It optimizes for small models if isSmallModel is true.
-func buildSystemPrompt(modePrefix string, tools []llm.ToolDef, skillContent, loadedContext string, memStore *memory.Store, iceContext, workDir, ignoreContent string) string {
-	return buildSystemPromptForModel(modePrefix, tools, skillContent, loadedContext, memStore, iceContext, workDir, ignoreContent, "")
+// systemPromptOptions carries every optional prompt-assembly parameter.
+// Zero values are safe: nil slices, empty strings, and 0 budget all produce
+// the same output as the legacy wrapper chain's defaults.
+type systemPromptOptions struct {
+	ModePrefix     string
+	Tools          []llm.ToolDef
+	SkillContent   string
+	SkillCatalog   string
+	LoadedContext  string
+	MemStore       *memory.Store
+	ICEContext     string
+	WorkDir        string
+	IgnoreContent  string
+	ModelName      string
+	NumCtx         int
+	ReadGrants     []ReadGrant
+	WriteGrants    []WriteGrant
+	OptionalBudget int // 0 → derive from NumCtx via optionalPromptBudget()
 }
 
-// buildSystemPromptForModel generates the system prompt, optionally optimized for the given model name.
-func buildSystemPromptForModel(modePrefix string, tools []llm.ToolDef, skillContent, loadedContext string, memStore *memory.Store, iceContext, workDir, ignoreContent string, modelName string) string {
-	return buildSystemPromptForModelBudget(modePrefix, tools, skillContent, loadedContext, memStore, iceContext, workDir, ignoreContent, modelName, 0)
-}
-
-// buildSystemPromptForModelBudget bounds optional context before prompt
-// assembly. The model still receives project instructions, skills, and memory,
-// but one oversized file or retrieval result cannot consume the entire window.
-func buildSystemPromptForModelBudget(modePrefix string, tools []llm.ToolDef, skillContent, loadedContext string, memStore *memory.Store, iceContext, workDir, ignoreContent string, modelName string, numCtx int) string {
-	return buildSystemPromptForModelBudgetContext(context.Background(), modePrefix, tools, skillContent, loadedContext, memStore, iceContext, workDir, ignoreContent, modelName, numCtx)
-}
-
-func buildSystemPromptForModelBudgetContext(ctx context.Context, modePrefix string, tools []llm.ToolDef, skillContent, loadedContext string, memStore *memory.Store, iceContext, workDir, ignoreContent string, modelName string, numCtx int) string {
-	return buildSystemPromptForModelBudgetContextWithSkillCatalog(ctx, modePrefix, tools, skillContent, "", loadedContext, memStore, iceContext, workDir, ignoreContent, modelName, numCtx)
-}
-
-func buildSystemPromptForModelBudgetContextWithSkillCatalog(ctx context.Context, modePrefix string, tools []llm.ToolDef, skillContent, skillCatalog, loadedContext string, memStore *memory.Store, iceContext, workDir, ignoreContent string, modelName string, numCtx int) string {
-	return buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadRoots(ctx, modePrefix, tools, skillContent, skillCatalog, loadedContext, memStore, iceContext, workDir, ignoreContent, modelName, numCtx, nil)
-}
-
-func buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadRoots(ctx context.Context, modePrefix string, tools []llm.ToolDef, skillContent, skillCatalog, loadedContext string, memStore *memory.Store, iceContext, workDir, ignoreContent string, modelName string, numCtx int, readRoots []string) string {
-	grants := make([]ReadGrant, 0, len(readRoots))
-	for _, root := range readRoots {
-		grants = append(grants, ReadGrant{Path: root, Kind: ReadGrantDirectory})
-	}
-	return buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadGrants(ctx, modePrefix, tools, skillContent, skillCatalog, loadedContext, memStore, iceContext, workDir, ignoreContent, modelName, numCtx, grants)
-}
-
-func buildSystemPromptForModelBudgetContextWithSkillCatalogAndReadGrants(ctx context.Context, modePrefix string, tools []llm.ToolDef, skillContent, skillCatalog, loadedContext string, memStore *memory.Store, iceContext, workDir, ignoreContent string, modelName string, numCtx int, readGrants []ReadGrant) string {
-	return buildSystemPromptForModelBudgetContextWithSkillCatalogAndPathGrants(
-		ctx, modePrefix, tools, skillContent, skillCatalog, loadedContext, memStore,
-		iceContext, workDir, ignoreContent, modelName, numCtx, readGrants, nil,
-	)
-}
-
-func buildSystemPromptForModelBudgetContextWithSkillCatalogAndPathGrants(ctx context.Context, modePrefix string, tools []llm.ToolDef, skillContent, skillCatalog, loadedContext string, memStore *memory.Store, iceContext, workDir, ignoreContent string, modelName string, numCtx int, readGrants []ReadGrant, writeGrants []WriteGrant) string {
-	return buildSystemPromptForModelBudgetContextWithSkillCatalogAndPathGrantsBudget(
-		ctx, modePrefix, tools, skillContent, skillCatalog, loadedContext, memStore,
-		iceContext, workDir, ignoreContent, modelName, numCtx, readGrants, writeGrants,
-		optionalPromptBudget(numCtx),
-	)
-}
-
-// buildSystemPromptForModelBudgetContextWithSkillCatalogAndPathGrantsBudget
-// is the testable assembly primitive behind the production prompt builder.
-// optionalBudget applies only to bounded optional text (skills, loaded
+// buildSystemPrompt assembles the system prompt from the given options.
+// It optimizes for small models if isSmallModel(opts.ModelName) is true.
+// OptionalBudget applies only to bounded optional text (skills, loaded
 // instructions, ICE, and ignores); it never modifies the tool definitions
 // supplied separately to the provider or the host's authority model.
-func buildSystemPromptForModelBudgetContextWithSkillCatalogAndPathGrantsBudget(ctx context.Context, modePrefix string, tools []llm.ToolDef, skillContent, skillCatalog, loadedContext string, memStore *memory.Store, iceContext, workDir, ignoreContent string, modelName string, numCtx int, readGrants []ReadGrant, writeGrants []WriteGrant, optionalBudget int) string {
-	useSmallModel := isSmallModel(modelName)
-	if budget := optionalBudget; budget > 0 {
-		loadedContextShare := 50
+func buildSystemPrompt(ctx context.Context, opts systemPromptOptions) string {
+	useSmallModel := isSmallModel(opts.ModelName)
+	budget := opts.OptionalBudget
+	if budget == 0 {
+		budget = optionalPromptBudget(opts.NumCtx)
+	}
+	modePrefix := opts.ModePrefix
+	tools := opts.Tools
+	skillContent := opts.SkillContent
+	skillCatalog := opts.SkillCatalog
+	loadedContext := opts.LoadedContext
+	memStore := opts.MemStore
+	iceContext := opts.ICEContext
+	workDir := opts.WorkDir
+	ignoreContent := opts.IgnoreContent
+	readGrants := opts.ReadGrants
+	writeGrants := opts.WriteGrants
+
+	if budget > 0 {
+		loadedContextShare := budgetShareLoadedContextDefault
 		if skillCatalog != "" {
-			loadedContextShare = 40
-			skillCatalog = boundPromptText(skillCatalog, budget*10/100)
+			loadedContextShare = budgetShareLoadedContextWithCatalog
+			skillCatalog = boundPromptText(skillCatalog, budget*budgetShareSkillCatalog/100)
 		}
 		loadedContext = boundPromptText(loadedContext, budget*loadedContextShare/100)
-		skillContent = boundPromptText(skillContent, budget*20/100)
-		iceContext = boundPromptText(iceContext, budget*25/100)
-		ignoreContent = boundPromptText(ignoreContent, budget*5/100)
+		skillContent = boundPromptText(skillContent, budget*budgetShareSkillContent/100)
+		iceContext = boundPromptText(iceContext, budget*budgetShareICEOrMemory/100)
+		ignoreContent = boundPromptText(ignoreContent, budget*budgetShareIgnoreContent/100)
 	}
 
 	toolList := nativeToolPromptSummary(tools)
@@ -159,8 +161,8 @@ func buildSystemPromptForModelBudgetContextWithSkillCatalogAndPathGrantsBudget(c
 	} else if memStore != nil {
 		memorySection = buildMemorySection(memStore)
 	}
-	if budget := optionalBudget; budget > 0 && iceContext == "" {
-		memorySection = boundPromptText(memorySection, budget*25/100)
+	if budget > 0 && iceContext == "" {
+		memorySection = boundPromptText(memorySection, budget*budgetShareICEOrMemory/100)
 	}
 
 	// A project memory store may still contribute bounded remembered context when
@@ -416,7 +418,7 @@ func detectProjectInfoContext(ctx context.Context, workDir string) string {
 
 // detectGitInfoContext returns bounded git branch and status information.
 func detectGitInfoContext(ctx context.Context, workDir string) string {
-	probeCtx, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
+	probeCtx, cancel := context.WithTimeout(ctx, gitProbeTimeout)
 	defer cancel()
 	if runGitCommandContext(probeCtx, workDir, "rev-parse", "--is-inside-work-tree") != "true" {
 		return ""
@@ -483,7 +485,7 @@ func runGitCommandContext(ctx context.Context, dir string, args ...string) strin
 	if err := ctx.Err(); err != nil {
 		return ""
 	}
-	commandCtx, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
+	commandCtx, cancel := context.WithTimeout(ctx, gitProbeTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(commandCtx, "git", args...)
 	configureCommandProcessGroup(cmd)

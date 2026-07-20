@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/agent"
 	"github.com/abdul-hamid-achik/local-agent/internal/ecosystem"
@@ -516,14 +517,10 @@ func truncateUTF8Bytes(value string, limit int) string {
 		return value
 	}
 	cut := limit
-	for cut > 0 && !utf8RuneStart(value[cut]) {
+	for cut > 0 && !utf8.RuneStart(value[cut]) {
 		cut--
 	}
 	return value[:cut]
-}
-
-func utf8RuneStart(value byte) bool {
-	return value&0xC0 != 0x80
 }
 
 func projectedToolTarget(projection ecosystem.ToolProjection) string {

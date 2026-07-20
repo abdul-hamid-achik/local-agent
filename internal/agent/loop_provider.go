@@ -47,10 +47,7 @@ func (t *turnRuntime) providerStage(ctx context.Context, i int) (string, []llm.T
 		if remainingEvalTokens <= 0 {
 			return "", nil, stageProceed, fmt.Errorf("%w: used %d of %d", ErrTurnEvalBudgetExhausted, t.totalEvalTokens, t.limits.MaxEvalTokens)
 		}
-		effectivePromptTokens := t.a.estimatePromptTokens(t.system, t.tools)
-		if receiptFloor := t.a.contextPromptFloorEstimate(t.turnModel, estimateHostPromptTokens(t.system, t.tools)); effectivePromptTokens < receiptFloor {
-			effectivePromptTokens = receiptFloor
-		}
+		effectivePromptTokens := t.estimatedPromptTokens()
 		requestEvalLimit = contextReservedEvalLimit(remainingEvalTokens, effectivePromptTokens, t.turnNumCtx)
 		if requestEvalLimit <= 0 {
 			return "", nil, stageProceed, t.rejectContextPrompt(effectivePromptTokens, true, "phase", "before_provider", "iter", i)

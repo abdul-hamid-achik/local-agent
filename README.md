@@ -14,6 +14,28 @@ OpenAI-compatible remote provider profiles.
   AUTO   -> proactive work with routine workspace actions pre-authorized
 ```
 
+<details>
+<summary>Table of contents</summary>
+
+- [What works today](#what-works-today)
+- [Quick start](#quick-start)
+- [Modes and authority](#modes-and-authority)
+- [Models](#models)
+- [CLI reference](#cli-reference)
+- [Slash commands](#slash-commands)
+- [Keyboard shortcuts](#keyboard-shortcuts)
+- [Configuration](#configuration)
+- [Environment variables](#environment-variables)
+- [Project instructions, skills, and profiles](#project-instructions-skills-and-profiles)
+- [MCP servers](#mcp-servers)
+- [Expert teams](#expert-teams)
+- [Sessions, memory, and ICE](#sessions-memory-and-ice)
+- [Architecture](#architecture)
+- [Alpha limitations and roadmap](#alpha-limitations-and-roadmap)
+- [Development](#development)
+
+</details>
+
 ## What works today
 
 - A responsive terminal UI built with Bubble Tea v2, Bubbles v2, Lip Gloss v2, and Glamour.
@@ -424,6 +446,13 @@ See [`config.example.yaml`](config.example.yaml) for the configured model catalo
 | `LOCAL_AGENT_LOCAL_ONLY` | Enable or disable local-machine endpoint enforcement |
 | `LOCAL_AGENT_ALLOW_LARGE_MODELS` | Bypass the 16 GB-oriented model/context guard |
 | `LOCAL_AGENT_REDUCED_MOTION` | Replace TUI spinners and the waiting shimmer with static activity glyphs |
+| `LOCAL_AGENT_GLYPHS` | Set glyph profile to `unicode` (default) or `ascii` |
+| `LOCAL_AGENT_TRUST_REPO_MCP` | Trust repository-level MCP server definitions |
+| `LOCAL_AGENT_PROVIDER` | Set the active provider profile name |
+| `LOCAL_AGENT_PROVIDER_BASE_URL` | Override the active provider base URL |
+| `LOCAL_AGENT_PROVIDER_MODEL` | Override the active provider model |
+| `LOCAL_AGENT_PROVIDER_API_KEY_ENV` | Override the env var name for the provider API key |
+| `LOCAL_AGENT_PROVIDER_CONTEXT_SIZE` | Override the provider context window size |
 
 ## Project instructions, skills, and profiles
 
@@ -565,7 +594,7 @@ ICE is still a flat JSON vector store rather than an ANN index, but its bounded 
 | `local-agent --version` | Print the build version |
 
 Source builds print `dev`. Tagged release artifacts print the tag version
-(for example, `0.17.0`), and MCP client handshakes advertise that same build
+(for example, `0.19.0`), and MCP client handshakes advertise that same build
 version.
 
 `-p` and `--prompt` are exact aliases for a human-readable convenience mode,
@@ -814,11 +843,12 @@ data erasure is required.
 | `alt+o`, `alt+d` | Open retained output / diff for the inspected tool when available |
 | `ctrl+t` | Toggle `<think>` tag display |
 | `ctrl+y` | Copy last response |
-| `ctrl+e` | Edit input with `$EDITOR` |
+| `ctrl+e` | Edit input with `$VISUAL`, then `$EDITOR` |
 | `ctrl+k` | Toggle compact mode |
 | `esc` | Close an overlay or inline form, cancel an approval, or cancel active generation |
 | `ctrl+n`, `ctrl+l` | New conversation / clear view |
 | `ctrl+c` | Quit |
+| `end` | Jump to latest output (empty input) |
 
 Transcript search never indexes private model reasoning, raw tool
 arguments/results, or raw MCP structured content. Closing it restores the
@@ -873,6 +903,8 @@ internal/workunit/  Specialist scheduling/admission contract (does not spawn wor
 internal/ui/        Charm terminal interface
 internal/logging/   Per-run structured logs
 ```
+
+Additional utility packages (`internal/`) provide path resolution, network policy, safe I/O, execution ledger, permission policy, reconciliation, session references, image assets, and documentation link checking.
 
 Top-level built-in, memory, and MCP calls execute deterministically in model order. The runtime does not parallelize unknown MCP effects. `consult_experts` is the bounded exception inside one read-only tool call: its tool-free inference reports may run concurrently under the host resource plan.
 

@@ -35,7 +35,7 @@ func (item agentHubItem) Title() string {
 	return sanitizeTerminalSingleLine(fmt.Sprintf(
 		"Consultation #%s%s%s",
 		item.displayID,
-		agentHubSeparator(item.glyphProfile),
+		glyphSeparator(item.glyphProfile),
 		agentGroupStatusLabel(item.group),
 	))
 }
@@ -290,13 +290,13 @@ func (state *AgentHubState) configureListTitle() {
 	if count := len(state.Surface.Groups); count > 0 {
 		title = fmt.Sprintf(
 			"Agents%s%d %s",
-			agentHubSeparator(state.glyphProfile),
+			glyphSeparator(state.glyphProfile),
 			count,
 			pluralizeNoun(count, "consultation", "consultations"),
 		)
 	}
 	if state.Surface.OmittedGroups > 0 {
-		title += fmt.Sprintf("%s+%d older", agentHubSeparator(state.glyphProfile), state.Surface.OmittedGroups)
+		title += fmt.Sprintf("%s+%d older", glyphSeparator(state.glyphProfile), state.Surface.OmittedGroups)
 	}
 	titleWidth := pickerListWidth(max(1, state.width), agentHubMaximumWidth)
 	if state.glyphProfile == GlyphASCII {
@@ -741,7 +741,7 @@ func renderAgentViewerLayout(
 ) agentViewerLayout {
 	width = max(1, width)
 	profile := resolveGlyphProfile(profiles...)
-	separator := agentHubSeparator(profile)
+	separator := glyphSeparator(profile)
 	truncate := func(value string) string {
 		return truncateDisplayWithGlyphProfile(value, width, profile)
 	}
@@ -853,7 +853,7 @@ func agentViewerStatusLine(group AgentGroupProjection, profiles ...GlyphProfile)
 		parts = append(parts, formatWorkingElapsed(group.Elapsed))
 	}
 	parts = append(parts, fmt.Sprintf("revision %d", group.Revision))
-	return strings.Join(parts, agentHubSeparator(resolveGlyphProfile(profiles...)))
+	return strings.Join(parts, glyphSeparator(resolveGlyphProfile(profiles...)))
 }
 
 func resolveAgentViewerRowOffset(
@@ -939,7 +939,7 @@ func agentGroupStatusLabel(group AgentGroupProjection) string {
 }
 
 func agentGroupSummary(group AgentGroupProjection, profiles ...GlyphProfile) string {
-	separator := agentHubSeparator(resolveGlyphProfile(profiles...))
+	separator := glyphSeparator(resolveGlyphProfile(profiles...))
 	if !group.ProgressAvailable {
 		parts := []string{"No public subagent progress yet"}
 		if group.Elapsed > 0 {
@@ -974,13 +974,6 @@ func agentGroupSummary(group AgentGroupProjection, profiles ...GlyphProfile) str
 		parts = append(parts, formatWorkingElapsed(group.Elapsed))
 	}
 	return strings.Join(parts, separator)
-}
-
-func agentHubSeparator(profile GlyphProfile) string {
-	if resolveGlyphProfile(profile) == GlyphASCII {
-		return " | "
-	}
-	return " · "
 }
 
 func agentGroupUnread(group AgentGroupProjection) int {
@@ -1038,7 +1031,7 @@ func (state *AgentHubState) viewerContent(styles Styles) string {
 		fmt.Sprintf(
 			"Consultation #%s%s%s",
 			agentGroupDisplayID(group.ID),
-			agentHubSeparator(state.glyphProfile),
+			glyphSeparator(state.glyphProfile),
 			agentGroupStatusLabel(group),
 		),
 		width,

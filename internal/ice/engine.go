@@ -92,6 +92,7 @@ func NewEngine(client llm.Client, memStore *memory.Store, cfg EngineConfig) (*En
 	lifecycle, cancel := context.WithCancel(context.Background())
 
 	store := NewStore(storePath)
+	store.SetEmbedModel(embedModel)
 	if err := store.Err(); err != nil {
 		cancel()
 		return nil, err

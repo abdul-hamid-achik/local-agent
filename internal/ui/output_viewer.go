@@ -299,14 +299,6 @@ func (viewer *OutputViewer) Status() OutputViewerStatus {
 	return viewer.status
 }
 
-// Generation returns the current page-result fence.
-func (viewer *OutputViewer) Generation() uint64 {
-	if viewer == nil {
-		return 0
-	}
-	return viewer.generation
-}
-
 // Layout returns the current immutable geometry snapshot.
 func (viewer *OutputViewer) Layout() OutputViewerLayout {
 	if viewer == nil {

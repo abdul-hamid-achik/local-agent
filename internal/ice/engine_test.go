@@ -60,19 +60,15 @@ func TestBudgetConfigPercentages(t *testing.T) {
 	cfg := DefaultBudgetConfig(16384)
 	budget := cfg.Calculate(100)
 
-	// Check percentages: ConversationPct=0.40, MemoryPct=0.20, CodePct=0.40
+	// Check percentages: ConversationPct=0.65, MemoryPct=0.35
 	// available = 12288 - 1500 - 2000 - 100 = 8688
-	// Conversation = 8688 * 0.40 = 3475
-	// Memory = 8688 * 0.20 = 1737
-	// Code = 8688 * 0.40 = 3475
-	if budget.Conversation != 3475 {
-		t.Errorf("Conversation = %d, want %d", budget.Conversation, 3475)
+	// Conversation = 8688 * 0.65 = 5647
+	// Memory = 8688 * 0.35 = 3040
+	if budget.Conversation != 5647 {
+		t.Errorf("Conversation = %d, want %d", budget.Conversation, 5647)
 	}
-	if budget.Memory != 1737 {
-		t.Errorf("Memory = %d, want %d", budget.Memory, 1737)
-	}
-	if budget.Code != 3475 {
-		t.Errorf("Code = %d, want %d", budget.Code, 3475)
+	if budget.Memory != 3040 {
+		t.Errorf("Memory = %d, want %d", budget.Memory, 3040)
 	}
 }
 

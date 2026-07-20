@@ -157,18 +157,9 @@ func (m *ModelManager) ClearRemoteProvider() {
 	m.remote = nil
 	m.remoteContext = 0
 	m.remoteLabel = ""
-	if m.providerActive == "" || m.providerActive != ProviderTypeOllamaName(m.providerCatalog) {
+	if m.providerActive == "" || m.providerActive != "ollama" {
 		m.providerActive = "ollama"
 	}
-}
-
-func ProviderTypeOllamaName(catalog config.ProviderConfig) string {
-	if catalog.HasProfiles() {
-		if _, ok := catalog.LookupProfile("ollama"); ok {
-			return "ollama"
-		}
-	}
-	return "ollama"
 }
 
 // SwitchProvider activates a named profile from the installed catalog.

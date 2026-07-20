@@ -65,10 +65,6 @@ const (
 	DiffViewerSplit
 )
 
-func (mode DiffViewerMode) Valid() bool {
-	return mode == DiffViewerUnified || mode == DiffViewerSplit
-}
-
 func (mode DiffViewerMode) String() string {
 	if mode == DiffViewerSplit {
 		return "split"

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
@@ -68,7 +69,7 @@ func TestSwitchProviderMissingKey(t *testing.T) {
 		},
 	}, false, "qwen3.5:2b")
 	err := manager.SwitchProvider("xai")
-	if err == nil || !contains(err.Error(), "XAI_API_KEY") {
+	if err == nil || !strings.Contains(err.Error(), "XAI_API_KEY") {
 		t.Fatalf("expected missing key error, got %v", err)
 	}
 }
@@ -91,10 +92,10 @@ func TestSwitchProviderLocalOnlyErrorDoesNotExposeBaseURL(t *testing.T) {
 	}, true, "qwen3.5:2b")
 
 	err := manager.SwitchProvider("remote")
-	if err == nil || !contains(err.Error(), "local_only") {
+	if err == nil || !strings.Contains(err.Error(), "local_only") {
 		t.Fatalf("expected local_only error, got %v", err)
 	}
-	if contains(err.Error(), "super-secret") || contains(err.Error(), secretURL) {
+	if strings.Contains(err.Error(), "super-secret") || strings.Contains(err.Error(), secretURL) {
 		t.Fatalf("provider switch error exposed base URL: %v", err)
 	}
 	if manager.RemoteProvider() || manager.ActiveProviderName() != "ollama" {
@@ -135,16 +136,4 @@ func TestSwitchProviderContextCanceledBeforeMutation(t *testing.T) {
 	if got := manager.Model(); got != originalModel {
 		t.Fatalf("model = %q, want unchanged %q", got, originalModel)
 	}
-}
-
-func contains(s, sub string) bool {
-	return len(s) >= len(sub) && (s == sub || len(sub) == 0 ||
-		(len(s) > 0 && (func() bool {
-			for i := 0; i+len(sub) <= len(s); i++ {
-				if s[i:i+len(sub)] == sub {
-					return true
-				}
-			}
-			return false
-		})()))
 }

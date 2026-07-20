@@ -338,7 +338,7 @@ func (state *ExpertProgressState) renderDetails(width int, styles ToolCardStyles
 	nodes = presentedWorkNodes(nodes)
 	width = max(1, width)
 	profile := resolveGlyphProfile(profiles...)
-	separator := agentHubSeparator(profile)
+	separator := glyphSeparator(profile)
 	truncate := func(value string) string {
 		return truncateDisplayWithGlyphProfile(value, width, profile)
 	}
@@ -391,7 +391,7 @@ func renderExpertProgressNode(node WorkNode, width int, styles ToolCardStyles, p
 	width = max(1, width)
 	profile := resolveGlyphProfile(profiles...)
 	glyphs := glyphSet(profile)
-	separator := agentHubSeparator(profile)
+	separator := glyphSeparator(profile)
 	truncate := func(value string) string {
 		return truncateDisplayWithGlyphProfile(value, width, profile)
 	}

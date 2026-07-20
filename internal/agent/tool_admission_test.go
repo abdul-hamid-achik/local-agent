@@ -677,3 +677,69 @@ func TestRunFirstTurnAt16KWithLargeMCPRegistry(t *testing.T) {
 		}
 	}
 }
+
+func TestEstimatedPromptTokensClampsToBothFloors(t *testing.T) {
+	tests := []struct {
+		name         string
+		systemLen    int // controls heuristic estimate (chars/4)
+		lastPrompt   int
+		receiptFloor int
+		wantMin      int
+	}{
+		{name: "heuristic dominates", systemLen: 20_000, lastPrompt: 1_000, receiptFloor: 2_000, wantMin: 5_000},
+		{name: "lastPrompt floor dominates", systemLen: 400, lastPrompt: 4_000, receiptFloor: 2_000, wantMin: 4_000},
+		{name: "receipt floor dominates", systemLen: 400, lastPrompt: 2_000, receiptFloor: 6_000, wantMin: 6_000},
+		{name: "receipt beats lastPrompt", systemLen: 200, lastPrompt: 3_000, receiptFloor: 3_500, wantMin: 3_500},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &toolAdmissionCaptureClient{}
+			agent := New(client, nil, 16_384)
+			agent.SetWorkDir(t.TempDir())
+			if test.receiptFloor > 0 {
+				if err := agent.RestoreContextPromptFloor(ContextPromptFloor{
+					Tokens:        test.receiptFloor,
+					HostTokens:    0,
+					MessageTokens: 0,
+					Model:         client.Model(),
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			rt := &turnRuntime{
+				a:                agent,
+				turnModel:        client.Model(),
+				turnNumCtx:       16_384,
+				system:           strings.Repeat("x ", test.systemLen/2),
+				lastPromptTokens: test.lastPrompt,
+			}
+			got := rt.estimatedPromptTokens()
+			if got < test.wantMin {
+				t.Fatalf("estimatedPromptTokens() = %d, want >= %d (floor not applied)", got, test.wantMin)
+			}
+		})
+	}
+}
+
+func TestEstimatedPromptTokensIgnoresMismatchedModelFloor(t *testing.T) {
+	client := &toolAdmissionCaptureClient{}
+	agent := New(client, nil, 16_384)
+	agent.SetWorkDir(t.TempDir())
+	if err := agent.RestoreContextPromptFloor(ContextPromptFloor{
+		Tokens: 9_000,
+		Model:  "some-other-model",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rt := &turnRuntime{
+		a:                agent,
+		turnModel:        client.Model(),
+		turnNumCtx:       16_384,
+		system:           "short prompt",
+		lastPromptTokens: 0,
+	}
+	got := rt.estimatedPromptTokens()
+	if got >= 9_000 {
+		t.Fatalf("estimatedPromptTokens() = %d, should ignore mismatched model floor", got)
+	}
+}

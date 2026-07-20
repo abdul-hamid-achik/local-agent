@@ -7,7 +7,6 @@ type BudgetConfig struct {
 	RecentReserve   int     // tokens reserved for recent conversation
 	ConversationPct float64 // fraction of remaining budget for past conversations
 	MemoryPct       float64 // fraction of remaining budget for memories
-	CodePct         float64 // fraction of remaining budget for code context
 }
 
 // DefaultBudgetConfig returns sensible defaults for a given context window.
@@ -16,9 +15,8 @@ func DefaultBudgetConfig(numCtx int) BudgetConfig {
 		NumCtx:          numCtx,
 		SystemReserve:   1500,
 		RecentReserve:   2000,
-		ConversationPct: 0.40,
-		MemoryPct:       0.20,
-		CodePct:         0.40,
+		ConversationPct: 0.65,
+		MemoryPct:       0.35,
 	}
 }
 
@@ -60,7 +58,6 @@ func (bc BudgetConfig) allocate(available int) Budget {
 		Recent:       bc.RecentReserve,
 		Conversation: int(float64(available) * bc.ConversationPct),
 		Memory:       int(float64(available) * bc.MemoryPct),
-		Code:         int(float64(available) * bc.CodePct),
 	}
 }
 

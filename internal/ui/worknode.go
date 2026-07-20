@@ -194,7 +194,7 @@ func workNodeActivitySummary(node WorkNode, profiles ...GlyphProfile) string {
 	if node.Unread > 0 {
 		parts = append(parts, fmt.Sprintf("%d unread", node.Unread))
 	}
-	return strings.Join(parts, agentHubSeparator(resolveGlyphProfile(profiles...)))
+	return strings.Join(parts, glyphSeparator(resolveGlyphProfile(profiles...)))
 }
 
 // workReportRefFromProjection admits only an exact normalized artifact receipt

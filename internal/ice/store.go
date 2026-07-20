@@ -29,12 +29,13 @@ var iceStoreWriteLimit = maxICEStoreBytes
 // Store is a flat-file vector store for conversation history.
 // It holds all entries in memory and persists to a JSON file.
 type Store struct {
-	mu      sync.Mutex
-	path    string
-	entries []ConversationEntry
-	nextID  int
-	dirty   bool
-	loadErr error
+	mu         sync.Mutex
+	path       string
+	entries    []ConversationEntry
+	nextID     int
+	dirty      bool
+	loadErr    error
+	embedModel string // stamps new entries; filters search to same-model vectors
 }
 
 // NewStore loads an existing store from path or creates an empty one.
@@ -44,10 +45,23 @@ func NewStore(path string) *Store {
 	return s
 }
 
+// SetEmbedModel records the active embedding model name. New entries are
+// stamped with it, and SearchScoped quarantines entries from other models
+// (cross-model cosine similarity is meaningless).
+func (s *Store) SetEmbedModel(model string) {
+	s.mu.Lock()
+	s.embedModel = model
+	s.mu.Unlock()
+}
+
 // Add appends a new conversation entry and returns its ID.
 func (s *Store) Add(sessionID, role, content string, embedding []float32, turnIndex int) (int, error) {
 	return s.AddScoped("", sessionID, role, content, embedding, turnIndex)
 }
+
+// maxEntriesPerProject is the soft cap for ICE entries per workspace.
+// AddScoped prunes the oldest entries when this limit is exceeded.
+const maxEntriesPerProject = 5000
 
 // AddScoped records an entry under a canonical workspace identity.
 func (s *Store) AddScoped(projectID, sessionID, role, content string, embedding []float32, turnIndex int) (int, error) {
@@ -62,14 +76,15 @@ func (s *Store) AddScoped(projectID, sessionID, role, content string, embedding 
 	err := s.mutateLocked(func() (bool, error) {
 		s.nextID++
 		entry := ConversationEntry{
-			ID:        s.nextID,
-			ProjectID: projectID,
-			SessionID: sessionID,
-			Role:      role,
-			Content:   content,
-			Embedding: append([]float32(nil), embedding...),
-			TurnIndex: turnIndex,
-			CreatedAt: timeNow(),
+			ID:         s.nextID,
+			ProjectID:  projectID,
+			SessionID:  sessionID,
+			Role:       role,
+			Content:    content,
+			Embedding:  append([]float32(nil), embedding...),
+			EmbedModel: s.embedModel,
+			TurnIndex:  turnIndex,
+			CreatedAt:  timeNow(),
 		}
 		s.entries = append(s.entries, entry)
 		id = entry.ID
@@ -78,7 +93,75 @@ func (s *Store) AddScoped(projectID, sessionID, role, content string, embedding 
 	if err != nil {
 		return 0, err
 	}
+	// Best-effort prune to keep the store bounded per workspace.
+	if projectID != "" && s.countScopedLocked(projectID) > maxEntriesPerProject {
+		_, _ = s.pruneScopedLocked(projectID, maxEntriesPerProject)
+	}
 	return id, nil
+}
+
+// PruneScoped evicts the oldest entries for projectID until at most maxEntries
+// remain. Entries without embeddings are evicted first (useless for vector
+// search), then by CreatedAt ascending. Returns the number of entries removed.
+func (s *Store) PruneScoped(projectID string, maxEntries int) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.loadErr != nil {
+		return 0, fmt.Errorf("refusing to mutate unreadable ICE store: %w", s.loadErr)
+	}
+	return s.pruneScopedLocked(projectID, maxEntries)
+}
+
+func (s *Store) pruneScopedLocked(projectID string, maxEntries int) (int, error) {
+	if projectID == "" || maxEntries < 0 {
+		return 0, nil
+	}
+	var removed int
+	err := s.mutateLocked(func() (bool, error) {
+		var scoped []int
+		for i := range s.entries {
+			if s.entries[i].ProjectID == projectID {
+				scoped = append(scoped, i)
+			}
+		}
+		if len(scoped) <= maxEntries {
+			return false, nil
+		}
+		sort.Slice(scoped, func(a, b int) bool {
+			ea, eb := s.entries[scoped[a]], s.entries[scoped[b]]
+			aHasEmb := len(ea.Embedding) > 0
+			bHasEmb := len(eb.Embedding) > 0
+			if aHasEmb != bHasEmb {
+				return !aHasEmb
+			}
+			return ea.CreatedAt.Before(eb.CreatedAt)
+		})
+		toRemove := len(scoped) - maxEntries
+		evict := make(map[int]bool, toRemove)
+		for i := 0; i < toRemove; i++ {
+			evict[scoped[i]] = true
+		}
+		kept := make([]ConversationEntry, 0, len(s.entries)-toRemove)
+		for i := range s.entries {
+			if !evict[i] {
+				kept = append(kept, s.entries[i])
+			}
+		}
+		removed = len(s.entries) - len(kept)
+		s.entries = kept
+		return removed > 0, nil
+	})
+	return removed, err
+}
+
+func (s *Store) countScopedLocked(projectID string) int {
+	count := 0
+	for i := range s.entries {
+		if s.entries[i].ProjectID == projectID {
+			count++
+		}
+	}
+	return count
 }
 
 // Search returns the top-K entries most similar to queryEmbedding.
@@ -105,6 +188,12 @@ func (s *Store) SearchScoped(queryEmbedding []float32, projectID, excludeSession
 			continue
 		}
 		if len(e.Embedding) == 0 {
+			continue
+		}
+		// Quarantine entries from a different embedding model: cross-model
+		// cosine similarity is meaningless. Legacy entries (EmbedModel == "")
+		// are excluded when a model is configured.
+		if s.embedModel != "" && e.EmbedModel != s.embedModel {
 			continue
 		}
 		sim := cosineSimilarity(queryEmbedding, e.Embedding)
@@ -167,7 +256,7 @@ func (s *Store) Flush() error {
 }
 
 func conversationEntriesEqual(left, right ConversationEntry) bool {
-	if left.ID != right.ID || left.ProjectID != right.ProjectID || left.SessionID != right.SessionID || left.Role != right.Role || left.Content != right.Content || left.TurnIndex != right.TurnIndex || !left.CreatedAt.Equal(right.CreatedAt) || len(left.Embedding) != len(right.Embedding) {
+	if left.ID != right.ID || left.ProjectID != right.ProjectID || left.SessionID != right.SessionID || left.Role != right.Role || left.Content != right.Content || left.EmbedModel != right.EmbedModel || left.TurnIndex != right.TurnIndex || !left.CreatedAt.Equal(right.CreatedAt) || len(left.Embedding) != len(right.Embedding) {
 		return false
 	}
 	for i := range left.Embedding {

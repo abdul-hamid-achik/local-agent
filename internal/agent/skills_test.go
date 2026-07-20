@@ -51,9 +51,10 @@ func TestSkillCatalogPromptContainsOnlyBoundedMetadata(t *testing.T) {
 		t.Fatalf("catalog order/content = %q", catalog)
 	}
 
-	prompt := buildSystemPromptForModelBudgetContextWithSkillCatalog(
-		context.Background(), "", nil, "", catalog, "", nil, "", "", "", "test-model", 0,
-	)
+	prompt := buildSystemPrompt(context.Background(), systemPromptOptions{
+		SkillCatalog: catalog,
+		ModelName:    "test-model",
+	})
 	for _, forbidden := range []string{"PRIVATE BODY", "ANOTHER PRIVATE BODY", "/Users/example", "SKILL.md"} {
 		if strings.Contains(prompt, forbidden) {
 			t.Fatalf("model prompt exposed %q: %q", forbidden, prompt)

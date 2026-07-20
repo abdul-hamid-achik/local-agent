@@ -163,8 +163,16 @@ func sameToolCatalog(left, right []llm.ToolDef) bool {
 	return true
 }
 
+// estimatedPromptTokens returns the host prompt-token estimate clamped to both
+// durable floors: the provider's last reported prompt count (authoritative for
+// an unchanged prompt) and the durable receipt floor. Every compaction and
+// budget decision should route through this single helper so the floors are
+// applied consistently.
 func (t *turnRuntime) estimatedPromptTokens() int {
 	estimated := t.a.estimatePromptTokens(t.system, t.tools)
+	if estimated < t.lastPromptTokens {
+		estimated = t.lastPromptTokens
+	}
 	hostTokens := estimateHostPromptTokens(t.system, t.tools)
 	if receiptFloor := t.a.contextPromptFloorEstimate(t.turnModel, hostTokens); estimated < receiptFloor {
 		return receiptFloor

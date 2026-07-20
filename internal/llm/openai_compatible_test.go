@@ -3,10 +3,13 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestOpenAICompatibleRejectsSensitiveBaseURLWithoutEchoingIt(t *testing.T) {
@@ -277,5 +280,88 @@ func TestOpenAICompatibleMissingKeyStillBuilds(t *testing.T) {
 	}
 	if client.Model() != "local" {
 		t.Fatalf("model = %q", client.Model())
+	}
+}
+
+func TestOpenAICompatibleChatStreamIdleWatchdogFailsHungStream(t *testing.T) {
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"))
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		<-release // then go silent without [DONE]
+	}))
+	defer server.Close()
+	defer close(release)
+
+	previous := streamIdleTimeout
+	streamIdleTimeout = 100 * time.Millisecond
+	defer func() { streamIdleTimeout = previous }()
+
+	client, err := NewOpenAICompatibleClient(OpenAICompatibleOptions{
+		BaseURL: server.URL, Model: "m", APIKey: "k",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sawText := false
+	streamErr := client.ChatStream(context.Background(), ChatOptions{}, func(chunk StreamChunk) error {
+		if chunk.Text != "" {
+			sawText = true
+		}
+		return nil
+	})
+	if !sawText {
+		t.Fatal("stream callback never observed the delivered chunk")
+	}
+	if !errors.Is(streamErr, ErrStreamIdle) {
+		t.Fatalf("hung stream error = %v, want ErrStreamIdle", streamErr)
+	}
+	if !IsRetryableTransport(streamErr) {
+		t.Fatalf("idle watchdog error must be retryable: %v", streamErr)
+	}
+	if !IsRemoteInferenceError(streamErr) {
+		t.Fatalf("idle error from accepted stream should carry remote provenance: %v", streamErr)
+	}
+}
+
+func TestOpenAICompatibleChatStreamIdleWatchdogAllowsSlowButLiveStream(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+		for i := 0; i < 3; i++ {
+			_, _ = fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":\"chunk%d\"}}]}\n\n", i)
+			flusher.Flush()
+			time.Sleep(60 * time.Millisecond)
+		}
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+		flusher.Flush()
+	}))
+	defer server.Close()
+
+	previous := streamIdleTimeout
+	streamIdleTimeout = 150 * time.Millisecond
+	defer func() { streamIdleTimeout = previous }()
+
+	client, err := NewOpenAICompatibleClient(OpenAICompatibleOptions{
+		BaseURL: server.URL, Model: "m", APIKey: "k",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var chunks int
+	streamErr := client.ChatStream(context.Background(), ChatOptions{}, func(chunk StreamChunk) error {
+		if chunk.Text != "" {
+			chunks++
+		}
+		return nil
+	})
+	if streamErr != nil {
+		t.Fatalf("slow-but-live stream error = %v, want nil", streamErr)
+	}
+	if chunks != 3 {
+		t.Fatalf("chunks = %d, want 3", chunks)
 	}
 }

@@ -12,14 +12,15 @@ const (
 
 // ConversationEntry is a single stored message with its embedding.
 type ConversationEntry struct {
-	ID        int       `json:"id"`
-	ProjectID string    `json:"project_id,omitempty"`
-	SessionID string    `json:"session_id"`
-	Role      string    `json:"role"` // "user", "assistant", "summary"
-	Content   string    `json:"content"`
-	Embedding []float32 `json:"embedding"`
-	CreatedAt time.Time `json:"created_at"`
-	TurnIndex int       `json:"turn_index"`
+	ID         int       `json:"id"`
+	ProjectID  string    `json:"project_id,omitempty"`
+	SessionID  string    `json:"session_id"`
+	Role       string    `json:"role"` // "user", "assistant", "summary"
+	Content    string    `json:"content"`
+	Embedding  []float32 `json:"embedding"`
+	EmbedModel string    `json:"embed_model,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+	TurnIndex  int       `json:"turn_index"`
 }
 
 // ScoredEntry pairs a conversation entry with its similarity score.
@@ -42,6 +43,5 @@ type Budget struct {
 	System       int
 	Conversation int
 	Memory       int
-	Code         int
 	Recent       int
 }

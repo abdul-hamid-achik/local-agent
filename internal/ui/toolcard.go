@@ -331,7 +331,7 @@ func (c ToolCard) ViewWithActivity(width int, activityGlyph string, elapsed time
 	truncate := func(value string, cells int) string {
 		return truncateDisplayWithGlyphProfile(value, cells, c.GlyphProfile)
 	}
-	summarySeparator := toolCardSeparator(c.GlyphProfile)
+	summarySeparator := glyphSeparator(c.GlyphProfile)
 
 	titleStyle := c.getTitleStyle()
 	presentationName := c.Name
@@ -540,7 +540,7 @@ func toolCardSummaryWithoutRepeatedAction(
 	if strings.EqualFold(summary, action) {
 		return ""
 	}
-	suffix := toolCardSeparator(profile) + action
+	suffix := glyphSeparator(profile) + action
 	if len(summary) >= len(suffix) && strings.EqualFold(summary[len(summary)-len(suffix):], suffix) {
 		return strings.TrimSpace(summary[:len(summary)-len(suffix)])
 	}
@@ -611,7 +611,7 @@ func compactToolAttention(
 ) string {
 	projection = projection.Normalize()
 	profile := resolveGlyphProfile(profiles...)
-	separator := toolCardSeparator(profile)
+	separator := glyphSeparator(profile)
 	if deferredMCPHubResult(projection) {
 		if summary := projection.SummaryText(); summary != "" {
 			return toolCardTextForGlyphProfile(summary, profile)
@@ -656,7 +656,7 @@ func toolProjectionDetails(projection ecosystem.ToolProjection, profiles ...Glyp
 		return nil
 	}
 	profile := resolveGlyphProfile(profiles...)
-	separator := toolCardSeparator(profile)
+	separator := glyphSeparator(profile)
 	details := make([]string, 0, 8)
 	if projection.Specialist != "" {
 		label := describeEcosystemServer(projection.Specialist).label
@@ -691,13 +691,6 @@ func toolProjectionDetails(projection ecosystem.ToolProjection, profiles ...Glyp
 		details = append(details, "receipt: "+toolCardTextForGlyphProfile(summary, profile))
 	}
 	return details
-}
-
-func toolCardSeparator(profile GlyphProfile) string {
-	if resolveGlyphProfile(profile) == GlyphASCII {
-		return " | "
-	}
-	return " · "
 }
 
 func toolCardTextForGlyphProfile(value string, profile GlyphProfile) string {

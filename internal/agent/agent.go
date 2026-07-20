@@ -25,6 +25,15 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/permission"
 )
 
+// Default tool and iteration limits. These are user-visible configuration
+// defaults that appear in documentation and error messages.
+const (
+	defaultMaxIterations     = 10
+	defaultAutoMaxIterations = 40
+	defaultToolTimeout       = 30 * time.Second
+	defaultMaxGrepResults    = 500
+)
+
 // Agent orchestrates the LLM and tools in a ReAct loop.
 type Agent struct {
 	mu                   sync.RWMutex
@@ -269,6 +278,8 @@ func (a *Agent) modeContext() (string, ToolPolicy) {
 
 // AppendLoadedContext appends to the loaded context.
 func (a *Agent) AppendLoadedContext(content string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if a.loadedCtx == "" {
 		a.loadedCtx = content
 	} else {
@@ -601,21 +612,29 @@ func restoreConversationSummaryOwnership(messages []llm.Message) []llm.Message {
 
 // SetSkillContent sets the combined content of active skills.
 func (a *Agent) SetSkillContent(content string) {
+	a.mu.Lock()
 	a.skillContent = content
+	a.mu.Unlock()
 }
 
 // SetLoadedContext sets the loaded context file content.
 func (a *Agent) SetLoadedContext(content string) {
+	a.mu.Lock()
 	a.loadedCtx = content
+	a.mu.Unlock()
 }
 
 // LoadedContext returns the currently assembled loaded context.
 func (a *Agent) LoadedContext() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
 	return a.loadedCtx
 }
 
 // SkillContent returns the currently active skill prompt content.
 func (a *Agent) SkillContent() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
 	return a.skillContent
 }
 
@@ -950,7 +969,7 @@ func (a *Agent) MaxIterations() int {
 	if a.toolsConfig.MaxIterations > 0 {
 		return a.toolsConfig.MaxIterations
 	}
-	return 10
+	return defaultMaxIterations
 }
 
 // MaxIterationsForAuthority keeps interactive turns concise while giving AUTO
@@ -961,7 +980,7 @@ func (a *Agent) MaxIterationsForAuthority(mode AuthorityMode) int {
 		if a.toolsConfig.AutoMaxIterations > 0 {
 			return a.toolsConfig.AutoMaxIterations
 		}
-		return 40
+		return defaultAutoMaxIterations
 	}
 	return a.MaxIterations()
 }
@@ -973,7 +992,7 @@ func (a *Agent) ToolTimeout() time.Duration {
 			return d
 		}
 	}
-	return 30 * time.Second
+	return defaultToolTimeout
 }
 
 // MaxGrepResults returns the configured max grep results, or default if not set.
@@ -981,7 +1000,7 @@ func (a *Agent) MaxGrepResults() int {
 	if a.toolsConfig.MaxGrepResults > 0 {
 		return a.toolsConfig.MaxGrepResults
 	}
-	return 500
+	return defaultMaxGrepResults
 }
 
 // Close cleans up resources.

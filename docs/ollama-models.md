@@ -77,6 +77,7 @@ Artifact sizes vary by Ollama build and quantization. The shipped guard is tuned
 | `phi4-mini:latest` | Alternative compact reasoning profile | Exclusive |
 | `qwen3.5:4b` | Coding, debugging, review, and multi-step tools | Eligible |
 | `qwen3.5:9b` | Deeper manual profile | Exclusive |
+| `gemma4:e2b` | Multimodal compact profile | Exclusive |
 | `ornith:latest` | Manual agentic coding and verification profile | Exclusive |
 
 The shipped Phi profile is manual-only because its advertised Ollama metadata has not been backed by behavioral tool-use verification in this harness. Its size is not the reason for the restriction.
