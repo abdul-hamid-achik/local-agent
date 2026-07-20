@@ -49,7 +49,7 @@ normalize:
 
 preconditions:
   commands:
-    - run: "rm -rf .glyphrun/tmp/agents-home .glyphrun/tmp/agents-profiles .glyphrun/tmp/agents-protocol.txt .glyphrun/tmp/fake-ollama-agents && mkdir -p .glyphrun/tmp/agents-home/.config/local-agent .glyphrun/tmp/agents-profiles && printf '%s\\n' 'model:' '  auto_select: false' 'experts:' '  enabled: true' '  max_concurrent_inference: 1' '  max_concurrent_distinct_models: 1' '  max_team_experts: 1' '  max_swarm_workers: 1' '  max_moe_experts: 1' '  max_eval_tokens: 64' '  timeout: 30s' > .glyphrun/tmp/agents-home/.config/local-agent/config.yaml && go build -o ./bin/local-agent ./cmd/local-agent && go build -o .glyphrun/tmp/fake-ollama-agents ./specs/fixtures/fake_ollama_agents"
+    - run: "rm -rf .glyphrun/tmp/agents-home .glyphrun/tmp/agents-profiles .glyphrun/tmp/agents-protocol.txt .glyphrun/tmp/fake-ollama-agents && mkdir -p .glyphrun/tmp/agents-home/.config/local-agent .glyphrun/tmp/agents-profiles && printf '%s\\n' 'model:' '  auto_select: false' 'ice:' '  enabled: false' 'experts:' '  enabled: true' '  max_concurrent_inference: 1' '  max_concurrent_distinct_models: 1' '  max_team_experts: 1' '  max_swarm_workers: 1' '  max_moe_experts: 1' '  max_eval_tokens: 64' '  timeout: 30s' > .glyphrun/tmp/agents-home/.config/local-agent/config.yaml && go build -o ./bin/local-agent ./cmd/local-agent && go build -o .glyphrun/tmp/fake-ollama-agents ./specs/fixtures/fake_ollama_agents"
       cwd: "."
       timeoutMs: 30000
 

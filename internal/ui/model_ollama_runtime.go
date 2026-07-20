@@ -663,9 +663,17 @@ func (m *Model) handleOllamaReconnectTick() tea.Cmd {
 
 // scheduleModelLoadCheck returns a tick that checks whether the active model
 // has finished loading into memory. Used for cold-load progress feedback.
+// Skips if the model is already reported as running in the current inventory.
 func (m *Model) scheduleModelLoadCheck() tea.Cmd {
-	if m.modelManager == nil {
+	if m.modelManager == nil || m.model == "" {
 		return nil
+	}
+	// Skip if the model is already running per the latest inventory.
+	canonical := config.CanonicalModelName(m.model)
+	for _, desc := range m.ollamaModels {
+		if config.CanonicalModelName(desc.Name) == canonical && desc.Running {
+			return nil
+		}
 	}
 	manager := m.modelManager
 	model := m.model
