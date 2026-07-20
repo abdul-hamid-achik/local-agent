@@ -301,7 +301,11 @@ func (t *turnRuntime) settleIteration(ctx context.Context, i int, toolCallCount 
 	}
 	if outcome.capabilityRouteFailed && t.capabilityReroutes < maxCapabilityReroutesPerTurn && i < t.maxIters-1 {
 		t.capabilityReroutes++
-		t.capabilityHintText, t.capabilityHint = t.a.resolveTurnCapabilityWithPolicy(ctx, t.out, t.capabilityActivity, t.turnToolPolicy.AllowMCP)
+		// Force MCPHub to reconsider: the exact advisory route already failed
+		// under host policy, so a cached recommendation is not reusable.
+		retryActivity := t.capabilityActivity
+		retryActivity.Reconsider = true
+		t.capabilityHintText, t.capabilityHint = t.a.resolveTurnCapabilityWithPolicy(ctx, t.out, retryActivity, t.turnToolPolicy.AllowMCP)
 		if err := ctx.Err(); err != nil {
 			return err
 		}

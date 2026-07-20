@@ -139,6 +139,9 @@ func buildSystemPrompt(ctx context.Context, opts systemPromptOptions) string {
 	}
 
 	toolList := nativeToolPromptSummary(tools)
+	if hasLazyMCPHubTools(tools) {
+		toolList = strings.TrimSpace(toolList) + "\n\n" + lazyMCPHubSystemGuidance() + "\n"
+	}
 
 	envSection := buildEnvironmentSectionContextWithPathGrants(ctx, workDir, readGrants, writeGrants)
 
@@ -208,6 +211,19 @@ func buildSystemPrompt(ctx context.Context, opts systemPromptOptions) string {
 		toolList,
 		memoryGuidelines,
 	)
+}
+
+func hasLazyMCPHubTools(tools []llm.ToolDef) bool {
+	for _, tool := range tools {
+		name := tool.Name
+		if strings.HasSuffix(name, "__mcphub_call_tool") ||
+			strings.HasSuffix(name, "__mcphub_resolve_tool") ||
+			strings.HasSuffix(name, "__mcphub_describe_tool") ||
+			strings.HasSuffix(name, "__mcphub_search_tools") {
+			return true
+		}
+	}
+	return false
 }
 
 // nativeToolPromptSummary avoids paying for tool names and descriptions twice:

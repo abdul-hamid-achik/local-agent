@@ -99,6 +99,17 @@ type Agent struct {
 	writeAuthorities  map[string]*additionalWriteAuthority
 	capabilityAdvisor capabilityAdviser
 	capabilityRetries map[capabilityRetryKey]struct{}
+	// capabilityCatalogEpoch tracks the MCP registry ToolSnapshot epoch so a
+	// reconnect or catalog change invalidates host capability cache entries.
+	capabilityCatalogEpoch uint64
+	// capabilityCatalogRevision is the last opaque MCPHub catalog_revision
+	// observed from a successful resolve. Process-local only.
+	capabilityCatalogRevision string
+	// capabilityStatsHint caches a coarse mcphub_stats projection.
+	capabilityStatsHint    string
+	capabilityStatsExpires time.Time
+	// capabilityMetrics is process-local routing telemetry (no prompt text).
+	capabilityMetrics CapabilityRoutingMetrics
 	expertConsultant  ExpertConsultant
 	imageResolver     ImageResolver
 	mcphubResults     *ecosystem.MCPHubResultAssembler

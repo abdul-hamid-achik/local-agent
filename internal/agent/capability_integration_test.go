@@ -290,8 +290,14 @@ func TestCapabilityRouteEventsExposeBoundedStatusAndFreshness(t *testing.T) {
 			if len(output.routes) != 1 || output.routes[0] != test.want {
 				t.Fatalf("routes = %#v, want %#v", output.routes, test.want)
 			}
-			if test.want.Status != CapabilityRouteResolved && (text != "" || hint != nil) {
-				t.Fatalf("non-resolved route entered model context: text=%q hint=%#v", text, hint)
+			if test.want.Status != CapabilityRouteResolved {
+				if hint != nil {
+					t.Fatalf("non-resolved route selected a hint: %#v", hint)
+				}
+				// Host may still attach a phase playbook (no selected route).
+				if strings.Contains(text, "MCPHub recommends") || strings.Contains(text, "Host pre-fetched tool contract") {
+					t.Fatalf("non-resolved route entered selected-route context: text=%q", text)
+				}
 			}
 		})
 	}
@@ -346,7 +352,7 @@ func TestTrivialChatAndResolverFailureDoNotBlockProvider(t *testing.T) {
 		if err := agent.Run(context.Background(), &capabilityOutputRecorder{}); err != nil {
 			t.Fatal(err)
 		}
-		if advisor.callCount() != 1 || strings.Contains(client.system(), "Host capability advisory") {
+		if advisor.callCount() != 1 || strings.Contains(client.system(), "MCPHub recommends") {
 			t.Fatalf("unavailable resolver altered the turn: calls=%d system=%q", advisor.callCount(), client.system())
 		}
 	})
@@ -407,7 +413,7 @@ func TestFailedRouteReconsiderationRefreshesTransientContextOnce(t *testing.T) {
 	}
 	output := &capabilityOutputRecorder{}
 	text, hint := agent.resolveTurnCapability(context.Background(), output, activity)
-	if text != "" || hint != nil {
+	if hint != nil || strings.Contains(text, "MCPHub recommends") || strings.Contains(text, "vidtrace") {
 		t.Fatalf("no-match refresh retained stale advisory: text=%q hint=%#v", text, hint)
 	}
 	if advisor.callCount() != 1 {
@@ -426,8 +432,12 @@ func TestFailedRouteReconsiderationRefreshesTransientContextOnce(t *testing.T) {
 	if len(output.routes) != 1 || output.routes[0] != want {
 		t.Fatalf("refresh route event = %#v, want %#v", output.routes, want)
 	}
-	if got := composeCapabilityContext(text, "base context"); got != "base context" || strings.Contains(got, "vidtrace") {
-		t.Fatalf("stale advisory survived refresh: %q", got)
+	got := composeCapabilityContext(text, "base context")
+	if strings.Contains(got, "vidtrace") || strings.Contains(got, "MCPHub recommends") {
+		t.Fatalf("stale selected route survived refresh: %q", got)
+	}
+	if !strings.Contains(got, "base context") {
+		t.Fatalf("base context lost during refresh: %q", got)
 	}
 }
 

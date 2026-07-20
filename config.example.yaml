@@ -216,6 +216,16 @@ servers:
         - cortex__cortex_start_task
         - cortex__cortex_verify
 
+    # Recommended MCPHub agent (mcphub.yaml) for this harness:
+    #   agents.local-agent.mode: gateway
+    #   pin: []
+    #   tool_schema_budget: "0"
+    #   servers: bob, cortex, codemap, vecgrep, hitspec, hitspec_web,
+    #            fcheap, monitor, obsidian, minerva, glyph, cairntrace
+    # Enrich each server's use_when / tags so mcphub_resolve_tool ranks well.
+    # Local Agent host enrichment: resolve → optional host describe pre-fetch →
+    # phase playbook → model mcphub_call_tool under normal approval.
+
     # Omitting trust currently uses a build-owned compatibility profile only
     # for exact mcphub/cortex/bob basenames. Prefer an explicit list. To suppress
     # that migration bridge, configure only: trust: {disabled: true}

@@ -94,8 +94,9 @@ private user task
   → host-owned activity projection
   → mcphub_resolve_tool
   → advisory server__tool route
-  → mcphub_describe_tool
-  → model-authored mcphub_call_tool
+  → host may pre-fetch mcphub_describe_tool (confident routes)
+  → host specialist playbook + optional coarse mcphub_stats snapshot
+  → model-authored mcphub_call_tool (with workspace soft-fill hints)
   → normal scope, privacy, approval, and ledger checks
 ```
 
@@ -106,14 +107,18 @@ facets preserve useful `use_when` matching without copying arbitrary task
 wording. It does not receive raw prompt text, file contents, paths, URLs,
 credentials, or previous tool output. Equivalent activities are
 cached only in memory. Clear recommendations expire after five minutes;
-ambiguous and no-match conclusions expire after 30 seconds so a reconnecting or
-changing catalog is reconsidered even before MCPHub revision events are wired
-into the host. A failed exact downstream route or an explicit request to
-reconsider capabilities bypasses the cached choice immediately.
+ambiguous and no-match conclusions expire after 30 seconds. The host also
+invalidates that cache when the MCP registry catalog epoch advances (reconnect
+or tool-list change) and partitions entries by MCPHub's `catalog_revision` when
+present. A failed exact downstream route or an explicit request to reconsider
+capabilities bypasses the cached choice immediately and re-runs resolve with
+`Reconsider` set.
 
 The TUI labels the result as a suggested MCP route rather than a tool run.
 Runtime can show the most recent route after the turn settles, but this bounded
-projection remains process-local and is not saved with the session.
+projection remains process-local and is not saved with the session. Process-local
+routing counters (resolved / ambiguous / no-match / host pre-fetch) are available
+to the host for diagnostics; they never store prompt text.
 
 Local Agent accepts only MCPHub's exact contextual-resolver contract version 1:
 the response must include a consistent status, a non-empty valid catalog
@@ -123,10 +128,16 @@ are never guessed into a route.
 
 An ambiguous recommendation is never selected or executed. The model can use
 `mcphub_search_tools` to compare bounded candidate metadata. For a clear route,
-the host advisory directs the model to call `mcphub_describe_tool` before
-argument construction because the resolver's required-field summary cannot
-express every runtime constraint, such as two individually optional inputs that
-are mutually exclusive.
+the host may pre-fetch `mcphub_describe_tool` and attach a sanitized schema to
+the active turn so small models skip a discovery hop. When pre-fetch is
+unavailable, the advisory still directs the model to describe before argument
+construction. Required-field summaries remain incomplete for mutually exclusive
+inputs. The host may soft-suggest only workspace-shaped defaults such as
+`workspace="."`; URLs, secrets, and free text are never filled.
+
+When resolve returns no usable route, the host still attaches a short phase
+playbook (research / planning / implementation / verification / web / code) so
+the model knows which specialist family to discover through the lazy gateway.
 
 Search descriptions, `use_when` hints, the selected tool description, and its
 sanitized JSON Schema are available only to the active model turn. They are

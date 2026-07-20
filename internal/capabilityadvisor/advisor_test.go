@@ -814,3 +814,24 @@ func TestAdvisorCanceledReconsiderDoesNotClaimOrReportFreshAttempt(t *testing.T)
 		t.Fatalf("original flight result = %#v", result)
 	}
 }
+
+func TestInvalidateAllClearsResolvedCache(t *testing.T) {
+	registry := &advisorRegistry{
+		exposed: "gateway__mcphub_resolve_tool", resolveOK: true,
+		results: []*mcp.ToolResult{resolverToolResult("bob", "bob_plan", []string{"workspace"})},
+	}
+	advisor := New(registry)
+	first := advisor.Advise(context.Background(), baseRequest())
+	if first.Status != StatusResolved || !first.Attempted {
+		t.Fatalf("first = %#v", first)
+	}
+	advisor.InvalidateAll()
+	second := advisor.Advise(context.Background(), baseRequest())
+	if second.Status != StatusResolved || !second.Attempted || second.Cached {
+		t.Fatalf("expected fresh resolve after InvalidateAll: %#v", second)
+	}
+	_, calls := registry.snapshot()
+	if len(calls) != 2 {
+		t.Fatalf("calls = %d, want 2", len(calls))
+	}
+}

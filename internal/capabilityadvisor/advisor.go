@@ -159,6 +159,44 @@ func New(registry Registry) *Advisor {
 	}
 }
 
+// InvalidateAll drops every in-memory recommendation. Call when the host
+// observes a catalog generation change (MCP reconnect, pin change, or an
+// MCPHub catalog_revision advance) so the next Advise cannot reuse a stale
+// route. Inflight calls are left alone; they still complete for their waiters.
+func (a *Advisor) InvalidateAll() {
+	if a == nil {
+		return
+	}
+	a.mu.Lock()
+	a.cache = make(map[cacheKey]cacheEntry)
+	a.order = a.order[:0]
+	a.mu.Unlock()
+}
+
+// InvalidateCatalog drops cache entries that were stored under a different
+// catalog generation than revision. When revision is empty, this is a no-op so
+// hosts without a revision feed do not thrash the cache.
+func (a *Advisor) InvalidateCatalog(revision string) {
+	if a == nil || revision == "" {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	kept := a.order[:0]
+	for _, key := range a.order {
+		entry, ok := a.cache[key]
+		if !ok {
+			continue
+		}
+		if entry.catalogRevision != "" && entry.catalogRevision != revision {
+			delete(a.cache, key)
+			continue
+		}
+		kept = append(kept, key)
+	}
+	a.order = kept
+}
+
 // Advise resolves the current non-trivial activity at most once for its cache
 // key. It never returns an error and never calls the recommended tool.
 func (a *Advisor) Advise(ctx context.Context, request Request) Result {

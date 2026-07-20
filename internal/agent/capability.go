@@ -267,6 +267,11 @@ func (registry scopedCapabilityRegistry) ResolveToolName(remoteName string) (str
 	if agent == nil || backend == nil || remoteName == "" || strings.TrimSpace(remoteName) != remoteName || strings.Contains(remoteName, "__") {
 		return "", false
 	}
+	// Host-side registry is limited to MCPHub management tools. Downstream
+	// specialists stay model- or continuation-owned.
+	if !hostMCPHubManagementTool(remoteName) {
+		return "", false
+	}
 
 	// Resolve exact routes only after projecting the host-trusted MCPHub
 	// namespaces. A different, untrusted server may legitimately expose the same
@@ -276,7 +281,7 @@ func (registry scopedCapabilityRegistry) ResolveToolName(remoteName string) (str
 	agent.mu.RLock()
 	trustedNamespaces := make([]string, 0, len(agent.trustedMCP))
 	for namespace, server := range agent.trustedMCP {
-		contract, trusted := server.contracts["mcphub_resolve_tool"]
+		contract, trusted := server.contracts[remoteName]
 		if server.gateway == config.MCPTrustGatewayMCPHub && trusted && contract.auto && contract.effect == executionpkg.EffectReadOnly {
 			trustedNamespaces = append(trustedNamespaces, namespace)
 		}
@@ -300,9 +305,16 @@ func (registry scopedCapabilityRegistry) ResolveToolName(remoteName string) (str
 }
 
 func (registry scopedCapabilityRegistry) CallTool(ctx context.Context, exposedName string, args map[string]any) (*mcp.ToolResult, error) {
-	expected, ok := registry.ResolveToolName("mcphub_resolve_tool")
+	if exposedName == "" || strings.Contains(exposedName, "\x00") {
+		return nil, fmt.Errorf("capability host tool is outside the active MCP scope")
+	}
+	namespace, remote, ok := strings.Cut(exposedName, "__")
+	if !ok || namespace == "" || !hostMCPHubManagementTool(remote) || strings.Contains(remote, "__") {
+		return nil, fmt.Errorf("capability host tool is outside the active MCP scope")
+	}
+	expected, ok := registry.ResolveToolName(remote)
 	if !ok || exposedName != expected {
-		return nil, fmt.Errorf("capability resolver is outside the active MCP scope")
+		return nil, fmt.Errorf("capability host tool is outside the active MCP scope")
 	}
 	return registry.backend.CallTool(ctx, exposedName, args)
 }
@@ -314,11 +326,18 @@ func (a *Agent) resolveTurnCapability(ctx context.Context, out Output, activity 
 
 func (a *Agent) resolveTurnCapabilityWithPolicy(ctx context.Context, out Output, activity CapabilityActivity, allowMCP bool) (string, *capabilityadvisor.Hint) {
 	if a == nil || a.capabilityAdvisor == nil || !activity.NonTrivial || !allowMCP {
+		// Without MCP authority the model cannot follow gateway playbooks; skip
+		// host orientation so PLAN/ASK turns stay free of unusable tool advice.
 		return "", nil
 	}
 	activity.ScopeID = strings.TrimSpace(activity.ScopeID)
 	if activity.ScopeID == "" {
 		return "", nil
+	}
+
+	a.syncCapabilityCatalogEpoch()
+	if activity.CatalogRevision == "" {
+		activity.CatalogRevision = a.capabilityCatalogRevisionSnapshot()
 	}
 
 	retryKey := capabilityActivityRetryKey(activity)
@@ -329,9 +348,13 @@ func (a *Agent) resolveTurnCapabilityWithPolicy(ctx context.Context, out Output,
 
 	resolveCtx, cancel := context.WithTimeout(ctx, capabilityResolverTimeout)
 	reconsidered := activity.Reconsider || retry
-	result := a.capabilityAdvisor.Advise(resolveCtx, activity.request(retry))
+	result := a.capabilityAdvisor.Advise(resolveCtx, activity.request(retry || activity.Reconsider))
 	cancel()
 	status := normalizedCapabilityRouteStatus(result)
+	a.recordCapabilityMetric(status)
+	if result.CatalogRevision != "" {
+		a.noteCapabilityCatalogRevision(result.CatalogRevision)
+	}
 	emitCapabilityRoute(out, capabilityRouteFromResult(activity, result, status, reconsidered))
 	if retry && (status == capabilityadvisor.StatusUnavailable || status == capabilityadvisor.StatusInvalid) {
 		// Preserve a failed-route refresh for a later turn when the resolver was
@@ -341,10 +364,20 @@ func (a *Agent) resolveTurnCapabilityWithPolicy(ctx context.Context, out Output,
 		a.mu.Unlock()
 	}
 	if (status != capabilityadvisor.StatusResolved && status != capabilityadvisor.StatusAmbiguous) || result.Hint == nil {
-		return "", nil
+		// No confident route: still emit playbook + optional stats so the model
+		// knows the lazy gateway workflow for this phase.
+		return a.enrichCapabilityAdvisory(ctx, activity, nil, "", allowMCP), nil
 	}
 	hint := result.Hint
-	return formatCapabilityHint(activity, *hint, allowMCP), hint
+	base := formatCapabilityHint(activity, *hint, allowMCP)
+	// When the host can pre-fetch describe, avoid ordering the model to re-describe.
+	if allowMCP && !hint.Ambiguous {
+		registry := scopedCapabilityRegistry{agent: a, backend: a.registry}
+		if _, ok := registry.ResolveToolName("mcphub_describe_tool"); ok {
+			base = formatCapabilityHintWithOptions(activity, *hint, allowMCP, capabilityHintOptions{HostMayPrefetch: true})
+		}
+	}
+	return a.enrichCapabilityAdvisory(ctx, activity, hint, base, allowMCP), hint
 }
 
 func normalizedCapabilityRouteStatus(result capabilityadvisor.Result) capabilityadvisor.Status {
@@ -422,7 +455,18 @@ func (a *Agent) formatCapabilityHint(activity CapabilityActivity, hint capabilit
 	return formatCapabilityHint(activity, hint, policy.AllowMCP)
 }
 
+type capabilityHintOptions struct {
+	// HostMayPrefetch signals that the host will (or already can) call
+	// mcphub_describe_tool for this route, so the advisory should not force a
+	// redundant model-authored describe hop.
+	HostMayPrefetch bool
+}
+
 func formatCapabilityHint(activity CapabilityActivity, hint capabilityadvisor.Hint, allowMCP bool) string {
+	return formatCapabilityHintWithOptions(activity, hint, allowMCP, capabilityHintOptions{})
+}
+
+func formatCapabilityHintWithOptions(activity CapabilityActivity, hint capabilityadvisor.Hint, allowMCP bool, options capabilityHintOptions) string {
 	var builder strings.Builder
 	builder.WriteString("## Host capability advisory\n")
 	builder.WriteString("This bounded MCPHub recommendation is advisory only. It is not a tool execution, result, success receipt, evidence, or additional authority.\n")
@@ -442,11 +486,24 @@ func formatCapabilityHint(activity CapabilityActivity, hint capabilityadvisor.Hi
 	if len(hint.RequiredFields) > 0 {
 		fmt.Fprintf(&builder, "Required argument fields: %s.\n", strings.Join(hint.RequiredFields, ", "))
 	}
+	if soft := softFillWorkspaceArgs(hint); soft != "" {
+		builder.WriteString(soft)
+		builder.WriteByte('\n')
+	}
 	if !hint.Ambiguous && allowMCP {
-		if hint.NeedsDescription() {
-			builder.WriteString("The resolver's argument summary was truncated. ")
+		if options.HostMayPrefetch {
+			if hint.NeedsDescription() {
+				builder.WriteString("The resolver's argument summary was truncated; prefer the host pre-fetched contract below when present. ")
+			} else {
+				builder.WriteString("Prefer the host pre-fetched contract below when present. ")
+			}
+			builder.WriteString("Only call mcphub_describe_tool again if that contract is missing or incomplete. Required fields are a routing summary and may omit mutually exclusive inputs.\n")
+		} else {
+			if hint.NeedsDescription() {
+				builder.WriteString("The resolver's argument summary was truncated. ")
+			}
+			builder.WriteString("Call the visible mcphub_describe_tool before constructing arguments. Required fields are only a routing summary and may omit runtime relationships such as mutually exclusive inputs.\n")
 		}
-		builder.WriteString("Call the visible mcphub_describe_tool before constructing arguments. Required fields are only a routing summary and may omit runtime relationships such as mutually exclusive inputs.\n")
 	}
 	appendKnownCapabilityContract(&builder, activity, hint)
 	if !hint.Ambiguous && allowMCP {
@@ -462,17 +519,46 @@ func formatCapabilityHint(activity CapabilityActivity, hint capabilityadvisor.Hi
 // invent persistence. These notes describe only what Local Agent can safely
 // conclude before a call; they never mark an operation successful.
 func appendKnownCapabilityContract(builder *strings.Builder, activity CapabilityActivity, hint capabilityadvisor.Hint) {
-	if builder == nil || hint.Ambiguous || !strings.EqualFold(hint.Server, "hitspec") {
+	if builder == nil || hint.Ambiguous {
 		return
 	}
-	switch strings.ToLower(hint.Tool) {
-	case "hitspec_fetch":
-		builder.WriteString("Known Hitspec fetch contract: hitspec_fetch returns bounded content inline and does not create a workspace file or durable artifact.\n")
-		if isDurableCapabilityOutcome(activity.DesiredOutcome) {
-			builder.WriteString("To satisfy this durable outcome, review the inline result, write the accepted content to a workspace file through a separately authorized host action, then describe and call fcheap_save separately. Fetch, file write, and artifact save are distinct effect and approval boundaries.\n")
+	server := strings.ToLower(hint.Server)
+	tool := strings.ToLower(hint.Tool)
+	switch server {
+	case "hitspec", "hitspec_web":
+		switch tool {
+		case "hitspec_fetch":
+			builder.WriteString("Known Hitspec fetch contract: hitspec_fetch returns bounded content inline and does not create a workspace file or durable artifact.\n")
+			if isDurableCapabilityOutcome(activity.DesiredOutcome) {
+				builder.WriteString("To satisfy this durable outcome, review the inline result, write the accepted content to a workspace file through a separately authorized host action, then describe and call fcheap_save separately. Fetch, file write, and artifact save are distinct effect and approval boundaries.\n")
+			}
+		case "hitspec_capture_webpage":
+			builder.WriteString("Known Hitspec v2.18 capture contract: when this optional tool is exposed, it persists rendered Markdown as a durable file.cheap stash and returns a compact artifact receipt rather than the page body. Indexing is requested and reported separately.\n")
+		case "hitspec_search_web":
+			builder.WriteString("Known Hitspec search contract: hitspec_search_web returns non-persisted discovery candidates, not verified evidence.\n")
 		}
-	case "hitspec_capture_webpage":
-		builder.WriteString("Known Hitspec v2.18 capture contract: when this optional tool is exposed, it persists rendered Markdown as a durable file.cheap stash and returns a compact artifact receipt rather than the page body. Indexing is requested and reported separately.\n")
+	case "bob":
+		switch tool {
+		case "bob_context", "bob_plan", "bob_path", "bob_playbook", "bob_inspect", "bob_check":
+			builder.WriteString("Known Bob contract: Bob reports repository/contract state only (EvidenceNone). Clean/plan success is not application verification.\n")
+		}
+	case "cortex":
+		switch tool {
+		case "cortex_status", "cortex_investigate", "cortex_plan", "cortex_verify", "cortex_open_task", "cortex_handoff", "cortex_remember":
+			builder.WriteString("Known Cortex contract: use for evidence-guided orientation and criteria; Local Agent still owns approval, budgets, and tool dispatch.\n")
+		}
+	case "codemap":
+		builder.WriteString("Known Codemap contract: structural graph/impact support; treat stale index signals as non-negative absence of proof.\n")
+	case "vecgrep":
+		builder.WriteString("Known Vecgrep contract: semantic discovery candidates only — open exact files with native tools before editing.\n")
+	case "fcheap":
+		builder.WriteString("Known file.cheap contract: artifact storage preserves bytes; it does not create truth by itself.\n")
+	case "minerva":
+		builder.WriteString("Known Minerva contract: skills/profiles/stack analytics for self-improvement after the primary task is grounded.\n")
+	case "monitor":
+		builder.WriteString("Known Monitor contract: operational process/resource support, not application verification evidence.\n")
+	case "obsidian":
+		builder.WriteString("Known Obsidian contract: vault note operations remain approval-gated and workspace/privacy scoped.\n")
 	}
 }
 
@@ -528,6 +614,7 @@ func (a *Agent) markCapabilityRouteFailed(activity CapabilityActivity, callName 
 	}
 	a.mu.Lock()
 	a.capabilityRetries[capabilityActivityRetryKey(activity)] = struct{}{}
+	a.capabilityMetrics.RouteFailedRetry++
 	a.mu.Unlock()
 	return true
 }
@@ -849,6 +936,23 @@ func capabilityIntentTags(objective, phase string) []string {
 	}
 	if phase == "planning" {
 		add("repository", "planning", "feature")
+	}
+	if containsAnyWord(lower,
+		" skill", " skills", " profile", " profiles", "system prompt", "self-improvement", "self improvement",
+		" habilidad", " habilidades", " perfil", " perfiles", " auto-mejora") {
+		add("skills", "profiles", "self_improvement")
+	}
+	if containsAnyWord(lower,
+		" note", " notes", " vault", "obsidian", " nota", " notas", " knowledge base", "base de conocimiento") {
+		add("notes", "knowledge", "vault")
+	}
+	if containsAnyWord(lower,
+		" codemap", " call graph", "impact analysis", "symbol graph", " grafo", "mapa de código") {
+		add("code", "symbols", "structure", "references")
+	}
+	if containsAnyWord(lower,
+		" vecgrep", "embedding search", "hybrid search", "vector search", " búsqueda vectorial") {
+		add("code", "semantic", "meaning", "search")
 	}
 
 	result := make([]string, 0, len(set))

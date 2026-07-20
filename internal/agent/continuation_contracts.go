@@ -42,8 +42,9 @@ func (a *Agent) clearContinuationContracts() {
 }
 
 // rememberContinuationContract records a schema only after the ordinary exact
-// MCPHub receipt parser and host trust checks have succeeded. LA-2 never calls
-// describe_tool itself: an absent contract leaves a lazy action unsupported.
+// MCPHub receipt parser and host trust checks have succeeded. The host may also
+// pre-fetch describe for a confident capability route; an absent contract still
+// leaves a lazy auto-continuation unsupported.
 func (a *Agent) rememberContinuationContract(
 	call llm.ToolCall,
 	projection ecosystem.ToolProjection,
