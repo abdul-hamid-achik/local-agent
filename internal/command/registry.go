@@ -40,8 +40,8 @@ type Context struct {
 	ICEConversations int
 	ICESessionID     string
 	// Memory store summary for the /memory command.
-	Memories     []MemoryInfo
-	MemoryCount  int
+	Memories    []MemoryInfo
+	MemoryCount int
 	// MCP tool summaries for the /tools command.
 	MCPTools []ToolSummary
 	// Token stats
@@ -158,59 +158,61 @@ type GoalRequest struct {
 type Action int
 
 const (
-	ActionNone               Action = iota
-	ActionShowHelp                  // Show help overlay
-	ActionClear                     // Clear conversation history
-	ActionQuit                      // Exit the application
-	ActionLoadContext               // Load markdown context (Data = path)
-	ActionUnloadContext             // Remove loaded context
-	ActionActivateSkill             // Activate skill (Data = name)
-	ActionDeactivateSkill           // Deactivate skill (Data = name)
-	ActionSwitchModel               // Switch model (Data = model name)
-	ActionEnableAutoModel           // Resume availability-aware automatic routing
-	ActionSwitchProvider            // Switch inference provider profile (Data = profile name)
-	ActionShowProviderPicker        // Open provider profile picker overlay
-	ActionSwitchAgent               // Switch agent profile (Data = agent name)
-	ActionShowSessions              // Open sessions picker
-	ActionShowModelPicker           // Open model picker overlay
-	ActionCommit                    // Generate commit message and commit
-	ActionSendPrompt                // Send Data as a message to the agent
-	ActionExport                    // Export conversation (Data = path)
-	ActionImport                    // Import conversation (Data = path)
-	ActionCheckpoint                // Save a conversation checkpoint (Data = optional label)
-	ActionListCheckpoints           // List saved checkpoints
-	ActionRestoreCheckpoint         // Restore a checkpoint (Data = id)
-	ActionOpenPlan                  // Open the guided PLAN form (Data = optional task)
-	ActionOpenGoal                  // Open the goal form (Data = optional objective)
-	ActionShowGoal                  // Show the active goal summary
-	ActionPauseGoal                 // Pause automatic goal continuation
-	ActionResumeGoal                // Resume/retry the active goal
-	ActionDropGoal                  // Drop the active goal without claiming completion
-	ActionEditGoalBudget            // Open the active goal's budget-only editor
-	ActionRecoverExecution          // Review typed evidence for a paused ordinary execution
-	ActionAddReadRoot               // Grant one temporary external read-only directory (Data = path)
-	ActionRemoveReadRoot            // Revoke one temporary external read-only grant (Data = path)
-	ActionClearReadRoots            // Revoke every temporary external read-only grant
-	ActionAttachImage               // Validate and attach one image asynchronously (Data = path)
-	ActionListImages                // Show images attached to the pending prompt
-	ActionClearImages               // Remove every image from the pending prompt
-	ActionForgetImageHistory        // Remove image references from active conversation history; checkpoints remain
-	ActionShowAgents                // Open the read-only agent activity hub
-	ActionDeleteMemory              // Delete one persistent memory entry (Data = id)
-	ActionMCPReconnect              // Reconnect an MCP server (Data = server name)
-	ActionPermissionsAcceptEdits    // Toggle accept-workspace-edits posture (Data = on|off)
-	ActionPermissionsClear          // Clear every process-local session approval grant
-	ActionPermissionsRevoke         // Revoke session grants for one tool (Data = tool; empty = all)
-	ActionPermissionsAllowBash      // Persist workspace bash prefix/pattern (Data = pattern)
-	ActionPermissionsAllowMCP       // Persist exact MCP tool allow (Data = tool)
-	ActionPermissionsAllowPath      // Persist write/edit/mkdir path (Data = path)
-	ActionPermissionsForgetBash     // Remove workspace bash prefix (Data = prefix)
-	ActionPermissionsForgetMCP      // Remove exact MCP tool allow (Data = tool)
-	ActionPermissionsForgetPath     // Remove write path allow (Data = path)
-	ActionPermissionsExport         // Export durable rules (Data = path; empty = default)
-	ActionPermissionsImport         // Import durable rules (Data = path[|replace])
-	ActionPermissionsClearRules     // Clear all durable workspace rules
-	ActionPermissionsPanel          // Open the interactive permissions panel
+	ActionNone                   Action = iota
+	ActionShowHelp                      // Show help overlay
+	ActionClear                         // Clear conversation history
+	ActionQuit                          // Exit the application
+	ActionLoadContext                   // Load markdown context (Data = path)
+	ActionUnloadContext                 // Remove loaded context
+	ActionActivateSkill                 // Activate skill (Data = name)
+	ActionDeactivateSkill               // Deactivate skill (Data = name)
+	ActionSwitchModel                   // Switch model (Data = model name)
+	ActionEnableAutoModel               // Resume availability-aware automatic routing
+	ActionSwitchProvider                // Switch inference provider profile (Data = profile name)
+	ActionShowProviderPicker            // Open provider profile picker overlay
+	ActionSwitchAgent                   // Switch agent profile (Data = agent name)
+	ActionShowSessions                  // Open sessions picker
+	ActionShowModelPicker               // Open model picker overlay
+	ActionCommit                        // Generate commit message and commit
+	ActionSendPrompt                    // Send Data as a message to the agent
+	ActionExport                        // Export conversation (Data = path)
+	ActionImport                        // Import conversation (Data = path)
+	ActionCheckpoint                    // Save a conversation checkpoint (Data = optional label)
+	ActionListCheckpoints               // List saved checkpoints
+	ActionRestoreCheckpoint             // Restore a checkpoint (Data = id)
+	ActionOpenPlan                      // Open the guided PLAN form (Data = optional task)
+	ActionOpenGoal                      // Open the goal form (Data = optional objective)
+	ActionShowGoal                      // Show the active goal summary
+	ActionPauseGoal                     // Pause automatic goal continuation
+	ActionResumeGoal                    // Resume/retry the active goal
+	ActionDropGoal                      // Drop the active goal without claiming completion
+	ActionEditGoalBudget                // Open the active goal's budget-only editor
+	ActionRecoverExecution              // Review typed evidence for a paused ordinary execution
+	ActionAddReadRoot                   // Grant one temporary external read-only directory (Data = path)
+	ActionRemoveReadRoot                // Revoke one temporary external read-only grant (Data = path)
+	ActionClearReadRoots                // Revoke every temporary external read-only grant
+	ActionAttachImage                   // Validate and attach one image asynchronously (Data = path)
+	ActionListImages                    // Show images attached to the pending prompt
+	ActionClearImages                   // Remove every image from the pending prompt
+	ActionForgetImageHistory            // Remove image references from active conversation history; checkpoints remain
+	ActionShowAgents                    // Open the read-only agent activity hub
+	ActionDeleteMemory                  // Delete one persistent memory entry (Data = id)
+	ActionSetNumCtx                     // Apply a new ollama.num_ctx at runtime (Data = tokens; optional Force)
+	ActionSaveNumCtx                    // Persist the active num_ctx into the host config file
+	ActionMCPReconnect                  // Reconnect an MCP server (Data = server name)
+	ActionPermissionsAcceptEdits        // Toggle accept-workspace-edits posture (Data = on|off)
+	ActionPermissionsClear              // Clear every process-local session approval grant
+	ActionPermissionsRevoke             // Revoke session grants for one tool (Data = tool; empty = all)
+	ActionPermissionsAllowBash          // Persist workspace bash prefix/pattern (Data = pattern)
+	ActionPermissionsAllowMCP           // Persist exact MCP tool allow (Data = tool)
+	ActionPermissionsAllowPath          // Persist write/edit/mkdir path (Data = path)
+	ActionPermissionsForgetBash         // Remove workspace bash prefix (Data = prefix)
+	ActionPermissionsForgetMCP          // Remove exact MCP tool allow (Data = tool)
+	ActionPermissionsForgetPath         // Remove write path allow (Data = path)
+	ActionPermissionsExport             // Export durable rules (Data = path; empty = default)
+	ActionPermissionsImport             // Import durable rules (Data = path[|replace])
+	ActionPermissionsClearRules         // Clear all durable workspace rules
+	ActionPermissionsPanel              // Open the interactive permissions panel
 )
 
 // Registry holds all registered slash commands.

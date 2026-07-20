@@ -328,6 +328,28 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 		m.resumeFollow()
 		return nil
 
+	case command.ActionSetNumCtx:
+		text, err := m.handleContextWindowCommand(result.Data)
+		if err != nil {
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: err.Error()})
+		} else if text != "" {
+			m.entries = append(m.entries, ChatEntry{Kind: "system", Content: text})
+		}
+		m.refreshTranscript()
+		m.resumeFollow()
+		return nil
+
+	case command.ActionSaveNumCtx:
+		text, err := m.saveConfiguredNumCtx()
+		if err != nil {
+			m.entries = append(m.entries, ChatEntry{Kind: "error", Content: err.Error()})
+		} else {
+			m.entries = append(m.entries, ChatEntry{Kind: "system", Content: text})
+		}
+		m.refreshTranscript()
+		m.resumeFollow()
+		return nil
+
 	case command.ActionMCPReconnect:
 		if m.agent != nil && result.Data != "" {
 			name := result.Data

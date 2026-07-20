@@ -370,6 +370,10 @@ type Model struct {
 
 	// Help overlay viewport (scrollable)
 	helpViewport viewport.Model
+
+	// configSourcePath is the host config file used by /context save. Empty when
+	// the process started without a writable resolved config path.
+	configSourcePath string
 }
 
 // New creates a new TUI Model.
@@ -444,6 +448,12 @@ func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, com
 		turnEntryIndex:          -1,
 		commitRunner:            runCommit,
 	}
+}
+
+// SetConfigSourcePath records the resolved host config path so /context save
+// can rewrite ollama.num_ctx without scanning for config files again.
+func (m *Model) SetConfigSourcePath(path string) {
+	m.configSourcePath = strings.TrimSpace(path)
 }
 
 // SetProgram sets the tea.Program reference (must be called before Run).

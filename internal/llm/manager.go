@@ -1181,6 +1181,67 @@ func (m *ModelManager) NumCtx() int {
 	return m.numCtx
 }
 
+// ConfiguredNumCtx returns the host-configured local KV allocation (the value
+// sent as options.num_ctx for local models), independent of cloud effective
+// windows.
+func (m *ModelManager) ConfiguredNumCtx() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.numCtx
+}
+
+// SetNumCtx updates the local KV-cache allocation used for subsequent local
+// Ollama requests. Cloud profiles keep their native maximum. The current local
+// client is rebuilt so the next turn picks up the new window; in-flight turns
+// keep their frozen snapshot.
+func (m *ModelManager) SetNumCtx(numCtx int) error {
+	normalized, err := config.NormalizeNumCtx(numCtx)
+	if err != nil {
+		return err
+	}
+	if err := m.admission.acquireOrdinary(context.Background()); err != nil {
+		return err
+	}
+	defer m.admission.releaseOrdinary()
+	m.switchMu.Lock()
+	defer m.switchMu.Unlock()
+	m.inferenceMu.Lock()
+	defer m.inferenceMu.Unlock()
+
+	m.mu.Lock()
+	m.numCtx = normalized
+	model := m.currentModel
+	m.mu.Unlock()
+
+	if m.remote != nil || model == "" {
+		return nil
+	}
+	policy := m.ContextPolicy(model)
+	if policy.Cloud {
+		return nil
+	}
+	client, err := NewOllamaClient(m.baseURL, model, policy.Request)
+	if err != nil {
+		return fmt.Errorf("rebuild client for num_ctx %d: %w", normalized, err)
+	}
+	m.mu.Lock()
+	m.clients[model] = client
+	m.mu.Unlock()
+	return nil
+}
+
+// LocalModelWeightBytes returns the cached local weight size for model when
+// known from inventory.
+func (m *ModelManager) LocalModelWeightBytes(model string) int64 {
+	canonical := config.CanonicalModelName(model)
+	m.localMu.RLock()
+	defer m.localMu.RUnlock()
+	if m.localModels == nil {
+		return 0
+	}
+	return m.localModels[canonical]
+}
+
 func (m *ModelManager) Model() string {
 	return m.CurrentModel()
 }

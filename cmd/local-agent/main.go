@@ -767,6 +767,7 @@ func run() int {
 	}
 
 	m := ui.New(ag, cmdReg, skillMgr, completer, modelManager, router, logger)
+	m.SetConfigSourcePath(cfg.SourcePath)
 	m.SetModelRoutingCatalog(cfg.Model.Models)
 	m.SetModelPreferenceStore(modelPreferenceStore)
 	if home, homeErr := os.UserHomeDir(); homeErr != nil {

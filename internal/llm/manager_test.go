@@ -855,3 +855,16 @@ func TestModelManagerSwitchWaitsForActiveInference(t *testing.T) {
 		t.Fatal("model switch stayed blocked after inference completed")
 	}
 }
+
+func TestModelManagerSetNumCtxRebuildsLocalPolicy(t *testing.T) {
+	manager := NewModelManager("http://127.0.0.1:9", 16_384)
+	if err := manager.SetNumCtx(98_304); err != nil {
+		t.Fatal(err)
+	}
+	if got := manager.ConfiguredNumCtx(); got != 98_304 {
+		t.Fatalf("ConfiguredNumCtx = %d", got)
+	}
+	if got := manager.NumCtx(); got != 98_304 {
+		t.Fatalf("NumCtx = %d", got)
+	}
+}

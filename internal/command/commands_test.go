@@ -893,7 +893,7 @@ func TestBuiltinRegistrySurfaceIsUniqueAndExecutable(t *testing.T) {
 	wantNames := []string{
 		"help", "clear", "plan", "goal", "model", "provider", "recover", "agent", "agents", "load",
 		"image", "scope", "permissions", "unload", "skill", "servers", "mcp", "tools", "ice", "memory", "sessions", "artifacts",
-		"changes", "commit", "stats", "export", "import", "checkpoint",
+		"changes", "commit", "context", "stats", "export", "import", "checkpoint",
 		"checkpoints", "restore", "exit",
 	}
 	all := r.All()
@@ -917,6 +917,35 @@ func TestBuiltinRegistrySurfaceIsUniqueAndExecutable(t *testing.T) {
 			if result.Error != "" && !strings.Contains(strings.ToLower(result.Error), "usage:") {
 				t.Fatalf("/%s default invocation failed unexpectedly: %s", spelling, result.Error)
 			}
+		}
+	}
+}
+
+func TestContextCommandParsesSubcommands(t *testing.T) {
+	r := NewRegistry()
+	RegisterBuiltins(r)
+	for _, test := range []struct {
+		args       []string
+		wantAction Action
+		wantData   string
+		wantError  bool
+	}{
+		{args: nil, wantAction: ActionSetNumCtx, wantData: "status"},
+		{args: []string{"auto"}, wantAction: ActionSetNumCtx, wantData: "auto"},
+		{args: []string{"set", "96k"}, wantAction: ActionSetNumCtx, wantData: "set:96k"},
+		{args: []string{"save"}, wantAction: ActionSaveNumCtx},
+		{args: []string{"set"}, wantError: true},
+		{args: []string{"nope"}, wantError: true},
+	} {
+		result := r.Execute(&Context{}, "context", test.args)
+		if test.wantError {
+			if result.Error == "" {
+				t.Fatalf("args=%v expected error, got %#v", test.args, result)
+			}
+			continue
+		}
+		if result.Error != "" || result.Action != test.wantAction || result.Data != test.wantData {
+			t.Fatalf("args=%v result=%#v want action=%d data=%q", test.args, result, test.wantAction, test.wantData)
 		}
 	}
 }
