@@ -382,6 +382,18 @@ func isOllamaStartupRecovery(content string, unavailable bool) bool {
 	return strings.HasPrefix(normalized, "ollama:") && strings.Contains(normalized, "try: ollama serve")
 }
 
+// defaultBootstrapModel is the recommended first model for new installations.
+const defaultBootstrapModel = "qwen3.5:2b"
+
+// needsModelBootstrap returns true when Ollama is reachable but no local
+// models are installed, indicating a first-run state.
+func (m *Model) needsModelBootstrap() bool {
+	if m.ollamaOffline || len(m.ollamaModels) > 0 {
+		return false
+	}
+	return m.ollamaInventoryAttempted
+}
+
 // renderWelcome renders a compact empty-state orientation surface. Persistent
 // runtime detail belongs in Settings; this view teaches only the active mode,
 // model, safety boundary, and the shortest paths into work.
@@ -429,6 +441,11 @@ func (m *Model) renderWelcome(b *strings.Builder) {
 	}
 	if len(infoParts) > 0 {
 		writeLine(m.styles.StatusText, strings.Join(infoParts, " · "))
+	}
+
+	if m.needsModelBootstrap() {
+		writeLine(m.styles.StatusWarning, "No local model installed")
+		writeLine(m.styles.WelcomeHint, "press p to pull qwen3.5:2b (~2.7 GB)")
 	}
 
 	if micro {

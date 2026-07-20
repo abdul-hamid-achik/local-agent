@@ -251,6 +251,9 @@ func defaults() Config {
 			MaxEvalTokens: 768,
 			Timeout:       "90s",
 		},
+		ICE: ICEConfig{
+			Enabled: true,
+		},
 		Privacy: PrivacyConfig{LocalOnly: true},
 	}
 }

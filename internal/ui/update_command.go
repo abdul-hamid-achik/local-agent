@@ -78,6 +78,27 @@ func (m *Model) buildCommandContext() *command.Context {
 		}
 	}
 
+	if m.agent != nil {
+		if store := m.agent.MemoryStore(); store != nil {
+			ctx.MemoryCount = store.Count()
+			for _, mem := range store.Recent(20) {
+				auto := false
+				for _, tag := range mem.Tags {
+					if tag == "auto" {
+						auto = true
+						break
+					}
+				}
+				ctx.Memories = append(ctx.Memories, command.MemoryInfo{
+					ID:      mem.ID,
+					Content: mem.Content,
+					Tags:    mem.Tags,
+					Auto:    auto,
+				})
+			}
+		}
+	}
+
 	return ctx
 }
 
@@ -266,6 +287,24 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 	case command.ActionShowAgents:
 		m.overlayParent = OverlayNone
 		m.openAgentHub()
+		return nil
+
+	case command.ActionDeleteMemory:
+		if m.agent != nil {
+			if store := m.agent.MemoryStore(); store != nil {
+				if id, err := strconv.Atoi(result.Text); err == nil {
+					if deleted, delErr := store.Delete(id); delErr != nil {
+						m.entries = append(m.entries, ChatEntry{Kind: "error", Content: fmt.Sprintf("memory delete: %v", delErr)})
+					} else if deleted {
+						m.entries = append(m.entries, ChatEntry{Kind: "system", Content: fmt.Sprintf("Memory #%d deleted.", id)})
+					} else {
+						m.entries = append(m.entries, ChatEntry{Kind: "system", Content: fmt.Sprintf("Memory #%d not found.", id)})
+					}
+				}
+			}
+		}
+		m.refreshTranscript()
+		m.resumeFollow()
 		return nil
 
 	case command.ActionEnableAutoModel:

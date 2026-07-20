@@ -300,6 +300,9 @@ func (a *Agent) RunTurnWithOptions(ctx context.Context, out Output, turnID strin
 		case assembleErr == nil && assembled != "":
 			rt.iceContext = assembled
 			rt.rebuildSystem(ctx)
+			if convs, facts := countICEChunks(assembled); convs > 0 || facts > 0 {
+				rt.out.SystemMessage(iceRecallSummary(convs, facts))
+			}
 		case errors.Is(assembleErr, ice.ErrICESessionChanged):
 			rt.iceEngine = nil
 		case assembleErr != nil && ctx.Err() == nil && !errors.Is(assembleErr, ice.ErrICESessionChanged):
@@ -475,4 +478,46 @@ func (a *Agent) handleBuiltinToolWithCancellation(ctx context.Context, tc llm.To
 	case <-ctx.Done():
 		return fmt.Sprintf("error: read-only tool %q cancelled before completion: %v", tc.Name, ctx.Err()), true
 	}
+}
+
+// countICEChunks counts the conversation and memory entries in an assembled
+// ICE context string by counting "- " list items under each section header.
+func countICEChunks(assembled string) (conversations, memories int) {
+	section := 0 // 0=none, 1=conversations, 2=memories
+	for _, line := range strings.Split(assembled, "\n") {
+		switch {
+		case strings.HasPrefix(line, "## Relevant Past Conversations"):
+			section = 1
+		case strings.HasPrefix(line, "## Remembered Facts"):
+			section = 2
+		case strings.HasPrefix(line, "## "):
+			section = 0
+		case strings.HasPrefix(line, "- ") && section == 1:
+			conversations++
+		case strings.HasPrefix(line, "- ") && section == 2:
+			memories++
+		}
+	}
+	return conversations, memories
+}
+
+func iceRecallSummary(conversations, memories int) string {
+	switch {
+	case conversations > 0 && memories > 0:
+		return fmt.Sprintf("ICE · recalled %d past conversation%s · %d remembered fact%s",
+			conversations, pluralSuffix(conversations), memories, pluralSuffix(memories))
+	case conversations > 0:
+		return fmt.Sprintf("ICE · recalled %d past conversation%s",
+			conversations, pluralSuffix(conversations))
+	default:
+		return fmt.Sprintf("ICE · recalled %d remembered fact%s",
+			memories, pluralSuffix(memories))
+	}
+}
+
+func pluralSuffix(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }

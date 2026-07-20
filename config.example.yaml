@@ -145,13 +145,15 @@ experts:
   max_eval_tokens: 768
   timeout: 90s
 
-# ICE (Infinite Context Engine) is opt-in. An empty store_path uses the managed
+# ICE (Infinite Context Engine) is enabled by default. Embeddings are computed
+# locally via Ollama (nomic-embed-text); no data leaves the machine. Set
+# `enabled: false` to disable. An empty store_path uses the managed
 # ~/.config/local-agent/conversations.json default. A non-empty relative value
 # is rooted under ~/.config/local-agent/ice/<workspace-hash>; absolute paths
 # and `..` escapes are rejected so repository config cannot write elsewhere or
 # place private embeddings inside the Git worktree.
 ice:
-  enabled: false
+  # enabled: true  # on by default; set false to disable
   # ~137M params / ~0.27GB — co-resides with any chat model for free. Keep it.
   embed_model: "nomic-embed-text"
   # store_path: "conversations.json"

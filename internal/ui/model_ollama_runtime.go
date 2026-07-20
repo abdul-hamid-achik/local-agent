@@ -580,6 +580,9 @@ func (m *Model) handleOllamaModelInventory(msg OllamaModelInventoryMsg, cmds []t
 	msg.Models = m.applyModelRoutingPolicy(msg.Models)
 	if msg.Err != nil || m.modelManager == nil {
 		m.applyOllamaInventory(msg)
+		if m.ollamaOffline && m.modelManager != nil {
+			cmds = append(cmds, m.scheduleOllamaReconnect())
+		}
 		return cmds
 	}
 	if m.ollamaInventoryCommitting {
@@ -638,4 +641,50 @@ func (m *Model) handleOllamaInventoryCommitted(msg ollamaModelInventoryCommitted
 	}
 	m.appendShutdownQuit(&cmds)
 	return cmds
+}
+
+// scheduleOllamaReconnect returns a tick that retries Ollama inventory after a
+// delay when the daemon is unreachable. The tick self-schedules until the
+// inventory succeeds or the model shuts down.
+func (m *Model) scheduleOllamaReconnect() tea.Cmd {
+	return tea.Tick(5*time.Second, func(time.Time) tea.Msg {
+		return ollamaReconnectTickMsg{}
+	})
+}
+
+// handleOllamaReconnectTick retries the Ollama inventory when the daemon was
+// previously unreachable.
+func (m *Model) handleOllamaReconnectTick() tea.Cmd {
+	if !m.ollamaOffline || m.modelManager == nil || m.shuttingDown {
+		return nil
+	}
+	return m.refreshOllamaInventory()
+}
+
+// scheduleModelLoadCheck returns a tick that checks whether the active model
+// has finished loading into memory. Used for cold-load progress feedback.
+func (m *Model) scheduleModelLoadCheck() tea.Cmd {
+	if m.modelManager == nil {
+		return nil
+	}
+	manager := m.modelManager
+	model := m.model
+	return tea.Tick(2*time.Second, func(time.Time) tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		running, err := manager.ListRunningOllamaModels(ctx)
+		if err != nil {
+			return modelLoadCheckMsg{}
+		}
+		for _, r := range running {
+			if config.CanonicalModelName(r.Model.Name) == config.CanonicalModelName(model) {
+				detail := fmt.Sprintf("%s loaded", model)
+				if r.SizeVRAM > 0 {
+					detail = fmt.Sprintf("%s · %.1f GB VRAM", model, float64(r.SizeVRAM)/1e9)
+				}
+				return modelLoadCheckMsg{Running: true, Detail: detail}
+			}
+		}
+		return modelLoadCheckMsg{Running: false, Detail: fmt.Sprintf("Loading %s into memory…", model)}
+	})
 }

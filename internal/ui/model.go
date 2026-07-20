@@ -735,6 +735,21 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 	case ollamaModelInventoryCommittedMsg:
 		cmds = m.handleOllamaInventoryCommitted(msg, cmds)
 
+	case ollamaReconnectTickMsg:
+		if cmd := m.handleOllamaReconnectTick(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+
+	case modelLoadCheckMsg:
+		if m.state == StateWaiting {
+			if msg.Detail != "" {
+				cmds = append(cmds, m.setFooterNotice(noticeInfo, msg.Detail, 3*time.Second))
+			}
+			if !msg.Running && !m.shuttingDown {
+				cmds = append(cmds, m.scheduleModelLoadCheck())
+			}
+		}
+
 	case providerSwitchResultMsg:
 		cmds = m.handleProviderSwitchResult(msg, cmds)
 

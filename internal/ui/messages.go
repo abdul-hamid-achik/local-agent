@@ -332,3 +332,14 @@ func sendMsg(p *tea.Program, msg tea.Msg) {
 		p.Send(msg)
 	}
 }
+
+// ollamaReconnectTickMsg triggers a background Ollama connectivity check
+// when the daemon was previously unreachable.
+type ollamaReconnectTickMsg struct{}
+
+// modelLoadCheckMsg triggers a background check on whether the active model
+// has finished loading into memory (cold-load progress feedback).
+type modelLoadCheckMsg struct {
+	Running bool
+	Detail  string
+}

@@ -39,6 +39,9 @@ type Context struct {
 	ICEEnabled       bool
 	ICEConversations int
 	ICESessionID     string
+	// Memory store summary for the /memory command.
+	Memories     []MemoryInfo
+	MemoryCount  int
 	// Token stats
 	SessionEvalTotal   int
 	SessionPromptTotal int
@@ -90,6 +93,14 @@ type SkillInfo struct {
 	Name        string
 	Description string
 	Active      bool
+}
+
+// MemoryInfo is a read-only view of a persisted memory entry for /memory.
+type MemoryInfo struct {
+	ID      int
+	Content string
+	Tags    []string
+	Auto    bool // true if extracted automatically by ICE
 }
 
 // ServerInfo is the bounded, read-only MCP connection projection exposed to
@@ -167,6 +178,7 @@ const (
 	ActionClearImages               // Remove every image from the pending prompt
 	ActionForgetImageHistory        // Remove image references from active conversation history; checkpoints remain
 	ActionShowAgents                // Open the read-only agent activity hub
+	ActionDeleteMemory              // Delete one persistent memory entry (Data = id)
 )
 
 // Registry holds all registered slash commands.

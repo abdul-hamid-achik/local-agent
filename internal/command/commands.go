@@ -512,7 +512,7 @@ func RegisterBuiltins(r *Registry) {
 				return Result{Error: err}
 			}
 			if !ctx.ICEEnabled {
-				return Result{Text: "ICE is not enabled. Add `ice: {enabled: true}` to your config.yaml"}
+				return Result{Text: "ICE is not enabled. It is on by default; check that Ollama is running and a workspace is available. To explicitly disable it, add `ice: {enabled: false}` to your config.yaml"}
 			}
 			var b strings.Builder
 			b.WriteString("Infinite Context Engine (ICE)\n")
@@ -520,6 +520,47 @@ func RegisterBuiltins(r *Registry) {
 			fmt.Fprintf(&b, "  Conversations: %d stored\n", ctx.ICEConversations)
 			fmt.Fprintf(&b, "  Session ID:    %s\n", ctx.ICESessionID)
 			fmt.Fprintf(&b, "  Embed model:   nomic-embed-text\n")
+			return Result{Text: b.String()}
+		},
+	})
+
+	r.Register(&Command{
+		Name:        "memory",
+		Aliases:     []string{"mem", "memories"},
+		Description: "View and manage persistent memories",
+		Usage:       "/memory [delete <id>]",
+		Handler: func(ctx *Context, args []string) Result {
+			if len(args) >= 2 && args[0] == "delete" {
+				id, err := strconv.Atoi(args[1])
+				if err != nil {
+					return Result{Error: fmt.Sprintf("invalid memory ID %q: must be a number", args[1])}
+				}
+				return Result{Action: ActionDeleteMemory, Text: fmt.Sprintf("%d", id)}
+			}
+			if len(args) > 0 {
+				return Result{Error: "usage: /memory [delete <id>]"}
+			}
+			if ctx == nil || ctx.MemoryCount == 0 {
+				return Result{Text: "No memories stored yet. Memories are saved automatically from conversations (auto) or by asking the agent to remember something."}
+			}
+			var b strings.Builder
+			fmt.Fprintf(&b, "Persistent Memories (%d stored)\n\n", ctx.MemoryCount)
+			for _, m := range ctx.Memories {
+				origin := "manual"
+				if m.Auto {
+					origin = "auto"
+				}
+				tags := ""
+				if len(m.Tags) > 0 {
+					tags = " [" + strings.Join(m.Tags, ", ") + "]"
+				}
+				content := m.Content
+				if len(content) > 80 {
+					content = content[:77] + "..."
+				}
+				fmt.Fprintf(&b, "  #%d  %s  (%s)%s\n", m.ID, content, origin, tags)
+			}
+			b.WriteString("\nDelete with: /memory delete <id>")
 			return Result{Text: b.String()}
 		},
 	})
