@@ -626,20 +626,16 @@ func (m *Model) renderApprovalChoices(width int) string {
 		return wideView
 	}
 	if width < 40 {
-		rows := make([]string, 0, (len(choices)+1)/2)
-		for index := 0; index < len(choices); index += 2 {
-			left := strings.TrimLeft(choiceView(choices[index], selected == index, true), " ")
-			if index+1 >= len(choices) {
-				rows = append(rows, truncateDisplayWithGlyphProfile(left, width, m.glyphProfile))
-				break
-			}
-			right := strings.TrimLeft(choiceView(choices[index+1], selected == index+1, true), " ")
-			row := lipgloss.JoinHorizontal(lipgloss.Top,
-				left,
-				m.styles.OverlayDim.Render(glyphSeparator(m.glyphProfile)),
-				right,
-			)
-			rows = append(rows, truncateDisplayWithGlyphProfile(row, width, m.glyphProfile))
+		// One choice per row keeps minimum-width screens deterministic across
+		// platforms. Pairing two compact choices per line truncates differently
+		// depending on terminal width accounting for focus glyphs.
+		rows := make([]string, 0, len(choices))
+		for index, choice := range choices {
+			rows = append(rows, truncateDisplayWithGlyphProfile(
+				strings.TrimLeft(choiceView(choice, index == selected, true), " "),
+				width,
+				m.glyphProfile,
+			))
 		}
 		return lipgloss.JoinVertical(lipgloss.Left, rows...)
 	}
