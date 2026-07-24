@@ -440,6 +440,11 @@ recordLoop:
 				break recordLoop
 			}
 			semantic := transcriptSemanticRow(rendered)
+			// Turn digests restate assistant prose for scannability; indexing
+			// them would double-count needles against the answer body.
+			if isTurnRecapSemanticRow(semantic) {
+				continue
+			}
 			point, _, ok := anchorPointAtOrAfter(
 				record,
 				localRow,
@@ -662,11 +667,8 @@ func transcriptSearchSourceCandidate(
 ) (string, bool) {
 	switch kind {
 	case "user":
-		// The renderer owns this role label. A user message whose content is
-		// literally "you" must still yield only its content row.
-		if localRow == 0 && semantic == "you" {
-			return "", false
-		}
+		// User rows are gutter + content only (no role-label chrome). A message
+		// whose source is literally "you" is real content and must be indexed.
 	case "error":
 		// The first row is always the renderer-owned error chip, even when an
 		// adversarial source repeats the same visible text.

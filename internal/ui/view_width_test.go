@@ -20,20 +20,6 @@ func TestWrapTextWideChars(t *testing.T) {
 	}
 }
 
-// TestIndentBlockWideChars tests indenting with wide characters
-func TestIndentBlockWideChars(t *testing.T) {
-	longLine := "https://example.com/very/long/path/that/should/be/wrapped"
-	got := indentBlock(longLine, "  ")
-
-	// The issue: indentBlock doesn't wrap, so this will exceed any reasonable width
-	lines := strings.Split(got, "\n")
-	for _, line := range lines {
-		if len([]rune(line)) > 100 {
-			t.Logf("WARNING: line exceeds expected width: %d runes", len([]rune(line)))
-		}
-	}
-}
-
 // TestWrapLineWrapping tests that wrapLine properly wraps content
 func TestWrapLineWrapping(t *testing.T) {
 	t.Run("long_url", func(t *testing.T) {

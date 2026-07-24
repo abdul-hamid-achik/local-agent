@@ -252,7 +252,7 @@ func TestShowGoalUsesInspectorAndRestoresStableFooter(t *testing.T) {
 	m.goalRuntime = newUIGoalRuntime(t, 42, goal.BudgetLimits{MaxContinuationTurns: 4})
 
 	before := ansi.Strip(m.renderStatusLine())
-	for _, required := range []string{"AUTO", "qwen3.5:9b", "ctx", "50%", "active"} {
+	for _, required := range []string{"AUTO", "qwen3.5:9b", "50%", "active"} {
 		if !strings.Contains(before, required) {
 			t.Fatalf("goal footer lost %q: %q", required, before)
 		}

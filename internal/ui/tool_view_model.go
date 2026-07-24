@@ -741,10 +741,15 @@ func projectToolHeaderCellBudget(inner, glyphCells, nameCells, summaryCells, dur
 		return toolHeaderCellBudget{}
 	}
 
+	// Verb and object are joined by a single space (1 cell), not a middle-dot
+	// separator. Thresholds below keep at least one operation cell when a
+	// summary is shown.
+	const summarySepCells = 1
+
 	summaryCap := 0
-	if wantSummary && summaryCells > 0 && textCells >= 7 {
+	if wantSummary && summaryCells > 0 && textCells >= 5 {
 		summaryCap = min(summaryCells, textCells/2)
-		if textCells-summaryCap-3 < 1 { // " · " plus one operation cell
+		if textCells-summaryCap-summarySepCells < 1 {
 			summaryCap = 0
 		}
 	}
@@ -755,7 +760,7 @@ func projectToolHeaderCellBudget(inner, glyphCells, nameCells, summaryCells, dur
 	showDuration := durationCells > 0
 	required := nameCells
 	if summaryCap > 0 {
-		required += 3 + summaryCap
+		required += summarySepCells + summaryCap
 	}
 	if showDuration {
 		required += 1 + durationCells
@@ -769,22 +774,22 @@ func projectToolHeaderCellBudget(inner, glyphCells, nameCells, summaryCells, dur
 		available -= durationCells + 1
 	}
 	summaryBudget := 0
-	if wantSummary && summaryCells > 0 && available >= 7 {
+	if wantSummary && summaryCells > 0 && available >= 5 {
 		summaryBudget = min(summaryCells, available/2)
-		if available-summaryBudget-3 < 1 {
+		if available-summaryBudget-summarySepCells < 1 {
 			summaryBudget = 0
 		}
 	}
 	nameBudget := available
 	if summaryBudget > 0 {
-		nameBudget -= summaryBudget + 3
+		nameBudget -= summaryBudget + summarySepCells
 	}
 	nameBudget = min(nameCells, max(0, nameBudget))
 	if summaryBudget > 0 {
 		// A short operation may donate cells it cannot use. The summary's base
 		// allocation still tops out at half; borrowing only consumes otherwise
 		// empty cells and never displaces operation identity.
-		unusedNameCells := available - summaryBudget - 3 - nameBudget
+		unusedNameCells := available - summaryBudget - summarySepCells - nameBudget
 		if unusedNameCells > 0 {
 			summaryBudget = min(summaryCells, summaryBudget+unusedNameCells)
 		}

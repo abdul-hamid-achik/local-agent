@@ -27,12 +27,24 @@ func (m *Model) View() tea.View {
 		return m.renderTerminalInputResumeView()
 	}
 
-	// The conversation and the active footer owner consume one shared geometry
-	// snapshot. Infrequent controls remain overlays over these stable base
-	// rectangles.
+	// Session header + conversation + footer share one geometry snapshot.
+	// Infrequent controls remain overlays over these stable base rectangles.
 	m.syncTranscriptPaintWindow()
 	frame := m.projectFrame()
+	// Keep the Bubbles viewport geometry locked to the projected transcript
+	// rect so footer chrome changes (framed composer, sticky header) cannot
+	// leave a stale tall viewport and overflow the terminal height.
+	if h := frame.Transcript.Rect.Height(); h > 0 && m.viewport.Height() != h {
+		m.viewport.SetHeight(h)
+	}
+	if w := frame.Transcript.Rect.Width(); w > 0 && m.viewport.Width() != w {
+		m.viewport.SetWidth(w)
+	}
 	var content strings.Builder
+	if frame.Header.Visible && frame.Header.Content != "" {
+		content.WriteString(frame.Header.Content)
+		content.WriteString("\n")
+	}
 	content.WriteString(m.viewport.View())
 	content.WriteString("\n")
 	paintedFooterY := strings.Count(content.String(), "\n")
@@ -115,12 +127,11 @@ func (m *Model) View() tea.View {
 
 	v := tea.NewView(content.String() + "\n")
 	v.AltScreen = true
-	// Cell-motion reporting is the smallest mouse mode that delivers wheel
-	// events. Without it, terminals commonly translate wheel input in the alt
-	// screen into arrow keys, which moves the focused composer instead of the
-	// transcript. Native selection remains available through the terminal's
-	// mouse-reporting override (commonly Shift-drag), and Ctrl+Y remains the
-	// application-level copy path.
+	// Cell-motion reports wheel + clicks for tool hit targets. Native terminal
+	// selection still works via Shift-drag in most terminals (iTerm, Ghostty,
+	// Kitty, WezTerm). Ctrl+Y copies the last assistant message when idle.
+	// Prefer Shift-drag over disabling mouse: wheel scroll of the transcript
+	// is a daily-driver affordance.
 	v.MouseMode = tea.MouseModeCellMotion
 	v.Cursor = viewCursor
 
@@ -144,17 +155,11 @@ func (m *Model) View() tea.View {
 	return v
 }
 
-// activityComposerGap gives the live activity rail one row of breathing room
-// before the draft surface. Prompt/form owners remain dense because their
-// controls already provide their own framing and exact height contract.
+// activityComposerGap used to insert a blank row between the live activity rail
+// and the composer. Grok-style density keeps them adjacent; the framed composer
+// already provides its own top edge, so the gap is never requested.
 func (m *Model) activityComposerGap() bool {
-	if _, active := m.currentWorkingActivity(); !active {
-		return false
-	}
-	if m.pendingApproval != nil || m.readScopePrompt != nil || m.pendingPaste != nil || m.overlay != OverlayNone {
-		return false
-	}
-	return m.queuedFollowUp != nil || (m.composerEditable() && m.renderComposerOverflowCue() == "")
+	return false
 }
 
 func (m *Model) conversationStarted() bool {
@@ -178,8 +183,13 @@ func (m *Model) inspectableToolReceiptAction() (string, bool) {
 	return "hide receipt", true
 }
 
-// formatTokens formats a token count as "1.2k" or "8192".
+// formatTokens formats a token count as "1.0M", "1.2k", or "999". The M tier
+// keeps Cloud-scale context windows readable in the absolute meter
+// ("120.4k/1.0M" instead of "120.4k/1048.6k").
 func formatTokens(n int) string {
+	if n >= 1_000_000 {
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	}
 	if n >= 1000 {
 		return fmt.Sprintf("%.1fk", float64(n)/1000)
 	}

@@ -12,10 +12,11 @@ const (
 	minTerminalHeight = 12
 )
 
-// layoutConfig holds adaptive parameters selected from one measured component.
+// layoutConfig holds adaptive truncation budgets selected from one measured
+// component. Horizontal indent is owned by ContentGrid (accent + pad), not by
+// density — ToolIndent is intentionally gone.
 type layoutConfig struct {
 	Capabilities   LayoutCapabilities
-	ToolIndent     string
 	ToolSummaryMax int
 	ArgsTruncMax   int
 	ResultTruncMax int
@@ -32,7 +33,6 @@ func layoutConfigFor(capabilities LayoutCapabilities) layoutConfig {
 	case LayoutDensityCompact:
 		return layoutConfig{
 			Capabilities:   capabilities,
-			ToolIndent:     "  ",
 			ToolSummaryMax: 40,
 			ArgsTruncMax:   100,
 			ResultTruncMax: 150,
@@ -40,7 +40,6 @@ func layoutConfigFor(capabilities LayoutCapabilities) layoutConfig {
 	case LayoutDensitySpacious:
 		return layoutConfig{
 			Capabilities:   capabilities,
-			ToolIndent:     "      ",
 			ToolSummaryMax: 80,
 			ArgsTruncMax:   300,
 			ResultTruncMax: 500,
@@ -48,7 +47,6 @@ func layoutConfigFor(capabilities LayoutCapabilities) layoutConfig {
 	default:
 		return layoutConfig{
 			Capabilities:   capabilities,
-			ToolIndent:     "      ",
 			ToolSummaryMax: 60,
 			ArgsTruncMax:   200,
 			ResultTruncMax: 300,
@@ -73,11 +71,16 @@ func (m *Model) transcriptLayoutCapabilities() LayoutCapabilities {
 	})
 }
 
-// transcriptWorkRect applies the transcript's complete horizontal chrome to
-// an already allocated viewport rectangle. Callers must split the parent frame
-// first; this helper never infers capacity from the outer terminal.
+// transcriptWorkRect applies the content-grid horizontal chrome to an already
+// allocated viewport rectangle: left accent+pad (contentLeftColumns) and right
+// slack (contentRightChromeColumns). WorkWidth stays pane − 6; Origin X is 3.
+// Callers must split the parent frame first; this helper never infers capacity
+// from the outer terminal.
 func transcriptWorkRect(viewportRect CellRect) CellRect {
-	return Inset(viewportRect, Insets{Right: transcriptContentChromeColumns})
+	return Inset(viewportRect, Insets{
+		Left:  contentLeftColumns,
+		Right: contentRightChromeColumns,
+	})
 }
 
 // chatPaneWidth is the width owned by the viewport component. Keep this in one
@@ -91,18 +94,15 @@ func (m *Model) chatPaneWidth() int {
 	return w
 }
 
-// chatContentWidth is the transcript WorkWidth used by wide structures and by
-// the current Markdown migration. Readable prose must use
-// transcriptLayoutCapabilities().ProseWidth once the renderer can distinguish
-// prose blocks from fences and tables; applying that cap here would incorrectly
-// narrow every transcript surface. Keeping WorkWidth stable across height-only
-// resizes preserves completed-message caches.
+// chatContentWidth is the transcript content-grid flex width (WorkWidth) used
+// by wide structures and by the current Markdown migration. Numerically it is
+// pane − contentLeftColumns − contentRightChromeColumns (still pane − 6).
+// Readable prose must use transcriptLayoutCapabilities().ProseWidth once the
+// renderer can distinguish prose blocks from fences and tables; applying that
+// cap here would incorrectly narrow every transcript surface. Keeping WorkWidth
+// stable across height-only resizes preserves completed-message caches.
 func (m *Model) chatContentWidth() int {
-	width := m.chatPaneWidth() - transcriptContentChromeColumns
-	if width < transcriptMinimumWorkColumns {
-		width = transcriptMinimumWorkColumns
-	}
-	return width
+	return m.contentGrid().ContentWidth()
 }
 
 // chatProseWidth is the readable measure for conversational text. It is

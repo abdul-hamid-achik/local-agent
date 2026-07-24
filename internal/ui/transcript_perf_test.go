@@ -12,6 +12,7 @@ import (
 
 func TestWarmStaticRunningToolRenderDoesNotRehashOrRepublishStableHistory(t *testing.T) {
 	m := newTestModel(t)
+	m.height = 13 // sticky off: layout/search fixtures need every entry painted
 	m.ready = true
 	m.now = func() time.Time {
 		return time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
@@ -153,6 +154,7 @@ func TestActivityClocksDoNotPaintTenThousandEntryTranscript(t *testing.T) {
 func largeRunningToolTranscript(t *testing.T, toolName string, reducedMotion bool) *Model {
 	t.Helper()
 	m := newTestModel(t)
+	m.height = 13 // sticky off: layout/search fixtures need every entry painted
 	base := time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)
 	m.now = func() time.Time { return base.Add(2500 * time.Millisecond) }
 	m.state = StateStreaming
@@ -222,6 +224,7 @@ func assertTranscriptPainted(t *testing.T, probe *transcriptRenderProbe, operati
 
 func TestPausedStreamingTailKeepsTransientBlockAcrossResizeAndTheme(t *testing.T) {
 	m := newTestModel(t)
+	m.height = 13 // sticky off: layout/search fixtures need every entry painted
 	m.handleWindowSize(tea.WindowSizeMsg{Width: 82, Height: 14}, nil)
 	m.entries = []ChatEntry{{Kind: "user", Content: "stream a detailed response"}}
 	m.state = StateStreaming
@@ -275,6 +278,7 @@ func TestPausedStreamingTailKeepsTransientBlockAcrossResizeAndTheme(t *testing.T
 func TestLiveTailIdentityAvoidsPersistedCollisionAndEmptyTurnReuse(t *testing.T) {
 	t.Run("persisted collision", func(t *testing.T) {
 		m := newTestModel(t)
+		m.height = 13 // sticky off: layout/search fixtures need every entry painted
 		m.ready = true
 		const turnID = TurnID("turn_adversarial")
 		collision := liveTailLayoutCandidate(0, turnID, 1, 0)
@@ -304,6 +308,7 @@ func TestLiveTailIdentityAvoidsPersistedCollisionAndEmptyTurnReuse(t *testing.T)
 
 	t.Run("empty turn starts a new episode", func(t *testing.T) {
 		m := newTestModel(t)
+		m.height = 13 // sticky off: layout/search fixtures need every entry painted
 		m.ready = true
 		m.state = StateStreaming
 		m.streamBuf.WriteString("first unowned live tail")

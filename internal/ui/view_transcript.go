@@ -17,9 +17,19 @@ import (
 
 func (m *Model) renderSystemNotice(content string, contentW int) string {
 	const label = "notice · "
-	available := max(1, contentW-m.styles.SystemText.GetPaddingLeft())
+	// Content grid owns the left indent; drop style padding so OriginX stays 3.
+	// Dim body — notices (ICE, system) must not compete with user/assistant.
+	// Budget accounts for the grid lead so 30-column rows never overflow.
+	available := max(1, contentW-contentLeftColumns)
+	if contentW < 36 {
+		available = max(1, contentW)
+	}
 	plain := label + sanitizeTerminalMultiline(content)
-	return m.styles.SystemText.Render(wrapText(plain, available))
+	wrapped := m.styles.Dimmed.UnsetPaddingLeft().Render(wrapText(plain, available))
+	if contentW < 36 {
+		return wrapped
+	}
+	return m.contentGrid().IndentBlock(" ", wrapped)
 }
 
 // renderEntries builds the full chat content for the viewport.
@@ -93,21 +103,20 @@ func (m *Model) renderEntries() string {
 		}
 		if !hasNotice {
 			welcome := strings.TrimRight(b.String(), "\n")
-			top := max(0, (m.viewport.Height()-lipgloss.Height(welcome))/2)
+			top := emptyWelcomeTopPad(m.viewport.Height(), lipgloss.Height(welcome))
 			m.endLiveTailLayoutEpisode()
 			m.publishTranscriptLayout(nil)
 			return m.recordTranscriptRender(strings.Repeat("\n", top) + welcome)
 		}
-		// PlaceHorizontal owns a rectangular block and does not retain the
-		// welcome builder's trailing newline. Start notices on a real row so a
-		// long left padding cannot push their first line beyond the viewport.
+		// Welcome lines already end with a trailing newline from renderWelcome.
+		// Start notices on a real row so they sit under the orientation surface.
 		b.WriteByte('\n')
 		// Append any system entries (e.g. failed server notices) below welcome
 		for _, e := range m.entries {
 			switch e.Kind {
 			case "system":
 				b.WriteString(m.renderSystemNotice(e.Content, proseW))
-				b.WriteString("\n\n")
+				b.WriteString("\n")
 			case "error":
 				if notice, ok := compactOllamaStartupNotice(e.Content, contentW, m.ollamaOffline); ok {
 					// At the supported 30-column tier the generic error frame can
@@ -121,7 +130,7 @@ func (m *Model) renderEntries() string {
 					// failed user operation. Preserve the detailed host recovery copy
 					// at ordinary widths without adding the generic red error label.
 					b.WriteString(m.renderSystemNotice(e.Content, proseW))
-					b.WriteString("\n\n")
+					b.WriteString("\n")
 				} else {
 					m.renderEntryError(&b, e.Content, contentW)
 				}
@@ -276,6 +285,11 @@ type entryRenderMemo struct {
 
 func (m *Model) renderEntryInto(b *strings.Builder, entryIndex, contentW int, memoAllowed bool, state *entryRenderState) {
 	entry := m.entries[entryIndex]
+	// Sticky last-user strip owns the prompt; do not reprint it in the body.
+	if entry.Kind == "user" && m.omitUserEntryFromTranscript(entryIndex) {
+		state.assistantStarted = false
+		return
+	}
 	showHeader := !state.assistantStarted
 	proseW := min(contentW, m.chatProseWidth())
 	memoKey := m.entryMemoKey(entry, contentW, proseW, showHeader)
@@ -901,20 +915,26 @@ func (m *Model) renderInlineTurnActivity(b *strings.Builder, label string, conte
 	if showHeader {
 		m.renderAssistantHeader(b, contentW)
 	}
-	b.WriteString(indentBlock(m.styles.StreamHint.Render(label), "  "))
+	b.WriteString(m.contentGrid().IndentBlock(" ", m.styles.StreamHint.Render(label)))
 	b.WriteString("\n")
 }
 
 // transcriptEntrySeparator is the single owner of vertical rhythm between
-// transcript entries. Consecutive compact receipts form a dense stack; every
-// other semantic boundary gets exactly one blank row.
+// transcript entries. Grok uses consistent breathing: one blank row between
+// distinct surfaces; tool cards stack denser; assistant segments of the same
+// turn stay adjacent.
 func transcriptEntrySeparator(previous, current string) string {
+	// Tool receipts form one instrument panel — no gap between cards.
 	if previous == "tool_group" && current == "tool_group" {
 		return "\n"
 	}
-	if previous == "system" && current == "system" {
+	// Multi-segment assistant of the same turn (reasoning chunks + answer)
+	// stay stacked without a chapter break.
+	if previous == "assistant" && current == "assistant" {
 		return "\n"
 	}
+	// Tool → answer / notice → assistant / user → * : one blank row.
+	// This matches Grok's readable vertical rhythm without sparse voids.
 	return "\n\n"
 }
 
@@ -923,22 +943,22 @@ func (m *Model) renderEntryError(b *strings.Builder, content string, contentW in
 	if content == "" {
 		content = "The operation failed without an error message."
 	}
-	b.WriteString("  " + m.styles.ErrorChip.Render(glyphSet(m.glyphProfile).Error+" error"))
+	grid := m.contentGrid()
+	b.WriteString(grid.Prefix(" ") + m.styles.ErrorChip.Render(glyphSet(m.glyphProfile).Error+" error"))
 	b.WriteString("\n")
-	b.WriteString(m.styles.ToolErrorText.Render(indentBlock(wrapText(content, max(1, contentW-2)), "  ")))
-	b.WriteString("\n\n")
+	b.WriteString(m.styles.ToolErrorText.Render(grid.IndentBlock(" ", wrapText(content, max(1, contentW)))))
+	b.WriteString("\n")
 }
 
-// renderUserMsg renders a user message block: a compact role label above an
-// accent-guttered content block. The gutter, not a full-width rule, carries
-// the visual identity so the transcript keeps a calm vertical rhythm.
+// renderUserMsg renders a user message as an accent-guttered content block.
+// No "you" role label — the gutter (and sticky strip for the latest turn) is
+// enough identity, matching denser Grok-style transcript chrome.
 func (m *Model) renderUserMsg(b *strings.Builder, content string, attachments []imageasset.Ref, contentW int) {
 	content = sanitizeTerminalMultiline(content)
-	b.WriteString(m.styles.UserLabel.Render("you"))
-	b.WriteString("\n")
-	gutter := "  " + m.styles.UserGutter.Render(glyphSet(m.glyphProfile).UserRail) + " "
+	grid := m.contentGrid()
+	gutter := grid.Prefix(m.styles.UserGutter.Render(glyphSet(m.glyphProfile).UserRail))
 	text := m.styles.UserContent.UnsetPaddingLeft()
-	for _, line := range strings.Split(wrapText(content, max(10, contentW-4)), "\n") {
+	for _, line := range strings.Split(wrapText(content, max(10, contentW)), "\n") {
 		b.WriteString(gutter + text.Render(line))
 		b.WriteString("\n")
 	}
@@ -962,11 +982,12 @@ func (m *Model) renderAssistantMsg(b *strings.Builder, entry ChatEntry, contentW
 		m.renderAssistantHeader(b, contentW)
 	}
 
+	grid := m.contentGrid()
 	// Reasoning belongs to this assistant turn, so its disclosure follows the
 	// role header instead of appearing as an unowned block above it.
 	if hasThinking {
 		thinkBox := m.renderThinkingBox(entry.ThinkingContent, entry.ThinkingCollapsed)
-		b.WriteString(indentBlock(thinkBox, "  "))
+		b.WriteString(grid.IndentBlock(" ", thinkBox))
 		b.WriteString("\n")
 	}
 	if !hasContent {
@@ -988,9 +1009,22 @@ func (m *Model) renderAssistantMsg(b *strings.Builder, entry ChatEntry, contentW
 	}
 	// Trim excessive trailing whitespace from Glamour output.
 	rendered = strings.TrimRight(rendered, " \t\n")
-	rendered = indentBlock(rendered, "  ")
+	rendered = grid.IndentBlock(" ", rendered)
 	b.WriteString(rendered)
 	b.WriteString("\n")
+	// Scannable turn digest (agent-harness research: Claude Code coherence,
+	// Zero recap, OpenCode structured sessions). Pure function of content so
+	// memo keys stay content-bound. Bound to prose width so the digest never
+	// widens the work column, and so transcript search can treat it as chrome.
+	if recap := formatTurnRecapLine(
+		buildTurnRecap(content),
+		min(contentW, m.chatProseWidth()),
+		m.isDark,
+		m.glyphProfile,
+	); recap != "" {
+		b.WriteString(grid.IndentBlock(" ", recap))
+		b.WriteString("\n")
+	}
 }
 
 // renderStreamingMsg renders the in-progress assistant message (plain text).
@@ -1010,7 +1044,7 @@ func (m *Model) renderStreamingMsg(b *strings.Builder, content string, contentW 
 	// disclosure. A bounded tail window keeps token-by-token height stable; the
 	// full receipt becomes expandable only after the turn settles.
 	if hasThinking {
-		b.WriteString(indentBlock(m.renderLiveThinkingBox(m.thinkBuf.String()), "  "))
+		b.WriteString(m.contentGrid().IndentBlock(" ", m.renderLiveThinkingBox(m.thinkBuf.String())))
 		b.WriteString("\n")
 	}
 	if !hasContent {
@@ -1036,15 +1070,17 @@ func (m *Model) renderStreamingAnswer(
 	// During streaming: render the stable markdown prefix with Glamour (cached)
 	// and only the trailing partial paragraph as plain wrapped text. This shows
 	// formatted output live instead of popping into shape on completion, while
-	// avoiding the jitter of re-rendering incomplete markdown.
+	// avoiding the jitter of re-rendering incomplete markdown. Content-grid
+	// Prefix owns the left three cells; wrap to the flex content budget only.
 	messageWidth := min(contentW, m.chatProseWidth())
 	if markdownUsesWorkWidth(content) {
 		messageWidth = contentW
 	}
-	wrapWidth := messageWidth - 2
+	wrapWidth := messageWidth
 	if wrapWidth < 10 {
 		wrapWidth = 10
 	}
+	grid := m.contentGrid()
 
 	var formatted, tail string
 	if m.md != nil {
@@ -1054,53 +1090,49 @@ func (m *Model) renderStreamingAnswer(
 	}
 
 	if formatted != "" {
-		b.WriteString(indentBlock(strings.TrimRight(formatted, " \t\n"), "  "))
+		b.WriteString(grid.IndentBlock(" ", strings.TrimRight(formatted, " \t\n")))
 		b.WriteString("\n")
 	}
 	if strings.TrimSpace(tail) != "" {
-		b.WriteString(indentBlock(wrapText(tail, wrapWidth), "  "))
+		b.WriteString(grid.IndentBlock(" ", wrapText(tail, wrapWidth)))
 		b.WriteString("\n")
 	}
 }
 
 func (m *Model) renderAssistantHeader(b *strings.Builder, _ int) {
-	// The operational footer owns the one active animation. Keeping the role
-	// header static makes streamed reasoning feel like transcript content rather
-	// than a second competing progress indicator. A compact label without a
-	// full-width rule keeps consecutive turns readable without heavy chrome.
-	b.WriteString(m.styles.AsstLabel.Render("assistant"))
+	// Quiet role chrome: dim single-word label (Grok barely shouts roles).
+	// Footer owns the only motion; this stays static transcript structure.
+	b.WriteString(m.contentGrid().Line(" ", m.styles.Dimmed.UnsetPaddingLeft().Render("assistant")))
 	b.WriteString("\n")
 }
 
 // renderToolGroup renders one tight tool receipt. The parent transcript owns
-// all spacing between this block and its neighbors.
+// all spacing between this block and its neighbors. ToolCard owns the
+// content-grid accent + pad; the parent must not re-indent.
 func (m *Model) renderToolGroup(b *strings.Builder, chat ChatEntry) {
 	if chat.ToolIndex < 0 || chat.ToolIndex >= len(m.toolEntries) {
 		return
 	}
+	grid := m.contentGrid()
+	glyphs := glyphSet(m.glyphProfile)
+	invalidReceipt := func() {
+		b.WriteString(grid.Line(
+			glyphs.Vertical,
+			m.styles.ToolErrorText.Render(glyphs.Error+" Invalid tool receipt"),
+		))
+	}
 	model, err := m.projectToolRenderModel(chat)
 	if err != nil {
-		b.WriteString(indentBlock(
-			m.styles.ToolErrorText.Render(
-				glyphSet(m.glyphProfile).Vertical+" "+
-					glyphSet(m.glyphProfile).Error+" Invalid tool receipt",
-			),
-			"  ",
-		))
+		invalidReceipt()
 		return
 	}
 	card, err := ToolCardFromRenderModel(model, m.isDark, m.glyphProfile)
 	if err != nil {
-		b.WriteString(indentBlock(
-			m.styles.ToolErrorText.Render(
-				glyphSet(m.glyphProfile).Vertical+" "+
-					glyphSet(m.glyphProfile).Error+" Invalid tool receipt",
-			),
-			"  ",
-		))
+		invalidReceipt()
 		return
 	}
-	availableWidth := max(4, m.chatPaneWidth()-4)
+	// LineWidth = accent + pad + content. ToolCard paints accent+pad internally.
+	availableWidth := max(4, grid.LineWidth())
 	cardView := card.View(availableWidth)
 	if model.Preview.Expanded && model.Lifecycle.Terminal() {
 		var diffView string
@@ -1130,12 +1162,13 @@ func (m *Model) renderToolGroup(b *strings.Builder, chat ChatEntry) {
 	}
 	if model.Preview.Expanded {
 		if hint := m.toolViewerActionHint(chat); hint != "" {
-			cardView += "\n" + m.styles.Dimmed.Render(
-				glyphSet(m.glyphProfile).Vertical+" "+hint,
+			// Align viewer hints under the card content column (after accent+pad).
+			cardView += "\n" + grid.Prefix(glyphs.Vertical) + m.styles.Dimmed.Render(
+				truncateDisplayWithGlyphProfile(hint, grid.ContentWidth(), m.glyphProfile),
 			)
 		}
 	}
-	b.WriteString(indentBlock(cardView, "  "))
+	b.WriteString(cardView)
 }
 
 func (m *Model) inlineDiffPreviewRows() int {
@@ -1165,15 +1198,4 @@ func (m *Model) projectToolRenderModel(chat ChatEntry) (ToolRenderModel, error) 
 		model.Preview.OutputAvailable = false
 	}
 	return model, nil
-}
-
-// indentBlock adds a prefix to each line of a multi-line string.
-func indentBlock(s, prefix string) string {
-	lines := strings.Split(s, "\n")
-	for i, line := range lines {
-		if line != "" {
-			lines[i] = prefix + line
-		}
-	}
-	return strings.Join(lines, "\n")
 }

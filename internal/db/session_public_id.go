@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/sessionref"
 )
@@ -73,6 +74,24 @@ func (s *Store) SessionHandle(ctx context.Context, sessionID int64) (string, err
 		return handle, nil
 	}
 	return "", fmt.Errorf("session %d has no public id", sessionID)
+}
+
+// UpdateSessionTitle persists a host- or model-authored session title.
+func (s *Store) UpdateSessionTitle(ctx context.Context, sessionID int64, title string) error {
+	if s == nil || s.Queries == nil {
+		return fmt.Errorf("session store is unavailable")
+	}
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return fmt.Errorf("session title is empty")
+	}
+	if sessionID <= 0 {
+		return fmt.Errorf("session id is required")
+	}
+	return s.Queries.UpdateSessionTitle(ctx, UpdateSessionTitleParams{
+		Title: title,
+		ID:    sessionID,
+	})
 }
 
 func ensureSessionPublicIDs(conn *sql.DB) error {

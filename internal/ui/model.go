@@ -57,6 +57,8 @@ type Model struct {
 	now                      func() time.Time
 	activityHeartbeatToken   uint64
 	activityHeartbeatPending bool
+	// chromeSpring drives sticky text reveal + context meter ease (harmonica).
+	chromeSpring             chromeSpringState
 	width                    int
 	height                   int
 	ready                    bool
@@ -169,6 +171,12 @@ type Model struct {
 	sessionID                    int64
 	sessionPublicID              string
 	activeSessionTitle           string
+	// sessionTitleNeedsAI is set when the durable title is still the provisional
+	// first-line prompt; a background model job upgrades it after the first turn.
+	sessionTitleNeedsAI          bool
+	sessionTitleAIDone           bool
+	sessionTitleGenToken         uint64
+	sessionTitleGen              sessionTitleGen
 	executionCursor              int64
 	executionLease               *db.ExecutionSessionLease
 	sessionStore                 *db.Store
@@ -406,9 +414,11 @@ func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, com
 	if glyphProfile == GlyphASCII {
 		mainSpinner = spinner.Line
 	}
+	// Spinner sits in the content-grid accent cell on the activity rail; omit
+	// StatusDot's left pad so Prefix owns OriginX exclusively.
 	s := spinner.New(
 		spinner.WithSpinner(mainSpinner),
-		spinner.WithStyle(initialStyles.StatusDot),
+		spinner.WithStyle(initialStyles.StatusDot.UnsetPaddingLeft()),
 	)
 
 	return &Model{
@@ -424,6 +434,7 @@ func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, com
 		isDark:                  true,
 		reducedMotion:           reducedMotion,
 		glyphProfile:            glyphProfile,
+		chromeSpring:            newChromeSpringState(),
 		now:                     time.Now,
 		inputLines:              1,
 		outputDetails:           NewOutputDetailStore(),
@@ -509,6 +520,7 @@ func (m *Model) SetInitCancel(cancel context.CancelFunc) {
 func (m *Model) beginShutdown() tea.Cmd {
 	m.shuttingDown = true
 	m.cancelTerminalInputResume()
+	m.cancelSessionTitleGen()
 	m.pendingOllamaInventory = nil
 	m.cancelPendingCloudSessionRestore()
 	if m.providerSwitchCancel != nil {
@@ -732,6 +744,11 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 	case AgentDoneMsg:
 		cmds = m.handleAgentDone(msg, cmds)
 
+	case sessionTitleJobMsg:
+		if cmd := m.handleSessionTitleJob(msg); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+
 	case OllamaModelPullRequestedMsg:
 		cmds = m.handleModelPullRequested(msg, cmds)
 
@@ -887,6 +904,14 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		cmds = append(cmds, cmd)
 	}
 
+	// Sticky reveal + context meter springs (harmonica). Independent of the
+	// activity spinner; no-ops under reducedMotion.
+	if tick, ok := msg.(chromeSpringTickMsg); ok {
+		if cmd := m.handleChromeSpringTick(tick); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+
 	// Visible Charm children own their non-key lifecycle messages (cursor
 	// blinks, list filter results, spinner ticks, and progress frames). Key
 	// presses stay in the explicit parent branches above so authority-changing
@@ -941,6 +966,11 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 	// follow.
 	if _, resized := msg.(tea.WindowSizeMsg); !resized {
 		m.checkAutoScroll()
+	}
+
+	// Kick sticky/context springs after state may have changed this frame.
+	if cmd := m.maybeKickChromeSpring(); cmd != nil {
+		cmds = append(cmds, cmd)
 	}
 
 	return m, tea.Batch(cmds...)
@@ -1622,9 +1652,15 @@ func (m *Model) completionDraftAndCursor() (string, int) {
 }
 
 // lastAssistantContent scans entries backwards for the last assistant message.
+// While streaming, prefer the live buffer so Ctrl+Y can grab in-flight text.
 func (m *Model) lastAssistantContent() string {
+	if m != nil && (m.state == StateStreaming || m.state == StateWaiting) {
+		if live := strings.TrimSpace(m.streamBuf.String()); live != "" {
+			return live
+		}
+	}
 	for i := len(m.entries) - 1; i >= 0; i-- {
-		if m.entries[i].Kind == "assistant" {
+		if m.entries[i].Kind == "assistant" && strings.TrimSpace(m.entries[i].Content) != "" {
 			return m.entries[i].Content
 		}
 	}

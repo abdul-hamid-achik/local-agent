@@ -87,6 +87,9 @@ func TestTranscriptPaintAppendOnlyGrowthMeasuresOnlyDelta(t *testing.T) {
 
 func TestTranscriptPaintMutationInvalidatesAppendReuse(t *testing.T) {
 	m := newTestModel(t)
+	// Sticky omits the latest single-line user from paint; paint-cache tests need
+	// every entry to measure as a stable block.
+	m.height = 13
 	m.toolEntries = []ToolEntry{{
 		ID:        "append-cache-tool",
 		Name:      "bash",
@@ -125,6 +128,8 @@ func TestTranscriptPaintMutationInvalidatesAppendReuse(t *testing.T) {
 
 func TestFlushStreamPromotesOnlyLiveTail(t *testing.T) {
 	m := newTestModel(t)
+	// Disable sticky so single-line history users stay as paint blocks.
+	m.height = 13
 	const historyEntries = 256
 	m.entries = make([]ChatEntry, 0, historyEntries+1)
 	for index := 0; index < historyEntries; index++ {

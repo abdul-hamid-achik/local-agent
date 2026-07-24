@@ -31,6 +31,8 @@ func mixedMemoTranscript(m *Model) {
 func TestEntryMemoWarmRenderIsByteIdentical(t *testing.T) {
 	m := newTestModel(t)
 	m.ready = true
+	// Short frame: sticky user chrome is off so every entry is body-memoized.
+	m.height = 13
 	mixedMemoTranscript(m)
 
 	cold := m.renderEntries()
@@ -143,6 +145,8 @@ func TestEntryMemoToolMutationChangesKeyAndRerenders(t *testing.T) {
 func TestEntryMemoCachesEventDrivenRunningToolAndClearsOnShrink(t *testing.T) {
 	m := newTestModel(t)
 	m.ready = true
+	// Keep sticky off so user + assistant both remain body-memoized after shrink.
+	m.height = 13
 	mixedMemoTranscript(m)
 	m.toolEntries[0].Status = ToolStatusRunning
 	m.toolsPending = 1

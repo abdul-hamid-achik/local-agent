@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -18,6 +19,10 @@ const (
 	// sequences inflate byte counts over visible text, so the ceiling is a
 	// multiple of the sanitized result bound.
 	maxToolCardResultDisplayBytes = 4 * maxToolCardResultBytes
+	// toolCardCollapsedDurationMinInner is the content-column width at which a
+	// collapsed success receipt may show tertiary duration meta. Below this,
+	// collapsed success stays quiet (duration appears on expand).
+	toolCardCollapsedDurationMinInner = 72
 )
 
 // ToolCardKind represents the type of tool operation.
@@ -326,12 +331,16 @@ func (c ToolCard) ViewWithActivity(width int, activityGlyph string, elapsed time
 	if width < 4 {
 		width = 4
 	}
-	inner := width - 2 // gutter is "│ "
+	// Content grid: ToolCard owns accent(1) + left pad(2). The parent passes
+	// LineWidth and must not re-indent; inner flex is the remaining cells.
+	inner := width - contentLeftColumns
+	if inner < 1 {
+		inner = 1
+	}
 	glyphs := glyphSet(resolveGlyphProfile(c.GlyphProfile))
 	truncate := func(value string, cells int) string {
 		return truncateDisplayWithGlyphProfile(value, cells, c.GlyphProfile)
 	}
-	summarySeparator := glyphSeparator(c.GlyphProfile)
 
 	titleStyle := c.getTitleStyle()
 	presentationName := c.Name
@@ -363,6 +372,15 @@ func (c ToolCard) ViewWithActivity(width int, activityGlyph string, elapsed time
 
 	// Leading glyph and trailing timing meta. Running animation is supplied by
 	// the parent so every card can share one Bubbles spinner tick chain.
+	//
+	// Disclosure is calm by default: only expanded completed receipts show ▾
+	// (and ExpertProgress running cards keep their expand affordance). Collapsed
+	// success/error/attention headers stay flat — the full header line remains
+	// the expand hit region.
+	//
+	// Duration is tertiary: always available for running elapsed time; for
+	// completed cards it appears when expanded, and for collapsed success only
+	// when the content column is wide enough to stay quiet on typical widths.
 	var glyph, meta string
 	if c.State == ToolCardRunning {
 		glyph = strings.TrimSpace(activityGlyph)
@@ -381,20 +399,23 @@ func (c ToolCard) ViewWithActivity(width int, activityGlyph string, elapsed time
 		}
 	} else {
 		glyph = titleStyle.Render(c.statusGlyph())
-		// Completed receipts are interactive. Match the reasoning receipt's
-		// disclosure grammar so expansion is discoverable without adding a noisy
-		// instruction to every tool row. Preserve the lifecycle glyph, and omit
-		// only the disclosure mark when the card has fewer than three inner cells.
-		if inner >= lipgloss.Width(glyph)+2 {
-			disclosure := glyphs.Collapsed
-			if c.Expanded {
-				disclosure = glyphs.Expanded
-			}
-			glyph = c.Styles.Dimmed.Render(disclosure) + " " + glyph
+		if c.Expanded && inner >= lipgloss.Width(glyph)+2 {
+			glyph = c.Styles.Dimmed.Render(glyphs.Expanded) + " " + glyph
 		}
-		if headerDuration > 0 {
+		// Errors keep duration as diagnostic; success only when expanded or wide.
+		showDurationMeta := headerDuration > 0 && (c.Expanded ||
+			c.State == ToolCardError ||
+			(c.State == ToolCardSuccess && inner >= toolCardCollapsedDurationMinInner))
+		if showDurationMeta {
 			meta = c.Styles.Dimmed.Render("(" + formatDuration(headerDuration) + ")")
 		}
+	}
+
+	// Muted collapsed success: keep the ✓ in Success color for scannability, but
+	// paint verb+object with Dimmed so the stack reads as settled history.
+	labelStyle := titleStyle
+	if c.State == ToolCardSuccess && !c.Expanded {
+		labelStyle = c.Styles.Dimmed
 	}
 
 	// Project the header into terminal-cell budgets before applying styles.
@@ -421,10 +442,12 @@ func (c ToolCard) ViewWithActivity(width int, activityGlyph string, elapsed time
 	name := truncate(presentation.label, budget.NameCells)
 	header := glyph
 	if name != "" {
-		header += " " + titleStyle.Render(name)
+		header += " " + labelStyle.Render(name)
 	}
+	// Object follows the verb with a single space (Grok-like). No middle-dot
+	// summary separator between verb and path/target.
 	if budget.SummaryCells > 0 {
-		header += c.Styles.Dimmed.Render(summarySeparator + truncate(cardSummary, budget.SummaryCells))
+		header += c.Styles.Dimmed.Render(" " + truncate(cardSummary, budget.SummaryCells))
 	}
 	if meta != "" {
 		header += " " + meta
@@ -508,18 +531,48 @@ func (c ToolCard) ViewWithActivity(width int, activityGlyph string, elapsed time
 				lines = append(lines, c.renderSemanticResultLines(result, inner)...)
 			}
 		}
+	} else if !c.Expanded && c.State != ToolCardRunning {
+		// Zero-style density: keep multi-line bodies collapsed and advertise
+		// the hidden size instead of dumping output into the transcript.
+		if footer := collapsedToolBodyFooter(safeResult); footer != "" {
+			lines = append(lines, c.Styles.Dimmed.Render(truncate(footer, inner)))
+		}
 	}
 
-	// Prefix every line with a state-colored gutter bar.
+	// Prefix every line with the content-grid accent + pad: status-colored
+	// vertical bar (1 cell) and two pad spaces. Semantic text begins at OriginX.
 	bar := c.getBorderStyle().Render(glyphs.Vertical)
+	prefix := bar + strings.Repeat(" ", contentLeftPadColumns)
 	var b strings.Builder
 	for i, ln := range lines {
 		if i > 0 {
 			b.WriteByte('\n')
 		}
-		b.WriteString(bar + " " + ln)
+		b.WriteString(prefix + ln)
 	}
 	return b.String()
+}
+
+// collapsedToolBodyFooter returns a "N lines hidden" cue when a collapsed
+// receipt has multi-line body content. Single-line or empty bodies stay
+// header-only so success receipts remain one log line. The wording matches the
+// output-viewer grammar ("230 lines hidden · open output") and names no input
+// method: expansion works via ctrl+r, ctrl+b, or a header click.
+func collapsedToolBodyFooter(result string) string {
+	result = strings.TrimRight(result, "\n")
+	if strings.TrimSpace(result) == "" {
+		return ""
+	}
+	lines := 0
+	for _, line := range strings.Split(result, "\n") {
+		if strings.TrimSpace(line) != "" {
+			lines++
+		}
+	}
+	if lines < 2 {
+		return ""
+	}
+	return fmt.Sprintf("%d lines hidden", lines)
 }
 
 // toolCardSummaryWithoutRepeatedAction keeps a routed tool's specialist or

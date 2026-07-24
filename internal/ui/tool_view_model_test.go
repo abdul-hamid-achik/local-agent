@@ -370,12 +370,13 @@ func TestProjectToolHeaderCellBudgetProperties(t *testing.T) {
 		if budget.NameCells < 0 || budget.SummaryCells < 0 {
 			t.Fatalf("width %d produced a negative budget: %#v", width, budget)
 		}
+		const summarySepCells = 1 // single space between verb and object
 		used := effectiveGlyph
 		if budget.NameCells > 0 {
 			used += 1 + budget.NameCells
 		}
 		if budget.SummaryCells > 0 {
-			used += 3 + budget.SummaryCells
+			used += summarySepCells + budget.SummaryCells
 		}
 		if budget.ShowDuration {
 			used += 1 + durationCells
@@ -395,8 +396,8 @@ func TestProjectToolHeaderCellBudgetProperties(t *testing.T) {
 		baseSummary := min(summaryCells, max(0, semanticCells/2))
 		maxSummary := baseSummary
 		if baseSummary > 0 {
-			baseName := min(nameCells, max(0, semanticCells-baseSummary-3))
-			maxSummary += max(0, semanticCells-baseSummary-3-baseName)
+			baseName := min(nameCells, max(0, semanticCells-baseSummary-summarySepCells))
+			maxSummary += max(0, semanticCells-baseSummary-summarySepCells-baseName)
 		}
 		if budget.SummaryCells > maxSummary {
 			t.Fatalf("width %d summary displaced semantic identity: %#v", width, budget)

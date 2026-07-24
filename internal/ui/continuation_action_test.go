@@ -173,8 +173,9 @@ func TestContinuationActionClearsWhenTurnFails(t *testing.T) {
 
 func TestContinuationActionFooterOwnsExactRowsAndPreservesPausedTranscript(t *testing.T) {
 	m := newTestModel(t)
-	initialHeight := m.viewport.Height()
 	setScrollableTranscript(m)
+	m.recalcViewportHeight()
+	initialHeight := m.viewport.Height()
 	m.setTranscriptYOffset(5)
 	m.pauseFollow()
 	m.beginContinuationTurn("turn-layout")

@@ -394,25 +394,68 @@ func (m *Model) needsModelBootstrap() bool {
 	return m.ollamaInventoryAttempted
 }
 
-// renderWelcome renders a compact empty-state orientation surface. Persistent
-// runtime detail belongs in Settings; this view teaches only the active mode,
-// model, safety boundary, and the shortest paths into work.
+// renderWelcome paints only recovery-critical empty-state copy.
+//
+// On roomy frames the session top bar, composer placeholder, and shortcuts bar
+// already own product identity, invite, and model/mode — a mid-canvas
+// "LOCAL AGENT / Local-first / Ask…" block is pure noise. Keep a compact
+// orientation surface only when session chrome is off (minimum terminals),
+// plus bootstrap/offline/Cloud/PLAN boundaries that must stay visible.
 func (m *Model) renderWelcome(b *strings.Builder) {
-	var wb strings.Builder
+	grid := m.contentGrid()
 	contentWidth := m.chatPaneWidth()
 	micro := contentWidth < 36
 	compact := contentWidth < 58
-	lineWidth := max(1, contentWidth-2)
-	if micro {
-		// The 30-column contract still has room for the complete safety label;
-		// use the full row instead of truncating one semantic word for padding.
-		lineWidth = contentWidth
-	}
+	headerActive := m.sessionHeaderActive()
+	// Left-align at OriginX. Budget uses the remaining pane (including right
+	// chrome) so orientation copy keeps the historical fit contract; Line()'s
+	// ContentWidth reserve is for structural transcript surfaces.
 	writeLine := func(style lipgloss.Style, text string) {
-		wb.WriteString(style.Render(truncateDisplay(text, lineWidth)))
-		wb.WriteByte('\n')
+		if micro {
+			// 30-column contract: complete safety labels may need the full row.
+			b.WriteString(style.Render(truncateDisplayWithGlyphProfile(
+				text, max(1, contentWidth), m.glyphProfile,
+			)))
+		} else {
+			budget := max(1, contentWidth-contentLeftColumns)
+			b.WriteString(grid.Prefix(" ") + style.Render(
+				truncateDisplayWithGlyphProfile(text, budget, m.glyphProfile),
+			))
+		}
+		b.WriteByte('\n')
 	}
 
+	// Roomy chrome owns the empty canvas. Only paint operational exceptions.
+	if headerActive {
+		var infoParts []string
+		modelLabel := m.currentModelSurfaceLabel(compact)
+		if m.currentModelIsNonLocal() && modelLabel != "" {
+			infoParts = append(infoParts, modelLabel)
+		}
+		if m.presentedMode() == ModePlan {
+			if compact {
+				infoParts = append(infoParts, "PLAN · read-only")
+			} else {
+				infoParts = append(infoParts, "PLAN · mutation tools removed")
+			}
+		}
+		if m.ollamaOffline {
+			if modelLabel != "" && !m.currentModelIsNonLocal() {
+				infoParts = append(infoParts, modelLabel)
+			}
+			infoParts = append(infoParts, "offline")
+		}
+		if len(infoParts) > 0 {
+			writeLine(m.styles.StatusText, strings.Join(infoParts, " · "))
+		}
+		if m.needsModelBootstrap() {
+			writeLine(m.styles.StatusWarning, "No local model installed")
+			writeLine(m.styles.WelcomeHint, "press p to pull qwen3.5:2b (~2.7 GB)")
+		}
+		return
+	}
+
+	// Minimum frames (no session header): keep a short orientation surface.
 	writeLine(m.styles.OverlayTitle, "LOCAL AGENT")
 	trust := "Local-first · Ollama · " + m.approvalPostureWelcomeLabel(false)
 	if micro {
@@ -426,15 +469,28 @@ func (m *Model) renderWelcome(b *strings.Builder) {
 	presentedMode := m.presentedMode()
 	modelLabel := m.currentModelSurfaceLabel(compact)
 	if m.currentModelIsNonLocal() && modelLabel != "" {
-		// The execution boundary precedes ordinary mode/model metadata so a
-		// narrow welcome surface cannot imply that Cloud prompts remain local.
 		infoParts = append(infoParts, modelLabel)
 	}
-	if presentedMode != ModeNormal {
+	if presentedMode == ModePlan {
+		if compact || micro {
+			infoParts = append(infoParts, "PLAN · read-only")
+		} else {
+			infoParts = append(infoParts, "PLAN · mutation tools removed")
+		}
+	} else if presentedMode != ModeNormal {
 		infoParts = append(infoParts, m.modeConfigs[presentedMode].Label)
 	}
 	if !m.currentModelIsNonLocal() && modelLabel != "" {
-		infoParts = append(infoParts, modelLabel)
+		already := false
+		for _, part := range infoParts {
+			if part == modelLabel {
+				already = true
+				break
+			}
+		}
+		if !already {
+			infoParts = append(infoParts, modelLabel)
+		}
 	}
 	if m.ollamaOffline {
 		infoParts = append(infoParts, "offline")
@@ -448,20 +504,25 @@ func (m *Model) renderWelcome(b *strings.Builder) {
 		writeLine(m.styles.WelcomeHint, "press p to pull qwen3.5:2b (~2.7 GB)")
 	}
 
+	invite := "Ask, @mention files, or type /help"
 	if micro {
-		writeLine(m.styles.WelcomeHint, "enter · ctrl+p settings")
-		writeLine(m.styles.StatusText, m.keys.Help.Help().Key+" help · / @ #")
+		invite = "Ask · /help"
 	} else if compact {
-		writeLine(m.styles.WelcomeHint, "enter send · ctrl+p settings")
-		writeLine(m.styles.StatusText, "/ commands · "+m.keys.Help.Help().Key+" help · @/#")
-	} else {
-		writeLine(m.styles.WelcomeHint,
-			"enter send · / commands · ctrl+p settings · "+m.keys.Help.Help().Key+" help",
-		)
-		writeLine(m.styles.StatusText, "shift+tab mode · ctrl+o models · @ files · # skills")
+		invite = "Ask or type /help"
 	}
+	writeLine(m.styles.WelcomeHint, invite)
+}
 
-	// Center the welcome content horizontally in the available viewport width.
-	centered := lipgloss.PlaceHorizontal(contentWidth, lipgloss.Center, wb.String())
-	b.WriteString(centered)
+// emptyWelcomeTopPad keeps the empty-state welcome just under the session
+// header instead of floating it as a vertically centered island. One blank
+// row is enough breathing room; tighter viewports get none.
+func emptyWelcomeTopPad(viewportHeight, welcomeHeight int) int {
+	if viewportHeight <= 0 || welcomeHeight <= 0 {
+		return 0
+	}
+	available := max(0, viewportHeight-welcomeHeight)
+	if available <= 0 {
+		return 0
+	}
+	return 1
 }

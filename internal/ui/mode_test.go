@@ -149,7 +149,7 @@ func TestCycleMode(t *testing.T) {
 		}
 	})
 
-	t.Run("no_cycle_when_not_idle", func(t *testing.T) {
+	t.Run("cycles_ambient_mode_while_streaming", func(t *testing.T) {
 		m := newTestModel(t)
 		m.state = StateStreaming
 		before := m.mode
@@ -157,8 +157,10 @@ func TestCycleMode(t *testing.T) {
 		updated, _ := m.Update(shiftTabKey())
 		m = updated.(*Model)
 
-		if m.mode != before {
-			t.Error("should not cycle mode when not idle")
+		// Ambient mode must cycle during a live turn so Shift+Tab never feels dead;
+		// tool authority for an attached goal remains AUTO until the next send.
+		if m.mode == before {
+			t.Error("expected ambient mode to cycle while streaming")
 		}
 	})
 }

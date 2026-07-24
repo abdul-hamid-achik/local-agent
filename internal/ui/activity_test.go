@@ -23,7 +23,7 @@ func TestMinimumTerminalWorkingStatesFit(t *testing.T) {
 		set  func(*Model)
 		want string
 	}{
-		{name: "idle", set: func(*Model) {}, want: "ctrl+p settings"},
+		{name: "idle", set: func(*Model) {}, want: "Ask · /help"},
 		{name: "failed runtime", set: func(m *Model) {
 			m.failedServers = []FailedServer{{Name: "tools", Reason: "offline"}}
 		}, want: "MCP unavailable"},
@@ -250,7 +250,9 @@ func BenchmarkCurrentWorkingActivityWithLargeToolHistory(b *testing.B) {
 	}
 }
 
-func TestActiveToolFooterLeavesBreathingRowBeforeComposer(t *testing.T) {
+func TestActiveToolFooterSitsAdjacentToFramedComposer(t *testing.T) {
+	// Grok-style density: activity rail immediately above the framed draft;
+	// the frame top edge is the breathing boundary (no extra blank row).
 	m := newTestModel(t)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
 	m = updated.(*Model)
@@ -267,8 +269,9 @@ func TestActiveToolFooterLeavesBreathingRowBeforeComposer(t *testing.T) {
 		t.Fatalf("activity/composer order is invalid: status=%d composer=%d\n%s", statusAt, composerAt, view)
 	}
 	between := view[statusAt:composerAt]
-	if !strings.Contains(between, "\n\n") {
-		t.Fatalf("activity rail has no breathing row before composer:\n%s", between)
+	// Exactly one newline between activity text and the next chrome row.
+	if strings.Count(between, "\n") < 1 {
+		t.Fatalf("activity rail not stacked above composer:\n%s", between)
 	}
 	assertRenderedHeightFits(t, m.View().Content, m.height)
 }
@@ -284,7 +287,7 @@ func TestAutoActivityFooterSeparatesAuthorityAndKeyboardActions(t *testing.T) {
 
 	line := m.renderWorkingLine()
 	plain := ansi.Strip(line)
-	for _, want := range []string{"Running", "AUTO", "esc cancel", "enter queue"} {
+	for _, want := range []string{"Running", "AUTO", "esc stop", "enter queue"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("AUTO activity footer omitted %q: %q", want, plain)
 		}
@@ -360,7 +363,7 @@ func TestWorkingControlKeyRecognizesOnlyRealFooterKeys(t *testing.T) {
 		segment string
 		want    string
 	}{
-		{segment: "esc cancel", want: "esc"},
+		{segment: "esc stop", want: "esc"},
 		{segment: "enter queue", want: "enter"},
 		{segment: "end latest", want: "end"},
 		{segment: "Route ambiguous", want: ""},
@@ -873,7 +876,7 @@ func TestRunningFooterOwnsControlsNotAssistantState(t *testing.T) {
 	m.thinkBuf.WriteString("working through the request")
 
 	line := ansi.Strip(m.renderWorkingLine())
-	for _, want := range []string{"Running", "esc cancel", "enter queue"} {
+	for _, want := range []string{"Running", "esc stop", "enter queue"} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("operational footer omitted %q: %q", want, line)
 		}

@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/agent"
 )
@@ -291,12 +292,16 @@ func (m *Model) renderWorkingLine() string {
 		activity.label = "Working"
 	}
 
+	// Motion sits after content-grid Prefix (OriginX pad). Do not use StatusDot's
+	// PaddingLeft here — that pad was for the old density-dependent left spacer
+	// and would double-indent, stealing cells needed for esc/queue at 30 cols.
+	motionStyle := m.styles.StatusDot.UnsetPaddingLeft()
 	// A single-cell ellipsis communicates unfinished work even when animation is
 	// disabled. Unlike a filled dot it cannot be mistaken for a settled status
 	// marker, and it keeps reduced-motion and static operations width-stable.
-	motion := m.styles.StatusDot.Render(glyphEllipsis(m.glyphProfile))
+	motion := motionStyle.Render(glyphEllipsis(m.glyphProfile))
 	if m.glyphProfile == GlyphASCII {
-		motion = m.styles.StatusDot.Render(glyphSet(GlyphASCII).Running)
+		motion = motionStyle.Render(glyphSet(GlyphASCII).Running)
 	}
 	if !m.reducedMotion && !activity.static {
 		if activity.waiting {
@@ -309,7 +314,7 @@ func (m *Model) renderWorkingLine() string {
 				}
 				motion = m.scramble.ViewN(cells)
 				if motion == "" {
-					motion = m.styles.StatusDot.Render(glyphEllipsis(m.glyphProfile))
+					motion = motionStyle.Render(glyphEllipsis(m.glyphProfile))
 				}
 			}
 		} else {
@@ -320,7 +325,8 @@ func (m *Model) renderWorkingLine() string {
 	longCancel := ""
 	shortCancel := ""
 	if activity.cancellable {
-		longCancel = " · esc cancel"
+		// Grok-style: stop is a first-class control next to the live timer.
+		longCancel = " · esc stop"
 		shortCancel = " · esc"
 	}
 
@@ -330,6 +336,11 @@ func (m *Model) renderWorkingLine() string {
 	// longer operations still keep the compact live timer.
 	if activity.elapsed >= time.Second {
 		elapsed = " · " + formatWorkingElapsed(activity.elapsed)
+	}
+	// Zero-style token delta while a turn is live (output tokens this turn).
+	tokens := ""
+	if m.evalCount > 0 && (m.state == StateWaiting || m.state == StateStreaming) {
+		tokens = " · ↑ " + formatTokens(m.evalCount)
 	}
 	detail := ""
 	if activity.detail != "" {
@@ -364,12 +375,14 @@ func (m *Model) renderWorkingLine() string {
 	candidates := make([]string, 0, 24)
 	if authority != "" {
 		candidates = append(candidates,
-			activity.label+authority+detail+elapsed+longCancel+queueAction,
+			activity.label+authority+detail+elapsed+tokens+longCancel+queueAction,
+			activity.label+authority+elapsed+tokens+longCancel+queueAction,
 			activity.label+authority+elapsed+longCancel+queueAction,
 			activity.label+authority+longCancel+queueAction,
 		)
 		if queueAction != "" {
 			candidates = append(candidates,
+				activity.label+authority+elapsed+tokens+shortCancel+" · queue",
 				activity.label+authority+elapsed+shortCancel+" · queue",
 				activity.label+authority+shortCancel+" · queue",
 			)
@@ -391,6 +404,7 @@ func (m *Model) renderWorkingLine() string {
 		} else {
 			if activity.compactLabel != "" {
 				candidates = append(candidates,
+					activity.compactLabel+authority+elapsed+tokens+shortCancel,
 					activity.compactLabel+authority+elapsed+shortCancel,
 					activity.compactLabel+authority+shortCancel,
 				)
@@ -399,7 +413,8 @@ func (m *Model) renderWorkingLine() string {
 		}
 	}
 	candidates = append(candidates,
-		activity.label+detail+elapsed+longCancel+queueAction,
+		activity.label+detail+elapsed+tokens+longCancel+queueAction,
+		activity.label+elapsed+tokens+longCancel+queueAction,
 		activity.label+elapsed+longCancel+queueAction,
 		activity.label+longCancel+queueAction,
 	)
@@ -444,15 +459,42 @@ func (m *Model) renderWorkingLine() string {
 		}
 	}
 
-	leftPad := "  "
-	if m.chatPaneWidth() < 40 {
-		leftPad = " "
+	// Align the activity rail with transcript OriginX via content-grid Prefix.
+	// Ordinary motion (spinner / ellipsis) occupies the accent cell so text
+	// begins at OriginX=3 with the same budget as transcript content. Bubble Tea
+	// spinners often emit a leading pad space (display width 2); trim that pad
+	// so the glyph fits the accent cell without Prefix collapsing it to "…",
+	// and without stealing the 30-column esc/queue budget. Multi-cell scramble
+	// keeps motion after the pad and budgets the remainder.
+	grid := m.contentGrid()
+	motionWidth := lipgloss.Width(motion)
+	accentMotion := motion
+	if trimmed := strings.TrimSpace(ansi.Strip(motion)); motionWidth > contentAccentColumns &&
+		trimmed != "" && lipgloss.Width(trimmed) <= contentAccentColumns {
+		// Preserve styling when the frame is only a pad space plus one glyph.
+		// Most Bubbles frames are plain; fall back to the stripped glyph.
+		if plain := strings.TrimSpace(motion); lipgloss.Width(plain) <= contentAccentColumns {
+			accentMotion = plain
+		} else {
+			accentMotion = trimmed
+		}
+		motionWidth = lipgloss.Width(accentMotion)
 	}
-	textWidth := max(1, m.chatPaneWidth()-lipgloss.Width(leftPad)-lipgloss.Width(motion)-1)
+	var lead string
+	var textWidth int
+	if motionWidth <= contentAccentColumns {
+		lead = grid.Prefix(accentMotion)
+		textWidth = max(1, m.chatPaneWidth()-lipgloss.Width(lead))
+	} else {
+		lead = grid.Prefix(" ")
+		textWidth = max(1, m.chatPaneWidth()-lipgloss.Width(lead)-motionWidth-1)
+	}
 	session := ""
 	selectionWidth := textWidth
+	// Sticky user strip already owns the prompt; activity keeps only the
+	// compact public handle (no title echo like "hey chat!").
 	titleLimit := 0
-	if m.chatPaneWidth() >= 72 {
+	if m.chatPaneWidth() >= 72 && !m.stickyUserActive() {
 		titleLimit = 24
 	}
 	sessionPublicID := m.sessionPublicID
@@ -464,8 +506,13 @@ func (m *Model) renderWorkingLine() string {
 		// not imply that the source session is being reloaded.
 		sessionPublicID = pending.TargetPublicID
 		sessionTitle = pending.TargetTitle
+		titleLimit = 24
 	}
-	session = sessionDisplayLabel(sessionPublicID, sessionTitle, titleLimit)
+	// While the sticky strip is live, skip session chrome entirely — the prompt
+	// is already painted above and the handle is discoverable in Runtime.
+	if !m.stickyUserActive() || m.sessionLoading {
+		session = sessionDisplayLabel(sessionPublicID, sessionTitle, titleLimit)
+	}
 	if session != "" {
 		selectionWidth = max(1, textWidth-lipgloss.Width(" · ")-lipgloss.Width(session))
 	}
@@ -480,7 +527,10 @@ func (m *Model) renderWorkingLine() string {
 	if session != "" {
 		chosen += " · " + session
 	}
-	return leftPad + motion + " " + m.renderWorkingCandidate(chosen)
+	if motionWidth <= contentAccentColumns {
+		return lead + m.renderWorkingCandidate(chosen)
+	}
+	return lead + motion + " " + m.renderWorkingCandidate(chosen)
 }
 
 // renderWorkingCandidate separates live state, authority, metadata, and keys
@@ -525,36 +575,12 @@ func workingControlKey(segment string) string {
 	}
 }
 
-func (m *Model) renderContextStatus(compact bool) string {
-	if m.promptTokens <= 0 || m.numCtx <= 0 {
+func (m *Model) renderContextStatus() string {
+	// Zero-style ambient instrumentation: show the context meter whenever the
+	// host knows a window, even at 0 used tokens (first frame / empty session).
+	// Percent display may be spring-smoothed; warning colors use true occupancy.
+	if m.numCtx <= 0 {
 		return ""
 	}
-	percent := m.promptTokens * 100 / m.numCtx
-	if percent < 0 {
-		percent = 0
-	}
-	if percent > 100 {
-		percent = 100
-	}
-
-	style := m.styles.ContextPctLow
-	if percent >= 85 {
-		style = m.styles.ContextPctHigh
-	} else if percent >= 65 {
-		style = m.styles.ContextPctMid
-	}
-	if compact {
-		return style.Render(fmt.Sprintf("ctx %d%%", percent))
-	}
-
-	filled := (percent + 19) / 20
-	if filled > 5 {
-		filled = 5
-	}
-	filledGlyph, emptyGlyph := "▮", "▯"
-	if m.glyphProfile == GlyphASCII {
-		filledGlyph, emptyGlyph = "#", "-"
-	}
-	meter := strings.Repeat(filledGlyph, filled) + strings.Repeat(emptyGlyph, 5-filled)
-	return style.Render(fmt.Sprintf("ctx %s %d%%", meter, percent))
+	return m.formatContextStatusWithPercent(m.displayContextPercent())
 }

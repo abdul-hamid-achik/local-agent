@@ -117,8 +117,9 @@ func TestBobWorkspaceContextCardIsOneRowResponsiveCachedAndNoColor(t *testing.T)
 
 func TestBobWorkspaceContextFooterRowsThemeAndPausedFollowAnchor(t *testing.T) {
 	m := newTestModel(t)
-	initialHeight := m.viewport.Height()
 	setScrollableTranscript(m)
+	m.recalcViewportHeight()
+	initialHeight := m.viewport.Height()
 	m.setTranscriptYOffset(5)
 	m.pauseFollow()
 

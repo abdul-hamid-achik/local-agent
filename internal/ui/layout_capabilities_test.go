@@ -62,8 +62,9 @@ func TestLayoutCapabilitiesProseAndWorkWidthRemainSeparate(t *testing.T) {
 		{workWidth: 1, wantProse: 1},
 		{workWidth: ProseTargetCandidate - 1, wantProse: ProseTargetCandidate - 1},
 		{workWidth: ProseTargetCandidate, wantProse: ProseTargetCandidate},
-		{workWidth: ProseTargetCandidate + 1, wantProse: ProseTargetCandidate},
-		{workWidth: 193, wantProse: ProseTargetCandidate},
+		// Wide work widths grow prose toward WorkWidth (soft-capped).
+		{workWidth: ProseTargetCandidate + 1, wantProse: proseWidthForWork(ProseTargetCandidate + 1)},
+		{workWidth: 193, wantProse: proseWidthForWork(193)},
 	}
 
 	for _, test := range tests {
@@ -143,7 +144,7 @@ func TestLayoutCapabilitiesAreMonotonicAndBoundedExhaustive(t *testing.T) {
 				t.Fatalf("%dx%d work size = %dx%d", width, height, capabilities.WorkWidth, capabilities.WorkHeight)
 			}
 			if capabilities.ProseWidth < 0 || capabilities.ProseWidth > capabilities.WorkWidth ||
-				capabilities.ProseWidth > ProseTargetCandidate {
+				capabilities.ProseWidth > ProseTargetWide {
 				t.Fatalf("%dx%d invalid prose/work width: %+v", width, height, capabilities)
 			}
 			if width > 0 {

@@ -125,11 +125,13 @@ func TestHugeSingleLineCheckpointPreservesUnicodeParity(t *testing.T) {
 				t.Fatalf("Unicode append rebuilt stable rows: %#v", probe)
 			}
 			for _, row := range m.transcriptPaint.liveCache.rows {
-				if width := lipgloss.Width(row); width > m.transcriptPaint.liveCache.wrapWidth+2 {
+				// Content-grid left chrome (accent+pad) sits outside wrapWidth.
+				maxRow := m.transcriptPaint.liveCache.wrapWidth + contentLeftColumns
+				if width := lipgloss.Width(row); width > maxRow {
 					t.Fatalf(
 						"row width = %d, want <= indented wrap width %d: %q",
 						width,
-						m.transcriptPaint.liveCache.wrapWidth+2,
+						maxRow,
 						row,
 					)
 				}
@@ -311,7 +313,7 @@ func BenchmarkTranscriptHugeSingleLineCheckpointAppend(b *testing.B) {
 	for _, size := range []int{1 << 10, 1 << 20} {
 		b.Run(fmt.Sprintf("bytes_%d", size), func(b *testing.B) {
 			m := newTestModel(b)
-			wrapWidth := max(10, min(m.chatContentWidth(), m.chatProseWidth())-2)
+			wrapWidth := max(10, min(m.chatContentWidth(), m.chatProseWidth()))
 			lineSize := size - size%wrapWidth
 			m.entries = []ChatEntry{{Kind: "user", Content: "benchmark checkpoint"}}
 			m.state = StateStreaming

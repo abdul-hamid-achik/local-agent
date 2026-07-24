@@ -85,6 +85,9 @@ func (m *Model) sendToAgentTurnPresentedWithAttachments(
 	}
 	m.cancelSessionLoad()
 	m.cancelSessionList()
+	// Background session-title generation shares ordinary inference admission;
+	// yield it before a foreground turn acquires the lease.
+	m.cancelSessionTitleGen()
 	m.turnMessagesBefore = append([]llm.Message(nil), messagesBeforeTurn...)
 	m.turnPromptFloor = m.agent.ContextPromptFloor()
 	m.turnPrompt = text

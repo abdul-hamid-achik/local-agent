@@ -229,6 +229,9 @@ func (m *Model) setRouterMode(mode config.ModeContext) {
 }
 
 func (m *Model) prepareModelSwitch() {
+	// Join background title inference before model/runtime changes so it
+	// cannot hold the ordinary admission lease across the switch.
+	m.stopSessionTitleGen()
 	if m.agent != nil {
 		m.agent.PrepareModelSwitch()
 	}

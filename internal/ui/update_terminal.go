@@ -14,8 +14,9 @@ func (m *Model) handleThemeChange(msg tea.BackgroundColorMsg) {
 	inlineFormAnchor := m.captureInlineFormTranscriptAnchor()
 	m.isDark = msg.IsDark()
 	m.styles = NewStyles(m.isDark)
-	// Update spinner style for theme.
-	m.spin.Style = m.styles.StatusDot
+	// Update spinner style for theme. Unset StatusDot pad — content-grid Prefix
+	// owns the activity-rail lead (see renderWorkingLine).
+	m.spin.Style = m.styles.StatusDot.UnsetPaddingLeft()
 	m.syncComposerAuthority()
 	m.scramble.SetDark(msg.IsDark())
 	m.restylePickerOverlays()

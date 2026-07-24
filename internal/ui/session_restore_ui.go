@@ -101,6 +101,9 @@ func (m *Model) finishLoadedSession(message SessionLoadedMsg) (bool, tea.Cmd) {
 	m.sessionID = message.SessionID
 	m.sessionPublicID = message.SessionPublicID
 	m.activeSessionTitle = sanitizeTerminalSingleLine(message.Title)
+	// Restored titles are durable as authored; do not re-title in the background.
+	m.sessionTitleNeedsAI = false
+	m.sessionTitleAIDone = true
 	_ = m.initializeSessionStateRevision(message.StateRecord.Revision)
 	m.agent.SetCheckpointSessionID(message.SessionID)
 	m.agent.SetExecutionSessionID(message.SessionID, message.SessionPublicID)

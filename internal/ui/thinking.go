@@ -2,6 +2,7 @@ package ui
 
 import (
 	"crypto/sha256"
+	"fmt"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -80,17 +81,24 @@ func (m *Model) renderThinkingBox(content string, collapsed bool) string {
 		return ""
 	}
 
-	// The caller indents this block by two cells. Bound it to the same readable
-	// transcript width as assistant prose instead of expanding to the terminal
-	// edge on wide screens.
-	width := max(4, m.chatContentWidth()-2)
+	// The caller applies content-grid IndentBlock (accent+pad = 3 cells). Bound
+	// this box to ContentWidth so the painted line stays within LineWidth.
+	width := max(4, m.chatContentWidth())
 	inner := max(1, width-2) // left rail plus one separating space
 	glyphs := glyphSet(m.glyphProfile)
 	direction := glyphs.Collapsed
 	if !collapsed {
 		direction = glyphs.Expanded
 	}
-	header := thinkingHeader(direction, inner)
+	// Zero-style: collapsed reasoning leads with a size cue instead of dumping
+	// the whole chain of thought into the transcript.
+	detail := ""
+	if collapsed {
+		if n := nonEmptyLineCount(content); n > 1 {
+			detail = fmt.Sprintf("%d lines", n)
+		}
+	}
+	header := thinkingHeaderWithDetail(direction, detail, inner)
 
 	bar := m.styles.ThinkingBorder.Render(glyphs.Vertical)
 	var b strings.Builder
@@ -134,7 +142,7 @@ const (
 // reasoning disclosure. Thinking belongs to the assistant transcript; the
 // footer is reserved for operational controls such as cancel and queue.
 func (m *Model) renderLiveThinkingBox(content string) string {
-	width := max(4, m.chatContentWidth()-2)
+	width := max(4, m.chatContentWidth())
 	inner := max(1, width-2)
 	tail := liveThinkingTail(content, inner)
 
@@ -204,8 +212,28 @@ func lastRawLines(content string, count int) string {
 	return content
 }
 
+func nonEmptyLineCount(content string) int {
+	n := 0
+	for _, line := range strings.Split(content, "\n") {
+		if strings.TrimSpace(line) != "" {
+			n++
+		}
+	}
+	return n
+}
+
 func thinkingHeader(direction string, width int) string {
+	return thinkingHeaderWithDetail(direction, "", width)
+}
+
+// thinkingHeaderWithDetail builds a Zero-style reasoning label:
+// "▸ Thought" or "▸ Thought · 12 lines" when a compact detail is available.
+func thinkingHeaderWithDetail(direction, detail string, width int) string {
 	header := direction + " Thought"
+	detail = strings.TrimSpace(detail)
+	if detail != "" {
+		header += " · " + detail
+	}
 	if lipgloss.Width(header) <= width {
 		return header
 	}

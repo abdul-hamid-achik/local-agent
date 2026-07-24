@@ -397,6 +397,13 @@ func (m *Model) handleAgentDone(msg AgentDoneMsg, cmds []tea.Cmd) []tea.Cmd {
 	}
 	m.lastTurnDuration = m.turnElapsed()
 	m.state = StateIdle
+	// After the first successful turn, upgrade the provisional first-line title
+	// with a short background model naming job (workspace + user + assistant).
+	if msg.Err == nil {
+		if cmd := m.scheduleSessionTitleGen(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
 	if msg.Err != nil && !rolledBackPrompt {
 		m.restoreQueuedFollowUp()
 	}
@@ -415,11 +422,26 @@ func (m *Model) handleAgentDone(msg AgentDoneMsg, cmds []tea.Cmd) []tea.Cmd {
 		if toolReceiptsSuccessful {
 			// The success notice is a completion receipt, not a generic stopped
 			// state; it also flashes the terminal title while active.
+			// Turn completion as instrumentation (harness DX): duration + output
+			// tokens when known — operators scan cost without opening /status.
 			doneText := glyphSet(m.glyphProfile).Success + " Done"
+			sep := glyphSeparator(m.glyphProfile)
 			if m.lastTurnDuration > 0 {
-				doneText += " · " + formatWorkingElapsed(m.lastTurnDuration)
+				doneText += sep + formatWorkingElapsed(m.lastTurnDuration)
 			}
-			cmds = append(cmds, m.setFooterNotice(noticeSuccess, doneText, 2*time.Second))
+			if m.evalCount > 0 {
+				doneText += sep + "↑ " + formatTokens(m.evalCount)
+			}
+			// The ambient footer meter already shows used/limit persistently on
+			// this same row. Repeat it in the notice only when occupancy is an
+			// operational warning (ContextPctMid threshold), not as metadata.
+			if m.promptTokens > 0 && m.numCtx > 0 {
+				if pct := min(100, m.promptTokens*100/m.numCtx); pct >= 65 {
+					doneText += sep + formatTokens(m.promptTokens) + "/" + formatTokens(m.numCtx) +
+						sep + fmt.Sprintf("%d%%", pct)
+				}
+			}
+			cmds = append(cmds, m.setFooterNotice(noticeSuccess, doneText, 3*time.Second))
 		} else {
 			// AgentDone without an error proves only that the provider loop
 			// settled. A failed, cancelled, incomplete, or semantically

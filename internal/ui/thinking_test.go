@@ -148,11 +148,11 @@ func TestRenderThinkingBoxUsesCompactRail(t *testing.T) {
 	m.width = 80
 
 	collapsed := ansi.Strip(m.renderThinkingBox("inspect files\ncompare behavior\nreport result", true))
-	if !strings.Contains(collapsed, "│ ▸ Thought") {
+	if !strings.Contains(collapsed, "│ ▸ Thought") || !strings.Contains(collapsed, "3 lines") {
 		t.Fatalf("collapsed reasoning receipt is unclear:\n%s", collapsed)
 	}
 	if strings.Contains(collapsed, "inspect files") || strings.ContainsAny(collapsed, "╭╮╰╯") ||
-		strings.Contains(collapsed, "ctrl+t") || strings.Contains(collapsed, "lines") {
+		strings.Contains(collapsed, "ctrl+t") {
 		t.Fatalf("collapsed reasoning retained heavy chrome or hidden content:\n%s", collapsed)
 	}
 
@@ -162,8 +162,8 @@ func TestRenderThinkingBoxUsesCompactRail(t *testing.T) {
 			t.Fatalf("expanded reasoning missing %q:\n%s", want, expanded)
 		}
 	}
-	if strings.Contains(expanded, "ctrl+t") || strings.Contains(expanded, "lines") {
-		t.Fatalf("expanded reasoning repeated global controls or metrics:\n%s", expanded)
+	if strings.Contains(expanded, "ctrl+t") {
+		t.Fatalf("expanded reasoning repeated global controls:\n%s", expanded)
 	}
 }
 
@@ -179,7 +179,7 @@ func TestRenderThinkingBoxStaysInsideReadableTranscript(t *testing.T) {
 		m := newTestModel(t)
 		m.width = width
 		rendered := m.renderThinkingBox(strings.Repeat("long reasoning text ", 10), false)
-		maximum := max(4, m.chatContentWidth()-2)
+		maximum := max(4, m.chatContentWidth())
 		for lineNumber, line := range strings.Split(rendered, "\n") {
 			if got := lipgloss.Width(line); got > maximum {
 				t.Fatalf("width %d line %d = %d cells, want <= %d: %q", width, lineNumber+1, got, maximum, line)
@@ -258,7 +258,7 @@ func TestRenderLiveThinkingBoxShowsBoundedTailWindow(t *testing.T) {
 
 func TestRenderLiveThinkingBoxSlicesAfterWrapping(t *testing.T) {
 	m := newTestModel(t)
-	inner := max(1, max(4, m.chatContentWidth()-2)-2)
+	inner := max(1, max(4, m.chatContentWidth())-2)
 	long := strings.TrimSpace(strings.Repeat("steady reasoning stream ", 20))
 
 	rendered := ansi.Strip(m.renderLiveThinkingBox(long))
@@ -366,11 +366,19 @@ func TestAssistantHeaderAppearsOnceAcrossReasoningSegments(t *testing.T) {
 		{Kind: "assistant", Content: "Here is the result."},
 	}
 
+	// Sticky owns the latest user prompt; body must still show the assistant turn.
+	m.settleChromeSpringForTest()
 	plain := ansi.Strip(m.renderEntries())
 	if got := strings.Count(plain, "assistant"); got != 1 {
 		t.Fatalf("one assistant turn rendered %d role headers:\n%s", got, plain)
 	}
-	for _, want := range []string{"inspect and explain", "▸ Thought", "Here is the result."} {
+	if sticky := ansi.Strip(m.projectFrame().Header.Content); !strings.Contains(sticky, "inspect and explain") {
+		t.Fatalf("sticky user omitted prompt:\n%s", sticky)
+	}
+	if strings.Contains(plain, "inspect and explain") {
+		t.Fatalf("body re-printed sticky-owned user prompt:\n%s", plain)
+	}
+	for _, want := range []string{"▸ Thought", "Here is the result."} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("assistant turn omitted %q:\n%s", want, plain)
 		}

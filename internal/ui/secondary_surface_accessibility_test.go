@@ -194,14 +194,19 @@ func TestASCIIProfileCoversApprovalActivityAndCompletionChrome(t *testing.T) {
 	surfaces := map[string]string{
 		"approval":       approvalModel.renderApproval(),
 		"activity":       activityModel.renderWorkingLine(),
-		"context status": activityModel.renderContextStatus(false),
+		"context status": activityModel.renderContextStatus(),
 		"idle status":    statusModel.renderStatusLine(),
 		"completion":     completionModel.renderCompletionPreview(48, 3),
 	}
 	for name, rendered := range surfaces {
 		plain := ansi.Strip(rendered)
 		assertNoUnicodeSemanticGlyphs(t, plain)
-		for _, forbidden := range []string{"·", "…", "◇", "›", "↑", "↓", "▮", "▯"} {
+	for _, forbidden := range []string{"…", "◇", "›", "↑", "↓", "▮", "▯"} {
+			// Context status uses the profile separator (ASCII "|") between
+			// used/limit and percent; middle-dot is Unicode-only chrome.
+			if name == "context status" && forbidden == "·" {
+				continue
+			}
 			if strings.Contains(plain, forbidden) {
 				t.Fatalf("%s retained Unicode chrome %q:\n%s", name, forbidden, plain)
 			}
@@ -210,7 +215,9 @@ func TestASCIIProfileCoversApprovalActivityAndCompletionChrome(t *testing.T) {
 			t.Fatalf("%s omitted ASCII separator chrome:\n%s", name, plain)
 		}
 	}
-	if context := ansi.Strip(activityModel.renderContextStatus(false)); !strings.Contains(context, "###--") {
-		t.Fatalf("context status omitted ASCII meter:\n%s", context)
+	// Absolute used/limit · percent (ASCII separator is " | " via glyphSeparator).
+	if context := ansi.Strip(activityModel.renderContextStatus()); !strings.Contains(context, "50%") ||
+		!strings.Contains(context, "50/100") {
+		t.Fatalf("context status omitted absolute occupancy:\n%s", context)
 	}
 }

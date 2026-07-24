@@ -456,7 +456,7 @@ func (m *Model) buildEmptyTranscriptPaintDocument(contentW, proseW int) transcri
 	m.publishTranscriptLayout(nil)
 	if !hasNotice {
 		welcome = strings.TrimRight(welcome, "\n")
-		top := max(0, (m.viewport.Height()-lipgloss.Height(welcome))/2)
+		top := emptyWelcomeTopPad(m.viewport.Height(), lipgloss.Height(welcome))
 		if welcome == "" {
 			return transcriptPaintDocument{}
 		}
@@ -480,12 +480,12 @@ func (m *Model) buildEmptyTranscriptPaintDocument(contentW, proseW int) transcri
 	for _, entry := range m.entries {
 		switch entry.Kind {
 		case "system":
-			appendChunk(m.renderSystemNotice(entry.Content, proseW) + "\n\n")
+			appendChunk(m.renderSystemNotice(entry.Content, proseW) + "\n")
 		case "error":
 			if notice, ok := compactOllamaStartupNotice(entry.Content, contentW, m.ollamaOffline); ok {
 				appendChunk(m.styles.ErrorText.Render(notice) + "\n")
 			} else if isOllamaStartupRecovery(entry.Content, m.ollamaOffline) {
-				appendChunk(m.renderSystemNotice(entry.Content, proseW) + "\n\n")
+				appendChunk(m.renderSystemNotice(entry.Content, proseW) + "\n")
 			} else {
 				var rendered strings.Builder
 				m.renderEntryError(&rendered, entry.Content, contentW)
@@ -637,7 +637,9 @@ func (m *Model) renderIncrementalPlainLiveTail(
 		if usesWorkWidth {
 			messageWidth = contentW
 		}
-		wrapWidth := max(10, messageWidth-2)
+		// Content-grid Prefix owns the left three cells; wrap the flex content
+		// budget only so live paint stays byte-identical to renderStreamingAnswer.
+		wrapWidth := max(10, messageWidth)
 		tail := raw
 		if m.md != nil {
 			_, tail = m.md.RenderStreamingFormatted(raw)
@@ -1050,13 +1052,15 @@ func (m *Model) plainLiveTailRows(
 	rawLines := strings.Split(raw, "\n")
 	rows := make([]string, 0, len(rawLines)+1)
 	if showHeader {
-		rows = append(rows, m.styles.AsstLabel.Render("assistant"))
+		rows = append(rows, m.contentGrid().Line(" ", m.styles.AsstLabel.UnsetPaddingLeft().Render("assistant")))
 	}
 	lastRenderedStart := len(rows)
 	wrapRawStart := 0
 	wrapRenderedStart := lastRenderedStart
 	rawStart := 0
 	lastLineWrapped := false
+	// Content-grid Prefix(" ") = one space accent + two pad spaces.
+	indent := strings.Repeat(" ", contentLeftColumns)
 	for index, rawLine := range rawLines {
 		if index == len(rawLines)-1 {
 			lastRenderedStart = len(rows)
@@ -1074,7 +1078,7 @@ func (m *Model) plainLiveTailRows(
 		}
 		for _, row := range lineRows {
 			if row != "" {
-				row = "  " + row
+				row = indent + row
 			}
 			rows = append(rows, row)
 		}

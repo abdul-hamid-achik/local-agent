@@ -1,13 +1,20 @@
 package ui
 
 const (
-	// ProseTargetCandidate is the initial readable-line target from the TUI
-	// design study. It is deliberately separate from WorkWidth: prose may stop
-	// here, while code fences, tables, diffs, logs, and inspectors keep the
-	// complete component width.
+	// ProseTargetCandidate is the minimum comfortable measure for chat prose.
+	// On wide terminals chatProseWidth grows toward WorkWidth so the column
+	// uses available space (Grok-style) instead of leaving a dead right margin.
+	// Code fences, tables, diffs, and inspectors still use full WorkWidth.
 	ProseTargetCandidate = 96
+	// ProseTargetWide is the soft cap for conversational prose on very wide
+	// terminals. Beyond this, long lines become harder to scan.
+	ProseTargetWide = 140
 
-	transcriptContentChromeColumns = 6
+	// transcriptContentChromeColumns is the full horizontal chrome reserved by
+	// the content grid: left accent+pad plus right slack. Prefer the split
+	// tokens (contentLeftColumns / contentRightChromeColumns) when applying
+	// insets; keep this sum for WorkWidth = pane − chrome contracts.
+	transcriptContentChromeColumns = contentLeftColumns + contentRightChromeColumns
 	transcriptMinimumWorkColumns   = 14
 	layoutMinUnifiedCodeColumns    = 40
 	layoutMinSplitCodeColumns      = 52
@@ -66,6 +73,23 @@ type LayoutCapabilities struct {
 	CanShowAgentPreview bool
 }
 
+// proseWidthForWork grows conversational measure with the work rectangle so
+// wide terminals do not leave a large dead margin (Grok-style density).
+// Small panes stay at the classic 96-col comfort cap.
+func proseWidthForWork(workWidth int) int {
+	if workWidth <= 0 {
+		return 0
+	}
+	if workWidth <= ProseTargetCandidate {
+		return workWidth
+	}
+	// Use most of the work width on large panes, soft-capped for readability.
+	wide := min(ProseTargetWide, workWidth)
+	// Prefer ~90% of work width between 96 and 140.
+	grown := max(ProseTargetCandidate, (workWidth*9)/10)
+	return min(wide, grown)
+}
+
 // DeriveLayoutCapabilities measures the final work rectangle for a component.
 // The fixed numbers below are named design tokens. In particular, diff and
 // split decisions require the minimum readable code width to remain after
@@ -96,7 +120,7 @@ func DeriveLayoutCapabilities(workRect CellRect, options LayoutCapabilityOptions
 		WorkRect:    workRect,
 		WorkWidth:   workWidth,
 		WorkHeight:  workHeight,
-		ProseWidth:  min(ProseTargetCandidate, workWidth),
+		ProseWidth:  proseWidthForWork(workWidth),
 		WidthClass:  widthClass,
 		HeightClass: heightClass,
 		Density:     density,

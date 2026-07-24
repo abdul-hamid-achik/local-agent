@@ -18,9 +18,10 @@ func TestNarrowTerminalUsesFullWidthConversation(t *testing.T) {
 	m = updated.(*Model)
 
 	view := m.View()
-	for _, want := range []string{"LOCAL AGENT", "Ctrl+P", "/ commands"} {
-		if !strings.Contains(strings.ToLower(view.Content), strings.ToLower(want)) {
-			t.Fatalf("narrow full-width view missing %q:\n%s", want, view.Content)
+	// Session chrome owns empty state on usable frames; no mid-canvas wall.
+	for _, noise := range []string{"LOCAL AGENT", "Local-first"} {
+		if strings.Contains(view.Content, noise) {
+			t.Fatalf("40×20 view still paints redundant welcome %q:\n%s", noise, view.Content)
 		}
 	}
 	assertRenderedLinesFit(t, view.Content, 40)
@@ -30,9 +31,10 @@ func TestNarrowTerminalUsesFullWidthConversation(t *testing.T) {
 }
 
 func TestCompactWelcomeFitsActualChatPane(t *testing.T) {
+	// Minimum frames still get a short orientation surface.
 	m := newTestModel(t)
-	m.width = 60
-	m.height = 20
+	m.width = minTerminalWidth
+	m.height = minTerminalHeight
 
 	var b strings.Builder
 	m.renderWelcome(&b)
@@ -40,18 +42,19 @@ func TestCompactWelcomeFitsActualChatPane(t *testing.T) {
 	if strings.Contains(got, "╦") {
 		t.Fatal("compact welcome should omit the wide ASCII logo")
 	}
-	for _, want := range []string{"LOCAL AGENT", "Local-first", "f1 help", "/ commands"} {
+	for _, want := range []string{"LOCAL AGENT", "Local-first", "Ask · /help"} {
 		if !strings.Contains(got, want) {
-			t.Errorf("compact welcome missing %q:\n%s", want, got)
+			t.Errorf("minimum welcome missing %q:\n%s", want, got)
 		}
 	}
 	assertRenderedLinesFit(t, got, m.chatPaneWidth())
 }
 
 func TestWelcomeUsesHonestLocalFirstCopy(t *testing.T) {
+	// Local-first copy is only painted when session chrome is off.
 	m := newTestModel(t)
-	m.width = 100
-	m.height = 30
+	m.width = minTerminalWidth
+	m.height = minTerminalHeight
 
 	var b strings.Builder
 	m.renderWelcome(&b)
@@ -63,6 +66,17 @@ func TestWelcomeUsesHonestLocalFirstCopy(t *testing.T) {
 		if strings.Contains(got, overclaim) {
 			t.Fatalf("welcome contains privacy overclaim %q:\n%s", overclaim, got)
 		}
+	}
+}
+
+func TestRoomyEmptyStateOmitsWelcomeWall(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 100
+	m.height = 30
+	var b strings.Builder
+	m.renderWelcome(&b)
+	if got := strings.TrimSpace(ansi.Strip(b.String())); got != "" {
+		t.Fatalf("roomy empty welcome should be empty, got:\n%s", got)
 	}
 }
 

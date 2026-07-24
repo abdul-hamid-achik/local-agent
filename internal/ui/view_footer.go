@@ -91,9 +91,12 @@ func (m *Model) renderStatusLine() string {
 	conversationStarted := m.conversationStarted()
 	hasNotice := m.hasTranscriptNotice()
 	noticeNeedsRecovery := hasNotice && (paneW < 36 || m.height < 16)
-	if !conversationStarted && !noticeNeedsRecovery && len(m.failedServers) == 0 && !m.skipApprovalsEnabled() && m.footerNotice == nil && (m.promptTokens <= 0 || m.numCtx <= 0) {
-		// The empty-state orientation already carries mode, model, and Settings.
-		// Repeating them immediately above the composer only adds visual noise.
+
+	// Empty welcome + session top bar own orientation and ambient identity.
+	// Repeating model/context on the idle footer only adds a sparse second row.
+	conversationQuiet := !conversationStarted && !noticeNeedsRecovery &&
+		len(m.failedServers) == 0 && !m.skipApprovalsEnabled() && m.footerNotice == nil
+	if conversationQuiet {
 		return ""
 	}
 
@@ -112,14 +115,25 @@ func (m *Model) renderStatusLine() string {
 	if paneW >= 40 {
 		modeLabel = "[ " + modeLabel + " ]"
 	}
-	parts := make([]string, 0, 7)
-	if presentedMode != ModeNormal {
-		parts = append(parts, modeStyle.Render(modeLabel))
+	parts := make([]string, 0, 8)
+	headerActive := m.sessionHeaderActive()
+	// Mode + authority posture stay ambient once work starts (harness research:
+	// operators must never lose track of PLAN/AUTO or approval posture mid-session).
+	if conversationStarted && presentedMode != ModeNormal {
+		if presentedMode == ModePlan && paneW >= 48 {
+			parts = append(parts, modeStyle.Render("[ PLAN · read-only ]"))
+		} else {
+			parts = append(parts, modeStyle.Render(modeLabel))
+		}
 	}
 	if m.skipApprovalsEnabled() {
 		parts = append(parts, m.styles.StatusWarning.Render("approval prompts skipped"))
 	} else if m.acceptWorkspaceEditsEnabled() {
 		parts = append(parts, m.styles.StatusWarning.Render("accept workspace edits"))
+	} else if conversationStarted && paneW >= 58 {
+		// Positive confirmation that the host still gates mutation. Welcome
+		// already states posture on empty frames; keep this once work starts.
+		parts = append(parts, m.styles.StatusText.Render("approvals on"))
 	}
 	if !conversationStarted && noticeNeedsRecovery {
 		// Startup and recovery notices can push the empty-state hints out of a
@@ -146,43 +160,40 @@ func (m *Model) renderStatusLine() string {
 		parts = append(parts, m.styles.StatusText.Render(session))
 	}
 
-	contextStatus := m.renderContextStatus(paneW < 80)
+	// Model and absolute context meter: top bar owns ambient identity when
+	// present. Footer still surfaces a high-pressure context warning, Cloud
+	// boundary, and full ambient meter on minimum terminals without a header.
+	contextStatus := m.renderContextStatus()
 	contextHigh := m.numCtx > 0 && m.promptTokens*100/m.numCtx >= 75
 	if contextHigh && contextStatus != "" {
 		parts = append(parts, contextStatus)
 	}
-	if model := m.currentModelSurfaceLabel(paneW < 58); model != "" {
+	model := m.currentModelSurfaceLabel(paneW < 58)
+	if model != "" && (!headerActive || m.currentModelIsNonLocal()) {
 		parts = append(parts, m.styles.StatusText.Render(model))
 	}
-	if profile := sanitizeTerminalSingleLine(m.agentProfile); paneW >= 80 && profile != "" {
+	if profile := sanitizeTerminalSingleLine(m.agentProfile); paneW >= 80 && profile != "" && !headerActive {
 		parts = append(parts, m.styles.StatusText.Render("@"+profile))
 	}
-	if !contextHigh && contextStatus != "" {
+	if !contextHigh && contextStatus != "" && !headerActive {
 		parts = append(parts, contextStatus)
 	}
-	if paneW >= 58 && conversationStarted {
-		// Persistent, compact discoverability: the welcome hints vanish after
-		// the first turn, so the idle footer keeps the highest-value controls
-		// visible. Width-tier packing below drops these before safety posture.
-		parts = append(parts, m.styles.FocusIndicator.Render("ctrl+p")+" "+m.styles.StatusText.Render("settings"))
-		if paneW >= 88 {
-			parts = append(parts, m.styles.FocusIndicator.Render("/")+" "+m.styles.StatusText.Render("commands"))
-		}
-		if paneW >= 100 {
-			parts = append(parts,
-				m.styles.FocusIndicator.Render(m.keys.Help.Help().Key)+
-					" "+m.styles.StatusText.Render("help"),
-			)
-		}
+	// Shortcuts bar already carries enter/mode/help. Idle footer only adds
+	// operational signals (mode, approvals, MCP, notices, high context) —
+	// not a second discoverability strip that fights the fixed chrome.
+	if len(parts) == 0 {
+		return ""
 	}
 
 	separator := m.styles.StatusText.Render(glyphSeparator(m.glyphProfile))
-	line := " " + strings.Join(parts, separator)
+	// Match transcript content-grid OriginX so status text starts at column 3.
+	lead := m.contentGrid().Prefix(" ")
+	line := lead + strings.Join(parts, separator)
 	// Drop optional metadata from the right. Mode and operational failure are
 	// first, so they survive every supported width tier.
 	for lipgloss.Width(line) > paneW && len(parts) > 2 {
 		parts = parts[:len(parts)-1]
-		line = " " + strings.Join(parts, separator)
+		line = lead + strings.Join(parts, separator)
 	}
 	if lipgloss.Width(line) > paneW {
 		// Preserve every compact safety boundary instead of truncating a single
@@ -206,6 +217,11 @@ func (m *Model) renderStatusLine() string {
 		}
 		if session := sessionDisplayLabel(m.sessionPublicID, "", 0); session != "" {
 			compact = append(compact, m.styles.StatusText.Render(session))
+		}
+		if len(compact) == 0 {
+			// Ambient-only rows (model · context) still deserve a single
+			// truncated line on minimum widths instead of vanishing.
+			return truncateDisplayWithGlyphProfile(line, paneW, m.glyphProfile)
 		}
 		return renderPackedStatusRows(paneW, compact, separator)
 	}
@@ -257,7 +273,7 @@ func (m *Model) renderGoalFooterStatus(summary GoalSummary, paneW int) string {
 		}
 		required = append(required, metadataPart{view: m.styles.StatusWarning.Render(label)})
 	}
-	contextStatus := m.renderContextStatus(paneW < 80)
+	contextStatus := m.renderContextStatus()
 	contextHigh := m.numCtx > 0 && m.promptTokens*100/m.numCtx >= 75
 	if failures := len(m.failedServers); failures > 0 {
 		label := "MCP unavailable"
@@ -344,12 +360,13 @@ func (m *Model) renderGoalFooterStatus(summary GoalSummary, paneW int) string {
 // renderPackedStatusRows keeps short host-authored status tokens intact while
 // packing them into the fewest width-safe rows. It is reserved for compact
 // safety fallbacks where dropping a rightmost token would hide active authority
-// or a remote-execution boundary.
+// or a remote-execution boundary. Leading pad matches content-grid OriginX.
 func renderPackedStatusRows(width int, parts []string, separator string) string {
 	if width <= 0 || len(parts) == 0 {
 		return ""
 	}
-	available := max(1, width-1)
+	lead := strings.Repeat(" ", contentLeftColumns)
+	available := max(1, width-contentLeftColumns)
 	rows := make([]string, 0, 2)
 	current := ""
 	for _, part := range parts {
@@ -362,14 +379,14 @@ func renderPackedStatusRows(width int, parts []string, separator string) string 
 			candidate = current + separator + part
 		}
 		if current != "" && lipgloss.Width(candidate) > available {
-			rows = append(rows, " "+current)
+			rows = append(rows, lead+current)
 			current = part
 			continue
 		}
 		current = candidate
 	}
 	if current != "" {
-		rows = append(rows, " "+current)
+		rows = append(rows, lead+current)
 	}
 	return strings.Join(rows, "\n")
 }

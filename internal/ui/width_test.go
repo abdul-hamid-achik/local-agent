@@ -50,6 +50,11 @@ func TestWideTranscriptSeparatesReadableProseFromWorkWidth(t *testing.T) {
 
 	usedWidth := 0
 	for _, line := range strings.Split(rendered, "\n") {
+		// Recap digests restate prose at the content-grid origin and are not
+		// the readable-measure contract under test.
+		if strings.Contains(line, "recap:") {
+			continue
+		}
 		if strings.Contains(line, "available transcript width") {
 			usedWidth = max(usedWidth, lipgloss.Width(line))
 		}

@@ -225,7 +225,8 @@ func TestASCIIProfilePropagatesAcrossPrimarySemanticSurfaces(t *testing.T) {
 	rendered := ansi.Strip(strings.Join(surfaces, "\n"))
 	assertNoUnicodeSemanticGlyphs(t, rendered)
 	for _, want := range []string{
-		"| inspect the interface",
+		// User rail is the content-grid accent (1 cell) + pad (2 spaces).
+		"|  inspect the interface",
 		"x error",
 		"| v Thought",
 		"|> first line",

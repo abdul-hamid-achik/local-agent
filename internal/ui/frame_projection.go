@@ -41,8 +41,8 @@ const (
 )
 
 // FrameProjection is the single geometry snapshot consumed by View and by
-// viewport sizing. The current migration projects the transcript and footer;
-// overlays remain a z-layer over these stable base rectangles.
+// viewport sizing. Header (session chrome), transcript, and footer stack
+// vertically; overlays remain a z-layer over these stable base rectangles.
 type FrameProjection struct {
 	Screen              CellRect
 	SafeScreen          CellRect
@@ -51,6 +51,7 @@ type FrameProjection struct {
 	TranscriptFloorRows int
 	TranscriptLayout    LayoutCapabilities
 	VerticalFit         FrameVerticalFit
+	Header              FrameSurfaceProjection
 	Transcript          FrameSurfaceProjection
 	Footer              FrameSurfaceProjection
 	Cursor              *tea.Cursor
@@ -99,8 +100,18 @@ func (m *Model) projectFrame() FrameProjection {
 			},
 		}
 	}
-	footer := m.projectFooterWithin(max(0, safe.Height()-transcriptFloor))
-	footerRect, transcriptRect := TakeBottom(safe, footer.reservedHeight)
+	// Grok-style session chrome claims the top of the safe screen first so the
+	// transcript viewport and sticky user never compete for the same rows.
+	header := m.projectSessionHeader()
+	// Never let header chrome starve the transcript floor + critical footer.
+	maxHeader := max(0, safe.Height()-transcriptFloor-1)
+	if header.reservedHeight > maxHeader {
+		header = sessionHeaderProjection{}
+	}
+	headerRect, body := TakeTop(safe, header.reservedHeight)
+
+	footer := m.projectFooterWithin(max(0, body.Height()-transcriptFloor))
+	footerRect, transcriptRect := TakeBottom(body, footer.reservedHeight)
 	transcriptLayout := DeriveLayoutCapabilities(
 		transcriptWorkRect(transcriptRect),
 		LayoutCapabilityOptions{ForceCompact: m.forceCompact},
@@ -119,6 +130,11 @@ func (m *Model) projectFrame() FrameProjection {
 		TranscriptFloorRows: transcriptFloor,
 		TranscriptLayout:    transcriptLayout,
 		VerticalFit:         footer.verticalFit,
+		Header: FrameSurfaceProjection{
+			Rect:    headerRect,
+			Content: header.content,
+			Visible: header.reservedHeight > 0,
+		},
 		Transcript: FrameSurfaceProjection{
 			Rect:    transcriptRect,
 			Visible: !transcriptRect.Empty(),
@@ -227,6 +243,7 @@ func (m *Model) projectFooterWithOptions(options footerProjectionOptions) footer
 		popup, popupCursor := m.renderCompletionModalView()
 		content.WriteString(popup)
 		content.WriteString("\n")
+		// Completion keeps the live draft unframed so the popup stays the focus.
 		input := m.input
 		input.SetVirtualCursor(false)
 		content.WriteString(input.View())
@@ -249,9 +266,8 @@ func (m *Model) projectFooterWithOptions(options footerProjectionOptions) footer
 	case m.overlay != OverlayNone:
 		// Centered overlays keep the draft's allocation in the base frame so
 		// opening navigation cannot reflow the transcript behind the scrim.
-		input := m.input
-		input.SetVirtualCursor(false)
-		content.WriteString(strings.Repeat("\n", max(0, lipgloss.Height(input.View())-1)))
+		framed, _ := m.renderComposerChrome()
+		content.WriteString(strings.Repeat("\n", max(0, lipgloss.Height(framed)-1)))
 	case m.queuedFollowUp != nil && (!m.queuedFollowUpHeld() || !m.composerEditable()):
 		queue := m.renderQueuedFollowUp()
 		content.WriteString(queue)
@@ -265,16 +281,20 @@ func (m *Model) projectFooterWithOptions(options footerProjectionOptions) footer
 			content.WriteString(cue)
 			content.WriteString("\n")
 		}
-		input := m.input
-		if m.state != StateIdle {
-			input.Placeholder = "Write a follow-up · enter queue"
-		}
-		input.SetVirtualCursor(false)
 		composerY := strings.Count(content.String(), "\n")
-		content.WriteString(input.View())
-		p.cursor = offsetCursor(input.Cursor(), 0, composerY)
+		framed, localCursor := m.renderComposerChrome()
+		content.WriteString(framed)
+		p.cursor = offsetCursor(localCursor, 0, composerY)
 	default:
 		// The empty projection below still owns one safe bottom row.
+	}
+
+	// Fixed product shortcuts bar (Grok-style) under the composer/owner.
+	if bar := m.renderShortcutsBar(m.chatPaneWidth()); bar != "" {
+		if content.Len() > 0 && !strings.HasSuffix(content.String(), "\n") {
+			content.WriteString("\n")
+		}
+		content.WriteString(bar)
 	}
 
 	p.content = content.String()

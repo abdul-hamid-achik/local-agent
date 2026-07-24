@@ -621,7 +621,11 @@ func (m *Model) renderReadScopePrompt() string {
 	if len(m.readScopePrompt.WriteGrants) > 0 {
 		return m.renderPathScopePrompt()
 	}
-	width := max(1, m.chatPaneWidth()-4)
+	grid := m.contentGrid()
+	// ContentWidth matches label-collision budgets so what is painted is what
+	// confirmability decides on. Compact path rows stack when kind+path cannot
+	// share one WorkWidth cell row.
+	width := grid.ContentWidth()
 	prompt := m.readScopePrompt
 	workspace := compactWorkspacePath(prompt.Workspace, width)
 	compact := m.width <= 40 || m.height <= 16
@@ -633,17 +637,23 @@ func (m *Model) renderReadScopePrompt() string {
 	} else if grants[0].Kind == agent.ReadGrantExactFile {
 		subject = "exact external read-only file"
 	}
-	lines := []string{m.styles.ApprovalPrompt.Render(truncateDisplay("Allow "+subject+"?", width))}
+	lines := []string{m.styles.ApprovalPrompt.Render(truncateDisplay(readScopeAllowSubject(subject, width), width))}
 	if compact {
+		// Multi-grant compact rows stay single-line so four grants fit the
+		// 30×12 height budget. Single-grant rows may stack kind/path so the
+		// basename is never ellipsized away on the floor.
+		allowStack := len(grants) == 1
 		for index, grant := range grants {
 			kind := "directory"
 			if grant.Kind == agent.ReadGrantExactFile {
 				kind = "exact file"
 			}
-			lines = append(lines, m.styles.OverlayDim.Render(truncateDisplay(kind+" · "+pathLabels[index], width)))
+			lines = append(lines, readScopeCompactPathLines(m, kind, pathLabels[index], width, allowStack)...)
 		}
 		lines = append(lines,
-			m.styles.StatusText.Render(truncateDisplay("Temporary · not saved · read-only", width)),
+			// Lead with read-only so the identity keyword survives min-width
+			// content-grid budgets (WorkWidth can be ~23 at 30 columns).
+			m.styles.StatusText.Render(truncateDisplay("Read-only · temporary · not saved", width)),
 			m.styles.StatusText.Render(truncateDisplay("Writes stay in the workspace", width)),
 		)
 	} else {
@@ -680,7 +690,7 @@ func (m *Model) renderReadScopePrompt() string {
 		}
 		lines = append(lines, m.renderKeyHints(width, hints...))
 	}
-	return indentApprovalSurface(strings.Join(lines, "\n"), 2, m.chatPaneWidth())
+	return indentApprovalSurface(strings.Join(lines, "\n"), grid.PaneWidth, m.glyphProfile)
 }
 
 func (m *Model) renderPathScopePrompt() string {
@@ -688,7 +698,8 @@ func (m *Model) renderPathScopePrompt() string {
 	if prompt == nil {
 		return ""
 	}
-	width := max(1, m.chatPaneWidth()-4)
+	grid := m.contentGrid()
+	width := grid.ContentWidth()
 	compact := m.width <= 40 || m.height <= 16
 	grants, access := pathScopePromptDisplayGrants(prompt)
 	pathLabels, pathsDistinct := m.readScopePromptPathLabels(grants)
@@ -700,7 +711,8 @@ func (m *Model) renderPathScopePrompt() string {
 	if len(pathSet) > 1 {
 		subject = fmt.Sprintf("temporary access to %d external paths", len(pathSet))
 	}
-	lines := []string{m.styles.ApprovalPrompt.Render(truncateDisplay("Allow "+subject+"?", width))}
+	lines := []string{m.styles.ApprovalPrompt.Render(truncateDisplay(readScopeAllowSubject(subject, width), width))}
+	allowStack := len(grants) == 1
 	for index, grant := range grants {
 		kind := "directory"
 		kindLabel := "Directory"
@@ -710,7 +722,7 @@ func (m *Model) renderPathScopePrompt() string {
 		}
 		value := access[index] + " · " + pathLabels[index]
 		if compact {
-			lines = append(lines, m.styles.OverlayDim.Render(truncateDisplay(kind+" · "+value, width)))
+			lines = append(lines, readScopeCompactPathLines(m, kind, value, width, allowStack)...)
 		} else {
 			lines = append(lines, m.runtimeStatusRow(kindLabel, value, width))
 		}
@@ -742,7 +754,7 @@ func (m *Model) renderPathScopePrompt() string {
 	} else {
 		lines = append(lines, m.renderKeyHints(width, hints...))
 	}
-	return indentApprovalSurface(strings.Join(lines, "\n"), 2, m.chatPaneWidth())
+	return indentApprovalSurface(strings.Join(lines, "\n"), grid.PaneWidth, m.glyphProfile)
 }
 
 func pathScopePromptDisplayGrants(prompt *ReadScopePrompt) ([]agent.ReadGrant, []string) {
@@ -795,27 +807,101 @@ func (m *Model) readScopePromptPathsDistinct() bool {
 // budget used by the renderer. A compact collision disables confirmation until
 // a resize makes the identities distinguishable; it never changes the grants.
 func (m *Model) readScopePromptPathLabels(grants []agent.ReadGrant) ([]string, bool) {
-	width := max(1, m.chatPaneWidth()-4)
+	width := m.contentGrid().ContentWidth()
 	compact := m.width <= 40 || m.height <= 16
 	labels := make([]string, len(grants))
-	seen := make(map[string]string, len(grants))
+	collisionSeen := make(map[string]string, len(grants))
 	distinct := true
 	for index, grant := range grants {
-		pathWidth := runtimeStatusValueWidth(width)
+		// Display labels use the full content-grid flex column so basenames
+		// survive stacked kind/path rows on minimum terminals.
+		labels[index] = compactWorkspacePath(grant.Path, width)
+		// Distinctness still uses the one-line kind · path packing budget so
+		// parent-only differences collide when the combined row would.
+		collisionWidth := runtimeStatusValueWidth(width)
 		if compact {
 			kind := "directory"
 			if grant.Kind == agent.ReadGrantExactFile {
 				kind = "exact file"
 			}
-			pathWidth = max(1, width-lipgloss.Width(kind)-3)
+			collisionWidth = max(1, width-lipgloss.Width(kind)-3)
 		}
-		label := compactWorkspacePath(grant.Path, pathWidth)
-		labels[index] = label
-		if prior, exists := seen[label]; exists && prior != grant.Path {
+		collisionLabel := compactWorkspacePath(grant.Path, collisionWidth)
+		if prior, exists := collisionSeen[collisionLabel]; exists && prior != grant.Path {
 			distinct = false
 		} else {
-			seen[label] = grant.Path
+			collisionSeen[collisionLabel] = grant.Path
 		}
 	}
 	return labels, distinct
+}
+
+// readScopeAllowSubject keeps "Allow" plus the most identity-rich phrase that
+// fits the content-grid flex column. Narrow budgets prefer the read-only /
+// count keywords over longer geographic wording so floor markers stay visible.
+func readScopeAllowSubject(subject string, width int) string {
+	subject = strings.TrimSpace(subject)
+	if subject == "" {
+		return truncateDisplay("Allow access?", width)
+	}
+	candidates := []string{"Allow " + subject + "?"}
+	// Prefer shorter forms that still carry identity markers the floor tests
+	// and operators rely on ("read-only", "exact", "N explicit").
+	switch {
+	case strings.Contains(subject, "explicit"):
+		// "4 explicit external read paths" → "4 explicit paths"
+		short := strings.Replace(subject, " external read", "", 1)
+		candidates = append(candidates, "Allow "+short+"?", "Allow paths?")
+	case strings.Contains(subject, "exact") && strings.Contains(subject, "file"):
+		candidates = append(candidates,
+			"Allow exact read-only file?",
+			"Allow exact file?",
+		)
+	case strings.Contains(subject, "read-only") && strings.Contains(subject, "directory"):
+		candidates = append(candidates,
+			"Allow read-only directory?",
+			"Allow read-only?",
+		)
+	case strings.Contains(subject, "read-only"):
+		candidates = append(candidates, "Allow read-only?")
+	case strings.Contains(subject, "path"):
+		candidates = append(candidates, "Allow path access?", "Allow paths?")
+	}
+	for _, candidate := range candidates {
+		if lipgloss.Width(candidate) <= width {
+			return candidate
+		}
+	}
+	return truncateDisplay(candidates[0], width)
+}
+
+// readScopeCompactPathLines paints grant kind + path under the content-grid
+// width. When both fit one row they share it. Single-grant confirmations may
+// stack kind and path so basenames survive min-width budgets; multi-grant
+// floors keep one row per grant so height stays within the 30×12 content budget.
+func readScopeCompactPathLines(m *Model, kind, path string, width int, allowStack bool) []string {
+	kind = strings.TrimSpace(kind)
+	path = strings.TrimSpace(path)
+	if kind == "" && path == "" {
+		return nil
+	}
+	dim := m.styles.OverlayDim
+	if kind == "" {
+		return []string{dim.Render(truncateDisplay(path, width))}
+	}
+	if path == "" {
+		return []string{dim.Render(truncateDisplay(kind, width))}
+	}
+	combined := kind + " · " + path
+	if lipgloss.Width(combined) <= width {
+		return []string{dim.Render(combined)}
+	}
+	if allowStack {
+		return []string{
+			dim.Render(truncateDisplay(kind, width)),
+			dim.Render(truncateDisplay(path, width)),
+		}
+	}
+	pathBudget := max(1, width-lipgloss.Width(kind)-3)
+	return []string{dim.Render(truncateDisplay(kind+" · "+truncateDisplay(path, pathBudget), width))}
 }

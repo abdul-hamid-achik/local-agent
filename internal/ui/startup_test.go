@@ -18,9 +18,10 @@ func TestStartupKeepsStableWelcomeShellAndOneFooterProgressLine(t *testing.T) {
 	m = updated.(*Model)
 
 	content := m.renderEntries()
-	for _, want := range []string{"LOCAL AGENT", "Local-first", "enter send"} {
-		if !strings.Contains(content, want) {
-			t.Errorf("stable startup shell missing %q:\n%s", want, content)
+	// Roomy empty canvas is quiet; startup progress lives only in the footer.
+	for _, noise := range []string{"LOCAL AGENT", "Local-first", "Ask, @mention files, or type /help"} {
+		if strings.Contains(content, noise) {
+			t.Errorf("startup still paints mid-canvas welcome %q:\n%s", noise, content)
 		}
 	}
 	for _, hidden := range []string{"line one line two", "details available in logs"} {

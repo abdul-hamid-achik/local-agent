@@ -9,9 +9,13 @@ import (
 // renderDecisionPrompt keeps every safety action labelled. Wide terminals get
 // one compact row; narrow terminals keep identity on the first row and greedily
 // wrap complete key/action pairs below it instead of truncating the decisions.
+// Horizontal alignment uses the transcript content grid so decision rows share
+// OriginX=3 with tools and approval surfaces.
 func (m *Model) renderDecisionPrompt(subject, detail string, choices ...keyHint) string {
-	width := m.chatPaneWidth()
-	inner := max(1, width-2)
+	grid := m.contentGrid()
+	inner := grid.ContentWidth()
+	lineWidth := grid.LineWidth()
+	lead := grid.Prefix(" ")
 	choiceRows := m.renderDecisionChoiceRows(inner, choices...)
 
 	subjectView := m.styles.ApprovalPrompt.Render(strings.TrimSpace(subject))
@@ -24,12 +28,12 @@ func (m *Model) renderDecisionPrompt(subject, detail string, choices ...keyHint)
 	// Give semantic detail every remaining cell while preserving the complete
 	// choice grammar at the right edge.
 	if choiceLine != "" {
-		prefix := "  " + subjectView
+		prefix := lead + subjectView
 		if detail != "" {
 			prefix += " "
 		}
 		suffix := m.styles.StatusText.Render(" · ") + choiceLine
-		detailBudget := width - lipgloss.Width(prefix) - lipgloss.Width(suffix)
+		detailBudget := lineWidth - lipgloss.Width(prefix) - lipgloss.Width(suffix)
 		if detail == "" || detailBudget >= 6 {
 			if detail != "" {
 				prefix += m.styles.StatusText.Render(truncateDisplay(detail, detailBudget))
@@ -38,14 +42,14 @@ func (m *Model) renderDecisionPrompt(subject, detail string, choices ...keyHint)
 		}
 	}
 
-	header := "  " + subjectView
+	header := lead + subjectView
 	if detail != "" {
-		budget := max(1, width-lipgloss.Width(header)-1)
+		budget := max(1, lineWidth-lipgloss.Width(header)-1)
 		header += " " + m.styles.StatusText.Render(truncateDisplay(detail, budget))
 	}
-	rows := []string{truncateDisplay(header, width)}
+	rows := []string{truncateDisplay(header, lineWidth)}
 	for _, row := range choiceRows {
-		rows = append(rows, "  "+row)
+		rows = append(rows, lead+row)
 	}
 	return strings.Join(rows, "\n")
 }

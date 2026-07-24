@@ -145,11 +145,8 @@ func (m *Model) handleBusyOperationKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 			return m.beginShutdown(), true
 		case key.Matches(msg, m.keys.Cancel):
 			m.cancelGoalOperation("Goal operation cancelled; the goal is paused.")
-		case key.Matches(msg, m.keys.CycleMode) && m.goalRuntime != nil:
-			// A linked goal always retains AUTO authority. Cycling here changes
-			// only the ambient mode used after the goal, so it is safe while a
-			// host-owned Cortex/status operation settles and should not feel like
-			// a dead keyboard shortcut.
+		case key.Matches(msg, m.keys.CycleMode):
+			// Ambient mode only; goal tool authority stays AUTO until next send.
 			m.cycleMode()
 		}
 		return nil, true

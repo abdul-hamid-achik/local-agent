@@ -87,6 +87,24 @@ func TestToolCardStripsTerminalControlsFromUntrustedFields(t *testing.T) {
 	}
 }
 
+func TestCollapsedToolBodyFooterGrammar(t *testing.T) {
+	// Multi-line hidden bodies advertise size with the shared "N lines hidden"
+	// grammar (matches the output-viewer receipt) and name no input method —
+	// expansion is reachable via ctrl+r, ctrl+b, and header clicks alike.
+	if got := collapsedToolBodyFooter("one\ntwo\nthree"); got != "3 lines hidden" {
+		t.Fatalf("collapsed body footer = %q, want \"3 lines hidden\"", got)
+	}
+	for name, body := range map[string]string{
+		"empty":       "",
+		"blank":       " \n\t\n",
+		"single line": "only line\n",
+	} {
+		if got := collapsedToolBodyFooter(body); got != "" {
+			t.Fatalf("%s body produced footer %q, want none", name, got)
+		}
+	}
+}
+
 func TestToolCardCollapsedErrorAlwaysShowsResult(t *testing.T) {
 	card := NewToolCard("write_file", ToolCardFile, true)
 	card.State = ToolCardError
@@ -107,21 +125,81 @@ func TestToolCardCollapsedErrorAlwaysShowsResult(t *testing.T) {
 	}
 }
 
+func TestToolCardHeaderUsesSpaceBetweenVerbAndObject(t *testing.T) {
+	card := NewToolCard("read_file", ToolCardFile, true)
+	card.State = ToolCardSuccess
+	card.Duration = 42 * time.Millisecond
+	card.SetSummary("path/to/file")
+	collapsed := ansi.Strip(card.View(56))
+	// Collapsed success: status + verb + space + object; no disclosure; no
+	// duration under the calm-width threshold (inner < 72).
+	if !strings.Contains(collapsed, "✓ Read path/to/file") {
+		t.Fatalf("header missing space-separated verb/object:\n%s", collapsed)
+	}
+	if strings.Contains(collapsed, "▸") || strings.Contains(collapsed, "▾") {
+		t.Fatalf("collapsed success showed a disclosure mark:\n%s", collapsed)
+	}
+	if strings.Contains(collapsed, "Read · ") || strings.Contains(collapsed, "Read | ") {
+		t.Fatalf("header still uses middle-dot/pipe between verb and object:\n%s", collapsed)
+	}
+	if strings.Contains(collapsed, "(42ms)") {
+		t.Fatalf("collapsed success kept tertiary duration on a calm width:\n%s", collapsed)
+	}
+
+	// Wide collapsed success may surface duration once the content column is
+	// roomy enough; expanded always prefers showing measured duration.
+	wideCollapsed := ansi.Strip(card.View(contentLeftColumns + toolCardCollapsedDurationMinInner))
+	if !strings.Contains(wideCollapsed, "✓ Read path/to/file") || !strings.Contains(wideCollapsed, "(42ms)") {
+		t.Fatalf("wide collapsed success missing verb/object or duration:\n%s", wideCollapsed)
+	}
+	if strings.Contains(wideCollapsed, "▸") || strings.Contains(wideCollapsed, "▾") {
+		t.Fatalf("wide collapsed success showed a disclosure mark:\n%s", wideCollapsed)
+	}
+	card.Expanded = true
+	expanded := ansi.Strip(card.View(56))
+	// Expanded headers drop the object summary (body holds detail) but keep
+	// disclosure + duration on the status line.
+	if !strings.Contains(expanded, "▾ ✓ Read") || !strings.Contains(expanded, "(42ms)") {
+		t.Fatalf("expanded header missing disclosure or duration:\n%s", expanded)
+	}
+	if strings.Contains(expanded, "▸") {
+		t.Fatalf("expanded header kept collapsed disclosure:\n%s", expanded)
+	}
+
+	card.Expanded = false
+	card.State = ToolCardRunning
+	card.SetSummary("path")
+	running := ansi.Strip(card.ViewWithActivity(48, "…", 0))
+	if !strings.Contains(running, "… Reading path") && !strings.Contains(running, "Reading path") {
+		t.Fatalf("running header missing space-separated verb/object:\n%s", running)
+	}
+	if strings.Contains(running, "Reading · ") || strings.Contains(running, "▸") || strings.Contains(running, "▾") {
+		t.Fatalf("running header used separator or unexpected disclosure:\n%s", running)
+	}
+}
+
 func TestToolCardCompletedReceiptShowsDisclosureState(t *testing.T) {
 	card := NewToolCard("read_file", ToolCardFile, true)
 	card.State = ToolCardSuccess
 	card.Duration = 42 * time.Millisecond
 	card.Result = "package ui"
 
+	// Calm collapsed: no disclosure glyph; lifecycle glyph remains.
 	collapsed := ansi.Strip(card.View(48))
-	if !strings.Contains(collapsed, "▸ ✓ Read") || strings.Contains(collapsed, "▾") {
-		t.Fatalf("collapsed receipt did not expose its disclosure state:\n%s", collapsed)
+	if !strings.Contains(collapsed, "✓ Read") {
+		t.Fatalf("collapsed receipt lost its success glyph:\n%s", collapsed)
+	}
+	if strings.Contains(collapsed, "▸") || strings.Contains(collapsed, "▾") {
+		t.Fatalf("collapsed receipt showed a disclosure mark:\n%s", collapsed)
 	}
 
 	card.Expanded = true
 	expanded := ansi.Strip(card.View(48))
 	if !strings.Contains(expanded, "▾ ✓ Read") || strings.Contains(expanded, "▸") {
 		t.Fatalf("expanded receipt did not expose its disclosure state:\n%s", expanded)
+	}
+	if !strings.Contains(expanded, "(42ms)") {
+		t.Fatalf("expanded receipt omitted measured duration:\n%s", expanded)
 	}
 
 	card.State = ToolCardRunning
@@ -135,8 +213,12 @@ func TestToolCardCompletedReceiptShowsDisclosureState(t *testing.T) {
 	card.Duration = 310 * time.Millisecond
 	card.Result = "exit status 1"
 	failed := ansi.Strip(card.View(48))
-	if !strings.Contains(failed, "▸ ✗ Run failed") || !strings.Contains(failed, "exit status 1") {
-		t.Fatalf("failed receipt lost its disclosure or error state:\n%s", failed)
+	// Collapsed error: bright status, no disclosure; duration may remain as diagnostic.
+	if !strings.Contains(failed, "✗ Run failed") || !strings.Contains(failed, "exit status 1") {
+		t.Fatalf("failed receipt lost its error state:\n%s", failed)
+	}
+	if strings.Contains(failed, "▸") || strings.Contains(failed, "▾") {
+		t.Fatalf("collapsed error kept disclosure noise:\n%s", failed)
 	}
 
 	card.State = ToolCardSuccess
@@ -144,7 +226,7 @@ func TestToolCardCompletedReceiptShowsDisclosureState(t *testing.T) {
 	for _, width := range []int{4, 5, 12} {
 		assertToolCardLinesFit(t, card.View(width), width)
 	}
-	if tiny := ansi.Strip(card.View(4)); strings.Contains(tiny, "▸") {
+	if tiny := ansi.Strip(card.View(4)); strings.Contains(tiny, "▸") || strings.Contains(tiny, "▾") {
 		t.Fatalf("extreme-width receipt kept a disclosure mark that cannot fit: %q", tiny)
 	}
 }
@@ -427,9 +509,15 @@ func TestToolCardOmitsMeaninglessZeroDuration(t *testing.T) {
 	}
 
 	card.Duration = 42 * time.Millisecond
-	withDuration := ansi.Strip(card.View(40))
-	if !strings.Contains(withDuration, "(42ms)") {
-		t.Fatalf("measured duration was omitted:\n%s", withDuration)
+	// Collapsed success hides duration under the calm-width threshold.
+	collapsed := ansi.Strip(card.View(40))
+	if strings.Contains(collapsed, "(42ms)") {
+		t.Fatalf("collapsed success kept tertiary duration on a calm width:\n%s", collapsed)
+	}
+	card.Expanded = true
+	expanded := ansi.Strip(card.View(40))
+	if !strings.Contains(expanded, "(42ms)") {
+		t.Fatalf("expanded receipt omitted measured duration:\n%s", expanded)
 	}
 }
 

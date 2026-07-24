@@ -492,7 +492,8 @@ func (m *Model) renderApproval() string {
 	if m.approvalState == nil || m.pendingApproval == nil {
 		return ""
 	}
-	contentWidth := m.approvalContentWidth()
+	grid := m.contentGrid()
+	contentWidth := grid.ContentWidth()
 	toolName := boundedApprovalMetadata(m.pendingApproval.ToolName, approvalMaximumActionBytes)
 	if toolName == "" {
 		toolName = "unknown tool"
@@ -501,16 +502,19 @@ func (m *Model) renderApproval() string {
 	// Keep the tool identity ahead of the mode so narrow terminals preserve the
 	// action being authorized. The authority mode remains explicit whenever the
 	// available width permits it.
+	// Permission glyph lives in the content-grid accent cell so the title text
+	// shares OriginX=3 with tools; body lines use a space accent.
 	permissionGlyph := "◇"
 	if m.glyphProfile == GlyphASCII {
 		permissionGlyph = "?"
 	}
 	separator := glyphSeparator(m.glyphProfile)
-	titleText := permissionGlyph + " Permission" + separator + toolName + separator + mode
-	title := m.styles.ApprovalPrompt.Render(
-		truncateDisplayWithGlyphProfile(titleText, contentWidth, m.glyphProfile),
+	titleText := approvalTitleText(toolName, mode, separator, contentWidth, m.glyphProfile)
+	title := grid.Line(
+		permissionGlyph,
+		m.styles.ApprovalPrompt.Render(titleText),
 	)
-	sections := []string{title}
+	var sections []string
 	if saved := m.renderApprovalComposerReceipt(contentWidth); saved != "" {
 		sections = append(sections, saved)
 	}
@@ -541,12 +545,11 @@ func (m *Model) renderApproval() string {
 		hints += "\n" + m.renderKeyHints(contentWidth, detailHints...)
 	}
 	sections = append(sections, hints)
-	return indentApprovalSurface(
-		strings.Join(sections, "\n"),
-		2,
-		m.chatPaneWidth(),
-		m.glyphProfile,
-	)
+	body := indentApprovalSurface(strings.Join(sections, "\n"), grid.PaneWidth, m.glyphProfile)
+	if body == "" {
+		return title
+	}
+	return title + "\n" + body
 }
 
 func (m *Model) renderApprovalComposerReceipt(width int) string {
@@ -653,11 +656,27 @@ func (m *Model) renderApprovalChoices(width int) string {
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
 
-// approvalContentWidth gives commands and diffs the same horizontal room as
-// the conversation. Only the small inline indent is reserved; unlike picker
-// overlays this surface does not cap useful content at an arbitrary width.
+// approvalContentWidth is the content-grid flex column used by approval
+// commands, diffs, and choice rows. It matches tools/transcript WorkWidth
+// (pane − left chrome − right chrome) so painted lines share OriginX=3.
 func (m *Model) approvalContentWidth() int {
-	return max(1, m.chatPaneWidth()-2)
+	return m.contentGrid().ContentWidth()
+}
+
+// approvalTitleText prefers the tool identity over the mode label when the
+// content-grid flex column is tight. Mode is dropped before the tool name is
+// truncated so minimum terminals still show which action is being authorized.
+func approvalTitleText(toolName, mode, separator string, width int, profile GlyphProfile) string {
+	base := "Permission" + separator + toolName
+	withMode := base + separator + mode
+	switch {
+	case lipgloss.Width(withMode) <= width:
+		return withMode
+	case lipgloss.Width(base) <= width:
+		return base
+	default:
+		return truncateDisplayWithGlyphProfile(base, width, profile)
+	}
 }
 
 // approvalBodyHeight keeps enough transcript visible to preserve context while
@@ -677,13 +696,22 @@ func (m *Model) approvalBodyHeight() int {
 	}
 }
 
-func indentApprovalSurface(value string, indent, width int, profiles ...GlyphProfile) string {
+// indentApprovalSurface aligns decision-surface lines to the transcript
+// content grid (accent + pad → OriginX=3). Each non-empty line is truncated to
+// ContentWidth before the grid prefix is applied so overflow never past
+// LineWidth. Empty lines stay empty for vertical rhythm.
+func indentApprovalSurface(value string, paneWidth int, profiles ...GlyphProfile) string {
 	profile := resolveGlyphProfile(profiles...)
-	prefix := strings.Repeat(" ", max(0, indent))
-	lineWidth := max(1, width-lipgloss.Width(prefix))
+	grid := ContentGrid{PaneWidth: max(1, paneWidth), Profile: profile}
+	if value == "" {
+		return ""
+	}
 	lines := strings.Split(value, "\n")
 	for index, line := range lines {
-		lines[index] = prefix + truncateDisplayWithGlyphProfile(line, lineWidth, profile)
+		if line == "" {
+			continue
+		}
+		lines[index] = grid.Line(" ", line)
 	}
 	return strings.Join(lines, "\n")
 }
@@ -722,9 +750,12 @@ func (m *Model) buildApprovalPreview(width int) string {
 			return
 		}
 		if m.approvalBodyHeight() <= 2 {
-			labelWidth := min(10, max(6, width/5))
-			available := max(1, width-labelWidth-1)
-			value = compactWorkspacePath(value, available)
+			// Min-height viewport is only two rows (Action + path). Drop the
+			// label so the full content-grid flex column can hold basenames
+			// like approval-probe.txt under OriginX=3 chrome.
+			value = compactWorkspacePath(value, width)
+			lines = append(lines, truncateDisplayWithGlyphProfile(value, width, m.glyphProfile))
+			return
 		}
 		appendRow(label, value)
 	}
@@ -765,12 +796,18 @@ func (m *Model) buildApprovalPreview(width int) string {
 		appendPathRow("Target", preview.Path)
 	}
 	appendRow("Impact", boundedApprovalMetadata(preview.Consequence, approvalMaximumConsequenceBytes))
-	appendRow("Scope", approvalScopeLabel(request.Scope))
-	digest := request.ArgumentsSHA256
-	if digest == "" {
-		digest = preview.ArgumentsSHA256
+	// Progressive disclosure: Scope + Request digest stay calm on narrow panes.
+	// Wide surfaces (>= 40 content columns) keep them visible by default; the
+	// d/ShowArguments toggle still exposes exact arguments without changing
+	// permission keys or decision semantics.
+	if width >= 40 {
+		appendRow("Scope", approvalScopeLabel(request.Scope))
+		digest := request.ArgumentsSHA256
+		if digest == "" {
+			digest = preview.ArgumentsSHA256
+		}
+		appendRow("Request", shortApprovalDigest(digest))
 	}
-	appendRow("Request", shortApprovalDigest(digest))
 
 	switch preview.Kind {
 	case permission.PreviewCommand:

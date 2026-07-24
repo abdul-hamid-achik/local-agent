@@ -33,7 +33,16 @@ func TestCloudModelBoundaryIsVisibleAcrossCoreSurfaces(t *testing.T) {
 		m.entries = []ChatEntry{{Kind: "user", Content: "hello"}}
 		status := ansi.Strip(m.renderStatusLine())
 		m.entries = nil
-		for surface, rendered := range map[string]string{"welcome": welcome, "status": status} {
+		// Welcome is empty on roomy frames; Cloud still must show on status or
+		// minimum welcome. Status is the durable roomy surface.
+		surfaces := map[string]string{"status": status}
+		if size.width <= minTerminalWidth || size.height <= minTerminalHeight {
+			surfaces["welcome"] = welcome
+		} else if welcome != "" {
+			// Roomy welcome may still paint Cloud as an operational exception.
+			surfaces["welcome"] = welcome
+		}
+		for surface, rendered := range surfaces {
 			if !strings.Contains(rendered, "CLOUD") || !strings.Contains(rendered, "remote prompts") {
 				t.Fatalf("%s at %dx%d hid Cloud boundary:\n%s", surface, size.width, size.height, rendered)
 			}

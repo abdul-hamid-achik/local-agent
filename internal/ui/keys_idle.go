@@ -2,6 +2,7 @@ package ui
 
 import (
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
@@ -144,7 +145,9 @@ func (m *Model) handleIdleKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		}
 
 	case key.Matches(msg, m.keys.CopyLast):
-		if m.state == StateIdle && strings.TrimSpace(m.input.Value()) == "" {
+		// Prefer last assistant answer; allow copy while a turn is live when the
+		// draft is empty so users can grab text without waiting for idle.
+		if strings.TrimSpace(m.input.Value()) == "" {
 			if content := m.lastAssistantContent(); content != "" {
 				return m.copyToClipboard(content), true
 			}
@@ -178,10 +181,16 @@ func (m *Model) handleIdleKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		}
 
 	case key.Matches(msg, m.keys.CycleMode):
-		if m.state == StateIdle {
-			m.cycleMode()
-			return nil, true
+		// Always cycle ambient mode. During a live turn this only prepares the
+		// next send (goal turns keep AUTO authority); never swallow Shift+Tab.
+		m.cycleMode()
+		if m.state != StateIdle {
+			label := m.modeConfigs[m.mode].Label
+			return m.setFooterNotice(noticeInfo,
+				"mode → "+label+" · applies on next send",
+				2*time.Second), true
 		}
+		return nil, true
 
 	case key.Matches(msg, m.keys.ModelPicker):
 		if m.state == StateIdle {

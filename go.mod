@@ -11,6 +11,7 @@ require (
 	github.com/alecthomas/chroma/v2 v2.14.0
 	github.com/atotto/clipboard v0.1.4
 	github.com/charmbracelet/glamour v0.10.0
+	github.com/charmbracelet/harmonica v0.2.0
 	github.com/charmbracelet/log v0.4.2
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/google/jsonschema-go v0.4.2
@@ -28,7 +29,6 @@ require (
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/aymerick/douceur v0.2.0 // indirect
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
-	github.com/charmbracelet/harmonica v0.2.0 // indirect
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834 // indirect
 	github.com/charmbracelet/ultraviolet v0.0.0-20260525132238-948f4557a654 // indirect
 	github.com/charmbracelet/x/cellbuf v0.0.15 // indirect

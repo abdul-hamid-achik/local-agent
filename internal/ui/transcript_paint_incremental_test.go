@@ -10,6 +10,7 @@ import (
 
 func TestIncrementalPlainLiveTailMatchesCompleteRenderer(t *testing.T) {
 	m := newTestModel(t)
+	m.height = 13 // sticky off: body keeps the user block for paint identity
 	m.entries = []ChatEntry{{
 		Kind:    "user",
 		Content: "stream a long response",
@@ -39,6 +40,7 @@ func TestIncrementalPlainLiveTailMatchesCompleteRenderer(t *testing.T) {
 
 func TestIncrementalPlainLiveTailMeasuresOnlyMutableRawLine(t *testing.T) {
 	m := newTestModel(t)
+	m.height = 13 // sticky off for full layout-record coverage
 	m.entries = []ChatEntry{{Kind: "user", Content: "measure the stream delta"}}
 	m.state = StateStreaming
 	m.appendTranscriptStreamText(
@@ -86,6 +88,7 @@ func TestIncrementalLayoutPublicationDoesNotCopyStableHistory(t *testing.T) {
 	for _, historyEntries := range []int{1, 10_000} {
 		t.Run(fmt.Sprintf("history_%d", historyEntries), func(t *testing.T) {
 			m := newTestModel(t)
+			m.height = 13 // sticky off for full layout-record coverage
 			m.entries = make([]ChatEntry, 0, historyEntries)
 			for index := 0; index < historyEntries; index++ {
 				m.entries = append(m.entries, ChatEntry{
@@ -163,6 +166,7 @@ func TestIncrementalLayoutPublicationDoesNotCopyStableHistory(t *testing.T) {
 
 func TestLayoutTailPublicationCopiesOnIdentityChange(t *testing.T) {
 	m := newTestModel(t)
+	m.height = 13 // sticky off for full layout-record coverage
 	m.entries = []ChatEntry{
 		{Kind: "user", Content: "stable prefix"},
 		{Kind: "assistant", Content: "stable response"},
@@ -201,6 +205,7 @@ func TestLayoutTailPublicationPreservesCapturedAnchorSemantics(t *testing.T) {
 	newPausedLiveCapture := func(t *testing.T) (*Model, transcriptReflowAnchor, BlockID) {
 		t.Helper()
 		m := newTestModel(t)
+		m.height = 13 // sticky off for full layout-record coverage
 		m.entries = []ChatEntry{{
 			Kind:    "user",
 			Content: strings.Repeat("stable history row\n", 24),
@@ -303,6 +308,7 @@ func TestLayoutTailPublicationPreservesCapturedAnchorSemantics(t *testing.T) {
 func TestIncrementalPlainLiveTailRejectsUntrackedMutationAndRebuildsMarkdownBoundary(t *testing.T) {
 	t.Run("untracked builder mutation", func(t *testing.T) {
 		m := newTestModel(t)
+		m.height = 13 // sticky off for full layout-record coverage
 		m.entries = []ChatEntry{{Kind: "user", Content: "do not trust a reset"}}
 		m.state = StateStreaming
 		m.appendTranscriptStreamText(strings.Repeat("old row\n", 80) + "old tail")
@@ -330,6 +336,7 @@ func TestIncrementalPlainLiveTailRejectsUntrackedMutationAndRebuildsMarkdownBoun
 
 	t.Run("new safe markdown boundary", func(t *testing.T) {
 		m := newTestModel(t)
+		m.height = 13 // sticky off for full layout-record coverage
 		m.entries = []ChatEntry{{Kind: "user", Content: "format complete blocks"}}
 		m.state = StateStreaming
 		m.appendTranscriptStreamText(strings.Repeat("plain row\n", 40) + "paragraph")
@@ -355,6 +362,7 @@ func TestIncrementalPlainLiveTailRejectsUntrackedMutationAndRebuildsMarkdownBoun
 
 func TestIncrementalPlainLiveTailPreservesPausedSemanticRow(t *testing.T) {
 	m := newTestModel(t)
+	m.height = 13 // sticky off for full layout-record coverage
 	m.entries = []ChatEntry{{Kind: "user", Content: "preserve my reading position"}}
 	m.state = StateStreaming
 	for index := 0; index < 400; index++ {

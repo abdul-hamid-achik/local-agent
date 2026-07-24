@@ -59,6 +59,10 @@ func (m *Model) ensureExecutionSession(title, modeLabel string) (bool, error) {
 	m.sessionID = session.ID
 	m.sessionPublicID = session.PublicID
 	m.activeSessionTitle = session.Title
+	// Provisional title is the first prompt line; background AI renames once
+	// the first turn provides goal-shaped context.
+	m.sessionTitleNeedsAI = true
+	m.sessionTitleAIDone = false
 	m.executionCursor = 0
 	m.executionLease = lease
 	if err := m.initializeSessionStateRevision(0); err != nil {
@@ -83,9 +87,12 @@ func (m *Model) discardCreatedExecutionSession() error {
 		deleteErr = m.sessionStore.DeleteSession(cleanupCtx, sessionID)
 		cancelCleanup()
 	}
+	m.cancelSessionTitleGen()
 	m.sessionID = 0
 	m.sessionPublicID = ""
 	m.activeSessionTitle = ""
+	m.sessionTitleNeedsAI = false
+	m.sessionTitleAIDone = false
 	m.executionCursor = 0
 	m.resetSessionStateRevision()
 	if m.agent != nil {
@@ -180,9 +187,12 @@ func (m *Model) resetConversationSession() {
 	m.goalPersistenceDirty = false
 	m.cancelSessionLoad()
 	m.cancelSessionList()
+	m.cancelSessionTitleGen()
 	m.sessionID = 0
 	m.sessionPublicID = ""
 	m.activeSessionTitle = ""
+	m.sessionTitleNeedsAI = false
+	m.sessionTitleAIDone = false
 	m.executionCursor = 0
 	m.resetSessionStateRevision()
 	_ = m.releaseExecutionSessionLease()

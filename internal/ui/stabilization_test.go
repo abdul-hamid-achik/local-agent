@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/agent"
 	"github.com/abdul-hamid-achik/local-agent/internal/command"
@@ -259,8 +260,14 @@ func TestContextCompactionClearsStaleOccupancy(t *testing.T) {
 	if m.promptTokens != 0 {
 		t.Fatalf("prompt occupancy after compaction = %d, want unknown/zero", m.promptTokens)
 	}
-	if status := m.renderContextStatus(false); status != "" {
-		t.Fatalf("stale context status remained after compaction: %q", status)
+	// Occupancy is reset to zero; the ambient meter may still show 0/limit so a
+	// high stale percentage cannot linger after compaction.
+	if status := ansi.Strip(m.renderContextStatus()); strings.Contains(status, "91%") ||
+		strings.Contains(status, "15.0k") {
+		t.Fatalf("stale high occupancy remained after compaction: %q", status)
+	}
+	if m.promptTokens != 0 {
+		t.Fatalf("promptTokens after compaction = %d", m.promptTokens)
 	}
 }
 

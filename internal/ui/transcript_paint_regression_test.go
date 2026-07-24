@@ -169,7 +169,8 @@ func TestTranscriptPaintHeightOnlyResizeReflowsExpandedDiffBudget(t *testing.T) 
 		DiffLines: lines,
 	}}
 	m.entries = []ChatEntry{
-		{Kind: "user", Content: "show the expanded patch"},
+		// Multi-line so sticky strip does not omit this block from paint.
+		{Kind: "user", Content: "show the expanded patch\nfull diff please"},
 		{Kind: "tool_group", ToolIndex: 0},
 	}
 	m.invalidateEntryCache()

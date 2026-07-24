@@ -71,6 +71,7 @@ func TestTranscriptSearchIndexesOnlySafeProjectedTranscript(t *testing.T) {
 		repeatedInThinking = "SHARED_VISIBLE_PHRASE"
 	)
 	m := newTestModel(t)
+	m.height = 13 // sticky off: layout/search fixtures need every entry painted
 	projection := ecosystem.ToolProjection{
 		Specialist: "cortex",
 		Operation:  "cortex_status",
@@ -159,6 +160,7 @@ func TestTranscriptSearchIndexesOnlySafeProjectedTranscript(t *testing.T) {
 
 func TestTranscriptSearchSourceProvenanceExcludesChrome(t *testing.T) {
 	m := newTestModel(t)
+	m.height = 13 // sticky off: layout/search fixtures need every entry painted
 	installSearchTranscript(t, m, []ChatEntry{
 		settledSearchEntry(
 			"search-user-chrome",
@@ -187,7 +189,9 @@ func TestTranscriptSearchSourceProvenanceExcludesChrome(t *testing.T) {
 		wantMatches int
 	}{
 		{
-			name:        "user role label cannot duplicate matching content",
+			// User chrome no longer paints a "you" role label; content "you"
+			// is the only match and must remain searchable.
+			name:        "user content you is searchable without role chrome",
 			query:       "you",
 			wantMatches: 1,
 		},
@@ -233,6 +237,7 @@ func TestTranscriptSearchSystemNarrowChromeDoesNotExhaustSource(t *testing.T) {
 	rendered := transcriptSearchSystemLabel + "\n  " + content
 
 	m := newTestModel(t)
+	m.height = 13 // sticky off: layout/search fixtures need every entry painted
 	m.transcriptSearch = newTranscriptSearchState(
 		30,
 		m.isDark,
@@ -296,6 +301,7 @@ func TestTranscriptSearchSourceIndexWorkIsLinear(t *testing.T) {
 	)
 
 	m := newTestModel(t)
+	m.height = 13 // sticky off: layout/search fixtures need every entry painted
 	m.transcriptSearch = newTranscriptSearchState(
 		80,
 		m.isDark,
@@ -354,6 +360,7 @@ func TestTranscriptSearchLiveTailExcludesReasoningAndChrome(t *testing.T) {
 		sharedPhrase    = "LIVE_SHARED_PHRASE"
 	)
 	m := newTestModel(t)
+	m.height = 13 // sticky off: layout/search fixtures need every entry painted
 	m.entries = []ChatEntry{settledSearchEntry(
 		"search-live-user",
 		"search-live-turn",
@@ -396,6 +403,7 @@ func TestTranscriptSearchLiveTailExcludesReasoningAndChrome(t *testing.T) {
 func TestTranscriptSearchAssistantMarkdownUsesSafeVisibleProjection(t *testing.T) {
 	const reasoningSecret = "MARKDOWN_REASONING_MUST_NOT_BE_SEARCHABLE"
 	m := newTestModel(t)
+	m.height = 13 // sticky off: layout/search fixtures need every entry painted
 	entry := settledSearchEntry(
 		"search-markdown-answer",
 		"search-markdown-turn",
@@ -431,6 +439,7 @@ func TestTranscriptSearchAssistantMarkdownUsesSafeVisibleProjection(t *testing.T
 
 func TestTranscriptSearchRestoresDraftFocusAndManualAnchor(t *testing.T) {
 	m := newTestModel(t)
+	m.height = 13 // sticky off: layout/search fixtures need every entry painted
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 64, Height: 12})
 	m = updated.(*Model)
 	entries := make([]ChatEntry, 0, 48)
@@ -516,6 +525,7 @@ func TestTranscriptSearchRestoresDraftFocusAndManualAnchor(t *testing.T) {
 
 func TestTranscriptSearchRestoresFollowLatestAfterHistoricalJump(t *testing.T) {
 	m := newTestModel(t)
+	m.height = 13 // sticky off: layout/search fixtures need every entry painted
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 56, Height: 12})
 	m = updated.(*Model)
 	entries := make([]ChatEntry, 0, 40)
@@ -551,6 +561,7 @@ func TestTranscriptSearchRestoresFollowLatestAfterHistoricalJump(t *testing.T) {
 
 func TestTranscriptSearchPreservesComposerFocusFromBackgroundLoad(t *testing.T) {
 	m := newTestModel(t)
+	m.height = 13 // sticky off: layout/search fixtures need every entry painted
 	m.fileLoading = true
 	m.fileOpToken = 41
 	m.input.Blur()
@@ -593,6 +604,7 @@ func TestTranscriptSearchPreservesComposerFocusFromBackgroundLoad(t *testing.T) 
 
 func TestOpenTranscriptSearchReplacesOrphanedState(t *testing.T) {
 	m := newTestModel(t)
+	m.height = 13 // sticky off: layout/search fixtures need every entry painted
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 52, Height: 12})
 	m = updated.(*Model)
 	entries := make([]ChatEntry, 0, 30)
@@ -657,6 +669,7 @@ func TestOpenTranscriptSearchReplacesOrphanedState(t *testing.T) {
 
 func TestTranscriptSearchNextPreviousWrapBySemanticIdentity(t *testing.T) {
 	m := newTestModel(t)
+	m.height = 13 // sticky off: layout/search fixtures need every entry painted
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 52, Height: 12})
 	m = updated.(*Model)
 	entries := make([]ChatEntry, 0, 24)
@@ -708,6 +721,7 @@ func TestTranscriptSearchNextPreviousWrapBySemanticIdentity(t *testing.T) {
 
 func TestTranscriptSearchMatchRowUsesBoundedIndexCoordinate(t *testing.T) {
 	m := newTestModel(t)
+	m.height = 13 // sticky off: layout/search fixtures need every entry painted
 	installSearchTranscript(t, m, []ChatEntry{
 		settledSearchEntry(
 			"search-coordinate-a",
@@ -747,6 +761,7 @@ func TestTranscriptSearchMatchRowUsesBoundedIndexCoordinate(t *testing.T) {
 func TestTranscriptSearchBoundsIndexMatchesAndQuery(t *testing.T) {
 	t.Run("bounded index rows", func(t *testing.T) {
 		m := newTestModel(t)
+		m.height = 13 // sticky off: layout/search fixtures need every entry painted
 		m.transcriptSearch = newTranscriptSearchState(40, m.isDark, m.reducedMotion)
 		m.transcriptLayout = TranscriptLayoutSnapshot{}
 		m.transcriptPaint.document = transcriptPaintDocument{}
@@ -804,6 +819,7 @@ func TestTranscriptSearchBoundsIndexMatchesAndQuery(t *testing.T) {
 
 	t.Run("bounded index bytes", func(t *testing.T) {
 		m := newTestModel(t)
+		m.height = 13 // sticky off: layout/search fixtures need every entry painted
 		m.transcriptSearch = newTranscriptSearchState(40, m.isDark, m.reducedMotion)
 		m.transcriptLayout = TranscriptLayoutSnapshot{}
 		m.transcriptPaint.document = transcriptPaintDocument{}
@@ -855,6 +871,7 @@ func TestTranscriptSearchBoundsIndexMatchesAndQuery(t *testing.T) {
 
 	t.Run("oversized older record cannot block latest", func(t *testing.T) {
 		m := newTestModel(t)
+		m.height = 13 // sticky off: layout/search fixtures need every entry painted
 		m.transcriptSearch = newTranscriptSearchState(
 			40,
 			m.isDark,
@@ -951,6 +968,7 @@ func TestTranscriptSearchBoundsIndexMatchesAndQuery(t *testing.T) {
 
 	t.Run("tool projection does not consume assistant source budget", func(t *testing.T) {
 		m := newTestModel(t)
+		m.height = 13 // sticky off: layout/search fixtures need every entry painted
 		tools := []ToolEntry{{
 			ID:        "search-budget-tool",
 			Name:      "read_file",
@@ -1015,6 +1033,7 @@ func TestTranscriptSearchBoundsIndexMatchesAndQuery(t *testing.T) {
 
 	t.Run("oversized newest record fails closed at row budget", func(t *testing.T) {
 		m := newTestModel(t)
+		m.height = 13 // sticky off: layout/search fixtures need every entry painted
 		m.transcriptSearch = newTranscriptSearchState(40, m.isDark, m.reducedMotion)
 		m.transcriptLayout = TranscriptLayoutSnapshot{}
 		m.transcriptPaint.document = transcriptPaintDocument{}
@@ -1059,6 +1078,7 @@ func TestTranscriptSearchBoundsIndexMatchesAndQuery(t *testing.T) {
 
 	t.Run("oversized rendered row fails closed before semantic strip", func(t *testing.T) {
 		m := newTestModel(t)
+		m.height = 13 // sticky off: layout/search fixtures need every entry painted
 		m.transcriptSearch = newTranscriptSearchState(40, m.isDark, m.reducedMotion)
 		m.transcriptLayout = TranscriptLayoutSnapshot{}
 		m.transcriptPaint.document = transcriptPaintDocument{}
@@ -1102,6 +1122,7 @@ func TestTranscriptSearchBoundsIndexMatchesAndQuery(t *testing.T) {
 
 	t.Run("bounded matches", func(t *testing.T) {
 		m := newTestModel(t)
+		m.height = 13 // sticky off: layout/search fixtures need every entry painted
 		m.transcriptSearch = newTranscriptSearchState(40, m.isDark, m.reducedMotion)
 		m.transcriptSearch.generation = m.transcriptPaint.documentGeneration
 		m.transcriptSearch.rows = []transcriptSearchRow{{
@@ -1185,6 +1206,7 @@ func BenchmarkTranscriptSearchMatchesAtMaximumIndex(b *testing.B) {
 
 func TestTranscriptSearchUnicodeCaseAndCombiningMarks(t *testing.T) {
 	m := newTestModel(t)
+	m.height = 13 // sticky off: layout/search fixtures need every entry painted
 	installSearchTranscript(t, m, []ChatEntry{
 		settledSearchEntry(
 			"search-unicode",
@@ -1204,6 +1226,7 @@ func TestTranscriptSearchUnicodeCaseAndCombiningMarks(t *testing.T) {
 
 func TestTranscriptSearchTypingPreservesWordSeparators(t *testing.T) {
 	m := newTestModel(t)
+	m.height = 13 // sticky off: layout/search fixtures need every entry painted
 	installSearchTranscript(t, m, []ChatEntry{
 		settledSearchEntry(
 			"search-space",
@@ -1235,6 +1258,7 @@ func TestTranscriptSearchTypingPreservesWordSeparators(t *testing.T) {
 
 func TestTranscriptSearchActiveRowSignalPreservesGeometryAndRestoresStyle(t *testing.T) {
 	m := newTestModel(t)
+	m.height = 13 // sticky off: layout/search fixtures need every entry painted
 	previous := func(index int) lipgloss.Style {
 		if index%2 == 0 {
 			return lipgloss.NewStyle().Italic(true)
@@ -1313,6 +1337,7 @@ func TestTranscriptSearchActiveRowSignalPreservesGeometryAndRestoresStyle(t *tes
 
 func TestTranscriptSearchActiveRowPreservesANSIStyledMarkdown(t *testing.T) {
 	m := newTestModel(t)
+	m.height = 13 // sticky off: layout/search fixtures need every entry painted
 	entry := settledSearchEntry(
 		"search-highlight-ansi",
 		"search-highlight-ansi-turn",
@@ -1370,6 +1395,7 @@ func TestTranscriptSearchActiveRowPreservesANSIStyledMarkdown(t *testing.T) {
 
 func TestTranscriptSearchCompactLayoutFitsRowsAndOwnsCursor(t *testing.T) {
 	m := newTestModel(t)
+	m.height = 13 // sticky off: layout/search fixtures need every entry painted
 	updated, _ := m.Update(tea.WindowSizeMsg{
 		Width:  minTerminalWidth,
 		Height: minTerminalHeight,
@@ -1452,6 +1478,7 @@ func TestTranscriptSearchResizeRecomputesTextInputOverflowWindow(t *testing.T) {
 
 func TestTranscriptSearchRefreshesStaleIndexOnNavigationWithoutSkippingFirst(t *testing.T) {
 	m := newTestModel(t)
+	m.height = 13 // sticky off: layout/search fixtures need every entry painted
 	m.entries = []ChatEntry{settledSearchEntry(
 		"search-refresh-user",
 		"search-refresh-turn",
@@ -1499,6 +1526,7 @@ func TestTranscriptSearchRefreshesStaleIndexOnNavigationWithoutSkippingFirst(t *
 
 func TestDismissOverlayRestoresSearchStateAndViewportStyle(t *testing.T) {
 	m := newTestModel(t)
+	m.height = 13 // sticky off: layout/search fixtures need every entry painted
 	previous := func(int) lipgloss.Style {
 		return lipgloss.NewStyle().Italic(true)
 	}
@@ -1532,6 +1560,7 @@ func TestDismissOverlayRestoresSearchStateAndViewportStyle(t *testing.T) {
 
 func TestTranscriptSearchANSINavigationRoundTripLeavesNoGhostHighlight(t *testing.T) {
 	m := newTestModel(t)
+	m.height = 13 // sticky off: layout/search fixtures need every entry painted
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 72, Height: 24})
 	m = updated.(*Model)
 
@@ -1617,6 +1646,7 @@ func TestTranscriptSearchFullViewGeometryAcrossWidths(t *testing.T) {
 	} {
 		t.Run(size.name, func(t *testing.T) {
 			m := newTestModel(t)
+			m.height = 13 // sticky off: layout/search fixtures need every entry painted
 			m.glyphProfile = size.glyphs
 			updated, _ := m.Update(tea.WindowSizeMsg{
 				Width:  size.width,
@@ -1711,6 +1741,7 @@ func TestTranscriptSearchFullViewGeometryAcrossWidths(t *testing.T) {
 
 func TestTranscriptSearchUnicodeRowsPreserveMatchAndCellGeometry(t *testing.T) {
 	m := newTestModel(t)
+	m.height = 13 // sticky off: layout/search fixtures need every entry painted
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 64, Height: 20})
 	m = updated.(*Model)
 	entry := settledSearchEntry(

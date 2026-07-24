@@ -9,12 +9,14 @@ import (
 
 func TestTranscriptPaintHeightOnlyResizeReusesHeightIndependentPrefix(t *testing.T) {
 	m := newTestModel(t)
+	m.height = 13 // sticky off: layout/search fixtures need every entry painted
 	const historyEntries = 192
 	m.entries = make([]ChatEntry, 0, historyEntries)
 	for index := 0; index < historyEntries; index++ {
 		m.entries = append(m.entries, ChatEntry{
 			Kind:    "user",
-			Content: fmt.Sprintf("height-independent history %03d", index),
+			// Multi-line so sticky never omits the latest block mid-resize.
+			Content: fmt.Sprintf("height-independent history %03d\ncontinued", index),
 		})
 	}
 	m.invalidateEntryCache()
@@ -39,9 +41,10 @@ func TestTranscriptPaintHeightOnlyResizeReusesHeightIndependentPrefix(t *testing
 
 	probe := &transcriptRenderProbe{}
 	m.transcriptRenderProbe = probe
+	// Grow width-stable height only; keep sticky disabled (height stays < 16).
 	updated, _ := m.Update(tea.WindowSizeMsg{
 		Width:  m.width,
-		Height: m.height + 7,
+		Height: 15,
 	})
 	m = updated.(*Model)
 

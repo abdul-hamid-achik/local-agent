@@ -11,6 +11,7 @@ import (
 
 func TestTranscriptPaintWindowMatchesCompleteReferenceAtTopMiddleAndBottom(t *testing.T) {
 	m := newTestModel(t)
+	m.height = 13 // sticky off: layout/search fixtures need every entry painted
 	m.toolEntries = []ToolEntry{{
 		ID:        "paint-tool",
 		Name:      "bash",
@@ -72,6 +73,7 @@ func TestTranscriptPaintWindowMatchesCompleteReferenceAtTopMiddleAndBottom(t *te
 
 func TestTranscriptPaintWindowBoundsTenThousandEntryHistory(t *testing.T) {
 	m := newTestModel(t)
+	m.height = 13 // sticky off: layout/search fixtures need every entry painted
 	const entryCount = 10_000
 	m.entries = make([]ChatEntry, 0, entryCount)
 	for index := 0; index < entryCount; index++ {
@@ -120,6 +122,7 @@ func TestTranscriptPaintWindowBoundsTenThousandEntryHistory(t *testing.T) {
 
 func TestEmptyTranscriptPaintVirtualizesUnboundedStartupNotices(t *testing.T) {
 	m := newTestModel(t)
+	m.height = 13 // sticky off: layout/search fixtures need every entry painted
 	const noticeCount = 2_000
 	for index := 0; index < noticeCount; index++ {
 		kind := "system"
@@ -166,6 +169,7 @@ func TestEmptyTranscriptPaintVirtualizesUnboundedStartupNotices(t *testing.T) {
 
 func TestTranscriptPaintWindowExtractsRowsInsideOneLargeBlock(t *testing.T) {
 	m := newTestModel(t)
+	m.height = 13 // sticky off: layout/search fixtures need every entry painted
 	const sourceRows = 20_000
 	m.entries = []ChatEntry{{
 		Kind:    "user",
@@ -198,6 +202,7 @@ func TestTranscriptPaintWindowExtractsRowsInsideOneLargeBlock(t *testing.T) {
 
 func TestWarmStreamingPaintDoesNotRevisitSettledHistory(t *testing.T) {
 	m := newTestModel(t)
+	m.height = 13 // sticky off: layout/search fixtures need every entry painted
 	const historyEntries = 2_000
 	for index := 0; index < historyEntries; index++ {
 		m.entries = append(m.entries, ChatEntry{
@@ -243,6 +248,7 @@ func TestWarmStreamingPaintDoesNotRevisitSettledHistory(t *testing.T) {
 
 func TestTranscriptPagingCrossesPaintWindowsWithoutChangingRowOrder(t *testing.T) {
 	m := newTestModel(t)
+	m.height = 13 // sticky off: layout/search fixtures need every entry painted
 	for index := 0; index < 120; index++ {
 		m.entries = append(m.entries, ChatEntry{
 			Kind:    "user",
@@ -281,6 +287,7 @@ func TestTranscriptPagingCrossesPaintWindowsWithoutChangingRowOrder(t *testing.T
 
 func TestTranscriptPaintGeometrySweep(t *testing.T) {
 	m := newTestModel(t)
+	m.height = 13 // sticky off: layout/search fixtures need every entry painted
 	for index := 0; index < 18; index++ {
 		kind := "user"
 		if index%3 == 1 {
@@ -325,6 +332,7 @@ func TestTranscriptPaintGeometrySweep(t *testing.T) {
 
 func TestVirtualTranscriptMouseUsesLogicalDocumentRow(t *testing.T) {
 	m := newTestModel(t)
+	m.height = 13 // sticky off: layout/search fixtures need every entry painted
 	for index := 0; index < 20; index++ {
 		m.entries = append(m.entries, ChatEntry{
 			Kind:    "user",

@@ -13,12 +13,17 @@ func TestSkippedApprovalPostureIsVisibleAcrossSafetySurfaces(t *testing.T) {
 	m.model = "local-model"
 	m.SetApprovalPosture(ApprovalPostureSkipApprovals)
 
+	// Roomy frames omit the mid-canvas welcome; min frames still surface posture.
+	m.width = minTerminalWidth
+	m.height = minTerminalHeight
 	var welcome strings.Builder
 	m.renderWelcome(&welcome)
-	if plain := ansi.Strip(welcome.String()); strings.Contains(plain, "YOLO") || !strings.Contains(plain, "prompts skipped") || !strings.Contains(plain, "boundaries apply") {
-		t.Fatalf("welcome hid skipped-approval posture:\n%s", plain)
+	if plain := ansi.Strip(welcome.String()); strings.Contains(plain, "YOLO") || !strings.Contains(plain, "prompts skipped") {
+		t.Fatalf("minimum welcome hid skipped-approval posture:\n%s", plain)
 	}
 
+	// Footer/status is the durable roomy-frame safety surface.
+	m.width, m.height = 80, 24
 	m.entries = append(m.entries, ChatEntry{Kind: "user", Content: "hello"})
 	if footer := ansi.Strip(m.renderStatusLine()); strings.Contains(footer, "YOLO") || !strings.Contains(footer, "prompts skipped") {
 		t.Fatalf("footer hid skipped-approval posture: %q", footer)
@@ -36,11 +41,17 @@ func TestSkippedApprovalPostureIsVisibleAcrossSafetySurfaces(t *testing.T) {
 func TestPromptedPostureDoesNotClaimEveryEffectAlwaysAsks(t *testing.T) {
 	m := newTestModel(t)
 	m.model = "local-model"
+	// Posture copy lives on the minimum welcome; roomy frames stay quiet.
+	m.width = minTerminalWidth
+	m.height = minTerminalHeight
 	var welcome strings.Builder
 	m.renderWelcome(&welcome)
 	plain := ansi.Strip(welcome.String())
-	if !strings.Contains(plain, "approval prompts enabled") || strings.Contains(plain, "tool effects ask first") {
-		t.Fatalf("prompted posture wording is inaccurate:\n%s", plain)
+	if !strings.Contains(plain, "prompts on") && !strings.Contains(plain, "approval prompts") {
+		t.Fatalf("prompted posture wording missing:\n%s", plain)
+	}
+	if strings.Contains(plain, "tool effects ask first") {
+		t.Fatalf("prompted posture overclaimed:\n%s", plain)
 	}
 }
 

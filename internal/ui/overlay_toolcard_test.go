@@ -491,32 +491,6 @@ func TestWrapText_EmptyAndEdgeCases(t *testing.T) {
 	}
 }
 
-// TestIndentBlock_Multiline verifies indentBlock adds prefix to each line
-func TestIndentBlock_Multiline(t *testing.T) {
-	input := "line1\nline2\nline3"
-	result := indentBlock(input, "  ")
-
-	expected := "  line1\n  line2\n  line3"
-	if result != expected {
-		t.Errorf("indentBlock failed: got %q, want %q", result, expected)
-	}
-}
-
-// TestIndentBlock_EmptyLines verifies indentBlock handles empty lines
-func TestIndentBlock_EmptyLines(t *testing.T) {
-	input := "line1\n\nline3"
-	result := indentBlock(input, "  ")
-
-	// Empty lines should remain empty
-	lines := strings.Split(result, "\n")
-	if len(lines) != 3 {
-		t.Errorf("expected 3 lines, got %d", len(lines))
-	}
-	if lines[1] != "" {
-		t.Error("empty line should remain empty")
-	}
-}
-
 // BenchmarkOverlayRendering benchmarks overlay rendering performance
 func BenchmarkOverlayRendering_Help(b *testing.B) {
 	m := newTestModelB(b)

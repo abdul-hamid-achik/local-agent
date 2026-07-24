@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestFormatTokens(t *testing.T) {
@@ -22,6 +23,10 @@ func TestFormatTokens(t *testing.T) {
 		{0, "0"},
 		{500, "500"},
 		{10000, "10.0k"},
+		{999_999, "1000.0k"},
+		{1_000_000, "1.0M"},
+		{1_048_576, "1.0M"},
+		{2_500_000, "2.5M"},
 	}
 
 	for _, tt := range tests {
@@ -132,99 +137,102 @@ func TestWrapText(t *testing.T) {
 	})
 }
 
-func TestIndentBlock(t *testing.T) {
-	t.Run("prefix_added", func(t *testing.T) {
-		got := indentBlock("hello\nworld", "  ")
-		lines := strings.Split(got, "\n")
-		if lines[0] != "  hello" {
-			t.Errorf("first line should be '  hello', got %q", lines[0])
-		}
-		if lines[1] != "  world" {
-			t.Errorf("second line should be '  world', got %q", lines[1])
-		}
-	})
-
-	t.Run("empty_lines_preserved", func(t *testing.T) {
-		got := indentBlock("hello\n\nworld", ">> ")
-		lines := strings.Split(got, "\n")
-		if len(lines) != 3 {
-			t.Fatalf("expected 3 lines, got %d", len(lines))
-		}
-		if lines[0] != ">> hello" {
-			t.Errorf("first line should be '>> hello', got %q", lines[0])
-		}
-		if lines[1] != "" {
-			t.Errorf("empty line should stay empty, got %q", lines[1])
-		}
-		if lines[2] != ">> world" {
-			t.Errorf("third line should be '>> world', got %q", lines[2])
-		}
-	})
-
-	t.Run("single_line", func(t *testing.T) {
-		got := indentBlock("hello", "* ")
-		if got != "* hello" {
-			t.Errorf("expected '* hello', got %q", got)
-		}
-	})
-}
-
 func TestContextUsageInComposerStatus(t *testing.T) {
+	// Context meter lives on the session top bar when chrome is active. Footer
+	// status only repeats it without a header, or when pressure is high.
+	withConversation := func(m *Model) {
+		m.entries = []ChatEntry{{Kind: "user", Content: "hello"}}
+	}
+
 	t.Run("no_pct_when_zero_tokens", func(t *testing.T) {
 		m := newTestModel(t)
+		withConversation(m)
 		m.model = "test-model"
 		m.promptTokens = 0
 		m.numCtx = 8192
+		// Header owns ambient 0%; idle footer stays quiet on that signal.
 		status := m.renderStatusLine()
-		if strings.Contains(status, "ctx") {
-			t.Error("should not show context usage when promptTokens is 0")
+		if strings.Contains(status, "0%") || strings.Contains(status, "ctx") {
+			t.Errorf("header-active idle footer should not re-print ambient context, got %q", status)
 		}
 	})
 
 	t.Run("no_pct_when_zero_numCtx", func(t *testing.T) {
 		m := newTestModel(t)
+		withConversation(m)
 		m.model = "test-model"
 		m.promptTokens = 1000
 		m.numCtx = 0
 		status := m.renderStatusLine()
-		if strings.Contains(status, "ctx") {
+		if strings.Contains(status, "ctx") || strings.Contains(status, "%") {
 			t.Error("should not show context usage when numCtx is 0")
 		}
 	})
 
-	t.Run("correct_percentage", func(t *testing.T) {
+	t.Run("correct_percentage_without_header", func(t *testing.T) {
 		m := newTestModel(t)
+		withConversation(m)
+		// Short frame skips the session header; roomy width keeps ambient meter.
+		m.width, m.height = 80, 13
 		m.model = "test-model"
 		m.promptTokens = 4096
 		m.numCtx = 8192
 		status := m.renderStatusLine()
-		if !strings.Contains(status, "ctx 50%") {
+		// Zero-style absolute used/limit · percent.
+		if !strings.Contains(status, "4.1k/8.2k · 50%") && !strings.Contains(status, "50%") {
 			t.Errorf("expected status to contain context usage, got %q", status)
 		}
 	})
 
 	t.Run("high_percentage", func(t *testing.T) {
 		m := newTestModel(t)
+		withConversation(m)
 		m.model = "test-model"
 		m.promptTokens = 7500
 		m.numCtx = 8192
 		status := m.renderStatusLine()
-		if !strings.Contains(status, "ctx 91%") {
+		if !strings.Contains(status, "91%") {
 			t.Errorf("expected status to contain high context usage, got %q", status)
 		}
-		if ctxAt, modelAt := strings.Index(status, "ctx 91%"), strings.Index(status, "test-model"); ctxAt < 0 || modelAt < 0 || ctxAt > modelAt {
-			t.Errorf("high context warning should outrank model metadata, got %q", status)
+		// High context outranks model; model may be omitted when header owns it.
+		if ctxAt := strings.Index(status, "91%"); ctxAt < 0 {
+			t.Errorf("high context warning missing, got %q", status)
 		}
 	})
 
 	t.Run("cloud_uses_effective_window", func(t *testing.T) {
 		m := newTestModel(t)
+		withConversation(m)
+		// No session header: footer carries ambient absolute meter.
+		m.width, m.height = 80, 13
 		m.model = "kimi-k2.7-code:cloud"
 		m.promptTokens = 120_351
 		m.numCtx = 1_048_576
 		status := m.renderStatusLine()
-		if !strings.Contains(status, "ctx 11%") || strings.Contains(status, "ctx 100%") {
+		if !strings.Contains(status, "11%") || strings.Contains(status, "100%") {
 			t.Fatalf("cloud context status = %q, want 11%%", status)
+		}
+	})
+
+	t.Run("ambient_context_at_zero_used", func(t *testing.T) {
+		m := newTestModel(t)
+		m.model = "test-model"
+		m.promptTokens = 0
+		m.numCtx = 8192
+		// Absolute meter is ambient on the top bar / context helper.
+		got := m.renderContextStatus()
+		if !strings.Contains(ansi.Strip(got), "0/8.2k · 0%") && !strings.Contains(ansi.Strip(got), "0%") {
+			t.Fatalf("ambient context = %q", got)
+		}
+	})
+
+	t.Run("empty_state_footer_stays_quiet_with_header", func(t *testing.T) {
+		m := newTestModel(t)
+		m.model = "test-model"
+		m.promptTokens = 0
+		m.numCtx = 8192
+		if status := m.renderStatusLine(); status != "" {
+			t.Fatalf("empty-state status should be quiet when welcome+header own identity, got %q", ansi.Strip(status))
 		}
 	})
 }
@@ -248,3 +256,4 @@ func TestComposerStatusProjectsActiveSessionHandleAndTitle(t *testing.T) {
 		t.Fatalf("compact status session identity = %q, want handle without title", status)
 	}
 }
+

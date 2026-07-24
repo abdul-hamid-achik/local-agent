@@ -25,6 +25,7 @@ func TestSemanticTranscriptLineMapUsesGraphemeCoordinates(t *testing.T) {
 
 func TestRenderEntriesPublishesContiguousIdentityLayout(t *testing.T) {
 	m := newTestModel(t)
+	m.height = 13 // sticky off: layout/search fixtures need every entry painted
 	m.ready = true
 	m.entries = []ChatEntry{
 		{Kind: "user", Content: "inspect the renderer"},
@@ -59,6 +60,7 @@ func TestRenderEntriesPublishesContiguousIdentityLayout(t *testing.T) {
 
 func TestWidthReflowKeepsPausedBlockAtItsScreenRow(t *testing.T) {
 	m := newTestModel(t)
+	m.height = 13 // sticky off: layout/search fixtures need every entry painted
 	m.handleWindowSize(tea.WindowSizeMsg{Width: 88, Height: 14}, nil)
 	for index := 0; index < 10; index++ {
 		kind := "assistant"
@@ -101,6 +103,7 @@ func TestWidthReflowKeepsPausedBlockAtItsScreenRow(t *testing.T) {
 
 func TestSemanticAnchorSurvivesInsertionBeforeBlock(t *testing.T) {
 	m := newTestModel(t)
+	m.height = 13 // sticky off: layout/search fixtures need every entry painted
 	m.handleWindowSize(tea.WindowSizeMsg{Width: 72, Height: 12}, nil)
 	for index := 0; index < 8; index++ {
 		m.entries = append(m.entries, ChatEntry{
@@ -134,6 +137,7 @@ func TestSemanticAnchorSurvivesInsertionBeforeBlock(t *testing.T) {
 
 func TestToolDisclosureBeforeViewportPreservesSemanticReadingPosition(t *testing.T) {
 	m := newTestModel(t)
+	m.height = 13 // sticky off: layout/search fixtures need every entry painted
 	m.handleWindowSize(tea.WindowSizeMsg{Width: 64, Height: 12}, nil)
 	m.toolEntries = []ToolEntry{{
 		ID: "tool-1", Name: "bash", Result: strings.Repeat("output row\n", 20),
