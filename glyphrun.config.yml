@@ -121,6 +121,8 @@ terminal:
         with: "session-grant.txt"
       - regex: "\\n\\s*\\+session scoped approval"
         with: ""
+      - regex: "\\n\\s*No textual difference detected\\."
+        with: ""
       # Minimum footer truncates approval/settings labels differently by host.
       - regex: "ctrl\\+p settings · qw…"
         with: "ctrl+p settings"

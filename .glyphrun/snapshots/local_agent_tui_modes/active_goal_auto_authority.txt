@@ -1,19 +1,27 @@
-   main · local-agent                          0/16.4k · 0%
-   notice · Goal saved · Cortex is not configured;
-   starting one bounded local turn…
+   main · local-agent                                      0/16.4k · 0%
+   qwen3.5:2b · offline
+
+   notice · ollama: no model selected
+   try: ollama serve · ollama pull qwen3.5:2b
     ✗ error
-   LLM request not started: inference not started: no
-   model selected
-   notice · Goal paused · unproductive turn:
-   inference not started: no model selected
+   LLM request not started: inference not started: no model selected
+   notice · Goal saved · Cortex is not configured; starting one
+   bounded local turn…
+    ✗ error
+   LLM request not started: inference not started: no model selected
+   notice · Goal paused · unproductive turn: inference not
+   started: no model selected
    notice · After goal · NORMAL · active goal · AUTO
 
-───────────────────────────────────────────────────────────
+
+
+
+───────────────────────────────────────────────────────────────────────
 plan · paused · 0/2 verified
-  □ pending · Demonstrate every requested outcome and cons…
-  □ pending · Record passing evidence from focused or repr…
- [ AUTO ] · Ⅱ paused · ship a bound… · <session> · qwen3.5:2b
-╭─────────────────────────────────────────────────────────╮
-│▌❯ Ask, @mention files, or type /help                   │
-╰─────────────────────────────────────────────────────────╯
-   enter send · shift+tab · esc · f1      qwen3.5:2b · AUTO
+  □ pending · Demonstrate every requested outcome and constraint in th…
+  □ pending · Record passing evidence from focused or reproducible ver…
+ [ AUTO ] · Ⅱ paused · ship a bo… · <session> · qwen3.5:2b · 0/16.4k · 0%
+╭─────────────────────────────────────────────────────────────────────╮
+│▌❯ Ask, @mention files, or type /help                               │
+╰─────────────────────────────────────────────────────────────────────╯
+   enter send · shift+tab mode · esc · f1             qwen3.5:2b · AUTO

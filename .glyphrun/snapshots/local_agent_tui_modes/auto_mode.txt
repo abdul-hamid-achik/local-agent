@@ -1,19 +1,27 @@
-   main · local-agent                          0/16.4k · 0%
+   main · local-agent                                      0/16.4k · 0%
    qwen3.5:2b · offline
 
    notice · ollama: no model selected
    try: ollama serve · ollama pull qwen3.5:2b
     ✗ error
-   LLM request not started: inference not started: no
-   model selected
+   LLM request not started: inference not started: no model selected
 
 
 
 
 
 
-───────────────────────────────────────────────────────────
-╭─────────────────────────────────────────────────────────╮
-│▌❯ design a safe migration                         …     │
-╰─────────────────────────────────────────────────────────╯
-   enter send · shift+tab · esc · f1      qwen3.5:2b · AUTO
+
+
+
+
+
+
+
+
+
+───────────────────────────────────────────────────────────────────────
+╭─────────────────────────────────────────────────────────────────────╮
+│▌❯ design a safe migration                                     …     │
+╰─────────────────────────────────────────────────────────────────────╯
+   enter send · shift+tab mode · esc · f1             qwen3.5:2b · AUTO
