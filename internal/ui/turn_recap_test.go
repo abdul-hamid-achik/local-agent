@@ -98,7 +98,7 @@ func TestRenderAssistantIncludesRecap(t *testing.T) {
 	m.renderAssistantMsg(&b, ChatEntry{
 		Kind:    "assistant",
 		Content: longMultiSectionAnswer,
-	}, m.chatContentWidth(), true)
+	}, m.chatContentWidth())
 	plain := ansi.Strip(b.String())
 	if !strings.Contains(plain, "inspect the boundary") {
 		t.Fatalf("answer body missing:\n%s", plain)
@@ -115,7 +115,7 @@ func TestRenderAssistantIncludesRecap(t *testing.T) {
 	m.renderAssistantMsg(&b, ChatEntry{
 		Kind:    "assistant",
 		Content: "Buenos días — what are we working on today?",
-	}, m.chatContentWidth(), true)
+	}, m.chatContentWidth())
 	short := ansi.Strip(b.String())
 	// Only one occurrence of the answer body (no digest echo).
 	if strings.Count(short, "Buenos días") != 1 {

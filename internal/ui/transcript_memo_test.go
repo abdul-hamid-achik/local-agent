@@ -89,8 +89,8 @@ func TestEntryMemoKeyIncludesReadableProseMeasure(t *testing.T) {
 		Kind:     "user",
 		Content:  strings.Repeat("readable prose ", 20),
 	}
-	wide := m.entryMemoKey(entry, 160, 96, false)
-	narrow := m.entryMemoKey(entry, 160, 72, false)
+	wide := m.entryMemoKey(entry, 160, 96)
+	narrow := m.entryMemoKey(entry, 160, 72)
 	if wide == "" || narrow == "" || wide == narrow {
 		t.Fatalf("memo key ignored prose geometry: wide=%q narrow=%q", wide, narrow)
 	}

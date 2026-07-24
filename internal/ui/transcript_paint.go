@@ -191,7 +191,6 @@ type transcriptLivePaintCache struct {
 	wrapWidth           int
 	usesWorkWidth       bool
 	workWidthMutable    bool
-	showHeader          bool
 	isDark              bool
 	glyphProfile        GlyphProfile
 	markdownRenderer    *MarkdownRenderer
@@ -581,7 +580,6 @@ func (m *Model) renderIncrementalPlainLiveTail(
 		)
 	}
 	startRow := state.renderedLines + separatorRows
-	showHeader := !state.assistantStarted
 
 	appendTrusted := m.syncTranscriptStreamSource()
 	thinkingTrusted := m.syncTranscriptThinkingSource()
@@ -605,7 +603,6 @@ func (m *Model) renderIncrementalPlainLiveTail(
 		cache.thinkRawLen == len(thinking) &&
 		cache.startRow == startRow &&
 		cache.contentWidth == contentW &&
-		cache.showHeader == showHeader &&
 		cache.isDark == m.isDark &&
 		cache.glyphProfile == m.glyphProfile &&
 		cache.markdownRenderer == m.md &&
@@ -664,7 +661,6 @@ func (m *Model) renderIncrementalPlainLiveTail(
 				wrapWidth,
 				usesWorkWidth,
 				workWidthMutable,
-				showHeader,
 				blockID,
 				turnID,
 			) {
@@ -697,7 +693,7 @@ func (m *Model) buildIncrementalPlainLiveTail(
 	tail string,
 	tailRawStart int,
 	startRow, contentW, wrapWidth int,
-	usesWorkWidth, workWidthMutable, showHeader bool,
+	usesWorkWidth, workWidthMutable bool,
 	blockID BlockID,
 	turnID TurnID,
 ) bool {
@@ -705,11 +701,10 @@ func (m *Model) buildIncrementalPlainLiveTail(
 		tail,
 		wrapWidth,
 		false,
-		false,
 	)
 
 	var canonical strings.Builder
-	m.renderStreamingMsg(&canonical, raw, contentW, showHeader)
+	m.renderStreamingMsg(&canonical, raw, contentW)
 	canonicalText := strings.TrimSuffix(canonical.String(), "\n")
 	if canonicalText == "" {
 		return false
@@ -799,7 +794,6 @@ func (m *Model) buildIncrementalPlainLiveTail(
 		wrapWidth:         wrapWidth,
 		usesWorkWidth:     usesWorkWidth,
 		workWidthMutable:  workWidthMutable,
-		showHeader:        showHeader,
 		isDark:            m.isDark,
 		glyphProfile:      m.glyphProfile,
 		markdownRenderer:  m.md,
@@ -918,7 +912,6 @@ func (m *Model) updateIncrementalPlainLiveTail(
 	projection := m.plainLiveTailRows(
 		sourceSuffix,
 		cache.wrapWidth,
-		false,
 		cache.lastLineWrapped,
 	)
 	if !deltaHasNewline {
@@ -1046,14 +1039,10 @@ func transcriptLiveLineNowUsesWorkWidth(line string) bool {
 func (m *Model) plainLiveTailRows(
 	raw string,
 	wrapWidth int,
-	showHeader bool,
 	forceFirstLineWrap bool,
 ) plainLiveTailProjection {
 	rawLines := strings.Split(raw, "\n")
 	rows := make([]string, 0, len(rawLines)+1)
-	if showHeader {
-		rows = append(rows, m.contentGrid().Line(" ", m.styles.AsstLabel.UnsetPaddingLeft().Render("assistant")))
-	}
 	lastRenderedStart := len(rows)
 	wrapRawStart := 0
 	wrapRenderedStart := lastRenderedStart

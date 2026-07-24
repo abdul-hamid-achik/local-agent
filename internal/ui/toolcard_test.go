@@ -89,10 +89,12 @@ func TestToolCardStripsTerminalControlsFromUntrustedFields(t *testing.T) {
 
 func TestCollapsedToolBodyFooterGrammar(t *testing.T) {
 	// Multi-line hidden bodies advertise size with the shared "N lines hidden"
-	// grammar (matches the output-viewer receipt) and name no input method —
-	// expansion is reachable via ctrl+r, ctrl+b, and header clicks alike.
-	if got := collapsedToolBodyFooter("one\ntwo\nthree"); got != "3 lines hidden" {
-		t.Fatalf("collapsed body footer = %q, want \"3 lines hidden\"", got)
+	// grammar (matches the output-viewer receipt) and name the primary key that
+	// reveals them. ctrl+b and header clicks still expand; hidden content with
+	// no stated way to reach it is a dead end for anyone who has not already
+	// read the help overlay.
+	if got := collapsedToolBodyFooter("one\ntwo\nthree"); got != "3 lines hidden · ctrl+r" {
+		t.Fatalf("collapsed body footer = %q, want \"3 lines hidden · ctrl+r\"", got)
 	}
 	for name, body := range map[string]string{
 		"empty":       "",

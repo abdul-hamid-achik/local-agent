@@ -1,13 +1,14 @@
 package main
 
 import (
-	"fmt"
 	"io"
+	"os"
 	"strings"
 	"unicode"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/charmbracelet/x/term"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/sessionref"
 	"github.com/abdul-hamid-achik/local-agent/internal/ui"
@@ -45,7 +46,34 @@ func writeSessionResumeMessage(writer io.Writer, finalModel tea.Model, runErr er
 	if title := sanitizeExitSessionTitle(info.Title); title != "" {
 		label += " · " + title
 	}
-	_, _ = fmt.Fprintf(writer, "\n%s\nResume this session with:\n  local-agent --resume %s\n", label, handle)
+	lines := []string{"", label, "Resume this session with:", "  local-agent --resume " + handle}
+	_, _ = io.WriteString(writer, exitReceiptText(lines, terminalWriter(writer)))
+}
+
+// exitReceiptText joins the exit receipt, erasing to end of line on a terminal.
+//
+// These lines land on rows the restored terminal may still be showing the last
+// TUI frame on. Without the erase, any leftover tail of the row underneath is
+// appended to ours, and the resume line in particular becomes a command that
+// looks copyable and is wrong ("--resume c0ffee1" printed over a row ending in
+// "session" reads as "--resume c0ffee1ession"). The escape is emitted only for
+// a terminal so redirected output stays plain text.
+func exitReceiptText(lines []string, isTerminal bool) string {
+	var b strings.Builder
+	for _, line := range lines {
+		b.WriteString(line)
+		if isTerminal {
+			b.WriteString("\x1b[K")
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// terminalWriter reports whether writer is an interactive terminal.
+func terminalWriter(writer io.Writer) bool {
+	file, ok := writer.(*os.File)
+	return ok && term.IsTerminal(file.Fd())
 }
 
 func sanitizeExitSessionTitle(title string) string {

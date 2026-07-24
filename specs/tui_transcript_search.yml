@@ -14,7 +14,7 @@ target:
         OLLAMA_HOST: "http://127.0.0.1:1"
 terminal:
     cols: 110
-    rows: 28
+    rows: 22
 preconditions:
     commands:
         - run: "rm -rf .glyphrun/tmp/transcript-search-home .glyphrun/tmp/transcript-search-agents && mkdir -p .glyphrun/tmp/transcript-search-home/.config/local-agent .glyphrun/tmp/transcript-search-agents && printf '%s\\n' 'model:' '  auto_select: false' 'ice:' '  enabled: false' > .glyphrun/tmp/transcript-search-home/.config/local-agent/config.yaml && go build -o ./bin/local-agent ./cmd/local-agent"

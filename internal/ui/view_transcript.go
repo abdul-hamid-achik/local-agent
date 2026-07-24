@@ -290,9 +290,8 @@ func (m *Model) renderEntryInto(b *strings.Builder, entryIndex, contentW int, me
 		state.assistantStarted = false
 		return
 	}
-	showHeader := !state.assistantStarted
 	proseW := min(contentW, m.chatProseWidth())
-	memoKey := m.entryMemoKey(entry, contentW, proseW, showHeader)
+	memoKey := m.entryMemoKey(entry, contentW, proseW)
 	var chunk string
 	hit := false
 	if memoAllowed && memoKey != "" {
@@ -307,7 +306,7 @@ func (m *Model) renderEntryInto(b *strings.Builder, entryIndex, contentW int, me
 		case "user":
 			m.renderUserMsg(&entryView, entry.Content, entry.Attachments, proseW)
 		case "assistant":
-			m.renderAssistantMsg(&entryView, entry, contentW, showHeader)
+			m.renderAssistantMsg(&entryView, entry, contentW)
 		case "tool_group":
 			m.renderToolGroup(&entryView, entry)
 		case "error":
@@ -730,7 +729,7 @@ func fnv64(parts ...string) uint64 {
 // entryMemoKey builds the composite key capturing every input that affects
 // one entry's rendered chunk. An empty key means the entry cannot be projected
 // safely enough to memoize.
-func (m *Model) entryMemoKey(entry ChatEntry, contentW, proseW int, showHeader bool) string {
+func (m *Model) entryMemoKey(entry ChatEntry, contentW, proseW int) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s|%d|%d|%d|%t|%t|%d",
 		entry.Kind, entry.Revision, contentW, proseW, m.isDark, m.toolsCollapsed, m.glyphProfile)
@@ -738,9 +737,9 @@ func (m *Model) entryMemoKey(entry ChatEntry, contentW, proseW int, showHeader b
 	case "user":
 		fmt.Fprintf(&b, "|%d|%x|%d", len(entry.Content), fnv64(entry.Content), len(entry.Attachments))
 	case "assistant":
-		fmt.Fprintf(&b, "|%x|%t|%t|%t",
+		fmt.Fprintf(&b, "|%x|%t|%t",
 			fnv64(entry.Content, "\x00", entry.ThinkingContent),
-			entry.ThinkingCollapsed, entry.RenderedContent != "", showHeader)
+			entry.ThinkingCollapsed, entry.RenderedContent != "")
 	case "tool_group":
 		toolKey, ok := m.toolGroupMemoKey(entry)
 		if !ok {
@@ -808,9 +807,9 @@ func (m *Model) toolGroupMemoKey(chat ChatEntry) (string, bool) {
 func (m *Model) renderLiveTail(b *strings.Builder, contentW int, state *entryRenderState) {
 	var tail strings.Builder
 	if m.hasLiveTurnContent() {
-		m.renderStreamingMsg(&tail, m.streamBuf.String(), contentW, !state.assistantStarted)
+		m.renderStreamingMsg(&tail, m.streamBuf.String(), contentW)
 	} else if label := m.inlineTurnActivity(); label != "" {
-		m.renderInlineTurnActivity(&tail, label, contentW, !state.assistantStarted)
+		m.renderInlineTurnActivity(&tail, label, contentW)
 	}
 	tailRendered := tail.String()
 	if tailRendered == "" {
@@ -907,13 +906,10 @@ func (m *Model) inlineTurnActivity() string {
 	return ""
 }
 
-func (m *Model) renderInlineTurnActivity(b *strings.Builder, label string, contentW int, showHeader bool) {
+func (m *Model) renderInlineTurnActivity(b *strings.Builder, label string, contentW int) {
 	label = sanitizeTerminalSingleLine(label)
 	if label == "" {
 		return
-	}
-	if showHeader {
-		m.renderAssistantHeader(b, contentW)
 	}
 	b.WriteString(m.contentGrid().IndentBlock(" ", m.styles.StreamHint.Render(label)))
 	b.WriteString("\n")
@@ -970,7 +966,7 @@ func (m *Model) renderUserMsg(b *strings.Builder, content string, attachments []
 
 // renderAssistantMsg renders a completed assistant message block.
 // Uses cached RenderedContent if available (snap-into-place pattern).
-func (m *Model) renderAssistantMsg(b *strings.Builder, entry ChatEntry, contentW int, showHeader bool) {
+func (m *Model) renderAssistantMsg(b *strings.Builder, entry ChatEntry, contentW int) {
 	content := sanitizeTerminalMultiline(entry.Content)
 	hasContent := strings.TrimSpace(content) != ""
 	hasThinking := strings.TrimSpace(entry.ThinkingContent) != ""
@@ -978,9 +974,6 @@ func (m *Model) renderAssistantMsg(b *strings.Builder, entry ChatEntry, contentW
 		return
 	}
 
-	if showHeader {
-		m.renderAssistantHeader(b, contentW)
-	}
 
 	grid := m.contentGrid()
 	// Reasoning belongs to this assistant turn, so its disclosure follows the
@@ -1007,7 +1000,12 @@ func (m *Model) renderAssistantMsg(b *strings.Builder, entry ChatEntry, contentW
 			rendered = m.md.RenderFull(rendered)
 		}
 	}
-	// Trim excessive trailing whitespace from Glamour output.
+	// Trim Glamour's own document padding. Its Document style carries
+	// BlockPrefix/BlockSuffix newlines, and only the trailing one was being
+	// removed — the leading one survived as a blank row on top of the blank row
+	// transcriptEntrySeparator already inserts, so every assistant turn opened
+	// with a two-row gap. Vertical rhythm belongs to the separator alone.
+	rendered = strings.Trim(rendered, "\n")
 	rendered = strings.TrimRight(rendered, " \t\n")
 	rendered = grid.IndentBlock(" ", rendered)
 	b.WriteString(rendered)
@@ -1028,7 +1026,7 @@ func (m *Model) renderAssistantMsg(b *strings.Builder, entry ChatEntry, contentW
 }
 
 // renderStreamingMsg renders the in-progress assistant message (plain text).
-func (m *Model) renderStreamingMsg(b *strings.Builder, content string, contentW int, showHeader bool) {
+func (m *Model) renderStreamingMsg(b *strings.Builder, content string, contentW int) {
 	content = sanitizeTerminalMultiline(content)
 	hasContent := strings.TrimSpace(content) != ""
 	hasThinking := strings.TrimSpace(m.thinkBuf.String()) != ""
@@ -1036,9 +1034,6 @@ func (m *Model) renderStreamingMsg(b *strings.Builder, content string, contentW 
 		return
 	}
 
-	if showHeader {
-		m.renderAssistantHeader(b, contentW)
-	}
 
 	// Live reasoning uses the same assistant-owned hierarchy as the completed
 	// disclosure. A bounded tail window keeps token-by-token height stable; the
@@ -1097,13 +1092,6 @@ func (m *Model) renderStreamingAnswer(
 		b.WriteString(grid.IndentBlock(" ", wrapText(tail, wrapWidth)))
 		b.WriteString("\n")
 	}
-}
-
-func (m *Model) renderAssistantHeader(b *strings.Builder, _ int) {
-	// Quiet role chrome: dim single-word label (Grok barely shouts roles).
-	// Footer owns the only motion; this stays static transcript structure.
-	b.WriteString(m.contentGrid().Line(" ", m.styles.Dimmed.UnsetPaddingLeft().Render("assistant")))
-	b.WriteString("\n")
 }
 
 // renderToolGroup renders one tight tool receipt. The parent transcript owns

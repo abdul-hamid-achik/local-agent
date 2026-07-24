@@ -4,8 +4,8 @@
 ▌  Write session-grant.txt with the exact text session scoped approval.
 
 
-   assistant
    Waiting for model…
+
 
 
 ─────────────────────────────────────────────────────────────────────────────────────────

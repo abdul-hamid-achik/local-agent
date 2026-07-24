@@ -730,7 +730,6 @@ func (m *Model) transcriptSearchAnswerSuffix(
 			&projected,
 			answerOnly,
 			contentWidth,
-			false,
 		)
 	}
 	projection := strings.TrimRight(projected.String(), "\n")

@@ -11,13 +11,22 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-func TestAssistantHeaderIsStaticWhileFooterOwnsMotion(t *testing.T) {
+// Assistant turns carry no role label. The user gutter already marks whose
+// turn a block is, and the footer owns the only motion in the frame.
+func TestAssistantTurnsCarryNoRoleLabelOrMotion(t *testing.T) {
 	m := newTestModel(t)
 	m.reducedMotion = false
 	var rendered strings.Builder
-	m.renderAssistantHeader(&rendered, 80)
-	if got := rendered.String(); strings.Contains(got, m.spin.View()) {
-		t.Fatalf("assistant header duplicated the footer spinner: %q", got)
+	m.renderAssistantMsg(&rendered, ChatEntry{
+		Kind:    "assistant",
+		Content: "a settled answer",
+	}, m.chatContentWidth())
+	got := ansi.Strip(rendered.String())
+	if strings.Contains(got, "assistant") {
+		t.Fatalf("assistant turn reintroduced a role label: %q", got)
+	}
+	if strings.Contains(rendered.String(), m.spin.View()) {
+		t.Fatalf("assistant turn duplicated the footer spinner: %q", got)
 	}
 }
 
@@ -194,8 +203,10 @@ func TestLiveReasoningStaysInsideAssistantTurnUntilAnswerStarts(t *testing.T) {
 	m.thinkBuf.WriteString("inspect files\ncompare behavior")
 
 	plain := ansi.Strip(m.renderEntries())
-	if got := strings.Count(plain, "assistant"); got != 1 {
-		t.Fatalf("thinking-only stream rendered %d assistant headers, want one:\n%s", got, plain)
+	// Assistant turns carry no role label, so ownership is structural: the
+	// reasoning block is the only thing in the turn until an answer starts.
+	if strings.Contains(plain, "assistant") {
+		t.Fatalf("assistant turn reintroduced a role label:\n%s", plain)
 	}
 	for _, want := range []string{"│ Thinking…", "compare behavior"} {
 		if !strings.Contains(plain, want) {
@@ -311,11 +322,11 @@ func TestReasoningOnlyCompletionBelongsToAssistantBlock(t *testing.T) {
 	}}
 
 	plain := ansi.Strip(m.renderEntries())
-	if got := strings.Count(plain, "assistant"); got != 1 {
-		t.Fatalf("completed reasoning-only segment rendered %d assistant headers, want one:\n%s", got, plain)
-	}
 	if !strings.Contains(plain, "▸ Thought") {
 		t.Fatalf("completed reasoning receipt missing:\n%s", plain)
+	}
+	if strings.Contains(plain, "assistant") {
+		t.Fatalf("assistant turn reintroduced a role label:\n%s", plain)
 	}
 }
 
@@ -347,9 +358,6 @@ func TestToolCallSettlesReasoningBeforeReceipt(t *testing.T) {
 		t.Fatalf("reasoning/tool entry order = %#v", m.entries)
 	}
 	plain := ansi.Strip(m.renderEntries())
-	if got := strings.Count(plain, "assistant"); got != 1 {
-		t.Fatalf("tool reasoning rendered %d assistant headers, want one:\n%s", got, plain)
-	}
 	reasoningAt := strings.Index(plain, "Thought")
 	toolAt := strings.Index(strings.ToLower(plain), "read")
 	if reasoningAt < 0 || toolAt < 0 || reasoningAt > toolAt {
@@ -357,7 +365,9 @@ func TestToolCallSettlesReasoningBeforeReceipt(t *testing.T) {
 	}
 }
 
-func TestAssistantHeaderAppearsOnceAcrossReasoningSegments(t *testing.T) {
+// Consecutive reasoning segments of one turn read as one block: they stack
+// without a chapter break, and the answer follows them.
+func TestReasoningSegmentsOfOneTurnStayTogether(t *testing.T) {
 	m := newTestModel(t)
 	m.entries = []ChatEntry{
 		{Kind: "user", Content: "inspect and explain"},
@@ -369,8 +379,11 @@ func TestAssistantHeaderAppearsOnceAcrossReasoningSegments(t *testing.T) {
 	// Sticky owns the latest user prompt; body must still show the assistant turn.
 	m.settleChromeSpringForTest()
 	plain := ansi.Strip(m.renderEntries())
-	if got := strings.Count(plain, "assistant"); got != 1 {
-		t.Fatalf("one assistant turn rendered %d role headers:\n%s", got, plain)
+	if strings.Contains(plain, "assistant") {
+		t.Fatalf("assistant turn reintroduced a role label:\n%s", plain)
+	}
+	if answerAt, reasoningAt := strings.Index(plain, "Here is the result."), strings.Index(plain, "▸ Thought"); answerAt < reasoningAt {
+		t.Fatalf("answer preceded the reasoning that produced it:\n%s", plain)
 	}
 	if sticky := ansi.Strip(m.projectFrame().Header.Content); !strings.Contains(sticky, "inspect and explain") {
 		t.Fatalf("sticky user omitted prompt:\n%s", sticky)

@@ -553,11 +553,14 @@ func (c ToolCard) ViewWithActivity(width int, activityGlyph string, elapsed time
 	return b.String()
 }
 
-// collapsedToolBodyFooter returns a "N lines hidden" cue when a collapsed
-// receipt has multi-line body content. Single-line or empty bodies stay
-// header-only so success receipts remain one log line. The wording matches the
-// output-viewer grammar ("230 lines hidden · open output") and names no input
-// method: expansion works via ctrl+r, ctrl+b, or a header click.
+// collapsedToolBodyFooter returns a "N lines hidden · ctrl+r" cue when a
+// collapsed receipt has multi-line body content. Single-line or empty bodies
+// stay header-only so success receipts remain one log line.
+//
+// The key is named even though ctrl+b and a header click also expand. Hidden
+// content with no stated way to reach it is a dead end for anyone who has not
+// already read the help overlay, and naming the primary key does not make the
+// alternatives stop working.
 func collapsedToolBodyFooter(result string) string {
 	result = strings.TrimRight(result, "\n")
 	if strings.TrimSpace(result) == "" {
@@ -572,7 +575,7 @@ func collapsedToolBodyFooter(result string) string {
 	if lines < 2 {
 		return ""
 	}
-	return fmt.Sprintf("%d lines hidden", lines)
+	return fmt.Sprintf("%d lines hidden · ctrl+r", lines)
 }
 
 // toolCardSummaryWithoutRepeatedAction keeps a routed tool's specialist or

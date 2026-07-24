@@ -81,3 +81,26 @@ func TestWriteSessionResumeMessageSuppressesUnavailableOrFailedExit(t *testing.T
 		})
 	}
 }
+
+// The exit receipt lands on rows the restored terminal may still be painting
+// the last TUI frame on. Without an erase, the tail of the row underneath is
+// appended to ours and the resume line becomes a wrong, copyable command.
+func TestExitReceiptErasesLineTailsOnATerminal(t *testing.T) {
+	lines := []string{"", "Session c0ffee1", "Resume this session with:", "  local-agent --resume c0ffee1"}
+
+	terminal := exitReceiptText(lines, true)
+	for _, line := range lines {
+		if !strings.Contains(terminal, line+"\x1b[K\n") {
+			t.Fatalf("line %q was written without an erase:\n%q", line, terminal)
+		}
+	}
+
+	// Redirected output must stay plain text.
+	plain := exitReceiptText(lines, false)
+	if strings.Contains(plain, "\x1b") {
+		t.Fatalf("non-terminal receipt leaked an escape sequence:\n%q", plain)
+	}
+	if plain != "\nSession c0ffee1\nResume this session with:\n  local-agent --resume c0ffee1\n" {
+		t.Fatalf("non-terminal receipt changed shape:\n%q", plain)
+	}
+}

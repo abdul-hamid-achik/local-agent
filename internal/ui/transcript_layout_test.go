@@ -66,14 +66,15 @@ func TestRenderEntriesNestsReasoningAndDenselyStacksTools(t *testing.T) {
 	}
 
 	plain := ansi.Strip(m.renderEntries())
-	assistantAt := strings.Index(plain, "assistant\n")
+	// Turn ownership is structural, not labelled: reasoning comes first, then
+	// the answer it produced. No role header separates them.
 	reasoningAt := strings.Index(plain, "Thought")
 	startingAt := strings.Index(plain, "starting")
-	if assistantAt < 0 || reasoningAt < assistantAt || startingAt < reasoningAt {
-		t.Fatalf("assistant turn ownership is unclear:\n%s", plain)
+	if reasoningAt < 0 || startingAt < reasoningAt {
+		t.Fatalf("reasoning did not precede the answer it produced:\n%s", plain)
 	}
-	if got := strings.Count(plain, "assistant\n"); got != 1 {
-		t.Fatalf("tool boundaries split one assistant turn into %d role headers:\n%s", got, plain)
+	if strings.Contains(plain, "assistant\n") {
+		t.Fatalf("transcript reintroduced a role label:\n%s", plain)
 	}
 	// ToolCard owns content-grid accent+pad; dense stack is a single newline
 	// between receipts with no parent indent. Collapsed success stays calm

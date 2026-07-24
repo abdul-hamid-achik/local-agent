@@ -1,11 +1,10 @@
-▌  about the Agent Hub.
+│  result: succeeded
 
-│  ▾ ✓ Consulted experts
-│  ✓ generalist · complet…
-│    consultation complet…
-│  tool: consult_experts
-│  call: completed
-─────────────────────────────
-   <session> · Paused · end
-▏❯ Ask · /help
-   enter send · shift+tab
+ ╭──────────────────────────╮
+ │ Agents · 1 consultatio…  │
+ │ │ Consultation #<session>… │
+ │                          │
+ │                          │
+ │                          │
+ │ esc close · enter view   │
+ ╰──────────────────────────╯
