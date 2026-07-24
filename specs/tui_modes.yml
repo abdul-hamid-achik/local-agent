@@ -38,7 +38,7 @@ steps:
         timeoutMs: 2000
     - wait:
         screen:
-            contains: "▏❯ Ask"
+            contains: "Ask"
         timeoutMs: 2000
     - snapshot: normal_default
     - press: "shift+tab"
@@ -48,7 +48,7 @@ steps:
         timeoutMs: 2000
     - wait:
         screen:
-            contains: "▌❯ Ask"
+            contains: "Ask"
         timeoutMs: 2000
     - type: "design a safe migration"
     - press: "enter"

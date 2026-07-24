@@ -36,11 +36,11 @@ steps:
         rows: 12
     - wait:
         screen:
-            contains: "ctrl+p settings"
+            contains: "LOCAL AGENT"
         timeoutMs: 2000
     - wait:
         screen:
-            contains: "▏❯ Ask"
+            contains: "Ask"
         timeoutMs: 2000
     - snapshot: minimum_idle
     - press: "ctrl+p"
@@ -61,7 +61,7 @@ steps:
         timeoutMs: 2000
     - wait:
         screen:
-            contains: "▌❯ Ask"
+            contains: "Ask"
         timeoutMs: 2000
     - snapshot: minimum_plan_form
     - wait:

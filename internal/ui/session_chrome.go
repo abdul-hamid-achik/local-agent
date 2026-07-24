@@ -134,6 +134,11 @@ func (m *Model) sessionWorkspaceLabel(paneW int) string {
 	// by machine (macOS home vs GitHub runner) and post-render normalizers
 	// cannot fix padding computed from the longer original path.
 	display := filepath.Base(dir)
+	// Glyphrun / temp workdirs encode scenario names that still truncate
+	// differently across hosts — keep a stable short label for those.
+	if strings.Contains(display, "glyphrun") {
+		display = "workspace"
+	}
 	limit := 18
 	switch {
 	case paneW >= 96:

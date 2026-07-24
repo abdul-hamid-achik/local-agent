@@ -1,4 +1,4 @@
-   local-agent-glyph…                8/16.4k · 0%
+   workspace                         8/16.4k · 0%
 
 
  ▌ Create approval-probe.txt with the exact text…
