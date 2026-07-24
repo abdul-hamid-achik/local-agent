@@ -14,13 +14,12 @@
    Target     <temp>/local-agent-glyphrun-approval-always-workdir/session-grant.txt
    Impact     Creates or replaces the target file with the proposed content.
    Scope      Exact arguments · this process only
-   Request    309302e8b9f8
 
    Proposed change
    › n deny
      y once
-     s same/session
-     a tool/session
-     p path · session-grant.txt
-     w save · session-grant.txt
+     s same request again this session
+     a this tool again this session
+     p path again this session · session-grant.txt
+     w save path for workspace · session-grant.txt
    esc cancel turn · enter select · ↑/↓/j/k move · d arguments · pgup/dn scroll

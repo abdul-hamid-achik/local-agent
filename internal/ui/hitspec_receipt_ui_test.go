@@ -75,8 +75,8 @@ func TestCompletedHitspecCaptureShowsBoundedArtifactReceipt(t *testing.T) {
 	for _, want := range []string{
 		"Captured webpage artifact",
 		"specialist: Hitspec · artifact",
-		"transport: succeeded",
-		"domain: succeeded",
+		"call: completed",
+		"result: succeeded",
 		"evidence: supported",
 		"fcheap://stash/stash-ui-123",
 		"1 file",

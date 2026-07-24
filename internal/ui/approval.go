@@ -617,6 +617,24 @@ func (m *Model) renderApprovalChoices(width int) string {
 		return indicator + keyView + " " + labelView
 	}
 
+	// choiceRow degrades per row rather than per screen. Once the choices stack
+	// vertically each row owns the full width, so the compact label is only
+	// warranted when the prose one genuinely does not fit. Reaching for it as
+	// soon as the single-row layout failed is why an 89-column terminal asked
+	// the user to choose between "same/session" and "tool/session" — two labels
+	// that do not say what they do — while the prose that explains them
+	// ("same request again this session") was already written and unused.
+	choiceRow := func(choice approvalChoice, active bool, budget int) string {
+		if full := choiceView(choice, active, false); lipgloss.Width(full) <= budget {
+			return full
+		}
+		compact := choiceView(choice, active, true)
+		if lipgloss.Width(compact) <= budget {
+			return compact
+		}
+		return truncateDisplayWithGlyphProfile(compact, budget, m.glyphProfile)
+	}
+
 	wide := make([]string, 0, len(choices)*2-1)
 	for index, choice := range choices {
 		if index > 0 {
@@ -628,30 +646,17 @@ func (m *Model) renderApprovalChoices(width int) string {
 	if lipgloss.Width(wideView) <= width {
 		return wideView
 	}
-	if width < 40 {
-		// One choice per row keeps minimum-width screens deterministic across
-		// platforms. Pairing two compact choices per line truncates differently
-		// depending on terminal width accounting for focus glyphs.
-		rows := make([]string, 0, len(choices))
-		for index, choice := range choices {
-			rows = append(rows, truncateDisplayWithGlyphProfile(
-				strings.TrimLeft(choiceView(choice, index == selected, true), " "),
-				width,
-				m.glyphProfile,
-			))
-		}
-		return lipgloss.JoinVertical(lipgloss.Left, rows...)
-	}
 
+	// One choice per row keeps minimum-width screens deterministic across
+	// platforms. Pairing two compact choices per line truncates differently
+	// depending on terminal width accounting for focus glyphs.
 	rows := make([]string, 0, len(choices))
 	for index, choice := range choices {
-		rows = append(rows,
-			truncateDisplayWithGlyphProfile(
-				choiceView(choice, index == selected, true),
-				width,
-				m.glyphProfile,
-			),
-		)
+		row := choiceRow(choice, index == selected, width)
+		if width < 40 {
+			row = strings.TrimLeft(row, " ")
+		}
+		rows = append(rows, row)
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
@@ -796,17 +801,16 @@ func (m *Model) buildApprovalPreview(width int) string {
 		appendPathRow("Target", preview.Path)
 	}
 	appendRow("Impact", boundedApprovalMetadata(preview.Consequence, approvalMaximumConsequenceBytes))
-	// Progressive disclosure: Scope + Request digest stay calm on narrow panes.
-	// Wide surfaces (>= 40 content columns) keep them visible by default; the
-	// d/ShowArguments toggle still exposes exact arguments without changing
-	// permission keys or decision semantics.
+	// Progressive disclosure: Scope stays calm on narrow panes and is visible by
+	// default on wide surfaces (>= 40 content columns).
+	//
+	// The argument digest is deliberately not here. It is an opaque hex handle
+	// that nobody decides anything from, and buildApprovalArguments already
+	// prints it as "Bound to <digest>" beside the exact arguments it fingerprints
+	// — which is the only place it means anything. The d/ShowArguments toggle
+	// reaches it without changing permission keys or decision semantics.
 	if width >= 40 {
 		appendRow("Scope", approvalScopeLabel(request.Scope))
-		digest := request.ArgumentsSHA256
-		if digest == "" {
-			digest = preview.ArgumentsSHA256
-		}
-		appendRow("Request", shortApprovalDigest(digest))
 	}
 
 	switch preview.Kind {

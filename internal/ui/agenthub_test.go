@@ -225,7 +225,7 @@ func TestAgentHubEscapeFilterViewerAndPrivacy(t *testing.T) {
 	for _, want := range []string{
 		"Agent Viewer",
 		"generalist",
-		"No public child events are available for this runtime.",
+		"This agent does not report step-by-step activity.",
 	} {
 		if !strings.Contains(viewer, want) {
 			t.Fatalf("Viewer missing %q:\n%s", want, viewer)

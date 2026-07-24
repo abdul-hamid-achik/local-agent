@@ -93,7 +93,7 @@ steps:
         timeoutMs: 3000
     - wait:
         screen:
-            contains: "No public child events are available for this runtime."
+            contains: "This agent does not report step-by-step activity."
         timeoutMs: 3000
     - wait:
         idle:

@@ -22,7 +22,7 @@
   │ not linked · bounded local goal                                          │
   │                                                                          │
   │ Budget                                                                   │
-  │ Actions · 2/4                                                            │
+  │ Actions                                                                  │
   │ Pause ×  › Resume  Budget  Drop                                          │
   │ Resume or safely retry goal evaluation                                   │
   │ esc close · ←/→ action · enter select · j/k scroll                       │

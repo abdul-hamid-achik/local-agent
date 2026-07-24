@@ -87,7 +87,7 @@ func TestHitspecSearchRendersSuccessfulCandidateEvidence(t *testing.T) {
 	}
 	card.Expanded = true
 	expanded := ansi.Strip(card.View(76))
-	for _, expected := range []string{"specialist: Hitspec · discovery", "domain: succeeded", "evidence: candidate"} {
+	for _, expected := range []string{"specialist: Hitspec · discovery", "result: succeeded", "evidence: candidate"} {
 		if !strings.Contains(expanded, expected) {
 			t.Fatalf("expanded Hitspec search receipt missing %q:\n%s", expected, expanded)
 		}
@@ -111,7 +111,7 @@ func TestExpandedSemanticReceiptShowsDownstreamRouteAndEvidence(t *testing.T) {
 		Route:    ecosystem.ToolRoute{Gateway: "mcphub", Server: "cortex", Tool: "cortex_investigate", Lazy: true},
 	}
 	plain := ansi.Strip(card.View(76))
-	for _, want := range []string{"Investigated", "specialist: Cortex · coordination", "route: Local Agent → MCPHub → Cortex · lazy", "transport: succeeded", "domain: succeeded", "evidence: supported"} {
+	for _, want := range []string{"Investigated", "specialist: Cortex · coordination", "route: Local Agent → MCPHub → Cortex · lazy", "call: completed", "result: succeeded", "evidence: supported"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("expanded semantic receipt missing %q:\n%s", want, plain)
 		}
@@ -158,8 +158,8 @@ func TestDeferredMCPHubReceiptShowsStoredResultAndFetchPath(t *testing.T) {
 
 	plain := ansi.Strip(card.View(76))
 	for _, want := range []string{
-		"Result stored", "fetch call-123", "transport: succeeded",
-		"domain: attention", "evidence: none", "stored result: call-123",
+		"Result stored", "fetch call-123", "call: completed",
+		"result: needs attention", "evidence: none", "stored result: call-123",
 	} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("stored MCPHub receipt missing %q:\n%s", want, plain)

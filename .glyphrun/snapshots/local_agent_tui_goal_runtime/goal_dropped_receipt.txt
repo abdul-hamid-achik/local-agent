@@ -22,7 +22,7 @@
   │ Cortex                                                                   │
   │ not linked · bounded local goal                                          │
   │                                                                          │
-  │ Actions · 1/4                                                            │
+  │ Actions                                                                  │
   │ › Pause ×  Resume ×  Budget ×  Drop ×                                    │
   │   Unavailable · Only an active goal can be paused.                       │
   │ esc close · ←/→ action · enter select · j/k scroll                       │

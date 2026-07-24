@@ -8,7 +8,7 @@
  │ … generalist · running · consulting · qwen3.5:0.8b · local                 │
  │                                                                            │
  │ Activity                                                                   │
- │ No public child events are available for this runtime.                     │
+ │ This agent does not report step-by-step activity.                          │
  │                                                                            │
  │                                                                            │
  │                                                                            │

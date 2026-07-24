@@ -407,7 +407,9 @@ func (i *GoalInspector) renderActionHeader(width int) string {
 	if len(i.actions) == 0 {
 		return i.styles.OverlayAccent.Render("Actions")
 	}
-	return i.styles.OverlayAccent.Render(truncateDisplay(fmt.Sprintf("Actions · %d/%d", i.selected+1, len(i.actions)), width))
+	// The rail below lists every action with the selected one marked, so an
+	// "n/total" counter beside the heading restated it in a form nobody reads.
+	return i.styles.OverlayAccent.Render(truncateDisplay("Actions", width))
 }
 
 func (i *GoalInspector) renderActionRail(width int) string {

@@ -6,6 +6,6 @@
  │   consulting · qwen3.5:… │
  │                          │
  │ Activity                 │
- │ No public child events … │
+ │ This agent does not rep… │
  │ esc back · enter jump    │
  ╰──────────────────────────╯

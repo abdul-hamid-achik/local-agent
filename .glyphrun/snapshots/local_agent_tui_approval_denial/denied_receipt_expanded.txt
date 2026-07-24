@@ -7,8 +7,8 @@
 │  ▾ ✗ Write failed
 │  tool: write
 │  args: content="[hidden]" path="approval-pr…
-│  transport: failed
-│  domain: failed
+│  call: failed
+│  result: failed
 │  evidence: none
 │  tool call denied: user denied tool executi…
 

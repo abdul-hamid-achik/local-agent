@@ -40,3 +40,37 @@ func TestRenderKeyHintsDegradesByPriority(t *testing.T) {
 		t.Fatalf("tiny hint width = %d, want <= 11", got)
 	}
 }
+
+// Two keys bound to one verb read as a bug. The grammar already has a form for
+// alternatives, so they merge instead of appearing twice.
+func TestKeyHintsMergeAliasesForOneAction(t *testing.T) {
+	merged := mergeKeyHintAliases([]keyHint{
+		{Key: "esc", Action: "cancel"},
+		{Key: "enter", Action: "cancel"},
+		{Key: "↑/↓", Action: "move"},
+	})
+	if len(merged) != 2 {
+		t.Fatalf("expected 2 hints after merge, got %d: %+v", len(merged), merged)
+	}
+	if merged[0].Key != "esc/enter" || merged[0].Action != "cancel" {
+		t.Fatalf("aliases did not merge into one hint: %+v", merged[0])
+	}
+	if merged[1].Key != "↑/↓" {
+		t.Fatalf("unrelated hint was disturbed: %+v", merged[1])
+	}
+}
+
+func TestKeyHintsKeepDistinctActionsAndRepeatedKeys(t *testing.T) {
+	merged := mergeKeyHintAliases([]keyHint{
+		{Key: "esc", Action: "cancel"},
+		{Key: "enter", Action: "select"},
+		{Key: "esc", Action: "cancel"},
+	})
+	if len(merged) != 2 {
+		t.Fatalf("expected 2 hints, got %d: %+v", len(merged), merged)
+	}
+	// The repeated esc/cancel pair must not become "esc/esc".
+	if merged[0].Key != "esc" {
+		t.Fatalf("identical hint was duplicated into the key list: %+v", merged[0])
+	}
+}

@@ -835,8 +835,11 @@ func renderAgentViewerLayout(
 		agentViewerRowAnchor{key: "activity"},
 	)
 	appendRow(
+		// "No public child events are available for this runtime" described the
+		// implementation, not the situation: nothing in it tells a reader
+		// whether something is wrong or what to do about it.
 		styles.OverlayDim.Render(truncate(
-			"No public child events are available for this runtime.",
+			"This agent does not report step-by-step activity.",
 		)),
 		agentViewerRowAnchor{key: "no-events"},
 	)

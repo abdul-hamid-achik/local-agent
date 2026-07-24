@@ -703,6 +703,53 @@ func deferredMCPHubResult(projection ecosystem.ToolProjection) bool {
 		projection.Operation != "mcphub_get_result"
 }
 
+// transportReadingLabel and domainReadingLabel put the projection's internal
+// state vocabulary into plain reading without collapsing the axes.
+//
+// The three axes are deliberately independent: a call can complete while the
+// tool reports nothing interpretable, and neither implies verified evidence.
+// But "transport: succeeded" reads as "it worked" to anyone who has not read
+// internal/ecosystem, which is the exact confusion the separation exists to
+// prevent. "call: completed · result: not reported" says the same thing and
+// survives being read literally.
+func transportReadingLabel(state ecosystem.TransportState) string {
+	switch state {
+	case ecosystem.TransportRunning:
+		return "running"
+	case ecosystem.TransportSucceeded:
+		return "completed"
+	case ecosystem.TransportFailed:
+		return "failed"
+	default:
+		return string(state)
+	}
+}
+
+func domainReadingLabel(state ecosystem.DomainState) string {
+	switch state {
+	case ecosystem.DomainPending:
+		return "pending"
+	case ecosystem.DomainUnknown, "":
+		// Not the same as failure: the tool answered in a shape this build
+		// cannot interpret, so no outcome may be claimed either way.
+		return "not reported"
+	case ecosystem.DomainSucceeded:
+		return "succeeded"
+	case ecosystem.DomainAttention:
+		return "needs attention"
+	case ecosystem.DomainFailed:
+		return "failed"
+	case ecosystem.DomainBlocked:
+		return "blocked"
+	case ecosystem.DomainConflict:
+		return "conflict"
+	case ecosystem.DomainDrift:
+		return "drift"
+	default:
+		return string(state)
+	}
+}
+
 func toolProjectionDetails(projection ecosystem.ToolProjection, profiles ...GlyphProfile) []string {
 	projection = projection.Normalize()
 	if projection.Transport == "" {
@@ -726,12 +773,8 @@ func toolProjectionDetails(projection ecosystem.ToolProjection, profiles ...Glyp
 		}
 		details = append(details, route)
 	}
-	details = append(details, "transport: "+string(projection.Transport))
-	domain := string(projection.Domain)
-	if domain == "" {
-		domain = string(ecosystem.DomainUnknown)
-	}
-	details = append(details, "domain: "+domain)
+	details = append(details, "call: "+transportReadingLabel(projection.Transport))
+	details = append(details, "result: "+domainReadingLabel(projection.Domain))
 	evidence := string(projection.Evidence)
 	if evidence == "" {
 		evidence = "none"

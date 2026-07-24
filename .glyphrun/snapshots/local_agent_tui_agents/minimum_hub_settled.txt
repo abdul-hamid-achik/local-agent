@@ -4,7 +4,7 @@
 │  ✓ generalist · complet…
 │    consultation complet…
 │  tool: consult_experts
-│  transport: succeeded
+│  call: completed
 ─────────────────────────────
    <session> · Paused · end
 ▏❯ Ask · /help

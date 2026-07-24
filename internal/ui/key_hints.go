@@ -22,6 +22,7 @@ func (m *Model) renderKeyHints(width int, hints ...keyHint) string {
 	if width <= 0 || len(hints) == 0 {
 		return ""
 	}
+	hints = mergeKeyHintAliases(hints)
 	// Compact progressively: keep as many controls as possible, then retain as
 	// many leading action labels as fit. Trying every intermediate action count
 	// avoids needlessly turning a clear primary hint such as "enter select" into
@@ -34,6 +35,37 @@ func (m *Model) renderKeyHints(width int, hints ...keyHint) string {
 		}
 	}
 	return truncateDisplayWithGlyphProfile(m.renderKeyHintSet(hints[:1], 0), width, m.glyphProfile)
+}
+
+// mergeKeyHintAliases folds hints that advertise the same action into one hint
+// with alternative keys, which is what the '/' in this grammar already means.
+//
+// Surfaces build their hints from local state, so two keys can legitimately end
+// up bound to the same verb — the Cloud consent footer read "esc cancel · enter
+// cancel" whenever the Cancel row was selected, which looks like a bug rather
+// than like two ways to do one thing. Merging here rather than at each call
+// site means a surface cannot reintroduce the pairing by accident, and no key
+// is hidden: "esc/enter cancel" still advertises both.
+func mergeKeyHintAliases(hints []keyHint) []keyHint {
+	merged := make([]keyHint, 0, len(hints))
+	positionByAction := make(map[string]int, len(hints))
+	for _, hint := range hints {
+		action := strings.ToLower(strings.TrimSpace(hint.Action))
+		key := strings.TrimSpace(hint.Key)
+		if action == "" || key == "" {
+			merged = append(merged, hint)
+			continue
+		}
+		if at, seen := positionByAction[action]; seen {
+			if !strings.Contains(merged[at].Key+"/", key+"/") {
+				merged[at].Key += "/" + key
+			}
+			continue
+		}
+		positionByAction[action] = len(merged)
+		merged = append(merged, hint)
+	}
+	return merged
 }
 
 // actionLimit is -1 for every action, 0 for none, or a positive count of

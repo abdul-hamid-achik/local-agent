@@ -70,7 +70,7 @@ steps:
         timeoutMs: 2000
     - wait:
         screen:
-            contains: "same/session"
+            contains: "same request again this session"
         timeoutMs: 2000
     - wait:
         screen:
