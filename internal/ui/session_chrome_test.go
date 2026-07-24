@@ -159,7 +159,7 @@ func TestSessionChromeAlignsToContentOrigin(t *testing.T) {
 		t.Fatalf("welcome re-printed model already on top bar:\n%s", plain)
 	}
 	if strings.Contains(plain, "LOCAL AGENT") || strings.Contains(plain, "Local-first") ||
-		strings.Contains(plain, "Ask, @mention") {
+		strings.Contains(plain, "Ask, @mention") || strings.Contains(plain, "Ask · /help") {
 		t.Fatalf("roomy welcome should stay empty when chrome owns the frame:\n%s", plain)
 	}
 }

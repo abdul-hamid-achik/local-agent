@@ -22,6 +22,6 @@ plan · paused · 0/2 verified
   □ pending · Record passing evidence from focused or reproducible ver…
  [ AUTO ] · Ⅱ paused · ship a bo… · <session> · qwen3.5:2b · 0/16.4k · 0%
 ╭─────────────────────────────────────────────────────────────────────╮
-│▌❯ Ask, @mention files, or type /help                               │
+│▌❯ Ask                                                         …     │
 ╰─────────────────────────────────────────────────────────────────────╯
    enter send · shift+tab mode · esc · f1             qwen3.5:2b · AUTO

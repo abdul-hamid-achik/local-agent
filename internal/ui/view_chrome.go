@@ -504,13 +504,7 @@ func (m *Model) renderWelcome(b *strings.Builder) {
 		writeLine(m.styles.WelcomeHint, "press p to pull qwen3.5:2b (~2.7 GB)")
 	}
 
-	invite := "Ask, @mention files, or type /help"
-	if micro {
-		invite = "Ask · /help"
-	} else if compact {
-		invite = "Ask or type /help"
-	}
-	writeLine(m.styles.WelcomeHint, invite)
+	writeLine(m.styles.WelcomeHint, "Ask · /help")
 }
 
 // emptyWelcomeTopPad keeps the empty-state welcome just under the session

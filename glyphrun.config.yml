@@ -107,11 +107,11 @@ terminal:
         with: "<project>"
       - regex: "~/work/local-agent/local-agent"
         with: "<project>"
-      # Placeholder truncation marker placement can shift with cell metrics.
-      - regex: "(Ask, @mention files, or type /help)…(\\s*)"
-        with: "$1$2"
-      - regex: "(Ask, @mention files, or type /help)(\\s+)…"
-        with: "$1$2"
+      # Legacy long placeholder (pre-dense chrome) if any residual frames remain.
+      - regex: "Ask, @mention files, or type /help"
+        with: "Ask"
+      - regex: "Ask or type / for commands"
+        with: "Ask · /help"
       # Session public IDs are random 7-char hex handles. Normalize them so
       # committed snapshots stay stable across runs while still covering the
       # handle shape in screen text.

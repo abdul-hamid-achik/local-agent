@@ -7,5 +7,5 @@ Ask · /help
 
 ─────────────────────────────
    ctrl+p settings
-▏❯ Ask or type / for commands
+▏❯ Ask · /help
    enter send · shift+tab

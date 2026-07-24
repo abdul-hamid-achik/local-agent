@@ -189,11 +189,13 @@ func (m *Model) handleWindowSize(msg tea.WindowSizeMsg, cmds []tea.Cmd) []tea.Cm
 		m.goalRecoveryState.SetSize(m.width, m.height)
 	}
 
-	// Input width matches viewport exactly - they're one unified area
+	// Input width matches viewport exactly - they're one unified area.
+	// Keep placeholders short so mid-width frames (and CI PTYs) never truncate
+	// the invite into host-dependent "Ask, @m…" chips.
 	if msg.Width < 36 {
-		m.input.Placeholder = "Ask or type / for commands"
+		m.input.Placeholder = "Ask · /help"
 	} else {
-		m.input.Placeholder = "Ask, @mention files, or type /help"
+		m.input.Placeholder = "Ask"
 	}
 	m.input.MaxHeight = composerVisibleRowLimit(msg.Height)
 	m.input.SetWidth(viewportWidth)

@@ -7,5 +7,5 @@
 │  transport: succeeded
 ─────────────────────────────
   <session> · Paused · end
-▏❯ Ask or type / for commands
+▏❯ Ask · /help
    enter send · shift+tab

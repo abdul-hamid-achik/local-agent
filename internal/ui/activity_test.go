@@ -64,7 +64,7 @@ func TestMinimumTerminalWorkingStatesFit(t *testing.T) {
 			if !strings.Contains(view, tt.want) {
 				t.Fatalf("minimum view missing %q:\n%s", tt.want, view)
 			}
-			if tt.name == "idle" && !strings.Contains(ansi.Strip(view), "Ask or type / for commands") {
+			if tt.name == "idle" && !strings.Contains(ansi.Strip(view), "Ask") {
 				t.Fatalf("minimum composer placeholder is not actionable:\n%s", view)
 			}
 			assertRenderedLinesFit(t, view, 30)

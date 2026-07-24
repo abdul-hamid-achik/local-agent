@@ -389,7 +389,7 @@ func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, com
 	reducedMotion := reducedMotionRequested()
 	glyphProfile := requestedGlyphProfile()
 	ta := textarea.New()
-	ta.Placeholder = "Ask, @mention files, or type /help"
+	ta.Placeholder = "Ask"
 	ta.Focus()
 	ta.CharLimit = 32 * 1024
 	ta.DynamicHeight = true
