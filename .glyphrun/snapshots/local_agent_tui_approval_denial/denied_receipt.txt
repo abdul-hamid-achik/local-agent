@@ -4,6 +4,7 @@
 ▌  Create approval-probe.txt with the exact text…
 
 
+   assistant
    │ ▸ Thought
 
 │  ✗ Write failed approval-probe.txt
@@ -11,9 +12,8 @@
 
 
    Denied safely. No file was changed.
+
 ─────────────────────────────────────────────────
    <session>
-╭───────────────────────────────────────────────╮
-│▏❯ A…                                          │
-╰───────────────────────────────────────────────╯
+▏❯ Ask
    enter send · shift+tab mode

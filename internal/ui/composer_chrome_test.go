@@ -5,34 +5,57 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
-func TestComposerFrameOnRoomyFrame(t *testing.T) {
-	m := newTestModel(t)
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	m = updated.(*Model)
-	if !m.composerFrameEnabled() {
-		t.Fatal("expected framed composer on roomy terminal")
-	}
-	view, _ := m.renderComposerChrome()
-	plain := ansi.Strip(view)
-	if !strings.Contains(plain, "╭") && !strings.Contains(plain, "+") {
-		t.Fatalf("framed composer missing border:\n%s", plain)
+// The draft is unframed at every size. The transcript rule above it and the
+// shortcuts row below already bound it; a box added a second rectangle and
+// cost two rows on every frame.
+func TestComposerIsUnframedAtEverySize(t *testing.T) {
+	for _, size := range []struct {
+		name          string
+		width, height int
+	}{
+		{"minimum", minTerminalWidth, minTerminalHeight},
+		{"standard", 80, 24},
+		{"wide", 120, 36},
+	} {
+		m := newTestModel(t)
+		updated, _ := m.Update(tea.WindowSizeMsg{Width: size.width, Height: size.height})
+		m = updated.(*Model)
+
+		view, _ := m.renderComposerChrome()
+		plain := ansi.Strip(view)
+		for _, border := range []string{"╭", "╮", "╰", "╯"} {
+			if strings.Contains(plain, border) {
+				t.Fatalf("%s: composer is still framed:\n%s", size.name, plain)
+			}
+		}
 	}
 }
 
-func TestComposerFrameOffOnMinimumTerminal(t *testing.T) {
+// The textarea's own prompt must land on the shared content grid: accent in
+// column 1, text in column 4, the same as tool receipts and notices.
+func TestComposerPromptSitsOnTheContentGrid(t *testing.T) {
 	m := newTestModel(t)
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: minTerminalWidth, Height: minTerminalHeight})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = updated.(*Model)
-	if m.composerFrameEnabled() {
-		t.Fatal("minimum terminal must not use framed composer")
-	}
+
 	view, _ := m.renderComposerChrome()
-	plain := ansi.Strip(view)
-	if strings.Contains(plain, "╭") || strings.Contains(plain, "╮") {
-		t.Fatalf("minimum composer still framed:\n%s", plain)
+	first := ansi.Strip(strings.SplitN(view, "\n", 2)[0])
+	at := strings.Index(first, "❯")
+	if at < 0 {
+		t.Fatalf("composer has no prompt:\n%q", first)
+	}
+	// Display columns, not byte offsets: the rail glyph ahead of the prompt is
+	// multi-byte. Grid origin is accent(1) + pad(2), and the composer spends
+	// that pad on "❯ ", so text starts in column 4 like every other surface.
+	if col := lipgloss.Width(first[:at]) + 1; col != 2 {
+		t.Fatalf("composer prompt in column %d, want 2:\n%q", col, first)
+	}
+	if col := lipgloss.Width(first[:at]) + lipgloss.Width("❯ ") + 1; col != contentLeftColumns+1 {
+		t.Fatalf("composer text starts in column %d, want %d:\n%q", col, contentLeftColumns+1, first)
 	}
 }
 
@@ -55,19 +78,10 @@ func TestFooterIdentityLivesOnShortcutsRow(t *testing.T) {
 	if top := ansi.Strip(m.renderSessionTopBar(m.chatPaneWidth())); !strings.Contains(top, "ornith") {
 		t.Fatalf("top bar missing the model it owns:\n%s", top)
 	}
-	// Composer chrome is border-only (no trailing model line).
+	// The composer carries the draft and nothing else — no identity meta row.
 	chrome, _ := m.renderComposerChrome()
-	plain := ansi.Strip(chrome)
-	if strings.Contains(plain, "ornith:latest") && !strings.Contains(plain, "╭") && !strings.Contains(plain, "+") {
-		t.Fatalf("model leaked into composer body unexpectedly:\n%s", plain)
-	}
-	// Framed composer must not append a separate identity row under the box.
-	lines := strings.Split(strings.TrimRight(plain, "\n"), "\n")
-	if len(lines) > 0 {
-		last := lines[len(lines)-1]
-		if strings.Contains(last, "ornith") && !strings.Contains(last, "│") && !strings.Contains(last, "|") {
-			t.Fatalf("composer still has under-box meta line: %q", last)
-		}
+	if plain := ansi.Strip(chrome); strings.Contains(plain, "ornith") {
+		t.Fatalf("model leaked into the composer surface:\n%s", plain)
 	}
 }
 

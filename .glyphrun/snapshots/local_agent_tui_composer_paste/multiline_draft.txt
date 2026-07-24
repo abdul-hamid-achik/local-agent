@@ -23,9 +23,9 @@
 
 
 
+
+
 ─────────────────────────────────────────────────────────────────────────────────────────
-╭───────────────────────────────────────────────────────────────────────────────────────╮
-│▏❯ Review the first receipt.…                                                          │
-│ │ Keep the second line while I check Settings.                   …                    │
-╰───────────────────────────────────────────────────────────────────────────────────────╯
+▏❯ Review the first receipt.
+ │ Keep the second line while I check Settings.
    enter send · shift+tab mode · esc cancel · f1 help

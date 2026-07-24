@@ -2,6 +2,8 @@
 
 ▌  Review the release receipts.
 
+
+   The read completed, the test failure is visible, and the interrupted effect needs
    inspection.
 
    notice · Restored session <session> · Recovery receipt review
@@ -11,7 +13,5 @@
    unknown; use /recover to inspect and record exact evidence.
 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
    Recovery paused <session> · Recovery receipt review · /recover inspect
-╭───────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│▏❯ Ask │
-╰───────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+▏❯ Ask
    enter send · shift+tab mode · esc cancel · f1 help

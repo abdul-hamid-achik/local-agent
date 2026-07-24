@@ -19,9 +19,9 @@
 
    notice · Restored session <session> · Recovery receipt review
 
+    ✗ error
+   Recovery blocked: write_file has a durable dispatch marker but no terminal receipt. Its outcome is
 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
    <session> · Recovery receipt review · Follow paused · end latest
-╭───────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│▏❯ draft survives transcript search                                                   …                    │
-╰───────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+▏❯ draft survives transcript search
    enter send · shift+tab mode · esc cancel · f1 help

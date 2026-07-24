@@ -8,12 +8,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// composerFrameEnabled is true when the frame has room for a bordered draft
-// without starving the minimum welcome + notice contract (30×12).
-func (m *Model) composerFrameEnabled() bool {
-	return m != nil && m.ready && m.height >= 16 && m.width >= 40
-}
-
 // blankRowsLike returns whitespace with the same row count as value, so a
 // surface can be emptied without changing the height the layout already
 // reserved for it.
@@ -21,10 +15,14 @@ func blankRowsLike(value string) string {
 	return strings.Repeat("\n", strings.Count(strings.TrimRight(value, "\n"), "\n"))
 }
 
-// renderComposerChrome paints the draft surface. On roomy frames it uses a
-// single Grok-style rounded border around the textarea only — model/mode live
-// on the bottom shortcuts row (right side), not as a second meta line under
-// the box. On minimum terminals it falls back to the plain textarea.
+// renderComposerChrome paints the draft surface.
+//
+// The draft is unframed. A rounded box around the textarea cost two rows on
+// every frame and drew a second rectangle inside a layout that already bounds
+// the draft: the transcript rule sits directly above it and the shortcuts row
+// directly below. The textarea's own "▏❯ " prompt lands the accent in column 1
+// and the text in column 4, which is exactly the content grid every other
+// surface uses, so no extra indent is needed either.
 //
 // Important: never mutate the live textarea width/height here — reflow during
 // paint desyncs inputLines from the projected footer and overflows the frame.
@@ -32,12 +30,11 @@ func (m *Model) renderComposerChrome() (string, *tea.Cursor) {
 	return m.renderComposerChromeBody(false)
 }
 
-// renderInertComposerChrome paints the composer's frame at its exact live
-// height with an empty interior. Overlays use it so the draft surface keeps its
-// allocation — reflowing the transcript when a modal opens is jarring — without
-// leaking the draft under the panel or showing a prompt that looks focused
-// while a modal owns input. Painting nothing there was the previous behavior
-// and it stranded the divider above an empty band on every overlay screen.
+// renderInertComposerChrome paints the composer at its exact live height with
+// no content. Overlays use it so the draft surface keeps its allocation —
+// reflowing the transcript when a modal opens is jarring — without leaking the
+// draft under the panel or showing a prompt that looks focused while a modal
+// owns input.
 func (m *Model) renderInertComposerChrome() string {
 	view, _ := m.renderComposerChromeBody(true)
 	return view
@@ -47,70 +44,16 @@ func (m *Model) renderComposerChromeBody(inert bool) (string, *tea.Cursor) {
 	if m == nil {
 		return "", nil
 	}
-	paneW := m.chatPaneWidth()
 	input := m.input
 	if m.state != StateIdle {
 		input.Placeholder = "Write a follow-up · enter queue"
 	}
 	input.SetVirtualCursor(false)
 
-	if !m.composerFrameEnabled() {
-		if inert {
-			return blankRowsLike(input.View()), nil
-		}
-		return input.View(), input.Cursor()
-	}
-
-	body := strings.TrimRight(input.View(), "\n")
 	if inert {
-		// Same row count, no content: geometry is identical to the live frame.
-		body = blankRowsLike(body)
+		return blankRowsLike(input.View()), nil
 	}
-	innerW := max(1, paneW-2)
-	palette := newSemanticPalette(m.isDark)
-	border := lipgloss.NewStyle().Foreground(palette.Border)
-	// ASCII profile keeps box-drawing off so glyph contracts stay pure.
-	topLeft, topRight, botLeft, botRight, horiz, vert := "╭", "╮", "╰", "╯", "─", "│"
-	if m.glyphProfile == GlyphASCII {
-		topLeft, topRight, botLeft, botRight, horiz, vert = "+", "+", "+", "+", "-", "|"
-	}
-	top := border.Render(topLeft + strings.Repeat(horiz, innerW) + topRight)
-	bot := border.Render(botLeft + strings.Repeat(horiz, innerW) + botRight)
-	side := border.Render(vert)
-
-	var framed strings.Builder
-	framed.WriteString(top)
-	framed.WriteByte('\n')
-	if body == "" {
-		framed.WriteString(side)
-		framed.WriteString(strings.Repeat(" ", innerW))
-		framed.WriteString(side)
-		framed.WriteByte('\n')
-	} else {
-		for _, line := range strings.Split(body, "\n") {
-			plain := ansi.Strip(line)
-			pad := innerW - lipgloss.Width(plain)
-			if pad < 0 {
-				line = truncateDisplayWithGlyphProfile(line, innerW, m.glyphProfile)
-				pad = innerW - lipgloss.Width(ansi.Strip(line))
-			}
-			if pad < 0 {
-				pad = 0
-			}
-			framed.WriteString(side)
-			framed.WriteString(line)
-			if pad > 0 {
-				framed.WriteString(strings.Repeat(" ", pad))
-			}
-			framed.WriteString(side)
-			framed.WriteByte('\n')
-		}
-	}
-	framed.WriteString(bot)
-
-	// Border insets: +1 column (left edge), +1 row (top edge).
-	cursor := offsetCursor(input.Cursor(), 1, 1)
-	return strings.TrimRight(framed.String(), "\n"), cursor
+	return strings.TrimRight(input.View(), "\n"), input.Cursor()
 }
 
 // renderFooterIdentityRight is the bottom-right identity on the shortcuts row.

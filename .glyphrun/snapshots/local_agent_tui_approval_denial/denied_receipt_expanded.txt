@@ -11,9 +11,9 @@
 │  domain: failed
 │  evidence: none
 │  tool call denied: user denied tool executi…
+
+
 ─────────────────────────────────────────────────
    <session> · Follow paused · end latest
-╭───────────────────────────────────────────────╮
-│▏❯ A…                                          │
-╰───────────────────────────────────────────────╯
+▏❯ Ask
    enter send · shift+tab mode
