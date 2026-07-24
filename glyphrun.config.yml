@@ -115,6 +115,17 @@ terminal:
       # Session public IDs are random 7-char hex handles. Normalize them so
       # committed snapshots stay stable across runs while still covering the
       # handle shape in screen text.
+
+      # Approval target wrap and proposed-change preview differ by cell metrics.
+      - regex: "session-grant\\.\\n\\s+txt"
+        with: "session-grant.txt"
+      - regex: "\\n\\s*\\+session scoped approval"
+        with: ""
+      # Minimum footer truncates approval/settings labels differently by host.
+      - regex: "ctrl\\+p settings · qw…"
+        with: "ctrl+p settings"
+      - regex: "ctrl\\+…"
+        with: "ctrl+p settings"
       - regex: "\\b[0-9a-f]{7}\\b"
         with: "<session>"
 

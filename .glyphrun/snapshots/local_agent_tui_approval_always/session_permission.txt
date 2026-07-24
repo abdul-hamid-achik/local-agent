@@ -11,8 +11,7 @@
 ─────────────────────────────────────────────────────────────────────────────────────────
 ◇  Permission · write · NORMAL
    Action     Write 23 B
-   Target     <temp>/local-agent-glyphrun-approval-always-workdir/session-grant.
-              txt
+   Target     <temp>/local-agent-glyphrun-approval-always-workdir/session-grant.txt
    Impact     Creates or replaces the target file with the proposed content.
    Scope      Exact arguments · this process only
    Request    309302e8b9f8

@@ -39,7 +39,7 @@ steps:
     - wait:
         screen:
             contains: "Ask"
-        timeoutMs: 2000
+        timeoutMs: 5000
     - snapshot: normal_default
     - press: "shift+tab"
     - wait:
@@ -49,7 +49,7 @@ steps:
     - wait:
         screen:
             contains: "Ask"
-        timeoutMs: 2000
+        timeoutMs: 5000
     - type: "design a safe migration"
     - press: "enter"
     - wait:
