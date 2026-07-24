@@ -76,9 +76,10 @@ func (m *Model) pullChromeSpringTargets() {
 	if key != s.stickyKey {
 		s.stickyKey = key
 		if key != "" && !m.reducedMotion {
-			// Start partially revealed so the sticky never blanks the only
-			// copy of the user prompt (body omit waits until reveal is high).
-			s.stickyPos = 0.4
+			// Sticky owns the only copy of the single-line prompt (body omits
+			// immediately). Snap reveal high so any residual consumers of
+			// stickyReveal() see a complete prompt from the first paint.
+			s.stickyPos = 1
 			s.stickyVel = 0
 		}
 	}
@@ -238,30 +239,6 @@ func (m *Model) displayContextPercent() int {
 		return 100
 	}
 	return pct
-}
-
-// revealStickyText progressively reveals runes while keeping full bar width
-// (trailing spaces) so header geometry never jumps frame-to-frame.
-func revealStickyText(text string, reveal float64) string {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return ""
-	}
-	if reveal >= 0.995 {
-		return text
-	}
-	if reveal <= 0.02 {
-		return ""
-	}
-	runes := []rune(text)
-	n := int(math.Ceil(float64(len(runes)) * reveal))
-	if n < 1 {
-		n = 1
-	}
-	if n > len(runes) {
-		n = len(runes)
-	}
-	return string(runes[:n])
 }
 
 // formatContextStatusWithPercent paints used/limit · N% using a display percent

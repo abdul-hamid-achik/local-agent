@@ -117,9 +117,10 @@ func (m *Model) renderStatusLine() string {
 	}
 	parts := make([]string, 0, 8)
 	headerActive := m.sessionHeaderActive()
-	// Mode + authority posture stay ambient once work starts (harness research:
-	// operators must never lose track of PLAN/AUTO or approval posture mid-session).
-	if conversationStarted && presentedMode != ModeNormal {
+	// Mode lives on the bottom shortcuts row (model · PLAN) once session chrome
+	// is up. Re-printing "[ PLAN · read-only ]" on the status line only doubles
+	// the same fact. Keep a mode badge only on minimum frames without chrome.
+	if conversationStarted && presentedMode != ModeNormal && !headerActive {
 		if presentedMode == ModePlan && paneW >= 48 {
 			parts = append(parts, modeStyle.Render("[ PLAN · read-only ]"))
 		} else {

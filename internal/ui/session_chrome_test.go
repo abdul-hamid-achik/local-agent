@@ -37,9 +37,9 @@ func TestSessionTopBarOmitsModelAndModeAlreadyOnFooter(t *testing.T) {
 	if strings.Contains(bar, "AUTO") {
 		t.Fatalf("top bar re-printed mode already on footer:\n%s", bar)
 	}
-	// Context meter may still appear on the right.
+	// Context meter may still appear on the right when numCtx is set.
 	if !strings.Contains(bar, "0%") && !strings.Contains(bar, "0/") {
-		// Meter requires numCtx; if present it is fine either way.
+		t.Fatalf("top bar missing ambient context meter:\n%s", bar)
 	}
 }
 
@@ -190,12 +190,15 @@ func TestStickyUserOmitsDuplicateFromTranscript(t *testing.T) {
 	m := newTestModel(t)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = updated.(*Model)
+	// Live bug: omit must not wait for sticky spring settle. Dual-print
+	// (sticky + body) is wrong from the first frame after send.
+	m.reducedMotion = false
 	m.entries = []ChatEntry{
 		{Kind: "user", Content: "unique sticky prompt xyz"},
 		{Kind: "system", Content: "ICE · recalled 1 past conversation"},
 		{Kind: "assistant", Content: "Waiting reply"},
 	}
-	m.settleChromeSpringForTest()
+	m.pullChromeSpringTargets()
 	m.recalcViewportHeight()
 	if !m.stickyUserActive() {
 		t.Fatal("expected sticky user on roomy conversation frame")
@@ -219,7 +222,7 @@ func TestStickyUserOmitsDuplicateFromTranscript(t *testing.T) {
 		{Kind: "user", Content: "second sticky prompt"},
 	}
 	m.entryCacheValid = false
-	m.settleChromeSpringForTest()
+	m.pullChromeSpringTargets()
 	m.recalcViewportHeight()
 	body = ansi.Strip(m.renderEntries())
 	if !strings.Contains(body, "first older prompt") {
@@ -227,6 +230,24 @@ func TestStickyUserOmitsDuplicateFromTranscript(t *testing.T) {
 	}
 	if strings.Contains(body, "second sticky prompt") {
 		t.Fatalf("latest user still in body with sticky:\n%s", body)
+	}
+}
+
+func TestRoomyStatusDoesNotDoublePlan(t *testing.T) {
+	// Captured live: status "[ PLAN · read-only ]" + shortcuts "· PLAN".
+	m := newTestModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = updated.(*Model)
+	m.entries = []ChatEntry{{Kind: "user", Content: "hey chat"}}
+	m.mode = ModePlan
+	m.model = "ornith:latest"
+	status := ansi.Strip(m.renderStatusLine())
+	if strings.Contains(status, "PLAN") {
+		t.Fatalf("status should not re-print PLAN when shortcuts own mode: %q", status)
+	}
+	bar := ansi.Strip(m.renderShortcutsBar(m.chatPaneWidth()))
+	if !strings.Contains(bar, "PLAN") || !strings.Contains(bar, "ornith") {
+		t.Fatalf("shortcuts should own model · mode: %q", bar)
 	}
 }
 

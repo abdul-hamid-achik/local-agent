@@ -129,7 +129,9 @@ func TestCycleMode(t *testing.T) {
 		}
 	})
 
-	t.Run("adds_system_message", func(t *testing.T) {
+	t.Run("ordinary_mode_switch_stays_quiet", func(t *testing.T) {
+		// Mode already lives on the shortcuts row (model · PLAN). A durable
+		// "notice · Mode · …" only cluttered scrollback after every Shift+Tab.
 		m := newTestModel(t)
 		m.entries = append(m.entries, ChatEntry{Kind: "user", Content: "hello"})
 		before := len(m.entries)
@@ -137,15 +139,16 @@ func TestCycleMode(t *testing.T) {
 		updated, _ := m.Update(shiftTabKey())
 		m = updated.(*Model)
 
-		if len(m.entries) <= before {
-			t.Fatal("expected system message entry after mode switch")
+		if m.mode != ModePlan {
+			t.Fatalf("mode = %v, want PLAN", m.mode)
 		}
-		last := m.entries[len(m.entries)-1]
-		if last.Kind != "system" {
-			t.Errorf("expected 'system' kind, got %q", last.Kind)
+		if len(m.entries) != before {
+			t.Fatalf("ordinary mode switch appended transcript noise: %#v", m.entries[before:])
 		}
-		if !strings.Contains(last.Content, "Mode · PLAN") {
-			t.Errorf("expected mode switch info in content, got %q", last.Content)
+		for _, entry := range m.entries {
+			if entry.Kind == "system" && strings.Contains(entry.Content, "Mode ·") {
+				t.Fatalf("unexpected Mode · receipt: %#v", entry)
+			}
 		}
 	})
 
@@ -401,15 +404,29 @@ func TestModePickerKeepsAllAuthoritiesActionableAtMinimum(t *testing.T) {
 }
 
 func TestModeStatusLine(t *testing.T) {
+	// Roomy frames: mode lives on the shortcuts row (model · PLAN), not the
+	// status strip — otherwise PLAN appears twice.
 	m := newTestModel(t)
 	m.state = StateIdle
 	m.entries = []ChatEntry{{Kind: "user", Content: "conversation started"}}
 
-	t.Run("auto_mode_badge", func(t *testing.T) {
-		m.mode = ModeAuto
-		status := m.renderStatusLine()
-		if !strings.Contains(status, "AUTO") {
-			t.Errorf("status line should contain AUTO badge, got %q", status)
+	t.Run("roomy_chrome_keeps_mode_off_status", func(t *testing.T) {
+		if !m.sessionHeaderActive() {
+			t.Fatal("expected session chrome on default test size")
+		}
+		for _, mode := range []Mode{ModeAuto, ModePlan} {
+			m.mode = mode
+			status := ansi.Strip(m.renderStatusLine())
+			label := m.modeConfigs[mode].Label
+			if strings.Contains(status, label) {
+				t.Errorf("status re-printed %s already on shortcuts: %q", label, status)
+			}
+		}
+		// Shortcuts row still owns identity.
+		m.mode = ModePlan
+		bar := ansi.Strip(m.renderShortcutsBar(m.chatPaneWidth()))
+		if !strings.Contains(bar, "PLAN") {
+			t.Fatalf("shortcuts lost PLAN mode: %q", bar)
 		}
 	})
 
@@ -421,11 +438,24 @@ func TestModeStatusLine(t *testing.T) {
 		}
 	})
 
-	t.Run("plan_mode_badge", func(t *testing.T) {
+	t.Run("minimum_frame_keeps_mode_badge", func(t *testing.T) {
+		// Without session chrome the status strip is the only ambient mode surface.
+		updated, _ := m.Update(tea.WindowSizeMsg{Width: minTerminalWidth, Height: minTerminalHeight})
+		m = updated.(*Model)
+		m.state = StateIdle
+		m.entries = []ChatEntry{{Kind: "user", Content: "conversation started"}}
+		if m.sessionHeaderActive() {
+			t.Fatal("minimum terminal should not claim session header")
+		}
 		m.mode = ModePlan
-		status := m.renderStatusLine()
+		status := ansi.Strip(m.renderStatusLine())
 		if !strings.Contains(status, "PLAN") {
-			t.Errorf("status line should contain PLAN badge, got %q", status)
+			t.Errorf("minimum status line should contain PLAN badge, got %q", status)
+		}
+		m.mode = ModeAuto
+		status = ansi.Strip(m.renderStatusLine())
+		if !strings.Contains(status, "AUTO") {
+			t.Errorf("minimum status line should contain AUTO badge, got %q", status)
 		}
 	})
 }

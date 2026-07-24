@@ -108,7 +108,6 @@ func (m *Model) setMode(mode Mode) {
 	if mode < ModeNormal || mode > ModeAuto || mode == m.mode {
 		return
 	}
-	hadConversation := m.conversationStarted()
 	m.mode = mode
 	ambientConfig := m.modeConfigs[mode]
 	m.syncComposerAuthority()
@@ -136,18 +135,12 @@ func (m *Model) setMode(mode Mode) {
 		m.logger.Info("mode switched", "mode", ambientConfig.Label, "authority", authorityConfig.Label, "model", m.model)
 	}
 
-	// The empty-state orientation already owns mode and model. Once a real
-	// conversation exists, retain a compact durable receipt for the transition.
-	// A linked goal is the other exception: its visible authority remains AUTO,
-	// so the receipt is the only way to expose the selected post-goal mode.
-	if hadConversation || m.goalRuntime != nil {
-		receipt := "Mode · " + ambientConfig.Label
-		if m.goalRuntime != nil {
-			receipt = "After goal · " + ambientConfig.Label + " · active goal · AUTO"
-		}
-		if m.model != "" {
-			receipt += " · " + m.model
-		}
+	// Ordinary mode switches stay quiet: session shortcuts already show
+	// model · mode, so a durable "notice · Mode · PLAN · …" only noise-fills
+	// the transcript. A linked goal is the exception — visible authority stays
+	// AUTO while ambient mode changes, so one receipt names both.
+	if m.goalRuntime != nil {
+		receipt := "After goal · " + ambientConfig.Label + " · active goal · AUTO"
 		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: receipt})
 	}
 	m.refreshTranscript()

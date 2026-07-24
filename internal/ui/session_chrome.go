@@ -66,7 +66,8 @@ func (m *Model) projectSessionHeader() sessionHeaderProjection {
 	}
 }
 
-// renderSessionTopBar paints: branch · path ........ used/limit · mode
+// renderSessionTopBar paints: branch · path ........ context meter
+// Mode and model live on the bottom shortcuts row — not here.
 // Content starts at OriginX so it lines up with welcome, transcript, and status.
 func (m *Model) renderSessionTopBar(paneW int) string {
 	lead := m.contentGrid().Prefix(" ")
@@ -140,7 +141,7 @@ func (m *Model) sessionWorkspaceLabel(paneW int) string {
 		}
 	}
 	// Prefer basename / short path so the top bar stays scannable.
-	limit := 24
+	var limit int
 	switch {
 	case paneW >= 96:
 		limit = 40
@@ -188,11 +189,11 @@ func (m *Model) renderStickyUserStrip(paneW int) string {
 		rail = "│"
 	}
 	// "▌ text…" with OriginX-aligned pad: accent(1) + pad(1) before text.
+	// Always paint the full prompt: the transcript omits this entry whenever
+	// sticky is active, so progressive reveal would hide the only copy.
 	prefix := rail + " "
 	budget := max(4, paneW-lipgloss.Width(prefix)-1)
-	// Harmonica sticky reveal: progressive runes, full bar width kept stable.
-	revealed := revealStickyText(text, m.stickyReveal())
-	body := truncateDisplayWithGlyphProfile(revealed, budget, m.glyphProfile)
+	body := truncateDisplayWithGlyphProfile(text, budget, m.glyphProfile)
 	plain := " " + prefix + body
 	// Pad with spaces so the elevated surface truly spans the pane.
 	if gap := paneW - lipgloss.Width(plain); gap > 0 {
@@ -215,7 +216,7 @@ func (m *Model) renderStickyUserStrip(paneW int) string {
 	// (empty / prompt / empty) so the sticky isn't crushed against the
 	// identity bar above or the transcript below. Horizontal layout was fine.
 	content := barStyle.Render(plain)
-	if m != nil && m.height >= 20 && paneW >= 40 {
+	if m.height >= 20 && paneW >= 40 {
 		blank := barStyle.Render(strings.Repeat(" ", paneW))
 		content = blank + "\n" + content + "\n" + blank
 	}
@@ -247,16 +248,13 @@ func (m *Model) latestUserEntryIndex() int {
 // omitUserEntryFromTranscript skips the latest user block when the sticky
 // strip already owns that prompt — one surface, one truth. Multi-line bodies
 // and image attachments stay in the transcript because the sticky strip is a
-// single-line summary only. While the sticky spring is still revealing text,
-// keep the body copy so the prompt never disappears mid-animation.
+// single-line summary only. Omit as soon as sticky is active: the strip always
+// paints the full single-line prompt (no reveal gate that dual-prints).
 func (m *Model) omitUserEntryFromTranscript(entryIndex int) bool {
 	if !m.stickyUserActive() || entryIndex < 0 || entryIndex >= len(m.entries) {
 		return false
 	}
 	if entryIndex != m.latestUserEntryIndex() {
-		return false
-	}
-	if m.stickyReveal() < 0.92 {
 		return false
 	}
 	entry := m.entries[entryIndex]

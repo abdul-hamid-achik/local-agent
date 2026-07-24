@@ -115,6 +115,7 @@ func TestCopyLast_OnlyWhenIdleAndEmpty(t *testing.T) {
 		}
 		if copied != "response text" && !strings.Contains(copied, "response") {
 			// copyToClipboard is async cmd — invoke the write path via Update of result
+			t.Logf("clipboard content not yet flushed: %q", copied)
 		}
 	})
 
