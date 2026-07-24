@@ -1,35 +1,35 @@
-   main · local-agent        ╭────────────────────────────────────────────────────────────╮                0/16.4k · 0%
-   qwen3.5:2b · offline      │ Help                                                       │
-                             │                                                            │
-   notice · ollama: no model │ Keyboard Shortcuts                                         │
-   try: ollama serve · ollama│   enter             Send / queue one follow-up             │
-                             │   shift+enter       New line · ctrl+j/alt+enter also       │
-                             │   esc               Cancel / close overlay                 │
-                             │   ctrl+c            Quit                                   │
-                             │   ctrl+l            Clear screen                           │
-                             │   ctrl+n            New conversation                       │
-                             │   f1                Show help (empty input)                │
-                             │   ctrl+b            Toggle all tools (empty input)         │
-                             │   ctrl+y            Copy last response (empty input)       │
-                             │   pgup              Scroll up                              │
-                             │   pgdown            Scroll down                            │
-                             │   ctrl+u            Edit / half page up                    │
-                             │   ctrl+d            Edit / half page down                  │
-                             │   end               Latest output (empty input)            │
-                             │   shift+tab         Cycle mode (NORMAL/PLAN/AUTO)          │
-                             │   ctrl+o            Open Ollama models                     │
-                             │   ctrl+p            Open settings                          │
-                             │   ctrl+g            Open agents                            │
-                             │   ctrl+f            Search transcript                      │
-                             │   ↑                 Previous input (empty input)           │
-                             │   ↓                 Next input (history active)            │
-                             │   ctrl+r            Toggle last tool (empty input)         │
-                             │   ctrl+t            Toggle all thoughts (empty draft)      │
-                             │   ctrl+k            Toggle compact mode                    │
-                             │   ctrl+e            Open in $VISUAL/$EDITOR                │
-                             │   tab               Autocomplete                           │
-                             │                                                            │
-─────────────────────────────│ Input Shortcuts                                            │────────────────────────────
-                             │   @file / @agent    Insert file or agent mention text      │
-                             │ esc/q close · pgdn more · g/shift+g ends                   │
-   enter send · shift+tab mod╰────────────────────────────────────────────────────────────╯                  qwen3.5:2b
+                     ╭────────────────────────────────────────────────────────────────────────────╮
+                     │ Help                                                                       │
+                     │                                                                            │
+                     │ Keyboard Shortcuts                                                         │
+                     │   enter             Send / queue one follow-up                             │
+                     │   shift+enter       New line · ctrl+j/alt+enter also                       │
+                     │   esc               Cancel / close overlay                                 │
+                     │   ctrl+c            Quit                                                   │
+                     │   ctrl+l            Clear screen                                           │
+                     │   ctrl+n            New conversation                                       │
+                     │   f1                Show help (empty input)                                │
+                     │   ctrl+b            Toggle all tools (empty input)                         │
+                     │   ctrl+y            Copy last response (empty input)                       │
+                     │   pgup              Scroll up                                              │
+                     │   pgdown            Scroll down                                            │
+                     │   ctrl+u            Edit / half page up                                    │
+                     │   ctrl+d            Edit / half page down                                  │
+                     │   end               Latest output (empty input)                            │
+                     │   shift+tab         Cycle mode (NORMAL/PLAN/AUTO)                          │
+                     │   ctrl+o            Open Ollama models                                     │
+                     │   ctrl+p            Open settings                                          │
+                     │   ctrl+g            Open agents                                            │
+                     │   ctrl+f            Search transcript                                      │
+                     │   ↑                 Previous input (empty input)                           │
+                     │   ↓                 Next input (history active)                            │
+                     │   ctrl+r            Toggle last tool (empty input)                         │
+                     │   ctrl+t            Toggle all thoughts (empty draft)                      │
+                     │   ctrl+k            Toggle compact mode                                    │
+                     │   ctrl+e            Open in $VISUAL/$EDITOR                                │
+                     │   tab               Autocomplete                                           │
+                     │                                                                            │
+                     │ Input Shortcuts                                                            │
+                     │   @file / @agent    Insert file or agent mention text                      │
+                     │ esc/q close · pgdn more · g/shift+g ends                                   │
+                     ╰────────────────────────────────────────────────────────────────────────────╯

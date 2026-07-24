@@ -33,15 +33,44 @@ func pickerFrameCursor(cursor *tea.Cursor) *tea.Cursor {
 }
 
 // centeredOverlayStartY mirrors overlayOnContent's vertical placement.
+//
+// Modals are anchored, not centered on their own height: a four-row prompt and
+// a twenty-row picker open with their top edge on the same row, so navigating
+// between overlays no longer walks the panel up and down the screen. The
+// anchor sits above the middle because modal content grows downward.
 func centeredOverlayStartY(base, overlay string) int {
-	startY := (len(strings.Split(base, "\n")) - len(strings.Split(overlay, "\n"))) / 2
-	return max(0, startY)
+	baseHeight := len(strings.Split(base, "\n"))
+	overlayHeight := len(strings.Split(overlay, "\n"))
+	room := baseHeight - overlayHeight
+	if room <= 0 {
+		return 0
+	}
+	anchor := baseHeight / 4
+	if anchor > room {
+		anchor = room
+	}
+	return max(0, anchor)
 }
 
-// centeredOverlayLineX mirrors overlayOnContent's per-line horizontal
-// placement. Lip Gloss width keeps ANSI styling and wide runes coordinate-safe.
-func centeredOverlayLineX(width int, line string) int {
-	return max(0, (width-lipgloss.Width(line))/2)
+// centeredOverlayLineX mirrors overlayOnContent's horizontal placement.
+//
+// The whole modal block shares one column. Placing each line independently
+// made ragged rows (a short footer, a padded title) drift against each other
+// inside the same border. Lip Gloss width keeps ANSI styling and wide runes
+// coordinate-safe.
+func centeredOverlayLineX(width int, block string) int {
+	return max(0, (width-overlayBlockWidth(block))/2)
+}
+
+// overlayBlockWidth is the widest rendered line in a modal block.
+func overlayBlockWidth(block string) int {
+	widest := 0
+	for _, line := range strings.Split(block, "\n") {
+		if w := lipgloss.Width(line); w > widest {
+			widest = w
+		}
+	}
+	return widest
 }
 
 // overlayCursor translates a cursor local to a rendered overlay into the
@@ -59,7 +88,7 @@ func overlayCursor(base, overlay string, width int, cursor *tea.Cursor) *tea.Cur
 
 	return offsetCursor(
 		cursor,
-		centeredOverlayLineX(width, overlayLines[cursor.Y]),
+		centeredOverlayLineX(width, overlay),
 		centeredOverlayStartY(base, overlay),
 	)
 }

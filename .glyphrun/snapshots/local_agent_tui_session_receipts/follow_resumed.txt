@@ -1,8 +1,8 @@
-   main · local-agent                                                                            0/16.4k · 0%
+   main · local-agent                                                     qwen3.5:2b · offline · 0/16.4k · 0%
 
- ▌ Review the release receipts.
+▌  Review the release receipts.
 
-     inspection.
+   inspection.
 
    notice · Restored session <session> · Recovery receipt review
 
@@ -14,4 +14,4 @@
 ╭───────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │▏❯ Ask │
 ╰───────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-   enter send · shift+tab mode · esc cancel · f1 help                                              qwen3.5:2b
+   enter send · shift+tab mode · esc cancel · f1 help

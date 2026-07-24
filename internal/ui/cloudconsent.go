@@ -55,7 +55,7 @@ func newCloudConsentState(model OllamaModelDescriptor, terminalWidth, terminalHe
 	}
 	compact := terminalWidth <= 40 || terminalHeight <= 14
 	delegate := newPickerDelegate(isDark, compact, profile)
-	width := pickerListWidth(terminalWidth, 62)
+	width := pickerListWidth(terminalWidth)
 	height := len(items)*delegate.Height() + 1
 	choices := list.New(items, delegate, width, height)
 	configurePickerList(&choices, isDark)
@@ -106,7 +106,7 @@ func (m *Model) renderCloudConsent() string {
 	if m.cloudConsentState == nil {
 		return ""
 	}
-	width := pickerListWidth(m.width, 62)
+	width := pickerListWidth(m.width)
 	content := m.styles.OverlayTitle.Render("Use Ollama Cloud?") + "\n" +
 		m.styles.OverlayDim.Render(wrapText("Prompts, context, files, and tool results leave this machine through Ollama Cloud.", width)) + "\n\n" +
 		m.cloudConsentState.List.View()
@@ -131,7 +131,7 @@ func (m *Model) renderCloudConsent() string {
 	if m.cloudConsentState.Error != "" {
 		footer += "\n" + m.styles.ErrorText.Render(truncateDisplay(sanitizeTerminalSingleLine(m.cloudConsentState.Error), width))
 	}
-	return m.renderPickerFrame(content, 62, footer)
+	return m.renderPickerFrame(content, footer)
 }
 
 func (m *Model) confirmCloudModel(name string) tea.Cmd {

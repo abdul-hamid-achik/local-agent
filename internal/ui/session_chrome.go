@@ -102,15 +102,37 @@ func (m *Model) sessionIdentityLeft(paneW int) string {
 	return strings.Join(parts, m.styles.Dimmed.Render(glyphSeparator(m.glyphProfile)))
 }
 
+// sessionIdentityRight carries the ambient identity this frame assigned to the
+// top bar: model (or its remote boundary) and the context meter. Mode stays on
+// the bottom row next to the key that changes it.
 func (m *Model) sessionIdentityRight(paneW int) string {
-	// Model and mode already live on the bottom shortcuts row (and AUTO in the
-	// activity rail). Top-right only keeps the ambient context meter so chrome
-	// does not triple-print identity.
-	_ = paneW
-	if ctx := m.renderContextStatus(); ctx != "" {
-		return ctx
+	plan := m.planStatus()
+	parts := make([]string, 0, 2)
+
+	if m.currentModelIsNonLocal() {
+		if plan.owns(factRemoteBoundary, surfaceTopBar) {
+			// Compact keeps the boundary token and drops the model name; the
+			// full label would crowd out the meter on ordinary widths.
+			parts = append(parts, m.styles.StatusWarning.Render(
+				m.currentModelReachabilityLabel(paneW < 72),
+			))
+		}
+	} else if plan.owns(factModel, surfaceTopBar) {
+		if model := m.currentModelReachabilityLabel(paneW < 58); model != "" {
+			parts = append(parts, m.styles.Dimmed.Render(
+				truncateDisplayWithGlyphProfile(model, min(24, max(8, paneW/3)), m.glyphProfile),
+			))
+		}
 	}
-	return ""
+	if plan.owns(factContext, surfaceTopBar) {
+		if ctx := m.renderContextStatus(); ctx != "" {
+			parts = append(parts, ctx)
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, m.styles.Dimmed.Render(glyphSeparator(m.glyphProfile)))
 }
 
 func (m *Model) workspaceDir() string {
@@ -182,13 +204,16 @@ func (m *Model) renderStickyUserStrip(paneW int) string {
 	if rail == "" {
 		rail = "│"
 	}
-	// "▌ text…" with OriginX-aligned pad: accent(1) + pad(1) before text.
+	// Share the content grid's prefix so the rail sits in the same accent
+	// column as tool receipts and the transcript's own user gutter. This row
+	// previously inset the rail by one, which read as a wobble against the
+	// identity bar directly above it.
 	// Always paint the full prompt: the transcript omits this entry whenever
 	// sticky is active, so progressive reveal would hide the only copy.
-	prefix := rail + " "
-	budget := max(4, paneW-lipgloss.Width(prefix)-1)
+	prefix := m.contentGrid().Prefix(rail)
+	budget := max(4, paneW-lipgloss.Width(prefix))
 	body := truncateDisplayWithGlyphProfile(text, budget, m.glyphProfile)
-	plain := " " + prefix + body
+	plain := prefix + body
 	// Pad with spaces so the elevated surface truly spans the pane.
 	if gap := paneW - lipgloss.Width(plain); gap > 0 {
 		plain += strings.Repeat(" ", gap)
@@ -268,17 +293,47 @@ func (m *Model) omitUserEntryFromTranscript(entryIndex int) bool {
 // Left: key hints. Right: model · mode. One row, no second meta under the
 // composer. While a turn is live the activity rail already owns esc stop /
 // enter queue, so left keeps only mode.
-func (m *Model) renderShortcutsBar(paneW int) string {
-	if paneW < 24 || m.height < 12 {
-		return ""
+// shortcutsBarActive reports whether the fixed bottom row is painted this
+// frame. planStatus needs this before any surface renders, so the visibility
+// rules live here rather than inline in renderShortcutsBar.
+func (m *Model) shortcutsBarActive() bool {
+	if m == nil || m.chatPaneWidth() < 24 || m.height < 12 {
+		return false
 	}
 	// While a decision surface owns the footer, its own key hints are enough.
 	if m.pendingApproval != nil || m.readScopePrompt != nil || m.pendingPaste != nil {
-		return ""
+		return false
 	}
 	if m.overlay == OverlayCompletion || m.overlay == OverlayTranscriptSearch ||
 		m.overlay == OverlayPlanForm || m.overlay == OverlayGoalForm ||
 		m.cortexDecisionActive() {
+		return false
+	}
+	return true
+}
+
+// shortcutsIdentityRightBudget is the width the shortcuts row reserves for its
+// right-hand identity, or zero when the row is too narrow to carry any. Keeping
+// it beside shortcutsBarActive lets planStatus ask the same question the
+// renderer will answer.
+func (m *Model) shortcutsIdentityRightBudget() int {
+	paneW := m.chatPaneWidth()
+	if !m.shortcutsBarActive() || paneW < 48 {
+		return 0
+	}
+	// Enough for "model · PLAN" on 60-column terminals: paneW/4 alone can drop
+	// authority once the budget falls under 16.
+	return min(40, max(18, paneW/3))
+}
+
+// shortcutsIdentityActive reports whether the shortcuts row will paint ambient
+// identity this frame.
+func (m *Model) shortcutsIdentityActive() bool {
+	return m.shortcutsIdentityRightBudget() > 0
+}
+
+func (m *Model) renderShortcutsBar(paneW int) string {
+	if !m.shortcutsBarActive() {
 		return ""
 	}
 
@@ -300,12 +355,7 @@ func (m *Model) renderShortcutsBar(paneW int) string {
 	inner := max(1, paneW-lipgloss.Width(lead))
 
 	// Reserve room for right identity; pack hints into the remainder.
-	// Keep enough width for "model · PLAN" on 60-col glyphrun terminals
-	// (paneW/4 alone can drop mode when budget falls under 16).
-	rightBudget := 0
-	if paneW >= 48 {
-		rightBudget = min(40, max(18, paneW/3))
-	}
+	rightBudget := m.shortcutsIdentityRightBudget()
 	leftBudget := max(8, inner-rightBudget-1)
 	left := m.renderKeyHints(leftBudget, hints...)
 	right := ""

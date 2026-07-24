@@ -63,7 +63,7 @@ func newPermissionsPanelState(items []permissionsItem, terminalWidth, terminalHe
 	compact := compactSettingsRows(terminalWidth, terminalHeight)
 	delegate := newPickerDelegate(isDark, compact, profile)
 	itemHeight := delegate.Height()
-	width := pickerListWidth(terminalWidth, 62)
+	width := pickerListWidth(terminalWidth)
 	height := pickerListHeight(terminalHeight, len(listItems)*itemHeight+2, 4)
 	l := list.New(listItems, delegate, width, height)
 	configurePickerList(&l, isDark)
@@ -355,5 +355,5 @@ func (m *Model) renderPermissionsPanel() string {
 				m.styles.OverlayDim.Render("  "+detail)
 		}
 	}
-	return m.renderPickerFrame(content, 62, m.pickerNavigationFooter(62, false))
+	return m.renderPickerFrame(content, m.pickerNavigationFooter(false))
 }

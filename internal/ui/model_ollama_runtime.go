@@ -77,13 +77,13 @@ func (m *Model) renderModelDetails() string {
 	if m.modelDetailsState == nil {
 		return ""
 	}
-	width := pickerListWidth(m.width, 58)
+	width := pickerListWidth(m.width)
 	content := renderOllamaModelDetails(*m.modelDetailsState, width, m.isDark)
 	if compactModelPicker(m.width, m.height) {
 		content = renderCompactOllamaModelDetails(*m.modelDetailsState, width, m.isDark)
 	}
 	footer := m.renderKeyHints(width, keyHint{Key: "esc", Action: "models"})
-	return m.renderPickerFrame(content, 58, footer)
+	return m.renderPickerFrame(content, footer)
 }
 
 func (m *Model) openModelPull() tea.Cmd {
@@ -110,7 +110,7 @@ func (m *Model) renderModelPull() (string, *tea.Cursor) {
 	if m.modelPullState == nil {
 		return "", nil
 	}
-	width := pickerListWidth(m.width, 58)
+	width := pickerListWidth(m.width)
 	content, inputCursor := m.modelPullState.ViewWithCursor(width, compactModelPicker(m.width, m.height))
 	footerAction := "close"
 	if m.modelPullState.Phase == ModelPullRunning {
@@ -124,7 +124,7 @@ func (m *Model) renderModelPull() (string, *tea.Cursor) {
 		hints = append(hints, keyHint{Key: "enter/r", Action: "retry"}, keyHint{Key: "e", Action: "edit"})
 	}
 	footer := m.renderKeyHints(width, hints...)
-	view := m.renderPickerFrame(content, 58, footer)
+	view := m.renderPickerFrame(content, footer)
 	if m.modelPullState.Phase != ModelPullEntry {
 		return view, nil
 	}

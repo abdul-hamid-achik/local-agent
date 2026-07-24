@@ -50,7 +50,7 @@ func TestProviderPickerResizeThemeAndReducedMotion(t *testing.T) {
 
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 36, Height: 12})
 	m = updated.(*Model)
-	if got, want := m.providerPickerState.List.Width(), pickerListWidth(36, 56); got != want {
+	if got, want := m.providerPickerState.List.Width(), pickerListWidth(36); got != want {
 		t.Fatalf("provider list width after resize = %d, want %d", got, want)
 	}
 	if got, want := m.providerPickerState.List.Height(), pickerListHeight(12, 8*defaultPickerItemHeight+2, 4); got != want {

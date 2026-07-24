@@ -14,7 +14,6 @@ import (
 )
 
 const (
-	goalRecoveryMaximumWidth          = 66
 	goalRecoverySummaryHeight         = 3
 	goalRecoveryMaximumItemIDBytes    = 128
 	goalRecoveryMaximumSummaryBytes   = 4 * 1024
@@ -468,7 +467,7 @@ func (r *GoalRecovery) SetReducedMotion(reduced bool) {
 }
 
 func (r *GoalRecovery) contentWidth() int {
-	return pickerListWidth(r.width, goalRecoveryMaximumWidth)
+	return pickerListWidth(r.width)
 }
 
 func (r *GoalRecovery) compact() bool {

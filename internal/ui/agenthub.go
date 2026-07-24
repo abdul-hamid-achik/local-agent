@@ -15,7 +15,6 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-const agentHubMaximumWidth = 68
 const agentHubASCIIListTitleReserve = 3
 
 type agentHubMode uint8
@@ -298,7 +297,7 @@ func (state *AgentHubState) configureListTitle() {
 	if state.Surface.OmittedGroups > 0 {
 		title += fmt.Sprintf("%s+%d older", glyphSeparator(state.glyphProfile), state.Surface.OmittedGroups)
 	}
-	titleWidth := pickerListWidth(max(1, state.width), agentHubMaximumWidth)
+	titleWidth := pickerListWidth(max(1, state.width))
 	if state.glyphProfile == GlyphASCII {
 		// Bubbles reserves one spinner cell plus a two-cell status gap in the
 		// title row even while both are visually empty.
@@ -430,7 +429,7 @@ func (state *AgentHubState) SetSize(terminalWidth, terminalHeight int) {
 	}
 	state.configureListTitle()
 
-	listWidth := pickerListWidth(state.width, agentHubMaximumWidth)
+	listWidth := pickerListWidth(state.width)
 	desiredRows := max(5, len(state.List.Items())*(state.ItemHeight+max(0, state.ItemSpacing))+2)
 	listHeight := pickerListHeight(state.height, desiredRows, 4)
 	state.List.SetSize(listWidth, listHeight)
@@ -1118,7 +1117,7 @@ func (m *Model) renderAgentHub() string {
 	if m == nil || m.agentHubState == nil {
 		return ""
 	}
-	width := pickerListWidth(m.width, agentHubMaximumWidth)
+	width := pickerListWidth(m.width)
 	var content string
 	var hints []keyHint
 	if m.agentHubState.Mode == agentHubViewerMode {
@@ -1157,7 +1156,7 @@ func (m *Model) renderAgentHub() string {
 			}
 		}
 	}
-	return m.renderPickerFrame(content, agentHubMaximumWidth, m.renderAgentHubHints(width, hints))
+	return m.renderPickerFrame(content, m.renderAgentHubHints(width, hints))
 }
 
 func (m *Model) renderAgentHubHints(width int, hints []keyHint) string {

@@ -68,7 +68,7 @@ func TestSkippedApprovalSafetyTextIsResponsiveAndNoColorSafe(t *testing.T) {
 	var welcome strings.Builder
 	m.renderWelcome(&welcome)
 	footer := m.renderStatusLine()
-	runtime := m.buildRuntimeStatusContent(pickerListWidth(m.width, 58))
+	runtime := m.buildRuntimeStatusContent(pickerListWidth(m.width))
 	for name, rendered := range map[string]string{"welcome": welcome.String(), "footer": footer, "runtime": runtime} {
 		if hasANSIColor(rendered) {
 			t.Fatalf("NO_COLOR %s emitted ANSI color: %q", name, rendered)

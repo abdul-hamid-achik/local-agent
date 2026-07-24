@@ -86,7 +86,7 @@ func newProviderPickerState(catalog []llm.ProviderDescriptor, current string, te
 	}
 
 	delegate := newPickerDelegate(isDark, false)
-	width := pickerListWidth(terminalWidth, 56)
+	width := pickerListWidth(terminalWidth)
 	height := pickerListHeight(terminalHeight, len(items)*delegate.Height()+2, 4)
 	l := list.New(items, delegate, width, height)
 	configurePickerList(&l, isDark, reducedMotion...)
@@ -161,9 +161,7 @@ func (m *Model) renderProviderPicker() string {
 		return ""
 	}
 	return m.renderPickerFrame(
-		m.providerPickerState.List.View(),
-		56,
-		m.pickerNavigationFooter(56, m.providerPickerState.List.FilterState() != list.Unfiltered),
+		m.providerPickerState.List.View(), m.pickerNavigationFooter(m.providerPickerState.List.FilterState() != list.Unfiltered),
 	)
 }
 

@@ -7,6 +7,7 @@ import (
 	"math"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 )
@@ -135,7 +136,9 @@ func (t *turnRuntime) providerStage(ctx context.Context, i int) (string, []llm.T
 				if t.lg != nil {
 					t.lg.Warn("llm request rejected before dispatch", "iter", i, "err", boundaryErr)
 				}
-				t.out.Error(fmt.Sprintf("LLM request not started: %v", boundaryErr))
+				// boundaryErr already reads "inference not started: <cause>", so a
+			// "LLM request not started:" prefix only stutters at the user.
+			t.out.Error(capitalizeFirst(boundaryErr.Error()))
 				return "", nil, stageProceed, boundaryErr
 			}
 			reservedEvalTokens := int64(0)
@@ -306,4 +309,16 @@ func providerBoundaryError(err error) error {
 		return remoteInferenceBoundaryError{}
 	}
 	return err
+}
+
+// capitalizeFirst makes a Go error string presentable as UI copy without
+// prefixing it with another sentence, which is how "LLM request not started:
+// inference not started: no model selected" happened.
+func capitalizeFirst(value string) string {
+	if value == "" {
+		return value
+	}
+	runes := []rune(value)
+	runes[0] = unicode.ToUpper(runes[0])
+	return string(runes)
 }

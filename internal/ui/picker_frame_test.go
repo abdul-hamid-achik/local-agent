@@ -13,7 +13,7 @@ func TestPickerFrameASCIIProfileNormalizesNavigationChrome(t *testing.T) {
 	m.width = 80
 	m.glyphProfile = GlyphASCII
 
-	footer := m.pickerNavigationFooter(52, true)
+	footer := m.pickerNavigationFooter(true)
 	plainFooter := ansi.Strip(footer)
 	if !strings.Contains(plainFooter, "j/k move") ||
 		!strings.Contains(plainFooter, " | ") {
@@ -29,7 +29,7 @@ func TestPickerFrameASCIIProfileNormalizesNavigationChrome(t *testing.T) {
 		keyHint{Key: "←", Action: "old"},
 		keyHint{Key: "→", Action: "new"},
 	)
-	frame := ansi.Strip(m.renderPickerFrame("picker", 52, rawStyledFooter))
+	frame := ansi.Strip(m.renderPickerFrame("picker", rawStyledFooter))
 	if !strings.Contains(frame, "j/k move") ||
 		!strings.Contains(frame, "< old") ||
 		!strings.Contains(frame, "> new") ||
@@ -39,7 +39,7 @@ func TestPickerFrameASCIIProfileNormalizesNavigationChrome(t *testing.T) {
 	if strings.ContainsAny(frame, "…·↑↓←→╭╮╰╯│") {
 		t.Fatalf("ASCII picker frame leaked Unicode chrome:\n%s", frame)
 	}
-	wantWidth := pickerContentWidth(m.width, 52) + 2
+	wantWidth := pickerContentWidth(m.width) + 2
 	for row, line := range strings.Split(frame, "\n") {
 		if got := lipgloss.Width(line); got != wantWidth {
 			t.Fatalf("frame row %d width = %d, want %d: %q", row, got, wantWidth, line)

@@ -115,7 +115,10 @@ func (m *Model) renderFollowPausedStatus(width int) string {
 		}
 	}
 	candidates = append(candidates, base...)
-	available := max(1, width-2)
+	// Share the transcript content grid instead of a hand-written indent, so
+	// this row lines up with the top bar, notices, and shortcuts around it.
+	lead := m.contentGrid().Prefix(" ")
+	available := max(1, width-lipgloss.Width(lead))
 	chosen := candidates[len(candidates)-1]
 	for _, candidate := range candidates {
 		if lipgloss.Width(candidate) <= available {
@@ -124,7 +127,7 @@ func (m *Model) renderFollowPausedStatus(width int) string {
 		}
 	}
 	parts := strings.SplitN(chosen, "end", 2)
-	line := "  " + m.styles.StatusText.Render(parts[0]) + m.styles.FocusIndicator.Render("end")
+	line := lead + m.styles.StatusText.Render(parts[0]) + m.styles.FocusIndicator.Render("end")
 	if len(parts) == 2 {
 		line += m.styles.StatusText.Render(parts[1])
 	}

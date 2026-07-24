@@ -41,12 +41,12 @@ steps:
     - press: "shift+tab"
     - wait:
         screen:
-            contains: "qwen3.5:0.8b · PLAN"
+            contains: "PLAN"
         timeoutMs: 2000
     - press: "shift+tab"
     - wait:
         screen:
-            contains: "qwen3.5:0.8b · AUTO"
+            contains: "AUTO"
         timeoutMs: 2000
     - type: "Run the safe local check, then inspect Minerva stack health and confirm test-skill is listed."
     - press: "enter"

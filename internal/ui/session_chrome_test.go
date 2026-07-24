@@ -22,7 +22,7 @@ func TestSessionTopBarAppearsOnRoomyFrame(t *testing.T) {
 	}
 }
 
-func TestSessionTopBarOmitsModelAndModeAlreadyOnFooter(t *testing.T) {
+func TestSessionTopBarOwnsIdentityAndLeavesModeToTheShortcutsRow(t *testing.T) {
 	m := newTestModel(t)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
 	m = updated.(*Model)
@@ -31,15 +31,15 @@ func TestSessionTopBarOmitsModelAndModeAlreadyOnFooter(t *testing.T) {
 	m.numCtx = 98_304
 	m.promptTokens = 0
 	bar := ansi.Strip(m.renderSessionTopBar(m.chatPaneWidth()))
-	if strings.Contains(bar, "ornith") {
-		t.Fatalf("top bar re-printed model already on footer:\n%s", bar)
+	if !strings.Contains(bar, "ornith") {
+		t.Fatalf("top bar missing the model it owns:\n%s", bar)
 	}
-	if strings.Contains(bar, "AUTO") {
-		t.Fatalf("top bar re-printed mode already on footer:\n%s", bar)
-	}
-	// Context meter may still appear on the right when numCtx is set.
 	if !strings.Contains(bar, "0%") && !strings.Contains(bar, "0/") {
 		t.Fatalf("top bar missing ambient context meter:\n%s", bar)
+	}
+	// Authority belongs beside shift+tab, not next to the workspace path.
+	if strings.Contains(bar, "AUTO") {
+		t.Fatalf("top bar re-printed mode owned by the shortcuts row:\n%s", bar)
 	}
 }
 
@@ -246,8 +246,11 @@ func TestRoomyStatusDoesNotDoublePlan(t *testing.T) {
 		t.Fatalf("status should not re-print PLAN when shortcuts own mode: %q", status)
 	}
 	bar := ansi.Strip(m.renderShortcutsBar(m.chatPaneWidth()))
-	if !strings.Contains(bar, "PLAN") || !strings.Contains(bar, "ornith") {
-		t.Fatalf("shortcuts should own model · mode: %q", bar)
+	if !strings.Contains(bar, "PLAN") {
+		t.Fatalf("shortcuts should own mode: %q", bar)
+	}
+	if strings.Contains(status, "ornith") || strings.Contains(bar, "ornith") {
+		t.Fatalf("model belongs to the top bar, not status/shortcuts: status=%q bar=%q", status, bar)
 	}
 }
 

@@ -45,7 +45,7 @@ func newModePickerState(current Mode, terminalWidth, terminalHeight int, isDark 
 	}
 
 	delegate := newPickerDelegate(isDark, false, profile)
-	width := pickerListWidth(terminalWidth, 52)
+	width := pickerListWidth(terminalWidth)
 	height := pickerListHeight(terminalHeight, len(items)*delegate.Height()+2, 4)
 	l := list.New(items, delegate, width, height)
 	configurePickerList(&l, isDark)
@@ -76,8 +76,6 @@ func (m *Model) renderModePicker() string {
 		return ""
 	}
 	return m.renderPickerFrame(
-		m.modePickerState.List.View(),
-		52,
-		m.pickerNavigationFooter(52, false),
+		m.modePickerState.List.View(), m.pickerNavigationFooter(false),
 	)
 }

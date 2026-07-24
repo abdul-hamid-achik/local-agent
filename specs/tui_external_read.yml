@@ -102,12 +102,12 @@ steps:
     - press: "shift+tab"
     - wait:
         screen:
-            contains: "qwen3.5:0.8b · PLAN"
+            contains: "PLAN"
         timeoutMs: 2000
     - press: "shift+tab"
     - wait:
         screen:
-            contains: "qwen3.5:0.8b · AUTO"
+            contains: "AUTO"
         timeoutMs: 2000
     - type: "Update \"${projectRoot}/.glyphrun/tmp/external-auto-target\"."
     - press: "enter"
@@ -129,7 +129,7 @@ steps:
         timeoutMs: 2000
     - wait:
         screen:
-            contains: "LLM request not started: inference not started: no"
+            contains: "Inference not started: no model selected"
         timeoutMs: 5000
     - press: "ctrl+c"
     - wait:

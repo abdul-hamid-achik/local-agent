@@ -264,10 +264,12 @@ func (m *Model) projectFooterWithOptions(options footerProjectionOptions) footer
 		content.WriteString(form)
 		p.cursor = offsetCursor(formCursor, 0, formY)
 	case m.overlay != OverlayNone:
-		// Centered overlays keep the draft's allocation in the base frame so
-		// opening navigation cannot reflow the transcript behind the scrim.
-		framed, _ := m.renderComposerChrome()
-		content.WriteString(strings.Repeat("\n", max(0, lipgloss.Height(framed)-1)))
+		// Anchored overlays keep the draft's allocation so opening navigation
+		// cannot reflow the transcript behind the scrim. Reserving the rows was
+		// right; leaving them blank stranded the divider above an empty band on
+		// every overlay screen. The inert frame keeps the composition coherent
+		// without leaking the draft or showing a focused-looking prompt.
+		content.WriteString(m.renderInertComposerChrome())
 	case m.queuedFollowUp != nil && (!m.queuedFollowUpHeld() || !m.composerEditable()):
 		queue := m.renderQueuedFollowUp()
 		content.WriteString(queue)

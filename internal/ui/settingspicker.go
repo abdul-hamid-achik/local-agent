@@ -63,7 +63,7 @@ func newSettingsPickerState(items []settingsItem, terminalWidth, terminalHeight 
 	delegate := newSettingsDelegate(isDark, compact, profile)
 	itemHeight := delegate.Height()
 
-	width := pickerListWidth(terminalWidth, 58)
+	width := pickerListWidth(terminalWidth)
 	height := settingsListHeight(listItems, itemHeight, terminalHeight)
 
 	l := list.New(listItems, delegate, width, height)
@@ -105,33 +105,46 @@ func setSettingsTitleDensity(l *list.Model, compact bool) {
 func settingsDetailWidth(terminalWidth int) int {
 	// Match the list's item indentation so the selected detail aligns with the
 	// row title while remaining inside the shared picker frame.
-	return max(1, pickerListWidth(terminalWidth, 58)-2)
+	return max(1, pickerListWidth(terminalWidth)-2)
 }
 
 func settingsListHeight(items []list.Item, itemHeight, terminalHeight int) int {
 	return pickerListHeight(terminalHeight, len(items)*itemHeight+2, 4)
 }
 
-func pickerContentWidth(terminalWidth, maximum int) int {
-	// Narrow modals should use the available canvas instead of leaving the
-	// desktop-sized gutters that make their content wrap prematurely. The
-	// shared frame still retains one cell of breathing room on either side.
-	width := terminalWidth - 4
-	if width > maximum {
-		width = maximum
+// overlayWidthTiers is the modal width scale, widest first. Every overlay
+// resolves to one of these for a given terminal, so Settings, Models, Sessions,
+// Help, and Agents all share an edge instead of each picking its own maximum.
+// Before this scale the codebase carried eight different maxima (52, 56, 58,
+// 60, 62, 66, 68, 76); because overlayOnContent centers what it is handed, each
+// one landed at a different column and navigating between modals made the panel
+// jump sideways. The tiers are close enough that a terminal resize steps
+// gently, and the widest matches the roomiest surface (the model picker).
+var overlayWidthTiers = []int{76, 68, 60}
+
+// pickerContentWidth is the canonical modal body width for a terminal. It
+// deliberately takes no per-caller maximum: a shared anchor is worth more than
+// letting each overlay pick a bespoke width.
+func pickerContentWidth(terminalWidth int) int {
+	// One cell of breathing room outside each border edge.
+	available := terminalWidth - 4
+	for _, tier := range overlayWidthTiers {
+		if available >= tier {
+			return tier
+		}
 	}
-	if width < 20 {
-		width = 20
+	if available < 20 {
+		return 20
 	}
-	return width
+	return available
 }
 
 // pickerListWidth leaves room for the modal's horizontal padding. Bubbles
 // delegates size and truncate their rows against this width, so keeping the
 // list and box interiors aligned prevents narrow rows from wrapping into
 // surprise extra lines.
-func pickerListWidth(terminalWidth, maximum int) int {
-	return max(1, pickerContentWidth(terminalWidth, maximum)-2)
+func pickerListWidth(terminalWidth int) int {
+	return max(1, pickerContentWidth(terminalWidth)-2)
 }
 
 // pickerListHeight keeps transient navigation inside the terminal. Chrome is
@@ -159,19 +172,19 @@ func (m *Model) resizePickerOverlays() {
 		state.ItemHeight = delegate.Height()
 		state.Compact = compact
 		state.List.SetSize(
-			pickerListWidth(m.width, 58),
+			pickerListWidth(m.width),
 			settingsListHeight(state.List.Items(), state.ItemHeight, m.height),
 		)
 	}
 	if state := m.agentPickerState; state != nil {
 		state.List.SetSize(
-			pickerListWidth(m.width, 52),
+			pickerListWidth(m.width),
 			pickerListHeight(m.height, len(state.List.Items())*defaultPickerItemHeight+2, 4),
 		)
 	}
 	if state := m.providerPickerState; state != nil {
 		state.List.SetSize(
-			pickerListWidth(m.width, 56),
+			pickerListWidth(m.width),
 			pickerListHeight(
 				m.height,
 				len(state.List.Items())*(state.ItemHeight+max(0, state.ItemSpacing))+2,
@@ -181,7 +194,7 @@ func (m *Model) resizePickerOverlays() {
 	}
 	if state := m.modePickerState; state != nil {
 		state.List.SetSize(
-			pickerListWidth(m.width, 52),
+			pickerListWidth(m.width),
 			pickerListHeight(m.height, len(state.List.Items())*defaultPickerItemHeight+2, 4),
 		)
 	}
@@ -199,7 +212,7 @@ func (m *Model) resizePickerOverlays() {
 		state.Compact = compact
 		state.ItemHeight = delegate.Height()
 		state.List.SetSize(
-			pickerListWidth(m.width, modelPickerMaximumWidth),
+			pickerListWidth(m.width),
 			modelPickerListHeight(m.height, count, state.ItemHeight),
 		)
 		state.List.SetShowPagination(!compact && count*state.ItemHeight > state.List.Height()-2)
@@ -209,14 +222,14 @@ func (m *Model) resizePickerOverlays() {
 		delegate := newPickerDelegate(m.isDark, state.Compact, m.glyphProfile)
 		state.List.SetDelegate(delegate)
 		state.List.SetSize(
-			pickerListWidth(m.width, 62),
+			pickerListWidth(m.width),
 			len(state.List.Items())*delegate.Height()+1,
 		)
 	}
 	if state := m.sessionsPickerState; state != nil {
 		if state.ready() {
 			state.List.SetSize(
-				pickerListWidth(m.width, 60),
+				pickerListWidth(m.width),
 				pickerListHeight(m.height, len(state.Sessions)*defaultPickerItemHeight+4, 4),
 			)
 		}
@@ -404,5 +417,5 @@ func (m *Model) renderSettingsPicker() string {
 				m.styles.OverlayDim.Render("  "+detail)
 		}
 	}
-	return m.renderPickerFrame(content, 58, m.pickerNavigationFooter(58, false))
+	return m.renderPickerFrame(content, m.pickerNavigationFooter(false))
 }

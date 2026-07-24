@@ -1,6 +1,6 @@
-   main · ollama-inventory-workdir                                          0/262.1k · 0%
+   CLOUD · remote prompts · kimi-code:cloud · 0/262.1k · 0%
 
-   CLOUD · remote prompts · kimi-code:cloud
+
 
 
 
@@ -24,4 +24,4 @@
 ╭───────────────────────────────────────────────────────────────────────────────────────╮
 │▏❯ Ask │
 ╰───────────────────────────────────────────────────────────────────────────────────────╯
-   enter send · shift+tab mode · esc cancel · f1 help              CLOUD · remote prompt…
+   enter send · shift+tab mode · esc cancel · f1 help

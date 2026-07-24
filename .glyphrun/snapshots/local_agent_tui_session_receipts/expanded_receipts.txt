@@ -1,12 +1,12 @@
-   main · local-agent                                                                            0/16.4k · 0%
+   main · local-agent                                                     qwen3.5:2b · offline · 0/16.4k · 0%
 
 
- ▌ Review the release receipts.
+▌  Review the release receipts.
 
 
    assistant
 
-     I checked the saved verification receipts.
+   I checked the saved verification receipts.
 
 │  ▾ ✓ Read (42ms)
 │  tool: read_file
@@ -20,8 +20,8 @@
 │  exit status 1: fixture regression
 
 
-     The read completed, the test failure is visible, and the interrupted effect needs
-     inspection.
+   The read completed, the test failure is visible, and the interrupted effect needs
+   inspection.
 
    notice · Restored session <session> · Recovery receipt review
 
@@ -36,4 +36,4 @@
 ╭───────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │▏❯ Ask │
 ╰───────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-   enter send · shift+tab mode · esc cancel · f1 help                                              qwen3.5:2b
+   enter send · shift+tab mode · esc cancel · f1 help

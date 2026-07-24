@@ -460,14 +460,21 @@ func TestModeStatusLine(t *testing.T) {
 	})
 }
 
-func TestWelcomeMarksUnavailableOllamaModelOffline(t *testing.T) {
+// Reachability travels with the model label so the pair reads as one fact.
+// Which surface carries it depends on the frame, so assert the composed view.
+func TestUnavailableOllamaModelIsMarkedOfflineBesideItsName(t *testing.T) {
 	m := newTestModel(t)
 	m.model = "qwen3.5:2b"
 	m.ollamaOffline = true
-	var view strings.Builder
-	m.renderWelcome(&view)
-	if got := view.String(); !strings.Contains(got, "qwen3.5:2b · offline") {
-		t.Fatalf("offline welcome = %q", got)
+	m.recalcViewportHeight()
+	m.refreshTranscript()
+
+	view := ansi.Strip(m.View().Content)
+	if !strings.Contains(view, "qwen3.5:2b · offline") {
+		t.Fatalf("offline marker is not attached to the model name:\n%s", view)
+	}
+	if got := strings.Count(view, "offline"); got != 1 {
+		t.Fatalf("offline appeared %d times, want exactly 1:\n%s", got, view)
 	}
 }
 

@@ -14,6 +14,13 @@ func (m *Model) composerFrameEnabled() bool {
 	return m != nil && m.ready && m.height >= 16 && m.width >= 40
 }
 
+// blankRowsLike returns whitespace with the same row count as value, so a
+// surface can be emptied without changing the height the layout already
+// reserved for it.
+func blankRowsLike(value string) string {
+	return strings.Repeat("\n", strings.Count(strings.TrimRight(value, "\n"), "\n"))
+}
+
 // renderComposerChrome paints the draft surface. On roomy frames it uses a
 // single Grok-style rounded border around the textarea only — model/mode live
 // on the bottom shortcuts row (right side), not as a second meta line under
@@ -22,6 +29,21 @@ func (m *Model) composerFrameEnabled() bool {
 // Important: never mutate the live textarea width/height here — reflow during
 // paint desyncs inputLines from the projected footer and overflows the frame.
 func (m *Model) renderComposerChrome() (string, *tea.Cursor) {
+	return m.renderComposerChromeBody(false)
+}
+
+// renderInertComposerChrome paints the composer's frame at its exact live
+// height with an empty interior. Overlays use it so the draft surface keeps its
+// allocation — reflowing the transcript when a modal opens is jarring — without
+// leaking the draft under the panel or showing a prompt that looks focused
+// while a modal owns input. Painting nothing there was the previous behavior
+// and it stranded the divider above an empty band on every overlay screen.
+func (m *Model) renderInertComposerChrome() string {
+	view, _ := m.renderComposerChromeBody(true)
+	return view
+}
+
+func (m *Model) renderComposerChromeBody(inert bool) (string, *tea.Cursor) {
 	if m == nil {
 		return "", nil
 	}
@@ -33,10 +55,17 @@ func (m *Model) renderComposerChrome() (string, *tea.Cursor) {
 	input.SetVirtualCursor(false)
 
 	if !m.composerFrameEnabled() {
+		if inert {
+			return blankRowsLike(input.View()), nil
+		}
 		return input.View(), input.Cursor()
 	}
 
 	body := strings.TrimRight(input.View(), "\n")
+	if inert {
+		// Same row count, no content: geometry is identical to the live frame.
+		body = blankRowsLike(body)
+	}
 	innerW := max(1, paneW-2)
 	palette := newSemanticPalette(m.isDark)
 	border := lipgloss.NewStyle().Foreground(palette.Border)
@@ -84,21 +113,39 @@ func (m *Model) renderComposerChrome() (string, *tea.Cursor) {
 	return strings.TrimRight(framed.String(), "\n"), cursor
 }
 
-// renderFooterIdentityRight is the Grok bottom-right identity: model · mode.
-// Painted on the same row as shortcuts (not under the composer box).
+// renderFooterIdentityRight is the bottom-right identity on the shortcuts row.
+//
+// It carries only what this frame assigned to surfaceShortcuts. On a roomy
+// frame that is the authority badge alone: the model name lives in the top bar,
+// beside the context meter it belongs with. On frames without a top bar the
+// plan falls the model through to here instead.
 func (m *Model) renderFooterIdentityRight(budget int) string {
 	if m == nil || budget < 8 {
 		return ""
 	}
+	plan := m.planStatus()
 	parts := make([]string, 0, 2)
-	if model := m.currentModelSurfaceLabel(budget < 28); model != "" {
-		parts = append(parts, m.styles.Dimmed.Render(
-			truncateDisplayWithGlyphProfile(model, min(22, budget), m.glyphProfile),
-		))
+
+	if m.currentModelIsNonLocal() {
+		if plan.owns(factRemoteBoundary, surfaceShortcuts) {
+			parts = append(parts, m.styles.StatusWarning.Render(
+				truncateDisplayWithGlyphProfile(
+					m.currentModelReachabilityLabel(budget < 28), budget, m.glyphProfile,
+				),
+			))
+		}
+	} else if plan.owns(factModel, surfaceShortcuts) {
+		if model := m.currentModelReachabilityLabel(budget < 28); model != "" {
+			parts = append(parts, m.styles.Dimmed.Render(
+				truncateDisplayWithGlyphProfile(model, min(22, budget), m.glyphProfile),
+			))
+		}
 	}
+
 	presented := m.presentedMode()
-	// PLAN/AUTO labels are short; keep them once there is room after the model.
-	if presented != ModeNormal && budget >= 12 {
+	// NORMAL is the default authority and needs no badge; PLAN and AUTO change
+	// what the host will do and always earn their label here.
+	if plan.owns(factMode, surfaceShortcuts) && presented != ModeNormal && budget >= 6 {
 		cfg := m.modeConfigs[presented]
 		var style lipgloss.Style
 		switch presented {
@@ -117,9 +164,9 @@ func (m *Model) renderFooterIdentityRight(budget int) string {
 	sep := m.styles.Dimmed.Render(glyphSeparator(m.glyphProfile))
 	line := strings.Join(parts, sep)
 	if lipgloss.Width(line) > budget {
-		// Drop mode first, then truncate model.
+		// Authority is last in and first kept: it changes what the host will do.
 		if len(parts) > 1 {
-			line = parts[0]
+			line = parts[len(parts)-1]
 		}
 		line = truncateDisplayWithGlyphProfile(ansi.Strip(line), budget, m.glyphProfile)
 		line = m.styles.Dimmed.Render(line)

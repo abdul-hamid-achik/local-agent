@@ -1,5 +1,4 @@
-   main · local-agent                                                        0/16.4k · 0%
-   qwen3.5:2b · offline
+   main · local-agent                                 qwen3.5:2b · offline · 0/16.4k · 0%
 
    notice · ollama: no model selected
    try: ollama serve · ollama pull qwen3.5:2b
@@ -23,9 +22,10 @@
 
 
 
+
 ─────────────────────────────────────────────────────────────────────────────────────────
 ╭───────────────────────────────────────────────────────────────────────────────────────╮
-│▏❯ Review the first receipt.                                                          …│
-│ │ Keep the second line while I check Settings.                                       …│
+│▏❯ Review the first receipt.…                                                          │
+│ │ Keep the second line while I check Settings.                   …                    │
 ╰───────────────────────────────────────────────────────────────────────────────────────╯
-   enter send · shift+tab mode · esc cancel · f1 help                          qwen3.5:2b
+   enter send · shift+tab mode · esc cancel · f1 help

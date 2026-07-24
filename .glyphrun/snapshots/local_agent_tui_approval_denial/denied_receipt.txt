@@ -1,7 +1,7 @@
-   workspace                         8/16.4k · 0%
+   workspace          qwen3.5:0.8b · 8/16.4k · 0%
 
 
- ▌ Create approval-probe.txt with the exact text…
+▌  Create approval-probe.txt with the exact text…
 
 
    │ ▸ Thought
@@ -10,10 +10,10 @@
 │  tool call denied: user denied tool executi…
 
 
-     Denied safely. No file was changed.
+   Denied safely. No file was changed.
 ─────────────────────────────────────────────────
    <session>
 ╭───────────────────────────────────────────────╮
-│▏❯ Ask │
+│▏❯ A…                                          │
 ╰───────────────────────────────────────────────╯
-   enter send · shift+tab mode       qwen3.5:0.8b
+   enter send · shift+tab mode

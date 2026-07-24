@@ -127,7 +127,7 @@ func TestOllamaModelDisplayProjectionStripsTerminalControlsWithoutChangingIdenti
 
 func TestOllamaModelPickerNarrowAndFilterable(t *testing.T) {
 	state := newOllamaModelPickerState([]OllamaModelDescriptor{{Name: "qwen", Source: OllamaModelLocal, Selectable: true, Fit: true}}, "", 32, 12, false)
-	if got := state.List.Width(); got > pickerListWidth(32, modelPickerMaximumWidth) {
+	if got := state.List.Width(); got > pickerListWidth(32) {
 		t.Fatalf("width = %d", got)
 	}
 	if !state.Compact || state.ItemHeight != 1 {
@@ -170,7 +170,7 @@ func TestOllamaModelPickerFitsWideAndMinimumTerminals(t *testing.T) {
 
 		view := m.renderModelPicker()
 		plain := strings.Join(strings.Fields(ansi.Strip(view)), " ")
-		detail := strings.Join(strings.Fields(ansi.Strip(m.renderModelSelectionDetail(m.modelPickerState, pickerListWidth(size.width, modelPickerMaximumWidth)))), " ")
+		detail := strings.Join(strings.Fields(ansi.Strip(m.renderModelSelectionDetail(m.modelPickerState, pickerListWidth(size.width)))), " ")
 		if !strings.Contains(detail, reason) || strings.Contains(detail, "…") {
 			t.Fatalf("%dx%d decision reason was truncated: %q", size.width, size.height, detail)
 		}

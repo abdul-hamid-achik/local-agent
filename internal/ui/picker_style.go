@@ -16,7 +16,7 @@ func completionFilterPromptForGlyphProfile(profile GlyphProfile) string {
 }
 
 func completionFilterInputWidth(terminalWidth int) int {
-	return max(1, pickerListWidth(terminalWidth, 60)-lipgloss.Width(completionFilterPrompt))
+	return max(1, pickerListWidth(terminalWidth)-lipgloss.Width(completionFilterPrompt))
 }
 
 // semanticTextInputStyles keeps custom Bubbles inputs in the same adaptive

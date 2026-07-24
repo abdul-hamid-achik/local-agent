@@ -41,6 +41,27 @@ func (m *Model) currentModelSurfaceLabel(compact bool) string {
 	return strings.Join([]string{boundary, name}, " · ")
 }
 
+// currentModelReachabilityLabel is the model label with its reachability, and
+// it is what every ambient surface paints.
+//
+// "offline" on its own has no subject, so it used to be appended to the welcome
+// while the model name was printed somewhere else entirely — the reader had to
+// join them. Keeping reachability attached to the label means the pair
+// "qwen3.5:2b · offline" appears once, wherever this frame put identity.
+func (m *Model) currentModelReachabilityLabel(compact bool) string {
+	if m == nil {
+		return ""
+	}
+	label := m.currentModelSurfaceLabel(compact)
+	if !m.ollamaOffline {
+		return label
+	}
+	if label == "" {
+		return "offline"
+	}
+	return label + " · offline"
+}
+
 func (m *Model) currentModelIsNonLocal() bool {
 	if m == nil {
 		return false

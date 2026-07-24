@@ -1,6 +1,6 @@
 LOCAL AGENT
 Local-first · prompts on
-PLAN · read-only · qwen3.5:2…
+qwen3.5:2b · offline · PLAN …
 Ask · /help
 
   Ollama model · ctrl+o

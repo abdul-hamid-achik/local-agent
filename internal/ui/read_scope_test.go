@@ -645,7 +645,7 @@ func TestReadScopePromptBlocksCollidingCompactPathsUntilTheyAreDistinct(t *testi
 
 	// Runtime is a scrollable inspection surface and therefore keeps both full
 	// escaped identities instead of repeating their compact shared tail.
-	runtimeWidth := pickerListWidth(30, 58)
+	runtimeWidth := pickerListWidth(30)
 	runtimeView := ansi.Strip(m.buildRuntimeStatusContent(runtimeWidth))
 	assertRenderedLinesFit(t, runtimeView, runtimeWidth)
 	for _, want := range []string{"~/a/shared.txt", "~/b/shared.txt"} {

@@ -37,19 +37,23 @@ func TestComposerFrameOffOnMinimumTerminal(t *testing.T) {
 }
 
 func TestFooterIdentityLivesOnShortcutsRow(t *testing.T) {
-	// Grok layout: model · mode on the bottom shortcuts row (right), not under
-	// the composer box as a second meta line.
+	// Authority sits on the bottom shortcuts row, beside the key that changes
+	// it, and never under the composer box as a second meta line. Identity
+	// (model · context) lives in the top bar — see planStatus.
 	m := newTestModel(t)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
 	m = updated.(*Model)
 	m.model = "ornith:latest"
 	m.setMode(ModePlan)
 	bar := ansi.Strip(m.renderShortcutsBar(m.chatPaneWidth()))
-	if !strings.Contains(bar, "ornith") {
-		t.Fatalf("shortcuts bar missing model identity:\n%s", bar)
-	}
 	if !strings.Contains(bar, "PLAN") {
 		t.Fatalf("shortcuts bar missing mode:\n%s", bar)
+	}
+	if strings.Contains(bar, "ornith") {
+		t.Fatalf("shortcuts bar re-printed model owned by the top bar:\n%s", bar)
+	}
+	if top := ansi.Strip(m.renderSessionTopBar(m.chatPaneWidth())); !strings.Contains(top, "ornith") {
+		t.Fatalf("top bar missing the model it owns:\n%s", top)
 	}
 	// Composer chrome is border-only (no trailing model line).
 	chrome, _ := m.renderComposerChrome()

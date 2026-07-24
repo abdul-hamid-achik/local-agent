@@ -136,66 +136,76 @@ func TestOverlayOnContent_Positioning(t *testing.T) {
 	}
 }
 
-func TestOverlayOnContent_PreservesCellsOutsideOverlay(t *testing.T) {
+// The modal scrim owns every row it covers. Letting base content survive beside
+// a modal put the transcript/composer rule through the panel and sliced the
+// shortcuts row mid-word at the border.
+func TestOverlayOnContent_ScrimOwnsModalRowsAndOneRowEitherSide(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 48
-	m.height = 5
+	m.height = 9
 
-	base := strings.Join([]string{
-		strings.Repeat("x", m.width),
-		strings.Repeat("x", m.width),
-		strings.Repeat("x", m.width),
-		strings.Repeat("x", m.width),
-		strings.Repeat("x", m.width),
-	}, "\n")
-	baseRows := strings.Split(base, "\n")
-	overlay := "modal"
+	baseRow := strings.Repeat("x", m.width)
+	base := strings.TrimSuffix(strings.Repeat(baseRow+"\n", 9), "\n")
+	overlay := "╭────╮\n│ ok │\n╰────╯"
 
-	result := m.overlayOnContent(base, overlay)
-	lines := strings.Split(result, "\n")
-	overlayRow := (len(lines) - 1) / 2
-	if got := lipgloss.Width(lines[overlayRow]); got != m.width {
-		t.Fatalf("overlay row width = %d, want %d", got, m.width)
-	}
-	start := centeredOverlayLineX(m.width, overlay)
-	want := strings.Repeat("x", start) + overlay + strings.Repeat("x", m.width-start-lipgloss.Width(overlay))
-	if got := ansi.Strip(lines[overlayRow]); got != want {
-		t.Fatalf("overlay row changed cells outside modal:\n got %q\nwant %q", got, want)
-	}
+	lines := strings.Split(ansi.Strip(m.overlayOnContent(base, overlay)), "\n")
+	startY := centeredOverlayStartY(base, overlay)
+	scrimTop, scrimBottom := startY-1, startY+lipgloss.Height(overlay)
+
 	for row, line := range lines {
-		if row != overlayRow && line != baseRows[row] {
-			t.Fatalf("overlay changed untouched row %d: got %q", row, line)
+		switch {
+		case row >= startY && row < startY+lipgloss.Height(overlay):
+			if strings.Contains(line, "x") {
+				t.Fatalf("modal row %d retained base fragments: %q", row, line)
+			}
+		case row == scrimTop || row == scrimBottom:
+			if strings.TrimSpace(line) != "" {
+				t.Fatalf("clear row %d beside the modal was not blank: %q", row, line)
+			}
+		default:
+			if line != baseRow {
+				t.Fatalf("row %d outside the scrim was modified: %q", row, line)
+			}
 		}
 	}
 }
 
-func TestOverlayOnContent_CompactRowsMaskBaseFragments(t *testing.T) {
+// Every row of a modal shares one column. Placing rows independently let a
+// short footer drift against the border above it inside the same panel.
+func TestOverlayOnContent_ModalBlockSharesOneColumn(t *testing.T) {
 	m := newTestModel(t)
-	m.width = 30
-	m.height = 5
+	m.width = 60
+	m.height = 9
 
-	base := strings.Join([]string{
-		strings.Repeat("x", m.width),
-		strings.Repeat("x", m.width),
-		strings.Repeat("x", m.width),
-		strings.Repeat("x", m.width),
-		strings.Repeat("x", m.width),
-	}, "\n")
-	overlay := "╭────╮\n│ ok │\n╰────╯"
+	base := strings.TrimSuffix(strings.Repeat(strings.Repeat("x", m.width)+"\n", 9), "\n")
+	// Deliberately ragged: a wide border, a short footer, a wide border.
+	overlay := "╭──────────────╮\n│ esc close    │\n╰──────────────╯"
 
-	result := ansi.Strip(m.overlayOnContent(base, overlay))
-	lines := strings.Split(result, "\n")
+	lines := strings.Split(ansi.Strip(m.overlayOnContent(base, overlay)), "\n")
 	startY := centeredOverlayStartY(base, overlay)
-	for row, line := range lines {
-		if row < startY || row >= startY+lipgloss.Height(overlay) {
-			if line != strings.Repeat("x", m.width) {
-				t.Fatalf("compact mask changed untouched row %d: %q", row, line)
-			}
-			continue
+
+	wantX := centeredOverlayLineX(m.width, overlay)
+	for i := range strings.Split(overlay, "\n") {
+		line := lines[startY+i]
+		gotX := lipgloss.Width(line) - lipgloss.Width(strings.TrimLeft(line, " "))
+		if gotX != wantX {
+			t.Fatalf("modal row %d starts at column %d, want %d (rows must share one X)", i, gotX, wantX)
 		}
-		if strings.Contains(line, "x") {
-			t.Fatalf("compact overlay row %d retained base fragments: %q", row, line)
-		}
+	}
+}
+
+// Anchoring, not centering: a short prompt and a tall picker open with their
+// top edge on the same row, so navigating between overlays does not walk the
+// panel up and down the screen.
+func TestOverlayAnchorIsIndependentOfModalHeight(t *testing.T) {
+	base := strings.TrimSuffix(strings.Repeat("\n", 24), "\n")
+	short := "╭──╮\n╰──╯"
+	tall := strings.TrimSuffix(strings.Repeat("│ row │\n", 10), "\n")
+
+	shortY := centeredOverlayStartY(base, short)
+	tallY := centeredOverlayStartY(base, tall)
+	if shortY != tallY {
+		t.Fatalf("modal top edge moved with content height: short=%d tall=%d", shortY, tallY)
 	}
 }
 
@@ -240,28 +250,24 @@ func TestOverlayOnContent_PreservesStyledWideTranscriptCells(t *testing.T) {
 	start := centeredOverlayLineX(m.width, overlay)
 	end := start + lipgloss.Width(overlay)
 
+	// Styled wide-rune rows outside the scrim survive the composite untouched.
+	untouched := row + lipgloss.Height(overlay) + 1
+	if untouched >= len(resultLines) {
+		t.Fatalf("test needs a base row below the scrim: rows=%d", len(resultLines))
+	}
 	wantCells := renderOverlayTestLine(baseLine, m.width)
-	gotCells := renderOverlayTestLine(resultLines[row], m.width)
+	gotCells := renderOverlayTestLine(resultLines[untouched], m.width)
 	for x := 0; x < m.width; x++ {
-		if x >= start && x < end {
-			continue
-		}
 		if !wantCells.CellAt(x, 0).Equal(gotCells.CellAt(x, 0)) {
-			t.Fatalf("outside cell %d changed: base=%#v result=%#v", x, wantCells.CellAt(x, 0), gotCells.CellAt(x, 0))
+			t.Fatalf("cell %d outside the scrim changed: base=%#v result=%#v", x, wantCells.CellAt(x, 0), gotCells.CellAt(x, 0))
 		}
 	}
+	gotCells = renderOverlayTestLine(resultLines[row], m.width)
 
 	overlayCells := renderOverlayTestLine(overlay, lipgloss.Width(overlay))
 	for x := start; x < end; x++ {
 		if !overlayCells.CellAt(x-start, 0).Equal(gotCells.CellAt(x, 0)) {
 			t.Fatalf("modal cell %d was not composited: overlay=%#v result=%#v", x, overlayCells.CellAt(x-start, 0), gotCells.CellAt(x, 0))
-		}
-	}
-
-	untouched := renderOverlayTestLine(resultLines[0], m.width)
-	for x := 0; x < m.width; x++ {
-		if !wantCells.CellAt(x, 0).Equal(untouched.CellAt(x, 0)) {
-			t.Fatalf("untouched colored row changed at cell %d", x)
 		}
 	}
 }

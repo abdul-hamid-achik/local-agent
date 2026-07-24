@@ -6,6 +6,6 @@
 │  tool: consult_experts
 │  transport: succeeded
 ─────────────────────────────
-  <session> · Paused · end
+   <session> · Paused · end
 ▏❯ Ask · /help
    enter send · shift+tab

@@ -8,12 +8,11 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/command"
 	"github.com/abdul-hamid-achik/local-agent/internal/goal"
 )
-
-const goalInspectorMaximumWidth = 66
 
 // GoalInspectorOptions contains presentation-only host state. The durable
 // snapshot and resolved actions remain immutable for the lifetime of a modal;
@@ -133,7 +132,7 @@ func (i *GoalInspector) SetReducedMotion(reduced bool) {
 func (i *GoalInspector) contentWidth() int {
 	// The frame owns one padding cell on each side. Reserve them before
 	// wrapping so Lip Gloss never adds surprise rows at the terminal edge.
-	return max(1, pickerListWidth(i.width, goalInspectorMaximumWidth)-2)
+	return max(1, pickerListWidth(i.width)-2)
 }
 
 func (i *GoalInspector) compact() bool {
@@ -242,6 +241,20 @@ func (i *GoalInspector) invalidate() {
 	}
 }
 
+// headerShowsFullObjective reports whether the phase line above the document
+// carries the objective in full, so the document can skip repeating it.
+func (i *GoalInspector) headerShowsFullObjective() bool {
+	objective := strings.TrimSpace(i.snapshot.Objective)
+	if objective == "" {
+		return true
+	}
+	header := ansi.Strip(RenderGoalStatusLine(GoalSummary{
+		Objective: objective,
+		Phase:     GoalPhase(i.snapshot.State),
+	}, i.contentWidth(), i.isDark, i.glyphProfile))
+	return strings.Contains(header, objective)
+}
+
 // View renders a cached modal frame. The viewport is only rebuilt when data,
 // size, theme, or navigation changes.
 func (i *GoalInspector) View() string {
@@ -282,7 +295,7 @@ func (i *GoalInspector) View() string {
 		Border(borderForGlyphProfile(i.glyphProfile)).
 		BorderForeground(i.styles.OverlayBorder).
 		Padding(0, 1).
-		Width(pickerListWidth(i.width, goalInspectorMaximumWidth) + 2).
+		Width(pickerListWidth(i.width) + 2).
 		Render(b.String())
 	i.cache.valid = true
 	i.cache.view = view
@@ -293,7 +306,13 @@ func (i *GoalInspector) View() string {
 func (i *GoalInspector) buildDocument() string {
 	width := i.contentWidth()
 	var b strings.Builder
-	i.writeSection(&b, "Objective", i.snapshot.Objective, width)
+	// The panel header already reads "Ⅱ paused · <objective>". Repeating it as
+	// an Objective section directly underneath printed the same sentence twice
+	// in the top three rows. Keep the section only when the header had to
+	// truncate, which is the one case where the body still adds something.
+	if !i.headerShowsFullObjective() {
+		i.writeSection(&b, "Objective", i.snapshot.Objective, width)
+	}
 
 	results := goalAcceptanceResults(i.snapshot)
 	glyphs := glyphSet(i.glyphProfile)
@@ -355,7 +374,11 @@ func (i *GoalInspector) buildDocument() string {
 			kind = "outcome unknown"
 		}
 		value := fmt.Sprintf("%s · %s eval · %s", kind, formatGoalTokens(turn.EvalTokens), goalRelativeTime(i.now, turn.RecordedAt))
-		if summary := strings.TrimSpace(turn.Summary); summary != "" {
+		// A paused goal's State reason is usually the last turn's summary word
+		// for word, which printed the same failure text twice a few rows apart.
+		// State is the more prominent of the two, so it keeps the text.
+		if summary := strings.TrimSpace(turn.Summary); summary != "" &&
+			!strings.Contains(status, summary) {
 			value += " · " + summary
 		}
 		i.writeSection(&b, "Last turn", value, width)

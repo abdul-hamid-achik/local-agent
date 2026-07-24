@@ -256,17 +256,22 @@ func TestOverlaySuppressesComposerPromptAndDraft(t *testing.T) {
 	}
 }
 
-func TestOverlayCursorUsesActualCenteredRowWidth(t *testing.T) {
+// The cursor follows the modal block, not the width of its own row. A short
+// row inside a wide panel must not pull the caret away from the panel's column.
+func TestOverlayCursorFollowsModalBlockColumn(t *testing.T) {
 	base := strings.Join(make([]string, 9), "\n")
 	overlay := "────────\n────\n────────"
 	local := tea.NewCursor(2, 1)
 
+	// Block width 8 in a 12-cell terminal anchors at X=2; the caret sits at +2.
+	// Base is 9 rows, so the anchor row is 9/4 = 2; the caret is on row 1 of the
+	// modal.
 	got := overlayCursor(base, overlay, 12, local)
 	if got == nil {
 		t.Fatal("expected translated cursor")
 	}
-	if got.X != 6 || got.Y != 4 {
-		t.Fatalf("translated cursor = (%d,%d), want (6,4)", got.X, got.Y)
+	if got.X != 4 || got.Y != 3 {
+		t.Fatalf("translated cursor = (%d,%d), want (4,3)", got.X, got.Y)
 	}
 	if local.X != 2 || local.Y != 1 {
 		t.Fatalf("translation mutated child cursor: (%d,%d)", local.X, local.Y)

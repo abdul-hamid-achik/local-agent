@@ -1,10 +1,10 @@
-   main · local-agent                                      0/16.4k · 0%
-   PLAN · mutation tools removed · qwen3.5:2b · offline
+   main · local-agent               qwen3.5:2b · offline · 0/16.4k · 0%
 
    notice · ollama: no model selected
    try: ollama serve · ollama pull qwen3.5:2b
     ✗ error
-   LLM request not started: inference not started: no model selected
+   Inference not started: no model selected
+
 
 
 
@@ -22,6 +22,6 @@
 
 ───────────────────────────────────────────────────────────────────────
 ╭─────────────────────────────────────────────────────────────────────╮
-│▌❯ design a safe migration                                     …     │
+│▌❯ design a safe migration                    …                      │
 ╰─────────────────────────────────────────────────────────────────────╯
-   enter send · shift+tab mode · esc · f1             qwen3.5:2b · PLAN
+   enter send · shift+tab mode · esc · f1                          PLAN

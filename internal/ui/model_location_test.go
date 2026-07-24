@@ -23,30 +23,49 @@ func TestCloudModelBoundaryIsVisibleAcrossCoreSurfaces(t *testing.T) {
 		}
 	}
 
+	// The safety contract is that a reader sees the boundary, not that any
+	// particular renderer prints it. planStatus decides which surface owns it
+	// per frame, so this asserts against the composed view: it stays true if
+	// ownership moves again, and it still fails if the boundary is dropped.
 	for _, size := range []struct {
 		width, height int
 	}{{30, 12}, {80, 24}} {
-		m.width, m.height = size.width, size.height
-		var welcomeBuilder strings.Builder
-		m.renderWelcome(&welcomeBuilder)
-		welcome := ansi.Strip(welcomeBuilder.String())
-		m.entries = []ChatEntry{{Kind: "user", Content: "hello"}}
-		status := ansi.Strip(m.renderStatusLine())
-		m.entries = nil
-		// Welcome is empty on roomy frames; Cloud still must show on status or
-		// minimum welcome. Status is the durable roomy surface.
-		surfaces := map[string]string{"status": status}
-		if size.width <= minTerminalWidth || size.height <= minTerminalHeight {
-			surfaces["welcome"] = welcome
-		} else if welcome != "" {
-			// Roomy welcome may still paint Cloud as an operational exception.
-			surfaces["welcome"] = welcome
-		}
-		for surface, rendered := range surfaces {
-			if !strings.Contains(rendered, "CLOUD") || !strings.Contains(rendered, "remote prompts") {
-				t.Fatalf("%s at %dx%d hid Cloud boundary:\n%s", surface, size.width, size.height, rendered)
+		for _, started := range []bool{false, true} {
+			m.width, m.height = size.width, size.height
+			if started {
+				m.entries = []ChatEntry{{Kind: "user", Content: "hello"}}
+			} else {
+				m.entries = nil
+			}
+			m.recalcViewportHeight()
+			m.refreshTranscript()
+
+			view := ansi.Strip(m.View().Content)
+			if !strings.Contains(view, "CLOUD") {
+				t.Fatalf("view at %dx%d (started=%v) hid the Cloud boundary:\n%s",
+					size.width, size.height, started, view)
 			}
 		}
+	}
+	m.entries = nil
+}
+
+// The Cloud boundary must appear exactly once. Printing it on two surfaces was
+// the old way of guaranteeing it appeared at all.
+func TestCloudModelBoundaryIsNotRepeated(t *testing.T) {
+	m := newTestModel(t)
+	m.model = "qwen-cloud:latest"
+	m.ollamaModels = []OllamaModelDescriptor{{
+		Name: "qwen-cloud:latest", Source: OllamaModelCloud,
+		Current: true, Selectable: true, Fit: true, ConsentGranted: true,
+	}}
+	m.entries = []ChatEntry{{Kind: "user", Content: "hello"}}
+	m.recalcViewportHeight()
+	m.refreshTranscript()
+
+	view := ansi.Strip(m.View().Content)
+	if got := strings.Count(view, "remote prompts"); got != 1 {
+		t.Fatalf("Cloud boundary appeared %d times, want exactly 1:\n%s", got, view)
 	}
 }
 

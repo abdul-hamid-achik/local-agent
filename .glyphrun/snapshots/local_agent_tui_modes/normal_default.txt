@@ -1,8 +1,8 @@
-   main · local-agent                                      0/16.4k · 0%
-   qwen3.5:2b · offline
+   main · local-agent               qwen3.5:2b · offline · 0/16.4k · 0%
 
    notice · ollama: no model selected
    try: ollama serve · ollama pull qwen3.5:2b
+
 
 
 
@@ -24,4 +24,4 @@
 ╭─────────────────────────────────────────────────────────────────────╮
 │▏❯ Ask │
 ╰─────────────────────────────────────────────────────────────────────╯
-   enter send · shift+tab mode · esc · f1                    qwen3.5:2b
+   enter send · shift+tab mode · esc · f1

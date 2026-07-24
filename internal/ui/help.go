@@ -15,7 +15,7 @@ type helpRow struct {
 
 // helpContentWidth returns the inner width for the help modal content.
 func (m *Model) helpContentWidth() int {
-	return pickerListWidth(m.width, 60)
+	return pickerListWidth(m.width)
 }
 
 // helpViewportHeight returns the viewport height for the help modal.
@@ -231,52 +231,51 @@ func (m *Model) renderHelpOverlay(_ int) string {
 			m.renderKeyHints(innerW, navigation...)
 	}
 
-	return m.renderPickerFrame(b.String(), 60, footer)
+	return m.renderPickerFrame(b.String(), footer)
 }
 
-// overlayOnContent renders the overlay centered on the viewport area.
+// overlayOnContent paints a modal over the base frame on an anchored scrim.
+//
+// The scrim is not decoration. Letting the base show through on the modal's own
+// rows meant the transcript/composer rule ran straight through the panel and
+// the shortcuts row was sliced mid-word at the border, which reads as a paint
+// bug rather than as depth. Every row the modal occupies — plus one clear row
+// above and below — now belongs to the modal.
 func (m *Model) overlayOnContent(base, overlay string) string {
 	baseLines := strings.Split(base, "\n")
 	overlayLines := strings.Split(overlay, "\n")
 	startY := centeredOverlayStartY(base, overlay)
+	startX := centeredOverlayLineX(m.width, overlay)
 	canvasWidth := max(m.width, lipgloss.Width(base), lipgloss.Width(overlay))
 	canvas := lipgloss.NewCanvas(canvasWidth, len(baseLines))
-	overlayWidth := lipgloss.Width(overlay)
-	// Preserve transcript context when the modal has a meaningful outside
-	// gutter. If only a few cells remain, those cells become chopped words and
-	// false-looking prompts, so the modal owns its intersecting rows instead.
-	compactMask := m.width > 0 && (m.width <= 40 || m.width-overlayWidth < 16)
-	layerCapacity := len(overlayLines) + 1
-	if compactMask {
-		layerCapacity += len(overlayLines)
-	}
-	layers := make([]*lipgloss.Layer, 0, layerCapacity)
+	scrimWidth := max(1, m.width)
+
+	// scrim(+2) covers one clear row on each side of the panel so the modal
+	// never appears welded to surrounding chrome.
+	layers := make([]*lipgloss.Layer, 0, 2*len(overlayLines)+3)
 	layers = append(layers, lipgloss.NewLayer(base).Z(0))
+	for row := startY - 1; row <= startY+len(overlayLines); row++ {
+		if row < 0 || row >= len(baseLines) {
+			continue
+		}
+		layers = append(layers, lipgloss.NewLayer(strings.Repeat(" ", scrimWidth)).
+			Y(row).
+			Z(1))
+	}
 
 	for i, ol := range overlayLines {
 		row := startY + i
 		if row >= len(baseLines) {
 			break
 		}
-		overlayZ := 1
-		if compactMask {
-			// One- and two-cell transcript fragments around a narrow modal read
-			// like broken controls. Compact overlays therefore own their complete
-			// rows; wider terminals keep the transparent transcript context.
-			layers = append(layers, lipgloss.NewLayer(strings.Repeat(" ", m.width)).
-				Y(row).
-				Z(overlayZ))
-			overlayZ++
-		}
+		// One X for the whole block: ragged rows inside a border must not drift.
 		layers = append(layers, lipgloss.NewLayer(ol).
-			X(centeredOverlayLineX(m.width, ol)).
+			X(startX).
 			Y(row).
-			Z(overlayZ))
+			Z(2))
 	}
 
 	// Lip Gloss' cell compositor keeps ANSI styles and grapheme widths intact.
-	// Wide overlay rows replace only their own bounds; compact rows use the
-	// explicit mask above so tiny base fragments never resemble active controls.
 	canvas.Compose(lipgloss.NewCompositor(layers...))
 	return canvas.Render()
 }

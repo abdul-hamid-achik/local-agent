@@ -44,7 +44,7 @@ steps:
     - press: "shift+tab"
     - wait:
         screen:
-            contains: "qwen3.5:2b · PLAN"
+            contains: "PLAN"
         timeoutMs: 2000
     - wait:
         screen:
@@ -54,7 +54,7 @@ steps:
     - press: "enter"
     - wait:
         screen:
-            contains: "LLM request not started: inference not started: no"
+            contains: "Inference not started: no model selected"
         timeoutMs: 2000
     - wait:
         screen:
@@ -68,7 +68,7 @@ steps:
     - press: "shift+tab"
     - wait:
         screen:
-            contains: "qwen3.5:2b · AUTO"
+            contains: "AUTO"
         timeoutMs: 2000
     - wait:
         screen:

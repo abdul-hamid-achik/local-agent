@@ -119,7 +119,7 @@ func (m *Model) renderCompletionModalView() (string, *tea.Cursor) {
 	if cs == nil {
 		return "", nil
 	}
-	contentW := pickerListWidth(m.width, 60)
+	contentW := pickerListWidth(m.width)
 	filter := cs.Filter
 	filter.SetVirtualCursor(false)
 	filter.SetWidth(completionFilterInputWidth(m.width))
@@ -302,7 +302,7 @@ func (m *Model) renderCompletionModalView() (string, *tea.Cursor) {
 	if cs.Selected != nil {
 		hints = append(hints, keyHint{Key: m.keys.CompleteToggle.Help().Key, Action: "toggle"})
 	}
-	return m.renderPickerFrame(b.String(), 60, m.renderKeyHints(contentW, hints...)), pickerFrameCursor(filterCursor)
+	return m.renderPickerFrame(b.String(), m.renderKeyHints(contentW, hints...)), pickerFrameCursor(filterCursor)
 }
 
 // completionCategoryDisplay keeps machine category tokens out of the UI.
@@ -383,7 +383,16 @@ func isOllamaStartupRecovery(content string, unavailable bool) bool {
 }
 
 // defaultBootstrapModel is the recommended first model for new installations.
-const defaultBootstrapModel = "qwen3.5:2b"
+const (
+	defaultBootstrapModel     = "qwen3.5:2b"
+	defaultBootstrapModelSize = "~2.7 GB"
+)
+
+// bootstrapPullHint is the single wording for the first-run pull affordance.
+// It was previously written out at two call sites that had already drifted.
+func bootstrapPullHint() string {
+	return "press p to pull " + defaultBootstrapModel + " (" + defaultBootstrapModelSize + ")"
+}
 
 // needsModelBootstrap returns true when Ollama is reachable but no local
 // models are installed, indicating a first-run state.
@@ -425,32 +434,48 @@ func (m *Model) renderWelcome(b *strings.Builder) {
 		b.WriteByte('\n')
 	}
 
-	// Roomy chrome owns the empty canvas. Only paint operational exceptions.
-	if headerActive {
+	plan := m.planStatus()
+
+	// welcomeAmbientLine collects only what this frame assigned to the welcome
+	// surface, plus operational exceptions that have no other home. The
+	// dedup-by-scanning-infoParts dance this replaces existed because the model
+	// name could be appended twice through two different branches.
+	welcomeAmbientLine := func() string {
 		var infoParts []string
-		modelLabel := m.currentModelSurfaceLabel(compact)
-		if m.currentModelIsNonLocal() && modelLabel != "" {
+		modelLabel := m.currentModelReachabilityLabel(compact)
+		if m.currentModelIsNonLocal() {
+			if plan.owns(factRemoteBoundary, surfaceWelcome) && modelLabel != "" {
+				infoParts = append(infoParts, modelLabel)
+			}
+		} else if plan.owns(factModel, surfaceWelcome) && modelLabel != "" {
 			infoParts = append(infoParts, modelLabel)
 		}
-		if m.presentedMode() == ModePlan {
-			if compact {
+		if presentedMode := m.presentedMode(); plan.owns(factMode, surfaceWelcome) &&
+			presentedMode != ModeNormal {
+			switch {
+			case presentedMode != ModePlan:
+				infoParts = append(infoParts, m.modeConfigs[presentedMode].Label)
+			case compact || micro:
 				infoParts = append(infoParts, "PLAN · read-only")
-			} else {
+			default:
 				infoParts = append(infoParts, "PLAN · mutation tools removed")
 			}
 		}
-		if m.ollamaOffline {
-			if modelLabel != "" && !m.currentModelIsNonLocal() {
-				infoParts = append(infoParts, modelLabel)
-			}
-			infoParts = append(infoParts, "offline")
-		}
-		if len(infoParts) > 0 {
-			writeLine(m.styles.StatusText, strings.Join(infoParts, " · "))
+		// Reachability rides along with the model label above rather than being
+		// appended here: a bare "offline" has no subject, and adding it
+		// unconditionally printed it a second time on frames where the welcome
+		// also owned identity.
+		return strings.Join(infoParts, " · ")
+	}
+
+	// Roomy chrome owns the empty canvas. Only paint operational exceptions.
+	if headerActive {
+		if line := welcomeAmbientLine(); line != "" {
+			writeLine(m.styles.StatusText, line)
 		}
 		if m.needsModelBootstrap() {
 			writeLine(m.styles.StatusWarning, "No local model installed")
-			writeLine(m.styles.WelcomeHint, "press p to pull qwen3.5:2b (~2.7 GB)")
+			writeLine(m.styles.WelcomeHint, bootstrapPullHint())
 		}
 		return
 	}
@@ -465,43 +490,13 @@ func (m *Model) renderWelcome(b *strings.Builder) {
 	}
 	writeLine(m.styles.StatusText, trust)
 
-	var infoParts []string
-	presentedMode := m.presentedMode()
-	modelLabel := m.currentModelSurfaceLabel(compact)
-	if m.currentModelIsNonLocal() && modelLabel != "" {
-		infoParts = append(infoParts, modelLabel)
-	}
-	if presentedMode == ModePlan {
-		if compact || micro {
-			infoParts = append(infoParts, "PLAN · read-only")
-		} else {
-			infoParts = append(infoParts, "PLAN · mutation tools removed")
-		}
-	} else if presentedMode != ModeNormal {
-		infoParts = append(infoParts, m.modeConfigs[presentedMode].Label)
-	}
-	if !m.currentModelIsNonLocal() && modelLabel != "" {
-		already := false
-		for _, part := range infoParts {
-			if part == modelLabel {
-				already = true
-				break
-			}
-		}
-		if !already {
-			infoParts = append(infoParts, modelLabel)
-		}
-	}
-	if m.ollamaOffline {
-		infoParts = append(infoParts, "offline")
-	}
-	if len(infoParts) > 0 {
-		writeLine(m.styles.StatusText, strings.Join(infoParts, " · "))
+	if line := welcomeAmbientLine(); line != "" {
+		writeLine(m.styles.StatusText, line)
 	}
 
 	if m.needsModelBootstrap() {
 		writeLine(m.styles.StatusWarning, "No local model installed")
-		writeLine(m.styles.WelcomeHint, "press p to pull qwen3.5:2b (~2.7 GB)")
+		writeLine(m.styles.WelcomeHint, bootstrapPullHint())
 	}
 
 	writeLine(m.styles.WelcomeHint, "Ask · /help")

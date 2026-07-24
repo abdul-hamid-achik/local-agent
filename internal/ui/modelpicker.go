@@ -11,7 +11,6 @@ import (
 )
 
 const (
-	modelPickerMaximumWidth = 76
 	modelPickerCompactWidth = 40
 	modelPickerCompactRows  = 14
 )
@@ -234,7 +233,7 @@ func newOllamaModelPickerState(models []OllamaModelDescriptor, currentModel stri
 	// single-line at every terminal size so metadata is not repeated and mixed
 	// local/cloud inventories remain simultaneously scannable.
 	delegate := newPickerDelegate(isDark, true)
-	pickerW := pickerListWidth(terminalWidth, modelPickerMaximumWidth)
+	pickerW := pickerListWidth(terminalWidth)
 	pickerH := modelPickerListHeight(terminalHeight, len(items), delegate.Height())
 	l := list.New(items, delegate, pickerW, pickerH)
 	configurePickerList(&l, isDark, reducedMotion...)
@@ -410,7 +409,7 @@ func (m *Model) renderModelPicker() string {
 	if descriptor, ok := ps.SelectedDescriptor(); ok && descriptor.RequiresConsent && !descriptor.ConsentGranted {
 		selectAction = "review"
 	}
-	width := pickerListWidth(m.width, modelPickerMaximumWidth)
+	width := pickerListWidth(m.width)
 	footer := m.renderKeyHints(width,
 		keyHint{Key: m.keys.Cancel.Help().Key, Action: m.overlayCloseLabel()},
 		keyHint{Key: m.keys.CompleteSelect.Help().Key, Action: selectAction},
@@ -422,7 +421,7 @@ func (m *Model) renderModelPicker() string {
 	if detail := m.renderModelSelectionDetail(ps, width); detail != "" {
 		content += "\n" + detail
 	}
-	return m.renderPickerFrame(content, modelPickerMaximumWidth, footer)
+	return m.renderPickerFrame(content, footer)
 }
 
 func humanModelBytes(size int64) string {

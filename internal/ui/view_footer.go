@@ -116,11 +116,8 @@ func (m *Model) renderStatusLine() string {
 		modeLabel = "[ " + modeLabel + " ]"
 	}
 	parts := make([]string, 0, 8)
-	headerActive := m.sessionHeaderActive()
-	// Mode lives on the bottom shortcuts row (model · PLAN) once session chrome
-	// is up. Re-printing "[ PLAN · read-only ]" on the status line only doubles
-	// the same fact. Keep a mode badge only on minimum frames without chrome.
-	if conversationStarted && presentedMode != ModeNormal && !headerActive {
+	plan := m.planStatus()
+	if plan.owns(factMode, surfaceStatusLine) && presentedMode != ModeNormal {
 		if presentedMode == ModePlan && paneW >= 48 {
 			parts = append(parts, modeStyle.Render("[ PLAN · read-only ]"))
 		} else {
@@ -161,22 +158,31 @@ func (m *Model) renderStatusLine() string {
 		parts = append(parts, m.styles.StatusText.Render(session))
 	}
 
-	// Model and absolute context meter: top bar owns ambient identity when
-	// present. Footer still surfaces a high-pressure context warning, Cloud
-	// boundary, and full ambient meter on minimum terminals without a header.
+	// Ambient identity is painted here only when this frame assigned it here.
+	// The one exception is context pressure: a context window about to force a
+	// compaction is an operational event, not ambient state, so it is promoted
+	// to the front of this row regardless of who owns the resting meter.
 	contextStatus := m.renderContextStatus()
 	contextHigh := m.numCtx > 0 && m.promptTokens*100/m.numCtx >= 75
 	if contextHigh && contextStatus != "" {
 		parts = append(parts, contextStatus)
 	}
-	model := m.currentModelSurfaceLabel(paneW < 58)
-	if model != "" && (!headerActive || m.currentModelIsNonLocal()) {
-		parts = append(parts, m.styles.StatusText.Render(model))
+	if m.currentModelIsNonLocal() {
+		if plan.owns(factRemoteBoundary, surfaceStatusLine) {
+			if model := m.currentModelReachabilityLabel(paneW < 58); model != "" {
+				parts = append(parts, m.styles.StatusWarning.Render(model))
+			}
+		}
+	} else if plan.owns(factModel, surfaceStatusLine) {
+		if model := m.currentModelReachabilityLabel(paneW < 58); model != "" {
+			parts = append(parts, m.styles.StatusText.Render(model))
+		}
 	}
-	if profile := sanitizeTerminalSingleLine(m.agentProfile); paneW >= 80 && profile != "" && !headerActive {
+	if profile := sanitizeTerminalSingleLine(m.agentProfile); paneW >= 80 && profile != "" &&
+		plan.ownedBy(factModel) == surfaceStatusLine {
 		parts = append(parts, m.styles.StatusText.Render("@"+profile))
 	}
-	if !contextHigh && contextStatus != "" && !headerActive {
+	if !contextHigh && contextStatus != "" && plan.owns(factContext, surfaceStatusLine) {
 		parts = append(parts, contextStatus)
 	}
 	// Shortcuts bar already carries enter/mode/help. Idle footer only adds
@@ -301,7 +307,7 @@ func (m *Model) renderGoalFooterStatus(summary GoalSummary, paneW int) string {
 	if contextHigh && contextStatus != "" {
 		optional = append(optional, metadataPart{view: contextStatus})
 	}
-	if model := m.currentModelSurfaceLabel(false); model != "" && !m.currentModelIsNonLocal() {
+	if model := m.currentModelReachabilityLabel(false); model != "" && !m.currentModelIsNonLocal() {
 		optional = append(optional, metadataPart{view: m.styles.StatusText.Render(
 			truncateDisplayWithGlyphProfile(model, 20, m.glyphProfile),
 		)})

@@ -78,7 +78,7 @@ func newSessionsPickerState(sessions []SessionListItem, width, height int, isDar
 
 	delegate := newPickerDelegate(isDark, false)
 
-	listW := pickerListWidth(width, 60)
+	listW := pickerListWidth(width)
 
 	// Height: items fit, max 20 lines
 	pickerH := len(sessions)*delegate.Height() + 4 // +4 for title + filter
@@ -142,9 +142,7 @@ func (m *Model) renderSessionsPicker() string {
 
 	if ps.ready() {
 		return m.renderPickerFrame(
-			ps.List.View(),
-			60,
-			m.pickerNavigationFooter(60, true),
+			ps.List.View(), m.pickerNavigationFooter(true),
 		)
 	}
 
@@ -154,12 +152,12 @@ func (m *Model) renderSessionsPicker() string {
 		content += m.spin.View() + " " + m.styles.StatusText.Render("Loading saved sessions…")
 	case sessionsFailed:
 		content += m.styles.ErrorText.Render("Unable to load sessions") + "\n"
-		content += m.styles.OverlayDim.Render(wrapText(ps.Message, pickerListWidth(m.width, 60)))
+		content += m.styles.OverlayDim.Render(wrapText(ps.Message, pickerListWidth(m.width)))
 	default:
 		content += m.styles.OverlayDim.Render("No saved sessions in this workspace.")
 	}
-	return m.renderPickerFrame(content, 60, m.renderKeyHints(
-		pickerListWidth(m.width, 60),
+	return m.renderPickerFrame(content, m.renderKeyHints(
+		pickerListWidth(m.width),
 		keyHint{Key: "esc", Action: m.overlayCloseLabel()},
 	))
 }

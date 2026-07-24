@@ -57,8 +57,18 @@ func markdownStyleConfig(isDark bool) ansi.StyleConfig {
 	))
 	style.Code.Color = &foreground
 	style.Code.BackgroundColor = &background
+
+	// Glamour's stock themes inset the document by two columns. The transcript
+	// already owns its left chrome through ContentGrid, so that second margin
+	// pushed assistant prose to column 6 while the role header, tool receipts,
+	// notices, and status all sat at the grid origin. Zero here makes the grid
+	// the single owner of the left edge; newMarkdownTermRenderer gives the two
+	// reclaimed columns back to the wrap budget so the right edge is unchanged.
+	style.Document.Margin = uintPointer(0)
 	return style
 }
+
+func uintPointer(value uint) *uint { return &value }
 
 func colorHex(value color.Color) string {
 	r, g, b, _ := value.RGBA()
@@ -72,6 +82,10 @@ func newMarkdownTermRenderer(width int, isDark bool) (*glamour.TermRenderer, err
 	}
 	return glamour.NewTermRenderer(
 		style,
+		// Glamour counts its document margin inside the wrap budget, so this
+		// stays width-4 and the block keeps its right edge. Zeroing the margin
+		// moves prose two columns left onto the content grid and hands those two
+		// columns back to the text instead of to dead inset.
 		glamour.WithWordWrap(max(1, width-4)),
 	)
 }

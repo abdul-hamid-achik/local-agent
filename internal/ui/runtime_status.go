@@ -45,7 +45,7 @@ func (m *Model) refreshRuntimeStatus(preserveOffset bool) {
 	if preserveOffset && m.runtimeStatusState != nil {
 		offset = m.runtimeStatusState.Viewport.YOffset()
 	}
-	width := pickerListWidth(m.width, 58)
+	width := pickerListWidth(m.width)
 	content := m.buildRuntimeStatusContent(width)
 	// Reserve one terminal row beyond the frame's calculated content so a
 	// full-height centered overlay never clips its bottom border in the final
@@ -372,5 +372,5 @@ func (m *Model) renderRuntimeStatus() string {
 			keyHint{Key: fmt.Sprintf("%.0f%%", vp.ScrollPercent()*100)},
 		)
 	}
-	return m.renderPickerFrame(content, 58, m.renderKeyHints(pickerListWidth(m.width, 58), hints...))
+	return m.renderPickerFrame(content, m.renderKeyHints(pickerListWidth(m.width), hints...))
 }

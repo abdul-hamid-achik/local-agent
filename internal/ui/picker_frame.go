@@ -18,8 +18,8 @@ var asciiPickerTextReplacer = strings.NewReplacer(
 	"…", "~",
 )
 
-func (m *Model) renderPickerFrame(content string, maximum int, footer string) string {
-	width := pickerContentWidth(m.width, maximum)
+func (m *Model) renderPickerFrame(content string, footer string) string {
+	width := pickerContentWidth(m.width)
 	content = strings.TrimRight(content, "\n")
 	content = pickerTextForGlyphProfile(content, m.glyphProfile)
 	if footer != "" {
@@ -34,8 +34,8 @@ func (m *Model) renderPickerFrame(content string, maximum int, footer string) st
 		Render(content)
 }
 
-func (m *Model) pickerNavigationFooter(maximum int, filterable bool) string {
-	width := pickerListWidth(m.width, maximum)
+func (m *Model) pickerNavigationFooter(filterable bool) string {
+	width := pickerListWidth(m.width)
 	hints := []keyHint{
 		{Key: m.keys.Cancel.Help().Key, Action: m.overlayCloseLabel()},
 		{Key: m.keys.CompleteSelect.Help().Key, Action: "select"},

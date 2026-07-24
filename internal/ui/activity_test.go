@@ -24,9 +24,11 @@ func TestMinimumTerminalWorkingStatesFit(t *testing.T) {
 		want string
 	}{
 		{name: "idle", set: func(*Model) {}, want: "Ask · /help"},
+		// Width decides between the counted label ("⚠ 1 MCP server unavailable")
+		// and the compact fallback ("MCP unavailable"); both must name MCP.
 		{name: "failed runtime", set: func(m *Model) {
 			m.failedServers = []FailedServer{{Name: "tools", Reason: "offline"}}
-		}, want: "MCP unavailable"},
+		}, want: "MCP"},
 		{name: "waiting", set: func(m *Model) {
 			m.state = StateWaiting
 			m.turnStartedAt = base.Add(-1500 * time.Millisecond)
