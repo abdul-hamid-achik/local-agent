@@ -1,4 +1,4 @@
-   main · /Users/abdulachik/project…           0/16.4k · 0%
+   main · <project>           0/16.4k · 0%
    notice · Goal saved · Cortex is not configured;
    starting one bounded local turn…
     ✗ error

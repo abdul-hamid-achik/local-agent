@@ -18,6 +18,41 @@ terminal:
     replace:
       - regex: "/(?:private/)?tmp/local-agent-glyphrun"
         with: "<temp>/local-agent-glyphrun"
+      # Host workspace path in the session top bar differs between developer
+      # machines and CI (and may be width-truncated mid-segment). Match only the
+      # project root — not longer paths under it (logs, glyphrun tmp, etc.).
+      - regex: "/Users/[^/\\s]+/projects/local-agent"
+        with: "<project>"
+      - regex: "/home/[^/\\s]+/work/local-agent/local-agent"
+        with: "<project>"
+      - regex: "/Users/[^/\\s]+/projects/loca…"
+        with: "<project>"
+      - regex: "/Users/[^/\\s]+/project…"
+        with: "<project>"
+      - regex: "/Users/[^/\\s]+/p╭"
+        with: "<project>╭"
+      - regex: "/Users/[^/\\s]+/p "
+        with: "<project> "
+      - regex: "/home/[^/\\s]+/work/local-agent/loca…"
+        with: "<project>"
+      - regex: "/home/[^/\\s]+/work/local-agent…"
+        with: "<project>"
+      - regex: "/home/[^/\\s]+/work/local-agen…"
+        with: "<project>"
+      - regex: "/home/[^/\\s]+/work/loca…"
+        with: "<project>"
+      - regex: "/home/[^/\\s]+/work/l…"
+        with: "<project>"
+      - regex: "/home/[^/\\s]+/w…"
+        with: "<project>"
+      - regex: "/home/[^/\\s]+/work/local-agent/p╭"
+        with: "<project>╭"
+      - regex: "/home/[^/\\s]+/work/local-agent/p "
+        with: "<project> "
+      - regex: "~/projects/local-agent"
+        with: "<project>"
+      - regex: "~/work/local-agent/local-agent"
+        with: "<project>"
       # Session public IDs are random 7-char hex handles. Normalize them so
       # committed snapshots stay stable across runs while still covering the
       # handle shape in screen text.
