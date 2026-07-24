@@ -112,6 +112,11 @@ terminal:
         with: "Ask"
       - regex: "Ask or type / for commands"
         with: "Ask · /help"
+      # Framed Ask line pads/ellipsis differently by host cell metrics.
+      - regex: "[│|]▏❯ Ask[ …]*[│|]"
+        with: "│▏❯ Ask │"
+      - regex: "[│|]> Ask[ …]*[│|]"
+        with: "│> Ask │"
       # Session public IDs are random 7-char hex handles. Normalize them so
       # committed snapshots stay stable across runs while still covering the
       # handle shape in screen text.
