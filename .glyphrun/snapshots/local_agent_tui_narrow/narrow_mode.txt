@@ -1,7 +1,7 @@
-              LOCAL AGENT
-   Local-first · approval prompts on
-      PLAN · qwen3.5:2b · offline
-     enter send · ctrl+p settings
+   local-agent             0/16.4k · 0%
+   PLAN · read-only · qwen3.5:2b · off…
+
+notice · ollama: no model
  ╭────────────────────────────────────╮
  │ Mode                               │
  │                                    │
@@ -13,6 +13,7 @@
  │   Work proactively with configure… │
  │ esc back · enter select · ↑/↓ move │
  ╰────────────────────────────────────╯
-
-
 ───────────────────────────────────────
+
+
+   enter send · shift+tab · esc · f1

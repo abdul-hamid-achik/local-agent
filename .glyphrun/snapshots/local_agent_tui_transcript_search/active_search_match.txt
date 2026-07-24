@@ -1,17 +1,27 @@
-
-  │ ▸ ✓ Read · path=internal/ui/view.go (42ms)
-  │ ▸ ✗ Run failed · command=go test ./internal/ui (310ms)
-  │ exit status 1: fixture regression
+   main · /Users/abdulachik/projects/local-agent                                                 0/16.4k · 0%
 
 
-    The read completed, the test failure is visible, and the interrupted effect needs
-    inspection.
+ ▌ Review the release receipts.
 
-  notice · Restored session <session> · Recovery receipt review
 
-   ✗ error
-  Recovery blocked: write_file has a durable dispatch marker but no terminal receipt. Its outcome is
-  unknown; use /recover to inspect and record exact evidence.
+   assistant
+
+     I checked the saved verification receipts.
+
+│  ✓ Read path=internal/ui/view.go (42ms)
+│  2 lines hidden
+│  ✗ Run failed command=go test ./internal/ui (310ms)
+│  exit status 1: fixture regression
+
+
+     The read completed, the test failure is visible, and the interrupted effect needs
+     inspection.
+
+   notice · Restored session <session> · Recovery receipt review
+
+    ✗ error
+   Recovery blocked: write_file has a durable dispatch marker but no terminal receipt. Its outcome is
+   unknown; use /recover to inspect and record exact evidence.
 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
 / interrupted effect
 1/1 · enter/↓ next · ↑ previous · esc close

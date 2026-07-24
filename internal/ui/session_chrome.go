@@ -306,9 +306,11 @@ func (m *Model) renderShortcutsBar(paneW int) string {
 	inner := max(1, paneW-lipgloss.Width(lead))
 
 	// Reserve room for right identity; pack hints into the remainder.
+	// Keep enough width for "model · PLAN" on 60-col glyphrun terminals
+	// (paneW/4 alone can drop mode when budget falls under 16).
 	rightBudget := 0
 	if paneW >= 48 {
-		rightBudget = min(36, max(12, paneW/4))
+		rightBudget = min(40, max(18, paneW/3))
 	}
 	leftBudget := max(8, inner-rightBudget-1)
 	left := m.renderKeyHints(leftBudget, hints...)

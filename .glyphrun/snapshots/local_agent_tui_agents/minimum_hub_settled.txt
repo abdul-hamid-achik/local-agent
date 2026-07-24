@@ -1,10 +1,11 @@
+▌  about the Agent Hub.
 
- ╭──────────────────────────╮
- │ Agents · 1 consultatio…  │
- │ │ Consultation #<session>… │
- │                          │
- │                          │
- │                          │
- │ esc close · enter view   │
- ╰──────────────────────────╯
- ✓ Done · <elapsed> · <session>
+│  ▾ ✓ Consulted experts
+│  ✓ generalist · complet…
+│    consultation complet…
+│  tool: consult_experts
+│  transport: succeeded
+─────────────────────────────
+  <session> · Paused · end
+▏❯ Ask or type / for commands
+   enter send · shift+tab

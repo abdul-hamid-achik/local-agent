@@ -1,12 +1,12 @@
 
-  ◇ Permission · write · NOR…
-  Action Write 19 B
-  Target …/approval-probe.txt
-  › n deny
-  y once
-  s same/session
-  a tool/session
-  p path · approval-probe.txt
-  w save · approval-probe.txt
-  esc cancel turn · enter
-  pgdn more · d arguments
+◇  Permission · write
+   Action Write 19 B
+   …/approval-probe.txt
+   › n deny
+   y once
+   s same/session
+   a tool/session
+   p path · approval…
+   w save · approval…
+   esc cancel turn · enter
+   pgdn more · d arguments

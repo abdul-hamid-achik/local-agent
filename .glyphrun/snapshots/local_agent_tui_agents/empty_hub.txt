@@ -1,4 +1,4 @@
-
+   main · /Users/abdulachik/projects/loca…                         0/16.4k · 0%
 
 
 
@@ -17,6 +17,7 @@
 
 
 
-
-
 ───────────────────────────────────────────────────────────────────────────────
+
+
+   enter send · shift+tab mode · esc cancel · f1                   qwen3.5:0.8b

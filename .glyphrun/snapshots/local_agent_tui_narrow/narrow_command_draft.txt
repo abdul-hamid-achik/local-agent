@@ -1,13 +1,10 @@
-              LOCAL AGENT
-   Local-first · approval prompts on
-      PLAN · qwen3.5:2b · offline
-     enter send · ctrl+p settings
-      / commands · f1 help · @/#
+   local-agent             0/16.4k · 0%
+   PLAN · read-only · qwen3.5:2b · off…
 
-  notice · ollama: no model
-  selected
-  try: ollama serve · ollama pull
-  qwen3.5:2b
+notice · ollama: no model
+selected
+try: ollama serve · ollama pull
+qwen3.5:2b
 
 
 
@@ -16,4 +13,7 @@
 
 
 ───────────────────────────────────────
-▌❯ /
+╭─────────────────────────────────────╮
+│▌❯ /                           …     │
+╰─────────────────────────────────────╯
+   enter send · shift+tab · esc · f1

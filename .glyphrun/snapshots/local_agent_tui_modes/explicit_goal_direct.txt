@@ -1,19 +1,19 @@
-  model selected
-
-  notice · Goal saved · Cortex is not configured;
-  starting one bounded local turn…
-
-   ✗ error
-  LLM request not started: inference not started: no
-  model selected
-
-  notice · Goal paused · unproductive turn: inference
-  not started: no model selected
-
+   main · /Users/abdulachik/project…           0/16.4k · 0%
+   model selected
+   notice · Goal saved · Cortex is not configured;
+   starting one bounded local turn…
+    ✗ error
+   LLM request not started: inference not started: no
+   model selected
+   notice · Goal paused · unproductive turn:
+   inference not started: no model selected
 
 ───────────────────────────────────────────────────────────
 plan · paused · 0/2 verified
   □ pending · Demonstrate every requested outcome and cons…
   □ pending · Record passing evidence from focused or repr…
  [ AUTO ] · Ⅱ paused · ship a bound… · <session> · qwen3.5:2b
-▌❯ Ask, @mention files, or type /help
+╭─────────────────────────────────────────────────────────╮
+│▌❯ Ask, @mention files, or type /help              …     │
+╰─────────────────────────────────────────────────────────╯
+   enter send · shift+tab · esc · f1      qwen3.5:2b · AUTO

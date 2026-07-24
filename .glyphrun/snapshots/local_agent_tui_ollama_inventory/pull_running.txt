@@ -1,6 +1,6 @@
+   main · /Users/abdulachik/projects/loca…                                  0/262.1k · 0%
 
-
-
+   CLOUD · remote prompts · kimi-code:cloud
 
 
 
@@ -21,6 +21,7 @@
 
 
 
-
-
 ─────────────────────────────────────────────────────────────────────────────────────────
+
+
+   enter send · shift+tab mode · esc cancel · f1 help              CLOUD · remote prompt…

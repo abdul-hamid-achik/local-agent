@@ -1,3 +1,6 @@
+   main · /Users/abdulachik/projects/loca…                                  0/262.1k · 0%
+
+   CLOUD · remote prompts · kimi-code:cloud
 
 
 
@@ -6,12 +9,6 @@
 
 
 
-
-                                       LOCAL AGENT
-                     Local-first · Ollama · approval prompts enabled
-                        CLOUD · remote prompts · kimi-code:cloud
-                   enter send · / commands · ctrl+p settings · f1 help
-                   shift+tab mode · ctrl+o models · @ files · # skills
 
 
 
@@ -24,4 +21,7 @@
 
 
 ─────────────────────────────────────────────────────────────────────────────────────────
-▏❯ Ask, @mention files, or type /help
+╭───────────────────────────────────────────────────────────────────────────────────────╮
+│▏❯ Ask, @mention files, or type /help                                                 …│
+╰───────────────────────────────────────────────────────────────────────────────────────╯
+   enter send · shift+tab mode · esc cancel · f1 help              CLOUD · remote prompt…

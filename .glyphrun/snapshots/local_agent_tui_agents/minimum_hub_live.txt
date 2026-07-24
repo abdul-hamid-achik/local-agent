@@ -1,4 +1,4 @@
-  you
+▌  Consult one generalist
  ╭──────────────────────────╮
  │ Agents · 1 consultatio…  │
  │ │ Consultation #<session>… │
@@ -7,4 +7,5 @@
  │                          │
  │ esc close · enter view   │
  ╰──────────────────────────╯
-  … Experts · esc · <session>
+…  Experts · esc · <session>
+   shift+tab mode

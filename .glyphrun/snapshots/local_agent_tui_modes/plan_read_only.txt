@@ -1,19 +1,19 @@
-                        LOCAL AGENT
-      Local-first · Ollama · approval prompts enabled
-                PLAN · qwen3.5:2b · offline
-    enter send · / commands · ctrl+p settings · f1 help
-    shift+tab mode · ctrl+o models · @ files · # skills
+   main · /Users/abdulachik/project…           0/16.4k · 0%
+   PLAN · mutation tools removed · qwen3.5:2b · offline
 
-  notice · ollama: no model selected
-  try: ollama serve · ollama pull qwen3.5:2b
+   notice · ollama: no model selected
+   try: ollama serve · ollama pull qwen3.5:2b
+    ✗ error
+   LLM request not started: inference not started: no
+   model selected
 
-   ✗ error
-  LLM request not started: inference not started: no
-  model selected
 
 
 
 
 
 ───────────────────────────────────────────────────────────
-▌❯ design a safe migration
+╭─────────────────────────────────────────────────────────╮
+│▌❯ design a safe migration                         …     │
+╰─────────────────────────────────────────────────────────╯
+   enter send · shift+tab · esc · f1      qwen3.5:2b · PLAN

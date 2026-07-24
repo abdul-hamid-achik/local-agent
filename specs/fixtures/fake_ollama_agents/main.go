@@ -193,6 +193,20 @@ func configuredExpertDelay(value string) (time.Duration, error) {
 	return delay, nil
 }
 
+
+func requestLooksLikeSessionTitle(raw []byte) bool {
+	s := string(raw)
+	return strings.Contains(s, "Reply with ONLY a short session title") ||
+		(strings.Contains(s, "Session title:") && strings.Contains(s, "User request:"))
+}
+
+func writeSessionTitleReply(w http.ResponseWriter) {
+	writeNDJSON(w, map[string]any{
+		"message": map[string]any{"role": "assistant", "content": "Fixture session"},
+		"done":    true, "eval_count": 2, "prompt_eval_count": 2,
+	})
+}
+
 func fixtureHandler(state *fixtureState, expertDelay time.Duration) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/version", func(w http.ResponseWriter, _ *http.Request) {
@@ -242,7 +256,17 @@ func fixtureHandler(state *fixtureState, expertDelay time.Duration) http.Handler
 			return
 		}
 		var request chatRequest
-		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&request); err != nil {
+		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if err != nil {
+			state.fail("read chat request: %v", err)
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		if requestLooksLikeSessionTitle(body) {
+			writeSessionTitleReply(w)
+			return
+		}
+		if err := json.Unmarshal(body, &request); err != nil {
 			state.fail("decode chat request: %v", err)
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return

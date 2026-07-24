@@ -1,6 +1,7 @@
-                                  LOCAL AGENT
-                Local-first · Ollama · approval prompts enabled
-                          AUTO · qwen3.5:2b · offline
+   main · /Users/abdulachik/projects/loca…                         0/16.4k · 0%
+   qwen3.5:2b · offline
+
+   notice · ollama: no model selected
        ╭────────────────────────────────────────────────────────────────╮
        │ Goal inspector · 0/1 verified                                  │
        │ Ⅱ paused · Ship a polished goal UI                             │
@@ -23,6 +24,8 @@
        │ Resume or safely retry goal evaluation                         │
        │ esc close · ←/→ action · enter select · j/k scroll             │
        ╰────────────────────────────────────────────────────────────────╯
-
 ───────────────────────────────────────────────────────────────────────────────
- [ AUTO ] · Ⅱ paused · Ship a… · 0/8 auto turns · 0s/30m · <session> · qwen3.5:2b
+ [ AUTO ] · Ⅱ paused · Ship a p… · 0s/30m · <session> · qwen3.5:2b · 0/16.4k · 0%
+
+
+   enter send · shift+tab mode · esc cancel · f1              qwen3.5:2b · AUTO

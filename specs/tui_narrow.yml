@@ -25,7 +25,7 @@ preconditions:
 steps:
     - wait:
         screen:
-            contains: "Ask, @mention files, or type /help"
+            contains: "enter send"
         timeoutMs: 5000
     - wait:
         screen:
@@ -93,7 +93,7 @@ steps:
         rows: 20
     - wait:
         screen:
-            contains: "LOCAL AGENT"
+            contains: "enter send"
         timeoutMs: 2000
     - snapshot: narrow_compact
     - press: "ctrl+p"

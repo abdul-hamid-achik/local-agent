@@ -31,7 +31,7 @@ preconditions:
 steps:
     - wait:
         screen:
-            contains: "Ask, @mention files, or type /help"
+            contains: "enter send"
         timeoutMs: 5000
     - type: "Analyze \"${projectRoot}/.glyphrun/tmp/external-read-evidence/bug.mp4\" with vidtrace."
     - press: "enter"
@@ -102,12 +102,12 @@ steps:
     - press: "shift+tab"
     - wait:
         screen:
-            contains: "PLAN · qwen3.5:0.8b"
+            contains: "qwen3.5:0.8b · PLAN"
         timeoutMs: 2000
     - press: "shift+tab"
     - wait:
         screen:
-            contains: "AUTO · qwen3.5:0.8b"
+            contains: "qwen3.5:0.8b · AUTO"
         timeoutMs: 2000
     - type: "Update \"${projectRoot}/.glyphrun/tmp/external-auto-target\"."
     - press: "enter"

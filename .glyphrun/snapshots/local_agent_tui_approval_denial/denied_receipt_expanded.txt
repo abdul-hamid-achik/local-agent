@@ -1,19 +1,19 @@
-  ▌ Create approval-probe.txt with the
-  ▌ exact text must not be written.
-
-  assistant
-  │ ▸ Thought
-
-  │ ▾ ✗ Write failed
-  │ tool: write
-  │ args: content="[hidden]" path="approval-pr…
-  │ transport: failed
-  │ domain: failed
-  │ evidence: none
-  │ tool call denied: user denied tool executi…
+   local-agent-glyph…                8/16.4k · 0%
 
 
-    Denied safely. No file was changed.
+ ▌ Create approval-probe.txt with the exact text…
+
+
+│  ▾ ✗ Write failed
+│  tool: write
+│  args: content="[hidden]" path="approval-pr…
+│  transport: failed
+│  domain: failed
+│  evidence: none
+│  tool call denied: user denied tool executi…
 ─────────────────────────────────────────────────
   <session> · Follow paused · end latest
-▏❯ Ask, @mention files, or type /help
+╭───────────────────────────────────────────────╮
+│▏❯ Ask, @mention files, or type /help         …│
+╰───────────────────────────────────────────────╯
+   enter send · shift+tab mode       qwen3.5:0.8b

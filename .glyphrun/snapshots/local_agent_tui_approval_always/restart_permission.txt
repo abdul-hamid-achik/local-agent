@@ -1,27 +1,27 @@
-  you
-  ▌ Write session-grant.txt with the exact text session scoped approval.
-
-  assistant
-  Waiting for model…
+   /private/tmp/local-agent-glyphr…                                          7/16.4k · 0%
 
 
+ ▌ Write session-grant.txt with the exact text session scoped approval.
 
+
+   assistant
+   Waiting for model…
 
 
 ─────────────────────────────────────────────────────────────────────────────────────────
-  ◇ Permission · write · NORMAL
-  Action     Write 23 B
-  Target     <temp>/local-agent-glyphrun-approval-always-workdir/session-grant.txt
-  Impact     Creates or replaces the target file with the proposed content.
-  Scope      Exact arguments · this process only
-  Request    309302e8b9f8
+◇  Permission · write · NORMAL
+   Action     Write 23 B
+   Target     <temp>/local-agent-glyphrun-approval-always-workdir/session-grant.
+              txt
+   Impact     Creates or replaces the target file with the proposed content.
+   Scope      Exact arguments · this process only
+   Request    309302e8b9f8
 
-  Proposed change
-  No textual difference detected.
-  › n deny
-    y once
-    s same/session
-    a tool/session
-    p path · session-grant.txt
-    w save · session-grant.txt
-  esc cancel turn · enter select · ↑/↓/j/k move · d arguments · pgup/dn scroll
+   Proposed change
+   › n deny
+     y once
+     s same/session
+     a tool/session
+     p path · session-grant.txt
+     w save · session-grant.txt
+   esc cancel turn · enter select · ↑/↓/j/k move · d arguments · pgup/dn scroll

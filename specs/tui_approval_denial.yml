@@ -31,7 +31,7 @@ preconditions:
 steps:
     - wait:
         screen:
-            contains: "Ask, @mention files, or type /help"
+            contains: "enter send"
         timeoutMs: 5000
     - wait:
         screen:
@@ -75,10 +75,6 @@ steps:
     - wait:
         screen:
             contains: "n deny"
-        timeoutMs: 2000
-    - wait:
-        screen:
-            contains: "you"
         timeoutMs: 2000
     - wait:
         idle:
@@ -125,7 +121,7 @@ steps:
         timeoutMs: 2000
     - wait:
         screen:
-            contains: "Ask, @mention files, or type /help"
+            contains: "enter send"
         timeoutMs: 2000
     - wait:
         screen:

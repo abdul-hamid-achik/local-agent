@@ -1,19 +1,19 @@
-  you
-  ▌ Create approval-probe.txt with the
-  ▌ exact text must not be written.
-
-  assistant
-  │ ▸ Thought
-
-  │ ▸ ✗ Write failed · approval-probe.txt
-  │ tool call denied: user denied tool executi…
+   local-agent-glyph…                8/16.4k · 0%
 
 
-    Denied safely. No file was changed.
+ ▌ Create approval-probe.txt with the exact text…
 
 
+   │ ▸ Thought
+
+│  ✗ Write failed approval-probe.txt
+│  tool call denied: user denied tool executi…
 
 
+     Denied safely. No file was changed.
 ─────────────────────────────────────────────────
- <session> · qwen3.5:0.8b · ctx 0%
-▏❯ Ask, @mention files, or type /help
+   <session>
+╭───────────────────────────────────────────────╮
+│▏❯ Ask, @mention files, or type /help         …│
+╰───────────────────────────────────────────────╯
+   enter send · shift+tab mode       qwen3.5:0.8b

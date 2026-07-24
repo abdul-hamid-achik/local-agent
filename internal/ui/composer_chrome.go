@@ -97,7 +97,8 @@ func (m *Model) renderFooterIdentityRight(budget int) string {
 		))
 	}
 	presented := m.presentedMode()
-	if presented != ModeNormal && budget >= 16 {
+	// PLAN/AUTO labels are short; keep them once there is room after the model.
+	if presented != ModeNormal && budget >= 12 {
 		cfg := m.modeConfigs[presented]
 		var style lipgloss.Style
 		switch presented {

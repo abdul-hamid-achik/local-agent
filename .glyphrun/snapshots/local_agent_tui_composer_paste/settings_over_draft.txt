@@ -1,11 +1,11 @@
-                                       LOCAL AGENT
-                     Local-first · Ollama · approval prompts enabled
-                                  qwen3.5:2b · offline
-                   enter send · / commands · ctrl+p settings · f1 help
-               ╭──────────────────────────────────────────────────────────╮
+   main · /Users/abdulachik/projects/loca…                                   0/16.4k · 0%
+   qwen3.5:2b · offline
+
+   notice · ollama: no model selected
+   try: ollama ╭──────────────────────────────────────────────────────────╮
                │ Settings                                                 │
-  notice · olla│                                                          │
-  try: ollama s│ │ Model · Pinned · qwen3.5:2b                            │
+               │                                                          │
+               │ │ Model · Pinned · qwen3.5:2b                            │
                │ │ Choose an installed local model or Ollama Cloud model  │
                │   Provider · ollama · local                              │
                │   Switch Ollama or OpenAI-compatible remote profiles     │
@@ -24,6 +24,8 @@
                │   Help · Shortcuts                                       │
                │   Keyboard reference and slash commands                  │
                │ esc close · enter select · ↑/↓ move                      │
-               ╰──────────────────────────────────────────────────────────╯
+───────────────╰──────────────────────────────────────────────────────────╯──────────────
 
-─────────────────────────────────────────────────────────────────────────────────────────
+
+
+   enter send · shift+tab mode · esc cancel · f1 help                          qwen3.5:2b

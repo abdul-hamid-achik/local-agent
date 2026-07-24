@@ -1,8 +1,8 @@
-  try: ollama serve · ollama pull
-  qwen3.5:2b
+   local-agent             0/16.4k · 0%
+selected
+try: ollama serve · ollama pull
+qwen3.5:2b
 
-
-───────────────────────────────────────
 ╭────────────────────────────────────╮
 │ Commands                           │
 │ Filter › type to narrow            │

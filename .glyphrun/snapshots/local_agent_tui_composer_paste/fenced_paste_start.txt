@@ -1,11 +1,8 @@
-                                       LOCAL AGENT
-                     Local-first · Ollama · approval prompts enabled
-                                  qwen3.5:2b · offline
-                   enter send · / commands · ctrl+p settings · f1 help
-                   shift+tab mode · ctrl+o models · @ files · # skills
+   main · /Users/abdulachik/projects/loca…                                   0/16.4k · 0%
+   qwen3.5:2b · offline
 
-  notice · ollama: no model selected
-  try: ollama serve · ollama pull qwen3.5:2b
+   notice · ollama: no model selected
+   try: ollama serve · ollama pull qwen3.5:2b
 
 
 
@@ -21,11 +18,14 @@
 
 ─────────────────────────────────────────────────────────────────────────────────────────
   ↓ later draft · ctrl+end bottom
-▏❯ Review the first receipt.
- │ Keep the second line while I check Settings.
- │ ```
- │ fixture line 01
- │ fixture line 02
- │ fixture line 03
- │ fixture line 04
- │ fixture line 05
+╭───────────────────────────────────────────────────────────────────────────────────────╮
+│▏❯ Review the first receipt.                                                          …│
+│ │ Keep the second line while I check Settings.                                       …│
+│ │ ```                                                                                …│
+│ │ fixture line 01                                                                    …│
+│ │ fixture line 02                                                                    …│
+│ │ fixture line 03                                                                    …│
+│ │ fixture line 04                                                                    …│
+│ │ fixture line 05                                                                    …│
+╰───────────────────────────────────────────────────────────────────────────────────────╯
+   enter send · shift+tab mode · esc cancel · f1 help                          qwen3.5:2b

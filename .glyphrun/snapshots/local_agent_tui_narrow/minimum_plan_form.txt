@@ -1,11 +1,11 @@
-         LOCAL AGENT
-  Local-first · prompts on
- PLAN · qwen3.5:2b · offline
-   enter · ctrl+p settings
-       f1 help · / @ #
+LOCAL AGENT
+Local-first · prompts on
+PLAN · read-only · qwen3.5:2…
+Ask · /help
 
   Ollama model · ctrl+o
 
 ─────────────────────────────
- PLAN · ctrl+p settings
+   PLAN
 ▌❯ Ask or type / for commands
+   enter send · shift+tab

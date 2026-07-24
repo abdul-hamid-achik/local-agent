@@ -30,7 +30,7 @@ preconditions:
 steps:
     - wait:
         screen:
-            contains: "Ask, @mention files, or type /help"
+            contains: "enter send"
         timeoutMs: 5000
     - wait:
         screen:
@@ -54,7 +54,7 @@ steps:
         timeoutMs: 5000
     - wait:
         screen:
-            contains: "Ask, @mention files, or type /help"
+            contains: "enter send"
         timeoutMs: 3000
     - type: "Write session-grant.txt again with the exact text session scoped approval."
     - press: "enter"

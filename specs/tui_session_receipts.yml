@@ -33,7 +33,7 @@ preconditions:
 steps:
     - wait:
         screen:
-            contains: "Ask, @mention files, or type /help"
+            contains: "enter send"
         timeoutMs: 5000
     - wait:
         screen:

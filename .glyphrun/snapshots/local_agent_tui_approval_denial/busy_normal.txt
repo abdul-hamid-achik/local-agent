@@ -1,13 +1,11 @@
-  you
-  ▌ Create approval-probe.txt with the exact text must not be written.
-
-  assistant
-  │ Thinking… · Checking workspace policy before the write.
+   /private/tmp/local-agent-glyphr…                                          0/16.4k · 0%
 
 
+ ▌ Create approval-probe.txt with the exact text must not be written.
 
 
-
+   assistant
+   │ Thinking… · Checking workspace policy before the write.
 
 
 
@@ -22,6 +20,8 @@
 
 
 ─────────────────────────────────────────────────────────────────────────────────────────
-   … Running · esc cancel · enter queue · <session> · Create approval-probe.t…
-
-▏❯ Write a follow-up · enter queue
+…  Running · Routing unavailable · implementation · esc stop · enter queue
+╭───────────────────────────────────────────────────────────────────────────────────────╮
+│▏❯ Write a follow-up · enter queue                                                    …│
+╰───────────────────────────────────────────────────────────────────────────────────────╯
+   shift+tab mode                                                            qwen3.5:0.8b
