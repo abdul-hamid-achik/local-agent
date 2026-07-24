@@ -1,4 +1,4 @@
-   main · <project>                                   0/16.4k · 0%
+   main · ollama-inventory-workdir                                           0/16.4k · 0%
 
 
 

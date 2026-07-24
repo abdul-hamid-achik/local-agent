@@ -18,6 +18,20 @@ terminal:
     replace:
       - regex: "/(?:private/)?tmp/local-agent-glyphrun"
         with: "<temp>/local-agent-glyphrun"
+      - regex: "/(?:private/)?tmp/local-agent-glyphr…"
+        with: "<temp>/local-agent-glyphrun…"
+      - regex: "/(?:private/)?tmp/local-agent-glyph…"
+        with: "<temp>/local-agent-glyphrun…"
+      - regex: "/(?:private/)?tmp/local-agent-glyp…"
+        with: "<temp>/local-agent-glyphrun…"
+      - regex: "/(?:private/)?tmp/local-agent-gly…"
+        with: "<temp>/local-agent-glyphrun…"
+      - regex: "/(?:private/)?tmp/local-agent-gl…"
+        with: "<temp>/local-agent-glyphrun…"
+      - regex: "/(?:private/)?tmp/local-agent-g…"
+        with: "<temp>/local-agent-glyphrun…"
+      - regex: "/(?:private/)?tmp/local-agent…"
+        with: "<temp>/local-agent-glyphrun…"
       # Host workspace path in the session top bar differs between developer
       # machines and CI (and may be width-truncated mid-segment with …). Match
       # the project root plus common truncations — not longer paths under it.

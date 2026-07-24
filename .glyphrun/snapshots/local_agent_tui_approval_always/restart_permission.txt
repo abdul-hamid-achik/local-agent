@@ -1,4 +1,4 @@
-   /private/tmp/local-agent-glyphr…                                          7/16.4k · 0%
+   local-agent-glyphrun-ap…                                                  7/16.4k · 0%
 
 
  ▌ Write session-grant.txt with the exact text session scoped approval.

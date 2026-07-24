@@ -130,29 +130,18 @@ func (m *Model) sessionWorkspaceLabel(paneW int) string {
 	if dir == "" {
 		return ""
 	}
-	home, _ := os.UserHomeDir()
-	display := dir
-	if home != "" {
-		if rel, err := filepath.Rel(home, dir); err == nil && !strings.HasPrefix(rel, "..") {
-			display = "~/" + filepath.ToSlash(rel)
-			if rel == "." {
-				display = "~"
-			}
-		}
-	}
-	// Prefer basename / short path so the top bar stays scannable.
-	var limit int
+	// Top bar stays scannable and host-portable: basename only. Full paths vary
+	// by machine (macOS home vs GitHub runner) and post-render normalizers
+	// cannot fix padding computed from the longer original path.
+	display := filepath.Base(dir)
+	limit := 18
 	switch {
 	case paneW >= 96:
-		limit = 40
+		limit = 28
 	case paneW >= 72:
-		limit = 32
+		limit = 24
 	case paneW >= 56:
-		// Mid width: keep ~/… but tighter.
-		limit = 26
-	default:
-		display = filepath.Base(dir)
-		limit = 18
+		limit = 20
 	}
 	return truncateDisplayWithGlyphProfile(display, limit, m.glyphProfile)
 }
