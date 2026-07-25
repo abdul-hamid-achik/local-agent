@@ -697,3 +697,50 @@ func TestClampNumCtxForMemory(t *testing.T) {
 		t.Errorf("override should keep value, got %d", c3.Ollama.NumCtx)
 	}
 }
+
+// Six environment overrides documented in one table used to handle a bad value
+// three different ways: exit, silent fallback, or silent no-op. A typo was then
+// indistinguishable from a deliberate setting, and Validate range-checks none
+// of them.
+func TestEnvironmentOverridesRejectUnparseableValues(t *testing.T) {
+	for name, value := range map[string]string{
+		"LOCAL_AGENT_TOOLS_MAX_GREP":        "lots",
+		"LOCAL_AGENT_TOOLS_MAX_ITER":        "5x",
+		"LOCAL_AGENT_AUTO_MAX_ITER":         "",
+		"LOCAL_AGENT_PROVIDER_CONTEXT_SIZE": "64k",
+		"LOCAL_AGENT_LOCAL_ONLY":            "maybe",
+	} {
+		if value == "" {
+			continue // an empty override is an absent override, not a bad one
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Setenv(name, value)
+			cfg := Defaults()
+			if err := applyEnvOverrides(&cfg); err == nil {
+				t.Fatalf("%s=%q was accepted silently", name, value)
+			}
+		})
+	}
+}
+
+// The privacy flag is the dangerous one: ParseBool rejects "yes"/"on", which
+// this codebase accepts elsewhere, so an operator hardening a run that way was
+// silently ignored while local_only stayed false.
+func TestLocalOnlyOverrideAcceptsTheProjectBooleanVocabulary(t *testing.T) {
+	for value, want := range map[string]bool{
+		"yes": true, "on": true, "1": true, "true": true, "Y": true,
+		"no": false, "off": false, "0": false, "false": false, "N": false,
+	} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("LOCAL_AGENT_LOCAL_ONLY", value)
+			cfg := Defaults()
+			cfg.Privacy.LocalOnly = !want
+			if err := applyEnvOverrides(&cfg); err != nil {
+				t.Fatalf("%q was rejected: %v", value, err)
+			}
+			if cfg.Privacy.LocalOnly != want {
+				t.Fatalf("%q produced local_only=%v, want %v", value, cfg.Privacy.LocalOnly, want)
+			}
+		})
+	}
+}

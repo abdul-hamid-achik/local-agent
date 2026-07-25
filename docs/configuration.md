@@ -182,6 +182,10 @@ weight budget and remain serial because provider-side capacity is unknown.
 | `LOCAL_AGENT_REDUCED_MOTION` | Replace animated TUI activity with static glyphs |
 | `LOCAL_AGENT_GLYPHS` | Set to `ascii` to replace Unicode UI glyphs independently of color and reduced motion |
 
+An unparseable value is a startup error rather than a silent fallback: a typo
+must not be indistinguishable from a deliberate setting. Boolean flags accept
+`1/true/yes/y/on` and `0/false/no/n/off`, case-insensitively.
+
 Remote providers (`LOCAL_AGENT_PROVIDER`, API key env names, optional TinyVault
 PATH wrapper variables such as `LOCAL_AGENT_NO_VAULT` and
 `LOCAL_AGENT_VAULT_PROJECT`) are documented in [Remote providers](./providers.md).

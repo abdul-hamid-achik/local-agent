@@ -45,9 +45,17 @@ func decodeReconciliationSession(record SessionStateRecord) (reconciliationSessi
 		return reconciliationSession{}, fmt.Errorf("decode reconciliation session envelope: %w", err)
 	}
 	var version int
-	if raw := fields["version"]; len(raw) == 0 {
+	// An explicit null is an absent version, not a malformed number: it decodes
+	// without error and leaves the zero value behind, which would otherwise be
+	// reported as "unsupported version 0".
+	raw := bytes.TrimSpace(fields["version"])
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
 		return reconciliationSession{}, errors.New("reconciliation session envelope has no version")
-	} else if err := json.Unmarshal(raw, &version); err != nil || !supportedReconciliationEnvelopeVersion(version) {
+	}
+	if err := json.Unmarshal(raw, &version); err != nil {
+		return reconciliationSession{}, fmt.Errorf("decode reconciliation session envelope version: %w", err)
+	}
+	if !supportedReconciliationEnvelopeVersion(version) {
 		return reconciliationSession{}, fmt.Errorf("unsupported reconciliation session envelope version %d", version)
 	}
 	goalRaw := fields["goal"]

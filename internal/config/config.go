@@ -327,15 +327,18 @@ func loadConfigAndAgents() (*Config, *AgentsDir, error) {
 		if err != nil {
 			return nil, nil, fmt.Errorf("load agents directory %s: %w", agentsDir, err)
 		}
-		if agentsData != nil {
-			if cfg.Ollama.Model == "" {
-				cfg.Ollama.Model = cfg.Model.DefaultModel
-			}
-
-			if len(cfg.Servers) == 0 && agentsData.HasMCP() {
-				cfg.Servers = agentsData.GetMCPServers()
-			}
+		if agentsData != nil && len(cfg.Servers) == 0 && agentsData.HasMCP() {
+			cfg.Servers = agentsData.GetMCPServers()
 		}
+	}
+
+	// The model fallback has nothing to do with the agents directory. Nested
+	// inside the auto_load block it meant an explicitly empty ollama.model was
+	// silently backfilled with the default auto_load: true, and hard-rejected
+	// by Validate with auto_load: false — the same configuration accepted or
+	// refused depending on an unrelated setting.
+	if cfg.Ollama.Model == "" {
+		cfg.Ollama.Model = cfg.Model.DefaultModel
 	}
 
 	clampNumCtxForMemory(&cfg)
@@ -708,8 +711,8 @@ func isRemoteModelAlias(model string) bool {
 
 // largeModelsAllowed reports whether the memory-safety guard is disabled.
 func largeModelsAllowed() bool {
-	v := os.Getenv("LOCAL_AGENT_ALLOW_LARGE_MODELS")
-	return v == "1" || v == "true" || v == "yes"
+	allowed, err := parseEnvBool("LOCAL_AGENT_ALLOW_LARGE_MODELS", os.Getenv("LOCAL_AGENT_ALLOW_LARGE_MODELS"))
+	return err == nil && allowed
 }
 
 // paramBPattern extracts a parameter count hint like ":9b" or ":0.8b" from a model tag.
@@ -822,7 +825,10 @@ func applyEnvOverrides(cfg *Config) error {
 		applyActiveProfileField(cfg, func(p *ProviderProfile) { p.APIKeyEnv = v })
 	}
 	if v := os.Getenv("LOCAL_AGENT_PROVIDER_CONTEXT_SIZE"); v != "" {
-		size := parseEnvInt(v, cfg.Provider.ContextSize)
+		size, err := parseEnvInt("LOCAL_AGENT_PROVIDER_CONTEXT_SIZE", v)
+		if err != nil {
+			return err
+		}
 		cfg.Provider.ContextSize = size
 		applyActiveProfileField(cfg, func(p *ProviderProfile) { p.ContextSize = size })
 	}
@@ -846,13 +852,25 @@ func applyEnvOverrides(cfg *Config) error {
 		cfg.Tools.Timeout = v
 	}
 	if v := os.Getenv("LOCAL_AGENT_TOOLS_MAX_GREP"); v != "" {
-		cfg.Tools.MaxGrepResults = parseEnvInt(v, cfg.Tools.MaxGrepResults)
+		parsed, err := parseEnvInt("LOCAL_AGENT_TOOLS_MAX_GREP", v)
+		if err != nil {
+			return err
+		}
+		cfg.Tools.MaxGrepResults = parsed
 	}
 	if v := os.Getenv("LOCAL_AGENT_TOOLS_MAX_ITER"); v != "" {
-		cfg.Tools.MaxIterations = parseEnvInt(v, cfg.Tools.MaxIterations)
+		parsed, err := parseEnvInt("LOCAL_AGENT_TOOLS_MAX_ITER", v)
+		if err != nil {
+			return err
+		}
+		cfg.Tools.MaxIterations = parsed
 	}
 	if v := os.Getenv("LOCAL_AGENT_TOOLS_AUTO_MAX_ITER"); v != "" {
-		cfg.Tools.AutoMaxIterations = parseEnvInt(v, cfg.Tools.AutoMaxIterations)
+		parsed, err := parseEnvInt("LOCAL_AGENT_AUTO_MAX_ITER", v)
+		if err != nil {
+			return err
+		}
+		cfg.Tools.AutoMaxIterations = parsed
 	}
 	if v := os.Getenv("LOCAL_AGENT_CONTINUATIONS_MODE"); v != "" {
 		cfg.Continuations.Mode = ContinuationMode(v)
@@ -868,9 +886,11 @@ func applyEnvOverrides(cfg *Config) error {
 		cfg.ICE.EmbedModel = v
 	}
 	if v := os.Getenv("LOCAL_AGENT_LOCAL_ONLY"); v != "" {
-		if localOnly, err := strconv.ParseBool(v); err == nil {
-			cfg.Privacy.LocalOnly = localOnly
+		localOnly, err := parseEnvBool("LOCAL_AGENT_LOCAL_ONLY", v)
+		if err != nil {
+			return err
 		}
+		cfg.Privacy.LocalOnly = localOnly
 	}
 	return nil
 }
@@ -893,9 +913,31 @@ func applyActiveProfileField(cfg *Config, mutate func(*ProviderProfile)) {
 	cfg.Provider.Profiles[name] = profile
 }
 
-func parseEnvInt(v string, defaultVal int) int {
-	if i, err := strconv.Atoi(v); err == nil {
-		return i
+// parseEnvInt reports an unparseable override instead of silently substituting
+// the previous value. Six variables documented in one table used to disagree —
+// one exited, four fell back silently, and one was a no-op — so a typo was
+// indistinguishable from a deliberate setting, and Validate range-checks none
+// of them.
+func parseEnvInt(name, v string) (int, error) {
+	i, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, fmt.Errorf("config: invalid %s %q: %w", name, v, err)
 	}
-	return defaultVal
+	return i, nil
+}
+
+// envBoolValues is the boolean vocabulary accepted by every Local Agent
+// environment flag. strconv.ParseBool rejects "yes"/"no"/"on"/"off", which
+// largeModelsAllowed has always accepted — so LOCAL_AGENT_LOCAL_ONLY=yes was
+// discarded while the operator believed the run had been hardened.
+var envBoolValues = map[string]bool{
+	"1": true, "t": true, "true": true, "yes": true, "y": true, "on": true,
+	"0": false, "f": false, "false": false, "no": false, "n": false, "off": false,
+}
+
+func parseEnvBool(name, v string) (bool, error) {
+	if parsed, ok := envBoolValues[strings.ToLower(strings.TrimSpace(v))]; ok {
+		return parsed, nil
+	}
+	return false, fmt.Errorf("config: invalid %s %q: want true or false", name, v)
 }

@@ -467,6 +467,10 @@ See [`config.example.yaml`](config.example.yaml) for the configured model catalo
 | `LOCAL_AGENT_PROVIDER_API_KEY_ENV` | Override the env var name for the provider API key |
 | `LOCAL_AGENT_PROVIDER_CONTEXT_SIZE` | Override the provider context window size |
 
+An unparseable value is a startup error rather than a silent fallback: a typo
+must not be indistinguishable from a deliberate setting. Boolean flags accept
+`1/true/yes/y/on` and `0/false/no/n/off`, case-insensitively.
+
 ## Project instructions, skills, and profiles
 
 At startup, `local-agent` loads `./AGENTS.md`; if absent, it falls back to legacy `./AGENT.md`. `local-agent init` creates `AGENTS.md`.

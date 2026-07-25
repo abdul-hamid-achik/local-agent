@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -184,10 +185,23 @@ func decodeSessionExecutionCursor(stateJSON string) (int64, error) {
 	if err := json.Unmarshal([]byte(stateJSON), &fields); err != nil {
 		return 0, fmt.Errorf("decode session envelope: %w", err)
 	}
+	// The decode error and the range check used to share one branch, so a
+	// version of "1", 1.5, true, or null reported "unsupported version 0" — a
+	// value never legitimately persisted. session repair is a last-resort
+	// recovery command; sending its operator after a compatibility problem
+	// that does not exist costs real debugging time.
 	var version int
-	if raw := fields["version"]; len(raw) == 0 {
+	// An explicit null is an absent version, not a malformed number: it decodes
+	// without error and leaves the zero value behind, which would otherwise be
+	// reported as "unsupported version 0".
+	raw := bytes.TrimSpace(fields["version"])
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
 		return 0, errors.New("session envelope has no version")
-	} else if err := json.Unmarshal(raw, &version); err != nil || !supportedReconciliationEnvelopeVersion(version) {
+	}
+	if err := json.Unmarshal(raw, &version); err != nil {
+		return 0, fmt.Errorf("decode session envelope version: %w", err)
+	}
+	if !supportedReconciliationEnvelopeVersion(version) {
 		return 0, fmt.Errorf("unsupported session envelope version %d", version)
 	}
 	cursor := int64(0)

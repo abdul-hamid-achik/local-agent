@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -204,5 +205,44 @@ func TestRepairSessionProjectionRefusesPendingReconciliationAndGoalSessions(t *t
 		executionTestEvent(t, goalSession.ID, workspaceID, "goal-effect", execution.Effectful))
 	if _, err := store.RepairSessionProjection(context.Background(), goalLease, goalSession.ID, workspaceID); !errors.Is(err, ErrStandaloneReconciliationGoalOwned) {
 		t.Fatalf("goal-owned repair error = %v, want goal-owned refusal", err)
+	}
+}
+
+// A malformed version must be reported as malformed. The decode error used to
+// share a branch with the range check, so a string, float, or null version
+// produced "unsupported session envelope version 0" — a value the writer never
+// persists — sending the operator of a last-resort recovery command after a
+// compatibility problem that does not exist.
+func TestSessionEnvelopeVersionErrorsDistinguishMalformedFromUnsupported(t *testing.T) {
+	for name, envelope := range map[string]string{
+		"string":  `{"version":"1"}`,
+		"float":   `{"version":1.5}`,
+		"boolean": `{"version":true}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := decodeSessionExecutionCursor(envelope)
+			if err == nil {
+				t.Fatal("a malformed version was accepted")
+			}
+			if strings.Contains(err.Error(), "unsupported") {
+				t.Fatalf("malformed version reported as a version mismatch: %v", err)
+			}
+			if !strings.Contains(err.Error(), "decode session envelope version") {
+				t.Fatalf("error does not identify the decode failure: %v", err)
+			}
+		})
+	}
+
+	// An explicit null decodes without error to the zero value, so it is an
+	// absent version rather than a malformed one.
+	if _, err := decodeSessionExecutionCursor(`{"version":null}`); err == nil ||
+		!strings.Contains(err.Error(), "has no version") {
+		t.Fatalf("explicit null version = %v, want the absent-version diagnosis", err)
+	}
+
+	// A well-formed but unknown version keeps the compatibility wording.
+	if _, err := decodeSessionExecutionCursor(`{"version":99}`); err == nil ||
+		!strings.Contains(err.Error(), "unsupported session envelope version 99") {
+		t.Fatalf("unsupported version lost its number: %v", err)
 	}
 }
