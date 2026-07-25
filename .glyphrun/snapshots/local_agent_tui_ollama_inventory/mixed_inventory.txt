@@ -5,7 +5,7 @@
 
 
       ╭────────────────────────────────────────────────────────────────────────────╮
-      │ Ollama 0.31.2-test · models                                                │
+      │ Ollama models                                                              │
       │                                                                            │
       │ │ LOCAL · qwen3.5:2b · current                                             │
       │   CLOUD · kimi-code:cloud · review                                         │

@@ -105,7 +105,10 @@ func renderOllamaModelDetails(model OllamaModelDescriptor, width int, isDark boo
 	if model.ContextLength > 0 {
 		rows = append(rows, [2]string{"Max context", compactTokenCount(model.ContextLength) + " tokens"})
 	}
-	if model.EffectiveContext > 0 {
+	// "Effective" only means something when policy lowered the window below the
+	// model's maximum. Printing the same number twice under two labels invited
+	// the reader to look for a difference that is not there.
+	if model.EffectiveContext > 0 && model.EffectiveContext != model.ContextLength {
 		rows = append(rows, [2]string{"Effective", compactTokenCount(model.EffectiveContext) + " tokens"})
 	}
 	if model.AllocatedContext > 0 {

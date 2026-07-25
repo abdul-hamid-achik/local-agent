@@ -315,3 +315,21 @@ func TestCompactWorkspacePathPreservesRepositoryName(t *testing.T) {
 		t.Fatalf("narrow workspace = %q, want %q", got, want)
 	}
 }
+
+// The Ollama daemon version used to live in the model picker's title, where
+// the specs used it as a proxy for "the picker is open". It is a runtime fact,
+// so it must be reachable in the Runtime panel — the title is now constant and
+// no longer surfaces it anywhere else.
+func TestRuntimeStatusSurfacesTheOllamaVersion(t *testing.T) {
+	m := newTestModel(t)
+	m.ollamaVersion = "0.31.2-test"
+	m.openRuntimeStatus()
+
+	panel := ansi.Strip(m.renderRuntimeStatus())
+	if !strings.Contains(panel, "0.31.2-test") {
+		t.Fatalf("runtime panel does not report the Ollama version:\n%s", panel)
+	}
+	if title := ollamaModelPickerTitle("0.31.2-test"); title != "Ollama models" {
+		t.Fatalf("model picker title still carries the version: %q", title)
+	}
+}

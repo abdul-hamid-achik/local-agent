@@ -1,5 +1,5 @@
  ╭──────────────────────────╮
- │ Agent Viewer             │
+ │ Agent viewer             │
  │ Consultation #<digest> … │
  │ Status · active · x.xs … │
  │ team · 1 agent · 1 acti… │

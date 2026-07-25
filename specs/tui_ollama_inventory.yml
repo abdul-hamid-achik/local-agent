@@ -42,7 +42,7 @@ steps:
     - press: "enter"
     - wait:
         screen:
-            contains: "Ollama 0.31.2-test · models"
+            contains: "Ollama models"
         timeoutMs: 3000
     - wait:
         screen:
@@ -63,7 +63,7 @@ steps:
     - press: "enter"
     - wait:
         screen:
-            contains: "Ollama 0.31.2-test · models"
+            contains: "Ollama models"
         timeoutMs: 2000
     - wait:
         screen:
@@ -82,7 +82,7 @@ steps:
         timeoutMs: 2000
     - wait:
         screen:
-            notContains: "Ollama 0.31.2-test · models"
+            notContains: "Ollama models"
         timeoutMs: 2000
     - wait:
         screen:
@@ -92,7 +92,7 @@ steps:
     - press: "ctrl+o"
     - wait:
         screen:
-            contains: "Ollama 0.31.2-test · models"
+            contains: "Ollama models"
         timeoutMs: 2000
     - press: "d"
     - wait:
@@ -103,7 +103,7 @@ steps:
     - press: "esc"
     - wait:
         screen:
-            contains: "Ollama 0.31.2-test · models"
+            contains: "Ollama models"
         timeoutMs: 2000
     - press: "a"
     - wait:
@@ -124,7 +124,7 @@ steps:
     - press: "esc"
     - wait:
         screen:
-            contains: "Ollama 0.31.2-test · models"
+            contains: "Ollama models"
         timeoutMs: 2000
     - wait:
         screen:
@@ -151,7 +151,7 @@ steps:
     - press: "esc"
     - wait:
         screen:
-            contains: "Ollama 0.31.2-test · models"
+            contains: "Ollama models"
         timeoutMs: 2000
     - press: "esc"
     - wait:

@@ -349,7 +349,7 @@ func TestPlanFormFitsSupportedTerminalSizes(t *testing.T) {
 					return
 				}
 
-				for _, label := range []string{"Plan Task", "Task", "Scope", "Focus (optional)"} {
+				for _, label := range []string{"Plan task", "Task", "Scope", "Focus (optional)"} {
 					if !strings.Contains(rendered, label) {
 						t.Fatalf("normal plan form missing %q:\n%s", label, rendered)
 					}

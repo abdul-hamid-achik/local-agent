@@ -89,7 +89,7 @@ steps:
     - press: "enter"
     - wait:
         screen:
-            contains: "Agent Viewer"
+            contains: "Agent viewer"
         timeoutMs: 3000
     - wait:
         screen:

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/viewport"
 	"charm.land/lipgloss/v2"
 )
@@ -37,11 +38,22 @@ func (m *Model) helpViewportHeight() int {
 func (m *Model) buildHelpContent(innerW int) string {
 	var b strings.Builder
 
-	// Keyboard shortcuts section.
+	// Keyboard shortcuts, grouped by the task the reader is trying to do.
 	b.WriteString(m.styles.OverlayAccent.Render("Keyboard Shortcuts"))
 	b.WriteString("\n")
 
-	m.writeHelpRows(&b, m.keyHelpRows(), innerW)
+	for index, section := range m.keys.HelpSections() {
+		rows := helpRowsForBindings(section.Bindings)
+		if len(rows) == 0 {
+			continue
+		}
+		if index > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(m.styles.OverlayDim.Render("  " + section.Title))
+		b.WriteString("\n")
+		m.writeHelpRows(&b, rows, innerW)
+	}
 
 	b.WriteString("\n")
 	b.WriteString(m.styles.OverlayAccent.Render("Input Shortcuts"))
@@ -86,20 +98,27 @@ func (m *Model) buildHelpContent(innerW int) string {
 	return b.String()
 }
 
+// helpRowsForBindings projects one group of bindings into presentable rows,
+// dropping any binding that carries no help text.
+func helpRowsForBindings(bindings []key.Binding) []helpRow {
+	rows := make([]helpRow, 0, len(bindings))
+	for _, binding := range bindings {
+		help := binding.Help()
+		if strings.TrimSpace(help.Key) == "" || strings.TrimSpace(help.Desc) == "" {
+			continue
+		}
+		description := strings.TrimSpace(help.Desc)
+		description = strings.ToUpper(description[:1]) + description[1:]
+		rows = append(rows, helpRow{key: strings.ToLower(help.Key), desc: description})
+	}
+	return rows
+}
+
+// keyHelpRows is every documented binding in section order.
 func (m *Model) keyHelpRows() []helpRow {
 	var rows []helpRow
-	for _, group := range m.keys.FullHelp() {
-		for _, binding := range group {
-			help := binding.Help()
-			if strings.TrimSpace(help.Key) == "" || strings.TrimSpace(help.Desc) == "" {
-				continue
-			}
-			description := strings.TrimSpace(help.Desc)
-			if len(description) > 0 {
-				description = strings.ToUpper(description[:1]) + description[1:]
-			}
-			rows = append(rows, helpRow{key: strings.ToLower(help.Key), desc: description})
-		}
+	for _, section := range m.keys.HelpSections() {
+		rows = append(rows, helpRowsForBindings(section.Bindings)...)
 	}
 	return rows
 }

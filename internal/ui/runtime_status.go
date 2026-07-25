@@ -109,6 +109,12 @@ func (m *Model) buildRuntimeStatusContent(width int) string {
 		}
 	}
 	lines = append(lines, m.runtimeStatusRow("Model", modelRuntime, width))
+	// The daemon version used to be spliced into the model picker's title
+	// ("Ollama 0.31.2-test · models"), which is a heading, not a place to read
+	// diagnostics. It belongs with the rest of the runtime facts.
+	if version := sanitizeTerminalSingleLine(m.ollamaVersion); version != "" {
+		lines = append(lines, m.runtimeStatusRow("Ollama", version, width))
+	}
 	if m.ollamaOffline {
 		// Ping failure can mean either host transport or model selection/setup.
 		// Keep the recovery conditional rather than presenting transport success

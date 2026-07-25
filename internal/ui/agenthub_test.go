@@ -188,7 +188,7 @@ func TestAgentHubHonorsNoColorInListAndViewer(t *testing.T) {
 	if hasANSIColor(viewer) {
 		t.Fatalf("NO_COLOR Agent Viewer emitted ANSI color sequences: %q", viewer)
 	}
-	for _, want := range []string{"Agents", "Consultation", "Agent Viewer"} {
+	for _, want := range []string{"Agents", "Consultation", "Agent viewer"} {
 		if !strings.Contains(ansi.Strip(hub+"\n"+viewer), want) {
 			t.Fatalf("NO_COLOR agent surfaces lost %q", want)
 		}
@@ -223,7 +223,7 @@ func TestAgentHubEscapeFilterViewerAndPrivacy(t *testing.T) {
 	}
 	viewer := ansi.Strip(m.renderAgentHub())
 	for _, want := range []string{
-		"Agent Viewer",
+		"Agent viewer",
 		"generalist",
 		"This agent does not report step-by-step activity.",
 	} {

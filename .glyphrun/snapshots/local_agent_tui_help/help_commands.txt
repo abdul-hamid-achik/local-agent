@@ -1,6 +1,15 @@
                      ╭────────────────────────────────────────────────────────────────────────────╮
                      │ Help                                                                       │
                      │                                                                            │
+                     │   ctrl+l            Clear screen                                           │
+                     │   f1                Show help (empty input)                                │
+                     │                                                                            │
+                     │   Leave                                                                    │
+                     │   esc               Cancel / close overlay                                 │
+                     │   ctrl+c            Quit                                                   │
+                     │                                                                            │
+                     │ Input Shortcuts                                                            │
+                     │   @file / @agent    Insert file or agent mention text                      │
                      │   ctrl+v            Paste text; on macOS convert a clipboard image to PNG  │
                      │                     and attach it                                          │
                      │   paste/drag imag…  Attach up to four PNG, JPEG, or GIF files to the       │
@@ -22,14 +31,5 @@
                      │   /help             Show help overlay with shortcuts and commands          │
                      │   /clear            Clear conversation history                             │
                      │   /plan             Open a guided read-only planning form                  │
-                     │   /goal             Create, inspect, pause, resume, budget, or drop a      │
-                     │                     durable goal                                           │
-                     │   /goal new         Define a durable objective, acceptance, and budget     │
-                     │   /goal show        Unavailable · No goal is configured.                   │
-                     │   /goal pause       Unavailable · No goal is configured.                   │
-                     │   /goal resume      Unavailable · No goal is configured.                   │
-                     │   /goal budget      Unavailable · No goal is configured.                   │
-                     │   /goal drop        Unavailable · No goal is configured.                   │
-                     │   /model            Show, switch, or list models                           │
-                     │ esc/q close · j/k scroll · pgup/pgdn page · 34%                            │
+                     │ esc/q close · j/k scroll · pgup/pgdn page · 31%                            │
                      ╰────────────────────────────────────────────────────────────────────────────╯

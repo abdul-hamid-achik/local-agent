@@ -174,14 +174,48 @@ func (k KeyMap) ShortHelp() []key.Binding {
 	return []key.Binding{k.Send, k.NewLine, k.Cancel, k.Quit, k.Help}
 }
 
-// FullHelp returns the key groups for the full help view.
-func (k KeyMap) FullHelp() [][]key.Binding {
-	return [][]key.Binding{
-		{k.Send, k.NewLine, k.Cancel, k.Quit},
-		{k.ClearView, k.NewConvo, k.Help, k.ToggleTools, k.CopyLast},
-		{k.PageUp, k.PageDown, k.HalfPageUp, k.HalfPageDn, k.JumpLatest},
-		{k.CycleMode, k.ModelPicker, k.SettingsPicker, k.AgentHub, k.TranscriptSearch},
-		{k.HistoryUp, k.HistoryDown},
-		{k.ToggleFocusedTool, k.ToggleThinking, k.CompactToggle, k.ExternalEditor, k.Complete},
+// KeyHelpSection is a titled group of bindings.
+//
+// The title lives here rather than in the help renderer because this is where
+// the grouping decision belongs: a binding added to a section is documented
+// under that heading automatically, and a renderer cannot invent a category
+// the keymap disagrees with.
+type KeyHelpSection struct {
+	Title    string
+	Bindings []key.Binding
+}
+
+// HelpSections groups every binding by the task a reader is trying to do.
+//
+// The help overlay used to print all twenty-six as one undifferentiated list,
+// which meant finding "how do I search the transcript" was a linear scan past
+// every editing and paging key. Sections are ordered by how often a reader
+// needs them, not alphabetically or by keystroke.
+func (k KeyMap) HelpSections() []KeyHelpSection {
+	return []KeyHelpSection{
+		{"Compose", []key.Binding{
+			k.Send, k.NewLine, k.Complete, k.HistoryUp, k.HistoryDown, k.ExternalEditor,
+		}},
+		{"Read", []key.Binding{
+			k.PageUp, k.PageDown, k.HalfPageUp, k.HalfPageDn, k.JumpLatest, k.TranscriptSearch,
+		}},
+		{"Inspect", []key.Binding{
+			k.ToggleTools, k.ToggleFocusedTool, k.ToggleThinking, k.CopyLast, k.CompactToggle,
+		}},
+		{"Session", []key.Binding{
+			k.CycleMode, k.ModelPicker, k.SettingsPicker, k.AgentHub, k.NewConvo, k.ClearView, k.Help,
+		}},
+		{"Leave", []key.Binding{k.Cancel, k.Quit}},
 	}
+}
+
+// FullHelp satisfies the Bubbles help.KeyMap interface. It is derived from
+// HelpSections so the two cannot describe different key surfaces.
+func (k KeyMap) FullHelp() [][]key.Binding {
+	sections := k.HelpSections()
+	groups := make([][]key.Binding, 0, len(sections))
+	for _, section := range sections {
+		groups = append(groups, section.Bindings)
+	}
+	return groups
 }

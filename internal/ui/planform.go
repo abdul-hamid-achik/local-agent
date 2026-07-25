@@ -372,7 +372,7 @@ func (m *Model) renderPlanFormView() (string, *tea.Cursor) {
 
 	var b strings.Builder
 	var cursor *tea.Cursor
-	b.WriteString(m.styles.OverlayTitle.Render("Plan Task"))
+	b.WriteString(m.styles.OverlayTitle.Render("Plan task"))
 	b.WriteString("\n\n")
 	for i, field := range pf.Fields {
 		active := i == pf.ActiveField

@@ -11,7 +11,6 @@
       │ Parameters      2.3B                                                       │
       │ Quantization    Q8_0                                                       │
       │ Max context     262K tokens                                                │
-      │ Effective       262K tokens                                                │
       │ Capabilities    tools+thinking+completion                                  │
       │                                                                            │
       │ Ollama Cloud · conversation consent                                        │
@@ -19,6 +18,7 @@
       │ Prompts leave this machine through Ollama.                                 │
       │ esc models                                                                 │
       ╰────────────────────────────────────────────────────────────────────────────╯
+
 
 
 

@@ -158,12 +158,10 @@ func modelDisplayName(model OllamaModelDescriptor) string {
 	return name
 }
 
-func ollamaModelPickerTitle(version string) string {
-	version = sanitizeTerminalSingleLine(version)
-	if version == "" {
-		return "Ollama models"
-	}
-	return "Ollama " + version + " · models"
+// ollamaModelPickerTitle is a constant heading. The daemon version it used to
+// carry is a runtime fact, and now lives in the Runtime panel with the others.
+func ollamaModelPickerTitle(string) string {
+	return "Ollama models"
 }
 
 type ModelPickerState struct {

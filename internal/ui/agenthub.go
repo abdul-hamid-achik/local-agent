@@ -136,7 +136,7 @@ type AgentHubState struct {
 	width            int
 	height           int
 	isDark           bool
-	themeID       string
+	themeID          string
 	reducedMotion    bool
 	glyphProfile     GlyphProfile
 	compact          bool
@@ -441,6 +441,26 @@ func (state *AgentHubState) SetSize(terminalWidth, terminalHeight int) {
 	state.rebuildViewerContent(true)
 }
 
+// fitViewerToContent shrinks the viewer to its document when the document is
+// shorter than the space reserved for it.
+//
+// The height was a fixed terminal-derived reservation, so a viewer with four
+// rows of content still painted a panel with ten blank rows inside its border
+// — the panel read as unfinished rather than as a short answer. The reservation
+// stays the ceiling; scrolling is unaffected because a document that fits has
+// nothing to scroll.
+func (state *AgentHubState) fitViewerToContent() {
+	if state == nil || state.Mode != agentHubViewerMode {
+		return
+	}
+	ceiling := max(1, state.height-6)
+	rows := state.Viewer.TotalLineCount()
+	if rows <= 0 || rows >= ceiling {
+		return
+	}
+	state.Viewer.SetHeight(rows)
+}
+
 func (state *AgentHubState) SetTheme(isDark bool, reducedMotion bool, themeIDs ...string) {
 	if state == nil {
 		return
@@ -728,6 +748,7 @@ func (state *AgentHubState) rebuildViewerContent(preserveOffset bool) {
 		offset = resolveAgentViewerRowOffset(anchor, layout.rows, offset)
 	}
 	state.Viewer.SetYOffset(offset)
+	state.fitViewerToContent()
 }
 
 func renderAgentViewerBody(group AgentGroupProjection, width int, isDark bool, themeID string, profiles ...GlyphProfile) string {
@@ -1028,7 +1049,7 @@ func (state *AgentHubState) viewerContent(styles Styles) string {
 	}
 	width := state.Viewer.Width()
 	title := styles.OverlayTitle.Render(truncateDisplayWithGlyphProfile(
-		"Agent Viewer",
+		"Agent viewer",
 		width,
 		state.glyphProfile,
 	))

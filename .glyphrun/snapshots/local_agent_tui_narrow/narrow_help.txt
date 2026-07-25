@@ -2,18 +2,18 @@
  │ Help                               │
  │                                    │
  │ Keyboard Shortcuts                 │
+ │   Compose                          │
  │   enter        Send / queue one    │
  │                follow-up           │
  │   shift+enter  New line ·          │
  │                ctrl+j/alt+enter    │
  │                also                │
- │   esc          Cancel / close      │
- │                overlay             │
- │   ctrl+c       Quit                │
- │   ctrl+l       Clear screen        │
- │   ctrl+n       New conversation    │
- │   f1           Show help (empty    │
- │                input)              │
- │   ctrl+b       Toggle all tools    │
+ │   tab          Autocomplete        │
+ │   ↑            Previous input      │
+ │                (empty input)       │
+ │   ↓            Next input          │
+ │                (history active)    │
+ │   ctrl+e       Open in             │
+ │                $VISUAL/$EDITOR     │
  │ esc/q close · pgdn · g/shift+g     │
  ╰────────────────────────────────────╯
