@@ -97,7 +97,8 @@ func (m *Model) buildCommandContext() *command.Context {
 	if m.agent != nil {
 		if store := m.agent.MemoryStore(); store != nil {
 			ctx.MemoryCount = store.Count()
-			for _, mem := range store.Recent(20) {
+			recent, _ := store.Recent(20)
+			for _, mem := range recent {
 				auto := false
 				for _, tag := range mem.Tags {
 					if tag == "auto" {

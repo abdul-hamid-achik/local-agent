@@ -70,7 +70,13 @@ func (a *Agent) handleMemoryRecall(args map[string]any) (string, bool) {
 		return "error: query is required", true
 	}
 
-	memories := a.memoryStore.Recall(query, 5)
+	memories, err := a.memoryStore.Recall(query, 5)
+	if err != nil {
+		// Reporting this as "no matching memories" would hand the model an
+		// authoritative absence built from a failure, and the loop would record
+		// the call as a completed execution.
+		return fmt.Sprintf("error: %v", err), true
+	}
 	if len(memories) == 0 {
 		return "No matching memories found.", false
 	}
@@ -170,7 +176,10 @@ func (a *Agent) handleMemoryList(args map[string]any) (string, bool) {
 		}
 	}
 
-	memories := a.memoryStore.Recent(limit)
+	memories, err := a.memoryStore.Recent(limit)
+	if err != nil {
+		return fmt.Sprintf("error: %v", err), true
+	}
 	if len(memories) == 0 {
 		return "No memories stored.", false
 	}

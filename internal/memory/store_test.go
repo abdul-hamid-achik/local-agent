@@ -64,7 +64,7 @@ func TestStore_Recall(t *testing.T) {
 	mustSave(t, s, "user name is Alice", []string{"name"})
 
 	t.Run("content match", func(t *testing.T) {
-		results := s.Recall("Go", 10)
+		results, _ := s.Recall("Go", 10)
 		if len(results) == 0 {
 			t.Fatal("expected results for 'Go' query")
 		}
@@ -80,7 +80,7 @@ func TestStore_Recall(t *testing.T) {
 	})
 
 	t.Run("tag match", func(t *testing.T) {
-		results := s.Recall("golang", 10)
+		results, _ := s.Recall("golang", 10)
 		if len(results) == 0 {
 			t.Fatal("expected results for 'golang' tag query")
 		}
@@ -91,7 +91,7 @@ func TestStore_Recall(t *testing.T) {
 
 	t.Run("combined scoring", func(t *testing.T) {
 		// "database" matches both content and tag for PostgreSQL entry.
-		results := s.Recall("database", 10)
+		results, _ := s.Recall("database", 10)
 		if len(results) == 0 {
 			t.Fatal("expected results for 'database' query")
 		}
@@ -102,7 +102,7 @@ func TestStore_Recall(t *testing.T) {
 	})
 
 	t.Run("maxResults limit", func(t *testing.T) {
-		results := s.Recall("user", 1)
+		results, _ := s.Recall("user", 1)
 		if len(results) > 1 {
 			t.Errorf("maxResults=1 but got %d results", len(results))
 		}
@@ -110,14 +110,14 @@ func TestStore_Recall(t *testing.T) {
 
 	t.Run("default maxResults 5 when 0", func(t *testing.T) {
 		// With 3 memories, should return all 3 (default limit is 5).
-		results := s.Recall("user", 0)
+		results, _ := s.Recall("user", 0)
 		if len(results) > 5 {
 			t.Errorf("default maxResults should be 5, got %d results", len(results))
 		}
 	})
 
 	t.Run("case insensitive", func(t *testing.T) {
-		results := s.Recall("ALICE", 10)
+		results, _ := s.Recall("ALICE", 10)
 		if len(results) == 0 {
 			t.Fatal("expected case-insensitive match for 'ALICE'")
 		}
@@ -127,7 +127,7 @@ func TestStore_Recall(t *testing.T) {
 	})
 
 	t.Run("no matches", func(t *testing.T) {
-		results := s.Recall("xyzzyzxyz", 10)
+		results, _ := s.Recall("xyzzyzxyz", 10)
 		if len(results) != 0 {
 			t.Errorf("expected no results for nonsense query, got %d", len(results))
 		}
@@ -145,7 +145,7 @@ func TestStore_Recall_TieBreakByRecency(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 	mustSave(t, s, "beta topic info", []string{"info"})
 
-	results := s.Recall("info", 10)
+	results, _ := s.Recall("info", 10)
 	if len(results) < 2 {
 		t.Fatalf("expected at least 2 results, got %d", len(results))
 	}
@@ -165,7 +165,7 @@ func TestStore_Recent(t *testing.T) {
 	mustSave(t, s, "new memory", nil)
 
 	t.Run("ordering by LastUsed", func(t *testing.T) {
-		recent := s.Recent(2)
+		recent, _ := s.Recent(2)
 		if len(recent) != 2 {
 			t.Fatalf("Recent(2) returned %d, want 2", len(recent))
 		}
@@ -178,7 +178,7 @@ func TestStore_Recent(t *testing.T) {
 	})
 
 	t.Run("limit exceeds count returns all", func(t *testing.T) {
-		recent := s.Recent(100)
+		recent, _ := s.Recent(100)
 		if len(recent) != 2 {
 			t.Errorf("Recent(100) returned %d, want 2", len(recent))
 		}
@@ -187,14 +187,14 @@ func TestStore_Recent(t *testing.T) {
 	t.Run("empty store", func(t *testing.T) {
 		emptyPath := filepath.Join(dir, "empty.json")
 		empty := NewStore(emptyPath)
-		recent := empty.Recent(5)
+		recent, _ := empty.Recent(5)
 		if recent != nil {
 			t.Errorf("empty Recent should return nil, got %v", recent)
 		}
 	})
 
 	t.Run("non-positive limit", func(t *testing.T) {
-		if recent := s.Recent(-1); recent != nil {
+		if recent, _ := s.Recent(-1); recent != nil {
 			t.Fatalf("Recent(-1) = %#v, want nil", recent)
 		}
 	})
@@ -222,7 +222,7 @@ func TestStorePrivateAndCorruptionSafe(t *testing.T) {
 	if corrupt.Err() == nil {
 		t.Fatal("corrupt memory store did not fail closed")
 	}
-	if got := corrupt.Recall("anything", 5); got != nil {
+	if got, _ := corrupt.Recall("anything", 5); got != nil {
 		t.Fatalf("Recall on corrupt store = %#v, want nil", got)
 	}
 	mutations := []struct {
@@ -262,7 +262,7 @@ func TestStoreReadFailureFailsClosed(t *testing.T) {
 	if store.Err() == nil {
 		t.Fatal("directory-backed memory store did not report a read error")
 	}
-	if got := store.Recall("anything", 5); got != nil {
+	if got, _ := store.Recall("anything", 5); got != nil {
 		t.Fatalf("Recall on unreadable store = %#v, want nil", got)
 	}
 	mutations := []struct {
@@ -390,7 +390,7 @@ func TestStore_Persistence_RoundTrip(t *testing.T) {
 	}
 
 	// Verify data is intact.
-	recent := s2.Recent(2)
+	recent, _ := s2.Recent(2)
 	contents := map[string]bool{}
 	for _, m := range recent {
 		contents[m.Content] = true
@@ -487,7 +487,7 @@ func TestStoreRecallReloadsBeforePersistingAlongsideAnotherWriter(t *testing.T) 
 	go func() {
 		defer wg.Done()
 		<-start
-		recalled = recaller.Recall("alpha", 5)
+		recalled, _ = recaller.Recall("alpha", 5)
 	}()
 	go func() {
 		defer wg.Done()
@@ -518,7 +518,7 @@ func TestStoreReadAPIsSeeWritesFromAnotherLongLivedInstance(t *testing.T) {
 	if got := reader.Count(); got != 1 {
 		t.Fatalf("stale Count = %d, want 1", got)
 	}
-	recent := reader.Recent(1)
+	recent, _ := reader.Recent(1)
 	if len(recent) != 1 || recent[0].ID != id {
 		t.Fatalf("stale Recent = %#v", recent)
 	}
@@ -657,7 +657,7 @@ func TestStore_DeleteByTag(t *testing.T) {
 	}
 
 	// Verify only temp memories are gone.
-	results := s.Recall("keep", 10)
+	results, _ := s.Recall("keep", 10)
 	if len(results) != 3 {
 		t.Errorf("Recall returned %d, want 3", len(results))
 	}
@@ -693,7 +693,7 @@ func TestStoreReadResultsDoNotAliasNestedTags(t *testing.T) {
 	store := NewStore(path)
 	id := mustSave(t, store, "immutable result", []string{"original"})
 
-	recent := store.Recent(1)
+	recent, _ := store.Recent(1)
 	got, found := store.Get(id)
 	if len(recent) != 1 || !found {
 		t.Fatal("saved memory unavailable")

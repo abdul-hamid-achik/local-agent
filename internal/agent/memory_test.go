@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,11 +13,17 @@ import (
 
 func newTestAgentWithMemory(t *testing.T) *Agent {
 	t.Helper()
-	store := memory.NewStore(filepath.Join(t.TempDir(), "test-memories.json"))
+	agent, _ := newTestAgentWithMemoryAt(t)
+	return agent
+}
+
+func newTestAgentWithMemoryAt(t *testing.T) (*Agent, string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "test-memories.json")
 	return &Agent{
-		memoryStore: store,
+		memoryStore: memory.NewStore(path),
 		registry:    mcp.NewRegistry(),
-	}
+	}, path
 }
 
 func TestHandleMemoryTool(t *testing.T) {
@@ -159,6 +166,45 @@ func TestHandleMemoryRecall(t *testing.T) {
 			}
 			if !strings.Contains(result, tt.wantSubstr) {
 				t.Errorf("handleMemoryRecall() = %q, want substring %q", result, tt.wantSubstr)
+			}
+		})
+	}
+}
+
+// An unusable memory store must reach the model as an error, never as an
+// authoritative "no matching memories" — the loop records tool results as
+// completed executions, so a swallowed failure becomes a fact nobody revisits.
+func TestMemoryToolsReportAnUnusableStoreInsteadOfAnAbsence(t *testing.T) {
+	ag, storePath := newTestAgentWithMemoryAt(t)
+
+	if _, err := ag.memoryStore.Save("a real memory", []string{"tag"}); err != nil {
+		t.Fatalf("seed memory: %v", err)
+	}
+	if result, isErr := ag.handleMemoryRecall(map[string]any{"query": "real"}); isErr ||
+		!strings.Contains(result, "a real memory") {
+		t.Fatalf("baseline recall failed: %q err=%v", result, isErr)
+	}
+
+	// Corrupt the backing file so the next read fails closed.
+	if err := os.WriteFile(storePath, []byte("{not json"), 0o600); err != nil {
+		t.Fatalf("corrupt store: %v", err)
+	}
+
+	for name, run := range map[string]func() (string, bool){
+		"memory_recall": func() (string, bool) {
+			return ag.handleMemoryRecall(map[string]any{"query": "real"})
+		},
+		"memory_list": func() (string, bool) {
+			return ag.handleMemoryList(map[string]any{})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			result, isErr := run()
+			if !isErr {
+				t.Fatalf("a broken store was reported as a normal result: %q", result)
+			}
+			if strings.Contains(result, "No matching memories") || strings.Contains(result, "No memories stored") {
+				t.Fatalf("a failure was reported as an absence: %q", result)
 			}
 		})
 	}

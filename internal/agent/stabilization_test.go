@@ -138,7 +138,7 @@ func TestCancellationStopsQueuedMutationWithYolo(t *testing.T) {
 	if got := store.Count(); got != 1 {
 		t.Fatalf("stored memories = %d, want 1", got)
 	}
-	memories := store.Recent(5)
+	memories, _ := store.Recent(5)
 	if len(memories) != 1 || memories[0].Content != "first mutation" {
 		t.Fatalf("cancelled queued mutation executed: %#v", memories)
 	}

@@ -105,11 +105,19 @@ func (s *Store) Save(content string, tags []string) (int, error) {
 }
 
 // Recall searches memories by keyword/tag matching and returns up to maxResults.
-func (s *Store) Recall(query string, maxResults int) []Memory {
+//
+// The error is not decoration. This result reaches the model as an answer, and
+// returning an empty slice for a lock timeout, a persist failure, or an
+// unreadable store told it "there is no such memory" — an authoritative
+// absence built from a failure. Every mutating method in this file already
+// reports that condition; the read paths swallowed it.
+func (s *Store) Recall(query string, maxResults int) ([]Memory, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.loadErr != nil {
-		return nil
+		// Fail closed here too: the store deliberately refuses to answer from a
+		// partially-read file, and that refusal must reach the caller.
+		return nil, fmt.Errorf("memory store unavailable: %w", s.loadErr)
 	}
 
 	if maxResults <= 0 {
@@ -173,18 +181,28 @@ func (s *Store) Recall(query string, maxResults int) []Memory {
 		}
 		return len(results) > 0
 	}); err != nil {
-		return nil
+		return nil, err
 	}
-	return out
+	return out, nil
 }
 
-// Recent returns the N most recently used memories.
-func (s *Store) Recent(n int) []Memory {
+// Recent returns the N most recently used memories. Like Recall, it reports an
+// unusable store rather than presenting it as an empty one.
+func (s *Store) Recent(n int) ([]Memory, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if n <= 0 || !s.refreshLocked() || len(s.memories) == 0 {
-		return nil
+	if n <= 0 {
+		return nil, nil
+	}
+	if !s.refreshLocked() {
+		if s.loadErr != nil {
+			return nil, fmt.Errorf("memory store unavailable: %w", s.loadErr)
+		}
+		return nil, errors.New("memory store unavailable")
+	}
+	if len(s.memories) == 0 {
+		return nil, nil
 	}
 
 	// Sort by LastUsed descending.
@@ -199,7 +217,7 @@ func (s *Store) Recent(n int) []Memory {
 	if n > len(sorted) {
 		n = len(sorted)
 	}
-	return sorted[:n]
+	return sorted[:n], nil
 }
 
 // Count returns the total number of stored memories.

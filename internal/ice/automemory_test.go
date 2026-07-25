@@ -82,7 +82,7 @@ func TestParseAndSave(t *testing.T) {
 			}
 
 			if tt.wantTags != nil {
-				recent := ms.Recent(tt.wantCount)
+				recent, _ := ms.Recent(tt.wantCount)
 				// Recent returns most-recent first, so reverse for order comparison.
 				for i, j := 0, len(recent)-1; i < j; i, j = i+1, j-1 {
 					recent[i], recent[j] = recent[j], recent[i]

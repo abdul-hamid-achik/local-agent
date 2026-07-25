@@ -45,12 +45,23 @@ func (a *Agent) handleGrep(ctx context.Context, args map[string]any) (string, bo
 		return fmt.Sprintf("error: invalid regex pattern: %v", err), true
 	}
 
+	// Validate the include glob before walking. filepath.Match's error was
+	// folded into the same branch as "did not match", so a malformed pattern
+	// skipped every file and returned a confident "No matches found".
+	if include != "" {
+		if _, matchErr := filepath.Match(include, "probe"); matchErr != nil {
+			return fmt.Sprintf("error: invalid include pattern: %v", matchErr), true
+		}
+	}
+
 	var results []string
+	coverage := &searchCoverage{}
 	err = readable.walk(func(filePath string, info os.FileInfo, err error) error {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
 		if err != nil {
+			coverage.skipUnlistable()
 			return nil
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
@@ -71,8 +82,9 @@ func (a *Agent) handleGrep(ctx context.Context, args map[string]any) (string, bo
 		}
 
 		if include != "" {
-			matched, err := filepath.Match(include, info.Name())
-			if err != nil || !matched {
+			// The pattern was validated above, so a non-match here is a real
+			// non-match rather than a swallowed error.
+			if matched, _ := filepath.Match(include, info.Name()); !matched {
 				return nil
 			}
 		}
@@ -83,8 +95,10 @@ func (a *Agent) handleGrep(ctx context.Context, args map[string]any) (string, bo
 
 		content, err := readable.readBoundedAt(filePath, maxFileReadBytes)
 		if err != nil {
+			coverage.skipUnreadable(info, maxFileReadBytes)
 			return nil
 		}
+		coverage.scan()
 
 		lines := strings.Split(string(content), "\n")
 		for i, line := range lines {
@@ -134,10 +148,10 @@ func (a *Agent) handleGrep(ctx context.Context, args map[string]any) (string, bo
 	}
 
 	if len(results) == 0 {
-		return fmt.Sprintf("No matches found for pattern: %s", pattern), false
+		return coverage.qualify(fmt.Sprintf("No matches found for pattern: %s", pattern)), false
 	}
 
-	return strings.Join(results, "\n"), false
+	return coverage.qualify(strings.Join(results, "\n")), false
 }
 
 func (a *Agent) handleRead(args map[string]any) (string, bool) {
@@ -211,13 +225,16 @@ func (a *Agent) handleGlob(ctx context.Context, args map[string]any) (string, bo
 	}
 
 	var matches []string
+	coverage := &searchCoverage{}
 	err = readable.walk(func(filePath string, info os.FileInfo, err error) error {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
 		if err != nil {
+			coverage.skipUnlistable()
 			return nil
 		}
+		coverage.scan()
 		if filePath != path && readable.ignored(a, filePath) {
 			if info.IsDir() {
 				return filepath.SkipDir
@@ -247,11 +264,11 @@ func (a *Agent) handleGlob(ctx context.Context, args map[string]any) (string, bo
 	}
 
 	if len(matches) == 0 {
-		return fmt.Sprintf("No files match pattern: %s", pattern), false
+		return coverage.qualify(fmt.Sprintf("No files match pattern: %s", pattern)), false
 	}
 
 	sort.Strings(matches)
-	return strings.Join(matches, "\n"), false
+	return coverage.qualify(strings.Join(matches, "\n")), false
 }
 
 func (a *Agent) handleLs(ctx context.Context, args map[string]any) (string, bool) {
@@ -339,13 +356,16 @@ func (a *Agent) handleFind(ctx context.Context, args map[string]any) (string, bo
 	}
 
 	var results []string
+	coverage := &searchCoverage{}
 	err = readable.walk(func(filePath string, info os.FileInfo, err error) error {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
 		if err != nil {
+			coverage.skipUnlistable()
 			return nil
 		}
+		coverage.scan()
 		if filePath != path && readable.ignored(a, filePath) {
 			if info.IsDir() {
 				return filepath.SkipDir
@@ -393,10 +413,10 @@ func (a *Agent) handleFind(ctx context.Context, args map[string]any) (string, bo
 	}
 
 	if len(results) == 0 {
-		return fmt.Sprintf("No files/directories found matching: %s", name), false
+		return coverage.qualify(fmt.Sprintf("No files/directories found matching: %s", name)), false
 	}
 
-	return strings.Join(results, "\n"), false
+	return coverage.qualify(strings.Join(results, "\n")), false
 }
 
 func (a *Agent) handleExists(args map[string]any) (string, bool) {

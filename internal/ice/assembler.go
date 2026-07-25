@@ -113,7 +113,12 @@ func (a *Assembler) retrieveMemories(query string, tokenBudget int) []ContextChu
 		return nil
 	}
 
-	memories := a.memStore.Recall(query, 10)
+	// Retrieval is best-effort context, not an answer, so an unusable store
+	// contributes nothing rather than failing the turn.
+	memories, err := a.memStore.Recall(query, 10)
+	if err != nil {
+		return nil
+	}
 
 	var chunks []ContextChunk
 	usedTokens := 0

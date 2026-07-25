@@ -519,8 +519,8 @@ func buildMemorySection(store *memory.Store) string {
 		return ""
 	}
 
-	recent := store.Recent(10)
-	if len(recent) == 0 {
+	recent, err := store.Recent(10)
+	if err != nil || len(recent) == 0 {
 		return ""
 	}
 
