@@ -223,11 +223,6 @@ type plainLiveTailProjection struct {
 	wrapRenderedStart   int
 }
 
-type plainLiveWrapChunk struct {
-	text     string
-	rawStart int
-}
-
 // refreshTranscript is the only production boundary that remeasures semantic
 // transcript state and stages a bounded paint window. renderEntries remains a
 // complete reference materializer for exports and tests, but production event
@@ -1094,110 +1089,17 @@ func plainLiveWrappedLine(
 	width int,
 	forceWrap bool,
 ) (rows []string, checkpointRaw, checkpointRow int, wrapped bool) {
-	if width <= 0 {
-		return []string{line}, 0, 0, false
+	chunks, wrapped := wrapLineChunks(line, width, forceWrap)
+	rows = make([]string, len(chunks))
+	for index := range chunks {
+		rows[index] = chunks[index].text
 	}
-	if !forceWrap && lipgloss.Width(line) <= width {
-		return []string{line}, 0, 0, false
+	if !wrapped {
+		return rows, 0, 0, false
 	}
-	words := strings.Fields(line)
-	if len(words) == 0 {
-		return []string{""}, len(line), 0, true
-	}
-
-	lines := make([]plainLiveWrapChunk, 0, len(words))
-	current := plainLiveWrapChunk{}
-	searchStart := 0
-	for _, word := range words {
-		relative := strings.Index(line[searchStart:], word)
-		if relative < 0 {
-			// strings.Fields returns substrings of line, so this is defensive.
-			return strings.Split(wrapLine(line, width), "\n"), 0, 0, true
-		}
-		wordStart := searchStart + relative
-		searchStart = wordStart + len(word)
-		if current.text != "" &&
-			lipgloss.Width(current.text)+1+lipgloss.Width(word) <= width {
-			current.text += " " + word
-			continue
-		}
-		if current.text != "" {
-			lines = append(lines, current)
-			current = plainLiveWrapChunk{}
-		}
-
-		chunks := splitPlainLiveWrapChunks(word, wordStart, width)
-		if len(chunks) == 0 {
-			continue
-		}
-		if len(chunks) > 1 {
-			lines = append(lines, chunks[:len(chunks)-1]...)
-		}
-		current = chunks[len(chunks)-1]
-	}
-	if current.text != "" {
-		lines = append(lines, current)
-	}
-	if len(lines) == 0 {
-		return []string{""}, len(line), 0, true
-	}
-
-	rows = make([]string, len(lines))
-	for index := range lines {
-		rows[index] = lines[index].text
-	}
-	checkpointRow = len(lines) - 1
-	checkpointRaw = lines[checkpointRow].rawStart
+	checkpointRow = len(chunks) - 1
+	checkpointRaw = chunks[checkpointRow].rawStart
 	return rows, checkpointRaw, checkpointRow, true
-}
-
-func splitPlainLiveWrapChunks(
-	word string,
-	wordStart int,
-	width int,
-) []plainLiveWrapChunk {
-	if word == "" || width <= 0 {
-		return nil
-	}
-	var chunks []plainLiveWrapChunk
-	var chunk strings.Builder
-	chunkStart := 0
-	used := 0
-	graphemes := uniseg.NewGraphemes(word)
-	for graphemes.Next() {
-		start, _ := graphemes.Positions()
-		cluster := graphemes.Str()
-		clusterWidth := lipgloss.Width(cluster)
-		if used > 0 && used+clusterWidth > width {
-			chunks = append(chunks, plainLiveWrapChunk{
-				text:     chunk.String(),
-				rawStart: wordStart + chunkStart,
-			})
-			chunk.Reset()
-			chunkStart = start
-			used = 0
-		}
-		if chunk.Len() == 0 {
-			chunkStart = start
-		}
-		chunk.WriteString(cluster)
-		used += clusterWidth
-		if used >= width {
-			chunks = append(chunks, plainLiveWrapChunk{
-				text:     chunk.String(),
-				rawStart: wordStart + chunkStart,
-			})
-			chunk.Reset()
-			used = 0
-		}
-	}
-	if chunk.Len() > 0 {
-		chunks = append(chunks, plainLiveWrapChunk{
-			text:     chunk.String(),
-			rawStart: wordStart + chunkStart,
-		})
-	}
-	return chunks
 }
 
 func reservePlainLiveRows(rows []string) []string {

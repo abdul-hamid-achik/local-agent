@@ -261,71 +261,134 @@ func wrapText(s string, width int) string {
 	return strings.TrimSuffix(result.String(), "\n")
 }
 
-// wrapLine wraps a single line to the given width, breaking long words if needed.
-func wrapLine(line string, width int) string {
-	if width <= 0 || lipgloss.Width(line) <= width {
-		return line
+// wrapChunk is one wrapped row plus the byte offset in the source line where
+// that row begins. The offset is what lets the incremental live-tail resume
+// wrapping mid-line instead of re-wrapping the whole message per token.
+type wrapChunk struct {
+	text     string
+	rawStart int
+}
+
+// wrapLineChunks is the single line-wrapping algorithm in the package.
+//
+// It used to exist twice: once here returning plain strings, and once in
+// transcript_paint.go returning the same rows with source offsets attached.
+// Two copies of word packing and grapheme splitting had to stay identical for
+// the incremental paint path to keep matching the canonical render — a
+// correctness coupling that nothing enforced. Callers that do not need offsets
+// project them away instead.
+//
+// forceWrap makes a line that already fits still go through packing, which the
+// live tail needs when a previous chunk ended mid-line.
+func wrapLineChunks(line string, width int, forceWrap bool) ([]wrapChunk, bool) {
+	if width <= 0 {
+		return []wrapChunk{{text: line}}, false
+	}
+	if !forceWrap && lipgloss.Width(line) <= width {
+		return []wrapChunk{{text: line}}, false
 	}
 	words := strings.Fields(line)
 	if len(words) == 0 {
-		return ""
+		return []wrapChunk{{text: "", rawStart: len(line)}}, true
 	}
 
-	lines := make([]string, 0, len(words))
-	current := ""
-	for _, w := range words {
-		if current != "" && lipgloss.Width(current)+1+lipgloss.Width(w) <= width {
-			current += " " + w
+	chunks := make([]wrapChunk, 0, len(words))
+	current := wrapChunk{}
+	searchStart := 0
+	for _, word := range words {
+		relative := strings.Index(line[searchStart:], word)
+		if relative < 0 {
+			// strings.Fields returns substrings of line, so this is defensive.
+			relative = 0
+		}
+		wordStart := searchStart + relative
+		searchStart = wordStart + len(word)
+		if current.text != "" &&
+			lipgloss.Width(current.text)+1+lipgloss.Width(word) <= width {
+			current.text += " " + word
 			continue
 		}
-		if current != "" {
-			lines = append(lines, current)
-			current = ""
+		if current.text != "" {
+			chunks = append(chunks, current)
+			current = wrapChunk{}
 		}
 
-		chunks := splitDisplayChunks(w, width)
-		if len(chunks) == 0 {
+		split := splitDisplayChunksAt(word, wordStart, width)
+		if len(split) == 0 {
 			continue
 		}
-		if len(chunks) > 1 {
-			lines = append(lines, chunks[:len(chunks)-1]...)
+		if len(split) > 1 {
+			chunks = append(chunks, split[:len(split)-1]...)
 		}
-		current = chunks[len(chunks)-1]
+		current = split[len(split)-1]
 	}
-	if current != "" {
-		lines = append(lines, current)
+	if current.text != "" {
+		chunks = append(chunks, current)
 	}
-	return strings.Join(lines, "\n")
+	if len(chunks) == 0 {
+		return []wrapChunk{{text: "", rawStart: len(line)}}, true
+	}
+	return chunks, true
 }
 
-// splitDisplayChunks splits one long word without slicing through UTF-8 and
-// measures terminal cells, which matters for CJK and emoji model output.
-func splitDisplayChunks(word string, width int) []string {
+// wrapLine wraps a single line to the given width, breaking long words if needed.
+func wrapLine(line string, width int) string {
+	chunks, _ := wrapLineChunks(line, width, false)
+	rows := make([]string, len(chunks))
+	for index := range chunks {
+		rows[index] = chunks[index].text
+	}
+	return strings.Join(rows, "\n")
+}
+
+// splitDisplayChunksAt splits one long word without slicing through UTF-8 and
+// measures terminal cells, which matters for CJK and emoji model output. Each
+// chunk carries its byte offset relative to the enclosing line.
+func splitDisplayChunksAt(word string, wordStart, width int) []wrapChunk {
 	if word == "" || width <= 0 {
 		return nil
 	}
-	var chunks []string
+	var chunks []wrapChunk
 	var chunk strings.Builder
+	chunkStart := 0
 	used := 0
 	graphemes := uniseg.NewGraphemes(word)
 	for graphemes.Next() {
+		start, _ := graphemes.Positions()
 		cluster := graphemes.Str()
 		clusterWidth := lipgloss.Width(cluster)
 		if used > 0 && used+clusterWidth > width {
-			chunks = append(chunks, chunk.String())
+			chunks = append(chunks, wrapChunk{text: chunk.String(), rawStart: wordStart + chunkStart})
 			chunk.Reset()
+			chunkStart = start
 			used = 0
+		}
+		if chunk.Len() == 0 {
+			chunkStart = start
 		}
 		chunk.WriteString(cluster)
 		used += clusterWidth
 		if used >= width {
-			chunks = append(chunks, chunk.String())
+			chunks = append(chunks, wrapChunk{text: chunk.String(), rawStart: wordStart + chunkStart})
 			chunk.Reset()
 			used = 0
 		}
 	}
 	if chunk.Len() > 0 {
-		chunks = append(chunks, chunk.String())
+		chunks = append(chunks, wrapChunk{text: chunk.String(), rawStart: wordStart + chunkStart})
 	}
 	return chunks
+}
+
+// splitDisplayChunks is the text-only projection of splitDisplayChunksAt.
+func splitDisplayChunks(word string, width int) []string {
+	chunks := splitDisplayChunksAt(word, 0, width)
+	if len(chunks) == 0 {
+		return nil
+	}
+	rows := make([]string, len(chunks))
+	for index := range chunks {
+		rows[index] = chunks[index].text
+	}
+	return rows
 }

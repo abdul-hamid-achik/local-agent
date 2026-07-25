@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/rivo/uniseg"
 )
 
 func TestFormatTokens(t *testing.T) {
@@ -257,3 +258,87 @@ func TestComposerStatusProjectsActiveSessionHandleAndTitle(t *testing.T) {
 	}
 }
 
+// The plain and offset-carrying views of wrapping are the same algorithm. They
+// used to be two implementations that had to stay identical for the
+// incremental paint path to keep matching the canonical render, with nothing
+// enforcing it.
+func TestWrappingViewsAgreeOnRowsAndOffsets(t *testing.T) {
+	lines := []string{
+		"short",
+		"",
+		"   ",
+		strings.Repeat("word ", 40),
+		"a very-long-unbreakable-token-that-must-be-split-across-several-rows-exactly",
+		"界 wide 🙂 runes 界界界 mixed with ordinary words to force packing",
+		strings.Repeat("界", 50),
+	}
+	for _, width := range []int{1, 2, 7, 20, 80} {
+		for _, line := range lines {
+			chunks, _ := wrapLineChunks(line, width, false)
+
+			rows := make([]string, len(chunks))
+			for i := range chunks {
+				rows[i] = chunks[i].text
+			}
+			if got, want := strings.Join(rows, "\n"), wrapLine(line, width); got != want {
+				t.Fatalf("width %d: wrapLine disagrees with wrapLineChunks:\n got %q\nwant %q", width, got, want)
+			}
+
+			// Offsets must be non-decreasing and inside the source line, or the
+			// live tail would resume from a position that is not a boundary.
+			previous := -1
+			for i, chunk := range chunks {
+				if chunk.rawStart < previous {
+					t.Fatalf("width %d line %q: chunk %d offset %d went backwards from %d",
+						width, line, i, chunk.rawStart, previous)
+				}
+				if chunk.rawStart > len(line) {
+					t.Fatalf("width %d line %q: chunk %d offset %d exceeds line length %d",
+						width, line, i, chunk.rawStart, len(line))
+				}
+				previous = chunk.rawStart
+			}
+
+			// A row may exceed the requested width only when it is a single
+			// grapheme cluster that is itself wider — a two-cell CJK rune
+			// cannot be split to fit a one-column budget.
+			if lipgloss.Width(line) > width && width > 0 {
+				for i, row := range rows {
+					if lipgloss.Width(row) <= width {
+						continue
+					}
+					graphemes := uniseg.NewGraphemes(row)
+					count := 0
+					for graphemes.Next() {
+						count++
+					}
+					if count > 1 {
+						t.Fatalf("width %d: row %d is %d cells across %d clusters: %q",
+							width, i, lipgloss.Width(row), count, row)
+					}
+				}
+			}
+		}
+	}
+}
+
+// splitDisplayChunks is the text projection of the offset-aware splitter.
+func TestSplitDisplayChunksProjectsTheOffsetAwareSplitter(t *testing.T) {
+	for _, word := range []string{"", "abc", strings.Repeat("x", 33), "界界界🙂界"} {
+		for _, width := range []int{1, 3, 8} {
+			withOffsets := splitDisplayChunksAt(word, 5, width)
+			plain := splitDisplayChunks(word, width)
+			if len(withOffsets) != len(plain) {
+				t.Fatalf("word %q width %d: %d chunks vs %d", word, width, len(withOffsets), len(plain))
+			}
+			for i := range plain {
+				if plain[i] != withOffsets[i].text {
+					t.Fatalf("word %q width %d chunk %d: %q vs %q", word, width, i, plain[i], withOffsets[i].text)
+				}
+				if withOffsets[i].rawStart < 5 {
+					t.Fatalf("word %q width %d chunk %d: offset %d ignores the word start", word, width, i, withOffsets[i].rawStart)
+				}
+			}
+		}
+	}
+}
