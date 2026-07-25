@@ -189,14 +189,18 @@ PATH wrapper variables such as `LOCAL_AGENT_NO_VAULT` and
 ## Appearance
 
 The terminal palette is chosen with `/theme`, which opens a picker, or set
-directly with `/theme <name>`. Six schemes are built in:
+directly with `/theme <name>`. Ten schemes are built in:
 
 | Name | Notes |
 |---|---|
 | `nord` | Arctic blues; the default |
 | `catppuccin` | Mocha on dark terminals, Latte on light |
 | `dracula` | High-contrast neon on dark |
+| `everforest` | Soft forest greens, easy on the eyes |
 | `gruvbox` | Warm retro contrast |
+| `kanagawa` | Wave on dark terminals, Lotus on light |
+| `one` | Atom's One Dark and One Light |
+| `rose-pine` | Muted natural tones; Dawn on light |
 | `solarized` | Ethan Schoonover's precision palette |
 | `tokyo-night` | Storm on dark terminals, Day on light |
 

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"image/color"
 	"math"
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -109,4 +111,51 @@ func relativeLuminance(value color.Color) float64 {
 		return math.Pow((srgb+0.055)/1.055, 2.4)
 	}
 	return 0.2126*linear(red) + 0.7152*linear(green) + 0.0722*linear(blue)
+}
+
+// Themes must be visually distinct. A registry entry whose palette duplicates
+// another is a menu item that does nothing, and copy-paste is exactly how that
+// happens when adding a scheme.
+func TestRegisteredThemesAreDistinct(t *testing.T) {
+	seen := map[string]string{}
+	for _, id := range themeIDs() {
+		theme := resolveTheme(id)
+		for _, mode := range []struct {
+			name   string
+			colors themeColors
+		}{{"dark", theme.Dark}, {"light", theme.Light}} {
+			key := fmt.Sprintf("%s|%v", mode.name, mode.colors)
+			if previous, duplicate := seen[key]; duplicate {
+				t.Errorf("%s/%s has the same palette as %s", theme.ID, mode.name, previous)
+			}
+			seen[key] = theme.ID + "/" + mode.name
+		}
+	}
+}
+
+// Every registered theme must be fully specified. A blank role silently falls
+// back to the terminal default and breaks the semantic vocabulary.
+func TestRegisteredThemesAreComplete(t *testing.T) {
+	for _, id := range themeIDs() {
+		theme := resolveTheme(id)
+		if strings.TrimSpace(theme.Label) == "" || strings.TrimSpace(theme.Description) == "" {
+			t.Errorf("%s is missing a label or description", theme.ID)
+		}
+		if !strings.HasPrefix(theme.DarkReference, "#") || len(theme.DarkReference) != 7 {
+			t.Errorf("%s has an invalid dark reference %q", theme.ID, theme.DarkReference)
+		}
+		for _, mode := range []struct {
+			name   string
+			colors themeColors
+		}{{"dark", theme.Dark}, {"light", theme.Light}} {
+			value := reflect.ValueOf(mode.colors)
+			for i := 0; i < value.NumField(); i++ {
+				hex := value.Field(i).String()
+				if !strings.HasPrefix(hex, "#") || len(hex) != 7 {
+					t.Errorf("%s/%s %s = %q is not a 6-digit hex color",
+						theme.ID, mode.name, value.Type().Field(i).Name, hex)
+				}
+			}
+		}
+	}
 }

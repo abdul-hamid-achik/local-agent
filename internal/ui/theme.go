@@ -144,6 +144,80 @@ var themes = map[string]Theme{
 			Border: "#93A1A1",
 		},
 	},
+	"rose-pine": {
+		ID:            "rose-pine",
+		Label:         "Rosé Pine",
+		Description:   "Muted natural tones; Dawn on light terminals",
+		DarkReference: "#191724",
+		// Rosé Pine has no green. Success maps to foam, the palette's own
+		// affirmative token, rather than importing a hue the scheme rejects.
+		Dark: themeColors{
+			Dim: "#908CAA", Muted: "#C9C6DC", Text: "#E0DEF4",
+			Accent: "#EBBCBA", Accent2: "#9CCFD8", Error: "#EB6F92",
+			Success: "#9CCFD8", Special: "#C4A7E7", Warning: "#F6C177",
+			Border: "#403D52",
+		},
+		Light: themeColors{
+			Dim: "#767291", Muted: "#575279", Text: "#464261",
+			Accent: "#B05A73", Accent2: "#286983", Error: "#B05A73",
+			Success: "#286983", Special: "#836B9F", Warning: "#8A5A0B",
+			Border: "#DFDAD9",
+		},
+	},
+	"everforest": {
+		ID:            "everforest",
+		Label:         "Everforest",
+		Description:   "Soft forest greens, easy on the eyes",
+		DarkReference: "#2D353B",
+		Dark: themeColors{
+			Dim: "#949F97", Muted: "#C0B6A0", Text: "#D3C6AA",
+			Accent: "#83C092", Accent2: "#7FBBB3", Error: "#E67E80",
+			Success: "#A7C080", Special: "#D699B6", Warning: "#DBBC7F",
+			Border: "#4F585E",
+		},
+		Light: themeColors{
+			Dim: "#6B7A6A", Muted: "#5C6A72", Text: "#4A555B",
+			Accent: "#2A8462", Accent2: "#317CA5", Error: "#E02F2C",
+			Success: "#6C7B01", Special: "#C4407F", Warning: "#966F00",
+			Border: "#E0DCC7",
+		},
+	},
+	"one": {
+		ID:            "one",
+		Label:         "One",
+		Description:   "Atom's One Dark and One Light",
+		DarkReference: "#282C34",
+		Dark: themeColors{
+			Dim: "#8C93A0", Muted: "#ABB2BF", Text: "#D7DAE0",
+			Accent: "#56B6C2", Accent2: "#61AFEF", Error: "#E96D77",
+			Success: "#98C379", Special: "#C678DD", Warning: "#E5C07B",
+			Border: "#3E4451",
+		},
+		Light: themeColors{
+			Dim: "#696C77", Muted: "#4F525E", Text: "#383A42",
+			Accent: "#017DB2", Accent2: "#2F6CF1", Error: "#CA3431",
+			Success: "#3C853B", Special: "#A626A4", Warning: "#986801",
+			Border: "#D3D3D6",
+		},
+	},
+	"kanagawa": {
+		ID:            "kanagawa",
+		Label:         "Kanagawa",
+		Description:   "Wave on dark terminals, Lotus on light",
+		DarkReference: "#1F1F28",
+		Dark: themeColors{
+			Dim: "#9A968C", Muted: "#C8C3AC", Text: "#DCD7BA",
+			Accent: "#7AA89F", Accent2: "#7E9CD8", Error: "#E46876",
+			Success: "#98BB6C", Special: "#957FB8", Warning: "#E6C384",
+			Border: "#363646",
+		},
+		Light: themeColors{
+			Dim: "#716E61", Muted: "#5F5F70", Text: "#545464",
+			Accent: "#597B75", Accent2: "#4D699B", Error: "#C84053",
+			Success: "#5F7742", Special: "#624C83", Warning: "#77713F",
+			Border: "#E4D794",
+		},
+	},
 	"dracula": {
 		ID:            "dracula",
 		Label:         "Dracula",

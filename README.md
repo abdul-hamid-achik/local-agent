@@ -408,7 +408,7 @@ privacy:
 # Presentation only. /theme overrides this for the current user and remembers
 # the choice; an unknown name falls back to the default rather than failing.
 ui:
-  theme: nord # nord | catppuccin | dracula | gruvbox | solarized | tokyo-night
+  theme: nord # nord | catppuccin | dracula | everforest | gruvbox | kanagawa | one | rose-pine | solarized | tokyo-night
 
 model:
   default_model: qwen3.5:2b
