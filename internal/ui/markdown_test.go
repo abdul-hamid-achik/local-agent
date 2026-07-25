@@ -20,7 +20,7 @@ func TestMarkdownStyleUsesAdaptiveNonErrorInlineCode(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			style := markdownStyleConfig(tt.isDark)
+			style := markdownStyleConfig(tt.isDark, defaultThemeID)
 			if style.Code.Color == nil || *style.Code.Color != tt.foreground {
 				t.Fatalf("inline code foreground = %v, want %s", style.Code.Color, tt.foreground)
 			}
@@ -43,7 +43,7 @@ func TestMarkdownInlineCodeMeetsNormalTextContrast(t *testing.T) {
 		{name: "dark", isDark: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			style := markdownStyleConfig(test.isDark)
+			style := markdownStyleConfig(test.isDark, defaultThemeID)
 			if style.Code.Color == nil || style.Code.BackgroundColor == nil {
 				t.Fatalf("inline code style is incomplete: foreground=%v background=%v", style.Code.Color, style.Code.BackgroundColor)
 			}
@@ -59,7 +59,7 @@ func TestMarkdownInlineCodeMeetsNormalTextContrast(t *testing.T) {
 }
 
 func TestMarkdownReadableMeasurePreservesWideWorkBlocks(t *testing.T) {
-	renderer := NewMarkdownRenderer(160, true)
+	renderer := NewMarkdownRenderer(160, true, defaultThemeID)
 	if renderer.proseWidth != ProseTargetCandidate {
 		t.Fatalf("prose width = %d, want %d", renderer.proseWidth, ProseTargetCandidate)
 	}

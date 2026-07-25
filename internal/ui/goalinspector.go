@@ -81,7 +81,7 @@ func NewGoalInspector(snapshot goal.Snapshot, actions []command.ActionState, opt
 		now:              now,
 		persistenceDirty: options.PersistenceDirty,
 		recoveryStatus:   strings.TrimSpace(options.RecoveryStatus),
-		styles:           NewStyles(options.IsDark),
+		styles:           NewStyles(options.IsDark, resolveThemeID(options.ThemeID)),
 	}
 	inspector.selected = inspector.firstEnabledAction()
 	inspector.rebuildViewport(false)
@@ -112,11 +112,11 @@ func (i *GoalInspector) SetSize(width, height int) {
 }
 
 // SetTheme reapplies the project LightDark-derived semantic palette.
-func (i *GoalInspector) SetTheme(isDark bool, themeIDs ...string) {
+func (i *GoalInspector) SetTheme(isDark bool, themeID string) {
 	if i == nil {
 		return
 	}
-	themeID := resolveThemeID(themeIDs...)
+	themeID = resolveThemeID(themeID)
 	if i.isDark == isDark && resolveThemeID(i.themeID) == themeID {
 		return
 	}

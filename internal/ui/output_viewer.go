@@ -345,7 +345,7 @@ func (viewer *OutputViewer) SetSize(width, height int) {
 
 // SetTheme changes adaptive presentation styles without moving the semantic
 // source-row anchor.
-func (viewer *OutputViewer) SetTheme(isDark bool, themeIDs ...string) {
+func (viewer *OutputViewer) SetTheme(isDark bool, themeID string) {
 	if viewer == nil || viewer.isDark == isDark {
 		return
 	}
@@ -746,9 +746,9 @@ func (viewer *OutputViewer) pushHistory(cursor OutputDetailCursor) {
 }
 
 func (viewer *OutputViewer) applyTheme() {
-	viewer.styles = NewStyles(viewer.isDark)
+	viewer.styles = NewStyles(viewer.isDark, viewer.themeID)
 	viewer.search.SetStyles(semanticTextInputStyles(viewer.isDark, viewer.themeID, viewer.reducedMotion))
-	palette := outputSemanticPalette(viewer.isDark)
+	palette := outputSemanticPalette(viewer.isDark, viewer.themeID)
 	viewer.viewport.HighlightStyle = lipgloss.NewStyle().
 		Foreground(palette.Text).
 		Underline(true)

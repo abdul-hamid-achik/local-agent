@@ -413,9 +413,9 @@ func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, com
 	ta.ShowLineNumbers = false
 	// A single send marker followed by continuation rails makes multiline
 	// drafts read as one composer instead of several submitted messages.
-	configureComposerModeWithGlyphProfile(&ta, true, ModeNormal, reducedMotion, glyphProfile)
+	configureComposerModeWithGlyphProfile(&ta, true, defaultThemeID, ModeNormal, reducedMotion, glyphProfile)
 
-	initialStyles := NewStyles(true)
+	initialStyles := NewStyles(true, defaultThemeID)
 	mainSpinner := spinner.MiniDot
 	if glyphProfile == GlyphASCII {
 		mainSpinner = spinner.Line
@@ -1146,17 +1146,17 @@ func standaloneRecoveryTarget(states []execution.State, snapshotCursor int64, se
 	return nil
 }
 
-func agentTextareaStyles(isDark bool) textarea.Styles {
-	return agentTextareaStylesForMode(isDark, ModeNormal)
+func agentTextareaStyles(isDark bool, themeID string) textarea.Styles {
+	return agentTextareaStylesForMode(isDark, themeID, ModeNormal)
 }
 
 // agentTextareaStylesForMode keeps the composer's focus treatment semantic:
 // NORMAL is a quiet neutral rail, PLAN uses Nord purple, and AUTO uses the
 // success green already shared by completed work. outputSemanticPalette also
 // preserves NO_COLOR behavior.
-func agentTextareaStylesForMode(isDark bool, mode Mode) textarea.Styles {
+func agentTextareaStylesForMode(isDark bool, themeID string, mode Mode) textarea.Styles {
 	styles := textarea.DefaultStyles(isDark)
-	palette := outputSemanticPalette(isDark)
+	palette := outputSemanticPalette(isDark, themeID)
 	// Dim is the quiet neutral token that still meets text contrast. Border is
 	// deliberately softer and made the NORMAL send marker hard to read on light
 	// terminals.
@@ -1188,19 +1188,20 @@ func agentTextareaStylesForMode(isDark bool, mode Mode) textarea.Styles {
 	return styles
 }
 
-func configureComposerMode(input *textarea.Model, isDark bool, mode Mode, reducedMotion ...bool) {
+func configureComposerMode(input *textarea.Model, isDark bool, themeID string, mode Mode, reducedMotion ...bool) {
 	staticCursor := len(reducedMotion) > 0 && reducedMotion[0]
-	configureComposerModeWithGlyphProfile(input, isDark, mode, staticCursor, GlyphUnicode)
+	configureComposerModeWithGlyphProfile(input, isDark, themeID, mode, staticCursor, GlyphUnicode)
 }
 
 func configureComposerModeWithGlyphProfile(
 	input *textarea.Model,
 	isDark bool,
+	themeID string,
 	mode Mode,
 	reducedMotion bool,
 	profile GlyphProfile,
 ) {
-	styles := agentTextareaStylesForMode(isDark, mode)
+	styles := agentTextareaStylesForMode(isDark, themeID, mode)
 	styles.Cursor.Blink = !reducedMotion
 	input.SetStyles(styles)
 	glyphs := glyphSet(resolveGlyphProfile(profile))

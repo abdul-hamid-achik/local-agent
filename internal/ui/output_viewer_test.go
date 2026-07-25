@@ -950,7 +950,7 @@ func TestOutputViewerPreservesSemanticAnchorAcrossResizeThemeAndSearch(t *testin
 	if got := fixture.viewer.Anchor(); got != before {
 		t.Fatalf("resize changed semantic anchor: before=%#v after=%#v", before, got)
 	}
-	fixture.viewer.SetTheme(false)
+	fixture.viewer.SetTheme(false, defaultThemeID)
 	if got := fixture.viewer.Anchor(); got != before {
 		t.Fatalf("theme changed semantic anchor: before=%#v after=%#v", before, got)
 	}
@@ -1010,7 +1010,7 @@ func TestOutputViewerReducedMotionDisablesBlinkWithoutChangingViewerState(t *tes
 	}
 
 	// Theme replacement must continue honoring the independent motion axis.
-	fixture.viewer.SetTheme(false)
+	fixture.viewer.SetTheme(false, defaultThemeID)
 	_, themedCursor := fixture.viewer.ViewWithCursor()
 	if themedCursor == nil || themedCursor.Blink ||
 		fixture.viewer.search.Styles().Cursor.Blink {

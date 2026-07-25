@@ -554,11 +554,11 @@ func (m *Model) resizeViewerModals() {
 
 func (m *Model) restyleViewerModals() {
 	for _, viewer := range m.outputViewers {
-		viewer.SetTheme(m.isDark)
+		viewer.SetTheme(m.isDark, m.themeID)
 		viewer.SetReducedMotion(m.reducedMotion)
 	}
 	for _, viewer := range m.diffViewers {
-		viewer.SetTheme(m.isDark)
+		viewer.SetTheme(m.isDark, m.themeID)
 		viewer.SetReducedMotion(m.reducedMotion)
 	}
 }

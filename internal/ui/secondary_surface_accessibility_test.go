@@ -50,6 +50,7 @@ func TestASCIIProfileCoversCortexAndGoalSurfaces(t *testing.T) {
 		80,
 		24,
 		true,
+		defaultThemeID,
 		true,
 		GlyphASCII,
 	)

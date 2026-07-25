@@ -167,3 +167,46 @@ func TestThemeSwitchRejectsUnknownAndKeepsCurrent(t *testing.T) {
 		t.Fatalf("rejected switch changed the active theme to %q", got)
 	}
 }
+
+// No surface may keep painting in the default scheme once another is selected.
+//
+// This is the failure the non-variadic palette signatures exist to prevent, and
+// it shipped anyway: eight call sites — including the constructors of the diff
+// viewer, goal form, goal inspector and goal recovery — resolved a palette
+// without a theme, so those panels opened in Nord while the rest of the frame
+// used the selected scheme. The omission is invisible at the call site, so the
+// frame itself is what has to be checked.
+func TestNoSurfaceKeepsTheDefaultPaletteAfterASwitch(t *testing.T) {
+	// Nord's dark accent. If it survives anywhere in a Dracula frame, some
+	// surface resolved its colors without the active theme.
+	const nordAccent = "136;192;208" // #88C0D0
+
+	for _, overlay := range []struct {
+		name string
+		open func(m *Model)
+	}{
+		{"transcript", func(*Model) {}},
+		{"settings", (*Model).openSettingsPicker},
+		{"theme picker", (*Model).openThemePicker},
+		{"help", func(m *Model) { m.overlay = OverlayHelp; m.initHelpViewport() }},
+		{"runtime", (*Model).openRuntimeStatus},
+	} {
+		t.Run(overlay.name, func(t *testing.T) {
+			m := newTestModel(t)
+			m.entries = []ChatEntry{
+				{Kind: "user", Content: "hey"},
+				{Kind: "assistant", Content: "an answer", RenderedContent: "an answer"},
+			}
+			if !m.SetTheme("dracula") {
+				t.Fatal("SetTheme rejected dracula")
+			}
+			overlay.open(m)
+			m.recalcViewportHeight()
+			m.refreshTranscript()
+
+			if view := m.View().Content; strings.Contains(view, nordAccent) {
+				t.Fatalf("%s still paints with the default theme's accent", overlay.name)
+			}
+		})
+	}
+}

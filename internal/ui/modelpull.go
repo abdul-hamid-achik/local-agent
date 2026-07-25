@@ -72,7 +72,7 @@ func NewModelPullState(isDark, reducedMotion bool, themeID string) *ModelPullSta
 	styles.Cursor.Blink = !reducedMotion
 	input.SetStyles(styles)
 
-	palette := outputSemanticPalette(isDark)
+	palette := outputSemanticPalette(isDark, themeID)
 	bar := progress.New(progress.WithColors(palette.Accent), progress.WithSpringOptions(20, 1))
 	bar.EmptyColor = palette.Border
 	bar.PercentageStyle = lipgloss.NewStyle().Foreground(palette.Muted)
@@ -80,11 +80,11 @@ func NewModelPullState(isDark, reducedMotion bool, themeID string) *ModelPullSta
 	return &ModelPullState{Input: input, Progress: bar, Spinner: spin, Phase: ModelPullEntry, isDark: isDark, reducedMotion: reducedMotion}
 }
 
-func (s *ModelPullState) SetTheme(isDark bool, themeIDs ...string) {
+func (s *ModelPullState) SetTheme(isDark bool, themeID string) {
 	if s == nil {
 		return
 	}
-	themeID := resolveThemeID(themeIDs...)
+	themeID = resolveThemeID(themeID)
 	if s.isDark == isDark && resolveThemeID(s.themeID) == themeID {
 		return
 	}
@@ -92,7 +92,7 @@ func (s *ModelPullState) SetTheme(isDark bool, themeIDs ...string) {
 	styles := semanticTextInputStyles(isDark, themeID)
 	styles.Cursor.Blink = !s.reducedMotion
 	s.Input.SetStyles(styles)
-	palette := outputSemanticPalette(isDark)
+	palette := outputSemanticPalette(isDark, themeID)
 	s.Progress.FullColor = palette.Accent
 	s.Progress.EmptyColor = palette.Border
 	s.Progress.PercentageStyle = lipgloss.NewStyle().Foreground(palette.Muted)
@@ -200,7 +200,7 @@ func (s *ModelPullState) render(width int, compact, hardwareCursor bool) (string
 		return "", nil
 	}
 	width = max(24, width)
-	palette := outputSemanticPalette(s.isDark)
+	palette := outputSemanticPalette(s.isDark, s.themeID)
 	title := lipgloss.NewStyle().Foreground(palette.Accent).Bold(true).Render("Add Ollama model")
 	muted := lipgloss.NewStyle().Foreground(palette.Dim)
 	var body strings.Builder

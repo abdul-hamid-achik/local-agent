@@ -242,11 +242,11 @@ func TestComposerModeRailIsImmediateAdaptiveAndCompact(t *testing.T) {
 		t.Run(map[bool]string{false: "light", true: "dark"}[isDark], func(t *testing.T) {
 			m := newTestModel(t)
 			m.isDark = isDark
-			m.styles = NewStyles(isDark)
-			configureComposerMode(&m.input, isDark, ModeNormal)
+			m.styles = NewStyles(isDark, defaultThemeID)
+			configureComposerMode(&m.input, isDark, defaultThemeID, ModeNormal)
 			updated, _ := m.Update(tea.WindowSizeMsg{Width: minTerminalWidth, Height: minTerminalHeight})
 			m = updated.(*Model)
-			palette := newSemanticPalette(isDark)
+			palette := newSemanticPalette(isDark, defaultThemeID)
 
 			assertSameColor(t, "normal composer rail", m.input.Styles().Focused.Prompt.GetForeground(), palette.Dim)
 			normal := m.View()
@@ -310,12 +310,12 @@ func TestComposerModeRailRespectsNoColor(t *testing.T) {
 	for _, mode := range []Mode{ModeNormal, ModePlan, ModeAuto} {
 		m := newTestModel(t)
 		m.mode = mode
-		m.styles = NewStyles(true)
-		configureComposerMode(&m.input, true, mode)
+		m.styles = NewStyles(true, defaultThemeID)
+		configureComposerMode(&m.input, true, defaultThemeID, mode)
 		updated, _ := m.Update(tea.WindowSizeMsg{Width: minTerminalWidth, Height: minTerminalHeight})
 		m = updated.(*Model)
 
-		styles := agentTextareaStylesForMode(true, mode)
+		styles := agentTextareaStylesForMode(true, defaultThemeID, mode)
 		if rendered := styles.Focused.Prompt.Render("┃"); lipgloss.Width(rendered) != 1 || hasANSIColor(rendered) {
 			t.Fatalf("mode %v NO_COLOR rail = %q", mode, rendered)
 		}
@@ -652,7 +652,7 @@ func TestGoalTurnAuthorityRemainsAutoAfterConversationalModeCycle(t *testing.T) 
 	m := newGoalRuntimeTestModel(t, client)
 	// Reproduce a goal created in AUTO followed by a Shift+Tab cycle to PLAN.
 	m.mode = ModePlan
-	configureComposerMode(&m.input, m.isDark, m.mode)
+	configureComposerMode(&m.input, m.isDark, m.themeID, m.mode)
 
 	cmd := m.sendGoalToAgentTurn("continue the admitted goal", "turn_goal_authority", agent.TurnLimits{})
 	if cmd == nil || m.state != StateWaiting {

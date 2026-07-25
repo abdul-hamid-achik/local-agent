@@ -760,7 +760,7 @@ func TestModelPullFailureCanRetryOrEdit(t *testing.T) {
 func TestModelPullThemeChangePreservesOperationState(t *testing.T) {
 	state := NewModelPullState(true, false, defaultThemeID)
 	state.Name, state.Phase, state.Completed, state.Total = "qwen", ModelPullRunning, 25, 100
-	state.SetTheme(false)
+	state.SetTheme(false, defaultThemeID)
 	if state.isDark || state.Name != "qwen" || state.Phase != ModelPullRunning || state.Completed != 25 || state.Total != 100 {
 		t.Fatalf("theme change lost state: %#v", state)
 	}

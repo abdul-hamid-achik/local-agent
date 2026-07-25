@@ -15,7 +15,7 @@ func remapTestPalette(t *testing.T) semanticPalette {
 	previous := noColor
 	noColor = false
 	t.Cleanup(func() { noColor = previous })
-	return newSemanticPalette(true)
+	return newSemanticPalette(true, defaultThemeID)
 }
 
 func remapStyle(palette semanticPalette, foreground interface{ RGBA() (r, g, b, a uint32) }, bold bool) lipgloss.Style {

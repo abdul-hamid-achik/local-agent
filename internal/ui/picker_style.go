@@ -211,6 +211,6 @@ func (m *Model) restylePickerOverlays() {
 		}
 	}
 	if state := m.modelPullState; state != nil {
-		state.SetTheme(m.isDark)
+		state.SetTheme(m.isDark, m.themeID)
 	}
 }

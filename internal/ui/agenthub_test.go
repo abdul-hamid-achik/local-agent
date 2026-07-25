@@ -594,7 +594,7 @@ func TestAgentHubFailsClosedInsteadOfRetainingLastGoodProjection(t *testing.T) {
 	if state.List.FilterState() != list.Unfiltered || state.Back() {
 		t.Fatal("unavailable projection retained an invisible filter or consumed close")
 	}
-	content := ansi.Strip(state.hubContent(NewStyles(true)))
+	content := ansi.Strip(state.hubContent(NewStyles(true, defaultThemeID)))
 	if !strings.Contains(content, "Agent activity is unavailable.") ||
 		!strings.Contains(content, "safe runtime projection was rejected") ||
 		strings.Contains(content, "critic") {
@@ -679,7 +679,7 @@ func TestAgentHubResizeThemeAndActiveGeometryPreserveState(t *testing.T) {
 	}
 
 	offset := m.agentHubState.Viewer.YOffset()
-	m.agentHubState.SetTheme(false, true)
+	m.agentHubState.SetTheme(false, true, defaultThemeID)
 	if m.agentHubState.Mode != agentHubViewerMode ||
 		m.agentHubState.ViewerGroupID != groupID ||
 		m.agentHubState.Viewer.YOffset() != offset {
@@ -817,6 +817,7 @@ func TestAgentHubIsPreemptedAndClearedByCortexDecision(t *testing.T) {
 		m.width,
 		m.height,
 		m.isDark,
+		m.themeID,
 		true,
 	)
 	if err != nil {

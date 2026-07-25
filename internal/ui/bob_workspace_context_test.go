@@ -100,7 +100,7 @@ func TestBobWorkspaceContextCardIsOneRowResponsiveCachedAndNoColor(t *testing.T)
 		t.Fatal("width change retained stale Bob context render")
 	}
 	_ = card.View()
-	card.SetTheme(false)
+	card.SetTheme(false, defaultThemeID)
 	if card.cachedView != "" {
 		t.Fatal("theme change retained stale Bob context render")
 	}

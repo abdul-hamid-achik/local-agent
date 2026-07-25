@@ -115,7 +115,7 @@ func TestCortexDecisionRendersInlineAtSupportedSizesWithoutPreselection(t *testi
 			m.input.SetValue("preserved draft")
 			presentation, err := newCortexDecisionPresentation(
 				"task_decision", *cortexDecisionFixture("display"),
-				size.width, size.height, m.isDark, true,
+				size.width, size.height, m.isDark, m.themeID, true,
 			)
 			if err != nil {
 				t.Fatal(err)

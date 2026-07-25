@@ -70,7 +70,7 @@ func (c *bobWorkspaceContextCard) SetWidth(width int) {
 	c.invalidate()
 }
 
-func (c *bobWorkspaceContextCard) SetTheme(isDark bool, themeIDs ...string) {
+func (c *bobWorkspaceContextCard) SetTheme(isDark bool, themeID string) {
 	if c.isDark == isDark {
 		return
 	}

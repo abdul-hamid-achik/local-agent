@@ -82,6 +82,7 @@ func TestTranscriptSearchIsPreemptedByCortexDecision(t *testing.T) {
 		m.width,
 		m.height,
 		m.isDark,
+		m.themeID,
 		true,
 		m.glyphProfile,
 	)

@@ -33,13 +33,13 @@ type semanticPalette struct {
 
 // newSemanticPalette resolves the color vocabulary for one appearance.
 //
-// The theme is variadic to match the codebase's existing resolveGlyphProfile
-// idiom, and because the palette is consulted from free functions that render
-// bounded values without a Model in scope. Omitting it selects the default
-// theme; a component that has one must pass it, or the frame paints two
-// schemes at once.
-func newSemanticPalette(isDark bool, themeIDs ...string) semanticPalette {
-	colors := resolveTheme(resolveThemeID(themeIDs...)).themeColorsFor(isDark)
+// themeID is required, not variadic. A variadic theme reads nicely and shipped
+// eight surfaces that silently painted in the default scheme while the rest of
+// the frame used the selected one — the omission is invisible at the call site
+// and invisible in review. An empty string still means "default", so a caller
+// that genuinely has no theme says so explicitly.
+func newSemanticPalette(isDark bool, themeID string) semanticPalette {
+	colors := resolveTheme(resolveThemeID(themeID)).themeColorsFor(isDark)
 	return semanticPalette{
 		Dim:     lipgloss.Color(colors.Dim),
 		Muted:   lipgloss.Color(colors.Muted),
@@ -65,9 +65,9 @@ func resolveThemeID(themeIDs ...string) string {
 	return defaultThemeID
 }
 
-func outputSemanticPalette(isDark bool, themeIDs ...string) semanticPalette {
+func outputSemanticPalette(isDark bool, themeID string) semanticPalette {
 	if !noColor {
-		return newSemanticPalette(isDark, themeIDs...)
+		return newSemanticPalette(isDark, themeID)
 	}
 	plain := lipgloss.NoColor{}
 	return semanticPalette{
@@ -173,17 +173,17 @@ type Styles struct {
 }
 
 // NewStyles creates a Styles set based on the background color.
-func NewStyles(isDark bool, themeIDs ...string) Styles {
+func NewStyles(isDark bool, themeID string) Styles {
 	if noColor {
 		return plainStyles()
 	}
-	return adaptiveStyles(isDark, themeIDs...)
+	return adaptiveStyles(isDark, themeID)
 }
 
-func adaptiveStyles(isDark bool, themeIDs ...string) Styles {
+func adaptiveStyles(isDark bool, themeID string) Styles {
 	// Body-muted colors must remain readable; border colors can be subtler.
 	// LightDark keeps every semantic token adaptive without hardcoded ANSI.
-	palette := newSemanticPalette(isDark, themeIDs...)
+	palette := newSemanticPalette(isDark, themeID)
 	colorDim := palette.Dim
 	colorMuted := palette.Muted
 	colorText := palette.Text

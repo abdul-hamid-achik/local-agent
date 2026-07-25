@@ -233,7 +233,7 @@ func TestOverlayOnContent_PreservesStyledWideTranscriptCells(t *testing.T) {
 
 	baseText := "界 transcript 🙂 remains"
 	baseText += strings.Repeat("·", m.width-lipgloss.Width(baseText))
-	palette := newSemanticPalette(true)
+	palette := newSemanticPalette(true, defaultThemeID)
 	baseLine := lipgloss.NewStyle().
 		Foreground(palette.Text).
 		Background(palette.Border).

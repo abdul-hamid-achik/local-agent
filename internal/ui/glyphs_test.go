@@ -147,7 +147,7 @@ func TestASCIIProfilePropagatesAcrossPrimarySemanticSurfaces(t *testing.T) {
 	diff := renderUnifiedDiffAtWidth(
 		"main.go",
 		[]DiffLine{{Kind: DiffAdded, Content: strings.Repeat("content ", 8), NewLine: 1}},
-		NewStyles(true),
+		NewStyles(true, defaultThemeID),
 		0,
 		18,
 		GlyphASCII,

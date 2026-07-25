@@ -69,7 +69,7 @@ func (c *continuationActionCard) SetWidth(width int) {
 	c.invalidate()
 }
 
-func (c *continuationActionCard) SetTheme(isDark bool, themeIDs ...string) {
+func (c *continuationActionCard) SetTheme(isDark bool, themeID string) {
 	if c.isDark == isDark {
 		return
 	}

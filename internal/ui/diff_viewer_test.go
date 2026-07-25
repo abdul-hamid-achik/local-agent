@@ -674,7 +674,7 @@ func TestDiffViewerThemeAndReducedMotionPreserveAnchorSelectionAndGeometry(t *te
 		t.Fatal("theme fixture search is not focused with motion enabled")
 	}
 
-	viewer.SetTheme(false)
+	viewer.SetTheme(false, defaultThemeID)
 	if got := viewer.CurrentAnchor(); got != beforeAnchor {
 		t.Fatalf("theme changed anchor from %+v to %+v", beforeAnchor, got)
 	}
@@ -695,7 +695,7 @@ func TestDiffViewerThemeAndReducedMotionPreserveAnchorSelectionAndGeometry(t *te
 		t.Fatal("reduced motion changed anchor, geometry, selection, or search state")
 	}
 
-	viewer.SetTheme(true)
+	viewer.SetTheme(true, defaultThemeID)
 	if viewer.search.Styles().Cursor.Blink {
 		t.Fatal("theme refresh re-enabled blink under reduced motion")
 	}
@@ -795,7 +795,7 @@ func TestDiffViewerRebuildPreservesCursorScreenRowAndOffset(t *testing.T) {
 			beforeOffset, beforeScreenRow)
 	}
 
-	viewer.SetTheme(false)
+	viewer.SetTheme(false, defaultThemeID)
 	if got := viewer.viewport.YOffset(); got != beforeOffset {
 		t.Fatalf("theme rebuild offset = %d, want %d", got, beforeOffset)
 	}
@@ -840,7 +840,7 @@ func TestDiffViewerRedundantPresentationSettersDoNotRebuild(t *testing.T) {
 
 	viewer.SetSize(80, 24)
 	viewer.SetScreenRect(NewCellRect(0, 0, 80, 24))
-	viewer.SetTheme(true)
+	viewer.SetTheme(true, defaultThemeID)
 	viewer.SetReducedMotion(false)
 
 	if got := &viewer.rows[0]; got != beforeRows {

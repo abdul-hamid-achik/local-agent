@@ -461,12 +461,12 @@ func (state *AgentHubState) fitViewerToContent() {
 	state.Viewer.SetHeight(rows)
 }
 
-func (state *AgentHubState) SetTheme(isDark bool, reducedMotion bool, themeIDs ...string) {
+func (state *AgentHubState) SetTheme(isDark bool, reducedMotion bool, themeID string) {
 	if state == nil {
 		return
 	}
 	state.isDark = isDark
-	state.themeID = resolveThemeID(themeIDs...)
+	state.themeID = resolveThemeID(themeID)
 	state.reducedMotion = reducedMotion
 	delegate := newAgentHubDelegate(isDark, state.compact, state.themeID, state.glyphProfile)
 	state.List.SetDelegate(delegate)

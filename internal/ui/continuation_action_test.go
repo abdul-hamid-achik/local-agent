@@ -134,7 +134,7 @@ func TestContinuationActionCardCachesAndInvalidatesOnLayoutOrTheme(t *testing.T)
 		t.Fatal("width change retained stale cached view")
 	}
 	_ = card.View()
-	card.SetTheme(false)
+	card.SetTheme(false, defaultThemeID)
 	if card.cachedView != "" {
 		t.Fatal("theme change retained stale cached view")
 	}

@@ -46,7 +46,9 @@ func newCortexDecisionPresentation(
 	taskID string,
 	decision goaladvisor.PendingDecision,
 	width, height int,
-	isDark, reducedMotion bool,
+	isDark bool,
+	themeID string,
+	reducedMotion bool,
 	profiles ...GlyphProfile,
 ) (*cortexDecisionPresentation, error) {
 	requestSHA256, err := decision.RequestBindingSHA256(taskID)
@@ -65,19 +67,19 @@ func newCortexDecisionPresentation(
 		Selected: -1, width: width, height: height, isDark: isDark, reducedMotion: reducedMotion,
 		glyphProfile: resolveGlyphProfile(profiles...),
 	}
-	presentation.SetTheme(isDark)
+	presentation.SetTheme(isDark, themeID)
 	presentation.resizeDetail(false)
 	return presentation, nil
 }
 
-func (p *cortexDecisionPresentation) SetTheme(isDark bool, themeIDs ...string) {
+func (p *cortexDecisionPresentation) SetTheme(isDark bool, themeID string) {
 	if p == nil {
 		return
 	}
 	p.isDark = isDark
 	p.styles = NewStyles(isDark, p.themeID)
 	p.warningStyle = lipgloss.NewStyle().
-		Foreground(outputSemanticPalette(isDark).Warning).
+		Foreground(outputSemanticPalette(isDark, p.themeID).Warning).
 		Bold(true)
 	p.cacheValid = false
 }

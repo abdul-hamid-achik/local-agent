@@ -37,7 +37,7 @@ func glamourStyle(isDark bool) string {
 	return "light"
 }
 
-func markdownStyleConfig(isDark bool, themeIDs ...string) ansi.StyleConfig {
+func markdownStyleConfig(isDark bool, themeID string) ansi.StyleConfig {
 	style := glamourStyles.LightStyleConfig
 	if isDark {
 		style = glamourStyles.DarkStyleConfig
@@ -49,7 +49,7 @@ func markdownStyleConfig(isDark bool, themeIDs ...string) ansi.StyleConfig {
 	// errors. Keep the standard Markdown grammar and code-block highlighting,
 	// but project inline code through Local Agent's adaptive text vocabulary;
 	// the background already gives code its distinct visual treatment.
-	palette := newSemanticPalette(isDark, themeIDs...)
+	palette := newSemanticPalette(isDark, themeID)
 	lightDark := lipgloss.LightDark(isDark)
 	foreground := colorHex(palette.Text)
 	background := colorHex(lightDark(
@@ -76,8 +76,8 @@ func colorHex(value color.Color) string {
 	return fmt.Sprintf("#%02X%02X%02X", uint8(r>>8), uint8(g>>8), uint8(b>>8))
 }
 
-func newMarkdownTermRenderer(width int, isDark bool, themeIDs ...string) (*glamour.TermRenderer, error) {
-	style := glamour.WithStyles(markdownStyleConfig(isDark, themeIDs...))
+func newMarkdownTermRenderer(width int, isDark bool, themeID string) (*glamour.TermRenderer, error) {
+	style := glamour.WithStyles(markdownStyleConfig(isDark, themeID))
 	if noColor {
 		style = glamour.WithStandardStyle(glamourStyle(isDark))
 	}
@@ -92,13 +92,13 @@ func newMarkdownTermRenderer(width int, isDark bool, themeIDs ...string) (*glamo
 }
 
 // NewMarkdownRenderer creates a renderer for the given terminal width and theme.
-func NewMarkdownRenderer(width int, isDark bool, themeIDs ...string) *MarkdownRenderer {
+func NewMarkdownRenderer(width int, isDark bool, themeID string) *MarkdownRenderer {
 	workWidth := max(1, width)
 	proseWidth := min(ProseTargetCandidate, workWidth)
-	workRenderer, _ := newMarkdownTermRenderer(workWidth, isDark, themeIDs...)
+	workRenderer, _ := newMarkdownTermRenderer(workWidth, isDark, themeID)
 	proseRenderer := workRenderer
 	if proseWidth != workWidth {
-		proseRenderer, _ = newMarkdownTermRenderer(proseWidth, isDark, themeIDs...)
+		proseRenderer, _ = newMarkdownTermRenderer(proseWidth, isDark, themeID)
 	}
 
 	return &MarkdownRenderer{
@@ -107,7 +107,7 @@ func NewMarkdownRenderer(width int, isDark bool, themeIDs ...string) *MarkdownRe
 		width:         workWidth,
 		proseWidth:    proseWidth,
 		isDark:        isDark,
-		themeID:       resolveThemeID(themeIDs...),
+		themeID:       resolveThemeID(themeID),
 	}
 }
 
@@ -310,7 +310,7 @@ func (mr *MarkdownRenderer) SetWidth(width int) {
 	mr.width = width
 	mr.cachedStreamPrefix = ""
 	mr.cachedStreamRender = ""
-	r, err := newMarkdownTermRenderer(width, mr.isDark)
+	r, err := newMarkdownTermRenderer(width, mr.isDark, mr.themeID)
 	if err == nil {
 		mr.renderer = r
 	}

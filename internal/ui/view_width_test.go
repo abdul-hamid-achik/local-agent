@@ -82,7 +82,7 @@ func TestRenderAssistantMsgWidth(t *testing.T) {
 	}
 
 	// Create markdown renderer
-	m.md = NewMarkdownRenderer(m.width-2, m.isDark)
+	m.md = NewMarkdownRenderer(m.width-2, m.isDark, defaultThemeID)
 
 	longURL := "Check out this URL https://github.com/very/long/path/that/definitely/needs/to/be/wrapped/properly"
 

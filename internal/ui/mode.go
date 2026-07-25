@@ -91,6 +91,7 @@ func (m *Model) syncComposerAuthority() {
 	configureComposerModeWithGlyphProfile(
 		&m.input,
 		m.isDark,
+		m.themeID,
 		m.presentedMode(),
 		m.reducedMotion,
 		m.glyphProfile,

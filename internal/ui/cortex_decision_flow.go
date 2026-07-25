@@ -117,7 +117,7 @@ func (m *Model) presentCortexDecision(advice goaladvisor.Advice) error {
 		return fmt.Errorf("cortex status has no consistent typed pending decision")
 	}
 	presentation, err := newCortexDecisionPresentation(
-		advice.TaskID, *advice.Decision, m.width, m.height, m.isDark, m.reducedMotion,
+		advice.TaskID, *advice.Decision, m.width, m.height, m.isDark, m.themeID, m.reducedMotion,
 		m.glyphProfile,
 	)
 	if err != nil {

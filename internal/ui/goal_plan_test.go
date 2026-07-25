@@ -153,7 +153,7 @@ func TestGoalPlanResponsiveCachedAndWidthSafe(t *testing.T) {
 	if card.renders != 2 || !strings.Contains(expanded, "□ pending") || !strings.Contains(expanded, "The plan is visible") {
 		t.Fatalf("expanded card did not invalidate or show criteria: renders=%d\n%s", card.renders, expanded)
 	}
-	card.SetTheme(false)
+	card.SetTheme(false, defaultThemeID)
 	_ = card.View()
 	if card.renders != 3 {
 		t.Fatalf("theme change did not invalidate cache: renders=%d", card.renders)

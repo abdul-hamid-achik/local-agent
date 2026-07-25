@@ -58,7 +58,7 @@ func TestComputeDiffPreservesFinalNewlineOnlyChanges(t *testing.T) {
 				t.Fatalf("no-newline marker is not immediately after affected side: %#v", lines)
 			}
 
-			plain := ansi.Strip(renderUnifiedDiffAtWidth("alpha.txt", lines, NewStyles(true), 0, 80))
+			plain := ansi.Strip(renderUnifiedDiffAtWidth("alpha.txt", lines, NewStyles(true, defaultThemeID), 0, 80))
 			if strings.Count(plain, diffNoNewlineContent) != 1 {
 				t.Fatalf("rendered patch does not contain the canonical marker once:\n%s", plain)
 			}
@@ -125,7 +125,7 @@ func TestComputeDiffOmitsBinarySnapshotsWithoutRawBytes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			plain := ansi.Strip(renderUnifiedDiffAtWidth("binary.dat", lines, NewStyles(true), 0, 80))
+			plain := ansi.Strip(renderUnifiedDiffAtWidth("binary.dat", lines, NewStyles(true, defaultThemeID), 0, 80))
 			if strings.Contains(string(raw), secret) || strings.Contains(plain, secret) || strings.ContainsRune(string(raw), '\x00') {
 				t.Fatalf("binary snapshot bytes leaked: json=%s render=%s", raw, plain)
 			}
@@ -286,7 +286,7 @@ func TestRenderUnifiedDiffFitsNarrowAndUsesWideOldNewGutters(t *testing.T) {
 	before := "line-01\nline-02\nline-03\nline-04\nline-05\n"
 	after := "line-01\nline-02\nline-03\nchanged-04\nline-05\n"
 	lines := computeDiff(before, after)
-	styles := NewStyles(true)
+	styles := NewStyles(true, defaultThemeID)
 
 	for _, width := range []int{24, 80} {
 		rendered := renderUnifiedDiffAtWidth("internal/ui/example.go", lines, styles, 0, width)
@@ -349,7 +349,7 @@ func TestResolveDiffGutterNumbersCountsForwardFromHunkHeaders(t *testing.T) {
 		}
 	}
 
-	plain := ansi.Strip(renderUnifiedDiffAtWidth("example.go", lines, NewStyles(true), 0, 100))
+	plain := ansi.Strip(renderUnifiedDiffAtWidth("example.go", lines, NewStyles(true, defaultThemeID), 0, 100))
 	for _, want := range []string{" 3  3 │   ctx-a", " 4    │ - gone-1", "    4 │ + new-1", "41    │ - gone-2"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("rendered patch missing %q:\n%s", want, plain)
@@ -360,7 +360,7 @@ func TestResolveDiffGutterNumbersCountsForwardFromHunkHeaders(t *testing.T) {
 func TestRenderUnifiedDiffOmitsNumberColumnsUnderMinWidth(t *testing.T) {
 	lines := computeDiff("line-01\nline-02\nline-03\n", "line-01\nchanged-02\nline-03\n")
 
-	narrow := ansi.Strip(renderUnifiedDiffAtWidth("example.go", lines, NewStyles(true), 0, diffGutterNumbersMinWidth-1))
+	narrow := ansi.Strip(renderUnifiedDiffAtWidth("example.go", lines, NewStyles(true, defaultThemeID), 0, diffGutterNumbersMinWidth-1))
 	for _, renderedLine := range strings.Split(narrow, "\n") {
 		if strings.Contains(renderedLine, "│") && !strings.HasPrefix(renderedLine, "│") {
 			t.Fatalf("narrow body line still carries number columns: %q", renderedLine)
@@ -372,7 +372,7 @@ func TestRenderUnifiedDiffOmitsNumberColumnsUnderMinWidth(t *testing.T) {
 		}
 	}
 
-	wide := ansi.Strip(renderUnifiedDiffAtWidth("example.go", lines, NewStyles(true), 0, diffGutterNumbersMinWidth))
+	wide := ansi.Strip(renderUnifiedDiffAtWidth("example.go", lines, NewStyles(true, defaultThemeID), 0, diffGutterNumbersMinWidth))
 	if !strings.Contains(wide, "2   │ - line-02") || !strings.Contains(wide, "  2 │ + changed-02") {
 		t.Fatalf("min-width rendering lost number columns:\n%s", wide)
 	}
@@ -404,7 +404,7 @@ func TestRenderUnifiedDiffFallsBackNumberlessOnMalformedOrTruncatedHunks(t *test
 		if _, ok := resolveDiffGutterNumbers(lines); ok {
 			t.Fatalf("%s: numbering resolved instead of failing closed", name)
 		}
-		plain := ansi.Strip(renderUnifiedDiffAtWidth("example.go", lines, NewStyles(true), 0, 100))
+		plain := ansi.Strip(renderUnifiedDiffAtWidth("example.go", lines, NewStyles(true, defaultThemeID), 0, 100))
 		for _, renderedLine := range strings.Split(plain, "\n") {
 			if strings.Contains(renderedLine, "│") && !strings.HasPrefix(renderedLine, "│") {
 				t.Fatalf("%s: body line was numbered: %q", name, renderedLine)
@@ -491,7 +491,7 @@ func TestLcsLines_Basic(t *testing.T) {
 }
 
 func TestRenderDiff_Empty(t *testing.T) {
-	s := NewStyles(true)
+	s := NewStyles(true, defaultThemeID)
 	result := renderDiff(nil, s, 10)
 	if result != "" {
 		t.Errorf("empty diff should render empty, got %q", result)
@@ -506,7 +506,7 @@ func TestRenderDiff_MaxLines(t *testing.T) {
 		{Kind: DiffAdded, Content: "d"},
 		{Kind: DiffAdded, Content: "e"},
 	}
-	s := NewStyles(true)
+	s := NewStyles(true, defaultThemeID)
 	result := renderDiff(lines, s, 3)
 	// Should contain "more lines" indicator.
 	if !strings.Contains(result, "more lines") {
@@ -524,7 +524,7 @@ func TestRenderUnifiedDiffWrapsWithContinuationGutter(t *testing.T) {
 		{Kind: DiffAdded, Content: "界🙂" + strings.Repeat("abcdef", 8), NewLine: 42},
 	}
 	const width = 28
-	rendered := ansi.Strip(renderUnifiedDiffAtWidth("wide.go", lines, NewStyles(true), 0, width))
+	rendered := ansi.Strip(renderUnifiedDiffAtWidth("wide.go", lines, NewStyles(true, defaultThemeID), 0, width))
 	rows := strings.Split(strings.TrimSuffix(rendered, "\n"), "\n")
 	foundContinuation := false
 	for _, row := range rows {
@@ -548,7 +548,7 @@ func TestRenderUnifiedDiffRowBudgetCountsWrappedRows(t *testing.T) {
 		{Kind: DiffAdded, Content: strings.Repeat("long-value-", 12), NewLine: 1},
 		{Kind: DiffAdded, Content: "second", NewLine: 2},
 	}
-	rendered := ansi.Strip(renderUnifiedDiffAtWidth("budget.go", lines, NewStyles(true), 4, 24))
+	rendered := ansi.Strip(renderUnifiedDiffAtWidth("budget.go", lines, NewStyles(true, defaultThemeID), 4, 24))
 	rows := strings.Split(strings.TrimSuffix(rendered, "\n"), "\n")
 	if bodyRows := len(rows) - 1; bodyRows != 4 {
 		t.Fatalf("rendered %d bounded body rows, want 4:\n%s", bodyRows, rendered)
@@ -565,7 +565,7 @@ func TestRenderUnifiedDiffGeometryAcrossSupportedWidths(t *testing.T) {
 		{Kind: DiffRemoved, Content: strings.Repeat("before-", 18), OldLine: 999_999},
 		{Kind: DiffAdded, Content: strings.Repeat("after-", 18), NewLine: 999_999},
 	}
-	styles := NewStyles(true)
+	styles := NewStyles(true, defaultThemeID)
 
 	for width := 30; width <= 200; width++ {
 		rendered := ansi.Strip(renderUnifiedDiffAtWidth("界/very/long/component.go", lines, styles, 0, width))
@@ -581,7 +581,7 @@ func TestRenderUnifiedDiffGeometryAcrossSupportedWidths(t *testing.T) {
 }
 
 func TestRenderUnifiedDiffBudgetLabelsOnlyVisibleFacts(t *testing.T) {
-	styles := NewStyles(true)
+	styles := NewStyles(true, defaultThemeID)
 
 	singleRows := []DiffLine{
 		{Kind: DiffAdded, Content: "first"},
@@ -613,7 +613,7 @@ func TestRenderUnifiedDiffBudgetLabelsOnlyVisibleFacts(t *testing.T) {
 }
 
 func TestRenderUnifiedDiffASCIIChromeCoversHeaderMetaAndContinuation(t *testing.T) {
-	styles := NewStyles(true)
+	styles := NewStyles(true, defaultThemeID)
 	metaLines := []DiffLine{
 		{Kind: DiffEllipsis, Content: "… unchanged lines"},
 		{Kind: DiffOmitted, Content: "… bounded omission · open viewer"},
@@ -687,7 +687,7 @@ func TestResolveDiffGutterNumbersRejectsInconsistentTypedCoordinates(t *testing.
 			if numbers, ok := resolveDiffGutterNumbers(lines); ok {
 				t.Fatalf("inconsistent coordinates produced gutters: %#v", numbers)
 			}
-			rendered := ansi.Strip(renderUnifiedDiffAtWidth("bad.go", lines, NewStyles(true), 0, 100))
+			rendered := ansi.Strip(renderUnifiedDiffAtWidth("bad.go", lines, NewStyles(true, defaultThemeID), 0, 100))
 			for _, row := range strings.Split(rendered, "\n") {
 				if strings.Contains(row, "│") && !strings.HasPrefix(row, "│") {
 					t.Fatalf("renderer invented a numbered gutter: %q", row)

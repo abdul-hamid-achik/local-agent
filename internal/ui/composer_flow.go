@@ -87,6 +87,7 @@ func (m *Model) composerHiddenRows() (earlier, later int) {
 		configureComposerModeWithGlyphProfile(
 			&probe,
 			m.isDark,
+			m.themeID,
 			m.presentedMode(),
 			m.reducedMotion,
 			m.glyphProfile,

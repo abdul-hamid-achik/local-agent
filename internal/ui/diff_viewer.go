@@ -237,7 +237,7 @@ func NewDiffViewer(
 	search.CharLimit = diffViewerMaximumSearchRunes
 	search.ShowSuggestions = false
 	search.SetVirtualCursor(false)
-	search.SetStyles(diffViewerSearchStyles(options.IsDark, options.ReducedMotion))
+	search.SetStyles(diffViewerSearchStyles(options.IsDark, resolveThemeID(options.ThemeID), options.ReducedMotion))
 
 	viewer := &DiffViewer{
 		origin:        origin,
@@ -247,7 +247,7 @@ func NewDiffViewer(
 		isDark:        options.IsDark,
 		reducedMotion: options.ReducedMotion,
 		glyphProfile:  profile,
-		styles:        NewStyles(options.IsDark),
+		styles:        NewStyles(options.IsDark, resolveThemeID(options.ThemeID)),
 		viewport: viewport.New(
 			viewport.WithWidth(1),
 			viewport.WithHeight(1),
@@ -321,7 +321,7 @@ func sanitizeDiffViewerDisplayPath(value string) string {
 	return sanitizeTerminalSingleLine(clean)
 }
 
-func diffViewerSearchStyles(isDark, reducedMotion bool) textinput.Styles {
+func diffViewerSearchStyles(isDark bool, themeID string, reducedMotion bool) textinput.Styles {
 	if noColor {
 		plain := lipgloss.NoColor{}
 		style := lipgloss.NewStyle().Foreground(plain)
@@ -337,7 +337,7 @@ func diffViewerSearchStyles(isDark, reducedMotion bool) textinput.Styles {
 			},
 		}
 	}
-	palette := newSemanticPalette(isDark)
+	palette := newSemanticPalette(isDark, themeID)
 	return textinput.Styles{
 		Focused: textinput.StyleState{
 			Text:        lipgloss.NewStyle().Foreground(palette.Text),
@@ -401,17 +401,17 @@ func (viewer *DiffViewer) SetScreenRect(rect CellRect) {
 
 // SetTheme refreshes every adaptive style while preserving mode, semantic
 // selection, search state, and geometry.
-func (viewer *DiffViewer) SetTheme(isDark bool, themeIDs ...string) {
+func (viewer *DiffViewer) SetTheme(isDark bool, themeID string) {
 	if viewer == nil {
 		return
 	}
-	themeID := resolveThemeID(themeIDs...)
+	themeID = resolveThemeID(themeID)
 	if viewer.isDark == isDark && resolveThemeID(viewer.themeID) == themeID {
 		return
 	}
 	viewer.isDark, viewer.themeID = isDark, themeID
 	viewer.styles = NewStyles(isDark, viewer.themeID)
-	viewer.search.SetStyles(diffViewerSearchStyles(isDark, viewer.reducedMotion))
+	viewer.search.SetStyles(diffViewerSearchStyles(isDark, viewer.themeID, viewer.reducedMotion))
 	viewer.rebuild(true)
 }
 
@@ -423,7 +423,7 @@ func (viewer *DiffViewer) SetReducedMotion(reduced bool) {
 		return
 	}
 	viewer.reducedMotion = reduced
-	viewer.search.SetStyles(diffViewerSearchStyles(viewer.isDark, reduced))
+	viewer.search.SetStyles(diffViewerSearchStyles(viewer.isDark, viewer.themeID, reduced))
 }
 
 // SetFiles replaces an immutable producer projection without resetting the

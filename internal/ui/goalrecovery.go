@@ -272,7 +272,7 @@ func NewGoalRecovery(items []GoalRecoveryItem, options GoalRecoveryOptions) *Goa
 		reducedMotion:    options.ReducedMotion,
 		glyphProfile:     profile,
 		standalone:       options.Standalone,
-		styles:           NewStyles(options.IsDark),
+		styles:           NewStyles(options.IsDark, resolveThemeID(options.ThemeID)),
 	}
 	recovery.applyStyles()
 	recovery.resizeComponents()
@@ -446,11 +446,11 @@ func (r *GoalRecovery) SetSize(width, height int) {
 }
 
 // SetTheme reapplies the existing LightDark-derived semantic palette.
-func (r *GoalRecovery) SetTheme(isDark bool, themeIDs ...string) {
+func (r *GoalRecovery) SetTheme(isDark bool, themeID string) {
 	if r == nil {
 		return
 	}
-	themeID := resolveThemeID(themeIDs...)
+	themeID = resolveThemeID(themeID)
 	if r.isDark == isDark && resolveThemeID(r.themeID) == themeID {
 		return
 	}
@@ -488,7 +488,7 @@ func (r *GoalRecovery) applyStyles() {
 	inputStyles := semanticTextInputStyles(r.isDark, r.themeID)
 	inputStyles.Cursor.Blink = !r.reducedMotion
 	r.reference.SetStyles(inputStyles)
-	r.summary.SetStyles(goalTextareaStyles(r.isDark, r.reducedMotion))
+	r.summary.SetStyles(goalTextareaStyles(r.isDark, r.themeID, r.reducedMotion))
 	configurePickerList(&r.itemList, r.isDark, r.themeID)
 	configurePickerListGlyphProfile(&r.itemList, r.glyphProfile)
 	palette := outputSemanticPalette(r.isDark, r.themeID)

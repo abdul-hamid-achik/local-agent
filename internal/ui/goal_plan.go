@@ -196,11 +196,11 @@ func (c *goalPlanCard) SetSize(width, height int) {
 	c.invalidate()
 }
 
-func (c *goalPlanCard) SetTheme(isDark bool, themeIDs ...string) {
+func (c *goalPlanCard) SetTheme(isDark bool, themeID string) {
 	if c == nil {
 		return
 	}
-	themeID := resolveThemeID(themeIDs...)
+	themeID = resolveThemeID(themeID)
 	if c.isDark == isDark && resolveThemeID(c.themeID) == themeID {
 		return
 	}

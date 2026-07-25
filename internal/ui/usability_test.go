@@ -205,13 +205,13 @@ func TestRenderDiffAtWidthFitsPane(t *testing.T) {
 		{Kind: DiffRemoved, Content: "a very long removed line that cannot fit"},
 		{Kind: DiffContext, Content: "context that cannot fit either"},
 	}
-	got := renderDiffAtWidth(lines, NewStyles(true), 10, 20)
+	got := renderDiffAtWidth(lines, NewStyles(true, defaultThemeID), 10, 20)
 	assertRenderedLinesFit(t, got, 20)
 }
 
 func TestRenderDiffStripsTerminalControlsAndPreservesIndentation(t *testing.T) {
 	lines := []DiffLine{{Kind: DiffAdded, Content: "  value\x1b]0;owned\x07\u202espoof"}}
-	rendered := renderDiffAtWidth(lines, NewStyles(true), 10, 40)
+	rendered := renderDiffAtWidth(lines, NewStyles(true, defaultThemeID), 10, 40)
 	for _, forbidden := range []string{"\x1b]", "\x07", "\u202e", "owned"} {
 		if strings.Contains(rendered, forbidden) {
 			t.Fatalf("diff retained terminal control payload %q: %q", forbidden, rendered)
@@ -233,7 +233,7 @@ func TestAdaptiveStatusTextUsesReadableMutedColor(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := adaptiveStyles(tt.isDark).StatusText.GetForeground()
+			got := adaptiveStyles(tt.isDark, defaultThemeID).StatusText.GetForeground()
 			want := lipgloss.Color(tt.want)
 			gr, gg, gb, ga := got.RGBA()
 			wr, wg, wb, wa := want.RGBA()

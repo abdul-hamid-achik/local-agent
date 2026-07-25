@@ -25,7 +25,7 @@ func TestPickerListUsesSharedSemanticPalette(t *testing.T) {
 		l := list.New([]list.Item{pickerStyleItem("first")}, delegate, 40, 8)
 		configurePickerList(&l, isDark, defaultThemeID)
 
-		palette := newSemanticPalette(isDark)
+		palette := newSemanticPalette(isDark, defaultThemeID)
 		assertSameColor(t, "title", l.Styles.Title.GetForeground(), palette.Accent)
 		assertSameColor(t, "selected title", delegate.Styles.SelectedTitle.GetForeground(), palette.Accent)
 		assertSameColor(t, "selected description", delegate.Styles.SelectedDesc.GetForeground(), palette.Muted)
@@ -41,7 +41,7 @@ func TestNoColorAppliesToToolCardsAndPickers(t *testing.T) {
 	t.Cleanup(func() { noColor = previous })
 
 	tool := NewToolCardStyles(true, defaultThemeID).TitleRunning.Render("tool")
-	composer := agentTextareaStyles(true).Focused.Prompt.Render("❯")
+	composer := agentTextareaStyles(true, defaultThemeID).Focused.Prompt.Render("❯")
 	delegate := newPickerDelegate(true, false, defaultThemeID)
 	l := list.New([]list.Item{pickerStyleItem("first")}, delegate, 40, 8)
 	configurePickerList(&l, true, defaultThemeID)
@@ -72,7 +72,7 @@ func TestTransientInputsAndCompactDensitySurviveThemeChange(t *testing.T) {
 
 	updated, _ = m.Update(tea.BackgroundColorMsg{Color: color.White})
 	m = updated.(*Model)
-	palette := newSemanticPalette(false)
+	palette := newSemanticPalette(false, defaultThemeID)
 	assertSameColor(t, "plan text", m.planFormState.Fields[0].Input.Styles().Focused.Text.GetForeground(), palette.Text)
 	assertSameColor(t, "plan placeholder", m.planFormState.Fields[0].Input.Styles().Focused.Placeholder.GetForeground(), palette.Dim)
 	assertSameColor(t, "completion text", m.completionState.Filter.Styles().Focused.Text.GetForeground(), palette.Text)

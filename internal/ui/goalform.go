@@ -152,7 +152,7 @@ func NewGoalForm(initial GoalFormValues, options GoalFormOptions) *GoalForm {
 		budgetOnly:      options.BudgetOnly,
 		draftFromPrompt: options.DraftFromPrompt,
 		followUpPrompt:  strings.TrimSpace(options.FollowUpPrompt),
-		styles:          NewStyles(options.IsDark),
+		styles:          NewStyles(options.IsDark, resolveThemeID(options.ThemeID)),
 	}
 	f.objective = newGoalTextInput("What outcome should persist?", 768)
 	f.acceptance = textarea.New()
@@ -299,11 +299,11 @@ func (f *GoalForm) SetSize(width, height int) {
 }
 
 // SetTheme reapplies the project's LightDark-derived semantic palette.
-func (f *GoalForm) SetTheme(isDark bool, themeIDs ...string) {
+func (f *GoalForm) SetTheme(isDark bool, themeID string) {
 	if f == nil {
 		return
 	}
-	themeID := resolveThemeID(themeIDs...)
+	themeID = resolveThemeID(themeID)
 	if f.isDark == isDark && resolveThemeID(f.themeID) == themeID {
 		return
 	}
@@ -331,12 +331,12 @@ func (f *GoalForm) applyStyles() {
 	f.turns.SetStyles(inputStyles)
 	f.tokens.SetStyles(inputStyles)
 	f.time.SetStyles(inputStyles)
-	f.acceptance.SetStyles(goalTextareaStyles(f.isDark, f.reducedMotion))
+	f.acceptance.SetStyles(goalTextareaStyles(f.isDark, f.themeID, f.reducedMotion))
 }
 
-func goalTextareaStyles(isDark, reducedMotion bool) textarea.Styles {
+func goalTextareaStyles(isDark bool, themeID string, reducedMotion bool) textarea.Styles {
 	styles := textarea.DefaultStyles(isDark)
-	palette := outputSemanticPalette(isDark)
+	palette := outputSemanticPalette(isDark, themeID)
 	styles.Focused.Base = lipgloss.NewStyle().Foreground(palette.Text)
 	styles.Focused.Text = lipgloss.NewStyle().Foreground(palette.Text)
 	styles.Focused.CursorLine = lipgloss.NewStyle().Foreground(palette.Text)

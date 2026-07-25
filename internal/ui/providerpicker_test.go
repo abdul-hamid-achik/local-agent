@@ -69,7 +69,7 @@ func TestProviderPickerResizeThemeAndReducedMotion(t *testing.T) {
 		t,
 		"provider title",
 		m.providerPickerState.List.Styles.Title.GetForeground(),
-		newSemanticPalette(false).Accent,
+		newSemanticPalette(false, defaultThemeID).Accent,
 	)
 	assertRenderedLinesFit(t, m.renderProviderPicker(), 36)
 	assertRenderedHeightFits(t, m.renderProviderPicker(), 12)

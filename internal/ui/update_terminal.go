@@ -133,7 +133,7 @@ func (m *Model) handleWindowSize(msg tea.WindowSizeMsg, cmds []tea.Cmd) []tea.Cm
 	markdownChanged := m.md == nil || contentWidth != m.markdownWidth
 	if markdownChanged {
 		m.markdownWidth = contentWidth
-		m.md = NewMarkdownRenderer(contentWidth, m.isDark)
+		m.md = NewMarkdownRenderer(contentWidth, m.isDark, m.themeID)
 	}
 
 	// Recalculate content height

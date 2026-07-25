@@ -47,7 +47,7 @@ func RenderGoalStatusLine(summary GoalSummary, width int, isDark bool, themeID s
 		return ""
 	}
 
-	styles := NewStyles(isDark)
+	styles := NewStyles(isDark, themeID)
 	palette := outputSemanticPalette(isDark, themeID)
 	profile := resolveGlyphProfile(profiles...)
 	glyph, label, phaseColor := goalPhasePresentation(summary.Phase, palette, profile)

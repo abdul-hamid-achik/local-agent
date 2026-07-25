@@ -204,7 +204,7 @@ func TestGoalInspectorCachesUntilPresentationChanges(t *testing.T) {
 	if inspector.cache.renders != 2 {
 		t.Fatalf("action navigation did not invalidate cache: renders=%d", inspector.cache.renders)
 	}
-	inspector.SetTheme(!inspector.isDark)
+	inspector.SetTheme(!inspector.isDark, defaultThemeID)
 	_ = inspector.View()
 	if inspector.cache.renders != 3 {
 		t.Fatalf("theme change did not invalidate cache: renders=%d", inspector.cache.renders)
