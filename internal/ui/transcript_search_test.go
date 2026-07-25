@@ -241,6 +241,7 @@ func TestTranscriptSearchSystemNarrowChromeDoesNotExhaustSource(t *testing.T) {
 	m.transcriptSearch = newTranscriptSearchState(
 		30,
 		m.isDark,
+		m.themeID,
 		m.reducedMotion,
 	)
 	m.entries = []ChatEntry{entry}
@@ -305,6 +306,7 @@ func TestTranscriptSearchSourceIndexWorkIsLinear(t *testing.T) {
 	m.transcriptSearch = newTranscriptSearchState(
 		80,
 		m.isDark,
+		m.themeID,
 		m.reducedMotion,
 	)
 	m.entries = []ChatEntry{entry}
@@ -623,7 +625,7 @@ func TestOpenTranscriptSearchReplacesOrphanedState(t *testing.T) {
 	previous := func(int) lipgloss.Style {
 		return lipgloss.NewStyle().Italic(true)
 	}
-	orphan := newTranscriptSearchState(20, m.isDark, m.reducedMotion)
+	orphan := newTranscriptSearchState(20, m.isDark, m.themeID, m.reducedMotion)
 	orphan.restore = m.captureTranscriptReflowAnchor()
 	orphan.composerFocused = m.input.Focused()
 	_ = orphan.input.Focus()
@@ -762,7 +764,7 @@ func TestTranscriptSearchBoundsIndexMatchesAndQuery(t *testing.T) {
 	t.Run("bounded index rows", func(t *testing.T) {
 		m := newTestModel(t)
 		m.height = 13 // sticky off: layout/search fixtures need every entry painted
-		m.transcriptSearch = newTranscriptSearchState(40, m.isDark, m.reducedMotion)
+		m.transcriptSearch = newTranscriptSearchState(40, m.isDark, m.themeID, m.reducedMotion)
 		m.transcriptLayout = TranscriptLayoutSnapshot{}
 		m.transcriptPaint.document = transcriptPaintDocument{}
 		for index := 0; index < 4; index++ {
@@ -820,7 +822,7 @@ func TestTranscriptSearchBoundsIndexMatchesAndQuery(t *testing.T) {
 	t.Run("bounded index bytes", func(t *testing.T) {
 		m := newTestModel(t)
 		m.height = 13 // sticky off: layout/search fixtures need every entry painted
-		m.transcriptSearch = newTranscriptSearchState(40, m.isDark, m.reducedMotion)
+		m.transcriptSearch = newTranscriptSearchState(40, m.isDark, m.themeID, m.reducedMotion)
 		m.transcriptLayout = TranscriptLayoutSnapshot{}
 		m.transcriptPaint.document = transcriptPaintDocument{}
 		for index := 0; index < 3; index++ {
@@ -875,6 +877,7 @@ func TestTranscriptSearchBoundsIndexMatchesAndQuery(t *testing.T) {
 		m.transcriptSearch = newTranscriptSearchState(
 			40,
 			m.isDark,
+			m.themeID,
 			m.reducedMotion,
 		)
 		const latest = "LATEST_NEEDLE"
@@ -1034,7 +1037,7 @@ func TestTranscriptSearchBoundsIndexMatchesAndQuery(t *testing.T) {
 	t.Run("oversized newest record fails closed at row budget", func(t *testing.T) {
 		m := newTestModel(t)
 		m.height = 13 // sticky off: layout/search fixtures need every entry painted
-		m.transcriptSearch = newTranscriptSearchState(40, m.isDark, m.reducedMotion)
+		m.transcriptSearch = newTranscriptSearchState(40, m.isDark, m.themeID, m.reducedMotion)
 		m.transcriptLayout = TranscriptLayoutSnapshot{}
 		m.transcriptPaint.document = transcriptPaintDocument{}
 		lines := []string{"first", "second", "third", "fourth"}
@@ -1079,7 +1082,7 @@ func TestTranscriptSearchBoundsIndexMatchesAndQuery(t *testing.T) {
 	t.Run("oversized rendered row fails closed before semantic strip", func(t *testing.T) {
 		m := newTestModel(t)
 		m.height = 13 // sticky off: layout/search fixtures need every entry painted
-		m.transcriptSearch = newTranscriptSearchState(40, m.isDark, m.reducedMotion)
+		m.transcriptSearch = newTranscriptSearchState(40, m.isDark, m.themeID, m.reducedMotion)
 		m.transcriptLayout = TranscriptLayoutSnapshot{}
 		m.transcriptPaint.document = transcriptPaintDocument{}
 		content := strings.Repeat("x", 1024)
@@ -1123,7 +1126,7 @@ func TestTranscriptSearchBoundsIndexMatchesAndQuery(t *testing.T) {
 	t.Run("bounded matches", func(t *testing.T) {
 		m := newTestModel(t)
 		m.height = 13 // sticky off: layout/search fixtures need every entry painted
-		m.transcriptSearch = newTranscriptSearchState(40, m.isDark, m.reducedMotion)
+		m.transcriptSearch = newTranscriptSearchState(40, m.isDark, m.themeID, m.reducedMotion)
 		m.transcriptSearch.generation = m.transcriptPaint.documentGeneration
 		m.transcriptSearch.rows = []transcriptSearchRow{{
 			BlockID:      "search-match-bound",
@@ -1145,7 +1148,7 @@ func TestTranscriptSearchBoundsIndexMatchesAndQuery(t *testing.T) {
 	})
 
 	t.Run("bounded query", func(t *testing.T) {
-		state := newTranscriptSearchState(40, false, false)
+		state := newTranscriptSearchState(40, false, defaultThemeID, false)
 		state.input.SetValue(strings.Repeat("界", transcriptSearchQueryLimit+8))
 		if got := len([]rune(state.input.Value())); got != transcriptSearchQueryLimit {
 			t.Fatalf("query runes = %d, want %d", got, transcriptSearchQueryLimit)
@@ -1188,6 +1191,7 @@ func BenchmarkTranscriptSearchMatchesAtMaximumIndex(b *testing.B) {
 			m.transcriptSearch = newTranscriptSearchState(
 				80,
 				m.isDark,
+				m.themeID,
 				m.reducedMotion,
 			)
 			m.transcriptSearch.rows = rows
@@ -1294,7 +1298,7 @@ func TestTranscriptSearchActiveRowSignalPreservesGeometryAndRestoresStyle(t *tes
 			t,
 			"active transcript search row",
 			style.GetForeground(),
-			outputSemanticPalette(m.isDark).Accent,
+			outputSemanticPalette(m.isDark, m.themeID).Accent,
 		)
 	}
 	localRow := state.activeRow - m.transcriptPaint.windowStart
@@ -1455,7 +1459,7 @@ func TestTranscriptSearchCompactLayoutFitsRowsAndOwnsCursor(t *testing.T) {
 }
 
 func TestTranscriptSearchResizeRecomputesTextInputOverflowWindow(t *testing.T) {
-	state := newTranscriptSearchState(24, false, true)
+	state := newTranscriptSearchState(24, false, defaultThemeID, true)
 	query := "resize preserves the complete visible search query"
 	state.input.SetValue(query)
 	state.input.CursorEnd()

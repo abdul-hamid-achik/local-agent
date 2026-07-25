@@ -15,7 +15,7 @@ func TestOverlay_ESC_ClosesCompletion(t *testing.T) {
 		{Label: "/clear", Insert: "/clear ", Category: "command"},
 		{Label: "/model", Insert: "/model ", Category: "command"},
 	}
-	m.completionState = newCompletionState("command", items, true)
+	m.completionState = newCompletionState("command", items, true, defaultThemeID)
 	m.completionState.Index = 1
 	m.completionState.Selected[0] = true
 	m.overlay = OverlayCompletion
@@ -238,7 +238,7 @@ func TestOverlay_CompletionNavigation(t *testing.T) {
 			{Label: "/clear", Insert: "/clear "},
 			{Label: "/model", Insert: "/model "},
 		}
-		m.completionState = newCompletionState("command", items, false)
+		m.completionState = newCompletionState("command", items, false, defaultThemeID)
 		m.overlay = OverlayCompletion
 		return m
 	}
@@ -285,7 +285,7 @@ func TestOverlay_CompletionToggle(t *testing.T) {
 			{Label: "/a", Insert: "/a "},
 			{Label: "/b", Insert: "/b "},
 		}
-		m.completionState = newCompletionState("attachments", items, true)
+		m.completionState = newCompletionState("attachments", items, true, defaultThemeID)
 		m.overlay = OverlayCompletion
 
 		updated, _ := m.Update(tabKey())
@@ -302,7 +302,7 @@ func TestOverlay_CompletionToggle(t *testing.T) {
 			{Label: "/a", Insert: "/a "},
 			{Label: "/b", Insert: "/b "},
 		}
-		m.completionState = newCompletionState("attachments", items, true)
+		m.completionState = newCompletionState("attachments", items, true, defaultThemeID)
 		m.completionState.Selected[0] = true
 		m.overlay = OverlayCompletion
 
@@ -319,7 +319,7 @@ func TestOverlay_CompletionToggle(t *testing.T) {
 		items := []Completion{
 			{Label: "/a", Insert: "/a "},
 		}
-		m.completionState = newCompletionState("command", items, false)
+		m.completionState = newCompletionState("command", items, false, defaultThemeID)
 		// Selected is nil for single-select mode
 		m.overlay = OverlayCompletion
 
@@ -336,7 +336,7 @@ func TestOverlay_CompletionAccept(t *testing.T) {
 			{Label: "/help", Insert: "/help "},
 			{Label: "/clear", Insert: "/clear "},
 		}
-		m.completionState = newCompletionState("command", items, false)
+		m.completionState = newCompletionState("command", items, false, defaultThemeID)
 		m.completionState.Index = 1
 		m.overlay = OverlayCompletion
 
@@ -361,7 +361,7 @@ func TestOverlay_CompletionAccept(t *testing.T) {
 			{Label: "@file2", Insert: "@file2 "},
 			{Label: "@file3", Insert: "@file3 "},
 		}
-		m.completionState = newCompletionState("attachments", items, true)
+		m.completionState = newCompletionState("attachments", items, true, defaultThemeID)
 		m.completionState.Selected[0] = true
 		m.completionState.Selected[2] = true
 		m.overlay = OverlayCompletion
@@ -385,7 +385,7 @@ func TestOverlay_CompletionAccept(t *testing.T) {
 			{Label: "@file1", Insert: "@file1 "},
 			{Label: "@file2", Insert: "@file2 "},
 		}
-		m.completionState = newCompletionState("attachments", items, true)
+		m.completionState = newCompletionState("attachments", items, true, defaultThemeID)
 		m.completionState.Index = 1
 		m.overlay = OverlayCompletion
 

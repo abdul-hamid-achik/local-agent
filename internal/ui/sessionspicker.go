@@ -65,7 +65,7 @@ func newSessionsLoadingState() *SessionsPickerState {
 }
 
 // newSessionsPickerState creates a new SessionsPickerState with a bubbles list.
-func newSessionsPickerState(sessions []SessionListItem, width, height int, isDark bool, reducedMotion ...bool) *SessionsPickerState {
+func newSessionsPickerState(sessions []SessionListItem, width, height int, isDark bool, themeID string, reducedMotion ...bool) *SessionsPickerState {
 	items := make([]list.Item, len(sessions))
 	for i, s := range sessions {
 		items[i] = sessionItem{
@@ -76,7 +76,7 @@ func newSessionsPickerState(sessions []SessionListItem, width, height int, isDar
 		}
 	}
 
-	delegate := newPickerDelegate(isDark, false)
+	delegate := newPickerDelegate(isDark, false, themeID)
 
 	listW := pickerListWidth(width)
 
@@ -85,7 +85,7 @@ func newSessionsPickerState(sessions []SessionListItem, width, height int, isDar
 	pickerH = pickerListHeight(height, pickerH, 4)
 
 	l := list.New(items, delegate, listW, pickerH)
-	configurePickerList(&l, isDark, reducedMotion...)
+	configurePickerList(&l, isDark, themeID, reducedMotion...)
 	l.Title = "Sessions"
 	l.SetShowStatusBar(false)
 	l.SetShowHelp(false)

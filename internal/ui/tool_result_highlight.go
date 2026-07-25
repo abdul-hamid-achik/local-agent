@@ -120,7 +120,7 @@ func (c ToolCard) remappedDisplayResultLines(width int) []string {
 		if len(plan.lines) == 0 {
 			return nil
 		}
-		palette := newSemanticPalette(c.IsDark)
+		palette := newSemanticPalette(c.IsDark, c.ThemeID)
 		rendered := make([]string, 0, len(plan.lines)+1)
 		for _, sourceIndex := range plan.sourceIndexes {
 			if sourceIndex < 0 || sourceIndex >= len(c.resultDisplayLines) {
@@ -156,7 +156,7 @@ func (c ToolCard) remappedDisplayResultLines(width int) []string {
 		return nil
 	}
 	all := strings.Split(display, "\n")
-	palette := newSemanticPalette(c.IsDark)
+	palette := newSemanticPalette(c.IsDark, c.ThemeID)
 	rendered := make([]string, 0, len(plan.lines)+1)
 	for _, sourceIndex := range plan.sourceIndexes {
 		if sourceIndex < 0 || sourceIndex >= len(all) {
@@ -216,7 +216,7 @@ func (c ToolCard) renderSemanticResultLines(result string, width int) []string {
 		switch kind {
 		case toolResultCode:
 			if !noColor {
-				if highlighted, ok := highlightToolCode(plainLines, language, c.IsDark); ok {
+				if highlighted, ok := highlightToolCode(plainLines, language, c.IsDark, c.ThemeID); ok {
 					rendered = highlighted
 				}
 			}
@@ -544,7 +544,7 @@ func insertToolPreviewOmission(lines []string, omission string, index int) []str
 	return result
 }
 
-func highlightToolCode(lines []string, language string, isDark bool) ([]string, bool) {
+func highlightToolCode(lines []string, language string, isDark bool, themeID string) ([]string, bool) {
 	lexer := lexers.Get(language)
 	if lexer == nil || lexer == lexers.Fallback {
 		return nil, false
@@ -554,7 +554,7 @@ func highlightToolCode(lines []string, language string, isDark bool) ([]string, 
 		return nil, false
 	}
 	var output bytes.Buffer
-	if err := formatters.TTY16m.Format(&output, toolCodeStyle(isDark), iterator); err != nil {
+	if err := formatters.TTY16m.Format(&output, toolCodeStyle(isDark, themeID), iterator); err != nil {
 		return nil, false
 	}
 	highlighted := strings.Split(strings.TrimSuffix(output.String(), "\n"), "\n")
@@ -564,8 +564,8 @@ func highlightToolCode(lines []string, language string, isDark bool) ([]string, 
 	return highlighted, true
 }
 
-func toolCodeStyle(isDark bool) *chroma.Style {
-	palette := newSemanticPalette(isDark)
+func toolCodeStyle(isDark bool, themeID string) *chroma.Style {
+	palette := newSemanticPalette(isDark, themeID)
 	text := colorHex(palette.Text)
 	muted := colorHex(palette.Muted)
 	dim := colorHex(palette.Dim)

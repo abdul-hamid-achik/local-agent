@@ -192,7 +192,7 @@ func TestAttachedGoalPresentsAutoAuthorityWhileAmbientModeCycles(t *testing.T) {
 	if router.context != config.ModeBuildContext {
 		t.Fatalf("active goal router authority = %v, want AUTO/build while ambient PLAN", router.context)
 	}
-	assertSameColor(t, "attached-goal composer rail", m.input.Styles().Focused.Prompt.GetForeground(), newSemanticPalette(m.isDark).Success)
+	assertSameColor(t, "attached-goal composer rail", m.input.Styles().Focused.Prompt.GetForeground(), newSemanticPalette(m.isDark, m.themeID).Success)
 
 	status := ansi.Strip(m.renderStatusLine())
 	if !strings.Contains(status, "AUTO") || strings.Contains(status, "PLAN") {
@@ -207,7 +207,7 @@ func TestAttachedGoalPresentsAutoAuthorityWhileAmbientModeCycles(t *testing.T) {
 	if got := m.presentedMode(); got != ModePlan {
 		t.Fatalf("post-goal presented mode = %v, want saved ambient PLAN", got)
 	}
-	assertSameColor(t, "post-goal composer rail", m.input.Styles().Focused.Prompt.GetForeground(), newSemanticPalette(m.isDark).Special)
+	assertSameColor(t, "post-goal composer rail", m.input.Styles().Focused.Prompt.GetForeground(), newSemanticPalette(m.isDark, m.themeID).Special)
 }
 
 func TestAttachedGoalAmbientModeCyclesDuringControlPlaneOperation(t *testing.T) {

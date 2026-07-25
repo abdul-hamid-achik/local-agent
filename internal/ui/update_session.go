@@ -35,7 +35,7 @@ func (m *Model) handleSessionList(msg SessionListMsg) {
 		m.sessionsPickerState = newSessionsMessageState(sessionsEmpty, "")
 		m.overlay = OverlaySessionsPicker
 	} else {
-		m.sessionsPickerState = newSessionsPickerState(msg.Sessions, m.width, m.height, m.isDark, m.reducedMotion)
+		m.sessionsPickerState = newSessionsPickerState(msg.Sessions, m.width, m.height, m.isDark, m.themeID, m.reducedMotion)
 		m.restylePickerOverlays()
 		m.overlay = OverlaySessionsPicker
 	}

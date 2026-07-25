@@ -51,6 +51,7 @@ type ModelPullState struct {
 	Total         int64
 	Err           error
 	isDark        bool
+	themeID       string
 	reducedMotion bool
 }
 
@@ -60,11 +61,11 @@ const (
 	maxModelPullErrorCells  = 512
 )
 
-func NewModelPullState(isDark, reducedMotion bool) *ModelPullState {
+func NewModelPullState(isDark, reducedMotion bool, themeID string) *ModelPullState {
 	input := textinput.New()
 	input.Prompt = "Model › "
 	input.Placeholder = "qwen3-coder or gpt-oss:120b-cloud"
-	input.SetStyles(semanticTextInputStyles(isDark))
+	input.SetStyles(semanticTextInputStyles(isDark, themeID))
 	input.SetWidth(46)
 	input.Focus()
 	styles := input.Styles()
@@ -79,12 +80,16 @@ func NewModelPullState(isDark, reducedMotion bool) *ModelPullState {
 	return &ModelPullState{Input: input, Progress: bar, Spinner: spin, Phase: ModelPullEntry, isDark: isDark, reducedMotion: reducedMotion}
 }
 
-func (s *ModelPullState) SetTheme(isDark bool) {
-	if s == nil || s.isDark == isDark {
+func (s *ModelPullState) SetTheme(isDark bool, themeIDs ...string) {
+	if s == nil {
 		return
 	}
-	s.isDark = isDark
-	styles := semanticTextInputStyles(isDark)
+	themeID := resolveThemeID(themeIDs...)
+	if s.isDark == isDark && resolveThemeID(s.themeID) == themeID {
+		return
+	}
+	s.isDark, s.themeID = isDark, themeID
+	styles := semanticTextInputStyles(isDark, themeID)
 	styles.Cursor.Blink = !s.reducedMotion
 	s.Input.SetStyles(styles)
 	palette := outputSemanticPalette(isDark)

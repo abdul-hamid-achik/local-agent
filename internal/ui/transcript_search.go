@@ -77,7 +77,7 @@ const transcriptSearchSystemLabel = "notice ·"
 
 func newTranscriptSearchState(
 	width int,
-	isDark bool,
+	isDark bool, themeID string,
 	reducedMotion bool,
 ) *TranscriptSearchState {
 	input := textinput.New()
@@ -85,7 +85,7 @@ func newTranscriptSearchState(
 	input.Placeholder = "search safe transcript"
 	input.CharLimit = transcriptSearchQueryLimit
 	input.SetVirtualCursor(false)
-	input.SetStyles(semanticTextInputStyles(isDark, reducedMotion))
+	input.SetStyles(semanticTextInputStyles(isDark, themeID, reducedMotion))
 	state := &TranscriptSearchState{
 		input:     input,
 		active:    -1,
@@ -136,6 +136,7 @@ func (m *Model) openTranscriptSearch() tea.Cmd {
 	state := newTranscriptSearchState(
 		m.chatPaneWidth(),
 		m.isDark,
+		m.themeID,
 		m.reducedMotion,
 	)
 	state.restore = m.captureTranscriptReflowAnchor()
@@ -191,7 +192,7 @@ func (m *Model) transcriptSearchHighlightRow() int {
 
 func (m *Model) transcriptSearchActiveRowStyle() lipgloss.Style {
 	return lipgloss.NewStyle().
-		Foreground(outputSemanticPalette(m.isDark).Accent).
+		Foreground(outputSemanticPalette(m.isDark, m.themeID).Accent).
 		// Lip Gloss v2 renders underlined text rune-by-rune so spaces can have
 		// separate underline semantics. ANSI resets inside a ZWJ emoji split
 		// its terminal grapheme and change measured width. Accent plus weight
@@ -228,7 +229,7 @@ func (m *Model) restyleTranscriptSearch() {
 		return
 	}
 	m.transcriptSearch.input.SetStyles(
-		semanticTextInputStyles(m.isDark, m.reducedMotion),
+		semanticTextInputStyles(m.isDark, m.themeID, m.reducedMotion),
 	)
 }
 

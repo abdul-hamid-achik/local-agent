@@ -168,6 +168,44 @@ func RegisterBuiltins(r *Registry) {
 	})
 
 	r.Register(&Command{
+		Name:        "theme",
+		Aliases:     []string{"themes", "colors"},
+		Description: "Show, switch, or list color schemes",
+		Usage:       "/theme [name|list]",
+		Handler: func(ctx *Context, args []string) Result {
+			if len(args) == 0 {
+				return Result{Action: ActionShowThemePicker}
+			}
+			if len(args) != 1 {
+				return Result{Error: "usage: /theme [name|list]"}
+			}
+			switch args[0] {
+			case "list", "ls":
+				var b strings.Builder
+				b.WriteString("Available themes:\n")
+				for _, id := range ctx.ThemeList {
+					marker := "  "
+					if id == ctx.Theme {
+						marker = "* "
+					}
+					fmt.Fprintf(&b, "  %s%s\n", marker, id)
+				}
+				b.WriteString("\n* = current")
+				return Result{Text: b.String()}
+			default:
+				// Validation lives with the registry so a typo is reported here
+				// instead of silently repainting in the default scheme.
+				for _, id := range ctx.ThemeList {
+					if id == args[0] {
+						return Result{Action: ActionSwitchTheme, Data: id}
+					}
+				}
+				return Result{Error: fmt.Sprintf("Unknown theme: %s (use /theme list to see available)", args[0])}
+			}
+		},
+	})
+
+	r.Register(&Command{
 		Name:        "provider",
 		Aliases:     []string{"providers", "prov"},
 		Description: "Show or switch inference provider profiles",

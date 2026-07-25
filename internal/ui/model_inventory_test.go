@@ -23,7 +23,7 @@ func TestOllamaModelPickerGroupsAndProjectsMetadata(t *testing.T) {
 		{Name: "cloud-code", Source: OllamaModelCloud, ParameterSize: "120B", ContextLength: 131072, Capabilities: []string{"completion", "tools", "thinking"}, Selectable: true, Fit: true},
 		{Name: "local-code", Source: OllamaModelLocal, SizeBytes: 4 * 1024 * 1024 * 1024, ParameterSize: "4B", Quantization: "Q4_K_M", ContextLength: 65536, EffectiveContext: 16384, Capabilities: []string{"completion", "tools"}, Current: true, Running: true, Selectable: true, Fit: true},
 	}
-	state := newOllamaModelPickerState(models, "local-code", 100, 40, true)
+	state := newOllamaModelPickerState(models, "local-code", 100, 40, true, defaultThemeID)
 	if state.List.Index() != 1 {
 		t.Fatalf("current local index = %d, want 1", state.List.Index())
 	}
@@ -55,7 +55,7 @@ func TestOllamaModelDisplayProjectionStripsTerminalControlsWithoutChangingIdenti
 		Capabilities: []string{"tools", "thinking", "completion"},
 		Selectable:   true, Fit: true, RequiresConsent: true, Reason: rawReason,
 	}
-	state := newOllamaModelPickerState([]OllamaModelDescriptor{descriptor}, rawName, 100, 30, true)
+	state := newOllamaModelPickerState([]OllamaModelDescriptor{descriptor}, rawName, 100, 30, true, defaultThemeID)
 	state.Notice = "Refresh\x1b]0;NOTICE_SECRET\x07\x1b[2J\nfailed\u2066"
 	state.List.Title = ollamaModelPickerTitle("0.31\x1b]0;VERSION_SECRET\x07\n.2\u202e")
 	item := state.List.Items()[0].(modelItem)
@@ -86,10 +86,10 @@ func TestOllamaModelDisplayProjectionStripsTerminalControlsWithoutChangingIdenti
 	m.width, m.height = 100, 30
 	m.modelPickerState = state
 	m.overlay = OverlayModelPicker
-	wideDetails := renderOllamaModelDetails(descriptor, 72, m.isDark)
-	compactDetails := renderCompactOllamaModelDetails(descriptor, 32, m.isDark)
+	wideDetails := renderOllamaModelDetails(descriptor, 72, m.isDark, defaultThemeID)
+	compactDetails := renderCompactOllamaModelDetails(descriptor, 32, m.isDark, defaultThemeID)
 	detail := m.renderModelSelectionDetail(state, 72)
-	consent := newCloudConsentState(descriptor, 72, 24, m.isDark)
+	consent := newCloudConsentState(descriptor, 72, 24, m.isDark, defaultThemeID)
 	for name, rendered := range map[string]string{
 		"picker":          m.renderModelPicker(),
 		"selected detail": detail,
@@ -126,7 +126,7 @@ func TestOllamaModelDisplayProjectionStripsTerminalControlsWithoutChangingIdenti
 }
 
 func TestOllamaModelPickerNarrowAndFilterable(t *testing.T) {
-	state := newOllamaModelPickerState([]OllamaModelDescriptor{{Name: "qwen", Source: OllamaModelLocal, Selectable: true, Fit: true}}, "", 32, 12, false)
+	state := newOllamaModelPickerState([]OllamaModelDescriptor{{Name: "qwen", Source: OllamaModelLocal, Selectable: true, Fit: true}}, "", 32, 12, false, defaultThemeID)
 	if got := state.List.Width(); got > pickerListWidth(32) {
 		t.Fatalf("width = %d", got)
 	}
@@ -140,7 +140,7 @@ func TestOllamaModelPickerFilterKeepsSourceOnEveryResult(t *testing.T) {
 		{Name: "local-code", Source: OllamaModelLocal, Selectable: true, Fit: true},
 		{Name: "cloud-first", Source: OllamaModelCloud, Selectable: true, Fit: true, RequiresConsent: true},
 		{Name: "cloud-target", Source: OllamaModelCloud, Selectable: true, Fit: true, RequiresConsent: true},
-	}, "", 100, 30, false)
+	}, "", 100, 30, false, defaultThemeID)
 	state.List.SetFilterText("cloud-target")
 	visible := state.List.VisibleItems()
 	if len(visible) != 1 {
@@ -164,7 +164,7 @@ func TestOllamaModelPickerFitsWideAndMinimumTerminals(t *testing.T) {
 	}{{100, 30, false}, {30, 12, true}} {
 		m := newTestModel(t)
 		m.width, m.height = size.width, size.height
-		m.modelPickerState = newOllamaModelPickerState(models, "qwen3.5:2b", size.width, size.height, m.isDark)
+		m.modelPickerState = newOllamaModelPickerState(models, "qwen3.5:2b", size.width, size.height, m.isDark, defaultThemeID)
 		m.modelPickerState.List.Select(1)
 		m.overlay = OverlayModelPicker
 
@@ -213,7 +213,7 @@ func TestOllamaModelPickerRestyleKeepsLocalAndCloudRowsVisible(t *testing.T) {
 	}
 	m := newTestModel(t)
 	m.width, m.height = 90, 28
-	m.modelPickerState = newOllamaModelPickerState(models, models[0].Name, m.width, m.height, m.isDark)
+	m.modelPickerState = newOllamaModelPickerState(models, models[0].Name, m.width, m.height, m.isDark, defaultThemeID)
 
 	// Opening an overlay restyles it for the active glyph profile. Its geometry
 	// must already agree with that delegate density.
@@ -233,7 +233,7 @@ func TestOllamaModelPickerRestyleKeepsLocalAndCloudRowsVisible(t *testing.T) {
 
 func TestOllamaModelPickerEscapeClearsFilterBeforeClosing(t *testing.T) {
 	m := newTestModel(t)
-	m.modelPickerState = newOllamaModelPickerState([]OllamaModelDescriptor{{Name: "qwen", Source: OllamaModelLocal, Selectable: true, Fit: true}}, "", m.width, m.height, m.isDark)
+	m.modelPickerState = newOllamaModelPickerState([]OllamaModelDescriptor{{Name: "qwen", Source: OllamaModelLocal, Selectable: true, Fit: true}}, "", m.width, m.height, m.isDark, defaultThemeID)
 	m.overlay = OverlayModelPicker
 	updated, _ := m.Update(charKey('/'))
 	m = updated.(*Model)
@@ -253,7 +253,7 @@ func TestOllamaModelPickerEnterSelectsVisibleResultWhileFiltering(t *testing.T) 
 	m := newTestModel(t)
 	descriptor := OllamaModelDescriptor{Name: "qwen", Source: OllamaModelLocal, Selectable: true, Fit: true, AutoRoutable: true}
 	m.ollamaModels = []OllamaModelDescriptor{descriptor}
-	m.modelPickerState = newOllamaModelPickerState(m.ollamaModels, "", m.width, m.height, m.isDark)
+	m.modelPickerState = newOllamaModelPickerState(m.ollamaModels, "", m.width, m.height, m.isDark, defaultThemeID)
 	m.overlay = OverlayModelPicker
 	updated, _ := m.Update(charKey('/'))
 	m = updated.(*Model)
@@ -270,7 +270,7 @@ func TestOllamaModelPickerEnterSelectsVisibleResultWhileFiltering(t *testing.T) 
 }
 
 func TestOllamaModelPickerEmptyStateIsActionable(t *testing.T) {
-	state := newOllamaModelPickerState(nil, "", 80, 24, false)
+	state := newOllamaModelPickerState(nil, "", 80, 24, false, defaultThemeID)
 	if !strings.Contains(state.Notice, "add a model") || !strings.Contains(state.Notice, "refresh") {
 		t.Fatalf("empty notice = %q", state.Notice)
 	}
@@ -278,7 +278,7 @@ func TestOllamaModelPickerEmptyStateIsActionable(t *testing.T) {
 
 func TestOllamaModelRefreshShowsImmediateFeedback(t *testing.T) {
 	m := newTestModel(t)
-	m.modelPickerState = newOllamaModelPickerState(nil, "", m.width, m.height, m.isDark)
+	m.modelPickerState = newOllamaModelPickerState(nil, "", m.width, m.height, m.isDark, defaultThemeID)
 	m.overlay = OverlayModelPicker
 
 	updated, _ := m.Update(charKey('r'))
@@ -291,7 +291,7 @@ func TestOllamaModelRefreshShowsImmediateFeedback(t *testing.T) {
 func TestOllamaModelPickerOpensDetailsAndPullSurfaces(t *testing.T) {
 	m := newTestModel(t)
 	descriptor := OllamaModelDescriptor{Name: "local-code", Source: OllamaModelLocal, Selectable: true, Fit: true, Capabilities: []string{"completion", "tools"}}
-	m.modelPickerState = newOllamaModelPickerState([]OllamaModelDescriptor{descriptor}, "", m.width, m.height, m.isDark)
+	m.modelPickerState = newOllamaModelPickerState([]OllamaModelDescriptor{descriptor}, "", m.width, m.height, m.isDark, defaultThemeID)
 	m.overlay = OverlayModelPicker
 
 	updated, _ := m.Update(charKey('d'))
@@ -316,7 +316,7 @@ func TestOllamaModelPickerDoesNotSelectPolicyBlockedModel(t *testing.T) {
 	m.model = "current"
 	m.modelPickerState = newOllamaModelPickerState([]OllamaModelDescriptor{{
 		Name: "cloud", Source: OllamaModelCloud, Selectable: false, Fit: true, Reason: "disabled by local-only privacy",
-	}}, m.model, m.width, m.height, m.isDark)
+	}}, m.model, m.width, m.height, m.isDark, m.themeID)
 	m.overlay = OverlayModelPicker
 	updated, _ := m.Update(enterKey())
 	m = updated.(*Model)
@@ -338,7 +338,7 @@ func TestOllamaCloudSelectionRequiresExplicitSessionConsent(t *testing.T) {
 		RequiresConsent: true, Reason: "conversation confirmation required",
 	}
 	m.ollamaModels = []OllamaModelDescriptor{descriptor}
-	m.modelPickerState = newOllamaModelPickerState(m.ollamaModels, m.model, m.width, m.height, m.isDark)
+	m.modelPickerState = newOllamaModelPickerState(m.ollamaModels, m.model, m.width, m.height, m.isDark, m.themeID)
 	m.overlay = OverlayModelPicker
 
 	updated, _ := m.Update(enterKey())
@@ -368,7 +368,7 @@ func TestOllamaCloudConsentCancelReturnsToModelsWithoutGrant(t *testing.T) {
 	m.modelManager.ConfigureOllamaCloudInventory([]string{"qwen:cloud"}, true)
 	descriptor := OllamaModelDescriptor{Name: "qwen:cloud", Source: OllamaModelCloud, Selectable: true, Fit: true, RequiresConsent: true}
 	m.ollamaModels = []OllamaModelDescriptor{descriptor}
-	m.modelPickerState = newOllamaModelPickerState(m.ollamaModels, m.model, m.width, m.height, m.isDark)
+	m.modelPickerState = newOllamaModelPickerState(m.ollamaModels, m.model, m.width, m.height, m.isDark, m.themeID)
 	m.overlay = OverlayModelPicker
 
 	updated, _ := m.Update(enterKey())
@@ -453,7 +453,7 @@ func TestOllamaCloudConsentModalFitsSupportedTerminals(t *testing.T) {
 	for _, size := range []struct{ width, height int }{{30, 12}, {40, 20}, {90, 28}} {
 		m := newTestModel(t)
 		m.width, m.height = size.width, size.height
-		m.cloudConsentState = newCloudConsentState(OllamaModelDescriptor{Name: "kimi-code:cloud"}, size.width, size.height, m.isDark)
+		m.cloudConsentState = newCloudConsentState(OllamaModelDescriptor{Name: "kimi-code:cloud"}, size.width, size.height, m.isDark, defaultThemeID)
 		m.overlay = OverlayCloudConsent
 		view := m.renderCloudConsent()
 		for _, want := range []string{"Use Ollama Cloud?", "results", "Ollama Cloud.", "Cancel", "Use kimi-code", "esc", "enter", "cancel"} {
@@ -526,7 +526,7 @@ func TestOllamaNestedSurfacesFitMinimumTerminal(t *testing.T) {
 	t.Run("pull receipts bound daemon text", func(t *testing.T) {
 		for _, phase := range []ModelPullPhase{ModelPullRunning, ModelPullComplete, ModelPullFailed} {
 			m := newMinimumModel(t)
-			m.modelPullState = NewModelPullState(m.isDark, true)
+			m.modelPullState = NewModelPullState(m.isDark, true, defaultThemeID)
 			m.modelPullState.Name = "a-very-long-ollama-model-name-that-must-not-displace-actions"
 			m.modelPullState.Phase = phase
 			m.modelPullState.Completed, m.modelPullState.Total = 25, 100
@@ -646,7 +646,7 @@ func TestModelSwitchProjectsEffectiveLocalAndCloudContexts(t *testing.T) {
 }
 
 func TestModelPullStateRequestProgressAndFailure(t *testing.T) {
-	state := NewModelPullState(true, true)
+	state := NewModelPullState(true, true, defaultThemeID)
 	state.Input.SetValue("  gpt-oss:120b-cloud  ")
 	cmd := state.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
@@ -673,7 +673,7 @@ func TestModelPullStateRequestProgressAndFailure(t *testing.T) {
 }
 
 func TestModelPullSanitizesAndBoundsUntrustedProgress(t *testing.T) {
-	state := NewModelPullState(true, true)
+	state := NewModelPullState(true, true, defaultThemeID)
 	state.Name, state.Phase = "qwen", ModelPullRunning
 	status := "\x1b]0;forged-title\x07pulling\r\nmanifest\u202e" + strings.Repeat("x", 2_000)
 	failure := errors.New("\x1b[2Jregistry failed\u2066\nsecond row")
@@ -706,7 +706,7 @@ func TestModelPullSanitizesAndBoundsUntrustedProgress(t *testing.T) {
 }
 
 func TestModelPullReducedMotionUsesUnfinishedStaticGlyph(t *testing.T) {
-	state := NewModelPullState(true, true)
+	state := NewModelPullState(true, true, defaultThemeID)
 	state.Name = "qwen"
 	state.Phase = ModelPullRunning
 	plain := ansi.Strip(state.View(50))
@@ -716,7 +716,7 @@ func TestModelPullReducedMotionUsesUnfinishedStaticGlyph(t *testing.T) {
 }
 
 func TestModelPullIgnoresStaleModelProgress(t *testing.T) {
-	state := NewModelPullState(false, true)
+	state := NewModelPullState(false, true, defaultThemeID)
 	state.Name, state.Phase = "wanted", ModelPullRunning
 	state.Apply(OllamaModelPullProgressMsg{Name: "stale", Done: true})
 	if state.Phase != ModelPullRunning {
@@ -725,7 +725,7 @@ func TestModelPullIgnoresStaleModelProgress(t *testing.T) {
 }
 
 func TestModelPullEmitsCancelWhileRunning(t *testing.T) {
-	state := NewModelPullState(false, true)
+	state := NewModelPullState(false, true, defaultThemeID)
 	state.Name, state.Phase = "qwen", ModelPullRunning
 	cmd := state.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if cmd == nil {
@@ -738,7 +738,7 @@ func TestModelPullEmitsCancelWhileRunning(t *testing.T) {
 }
 
 func TestModelPullFailureCanRetryOrEdit(t *testing.T) {
-	state := NewModelPullState(false, true)
+	state := NewModelPullState(false, true, defaultThemeID)
 	state.Name, state.Phase, state.Err = "qwen3:4b", ModelPullFailed, errors.New("network unavailable")
 
 	retry := state.Update(tea.KeyPressMsg{Code: 'r'})
@@ -758,7 +758,7 @@ func TestModelPullFailureCanRetryOrEdit(t *testing.T) {
 }
 
 func TestModelPullThemeChangePreservesOperationState(t *testing.T) {
-	state := NewModelPullState(true, false)
+	state := NewModelPullState(true, false, defaultThemeID)
 	state.Name, state.Phase, state.Completed, state.Total = "qwen", ModelPullRunning, 25, 100
 	state.SetTheme(false)
 	if state.isDark || state.Name != "qwen" || state.Phase != ModelPullRunning || state.Completed != 25 || state.Total != 100 {
@@ -770,7 +770,7 @@ func TestModelPullIgnoresStaleOperationReceipt(t *testing.T) {
 	m := newTestModel(t)
 	m.modelPullRequest = 2
 	m.modelPullRunning = true
-	m.modelPullState = NewModelPullState(false, true)
+	m.modelPullState = NewModelPullState(false, true, defaultThemeID)
 	m.modelPullState.Name, m.modelPullState.Phase = "qwen", ModelPullRunning
 
 	updated, _ := m.Update(OllamaModelPullProgressMsg{RequestID: 1, Name: "qwen", Err: errors.New("old cancellation")})
@@ -804,7 +804,7 @@ func TestOllamaModelDetailsDisclosesRemoteBoundary(t *testing.T) {
 	view := renderOllamaModelDetails(OllamaModelDescriptor{
 		Name: "coder:cloud", Source: OllamaModelCloud, ParameterSize: "120B",
 		ContextLength: 131072, Capabilities: []string{"tools", "thinking"}, Selectable: true, Fit: true,
-	}, 48, false)
+	}, 48, false, defaultThemeID)
 	for _, want := range []string{"coder:cloud", "cloud", "120B", "131K tokens", "tools+thinking", "Prompts leave this machine"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("details missing %q:\n%s", want, view)
@@ -816,7 +816,7 @@ func TestOllamaModelDetailsDoesNotClaimMachineSpecificFit(t *testing.T) {
 	view := renderOllamaModelDetails(OllamaModelDescriptor{
 		Name: "large-local", Source: OllamaModelLocal, Selectable: true, Fit: false,
 		Reason: "outside local memory profile",
-	}, 48, false)
+	}, 48, false, defaultThemeID)
 	if !strings.Contains(view, "Outside default profile") || strings.Contains(view, "Status         Unavailable") {
 		t.Fatalf("profile status = %q", view)
 	}

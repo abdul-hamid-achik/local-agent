@@ -15,7 +15,7 @@ import (
 )
 
 func TestToolCardViewWithActivityIsPureAndShowsSummary(t *testing.T) {
-	card := NewToolCard("write_file", ToolCardFile, true)
+	card := NewToolCard("write_file", ToolCardFile, true, defaultThemeID)
 	card.SetSummary("write src/部署🙂/main.go")
 	before := card
 
@@ -40,7 +40,7 @@ func TestToolCardViewWithActivityIsPureAndShowsSummary(t *testing.T) {
 }
 
 func TestToolCardSummaryIsBoundedAndUnicodeSafe(t *testing.T) {
-	card := NewToolCard("read_file", ToolCardFile, false)
+	card := NewToolCard("read_file", ToolCardFile, false, defaultThemeID)
 	card.SetSummary(strings.Repeat("部署🙂\n", 300))
 
 	if !utf8.ValidString(card.Summary) {
@@ -63,7 +63,7 @@ func TestToolCardSummaryIsBoundedAndUnicodeSafe(t *testing.T) {
 }
 
 func TestToolCardStripsTerminalControlsFromUntrustedFields(t *testing.T) {
-	card := NewToolCard("remote__read", ToolCardGeneric, true)
+	card := NewToolCard("remote__read", ToolCardGeneric, true, defaultThemeID)
 	card.State = ToolCardSuccess
 	card.Expanded = true
 	card.SetSummary("summary\x1b]8;;https://example.invalid\x07link\x1b]8;;\x07\u202espoof")
@@ -108,7 +108,7 @@ func TestCollapsedToolBodyFooterGrammar(t *testing.T) {
 }
 
 func TestToolCardCollapsedErrorAlwaysShowsResult(t *testing.T) {
-	card := NewToolCard("write_file", ToolCardFile, true)
+	card := NewToolCard("write_file", ToolCardFile, true, defaultThemeID)
 	card.State = ToolCardError
 	card.Expanded = false
 	card.Duration = 250 * time.Millisecond
@@ -128,7 +128,7 @@ func TestToolCardCollapsedErrorAlwaysShowsResult(t *testing.T) {
 }
 
 func TestToolCardHeaderUsesSpaceBetweenVerbAndObject(t *testing.T) {
-	card := NewToolCard("read_file", ToolCardFile, true)
+	card := NewToolCard("read_file", ToolCardFile, true, defaultThemeID)
 	card.State = ToolCardSuccess
 	card.Duration = 42 * time.Millisecond
 	card.SetSummary("path/to/file")
@@ -181,7 +181,7 @@ func TestToolCardHeaderUsesSpaceBetweenVerbAndObject(t *testing.T) {
 }
 
 func TestToolCardCompletedReceiptShowsDisclosureState(t *testing.T) {
-	card := NewToolCard("read_file", ToolCardFile, true)
+	card := NewToolCard("read_file", ToolCardFile, true, defaultThemeID)
 	card.State = ToolCardSuccess
 	card.Duration = 42 * time.Millisecond
 	card.Result = "package ui"
@@ -210,7 +210,7 @@ func TestToolCardCompletedReceiptShowsDisclosureState(t *testing.T) {
 		t.Fatalf("non-expandable running receipt showed a disclosure mark:\n%s", running)
 	}
 
-	card = NewToolCard("bash", ToolCardBash, true)
+	card = NewToolCard("bash", ToolCardBash, true, defaultThemeID)
 	card.State = ToolCardError
 	card.Duration = 310 * time.Millisecond
 	card.Result = "exit status 1"
@@ -238,7 +238,7 @@ func TestExpandedBashUnifiedDiffUsesAdaptiveSemanticColors(t *testing.T) {
 	noColor = false
 	t.Cleanup(func() { noColor = previous })
 
-	card := NewToolCard("bash", ToolCardBash, true)
+	card := NewToolCard("bash", ToolCardBash, true, defaultThemeID)
 	card.State = ToolCardSuccess
 	card.Expanded = true
 	card.Result = "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1 +1 @@\n-old\n+new\n context"
@@ -272,7 +272,7 @@ func TestExpandedFileReadUsesTrustedAdaptiveChroma(t *testing.T) {
 	const source = "package ui\n\nfunc answer() int { return 42 }"
 	views := make([]string, 0, 2)
 	for _, isDark := range []bool{false, true} {
-		card := NewToolCard("read_file", ToolCardFile, isDark)
+		card := NewToolCard("read_file", ToolCardFile, isDark, defaultThemeID)
 		card.State = ToolCardSuccess
 		card.Expanded = true
 		card.ResultLanguage = trustedResultLanguageFromPath("internal/ui/model.go")
@@ -318,7 +318,7 @@ func TestExpandedSearchResultUsesSemanticPathLocationAndMatch(t *testing.T) {
 	noColor = false
 	t.Cleanup(func() { noColor = previous })
 
-	card := NewToolCard("vecgrep_search", ToolCardSearch, true)
+	card := NewToolCard("vecgrep_search", ToolCardSearch, true, defaultThemeID)
 	card.State = ToolCardSuccess
 	card.Expanded = true
 	card.Result = "internal/ui/model.go:42:7:func (m *Model) Update()\ninternal/ui/view.go:18:render transcript"
@@ -337,7 +337,7 @@ func TestExpandedSearchResultUsesSemanticPathLocationAndMatch(t *testing.T) {
 }
 
 func TestSemanticToolResultPreviewIsBoundedAndVisible(t *testing.T) {
-	card := NewToolCard("read_file", ToolCardFile, true)
+	card := NewToolCard("read_file", ToolCardFile, true, defaultThemeID)
 	card.State = ToolCardSuccess
 	card.Expanded = true
 	card.ResultLanguage = "go"
@@ -365,7 +365,7 @@ func TestSemanticToolResultHonorsNoColorAndSanitizesBeforeHighlighting(t *testin
 	noColor = true
 	t.Cleanup(func() { noColor = previous })
 
-	card := NewToolCard("read_file", ToolCardFile, true)
+	card := NewToolCard("read_file", ToolCardFile, true, defaultThemeID)
 	card.State = ToolCardSuccess
 	card.Expanded = true
 	card.ResultLanguage = "go"
@@ -383,7 +383,7 @@ func TestSemanticToolResultHonorsNoColorAndSanitizesBeforeHighlighting(t *testin
 }
 
 func TestSemanticToolResultUnknownLanguageFallsBackToPlainText(t *testing.T) {
-	card := NewToolCard("read_file", ToolCardFile, true)
+	card := NewToolCard("read_file", ToolCardFile, true, defaultThemeID)
 	card.ResultLanguage = "../../go"
 	got := card.renderSemanticResultLines("plain output", 40)
 	if len(got) != 1 || ansi.Strip(got[0]) != "1 │ plain output" {
@@ -401,7 +401,7 @@ func TestSemanticToolResultCacheIsBoundedAndReturnsCopies(t *testing.T) {
 		semanticToolResultCache.Unlock()
 	})
 
-	card := NewToolCard("read_file", ToolCardFile, true)
+	card := NewToolCard("read_file", ToolCardFile, true, defaultThemeID)
 	card.ResultLanguage = "go"
 	for index := 0; index < maxToolResultRenderCache+17; index++ {
 		card.renderSemanticResultLines(fmt.Sprintf("package p%d", index), 40)
@@ -431,9 +431,9 @@ func TestSemanticToolResultCacheSeparatesGlyphProfiles(t *testing.T) {
 		semanticToolResultCache.Unlock()
 	})
 
-	unicodeCard := NewToolCard("read_file", ToolCardFile, true, GlyphUnicode)
+	unicodeCard := NewToolCard("read_file", ToolCardFile, true, defaultThemeID, GlyphUnicode)
 	unicodeCard.PreviewMode = ToolPreviewRead
-	asciiCard := NewToolCard("read_file", ToolCardFile, true, GlyphASCII)
+	asciiCard := NewToolCard("read_file", ToolCardFile, true, defaultThemeID, GlyphASCII)
 	asciiCard.PreviewMode = ToolPreviewRead
 
 	const result = "first\nsecond"
@@ -485,7 +485,7 @@ func TestToolCardStatusGlyphsKeepUnknownDistinctAndSingleWidth(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			card := NewToolCard("remote_tool", ToolCardGeneric, true)
+			card := NewToolCard("remote_tool", ToolCardGeneric, true, defaultThemeID)
 			card.State = tt.state
 			card.Projection = tt.projection
 			if got := card.statusGlyph(); got != tt.want {
@@ -498,7 +498,7 @@ func TestToolCardStatusGlyphsKeepUnknownDistinctAndSingleWidth(t *testing.T) {
 }
 
 func TestToolCardOmitsMeaninglessZeroDuration(t *testing.T) {
-	card := NewToolCard("read_file", ToolCardFile, true)
+	card := NewToolCard("read_file", ToolCardFile, true, defaultThemeID)
 	card.State = ToolCardSuccess
 	card.SetSummary("internal/ui/toolcard.go")
 
@@ -578,7 +578,7 @@ func TestToolCardAttentionHonorsNoColor(t *testing.T) {
 	noColor = true
 	t.Cleanup(func() { noColor = previous })
 
-	card := NewToolCard("mcphub__mcphub_call_tool", ToolCardGeneric, true)
+	card := NewToolCard("mcphub__mcphub_call_tool", ToolCardGeneric, true, defaultThemeID)
 	card.State = ToolCardAttention
 	card.Projection = ecosystem.ToolProjection{
 		Operation: "cortex_start_task", Role: ecosystem.RoleCoordination,
@@ -611,7 +611,7 @@ func TestASCIIExpandedRoutedAttentionCardUsesProfileAwareChrome(t *testing.T) {
 			BudgetBytes:   1024,
 		},
 	}
-	card := NewToolCard("mcphub__mcphub_call_tool", ToolCardGeneric, true, GlyphASCII)
+	card := NewToolCard("mcphub__mcphub_call_tool", ToolCardGeneric, true, defaultThemeID, GlyphASCII)
 	card.State = ToolCardAttention
 	card.Lifecycle = ToolLifecycleAttention
 	card.Expanded = true

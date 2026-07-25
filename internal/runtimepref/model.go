@@ -24,6 +24,7 @@ const (
 	maxPreferenceFileBytes    = 1024
 	maxPreferredModelBytes    = 256
 	maxPreferredProviderBytes = 128
+	maxPreferredThemeBytes    = 64
 	preferenceReadTimeout     = 2 * time.Second
 	preferenceLockTimeout     = 2 * time.Second
 	defaultPreferencesFile    = "runtime-preferences.json"
@@ -33,6 +34,7 @@ type document struct {
 	Version        int    `json:"version"`
 	ManualModel    string `json:"manual_model,omitempty"`
 	ManualProvider string `json:"manual_provider,omitempty"`
+	Theme          string `json:"theme,omitempty"`
 }
 
 // Store persists one bounded manual model selection in an owner-private file.
@@ -130,6 +132,51 @@ func (s *Store) SetManualProvider(name string) error {
 	}
 	return s.update(func(doc *document) error {
 		doc.ManualProvider = name
+		return nil
+	})
+}
+
+// LoadTheme reads the saved theme selection. The boolean is false when the
+// user has never chosen one, which is distinct from having chosen the default.
+func (s *Store) LoadTheme() (string, bool, error) {
+	if s == nil || strings.TrimSpace(s.path) == "" || s.reader == nil {
+		return "", false, fmt.Errorf("theme preference store is not initialized")
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	doc, err := s.loadLocked()
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	if doc.Theme == "" {
+		return "", false, nil
+	}
+	return doc.Theme, true, nil
+}
+
+// SetTheme atomically stores the selected theme identifier. The value is a
+// registry key, not free text, so the same bounded charset the provider name
+// uses is more than sufficient.
+func (s *Store) SetTheme(id string) error {
+	id, err := validateTheme(id)
+	if err != nil {
+		return err
+	}
+	return s.update(func(doc *document) error {
+		doc.Theme = id
+		return nil
+	})
+}
+
+// ClearTheme removes the saved theme preference, returning the UI to whatever
+// the configuration file selects.
+func (s *Store) ClearTheme() error {
+	return s.update(func(doc *document) error {
+		doc.Theme = ""
 		return nil
 	})
 }
@@ -311,4 +358,26 @@ func validateProvider(name string) (string, error) {
 		}
 	}
 	return name, nil
+}
+
+func validateTheme(id string) (string, error) {
+	id = strings.ToLower(strings.TrimSpace(id))
+	if id == "" {
+		return "", fmt.Errorf("theme preference is empty")
+	}
+	if !utf8.ValidString(id) {
+		return "", fmt.Errorf("theme preference is not valid UTF-8")
+	}
+	if len(id) > maxPreferredThemeBytes {
+		return "", fmt.Errorf("theme preference exceeds %d bytes", maxPreferredThemeBytes)
+	}
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-':
+			continue
+		default:
+			return "", fmt.Errorf("theme preference contains invalid characters")
+		}
+	}
+	return id, nil
 }

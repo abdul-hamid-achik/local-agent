@@ -115,7 +115,7 @@ func TestToolPreviewPoliciesSelectExpectedSourceRows(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			card := NewToolCard("tool", ToolCardGeneric, true)
+			card := NewToolCard("tool", ToolCardGeneric, true, defaultThemeID)
 			card.PreviewMode = test.mode
 			plan := card.resultPreviewPlan(source, 80)
 			if !reflect.DeepEqual(plan.sourceIndexes, test.wantIndexes) {
@@ -149,7 +149,7 @@ func TestReadAndExecPreviewNeverPresentRetainedPrefixAsSourceTail(t *testing.T) 
 		{name: "exec", mode: ToolPreviewExec, head: execPreviewHeadRows},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			card := NewToolCard(test.name, ToolCardGeneric, true)
+			card := NewToolCard(test.name, ToolCardGeneric, true, defaultThemeID)
 			card.PreviewMode = test.mode
 			card.OutputDigest = receipt.Digest
 			plan := card.resultPreviewPlan(result, 80)
@@ -168,7 +168,7 @@ func TestReadAndExecPreviewNeverPresentRetainedPrefixAsSourceTail(t *testing.T) 
 }
 
 func TestHeadTailOmissionIsRenderedBetweenHeadAndTail(t *testing.T) {
-	card := NewToolCard("read", ToolCardFile, true)
+	card := NewToolCard("read", ToolCardFile, true, defaultThemeID)
 	card.State = ToolCardSuccess
 	card.Lifecycle = ToolLifecycleSucceeded
 	card.Expanded = true
@@ -198,7 +198,7 @@ func TestReadPreviewRendersAbsoluteSourceRowsInsideCellBudget(t *testing.T) {
 	for index := range sourceLines {
 		sourceLines[index] = fmt.Sprintf("var row%02d = %d", index+1, index+1)
 	}
-	card := NewToolCard("read", ToolCardFile, true)
+	card := NewToolCard("read", ToolCardFile, true, defaultThemeID)
 	card.PreviewMode = ToolPreviewRead
 	card.ResultLanguage = "go"
 	rendered := card.renderSemanticResultLines(strings.Join(sourceLines, "\n"), 24)
@@ -234,7 +234,7 @@ func TestReadPreviewRendersAbsoluteSourceRowsInsideCellBudget(t *testing.T) {
 		t.Fatalf("narrow read gutter displaced useful content: %#v", narrowPlan)
 	}
 
-	ascii := NewToolCard("read", ToolCardFile, true, GlyphASCII)
+	ascii := NewToolCard("read", ToolCardFile, true, defaultThemeID, GlyphASCII)
 	ascii.PreviewMode = ToolPreviewRead
 	asciiLines := ascii.renderSemanticResultLines("one\ntwo", 12)
 	asciiPlain := ansi.Strip(strings.Join(asciiLines, "\n"))
@@ -244,7 +244,7 @@ func TestReadPreviewRendersAbsoluteSourceRowsInsideCellBudget(t *testing.T) {
 }
 
 func TestSearchPreviewGroupsAdjacentMatchesWithoutHidingFileAfterGap(t *testing.T) {
-	card := NewToolCard("grep", ToolCardSearch, true)
+	card := NewToolCard("grep", ToolCardSearch, true, defaultThemeID)
 	card.PreviewMode = ToolPreviewSearch
 	lines := []string{
 		"internal/ui/model.go:42:7:first match",
@@ -274,7 +274,7 @@ func TestGenericPreviewStylesBoundedKeyValueRowsWithoutParsingJSON(t *testing.T)
 	noColor = false
 	t.Cleanup(func() { noColor = previous })
 
-	card := NewToolCard("remote_status", ToolCardGeneric, true)
+	card := NewToolCard("remote_status", ToolCardGeneric, true, defaultThemeID)
 	card.PreviewMode = ToolPreviewGeneric
 	keyValue := card.renderGenericResultLine("state: ready", 40)
 	if plain := ansi.Strip(keyValue); plain != "state: ready" {

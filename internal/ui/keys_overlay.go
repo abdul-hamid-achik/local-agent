@@ -72,6 +72,8 @@ func (m *Model) handleOverlayKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 			m.closeAgentHub()
 		case OverlayModePicker:
 			m.closeModePicker()
+		case OverlayThemePicker:
+			m.closeThemePicker()
 		case OverlayRuntimeStatus:
 			m.closeRuntimeStatus()
 		case OverlayGoalRecovery:
@@ -176,6 +178,19 @@ func (m *Model) handleOverlayKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		} else {
 			var cmd tea.Cmd
 			m.providerPickerState.List, cmd = m.providerPickerState.List.Update(msg)
+			cmds = append(cmds, cmd)
+		}
+		return tea.Batch(cmds...), true
+	}
+
+	if m.overlay == OverlayThemePicker && m.themePickerState != nil {
+		if key.Matches(msg, m.keys.CompleteSelect) {
+			selected := m.themePickerState.SelectedThemeID()
+			m.closeThemePicker()
+			cmds = append(cmds, m.applyTheme(selected))
+		} else {
+			var cmd tea.Cmd
+			m.themePickerState.List, cmd = m.themePickerState.List.Update(msg)
 			cmds = append(cmds, cmd)
 		}
 		return tea.Batch(cmds...), true

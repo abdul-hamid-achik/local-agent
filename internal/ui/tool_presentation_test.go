@@ -118,7 +118,7 @@ func TestPresentToolBoundsLongUnicodeLabels(t *testing.T) {
 }
 
 func TestToolCardPresentationPreservesRawNameAndShowsItWhenExpanded(t *testing.T) {
-	card := NewToolCard("write_file", ToolCardFile, true)
+	card := NewToolCard("write_file", ToolCardFile, true, defaultThemeID)
 	originalName := card.Name
 	card.State = ToolCardSuccess
 	card.Duration = 250 * time.Millisecond

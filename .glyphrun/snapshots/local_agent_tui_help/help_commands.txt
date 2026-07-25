@@ -31,5 +31,5 @@
                      │   /goal budget      Unavailable · No goal is configured.                   │
                      │   /goal drop        Unavailable · No goal is configured.                   │
                      │   /model            Show, switch, or list models                           │
-                     │ esc/q close · j/k scroll · pgup/pgdn page · 35%                            │
+                     │ esc/q close · j/k scroll · pgup/pgdn page · 34%                            │
                      ╰────────────────────────────────────────────────────────────────────────────╯

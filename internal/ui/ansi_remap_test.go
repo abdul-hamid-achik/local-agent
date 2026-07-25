@@ -241,7 +241,7 @@ func TestRemapANSI16TruncatesToPlainWidth(t *testing.T) {
 func TestRenderSemanticResultLinesUsesDisplayVariantWithoutCacheLeak(t *testing.T) {
 	palette := remapTestPalette(t)
 
-	card := NewToolCard("bash", ToolCardBash, true)
+	card := NewToolCard("bash", ToolCardBash, true, defaultThemeID)
 	card.Result = "build ok"
 	plain := card.renderSemanticResultLines(card.Result, 40)
 	if len(plain) != 1 {
@@ -275,20 +275,20 @@ func TestRenderSemanticResultLinesUsesDisplayVariantWithoutCacheLeak(t *testing.
 func TestRenderSemanticResultLinesDisplayVariantSkipsSearchAndCode(t *testing.T) {
 	remapTestPalette(t)
 
-	search := NewToolCard("grep", ToolCardSearch, true)
+	search := NewToolCard("grep", ToolCardSearch, true, defaultThemeID)
 	search.Result = "main.go:1:package main"
 	search.ResultDisplay = "\x1b[35mmain.go\x1b[0m:1:package main"
-	baseline := NewToolCard("grep", ToolCardSearch, true)
+	baseline := NewToolCard("grep", ToolCardSearch, true, defaultThemeID)
 	baseline.Result = search.Result
 	if got, want := search.renderSemanticResultLines(search.Result, 60), baseline.renderSemanticResultLines(baseline.Result, 60); got[0] != want[0] {
 		t.Errorf("search kind must ignore the display variant: %q, want %q", got[0], want[0])
 	}
 
-	code := NewToolCard("read_file", ToolCardFile, true)
+	code := NewToolCard("read_file", ToolCardFile, true, defaultThemeID)
 	code.ResultLanguage = "go"
 	code.Result = "package main"
 	code.ResultDisplay = "\x1b[31mpackage main\x1b[0m"
-	codeBaseline := NewToolCard("read_file", ToolCardFile, true)
+	codeBaseline := NewToolCard("read_file", ToolCardFile, true, defaultThemeID)
 	codeBaseline.ResultLanguage = "go"
 	codeBaseline.Result = code.Result
 	if got, want := code.renderSemanticResultLines(code.Result, 60), codeBaseline.renderSemanticResultLines(codeBaseline.Result, 60); got[0] != want[0] {
@@ -301,7 +301,7 @@ func TestRemappedDisplayResultLinesRespectsNoColor(t *testing.T) {
 	noColor = true
 	t.Cleanup(func() { noColor = previous })
 
-	card := NewToolCard("bash", ToolCardBash, true)
+	card := NewToolCard("bash", ToolCardBash, true, defaultThemeID)
 	card.Result = "ok"
 	card.ResultDisplay = "\x1b[32mok\x1b[0m"
 	if lines := card.remappedDisplayResultLines(40); lines != nil {
@@ -343,7 +343,7 @@ func TestPersistedSessionNeverContainsEscapeBytes(t *testing.T) {
 func TestToolCardAttentionExpandedUsesDisplayVariant(t *testing.T) {
 	palette := remapTestPalette(t)
 
-	card := NewToolCard("bash", ToolCardBash, true)
+	card := NewToolCard("bash", ToolCardBash, true, defaultThemeID)
 	card.State = ToolCardAttention
 	card.Expanded = true
 	card.Result = "warning: something"

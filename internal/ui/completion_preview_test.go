@@ -28,7 +28,7 @@ func openCompletionPreviewFixture(t *testing.T, files ...string) *Model {
 	for _, file := range files {
 		items = append(items, completionFileItem(file))
 	}
-	m.completionState = newCompletionState("attachments", items, true, m.isDark)
+	m.completionState = newCompletionState("attachments", items, true, m.themeID, m.isDark)
 	m.overlay = OverlayCompletion
 	return m
 }
@@ -324,7 +324,7 @@ func TestCompletionModalSanitizesUntrustedChromeWithoutChangingInsertion(t *test
 		Description: "open\x1b[2J\nDESCRIPTION_SPOOF",
 	}
 	m := newTestModel(t)
-	m.completionState = newCompletionState("attachments", []Completion{unsafe}, true, m.isDark)
+	m.completionState = newCompletionState("attachments", []Completion{unsafe}, true, m.themeID, m.isDark)
 	m.completionState.CurrentPath = "folder\x1b]0;PATH_SECRET\x07\nBREADCRUMB_SPOOF"
 	m.overlay = OverlayCompletion
 

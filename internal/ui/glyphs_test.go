@@ -126,7 +126,7 @@ func TestASCIIProfilePropagatesAcrossPrimarySemanticSurfaces(t *testing.T) {
 		{ToolCardAttention, ToolLifecycleCancelled},
 		{ToolCardError, ToolLifecycleFailed},
 	} {
-		card := NewToolCard("read_file", ToolCardFile, true, GlyphASCII)
+		card := NewToolCard("read_file", ToolCardFile, true, defaultThemeID, GlyphASCII)
 		card.State = state.cardState
 		card.Lifecycle = state.lifecycle
 		card.Expanded = state.cardState != ToolCardRunning
@@ -154,7 +154,7 @@ func TestASCIIProfilePropagatesAcrossPrimarySemanticSurfaces(t *testing.T) {
 	)
 	surfaces = append(surfaces, diff)
 
-	nodeStyles := NewToolCardStyles(true)
+	nodeStyles := NewToolCardStyles(true, defaultThemeID)
 	nodes := []WorkNode{
 		{Status: WorkNodeRunning, Label: "runner", Model: "m", Location: WorkNodeLocationLocal},
 		{Status: WorkNodeWaiting, Label: "waiter", Model: "m", Location: WorkNodeLocationLocal},
@@ -220,7 +220,7 @@ func TestASCIIProfilePropagatesAcrossPrimarySemanticSurfaces(t *testing.T) {
 		Lifecycle:         BlockLive,
 		ProgressAvailable: true,
 		Nodes:             nodes,
-	}, 72, true, GlyphASCII))
+	}, 72, true, defaultThemeID, GlyphASCII))
 
 	rendered := ansi.Strip(strings.Join(surfaces, "\n"))
 	assertNoUnicodeSemanticGlyphs(t, rendered)

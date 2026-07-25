@@ -43,8 +43,8 @@ type goalPlanStyles struct {
 	warning   lipgloss.Style
 }
 
-func newGoalPlanStyles(isDark bool, phase goalPlanPhase) goalPlanStyles {
-	palette := outputSemanticPalette(isDark)
+func newGoalPlanStyles(isDark bool, themeID string, phase goalPlanPhase) goalPlanStyles {
+	palette := outputSemanticPalette(isDark, themeID)
 	phaseColor := palette.Accent
 	switch phase {
 	case goalPlanPaused, goalPlanExhausted:
@@ -76,6 +76,7 @@ type goalPlanCard struct {
 	width        int
 	height       int
 	isDark       bool
+	themeID       string
 	glyphProfile GlyphProfile
 	styles       goalPlanStyles
 
@@ -86,7 +87,7 @@ type goalPlanCard struct {
 	renders      int
 }
 
-func newGoalPlanCard(snapshot goal.Snapshot, isDark bool, profiles ...GlyphProfile) (*goalPlanCard, bool) {
+func newGoalPlanCard(snapshot goal.Snapshot, isDark bool, themeID string, profiles ...GlyphProfile) (*goalPlanCard, bool) {
 	if !validGoalPlanSnapshot(snapshot) {
 		return nil, false
 	}
@@ -97,7 +98,7 @@ func newGoalPlanCard(snapshot goal.Snapshot, isDark bool, profiles ...GlyphProfi
 		height:       goalPlanCompactHeight,
 		isDark:       isDark,
 		glyphProfile: resolveGlyphProfile(profiles...),
-		styles:       newGoalPlanStyles(isDark, phase),
+		styles:       newGoalPlanStyles(isDark, themeID, phase),
 	}, true
 }
 
@@ -158,7 +159,7 @@ func (c *goalPlanCard) SetSnapshot(snapshot goal.Snapshot) bool {
 		return true
 	}
 	c.snapshot = cloneGoalPlanSnapshot(snapshot)
-	c.styles = newGoalPlanStyles(c.isDark, goalPlanPhaseForSnapshot(snapshot))
+	c.styles = newGoalPlanStyles(c.isDark, c.themeID, goalPlanPhaseForSnapshot(snapshot))
 	c.invalidate()
 	return true
 }
@@ -195,12 +196,16 @@ func (c *goalPlanCard) SetSize(width, height int) {
 	c.invalidate()
 }
 
-func (c *goalPlanCard) SetTheme(isDark bool) {
-	if c == nil || c.isDark == isDark {
+func (c *goalPlanCard) SetTheme(isDark bool, themeIDs ...string) {
+	if c == nil {
 		return
 	}
-	c.isDark = isDark
-	c.styles = newGoalPlanStyles(isDark, goalPlanPhaseForSnapshot(c.snapshot))
+	themeID := resolveThemeID(themeIDs...)
+	if c.isDark == isDark && resolveThemeID(c.themeID) == themeID {
+		return
+	}
+	c.isDark, c.themeID = isDark, themeID
+	c.styles = newGoalPlanStyles(isDark, themeID, goalPlanPhaseForSnapshot(c.snapshot))
 	c.invalidate()
 }
 
@@ -402,7 +407,7 @@ func (m *Model) syncGoalPlan() {
 		return
 	}
 	if m.goalPlan == nil || m.goalPlan.snapshot.ID != snapshot.ID {
-		card, ok := newGoalPlanCard(snapshot, m.isDark, m.glyphProfile)
+		card, ok := newGoalPlanCard(snapshot, m.isDark, m.themeID, m.glyphProfile)
 		if !ok {
 			m.goalPlan = nil
 			return

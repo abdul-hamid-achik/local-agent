@@ -79,7 +79,7 @@ func TestGoalPlanDerivesLifecycleOnlyFromDurableSnapshot(t *testing.T) {
 			if phase := goalPlanPhaseForSnapshot(snapshot); phase != test.phase {
 				t.Fatalf("phase = %q, want %q", phase, test.phase)
 			}
-			card, ok := newGoalPlanCard(snapshot, true)
+			card, ok := newGoalPlanCard(snapshot, true, defaultThemeID)
 			if !ok {
 				t.Fatal("valid durable snapshot was rejected")
 			}
@@ -97,7 +97,7 @@ func TestGoalPlanDerivesLifecycleOnlyFromDurableSnapshot(t *testing.T) {
 func TestGoalPlanRejectsStaleAndEquivocatingSnapshots(t *testing.T) {
 	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
 	base := goalPlanFixture(now)
-	card, ok := newGoalPlanCard(base, true)
+	card, ok := newGoalPlanCard(base, true, defaultThemeID)
 	if !ok {
 		t.Fatal("fixture rejected")
 	}
@@ -131,7 +131,7 @@ func TestGoalPlanResponsiveCachedAndWidthSafe(t *testing.T) {
 	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
 	snapshot := goalPlanFixture(now)
 	snapshot.Cortex = goal.CortexCorrelation{TaskID: "task_1", Revision: 1, Actor: "local-agent"}
-	card, ok := newGoalPlanCard(snapshot, true)
+	card, ok := newGoalPlanCard(snapshot, true, defaultThemeID)
 	if !ok {
 		t.Fatal("fixture rejected")
 	}
@@ -176,7 +176,7 @@ func TestGoalPlanDoesNotPromoteProseOrRawLookingContent(t *testing.T) {
 	snapshot.Completion = &goal.CompletionRecord{CompletionRequest: goal.CompletionRequest{Results: []goal.AcceptanceResult{{
 		CriterionID: "criterion_1", Satisfied: true, Evidence: "untrusted transcript text",
 	}}}}
-	card, ok := newGoalPlanCard(snapshot, true)
+	card, ok := newGoalPlanCard(snapshot, true, defaultThemeID)
 	if !ok {
 		t.Fatal("bounded snapshot rejected")
 	}

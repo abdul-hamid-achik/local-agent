@@ -76,7 +76,7 @@ func TestRefreshEnrichesMissingCapabilitiesWithShow(t *testing.T) {
 func TestApplyInventoryRecomputesCurrentModelAtReceiptTime(t *testing.T) {
 	m := newTestModel(t)
 	m.model = "model-b"
-	m.modelPullState = NewModelPullState(false, true)
+	m.modelPullState = NewModelPullState(false, true, defaultThemeID)
 	m.modelPullState.Name = "model-b"
 	m.modelPullState.Phase = ModelPullComplete
 	m.modelInventoryRequest = 3

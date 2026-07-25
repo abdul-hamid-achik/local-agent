@@ -199,7 +199,7 @@ func TestContentGridOriginSharedAcrossSurfaces(t *testing.T) {
 	}
 
 	// Tool card: │ at column 0; semantic content after bar+pad at OriginX.
-	card := NewToolCard("read_file", ToolCardFile, true)
+	card := NewToolCard("read_file", ToolCardFile, true, defaultThemeID)
 	card.State = ToolCardSuccess
 	card.SetSummary("path/to/file")
 	lineWidth := contentLeftColumns + 40

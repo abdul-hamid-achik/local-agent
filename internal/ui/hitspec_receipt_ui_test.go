@@ -27,7 +27,7 @@ func TestRunningHitspecRoutesKeepSpecialistWithoutRepeatingAction(t *testing.T) 
 				// ambient card even while the route remains recognizable.
 				"arguments": map[string]any{"query": "private query", "token": "secret"},
 			}
-			card := NewToolCard("mcphub__mcphub_call_tool", ToolCardGeneric, true)
+			card := NewToolCard("mcphub__mcphub_call_tool", ToolCardGeneric, true, defaultThemeID)
 			card.Projection = ecosystem.ProjectToolCall(card.Name, args)
 			card.SetSummary(ecosystemToolSummary(card.Name, args))
 
@@ -66,7 +66,7 @@ func TestCompletedHitspecCaptureShowsBoundedArtifactReceipt(t *testing.T) {
 		}`)},
 	)
 
-	card := NewToolCard("mcphub__mcphub_call_tool", ToolCardGeneric, true)
+	card := NewToolCard("mcphub__mcphub_call_tool", ToolCardGeneric, true, defaultThemeID)
 	card.State = toolCardStateFromProjection(projection)
 	card.Projection = projection
 	card.Expanded = true

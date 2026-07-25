@@ -308,7 +308,7 @@ func TestStaleCompletionDebounceTickDoesNotStartSearch(t *testing.T) {
 func TestCompletionPreviewGenerationRejectsCloseReopenResult(t *testing.T) {
 	m := newTestModel(t)
 	m.completionGeneration = 10
-	m.completionState = newCompletionState("attachments", []Completion{completionFileItem("old.txt")}, true, m.isDark)
+	m.completionState = newCompletionState("attachments", []Completion{completionFileItem("old.txt")}, true, m.themeID, m.isDark)
 	m.completionState.Generation = m.completionGeneration
 	m.overlay = OverlayCompletion
 	old := m.refreshCompletionPreview()
@@ -317,7 +317,7 @@ func TestCompletionPreviewGenerationRejectsCloseReopenResult(t *testing.T) {
 	}
 	m.closeCompletion()
 	m.completionGeneration++
-	m.completionState = newCompletionState("attachments", []Completion{completionFileItem("new.txt")}, true, m.isDark)
+	m.completionState = newCompletionState("attachments", []Completion{completionFileItem("new.txt")}, true, m.themeID, m.isDark)
 	m.completionState.Generation = m.completionGeneration
 	m.overlay = OverlayCompletion
 	m.completionState.Preview = completionPreview{State: completionPreviewLoading, Path: "new.txt"}

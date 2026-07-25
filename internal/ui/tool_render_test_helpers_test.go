@@ -24,7 +24,7 @@ func (manager *ToolCardManager) AddCardWithID(
 	kind ToolCardKind,
 	startTime time.Time,
 ) {
-	card := NewToolCard(name, kind, manager.IsDark)
+	card := NewToolCard(name, kind, manager.IsDark, defaultThemeID)
 	card.ID = id
 	card.StartTime = startTime
 	manager.Cards = append(manager.Cards, card)
@@ -59,10 +59,10 @@ func (manager *ToolCardManager) UpdateCardSemanticWithID(
 	}
 }
 
-func (manager *ToolCardManager) SetDark(isDark bool) {
+func (manager *ToolCardManager) SetDark(isDark bool, themeID string) {
 	manager.IsDark = isDark
 	for index := range manager.Cards {
-		manager.Cards[index].SetDark(isDark)
+		manager.Cards[index].SetDark(isDark, themeID)
 	}
 }
 
@@ -94,7 +94,7 @@ func testProjectedToolCard(t testing.TB, model *Model, index int) ToolCard {
 	if err != nil {
 		t.Fatalf("project tool %d: %v", index, err)
 	}
-	card, err := ToolCardFromRenderModel(renderModel, model.isDark, model.glyphProfile)
+	card, err := ToolCardFromRenderModel(renderModel, model.isDark, defaultThemeID, model.glyphProfile)
 	if err != nil {
 		t.Fatalf("construct tool card %d: %v", index, err)
 	}

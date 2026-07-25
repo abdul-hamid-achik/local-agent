@@ -185,7 +185,7 @@ func TestHelpOverlayFitsNarrowTerminal(t *testing.T) {
 }
 
 func TestToolCardFitsNarrowWidthAndUnicode(t *testing.T) {
-	card := NewToolCard("write_文件_with_a_very_long_name", ToolCardFile, true)
+	card := NewToolCard("write_文件_with_a_very_long_name", ToolCardFile, true, defaultThemeID)
 	card.State = ToolCardSuccess
 	card.Duration = 1250 * time.Millisecond
 	card.Expanded = true

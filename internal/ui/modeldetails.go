@@ -11,9 +11,9 @@ import (
 // renderCompactOllamaModelDetails keeps the minimum terminal actionable. It
 // projects one bounded line per decision-relevant group instead of letting the
 // complete metadata table push the footer and closing border off-screen.
-func renderCompactOllamaModelDetails(model OllamaModelDescriptor, width int, isDark bool) string {
+func renderCompactOllamaModelDetails(model OllamaModelDescriptor, width int, isDark bool, themeID string) string {
 	width = max(1, width)
-	palette := outputSemanticPalette(isDark)
+	palette := outputSemanticPalette(isDark, themeID)
 	titleStyle := lipgloss.NewStyle().Foreground(palette.Accent).Bold(true)
 	textStyle := lipgloss.NewStyle().Foreground(palette.Text)
 	dimStyle := lipgloss.NewStyle().Foreground(palette.Dim)
@@ -76,9 +76,9 @@ func renderCompactOllamaModelDetails(model OllamaModelDescriptor, width int, isD
 // renderOllamaModelDetails is a transport-independent details projection for a
 // modal owned by the parent model. It remains useful while enrichment loads:
 // unknown metadata is omitted instead of rendered as misleading zero values.
-func renderOllamaModelDetails(model OllamaModelDescriptor, width int, isDark bool) string {
+func renderOllamaModelDetails(model OllamaModelDescriptor, width int, isDark bool, themeID string) string {
 	width = max(24, width)
-	palette := outputSemanticPalette(isDark)
+	palette := outputSemanticPalette(isDark, themeID)
 	label := lipgloss.NewStyle().Foreground(palette.Dim).Width(min(15, width/3))
 	value := lipgloss.NewStyle().Foreground(palette.Text)
 	accent := lipgloss.NewStyle().Foreground(palette.Accent).Bold(true)

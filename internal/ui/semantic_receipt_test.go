@@ -71,7 +71,7 @@ func TestHitspecSearchRendersSuccessfulCandidateEvidence(t *testing.T) {
 		}),
 		ecosystem.RawReceipt{Text: `{"kind":"discovery","query":"current docs","results":[{"title":"Docs","url":"https://docs.local-agent.dev/","domain":"docs.local-agent.dev","snippet":"candidate","citation_id":"source-01"}],"truncated":false}`},
 	)
-	card := NewToolCard("mcphub__mcphub_call_tool", ToolCardGeneric, true)
+	card := NewToolCard("mcphub__mcphub_call_tool", ToolCardGeneric, true, defaultThemeID)
 	card.State = toolCardStateFromProjection(projection)
 	card.Projection = projection
 	card.Result = ecosystem.SafeReceiptText(projection)
@@ -100,7 +100,7 @@ func TestHitspecSearchRendersSuccessfulCandidateEvidence(t *testing.T) {
 }
 
 func TestExpandedSemanticReceiptShowsDownstreamRouteAndEvidence(t *testing.T) {
-	card := NewToolCard("mcphub__cortex__cortex_investigate", ToolCardGeneric, true)
+	card := NewToolCard("mcphub__cortex__cortex_investigate", ToolCardGeneric, true, defaultThemeID)
 	card.State = ToolCardSuccess
 	card.Expanded = true
 	card.Duration = time.Millisecond
@@ -120,7 +120,7 @@ func TestExpandedSemanticReceiptShowsDownstreamRouteAndEvidence(t *testing.T) {
 }
 
 func TestSemanticAttentionUsesDomainBeforeArbitraryResultText(t *testing.T) {
-	card := NewToolCard("bob__bob_check", ToolCardGeneric, true)
+	card := NewToolCard("bob__bob_check", ToolCardGeneric, true, defaultThemeID)
 	card.State = ToolCardAttention
 	card.Expanded = true
 	card.Duration = time.Millisecond
@@ -150,7 +150,7 @@ func TestDeferredMCPHubReceiptShowsStoredResultAndFetchPath(t *testing.T) {
 			CallID: "call-123", Lazy: true,
 		},
 	}
-	card := NewToolCard("mcphub__mcphub_call_tool", ToolCardGeneric, true)
+	card := NewToolCard("mcphub__mcphub_call_tool", ToolCardGeneric, true, defaultThemeID)
 	card.State = toolCardStateFromProjection(projection)
 	card.Expanded = true
 	card.Duration = 2 * time.Millisecond

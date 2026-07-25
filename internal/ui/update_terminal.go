@@ -9,43 +9,56 @@ import (
 // handleThemeChange applies a terminal background color change to every
 // themed surface without disturbing transcript anchors.
 func (m *Model) handleThemeChange(msg tea.BackgroundColorMsg) {
+	m.isDark = msg.IsDark()
+	m.rebuildThemedSurfaces()
+}
+
+// rebuildThemedSurfaces repaints every themed surface from the current
+// appearance — light/dark and selected color scheme — while preserving
+// transcript, approval, and form anchors.
+//
+// Light/dark detection and /theme are the same event as far as the frame is
+// concerned: both change what newSemanticPalette returns, and both must reach
+// the cached styles held by child components, the Bubbles delegates, the
+// approval viewport, and the Glamour renderer. Keeping one routine means a
+// surface added later cannot be repainted by one path and missed by the other.
+func (m *Model) rebuildThemedSurfaces() {
 	transcriptAnchor := m.captureTranscriptReflowAnchor()
 	approvalAnchor := m.captureApprovalTranscriptAnchor()
 	inlineFormAnchor := m.captureInlineFormTranscriptAnchor()
-	m.isDark = msg.IsDark()
-	m.styles = NewStyles(m.isDark)
+	m.styles = NewStyles(m.isDark, m.themeID)
 	// Update spinner style for theme. Unset StatusDot pad — content-grid Prefix
 	// owns the activity-rail lead (see renderWorkingLine).
 	m.spin.Style = m.styles.StatusDot.UnsetPaddingLeft()
 	m.syncComposerAuthority()
-	m.scramble.SetDark(msg.IsDark())
+	m.scramble.SetDark(m.isDark)
 	m.restylePickerOverlays()
 	m.restyleAgentHub()
 	m.restyleViewerModals()
 	m.restyleTranscriptSearch()
 	if m.goalFormState != nil {
-		m.goalFormState.SetTheme(m.isDark)
+		m.goalFormState.SetTheme(m.isDark, m.themeID)
 		m.goalFormState.SetReducedMotion(m.reducedMotion)
 	}
 	if m.cortexDecision != nil {
-		m.cortexDecision.SetTheme(m.isDark)
+		m.cortexDecision.SetTheme(m.isDark, m.themeID)
 		m.cortexDecision.reducedMotion = m.reducedMotion
 	}
 	if m.continuation.card != nil {
-		m.continuation.card.SetTheme(m.isDark)
+		m.continuation.card.SetTheme(m.isDark, m.themeID)
 	}
 	if m.bobWorkspaceContext.card != nil {
-		m.bobWorkspaceContext.card.SetTheme(m.isDark)
+		m.bobWorkspaceContext.card.SetTheme(m.isDark, m.themeID)
 	}
 	if m.goalInspectorState != nil {
-		m.goalInspectorState.SetTheme(m.isDark)
+		m.goalInspectorState.SetTheme(m.isDark, m.themeID)
 		m.goalInspectorState.SetReducedMotion(m.reducedMotion)
 	}
 	if m.goalPlan != nil {
-		m.goalPlan.SetTheme(m.isDark)
+		m.goalPlan.SetTheme(m.isDark, m.themeID)
 	}
 	if m.goalRecoveryState != nil {
-		m.goalRecoveryState.SetTheme(m.isDark)
+		m.goalRecoveryState.SetTheme(m.isDark, m.themeID)
 		m.goalRecoveryState.SetReducedMotion(m.reducedMotion)
 	}
 	if m.pendingApproval != nil && m.approvalState != nil {
@@ -57,7 +70,7 @@ func (m *Model) handleThemeChange(msg tea.BackgroundColorMsg) {
 	// Recreate markdown renderer for new theme.
 	if m.width > 0 {
 		m.markdownWidth = m.chatContentWidth()
-		m.md = NewMarkdownRenderer(m.markdownWidth, m.isDark)
+		m.md = NewMarkdownRenderer(m.markdownWidth, m.isDark, m.themeID)
 		m.invalidateRenderedCache()
 	}
 	if m.ready {

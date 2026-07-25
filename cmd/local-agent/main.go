@@ -770,6 +770,20 @@ func run() int {
 	m.SetConfigSourcePath(cfg.SourcePath)
 	m.SetModelRoutingCatalog(cfg.Model.Models)
 	m.SetModelPreferenceStore(modelPreferenceStore)
+	// Theme precedence: an explicit /theme choice outranks the config key,
+	// because it is the more recent and more deliberate of the two. An
+	// unreadable preference file is not worth failing startup over — the
+	// default palette is always legible.
+	if theme := strings.TrimSpace(cfg.UI.Theme); theme != "" && !m.SetTheme(theme) {
+		log.Printf("warning: unknown ui.theme %q in %s; using the default", theme, cfg.SourcePath)
+	}
+	if modelPreferenceStore != nil {
+		if saved, ok, themeErr := modelPreferenceStore.LoadTheme(); themeErr != nil {
+			log.Printf("warning: saved theme preference unreadable: %v", themeErr)
+		} else if ok && !m.SetTheme(saved) {
+			log.Printf("warning: saved theme %q is not available in this build; using the default", saved)
+		}
+	}
 	if home, homeErr := os.UserHomeDir(); homeErr != nil {
 		log.Printf("warning: image attachments unavailable: %v", homeErr)
 	} else if imageStore, imageErr := imageasset.NewStore(filepath.Join(home, ".config", "local-agent", "images"), imageasset.DefaultLimits()); imageErr != nil {

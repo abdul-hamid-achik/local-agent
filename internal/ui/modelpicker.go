@@ -196,7 +196,7 @@ func (s *ModelPickerState) SelectedReason() string {
 	return modelDecisionReason(descriptor)
 }
 
-func newModelPickerState(models []config.Model, currentModel string, terminalWidth, terminalHeight int, isDark bool, reducedMotion ...bool) *ModelPickerState {
+func newModelPickerState(models []config.Model, currentModel string, terminalWidth, terminalHeight int, isDark bool, themeID string, reducedMotion ...bool) *ModelPickerState {
 	descriptors := make([]OllamaModelDescriptor, 0, len(models))
 	for _, model := range models {
 		descriptors = append(descriptors, OllamaModelDescriptor{
@@ -206,12 +206,12 @@ func newModelPickerState(models []config.Model, currentModel string, terminalWid
 			Selectable: true, Fit: config.CheckModelMemorySafe(model.Name) == nil, AutoRoutable: true,
 		})
 	}
-	state := newOllamaModelPickerState(descriptors, currentModel, terminalWidth, terminalHeight, isDark, reducedMotion...)
+	state := newOllamaModelPickerState(descriptors, currentModel, terminalWidth, terminalHeight, isDark, themeID, reducedMotion...)
 	state.Models = models
 	return state
 }
 
-func newOllamaModelPickerState(models []OllamaModelDescriptor, currentModel string, terminalWidth, terminalHeight int, isDark bool, reducedMotion ...bool) *ModelPickerState {
+func newOllamaModelPickerState(models []OllamaModelDescriptor, currentModel string, terminalWidth, terminalHeight int, isDark bool, themeID string, reducedMotion ...bool) *ModelPickerState {
 	models = append([]OllamaModelDescriptor(nil), models...)
 	sort.SliceStable(models, func(i, j int) bool {
 		gi, gj := descriptorGroup(models[i]), descriptorGroup(models[j])
@@ -232,11 +232,11 @@ func newOllamaModelPickerState(models []OllamaModelDescriptor, currentModel stri
 	// selected-detail strip below owns metadata. Model rows intentionally stay
 	// single-line at every terminal size so metadata is not repeated and mixed
 	// local/cloud inventories remain simultaneously scannable.
-	delegate := newPickerDelegate(isDark, true)
+	delegate := newPickerDelegate(isDark, true, themeID)
 	pickerW := pickerListWidth(terminalWidth)
 	pickerH := modelPickerListHeight(terminalHeight, len(items), delegate.Height())
 	l := list.New(items, delegate, pickerW, pickerH)
-	configurePickerList(&l, isDark, reducedMotion...)
+	configurePickerList(&l, isDark, themeID, reducedMotion...)
 	setSettingsTitleDensity(&l, compact)
 	l.Title = "Ollama models"
 	l.SetShowStatusBar(false)
@@ -468,7 +468,7 @@ func (m *Model) openModelPicker() {
 		return
 	}
 	if len(m.ollamaModels) > 0 {
-		m.modelPickerState = newOllamaModelPickerState(m.ollamaModels, m.model, m.width, m.height, m.isDark, m.reducedMotion)
+		m.modelPickerState = newOllamaModelPickerState(m.ollamaModels, m.model, m.width, m.height, m.isDark, m.themeID, m.reducedMotion)
 		m.restylePickerOverlays()
 		if m.ollamaVersion != "" {
 			m.modelPickerState.List.Title = ollamaModelPickerTitle(m.ollamaVersion)
@@ -478,7 +478,7 @@ func (m *Model) openModelPicker() {
 		return
 	}
 	if m.ollamaInventoryAttempted {
-		m.modelPickerState = newOllamaModelPickerState(nil, m.model, m.width, m.height, m.isDark, m.reducedMotion)
+		m.modelPickerState = newOllamaModelPickerState(nil, m.model, m.width, m.height, m.isDark, m.themeID, m.reducedMotion)
 		m.restylePickerOverlays()
 		if m.ollamaVersion != "" {
 			m.modelPickerState.List.Title = ollamaModelPickerTitle(m.ollamaVersion)
@@ -509,7 +509,7 @@ func (m *Model) openModelPicker() {
 		return
 	}
 
-	m.modelPickerState = newModelPickerState(models, m.model, m.width, m.height, m.isDark, m.reducedMotion)
+	m.modelPickerState = newModelPickerState(models, m.model, m.width, m.height, m.isDark, m.themeID, m.reducedMotion)
 	m.restylePickerOverlays()
 	m.overlay = OverlayModelPicker
 	m.input.Blur()

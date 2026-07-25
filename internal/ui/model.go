@@ -63,6 +63,11 @@ type Model struct {
 	height                   int
 	ready                    bool
 	isDark                   bool
+	// themeID selects the color scheme. Empty means the default; it is passed
+	// explicitly to every palette lookup rather than held in a package global,
+	// because the ui tests run in parallel and a shared mutable theme would let
+	// one test repaint another's assertions.
+	themeID                  string
 	reducedMotion            bool
 	glyphProfile             GlyphProfile
 	evalCount                int
@@ -219,6 +224,7 @@ type Model struct {
 	modelManager             *llm.ModelManager
 	router                   config.ModelRouter
 	modelPreferenceStore     ModelPreferenceStore
+	themePickerState        *ThemePickerState
 	modelPickerState         *ModelPickerState
 	cloudConsentState        *CloudConsentState
 	cloudRestoreAuthorized   string
@@ -432,6 +438,7 @@ func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, com
 		keys:                    DefaultKeyMap(),
 		state:                   StateIdle,
 		isDark:                  true,
+		themeID:                 defaultThemeID,
 		reducedMotion:           reducedMotion,
 		glyphProfile:            glyphProfile,
 		chromeSpring:            newChromeSpringState(),
@@ -459,6 +466,30 @@ func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, com
 		turnEntryIndex:          -1,
 		commitRunner:            runCommit,
 	}
+}
+
+// SetTheme selects the color scheme and rebuilds every cached style. It
+// returns false for an unregistered id so a caller can report the typo instead
+// of silently repainting in the default.
+func (m *Model) SetTheme(id string) bool {
+	if m == nil || !knownThemeID(id) {
+		return false
+	}
+	resolved := normalizeThemeID(id)
+	if resolved == m.themeID {
+		return true
+	}
+	m.themeID = resolved
+	m.rebuildThemedSurfaces()
+	return true
+}
+
+// ThemeID reports the active color scheme.
+func (m *Model) ThemeID() string {
+	if m == nil || m.themeID == "" {
+		return defaultThemeID
+	}
+	return m.themeID
 }
 
 // SetConfigSourcePath records the resolved host config path so /context save
@@ -1423,7 +1454,7 @@ func (m *Model) isCompletionActive() bool {
 }
 
 // newCompletionState creates a CompletionState with the filter textinput initialized.
-func newCompletionState(kind string, items []Completion, multiSelect bool, presentation ...bool) *CompletionState {
+func newCompletionState(kind string, items []Completion, multiSelect bool, themeID string, presentation ...bool) *CompletionState {
 	isDark := true
 	reducedMotion := false
 	if len(presentation) > 0 {
@@ -1433,7 +1464,7 @@ func newCompletionState(kind string, items []Completion, multiSelect bool, prese
 		reducedMotion = presentation[1]
 	}
 	ti := textinput.New()
-	ti.SetStyles(semanticTextInputStyles(isDark, reducedMotion))
+	ti.SetStyles(semanticTextInputStyles(isDark, themeID, reducedMotion))
 	ti.Placeholder = "type to narrow"
 	ti.Prompt = ""
 	ti.Focus()
@@ -1483,7 +1514,7 @@ func (m *Model) triggerCompletion(input string) tea.Cmd {
 
 	anchor := m.captureCompletionTranscriptAnchor()
 	m.completionGeneration++
-	m.completionState = newCompletionState(token.Kind, baseItems, token.Kind != "command", m.isDark, m.reducedMotion)
+	m.completionState = newCompletionState(token.Kind, baseItems, token.Kind != "command", m.themeID, m.isDark, m.reducedMotion)
 	m.completionState.Anchor = token.Anchor
 	m.completionState.CommandPrefix = token.CommandPrefix
 	m.completionState.Generation = m.completionGeneration

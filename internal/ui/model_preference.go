@@ -10,6 +10,7 @@ type ModelPreferenceStore interface {
 	ClearManualModel() error
 	SetManualProvider(string) error
 	ClearManualProvider() error
+	SetTheme(string) error
 }
 
 // SetModelPreferenceStore enables restart persistence for explicit /model,

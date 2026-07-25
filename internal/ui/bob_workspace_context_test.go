@@ -64,7 +64,7 @@ func TestBobWorkspaceContextCardIsOneRowResponsiveCachedAndNoColor(t *testing.T)
 	if !ok {
 		t.Fatal("valid Bob context did not normalize")
 	}
-	card := newBobWorkspaceContextCard(context, true)
+	card := newBobWorkspaceContextCard(context, true, defaultThemeID)
 	for _, width := range []int{1, 8, 20, 30, 48, 80} {
 		card.SetWidth(width)
 		rendered := card.View()
@@ -108,7 +108,7 @@ func TestBobWorkspaceContextCardIsOneRowResponsiveCachedAndNoColor(t *testing.T)
 	previous := noColor
 	noColor = true
 	t.Cleanup(func() { noColor = previous })
-	plainCard := newBobWorkspaceContextCard(context, true)
+	plainCard := newBobWorkspaceContextCard(context, true, defaultThemeID)
 	plainCard.SetWidth(72)
 	if rendered := plainCard.View(); hasANSIColor(rendered) {
 		t.Fatalf("NO_COLOR Bob context emitted ANSI color: %q", rendered)

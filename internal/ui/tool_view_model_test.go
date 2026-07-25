@@ -106,7 +106,7 @@ func TestToolRenderModelAdapterExcludesEphemeralAndStructuredSurfaces(t *testing
 	if err != nil {
 		t.Fatalf("project render model: %v", err)
 	}
-	card, err := ToolCardFromRenderModel(model, true)
+	card, err := ToolCardFromRenderModel(model, true, defaultThemeID)
 	if err != nil {
 		t.Fatalf("construct card: %v", err)
 	}
@@ -212,11 +212,11 @@ func TestToolRenderModelDerivesThemeWithoutMutableCardState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	light, err := ToolCardFromRenderModel(model, false)
+	light, err := ToolCardFromRenderModel(model, false, defaultThemeID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	dark, err := ToolCardFromRenderModel(model, true)
+	dark, err := ToolCardFromRenderModel(model, true, defaultThemeID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +236,7 @@ func TestToolViewModelAdaptersFailClosedOnInvalidIdentity(t *testing.T) {
 		t.Fatal("unsafe invocation identity was accepted")
 	}
 
-	card := NewToolCard("read_file", ToolCardFile, true)
+	card := NewToolCard("read_file", ToolCardFile, true, defaultThemeID)
 	card.ID = "call-1"
 	card.State = ToolCardSuccess
 	if _, err := ToolViewModelFromToolCard(ChatEntry{BlockID: "bad block", Revision: 1}, card); err == nil {
@@ -248,7 +248,7 @@ func TestToolViewModelAdaptersFailClosedOnInvalidIdentity(t *testing.T) {
 }
 
 func TestToolViewModelKeepsTransportDomainAndEvidenceIndependent(t *testing.T) {
-	card := NewToolCard("remote_tool", ToolCardGeneric, true)
+	card := NewToolCard("remote_tool", ToolCardGeneric, true, defaultThemeID)
 	card.ID = "call-1"
 	card.State = ToolCardAttention
 	card.Projection = ecosystem.ToolProjection{
@@ -409,7 +409,7 @@ func TestProjectToolHeaderCellBudgetProperties(t *testing.T) {
 }
 
 func TestToolCardHeaderProjectionFitsEveryWidthAndDropsDurationFirst(t *testing.T) {
-	card := NewToolCard("write_file", ToolCardFile, true)
+	card := NewToolCard("write_file", ToolCardFile, true, defaultThemeID)
 	card.ID = "call-1"
 	card.State = ToolCardSuccess
 	card.SetSummary("write internal/ui/a-very-descriptive-file-name.go")
@@ -448,7 +448,7 @@ func stripANSIForToolViewTest(value string) string {
 }
 
 func TestToolCardHeaderPlannerUsesDisplayCellsNotBytes(t *testing.T) {
-	card := NewToolCard("read_file", ToolCardFile, false)
+	card := NewToolCard("read_file", ToolCardFile, false, defaultThemeID)
 	card.State = ToolCardSuccess
 	card.SetSummary("部署🙂 résumé")
 	card.Duration = 42 * time.Millisecond

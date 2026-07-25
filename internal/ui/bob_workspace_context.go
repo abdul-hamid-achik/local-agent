@@ -28,8 +28,8 @@ type bobWorkspaceContextState struct {
 	card       *bobWorkspaceContextCard
 }
 
-func newBobWorkspaceContextStyles(isDark bool) bobWorkspaceContextStyles {
-	palette := outputSemanticPalette(isDark)
+func newBobWorkspaceContextStyles(isDark bool, themeID string) bobWorkspaceContextStyles {
+	palette := outputSemanticPalette(isDark, themeID)
 	return bobWorkspaceContextStyles{
 		// Bob describes repository contract state. Accent identifies the source;
 		// the value deliberately stays neutral instead of borrowing success or
@@ -45,6 +45,7 @@ type bobWorkspaceContextCard struct {
 	context bobWorkspaceContextPresentation
 	width   int
 	isDark  bool
+	themeID       string
 	styles  bobWorkspaceContextStyles
 
 	cachedKey   string
@@ -52,11 +53,11 @@ type bobWorkspaceContextCard struct {
 	cachedView  string
 }
 
-func newBobWorkspaceContextCard(context bobWorkspaceContextPresentation, isDark bool) *bobWorkspaceContextCard {
+func newBobWorkspaceContextCard(context bobWorkspaceContextPresentation, isDark bool, themeID string) *bobWorkspaceContextCard {
 	return &bobWorkspaceContextCard{
 		context: context,
 		isDark:  isDark,
-		styles:  newBobWorkspaceContextStyles(isDark),
+		styles:  newBobWorkspaceContextStyles(isDark, themeID),
 	}
 }
 
@@ -69,12 +70,12 @@ func (c *bobWorkspaceContextCard) SetWidth(width int) {
 	c.invalidate()
 }
 
-func (c *bobWorkspaceContextCard) SetTheme(isDark bool) {
+func (c *bobWorkspaceContextCard) SetTheme(isDark bool, themeIDs ...string) {
 	if c.isDark == isDark {
 		return
 	}
 	c.isDark = isDark
-	c.styles = newBobWorkspaceContextStyles(isDark)
+	c.styles = newBobWorkspaceContextStyles(isDark, c.themeID)
 	c.invalidate()
 }
 
@@ -168,7 +169,7 @@ func (m *Model) handleBobWorkspaceContext(message BobWorkspaceContextMsg) {
 	followYOffset := m.transcriptYOffset()
 	m.bobWorkspaceContext = bobWorkspaceContextState{generation: message.Generation}
 	if context, ok := normalizeBobWorkspaceContext(message.Digest); ok {
-		m.bobWorkspaceContext.card = newBobWorkspaceContextCard(context, m.isDark)
+		m.bobWorkspaceContext.card = newBobWorkspaceContextCard(context, m.isDark, m.themeID)
 		m.bobWorkspaceContext.card.SetWidth(m.chatPaneWidth())
 	}
 	if m.ready {

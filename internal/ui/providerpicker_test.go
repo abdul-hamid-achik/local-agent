@@ -85,7 +85,7 @@ func TestProviderPickerWheelMovesVisibleCursorWithoutScrollingTranscript(t *test
 			Model: fmt.Sprintf("model-%d", index),
 		}
 	}
-	m.providerPickerState = newProviderPickerState(descriptors, "", m.width, m.height, m.isDark)
+	m.providerPickerState = newProviderPickerState(descriptors, "", m.width, m.height, m.isDark, m.themeID)
 	m.overlay = OverlayProviderPicker
 	m.setTestTranscriptContent("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten")
 	m.transcriptGotoTop()
@@ -183,7 +183,7 @@ func TestProviderPickerPointerFailsClosedOutsideItemsAndEmptyFilter(t *testing.T
 	for index := range descriptors {
 		descriptors[index] = llm.ProviderDescriptor{Name: fmt.Sprintf("provider-%d", index), Type: "ollama"}
 	}
-	m.providerPickerState = newProviderPickerState(descriptors, "", m.width, m.height, m.isDark)
+	m.providerPickerState = newProviderPickerState(descriptors, "", m.width, m.height, m.isDark, m.themeID)
 	m.overlay = OverlayProviderPicker
 	x, y := providerPickerItemPoint(t, m, 0)
 
@@ -251,7 +251,7 @@ func TestProviderItemSanitizesTerminalControlsWithoutChangingIdentity(t *testing
 	}
 
 	m := newTestModel(t)
-	m.providerPickerState = newProviderPickerState([]llm.ProviderDescriptor{descriptor}, "", m.width, m.height, m.isDark)
+	m.providerPickerState = newProviderPickerState([]llm.ProviderDescriptor{descriptor}, "", m.width, m.height, m.isDark, m.themeID)
 	m.overlay = OverlayProviderPicker
 	plain := ansi.Strip(m.renderProviderPicker())
 	for _, secret := range []string{"NAME_SECRET", "MODEL_SECRET", "ENV_SECRET"} {
@@ -269,7 +269,7 @@ func TestProviderPickerUnicodeHitTestingAtMinimumTerminal(t *testing.T) {
 		{Name: "日本語🤖", Type: "xai", Model: "grok-4"},
 		{Name: "ollama", Type: "ollama", Model: "qwen"},
 	}
-	m.providerPickerState = newProviderPickerState(descriptors, "", m.width, m.height, m.isDark)
+	m.providerPickerState = newProviderPickerState(descriptors, "", m.width, m.height, m.isDark, m.themeID)
 	m.overlay = OverlayProviderPicker
 
 	rendered := m.renderProviderPicker()
@@ -299,7 +299,7 @@ func TestProviderPickerHitTestingUsesVisiblePageOffset(t *testing.T) {
 			Model: fmt.Sprintf("model-%02d", index),
 		}
 	}
-	m.providerPickerState = newProviderPickerState(descriptors, "", m.width, m.height, m.isDark)
+	m.providerPickerState = newProviderPickerState(descriptors, "", m.width, m.height, m.isDark, m.themeID)
 	m.overlay = OverlayProviderPicker
 	perPage := m.providerPickerState.List.Paginator.PerPage
 	if perPage < 1 || perPage >= len(descriptors) {

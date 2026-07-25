@@ -293,7 +293,7 @@ func TestToolCard_WidthCalculation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			card := NewToolCard(tt.cardName, ToolCardFile, true)
+			card := NewToolCard(tt.cardName, ToolCardFile, true, defaultThemeID)
 			card.State = ToolCardRunning
 
 			view := card.View(tt.availableW)
@@ -311,7 +311,7 @@ func TestToolCard_WidthCalculation(t *testing.T) {
 
 // TestToolCard_LongArgsWrapping verifies long args are wrapped properly
 func TestToolCard_LongArgsWrapping(t *testing.T) {
-	card := NewToolCard("write_file", ToolCardFile, true)
+	card := NewToolCard("write_file", ToolCardFile, true, defaultThemeID)
 	card.State = ToolCardSuccess
 	card.Expanded = true
 	card.Args = strings.Repeat("very_long_argument_that_should_be_wrapped_properly ", 10)
@@ -393,7 +393,7 @@ func TestDuplicateRestoredToolIDUsesNewestReceipt(t *testing.T) {
 
 // TestToolCard_BorderAndPadding verifies border and padding are accounted for
 func TestToolCard_BorderAndPadding(t *testing.T) {
-	card := NewToolCard("test", ToolCardGeneric, true)
+	card := NewToolCard("test", ToolCardGeneric, true, defaultThemeID)
 	card.State = ToolCardSuccess
 	card.Expanded = true
 	card.Args = "test args"
@@ -423,7 +423,7 @@ func TestToolCard_EmojiIcons(t *testing.T) {
 	for _, kind := range kinds {
 		for _, state := range states {
 			t.Run(string(rune(kind))+string(rune(state)), func(t *testing.T) {
-				card := NewToolCard("test", kind, true)
+				card := NewToolCard("test", kind, true, defaultThemeID)
 				card.State = state
 
 				view := card.View(60)
@@ -513,7 +513,7 @@ func BenchmarkOverlayRendering_Help(b *testing.B) {
 
 // BenchmarkToolCardRendering benchmarks tool card rendering
 func BenchmarkToolCardRendering(b *testing.B) {
-	card := NewToolCard("read_file", ToolCardFile, true)
+	card := NewToolCard("read_file", ToolCardFile, true, defaultThemeID)
 	card.State = ToolCardSuccess
 	card.Expanded = true
 	card.Args = strings.Repeat("arg ", 20)

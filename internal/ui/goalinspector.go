@@ -21,6 +21,7 @@ type GoalInspectorOptions struct {
 	Width            int
 	Height           int
 	IsDark           bool
+	ThemeID          string
 	ReducedMotion    bool
 	GlyphProfile     GlyphProfile
 	Now              time.Time
@@ -46,6 +47,7 @@ type GoalInspector struct {
 	width            int
 	height           int
 	isDark           bool
+	themeID       string
 	reducedMotion    bool
 	glyphProfile     GlyphProfile
 	now              time.Time
@@ -110,12 +112,16 @@ func (i *GoalInspector) SetSize(width, height int) {
 }
 
 // SetTheme reapplies the project LightDark-derived semantic palette.
-func (i *GoalInspector) SetTheme(isDark bool) {
-	if i == nil || i.isDark == isDark {
+func (i *GoalInspector) SetTheme(isDark bool, themeIDs ...string) {
+	if i == nil {
 		return
 	}
-	i.isDark = isDark
-	i.styles = NewStyles(isDark)
+	themeID := resolveThemeID(themeIDs...)
+	if i.isDark == isDark && resolveThemeID(i.themeID) == themeID {
+		return
+	}
+	i.isDark, i.themeID = isDark, themeID
+	i.styles = NewStyles(isDark, i.themeID)
 	i.rebuildViewport(true)
 }
 
@@ -251,7 +257,7 @@ func (i *GoalInspector) headerShowsFullObjective() bool {
 	header := ansi.Strip(RenderGoalStatusLine(GoalSummary{
 		Objective: objective,
 		Phase:     GoalPhase(i.snapshot.State),
-	}, i.contentWidth(), i.isDark, i.glyphProfile))
+	}, i.contentWidth(), i.isDark, i.themeID, i.glyphProfile))
 	return strings.Contains(header, objective)
 }
 
@@ -270,7 +276,7 @@ func (i *GoalInspector) View() string {
 	phase := RenderGoalStatusLine(GoalSummary{
 		Objective: i.snapshot.Objective,
 		Phase:     GoalPhase(i.snapshot.State),
-	}, width, i.isDark, i.glyphProfile)
+	}, width, i.isDark, i.themeID, i.glyphProfile)
 	var b strings.Builder
 	title := fmt.Sprintf("Goal inspector · %d/%d verified", verified, total)
 	if i.compact() {

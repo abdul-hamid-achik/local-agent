@@ -182,6 +182,7 @@ type OutputViewer struct {
 	width         int
 	height        int
 	isDark        bool
+	themeID       string
 	glyphProfile  GlyphProfile
 	reducedMotion bool
 	styles        Styles
@@ -344,7 +345,7 @@ func (viewer *OutputViewer) SetSize(width, height int) {
 
 // SetTheme changes adaptive presentation styles without moving the semantic
 // source-row anchor.
-func (viewer *OutputViewer) SetTheme(isDark bool) {
+func (viewer *OutputViewer) SetTheme(isDark bool, themeIDs ...string) {
 	if viewer == nil || viewer.isDark == isDark {
 		return
 	}
@@ -363,7 +364,7 @@ func (viewer *OutputViewer) SetReducedMotion(reduced bool) {
 	}
 	anchor := viewer.Anchor()
 	viewer.reducedMotion = reduced
-	viewer.search.SetStyles(semanticTextInputStyles(viewer.isDark, reduced))
+	viewer.search.SetStyles(semanticTextInputStyles(viewer.isDark, viewer.themeID, reduced))
 	viewer.restoreAnchor(anchor)
 }
 
@@ -746,7 +747,7 @@ func (viewer *OutputViewer) pushHistory(cursor OutputDetailCursor) {
 
 func (viewer *OutputViewer) applyTheme() {
 	viewer.styles = NewStyles(viewer.isDark)
-	viewer.search.SetStyles(semanticTextInputStyles(viewer.isDark, viewer.reducedMotion))
+	viewer.search.SetStyles(semanticTextInputStyles(viewer.isDark, viewer.themeID, viewer.reducedMotion))
 	palette := outputSemanticPalette(viewer.isDark)
 	viewer.viewport.HighlightStyle = lipgloss.NewStyle().
 		Foreground(palette.Text).

@@ -42,13 +42,13 @@ type goalStatusMetric struct {
 // RenderGoalStatusLine renders a single adaptive, width-safe status row for
 // headers, composer chrome, or transient receipts. State is always conveyed by
 // a glyph and text, never color alone.
-func RenderGoalStatusLine(summary GoalSummary, width int, isDark bool, profiles ...GlyphProfile) string {
+func RenderGoalStatusLine(summary GoalSummary, width int, isDark bool, themeID string, profiles ...GlyphProfile) string {
 	if width <= 0 {
 		return ""
 	}
 
 	styles := NewStyles(isDark)
-	palette := outputSemanticPalette(isDark)
+	palette := outputSemanticPalette(isDark, themeID)
 	profile := resolveGlyphProfile(profiles...)
 	glyph, label, phaseColor := goalPhasePresentation(summary.Phase, palette, profile)
 	phase := lipgloss.NewStyle().

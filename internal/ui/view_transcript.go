@@ -1018,6 +1018,7 @@ func (m *Model) renderAssistantMsg(b *strings.Builder, entry ChatEntry, contentW
 		buildTurnRecap(content),
 		min(contentW, m.chatProseWidth()),
 		m.isDark,
+		m.themeID,
 		m.glyphProfile,
 	); recap != "" {
 		b.WriteString(grid.IndentBlock(" ", recap))
@@ -1114,7 +1115,7 @@ func (m *Model) renderToolGroup(b *strings.Builder, chat ChatEntry) {
 		invalidReceipt()
 		return
 	}
-	card, err := ToolCardFromRenderModel(model, m.isDark, m.glyphProfile)
+	card, err := ToolCardFromRenderModel(model, m.isDark, m.themeID, m.glyphProfile)
 	if err != nil {
 		invalidReceipt()
 		return

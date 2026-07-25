@@ -20,6 +20,8 @@ func (m *Model) buildCommandContext() *command.Context {
 	ctx := &command.Context{
 		Model:              m.model,
 		ModelList:          m.modelList,
+		Theme:              m.ThemeID(),
+		ThemeList:          themeIDs(),
 		Provider:           m.activeProviderName(),
 		ProviderList:       m.providerNames(),
 		AgentProfile:       m.agentProfile,
@@ -382,6 +384,14 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 		m.overlayParent = OverlayNone
 		m.openModelPicker()
 		return nil
+
+	case command.ActionShowThemePicker:
+		m.overlayParent = OverlayNone
+		m.openThemePicker()
+		return nil
+
+	case command.ActionSwitchTheme:
+		return m.applyTheme(result.Data)
 
 	case command.ActionSendPrompt:
 		if m.goalRuntime != nil {

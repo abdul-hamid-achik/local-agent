@@ -6,7 +6,7 @@ import (
 )
 
 func TestPlanForm_NewPrefilled(t *testing.T) {
-	pf := NewPlanFormState("refactor auth module")
+	pf := NewPlanFormState("refactor auth module", defaultThemeID)
 
 	if len(pf.Fields) != 3 {
 		t.Fatalf("expected 3 fields, got %d", len(pf.Fields))
@@ -33,7 +33,7 @@ func TestPlanForm_NewPrefilled(t *testing.T) {
 
 func TestPlanForm_PrefillPreservesComposerSizedTask(t *testing.T) {
 	task := strings.Repeat("界", 2048)
-	pf := NewPlanFormState(task)
+	pf := NewPlanFormState(task, defaultThemeID)
 
 	if got := pf.Fields[0].Input.Value(); got != task {
 		t.Fatalf("prefilled task was truncated: got %d runes, want %d", len([]rune(got)), len([]rune(task)))
@@ -41,7 +41,7 @@ func TestPlanForm_PrefillPreservesComposerSizedTask(t *testing.T) {
 }
 
 func TestPlanForm_AssemblePrompt(t *testing.T) {
-	pf := NewPlanFormState("build a REST API")
+	pf := NewPlanFormState("build a REST API", defaultThemeID)
 	pf.Fields[1].OptionIndex = 1 // "module"
 	pf.Fields[2].Input.SetValue("keep backward compat")
 
@@ -99,7 +99,7 @@ func TestPlanForm_RequiresTaskBeforeAdvancingOrSubmitting(t *testing.T) {
 }
 
 func TestPlanForm_AssemblePrompt_NoFocus(t *testing.T) {
-	pf := NewPlanFormState("fix the bug")
+	pf := NewPlanFormState("fix the bug", defaultThemeID)
 
 	prompt := pf.AssemblePrompt()
 
@@ -129,7 +129,7 @@ func TestPlanForm_OpenClose(t *testing.T) {
 
 	t.Run("close_resets_state", func(t *testing.T) {
 		m := newTestModel(t)
-		m.planFormState = NewPlanFormState("test")
+		m.planFormState = NewPlanFormState("test", defaultThemeID)
 		m.overlay = OverlayPlanForm
 
 		m.closePlanForm()

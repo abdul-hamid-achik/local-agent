@@ -184,7 +184,7 @@ func isTurnRecapSemanticRow(semantic string) bool {
 
 // formatTurnRecapLine paints the digest with a quiet marker. Width is the flex
 // content budget. Returns "" when the digest is too short to show.
-func formatTurnRecapLine(recap string, width int, isDark bool, profile GlyphProfile) string {
+func formatTurnRecapLine(recap string, width int, isDark bool, themeID string, profile GlyphProfile) string {
 	recap = strings.TrimSpace(recap)
 	if recap == "" || width < 12 {
 		return ""
@@ -201,7 +201,7 @@ func formatTurnRecapLine(recap string, width int, isDark bool, profile GlyphProf
 	if lipgloss.Width(body) < min(minTurnRecapCells, budget) {
 		return ""
 	}
-	palette := newSemanticPalette(isDark)
+	palette := newSemanticPalette(isDark, themeID)
 	style := lipgloss.NewStyle().Foreground(palette.Dim)
 	return style.Render(marker + body)
 }

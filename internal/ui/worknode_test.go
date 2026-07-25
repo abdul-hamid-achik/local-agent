@@ -311,7 +311,7 @@ func TestExpertProgressDetailsKeepIndexOrderWithoutChangingGrammar(t *testing.T)
 			{Index: 2, Expert: "failed", Model: "m2", Location: llm.OllamaModelLocationCloud, Phase: expertteam.ProgressFailed, Status: expertteam.ExpertFailed, FailureCode: "model_unavailable"},
 		},
 	}
-	view := state.renderDetails(80, NewToolCardStyles(true))
+	view := state.renderDetails(80, NewToolCardStyles(true, defaultThemeID))
 	failedAt, runningAt, queuedAt := strings.Index(view, "failed"), strings.Index(view, "active"), strings.Index(view, "1 more queued")
 	if failedAt < 0 || runningAt < 0 || queuedAt < 0 ||
 		runningAt >= queuedAt || queuedAt >= failedAt {
@@ -334,7 +334,7 @@ func TestExpertProgressAdapterDistinguishesCancellationFromFailure(t *testing.T)
 	if !ok || len(nodes) != 1 || nodes[0].Status != WorkNodeCancelled {
 		t.Fatalf("cancelled progress projection = %#v, ok=%v", nodes, ok)
 	}
-	if view := state.renderDetails(80, NewToolCardStyles(true)); !strings.Contains(view, "cancelled") {
+	if view := state.renderDetails(80, NewToolCardStyles(true, defaultThemeID)); !strings.Contains(view, "cancelled") {
 		t.Fatalf("cancelled work node lacks distinct presentation:\n%s", view)
 	}
 }

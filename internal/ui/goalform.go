@@ -75,6 +75,7 @@ type GoalFormOptions struct {
 	Width         int
 	Height        int
 	IsDark        bool
+	ThemeID          string
 	ReducedMotion bool
 	GlyphProfile  GlyphProfile
 	// DraftFromPrompt tells the form that the initial definition was inferred
@@ -114,6 +115,7 @@ type GoalForm struct {
 	width           int
 	height          int
 	isDark          bool
+	themeID       string
 	reducedMotion   bool
 	glyphProfile    GlyphProfile
 	budgetOnly      bool
@@ -297,12 +299,16 @@ func (f *GoalForm) SetSize(width, height int) {
 }
 
 // SetTheme reapplies the project's LightDark-derived semantic palette.
-func (f *GoalForm) SetTheme(isDark bool) {
-	if f == nil || f.isDark == isDark {
+func (f *GoalForm) SetTheme(isDark bool, themeIDs ...string) {
+	if f == nil {
 		return
 	}
-	f.isDark = isDark
-	f.styles = NewStyles(isDark)
+	themeID := resolveThemeID(themeIDs...)
+	if f.isDark == isDark && resolveThemeID(f.themeID) == themeID {
+		return
+	}
+	f.isDark, f.themeID = isDark, themeID
+	f.styles = NewStyles(isDark, f.themeID)
 	f.applyStyles()
 	f.invalidate()
 }
@@ -319,7 +325,7 @@ func (f *GoalForm) SetReducedMotion(reduced bool) {
 }
 
 func (f *GoalForm) applyStyles() {
-	inputStyles := semanticTextInputStyles(f.isDark)
+	inputStyles := semanticTextInputStyles(f.isDark, f.themeID)
 	inputStyles.Cursor.Blink = !f.reducedMotion
 	f.objective.SetStyles(inputStyles)
 	f.turns.SetStyles(inputStyles)

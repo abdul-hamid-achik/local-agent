@@ -255,7 +255,7 @@ func TestAgentHubViewerTracksStableGroupAcrossLifecycleRefresh(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state := newAgentHubState(live, false, 72, 24, true, false)
+	state := newAgentHubState(live, false, 72, 24, true, defaultThemeID, false)
 	if !state.openSelectedViewer() {
 		t.Fatal("could not open live group")
 	}
@@ -311,7 +311,7 @@ func TestAgentHubUnreadIsRevisionDerivedAndViewerOwned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state := newAgentHubState(live, false, 72, 24, true, false)
+	state := newAgentHubState(live, false, 72, 24, true, defaultThemeID, false)
 	if unread := agentGroupUnread(state.Surface.Groups[0]); unread != 0 {
 		t.Fatalf("initial projection was incorrectly unread: %d", unread)
 	}
@@ -418,7 +418,7 @@ func TestAgentViewerRendersOnlyValidatedReportArtifactReferences(t *testing.T) {
 	if !surface.valid() {
 		t.Fatalf("valid report surface rejected: %#v", surface)
 	}
-	state := newAgentHubState(surface, false, 72, 24, true, false)
+	state := newAgentHubState(surface, false, 72, 24, true, defaultThemeID, false)
 	if !state.openSelectedViewer() {
 		t.Fatal("could not open report Viewer")
 	}
@@ -448,7 +448,7 @@ func TestAgentHubFilterStaysCurrentAcrossViewerRefresh(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state := newAgentHubState(surface, false, 72, 24, true, false)
+	state := newAgentHubState(surface, false, 72, 24, true, defaultThemeID, false)
 	keys := DefaultKeyMap()
 	state.UpdateKey(charKey('/'), keys)
 	for _, character := range "verifier" {
@@ -497,7 +497,7 @@ func TestAgentHubPasteFiltersSynchronouslyWithoutStaleReceipt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state := newAgentHubState(surface, false, 72, 24, true, false)
+	state := newAgentHubState(surface, false, 72, 24, true, defaultThemeID, false)
 	state.UpdateKey(charKey('/'), DefaultKeyMap())
 	if cmd := state.Update(tea.PasteMsg{Content: "verifier"}); cmd != nil {
 		t.Fatal("bounded paste filter returned an asynchronous command")
@@ -524,7 +524,7 @@ func TestAgentHubLiveRefreshPreservesFilterCursorAndHonestEmptyHints(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	state := newAgentHubState(surface, false, 40, 16, true, false)
+	state := newAgentHubState(surface, false, 40, 16, true, defaultThemeID, false)
 	keys := DefaultKeyMap()
 	state.UpdateKey(charKey('/'), keys)
 	if cmd := state.Update(tea.PasteMsg{Content: "generalist"}); cmd != nil {
@@ -584,7 +584,7 @@ func TestAgentHubFailsClosedInsteadOfRetainingLastGoodProjection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state := newAgentHubState(surface, false, 72, 24, true, false)
+	state := newAgentHubState(surface, false, 72, 24, true, defaultThemeID, false)
 	state.UpdateKey(charKey('/'), DefaultKeyMap())
 	state.UpdateKey(charKey('c'), DefaultKeyMap())
 	_ = state.SetProjection(AgentSurfaceProjection{OmittedGroups: -1}, false)
@@ -613,7 +613,7 @@ func TestAgentViewerPreservesSemanticTopNodeAcrossResizeAndProgress(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	state := newAgentHubState(surface, false, 40, 12, true, false)
+	state := newAgentHubState(surface, false, 40, 12, true, defaultThemeID, false)
 	if !state.openSelectedViewer() {
 		t.Fatal("could not open Viewer")
 	}
@@ -837,7 +837,7 @@ func TestAgentViewerBodyCellWidthIsBounded(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, width := range []int{8, 20, 52, 80} {
-		body := renderAgentViewerBody(surface.Groups[0], width, true)
+		body := renderAgentViewerBody(surface.Groups[0], width, true, defaultThemeID)
 		for _, line := range strings.Split(body, "\n") {
 			if got := lipgloss.Width(line); got > width {
 				t.Fatalf("width %d rendered %d cells: %q", width, got, line)
@@ -857,7 +857,7 @@ func TestAgentHubASCIIProfileCoversTitlesViewerAndNavigationChrome(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	state := newAgentHubState(surface, false, 80, 24, true, true, GlyphASCII)
+	state := newAgentHubState(surface, false, 80, 24, true, defaultThemeID, true, GlyphASCII)
 	item, ok := state.List.Items()[0].(agentHubItem)
 	if !ok {
 		t.Fatalf("list item type = %T", state.List.Items()[0])

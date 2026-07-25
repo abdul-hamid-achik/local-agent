@@ -239,7 +239,7 @@ func TestToolCardUsesExactOutputDigestForOmissionReceipt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	card := NewToolCard("read_file", ToolCardFile, true)
+	card := NewToolCard("read_file", ToolCardFile, true, defaultThemeID)
 	card.State = ToolCardSuccess
 	card.Lifecycle = ToolLifecycleSucceeded
 	card.Expanded = true
@@ -266,7 +266,7 @@ func TestToolCardReportsBytesHiddenInsideOneLongRow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	card := NewToolCard("bash", ToolCardBash, true, GlyphASCII)
+	card := NewToolCard("bash", ToolCardBash, true, defaultThemeID, GlyphASCII)
 	card.State = ToolCardSuccess
 	card.Lifecycle = ToolLifecycleSucceeded
 	card.Expanded = true

@@ -18,6 +18,7 @@ type MarkdownRenderer struct {
 	width         int
 	proseWidth    int
 	isDark        bool
+	themeID       string
 
 	// Stable-prefix streaming cache: the rendered output of the last stable
 	// markdown prefix, reused across paints so we only re-render when a new
@@ -36,7 +37,7 @@ func glamourStyle(isDark bool) string {
 	return "light"
 }
 
-func markdownStyleConfig(isDark bool) ansi.StyleConfig {
+func markdownStyleConfig(isDark bool, themeIDs ...string) ansi.StyleConfig {
 	style := glamourStyles.LightStyleConfig
 	if isDark {
 		style = glamourStyles.DarkStyleConfig
@@ -48,7 +49,7 @@ func markdownStyleConfig(isDark bool) ansi.StyleConfig {
 	// errors. Keep the standard Markdown grammar and code-block highlighting,
 	// but project inline code through Local Agent's adaptive text vocabulary;
 	// the background already gives code its distinct visual treatment.
-	palette := newSemanticPalette(isDark)
+	palette := newSemanticPalette(isDark, themeIDs...)
 	lightDark := lipgloss.LightDark(isDark)
 	foreground := colorHex(palette.Text)
 	background := colorHex(lightDark(
@@ -75,8 +76,8 @@ func colorHex(value color.Color) string {
 	return fmt.Sprintf("#%02X%02X%02X", uint8(r>>8), uint8(g>>8), uint8(b>>8))
 }
 
-func newMarkdownTermRenderer(width int, isDark bool) (*glamour.TermRenderer, error) {
-	style := glamour.WithStyles(markdownStyleConfig(isDark))
+func newMarkdownTermRenderer(width int, isDark bool, themeIDs ...string) (*glamour.TermRenderer, error) {
+	style := glamour.WithStyles(markdownStyleConfig(isDark, themeIDs...))
 	if noColor {
 		style = glamour.WithStandardStyle(glamourStyle(isDark))
 	}
@@ -91,13 +92,13 @@ func newMarkdownTermRenderer(width int, isDark bool) (*glamour.TermRenderer, err
 }
 
 // NewMarkdownRenderer creates a renderer for the given terminal width and theme.
-func NewMarkdownRenderer(width int, isDark bool) *MarkdownRenderer {
+func NewMarkdownRenderer(width int, isDark bool, themeIDs ...string) *MarkdownRenderer {
 	workWidth := max(1, width)
 	proseWidth := min(ProseTargetCandidate, workWidth)
-	workRenderer, _ := newMarkdownTermRenderer(workWidth, isDark)
+	workRenderer, _ := newMarkdownTermRenderer(workWidth, isDark, themeIDs...)
 	proseRenderer := workRenderer
 	if proseWidth != workWidth {
-		proseRenderer, _ = newMarkdownTermRenderer(proseWidth, isDark)
+		proseRenderer, _ = newMarkdownTermRenderer(proseWidth, isDark, themeIDs...)
 	}
 
 	return &MarkdownRenderer{
@@ -106,6 +107,7 @@ func NewMarkdownRenderer(width int, isDark bool) *MarkdownRenderer {
 		width:         workWidth,
 		proseWidth:    proseWidth,
 		isDark:        isDark,
+		themeID:       resolveThemeID(themeIDs...),
 	}
 }
 

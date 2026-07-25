@@ -79,6 +79,7 @@ type ToolCard struct {
 	Duration        time.Duration
 	Expanded        bool
 	IsDark          bool
+	ThemeID         string
 	GlyphProfile    GlyphProfile
 	Lifecycle       ToolLifecycle
 	// ExpertProgress is the bounded host projection for the exact built-in
@@ -118,8 +119,8 @@ type ToolCardStyles struct {
 }
 
 // NewToolCardStyles creates styles based on theme.
-func NewToolCardStyles(isDark bool) ToolCardStyles {
-	palette := outputSemanticPalette(isDark)
+func NewToolCardStyles(isDark bool, themeID string) ToolCardStyles {
+	palette := outputSemanticPalette(isDark, themeID)
 
 	return ToolCardStyles{
 		BorderRunning:   lipgloss.NewStyle().Foreground(palette.Accent2),
@@ -146,7 +147,7 @@ func NewToolCardStyles(isDark bool) ToolCardStyles {
 }
 
 // NewToolCard creates a new tool card.
-func NewToolCard(name string, kind ToolCardKind, isDark bool, profiles ...GlyphProfile) ToolCard {
+func NewToolCard(name string, kind ToolCardKind, isDark bool, themeID string, profiles ...GlyphProfile) ToolCard {
 	previewMode := ToolPreviewGeneric
 	switch kind {
 	case ToolCardBash:
@@ -166,19 +167,20 @@ func NewToolCard(name string, kind ToolCardKind, isDark bool, profiles ...GlyphP
 		State:        ToolCardRunning,
 		PreviewMode:  previewMode,
 		IsDark:       isDark,
+		ThemeID:      themeID,
 		GlyphProfile: resolveGlyphProfile(profiles...),
 		Lifecycle:    ToolLifecycleRunning,
-		Styles:       NewToolCardStyles(isDark),
+		Styles:       NewToolCardStyles(isDark, themeID),
 	}
 }
 
 // ToolCardFromRenderModel constructs the dumb visual component exclusively
 // from the strict render projection. It never reads ToolEntry or Model state.
-func ToolCardFromRenderModel(model ToolRenderModel, isDark bool, profiles ...GlyphProfile) (ToolCard, error) {
+func ToolCardFromRenderModel(model ToolRenderModel, isDark bool, themeID string, profiles ...GlyphProfile) (ToolCard, error) {
 	if err := model.Validate(); err != nil {
 		return ToolCard{}, err
 	}
-	card := NewToolCard(model.ToolName, toolCardKindFromViewKind(model.Kind), isDark, profiles...)
+	card := NewToolCard(model.ToolName, toolCardKindFromViewKind(model.Kind), isDark, themeID, profiles...)
 	card.ID = model.InvocationID
 	card.State = toolCardStateFromLifecycle(model.Lifecycle)
 	card.Lifecycle = model.Lifecycle
@@ -240,9 +242,10 @@ func cloneANSIResultPreview(lines [][]ansiRemapSegment) [][]ansiRemapSegment {
 }
 
 // SetDark updates the theme.
-func (c *ToolCard) SetDark(isDark bool) {
+func (c *ToolCard) SetDark(isDark bool, themeID string) {
 	c.IsDark = isDark
-	c.Styles = NewToolCardStyles(isDark)
+	c.ThemeID = themeID
+	c.Styles = NewToolCardStyles(isDark, themeID)
 	if c.ExpertProgress != nil && c.expertProgressCacheWidth > 0 {
 		c.setExpertProgress(c.ExpertProgress, c.expertProgressCacheWidth)
 	}

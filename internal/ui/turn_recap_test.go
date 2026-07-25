@@ -59,11 +59,11 @@ func TestBuildTurnRecapSuppressesNonCompressingDigest(t *testing.T) {
 
 func TestFormatTurnRecapLineASCII(t *testing.T) {
 	// Short phrases are suppressed — they only echo the answer.
-	if line := formatTurnRecapLine("Ready when you are.", 40, true, GlyphASCII); line != "" {
+	if line := formatTurnRecapLine("Ready when you are.", 40, true, defaultThemeID, GlyphASCII); line != "" {
 		t.Fatalf("short recap should be suppressed, got %q", ansi.Strip(line))
 	}
 	long := "Patched the loader race across concurrent reloads of the cache key and host policy path."
-	line := formatTurnRecapLine(long, 80, true, GlyphASCII)
+	line := formatTurnRecapLine(long, 80, true, defaultThemeID, GlyphASCII)
 	plain := ansi.Strip(line)
 	if !strings.HasPrefix(plain, "* ") {
 		t.Fatalf("ASCII recap marker missing: %q", plain)

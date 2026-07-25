@@ -78,16 +78,16 @@ func (m *Model) renderModelDetails() string {
 		return ""
 	}
 	width := pickerListWidth(m.width)
-	content := renderOllamaModelDetails(*m.modelDetailsState, width, m.isDark)
+	content := renderOllamaModelDetails(*m.modelDetailsState, width, m.isDark, m.themeID)
 	if compactModelPicker(m.width, m.height) {
-		content = renderCompactOllamaModelDetails(*m.modelDetailsState, width, m.isDark)
+		content = renderCompactOllamaModelDetails(*m.modelDetailsState, width, m.isDark, m.themeID)
 	}
 	footer := m.renderKeyHints(width, keyHint{Key: "esc", Action: "models"})
 	return m.renderPickerFrame(content, footer)
 }
 
 func (m *Model) openModelPull() tea.Cmd {
-	m.modelPullState = NewModelPullState(m.isDark, m.reducedMotion)
+	m.modelPullState = NewModelPullState(m.isDark, m.reducedMotion, m.themeID)
 	m.overlay = OverlayModelPull
 	m.input.Blur()
 	return m.modelPullState.Input.Focus()
@@ -97,7 +97,7 @@ func (m *Model) closeModelPull() {
 	m.cancelModelPull()
 	m.modelPullState = nil
 	if m.ollamaInventoryAttempted {
-		m.modelPickerState = newOllamaModelPickerState(m.ollamaModels, m.model, m.width, m.height, m.isDark, m.reducedMotion)
+		m.modelPickerState = newOllamaModelPickerState(m.ollamaModels, m.model, m.width, m.height, m.isDark, m.themeID, m.reducedMotion)
 		m.restylePickerOverlays()
 		if m.ollamaVersion != "" {
 			m.modelPickerState.List.Title = ollamaModelPickerTitle(m.ollamaVersion)
@@ -324,7 +324,7 @@ func (m *Model) applyOllamaInventory(message OllamaModelInventoryMsg) {
 		m.completer.UpdateModels(m.modelList)
 	}
 	if m.overlay == OverlayModelPicker {
-		m.modelPickerState = newOllamaModelPickerState(models, m.model, m.width, m.height, m.isDark, m.reducedMotion)
+		m.modelPickerState = newOllamaModelPickerState(models, m.model, m.width, m.height, m.isDark, m.themeID, m.reducedMotion)
 		m.restylePickerOverlays()
 		if m.ollamaVersion != "" {
 			m.modelPickerState.List.Title = ollamaModelPickerTitle(m.ollamaVersion)

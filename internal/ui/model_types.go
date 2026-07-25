@@ -44,6 +44,7 @@ const (
 	OverlayAgents
 	OverlayTranscriptSearch
 	OverlayPermissions
+	OverlayThemePicker
 )
 
 // CompletionState holds all state for the composer-owned completion popup.

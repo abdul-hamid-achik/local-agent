@@ -32,7 +32,7 @@ const planTaskCharLimit = 32 * 1024
 // NewPlanFormState creates a plan form pre-filled with the user's task description.
 // Presentation options are ordered as theme-dark, then reduced-motion so older
 // callers that only select a theme remain source compatible.
-func NewPlanFormState(task string, presentation ...bool) *PlanFormState {
+func NewPlanFormState(task string, themeID string, presentation ...bool) *PlanFormState {
 	isDark := true
 	reducedMotion := false
 	if len(presentation) > 0 {
@@ -42,7 +42,7 @@ func NewPlanFormState(task string, presentation ...bool) *PlanFormState {
 		reducedMotion = presentation[1]
 	}
 	taskInput := textinput.New()
-	taskInput.SetStyles(semanticTextInputStyles(isDark, reducedMotion))
+	taskInput.SetStyles(semanticTextInputStyles(isDark, themeID, reducedMotion))
 	taskInput.Placeholder = "Describe the task..."
 	taskInput.Prompt = ""
 	// Match the main composer bound so `/plan <task>` remains lossless when it
@@ -52,7 +52,7 @@ func NewPlanFormState(task string, presentation ...bool) *PlanFormState {
 	taskInput.Focus()
 
 	focusInput := textinput.New()
-	focusInput.SetStyles(semanticTextInputStyles(isDark, reducedMotion))
+	focusInput.SetStyles(semanticTextInputStyles(isDark, themeID, reducedMotion))
 	focusInput.Placeholder = "Any constraints or requirements? (optional)"
 	focusInput.Prompt = ""
 	focusInput.CharLimit = 512
@@ -410,7 +410,7 @@ func (m *Model) openPlanForm(task string) {
 	if !m.prepareInlineFormOpen() {
 		return
 	}
-	m.planFormState = NewPlanFormState(task, m.isDark, m.reducedMotion)
+	m.planFormState = NewPlanFormState(task, m.themeID, m.isDark, m.reducedMotion)
 	m.restylePickerOverlays()
 	m.overlay = OverlayPlanForm
 	m.input.Blur()

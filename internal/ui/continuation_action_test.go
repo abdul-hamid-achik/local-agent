@@ -80,7 +80,7 @@ func TestContinuationActionSanitizesAndBoundsPresentation(t *testing.T) {
 	if len(action.Inputs) != maxContinuationItems || len(action.BlockedBy) != maxContinuationItems {
 		t.Fatalf("identifier bounds = inputs:%d blockers:%d", len(action.Inputs), len(action.BlockedBy))
 	}
-	card := newContinuationActionCard(action, true)
+	card := newContinuationActionCard(action, true, defaultThemeID)
 	for _, width := range []int{30, 47, 48, 80} {
 		card.SetWidth(width)
 		rendered := card.View()
@@ -107,7 +107,7 @@ func TestContinuationActionCardHonorsNoColor(t *testing.T) {
 	if !ok {
 		t.Fatal("fixture did not normalize")
 	}
-	card := newContinuationActionCard(action, true)
+	card := newContinuationActionCard(action, true, defaultThemeID)
 	card.SetWidth(72)
 	if rendered := card.View(); hasANSIColor(rendered) {
 		t.Fatalf("NO_COLOR continuation emitted ANSI color: %q", rendered)
@@ -119,7 +119,7 @@ func TestContinuationActionCardCachesAndInvalidatesOnLayoutOrTheme(t *testing.T)
 	if !ok {
 		t.Fatal("fixture did not normalize")
 	}
-	card := newContinuationActionCard(action, true)
+	card := newContinuationActionCard(action, true, defaultThemeID)
 	card.SetWidth(72)
 	first := card.View()
 	if first == "" || card.cachedView == "" {
@@ -148,7 +148,7 @@ func TestContinuationActionExpandedCardStaysWithinThreeRows(t *testing.T) {
 	if !ok {
 		t.Fatal("fixture did not normalize")
 	}
-	card := newContinuationActionCard(action, true)
+	card := newContinuationActionCard(action, true, defaultThemeID)
 	card.SetWidth(48)
 	if rendered := card.View(); lipgloss.Height(rendered) > 3 {
 		t.Fatalf("48-column action card consumed %d rows:\n%s", lipgloss.Height(rendered), rendered)

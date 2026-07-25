@@ -160,6 +160,7 @@ type DiffViewerOptions struct {
 	Width         int
 	Height        int
 	IsDark        bool
+	ThemeID          string
 	ReducedMotion bool
 	GlyphProfile  GlyphProfile
 }
@@ -204,6 +205,7 @@ type DiffViewer struct {
 	screen        CellRect
 	layout        DiffViewerLayout
 	isDark        bool
+	themeID       string
 	reducedMotion bool
 	glyphProfile  GlyphProfile
 	styles        Styles
@@ -399,12 +401,16 @@ func (viewer *DiffViewer) SetScreenRect(rect CellRect) {
 
 // SetTheme refreshes every adaptive style while preserving mode, semantic
 // selection, search state, and geometry.
-func (viewer *DiffViewer) SetTheme(isDark bool) {
-	if viewer == nil || viewer.isDark == isDark {
+func (viewer *DiffViewer) SetTheme(isDark bool, themeIDs ...string) {
+	if viewer == nil {
 		return
 	}
-	viewer.isDark = isDark
-	viewer.styles = NewStyles(isDark)
+	themeID := resolveThemeID(themeIDs...)
+	if viewer.isDark == isDark && resolveThemeID(viewer.themeID) == themeID {
+		return
+	}
+	viewer.isDark, viewer.themeID = isDark, themeID
+	viewer.styles = NewStyles(isDark, viewer.themeID)
 	viewer.search.SetStyles(diffViewerSearchStyles(isDark, viewer.reducedMotion))
 	viewer.rebuild(true)
 }

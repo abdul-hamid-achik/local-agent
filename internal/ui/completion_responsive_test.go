@@ -26,7 +26,7 @@ func TestCompletionModalFitsSupportedTerminalSizes(t *testing.T) {
 			m := newTestModel(t)
 			updated, _ := m.Update(tea.WindowSizeMsg{Width: size.width, Height: size.height})
 			m = updated.(*Model)
-			m.completionState = newCompletionState("attachments", items, true)
+			m.completionState = newCompletionState("attachments", items, true, defaultThemeID)
 			m.overlay = OverlayCompletion
 			m.resizePickerOverlays()
 

@@ -213,7 +213,7 @@ func TestExpertProgressCardIsNarrowAndCached(t *testing.T) {
 			t.Fatalf("event %d rejected", sequence+2)
 		}
 	}
-	card := NewToolCard("consult_experts", ToolCardGeneric, true)
+	card := NewToolCard("consult_experts", ToolCardGeneric, true, defaultThemeID)
 	card.State = ToolCardAttention
 	card.Expanded = true
 	card.SetSummary(state.summary())
@@ -247,7 +247,7 @@ func TestExpertProgressDetailsCapVisualRowsAndReportHiddenNodes(t *testing.T) {
 		}
 	}
 
-	wide := state.renderDetails(80, NewToolCardStyles(true))
+	wide := state.renderDetails(80, NewToolCardStyles(true, defaultThemeID))
 	wideLines := strings.Split(wide, "\n")
 	if len(wideLines) != maxExpertProgressDetailRows+1 {
 		t.Fatalf("wide detail rows = %d, want %d:\n%s", len(wideLines), maxExpertProgressDetailRows+1, wide)
@@ -263,7 +263,7 @@ func TestExpertProgressDetailsCapVisualRowsAndReportHiddenNodes(t *testing.T) {
 		}
 	}
 
-	narrow := state.renderDetails(30, NewToolCardStyles(true))
+	narrow := state.renderDetails(30, NewToolCardStyles(true, defaultThemeID))
 	narrowLines := strings.Split(narrow, "\n")
 	if len(narrowLines) != maxExpertProgressDetailRows+1 {
 		t.Fatalf("narrow detail rows = %d, want %d:\n%s", len(narrowLines), maxExpertProgressDetailRows+1, narrow)
@@ -307,7 +307,7 @@ func TestExpertProgressDetailsKeepLateActiveNodeInsideInlineCap(t *testing.T) {
 	}
 
 	for _, width := range []int{30, 80} {
-		view := state.renderDetails(width, NewToolCardStyles(true))
+		view := state.renderDetails(width, NewToolCardStyles(true, defaultThemeID))
 		activeAt := strings.Index(view, "active-last")
 		queueAt := strings.Index(view, "1 more queued")
 		settledAt := strings.Index(view, "settled-0")
@@ -347,7 +347,7 @@ func TestExpertProgressDetailsPreserveQueuedAggregateWithinCap(t *testing.T) {
 		}
 	}
 
-	view := state.renderDetails(80, NewToolCardStyles(true))
+	view := state.renderDetails(80, NewToolCardStyles(true, defaultThemeID))
 	firstSettledAt := strings.Index(view, "expert-a")
 	queuedAt := strings.Index(view, "2 more queued")
 	nextAt := strings.Index(view, "expert-c")

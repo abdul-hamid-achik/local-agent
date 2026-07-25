@@ -24,7 +24,7 @@ func TestRenderGoalStatusLineIsAdaptiveAndUseful(t *testing.T) {
 
 	for _, width := range []int{12, 30, 48, 80} {
 		t.Run(formatGoalBudget(width), func(t *testing.T) {
-			line := RenderGoalStatusLine(summary, width, true)
+			line := RenderGoalStatusLine(summary, width, true, defaultThemeID)
 			if strings.Contains(line, "\n") {
 				t.Fatalf("status line wrapped at width %d: %q", width, line)
 			}
@@ -37,7 +37,7 @@ func TestRenderGoalStatusLineIsAdaptiveAndUseful(t *testing.T) {
 		})
 	}
 
-	wide := RenderGoalStatusLine(summary, 80, true)
+	wide := RenderGoalStatusLine(summary, 80, true, defaultThemeID)
 	for _, want := range []string{"3/12 auto turns", "8k/32k tok", "14m/1h"} {
 		if !strings.Contains(wide, want) {
 			t.Fatalf("wide status missing %q: %q", want, wide)
@@ -47,7 +47,7 @@ func TestRenderGoalStatusLineIsAdaptiveAndUseful(t *testing.T) {
 
 func TestRenderGoalStatusLineSanitizesUserObjective(t *testing.T) {
 	raw := "ship\x1b]52;c;GOAL_SECRET\x07\x1b[2J\nrelease\u202e\u2066"
-	plain := ansi.Strip(RenderGoalStatusLine(GoalSummary{Objective: raw, Phase: GoalPhaseActive}, 100, true))
+	plain := ansi.Strip(RenderGoalStatusLine(GoalSummary{Objective: raw, Phase: GoalPhaseActive}, 100, true, defaultThemeID))
 	if strings.Contains(plain, "GOAL_SECRET") || strings.Contains(plain, "\n") {
 		t.Fatalf("goal objective escaped its fixed row: %q", plain)
 	}
@@ -80,7 +80,7 @@ func TestRenderGoalStatusLineNamesEveryPhaseWithoutColor(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.label, func(t *testing.T) {
-			line := RenderGoalStatusLine(GoalSummary{Objective: "ship", Phase: test.phase}, 40, false)
+			line := RenderGoalStatusLine(GoalSummary{Objective: "ship", Phase: test.phase}, 40, false, defaultThemeID)
 			if !strings.Contains(line, test.glyph) || !strings.Contains(line, test.label) {
 				t.Fatalf("phase %q was not conveyed with glyph and text: %q", test.phase, line)
 			}
@@ -95,7 +95,7 @@ func TestRenderGoalStatusLineOmitsUnlimitedBudgets(t *testing.T) {
 		TurnsUsed:  5,
 		TokensUsed: 9000,
 		Elapsed:    time.Hour,
-	}, 80, true)
+	}, 80, true, defaultThemeID)
 
 	if strings.Contains(line, "turn") || strings.Contains(line, "tok") || strings.Contains(line, "/") {
 		t.Fatalf("unlimited budgets should not create progress fractions: %q", line)
@@ -118,7 +118,7 @@ func TestGoalStatusTerminalPhasesStopLiveTimeAndWarningAccrual(t *testing.T) {
 				Elapsed:     3 * time.Hour,
 				TimeBudget:  time.Hour,
 			}
-			line := RenderGoalStatusLine(summary, 100, true)
+			line := RenderGoalStatusLine(summary, 100, true, defaultThemeID)
 			if strings.Contains(line, "3h/1h") {
 				t.Fatalf("terminal status kept a live wall clock: %q", line)
 			}

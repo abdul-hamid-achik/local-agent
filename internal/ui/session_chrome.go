@@ -219,7 +219,7 @@ func (m *Model) renderStickyUserStrip(paneW int) string {
 		plain += strings.Repeat(" ", gap)
 	}
 
-	palette := newSemanticPalette(m.isDark)
+	palette := newSemanticPalette(m.isDark, m.themeID)
 	// Subtle elevated band — close to Grok's sticky strip without a harsh chip.
 	elevated := lipgloss.LightDark(m.isDark)(
 		lipgloss.Color("#ECEFF4"), // nord snow storm 2

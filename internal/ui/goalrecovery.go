@@ -122,6 +122,7 @@ type GoalRecoveryOptions struct {
 	Width         int
 	Height        int
 	IsDark        bool
+	ThemeID          string
 	ReducedMotion bool
 	GlyphProfile  GlyphProfile
 	// Standalone adapts the already-designed evidence review for an ordinary
@@ -216,6 +217,7 @@ type GoalRecovery struct {
 	width         int
 	height        int
 	isDark        bool
+	themeID       string
 	reducedMotion bool
 	glyphProfile  GlyphProfile
 	standalone    bool
@@ -234,9 +236,9 @@ func NewGoalRecovery(items []GoalRecoveryItem, options GoalRecoveryOptions) *Goa
 	}
 
 	profile := resolveGlyphProfile(options.GlyphProfile)
-	delegate := newPickerDelegate(options.IsDark, false, profile)
+	delegate := newPickerDelegate(options.IsDark, false, resolveThemeID(options.ThemeID), profile)
 	itemList := list.New(nil, delegate, 1, 1)
-	configurePickerList(&itemList, options.IsDark)
+	configurePickerList(&itemList, options.IsDark, resolveThemeID(options.ThemeID))
 	configurePickerListGlyphProfile(&itemList, profile)
 	itemList.SetShowTitle(false)
 	itemList.SetShowStatusBar(false)
@@ -444,12 +446,16 @@ func (r *GoalRecovery) SetSize(width, height int) {
 }
 
 // SetTheme reapplies the existing LightDark-derived semantic palette.
-func (r *GoalRecovery) SetTheme(isDark bool) {
-	if r == nil || r.isDark == isDark {
+func (r *GoalRecovery) SetTheme(isDark bool, themeIDs ...string) {
+	if r == nil {
 		return
 	}
-	r.isDark = isDark
-	r.styles = NewStyles(isDark)
+	themeID := resolveThemeID(themeIDs...)
+	if r.isDark == isDark && resolveThemeID(r.themeID) == themeID {
+		return
+	}
+	r.isDark, r.themeID = isDark, themeID
+	r.styles = NewStyles(isDark, r.themeID)
 	r.applyStyles()
 	r.resizeComponents()
 	r.refreshDetail(false)
@@ -479,20 +485,20 @@ func (r *GoalRecovery) errorStyle() lipgloss.Style {
 }
 
 func (r *GoalRecovery) applyStyles() {
-	inputStyles := semanticTextInputStyles(r.isDark)
+	inputStyles := semanticTextInputStyles(r.isDark, r.themeID)
 	inputStyles.Cursor.Blink = !r.reducedMotion
 	r.reference.SetStyles(inputStyles)
 	r.summary.SetStyles(goalTextareaStyles(r.isDark, r.reducedMotion))
-	configurePickerList(&r.itemList, r.isDark)
+	configurePickerList(&r.itemList, r.isDark, r.themeID)
 	configurePickerListGlyphProfile(&r.itemList, r.glyphProfile)
-	palette := outputSemanticPalette(r.isDark)
+	palette := outputSemanticPalette(r.isDark, r.themeID)
 	r.detail.Style = lipgloss.NewStyle().Foreground(palette.Muted)
 }
 
 func (r *GoalRecovery) resizeComponents() {
 	width := r.contentWidth()
 	bubbleWidth := max(1, width-2)
-	delegate := newPickerDelegate(r.isDark, r.compact(), r.glyphProfile)
+	delegate := newPickerDelegate(r.isDark, r.compact(), r.themeID, r.glyphProfile)
 	r.itemList.SetDelegate(delegate)
 	listHeight := 1
 	if !r.compact() {
@@ -518,7 +524,7 @@ func (r *GoalRecovery) resizeComponents() {
 		r.detail.SetWidth(bubbleWidth)
 		r.detail.SetHeight(detailHeight)
 	}
-	r.detail.Style = lipgloss.NewStyle().Foreground(outputSemanticPalette(r.isDark).Muted)
+	r.detail.Style = lipgloss.NewStyle().Foreground(outputSemanticPalette(r.isDark, r.themeID).Muted)
 }
 
 func (r *GoalRecovery) selectedObservation() GoalRecoveryObservation {

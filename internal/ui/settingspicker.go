@@ -52,7 +52,7 @@ type SettingsPickerState struct {
 	Compact    bool
 }
 
-func newSettingsPickerState(items []settingsItem, terminalWidth, terminalHeight int, isDark bool, profiles ...GlyphProfile) *SettingsPickerState {
+func newSettingsPickerState(items []settingsItem, terminalWidth, terminalHeight int, isDark bool, themeID string, profiles ...GlyphProfile) *SettingsPickerState {
 	profile := resolveGlyphProfile(profiles...)
 	listItems := make([]list.Item, len(items))
 	for i := range items {
@@ -60,14 +60,14 @@ func newSettingsPickerState(items []settingsItem, terminalWidth, terminalHeight 
 	}
 
 	compact := compactSettingsRows(terminalWidth, terminalHeight)
-	delegate := newSettingsDelegate(isDark, compact, profile)
+	delegate := newSettingsDelegate(isDark, compact, themeID, profile)
 	itemHeight := delegate.Height()
 
 	width := pickerListWidth(terminalWidth)
 	height := settingsListHeight(listItems, itemHeight, terminalHeight)
 
 	l := list.New(listItems, delegate, width, height)
-	configurePickerList(&l, isDark)
+	configurePickerList(&l, isDark, themeID)
 	configurePickerListGlyphProfile(&l, profile)
 	l.Title = "Settings"
 	setSettingsTitleDensity(&l, compact)
@@ -88,8 +88,8 @@ func compactSettingsRows(terminalWidth, terminalHeight int) bool {
 	return terminalWidth <= 40 || terminalHeight <= 20
 }
 
-func newSettingsDelegate(isDark, compact bool, profiles ...GlyphProfile) list.DefaultDelegate {
-	return newPickerDelegate(isDark, compact, profiles...)
+func newSettingsDelegate(isDark, compact bool, themeID string, profiles ...GlyphProfile) list.DefaultDelegate {
+	return newPickerDelegate(isDark, compact, themeID, profiles...)
 }
 
 func setSettingsTitleDensity(l *list.Model, compact bool) {
@@ -166,7 +166,7 @@ func (m *Model) resizePickerOverlays() {
 	}
 	if state := m.settingsPickerState; state != nil {
 		compact := compactSettingsRows(m.width, m.height)
-		delegate := newSettingsDelegate(m.isDark, compact, m.glyphProfile)
+		delegate := newSettingsDelegate(m.isDark, compact, m.themeID, m.glyphProfile)
 		state.List.SetDelegate(delegate)
 		setSettingsTitleDensity(&state.List, compact)
 		state.ItemHeight = delegate.Height()
@@ -198,6 +198,12 @@ func (m *Model) resizePickerOverlays() {
 			pickerListHeight(m.height, len(state.List.Items())*defaultPickerItemHeight+2, 4),
 		)
 	}
+	if state := m.themePickerState; state != nil {
+		state.List.SetSize(
+			pickerListWidth(m.width),
+			pickerListHeight(m.height, len(state.List.Items())*defaultPickerItemHeight+2, 4),
+		)
+	}
 	if state := m.modelPickerState; state != nil {
 		count := len(state.Inventory)
 		if count == 0 {
@@ -206,7 +212,7 @@ func (m *Model) resizePickerOverlays() {
 		compact := compactModelPicker(m.width, m.height)
 		// The model picker reserves metadata for its selected-detail strip;
 		// terminal resizing must not turn navigable rows into descriptions.
-		delegate := newPickerDelegate(m.isDark, true, m.glyphProfile)
+		delegate := newPickerDelegate(m.isDark, true, m.themeID, m.glyphProfile)
 		state.List.SetDelegate(delegate)
 		setSettingsTitleDensity(&state.List, compact)
 		state.Compact = compact
@@ -219,7 +225,7 @@ func (m *Model) resizePickerOverlays() {
 	}
 	if state := m.cloudConsentState; state != nil {
 		state.Compact = m.width <= 40 || m.height <= 14
-		delegate := newPickerDelegate(m.isDark, state.Compact, m.glyphProfile)
+		delegate := newPickerDelegate(m.isDark, state.Compact, m.themeID, m.glyphProfile)
 		state.List.SetDelegate(delegate)
 		state.List.SetSize(
 			pickerListWidth(m.width),
@@ -352,7 +358,7 @@ func (m *Model) settingsItems() []settingsItem {
 
 func (m *Model) openSettingsPicker() {
 	m.overlayParent = OverlayNone
-	m.settingsPickerState = newSettingsPickerState(m.settingsItems(), m.width, m.height, m.isDark, m.glyphProfile)
+	m.settingsPickerState = newSettingsPickerState(m.settingsItems(), m.width, m.height, m.isDark, m.themeID, m.glyphProfile)
 	m.overlay = OverlaySettings
 	m.input.Blur()
 }
@@ -362,7 +368,7 @@ func (m *Model) refreshSettingsPicker() {
 		return
 	}
 	selected := m.settingsPickerState.List.Index()
-	m.settingsPickerState = newSettingsPickerState(m.settingsItems(), m.width, m.height, m.isDark, m.glyphProfile)
+	m.settingsPickerState = newSettingsPickerState(m.settingsItems(), m.width, m.height, m.isDark, m.themeID, m.glyphProfile)
 	if selected >= 0 && selected < len(m.settingsPickerState.List.Items()) {
 		m.settingsPickerState.List.Select(selected)
 	}

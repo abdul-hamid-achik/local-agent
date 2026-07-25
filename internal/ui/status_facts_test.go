@@ -123,3 +123,47 @@ func TestAmbientStateRemainsVisibleOnEverySupportedFrame(t *testing.T) {
 		}
 	}
 }
+
+// A theme switch must reach every cached surface, not just the styles the
+// Model holds directly. Child components, Bubbles delegates, and the Glamour
+// renderer each keep their own copy, which is what rebuildThemedSurfaces
+// exists to repaint.
+func TestThemeSwitchRepaintsTheWholeFrame(t *testing.T) {
+	m := newTestModel(t)
+	m.entries = []ChatEntry{
+		{Kind: "user", Content: "hey"},
+		{Kind: "assistant", Content: "an answer", RenderedContent: "an answer"},
+	}
+	m.refreshTranscript()
+	before := m.View().Content
+
+	if !m.SetTheme("dracula") {
+		t.Fatal("SetTheme rejected a registered theme")
+	}
+	m.refreshTranscript()
+	after := m.View().Content
+
+	if before == after {
+		t.Fatal("theme switch did not change any painted cell")
+	}
+	// The Dracula dark accent must actually appear somewhere in the frame.
+	if !strings.Contains(after, "139;233;253") { // #8BE9FD
+		t.Fatalf("selected theme's accent is absent from the frame:\n%q", after[:min(600, len(after))])
+	}
+	if m.md == nil || m.md.themeID != "dracula" {
+		t.Fatal("markdown renderer kept the previous theme")
+	}
+}
+
+func TestThemeSwitchRejectsUnknownAndKeepsCurrent(t *testing.T) {
+	m := newTestModel(t)
+	if !m.SetTheme("gruvbox") {
+		t.Fatal("SetTheme rejected gruvbox")
+	}
+	if m.SetTheme("not-a-theme") {
+		t.Fatal("SetTheme accepted an unregistered id")
+	}
+	if got := m.ThemeID(); got != "gruvbox" {
+		t.Fatalf("rejected switch changed the active theme to %q", got)
+	}
+}

@@ -21,9 +21,9 @@ func TestPickerListUsesSharedSemanticPalette(t *testing.T) {
 	t.Cleanup(func() { noColor = previous })
 
 	for _, isDark := range []bool{false, true} {
-		delegate := newPickerDelegate(isDark, false)
+		delegate := newPickerDelegate(isDark, false, defaultThemeID)
 		l := list.New([]list.Item{pickerStyleItem("first")}, delegate, 40, 8)
-		configurePickerList(&l, isDark)
+		configurePickerList(&l, isDark, defaultThemeID)
 
 		palette := newSemanticPalette(isDark)
 		assertSameColor(t, "title", l.Styles.Title.GetForeground(), palette.Accent)
@@ -40,18 +40,18 @@ func TestNoColorAppliesToToolCardsAndPickers(t *testing.T) {
 	noColor = true
 	t.Cleanup(func() { noColor = previous })
 
-	tool := NewToolCardStyles(true).TitleRunning.Render("tool")
+	tool := NewToolCardStyles(true, defaultThemeID).TitleRunning.Render("tool")
 	composer := agentTextareaStyles(true).Focused.Prompt.Render("❯")
-	delegate := newPickerDelegate(true, false)
+	delegate := newPickerDelegate(true, false, defaultThemeID)
 	l := list.New([]list.Item{pickerStyleItem("first")}, delegate, 40, 8)
-	configurePickerList(&l, true)
+	configurePickerList(&l, true, defaultThemeID)
 	l.SetShowStatusBar(false)
 	l.SetShowPagination(false)
 	l.SetShowHelp(false)
 	picker := l.View()
-	plan := NewPlanFormState("polish the interface")
+	plan := NewPlanFormState("polish the interface", defaultThemeID)
 	planInput := plan.Fields[0].Input.View()
-	completion := newCompletionState("command", []Completion{{Label: "/help"}}, false)
+	completion := newCompletionState("command", []Completion{{Label: "/help"}}, false, defaultThemeID)
 	completionInput := completion.Filter.View()
 	if hasANSIColor(tool) || hasANSIColor(composer) || hasANSIColor(picker) || hasANSIColor(planInput) || hasANSIColor(completionInput) {
 		t.Fatalf("NO_COLOR rendering emitted ANSI color sequences: tool=%q composer=%q picker=%q plan=%q completion=%q", tool, composer, picker, planInput, completionInput)
@@ -67,8 +67,8 @@ func TestTransientInputsAndCompactDensitySurviveThemeChange(t *testing.T) {
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: minTerminalWidth, Height: minTerminalHeight})
 	m = updated.(*Model)
 	m.openSettingsPicker()
-	m.planFormState = NewPlanFormState("polish the interface")
-	m.completionState = newCompletionState("command", []Completion{{Label: "/help"}}, false, true)
+	m.planFormState = NewPlanFormState("polish the interface", defaultThemeID)
+	m.completionState = newCompletionState("command", []Completion{{Label: "/help"}}, false, defaultThemeID, true)
 
 	updated, _ = m.Update(tea.BackgroundColorMsg{Color: color.White})
 	m = updated.(*Model)
@@ -100,16 +100,16 @@ func TestTransientInputsAndCompactDensitySurviveThemeChange(t *testing.T) {
 func TestTransientInputReducedMotionSurvivesThemeChange(t *testing.T) {
 	m := newTestModel(t)
 	m.reducedMotion = true
-	m.planFormState = NewPlanFormState("polish the interface", m.isDark, m.reducedMotion)
+	m.planFormState = NewPlanFormState("polish the interface", m.themeID, m.isDark, m.reducedMotion)
 	m.completionState = newCompletionState(
-		"command", []Completion{{Label: "/help"}}, false, m.isDark, m.reducedMotion,
+		"command", []Completion{{Label: "/help"}}, false, m.themeID, m.isDark, m.reducedMotion,
 	)
 	m.modelPickerState = newOllamaModelPickerState([]OllamaModelDescriptor{{
 		Name: "local-code", Source: OllamaModelLocal, Selectable: true, Fit: true,
-	}}, "local-code", m.width, m.height, m.isDark, m.reducedMotion)
+	}}, "local-code", m.width, m.height, m.isDark, m.themeID, m.reducedMotion)
 	m.sessionsPickerState = newSessionsPickerState([]SessionListItem{{
 		ID: 1, Title: "Reduced motion", CreatedAt: "just now",
-	}}, m.width, m.height, m.isDark, m.reducedMotion)
+	}}, m.width, m.height, m.isDark, m.themeID, m.reducedMotion)
 	if m.modelPickerState.List.FilterInput.Styles().Cursor.Blink || m.sessionsPickerState.List.FilterInput.Styles().Cursor.Blink {
 		t.Fatal("reduced motion left a picker filter cursor blinking")
 	}

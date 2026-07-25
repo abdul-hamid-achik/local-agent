@@ -32,6 +32,7 @@ type cortexDecisionPresentation struct {
 	width         int
 	height        int
 	isDark        bool
+	themeID       string
 	reducedMotion bool
 	glyphProfile  GlyphProfile
 	styles        Styles
@@ -69,12 +70,12 @@ func newCortexDecisionPresentation(
 	return presentation, nil
 }
 
-func (p *cortexDecisionPresentation) SetTheme(isDark bool) {
+func (p *cortexDecisionPresentation) SetTheme(isDark bool, themeIDs ...string) {
 	if p == nil {
 		return
 	}
 	p.isDark = isDark
-	p.styles = NewStyles(isDark)
+	p.styles = NewStyles(isDark, p.themeID)
 	p.warningStyle = lipgloss.NewStyle().
 		Foreground(outputSemanticPalette(isDark).Warning).
 		Bold(true)

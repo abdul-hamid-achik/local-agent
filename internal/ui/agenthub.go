@@ -79,9 +79,9 @@ func (item agentHubRenderItem) Title() string       { return item.title }
 func (item agentHubRenderItem) Description() string { return item.description }
 func (item agentHubRenderItem) FilterValue() string { return item.item.FilterValue() }
 
-func newAgentHubDelegate(isDark, compact bool, profile GlyphProfile) agentHubDelegate {
+func newAgentHubDelegate(isDark, compact bool, themeID string, profile GlyphProfile) agentHubDelegate {
 	return agentHubDelegate{
-		DefaultDelegate: newPickerDelegate(isDark, compact, profile),
+		DefaultDelegate: newPickerDelegate(isDark, compact, themeID, profile),
 		glyphProfile:    resolveGlyphProfile(profile),
 	}
 }
@@ -136,6 +136,7 @@ type AgentHubState struct {
 	width            int
 	height           int
 	isDark           bool
+	themeID       string
 	reducedMotion    bool
 	glyphProfile     GlyphProfile
 	compact          bool
@@ -163,7 +164,7 @@ func newAgentHubState(
 	unavailable bool,
 	terminalWidth int,
 	terminalHeight int,
-	isDark bool,
+	isDark bool, themeID string,
 	reducedMotion bool,
 	profiles ...GlyphProfile,
 ) *AgentHubState {
@@ -175,9 +176,9 @@ func newAgentHubState(
 	profile := resolveGlyphProfile(profiles...)
 	items := agentHubItems(surface, profile)
 	compact := compactAgentHub(terminalWidth, terminalHeight)
-	delegate := newAgentHubDelegate(isDark, compact, profile)
+	delegate := newAgentHubDelegate(isDark, compact, themeID, profile)
 	l := list.New(items, delegate, 1, 1)
-	configurePickerList(&l, isDark, reducedMotion)
+	configurePickerList(&l, isDark, themeID, reducedMotion)
 	configurePickerListGlyphProfile(&l, profile)
 	l.SetShowStatusBar(false)
 	l.SetShowHelp(false)
@@ -422,7 +423,7 @@ func (state *AgentHubState) SetSize(terminalWidth, terminalHeight int) {
 	compact := compactAgentHub(state.width, state.height)
 	if compact != state.compact {
 		state.compact = compact
-		delegate := newAgentHubDelegate(state.isDark, compact, state.glyphProfile)
+		delegate := newAgentHubDelegate(state.isDark, compact, state.themeID, state.glyphProfile)
 		state.List.SetDelegate(delegate)
 		state.ItemHeight = delegate.Height()
 		state.ItemSpacing = delegate.Spacing()
@@ -440,17 +441,18 @@ func (state *AgentHubState) SetSize(terminalWidth, terminalHeight int) {
 	state.rebuildViewerContent(true)
 }
 
-func (state *AgentHubState) SetTheme(isDark bool, reducedMotion bool) {
+func (state *AgentHubState) SetTheme(isDark bool, reducedMotion bool, themeIDs ...string) {
 	if state == nil {
 		return
 	}
 	state.isDark = isDark
+	state.themeID = resolveThemeID(themeIDs...)
 	state.reducedMotion = reducedMotion
-	delegate := newAgentHubDelegate(isDark, state.compact, state.glyphProfile)
+	delegate := newAgentHubDelegate(isDark, state.compact, state.themeID, state.glyphProfile)
 	state.List.SetDelegate(delegate)
 	state.ItemHeight = delegate.Height()
 	state.ItemSpacing = delegate.Spacing()
-	configurePickerList(&state.List, isDark, reducedMotion)
+	configurePickerList(&state.List, isDark, state.themeID, reducedMotion)
 	configurePickerListGlyphProfile(&state.List, state.glyphProfile)
 	state.configureListTitle()
 	state.rebuildViewerContent(true)
@@ -718,7 +720,7 @@ func (state *AgentHubState) rebuildViewerContent(preserveOffset bool) {
 		state.Viewer.SetYOffset(offset)
 		return
 	}
-	layout := renderAgentViewerLayout(group, state.Viewer.Width(), state.isDark, state.glyphProfile)
+	layout := renderAgentViewerLayout(group, state.Viewer.Width(), state.isDark, state.themeID, state.glyphProfile)
 	state.Viewer.SetContent(layout.content)
 	state.viewerContentKey = key
 	state.viewerRows = layout.rows
@@ -728,14 +730,15 @@ func (state *AgentHubState) rebuildViewerContent(preserveOffset bool) {
 	state.Viewer.SetYOffset(offset)
 }
 
-func renderAgentViewerBody(group AgentGroupProjection, width int, isDark bool, profiles ...GlyphProfile) string {
-	return renderAgentViewerLayout(group, width, isDark, profiles...).content
+func renderAgentViewerBody(group AgentGroupProjection, width int, isDark bool, themeID string, profiles ...GlyphProfile) string {
+	return renderAgentViewerLayout(group, width, isDark, themeID, profiles...).content
 }
 
 func renderAgentViewerLayout(
 	group AgentGroupProjection,
 	width int,
 	isDark bool,
+	themeID string,
 	profiles ...GlyphProfile,
 ) agentViewerLayout {
 	width = max(1, width)
@@ -744,8 +747,8 @@ func renderAgentViewerLayout(
 	truncate := func(value string) string {
 		return truncateDisplayWithGlyphProfile(value, width, profile)
 	}
-	styles := NewStyles(isDark)
-	nodeStyles := NewToolCardStyles(isDark)
+	styles := NewStyles(isDark, themeID)
+	nodeStyles := NewToolCardStyles(isDark, themeID)
 	lines := make([]string, 0, 10+len(group.Nodes)*2)
 	rows := make([]agentViewerRowAnchor, 0, cap(lines))
 	appendRow := func(line string, row agentViewerRowAnchor) {
@@ -1054,6 +1057,7 @@ func (m *Model) openAgentHub() {
 		m.width,
 		m.height,
 		m.isDark,
+		m.themeID,
 		m.reducedMotion,
 		m.glyphProfile,
 	)
@@ -1112,7 +1116,7 @@ func (m *Model) resizeAgentHub() {
 
 func (m *Model) restyleAgentHub() {
 	if m != nil && m.overlay == OverlayAgents && m.agentHubState != nil {
-		m.agentHubState.SetTheme(m.isDark, m.reducedMotion)
+		m.agentHubState.SetTheme(m.isDark, m.reducedMotion, m.themeID)
 	}
 }
 

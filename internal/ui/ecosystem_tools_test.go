@@ -138,7 +138,7 @@ func TestCompactToolFailureExtractsJSONAndOffersRecovery(t *testing.T) {
 }
 
 func TestToolCardKeepsCompactErrorAndExpandedRawDetail(t *testing.T) {
-	card := NewToolCard("cortex__cortex_status", ToolCardGeneric, true)
+	card := NewToolCard("cortex__cortex_status", ToolCardGeneric, true, defaultThemeID)
 	card.State = ToolCardError
 	card.Result = `{"error":{"message":"connection refused"},"debug":"raw detail"}`
 

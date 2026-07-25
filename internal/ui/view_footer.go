@@ -330,7 +330,7 @@ func (m *Model) renderGoalFooterStatus(summary GoalSummary, paneW int) string {
 	}
 	if len(required) > 0 && available-fixedWidth-requiredWidth < minimumGoalWidth {
 		goalWidth := max(1, available-fixedWidth)
-		core := " " + strings.Join([]string{modePart, RenderGoalStatusLine(summary, goalWidth, m.isDark, m.glyphProfile)}, separator)
+		core := " " + strings.Join([]string{modePart, RenderGoalStatusLine(summary, goalWidth, m.isDark, m.themeID, m.glyphProfile)}, separator)
 		safety := make([]string, 0, len(required))
 		for _, candidate := range required {
 			safety = append(safety, candidate.view)
@@ -353,7 +353,7 @@ func (m *Model) renderGoalFooterStatus(summary GoalSummary, paneW int) string {
 		fixedWidth += cost
 	}
 	goalWidth := max(1, available-fixedWidth)
-	goalPart := RenderGoalStatusLine(summary, goalWidth, m.isDark, m.glyphProfile)
+	goalPart := RenderGoalStatusLine(summary, goalWidth, m.isDark, m.themeID, m.glyphProfile)
 	parts := make([]string, 0, 2+len(selected))
 	if modePart != "" {
 		parts = append(parts, modePart)

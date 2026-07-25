@@ -50,6 +50,18 @@ type Config struct {
 	Continuations ContinuationsConfig `yaml:"continuations,omitempty"`
 	Experts       ExpertsConfig       `yaml:"experts,omitempty"`
 	Privacy       PrivacyConfig       `yaml:"privacy,omitempty"`
+	UI            UIConfig            `yaml:"ui,omitempty"`
+}
+
+// UIConfig holds presentation-only preferences. Nothing here affects authority,
+// tool policy, or what leaves the machine.
+type UIConfig struct {
+	// Theme names a built-in color scheme. An unknown name falls back to the
+	// default rather than failing startup: a config written for a newer build
+	// must not leave the terminal colorless. Run /theme to see what is
+	// available, or to pick one interactively (that choice is stored separately
+	// and takes precedence over this key).
+	Theme string `yaml:"theme,omitempty"`
 }
 
 // UnmarshalYAML rejects an explicit null continuation policy before it can be

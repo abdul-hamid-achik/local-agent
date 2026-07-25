@@ -73,7 +73,7 @@ func TestNewToolCardStylesUsesLightDarkPalette(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			styles := NewToolCardStyles(tt.isDark)
+			styles := NewToolCardStyles(tt.isDark, defaultThemeID)
 			got := map[string]lipgloss.Style{
 				"border running":   styles.BorderRunning,
 				"border success":   styles.BorderSuccess,
@@ -117,7 +117,7 @@ func TestToolCardManagerSetDarkUpdatesStylesAndPreservesCallID(t *testing.T) {
 	}
 	assertToolCardForeground(t, "light running title", mgr.Cards[0].Styles.TitleRunning, "#447c7c")
 
-	mgr.SetDark(true)
+	mgr.SetDark(true, defaultThemeID)
 
 	card := mgr.Cards[0]
 	if card.ID != "call-42" {

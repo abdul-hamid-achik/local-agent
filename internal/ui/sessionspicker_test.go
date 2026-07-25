@@ -70,7 +70,7 @@ func TestSessionsPickerFormatsPersistedTimestampOnce(t *testing.T) {
 		ID:        1,
 		Title:     "Release polish",
 		CreatedAt: "2026-07-11T12:00:00.000Z",
-	}}, 80, 24, true)
+	}}, 80, 24, true, defaultThemeID)
 
 	item, ok := state.List.Items()[0].(sessionItem)
 	if !ok {
@@ -88,7 +88,7 @@ func TestSessionsPickerFitsMinimumAndKeepsFooter(t *testing.T) {
 	m.sessionsPickerState = newSessionsPickerState([]SessionListItem{
 		{ID: 1, Title: strings.Repeat("会話🙂", 12), CreatedAt: "just now"},
 		{ID: 2, Title: "Second session", CreatedAt: "yesterday"},
-	}, m.width, m.height, m.isDark)
+	}, m.width, m.height, m.isDark, m.themeID)
 	m.overlay = OverlaySessionsPicker
 
 	rendered := m.renderSessionsPicker()
@@ -105,7 +105,7 @@ func TestSessionsPickerFooterNamesSlashFilterBinding(t *testing.T) {
 	m.sessionsPickerState = newSessionsPickerState([]SessionListItem{
 		{ID: 1, Title: "First session", CreatedAt: "just now"},
 		{ID: 2, Title: "Second session", CreatedAt: "yesterday"},
-	}, m.width, m.height, m.isDark)
+	}, m.width, m.height, m.isDark, m.themeID)
 	m.overlay = OverlaySessionsPicker
 
 	rendered := ansi.Strip(m.renderSessionsPicker())

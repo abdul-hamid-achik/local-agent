@@ -66,7 +66,7 @@ func TestASCIIProfileCoversCortexAndGoalSurfaces(t *testing.T) {
 		GlyphProfile: GlyphASCII, Now: now,
 	})
 
-	plan, ok := newGoalPlanCard(goalPlanFixture(now), true, GlyphASCII)
+	plan, ok := newGoalPlanCard(goalPlanFixture(now), true, defaultThemeID, GlyphASCII)
 	if !ok {
 		t.Fatal("ASCII goal plan fixture rejected")
 	}
@@ -105,7 +105,7 @@ func TestASCIIProfileCoversInlineFormControls(t *testing.T) {
 	m := newTestModel(t)
 	m.glyphProfile = GlyphASCII
 
-	m.planFormState = NewPlanFormState("inspect UI", m.isDark, true)
+	m.planFormState = NewPlanFormState("inspect UI", m.themeID, m.isDark, true)
 	m.planFormState.ActiveField = 1
 	plan := m.renderPlanForm()
 
@@ -134,7 +134,7 @@ func TestASCIIProfileCoversInlineFormControls(t *testing.T) {
 func TestASCIIListFilterChromeIsStaticAndReducedMotionSafe(t *testing.T) {
 	state := newSessionsPickerState([]SessionListItem{{
 		ID: 1, Title: "ASCII session", CreatedAt: "now",
-	}}, 80, 24, true, true)
+	}}, 80, 24, true, defaultThemeID, true)
 	configurePickerListGlyphProfile(&state.List, GlyphASCII)
 
 	if state.List.FilterInput.Prompt != "Filter > " {
@@ -182,6 +182,7 @@ func TestASCIIProfileCoversApprovalActivityAndCompletionChrome(t *testing.T) {
 		"attachments",
 		[]Completion{{Label: "notes.txt", Insert: "notes.txt"}},
 		true,
+		completionModel.themeID,
 		completionModel.isDark,
 	)
 	completionModel.completionState.Preview = completionPreview{

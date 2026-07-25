@@ -54,19 +54,19 @@ type PermissionsPanelState struct {
 	Compact    bool
 }
 
-func newPermissionsPanelState(items []permissionsItem, terminalWidth, terminalHeight int, isDark bool, profiles ...GlyphProfile) *PermissionsPanelState {
+func newPermissionsPanelState(items []permissionsItem, terminalWidth, terminalHeight int, isDark bool, themeID string, profiles ...GlyphProfile) *PermissionsPanelState {
 	profile := resolveGlyphProfile(profiles...)
 	listItems := make([]list.Item, len(items))
 	for i := range items {
 		listItems[i] = items[i]
 	}
 	compact := compactSettingsRows(terminalWidth, terminalHeight)
-	delegate := newPickerDelegate(isDark, compact, profile)
+	delegate := newPickerDelegate(isDark, compact, themeID, profile)
 	itemHeight := delegate.Height()
 	width := pickerListWidth(terminalWidth)
 	height := pickerListHeight(terminalHeight, len(listItems)*itemHeight+2, 4)
 	l := list.New(listItems, delegate, width, height)
-	configurePickerList(&l, isDark)
+	configurePickerList(&l, isDark, themeID)
 	configurePickerListGlyphProfile(&l, profile)
 	l.Title = "Permissions"
 	setSettingsTitleDensity(&l, compact)
@@ -159,7 +159,7 @@ func (m *Model) permissionsPanelItems() []permissionsItem {
 
 func (m *Model) openPermissionsPanel() {
 	// openSettingsChild may set overlayParent=Settings before calling this.
-	m.permissionsPanelState = newPermissionsPanelState(m.permissionsPanelItems(), m.width, m.height, m.isDark, m.glyphProfile)
+	m.permissionsPanelState = newPermissionsPanelState(m.permissionsPanelItems(), m.width, m.height, m.isDark, m.themeID, m.glyphProfile)
 	m.overlay = OverlayPermissions
 	m.input.Blur()
 }
@@ -169,7 +169,7 @@ func (m *Model) refreshPermissionsPanel() {
 		return
 	}
 	selected := m.permissionsPanelState.List.Index()
-	m.permissionsPanelState = newPermissionsPanelState(m.permissionsPanelItems(), m.width, m.height, m.isDark, m.glyphProfile)
+	m.permissionsPanelState = newPermissionsPanelState(m.permissionsPanelItems(), m.width, m.height, m.isDark, m.themeID, m.glyphProfile)
 	if selected >= 0 && selected < len(m.permissionsPanelState.List.Items()) {
 		m.permissionsPanelState.List.Select(selected)
 	}

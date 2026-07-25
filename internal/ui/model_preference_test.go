@@ -9,6 +9,9 @@ import (
 type modelPreferenceStoreStub struct {
 	model          string
 	provider       string
+	theme          string
+	themeSets      int
+	themeSetErr    error
 	setCalls       int
 	clearCalls     int
 	providerSets   int
@@ -16,6 +19,15 @@ type modelPreferenceStoreStub struct {
 	setErr         error
 	clearErr       error
 	providerSetErr error
+}
+
+func (s *modelPreferenceStoreStub) SetTheme(id string) error {
+	s.themeSets++
+	if s.themeSetErr != nil {
+		return s.themeSetErr
+	}
+	s.theme = id
+	return nil
 }
 
 func (s *modelPreferenceStoreStub) SetManualModel(model string) error {

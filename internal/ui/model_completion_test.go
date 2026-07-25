@@ -144,7 +144,7 @@ func TestAcceptCompletion(t *testing.T) {
 			{Label: "/help", Insert: "/help "},
 			{Label: "/clear", Insert: "/clear "},
 		}
-		m.completionState = newCompletionState("command", items, false)
+		m.completionState = newCompletionState("command", items, false, defaultThemeID)
 		m.overlay = OverlayCompletion
 		m.completionState.Index = 0
 
@@ -168,7 +168,7 @@ func TestAcceptCompletion(t *testing.T) {
 			{Label: "@b", Insert: "@b "},
 			{Label: "@c", Insert: "@c "},
 		}
-		m.completionState = newCompletionState("attachments", items, true)
+		m.completionState = newCompletionState("attachments", items, true, defaultThemeID)
 		m.overlay = OverlayCompletion
 		m.completionState.Index = 0
 		m.completionState.Selected[1] = true
@@ -189,7 +189,7 @@ func TestAcceptCompletion(t *testing.T) {
 			{Label: "@x", Insert: "@x "},
 			{Label: "@y", Insert: "@y "},
 		}
-		m.completionState = newCompletionState("attachments", items, true)
+		m.completionState = newCompletionState("attachments", items, true, defaultThemeID)
 		m.overlay = OverlayCompletion
 		m.completionState.Index = 1
 
@@ -216,7 +216,7 @@ func TestAcceptCompletion(t *testing.T) {
 func TestCloseCompletion(t *testing.T) {
 	m := newTestModel(t)
 	items := []Completion{{Label: "test"}}
-	m.completionState = newCompletionState("command", items, true)
+	m.completionState = newCompletionState("command", items, true, defaultThemeID)
 	m.completionState.Index = 5
 	m.completionState.Selected[0] = true
 	m.overlay = OverlayCompletion

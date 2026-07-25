@@ -22,9 +22,9 @@ func completionFilterInputWidth(terminalWidth int) int {
 // semanticTextInputStyles keeps custom Bubbles inputs in the same adaptive
 // palette as lists, the composer, and ToolCards. Starting from Bubbles keeps
 // its cursor behavior while replacing every hardcoded default color.
-func semanticTextInputStyles(isDark bool, reducedMotion ...bool) textinput.Styles {
+func semanticTextInputStyles(isDark bool, themeID string, reducedMotion ...bool) textinput.Styles {
 	styles := textinput.DefaultStyles(isDark)
-	palette := outputSemanticPalette(isDark)
+	palette := outputSemanticPalette(isDark, themeID)
 	styles.Focused = textinput.StyleState{
 		Text:        lipgloss.NewStyle().Foreground(palette.Text),
 		Placeholder: lipgloss.NewStyle().Foreground(palette.Dim),
@@ -45,8 +45,8 @@ func semanticTextInputStyles(isDark bool, reducedMotion ...bool) textinput.Style
 // newPickerDelegate gives every Bubbles picker the same density, focus mark,
 // and semantic colors. Individual pickers supply data; this is the shared
 // visual grammar.
-func newPickerDelegate(isDark, compact bool, profiles ...GlyphProfile) list.DefaultDelegate {
-	palette := outputSemanticPalette(isDark)
+func newPickerDelegate(isDark, compact bool, themeID string, profiles ...GlyphProfile) list.DefaultDelegate {
+	palette := outputSemanticPalette(isDark, themeID)
 	profile := resolveGlyphProfile(profiles...)
 	selectionBorder := lipgloss.NormalBorder()
 	if profile == GlyphASCII {
@@ -87,8 +87,8 @@ func newPickerDelegate(isDark, compact bool, profiles ...GlyphProfile) list.Defa
 	return delegate
 }
 
-func configurePickerList(l *list.Model, isDark bool, reducedMotion ...bool) {
-	palette := outputSemanticPalette(isDark)
+func configurePickerList(l *list.Model, isDark bool, themeID string, reducedMotion ...bool) {
+	palette := outputSemanticPalette(isDark, themeID)
 	l.Styles.TitleBar = lipgloss.NewStyle().Padding(0, 0, 1, 0)
 	l.Styles.Title = lipgloss.NewStyle().
 		Foreground(palette.Accent).
@@ -147,66 +147,66 @@ func configurePickerListGlyphProfile(l *list.Model, profile GlyphProfile) {
 
 func (m *Model) restylePickerOverlays() {
 	if state := m.settingsPickerState; state != nil {
-		delegate := newPickerDelegate(m.isDark, state.Compact, m.glyphProfile)
+		delegate := newPickerDelegate(m.isDark, state.Compact, m.themeID, m.glyphProfile)
 		state.List.SetDelegate(delegate)
 		state.ItemHeight = delegate.Height()
-		configurePickerList(&state.List, m.isDark, m.reducedMotion)
+		configurePickerList(&state.List, m.isDark, m.themeID, m.reducedMotion)
 		configurePickerListGlyphProfile(&state.List, m.glyphProfile)
 		setSettingsTitleDensity(&state.List, state.Compact)
 	}
 	if state := m.permissionsPanelState; state != nil {
-		delegate := newPickerDelegate(m.isDark, state.Compact, m.glyphProfile)
+		delegate := newPickerDelegate(m.isDark, state.Compact, m.themeID, m.glyphProfile)
 		state.List.SetDelegate(delegate)
 		state.ItemHeight = delegate.Height()
-		configurePickerList(&state.List, m.isDark, m.reducedMotion)
+		configurePickerList(&state.List, m.isDark, m.themeID, m.reducedMotion)
 		configurePickerListGlyphProfile(&state.List, m.glyphProfile)
 		setSettingsTitleDensity(&state.List, state.Compact)
 	}
 	if state := m.agentPickerState; state != nil {
-		state.List.SetDelegate(newPickerDelegate(m.isDark, false, m.glyphProfile))
-		configurePickerList(&state.List, m.isDark, m.reducedMotion)
+		state.List.SetDelegate(newPickerDelegate(m.isDark, false, m.themeID, m.glyphProfile))
+		configurePickerList(&state.List, m.isDark, m.themeID, m.reducedMotion)
 		configurePickerListGlyphProfile(&state.List, m.glyphProfile)
 	}
 	if state := m.providerPickerState; state != nil {
-		delegate := newPickerDelegate(m.isDark, false, m.glyphProfile)
+		delegate := newPickerDelegate(m.isDark, false, m.themeID, m.glyphProfile)
 		state.List.SetDelegate(delegate)
 		state.ItemHeight = delegate.Height()
 		state.ItemSpacing = delegate.Spacing()
-		configurePickerList(&state.List, m.isDark, m.reducedMotion)
+		configurePickerList(&state.List, m.isDark, m.themeID, m.reducedMotion)
 		configurePickerListGlyphProfile(&state.List, m.glyphProfile)
 	}
 	if state := m.modePickerState; state != nil {
-		state.List.SetDelegate(newPickerDelegate(m.isDark, false, m.glyphProfile))
-		configurePickerList(&state.List, m.isDark, m.reducedMotion)
+		state.List.SetDelegate(newPickerDelegate(m.isDark, false, m.themeID, m.glyphProfile))
+		configurePickerList(&state.List, m.isDark, m.themeID, m.reducedMotion)
 		configurePickerListGlyphProfile(&state.List, m.glyphProfile)
 	}
 	if state := m.modelPickerState; state != nil {
 		// Model metadata has a dedicated selected-detail strip. Keep its
 		// navigable rows single-line when colors/glyphs are restyled.
-		delegate := newPickerDelegate(m.isDark, true, m.glyphProfile)
+		delegate := newPickerDelegate(m.isDark, true, m.themeID, m.glyphProfile)
 		state.List.SetDelegate(delegate)
 		state.ItemHeight = delegate.Height()
-		configurePickerList(&state.List, m.isDark, m.reducedMotion)
+		configurePickerList(&state.List, m.isDark, m.themeID, m.reducedMotion)
 		configurePickerListGlyphProfile(&state.List, m.glyphProfile)
 		setSettingsTitleDensity(&state.List, state.Compact)
 	}
 	if state := m.cloudConsentState; state != nil {
-		state.List.SetDelegate(newPickerDelegate(m.isDark, state.Compact, m.glyphProfile))
-		configurePickerList(&state.List, m.isDark, m.reducedMotion)
+		state.List.SetDelegate(newPickerDelegate(m.isDark, state.Compact, m.themeID, m.glyphProfile))
+		configurePickerList(&state.List, m.isDark, m.themeID, m.reducedMotion)
 		configurePickerListGlyphProfile(&state.List, m.glyphProfile)
 	}
 	if state := m.sessionsPickerState; state != nil && state.ready() {
-		state.List.SetDelegate(newPickerDelegate(m.isDark, false, m.glyphProfile))
-		configurePickerList(&state.List, m.isDark, m.reducedMotion)
+		state.List.SetDelegate(newPickerDelegate(m.isDark, false, m.themeID, m.glyphProfile))
+		configurePickerList(&state.List, m.isDark, m.themeID, m.reducedMotion)
 		configurePickerListGlyphProfile(&state.List, m.glyphProfile)
 	}
 	if state := m.completionState; state != nil {
-		state.Filter.SetStyles(semanticTextInputStyles(m.isDark, m.reducedMotion))
+		state.Filter.SetStyles(semanticTextInputStyles(m.isDark, m.themeID, m.reducedMotion))
 	}
 	if state := m.planFormState; state != nil {
 		for index := range state.Fields {
 			if state.Fields[index].Kind == "text" {
-				state.Fields[index].Input.SetStyles(semanticTextInputStyles(m.isDark, m.reducedMotion))
+				state.Fields[index].Input.SetStyles(semanticTextInputStyles(m.isDark, m.themeID, m.reducedMotion))
 			}
 		}
 	}

@@ -35,7 +35,7 @@ type AgentPickerState struct {
 	List list.Model
 }
 
-func newAgentPickerState(names []string, current string, terminalWidth, terminalHeight int, isDark bool, profiles ...GlyphProfile) *AgentPickerState {
+func newAgentPickerState(names []string, current string, terminalWidth, terminalHeight int, isDark bool, themeID string, profiles ...GlyphProfile) *AgentPickerState {
 	profile := resolveGlyphProfile(profiles...)
 	items := make([]list.Item, 0, len(names)+1)
 	items = append(items, agentItem{
@@ -55,11 +55,11 @@ func newAgentPickerState(names []string, current string, terminalWidth, terminal
 		items = append(items, agentItem{name: name, display: name, current: name == current, profile: profile})
 	}
 
-	delegate := newPickerDelegate(isDark, false, profile)
+	delegate := newPickerDelegate(isDark, false, themeID, profile)
 	width := pickerListWidth(terminalWidth)
 	height := pickerListHeight(terminalHeight, len(items)*delegate.Height()+2, 4)
 	l := list.New(items, delegate, width, height)
-	configurePickerList(&l, isDark)
+	configurePickerList(&l, isDark, themeID)
 	configurePickerListGlyphProfile(&l, profile)
 	l.Title = "Profile"
 	l.SetShowStatusBar(false)
@@ -72,7 +72,7 @@ func newAgentPickerState(names []string, current string, terminalWidth, terminal
 }
 
 func (m *Model) openAgentPicker() {
-	m.agentPickerState = newAgentPickerState(m.agentList, m.agentProfile, m.width, m.height, m.isDark, m.glyphProfile)
+	m.agentPickerState = newAgentPickerState(m.agentList, m.agentProfile, m.width, m.height, m.isDark, m.themeID, m.glyphProfile)
 	m.overlay = OverlayAgentPicker
 	m.input.Blur()
 }

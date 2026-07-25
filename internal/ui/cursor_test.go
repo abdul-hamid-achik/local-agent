@@ -59,7 +59,7 @@ func TestViewCursorOwnsRunningFollowUpComposer(t *testing.T) {
 
 func TestViewCursorOwnsCompletionFilter(t *testing.T) {
 	m := newTestModel(t)
-	m.completionState = newCompletionState("command", []Completion{{Label: "/help", Insert: "/help"}}, false, m.isDark)
+	m.completionState = newCompletionState("command", []Completion{{Label: "/help", Insert: "/help"}}, false, m.themeID, m.isDark)
 	m.completionState.Filter.SetValue("help")
 	m.completionState.Filter.CursorEnd()
 	m.overlay = OverlayCompletion
@@ -101,7 +101,7 @@ func TestReducedMotionDisablesTransientInputCursorBlink(t *testing.T) {
 		m := newTestModel(t)
 		m.reducedMotion = true
 		m.completionState = newCompletionState(
-			"command", []Completion{{Label: "/help", Insert: "/help"}}, false, m.isDark, m.reducedMotion,
+			"command", []Completion{{Label: "/help", Insert: "/help"}}, false, m.themeID, m.isDark, m.reducedMotion,
 		)
 		m.overlay = OverlayCompletion
 		m.input.Blur()

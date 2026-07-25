@@ -11,33 +11,9 @@ import (
 // noColor detects NO_COLOR environment variable.
 var noColor = os.Getenv("NO_COLOR") != ""
 
-// Nord Color Palette (https://www.nordtheme.com/)
-// Nord Dark (Polar Night + Frost)
-var (
-	// Polar Night (dark theme background/text)
-	nord3 = "#4C566A" // comments/borders
-
-	// Frost (dark theme foreground/text)
-	nord4 = "#D8DEE9" // primary text
-	nord5 = "#E5E9F0" // secondary text
-	// Aurora (dark theme accents)
-	nord7  = "#ED7A84" // accessible red (errors/warnings)
-	nord9  = "#EBCB8B" // yellow (warnings/highlights)
-	nord10 = "#A3BE8C" // green (success)
-	nord11 = "#C18CB9" // accessible purple (special)
-	nord12 = "#88C0D0" // cyan (primary accent)
-	nord13 = "#81A1C1" // blue (secondary accent)
-)
-
-// Nord Light (Aurora variant for light theme)
-var (
-	// Light background
-	nordLight3 = "#D8DEE9" // borders
-
-	// Light text
-	nordLight4 = "#4C566A" // primary text
-	nordLight5 = "#3B4252" // secondary text
-)
+// The Nord hex values that used to live here are now one entry in the theme
+// registry (internal/ui/theme.go) alongside every other scheme. Keeping a
+// second copy here would be two places to change one color.
 
 // semanticPalette is the single color vocabulary shared by the transcript,
 // Bubbles components, overlays, composer, and tool receipts. Components own
@@ -55,27 +31,43 @@ type semanticPalette struct {
 	Border  color.Color
 }
 
-func newSemanticPalette(isDark bool) semanticPalette {
-	ld := lipgloss.LightDark(isDark)
+// newSemanticPalette resolves the color vocabulary for one appearance.
+//
+// The theme is variadic to match the codebase's existing resolveGlyphProfile
+// idiom, and because the palette is consulted from free functions that render
+// bounded values without a Model in scope. Omitting it selects the default
+// theme; a component that has one must pass it, or the frame paints two
+// schemes at once.
+func newSemanticPalette(isDark bool, themeIDs ...string) semanticPalette {
+	colors := resolveTheme(resolveThemeID(themeIDs...)).themeColorsFor(isDark)
 	return semanticPalette{
-		Dim:   ld(lipgloss.Color("#5B6779"), lipgloss.Color("#96A2B8")),
-		Muted: ld(lipgloss.Color(nordLight4), lipgloss.Color(nord4)),
-		Text:  ld(lipgloss.Color(nordLight5), lipgloss.Color(nord5)),
-		// Light semantic foregrounds retain the Nord-adjacent hues while clearing
-		// 4.5:1 against a white terminal background for normal-sized text.
-		Accent:  ld(lipgloss.Color("#447C7C"), lipgloss.Color(nord12)),
-		Accent2: ld(lipgloss.Color("#50759F"), lipgloss.Color(nord13)),
-		Error:   ld(lipgloss.Color("#C34848"), lipgloss.Color(nord7)),
-		Success: ld(lipgloss.Color("#477F33"), lipgloss.Color(nord10)),
-		Special: ld(lipgloss.Color("#7B5A83"), lipgloss.Color(nord11)),
-		Warning: ld(lipgloss.Color("#8A6500"), lipgloss.Color(nord9)),
-		Border:  ld(lipgloss.Color(nordLight3), lipgloss.Color(nord3)),
+		Dim:     lipgloss.Color(colors.Dim),
+		Muted:   lipgloss.Color(colors.Muted),
+		Text:    lipgloss.Color(colors.Text),
+		Accent:  lipgloss.Color(colors.Accent),
+		Accent2: lipgloss.Color(colors.Accent2),
+		Error:   lipgloss.Color(colors.Error),
+		Success: lipgloss.Color(colors.Success),
+		Special: lipgloss.Color(colors.Special),
+		Warning: lipgloss.Color(colors.Warning),
+		Border:  lipgloss.Color(colors.Border),
 	}
 }
 
-func outputSemanticPalette(isDark bool) semanticPalette {
+// resolveThemeID mirrors resolveGlyphProfile: the last non-empty value wins,
+// and no value means the default.
+func resolveThemeID(themeIDs ...string) string {
+	for index := len(themeIDs) - 1; index >= 0; index-- {
+		if id := normalizeThemeID(themeIDs[index]); id != "" {
+			return id
+		}
+	}
+	return defaultThemeID
+}
+
+func outputSemanticPalette(isDark bool, themeIDs ...string) semanticPalette {
 	if !noColor {
-		return newSemanticPalette(isDark)
+		return newSemanticPalette(isDark, themeIDs...)
 	}
 	plain := lipgloss.NoColor{}
 	return semanticPalette{
@@ -181,17 +173,17 @@ type Styles struct {
 }
 
 // NewStyles creates a Styles set based on the background color.
-func NewStyles(isDark bool) Styles {
+func NewStyles(isDark bool, themeIDs ...string) Styles {
 	if noColor {
 		return plainStyles()
 	}
-	return adaptiveStyles(isDark)
+	return adaptiveStyles(isDark, themeIDs...)
 }
 
-func adaptiveStyles(isDark bool) Styles {
+func adaptiveStyles(isDark bool, themeIDs ...string) Styles {
 	// Body-muted colors must remain readable; border colors can be subtler.
 	// LightDark keeps every semantic token adaptive without hardcoded ANSI.
-	palette := newSemanticPalette(isDark)
+	palette := newSemanticPalette(isDark, themeIDs...)
 	colorDim := palette.Dim
 	colorMuted := palette.Muted
 	colorText := palette.Text

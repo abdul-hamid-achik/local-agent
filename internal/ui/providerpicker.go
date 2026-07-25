@@ -63,7 +63,7 @@ type ProviderPickerState struct {
 	ItemSpacing int
 }
 
-func newProviderPickerState(catalog []llm.ProviderDescriptor, current string, terminalWidth, terminalHeight int, isDark bool, reducedMotion ...bool) *ProviderPickerState {
+func newProviderPickerState(catalog []llm.ProviderDescriptor, current string, terminalWidth, terminalHeight int, isDark bool, themeID string, reducedMotion ...bool) *ProviderPickerState {
 	presentations := providerOptionPresentations(catalog)
 	items := make([]list.Item, 0, len(presentations))
 	selected := 0
@@ -85,11 +85,11 @@ func newProviderPickerState(catalog []llm.ProviderDescriptor, current string, te
 		}})
 	}
 
-	delegate := newPickerDelegate(isDark, false)
+	delegate := newPickerDelegate(isDark, false, themeID)
 	width := pickerListWidth(terminalWidth)
 	height := pickerListHeight(terminalHeight, len(items)*delegate.Height()+2, 4)
 	l := list.New(items, delegate, width, height)
-	configurePickerList(&l, isDark, reducedMotion...)
+	configurePickerList(&l, isDark, themeID, reducedMotion...)
 	l.Title = "Provider"
 	l.SetShowStatusBar(false)
 	l.SetShowHelp(false)
@@ -115,9 +115,10 @@ func (m *Model) openProviderPicker() {
 		m.width,
 		m.height,
 		m.isDark,
+		m.themeID,
 		m.reducedMotion,
 	)
-	delegate := newPickerDelegate(m.isDark, false, m.glyphProfile)
+	delegate := newPickerDelegate(m.isDark, false, m.themeID, m.glyphProfile)
 	m.providerPickerState.List.SetDelegate(delegate)
 	m.providerPickerState.ItemHeight = delegate.Height()
 	m.providerPickerState.ItemSpacing = delegate.Spacing()

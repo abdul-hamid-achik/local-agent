@@ -7,51 +7,76 @@ import (
 	"testing"
 )
 
-func TestSemanticForegroundsMeetNormalTextContrastInBothThemes(t *testing.T) {
+// Every registered theme must be legible in both modes. A theme is a set of
+// answers to one semantic vocabulary, so a new scheme cannot be added without
+// its foregrounds clearing WCAG AA for normal text — measured against that
+// scheme's own darkest surface, since Local Agent never paints a background.
+func TestThemeForegroundsMeetContrastInBothModes(t *testing.T) {
 	previous := noColor
 	noColor = false
 	t.Cleanup(func() { noColor = previous })
 
-	themes := []struct {
-		name       string
-		isDark     bool
-		background color.Color
-	}{
-		{name: "light", background: color.White},
-		// Local Agent does not paint over the terminal background. Nord's
-		// darkest surface is the conservative reference used by the dark
-		// palette instead of assuming pure black.
-		{name: "dark", isDark: true, background: hexColor(t, "#2E3440")},
-	}
-
-	for _, theme := range themes {
-		t.Run(theme.name, func(t *testing.T) {
-			palette := newSemanticPalette(theme.isDark)
-			foregrounds := []struct {
-				name  string
-				color color.Color
+	for _, id := range themeIDs() {
+		theme := resolveTheme(id)
+		t.Run(theme.ID, func(t *testing.T) {
+			modes := []struct {
+				name       string
+				isDark     bool
+				background color.Color
 			}{
-				{name: "dim", color: palette.Dim},
-				{name: "muted", color: palette.Muted},
-				{name: "text", color: palette.Text},
-				{name: "accent", color: palette.Accent},
-				{name: "accent2", color: palette.Accent2},
-				{name: "error", color: palette.Error},
-				{name: "success", color: palette.Success},
-				{name: "special", color: palette.Special},
-				{name: "warning", color: palette.Warning},
+				{name: "light", background: color.White},
+				{name: "dark", isDark: true, background: hexColor(t, theme.DarkReference)},
 			}
-			for _, foreground := range foregrounds {
-				t.Run(foreground.name, func(t *testing.T) {
-					const minimumContrast = 4.5
-					ratio := contrastRatio(foreground.color, theme.background)
-					if ratio < minimumContrast {
-						t.Fatalf("%s %s contrast = %.2f:1, want >= %.1f:1",
-							theme.name, foreground.name, ratio, minimumContrast)
+			for _, mode := range modes {
+				t.Run(mode.name, func(t *testing.T) {
+					palette := newSemanticPalette(mode.isDark, theme.ID)
+					foregrounds := []struct {
+						name  string
+						color color.Color
+					}{
+						{name: "dim", color: palette.Dim},
+						{name: "muted", color: palette.Muted},
+						{name: "text", color: palette.Text},
+						{name: "accent", color: palette.Accent},
+						{name: "accent2", color: palette.Accent2},
+						{name: "error", color: palette.Error},
+						{name: "success", color: palette.Success},
+						{name: "special", color: palette.Special},
+						{name: "warning", color: palette.Warning},
+					}
+					for _, foreground := range foregrounds {
+						t.Run(foreground.name, func(t *testing.T) {
+							const minimumContrast = 4.5
+							ratio := contrastRatio(foreground.color, mode.background)
+							if ratio < minimumContrast {
+								t.Fatalf("%s/%s %s contrast = %.2f:1, want >= %.1f:1",
+									theme.ID, mode.name, foreground.name, ratio, minimumContrast)
+							}
+						})
 					}
 				})
 			}
 		})
+	}
+}
+
+// The default theme must stay the one the product has always shipped, and an
+// unknown ID must never leave the UI colorless.
+func TestThemeResolutionFallsBackToTheDefault(t *testing.T) {
+	if got := resolveTheme("no-such-theme").ID; got != defaultThemeID {
+		t.Fatalf("unknown theme resolved to %q, want %q", got, defaultThemeID)
+	}
+	if got := resolveTheme("").ID; got != defaultThemeID {
+		t.Fatalf("empty theme resolved to %q, want %q", got, defaultThemeID)
+	}
+	if got := resolveTheme("  CATPPUCCIN  ").ID; got != "catppuccin" {
+		t.Fatalf("theme id is not normalized: %q", got)
+	}
+	if knownThemeID("no-such-theme") {
+		t.Fatal("knownThemeID accepted an unregistered theme")
+	}
+	if ids := themeIDs(); len(ids) == 0 || ids[0] != defaultThemeID {
+		t.Fatalf("theme listing must lead with the default: %v", ids)
 	}
 }
 

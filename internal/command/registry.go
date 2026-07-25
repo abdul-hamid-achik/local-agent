@@ -23,6 +23,8 @@ type Command struct {
 type Context struct {
 	Model            string
 	ModelList        []string
+	Theme            string   // active color scheme id
+	ThemeList        []string // registered color scheme ids
 	Provider         string   // active inference provider profile name
 	ProviderList     []string // configured provider profile names
 	AgentProfile     string
@@ -173,6 +175,8 @@ const (
 	ActionSwitchAgent                   // Switch agent profile (Data = agent name)
 	ActionShowSessions                  // Open sessions picker
 	ActionShowModelPicker               // Open model picker overlay
+	ActionShowThemePicker               // Open the color-scheme picker overlay
+	ActionSwitchTheme                   // Select a color scheme (Data = theme id)
 	ActionCommit                        // Generate commit message and commit
 	ActionSendPrompt                    // Send Data as a message to the agent
 	ActionExport                        // Export conversation (Data = path)

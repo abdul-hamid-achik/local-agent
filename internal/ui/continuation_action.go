@@ -28,8 +28,8 @@ type continuationActionState struct {
 	sequence uint64
 }
 
-func newContinuationActionStyles(isDark bool) continuationActionStyles {
-	palette := outputSemanticPalette(isDark)
+func newContinuationActionStyles(isDark bool, themeID string) continuationActionStyles {
+	palette := outputSemanticPalette(isDark, themeID)
 	return continuationActionStyles{
 		nextLabel:      lipgloss.NewStyle().Foreground(palette.Accent).Bold(true),
 		attentionLabel: lipgloss.NewStyle().Foreground(palette.Warning).Bold(true),
@@ -44,6 +44,7 @@ type continuationActionCard struct {
 	action ContinuationActionPresentation
 	width  int
 	isDark bool
+	themeID       string
 	styles continuationActionStyles
 
 	cachedKey   string
@@ -51,11 +52,11 @@ type continuationActionCard struct {
 	cachedView  string
 }
 
-func newContinuationActionCard(action ContinuationActionPresentation, isDark bool) *continuationActionCard {
+func newContinuationActionCard(action ContinuationActionPresentation, isDark bool, themeID string) *continuationActionCard {
 	return &continuationActionCard{
 		action: action,
 		isDark: isDark,
-		styles: newContinuationActionStyles(isDark),
+		styles: newContinuationActionStyles(isDark, themeID),
 	}
 }
 
@@ -68,12 +69,12 @@ func (c *continuationActionCard) SetWidth(width int) {
 	c.invalidate()
 }
 
-func (c *continuationActionCard) SetTheme(isDark bool) {
+func (c *continuationActionCard) SetTheme(isDark bool, themeIDs ...string) {
 	if c.isDark == isDark {
 		return
 	}
 	c.isDark = isDark
-	c.styles = newContinuationActionStyles(isDark)
+	c.styles = newContinuationActionStyles(isDark, c.themeID)
 	c.invalidate()
 }
 
@@ -254,7 +255,7 @@ func (m *Model) handleContinuationAction(message ContinuationActionMsg) {
 	m.continuation.card = nil
 	if message.Action != nil {
 		if normalized, ok := normalizeContinuationActionPresentation(*message.Action); ok {
-			m.continuation.card = newContinuationActionCard(normalized, m.isDark)
+			m.continuation.card = newContinuationActionCard(normalized, m.isDark, m.themeID)
 			m.continuation.card.SetWidth(m.chatPaneWidth())
 		}
 	}
