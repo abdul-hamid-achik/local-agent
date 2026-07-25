@@ -96,6 +96,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
+      # actions/checkout resolves a SHA, so `git branch --show-current` is empty
+      # and the session top bar falls back to its detached-HEAD label. That label
+      # is a different width than a branch name, so the bar's right-aligned
+      # context meter lands in a different column and every committed snapshot
+      # containing the top bar mismatches. Text normalization cannot repair it —
+      # the padding is computed before any rule runs. Restoring the branch is the
+      # only fix that keeps the snapshots byte-identical to a developer's run.
+      - name: Restore branch name for deterministic session chrome
+        run: git checkout -B main --no-track HEAD
+
       - name: Set up Go for Glyphrun
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
