@@ -1,5 +1,5 @@
 version: 1
-contractHash: sha256:a0d7dbb0556022734f0d9ee89bbeb8ca28facae3c3674156d9dd3dcc08f49e02
+contractHash: sha256:d9db0aed3d7010007becd8477fecbf63052aa20e6c28665b2213e09390e9061a
 name: local_agent_tui_approval_always
 # Runner note (2026-07-16): a restricted sandbox can deny the wrapper's
 # 127.0.0.1:0 listener before Local Agent starts. Glyphrun currently reports
@@ -14,7 +14,7 @@ target:
         - "${projectRoot}/.glyphrun/tmp/fake-ollama-always"
         - "${projectRoot}/bin/local-agent"
         - "${projectRoot}/.glyphrun/tmp/approval-always-protocol.txt"
-    cwd: "/tmp/local-agent-glyphrun-approval-always-workdir"
+    cwd: "/tmp/local-agent-glyphrun-always"
     env:
         HOME: "${projectRoot}/.glyphrun/tmp/approval-always-home"
         LOCAL_AGENT_AGENTS_DIR: "${projectRoot}/.glyphrun/tmp/approval-always-agents"
@@ -22,9 +22,14 @@ target:
 terminal:
     cols: 90
     rows: 28
+# The approval panel wraps its Target row, and macOS resolves /tmp to
+# /private/tmp — eight characters longer. A workdir name long enough to wrap
+# there but not on Linux makes the panel one row taller on one host, which no
+# text normalization can repair because the wrap happens before any rule runs.
+# Keep the absolute path under ~70 columns: "/private/tmp/" + dir + "/file".
 preconditions:
     commands:
-        - run: "rm -rf .glyphrun/tmp/approval-always-home .glyphrun/tmp/approval-always-agents .glyphrun/tmp/approval-always-protocol.txt .glyphrun/tmp/fake-ollama-always /tmp/local-agent-glyphrun-approval-always-workdir && mkdir -p .glyphrun/tmp/approval-always-home/.config/local-agent .glyphrun/tmp/approval-always-agents /tmp/local-agent-glyphrun-approval-always-workdir && printf '%s\\n' 'model:' '  auto_select: false' 'ice:' '  enabled: false' > .glyphrun/tmp/approval-always-home/.config/local-agent/config.yaml && go build -o ./bin/local-agent ./cmd/local-agent && go build -o .glyphrun/tmp/fake-ollama-always ./specs/fixtures/fake_ollama_always"
+        - run: "rm -rf .glyphrun/tmp/approval-always-home .glyphrun/tmp/approval-always-agents .glyphrun/tmp/approval-always-protocol.txt .glyphrun/tmp/fake-ollama-always /tmp/local-agent-glyphrun-always && mkdir -p .glyphrun/tmp/approval-always-home/.config/local-agent .glyphrun/tmp/approval-always-agents /tmp/local-agent-glyphrun-always && printf '%s\\n' 'model:' '  auto_select: false' 'ice:' '  enabled: false' > .glyphrun/tmp/approval-always-home/.config/local-agent/config.yaml && go build -o ./bin/local-agent ./cmd/local-agent && go build -o .glyphrun/tmp/fake-ollama-always ./specs/fixtures/fake_ollama_always"
           cwd: "."
           timeoutMs: 30000
 steps:
@@ -101,7 +106,7 @@ outcomes:
       description: the explicitly session-approved exact write executes
       verify:
         command:
-            run: "test \"$(cat /tmp/local-agent-glyphrun-approval-always-workdir/session-grant.txt)\" = 'session scoped approval'"
+            run: "test \"$(cat /tmp/local-agent-glyphrun-always/session-grant.txt)\" = 'session scoped approval'"
     - id: session_permission_is_reviewed
       description: the first prompt exposes the exact-request session decision
       verify:
