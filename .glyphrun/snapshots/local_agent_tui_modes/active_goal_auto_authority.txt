@@ -22,6 +22,6 @@
 plan · paused · 0/2 verified
   □ pending · Demonstrate every requested outcome and constraint in th…
   □ pending · Record passing evidence from focused or reproducible ver…
- [ AUTO ] · Ⅱ paused · ship a bounded… · <session> · qwen3.5:2b · offline
+ [ AUTO ] · Ⅱ paused · ship a bounded durable migra… · 0s/30m · <session>
 ▌❯ Ask
-   enter send · shift+tab mode · esc · f1                          AUTO
+   enter send · shift+tab mode · esc · f1

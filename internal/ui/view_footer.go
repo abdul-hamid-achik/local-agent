@@ -163,8 +163,8 @@ func (m *Model) renderStatusLine() string {
 	// compaction is an operational event, not ambient state, so it is promoted
 	// to the front of this row regardless of who owns the resting meter.
 	contextStatus := m.renderContextStatus()
-	contextHigh := m.numCtx > 0 && m.promptTokens*100/m.numCtx >= 75
-	if contextHigh && contextStatus != "" {
+	contextHigh := m.contextPressureHigh()
+	if contextHigh && contextStatus != "" && plan.owns(factContext, surfaceStatusLine) {
 		parts = append(parts, contextStatus)
 	}
 	if m.currentModelIsNonLocal() {
@@ -207,7 +207,7 @@ func (m *Model) renderStatusLine() string {
 		// concatenated string from the right. Combined Cloud, MCP, and approval
 		// posture can legitimately need a second row at the minimum width.
 		compact := make([]string, 0, 4)
-		if presentedMode != ModeNormal {
+		if presentedMode != ModeNormal && plan.owns(factMode, surfaceStatusLine) {
 			compact = append(compact, modeStyle.Render(cfg.Label))
 		}
 		if m.skipApprovalsEnabled() {
@@ -218,9 +218,9 @@ func (m *Model) renderStatusLine() string {
 		if len(m.failedServers) > 0 {
 			compact = append(compact, m.styles.ErrorText.UnsetPaddingLeft().Render("MCP unavailable"))
 		}
-		if m.currentModelIsNonLocal() {
+		if m.currentModelIsNonLocal() && plan.owns(factRemoteBoundary, surfaceStatusLine) {
 			boundary := strings.Fields(m.currentModelSurfaceLabel(true))[0]
-			compact = append(compact, m.styles.StatusText.Render(boundary))
+			compact = append(compact, m.styles.StatusWarning.Render(boundary))
 		}
 		if session := sessionDisplayLabel(m.sessionPublicID, "", 0); session != "" {
 			compact = append(compact, m.styles.StatusText.Render(session))
@@ -250,6 +250,10 @@ func (m *Model) renderGoalFooterStatus(summary GoalSummary, paneW int) string {
 	if paneW <= 1 {
 		return ""
 	}
+	// This row replaced renderStatusLine wholesale and re-derived every ambient
+	// fact from scratch, so an attached goal reprinted the model, the meter and
+	// the Cloud boundary one line under the top bar that already owned them.
+	plan := m.planStatus()
 	available := paneW - 1 // preserve the status row's leading breathing cell
 	// An attached Goal Runtime always dispatches with AUTO authority. m.mode is
 	// only the ambient selection for future non-goal turns, so it must not tint
@@ -281,7 +285,7 @@ func (m *Model) renderGoalFooterStatus(summary GoalSummary, paneW int) string {
 		required = append(required, metadataPart{view: m.styles.StatusWarning.Render(label)})
 	}
 	contextStatus := m.renderContextStatus()
-	contextHigh := m.numCtx > 0 && m.promptTokens*100/m.numCtx >= 75
+	contextHigh := m.contextPressureHigh()
 	if failures := len(m.failedServers); failures > 0 {
 		label := "MCP unavailable"
 		if paneW >= 58 {
@@ -289,12 +293,12 @@ func (m *Model) renderGoalFooterStatus(summary GoalSummary, paneW int) string {
 		}
 		required = append(required, metadataPart{view: m.styles.ErrorText.UnsetPaddingLeft().Render(label)})
 	}
-	if m.currentModelIsNonLocal() {
+	if m.currentModelIsNonLocal() && plan.owns(factRemoteBoundary, surfaceStatusLine) {
 		boundary := m.currentModelSurfaceLabel(true)
 		if paneW < 58 {
 			boundary = strings.Fields(boundary)[0]
 		}
-		required = append(required, metadataPart{view: m.styles.StatusText.Render(boundary)})
+		required = append(required, metadataPart{view: m.styles.StatusWarning.Render(boundary)})
 	}
 	if session := sessionDisplayLabel(m.sessionPublicID, "", 0); session != "" {
 		required = append(required, metadataPart{view: m.styles.StatusText.Render(session)})
@@ -304,15 +308,16 @@ func (m *Model) renderGoalFooterStatus(summary GoalSummary, paneW int) string {
 	// The goal label already names the work. At roomy widths add only the
 	// compact durable handle; repeating the session title would squeeze the
 	// goal phase, budget, and objective that matter more here.
-	if contextHigh && contextStatus != "" {
+	if contextHigh && contextStatus != "" && plan.owns(factContext, surfaceStatusLine) {
 		optional = append(optional, metadataPart{view: contextStatus})
 	}
-	if model := m.currentModelReachabilityLabel(false); model != "" && !m.currentModelIsNonLocal() {
+	if model := m.currentModelReachabilityLabel(false); model != "" &&
+		!m.currentModelIsNonLocal() && plan.owns(factModel, surfaceStatusLine) {
 		optional = append(optional, metadataPart{view: m.styles.StatusText.Render(
 			truncateDisplayWithGlyphProfile(model, 20, m.glyphProfile),
 		)})
 	}
-	if !contextHigh && contextStatus != "" {
+	if !contextHigh && contextStatus != "" && plan.owns(factContext, surfaceStatusLine) {
 		optional = append(optional, metadataPart{view: contextStatus})
 	}
 	if notice := m.footerNotice; notice != nil {

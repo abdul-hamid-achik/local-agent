@@ -161,19 +161,8 @@ func run() int {
 		if preferred, ok, prefErr := modelPreferenceStore.LoadManualProvider(); prefErr != nil {
 			fmt.Fprintf(os.Stderr, "warning: saved provider preference ignored: %v\n", prefErr)
 		} else if ok {
-			if _, _, resolveErr := cfg.Provider.ResolveProfile(preferred); resolveErr == nil {
-				cfg.Provider.Active = preferred
-			} else if !cfg.Provider.HasProfiles() {
-				// Flat catalog: accept known type names as active preference.
-				switch config.NormalizedProviderType(preferred) {
-				case config.ProviderTypeOllama, config.ProviderTypeXAI, config.ProviderTypeOpenAICompatible:
-					cfg.Provider.Type = preferred
-					cfg.Provider.Active = preferred
-				default:
-					fmt.Fprintf(os.Stderr, "warning: saved provider %q is not available; using configured default\n", preferred)
-				}
-			} else {
-				fmt.Fprintf(os.Stderr, "warning: saved provider %q is not in the catalog; using configured default\n", preferred)
+			if warning := restoreManualProviderPreference(cfg, preferred); warning != "" {
+				fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
 			}
 		}
 	}

@@ -28,4 +28,4 @@
   │ esc close · ←/→ action · enter select · j/k scroll                       │
   ╰──────────────────────────────────────────────────────────────────────────╯
 
-   enter send · shift+tab mode · esc cancel · f1                           AUTO
+   enter send · shift+tab mode · esc cancel · f1

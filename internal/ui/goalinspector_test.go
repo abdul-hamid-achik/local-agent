@@ -251,12 +251,18 @@ func TestShowGoalUsesInspectorAndRestoresStableFooter(t *testing.T) {
 	m.entries = []ChatEntry{{Kind: "user", Content: "working"}}
 	m.goalRuntime = newUIGoalRuntime(t, 42, goal.BudgetLimits{MaxContinuationTurns: 4})
 
-	before := ansi.Strip(m.renderStatusLine())
+	// The goal row owns authority and goal progress; identity and the meter
+	// belong to the top bar, so the stable-footer contract is checked on the
+	// composed frame and each fact must appear exactly once.
+	m.recalcViewportHeight()
+	m.refreshTranscript()
+	frame := ansi.Strip(m.View().Content)
 	for _, required := range []string{"AUTO", "qwen3.5:9b", "50%", "active"} {
-		if !strings.Contains(before, required) {
-			t.Fatalf("goal footer lost %q: %q", required, before)
+		if got := strings.Count(frame, required); got != 1 {
+			t.Fatalf("frame shows %q %d times, want exactly 1:\n%s", required, got, frame)
 		}
 	}
+	before := ansi.Strip(m.renderStatusLine())
 	m.showGoal()
 	if m.overlay != OverlayGoalInspector || m.goalInspectorState == nil || m.input.Focused() {
 		t.Fatalf("show goal did not transfer focus to inspector: overlay=%d state=%v focused=%v", m.overlay, m.goalInspectorState != nil, m.input.Focused())

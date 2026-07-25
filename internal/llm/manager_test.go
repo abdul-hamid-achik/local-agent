@@ -20,8 +20,8 @@ func TestNewModelManager(t *testing.T) {
 	if m.baseURL != "http://localhost:11434" {
 		t.Errorf("baseURL = %q, want %q", m.baseURL, "http://localhost:11434")
 	}
-	if m.numCtx != 4096 {
-		t.Errorf("numCtx = %d, want %d", m.numCtx, 4096)
+	if m.configuredNumCtx() != 4096 {
+		t.Errorf("numCtx = %d, want %d", m.configuredNumCtx(), 4096)
 	}
 	if m.clients == nil {
 		t.Error("clients map should be initialized")

@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/abdul-hamid-achik/local-agent/internal/goal"
 )
 
 func TestCloudModelBoundaryIsVisibleAcrossCoreSurfaces(t *testing.T) {
@@ -78,11 +80,23 @@ func TestGoalFooterPreservesCloudAndSkippedApprovalBoundaries(t *testing.T) {
 	m.SetApprovalPosture(ApprovalPostureSkipApprovals)
 	summary := GoalSummary{Objective: "ship safely", Phase: GoalPhaseActive}
 
+	// Which surface carries the Cloud boundary is planStatus's decision, so the
+	// contract is checked on the composed frame: the reader sees it exactly
+	// once. The goal row is still checked for the facts it does own.
+	m.goalRuntime = newUIGoalRuntime(t, 77, goal.BudgetLimits{MaxContinuationTurns: 4})
+	m.entries = []ChatEntry{{Kind: "user", Content: "working"}}
 	for _, width := range []int{30, 80} {
+		m.width, m.height = width, 24
+		m.recalcViewportHeight()
+		m.refreshTranscript()
+		frame := ansi.Strip(m.View().Content)
+		if got := strings.Count(frame, "CLOUD"); got != 1 {
+			t.Fatalf("frame at width %d printed the Cloud boundary %d times:\n%s", width, got, frame)
+		}
 		plain := ansi.Strip(m.renderGoalFooterStatus(summary, width))
-		for _, want := range []string{"AUTO", "active", "CLOUD"} {
+		for _, want := range []string{"AUTO", "active"} {
 			if !strings.Contains(plain, want) {
-				t.Fatalf("goal footer at width %d hid %q: %q", width, want, plain)
+				t.Fatalf("goal row at width %d hid %q: %q", width, want, plain)
 			}
 		}
 		if !strings.Contains(plain, "no prompts") && !strings.Contains(plain, "approval prompts skipped") {

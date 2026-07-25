@@ -9,14 +9,20 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
 )
 
 type ModelManager struct {
-	baseURL      string
-	numCtx       int
+	baseURL string
+	// numCtx is atomic rather than mu-guarded. It is written by SetNumCtx and
+	// read from paths that hold mu, localMu, or no lock at all; getClient
+	// already holds mu when it calls ContextPolicy, which takes localMu, so the
+	// ordering is mu -> localMu and guarding numCtx with mu would invert it in
+	// contextPolicyLocked. An atomic has no ordering to get wrong.
+	numCtx       atomic.Int64
 	clients      map[string]*OllamaClient
 	active       map[string]bool
 	activity     map[string]modelActivity
@@ -75,9 +81,8 @@ type ModelContextPolicy struct {
 var _ Client = (*ModelManager)(nil)
 
 func NewModelManager(baseURL string, numCtx int) *ModelManager {
-	return &ModelManager{
+	manager := &ModelManager{
 		baseURL:     baseURL,
-		numCtx:      numCtx,
 		clients:     make(map[string]*OllamaClient),
 		active:      make(map[string]bool),
 		activity:    make(map[string]modelActivity),
@@ -87,6 +92,8 @@ func NewModelManager(baseURL string, numCtx int) *ModelManager {
 		cloudGrants: make(map[string]struct{}),
 		nativeCtx:   make(map[string]int),
 	}
+	manager.numCtx.Store(int64(numCtx))
+	return manager
 }
 
 // ConfigureProviderCatalog installs the multi-profile provider definitions used
@@ -500,10 +507,10 @@ func (m *ModelManager) contextPolicyLocked(model string) ModelContextPolicy {
 		}
 		return policy
 	}
-	if canonical == "" || m.numCtx <= 0 {
+	if canonical == "" || m.configuredNumCtx() <= 0 {
 		return policy
 	}
-	policy.Request = m.numCtx
+	policy.Request = m.configuredNumCtx()
 	if nativeKnown && native < policy.Request {
 		policy.Request = native
 	}
@@ -901,7 +908,7 @@ func (m *ModelManager) ListLocalModels(ctx context.Context) ([]string, error) {
 // Privacy and routing policy must be applied by the caller using Location and
 // Capabilities; unlike ListLocalModels, cloud and remote-host entries remain.
 func (m *ModelManager) ListOllamaModels(ctx context.Context) ([]OllamaModel, error) {
-	client, err := NewOllamaClient(m.baseURL, "", m.numCtx)
+	client, err := NewOllamaClient(m.baseURL, "", m.configuredNumCtx())
 	if err != nil {
 		return nil, err
 	}
@@ -909,7 +916,7 @@ func (m *ModelManager) ListOllamaModels(ctx context.Context) ([]OllamaModel, err
 }
 
 func (m *ModelManager) ShowOllamaModel(ctx context.Context, model string) (OllamaModelInfo, error) {
-	client, err := NewOllamaClient(m.baseURL, "", m.numCtx)
+	client, err := NewOllamaClient(m.baseURL, "", m.configuredNumCtx())
 	if err != nil {
 		return OllamaModelInfo{}, err
 	}
@@ -917,7 +924,7 @@ func (m *ModelManager) ShowOllamaModel(ctx context.Context, model string) (Ollam
 }
 
 func (m *ModelManager) ListRunningOllamaModels(ctx context.Context) ([]OllamaRunningModel, error) {
-	client, err := NewOllamaClient(m.baseURL, "", m.numCtx)
+	client, err := NewOllamaClient(m.baseURL, "", m.configuredNumCtx())
 	if err != nil {
 		return nil, err
 	}
@@ -925,7 +932,7 @@ func (m *ModelManager) ListRunningOllamaModels(ctx context.Context) ([]OllamaRun
 }
 
 func (m *ModelManager) OllamaVersion(ctx context.Context) (string, error) {
-	client, err := NewOllamaClient(m.baseURL, "", m.numCtx)
+	client, err := NewOllamaClient(m.baseURL, "", m.configuredNumCtx())
 	if err != nil {
 		return "", err
 	}
@@ -933,7 +940,7 @@ func (m *ModelManager) OllamaVersion(ctx context.Context) (string, error) {
 }
 
 func (m *ModelManager) PullOllamaModel(ctx context.Context, model string, fn func(OllamaPullProgress) error) error {
-	client, err := NewOllamaClient(m.baseURL, "", m.numCtx)
+	client, err := NewOllamaClient(m.baseURL, "", m.configuredNumCtx())
 	if err != nil {
 		return err
 	}
@@ -943,7 +950,7 @@ func (m *ModelManager) PullOllamaModel(ctx context.Context, model string, fn fun
 // ListLocalModelInventory returns local identities with their actual weight
 // sizes so memory admission never has to infer safety from a tag string.
 func (m *ModelManager) ListLocalModelInventory(ctx context.Context) ([]LocalModel, error) {
-	client, err := NewOllamaClient(m.baseURL, "", m.numCtx)
+	client, err := NewOllamaClient(m.baseURL, "", m.configuredNumCtx())
 	if err != nil {
 		return nil, err
 	}
@@ -1058,7 +1065,7 @@ func (m *ModelManager) ensureModelLocalWithRefresh(ctx context.Context, model st
 	// including explicitly granted cloud aliases and callers that installed
 	// inventory programmatically. Cloud consent crosses the model-execution
 	// boundary; it never grants access to a remote Ollama control plane.
-	client, err := NewOllamaClient(m.baseURL, "", m.numCtx)
+	client, err := NewOllamaClient(m.baseURL, "", m.configuredNumCtx())
 	if err != nil {
 		return fmt.Errorf("local-only model admission: %w", err)
 	}
@@ -1178,17 +1185,16 @@ func (m *ModelManager) NumCtx() int {
 			return policy.Effective
 		}
 	}
-	return m.numCtx
+	return m.configuredNumCtx()
 }
 
 // ConfiguredNumCtx returns the host-configured local KV allocation (the value
 // sent as options.num_ctx for local models), independent of cloud effective
 // windows.
-func (m *ModelManager) ConfiguredNumCtx() int {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.numCtx
-}
+func (m *ModelManager) ConfiguredNumCtx() int { return m.configuredNumCtx() }
+
+// configuredNumCtx is the single read path for the atomic allocation.
+func (m *ModelManager) configuredNumCtx() int { return int(m.numCtx.Load()) }
 
 // SetNumCtx updates the local KV-cache allocation used for subsequent local
 // Ollama requests. Cloud profiles keep their native maximum. The current local
@@ -1209,7 +1215,7 @@ func (m *ModelManager) SetNumCtx(numCtx int) error {
 	defer m.inferenceMu.Unlock()
 
 	m.mu.Lock()
-	m.numCtx = normalized
+	m.numCtx.Store(int64(normalized))
 	model := m.currentModel
 	m.mu.Unlock()
 

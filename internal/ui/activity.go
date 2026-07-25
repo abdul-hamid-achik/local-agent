@@ -350,21 +350,31 @@ func (m *Model) renderWorkingLine() string {
 		detail = fmt.Sprintf(" · + %d image%s", len(m.pendingImages), pluralSuffix(len(m.pendingImages))) + detail
 	}
 	authority := ""
+	// The rail owns authority only when this frame assigned it here; otherwise
+	// the shortcuts row is already showing it one line below.
+	plan := m.planStatus()
+	ownsMode := plan.owns(factMode, surfaceActivityRail)
 	switch m.presentedMode() {
 	case ModeAuto:
 		// The ordinary idle footer is replaced while work is active. Keep AUTO's
 		// authority visible in the activity rail so a long-running turn never
 		// leaves the user guessing whether it is operating autonomously. A
 		// multi-segment continuation also surfaces which segment is running.
-		authority = " · AUTO"
+		if ownsMode {
+			authority = " · AUTO"
+		}
+		// The continuation counter is progress, not authority: it survives even
+		// when the badge itself belongs to another surface.
 		if continued := m.autoCheckpoints.segmentsContinued; continued > 0 {
-			authority = fmt.Sprintf(" · AUTO · seg %d", continued+1)
+			authority = fmt.Sprintf("%s · seg %d", authority, continued+1)
 		}
 	case ModePlan:
 		// PLAN is also an authority boundary: it may inspect and reason, but must
 		// not be mistaken for an ordinary implementation turn while the idle
 		// status row is replaced by live activity.
-		authority = " · PLAN"
+		if ownsMode {
+			authority = " · PLAN"
+		}
 	}
 	queueAction := ""
 	if m.queuedFollowUp == nil && m.goalTurnID == "" && m.goalOperation == "" &&

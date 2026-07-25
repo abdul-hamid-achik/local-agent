@@ -30,6 +30,23 @@ var ambientFrames = []ambientFrame{
 }
 
 func TestAmbientStateIsNeverPrintedTwiceInAFrame(t *testing.T) {
+	// The first cut of this test only exercised an idle frame at ~1% context
+	// occupancy with no goal attached, and passed while four surfaces — the
+	// activity rail, the goal row, the context-pressure promotion and the
+	// compact repack — printed ambient facts twice. The states below are the
+	// ones that were missing.
+	states := []struct {
+		name  string
+		apply func(m *Model)
+	}{
+		{"idle", func(*Model) {}},
+		{"streaming", func(m *Model) {
+			m.state = StateStreaming
+			m.turnStartedAt = m.nowTime()
+			m.reducedMotion = true
+		}},
+		{"context pressure", func(m *Model) { m.promptTokens = m.numCtx * 9 / 10 }},
+	}
 	for _, mode := range []Mode{ModeNormal, ModePlan, ModeAuto} {
 		for _, started := range []bool{false, true} {
 			for _, frame := range ambientFrames {
@@ -46,22 +63,31 @@ func TestAmbientStateIsNeverPrintedTwiceInAFrame(t *testing.T) {
 						{Kind: "assistant", Content: "sure"},
 					}
 				}
-				m.recalcViewportHeight()
-				m.refreshTranscript()
+				for _, state := range states {
+					state.apply(m)
+					m.recalcViewportHeight()
+					m.refreshTranscript()
 
-				view := ansi.Strip(m.View().Content)
-				label := frame.name + "/" + m.modeConfigs[mode].Label
-				if started {
-					label += "/started"
-				}
+					view := ansi.Strip(m.View().Content)
+					label := frame.name + "/" + m.modeConfigs[mode].Label + "/" + state.name
+					if started {
+						label += "/started"
+					}
 
-				if got := strings.Count(view, "ornith"); got > 1 {
-					t.Errorf("%s: model printed %d times:\n%s", label, got, view)
-				}
-				// NORMAL is never badged, so only PLAN and AUTO can double up.
-				if mode != ModeNormal {
-					if got := strings.Count(view, m.modeConfigs[mode].Label); got > 1 {
-						t.Errorf("%s: mode printed %d times:\n%s", label, got, view)
+					if got := strings.Count(view, "ornith"); got > 1 {
+						t.Errorf("%s: model printed %d times:\n%s", label, got, view)
+					}
+					// NORMAL is never badged, so only PLAN and AUTO can double up.
+					if mode != ModeNormal {
+						if got := strings.Count(view, m.modeConfigs[mode].Label); got > 1 {
+							t.Errorf("%s: mode printed %d times:\n%s", label, got, view)
+						}
+					}
+					// The meter is one fact: "N/M" must not appear twice.
+					if meter := ansi.Strip(m.renderContextStatus()); meter != "" {
+						if got := strings.Count(view, meter); got > 1 {
+							t.Errorf("%s: context meter printed %d times:\n%s", label, got, view)
+						}
 					}
 				}
 			}

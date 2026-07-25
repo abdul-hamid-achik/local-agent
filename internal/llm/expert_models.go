@@ -96,7 +96,7 @@ func (m *ModelManager) PrepareExpertModels(ctx context.Context, selected []strin
 	localOnly := m.localOnly
 	m.localMu.RUnlock()
 	if localOnly {
-		client, err := NewOllamaClient(m.baseURL, "", m.numCtx)
+		client, err := NewOllamaClient(m.baseURL, "", m.configuredNumCtx())
 		if err != nil {
 			return ExpertModelSnapshot{}, fmt.Errorf("local-only expert model snapshot: %w", err)
 		}

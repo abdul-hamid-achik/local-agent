@@ -28,6 +28,9 @@ const (
 	surfaceShortcuts
 	// surfaceWelcome is the empty-state orientation copy inside the transcript.
 	surfaceWelcome
+	// surfaceActivityRail is the live "working" row that replaces the idle
+	// status line while a turn runs.
+	surfaceActivityRail
 )
 
 // statusFact is one piece of ambient state that more than one surface could
@@ -111,8 +114,26 @@ func (m *Model) planStatus() statusPlan {
 		plan.owners[factRemoteBoundary] = surfaceStatusLine
 	}
 
-	// Authority belongs at the bottom, next to the keys that change it.
+	// A context window near its limit stops being ambient and becomes an
+	// operational warning, so ownership moves to the row the reader is already
+	// watching for warnings. Promoting it without moving ownership is what made
+	// the meter appear twice for the rest of a long session.
+	if m.contextPressureHigh() {
+		plan.owners[factContext] = surfaceStatusLine
+	}
+
+	// Authority belongs at the bottom, next to the keys that change it —
+	// except while a turn is running, when the activity rail replaces the idle
+	// status row and carries authority itself so a long autonomous turn never
+	// leaves the reader guessing.
 	switch {
+	case m.activityRailActive():
+		plan.owners[factMode] = surfaceActivityRail
+	case m.goalRowActive():
+		// An attached goal replaces the status row with its own line, which
+		// already leads with the authority the goal dispatches under. The
+		// shortcuts row must not print it a second time one line below.
+		plan.owners[factMode] = surfaceStatusLine
 	case shortcuts:
 		plan.owners[factMode] = surfaceShortcuts
 	case welcome:
@@ -122,4 +143,42 @@ func (m *Model) planStatus() statusPlan {
 	}
 
 	return plan
+}
+
+// activityRailActive reports whether the live working row replaces the idle
+// status line this frame. It mirrors renderStatusLine's own dispatch.
+func (m *Model) activityRailActive() bool {
+	if m == nil {
+		return false
+	}
+	if m.pendingApproval != nil || m.readScopePrompt != nil || m.pendingPaste != nil {
+		return false
+	}
+	if m.overlay == OverlayCompletion && m.isCompletionActive() {
+		return false
+	}
+	if m.overlay == OverlayTranscriptSearch && m.transcriptSearch != nil {
+		return false
+	}
+	if m.cortexDecisionActive() || m.inlineFormActive() {
+		return false
+	}
+	return m.state != StateIdle || m.composerIsBusy()
+}
+
+// contextPressureHigh is the single definition of "the context window is close
+// enough to full that it is news". renderStatusLine and planStatus computed it
+// separately, so one could promote the meter while the other still believed
+// the top bar owned it.
+func (m *Model) contextPressureHigh() bool {
+	return m != nil && m.numCtx > 0 && m.promptTokens*100/m.numCtx >= 75
+}
+
+// goalRowActive reports whether an attached goal replaces the idle status row.
+func (m *Model) goalRowActive() bool {
+	if m == nil || m.activityRailActive() {
+		return false
+	}
+	_, ok := m.goalStatusSummary()
+	return ok
 }

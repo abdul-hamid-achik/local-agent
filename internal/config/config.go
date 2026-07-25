@@ -230,6 +230,12 @@ func (e *RepoMCPTrustError) Error() string {
 	)
 }
 
+// Defaults returns the configuration a run starts from before any file or
+// environment override is applied. Exported so callers that mutate a loaded
+// config after Validate — and tests that need a valid baseline — do not have
+// to reconstruct every required field by hand and drift from the real one.
+func Defaults() Config { return defaults() }
+
 func defaults() Config {
 	modelCfg := DefaultModelConfig()
 	return Config{
