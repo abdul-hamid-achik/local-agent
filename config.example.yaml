@@ -65,6 +65,13 @@ ollama:
 # Enforce local-machine-only Ollama and remote MCP endpoints. Approved shell tools
 # remain an explicit network-capable boundary until OS sandboxing lands.
 # Set false when using a remote provider (xAI, OpenAI, OpenRouter, …).
+# Presentation only: no effect on authority, tool policy, or what leaves the
+# machine. Every scheme is contrast-checked for light and dark terminals.
+# Pick interactively with /theme; that choice is stored in
+# ~/.config/local-agent/runtime-preferences.json and outranks this key.
+ui:
+  theme: nord # nord | catppuccin | dracula | gruvbox | solarized | tokyo-night
+
 privacy:
   local_only: true
 

@@ -135,6 +135,9 @@ sessions instead use `goal show` and `goal recover`.
 | `/model list` | List currently admitted models |
 | `/model <name>` | Switch to and pin a model |
 | `/model auto` | Release the pin and resume local automatic routing |
+| `/theme` | Open the color-scheme picker |
+| `/theme list` | List the built-in color schemes |
+| `/theme <name>` | Switch color scheme (remembered for the next start) |
 | `/provider` | Open the inference provider picker |
 | `/provider list` | List configured provider profiles |
 | `/provider <name>` | Switch provider profile (persisted for restart) |

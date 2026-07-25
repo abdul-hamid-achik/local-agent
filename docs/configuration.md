@@ -61,6 +61,9 @@ ollama:
 privacy:
   local_only: true
 
+ui:
+  theme: nord
+
 model:
   default_model: qwen3.5:2b
   fallback_chain:
@@ -182,6 +185,41 @@ weight budget and remain serial because provider-side capacity is unknown.
 Remote providers (`LOCAL_AGENT_PROVIDER`, API key env names, optional TinyVault
 PATH wrapper variables such as `LOCAL_AGENT_NO_VAULT` and
 `LOCAL_AGENT_VAULT_PROJECT`) are documented in [Remote providers](./providers.md).
+
+## Appearance
+
+The terminal palette is chosen with `/theme`, which opens a picker, or set
+directly with `/theme <name>`. Six schemes are built in:
+
+| Name | Notes |
+|---|---|
+| `nord` | Arctic blues; the default |
+| `catppuccin` | Mocha on dark terminals, Latte on light |
+| `dracula` | High-contrast neon on dark |
+| `gruvbox` | Warm retro contrast |
+| `solarized` | Ethan Schoonover's precision palette |
+| `tokyo-night` | Storm on dark terminals, Day on light |
+
+Each scheme ships a light and a dark variant, and every foreground is checked
+against WCAG AA for normal text in both, measured against that scheme's own
+darkest surface. Local Agent does not paint a terminal background, so the
+scheme changes foreground colors only and your terminal's own background is
+preserved.
+
+A theme can also be set declaratively:
+
+```yaml
+ui:
+  theme: catppuccin
+```
+
+An interactive `/theme` choice is stored in the owner-private
+`~/.config/local-agent/runtime-preferences.json` and takes precedence over this
+key, because it is the more recent and more deliberate of the two. A name this
+build does not recognise falls back to the default rather than failing startup.
+
+Themes are presentation only. They do not affect authority, tool policy,
+approvals, or what leaves the machine.
 
 ## Runtime model preference
 

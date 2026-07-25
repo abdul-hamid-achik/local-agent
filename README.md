@@ -405,6 +405,11 @@ ollama:
 privacy:
   local_only: true
 
+# Presentation only. /theme overrides this for the current user and remembers
+# the choice; an unknown name falls back to the default rather than failing.
+ui:
+  theme: nord # nord | catppuccin | dracula | gruvbox | solarized | tokyo-night
+
 model:
   default_model: qwen3.5:2b
   fallback_chain:
@@ -666,6 +671,8 @@ separate `goal show`/`goal recover` flow.
 | `/model list` | List admitted models from the live Ollama inventory |
 | `/model <name>` | Switch and pin an available Ollama model |
 | `/model auto` | Resume automatic model routing |
+| `/theme`, `/theme list` | Open the color-scheme picker or list the built-in themes |
+| `/theme <name>` | Switch color scheme and remember it for the next start |
 | `/provider`, `/provider list` | Open the provider picker or list configured provider profiles |
 | `/provider <name>` | Switch provider profile and persist that preference for restart |
 | `/agent [name\|list]` | List or switch profiles |

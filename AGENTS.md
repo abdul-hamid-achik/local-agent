@@ -18,7 +18,11 @@ Global instructions for the local-agent project.
 - **Always use Charm libraries** for all TUI components: [BubbleTea v2](https://charm.land/bubbletea/v2), [Bubbles v2](https://charm.land/bubbles/v2), [Lip Gloss v2](https://charm.land/lipgloss/v2), [Glamour](https://github.com/charmbracelet/glamour).
 - Prefer existing Bubbles components (spinner, viewport, textarea, textinput, list, table, paginator, progress, stopwatch, timer, key) over custom implementations.
 - Follow the Charm "smart parent, dumb child" pattern: the main `Model` processes all messages; child components expose methods returning `tea.Cmd`.
-- Use `lipgloss.LightDark()` for adaptive theming. Never hardcode ANSI colors.
+- Colors come from `internal/ui/theme.go` through `semanticPalette`. Never hardcode ANSI colors, and never add a color meaning outside that vocabulary — a new scheme answers the existing ten roles.
+- Pass the active `themeID` explicitly to every palette lookup. It is deliberately not a package global: the `ui` tests run in parallel, and helper signatures are non-variadic so the compiler catches a surface that would otherwise paint in the default scheme.
+- Ambient state (model, remote boundary, context meter, mode) has exactly one owner per frame, assigned by `planStatus` in `internal/ui/status_facts.go`. A surface must ask before painting rather than guessing what another surface already showed.
+- All content starts at the `ContentGrid` origin; column 1 is reserved for accent/chrome. Do not hand-write indents.
+- Modals share one width scale and one anchor, and own the rows they cover. Do not add a per-overlay maximum width.
 - Render cached content where possible to avoid per-frame re-rendering overhead.
 - Never render a successful MCP transport as domain success or verified evidence. Use the bounded `internal/ecosystem` projection and keep transport, domain, and evidence states separate.
 - Keep raw MCP `StructuredContent` inside the agent parser boundary. Do not concatenate it into transcript text or persist it in UI/session state.
