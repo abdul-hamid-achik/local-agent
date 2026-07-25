@@ -6,73 +6,114 @@ import (
 	"strings"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
 	"github.com/abdul-hamid-achik/local-agent/internal/resource"
 )
 
+// numCtxAppliedMsg carries the result of an off-loop num_ctx change.
+type numCtxAppliedMsg struct {
+	Token uint64
+	Value int
+	Text  string
+	Err   error
+}
+
 // handleContextWindowCommand implements /context status|auto|set.
-func (m *Model) handleContextWindowCommand(spec string) (string, error) {
+//
+// Validation is cheap and stays on the event loop; applying is not. SetNumCtx
+// takes ModelManager's exclusive inference lock, which ChatStream holds for a
+// whole streamed response — including the AI session-title job that starts the
+// moment a turn settles, exactly when the composer becomes free to accept
+// /context. Running it inside Update froze painting and every key, Ctrl+C
+// included, for as long as that background stream lasted. The returned command
+// is nil when nothing needs applying.
+func (m *Model) handleContextWindowCommand(spec string) (string, tea.Cmd, error) {
 	spec = strings.TrimSpace(spec)
 	if spec == "" || spec == "status" {
-		return m.contextWindowStatusReport(), nil
+		return m.contextWindowStatusReport(), nil, nil
 	}
 	if m.modelManager == nil {
-		return "", fmt.Errorf("model manager unavailable")
+		return "", nil, fmt.Errorf("model manager unavailable")
 	}
 	if m.modelManager.RemoteProvider() {
-		return "", fmt.Errorf("remote providers own their context window; /context only tunes local Ollama num_ctx")
+		return "", nil, fmt.Errorf("remote providers own their context window; /context only tunes local Ollama num_ctx")
 	}
 
 	switch {
 	case spec == "auto":
 		rec := m.recommendNumCtx()
 		if rec.Recommended <= 0 {
-			return "", fmt.Errorf("could not recommend a num_ctx: %s", rec.Reason)
+			return "", nil, fmt.Errorf("could not recommend a num_ctx: %s", rec.Reason)
 		}
 		if rec.Recommended == m.modelManager.ConfiguredNumCtx() {
-			return m.formatContextApplied(rec, rec.Recommended, false, "already at recommended value"), nil
+			return m.formatContextApplied(rec, rec.Recommended, false, "already at recommended value"), nil, nil
 		}
-		if err := m.applyNumCtx(rec.Recommended); err != nil {
-			return "", err
-		}
-		return m.formatContextApplied(rec, rec.Recommended, true, "applied recommendation for this process"), nil
+		return "", m.beginNumCtxApply(
+			rec.Recommended,
+			m.formatContextApplied(rec, rec.Recommended, true, "applied recommendation for this process"),
+		), nil
 
 	case strings.HasPrefix(spec, "set:"):
 		raw := strings.TrimPrefix(spec, "set:")
 		value, err := config.ParseNumCtxArg(raw)
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 		rec := m.recommendNumCtx()
 		if rec.MaxSafe > 0 && value > rec.MaxSafe {
-			return "", fmt.Errorf(
+			return "", nil, fmt.Errorf(
 				"num_ctx %d exceeds estimated max safe %d on this host (%s total RAM); pick a lower value or free memory",
 				value, rec.MaxSafe, config.FormatBytesIEC(rec.TotalRAM),
 			)
 		}
 		if !rec.AllowLarge && value > 32_768 {
-			return "", fmt.Errorf(
+			return "", nil, fmt.Errorf(
 				"num_ctx %d needs LOCAL_AGENT_ALLOW_LARGE_MODELS=1 (host clamp is 32768 without it)",
 				value,
 			)
 		}
-		if err := m.applyNumCtx(value); err != nil {
-			return "", err
-		}
-		return m.formatContextApplied(rec, value, true, "applied explicit value for this process"), nil
+		return "", m.beginNumCtxApply(
+			value,
+			m.formatContextApplied(rec, value, true, "applied explicit value for this process"),
+		), nil
 	default:
-		return "", fmt.Errorf("unknown /context action %q", spec)
+		return "", nil, fmt.Errorf("unknown /context action %q", spec)
 	}
 }
 
-func (m *Model) applyNumCtx(value int) error {
-	if m.modelManager == nil {
-		return fmt.Errorf("model manager unavailable")
+// beginNumCtxApply moves the blocking manager call off Bubble Tea's event loop.
+// A token drops a late result that a newer /context has already superseded.
+func (m *Model) beginNumCtxApply(value int, receipt string) tea.Cmd {
+	m.numCtxApplyToken++
+	token := m.numCtxApplyToken
+	manager := m.modelManager
+	return func() tea.Msg {
+		var err error
+		if manager == nil {
+			err = fmt.Errorf("model manager unavailable")
+		} else {
+			err = manager.SetNumCtx(value)
+		}
+		return numCtxAppliedMsg{Token: token, Value: value, Text: receipt, Err: err}
 	}
-	if err := m.modelManager.SetNumCtx(value); err != nil {
-		return err
+}
+
+// handleNumCtxApplied records the outcome back on the event loop, where the
+// effective-context resync and transcript refresh belong.
+func (m *Model) handleNumCtxApplied(msg numCtxAppliedMsg) tea.Cmd {
+	if msg.Token != m.numCtxApplyToken {
+		return nil
 	}
-	m.syncEffectiveContext(false)
+	if msg.Err != nil {
+		m.entries = append(m.entries, ChatEntry{Kind: "error", Content: msg.Err.Error()})
+	} else {
+		m.syncEffectiveContext(false)
+		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: msg.Text})
+	}
+	m.refreshTranscript()
+	m.resumeFollow()
 	return nil
 }
 

@@ -800,13 +800,10 @@ func applyEnvOverrides(cfg *Config) error {
 		// Prefer multi-profile active name when a catalog exists; otherwise treat
 		// the value as a flat type (xai / openai_compatible / ollama).
 		if cfg.Provider.HasProfiles() {
-			if _, ok := cfg.Provider.LookupProfile(v); ok {
-				cfg.Provider.Active = v
-			} else {
-				// Still allow setting active to an unknown name so Validate fails clearly,
-				// or fall back to flat type when no catalog match.
-				cfg.Provider.Active = v
-			}
+			// Both branches assigned the same value: a name that is not in the
+			// catalog is still set so Validate reports it by name rather than
+			// silently ignoring the override.
+			cfg.Provider.Active = v
 		} else {
 			cfg.Provider.Type = v
 			cfg.Provider.Active = v

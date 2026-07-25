@@ -242,6 +242,7 @@ type Model struct {
 	providerPickerState      *ProviderPickerState
 	agentHubState            *AgentHubState
 	providerSwitchToken      uint64
+	numCtxApplyToken         uint64
 	providerSwitchRunning    bool
 	providerSwitchName       string
 	providerSwitchCancel     context.CancelFunc
@@ -821,6 +822,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 
 	case providerSwitchResultMsg:
 		cmds = m.handleProviderSwitchResult(msg, cmds)
+
+	case numCtxAppliedMsg:
+		cmds = append(cmds, m.handleNumCtxApplied(msg))
 
 	case OllamaModelDetailsResultMsg:
 		m.handleOllamaModelDetailsResult(msg)

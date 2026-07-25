@@ -433,9 +433,9 @@ continuations:
 experts:
   enabled: true
 
-# Disabled by default. Pull nomic-embed-text before enabling.
+# Enabled by default. Pull nomic-embed-text, or set enabled: false to turn it off.
 ice:
-  enabled: false
+  enabled: true
 
 servers: []
 ```
@@ -539,7 +539,8 @@ The local memory store is available even when ICE is disabled. It is keyed by ca
 
 Pre-workspace global memories and ICE entries have no trustworthy project provenance. They remain quarantined, are never attributed to the current repository, and do not add maintenance noise to normal interactive or headless startup.
 
-ICE is opt-in:
+ICE is enabled by default. Set `ice.enabled: false` to turn off background
+embedding and auto-memory entirely:
 
 ```yaml
 ice:

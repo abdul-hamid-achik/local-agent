@@ -163,7 +163,7 @@ weight budget and remain serial because provider-side capacity is unknown.
 |---|---|
 | `OLLAMA_HOST` | Override `ollama.base_url` |
 | `LOCAL_AGENT_MODEL` | Override the initial model (also remote provider model when remote is active) |
-| `LOCAL_AGENT_PROVIDER` | Select inference adapter: `ollama`, `xai`, or `openai_compatible` |
+| `LOCAL_AGENT_PROVIDER` | Profile name when `provider.profiles` is defined; adapter type in the flat form: `ollama`, `xai`, `openai_compatible` |
 | `LOCAL_AGENT_PROVIDER_BASE_URL` | Override remote provider base URL |
 | `LOCAL_AGENT_PROVIDER_MODEL` | Override remote provider model id |
 | `LOCAL_AGENT_PROVIDER_API_KEY_ENV` | Env var **name** that holds the API key (never the secret value) |

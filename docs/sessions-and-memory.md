@@ -137,7 +137,7 @@ The store uses owner-only files, interprocess locking, coherent reloads, and fai
 
 ## Optional ICE retrieval
 
-ICE embeds prior conversations with Ollama and retrieves relevant history for the same canonical workspace. It is disabled by default:
+ICE embeds prior conversations with Ollama and retrieves relevant history for the same canonical workspace. It is enabled by default; set `enabled: false` to turn off background embedding and auto-memory entirely:
 
 ```yaml
 ice:
