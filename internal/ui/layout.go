@@ -12,48 +12,6 @@ const (
 	minTerminalHeight = 12
 )
 
-// layoutConfig holds adaptive truncation budgets selected from one measured
-// component. Horizontal indent is owned by ContentGrid (accent + pad), not by
-// density — ToolIndent is intentionally gone.
-type layoutConfig struct {
-	Capabilities   LayoutCapabilities
-	ToolSummaryMax int
-	ArgsTruncMax   int
-	ResultTruncMax int
-}
-
-// currentLayout returns layout parameters derived from the transcript
-// component's final work rectangle and the explicit compact preference.
-func (m *Model) currentLayout() layoutConfig {
-	return layoutConfigFor(m.transcriptLayoutCapabilities())
-}
-
-func layoutConfigFor(capabilities LayoutCapabilities) layoutConfig {
-	switch capabilities.Density {
-	case LayoutDensityCompact:
-		return layoutConfig{
-			Capabilities:   capabilities,
-			ToolSummaryMax: 40,
-			ArgsTruncMax:   100,
-			ResultTruncMax: 150,
-		}
-	case LayoutDensitySpacious:
-		return layoutConfig{
-			Capabilities:   capabilities,
-			ToolSummaryMax: 80,
-			ArgsTruncMax:   300,
-			ResultTruncMax: 500,
-		}
-	default:
-		return layoutConfig{
-			Capabilities:   capabilities,
-			ToolSummaryMax: 60,
-			ArgsTruncMax:   200,
-			ResultTruncMax: 300,
-		}
-	}
-}
-
 // transcriptLayoutCapabilities evaluates the allocated transcript viewport,
 // not the outer terminal. The viewport dimensions are authoritative once the
 // Bubble Tea parent has measured it. Before that, only the parent's planned

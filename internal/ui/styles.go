@@ -79,29 +79,14 @@ func outputSemanticPalette(isDark bool, themeID string) semanticPalette {
 // Styles holds all pre-built lipgloss styles.
 type Styles struct {
 	// Header
-	HeaderTitle lipgloss.Style
-	HeaderInfo  lipgloss.Style
-	HeaderRule  lipgloss.Style
 
 	// Messages
-	UserLabel    lipgloss.Style
-	UserContent  lipgloss.Style
-	UserGutter   lipgloss.Style
-	AsstLabel    lipgloss.Style
-	AsstContent  lipgloss.Style
-	StreamCursor lipgloss.Style
+	UserContent lipgloss.Style
+	UserGutter  lipgloss.Style
 
 	// Tools
-	ToolCallIcon    lipgloss.Style
-	ToolCallText    lipgloss.Style
-	ToolResultIcon  lipgloss.Style
-	ToolResultText  lipgloss.Style
-	ToolErrorIcon   lipgloss.Style
 	ToolErrorText   lipgloss.Style
-	ToolDoneIcon    lipgloss.Style
-	ToolDoneText    lipgloss.Style
 	ToolRunningText lipgloss.Style
-	ToolDetailText  lipgloss.Style
 
 	// Footer
 	Divider        lipgloss.Style
@@ -117,26 +102,16 @@ type Styles struct {
 	Dimmed         lipgloss.Style
 
 	// System messages
-	SystemText  lipgloss.Style
 	WelcomeHint lipgloss.Style
 
 	// Completion popup
-	CompletionBorder   lipgloss.Style
-	CompletionSelected lipgloss.Style
 
 	// Completion modal
-	CompletionFilter    lipgloss.Style
-	CompletionCursor    lipgloss.Style
-	CompletionCategory  lipgloss.Style
-	CompletionFooter    lipgloss.Style
-	CompletionSearching lipgloss.Style
+	CompletionFilter   lipgloss.Style
+	CompletionCategory lipgloss.Style
 
 	// Startup progress
-	StartupCheck  lipgloss.Style
-	StartupFail   lipgloss.Style
-	StartupLabel  lipgloss.Style
 	StartupDetail lipgloss.Style
-	StartupSpin   lipgloss.Style
 
 	// Mode badges
 	ModeAsk   lipgloss.Style
@@ -149,7 +124,6 @@ type Styles struct {
 	ContextPctHigh lipgloss.Style
 
 	// Tool type rendering
-	ToolBashCmd lipgloss.Style
 
 	// Diff view
 	DiffAdded   lipgloss.Style
@@ -199,60 +173,17 @@ func adaptiveStyles(isDark bool, themeID string) Styles {
 	colorChipText := lipgloss.LightDark(isDark)(lipgloss.Color("#FBF7F5"), lipgloss.Color("#ECEFF4"))
 
 	return Styles{
-		HeaderTitle: lipgloss.NewStyle().
-			Bold(true).
-			Foreground(colorAccent).
-			PaddingLeft(1),
-		HeaderInfo: lipgloss.NewStyle().
-			Foreground(colorDim).
-			PaddingRight(1),
-		HeaderRule: lipgloss.NewStyle().
-			Foreground(colorBorder),
 
-		UserLabel: lipgloss.NewStyle().
-			Bold(true).
-			Foreground(colorAccent2).
-			PaddingLeft(2),
 		UserContent: lipgloss.NewStyle().
 			Foreground(colorText).
 			PaddingLeft(2),
 		UserGutter: lipgloss.NewStyle().
 			Foreground(colorAccent2),
-		AsstLabel: lipgloss.NewStyle().
-			Bold(true).
-			Foreground(colorSuccess).
-			PaddingLeft(2),
-		AsstContent: lipgloss.NewStyle().
-			Foreground(colorText).
-			PaddingLeft(4),
-		StreamCursor: lipgloss.NewStyle().
-			Foreground(colorAccent).
-			Bold(true),
 
-		ToolCallIcon: lipgloss.NewStyle().
-			Foreground(colorSpecial).
-			PaddingLeft(4),
-		ToolCallText: lipgloss.NewStyle().
-			Foreground(colorSpecial),
-		ToolResultIcon: lipgloss.NewStyle().
-			Foreground(colorDim).
-			PaddingLeft(4),
-		ToolResultText: lipgloss.NewStyle().
-			Foreground(colorDim),
-		ToolErrorIcon: lipgloss.NewStyle().
-			Foreground(colorError).
-			PaddingLeft(4),
 		ToolErrorText: lipgloss.NewStyle().
 			Foreground(colorError),
-		ToolDoneIcon: lipgloss.NewStyle().
-			Foreground(colorSuccess).
-			PaddingLeft(4),
-		ToolDoneText: lipgloss.NewStyle().
-			Foreground(colorDim),
 		ToolRunningText: lipgloss.NewStyle().
 			Foreground(colorAccent),
-		ToolDetailText: lipgloss.NewStyle().
-			Foreground(colorMuted),
 
 		Divider: lipgloss.NewStyle().
 			Foreground(colorBorder),
@@ -291,44 +222,17 @@ func adaptiveStyles(isDark bool, themeID string) Styles {
 		Dimmed: lipgloss.NewStyle().
 			Foreground(colorDim),
 
-		SystemText: lipgloss.NewStyle().
-			Foreground(colorText).
-			Italic(true).
-			PaddingLeft(2),
 		WelcomeHint: lipgloss.NewStyle().
 			Foreground(colorAccent2).
 			Bold(true),
 
-		CompletionBorder: lipgloss.NewStyle().
-			Foreground(colorBorder),
-		CompletionSelected: lipgloss.NewStyle().
-			Foreground(colorAccent).
-			Bold(true),
-
 		CompletionFilter: lipgloss.NewStyle().
 			Foreground(colorText),
-		CompletionCursor: lipgloss.NewStyle().
-			Foreground(colorAccent).
-			Bold(true),
 		CompletionCategory: lipgloss.NewStyle().
 			Foreground(colorDim),
-		CompletionFooter: lipgloss.NewStyle().
-			Foreground(colorDim).
-			Italic(true),
-		CompletionSearching: lipgloss.NewStyle().
-			Foreground(colorSpecial).
-			Italic(true),
 
-		StartupCheck: lipgloss.NewStyle().
-			Foreground(colorSuccess),
-		StartupFail: lipgloss.NewStyle().
-			Foreground(colorError),
-		StartupLabel: lipgloss.NewStyle().
-			Foreground(colorText),
 		StartupDetail: lipgloss.NewStyle().
 			Foreground(colorDim),
-		StartupSpin: lipgloss.NewStyle().
-			Foreground(colorAccent),
 
 		ModeAsk: lipgloss.NewStyle().
 			Bold(true).
@@ -346,10 +250,6 @@ func adaptiveStyles(isDark bool, themeID string) Styles {
 			Foreground(colorWarning),
 		ContextPctHigh: lipgloss.NewStyle().
 			Foreground(colorError),
-
-		ToolBashCmd: lipgloss.NewStyle().
-			Foreground(colorDim).
-			Italic(true),
 
 		DiffAdded: lipgloss.NewStyle().
 			Foreground(colorSuccess).
@@ -395,27 +295,12 @@ func plainStyles() Styles {
 	pl2 := lipgloss.NewStyle().PaddingLeft(2)
 	pl4 := lipgloss.NewStyle().PaddingLeft(4)
 	return Styles{
-		HeaderTitle: b.PaddingLeft(1),
-		HeaderInfo:  p.PaddingRight(1),
-		HeaderRule:  p,
 
-		UserLabel:    b.PaddingLeft(2),
-		UserContent:  pl2,
-		UserGutter:   p,
-		AsstLabel:    b.PaddingLeft(2),
-		AsstContent:  pl2,
-		StreamCursor: b,
+		UserContent: pl2,
+		UserGutter:  p,
 
-		ToolCallIcon:    pl4,
-		ToolCallText:    p,
-		ToolResultIcon:  pl4,
-		ToolResultText:  p,
-		ToolErrorIcon:   pl4,
 		ToolErrorText:   b,
-		ToolDoneIcon:    pl4,
-		ToolDoneText:    p,
 		ToolRunningText: p,
-		ToolDetailText:  p,
 
 		Divider:        p,
 		StatusDot:      p.PaddingLeft(1),
@@ -429,23 +314,12 @@ func plainStyles() Styles {
 		ErrorChip:      b.Padding(0, 1),
 		Dimmed:         p,
 
-		SystemText:  p.PaddingLeft(2).Italic(true),
 		WelcomeHint: b,
 
-		CompletionBorder:   p,
-		CompletionSelected: b,
+		CompletionFilter:   p,
+		CompletionCategory: p,
 
-		CompletionFilter:    p,
-		CompletionCursor:    b,
-		CompletionCategory:  p,
-		CompletionFooter:    p.Italic(true),
-		CompletionSearching: p.Italic(true),
-
-		StartupCheck:  p,
-		StartupFail:   b,
-		StartupLabel:  p,
 		StartupDetail: p,
-		StartupSpin:   p,
 
 		ModeAsk:   b,
 		ModePlan:  b,
@@ -454,8 +328,6 @@ func plainStyles() Styles {
 		ContextPctLow:  p,
 		ContextPctMid:  p,
 		ContextPctHigh: p,
-
-		ToolBashCmd: p.Italic(true),
 
 		DiffAdded:   pl4,
 		DiffRemoved: pl4,

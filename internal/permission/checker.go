@@ -460,11 +460,6 @@ func (c *Checker) ToCheckResult(toolName string) CheckResult {
 	}
 }
 
-// NilSafe creates a no-op checker if store is nil, for safe optional use.
-func NilSafe(store *db.Store, skipApprovals bool) *Checker {
-	return NewChecker(store, skipApprovals)
-}
-
 // AlwaysAllow is an explicit auto-approval callback for trusted callers.
 var AlwaysAllow = func(req ApprovalRequest) {
 	req.Response <- AllowOnce()

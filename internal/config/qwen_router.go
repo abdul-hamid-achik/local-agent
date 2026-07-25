@@ -4,7 +4,6 @@ import (
 	"context"
 	"strings"
 	"sync"
-	"time"
 )
 
 // QwenModelRouter is optimized for Qwen 3.5 variant selection (0.8B, 2B, 4B, 9B)
@@ -301,16 +300,12 @@ func classifyQwenTask(query string, mode ModeContext) QwenComplexity {
 
 // RecordOverride logs user model selection for learning
 func (r *QwenModelRouter) RecordOverride(query, userModel string) {
-	routerModel := r.SelectModel(query)
-
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	r.overrideLog = append(r.overrideLog, ModelOverride{
-		Query:       query,
-		UserModel:   userModel,
-		RouterModel: routerModel,
-		Timestamp:   time.Now(),
+		Query:     query,
+		UserModel: userModel,
 	})
 
 	// Keep last 100 overrides

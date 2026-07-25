@@ -112,21 +112,20 @@ func TestFrameProjectionDerivesTranscriptCapabilitiesAfterSplitAndInset(t *testi
 			m = updated.(*Model)
 
 			frame := m.projectFrame()
-			want := DeriveLayoutCapabilities(
+			// The projection no longer carries a capabilities snapshot nobody
+			// read. What still matters is that the transcript rectangle the
+			// capabilities would be derived from is the one actually projected.
+			capabilities := DeriveLayoutCapabilities(
 				transcriptWorkRect(frame.Transcript.Rect),
 				LayoutCapabilityOptions{ForceCompact: forceCompact},
 			)
-			if frame.TranscriptLayout != want {
-				t.Fatalf("%dx%d compact=%t layout = %+v, want %+v",
-					size.width, size.height, forceCompact, frame.TranscriptLayout, want)
-			}
-			if frame.TranscriptLayout.WorkWidth != frame.Transcript.Rect.Width()-transcriptContentChromeColumns {
+			if capabilities.WorkWidth != frame.Transcript.Rect.Width()-transcriptContentChromeColumns {
 				t.Fatalf("%dx%d work width = %d, transcript width = %d",
-					size.width, size.height, frame.TranscriptLayout.WorkWidth, frame.Transcript.Rect.Width())
+					size.width, size.height, capabilities.WorkWidth, frame.Transcript.Rect.Width())
 			}
-			if frame.TranscriptLayout.WorkHeight != frame.Transcript.Rect.Height() {
+			if capabilities.WorkHeight != frame.Transcript.Rect.Height() {
 				t.Fatalf("%dx%d work height = %d, transcript height = %d",
-					size.width, size.height, frame.TranscriptLayout.WorkHeight, frame.Transcript.Rect.Height())
+					size.width, size.height, capabilities.WorkHeight, frame.Transcript.Rect.Height())
 			}
 		}
 	}
@@ -331,9 +330,6 @@ func TestFrameProjectionRecoveryOwnsNoBasePaint(t *testing.T) {
 			}
 			if frame.Transcript.Visible || frame.Footer.Visible || frame.Footer.Content != "" || frame.Cursor != nil {
 				t.Fatalf("%dx%d recovery leaked base paint: %#v", width, height, frame)
-			}
-			if frame.TranscriptLayout.WorkWidth != 0 || frame.TranscriptLayout.WorkHeight != 0 {
-				t.Fatalf("%dx%d recovery leaked layout capacity: %+v", width, height, frame.TranscriptLayout)
 			}
 		}
 	}

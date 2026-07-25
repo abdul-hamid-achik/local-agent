@@ -4,7 +4,6 @@ import (
 	"context"
 	"strings"
 	"sync"
-	"time"
 )
 
 type TaskComplexity string
@@ -51,11 +50,15 @@ type ModelPinger interface {
 }
 
 // ModelOverride records when a user explicitly selects a model.
+//
+// It carried RouterModel and Timestamp as well, neither of which any code read.
+// RouterModel in particular cost a full SelectModel pass on every /model switch
+// to compute a value that was only ever appended to a slice — the
+// "router choice vs. user choice" comparison the field names imply was never
+// implemented.
 type ModelOverride struct {
-	Query       string
-	UserModel   string
-	RouterModel string
-	Timestamp   time.Time
+	Query     string
+	UserModel string
 }
 
 type Router struct {
@@ -119,19 +122,16 @@ func (r *Router) SelectModelForMode(query string, mode ModeContext) string {
 // RecordOverride logs when a user explicitly selects a model.
 // This helps the router learn from user preferences.
 func (r *Router) RecordOverride(query, userModel string) {
-	// SelectModel reads the learned-pattern state under r.mu. Compute the
-	// router choice before taking the write lock to avoid re-entering the same
-	// RWMutex and deadlocking the TUI's /model command.
-	routerModel := r.SelectModel(query)
-
+	// No SelectModel call here: nothing reads its result, and calling it under
+	// the same RWMutex this method then write-locks is what deadlocked the
+	// TUI's /model command. TestRouter_RecordOverrideDoesNotDeadlock still pins
+	// that, so a future reader cannot reintroduce the nesting.
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	r.overrideLog = append(r.overrideLog, ModelOverride{
-		Query:       query,
-		UserModel:   userModel,
-		RouterModel: routerModel,
-		Timestamp:   time.Now(),
+		Query:     query,
+		UserModel: userModel,
 	})
 
 	// Keep last 100 overrides

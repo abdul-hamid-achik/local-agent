@@ -49,7 +49,6 @@ type FrameProjection struct {
 	WidthClass          WidthClass
 	HeightClass         HeightClass
 	TranscriptFloorRows int
-	TranscriptLayout    LayoutCapabilities
 	VerticalFit         FrameVerticalFit
 	Header              FrameSurfaceProjection
 	Transcript          FrameSurfaceProjection
@@ -80,17 +79,12 @@ func (m *Model) projectFrame() FrameProjection {
 	safe := Inset(screen, Insets{Right: 1, Bottom: 1})
 	transcriptFloor := min(minTranscriptRows, safe.Height())
 	if m.narrowTerminalHint() != "" {
-		emptyWorkRect := NewCellRect(safe.MinX, safe.MinY, safe.MinX, safe.MinY)
 		return FrameProjection{
 			Screen:              screen,
 			SafeScreen:          safe,
 			WidthClass:          ClassifyWidth(m.width),
 			HeightClass:         ClassifyHeight(m.height),
 			TranscriptFloorRows: transcriptFloor,
-			TranscriptLayout: DeriveLayoutCapabilities(
-				emptyWorkRect,
-				LayoutCapabilityOptions{ForceCompact: m.forceCompact},
-			),
 			VerticalFit: FrameVerticalRecovery,
 			Transcript: FrameSurfaceProjection{
 				Rect: safe,
@@ -112,11 +106,6 @@ func (m *Model) projectFrame() FrameProjection {
 
 	footer := m.projectFooterWithin(max(0, body.Height()-transcriptFloor))
 	footerRect, transcriptRect := TakeBottom(body, footer.reservedHeight)
-	transcriptLayout := DeriveLayoutCapabilities(
-		transcriptWorkRect(transcriptRect),
-		LayoutCapabilityOptions{ForceCompact: m.forceCompact},
-	)
-
 	var cursor *tea.Cursor
 	if footer.cursor != nil {
 		cursor = offsetCursor(footer.cursor, footerRect.MinX, footerRect.MinY)
@@ -128,7 +117,6 @@ func (m *Model) projectFrame() FrameProjection {
 		WidthClass:          ClassifyWidth(m.width),
 		HeightClass:         ClassifyHeight(m.height),
 		TranscriptFloorRows: transcriptFloor,
-		TranscriptLayout:    transcriptLayout,
 		VerticalFit:         footer.verticalFit,
 		Header: FrameSurfaceProjection{
 			Rect:    headerRect,
