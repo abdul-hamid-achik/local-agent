@@ -1,5 +1,5 @@
 version: 1
-contractHash: sha256:391061436e0effad39e1027e5e94ad4d1d2d568654e098604b90f8ee9ad2dc9a
+contractHash: sha256:067086de698f8a3cf74c1c7c86f57bcf4e3e3b81480fde97d6e7bfff74db0bb1
 name: local_agent_tui_approval_denial
 # Runner note (2026-07-16): a restricted sandbox can deny the wrapper's
 # 127.0.0.1:0 listener before Local Agent starts. Glyphrun currently reports
@@ -15,7 +15,7 @@ target:
         - "${projectRoot}/.glyphrun/tmp/fake-ollama-approval"
         - "${projectRoot}/bin/local-agent"
         - "${projectRoot}/.glyphrun/tmp/approval-protocol.txt"
-    cwd: "/tmp/local-agent-glyphrun-approval-workdir"
+    cwd: "/tmp/local-agent-glyphrun-denial"
     env:
         HOME: "${projectRoot}/.glyphrun/tmp/approval-home"
         LOCAL_AGENT_AGENTS_DIR: "${projectRoot}/.glyphrun/tmp/approval-agents"
@@ -23,9 +23,13 @@ target:
 terminal:
     cols: 90
     rows: 28
+# See tui_approval_always for the constraint: macOS resolves /tmp to
+# /private/tmp, and a workdir path long enough to wrap the approval panel's
+# Target row there but not on Linux makes the panel one row taller on one host.
+# This name previously cleared the 83-column budget by three characters.
 preconditions:
     commands:
-        - run: "rm -rf .glyphrun/tmp/approval-home .glyphrun/tmp/approval-agents .glyphrun/tmp/approval-protocol.txt .glyphrun/tmp/fake-ollama-approval /tmp/local-agent-glyphrun-approval-workdir && mkdir -p .glyphrun/tmp/approval-home/.config/local-agent .glyphrun/tmp/approval-agents /tmp/local-agent-glyphrun-approval-workdir && printf '%s\\n' 'model:' '  auto_select: false' 'ice:' '  enabled: false' > .glyphrun/tmp/approval-home/.config/local-agent/config.yaml && go build -o ./bin/local-agent ./cmd/local-agent && go build -o .glyphrun/tmp/fake-ollama-approval ./specs/fixtures/fake_ollama_approval"
+        - run: "rm -rf .glyphrun/tmp/approval-home .glyphrun/tmp/approval-agents .glyphrun/tmp/approval-protocol.txt .glyphrun/tmp/fake-ollama-approval /tmp/local-agent-glyphrun-denial && mkdir -p .glyphrun/tmp/approval-home/.config/local-agent .glyphrun/tmp/approval-agents /tmp/local-agent-glyphrun-denial && printf '%s\\n' 'model:' '  auto_select: false' 'ice:' '  enabled: false' > .glyphrun/tmp/approval-home/.config/local-agent/config.yaml && go build -o ./bin/local-agent ./cmd/local-agent && go build -o .glyphrun/tmp/fake-ollama-approval ./specs/fixtures/fake_ollama_approval"
           cwd: "."
           timeoutMs: 30000
 steps:
@@ -180,7 +184,7 @@ outcomes:
       description: the denied tool never creates its requested workspace file
       verify:
         command:
-            run: "test ! -e /tmp/local-agent-glyphrun-approval-workdir/approval-probe.txt"
+            run: "test ! -e /tmp/local-agent-glyphrun-denial/approval-probe.txt"
     - id: fake_provider_observed_the_denial
       description: exactly two provider calls occurred and the second contained the denied tool result
       verify:
