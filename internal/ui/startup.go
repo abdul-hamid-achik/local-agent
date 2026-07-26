@@ -44,6 +44,32 @@ func (m *Model) handleStartupStatus(msg StartupStatusMsg) {
 	}
 }
 
+// handleCoreReady opens turn admission after the host has atomically applied
+// the startup model/profile. Optional MCP, ICE, and metadata initialization may
+// continue while the composer is usable.
+func (m *Model) handleCoreReady(msg CoreReadyMsg) {
+	m.setCurrentModelProjection(msg.Model)
+	m.ollamaModels = m.applyModelRoutingPolicy(msg.OllamaModels)
+	m.modelList = append([]string(nil), msg.ModelList...)
+	if selectable := manuallySelectableOllamaModels(m.ollamaModels); len(selectable) > 0 {
+		m.modelList = selectable
+	}
+	m.localOnly = msg.LocalOnly
+	m.ollamaInventoryAttempted = msg.OllamaInventoryAttempted
+	m.setActiveProfileMetadata(msg.AgentProfile)
+	if msg.NumCtx > 0 {
+		m.numCtx = msg.NumCtx
+	}
+	m.syncEffectiveContext(false)
+	m.turnReady = true
+	if m.completer != nil {
+		m.completer.UpdateModels(m.modelList)
+	}
+	if m.ready {
+		m.refreshTranscript()
+	}
+}
+
 // handleInitComplete applies the completed initialization snapshot and ends
 // the startup phase.
 func (m *Model) handleInitComplete(msg InitCompleteMsg, cmds []tea.Cmd) []tea.Cmd {
@@ -83,6 +109,7 @@ func (m *Model) handleInitComplete(msg InitCompleteMsg, cmds []tea.Cmd) []tea.Cm
 		})
 	}
 
+	m.turnReady = true
 	m.initializing = false
 	m.startupItems = nil
 

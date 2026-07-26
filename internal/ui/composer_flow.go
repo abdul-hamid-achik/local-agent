@@ -112,13 +112,19 @@ func (m *Model) queuedFollowUpHeld() bool {
 // reasons or tools run. Owned filesystem/session/goal operations still lock it
 // because their completion may replace the active conversation authority.
 func (m *Model) composerEditable() bool {
-	if m.initializing || m.shuttingDown || m.overlay != OverlayNone ||
+	if m.shuttingDown || m.overlay != OverlayNone ||
 		m.viewerModalActive() || m.pendingApproval != nil || m.pendingPaste != nil ||
 		m.pendingSessionSwitch != nil || m.readScopePrompt != nil {
 		return false
 	}
 	if m.state == StateIdle {
-		return (m.queuedFollowUp == nil || m.queuedFollowUpHeld()) && !m.composerIsBusy()
+		busy := m.composerIsBusy()
+		// Startup progress owns the activity rail, not the draft. Admission is
+		// enforced separately by turnReady in the parent key router.
+		if m.initializing {
+			busy = false
+		}
+		return (m.queuedFollowUp == nil || m.queuedFollowUpHeld()) && !busy
 	}
 	if m.queuedFollowUp != nil || m.goalTurnID != "" || m.goalOperation != "" {
 		return false

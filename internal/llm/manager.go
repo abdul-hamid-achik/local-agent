@@ -847,6 +847,14 @@ func (m *ModelManager) ChatStreamForModel(ctx context.Context, model string, opt
 }
 
 func (m *ModelManager) Ping() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return m.PingContext(ctx)
+}
+
+// PingContext checks the currently selected provider/model while preserving
+// the caller's cancellation and deadline across the actual network request.
+func (m *ModelManager) PingContext(ctx context.Context) error {
 	m.inferenceMu.RLock()
 	defer m.inferenceMu.RUnlock()
 	m.mu.RLock()
@@ -858,16 +866,14 @@ func (m *ModelManager) Ping() error {
 		return ErrNoModelSelected
 	}
 	if remote != nil {
-		return remote.Ping()
+		return remote.PingContext(ctx)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
 	client, err := m.getClient(ctx, model)
 	if err != nil {
 		return err
 	}
-	return client.Ping()
+	return client.PingContext(ctx)
 }
 
 func (m *ModelManager) PingModel(ctx context.Context, model string) error {

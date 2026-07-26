@@ -76,6 +76,7 @@ func newTestModel(t testing.TB) *Model {
 	m.spin.Spinner = spinner.MiniDot
 	m.syncComposerAuthority()
 	m.initializing = false // skip startup phase for tests
+	m.turnReady = true
 	// Send WindowSizeMsg to set ready=true
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	return updated.(*Model)

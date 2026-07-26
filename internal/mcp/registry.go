@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -50,23 +51,25 @@ var (
 
 // Registry manages multiple MCP server connections and routes tool calls.
 type Registry struct {
-	mu             sync.RWMutex
-	clients        map[string]*MCPClient
-	toolMap        map[string]toolRoute // exposed tool name -> server and remote name
-	serverTools    map[string][]llm.ToolDef
-	serverGuidance map[string]string
-	failedServers  []FailedServer
-	serverConfigs  map[string]config.ServerConfig // name -> config for reconnection
-	callTimeout    time.Duration                  // per tool-call timeout (0 = default)
-	version        string                         // advertised MCP client implementation version
-	epoch          uint64                         // increments on every connection/catalog state transition
-	connectAttempt map[string]uint64              // latest admitted connection generation per server
-	localOnly      bool                           // enforce per-request local HTTP authority
-	closed         bool
-	lifecycleCtx   context.Context
-	cancel         context.CancelFunc
-	lifecycleWG    sync.WaitGroup
-	closeOnce      sync.Once
+	mu               sync.RWMutex
+	clients          map[string]*MCPClient
+	toolMap          map[string]toolRoute // exposed tool name -> server and remote name
+	serverTools      map[string][]llm.ToolDef
+	serverGuidance   map[string]string
+	failedServers    []FailedServer
+	serverConfigs    map[string]config.ServerConfig // name -> config for reconnection
+	callTimeout      time.Duration                  // per tool-call timeout (0 = default)
+	version          string                         // advertised MCP client implementation version
+	epoch            uint64                         // increments on every connection/catalog state transition
+	connectAttempt   map[string]uint64              // latest admitted connection generation per server
+	toolRefreshRun   map[string]bool                // server -> list_changed refresh worker owns it
+	toolRefreshDirty map[string]bool                // server -> another notification arrived while refreshing
+	localOnly        bool                           // enforce per-request local HTTP authority
+	closed           bool
+	lifecycleCtx     context.Context
+	cancel           context.CancelFunc
+	lifecycleWG      sync.WaitGroup
+	closeOnce        sync.Once
 
 	// Test seams keep shutdown overlap tests deterministic without launching a
 	// real child process. Production always uses discoverServer/client.Close.
@@ -98,17 +101,19 @@ func WithLocalOnly(required bool) RegistryOption {
 func NewRegistryWithVersion(version string, options ...RegistryOption) *Registry {
 	lifecycleCtx, cancel := context.WithCancel(context.Background())
 	registry := &Registry{
-		toolMap:        make(map[string]toolRoute),
-		clients:        make(map[string]*MCPClient),
-		serverTools:    make(map[string][]llm.ToolDef),
-		serverGuidance: make(map[string]string),
-		serverConfigs:  make(map[string]config.ServerConfig),
-		callTimeout:    defaultCallTimeout,
-		version:        clientImplementation(version).Version,
-		epoch:          1,
-		connectAttempt: make(map[string]uint64),
-		lifecycleCtx:   lifecycleCtx,
-		cancel:         cancel,
+		toolMap:          make(map[string]toolRoute),
+		clients:          make(map[string]*MCPClient),
+		serverTools:      make(map[string][]llm.ToolDef),
+		serverGuidance:   make(map[string]string),
+		serverConfigs:    make(map[string]config.ServerConfig),
+		callTimeout:      defaultCallTimeout,
+		version:          clientImplementation(version).Version,
+		epoch:            1,
+		connectAttempt:   make(map[string]uint64),
+		toolRefreshRun:   make(map[string]bool),
+		toolRefreshDirty: make(map[string]bool),
+		lifecycleCtx:     lifecycleCtx,
+		cancel:           cancel,
 	}
 	for _, option := range options {
 		if option != nil {
@@ -172,9 +177,20 @@ func (r *Registry) closeMCPClient(client *MCPClient) error {
 // given ctx. STDIO Connect also links ctx to an owned process-group cancel, so
 // Registry.Close's lifecycleWG wait cannot be stranded by a hanging child.
 func (r *Registry) discoverServer(ctx context.Context, srv config.ServerConfig) (*MCPClient, []llm.ToolDef, error) {
-	client, err := connectWithVersionAndTrust(
+	initialCatalogListed := make(chan struct{})
+	client, err := connectWithVersionTrustAndToolChanges(
 		ctx, r.version, srv.Name, srv.Command, srv.Args, srv.Env, srv.Transport, srv.URL,
 		r.localOnly, srv.ExecutableSHA256,
+		func() {
+			// AddTool calls made before/during initialize can produce a queued
+			// notification even though the first ListTools already observes them.
+			// Only changes after that authoritative list require another round trip.
+			select {
+			case <-initialCatalogListed:
+				r.scheduleToolRefresh(srv.Name)
+			default:
+			}
+		},
 	)
 	if err != nil {
 		return nil, nil, err
@@ -187,6 +203,7 @@ func (r *Registry) discoverServer(ctx context.Context, srv config.ServerConfig) 
 		}
 		return nil, nil, fmt.Errorf("%s tools: %w", srv.Name, err)
 	}
+	close(initialCatalogListed)
 
 	serverDefs := make([]llm.ToolDef, 0, len(tools))
 	for _, tool := range tools {
@@ -221,7 +238,8 @@ func (r *Registry) ConnectServer(ctx context.Context, srv config.ServerConfig) (
 	defer cancel()
 
 	connector := r.testConnector
-	if connector == nil {
+	productionConnector := connector == nil
+	if productionConnector {
 		connector = r.discoverServer
 	}
 	client, serverDefs, err := connector(connCtx, srv)
@@ -277,12 +295,101 @@ func (r *Registry) ConnectServer(ctx context.Context, srv config.ServerConfig) (
 		r.removeServerLocked(srv.Name)
 	}
 	r.registerConnectedServerLocked(srv.Name, client, serverDefs)
+	refreshAfterRegister := productionConnector && r.toolRefreshDirty[srv.Name]
 	r.mu.Unlock()
+	if refreshAfterRegister {
+		// Close the narrow race where list_changed arrives after the initial
+		// ListTools but before this client becomes registry-visible.
+		r.scheduleToolRefresh(srv.Name)
+	}
 	if existing != nil {
 		_ = r.closeMCPClient(existing)
 	}
 
 	return len(serverDefs), nil
+}
+
+// scheduleToolRefresh coalesces server-driven tools/list_changed
+// notifications. The worker participates in Registry lifecycle ownership, so
+// Close cancels and joins it before tearing down the client it is listing.
+func (r *Registry) scheduleToolRefresh(name string) {
+	opCtx, finish, err := r.beginLifecycleOperation(r.lifecycleCtx)
+	if err != nil {
+		return
+	}
+
+	r.mu.Lock()
+	if r.clients[name] == nil {
+		// A notification can arrive after discoverServer's initial ListTools but
+		// before ConnectServer publishes the client. Preserve that edge; the
+		// registrar schedules exactly one refresh after the atomic install.
+		r.toolRefreshDirty[name] = true
+		r.mu.Unlock()
+		finish()
+		return
+	}
+	if r.toolRefreshRun[name] {
+		r.toolRefreshDirty[name] = true
+		r.mu.Unlock()
+		finish()
+		return
+	}
+	r.toolRefreshRun[name] = true
+	r.toolRefreshDirty[name] = false
+	r.mu.Unlock()
+
+	go func() {
+		defer finish()
+		for {
+			refreshCtx, cancel := context.WithTimeout(opCtx, connectTimeout)
+			r.refreshServerTools(refreshCtx, name)
+			cancel()
+
+			r.mu.Lock()
+			if r.toolRefreshDirty[name] && !r.closed {
+				r.toolRefreshDirty[name] = false
+				r.mu.Unlock()
+				continue
+			}
+			delete(r.toolRefreshRun, name)
+			delete(r.toolRefreshDirty, name)
+			r.mu.Unlock()
+			return
+		}
+	}()
+}
+
+func (r *Registry) refreshServerTools(ctx context.Context, name string) {
+	r.mu.RLock()
+	client := r.clients[name]
+	r.mu.RUnlock()
+	if client == nil {
+		return
+	}
+
+	tools, err := client.ListTools(ctx)
+	if err != nil {
+		return
+	}
+	defs := make([]llm.ToolDef, 0, len(tools))
+	for _, tool := range tools {
+		defs = append(defs, ToLLMToolDefFromMCP(tool))
+	}
+	for i := range defs {
+		defs[i].Name = namespacedToolName(name, defs[i].Name)
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed || r.clients[name] != client {
+		return
+	}
+	if reflect.DeepEqual(r.serverTools[name], defs) {
+		return
+	}
+	r.serverTools[name] = defs
+	r.rebuildToolMapLocked()
+	r.epoch++
 }
 
 // ConnectAll spawns and connects to all configured MCP servers.
@@ -555,6 +662,8 @@ func (r *Registry) Close() {
 		r.failedServers = nil
 		r.serverConfigs = make(map[string]config.ServerConfig)
 		r.connectAttempt = make(map[string]uint64)
+		r.toolRefreshRun = make(map[string]bool)
+		r.toolRefreshDirty = make(map[string]bool)
 		r.epoch++
 		r.mu.Unlock()
 

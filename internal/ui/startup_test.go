@@ -5,6 +5,66 @@ import (
 	"testing"
 )
 
+func TestStartupAcceptsDraftBeforeTurnAdmission(t *testing.T) {
+	m := newTestModel(t)
+	m.initializing = true
+	m.turnReady = false
+
+	for _, char := range "hello" {
+		updated, _ := m.Update(charKey(char))
+		m = updated.(*Model)
+	}
+	if got := m.input.Value(); got != "hello" {
+		t.Fatalf("startup draft = %q, want hello (editable=%v focused=%v state=%v overlay=%v)", got, m.composerEditable(), m.input.Focused(), m.state, m.overlay)
+	}
+
+	updated, cmd := m.Update(enterKey())
+	m = updated.(*Model)
+	if cmd == nil {
+		t.Fatal("startup send did not surface a bounded draft-kept notice")
+	}
+	if got := m.input.Value(); got != "hello" {
+		t.Fatalf("startup send consumed draft = %q", got)
+	}
+	if m.turnReady {
+		t.Fatal("draft input opened turn admission")
+	}
+}
+
+func TestCoreReadyOpensTurnsWithoutSettlingOptionalStartup(t *testing.T) {
+	m := newTestModel(t)
+	m.initializing = true
+	m.turnReady = false
+	m.startupItems = []startupItem{{ID: "mcp:slow", Status: "connecting"}}
+
+	updated, _ := m.Update(CoreReadyMsg{
+		Model: "model-a", ModelList: []string{"model-a"}, AgentProfile: "coder", NumCtx: 8192,
+	})
+	m = updated.(*Model)
+
+	if !m.turnReady || !m.initializing {
+		t.Fatalf("core readiness = turnReady:%v initializing:%v", m.turnReady, m.initializing)
+	}
+	if len(m.startupItems) != 1 {
+		t.Fatalf("core readiness discarded optional startup progress: %#v", m.startupItems)
+	}
+	if m.model != "model-a" || m.agentProfile != "coder" || m.numCtx != 8192 {
+		t.Fatalf("core projection = model:%q profile:%q numCtx:%d", m.model, m.agentProfile, m.numCtx)
+	}
+}
+
+func TestAdmittedTurnOwnsActivityWhileOptionalStartupContinues(t *testing.T) {
+	m := newTestModel(t)
+	m.initializing = true
+	m.turnReady = true
+	m.state = StateWaiting
+
+	activity, ok := m.currentWorkingActivity()
+	if !ok || activity.label != "Running" {
+		t.Fatalf("active turn lost activity ownership to startup: %#v, active=%v", activity, ok)
+	}
+}
+
 func TestStartupKeepsStableWelcomeShellAndOneFooterProgressLine(t *testing.T) {
 	m := newTestModel(t)
 	m.initializing = true

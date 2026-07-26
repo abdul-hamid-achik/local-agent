@@ -18,7 +18,8 @@ import (
 // successful ModelManager switch. Context occupancy belongs to one model, so
 // it must not be carried across a denominator change.
 func (m *Model) setCurrentModelProjection(name string) {
-	changed := config.CanonicalModelName(m.model) != config.CanonicalModelName(name)
+	previous := config.CanonicalModelName(m.model)
+	changed := previous != "" && previous != config.CanonicalModelName(name)
 	m.model = name
 	if changed && m.agent != nil {
 		m.agent.CommitModelSwitch()

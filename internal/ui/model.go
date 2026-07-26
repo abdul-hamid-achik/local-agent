@@ -58,32 +58,32 @@ type Model struct {
 	activityHeartbeatToken   uint64
 	activityHeartbeatPending bool
 	// chromeSpring drives sticky text reveal + context meter ease (harmonica).
-	chromeSpring             chromeSpringState
-	width                    int
-	height                   int
-	ready                    bool
-	isDark                   bool
+	chromeSpring chromeSpringState
+	width        int
+	height       int
+	ready        bool
+	isDark       bool
 	// themeID selects the color scheme. Empty means the default; it is passed
 	// explicitly to every palette lookup rather than held in a package global,
 	// because the ui tests run in parallel and a shared mutable theme would let
 	// one test repaint another's assertions.
-	themeID                  string
-	reducedMotion            bool
-	glyphProfile             GlyphProfile
-	evalCount                int
-	promptTokens             int
-	turnEvalTotal            int
-	turnPromptTotal          int
-	toolsPending             int
-	capabilityRoute          *agent.CapabilityRoute
-	lastCapabilityRoute      *agent.CapabilityRoute
-	continuation             continuationActionState
-	bobWorkspaceContext      bobWorkspaceContextState
-	inputLines               int
-	composerMeasureDigest    [32]byte
-	composerMeasureW         int
-	composerMeasureRows      int
-	userScrolledUp           bool
+	themeID               string
+	reducedMotion         bool
+	glyphProfile          GlyphProfile
+	evalCount             int
+	promptTokens          int
+	turnEvalTotal         int
+	turnPromptTotal       int
+	toolsPending          int
+	capabilityRoute       *agent.CapabilityRoute
+	lastCapabilityRoute   *agent.CapabilityRoute
+	continuation          continuationActionState
+	bobWorkspaceContext   bobWorkspaceContextState
+	inputLines            int
+	composerMeasureDigest [32]byte
+	composerMeasureW      int
+	composerMeasureRows   int
+	userScrolledUp        bool
 
 	// Scroll anchor system - prevents jitter during streaming.
 	anchorActive bool // true when user wants to stay at bottom
@@ -114,6 +114,7 @@ type Model struct {
 
 	// Startup
 	initializing bool
+	turnReady    bool
 	startupItems []startupItem
 	initCancel   context.CancelFunc
 
@@ -173,9 +174,9 @@ type Model struct {
 	footerNotice *footerNotice
 
 	// Session persistence
-	sessionID                    int64
-	sessionPublicID              string
-	activeSessionTitle           string
+	sessionID          int64
+	sessionPublicID    string
+	activeSessionTitle string
 	// sessionTitleNeedsAI is set when the durable title is still the provisional
 	// first-line prompt; a background model job upgrades it after the first turn.
 	sessionTitleNeedsAI          bool
@@ -224,7 +225,7 @@ type Model struct {
 	modelManager             *llm.ModelManager
 	router                   config.ModelRouter
 	modelPreferenceStore     ModelPreferenceStore
-	themePickerState        *ThemePickerState
+	themePickerState         *ThemePickerState
 	modelPickerState         *ModelPickerState
 	cloudConsentState        *CloudConsentState
 	cloudRestoreAuthorized   string
@@ -428,6 +429,13 @@ func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, com
 		spinner.WithStyle(initialStyles.StatusDot.UnsetPaddingLeft()),
 	)
 
+	initialModel := ""
+	initialNumCtx := 0
+	if modelManager != nil {
+		initialModel = modelManager.CurrentModel()
+		initialNumCtx = modelManager.NumCtx()
+	}
+
 	return &Model{
 		input:                   ta,
 		clipboardRead:           clipboard.ReadAll,
@@ -450,6 +458,8 @@ func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, com
 		diffViewers:             make(map[OverlayID]*DiffViewer),
 		toolsCollapsed:          true,
 		initializing:            true,
+		model:                   initialModel,
+		numCtx:                  initialNumCtx,
 		approvalPosture:         ApprovalPosturePrompted,
 		mode:                    ModeNormal,
 		modeConfigs:             DefaultModeConfigs(),
@@ -831,6 +841,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 
 	case StartupStatusMsg:
 		m.handleStartupStatus(msg)
+
+	case CoreReadyMsg:
+		m.handleCoreReady(msg)
 
 	case InitCompleteMsg:
 		cmds = m.handleInitComplete(msg, cmds)

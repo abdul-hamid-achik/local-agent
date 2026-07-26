@@ -837,28 +837,65 @@ func run() int {
 	go func() {
 		defer close(initDone)
 
-		// 1. Ping configured inference provider.
-		providerLabel := "Ollama (" + modelName + ")"
+		// 1. Commit the host-owned profile and MCP scope before any interactive
+		// turn can run. Failure closes MCP authority rather than leaving a
+		// partially configured agent executable.
+		activeAgentProfile := cfg.AgentProfile
+		if err := applyInitialAgentProfile(ag, skillMgr, modelManager, agentsDir, baseLoadedContext, cfg.AgentProfile); err != nil {
+			ag.DenyAllMCPTools()
+			activeAgentProfile = ""
+			p.Send(ui.ErrorMsg{Msg: fmt.Sprintf("agent profile: %v", err)})
+		}
+		admittedModel := modelManager.CurrentModel()
+		if admittedModel == "" {
+			admittedModel = modelName
+		}
+
+		// 2. Ping the admitted inference provider with initCtx cancellation.
+		providerLabel := "Ollama (" + admittedModel + ")"
 		providerID := "ollama"
 		if modelManager.RemoteProvider() {
 			providerID = "provider"
-			providerLabel = modelManager.RemoteProviderLabel() + " (" + modelName + ")"
+			providerLabel = modelManager.RemoteProviderLabel() + " (" + admittedModel + ")"
 		}
 		p.Send(ui.StartupStatusMsg{ID: providerID, Label: providerLabel, Status: "connecting"})
-		if err := modelManager.Ping(); err != nil {
+		pingCtx, cancelPing := context.WithTimeout(initCtx, 2*time.Second)
+		pingErr := modelManager.PingContext(pingCtx)
+		cancelPing()
+		if pingErr != nil {
 			if modelManager.RemoteProvider() {
 				p.Send(ui.StartupStatusMsg{ID: providerID, Label: providerLabel, Status: "failed", Detail: ui.ProviderFailureCopy})
 				p.Send(ui.ErrorMsg{Msg: ui.ProviderFailureCopy})
 			} else {
-				p.Send(ui.StartupStatusMsg{ID: providerID, Label: providerLabel, Status: "failed", Detail: err.Error()})
-				p.Send(ui.ErrorMsg{Msg: fmt.Sprintf("ollama: %v\ntry: ollama serve · ollama pull %s", err, modelName)})
+				p.Send(ui.StartupStatusMsg{ID: providerID, Label: providerLabel, Status: "failed", Detail: pingErr.Error()})
+				p.Send(ui.ErrorMsg{Msg: fmt.Sprintf("ollama: %v\ntry: ollama serve · ollama pull %s", pingErr, admittedModel)})
 			}
 			// Continue — non-fatal for TUI, user can see the error.
 		} else {
 			p.Send(ui.StartupStatusMsg{ID: providerID, Label: providerLabel, Status: "connected"})
 		}
+		// --resume keeps its existing full-init barrier so session restoration
+		// owns the composer before any queued draft can target the wrong session.
+		if !resumeRequested && initCtx.Err() == nil {
+			coreModels := ui.BuildOllamaModelDescriptors(
+				ollamaInventory, nil, admittedModel, cfg.Privacy.LocalOnly,
+			)
+			for index := range coreModels {
+				coreModels[index].EffectiveContext = modelManager.ContextPolicy(coreModels[index].Name).Effective
+			}
+			p.Send(ui.CoreReadyMsg{
+				Model:                    admittedModel,
+				ModelList:                modelList,
+				OllamaModels:             coreModels,
+				LocalOnly:                cfg.Privacy.LocalOnly,
+				OllamaInventoryAttempted: true,
+				AgentProfile:             activeAgentProfile,
+				NumCtx:                   modelManager.NumCtx(),
+			})
+		}
 
-		// 2. Connect MCP servers in parallel.
+		// 3. Connect MCP servers in parallel. This no longer gates ordinary TUI
+		// turns; the registry is snapshotted afresh at each turn boundary.
 		if initCtx.Err() != nil {
 			return
 		}
@@ -898,7 +935,7 @@ func run() int {
 			}
 		})
 
-		// 3. ICE setup.
+		// 4. ICE setup.
 		var iceEnabled bool
 		var iceConversations int
 		var iceSessionID string
@@ -919,15 +956,7 @@ func run() int {
 			p.Send(ui.StartupStatusMsg{ID: "ice", Label: "ICE", Status: "failed", Detail: "workspace identity unavailable; legacy retrieval disabled"})
 		}
 
-		// 4. Load context and agent profile.
-		activeAgentProfile := cfg.AgentProfile
-		if err := applyInitialAgentProfile(ag, skillMgr, modelManager, agentsDir, baseLoadedContext, cfg.AgentProfile); err != nil {
-			ag.DenyAllMCPTools()
-			activeAgentProfile = ""
-			p.Send(ui.ErrorMsg{Msg: fmt.Sprintf("agent profile: %v", err)})
-		}
-
-		// 5. Collect results and send InitCompleteMsg.
+		// 5. Collect optional results and settle the startup presentation.
 		var runningModels []llm.OllamaRunningModel
 		ollamaVersion := ""
 		if discoveryErr == nil {
@@ -937,7 +966,7 @@ func run() int {
 			cancelMetadata()
 		}
 		ollamaModels := ui.BuildOllamaModelDescriptors(
-			ollamaInventory, runningModels, modelName, cfg.Privacy.LocalOnly,
+			ollamaInventory, runningModels, admittedModel, cfg.Privacy.LocalOnly,
 		)
 		for index := range ollamaModels {
 			ollamaModels[index].EffectiveContext = modelManager.ContextPolicy(ollamaModels[index].Name).Effective
@@ -950,7 +979,7 @@ func run() int {
 			})
 		}
 		p.Send(ui.InitCompleteMsg{
-			Model:                    modelName,
+			Model:                    admittedModel,
 			ModelList:                modelList,
 			OllamaModels:             ollamaModels,
 			OllamaVersion:            ollamaVersion,

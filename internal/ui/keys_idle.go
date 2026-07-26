@@ -13,6 +13,27 @@ import (
 // was consumed here; unhandled keys fall through to the composer and
 // transcript sub-components in Update.
 func (m *Model) handleIdleKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
+	// The first frame owns draft input immediately, but execution remains
+	// closed until the host commits the startup model and profile. Unhandled
+	// editing keys fall through to Bubbles; application shortcuts stay inert.
+	if !m.turnReady {
+		switch {
+		case key.Matches(msg, m.keys.Quit):
+			return m.beginShutdown(), true
+		case msg.String() == "ctrl+v" && m.composerEditable():
+			return m.readClipboardPaste(), true
+		case key.Matches(msg, m.keys.NewLine) && m.composerEditable():
+			m.clearCompletionSuppression()
+			m.input.InsertString("\n")
+			m.syncInputHeight()
+			return nil, true
+		case key.Matches(msg, m.keys.Send):
+			return m.setFooterNotice(noticeInfo, "runtime still starting · draft kept", 2*time.Second), true
+		default:
+			return nil, false
+		}
+	}
+
 	// A focused editable composer owns every printable key, including the
 	// first character of an empty draft. Key.Text is Bubble Tea's explicit
 	// printable-character signal and remains empty for application chords.

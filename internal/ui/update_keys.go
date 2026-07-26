@@ -12,13 +12,6 @@ import (
 // unhandled key falls through to the composer and transcript sub-components
 // in Update.
 func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Cmd, bool) {
-	// During startup, only allow Ctrl+C to quit.
-	if m.initializing {
-		if key.Matches(msg, m.keys.Quit) {
-			return m.beginShutdown(), true
-		}
-		return nil, true
-	}
 	// Pending tool approval owns the keyboard before every other overlay.
 	if m.pendingApproval != nil {
 		return m.handlePendingApprovalKey(msg)

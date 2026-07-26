@@ -160,6 +160,19 @@ type MCPStatusSnapshotMsg struct {
 	Servers []MCPServerStatus
 }
 
+// CoreReadyMsg signals that the host has committed the startup model and
+// agent profile, so ordinary turns may run even while optional MCP/ICE work
+// continues in the background.
+type CoreReadyMsg struct {
+	Model                    string
+	ModelList                []string
+	OllamaModels             []OllamaModelDescriptor
+	LocalOnly                bool
+	OllamaInventoryAttempted bool
+	AgentProfile             string
+	NumCtx                   int
+}
+
 // InitCompleteMsg signals startup is done.
 type InitCompleteMsg struct {
 	Model                    string

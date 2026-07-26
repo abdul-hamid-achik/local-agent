@@ -3,6 +3,8 @@ package mcp
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/abdul-hamid-achik/local-agent/internal/config"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
+	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type deadlineToolCaller struct {
@@ -20,6 +23,48 @@ type deadlineToolCaller struct {
 
 type recordingToolCaller struct {
 	calls atomic.Int64
+}
+
+func TestRegistryRefreshesServerDrivenToolListChanges(t *testing.T) {
+	downstream := sdk.NewServer(&sdk.Implementation{Name: "dynamic", Version: "1"}, nil)
+	downstream.AddTool(&sdk.Tool{
+		Name: "first", InputSchema: map[string]any{"type": "object"},
+	}, func(context.Context, *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
+		return &sdk.CallToolResult{}, nil
+	})
+	handler := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return downstream }, nil)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	registry := NewRegistry()
+	defer registry.Close()
+	if _, err := registry.ConnectServer(context.Background(), config.ServerConfig{
+		Name: "dynamic", Transport: "streamable-http", URL: server.URL,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := registry.ResolveToolName("first"); !ok {
+		t.Fatal("initial tool was not registered")
+	}
+	initialEpoch := registry.SnapshotTools().Epoch
+
+	downstream.AddTool(&sdk.Tool{
+		Name: "second", InputSchema: map[string]any{"type": "object"},
+	}, func(context.Context, *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
+		return &sdk.CallToolResult{}, nil
+	})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		snapshot := registry.SnapshotTools()
+		if snapshot.Epoch > initialEpoch {
+			if name, ok := registry.ResolveToolName("second"); ok && name == "dynamic__second" {
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("dynamic tool did not enter registry: %#v", registry.SnapshotTools())
 }
 
 func (c *recordingToolCaller) CallTool(context.Context, string, map[string]any) (*ToolResult, error) {

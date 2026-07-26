@@ -81,7 +81,7 @@ func (m *Model) currentWorkingActivity() (workingActivity, bool) {
 	switch {
 	case m.shuttingDown:
 		return workingActivity{label: "Stopping safely", detail: "waiting for receipts"}, true
-	case m.initializing:
+	case m.initializing && (!m.turnReady || m.state == StateIdle):
 		settled := 0
 		for _, item := range m.startupItems {
 			if item.Status == "connected" || item.Status == "failed" {

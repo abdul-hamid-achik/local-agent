@@ -30,9 +30,33 @@ func connectWithVersion(ctx context.Context, implementationVersion, name, comman
 }
 
 func connectWithVersionAndTrust(ctx context.Context, implementationVersion, name, command string, args []string, env []string, transport, url string, localOnly bool, executableSHA256 string) (*MCPClient, error) {
+	return connectWithVersionTrustAndToolChanges(
+		ctx, implementationVersion, name, command, args, env, transport, url,
+		localOnly, executableSHA256, nil,
+	)
+}
+
+func connectWithVersionTrustAndToolChanges(
+	ctx context.Context,
+	implementationVersion, name, command string,
+	args []string,
+	env []string,
+	transport, url string,
+	localOnly bool,
+	executableSHA256 string,
+	onToolListChanged func(),
+) (*MCPClient, error) {
+	var clientOptions *sdkmcp.ClientOptions
+	if onToolListChanged != nil {
+		clientOptions = &sdkmcp.ClientOptions{
+			ToolListChangedHandler: func(context.Context, *sdkmcp.ToolListChangedRequest) {
+				onToolListChanged()
+			},
+		}
+	}
 	client := sdkmcp.NewClient(
 		clientImplementation(implementationVersion),
-		nil,
+		clientOptions,
 	)
 
 	var t sdkmcp.Transport

@@ -458,6 +458,37 @@ func TestModelManagerPingNoModel(t *testing.T) {
 	}
 }
 
+func TestModelManagerPingContextHonorsCallerDeadline(t *testing.T) {
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer server.Close()
+	defer close(release)
+
+	client, err := NewOllamaClient(server.URL, "slow-model", 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewModelManager(server.URL, 4096)
+	m.currentModel = "slow-model"
+	m.clients["slow-model"] = client
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err = m.PingContext(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("PingContext error = %v, want deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("PingContext ignored caller deadline: %v", elapsed)
+	}
+}
+
 func TestModelManagerEmbedWithCurrentModelNoModel(t *testing.T) {
 	m := NewModelManager("http://localhost:11434", 4096)
 
