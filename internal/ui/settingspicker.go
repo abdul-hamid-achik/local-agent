@@ -201,7 +201,7 @@ func (m *Model) resizePickerOverlays() {
 	if state := m.themePickerState; state != nil {
 		state.List.SetSize(
 			pickerListWidth(m.width),
-			pickerListHeight(m.height, len(state.List.Items())*defaultPickerItemHeight+2, 4),
+			pickerListHeight(m.height, len(state.List.Items())*defaultPickerItemHeight+2, themePickerChromeRows),
 		)
 	}
 	if state := m.modelPickerState; state != nil {

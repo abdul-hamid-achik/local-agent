@@ -155,11 +155,19 @@ func TestAmbientStateRemainsVisibleOnEverySupportedFrame(t *testing.T) {
 // renderer each keep their own copy, which is what rebuildThemedSurfaces
 // exists to repaint.
 func TestThemeSwitchRepaintsTheWholeFrame(t *testing.T) {
+	previous := noColor
+	noColor = false
+	t.Cleanup(func() { noColor = previous })
+
 	m := newTestModel(t)
 	m.entries = []ChatEntry{
 		{Kind: "user", Content: "hey"},
 		{Kind: "assistant", Content: "an answer", RenderedContent: "an answer"},
 	}
+	// Keep an accent-owning cached child visible. A plain settled transcript is
+	// allowed to use only text/background roles, so it cannot prove that the
+	// selected theme's accent reached child surfaces.
+	m.openThemePicker()
 	m.refreshTranscript()
 	before := m.View().Content
 

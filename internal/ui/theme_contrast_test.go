@@ -11,8 +11,8 @@ import (
 
 // Every registered theme must be legible in both modes. A theme is a set of
 // answers to one semantic vocabulary, so a new scheme cannot be added without
-// its foregrounds clearing WCAG AA for normal text — measured against that
-// scheme's own darkest surface, since Local Agent never paints a background.
+// its foregrounds clearing WCAG AA for normal text — measured against the
+// exact surface Local Agent paints for that appearance.
 func TestThemeForegroundsMeetContrastInBothModes(t *testing.T) {
 	previous := noColor
 	noColor = false
@@ -26,8 +26,8 @@ func TestThemeForegroundsMeetContrastInBothModes(t *testing.T) {
 				isDark     bool
 				background color.Color
 			}{
-				{name: "light", background: color.White},
-				{name: "dark", isDark: true, background: hexColor(t, theme.DarkReference)},
+				{name: "light", background: hexColor(t, theme.Light.Background)},
+				{name: "dark", isDark: true, background: hexColor(t, theme.Dark.Background)},
 			}
 			for _, mode := range modes {
 				t.Run(mode.name, func(t *testing.T) {
@@ -140,9 +140,6 @@ func TestRegisteredThemesAreComplete(t *testing.T) {
 		theme := resolveTheme(id)
 		if strings.TrimSpace(theme.Label) == "" || strings.TrimSpace(theme.Description) == "" {
 			t.Errorf("%s is missing a label or description", theme.ID)
-		}
-		if !strings.HasPrefix(theme.DarkReference, "#") || len(theme.DarkReference) != 7 {
-			t.Errorf("%s has an invalid dark reference %q", theme.ID, theme.DarkReference)
 		}
 		for _, mode := range []struct {
 			name   string

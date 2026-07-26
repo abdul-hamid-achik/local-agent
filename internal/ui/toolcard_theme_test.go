@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"image/color"
 	"testing"
 	"time"
 
@@ -15,65 +16,15 @@ func TestNewToolCardStylesUsesLightDarkPalette(t *testing.T) {
 	tests := []struct {
 		name   string
 		isDark bool
-		want   map[string]string
 	}{
-		{
-			name:   "light",
-			isDark: false,
-			want: map[string]string{
-				"border running":   "#50759f",
-				"border success":   "#477f33",
-				"border attention": "#8a6500",
-				"border error":     "#c34848",
-				"title running":    "#447c7c",
-				"title success":    "#477f33",
-				"title attention":  "#8a6500",
-				"title error":      "#c34848",
-				"args":             "#4c566a",
-				"result":           "#4c566a",
-				"error":            "#c34848",
-				"warning":          "#8a6500",
-				"dimmed":           "#5b6779",
-				"elapsed":          "#50759f",
-				"diff added":       "#477f33",
-				"diff removed":     "#c34848",
-				"diff header":      "#447c7c",
-				"search path":      "#447c7c",
-				"search location":  "#5b6779",
-				"search match":     "#7b5a83",
-			},
-		},
-		{
-			name:   "dark",
-			isDark: true,
-			want: map[string]string{
-				"border running":   "#81a1c1",
-				"border success":   "#a3be8c",
-				"border attention": "#ebcb8b",
-				"border error":     "#ed7a84",
-				"title running":    "#88c0d0",
-				"title success":    "#a3be8c",
-				"title attention":  "#ebcb8b",
-				"title error":      "#ed7a84",
-				"args":             "#d8dee9",
-				"result":           "#d8dee9",
-				"error":            "#ed7a84",
-				"warning":          "#ebcb8b",
-				"dimmed":           "#96a2b8",
-				"elapsed":          "#81a1c1",
-				"diff added":       "#a3be8c",
-				"diff removed":     "#ed7a84",
-				"diff header":      "#88c0d0",
-				"search path":      "#88c0d0",
-				"search location":  "#96a2b8",
-				"search match":     "#c18cb9",
-			},
-		},
+		{name: "light"},
+		{name: "dark", isDark: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			styles := NewToolCardStyles(tt.isDark, defaultThemeID)
+			palette := newSemanticPalette(tt.isDark, defaultThemeID)
 			got := map[string]lipgloss.Style{
 				"border running":   styles.BorderRunning,
 				"border success":   styles.BorderSuccess,
@@ -96,9 +47,20 @@ func TestNewToolCardStylesUsesLightDarkPalette(t *testing.T) {
 				"search location":  styles.SearchLocation,
 				"search match":     styles.SearchMatch,
 			}
+			want := map[string]color.Color{
+				"border running": palette.Accent2, "border success": palette.Success,
+				"border attention": palette.Warning, "border error": palette.Error,
+				"title running": palette.Accent, "title success": palette.Success,
+				"title attention": palette.Warning, "title error": palette.Error,
+				"args": palette.Muted, "result": palette.Muted, "error": palette.Error,
+				"warning": palette.Warning, "dimmed": palette.Dim, "elapsed": palette.Accent2,
+				"diff added": palette.Success, "diff removed": palette.Error,
+				"diff header": palette.Accent, "search path": palette.Accent,
+				"search location": palette.Dim, "search match": palette.Special,
+			}
 
 			for name, style := range got {
-				assertToolCardForeground(t, name, style, tt.want[name])
+				assertToolCardForeground(t, name, style, want[name])
 			}
 		})
 	}
@@ -115,7 +77,8 @@ func TestToolCardManagerSetDarkUpdatesStylesAndPreservesCallID(t *testing.T) {
 	if len(mgr.Cards) != 1 {
 		t.Fatalf("card count = %d, want 1", len(mgr.Cards))
 	}
-	assertToolCardForeground(t, "light running title", mgr.Cards[0].Styles.TitleRunning, "#447c7c")
+	assertToolCardForeground(t, "light running title", mgr.Cards[0].Styles.TitleRunning,
+		newSemanticPalette(false, defaultThemeID).Accent)
 
 	mgr.SetDark(true, defaultThemeID)
 
@@ -126,17 +89,17 @@ func TestToolCardManagerSetDarkUpdatesStylesAndPreservesCallID(t *testing.T) {
 	if !mgr.IsDark {
 		t.Fatal("manager should use the dark theme")
 	}
-	assertToolCardForeground(t, "dark running title", card.Styles.TitleRunning, "#88c0d0")
+	assertToolCardForeground(t, "dark running title", card.Styles.TitleRunning,
+		newSemanticPalette(true, defaultThemeID).Accent)
 }
 
-func assertToolCardForeground(t *testing.T, name string, style lipgloss.Style, wantHex string) {
+func assertToolCardForeground(t *testing.T, name string, style lipgloss.Style, want color.Color) {
 	t.Helper()
 
 	got := style.GetForeground()
-	want := lipgloss.Color(wantHex)
 	gotR, gotG, gotB, gotA := got.RGBA()
 	wantR, wantG, wantB, wantA := want.RGBA()
 	if gotR != wantR || gotG != wantG || gotB != wantB || gotA != wantA {
-		t.Errorf("%s foreground = %#v, want %s", name, got, wantHex)
+		t.Errorf("%s foreground = %#v, want %#v", name, got, want)
 	}
 }

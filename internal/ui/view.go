@@ -18,6 +18,7 @@ func (m *Model) View() tea.View {
 		v := tea.NewView("LOCAL AGENT\nStarting…")
 		v.AltScreen = true
 		v.WindowTitle = m.windowTitleBase()
+		m.applyViewTheme(&v)
 		return v
 	}
 	if hint := m.narrowTerminalHint(); hint != "" {
@@ -136,6 +137,7 @@ func (m *Model) View() tea.View {
 	// is a daily-driver affordance.
 	v.MouseMode = tea.MouseModeCellMotion
 	v.Cursor = viewCursor
+	m.applyViewTheme(&v)
 
 	// Terminal title progress. The workspace basename differentiates several
 	// Local Agent tabs without exposing a full private path through terminal
@@ -155,6 +157,16 @@ func (m *Model) View() tea.View {
 	}
 
 	return v
+}
+
+// applyViewTheme sets Bubble Tea's terminal-level surface color. This paints
+// cells not owned by a component (including resize gaps) without padding the
+// rendered content or changing any ContentGrid geometry.
+func (m *Model) applyViewTheme(view *tea.View) {
+	if m == nil || view == nil || noColor {
+		return
+	}
+	view.BackgroundColor = newSemanticPalette(m.isDark, m.themeID).Background
 }
 
 // activityComposerGap used to insert a blank row between the live activity rail

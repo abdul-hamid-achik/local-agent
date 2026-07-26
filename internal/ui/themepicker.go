@@ -1,11 +1,19 @@
 package ui
 
 import (
+	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
+
+const themePreviewRows = 2
+
+// themePickerChromeRows includes the ordinary picker chrome plus the newline
+// and two-row preview surface below the list.
+const themePickerChromeRows = 4 + 1 + themePreviewRows
 
 // ThemePickerState is the transient color-scheme chooser. It holds navigation
 // state only; the parent Model owns the selection and its persistence.
@@ -52,7 +60,7 @@ func newThemePickerState(current string, terminalWidth, terminalHeight int, isDa
 
 	delegate := newPickerDelegate(isDark, false, themeID, profile)
 	width := pickerListWidth(terminalWidth)
-	height := pickerListHeight(terminalHeight, len(items)*delegate.Height()+2, 4)
+	height := pickerListHeight(terminalHeight, len(items)*delegate.Height()+2, themePickerChromeRows)
 	l := list.New(items, delegate, width, height)
 	configurePickerList(&l, isDark, themeID)
 	configurePickerListGlyphProfile(&l, profile)
@@ -106,10 +114,33 @@ func (m *Model) renderThemePicker() string {
 	if m.themePickerState == nil {
 		return ""
 	}
+	content := strings.TrimRight(m.themePickerState.List.View(), "\n")
+	content += "\n" + m.renderThemePreview(m.themePickerState.SelectedThemeID())
 	return m.renderPickerFrame(
-		m.themePickerState.List.View(),
+		content,
 		m.pickerNavigationFooter(false),
 	)
+}
+
+// renderThemePreview is deliberately small: it shows the selected scheme's
+// actual surface plus its primary semantic colors without applying or
+// persisting the theme. Navigation therefore remains reversible with Escape.
+func (m *Model) renderThemePreview(id string) string {
+	theme := resolveTheme(id)
+	palette := outputSemanticPalette(m.isDark, theme.ID)
+	width := pickerListWidth(m.width)
+	background := lipgloss.NewStyle().Background(palette.Background)
+	heading := background.
+		Foreground(palette.Text).
+		Bold(true).
+		Width(width).
+		Render(truncateDisplay(" Preview · "+theme.Label, width))
+	samples := background.Foreground(palette.Text).Render(" Aa ") +
+		background.Foreground(palette.Accent).Bold(true).Render(" accent ") +
+		background.Foreground(palette.Success).Render(" success ") +
+		background.Foreground(palette.Warning).Render(" warning ")
+	samples = background.Width(width).MaxWidth(width).Render(samples)
+	return heading + "\n" + samples
 }
 
 // applyTheme selects a scheme, repaints, and persists the choice. Persistence

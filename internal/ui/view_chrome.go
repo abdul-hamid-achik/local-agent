@@ -86,6 +86,7 @@ func (m *Model) renderTerminalPauseView(titleText, hint string, controlCandidate
 	v := tea.NewView(content)
 	v.AltScreen = true
 	v.WindowTitle = m.windowTitleBase() + " · " + titleSuffix
+	m.applyViewTheme(&v)
 	return v
 }
 

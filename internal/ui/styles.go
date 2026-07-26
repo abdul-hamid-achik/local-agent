@@ -19,16 +19,17 @@ var noColor = os.Getenv("NO_COLOR") != ""
 // Bubbles components, overlays, composer, and tool receipts. Components own
 // layout, but they should not invent a second meaning for the same state.
 type semanticPalette struct {
-	Dim     color.Color
-	Muted   color.Color
-	Text    color.Color
-	Accent  color.Color
-	Accent2 color.Color
-	Error   color.Color
-	Success color.Color
-	Special color.Color
-	Warning color.Color
-	Border  color.Color
+	Background color.Color
+	Dim        color.Color
+	Muted      color.Color
+	Text       color.Color
+	Accent     color.Color
+	Accent2    color.Color
+	Error      color.Color
+	Success    color.Color
+	Special    color.Color
+	Warning    color.Color
+	Border     color.Color
 }
 
 // newSemanticPalette resolves the color vocabulary for one appearance.
@@ -41,16 +42,17 @@ type semanticPalette struct {
 func newSemanticPalette(isDark bool, themeID string) semanticPalette {
 	colors := resolveTheme(resolveThemeID(themeID)).themeColorsFor(isDark)
 	return semanticPalette{
-		Dim:     lipgloss.Color(colors.Dim),
-		Muted:   lipgloss.Color(colors.Muted),
-		Text:    lipgloss.Color(colors.Text),
-		Accent:  lipgloss.Color(colors.Accent),
-		Accent2: lipgloss.Color(colors.Accent2),
-		Error:   lipgloss.Color(colors.Error),
-		Success: lipgloss.Color(colors.Success),
-		Special: lipgloss.Color(colors.Special),
-		Warning: lipgloss.Color(colors.Warning),
-		Border:  lipgloss.Color(colors.Border),
+		Background: lipgloss.Color(colors.Background),
+		Dim:        lipgloss.Color(colors.Dim),
+		Muted:      lipgloss.Color(colors.Muted),
+		Text:       lipgloss.Color(colors.Text),
+		Accent:     lipgloss.Color(colors.Accent),
+		Accent2:    lipgloss.Color(colors.Accent2),
+		Error:      lipgloss.Color(colors.Error),
+		Success:    lipgloss.Color(colors.Success),
+		Special:    lipgloss.Color(colors.Special),
+		Warning:    lipgloss.Color(colors.Warning),
+		Border:     lipgloss.Color(colors.Border),
 	}
 }
 
@@ -71,7 +73,8 @@ func outputSemanticPalette(isDark bool, themeID string) semanticPalette {
 	}
 	plain := lipgloss.NoColor{}
 	return semanticPalette{
-		Dim: plain, Muted: plain, Text: plain, Accent: plain, Accent2: plain,
+		Background: plain,
+		Dim:        plain, Muted: plain, Text: plain, Accent: plain, Accent2: plain,
 		Error: plain, Success: plain, Special: plain, Warning: plain, Border: plain,
 	}
 }

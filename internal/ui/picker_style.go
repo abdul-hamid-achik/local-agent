@@ -180,6 +180,13 @@ func (m *Model) restylePickerOverlays() {
 		configurePickerList(&state.List, m.isDark, m.themeID, m.reducedMotion)
 		configurePickerListGlyphProfile(&state.List, m.glyphProfile)
 	}
+	if state := m.themePickerState; state != nil {
+		delegate := newPickerDelegate(m.isDark, false, m.themeID, m.glyphProfile)
+		state.List.SetDelegate(delegate)
+		state.ItemHeight = delegate.Height()
+		configurePickerList(&state.List, m.isDark, m.themeID, m.reducedMotion)
+		configurePickerListGlyphProfile(&state.List, m.glyphProfile)
+	}
 	if state := m.modelPickerState; state != nil {
 		// Model metadata has a dedicated selected-detail strip. Keep its
 		// navigable rows single-line when colors/glyphs are restyled.
