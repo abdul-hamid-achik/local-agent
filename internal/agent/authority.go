@@ -247,6 +247,44 @@ func (a *Agent) trustedMCPContract(call llm.ToolCall) (mcpAuthorityContract, boo
 	return contract, found
 }
 
+// trustedMCPOutcomeContract recognizes exact, build-owned semantic contracts
+// that remain approval-required but can prove a downstream terminal answer.
+// It is deliberately separate from trustedMCPContract: this function never
+// grants automatic execution authority. The compatibility entries cover both
+// direct downstream names and MCPHub 0.20's clean public aliases.
+func (a *Agent) trustedMCPOutcomeContract(call llm.ToolCall) bool {
+	if _, ok := a.trustedMCPContract(call); ok {
+		return true
+	}
+	parts := strings.Split(call.Name, "__")
+	if len(parts) < 2 || !a.isTrustedMCPHubNamespace(parts[0]) {
+		return false
+	}
+	server, tool := "", ""
+	switch {
+	case len(parts) == 3:
+		server, tool = parts[1], parts[2]
+	case len(parts) == 2 && parts[1] == "mcphub_call_tool":
+		var exact bool
+		server, tool, exact = exactLazyMCPHubTarget(call.Arguments)
+		if !exact {
+			return false
+		}
+	default:
+		return false
+	}
+	if server != "hitspec" {
+		return false
+	}
+	switch tool {
+	case "search_web", "hitspec_search_web", "fetch", "hitspec_fetch",
+		"capture_webpage", "hitspec_capture_webpage":
+		return true
+	default:
+		return false
+	}
+}
+
 func exactLazyMCPHubTarget(args map[string]any) (server, tool string, ok bool) {
 	rawTool, toolOK := args["tool"].(string)
 	if !toolOK || rawTool == "" || strings.TrimSpace(rawTool) != rawTool {

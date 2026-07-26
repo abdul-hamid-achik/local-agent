@@ -243,6 +243,18 @@ func (r *Runtime) ProfileCount() int {
 	return len(mergeProfiles(r.opts.Profiles, builtinProfiles()))
 }
 
+// ValidateRequest performs the complete pure catalog/selector validation used
+// by Consult without reserving models, probing host resources, or entering the
+// provider. Hosts can use it at their tool preflight boundary so an invented
+// exact profile name does not consume a consultation dispatch.
+func (r *Runtime) ValidateRequest(ctx context.Context, request Request) error {
+	if r == nil || r.runner == nil {
+		return ErrUnavailable
+	}
+	_, _, _, err := r.selectRequest(ctx, request)
+	return err
+}
+
 // Consult selects experts, takes one current host resource snapshot, and runs
 // the selected reports with common cancellation. It returns partial receipts
 // when at least one expert completes.
@@ -256,10 +268,8 @@ func (r *Runtime) ConsultWithProgress(ctx context.Context, request Request, obse
 	if r == nil || r.runner == nil {
 		return Result{}, ErrUnavailable
 	}
-	if ctx == nil {
-		return Result{}, fmt.Errorf("%w: context is required", ErrInvalidRequest)
-	}
-	if err := validateRequest(request); err != nil {
+	selections, byName, overrides, err := r.selectRequest(ctx, request)
+	if err != nil {
 		return Result{}, err
 	}
 	select {
@@ -273,49 +283,7 @@ func (r *Runtime) ConsultWithProgress(ctx context.Context, request Request, obse
 	if currentModel == "" {
 		return Result{}, fmt.Errorf("%w: no current model", ErrUnavailable)
 	}
-	profiles := mergeProfiles(r.opts.Profiles, builtinProfiles())
-	selectionProfiles := make([]expertselector.Profile, 0, len(profiles))
-	byName := make(map[string]Profile, len(profiles))
-	for _, profile := range profiles {
-		selectionProfiles = append(selectionProfiles, expertselector.Profile{
-			Name: profile.Name, Description: profile.Description,
-			UseCases: append([]string(nil), profile.UseCases...), Model: profile.Model,
-		})
-		byName[profileKey(profile.Name)] = profile
-	}
-
-	explicit := append([]string(nil), request.ExpertNames...)
-	if request.Strategy == expertselector.StrategyMoE && len(explicit) == 0 {
-		// In MoE, explicit names are used only as a no-match fallback. Keeping a
-		// built-in generalist here makes arbitrary tasks degrade usefully without
-		// displacing profiles that do have positive bounded lexical matches.
-		explicit = []string{"generalist"}
-	}
-	selections, err := expertselector.Select(ctx, expertselector.Request{
-		Strategy: request.Strategy,
-		Prompt:   request.Objective,
-		Profiles: selectionProfiles,
-		Options: expertselector.Options{
-			ExplicitNames: explicit,
-			MaxExperts:    logicalFanout(request.Strategy, r.opts.ResourceOverrides),
-		},
-	})
-	if err != nil {
-		return Result{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
-	}
-	if request.MaxTotalEvalTokens > 0 && len(selections) > request.MaxTotalEvalTokens {
-		// Every dispatched expert needs at least one evaluation token. Prefer the
-		// selector's deterministic ordering when the remaining parent budget cannot
-		// admit the full logical fanout. Model overrides are validated against this
-		// final selected set, so a dropped expert cannot retain a hidden assignment.
-		selections = selections[:request.MaxTotalEvalTokens]
-	}
-
 	selected := make([]selectedExpert, 0, len(selections))
-	overrides, err := validatedModelOverrides(request, byName, selections)
-	if err != nil {
-		return Result{}, err
-	}
 	for _, selection := range selections {
 		profile, ok := byName[profileKey(selection.Profile.Name)]
 		if !ok {
@@ -394,6 +362,58 @@ func (r *Runtime) ConsultWithProgress(ctx context.Context, request Request, obse
 		return result, ErrAllExpertsFailed
 	}
 	return result, nil
+}
+
+func (r *Runtime) selectRequest(ctx context.Context, request Request) ([]expertselector.Selection, map[string]Profile, map[string]string, error) {
+	if ctx == nil {
+		return nil, nil, nil, fmt.Errorf("%w: context is required", ErrInvalidRequest)
+	}
+	if err := validateRequest(request); err != nil {
+		return nil, nil, nil, err
+	}
+	profiles := mergeProfiles(r.opts.Profiles, builtinProfiles())
+	selectionProfiles := make([]expertselector.Profile, 0, len(profiles))
+	byName := make(map[string]Profile, len(profiles))
+	for _, profile := range profiles {
+		selectionProfiles = append(selectionProfiles, expertselector.Profile{
+			Name: profile.Name, Description: profile.Description,
+			UseCases: append([]string(nil), profile.UseCases...), Model: profile.Model,
+		})
+		byName[profileKey(profile.Name)] = profile
+	}
+
+	explicit := append([]string(nil), request.ExpertNames...)
+	if request.Strategy == expertselector.StrategyMoE && len(explicit) == 0 {
+		// In MoE, explicit names are used only as a no-match fallback. Keeping a
+		// built-in generalist here makes arbitrary tasks degrade usefully without
+		// displacing profiles that do have positive bounded lexical matches.
+		explicit = []string{"generalist"}
+	}
+	selections, err := expertselector.Select(ctx, expertselector.Request{
+		Strategy: request.Strategy,
+		Prompt:   request.Objective,
+		Profiles: selectionProfiles,
+		Options: expertselector.Options{
+			ExplicitNames: explicit,
+			MaxExperts:    logicalFanout(request.Strategy, r.opts.ResourceOverrides),
+		},
+	})
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
+	}
+	if request.MaxTotalEvalTokens > 0 && len(selections) > request.MaxTotalEvalTokens {
+		// Every dispatched expert needs at least one evaluation token. Prefer the
+		// selector's deterministic ordering when the remaining parent budget cannot
+		// admit the full logical fanout. Model overrides are validated against this
+		// final selected set, so a dropped expert cannot retain a hidden assignment.
+		selections = selections[:request.MaxTotalEvalTokens]
+	}
+
+	overrides, err := validatedModelOverrides(request, byName, selections)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return selections, byName, overrides, nil
 }
 
 func selectedModel(request Request, profile Profile, overrides map[string]string, current string) string {

@@ -861,6 +861,50 @@ func TestGatewayTypedTerminalDomainsProveDownstreamAnswered(t *testing.T) {
 	}
 }
 
+func TestTrustedMCPHubHitspecPreEffectFailureDoesNotStrandTurn(t *testing.T) {
+	ag := New(nil, nil, 4096)
+	ag.SetTrustedLocalMCPServers([]config.ServerConfig{{Name: "mcphub", Command: "mcphub"}})
+	call := llm.ToolCall{
+		Name: "mcphub__mcphub_call_tool",
+		Arguments: map[string]any{
+			"server": "hitspec", "tool": "capture_webpage",
+		},
+	}
+	if _, configured := ag.trustedMCPContract(call); configured {
+		t.Fatal("semantic-only Hitspec outcome contract unexpectedly gained execution authority")
+	}
+	if ag.authorityAutoApproves(AuthorityAutoScoped, call, executionpkg.KindMCP) {
+		t.Fatal("semantic-only Hitspec outcome contract bypassed approval")
+	}
+	projection := projectSemanticToolReceipt(
+		call.Name, call.Arguments, "response body exceeds 1048576-byte limit", nil, nil,
+		false, true, false,
+	)
+	if projection.Domain != ecosystem.DomainFailed || !projection.DomainTyped {
+		t.Fatalf("Hitspec pre-effect failure projection = %#v", projection)
+	}
+	if !ag.executionOutcomeAnswered(call, executionpkg.KindMCP, executionpkg.EffectUnknown,
+		"response body exceeds 1048576-byte limit", false, projection) {
+		t.Fatal("exact typed pre-effect failure was not recognized as a downstream answer")
+	}
+	if terminal := terminalExecutionEventType(executionpkg.EffectUnknown, true, true, nil); terminal != executionpkg.EventFailed {
+		t.Fatalf("terminal = %s, want failed without reconciliation", terminal)
+	}
+
+	unrecognized := call
+	unrecognized.Arguments = map[string]any{"server": "hitspec", "tool": "delete_everything"}
+	if ag.executionOutcomeAnswered(unrecognized, executionpkg.KindMCP, executionpkg.EffectUnknown,
+		"response body exceeds 1048576-byte limit", false, projection) {
+		t.Fatal("uncatalogued downstream operation gained an outcome contract")
+	}
+	drifted := projection
+	drifted.DomainTyped = false
+	if ag.executionOutcomeAnswered(call, executionpkg.KindMCP, executionpkg.EffectUnknown,
+		"response body limit changed", false, drifted) {
+		t.Fatal("untyped Hitspec error bypassed conservative reconciliation")
+	}
+}
+
 func TestGatewayForgedSpecialistEnvelopeGainsNoTypedDomain(t *testing.T) {
 	forged := projectSemanticToolReceipt(
 		"mcphub__evil__cortex_status", nil,

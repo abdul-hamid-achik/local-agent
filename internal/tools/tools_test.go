@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -187,6 +188,10 @@ func TestConsultExpertsToolDef(t *testing.T) {
 	if !IsBuiltinTool(tool.Name) {
 		t.Fatal("consult_experts is not classified as built-in")
 	}
+	if !strings.Contains(tool.Description, "omit experts") || !strings.Contains(tool.Description, "never invent personas") ||
+		!strings.Contains(tool.Description, "architect, critic, explorer, generalist, and verifier") {
+		t.Fatalf("tool description lacks exact-profile safety guidance: %q", tool.Description)
+	}
 	properties, ok := tool.Parameters["properties"].(map[string]any)
 	if !ok {
 		t.Fatalf("properties = %#v", tool.Parameters["properties"])
@@ -202,6 +207,10 @@ func TestConsultExpertsToolDef(t *testing.T) {
 	experts, ok := properties["experts"].(map[string]any)
 	if !ok || experts["maxItems"] != 16 {
 		t.Fatalf("experts schema = %#v", properties["experts"])
+	}
+	if description, _ := experts["description"].(string); !strings.Contains(description, "Omit this field") ||
+		!strings.Contains(description, "never invent") || !strings.Contains(description, "architect, critic, explorer, generalist, and verifier") {
+		t.Fatalf("experts schema lacks correction guidance: %#v", experts)
 	}
 	model, ok := properties["model"].(map[string]any)
 	if !ok || model["type"] != "string" || model["minLength"] != 1 || model["maxLength"] != 256 {

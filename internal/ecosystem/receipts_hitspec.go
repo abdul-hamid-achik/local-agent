@@ -8,13 +8,14 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 )
 
 func transientHitspecSearch(projection ToolProjection, receipt RawReceipt) (string, bool) {
-	if projection.Specialist != "hitspec" || projection.Operation != "hitspec_search_web" ||
+	if projection.Specialist != "hitspec" || !isHitspecSearchOperation(projection.Operation) ||
 		projection.Domain != DomainSucceeded || projection.Evidence != EvidenceCandidate {
 		return "", false
 	}
@@ -81,7 +82,7 @@ type hitspecSearchResult struct {
 // bounded discovery envelope. Search completion is typed domain success, while
 // its snippets remain candidate evidence rather than verified facts.
 func projectHitspecSearchReceipt(operation string, receipt RawReceipt) (DomainState, EvidenceState, *ReceiptDigest, bool) {
-	if operation != "hitspec_search_web" {
+	if !isHitspecSearchOperation(operation) {
 		return "", EvidenceNone, nil, false
 	}
 	document, ok := receiptDocument(receipt)
@@ -226,7 +227,7 @@ func canonicalHitspecSearchURL(raw string) (string, string, bool) {
 // inside the short-lived parser boundary. Only durable file.cheap identity and
 // bounded storage metrics survive as an artifact projection.
 func projectHitspecReceipt(operation string, receipt RawReceipt) (DomainState, EvidenceState, *ArtifactDigest, bool) {
-	if operation != "hitspec_capture_webpage" {
+	if !isHitspecCaptureOperation(operation) {
 		return "", EvidenceNone, nil, false
 	}
 	document, ok := receiptDocument(receipt)
@@ -270,6 +271,41 @@ func projectHitspecReceipt(operation string, receipt RawReceipt) (DomainState, E
 		domain = DomainAttention
 	}
 	return domain, EvidenceSupported, &artifact, true
+}
+
+// MCPHub 0.20 removes a redundant downstream self-prefix from public names
+// (hitspec_search_web becomes hitspec__search_web). Direct Hitspec connections
+// retain the original operation. Both exact identities refer to the same
+// versioned contract after ProjectToolCall has established specialist=hitspec.
+func isHitspecSearchOperation(operation string) bool {
+	return operation == "hitspec_search_web" || operation == "search_web"
+}
+
+func isHitspecCaptureOperation(operation string) bool {
+	return operation == "hitspec_capture_webpage" || operation == "capture_webpage"
+}
+
+// projectHitspecPreEffectFailure recognizes only producer errors whose v2.19
+// contract is known to occur before capture reaches artifact.Save. It does not
+// infer from arbitrary prose: any wording drift, transport failure, non-error
+// result, or unsupported operation remains untyped and therefore preserves the
+// caller's outcome-unknown safety path.
+func projectHitspecPreEffectFailure(operation string, receipt RawReceipt) (DomainState, bool) {
+	if !isHitspecCaptureOperation(operation) || !receipt.ToolError || receipt.TransportError {
+		return "", false
+	}
+	const prefix = "response body exceeds "
+	const suffix = "-byte limit"
+	text := strings.TrimSpace(receipt.Text)
+	if !strings.HasPrefix(text, prefix) || !strings.HasSuffix(text, suffix) {
+		return "", false
+	}
+	encoded := strings.TrimSuffix(strings.TrimPrefix(text, prefix), suffix)
+	limit, err := strconv.ParseInt(encoded, 10, 64)
+	if err != nil || limit <= 0 || text != fmt.Sprintf("%s%d%s", prefix, limit, suffix) {
+		return "", false
+	}
+	return DomainFailed, true
 }
 
 type hitspecCaptureWireEnvelope struct {

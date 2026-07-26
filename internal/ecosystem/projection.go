@@ -280,7 +280,7 @@ func ProjectToolCall(name string, args map[string]any) ToolProjection {
 		projection.Specialist = inferSpecialist(projection.Route.Server, projection.Operation, segments)
 	}
 	projection.Role = specialistRoles[projection.Specialist]
-	if projection.Specialist == "hitspec" && projection.Operation == "hitspec_capture_webpage" {
+	if projection.Specialist == "hitspec" && isHitspecCaptureOperation(projection.Operation) {
 		projection.Role = RoleArtifact
 	}
 	if projection.Role == "" {
@@ -465,6 +465,10 @@ func ProjectReceipt(projection ToolProjection, receipt RawReceipt) ToolProjectio
 		} else if domain, evidence, artifact, ok := projectHitspecReceipt(projection.Operation, receipt); ok {
 			projection.Domain, projection.Evidence = domain, evidence
 			projection.Artifact = artifact
+			projection.DomainTyped = true
+		} else if domain, ok := projectHitspecPreEffectFailure(projection.Operation, receipt); ok {
+			projection.Domain = domain
+			projection.Evidence = EvidenceNone
 			projection.DomainTyped = true
 		} else {
 			projection.Domain, projection.Evidence = DomainUnknown, EvidenceNone
@@ -1014,7 +1018,7 @@ func (p ToolProjection) Normalize() ToolProjection {
 		digest := normalizeReceiptDigest(*p.Digest)
 		validContext := digest.Kind != ""
 		if digest.Kind == DigestHitspecSearch {
-			validContext = p.Specialist == "hitspec" && p.Operation == "hitspec_search_web" &&
+			validContext = p.Specialist == "hitspec" && isHitspecSearchOperation(p.Operation) &&
 				p.Role == RoleDiscovery && p.Transport == TransportSucceeded &&
 				p.Domain == DomainSucceeded && p.Evidence == EvidenceCandidate
 		} else if isBobDigestKind(digest.Kind) {
@@ -1037,7 +1041,7 @@ func (p ToolProjection) Normalize() ToolProjection {
 			(p.Specialist == "filecheap" || p.Specialist == "fcheap") &&
 			(p.Operation == "fcheap_save" || p.Operation == "filecheap_save")
 		hitspecContext := artifact.Kind == ArtifactDigestHitspecCapture && p.Specialist == "hitspec" &&
-			p.Operation == "hitspec_capture_webpage"
+			isHitspecCaptureOperation(p.Operation)
 		validContext := baseContext && (fileCheapContext || hitspecContext)
 		if !validContext {
 			p.Artifact = nil

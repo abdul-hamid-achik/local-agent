@@ -301,6 +301,10 @@ type expertBudgetTurnClient struct {
 	repeat bool
 }
 
+type expertCorrectionTurnClient struct {
+	calls atomic.Int64
+}
+
 type cancellationReceiptExpertConsultant struct {
 	started chan struct{}
 	calls   atomic.Int64
@@ -405,6 +409,32 @@ func (c *expertBudgetTurnClient) ChatStream(_ context.Context, options llm.ChatO
 		})
 	}
 	return emit(llm.StreamChunk{Text: "synthesis", Done: true, EvalCount: options.MaxEvalTokens})
+}
+
+func (c *expertCorrectionTurnClient) ChatStream(_ context.Context, _ llm.ChatOptions, emit func(llm.StreamChunk) error) error {
+	switch call := c.calls.Add(1); call {
+	case 1:
+		return emit(llm.StreamChunk{Done: true, EvalCount: 1, ToolCalls: []llm.ToolCall{{
+			ID: "invented-experts", Name: "consult_experts", Arguments: map[string]any{
+				"strategy": "swarm", "objective": "Compare game engines.",
+				"experts": []any{"Game Engine Architect", "Networking Engineer"},
+			},
+		}}})
+	case 2:
+		return emit(llm.StreamChunk{Done: true, EvalCount: 1, ToolCalls: []llm.ToolCall{{
+			ID: "automatic-experts", Name: "consult_experts", Arguments: map[string]any{
+				"strategy": "swarm", "objective": "Compare game engines.",
+			},
+		}}})
+	default:
+		return emit(llm.StreamChunk{Text: "synthesis", Done: true, EvalCount: 1})
+	}
+}
+
+func (*expertCorrectionTurnClient) Ping() error   { return nil }
+func (*expertCorrectionTurnClient) Model() string { return "expert-correction-test" }
+func (*expertCorrectionTurnClient) Embed(context.Context, string, []string) ([][]float32, error) {
+	return nil, nil
 }
 
 func (*expertBudgetTurnClient) Ping() error   { return nil }
@@ -556,6 +586,39 @@ func TestRunTurnDispatchesAtMostOneExpertConsultation(t *testing.T) {
 	}
 	if consultant.calls != 1 {
 		t.Fatalf("expert runtime dispatches=%d, want exactly one", consultant.calls)
+	}
+}
+
+func TestRunTurnCanCorrectInventedExpertProfilesWithoutConsumingDispatch(t *testing.T) {
+	client := &expertCorrectionTurnClient{}
+	consultant := &fakeExpertConsultant{
+		result: expertteam.Result{
+			Strategy: expertselector.StrategySwarm,
+			Experts: []expertteam.ExpertReceipt{{
+				Name: "architect", Model: "qwen:2b", Status: expertteam.ExpertCompleted,
+				Report: "bounded finding", EvalTokens: 1, ChargedEvalTokens: 1,
+			}},
+		},
+		validate: func(request expertteam.Request) error {
+			if len(request.ExpertNames) > 0 {
+				return errors.Join(expertteam.ErrInvalidRequest, expertselector.ErrUnknownExplicitProfile)
+			}
+			return nil
+		},
+	}
+	agent := New(client, nil, 4096)
+	agent.SetWorkDir(t.TempDir())
+	agent.SetExpertConsultant(consultant)
+	agent.AddUserMessage("Use a swarm to compare game engines.")
+
+	if err := agent.RunTurn(context.Background(), &limitOutput{}, "turn_correct_expert_catalog"); err != nil {
+		t.Fatal(err)
+	}
+	if consultant.calls != 1 {
+		t.Fatalf("expert runtime dispatches=%d, want only the corrected request", consultant.calls)
+	}
+	if got := client.calls.Load(); got != 3 {
+		t.Fatalf("parent iterations=%d, want invalid correction + consultation + synthesis", got)
 	}
 }
 

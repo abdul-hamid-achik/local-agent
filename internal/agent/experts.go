@@ -87,6 +87,23 @@ func (a *Agent) preflightConsultExperts(arguments map[string]any) error {
 			return errors.New("model_overrides contains an invalid expert or model name")
 		}
 	}
+	a.mu.RLock()
+	consultant := a.expertConsultant
+	a.mu.RUnlock()
+	if validator, ok := consultant.(ExpertRequestValidator); ok {
+		if err := validator.ValidateRequest(context.Background(), request); err != nil {
+			switch {
+			case errors.Is(err, expertselector.ErrUnknownExplicitProfile):
+				return errors.New("experts contains unavailable exact profile names; omit experts for automatic selection instead of inventing personas")
+			case errors.Is(err, expertteam.ErrInvalidRequest):
+				return errors.New("expert selection is invalid for the current catalog; omit experts for automatic selection or use exact host-provided profile names")
+			case errors.Is(err, expertteam.ErrUnavailable):
+				return errors.New("expert consultation is unavailable")
+			default:
+				return errors.New("expert consultation preflight could not validate the current catalog")
+			}
+		}
+	}
 	return nil
 }
 

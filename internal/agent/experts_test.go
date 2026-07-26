@@ -21,9 +21,17 @@ type fakeExpertConsultant struct {
 	calls    int
 	profiles int
 	events   []expertteam.ProgressEvent
+	validate func(expertteam.Request) error
 }
 
 func (consultant *fakeExpertConsultant) ProfileCount() int { return consultant.profiles }
+
+func (consultant *fakeExpertConsultant) ValidateRequest(_ context.Context, request expertteam.Request) error {
+	if consultant.validate != nil {
+		return consultant.validate(request)
+	}
+	return nil
+}
 
 func (consultant *fakeExpertConsultant) Consult(_ context.Context, request expertteam.Request) (expertteam.Result, error) {
 	consultant.calls++
@@ -107,6 +115,33 @@ func TestConsultExpertsPreflightRejectsInvalidShapeBeforeRuntime(t *testing.T) {
 		if err := ag.preflightToolCall(execution.KindBuiltin, call); err == nil {
 			t.Errorf("case %d passed preflight", index)
 		}
+	}
+}
+
+func TestConsultExpertsPreflightRejectsInventedProfilesBeforeDispatch(t *testing.T) {
+	consultant := &fakeExpertConsultant{validate: func(request expertteam.Request) error {
+		if len(request.ExpertNames) > 0 {
+			return errors.Join(expertteam.ErrInvalidRequest, expertselector.ErrUnknownExplicitProfile)
+		}
+		return nil
+	}}
+	ag := New(nil, nil, 8192)
+	ag.SetExpertConsultant(consultant)
+	invalid := llm.ToolCall{Name: "consult_experts", Arguments: map[string]any{
+		"strategy": "swarm", "objective": "Compare game engines.",
+		"experts": []any{"Game Engine Architect", "Networking Engineer"},
+	}}
+	err := ag.preflightToolCall(execution.KindBuiltin, invalid)
+	if err == nil || !strings.Contains(err.Error(), "omit experts for automatic selection") {
+		t.Fatalf("preflight error = %v, want actionable automatic-selection correction", err)
+	}
+	if consultant.calls != 0 {
+		t.Fatalf("invalid catalog request dispatched %d consultations", consultant.calls)
+	}
+	valid := invalid
+	valid.Arguments = map[string]any{"strategy": "swarm", "objective": "Compare game engines."}
+	if err := ag.preflightToolCall(execution.KindBuiltin, valid); err != nil {
+		t.Fatalf("automatic selection failed preflight: %v", err)
 	}
 }
 

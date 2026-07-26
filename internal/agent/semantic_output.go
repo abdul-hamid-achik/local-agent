@@ -342,10 +342,9 @@ func exactMCPHubResultCallID(arguments map[string]any, projected string) (string
 // may differ; every other typed MCP receipt stays as a bounded semantic
 // projection on both paths.
 func (a *Agent) semanticToolContents(call llm.ToolCall, projection ecosystem.ToolProjection, rawResult string, structured json.RawMessage, toolError bool) (modelResult, durableResult string) {
-	if projection.Specialist == "hitspec" &&
-		(projection.Operation == "hitspec_search_web" || projection.Operation == "hitspec_capture_webpage") {
+	if isHitspecSearchProjection(projection) || isHitspecCaptureProjection(projection) {
 		durableResult = ecosystem.SafeReceiptText(projection)
-		if !toolError && projection.DomainTyped && projection.Operation == "hitspec_search_web" &&
+		if !toolError && projection.DomainTyped && isHitspecSearchProjection(projection) &&
 			projection.Domain == ecosystem.DomainSucceeded {
 			if transient, ok := ecosystem.TransientModelContent(projection, ecosystem.RawReceipt{
 				Text: rawResult, Structured: structured,
@@ -403,6 +402,16 @@ func (a *Agent) semanticToolContents(call llm.ToolCall, projection ecosystem.Too
 		modelResult = transient
 	}
 	return modelResult, durableResult
+}
+
+func isHitspecSearchProjection(projection ecosystem.ToolProjection) bool {
+	return projection.Specialist == "hitspec" &&
+		(projection.Operation == "hitspec_search_web" || projection.Operation == "search_web")
+}
+
+func isHitspecCaptureProjection(projection ecosystem.ToolProjection) bool {
+	return projection.Specialist == "hitspec" &&
+		(projection.Operation == "hitspec_capture_webpage" || projection.Operation == "capture_webpage")
 }
 
 // trustedMCPHubTransientContent exposes only a bounded, typed projection of

@@ -150,6 +150,32 @@ func highCapacityProbe() resource.Probe {
 	})
 }
 
+func TestValidateRequestRejectsInventedProfilesWithoutProviderOrResourceWork(t *testing.T) {
+	runner := &fakeModelRunner{current: "qwen:2b"}
+	runtime, err := New(runner, Options{Probe: highCapacityProbe(), DefaultNumCtx: 8192})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = runtime.ValidateRequest(context.Background(), Request{
+		Strategy: expertselector.StrategySwarm, Objective: "Compare game engines.",
+		ExpertNames: []string{"Game Engine Architect", "Networking Engineer"},
+	})
+	if !errors.Is(err, ErrInvalidRequest) || !errors.Is(err, expertselector.ErrUnknownExplicitProfile) {
+		t.Fatalf("validation error = %v, want invalid request + unknown exact profile", err)
+	}
+	if runner.prepared != 0 || len(runner.models) != 0 {
+		t.Fatalf("pure validation touched provider state: prepared=%d models=%v", runner.prepared, runner.models)
+	}
+	if err := runtime.ValidateRequest(context.Background(), Request{
+		Strategy: expertselector.StrategySwarm, Objective: "Compare architecture, risks, and verification.",
+	}); err != nil {
+		t.Fatalf("automatic catalog selection failed validation: %v", err)
+	}
+	if runner.prepared != 0 || len(runner.models) != 0 {
+		t.Fatalf("valid pure validation touched provider state: prepared=%d models=%v", runner.prepared, runner.models)
+	}
+}
+
 func TestConsultTeamRunsBoundedExpertsInParallelWithoutTools(t *testing.T) {
 	release := make(chan struct{})
 	runner := &fakeModelRunner{current: "qwen:2b", started: make(chan string, 3), release: release}

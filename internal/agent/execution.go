@@ -540,7 +540,7 @@ func (a *Agent) executionOutcomeAnswered(
 	if _, ok := a.gatewayDownstreamServer(call); !ok {
 		return false
 	}
-	if _, catalogued := a.trustedMCPContract(call); !catalogued {
+	if !a.trustedMCPOutcomeContract(call) {
 		return false
 	}
 	return projection.DomainTyped && projection.Domain != "" &&

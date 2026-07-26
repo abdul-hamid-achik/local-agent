@@ -73,7 +73,7 @@ type Agent struct {
 	// approvalPosture is process-local approval UX policy (e.g. accept
 	// workspace edits without per-call prompts). It never broadens deny
 	// policies or skip-approvals host posture.
-	approvalPosture ApprovalPosture
+	approvalPosture     ApprovalPosture
 	toolsConfig         config.ToolsConfig
 	continuationsConfig config.ContinuationsConfig
 	logger              *log.Logger
@@ -165,6 +165,13 @@ type ExpertConsultant interface {
 // can expose only the bounded host-owned progress projection.
 type ExpertProgressConsultant interface {
 	ConsultWithProgress(context.Context, expertteam.Request, expertteam.Observer) (expertteam.Result, error)
+}
+
+// ExpertRequestValidator is an optional pure preflight extension. Production
+// runtimes use it to reject unavailable exact profile names before the one
+// consultation dispatch allowed for a parent turn is consumed.
+type ExpertRequestValidator interface {
+	ValidateRequest(context.Context, expertteam.Request) error
 }
 
 // contextWindowProvider is an optional capability implemented by clients that

@@ -94,6 +94,57 @@ func TestHitspecSearchAcceptsUpstreamCanonicalExampleAndPublicIP(t *testing.T) {
 	}
 }
 
+func TestHitspecMCPHubCleanPublicAliasesRetainTypedContracts(t *testing.T) {
+	search := ProjectReceipt(ProjectToolCall("mcphub__mcphub_call_tool", map[string]any{
+		"server": "hitspec", "tool": "search_web",
+	}), RawReceipt{Text: `{"kind":"discovery","query":"q","results":[],"truncated":false}`})
+	if search.Operation != "search_web" || search.Domain != DomainSucceeded || !search.DomainTyped ||
+		search.Evidence != EvidenceCandidate || search.Digest == nil {
+		t.Fatalf("clean search alias projection = %#v", search)
+	}
+
+	capture := ProjectReceipt(ProjectToolCall("mcphub__mcphub_call_tool", map[string]any{
+		"server": "hitspec", "tool": "capture_webpage",
+	}), RawReceipt{Structured: json.RawMessage(`{
+		"url":"https://example.com","final_url":"https://example.com","title":"Example",
+		"http_status":200,"content_type":"text/html","markdown_bytes":12,
+		"stash":{"id":"stash-clean","status":"saved","file_count":1,"total_size":12,
+			"indexed":false,"index_requested":false}
+	}`)})
+	if capture.Operation != "capture_webpage" || capture.Role != RoleArtifact ||
+		capture.Domain != DomainSucceeded || !capture.DomainTyped || capture.Artifact == nil ||
+		capture.Artifact.ID != "stash-clean" {
+		t.Fatalf("clean capture alias projection = %#v", capture)
+	}
+	if restored := capture.Normalize(); restored.Artifact == nil || restored.Artifact.ID != "stash-clean" {
+		t.Fatalf("clean capture artifact did not survive normalization: %#v", restored)
+	}
+}
+
+func TestHitspecOversizeCaptureIsTypedOnlyForExactPreEffectError(t *testing.T) {
+	for _, operation := range []string{"capture_webpage", "hitspec_capture_webpage"} {
+		got := ProjectReceipt(ProjectToolCall("hitspec__"+operation, nil), RawReceipt{
+			Text: "response body exceeds 1048576-byte limit", ToolError: true,
+		})
+		if got.Domain != DomainFailed || !got.DomainTyped || got.Evidence != EvidenceNone || got.Artifact != nil {
+			t.Fatalf("typed pre-effect failure for %q = %#v", operation, got)
+		}
+	}
+	for name, receipt := range map[string]RawReceipt{
+		"not a tool error": {Text: "response body exceeds 1048576-byte limit"},
+		"transport error":  {Text: "response body exceeds 1048576-byte limit", ToolError: true, TransportError: true},
+		"wording drift":    {Text: "response body exceeds one-megabyte limit", ToolError: true},
+		"invalid limit":    {Text: "response body exceeds 0-byte limit", ToolError: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := ProjectReceipt(ProjectToolCall("hitspec__capture_webpage", nil), receipt)
+			if got.DomainTyped || got.Artifact != nil {
+				t.Fatalf("ambiguous failure became typed: %#v", got)
+			}
+		})
+	}
+}
+
 func TestHitspecCaptureProjectsBoundedDurableArtifact(t *testing.T) {
 	projection := ProjectToolCall("mcphub__mcphub_call_tool", map[string]any{
 		"server": "hitspec", "tool": "hitspec_capture_webpage",

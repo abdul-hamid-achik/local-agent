@@ -526,15 +526,15 @@ func appendKnownCapabilityContract(builder *strings.Builder, activity Capability
 	tool := strings.ToLower(hint.Tool)
 	switch server {
 	case "hitspec", "hitspec_web":
-		switch tool {
-		case "hitspec_fetch":
+		switch {
+		case isHitspecCapabilityTool(tool, "fetch"):
 			builder.WriteString("Known Hitspec fetch contract: hitspec_fetch returns bounded content inline and does not create a workspace file or durable artifact.\n")
 			if isDurableCapabilityOutcome(activity.DesiredOutcome) {
 				builder.WriteString("To satisfy this durable outcome, review the inline result, write the accepted content to a workspace file through a separately authorized host action, then describe and call fcheap_save separately. Fetch, file write, and artifact save are distinct effect and approval boundaries.\n")
 			}
-		case "hitspec_capture_webpage":
+		case isHitspecCapabilityTool(tool, "capture_webpage"):
 			builder.WriteString("Known Hitspec v2.18 capture contract: when this optional tool is exposed, it persists rendered Markdown as a durable file.cheap stash and returns a compact artifact receipt rather than the page body. Indexing is requested and reported separately.\n")
-		case "hitspec_search_web":
+		case isHitspecCapabilityTool(tool, "search_web"):
 			builder.WriteString("Known Hitspec search contract: hitspec_search_web returns non-persisted discovery candidates, not verified evidence.\n")
 		}
 	case "bob":
@@ -573,7 +573,9 @@ func appendKnownAmbiguousCapabilityContracts(builder *strings.Builder, activity 
 	candidates := append([]string{hint.Namespaced}, hint.Alternatives...)
 	hasCandidate := func(target string) bool {
 		for _, candidate := range candidates {
-			if strings.EqualFold(candidate, "hitspec__"+target) {
+			clean := strings.TrimPrefix(target, "hitspec_")
+			if strings.EqualFold(candidate, "hitspec__"+target) ||
+				strings.EqualFold(candidate, "hitspec__"+clean) {
 				return true
 			}
 		}
@@ -597,6 +599,10 @@ func appendKnownAmbiguousCapabilityContracts(builder *strings.Builder, activity 
 	if isDurableCapabilityOutcome(activity.DesiredOutcome) {
 		builder.WriteString(". The requested outcome is durable, but MCPHub's route remains ambiguous until the candidate contracts are compared")
 	}
+}
+
+func isHitspecCapabilityTool(tool, public string) bool {
+	return tool == public || tool == "hitspec_"+public
 }
 
 func isDurableCapabilityOutcome(value string) bool {

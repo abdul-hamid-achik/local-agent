@@ -329,7 +329,7 @@ func LoadSkillToolDef() llm.ToolDef {
 func ConsultExpertsToolDef() llm.ToolDef {
 	return llm.ToolDef{
 		Name:        "consult_experts",
-		Description: "Run a bounded read-only team, swarm, or application-level MoE of tool-free profiles. Use for explicit expert requests or hard decisions needing distinct perspectives; the parent verifies claims.",
+		Description: "Run a bounded read-only team, swarm, or application-level MoE of tool-free profiles. Guaranteed built-ins are architect, critic, explorer, generalist, and verifier; the host may expose more. Use for explicit expert requests or hard decisions needing distinct perspectives; omit experts for automatic selection unless exact profile names were supplied, never invent personas, and have the parent verify claims.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -348,13 +348,13 @@ func ConsultExpertsToolDef() llm.ToolDef {
 					"type":        "array",
 					"items":       map[string]any{"type": "string", "minLength": 1, "maxLength": 128},
 					"maxItems":    16,
-					"description": "Optional exact profiles: team exact, swarm seeds, moe fallback.",
+					"description": "Optional exact host-provided profile names: team exact, swarm seeds, moe fallback. Guaranteed built-ins are architect, critic, explorer, generalist, and verifier; the host may expose more. Omit this field for automatic selection; never invent profile names or role descriptions.",
 				},
 				"model": map[string]any{
 					"type":        "string",
 					"minLength":   1,
 					"maxLength":   256,
-					"description": "Optional exact default model; host inventory, consent, and resource policy still apply.",
+					"description": "Optional exact model from the active Ollama inventory, not a provider profile or arbitrary remote model; host inventory, consent, and resource policy still apply. Omit to inherit profile/current-model routing.",
 				},
 				"model_overrides": map[string]any{
 					"type":     "array",

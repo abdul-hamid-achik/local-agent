@@ -177,6 +177,33 @@ func TestCapabilityHintDescribesHitspecCaptureAsDurableFileCheapStash(t *testing
 	}
 }
 
+func TestCapabilityHintRecognizesMCPHubCleanHitspecNames(t *testing.T) {
+	agent := New(nil, nil, 0)
+	agent.SetModeContext("test", BuildToolPolicy())
+	activity := CapabilityActivity{DesiredOutcome: "Public web research without persistence"}
+	hint := capabilityadvisor.Hint{
+		Namespaced: "hitspec__search_web", Server: "hitspec", Tool: "search_web",
+	}
+	got := agent.formatCapabilityHint(activity, hint)
+	if !strings.Contains(got, "returns non-persisted discovery candidates") {
+		t.Fatalf("clean Hitspec search hint lost host contract:\n%s", got)
+	}
+
+	ambiguous := hint
+	ambiguous.Namespaced = "hitspec__capture_webpage"
+	ambiguous.Tool = "capture_webpage"
+	ambiguous.Alternatives = []string{"hitspec__fetch", "hitspec__search_web"}
+	ambiguous.Ambiguous = true
+	got = agent.formatCapabilityHint(activity, ambiguous)
+	for _, expected := range []string{
+		"persists rendered Markdown", "returns bounded content inline", "non-persisted discovery candidates",
+	} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("clean ambiguous Hitspec hint missing %q:\n%s", expected, got)
+		}
+	}
+}
+
 func TestAmbiguousHitspecWebRouteExplainsContractsWithoutSelectingCandidate(t *testing.T) {
 	activity := CapabilityActivity{DesiredOutcome: "A readable durable Markdown artifact"}
 	hint := capabilityadvisor.Hint{
