@@ -18,9 +18,158 @@ func projectFileCheapReceipt(operation string, receipt RawReceipt) (DomainState,
 		return domain, evidence, nil, recognized
 	case "fcheap_artifact_ref", "filecheap_artifact_ref":
 		return projectFileCheapArtifactRefReceipt(document)
+	case "fcheap_list", "filecheap_list":
+		domain, evidence, recognized := projectFileCheapListReceipt(document)
+		return domain, evidence, nil, recognized
+	case "fcheap_info", "filecheap_info":
+		domain, evidence, recognized := projectFileCheapInfoReceipt(document)
+		return domain, evidence, nil, recognized
+	case "fcheap_analyze", "filecheap_analyze":
+		domain, evidence, recognized := projectFileCheapAnalyzeReceipt(document)
+		return domain, evidence, nil, recognized
+	case "fcheap_drop", "filecheap_drop":
+		domain, evidence, recognized := projectFileCheapDropReceipt(document)
+		return domain, evidence, nil, recognized
+	case "fcheap_ttl", "filecheap_ttl":
+		domain, evidence, recognized := projectFileCheapTTLReceipt(document)
+		return domain, evidence, nil, recognized
 	default:
 		return "", EvidenceNone, nil, false
 	}
+}
+
+// projectFileCheapListReceipt recognizes the wrapped stash-summary listing.
+// Every entry must carry a valid identity and bounded metrics; a single
+// malformed entry invalidates the whole receipt rather than a partial parse.
+func projectFileCheapListReceipt(document json.RawMessage) (DomainState, EvidenceState, bool) {
+	var output struct {
+		Result json.RawMessage `json:"result"`
+		Error  json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal(document, &output) != nil {
+		return "", EvidenceNone, false
+	}
+	if rawJSONPresent(output.Error) {
+		return DomainFailed, EvidenceNone, true
+	}
+	if !jsonKind(output.Result, '[') {
+		return "", EvidenceNone, false
+	}
+	var entries []struct {
+		ID        string `json:"id"`
+		FileCount *int64 `json:"file_count"`
+		TotalSize *int64 `json:"total_size"`
+		CreatedAt string `json:"created_at"`
+	}
+	if json.Unmarshal(output.Result, &entries) != nil {
+		return "", EvidenceNone, false
+	}
+	for _, entry := range entries {
+		if !validFileCheapStashID(entry.ID) || entry.FileCount == nil || !validProjectionMetric(*entry.FileCount) ||
+			entry.TotalSize == nil || !validProjectionMetric(*entry.TotalSize) || entry.CreatedAt == "" {
+			return "", EvidenceNone, false
+		}
+	}
+	return DomainSucceeded, EvidenceSupported, true
+}
+
+// projectFileCheapInfoReceipt recognizes the manifest document fcheap_info
+// returns directly, under the same contract pins as the save receipt.
+func projectFileCheapInfoReceipt(document json.RawMessage) (DomainState, EvidenceState, bool) {
+	var output fileCheapManifest
+	if json.Unmarshal(document, &output) != nil {
+		return "", EvidenceNone, false
+	}
+	if output.SchemaVersion != fileCheapManifestSchema || !validFileCheapStashID(output.ID) ||
+		output.CreatedAt == "" || output.FileCount == nil || !validProjectionMetric(*output.FileCount) ||
+		output.TotalSize == nil || !validProjectionMetric(*output.TotalSize) || !validLowerSHA256(output.ContentHash) {
+		return "", EvidenceNone, false
+	}
+	return DomainSucceeded, EvidenceSupported, true
+}
+
+// projectFileCheapAnalyzeReceipt recognizes the indexing receipt. Search is
+// explicitly best-effort: a search_error keeps the successfully indexed stash
+// at attention instead of unknown.
+func projectFileCheapAnalyzeReceipt(document json.RawMessage) (DomainState, EvidenceState, bool) {
+	var output struct {
+		StashID      string          `json:"stash_id"`
+		Status       string          `json:"status"`
+		BundleType   string          `json:"bundle_type"`
+		FilesIndexed *int64          `json:"files_indexed"`
+		SearchError  json.RawMessage `json:"search_error"`
+		Error        json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal(document, &output) != nil {
+		return "", EvidenceNone, false
+	}
+	if rawJSONPresent(output.Error) {
+		return DomainFailed, EvidenceNone, true
+	}
+	if output.Status != "indexed" || !validFileCheapStashID(output.StashID) ||
+		strings.TrimSpace(output.BundleType) == "" || output.FilesIndexed == nil ||
+		!validProjectionMetric(*output.FilesIndexed) {
+		return "", EvidenceNone, false
+	}
+	if rawJSONPresent(output.SearchError) {
+		return DomainAttention, EvidenceSupported, true
+	}
+	return DomainSucceeded, EvidenceSupported, true
+}
+
+// projectFileCheapDropReceipt recognizes the deletion receipt. Residual
+// per-stage failures (for example a surviving search index) surface as
+// attention so cleanup is never silently partial.
+func projectFileCheapDropReceipt(document json.RawMessage) (DomainState, EvidenceState, bool) {
+	var output struct {
+		StashID string          `json:"stash_id"`
+		Status  string          `json:"status"`
+		Failed  json.RawMessage `json:"failed"`
+		Error   json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal(document, &output) != nil {
+		return "", EvidenceNone, false
+	}
+	if rawJSONPresent(output.Error) {
+		return DomainFailed, EvidenceNone, true
+	}
+	if !validFileCheapStashID(output.StashID) || !jsonKind(output.Failed, '[') {
+		return "", EvidenceNone, false
+	}
+	failures := rawJSONArrayLen(output.Failed)
+	switch output.Status {
+	case "dropped":
+		if failures != 0 {
+			return "", EvidenceNone, false
+		}
+		return DomainSucceeded, EvidenceSupported, true
+	case "dropped_with_failures":
+		if failures == 0 {
+			return "", EvidenceNone, false
+		}
+		return DomainAttention, EvidenceSupported, true
+	default:
+		return "", EvidenceNone, false
+	}
+}
+
+// projectFileCheapTTLReceipt recognizes the expiry receipt; an empty
+// expires_at is a valid cleared TTL, so only the key's presence is required.
+func projectFileCheapTTLReceipt(document json.RawMessage) (DomainState, EvidenceState, bool) {
+	var output struct {
+		StashID string          `json:"stash_id"`
+		Error   json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal(document, &output) != nil {
+		return "", EvidenceNone, false
+	}
+	if rawJSONPresent(output.Error) {
+		return DomainFailed, EvidenceNone, true
+	}
+	if !validFileCheapStashID(output.StashID) || !jsonObjectHasKey(document, "expires_at") {
+		return "", EvidenceNone, false
+	}
+	return DomainSucceeded, EvidenceSupported, true
 }
 
 // artifactRefEnvelope is the exact ArtifactRefV1 wire shape

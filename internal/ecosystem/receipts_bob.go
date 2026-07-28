@@ -233,8 +233,80 @@ func validBobRecipeRef(raw json.RawMessage) (string, bool) {
 		// registry-seam regression test on Bob's side.
 		return recipe.ID, recipe.Version == 3 || recipe.Version == 4 || recipe.Version == 5
 	default:
+		if _, stack := bobStackRecipeRuntimes[recipe.ID]; stack {
+			minVersion := 1
+			if bobStackRecipesV2Only[recipe.ID] {
+				minVersion = 2
+			}
+			return recipe.ID, recipe.Version >= minVersion && recipe.Version <= 2
+		}
 		return recipe.ID, false
 	}
+}
+
+// bobStackRecipeRuntimes mirrors Bob's closed per-recipe runtime contract
+// (manifest.stackRecipeRuntimes). Stack hygiene recipes share one manifest
+// shape; only the admitted language/kind pairs differ.
+var bobStackRecipeRuntimes = map[string]struct {
+	languages []string
+	kinds     []string
+}{
+	"ts-app":        {[]string{"typescript"}, []string{"app", "monorepo"}},
+	"js-app":        {[]string{"javascript"}, []string{"app", "monorepo"}},
+	"vue-app":       {[]string{"typescript", "javascript"}, []string{"web-app"}},
+	"python-app":    {[]string{"python"}, []string{"app"}},
+	"ruby-app":      {[]string{"ruby"}, []string{"app", "gem"}},
+	"lua-lib":       {[]string{"lua"}, []string{"lib", "plugin"}},
+	"rust-cli":      {[]string{"rust"}, []string{"cli", "lib", "workspace"}},
+	"swift-package": {[]string{"swift"}, []string{"package"}},
+	"elixir-app":    {[]string{"elixir"}, []string{"app", "umbrella"}},
+	"static-web":    {[]string{"html"}, []string{"site"}},
+}
+
+// bobStackRecipesV2Only lists the stacks introduced with contract version 2;
+// the other stack recipes remain renderable at their published version 1.
+var bobStackRecipesV2Only = map[string]bool{
+	"swift-package": true,
+	"elixir-app":    true,
+}
+
+func isBobStackRecipe(recipeID string) bool {
+	_, ok := bobStackRecipeRuntimes[recipeID]
+	return ok
+}
+
+func bobJavaScriptFamilyRecipe(recipeID string) bool {
+	return recipeID == "ts-app" || recipeID == "js-app" || recipeID == "vue-app"
+}
+
+// validBobStackRuntime enforces the recipe's closed language/kind contract.
+// package_manager is admitted only for the JavaScript-family recipes and only
+// from Bob's closed manager set.
+func validBobStackRuntime(recipeID string, raw json.RawMessage) bool {
+	runtime, ok := bobStackRecipeRuntimes[recipeID]
+	if !ok || !jsonObjectHasKey(raw, "language") || !jsonObjectHasKey(raw, "kind") {
+		return false
+	}
+	var value struct {
+		Language       string `json:"language"`
+		Kind           string `json:"kind"`
+		PackageManager string `json:"package_manager"`
+	}
+	if json.Unmarshal(raw, &value) != nil ||
+		!oneOf(value.Language, runtime.languages...) || !oneOf(value.Kind, runtime.kinds...) {
+		return false
+	}
+	if bobJavaScriptFamilyRecipe(recipeID) {
+		return oneOf(value.PackageManager, "", "bun", "npm", "pnpm", "yarn")
+	}
+	return value.PackageManager == ""
+}
+
+// validBobStackDistribution admits only the github_actions toggle: stack
+// hygiene never distributes through goreleaser/homebrew and has no docs site.
+func validBobStackDistribution(raw json.RawMessage) bool {
+	value, ok := decodeBobManifestDistribution(raw)
+	return ok && !*value.GoReleaser && !*value.Homebrew && (value.Docs == "" || value.Docs == "none")
 }
 
 // validBobQualifiedPlanDigest accepts the additive qualified digest only when
@@ -571,7 +643,7 @@ func validBobManifest(raw json.RawMessage, expectedRecipe string) bool {
 		Files         json.RawMessage `json:"files"`
 	}
 	if json.Unmarshal(raw, &manifest) != nil || manifest.SchemaVersion != 1 || manifest.Recipe != expectedRecipe ||
-		(expectedRecipe != "files" && expectedRecipe != "go-agent-tool") ||
+		(expectedRecipe != "files" && expectedRecipe != "go-agent-tool" && !isBobStackRecipe(expectedRecipe)) ||
 		!validBobProduct(manifest.Product, expectedRecipe) || !jsonKind(manifest.Runtime, '{') ||
 		!jsonKind(manifest.Surfaces, '{') || !jsonKind(manifest.Integrations, '{') ||
 		!jsonKind(manifest.Distribution, '{') {
@@ -580,6 +652,11 @@ func validBobManifest(raw json.RawMessage, expectedRecipe string) bool {
 	if expectedRecipe == "go-agent-tool" {
 		return validBobGoRuntime(manifest.Runtime) && validBobGoSurfaces(manifest.Surfaces) &&
 			validBobGoIntegrations(manifest.Integrations) && validBobGoDistribution(manifest.Distribution, manifest.Product) &&
+			!jsonObjectHasKey(raw, "vars") && !jsonObjectHasKey(raw, "files")
+	}
+	if isBobStackRecipe(expectedRecipe) {
+		return validBobStackRuntime(expectedRecipe, manifest.Runtime) && validBobZeroSurfaces(manifest.Surfaces) &&
+			validBobZeroIntegrations(manifest.Integrations) && validBobStackDistribution(manifest.Distribution) &&
 			!jsonObjectHasKey(raw, "vars") && !jsonObjectHasKey(raw, "files")
 	}
 	return validBobZeroRuntime(manifest.Runtime) && validBobZeroSurfaces(manifest.Surfaces) &&
@@ -604,7 +681,8 @@ func validBobProduct(raw json.RawMessage, recipe string) bool {
 		License     string `json:"license"`
 	}
 	if json.Unmarshal(raw, &product) != nil || !validBobProductName(product.Name) ||
-		strings.TrimSpace(product.Description) == "" || !validBobModule(product.Module, recipe == "files") {
+		strings.TrimSpace(product.Description) == "" ||
+		!validBobModule(product.Module, recipe == "files" || isBobStackRecipe(recipe)) {
 		return false
 	}
 	if recipe == "go-agent-tool" {
