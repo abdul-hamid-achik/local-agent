@@ -30,6 +30,9 @@ var cortexEnvelopeOperations = map[string]bool{
 // untouched. Structurally unrecognized documents report false and stay on the
 // fail-closed unknown path.
 func projectCortexReceipt(operation string, receipt RawReceipt) (DomainState, *ReceiptDigest, bool) {
+	if operation == "cortex_handoff" {
+		return projectCortexHandoffReceipt(receipt)
+	}
 	if !cortexEnvelopeOperations[operation] {
 		return "", nil, false
 	}
@@ -59,6 +62,36 @@ func projectCortexReceipt(operation string, receipt RawReceipt) (DomainState, *R
 		}
 	}
 	return DomainSucceeded, digest, true
+}
+
+// projectCortexHandoffReceipt recognizes the handoff export, which
+// deliberately differs from the shared lifecycle envelope: it is keyed on
+// schemaVersion and carries the exported case's identity, revision, and
+// phase. A handoff is a coordination artifact — proof closure, receipts, and
+// hypotheses stay inside the short-lived parser boundary and never become
+// evidence by export alone.
+func projectCortexHandoffReceipt(receipt RawReceipt) (DomainState, *ReceiptDigest, bool) {
+	document, ok := receiptDocument(receipt)
+	if !ok {
+		return "", nil, false
+	}
+	var envelope struct {
+		SchemaVersion *int   `json:"schemaVersion"`
+		TaskID        string `json:"taskId"`
+		Revision      *int64 `json:"revision"`
+		Phase         string `json:"phase"`
+	}
+	if json.Unmarshal(document, &envelope) != nil ||
+		envelope.SchemaVersion == nil || *envelope.SchemaVersion != 1 {
+		return "", nil, false
+	}
+	taskID := canonicalIdentifier(envelope.TaskID)
+	phase := canonicalIdentifier(envelope.Phase)
+	if taskID == "" || taskID != envelope.TaskID || phase == "" ||
+		envelope.Revision == nil || *envelope.Revision < 0 {
+		return "", nil, false
+	}
+	return DomainSucceeded, &ReceiptDigest{Kind: DigestCortexReceipt, Target: taskID, Items: []string{phase}}, true
 }
 
 // projectCortexFailureReceipt recognizes only the shared, explicit rejection

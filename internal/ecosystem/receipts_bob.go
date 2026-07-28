@@ -17,6 +17,7 @@ type bobMCPReceipt struct {
 	LockChanged           *bool           `json:"lock_changed"`
 	ConflictCount         *int            `json:"conflict_count"`
 	PlanDigest            string          `json:"plan_digest"`
+	PlanDigestQualified   string          `json:"plan_digest_qualified"`
 	Authority             json.RawMessage `json:"authority"`
 	Report                json.RawMessage `json:"report"`
 	Counts                json.RawMessage `json:"counts"`
@@ -127,7 +128,8 @@ func validBobMCPSuccess(operation string, document json.RawMessage, output bobMC
 
 func validBobPlanFields(document json.RawMessage, output bobMCPReceipt, requireActions bool) bool {
 	if output.Clean == nil || output.LockChanged == nil || output.ConflictCount == nil || *output.ConflictCount < 0 ||
-		!validLowerHexDigest(output.PlanDigest) || !jsonKind(output.Warnings, '[') || !jsonKind(output.NextActions, '[') {
+		!validLowerHexDigest(output.PlanDigest) || !jsonKind(output.Warnings, '[') || !jsonKind(output.NextActions, '[') ||
+		!validBobQualifiedPlanDigest(output.PlanDigestQualified, output.PlanDigest) {
 		return false
 	}
 	counts, ok := validBobActionCounts(output.Counts)
@@ -227,10 +229,23 @@ func validBobRecipeRef(raw json.RawMessage) (string, bool) {
 	case "files":
 		return recipe.ID, recipe.Version == 1
 	case "go-agent-tool":
-		return recipe.ID, recipe.Version == 3 || recipe.Version == 4
+		// v5 kept the v4 manifest body; the bump only added a generated
+		// registry-seam regression test on Bob's side.
+		return recipe.ID, recipe.Version == 3 || recipe.Version == 4 || recipe.Version == 5
 	default:
 		return recipe.ID, false
 	}
+}
+
+// validBobQualifiedPlanDigest accepts the additive qualified digest only when
+// it is exactly the sha256-prefixed spelling of the raw plan digest, so the
+// value Bob recommends copying into `bob apply --expect-plan-digest` can
+// never disagree with the legacy field.
+func validBobQualifiedPlanDigest(qualified, digest string) bool {
+	if qualified == "" {
+		return true
+	}
+	return qualified == "sha256:"+digest
 }
 
 type bobActionCountValues struct {

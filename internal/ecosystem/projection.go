@@ -100,6 +100,7 @@ const (
 	DigestMCPHubUnavailable      ReceiptDigestKind = "mcphub_unavailable"
 	DigestMCPHubCursorOutOfRange ReceiptDigestKind = "mcphub_cursor_out_of_range"
 	DigestMCPHubError            ReceiptDigestKind = "mcphub_error"
+	DigestMCPHubDetached         ReceiptDigestKind = "mcphub_detached"
 	DigestHitspecSearch          ReceiptDigestKind = "hitspec_search"
 	DigestCortexFailure          ReceiptDigestKind = "cortex_failure"
 	DigestCortexReceipt          ReceiptDigestKind = "cortex_receipt"
@@ -1179,7 +1180,7 @@ func validReceiptDigestKind(value ReceiptDigestKind) bool {
 	case "", DigestMCPHubServers, DigestMCPHubSearch, DigestMCPHubDescribe,
 		DigestMCPHubResolve, DigestMCPHubStats, DigestMCPHubStored,
 		DigestMCPHubPage, DigestMCPHubUnavailable,
-		DigestMCPHubCursorOutOfRange, DigestMCPHubError, DigestHitspecSearch, DigestCortexFailure,
+		DigestMCPHubCursorOutOfRange, DigestMCPHubError, DigestMCPHubDetached, DigestHitspecSearch, DigestCortexFailure,
 		DigestCortexReceipt, DigestBobContext, DigestBobPath, DigestBobPlaybook, DigestBobFailure:
 		return true
 	default:

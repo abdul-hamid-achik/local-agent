@@ -41,6 +41,9 @@ func projectMCPHubReceipt(projection ToolProjection, receipt RawReceipt) (ToolPr
 	if projected, stored := projectMCPHubStoredReceipt(projection, document); stored {
 		return projected, true
 	}
+	if projected, detached := projectMCPHubDetachedReceipt(projection, document); detached {
+		return projected, true
+	}
 	if !isMCPHubManagementOperation(projection.Operation) || !exactMCPHubManagementRoute(projection) {
 		return projection, false
 	}
@@ -132,6 +135,68 @@ func projectMCPHubStoredReceipt(projection ToolProjection, document json.RawMess
 		Kind: DigestMCPHubStored, OriginalBytes: envelope.OriginalBytes, BudgetBytes: envelope.BudgetBytes,
 	}
 	return projection.Normalize(), true
+}
+
+// projectMCPHubDetachedReceipt recognizes the detached-call lifecycle:
+// acceptance on the gateway route and the poll states on the management
+// route. Detached work is durably pending — never success — until its
+// finalized downstream result is collected and parsed under the downstream
+// tool's own contract.
+func projectMCPHubDetachedReceipt(projection ToolProjection, document json.RawMessage) (ToolProjection, bool) {
+	var envelope struct {
+		Status     string          `json:"status"`
+		CallID     string          `json:"callId"`
+		Namespaced string          `json:"namespaced"`
+		TimeoutMS  *int64          `json:"timeoutMs"`
+		ElapsedMS  *int64          `json:"elapsedMs"`
+		Reason     string          `json:"reason"`
+		Error      json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal(document, &envelope) != nil {
+		return projection, false
+	}
+	callID := canonicalIdentifier(envelope.CallID)
+	if callID == "" || callID != envelope.CallID {
+		return projection, false
+	}
+	settle := func(domain DomainState, state string) (ToolProjection, bool) {
+		projection.Route.CallID = callID
+		projection.Domain = domain
+		projection.Evidence = EvidenceNone
+		projection.Digest = &ReceiptDigest{Kind: DigestMCPHubDetached, State: state}
+		return projection.Normalize(), true
+	}
+	switch envelope.Status {
+	case "accepted":
+		// Acceptance is emitted by mcphub_call_tool with detach=true and is
+		// only trusted on the exact gateway route.
+		if projection.Route.Gateway != "mcphub" || envelope.TimeoutMS == nil || *envelope.TimeoutMS <= 0 {
+			return projection, false
+		}
+		return settle(DomainPending, "accepted")
+	case "pending":
+		if projection.Operation != "mcphub_poll_result" || !exactMCPHubManagementRoute(projection) ||
+			envelope.ElapsedMS == nil || *envelope.ElapsedMS < 0 {
+			return projection, false
+		}
+		return settle(DomainPending, "pending")
+	case "failed":
+		if projection.Operation != "mcphub_poll_result" || !exactMCPHubManagementRoute(projection) ||
+			!rawJSONPresent(envelope.Error) {
+			return projection, false
+		}
+		return settle(DomainFailed, "failed")
+	case "unknown":
+		// The gateway no longer knows this call: the outcome is genuinely
+		// unresolved and needs attention, not a silent retry.
+		if projection.Operation != "mcphub_poll_result" || !exactMCPHubManagementRoute(projection) ||
+			strings.TrimSpace(envelope.Reason) == "" {
+			return projection, false
+		}
+		return settle(DomainAttention, "unknown")
+	default:
+		return projection, false
+	}
 }
 
 func projectMCPHubResultPage(projection ToolProjection, document json.RawMessage) ToolProjection {
