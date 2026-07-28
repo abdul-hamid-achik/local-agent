@@ -435,11 +435,13 @@ func ProjectReceipt(projection ToolProjection, receipt RawReceipt) ToolProjectio
 			projection.Domain, projection.Evidence = DomainUnknown, EvidenceNone
 		}
 	case "monitor":
-		if domain, evidence, ok := projectMonitorReceipt(projection.Operation, receipt); ok {
+		if domain, evidence, artifact, ok := projectMonitorReceipt(projection.Operation, receipt); ok {
 			projection.Domain, projection.Evidence = domain, evidence
+			projection.Artifact = artifact
 			projection.DomainTyped = true
 		} else {
 			projection.Domain, projection.Evidence = DomainUnknown, EvidenceNone
+			projection.Artifact = nil
 		}
 	case "vidtrace":
 		if domain, evidence, ok := projectVidtraceReceipt(projection.Operation, receipt); ok {
@@ -1035,14 +1037,25 @@ func (p ToolProjection) Normalize() ToolProjection {
 	if p.Artifact != nil {
 		artifact := normalizeArtifactDigest(*p.Artifact)
 		baseContext := artifact.Kind != "" && p.Transport == TransportSucceeded &&
-			(p.Domain == DomainSucceeded || p.Domain == DomainAttention) &&
-			p.Evidence == EvidenceSupported && p.Role == RoleArtifact
+			(p.Domain == DomainSucceeded || p.Domain == DomainAttention)
+		strictArtifactEvidence := p.Evidence == EvidenceSupported && p.Role == RoleArtifact
 		fileCheapContext := artifact.Kind == ArtifactDigestFileCheapStash &&
+			strictArtifactEvidence &&
 			(p.Specialist == "filecheap" || p.Specialist == "fcheap") &&
 			(p.Operation == "fcheap_save" || p.Operation == "filecheap_save")
 		hitspecContext := artifact.Kind == ArtifactDigestHitspecCapture && p.Specialist == "hitspec" &&
-			isHitspecCaptureOperation(p.Operation)
-		validContext := baseContext && (fileCheapContext || hitspecContext)
+			strictArtifactEvidence && isHitspecCaptureOperation(p.Operation)
+		// Portable ArtifactRefV1 digests come from two typed sources: the
+		// fcheap_artifact_ref emitter (RoleArtifact; cloud/link refs carry no
+		// local evidence) and a completed monitor investigation that stashed
+		// its incident bundle (RoleObservability).
+		portableRefContext := artifact.Kind == ArtifactDigestPortableRef && p.DomainTyped &&
+			(((p.Specialist == "filecheap" || p.Specialist == "fcheap") && p.Role == RoleArtifact &&
+				(p.Operation == "fcheap_artifact_ref" || p.Operation == "filecheap_artifact_ref") &&
+				(p.Evidence == EvidenceSupported || p.Evidence == EvidenceNone)) ||
+				(p.Specialist == "monitor" && p.Role == RoleObservability &&
+					p.Operation == "monitor_investigate" && p.Evidence == EvidenceSupported))
+		validContext := baseContext && (fileCheapContext || hitspecContext || portableRefContext)
 		if !validContext {
 			p.Artifact = nil
 		} else {

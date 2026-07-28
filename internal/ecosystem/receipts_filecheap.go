@@ -16,9 +16,93 @@ func projectFileCheapReceipt(operation string, receipt RawReceipt) (DomainState,
 	case "fcheap_restore", "filecheap_restore":
 		domain, evidence, recognized := projectFileCheapRestoreReceipt(document, receipt.ToolError)
 		return domain, evidence, nil, recognized
+	case "fcheap_artifact_ref", "filecheap_artifact_ref":
+		return projectFileCheapArtifactRefReceipt(document)
 	default:
 		return "", EvidenceNone, nil, false
 	}
+}
+
+// artifactRefEnvelope is the exact ArtifactRefV1 wire shape
+// (urn:filecheap.dev:artifact-ref:v1). Producer metadata and URIs are
+// validated for shape and then discarded; only the bounded digest survives.
+type artifactRefEnvelope struct {
+	Schema     string          `json:"$schema"`
+	Version    *int            `json:"version"`
+	Provider   string          `json:"provider"`
+	URI        string          `json:"uri"`
+	ArtifactID string          `json:"artifact_id"`
+	Kind       string          `json:"kind"`
+	Producer   json.RawMessage `json:"producer"`
+	WebURL     string          `json:"web_url"`
+	Error      json.RawMessage `json:"error"`
+}
+
+// artifactDigestFromRef validates one ArtifactRefV1 document and projects it
+// to the bounded portable digest. Unknown schemas, versions, providers, or
+// malformed identities yield no digest — never a partial one.
+func artifactDigestFromRef(document json.RawMessage) (*ArtifactDigest, bool) {
+	var ref artifactRefEnvelope
+	if json.Unmarshal(document, &ref) != nil {
+		return nil, false
+	}
+	if ref.Schema != artifactRefSchemaURI || ref.Version == nil || *ref.Version != 1 {
+		return nil, false
+	}
+	if strings.TrimSpace(ref.URI) == "" || len(ref.URI) > 2048 {
+		return nil, false
+	}
+	if rawJSONPresent(ref.Producer) && !jsonKind(ref.Producer, '{') {
+		return nil, false
+	}
+	switch ref.Provider {
+	case artifactRefProviderLocal:
+		// The contract binds the local URI to the artifact identity exactly.
+		if ref.WebURL != "" || ref.URI != fileCheapStashURI(ref.ArtifactID) {
+			return nil, false
+		}
+	case artifactRefProviderCloud:
+		if ref.ArtifactID == "" {
+			return nil, false
+		}
+	case artifactRefProviderLink:
+		if ref.ArtifactID != "" || ref.WebURL != "" {
+			return nil, false
+		}
+	default:
+		return nil, false
+	}
+	digest := normalizeArtifactDigest(ArtifactDigest{
+		Kind:          ArtifactDigestPortableRef,
+		ID:            ref.ArtifactID,
+		SchemaVersion: artifactRefSchemaURI,
+		Provider:      ref.Provider,
+		RefKind:       ref.Kind,
+	})
+	if digest.Kind == "" {
+		return nil, false
+	}
+	return &digest, true
+}
+
+func projectFileCheapArtifactRefReceipt(document json.RawMessage) (DomainState, EvidenceState, *ArtifactDigest, bool) {
+	var envelope artifactRefEnvelope
+	if json.Unmarshal(document, &envelope) != nil {
+		return "", EvidenceNone, nil, false
+	}
+	if rawJSONPresent(envelope.Error) {
+		return DomainFailed, EvidenceNone, nil, true
+	}
+	digest, ok := artifactDigestFromRef(document)
+	if !ok {
+		return "", EvidenceNone, nil, false
+	}
+	// A local reference is backed by a stash the emitting tool just resolved;
+	// cloud and link references cannot be corroborated on this host.
+	if digest.Provider == artifactRefProviderLocal {
+		return DomainSucceeded, EvidenceSupported, digest, true
+	}
+	return DomainSucceeded, EvidenceNone, digest, true
 }
 
 type fileCheapSaveEnvelope struct {
