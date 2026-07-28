@@ -103,6 +103,19 @@ func run() int {
 		fmt.Fprintln(os.Stderr, "tools: --tools requires a headless prompt via -p/--prompt")
 		return 2
 	}
+	if options.jsonReceipt && !promptProvided {
+		fmt.Fprintln(os.Stderr, "json: --json requires a headless prompt via -p/--prompt")
+		return 2
+	}
+	if (options.runID != "" || options.turnID != "" || options.actor != "") && !promptProvided {
+		fmt.Fprintln(os.Stderr, "identity: --run-id, --turn-id, and --actor require a headless prompt via -p/--prompt")
+		return 2
+	}
+	externalRunID, externalTurnID, externalActor, err := resolveExternalTurnIdentity(options)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "identity: %v\n", err)
+		return 2
+	}
 	resumeSelector, resumeRequested, err := resumeFlag.selector()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "resume: %v\n", err)
@@ -529,6 +542,12 @@ func run() int {
 		// the TUI; it is independent from the --skip-approvals posture.
 		ag.SetModeContext(modeConfig.SystemPromptPrefix, modeConfig.ToolPolicy)
 		ag.SetAuthorityMode(headlessAuthorityMode(headlessMode))
+		if externalRunID != "" {
+			if err := ag.SetExecutionRunID(externalRunID); err != nil {
+				fmt.Fprintf(os.Stderr, "run-id: %v\n", err)
+				return 2
+			}
+		}
 		if workspace == "" {
 			fmt.Fprintln(os.Stderr, "local-agent: workspace identity is unavailable; refusing to start a headless turn")
 			return 1
@@ -581,13 +600,23 @@ func run() int {
 		ag.SetExecutionSessionID(session.ID, session.PublicID)
 		ag.SetExecutionSnapshotCursor(executionCursor)
 
-		// Run the agent synchronously.
-		out := agent.NewHeadlessOutput()
+		// Run the agent synchronously. The goal admission, the execution ledger,
+		// and the emitted receipt share one exact turn identity.
+		var out headlessTurnOutput = agent.NewHeadlessOutput()
+		var jsonOut *agent.JSONOutput
+		if options.jsonReceipt {
+			jsonOut = agent.NewJSONOutput()
+			out = jsonOut
+		}
+		headlessTurnID := externalTurnID
 		if goalRuntime != nil {
-			turnID, idErr := goal.NewGoalID()
-			if idErr != nil {
-				fmt.Fprintf(os.Stderr, "goal run: create turn identity: %v\n", idErr)
-				return 1
+			if headlessTurnID == "" {
+				goalTurnID, idErr := goal.NewGoalID()
+				if idErr != nil {
+					fmt.Fprintf(os.Stderr, "goal run: create turn identity: %v\n", idErr)
+					return 1
+				}
+				headlessTurnID = "turn_" + goalTurnID
 			}
 			admission := goal.AdmissionManual
 			snapshot, snapshotErr := goalRuntime.Snapshot(ctx)
@@ -609,10 +638,18 @@ func run() int {
 			if snapshot.LastTurn == nil {
 				admission = goal.AdmissionInitial
 			}
-			if _, err := goalRuntime.BeginTurn(ctx, "turn_"+turnID, admission); err != nil {
+			if _, err := goalRuntime.BeginTurn(ctx, headlessTurnID, admission); err != nil {
 				fmt.Fprintf(os.Stderr, "goal run: admit turn: %v\n", err)
 				return 1
 			}
+		}
+		if headlessTurnID == "" {
+			mintedTurnID, idErr := executionpkg.NewTurnID()
+			if idErr != nil {
+				fmt.Fprintf(os.Stderr, "local-agent: execution turn identity: %v\n", idErr)
+				return 1
+			}
+			headlessTurnID = mintedTurnID
 		}
 		ag.AddUserMessage(promptFlag)
 		persistHeadlessState := func(saveCtx context.Context, executionCursor int64) error {
@@ -674,7 +711,7 @@ func run() int {
 			}
 			return 1
 		}
-		runErr := ag.Run(ctx, out)
+		runErr := ag.RunTurn(ctx, out, headlessTurnID)
 		if goalRuntime != nil {
 			pending, snapshotErr := goalRuntime.Snapshot(context.Background())
 			if snapshotErr != nil {
@@ -704,6 +741,40 @@ func run() int {
 		saveErr := persistHeadlessState(saveCtx, finalCursor)
 		cancelSave()
 		saveErr = errors.Join(cursorErr, saveErr)
+		if jsonOut != nil {
+			receiptCtx, cancelReceipt := context.WithTimeout(context.Background(), 2*time.Second)
+			pendingRecoveries, pendingErr := headlessPendingRecoveryCount(receiptCtx, dbStore, session.ID, workspace, executionCursor)
+			cancelReceipt()
+			if pendingErr != nil {
+				fmt.Fprintf(os.Stderr, "local-agent: inspect pending recoveries: %v\n", pendingErr)
+			}
+			status, stopReason := agent.TurnOutcome(runErr)
+			receipt := agent.TurnReceipt{
+				RunID:  ag.ExecutionRunID(),
+				TurnID: headlessTurnID,
+				Actor:  externalActor,
+				Session: &agent.TurnReceiptSession{
+					ID: session.ID, PublicID: session.PublicID, Workspace: workspace,
+				},
+				Model: agent.TurnReceiptModel{
+					Name:     modelName,
+					NumCtx:   ag.NumCtx(),
+					Provider: modelManager.ActiveProviderName(),
+					Remote:   modelManager.RemoteProvider(),
+				},
+				Status:               status,
+				StopReason:           stopReason,
+				Error:                boundedReceiptError(runErr),
+				ExecutionCursor:      finalCursor,
+				PendingRecoveryCount: pendingRecoveries,
+			}
+			if err := agent.WriteTurnReceipt(os.Stdout, jsonOut.ComposeReceipt(receipt)); err != nil {
+				fmt.Fprintf(os.Stderr, "local-agent: %v\n", err)
+				if runErr == nil && saveErr == nil {
+					return 1
+				}
+			}
+		}
 		if runErr != nil {
 			if saveErr != nil {
 				fmt.Fprintf(os.Stderr, "local-agent: save execution session after failure: %v\n", saveErr)

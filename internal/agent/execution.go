@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/jsonschema-go/jsonschema"
 
@@ -158,6 +159,36 @@ func (a *Agent) SetExecutionSessionID(sessionID int64, publicID string) {
 	}
 	a.executionSessionID = sessionID
 	a.mu.Unlock()
+}
+
+// SetExecutionRunID imports an externally minted run identity for the
+// execution ledger. It is a correlation label with the same shape rules as
+// execution.Identity: any non-empty bounded UTF-8 value is accepted so an
+// orchestration platform can bind this process's ledger rows to its own run
+// records. The label never grants authority and cannot change mid-turn.
+func (a *Agent) SetExecutionRunID(runID string) error {
+	runID = strings.TrimSpace(runID)
+	if runID == "" || len(runID) > executionpkg.MaxRunIDBytes || !utf8.ValidString(runID) {
+		return fmt.Errorf("execution run identity is invalid: a non-empty UTF-8 value of at most %d bytes is required", executionpkg.MaxRunIDBytes)
+	}
+	a.turnMu.Lock()
+	defer a.turnMu.Unlock()
+	if a.turnRunning.Load() {
+		return fmt.Errorf("execution run identity cannot change while a turn is running")
+	}
+	a.mu.Lock()
+	a.executionRunID = runID
+	a.executionRunIDErr = nil
+	a.mu.Unlock()
+	return nil
+}
+
+// ExecutionRunID returns the run identity that stamps this process's
+// execution-ledger rows, whether host-minted or externally imported.
+func (a *Agent) ExecutionRunID() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.executionRunID
 }
 
 // SetExecutionSnapshotCursor identifies the last execution-event row already
