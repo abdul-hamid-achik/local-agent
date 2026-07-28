@@ -434,6 +434,13 @@ func ProjectReceipt(projection ToolProjection, receipt RawReceipt) ToolProjectio
 		} else {
 			projection.Domain, projection.Evidence = DomainUnknown, EvidenceNone
 		}
+	case "vecgrep":
+		if domain, evidence, ok := projectVecgrepReceipt(projection.Operation, receipt); ok {
+			projection.Domain, projection.Evidence = domain, evidence
+			projection.DomainTyped = true
+		} else {
+			projection.Domain, projection.Evidence = DomainUnknown, EvidenceNone
+		}
 	case "monitor":
 		if domain, evidence, artifact, ok := projectMonitorReceipt(projection.Operation, receipt); ok {
 			projection.Domain, projection.Evidence = domain, evidence
