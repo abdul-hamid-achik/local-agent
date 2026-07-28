@@ -571,6 +571,14 @@ func TestGoalRunExecutesAndSettlesDurableTurn(t *testing.T) {
 	if len(state.Messages) < 2 || state.Messages[len(state.Messages)-1].Content != "durable turn complete" {
 		t.Fatalf("persisted messages=%#v", state.Messages)
 	}
+	// Headless turns persist provider accounting like the TUI does.
+	stats, err := store.GetSessionTokenStats(context.Background(), opened.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stats) != 1 || stats[0].EvalCount != 7 || stats[0].PromptTokens != 11 || stats[0].Turn != 1 {
+		t.Fatalf("headless token stats=%#v", stats)
+	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}

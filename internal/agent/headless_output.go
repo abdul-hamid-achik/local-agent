@@ -15,6 +15,7 @@ type HeadlessOutput struct {
 	stderr        io.Writer
 	text          strings.Builder
 	evalTokens    int64
+	promptTokens  int64
 	toolCalls     int64
 	toolSuccesses int64
 }
@@ -51,7 +52,16 @@ func (h *HeadlessOutput) StreamDone(evalCount, promptTokens int) {
 	if evalCount > 0 {
 		h.evalTokens += int64(evalCount)
 	}
+	if promptTokens > 0 {
+		h.promptTokens += int64(promptTokens)
+	}
 	_, _ = fmt.Fprintln(h.stdout)
+}
+
+// TokenUsage returns the accumulated provider token accounting so headless
+// runs can persist per-turn usage exactly like the TUI.
+func (h *HeadlessOutput) TokenUsage() (promptTokens, evalTokens int64) {
+	return h.promptTokens, h.evalTokens
 }
 
 // ToolCallStart writes a brief tool invocation notice to stderr.

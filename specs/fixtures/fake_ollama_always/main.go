@@ -197,7 +197,6 @@ func inspectDurableApproval() durableApprovalState {
 	return state
 }
 
-
 func requestLooksLikeSessionTitle(raw []byte) bool {
 	s := string(raw)
 	return strings.Contains(s, "Reply with ONLY a short session title") ||
@@ -207,7 +206,8 @@ func requestLooksLikeSessionTitle(raw []byte) bool {
 func writeSessionTitleReply(w http.ResponseWriter) {
 	writeNDJSON(w, map[string]any{
 		"message": map[string]any{"role": "assistant", "content": "Fixture session"},
-		"done":    true, "eval_count": 2, "prompt_eval_count": 2,
+		"done":    true, "done_reason": "stop", "eval_count": 2, "prompt_eval_count": 2,
+		"total_duration": 200000000, "load_duration": 10000000, "prompt_eval_duration": 40000000, "eval_duration": 150000000,
 	})
 }
 
@@ -260,7 +260,8 @@ func fixtureHandler(state *fixtureState) http.Handler {
 			state.recordToolReceipt()
 			writeNDJSON(w, map[string]any{
 				"message": map[string]any{"role": "assistant", "content": "Session approval recorded."},
-				"done":    true, "eval_count": 4, "prompt_eval_count": 6,
+				"done":    true, "done_reason": "stop", "eval_count": 4, "prompt_eval_count": 6,
+				"total_duration": 200000000, "load_duration": 10000000, "prompt_eval_duration": 40000000, "eval_duration": 150000000,
 			})
 		case 3:
 			writeToolCall(w, "session-reuse", "session-grant.txt", "session scoped approval")
@@ -271,7 +272,8 @@ func fixtureHandler(state *fixtureState) http.Handler {
 			state.recordToolReceipt()
 			writeNDJSON(w, map[string]any{
 				"message": map[string]any{"role": "assistant", "content": "Session approval reused without another prompt."},
-				"done":    true, "eval_count": 4, "prompt_eval_count": 6,
+				"done":    true, "done_reason": "stop", "eval_count": 4, "prompt_eval_count": 6,
+				"total_duration": 200000000, "load_duration": 10000000, "prompt_eval_duration": 40000000, "eval_duration": 150000000,
 			})
 		case 5:
 			writeToolCall(w, "restart-once", "session-grant.txt", "session scoped approval")
@@ -282,7 +284,8 @@ func fixtureHandler(state *fixtureState) http.Handler {
 			state.recordToolReceipt()
 			writeNDJSON(w, map[string]any{
 				"message": map[string]any{"role": "assistant", "content": "Restart required a fresh approval."},
-				"done":    true, "eval_count": 4, "prompt_eval_count": 6,
+				"done":    true, "done_reason": "stop", "eval_count": 4, "prompt_eval_count": 6,
+				"total_duration": 200000000, "load_duration": 10000000, "prompt_eval_duration": 40000000, "eval_duration": 150000000,
 			})
 		default:
 			state.fail("unexpected chat request %d", call)
@@ -304,7 +307,8 @@ func writeToolCall(w http.ResponseWriter, id, path, content string) {
 				},
 			}},
 		},
-		"done": true, "eval_count": 5, "prompt_eval_count": 7,
+		"done": true, "done_reason": "stop", "eval_count": 5, "prompt_eval_count": 7,
+		"total_duration": 200000000, "load_duration": 10000000, "prompt_eval_duration": 40000000, "eval_duration": 150000000,
 	})
 }
 

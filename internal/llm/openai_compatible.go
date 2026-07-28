@@ -342,6 +342,7 @@ func (c *OpenAICompatibleClient) consumeSSE(ctx context.Context, body io.ReadClo
 		finish := choice.FinishReason
 		if finish == "stop" || finish == "tool_calls" || finish == "length" {
 			chunk.Done = true
+			chunk.FinishReason = finish
 			chunk.ToolCalls = finalizeToolCalls(toolAccum)
 			sawDone = true
 			if event.Usage != nil {

@@ -9,6 +9,7 @@ import (
 	"mime"
 	"path"
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -316,6 +317,18 @@ func validateImageMediaType(value string) (string, error) {
 	return mediaType, nil
 }
 
+// ProviderTiming carries the provider-reported request timings plus the
+// client-measured time to first streamed token. Durations the provider did
+// not report stay zero; consumers must treat zero as "not reported", never
+// as "instant".
+type ProviderTiming struct {
+	TimeToFirstToken   time.Duration
+	TotalDuration      time.Duration
+	LoadDuration       time.Duration
+	PromptEvalDuration time.Duration
+	EvalDuration       time.Duration
+}
+
 // StreamChunk is a piece of a streaming response.
 type StreamChunk struct {
 	Text            string     // incremental text content
@@ -324,6 +337,13 @@ type StreamChunk struct {
 	Done            bool       // true on the last chunk
 	EvalCount       int        // tokens generated (only on Done)
 	PromptEvalCount int        // prompt tokens evaluated (only on Done)
+	// FinishReason is the provider's terminal reason (only on Done): "stop",
+	// "tool_calls", or "length" for a truncated generation. Empty when the
+	// provider did not report one — a truncated response must therefore be
+	// detected by "length", never by the absence of "stop".
+	FinishReason string
+	// Timing is attached to the terminal chunk when any timing fact is known.
+	Timing *ProviderTiming
 }
 
 // ToolCall represents a tool invocation requested by the LLM.

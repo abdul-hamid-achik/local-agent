@@ -797,6 +797,14 @@ func run() int {
 		saveErr := persistHeadlessState(saveCtx, finalCursor)
 		cancelSave()
 		saveErr = errors.Join(cursorErr, saveErr)
+		if runErr == nil {
+			usageCtx, cancelUsage := context.WithTimeout(context.Background(), 2*time.Second)
+			promptTokens, evalTokens := out.TokenUsage()
+			if usageErr := recordHeadlessTokenUsage(usageCtx, dbStore, session.ID, modelName, promptTokens, evalTokens); usageErr != nil {
+				fmt.Fprintf(os.Stderr, "local-agent: record token usage: %v\n", usageErr)
+			}
+			cancelUsage()
+		}
 		if jsonOut != nil {
 			receiptCtx, cancelReceipt := context.WithTimeout(context.Background(), 2*time.Second)
 			pendingRecoveries, pendingErr := headlessPendingRecoveryCount(receiptCtx, dbStore, session.ID, workspace, executionCursor)
@@ -805,6 +813,24 @@ func run() int {
 				fmt.Fprintf(os.Stderr, "local-agent: inspect pending recoveries: %v\n", pendingErr)
 			}
 			status, stopReason := agent.TurnOutcome(runErr)
+			modelCtx, cancelModel := context.WithTimeout(context.Background(), 2*time.Second)
+			modelReceipt := modelManager.CurrentModelReceipt(modelCtx)
+			cancelModel()
+			if modelReceipt.Name == "" {
+				modelReceipt.Name = modelName
+			}
+			receiptModel := agent.TurnReceiptModel{
+				Name:     modelReceipt.Name,
+				Digest:   modelReceipt.Digest,
+				NumCtx:   ag.NumCtx(),
+				Provider: modelReceipt.Provider,
+				Remote:   modelReceipt.Remote,
+			}
+			if modelReceipt.OffloadKnown {
+				receiptModel.Offload = &agent.TurnReceiptModelOffload{
+					VRAMBytes: modelReceipt.VRAMBytes, TotalBytes: modelReceipt.TotalBytes,
+				}
+			}
 			receipt := agent.TurnReceipt{
 				RunID:  ag.ExecutionRunID(),
 				TurnID: headlessTurnID,
@@ -812,12 +838,7 @@ func run() int {
 				Session: &agent.TurnReceiptSession{
 					ID: session.ID, PublicID: session.PublicID, Workspace: workspace,
 				},
-				Model: agent.TurnReceiptModel{
-					Name:     modelName,
-					NumCtx:   ag.NumCtx(),
-					Provider: modelManager.ActiveProviderName(),
-					Remote:   modelManager.RemoteProvider(),
-				},
+				Model:                receiptModel,
 				Status:               status,
 				StopReason:           stopReason,
 				Error:                boundedReceiptError(runErr),

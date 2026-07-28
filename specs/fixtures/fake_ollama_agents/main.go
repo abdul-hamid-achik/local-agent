@@ -193,7 +193,6 @@ func configuredExpertDelay(value string) (time.Duration, error) {
 	return delay, nil
 }
 
-
 func requestLooksLikeSessionTitle(raw []byte) bool {
 	s := string(raw)
 	return strings.Contains(s, "Reply with ONLY a short session title") ||
@@ -203,7 +202,8 @@ func requestLooksLikeSessionTitle(raw []byte) bool {
 func writeSessionTitleReply(w http.ResponseWriter) {
 	writeNDJSON(w, map[string]any{
 		"message": map[string]any{"role": "assistant", "content": "Fixture session"},
-		"done":    true, "eval_count": 2, "prompt_eval_count": 2,
+		"done":    true, "done_reason": "stop", "eval_count": 2, "prompt_eval_count": 2,
+		"total_duration": 200000000, "load_duration": 10000000, "prompt_eval_duration": 40000000, "eval_duration": 150000000,
 	})
 }
 
@@ -308,7 +308,8 @@ func fixtureHandler(state *fixtureState, expertDelay time.Duration) http.Handler
 					"role":    "assistant",
 					"content": "Advisory report: keep the Agent Hub bounded, causal, and honest about unavailable child events.",
 				},
-				"done": true, "eval_count": 11, "prompt_eval_count": 17,
+				"done": true, "done_reason": "stop", "eval_count": 11, "prompt_eval_count": 17,
+				"total_duration": 200000000, "load_duration": 10000000, "prompt_eval_duration": 40000000, "eval_duration": 150000000,
 			})
 		case requestParentFollowup:
 			writeNDJSON(w, map[string]any{
@@ -316,7 +317,8 @@ func fixtureHandler(state *fixtureState, expertDelay time.Duration) http.Handler
 					"role":    "assistant",
 					"content": "The bounded expert consultation completed and remains available in the Agent Hub.",
 				},
-				"done": true, "eval_count": 9, "prompt_eval_count": 19,
+				"done": true, "done_reason": "stop", "eval_count": 9, "prompt_eval_count": 19,
+				"total_duration": 200000000, "load_duration": 10000000, "prompt_eval_duration": 40000000, "eval_duration": 150000000,
 			})
 		}
 	})
@@ -359,7 +361,8 @@ func writeExpertToolCall(w http.ResponseWriter) {
 				},
 			}},
 		},
-		"done": true, "eval_count": 5, "prompt_eval_count": 7,
+		"done": true, "done_reason": "stop", "eval_count": 5, "prompt_eval_count": 7,
+		"total_duration": 200000000, "load_duration": 10000000, "prompt_eval_duration": 40000000, "eval_duration": 150000000,
 	})
 }
 

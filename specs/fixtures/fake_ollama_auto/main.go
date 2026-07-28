@@ -203,7 +203,6 @@ func inspectDurableAuto() durableAutoState {
 	return state
 }
 
-
 func requestLooksLikeSessionTitle(raw []byte) bool {
 	s := string(raw)
 	return strings.Contains(s, "Reply with ONLY a short session title") ||
@@ -213,7 +212,8 @@ func requestLooksLikeSessionTitle(raw []byte) bool {
 func writeSessionTitleReply(w http.ResponseWriter) {
 	writeNDJSON(w, map[string]any{
 		"message": map[string]any{"role": "assistant", "content": "Fixture session"},
-		"done":    true, "eval_count": 2, "prompt_eval_count": 2,
+		"done":    true, "done_reason": "stop", "eval_count": 2, "prompt_eval_count": 2,
+		"total_duration": 200000000, "load_duration": 10000000, "prompt_eval_duration": 40000000, "eval_duration": 150000000,
 	})
 }
 
@@ -284,7 +284,8 @@ func fixtureHandler(state *fixtureState) http.Handler {
 				"message": map[string]any{
 					"role": "assistant", "content": "AUTO completed the safe local check and both exact Minerva queries without interruption.",
 				},
-				"done": true, "eval_count": 5, "prompt_eval_count": 8,
+				"done": true, "done_reason": "stop", "eval_count": 5, "prompt_eval_count": 8,
+				"total_duration": 200000000, "load_duration": 10000000, "prompt_eval_duration": 40000000, "eval_duration": 150000000,
 			})
 		default:
 			state.fail("unexpected chat request %d", call)
@@ -306,7 +307,8 @@ func writeBashCall(w http.ResponseWriter, id, command string) {
 				},
 			}},
 		},
-		"done": true, "eval_count": 5, "prompt_eval_count": 7,
+		"done": true, "done_reason": "stop", "eval_count": 5, "prompt_eval_count": 7,
+		"total_duration": 200000000, "load_duration": 10000000, "prompt_eval_duration": 40000000, "eval_duration": 150000000,
 	})
 }
 

@@ -25,6 +25,28 @@ const maxReceiptErrorBytes = 2048
 type headlessTurnOutput interface {
 	agent.Output
 	GoalTurnStats() (summary string, evalTokens int64, productive bool)
+	TokenUsage() (promptTokens, evalTokens int64)
+}
+
+// recordHeadlessTokenUsage persists the settled turn's provider accounting
+// into the same token_stats projection the TUI maintains, numbering the turn
+// after the rows the session already has.
+func recordHeadlessTokenUsage(ctx context.Context, store *db.Store, sessionID int64, model string, promptTokens, evalTokens int64) error {
+	if promptTokens <= 0 && evalTokens <= 0 {
+		return nil
+	}
+	existing, err := store.GetSessionTokenStats(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	_, err = store.RecordTokenUsage(ctx, db.RecordTokenUsageParams{
+		SessionID:    sessionID,
+		Turn:         int64(len(existing)) + 1,
+		EvalCount:    evalTokens,
+		PromptTokens: promptTokens,
+		Model:        model,
+	})
+	return err
 }
 
 // resolveExternalTurnIdentity merges identity flags with their environment

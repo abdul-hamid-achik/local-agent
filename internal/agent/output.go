@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/expertteam"
+	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 )
 
 // Output is the interface the agent uses to stream results to the UI.
@@ -39,4 +40,12 @@ type Output interface {
 // provider text, prompts, paths, reports, and reasoning.
 type ExpertProgressOutput interface {
 	ExpertProgress(callID string, event expertteam.ProgressEvent)
+}
+
+// ProviderReceiptOutput is an optional output capability for terminal
+// provider receipts: the finish reason ("length" marks a truncated
+// generation) and the provider-reported request timings. It fires once per
+// provider iteration inside a turn.
+type ProviderReceiptOutput interface {
+	ProviderReceipt(finishReason string, timing *llm.ProviderTiming)
 }

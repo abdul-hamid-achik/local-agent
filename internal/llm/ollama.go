@@ -124,9 +124,15 @@ type ollamaChatRequest struct {
 type ollamaChatResponse struct {
 	Message         ollamaMessage `json:"message"`
 	Done            bool          `json:"done"`
+	DoneReason      string        `json:"done_reason,omitempty"`
 	EvalCount       int           `json:"eval_count,omitempty"`
 	PromptEvalCount int           `json:"prompt_eval_count,omitempty"`
-	Error           string        `json:"error,omitempty"`
+	// Durations are nanoseconds, exactly as Ollama's /api/chat reports them.
+	TotalDuration      int64  `json:"total_duration,omitempty"`
+	LoadDuration       int64  `json:"load_duration,omitempty"`
+	PromptEvalDuration int64  `json:"prompt_eval_duration,omitempty"`
+	EvalDuration       int64  `json:"eval_duration,omitempty"`
+	Error              string `json:"error,omitempty"`
 }
 
 type ollamaListResponse struct {
@@ -333,6 +339,8 @@ func (o *OllamaClient) ChatStream(ctx context.Context, opts ChatOptions, fn func
 	}
 
 	sawDone := false
+	requestStart := time.Now()
+	var firstTokenAt time.Time
 	err := o.streamJSON(ctx, "/api/chat", request, func(record []byte) error {
 		var response ollamaChatResponse
 		if err := json.Unmarshal(record, &response); err != nil {
@@ -344,6 +352,9 @@ func (o *OllamaClient) ChatStream(ctx context.Context, opts ChatOptions, fn func
 		if response.Done {
 			sawDone = true
 		}
+		if firstTokenAt.IsZero() && (response.Message.Content != "" || response.Message.Thinking != "") {
+			firstTokenAt = time.Now()
+		}
 
 		chunk := StreamChunk{
 			Text:      response.Message.Content,
@@ -353,6 +364,19 @@ func (o *OllamaClient) ChatStream(ctx context.Context, opts ChatOptions, fn func
 		if response.Done {
 			chunk.EvalCount = response.EvalCount
 			chunk.PromptEvalCount = response.PromptEvalCount
+			chunk.FinishReason = response.DoneReason
+			timing := ProviderTiming{
+				TotalDuration:      time.Duration(response.TotalDuration),
+				LoadDuration:       time.Duration(response.LoadDuration),
+				PromptEvalDuration: time.Duration(response.PromptEvalDuration),
+				EvalDuration:       time.Duration(response.EvalDuration),
+			}
+			if !firstTokenAt.IsZero() {
+				timing.TimeToFirstToken = firstTokenAt.Sub(requestStart)
+			}
+			if timing != (ProviderTiming{}) {
+				chunk.Timing = &timing
+			}
 		}
 		for _, call := range response.Message.ToolCalls {
 			chunk.ToolCalls = append(chunk.ToolCalls, ToolCall{

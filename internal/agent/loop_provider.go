@@ -126,6 +126,9 @@ func (t *turnRuntime) providerStage(ctx context.Context, i int) (string, []llm.T
 				t.lastEvalTokens = chunk.EvalCount
 				reportedEvalTokens = int64(chunk.EvalCount)
 				t.out.StreamDone(chunk.EvalCount, chunk.PromptEvalCount)
+				if receiptOut, ok := t.out.(ProviderReceiptOutput); ok {
+					receiptOut.ProviderReceipt(chunk.FinishReason, chunk.Timing)
+				}
 			}
 			return nil
 		})

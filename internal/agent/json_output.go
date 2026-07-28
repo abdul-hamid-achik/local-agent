@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 	"github.com/abdul-hamid-achik/local-agent/internal/memory"
 )
 
@@ -27,6 +28,9 @@ type JSONOutput struct {
 	evalTokens       int64
 	toolCalls        []TurnReceiptToolCall
 	toolCallsOmitted int
+	timing           llm.ProviderTiming
+	timingSeen       bool
+	truncated        bool
 }
 
 // NewJSONOutput creates a JSONOutput with diagnostics on os.Stderr.
@@ -101,6 +105,35 @@ func (j *JSONOutput) GoalTurnStats() (summary string, evalTokens int64, producti
 	return j.inner.GoalTurnStats()
 }
 
+// TokenUsage returns the accumulated provider token accounting.
+func (j *JSONOutput) TokenUsage() (promptTokens, evalTokens int64) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.promptTokens, j.evalTokens
+}
+
+// ProviderReceipt accumulates terminal provider receipts across the turn's
+// iterations: the first measured time-to-first-token, summed durations, and
+// whether any generation was truncated at its token ceiling.
+func (j *JSONOutput) ProviderReceipt(finishReason string, timing *llm.ProviderTiming) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if finishReason == "length" {
+		j.truncated = true
+	}
+	if timing == nil {
+		return
+	}
+	j.timingSeen = true
+	if j.timing.TimeToFirstToken == 0 && timing.TimeToFirstToken > 0 {
+		j.timing.TimeToFirstToken = timing.TimeToFirstToken
+	}
+	j.timing.TotalDuration += timing.TotalDuration
+	j.timing.LoadDuration += timing.LoadDuration
+	j.timing.PromptEvalDuration += timing.PromptEvalDuration
+	j.timing.EvalDuration += timing.EvalDuration
+}
+
 // ComposeReceipt merges the streamed observations (usage, tool calls, final
 // text) into a caller-assembled receipt frame.
 func (j *JSONOutput) ComposeReceipt(base TurnReceipt) TurnReceipt {
@@ -108,6 +141,16 @@ func (j *JSONOutput) ComposeReceipt(base TurnReceipt) TurnReceipt {
 	base.Usage = TurnReceiptUsage{PromptTokens: j.promptTokens, EvalTokens: j.evalTokens}
 	base.ToolCalls = append([]TurnReceiptToolCall(nil), j.toolCalls...)
 	base.ToolCallsOmitted = j.toolCallsOmitted
+	base.Truncated = j.truncated
+	if j.timingSeen {
+		base.Timing = &TurnReceiptTiming{
+			TTFTMS:       j.timing.TimeToFirstToken.Milliseconds(),
+			LoadMS:       j.timing.LoadDuration.Milliseconds(),
+			PromptEvalMS: j.timing.PromptEvalDuration.Milliseconds(),
+			EvalMS:       j.timing.EvalDuration.Milliseconds(),
+			TotalMS:      j.timing.TotalDuration.Milliseconds(),
+		}
+	}
 	j.mu.Unlock()
 	base.Text = strings.TrimRight(j.inner.text.String(), "\n")
 	return base

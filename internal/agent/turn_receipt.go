@@ -35,14 +35,36 @@ type TurnReceiptSession struct {
 	Workspace string `json:"workspace"`
 }
 
+// TurnReceiptModelOffload reports weights residency from the local runtime's
+// process inventory. vram_bytes < total_bytes means part of the model ran on
+// CPU — a fact that silently changes throughput and comparability.
+type TurnReceiptModelOffload struct {
+	VRAMBytes  int64 `json:"vram_bytes"`
+	TotalBytes int64 `json:"total_bytes"`
+}
+
 // TurnReceiptModel records the inference identity the host resolved for the
-// turn. Digest is present only when the provider inventory verified it.
+// turn. Digest is present only when the provider inventory verified it, and
+// Offload only when the runtime exposed residency for the model.
 type TurnReceiptModel struct {
-	Name     string `json:"name"`
-	Digest   string `json:"digest,omitempty"`
-	NumCtx   int    `json:"num_ctx"`
-	Provider string `json:"provider,omitempty"`
-	Remote   bool   `json:"remote"`
+	Name     string                   `json:"name"`
+	Digest   string                   `json:"digest,omitempty"`
+	NumCtx   int                      `json:"num_ctx"`
+	Provider string                   `json:"provider,omitempty"`
+	Remote   bool                     `json:"remote"`
+	Offload  *TurnReceiptModelOffload `json:"offload,omitempty"`
+}
+
+// TurnReceiptTiming aggregates provider-reported request timings across every
+// iteration in the turn. ttft_ms is the first iteration's client-measured
+// time to first token; the other fields are summed provider durations. A
+// zero value means "not reported", never "instant".
+type TurnReceiptTiming struct {
+	TTFTMS       int64 `json:"ttft_ms"`
+	LoadMS       int64 `json:"load_ms"`
+	PromptEvalMS int64 `json:"prompt_eval_ms"`
+	EvalMS       int64 `json:"eval_ms"`
+	TotalMS      int64 `json:"total_ms"`
 }
 
 // TurnReceiptUsage accumulates provider-reported token accounting across every
@@ -89,8 +111,12 @@ type TurnReceipt struct {
 	Usage                TurnReceiptUsage      `json:"usage"`
 	ToolCalls            []TurnReceiptToolCall `json:"tool_calls"`
 	ToolCallsOmitted     int                   `json:"tool_calls_omitted,omitempty"`
+	Timing               *TurnReceiptTiming    `json:"timing,omitempty"`
 	Status               string                `json:"status"`
 	StopReason           string                `json:"stop_reason"`
+	// Truncated is true when any provider response in the turn finished with
+	// reason "length": the generation hit its token ceiling mid-thought.
+	Truncated            bool                  `json:"truncated,omitempty"`
 	Decision             *TurnReceiptDecision  `json:"decision,omitempty"`
 	Error                string                `json:"error,omitempty"`
 	ExecutionCursor      int64                 `json:"execution_cursor"`

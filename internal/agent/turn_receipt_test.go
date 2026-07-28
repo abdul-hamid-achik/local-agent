@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/abdul-hamid-achik/local-agent/internal/llm"
 )
 
 func TestTurnOutcomeMapsTerminalErrors(t *testing.T) {
@@ -109,6 +111,43 @@ func TestJSONOutputBoundsToolCallEntries(t *testing.T) {
 	}
 	if receipt.ToolCallsOmitted != 7 {
 		t.Fatalf("omitted = %d, want 7", receipt.ToolCallsOmitted)
+	}
+}
+
+func TestJSONOutputAggregatesProviderReceipts(t *testing.T) {
+	out := newJSONOutput(&bytes.Buffer{})
+	out.ProviderReceipt("stop", &llm.ProviderTiming{
+		TimeToFirstToken:   400 * time.Millisecond,
+		TotalDuration:      2 * time.Second,
+		LoadDuration:       100 * time.Millisecond,
+		PromptEvalDuration: 200 * time.Millisecond,
+		EvalDuration:       1500 * time.Millisecond,
+	})
+	out.ProviderReceipt("length", &llm.ProviderTiming{
+		TimeToFirstToken: 90 * time.Millisecond,
+		TotalDuration:    1 * time.Second,
+		EvalDuration:     800 * time.Millisecond,
+	})
+
+	receipt := out.ComposeReceipt(TurnReceipt{})
+	if receipt.Timing == nil {
+		t.Fatal("receipt should carry aggregated timing")
+	}
+	if receipt.Timing.TTFTMS != 400 {
+		t.Fatalf("ttft_ms = %d, want the first iteration's 400", receipt.Timing.TTFTMS)
+	}
+	if receipt.Timing.TotalMS != 3000 || receipt.Timing.EvalMS != 2300 ||
+		receipt.Timing.LoadMS != 100 || receipt.Timing.PromptEvalMS != 200 {
+		t.Fatalf("timing = %+v", receipt.Timing)
+	}
+	if !receipt.Truncated {
+		t.Fatal("a length finish reason must mark the receipt truncated")
+	}
+
+	bare := newJSONOutput(&bytes.Buffer{})
+	bare.ProviderReceipt("stop", nil)
+	if got := bare.ComposeReceipt(TurnReceipt{}); got.Timing != nil || got.Truncated {
+		t.Fatalf("no timings and a clean stop should leave receipt untouched: %+v", got)
 	}
 }
 
