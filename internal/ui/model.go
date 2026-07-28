@@ -226,6 +226,8 @@ type Model struct {
 	router                   config.ModelRouter
 	modelPreferenceStore     ModelPreferenceStore
 	themePickerState         *ThemePickerState
+	contextDoctorState       *ContextDoctorState
+	contextDoctorRequest     uint64
 	modelPickerState         *ModelPickerState
 	cloudConsentState        *CloudConsentState
 	cloudRestoreAuthorized   string
@@ -1034,6 +1036,8 @@ func (m *Model) updateActiveOverlayMessage(msg tea.Msg) tea.Cmd {
 		}
 	case OverlayTranscriptSearch:
 		return m.updateTranscriptSearchMessage(msg)
+	case OverlayContextDoctor:
+		return m.updateContextDoctorMessage(msg)
 	case OverlaySettings:
 		if m.settingsPickerState != nil {
 			var cmd tea.Cmd

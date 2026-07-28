@@ -74,6 +74,8 @@ func (m *Model) handleOverlayKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 			m.closeModePicker()
 		case OverlayThemePicker:
 			m.closeThemePicker()
+		case OverlayContextDoctor:
+			m.closeContextDoctor()
 		case OverlayRuntimeStatus:
 			m.closeRuntimeStatus()
 		case OverlayGoalRecovery:
@@ -123,6 +125,14 @@ func (m *Model) handleOverlayKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 			if m.runtimeStatusState != nil {
 				navigateReadOnlyViewport(&m.runtimeStatusState.Viewport, msg.String())
 			}
+		}
+		return nil, true
+	}
+
+	if m.overlay == OverlayContextDoctor {
+		if msg.String() == "q" {
+			m.closeContextDoctor()
+			return tea.ClearScreen, true
 		}
 		return nil, true
 	}

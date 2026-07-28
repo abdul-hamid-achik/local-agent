@@ -217,6 +217,7 @@ const (
 	ActionPermissionsImport             // Import durable rules (Data = path[|replace])
 	ActionPermissionsClearRules         // Clear all durable workspace rules
 	ActionPermissionsPanel              // Open the interactive permissions panel
+	ActionShowContextDoctor             // Open the animated context-usage overlay
 )
 
 // Registry holds all registered slash commands.

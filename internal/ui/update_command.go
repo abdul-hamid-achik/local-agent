@@ -399,6 +399,10 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 		m.openThemePicker()
 		return nil
 
+	case command.ActionShowContextDoctor:
+		m.overlayParent = OverlayNone
+		return m.openContextDoctor()
+
 	case command.ActionSwitchTheme:
 		return m.applyTheme(result.Data)
 

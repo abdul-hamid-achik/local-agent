@@ -959,16 +959,16 @@ func RegisterBuiltins(r *Registry) {
 	r.Register(&Command{
 		Name:        "context",
 		Aliases:     []string{"numctx", "ctx"},
-		Description: "Analyze host RAM and set the Ollama context window (num_ctx)",
-		Usage:       "/context [auto|set <n>|save]",
+		Description: "Visualize session context usage and manage the Ollama context window (num_ctx)",
+		Usage:       "/context [status|auto|set <n>|save]",
 		Handler: func(ctx *Context, args []string) Result {
 			if len(args) == 0 {
-				return Result{Action: ActionSetNumCtx, Data: "status"}
+				return Result{Action: ActionShowContextDoctor}
 			}
 			switch strings.ToLower(args[0]) {
 			case "status", "show", "analyze":
 				if len(args) != 1 {
-					return Result{Error: "usage: /context [auto|set <n>|save]"}
+					return Result{Error: "usage: /context [status|auto|set <n>|save]"}
 				}
 				return Result{Action: ActionSetNumCtx, Data: "status"}
 			case "auto", "recommend", "apply":
@@ -987,7 +987,7 @@ func RegisterBuiltins(r *Registry) {
 				}
 				return Result{Action: ActionSaveNumCtx}
 			default:
-				return Result{Error: "usage: /context [auto|set <n>|save]"}
+				return Result{Error: "usage: /context [status|auto|set <n>|save]"}
 			}
 		},
 	})

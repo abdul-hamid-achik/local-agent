@@ -930,7 +930,8 @@ func TestContextCommandParsesSubcommands(t *testing.T) {
 		wantData   string
 		wantError  bool
 	}{
-		{args: nil, wantAction: ActionSetNumCtx, wantData: "status"},
+		{args: nil, wantAction: ActionShowContextDoctor},
+		{args: []string{"status"}, wantAction: ActionSetNumCtx, wantData: "status"},
 		{args: []string{"auto"}, wantAction: ActionSetNumCtx, wantData: "auto"},
 		{args: []string{"set", "96k"}, wantAction: ActionSetNumCtx, wantData: "set:96k"},
 		{args: []string{"save"}, wantAction: ActionSaveNumCtx},

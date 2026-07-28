@@ -109,7 +109,25 @@ type systemPromptOptions struct {
 // instructions, ICE, and ignores); it never modifies the tool definitions
 // supplied separately to the provider or the host's authority model.
 func buildSystemPrompt(ctx context.Context, opts systemPromptOptions) string {
-	useSmallModel := isSmallModel(opts.ModelName)
+	return formatSystemPrompt(opts.ModelName, resolveBoundedPromptSections(ctx, opts))
+}
+
+// boundedPromptSections holds every assembled system-prompt section after
+// optional-budget bounding, in template order. buildSystemPrompt formats them
+// and ContextBreakdown measures them, so the reported sizes are the exact
+// bytes the provider receives.
+type boundedPromptSections struct {
+	ModePrefixSection string
+	EnvSection        string
+	IgnoreSection     string
+	SkillSection      string
+	CtxSection        string
+	MemorySection     string
+	ToolList          string
+	MemoryGuidelines  string
+}
+
+func resolveBoundedPromptSections(ctx context.Context, opts systemPromptOptions) boundedPromptSections {
 	budget := opts.OptionalBudget
 	if budget == 0 {
 		budget = optionalPromptBudget(opts.NumCtx)
@@ -184,32 +202,34 @@ func buildSystemPrompt(ctx context.Context, opts systemPromptOptions) string {
 		modePrefixSection = "\n" + modePrefix + "\n"
 	}
 
-	dateStr := time.Now().Format("Monday, January 2, 2006")
-
-	if useSmallModel {
-		return fmt.Sprintf(smallModelTemplate,
-			modePrefixSection,
-			dateStr,
-			envSection,
-			ignoreSection,
-			skillSection,
-			ctxSection,
-			memorySection,
-			toolList,
-			memoryGuidelines,
-		)
+	return boundedPromptSections{
+		ModePrefixSection: modePrefixSection,
+		EnvSection:        envSection,
+		IgnoreSection:     ignoreSection,
+		SkillSection:      skillSection,
+		CtxSection:        ctxSection,
+		MemorySection:     memorySection,
+		ToolList:          toolList,
+		MemoryGuidelines:  memoryGuidelines,
 	}
+}
 
-	return fmt.Sprintf(systemTemplate,
-		modePrefixSection,
+func formatSystemPrompt(modelName string, sections boundedPromptSections) string {
+	template := systemTemplate
+	if isSmallModel(modelName) {
+		template = smallModelTemplate
+	}
+	dateStr := time.Now().Format("Monday, January 2, 2006")
+	return fmt.Sprintf(template,
+		sections.ModePrefixSection,
 		dateStr,
-		envSection,
-		ignoreSection,
-		skillSection,
-		ctxSection,
-		memorySection,
-		toolList,
-		memoryGuidelines,
+		sections.EnvSection,
+		sections.IgnoreSection,
+		sections.SkillSection,
+		sections.CtxSection,
+		sections.MemorySection,
+		sections.ToolList,
+		sections.MemoryGuidelines,
 	)
 }
 
