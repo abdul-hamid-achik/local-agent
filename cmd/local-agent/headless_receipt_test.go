@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/abdul-hamid-achik/local-agent/internal/supervisor"
 )
 
 func TestParseRootOptionsAcceptsReceiptIdentityFlags(t *testing.T) {
@@ -76,3 +78,21 @@ func TestBoundedReceiptErrorCapsOnRuneBoundary(t *testing.T) {
 type stringError struct{ msg string }
 
 func (e *stringError) Error() string { return e.msg }
+
+func TestReceiptDecisionProjectsSupervisorVerdict(t *testing.T) {
+	projected := receiptDecision(supervisor.Decision{
+		Action:   supervisor.ActionStop,
+		Reason:   supervisor.StopBudget,
+		Detail:   "goal budget exhausted",
+		IssueIDs: []string{"item_1", "item_2"},
+	})
+	if projected.Action != "stop" || projected.Reason != "budget_exhausted" {
+		t.Fatalf("projection = %+v", projected)
+	}
+	if len(projected.IssueIDs) != 2 || projected.IssueIDs[0] != "item_1" {
+		t.Fatalf("issue ids = %v", projected.IssueIDs)
+	}
+	if projected.Detail != "goal budget exhausted" {
+		t.Fatalf("detail = %q", projected.Detail)
+	}
+}

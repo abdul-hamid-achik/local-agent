@@ -591,11 +591,40 @@ func TestGoalRunExecutesAndSettlesDurableTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.Revision != 5 || snapshot.PendingContinuation != nil || snapshot.State != goal.StatePaused || snapshot.LastPendingRecovery != nil {
+	if record.Revision != 5 || snapshot.PendingContinuation != nil || snapshot.State != goal.StateExhausted || snapshot.LastPendingRecovery != nil {
 		t.Fatalf("known failure left unsafe state revision=%d snapshot=%#v", record.Revision, snapshot)
 	}
-	if snapshot.LastTurn == nil || snapshot.LastTurn.OutcomeUnknown || !strings.Contains(snapshot.LastTurn.Summary, "known provider failure") {
+	// The headless turn now runs under the goal's hard eval-token limit, so a
+	// provider stream that dies without a trustworthy terminal usage receipt
+	// charges its reservation fail-closed and exhausts the remaining budget —
+	// the same accounting the TUI applies to capped goal turns.
+	if snapshot.Usage.EvalTokens != snapshot.Budget.MaxEvalTokens {
+		t.Fatalf("fail-closed reservation should consume the remaining budget, usage=%#v budget=%#v", snapshot.Usage, snapshot.Budget)
+	}
+	if snapshot.LastTurn == nil || snapshot.LastTurn.OutcomeUnknown || !strings.Contains(snapshot.LastTurn.Summary, "budget exhausted") {
 		t.Fatalf("known failure receipt=%#v", snapshot.LastTurn)
+	}
+
+	// An exhausted goal must stop at the supervisor gate: no admission, no
+	// provider dispatch, and no durable state churn.
+	dispatchedBefore := chatCalls.Load()
+	var deniedOut, deniedErr bytes.Buffer
+	if code := handleGoalRun([]string{openedSession.PublicID, "--prompt", "one more turn"}, &deniedOut, &deniedErr); code != 1 {
+		t.Fatalf("exhausted goal run code=%d, want 1", code)
+	}
+	if chatCalls.Load() != dispatchedBefore {
+		t.Fatalf("exhausted goal still dispatched the provider: %d -> %d calls", dispatchedBefore, chatCalls.Load())
+	}
+	_, restored, _, record, err = loadHeadlessGoalState(context.Background(), store, currentWorkspace(), opened.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err = restored.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Revision != 5 || snapshot.State != goal.StateExhausted {
+		t.Fatalf("denied dispatch mutated durable state revision=%d state=%s", record.Revision, snapshot.State)
 	}
 }
 

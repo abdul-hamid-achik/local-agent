@@ -25,6 +25,7 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/expertteam"
 	"github.com/abdul-hamid-achik/local-agent/internal/goal"
 	"github.com/abdul-hamid-achik/local-agent/internal/goaladvisor"
+	"github.com/abdul-hamid-achik/local-agent/internal/supervisor"
 	"github.com/abdul-hamid-achik/local-agent/internal/ice"
 	"github.com/abdul-hamid-achik/local-agent/internal/imageasset"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
@@ -609,6 +610,7 @@ func run() int {
 			out = jsonOut
 		}
 		headlessTurnID := externalTurnID
+		var goalTurnLimits agent.TurnLimits
 		if goalRuntime != nil {
 			if headlessTurnID == "" {
 				goalTurnID, idErr := goal.NewGoalID()
@@ -618,26 +620,80 @@ func run() int {
 				}
 				headlessTurnID = "turn_" + goalTurnID
 			}
-			admission := goal.AdmissionManual
 			snapshot, snapshotErr := goalRuntime.Snapshot(ctx)
 			if snapshotErr != nil {
 				fmt.Fprintf(os.Stderr, "goal run: inspect runtime: %v\n", snapshotErr)
 				return 1
 			}
 			if snapshot.State == goal.StatePaused {
+				// An explicit `goal run` is the resume authority; the supervisor
+				// then decides on the resumed state.
 				if err := goalRuntime.Resume(ctx, "explicit headless goal run"); err != nil {
 					fmt.Fprintf(os.Stderr, "goal run: resume goal: %v\n", err)
 					return 1
 				}
-				snapshot, snapshotErr = goalRuntime.Snapshot(ctx)
-				if snapshotErr != nil {
-					fmt.Fprintf(os.Stderr, "goal run: inspect resumed runtime: %v\n", snapshotErr)
-					return 1
-				}
 			}
-			if snapshot.LastTurn == nil {
+			supervisorIssues, issuesErr := headlessSupervisorIssues(ctx, dbStore, session.ID, workspace)
+			if issuesErr != nil {
+				fmt.Fprintf(os.Stderr, "goal run: inspect control plane: %v\n", issuesErr)
+				return 1
+			}
+			decision, decideErr := supervisor.Decide(ctx, goalRuntime, supervisor.Observation{
+				LeaseOwned:       true,
+				PersistenceReady: true,
+				// The headless path has no Cortex evaluation loop yet, so a
+				// Cortex-linked goal stops honestly instead of running unevaluated.
+				AdvisorAvailable: false,
+				Manual:           true,
+				Issues:           supervisorIssues,
+			})
+			if decideErr != nil {
+				fmt.Fprintf(os.Stderr, "goal run: supervise: %v\n", decideErr)
+				return 1
+			}
+			var admission goal.TurnAdmissionKind
+			switch decision.Action {
+			case supervisor.ActionDispatchInitial:
 				admission = goal.AdmissionInitial
+			case supervisor.ActionDispatchManual:
+				admission = goal.AdmissionManual
+			default:
+				reason := string(decision.Reason)
+				if reason == "" {
+					reason = string(decision.Action)
+				}
+				fmt.Fprintf(os.Stderr, "goal run: not admitted: %s · %s\n", reason, decision.Detail)
+				if jsonOut != nil {
+					receipt := agent.TurnReceipt{
+						RunID:  ag.ExecutionRunID(),
+						TurnID: headlessTurnID,
+						Actor:  externalActor,
+						Session: &agent.TurnReceiptSession{
+							ID: session.ID, PublicID: session.PublicID, Workspace: workspace,
+						},
+						Model: agent.TurnReceiptModel{
+							Name:     modelName,
+							NumCtx:   ag.NumCtx(),
+							Provider: modelManager.ActiveProviderName(),
+							Remote:   modelManager.RemoteProvider(),
+						},
+						Status:          "not_admitted",
+						StopReason:      reason,
+						Decision:        receiptDecision(decision),
+						ExecutionCursor: executionCursor,
+					}
+					if err := agent.WriteTurnReceipt(os.Stdout, jsonOut.ComposeReceipt(receipt)); err != nil {
+						fmt.Fprintf(os.Stderr, "local-agent: %v\n", err)
+					}
+				}
+				return 1
 			}
+			limits, limitsErr := supervisor.AgentTurnLimits(decision.Goal, time.Now())
+			if limitsErr != nil {
+				fmt.Fprintf(os.Stderr, "goal run: %v\n", limitsErr)
+				return 1
+			}
+			goalTurnLimits = limits
 			if _, err := goalRuntime.BeginTurn(ctx, headlessTurnID, admission); err != nil {
 				fmt.Fprintf(os.Stderr, "goal run: admit turn: %v\n", err)
 				return 1
@@ -711,7 +767,7 @@ func run() int {
 			}
 			return 1
 		}
-		runErr := ag.RunTurn(ctx, out, headlessTurnID)
+		runErr := ag.RunTurnWithOptions(ctx, out, headlessTurnID, agent.TurnOptions{Limits: goalTurnLimits})
 		if goalRuntime != nil {
 			pending, snapshotErr := goalRuntime.Snapshot(context.Background())
 			if snapshotErr != nil {
@@ -767,6 +823,25 @@ func run() int {
 				Error:                boundedReceiptError(runErr),
 				ExecutionCursor:      finalCursor,
 				PendingRecoveryCount: pendingRecoveries,
+			}
+			if goalRuntime != nil {
+				// The post-turn supervision verdict tells an external loop whether
+				// another explicit `goal run` would be admitted.
+				decisionCtx, cancelDecision := context.WithTimeout(context.Background(), 2*time.Second)
+				postIssues, postIssuesErr := headlessSupervisorIssues(decisionCtx, dbStore, session.ID, workspace)
+				if postIssuesErr == nil {
+					if postDecision, postErr := supervisor.Decide(decisionCtx, goalRuntime, supervisor.Observation{
+						LeaseOwned: true, PersistenceReady: true, AdvisorAvailable: false,
+						Manual: true, Issues: postIssues,
+					}); postErr == nil {
+						receipt.Decision = receiptDecision(postDecision)
+					} else {
+						fmt.Fprintf(os.Stderr, "local-agent: post-turn supervision: %v\n", postErr)
+					}
+				} else {
+					fmt.Fprintf(os.Stderr, "local-agent: post-turn supervision: %v\n", postIssuesErr)
+				}
+				cancelDecision()
 			}
 			if err := agent.WriteTurnReceipt(os.Stdout, jsonOut.ComposeReceipt(receipt)); err != nil {
 				fmt.Fprintf(os.Stderr, "local-agent: %v\n", err)

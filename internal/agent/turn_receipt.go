@@ -62,9 +62,23 @@ type TurnReceiptToolCall struct {
 	DurationMS int64  `json:"duration_ms"`
 }
 
+// TurnReceiptDecision is the goal supervisor's verdict on whether another
+// explicit invocation may dispatch. Action "stop" means a further `goal run`
+// would not be admitted; Reason then uses the supervisor's own closed
+// catalog, which shares spellings with the turn stop reasons where the two
+// vocabularies overlap (completed, budget_exhausted, outcome_unknown).
+type TurnReceiptDecision struct {
+	Action   string   `json:"action"`
+	Reason   string   `json:"reason,omitempty"`
+	Detail   string   `json:"detail,omitempty"`
+	IssueIDs []string `json:"issue_ids,omitempty"`
+}
+
 // TurnReceipt is the complete document. RunID, TurnID, and Actor may carry
 // externally minted identifiers; they are correlation labels and never grant
-// authority.
+// authority. Status is one of settled, canceled, failed, or not_admitted —
+// the last means the goal supervisor refused dispatch and no provider work
+// happened.
 type TurnReceipt struct {
 	Schema               string                `json:"schema"`
 	RunID                string                `json:"run_id,omitempty"`
@@ -77,6 +91,7 @@ type TurnReceipt struct {
 	ToolCallsOmitted     int                   `json:"tool_calls_omitted,omitempty"`
 	Status               string                `json:"status"`
 	StopReason           string                `json:"stop_reason"`
+	Decision             *TurnReceiptDecision  `json:"decision,omitempty"`
 	Error                string                `json:"error,omitempty"`
 	ExecutionCursor      int64                 `json:"execution_cursor"`
 	PendingRecoveryCount int                   `json:"pending_recovery_count"`

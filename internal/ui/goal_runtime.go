@@ -14,6 +14,7 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/execution"
 	"github.com/abdul-hamid-achik/local-agent/internal/goal"
 	"github.com/abdul-hamid-achik/local-agent/internal/goaladvisor"
+	"github.com/abdul-hamid-achik/local-agent/internal/supervisor"
 )
 
 const (
@@ -764,23 +765,10 @@ func adviceContinuation(advice *goaladvisor.Advice) *agent.ContinuationContext {
 	return advice.Continuation
 }
 
+// goalAgentTurnLimits delegates to the shared supervisor policy so the TUI
+// and headless controllers bound goal turns identically.
 func goalAgentTurnLimits(snapshot goal.Snapshot, now time.Time) (agent.TurnLimits, error) {
-	limits := agent.TurnLimits{}
-	if snapshot.Budget.MaxEvalTokens > 0 {
-		remaining := snapshot.Budget.MaxEvalTokens - snapshot.Usage.EvalTokens
-		if remaining <= 0 {
-			return limits, goal.ErrBudgetExhausted
-		}
-		limits.MaxEvalTokens = remaining
-	}
-	if snapshot.Budget.MaxWallTime > 0 {
-		deadline := snapshot.CreatedAt.Add(snapshot.Budget.MaxWallTime)
-		if !now.Before(deadline) {
-			return limits, goal.ErrBudgetExhausted
-		}
-		limits.Deadline = deadline
-	}
-	return limits, nil
+	return supervisor.AgentTurnLimits(snapshot, now)
 }
 
 func goalStatePreventsTurnMessage(snapshot goal.Snapshot) string {
