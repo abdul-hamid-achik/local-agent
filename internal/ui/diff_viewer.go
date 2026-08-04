@@ -160,7 +160,7 @@ type DiffViewerOptions struct {
 	Width         int
 	Height        int
 	IsDark        bool
-	ThemeID          string
+	ThemeID       string
 	ReducedMotion bool
 	GlyphProfile  GlyphProfile
 }

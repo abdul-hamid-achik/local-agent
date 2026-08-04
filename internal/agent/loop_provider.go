@@ -140,8 +140,8 @@ func (t *turnRuntime) providerStage(ctx context.Context, i int) (string, []llm.T
 					t.lg.Warn("llm request rejected before dispatch", "iter", i, "err", boundaryErr)
 				}
 				// boundaryErr already reads "inference not started: <cause>", so a
-			// "LLM request not started:" prefix only stutters at the user.
-			t.out.Error(capitalizeFirst(boundaryErr.Error()))
+				// "LLM request not started:" prefix only stutters at the user.
+				t.out.Error(capitalizeFirst(boundaryErr.Error()))
 				return "", nil, stageProceed, boundaryErr
 			}
 			reservedEvalTokens := int64(0)

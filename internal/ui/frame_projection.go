@@ -85,7 +85,7 @@ func (m *Model) projectFrame() FrameProjection {
 			WidthClass:          ClassifyWidth(m.width),
 			HeightClass:         ClassifyHeight(m.height),
 			TranscriptFloorRows: transcriptFloor,
-			VerticalFit: FrameVerticalRecovery,
+			VerticalFit:         FrameVerticalRecovery,
 			Transcript: FrameSurfaceProjection{
 				Rect: safe,
 			},

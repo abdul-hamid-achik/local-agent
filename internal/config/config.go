@@ -31,16 +31,16 @@ var configFileReadTimeout = safeio.StartupReadTimeout
 type Config struct {
 	// SourcePath is the host-resolved config selected by repository/XDG
 	// precedence. It is runtime metadata only and is never serialized.
-	SourcePath string         `yaml:"-" json:"-"`
-	Ollama     OllamaConfig   `yaml:"ollama"`
+	SourcePath string       `yaml:"-" json:"-"`
+	Ollama     OllamaConfig `yaml:"ollama"`
 	// Provider selects the inference adapter. Empty/ollama keeps the existing
 	// Ollama path. Multi-profile catalogs use active + profiles; flat type/
 	// base_url/model remains supported. Credentials are env names only.
 	// Prefer TinyVault: tvault run --only KEY -- local-agent.
-	Provider      ProviderConfig      `yaml:"provider,omitempty"`
-	Model         ModelConfig         `yaml:"model,omitempty"`
-	Agents        AgentsConfig        `yaml:"agents,omitempty"`
-	Servers       []ServerConfig      `yaml:"servers,omitempty"`
+	Provider ProviderConfig `yaml:"provider,omitempty"`
+	Model    ModelConfig    `yaml:"model,omitempty"`
+	Agents   AgentsConfig   `yaml:"agents,omitempty"`
+	Servers  []ServerConfig `yaml:"servers,omitempty"`
 	// SkillsDir is decoded only to reject the retired split skill root with a
 	// clear migration error instead of silently ignoring an old configuration.
 	SkillsDir     string              `yaml:"skills_dir,omitempty"`
@@ -99,10 +99,35 @@ type AgentsConfig struct {
 }
 
 type ToolsConfig struct {
-	Timeout           string `yaml:"timeout,omitempty"` // e.g., "30s", "2m"
+	Timeout string `yaml:"timeout,omitempty"` // e.g., "30s", "2m"
+	// MCPTimeout bounds a single MCP tool call. The default suits interactive
+	// tools, but work that builds an index or walks a large repository can
+	// legitimately exceed it — and a timeout is indistinguishable from a hung
+	// server, so an unanswered effectful call becomes an outcome_unknown that
+	// halts the turn for manual reconciliation. Raise this for a stack with
+	// slow-but-honest servers. Empty keeps the built-in default.
+	MCPTimeout        string `yaml:"mcp_timeout,omitempty"`
 	MaxGrepResults    int    `yaml:"max_grep_results,omitempty"`
 	MaxIterations     int    `yaml:"max_iterations,omitempty"`
 	AutoMaxIterations int    `yaml:"auto_max_iterations,omitempty"`
+}
+
+// MaxMCPCallTimeout bounds tools.mcp_timeout. A hung server must still fail
+// eventually; without a ceiling a misconfiguration could hold a turn open
+// indefinitely, which is the failure this timeout exists to prevent.
+const MaxMCPCallTimeout = 10 * time.Minute
+
+// MCPCallTimeout returns the configured per-call MCP timeout, or zero when the
+// built-in default applies. Validation has already accepted the value.
+func (c Config) MCPCallTimeout() time.Duration {
+	if c.Tools.MCPTimeout == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(c.Tools.MCPTimeout)
+	if err != nil || d <= 0 {
+		return 0
+	}
+	return d
 }
 
 // MaxAutoContinuationSteps is a host-owned safety ceiling. Configuration may
@@ -562,6 +587,15 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("config: tools.timeout must be positive, got %s", c.Tools.Timeout)
 		}
 	}
+	if c.Tools.MCPTimeout != "" {
+		if d, err := time.ParseDuration(c.Tools.MCPTimeout); err != nil {
+			return fmt.Errorf("config: invalid tools.mcp_timeout %q: %w", c.Tools.MCPTimeout, err)
+		} else if d <= 0 {
+			return fmt.Errorf("config: tools.mcp_timeout must be positive, got %s", c.Tools.MCPTimeout)
+		} else if d > MaxMCPCallTimeout {
+			return fmt.Errorf("config: tools.mcp_timeout %s exceeds the %s ceiling", c.Tools.MCPTimeout, MaxMCPCallTimeout)
+		}
+	}
 	if !c.Continuations.Mode.Valid() {
 		return fmt.Errorf(
 			"config: continuations.mode must be one of %q, %q, or %q, got %q",
@@ -797,6 +831,9 @@ func configFileCandidates() []string {
 func applyEnvOverrides(cfg *Config) error {
 	if v := os.Getenv("OLLAMA_HOST"); v != "" {
 		cfg.Ollama.BaseURL = v
+	}
+	if v := os.Getenv("LOCAL_AGENT_MCP_TIMEOUT"); v != "" {
+		cfg.Tools.MCPTimeout = v
 	}
 	// Provider selection first so model overrides can target the remote profile.
 	if v := os.Getenv("LOCAL_AGENT_PROVIDER"); v != "" {

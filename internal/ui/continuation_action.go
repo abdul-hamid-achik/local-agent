@@ -41,11 +41,11 @@ func newContinuationActionStyles(isDark bool, themeID string) continuationAction
 // continuationActionCard is a dumb, non-interactive child. The parent owns
 // freshness and visibility; this child owns only bounded responsive rendering.
 type continuationActionCard struct {
-	action ContinuationActionPresentation
-	width  int
-	isDark bool
-	themeID       string
-	styles continuationActionStyles
+	action  ContinuationActionPresentation
+	width   int
+	isDark  bool
+	themeID string
+	styles  continuationActionStyles
 
 	cachedKey   string
 	cachedWidth int

@@ -168,4 +168,3 @@ func TestAutoProgressCountsEffectfulSuccesses(t *testing.T) {
 		t.Fatalf("checkpoint counters = %#v", checkpoint)
 	}
 }
-

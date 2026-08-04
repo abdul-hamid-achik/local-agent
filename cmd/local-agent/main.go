@@ -25,7 +25,6 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/expertteam"
 	"github.com/abdul-hamid-achik/local-agent/internal/goal"
 	"github.com/abdul-hamid-achik/local-agent/internal/goaladvisor"
-	"github.com/abdul-hamid-achik/local-agent/internal/supervisor"
 	"github.com/abdul-hamid-achik/local-agent/internal/ice"
 	"github.com/abdul-hamid-achik/local-agent/internal/imageasset"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
@@ -35,6 +34,7 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/permission"
 	"github.com/abdul-hamid-achik/local-agent/internal/runtimepref"
 	"github.com/abdul-hamid-achik/local-agent/internal/skill"
+	"github.com/abdul-hamid-achik/local-agent/internal/supervisor"
 	"github.com/abdul-hamid-achik/local-agent/internal/ui"
 )
 
@@ -332,6 +332,9 @@ func run() int {
 	}
 
 	registry := mcp.NewRegistryWithVersion(effectiveVersion(), mcp.WithLocalOnly(cfg.Privacy.LocalOnly))
+	if timeout := cfg.MCPCallTimeout(); timeout > 0 {
+		registry.SetCallTimeout(timeout)
+	}
 	defer registry.Close()
 
 	agentContext := cfg.Ollama.NumCtx

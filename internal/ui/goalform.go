@@ -75,7 +75,7 @@ type GoalFormOptions struct {
 	Width         int
 	Height        int
 	IsDark        bool
-	ThemeID          string
+	ThemeID       string
 	ReducedMotion bool
 	GlyphProfile  GlyphProfile
 	// DraftFromPrompt tells the form that the initial definition was inferred
@@ -115,7 +115,7 @@ type GoalForm struct {
 	width           int
 	height          int
 	isDark          bool
-	themeID       string
+	themeID         string
 	reducedMotion   bool
 	glyphProfile    GlyphProfile
 	budgetOnly      bool

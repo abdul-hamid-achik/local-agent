@@ -47,7 +47,7 @@ type GoalInspector struct {
 	width            int
 	height           int
 	isDark           bool
-	themeID       string
+	themeID          string
 	reducedMotion    bool
 	glyphProfile     GlyphProfile
 	now              time.Time

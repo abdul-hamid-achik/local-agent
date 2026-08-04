@@ -75,10 +75,18 @@ func TestSearchesStaySilentWhenCoverageIsComplete(t *testing.T) {
 	}
 
 	for name, run := range map[string]func() (string, bool){
-		"grep hit":  func() (string, bool) { return ag.handleGrep(context.Background(), map[string]any{"path": workspace, "pattern": "package"}) },
-		"grep miss": func() (string, bool) { return ag.handleGrep(context.Background(), map[string]any{"path": workspace, "pattern": "zzz-absent"}) },
-		"glob":      func() (string, bool) { return ag.handleGlob(context.Background(), map[string]any{"path": workspace, "pattern": "*.go"}) },
-		"find":      func() (string, bool) { return ag.handleFind(context.Background(), map[string]any{"path": workspace, "name": "*.go"}) },
+		"grep hit": func() (string, bool) {
+			return ag.handleGrep(context.Background(), map[string]any{"path": workspace, "pattern": "package"})
+		},
+		"grep miss": func() (string, bool) {
+			return ag.handleGrep(context.Background(), map[string]any{"path": workspace, "pattern": "zzz-absent"})
+		},
+		"glob": func() (string, bool) {
+			return ag.handleGlob(context.Background(), map[string]any{"path": workspace, "pattern": "*.go"})
+		},
+		"find": func() (string, bool) {
+			return ag.handleFind(context.Background(), map[string]any{"path": workspace, "name": "*.go"})
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			result, isErr := run()

@@ -35,7 +35,7 @@ func TestFormatContext(t *testing.T) {
 			wantMem:   false,
 		},
 		{
-			name:      "memories only",
+			name:       "memories only",
 			convChunks: nil,
 			memChunks: []ContextChunk{
 				{Source: SourceMemory, Content: "user name is Alice"},

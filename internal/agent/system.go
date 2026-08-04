@@ -18,12 +18,12 @@ import (
 // Optional prompt budget shares (percentages of the optional budget).
 // The shares should sum to ~100% across all optional sections.
 const (
-	budgetShareLoadedContextDefault    = 50 // loaded context when no skill catalog
+	budgetShareLoadedContextDefault     = 50 // loaded context when no skill catalog
 	budgetShareLoadedContextWithCatalog = 40 // loaded context when skill catalog present
-	budgetShareSkillCatalog            = 10
-	budgetShareSkillContent            = 20
-	budgetShareICEOrMemory             = 25
-	budgetShareIgnoreContent           = 5
+	budgetShareSkillCatalog             = 10
+	budgetShareSkillContent             = 20
+	budgetShareICEOrMemory              = 25
+	budgetShareIgnoreContent            = 5
 )
 
 // gitProbeTimeout bounds filesystem and git probes during prompt assembly so

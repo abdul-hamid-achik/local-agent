@@ -1,12 +1,12 @@
 package main
 
 import (
-	"fmt"
 	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,9 +16,9 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/controlplane"
 	"github.com/abdul-hamid-achik/local-agent/internal/db"
 	"github.com/abdul-hamid-achik/local-agent/internal/execution"
-	"github.com/abdul-hamid-achik/local-agent/internal/sessionref"
 	"github.com/abdul-hamid-achik/local-agent/internal/goal"
 	"github.com/abdul-hamid-achik/local-agent/internal/safeio"
+	"github.com/abdul-hamid-achik/local-agent/internal/sessionref"
 )
 
 type fakeSessionExportStore struct {
@@ -38,9 +38,6 @@ type fakeSessionExportStore struct {
 	leaseErr error
 	leases   int
 }
-
-
-
 
 func (s *fakeSessionExportStore) ResolveSessionRef(_ context.Context, ref string) (db.Session, error) {
 	publicID, err := sessionref.Parse(ref)

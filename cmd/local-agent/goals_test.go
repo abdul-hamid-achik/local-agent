@@ -1011,4 +1011,3 @@ func TestDecodeGoalSummaryRefreshesElapsedWallBudget(t *testing.T) {
 		t.Fatalf("elapsed state = %s, want exhausted", summary.State)
 	}
 }
-

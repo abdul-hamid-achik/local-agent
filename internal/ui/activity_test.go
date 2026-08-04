@@ -1009,7 +1009,7 @@ func TestSessionRestoreActivityUsesPendingTargetIdentity(t *testing.T) {
 		m.sessionLoadToken = 11
 		m.pendingSessionSwitch = &pendingSessionSwitch{
 			TargetSessionID: 42,
-			TargetPublicID: "aaaaa2a",
+			TargetPublicID:  "aaaaa2a",
 			TargetTitle:     "Target work",
 			Choice:          sessionSwitchKeep,
 			LoadToken:       11,

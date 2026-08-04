@@ -102,26 +102,26 @@ type TurnReceiptDecision struct {
 // the last means the goal supervisor refused dispatch and no provider work
 // happened.
 type TurnReceipt struct {
-	Schema               string                `json:"schema"`
-	RunID                string                `json:"run_id,omitempty"`
-	TurnID               string                `json:"turn_id,omitempty"`
-	Actor                string                `json:"actor,omitempty"`
-	Session              *TurnReceiptSession   `json:"session,omitempty"`
-	Model                TurnReceiptModel      `json:"model"`
-	Usage                TurnReceiptUsage      `json:"usage"`
-	ToolCalls            []TurnReceiptToolCall `json:"tool_calls"`
-	ToolCallsOmitted     int                   `json:"tool_calls_omitted,omitempty"`
-	Timing               *TurnReceiptTiming    `json:"timing,omitempty"`
-	Status               string                `json:"status"`
-	StopReason           string                `json:"stop_reason"`
+	Schema           string                `json:"schema"`
+	RunID            string                `json:"run_id,omitempty"`
+	TurnID           string                `json:"turn_id,omitempty"`
+	Actor            string                `json:"actor,omitempty"`
+	Session          *TurnReceiptSession   `json:"session,omitempty"`
+	Model            TurnReceiptModel      `json:"model"`
+	Usage            TurnReceiptUsage      `json:"usage"`
+	ToolCalls        []TurnReceiptToolCall `json:"tool_calls"`
+	ToolCallsOmitted int                   `json:"tool_calls_omitted,omitempty"`
+	Timing           *TurnReceiptTiming    `json:"timing,omitempty"`
+	Status           string                `json:"status"`
+	StopReason       string                `json:"stop_reason"`
 	// Truncated is true when any provider response in the turn finished with
 	// reason "length": the generation hit its token ceiling mid-thought.
-	Truncated            bool                  `json:"truncated,omitempty"`
-	Decision             *TurnReceiptDecision  `json:"decision,omitempty"`
-	Error                string                `json:"error,omitempty"`
-	ExecutionCursor      int64                 `json:"execution_cursor"`
-	PendingRecoveryCount int                   `json:"pending_recovery_count"`
-	Text                 string                `json:"text"`
+	Truncated            bool                 `json:"truncated,omitempty"`
+	Decision             *TurnReceiptDecision `json:"decision,omitempty"`
+	Error                string               `json:"error,omitempty"`
+	ExecutionCursor      int64                `json:"execution_cursor"`
+	PendingRecoveryCount int                  `json:"pending_recovery_count"`
+	Text                 string               `json:"text"`
 }
 
 // TurnOutcome maps a RunTurn error onto the receipt's closed status and

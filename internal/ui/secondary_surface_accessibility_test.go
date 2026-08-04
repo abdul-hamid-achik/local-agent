@@ -203,7 +203,7 @@ func TestASCIIProfileCoversApprovalActivityAndCompletionChrome(t *testing.T) {
 	for name, rendered := range surfaces {
 		plain := ansi.Strip(rendered)
 		assertNoUnicodeSemanticGlyphs(t, plain)
-	for _, forbidden := range []string{"…", "◇", "›", "↑", "↓", "▮", "▯"} {
+		for _, forbidden := range []string{"…", "◇", "›", "↑", "↓", "▮", "▯"} {
 			// Context status uses the profile separator (ASCII "|") between
 			// used/limit and percent; middle-dot is Unicode-only chrome.
 			if name == "context status" && forbidden == "·" {

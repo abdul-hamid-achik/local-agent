@@ -76,7 +76,7 @@ type goalPlanCard struct {
 	width        int
 	height       int
 	isDark       bool
-	themeID       string
+	themeID      string
 	glyphProfile GlyphProfile
 	styles       goalPlanStyles
 

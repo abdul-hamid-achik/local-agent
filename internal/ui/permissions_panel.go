@@ -101,7 +101,7 @@ func (m *Model) permissionsPanelItems() []permissionsItem {
 	}
 	items = append(items, permissionsItem{
 		action: permissionsClearSession, title: "Clear session grants",
-		value: fmt.Sprintf("%d", sessionCount),
+		value:       fmt.Sprintf("%d", sessionCount),
 		description: "Drop every process-local session approval grant",
 	})
 
@@ -121,18 +121,18 @@ func (m *Model) permissionsPanelItems() []permissionsItem {
 	}
 	items = append(items, permissionsItem{
 		action: permissionsExport, title: "Export workspace rules",
-		value: "JSON",
+		value:       "JSON",
 		description: "Write portable rules to " + permission.DefaultExportFileName,
 	})
 	items = append(items, permissionsItem{
 		action: permissionsImportHint, title: "Import workspace rules",
-		value: "slash",
+		value:       "slash",
 		description: "Use /permissions import [--replace] <path>",
 	})
 	ruleTotal := len(rules.BashPrefixes) + len(rules.MCPTools) + len(rules.WritePaths)
 	items = append(items, permissionsItem{
 		action: permissionsClearRules, title: "Clear workspace rules",
-		value: fmt.Sprintf("%d", ruleTotal),
+		value:       fmt.Sprintf("%d", ruleTotal),
 		description: "Remove every durable bash/MCP/path rule for this workspace",
 	})
 
@@ -196,7 +196,7 @@ func (m *Model) activatePermissionsItem(item permissionsItem) tea.Cmd {
 		} else {
 			m.SetApprovalPosture(ApprovalPostureAcceptWorkspaceEdits)
 			m.entries = append(m.entries, ChatEntry{
-				Kind: "system",
+				Kind:    "system",
 				Content: "Accept workspace edits enabled. write/edit/mkdir inside the workspace no longer prompt.",
 			})
 		}
@@ -208,7 +208,7 @@ func (m *Model) activatePermissionsItem(item permissionsItem) tea.Cmd {
 			count = m.agent.RevokeSessionApprovals("")
 		}
 		m.entries = append(m.entries, ChatEntry{
-			Kind: "system",
+			Kind:    "system",
 			Content: fmt.Sprintf("Cleared %d process-local session approval grant%s.", count, pluralSuffix(count)),
 		})
 		m.refreshTranscript()
@@ -219,7 +219,7 @@ func (m *Model) activatePermissionsItem(item permissionsItem) tea.Cmd {
 			count = m.agent.RevokeSessionApprovals(item.data)
 		}
 		m.entries = append(m.entries, ChatEntry{
-			Kind: "system",
+			Kind:    "system",
 			Content: fmt.Sprintf("Revoked %d session grant%s for %q.", count, pluralSuffix(count), item.data),
 		})
 		m.refreshTranscript()
@@ -228,7 +228,7 @@ func (m *Model) activatePermissionsItem(item permissionsItem) tea.Cmd {
 		return m.exportWorkspaceRules("")
 	case permissionsImportHint:
 		m.entries = append(m.entries, ChatEntry{
-			Kind: "system",
+			Kind:    "system",
 			Content: "Import with: /permissions import [--replace] <path>",
 		})
 		m.refreshTranscript()
@@ -303,7 +303,7 @@ func (m *Model) exportWorkspaceRules(path string) tea.Cmd {
 		m.entries = append(m.entries, ChatEntry{Kind: "error", Content: err.Error()})
 	} else {
 		m.entries = append(m.entries, ChatEntry{
-			Kind: "system",
+			Kind:    "system",
 			Content: fmt.Sprintf("Exported %d workspace rule%s to %s", doc.RuleCount(), pluralSuffix(doc.RuleCount()), path),
 		})
 	}
@@ -334,7 +334,7 @@ func (m *Model) importWorkspaceRules(data string) tea.Cmd {
 		}
 		total := len(rules.BashPrefixes) + len(rules.MCPTools) + len(rules.WritePaths)
 		m.entries = append(m.entries, ChatEntry{
-			Kind: "system",
+			Kind:    "system",
 			Content: fmt.Sprintf("Import %s: +%d new · %d total durable rules.", mode, added, total),
 		})
 	}

@@ -60,7 +60,7 @@ func (m *Model) projectSessionHeader() sessionHeaderProjection {
 	}
 	content := strings.Join(lines, "\n")
 	return sessionHeaderProjection{
-		content:        content,
+		content: content,
 		// Sticky may be multi-line (padded band); measure real paint height.
 		reservedHeight: lipgloss.Height(content),
 	}

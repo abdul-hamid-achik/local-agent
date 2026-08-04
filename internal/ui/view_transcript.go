@@ -974,7 +974,6 @@ func (m *Model) renderAssistantMsg(b *strings.Builder, entry ChatEntry, contentW
 		return
 	}
 
-
 	grid := m.contentGrid()
 	// Reasoning belongs to this assistant turn, so its disclosure follows the
 	// role header instead of appearing as an unowned block above it.
@@ -1034,7 +1033,6 @@ func (m *Model) renderStreamingMsg(b *strings.Builder, content string, contentW 
 	if !hasContent && !hasThinking {
 		return
 	}
-
 
 	// Live reasoning uses the same assistant-owned hierarchy as the completed
 	// disclosure. A bounded tail window keeps token-by-token height stable; the

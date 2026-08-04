@@ -25,8 +25,8 @@ type sessionTitleJobMsg struct {
 }
 
 const (
-	sessionTitleMaxEvalTokens = 48
-	sessionTitleJobTimeout    = 20 * time.Second
+	sessionTitleMaxEvalTokens  = 48
+	sessionTitleJobTimeout     = 20 * time.Second
 	sessionTitleSourceMaxRunes = 600
 )
 

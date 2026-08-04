@@ -14,7 +14,7 @@ func TestTranscriptPaintHeightOnlyResizeReusesHeightIndependentPrefix(t *testing
 	m.entries = make([]ChatEntry, 0, historyEntries)
 	for index := 0; index < historyEntries; index++ {
 		m.entries = append(m.entries, ChatEntry{
-			Kind:    "user",
+			Kind: "user",
 			// Multi-line so sticky never omits the latest block mid-resize.
 			Content: fmt.Sprintf("height-independent history %03d\ncontinued", index),
 		})

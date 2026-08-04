@@ -122,7 +122,7 @@ type GoalRecoveryOptions struct {
 	Width         int
 	Height        int
 	IsDark        bool
-	ThemeID          string
+	ThemeID       string
 	ReducedMotion bool
 	GlyphProfile  GlyphProfile
 	// Standalone adapts the already-designed evidence review for an ordinary

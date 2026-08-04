@@ -36,16 +36,16 @@ func hostMCPHubManagementTool(remoteName string) bool {
 // CapabilityRoutingMetrics is a process-local, privacy-safe counter set. It
 // never stores prompts, paths, schemas, or resolver prose.
 type CapabilityRoutingMetrics struct {
-	TurnsNonTrivial   int `json:"turns_non_trivial"`
-	Resolved          int `json:"resolved"`
-	Ambiguous         int `json:"ambiguous"`
-	NoMatch           int `json:"no_match"`
-	Unavailable       int `json:"unavailable"`
-	Invalid           int `json:"invalid"`
-	Skipped           int `json:"skipped"`
-	HostPrefetchOK    int `json:"host_prefetch_ok"`
-	HostPrefetchFail  int `json:"host_prefetch_fail"`
-	RouteFailedRetry  int `json:"route_failed_retry"`
+	TurnsNonTrivial    int `json:"turns_non_trivial"`
+	Resolved           int `json:"resolved"`
+	Ambiguous          int `json:"ambiguous"`
+	NoMatch            int `json:"no_match"`
+	Unavailable        int `json:"unavailable"`
+	Invalid            int `json:"invalid"`
+	Skipped            int `json:"skipped"`
+	HostPrefetchOK     int `json:"host_prefetch_ok"`
+	HostPrefetchFail   int `json:"host_prefetch_fail"`
+	RouteFailedRetry   int `json:"route_failed_retry"`
 	CatalogInvalidates int `json:"catalog_invalidates"`
 }
 

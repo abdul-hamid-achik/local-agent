@@ -45,7 +45,7 @@ type bobWorkspaceContextCard struct {
 	context bobWorkspaceContextPresentation
 	width   int
 	isDark  bool
-	themeID       string
+	themeID string
 	styles  bobWorkspaceContextStyles
 
 	cachedKey   string
