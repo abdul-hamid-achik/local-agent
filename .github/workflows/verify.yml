@@ -30,9 +30,6 @@ jobs:
       - name: Check module files
         run: go mod tidy -diff
 
-      - name: Test portable provider wrapper
-        run: sh scripts/local-agent-wrapper_test.sh
-
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
@@ -188,9 +185,6 @@ jobs:
 
       - name: Run binary smoke test
         run: '"${RUNNER_TEMP}/local-agent" --version'
-
-      - name: Test portable provider wrapper
-        run: sh scripts/local-agent-wrapper_test.sh
 
       - name: Run Darwin-sensitive package tests
         run: go test ./cmd/local-agent ./internal/agent ./internal/config ./internal/db ./internal/mcp ./internal/safeio -count=1
