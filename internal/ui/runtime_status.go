@@ -109,6 +109,18 @@ func (m *Model) buildRuntimeStatusContent(width int) string {
 		}
 	}
 	lines = append(lines, m.runtimeStatusRow("Model", modelRuntime, width))
+	if wait := m.chromeSpring.wait; wait.samples > 0 {
+		// The static receipt behind the waiting-phase trace (wait_trace.go):
+		// this model's first-response latency, readable with no motion at
+		// all. On a local host it is also the plainest way to see that a
+		// model has warmed up — the first sample carries the disk load, the
+		// typical value converges away from it.
+		lines = append(lines, m.runtimeStatusRow("Response",
+			fmt.Sprintf("first token · last %s · typical %s",
+				formatWorkingElapsed(wait.last), formatWorkingElapsed(wait.baseline)),
+			width,
+		))
+	}
 	// The daemon version used to be spliced into the model picker's title
 	// ("Ollama 0.31.2-test · models"), which is a heading, not a place to read
 	// diagnostics. It belongs with the rest of the runtime facts.

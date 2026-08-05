@@ -38,6 +38,11 @@ type chromeSpringState struct {
 
 	token   uint64
 	pending bool
+
+	// wait is the waiting-phase trace record (wait_trace.go). It lives here
+	// because Model already owns this presentation-only struct; it drives no
+	// spring and schedules no ticks of its own.
+	wait waitTraceState
 }
 
 func newChromeSpringState() chromeSpringState {
@@ -158,7 +163,13 @@ func (m *Model) startChromeSpringTick() tea.Cmd {
 
 // maybeKickChromeSpring updates targets and schedules a frame if motion remains.
 func (m *Model) maybeKickChromeSpring() tea.Cmd {
-	if m == nil || !m.ready {
+	if m == nil {
+		return nil
+	}
+	// Wait-trace observation rides the same per-update hook. It only records
+	// state transitions; it never schedules ticks, in any motion mode.
+	m.observeWaitTrace()
+	if !m.ready {
 		return nil
 	}
 	m.pullChromeSpringTargets()
