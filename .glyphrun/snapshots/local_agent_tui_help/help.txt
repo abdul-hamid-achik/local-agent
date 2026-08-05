@@ -5,6 +5,7 @@
                      │   Compose                                                                  │
                      │   enter             Send / queue one follow-up                             │
                      │   shift+enter       New line · ctrl+j/alt+enter also                       │
+                     │   ctrl+v            Paste text, or a macOS clipboard image as PNG          │
                      │   tab               Autocomplete                                           │
                      │   ↑                 Previous input (empty input)                           │
                      │   ↓                 Next input (history active)                            │
@@ -22,14 +23,13 @@
                      │   alt+t             Toggle all tools (empty input)                         │
                      │   ctrl+t            Toggle focused tool (empty input)                      │
                      │   alt+r             Toggle all reasoning (empty draft)                     │
+                     │   alt+o             Full output (inspected receipt)                        │
+                     │   alt+d             Full diff (inspected receipt)                          │
                      │   ctrl+y            Copy last response (empty input)                       │
-                     │   alt+m             Mouse capture off/on — turn off to select and copy     │
-                     │                     with the mouse                                         │
+                     │   alt+m             Mouse capture off/on — off lets you select text        │
                      │   alt+c             Toggle compact mode                                    │
                      │                                                                            │
                      │   Session                                                                  │
                      │   shift+tab         Cycle mode (NORMAL/PLAN/AUTO)                          │
-                     │   ctrl+o            Open model picker                                      │
-                     │   ctrl+p            Open settings                                          │
                      │ esc/q close · pgdn more · g/shift+g ends                                   │
                      ╰────────────────────────────────────────────────────────────────────────────╯

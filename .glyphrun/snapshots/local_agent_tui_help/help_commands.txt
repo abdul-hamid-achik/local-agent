@@ -1,6 +1,8 @@
                      ╭────────────────────────────────────────────────────────────────────────────╮
                      │ Help                                                                       │
                      │                                                                            │
+                     │   ctrl+o            Open model picker                                      │
+                     │   ctrl+p            Open settings                                          │
                      │   ctrl+g            Open agents                                            │
                      │   ctrl+n            New conversation                                       │
                      │   ctrl+l            Clear screen                                           │
@@ -12,8 +14,6 @@
                      │                                                                            │
                      │ Input Shortcuts                                                            │
                      │   @file / @agent    Insert file or agent mention text                      │
-                     │   ctrl+v            Paste text; on macOS convert a clipboard image to PNG  │
-                     │                     and attach it                                          │
                      │   paste/drag imag…  Attach up to four PNG, JPEG, or GIF files to the       │
                      │                     pending prompt                                         │
                      │   shift+drag        Select and copy: Ghostty, kitty, WezTerm, Alacritty,   │
