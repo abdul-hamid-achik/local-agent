@@ -138,7 +138,10 @@ func TestHelpDescribesClipboardImageConversionAndFileFormats(t *testing.T) {
 	m := newTestModel(t)
 	content := strings.Join(strings.Fields(strings.ToLower(ansi.Strip(m.buildHelpContent(m.helpContentWidth())))), " ")
 	for _, want := range []string{
-		"on macos convert a clipboard image to png",
+		// The row was shortened to buy back a help line, but the contract it
+		// states is unchanged: a macOS clipboard image is converted, not
+		// attached in whatever format the clipboard held.
+		"a macos clipboard image as png",
 		"attach up to four png, jpeg, or gif files",
 	} {
 		if !strings.Contains(content, want) {
