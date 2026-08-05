@@ -36,7 +36,13 @@ import (
 var syncedPackages = []string{
 	"controlplane",
 	"execution",
-	"expertselector",
+	// expertselector was here until sonar deleted it. Expert consultation picks
+	// several distinct models out of a local multi-model inventory and runs
+	// them side by side; sonar reaches hosted providers, which serve one model
+	// per profile and expose no inventory to choose from, so the feature had
+	// nothing to stand on there. Local Agent has exactly that inventory, so it
+	// keeps the package. This is a real divergence in what the two products
+	// are, not a port anyone forgot.
 	"imageasset",
 	"initcmd",
 	"netpolicy",
