@@ -80,6 +80,34 @@ func NormalizedProviderType(typ string) string {
 	}
 }
 
+// knownProviderTypes is the enumeration of selectable provider types, in the
+// order a user should see them. Every other answer to "does this type exist?"
+// derives from it. A second hand-written list is how one layer rejects a
+// provider the next layer would have accepted, and the rejection surfaces as
+// "Unknown provider" for something that is perfectly well known.
+var knownProviderTypes = []string{
+	ProviderTypeOllama,
+	ProviderTypeOpenAICompatible,
+	ProviderTypeXAI,
+}
+
+// KnownProviderTypes returns the selectable provider types in display order.
+func KnownProviderTypes() []string {
+	return append([]string(nil), knownProviderTypes...)
+}
+
+// IsKnownProviderType reports whether a provider type can be selected. It is
+// the single answer to that question.
+func IsKnownProviderType(typ string) bool {
+	normalized := NormalizedProviderType(typ)
+	for _, known := range knownProviderTypes {
+		if normalized == known {
+			return true
+		}
+	}
+	return false
+}
+
 // NormalizedType returns the effective provider type after empty → ollama.
 func (c ProviderConfig) NormalizedType() string {
 	return NormalizedProviderType(c.Type)
@@ -394,19 +422,16 @@ func validateProviderProfile(name string, profile ProviderProfile, localOnly boo
 	if profile.ContextSize < 0 {
 		return fmt.Errorf("config: provider profile %q context_size cannot be negative", label)
 	}
-	switch NormalizedProviderType(profile.Type) {
-	case ProviderTypeOllama:
-		return nil
-	case ProviderTypeOpenAICompatible, ProviderTypeXAI:
-		// ok
-	default:
+	normalized := NormalizedProviderType(profile.Type)
+	if !IsKnownProviderType(normalized) {
 		return fmt.Errorf(
-			"config: provider profile %q type must be %q, %q, or %q",
+			"config: provider profile %q type must be one of: %s",
 			label,
-			ProviderTypeOllama,
-			ProviderTypeOpenAICompatible,
-			ProviderTypeXAI,
+			strings.Join(KnownProviderTypes(), ", "),
 		)
+	}
+	if normalized == ProviderTypeOllama {
+		return nil
 	}
 	if strings.TrimSpace(profile.BaseURL) == "" {
 		return fmt.Errorf("config: provider profile %q requires base_url for type %q", label, profile.Type)

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/abdul-hamid-achik/local-agent/internal/config"
 )
 
 // RegisterBuiltins adds all built-in slash commands to the registry.
@@ -249,9 +251,12 @@ func RegisterBuiltins(r *Registry) {
 					}
 				}
 			}
-			// Allow switching to a known type even if not listed (flat catalog).
-			switch strings.ToLower(target) {
-			case "ollama", "xai", "openai_compatible":
+			// A provider type is selectable even when no profile is named after
+			// it (the flat catalog). config.IsKnownProviderType is the single
+			// answer to which types exist; the list this replaced was a second
+			// copy that happened to still agree, which is the only reason it had
+			// not yet rejected a valid provider.
+			if strings.TrimSpace(target) != "" && config.IsKnownProviderType(target) {
 				return Result{
 					Text:   fmt.Sprintf("Switching to provider: %s", target),
 					Action: ActionSwitchProvider,
