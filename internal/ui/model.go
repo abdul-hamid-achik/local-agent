@@ -947,6 +947,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		var cmd tea.Cmd
 		m.scramble, cmd = m.scramble.Update(msg)
 		cmds = append(cmds, cmd)
+		// The wait trace's spring rides this same clock rather than starting
+		// one of its own; the waiting phase owns exactly one.
+		m.advanceWaitTrace()
 	}
 
 	// The parent owns one Bubbles spinner clock for startup, streaming, tools,

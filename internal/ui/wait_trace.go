@@ -1,10 +1,12 @@
 package ui
 
 import (
+	"math"
 	"strings"
 	"time"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/harmonica"
 )
 
 // Wait trace: StateWaiting means the request reached Ollama and nothing has
@@ -40,6 +42,11 @@ const (
 	// the floor only widens the displayed timeline — the recorded EMA keeps
 	// the true value.
 	waitTraceBaselineFloor = 250 * time.Millisecond
+	// waitTraceFPS is the rate of the clock that advances the spring: the
+	// waiting phase's scramble tick. harmonica precomputes its coefficients
+	// from this, so a value that does not match the real tick makes the
+	// animation resolve too fast or too slow.
+	waitTraceFPS = 15
 )
 
 // waitTraceState tracks one in-flight wait and the per-model first-response
@@ -60,6 +67,30 @@ type waitTraceState struct {
 	last      time.Duration
 	samples   int
 	lastModel string
+
+	// headPos/headVel are the animated head position in cells, driven by a
+	// harmonica spring toward the position elapsed time says it should hold.
+	//
+	// The arithmetic alone would place the head correctly; it would also make
+	// it teleport between six integer cells, which reads as a counter rather
+	// than as something moving. The spring gives it momentum: it eases in,
+	// glides, and settles onto the expected-reply marker with a small
+	// overshoot. That overshoot is the point — it is the frame where a wait
+	// crosses from "normal" to "late", and a hard stop hides the moment.
+	headPos, headVel float64
+	spring           harmonica.Spring
+	springReady      bool
+}
+
+// waitTraceSpring is under-damped on purpose. A damping ratio below 1
+// overshoots and oscillates as the amplitude decays; at 0.62 the head passes
+// the marker by a fraction of a cell and settles back, which is what makes
+// arrival legible. Critical damping (1.0) would be smoother and say less.
+//
+// The frame rate must match the clock that actually advances it — the waiting
+// phase's scramble tick at ~15 FPS — or the motion resolves at the wrong speed.
+func newWaitTraceSpring() harmonica.Spring {
+	return harmonica.NewSpring(harmonica.FPS(waitTraceFPS), 7.0, 0.62)
 }
 
 // observeWaitTrace watches state transitions from the per-update chrome
@@ -84,6 +115,9 @@ func (m *Model) observeWaitTrace() {
 	case waiting && !s.inWait:
 		s.inWait = true
 		s.waitStart = m.nowTime()
+		// Each ping starts at the left edge with no momentum. Carrying the
+		// previous wait's velocity would fling the head off on the next turn.
+		s.headPos, s.headVel = 0, 0
 	case !waiting && s.inWait:
 		s.inWait = false
 		if m.state != StateStreaming || s.waitStart.IsZero() {
@@ -105,6 +139,80 @@ func (m *Model) observeWaitTrace() {
 		}
 		s.samples++
 	}
+}
+
+// advanceWaitTrace steps the spring one frame toward where elapsed time says
+// the head belongs. It is called from the waiting phase's scramble tick, which
+// is that phase's one clock owner — this adds no clock of its own.
+//
+// Under reducedMotion it does nothing and the head stays where it is, because
+// nothing renders it there anyway.
+func (m *Model) advanceWaitTrace() {
+	if m == nil || m.reducedMotion {
+		return
+	}
+	s := &m.chromeSpring.wait
+	if !s.inWait || s.samples == 0 || s.waitStart.IsZero() {
+		return
+	}
+	if !s.springReady {
+		s.spring = newWaitTraceSpring()
+		s.springReady = true
+	}
+	target := waitTraceTarget(m.nowTime().Sub(s.waitStart), s.baseline, waitTraceCells)
+	s.headPos, s.headVel = s.spring.Update(s.headPos, s.headVel, target)
+}
+
+// waitTraceTarget is where elapsed time says the head belongs, in fractional
+// cells. The expected-reply marker sits at cells/2, so elapsed == baseline
+// targets the marker exactly. The spring chases this; it is not rendered
+// directly.
+func waitTraceTarget(elapsed, baseline time.Duration, cells int) float64 {
+	if baseline < waitTraceBaselineFloor {
+		baseline = waitTraceBaselineFloor
+	}
+	if cells < 2 || elapsed <= 0 {
+		return 0
+	}
+	marker := float64(cells / 2)
+	target := float64(elapsed) / float64(baseline) * marker
+	if limit := float64(cells - 1); target > limit {
+		// Pinned at the last cell. The spring still approaches it, so a very
+		// late reply parks rather than accelerating off the end.
+		return limit
+	}
+	return target
+}
+
+// waitTraceTrail reports the cell the head is leaving and how strongly to
+// paint it, from the head's fractional position.
+//
+// weight is 0 when the head sits on a cell centre and rises toward 1 as it
+// crosses between cells. Six cells is too coarse to show travel by moving a
+// glyph alone; lighting the vacated cell in proportion turns two dots into one
+// object in motion. It returns ok=false when there is nothing to trail —
+// on-centre, or already at an edge.
+func waitTraceTrail(pos float64, head int) (cell int, weight float64) {
+	offset := pos - float64(head)
+	if offset > -0.15 && offset < 0.15 {
+		return -1, 0
+	}
+	// The fraction says which pair of cells the head sits between, which is
+	// direction-agnostic: a negative offset means it is short of the rendered
+	// cell, so the smear belongs on the neighbour to the left, and vice versa.
+	if offset < 0 {
+		cell = head - 1
+	} else {
+		cell = head + 1
+	}
+	if cell < 0 || cell >= waitTraceCells {
+		return -1, 0
+	}
+	weight = math.Abs(offset)
+	if weight > 1 {
+		weight = 1
+	}
+	return cell, weight
 }
 
 // waitTraceHead maps an elapsed wait onto the trace. The expected-reply
@@ -141,14 +249,25 @@ func (m *Model) renderWaitTrace(cells int) string {
 	if s.samples == 0 || !s.inWait || s.waitStart.IsZero() {
 		return ""
 	}
-	head, overdue := waitTraceHead(m.nowTime().Sub(s.waitStart), s.baseline, waitTraceCells)
+	_, overdue := waitTraceHead(m.nowTime().Sub(s.waitStart), s.baseline, waitTraceCells)
+	// The spring's position, not the arithmetic one. They agree at rest and
+	// differ exactly while the head is moving, which is the animation.
+	head := int(math.Round(s.headPos))
+	head = max(0, min(head, waitTraceCells-1))
+	// Sub-cell position drives a trailing echo. Six cells cannot show smooth
+	// travel by glyph alone, so the fraction between cells is rendered as
+	// brightness on the cell the head is leaving: the eye reads the pair as
+	// one thing in motion rather than a dot that jumped.
+	trail, trailWeight := waitTraceTrail(s.headPos, head)
 
 	palette := outputSemanticPalette(m.isDark, m.themeID)
 	trackStyle := lipgloss.NewStyle().Foreground(palette.Dim)
 	markerStyle := lipgloss.NewStyle().Foreground(palette.Border)
 	headStyle := lipgloss.NewStyle().Foreground(palette.Accent)
+	trailStyle := lipgloss.NewStyle().Foreground(palette.Muted)
 	if overdue {
 		headStyle = lipgloss.NewStyle().Foreground(palette.Warning)
+		trailStyle = lipgloss.NewStyle().Foreground(palette.Accent2)
 	}
 
 	// Position carries the fact; color only reinforces it, so NO_COLOR and
@@ -159,10 +278,14 @@ func (m *Model) renderWaitTrace(cells int) string {
 	marker := waitTraceCells / 2
 	var b strings.Builder
 	for cell := range waitTraceCells {
-		switch cell {
-		case head:
+		switch {
+		case cell == head:
 			b.WriteString(headStyle.Render(glyphs.Selected))
-		case marker:
+		case cell == trail && trailWeight > 0:
+			// The vacated cell, held briefly. Position still carries the fact
+			// on its own, so a NO_COLOR terminal loses only the smoothing.
+			b.WriteString(trailStyle.Render(glyphs.Selected))
+		case cell == marker:
 			b.WriteString(markerStyle.Render(glyphs.Vertical))
 		default:
 			b.WriteString(trackStyle.Render("·"))
