@@ -62,6 +62,34 @@ type UIConfig struct {
 	// available, or to pick one interactively (that choice is stored separately
 	// and takes precedence over this key).
 	Theme string `yaml:"theme,omitempty"`
+	// ProseWidth caps how wide conversational text is allowed to wrap, in
+	// columns. Structural surfaces — code fences, diffs, tables, inspectors —
+	// always use the full pane and are unaffected.
+	//
+	// The default soft-caps prose well below a very wide terminal, on the
+	// ordinary typographic argument that long lines are harder to scan. That is
+	// a judgement, not a fact about your terminal, and on an ultrawide display
+	// it reads as a dead right margin. Raise it to use the full width, or lower
+	// it for a narrower measure.
+	//
+	// Zero keeps the built-in default. Values below MinProseWidth are refused:
+	// a measure narrower than that wraps ordinary sentences into ribbons.
+	ProseWidth int `yaml:"prose_width,omitempty"`
+} // Prose measure bounds. The default matches the former ProseTargetWide
+// constant, so an unconfigured harness wraps exactly as before.
+const (
+	DefaultProseWidth = 140
+	MinProseWidth     = 40
+	MaxProseWidth     = 500
+)
+
+// EffectiveProseWidth returns the configured prose cap, or the default.
+// Validation has already accepted the value.
+func (u UIConfig) EffectiveProseWidth() int {
+	if u.ProseWidth <= 0 {
+		return DefaultProseWidth
+	}
+	return u.ProseWidth
 }
 
 // UnmarshalYAML rejects an explicit null continuation policy before it can be
@@ -660,6 +688,14 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("config: tools.mcp_timeout must be positive, got %s", c.Tools.MCPTimeout)
 		} else if d > MaxMCPCallTimeout {
 			return fmt.Errorf("config: tools.mcp_timeout %s exceeds the %s ceiling", c.Tools.MCPTimeout, MaxMCPCallTimeout)
+		}
+	}
+	if c.UI.ProseWidth != 0 {
+		if c.UI.ProseWidth < MinProseWidth {
+			return fmt.Errorf("config: ui.prose_width %d is below the %d-column minimum; a narrower measure wraps sentences into ribbons", c.UI.ProseWidth, MinProseWidth)
+		}
+		if c.UI.ProseWidth > MaxProseWidth {
+			return fmt.Errorf("config: ui.prose_width %d exceeds the %d-column ceiling", c.UI.ProseWidth, MaxProseWidth)
 		}
 	}
 	if raw := strings.TrimSpace(c.Tools.ApprovalTimeout); raw != "" {
