@@ -5,7 +5,7 @@ no model selected
 │ Locked · Ship a polish…   │
 │ 1 acceptance criterion    │
 │ Auto-turn budget          │
-│ > 8                       │
+│ > 24                      │
 │ esc cancel                │
 │ enter/tab next            │
 ╰───────────────────────────╯

@@ -20,7 +20,7 @@
       │   Open a saved workspace session                                           │
       │   Compact layout · Auto                                                    │
       │   Toggle the explicit compact transcript preference                        │
-      │   Runtime status · 21 ready tools · 21 local · 0 MCP                       │
+      │   Runtime status · 22 ready tools · 22 local · 0 MCP                       │
       │   Inspect model, approval posture, tools, servers, and failures            │
       │   Permissions · 0 session · 0 rules                                        │
       │   Accept-edits, session grants, durable rules, export/import               │

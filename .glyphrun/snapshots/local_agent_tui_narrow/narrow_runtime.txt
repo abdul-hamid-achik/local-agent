@@ -13,7 +13,7 @@
  │ Approval   Prompted for            │
  │            approval-gated tools    │
  │ Read scope workspace only          │
- │ Tools      21 ready · 21 local · 0 │
+ │ Tools      22 ready · 22 local · 0 │
  │            MCP                     │
  │ esc/q back · j/k scroll · ↓ more   │
  ╰────────────────────────────────────╯

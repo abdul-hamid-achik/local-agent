@@ -20,9 +20,9 @@
 │                                                                             │
 │                                                                             │
 │ Limits · set at least one                                                   │
-│ Auto turns > 8                                                              │
-│ Tokens       12000                                                          │
-│ Time         30m                                                            │
+│ Auto turns > 24                                                             │
+│ Tokens       250000                                                         │
+│ Time         1h30m                                                          │
 │                                                                             │
 │ Actions                                                                     │
 │ ▸ Save budgets ·   Cancel                                                   │
