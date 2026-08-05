@@ -158,11 +158,11 @@ func (m *Model) renderWaitTrace(cells int) string {
 	glyphs := glyphSet(m.glyphProfile)
 	marker := waitTraceCells / 2
 	var b strings.Builder
-	for cell := 0; cell < waitTraceCells; cell++ {
-		switch {
-		case cell == head:
+	for cell := range waitTraceCells {
+		switch cell {
+		case head:
 			b.WriteString(headStyle.Render(glyphs.Selected))
-		case cell == marker:
+		case marker:
 			b.WriteString(markerStyle.Render(glyphs.Vertical))
 		default:
 			b.WriteString(trackStyle.Render("·"))
