@@ -111,7 +111,7 @@ func run() int {
 		command.Stdin = os.Stdin
 		command.Stdout = os.Stdout
 		command.Stderr = os.Stderr
-		command.Env = replaceEnv(os.Environ(), "OLLAMA_HOST", "http://"+listener.Addr().String())
+		command.Env = replaceEnv(hermeticEnv(), "OLLAMA_HOST", "http://"+listener.Addr().String())
 		if err := command.Run(); err != nil {
 			state.fail("local-agent process %d: %v", process, err)
 			var exitErr *exec.ExitError
@@ -332,6 +332,39 @@ func writeNDJSON(w http.ResponseWriter, value any) {
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()
 	}
+}
+
+// hermeticEnv strips every provider credential and provider override the
+// ambient shell may carry before this fixture declares its own.
+//
+// Without it a spec is not hermetic. These fixtures pass os.Environ() straight
+// to the binary they launch, and a developer machine routinely exports a
+// hosted provider key — so local-agent would configure a remote provider no
+// spec asked for, while the fake Ollama server owned the model inventory. The
+// same spec then passes or fails depending on what happens to be exported, and
+// a test run can reach a metered endpoint with a real credential.
+//
+// A deterministic terminal suite must not be able to bill you.
+//
+// OLLAMA_HOST is deliberately left in place: specs point it at their fake
+// server or at a dead port on purpose, and removing it would let the binary
+// reach a real local daemon instead.
+func hermeticEnv() []string {
+	environment := os.Environ()
+	result := make([]string, 0, len(environment))
+	for _, entry := range environment {
+		key, _, found := strings.Cut(entry, "=")
+		if !found {
+			continue
+		}
+		if strings.HasPrefix(key, "LOCAL_AGENT_PROVIDER") ||
+			strings.HasSuffix(key, "_API_KEY") ||
+			strings.HasSuffix(key, "_API_TOKEN") {
+			continue
+		}
+		result = append(result, entry)
+	}
+	return result
 }
 
 func replaceEnv(environ []string, key, value string) []string {
