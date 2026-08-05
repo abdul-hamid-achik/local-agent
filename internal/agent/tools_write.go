@@ -1,11 +1,16 @@
 package agent
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
 	"strconv"
 	"strings"
+
+	executionpkg "github.com/abdul-hamid-achik/local-agent/internal/execution"
+	permissionpkg "github.com/abdul-hamid-achik/local-agent/internal/permission"
 )
 
 func (a *Agent) handleWrite(args map[string]any) (string, bool) {
@@ -37,15 +42,30 @@ func (a *Agent) handleWrite(args map[string]any) (string, bool) {
 	return fmt.Sprintf("Written to %s (%d bytes)", path, len(content)), false
 }
 
+// handleEdit edits one file in place under two mutually exclusive modes.
+//
+// The primary mode is exact string replacement: old_string is located
+// verbatim in the current file and becomes new_string. It requires no line
+// numbers, no hunk headers and no leading markers, which is exactly the
+// bookkeeping models get wrong. An old_string that matches zero or several
+// locations is refused with instructions rather than resolved by guessing.
+//
+// The unified-diff patch mode is retained for existing callers and for edits
+// a model prefers to express as a diff. Both modes share this function's
+// workspace containment, permission classification and atomic write.
 func (a *Agent) handleEdit(args map[string]any) (string, bool) {
 	requestedPath, _ := args["path"].(string)
 	patch, _ := args["patch"].(string)
+	edit, replacementMode := parseReplacementEdit(args)
 
 	if requestedPath == "" {
 		return "error: path is required", true
 	}
-	if patch == "" {
-		return "error: patch is required", true
+	switch {
+	case replacementMode && patch != "":
+		return "error: pass either old_string/new_string or patch, not both", true
+	case !replacementMode && patch == "":
+		return "error: old_string and new_string are required (patch is accepted as an alternative)", true
 	}
 
 	workspace, path, relative, err := a.openWritableRootForPath(requestedPath)
@@ -65,17 +85,224 @@ func (a *Agent) handleEdit(args map[string]any) (string, bool) {
 		return fmt.Sprintf("error reading file: %v", err), true
 	}
 
-	// Apply the patch
-	newContent, err := applyPatch(string(oldContent), patch)
-	if err != nil {
-		return fmt.Sprintf("error applying patch: %v", err), true
+	var (
+		newContent string
+		summary    string
+	)
+	if replacementMode {
+		updated, replacements, replaceErr := applyReplacementEdit(string(oldContent), edit)
+		if replaceErr != nil {
+			return fmt.Sprintf("error editing file: %v", replaceErr), true
+		}
+		newContent = updated
+		summary = fmt.Sprintf("Replaced %s in %s", pluralOccurrences(replacements), path)
+	} else {
+		// Apply the patch
+		updated, patchErr := applyPatch(string(oldContent), patch)
+		if patchErr != nil {
+			return fmt.Sprintf("error applying patch: %v", patchErr), true
+		}
+		newContent = updated
+		summary = fmt.Sprintf("Applied patch to %s", path)
 	}
 
 	if err := atomicWriteRoot(parent, name, []byte(newContent), info.Mode().Perm()); err != nil {
 		return fmt.Sprintf("error writing file: %v", err), true
 	}
 
-	return fmt.Sprintf("Applied patch to %s (%d bytes)", path, len(newContent)), false
+	return fmt.Sprintf("%s (%d bytes)", summary, len(newContent)), false
+}
+
+// replacementEdit is the string-replacement form of an edit call: exact text
+// in, exact text out. It carries no positional information because position
+// is derived from the file itself.
+type replacementEdit struct {
+	oldString  string
+	newString  string
+	replaceAll bool
+}
+
+// parseReplacementEdit reports whether an edit call selected string
+// replacement and returns its payload. The presence of either string field
+// selects the mode, so a call that supplies only one of them still fails as a
+// replacement (with a targeted message) instead of being read as a patch.
+func parseReplacementEdit(args map[string]any) (replacementEdit, bool) {
+	_, hasOld := args["old_string"]
+	_, hasNew := args["new_string"]
+	if !hasOld && !hasNew {
+		return replacementEdit{}, false
+	}
+	oldString, _ := args["old_string"].(string)
+	newString, _ := args["new_string"].(string)
+	replaceAll, _ := args["replace_all"].(bool)
+	return replacementEdit{oldString: oldString, newString: newString, replaceAll: replaceAll}, true
+}
+
+// validate rejects the two payloads that can never identify a single edit,
+// independently of any file content, so the failure is reported before a
+// dispatch record or an approval prompt is created.
+func (e replacementEdit) validate() error {
+	if e.oldString == "" {
+		return errors.New("old_string is required and must not be empty: copy the exact text to replace from the current file, or use the write tool to create a whole file")
+	}
+	if e.oldString == e.newString {
+		return errors.New("old_string and new_string are identical, so this edit would change nothing")
+	}
+	return nil
+}
+
+// maxReplacementNearMissCells bounds the whitespace-insensitive near-miss
+// scan used only to explain a failed match.
+const maxReplacementNearMissCells = 4_000_000
+
+// applyReplacementEdit performs one exact, literal replacement and returns
+// the new content plus the number of replaced occurrences. Nothing here is
+// interpreted as a pattern: old_string is matched byte for byte, so regex
+// metacharacters, tabs and non-ASCII text carry no special meaning.
+//
+// Ambiguity is a hard error. A target that appears in several places could be
+// edited in the wrong one, and a silently misplaced edit is far more expensive
+// than a refused call, so the model is told how to make the target unique
+// instead of having one location chosen for it.
+func applyReplacementEdit(content string, edit replacementEdit) (string, int, error) {
+	if err := edit.validate(); err != nil {
+		return "", 0, err
+	}
+	switch matches := countExactMatches(content, edit.oldString); {
+	case matches == 0:
+		return "", 0, fmt.Errorf("old_string was not found in the file%s. Read the file again and copy the exact text, including indentation and any change already applied earlier in this session. Received: %s",
+			replacementNearMiss(content, edit.oldString), patchMismatchSnippet(edit.oldString))
+	case matches > 1 && !edit.replaceAll:
+		return "", 0, fmt.Errorf("old_string matches %d locations in the file, so the intended one is ambiguous and no edit was made. Extend old_string (and new_string) with surrounding lines until it matches exactly one location, or pass replace_all: true to change all %d",
+			matches, matches)
+	}
+	// strings.Count is the non-overlapping count actually consumed by
+	// ReplaceAll; countExactMatches above is deliberately overlap-aware so
+	// that an overlapping target is refused as ambiguous rather than
+	// silently resolved left to right.
+	replacements := strings.Count(content, edit.oldString)
+	return strings.ReplaceAll(content, edit.oldString, edit.newString), replacements, nil
+}
+
+// countExactMatches counts every offset where target occurs, including
+// overlapping occurrences. Overlap matters for the uniqueness rule: two
+// overlapping candidate locations are still two locations.
+func countExactMatches(content, target string) int {
+	if target == "" {
+		return 0
+	}
+	count := 0
+	for offset := 0; offset+len(target) <= len(content); {
+		index := strings.Index(content[offset:], target)
+		if index < 0 {
+			break
+		}
+		count++
+		offset += index + 1
+	}
+	return count
+}
+
+// replacementNearMiss explains a failed exact match when the file holds the
+// same lines apart from leading or trailing whitespace, which is the common
+// shape of a model-authored target. It never relaxes the match: the edit is
+// still refused, the model is simply told that indentation rather than
+// location is what differed.
+func replacementNearMiss(content, target string) string {
+	targetLines := strings.Split(target, "\n")
+	sourceLines := strings.Split(content, "\n")
+	if len(targetLines) > len(sourceLines) {
+		return ""
+	}
+	if len(targetLines) > 0 && len(sourceLines) > maxReplacementNearMissCells/len(targetLines) {
+		return ""
+	}
+	trimmedTarget := make([]string, len(targetLines))
+	for index, line := range targetLines {
+		trimmedTarget[index] = strings.TrimSpace(line)
+	}
+	found, line := 0, 0
+	for start := 0; start+len(targetLines) <= len(sourceLines); start++ {
+		matched := true
+		for offset, want := range trimmedTarget {
+			if strings.TrimSpace(sourceLines[start+offset]) != want {
+				matched = false
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+		found++
+		if found > 1 {
+			return ""
+		}
+		line = start + 1
+	}
+	if found != 1 {
+		return ""
+	}
+	return fmt.Sprintf(" (line %d differs only in leading or trailing whitespace; match the file's exact indentation)", line)
+}
+
+func pluralOccurrences(count int) string {
+	if count == 1 {
+		return "1 occurrence"
+	}
+	return fmt.Sprintf("%d occurrences", count)
+}
+
+// preflightEditArguments admits an edit call before it is recorded and
+// dispatched. It accepts either edit mode and rejects payloads that cannot
+// name a single, well-formed change under the mode they selected.
+func preflightEditArguments(args map[string]any) error {
+	edit, replacementMode := parseReplacementEdit(args)
+	patch, _ := args["patch"].(string)
+	if !replacementMode {
+		if _, ok := args["patch"]; !ok {
+			return errors.New("edit requires old_string and new_string (exact text replacement), or patch (a complete unified diff)")
+		}
+		return preflightRequiredString(args, "patch", false)
+	}
+	if patch != "" {
+		return errors.New("edit accepts either old_string/new_string or patch, not both")
+	}
+	if _, ok := args["old_string"].(string); !ok {
+		return errors.New("old_string must be a string")
+	}
+	if _, ok := args["new_string"]; !ok {
+		return errors.New("new_string is required; pass an empty string to delete the matched text")
+	}
+	if _, ok := args["new_string"].(string); !ok {
+		return errors.New("new_string must be a string")
+	}
+	return edit.validate()
+}
+
+// replacementEditPreview fills the approval preview for a string-replacement
+// edit. The preview kind stays PreviewFilePatch so approval classification,
+// session scoping and host rendering are unchanged; only the diff body is
+// derived from the exact replacement rather than copied from a
+// model-supplied patch.
+func (a *Agent) replacementEditPreview(ctx context.Context, preview *permissionpkg.ApprovalPreview, edit replacementEdit) {
+	preview.Kind = permissionpkg.PreviewFilePatch
+	preview.Consequence = "Replaces the exact matched text in the target file."
+	before, exists, reason := a.approvalExistingContent(preview.Path)
+	if exists {
+		preview.ExistingSHA256 = executionpkg.HashText(before)
+	}
+	if reason != "" {
+		preview.DiffOmittedReason = reason
+		return
+	}
+	after, _, err := applyReplacementEdit(before, edit)
+	if err != nil {
+		preview.DiffOmittedReason = fmt.Sprintf("replacement could not be applied for preview: %v", err)
+		return
+	}
+	preview.ByteSize = int64(len(after))
+	preview.ContentSHA256 = executionpkg.HashText(after)
+	preview.Diff, preview.DiffTruncated, preview.DiffOmittedReason = approvalDiff(ctx, before, after)
 }
 
 var hunkHeaderPattern = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@`)
@@ -167,10 +394,139 @@ func applyPatch(content, patch string) (string, error) {
 	}
 
 	if !applied {
-		return "", fmt.Errorf("patch contains no hunks")
+		// No hunk header matched anywhere. Before giving up, try the body
+		// as a header-less diff anchored to content rather than to line
+		// numbers. This cannot interfere with header-driven application:
+		// it runs only when the patch contained no usable header at all.
+		anchored, err := applyHeaderlessPatch(source, patchLines)
+		if err != nil {
+			return "", err
+		}
+		return strings.Join(anchored, "\n"), nil
 	}
 	result = append(result, source[sourcePos:]...)
 	return strings.Join(result, "\n"), nil
+}
+
+// errPatchNoHunks reports a patch argument that is not a unified diff at all.
+// It names the arguments that need neither headers nor line numbers, because
+// this error is read by the model that must produce the next attempt.
+var errPatchNoHunks = errors.New(`patch contains no hunks: no line matched the required "@@ -start,count +start,count @@" header, and the body is not a bare diff either. Prefer the old_string/new_string arguments, which replace exact text and need no headers or line numbers`)
+
+// maxHeaderlessAnchorCells bounds the cost of locating a header-less hunk.
+const maxHeaderlessAnchorCells = 4_000_000
+
+// applyHeaderlessPatch applies a diff body that carries no @@ header, which
+// is the most common shape behind a "patch contains no hunks" failure. The
+// context and removed lines are the anchor: they must occur in exactly one
+// place in the file. Zero or several occurrences are refused for the same
+// reason an ambiguous old_string is refused, so this tolerance can never move
+// an edit to a location the model did not actually name.
+func applyHeaderlessPatch(source, patchLines []string) ([]string, error) {
+	oldLines, newLines, err := parseHeaderlessHunkBody(patchLines)
+	if err != nil {
+		return nil, err
+	}
+	if len(oldLines) > len(source) {
+		return nil, errors.New("patch body does not match the file: it has more context and removed lines than the file has lines. Read the file again, or use the old_string/new_string arguments")
+	}
+	if len(source) > maxHeaderlessAnchorCells/len(oldLines) {
+		return nil, errors.New("patch has no @@ header and the file is too large to locate the hunk by content. Add the @@ -start,count +start,count @@ header, or use the old_string/new_string arguments")
+	}
+
+	matches, at := 0, 0
+	for start := 0; start+len(oldLines) <= len(source); start++ {
+		matched := true
+		for offset, want := range oldLines {
+			if source[start+offset] != want {
+				matched = false
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+		matches++
+		if matches > 1 {
+			return nil, fmt.Errorf("patch has no @@ header and its context and removed lines appear in %d places, so the intended one is ambiguous and no edit was made. Add surrounding context lines, or use the old_string/new_string arguments", matches)
+		}
+		at = start
+	}
+	if matches == 0 {
+		return nil, errors.New("patch body does not match the file: its context and removed lines do not appear anywhere. Read the file again and copy the exact lines, or use the old_string/new_string arguments")
+	}
+
+	result := make([]string, 0, len(source)-len(oldLines)+len(newLines))
+	result = append(result, source[:at]...)
+	result = append(result, newLines...)
+	result = append(result, source[at+len(oldLines):]...)
+	return result, nil
+}
+
+// parseHeaderlessHunkBody splits a header-less diff body into the lines it
+// expects to find and the lines that replace them. Anything that is not a
+// diff marker line, a diff preamble, or a code fence makes the whole argument
+// something other than a patch.
+func parseHeaderlessHunkBody(patchLines []string) (oldLines, newLines []string, err error) {
+	body, changed := false, false
+	for index, line := range patchLines {
+		if strings.HasPrefix(line, "\\ No newline at end of file") {
+			continue
+		}
+		if strings.HasPrefix(strings.TrimSpace(line), "```") {
+			continue
+		}
+		// File headers are only headers before the body begins; afterwards a
+		// "--- " line is an ordinary removal of a line that starts with two
+		// dashes.
+		if !body && isDiffPreambleLine(line) {
+			continue
+		}
+		if line == "" {
+			if index == len(patchLines)-1 {
+				break
+			}
+			if !body {
+				continue
+			}
+			// A context line for a blank source line, whose single trailing
+			// space editors and models routinely strip.
+			line = " "
+		}
+		switch line[0] {
+		case ' ':
+			oldLines = append(oldLines, line[1:])
+			newLines = append(newLines, line[1:])
+		case '-':
+			oldLines = append(oldLines, line[1:])
+			changed = true
+		case '+':
+			newLines = append(newLines, line[1:])
+			changed = true
+		default:
+			return nil, nil, errPatchNoHunks
+		}
+		body = true
+	}
+	if !body {
+		return nil, nil, errPatchNoHunks
+	}
+	if !changed {
+		return nil, nil, errors.New("patch adds and removes nothing, so it would change nothing")
+	}
+	if len(oldLines) == 0 {
+		return nil, nil, errors.New("patch has no @@ header and only added lines, so there is nothing to locate it by. Include the surrounding unchanged lines as context, or use the old_string/new_string arguments to name the exact insertion point")
+	}
+	return oldLines, newLines, nil
+}
+
+func isDiffPreambleLine(line string) bool {
+	for _, prefix := range []string{"--- ", "+++ ", "diff --git ", "index "} {
+		if strings.HasPrefix(line, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // patchMismatchSnippet bounds a patch/source line before it is quoted into a
