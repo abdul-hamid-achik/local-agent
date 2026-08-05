@@ -501,6 +501,28 @@ type openAIErrorBody struct {
 	Code    any    `json:"code,omitempty"`
 }
 
+// ProviderHTTPStatus reports the HTTP status a provider returned, when the
+// client dispatched the request at all.
+//
+// The status code alone is a bounded, host-safe fact: unlike the response body
+// it cannot contain provider prose, an endpoint, or a credential. That makes it
+// the one wire detail a session log can carry without weakening the redaction
+// contract, and it is the difference between "the key is wrong" (401), "you are
+// being throttled" (429), "the request was malformed" (400), and "their server
+// broke" (5xx) — four different investigations that an untyped error text makes
+// a reader guess at.
+func ProviderHTTPStatus(err error) (int, bool) {
+	var openAIErr *openAIHTTPError
+	if errors.As(err, &openAIErr) && openAIErr.StatusCode > 0 {
+		return openAIErr.StatusCode, true
+	}
+	var ollamaErr *ollamaHTTPError
+	if errors.As(err, &ollamaErr) && ollamaErr.StatusCode > 0 {
+		return ollamaErr.StatusCode, true
+	}
+	return 0, false
+}
+
 type openAIHTTPError struct {
 	StatusCode int
 	Status     string
