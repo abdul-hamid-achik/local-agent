@@ -1,5 +1,5 @@
 version: 1
-contractHash: sha256:067086de698f8a3cf74c1c7c86f57bcf4e3e3b81480fde97d6e7bfff74db0bb1
+contractHash: sha256:a7ae958bcea0f3616150299316aa35a624e65dfbf3dee6642c6bcd5fe0880084
 name: local_agent_tui_approval_denial
 # Runner note (2026-07-16): a restricted sandbox can deny the wrapper's
 # 127.0.0.1:0 listener before Local Agent starts. Glyphrun currently reports
@@ -132,7 +132,7 @@ steps:
             notContains: "✓ Done"
         timeoutMs: 4000
     - snapshot: denied_receipt
-    - press: "ctrl+r"
+    - press: "ctrl+t"
     - wait:
         screen:
             contains: "tool: write"
@@ -175,7 +175,7 @@ outcomes:
             name: denied_receipt
             mode: text
     - id: denied_receipt_is_keyboard_inspectable
-      description: ctrl+r expands the denied receipt to show safe tool identity, redacted arguments, and transport/domain/evidence state
+      description: ctrl+t expands the denied receipt to show safe tool identity, redacted arguments, and transport/domain/evidence state
       verify:
         snapshot:
             name: denied_receipt_expanded

@@ -79,13 +79,18 @@ steps:
             contains: "Recovery blocked: write_file has a durable dispatch marker"
         timeoutMs: 3000
     - snapshot: compact_receipts
-    - press: "ctrl+b"
+    # alt+t expands every receipt. The runner cannot press alt+<letter>, so the
+    # spec sends the ESC-prefixed bytes a terminal actually transmits.
+    - send:
+        bytes: "\et"
     - wait:
         screen:
             contains: "package ui"
         timeoutMs: 2000
     - snapshot: expanded_receipts
-    - press: "ctrl+t"
+    # alt+r collapses all reasoning, sent the same way.
+    - send:
+        bytes: "\er"
     - wait:
         screen:
             notContains: "one successful read and one failed test command"
