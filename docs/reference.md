@@ -207,7 +207,7 @@ Use Go duration syntax such as `30m` or `1h30m`. Duration-shaped but invalid inp
 
 | Key | Action |
 |---|---|
-| `enter` | Send the draft, or queue one follow-up while a turn is active |
+| `enter` | Send the draft. While a turn is active, a slash command runs immediately and anything else queues as the one follow-up |
 | `shift+enter`, `ctrl+j`, `alt+enter` | Insert a newline without sending |
 | `shift+tab` | Cycle NORMAL, PLAN, and AUTO without opening a form |
 | `ctrl+p` | Open session settings |
@@ -220,12 +220,13 @@ Use Go duration syntax such as `30m` or `1h30m`. Duration-shaped but invalid inp
 | `pgup`, `pgdown` | Scroll the conversation without editing the draft |
 | `ctrl+u`, `ctrl+d` | Edit the draft; with an empty or unavailable composer, scroll by half a page |
 | `end` | Jump to the latest conversation output when the composer is empty or unavailable |
-| `ctrl+b`, `ctrl+r` | Toggle all tool details or the focused/latest tool |
-| `alt+o`, `alt+d` | Open retained output or a diff for the inspected tool when available |
-| `ctrl+t` | Toggle model thinking display |
+| `alt+t`, `ctrl+t` | Toggle every tool receipt, or the focused one |
+| `alt+o`, `alt+d` | Open the full output or the full diff for the inspected tool |
+| `alt+r` | Toggle all model reasoning |
 | `ctrl+y` | Copy the latest response |
+| `alt+m` | Turn mouse capture off so the terminal can select text, and back on |
 | `ctrl+e` | Edit input with `$VISUAL`, then `$EDITOR` |
-| `ctrl+k` | Toggle compact transcript layout |
+| `alt+c` | Toggle compact transcript layout |
 | `esc` | Close an overlay or inline form, cancel an approval, or cancel active generation |
 | `ctrl+n`, `ctrl+l` | New conversation or clear the view |
 | `ctrl+c` | Quit |
@@ -246,10 +247,14 @@ or later draft rows are hidden and names the corresponding `ctrl+home` or
 composer cursor or its internal viewport; a visible document overlay owns the
 wheel while it is open. Press `end` to resume following the latest output only
 when the composer is empty or unavailable. Local Agent enables terminal mouse
-reporting so wheel events reach the transcript. Use the terminal's selection
-override, commonly `shift+drag`, to select transcript text; `ctrl+y` remains the
-application-level copy shortcut for the latest response. Use `pgup`/`pgdown`,
-`ctrl+b` and `ctrl+r` for transcript and tool navigation. With an empty composer,
+reporting so wheel events reach the transcript, and that is what stops the
+terminal from doing its own drag-selection. Most terminals offer a modifier
+that hands the mouse back — `shift+drag` in Ghostty, kitty, WezTerm, Alacritty
+and xterm, `option+drag` in iTerm2 — but Terminal.app has none. `alt+m` turns
+capture off outright, which works everywhere; wheel scrolling stops until you
+press it again, and the paging keys keep working. `ctrl+y` copies the latest
+response without touching the mouse at all. Use `pgup`/`pgdown`, `alt+t` and
+`ctrl+t` for transcript and tool navigation. With an empty composer,
 `ctrl+u`/`ctrl+d` also scroll half a page; while drafting they retain their
 standard editing behavior.
 
@@ -288,8 +293,15 @@ draft text. Duplicate paths are removed before admission, and images with the
 same validated content are attached only once. At most the first four available
 slots are queued; Local Agent reports any additional files it skips.
 
-When a turn is already running, sending a follow-up moves its text and pending
-images into one visible queue item. Editing or an ordinary failed turn restores
+A slash command typed while a turn runs does not use that slot: it executes
+immediately when its action is safe mid-turn — pure UI, read-only information,
+and approval policy that applies to the next turn. Anything that would replace
+the conversation, start a second turn, or change the model, provider, context
+window, MCP servers, checkpoints or goals is deferred instead, so checking
+`/permissions` or reading `/help` never costs you the follow-up.
+
+When a turn is already running, sending an ordinary follow-up moves its text and
+pending images into one visible queue item. Editing or an ordinary failed turn restores
 both to the composer in their original order; a successful dispatch consumes
 them together. If the active prompt is rejected before inference begins, Local
 Agent keeps that retry and the queued follow-up as two separate visible owners.

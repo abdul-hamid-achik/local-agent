@@ -78,6 +78,9 @@ tools:
   max_grep_results: 500
   max_iterations: 10
   auto_max_iterations: 40
+  auto_max_segments: 8
+  auto_max_wall_time: 90m
+  approval_timeout: 0s
 
 continuations:
   mode: suggest # off | suggest | auto_read_only
@@ -132,6 +135,22 @@ than exposing only half of it. Configure the gateway's per-agent `pin` and
 for a compact profile.
 
 Start from the annotated [`config.example.yaml`](https://github.com/abdul-hamid-achik/local-agent/blob/main/config.example.yaml) when you need the complete model and MCP examples.
+
+## Unattended AUTO runs
+
+`tools.auto_max_iterations` bounds a single provider segment. AUTO chains
+segments after that fires, so the ceiling on the whole turn is
+`tools.auto_max_segments` and `tools.auto_max_wall_time` — up to 512 segments
+and 24 hours. Both were fixed host constants until recently, which meant no
+setting could take a run past 90 minutes and nothing explained why. The
+defaults are unchanged; raising them lets a productive job run longer without
+letting a stuck one run longer, because the stall guard is separate.
+
+`tools.approval_timeout` decides what an unanswered approval prompt does when
+nobody is watching. Left at `0s` it waits indefinitely, which is right for
+interactive use. Set to a duration, it **refuses and continues** rather than
+cancelling: the model sees the refusal and takes another route, and the run
+keeps going. A timeout can only ever withhold permission, never grant it.
 
 ## Expert runtime
 
@@ -219,6 +238,7 @@ A theme can also be set declaratively:
 ```yaml
 ui:
   theme: catppuccin
+  # prose_width: 96
 ```
 
 An interactive `/theme` choice is stored in the owner-private
@@ -228,6 +248,31 @@ build does not recognise falls back to the default rather than failing startup.
 
 Themes are presentation only. They do not affect authority, tool policy,
 approvals, or what leaves the machine.
+
+### Prose width
+
+Conversational text wraps to the pane by default, sharing a right edge with
+everything else on screen. Code fences, diffs, tables and inspectors always use
+the full width and ignore this setting.
+
+Set `ui.prose_width` to a column count to pin a fixed measure instead. Some
+readers prefer a shorter line, and long lines are genuinely harder to scan;
+the value is capped by the pane, so it can only ever narrow the text.
+
+### The waiting indicator
+
+While a turn waits for its first token, the activity row shows a head moving
+along a short track with a marker at the midpoint. The marker is this model's
+typical first response, learned from the second wait onward, so the position
+answers "is this wait normal *for this model*" rather than "how many seconds
+have passed". Left of the marker is faster than usual; parked at the right edge
+means the reply is late, and the glyph takes the warning colour past roughly
+twice typical.
+
+Position carries the fact on its own, so the indicator reads the same under
+`NO_COLOR`. Reduced motion replaces it with a static frame, and `/runtime`
+always shows the same numbers without any animation: last and typical response
+time.
 
 ## Runtime model preference
 

@@ -43,6 +43,18 @@ cd local-agent
 go run ./cmd/local-agent
 ```
 
+From a checkout you can also put it on your PATH, which is what you want if you
+intend to use it outside the repository:
+
+```bash
+task install    # builds and installs into `go env GOBIN`, or GOPATH/bin
+task uninstall  # removes it again
+```
+
+`task install` reports where the binary landed and warns if that directory is
+not on your PATH — the one failure mode where the command silently does not
+appear.
+
 ## Prepare Ollama
 
 Start Ollama and pull a compact model:
@@ -111,8 +123,10 @@ conversation and a failed TUI run do not print a resume command.
 | `enter` | Send the prompt, or queue one follow-up while a turn is running |
 | `shift+enter`, `ctrl+j`, `alt+enter` | Insert a newline; use `ctrl+j` when the terminal cannot distinguish `shift+enter` |
 | `shift+tab` | Cycle NORMAL, PLAN, and AUTO |
-| `ctrl+o` | Open the live Ollama model picker |
+| `ctrl+o` | Open the model picker |
 | `ctrl+p` | Open session settings |
+| `alt+t`, `ctrl+t` | Expand every tool receipt, or the focused one |
+| `alt+m` | Turn mouse capture off so the terminal can select and copy text |
 | `tab` | Complete commands, paths, and skills |
 | `esc` | Close an overlay or inline form, cancel an approval, or cancel active work |
 | `ctrl+c` | Quit |
@@ -121,7 +135,12 @@ The composer grows with wrapped text up to a terminal-height-aware limit, then
 scrolls internally while keeping the cursor visible. When earlier or later
 draft rows are outside the visible composer, a cue names the corresponding
 `ctrl+home` or `ctrl+end` jump. Typed and pasted text follow the same layout.
-The mouse wheel scrolls the conversation without moving the draft.
+The mouse wheel scrolls the conversation without moving the draft. That
+requires mouse reporting, which is also what stops your terminal from doing its
+own drag-selection. Most terminals hand the mouse back with a modifier —
+`shift+drag` in Ghostty, kitty, WezTerm, Alacritty and xterm, `option+drag` in
+iTerm2 — and Terminal.app has none, so `alt+m` turns capture off outright when
+you want to select text.
 
 Selecting a verified local model with `/model <name>` or the model picker saves
 the pin for the next process start. `/model auto` clears it. A CLI `--model`

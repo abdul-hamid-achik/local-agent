@@ -859,12 +859,13 @@ data erasure is required.
 | `up`, `down` | Browse input history |
 | `pgup`, `pgdown` | Scroll conversation without editing the draft |
 | `ctrl+u`, `ctrl+d` | Edit the draft; with an empty or unavailable composer, scroll by half a page |
-| `ctrl+b`, `ctrl+r` | Toggle all tool details / the focused or latest tool |
-| `alt+o`, `alt+d` | Open retained output / diff for the inspected tool when available |
-| `ctrl+t` | Toggle `<think>` tag display |
+| `alt+t`, `ctrl+t` | Toggle every tool receipt / the focused one |
+| `alt+o`, `alt+d` | Open the full output / full diff for the inspected tool |
+| `alt+r` | Toggle all model reasoning |
 | `ctrl+y` | Copy last response |
+| `alt+m` | Turn mouse capture off so the terminal can select text, and back on |
 | `ctrl+e` | Edit input with `$VISUAL`, then `$EDITOR` |
-| `ctrl+k` | Toggle compact mode |
+| `alt+c` | Toggle compact mode |
 | `esc` | Close an overlay or inline form, cancel an approval, or cancel active generation |
 | `ctrl+n`, `ctrl+l` | New conversation / clear view |
 | `ctrl+c` | Quit |
