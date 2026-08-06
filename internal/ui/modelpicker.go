@@ -613,6 +613,19 @@ func (m *Model) ollamaModelDescriptor(name string) (OllamaModelDescriptor, bool)
 
 func (m *Model) validateModelAdmission(name string) error {
 	if descriptor, ok := m.ollamaModelDescriptor(name); ok {
+		// This gate belongs HERE and nowhere else, and the distinction is worth
+		// stating because the sibling harness looks like it is missing it.
+		//
+		// local-agent runs models on the machine through Ollama, so
+		// privacy.local_only has a local alternative to fall back to and
+		// refusing a cloud model is a real choice with a real remedy. sonar
+		// reaches hosted providers exclusively — ProviderProfile.IsRemote() is
+		// constant true there — so the same rule could only ever refuse every
+		// model that harness supports. It carried a copy of this anyway until it
+		// was removed, and internal/ui's TestNoLocalOnlyInferenceGateReturns now
+		// keeps it out.
+		//
+		// So: divergence by decision, not drift. Do not sync this away.
 		if descriptor.Source == OllamaModelCloud && m.localOnly && !descriptor.ConsentGranted {
 			return fmt.Errorf("model %q requires Ollama Cloud confirmation for this conversation", name)
 		}
