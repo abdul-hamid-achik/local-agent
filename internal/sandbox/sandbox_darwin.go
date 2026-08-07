@@ -9,7 +9,7 @@ import (
 // seatbeltLogTag appears on every deny rule. macOS writes it to the system
 // sandbox violation log, so an operator asking "what did the sandbox stop"
 // has one string to search for instead of a guess.
-const seatbeltLogTag = "local-agent-sandbox"
+const seatbeltLogTag = "sonar-sandbox"
 
 // sandboxExecPath is the macOS confinement driver.
 //
@@ -23,6 +23,11 @@ func Available() bool {
 	info, err := exec.LookPath(sandboxExecPath)
 	return err == nil && info != ""
 }
+
+// networkNamespaceAvailable is always true on macOS: Seatbelt applies the
+// network denial in the same profile as the filesystem rules, so there is no
+// separate capability to probe.
+func networkNamespaceAvailable() bool { return true }
 
 func wrapCommand(policy Policy, name string, args []string) (string, []string, error) {
 	profile, err := seatbeltProfile(policy)
