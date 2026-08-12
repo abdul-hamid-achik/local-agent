@@ -157,6 +157,7 @@ func TestExpertProgressRejectsUnsafeOrTamperedSnapshots(t *testing.T) {
 	state := newExpertProgressState(expertProgressEvent(1, expertteam.ProgressPlanned, -1))
 	if state == nil {
 		t.Fatal("planned state rejected")
+		return
 	}
 	started := expertProgressEvent(2, expertteam.ProgressStarted, 0)
 	if !state.apply(started) {

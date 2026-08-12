@@ -517,6 +517,7 @@ func TestOllamaNestedSurfacesFitMinimumTerminal(t *testing.T) {
 		overlay, cursor := m.renderModelPull()
 		if cursor == nil {
 			t.Fatal("minimum pull entry did not expose its focused Bubbles cursor")
+			return
 		}
 		assertRenderedLinesFit(t, overlay, 30)
 		assertRenderedHeightFits(t, overlay, 12)
@@ -651,6 +652,7 @@ func TestModelPullStateRequestProgressAndFailure(t *testing.T) {
 	cmd := state.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("missing pull request command")
+		return
 	}
 	request, ok := cmd().(OllamaModelPullRequestedMsg)
 	if !ok || request.Name != "gpt-oss:120b-cloud" {
@@ -730,6 +732,7 @@ func TestModelPullEmitsCancelWhileRunning(t *testing.T) {
 	cmd := state.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if cmd == nil {
 		t.Fatal("missing cancel command")
+		return
 	}
 	msg, ok := cmd().(OllamaModelPullCancelRequestedMsg)
 	if !ok || msg.Name != "qwen" {
@@ -744,6 +747,7 @@ func TestModelPullFailureCanRetryOrEdit(t *testing.T) {
 	retry := state.Update(tea.KeyPressMsg{Code: 'r'})
 	if retry == nil {
 		t.Fatal("retry did not emit a command")
+		return
 	}
 	request, ok := retry().(OllamaModelPullRequestedMsg)
 	if !ok || request.Name != "qwen3:4b" || state.Phase != ModelPullRunning || state.Err != nil {
