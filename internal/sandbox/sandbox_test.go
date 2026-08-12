@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/abdul-hamid-achik/sonar/internal/config"
+	"github.com/abdul-hamid-achik/local-agent/internal/config"
 )
 
 // TestConfinementHoldsAgainstTheRealKernel is the only test in this package
