@@ -1,4 +1,4 @@
-
+│  result: succeeded
 
  ╭──────────────────────────╮
  │ Agents · 1 consultatio…  │
