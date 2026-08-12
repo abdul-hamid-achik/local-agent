@@ -297,7 +297,7 @@ func TestAllowSessionToolNormalizesWithScopeKind(t *testing.T) {
 // ResolveApprovalContextWithTimeout Normalize()s every host response.
 // Known session scopes offered by the TUI must survive that pass.
 func TestKnownSessionScopesSurviveNormalize(t *testing.T) {
-	for _, want := range []string{ScopeSessionTool, ScopeSessionPath, ScopeSessionBashPrefix, ScopeSessionMCPTool} {
+	for _, want := range []string{ScopeSessionTool, ScopeSessionPath, ScopeSessionBashPrefix, ScopeSessionMCPTool, ScopeSessionMCPServer} {
 		var constructor func() ApprovalResponse
 		switch want {
 		case ScopeSessionTool:
@@ -308,6 +308,8 @@ func TestKnownSessionScopesSurviveNormalize(t *testing.T) {
 			constructor = AllowSessionBashPrefix
 		case ScopeSessionMCPTool:
 			constructor = AllowSessionMCPTool
+		case ScopeSessionMCPServer:
+			constructor = AllowSessionMCPServer
 		}
 		got := constructor().Normalize()
 		if got.Decision != DecisionAllowSession || got.ScopeKind != want {

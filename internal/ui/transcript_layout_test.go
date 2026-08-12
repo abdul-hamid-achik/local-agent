@@ -226,7 +226,7 @@ func TestContentGridOriginSharedAcrossSurfaces(t *testing.T) {
 }
 
 // TestCollapsedToolFooterIsClickable closes a gap the receipt advertised
-// itself: "N lines hidden · ctrl+r" is the only row of a tool card that names
+// itself: "N lines hidden · ctrl+t" is the only row of a tool card that names
 // a key, and it was the only row a click could not reach — the pointer region
 // covered the header line alone. An affordance that states how to reach hidden
 // content and then ignores the pointer aimed at it is worse than a silent one.
@@ -242,7 +242,7 @@ func TestCollapsedToolFooterIsClickable(t *testing.T) {
 	}}
 
 	plain := ansi.Strip(m.renderEntries())
-	if !strings.Contains(plain, "lines hidden · ctrl+r") {
+	if !strings.Contains(plain, "lines hidden · ctrl+t") {
 		t.Fatalf("collapsed receipt did not advertise its hidden body:\n%s", plain)
 	}
 	if len(m.toolHitRegions) != 2 {

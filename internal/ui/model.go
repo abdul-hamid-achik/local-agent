@@ -361,6 +361,7 @@ type Model struct {
 	serverCount               int
 	numCtx                    int
 	approvalPosture           ApprovalPosture
+	approvalTimeoutWarned     bool
 	expertRuntimeSetupFailed  bool
 
 	failedServers []FailedServer

@@ -122,7 +122,7 @@ func TestPrefixGrantsRefuseWildcardsAndEmptyInput(t *testing.T) {
 func TestOnlyKnownScopeKindsAreAccepted(t *testing.T) {
 	for _, kind := range []string{
 		"", ScopeExactRequest, ScopeSessionTool, ScopeSessionPath,
-		ScopeSessionBashPrefix, ScopeSessionMCPTool,
+		ScopeSessionBashPrefix, ScopeSessionMCPTool, ScopeSessionMCPServer,
 	} {
 		if !KnownSessionScopeKind(kind) {
 			t.Errorf("documented scope kind %q was rejected", kind)

@@ -341,13 +341,29 @@ func (m *Model) renderShortcutsBar(paneW int) string {
 		return ""
 	}
 
+	lead := m.contentGrid().Prefix(" ")
+	inner := max(1, paneW-lipgloss.Width(lead))
+
+	// Reserve room for right identity; pack hints into the remainder.
+	rightBudget := m.shortcutsIdentityRightBudget()
+	leftBudget := max(8, inner-rightBudget-1)
+
 	var hints []keyHint
 	if m.state == StateIdle && !m.composerIsBusy() {
+		// Idle has nothing to cancel unless a queued follow-up already owns a
+		// gesture. Advertising "esc cancel" here taught a dead verb.
 		hints = []keyHint{
 			{Key: "enter", Action: "send"},
 			{Key: "shift+tab", Action: "mode"},
-			{Key: "esc", Action: "cancel"},
 			{Key: m.keys.Help.Help().Key, Action: "help"},
+		}
+		if m.idleCancelAffordanceActive() {
+			hints = []keyHint{
+				{Key: "enter", Action: "send"},
+				{Key: "shift+tab", Action: "mode"},
+				{Key: "esc", Action: "cancel"},
+				{Key: m.keys.Help.Help().Key, Action: "help"},
+			}
 		}
 	} else {
 		// Live activity rail already surfaces esc stop · enter queue.
@@ -355,12 +371,6 @@ func (m *Model) renderShortcutsBar(paneW int) string {
 			{Key: "shift+tab", Action: "mode"},
 		}
 	}
-	lead := m.contentGrid().Prefix(" ")
-	inner := max(1, paneW-lipgloss.Width(lead))
-
-	// Reserve room for right identity; pack hints into the remainder.
-	rightBudget := m.shortcutsIdentityRightBudget()
-	leftBudget := max(8, inner-rightBudget-1)
 	left := m.renderKeyHints(leftBudget, hints...)
 	right := ""
 	if rightBudget > 0 {
@@ -382,6 +392,17 @@ func (m *Model) renderShortcutsBar(paneW int) string {
 		return lead + left
 	}
 	return lead + left + strings.Repeat(" ", gap) + right
+}
+
+// idleCancelAffordanceActive reports whether Escape currently cancels something
+// while the session is idle. Without that, the shortcuts row must not advertise
+// "esc cancel" — a verb with no effect. local-agent has no voice listening
+// stage; a queued follow-up is the cancel-worthy idle state.
+func (m *Model) idleCancelAffordanceActive() bool {
+	if m == nil {
+		return false
+	}
+	return m.queuedFollowUp != nil
 }
 
 // git branch cache — avoid spawning git every frame.

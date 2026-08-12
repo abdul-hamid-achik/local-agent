@@ -73,10 +73,26 @@ func (m *Model) buildHelpContent(innerW int) string {
 
 	m.writeHelpRows(&b, inputShortcuts, innerW)
 
-	b.WriteString(m.styles.OverlayAccent.Render("Slash Commands"))
+	// The wait trace encodes a fact — is this wait normal for this model? —
+	// and a reader who has not been told what the glyphs mean sees decoration.
+	b.WriteString("\n")
+	b.WriteString(m.styles.OverlayAccent.Render("Waiting Indicator"))
 	b.WriteString("\n")
 
-	// Slash commands.
+	m.writeHelpRows(&b, []helpRow{
+		{"● position", "How far this wait has gone against this model's typical first response"},
+		{"│ marker", "Where the reply is expected — left of it is faster than usual"},
+		{"● at the edge", "The reply is late; the glyph warns past roughly twice typical"},
+		{"first wait", "No typical value yet — the baseline is learned from the second wait on"},
+		{"/runtime", "The same numbers without motion: last and typical response time"},
+	}, innerW)
+
+	b.WriteString("\n")
+	b.WriteString(m.styles.OverlayAccent.Render("Slash Commands"))
+	b.WriteString("\n")
+	b.WriteString(m.styles.OverlayDim.Render("  Full registry — scroll for actions and availability"))
+	b.WriteString("\n")
+
 	if m.cmdRegistry != nil {
 		commands := make([]helpRow, 0, len(m.cmdRegistry.All()))
 		ctx := m.buildCommandContext()
@@ -92,23 +108,6 @@ func (m *Model) buildHelpContent(innerW int) string {
 		}
 		m.writeHelpRows(&b, commands, innerW)
 	}
-
-	// The wait trace encodes a fact — is this wait normal for this model? —
-	// and a reader who has not been told what the glyphs mean sees decoration.
-	// The trace was designed to be legible from position alone, but "legible
-	// without the legend" and "meaningless without the legend" look identical
-	// until someone explains it once.
-	b.WriteString("\n")
-	b.WriteString(m.styles.OverlayAccent.Render("Waiting Indicator"))
-	b.WriteString("\n")
-
-	m.writeHelpRows(&b, []helpRow{
-		{"● position", "How far this wait has gone against this model's typical first response"},
-		{"│ marker", "Where the reply is expected — left of it is faster than usual"},
-		{"● at the edge", "The reply is late; the glyph warns past roughly twice typical"},
-		{"first wait", "No typical value yet — the baseline is learned from the second wait on"},
-		{"/runtime", "The same numbers without motion: last and typical response time"},
-	}, innerW)
 
 	b.WriteString("\n")
 
