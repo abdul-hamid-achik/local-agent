@@ -32,6 +32,10 @@ steps:
             contains: "Keyboard Shortcuts"
         timeoutMs: 3000
     - snapshot: help
+    # Two pages: Waiting Indicator now sits above Slash Commands, and the
+    # keyboard section is denser here than in sonar, so one pgdown no longer
+    # reaches the slash-command list.
+    - press: "pgdown"
     - press: "pgdown"
     - wait:
         screen:

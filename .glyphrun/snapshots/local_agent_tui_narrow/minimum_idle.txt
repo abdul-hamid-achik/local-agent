@@ -6,6 +6,6 @@ Ask · /help
   Ollama model · ctrl+o
 
 ─────────────────────────────
-   ctrl+p settings
+   ctrl+p settings · 0/…
 ▏❯ Ask · /help
    enter send · shift+tab

@@ -16,4 +16,4 @@ qwen3.5:2b
 
 ───────────────────────────────────────
 ▌❯ Ask
-   enter send · shift+tab · esc · f1
+   enter send · shift+tab mode · f1
