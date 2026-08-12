@@ -293,3 +293,34 @@ func TestAllowSessionToolNormalizesWithScopeKind(t *testing.T) {
 		t.Fatalf("unknown scope retained: %#v", cleared)
 	}
 }
+
+// ResolveApprovalContextWithTimeout Normalize()s every host response.
+// Known session scopes offered by the TUI must survive that pass.
+func TestKnownSessionScopesSurviveNormalize(t *testing.T) {
+	for _, want := range []string{ScopeSessionTool, ScopeSessionPath, ScopeSessionBashPrefix, ScopeSessionMCPTool} {
+		var constructor func() ApprovalResponse
+		switch want {
+		case ScopeSessionTool:
+			constructor = AllowSessionTool
+		case ScopeSessionPath:
+			constructor = AllowSessionPath
+		case ScopeSessionBashPrefix:
+			constructor = AllowSessionBashPrefix
+		case ScopeSessionMCPTool:
+			constructor = AllowSessionMCPTool
+		}
+		got := constructor().Normalize()
+		if got.Decision != DecisionAllowSession || got.ScopeKind != want {
+			t.Fatalf("Normalize(%s) = %#v", want, got)
+		}
+		live := ResolveApprovalContextWithTimeout(
+			context.Background(),
+			ApprovalRequest{ToolName: "bash"},
+			func(request ApprovalRequest) { request.Response <- constructor() },
+			time.Second,
+		)
+		if live.Decision != DecisionAllowSession || live.ScopeKind != want {
+			t.Fatalf("live approval %s = %#v", want, live)
+		}
+	}
+}

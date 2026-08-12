@@ -139,6 +139,16 @@ func (t *turnRuntime) rejectContextPrompt(estimated int, bounded bool, attribute
 	return err
 }
 
+// compactTurn charges the summarizer's eval receipt to the logical turn so a
+// hard generation budget cannot be spent untracked.
+func (t *turnRuntime) compactTurn(ctx context.Context) bool {
+	compacted, evalTokens := t.a.compactForContextAndModelWithICE(ctx, t.out, t.turnNumCtx, t.turnModel, t.iceEngine)
+	if evalTokens > 0 {
+		t.totalEvalTokens += evalTokens
+	}
+	return compacted
+}
+
 // admitSystemPrompt gates the admitted prompt against the context window,
 // compacting once when allowed. Compaction admission is an eval-token
 // accounting decision: a turn with a hard generation budget may not spend an
@@ -155,7 +165,7 @@ func (t *turnRuntime) admitSystemPrompt(ctx context.Context) error {
 	if t.lg != nil {
 		t.lg.Info("compaction", "phase", "before_request", "prompt_tokens", estimated, "num_ctx", t.turnNumCtx)
 	}
-	if t.a.compactForContextAndModelWithICE(ctx, t.out, t.turnNumCtx, t.turnModel, t.iceEngine) {
+	if t.compactTurn(ctx) {
 		t.rebuildSystem(ctx)
 		t.admitToolSchemasForContext(ctx)
 	}
@@ -268,7 +278,7 @@ func (t *turnRuntime) finishDirectResponse(ctx context.Context, i int, assistant
 		if t.lg != nil {
 			t.lg.Info("compaction", "phase", "direct_response", "prompt_tokens", estimatedPromptTokens, "num_ctx", t.turnNumCtx)
 		}
-		t.a.compactForContextAndModelWithICE(ctx, t.out, t.turnNumCtx, t.turnModel, t.iceEngine)
+		t.compactTurn(ctx)
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -338,7 +348,7 @@ func (t *turnRuntime) settleIteration(ctx context.Context, i int, toolCallCount 
 			if t.lg != nil {
 				t.lg.Info("compaction", "iter", i, "prompt_tokens", estimatedPromptTokens, "num_ctx", t.turnNumCtx)
 			}
-			compacted := t.a.compactForContextAndModelWithICE(ctx, t.out, t.turnNumCtx, t.turnModel, t.iceEngine)
+			compacted := t.compactTurn(ctx)
 			if compacted {
 				// Rebuild system prompt after compaction (memory may have changed).
 				t.rebuildSystem(ctx)
