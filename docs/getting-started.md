@@ -15,7 +15,7 @@ Run Local Agent in a clean Git worktree, read approval requests, and review the 
 ## Requirements
 
 - macOS or Linux
-- [Go 1.25.12 or newer](https://go.dev/dl/) when installing from source
+- [Go 1.26.5 or newer](https://go.dev/dl/) when installing from source
 - [Ollama](https://ollama.com/) running on the same machine
 - A Git worktree for work you want the agent to inspect or change
 

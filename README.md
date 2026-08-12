@@ -55,7 +55,7 @@ OpenAI-compatible remote provider profiles.
 
 ### Prerequisites
 
-- [Go 1.25.12 or newer](https://go.dev/dl/) when installing from source
+- [Go 1.26.5 or newer](https://go.dev/dl/) when installing from source
 - [Ollama](https://ollama.com/) running on the same machine
 - [Task](https://taskfile.dev/) for repository development commands (optional)
 - MCPHub, Cortex, Obsidian, or other MCP servers only if you want those tools

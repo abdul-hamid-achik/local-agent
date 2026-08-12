@@ -29,7 +29,7 @@ Global instructions for the local-agent project.
 
 ## Code Style
 
-- Go 1.25+, idiomatic Go conventions
+- Go 1.26+, idiomatic Go conventions
 - Tests for all new TUI components and message handlers
 - Protect shared state with `sync.RWMutex`
 - Use `context.Context` for cancellable operations

@@ -38,7 +38,7 @@ go test ./internal/agent/ -run TestFunctionName
 
 ## Architecture
 
-Go 1.25+ project implementing a local-first terminal coding agent. Ollama is the only inference adapter. The TUI uses Charm v2; MCP servers extend the tool surface.
+Go 1.26+ project implementing a local-first terminal coding agent. Ollama is the only inference adapter. The TUI uses Charm v2; MCP servers extend the tool surface.
 
 ### Package Layout (`internal/`)
 

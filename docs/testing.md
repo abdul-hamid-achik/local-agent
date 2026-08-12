@@ -34,12 +34,12 @@ The repository currently fixes these versions or version ranges:
 
 | Surface | Repository contract |
 |---|---|
-| Application toolchain | Go 1.25.12 from `go.mod` |
+| Application toolchain | Go 1.26.5 from `go.mod` |
 | Website runtime | Node 22 or newer; CI uses Node 24 |
 | Website packages | VitePress 1.6.4 and Vue 3.5.39 |
 | CI linter | golangci-lint 2.12.2 |
 | Vulnerability scanner | govulncheck 1.6.0 in `Taskfile.yml` and CI |
-| Terminal contracts | Glyphrun 0.14.3 in CI, installed with Go 1.26.x; local-agent is then rebuilt with the Go 1.25.12 application toolchain |
+| Terminal contracts | Glyphrun 0.14.3 in CI, built with the same Go 1.26.5 toolchain as local-agent |
 
 The local `golangci-lint` and `glyph` tasks use the executables on `PATH`; use
 the CI versions above when reproducing CI exactly.
