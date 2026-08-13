@@ -365,6 +365,15 @@ func (m *Model) renderShortcutsBar(paneW int) string {
 				{Key: m.keys.Help.Help().Key, Action: "help"},
 			}
 		}
+		if m.mouseCaptureOff {
+			hints = append([]keyHint{{Key: "alt+m", Action: "exit select"}}, hints...)
+		} else if strings.TrimSpace(m.input.Value()) == "" && m.lastAssistantContent() != "" {
+			withCopy := append(append([]keyHint{}, hints...),
+				keyHint{Key: "ctrl+y", Action: "copy"})
+			if lipgloss.Width(m.renderKeyHintSet(mergeKeyHintAliases(withCopy), len(withCopy))) <= leftBudget {
+				hints = withCopy
+			}
+		}
 	} else {
 		// Live activity rail already surfaces esc stop · enter queue.
 		hints = []keyHint{
