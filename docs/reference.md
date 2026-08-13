@@ -223,8 +223,8 @@ Use Go duration syntax such as `30m` or `1h30m`. Duration-shaped but invalid inp
 | `alt+t`, `ctrl+t` | Toggle every tool receipt, or the focused one |
 | `alt+o`, `alt+d` | Open the full output or the full diff for the inspected tool |
 | `alt+r` | Toggle all model reasoning |
-| `ctrl+y` | Copy the latest response (host clipboard and OSC 52, so tmux/SSH still land on the local machine) |
-| `alt+m`, `/mouse` | Turn mouse capture on for wheel-scroll and click-to-expand, and back off. Select/copy is the default. `/mouse` works when Option+M types µ |
+| `ctrl+y` | Copy the selection, or the latest response (host clipboard and OSC 52, so tmux/SSH still land on the local machine) |
+| `alt+m`, `/mouse` | Hand the mouse to the terminal for native select, and back. `/mouse` works when Option+M types µ |
 | `ctrl+e` | Edit input with `$VISUAL`, then `$EDITOR` |
 | `alt+c` | Toggle compact transcript layout |
 | `esc` | Close an overlay or inline form, cancel an approval, or cancel active generation |
@@ -243,18 +243,17 @@ pending authority decision returns.
 The composer grows for soft-wrapped typing and text paste until its adaptive
 visible-row cap, then scrolls internally. A visible cue reports whether earlier
 or later draft rows are hidden and names the corresponding `ctrl+home` or
-`ctrl+end` jump. Drag-select is the default: mouse reporting stays off so the
-terminal owns press and release. `/mouse` (or `alt+m`) turns capture on so the
-wheel scrolls the transcript without moving the composer, and a visible
-document overlay owns the wheel while it is open. Press `end` to resume
-following the latest output only when the composer is empty or unavailable.
-While capture is on, most terminals still hand the mouse back with a modifier
-— `shift+drag` in Ghostty, kitty, WezTerm, Alacritty and xterm, `option+drag`
-in iTerm2 — but Terminal.app has none; toggle capture off again. Stock macOS
-terminals compose Option+M into µ instead of sending `alt+m` until Option is
-Meta — Ghostty `macos-option-as-alt = true`, iTerm2 Left Option = Esc+,
-Terminal.app "Use Option as Meta key". `ctrl+y` copies the latest response
-without touching the mouse at all. Use `pgup`/`pgdown`, `alt+t` and
+`ctrl+end` jump. Drag across the transcript to select; release copies. The
+wheel still scrolls. `/mouse` (or `alt+m`) hands the mouse back when you want
+the terminal's own select. A visible document overlay owns the wheel while it
+is open. Press `end` to resume following the latest output only when the
+composer is empty or unavailable. Most terminals also hand the mouse back with
+a modifier — `shift+drag` in Ghostty, kitty, WezTerm, Alacritty and xterm,
+`option+drag` in iTerm2 — but Terminal.app has none. Stock macOS terminals
+compose Option+M into µ instead of sending `alt+m` until Option is Meta —
+Ghostty `macos-option-as-alt = true`, iTerm2 Left Option = Esc+, Terminal.app
+"Use Option as Meta key". `ctrl+y` copies the selection, or the latest
+response without touching the mouse at all. Use `pgup`/`pgdown`, `alt+t` and
 `ctrl+t` for transcript and tool navigation. With an empty composer,
 `ctrl+u`/`ctrl+d` also scroll half a page; while drafting they retain their
 standard editing behavior.

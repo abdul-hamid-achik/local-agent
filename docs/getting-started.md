@@ -126,7 +126,7 @@ conversation and a failed TUI run do not print a resume command.
 | `ctrl+o` | Open the model picker |
 | `ctrl+p` | Open session settings |
 | `alt+t`, `ctrl+t` | Expand every tool receipt, or the focused one |
-| `alt+m`, `/mouse` | Turn mouse capture on for wheel-scroll and click-to-expand. Select/copy is the default. `/mouse` still works when Option+M types µ |
+| `alt+m`, `/mouse` | Hand the mouse to the terminal for native select. `/mouse` still works when Option+M types µ |
 | `tab` | Complete commands, paths, and skills |
 | `esc` | Close an overlay or inline form, cancel an approval, or cancel active work |
 | `ctrl+c` | Quit |
@@ -135,17 +135,17 @@ The composer grows with wrapped text up to a terminal-height-aware limit, then
 scrolls internally while keeping the cursor visible. When earlier or later
 draft rows are outside the visible composer, a cue names the corresponding
 `ctrl+home` or `ctrl+end` jump. Typed and pasted text follow the same layout.
-Drag-select is the default: mouse reporting stays off so the terminal owns
-press and release. `/mouse` (or `alt+m`) turns capture on when you want the
-wheel to scroll the transcript or a click to expand a tool card. `pgup`/`pgdn`
-always scroll. While capture is on, most terminals still hand the mouse back
-with a modifier — `shift+drag` in Ghostty, kitty, WezTerm, Alacritty and xterm,
-`option+drag` in iTerm2. Terminal.app has none; toggle capture off again. Stock
-macOS terminals compose Option+M into µ; `/mouse` is the binding that still
-works. To make `alt+m` itself work, set Option as Meta: Ghostty
-`macos-option-as-alt = true`, iTerm2 Left Option = Esc+, Terminal.app "Use
-Option as Meta key". `ctrl+y` copies the last reply without the mouse,
-including over tmux and SSH.
+Drag across the transcript to select; release copies. The wheel still scrolls.
+Double-click a word, triple-click a line. `esc` clears the highlight. `ctrl+y`
+copies the selection, or the last reply when nothing is selected. Mouse
+reporting stays on so the wheel can scroll the chat; `/mouse` (or `alt+m`)
+hands the mouse back when you want the terminal's own select. `pgup`/`pgdn`
+always scroll. Most terminals also hand the mouse back with a modifier —
+`shift+drag` in Ghostty, kitty, WezTerm, Alacritty and xterm, `option+drag` in
+iTerm2. Terminal.app has none. Stock macOS terminals compose Option+M into µ;
+`/mouse` is the binding that still works. To make `alt+m` itself work, set
+Option as Meta: Ghostty `macos-option-as-alt = true`, iTerm2 Left Option =
+Esc+, Terminal.app "Use Option as Meta key".
 
 Selecting a verified local model with `/model <name>` or the model picker saves
 the pin for the next process start. `/model auto` clears it. A CLI `--model`

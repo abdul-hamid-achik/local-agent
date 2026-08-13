@@ -805,10 +805,10 @@ controls.
 The composer grows with visually wrapped text as you type, up to a bounded
 terminal-height-aware limit, then scrolls internally while keeping the cursor
 region visible. Ordinary bracketed text paste follows the same layout;
-large text pastes retain their existing review step. Drag-select is the default. `/mouse` or `alt+m` turns reporting on so the
-wheel scrolls the conversation without moving the composer; while capture is
-on, use your terminal's selection override (commonly Shift-drag). `ctrl+y`
-remains available for copying the last response.
+large text pastes retain their existing review step. Drag across the transcript
+to select; release copies, and the wheel still scrolls. `/mouse` or `alt+m`
+hands the mouse to the terminal for native select. `ctrl+y` copies the
+selection, or the last response.
 
 Attach an image with `/image <path>` or its `/attach <path>` alias. You can also
 paste or drag one file path or a complete space/newline-separated list of PNG,
