@@ -1,10 +1,10 @@
    workspace                                                  qwen3.5:0.8b · 7/16.4k · 0%
 
-
 ▌  Create approval-probe.txt with the exact text must not be written.
 
-
    │ Thinking… · Checking workspace policy before the write.
+
+
 
 
 
