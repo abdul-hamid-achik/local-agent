@@ -403,6 +403,9 @@ func (m *Model) handleCommandActionWithDraft(result command.Result, draft string
 		m.overlayParent = OverlayNone
 		return m.openContextDoctor()
 
+	case command.ActionToggleMouseCapture:
+		return m.toggleMouseCapture()
+
 	case command.ActionSwitchTheme:
 		return m.applyTheme(result.Data)
 

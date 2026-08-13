@@ -218,6 +218,7 @@ const (
 	ActionPermissionsClearRules         // Clear all durable workspace rules
 	ActionPermissionsPanel              // Open the interactive permissions panel
 	ActionShowContextDoctor             // Open the animated context-usage overlay
+	ActionToggleMouseCapture            // Release or restore mouse reporting so the terminal can select text
 )
 
 // Registry holds all registered slash commands.

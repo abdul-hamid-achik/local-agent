@@ -170,6 +170,19 @@ func RegisterBuiltins(r *Registry) {
 	})
 
 	r.Register(&Command{
+		Name:        "mouse",
+		Aliases:     []string{"select"},
+		Description: "Toggle mouse capture so the terminal can select and copy text",
+		Usage:       "/mouse",
+		Handler: func(_ *Context, args []string) Result {
+			if err := noArguments(args, "/mouse"); err != "" {
+				return Result{Error: err}
+			}
+			return Result{Action: ActionToggleMouseCapture}
+		},
+	})
+
+	r.Register(&Command{
 		Name:        "theme",
 		Aliases:     []string{"themes", "colors"},
 		Description: "Show, switch, or list color schemes",

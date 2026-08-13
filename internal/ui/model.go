@@ -1021,9 +1021,16 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 	// Update sub-components.
 	if m.composerEditable() {
 		hadOverflowCue := m.renderComposerOverflowCue() != ""
+		optionHint := ""
+		if key, isKey := msg.(tea.KeyPressMsg); isKey {
+			optionHint = m.noticeForOptionComposedKey(key.String())
+		}
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		cmds = append(cmds, cmd)
+		if optionHint != "" {
+			cmds = append(cmds, m.setFooterNotice(noticeInfo, optionHint, 8*time.Second))
+		}
 
 		// Auto-grow textarea based on content.
 		m.syncInputHeight()
