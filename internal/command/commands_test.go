@@ -906,7 +906,7 @@ func TestBuiltinScopeParsesProcessLocalReadRootActions(t *testing.T) {
 func TestBuiltinRegistrySurfaceIsUniqueAndExecutable(t *testing.T) {
 	r := newTestRegistry()
 	wantNames := []string{
-		"help", "clear", "plan", "goal", "model", "theme", "provider", "recover", "agent", "agents", "load",
+		"help", "clear", "plan", "goal", "model", "mouse", "theme", "provider", "recover", "agent", "agents", "load",
 		"image", "scope", "permissions", "unload", "skill", "servers", "mcp", "tools", "ice", "memory", "sessions", "artifacts",
 		"changes", "commit", "context", "stats", "export", "import", "checkpoint",
 		"checkpoints", "restore", "exit",
