@@ -223,8 +223,8 @@ Use Go duration syntax such as `30m` or `1h30m`. Duration-shaped but invalid inp
 | `alt+t`, `ctrl+t` | Toggle every tool receipt, or the focused one |
 | `alt+o`, `alt+d` | Open the full output or the full diff for the inspected tool |
 | `alt+r` | Toggle all model reasoning |
-| `ctrl+y` | Copy the latest response |
-| `alt+m` | Turn mouse capture off so the terminal can select text, and back on |
+| `ctrl+y` | Copy the latest response (host clipboard and OSC 52, so tmux/SSH still land on the local machine) |
+| `alt+m`, `/mouse` | Turn mouse capture off so the terminal can select text, and back on. `/mouse` works when Option+M types µ |
 | `ctrl+e` | Edit input with `$VISUAL`, then `$EDITOR` |
 | `alt+c` | Toggle compact transcript layout |
 | `esc` | Close an overlay or inline form, cancel an approval, or cancel active generation |
@@ -250,10 +250,13 @@ when the composer is empty or unavailable. Local Agent enables terminal mouse
 reporting so wheel events reach the transcript, and that is what stops the
 terminal from doing its own drag-selection. Most terminals offer a modifier
 that hands the mouse back — `shift+drag` in Ghostty, kitty, WezTerm, Alacritty
-and xterm, `option+drag` in iTerm2 — but Terminal.app has none. `alt+m` turns
-capture off outright, which works everywhere; wheel scrolling stops until you
-press it again, and the paging keys keep working. `ctrl+y` copies the latest
-response without touching the mouse at all. Use `pgup`/`pgdown`, `alt+t` and
+and xterm, `option+drag` in iTerm2 — but Terminal.app has none. `/mouse` (or
+`alt+m`) turns capture off outright, which works everywhere; wheel scrolling
+stops until you press it again, and the paging keys keep working. Stock macOS
+terminals compose Option+M into µ instead of sending `alt+m` until Option is
+Meta — Ghostty `macos-option-as-alt = true`, iTerm2 Left Option = Esc+,
+Terminal.app "Use Option as Meta key". `ctrl+y` copies the latest response
+without touching the mouse at all. Use `pgup`/`pgdown`, `alt+t` and
 `ctrl+t` for transcript and tool navigation. With an empty composer,
 `ctrl+u`/`ctrl+d` also scroll half a page; while drafting they retain their
 standard editing behavior.
