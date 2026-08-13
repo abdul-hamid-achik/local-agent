@@ -25,6 +25,7 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/expertteam"
 	"github.com/abdul-hamid-achik/local-agent/internal/goal"
 	"github.com/abdul-hamid-achik/local-agent/internal/goaladvisor"
+	"github.com/abdul-hamid-achik/local-agent/internal/hostenv"
 	"github.com/abdul-hamid-achik/local-agent/internal/ice"
 	"github.com/abdul-hamid-achik/local-agent/internal/imageasset"
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
@@ -46,6 +47,7 @@ type availabilityAwareRouter interface {
 }
 
 func main() {
+	hostenv.ScrubDarwinMallocDiagnostics()
 	os.Exit(run())
 }
 
@@ -1228,7 +1230,9 @@ func run() int {
 		})
 	}()
 
+	restoreStderr := hostenv.FilterMallocDiagnostics()
 	finalModel, runErr := p.Run()
+	restoreStderr()
 	signal.Stop(sigCh)
 	close(signalDone)
 	initCancel()
