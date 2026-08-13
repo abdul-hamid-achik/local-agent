@@ -112,6 +112,9 @@ sandbox:
 # Provider-loop budgets are independent so interactive turns stay concise while
 # AUTO has room to inspect, implement, and verify without a premature stop.
 tools:
+  # Default bash timeout when the model omits the argument. An explicit timeout
+  # argument is still honored up to 120s (see the bash tool schema); this value
+  # is not a silent ceiling for requested timeouts.
   timeout: 30s
   max_grep_results: 500
   max_iterations: 10
