@@ -73,8 +73,9 @@ type Model struct {
 	// restores this value without persisting, Enter persists the previewed one.
 	themePickerBase string
 	// mouseCaptureOff disables mouse reporting so the terminal can do native
-	// text selection. Presentation-only and deliberately not persisted: it is
-	// a "let me grab this one thing" gesture, not a preference.
+	// text selection. Default true: drag-select is the ordinary gesture.
+	// Turning capture on (wheel scroll, click-to-expand) is the session
+	// gesture, and is deliberately not persisted.
 	mouseCaptureOff       bool
 	reducedMotion         bool
 	glyphProfile          GlyphProfile
@@ -497,6 +498,7 @@ func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, com
 		receiptInspectToolIndex: -1,
 		turnEntryIndex:          -1,
 		commitRunner:            runCommit,
+		mouseCaptureOff:         true,
 	}
 }
 

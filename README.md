@@ -805,10 +805,10 @@ controls.
 The composer grows with visually wrapped text as you type, up to a bounded
 terminal-height-aware limit, then scrolls internally while keeping the cursor
 region visible. Ordinary bracketed text paste follows the same layout;
-large text pastes retain their existing review step. The mouse wheel scrolls the
-conversation without moving the composer. While mouse reporting is active, use
-your terminal's selection override (commonly Shift-drag) for native selection
-and copy; `ctrl+y` remains available for copying the last response.
+large text pastes retain their existing review step. Drag-select is the default. `/mouse` or `alt+m` turns reporting on so the
+wheel scrolls the conversation without moving the composer; while capture is
+on, use your terminal's selection override (commonly Shift-drag). `ctrl+y`
+remains available for copying the last response.
 
 Attach an image with `/image <path>` or its `/attach <path>` alias. You can also
 paste or drag one file path or a complete space/newline-separated list of PNG,
@@ -863,7 +863,7 @@ data erasure is required.
 | `alt+o`, `alt+d` | Open the full output / full diff for the inspected tool |
 | `alt+r` | Toggle all model reasoning |
 | `ctrl+y` | Copy last response |
-| `alt+m` | Turn mouse capture off so the terminal can select text, and back on |
+| `alt+m` | Turn mouse capture on for wheel scroll, and back off (select is the default) |
 | `ctrl+e` | Edit input with `$VISUAL`, then `$EDITOR` |
 | `alt+c` | Toggle compact mode |
 | `esc` | Close an overlay or inline form, cancel an approval, or cancel active generation |

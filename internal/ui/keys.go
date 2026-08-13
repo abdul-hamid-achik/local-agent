@@ -151,7 +151,7 @@ func DefaultKeyMap() KeyMap {
 		),
 		ToggleMouse: key.NewBinding(
 			key.WithKeys("alt+m"),
-			key.WithHelp("alt+m", "mouse capture off/on — turn off to select and copy · /mouse also"),
+			key.WithHelp("alt+m", "mouse capture on/off — on for wheel scroll · /mouse also"),
 		),
 		CycleMode: key.NewBinding(
 			key.WithKeys("shift+tab"),

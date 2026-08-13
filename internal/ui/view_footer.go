@@ -96,7 +96,7 @@ func (m *Model) renderStatusLine() string {
 	// Repeating model/context on the idle footer only adds a sparse second row.
 	conversationQuiet := !conversationStarted && !noticeNeedsRecovery &&
 		len(m.failedServers) == 0 && !m.skipApprovalsEnabled() && m.footerNotice == nil &&
-		!m.mouseCaptureOff
+		m.mouseCaptureOff
 	if conversationQuiet {
 		return ""
 	}
@@ -145,8 +145,8 @@ func (m *Model) renderStatusLine() string {
 		label := mcpUnavailableStatusLabel(failures)
 		parts = append(parts, m.styles.ErrorText.UnsetPaddingLeft().Render(label))
 	}
-	if m.mouseCaptureOff {
-		parts = append(parts, m.styles.FocusIndicator.Render("select · alt+m"))
+	if !m.mouseCaptureOff {
+		parts = append(parts, m.styles.FocusIndicator.Render("wheel · alt+m"))
 	}
 	if notice := m.footerNotice; notice != nil {
 		parts = append(parts, m.footerNoticeStyle(notice.severity).Render(notice.text))
@@ -297,8 +297,8 @@ func (m *Model) renderGoalFooterStatus(summary GoalSummary, paneW int) string {
 		}
 		required = append(required, metadataPart{view: m.styles.ErrorText.UnsetPaddingLeft().Render(label)})
 	}
-	if m.mouseCaptureOff {
-		required = append(required, metadataPart{view: m.styles.FocusIndicator.Render("select · alt+m")})
+	if !m.mouseCaptureOff {
+		required = append(required, metadataPart{view: m.styles.FocusIndicator.Render("wheel · alt+m")})
 	}
 	if m.currentModelIsNonLocal() && plan.owns(factRemoteBoundary, surfaceStatusLine) {
 		boundary := m.currentModelSurfaceLabel(true)

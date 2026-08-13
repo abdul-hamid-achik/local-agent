@@ -224,7 +224,7 @@ Use Go duration syntax such as `30m` or `1h30m`. Duration-shaped but invalid inp
 | `alt+o`, `alt+d` | Open the full output or the full diff for the inspected tool |
 | `alt+r` | Toggle all model reasoning |
 | `ctrl+y` | Copy the latest response (host clipboard and OSC 52, so tmux/SSH still land on the local machine) |
-| `alt+m`, `/mouse` | Turn mouse capture off so the terminal can select text, and back on. `/mouse` works when Option+M types µ |
+| `alt+m`, `/mouse` | Turn mouse capture on for wheel-scroll and click-to-expand, and back off. Select/copy is the default. `/mouse` works when Option+M types µ |
 | `ctrl+e` | Edit input with `$VISUAL`, then `$EDITOR` |
 | `alt+c` | Toggle compact transcript layout |
 | `esc` | Close an overlay or inline form, cancel an approval, or cancel active generation |
@@ -243,16 +243,14 @@ pending authority decision returns.
 The composer grows for soft-wrapped typing and text paste until its adaptive
 visible-row cap, then scrolls internally. A visible cue reports whether earlier
 or later draft rows are hidden and names the corresponding `ctrl+home` or
-`ctrl+end` jump. The mouse wheel scrolls the transcript without moving the
-composer cursor or its internal viewport; a visible document overlay owns the
-wheel while it is open. Press `end` to resume following the latest output only
-when the composer is empty or unavailable. Local Agent enables terminal mouse
-reporting so wheel events reach the transcript, and that is what stops the
-terminal from doing its own drag-selection. Most terminals offer a modifier
-that hands the mouse back — `shift+drag` in Ghostty, kitty, WezTerm, Alacritty
-and xterm, `option+drag` in iTerm2 — but Terminal.app has none. `/mouse` (or
-`alt+m`) turns capture off outright, which works everywhere; wheel scrolling
-stops until you press it again, and the paging keys keep working. Stock macOS
+`ctrl+end` jump. Drag-select is the default: mouse reporting stays off so the
+terminal owns press and release. `/mouse` (or `alt+m`) turns capture on so the
+wheel scrolls the transcript without moving the composer, and a visible
+document overlay owns the wheel while it is open. Press `end` to resume
+following the latest output only when the composer is empty or unavailable.
+While capture is on, most terminals still hand the mouse back with a modifier
+— `shift+drag` in Ghostty, kitty, WezTerm, Alacritty and xterm, `option+drag`
+in iTerm2 — but Terminal.app has none; toggle capture off again. Stock macOS
 terminals compose Option+M into µ instead of sending `alt+m` until Option is
 Meta — Ghostty `macos-option-as-alt = true`, iTerm2 Left Option = Esc+,
 Terminal.app "Use Option as Meta key". `ctrl+y` copies the latest response
