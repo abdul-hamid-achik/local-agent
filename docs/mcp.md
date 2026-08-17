@@ -39,8 +39,8 @@ Large lazy results may return a stored-result receipt. Retrieve its bounded page
 ### Small-model gateway profile
 
 For a small local model, keep the local-agent connection above and configure
-the corresponding MCPHub agent in `mcphub.yaml` as a gateway with no directly
-advertised downstream schemas:
+the corresponding MCPHub agent in `mcphub.yaml` as a gateway with one pinned
+tool for first-call context:
 
 ```yaml
 expose: lazy
@@ -50,17 +50,21 @@ agents:
     type: local-agent
     path: ~/.config/local-agent/config.yaml
     mode: gateway
-    pin: []
-    tool_schema_budget: "0"
+    pin:
+      - bob__context
+    tool_schema_budget: "8KB"
 ```
 
-`pin: []` prevents the agent from inheriting global pins. A schema budget of
-`"0"` leaves the eight MCPHub management tools available and keeps every allowed
-downstream tool discoverable and callable through the lazy workflow. This
-changes advertisement, not authorization: use `servers` and `tools` in the
-same agent entry when you also need to limit which downstream capabilities may
-be called. Run `mcphub sync` to preview the harness entry, apply with
-`mcphub sync --write`, then restart Local Agent.
+This pins `bob__context` (canonical name as of MCPHub 0.3.0; the stuttered
+`bob__bob_context` remains a one-release alias) as the advertised first-call
+tool while keeping other downstream tools discoverable through the lazy workflow
+(resolve/call). An empty `pin: []` would suppress inherited global pins
+entirely, hiding useful entry points. A small budget like `8KB` admits one
+complete tool definition that fits; MCPHub never truncates schemas. This changes
+advertisement, not authorization: use `servers` and `tools` in the same agent
+entry when you also need to limit which downstream capabilities may be called.
+Run `mcphub sync` to preview the harness entry, apply with `mcphub sync --write`,
+then restart Local Agent.
 
 Use a small nonzero `tool_schema_budget` only when a directly mounted tool is
 worth its recurring schema cost. MCPHub admits complete definitions that fit;
