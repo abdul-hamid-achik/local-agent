@@ -91,10 +91,10 @@ Large-model admission can be overridden with `LOCAL_AGENT_ALLOW_LARGE_MODELS=1`,
 Check the active `ollama.num_ctx` and model with `/model list`. A large native
 context advertised by Ollama does not override the configured request limit.
 Then reduce the recurring MCP schema surface: use MCPHub gateway mode with
-`expose: lazy`, pin one useful first-call tool like `bob__bob_context` with
-`tool_schema_budget: "8KB"`, and restart the agent after syncing the change. The
-[MCP guide](/mcp#small-model-gateway-profile) shows the complete public
-configuration.
+`expose: lazy`, pin one useful first-call tool like `bob__context` (canonical
+name as of MCPHub 0.3.0) with `tool_schema_budget: "8KB"`, and restart the agent
+after syncing the change. The [MCP guide](/mcp#small-model-gateway-profile)
+shows the complete public configuration.
 
 Local Agent estimates prompts before dispatch and may compact tool definitions
 for one pressured turn. If it still cannot keep the prompt below the admission

@@ -289,13 +289,15 @@ servers:
     # Recommended MCPHub agent (mcphub.yaml) for this harness:
     #   agents.local-agent.mode: gateway
     #   pin:
-    #     - bob__bob_context
+    #     - bob__context
     #   tool_schema_budget: "8KB"
     #   servers: bob, cortex, codemap, vecgrep, hitspec, hitspec_web,
     #            fcheap, monitor, obsidian, minerva, glyph, cairntrace
     # Enrich each server's use_when / tags so mcphub_resolve_tool ranks well.
     # Local Agent host enrichment: resolve → optional host describe pre-fetch →
     # phase playbook → model mcphub_call_tool under normal approval.
+    # bob__context is the canonical name (MCPHub 0.3.0+); bob__bob_context remains
+    # a one-release alias.
 
     # Omitting trust currently uses a build-owned compatibility profile only
     # for exact mcphub/cortex/bob basenames. Prefer an explicit list. To suppress

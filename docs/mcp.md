@@ -51,19 +51,20 @@ agents:
     path: ~/.config/local-agent/config.yaml
     mode: gateway
     pin:
-      - bob__bob_context
+      - bob__context
     tool_schema_budget: "8KB"
 ```
 
-This pins `bob_context` as the advertised first-call tool while keeping other
-downstream tools discoverable through the lazy workflow (resolve/call). An
-empty `pin: []` would suppress inherited global pins entirely, hiding useful
-entry points. A small budget like `8KB` admits one complete tool definition that
-fits; MCPHub never truncates schemas. This changes advertisement, not
-authorization: use `servers` and `tools` in the same agent entry when you also
-need to limit which downstream capabilities may be called. Run `mcphub sync` to
-preview the harness entry, apply with `mcphub sync --write`, then restart Local
-Agent.
+This pins `bob__context` (canonical name as of MCPHub 0.3.0; the stuttered
+`bob__bob_context` remains a one-release alias) as the advertised first-call
+tool while keeping other downstream tools discoverable through the lazy workflow
+(resolve/call). An empty `pin: []` would suppress inherited global pins
+entirely, hiding useful entry points. A small budget like `8KB` admits one
+complete tool definition that fits; MCPHub never truncates schemas. This changes
+advertisement, not authorization: use `servers` and `tools` in the same agent
+entry when you also need to limit which downstream capabilities may be called.
+Run `mcphub sync` to preview the harness entry, apply with `mcphub sync --write`,
+then restart Local Agent.
 
 Use a small nonzero `tool_schema_budget` only when a directly mounted tool is
 worth its recurring schema cost. MCPHub admits complete definitions that fit;
