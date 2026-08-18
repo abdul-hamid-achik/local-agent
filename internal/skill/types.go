@@ -53,6 +53,10 @@ type skillFrontmatter struct {
 	Metadata               yaml.Node                 `yaml:"metadata"`
 	AllowedTools           yaml.Node                 `yaml:"allowed-tools"`
 	Triggers               yaml.Node                 `yaml:"triggers"`
+	// Cursor / Codex catalog extension: hide from some UIs without changing
+	// discovery semantics here. Accepted so a shared ~/.agents skill does not
+	// fail the whole agent boot.
+	Hidden yaml.Node `yaml:"hidden"`
 }
 
 // CatalogEntry is the bounded, model-safe projection of a discovered skill.

@@ -512,6 +512,7 @@ triggers:
 disable-model-invocation: false
 user-invocable: true
 argument-hint: "[path]"
+hidden: true
 ---
 body`)
 		m := NewManager(dir)
