@@ -321,7 +321,7 @@ func TestGoalOpenPersistsValidatedHeadlessRuntime(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 		t.Fatalf("decode goal open result: %v (%s)", err, stdout.String())
 	}
-	if result.SessionID <= 0 || result.Workspace != workspace || result.Goal.SessionID != result.SessionID || result.Goal.State != goal.StateActive {
+	if result.SessionID <= 0 || result.PublicID == "" || result.Workspace != workspace || result.Goal.SessionID != result.SessionID || result.Goal.State != goal.StateActive {
 		t.Fatalf("goal open result = %#v", result)
 	}
 	if result.Goal.Budget.MaxContinuationTurns != 4 || result.Goal.Budget.MaxEvalTokens != 1200 {
@@ -490,12 +490,13 @@ func TestParseGoalRunArgsAcceptsFlagsAfterSessionID(t *testing.T) {
 		t.Run(sessionReference, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			options, code := parseGoalRunArgs([]string{
-				sessionReference, "--prompt", " continue safely ", "--skip-approvals", "--model=qwen3", "--agent", "reviewer",
+				sessionReference, "--prompt", " continue safely ", "--skip-approvals", "--json",
+				"--run-id", "chalupa-run-1", "--model=qwen3", "--agent", "reviewer",
 			}, &stdout, &stderr)
 			if code != 0 {
 				t.Fatalf("parse code=%d stderr=%q", code, stderr.String())
 			}
-			if options.SessionPublicID != "a1b2c3d" || options.Prompt != "continue safely" || !options.SkipApprovals || options.Model != "qwen3" || options.AgentProfile != "reviewer" {
+			if options.SessionPublicID != "a1b2c3d" || options.Prompt != "continue safely" || !options.SkipApprovals || !options.JSONReceipt || options.RunID != "chalupa-run-1" || options.Model != "qwen3" || options.AgentProfile != "reviewer" {
 				t.Fatalf("goal run options = %#v", options)
 			}
 		})

@@ -144,6 +144,7 @@ type goalRecoveryApplyResult struct {
 
 type goalOpenResult struct {
 	SessionID int64         `json:"session_id"`
+	PublicID  string        `json:"public_id"`
 	Workspace string        `json:"workspace"`
 	Goal      goal.Snapshot `json:"goal"`
 }
@@ -158,6 +159,8 @@ type goalRunOptions struct {
 	SessionID       int64
 	Prompt          string
 	SkipApprovals   bool
+	JSONReceipt     bool
+	RunID           string
 	Model           string
 	AgentProfile    string
 }
@@ -266,6 +269,12 @@ func handleGoalRun(args []string, stdout, stderr io.Writer) int {
 	}
 	options.SessionID = session.ID
 	rootArgs := []string{os.Args[0], "--prompt", options.Prompt, "--mode", "auto"}
+	if options.JSONReceipt {
+		rootArgs = append(rootArgs, "--json")
+	}
+	if options.RunID != "" {
+		rootArgs = append(rootArgs, "--run-id", options.RunID)
+	}
 	if options.SkipApprovals {
 		rootArgs = append(rootArgs, "--skip-approvals")
 	}
@@ -290,6 +299,7 @@ func parseGoalRunArgs(args []string, stdout, stderr io.Writer) (goalRunOptions, 
 		"prompt": true,
 		"model":  true,
 		"agent":  true,
+		"run-id": true,
 	})
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "goal run: %v\n", err)
@@ -300,6 +310,8 @@ func parseGoalRunArgs(args []string, stdout, stderr io.Writer) (goalRunOptions, 
 	flags.Usage = func() { writeGoalRunUsage(stdout) }
 	prompt := flags.String("prompt", "", "instruction for this goal turn")
 	skipApprovals := flags.Bool("skip-approvals", false, "skip approval prompts")
+	jsonReceipt := flags.Bool("json", false, "emit one machine-readable turn receipt on stdout")
+	runID := flags.String("run-id", "", "label the execution ledger with an external run identity")
 	model := flags.String("model", "", "override the Ollama model")
 	agentProfile := flags.String("agent", "", "override the agent profile")
 	if code, done := flagParseExitCode(flags.Parse(normalized)); done {
@@ -320,8 +332,13 @@ func parseGoalRunArgs(args []string, stdout, stderr io.Writer) (goalRunOptions, 
 		return goalRunOptions{}, 2
 	}
 	return goalRunOptions{
-		SessionPublicID: publicID, Prompt: promptText, SkipApprovals: *skipApprovals,
-		Model: strings.TrimSpace(*model), AgentProfile: strings.TrimSpace(*agentProfile),
+		SessionPublicID: publicID,
+		Prompt:          promptText,
+		SkipApprovals:   *skipApprovals,
+		JSONReceipt:     *jsonReceipt,
+		RunID:           strings.TrimSpace(*runID),
+		Model:           strings.TrimSpace(*model),
+		AgentProfile:    strings.TrimSpace(*agentProfile),
 	}, 0
 }
 
@@ -397,7 +414,12 @@ func handleGoalOpen(store *db.Store, workspace string, args []string, stdout, st
 		_, _ = fmt.Fprintf(stderr, "goal open: persist state: %v\n", err)
 		return 1
 	}
-	result := goalOpenResult{SessionID: session.ID, Workspace: workspace, Goal: snapshot}
+	result := goalOpenResult{
+		SessionID: session.ID,
+		PublicID:  sessionDisplayHandle(session),
+		Workspace: workspace,
+		Goal:      snapshot,
+	}
 	if *jsonOutput {
 		if err := writeJSON(stdout, result); err != nil {
 			_, _ = fmt.Fprintf(stderr, "goal open: %v\n", err)
@@ -1008,6 +1030,8 @@ func writeGoalRunUsage(writer io.Writer) {
 	_, _ = fmt.Fprintln(writer, "Options:")
 	_, _ = fmt.Fprintln(writer, "  --prompt TEXT       Instruction for this goal turn (required)")
 	_, _ = fmt.Fprintln(writer, "  --skip-approvals    Skip approval prompts; explicit denies still win")
+	_, _ = fmt.Fprintln(writer, "  --json              Emit one machine-readable turn receipt on stdout")
+	_, _ = fmt.Fprintln(writer, "  --run-id ID         Label the execution ledger with an external run identity")
 	_, _ = fmt.Fprintln(writer, "  --model NAME        Override the Ollama model")
 	_, _ = fmt.Fprintln(writer, "  --agent NAME        Override the agent profile")
 	_, _ = fmt.Fprintln(writer, "  -h, --help          Show this help")
