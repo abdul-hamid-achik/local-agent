@@ -13,6 +13,8 @@ Global instructions for the local-agent project.
 - Keep public claims factual and source-backed. Do not invent adoption numbers, benchmarks, testimonials, compatibility, release status, or security guarantees.
 - Website changes must preserve responsive layout, keyboard navigation, accessible contrast, reduced-motion behavior, canonical metadata, and a successful production build.
 
+Git auto-builds **`main` only** (`vercel.json` at repo root). Feature branches do not create Preview deployments. `ignoreCommand` skips non-docs commits. Do not `vercel promote`; `main` is the site release. The CLI ships from tags, not from a docs deploy.
+
 ## TUI Development Rules
 
 - **Always use Charm libraries** for all TUI components: [BubbleTea v2](https://charm.land/bubbletea/v2), [Bubbles v2](https://charm.land/bubbles/v2), [Lip Gloss v2](https://charm.land/lipgloss/v2), [Glamour](https://github.com/charmbracelet/glamour).
