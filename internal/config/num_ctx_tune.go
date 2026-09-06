@@ -35,8 +35,7 @@ const numCtxKVBytesPerToken int64 = 40 << 10 // 40 KiB
 const (
 	numCtxOSReserveBytes    int64 = 5 << 30   // macOS + browser + MCPHub + terminal
 	numCtxEmbedReserveBytes int64 = 512 << 20 // nomic-embed-text co-resident
-	numCtxMinRecommend            = 8_192
-	defaultUnknownWeight    int64 = 6 << 30 // exclusive 9B-class local weights
+	defaultUnknownWeight    int64 = 6 << 30   // exclusive 9B-class local weights
 )
 
 // NumCtxRecommendation is a host-side plan for ollama.num_ctx.
@@ -68,9 +67,7 @@ func RecommendNumCtx(totalRAM, modelWeightBytes int64, nativeMax, current int) N
 		rec.ModelWeight = modelWeightBytes
 	}
 	if totalRAM <= 0 {
-		rec.Recommended = 16_384
-		rec.MaxSafe = 16_384
-		rec.Reason = "host RAM unknown; keeping the modest 16k default"
+		rec.Reason = "host RAM unknown; no automatic allocation can be recommended"
 		return rec
 	}
 
@@ -79,23 +76,19 @@ func RecommendNumCtx(totalRAM, modelWeightBytes int64, nativeMax, current int) N
 		budget = totalRAM * 2 / 3
 	}
 	kvBudget := budget - modelWeightBytes
-	if kvBudget < 0 {
-		rec.Recommended = numCtxMinRecommend
-		rec.MaxSafe = numCtxMinRecommend
-		rec.Reason = "model weights already leave little RAM; use the minimum agent window"
+	if kvBudget < 2048*numCtxKVBytesPerToken {
+		rec.Reason = "estimated weights and reserves leave no room for the minimum 2048-token window"
 		return rec
 	}
 
 	maxByRAM := int(kvBudget / numCtxKVBytesPerToken)
 	maxSafe := snapNumCtxDown(maxByRAM)
-	if maxSafe < numCtxMinRecommend {
-		maxSafe = numCtxMinRecommend
-	}
 	if nativeMax > 0 && maxSafe > nativeMax {
 		maxSafe = snapNumCtxDown(nativeMax)
-		if maxSafe < numCtxMinRecommend {
-			maxSafe = min(nativeMax, numCtxMinRecommend)
-		}
+	}
+	if maxSafe < 2048 {
+		rec.Reason = "model context is below the supported 2048-token minimum"
+		return rec
 	}
 	rec.MaxSafe = maxSafe
 
@@ -117,16 +110,16 @@ func RecommendNumCtx(totalRAM, modelWeightBytes int64, nativeMax, current int) N
 	switch {
 	case rec.ClampedByEnv:
 		rec.Reason = fmt.Sprintf(
-			"host can take more, but LOCAL_AGENT_ALLOW_LARGE_MODELS is unset so apply is capped at %d; set the env to use up to %d",
+			"static estimate reaches %d tokens under the default policy cap; the uncapped estimate is %d, not measured free memory",
 			safeMaxNumCtx, maxSafe,
 		)
 	case recommended == preferredAgentNumCtx && maxSafe > preferredAgentNumCtx:
 		rec.Reason = fmt.Sprintf(
-			"agent sweet spot %d fits this machine (max safe ~%d by RAM); raise with /context set if needed",
+			"preferred allocation %d is below the static ceiling %d; current memory pressure is not measured",
 			recommended, maxSafe,
 		)
 	default:
-		rec.Reason = fmt.Sprintf("largest step that fits estimated weights+KV under host RAM (max safe %d)", maxSafe)
+		rec.Reason = fmt.Sprintf("static weights+KV estimate under total RAM (ceiling %d); current memory pressure is not measured", maxSafe)
 	}
 	return rec
 }

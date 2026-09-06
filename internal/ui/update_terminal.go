@@ -202,16 +202,17 @@ func (m *Model) handleWindowSize(msg tea.WindowSizeMsg, cmds []tea.Cmd) []tea.Cm
 		m.goalRecoveryState.SetSize(m.width, m.height)
 	}
 
-	// Input width matches viewport exactly - they're one unified area.
-	// Keep placeholders short so mid-width frames (and CI PTYs) never truncate
-	// the invite into host-dependent "Ask, @m…" chips.
+	// Input width is the framed composer inner column (LineWidth minus Lip
+	// Gloss frame size). Never SetWidth during paint — that desyncs wrap from
+	// the projected footer. Keep placeholders short so mid-width frames (and
+	// CI PTYs) never truncate the invite into host-dependent "Ask, @m…" chips.
 	if msg.Width < 36 {
 		m.input.Placeholder = "Ask · /help"
 	} else {
-		m.input.Placeholder = "Ask"
+		m.input.Placeholder = "Ask or describe a task"
 	}
 	m.input.MaxHeight = composerVisibleRowLimit(msg.Height)
-	m.input.SetWidth(viewportWidth)
+	m.input.SetWidth(m.composerTextWidth())
 	m.syncInputHeight()
 	m.restoreApprovalTranscriptAnchor(approvalAnchor)
 	m.restoreCompletionTranscriptAnchor(completionAnchor)

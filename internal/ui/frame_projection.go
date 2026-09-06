@@ -184,7 +184,7 @@ func (m *Model) projectFooterWithOptions(options footerProjectionOptions) footer
 	p := footerProjection{}
 	var content strings.Builder
 
-	if options.showDivider && !m.compactCompletionOwnsDivider() {
+	if options.showDivider && !m.compactCompletionOwnsDivider() && !m.footerPaintsComposerFrame() {
 		content.WriteString(m.styles.Divider.Render(
 			ruleWithGlyphProfile(m.chatPaneWidth(), m.glyphProfile),
 		))
@@ -215,26 +215,26 @@ func (m *Model) projectFooterWithOptions(options footerProjectionOptions) footer
 	}
 
 	switch {
-	case m.pendingApproval != nil:
-		approval := m.renderApproval()
-		content.WriteString(approval)
+	case m.pendingApproval != nil || m.pendingQuestion != nil:
+		// Approval and agent questions overlay the chat. Keep the composer
+		// allocation so the transcript does not jump when the request arrives.
+		content.WriteString(m.renderInertComposerChrome())
 	case m.readScopePrompt != nil:
 		prompt := m.renderReadScopePrompt()
 		content.WriteString(prompt)
 	case m.pendingPaste != nil || m.pendingSessionSwitch != nil:
 		// The status projection above owns the footer until the user answers.
 	case m.overlay == OverlayCortexDecision && m.cortexDecision != nil:
-		decision := m.cortexDecision.View(m.cortexDecisionBusyMarker())
-		content.WriteString(decision)
+		content.WriteString(m.renderInertComposerChrome())
 	case m.overlay == OverlayCompletion && m.isCompletionActive():
 		popupY := strings.Count(content.String(), "\n")
 		popup, popupCursor := m.renderCompletionModalView()
 		content.WriteString(popup)
 		content.WriteString("\n")
-		// Completion keeps the live draft unframed so the popup stays the focus.
-		input := m.input
-		input.SetVirtualCursor(false)
-		content.WriteString(input.View())
+		// Completion keeps the draft in the shared framed column; the popup
+		// owns the hardware cursor so the draft is not a second focus.
+		framed, _ := m.renderComposerChrome()
+		content.WriteString(framed)
 		p.cursor = offsetCursor(popupCursor, 0, popupY)
 	case m.overlay == OverlayTranscriptSearch && m.transcriptSearch != nil:
 		searchY := strings.Count(content.String(), "\n")

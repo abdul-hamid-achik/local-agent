@@ -1,5 +1,7 @@
 package ui
 
+import "strings"
+
 // CellRect describes a half-open rectangle of terminal cells:
 // [MinX, MaxX) x [MinY, MaxY). The zero value is an empty rectangle.
 type CellRect struct {
@@ -119,6 +121,29 @@ func clampExtent(value, extent int) int {
 		return 0
 	}
 	return min(value, extent)
+}
+
+// fitDisplayRows pads or clips value to exactly rows terminal lines so a
+// surface can occupy its projected rectangle without inventing a trailing
+// blank row or overflowing into the next surface.
+func fitDisplayRows(value string, rows int) string {
+	if rows <= 0 {
+		return ""
+	}
+	var lines []string
+	if value != "" {
+		lines = strings.Split(strings.TrimRight(value, "\n"), "\n")
+	}
+	switch {
+	case len(lines) == rows:
+		return strings.Join(lines, "\n")
+	case len(lines) > rows:
+		return strings.Join(lines[:rows], "\n")
+	default:
+		out := make([]string, rows)
+		copy(out, lines)
+		return strings.Join(out, "\n")
+	}
 }
 
 // WidthClass is the horizontal density tier for a terminal frame. Recovery is

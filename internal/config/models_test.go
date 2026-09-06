@@ -314,6 +314,34 @@ func TestAvailableLocalChatModelsRequiresOrnithInstalled(t *testing.T) {
 	if got := cfg.AvailableLocalChatModels([]string{"ornith:latest"}); !reflect.DeepEqual(got, []string{"ornith:latest"}) {
 		t.Fatalf("installed Ornith was not exposed for manual selection: %#v", got)
 	}
+	if !(&cfg).isExclusive("ornith-1.5:9b") {
+		t.Fatal("renamed Ornith sibling was not treated as exclusive")
+	}
+}
+
+func TestModelNameCoversRenamedLatestSiblings(t *testing.T) {
+	if !ModelNameCovers("ornith:latest", "ornith-1.5:9b") {
+		t.Fatal("ornith:latest should cover ornith-1.5:9b")
+	}
+	if !ModelNameCovers("llama3", "llama3:8b") {
+		t.Fatal("untagged llama3 should cover llama3:8b")
+	}
+	if ModelNameCovers("qwen3.5:2b", "qwen3.5:4b") {
+		t.Fatal("specific size tags must not cover another size")
+	}
+	if ModelNameCovers("qwen3", "qwen3.5:2b") {
+		t.Fatal("dotted family versions must not cover as renamed siblings")
+	}
+	got, ok := MatchInstalledModel("ornith:latest", []string{"qwen3.5:2b", "ornith-1.5:9b"})
+	if !ok || got != "ornith-1.5:9b" {
+		t.Fatalf("MatchInstalledModel = %q ok=%v", got, ok)
+	}
+	if _, ok := MatchInstalledModel("qwen3.5:2b", []string{"qwen3.5:4b"}); ok {
+		t.Fatal("missing specific tag should not alias to another size")
+	}
+	if _, ok := MatchInstalledModel("llama3", []string{"llama3:8b", "llama3:70b"}); ok {
+		t.Fatal("ambiguous latest siblings should stay unresolved")
+	}
 }
 
 func TestCheckModelAvailableLocally(t *testing.T) {

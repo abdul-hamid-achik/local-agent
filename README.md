@@ -141,6 +141,13 @@ Approximate artifact sizes vary by Ollama build and quantization:
 
 The shipped Phi profile is manual-only because its advertised Ollama metadata has not been backed by behavioral tool-use verification in this harness. Its size is not the reason for the restriction.
 
+For guided single-file work, [the lightweight example](config.light.example.yaml)
+uses `qwen3:1.7b-light`, an 8K context and four native tools. Build the alias with
+[Modelfile.light](Modelfile.light), load the file with `/load`, and verify each
+approved edit with your compiler or tests. The example also documents the
+optional `tools.builtin_tools` and `ollama.disable_reasoning` settings; reducing
+model size or tool count alone does not establish reliable autonomous editing.
+
 Pull whichever profiles you intend to use:
 
 ```bash

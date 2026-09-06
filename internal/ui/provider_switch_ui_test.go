@@ -183,3 +183,20 @@ func providerSwitchTestManager(t *testing.T) *llm.ModelManager {
 	}, false, "qwen3.5:2b")
 	return manager
 }
+
+func TestRemoteOllamaProfileKeepsBoundaryOnCompactSurfaces(t *testing.T) {
+	m := newTestModel(t)
+	manager := llm.NewModelManager("http://127.0.0.1:9", 4096)
+	defer manager.Close()
+	manager.ConfigureProviderCatalog(config.ProviderConfig{Profiles: map[string]config.ProviderProfile{
+		"gpu": {Type: config.ProviderTypeOllamaRemote, BaseURL: "http://127.0.0.1:11435", Model: "large:35b", ContextSize: 65536, MaxModelBytes: 32 << 30},
+	}}, false, "small")
+	if err := manager.SwitchProvider("gpu"); err != nil {
+		t.Fatal(err)
+	}
+	m.modelManager = manager
+	m.model = manager.Model()
+	if !m.currentModelIsNonLocal() || !strings.Contains(m.currentModelSurfaceLabel(true), "remote prompts") {
+		t.Fatal("SSH loopback hid remote boundary")
+	}
+}

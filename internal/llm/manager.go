@@ -16,7 +16,8 @@ import (
 )
 
 type ModelManager struct {
-	baseURL string
+	disableReasoning atomic.Bool
+	baseURL          string
 	// numCtx is atomic rather than mu-guarded. It is written by SetNumCtx and
 	// read from paths that hold mu, localMu, or no lock at all; getClient
 	// already holds mu when it calls ContextPolicy, which takes localMu, so the
@@ -42,12 +43,14 @@ type ModelManager struct {
 	cloudModels  map[string]struct{}
 	cloudGrants  map[string]struct{}
 	nativeCtx    map[string]int
-	// remote, when non-nil, routes ChatStream/Ping/Model through an
-	// OpenAI-compatible provider instead of Ollama. Embeddings still use
+
+	remotePolicyModel string // protected by localMu; never merged into local inventory
+	remotePolicy      ModelContextPolicy
+	// remote, when non-nil, routes ChatStream/Ping/Model through a
+	// remote provider instead of local Ollama. Embeddings still use
 	// Ollama when ICE is enabled.
-	remote        *OpenAICompatibleClient
-	remoteContext int
-	remoteLabel   string
+	remote      RemoteClient
+	remoteLabel string
 	// Provider catalog for multi-profile switching (/provider).
 	providerCatalog  config.ProviderConfig
 	providerActive   string
@@ -111,10 +114,10 @@ func (m *ModelManager) ConfigureProviderCatalog(catalog config.ProviderConfig, l
 	}
 }
 
-// ConfigureRemoteProvider attaches an OpenAI-compatible chat backend. When set,
+// ConfigureRemoteProvider attaches a remote chat backend. When set,
 // ordinary chat, ping, and model selection use the remote client. Local Ollama
 // inventory, admission guards, and embeddings remain available for ICE.
-func (m *ModelManager) ConfigureRemoteProvider(client *OpenAICompatibleClient, contextSize int, label string) error {
+func (m *ModelManager) ConfigureRemoteProvider(client RemoteClient, contextSize int, label string) error {
 	if client == nil {
 		return errors.New("remote provider client is nil")
 	}
@@ -131,26 +134,17 @@ func (m *ModelManager) ConfigureRemoteProvider(client *OpenAICompatibleClient, c
 	return m.attachRemoteLocked(client, contextSize, label)
 }
 
-func (m *ModelManager) attachRemoteLocked(client *OpenAICompatibleClient, contextSize int, label string) error {
+func (m *ModelManager) attachRemoteLocked(client RemoteClient, contextSize int, label string) error {
 	m.remote = client
-	m.remoteContext = contextSize
 	m.remoteLabel = label
 	m.providerActive = label
 	m.currentModel = client.Model()
 	m.localMu.Lock()
-	m.cloudKnown = true
-	if m.cloudModels == nil {
-		m.cloudModels = make(map[string]struct{})
+	m.remotePolicyModel = config.CanonicalModelName(client.Model())
+	m.remotePolicy = ModelContextPolicy{Effective: contextSize, Native: contextSize, NativeKnown: true, Cloud: true}
+	if _, native := client.(*OllamaClient); native {
+		m.remotePolicy = ModelContextPolicy{Effective: contextSize, Request: contextSize}
 	}
-	m.cloudModels[config.CanonicalModelName(client.Model())] = struct{}{}
-	if m.nativeCtx == nil {
-		m.nativeCtx = make(map[string]int)
-	}
-	m.nativeCtx[config.CanonicalModelName(client.Model())] = contextSize
-	if m.cloudGrants == nil {
-		m.cloudGrants = make(map[string]struct{})
-	}
-	m.cloudGrants[config.CanonicalModelName(client.Model())] = struct{}{}
 	m.localMu.Unlock()
 	return nil
 }
@@ -162,7 +156,10 @@ func (m *ModelManager) ClearRemoteProvider() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.remote = nil
-	m.remoteContext = 0
+	m.localMu.Lock()
+	m.remotePolicyModel = ""
+	m.remotePolicy = ModelContextPolicy{}
+	m.localMu.Unlock()
 	m.remoteLabel = ""
 	if m.providerActive == "" || m.providerActive != "ollama" {
 		m.providerActive = "ollama"
@@ -231,7 +228,10 @@ func (m *ModelManager) SwitchProviderContext(ctx context.Context, name string) e
 		}
 		m.mu.Lock()
 		m.remote = nil
-		m.remoteContext = 0
+		m.localMu.Lock()
+		m.remotePolicyModel = ""
+		m.remotePolicy = ModelContextPolicy{}
+		m.localMu.Unlock()
 		m.remoteLabel = ""
 		m.providerActive = profileName
 		m.mu.Unlock()
@@ -244,15 +244,7 @@ func (m *ModelManager) SwitchProviderContext(ctx context.Context, name string) e
 		return nil
 	}
 
-	apiKey, err := profile.ResolveAPIKey()
-	if err != nil {
-		return err
-	}
-	client, err := NewOpenAICompatibleClient(OpenAICompatibleOptions{
-		BaseURL: profile.BaseURL,
-		Model:   profile.Model,
-		APIKey:  apiKey,
-	})
+	client, err := NewRemoteProviderClient(profile)
 	if err != nil {
 		return err
 	}
@@ -281,7 +273,7 @@ func resolveSwitchTarget(catalog config.ProviderConfig, name string) (string, co
 	return "", config.ProviderProfile{}, fmt.Errorf("unknown provider %q", name)
 }
 
-// RemoteProvider reports whether chat inference uses a non-Ollama adapter.
+// RemoteProvider reports whether chat inference uses an explicit remote profile.
 func (m *ModelManager) RemoteProvider() bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -488,6 +480,15 @@ func boundedNativeContext(value int64) int {
 func (m *ModelManager) ContextPolicy(model string) ModelContextPolicy {
 	m.localMu.RLock()
 	defer m.localMu.RUnlock()
+	if canonical := config.CanonicalModelName(model); canonical != "" && canonical == m.remotePolicyModel {
+		return m.remotePolicy
+	}
+	return m.contextPolicyLocked(model)
+}
+
+func (m *ModelManager) ollamaContextPolicy(model string) ModelContextPolicy {
+	m.localMu.RLock()
+	defer m.localMu.RUnlock()
 	return m.contextPolicyLocked(model)
 }
 
@@ -566,7 +567,7 @@ func (m *ModelManager) getClient(ctx context.Context, modelName string) (*Ollama
 	if err := m.ensureModelLocal(ctx, modelName); err != nil {
 		return nil, err
 	}
-	policy := m.ContextPolicy(modelName)
+	policy := m.ollamaContextPolicy(modelName)
 	if err := validateRequestContextPolicy(modelName, policy); err != nil {
 		return nil, err
 	}
@@ -583,7 +584,7 @@ func (m *ModelManager) getClient(ctx context.Context, modelName string) (*Ollama
 
 	// Re-read policy after taking the client lock so a context refresh that
 	// raced the first lookup cannot install a client with the old request value.
-	policy = m.ContextPolicy(modelName)
+	policy = m.ollamaContextPolicy(modelName)
 	if err := validateRequestContextPolicy(modelName, policy); err != nil {
 		return nil, err
 	}
@@ -630,20 +631,7 @@ func (m *ModelManager) SetCurrentModel(model string) error {
 		}
 		m.mu.Unlock()
 		m.localMu.Lock()
-		if m.cloudModels == nil {
-			m.cloudModels = make(map[string]struct{})
-		}
-		m.cloudModels[config.CanonicalModelName(model)] = struct{}{}
-		if m.nativeCtx == nil {
-			m.nativeCtx = make(map[string]int)
-		}
-		if m.remoteContext > 0 {
-			m.nativeCtx[config.CanonicalModelName(model)] = m.remoteContext
-		}
-		if m.cloudGrants == nil {
-			m.cloudGrants = make(map[string]struct{})
-		}
-		m.cloudGrants[config.CanonicalModelName(model)] = struct{}{}
+		m.remotePolicyModel = config.CanonicalModelName(model)
 		m.localMu.Unlock()
 		return nil
 	}
@@ -739,6 +727,13 @@ func (m *ModelManager) CurrentModel() string {
 	return m.currentModel
 }
 
+// ConfigureOllamaReasoning controls native Ollama requests, including future
+// model switches. False preserves the provider default; remote profiles retain
+// their own controls. Per-request disabling still takes precedence.
+func (m *ModelManager) ConfigureOllamaReasoning(disable bool) {
+	m.disableReasoning.Store(disable)
+}
+
 func (m *ModelManager) ChatStream(ctx context.Context, opts ChatOptions, fn func(StreamChunk) error) error {
 	if err := m.admission.acquireOrdinary(ctx); err != nil {
 		return inferenceNotStarted(err)
@@ -777,6 +772,7 @@ func (m *ModelManager) ChatStream(ctx context.Context, opts ChatOptions, fn func
 	m.active[model] = true
 	m.markNonExpertActivityLocked(model)
 	m.mu.Unlock()
+	opts.DisableReasoning = opts.DisableReasoning || m.disableReasoning.Load()
 	return client.ChatStream(ctx, opts, fn)
 }
 
@@ -841,6 +837,7 @@ func (m *ModelManager) ChatStreamForModel(ctx context.Context, model string, opt
 	m.active[model] = true
 	m.markExpertActivityLocked(model)
 	m.mu.Unlock()
+	opts.DisableReasoning = opts.DisableReasoning || m.disableReasoning.Load()
 	return client.ChatStream(ctx, opts, fn)
 }
 

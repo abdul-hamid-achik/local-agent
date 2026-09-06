@@ -21,6 +21,9 @@ func TestInlineCodeFollowsTheActiveScheme(t *testing.T) {
 			style := markdownStyleConfig(isDark, themeID)
 			palette := newSemanticPalette(isDark, themeID)
 
+			if style.Document.Color == nil || *style.Document.Color != colorHex(palette.Text) {
+				t.Fatalf("%s dark=%v: prose ignored the theme text colour", themeID, isDark)
+			}
 			if style.Code.Color == nil || style.Code.BackgroundColor == nil {
 				t.Fatalf("%s dark=%v: inline code has no colours", themeID, isDark)
 			}
@@ -157,6 +160,26 @@ func TestUnconfiguredProseFollowsThePane(t *testing.T) {
 	// The point of the change: a wide pane is used, not left half empty.
 	if width <= 96 {
 		t.Fatalf("prose still stopped at %d columns on a 160-column pane:\n%s", width, rendered)
+	}
+}
+
+func TestMarkdownWrapUsesTheFullMeasure(t *testing.T) {
+	original := proseCap
+	t.Cleanup(func() { proseCap = original })
+	SetProseCap(0)
+
+	const measure = 80
+	renderer := NewMarkdownRenderer(measure, true, defaultThemeID)
+	rendered := ansi.Strip(renderer.RenderFull(strings.Repeat("word ", 80)))
+	width := widestDisplayLine(rendered)
+	if width > measure {
+		t.Fatalf("prose overflowed measure %d at %d\n%s", measure, width, rendered)
+	}
+	// The previous wrap was measure-4. Word-wrapped lines must be allowed
+	// past that leftover gutter so they share the composer column.
+	if width <= measure-4 {
+		t.Fatalf("prose still wraps at the old measure-4 gutter: %d want > %d\n%s",
+			width, measure-4, rendered)
 	}
 }
 

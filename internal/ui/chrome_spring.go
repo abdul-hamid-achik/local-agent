@@ -10,7 +10,7 @@ import (
 	"github.com/charmbracelet/harmonica"
 )
 
-// Micro spring chrome (sticky reveal + context meter). Harmonica drives natural
+// Context meter motion. Harmonica drives natural
 // ease; reducedMotion snaps to targets and never schedules ticks. Layout stays
 // stable — we never animate reserved row counts mid-flight.
 const (
@@ -27,10 +27,6 @@ type chromeSpringTickMsg struct {
 // chromeSpringState is owned by Model; values are presentation-only.
 type chromeSpringState struct {
 	spring harmonica.Spring
-
-	// Sticky reveal 0→1: progressive text reveal at full bar width.
-	stickyPos, stickyVel, stickyTarget float64
-	stickyKey                          string
 
 	// Context meter display percent 0→100 (style still uses true occupancy).
 	ctxPos, ctxVel, ctxTarget float64
@@ -61,8 +57,7 @@ func (m *Model) chromeSpringActive() bool {
 		return false
 	}
 	s := &m.chromeSpring
-	return !springSettled(s.stickyPos, s.stickyVel, s.stickyTarget) ||
-		!springSettled(s.ctxPos, s.ctxVel, s.ctxTarget)
+	return !springSettled(s.ctxPos, s.ctxVel, s.ctxTarget)
 }
 
 // pullChromeSpringTargets syncs spring targets from model state. When reduced
@@ -72,31 +67,6 @@ func (m *Model) pullChromeSpringTargets() {
 		return
 	}
 	s := &m.chromeSpring
-
-	// Sticky: re-open when the latest user prompt identity changes.
-	key := ""
-	if m.stickyUserActive() {
-		key = m.latestUserPromptText()
-	}
-	if key != s.stickyKey {
-		s.stickyKey = key
-		if key != "" && !m.reducedMotion {
-			// Sticky owns the only copy of the single-line prompt (body omits
-			// immediately). Snap reveal high so any residual consumers of
-			// stickyReveal() see a complete prompt from the first paint.
-			s.stickyPos = 1
-			s.stickyVel = 0
-		}
-	}
-	if key != "" {
-		s.stickyTarget = 1
-	} else {
-		s.stickyTarget = 0
-		if m.reducedMotion {
-			s.stickyPos = 0
-			s.stickyVel = 0
-		}
-	}
 
 	// Context meter target from true occupancy.
 	if m.numCtx > 0 {
@@ -120,8 +90,6 @@ func (m *Model) pullChromeSpringTargets() {
 	}
 
 	if m.reducedMotion {
-		s.stickyPos = s.stickyTarget
-		s.stickyVel = 0
 		s.ctxPos = s.ctxTarget
 		s.ctxVel = 0
 	}
@@ -132,15 +100,8 @@ func (m *Model) stepChromeSpring() {
 		return
 	}
 	s := &m.chromeSpring
-	s.stickyPos, s.stickyVel = s.spring.Update(s.stickyPos, s.stickyVel, s.stickyTarget)
 	s.ctxPos, s.ctxVel = s.spring.Update(s.ctxPos, s.ctxVel, s.ctxTarget)
 	// Clamp to sensible ranges.
-	if s.stickyPos < 0 {
-		s.stickyPos = 0
-	}
-	if s.stickyPos > 1 {
-		s.stickyPos = 1
-	}
 	if s.ctxPos < 0 {
 		s.ctxPos = 0
 	}
@@ -189,30 +150,11 @@ func (m *Model) handleChromeSpringTick(msg chromeSpringTickMsg) tea.Cmd {
 	m.stepChromeSpring()
 	if !m.chromeSpringActive() {
 		// Snap to final targets for clean paint.
-		m.chromeSpring.stickyPos = m.chromeSpring.stickyTarget
-		m.chromeSpring.stickyVel = 0
 		m.chromeSpring.ctxPos = m.chromeSpring.ctxTarget
 		m.chromeSpring.ctxVel = 0
 		return nil
 	}
 	return m.startChromeSpringTick()
-}
-
-// stickyReveal returns 0..1 for progressive sticky text reveal.
-func (m *Model) stickyReveal() float64 {
-	if m == nil {
-		return 0
-	}
-	if m.reducedMotion || !m.stickyUserActive() {
-		if m.stickyUserActive() {
-			return 1
-		}
-		return 0
-	}
-	if m.chromeSpring.stickyPos < 0.4 && m.chromeSpring.stickyTarget >= 1 {
-		return 0.4
-	}
-	return m.chromeSpring.stickyPos
 }
 
 // settleChromeSpringForTest snaps springs to targets for deterministic paint
@@ -222,8 +164,6 @@ func (m *Model) settleChromeSpringForTest() {
 		return
 	}
 	m.pullChromeSpringTargets()
-	m.chromeSpring.stickyPos = m.chromeSpring.stickyTarget
-	m.chromeSpring.stickyVel = 0
 	m.chromeSpring.ctxPos = m.chromeSpring.ctxTarget
 	m.chromeSpring.ctxVel = 0
 	m.chromeSpring.pending = false

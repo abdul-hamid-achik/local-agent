@@ -18,11 +18,8 @@ func TestNarrowTerminalUsesFullWidthConversation(t *testing.T) {
 	m = updated.(*Model)
 
 	view := m.View()
-	// Session chrome owns empty state on usable frames; no mid-canvas wall.
-	for _, noise := range []string{"LOCAL AGENT", "Local-first"} {
-		if strings.Contains(view.Content, noise) {
-			t.Fatalf("40×20 view still paints redundant welcome %q:\n%s", noise, view.Content)
-		}
+	if !strings.Contains(view.Content, "LOCAL AGENT") || !strings.Contains(view.Content, "Ask · /help") {
+		t.Fatalf("compact welcome omitted orientation:\n%s", view.Content)
 	}
 	assertRenderedLinesFit(t, view.Content, 40)
 	if hint := m.narrowTerminalHint(); hint != "" {
@@ -69,14 +66,14 @@ func TestWelcomeUsesHonestLocalFirstCopy(t *testing.T) {
 	}
 }
 
-func TestRoomyEmptyStateOmitsWelcomeWall(t *testing.T) {
+func TestRoomyEmptyStateHasBriefOrientation(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 100
 	m.height = 30
 	var b strings.Builder
 	m.renderWelcome(&b)
-	if got := strings.TrimSpace(ansi.Strip(b.String())); got != "" {
-		t.Fatalf("roomy empty welcome should be empty, got:\n%s", got)
+	if got := strings.TrimSpace(ansi.Strip(b.String())); !strings.Contains(got, "Ask a question") || lipgloss.Height(got) > 6 {
+		t.Fatalf("roomy welcome should give brief orientation:\n%s", got)
 	}
 }
 

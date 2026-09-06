@@ -45,15 +45,16 @@ func (m *Model) renderComposerOverflowCue() string {
 			"↑ earlier · ↓ later",
 		}
 	}
-	width := max(1, m.chatPaneWidth())
+	width := max(1, m.contentGrid().LineWidth())
+	lead := m.contentGrid().Prefix(" ")
 	chosen := candidates[len(candidates)-1]
 	for _, candidate := range candidates {
-		if lipgloss.Width("  "+candidate) <= width {
+		if lipgloss.Width(lead+candidate) <= width {
 			chosen = candidate
 			break
 		}
 	}
-	return truncateDisplay("  "+m.styles.StatusText.Render(chosen), width)
+	return truncateDisplay(lead+m.styles.StatusText.Render(chosen), width)
 }
 
 // composerHiddenRows reports the exact wrapped rows outside the textarea's
@@ -73,7 +74,7 @@ func (m *Model) composerHiddenRows() (earlier, later int) {
 	if m.input.MaxHeight > 0 && visible < m.input.MaxHeight {
 		return 0, 0
 	}
-	width := max(20, m.chatPaneWidth())
+	width := max(8, m.composerTextWidth())
 	digest := sha256.Sum256([]byte(value))
 	total := m.composerMeasureRows
 	if digest != m.composerMeasureDigest || width != m.composerMeasureW || total <= 0 {
@@ -183,7 +184,7 @@ func (m *Model) renderQueuedFollowUp() string {
 		prompt = "follow-up"
 	}
 
-	prefix := "  " + m.styles.FocusIndicator.Render("queued") + m.styles.StatusText.Render(" › ")
+	prefix := m.contentGrid().Prefix(" ") + m.styles.FocusIndicator.Render("queued") + m.styles.StatusText.Render(" › ")
 	imageMarker := ""
 	if count := len(m.queuedFollowUp.Images); count > 0 {
 		imageMarker = fmt.Sprintf(" · + %d image%s", count, pluralSuffix(count))

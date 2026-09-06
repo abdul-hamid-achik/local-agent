@@ -248,6 +248,23 @@ type SessionLoadedMsg struct {
 	Err              error
 }
 
+// AgentQuestionMsg asks the human a bounded question from the agent.
+type AgentQuestionMsg struct {
+	CallID   string
+	Kind     QuestionKind
+	Prompt   string
+	Options  []QuestionChoice
+	Response chan<- AgentQuestionResponse
+}
+
+// AgentQuestionResponse is the human's answer or skip for ask_user.
+type AgentQuestionResponse struct {
+	Skipped bool
+	ID      string
+	Label   string
+	Text    string
+}
+
 // ToolApprovalMsg asks the user to approve a tool call.
 type ToolApprovalMsg struct {
 	RequestID       string

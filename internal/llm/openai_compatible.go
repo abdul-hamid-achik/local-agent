@@ -29,12 +29,13 @@ const (
 // HTTP APIs (xAI, OpenAI, OpenRouter, local vLLM, etc.). Credentials are
 // supplied by the process environment only — never from config files.
 type OpenAICompatibleClient struct {
-	httpClient *http.Client
-	base       *url.URL
-	baseURL    string
-	model      string
-	apiKey     string
-	mu         sync.RWMutex
+	streamIdleTimeout time.Duration
+	httpClient        *http.Client
+	base              *url.URL
+	baseURL           string
+	model             string
+	apiKey            string
+	mu                sync.RWMutex
 }
 
 // OpenAICompatibleOptions constructs a remote OpenAI-style client.
@@ -75,11 +76,12 @@ func NewOpenAICompatibleClient(opts OpenAICompatibleOptions) (*OpenAICompatibleC
 	u.Path = strings.TrimRight(u.Path, "/")
 	client := newOpenAIHTTPClient(u)
 	return &OpenAICompatibleClient{
-		httpClient: client,
-		base:       u,
-		baseURL:    strings.TrimSuffix(u.String(), "/"),
-		model:      model,
-		apiKey:     strings.TrimSpace(opts.APIKey),
+		httpClient:        client,
+		streamIdleTimeout: defaultStreamIdleTimeout,
+		base:              u,
+		baseURL:           strings.TrimSuffix(u.String(), "/"),
+		model:             model,
+		apiKey:            strings.TrimSpace(opts.APIKey),
 	}, nil
 }
 
@@ -265,8 +267,8 @@ func (c *OpenAICompatibleClient) consumeSSE(ctx context.Context, body io.ReadClo
 	// a blocked ReadString returns instead of holding the turn open forever.
 	streamCtx, cancelStream := context.WithCancelCause(ctx)
 	defer cancelStream(nil)
-	idle := time.AfterFunc(streamIdleTimeout, func() {
-		cancelStream(fmt.Errorf("%w (%s)", ErrStreamIdle, streamIdleTimeout))
+	idle := time.AfterFunc(c.streamIdleTimeout, func() {
+		cancelStream(fmt.Errorf("%w (%s)", ErrStreamIdle, c.streamIdleTimeout))
 		_ = body.Close()
 	})
 	defer idle.Stop()
@@ -310,7 +312,7 @@ func (c *OpenAICompatibleClient) consumeSSE(ctx context.Context, body io.ReadClo
 			}
 			return fmt.Errorf("read provider stream: %w", err)
 		}
-		idle.Reset(streamIdleTimeout)
+		idle.Reset(c.streamIdleTimeout)
 		line = strings.TrimRight(line, "\r\n")
 		if line == "" || strings.HasPrefix(line, ":") {
 			continue

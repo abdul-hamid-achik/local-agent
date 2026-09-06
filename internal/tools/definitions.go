@@ -20,6 +20,7 @@ var builtinToolNames = map[string]bool{
 	"exists":          true,
 	"load_skill":      true,
 	"consult_experts": true,
+	"ask_user":        true,
 }
 
 func AllToolDefs() []llm.ToolDef {
@@ -41,6 +42,7 @@ func AllToolDefs() []llm.ToolDef {
 		ExistsToolDef(),
 		LoadSkillToolDef(),
 		ConsultExpertsToolDef(),
+		AskUserToolDef(),
 	}
 }
 

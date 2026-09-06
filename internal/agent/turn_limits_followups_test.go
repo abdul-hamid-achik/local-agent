@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -91,11 +92,17 @@ func TestEvalBudgetedTurnStillRefusesUntrackedCompaction(t *testing.T) {
 type flakyThenScriptedClient struct {
 	failures int
 	inner    *scriptedClient
+	partial  *llm.StreamChunk
 }
 
 func (c *flakyThenScriptedClient) ChatStream(ctx context.Context, options llm.ChatOptions, emit func(llm.StreamChunk) error) error {
 	if c.failures > 0 {
 		c.failures--
+		if c.partial != nil {
+			if err := emit(*c.partial); err != nil {
+				return err
+			}
+		}
 		return io.ErrUnexpectedEOF
 	}
 	return c.inner.ChatStream(ctx, options, emit)
@@ -148,6 +155,49 @@ func TestBoundedTurnWithoutRemainingBudgetFailsClosedOnTransport(t *testing.T) {
 	}
 	if client.failures != 0 {
 		t.Fatal("provider was never dispatched")
+	}
+}
+
+func TestProviderRetryRequiresUnpublishedResponse(t *testing.T) {
+	for _, budget := range []int64{0, 50_000} {
+		for _, tc := range []struct {
+			name    string
+			partial *llm.StreamChunk
+			retry   bool
+		}{
+			{"before output", nil, true},
+			{"empty chunk", &llm.StreamChunk{}, true},
+			{"text", &llm.StreamChunk{Text: "partial answer"}, false},
+			{"reasoning", &llm.StreamChunk{Reasoning: "partial reasoning"}, false},
+			{"terminal receipt", &llm.StreamChunk{Done: true, EvalCount: 5}, false},
+		} {
+			t.Run(fmt.Sprintf("budget_%d/%s", budget, tc.name), func(t *testing.T) {
+				client := &flakyThenScriptedClient{
+					failures: 1,
+					partial:  tc.partial,
+					inner: &scriptedClient{responses: [][]llm.StreamChunk{{{
+						Text: "recovered", Done: true, EvalCount: 5,
+					}}}},
+				}
+				ag := New(client, nil, 4_096)
+				ag.SetWorkDir(t.TempDir())
+				ag.AddUserMessage("hola")
+				out := &mockOutput{}
+				err := ag.RunTurnWithLimits(context.Background(), out, "turn_partial_retry", TurnLimits{MaxEvalTokens: budget})
+				if tc.retry {
+					if err != nil || client.inner.calls != 1 {
+						t.Fatalf("unpublished response should retry: calls=%d err=%v", client.inner.calls, err)
+					}
+				} else {
+					if !errors.Is(err, io.ErrUnexpectedEOF) || client.inner.calls != 0 {
+						t.Fatalf("published response retried: calls=%d text=%q err=%v", client.inner.calls, out.texts, err)
+					}
+					if strings.Contains(strings.Join(out.errors, "\n"), "retrying") {
+						t.Fatalf("published response offered automatic retry: %v", out.errors)
+					}
+				}
+			})
+		}
 	}
 }
 

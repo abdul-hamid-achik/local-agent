@@ -37,7 +37,9 @@ func TestAutoIterationLimitReturnsProductiveCheckpoint(t *testing.T) {
 	ag := New(&scriptedClient{responses: responses}, nil, 4096)
 	ag.SetWorkDir(workspace)
 	ag.SetAuthorityMode(AuthorityAutoScoped)
-	ag.SetToolsConfig(config.ToolsConfig{MaxIterations: 3, AutoMaxIterations: 3})
+	if err := ag.SetToolsConfig(config.ToolsConfig{MaxIterations: 3, AutoMaxIterations: 3}); err != nil {
+		t.Fatal(err)
+	}
 	out := &outputRecorder{}
 	err := ag.RunTurn(context.Background(), out, "turn_productive_checkpoint")
 
@@ -99,7 +101,9 @@ func TestAutoIterationCheckpointRejectsRepeatedOrBlockedWork(t *testing.T) {
 		ag := New(&scriptedClient{responses: responses}, nil, 4096)
 		ag.SetWorkDir(t.TempDir())
 		ag.SetAuthorityMode(AuthorityAutoScoped)
-		ag.SetToolsConfig(config.ToolsConfig{MaxIterations: 3, AutoMaxIterations: 3})
+		if err := ag.SetToolsConfig(config.ToolsConfig{MaxIterations: 3, AutoMaxIterations: 3}); err != nil {
+			t.Fatal(err)
+		}
 		err := ag.Run(context.Background(), &outputRecorder{})
 		if errors.Is(err, ErrAutoIterationCheckpoint) || err == nil ||
 			!strings.Contains(err.Error(), "reached max iterations (3)") {
@@ -117,7 +121,9 @@ func TestAutoIterationCheckpointRejectsRepeatedOrBlockedWork(t *testing.T) {
 		}}}}, nil, 4096)
 		ag.SetWorkDir(t.TempDir())
 		ag.SetAuthorityMode(AuthorityAutoScoped)
-		ag.SetToolsConfig(config.ToolsConfig{MaxIterations: 1, AutoMaxIterations: 1})
+		if err := ag.SetToolsConfig(config.ToolsConfig{MaxIterations: 1, AutoMaxIterations: 1}); err != nil {
+			t.Fatal(err)
+		}
 		err := ag.Run(context.Background(), &outputRecorder{})
 		if errors.Is(err, ErrAutoIterationCheckpoint) || err == nil ||
 			!strings.Contains(err.Error(), "reached max iterations (1)") {
@@ -184,7 +190,9 @@ func TestAutoCheckpointAllowsMixedFinalIteration(t *testing.T) {
 	}}}}, nil, 4096)
 	ag.SetWorkDir(workspace)
 	ag.SetAuthorityMode(AuthorityAutoScoped)
-	ag.SetToolsConfig(config.ToolsConfig{MaxIterations: 1, AutoMaxIterations: 1})
+	if err := ag.SetToolsConfig(config.ToolsConfig{MaxIterations: 1, AutoMaxIterations: 1}); err != nil {
+		t.Fatal(err)
+	}
 	err := ag.Run(context.Background(), &outputRecorder{})
 
 	var checkpoint *AutoIterationCheckpointError
@@ -211,7 +219,9 @@ func TestAutoEmptyTerminalFallsBackToSegmentCheckpoint(t *testing.T) {
 	}}, nil, 4096)
 	ag.SetWorkDir(workspace)
 	ag.SetAuthorityMode(AuthorityAutoScoped)
-	ag.SetToolsConfig(config.ToolsConfig{MaxIterations: 5, AutoMaxIterations: 5})
+	if err := ag.SetToolsConfig(config.ToolsConfig{MaxIterations: 5, AutoMaxIterations: 5}); err != nil {
+		t.Fatal(err)
+	}
 	out := &outputRecorder{}
 	err := ag.Run(context.Background(), out)
 
@@ -233,7 +243,9 @@ func TestAutoEmptyTerminalWithoutProgressRemainsTerminal(t *testing.T) {
 	}}, nil, 4096)
 	ag.SetWorkDir(t.TempDir())
 	ag.SetAuthorityMode(AuthorityAutoScoped)
-	ag.SetToolsConfig(config.ToolsConfig{MaxIterations: 5, AutoMaxIterations: 5})
+	if err := ag.SetToolsConfig(config.ToolsConfig{MaxIterations: 5, AutoMaxIterations: 5}); err != nil {
+		t.Fatal(err)
+	}
 	err := ag.Run(context.Background(), &outputRecorder{})
 	if !errors.Is(err, ErrEmptyTerminalResponse) {
 		t.Fatalf("empty first response error = %T %v, want ErrEmptyTerminalResponse", err, err)
@@ -259,7 +271,9 @@ func TestAutoMalformedToolLoopFallsBackToSegmentCheckpoint(t *testing.T) {
 	}}, nil, 4096)
 	ag.SetWorkDir(workspace)
 	ag.SetAuthorityMode(AuthorityAutoScoped)
-	ag.SetToolsConfig(config.ToolsConfig{MaxIterations: 6, AutoMaxIterations: 6})
+	if err := ag.SetToolsConfig(config.ToolsConfig{MaxIterations: 6, AutoMaxIterations: 6}); err != nil {
+		t.Fatal(err)
+	}
 	err := ag.Run(context.Background(), &outputRecorder{})
 
 	var checkpoint *AutoIterationCheckpointError
@@ -286,7 +300,9 @@ func TestInteractiveEmptyTerminalRemainsTerminal(t *testing.T) {
 	}}, nil, 4096)
 	ag.SetWorkDir(workspace)
 	ag.SetAuthorityMode(AuthorityNormal)
-	ag.SetToolsConfig(config.ToolsConfig{MaxIterations: 5, AutoMaxIterations: 5})
+	if err := ag.SetToolsConfig(config.ToolsConfig{MaxIterations: 5, AutoMaxIterations: 5}); err != nil {
+		t.Fatal(err)
+	}
 	err := ag.Run(context.Background(), &outputRecorder{})
 	if !errors.Is(err, ErrEmptyTerminalResponse) {
 		t.Fatalf("interactive empty terminal error = %T %v, want ErrEmptyTerminalResponse", err, err)
@@ -300,7 +316,9 @@ func TestInteractiveIterationLimitRemainsTerminal(t *testing.T) {
 	}}}}, nil, 4096)
 	ag.SetWorkDir(t.TempDir())
 	ag.SetAuthorityMode(AuthorityNormal)
-	ag.SetToolsConfig(config.ToolsConfig{MaxIterations: 1, AutoMaxIterations: 1})
+	if err := ag.SetToolsConfig(config.ToolsConfig{MaxIterations: 1, AutoMaxIterations: 1}); err != nil {
+		t.Fatal(err)
+	}
 	err := ag.Run(context.Background(), &outputRecorder{})
 	if errors.Is(err, ErrAutoIterationCheckpoint) || err == nil ||
 		!strings.Contains(err.Error(), "reached max iterations (1)") {

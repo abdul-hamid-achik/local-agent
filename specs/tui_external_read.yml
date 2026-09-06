@@ -82,7 +82,7 @@ steps:
         timeoutMs: 5000
     - wait:
         screen:
-            contains: "▏❯ Analyze"
+            contains: "❯ Analyze"
         timeoutMs: 5000
     - press: "ctrl+u"
     - type: "/scope list"

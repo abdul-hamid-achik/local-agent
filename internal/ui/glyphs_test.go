@@ -229,7 +229,7 @@ func TestASCIIProfilePropagatesAcrossPrimarySemanticSurfaces(t *testing.T) {
 		"|  inspect the interface",
 		"x error",
 		"| v Thought",
-		"|> first line",
+		"> first line",
 		"v + Read",
 		"v x Read failed",
 		"Local Agent > MCPHub > Cortex",

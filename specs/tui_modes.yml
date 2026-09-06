@@ -62,7 +62,7 @@ steps:
         timeoutMs: 2000
     - wait:
         screen:
-            contains: "▌❯ design a safe migration"
+            contains: "❯ design a safe migration"
         timeoutMs: 2000
     - snapshot: plan_read_only
     - press: "shift+tab"
@@ -76,7 +76,7 @@ steps:
         timeoutMs: 2000
     - wait:
         screen:
-            contains: "▌❯ design a safe migration"
+            contains: "❯ design a safe migration"
         timeoutMs: 2000
     - snapshot: auto_mode
     - press: "ctrl+u"

@@ -59,6 +59,12 @@ func (g ContentGrid) LineWidth() int {
 	return contentLeftColumns + g.ContentWidth()
 }
 
+// RightChrome is the unused columns after LineWidth. When the work-width
+// floor is not binding it equals OriginX, so inset chrome has equal gutters.
+func (g ContentGrid) RightChrome() int {
+	return max(0, g.PaneWidth-g.LineWidth())
+}
+
 // Prefix forces accent to one display cell and appends the two-cell left pad.
 // Empty accents become a single space so OriginX stays aligned.
 func (g ContentGrid) Prefix(accent string) string {

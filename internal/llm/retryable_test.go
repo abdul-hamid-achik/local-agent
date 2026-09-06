@@ -55,14 +55,11 @@ func TestOllamaChatStreamIdleWatchdogFailsHungStream(t *testing.T) {
 	defer server.Close()
 	defer close(release)
 
-	previous := streamIdleTimeout
-	streamIdleTimeout = 100 * time.Millisecond
-	defer func() { streamIdleTimeout = previous }()
-
 	client, err := NewOllamaClient(server.URL, "qwen", 4096)
 	if err != nil {
 		t.Fatal(err)
 	}
+	client.streamIdleTimeout = 100 * time.Millisecond
 	sawText := false
 	streamErr := client.ChatStream(context.Background(), ChatOptions{}, func(chunk StreamChunk) error {
 		if chunk.Text != "" {
@@ -95,14 +92,11 @@ func TestOllamaChatStreamIdleWatchdogAllowsSlowButLiveStream(t *testing.T) {
 	}))
 	defer server.Close()
 
-	previous := streamIdleTimeout
-	streamIdleTimeout = 150 * time.Millisecond
-	defer func() { streamIdleTimeout = previous }()
-
 	client, err := NewOllamaClient(server.URL, "qwen", 4096)
 	if err != nil {
 		t.Fatal(err)
 	}
+	client.streamIdleTimeout = 150 * time.Millisecond
 	chunks := 0
 	if err := client.ChatStream(context.Background(), ChatOptions{}, func(StreamChunk) error {
 		chunks++

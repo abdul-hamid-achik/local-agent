@@ -609,7 +609,9 @@ func TestAutoReadOnlyContinuationPreservesFinalProviderIteration(t *testing.T) {
 			agent := newAutoLoopAgent(t, workspace, client, registry, ledger, config.ContinuationsConfig{
 				Mode: config.ContinuationAutoReadOnly, MaxAutoSteps: 2,
 			})
-			agent.SetToolsConfig(config.ToolsConfig{MaxIterations: tc.maxIterations, AutoMaxIterations: tc.maxIterations})
+			if err := agent.SetToolsConfig(config.ToolsConfig{MaxIterations: tc.maxIterations, AutoMaxIterations: tc.maxIterations}); err != nil {
+				t.Fatal(err)
+			}
 
 			if err := agent.RunTurn(context.Background(), &outputRecorder{}, "turn_auto_final_provider"); err != nil {
 				t.Fatal(err)

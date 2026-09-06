@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -167,8 +168,16 @@ type AgentsConfig struct {
 	AutoLoad bool   `yaml:"auto_load"`
 }
 
+// NativeToolNames preserves an explicit empty kit when YAML is saved again.
+type NativeToolNames []string
+
+func (names NativeToolNames) IsZero() bool { return names == nil }
+
 type ToolsConfig struct {
-	Timeout string `yaml:"timeout,omitempty"` // e.g., "30s", "2m"
+	// BuiltinTools optionally narrows native tools (including memory tools).
+	// Omitted keeps the mode's defaults; an explicit [] disables native tools.
+	BuiltinTools NativeToolNames `yaml:"builtin_tools,omitempty"`
+	Timeout      string          `yaml:"timeout,omitempty"` // e.g., "30s", "2m"
 	// MCPTimeout bounds a single MCP tool call. The default suits interactive
 	// tools, but work that builds an index or walks a large repository can
 	// legitimately exceed it — and a timeout is indistinguishable from a hung
@@ -354,9 +363,10 @@ type ICEConfig struct {
 }
 
 type OllamaConfig struct {
-	Model   string `yaml:"model"`
-	BaseURL string `yaml:"base_url"`
-	NumCtx  int    `yaml:"num_ctx"`
+	DisableReasoning bool   `yaml:"disable_reasoning,omitempty"`
+	Model            string `yaml:"model"`
+	BaseURL          string `yaml:"base_url"`
+	NumCtx           int    `yaml:"num_ctx"`
 }
 
 type ServerConfig struct {
@@ -995,6 +1005,28 @@ func configFileCandidates() []string {
 }
 
 func applyEnvOverrides(cfg *Config) error {
+	// Process-scoped provider handoff from a launcher; never writes the user's config.
+	if raw := os.Getenv("LOCAL_AGENT_PROVIDER_CONFIG"); raw != "" {
+		name := os.Getenv("LOCAL_AGENT_PROVIDER")
+		if len(raw) > 16384 || name == "" {
+			return errors.New("config: LOCAL_AGENT_PROVIDER_CONFIG requires LOCAL_AGENT_PROVIDER and at most 16 KiB")
+		}
+		var profile ProviderProfile
+		decoder := yaml.NewDecoder(strings.NewReader(raw))
+		decoder.KnownFields(true)
+		if err := decoder.Decode(&profile); err != nil {
+			return errors.New("config: invalid LOCAL_AGENT_PROVIDER_CONFIG profile")
+		}
+		var extra any
+		if err := decoder.Decode(&extra); err != io.EOF {
+			return errors.New("config: LOCAL_AGENT_PROVIDER_CONFIG must contain one profile")
+		}
+		if cfg.Provider.Profiles == nil {
+			cfg.Provider.Profiles = make(map[string]ProviderProfile)
+		}
+		cfg.Provider.Profiles[name] = profile
+	}
+
 	if v := os.Getenv("OLLAMA_HOST"); v != "" {
 		cfg.Ollama.BaseURL = v
 	}

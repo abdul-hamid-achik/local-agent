@@ -437,13 +437,13 @@ func TestPendingApprovalSessionDecisionIsExplicit(t *testing.T) {
 
 func TestApprovalChoiceSelectionDefaultsToDenyAndSupportsArrowsAndVim(t *testing.T) {
 	tests := []struct {
-		name          string
-		toolName      string
-		move          []tea.KeyPressMsg
-		wantIndex     int
-		wantDecision  permission.ApprovalDecision
-		wantScope     string
-		confirmTwice  bool
+		name         string
+		toolName     string
+		move         []tea.KeyPressMsg
+		wantIndex    int
+		wantDecision permission.ApprovalDecision
+		wantScope    string
+		confirmTwice bool
 	}{
 		{name: "safe default", toolName: "write_file", wantIndex: 0, wantDecision: permission.DecisionUserDeny},
 		{name: "down to once", toolName: "write_file", move: []tea.KeyPressMsg{downKey()}, wantIndex: 1, wantDecision: permission.DecisionAllowOnce},
@@ -813,6 +813,29 @@ func TestInlineApprovalFitsMinimumTerminalAndKeepsDecisionKeys(t *testing.T) {
 	}
 }
 
+func TestApprovalOverlayLeavesTranscriptVisible(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = updated.(*Model)
+	m.setTestTranscriptContent("VISIBLE CONVERSATION")
+	responses := make(chan permission.ApprovalResponse, 1)
+	m = openApprovalForTest(t, m, ToolApprovalMsg{
+		ToolName: "write_file",
+		Args:     map[string]any{"path": "note.txt"},
+		Preview:  permission.ApprovalPreview{Kind: permission.PreviewFileWrite, Path: "note.txt"},
+		Response: responses,
+	})
+	plain := ansi.Strip(m.View().Content)
+	for _, want := range []string{"VISIBLE CONVERSATION", "Permission", "write_file", "n deny", "y once"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("permission overlay omitted %q:\n%s", want, plain)
+		}
+	}
+	if m.projectFrame().Footer.Rect.Height() >= 12 {
+		t.Fatalf("permission overlay still owned a huge footer: %#v", m.projectFrame().Footer)
+	}
+}
+
 func TestApprovalDiffPrioritizesMaterialAdditionOverEmptyPreimage(t *testing.T) {
 	m := newTestModel(t)
 	lines := m.renderApprovalDiff("-\n+must not be written", 60)
@@ -927,7 +950,7 @@ func TestApprovalThemeChangeRebuildsCachedBodyAndPreservesOffsets(t *testing.T) 
 	}
 }
 
-func TestApprovalUsesInlineComposerWidthAndShowsDiff(t *testing.T) {
+func TestApprovalUsesSharedModalWidthAndShowsDiff(t *testing.T) {
 	m := newTestModel(t)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 140, Height: 32})
 	m = updated.(*Model)
@@ -948,8 +971,8 @@ func TestApprovalUsesInlineComposerWidthAndShowsDiff(t *testing.T) {
 	if m.overlay != OverlayNone {
 		t.Fatalf("approval covered the transcript with overlay %v", m.overlay)
 	}
-	if got := m.approvalState.Viewport.Width(); got <= 86 || got != m.approvalContentWidth() {
-		t.Fatalf("inline approval width = %d, want full composer width %d", got, m.approvalContentWidth())
+	if got := m.approvalState.Viewport.Width(); got != pickerListWidth(m.width) || got != m.approvalContentWidth() {
+		t.Fatalf("inline approval width = %d, want shared modal content width %d", got, m.approvalContentWidth())
 	}
 	plain := ansi.Strip(m.View().Content)
 	for _, want := range []string{

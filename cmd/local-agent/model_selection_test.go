@@ -36,12 +36,12 @@ func TestResolveStartupModelValidatesPinnedLocalInventory(t *testing.T) {
 	discovered := []string{"nomic-embed-text", "qwen3.5:2b", "gemma4:e2b", "unknown:latest"}
 	router := &selectionRouterStub{resolved: "qwen3.5:2b"}
 
-	selected, models, err := resolveStartupModel("gemma4:e2b", true, true, &cfg, discovered, discovered, true, router)
+	selected, models, warning, err := resolveStartupModel("gemma4:e2b", true, true, &cfg, discovered, discovered, discovered, true, router)
 	if err != nil {
 		t.Fatalf("locally installed profile pin rejected: %v", err)
 	}
-	if selected != "gemma4:e2b" {
-		t.Fatalf("selected = %q, want profile pin", selected)
+	if selected != "gemma4:e2b" || warning != "" {
+		t.Fatalf("selected = %q warning=%q, want profile pin", selected, warning)
 	}
 	wantModels := discovered
 	if !reflect.DeepEqual(models, wantModels) {
@@ -51,13 +51,17 @@ func TestResolveStartupModelValidatesPinnedLocalInventory(t *testing.T) {
 		t.Fatalf("router inventory = %#v, want %#v", router.models, wantModels)
 	}
 
-	_, _, err = resolveStartupModel("qwen3.5:cloud", true, true, &cfg, discovered, discovered, true, router)
+	_, _, _, err = resolveStartupModel("qwen3.5:cloud", true, true, &cfg, discovered, discovered, discovered, true, router)
 	if err == nil {
 		t.Fatal("cloud profile pin accepted")
 	}
-	_, _, err = resolveStartupModel("qwen3.5:4b", true, true, &cfg, discovered, discovered, true, router)
-	if err == nil {
-		t.Fatal("missing local --model pin accepted")
+	manual := []string{"qwen3.5:2b", "gemma4:e2b"}
+	selected, _, warning, err = resolveStartupModel("qwen3.5:4b", true, true, &cfg, manual, manual, []string{"qwen3.5:2b"}, true, router)
+	if err != nil {
+		t.Fatalf("missing local pin should start on an installed model: %v", err)
+	}
+	if selected != "qwen3.5:2b" || !strings.Contains(warning, "qwen3.5:4b") {
+		t.Fatalf("missing pin fallback selected=%q warning=%q", selected, warning)
 	}
 }
 
@@ -67,40 +71,58 @@ func TestResolveStartupModelAcceptsPinnedImplicitLatestTag(t *testing.T) {
 		DefaultModel: "llama3",
 	}
 	router := &selectionRouterStub{resolved: "llama3"}
-	selected, models, err := resolveStartupModel("llama3", true, true, &cfg, []string{"llama3:latest"}, []string{"llama3:latest"}, true, router)
+	selected, models, warning, err := resolveStartupModel("llama3", true, true, &cfg, []string{"llama3:latest"}, []string{"llama3:latest"}, []string{"llama3:latest"}, true, router)
 	if err != nil {
 		t.Fatalf("implicit :latest pin rejected: %v", err)
 	}
-	if selected != "llama3" || !reflect.DeepEqual(models, []string{"llama3:latest"}) {
-		t.Fatalf("selection = %q, models=%#v", selected, models)
+	if selected != "llama3" || warning != "" || !reflect.DeepEqual(models, []string{"llama3:latest"}) {
+		t.Fatalf("selection = %q warning=%q models=%#v", selected, warning, models)
 	}
 }
 
 func TestResolveStartupModelAcceptsPinnedOrnith(t *testing.T) {
 	cfg := config.DefaultModelConfig()
 	router := &selectionRouterStub{resolved: "qwen3.5:2b"}
-	selected, models, err := resolveStartupModel(
-		"ornith:latest", true, true, &cfg, []string{"ornith:latest"}, []string{"ornith:latest"}, true, router,
+	selected, models, warning, err := resolveStartupModel(
+		"ornith:latest", true, true, &cfg, []string{"ornith:latest"}, []string{"ornith:latest"}, []string{"ornith:latest"}, true, router,
 	)
 	if err != nil {
 		t.Fatalf("installed Ornith pin rejected: %v", err)
 	}
-	if selected != "ornith:latest" || !reflect.DeepEqual(models, []string{"ornith:latest"}) {
-		t.Fatalf("selection = %q, models=%#v", selected, models)
+	if selected != "ornith:latest" || warning != "" || !reflect.DeepEqual(models, []string{"ornith:latest"}) {
+		t.Fatalf("selection = %q warning=%q models=%#v", selected, warning, models)
+	}
+}
+
+func TestResolveStartupModelAliasesRenamedOrnithTag(t *testing.T) {
+	cfg := config.DefaultModelConfig()
+	router := &selectionRouterStub{resolved: "qwen3.5:2b"}
+	installed := []string{"ornith-1.5:9b"}
+	selected, models, warning, err := resolveStartupModel(
+		"ornith:latest", true, true, &cfg, installed, installed, nil, true, router,
+	)
+	if err != nil {
+		t.Fatalf("renamed Ornith sibling rejected: %v", err)
+	}
+	if selected != "ornith-1.5:9b" || !strings.Contains(warning, "ornith:latest") {
+		t.Fatalf("selection = %q warning=%q", selected, warning)
+	}
+	if !reflect.DeepEqual(models, installed) {
+		t.Fatalf("models = %#v", models)
 	}
 }
 
 func TestResolveStartupModelAcceptsPinnedOllamaCloudWhenLocalOnlyDisabled(t *testing.T) {
 	cfg := config.DefaultModelConfig()
 	router := &selectionRouterStub{resolved: "qwen3.5:cloud"}
-	selected, models, err := resolveStartupModel(
-		"qwen3.5:cloud", true, false, &cfg, []string{"qwen3.5:cloud"}, nil, true, router,
+	selected, models, warning, err := resolveStartupModel(
+		"qwen3.5:cloud", true, false, &cfg, []string{"qwen3.5:cloud"}, nil, nil, true, router,
 	)
 	if err != nil {
 		t.Fatalf("pinned Ollama Cloud model rejected with local-only disabled: %v", err)
 	}
-	if selected != "qwen3.5:cloud" || !reflect.DeepEqual(models, []string{"qwen3.5:cloud"}) {
-		t.Fatalf("selection = %q models=%#v", selected, models)
+	if selected != "qwen3.5:cloud" || warning != "" || !reflect.DeepEqual(models, []string{"qwen3.5:cloud"}) {
+		t.Fatalf("selection = %q warning=%q models=%#v", selected, warning, models)
 	}
 	if len(router.models) != 0 {
 		t.Fatalf("manual cloud leaked into router inventory: %#v", router.models)
@@ -110,43 +132,81 @@ func TestResolveStartupModelAcceptsPinnedOllamaCloudWhenLocalOnlyDisabled(t *tes
 func TestResolveStartupModelNeverAutomaticallySelectsCloud(t *testing.T) {
 	cfg := config.DefaultModelConfig()
 	router := &selectionRouterStub{resolved: "qwen3.5:cloud"}
-	selected, models, err := resolveStartupModel(
+	selected, models, warning, err := resolveStartupModel(
 		"qwen3.5:cloud", false, false, &cfg,
-		[]string{"local-code", "qwen3.5:cloud"}, []string{"local-code"}, true, router,
+		[]string{"local-code", "qwen3.5:cloud"}, []string{"local-code"}, []string{"local-code"}, true, router,
 	)
 	if err != nil {
 		t.Fatalf("local fallback rejected: %v", err)
 	}
-	if selected != "local-code" || !reflect.DeepEqual(models, []string{"local-code", "qwen3.5:cloud"}) {
-		t.Fatalf("selection = %q models=%#v", selected, models)
+	if selected != "local-code" || warning != "" || !reflect.DeepEqual(models, []string{"local-code", "qwen3.5:cloud"}) {
+		t.Fatalf("selection = %q warning=%q models=%#v", selected, warning, models)
 	}
 	if !reflect.DeepEqual(router.models, []string{"local-code"}) {
 		t.Fatalf("router inventory = %#v, want local only", router.models)
 	}
 }
 
+func TestResolveStartupModelMissingPinFallsBackToExclusiveLocalOnly(t *testing.T) {
+	cfg := config.DefaultModelConfig()
+	router := &selectionRouterStub{}
+	installed := []string{"ornith-1.5:9b"}
+	selected, _, warning, err := resolveStartupModel(
+		"qwen3.5:2b", true, true, &cfg, installed, installed, nil, true, router,
+	)
+	if err != nil {
+		t.Fatalf("exclusive-only fallback rejected: %v", err)
+	}
+	if selected != "ornith-1.5:9b" || !strings.Contains(warning, "qwen3.5:2b") {
+		t.Fatalf("exclusive-only fallback selected=%q warning=%q", selected, warning)
+	}
+}
+
+func TestResolveStartupModelMissingPinNeverFallsBackToCloud(t *testing.T) {
+	cfg := config.DefaultModelConfig()
+	router := &selectionRouterStub{}
+	selected, _, warning, err := resolveStartupModel(
+		"missing-local", true, false, &cfg,
+		[]string{"qwen3.5:cloud"}, nil, nil, true, router,
+	)
+	if err == nil {
+		t.Fatalf("cloud-only inventory accepted missing pin selected=%q warning=%q", selected, warning)
+	}
+
+	selected, _, warning, err = resolveStartupModel(
+		"gone", true, false, &cfg,
+		[]string{"local-code", "qwen3.5:cloud"}, []string{"local-code"}, []string{"local-code"}, true, router,
+	)
+	if err != nil {
+		t.Fatalf("local fallback next to cloud rejected: %v", err)
+	}
+	if selected != "local-code" || !strings.Contains(warning, "gone") {
+		t.Fatalf("mixed-privacy fallback selected=%q warning=%q", selected, warning)
+	}
+}
+
 func TestResolveStartupModelUsesVerifiedLocationInsteadOfCloudLikeTag(t *testing.T) {
 	cfg := config.DefaultModelConfig()
 	router := &selectionRouterStub{}
-	selected, _, err := resolveStartupModel(
-		"provider-cloud:latest", true, true, &cfg, []string{"provider-cloud:latest"}, []string{"provider-cloud:latest"}, true, router,
+	selected, _, warning, err := resolveStartupModel(
+		"provider-cloud:latest", true, true, &cfg, []string{"provider-cloud:latest"}, []string{"provider-cloud:latest"}, []string{"provider-cloud:latest"}, true, router,
 	)
-	if err != nil || selected != "provider-cloud:latest" {
-		t.Fatalf("verified local cloud-like tag selected=%q err=%v", selected, err)
+	if err != nil || selected != "provider-cloud:latest" || warning != "" {
+		t.Fatalf("verified local cloud-like tag selected=%q warning=%q err=%v", selected, warning, err)
 	}
 }
 
 func TestResolveStartupModelFallsBackToCustomOnlyInventory(t *testing.T) {
 	cfg := config.DefaultModelConfig()
 	router := &selectionRouterStub{resolved: ""}
-	selected, models, err := resolveStartupModel(
-		cfg.DefaultModel, false, true, &cfg, []string{"custom-code:latest"}, []string{"custom-code:latest"}, true, router,
+	selected, models, warning, err := resolveStartupModel(
+		cfg.DefaultModel, false, true, &cfg, []string{"custom-code:latest"}, []string{"custom-code:latest"}, []string{"custom-code:latest"}, true, router,
 	)
 	if err != nil {
 		t.Fatalf("custom-only Ollama inventory rejected: %v", err)
 	}
-	if selected != "custom-code:latest" || !reflect.DeepEqual(models, []string{"custom-code:latest"}) {
-		t.Fatalf("selection = %q models=%#v", selected, models)
+	if selected != "custom-code:latest" || warning != "" || !reflect.DeepEqual(models, []string{"custom-code:latest"}) {
+		t.Fatalf("selection = %q warning=%q models=%#v", selected, warning, models)
 	}
 }
 
@@ -154,20 +214,20 @@ func TestResolveStartupModelEmptyInventoryAndOfflineDiagnostics(t *testing.T) {
 	cfg := config.DefaultModelConfig()
 	router := &selectionRouterStub{resolved: ""}
 
-	if _, _, err := resolveStartupModel(cfg.DefaultModel, false, true, &cfg, []string{}, []string{}, true, router); err == nil {
+	if _, _, _, err := resolveStartupModel(cfg.DefaultModel, false, true, &cfg, []string{}, []string{}, []string{}, true, router); err == nil {
 		t.Fatal("known empty inventory accepted an automatic model")
 	}
 
-	selected, models, err := resolveStartupModel(cfg.DefaultModel, false, true, &cfg, nil, nil, false, router)
+	selected, models, warning, err := resolveStartupModel(cfg.DefaultModel, false, true, &cfg, nil, nil, nil, false, router)
 	if err != nil {
 		t.Fatalf("offline diagnostic startup rejected: %v", err)
 	}
-	if selected != cfg.DefaultModel || len(models) != 0 {
-		t.Fatalf("offline fallback = %q, %#v", selected, models)
+	if selected != cfg.DefaultModel || warning != "" || len(models) != 0 {
+		t.Fatalf("offline fallback = %q warning=%q %#v", selected, warning, models)
 	}
 
 	t.Setenv("LOCAL_AGENT_ALLOW_LARGE_MODELS", "1")
-	if _, _, err := resolveStartupModel("qwen3.5:cloud", true, true, &cfg, nil, nil, false, router); err == nil {
+	if _, _, _, err := resolveStartupModel("qwen3.5:cloud", true, true, &cfg, nil, nil, nil, false, router); err == nil {
 		t.Fatal("offline inventory plus hardware override accepted cloud alias")
 	}
 }
@@ -177,15 +237,15 @@ func TestResolveStartupModelOfflineMixedPrivacyStillRejectsOversizedLocalTier(t 
 	cfg := config.DefaultModelConfig()
 	router := &selectionRouterStub{}
 
-	if _, _, err := resolveStartupModel("qwen3.5:70b", true, false, &cfg, nil, nil, false, router); err == nil {
+	if _, _, _, err := resolveStartupModel("qwen3.5:70b", true, false, &cfg, nil, nil, nil, false, router); err == nil {
 		t.Fatal("unverified oversized local model was admitted with local-only disabled")
 	}
-	selected, models, err := resolveStartupModel("provider-cloud:latest", true, false, &cfg, nil, nil, false, router)
+	selected, models, warning, err := resolveStartupModel("provider-cloud:latest", true, false, &cfg, nil, nil, nil, false, router)
 	if err != nil {
 		t.Fatalf("offline fallback inferred execution location from a custom tag: %v", err)
 	}
-	if selected != "provider-cloud:latest" || len(models) != 0 {
-		t.Fatalf("offline mixed-privacy fallback = %q, %#v", selected, models)
+	if selected != "provider-cloud:latest" || warning != "" || len(models) != 0 {
+		t.Fatalf("offline mixed-privacy fallback = %q warning=%q %#v", selected, warning, models)
 	}
 }
 
@@ -240,6 +300,16 @@ func TestRestoreManualModelPreferenceRequiresVerifiedLocalInventory(t *testing.T
 		{
 			name: "verified local alias", preferred: "local-code", manual: []string{"local-code:latest"},
 			local: []string{"local-code:latest"}, known: true, want: "local-code:latest", wantOK: true,
+		},
+		{
+			name: "exclusive local pin restored", preferred: "phi4-mini",
+			manual: []string{"phi4-mini:latest", "qwen3.5:cloud"},
+			local:  []string{"phi4-mini:latest"}, known: true, want: "phi4-mini:latest", wantOK: true,
+		},
+		{
+			name: "renamed ornith sibling", preferred: "ornith:latest",
+			manual: []string{"ornith-1.5:9b"},
+			local:  []string{"ornith-1.5:9b"}, known: true, want: "ornith-1.5:9b", wantOK: true,
 		},
 		{
 			name: "cloud needs fresh consent", preferred: "cloud-code", manual: []string{"local-code", "cloud-code"},

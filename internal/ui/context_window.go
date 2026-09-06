@@ -64,7 +64,7 @@ func (m *Model) handleContextWindowCommand(spec string) (string, tea.Cmd, error)
 		rec := m.recommendNumCtx()
 		if rec.MaxSafe > 0 && value > rec.MaxSafe {
 			return "", nil, fmt.Errorf(
-				"num_ctx %d exceeds estimated max safe %d on this host (%s total RAM); pick a lower value or free memory",
+				"num_ctx %d exceeds the static ceiling %d (%s total RAM); choose a lower value",
 				value, rec.MaxSafe, config.FormatBytesIEC(rec.TotalRAM),
 			)
 		}
@@ -110,7 +110,7 @@ func (m *Model) handleNumCtxApplied(msg numCtxAppliedMsg) tea.Cmd {
 		m.entries = append(m.entries, ChatEntry{Kind: "error", Content: msg.Err.Error()})
 	} else {
 		m.syncEffectiveContext(false)
-		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: msg.Text})
+		m.entries = append(m.entries, ChatEntry{Kind: "system", Content: msg.Text + fmt.Sprintf("\n  Effective context: %d tokens", m.numCtx)})
 	}
 	m.refreshTranscript()
 	m.resumeFollow()
@@ -183,12 +183,13 @@ func (m *Model) contextWindowStatusReport() string {
 		fmt.Fprintf(&b, "  Model weights:    %s (estimate)\n", config.FormatBytesIEC(rec.ModelWeight))
 	}
 	fmt.Fprintf(&b, "  Recommended:      %d tokens\n", rec.Recommended)
-	fmt.Fprintf(&b, "  Max safe (est.):  %d tokens\n", rec.MaxSafe)
+	fmt.Fprintf(&b, "  Static ceiling:   %d tokens\n", rec.MaxSafe)
 	fmt.Fprintf(&b, "  Large models env: %v\n", rec.AllowLarge)
 	fmt.Fprintf(&b, "  Note: %s\n", rec.Reason)
+	b.WriteString("  Estimate only: current memory pressure is not measured.\n")
 	b.WriteString("\nCommands:\n")
 	b.WriteString("  /context auto       apply the recommendation now\n")
-	b.WriteString("  /context set 96k    set an explicit window (e.g. 65536, 96k)\n")
+	b.WriteString("  /context set 8k     set an explicit window (e.g. 4096, 8k)\n")
 	b.WriteString("  /context save       write the active value into config.yaml\n")
 	if rec.Current > 0 && rec.Recommended > 0 && rec.Current != rec.Recommended {
 		fmt.Fprintf(&b, "\nSuggestion: /context auto  (move %d → %d)\n", rec.Current, rec.Recommended)
@@ -204,9 +205,8 @@ func (m *Model) formatContextApplied(rec config.NumCtxRecommendation, applied in
 		fmt.Fprintf(&b, "Context window remains %d tokens\n", applied)
 	}
 	fmt.Fprintf(&b, "  %s\n", detail)
-	fmt.Fprintf(&b, "  Effective now: %d\n", m.numCtx)
 	if rec.MaxSafe > 0 {
-		fmt.Fprintf(&b, "  Max safe est.: %d\n", rec.MaxSafe)
+		fmt.Fprintf(&b, "  Static ceiling: %d\n", rec.MaxSafe)
 	}
 	b.WriteString("  Persist with: /context save\n")
 	if rec.Reason != "" {

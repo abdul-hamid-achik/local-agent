@@ -434,7 +434,6 @@ func (m *Model) renderWelcome(b *strings.Builder) {
 	contentWidth := m.chatPaneWidth()
 	micro := contentWidth < 36
 	compact := contentWidth < 58
-	headerActive := m.sessionHeaderActive()
 	// Left-align at OriginX. Budget uses the remaining pane (including right
 	// chrome) so orientation copy keeps the historical fit contract; Line()'s
 	// ContentWidth reserve is for structural transcript surfaces.
@@ -504,25 +503,10 @@ func (m *Model) renderWelcome(b *strings.Builder) {
 		return strings.Join(infoParts, " · ")
 	}
 
-	// Roomy chrome owns the empty canvas. Only paint operational exceptions.
-	if headerActive {
-		if line := welcomeAmbientLine(); line != "" {
-			writeLine(m.styles.StatusText, line)
-		}
-		if micro {
-			if mode := welcomeModeLabel(); mode != "" {
-				writeLine(m.styles.StatusText, mode)
-			}
-		}
-		if m.needsModelBootstrap() {
-			writeLine(m.styles.StatusWarning, "No local model installed")
-			writeLine(m.styles.WelcomeHint, bootstrapPullHint())
-		}
-		return
-	}
-
-	// Minimum frames (no session header): keep a short orientation surface.
 	writeLine(m.styles.OverlayTitle, "LOCAL AGENT")
+	if !compact {
+		writeLine(m.styles.UserContent, "Ask a question or describe a change.")
+	}
 	trust := "Local-first · Ollama · " + m.approvalPostureWelcomeLabel(false)
 	if micro {
 		trust = "Local-first · " + m.approvalPostureWelcomeMicroLabel()
@@ -545,7 +529,12 @@ func (m *Model) renderWelcome(b *strings.Builder) {
 		writeLine(m.styles.WelcomeHint, bootstrapPullHint())
 	}
 
-	writeLine(m.styles.WelcomeHint, "Ask · /help")
+	if !compact {
+		b.WriteByte('\n')
+		writeLine(m.styles.WelcomeHint, "@ add files · /help commands")
+	} else {
+		writeLine(m.styles.WelcomeHint, "Ask · /help")
+	}
 }
 
 // emptyWelcomeTopPad keeps the empty-state welcome just under the session

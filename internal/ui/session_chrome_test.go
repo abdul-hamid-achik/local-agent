@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -43,117 +42,26 @@ func TestSessionTopBarOwnsIdentityAndLeavesModeToTheShortcutsRow(t *testing.T) {
 	}
 }
 
-func TestSessionStickyUserRequiresConversation(t *testing.T) {
+func TestUserPromptLeavesAGapBeforeNotice(t *testing.T) {
 	m := newTestModel(t)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = updated.(*Model)
-	// Empty conversation: only top bar (1 row), no sticky user.
-	if h := m.projectFrame().Header.Rect.Height(); h > 1 {
-		t.Fatalf("empty conversation header height = %d, want <= 1", h)
+	m.entries = []ChatEntry{
+		{Kind: "user", Content: "hello chat!"},
+		{Kind: "system", Content: "ICE · recalled 1 past conversation"},
 	}
-	m.entries = []ChatEntry{{Kind: "user", Content: "sticky prompt please keep me visible"}}
 	m.settleChromeSpringForTest()
 	m.recalcViewportHeight()
-	frame := m.projectFrame()
-	if frame.Header.Rect.Height() < 2 {
-		t.Fatalf("expected sticky user row: header=%#v", frame.Header)
+	m.refreshTranscript()
+	view := ansi.Strip(m.View().Content)
+	promptAt := strings.Index(view, "hello chat!")
+	noticeAt := strings.Index(view, "notice ·")
+	if promptAt < 0 || noticeAt < 0 || noticeAt <= promptAt {
+		t.Fatalf("prompt/notice order is invalid:\n%s", view)
 	}
-	if !strings.Contains(ansi.Strip(frame.Header.Content), "sticky prompt") {
-		t.Fatalf("sticky user missing prompt: %q", frame.Header.Content)
-	}
-}
-
-func TestStickyUserStripIsFullWidthBand(t *testing.T) {
-	// Sticky must be a full-pane band (Grok), not a partial "chip" highlight.
-	m := newTestModel(t)
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	m = updated.(*Model)
-	m.entries = []ChatEntry{{Kind: "user", Content: "hello chat!"}}
-	m.settleChromeSpringForTest()
-	paneW := m.chatPaneWidth()
-	bar := m.renderStickyUserStrip(paneW)
-	if bar == "" {
-		t.Fatal("expected sticky strip")
-	}
-	// Roomy frames: 3-row elevated band (vertical padding + prompt).
-	if strings.Count(bar, "\n") != 2 {
-		t.Fatalf("roomy sticky should be 3 rows (pad/prompt/pad), got:\n%s", ansi.Strip(bar))
-	}
-	for i, line := range strings.Split(bar, "\n") {
-		if got := lipgloss.Width(line); got != paneW {
-			t.Fatalf("sticky row %d width = %d, want full pane %d\n%s", i, got, paneW, ansi.Strip(line))
-		}
-	}
-	if !strings.Contains(ansi.Strip(bar), "hello chat!") {
-		t.Fatalf("sticky missing prompt: %q", ansi.Strip(bar))
-	}
-}
-
-func TestStickyUserStripHasVerticalBreathingInHeader(t *testing.T) {
-	m := newTestModel(t)
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	m = updated.(*Model)
-	m.entries = []ChatEntry{{Kind: "user", Content: "hello chat!"}}
-	m.settleChromeSpringForTest()
-	m.recalcViewportHeight()
-	header := m.projectSessionHeader()
-	// Roomy (H>=28, below the tall-frame pad): identity + 3-row elevated sticky.
-	if header.reservedHeight != 4 {
-		t.Fatalf("header height = %d, want 4 (top + elevated sticky)\n%s",
-			header.reservedHeight, ansi.Strip(header.content))
-	}
-	lines := strings.Split(ansi.Strip(header.content), "\n")
-	if len(lines) != 4 {
-		t.Fatalf("header lines = %d, want 4:\n%s", len(lines), ansi.Strip(header.content))
-	}
-	// No adjacent blank rows — elevated pad is the only breath.
-	for i := 1; i < len(lines); i++ {
-		if strings.TrimSpace(lines[i-1]) == "" && strings.TrimSpace(lines[i]) == "" {
-			t.Fatalf("blank-on-blank void at rows %d-%d:\n%s", i-1, i, ansi.Strip(header.content))
-		}
-	}
-	plain := ansi.Strip(header.content)
-	if !strings.Contains(plain, "hello chat!") {
-		t.Fatalf("header missing sticky prompt:\n%s", plain)
-	}
-
-	// Tall frames (above every Glyphrun contract) pad above identity.
-	updated, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 42})
-	m = updated.(*Model)
-	m.entries = []ChatEntry{{Kind: "user", Content: "hello chat!"}}
-	m.settleChromeSpringForTest()
-	m.recalcViewportHeight()
-	tall := m.projectSessionHeader()
-	if tall.reservedHeight != 5 {
-		t.Fatalf("tall header height = %d, want 5 (pad + top + elevated sticky)\n%s",
-			tall.reservedHeight, ansi.Strip(tall.content))
-	}
-	if got := strings.Split(ansi.Strip(tall.content), "\n"); strings.TrimSpace(got[0]) != "" {
-		t.Fatalf("tall header should lead with a blank row:\n%s", ansi.Strip(tall.content))
-	}
-
-	// Ordinary elevated frames keep outer blanks so short readers still overflow.
-	updated, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 22})
-	m = updated.(*Model)
-	m.entries = []ChatEntry{{Kind: "user", Content: "hello chat!"}}
-	m.settleChromeSpringForTest()
-	m.recalcViewportHeight()
-	ordinary := m.projectSessionHeader()
-	if ordinary.reservedHeight != 6 {
-		t.Fatalf("ordinary elevated header height = %d, want 6 (top + blanks + band)\n%s",
-			ordinary.reservedHeight, ansi.Strip(ordinary.content))
-	}
-
-	// Mid frames keep outer blanks around the single-row sticky.
-	updated, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 18})
-	m = updated.(*Model)
-	m.entries = []ChatEntry{{Kind: "user", Content: "hello chat!"}}
-	m.settleChromeSpringForTest()
-	m.recalcViewportHeight()
-	mid := m.projectSessionHeader()
-	if mid.reservedHeight != 4 {
-		t.Fatalf("mid header height = %d, want 4 (top + blank + sticky + blank)\n%s",
-			mid.reservedHeight, ansi.Strip(mid.content))
+	between := view[promptAt:noticeAt]
+	if strings.Count(between, "\n") < 2 {
+		t.Fatalf("prompt needs a blank row before a notice:\n%s", between)
 	}
 }
 
@@ -168,7 +76,7 @@ func TestShortcutsBarInFooter(t *testing.T) {
 		}
 	}
 	// Idle with nothing to cancel must not advertise a dead "esc cancel".
-	if strings.Contains(strings.ToLower(footer), "esc") {
+	if strings.Contains(strings.ToLower(m.renderShortcutsBar(m.chatPaneWidth())), "esc") {
 		t.Fatalf("idle footer advertised esc with nothing to cancel:\n%s", footer)
 	}
 }
@@ -214,7 +122,7 @@ func TestSessionChromeAlignsToContentOrigin(t *testing.T) {
 	if got := emptyWelcomeTopPad(4, 4); got != 0 {
 		t.Fatalf("emptyWelcomeTopPad(4,4)=%d, want 0", got)
 	}
-	// Roomy empty frames: top bar + composer own orientation; no mid-canvas wall.
+	// Welcome orients the user without repeating the model owned by the top bar.
 	m.model = "ornith:latest"
 	var welcome strings.Builder
 	m.renderWelcome(&welcome)
@@ -222,9 +130,10 @@ func TestSessionChromeAlignsToContentOrigin(t *testing.T) {
 	if strings.Contains(plain, "ornith:latest") {
 		t.Fatalf("welcome re-printed model already on top bar:\n%s", plain)
 	}
-	if strings.Contains(plain, "LOCAL AGENT") || strings.Contains(plain, "Local-first") ||
-		strings.Contains(plain, "Ask, @mention") || strings.Contains(plain, "Ask · /help") {
-		t.Fatalf("roomy welcome should stay empty when chrome owns the frame:\n%s", plain)
+	for _, want := range []string{"LOCAL AGENT", "Ask a question", "@ add files", "/help commands"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("welcome missing orientation %q:\n%s", want, plain)
+		}
 	}
 }
 
@@ -247,53 +156,6 @@ func TestEmptyStateFooterDoesNotDuplicateTopBar(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(footer), "enter") {
 		t.Fatalf("expected shortcuts bar in empty footer:\n%s", footer)
-	}
-}
-
-func TestStickyUserOmitsDuplicateFromTranscript(t *testing.T) {
-	m := newTestModel(t)
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	m = updated.(*Model)
-	// Live bug: omit must not wait for sticky spring settle. Dual-print
-	// (sticky + body) is wrong from the first frame after send.
-	m.reducedMotion = false
-	m.entries = []ChatEntry{
-		{Kind: "user", Content: "unique sticky prompt xyz"},
-		{Kind: "system", Content: "ICE · recalled 1 past conversation"},
-		{Kind: "assistant", Content: "Waiting reply"},
-	}
-	m.pullChromeSpringTargets()
-	m.recalcViewportHeight()
-	if !m.stickyUserActive() {
-		t.Fatal("expected sticky user on roomy conversation frame")
-	}
-	header := ansi.Strip(m.projectFrame().Header.Content)
-	if !strings.Contains(header, "unique sticky prompt xyz") {
-		t.Fatalf("sticky missing prompt:\n%s", header)
-	}
-	// Body must not re-print the sticky-owned prompt.
-	body := ansi.Strip(m.renderEntries())
-	if strings.Contains(body, "unique sticky prompt xyz") {
-		t.Fatalf("transcript re-printed sticky user prompt:\n%s", body)
-	}
-	if !strings.Contains(body, "ICE") || !strings.Contains(body, "Waiting reply") {
-		t.Fatalf("transcript lost non-user content:\n%s", body)
-	}
-	// Older user turns remain visible when a newer sticky prompt exists.
-	m.entries = []ChatEntry{
-		{Kind: "user", Content: "first older prompt"},
-		{Kind: "assistant", Content: "first reply"},
-		{Kind: "user", Content: "second sticky prompt"},
-	}
-	m.entryCacheValid = false
-	m.pullChromeSpringTargets()
-	m.recalcViewportHeight()
-	body = ansi.Strip(m.renderEntries())
-	if !strings.Contains(body, "first older prompt") {
-		t.Fatalf("older user turn was omitted:\n%s", body)
-	}
-	if strings.Contains(body, "second sticky prompt") {
-		t.Fatalf("latest user still in body with sticky:\n%s", body)
 	}
 }
 
@@ -351,5 +213,35 @@ func TestTranscriptSeparatorsUseConsistentMessagePadding(t *testing.T) {
 	}
 	if got := transcriptEntrySeparator("assistant", "tool_group"); got != "\n\n" {
 		t.Fatalf("assistant→tool separator = %q, want one blank row", got)
+	}
+}
+
+func TestConversationPreservesCompletePromptsInOrderAcrossResize(t *testing.T) {
+	m := newTestModel(t)
+	prompt := "Compare the existing behavior with the requested change and preserve every detail including the final instruction."
+	m.entries = []ChatEntry{
+		{Kind: "user", Content: "First question"},
+		{Kind: "assistant", Content: "First answer"},
+		{Kind: "user", Content: prompt},
+		{Kind: "assistant", Content: "Second answer"},
+	}
+	for _, size := range [][2]int{{100, 30}, {40, 20}, {30, 12}, {120, 36}} {
+		updated, _ := m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+		m = updated.(*Model)
+		body := ansi.Strip(m.renderEntries())
+		// Ignore wrapping and the user gutter when comparing the visible words.
+		plain := strings.Join(strings.Fields(strings.ReplaceAll(body, glyphSet(m.glyphProfile).UserRail, "")), " ")
+		last := -1
+		for _, want := range []string{"First question", "First answer", prompt, "Second answer"} {
+			at := strings.Index(plain, want)
+			if at <= last || strings.Count(plain, want) != 1 {
+				t.Fatalf("%dx%d lost or reordered %q:\n%s", size[0], size[1], want, body)
+			}
+			last = at
+		}
+		if strings.Contains(ansi.Strip(m.projectSessionHeader().content), "final instruction") {
+			t.Fatal("conversation content escaped into fixed chrome")
+		}
+		assertRenderedLinesFit(t, m.View().Content, size[0])
 	}
 }

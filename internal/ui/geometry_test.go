@@ -35,6 +35,27 @@ func TestCellRectHalfOpenContractExhaustive(t *testing.T) {
 	}
 }
 
+func TestFitDisplayRowsPadsAndClips(t *testing.T) {
+	if got := fitDisplayRows("a\nb", 2); got != "a\nb" {
+		t.Fatalf("identity = %q", got)
+	}
+	if got := fitDisplayRows("a\nb\nc", 2); got != "a\nb" {
+		t.Fatalf("clip = %q", got)
+	}
+	if got := fitDisplayRows("a", 3); got != "a\n\n" {
+		t.Fatalf("pad = %q", got)
+	}
+	if got := fitDisplayRows("", 2); got != "\n" {
+		t.Fatalf("empty pad = %q", got)
+	}
+	if got := fitDisplayRows("a\n", 1); got != "a" {
+		t.Fatalf("trim trailing newline = %q", got)
+	}
+	if got := fitDisplayRows("a", 0); got != "" {
+		t.Fatalf("zero rows = %q", got)
+	}
+}
+
 func TestCellRectCanonicalizesInvertedBounds(t *testing.T) {
 	want := CellRect{MinX: 10, MinY: 20, MaxX: 10, MaxY: 20}
 	if got := NewCellRect(10, 20, 5, 15); got != want {

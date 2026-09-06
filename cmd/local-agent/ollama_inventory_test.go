@@ -44,6 +44,7 @@ func TestAutoRoutableOllamaChatModelsExcludeConfiguredExclusiveProfiles(t *testi
 		{Name: "qwen3.5:2b", Location: llm.OllamaModelLocationLocal, SizeBytes: 2 << 30, Capabilities: []string{"completion", "tools"}},
 		{Name: "phi4-mini:latest", Location: llm.OllamaModelLocationLocal, SizeBytes: 2 << 30, Capabilities: []string{"completion", "tools"}},
 		{Name: "ornith:latest", Location: llm.OllamaModelLocationLocal, SizeBytes: 5 << 30, Capabilities: []string{"completion", "tools"}},
+		{Name: "ornith-1.5:9b", Location: llm.OllamaModelLocationLocal, SizeBytes: 6 << 30, Capabilities: []string{"completion", "tools"}},
 		{Name: "gemma4:e2b", Location: llm.OllamaModelLocationLocal, SizeBytes: 7 << 30, Capabilities: []string{"completion", "tools"}},
 	}
 	cfg := config.DefaultModelConfig()

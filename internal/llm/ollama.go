@@ -31,13 +31,7 @@ const (
 	maxOllamaErrorBytes        = 1 << 20
 )
 
-// streamIdleTimeout bounds the silence between stream records (and before
-// the first one). It must stay generous: loading a multi-gigabyte model
-// from disk and evaluating a large prompt both legitimately produce long
-// gaps before the first token on constrained hardware. It exists so a hung
-// server fails the turn instead of wedging a spinner forever. A variable
-// only so tests can exercise the watchdog without waiting minutes.
-var streamIdleTimeout = 5 * time.Minute
+const defaultStreamIdleTimeout = 5 * time.Minute
 
 // ErrStreamIdle reports that an accepted provider stream stopped producing
 // data for longer than the idle watchdog allows. It is retryable.
@@ -72,12 +66,15 @@ func IsRetryableTransport(err error) bool {
 // Keeping the wire client here avoids linking Ollama's server/runtime graph
 // (GPU runners, archives, SSH helpers, and registry code) into this CLI.
 type OllamaClient struct {
-	httpClient *http.Client
-	base       *url.URL
-	model      string
-	numCtx     int
-	baseURL    string
-	authHeader string
+	streamIdleTimeout time.Duration
+	remote            bool
+	maxModelBytes     int64
+	httpClient        *http.Client
+	base              *url.URL
+	model             string
+	numCtx            int
+	baseURL           string
+	authHeader        string
 }
 
 type ollamaMessage struct {
@@ -196,12 +193,13 @@ func NewOllamaClient(baseURL, model string, numCtx int) (*OllamaClient, error) {
 		}
 	}
 	return &OllamaClient{
-		httpClient: client,
-		base:       u,
-		model:      model,
-		numCtx:     numCtx,
-		baseURL:    strings.TrimSuffix(u.String(), "/"),
-		authHeader: authHeader,
+		httpClient:        client,
+		streamIdleTimeout: defaultStreamIdleTimeout,
+		base:              u,
+		model:             model,
+		numCtx:            numCtx,
+		baseURL:           strings.TrimSuffix(u.String(), "/"),
+		authHeader:        authHeader,
 	}, nil
 }
 
@@ -254,6 +252,9 @@ func (o *OllamaClient) Ping() error {
 // PingContext checks model availability within the caller's cancellation and
 // deadline rather than creating an unrelated background operation.
 func (o *OllamaClient) PingContext(ctx context.Context) error {
+	if o.remote {
+		return o.checkRemoteModel(ctx)
+	}
 	var response struct{}
 	if err := o.doJSON(ctx, http.MethodPost, "/api/show", map[string]any{"model": o.model}, &response); err != nil {
 		return fmt.Errorf("model %q not available: %w", o.model, err)
@@ -282,6 +283,11 @@ func (o *OllamaClient) ChatStream(ctx context.Context, opts ChatOptions, fn func
 		return errors.New("ollama num_thread cannot be negative")
 	}
 
+	if o.remote {
+		if err := o.checkRemoteModel(ctx); err != nil {
+			return inferenceNotStarted(o.markRemoteFailure(err))
+		}
+	}
 	messages := make([]ollamaMessage, 0, len(opts.Messages)+1)
 	if opts.System != "" {
 		messages = append(messages, ollamaMessage{Role: "system", Content: opts.System})
@@ -396,28 +402,10 @@ func (o *OllamaClient) ChatStream(ctx context.Context, opts ChatOptions, fn func
 	return nil
 }
 
-// markRemoteFailure applies the remote-inference redaction contract to a
-// dispatched request that carried a credential.
-//
-// Ollama Cloud is a credentialed remote HTTPS provider that happens to be
-// implemented as a variant of this client rather than as its own type, so
-// classifying provenance by concrete client type left it on the local branch —
-// the one that deliberately prints the raw error, which ollamaStatusError
-// builds straight from the remote HTTP response body, into the transcript and
-// from there into the durable session snapshot. The credential is the
-// discriminator that survives that implementation detail: it is set only for
-// an HTTPS host that is not local, which is exactly the population whose
-// failure text is somebody else's server talking.
-//
-// A genuinely local Ollama sends no Authorization header and keeps its raw
-// diagnostics, which are actionable and are meant to be shown.
-//
-// Only ChatStream needs this. It is the sole Ollama entry point whose error
-// crosses a transcript or durable-session boundary; Ping, Embed, and the
-// inventory calls report through host-authored copy that never carries the
-// provider body.
+// markRemoteFailure preserves provenance for explicit remote profiles even
+// through loopback SSH, and for credentialed Ollama Cloud requests.
 func (o *OllamaClient) markRemoteFailure(err error) error {
-	if o.authHeader == "" {
+	if o.authHeader == "" && !o.remote {
 		return err
 	}
 	return markRemoteInferenceError(err)
@@ -523,8 +511,8 @@ func (o *OllamaClient) streamJSON(ctx context.Context, route string, payload any
 	// returns instead of holding the turn (and its spinner) open forever.
 	streamCtx, cancelStream := context.WithCancelCause(ctx)
 	defer cancelStream(nil)
-	idle := time.AfterFunc(streamIdleTimeout, func() {
-		cancelStream(fmt.Errorf("%w (%s)", ErrStreamIdle, streamIdleTimeout))
+	idle := time.AfterFunc(o.streamIdleTimeout, func() {
+		cancelStream(fmt.Errorf("%w (%s)", ErrStreamIdle, o.streamIdleTimeout))
 	})
 	defer idle.Stop()
 	streamCause := func(err error) error {
@@ -559,7 +547,7 @@ func (o *OllamaClient) streamJSON(ctx context.Context, route string, payload any
 	scanner := bufio.NewScanner(response.Body)
 	scanner.Buffer(make([]byte, 64<<10), maxOllamaStreamRecordBytes)
 	for scanner.Scan() {
-		idle.Reset(streamIdleTimeout)
+		idle.Reset(o.streamIdleTimeout)
 		record := bytes.TrimSpace(scanner.Bytes())
 		if len(record) == 0 {
 			continue

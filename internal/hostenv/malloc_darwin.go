@@ -38,9 +38,10 @@ func FilterMallocDiagnostics() func() {
 		copyFilteredMallocDiagnostics(reader, fdWriter(saved))
 	}()
 	return func() {
+		// Release fd 2's duplicate pipe writer before waiting for EOF.
+		_ = unix.Dup2(saved, unix.Stderr)
 		_ = writer.Close()
 		<-done
-		_ = unix.Dup2(saved, unix.Stderr)
 		_ = unix.Close(saved)
 	}
 }

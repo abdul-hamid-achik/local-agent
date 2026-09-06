@@ -43,9 +43,11 @@ func configuredChatModel(modelConfig *config.ModelConfig, name string) bool {
 	if modelConfig == nil {
 		return false
 	}
-	wanted := config.CanonicalModelName(name)
 	for _, model := range modelConfig.Models {
-		if config.CanonicalModelName(model.Name) == wanted && config.CanonicalModelName(model.Name) != config.CanonicalModelName(modelConfig.EmbedModel) {
+		if config.CanonicalModelName(model.Name) == config.CanonicalModelName(modelConfig.EmbedModel) {
+			continue
+		}
+		if config.ModelNameCovers(model.Name, name) {
 			return true
 		}
 	}
@@ -111,10 +113,9 @@ func configuredExclusiveModel(modelConfig *config.ModelConfig, name string) bool
 	if modelConfig == nil {
 		return false
 	}
-	wanted := config.CanonicalModelName(name)
 	for _, model := range modelConfig.Models {
-		if config.CanonicalModelName(model.Name) == wanted {
-			return model.Exclusive
+		if model.Exclusive && config.ModelNameCovers(model.Name, name) {
+			return true
 		}
 	}
 	return false

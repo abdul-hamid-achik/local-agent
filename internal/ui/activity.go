@@ -534,12 +534,8 @@ func (m *Model) renderWorkingLine() string {
 	}
 	session := ""
 	selectionWidth := textWidth
-	// Sticky user strip already owns the prompt; activity keeps only the
-	// compact public handle (no title echo like "hey chat!").
+	// Session titles repeat the conversation; only restoration needs one.
 	titleLimit := 0
-	if m.chatPaneWidth() >= 72 && !m.stickyUserActive() {
-		titleLimit = 24
-	}
 	sessionPublicID := m.sessionPublicID
 	sessionTitle := m.activeSessionTitle
 	if pending := m.pendingSessionSwitch; m.sessionLoading && pending != nil &&
@@ -551,11 +547,7 @@ func (m *Model) renderWorkingLine() string {
 		sessionTitle = pending.TargetTitle
 		titleLimit = 24
 	}
-	// While the sticky strip is live, skip session chrome entirely — the prompt
-	// is already painted above and the handle is discoverable in Runtime.
-	if !m.stickyUserActive() || m.sessionLoading {
-		session = sessionDisplayLabel(sessionPublicID, sessionTitle, titleLimit)
-	}
+	session = sessionDisplayLabel(sessionPublicID, sessionTitle, titleLimit)
 	if session != "" {
 		selectionWidth = max(1, textWidth-lipgloss.Width(" · ")-lipgloss.Width(session))
 	}

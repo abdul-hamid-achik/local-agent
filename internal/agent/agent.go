@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -59,6 +60,7 @@ type Agent struct {
 	filesystemPinned     bool
 	permChecker          *permission.Checker
 	approvalCallback     func(permission.ApprovalRequest)
+	questionCallback     func(UserQuestionRequest)
 	approvalHostVersion  uint64
 	// approvalGrants contains host-approved session grants for this Agent
 	// process. Keys bind workspace, tool, scope kind, and (for exact-request)
@@ -309,7 +311,12 @@ func (a *Agent) SetModeContext(prefix string, policy ToolPolicy) {
 func (a *Agent) modeContext() (string, ToolPolicy) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	return a.modePrefix, a.toolPolicy
+	policy := a.toolPolicy.restrictNative(a.toolsConfig.BuiltinTools)
+	prefix := a.modePrefix
+	if a.toolsConfig.BuiltinTools != nil {
+		prefix = NarrowedToolSystemPrompt(prefix, policy)
+	}
+	return prefix, policy
 }
 
 // AppendLoadedContext appends to the loaded context.
@@ -706,7 +713,7 @@ func (a *Agent) ToolAvailability() ToolAvailability {
 		return ToolAvailability{}
 	}
 	a.mu.RLock()
-	policy := a.toolPolicy
+	policy := a.toolPolicy.restrictNative(a.toolsConfig.BuiltinTools)
 	hasMemory := a.memoryStore != nil
 	a.mu.RUnlock()
 
@@ -1015,9 +1022,24 @@ func (a *Agent) CommitModelSwitch() {
 	a.clearContextPromptFloor()
 }
 
-// SetToolsConfig sets the tools configuration.
-func (a *Agent) SetToolsConfig(cfg config.ToolsConfig) {
+// SetToolsConfig installs startup configuration. Invalid native kits fail closed.
+func (a *Agent) SetToolsConfig(cfg config.ToolsConfig) error {
+	catalog := BuildToolPolicy()
+	seen := make(map[string]bool, len(cfg.BuiltinTools))
+	var err error
+	for _, name := range cfg.BuiltinTools {
+		if (!catalog.AllowsBuiltin(name) && !catalog.AllowsMemory(name)) || seen[name] {
+			err = fmt.Errorf("config: tools.builtin_tools contains unknown or duplicate tool %q", name)
+			cfg.BuiltinTools = []string{}
+			break
+		}
+		seen[name] = true
+	}
+	cfg.BuiltinTools = slices.Clone(cfg.BuiltinTools)
+	a.mu.Lock()
 	a.toolsConfig = cfg
+	a.mu.Unlock()
+	return err
 }
 
 // ApprovalWaitTimeout returns how long a tool call waits for a human approval

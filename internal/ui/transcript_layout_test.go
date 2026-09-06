@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -39,16 +40,40 @@ func TestTranscriptEntrySeparatorOwnsVerticalRhythm(t *testing.T) {
 func TestSystemNoticesAreExplicitAndBounded(t *testing.T) {
 	m := newTestModel(t)
 	for _, width := range []int{30, 80} {
-		m.width = width
-		plain := ansi.Strip(m.renderSystemNotice("Model changed to local", width-2))
+		updated, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: 24})
+		m = updated.(*Model)
+		plain := ansi.Strip(m.renderSystemNotice("Model changed to local", m.chatContentWidth()))
 		if !strings.Contains(plain, "notice · Model changed") {
 			t.Fatalf("%d-column host notice is indistinguishable:\n%s", width, plain)
 		}
+		limit := m.contentGrid().LineWidth()
+		if width < 36 {
+			limit = width
+		}
 		for _, line := range strings.Split(plain, "\n") {
-			if len([]rune(line)) > width {
-				t.Fatalf("%d-column host notice overflowed: %q", width, line)
+			if lipgloss.Width(line) > limit {
+				t.Fatalf("%d-column host notice overflowed %d: %q", width, limit, line)
 			}
 		}
+	}
+}
+
+func TestUserAndNoticeShareContentOrigin(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = updated.(*Model)
+	var user strings.Builder
+	m.renderUserMsg(&user, "hello from the body", nil, m.chatContentWidth())
+	notice := m.renderSystemNotice("recalled 1 past conversation", m.chatContentWidth())
+	userLine := strings.Split(ansi.Strip(user.String()), "\n")[0]
+	noticeLine := strings.Split(ansi.Strip(notice), "\n")[0]
+	origin := strings.Repeat(" ", contentLeftColumns)
+	rail := glyphSet(m.glyphProfile).UserRail
+	if !strings.HasPrefix(userLine, rail) {
+		t.Fatalf("user should start with the rail:\n%q", userLine)
+	}
+	if !strings.HasPrefix(noticeLine, origin) {
+		t.Fatalf("notice should start at OriginX:\n%q", noticeLine)
 	}
 }
 

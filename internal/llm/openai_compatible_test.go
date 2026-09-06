@@ -296,16 +296,13 @@ func TestOpenAICompatibleChatStreamIdleWatchdogFailsHungStream(t *testing.T) {
 	defer server.Close()
 	defer close(release)
 
-	previous := streamIdleTimeout
-	streamIdleTimeout = 100 * time.Millisecond
-	defer func() { streamIdleTimeout = previous }()
-
 	client, err := NewOpenAICompatibleClient(OpenAICompatibleOptions{
 		BaseURL: server.URL, Model: "m", APIKey: "k",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	client.streamIdleTimeout = 100 * time.Millisecond
 	sawText := false
 	streamErr := client.ChatStream(context.Background(), ChatOptions{}, func(chunk StreamChunk) error {
 		if chunk.Text != "" {
@@ -341,16 +338,13 @@ func TestOpenAICompatibleChatStreamIdleWatchdogAllowsSlowButLiveStream(t *testin
 	}))
 	defer server.Close()
 
-	previous := streamIdleTimeout
-	streamIdleTimeout = 150 * time.Millisecond
-	defer func() { streamIdleTimeout = previous }()
-
 	client, err := NewOpenAICompatibleClient(OpenAICompatibleOptions{
 		BaseURL: server.URL, Model: "m", APIKey: "k",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	client.streamIdleTimeout = 150 * time.Millisecond
 	var chunks int
 	streamErr := client.ChatStream(context.Background(), ChatOptions{}, func(chunk StreamChunk) error {
 		if chunk.Text != "" {

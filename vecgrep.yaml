@@ -1,0 +1,9 @@
+embedding:
+  document_template: ""
+  ollama_context: 2048
+  ollama_options: {}
+  query_template: ""
+
+# Keep embeddings cached locally; the installed fcheap adapter returns no stash ID.
+cache:
+  fcheap_stash: false

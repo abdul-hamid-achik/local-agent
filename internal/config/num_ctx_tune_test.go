@@ -82,3 +82,25 @@ func TestUpdateOllamaNumCtxFile(t *testing.T) {
 		t.Fatal("expected surrounding keys preserved")
 	}
 }
+
+func TestRecommendNumCtxRespectsAvailableEstimateAndNativeLimit(t *testing.T) {
+	t.Setenv("LOCAL_AGENT_ALLOW_LARGE_MODELS", "")
+	for _, tt := range []struct {
+		name          string
+		total, weight int64
+		native, want  int
+	}{
+		{"unknown RAM cannot establish a budget", 0, 1 << 30, 4096, 0},
+		{"weights exhaust budget", 16 << 30, 12 << 30, 4096, 0},
+		{"budget fits 4k but not 8k", 16 << 30, (16 << 30) - numCtxOSReserveBytes - numCtxEmbedReserveBytes - 4096*numCtxKVBytesPerToken, 262144, 4096},
+		{"native 4k", 16 << 30, 1 << 30, 4096, 4096},
+		{"native below supported minimum", 16 << 30, 1 << 30, 1024, 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := RecommendNumCtx(tt.total, tt.weight, tt.native, 16384)
+			if got.Recommended != tt.want || got.MaxSafe != tt.want {
+				t.Fatalf("recommended=%d ceiling=%d, want %d; %s", got.Recommended, got.MaxSafe, tt.want, got.Reason)
+			}
+		})
+	}
+}

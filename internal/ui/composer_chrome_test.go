@@ -9,15 +9,11 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// The draft is unframed at every size. The transcript rule above it and the
-// shortcuts row below already bound it; a box added a second rectangle and
-// cost two rows on every frame.
-func TestComposerIsUnframedAtEverySize(t *testing.T) {
+func TestComposerIsFramedAtSharedColumn(t *testing.T) {
 	for _, size := range []struct {
 		name          string
 		width, height int
 	}{
-		{"minimum", minTerminalWidth, minTerminalHeight},
 		{"standard", 80, 24},
 		{"wide", 120, 36},
 	} {
@@ -27,35 +23,83 @@ func TestComposerIsUnframedAtEverySize(t *testing.T) {
 
 		view, _ := m.renderComposerChrome()
 		plain := ansi.Strip(view)
-		for _, border := range []string{"╭", "╮", "╰", "╯"} {
-			if strings.Contains(plain, border) {
-				t.Fatalf("%s: composer is still framed:\n%s", size.name, plain)
-			}
+		lines := strings.Split(plain, "\n")
+		if len(lines) < 3 {
+			t.Fatalf("%s: framed composer should be at least 3 rows:\n%s", size.name, plain)
+		}
+		grid := m.contentGrid()
+		if got := lipgloss.Width(lines[0]); got != grid.LineWidth() {
+			t.Fatalf("%s: composer top width = %d, want LineWidth %d\n%s", size.name, got, grid.LineWidth(), plain)
+		}
+		if !strings.HasPrefix(strings.TrimRight(lines[0], " "), strings.Repeat(" ", grid.OriginX())+"╭") {
+			t.Fatalf("%s: composer is not inset by OriginX:\n%s", size.name, plain)
+		}
+		if !strings.Contains(lines[0], "╭") || !strings.Contains(lines[0], "╮") ||
+			!strings.Contains(lines[len(lines)-1], "╰") || !strings.Contains(lines[len(lines)-1], "╯") {
+			t.Fatalf("%s: composer is missing a complete rounded box:\n%s", size.name, plain)
+		}
+		if !strings.Contains(plain, "❯") {
+			t.Fatalf("%s: composer missing prompt:\n%s", size.name, plain)
 		}
 	}
 }
 
-// The textarea's own prompt must land on the shared content grid: accent in
-// column 1, text in column 4, the same as tool receipts and notices.
-func TestComposerPromptSitsOnTheContentGrid(t *testing.T) {
+func TestComposerStaysUnframedOnMinimumTerminal(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: minTerminalWidth, Height: minTerminalHeight})
+	m = updated.(*Model)
+	if m.composerFrameActive() {
+		t.Fatal("minimum terminal should keep the draft unframed")
+	}
+	view, _ := m.renderComposerChrome()
+	plain := ansi.Strip(view)
+	for _, border := range []string{"╭", "╮", "╰", "╯"} {
+		if strings.Contains(plain, border) {
+			t.Fatalf("minimum composer is framed:\n%s", plain)
+		}
+	}
+	if !strings.Contains(plain, "❯") {
+		t.Fatalf("minimum composer missing prompt:\n%s", plain)
+	}
+}
+
+func TestComposerPromptSitsInsideTheFrame(t *testing.T) {
 	m := newTestModel(t)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = updated.(*Model)
 
 	view, _ := m.renderComposerChrome()
-	first := ansi.Strip(strings.SplitN(view, "\n", 2)[0])
-	at := strings.Index(first, "❯")
+	lines := strings.Split(ansi.Strip(view), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("composer has no inner row:\n%q", view)
+	}
+	inner := lines[1]
+	at := strings.Index(inner, "❯")
 	if at < 0 {
-		t.Fatalf("composer has no prompt:\n%q", first)
+		t.Fatalf("composer has no prompt:\n%q", inner)
 	}
-	// Display columns, not byte offsets: the rail glyph ahead of the prompt is
-	// multi-byte. Grid origin is accent(1) + pad(2), and the composer spends
-	// that pad on "❯ ", so text starts in column 4 like every other surface.
-	if col := lipgloss.Width(first[:at]) + 1; col != 2 {
-		t.Fatalf("composer prompt in column %d, want 2:\n%q", col, first)
+	// OriginX gutter + border + pad put ❯ in display column 6 (1-indexed).
+	if col := lipgloss.Width(inner[:at]) + 1; col != contentLeftColumns+3 {
+		t.Fatalf("composer prompt in column %d, want %d:\n%q", col, contentLeftColumns+3, inner)
 	}
-	if col := lipgloss.Width(first[:at]) + lipgloss.Width("❯ ") + 1; col != contentLeftColumns+1 {
-		t.Fatalf("composer text starts in column %d, want %d:\n%q", col, contentLeftColumns+1, first)
+	if col := lipgloss.Width(inner[:at]) + lipgloss.Width("❯ ") + 1; col != contentLeftColumns+5 {
+		t.Fatalf("composer text starts in column %d, want %d:\n%q", col, contentLeftColumns+5, inner)
+	}
+}
+
+func TestComposerInnerWidthIsLineWidthMinusFrame(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = updated.(*Model)
+
+	box := m.contentGrid().ContentWidth()
+	inner := m.composerInnerWidth()
+	frame := composerFrameStyle(box, m.glyphProfile, lipgloss.NoColor{})
+	if got := frame.GetHorizontalFrameSize(); got != 4 {
+		t.Fatalf("composer frame size = %d, want 4 (border 2 + pad 2)", got)
+	}
+	if inner != box-4 {
+		t.Fatalf("composer inner = %d, want ContentWidth %d - 4", inner, box)
 	}
 }
 
@@ -85,7 +129,7 @@ func TestFooterIdentityLivesOnShortcutsRow(t *testing.T) {
 	}
 }
 
-func TestActivityOmitsStickyEcho(t *testing.T) {
+func TestActivityOmitsConversationTitle(t *testing.T) {
 	m := newTestModel(t)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
 	m = updated.(*Model)
@@ -95,11 +139,54 @@ func TestActivityOmitsStickyEcho(t *testing.T) {
 	m.state = StateStreaming
 	m.reducedMotion = true
 	m.turnStartedAt = m.nowTime()
-	if !m.stickyUserActive() {
-		t.Fatal("expected sticky user for activity de-dupe")
-	}
 	line := ansi.Strip(m.renderWorkingLine())
 	if strings.Contains(line, "hey chat unique prompt") {
-		t.Fatalf("activity re-echoed sticky/title prompt:\n%s", line)
+		t.Fatalf("activity re-echoed the conversation title:\n%s", line)
+	}
+}
+
+func TestComposerAndIdentityShareLineWidth(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = updated.(*Model)
+	m.entries = []ChatEntry{{Kind: "user", Content: "align the last prompt"}}
+	m.settleChromeSpringForTest()
+
+	outer := m.contentGrid().LineWidth()
+	paneW := m.chatPaneWidth()
+	composer, _ := m.renderComposerChrome()
+	composerTop := strings.Split(ansi.Strip(composer), "\n")[0]
+	identity := ansi.Strip(m.renderSessionTopBar(paneW))
+	if lipgloss.Width(composerTop) != outer {
+		t.Fatalf("composer width = %d, want LineWidth %d", lipgloss.Width(composerTop), outer)
+	}
+	if lipgloss.Width(identity) != outer {
+		t.Fatalf("top bar width = %d, want LineWidth %d so the meter matches the composer", lipgloss.Width(identity), outer)
+	}
+	if outer >= paneW {
+		t.Fatalf("shared column %d should be inset from pane %d", outer, paneW)
+	}
+	grid := m.contentGrid()
+	if grid.RightChrome() != grid.OriginX() {
+		t.Fatalf("gutters are uneven: left OriginX=%d right chrome=%d (pane %d LineWidth %d)",
+			grid.OriginX(), grid.RightChrome(), paneW, outer)
+	}
+	composerPad := strings.Repeat(" ", grid.OriginX())
+	if !strings.HasPrefix(strings.TrimRight(composerTop, " "), composerPad+"╭") {
+		t.Fatalf("composer left gutter missing:\n%s", composerTop)
+	}
+}
+
+func TestModalHidesComposerChromeWithoutChangingItsHeight(t *testing.T) {
+	m := newTestModel(t)
+	for _, size := range [][2]int{{80, 24}, {30, 12}} {
+		updated, _ := m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+		m = updated.(*Model)
+		m.input.SetValue("private draft")
+		live, _ := m.renderComposerChrome()
+		inert := m.renderInertComposerChrome()
+		if strings.TrimSpace(ansi.Strip(inert)) != "" || lipgloss.Height(inert) != lipgloss.Height(live) {
+			t.Fatalf("modal should hide the draft and frame, preserving height: live=%q inert=%q", live, inert)
+		}
 	}
 }

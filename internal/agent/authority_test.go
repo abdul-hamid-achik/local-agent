@@ -417,7 +417,9 @@ func TestAutoScopedAuthorityConfinesWritesAndCortexLifecycle(t *testing.T) {
 
 func TestIterationBudgetsSeparateInteractiveAndAutoAuthority(t *testing.T) {
 	ag := New(nil, nil, 4096)
-	ag.SetToolsConfig(config.ToolsConfig{MaxIterations: 12, AutoMaxIterations: 48})
+	if err := ag.SetToolsConfig(config.ToolsConfig{MaxIterations: 12, AutoMaxIterations: 48}); err != nil {
+		t.Fatal(err)
+	}
 	if got := ag.MaxIterationsForAuthority(AuthorityNormal); got != 12 {
 		t.Fatalf("NORMAL max iterations = %d, want 12", got)
 	}
@@ -428,7 +430,9 @@ func TestIterationBudgetsSeparateInteractiveAndAutoAuthority(t *testing.T) {
 		t.Fatalf("AUTO max iterations = %d, want 48", got)
 	}
 
-	ag.SetToolsConfig(config.ToolsConfig{})
+	if err := ag.SetToolsConfig(config.ToolsConfig{}); err != nil {
+		t.Fatal(err)
+	}
 	if got := ag.MaxIterationsForAuthority(AuthorityAutoScoped); got != 40 {
 		t.Fatalf("default AUTO max iterations = %d, want 40", got)
 	}
@@ -449,7 +453,9 @@ func TestAutoIterationBudgetDoesNotEmitInteractiveNearLimitWarning(t *testing.T)
 		}
 		ag := New(&scriptedClient{responses: responses}, nil, 4096)
 		ag.SetWorkDir(t.TempDir())
-		ag.SetToolsConfig(config.ToolsConfig{MaxIterations: 3, AutoMaxIterations: 3})
+		if err := ag.SetToolsConfig(config.ToolsConfig{MaxIterations: 3, AutoMaxIterations: 3}); err != nil {
+			t.Fatal(err)
+		}
 		ag.SetAuthorityMode(mode)
 		out := &outputRecorder{}
 		err := ag.Run(context.Background(), out)

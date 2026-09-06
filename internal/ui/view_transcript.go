@@ -17,16 +17,13 @@ import (
 
 func (m *Model) renderSystemNotice(content string, contentW int) string {
 	const label = "notice · "
-	// Content grid owns the left indent; drop style padding so OriginX stays 3.
-	// Dim body — notices (ICE, system) must not compete with user/assistant.
-	// Budget accounts for the grid lead so 30-column rows never overflow.
-	available := max(1, contentW-contentLeftColumns)
-	if contentW < 36 {
-		available = max(1, contentW)
-	}
+	// contentW is the flex column (ContentWidth). Wrap to that and let Prefix
+	// own OriginX — subtracting left chrome here again left notices short of
+	// the composer column. Compact panes skip the prefix so 30-col rows fit.
+	wrapW := max(1, contentW)
 	plain := label + sanitizeTerminalMultiline(content)
-	wrapped := m.styles.Dimmed.UnsetPaddingLeft().Render(wrapText(plain, available))
-	if contentW < 36 {
+	wrapped := m.styles.Dimmed.Render(wrapText(plain, wrapW))
+	if m.chatPaneWidth() < 36 {
 		return wrapped
 	}
 	return m.contentGrid().IndentBlock(" ", wrapped)
@@ -138,7 +135,9 @@ func (m *Model) renderEntries() string {
 		}
 		m.endLiveTailLayoutEpisode()
 		m.publishTranscriptLayout(nil)
-		return m.recordTranscriptRender(b.String())
+		welcome := b.String()
+		top := emptyWelcomeTopPad(m.viewport.Height(), lipgloss.Height(welcome))
+		return m.recordTranscriptRender(strings.Repeat("\n", top) + welcome)
 	}
 
 	// Fast path: the cached stable transcript is current. Running ToolCards are
@@ -286,10 +285,7 @@ type entryRenderMemo struct {
 func (m *Model) renderEntryInto(b *strings.Builder, entryIndex, contentW int, memoAllowed bool, state *entryRenderState) {
 	entry := m.entries[entryIndex]
 	// Sticky last-user strip owns the prompt; do not reprint it in the body.
-	if entry.Kind == "user" && m.omitUserEntryFromTranscript(entryIndex) {
-		state.assistantStarted = false
-		return
-	}
+
 	// A run of consecutive settled read-family receipts renders as one line at
 	// its first entry; the rest render nothing. Both answers come from the same
 	// pair of predicates, so exactly one entry in a run produces a chunk, and
@@ -1055,13 +1051,12 @@ func (m *Model) renderEntryError(b *strings.Builder, content string, contentW in
 }
 
 // renderUserMsg renders a user message as an accent-guttered content block.
-// No "you" role label — the gutter (and sticky strip for the latest turn) is
-// enough identity, matching denser Grok-style transcript chrome.
+// The accent gutter distinguishes prompts without moving them out of order.
 func (m *Model) renderUserMsg(b *strings.Builder, content string, attachments []imageasset.Ref, contentW int) {
 	content = sanitizeTerminalMultiline(content)
 	grid := m.contentGrid()
 	gutter := grid.Prefix(m.styles.UserGutter.Render(glyphSet(m.glyphProfile).UserRail))
-	text := m.styles.UserContent.UnsetPaddingLeft()
+	text := m.styles.UserContent
 	for _, line := range strings.Split(wrapText(content, max(10, contentW)), "\n") {
 		b.WriteString(gutter + text.Render(line))
 		b.WriteString("\n")
@@ -1235,13 +1230,16 @@ func (m *Model) renderToolGroup(b *strings.Builder, chat ChatEntry) {
 	// LineWidth = accent + pad + content. ToolCard paints accent+pad internally.
 	availableWidth := max(4, grid.LineWidth())
 	cardView := card.ViewWithActivity(availableWidth, m.runningToolActivityGlyph(), 0)
-	if model.Preview.Expanded && model.Lifecycle.Terminal() {
+	// Crush/Grok show a bounded hunk on Edit/Write without requiring expand.
+	// Other tool families stay header-only until the card is opened.
+	if m.shouldAttachInlineDiff(model) {
 		var diffView string
+		diffWidth := max(1, grid.ContentWidth())
 		if model.Preview.DiffPending {
 			diffView = renderDiffLoadingAtWidth(
 				model.Summary,
 				m.styles,
-				availableWidth,
+				diffWidth,
 				m.glyphProfile,
 			)
 		} else if len(model.Preview.DiffLines) > 0 {
@@ -1250,15 +1248,17 @@ func (m *Model) renderToolGroup(b *strings.Builder, chat ChatEntry) {
 					model.Summary,
 					model.Preview.DiffLines,
 					m.styles,
-					m.inlineDiffPreviewRows(),
-					availableWidth,
+					m.attachedDiffPreviewRows(model),
+					diffWidth,
 					m.glyphProfile,
 				),
 				"\n",
 			)
 		}
 		if diffView != "" {
-			cardView += "\n" + diffView
+			// Paint the patch in the content column and prefix the same rail
+			// the card uses, so the left edge does not jump to column 0.
+			cardView += "\n" + grid.IndentBlock(glyphs.Vertical, diffView)
 		}
 	}
 	if shouldShowToolViewerHint(m, model.Preview) {
@@ -1270,6 +1270,27 @@ func (m *Model) renderToolGroup(b *strings.Builder, chat ChatEntry) {
 		}
 	}
 	b.WriteString(cardView)
+}
+
+func (m *Model) shouldAttachInlineDiff(model ToolRenderModel) bool {
+	if !model.Lifecycle.Terminal() {
+		return false
+	}
+	if model.Preview.DiffPending {
+		return true
+	}
+	if len(model.Preview.DiffLines) == 0 {
+		return false
+	}
+	return model.Preview.Expanded || model.Preview.Mode == ToolPreviewEdit
+}
+
+func (m *Model) attachedDiffPreviewRows(model ToolRenderModel) int {
+	rows := m.inlineDiffPreviewRows()
+	if !model.Preview.Expanded {
+		return min(10, rows)
+	}
+	return rows
 }
 
 func (m *Model) inlineDiffPreviewRows() int {

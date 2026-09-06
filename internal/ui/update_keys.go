@@ -16,6 +16,9 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	if m.pendingApproval != nil {
 		return m.handlePendingApprovalKey(msg)
 	}
+	if m.pendingQuestion != nil {
+		return m.handleAgentQuestionKey(msg)
+	}
 	// External read-root authorization is a host-owned decision. It precedes
 	// every overlay and never falls through to composer or agent shortcuts.
 	if m.readScopePrompt != nil {

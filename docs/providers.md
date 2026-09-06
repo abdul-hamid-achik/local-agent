@@ -1,18 +1,19 @@
 ---
 title: Remote providers
-description: Configure one or more OpenAI-compatible remote inference profiles (xAI Grok, OpenAI, OpenRouter) with API keys from TinyVault.
+description: Configure native remote Ollama through an SSH tunnel or OpenAI-compatible inference profiles.
 outline: deep
 ---
 
 # Remote providers
 
-Local Agent defaults to **Ollama on the local machine**. Remote chat is opt-in through OpenAI-compatible **provider profiles**. Secrets stay out of YAML: only environment variable **names** are configured; values are injected at launch (recommended: [TinyVault](https://www.tinyvault.dev/) / `tvault`).
+Local Agent defaults to **Ollama on the local machine**. Remote chat is opt-in through **provider profiles**, including native remote Ollama and OpenAI-compatible APIs. Secrets stay out of YAML: only environment variable **names** are configured; values are injected at launch (recommended: [TinyVault](https://www.tinyvault.dev/) / `tvault`).
 
 ## Supported types
 
 | `type` | Meaning |
 | --- | --- |
 | `ollama` (default) | Existing local Ollama path |
+| `ollama_remote` | Native Ollama on a remote host, including an SSH loopback tunnel |
 | `xai` | Grok via `https://api.x.ai/v1`, key env `XAI_API_KEY` |
 | `openai_compatible` | Any OpenAI-style chat API (OpenAI, OpenRouter, local vLLM, …) |
 
@@ -21,6 +22,42 @@ Their `base_url` must use HTTPS; plain HTTP is accepted only for
 `localhost` or literal loopback/unspecified addresses used by local servers.
 
 SuperGrok / X Premium chat subscriptions are **not** API credentials. Create a key at [console.x.ai](https://console.x.ai). No X Platform developer app is required.
+
+## Remote Ollama through Chalupa
+
+A remote GPU can serve chat while local Ollama keeps embeddings on this machine.
+Use a separate tunnel port, for example local `11435` to remote `11434`:
+
+```yaml
+privacy:
+  local_only: false
+provider:
+  active: gpu
+  profiles:
+    ollama:
+      type: ollama
+    gpu:
+      type: ollama_remote
+      base_url: http://127.0.0.1:11435
+      model: qwen3.8:27b
+      context_size: 32768
+      max_model_bytes: 25769803776
+      stream_idle_timeout: 10m
+```
+
+This example requests a 32K context and caps the reported weight file size at
+24 GiB. The weight ceiling does not cap total GPU memory, KV cache, or cost.
+The remote provider validates installed host weights, declared tool support,
+and the model's native context before chat. Actual performance and tool
+correctness still require a test on the target GPU. A loopback URL reached
+through SSH remains remote inference, so privacy opt-in is required.
+
+In Chalupa checkouts with inference support, `chalupa connect --config PATH`
+exports this profile fragment. Merge it into your config and keep
+`chalupa tunnel --config PATH` running, then select `/provider gpu`.
+See [Chalupa's inference guide](https://chalupa.run/docs/inference) for setup
+and expiry limits. These examples describe source support; use builds that
+include the `ollama_remote` provider and Chalupa's `connect` command.
 
 ## Multi-profile config
 

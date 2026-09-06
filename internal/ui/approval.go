@@ -327,10 +327,10 @@ func (m *Model) openApproval(request ToolApprovalMsg) error {
 	}
 	m.pendingApproval = &request
 	m.approvalState = &ApprovalState{ChoiceIndex: 0}
-	// Permission decisions are part of the active conversation flow. They own
-	// the composer/footer region instead of covering the transcript with a
-	// centered modal. Clear a completion defensively so an asynchronous host
-	// request never leaves hidden filter state behind the inline surface.
+	// Permission requests overlay the chat (Crush-style dialog) so the
+	// transcript stays visible around the decision. The composer keeps its
+	// row budget but is inert. Clear a completion defensively so an
+	// asynchronous host request never leaves hidden filter state behind.
 	if m.isCompletionActive() {
 		m.dismissCompletion()
 	}
@@ -549,7 +549,7 @@ func (m *Model) resizeApproval(preserveOffset bool) {
 	}
 	width := m.approvalContentWidth()
 	content := m.buildApprovalContent(width)
-	bodyHeight := min(max(1, lipgloss.Height(content)), m.approvalBodyHeight())
+	bodyHeight := min(max(1, lipgloss.Height(content)), m.approvalDialogBodyHeight())
 	vp := viewport.New(
 		viewport.WithWidth(width),
 		viewport.WithHeight(bodyHeight),
@@ -570,64 +570,54 @@ func (m *Model) renderApproval() string {
 	if m.approvalState == nil || m.pendingApproval == nil {
 		return ""
 	}
-	grid := m.contentGrid()
-	contentWidth := grid.ContentWidth()
+	width := m.approvalContentWidth()
 	toolName := boundedApprovalMetadata(m.pendingApproval.ToolName, approvalMaximumActionBytes)
 	if toolName == "" {
 		toolName = "unknown tool"
 	}
 	mode := m.modeConfigs[m.presentedMode()].Label
-	// Keep the tool identity ahead of the mode so narrow terminals preserve the
-	// action being authorized. The authority mode remains explicit whenever the
-	// available width permits it.
-	// Permission glyph lives in the content-grid accent cell so the title text
-	// shares OriginX=3 with tools; body lines use a space accent.
-	permissionGlyph := "◇"
-	if m.glyphProfile == GlyphASCII {
-		permissionGlyph = "?"
-	}
 	separator := glyphSeparator(m.glyphProfile)
-	titleText := approvalTitleText(toolName, mode, separator, contentWidth, m.glyphProfile)
-	title := grid.Line(
-		permissionGlyph,
-		m.styles.ApprovalPrompt.Render(titleText),
-	)
-	var sections []string
-	if saved := m.renderApprovalComposerReceipt(contentWidth); saved != "" {
-		sections = append(sections, saved)
+	titleText := approvalTitleText(toolName, mode, separator, width, m.glyphProfile)
+
+	var body strings.Builder
+	body.WriteString(m.styles.ApprovalPrompt.Render(titleText))
+	body.WriteString("\n")
+	if saved := m.renderApprovalComposerReceipt(width); saved != "" {
+		body.WriteString(saved)
+		body.WriteString("\n")
 	}
-	sections = append(sections, m.approvalState.Viewport.View(), m.renderApprovalChoices(contentWidth))
+	body.WriteString(m.approvalState.Viewport.View())
+	body.WriteString("\n")
+	body.WriteString(m.renderApprovalPrimaryButtons(width))
+	if extra := m.renderApprovalExtraHints(width); extra != "" {
+		body.WriteString("\n")
+		body.WriteString(extra)
+	}
+
 	detailAction := "arguments"
 	if m.approvalState.ShowArguments {
 		detailAction = "preview"
 	}
-	hints := m.renderKeyHints(contentWidth,
-		keyHint{Key: "esc", Action: "cancel turn"},
-		keyHint{Key: "enter", Action: "select"},
-		keyHint{Key: "↑/↓/j/k", Action: "move"},
-		keyHint{Key: "d", Action: detailAction},
-		keyHint{Key: "pgup/dn", Action: "scroll"},
-	)
-	if contentWidth < 40 {
-		hints = m.renderKeyHints(contentWidth,
-			keyHint{Key: "esc", Action: "cancel turn"},
-			keyHint{Key: "enter", Action: "select"},
-		)
-		detailHints := []keyHint{{Key: "d", Action: detailAction}}
-		switch {
-		case !m.approvalState.Viewport.AtBottom():
-			detailHints = append([]keyHint{{Key: "pgdn", Action: "more"}}, detailHints...)
-		case m.approvalState.Viewport.YOffset() > 0:
-			detailHints = append([]keyHint{{Key: "pgup", Action: "previous"}}, detailHints...)
-		}
-		hints += "\n" + m.renderKeyHints(contentWidth, detailHints...)
+	primary := []keyHint{
+		{Key: "esc", Action: "cancel turn"},
+		{Key: "enter", Action: "select"},
+		{Key: "n", Action: "deny"},
+		{Key: "y", Action: "once"},
+		{Key: "s", Action: "same/session"},
 	}
-	sections = append(sections, hints)
-	body := indentApprovalSurface(strings.Join(sections, "\n"), grid.PaneWidth, m.glyphProfile)
-	if body == "" {
-		return title
+	secondary := []keyHint{{Key: "d", Action: detailAction}}
+	if !m.approvalState.Viewport.AtBottom() {
+		secondary = append([]keyHint{{Key: "pgdn", Action: "more"}}, secondary...)
+	} else if m.approvalState.Viewport.YOffset() > 0 {
+		secondary = append([]keyHint{{Key: "pgup", Action: "previous"}}, secondary...)
 	}
-	return title + "\n" + body
+	footer := m.renderKeyHints(width, primary...)
+	if width < 40 {
+		footer += "\n" + m.renderKeyHints(width, secondary...)
+	} else {
+		footer = m.renderKeyHints(width, append(primary, secondary...)...)
+	}
+	return dialogFrameAt(m.styles, body.String(), footer, m.approvalDialogOuterWidth(), m.glyphProfile)
 }
 
 func (m *Model) renderApprovalComposerReceipt(width int) string {
@@ -752,11 +742,85 @@ func (m *Model) renderApprovalChoices(width int) string {
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
 
-// approvalContentWidth is the content-grid flex column used by approval
-// commands, diffs, and choice rows. It matches tools/transcript WorkWidth
-// (pane − left chrome − right chrome) so painted lines share OriginX=3.
+// approvalDialogOuterWidth follows the same scale as every other modal.
+func (m *Model) approvalDialogOuterWidth() int {
+	if m == nil || m.width <= 0 {
+		return pickerContentWidth(80) + 2
+	}
+	return pickerContentWidth(m.width) + 2
+}
+
+func (m *Model) approvalDialogBodyHeight() int {
+	capRows := max(3, m.height/3)
+	return min(m.approvalBodyHeight(), capRows)
+}
+
+// approvalContentWidth is the dialog interior used by preview, diffs, and
+// choice rows: outer Width minus one-cell border and padding on each side.
 func (m *Model) approvalContentWidth() int {
-	return m.contentGrid().ContentWidth()
+	return max(1, m.approvalDialogOuterWidth()-4)
+}
+
+func approvalChoiceIsPrimary(choice approvalChoice) bool {
+	switch strings.ToLower(choice.Key) {
+	case "n", "y", "s":
+		return true
+	default:
+		return false
+	}
+}
+
+func (m *Model) renderApprovalPrimaryButtons(width int) string {
+	if m.height >= 20 {
+		return m.renderApprovalChoices(width)
+	}
+	if m.approvalState == nil || width <= 0 {
+		return ""
+	}
+	selected := m.approvalState.ChoiceIndex
+	var parts []string
+	for index, choice := range m.currentApprovalChoices() {
+		if !approvalChoiceIsPrimary(choice) {
+			continue
+		}
+		label := "[" + choice.Key + " " + choice.CompactLabel + "]"
+		if m.approvalState.ConfirmScope == choice.ScopeKind &&
+			strings.EqualFold(m.approvalState.ConfirmKey, choice.Key) {
+			label = "[confirm " + choice.CompactLabel + "]"
+		}
+		if index == selected {
+			parts = append(parts, m.styles.FocusIndicator.Render(label))
+		} else {
+			parts = append(parts, m.styles.OverlayDim.Render(label))
+		}
+	}
+	if len(parts) == 0 {
+		return m.renderApprovalChoices(width)
+	}
+	row := strings.Join(parts, "  ")
+	if lipgloss.Width(row) > width {
+		return strings.Join(parts, "\n")
+	}
+	return row
+}
+
+func (m *Model) renderApprovalExtraHints(width int) string {
+	if m.height >= 20 {
+		return ""
+	}
+	var extras []string
+	for _, choice := range m.currentApprovalChoices() {
+		if approvalChoiceIsPrimary(choice) {
+			continue
+		}
+		extras = append(extras, choice.Key+" "+choice.CompactLabel)
+	}
+	if len(extras) == 0 {
+		return ""
+	}
+	return m.styles.OverlayDim.Render(
+		truncateDisplayWithGlyphProfile(strings.Join(extras, " · "), width, m.glyphProfile),
+	)
 }
 
 // approvalTitleText prefers the tool identity over the mode label when the

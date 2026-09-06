@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
@@ -668,6 +669,71 @@ func TestASCIIExpandedRoutedAttentionCardUsesProfileAwareChrome(t *testing.T) {
 	}
 	if unicodeDetails := strings.Join(toolProjectionDetails(projection, GlyphUnicode), "\n"); !strings.Contains(unicodeDetails, " · ") {
 		t.Fatalf("Unicode projection punctuation changed: %q", unicodeDetails)
+	}
+}
+
+func TestCollapsedWriteKeepsABoundedDiffPeek(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = updated.(*Model)
+	m.toolEntries = []ToolEntry{{
+		ID: "write-peek", Name: "write_file", Status: ToolStatusDone,
+		Summary: "session_chrome_test.go", Collapsed: true,
+		DiffLines: []DiffLine{
+			{Kind: DiffRemoved, Content: "want 2 (identity + sticky)"},
+			{Kind: DiffAdded, Content: "want 5 (identity + padded chip + gap)"},
+		},
+	}}
+	m.entries = []ChatEntry{
+		{Kind: "user", Content: "pad the sticky"},
+		{Kind: "tool_group", ToolIndex: 0},
+	}
+	m.invalidateEntryCache()
+	m.refreshTranscript()
+	plain := ansi.Strip(m.renderEntries())
+	if !strings.Contains(plain, "want 5 (identity + padded chip + gap)") {
+		t.Fatalf("collapsed write hid the edit hunk:\n%s", plain)
+	}
+	if strings.Contains(plain, "tool: write_file") {
+		t.Fatalf("collapsed write leaked expanded meta:\n%s", plain)
+	}
+}
+
+func TestToolAttachedDiffSharesContentGridRail(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = updated.(*Model)
+	m.toolEntries = []ToolEntry{{
+		ID: "write-1", Name: "write_file", Status: ToolStatusDone,
+		Summary: "note.txt", Collapsed: false,
+		DiffLines: []DiffLine{
+			{Kind: DiffAdded, Content: "hello attached diff"},
+		},
+	}}
+	m.entries = []ChatEntry{
+		{Kind: "user", Content: "write the note"},
+		{Kind: "tool_group", ToolIndex: 0},
+	}
+	m.invalidateEntryCache()
+	m.refreshTranscript()
+	plain := ansi.Strip(m.renderEntries())
+	grid := m.contentGrid()
+	prefix := grid.Prefix(glyphSet(m.glyphProfile).Vertical)
+	var attached string
+	for _, line := range strings.Split(plain, "\n") {
+		if strings.Contains(line, "hello attached diff") {
+			attached = line
+			break
+		}
+	}
+	if attached == "" {
+		t.Fatalf("attached diff missing from transcript:\n%s", plain)
+	}
+	if !strings.HasPrefix(attached, strings.TrimRight(prefix, " ")) {
+		t.Fatalf("attached diff lost the card rail (prefix %q):\n%s", prefix, attached)
+	}
+	if lipgloss.Width(attached) > grid.LineWidth() {
+		t.Fatalf("attached diff overflowed line width %d: %d\n%s", grid.LineWidth(), lipgloss.Width(attached), attached)
 	}
 }
 

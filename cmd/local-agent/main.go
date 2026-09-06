@@ -237,6 +237,7 @@ func run() int {
 	// Ollama owns model availability for the local path. Remote providers use a
 	// configured model id and env-sourced API key (typically via TinyVault).
 	modelManager := llm.NewModelManager(cfg.Ollama.BaseURL, cfg.Ollama.NumCtx)
+	modelManager.ConfigureOllamaReasoning(cfg.Ollama.DisableReasoning)
 	defer modelManager.Close()
 	modelManager.ConfigureProviderCatalog(cfg.Provider, cfg.Privacy.LocalOnly, cfg.Ollama.Model)
 
@@ -248,16 +249,9 @@ func run() int {
 		manualChatModels []string
 	)
 	if provider.IsRemote() {
-		apiKey, keyErr := provider.ResolveAPIKey()
-		if keyErr != nil {
-			fmt.Fprintf(os.Stderr, "provider: %v\n", keyErr)
-			return 1
-		}
-		remoteClient, clientErr := llm.NewOpenAICompatibleClient(llm.OpenAICompatibleOptions{
-			BaseURL: provider.BaseURL,
-			Model:   modelName,
-			APIKey:  apiKey,
-		})
+		remoteProfile := provider
+		remoteProfile.Model = modelName
+		remoteClient, clientErr := llm.NewRemoteProviderClient(remoteProfile)
 		if clientErr != nil {
 			fmt.Fprintf(os.Stderr, "provider: %v\n", clientErr)
 			return 1
@@ -279,7 +273,7 @@ func run() int {
 			fmt.Fprintf(os.Stderr, "set current model: %v\n", err)
 			return 1
 		}
-		fmt.Fprintf(os.Stderr, "provider: %s (%s) model %s (api key from $%s)\n", providerName, provider.Type, modelName, provider.APIKeyEnv)
+		fmt.Fprintf(os.Stderr, "provider: %s (%s) model %s · remote prompts\n", providerName, provider.Type, modelName)
 	} else {
 		discoveryCtx, cancelDiscovery := context.WithTimeout(context.Background(), 2*time.Second)
 		ollamaInventory, discoveryErr = modelManager.ListOllamaModels(discoveryCtx)
@@ -300,6 +294,7 @@ func run() int {
 			return 1
 		}
 		manualChatModels = manuallySelectableOllamaChatModels(ollamaInventory, cfg.Privacy.LocalOnly)
+		localChatModels := manuallySelectableOllamaChatModels(ollamaInventory, true)
 		autoChatModels = autoRoutableOllamaChatModels(ollamaInventory, &cfg.Model)
 		if modelPreferenceStore != nil && shouldRestoreManualModelPreference(*modelFlag, profileModelPinned) {
 			preferred, saved, preferenceErr := modelPreferenceStore.LoadManualModel()
@@ -308,7 +303,7 @@ func run() int {
 				fmt.Fprintf(os.Stderr, "warning: saved model preference ignored: %v\n", preferenceErr)
 			case saved:
 				if restored, ok, warning := restoreManualModelPreference(
-					preferred, manualChatModels, autoChatModels, discoveryErr == nil,
+					preferred, manualChatModels, localChatModels, discoveryErr == nil,
 				); ok {
 					modelName = restored
 					modelPinned = true
@@ -318,12 +313,14 @@ func run() int {
 			}
 		}
 		var resolveErr error
-		modelName, modelList, resolveErr = resolveStartupModel(
+		var resolveWarning string
+		modelName, modelList, resolveWarning, resolveErr = resolveStartupModel(
 			modelName,
 			modelPinned,
 			cfg.Privacy.LocalOnly,
 			&cfg.Model,
 			manualChatModels,
+			localChatModels,
 			autoChatModels,
 			discoveryErr == nil,
 			awareRouter,
@@ -331,6 +328,9 @@ func run() int {
 		if resolveErr != nil {
 			fmt.Fprintf(os.Stderr, "model: %v\n", resolveErr)
 			return 1
+		}
+		if resolveWarning != "" {
+			fmt.Fprintf(os.Stderr, "warning: %s\n", resolveWarning)
 		}
 		if discoveryErr != nil {
 			fmt.Fprintf(os.Stderr, "warning: Ollama model discovery failed: %v\n", discoveryErr)
@@ -370,7 +370,10 @@ func run() int {
 	// package users may opt out, but neither the TUI nor headless mode may send
 	// provider work without a scoped SQLite ledger.
 	ag.RequireExecutionLedger(true)
-	ag.SetToolsConfig(cfg.Tools)
+	if err := ag.SetToolsConfig(cfg.Tools); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	ag.SetContinuationsConfig(cfg.Continuations)
 	// OS-level confinement for shell subprocesses. Requesting it on a platform
 	// with no driver is reported rather than ignored: an operator who edited
@@ -504,7 +507,9 @@ func run() int {
 		modeConfig := ui.DefaultModeConfigs()[headlessMode]
 		if options.toolsProvided {
 			modeConfig.ToolPolicy = narrowedHeadlessToolPolicy
-			modeConfig.SystemPromptPrefix = narrowHeadlessSystemPrompt(modeConfig.SystemPromptPrefix, narrowedHeadlessToolPolicy)
+			if cfg.Tools.BuiltinTools == nil {
+				modeConfig.SystemPromptPrefix = narrowHeadlessSystemPrompt(modeConfig.SystemPromptPrefix, narrowedHeadlessToolPolicy)
+			}
 		}
 		if explicitRouter, ok := router.(interface{ SetModeContext(config.ModeContext) }); ok {
 			explicitRouter.SetModeContext(modeConfig.RouterMode)

@@ -1,5 +1,4 @@
-   workspace                                                  qwen3.5:0.8b · 0/16.4k · 0%
-
+   workspace                                               qwen3.5:0.8b · 0/16.4k · 0%
 ▌  Create approval-probe.txt with the exact text must not be written.
 
    │ Thinking… · Checking workspace policy before the write.
@@ -21,7 +20,8 @@
 
 
 
-─────────────────────────────────────────────────────────────────────────────────────────
-…  Running · Routing unavailable · implementation · esc stop · enter queue
-▏❯ Write a follow-up · enter queue
+…  Running · Routing unavailable · implementation · esc stop · enter queue · <session>
+   ╭─────────────────────────────────────────────────────────────────────────────────╮
+   │ ❯ Write a follow-up · enter queue                                               │
+   ╰─────────────────────────────────────────────────────────────────────────────────╯
    shift+tab mode

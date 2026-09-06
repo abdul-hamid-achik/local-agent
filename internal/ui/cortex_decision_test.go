@@ -130,15 +130,18 @@ func TestCortexDecisionRendersInlineAtSupportedSizesWithoutPreselection(t *testi
 			if presentation.Selected != -1 || (size.name == "minimum" && !strings.Contains(plain, "No option selected")) {
 				t.Fatalf("decision was preselected: selected=%d\n%s", presentation.Selected, plain)
 			}
-			for _, text := range []string{"VISIBLE TRANSCRIPT", "Cortex decision", "Q ·", "enter confirm", "sensitive"} {
+			required := []string{"Cortex decision", "Q ·", "enter confirm", "sensitive"}
+			if size.height >= 24 {
+				required = append(required, "VISIBLE TRANSCRIPT")
+			}
+			for _, text := range required {
 				if !strings.Contains(plain, text) {
-					t.Fatalf("minimum decision omitted %q:\n%s", text, plain)
+					t.Fatalf("%s decision omitted %q:\n%s", size.name, text, plain)
 				}
 			}
 			if view.Cursor != nil || m.input.Value() != "preserved draft" || m.viewport.Height() < 1 {
-				t.Fatalf("inline ownership cursor=%v draft=%q transcriptRows=%d", view.Cursor, m.input.Value(), m.viewport.Height())
+				t.Fatalf("overlay ownership cursor=%v draft=%q transcriptRows=%d", view.Cursor, m.input.Value(), m.viewport.Height())
 			}
-			assertInlineFormFrameOwnsPane(t, m, view.Content)
 			assertRenderedLinesFit(t, view.Content, size.width)
 			assertRenderedHeightFits(t, view.Content, size.height)
 

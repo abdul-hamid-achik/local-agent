@@ -7,6 +7,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 )
@@ -14,6 +15,7 @@ import (
 // Provider types. Ollama remains the default local runtime.
 const (
 	ProviderTypeOllama           = "ollama"
+	ProviderTypeOllamaRemote     = "ollama_remote"
 	ProviderTypeOpenAICompatible = "openai_compatible"
 	ProviderTypeXAI              = "xai"
 
@@ -50,20 +52,24 @@ type ProviderConfig struct {
 	Profiles map[string]ProviderProfile `yaml:"profiles,omitempty"`
 
 	// Flat fields (single-provider form, also the resolved surface after ActiveProfile).
-	Type        string `yaml:"type,omitempty"`
-	BaseURL     string `yaml:"base_url,omitempty"`
-	Model       string `yaml:"model,omitempty"`
-	APIKeyEnv   string `yaml:"api_key_env,omitempty"`
-	ContextSize int    `yaml:"context_size,omitempty"`
+	Type              string `yaml:"type,omitempty"`
+	BaseURL           string `yaml:"base_url,omitempty"`
+	Model             string `yaml:"model,omitempty"`
+	APIKeyEnv         string `yaml:"api_key_env,omitempty"`
+	ContextSize       int    `yaml:"context_size,omitempty"`
+	MaxModelBytes     int64  `yaml:"max_model_bytes,omitempty"`
+	StreamIdleTimeout string `yaml:"stream_idle_timeout,omitempty"`
 }
 
 // ProviderProfile is one named inference backend definition.
 type ProviderProfile struct {
-	Type        string `yaml:"type,omitempty"`
-	BaseURL     string `yaml:"base_url,omitempty"`
-	Model       string `yaml:"model,omitempty"`
-	APIKeyEnv   string `yaml:"api_key_env,omitempty"`
-	ContextSize int    `yaml:"context_size,omitempty"`
+	Type              string `yaml:"type,omitempty"`
+	BaseURL           string `yaml:"base_url,omitempty"`
+	Model             string `yaml:"model,omitempty"`
+	APIKeyEnv         string `yaml:"api_key_env,omitempty"`
+	ContextSize       int    `yaml:"context_size,omitempty"`
+	MaxModelBytes     int64  `yaml:"max_model_bytes,omitempty"`
+	StreamIdleTimeout string `yaml:"stream_idle_timeout,omitempty"`
 }
 
 // NormalizedProviderType returns the effective type after empty → ollama.
@@ -87,6 +93,7 @@ func NormalizedProviderType(typ string) string {
 // "Unknown provider" for something that is perfectly well known.
 var knownProviderTypes = []string{
 	ProviderTypeOllama,
+	ProviderTypeOllamaRemote,
 	ProviderTypeOpenAICompatible,
 	ProviderTypeXAI,
 }
@@ -118,10 +125,10 @@ func (c ProviderConfig) IsRemote() bool {
 	return ProviderProfile(c.asProfile()).IsRemote()
 }
 
-// IsRemote reports whether this profile uses a non-Ollama chat adapter.
+// IsRemote reports whether the profile declares inference outside local Ollama.
 func (p ProviderProfile) IsRemote() bool {
 	switch NormalizedProviderType(p.Type) {
-	case ProviderTypeOpenAICompatible, ProviderTypeXAI:
+	case ProviderTypeOpenAICompatible, ProviderTypeXAI, ProviderTypeOllamaRemote:
 		return true
 	default:
 		return false
@@ -130,11 +137,13 @@ func (p ProviderProfile) IsRemote() bool {
 
 func (c ProviderConfig) asProfile() ProviderProfile {
 	return ProviderProfile{
-		Type:        c.Type,
-		BaseURL:     c.BaseURL,
-		Model:       c.Model,
-		APIKeyEnv:   c.APIKeyEnv,
-		ContextSize: c.ContextSize,
+		Type:              c.Type,
+		BaseURL:           c.BaseURL,
+		Model:             c.Model,
+		APIKeyEnv:         c.APIKeyEnv,
+		ContextSize:       c.ContextSize,
+		MaxModelBytes:     c.MaxModelBytes,
+		StreamIdleTimeout: c.StreamIdleTimeout,
 	}
 }
 
@@ -173,11 +182,13 @@ func (p ProviderProfile) Resolve() ProviderProfile {
 
 func (p ProviderProfile) asConfig() ProviderConfig {
 	return ProviderConfig{
-		Type:        p.Type,
-		BaseURL:     p.BaseURL,
-		Model:       p.Model,
-		APIKeyEnv:   p.APIKeyEnv,
-		ContextSize: p.ContextSize,
+		Type:              p.Type,
+		BaseURL:           p.BaseURL,
+		Model:             p.Model,
+		APIKeyEnv:         p.APIKeyEnv,
+		ContextSize:       p.ContextSize,
+		MaxModelBytes:     p.MaxModelBytes,
+		StreamIdleTimeout: p.StreamIdleTimeout,
 	}
 }
 
@@ -346,6 +357,9 @@ func (p ProviderProfile) ResolveAPIKey() (string, error) {
 		return "", nil
 	}
 	envName := strings.TrimSpace(resolved.APIKeyEnv)
+	if envName == "" && resolved.Type == ProviderTypeOllamaRemote {
+		return "", nil
+	}
 	if envName == "" {
 		return "", errors.New("provider.api_key_env is empty")
 	}
@@ -430,6 +444,25 @@ func validateProviderProfile(name string, profile ProviderProfile, localOnly boo
 			strings.Join(KnownProviderTypes(), ", "),
 		)
 	}
+	if normalized == ProviderTypeOllamaRemote {
+		if !strings.Contains(profile.BaseURL, "://") {
+			return fmt.Errorf("config: ollama_remote base_url requires an explicit http or https scheme")
+		}
+		if localOnly {
+			return fmt.Errorf("config: privacy.local_only rejects ollama_remote, including SSH loopback tunnels")
+		}
+		if profile.ContextSize <= 0 || profile.MaxModelBytes <= 0 {
+			return fmt.Errorf("config: ollama_remote requires positive context_size and max_model_bytes for the destination")
+		}
+		if profile.StreamIdleTimeout != "" {
+			d, err := time.ParseDuration(profile.StreamIdleTimeout)
+			if err != nil || d <= 0 {
+				return fmt.Errorf("config: stream_idle_timeout must be a positive duration")
+			}
+		}
+	} else if profile.MaxModelBytes != 0 || profile.StreamIdleTimeout != "" {
+		return fmt.Errorf("config: max_model_bytes and stream_idle_timeout require ollama_remote")
+	}
 	if normalized == ProviderTypeOllama {
 		return nil
 	}
@@ -471,6 +504,9 @@ func validateProviderProfile(name string, profile ProviderProfile, localOnly boo
 	}
 	if strings.TrimSpace(profile.Model) == "" {
 		return fmt.Errorf("config: provider profile %q requires model for type %q", label, profile.Type)
+	}
+	if normalized == ProviderTypeOllamaRemote && profile.APIKeyEnv == "" {
+		return nil
 	}
 	if strings.TrimSpace(profile.APIKeyEnv) == "" {
 		return fmt.Errorf("config: provider profile %q requires api_key_env for type %q (env var name only; never put the secret in YAML)", label, profile.Type)

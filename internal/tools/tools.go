@@ -107,7 +107,7 @@ const (
 
 func BashToolDef() llm.ToolDef {
 	return llm.ToolDef{
-		Name: "bash",
+		Name:        "bash",
 		Description: "Execute a shell command. Commands already run in the working directory named in the system prompt, foreground and background alike, so never prefix one with a 'cd' into that directory: the extra cd can turn an auto-approved command into an approval prompt. Use this to run git, npm, go, or other command-line tools. Output is returned after completion. Set background to true for a long-running command such as a dev server, watch build, or log tail.",
 		Parameters: map[string]any{
 			"type": "object",
@@ -329,6 +329,46 @@ func MoveToolDef() llm.ToolDef {
 				},
 			},
 			"required": []string{"source", "destination"},
+		},
+	}
+}
+
+func AskUserToolDef() llm.ToolDef {
+	return llm.ToolDef{
+		Name:        "ask_user",
+		Description: "Ask the human one bounded question and wait for the answer. Use this when a preference, confirmation, or missing fact must come from the user before you continue. Do not use it to request filesystem permission — the host already prompts for those. Yes/no questions default to no. Skip (escape) means the user declined to answer.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"question": map[string]any{
+					"type":        "string",
+					"minLength":   1,
+					"maxLength":   2048,
+					"description": "The question to display.",
+				},
+				"kind": map[string]any{
+					"type":        "string",
+					"enum":        []string{"yes_no", "single", "freetext"},
+					"description": "yes_no (default when options are omitted), single (requires options), or freetext.",
+				},
+				"options": map[string]any{
+					"type":     "array",
+					"maxItems": 8,
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"id":     map[string]any{"type": "string", "minLength": 1, "maxLength": 64},
+							"label":  map[string]any{"type": "string", "minLength": 1, "maxLength": 256},
+							"detail": map[string]any{"type": "string", "maxLength": 512},
+						},
+						"required":             []string{"id", "label"},
+						"additionalProperties": false,
+					},
+					"description": "Choices for kind=single. Ignored for yes_no and freetext.",
+				},
+			},
+			"required":             []string{"question"},
+			"additionalProperties": false,
 		},
 	}
 }

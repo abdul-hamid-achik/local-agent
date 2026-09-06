@@ -113,20 +113,35 @@ func (m *Model) renderThinkingBox(content string, collapsed bool) string {
 		return b.String()
 	}
 
-	lines := strings.Split(content, "\n")
-	for _, sourceLine := range lines {
+	body := thinkingWrappedLines(content, inner)
+	if hidden := len(body) - expandedThinkingTailRows; hidden > 0 {
+		body = body[len(body)-expandedThinkingTailRows:]
+		b.WriteByte('\n')
+		b.WriteString(bar)
+		b.WriteByte(' ')
+		b.WriteString(m.styles.ThinkingContent.UnsetPaddingLeft().Render(
+			truncateDisplay(fmt.Sprintf("%d earlier lines hidden", hidden), inner),
+		))
+	}
+	for _, line := range body {
+		b.WriteByte('\n')
+		b.WriteString(bar)
+		b.WriteByte(' ')
+		b.WriteString(m.styles.ThinkingContent.UnsetPaddingLeft().Render(line))
+	}
+	return b.String()
+}
+
+func thinkingWrappedLines(content string, inner int) []string {
+	var lines []string
+	for _, sourceLine := range strings.Split(content, "\n") {
 		wrapped := wrapText(sourceLine, inner)
 		if wrapped == "" {
 			wrapped = " "
 		}
-		for _, line := range strings.Split(wrapped, "\n") {
-			b.WriteByte('\n')
-			b.WriteString(bar)
-			b.WriteByte(' ')
-			b.WriteString(m.styles.ThinkingContent.UnsetPaddingLeft().Render(line))
-		}
+		lines = append(lines, strings.Split(wrapped, "\n")...)
 	}
-	return b.String()
+	return lines
 }
 
 // Live reasoning shows a bounded tail window rather than the whole buffer.
@@ -136,6 +151,7 @@ func (m *Model) renderThinkingBox(content string, collapsed bool) string {
 const (
 	liveThinkingTailRows     = 3
 	liveThinkingTailRawLines = 6
+	expandedThinkingTailRows = 8
 )
 
 // renderLiveThinkingBox is the stable in-progress counterpart to a completed

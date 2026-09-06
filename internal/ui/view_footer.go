@@ -198,15 +198,18 @@ func (m *Model) renderStatusLine() string {
 
 	separator := m.styles.StatusText.Render(glyphSeparator(m.glyphProfile))
 	// Match transcript content-grid OriginX so status text starts at column 3.
-	lead := m.contentGrid().Prefix(" ")
+	// Cap to LineWidth so this row cannot poke past the composer box.
+	grid := m.contentGrid()
+	lead := grid.Prefix(" ")
+	outer := min(grid.LineWidth(), paneW)
 	line := lead + strings.Join(parts, separator)
 	// Drop optional metadata from the right. Mode and operational failure are
 	// first, so they survive every supported width tier.
-	for lipgloss.Width(line) > paneW && len(parts) > 2 {
+	for lipgloss.Width(line) > outer && len(parts) > 2 {
 		parts = parts[:len(parts)-1]
 		line = lead + strings.Join(parts, separator)
 	}
-	if lipgloss.Width(line) > paneW {
+	if lipgloss.Width(line) > outer {
 		// Preserve every compact safety boundary instead of truncating a single
 		// concatenated string from the right. Combined Cloud, MCP, and approval
 		// posture can legitimately need a second row at the minimum width.

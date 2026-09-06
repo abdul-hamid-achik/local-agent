@@ -219,6 +219,9 @@ func (m *Model) sendToAgentTurnPresentedWithAttachments(
 			Response:        req.Response,
 		})
 	})
+	m.agent.SetQuestionCallback(func(req agent.UserQuestionRequest) {
+		p.Send(mapUserQuestion(req))
+	})
 
 	runAgent := newAgentSegmentCmd(
 		m.agent, p, m.outputDetails, ctx, turnID, turnID, options,

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -173,6 +174,28 @@ func TestRenderThinkingBoxUsesCompactRail(t *testing.T) {
 	}
 	if strings.Contains(expanded, "ctrl+t") {
 		t.Fatalf("expanded reasoning repeated global controls:\n%s", expanded)
+	}
+}
+
+func TestExpandedReasoningUsesATailWindow(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 80
+	var body strings.Builder
+	for i := 1; i <= expandedThinkingTailRows+6; i++ {
+		fmt.Fprintf(&body, "reason line %02d\n", i)
+	}
+	rendered := ansi.Strip(m.renderThinkingBox(body.String(), false))
+	if !strings.Contains(rendered, "6 earlier lines hidden") {
+		t.Fatalf("expanded long reasoning missing tail cue:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "reason line 01") {
+		t.Fatalf("expanded long reasoning dumped the head:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "reason line 14") {
+		t.Fatalf("expanded long reasoning dropped the tail:\n%s", rendered)
+	}
+	if strings.Count(rendered, "\n") > expandedThinkingTailRows+2 {
+		t.Fatalf("expanded long reasoning taller than tail window:\n%s", rendered)
 	}
 }
 
@@ -376,7 +399,7 @@ func TestReasoningSegmentsOfOneTurnStayTogether(t *testing.T) {
 		{Kind: "assistant", Content: "Here is the result."},
 	}
 
-	// Sticky owns the latest user prompt; body must still show the assistant turn.
+	// The transcript owns both the prompt and its assistant turn.
 	m.settleChromeSpringForTest()
 	plain := ansi.Strip(m.renderEntries())
 	if strings.Contains(plain, "assistant") {
@@ -385,11 +408,8 @@ func TestReasoningSegmentsOfOneTurnStayTogether(t *testing.T) {
 	if answerAt, reasoningAt := strings.Index(plain, "Here is the result."), strings.Index(plain, "▸ Thought"); answerAt < reasoningAt {
 		t.Fatalf("answer preceded the reasoning that produced it:\n%s", plain)
 	}
-	if sticky := ansi.Strip(m.projectFrame().Header.Content); !strings.Contains(sticky, "inspect and explain") {
-		t.Fatalf("sticky user omitted prompt:\n%s", sticky)
-	}
-	if strings.Contains(plain, "inspect and explain") {
-		t.Fatalf("body re-printed sticky-owned user prompt:\n%s", plain)
+	if promptAt := strings.Index(plain, "inspect and explain"); promptAt < 0 || promptAt > strings.Index(plain, "▸ Thought") {
+		t.Fatalf("prompt must precede its reasoning and answer:\n%s", plain)
 	}
 	for _, want := range []string{"▸ Thought", "Here is the result."} {
 		if !strings.Contains(plain, want) {

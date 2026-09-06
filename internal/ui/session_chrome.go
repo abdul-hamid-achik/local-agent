@@ -11,9 +11,8 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// sessionHeaderProjection is the Grok-style top chrome: identity bar and an
-// optional sticky last-user strip. projectFrame TakeTops this from SafeScreen
-// so the transcript viewport shrinks automatically.
+// sessionHeaderProjection reserves workspace and model identity above the
+// chronological transcript.
 type sessionHeaderProjection struct {
 	content        string
 	reservedHeight int
@@ -38,41 +37,14 @@ func (m *Model) projectSessionHeader() sessionHeaderProjection {
 
 	var lines []string
 	if bar := m.renderSessionTopBar(paneW); bar != "" {
-		// Tall frames: one blank above the identity row so it is not flush
-		// against the terminal chrome. Glyphrun contracts top out at 40 rows,
-		// so this stays off every committed spec and on a maximized window.
-		if m.height >= 42 {
-			lines = append(lines, "")
-		}
 		lines = append(lines, bar)
-	}
-	// Sticky user: real conversation + room for vertical padding (Grok band).
-	if m.stickyUserActive() {
-		if sticky := m.renderStickyUserStrip(paneW); sticky != "" {
-			// Outer blanks breathe around a single-row sticky. On tall frames
-			// the elevated 3-row band already pads itself — stacking outer
-			// blanks produced blank-on-blank voids (measured: 4 empty of 6).
-			// Keep the outer blanks through ordinary heights (incl. Glyphrun
-			// 22-row readers) so one PgUp still leaves latest-follow; only
-			// reclaim them once the frame is clearly roomy.
-			elevated := stickyUsesElevatedBand(m.height, paneW)
-			omitOuter := elevated && m.height >= 28
-			if !omitOuter && m.height >= 18 && len(lines) > 0 {
-				lines = append(lines, "")
-			}
-			lines = append(lines, sticky)
-			if !omitOuter && m.height >= 18 {
-				lines = append(lines, "")
-			}
-		}
 	}
 	if len(lines) == 0 {
 		return sessionHeaderProjection{}
 	}
 	content := strings.Join(lines, "\n")
 	return sessionHeaderProjection{
-		content: content,
-		// Sticky may be multi-line (padded band); measure real paint height.
+		content:        content,
 		reservedHeight: lipgloss.Height(content),
 	}
 }
@@ -81,8 +53,11 @@ func (m *Model) projectSessionHeader() sessionHeaderProjection {
 // Mode and model live on the bottom shortcuts row — not here.
 // Content starts at OriginX so it lines up with welcome, transcript, and status.
 func (m *Model) renderSessionTopBar(paneW int) string {
-	lead := m.contentGrid().Prefix(" ")
-	innerW := max(1, paneW-lipgloss.Width(lead))
+	grid := m.contentGrid()
+	lead := grid.Prefix(" ")
+	// Pack into LineWidth, not the pane: the meter must share the composer
+	// box's right edge instead of sitting in the unused right chrome.
+	innerW := min(grid.ContentWidth(), max(1, paneW-lipgloss.Width(lead)))
 	left := m.sessionIdentityLeft(innerW)
 	right := m.sessionIdentityRight(innerW)
 	// Pack left and right with flexible spaces between.
@@ -184,130 +159,6 @@ func (m *Model) sessionWorkspaceLabel(paneW int) string {
 	return truncateDisplayWithGlyphProfile(display, limit, m.glyphProfile)
 }
 
-// stickyUserActive reports when the sticky last-user strip is painted. The
-// transcript omits that same user entry so the prompt is not printed twice.
-func (m *Model) stickyUserActive() bool {
-	if !m.sessionHeaderActive() || m.height < 16 {
-		return false
-	}
-	return m.latestUserPromptText() != ""
-}
-
-// renderStickyUserStrip keeps the latest user prompt visible while the body
-// scrolls — Grok Build's "last message stays" band with vertical padding.
-//
-// Paint as ONE full-width style. Pre-coloring the rail/body and then applying
-// Background only to the composite produces a partial "chip" highlight that
-// looks broken against the terminal surface.
-func (m *Model) renderStickyUserStrip(paneW int) string {
-	text := m.latestUserPromptText()
-	if text == "" || paneW < 8 {
-		return ""
-	}
-	text = sanitizeTerminalSingleLine(text)
-	// Soft single-line summary; multi-line drafts collapse to one sticky row.
-	if i := strings.IndexByte(text, '\n'); i >= 0 {
-		text = strings.TrimSpace(text[:i]) + "…"
-	}
-
-	// Plain cells only — styling is applied once to the whole bar.
-	rail := glyphSet(m.glyphProfile).UserRail
-	if rail == "" {
-		rail = "│"
-	}
-	// Share the content grid's prefix so the rail sits in the same accent
-	// column as tool receipts and the transcript's own user gutter. This row
-	// previously inset the rail by one, which read as a wobble against the
-	// identity bar directly above it.
-	// Always paint the full prompt: the transcript omits this entry whenever
-	// sticky is active, so progressive reveal would hide the only copy.
-	prefix := m.contentGrid().Prefix(rail)
-	budget := max(4, paneW-lipgloss.Width(prefix))
-	body := truncateDisplayWithGlyphProfile(text, budget, m.glyphProfile)
-	plain := prefix + body
-	// Pad with spaces so the elevated surface truly spans the pane.
-	if gap := paneW - lipgloss.Width(plain); gap > 0 {
-		plain += strings.Repeat(" ", gap)
-	}
-
-	palette := newSemanticPalette(m.isDark, m.themeID)
-	// Subtle elevated band — a surface lifted off the page without a harsh
-	// chip. Border is the scheme's own value for exactly that, and it is what
-	// inline code uses for the same reason.
-	//
-	// These were two literal hexes whose own comments named them: "nord snow
-	// storm 2" and "nord polar night 1". The palette was already computed on
-	// the line above and used for the foreground, so the band painted Nord on
-	// nine schemes while the text over it followed the theme correctly.
-	elevated := palette.Border
-	barStyle := lipgloss.NewStyle().
-		Width(paneW).
-		MaxWidth(paneW).
-		Background(elevated).
-		Foreground(palette.Text)
-
-	// Vertical padding: on roomy frames paint a 3-row elevated band
-	// (empty / prompt / empty) so the sticky isn't crushed against the
-	// identity bar above or the transcript below. Horizontal layout was fine.
-	content := barStyle.Render(plain)
-	if stickyUsesElevatedBand(m.height, paneW) {
-		blank := barStyle.Render(strings.Repeat(" ", paneW))
-		content = blank + "\n" + content + "\n" + blank
-	}
-	return content
-}
-
-// stickyUsesElevatedBand is the single gate for the 3-row sticky surface.
-// projectSessionHeader consults it so outer blank rows never stack on the
-// band's own pad rows.
-func stickyUsesElevatedBand(height, paneW int) bool {
-	return height >= 20 && paneW >= 40
-}
-
-func (m *Model) latestUserPromptText() string {
-	if m == nil {
-		return ""
-	}
-	if i := m.latestUserEntryIndex(); i >= 0 {
-		return strings.TrimSpace(m.entries[i].Content)
-	}
-	return ""
-}
-
-func (m *Model) latestUserEntryIndex() int {
-	if m == nil {
-		return -1
-	}
-	for i := len(m.entries) - 1; i >= 0; i-- {
-		if m.entries[i].Kind == "user" {
-			return i
-		}
-	}
-	return -1
-}
-
-// omitUserEntryFromTranscript skips the latest user block when the sticky
-// strip already owns that prompt — one surface, one truth. Multi-line bodies
-// and image attachments stay in the transcript because the sticky strip is a
-// single-line summary only. Omit as soon as sticky is active: the strip always
-// paints the full single-line prompt (no reveal gate that dual-prints).
-func (m *Model) omitUserEntryFromTranscript(entryIndex int) bool {
-	if !m.stickyUserActive() || entryIndex < 0 || entryIndex >= len(m.entries) {
-		return false
-	}
-	if entryIndex != m.latestUserEntryIndex() {
-		return false
-	}
-	entry := m.entries[entryIndex]
-	if len(entry.Attachments) > 0 {
-		return false
-	}
-	if strings.Contains(entry.Content, "\n") {
-		return false
-	}
-	return true
-}
-
 // renderShortcutsBar is the fixed bottom product chrome (Grok-style):
 //
 //	enter send · shift+tab mode · …          ornith:latest · PLAN
@@ -359,8 +210,9 @@ func (m *Model) renderShortcutsBar(paneW int) string {
 		return ""
 	}
 
-	lead := m.contentGrid().Prefix(" ")
-	inner := max(1, paneW-lipgloss.Width(lead))
+	grid := m.contentGrid()
+	lead := grid.Prefix(" ")
+	inner := min(grid.ContentWidth(), max(1, paneW-lipgloss.Width(lead)))
 
 	// Reserve room for right identity; pack hints into the remainder.
 	rightBudget := m.shortcutsIdentityRightBudget()

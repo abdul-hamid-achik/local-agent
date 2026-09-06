@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/abdul-hamid-achik/local-agent/internal/llm"
@@ -78,5 +79,29 @@ func TestStaleContextResultIsDropped(t *testing.T) {
 	m.handleNumCtxApplied(stale)
 	if len(m.entries) != before {
 		t.Fatalf("a superseded result was recorded: %+v", m.entries[before:])
+	}
+}
+
+func TestContextAppliedReceiptUsesNewEffectiveWindow(t *testing.T) {
+	m := newTestModel(t)
+	m.modelManager = llm.NewModelManager("http://127.0.0.1:1", 8192)
+	m.numCtx = 8192
+	_, cmd, err := m.handleContextWindowCommand("set:16384")
+	if err != nil || cmd == nil {
+		t.Fatalf("set: %v", err)
+	}
+	m.handleNumCtxApplied(cmd().(numCtxAppliedMsg))
+	receipt := m.entries[len(m.entries)-1].Content
+	if strings.Contains(receipt, "Effective now: 8192") || !strings.Contains(receipt, "Effective context: 16384") {
+		t.Fatalf("stale effective window in receipt: %s", receipt)
+	}
+}
+
+func TestContextReportLabelsStaticEstimate(t *testing.T) {
+	m := newTestModel(t)
+	m.modelManager = llm.NewModelManager("http://127.0.0.1:1", 8192)
+	report := m.contextWindowStatusReport()
+	if strings.Contains(report, "Max safe") || !strings.Contains(report, "current memory pressure is not measured") {
+		t.Fatalf("report overstates a total-RAM estimate: %s", report)
 	}
 }

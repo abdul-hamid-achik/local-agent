@@ -63,6 +63,7 @@ func (t *turnRuntime) providerStage(ctx context.Context, i int) (string, []llm.T
 	t.lastEvalTokens = 0
 	doneSeen := false
 	callbackSeen := false
+	outputStarted := false
 	reportedEvalTokens := int64(0)
 	requestHostTokens := 0
 	requestMessageTokens := 0
@@ -101,6 +102,9 @@ func (t *turnRuntime) providerStage(ctx context.Context, i int) (string, []llm.T
 			if doneSeen {
 				return fmt.Errorf("provider streamed data after its terminal usage receipt")
 			}
+			// Published output cannot be retracted by Output implementations.
+			// Retrying it would concatenate separate attempts in the transcript.
+			outputStarted = outputStarted || chunk.Text != "" || chunk.Reasoning != "" || chunk.Done
 
 			if chunk.Text != "" {
 				textBuf.WriteString(chunk.Text)
@@ -155,7 +159,7 @@ func (t *turnRuntime) providerStage(ctx context.Context, i int) (string, []llm.T
 				// way; count it against this turn before deciding whether the
 				// remaining budget can absorb a retry of the same request.
 				t.totalEvalTokens += reservedEvalTokens
-				if ctx.Err() == nil && !repairRequest && t.retryCount < maxRetries &&
+				if ctx.Err() == nil && !outputStarted && !repairRequest && t.retryCount < maxRetries &&
 					isRetryableError(err) && t.totalEvalTokens < t.limits.MaxEvalTokens {
 					t.retryCount++
 					if t.lg != nil {
@@ -177,7 +181,7 @@ func (t *turnRuntime) providerStage(ctx context.Context, i int) (string, []llm.T
 				return "", nil, stageProceed, errors.Join(reservationErr, fmt.Errorf("LLM response: %w", boundaryErr))
 			}
 			// Retry on transient provider errors from small models.
-			if !repairRequest && t.limits.MaxEvalTokens == 0 && t.retryCount < maxRetries && isRetryableError(err) {
+			if !outputStarted && !repairRequest && t.limits.MaxEvalTokens == 0 && t.retryCount < maxRetries && isRetryableError(err) {
 				t.retryCount++
 				if t.lg != nil {
 					t.lg.Warn("llm retry", "iter", i, "attempt", t.retryCount, "err", boundaryErr)

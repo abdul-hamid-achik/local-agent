@@ -42,26 +42,19 @@ func (m *Model) View() tea.View {
 		m.viewport.SetWidth(w)
 	}
 	var content strings.Builder
-	if frame.Header.Visible && frame.Header.Content != "" {
-		content.WriteString(frame.Header.Content)
-		content.WriteString("\n")
-	}
-	content.WriteString(m.viewport.View())
-	content.WriteString("\n")
-	paintedFooterY := strings.Count(content.String(), "\n")
-	content.WriteString(frame.Footer.Content)
+	content.WriteString(m.paintBaseFrame(frame))
 	viewCursor := frame.Cursor
-	if viewCursor != nil && paintedFooterY != frame.Footer.Rect.MinY {
-		// Tests and a few setup paths can replace an owner immediately before a
-		// viewport reflow. Keep the single projected local cursor, but translate
-		// it to the footer's actually painted origin for that transitional frame.
-		viewCursor = offsetCursor(viewCursor, 0, paintedFooterY-frame.Footer.Rect.MinY)
-	}
 
 	// Infrequent controls remain centered overlays. Composer-owned completion,
 	// transcript search, Plan, and Goal surfaces were already rendered in the
-	// normal footer flow.
-	if m.overlay != OverlayNone && m.overlay != OverlayCompletion &&
+	// normal footer flow. Agent questions and permission requests overlay the
+	// chat so the conversation stays visible around the decision.
+	if overlay, localCursor, ok := m.decisionOverlay(); ok {
+		base := content.String()
+		content.Reset()
+		content.WriteString(m.overlayOnContent(base, overlay))
+		viewCursor = overlayCursor(base, overlay, m.width, localCursor)
+	} else if m.overlay != OverlayNone && m.overlay != OverlayCompletion &&
 		m.overlay != OverlayTranscriptSearch &&
 		m.overlay != OverlayCortexDecision &&
 		m.overlay != OverlayPlanForm && m.overlay != OverlayGoalForm {
@@ -130,7 +123,7 @@ func (m *Model) View() tea.View {
 		}
 	}
 
-	v := tea.NewView(content.String() + "\n")
+	v := tea.NewView(content.String())
 	v.AltScreen = true
 	// Cell-motion (DEC 1002) reports wheel and clicks. It also consumes press
 	// and release, which is what stops the terminal doing native drag-select.
@@ -165,6 +158,45 @@ func (m *Model) View() tea.View {
 	}
 
 	return v
+}
+
+// paintBaseFrame places header, transcript, and footer into their projected
+// rectangles. Each surface is padded or clipped to its reserved rows so the
+// composer cannot inherit a blank separator invented at paint time.
+func (m *Model) paintBaseFrame(frame FrameProjection) string {
+	parts := make([]string, 0, 3)
+	if frame.Header.Visible && frame.Header.Rect.Height() > 0 {
+		parts = append(parts, fitDisplayRows(frame.Header.Content, frame.Header.Rect.Height()))
+	}
+	if frame.Transcript.Visible && frame.Transcript.Rect.Height() > 0 {
+		parts = append(parts, fitDisplayRows(m.viewport.View(), frame.Transcript.Rect.Height()))
+	}
+	if frame.Footer.Visible && frame.Footer.Rect.Height() > 0 {
+		parts = append(parts, fitDisplayRows(frame.Footer.Content, frame.Footer.Rect.Height()))
+	}
+	return strings.Join(parts, "\n")
+}
+
+func (m *Model) decisionOverlay() (string, *tea.Cursor, bool) {
+	if m == nil {
+		return "", nil, false
+	}
+	if m.pendingApproval != nil {
+		if overlay := m.renderApproval(); overlay != "" {
+			return overlay, nil, true
+		}
+	}
+	if m.pendingQuestion != nil {
+		if overlay := m.renderAgentQuestion(); overlay != "" {
+			return overlay, nil, true
+		}
+	}
+	if m.overlay == OverlayCortexDecision && m.cortexDecision != nil {
+		if overlay := m.cortexDecision.View(m.cortexDecisionBusyMarker()); overlay != "" {
+			return overlay, nil, true
+		}
+	}
+	return "", nil, false
 }
 
 // applyViewTheme sets Bubble Tea's terminal-level surface color. This paints

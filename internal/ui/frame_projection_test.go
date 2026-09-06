@@ -12,6 +12,36 @@ import (
 	"github.com/abdul-hamid-achik/local-agent/internal/permission"
 )
 
+func TestViewPaintsAtMostTerminalHeight(t *testing.T) {
+	sizes := []struct{ width, height int }{
+		{30, 12}, {80, 18}, {80, 24}, {100, 30}, {160, 48},
+	}
+	for _, size := range sizes {
+		t.Run(fmt.Sprintf("%dx%d", size.width, size.height), func(t *testing.T) {
+			m := newTestModel(t)
+			updated, _ := m.Update(tea.WindowSizeMsg{Width: size.width, Height: size.height})
+			m = updated.(*Model)
+			m.entries = []ChatEntry{{Kind: "user", Content: "keep the last prompt in the header"}}
+			m.settleChromeSpringForTest()
+			m.recalcViewportHeight()
+			view := m.View()
+			if got := lipgloss.Height(view.Content); got > size.height {
+				t.Fatalf("view height = %d, terminal = %d\n%s", got, size.height, ansi.Strip(view.Content))
+			}
+			frame := m.projectFrame()
+			want := frame.Transcript.Rect.Height() + frame.Footer.Rect.Height()
+			if frame.Header.Visible {
+				want += frame.Header.Rect.Height()
+			}
+			if got := lipgloss.Height(view.Content); got != want {
+				t.Fatalf("view height = %d, partitioned surfaces = %d (header=%d transcript=%d footer=%d)\n%s",
+					got, want, frame.Header.Rect.Height(), frame.Transcript.Rect.Height(), frame.Footer.Rect.Height(),
+					ansi.Strip(view.Content))
+			}
+		})
+	}
+}
+
 func TestFrameProjectionPartitionsSafeScreen(t *testing.T) {
 	sizes := []struct {
 		width  int
@@ -168,7 +198,7 @@ func TestFrameProjectionFooterOwnersPreserveFloorOrDeclareCriticalPriority(t *te
 			},
 			wantFit:  FrameVerticalComfortable,
 			checkFit: true,
-			markers:  []string{"queued", "check foc"},
+			markers:  []string{"queued", "check fo"},
 		},
 		{
 			name: "completion compact variant",

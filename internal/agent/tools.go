@@ -22,7 +22,7 @@ const (
 
 func (a *Agent) toolsBuiltinToolDefs() []llm.ToolDef {
 	defs := tools.AllToolDefs()
-	if a.hasSkillLoader() && a.hasExpertConsultant() {
+	if a.hasSkillLoader() && a.hasExpertConsultant() && a.questionCallbackOrNil() != nil {
 		return defs
 	}
 	filtered := make([]llm.ToolDef, 0, len(defs))
@@ -31,6 +31,9 @@ func (a *Agent) toolsBuiltinToolDefs() []llm.ToolDef {
 			continue
 		}
 		if def.Name == "consult_experts" && !a.hasExpertConsultant() {
+			continue
+		}
+		if def.Name == "ask_user" && a.questionCallbackOrNil() == nil {
 			continue
 		}
 		filtered = append(filtered, def)
@@ -78,6 +81,8 @@ func (a *Agent) handleToolsTool(ctx context.Context, tc llm.ToolCall) (string, b
 		return a.handleLoadSkill(tc.Arguments)
 	case "consult_experts":
 		return a.handleConsultExperts(ctx, tc.Arguments)
+	case "ask_user":
+		return a.handleAskUser(ctx, tc)
 	default:
 		return fmt.Sprintf("unknown tool: %s", tc.Name), true
 	}

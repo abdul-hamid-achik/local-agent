@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"fmt"
 	"strings"
 
 	"charm.land/bubbles/v2/viewport"
@@ -38,6 +37,7 @@ type cortexDecisionPresentation struct {
 	styles        Styles
 	warningStyle  lipgloss.Style
 	detail        viewport.Model
+	prompt        QuestionPrompt
 	cache         string
 	cacheValid    bool
 }
@@ -68,6 +68,7 @@ func newCortexDecisionPresentation(
 		glyphProfile: resolveGlyphProfile(profiles...),
 	}
 	presentation.SetTheme(isDark, themeID)
+	presentation.syncQuestionPrompt()
 	presentation.resizeDetail(false)
 	return presentation, nil
 }
@@ -82,6 +83,7 @@ func (p *cortexDecisionPresentation) SetTheme(isDark bool, themeID string) {
 		Foreground(outputSemanticPalette(isDark, p.themeID).Warning).
 		Bold(true)
 	p.cacheValid = false
+	p.syncQuestionPrompt()
 }
 
 func (p *cortexDecisionPresentation) SetSize(width, height int) {
@@ -102,7 +104,26 @@ func (p *cortexDecisionPresentation) contentWidth() int {
 	if p == nil {
 		return 1
 	}
-	return inlineFormContentWidth(p.width)
+	return pickerListWidth(p.width)
+}
+
+func (p *cortexDecisionPresentation) syncQuestionPrompt() {
+	if p == nil {
+		return
+	}
+	choices := make([]QuestionChoice, len(p.Decision.Options))
+	for index, option := range p.Decision.Options {
+		choices[index] = QuestionChoice{ID: option.ID, Label: option.Label, Detail: option.Consequence}
+	}
+	title := "Cortex decision"
+	question := p.Decision.Question
+	if question != "" {
+		question = "Q" + p.separator() + question
+	}
+	p.prompt = newQuestionPrompt(QuestionKindSingle, title, question, choices, p.styles, p.glyphProfile)
+	p.prompt.sep = p.separator()
+	p.prompt.SetWidth(p.width)
+	p.prompt.Selected = p.Selected
 }
 
 func (p *cortexDecisionPresentation) detailHeight() int {
@@ -155,6 +176,7 @@ func (p *cortexDecisionPresentation) move(delta int) bool {
 		p.Selected = (p.Selected + delta + len(p.Decision.Options)) % len(p.Decision.Options)
 	}
 	p.Notice = ""
+	p.prompt.Selected = p.Selected
 	p.resizeDetail(false)
 	p.cacheValid = false
 	return true
@@ -246,7 +268,7 @@ func (p *cortexDecisionPresentation) View(busyMarker string) string {
 		return p.cache
 	}
 	content := p.renderContent(busyMarker)
-	view := renderInlineFormFrame(p.styles, content, p.renderFooter(), p.width, p.glyphProfile)
+	view := dialogFrame(p.styles, content, p.renderFooter(), p.width, p.glyphProfile)
 	if !animated {
 		p.cache = view
 		p.cacheValid = true
@@ -255,34 +277,12 @@ func (p *cortexDecisionPresentation) View(busyMarker string) string {
 }
 
 func (p *cortexDecisionPresentation) renderContent(busyMarker string) string {
-	width := p.contentWidth()
-	var body strings.Builder
-	title := "Cortex decision"
-	if p.Decision.Sensitive {
-		title += p.separator() + p.warningStyle.Render("sensitive")
+	p.prompt.Selected = p.Selected
+	p.prompt.SetWidth(p.width)
+	body := p.prompt.Render()
+	if p.Decision.Sensitive && !strings.Contains(body, "sensitive") {
+		body += "\n" + p.warningStyle.Render("sensitive")
 	}
-	body.WriteString(p.styles.OverlayTitle.Render(title))
-	body.WriteString("\n")
-	question := "Q" + p.separator() + p.Decision.Question
-	if p.compact() {
-		body.WriteString(p.styles.StatusText.Render(p.truncate(question, width)))
-	} else {
-		body.WriteString(p.styles.StatusText.Render(limitWrappedRows(question, width, 2, p.glyphProfile)))
-	}
-	body.WriteString("\n")
-
-	if p.compact() {
-		body.WriteString(p.renderCurrentOption(width))
-		body.WriteString("\n")
-		body.WriteString(p.detail.View())
-	} else {
-		body.WriteString(p.renderOptionWindow(width))
-		body.WriteString("\n")
-		body.WriteString(p.styles.OverlayAccent.Render("Consequence"))
-		body.WriteString("\n")
-		body.WriteString(p.detail.View())
-	}
-
 	status := ""
 	switch {
 	case p.Answering:
@@ -294,53 +294,17 @@ func (p *cortexDecisionPresentation) renderContent(busyMarker string) string {
 	case p.Notice != "":
 		status = p.Notice
 	}
-	if status != "" {
-		if busyMarker != "" && (p.Answering || p.Refreshing) && !p.reducedMotion {
-			status = busyMarker + " " + status
-		}
-		body.WriteString("\n")
-		style := p.styles.OverlayDim
-		if p.OutcomeUnknown && !p.Refreshing {
-			style = p.styles.ErrorText
-		}
-		body.WriteString(style.Render(p.truncate(status, width)))
+	if status == "" {
+		return body
 	}
-	return body.String()
-}
-
-func (p *cortexDecisionPresentation) renderCurrentOption(width int) string {
-	option, ok := p.selectedOption()
-	glyphs := glyphSet(p.glyphProfile)
-	if !ok {
-		return p.styles.OverlayDim.Render(p.truncate(glyphs.Unselected+" No option selected", width))
+	if busyMarker != "" && (p.Answering || p.Refreshing) && !p.reducedMotion {
+		status = busyMarker + " " + status
 	}
-	text := fmt.Sprintf("%s %s%s%s", glyphs.Selected, option.ID, p.separator(), option.Label)
-	return p.styles.FocusIndicator.Render(p.truncate(text, width))
-}
-
-func (p *cortexDecisionPresentation) renderOptionWindow(width int) string {
-	options := p.Decision.Options
-	if len(options) == 0 {
-		return p.styles.OverlayDim.Render("No valid options")
+	style := p.styles.OverlayDim
+	if p.OutcomeUnknown && !p.Refreshing {
+		style = p.styles.ErrorText
 	}
-	start := 0
-	if p.Selected >= cortexDecisionOptionWindow {
-		start = p.Selected - cortexDecisionOptionWindow + 1
-	}
-	end := min(len(options), start+cortexDecisionOptionWindow)
-	rows := make([]string, 0, end-start)
-	glyphs := glyphSet(p.glyphProfile)
-	for index := start; index < end; index++ {
-		marker := glyphs.Unselected
-		style := p.styles.StatusText
-		if index == p.Selected {
-			marker = glyphs.Selected
-			style = p.styles.FocusIndicator
-		}
-		row := fmt.Sprintf("%s %s%s%s", marker, options[index].ID, p.separator(), options[index].Label)
-		rows = append(rows, style.Render(p.truncate(row, width)))
-	}
-	return strings.Join(rows, "\n")
+	return body + "\n" + style.Render(p.truncate(status, p.contentWidth()))
 }
 
 func (p *cortexDecisionPresentation) renderFooter() string {

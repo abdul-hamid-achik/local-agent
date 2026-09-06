@@ -3,9 +3,12 @@
 # or the fallback $HOME/.config/local-agent/config.yaml (in precedence order).
 
 ollama:
-  # Everyday agent model. qwen3.5:2b (~2.7GB) is the smallest that does usable
-  # tool calling and is the safe default for 16GB. You CAN switch to qwen3.5:4b
-  # (~3.4GB) for more reliable multi-step tool chains — still safe on 16GB.
+  # Opt in for lightweight models that loop in thinking mode (e.g. Qwen 0.8B).
+  # Only use with models whose Ollama template supports think=false.
+  # disable_reasoning: true
+  # Everyday candidate: qwen3.5:2b. Smaller models can handle guided tasks,
+  # but tool reliability needs verification. Model weights alone do not prove
+  # a profile fits: context, other applications, and swap also consume memory.
   #
   # On 16GB, qwen3.5:9b, ornith:latest, and gemma4:e2b are manual EXCLUSIVE
   # profiles: the runtime unloads the prior chat model before switching and the
@@ -38,6 +41,14 @@ ollama:
 #   profiles:
 #     ollama:
 #       type: ollama
+#     gpu:
+#       type: ollama_remote
+#       base_url: http://127.0.0.1:11435 # SSH forward to the remote daemon
+#       model: ornith:35b
+#       context_size: 65536 # request allocation; choose for destination capacity
+#       max_model_bytes: 34359738368 # 32 GiB weights ceiling, not total VRAM
+#       stream_idle_timeout: 10m # optional; default 5m, cancellation stays immediate
+#       # api_key_env is optional for an SSH-protected daemon
 #     xai:
 #       type: xai
 #       model: grok-4.5
@@ -112,6 +123,10 @@ sandbox:
 # Provider-loop budgets are independent so interactive turns stay concise while
 # AUTO has room to inspect, implement, and verify without a premature stop.
 tools:
+  # Optional small native tool kit for lightweight local models. Omit for all
+  # tools allowed by the mode; [] disables native tools. MCP is separate.
+  # Mode permissions and approval prompts still apply.
+  # builtin_tools: [read, grep, write, edit, bash, bash_output]
   # Default bash timeout when the model omits the argument. An explicit timeout
   # argument is still honored up to 120s (see the bash tool schema); this value
   # is not a silent ceiling for requested timeouts.

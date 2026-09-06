@@ -1,4 +1,9 @@
-   main · local-agent                                                               qwen3.5:2b · offline · 0/16.4k · 0%
+   main · local-agent                                                            qwen3.5:2b · offline · 0/16.4k · 0%
+   LOCAL AGENT
+   Ask a question or describe a change.
+   Local-first · Ollama · approval prompts enabled
+
+   @ add files · /help commands
 
    notice · ollama: no model selected
    try: ollama serve · ollama pull qwen3.5:2b
@@ -24,12 +29,7 @@
 
 
 
-
-
-
-
-
-
-───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-▏❯ Ask
+   ╭───────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+   │ ❯ Ask or describe a task                                                                                      │
+   ╰───────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
    enter send · shift+tab mode · f1 help

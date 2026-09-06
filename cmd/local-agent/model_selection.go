@@ -16,9 +16,9 @@ func shouldRestoreManualModelPreference(modelOverride string, profileModelPinned
 }
 
 // restoreManualModelPreference accepts a saved selection only when the current
-// Ollama inventory proves it is local and manually selectable. In particular,
-// a remembered Ollama Cloud name never carries its prior session consent into
-// a new process.
+// Ollama inventory proves it is local and manually selectable, including
+// catalog-exclusive local profiles. A remembered Ollama Cloud name never
+// carries its prior session consent into a new process.
 func restoreManualModelPreference(
 	preferred string,
 	manuallySelectable []string,
@@ -42,13 +42,7 @@ func restoreManualModelPreference(
 }
 
 func matchingModel(models []string, wanted string) (string, bool) {
-	wanted = config.CanonicalModelName(wanted)
-	for _, model := range models {
-		if config.CanonicalModelName(model) == wanted {
-			return model, true
-		}
-	}
-	return "", false
+	return config.MatchInstalledModel(wanted, models)
 }
 
 // resolveStartupModel keeps the manual selection inventory separate from the
@@ -57,19 +51,25 @@ func matchingModel(models []string, wanted string) (string, bool) {
 // offline Ollama diagnostic. The name-based local memory guard remains active
 // in that fallback because no verified byte size is available yet; it
 // deliberately does not infer execution location.
+//
+// A pinned or configured name that is missing from inventory first tries a
+// renamed sibling (ornith:latest → ornith-1.5:9b). If that also misses, it
+// starts on an installed local chat model and returns a warning instead of
+// refusing to launch. Cloud names are never chosen as that fallback.
 func resolveStartupModel(
 	modelName string,
 	modelPinned bool,
 	localOnly bool,
 	modelConfig *config.ModelConfig,
 	manuallySelectable []string,
+	localSelectable []string,
 	autoRoutable []string,
 	inventoryKnown bool,
 	router availabilityAwareRouter,
-) (string, []string, error) {
+) (string, []string, string, error) {
 	if !inventoryKnown {
 		if err := config.CheckLocalModelNameMemorySafe(modelName); err != nil {
-			return "", nil, err
+			return "", nil, "", err
 		}
 	}
 	if localOnly {
@@ -78,19 +78,29 @@ func resolveStartupModel(
 			check = config.CheckModelMemorySafe
 		}
 		if err := check(modelName); err != nil {
-			return "", nil, err
+			return "", nil, "", err
 		}
 	}
 
 	var modelList []string
 	if !inventoryKnown {
 		router.SetAvailableModels([]string{})
-		return modelName, modelList, nil
+		return modelName, modelList, "", nil
 	}
 
 	modelList = uniqueModelNames(manuallySelectable)
+	localModels := uniqueModelNames(localSelectable)
 	autoModels := uniqueModelNames(autoRoutable)
 	router.SetAvailableModels(autoModels)
+
+	requested := modelName
+	warning := ""
+	if resolved, ok := matchingModel(manuallySelectable, modelName); ok {
+		modelName = preferRequestedModelSpelling(requested, resolved)
+	} else if resolved, ok := matchingModel(localModels, modelName); ok {
+		modelName = preferRequestedModelSpelling(requested, resolved)
+	}
+
 	if !modelPinned {
 		modelName = router.ResolveAvailableModel(modelName)
 		if !containsModel(autoModels, modelName) {
@@ -99,18 +109,73 @@ func resolveStartupModel(
 		if modelName == "" && len(autoModels) > 0 {
 			modelName = autoModels[0]
 		}
+	} else if !modelAdmitted(modelName, manuallySelectable, localModels, localOnly) {
+		if localOnly {
+			if err := config.CheckModelMemorySafe(requested); err != nil {
+				return "", modelList, "", err
+			}
+		}
+		if fallback := firstLocalChatModel(autoModels, localModels); fallback != "" {
+			warning = fmt.Sprintf("configured model %q is not installed; using %q", requested, fallback)
+			modelName = fallback
+		} else {
+			modelName = ""
+		}
+	} else if config.CanonicalModelName(modelName) != config.CanonicalModelName(requested) {
+		warning = fmt.Sprintf("using installed model %q in place of %q", modelName, requested)
 	}
+
 	if modelName == "" {
-		return "", modelList, fmt.Errorf("no compatible local chat model is installed; pull a configured model such as %q", modelConfig.DefaultModel)
+		return "", modelList, "", fmt.Errorf("no compatible local chat model is installed; pull a configured model such as %q", modelConfig.DefaultModel)
 	}
 	if localOnly {
-		if err := config.CheckModelAvailableLocally(modelName, manuallySelectable); err != nil {
-			return "", modelList, err
+		if err := config.CheckModelAvailableLocally(modelName, appendLocalAdmission(manuallySelectable, localModels)); err != nil {
+			return "", modelList, warning, err
 		}
-	} else if !containsModel(manuallySelectable, modelName) {
-		return "", modelList, fmt.Errorf("model %q is not available from the configured Ollama host", modelName)
+	} else if !containsModel(manuallySelectable, modelName) && !containsModel(localModels, modelName) {
+		return "", modelList, warning, fmt.Errorf("model %q is not available from the configured Ollama host", modelName)
 	}
-	return modelName, modelList, nil
+	return modelName, modelList, warning, nil
+}
+
+func modelAdmitted(modelName string, manuallySelectable, localSelectable []string, localOnly bool) bool {
+	if containsModel(localSelectable, modelName) {
+		return true
+	}
+	if localOnly {
+		return config.CheckModelAvailableLocally(modelName, manuallySelectable) == nil
+	}
+	return containsModel(manuallySelectable, modelName)
+}
+
+func preferRequestedModelSpelling(requested, resolved string) string {
+	if config.CanonicalModelName(requested) == config.CanonicalModelName(resolved) {
+		return requested
+	}
+	return resolved
+}
+
+func firstLocalChatModel(autoModels, localModels []string) string {
+	if len(autoModels) > 0 {
+		return autoModels[0]
+	}
+	if len(localModels) > 0 {
+		return localModels[0]
+	}
+	return ""
+}
+
+func appendLocalAdmission(manual, local []string) []string {
+	if len(local) == 0 {
+		return manual
+	}
+	result := uniqueModelNames(manual)
+	for _, model := range local {
+		if !containsModel(result, model) {
+			result = append(result, model)
+		}
+	}
+	return result
 }
 
 func uniqueModelNames(models []string) []string {

@@ -275,6 +275,72 @@ func CanonicalModelName(name string) string {
 	return name + ":latest"
 }
 
+func modelStemAndTag(name string) (stem, tag string) {
+	name = CanonicalModelName(name)
+	if name == "" {
+		return "", ""
+	}
+	if at := strings.IndexByte(name, '@'); at >= 0 {
+		name = CanonicalModelName(name[:at])
+	}
+	lastSlash := strings.LastIndexByte(name, '/')
+	lastColon := strings.LastIndexByte(name, ':')
+	if lastColon > lastSlash {
+		return name[:lastColon], name[lastColon+1:]
+	}
+	return name, "latest"
+}
+
+// ModelNameCovers reports whether wanted names the same local weights as
+// candidate. An omitted or :latest tag may match a renamed sibling such as
+// ornith:latest → ornith-1.5:9b. A specific tag (qwen3.5:2b) only matches
+// that exact identity and never another size in the same family.
+func ModelNameCovers(wanted, candidate string) bool {
+	if CanonicalModelName(wanted) == "" || CanonicalModelName(candidate) == "" {
+		return false
+	}
+	if CanonicalModelName(wanted) == CanonicalModelName(candidate) {
+		return true
+	}
+	wantedStem, wantedTag := modelStemAndTag(wanted)
+	candidateStem, _ := modelStemAndTag(candidate)
+	if !strings.EqualFold(wantedTag, "latest") || wantedStem == "" || candidateStem == "" {
+		return false
+	}
+	if strings.EqualFold(wantedStem, candidateStem) {
+		return true
+	}
+	prefix := strings.ToLower(wantedStem) + "-"
+	return strings.HasPrefix(strings.ToLower(candidateStem), prefix)
+}
+
+// MatchInstalledModel resolves wanted against an Ollama inventory. Exact
+// canonical identity wins. A :latest / untagged name may resolve to a unique
+// covered sibling; multiple siblings are left unresolved so the caller can
+// fall back explicitly.
+func MatchInstalledModel(wanted string, installed []string) (string, bool) {
+	wanted = strings.TrimSpace(wanted)
+	if wanted == "" {
+		return "", false
+	}
+	canonical := CanonicalModelName(wanted)
+	for _, model := range installed {
+		if CanonicalModelName(model) == canonical {
+			return model, true
+		}
+	}
+	var matches []string
+	for _, model := range installed {
+		if ModelNameCovers(wanted, model) {
+			matches = append(matches, model)
+		}
+	}
+	if len(matches) == 1 {
+		return matches[0], true
+	}
+	return "", false
+}
+
 func (mc *ModelConfig) SelectModelForTask(taskComplexity string) string {
 	if !mc.AutoSelect {
 		return mc.DefaultModel
@@ -433,8 +499,8 @@ func selectAvailableAutoModel(preferred string, mc *ModelConfig, available map[s
 
 func (mc *ModelConfig) isExclusive(name string) bool {
 	for _, model := range mc.Models {
-		if model.Name == name {
-			return model.Exclusive
+		if model.Exclusive && ModelNameCovers(model.Name, name) {
+			return true
 		}
 	}
 	return false

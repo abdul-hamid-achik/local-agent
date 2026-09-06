@@ -250,8 +250,8 @@ func TestComposerModeRailIsImmediateAdaptiveAndCompact(t *testing.T) {
 
 			assertSameColor(t, "normal composer rail", m.input.Styles().Focused.Prompt.GetForeground(), palette.Dim)
 			normal := m.View()
-			if !strings.Contains(ansi.Strip(normal.Content), "▏❯ Ask") {
-				t.Fatalf("empty-state NORMAL composer omitted neutral rail:\n%s", ansi.Strip(normal.Content))
+			if !strings.Contains(ansi.Strip(normal.Content), "❯ Ask") {
+				t.Fatalf("empty-state NORMAL composer omitted prompt:\n%s", ansi.Strip(normal.Content))
 			}
 			if status := m.renderStatusLine(); status != "" {
 				t.Fatalf("test requires empty-state status suppression, got %q", ansi.Strip(status))
@@ -264,7 +264,7 @@ func TestComposerModeRailIsImmediateAdaptiveAndCompact(t *testing.T) {
 			}
 			assertSameColor(t, "plan composer rail", m.input.Styles().Focused.Prompt.GetForeground(), palette.Special)
 			plan := m.View()
-			if !strings.Contains(ansi.Strip(plan.Content), "▌❯ Ask") || !strings.Contains(ansi.Strip(plan.Content), "PLAN") {
+			if !strings.Contains(ansi.Strip(plan.Content), "❯ Ask") || !strings.Contains(ansi.Strip(plan.Content), "PLAN") {
 				t.Fatalf("empty-state PLAN mode is not visible on composer/welcome:\n%s", ansi.Strip(plan.Content))
 			}
 
@@ -275,7 +275,7 @@ func TestComposerModeRailIsImmediateAdaptiveAndCompact(t *testing.T) {
 			}
 			assertSameColor(t, "auto composer rail", m.input.Styles().Focused.Prompt.GetForeground(), palette.Success)
 			auto := m.View()
-			if !strings.Contains(ansi.Strip(auto.Content), "▌❯ Ask") || !strings.Contains(ansi.Strip(auto.Content), "AUTO") {
+			if !strings.Contains(ansi.Strip(auto.Content), "❯ Ask") || !strings.Contains(ansi.Strip(auto.Content), "AUTO") {
 				t.Fatalf("empty-state AUTO mode is not visible on composer/welcome:\n%s", ansi.Strip(auto.Content))
 			}
 
@@ -287,15 +287,15 @@ func TestComposerModeRailIsImmediateAdaptiveAndCompact(t *testing.T) {
 			assertSameColor(t, "wrapped normal composer rail", m.input.Styles().Focused.Prompt.GetForeground(), palette.Dim)
 			normalAgain := m.View()
 			plainNormalAgain := ansi.Strip(normalAgain.Content)
-			if !strings.Contains(plainNormalAgain, "▏❯ Ask") || strings.Contains(plainNormalAgain, "PLAN ·") || strings.Contains(plainNormalAgain, "AUTO ·") {
+			if !strings.Contains(plainNormalAgain, "❯ Ask") || strings.Contains(plainNormalAgain, "PLAN ·") || strings.Contains(plainNormalAgain, "AUTO ·") {
 				t.Fatalf("wrapped NORMAL mode is not quiet and visible on the composer:\n%s", plainNormalAgain)
 			}
 
 			for name, view := range map[string]tea.View{"normal": normal, "plan": plan, "auto": auto, "normal_again": normalAgain} {
 				assertRenderedLinesFit(t, view.Content, minTerminalWidth)
 				assertRenderedHeightFits(t, view.Content, minTerminalHeight)
-				if view.Cursor == nil || view.Cursor.X != 3 {
-					t.Fatalf("%s composer cursor drifted from three-cell rail/prompt: %#v", name, view.Cursor)
+				if view.Cursor == nil || view.Cursor.X != contentLeftColumns+composerPromptColumns {
+					t.Fatalf("%s composer cursor drifted from inset prompt: %#v", name, view.Cursor)
 				}
 			}
 		})
@@ -321,11 +321,7 @@ func TestComposerModeRailRespectsNoColor(t *testing.T) {
 		}
 		view := m.View()
 		plain := ansi.Strip(view.Content)
-		wantRail := "▌❯ Ask"
-		if mode == ModeNormal {
-			wantRail = "▏❯ Ask"
-		}
-		if !strings.Contains(plain, wantRail) || hasANSIColor(view.Content) {
+		if !strings.Contains(plain, "❯ Ask") || hasANSIColor(view.Content) {
 			t.Fatalf("mode %v NO_COLOR composer omitted its glyph fallback or emitted color:\n%s", mode, plain)
 		}
 		assertRenderedLinesFit(t, view.Content, minTerminalWidth)

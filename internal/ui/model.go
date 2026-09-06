@@ -57,7 +57,7 @@ type Model struct {
 	now                      func() time.Time
 	activityHeartbeatToken   uint64
 	activityHeartbeatPending bool
-	// chromeSpring drives sticky text reveal + context meter ease (harmonica).
+	// chromeSpring drives context meter ease (harmonica).
 	chromeSpring chromeSpringState
 	width        int
 	height       int
@@ -385,6 +385,7 @@ type Model struct {
 	// Tool approval prompt
 	pendingApproval    *ToolApprovalMsg
 	approvalState      *ApprovalState
+	pendingQuestion    *pendingAgentQuestion
 	queuedFollowUp     *queuedFollowUp
 	turnMessagesBefore []llm.Message
 	turnPromptFloor    agent.ContextPromptFloor
@@ -420,7 +421,7 @@ func New(ag *agent.Agent, cmdReg *command.Registry, skillMgr *skill.Manager, com
 	reducedMotion := reducedMotionRequested()
 	glyphProfile := requestedGlyphProfile()
 	ta := textarea.New()
-	ta.Placeholder = "Ask"
+	ta.Placeholder = "Ask or describe a task"
 	ta.Focus()
 	ta.CharLimit = 32 * 1024
 	ta.DynamicHeight = true
@@ -922,6 +923,9 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 	case ToolApprovalMsg:
 		m.handleToolApprovalRequest(msg)
 
+	case AgentQuestionMsg:
+		m.handleAgentQuestionRequest(msg)
+
 	case CommitResultMsg:
 		cmds = m.handleCommitResult(msg, cmds)
 
@@ -1007,7 +1011,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		}
 	}
 
-	// Sticky reveal + context meter springs (harmonica). Independent of the
+	// Context meter springs (harmonica). Independent of the
 	// activity spinner; no-ops under reducedMotion.
 	if tick, ok := msg.(chromeSpringTickMsg); ok {
 		if cmd := m.handleChromeSpringTick(tick); cmd != nil {
@@ -1078,7 +1082,7 @@ func (m *Model) Update(msg tea.Msg) (retModel tea.Model, retCmd tea.Cmd) {
 		m.checkAutoScroll()
 	}
 
-	// Kick sticky/context springs after state may have changed this frame.
+	// Update context meter motion after state may have changed this frame.
 	if cmd := m.maybeKickChromeSpring(); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
@@ -1285,18 +1289,8 @@ func configureComposerModeWithGlyphProfile(
 	styles := agentTextareaStylesForMode(isDark, themeID, mode)
 	styles.Cursor.Blink = !reducedMotion
 	input.SetStyles(styles)
-	glyphs := glyphSet(resolveGlyphProfile(profile))
-	input.SetPromptFunc(3, func(info textarea.PromptInfo) string {
-		if info.LineNumber == 0 {
-			if profile == GlyphASCII {
-				return glyphs.UserRail + "> "
-			}
-			if mode == ModeNormal {
-				return "▏❯ "
-			}
-			return glyphs.UserRail + "❯ "
-		}
-		return " " + glyphs.Vertical + " "
+	input.SetPromptFunc(composerPromptColumns, func(info textarea.PromptInfo) string {
+		return composerPrompt(resolveGlyphProfile(profile), info.LineNumber)
 	})
 }
 

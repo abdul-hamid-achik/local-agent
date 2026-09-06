@@ -46,6 +46,16 @@ func TestContentGridContentWidthFloors(t *testing.T) {
 	}
 }
 
+func TestContentGridRightChromeMatchesOriginX(t *testing.T) {
+	for _, pane := range []int{30, 40, 72, 112} {
+		grid := ContentGrid{PaneWidth: pane, Profile: GlyphUnicode}
+		if grid.RightChrome() != grid.OriginX() {
+			t.Fatalf("pane %d: right chrome %d != OriginX %d (LineWidth %d)",
+				pane, grid.RightChrome(), grid.OriginX(), grid.LineWidth())
+		}
+	}
+}
+
 func TestContentGridIndentBlockEmptyLines(t *testing.T) {
 	grid := ContentGrid{PaneWidth: 80, Profile: GlyphUnicode}
 	input := "hello\n\nworld"

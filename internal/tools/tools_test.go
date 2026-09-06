@@ -222,6 +222,31 @@ func TestLoadSkillToolDef(t *testing.T) {
 	}
 }
 
+func TestAskUserToolDef(t *testing.T) {
+	tool := AskUserToolDef()
+	if tool.Name != "ask_user" {
+		t.Fatalf("Name = %q", tool.Name)
+	}
+	if !IsBuiltinTool(tool.Name) {
+		t.Fatal("ask_user is not classified as built-in")
+	}
+	if !strings.Contains(tool.Description, "Yes/no") {
+		t.Fatalf("description missing yes/no default: %q", tool.Description)
+	}
+	properties, ok := tool.Parameters["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties = %#v", tool.Parameters["properties"])
+	}
+	kind, ok := properties["kind"].(map[string]any)
+	if !ok {
+		t.Fatalf("kind = %#v", properties["kind"])
+	}
+	values, ok := kind["enum"].([]string)
+	if !ok || len(values) != 3 {
+		t.Fatalf("kind enum = %#v", kind["enum"])
+	}
+}
+
 func TestConsultExpertsToolDef(t *testing.T) {
 	tool := ConsultExpertsToolDef()
 	if tool.Name != "consult_experts" {

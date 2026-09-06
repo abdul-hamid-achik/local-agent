@@ -178,8 +178,7 @@ func adaptiveStyles(isDark bool, themeID string) Styles {
 	return Styles{
 
 		UserContent: lipgloss.NewStyle().
-			Foreground(colorText).
-			PaddingLeft(2),
+			Foreground(colorText),
 		UserGutter: lipgloss.NewStyle().
 			Foreground(colorAccent2),
 
@@ -295,11 +294,10 @@ func adaptiveStyles(isDark bool, themeID string) Styles {
 func plainStyles() Styles {
 	p := lipgloss.NewStyle()
 	b := lipgloss.NewStyle().Bold(true)
-	pl2 := lipgloss.NewStyle().PaddingLeft(2)
 	pl4 := lipgloss.NewStyle().PaddingLeft(4)
 	return Styles{
 
-		UserContent: pl2,
+		UserContent: p,
 		UserGutter:  p,
 
 		ToolErrorText:   b,

@@ -134,7 +134,9 @@ func TestAdditionalReadRootLsBoundsLargeDirectoryAndHonorsIgnore(t *testing.T) {
 
 	ag := New(nil, nil, 0)
 	ag.SetWorkDir(workspace)
-	ag.SetToolsConfig(config.ToolsConfig{MaxGrepResults: 7})
+	if err := ag.SetToolsConfig(config.ToolsConfig{MaxGrepResults: 7}); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(ag.Close)
 	if _, err := ag.AddReadRoot(external); err != nil {
 		t.Fatal(err)
