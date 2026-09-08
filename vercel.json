@@ -6,10 +6,10 @@
       "main": true
     }
   },
-  "ignoreCommand": "git diff --quiet ${VERCEL_GIT_PREVIOUS_SHA:-HEAD^} HEAD -- docs/ package.json bun.lock package-lock.json vercel.json",
+  "ignoreCommand": "git diff --quiet ${VERCEL_GIT_PREVIOUS_SHA:-HEAD^} HEAD -- docs/ package.json bun.lock bunfig.toml .bun-version 'apps/*/package.json' 'packages/*/package.json' vercel.json",
   "framework": "vitepress",
-  "installCommand": "npm ci",
-  "buildCommand": "npm run site:build",
+  "installCommand": "npx --yes bun@1.4.2 install --frozen-lockfile",
+  "buildCommand": "npx --yes bun@1.4.2 run site:build",
   "outputDirectory": "docs/.vitepress/dist",
   "cleanUrls": true
 }

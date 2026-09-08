@@ -1,20 +1,41 @@
 {
-  "name": "local-agent-site",
+  "name": "local-agent-workspace",
   "private": true,
   "type": "module",
+  "packageManager": "bun@1.4.2",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "docs"
+  ],
   "engines": {
-    "node": ">=22"
+    "node": ">=22",
+    "bun": "1.4.2"
   },
   "scripts": {
-    "site": "vitepress dev docs --host 127.0.0.1",
-    "site:build": "vitepress build docs",
-    "site:preview": "vitepress preview docs --host 127.0.0.1"
+    "dev": "bun run --cwd apps/cli dev",
+    "start": "bun run apps/cli/dist/main.mjs",
+    "build": "bun run --cwd apps/cli build && bun run tui:build",
+    "typecheck": "tsc --noEmit && bun run --cwd apps/tui-playground typecheck",
+    "test": "bun --bun vitest run",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "check": "bun run lint && bun run typecheck && bun run test && bun run build",
+    "site": "bun run --cwd docs dev",
+    "site:build": "bun run --cwd docs build",
+    "site:preview": "bun run --cwd docs preview",
+    "test:watch": "bun --bun vitest",
+    "tui:dev": "bun run --cwd apps/tui-playground dev",
+    "tui:build": "bun run --cwd apps/tui-playground build",
+    "test:integration": "glyph run specs/bun/*.yml --parallel 1 --format md --progress never",
+    "site:check-links": "bun scripts/site-links.ts"
   },
   "devDependencies": {
-    "vitepress": "1.6.4",
-    "vue": "3.5.39"
-  },
-  "overrides": {
-    "vite": "6.4.3"
+    "@biomejs/biome": "2.5.12",
+    "@types/bun": "1.4.2",
+    "entities": "7.0.1",
+    "typescript": "7.0.2",
+    "vite": "8.2.2",
+    "vitest": "5.0.0"
   }
 }

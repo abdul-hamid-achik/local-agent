@@ -1,0 +1,462 @@
+import { createHash, randomUUID } from "node:crypto";
+import type { Tool } from "ollama";
+import { z } from "zod";
+import { admitOllamaModel } from "#runtime/admission";
+import {
+  type ApprovedCommandProposal,
+  createCommandProposal,
+  executeApprovedCommand,
+} from "#runtime/command";
+import type { Provider } from "#runtime/config";
+import {
+  chat,
+  type Message,
+  MessageSchema,
+  type RunEvent,
+  type ToolCall,
+} from "#runtime/index";
+import { hostInstructions, projectInstructions } from "#runtime/instructions";
+import type { McpConnection } from "#runtime/mcp";
+import type { ExecutionEvent, Session, SessionStore } from "#runtime/session";
+import type { Workspace, WorkspaceEditProposal } from "#runtime/workspace";
+
+const ReadArgs = z.strictObject({ path: z.string().min(1).max(4096) });
+const EditArgs = ReadArgs.extend({
+  old_string: z.string().min(1).max(100_000),
+  new_string: z.string().max(100_000),
+});
+const CommandArgs = z.strictObject({
+  argv: z.array(z.string().max(100_000)).min(1).max(256),
+  timeout_ms: z.number().int().min(1).max(600_000).default(120_000),
+});
+
+const tools: Tool[] = [
+  {
+    type: "function",
+    function: {
+      name: "read",
+      description: "Read an existing UTF-8 file relative to the workspace.",
+      parameters: {
+        type: "object",
+        properties: { path: { type: "string" } },
+        required: ["path"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "edit",
+      description:
+        "Replace one exact occurrence in an existing workspace file. The host requests approval before applying it.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string" },
+          old_string: { type: "string" },
+          new_string: { type: "string" },
+        },
+        required: ["path", "old_string", "new_string"],
+      },
+    },
+  },
+];
+tools.push({
+  type: "function",
+  function: {
+    name: "run_command",
+    description:
+      "Run an argv vector in the workspace after host approval, including verification commands. No implicit shell. Processes have user permissions; this is not an OS sandbox. Report exit code and actual output, not assumed verification success.",
+    parameters: {
+      type: "object",
+      properties: {
+        argv: { type: "array", items: { type: "string" } },
+        timeout_ms: { type: "integer" },
+      },
+      required: ["argv"],
+    },
+  },
+});
+
+export type ApprovalRequest =
+  | WorkspaceEditProposal
+  | ApprovedCommandProposal
+  | Readonly<{
+      kind: "mcp";
+      name: string;
+      argumentsJson: string;
+    }>;
+
+export type AgentEvent =
+  | RunEvent
+  | { type: "message"; message: Message }
+  | { type: "tool_requested"; id: string; name: string }
+  | { type: "tool_start"; id: string; name: string }
+  | {
+      type: "tool_result";
+      id: string;
+      name: string;
+      status:
+        | "succeeded"
+        | "denied"
+        | "failed"
+        | "outcome_unknown"
+        | "unverified";
+      output: string;
+    }
+  | { type: "turn_complete"; messages: Message[] };
+
+export type SessionContext = { store: SessionStore; state: Session };
+
+export type AgentOptions = {
+  workspace: Workspace;
+  /** Plan denies writes even if the approval callback would allow them. */
+  intent?: "plan" | "build";
+  approve: (proposal: ApprovalRequest, signal: AbortSignal) => Promise<boolean>;
+  signal: AbortSignal;
+  session?: SessionContext;
+  mcp?: readonly McpConnection[];
+};
+
+/** Serial tool loop. A complete provider response is required before any host action. */
+export async function* runAgent(
+  provider: Provider,
+  messages: Message[],
+  options: AgentOptions,
+): AsyncGenerator<AgentEvent> {
+  const saved = options.session;
+  if (saved && saved.state.workspaceId !== options.workspace.root)
+    throw new Error("Session belongs to another workspace");
+  const release = saved
+    ? await saved.store.acquireLease(saved.state.id, options.workspace.root)
+    : undefined;
+  try {
+    if (saved) {
+      const current = await saved.store.loadSession(
+        saved.state.publicId,
+        options.workspace.root,
+      );
+      if (current.revision !== saved.state.revision)
+        throw new Error("Session changed in another client");
+      saved.state = current;
+      if (saved.store.listHazards(current.id, current.workspaceId).length)
+        throw new Error(
+          "Session has an uncertain tool outcome; inspect recovery before continuing",
+        );
+      let pending: string[] = [];
+      for (const message of current.messages) {
+        if (message.role !== "assistant" && message.tool_calls?.length)
+          throw new Error(
+            "Session contains invalid tool calls; recovery is required",
+          );
+        if (message.role === "tool") {
+          if (!pending.length || message.tool_name !== pending.shift())
+            throw new Error(
+              "Session contains unmatched tool results; recovery is required",
+            );
+        } else {
+          if (pending.length)
+            throw new Error(
+              "Session contains interrupted tool calls; recovery is required",
+            );
+          if (message.tool_calls?.length) {
+            pending = message.tool_calls.map((call) => call.function.name);
+          }
+        }
+      }
+      if (pending.length)
+        throw new Error(
+          "Session contains interrupted tool calls; recovery is required",
+        );
+    }
+    yield* agentTurn(provider, messages, options);
+  } finally {
+    await release?.();
+  }
+}
+
+async function* agentTurn(
+  provider: Provider,
+  messages: Message[],
+  options: AgentOptions,
+): AsyncGenerator<AgentEvent> {
+  const { signal, workspace } = options;
+  const mcpTools = new Map<string, McpConnection>();
+  const availableTools = [...tools];
+  for (const connection of options.mcp ?? []) {
+    for (const tool of connection.tools) {
+      if (availableTools.some((entry) => entry.function.name === tool.name))
+        throw new Error(`Duplicate tool name: ${tool.name}`);
+      mcpTools.set(tool.name, connection);
+      availableTools.push({
+        type: "function",
+        function: {
+          name: tool.name,
+          description: tool.description ?? "MCP tool; host approval required",
+          parameters: tool.inputSchema as Tool["function"]["parameters"],
+        },
+      });
+    }
+  }
+  if (availableTools.length > 256)
+    throw new Error("Tool catalog exceeds 256 tools");
+  const saved = options.session;
+  const runId = randomUUID();
+  const history = z.array(MessageSchema).min(1).max(1000).parse(messages);
+  if (
+    saved &&
+    JSON.stringify(history.slice(0, saved.state.messages.length)) !==
+      JSON.stringify(saved.state.messages)
+  )
+    throw new Error("Session history differs from its durable state");
+  const checkpoint = () => {
+    if (saved)
+      saved.state = saved.store.saveStateCAS(
+        saved.state.id,
+        saved.state.workspaceId,
+        saved.state.revision,
+        history,
+      );
+  };
+  checkpoint();
+  const instructions = [
+    hostInstructions(options.intent ?? "build"),
+    await projectInstructions(workspace),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  const admission = await admitOllamaModel(provider, signal);
+  signal.throwIfAborted();
+  if (admission.status !== "validated")
+    throw new Error(
+      `Model admission ${admission.status}: ${admission.message}`,
+    );
+  if (!admission.capabilities.includes("tools"))
+    throw new Error("Agent requires a model with tools capability");
+  for (let step = 0; step < 20; step++) {
+    signal.throwIfAborted();
+    const assistant: Message = { role: "assistant", content: "" };
+    const calls: ToolCall[] = [];
+    for await (const event of chat(
+      provider,
+      [{ role: "system", content: instructions }, ...history],
+      signal,
+      options.intent === "plan" ? tools.slice(0, 1) : availableTools,
+    )) {
+      if (event.type === "text") assistant.content += event.text;
+      if (event.type === "thinking")
+        assistant.thinking = (assistant.thinking ?? "") + event.text;
+      if (event.type === "tool_call") calls.push(event.call);
+      yield event;
+    }
+    if (calls.length) assistant.tool_calls = calls;
+    history.push(assistant);
+    checkpoint();
+    yield { type: "message", message: assistant };
+    if (!calls.length) {
+      yield { type: "turn_complete", messages: history };
+      return;
+    }
+    for (const call of calls) {
+      const name = call.function.name;
+      const mcpConnection = mcpTools.get(name);
+      const id = randomUUID();
+      const execution: Omit<ExecutionEvent, "type"> | undefined = saved
+        ? {
+            sessionId: saved.state.id,
+            workspaceId: saved.state.workspaceId,
+            runId,
+            turnId: runId,
+            executionId: id,
+            idempotencyKey: id,
+            canonicalCallId: id,
+            toolName: name,
+            effectClass:
+              name === "read"
+                ? "read_only"
+                : mcpConnection
+                  ? "unknown"
+                  : "effectful",
+            argumentsSha256: createHash("sha256")
+              .update(JSON.stringify(call.function.arguments))
+              .digest("hex"),
+          }
+        : undefined;
+      const record = (type: ExecutionEvent["type"]) => {
+        if (saved && execution) saved.store.appendEvent({ ...execution, type });
+      };
+      record("requested");
+      yield { type: "tool_requested", id, name };
+      let status:
+        | "succeeded"
+        | "denied"
+        | "failed"
+        | "outcome_unknown"
+        | "unverified" = "succeeded";
+      let effectAttempted = false;
+      let uncertain = false;
+      let output: string;
+      try {
+        signal.throwIfAborted();
+        if (name === "read") {
+          const args = ReadArgs.parse(call.function.arguments);
+          record("started");
+          yield { type: "tool_start", id, name };
+          signal.throwIfAborted();
+          output = await workspace.read(args.path);
+          if (output.length > 100_000)
+            throw new Error("File exceeds tool output limit");
+        } else if (name === "edit") {
+          if (options.intent === "plan") {
+            status = "denied";
+            output = "Plan mode does not permit edits";
+          } else {
+            const args = EditArgs.parse(call.function.arguments);
+            const proposal = await workspace.prepareEdit(
+              args.path,
+              args.old_string,
+              args.new_string,
+            );
+            record("approval_requested");
+            const allowed = await options.approve(proposal, signal);
+            signal.throwIfAborted();
+            if (allowed !== true) {
+              status = "denied";
+              output = "Edit denied by host";
+            } else {
+              record("approved");
+              record("started");
+              yield { type: "tool_start", id, name };
+              signal.throwIfAborted();
+              effectAttempted = true;
+              await workspace.applyEdit(proposal);
+              output = `Updated ${proposal.path}. Verification has not been run.`;
+            }
+          }
+        } else if (name === "run_command") {
+          if (options.intent === "plan") {
+            status = "denied";
+            output = "Plan mode does not permit command execution";
+          } else {
+            const args = CommandArgs.parse(call.function.arguments);
+            const proposal = await createCommandProposal(
+              args.argv,
+              workspace.root,
+              args.timeout_ms,
+            );
+            record("approval_requested");
+            const allowed = await options.approve(proposal, signal);
+            signal.throwIfAborted();
+            if (allowed !== true) {
+              status = "denied";
+              output = "Command denied by host";
+            } else {
+              record("approved");
+              record("started");
+              yield { type: "tool_start", id, name };
+              signal.throwIfAborted();
+              effectAttempted = true;
+              const result = await executeApprovedCommand(proposal, signal);
+              uncertain =
+                result.timedOut || result.cancelled || result.cleanupIncomplete;
+              status =
+                result.exitCode === 0 && !result.timedOut && !result.cancelled
+                  ? "succeeded"
+                  : "failed";
+              output = JSON.stringify({
+                ...result,
+                output: result.output.slice(0, 100_000),
+                truncated: result.truncated || result.output.length > 100_000,
+              });
+            }
+          }
+        } else if (mcpConnection) {
+          if (options.intent === "plan") {
+            status = "denied";
+            output =
+              "Plan mode does not authorize MCP calls from server annotations";
+          } else {
+            const argumentsJson = JSON.stringify(call.function.arguments);
+            if (Buffer.byteLength(argumentsJson) > 100_000)
+              throw new Error("MCP arguments exceed 100000 bytes");
+            const proposal = Object.freeze({
+              kind: "mcp" as const,
+              name,
+              argumentsJson,
+            });
+            record("approval_requested");
+            const allowed = await options.approve(proposal, signal);
+            signal.throwIfAborted();
+            if (allowed !== true) {
+              status = "denied";
+              output = "MCP call denied by host";
+            } else {
+              record("approved");
+              record("started");
+              yield { type: "tool_start", id, name };
+              signal.throwIfAborted();
+              effectAttempted = true;
+              const result = await mcpConnection.callTool(
+                name,
+                JSON.parse(argumentsJson),
+                signal,
+              );
+              status = result.isError ? "failed" : "unverified";
+              output = JSON.stringify(result);
+            }
+          }
+        } else {
+          throw new Error(`Unknown tool: ${name}`);
+        }
+      } catch (error) {
+        uncertain = effectAttempted;
+        status = "failed";
+        output = signal.aborted
+          ? "Cancelled; tool did not report successful completion"
+          : mcpConnection && effectAttempted
+            ? "MCP call did not produce a usable result; its effects are unknown"
+            : error instanceof Error
+              ? error.message
+              : "Tool failed";
+      }
+      if (uncertain) status = "outcome_unknown";
+      const result = { status, output };
+      const message: Message = {
+        role: "tool",
+        tool_name: name,
+        content: JSON.stringify(result),
+      };
+      history.push(message);
+      if (saved && execution) {
+        saved.state = saved.store.commitOutcome(
+          {
+            ...execution,
+            type: uncertain
+              ? "outcome_unknown"
+              : status === "succeeded" || status === "unverified"
+                ? "completed"
+                : status === "denied"
+                  ? "denied"
+                  : signal.aborted
+                    ? "cancelled"
+                    : "failed",
+            resultSha256: createHash("sha256")
+              .update(message.content)
+              .digest("hex"),
+            resultReceipt: message.content,
+          },
+          saved.state.revision,
+          history,
+        );
+      }
+      yield { type: "message", message };
+      yield { type: "tool_result", id, name, ...result };
+      if (uncertain)
+        throw new Error(
+          "Tool outcome is uncertain; review the workspace before continuing",
+        );
+    }
+    signal.throwIfAborted();
+  }
+  throw new Error("Agent reached the 20-step limit");
+}

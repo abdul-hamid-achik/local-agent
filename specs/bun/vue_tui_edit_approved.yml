@@ -1,0 +1,39 @@
+version: 1
+name: bun_vue_tui_edit_approved
+intent: |
+    the interactive agent applies an approved exact edit in an isolated
+    temporary workspace.
+target:
+    cmd: ["bun", "specs/fixtures/bun_ollama.ts", "edit-approve"]
+    cwd: "${projectRoot}"
+terminal:
+    cols: 100
+    rows: 28
+    alternateScreen: require
+steps:
+    - wait:
+        screen:
+            contains: "Message the model"
+        timeoutMs: 10000
+    - type: "edit"
+    - press: enter
+    - wait:
+        screen:
+            contains: "Edit notes.txt"
+        timeoutMs: 10000
+    - press: y
+    - wait:
+        screen:
+            contains: "assistant: edit applied"
+        timeoutMs: 10000
+    - press: ctrl+c
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 3000
+outcomes:
+    - id: edit_approved
+      description: approving the proposal applies the exact edit in the workspace
+      verify:
+        process:
+            exitCode: 0

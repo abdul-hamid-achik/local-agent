@@ -1,0 +1,51 @@
+version: 1
+name: bun_vue_tui_fullscreen
+intent: |
+    the experimental Bun Vue TUI fullscreen presentation accepts a prompt and
+    renders the assistant response inside its interactive terminal surface.
+target:
+    cmd: ["bun", "specs/fixtures/bun_ollama.ts", "fullscreen"]
+    cwd: "${projectRoot}"
+terminal:
+    cols: 120
+    rows: 36
+    alternateScreen: require
+steps:
+    - wait:
+        screen:
+            contains: "Message the model"
+        timeoutMs: 10000
+    - resize:
+        cols: 80
+        rows: 24
+    - wait:
+        screen:
+            contains: "Message the model"
+        timeoutMs: 3000
+    - type: "hello"
+    - press: enter
+    - wait:
+        screen:
+            contains: "fixture reply to hello"
+        timeoutMs: 10000
+    - wait:
+        screen:
+            contains: "Enter send"
+        timeoutMs: 3000
+    - press: ctrl+c
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 3000
+outcomes:
+    - id: fullscreen_renders_response
+      description: fullscreen mode renders the submitted prompt and fixture response
+      verify:
+        screen:
+            contains: "fixture reply to hello"
+    - id: fullscreen_starts_interactive_surface
+      description: fullscreen mode exits cleanly after the resized response
+      verify:
+        process:
+            exitCode: 0
+contractHash: sha256:827d18e0bcca2214f7ac458dc4ae7af3fb70ea7bbe39bec4026aa766c1a73d31

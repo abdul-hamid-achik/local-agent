@@ -1,0 +1,258 @@
+import {
+  type ApprovalRequest,
+  type McpConnection,
+  type Message,
+  type Provider,
+  runAgent,
+  type SessionContext,
+  type Workspace,
+} from "@local-agent/runtime";
+import {
+  Approval,
+  Composer,
+  createApp,
+  onKeyDown,
+  PanelLayout,
+  type Presentation,
+  ScrollBox,
+  Text,
+  terminalOptions,
+  terminalText,
+  useExit,
+} from "@local-agent/vue-tui";
+import { defineComponent, h, onUnmounted, ref } from "vue";
+
+export function createTerminalRoot(
+  provider: Provider,
+  mode: Presentation,
+  signal: AbortSignal,
+  workspace: Workspace,
+  intent: "plan" | "build",
+  session?: SessionContext,
+  mcp: readonly McpConnection[] = [],
+) {
+  return defineComponent({
+    setup() {
+      const draft = ref("");
+      const busy = ref(false);
+      const status = ref("Enter send · Esc cancel · Ctrl+C exit");
+      const history = ref<Message[]>(session?.state.messages.slice() ?? []);
+      const live = ref("");
+      const exit = useExit();
+      let turn: AbortController | undefined;
+      const pending = ref<ApprovalRequest>();
+      let decide: ((allowed: boolean) => void) | undefined;
+      function approve(
+        proposal: ApprovalRequest,
+        approvalSignal: AbortSignal,
+      ): Promise<boolean> {
+        approvalSignal.throwIfAborted();
+        const preview = approvalPreview(proposal);
+        if (mode === "inline") process.stdout.write(`\n${preview}\n`);
+        pending.value = proposal;
+        return new Promise((resolve) => {
+          const deny = () => finish(false);
+          const finish = (allowed: boolean) => {
+            approvalSignal.removeEventListener("abort", deny);
+            pending.value = undefined;
+            decide = undefined;
+            resolve(allowed);
+          };
+          decide = finish;
+          approvalSignal.addEventListener("abort", deny, { once: true });
+          if (approvalSignal.aborted) finish(false);
+        });
+      }
+      onUnmounted(() => turn?.abort());
+
+      async function submit() {
+        if (busy.value || !draft.value.trim()) return;
+        const prompt = draft.value;
+        draft.value = "";
+        live.value = "";
+        busy.value = true;
+        const request = new AbortController();
+        turn = request;
+        let receivedMessage = false;
+        history.value.push({ role: "user", content: prompt });
+        if (mode === "inline")
+          process.stdout.write(`\nYou: ${terminalText(prompt)}\nAssistant: `);
+        try {
+          for await (const event of runAgent(provider, history.value, {
+            workspace,
+            intent,
+            approve,
+            signal: AbortSignal.any([signal, request.signal]),
+            session,
+            mcp,
+          })) {
+            if (event.type === "message") {
+              receivedMessage = true;
+              history.value.push(event.message);
+              live.value = "";
+            }
+            if (event.type === "tool_result") {
+              status.value = `${event.name}: ${event.status}`;
+              if (mode === "inline")
+                process.stdout.write(`\n${terminalText(status.value)}\n`);
+            }
+            if (event.type === "text") {
+              live.value += event.text;
+              if (mode === "inline")
+                process.stdout.write(terminalText(event.text));
+            }
+          }
+          status.value = "Enter send · Esc cancel · Ctrl+C exit";
+        } catch (error) {
+          // Keep completed messages and tool receipts even when a later request fails.
+          if (!session) {
+            if (!receivedMessage) history.value.pop();
+            if (!receivedMessage && !draft.value) draft.value = prompt;
+          }
+          status.value = request.signal.aborted
+            ? "Cancelled"
+            : terminalText(
+                error instanceof Error ? error.message : "Inference failed",
+              );
+        } finally {
+          if (mode === "inline") process.stdout.write("\n");
+          busy.value = false;
+          live.value = "";
+          if (turn === request) turn = undefined;
+        }
+      }
+      onKeyDown((key) => {
+        if (key.name === "escape" && !pending.value) {
+          turn?.abort();
+          key.preventDefault();
+        }
+        if (key.ctrl && key.name === "c") exit();
+      });
+      return () =>
+        h(
+          PanelLayout,
+          { sidebar: mode === "fullscreen" },
+          {
+            default: () => [
+              h(
+                Text,
+                { bold: true },
+                () =>
+                  `Local Agent · ${provider.type === "ollama_remote" ? "Chalupa / remote" : "Ollama / loopback"} · experimental`,
+              ),
+              mode === "fullscreen"
+                ? h(
+                    ScrollBox,
+                    {
+                      flexGrow: 1,
+                      minHeight: 0,
+                      stickyScroll: true,
+                      stickyStart: "bottom",
+                    },
+                    () => [
+                      ...history.value.map((message, index) =>
+                        h(
+                          Text,
+                          { key: index },
+                          () =>
+                            `${message.role}: ${terminalText(message.content)}`,
+                        ),
+                      ),
+                      h(Text, {}, () => terminalText(live.value)),
+                    ],
+                  )
+                : null,
+              h(Text, {}, () =>
+                busy.value ? "Generating · Esc cancel" : status.value,
+              ),
+              pending.value
+                ? h(Approval, {
+                    title:
+                      pending.value.kind === "edit"
+                        ? `Edit ${terminalText(pending.value.path)}? y approve · Enter/n deny`
+                        : pending.value.kind === "mcp"
+                          ? `Call ${terminalText(pending.value.name)}? y approve · Enter/n deny`
+                          : "Run command? y approve · Enter/n deny",
+                    preview:
+                      mode === "inline" && pending.value.kind === "edit"
+                        ? "Diff printed above"
+                        : approvalPreview(pending.value),
+                    maxLines: mode === "inline" ? 1 : 12,
+                    onDecision: (allowed: boolean) => {
+                      decide?.(allowed);
+                    },
+                  })
+                : h(Composer, {
+                    modelValue: draft.value,
+                    busy: busy.value,
+                    "onUpdate:modelValue": (value: string) => {
+                      draft.value = value;
+                    },
+                    onSubmit: () => void submit(),
+                    onCancel: () => turn?.abort(),
+                  }),
+            ],
+            sidebar: () =>
+              h(
+                Text,
+                {},
+                () =>
+                  `Model\n${provider.model}\n\nContext\n${provider.context_size}\n\n${intent} mode\nRead · Edit · Command\nMCP servers: ${mcp.length}\n${session ? `Session\n${session.state.publicId}` : "Session: temporary"}`,
+              ),
+          },
+        );
+    },
+  });
+}
+
+export async function runTerminal(
+  provider: Provider,
+  mode: Presentation,
+  signal: AbortSignal,
+  workspace: Workspace,
+  intent: "plan" | "build",
+  session?: SessionContext,
+  mcp: readonly McpConnection[] = [],
+) {
+  signal.throwIfAborted();
+  const Root = createTerminalRoot(
+    provider,
+    mode,
+    signal,
+    workspace,
+    intent,
+    session,
+    mcp,
+  );
+  const app = await createApp(Root, null, terminalOptions(mode));
+  const stop = () => app.exit();
+  signal.addEventListener("abort", stop, { once: true });
+  try {
+    signal.throwIfAborted();
+    app.mount();
+    await app.waitUntilExit();
+  } finally {
+    signal.removeEventListener("abort", stop);
+    app.exit();
+  }
+}
+
+function approvalPreview(proposal: ApprovalRequest): string {
+  if (proposal.kind === "edit") return terminalText(proposal.diff);
+  if (proposal.kind === "mcp")
+    return terminalText(
+      `${proposal.name}\n${proposal.argumentsJson}\nMCP effects are not verified by transport success.`,
+    );
+  return terminalText(
+    JSON.stringify(
+      {
+        argv: proposal.argv,
+        cwd: proposal.cwd,
+        timeoutMs: proposal.timeoutMs,
+        permissions: "user",
+      },
+      null,
+      2,
+    ),
+  );
+}

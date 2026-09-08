@@ -1,0 +1,9 @@
+
+You: hello
+Assistant: fixture reply to hello
+
+Local Agent · Ollama / loopback · experimental
+Enter send · Esc cancel · Ctrl+C exit
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Message the model                                                                                 │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘

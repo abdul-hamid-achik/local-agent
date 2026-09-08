@@ -1,0 +1,21 @@
+{
+  "name": "@local-agent/runtime",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/client": "2.0.0",
+    "diff": "9.0.0",
+    "ollama": "0.6.3",
+    "zod": "4.5.4"
+  },
+  "imports": {
+    "#runtime/*": "./src/*.ts"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/server": "2.0.0"
+  }
+}

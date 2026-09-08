@@ -35,15 +35,16 @@ Or install the latest tagged Go release:
 go install github.com/abdul-hamid-achik/local-agent/cmd/local-agent@latest
 ```
 
-Or run a checkout directly:
+To run the historical Go implementation from source, pin its retained revision:
 
 ```bash
 git clone https://github.com/abdul-hamid-achik/local-agent.git
 cd local-agent
+git checkout 2567a7a7468ef2a1591e289f43d62b78b5c9679a
 go run ./cmd/local-agent
 ```
 
-From a checkout you can also put it on your PATH, which is what you want if you
+From that historical checkout you can also put it on your PATH, which is what you want if you
 intend to use it outside the repository:
 
 ```bash

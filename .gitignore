@@ -9,8 +9,6 @@ dist/
 *.test
 *.out
 local-agent
-!cmd/local-agent/
-!cmd/local-agent/*.go
 
 # Vector embeddings
 .vecgrep/

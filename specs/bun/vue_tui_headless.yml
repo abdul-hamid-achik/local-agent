@@ -1,0 +1,28 @@
+version: 1
+name: bun_vue_tui_headless
+intent: |
+    the experimental Bun Vue TUI headless presentation streams deterministic
+    inference through the Ollama boundary and exits successfully.
+target:
+    cmd: ["bun", "specs/fixtures/bun_ollama.ts", "headless"]
+    cwd: "${projectRoot}"
+terminal:
+    cols: 100
+    rows: 28
+    alternateScreen: forbid
+steps:
+    - wait:
+        screen:
+            contains: "fixture reply to hello"
+        timeoutMs: 10000
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 3000
+outcomes:
+    - id: headless_stream_completes
+      description: headless mode streams the fixture response and exits successfully
+      verify:
+        screen:
+            contains: "fixture reply to hello"
+contractHash: sha256:186903efe3a5cc1baf843d1ec111925a07b8d7a3e8b815d4be1b505f34999440

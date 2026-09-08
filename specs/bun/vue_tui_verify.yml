@@ -1,0 +1,49 @@
+version: 1
+name: bun_vue_tui_verify
+intent: |
+    headless JSON mode reads an isolated workspace file, applies an approved
+    exact edit, and runs an approved argv verification command against it.
+target:
+    cmd: ["bun", "specs/fixtures/bun_ollama.ts", "verify"]
+    cwd: "${projectRoot}"
+terminal:
+    cols: 120
+    rows: 36
+    alternateScreen: forbid
+steps:
+    - wait:
+        screen:
+            contains: '"name":"read"'
+        timeoutMs: 10000
+    - wait:
+        screen:
+            contains: '"name":"run_command"'
+        timeoutMs: 10000
+    - wait:
+        screen:
+            contains: "verification passed"
+        timeoutMs: 10000
+    - wait:
+        screen:
+            contains: "exitCode"
+        timeoutMs: 3000
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 5000
+outcomes:
+    - id: headless_json_verifies_edit
+      description: headless JSON reports a successful command with real output
+      verify:
+        screen:
+            contains: "verification passed"
+    - id: verification_reports_exit_code
+      description: command tool output includes its actual process exit code
+      verify:
+        screen:
+            contains: "exitCode"
+    - id: headless_json_exits_cleanly
+      description: the isolated read-edit-verify flow exits successfully without alternate screen
+      verify:
+        process:
+            exitCode: 0

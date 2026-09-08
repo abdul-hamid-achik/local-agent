@@ -1,139 +1,57 @@
 ---
 title: Testing and verification
-description: Verify Local Agent with Go race tests, linting, vulnerability checks, and deterministic Glyphrun terminal contracts.
+description: Verify the Bun workspaces with Vitest, TypeScript and deterministic Glyphrun terminal contracts.
 outline: deep
+currentImplementation: true
 ---
 
 # Testing and verification
 
-Local Agent combines code-level Go gates with black-box terminal behavior specs.
+Current development uses Bun 1.4.2 workspaces. The Go implementation and its
+release automation were retired from the working tree; parity remains incomplete.
+Historical behavior is documented in the
+[Go implementation reference](https://github.com/abdul-hamid-achik/local-agent/blob/main/reference/GO_IMPLEMENTATION.md).
 
 ## Repository verification
 
 ```bash
-task verify
+bun install --frozen-lockfile
+bun run check
+bun run site:build
+bun run site:check-links
 ```
 
-The verification task runs:
+`check` runs Biome, TypeScript 7, the isolated Vue SFC template checker,
+Vitest, the CLI workspace build and the Vue playground build. Tests use
+`bun run test`, not `bun test`. The rendered-site checker verifies same-origin
+links, assets and HTML anchors without making network requests.
 
-- the VitePress production website build and rendered internal-link check;
-- `go mod tidy -diff`;
-- the portable TinyVault provider-wrapper smoke test using synthetic metadata;
-- `golangci-lint`;
-- `go vet`;
-- the complete Go test suite with the race detector;
-- `govulncheck` v1.6.0.
+## Terminal contracts
 
-`task verify` covers the local Go and public-site gates. Glyphrun has separate
-contract, fast, and full tasks because it exercises the compiled program through
-a pseudo-terminal.
+Install Glyphrun v0.20.0 and run:
 
-## Pinned versions
+```bash
+go install github.com/abdul-hamid-achik/glyphrun/cmd/glyph@v0.20.0
+bun run test:integration
+```
 
-The repository currently fixes these versions or version ranges:
-
-| Surface | Repository contract |
-|---|---|
-| Application toolchain | Go 1.26.5 from `go.mod` |
-| Website runtime | Node 22 or newer; CI uses Node 24 |
-| Website packages | VitePress 1.6.4 and Vue 3.5.39 |
-| CI linter | golangci-lint 2.12.2 |
-| Vulnerability scanner | govulncheck 1.6.0 in `Taskfile.yml` and CI |
-| Terminal contracts | Glyphrun 0.14.3 in CI, built with the same Go 1.26.5 toolchain as local-agent |
-
-The local `golangci-lint` and `glyph` tasks use the executables on `PATH`; use
-the CI versions above when reproducing CI exactly.
+The Go toolchain here installs the external Glyphrun runner; it does not build
+Local Agent. Contracts under `specs/bun/` use deterministic loopback fixtures.
+They exercise fullscreen resize, native inline scrollback, headless output,
+approval and denial, command verification and clean exit. They do not download
+models or contact GPUs. Native component tests also exercise input and cleanup.
 
 ## Continuous integration
 
-The verification workflow has four independent jobs:
+The workflow verifies Bun on Linux and macOS and builds the website separately.
+External package versions are exact and installation uses the frozen lockfile.
+The site job also audits dependencies and checks rendered links after building.
+A green workflow establishes the behavior covered by those tests; it does not
+establish complete parity with historical Go features or a standalone release.
 
-- Linux Go verification: module diff, golangci-lint, vet, race tests,
-  integration-tag compile-only coverage, the provider-wrapper smoke test, and
-  govulncheck;
-- VitePress production build plus a test of links in the rendered site;
-- all committed Glyphrun contract hashes plus the complete deterministic
-  terminal suite from `task glyphrun`;
-- a macOS build, `--version` and provider-wrapper smoke tests, and
-  Darwin-sensitive package tests.
+## Compiler boundary
 
-## Terminal behavior
-
-[Glyphrun](https://glyphrun.dev/) drives the compiled application through a real pseudo-terminal and verifies user-visible outcomes against a deterministic terminal emulator.
-
-```bash
-task glyphrun-contracts
-task glyphrun-cli
-task glyphrun
-task test:integration
-```
-
-`task glyphrun-contracts` verifies that every committed spec still matches its
-reviewed intent and outcomes. `task glyphrun-cli` is the fast local smoke suite
-for public flags, skip-approval behavior, and exact external-file reads.
-`task glyphrun` prebuilds Local Agent once, then runs every deterministic spec;
-this keeps a cold dependency build outside the bounded per-spec terminal
-timeouts. The same execution gate runs in CI, while specs under `specs/live/`
-remain explicitly opt-in.
-
-`task test:integration` keeps the build-tagged integration package compiling
-and runs its host-side checks. Tests whose live dependency is unavailable
-self-skip; this task is not a model-quality evaluation.
-
-Committed scenarios cover normal and minimum terminal sizes, authority modes,
-public CLI parsing, explicit external-file review, inline goal review and
-approvals, goal receipts, the Ollama inventory, composer paste behavior,
-session restore, receipt inspection, saved reasoning, transcript follow
-behavior, settings, and Help. Their fixtures are Go programs or repository
-data, so the suite does not require system `sqlite3`, `rg`, or a `scripts/`
-directory.
-
-When a scenario contract intentionally changes, verify and stamp only that
-changed spec:
-
-```bash
-glyph spec verify specs/<changed>.yml --stamp
-glyph spec verify specs/<changed>.yml --format md
-glyph run specs/<changed>.yml --format md --progress always --parallel 1
-```
-
-The contract hash covers `intent`, `outcomes`, `redaction`, and `coversSymbol`.
-Do not restamp a mismatch merely to make verification pass; review the changed
-contract first.
-
-Refresh snapshots only for an intentional visual change:
-
-```bash
-task glyphrun-snapshots
-git diff -- .glyphrun/snapshots
-```
-
-Snapshots are evidence of rendering; they are not a substitute for outcome assertions.
-
-## Optional live Ollama smoke
-
-With a running local Ollama and the documented default `qwen3.5:2b` already installed, run the constrained-model tool scenario separately:
-
-```bash
-task eval
-EVAL_REPEATS=5 task eval
-```
-
-The task checks the configured `OLLAMA_HOST` (loopback by default) for an
-already-installed `qwen3.5:2b`, then repeats the exact tool-call contract three
-times by default and reports Glyphrun's structured stability result. It exits
-if the model is unavailable and never runs `ollama pull` or downloads weights.
-This is a narrow live smoke—not a repository task-completion benchmark—and is
-intentionally outside the deterministic hosted-CI suite.
-Any failed repeat makes `task eval` exit nonzero. The structured result and the
-corresponding `.glyphrun/runs/` artifact distinguish tool dispatch, final-answer
-grounding, and process completion instead of collapsing a model miss into a
-generic timeout.
-
-## Related evidence tools
-
-- [Cairntrace](https://cairntrace.dev/) describes and verifies browser behavior.
-- [Vidtrace](https://vidtrace.dev/) converts bug recordings into timestamped evidence bundles.
-- [file.cheap](https://file.cheap) stores and compares agent workflow artifacts.
-
-These are related tools in the wider ecosystem, not bundled Local Agent dependencies.
+Framework and CLI `.ts` files use TypeScript 7.0.2. Vue SFCs in the playground
+use `vue-tsc` 3.3.11 with its isolated TypeScript 6.0.3 dependency because its
+checker requires compiler APIs unavailable in TypeScript 7. Both checks run in
+`bun run typecheck`; template checking is not skipped.

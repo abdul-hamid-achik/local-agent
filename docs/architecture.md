@@ -31,6 +31,11 @@ Persistence -> scoped memory/ICE + SQLite sessions/ledger + logs
 
 ## Runtime boundaries
 
+These paths refer to the historical Go source at
+[revision 2567a7a](https://github.com/abdul-hamid-achik/local-agent/tree/2567a7a7468ef2a1591e289f43d62b78b5c9679a).
+The current Bun workspaces are `apps/cli`, `packages/runtime`, and
+`packages/vue-tui`; removing Go from the current tree does not establish parity.
+
 - `internal/agent` owns the ReAct loop, prompts, policies, and tool dispatch.
 - `internal/llm` owns the Ollama client, live inventory, model admission, and per-request context policy.
 - `internal/mcp` owns server connections, health checks, reconnection, and tool namespacing.

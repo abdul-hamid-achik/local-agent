@@ -1,0 +1,39 @@
+version: 1
+name: bun_vue_tui_edit_denied
+intent: |
+    the interactive agent asks before an edit and preserves the workspace when
+    the operator denies it.
+target:
+    cmd: ["bun", "specs/fixtures/bun_ollama.ts", "edit-deny"]
+    cwd: "${projectRoot}"
+terminal:
+    cols: 100
+    rows: 28
+    alternateScreen: require
+steps:
+    - wait:
+        screen:
+            contains: "Message the model"
+        timeoutMs: 10000
+    - type: "edit"
+    - press: enter
+    - wait:
+        screen:
+            contains: "Edit notes.txt"
+        timeoutMs: 10000
+    - press: n
+    - wait:
+        screen:
+            contains: "assistant: edit denied"
+        timeoutMs: 10000
+    - press: ctrl+c
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 3000
+outcomes:
+    - id: edit_denied
+      description: denying the approval leaves the workspace unchanged
+      verify:
+        process:
+            exitCode: 0

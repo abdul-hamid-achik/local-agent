@@ -1,0 +1,15 @@
+{
+  "name": "@local-agent/site",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vitepress dev . --host 127.0.0.1",
+    "build": "vitepress build .",
+    "preview": "vitepress preview . --host 127.0.0.1"
+  },
+  "devDependencies": {
+    "vite": "6.4.3",
+    "vitepress": "1.6.4",
+    "vue": "3.5.42"
+  }
+}

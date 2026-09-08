@@ -2,180 +2,38 @@ version: '3'
 
 tasks:
   build:
-    desc: Build the binary
-    cmds:
-      - go build -o bin/local-agent ./cmd/local-agent
-
+    cmds: [bun run build]
   run:
-    desc: Build and run
-    deps: [build]
-    cmds:
-      - ./bin/local-agent
-
+    cmds: [bun run start {{.CLI_ARGS}}]
   dev:
-    desc: Run with go run
-    cmds:
-      - go run ./cmd/local-agent
-
-  install:
-    desc: Install local-agent onto this machine's PATH (go env GOBIN, or GOPATH/bin)
-    cmds:
-      # A real binary rather than a symlink into bin/: `task clean` removes
-      # bin/, and a global command that breaks when you tidy the repository is
-      # worse than one you re-install deliberately. Rerun this after pulling.
-      - go install ./cmd/local-agent
-      - cmd: |
-          target="$(go env GOBIN)"
-          [ -n "$target" ] || target="$(go env GOPATH)/bin"
-          echo "installed: $target/local-agent"
-          case ":$PATH:" in
-            *":$target:"*) ;;
-            *) echo "warning: $target is not on PATH; add it to your shell profile" >&2 ;;
-          esac
-        silent: true
-
-  uninstall:
-    desc: Remove the installed local-agent binary from this machine
-    cmds:
-      - cmd: |
-          target="$(go env GOBIN)"
-          [ -n "$target" ] || target="$(go env GOPATH)/bin"
-          rm -f "$target/local-agent" && echo "removed: $target/local-agent"
-        silent: true
-
-  'site:deps':
-    internal: true
-    sources:
-      - package.json
-      - package-lock.json
-    generates:
-      - node_modules/.package-lock.json
-    cmds:
-      - npm ci --no-audit --no-fund
-
-  site:
-    desc: Run the VitePress documentation site locally
-    deps: ['site:deps']
-    cmds:
-      - npm run site
-
-  'site:build':
-    desc: Build the VitePress documentation site
-    deps: ['site:deps']
-    cmds:
-      - npm run site:build
-
-  'site:check-links':
-    desc: Check internal links in the rendered documentation site
-    deps: ['site:build']
-    cmds:
-      - go test ./internal/doclinks -count=1 -args -dist="{{.ROOT_DIR}}/docs/.vitepress/dist"
-
-  'site:verify':
-    desc: Test, build, and check the public documentation site
-    deps: ['site:check-links']
-
-  'site:preview':
-    desc: Preview the built VitePress documentation site
-    deps: ['site:build']
-    cmds:
-      - npm run site:preview
-
+    cmds: [bun run dev {{.CLI_ARGS}}]
+  deps:
+    cmds: [bun install --frozen-lockfile]
   lint:
-    desc: Run linter
-    cmds:
-      - golangci-lint run ./...
-
+    cmds: [bun run lint]
   test:
-    desc: Run tests
-    cmds:
-      - go test ./...
-
-  'test:integration':
-    desc: Compile and run the opt-in integration-tag suite (live dependencies self-skip when absent)
-    cmds:
-      - go test -tags=integration ./internal/integration -count=1
-
-  sqlc:
-    desc: Regenerate typed SQLite query and schema models
-    dir: internal/db
-    cmds:
-      - sqlc generate
-
+    cmds: [bun run test]
   verify:
-    desc: Run the local code and documentation verification gates
-    deps: ['site:verify']
     cmds:
-      - go mod tidy -diff
-      - golangci-lint run ./...
-      - go vet ./...
-      - go test ./... -count=1 -race
-      - go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
-
-  glyphrun-cli:
-    desc: Run release-critical CLI, AUTO, and external-scope contracts with Glyphrun
-    cmds:
-      - glyph run specs/cli_flags.yml specs/cli_skip_approvals.yml specs/cli_json_receipt.yml specs/tui_auto_commands.yml specs/tui_external_read.yml --format md --progress auto --parallel 1
-
-  glyphrun-contracts:
-    desc: Verify every committed Glyphrun contract hash
-    cmds:
-      - |
-        set -eu
-        test -f specs/live/ollama_tool.yml
-        for spec in specs/*.yml specs/live/*.yml; do
-          test -f "$spec" || continue
-          glyph spec verify "$spec" --format md
-        done
-
+      - bun install --frozen-lockfile
+      - bun run check
+      - bun run site:build
+      - bun run site:check-links
+  site:
+    cmds: [bun run site]
+  site:build:
+    cmds: [bun run site:build]
+  site:check-links:
+    deps: ['site:build']
+    cmds: [bun run site:check-links]
+  site:preview:
+    cmds: [bun run site:preview]
+  test:integration:
+    cmds: [bun run test:integration]
   glyphrun:
-    desc: Run every deterministic terminal behavior spec with Glyphrun
+    cmds: [bun run test:integration]
+  glyphrun-contracts:
     cmds:
-      - go build -o ./bin/local-agent ./cmd/local-agent
-      - |
-        set -eu
-        set --
-        for spec in specs/*.yml; do
-          set -- "$@" "$spec"
-        done
-        test "$#" -gt 0
-        glyph run "$@" --format md --progress auto --parallel 1
-
-  eval:
-    desc: Repeat the opt-in live default-model tool smoke (requires local Ollama; never pulls models)
-    cmds:
-      - |
-        set -eu
-        export OLLAMA_HOST="${OLLAMA_HOST:-http://127.0.0.1:11434}"
-        if ! ollama show qwen3.5:2b >/dev/null 2>&1; then
-          echo "eval requires a running local Ollama with qwen3.5:2b already installed" >&2
-          exit 1
-        fi
-        repeats="${EVAL_REPEATS:-3}"
-        case "$repeats" in
-          ''|*[!0-9]*) echo "EVAL_REPEATS must be a positive integer" >&2; exit 1 ;;
-        esac
-        test "$repeats" -ge 1
-        glyph run specs/live/ollama_tool.yml --format json --progress always --parallel 1 --repeat "$repeats"
-
-  glyphrun-snapshots:
-    desc: Refresh committed Glyphrun terminal snapshots
-    cmds:
-      - glyph snapshot update specs/cli_skip_approvals.yml --format md
-      - glyph snapshot update specs/tui_smoke.yml --format md
-      - glyph snapshot update specs/tui_modes.yml --format md
-      - glyph snapshot update specs/tui_narrow.yml --format md
-      - glyph snapshot update specs/tui_goal_runtime.yml --format md
-      - glyph snapshot update specs/tui_ollama_inventory.yml --format md
-      - glyph snapshot update specs/tui_composer_paste.yml --format md
-      - glyph snapshot update specs/tui_approval_denial.yml --format md
-      - glyph snapshot update specs/tui_approval_always.yml --format md
-      - glyph snapshot update specs/tui_session_receipts.yml --format md
-      - glyph snapshot update specs/tui_help.yml --format md
-      - glyph snapshot update specs/tui_agents.yml --format md
-      - glyph snapshot update specs/tui_transcript_search.yml --format md
-
-  clean:
-    desc: Clean build artifacts
-    cmds:
-      - rm -rf bin/
+      - for spec in specs/bun/*.yml; do glyph spec verify "$spec" --format md || exit 1; done
+  tui:dev:
+    cmds: [bun run tui:dev]

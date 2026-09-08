@@ -1,0 +1,181 @@
+import { z } from "zod";
+
+const defaultStreamIdleTimeoutMs = 300_000;
+const maxStreamIdleTimeoutMs = 2_147_483_647;
+
+const durationMilliseconds = (value: string) => {
+  if (!/^(?:\d+(?:\.\d+)?(?:ns|us|µs|ms|s|m|h))+$/u.test(value))
+    return undefined;
+  const units: Record<string, number> = {
+    ns: 1e-6,
+    us: 1e-3,
+    µs: 1e-3,
+    ms: 1,
+    s: 1_000,
+    m: 60_000,
+    h: 3_600_000,
+  };
+  let milliseconds = 0;
+  for (const [, amount, unit] of value.matchAll(
+    /(\d+(?:\.\d+)?)(ns|us|µs|ms|s|m|h)/gu,
+  ))
+    milliseconds += Number(amount) * (units[unit ?? "ms"] ?? 0);
+  const rounded = Math.ceil(milliseconds);
+  return milliseconds > 0 &&
+    rounded <= maxStreamIdleTimeoutMs &&
+    Number.isSafeInteger(rounded)
+    ? rounded
+    : undefined;
+};
+
+export function providerStreamIdleTimeoutMs(provider: Provider): number {
+  const parsed = provider.stream_idle_timeout
+    ? durationMilliseconds(provider.stream_idle_timeout)
+    : undefined;
+  if (parsed === undefined && provider.stream_idle_timeout)
+    throw new Error("Provider stream_idle_timeout is invalid");
+  return (
+    parsed ?? provider.stream_idle_timeout_ms ?? defaultStreamIdleTimeoutMs
+  );
+}
+
+const endpoint = z.string().superRefine((value, ctx) => {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    ctx.addIssue({
+      code: "custom",
+      message: "Use a valid HTTP(S) Ollama origin",
+    });
+    return;
+  }
+  if (
+    !["http:", "https:"].includes(url.protocol) ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    url.pathname !== "/"
+  )
+    ctx.addIssue({
+      code: "custom",
+      message:
+        "Use an HTTP(S) Ollama origin without credentials, query or path",
+    });
+});
+
+export const ProviderSchema = z
+  .object({
+    type: z.enum(["ollama", "ollama_remote"]),
+    base_url: endpoint,
+    model: z.string().trim().min(1).max(200),
+    context_size: z.number().int().positive().max(2_097_152).default(16_384),
+    max_model_bytes: z
+      .number()
+      .int()
+      .positive()
+      .max(Number.MAX_SAFE_INTEGER)
+      .optional(),
+    stream_idle_timeout: z.string().trim().optional(),
+    /** Parsed milliseconds for the root chat client's request watchdog. */
+    stream_idle_timeout_ms: z.number().int().positive().optional(),
+  })
+  .superRefine((profile, ctx) => {
+    const timeout = profile.stream_idle_timeout
+      ? durationMilliseconds(profile.stream_idle_timeout)
+      : undefined;
+    if (profile.stream_idle_timeout && timeout === undefined)
+      ctx.addIssue({
+        code: "custom",
+        path: ["stream_idle_timeout"],
+        message: "Use a positive Go duration such as 10m or 250ms",
+      });
+    if (
+      profile.stream_idle_timeout_ms !== undefined &&
+      profile.stream_idle_timeout &&
+      profile.stream_idle_timeout_ms !== timeout
+    )
+      ctx.addIssue({
+        code: "custom",
+        path: ["stream_idle_timeout_ms"],
+        message: "Must match stream_idle_timeout",
+      });
+    if (profile.type === "ollama") {
+      let hostname: string;
+      try {
+        hostname = new URL(profile.base_url).hostname;
+      } catch {
+        return;
+      }
+      if (!["127.0.0.1", "localhost", "[::1]"].includes(hostname))
+        ctx.addIssue({
+          code: "custom",
+          message:
+            "Local Ollama requires a loopback endpoint; use an explicit Chalupa profile for remote inference",
+        });
+    }
+    if (profile.type === "ollama_remote") {
+      if (profile.max_model_bytes === undefined)
+        ctx.addIssue({
+          code: "custom",
+          path: ["max_model_bytes"],
+          message: "Chalupa must negotiate a positive max_model_bytes",
+        });
+      if (profile.stream_idle_timeout === undefined)
+        ctx.addIssue({
+          code: "custom",
+          path: ["stream_idle_timeout"],
+          message: "Chalupa must negotiate a positive stream_idle_timeout",
+        });
+    } else if (
+      profile.max_model_bytes !== undefined ||
+      profile.stream_idle_timeout !== undefined ||
+      (profile.stream_idle_timeout_ms !== undefined &&
+        profile.type !== "ollama")
+    )
+      ctx.addIssue({
+        code: "custom",
+        message: "Negotiated remote limits require an ollama_remote profile",
+      });
+  });
+export type Provider = z.infer<typeof ProviderSchema>;
+
+/** Chalupa owns provisioning, model placement and the tunnel; we consume its process profile. */
+export function resolveProvider(
+  env: Record<string, string | undefined>,
+  model?: string,
+): Provider {
+  if (env.LOCAL_AGENT_PROVIDER === "chalupa") {
+    if (env.LOCAL_AGENT_LOCAL_ONLY !== "false")
+      throw new Error("Chalupa requires explicit LOCAL_AGENT_LOCAL_ONLY=false");
+    let rawProfile: unknown;
+    try {
+      rawProfile = JSON.parse(env.LOCAL_AGENT_PROVIDER_CONFIG ?? "{}");
+    } catch {
+      throw new Error("Chalupa provider config must be valid JSON");
+    }
+    const profile = ProviderSchema.parse(rawProfile);
+    if (profile.type !== "ollama_remote")
+      throw new Error("Chalupa requires an ollama_remote profile");
+    if (model && model !== profile.model)
+      throw new Error("Select the model in Chalupa before launching");
+    return {
+      ...profile,
+      stream_idle_timeout_ms: providerStreamIdleTimeoutMs(profile),
+    };
+  }
+  if (env.LOCAL_AGENT_PROVIDER && env.LOCAL_AGENT_PROVIDER !== "ollama")
+    throw new Error("This Bun prototype supports Ollama and Chalupa only");
+  if (env.LOCAL_AGENT_PROVIDER_CONFIG)
+    throw new Error("Provider config requires LOCAL_AGENT_PROVIDER=chalupa");
+  const host = env.OLLAMA_HOST || "http://127.0.0.1:11434";
+  return {
+    ...ProviderSchema.parse({
+      type: "ollama",
+      base_url: host.includes("://") ? host : `http://${host}`,
+      model: model || env.LOCAL_AGENT_MODEL,
+    }),
+    stream_idle_timeout_ms: defaultStreamIdleTimeoutMs,
+  };
+}

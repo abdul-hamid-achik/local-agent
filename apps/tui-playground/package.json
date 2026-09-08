@@ -1,0 +1,25 @@
+{
+  "name": "@local-agent/tui-playground",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --bun vite",
+    "build": "bun --bun vite build",
+    "typecheck": "bun --bun vue-tsc --noEmit -p tsconfig.json"
+  },
+  "imports": {
+    "#playground/*.vue": "./src/*.vue",
+    "#playground/*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@local-agent/vue-tui": "workspace:*",
+    "vue": "3.5.42"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "6.0.8",
+    "vite": "8.2.2",
+    "typescript": "6.0.3",
+    "vue-tsc": "3.3.11"
+  }
+}
