@@ -2,11 +2,15 @@ import type { Theme } from 'vitepress'
 import DefaultTheme from 'vitepress/theme-without-fonts'
 import Layout from './Layout.vue'
 import './style.css'
+import { inject } from '@vercel/analytics'
 
 export default {
   extends: DefaultTheme,
   Layout,
   enhanceApp() {
+    if (typeof window !== 'undefined') {
+      inject()
+    }
     if (typeof document === 'undefined') return
 
     document.addEventListener('keydown', (event) => {
