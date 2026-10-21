@@ -1,0 +1,72 @@
+version: 1
+name: bun_tuimark_composer
+intent: |
+    the Tuimark client's composer takes a message of several lines: shift+enter
+    and alt+enter start a new line, the box grows with the draft, a pasted
+    block keeps its line breaks, and enter sends all of it as one message.
+target:
+    cmd: ["bun", "specs/tuimark/fixture.ts", "chat"]
+    cwd: "${projectRoot}"
+terminal:
+    cols: 100
+    rows: 32
+    alternateScreen: require
+steps:
+    - wait:
+        screen:
+            contains: "Message the model"
+        timeoutMs: 15000
+    - type: "count these"
+    - send:
+        bytes: "\e[13;2u"
+    - type: "second line"
+    - send:
+        bytes: "\e\r"
+    - type: "third line"
+    - wait:
+        screen:
+            matches: "║ third line\\s*║"
+        timeoutMs: 5000
+    - snapshot: three_lines
+    - press: enter
+    - wait:
+        screen:
+            contains: "The message had 3 lines: count these"
+        timeoutMs: 15000
+    - wait:
+        screen:
+            contains: "Ready"
+        timeoutMs: 15000
+    - paste: "count pasted\nblock of\ntext"
+    - wait:
+        screen:
+            matches: "║ text\\s*║"
+        timeoutMs: 5000
+    - snapshot: pasted
+    - press: enter
+    - wait:
+        screen:
+            contains: "The message had 3 lines: count pasted"
+        timeoutMs: 15000
+    - press: ctrl+c
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 5000
+outcomes:
+    - id: tuimark_composer_typed_lines
+      description: three lines typed with shift+enter and alt+enter reach the model as one message of three lines
+      verify:
+        screen:
+            contains: "The message had 3 lines: count these"
+    - id: tuimark_composer_pasted_block
+      description: a pasted block keeps its line breaks and is sent as one message of three lines
+      verify:
+        screen:
+            contains: "The message had 3 lines: count pasted"
+    - id: tuimark_composer_exits
+      description: the client exits cleanly
+      verify:
+        process:
+            exitCode: 0
+contractHash: sha256:bc199db937d56f6039fde49279063a819b41fbae7a1fff0703680be5fac6a2e2

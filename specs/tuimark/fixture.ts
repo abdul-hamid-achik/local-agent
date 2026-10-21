@@ -5,6 +5,8 @@
 // The reply depends only on the last message, so one run can hold several turns:
 //
 //   last message is a tool result  -> "edit applied" or "edit denied"
+//   prompt starts with "count"     -> "The message had N lines: FIRST LINE" (one message,
+//                                      however it was typed or pasted)
 //   prompt contains "edit"         -> one `edit` tool call on notes.txt
 //   prompt contains "slow"         -> one chunk, then nothing until cancelled
 //   anything else                  -> a streamed markdown reply with a code block
@@ -111,6 +113,16 @@ const server = Bun.serve({
         5,
       );
     const prompt = last?.content ?? "";
+    if (prompt.startsWith("count"))
+      return stream(
+        [
+          assistant(
+            `The message had ${prompt.split("\n").length} lines: ${prompt.split("\n")[0]}`,
+          ),
+          done,
+        ],
+        5,
+      );
     if (prompt.includes("edit"))
       return stream(
         [

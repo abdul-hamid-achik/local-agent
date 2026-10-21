@@ -1,0 +1,89 @@
+version: 1
+name: bun_tuimark_history
+intent: |
+    in the Tuimark client, up on the first line of the composer recalls the
+    messages sent before, newest first, down comes forward again, and down past
+    the newest brings back the draft that was being written.
+target:
+    cmd: ["bun", "specs/tuimark/fixture.ts", "chat"]
+    cwd: "${projectRoot}"
+terminal:
+    cols: 100
+    rows: 32
+    alternateScreen: require
+steps:
+    - wait:
+        screen:
+            contains: "Message the model"
+        timeoutMs: 15000
+    - press: up
+    - wait:
+        screen:
+            matches: "║ Message the model\\s*║"
+        timeoutMs: 3000
+    - type: "count alpha"
+    - press: enter
+    - wait:
+        screen:
+            contains: "The message had 1 lines: count alpha"
+        timeoutMs: 15000
+    - wait:
+        screen:
+            contains: "Ready"
+        timeoutMs: 15000
+    - type: "count beta"
+    - press: enter
+    - wait:
+        screen:
+            contains: "The message had 1 lines: count beta"
+        timeoutMs: 15000
+    - wait:
+        screen:
+            contains: "Ready"
+        timeoutMs: 15000
+    - type: "half typed"
+    - press: up
+    - wait:
+        screen:
+            matches: "║ count beta\\s*║"
+        timeoutMs: 5000
+    - snapshot: newest
+    - press: up
+    - wait:
+        screen:
+            matches: "║ count alpha\\s*║"
+        timeoutMs: 5000
+    - snapshot: oldest
+    - press: up
+    - wait:
+        screen:
+            matches: "║ count alpha\\s*║"
+        timeoutMs: 3000
+    - press: down
+    - wait:
+        screen:
+            matches: "║ count beta\\s*║"
+        timeoutMs: 5000
+    - press: down
+    - wait:
+        screen:
+            matches: "║ half typed\\s*║"
+        timeoutMs: 5000
+    - snapshot: draft_back
+    - press: ctrl+c
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 5000
+outcomes:
+    - id: tuimark_history_recalls
+      description: up walked back through both sent messages and down walked forward again to the unsent draft
+      verify:
+        screen:
+            matches: "║ half typed\\s*║"
+    - id: tuimark_history_exits
+      description: the client exits cleanly
+      verify:
+        process:
+            exitCode: 0
+contractHash: sha256:67ff8fd30b991aab8e3953282e7be8cdc82d1667c5b6c0f74814076ab2d638f6
