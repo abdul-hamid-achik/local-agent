@@ -1,0 +1,51 @@
+{
+  "name": "@local-agent/desktop",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist-main/main.mjs",
+  "scripts": {
+    "dev": "bun scripts/dev.ts",
+    "build:main": "bun build src/main/main.ts --outfile=dist-main/main.mjs --target=node --format=esm --external=electron && bun build src/main/preload.ts --outfile=dist-main/preload.cjs --target=node --format=cjs --external=electron",
+    "build:renderer": "vite build",
+    "build": "bun run build:main && bun run build:renderer",
+    "start": "electron dist-main/main.mjs",
+    "dist": "bun run build && electron-builder --mac --publish never",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.json"
+  },
+  "imports": {
+    "#desktop/*.vue": "./src/*.vue",
+    "#desktop/*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@local-agent/runtime": "workspace:*",
+    "vue": "3.5.42"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "6.0.8",
+    "electron": "44.4.5",
+    "electron-builder": "26.15.3",
+    "typescript": "6.0.3",
+    "vite": "8.2.2",
+    "vue-tsc": "3.3.11"
+  },
+  "build": {
+    "appId": "dev.localagent.workbench",
+    "productName": "Local Agent Workbench",
+    "files": [
+      "dist-main/**",
+      "dist-renderer/**",
+      "package.json"
+    ],
+    "mac": {
+      "icon": "build/icon.icns",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "directories": {
+      "output": "release"
+    }
+  }
+}

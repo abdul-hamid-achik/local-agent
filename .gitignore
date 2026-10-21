@@ -46,3 +46,8 @@ tmp/
 temp/
 *.tmp
 .vercel
+
+# Electron workbench build output (committed icon source lives in build/)
+apps/desktop/dist-main/
+apps/desktop/dist-renderer/
+apps/desktop/release/
