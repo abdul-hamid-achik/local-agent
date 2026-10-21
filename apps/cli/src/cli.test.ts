@@ -140,6 +140,8 @@ async function runCli(...args: string[]) {
 
 test.each([
   [["--ui", "bogus"], "Unknown UI client"],
+  [["--ui", "bogus", "--help"], "Unknown UI client"],
+  [["--ui", "bogus", "--mcp-status"], "Unknown UI client"],
   [["--ui", "tuimark", "--mode", "inline"], "--ui tuimark is fullscreen only"],
   [
     ["--ui", "tuimark", "--mode", "headless", "-p", "x"],

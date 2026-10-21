@@ -11,6 +11,7 @@ import {
   Workspace,
 } from "@local-agent/runtime";
 import { terminalText } from "@local-agent/vue-tui/text";
+import { parseUi } from "#cli/ui-flag";
 
 async function inspectMcpStatus(path: string, signal: AbortSignal) {
   const file = Bun.file(path);
@@ -70,11 +71,15 @@ try {
       "mcp-status": { type: "boolean", default: false },
     },
   });
+  const ui = parseUi(values.ui);
   if (values.help) {
     console.log(`Bun Local Agent — experimental agent
 
 bun dev --model MODEL [--mode fullscreen|inline|headless] [--ui vue|tuimark] [-p PROMPT] [--json]
-  --ui vue|tuimark     Interactive client: vue (default) or the opt-in Tuimark client (fullscreen only)
+  --ui vue|tuimark     Interactive client: vue (default) or the opt-in Tuimark client
+                       (fullscreen, macOS and Linux). It runs the tuimark binary from
+                       TUIMARK_BINARY, or downloads the release it is pinned to once
+                       (checksum-verified) into the user cache.
   --workspace PATH     Workspace root (default: current directory)
   --intent plan|build  Plan forbids edits and commands; build asks before acting
   --approve-edits      Allow existing-file edits in headless mode
@@ -112,8 +117,6 @@ Interrupted tool outcomes require inspection; they are never automatically repla
   } else {
     if (!["fullscreen", "inline", "headless"].includes(values.mode))
       throw new Error("Unknown presentation mode");
-    if (values.ui !== "vue" && values.ui !== "tuimark")
-      throw new Error("Unknown UI client; use --ui vue or --ui tuimark");
     if (values.intent !== "plan" && values.intent !== "build")
       throw new Error("Unknown agent intent");
     if (
@@ -141,7 +144,7 @@ Interrupted tool outcomes require inspection; they are never automatically repla
     const headless =
       values.mode === "headless" || values.prompt !== undefined || values.json;
     if (!inspect) {
-      if (values.ui === "tuimark" && (headless || values.mode !== "fullscreen"))
+      if (ui === "tuimark" && (headless || values.mode !== "fullscreen"))
         throw new Error(
           "--ui tuimark is fullscreen only; use it without --prompt, --json or --mode inline|headless",
         );
@@ -284,7 +287,7 @@ Interrupted tool outcomes require inspection; they are never automatically repla
                 );
             }
             if (!values.json) process.stdout.write("\n");
-          } else if (values.ui === "tuimark") {
+          } else if (ui === "tuimark") {
             // Tuimark owns the terminal; the Vue renderer stays unloaded.
             const { runTuimark } = await import("#cli/tuimark/launch");
             await runTuimark(

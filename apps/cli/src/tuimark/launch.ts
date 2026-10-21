@@ -14,9 +14,18 @@ import type {
   SessionContext,
   Workspace,
 } from "@local-agent/runtime";
-import { spawnHost } from "@thelacanians/tuimark";
+import { type Ready, resolveBinary, spawnHost } from "@thelacanians/tuimark";
 import type { Intent } from "#cli/tuimark/commands";
-import { TuimarkClient } from "#cli/tuimark/controller";
+import { type ClientOptions, TuimarkClient } from "#cli/tuimark/controller";
+
+/** The oldest tuimark this client's document runs on (props and <slot/>, 0.4.5). */
+export const MIN_TUIMARK = "0.4.5";
+
+/**
+ * Leave the alternate screen, show the cursor, turn bracketed paste off and
+ * autowrap on. A host that dies leaves the terminal as it was drawing it.
+ */
+export const TERMINAL_RESET = "\x1b[?1049l\x1b[?25h\x1b[?2004l\x1b[?7h\x1b[0m";
 
 /**
  * The folder with app.tui, next to this file. The bundle (`bun run build`)
@@ -32,6 +41,59 @@ export function uiDirectory(
   return directory;
 }
 
+/** True when `version` ("0.4.6", "0.4.5-dev", "v1.0.0") is at least `minimum`. */
+export function versionAtLeast(version: string, minimum: string): boolean {
+  const parse = (text: string) =>
+    (/^v?(\d+)\.(\d+)\.(\d+)/.exec(text) ?? []).slice(1).map(Number);
+  const have = parse(version);
+  const need = parse(minimum);
+  if (have.length < 3) return false;
+  for (let i = 0; i < 3; i++) {
+    if ((have[i] ?? 0) !== (need[i] ?? 0))
+      return (have[i] ?? 0) > (need[i] ?? 0);
+  }
+  return true;
+}
+
+/**
+ * Why a tuimark that said `ready` cannot run this client, or undefined. An older
+ * binary loads the document with errors (no props, no slot) and shows an
+ * approval dialog without its diff, so it is refused before anything is drawn.
+ */
+export function readyProblem(
+  ready: Pick<Ready, "version" | "diagnostics">,
+  bin: string,
+): string | undefined {
+  const errors = ready.diagnostics.filter(
+    (d) => (d as { severity?: unknown }).severity === "error",
+  );
+  const tooOld = !versionAtLeast(ready.version, MIN_TUIMARK);
+  if (!tooOld && errors.length === 0) return undefined;
+  const first = errors[0] as { code?: string; msg?: string } | undefined;
+  return [
+    `The Tuimark client needs tuimark >= ${MIN_TUIMARK}; ${bin} is ${ready.version}`,
+    errors.length
+      ? ` and loads app.tui with ${errors.length} error${errors.length === 1 ? "" : "s"}${first ? ` (${first.code}: ${first.msg})` : ""}`
+      : "",
+    ". Set TUIMARK_BINARY to a newer tuimark, or use --ui vue.",
+  ].join("");
+}
+
+/** The parts of the process the launcher uses (fakes in tests). */
+export interface LaunchDeps {
+  /** Replaces the runtime's agent loop (tests). */
+  run?: ClientOptions["run"];
+  spawn?: typeof spawnHost;
+  resolve?: () => Promise<string>;
+  stdout?: {
+    isTTY?: boolean;
+    columns?: number;
+    write(chunk: string): unknown;
+    on?(event: "resize", listener: () => void): unknown;
+    off?(event: "resize", listener: () => void): unknown;
+  };
+}
+
 export async function runTuimark(
   provider: Provider,
   signal: AbortSignal,
@@ -39,8 +101,14 @@ export async function runTuimark(
   intent: Intent,
   session?: SessionContext,
   mcp: readonly McpConnection[] = [],
+  deps: LaunchDeps = {},
 ): Promise<void> {
   signal.throwIfAborted();
+  const stdout = deps.stdout ?? process.stdout;
+  const resetTerminal = () => {
+    if (stdout.isTTY) stdout.write(TERMINAL_RESET);
+  };
+  let readyColumns = 80;
   const client = new TuimarkClient({
     provider,
     workspace,
@@ -48,12 +116,25 @@ export async function runTuimark(
     session,
     mcp,
     signal,
+    run: deps.run,
+    columns: () => stdout.columns ?? readyColumns,
   });
-  const ui = await spawnHost(join(uiDirectory(), "app.tui"), {
+  const bin = await (deps.resolve ?? resolveBinary)();
+  const ui = await (deps.spawn ?? spawnHost)(join(uiDirectory(), "app.tui"), {
     data: client.initialStore() as unknown as Record<string, unknown>,
     replyTimeout: "5s",
+    bin,
   });
+  readyColumns = ui.ready.cols;
+  const problem = readyProblem(ui.ready, bin);
+  if (problem) {
+    await ui.close();
+    resetTerminal();
+    throw new Error(problem);
+  }
   client.attach(ui);
+  const onResize = () => void client.resize();
+  stdout.on?.("resize", onResize);
   const stop = () => {
     client.abort();
     void ui.close();
@@ -61,14 +142,27 @@ export async function runTuimark(
   signal.addEventListener("abort", stop, { once: true });
   try {
     if (signal.aborted) stop();
-    const exit = await ui.exited;
-    // The session lease and the store are released by the turn's own cleanup.
+    let failure: Error | undefined;
+    try {
+      const exit = await ui.exited;
+      if (exit.reason === "error")
+        failure = new Error(
+          exit.error ?? "The Tuimark host ended with an error",
+        );
+    } catch (error) {
+      failure = error instanceof Error ? error : new Error(String(error));
+    }
+    // Wait for the turn first: runAgent releases the session lease, and main.ts
+    // closes the session store right after this returns.
     client.abort();
     await client.idle();
-    if (exit.reason === "error")
-      throw new Error(exit.error ?? "The Tuimark host ended with an error");
+    if (failure) {
+      resetTerminal();
+      throw failure;
+    }
   } finally {
     signal.removeEventListener("abort", stop);
+    stdout.off?.("resize", onResize);
     client.abort();
     await client.idle();
   }
