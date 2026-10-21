@@ -24,7 +24,7 @@ import {
   useExit,
 } from "@local-agent/vue-tui";
 import { defineComponent, h, nextTick, onUnmounted, ref } from "vue";
-import { approvalPreview, messageText } from "#cli/preview";
+import { approvalPreview, messageText, tokensPerSecond } from "#cli/preview";
 
 const messageSyntax = SyntaxStyle.fromStyles({
   default: { fg: "#d8dee9" },
@@ -52,6 +52,8 @@ export function createTerminalRoot(
       const status = ref(idleStatus);
       const history = ref<Message[]>(session?.state.messages.slice() ?? []);
       const live = ref("");
+      // The model is reasoning before it answers (never added to the history).
+      const thinking = ref(false);
       const selectedIntent = ref(intent);
       const exit = useExit();
       let turn: AbortController | undefined;
@@ -124,6 +126,8 @@ export function createTerminalRoot(
         const request = new AbortController();
         turn = request;
         let receivedMessage = false;
+        let evalCount = 0;
+        let evalDuration = 0;
         history.value.push({ role: "user", content: prompt });
         if (mode === "inline")
           process.stdout.write(`\nYou: ${terminalText(prompt)}\nAssistant: `);
@@ -136,6 +140,14 @@ export function createTerminalRoot(
             session,
             mcp,
           })) {
+            if (event.type === "thinking") thinking.value = true;
+            if (event.type === "text" || event.type === "tool_requested")
+              thinking.value = false;
+            if (event.type === "done") {
+              evalCount += event.evalCount ?? 0;
+              evalDuration += event.evalDuration ?? 0;
+              thinking.value = false;
+            }
             if (event.type === "message") {
               receivedMessage = true;
               history.value.push(event.message);
@@ -152,7 +164,8 @@ export function createTerminalRoot(
                 process.stdout.write(terminalText(event.text));
             }
           }
-          status.value = idleStatus;
+          const speed = tokensPerSecond(evalCount, evalDuration);
+          status.value = speed ? `${idleStatus} · ${speed}` : idleStatus;
         } catch (error) {
           // Keep completed messages and tool receipts even when a later request fails.
           if (!session) {
@@ -167,6 +180,7 @@ export function createTerminalRoot(
         } finally {
           if (mode === "inline") process.stdout.write("\n");
           busy.value = false;
+          thinking.value = false;
           live.value = "";
           if (turn === request) turn = undefined;
         }
@@ -248,7 +262,9 @@ export function createTerminalRoot(
                   )
                 : null,
               h(Text, {}, () =>
-                busy.value ? "Generating · Esc cancel" : status.value,
+                busy.value
+                  ? `${thinking.value ? "Thinking…" : "Generating"} · Esc cancel`
+                  : status.value,
               ),
               pending.value
                 ? h(Approval, {

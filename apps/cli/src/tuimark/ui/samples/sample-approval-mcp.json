@@ -228,6 +228,10 @@
     },
     "active": true
   },
+  "thinking": {
+    "on": false,
+    "runs": []
+  },
   "approval": {
     "open": true,
     "title": "Call db__query?",

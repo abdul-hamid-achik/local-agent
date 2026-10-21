@@ -8,8 +8,10 @@ import {
   cleanText,
   clip,
   IDLE_LIVE,
+  IDLE_THINKING,
   type LiveView,
   type MessageView,
+  type ThinkingView,
 } from "#cli/tuimark/blocks";
 import {
   filterPalette,
@@ -68,6 +70,8 @@ export interface Store {
   messages: MessageView[];
   earlier: { n: number };
   live: LiveView;
+  /** The model's reasoning while it streams; gone once the answer starts. */
+  thinking: ThinkingView;
   approval: ApprovalState;
   palette: { open: boolean; query: string; cur: string };
   found: { any: boolean; items: PaletteItem[] };
@@ -135,6 +139,7 @@ export function initialStore(init: StoreInit): Store {
     messages: init.transcript.messages,
     earlier: init.transcript.earlier,
     live: IDLE_LIVE,
+    thinking: IDLE_THINKING,
     approval: noApproval(),
     palette: { open: false, query: "", cur: found[0]?.id ?? "" },
     found: { any: found.length > 0, items: found },
@@ -296,7 +301,7 @@ export function approvalState(
       return {
         ...base,
         title: "Run command?",
-        body: body("Run this command in the workspace with your permissions."),
+        body: body("Runs exactly as written: there is no shell."),
         danger: true,
       };
   }

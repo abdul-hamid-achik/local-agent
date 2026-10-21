@@ -35,14 +35,90 @@ and Biome **2.5.12**.
 ```bash
 bun install --frozen-lockfile
 bun run check                         # lint, TS 7, tests, CLI build
-bun run dev --model YOUR_LOCAL_MODEL  # fullscreen; model must already exist
-bun run dev --model YOUR_LOCAL_MODEL --mode inline
-bun run dev --model YOUR_LOCAL_MODEL --mode headless -p "Hello" --json
+bun run dev                           # fullscreen, with the default model (see below)
+bun run dev --mode inline
+bun run dev --mode headless -p "Hello" --json
+bun run dev --model OTHER_MODEL       # any installed Ollama model with tools
 bun run build
 bun run start --help
 bun run site:build
 bun run tui:dev                       # Vue SFC playground, no model required
 bun run test:integration              # requires Glyphrun v0.20.0
+```
+
+## Local model
+
+With the local Ollama provider and neither `--model` nor `LOCAL_AGENT_MODEL`,
+local-agent uses **`qwen3.5:4b-q4_K_M`**. It is the smallest model that completed
+every task of a six-task coding battery (read and explain, find with grep, fix a
+bug, add and run tests, a chat question, a rename across files) in all three
+repetitions on a 16 GB laptop, at about 3.7 GB of memory and 30 to 40 tokens per
+second. The `-q4_K_M` tags run on llama.cpp; the default `qwen3.5:4b` tag runs on
+Ollama's MLX runner, whose reported memory kept growing during a session.
+
+```bash
+ollama pull qwen3.5:4b-q4_K_M
+bun run dev
+```
+
+If the model is missing, the client stops before it starts with
+`Model qwen3.5:4b-q4_K_M is not installed. Run: ollama pull qwen3.5:4b-q4_K_M`.
+The Chalupa provider keeps the model of its profile.
+
+| Option | Model | Notes |
+| --- | --- | --- |
+| Default | `qwen3.5:4b-q4_K_M` | 3.3 GB download |
+| Lighter | `qwen3.5:2b-q4_K_M` with `--think off` | 1.9 GB; much faster, but weaker on multi-step work. With thinking on it often loops, so turn it off |
+| Stronger | `ornith-1.5:9b` | 6.6 GB download, about 21 tokens per second; close other applications first on a 16 GB machine |
+
+Flags and variables (a flag wins over its variable):
+
+| Flag | Variable | Meaning |
+| --- | --- | --- |
+| `--model MODEL` | `LOCAL_AGENT_MODEL` | Ollama model; Chalupa rejects a different one |
+| `--think on\|off` | `LOCAL_AGENT_THINK=1\|0` | Sent to Ollama as `think`, only when set; unset keeps the model's default. Applies to Chalupa too |
+| `--context N` | `LOCAL_AGENT_CONTEXT` | Context tokens for local Ollama (`32768` or `32k`; default 16384). It cannot exceed the model's native context. Chalupa negotiates its own, so `--context` is refused there and the variable ignored |
+
+Thinking streams as its own `thinking` event, apart from the answer. The Tuimark
+client shows a dim "Thinking…" block with the last three lines while it streams
+and removes it when the answer starts; the Vue client shows "Thinking…" in its
+status line; headless `--json` emits the events. Reasoning is never printed into
+the transcript. The `done` event also carries Ollama's `promptEvalCount`,
+`promptEvalDuration`, `evalCount`, `evalDuration` and `totalDuration` (durations in
+nanoseconds) when reported, and the status line shows `N tok/s` after a turn.
+
+### Tools
+
+Paths are relative to the workspace root (`src/main.ts`). An absolute path inside
+the workspace is accepted and shown in its relative form; any other absolute path
+is rejected with the relative path it probably meant. `..` and symbolic links out
+of the workspace stay forbidden.
+
+| Tool | Approval | What it does |
+| --- | --- | --- |
+| `read` | none | Read a UTF-8 file |
+| `list` | none | List a directory (directories end with `/`; `.git` and `node_modules` skipped; 500 entries) |
+| `search` | none | Literal or regular-expression search over workspace text files as `path:line: text` (100 matches; binaries, `.git`, `node_modules` and secrets skipped) |
+| `edit` | `--approve-edits` | Replace one exact occurrence in an existing file |
+| `write` | `--approve-edits` | Create a file (creating directories) or replace one; the approval shows the content as added lines, or the diff for a replacement |
+| `run_command` | `--approve-commands` | Run one program from an `argv` array, with no shell |
+
+`run_command` takes `{"argv": ["bun", "test", "tests/a.test.ts"]}`. If a model sends
+a string instead it is split with a quote-aware splitter; a string that needs a shell
+(`|`, `&&`, `;`, `>`, `<`, `$(`, backticks) is refused with a message that there is
+no shell. The approval shows the parsed command as one shell-quoted line. The
+system prompt lists which of `bun`, `node`, `npm`, `python3`, `go`, `cargo` and
+`git` are on `PATH`. MCP tools are named `SERVER__TOOL` and are handled as before.
+
+### Ornith on Chalupa
+
+For `ornith-1.5:9b` (or `35b`) on a rented GPU, run from this checkout. **`chalupa up`
+costs money until `chalupa down`**; check the plan with `--dry-run` first.
+
+```bash
+chalupa up --model ornith-1.5:9b --tier gpu-small --context 64k --expires-after 45
+chalupa exec --context 64k -- bun run apps/cli/src/main.ts   # no --model: the profile has it
+chalupa down                                                  # stops the billing
 ```
 
 Workspaces and scripts use [Bun's native workspace support](https://bun.com/docs/pm/workspaces)
@@ -60,10 +136,9 @@ interactive presentation, use `/help`, `/mode plan`, `/mode build`, and `/mcp`.
 Mode changes apply to the next turn; they do not alter a running tool call.
 
 Use `--workspace PATH` to select the file root and `--intent plan` to forbid
-edits and commands. Build intent asks for each edit or command in interactive modes; Enter denies and
-`y` approves. Headless edits are denied unless `--approve-edits` is explicit.
-This flag only permits exact edits to existing files; it grants no command
-execution. Headless commands require the separate `--approve-commands` flag.
+edits, writes and commands. Build intent asks for each edit or command in interactive modes; Enter denies and
+`y` approves. Headless edits and writes are denied unless `--approve-edits` is explicit.
+This flag permits file changes only; it grants no command execution. Headless commands require the separate `--approve-commands` flag.
 Commands run with user permissions, without an OS sandbox or implicit shell.
 A successful edit does not imply that verification passed.
 

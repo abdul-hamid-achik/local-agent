@@ -23,13 +23,17 @@ import {
   type Workspace,
 } from "@local-agent/runtime";
 import type { Host, HostEvent } from "@thelacanians/tuimark";
+import { tokensPerSecond } from "#cli/preview";
 import { terminalText } from "#cli/text";
 import {
   clip,
   IDLE_LIVE,
+  IDLE_THINKING,
   type LiveView,
   liveToolView,
   streamingView,
+  type ThinkingView,
+  thinkingView,
   ViewBuilder,
 } from "#cli/tuimark/blocks";
 import {
@@ -99,6 +103,11 @@ function oneLine(message: string): string {
   return clip(terminalText(message).replace(/\s+/g, " ").trim(), 300);
 }
 
+function withSpeed(status: string, count: number, duration: number): string {
+  const speed = tokensPerSecond(count, duration);
+  return speed ? `${status} · ${speed}` : status;
+}
+
 /** The refused writes the client remembers. */
 const MAX_WRITE_ERRORS = 20;
 
@@ -116,6 +125,8 @@ export class TuimarkClient {
   // the live message
   private liveText = "";
   private liveTool?: LiveView;
+  /** The reasoning of the current step; never part of the history. */
+  private thinkText = "";
   private dirty = false;
   private liveInFlight = false;
   private timer?: ReturnType<typeof setInterval>;
@@ -128,6 +139,9 @@ export class TuimarkClient {
   private armTimer?: ReturnType<typeof setTimeout>;
   private proposal?: ApprovalRequest;
   private usedTokens = 0;
+  /** Ollama's generation counters, summed over the steps of a turn (nanoseconds). */
+  private evalCount = 0;
+  private evalDuration = 0;
   private reportedWriteError = false;
 
   constructor(private readonly options: ClientOptions) {
@@ -252,8 +266,28 @@ export class TuimarkClient {
   private publishMessages(extra: Write[] = []): Promise<void> {
     this.liveText = "";
     this.liveTool = undefined;
+    this.thinkText = "";
     this.dirty = false;
-    return this.publishWindow([{ path: "live", value: IDLE_LIVE }, ...extra]);
+    return this.publishWindow([
+      { path: "live", value: IDLE_LIVE },
+      { path: "thinking", value: IDLE_THINKING },
+      ...extra,
+    ]);
+  }
+
+  private currentThinking(): ThinkingView {
+    // The block ends where the answer, or a tool call, begins.
+    return this.thinkText && !this.liveText && !this.liveTool
+      ? thinkingView(this.thinkText)
+      : IDLE_THINKING;
+  }
+
+  /** The writes that bring the live message and the thinking block up to date. */
+  private liveWrites(): Write[] {
+    return [
+      { path: "live", value: this.currentLive() },
+      { path: "thinking", value: this.currentThinking() },
+    ];
   }
 
   private currentLive(): LiveView {
@@ -266,18 +300,16 @@ export class TuimarkClient {
     if (!this.dirty || this.liveInFlight) return;
     this.dirty = false;
     this.liveInFlight = true;
-    void this.write([{ path: "live", value: this.currentLive() }]).finally(
-      () => {
-        this.liveInFlight = false;
-      },
-    );
+    void this.write(this.liveWrites()).finally(() => {
+      this.liveInFlight = false;
+    });
   }
 
   /** Test hook: flush the live message now and wait for the writer. */
   async flush(): Promise<void> {
     if (this.dirty) {
       this.dirty = false;
-      await this.write([{ path: "live", value: this.currentLive() }]);
+      await this.write(this.liveWrites());
     }
     await this.tail;
   }
@@ -433,6 +465,9 @@ export class TuimarkClient {
     this.turn = request;
     this.liveText = "";
     this.liveTool = undefined;
+    this.thinkText = "";
+    this.evalCount = 0;
+    this.evalDuration = 0;
     const message: Message = { role: "user", content: prompt };
     this.history.push(message);
     const view = this.builder.fromMessage(message);
@@ -488,6 +523,10 @@ export class TuimarkClient {
         mcp,
       })) {
         switch (event.type) {
+          case "thinking":
+            this.thinkText += event.text;
+            this.dirty = true;
+            break;
           case "text":
             this.liveText += event.text;
             this.dirty = true;
@@ -503,6 +542,7 @@ export class TuimarkClient {
           case "tool_requested":
             toolName = event.name;
             this.liveText = "";
+            this.thinkText = "";
             this.liveTool = liveToolView(
               this.builder.takeCall(),
               event.name,
@@ -535,11 +575,16 @@ export class TuimarkClient {
             break;
           case "done":
             this.usedTokens = event.inputTokens + event.outputTokens;
+            this.evalCount += event.evalCount ?? 0;
+            this.evalDuration += event.evalDuration ?? 0;
+            // The next step starts with a clean reasoning block.
+            this.thinkText = "";
             break;
           default:
             break;
         }
       }
+      status = withSpeed(status, this.evalCount, this.evalDuration);
     } catch (error) {
       // Keep completed messages and tool receipts even when a later request fails.
       if (!session) {

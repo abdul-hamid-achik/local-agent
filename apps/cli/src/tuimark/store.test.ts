@@ -52,6 +52,7 @@ test("the initial store has every path the document reads", () => {
       "palette",
       "placeholder",
       "status",
+      "thinking",
     ].sort(),
   );
   expect(store.approval).toEqual(noApproval());

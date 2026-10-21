@@ -286,6 +286,10 @@
     },
     "active": true
   },
+  "thinking": {
+    "on": false,
+    "runs": []
+  },
   "approval": {
     "open": false,
     "title": "",

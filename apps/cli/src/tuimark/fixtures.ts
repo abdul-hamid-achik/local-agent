@@ -3,7 +3,12 @@
 // change to a store shape shows up in the goldens instead of in a terminal.
 
 import type { ApprovalRequest, Message } from "@local-agent/runtime";
-import { liveToolView, streamingView, ViewBuilder } from "#cli/tuimark/blocks";
+import {
+  liveToolView,
+  streamingView,
+  thinkingView,
+  ViewBuilder,
+} from "#cli/tuimark/blocks";
 import { filterPalette } from "#cli/tuimark/commands";
 import {
   APPROVAL_STATUS,
@@ -253,6 +258,54 @@ export function streamingSample(): Store {
   return store;
 }
 
+/** The model is reasoning: the dim "Thinking…" block shows the last three lines. */
+export function thinkingSample(): Store {
+  const { store } = base();
+  store.thinking = thinkingView(
+    [
+      "The user wants a retry around the fetch helper.",
+      "I should read src/fetch.ts first to see how get() is written.",
+      "Then wrap the call: three attempts, exponential backoff,",
+      "and rethrow the last error so callers still see it.",
+    ].join("\n"),
+  );
+  store.busy = true;
+  store.placeholder = "Generating…";
+  store.status = BUSY_STATUS_LINE;
+  return store;
+}
+
+/** A command waiting for approval: one shell-quoted line, then where it runs. */
+export function commandApprovalSample(): Store {
+  const { store, builder } = base();
+  builder.fromMessage({
+    role: "assistant",
+    content: "",
+    tool_calls: [MARKDOWN_TOOL],
+  });
+  store.live = liveToolView(builder.takeCall(), "run_command", "approval");
+  store.approval = approvalState(
+    {
+      kind: "command",
+      argv: [
+        "bun",
+        "test",
+        "tests/stats.test.ts",
+        "-t",
+        "mean of an empty list",
+      ],
+      cwd: "/home/me/project",
+      timeoutMs: 120_000,
+    },
+    80,
+    "/home/me/project",
+  );
+  store.busy = true;
+  store.placeholder = "Generating…";
+  store.status = APPROVAL_STATUS;
+  return store;
+}
+
 /** The command palette, filtered to "mode". */
 export function paletteSample(): Store {
   const { store } = base();
@@ -276,6 +329,8 @@ export const SAMPLES = {
   "sample-approval-long": longApprovalSample,
   "sample-approval-mcp": mcpApprovalSample,
   "sample-approval-truncated": truncatedApprovalSample,
+  "sample-approval-command": commandApprovalSample,
+  "sample-thinking": thinkingSample,
   "sample-streaming": streamingSample,
   "sample-palette": paletteSample,
   "sample-help": helpSample,

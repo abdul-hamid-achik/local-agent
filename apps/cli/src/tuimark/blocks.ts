@@ -821,6 +821,41 @@ export const IDLE_LIVE: LiveView = Object.freeze({
   active: false,
 }) as LiveView;
 
+/** The "Thinking…" block under the log while the model reasons before it answers. */
+export interface ThinkingView {
+  on: boolean;
+  /** The last THINK_LINES lines of the reasoning, dim, as runs. */
+  runs: Run[];
+}
+
+export const IDLE_THINKING: ThinkingView = Object.freeze({
+  on: false,
+  runs: [],
+}) as ThinkingView;
+
+/** Lines of the reasoning the block shows, and the columns each keeps. */
+export const THINK_LINES = 3;
+const THINK_COLS = 72;
+
+/**
+ * The block for the reasoning streamed so far: its last three non-blank lines,
+ * clipped. It lives only in the live view; the reasoning is never part of a
+ * message the transcript commits.
+ */
+export function thinkingView(text: string): ThinkingView {
+  const lines = cleanText(text)
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(-THINK_LINES);
+  const runs: Run[] = [];
+  lines.forEach((line, n) => {
+    if (n > 0) pushRun(runs, "\n");
+    pushRun(runs, clip(line, THINK_COLS), "think");
+  });
+  return { on: true, runs };
+}
+
 /** An in-flight assistant reply (streaming markdown). */
 export function streamingView(text: string): LiveView {
   return { ...view("live", "asst", parseStreaming(text)), active: true };

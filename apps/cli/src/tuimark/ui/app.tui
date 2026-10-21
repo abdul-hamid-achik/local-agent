@@ -118,6 +118,11 @@
         <col id="live" if="live.active">
           <use template="la-turn" with="live as msg"/>
         </col>
+        <!-- The model's reasoning: its last three lines, dim, until the answer starts. -->
+        <col id="thinking" if="thinking.on">
+          <text class="la-think-head">Thinking…</text>
+          <text class="la-think" runs="thinking.runs" wrap="pre-wrap"/>
+        </col>
       </scroll>
 
       <input id="composer" bind="draft" placeholder="{placeholder}" on:submit="send"/>

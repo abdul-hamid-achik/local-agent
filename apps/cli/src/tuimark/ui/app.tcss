@@ -34,7 +34,7 @@
 .la-spin { width: 2; }
 
 #log { width: 1fr; height: 1fr; }
-#rows, #live { height: auto; layout: column; }
+#rows, #live, #thinking { height: auto; layout: column; }
 
 .la-msg { height: auto; layout: column; margin: 0 0 1 0; }
 .la-role { bold: true; }
@@ -51,7 +51,10 @@
 
 .la-code { height: auto; layout: column; background: $panel; padding: 0 1; }
 .la-lang { color: $muted; dim: true; }
-.la-codetext, .la-out { height: auto; }
+.la-codetext, .la-out, .la-think { height: auto; }
+.la-think-head { color: $muted; dim: true; }
+.la-think { padding: 0 0 0 2; }
+#thinking { margin: 0 0 1 0; }
 
 /* Inline runs (blocks.ts inlineRuns) and code tokens: a span is styled by the
  * class its run carries. */
@@ -63,6 +66,7 @@ span.url, span.strike { dim: true; }
 span.kw { color: $kw; }
 span.str { color: $str; }
 span.num { color: $num; }
+span.think { color: $muted; italic: true; dim: true; }
 span.com, span.note { color: $com; italic: true; }
 span.err { color: $danger; bold: true; }
 

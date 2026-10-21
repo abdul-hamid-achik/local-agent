@@ -163,6 +163,55 @@ test("a turn publishes the prompt, streams, keeps the reply and returns to idle"
   expect(client.writeErrors).toEqual([]);
 });
 
+test("thinking streams into its own block, keeps the last three lines, and is gone once the answer starts", async () => {
+  let toAnswer: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    toAnswer = r;
+  });
+  const { ui, client } = setup(async function* () {
+    yield { type: "thinking", text: "one\ntwo\nthree\n" };
+    yield { type: "thinking", text: "four\nfi" };
+    await gate;
+    yield { type: "text", text: "The answer " };
+    await new Promise((r) => setTimeout(r, 30));
+    yield {
+      type: "done",
+      inputTokens: 10,
+      outputTokens: 40,
+      evalCount: 40,
+      evalDuration: 1_000_000_000,
+    };
+    yield {
+      type: "message",
+      message: { role: "assistant", content: "The answer", thinking: "one" },
+    };
+  });
+  await ui.fire("send", "go");
+  await new Promise((r) => setTimeout(r, 40));
+  const during = store(ui);
+  expect(during.thinking.on).toBe(true);
+  expect(runsText(during.thinking.runs)).toBe("three\nfour\nfi");
+  expect(during.live.active).toBe(false);
+  toAnswer();
+  await new Promise((r) => setTimeout(r, 20));
+  expect(store(ui).thinking.on).toBe(false);
+  expect(store(ui).live.active).toBe(true);
+  await client.idle();
+  const s = store(ui);
+  expect(s.thinking).toEqual({ on: false, runs: [] });
+  // The reasoning is not in the committed history, and the speed is on the status line.
+  expect(JSON.stringify(s.messages)).not.toContain("three");
+  expect(s.status).toBe("Ready · /help for commands · 40 tok/s");
+  expect(client.writeErrors).toEqual([]);
+});
+
+test("a turn without timings leaves the idle status alone", async () => {
+  const { ui, client } = setup(reply("hello there"));
+  await ui.fire("send", "hi");
+  await client.idle();
+  expect(store(ui).status).toBe("Ready · /help for commands");
+});
+
 test("the model sees the history like the Vue client sends it", async () => {
   const { ui, client, seen } = setup(reply("one"));
   await ui.fire("send", "first");

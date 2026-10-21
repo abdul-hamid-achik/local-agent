@@ -1,0 +1,31 @@
+=== grid 80x30 ===
+ Local Agent         qwen3-coder:30b  build          ctx 9.6k/32k  ████░░░░░░░░ 
+Assistant                                                                       
+Sure. I will wrap the call in a bounded retry with backoff:                     
+ ts                                                                             
+ export async function fetchRetry(url, tries = 3) {                             
+   // exponential backoff                                                       
+   for (let attempt = 1; ; attempt++) {                                         
+     try { return await fetch(url); }                                           
+     catch (e) { if (attempt === tries) throw e; }                              
+  ╭─ Run command? ───────────────────────────────────────────────────────────╮  
+ }│                                                                          │  
+  │  Runs exactly as written: there is no shell.                             │  
+╭─│  ┌────────────────────────────────────────────────────────────────────┐  │─╮
+│s│  │$ bun test tests/stats.test.ts -t 'mean of an empty list'           │  │ │
+│s│  │in the workspace · timeout 120s · runs with your permissions        │  │ │
+│U│  └────────────────────────────────────────────────────────────────────┘  │ │
+╰─│                                                                          │─╯
+  │                                                     [ Deny ]  [ Allow ]  │  
+As│                                                                          │  
+Do╰──────────────────────────────────────────────────────────────────────────╯  
+                                                                                
+╭─ Tool · run_command ─────────────────────────────────────────────────────────╮
+│⠋  waiting for approval                                                       │
+│bun test fetch                                                                │
+╰──────────────────────────────────────────────────────────────────────────────╯
+                                                                                
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ Generating…                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+ ⠋  Waiting for approval · y allow · n deny · Esc deny   pgup/pgdn scroll       

@@ -38,6 +38,16 @@ export function approvalPreview(
   );
 }
 
+/** "31 tok/s" from Ollama's counters, or undefined when it reported none. */
+export function tokensPerSecond(
+  evalCount: number,
+  evalDurationNs: number,
+): string | undefined {
+  if (evalCount <= 0 || evalDurationNs <= 0) return undefined;
+  const rate = evalCount / (evalDurationNs / 1e9);
+  return `${rate >= 10 ? Math.round(rate) : rate.toFixed(1)} tok/s`;
+}
+
 export function messageText(message: Message): string {
   if (message.role !== "tool") return message.content;
   try {
