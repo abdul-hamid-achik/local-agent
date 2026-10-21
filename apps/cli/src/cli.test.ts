@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -181,9 +181,55 @@ test("--ui tuimark leaves session inspection and --mcp-status on their own paths
   expect(status.stderr).toContain("--mcp-status requires --mcp-config PATH");
 });
 
+test("the default client is not refused for a mode: only an explicit --ui tuimark is", async () => {
+  // Without a terminal both stop at the same place, after the flags were accepted.
+  for (const args of [
+    ["--mode", "inline"],
+    ["--ui", "vue", "--mode", "inline"],
+  ]) {
+    const { stderr, code } = await runCli(...args);
+    expect(code).toBe(1);
+    expect(stderr).toContain("Interactive modes require a terminal");
+    expect(stderr).not.toContain("fullscreen only");
+  }
+});
+
+test("the local-agent launcher runs the CLI from the checkout, also through a symlink on PATH", async () => {
+  const scratch = await mkdtemp(join(tmpdir(), "local-agent-launcher-"));
+  try {
+    const launcher = join(directory, "../launcher.ts");
+    const link = join(scratch, "local-agent");
+    await symlink(launcher, link);
+    for (const command of [launcher, link]) {
+      const child = Bun.spawn([process.execPath, command, "--ui", "bogus"], {
+        cwd: scratch,
+        env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [stderr, code] = await Promise.all([
+        new Response(child.stderr).text(),
+        child.exited,
+      ]);
+      expect(stderr).toContain("Unknown UI client");
+      expect(code).toBe(1);
+    }
+    // The package declares it, so `bun link` puts it on PATH under this name.
+    const manifest = (await Bun.file(
+      join(directory, "../package.json"),
+    ).json()) as {
+      bin: Record<string, string>;
+    };
+    expect(manifest.bin).toEqual({ "local-agent": "./launcher.ts" });
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+});
+
 test("--help shows the default model and the new flags", async () => {
   const { stdout, code } = await runCli("--help");
   expect(code).toBe(0);
+  expect(stdout).toContain("tuimark (default on macOS and Linux)");
   expect(stdout).toContain("default: qwen3.5:4b-q4_K_M");
   expect(stdout).toContain("--think on|off");
   expect(stdout).toContain("--context N");

@@ -43,8 +43,50 @@ bun run build
 bun run start --help
 bun run site:build
 bun run tui:dev                       # Vue SFC playground, no model required
-bun run test:integration              # requires Glyphrun v0.20.0
+bun run test:integration              # Vue client contracts, requires Glyphrun v0.23.0
+bun run test:integration:tuimark      # Tuimark client contracts, needs TUIMARK_BINARY
 ```
+
+### The `local-agent` command
+
+`apps/cli` declares a `local-agent` bin: a small launcher that runs
+`apps/cli/src/main.ts` with Bun from this checkout, whatever directory you start
+it in (that directory is the workspace unless you pass `--workspace`). One time,
+from the checkout:
+
+```bash
+bun install --frozen-lockfile
+(cd apps/cli && bun link)             # puts local-agent in ~/.bun/bin
+local-agent --help                    # ~/.bun/bin must be on PATH
+```
+
+`bun link` leaves a symlink, so the command always runs the code of the checkout
+and updates with `git pull`. Move or delete the checkout and the command stops
+working; `bun unlink` in `apps/cli` removes it. Chalupa finds it by name:
+`chalupa launch local-agent` (see below).
+
+### Clients
+
+On macOS and Linux the default interactive client is the one built on
+[Tuimark](https://tuimark.dev): it runs the `tuimark` binary (`tuimark host`) as
+a child and draws the whole screen from `apps/cli/src/tuimark/ui/app.tui`.
+`--ui vue` keeps the Vue TermUI client, which is also the default on Windows.
+
+- The binary is `TUIMARK_BINARY` if set, else a cached copy, else the release
+  the vendored SDK is pinned to (downloaded once, checksum-verified, into the
+  user cache). Version 0.4.6 or newer is required: the composer is a
+  `<textarea>` and the reply streams with the append write. If no binary can be
+  found and `--ui` was not given, the Vue client starts with a line on stderr;
+  an explicit `--ui tuimark` fails instead.
+- `--mode inline` and the headless flags use the Vue client unless `--ui tuimark`
+  is explicit, which refuses them: the Tuimark client is fullscreen only so far.
+- `vendor/tuimark/` holds the SDK tarball (`file:` dependency) until its release
+  is on the registry; see the README there.
+- Composer: `enter` sends, `shift+enter` or `alt+enter` start a new line, and a
+  pasted block stays one message. The box grows to eight rows, then scrolls.
+  `up` on the first line and `down` on the last recall what you sent in this
+  session (a resumed session's earlier messages included). `ctrl+p` opens the
+  command palette, `/help` lists every key.
 
 ## Local model
 
@@ -127,20 +169,15 @@ Then run local-agent in one of two ways:
 
 ```bash
 # From a checkout of this repository
-chalupa exec --context 64k -- bun run apps/cli/src/main.ts --ui tuimark
+chalupa exec --context 64k -- bun run apps/cli/src/main.ts
 
-# Or, when a `local-agent` command is on PATH
-chalupa launch local-agent -- --ui tuimark
+# Or by name, once `bun link` has put `local-agent` on PATH (see above)
+chalupa launch local-agent
 ```
 
-This repository does not install a `local-agent` command (the CLI build is not a
-standalone release), so for the second route put a small wrapper on your `PATH`
-yourself:
-
-```bash
-printf '#!/bin/sh\nexec bun run %s/apps/cli/src/main.ts "$@"\n' "$PWD" > ~/.local/bin/local-agent
-chmod +x ~/.local/bin/local-agent
-```
+Arguments for local-agent go after `--` (`chalupa launch local-agent -- --ui vue`).
+The Tuimark client is the default on macOS and Linux, so neither command needs
+`--ui`.
 
 When you are done, stop the billing:
 
@@ -213,7 +250,7 @@ Glyphrun contracts under `specs/bun/` exercise headless output, native inline
 scrollback, fullscreen resize, edit approval/denial and clean exit against a
 deterministic loopback fixture. They do not download models or contact GPUs.
 CI runs these contracts on Linux and macOS. Install the tested runner with
-`go install github.com/abdul-hamid-achik/glyphrun/cmd/glyph@v0.20.0`.
+`go install github.com/abdul-hamid-achik/glyphrun/cmd/glyph@v0.23.0`.
 
 For an already configured Chalupa environment, run from this checkout:
 

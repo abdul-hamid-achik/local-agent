@@ -133,6 +133,9 @@ const args = [
   model,
   "--mode",
   cliMode,
+  // These contracts exercise the Vue client; Tuimark is the default.
+  "--ui",
+  "vue",
   ...(workspaceRoot ? ["--workspace", workspaceRoot] : []),
   ...(mode === "headless" ? ["--prompt", prompt] : []),
   ...(verifyMode

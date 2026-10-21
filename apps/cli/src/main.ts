@@ -13,7 +13,7 @@ import {
   Workspace,
 } from "@local-agent/runtime";
 import { terminalText } from "@local-agent/vue-tui/text";
-import { parseUi } from "#cli/ui-flag";
+import { interactiveClient, parseUi } from "#cli/ui-flag";
 
 async function inspectMcpStatus(path: string, signal: AbortSignal) {
   const file = Bun.file(path);
@@ -59,7 +59,7 @@ try {
       context: { type: "string" },
       prompt: { type: "string", short: "p" },
       mode: { type: "string", default: "fullscreen" },
-      ui: { type: "string", default: "vue" },
+      ui: { type: "string" },
       json: { type: "boolean" },
       workspace: { type: "string", default: process.cwd() },
       intent: { type: "string", default: "build" },
@@ -87,8 +87,10 @@ bun dev [--model MODEL (default: ${DEFAULT_OLLAMA_MODEL})] [--mode fullscreen|in
   --context N          Context size in tokens for local Ollama (default 16384, or
                        LOCAL_AGENT_CONTEXT; 32768 and 32k both work); it cannot exceed
                        the model's native context. Chalupa negotiates its own
-  --ui vue|tuimark     Interactive client: vue (default) or the opt-in Tuimark client
-                       (fullscreen, macOS and Linux). It runs the tuimark binary from
+  --ui vue|tuimark     Interactive client: tuimark (default on macOS and Linux) or vue
+                       (default on Windows). The Tuimark client is fullscreen only for
+                       now, so --mode inline uses vue unless --ui tuimark is explicit
+                       (then it is refused). It runs the tuimark binary from
                        TUIMARK_BINARY, or downloads the release it is pinned to once
                        (checksum-verified) into the user cache.
   --workspace PATH     Workspace root (default: current directory)
@@ -155,7 +157,7 @@ Interrupted tool outcomes require inspection; they are never automatically repla
     const headless =
       values.mode === "headless" || values.prompt !== undefined || values.json;
     if (!inspect) {
-      if (ui === "tuimark" && (headless || values.mode !== "fullscreen"))
+      if (values.ui === "tuimark" && (headless || values.mode !== "fullscreen"))
         throw new Error(
           "--ui tuimark is fullscreen only; use it without --prompt, --json or --mode inline|headless",
         );
@@ -271,6 +273,22 @@ Interrupted tool outcomes require inspection; they are never automatically repla
               mcp.push(await connectMcp(config, controller.signal));
             }
           }
+          let client = headless
+            ? "vue"
+            : interactiveClient(ui, values.mode as "fullscreen" | "inline");
+          let bin: string | undefined;
+          if (client === "tuimark" && values.ui === undefined) {
+            // The default client must not fail a run that never asked for it.
+            const { findBinary } = await import("#cli/tuimark/launch");
+            const found = await findBinary();
+            if ("bin" in found) bin = found.bin;
+            else {
+              process.stderr.write(
+                `No tuimark binary (${terminalText(found.error)}); using the Vue client. Set TUIMARK_BINARY to a tuimark, or pass --ui vue to silence this.\n`,
+              );
+              client = "vue";
+            }
+          }
           if (headless) {
             if (session) {
               if (values.json)
@@ -312,7 +330,7 @@ Interrupted tool outcomes require inspection; they are never automatically repla
                 );
             }
             if (!values.json) process.stdout.write("\n");
-          } else if (ui === "tuimark") {
+          } else if (client === "tuimark") {
             // Tuimark owns the terminal; the Vue renderer stays unloaded.
             const { runTuimark } = await import("#cli/tuimark/launch");
             await runTuimark(
@@ -322,6 +340,7 @@ Interrupted tool outcomes require inspection; they are never automatically repla
               values.intent,
               session,
               mcp,
+              bin ? { resolve: async () => bin } : {},
             );
           } else {
             const { runTerminal } = await import("#cli/terminal");
