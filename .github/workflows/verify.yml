@@ -20,20 +20,29 @@ jobs:
         with:
           bun-version: 1.4.2
       - run: bun install --frozen-lockfile
-      - run: bun run check
-      - name: Set up Go for Glyphrun
+      - name: Set up Go for Glyphrun and the Tuimark binary
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: "1.26.6"
           cache: false
+      - name: Install the tuimark binary pinned by apps/cli/package.json
+        run: |
+          version="$(bun -e 'console.log(require("./apps/cli/package.json").dependencies["@thelacanians/tuimark"])')"
+          GOBIN="$RUNNER_TEMP/tuimark" go install "github.com/abdul-hamid-achik/tuimark/cmd/tuimark@v${version}"
+          echo "TUIMARK_BINARY=$RUNNER_TEMP/tuimark/tuimark" >> "$GITHUB_ENV"
+          "$RUNNER_TEMP/tuimark/tuimark" version
+      # TUIMARK_BINARY is set by now: with CI set, the Tuimark loop in `check` fails
+      # (it does not skip) when the binary is missing.
+      - run: bun run check
       - name: Install Glyphrun for Bun terminal contracts
         run: go install github.com/abdul-hamid-achik/glyphrun/cmd/glyph@v0.20.0
       - name: Verify Bun terminal contract hashes
         run: |
-          for spec in specs/bun/*.yml; do
+          for spec in specs/bun/*.yml specs/tuimark/*.yml; do
             glyph spec verify "$spec" --format md || exit 1
           done
       - run: bun run test:integration
+      - run: bun run test:integration:tuimark
 
   site:
     name: VitePress site verification

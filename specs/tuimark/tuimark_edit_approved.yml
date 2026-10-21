@@ -3,7 +3,8 @@ name: bun_tuimark_edit_approved
 intent: |
     the Tuimark client shows the proposed edit in an approval dialog with the
     cursor on Deny, and applies the exact edit in an isolated temporary
-    workspace only after y.
+    workspace only after y (the dialog accepts y a moment after it opens,
+    and stays readable after a resize).
 target:
     cmd: ["bun", "specs/tuimark/fixture.ts", "edit-approve"]
     cwd: "${projectRoot}"
@@ -23,9 +24,17 @@ steps:
             contains: "Edit notes.txt?"
         timeoutMs: 15000
     - snapshot: approval
+    - resize:
+        cols: 70
+        rows: 24
     - wait:
         screen:
-            contains: "Waiting for approval"
+            contains: "Edit notes.txt?"
+        timeoutMs: 5000
+    - snapshot: approval_narrow
+    - wait:
+        screen:
+            contains: "y allow"
         timeoutMs: 5000
     - press: y
     - wait:
@@ -48,4 +57,4 @@ outcomes:
       verify:
         process:
             exitCode: 0
-contractHash: sha256:b1b4ebda276694ff695a162ecb1b96431564c086aa365dcc176099483d80c087
+contractHash: sha256:970a458b175510f337e33a94bf769da0395449dcbc685a3387aab9c5376a7f45

@@ -9,6 +9,9 @@
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
     "skipLibCheck": true,
+    // Only to type-check @thelacanians/tuimark, whose `bun` export condition points
+    // at .ts sources that import each other with extensions. noEmit, so harmless;
+    // drop it if the SDK ships usable types for the `bun` condition.
     "allowImportingTsExtensions": true,
     "noEmit": true,
     "types": ["bun"]
