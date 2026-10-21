@@ -6,6 +6,7 @@ import {
   providerStreamIdleTimeoutMs,
 } from "#runtime/config";
 
+export { admitOllamaModel, type OllamaAdmission } from "#runtime/admission";
 export {
   type AgentEvent,
   type AgentOptions,
@@ -27,6 +28,7 @@ export {
 export { Workspace, type WorkspaceEditProposal } from "#runtime/workspace";
 
 export const ToolCallSchema = z.object({
+  id: z.string().min(1).max(1024).optional(),
   function: z.object({
     name: z.string().min(1).max(128),
     arguments: z.record(z.string(), z.unknown()),
@@ -39,6 +41,7 @@ export const MessageSchema = z.object({
   thinking: z.string().max(1_000_000).optional(),
   tool_calls: z.array(ToolCallSchema).max(32).optional(),
   tool_name: z.string().max(128).optional(),
+  tool_call_id: z.string().min(1).max(1024).optional(),
 });
 export type Message = z.infer<typeof MessageSchema>;
 export const RunEventSchema = z.discriminatedUnion("type", [
@@ -192,4 +195,5 @@ export async function* chat(
   }
 }
 
+export { inspectRecovery } from "#runtime/recovery";
 export { type Session, SessionStore } from "#runtime/session";

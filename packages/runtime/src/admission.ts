@@ -109,19 +109,41 @@ export async function admitOllamaModel(
 ): Promise<OllamaAdmission> {
   const config = ProviderSchema.parse(provider);
   const base = config.base_url;
-  let tags: z.infer<typeof TagsSchema>;
+  let entry: TagModel | undefined;
   let show: ShowModel;
   const metadataSignal = AbortSignal.any([signal, AbortSignal.timeout(10_000)]);
   try {
     const rawTags = await getJSON(`${base}/api/tags`, metadataSignal, {
       method: "GET",
     });
+    const tags = TagsSchema.parse(rawTags);
+    const wanted = canonicalModel(config.model);
+    entry = tags.models.find(
+      (item) =>
+        canonicalModel(String(item.model ?? item.name ?? "")) === wanted,
+    );
+    if (!entry) {
+      const unprefixed = config.model.startsWith("ollama/")
+        ? config.model.slice(7)
+        : undefined;
+      const hint =
+        unprefixed &&
+        tags.models.some(
+          (item) =>
+            canonicalModel(String(item.model ?? item.name ?? "")) ===
+            canonicalModel(unprefixed),
+        );
+      return {
+        status: "rejected",
+        kind: "metadata",
+        message: `Ollama model ${config.model} was not listed.${hint ? ` Use --model ${unprefixed} without the ollama/ prefix.` : " Check the installed model name with ollama list."}`,
+      };
+    }
     const rawShow = await getJSON(`${base}/api/show`, metadataSignal, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ model: config.model, verbose: false }),
     });
-    tags = TagsSchema.parse(rawTags);
     show = ShowSchema.parse(rawShow);
   } catch (error) {
     if (
@@ -150,17 +172,6 @@ export async function admitOllamaModel(
       message: "Ollama /api/show omitted capabilities",
     };
 
-  const wanted = canonicalModel(config.model);
-  const entry = tags.models.find((candidate): candidate is TagModel => {
-    const item = candidate as TagModel;
-    return canonicalModel(String(item.model ?? item.name ?? "")) === wanted;
-  });
-  if (!entry)
-    return {
-      status: "rejected",
-      kind: "metadata",
-      message: `Ollama model ${config.model} was not listed`,
-    };
   const sizeBytes = positiveInteger(entry.size);
   if (sizeBytes === undefined)
     return {

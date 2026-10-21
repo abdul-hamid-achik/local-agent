@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import { z } from "zod";
 
 const defaultStreamIdleTimeoutMs = 300_000;
@@ -169,11 +170,22 @@ export function resolveProvider(
     throw new Error("This Bun prototype supports Ollama and Chalupa only");
   if (env.LOCAL_AGENT_PROVIDER_CONFIG)
     throw new Error("Provider config requires LOCAL_AGENT_PROVIDER=chalupa");
-  const host = env.OLLAMA_HOST || "http://127.0.0.1:11434";
+  const host = env.OLLAMA_HOST?.trim() || "127.0.0.1:11434";
+  const hasScheme = host.includes("://");
+  const address = isIP(host) === 6 ? `[${host}]` : host;
+  const url = new URL(
+    endpoint.parse(hasScheme ? address : `http://${address}`),
+  );
+  // OLLAMA_HOST also configures the server's bind address. Clients must dial
+  // loopback for unspecified addresses, using Ollama's schemeless default port.
+  if (!hasScheme && !/:\d+$/.test(address.split("/")[0] ?? ""))
+    url.port = "11434";
+  if (url.hostname === "0.0.0.0") url.hostname = "127.0.0.1";
+  if (url.hostname === "[::]") url.hostname = "[::1]";
   return {
     ...ProviderSchema.parse({
       type: "ollama",
-      base_url: host.includes("://") ? host : `http://${host}`,
+      base_url: url.toString().replace(/\/$/, ""),
       model: model || env.LOCAL_AGENT_MODEL,
     }),
     stream_idle_timeout_ms: defaultStreamIdleTimeoutMs,

@@ -7,7 +7,7 @@ import { z } from "zod";
 import { type Message, MessageSchema } from "#runtime/index";
 import { tryLockFile } from "#runtime/workspace_native";
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const MAX_STATE_BYTES = 8 * 1024 * 1024;
 const EVENT_TYPES = [
   "requested",
@@ -22,6 +22,7 @@ const EVENT_TYPES = [
 ] as const;
 type EventType = (typeof EVENT_TYPES)[number];
 type EffectClass = "read_only" | "effectful" | "unknown";
+type ExecutionKind = "builtin" | "mcp";
 
 export type SessionMessage = Message;
 export type Session = Readonly<{
@@ -41,6 +42,10 @@ export type ExecutionEvent = Readonly<{
   canonicalCallId: string;
   toolName: string;
   effectClass: EffectClass;
+  providerCallId?: string;
+  iteration?: number;
+  ordinal?: number;
+  kind?: ExecutionKind;
   type: EventType;
   approval?: string;
   argumentsSha256: string;
@@ -86,7 +91,7 @@ export class SessionStore {
           )
           .get();
         if (!meta) throw new Error("unsupported session database format");
-        if (meta.version !== SCHEMA_VERSION) {
+        if (meta.version !== 1 && meta.version !== SCHEMA_VERSION) {
           throw new Error(`unsupported session schema version ${meta.version}`);
         }
       } catch (error) {
@@ -94,23 +99,68 @@ export class SessionStore {
         throw error;
       }
     }
-    db.exec(
-      "PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON;",
-    );
-    await chmod(candidate, 0o600);
-    db.exec(
-      "CREATE TABLE IF NOT EXISTS schema_meta (version INTEGER NOT NULL)",
-    );
-    const row = db
-      .query<{ version: number }, []>("SELECT version FROM schema_meta LIMIT 1")
-      .get();
-    if (row && row.version !== SCHEMA_VERSION) {
-      db.close();
-      throw new Error(`unsupported session schema version ${row.version}`);
-    }
-    if (!row) {
-      db.transaction(() =>
-        db.exec(`
+    try {
+      db.exec(
+        "PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON;",
+      );
+      await chmod(candidate, 0o600);
+      db.exec(
+        "CREATE TABLE IF NOT EXISTS schema_meta (version INTEGER NOT NULL)",
+      );
+      const row = db
+        .query<{ version: number }, []>(
+          "SELECT version FROM schema_meta LIMIT 1",
+        )
+        .get();
+      if (row?.version === 1) {
+        db.transaction(() => {
+          const locked = db
+            .query<{ version: number }, []>(
+              "SELECT version FROM schema_meta LIMIT 1",
+            )
+            .get();
+          if (!locked) throw new Error("unsupported session database format");
+          if (locked.version === 1) {
+            db.exec(`
+              ALTER TABLE execution_events ADD COLUMN provider_call_id TEXT;
+              ALTER TABLE execution_events ADD COLUMN iteration INTEGER;
+              ALTER TABLE execution_events ADD COLUMN ordinal INTEGER;
+              ALTER TABLE execution_events ADD COLUMN kind TEXT;
+              CREATE UNIQUE INDEX execution_events_logical_slot ON execution_events(session_id, workspace_id, run_id, turn_id, iteration, ordinal) WHERE event_type = 'requested' AND iteration IS NOT NULL AND ordinal IS NOT NULL;
+              UPDATE schema_meta SET version = ${SCHEMA_VERSION};
+            `);
+          } else if (locked.version !== SCHEMA_VERSION) {
+            throw new Error(
+              `unsupported session schema version ${locked.version}`,
+            );
+          }
+        }).immediate();
+      }
+      const currentVersion = db
+        .query<{ version: number }, []>(
+          "SELECT version FROM schema_meta LIMIT 1",
+        )
+        .get();
+      if (currentVersion && currentVersion.version !== SCHEMA_VERSION) {
+        throw new Error(
+          `unsupported session schema version ${currentVersion.version}`,
+        );
+      }
+      if (!row) {
+        db.transaction(() => {
+          const initialized = db
+            .query<{ version: number }, []>(
+              "SELECT version FROM schema_meta LIMIT 1",
+            )
+            .get();
+          if (initialized) {
+            if (initialized.version !== SCHEMA_VERSION)
+              throw new Error(
+                `unsupported session schema version ${initialized.version}`,
+              );
+            return;
+          }
+          db.exec(`
         CREATE TABLE sessions (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           public_id TEXT NOT NULL UNIQUE,
@@ -129,7 +179,11 @@ export class SessionStore {
           turn_id TEXT NOT NULL,
           execution_id TEXT NOT NULL,
           idempotency_key TEXT NOT NULL,
+          provider_call_id TEXT,
           canonical_call_id TEXT NOT NULL,
+          iteration INTEGER,
+          ordinal INTEGER,
+          kind TEXT,
           tool_name TEXT NOT NULL,
           effect_class TEXT NOT NULL,
           event_type TEXT NOT NULL,
@@ -143,15 +197,27 @@ export class SessionStore {
           UNIQUE(idempotency_key, event_type)
         );
         CREATE UNIQUE INDEX execution_events_one_terminal ON execution_events(execution_id) WHERE event_type IN ('denied','completed','failed','cancelled','outcome_unknown');
+        CREATE UNIQUE INDEX execution_events_logical_slot ON execution_events(session_id, workspace_id, run_id, turn_id, iteration, ordinal) WHERE event_type = 'requested' AND iteration IS NOT NULL AND ordinal IS NOT NULL;
         CREATE TRIGGER execution_events_workspace_guard BEFORE INSERT ON execution_events WHEN NOT EXISTS (SELECT 1 FROM sessions WHERE id = NEW.session_id AND workspace_id = NEW.workspace_id) BEGIN SELECT RAISE(ABORT, 'event workspace does not match session'); END;
         CREATE TRIGGER execution_events_no_update BEFORE UPDATE ON execution_events BEGIN SELECT RAISE(ABORT, 'execution events are append-only'); END;
         CREATE TRIGGER execution_events_no_delete BEFORE DELETE ON execution_events BEGIN SELECT RAISE(ABORT, 'execution events are append-only'); END;
         CREATE INDEX execution_events_session ON execution_events(session_id, workspace_id, id);
         INSERT INTO schema_meta(version) VALUES (${SCHEMA_VERSION});
-      `),
-      )();
+          `);
+        }).immediate();
+      }
+      const initializedVersion = db
+        .query<{ version: number }, []>(
+          "SELECT version FROM schema_meta LIMIT 1",
+        )
+        .get();
+      if (!initializedVersion || initializedVersion.version !== SCHEMA_VERSION)
+        throw new Error("session schema initialization failed");
+      return new SessionStore(db, candidate);
+    } catch (error) {
+      db.close();
+      throw error;
     }
-    return new SessionStore(db, candidate);
   }
 
   close(): void {
@@ -270,10 +336,10 @@ export class SessionStore {
     if (session.workspace_id !== event.workspaceId)
       throw new Error("event workspace does not match session");
     const existing = this.db
-      .query<EventRow, [string]>(
-        "SELECT * FROM execution_events WHERE execution_id = ? ORDER BY id",
+      .query<EventRow, [string, string]>(
+        "SELECT * FROM execution_events WHERE execution_id = ? OR idempotency_key = ? ORDER BY id",
       )
-      .all(event.executionId);
+      .all(event.executionId, event.idempotencyKey);
     if (existing.some((row) => !identityMatches(row, event)))
       throw new Error("execution identity conflict");
     if (existing.some((row) => row.event_type === event.type)) {
@@ -283,12 +349,54 @@ export class SessionStore {
       if (row && sameEvent(row, event)) return;
       throw new Error("conflicting immutable execution event");
     }
+    if (
+      event.type === "requested" &&
+      event.iteration !== undefined &&
+      event.ordinal !== undefined
+    ) {
+      const canonical = this.db
+        .query<
+          { execution_id: string; ordinal: number | null },
+          [number, string, string, string]
+        >(
+          "SELECT execution_id, ordinal FROM execution_events WHERE session_id = ? AND run_id = ? AND canonical_call_id = ? AND event_type = 'requested' AND workspace_id = ? LIMIT 1",
+        )
+        .get(
+          event.sessionId,
+          event.runId,
+          event.canonicalCallId,
+          event.workspaceId,
+        );
+      if (canonical && canonical.execution_id !== event.executionId)
+        throw new Error("execution canonical call collision");
+      const slot = this.db
+        .query<
+          { execution_id: string; canonical_call_id: string },
+          [number, string, string, string, number, number]
+        >(
+          "SELECT execution_id, canonical_call_id FROM execution_events WHERE session_id = ? AND workspace_id = ? AND run_id = ? AND turn_id = ? AND iteration = ? AND ordinal = ? AND event_type = 'requested' LIMIT 1",
+        )
+        .get(
+          event.sessionId,
+          event.workspaceId,
+          event.runId,
+          event.turnId,
+          event.iteration,
+          event.ordinal,
+        );
+      if (
+        slot &&
+        (slot.execution_id !== event.executionId ||
+          slot.canonical_call_id !== event.canonicalCallId)
+      )
+        throw new Error("execution logical slot conflict");
+    }
     const previous = existing.at(-1)?.event_type as EventType | undefined;
     if (!legalTransition(previous, event.type))
       throw new Error("illegal execution event transition");
     this.db
       .query(
-        "INSERT INTO execution_events(session_id, workspace_id, run_id, turn_id, execution_id, idempotency_key, canonical_call_id, tool_name, effect_class, event_type, approval, arguments_sha256, result_sha256, result_receipt, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO execution_events(session_id, workspace_id, run_id, turn_id, execution_id, idempotency_key, provider_call_id, canonical_call_id, iteration, ordinal, kind, tool_name, effect_class, event_type, approval, arguments_sha256, result_sha256, result_receipt, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       )
       .run(
         event.sessionId,
@@ -297,7 +405,11 @@ export class SessionStore {
         event.turnId,
         event.executionId,
         event.idempotencyKey,
+        event.providerCallId ?? null,
         event.canonicalCallId,
+        event.iteration ?? null,
+        event.ordinal ?? null,
+        event.kind ?? null,
         event.toolName,
         event.effectClass,
         event.type,
@@ -379,7 +491,11 @@ export type EventRow = {
   run_id: string;
   turn_id: string;
   idempotency_key: string;
+  provider_call_id: string | null;
   canonical_call_id: string;
+  iteration: number | null;
+  ordinal: number | null;
+  kind: ExecutionKind | null;
   tool_name: string;
   approval: string;
   result_sha256: string;
@@ -429,9 +545,13 @@ const EventSchema = z.strictObject({
   turnId: z.string().min(1).max(128),
   executionId: z.string().min(1).max(128),
   idempotencyKey: z.string().min(1).max(128),
+  providerCallId: z.string().max(1024).optional(),
   canonicalCallId: z.string().min(1).max(1024),
   toolName: z.string().min(1).max(512),
   effectClass: z.enum(["read_only", "effectful", "unknown"]),
+  iteration: z.number().int().positive().optional(),
+  ordinal: z.number().int().positive().optional(),
+  kind: z.enum(["builtin", "mcp"]).optional(),
   type: z.enum(EVENT_TYPES),
   approval: z.string().max(64).optional(),
   argumentsSha256: z.string().regex(/^[0-9a-f]{64}$/),
@@ -444,15 +564,32 @@ const EventSchema = z.strictObject({
 });
 function validateEvent(event: ExecutionEvent): void {
   EventSchema.parse(event);
+  const metadata = [event.iteration, event.ordinal, event.kind].some(
+    (value) => value !== undefined,
+  );
+  if (
+    metadata &&
+    (event.iteration === undefined ||
+      event.ordinal === undefined ||
+      event.kind === undefined)
+  )
+    throw new Error(
+      "execution metadata must include iteration, ordinal, and kind",
+    );
 }
 
 function sameEvent(row: EventRow, event: ExecutionEvent): boolean {
   return (
+    row.execution_id === event.executionId &&
     row.workspace_id === event.workspaceId &&
     row.run_id === event.runId &&
     row.turn_id === event.turnId &&
     row.idempotency_key === event.idempotencyKey &&
+    (row.provider_call_id ?? "") === (event.providerCallId ?? "") &&
     row.canonical_call_id === event.canonicalCallId &&
+    row.iteration === (event.iteration ?? null) &&
+    row.ordinal === (event.ordinal ?? null) &&
+    row.kind === (event.kind ?? null) &&
     row.tool_name === event.toolName &&
     row.effect_class === event.effectClass &&
     row.event_type === event.type &&
@@ -466,11 +603,16 @@ function sameEvent(row: EventRow, event: ExecutionEvent): boolean {
 function identityMatches(row: EventRow, event: ExecutionEvent): boolean {
   return (
     row.session_id === event.sessionId &&
+    row.execution_id === event.executionId &&
     row.workspace_id === event.workspaceId &&
     row.run_id === event.runId &&
     row.turn_id === event.turnId &&
     row.idempotency_key === event.idempotencyKey &&
+    (row.provider_call_id ?? "") === (event.providerCallId ?? "") &&
     row.canonical_call_id === event.canonicalCallId &&
+    row.iteration === (event.iteration ?? null) &&
+    row.ordinal === (event.ordinal ?? null) &&
+    row.kind === (event.kind ?? null) &&
     row.tool_name === event.toolName &&
     row.effect_class === event.effectClass &&
     row.arguments_sha256 === event.argumentsSha256

@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import { mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -36,6 +36,53 @@ function event(
   };
 }
 
+async function seedV1Database(
+  path: string,
+  workspaceId: string,
+): Promise<void> {
+  const db = new Database(path);
+  db.exec(`
+    CREATE TABLE schema_meta (version INTEGER NOT NULL);
+    INSERT INTO schema_meta(version) VALUES (1);
+    CREATE TABLE sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      public_id TEXT NOT NULL UNIQUE,
+      workspace_id TEXT NOT NULL,
+      state_json TEXT NOT NULL DEFAULT '[]',
+      revision INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    );
+    CREATE TABLE execution_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      workspace_id TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      turn_id TEXT NOT NULL,
+      execution_id TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      canonical_call_id TEXT NOT NULL,
+      tool_name TEXT NOT NULL,
+      effect_class TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      approval TEXT NOT NULL DEFAULT '',
+      arguments_sha256 TEXT NOT NULL,
+      result_sha256 TEXT NOT NULL DEFAULT '',
+      result_receipt TEXT NOT NULL DEFAULT '',
+      detail TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      UNIQUE(execution_id, event_type), UNIQUE(idempotency_key, event_type)
+    );
+    INSERT INTO sessions(id, public_id, workspace_id, state_json, revision)
+      VALUES (1, 'legacy1', '${workspaceId.replaceAll("'", "''")}', '[{"role":"user","content":"legacy prompt"},{"role":"assistant","content":"legacy reply"}]', 2);
+    INSERT INTO execution_events(session_id, workspace_id, run_id, turn_id, execution_id, idempotency_key, canonical_call_id, tool_name, effect_class, event_type, arguments_sha256, result_receipt)
+      VALUES (1, '${workspaceId.replaceAll("'", "''")}', 'run-legacy', 'turn-legacy', 'exec-legacy', 'idem-legacy', 'call-legacy', 'read', 'read_only', 'requested', '${sha256("legacy")}', 'legacy-request');
+    INSERT INTO execution_events(session_id, workspace_id, run_id, turn_id, execution_id, idempotency_key, canonical_call_id, tool_name, effect_class, event_type, arguments_sha256, result_receipt)
+      VALUES (1, '${workspaceId.replaceAll("'", "''")}', 'run-legacy', 'turn-legacy', 'exec-legacy', 'idem-legacy', 'call-legacy', 'read', 'read_only', 'started', '${sha256("legacy")}', 'legacy-started');
+  `);
+  db.close();
+}
+
 test("creates and lists sessions by canonical workspace with lossless CAS state", async () => {
   const { db, workspace } = await fixture();
   const store = await SessionStore.open(db);
@@ -68,6 +115,56 @@ test("keeps sessions isolated by workspace", async () => {
   store.close();
 });
 
+test("migrates v1 execution history to v2 without inventing identity metadata", async () => {
+  const { db, workspace } = await fixture();
+  await seedV1Database(db, await realpath(workspace));
+  const store = await SessionStore.open(db);
+  const loaded = await store.loadSession("legacy1", workspace);
+  expect(loaded.revision).toBe(2);
+  expect(loaded.messages).toEqual([
+    { role: "user", content: "legacy prompt" },
+    { role: "assistant", content: "legacy reply" },
+  ]);
+  const raw = (store as unknown as { db: Database }).db;
+  const columns = raw
+    .query<{ name: string }, []>("PRAGMA table_info(execution_events)")
+    .all()
+    .map((column) => column.name);
+  expect(columns).toEqual(
+    expect.arrayContaining([
+      "provider_call_id",
+      "iteration",
+      "ordinal",
+      "kind",
+    ]),
+  );
+  const rows = raw
+    .query<
+      { event_type: string; result_receipt: string; iteration: number | null },
+      []
+    >(
+      "SELECT event_type, result_receipt, iteration FROM execution_events ORDER BY id",
+    )
+    .all();
+  expect(rows).toEqual([
+    {
+      event_type: "requested",
+      result_receipt: "legacy-request",
+      iteration: null,
+    },
+    {
+      event_type: "started",
+      result_receipt: "legacy-started",
+      iteration: null,
+    },
+  ]);
+  expect(
+    raw.query<{ version: number }, []>("SELECT version FROM schema_meta").get()
+      ?.version,
+  ).toBe(2);
+  store.close();
+});
+
 test("enforces append-only lifecycle and projects effect hazards", async () => {
   const { db, workspace } = await fixture();
   const store = await SessionStore.open(db);
@@ -85,6 +182,71 @@ test("enforces append-only lifecycle and projects effect hazards", async () => {
     store.appendEvent({ ...requested, argumentsSha256: sha256("different") }),
   ).toThrow("identity conflict");
   store.close();
+});
+
+test("rejects independent idempotency collisions and changed v2 ordinal identity", async () => {
+  const { db, workspace } = await fixture();
+  const store = await SessionStore.open(db);
+  const session = await store.createSession(workspace);
+  const metadata = {
+    providerCallId: "provider-1",
+    iteration: 1,
+    ordinal: 1,
+    kind: "builtin" as const,
+  };
+  const requested = {
+    ...event(session.id, session.workspaceId, "requested"),
+    ...metadata,
+  };
+  store.appendEvent(requested);
+  expect(() =>
+    store.appendEvent({
+      ...requested,
+      executionId: "different-execution",
+      type: "requested",
+    }),
+  ).toThrow("identity conflict");
+  expect(() =>
+    store.appendEvent({
+      ...requested,
+      executionId: "slot-execution",
+      idempotencyKey: "slot-idempotency",
+      canonicalCallId: "slot-call",
+      type: "requested",
+    }),
+  ).toThrow("logical slot conflict");
+  store.appendEvent({ ...requested, type: "started" });
+  expect(() =>
+    store.appendEvent({ ...requested, type: "completed", ordinal: 2 }),
+  ).toThrow("identity conflict");
+  expect(() =>
+    store.appendEvent({ ...requested, type: "failed", kind: undefined }),
+  ).toThrow("metadata");
+  expect(() =>
+    store.appendEvent({
+      ...requested,
+      executionId: "canonical-collision",
+      idempotencyKey: "canonical-collision-idem",
+      ordinal: 2,
+      type: "requested",
+    }),
+  ).toThrow("canonical call collision");
+  store.close();
+});
+
+test("serializes concurrent v1 migration openers", async () => {
+  const { db, workspace } = await fixture();
+  await seedV1Database(db, await realpath(workspace));
+  const opened = await Promise.all([
+    SessionStore.open(db),
+    SessionStore.open(db),
+  ]);
+  const raw = (opened[0] as unknown as { db: Database }).db;
+  expect(
+    raw.query<{ version: number }, []>("SELECT version FROM schema_meta").get()
+      ?.version,
+  ).toBe(2);
+  for (const store of opened) store.close();
 });
 
 test("commitOutcome rolls back its event when the state revision is stale", async () => {

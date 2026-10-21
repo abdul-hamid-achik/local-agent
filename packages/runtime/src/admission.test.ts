@@ -1,6 +1,6 @@
 import { expect, test, vi } from "vitest";
-import { admitOllamaModel } from "./admission";
-import { resolveProvider } from "./config";
+import { admitOllamaModel } from "#runtime/admission";
+import { resolveProvider } from "#runtime/config";
 
 const remote = (base_url: string) =>
   resolveProvider({
@@ -93,6 +93,28 @@ test("admits only a model proved by exact Ollama metadata", async () => {
     await expect(
       admitOllamaModel(remote("http://127.0.0.1"), signal),
     ).resolves.toMatchObject({ status: "unverified", kind: "transport" });
+  } finally {
+    fetchMock.mockRestore();
+  }
+});
+
+test("missing model explains a provider prefix without requesting show or switching models", async () => {
+  const fetchMock = vi
+    .spyOn(globalThis, "fetch")
+    .mockResolvedValue(
+      Response.json({ models: [{ name: "qwen3.5:0.8b", size: 1000 }] }),
+    );
+  try {
+    const result = await admitOllamaModel(
+      resolveProvider({}, "ollama/qwen3.5:0.8b"),
+      new AbortController().signal,
+    );
+    expect(result).toMatchObject({ status: "rejected", kind: "metadata" });
+    expect("message" in result && result.message).toContain(
+      "Use --model qwen3.5:0.8b without the ollama/ prefix",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toMatch(/\/api\/tags$/);
   } finally {
     fetchMock.mockRestore();
   }

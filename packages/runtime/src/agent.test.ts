@@ -173,6 +173,7 @@ test.each(["allow", "deny", "plan", "truncated", "cancel"] as const)(
                 content: "",
                 tool_calls: [
                   {
+                    id: "provider-edit-call",
                     function: {
                       name: "edit",
                       arguments: {
@@ -233,6 +234,13 @@ test.each(["allow", "deny", "plan", "truncated", "cancel"] as const)(
           : 0,
       );
       if (decision !== "truncated" && decision !== "cancel") {
+        const toolMessage = events.find(
+          (event) => event.type === "message" && event.message.role === "tool",
+        );
+        expect(toolMessage).toMatchObject({
+          type: "message",
+          message: { tool_call_id: "provider-edit-call" },
+        });
         expect(requests[1]?.messages.at(-1)).toMatchObject({ role: "tool" });
         expect(
           JSON.parse(requests[1]?.messages.at(-1)?.content ?? "").status,

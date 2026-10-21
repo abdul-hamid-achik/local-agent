@@ -3,9 +3,33 @@ import {
   ProviderSchema,
   providerStreamIdleTimeoutMs,
   resolveProvider,
-} from "./config";
+} from "#runtime/config";
 
 describe("provider configuration boundary", () => {
+  test.each([
+    ["0.0.0.0", "http://127.0.0.1:11434"],
+    ["0.0.0.0:11500", "http://127.0.0.1:11500"],
+    ["http://0.0.0.0:11434", "http://127.0.0.1:11434"],
+    ["localhost", "http://localhost:11434"],
+    ["localhost:80", "http://localhost"],
+    ["::", "http://[::1]:11434"],
+    ["[::]:11500", "http://[::1]:11500"],
+    ["https://localhost", "https://localhost"],
+  ])("normalizes Ollama bind address %s", (host, expected) => {
+    expect(resolveProvider({ OLLAMA_HOST: host }, "fixture").base_url).toBe(
+      expected,
+    );
+  });
+
+  test("bind normalization does not authorize remote hosts or hide invalid origins", () => {
+    for (const host of [
+      "192.168.1.20:11434",
+      "https://remote.example",
+      "http://0.0.0.0:11434/private",
+      "http://user:secret@0.0.0.0:11434",
+    ])
+      expect(() => resolveProvider({ OLLAMA_HOST: host }, "fixture")).toThrow();
+  });
   test("rejects malformed endpoint input without leaking a URL exception", () => {
     const result = ProviderSchema.safeParse({
       type: "ollama",

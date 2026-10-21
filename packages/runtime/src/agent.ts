@@ -143,14 +143,19 @@ export async function* runAgent(
         throw new Error(
           "Session has an uncertain tool outcome; inspect recovery before continuing",
         );
-      let pending: string[] = [];
+      let pending: ToolCall[] = [];
       for (const message of current.messages) {
         if (message.role !== "assistant" && message.tool_calls?.length)
           throw new Error(
             "Session contains invalid tool calls; recovery is required",
           );
         if (message.role === "tool") {
-          if (!pending.length || message.tool_name !== pending.shift())
+          const expected = pending.shift();
+          if (
+            !expected ||
+            message.tool_name !== expected.function.name ||
+            message.tool_call_id !== expected.id
+          )
             throw new Error(
               "Session contains unmatched tool results; recovery is required",
             );
@@ -160,7 +165,7 @@ export async function* runAgent(
               "Session contains interrupted tool calls; recovery is required",
             );
           if (message.tool_calls?.length) {
-            pending = message.tool_calls.map((call) => call.function.name);
+            pending = message.tool_calls.slice();
           }
         }
       }
@@ -202,6 +207,7 @@ async function* agentTurn(
     throw new Error("Tool catalog exceeds 256 tools");
   const saved = options.session;
   const runId = randomUUID();
+  const canonicalCallIds = new Set<string>();
   const history = z.array(MessageSchema).min(1).max(1000).parse(messages);
   if (
     saved &&
@@ -249,6 +255,13 @@ async function* agentTurn(
       if (event.type === "tool_call") calls.push(event.call);
       yield event;
     }
+    const providerCallIds = calls.map((call) => call.id ?? "");
+    for (const call of calls) {
+      call.id ??= randomUUID();
+      if (canonicalCallIds.has(call.id))
+        throw new Error("Provider repeated a tool call identity");
+      canonicalCallIds.add(call.id);
+    }
     if (calls.length) assistant.tool_calls = calls;
     history.push(assistant);
     checkpoint();
@@ -257,7 +270,7 @@ async function* agentTurn(
       yield { type: "turn_complete", messages: history };
       return;
     }
-    for (const call of calls) {
+    for (const [callIndex, call] of calls.entries()) {
       const name = call.function.name;
       const mcpConnection = mcpTools.get(name);
       const id = randomUUID();
@@ -269,7 +282,11 @@ async function* agentTurn(
             turnId: runId,
             executionId: id,
             idempotencyKey: id,
-            canonicalCallId: id,
+            canonicalCallId: call.id ?? id,
+            providerCallId: providerCallIds[callIndex] ?? "",
+            iteration: step + 1,
+            ordinal: callIndex + 1,
+            kind: mcpConnection ? "mcp" : "builtin",
             toolName: name,
             effectClass:
               name === "read"
@@ -424,6 +441,7 @@ async function* agentTurn(
       const message: Message = {
         role: "tool",
         tool_name: name,
+        tool_call_id: call.id,
         content: JSON.stringify(result),
       };
       history.push(message);
