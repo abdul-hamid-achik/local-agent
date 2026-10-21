@@ -1,6 +1,13 @@
 import { isIP } from "node:net";
 import { z } from "zod";
 
+/**
+ * The model used with the local Ollama provider when neither `--model` nor
+ * `LOCAL_AGENT_MODEL` names one: the smallest model that passed the agent
+ * battery reliably. Chalupa profiles keep the model they negotiated.
+ */
+export const DEFAULT_OLLAMA_MODEL = "qwen3.5:4b-q4_K_M";
+
 const defaultStreamIdleTimeoutMs = 300_000;
 const maxStreamIdleTimeoutMs = 2_147_483_647;
 
@@ -72,6 +79,8 @@ export const ProviderSchema = z
     base_url: endpoint,
     model: z.string().trim().min(1).max(200),
     context_size: z.number().int().positive().max(2_097_152).default(16_384),
+    /** Sent to Ollama as `think` on chat only when set; unset keeps the model's default. */
+    think: z.boolean().optional(),
     max_model_bytes: z
       .number()
       .int()
@@ -142,11 +151,53 @@ export const ProviderSchema = z
   });
 export type Provider = z.infer<typeof ProviderSchema>;
 
+/** Raw `--context` / `--think` values; the environment variables are the fallback. */
+export type ProviderOptions = { context?: string; think?: string };
+
+/** `32768`, `32k` or `32K` (k = 1024 tokens). */
+export function parseContextSize(value: string, source = "--context"): number {
+  const match = /^(\d+)([kK]?)$/u.exec(value.trim());
+  const size = match ? Number(match[1]) * (match[2] ? 1024 : 1) : Number.NaN;
+  if (!Number.isSafeInteger(size) || size < 512 || size > 2_097_152)
+    throw new Error(
+      `${source} must be a token count between 512 and 2097152, such as 32768 or 32k`,
+    );
+  return size;
+}
+
+/** `on|off`, `1|0` or `true|false`. */
+export function parseThink(value: string, source = "--think"): boolean {
+  switch (value.trim().toLowerCase()) {
+    case "on":
+    case "1":
+    case "true":
+      return true;
+    case "off":
+    case "0":
+    case "false":
+      return false;
+    default:
+      throw new Error(`${source} must be on or off`);
+  }
+}
+
+const present = (value: string | undefined) =>
+  value === undefined || value.trim() === "" ? undefined : value;
+
 /** Chalupa owns provisioning, model placement and the tunnel; we consume its process profile. */
 export function resolveProvider(
   env: Record<string, string | undefined>,
   model?: string,
+  options: ProviderOptions = {},
 ): Provider {
+  const thinkSetting = present(options.think);
+  const envThink = present(env.LOCAL_AGENT_THINK);
+  const think =
+    thinkSetting !== undefined
+      ? parseThink(thinkSetting)
+      : envThink !== undefined
+        ? parseThink(envThink, "LOCAL_AGENT_THINK")
+        : undefined;
   if (env.LOCAL_AGENT_PROVIDER === "chalupa") {
     if (env.LOCAL_AGENT_LOCAL_ONLY !== "false")
       throw new Error("Chalupa requires explicit LOCAL_AGENT_LOCAL_ONLY=false");
@@ -161,8 +212,14 @@ export function resolveProvider(
       throw new Error("Chalupa requires an ollama_remote profile");
     if (model && model !== profile.model)
       throw new Error("Select the model in Chalupa before launching");
+    // The negotiated context belongs to the Chalupa profile; the variable is ignored.
+    if (present(options.context) !== undefined)
+      throw new Error(
+        "Chalupa negotiates the context size; pass --context to chalupa exec",
+      );
     return {
       ...profile,
+      ...(think === undefined ? {} : { think }),
       stream_idle_timeout_ms: providerStreamIdleTimeoutMs(profile),
     };
   }
@@ -182,11 +239,21 @@ export function resolveProvider(
     url.port = "11434";
   if (url.hostname === "0.0.0.0") url.hostname = "127.0.0.1";
   if (url.hostname === "[::]") url.hostname = "[::1]";
+  const contextSetting = present(options.context);
+  const envContext = present(env.LOCAL_AGENT_CONTEXT);
+  const context =
+    contextSetting !== undefined
+      ? parseContextSize(contextSetting)
+      : envContext !== undefined
+        ? parseContextSize(envContext, "LOCAL_AGENT_CONTEXT")
+        : undefined;
   return {
     ...ProviderSchema.parse({
       type: "ollama",
       base_url: url.toString().replace(/\/$/, ""),
-      model: model || env.LOCAL_AGENT_MODEL,
+      model: model || present(env.LOCAL_AGENT_MODEL) || DEFAULT_OLLAMA_MODEL,
+      ...(context === undefined ? {} : { context_size: context }),
+      ...(think === undefined ? {} : { think }),
     }),
     stream_idle_timeout_ms: defaultStreamIdleTimeoutMs,
   };

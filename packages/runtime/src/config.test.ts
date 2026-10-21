@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+  DEFAULT_OLLAMA_MODEL,
   ProviderSchema,
   providerStreamIdleTimeoutMs,
   resolveProvider,
@@ -126,5 +127,83 @@ describe("provider configuration boundary", () => {
         stream_idle_timeout: "999999999999999999999h",
       }),
     ).toThrow(/stream_idle_timeout/);
+  });
+
+  const chalupa = (extra: Record<string, unknown> = {}) => ({
+    LOCAL_AGENT_PROVIDER: "chalupa",
+    LOCAL_AGENT_LOCAL_ONLY: "false",
+    LOCAL_AGENT_PROVIDER_CONFIG: JSON.stringify({
+      type: "ollama_remote",
+      base_url: "https://remote.example",
+      model: "ornith-1.5:9b",
+      context_size: 65536,
+      max_model_bytes: 40_000_000_000,
+      stream_idle_timeout: "10m",
+      ...extra,
+    }),
+  });
+
+  test("local Ollama defaults to the small model; flag and variable override it", () => {
+    expect(DEFAULT_OLLAMA_MODEL).toBe("qwen3.5:4b-q4_K_M");
+    expect(resolveProvider({}).model).toBe(DEFAULT_OLLAMA_MODEL);
+    expect(resolveProvider({ LOCAL_AGENT_MODEL: "  " }).model).toBe(
+      DEFAULT_OLLAMA_MODEL,
+    );
+    expect(resolveProvider({ LOCAL_AGENT_MODEL: "env:1b" }).model).toBe(
+      "env:1b",
+    );
+    expect(
+      resolveProvider({ LOCAL_AGENT_MODEL: "env:1b" }, "flag:2b").model,
+    ).toBe("flag:2b");
+  });
+
+  test("Chalupa keeps the model of its profile", () => {
+    expect(resolveProvider(chalupa()).model).toBe("ornith-1.5:9b");
+  });
+
+  test("think is unset by default and read from the flag before the variable", () => {
+    expect(resolveProvider({})).not.toHaveProperty("think");
+    expect(resolveProvider({ LOCAL_AGENT_THINK: "0" }).think).toBe(false);
+    expect(resolveProvider({ LOCAL_AGENT_THINK: "1" }).think).toBe(true);
+    expect(
+      resolveProvider({ LOCAL_AGENT_THINK: "1" }, undefined, { think: "off" })
+        .think,
+    ).toBe(false);
+    expect(resolveProvider({}, undefined, { think: "on" }).think).toBe(true);
+    expect(() => resolveProvider({}, undefined, { think: "maybe" })).toThrow(
+      "--think must be on or off",
+    );
+    expect(() => resolveProvider({ LOCAL_AGENT_THINK: "x" })).toThrow(
+      "LOCAL_AGENT_THINK must be on or off",
+    );
+    // It applies on top of a Chalupa profile, which does not set it.
+    expect(resolveProvider(chalupa(), undefined, { think: "off" }).think).toBe(
+      false,
+    );
+    expect(resolveProvider(chalupa())).not.toHaveProperty("think");
+  });
+
+  test("context overrides the local default only, and is parsed strictly", () => {
+    expect(resolveProvider({}).context_size).toBe(16_384);
+    expect(resolveProvider({ LOCAL_AGENT_CONTEXT: "32768" }).context_size).toBe(
+      32_768,
+    );
+    expect(
+      resolveProvider({ LOCAL_AGENT_CONTEXT: "8192" }, undefined, {
+        context: "32k",
+      }).context_size,
+    ).toBe(32_768);
+    for (const bad of ["abc", "0", "100", "-5", "1.5k", "9999999999"])
+      expect(() => resolveProvider({}, undefined, { context: bad })).toThrow(
+        /--context must be a token count/,
+      );
+    // Chalupa negotiates its context: the variable is ignored, the flag refused.
+    expect(
+      resolveProvider({ ...chalupa(), LOCAL_AGENT_CONTEXT: "8192" })
+        .context_size,
+    ).toBe(65_536);
+    expect(() =>
+      resolveProvider(chalupa(), undefined, { context: "8192" }),
+    ).toThrow("Chalupa negotiates the context size");
   });
 });

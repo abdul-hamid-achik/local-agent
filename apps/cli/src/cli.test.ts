@@ -87,7 +87,13 @@ test.each(["chalupa", "ollama"])(
           .map((line) => JSON.parse(line)),
       ).toEqual([
         { type: "text", text: "Hello" },
-        { type: "done", inputTokens: 1, outputTokens: 1 },
+        {
+          type: "done",
+          inputTokens: 1,
+          outputTokens: 1,
+          promptEvalCount: 1,
+          evalCount: 1,
+        },
         { type: "message", message: { role: "assistant", content: "Hello" } },
         {
           type: "turn_complete",
@@ -173,4 +179,159 @@ test("--ui tuimark leaves session inspection and --mcp-status on their own paths
   const status = await runCli("--ui", "tuimark", "--mcp-status");
   expect(status.code).toBe(1);
   expect(status.stderr).toContain("--mcp-status requires --mcp-config PATH");
+});
+
+test("--help shows the default model and the new flags", async () => {
+  const { stdout, code } = await runCli("--help");
+  expect(code).toBe(0);
+  expect(stdout).toContain("default: qwen3.5:4b-q4_K_M");
+  expect(stdout).toContain("--think on|off");
+  expect(stdout).toContain("--context N");
+});
+
+async function withOllama(
+  models: { name: string; size: number; context?: number }[],
+  run: (origin: string, chats: unknown[]) => Promise<void>,
+) {
+  const chats: unknown[] = [];
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/tags") return Response.json({ models });
+      if (path === "/api/show") {
+        const { model } = (await request.json()) as { model: string };
+        const entry = models.find((item) => item.name === model);
+        return Response.json({
+          capabilities: ["completion", "tools"],
+          model_info: { "fixture.context_length": entry?.context ?? 65536 },
+        });
+      }
+      chats.push(await request.json());
+      return new Response(
+        `${JSON.stringify({ message: { role: "assistant", content: "ok" }, done: true })}\n`,
+      );
+    },
+  });
+  try {
+    await run(server.url.origin, chats);
+  } finally {
+    await server.stop(true);
+  }
+}
+
+test("a missing default model fails with one actionable line before any chat request", async () => {
+  await withOllama(
+    [{ name: "other:1b", size: 1000 }],
+    async (origin, chats) => {
+      const child = Bun.spawn(
+        [
+          process.execPath,
+          "run",
+          "--silent",
+          "dev",
+          "--mode",
+          "headless",
+          "-p",
+          "Hello",
+          "--json",
+        ],
+        {
+          cwd: join(directory, "../../.."),
+          env: { PATH: process.env.PATH ?? "", OLLAMA_HOST: origin },
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      const [stdout, stderr, code] = await Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+        child.exited,
+      ]);
+      expect(code).toBe(1);
+      expect(stdout).toBe("");
+      expect(stderr).toBe(
+        "Model qwen3.5:4b-q4_K_M is not installed. Run: ollama pull qwen3.5:4b-q4_K_M\n",
+      );
+      expect(chats).toEqual([]);
+    },
+  );
+});
+
+test("the installed default model is used without --model, with --think and --context applied", async () => {
+  await withOllama(
+    [{ name: "qwen3.5:4b-q4_K_M", size: 1000, context: 262144 }],
+    async (origin, chats) => {
+      const child = Bun.spawn(
+        [
+          process.execPath,
+          "run",
+          "--silent",
+          "dev",
+          "--mode",
+          "headless",
+          "-p",
+          "Hello",
+          "--json",
+          "--think",
+          "off",
+          "--context",
+          "32k",
+        ],
+        {
+          cwd: join(directory, "../../.."),
+          env: { PATH: process.env.PATH ?? "", OLLAMA_HOST: origin },
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      const [stderr, code] = await Promise.all([
+        new Response(child.stderr).text(),
+        child.exited,
+      ]);
+      expect(stderr).toBe("");
+      expect(code).toBe(0);
+      expect(chats[0]).toMatchObject({
+        model: "qwen3.5:4b-q4_K_M",
+        think: false,
+        options: { num_ctx: 32768 },
+      });
+    },
+  );
+});
+
+test("a --context beyond the model's native context is refused before any chat request", async () => {
+  await withOllama(
+    [{ name: "qwen3.5:4b-q4_K_M", size: 1000, context: 8192 }],
+    async (origin, chats) => {
+      const child = Bun.spawn(
+        [
+          process.execPath,
+          "run",
+          "--silent",
+          "dev",
+          "--mode",
+          "headless",
+          "-p",
+          "Hello",
+          "--context",
+          "32768",
+        ],
+        {
+          cwd: join(directory, "../../.."),
+          env: { PATH: process.env.PATH ?? "", OLLAMA_HOST: origin },
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      const [stderr, code] = await Promise.all([
+        new Response(child.stderr).text(),
+        child.exited,
+      ]);
+      expect(code).toBe(1);
+      expect(stderr).toContain("--context 8192");
+      expect(chats).toEqual([]);
+    },
+  );
 });

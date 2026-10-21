@@ -2,8 +2,7 @@ import { describe, expect, test } from "vitest";
 import { chat, resolveProvider } from "./index";
 
 describe("provider boundary", () => {
-  test("requires an explicit model and rejects accidental remote endpoints", () => {
-    expect(() => resolveProvider({})).toThrow();
+  test("rejects accidental remote endpoints", () => {
     expect(resolveProvider({}, "fixture").base_url).toBe(
       "http://127.0.0.1:11434",
     );
@@ -82,13 +81,21 @@ test("streams a real HTTP fixture and sends the negotiated context", async () =>
       events.push(event);
     expect(events).toEqual([
       { type: "text", text: "Hola 🛶" },
-      { type: "done", inputTokens: 9, outputTokens: 2 },
+      {
+        type: "done",
+        inputTokens: 9,
+        outputTokens: 2,
+        promptEvalCount: 9,
+        evalCount: 2,
+      },
     ]);
     expect(request).toMatchObject({
       model: "fixture",
       options: { num_ctx: 16384 },
       stream: true,
     });
+    // An unset think is not sent: the model keeps its own default.
+    expect(request).not.toHaveProperty("think");
   } finally {
     await server.stop(true);
   }
@@ -295,4 +302,90 @@ test("rejects redirects rather than forwarding a prompt to another host", async 
   } finally {
     await server.stop(true);
   }
+});
+
+describe("thinking and timings over a loopback fixture", () => {
+  const serve = (requests: unknown[]) =>
+    Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(req) {
+        requests.push(await req.json());
+        return new Response(
+          `${[
+            {
+              message: { role: "assistant", thinking: "Let me " },
+              done: false,
+            },
+            { message: { role: "assistant", thinking: "think." }, done: false },
+            { message: { role: "assistant", content: "Answer" }, done: false },
+            {
+              message: { role: "assistant", content: "" },
+              done: true,
+              total_duration: 3_000_000_000,
+              prompt_eval_count: 40,
+              prompt_eval_duration: 500_000_000,
+              eval_count: 30,
+              eval_duration: 1_000_000_000,
+            },
+          ]
+            .map((line) => JSON.stringify(line))
+            .join("\n")}\n`,
+          { headers: { "Content-Type": "application/x-ndjson" } },
+        );
+      },
+    });
+
+  test.each([
+    ["on", true],
+    ["off", false],
+  ])("--think %s is sent as think: %s", async (flag, expected) => {
+    const requests: unknown[] = [];
+    const server = serve(requests);
+    try {
+      const provider = resolveProvider(
+        { OLLAMA_HOST: server.url.origin },
+        "fixture",
+        { think: flag },
+      );
+      for await (const _ of chat(
+        provider,
+        [{ role: "user", content: "Hi" }],
+        new AbortController().signal,
+      ));
+      expect(requests[0]).toMatchObject({ think: expected });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("thinking streams as its own event, never as text, and done carries Ollama's timings", async () => {
+    const server = serve([]);
+    try {
+      const events = [];
+      for await (const event of chat(
+        resolveProvider({ OLLAMA_HOST: server.url.origin }, "fixture"),
+        [{ role: "user", content: "Hi" }],
+        new AbortController().signal,
+      ))
+        events.push(event);
+      expect(events).toEqual([
+        { type: "thinking", text: "Let me " },
+        { type: "thinking", text: "think." },
+        { type: "text", text: "Answer" },
+        {
+          type: "done",
+          inputTokens: 40,
+          outputTokens: 30,
+          promptEvalCount: 40,
+          promptEvalDuration: 500_000_000,
+          evalCount: 30,
+          evalDuration: 1_000_000_000,
+          totalDuration: 3_000_000_000,
+        },
+      ]);
+    } finally {
+      await server.stop(true);
+    }
+  });
 });

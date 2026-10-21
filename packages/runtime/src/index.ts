@@ -15,7 +15,9 @@ export {
   type SessionContext,
 } from "#runtime/agent";
 export {
+  DEFAULT_OLLAMA_MODEL,
   type Provider,
+  type ProviderOptions,
   ProviderSchema,
   providerStreamIdleTimeoutMs,
   resolveProvider,
@@ -52,6 +54,12 @@ export const RunEventSchema = z.discriminatedUnion("type", [
     type: z.literal("done"),
     inputTokens: z.number().int().nonnegative(),
     outputTokens: z.number().int().nonnegative(),
+    /** Ollama's own counters, present when the server reports them. Durations are nanoseconds. */
+    promptEvalCount: z.number().int().nonnegative().optional(),
+    promptEvalDuration: z.number().nonnegative().optional(),
+    evalCount: z.number().int().nonnegative().optional(),
+    evalDuration: z.number().nonnegative().optional(),
+    totalDuration: z.number().nonnegative().optional(),
   }),
 ]);
 export type RunEvent = z.infer<typeof RunEventSchema>;
@@ -154,6 +162,8 @@ export async function* chat(
       messages: input,
       stream: true,
       tools,
+      // Sent only when set: an unset `think` keeps the model's own default.
+      ...(config.think === undefined ? {} : { think: config.think }),
       options: { num_ctx: config.context_size },
     });
     let outputSize = 0;
@@ -181,10 +191,22 @@ export async function* chat(
         yield RunEventSchema.parse({ type: "tool_call", call: rawCall });
       }
       if (part.done) {
+        // Ollama's own counters, only the ones it reported.
+        const reported: Record<string, number> = {};
+        for (const [key, value] of [
+          ["promptEvalCount", part.prompt_eval_count],
+          ["promptEvalDuration", part.prompt_eval_duration],
+          ["evalCount", part.eval_count],
+          ["evalDuration", part.eval_duration],
+          ["totalDuration", part.total_duration],
+        ] as const)
+          if (typeof value === "number" && Number.isFinite(value) && value >= 0)
+            reported[key] = value;
         yield RunEventSchema.parse({
           type: "done",
           inputTokens: part.prompt_eval_count ?? 0,
           outputTokens: part.eval_count ?? 0,
+          ...reported,
         });
         return;
       }

@@ -119,3 +119,47 @@ test("missing model explains a provider prefix without requesting show or switch
     fetchMock.mockRestore();
   }
 });
+
+test("a missing local model gets one actionable line; a remote one does not suggest a pull", async () => {
+  const fetchMock = vi
+    .spyOn(globalThis, "fetch")
+    .mockResolvedValue(
+      Response.json({ models: [{ name: "other:1b", size: 1000 }] }),
+    );
+  try {
+    const signal = new AbortController().signal;
+    const local = await admitOllamaModel(resolveProvider({}), signal);
+    expect(local).toMatchObject({
+      status: "rejected",
+      message:
+        "Model qwen3.5:4b-q4_K_M is not installed. Run: ollama pull qwen3.5:4b-q4_K_M",
+    });
+    const far = await admitOllamaModel(remote("http://127.0.0.1"), signal);
+    expect("message" in far && far.message).not.toContain("ollama pull");
+  } finally {
+    fetchMock.mockRestore();
+  }
+});
+
+test("a --context beyond the native context is rejected with the largest usable value", async () => {
+  const fetchMock = vi
+    .spyOn(globalThis, "fetch")
+    .mockImplementation(async (input) =>
+      String(input).endsWith("/api/tags")
+        ? Response.json({ models: [{ name: "small:1b", size: 1000 }] })
+        : Response.json({
+            capabilities: ["completion", "tools"],
+            model_info: { "small.context_length": 8192 },
+          }),
+    );
+  try {
+    const result = await admitOllamaModel(
+      resolveProvider({}, "small:1b", { context: "32k" }),
+      new AbortController().signal,
+    );
+    expect(result).toMatchObject({ status: "rejected", kind: "policy" });
+    expect("message" in result && result.message).toContain("--context 8192");
+  } finally {
+    fetchMock.mockRestore();
+  }
+});

@@ -235,7 +235,9 @@ async function* agentTurn(
   signal.throwIfAborted();
   if (admission.status !== "validated")
     throw new Error(
-      `Model admission ${admission.status}: ${admission.message}`,
+      admission.status === "rejected" && admission.code === "not_installed"
+        ? admission.message
+        : `Model admission ${admission.status}: ${admission.message}`,
     );
   if (!admission.capabilities.includes("tools"))
     throw new Error("Agent requires a model with tools capability");

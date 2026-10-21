@@ -9,6 +9,8 @@ export type OllamaAdmission =
       status: "rejected";
       kind: Exclude<FailureKind, "transport">;
       message: string;
+      /** The model is not in the inventory: the message is a complete instruction. */
+      code?: "not_installed";
     }
   | {
       status: "validated";
@@ -133,10 +135,19 @@ export async function admitOllamaModel(
             canonicalModel(String(item.model ?? item.name ?? "")) ===
             canonicalModel(unprefixed),
         );
+      // Local Ollama can pull the model; a remote (Chalupa) profile cannot.
+      const message = hint
+        ? `Ollama model ${config.model} was not listed. Use --model ${unprefixed} without the ollama/ prefix.`
+        : config.type === "ollama"
+          ? `Model ${config.model} is not installed. Run: ollama pull ${config.model}`
+          : `Ollama model ${config.model} was not listed. Check the installed model name with ollama list.`;
       return {
         status: "rejected",
         kind: "metadata",
-        message: `Ollama model ${config.model} was not listed.${hint ? ` Use --model ${unprefixed} without the ollama/ prefix.` : " Check the installed model name with ollama list."}`,
+        message,
+        ...(config.type === "ollama" && !hint
+          ? { code: "not_installed" as const }
+          : {}),
       };
     }
     const rawShow = await getJSON(`${base}/api/show`, metadataSignal, {
@@ -228,7 +239,7 @@ export async function admitOllamaModel(
     return {
       status: "rejected",
       kind: "policy",
-      message: `Ollama model ${config.model} cannot satisfy context_size ${config.context_size}`,
+      message: `Ollama model ${config.model} cannot satisfy context_size ${config.context_size}${config.type === "ollama" ? `; its native context is ${nativeContext}, so use --context ${nativeContext} or less` : ""}`,
     };
   return {
     status: "validated",

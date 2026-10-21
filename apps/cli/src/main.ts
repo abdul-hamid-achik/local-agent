@@ -1,6 +1,8 @@
 import { parseArgs } from "node:util";
 import {
+  admitOllamaModel,
   connectMcp,
+  DEFAULT_OLLAMA_MODEL,
   inspectRecovery,
   type McpConnection,
   McpServerConfigSchema,
@@ -53,6 +55,8 @@ try {
     options: {
       help: { type: "boolean", short: "h" },
       model: { type: "string" },
+      think: { type: "string" },
+      context: { type: "string" },
       prompt: { type: "string", short: "p" },
       mode: { type: "string", default: "fullscreen" },
       ui: { type: "string", default: "vue" },
@@ -75,7 +79,14 @@ try {
   if (values.help) {
     console.log(`Bun Local Agent — experimental agent
 
-bun dev --model MODEL [--mode fullscreen|inline|headless] [--ui vue|tuimark] [-p PROMPT] [--json]
+bun dev [--model MODEL] [--mode fullscreen|inline|headless] [--ui vue|tuimark] [-p PROMPT] [--json]
+  --model MODEL        Ollama model (default: ${DEFAULT_OLLAMA_MODEL}, or LOCAL_AGENT_MODEL);
+                       Chalupa keeps the model of its profile
+  --think on|off       Turn the model's thinking on or off (or LOCAL_AGENT_THINK=1|0);
+                       unset keeps the model's own default
+  --context N          Context size in tokens for local Ollama (default 16384, or
+                       LOCAL_AGENT_CONTEXT; 32768 and 32k both work); it cannot exceed
+                       the model's native context. Chalupa negotiates its own
   --ui vue|tuimark     Interactive client: vue (default) or the opt-in Tuimark client
                        (fullscreen, macOS and Linux). It runs the tuimark binary from
                        TUIMARK_BINARY, or downloads the release it is pinned to once
@@ -214,7 +225,21 @@ Interrupted tool outcomes require inspection; they are never automatically repla
           }
         }
       } else {
-        const provider = resolveProvider(process.env, values.model);
+        const provider = resolveProvider(process.env, values.model, {
+          context: values.context,
+          think: values.think,
+        });
+        if (!headless) {
+          // An interactive client must not open its screen for a model that is
+          // missing, or a --context beyond its native one: say so in one line.
+          // (Headless runs report the same line from the agent's own admission.)
+          const admission = await admitOllamaModel(
+            provider,
+            AbortSignal.timeout(15_000),
+          );
+          if (admission.status === "rejected")
+            throw new Error(admission.message);
+        }
         const session: SessionContext | undefined = store
           ? {
               store,
