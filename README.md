@@ -112,13 +112,40 @@ system prompt lists which of `bun`, `node`, `npm`, `python3`, `go`, `cargo` and
 
 ### Ornith on Chalupa
 
-For `ornith-1.5:9b` (or `35b`) on a rented GPU, run from this checkout. **`chalupa up`
-costs money until `chalupa down`**; check the plan with `--dry-run` first.
+For `ornith-1.5:9b` (or `35b`) on a rented GPU, Chalupa places the model and opens
+the tunnel; local-agent reads its process profile (`LOCAL_AGENT_PROVIDER=chalupa`,
+`LOCAL_AGENT_PROVIDER_CONFIG`, `LOCAL_AGENT_LOCAL_ONLY=false`) and takes the model,
+endpoint and context from it. Do not pass `--model` or `--context` on this route.
+**`chalupa up` costs money until `chalupa down`**; check the plan with `--dry-run`
+first.
 
 ```bash
 chalupa up --model ornith-1.5:9b --tier gpu-small --context 64k --expires-after 45
-chalupa exec --context 64k -- bun run apps/cli/src/main.ts   # no --model: the profile has it
-chalupa down                                                  # stops the billing
+```
+
+Then run local-agent in one of two ways:
+
+```bash
+# From a checkout of this repository
+chalupa exec --context 64k -- bun run apps/cli/src/main.ts --ui tuimark
+
+# Or, when a `local-agent` command is on PATH
+chalupa launch local-agent -- --ui tuimark
+```
+
+This repository does not install a `local-agent` command (the CLI build is not a
+standalone release), so for the second route put a small wrapper on your `PATH`
+yourself:
+
+```bash
+printf '#!/bin/sh\nexec bun run %s/apps/cli/src/main.ts "$@"\n' "$PWD" > ~/.local/bin/local-agent
+chmod +x ~/.local/bin/local-agent
+```
+
+When you are done, stop the billing:
+
+```bash
+chalupa down
 ```
 
 Workspaces and scripts use [Bun's native workspace support](https://bun.com/docs/pm/workspaces)
