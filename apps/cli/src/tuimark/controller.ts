@@ -443,7 +443,11 @@ export class TuimarkClient {
         if (!receivedMessage) {
           this.history.pop();
           this.transcript.pop();
-          const draft = (await this.ui?.get("draft"))?.value;
+          // The host may be gone already (ctrl+c mid-turn): keep going to the cleanup.
+          const draft = await this.ui
+            ?.get("draft")
+            .then((result) => result.value)
+            .catch(() => "gone");
           if (!draft) await this.write([{ path: "draft", value: prompt }]);
         }
       }

@@ -3,7 +3,7 @@ name: bun_tuimark_chat
 intent: |
     the opt-in Tuimark client (--ui tuimark) streams a markdown reply with a
     code block, answers slash commands locally, cancels a running reply with
-    esc, and exits on ctrl+c.
+    esc, and exits on ctrl+c even in the middle of a reply.
 target:
     cmd: ["bun", "specs/tuimark/fixture.ts", "chat"]
     cwd: "${projectRoot}"
@@ -69,6 +69,11 @@ steps:
             contains: "Cancelled"
         timeoutMs: 5000
     - snapshot: cancelled
+    - press: enter
+    - wait:
+        screen:
+            contains: "this takes a while"
+        timeoutMs: 15000
     - press: ctrl+c
     - wait:
         process:
@@ -76,8 +81,8 @@ steps:
         timeoutMs: 5000
 outcomes:
     - id: tuimark_chat
-      description: streaming, slash commands, esc cancel and ctrl+c work end to end
+      description: streaming, slash commands, esc cancel work end to end, and ctrl+c quits in the middle of a reply
       verify:
         process:
             exitCode: 0
-contractHash: sha256:815e0dd16fc929621afad5e23ba3003506931b1f67f52a4f33b3dd66460a3cca
+contractHash: sha256:87681f2e75adf437f8072e5842b98d70ceb1131a3ae091e5fc2a0b752e140ecf

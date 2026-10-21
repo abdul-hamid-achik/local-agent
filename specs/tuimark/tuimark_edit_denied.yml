@@ -2,7 +2,8 @@ version: 1
 name: bun_tuimark_edit_denied
 intent: |
     the Tuimark client leaves the file untouched when the edit is denied, with
-    n and with esc, and gives the focus back to the composer afterwards.
+    n and with esc, gives the focus back to the composer afterwards, and quits with
+    ctrl+c while the dialog is open.
 target:
     cmd: ["bun", "specs/tuimark/fixture.ts", "edit-deny"]
     cwd: "${projectRoot}"
@@ -46,12 +47,18 @@ steps:
         screen:
             contains: "Ready"
         timeoutMs: 15000
-    - type: "back in the composer"
+    - type: "edit once more"
     - wait:
         screen:
-            contains: "back in the composer"
+            contains: "edit once more"
         timeoutMs: 5000
     - snapshot: denied_with_esc
+    - press: enter
+    - wait:
+        screen:
+            contains: "Edit notes.txt?"
+        timeoutMs: 15000
+    - snapshot: quit_with_dialog_open
     - press: ctrl+c
     - wait:
         process:
@@ -63,4 +70,4 @@ outcomes:
       verify:
         process:
             exitCode: 0
-contractHash: sha256:45ec897cb81feb9985dc6ca6e0700daaa1cd9c3b3216db7082ae2622084ad630
+contractHash: sha256:e4fbf0d2ec9cd9878ec08932a8213bb62bd4f2e675ec025dc3ecb8bd2cde416c
