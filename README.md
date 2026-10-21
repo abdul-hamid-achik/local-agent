@@ -29,7 +29,7 @@ and Biome **2.5.12**.
 | `apps/cli` | Application composition and the three presentation modes |
 | `apps/tui-playground` | Model-free `.vue` component playground, development reload and template checking |
 | `packages/runtime` | Provider admission, cancellable streaming, serial tool loop and workspace operations; no Vue dependency |
-| `packages/vue-tui` | Internal terminal components and layout, with no agent dependencies; eventual package extraction |
+| `packages/vue-tui` | Internal terminal components and layout on Vue TermUI/OpenTUI, with no agent dependencies |
 | `docs` | Existing public VitePress website, in its original location |
 
 ```bash
@@ -54,6 +54,11 @@ Unit/component tests run through Vitest with Bun (`bun run test`), with
 `bun run test:watch` for development. Do not invoke them with `bun test`.
 The CLI build is for this installed workspace, not a standalone release binary.
 
+In fullscreen, assistant messages render Markdown with separate role labels.
+Inline keeps streamed plain text in native terminal scrollback. In either
+interactive presentation, use `/help`, `/mode plan`, `/mode build`, and `/mcp`.
+Mode changes apply to the next turn; they do not alter a running tool call.
+
 Use `--workspace PATH` to select the file root and `--intent plan` to forbid
 edits and commands. Build intent asks for each edit or command in interactive modes; Enter denies and
 `y` approves. Headless edits are denied unless `--approve-edits` is explicit.
@@ -68,6 +73,15 @@ database, `--sessions` lists handles, `--resume HANDLE` restores a completed
 conversation, and `--session-info HANDLE` inspects saved messages and uncertain
 outcomes without contacting a provider. Interrupted effects are never replayed
 automatically; reconciliation and Go session migration are not implemented yet.
+`--recovery-info HANDLE` returns the session revision and exact hazardous event
+identifiers for review, omitting the transcript and raw receipts. Bun schema v1
+databases migrate to v2 with existing history preserved; new calls retain their
+canonical ID, provider ID when supplied, iteration and position within the response.
+Legacy records retain absent metadata rather than receiving invented identities.
+
+`--mcp-status --mcp-config PATH` checks the explicitly configured servers and
+prints connection status and tool names without contacting a model. It starts
+configured STDIO commands for discovery and closes the connections afterward.
 
 `--mcp-config PATH` loads a trusted JSON array of servers, for example
 `[{"name":"local","transport":{"kind":"http","url":"http://127.0.0.1:3000/mcp"}}]`.
@@ -80,10 +94,10 @@ advertised as read-only. Responses project bounded text and retain unknown
 domain status and unverified evidence; raw structured content is not placed
 in the transcript. Paginated tool catalogs are currently rejected.
 
-The framework reuses [Vue TermUI](https://github.com/vue-terminal/vue-termui) and
+The internal component package reuses [Vue TermUI](https://github.com/vue-terminal/vue-termui) and
 [OpenTUI](https://opentui.com/docs/core-concepts/renderer/); our layout and lifecycle
 tests exercise resize and native scrollback before more components are added.
-The framework and agent CLI use `defineComponent`/`h` in `.ts` files, checked
+The component package and agent CLI use `defineComponent`/`h` in `.ts` files, checked
 by TS 7. The model-free playground demonstrates `.vue` templates, slots and
 `v-model` through the official Vue TermUI Vite plugin. Its `vue-tsc` 3.3.11
 checker is isolated with TypeScript 6.0.3: `vue-tsc` still accesses compiler APIs
