@@ -9,18 +9,29 @@ import {
 } from "@local-agent/runtime";
 import {
   Approval,
+  Box,
   Composer,
   createApp,
+  Markdown,
   onKeyDown,
   PanelLayout,
   type Presentation,
   ScrollBox,
+  SyntaxStyle,
   Text,
   terminalOptions,
   terminalText,
   useExit,
 } from "@local-agent/vue-tui";
-import { defineComponent, h, onUnmounted, ref } from "vue";
+import { defineComponent, h, nextTick, onUnmounted, ref } from "vue";
+
+const messageSyntax = SyntaxStyle.fromStyles({
+  default: { fg: "#d8dee9" },
+  "markup.heading": { fg: "#88c0d0", bold: true },
+  "markup.bold": { bold: true },
+  "markup.italic": { italic: true },
+  "markup.raw": { fg: "#a3be8c" },
+});
 
 export function createTerminalRoot(
   provider: Provider,
@@ -35,9 +46,12 @@ export function createTerminalRoot(
     setup() {
       const draft = ref("");
       const busy = ref(false);
-      const status = ref("Enter send · Esc cancel · Ctrl+C exit");
+      const idleStatus =
+        "Enter send · Esc cancel · /mode plan|build · Ctrl+C exit";
+      const status = ref(idleStatus);
       const history = ref<Message[]>(session?.state.messages.slice() ?? []);
       const live = ref("");
+      const selectedIntent = ref(intent);
       const exit = useExit();
       let turn: AbortController | undefined;
       const pending = ref<ApprovalRequest>();
@@ -66,9 +80,44 @@ export function createTerminalRoot(
       onUnmounted(() => turn?.abort());
 
       async function submit() {
-        if (busy.value || !draft.value.trim()) return;
+        if (busy.value) {
+          if (draft.value.trim().startsWith("/"))
+            status.value = "Busy · wait for the current turn to finish";
+          return;
+        }
+        if (!draft.value.trim()) return;
         const prompt = draft.value;
         draft.value = "";
+        await nextTick();
+        const command = prompt.trim();
+        const modeCommand = command.match(/^\/mode(?:\s+(\S+))?\s*$/i);
+        if (modeCommand) {
+          const requested = modeCommand[1]?.toLowerCase();
+          if (!requested) {
+            status.value = `Current mode: ${selectedIntent.value}. Use /mode plan or /mode build`;
+          } else if (requested !== "plan" && requested !== "build") {
+            status.value = `Unknown mode: ${requested}. Use /mode plan or /mode build`;
+          } else {
+            selectedIntent.value = requested as "plan" | "build";
+            status.value = `Mode changed to ${requested}`;
+          }
+          return;
+        }
+        if (command === "/help") {
+          status.value =
+            "/mode plan|build · /mcp · /help · Esc cancel · Ctrl+C exit";
+          return;
+        }
+        if (command === "/mcp") {
+          status.value = mcp.length
+            ? `MCP servers: ${mcp.length} · ${mcp.reduce((total, server) => total + server.tools.length, 0)} tools`
+            : "MCP servers: 0 · use --mcp-config to connect trusted servers";
+          return;
+        }
+        if (command.startsWith("/")) {
+          status.value = `Unknown command: ${command}. Use /help`;
+          return;
+        }
         live.value = "";
         busy.value = true;
         const request = new AbortController();
@@ -80,7 +129,7 @@ export function createTerminalRoot(
         try {
           for await (const event of runAgent(provider, history.value, {
             workspace,
-            intent,
+            intent: selectedIntent.value,
             approve,
             signal: AbortSignal.any([signal, request.signal]),
             session,
@@ -102,7 +151,7 @@ export function createTerminalRoot(
                 process.stdout.write(terminalText(event.text));
             }
           }
-          status.value = "Enter send · Esc cancel · Ctrl+C exit";
+          status.value = idleStatus;
         } catch (error) {
           // Keep completed messages and tool receipts even when a later request fails.
           if (!session) {
@@ -152,13 +201,48 @@ export function createTerminalRoot(
                     () => [
                       ...history.value.map((message, index) =>
                         h(
-                          Text,
-                          { key: index },
-                          () =>
-                            `${message.role}: ${terminalText(message.content)}`,
+                          Box,
+                          {
+                            key: `message-${index}`,
+                            flexDirection: "column",
+                            marginBottom: 1,
+                            flexShrink: 0,
+                          },
+                          () => [
+                            h(Text, { bold: true }, () =>
+                              message.role === "user"
+                                ? "You"
+                                : message.role === "tool"
+                                  ? `Tool · ${message.tool_name ?? "result"}`
+                                  : "Assistant",
+                            ),
+                            message.role === "assistant"
+                              ? h(Markdown, {
+                                  content: terminalText(message.content),
+                                  syntaxStyle: messageSyntax,
+                                  width: "100%",
+                                })
+                              : h(Text, {}, () =>
+                                  terminalText(messageText(message)),
+                                ),
+                          ],
                         ),
                       ),
-                      h(Text, {}, () => terminalText(live.value)),
+                      live.value
+                        ? h(
+                            Box,
+                            { flexDirection: "column", marginBottom: 1 },
+                            () => [
+                              h(Text, { bold: true }, () => "Assistant"),
+                              h(Markdown, {
+                                content: terminalText(live.value),
+                                syntaxStyle: messageSyntax,
+                                width: "100%",
+                                streaming: true,
+                              }),
+                            ],
+                          )
+                        : null,
                     ],
                   )
                 : null,
@@ -197,7 +281,7 @@ export function createTerminalRoot(
                 Text,
                 {},
                 () =>
-                  `Model\n${provider.model}\n\nContext\n${provider.context_size}\n\n${intent} mode\nRead · Edit · Command\nMCP servers: ${mcp.length}\n${session ? `Session\n${session.state.publicId}` : "Session: temporary"}`,
+                  `Model\n${provider.model}\n\nContext\n${provider.context_size}\n\nMode\n${selectedIntent.value}\n${selectedIntent.value === "plan" ? "Read only" : "Read · Edit · Command"}\n\nMCP servers: ${mcp.length}\n${session ? `Session\n${session.state.publicId}` : "Session: temporary"}`,
               ),
           },
         );
@@ -255,4 +339,19 @@ function approvalPreview(proposal: ApprovalRequest): string {
       2,
     ),
   );
+}
+
+function messageText(message: Message): string {
+  if (message.role !== "tool") return message.content;
+  try {
+    const result = JSON.parse(message.content) as {
+      status?: unknown;
+      output?: unknown;
+    };
+    return typeof result.output === "string"
+      ? `${typeof result.status === "string" ? result.status : "unknown"}\n${result.output}`
+      : message.content;
+  } catch {
+    return message.content;
+  }
 }

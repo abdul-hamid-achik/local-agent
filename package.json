@@ -13,7 +13,7 @@
     "bun": "1.4.2"
   },
   "scripts": {
-    "dev": "bun run --cwd apps/cli dev",
+    "dev": "bun run apps/cli/src/main.ts",
     "start": "bun run apps/cli/dist/main.mjs",
     "build": "bun run --cwd apps/cli build && bun run tui:build",
     "typecheck": "tsc --noEmit && bun run --cwd apps/tui-playground typecheck",

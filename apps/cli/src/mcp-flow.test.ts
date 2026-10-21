@@ -56,6 +56,7 @@ async function runMcpCli(
     ],
     {
       env: {
+        HOME: root,
         PATH: process.env.PATH ?? "",
         OLLAMA_HOST: server.url.origin,
         MCP_SECRET: "process-secret-must-not-leak",
@@ -212,6 +213,104 @@ test("plan mode denies even read-only MCP annotations without invoking the tool"
     }
   } finally {
     await server.stop(true);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("MCP status reports configured tools without requiring a model", async () => {
+  const root = await mkdtemp(join(tmpdir(), "local-agent-mcp-status-"));
+  try {
+    const configPath = join(root, "mcp.json");
+    await writeFile(
+      configPath,
+      JSON.stringify([
+        {
+          name: "fixture",
+          transport: {
+            kind: "stdio",
+            command: process.execPath,
+            args: [fixturePath],
+            cwd: root,
+            env: {},
+          },
+        },
+      ]),
+    );
+    const child = Bun.spawn(
+      [process.execPath, mainPath, "--mcp-status", "--mcp-config", configPath],
+      {
+        env: { HOME: root, PATH: process.env.PATH ?? "" },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+    expect(code).toBe(0);
+    expect(stderr).toBe("");
+    expect(JSON.parse(stdout)).toEqual({
+      servers: [
+        {
+          name: "fixture",
+          transport: "stdio",
+          status: "connected",
+          tools: ["fixture__echo"],
+        },
+      ],
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("MCP status exits nonzero for an unavailable server", async () => {
+  const root = await mkdtemp(join(tmpdir(), "local-agent-mcp-status-"));
+  try {
+    const configPath = join(root, "mcp.json");
+    await writeFile(
+      configPath,
+      JSON.stringify([
+        {
+          name: "missing",
+          transport: {
+            kind: "stdio",
+            command: process.execPath,
+            args: [join(root, "missing-server.ts")],
+            cwd: root,
+            env: {},
+          },
+        },
+      ]),
+    );
+    const child = Bun.spawn(
+      [process.execPath, mainPath, "--mcp-status", "--mcp-config", configPath],
+      {
+        env: { HOME: root, PATH: process.env.PATH ?? "" },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+    expect(code).toBe(1);
+    expect(stderr).toBe("");
+    expect(JSON.parse(stdout)).toEqual({
+      servers: [
+        {
+          name: "missing",
+          transport: "stdio",
+          status: "unavailable",
+          tools: [],
+        },
+      ],
+    });
+  } finally {
     await rm(root, { recursive: true, force: true });
   }
 });

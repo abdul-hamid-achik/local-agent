@@ -94,10 +94,34 @@ test("resumes completed state and inspects hazardous sessions without replaying 
       argumentsSha256: "0".repeat(64),
     };
     store.appendEvent({ ...identity, type: "requested" });
-    store.appendEvent({ ...identity, type: "started" });
+    store.appendEvent({
+      ...identity,
+      type: "started",
+      detail: "private-recovery-detail",
+    });
     const inspection = await launch(["--session-info", state.publicId]);
     expect(inspection.code).toBe(0);
     expect(JSON.parse(inspection.stdout).hazards).toHaveLength(1);
+    const recovery = await launch(["--recovery-info", state.publicId]);
+    expect(recovery.code).toBe(0);
+    const review = JSON.parse(recovery.stdout);
+    expect(review.revision).toBe(restored.revision);
+    expect(review.hazards).toHaveLength(1);
+    expect(review.hazards[0]).toEqual({
+      eventId: expect.any(Number),
+      executionId: "interrupted-tool",
+      turnId: "interrupted",
+      toolName: "run_command",
+      eventType: "started",
+      effectClass: "effectful",
+      argumentsSha256: "0".repeat(64),
+    });
+    expect(recovery.stdout).not.toContain("private-recovery-detail");
+    expect(recovery.stdout).not.toContain("Remembered answer");
+    expect(recovery.stdout).not.toContain("messages");
+    expect((await store.loadSession(state.publicId, root)).revision).toBe(
+      restored.revision,
+    );
     const blocked = await launch(
       ["--resume", state.publicId, "--prompt", "Retry", "--json"],
       true,
@@ -124,6 +148,23 @@ test("resumes completed state and inspects hazardous sessions without replaying 
       [call, { role: "user", content: "Interrupted" }, receipt],
       [{ ...call, role: "user" }, receipt],
       [call],
+      [
+        {
+          ...call,
+          tool_calls: [
+            {
+              id: "first",
+              function: { name: "read", arguments: { path: "first" } },
+            },
+            {
+              id: "second",
+              function: { name: "read", arguments: { path: "second" } },
+            },
+          ],
+        },
+        { ...receipt, tool_call_id: "second" },
+        { ...receipt, tool_call_id: "first" },
+      ],
     ];
     const previousRequests = requests;
     for (const messages of invalidHistories) {

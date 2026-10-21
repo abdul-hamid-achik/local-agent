@@ -1,6 +1,7 @@
 import { parseArgs } from "node:util";
 import {
   connectMcp,
+  inspectRecovery,
   type McpConnection,
   McpServerConfigSchema,
   resolveProvider,
@@ -10,6 +11,40 @@ import {
   Workspace,
 } from "@local-agent/runtime";
 import { terminalText } from "@local-agent/vue-tui/text";
+
+async function inspectMcpStatus(path: string, signal: AbortSignal) {
+  const file = Bun.file(path);
+  if (file.size > 1_000_000) throw new Error("MCP config exceeds 1 MB");
+  const configs = McpServerConfigSchema.array()
+    .max(16)
+    .parse(await file.json());
+  if (new Set(configs.map((config) => config.name)).size !== configs.length)
+    throw new Error("Duplicate MCP server names");
+  const servers = [];
+  for (const config of configs) {
+    signal.throwIfAborted();
+    try {
+      const connection = await connectMcp(config, signal);
+      const tools = connection.tools.map((tool) => tool.name);
+      await connection.close();
+      servers.push({
+        name: config.name,
+        transport: config.transport.kind,
+        status: "connected",
+        tools,
+      });
+    } catch (error) {
+      if (signal.aborted) throw error;
+      servers.push({
+        name: config.name,
+        transport: config.transport.kind,
+        status: "unavailable",
+        tools: [],
+      });
+    }
+  }
+  return { servers };
+}
 
 try {
   const { values } = parseArgs({
@@ -30,6 +65,8 @@ try {
       resume: { type: "string" },
       sessions: { type: "boolean" },
       "session-info": { type: "string" },
+      "recovery-info": { type: "string" },
+      "mcp-status": { type: "boolean", default: false },
     },
   });
   if (values.help) {
@@ -46,25 +83,56 @@ bun dev --model MODEL [--mode fullscreen|inline|headless] [-p PROMPT] [--json]
   --resume HANDLE      Resume a completed session from --session-db
   --sessions           List sessions in this workspace without contacting a model
   --session-info ID    Inspect saved state and recovery hazards without running tools
+  --recovery-info ID   Inspect recovery review tokens without transcript or raw receipts
+  --mcp-status         Check only the explicitly supplied MCP config and list tools
 
 Chalupa profiles come from the environment supplied by chalupa exec.
 Interrupted tool outcomes require inspection; they are never automatically replayed.`);
+  } else if (values["mcp-status"]) {
+    if (!values["mcp-config"])
+      throw new Error("--mcp-status requires --mcp-config PATH");
+    const controller = new AbortController();
+    const stop = () => controller.abort();
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
+    try {
+      const report = await inspectMcpStatus(
+        values["mcp-config"],
+        controller.signal,
+      );
+      console.log(JSON.stringify(report));
+      if (report.servers.some((server) => server.status === "unavailable"))
+        process.exitCode = 1;
+    } finally {
+      process.off("SIGINT", stop);
+      process.off("SIGTERM", stop);
+    }
   } else {
     if (!["fullscreen", "inline", "headless"].includes(values.mode))
       throw new Error("Unknown presentation mode");
     if (values.intent !== "plan" && values.intent !== "build")
       throw new Error("Unknown agent intent");
     if (
-      [values.resume, values.sessions, values["session-info"]].filter(Boolean)
-        .length > 1
+      [
+        values.resume,
+        values.sessions,
+        values["session-info"],
+        values["recovery-info"],
+      ].filter(Boolean).length > 1
     )
       throw new Error("Choose one session operation");
     if (
-      (values.resume || values.sessions || values["session-info"]) &&
+      (values.resume ||
+        values.sessions ||
+        values["session-info"] ||
+        values["recovery-info"]) &&
       !values["session-db"]
     )
       throw new Error("Session operations require --session-db");
-    const inspect = values.sessions || values["session-info"] !== undefined;
+    const inspect =
+      values.sessions ||
+      values["session-info"] !== undefined ||
+      values["recovery-info"] !== undefined;
     const prompt = values.prompt ?? "";
     const headless =
       values.mode === "headless" || values.prompt !== undefined || values.json;
@@ -92,7 +160,17 @@ Interrupted tool outcomes require inspection; they are never automatically repla
     try {
       if (inspect) {
         if (!store) throw new Error("Session database is required");
-        if (values.sessions) {
+        if (values["recovery-info"] !== undefined) {
+          console.log(
+            JSON.stringify(
+              await inspectRecovery(
+                store,
+                values["recovery-info"],
+                workspace.root,
+              ),
+            ),
+          );
+        } else if (values.sessions) {
           const sessions = await store.listSessions(workspace.root);
           console.log(
             JSON.stringify(
