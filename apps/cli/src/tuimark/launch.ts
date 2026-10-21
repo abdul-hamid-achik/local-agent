@@ -26,9 +26,8 @@ import { type ClientOptions, TuimarkClient } from "#cli/tuimark/controller";
 export const MIN_TUIMARK = "0.4.6";
 
 /**
- * The tuimark release the client downloads when TUIMARK_BINARY is not set. The
- * vendored SDK is a pre-release (0.4.6-pre) whose own version has no release to
- * download, so the release is named here.
+ * The tuimark release the client downloads when TUIMARK_BINARY is not set,
+ * named here so the binary matches the SDK this client was checked against.
  */
 export const PINNED_TUIMARK = "0.4.6";
 
