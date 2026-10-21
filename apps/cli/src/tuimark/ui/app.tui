@@ -21,11 +21,21 @@
     <bind keys="down,ctrl+n" action="move-next" to="#palette__list"/>
     <bind keys="up,ctrl+p" action="move-prev" to="#palette__list"/>
   </keymap>
+  <!-- The approval preview: every row of what is being approved is reachable by
+       key while the dialog is open (focus stays on Deny). -->
+  <keymap when=".k-dialog">
+    <bind keys="pgup" action="move-page-up" to="#approval_diff" label="scroll" keycap="pgup/pgdn"/>
+    <bind keys="pgdn" action="move-page-down" to="#approval_diff"/>
+    <bind keys="up" action="move-prev" to="#approval_diff"/>
+    <bind keys="down" action="move-next" to="#approval_diff"/>
+    <bind keys="home" action="move-first" to="#approval_diff" label="top/end" keycap="home/end"/>
+    <bind keys="end" action="move-last" to="#approval_diff"/>
+  </keymap>
   <keymap>
     <bind keys="esc" action="cancel" label="cancel"/>
     <bind keys="ctrl+k" action="palette_open" keycap="^K" label="commands"/>
     <bind keys="ctrl+c" action="quit" label="quit"/>
-    <bind keys="ctrl+o" action="load_earlier"/>
+    <bind keys="ctrl+o" action="load_earlier" keycap="^O" label="earlier"/>
     <bind keys="pgup" action="move-page-up" to="#log" label="scroll" keycap="pgup/pgdn"/>
     <bind keys="pgdn" action="move-page-down" to="#log"/>
   </keymap>
@@ -122,7 +132,7 @@
     <use id="approval" template="k-confirm" style="width: 76; max-width: 100%" with="approval as d">
       <scroll id="approval_diff" class="la-diff" focusable="true">
         <col class="la-difflines" each="approval.lines as ln" key="ln.n">
-          <text wrap="truncate" class:add="ln.add" class:del="ln.del">{ln.t}</text>
+          <text wrap="truncate" class:add="ln.add" class:del="ln.del" class:note="ln.note">{ln.t}</text>
         </col>
       </scroll>
     </use>

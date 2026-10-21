@@ -28,4 +28,4 @@ Done. The helper now retries three times.
 ╔══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
 ║ Message the model                                                                                                    ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
- Ready · /help for commands   esc cancel  ^K commands  ctrl+c quit  pgup/pgdn scroll                                    
+ Ready · /help for commands   esc cancel  ^K commands  ctrl+c quit  ^O earlier  pgup/pgdn scroll                        

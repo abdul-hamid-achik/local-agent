@@ -1,0 +1,31 @@
+=== grid 120x30 ===
+ Local Agent           Ollama / loopback  qwen3-coder:30b  build            session a1b2c3d  ctx 9.6k/32k  ████░░░░░░░░ 
+Assistant                                                                                                               
+Sure. I will wrap the call in a bounded retry with backoff:                                                             
+ ts                                                                                                                     
+ export async function╭─ Edit big.txt? ──────────────────────────────────────────────────────────╮                      
+   // exponential back│                                                                          │                      
+   for (let attempt = │  Preview truncated. Deny unless you have read the whole change.          │                      
+     try { return awai│  ┌────────────────────────────────────────────────────────────────────┐  │                      
+     catch (e) { if (a│  │+line 0                                                             ┃  │                      
+   }                  │  │+line 1                                                             │  │                      
+ }                    │  │+line 2                                                             │  │                      
+                      │  │+line 3                                                             │  │                      
+╭─ Tool · edit ───────│  │+line 4                                                             │  │─────────────────────╮
+│succeeded            │  │+line 5                                                             │  │                     │
+│src/fetch.ts         │  │+line 6                                                             │  │                     │
+│Updated src/fetch.ts.│  │+line 7                                                             │  │                     │
+╰─────────────────────│  │+line 8                                                             │  │─────────────────────╯
+                      │  │+line 9                                                             │  │                      
+Assistant             │  │+line 10                                                            │  │                      
+Done. The helper now r│  │+line 11                                                            │  │                      
+                      │  └────────────────────────────────────────────────────────────────────┘  │                      
+╭─ Tool · edit ───────│                                                                          │─────────────────────╮
+│⠋  waiting for approv│                                                     [ Deny ]  [ Allow ]  │                     │
+│src/fetch.ts         │                                                                          │                     │
+╰─────────────────────╰──────────────────────────────────────────────────────────────────────────╯─────────────────────╯
+                                                                                                                        
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Generating…                                                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+ ⠋  Preview truncated · y allow · n deny · Esc deny   pgup/pgdn scroll  home/end top/end                                

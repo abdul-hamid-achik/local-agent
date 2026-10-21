@@ -28,4 +28,4 @@ Here is the plan:
 ╔══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
 ║ Generating…                                                                                                          ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
- ⠋  Generating · Esc cancel   esc cancel  ^K commands  ctrl+c quit  pgup/pgdn scroll                                    
+ ⠋  Generating…   esc cancel  ^K commands  ctrl+c quit  ^O earlier  pgup/pgdn scroll                                    

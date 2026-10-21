@@ -72,7 +72,10 @@
 .la-statustext { width: auto; padding: 0 2 0 0; }
 .la-hints { width: 1fr; justify: end; }
 
-.la-diff { max-height: 14; width: 1fr; height: auto; }
+.la-diff { max-height: 14; width: 1fr; height: auto; border: single; border-color: $border; scrollbar: auto; }
+.la-diff:focus { border: double; border-color: $focus; }
 .la-difflines { height: auto; layout: column; }
+.la-difflines > text { height: 1; }
 .add { color: $ok; }
 .del { color: $danger; }
+.note { color: $muted; italic: true; }

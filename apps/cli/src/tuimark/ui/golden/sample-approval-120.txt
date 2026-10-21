@@ -3,29 +3,29 @@
 Assistant                                                                                                               
 Sure. I will wrap the call in a bounded retry with backoff:                                                             
  ts                                                                                                                     
- export async function fetchRetry(url, tries = 3) {                                                                     
-   // exponential back╭─ Edit src/fetch.ts? ─────────────────────────────────────────────────────╮                      
-   for (let attempt = │                                                                          │                      
-     try { return awai│  Apply this change to the workspace.                                     │                      
-     catch (e) { if (a│  --- a/src/fetch.ts                                                      │                      
-   }                  │  +++ b/src/fetch.ts                                                      │                      
- }                    │  @@ -12,3 +12,9 @@                                                       │                      
-                      │   import { sleep } from './util';                                        │                      
-╭─ Tool · edit ───────│  -export const get = (url) => fetch(url);                                │─────────────────────╮
-│succeeded            │  +export async function fetchRetry(url, tries = 3) {                     │                     │
-│src/fetch.ts         │  +  for (let attempt = 1; ; attempt++) {                                 │                     │
-│Updated src/fetch.ts.│  +    try { return await fetch(url); }                                   │                     │
-╰─────────────────────│  +    catch (e) { if (attempt === tries) throw e; await sleep(200 * at…  │─────────────────────╯
-                      │  +  }                                                                    │                      
-Assistant             │  +}                                                                      │                      
-Done. The helper now r│  +export const get = (url) => fetchRetry(url);                           │                      
-                      │                                                                          │                      
-╭─ Tool · edit ───────│                                                     [ Deny ]  [ Allow ]  │─────────────────────╮
-│⠋  waiting for approv│                                                                          │                     │
-│src/fetch.ts         ╰──────────────────────────────────────────────────────────────────────────╯                     │
-╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+ export async function╭─ Edit src/fetch.ts? ─────────────────────────────────────────────────────╮                      
+   // exponential back│                                                                          │                      
+   for (let attempt = │  Apply this change to the workspace.                                     │                      
+     try { return awai│  ┌────────────────────────────────────────────────────────────────────┐  │                      
+     catch (e) { if (a│  │--- a/src/fetch.ts                                                  ┃  │                      
+   }                  │  │+++ b/src/fetch.ts                                                  ┃  │                      
+ }                    │  │@@ -12,3 +12,9 @@                                                   ┃  │                      
+                      │  │ import { sleep } from './util';                                    ┃  │                      
+╭─ Tool · edit ───────│  │-export const get = (url) => fetch(url);                            ┃  │─────────────────────╮
+│succeeded            │  │+export async function fetchRetry(url, tries = 3) {                 ┃  │                     │
+│src/fetch.ts         │  │+  for (let attempt = 1; ; attempt++) {                             ┃  │                     │
+│Updated src/fetch.ts.│  │+    try { return await fetch(url); }                               ┃  │                     │
+╰─────────────────────│  │+    catch (e) { if (attempt === tries) throw e; await sleep(200 * a┃  │─────────────────────╯
+                      │  │↪ ttempt); }                                                        ┃  │                      
+Assistant             │  │+  }                                                                ┃  │                      
+Done. The helper now r│  │+}                                                                  │  │                      
+                      │  └────────────────────────────────────────────────────────────────────┘  │                      
+╭─ Tool · edit ───────│                                                                          │─────────────────────╮
+│⠋  waiting for approv│                                                     [ Deny ]  [ Allow ]  │                     │
+│src/fetch.ts         │                                                                          │                     │
+╰─────────────────────╰──────────────────────────────────────────────────────────────────────────╯─────────────────────╯
                                                                                                                         
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Generating…                                                                                                          │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
- ⠋  Waiting for approval · y allow · n deny · Esc deny                                                                  
+ ⠋  Waiting for approval · y allow · n deny · Esc deny   pgup/pgdn scroll  home/end top/end                             

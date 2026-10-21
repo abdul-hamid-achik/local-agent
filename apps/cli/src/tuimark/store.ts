@@ -19,17 +19,29 @@ import {
 import type { TranscriptSnapshot } from "#cli/tuimark/transcript";
 
 export const IDLE_STATUS = "Ready · /help for commands";
+
+/** The idle status line; it keeps the MCP count for the whole session. */
+export function idleStatus(mcpServers: number): string {
+  return mcpServers ? `${IDLE_STATUS} · MCP ${mcpServers}` : IDLE_STATUS;
+}
 export const PLACEHOLDER = "Message the model";
 export const PLACEHOLDER_BUSY = "Generating…";
+/** While the dialog is not armed yet: only deny works. */
+export const APPROVAL_WAIT_STATUS = "Waiting for approval · n deny · Esc deny";
+/** Once the dialog accepts `y`. */
 export const APPROVAL_STATUS =
   "Waiting for approval · y allow · n deny · Esc deny";
-export const BUSY_STATUS_LINE = "Generating · Esc cancel";
+export const APPROVAL_TRUNCATED_STATUS =
+  "Preview truncated · y allow · n deny · Esc deny";
+export const BUSY_STATUS_LINE = "Generating…";
 
 export interface DiffLine {
   n: number;
   t: string;
   add: boolean;
   del: boolean;
+  /** A row the client wrote (the "more lines" marker), not part of the preview text. */
+  note: boolean;
 }
 
 export interface ApprovalState {
@@ -39,6 +51,8 @@ export interface ApprovalState {
   danger: boolean;
   no: string;
   yes: string;
+  /** The preview was cut at the row cap: the dialog says so and still defaults to Deny. */
+  truncated: boolean;
   lines: DiffLine[];
 }
 
@@ -64,7 +78,7 @@ export interface Store {
   status: string;
 }
 
-/** Context size as the Vue sidebar says it: "32k" for 32768 tokens. */
+/** A token count in k = 1024 tokens: 32768 reads "32k", 9800 reads "9.6k". */
 export function tokens(n: number): string {
   if (n < 1000) return String(n);
   const k = n / 1024;
@@ -93,6 +107,7 @@ export function noApproval(): ApprovalState {
     danger: false,
     no: "Deny",
     yes: "Allow",
+    truncated: false,
     lines: [],
   };
 }
@@ -127,54 +142,146 @@ export function initialStore(init: StoreInit): Store {
     draft: "",
     placeholder: PLACEHOLDER,
     busy: false,
-    status: init.mcpServers
-      ? `${IDLE_STATUS} · MCP ${init.mcpServers}`
-      : IDLE_STATUS,
+    status: idleStatus(init.mcpServers),
   };
 }
 
 // ---------------------------------------------------------------------- approval
 
-const APPROVAL_LINES = 200;
+/** Rows of the approval preview; past this the preview says it is truncated. */
+export const APPROVAL_MAX_ROWS = 2000;
+/** The dialog is `width: 76` (see ui/app.tui), or the whole screen when narrower. */
+const DIALOG_WIDTH = 76;
+/** Border (2) and padding (4) of the dialog, plus the border of the preview (2). */
+const DIALOG_CHROME = 8;
 
-function diffLines(text: string): DiffLine[] {
-  return cleanText(text)
-    .split("\n")
-    .slice(0, APPROVAL_LINES)
-    .map((t, n) => ({
-      n,
-      t,
-      add: t.startsWith("+") && !t.startsWith("+++"),
-      del: t.startsWith("-") && !t.startsWith("---"),
-    }));
+/** Columns a preview row may use inside the dialog on a terminal `cols` wide. */
+export function previewWidth(cols: number): number {
+  return Math.max(20, Math.min(DIALOG_WIDTH, cols) - DIALOG_CHROME);
 }
 
-/** What the approval dialog shows for a runtime proposal. */
-export function approvalState(proposal: ApprovalRequest): ApprovalState {
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+/**
+ * Hard-wraps one line by display width. It keeps every character and every
+ * space (CSS `wrap: wrap` would collapse repeated spaces, which corrupts a
+ * diff). The continuation rows are marked with a leading arrow.
+ */
+export function wrapLine(text: string, width: number): string[] {
+  if (Bun.stringWidth(text) <= width) return [text];
+  const rows: string[] = [];
+  let row = "";
+  let used = 0;
+  let limit = width;
+  for (const { segment } of graphemes.segment(text)) {
+    const w = Bun.stringWidth(segment);
+    if (used + w > limit && row !== "") {
+      rows.push(row);
+      row = "↪ ";
+      used = 2;
+      limit = width;
+    }
+    row += segment;
+    used += w;
+  }
+  rows.push(row);
+  return rows;
+}
+
+export interface Preview {
+  lines: DiffLine[];
+  /** Logical lines of the text, and how many of them are fully shown. */
+  total: number;
+  shown: number;
+  truncated: boolean;
+}
+
+/** The rows of a preview text: wrapped to `width`, capped at `maxRows` plus a marker row. */
+export function previewRows(
+  text: string,
+  width: number,
+  maxRows = APPROVAL_MAX_ROWS,
+): Preview {
+  const source = cleanText(text).split("\n");
+  // A diff ends with a newline: that is not an empty row to scroll to.
+  while (source.length > 1 && source[source.length - 1] === "") source.pop();
+  const lines: DiffLine[] = [];
+  let shown = 0;
+  let truncated = false;
+  outer: for (const line of source) {
+    const add = line.startsWith("+") && !line.startsWith("+++");
+    const del = line.startsWith("-") && !line.startsWith("---");
+    for (const t of wrapLine(line, width)) {
+      if (lines.length >= maxRows) {
+        truncated = true;
+        break outer;
+      }
+      lines.push({ n: lines.length, t, add, del, note: false });
+    }
+    shown++;
+  }
+  if (truncated)
+    lines.push({
+      n: lines.length,
+      t: `… ${source.length - shown} more lines not shown`,
+      add: false,
+      del: false,
+      note: true,
+    });
+  return { lines, total: source.length, shown, truncated };
+}
+
+function prettyJson(text: string): string {
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2);
+  } catch {
+    return text;
+  }
+}
+
+/** The full text the dialog previews: nothing the user approves is left out of it. */
+export function approvalText(proposal: ApprovalRequest): string {
+  if (proposal.kind === "mcp")
+    return `${proposal.name}\n${prettyJson(proposal.argumentsJson)}\n\nMCP effects are not verified by transport success.`;
+  return approvalPreview(proposal);
+}
+
+export const TRUNCATED_BODY =
+  "Preview truncated. Deny unless you have read the whole change.";
+
+/** What the approval dialog shows for a runtime proposal, wrapped for `cols` columns. */
+export function approvalState(
+  proposal: ApprovalRequest,
+  cols = 80,
+): ApprovalState {
+  const preview = previewRows(approvalText(proposal), previewWidth(cols));
   const base = {
     ...noApproval(),
     open: true,
-    lines: diffLines(approvalPreview(proposal)),
+    lines: preview.lines,
+    truncated: preview.truncated,
   };
+  const body = (text: string) => (preview.truncated ? TRUNCATED_BODY : text);
   switch (proposal.kind) {
     case "edit":
       return {
         ...base,
         title: clip(`Edit ${cleanText(proposal.path)}?`, 70),
-        body: "Apply this change to the workspace.",
+        body: body("Apply this change to the workspace."),
+        danger: preview.truncated,
       };
     case "mcp":
       return {
         ...base,
         title: clip(`Call ${cleanText(proposal.name)}?`, 70),
-        body: "MCP effects are not verified by transport success.",
+        body: body("Call this MCP tool with the arguments below."),
         danger: true,
       };
     default:
       return {
         ...base,
         title: "Run command?",
-        body: clip(cleanText(proposal.argv.join(" ")), 200),
+        body: body("Run this command in the workspace with your permissions."),
         danger: true,
       };
   }

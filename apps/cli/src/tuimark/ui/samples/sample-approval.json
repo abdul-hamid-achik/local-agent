@@ -453,78 +453,98 @@
     "danger": false,
     "no": "Deny",
     "yes": "Allow",
+    "truncated": false,
     "lines": [
       {
         "n": 0,
         "t": "--- a/src/fetch.ts",
         "add": false,
-        "del": false
+        "del": false,
+        "note": false
       },
       {
         "n": 1,
         "t": "+++ b/src/fetch.ts",
         "add": false,
-        "del": false
+        "del": false,
+        "note": false
       },
       {
         "n": 2,
         "t": "@@ -12,3 +12,9 @@",
         "add": false,
-        "del": false
+        "del": false,
+        "note": false
       },
       {
         "n": 3,
         "t": " import { sleep } from './util';",
         "add": false,
-        "del": false
+        "del": false,
+        "note": false
       },
       {
         "n": 4,
         "t": "-export const get = (url) => fetch(url);",
         "add": false,
-        "del": true
+        "del": true,
+        "note": false
       },
       {
         "n": 5,
         "t": "+export async function fetchRetry(url, tries = 3) {",
         "add": true,
-        "del": false
+        "del": false,
+        "note": false
       },
       {
         "n": 6,
         "t": "+  for (let attempt = 1; ; attempt++) {",
         "add": true,
-        "del": false
+        "del": false,
+        "note": false
       },
       {
         "n": 7,
         "t": "+    try { return await fetch(url); }",
         "add": true,
-        "del": false
+        "del": false,
+        "note": false
       },
       {
         "n": 8,
-        "t": "+    catch (e) { if (attempt === tries) throw e; await sleep(200 * attempt); }",
+        "t": "+    catch (e) { if (attempt === tries) throw e; await sleep(200 * a",
         "add": true,
-        "del": false
+        "del": false,
+        "note": false
       },
       {
         "n": 9,
-        "t": "+  }",
+        "t": "↪ ttempt); }",
         "add": true,
-        "del": false
+        "del": false,
+        "note": false
       },
       {
         "n": 10,
-        "t": "+}",
+        "t": "+  }",
         "add": true,
-        "del": false
+        "del": false,
+        "note": false
       },
       {
         "n": 11,
+        "t": "+}",
+        "add": true,
+        "del": false,
+        "note": false
+      },
+      {
+        "n": 12,
         "t": "+export const get = (url) => fetchRetry(url);",
         "add": true,
-        "del": false
+        "del": false,
+        "note": false
       }
     ]
   },

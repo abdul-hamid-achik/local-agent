@@ -13,7 +13,12 @@
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { resolveBinary } from "@thelacanians/tuimark";
-import { SAMPLES } from "#cli/tuimark/fixtures";
+import {
+  EXACT_LINE,
+  HIDDEN_LINE,
+  SAMPLES,
+  WRAPPED_LINE,
+} from "#cli/tuimark/fixtures";
 
 const ui = join(dirname(import.meta.path), "ui");
 const update = Bun.argv.includes("--update");
@@ -81,55 +86,118 @@ for (const [name, make] of Object.entries(SAMPLES)) {
   }
 }
 
-// 4: every action fires, from the sample where its key is live.
+// 4: every action fires, from the sample where its key is live. The event
+// list is compared exactly: an extra event (a dialog_confirm next to the
+// dialog_cancel that esc must fire) is a failure.
 interface Expect {
   sample: string;
   input: string;
-  action: string;
+  /** Every event the replay fires, in order. */
+  actions: string[];
+  /** The value of the first event. */
   value?: unknown;
+  /** Text that must be on the final screen, and text that must not. */
+  screen?: string[];
+  notScreen?: string[];
 }
+const pages = (n: number) => Array(n).fill("pgdn").join(" ");
 const plays: Expect[] = [
   {
     sample: "sample",
     input: "text:hello enter",
-    action: "send",
+    actions: ["send"],
     value: "hello",
   },
   {
     sample: "sample",
     input: "text:/help enter",
-    action: "send",
+    actions: ["send"],
     value: "/help",
   },
-  { sample: "sample", input: "esc", action: "cancel" },
-  { sample: "sample", input: "ctrl+c", action: "quit" },
-  { sample: "sample", input: "ctrl+k", action: "palette_open" },
-  { sample: "sample-approval", input: "y", action: "dialog_confirm" },
-  { sample: "sample-approval", input: "n", action: "dialog_cancel" },
-  { sample: "sample-approval", input: "esc", action: "dialog_cancel" },
-  { sample: "sample-approval", input: "enter", action: "dialog_cancel" },
-  { sample: "sample-approval", input: "ctrl+c", action: "quit" },
+  { sample: "sample", input: "esc", actions: ["cancel"] },
+  { sample: "sample", input: "ctrl+c", actions: ["quit"] },
+  { sample: "sample", input: "ctrl+k", actions: ["palette_open"] },
+  { sample: "sample-approval", input: "y", actions: ["dialog_confirm"] },
+  { sample: "sample-approval", input: "n", actions: ["dialog_cancel"] },
+  { sample: "sample-approval", input: "esc", actions: ["dialog_cancel"] },
+  { sample: "sample-approval", input: "enter", actions: ["dialog_cancel"] },
+  { sample: "sample-approval", input: "ctrl+c", actions: ["quit"] },
+  // The whole preview is reachable by key while the dialog is open.
+  {
+    sample: "sample-approval-long",
+    input: "pgdn",
+    actions: [],
+    notScreen: [HIDDEN_LINE],
+  },
+  {
+    sample: "sample-approval-long",
+    input: "down down down",
+    actions: [],
+    screen: ["+echo step 3"],
+  },
+  {
+    sample: "sample-approval-long",
+    input: "end",
+    actions: [],
+    screen: ["+echo step 249"],
+  },
+  {
+    sample: "sample-approval-long",
+    input: "end home",
+    actions: [],
+    screen: ["--- a/install.sh"],
+  },
+  // A line as wide as the viewport is whole; a wider one wraps with a marker.
+  {
+    sample: "sample-approval-long",
+    input: "home",
+    actions: [],
+    screen: [EXACT_LINE, WRAPPED_LINE.slice(0, 68)],
+  },
+  {
+    sample: "sample-approval-long",
+    input: pages(1),
+    actions: [],
+    screen: [`↪ ${WRAPPED_LINE.slice(68)}`],
+  },
+  {
+    sample: "sample-approval-mcp",
+    input: "end",
+    actions: [],
+    screen: ["zzz_last", "DELETE FROM accounts WHERE 1=1"],
+  },
+  {
+    sample: "sample-approval-truncated",
+    input: "end",
+    actions: [],
+    screen: ["more lines not shown"],
+  },
+  {
+    sample: "sample-approval-truncated",
+    input: "enter",
+    actions: ["dialog_cancel"],
+  },
   {
     sample: "sample-streaming",
     input: "focus:#earlier enter",
-    action: "load_earlier",
+    actions: ["load_earlier"],
   },
-  { sample: "sample-streaming", input: "ctrl+o", action: "load_earlier" },
+  { sample: "sample-streaming", input: "ctrl+o", actions: ["load_earlier"] },
   {
     sample: "sample-palette",
     input: "text:x",
-    action: "palette_query",
+    actions: ["palette_query"],
     value: "modex",
   },
   {
     sample: "sample-palette",
     input: "enter",
-    action: "palette_run",
+    actions: ["palette_run"],
     value: "mode",
   },
-  { sample: "sample-palette", input: "esc", action: "palette_close" },
-  { sample: "sample-help", input: "q", action: "help_close" },
-  { sample: "sample-help", input: "esc", action: "help_close" },
+  { sample: "sample-palette", input: "esc", actions: ["palette_close"] },
+  { sample: "sample-help", input: "q", actions: ["help_close"] },
+  { sample: "sample-help", input: "esc", actions: ["help_close"] },
 ];
 for (const check of plays) {
   const run = tuimark([
@@ -142,23 +210,52 @@ for (const check of plays) {
     "--format",
     "json",
   ]);
-  const label = `play ${check.sample} "${check.input}"`;
+  const label = `play ${check.sample} "${check.input.slice(0, 40)}"`;
   try {
-    const events = (
-      JSON.parse(run.out) as { events: { action: string; value: unknown }[] }
-    ).events;
-    const event = events.find((e) => e.action === check.action);
-    if (!event)
+    const result = JSON.parse(run.out) as {
+      events: { action: string; value: unknown }[];
+      grid: string[];
+    };
+    const actions = result.events.map((e) => e.action);
+    if (JSON.stringify(actions) !== JSON.stringify(check.actions))
       failures.push(
-        `${label}: expected ${check.action}, got ${events.map((e) => e.action).join(",") || "nothing"}`,
+        `${label}: events [${actions}], expected [${check.actions}]`,
       );
-    else if ("value" in check && event.value !== check.value)
+    else if ("value" in check && result.events[0]?.value !== check.value)
       failures.push(
-        `${label}: ${check.action} value ${JSON.stringify(event.value)}, expected ${JSON.stringify(check.value)}`,
+        `${label}: value ${JSON.stringify(result.events[0]?.value)}, expected ${JSON.stringify(check.value)}`,
       );
+    const screen = result.grid.join("\n");
+    for (const text of check.screen ?? [])
+      if (!screen.includes(text))
+        failures.push(`${label}: the screen does not show ${text}`);
+    for (const text of check.notScreen ?? [])
+      if (screen.includes(text))
+        failures.push(`${label}: the screen shows ${text} too early`);
   } catch {
     failures.push(`${label}: ${run.err || run.out}`.trim());
   }
+}
+
+// The command on line 240 of the long diff is reached by paging down.
+{
+  let reached = 0;
+  for (let n = 1; n <= 40 && !reached; n++) {
+    const run = tuimark([
+      "play",
+      "app.tui",
+      "--data",
+      "samples/sample-approval-long.json",
+      "--input",
+      pages(n),
+      "--format",
+      "json",
+    ]);
+    const grid = (JSON.parse(run.out) as { grid: string[] }).grid.join("\n");
+    if (grid.includes(HIDDEN_LINE)) reached = n;
+  }
+  if (!reached)
+    failures.push(`${HIDDEN_LINE} is not reachable by pgdn in the long diff`);
 }
 
 // Focus lands on Deny when the approval opens (the safe button).

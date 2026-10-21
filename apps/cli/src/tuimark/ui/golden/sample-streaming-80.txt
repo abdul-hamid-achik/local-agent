@@ -28,4 +28,4 @@ Here is the plan:
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║ Generating…                                                                  ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
- ⠋  Generating · Esc cancel   esc cancel  ^K commands  ctrl+c quit              
+ ⠋  Generating…   esc cancel  ^K commands  ctrl+c quit  ^O earlier              

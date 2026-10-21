@@ -453,6 +453,7 @@
     "danger": false,
     "no": "Deny",
     "yes": "Allow",
+    "truncated": false,
     "lines": []
   },
   "palette": {

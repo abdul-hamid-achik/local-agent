@@ -22,9 +22,10 @@ import {
   type SessionContext,
   type Workspace,
 } from "@local-agent/runtime";
-import { terminalText } from "@local-agent/vue-tui/text";
 import type { Host, HostEvent } from "@thelacanians/tuimark";
+import { terminalText } from "#cli/text";
 import {
+  clip,
   IDLE_LIVE,
   type LiveView,
   liveToolView,
@@ -40,11 +41,13 @@ import {
 } from "#cli/tuimark/commands";
 import {
   APPROVAL_STATUS,
+  APPROVAL_TRUNCATED_STATUS,
+  APPROVAL_WAIT_STATUS,
   approvalState,
   BUSY_STATUS_LINE,
   contextLabel,
   contextPct,
-  IDLE_STATUS,
+  idleStatus,
   initialStore,
   noApproval,
   PLACEHOLDER,
@@ -78,7 +81,26 @@ export interface ClientOptions {
   /** Messages the store holds at first, and how many "load earlier" adds. */
   windowSize?: number;
   windowStep?: number;
+  /** The terminal width in columns, for wrapping the approval preview. */
+  columns?: () => number;
+  /** How long a new approval dialog ignores `y`. Default APPROVAL_ARM_MS. */
+  armMs?: number;
 }
+
+/**
+ * A new approval dialog ignores dialog_confirm for this long. A `y` typed or
+ * double-tapped just as the dialog opens must not approve a change nobody has
+ * read; deny and cancel always work. The status line shows "y allow" only once
+ * the dialog is armed.
+ */
+export const APPROVAL_ARM_MS = 300;
+/** A message as one status line: zod errors and stack-like text span many lines. */
+function oneLine(message: string): string {
+  return clip(terminalText(message).replace(/\s+/g, " ").trim(), 300);
+}
+
+/** The refused writes the client remembers. */
+const MAX_WRITE_ERRORS = 20;
 
 export class TuimarkClient {
   private ui?: UiHost;
@@ -102,7 +124,11 @@ export class TuimarkClient {
   private turn?: AbortController;
   private turnDone: Promise<void> = Promise.resolve();
   private decide?: (allowed: boolean) => Promise<void>;
+  private armed = false;
+  private armTimer?: ReturnType<typeof setTimeout>;
+  private proposal?: ApprovalRequest;
   private usedTokens = 0;
+  private reportedWriteError = false;
 
   constructor(private readonly options: ClientOptions) {
     this.run = options.run ?? runAgent;
@@ -140,7 +166,9 @@ export class TuimarkClient {
       return "quit";
     });
     ui.on("load_earlier", () => this.loadEarlier());
-    ui.on("dialog_confirm", () => this.decide?.(true));
+    ui.on("dialog_confirm", () =>
+      this.armed ? this.decide?.(true) : undefined,
+    );
     ui.on("dialog_cancel", () => this.decide?.(false));
     ui.on("palette_open", () => this.paletteOpen());
     ui.on("palette_query", (ev) => this.paletteQuery(ev));
@@ -151,6 +179,17 @@ export class TuimarkClient {
     ui.on("help_close", () =>
       this.write([{ path: "help.open", value: false }]),
     );
+  }
+
+  /** The terminal changed size: an open approval preview is wrapped again. */
+  async resize(): Promise<void> {
+    const proposal = this.proposal;
+    if (!proposal) return;
+    await this.write([{ path: "approval", value: this.approvalFor(proposal) }]);
+  }
+
+  private approvalFor(proposal: ApprovalRequest) {
+    return approvalState(proposal, this.options.columns?.() ?? 80);
   }
 
   /** Aborts the running turn, if any. */
@@ -171,31 +210,46 @@ export class TuimarkClient {
     const ui = this.ui;
     if (!ui) return Promise.resolve();
     const next = this.tail.then(async () => {
+      let failure: string | undefined;
       try {
         const ack = await ui.batch(writes);
-        if (!ack.ok) this.writeErrors.push(ack.error ?? "write refused");
+        if (!ack.ok) failure = ack.error ?? "write refused";
       } catch (error) {
-        this.writeErrors.push(
-          error instanceof Error ? error.message : String(error),
-        );
+        failure = error instanceof Error ? error.message : String(error);
+      }
+      if (failure === undefined) {
+        this.reportedWriteError = false;
+        return;
+      }
+      this.writeErrors.push(failure);
+      if (this.writeErrors.length > MAX_WRITE_ERRORS) this.writeErrors.shift();
+      // Say so once on the status line, so a frozen view is not silent.
+      if (!this.reportedWriteError) {
+        this.reportedWriteError = true;
+        const status = `UI update failed: ${terminalText(failure).replace(/\s+/g, " ").slice(0, 200)}`;
+        await ui.batch([{ path: "status", value: status }]).catch(() => {});
       }
     });
     this.tail = next;
     return next;
   }
 
-  private publishMessages(extra: Write[] = []): Promise<void> {
-    // Whatever was streaming is over: a later tick must not resend it.
-    this.liveText = "";
-    this.liveTool = undefined;
-    this.dirty = false;
+  /** Only the window of the transcript: the live message is left alone. */
+  private publishWindow(extra: Write[] = []): Promise<void> {
     const { messages, earlier } = this.transcript.snapshot();
     return this.write([
       { path: "messages", value: messages },
       { path: "earlier", value: earlier },
-      { path: "live", value: IDLE_LIVE },
       ...extra,
     ]);
+  }
+
+  /** The window plus the end of whatever was streaming: a later tick must not resend it. */
+  private publishMessages(extra: Write[] = []): Promise<void> {
+    this.liveText = "";
+    this.liveTool = undefined;
+    this.dirty = false;
+    return this.publishWindow([{ path: "live", value: IDLE_LIVE }, ...extra]);
   }
 
   private currentLive(): LiveView {
@@ -262,7 +316,7 @@ export class TuimarkClient {
   }
 
   private async loadEarlier(): Promise<void> {
-    if (this.transcript.widen()) await this.publishMessages();
+    if (this.transcript.widen()) await this.publishWindow();
   }
 
   // ------------------------------------------------------------------ the palette
@@ -295,11 +349,12 @@ export class TuimarkClient {
     const id = rows.find((row) => row.id === cur)?.id ?? rows[0]?.id;
     if (id === undefined) return;
     await this.write([{ path: "palette.open", value: false }]);
-    if (this.busy) {
+    const command = paletteCommand(id);
+    // The help overlay is harmless while a turn runs; everything else waits.
+    if (this.busy && command !== "/help") {
       await this.write([{ path: "status", value: BUSY_STATUS }]);
       return;
     }
-    const command = paletteCommand(id);
     if (command) await this.runCommand(command);
   }
 
@@ -313,21 +368,28 @@ export class TuimarkClient {
     return new Promise<boolean>((resolve) => {
       const finish = async (allowed: boolean): Promise<void> => {
         signal.removeEventListener("abort", deny);
+        clearTimeout(this.armTimer);
         this.decide = undefined;
+        this.armed = false;
+        this.proposal = undefined;
         resolve(allowed);
         await this.write([
           { path: "approval", value: noApproval() },
           { path: "status", value: allowed ? "Approved" : "Denied" },
         ]);
       };
+      // Anything but an armed, explicit "allow" is a deny, the abort included.
       const deny = () => void finish(false);
       this.decide = finish;
+      this.armed = false;
+      this.proposal = proposal;
       signal.addEventListener("abort", deny, { once: true });
+      const approval = this.approvalFor(proposal);
       const writes: Write[] = [
         { path: "palette.open", value: false },
         { path: "help.open", value: false },
-        { path: "approval", value: approvalState(proposal) },
-        { path: "status", value: APPROVAL_STATUS },
+        { path: "approval", value: approval },
+        { path: "status", value: APPROVAL_WAIT_STATUS },
       ];
       if (this.liveTool) {
         // The card goes in the same write as the dialog, so the two never disagree.
@@ -342,7 +404,22 @@ export class TuimarkClient {
         this.dirty = false;
         writes.unshift({ path: "live", value: this.liveTool });
       }
-      void this.write(writes);
+      // The dialog accepts `y` only a moment after the write that opens it landed.
+      void this.write(writes).then(() => {
+        if (this.decide !== finish) return;
+        this.armTimer = setTimeout(() => {
+          if (this.decide !== finish) return;
+          this.armed = true;
+          void this.write([
+            {
+              path: "status",
+              value: approval.truncated
+                ? APPROVAL_TRUNCATED_STATUS
+                : APPROVAL_STATUS,
+            },
+          ]);
+        }, this.options.armMs ?? APPROVAL_ARM_MS);
+      });
     });
   };
 
@@ -356,31 +433,53 @@ export class TuimarkClient {
     this.history.push(message);
     const view = this.builder.fromMessage(message);
     if (view) this.transcript.push(view);
-    await this.publishMessages([
-      { path: "draft", value: "" },
-      { path: "busy", value: true },
-      { path: "placeholder", value: PLACEHOLDER_BUSY },
-      { path: "status", value: BUSY_STATUS_LINE },
-    ]);
-    this.timer = setInterval(() => this.tick(), this.options.flushMs ?? 33);
-    this.turnDone = this.loop(prompt, request).catch((error) => {
+    // turnDone is set before any await, so idle() can never miss this turn.
+    let published: () => void = () => {};
+    const promptShown = new Promise<void>((resolve) => {
+      published = resolve;
+    });
+    this.turnDone = this.runTurn(prompt, request, published).catch((error) => {
       this.writeErrors.push(
         error instanceof Error ? error.message : String(error),
       );
     });
+    await promptShown;
+  }
+
+  private async runTurn(
+    prompt: string,
+    request: AbortController,
+    published: () => void,
+  ): Promise<void> {
+    try {
+      await this.publishMessages([
+        { path: "draft", value: "" },
+        { path: "busy", value: true },
+        { path: "placeholder", value: PLACEHOLDER_BUSY },
+        { path: "status", value: BUSY_STATUS_LINE },
+      ]);
+    } finally {
+      published();
+    }
+    this.timer = setInterval(() => this.tick(), this.options.flushMs ?? 33);
+    await this.loop(prompt, request);
   }
 
   private async loop(prompt: string, request: AbortController): Promise<void> {
     const { provider, workspace, session, mcp, signal } = this.options;
     let receivedMessage = false;
-    let status = IDLE_STATUS;
+    let status = idleStatus(mcp?.length ?? 0);
     let toolName = "";
     try {
+      const turnSignal = AbortSignal.any([signal, request.signal]);
+      // A turn aborted before it started (a signal while its first write was
+      // in flight) never calls the runtime, so it never takes the session lease.
+      turnSignal.throwIfAborted();
       for await (const event of this.run(provider, this.history, {
         workspace,
         intent: this.intent,
         approve: this.approve,
-        signal: AbortSignal.any([signal, request.signal]),
+        signal: turnSignal,
         session,
         mcp,
       })) {
@@ -453,14 +552,15 @@ export class TuimarkClient {
       }
       status = request.signal.aborted
         ? "Cancelled"
-        : terminalText(
-            error instanceof Error ? error.message : "Inference failed",
-          );
+        : oneLine(error instanceof Error ? error.message : "Inference failed");
     } finally {
       if (this.timer) clearInterval(this.timer);
       this.timer = undefined;
       this.busy = false;
+      clearTimeout(this.armTimer);
       this.decide = undefined;
+      this.armed = false;
+      this.proposal = undefined;
       if (this.turn === request) this.turn = undefined;
       const size = this.options.provider.context_size;
       await this.publishMessages([

@@ -594,6 +594,7 @@
     "danger": false,
     "no": "Deny",
     "yes": "Allow",
+    "truncated": false,
     "lines": []
   },
   "palette": {
@@ -632,5 +633,5 @@
   "draft": "",
   "placeholder": "Generating…",
   "busy": true,
-  "status": "Generating · Esc cancel"
+  "status": "Generating…"
 }

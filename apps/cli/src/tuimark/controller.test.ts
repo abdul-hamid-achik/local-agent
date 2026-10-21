@@ -12,8 +12,16 @@ import type { Host, HostEvent } from "@thelacanians/tuimark";
 import { expect, test } from "vitest";
 import type { MessageView } from "#cli/tuimark/blocks";
 import type { PaletteItem } from "#cli/tuimark/commands";
-import { TuimarkClient, type UiHost } from "#cli/tuimark/controller";
-import type { Store } from "#cli/tuimark/store";
+import {
+  APPROVAL_ARM_MS,
+  TuimarkClient,
+  type UiHost,
+} from "#cli/tuimark/controller";
+import {
+  APPROVAL_STATUS,
+  APPROVAL_WAIT_STATUS,
+  type Store,
+} from "#cli/tuimark/store";
 
 // ------------------------------------------------------------------ a fake host
 
@@ -108,12 +116,14 @@ function setup(
     intent: "build",
     signal: aborts.signal,
     flushMs: 2,
+    armMs: 10,
     run: (_provider, messages, options) => {
       seen.push({ messages: messages.map((m) => `${m.role}:${m.content}`) });
       return script({ options, messages });
     },
     ...extra,
   });
+  decisions.length = 0;
   ui.store = JSON.parse(JSON.stringify(client.initialStore()));
   client.attach(ui);
   return { ui, client, aborts, seen };
@@ -236,16 +246,19 @@ test("while busy, a slash command says Busy and a prompt is ignored", async () =
   expect(seen).toHaveLength(1);
 });
 
-function editProposal(): ApprovalRequest {
+function editProposal(diff = "-x\n+y"): ApprovalRequest {
   return {
     kind: "edit",
     path: "a.txt",
     before: "",
     after: "",
-    diff: "-x\n+y",
+    diff,
     identity: "i",
   };
 }
+
+/** What `approve` resolved to, one entry per approval of the running test. */
+const decisions: boolean[] = [];
 
 const withApproval: Script = async function* ({ options }) {
   yield {
@@ -260,6 +273,7 @@ const withApproval: Script = async function* ({ options }) {
   };
   yield { type: "tool_requested", id: "e1", name: "edit" };
   const allowed = await options.approve(editProposal(), options.signal);
+  decisions.push(allowed);
   if (allowed) yield { type: "tool_start", id: "e1", name: "edit" };
   const status = allowed ? "succeeded" : "denied";
   const message: Message = {
@@ -275,9 +289,14 @@ const withApproval: Script = async function* ({ options }) {
   yield { type: "tool_result", id: "e1", name: "edit", status, output: "o" };
 };
 
-async function untilApproval(ui: FakeHost) {
-  for (let i = 0; i < 100 && !store(ui).approval?.open; i++)
+async function until(ok: () => boolean) {
+  for (let i = 0; i < 200 && !ok(); i++)
     await new Promise((r) => setTimeout(r, 5));
+}
+
+/** The dialog is open and has armed itself (the status line offers "y allow"). */
+async function untilApproval(ui: FakeHost) {
+  await until(() => store(ui).status === APPROVAL_STATUS);
   expect(store(ui).approval.open).toBe(true);
 }
 
@@ -291,9 +310,10 @@ test("approval: the dialog opens with the tool card, and allow resolves the prom
     is_tool: true,
     card: { name: "edit", status: "waiting for approval", args: "a.txt" },
   });
-  expect(store(ui).status).toContain("Waiting for approval");
+  expect(store(ui).status).toBe(APPROVAL_STATUS);
   await ui.fire("dialog_confirm");
   expect(store(ui).approval.open).toBe(false);
+  expect(decisions).toEqual([true]);
   await client.idle();
   const tool = store(ui).messages.find((m: MessageView) => m.is_tool);
   expect(tool?.card).toMatchObject({
@@ -310,6 +330,7 @@ test("approval: deny, and esc (also dialog_cancel), keep the edit out", async ()
   await untilApproval(ui);
   await ui.fire("dialog_cancel");
   await client.idle();
+  expect(decisions).toEqual([false]);
   const tool = store(ui).messages.find((m: MessageView) => m.is_tool);
   expect(tool?.card).toMatchObject({ bad: true, status: "denied" });
   expect(store(ui).approval.open).toBe(false);
@@ -342,6 +363,191 @@ test("esc while an approval is pending denies it", async () => {
   await client.idle();
   expect(store(ui).approval.open).toBe(false);
   expect(store(ui).busy).toBe(false);
+  // Aborting is a deny: the promise resolved to false, not to a wrong true.
+  expect(decisions).toEqual([false]);
+});
+
+test("ctrl+c (quit) with the dialog open resolves the approval to deny", async () => {
+  const { ui, client } = setup(withApproval);
+  await ui.fire("send", "edit");
+  await untilApproval(ui);
+  expect(await ui.fire("quit")).toBe("quit");
+  await client.idle();
+  expect(decisions).toEqual([false]);
+});
+
+test("the process signal with the dialog open resolves the approval to deny", async () => {
+  const { ui, client, aborts } = setup(withApproval);
+  await ui.fire("send", "edit");
+  await untilApproval(ui);
+  aborts.abort();
+  await client.idle();
+  expect(decisions).toEqual([false]);
+});
+
+test("a confirm before the dialog is armed is ignored; deny always works", async () => {
+  const { ui, client } = setup(withApproval, { armMs: 80 });
+  await ui.fire("send", "edit");
+  await until(() => store(ui).approval.open);
+  expect(store(ui).status).toBe(APPROVAL_WAIT_STATUS);
+  await ui.fire("dialog_confirm");
+  expect(store(ui).approval.open).toBe(true);
+  expect(decisions).toEqual([]);
+  await until(() => store(ui).status === APPROVAL_STATUS);
+  await ui.fire("dialog_confirm");
+  expect(decisions).toEqual([true]);
+  await client.idle();
+
+  // The same turn again: deny works at once, before the arm delay.
+  await ui.fire("send", "edit again");
+  await until(() => store(ui).approval.open);
+  expect(store(ui).status).toBe(APPROVAL_WAIT_STATUS);
+  await ui.fire("dialog_cancel");
+  expect(decisions).toEqual([true, false]);
+  await client.idle();
+});
+
+test("an approval is armed by default 300 ms after it opens", () => {
+  expect(APPROVAL_ARM_MS).toBe(300);
+});
+
+test("resizing wraps an open approval preview again", async () => {
+  let cols = 100;
+  const { ui, client } = setup(
+    async function* ({ options }) {
+      yield { type: "tool_requested", id: "e1", name: "edit" };
+      await options.approve(
+        editProposal(`+${"x".repeat(150)}`),
+        options.signal,
+      );
+    },
+    { columns: () => cols },
+  );
+  await ui.fire("send", "edit");
+  await untilApproval(ui);
+  const wide = store(ui).approval.lines.length;
+  cols = 40;
+  await client.resize();
+  expect(store(ui).approval.lines.length).toBeGreaterThan(wide);
+  expect(store(ui).approval.open).toBe(true);
+  client.abort();
+  await client.idle();
+});
+
+test("loading earlier messages mid-turn keeps the streaming message", async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const session = {
+    store: {},
+    state: {
+      messages: Array.from({ length: 450 }, (_, i) => ({
+        role: i % 2 ? "assistant" : "user",
+        content: `m${i}`,
+      })),
+    },
+  } as unknown as SessionContext;
+  const { ui, client } = setup(
+    async function* () {
+      yield { type: "text", text: "first half " };
+      await gate;
+      yield {
+        type: "message",
+        message: { role: "assistant", content: "first half second half" },
+      };
+    },
+    { session },
+  );
+  await ui.fire("send", "go");
+  await until(() => store(ui).live.active);
+  await ui.fire("load_earlier");
+  expect(store(ui).messages.length).toBeGreaterThan(200);
+  expect(store(ui).live.active).toBe(true);
+  expect(store(ui).live.blocks[0]?.t.trim()).toBe("first half");
+  release();
+  await client.idle();
+  expect(store(ui).live.active).toBe(false);
+});
+
+test("idle() waits for a turn that is aborted while its first write is in flight", async () => {
+  let started = false;
+  const { ui, client, aborts } = setup(
+    quiet(async () => {
+      started = true;
+    }),
+  );
+  const sent = ui.fire("send", "go");
+  aborts.abort();
+  await client.idle();
+  await sent;
+  // The turn was cancelled before it started: the runtime never ran.
+  expect(started).toBe(false);
+  expect(store(ui).busy).toBe(false);
+});
+
+test("a refused write is shown on the status line, once, and remembered in a bounded list", async () => {
+  const { ui, client } = setup(reply("hi"));
+  const original = ui.batch.bind(ui);
+  let failing = true;
+  ui.batch = async (writes) => {
+    if (failing && writes.some((w) => w.path === "messages"))
+      return { type: "ack" as const, id: "x", ok: false, error: "too big" };
+    return original(writes);
+  };
+  await ui.fire("send", "hi");
+  await client.idle();
+  expect(store(ui).status).toContain("UI update failed: too big");
+  expect(client.writeErrors.length).toBeGreaterThan(0);
+  for (let turn = 0; turn < 12; turn++) {
+    await ui.fire("send", `again ${turn}`);
+    await client.idle();
+  }
+  expect(client.writeErrors.length).toBe(20);
+  failing = false;
+});
+
+test("a multi-line error is one line on the status row", async () => {
+  const { ui, client } = setup(
+    quiet(async () => {
+      throw new Error('[\n  {\n    "code": "too_big"\n  }\n]');
+    }),
+  );
+  await ui.fire("send", "go");
+  await client.idle();
+  expect(store(ui).status).toBe('[ { "code": "too_big" } ]');
+});
+
+test("the MCP count stays on the status line after a turn", async () => {
+  const mcp = [{ tools: [] }] as unknown as McpConnection[];
+  const { ui, client } = setup(reply("x"), { mcp });
+  await ui.fire("send", "go");
+  await client.idle();
+  expect(store(ui).status).toContain("MCP 1");
+});
+
+test("/help from the palette works while a turn runs, other commands say Busy", async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const { ui, client } = setup(
+    quiet(async () => {
+      await gate;
+    }),
+  );
+  await ui.fire("send", "go");
+  await ui.fire("palette_open");
+  store(ui).palette.query = "help";
+  store(ui).palette.cur = "help";
+  await ui.fire("palette_run");
+  expect(store(ui).help.open).toBe(true);
+  store(ui).palette.query = "mode plan";
+  store(ui).palette.cur = "mode-plan";
+  await ui.fire("palette_run");
+  expect(store(ui).status).toBe("Busy · wait for the current turn to finish");
+  release();
+  await client.idle();
 });
 
 test("a failed request shows its message and keeps a typed draft", async () => {

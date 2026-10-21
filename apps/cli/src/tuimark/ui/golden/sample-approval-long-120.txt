@@ -1,0 +1,31 @@
+=== grid 120x30 ===
+ Local Agent           Ollama / loopback  qwen3-coder:30b  build            session a1b2c3d  ctx 9.6k/32k  ████░░░░░░░░ 
+Assistant                                                                                                               
+Sure. I will wrap the call in a bounded retry with backoff:                                                             
+ ts                                                                                                                     
+ export async function╭─ Edit install.sh? ───────────────────────────────────────────────────────╮                      
+   // exponential back│                                                                          │                      
+   for (let attempt = │  Apply this change to the workspace.                                     │                      
+     try { return awai│  ┌────────────────────────────────────────────────────────────────────┐  │                      
+     catch (e) { if (a│  │--- a/install.sh                                                    ┃  │                      
+   }                  │  │+++ b/install.sh                                                    │  │                      
+ }                    │  │@@ -1,3 +1,250 @@                                                   │  │                      
+                      │  │+echo step 0                                                        │  │                      
+╭─ Tool · edit ───────│  │+echo step 1                                                        │  │─────────────────────╮
+│succeeded            │  │+echo step 2                                                        │  │                     │
+│src/fetch.ts         │  │+echo step 3                                                        │  │                     │
+│Updated src/fetch.ts.│  │+echo step 4                                                        │  │                     │
+╰─────────────────────│  │+echo step 5                                                        │  │─────────────────────╯
+                      │  │+echo step 6                                                        │  │                      
+Assistant             │  │+abcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefg│  │                      
+Done. The helper now r│  │+0123456789012345678901234567890123456789012345678901234567890123456│  │                      
+                      │  └────────────────────────────────────────────────────────────────────┘  │                      
+╭─ Tool · edit ───────│                                                                          │─────────────────────╮
+│⠋  waiting for approv│                                                     [ Deny ]  [ Allow ]  │                     │
+│src/fetch.ts         │                                                                          │                     │
+╰─────────────────────╰──────────────────────────────────────────────────────────────────────────╯─────────────────────╯
+                                                                                                                        
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Generating…                                                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+ ⠋  Waiting for approval · y allow · n deny · Esc deny   pgup/pgdn scroll  home/end top/end                             

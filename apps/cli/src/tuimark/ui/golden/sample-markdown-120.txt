@@ -28,4 +28,4 @@ Use `fetchRetry` for **every** call.
 ╔══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
 ║ Message the model                                                                                                    ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
- Ready · /help for commands   esc cancel  ^K commands  ctrl+c quit  pgup/pgdn scroll                                    
+ Ready · /help for commands   esc cancel  ^K commands  ctrl+c quit  ^O earlier  pgup/pgdn scroll                        
