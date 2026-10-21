@@ -2,7 +2,7 @@
 // import a renderer: this module is loaded before any terminal is claimed.
 
 import type { ApprovalRequest, Message } from "@local-agent/runtime";
-import { terminalText } from "@local-agent/vue-tui/text";
+import { terminalText } from "#cli/text";
 
 export function approvalPreview(proposal: ApprovalRequest): string {
   if (proposal.kind === "edit") return terminalText(proposal.diff);

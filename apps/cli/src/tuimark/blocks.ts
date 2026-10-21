@@ -13,7 +13,7 @@
 // and `if` / `class:NAME` on a missing member report B002 / B003.
 
 import type { Message, ToolCall } from "@local-agent/runtime";
-import { terminalText } from "@local-agent/vue-tui/text";
+import { terminalText } from "#cli/text";
 
 // ---------------------------------------------------------------- text hygiene
 
@@ -22,9 +22,14 @@ export function cleanText(text: string): string {
   return terminalText(text).replaceAll("\t", "  ");
 }
 
-/** Cuts a string to `max` columns (code units), ending in an ellipsis. */
+/**
+ * Cuts a string to `max` characters, ending in an ellipsis. It cuts on code
+ * point boundaries, so an emoji is never split into a lone surrogate.
+ */
 export function clip(text: string, max: number): string {
-  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
+  if (text.length <= max) return text;
+  const chars = Array.from(text);
+  return chars.length <= max ? text : `${chars.slice(0, max - 1).join("")}…`;
 }
 
 // ------------------------------------------------------------------- code blocks
@@ -58,6 +63,11 @@ export interface Block {
 export const MAX_CODE_LINES = 300;
 /** A paragraph keeps this many characters. */
 export const MAX_PARA_CHARS = 20_000;
+/** A code line keeps this many characters. */
+export const MAX_CODE_COLS = 1000;
+/** One message view keeps this many characters of source and this many blocks. */
+export const MAX_MESSAGE_CHARS = 256 * 1024;
+export const MAX_MESSAGE_BLOCKS = 400;
 
 const KEYWORDS = new Set([
   "const",
@@ -122,7 +132,12 @@ export function tokenizeLine(line: string): Omit<Seg, "i">[] {
   };
   const re = new RegExp(TOKEN.source, "y");
   for (let m = re.exec(line); m; m = re.exec(line)) {
-    if (m[1] !== undefined) push(m[1], "com");
+    if (m[1]?.startsWith("#") && line.slice(0, m.index).trim()) {
+      // `#` is a comment only at the start of a line (shell, python, yaml); in
+      // `#private`, `#fff` or a URL fragment it is just a character.
+      push("#", "");
+      re.lastIndex = m.index + 1;
+    } else if (m[1] !== undefined) push(m[1], "com");
     else if (m[2] !== undefined) push(m[2], "str");
     else if (m[3] !== undefined) push(m[3], "num");
     else if (m[4] !== undefined) push(m[4], KEYWORDS.has(m[4]) ? "kw" : "");
@@ -135,7 +150,7 @@ function codeBlock(id: string, lang: string, source: string[]): Block {
   const kept = source.slice(0, MAX_CODE_LINES);
   const lines: CodeLine[] = kept.map((line, n) => ({
     n,
-    segs: tokenizeLine(line).map((s, i) => ({ i, ...s })),
+    segs: tokenizeLine(clip(line, MAX_CODE_COLS)).map((s, i) => ({ i, ...s })),
   }));
   if (source.length > kept.length)
     lines.push({
@@ -182,14 +197,30 @@ function textBlock(
 
 // --------------------------------------------------------------------- markdown
 
+/** An opening fence: three or more backticks or tildes, then an info string. */
+const FENCE_OPEN = /^\s{0,3}(`{3,}|~{3,})\s*([^`]*)$/;
+
+function closesFence(line: string, open: string): boolean {
+  const mark = open[0] ?? "`";
+  return new RegExp(`^\\s{0,3}\\${mark}{${open.length},}\\s*$`).test(line);
+}
+
 /**
  * A small markdown subset: paragraphs, `#` headings, bullets, `>` quotes,
  * pipe tables (kept aligned as a code block) and fenced code. Inline marks
  * (`**bold**`, `` `code` ``) stay literal until Tuimark has `runs` (0.4d).
+ * A fence that never closes runs to the end, so a half-streamed code block
+ * already shows as code.
+ *
+ * The view is bounded: past MAX_MESSAGE_CHARS of source or MAX_MESSAGE_BLOCKS
+ * blocks the rest is one row that says so. The model's history is not cut.
  */
 export function parseBlocks(markdown: string, prefix = "b"): Block[] {
   const blocks: Block[] = [];
-  const lines = cleanText(markdown).split("\n");
+  const cut = markdown.length > MAX_MESSAGE_CHARS;
+  const lines = cleanText(
+    cut ? markdown.slice(0, MAX_MESSAGE_CHARS) : markdown,
+  ).split("\n");
   let para: string[] = [];
   let quote: string[] = [];
   const next = () => `${prefix}${blocks.length}`;
@@ -205,18 +236,16 @@ export function parseBlocks(markdown: string, prefix = "b"): Block[] {
   };
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i] ?? "";
-    const fence = /^\s{0,3}(?:```|~~~)\s*([\w+#.-]*)\s*$/.exec(line);
+    const fence = FENCE_OPEN.exec(line);
     if (fence) {
       flush();
+      const open = fence[1] ?? "```";
       const body: string[] = [];
-      for (
-        i++;
-        i < lines.length && !/^\s{0,3}(?:```|~~~)\s*$/.test(lines[i] ?? "");
-        i++
-      ) {
+      for (i++; i < lines.length && !closesFence(lines[i] ?? "", open); i++) {
         body.push(lines[i] ?? "");
       }
-      blocks.push(codeBlock(next(), fence[1] ?? "", body));
+      const lang = clip((fence[2] ?? "").trim().split(/\s+/)[0] ?? "", 24);
+      blocks.push(codeBlock(next(), lang, body));
     } else if (/^\s*\|.*\|\s*$/.test(line)) {
       flush();
       const table: string[] = [line.trim()];
@@ -239,19 +268,24 @@ export function parseBlocks(markdown: string, prefix = "b"): Block[] {
     }
   }
   flush();
+  const dropped = blocks.length - MAX_MESSAGE_BLOCKS;
+  if (dropped > 0) blocks.length = MAX_MESSAGE_BLOCKS;
+  if (cut || dropped > 0)
+    blocks.push(
+      textBlock(
+        `${prefix}${blocks.length}`,
+        "quote",
+        cut
+          ? `… message truncated in this view (${markdown.length - MAX_MESSAGE_CHARS} more characters)`
+          : `… ${dropped} more blocks not shown in this view`,
+      ),
+    );
   return blocks;
 }
 
-/**
- * Parses an in-flight reply. An unterminated fence is closed on the fly, so a
- * half-streamed code block already shows as code.
- */
+/** Parses an in-flight reply (the same mapping, with a prefix of its own). */
 export function parseStreaming(markdown: string, prefix = "l"): Block[] {
-  const fences = markdown.split("\n").filter((l) => /^\s{0,3}```/.test(l));
-  return parseBlocks(
-    fences.length % 2 === 1 ? `${markdown}\n\`\`\`` : markdown,
-    prefix,
-  );
+  return parseBlocks(markdown, prefix);
 }
 
 // ------------------------------------------------------------------- tool cards

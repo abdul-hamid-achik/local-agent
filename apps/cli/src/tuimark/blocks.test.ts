@@ -2,9 +2,13 @@ import type { Message } from "@local-agent/runtime";
 import { expect, test } from "vitest";
 import {
   callSummary,
+  clip,
   IDLE_LIVE,
   liveToolView,
+  MAX_CODE_COLS,
   MAX_CODE_LINES,
+  MAX_MESSAGE_BLOCKS,
+  MAX_MESSAGE_CHARS,
   outputLines,
   parseBlocks,
   parseStreaming,
@@ -214,5 +218,61 @@ test("the idle and streaming live views have the same keys", () => {
   );
   expect(Object.keys(liveToolView(undefined, "t", "running")).sort()).toEqual(
     Object.keys(IDLE_LIVE).sort(),
+  );
+});
+
+test("clip cuts on code points, never inside a surrogate pair", () => {
+  expect(clip("😀😀😀😀", 3)).toBe("😀😀…");
+  expect(clip("short", 10)).toBe("short");
+  expect(clip("exactly", 7)).toBe("exactly");
+});
+
+test("a # is a comment only at the start of a line", () => {
+  const plain = tokenizeLine("this.#private = color.replace('#fff')");
+  expect(plain.some((s) => s.com)).toBe(false);
+  expect(plain.map((s) => s.t).join("")).toBe(
+    "this.#private = color.replace('#fff')",
+  );
+  const comment = tokenizeLine("  # a comment");
+  expect(comment.find((s) => s.com)?.t).toBe("# a comment");
+  expect(tokenizeLine("x = 1  # trailing").some((s) => s.com)).toBe(false);
+});
+
+test("fences: an info string with spaces opens one, and only the same mark closes it", () => {
+  const blocks = parseBlocks(
+    [
+      '```python title="x.py"',
+      "a = 1",
+      "~~~",
+      "still code",
+      "```",
+      "after",
+    ].join("\n"),
+  );
+  expect(blocks.map((b) => b.code)).toEqual([true, false]);
+  expect(blocks[0]?.lang).toBe("python");
+  expect(blocks[0]?.lines).toHaveLength(3);
+  // A streamed prefix is the same mapping: the open fence is code already.
+  expect(parseStreaming('```python title="x.py"\na = 1')[0]?.code).toBe(true);
+});
+
+test("a message view is bounded: characters, blocks and code line width", () => {
+  const huge = parseBlocks("a".repeat(MAX_MESSAGE_CHARS + 50));
+  expect(huge.at(-1)?.quote).toBe(true);
+  expect(huge.at(-1)?.t).toBe(
+    "… message truncated in this view (50 more characters)",
+  );
+  const many = parseBlocks(
+    Array.from({ length: MAX_MESSAGE_BLOCKS + 7 }, (_, i) => `# h${i}`).join(
+      "\n",
+    ),
+  );
+  expect(many).toHaveLength(MAX_MESSAGE_BLOCKS + 1);
+  expect(many.at(-1)?.t).toBe("… 7 more blocks not shown in this view");
+  const [code] = parseBlocks(
+    ["```", "z".repeat(MAX_CODE_COLS + 500), "```"].join("\n"),
+  );
+  expect(code?.lines[0]?.segs.map((s) => s.t).join("").length).toBe(
+    MAX_CODE_COLS,
   );
 });
