@@ -1,3 +1,8 @@
 [install]
 exact = true
 linker = "isolated"
+
+# @thelacanians packages come from npmjs. Without this, a developer's user-level
+# .npmrc may map the scope to a private registry.
+[install.scopes]
+"@thelacanians" = "https://registry.npmjs.org/"
