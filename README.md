@@ -68,7 +68,7 @@ The Chalupa provider keeps the model of its profile.
 | Option | Model | Notes |
 | --- | --- | --- |
 | Default | `qwen3.5:4b-q4_K_M` | 3.3 GB download |
-| Lighter | `qwen3.5:2b-q4_K_M` with `--think off` | 1.9 GB; much faster, but weaker on multi-step work. With thinking on it often loops, so turn it off |
+| Lighter | `qwen3.5:2b-q4_K_M` with `--think off` | 1.9 GB, about 5 seconds per task instead of 15. It passed 14 of 18 runs of the battery (the default passed 18 of 18), and with thinking left on only 9 of 18, so always use `--think off` with it |
 | Stronger | `ornith-1.5:9b` | 6.6 GB download, about 21 tokens per second; close other applications first on a 16 GB machine |
 
 Flags and variables (a flag wins over its variable):
