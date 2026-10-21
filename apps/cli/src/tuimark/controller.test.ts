@@ -10,7 +10,7 @@ import type {
 } from "@local-agent/runtime";
 import type { Host, HostEvent } from "@thelacanians/tuimark";
 import { expect, test } from "vitest";
-import type { MessageView } from "#cli/tuimark/blocks";
+import { type MessageView, runsText } from "#cli/tuimark/blocks";
 import type { PaletteItem } from "#cli/tuimark/commands";
 import {
   APPROVAL_ARM_MS,
@@ -192,7 +192,9 @@ test("the live message is flushed while streaming, with one write in flight at a
   await ui.fire("send", "go");
   await new Promise((r) => setTimeout(r, 40));
   expect(store(ui).live).toMatchObject({ active: true, is_asst: true });
-  expect(store(ui).live.blocks[0]?.t.trim()).toBe("partial reply");
+  expect(runsText(store(ui).live.blocks[0]?.runs ?? []).trim()).toBe(
+    "partial reply",
+  );
   release();
   await client.idle();
   expect(store(ui).live.active).toBe(false);
@@ -464,7 +466,9 @@ test("loading earlier messages mid-turn keeps the streaming message", async () =
   await ui.fire("load_earlier");
   expect(store(ui).messages.length).toBeGreaterThan(200);
   expect(store(ui).live.active).toBe(true);
-  expect(store(ui).live.blocks[0]?.t.trim()).toBe("first half");
+  expect(runsText(store(ui).live.blocks[0]?.runs ?? []).trim()).toBe(
+    "first half",
+  );
   release();
   await client.idle();
   expect(store(ui).live.active).toBe(false);

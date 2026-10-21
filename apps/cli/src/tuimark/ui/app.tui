@@ -8,7 +8,7 @@
   Cards are templates:
     la-message  props label; slot: the body            (user and assistant)
     la-tool     with="card as t"; slot: the output     (tool call)
-    la-blocks   with="blocks as blocks": markdown blocks and code
+    la-blocks   with="blocks as blocks": markdown blocks (text runs) and code
     la-turn     with="msg": one message of the transcript, history or live
   The approval dialog is the kit's k-confirm, its slot holding the diff.
 -->
@@ -53,19 +53,21 @@
     </col>
   </template>
 
-  <!-- The markdown blocks of a message. with="msg.blocks as blocks". -->
+  <!-- The markdown blocks of a message. with="msg.blocks as blocks". Text is
+       runs (inline marks, styled by span.* in app.tcss); a code block is one
+       pre-wrap text whose runs are the syntax tokens. -->
   <template id="la-blocks">
     <col class="la-blocks" each="blocks as b" key="b.id">
-      <text if="b.para" wrap="wrap">{b.t}</text>
-      <text if="b.head" class="la-head" wrap="wrap">{b.t}</text>
-      <text if="b.quote" class="la-quote" wrap="wrap">{b.t}</text>
+      <text if="b.para" runs="b.runs" wrap="wrap"/>
+      <text if="b.head" class="la-head" runs="b.runs" wrap="wrap"/>
+      <text if="b.quote" class="la-quote" runs="b.runs" wrap="wrap"/>
+      <row if="b.item" class="la-item" class:nest="b.nest">
+        <text class="la-marker">{b.marker}</text>
+        <text class="la-itemtext" runs="b.runs" wrap="wrap"/>
+      </row>
       <col if="b.code" class="la-code">
         <text class="la-lang">{b.lang}</text>
-        <col class="la-lines" each="b.lines as l" key="l.n">
-          <row class="la-codeline" each="l.segs as s" key="s.i">
-            <text wrap="nowrap" class:kw="s.kw" class:str="s.str" class:num="s.num" class:com="s.com">{s.t}</text>
-          </row>
-        </col>
+        <text class="la-codetext" runs="b.runs" wrap="pre-wrap"/>
       </col>
     </col>
   </template>
@@ -92,9 +94,7 @@
       <use template="la-blocks" with="msg.blocks as blocks"/>
     </use>
     <use template="la-tool" if="msg.is_tool" with="msg.card as t">
-      <col class="la-out" each="msg.card.out as o" key="o.n">
-        <text wrap="truncate">{o.t}</text>
-      </col>
+      <text class="la-out" runs="msg.card.out" wrap="pre-wrap"/>
     </use>
   </template>
 

@@ -46,19 +46,33 @@ const REPLY = [
 ].join("\n");
 
 const MARKDOWN = [
-  "## Notes",
-  "- the delay doubles on every attempt",
-  "- the last error is rethrown",
+  "## Notes on **retries**",
+  "- the delay *doubles* on every attempt",
+  "- the last error is rethrown, see [the MDN page](https://developer.mozilla.org/docs/Web/API/fetch)",
+  "  - `AbortError` is never retried",
+  "- ~~linear backoff~~ is gone",
+  "",
+  "1. wrap the call",
+  "2. count the attempts",
+  "3. sleep `200 * attempt` ms",
   "",
   "> Only idempotent requests should be retried.",
   "",
   "| attempt | delay |",
-  "|---|---|",
+  "|:--|--:|",
   "| 1 | 200 ms |",
   "| 2 | 400 ms |",
   "",
-  "Use `fetchRetry` for **every** call.",
+  "Use `fetchRetry` for **every** call, and a stray 2 * 3 * 4 or snake_case_name stays as typed.",
 ].join("\n");
+
+const MARKDOWN_TOOL = {
+  id: "call-2",
+  function: {
+    name: "run_command",
+    arguments: { argv: ["bun", "test", "fetch"] },
+  },
+};
 
 const MESSAGES: Message[] = [
   {
@@ -82,6 +96,22 @@ const MESSAGES: Message[] = [
 const MARKDOWN_MESSAGES: Message[] = [
   { role: "user", content: "Explain the retry policy." },
   { role: "assistant", content: MARKDOWN },
+  { role: "assistant", content: "", tool_calls: [MARKDOWN_TOOL] },
+  {
+    role: "tool",
+    tool_name: "run_command",
+    tool_call_id: "call-2",
+    content: JSON.stringify({
+      status: "failed",
+      output: JSON.stringify({
+        output:
+          "fetch.test.ts\n  retries three times  FAIL\n    expected 3, got 1\n",
+        exitCode: 1,
+        timedOut: false,
+        truncated: false,
+      }),
+    }),
+  },
 ];
 
 const DIFF = [
@@ -135,7 +165,7 @@ export function idleSample(): Store {
   return base().store;
 }
 
-/** Markdown beyond code: heading, bullets, quote, table, inline marks. */
+/** Markdown beyond code: heading, nested bullets, numbered items, quote, table, inline marks, a failed command. */
 export function markdownSample(): Store {
   return base(MARKDOWN_MESSAGES).store;
 }

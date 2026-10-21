@@ -19,10 +19,14 @@
           "para": true,
           "head": false,
           "quote": false,
+          "item": false,
           "code": false,
-          "t": "Explain the retry policy.",
+          "nest": false,
+          "marker": "",
           "lang": "",
-          "lines": []
+          "runs": [
+            "Explain the retry policy."
+          ]
         }
       ],
       "card": {
@@ -47,167 +51,198 @@
           "para": false,
           "head": true,
           "quote": false,
+          "item": false,
           "code": false,
-          "t": "Notes",
+          "nest": false,
+          "marker": "",
           "lang": "",
-          "lines": []
+          "runs": [
+            "Notes on ",
+            {
+              "text": "retries",
+              "class": "b"
+            }
+          ]
         },
         {
           "id": "b1",
-          "para": true,
+          "para": false,
           "head": false,
           "quote": false,
+          "item": true,
           "code": false,
-          "t": "• the delay doubles on every attempt\n• the last error is rethrown",
+          "nest": false,
+          "marker": "•",
           "lang": "",
-          "lines": []
+          "runs": [
+            "the delay ",
+            {
+              "text": "doubles",
+              "class": "i"
+            },
+            " on every attempt"
+          ]
         },
         {
           "id": "b2",
           "para": false,
           "head": false,
-          "quote": true,
+          "quote": false,
+          "item": true,
           "code": false,
-          "t": "Only idempotent requests should be retried.",
+          "nest": false,
+          "marker": "•",
           "lang": "",
-          "lines": []
+          "runs": [
+            "the last error is rethrown, see ",
+            {
+              "text": "the MDN page",
+              "class": "link"
+            },
+            {
+              "text": " (https://developer.mozilla.org/docs/Web/API/fetch)",
+              "class": "url"
+            }
+          ]
         },
         {
           "id": "b3",
           "para": false,
           "head": false,
           "quote": false,
-          "code": true,
-          "t": "",
-          "lang": "table",
-          "lines": [
+          "item": true,
+          "code": false,
+          "nest": true,
+          "marker": "•",
+          "lang": "",
+          "runs": [
             {
-              "n": 0,
-              "segs": [
-                {
-                  "i": 0,
-                  "t": "| attempt | delay |",
-                  "kw": false,
-                  "str": false,
-                  "num": false,
-                  "com": false
-                }
-              ]
+              "text": "AbortError",
+              "class": "code"
             },
-            {
-              "n": 1,
-              "segs": [
-                {
-                  "i": 0,
-                  "t": "|---|---|",
-                  "kw": false,
-                  "str": false,
-                  "num": false,
-                  "com": false
-                }
-              ]
-            },
-            {
-              "n": 2,
-              "segs": [
-                {
-                  "i": 0,
-                  "t": "| ",
-                  "kw": false,
-                  "str": false,
-                  "num": false,
-                  "com": false
-                },
-                {
-                  "i": 1,
-                  "t": "1",
-                  "kw": false,
-                  "str": false,
-                  "num": true,
-                  "com": false
-                },
-                {
-                  "i": 2,
-                  "t": " | ",
-                  "kw": false,
-                  "str": false,
-                  "num": false,
-                  "com": false
-                },
-                {
-                  "i": 3,
-                  "t": "200",
-                  "kw": false,
-                  "str": false,
-                  "num": true,
-                  "com": false
-                },
-                {
-                  "i": 4,
-                  "t": " ms |",
-                  "kw": false,
-                  "str": false,
-                  "num": false,
-                  "com": false
-                }
-              ]
-            },
-            {
-              "n": 3,
-              "segs": [
-                {
-                  "i": 0,
-                  "t": "| ",
-                  "kw": false,
-                  "str": false,
-                  "num": false,
-                  "com": false
-                },
-                {
-                  "i": 1,
-                  "t": "2",
-                  "kw": false,
-                  "str": false,
-                  "num": true,
-                  "com": false
-                },
-                {
-                  "i": 2,
-                  "t": " | ",
-                  "kw": false,
-                  "str": false,
-                  "num": false,
-                  "com": false
-                },
-                {
-                  "i": 3,
-                  "t": "400",
-                  "kw": false,
-                  "str": false,
-                  "num": true,
-                  "com": false
-                },
-                {
-                  "i": 4,
-                  "t": " ms |",
-                  "kw": false,
-                  "str": false,
-                  "num": false,
-                  "com": false
-                }
-              ]
-            }
+            " is never retried"
           ]
         },
         {
           "id": "b4",
+          "para": false,
+          "head": false,
+          "quote": false,
+          "item": true,
+          "code": false,
+          "nest": false,
+          "marker": "•",
+          "lang": "",
+          "runs": [
+            {
+              "text": "linear backoff",
+              "class": "strike"
+            },
+            " is gone"
+          ]
+        },
+        {
+          "id": "b5",
+          "para": false,
+          "head": false,
+          "quote": false,
+          "item": true,
+          "code": false,
+          "nest": false,
+          "marker": "1.",
+          "lang": "",
+          "runs": [
+            "wrap the call"
+          ]
+        },
+        {
+          "id": "b6",
+          "para": false,
+          "head": false,
+          "quote": false,
+          "item": true,
+          "code": false,
+          "nest": false,
+          "marker": "2.",
+          "lang": "",
+          "runs": [
+            "count the attempts"
+          ]
+        },
+        {
+          "id": "b7",
+          "para": false,
+          "head": false,
+          "quote": false,
+          "item": true,
+          "code": false,
+          "nest": false,
+          "marker": "3.",
+          "lang": "",
+          "runs": [
+            "sleep ",
+            {
+              "text": "200 * attempt",
+              "class": "code"
+            },
+            " ms"
+          ]
+        },
+        {
+          "id": "b8",
+          "para": false,
+          "head": false,
+          "quote": true,
+          "item": false,
+          "code": false,
+          "nest": false,
+          "marker": "",
+          "lang": "",
+          "runs": [
+            "Only idempotent requests should be retried."
+          ]
+        },
+        {
+          "id": "b9",
+          "para": false,
+          "head": false,
+          "quote": false,
+          "item": false,
+          "code": true,
+          "nest": false,
+          "marker": "",
+          "lang": "table",
+          "runs": [
+            {
+              "text": "| attempt |  delay |",
+              "class": "b"
+            },
+            "\n| :------ | -----: |\n| 1       | 200 ms |\n| 2       | 400 ms |"
+          ]
+        },
+        {
+          "id": "b10",
           "para": true,
           "head": false,
           "quote": false,
+          "item": false,
           "code": false,
-          "t": "Use `fetchRetry` for **every** call.",
+          "nest": false,
+          "marker": "",
           "lang": "",
-          "lines": []
+          "runs": [
+            "Use ",
+            {
+              "text": "fetchRetry",
+              "class": "code"
+            },
+            " for ",
+            {
+              "text": "every",
+              "class": "b"
+            },
+            " call, and a stray 2 * 3 * 4 or snake_case_name stays as typed."
+          ]
         }
       ],
       "card": {
@@ -219,6 +254,29 @@
         "warn": false,
         "running": false,
         "out": []
+      }
+    },
+    {
+      "id": "m2",
+      "is_user": false,
+      "is_asst": false,
+      "is_tool": true,
+      "blocks": [],
+      "card": {
+        "name": "run_command",
+        "status": "failed",
+        "args": "bun test fetch",
+        "ok": false,
+        "bad": true,
+        "warn": false,
+        "running": false,
+        "out": [
+          {
+            "text": "exit 1",
+            "class": "err"
+          },
+          "\nfetch.test.ts\n  retries three times  FAIL\n    expected 3, got 1"
+        ]
       }
     }
   ],

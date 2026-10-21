@@ -2,15 +2,19 @@
 //
 //   runtime Message  ->  MessageView { blocks | card }  ->  store (messages[], live)
 //
-// Tuimark has no inline markup and no markdown parser, so this module turns a
-// message into plain data the templates in ui/app.tui walk with `each`:
+// Tuimark has no markdown parser, so this module turns a message into plain
+// data the templates in ui/app.tui walk with `each`:
 //
-//   message.blocks[] -> { para | head | quote | code } -> code.lines[] -> line.segs[]
+//   message.blocks[] -> { para | head | quote | item | code } -> runs
 //
-// Phase 2 (Tuimark 0.4d `runs` and `append`) replaces THIS module and nothing
-// else: the templates read `blocks`, `card` and the flags below, and every flag
-// is always present (true or false) because the markup has no equality test
-// and `if` / `class:NAME` on a missing member report B002 / B003.
+// A block's text is a list of RUNS (Tuimark 0.4d `<text runs="b.runs"/>`): a
+// plain string, or `{ text, class }` that the stylesheet styles (`span.b`,
+// `span.code`, ...). Inline markdown (`**bold**`, `` `code` ``, links) becomes
+// runs here; a code block is ONE text node (`wrap: pre-wrap`) whose runs are
+// the syntax tokens, not a node per token.
+//
+// Every flag is always present (true or false) because the markup has no
+// equality test and `if` / `class:NAME` on a missing member report B002 / B003.
 
 import type { Message, ToolCall } from "@local-agent/runtime";
 import { terminalText } from "#cli/text";
@@ -32,20 +36,288 @@ export function clip(text: string, max: number): string {
   return chars.length <= max ? text : `${chars.slice(0, max - 1).join("")}…`;
 }
 
-// ------------------------------------------------------------------- code blocks
+// -------------------------------------------------------------------------- runs
 
-export interface Seg {
-  i: number;
-  t: string;
-  kw: boolean;
-  str: boolean;
-  num: boolean;
-  com: boolean;
+/** A piece of styled text: a plain string, or text with class names (Tuimark `runs`). */
+export type Run = string | { text: string; class: string };
+
+/** The text a list of runs paints, without the styling. */
+export function runsText(runs: readonly Run[]): string {
+  return runs.map((r) => (typeof r === "string" ? r : r.text)).join("");
 }
 
-export interface CodeLine {
-  n: number;
-  segs: Seg[];
+/** Appends a piece, merging it into the previous one when the class is the same. */
+function pushRun(runs: Run[], text: string, cls = ""): void {
+  if (text === "") return;
+  const last = runs[runs.length - 1];
+  if (last === undefined) runs.push(cls ? { text, class: cls } : text);
+  else if (typeof last === "string") {
+    if (cls === "") runs[runs.length - 1] = last + text;
+    else runs.push({ text, class: cls });
+  } else if (last.class === cls) last.text += text;
+  else runs.push(cls ? { text, class: cls } : text);
+}
+
+// ------------------------------------------------------------------ inline marks
+
+const B = 1;
+const I = 2;
+const STRIKE = 4;
+const LINK = 8;
+const CODE = 16;
+const URL = 32;
+/** The classes of the style bits, in the order they are written. */
+const CLASS_NAMES: readonly (readonly [number, string])[] = [
+  [B, "b"],
+  [I, "i"],
+  [STRIKE, "strike"],
+  [LINK, "link"],
+  [CODE, "code"],
+  [URL, "url"],
+];
+/** The bits a delimiter or a link can lay over a span of nodes. */
+const SPAN_BITS = [B, I, STRIKE, LINK] as const;
+
+/** A link destination longer than this is not one: it bounds the work per `](`. */
+const MAX_URL = 2048;
+
+const ESCAPABLE = "\\`*_~[]()#>-+.!|";
+const SPECIAL = /[\\`*_~[\]]/g;
+const PUNCT = /^[\p{P}\p{S}]$/u;
+const SPACE = /^\s$/u;
+const CJK =
+  /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]$/u;
+
+interface Node {
+  s: string;
+  /** Style bits the node has by itself (code, url). */
+  m: number;
+}
+
+interface Frame {
+  /** `*`, `**`, `_`, `__`, `~~` or `[`. */
+  kind: string;
+  /** The node holding the literal marker; it is blanked when the frame closes. */
+  node: number;
+}
+
+function charBefore(text: string, i: number): string {
+  if (i <= 0) return "";
+  const lo = text.charCodeAt(i - 1);
+  if (lo >= 0xdc00 && lo <= 0xdfff && i >= 2) return text.slice(i - 2, i);
+  return text[i - 1] ?? "";
+}
+
+function charAt(text: string, i: number): string {
+  const cp = i < text.length ? text.codePointAt(i) : undefined;
+  return cp === undefined ? "" : String.fromCodePoint(cp);
+}
+
+/**
+ * Inline markdown to runs: `**bold**`/`__bold__` (class b), `*em*`/`_em_` (i),
+ * `` `code` `` (code), `~~strike~~` (strike) and `[text](url)` (the text in
+ * class link, then ` (url)` in class url). A marker that does not close, or
+ * that CommonMark would not let open (`2 * 3 * 4`, `snake_case_name`), stays
+ * literal text, so a message that is still streaming and ends mid-marker reads
+ * fine. No HTML, no images, no reference links.
+ *
+ * One pass with a stack of open markers: each marker is pushed and popped at
+ * most once, a closer looks only for kinds that are open (O(1) when none is),
+ * code spans pair backtick runs through a table built in one sweep, and a link
+ * destination is read for at most MAX_URL characters. The work is linear in
+ * the text (times that constant per `](`).
+ */
+export function inlineRuns(text: string): Run[] {
+  const nodes: Node[] = [];
+  const stack: Frame[] = [];
+  const open: Record<string, number> = {};
+  const spans: { from: number; to: number; bit: number }[] = [];
+
+  // Backtick runs, each with the next run of the same length (a code span's closer).
+  const ticks: { pos: number; len: number; next: number }[] = [];
+  if (text.includes("`")) {
+    for (let i = 0; i < text.length; ) {
+      if (text[i] === "\\" && ESCAPABLE.includes(text[i + 1] ?? "\n")) i += 2;
+      else if (text[i] === "`") {
+        let j = i;
+        while (text[j] === "`") j++;
+        ticks.push({ pos: i, len: j - i, next: -1 });
+        i = j;
+      } else i++;
+    }
+    const last = new Map<number, number>();
+    for (let k = ticks.length - 1; k >= 0; k--) {
+      const t = ticks[k];
+      if (!t) continue;
+      t.next = last.get(t.len) ?? -1;
+      last.set(t.len, k);
+    }
+  }
+  let tp = 0;
+
+  const add = (s: string, m = 0) => {
+    if (s !== "") nodes.push({ s, m });
+  };
+  const push = (kind: string) => {
+    stack.push({ kind, node: nodes.length });
+    open[kind] = (open[kind] ?? 0) + 1;
+    add(kind);
+  };
+  /** Pops down to the nearest frame `accept` takes; the frames above it stay literal. */
+  const take = (accept: (kind: string) => boolean): Frame | undefined => {
+    for (let f = stack.pop(); f; f = stack.pop()) {
+      open[f.kind] = (open[f.kind] ?? 1) - 1;
+      if (accept(f.kind)) return f;
+    }
+    return undefined;
+  };
+  const close = (f: Frame, bit: number) => {
+    const node = nodes[f.node];
+    if (node) node.s = "";
+    spans.push({ from: f.node + 1, to: nodes.length, bit });
+  };
+
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i] ?? "";
+    if (c === "\\" && ESCAPABLE.includes(text[i + 1] ?? "\n")) {
+      add(text[i + 1] ?? "");
+      i += 2;
+    } else if (c === "`") {
+      while (tp < ticks.length && (ticks[tp]?.pos ?? 0) < i) tp++;
+      const run = ticks[tp];
+      let n = 1;
+      while (text[i + n] === "`") n++;
+      const closer =
+        run && run.pos === i && run.next >= 0 ? ticks[run.next] : undefined;
+      if (closer) {
+        let code = text.slice(i + n, closer.pos).replaceAll("\n", " ");
+        if (
+          code.length > 2 &&
+          code.startsWith(" ") &&
+          code.endsWith(" ") &&
+          code.trim() !== ""
+        )
+          code = code.slice(1, -1);
+        add(code, CODE);
+        i = closer.pos + n;
+      } else {
+        add("`".repeat(n));
+        i += n;
+      }
+    } else if (c === "*" || c === "_" || c === "~") {
+      let n = 1;
+      while (text[i + n] === c) n++;
+      if (c === "~" && n !== 2) {
+        add(c.repeat(n));
+        i += n;
+        continue;
+      }
+      const before = charBefore(text, i);
+      const after = charAt(text, i + n);
+      const beforeSpace = before === "" || SPACE.test(before);
+      const afterSpace = after === "" || SPACE.test(after);
+      const beforePunct = PUNCT.test(before);
+      const afterPunct = PUNCT.test(after);
+      // CommonMark's flanking rules, with CJK text counting as a boundary next
+      // to punctuation (`这是**「重要」**的` has no spaces to flank on).
+      const left =
+        !afterSpace &&
+        (!afterPunct || beforeSpace || beforePunct || CJK.test(before));
+      const right =
+        !beforeSpace &&
+        (!beforePunct || afterSpace || afterPunct || CJK.test(after));
+      const canOpen = c === "_" ? left && (!right || beforePunct) : left;
+      const canClose = c === "_" ? right && (!left || afterPunct) : right;
+      let rest = n;
+      if (canClose) {
+        const one = c === "~" ? "" : c;
+        const two = c + c;
+        while (rest > 0) {
+          const strong = rest >= 2 && (open[two] ?? 0) > 0;
+          const em = one !== "" && (open[one] ?? 0) > 0;
+          if (!strong && !em) break;
+          const f = take((k) => (strong && k === two) || (em && k === one));
+          if (!f) break;
+          close(f, f.kind === "~~" ? STRIKE : f.kind.length === 2 ? B : I);
+          rest -= f.kind.length;
+        }
+      }
+      if (rest > 0 && canOpen) {
+        if (c === "~") push("~~");
+        else {
+          for (let k = Math.floor(rest / 2); k > 0; k--) push(c + c);
+          if (rest % 2 === 1) push(c);
+        }
+      } else if (rest > 0) add(c.repeat(rest));
+      i += n;
+    } else if (c === "[") {
+      push("[");
+      i++;
+    } else if (c === "]") {
+      i++;
+      if ((open["["] ?? 0) === 0) {
+        add("]");
+        continue;
+      }
+      const f = take((k) => k === "[");
+      let end = -1;
+      if (f && text[i] === "(") {
+        let depth = 1;
+        let j = i + 1;
+        for (; j < text.length && j - i <= MAX_URL; j++) {
+          const u = text[j] ?? "";
+          if (u === "(") depth++;
+          else if (u === ")" && --depth === 0) break;
+          else if (u === " " || u === "\n") break;
+        }
+        if (depth === 0 && text[j] === ")") end = j;
+      }
+      if (f && end >= 0) {
+        close(f, LINK);
+        const url = text.slice(i + 1, end);
+        if (url !== "") add(` (${url})`, URL);
+        i = end + 1;
+      } else add("]");
+    } else {
+      SPECIAL.lastIndex = i + 1;
+      const next = SPECIAL.exec(text);
+      const stop = next ? next.index : text.length;
+      add(text.slice(i, stop));
+      i = stop;
+    }
+  }
+
+  // Sweep the spans into one mask per node, then merge neighbours that share one.
+  const diff = SPAN_BITS.map(() => new Int32Array(nodes.length + 1));
+  for (const sp of spans) {
+    const d = diff[SPAN_BITS.indexOf(sp.bit as (typeof SPAN_BITS)[number])];
+    if (!d) continue;
+    d[sp.from] = (d[sp.from] ?? 0) + 1;
+    d[sp.to] = (d[sp.to] ?? 0) - 1;
+  }
+  const depth = SPAN_BITS.map(() => 0);
+  const runs: Run[] = [];
+  nodes.forEach((node, k) => {
+    let mask = node.m;
+    SPAN_BITS.forEach((bit, b) => {
+      depth[b] = (depth[b] ?? 0) + (diff[b]?.[k] ?? 0);
+      if ((depth[b] ?? 0) > 0) mask |= bit;
+    });
+    const cls = CLASS_NAMES.filter(([bit]) => mask & bit)
+      .map(([, name]) => name)
+      .join(" ");
+    pushRun(runs, node.s, cls);
+  });
+  return runs;
+}
+
+// ------------------------------------------------------------------- code blocks
+
+/** A piece of a code line and its class (`kw`, `str`, `num`, `com`, or `` for plain). */
+export interface Token {
+  t: string;
+  cls: string;
 }
 
 export interface Block {
@@ -53,10 +325,16 @@ export interface Block {
   para: boolean;
   head: boolean;
   quote: boolean;
+  /** A bullet or numbered list item: `marker`, then `runs`. */
+  item: boolean;
   code: boolean;
-  t: string;
+  /** A list item below the first level (indented). */
+  nest: boolean;
+  /** `•` or `1.` for an item, empty for every other block. */
+  marker: string;
+  /** The label of a code block (`ts`, `table`), empty for every other block. */
   lang: string;
-  lines: CodeLine[];
+  runs: Run[];
 }
 
 /** A code block keeps this many lines; the rest is one "N more lines" row. */
@@ -103,32 +381,17 @@ const KEYWORDS = new Set([
 const TOKEN =
   /(\/\/.*$|#.*$)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)|(\b\d[\d_.]*\b)|([A-Za-z_$][\w$]*)|(\s+)|([\s\S])/gy;
 
-type Kind = "kw" | "str" | "num" | "com" | "";
-
-/** Splits one source line into classified runs. Whitespace stays in the runs. */
-export function tokenizeLine(line: string): Omit<Seg, "i">[] {
-  const out: Omit<Seg, "i">[] = [];
-  const push = (t: string, kind: Kind) => {
+/** Splits one source line into classified tokens. Whitespace stays in the tokens. */
+export function tokenizeLine(line: string): Token[] {
+  const out: Token[] = [];
+  const push = (t: string, cls: string) => {
     const last = out[out.length - 1];
-    // Merge neighbours of the same plain kind so plain code is not one node per character.
-    if (
-      last &&
-      kind === "" &&
-      !last.kw &&
-      !last.str &&
-      !last.num &&
-      !last.com
-    ) {
+    // Merge neighbours of the same plain kind so plain code is not one token per character.
+    if (last && cls === "" && last.cls === "") {
       last.t += t;
       return;
     }
-    out.push({
-      t,
-      kw: kind === "kw",
-      str: kind === "str",
-      num: kind === "num",
-      com: kind === "com",
-    });
+    out.push({ t, cls });
   };
   const re = new RegExp(TOKEN.source, "y");
   for (let m = re.exec(line); m; m = re.exec(line)) {
@@ -146,36 +409,53 @@ export function tokenizeLine(line: string): Omit<Seg, "i">[] {
   return out;
 }
 
-function codeBlock(id: string, lang: string, source: string[]): Block {
+/**
+ * The runs of a block of lines: at most MAX_CODE_LINES lines of at most
+ * MAX_CODE_COLS characters, `\n` between them (the template paints them with
+ * `wrap: pre-wrap`), and a final dim "N more lines" row when lines were dropped.
+ */
+function linesToRuns(
+  source: string[],
+  tokens: (line: string, n: number) => Token[],
+): Run[] {
+  const runs: Run[] = [];
   const kept = source.slice(0, MAX_CODE_LINES);
-  const lines: CodeLine[] = kept.map((line, n) => ({
-    n,
-    segs: tokenizeLine(clip(line, MAX_CODE_COLS)).map((s, i) => ({ i, ...s })),
-  }));
+  kept.forEach((line, n) => {
+    if (n > 0) pushRun(runs, "\n");
+    for (const tok of tokens(clip(line, MAX_CODE_COLS), n))
+      pushRun(runs, tok.t, tok.cls);
+  });
   if (source.length > kept.length)
-    lines.push({
-      n: kept.length,
-      segs: [
-        {
-          i: 0,
-          t: `… ${source.length - kept.length} more lines`,
-          kw: false,
-          str: false,
-          num: false,
-          com: true,
-        },
-      ],
-    });
+    pushRun(
+      runs,
+      `${kept.length > 0 ? "\n" : ""}… ${source.length - kept.length} more lines`,
+      "com",
+    );
+  return runs;
+}
+
+function block(id: string, kind: Partial<Block>, runs: Run[]): Block {
   return {
     id,
     para: false,
     head: false,
     quote: false,
-    code: true,
-    t: "",
-    lang,
-    lines,
+    item: false,
+    code: false,
+    nest: false,
+    marker: "",
+    lang: "",
+    runs,
+    ...kind,
   };
+}
+
+function codeBlock(id: string, lang: string, source: string[]): Block {
+  return block(
+    id,
+    { code: true, lang },
+    linesToRuns(source, (line) => tokenizeLine(line)),
+  );
 }
 
 function textBlock(
@@ -183,22 +463,67 @@ function textBlock(
   kind: "para" | "head" | "quote",
   t: string,
 ): Block {
-  return {
-    id,
-    para: kind === "para",
-    head: kind === "head",
-    quote: kind === "quote",
-    code: false,
-    t: clip(t, MAX_PARA_CHARS),
-    lang: "",
-    lines: [],
-  };
+  return block(id, { [kind]: true }, inlineRuns(clip(t, MAX_PARA_CHARS)));
+}
+
+// ------------------------------------------------------------------------ tables
+
+const TABLE_ROW = /^\s*\|.*\|\s*$/;
+const DIVIDER_CELL = /^:?-+:?$/;
+
+function tableCells(row: string): string[] {
+  const inner = row.trim().replace(/^\|/, "").replace(/\|$/, "");
+  return inner.split(/(?<!\\)\|/).map((c) => c.trim());
+}
+
+/**
+ * A pipe table as monospace rows: each column as wide as its widest cell (by
+ * display width), a divider rebuilt to that width keeping its `:` marks, the
+ * header row in class `b`. Cell text stays literal (no inline marks).
+ */
+export function tableRuns(rows: string[]): Run[] {
+  const parsed = rows.map(tableCells);
+  const divider = parsed[1] ?? [];
+  const header =
+    divider.length > 0 && divider.every((c) => DIVIDER_CELL.test(c));
+  const width = Array.from(
+    { length: Math.max(...parsed.map((r) => r.length)) },
+    (_, k) =>
+      Math.max(
+        3,
+        ...parsed.map((r, n) =>
+          header && n === 1 ? 3 : Bun.stringWidth(r[k] ?? ""),
+        ),
+      ),
+  );
+  const mark = (k: number) => divider[k] ?? "";
+  const right = (k: number) =>
+    header && mark(k).endsWith(":") && !mark(k).startsWith(":");
+  const lines = parsed.map((row, n) => {
+    const out = width.map((w, k) => {
+      if (header && n === 1) {
+        const m = mark(k);
+        const left = m.startsWith(":") ? ":" : "-";
+        const end = m.endsWith(":") ? ":" : "-";
+        return `${left}${"-".repeat(w - 2)}${end}`;
+      }
+      const cell = row[k] ?? "";
+      const pad = " ".repeat(Math.max(0, w - Bun.stringWidth(cell)));
+      return right(k) ? pad + cell : cell + pad;
+    });
+    return `| ${out.join(" | ")} |`;
+  });
+  return linesToRuns(lines, (t, n) => [
+    { t, cls: header && n === 0 ? "b" : "" },
+  ]);
 }
 
 // --------------------------------------------------------------------- markdown
 
 /** An opening fence: three or more backticks or tildes, then an info string. */
 const FENCE_OPEN = /^\s{0,3}(`{3,}|~{3,})\s*([^`]*)$/;
+/** A bullet (`-`, `*`, `+`) or a numbered (`1.`, `1)`) list item. */
+const LIST_ITEM = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/;
 
 function closesFence(line: string, open: string): boolean {
   const mark = open[0] ?? "`";
@@ -206,11 +531,11 @@ function closesFence(line: string, open: string): boolean {
 }
 
 /**
- * A small markdown subset: paragraphs, `#` headings, bullets, `>` quotes,
- * pipe tables (kept aligned as a code block) and fenced code. Inline marks
- * (`**bold**`, `` `code` ``) stay literal until Tuimark has `runs` (0.4d).
- * A fence that never closes runs to the end, so a half-streamed code block
- * already shows as code.
+ * A small markdown subset: paragraphs, `#` headings, bullet and numbered
+ * items (one nesting level), `>` quotes, pipe tables (aligned, header bold)
+ * and fenced code, with inline marks as runs (see `inlineRuns`). A fence that
+ * never closes runs to the end, so a half-streamed code block already shows as
+ * code.
  *
  * The view is bounded: past MAX_MESSAGE_CHARS of source or MAX_MESSAGE_BLOCKS
  * blocks the rest is one row that says so. The model's history is not cut.
@@ -223,6 +548,7 @@ export function parseBlocks(markdown: string, prefix = "b"): Block[] {
   ).split("\n");
   let para: string[] = [];
   let quote: string[] = [];
+  let item: { marker: string; nest: boolean; lines: string[] } | undefined;
   const next = () => `${prefix}${blocks.length}`;
   const flush = () => {
     if (para.length > 0) {
@@ -233,10 +559,21 @@ export function parseBlocks(markdown: string, prefix = "b"): Block[] {
       blocks.push(textBlock(next(), "quote", quote.join("\n")));
       quote = [];
     }
+    if (item) {
+      blocks.push(
+        block(
+          next(),
+          { item: true, nest: item.nest, marker: item.marker },
+          inlineRuns(clip(item.lines.join("\n"), MAX_PARA_CHARS)),
+        ),
+      );
+      item = undefined;
+    }
   };
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i] ?? "";
     const fence = FENCE_OPEN.exec(line);
+    const listItem = LIST_ITEM.exec(line);
     if (fence) {
       flush();
       const open = fence[1] ?? "```";
@@ -246,25 +583,44 @@ export function parseBlocks(markdown: string, prefix = "b"): Block[] {
       }
       const lang = clip((fence[2] ?? "").trim().split(/\s+/)[0] ?? "", 24);
       blocks.push(codeBlock(next(), lang, body));
-    } else if (/^\s*\|.*\|\s*$/.test(line)) {
+    } else if (TABLE_ROW.test(line)) {
       flush();
       const table: string[] = [line.trim()];
-      while (/^\s*\|.*\|\s*$/.test(lines[i + 1] ?? "")) {
+      while (TABLE_ROW.test(lines[i + 1] ?? "")) {
         i++;
         table.push((lines[i] ?? "").trim());
       }
-      blocks.push(codeBlock(next(), "table", table));
+      blocks.push(
+        block(next(), { code: true, lang: "table" }, tableRuns(table)),
+      );
     } else if (/^#{1,6}\s/.test(line)) {
       flush();
-      blocks.push(textBlock(next(), "head", line.replace(/^#+\s*/, "")));
+      blocks.push(
+        textBlock(
+          next(),
+          "head",
+          line.replace(/^#+\s*/, "").replace(/\s+#+\s*$/, ""),
+        ),
+      );
     } else if (/^\s*>\s?/.test(line)) {
-      if (para.length > 0) flush();
+      if (para.length > 0 || item) flush();
       quote.push(line.replace(/^\s*>\s?/, ""));
+    } else if (listItem) {
+      flush();
+      const mark = listItem[2] ?? "-";
+      item = {
+        marker: /^\d/.test(mark) ? `${mark.slice(0, -1)}.` : "•",
+        nest: (listItem[1] ?? "").length >= 2,
+        lines: [listItem[3] ?? ""],
+      };
     } else if (line.trim() === "") {
       flush();
+    } else if (item) {
+      // A wrapped line of the item above (indented or lazy).
+      item.lines.push(line.trim());
     } else {
       if (quote.length > 0) flush();
-      para.push(line.replace(/^(\s*)[-*+]\s+/, "$1• "));
+      para.push(line);
     }
   }
   flush();
@@ -298,7 +654,8 @@ export interface Card {
   bad: boolean;
   warn: boolean;
   running: boolean;
-  out: { n: number; t: string }[];
+  /** The output as runs for one `wrap: pre-wrap` text. */
+  out: Run[];
 }
 
 export const NO_CARD: Card = Object.freeze({
@@ -346,20 +703,33 @@ export function callSummary(call: ToolCall | undefined): string {
   return clip(cleanText(JSON.stringify(args)), 160);
 }
 
-/** The first lines of a tool's output, with a final "N more lines" row. */
-export function outputLines(output: string): { n: number; t: string }[] {
+/**
+ * The first lines of a tool's output as runs, with a final "N more lines" row.
+ * The optional head line (exit code) is the first line, in class `err` or `note`.
+ */
+export function outputRuns(
+  output: string,
+  head?: { text: string; bad: boolean },
+): Run[] {
   const all = cleanText(output).split("\n");
   while (all.length > 0 && all[all.length - 1] === "") all.pop();
-  const out = all
-    .slice(0, OUT_LINES)
-    .map((t, n) => ({ n, t: clip(t, OUT_COLS) }));
+  if (head) all.unshift(head.text);
+  const runs: Run[] = [];
+  all.slice(0, OUT_LINES).forEach((line, n) => {
+    if (n > 0) pushRun(runs, "\n");
+    const cls = head && n === 0 ? (head.bad ? "err" : "note") : "";
+    pushRun(runs, clip(line, OUT_COLS), cls);
+  });
   if (all.length > OUT_LINES)
-    out.push({ n: OUT_LINES, t: `… ${all.length - OUT_LINES} more lines` });
-  return out;
+    pushRun(runs, `\n… ${all.length - OUT_LINES} more lines`, "note");
+  return runs;
 }
 
-/** What to show under a finished tool card, from the `{status, output}` the runtime stores. */
-export function resultSummary(name: string, output: string): string {
+/** What to show under a finished tool card: an optional head line, then the output. */
+function resultParts(
+  name: string,
+  output: string,
+): { head?: { text: string; bad: boolean }; body: string } {
   if (name === "run_command") {
     try {
       const r = JSON.parse(output) as {
@@ -375,13 +745,25 @@ export function resultSummary(name: string, output: string): string {
           r.timedOut === true ? "timed out" : "",
           r.truncated === true ? "truncated" : "",
         ].filter(Boolean);
-        return [[code, ...flags].join(", "), r.output].join("\n");
+        return {
+          head: {
+            text: [code, ...flags].join(", "),
+            bad: r.exitCode !== 0 || r.timedOut === true,
+          },
+          body: r.output,
+        };
       }
     } catch {
       // Not JSON: show it as it is.
     }
   }
-  return output;
+  return { body: output };
+}
+
+/** What to show under a finished tool card, from the `{status, output}` the runtime stores. */
+export function resultSummary(name: string, output: string): string {
+  const { head, body } = resultParts(name, output);
+  return head ? [head.text, body].join("\n") : body;
 }
 
 function toolCard(
@@ -390,6 +772,7 @@ function toolCard(
   state: ToolState,
   output = "",
 ): Card {
+  const parts = resultParts(name, output);
   return {
     name: clip(cleanText(name), 80),
     status: STATE_LABEL[state],
@@ -399,7 +782,7 @@ function toolCard(
     warn: state === "outcome_unknown" || state === "unverified",
     running:
       state === "running" || state === "requested" || state === "approval",
-    out: output ? outputLines(resultSummary(name, output)) : [],
+    out: output ? outputRuns(parts.body, parts.head) : [],
   };
 }
 

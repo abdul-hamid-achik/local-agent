@@ -44,16 +44,27 @@
 .la-blocks > text { wrap: wrap; }
 .la-head { bold: true; }
 .la-quote { color: $muted; italic: true; padding: 0 0 0 1; }
+.la-item { height: auto; layout: row; gap: 1; }
+.la-item.nest { padding: 0 0 0 2; }
+.la-marker { width: auto; color: $muted; }
+.la-itemtext { width: 1fr; }
 
 .la-code { height: auto; layout: column; background: $panel; padding: 0 1; }
 .la-lang { color: $muted; dim: true; }
-.la-lines { height: auto; layout: column; }
-.la-codeline { height: 1; layout: row; overflow: hidden; }
-.la-codeline > text { height: 1; }
-.kw { color: $kw; }
-.str { color: $str; }
-.num { color: $num; }
-.com { color: $com; italic: true; }
+.la-codetext, .la-out { height: auto; }
+
+/* Inline runs (blocks.ts inlineRuns) and code tokens: a span is styled by the
+ * class its run carries. */
+span.b { bold: true; }
+span.i { italic: true; }
+span.code { color: $code; }
+span.link { underline: true; color: $accent; }
+span.url, span.strike { dim: true; }
+span.kw { color: $kw; }
+span.str { color: $str; }
+span.num { color: $num; }
+span.com, span.note { color: $com; italic: true; }
+span.err { color: $danger; bold: true; }
 
 .la-tool { height: auto; layout: column; border: rounded; border-color: $border; title-color: $tool; margin: 0 0 1 0; }
 .la-tool.run { border-color: $warn; }
@@ -61,7 +72,6 @@
 .la-tool.bad { border-color: $danger; }
 .la-tool.warn { border-color: $warn; }
 .la-tool-head { height: 1; gap: 1; }
-.la-out { height: auto; layout: column; }
 
 #composer { width: 1fr; height: 3; border: rounded; border-color: $border; padding: 0 1; }
 #composer:focus { border: double; border-color: $focus; }

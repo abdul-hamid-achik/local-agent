@@ -19,10 +19,14 @@
           "para": true,
           "head": false,
           "quote": false,
+          "item": false,
           "code": false,
-          "t": "Add a retry to the fetch helper and show me the result.",
+          "nest": false,
+          "marker": "",
           "lang": "",
-          "lines": []
+          "runs": [
+            "Add a retry to the fetch helper and show me the result."
+          ]
         }
       ],
       "card": {
@@ -47,319 +51,96 @@
           "para": true,
           "head": false,
           "quote": false,
+          "item": false,
           "code": false,
-          "t": "Sure. I will wrap the call in a bounded retry with backoff:",
+          "nest": false,
+          "marker": "",
           "lang": "",
-          "lines": []
+          "runs": [
+            "Sure. I will wrap the call in a bounded retry with backoff:"
+          ]
         },
         {
           "id": "b1",
           "para": false,
           "head": false,
           "quote": false,
+          "item": false,
           "code": true,
-          "t": "",
+          "nest": false,
+          "marker": "",
           "lang": "ts",
-          "lines": [
+          "runs": [
             {
-              "n": 0,
-              "segs": [
-                {
-                  "i": 0,
-                  "t": "export",
-                  "kw": true,
-                  "str": false,
-                  "num": false,
-                  "com": false
-                },
-                {
-                  "i": 1,
-                  "t": " ",
-                  "kw": false,
-                  "str": false,
-                  "num": false,
-                  "com": false
-                },
-                {
-                  "i": 2,
-                  "t": "async",
-                  "kw": true,
-                  "str": false,
-                  "num": false,
-                  "com": false
-                },
-                {
-                  "i": 3,
-                  "t": " ",
-                  "kw": false,
-                  "str": false,
-                  "num": false,
-                  "com": false
-                },
-                {
-                  "i": 4,
-                  "t": "function",
-                  "kw": true,
-                  "str": false,
-                  "num": false,
-                  "com": false
-                },
-                {
-                  "i": 5,
-                  "t": " fetchRetry(url, tries = ",
-                  "kw": false,
-                  "str": false,
-                  "num": false,
-                  "com": false
-                },
-                {
-                  "i": 6,
-                  "t": "3",
-                  "kw": false,
-                  "str": false,
-                  "num": true,
-                  "com": false
-                },
-                {
-                  "i": 7,
-                  "t": ") {",
-                  "kw": false,
-                  "str": false,
-                  "num": false,
-                  "com": false
-                }
-              ]
+              "text": "export",
+              "class": "kw"
             },
+            " ",
             {
-              "n": 1,
-              "segs": [
-                {
-                  "i": 0,
-                  "t": "  ",
-                  "kw": false,
-                  "str": false,
-                  "num": false,
-                  "com": false
-                },
-                {
-                  "i": 1,
-                  "t": "// exponential backoff",
-                  "kw": false,
-                  "str": false,
-                  "num": false,
-                  "com": true
-                }
-              ]
+              "text": "async",
+              "class": "kw"
             },
+            " ",
             {
-              "n": 2,
-              "segs": [
-                {
-                  "i": 0,
-                  "t": "  ",
-                  "kw": false,
-                  "str": false,
-                  "num": false,
-                  "com": false
-                },
-                {
-                  "i": 1,
-                  "t": "for",
-                  "kw": true,
-                  "str": false,
-                  "num": false,
-                  "com": false
-                },
-                {
-                  "i": 2,
-                  "t": " (",
-                  "kw": false,
-                  "str": false,
-                  "num": false,
-                  "com": false
-                },
-                {
-                  "i": 3,
-                  "t": "let",
-                  "kw": true,
-                  "str": false,
-                  "num": false,
-                  "com": false
-                },
-                {
-                  "i": 4,
-                  "t": " attempt = ",
-                  "kw": false,
-                  "str": false,
-                  "num": false,
-                  "com": false
-                },
-                {
-                  "i": 5,
-                  "t": "1",
-                  "kw": false,
-                  "str": false,
-                  "num": true,
-                  "com": false
-                },
-                {
-                  "i": 6,
-                  "t": "; ; attempt++) {",
-                  "kw": false,
-                  "str": false,
-                  "num": false,
-                  "com": false
-                }
-              ]
+              "text": "function",
+              "class": "kw"
             },
+            " fetchRetry(url, tries = ",
             {
-              "n": 3,
-              "segs": [
-                {
-                  "i": 0,
-                  "t": "    ",
-                  "kw": false,
-                  "str": false,
-                  "num": false,
-                  "com": false
-                },
-                {
-                  "i": 1,
-                  "t": "try",
-                  "kw": true,
-                  "str": false,
-                  "num": false,
-                  "com": false
-                },
-                {
-                  "i": 2,
-                  "t": " { ",
-                  "kw": false,
-                  "str": false,
-                  "num": false,
-                  "com": false
-                },
-                {
-                  "i": 3,
-                  "t": "return",
-                  "kw": true,
-                  "str": false,
-                  "num": false,
-                  "com": false
-                },
-                {
-                  "i": 4,
-                  "t": " ",
-                  "kw": false,
-                  "str": false,
-                  "num": false,
-                  "com": false
-                },
-                {
-                  "i": 5,
-                  "t": "await",
-                  "kw": true,
-                  "str": false,
-                  "num": false,
-                  "com": false
-                },
-                {
-                  "i": 6,
-                  "t": " fetch(url); }",
-                  "kw": false,
-                  "str": false,
-                  "num": false,
-                  "com": false
-                }
-              ]
+              "text": "3",
+              "class": "num"
             },
+            ") {\n  ",
             {
-              "n": 4,
-              "segs": [
-                {
-                  "i": 0,
-                  "t": "    ",
-                  "kw": false,
-                  "str": false,
-                  "num": false,
-                  "com": false
-                },
-                {
-                  "i": 1,
-                  "t": "catch",
-                  "kw": true,
-                  "str": false,
-                  "num": false,
-                  "com": false
-                },
-                {
-                  "i": 2,
-                  "t": " (e) { ",
-                  "kw": false,
-                  "str": false,
-                  "num": false,
-                  "com": false
-                },
-                {
-                  "i": 3,
-                  "t": "if",
-                  "kw": true,
-                  "str": false,
-                  "num": false,
-                  "com": false
-                },
-                {
-                  "i": 4,
-                  "t": " (attempt === tries) ",
-                  "kw": false,
-                  "str": false,
-                  "num": false,
-                  "com": false
-                },
-                {
-                  "i": 5,
-                  "t": "throw",
-                  "kw": true,
-                  "str": false,
-                  "num": false,
-                  "com": false
-                },
-                {
-                  "i": 6,
-                  "t": " e; }",
-                  "kw": false,
-                  "str": false,
-                  "num": false,
-                  "com": false
-                }
-              ]
+              "text": "// exponential backoff",
+              "class": "com"
             },
+            "\n  ",
             {
-              "n": 5,
-              "segs": [
-                {
-                  "i": 0,
-                  "t": "  }",
-                  "kw": false,
-                  "str": false,
-                  "num": false,
-                  "com": false
-                }
-              ]
+              "text": "for",
+              "class": "kw"
             },
+            " (",
             {
-              "n": 6,
-              "segs": [
-                {
-                  "i": 0,
-                  "t": "}",
-                  "kw": false,
-                  "str": false,
-                  "num": false,
-                  "com": false
-                }
-              ]
-            }
+              "text": "let",
+              "class": "kw"
+            },
+            " attempt = ",
+            {
+              "text": "1",
+              "class": "num"
+            },
+            "; ; attempt++) {\n    ",
+            {
+              "text": "try",
+              "class": "kw"
+            },
+            " { ",
+            {
+              "text": "return",
+              "class": "kw"
+            },
+            " ",
+            {
+              "text": "await",
+              "class": "kw"
+            },
+            " fetch(url); }\n    ",
+            {
+              "text": "catch",
+              "class": "kw"
+            },
+            " (e) { ",
+            {
+              "text": "if",
+              "class": "kw"
+            },
+            " (attempt === tries) ",
+            {
+              "text": "throw",
+              "class": "kw"
+            },
+            " e; }\n  }\n}"
           ]
         }
       ],
@@ -389,10 +170,7 @@
         "warn": false,
         "running": false,
         "out": [
-          {
-            "n": 0,
-            "t": "Updated src/fetch.ts. Verification has not been run."
-          }
+          "Updated src/fetch.ts. Verification has not been run."
         ]
       }
     },
@@ -407,10 +185,14 @@
           "para": true,
           "head": false,
           "quote": false,
+          "item": false,
           "code": false,
-          "t": "Done. The helper now retries three times.",
+          "nest": false,
+          "marker": "",
           "lang": "",
-          "lines": []
+          "runs": [
+            "Done. The helper now retries three times."
+          ]
         }
       ],
       "card": {
@@ -439,139 +221,56 @@
         "para": true,
         "head": false,
         "quote": false,
+        "item": false,
         "code": false,
-        "t": "Here is the plan:",
+        "nest": false,
+        "marker": "",
         "lang": "",
-        "lines": []
+        "runs": [
+          "Here is the plan:"
+        ]
       },
       {
         "id": "l1",
         "para": false,
         "head": false,
         "quote": false,
+        "item": false,
         "code": true,
-        "t": "",
+        "nest": false,
+        "marker": "",
         "lang": "ts",
-        "lines": [
+        "runs": [
           {
-            "n": 0,
-            "segs": [
-              {
-                "i": 0,
-                "t": "const",
-                "kw": true,
-                "str": false,
-                "num": false,
-                "com": false
-              },
-              {
-                "i": 1,
-                "t": " retries = ",
-                "kw": false,
-                "str": false,
-                "num": false,
-                "com": false
-              },
-              {
-                "i": 2,
-                "t": "3",
-                "kw": false,
-                "str": false,
-                "num": true,
-                "com": false
-              },
-              {
-                "i": 3,
-                "t": ";",
-                "kw": false,
-                "str": false,
-                "num": false,
-                "com": false
-              }
-            ]
+            "text": "const",
+            "class": "kw"
           },
+          " retries = ",
           {
-            "n": 1,
-            "segs": [
-              {
-                "i": 0,
-                "t": "for",
-                "kw": true,
-                "str": false,
-                "num": false,
-                "com": false
-              },
-              {
-                "i": 1,
-                "t": " (",
-                "kw": false,
-                "str": false,
-                "num": false,
-                "com": false
-              },
-              {
-                "i": 2,
-                "t": "let",
-                "kw": true,
-                "str": false,
-                "num": false,
-                "com": false
-              },
-              {
-                "i": 3,
-                "t": " i = ",
-                "kw": false,
-                "str": false,
-                "num": false,
-                "com": false
-              },
-              {
-                "i": 4,
-                "t": "0",
-                "kw": false,
-                "str": false,
-                "num": true,
-                "com": false
-              },
-              {
-                "i": 5,
-                "t": "; i < retries; i++) {",
-                "kw": false,
-                "str": false,
-                "num": false,
-                "com": false
-              }
-            ]
+            "text": "3",
+            "class": "num"
           },
+          ";\n",
           {
-            "n": 2,
-            "segs": [
-              {
-                "i": 0,
-                "t": "  ",
-                "kw": false,
-                "str": false,
-                "num": false,
-                "com": false
-              },
-              {
-                "i": 1,
-                "t": "await",
-                "kw": true,
-                "str": false,
-                "num": false,
-                "com": false
-              },
-              {
-                "i": 2,
-                "t": " fetch(url);",
-                "kw": false,
-                "str": false,
-                "num": false,
-                "com": false
-              }
-            ]
-          }
+            "text": "for",
+            "class": "kw"
+          },
+          " (",
+          {
+            "text": "let",
+            "class": "kw"
+          },
+          " i = ",
+          {
+            "text": "0",
+            "class": "num"
+          },
+          "; i < retries; i++) {\n  ",
+          {
+            "text": "await",
+            "class": "kw"
+          },
+          " fetch(url);"
         ]
       }
     ],
