@@ -1,6 +1,6 @@
 // Deterministic loopback Ollama for the Tuimark client specs (--ui tuimark).
 //
-//   bun specs/tuimark/fixture.ts chat|edit-approve|edit-deny
+//   bun specs/tuimark/fixture.ts chat|edit-approve|edit-deny|session
 //
 // The reply depends only on the last message, so one run can hold several turns:
 //
@@ -8,6 +8,9 @@
 //   prompt contains "edit"         -> one `edit` tool call on notes.txt
 //   prompt contains "slow"         -> one chunk, then nothing until cancelled
 //   anything else                  -> a streamed markdown reply with a code block
+//
+// In `session` mode the fixture first runs one headless turn into a session
+// database, then opens the Tuimark client on that session with --resume.
 //
 // No inference and no credentials. The Tuimark binary comes from
 // TUIMARK_BINARY (CI installs the pinned release); the SDK may download it
@@ -19,7 +22,12 @@ import { join } from "node:path";
 
 const mode = Bun.argv[2] ?? "chat";
 const model = "fixture-model";
-const port = { chat: 19210, "edit-approve": 19211, "edit-deny": 19212 }[mode];
+const port = {
+  chat: 19210,
+  "edit-approve": 19211,
+  "edit-deny": 19212,
+  session: 19213,
+}[mode];
 if (!port) throw new Error(`unknown mode: ${mode}`);
 
 const workspaceRoot = await mkdtemp(join(tmpdir(), "local-agent-tuimark-"));
@@ -130,36 +138,50 @@ const server = Bun.serve({
   },
 });
 
+const baseArgs = ["apps/cli/src/main.ts", "--model", model, "--workspace", workspaceRoot];
+const env = {
+  PATH: process.env.PATH ?? "",
+  TERM: process.env.TERM ?? "xterm-256color",
+  COLORTERM: process.env.COLORTERM ?? "",
+  OLLAMA_HOST: server.url.origin,
+  // How the Tuimark SDK finds its binary.
+  ...Object.fromEntries(
+    ["TUIMARK_BINARY", "HOME", "XDG_CACHE_HOME", "TMPDIR"].flatMap((name) =>
+      process.env[name] ? [[name, process.env[name]]] : [],
+    ),
+  ),
+};
+
+const extraArgs: string[] = [];
+let sessionDirectory: string | undefined;
+if (mode === "session") {
+  sessionDirectory = await mkdtemp(join(tmpdir(), "local-agent-tuimark-db-"));
+  const database = join(sessionDirectory, "sessions.db");
+  const first = Bun.spawn(
+    [
+      process.execPath,
+      ...baseArgs,
+      "--mode",
+      "headless",
+      "-p",
+      "stream the first reply",
+      "--session-db",
+      database,
+    ],
+    { stdout: "ignore", stderr: "pipe", env },
+  );
+  const log = await new Response(first.stderr).text();
+  const id = /Session: (\w+)/.exec(log)?.[1];
+  if ((await first.exited) !== 0 || !id) {
+    console.error(`headless session failed: ${log}`);
+    process.exit(1);
+  }
+  extraArgs.push("--session-db", database, "--resume", id);
+}
+
 const child = Bun.spawn(
-  [
-    process.execPath,
-    "apps/cli/src/main.ts",
-    "--model",
-    model,
-    "--mode",
-    "fullscreen",
-    "--ui",
-    "tuimark",
-    "--workspace",
-    workspaceRoot,
-  ],
-  {
-    stdin: "inherit",
-    stdout: "inherit",
-    stderr: "inherit",
-    env: {
-      PATH: process.env.PATH ?? "",
-      TERM: process.env.TERM ?? "xterm-256color",
-      COLORTERM: process.env.COLORTERM ?? "",
-      OLLAMA_HOST: server.url.origin,
-      // How the Tuimark SDK finds its binary.
-      ...Object.fromEntries(
-        ["TUIMARK_BINARY", "HOME", "XDG_CACHE_HOME", "TMPDIR"].flatMap((name) =>
-          process.env[name] ? [[name, process.env[name]]] : [],
-        ),
-      ),
-    },
-  },
+  [process.execPath, ...baseArgs, "--mode", "fullscreen", "--ui", "tuimark", ...extraArgs],
+  { stdin: "inherit", stdout: "inherit", stderr: "inherit", env },
 );
 
 let cleaned = false;
@@ -174,6 +196,7 @@ async function shutdown(exitCode: number) {
   const expected = mode === "edit-approve" ? "after\n" : "before\n";
   if (contents !== expected) exitCode = 1;
   await rm(workspaceRoot, { recursive: true, force: true });
+  if (sessionDirectory) await rm(sessionDirectory, { recursive: true, force: true });
   process.exit(exitCode);
 }
 

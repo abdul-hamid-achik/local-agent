@@ -24,8 +24,11 @@
 .la-model { bold: true; width: auto; }
 .la-mode { color: $warn; width: auto; }
 .la-provider, .la-session, .la-ctx { width: auto; }
-@media (max-cols: 100) {
-  .la-provider, .la-session { display: none; }
+@media (max-cols: 110) {
+  .la-provider { display: none; }
+}
+@media (max-cols: 90) {
+  .la-session { display: none; }
 }
 .la-ctxbar { width: 12; }
 .la-spin { width: 2; }

@@ -114,6 +114,7 @@ const plays: Expect[] = [
     input: "focus:#earlier enter",
     action: "load_earlier",
   },
+  { sample: "sample-streaming", input: "ctrl+o", action: "load_earlier" },
   {
     sample: "sample-palette",
     input: "text:x",

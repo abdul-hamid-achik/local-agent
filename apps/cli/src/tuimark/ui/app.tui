@@ -25,6 +25,7 @@
     <bind keys="esc" action="cancel" label="cancel"/>
     <bind keys="ctrl+k" action="palette_open" keycap="^K" label="commands"/>
     <bind keys="ctrl+c" action="quit" label="quit"/>
+    <bind keys="ctrl+o" action="load_earlier"/>
     <bind keys="pgup" action="move-page-up" to="#log" label="scroll" keycap="pgup/pgdn"/>
     <bind keys="pgdn" action="move-page-down" to="#log"/>
   </keymap>
@@ -100,7 +101,7 @@
       </use>
 
       <scroll id="log" stick="bottom" focusable="true">
-        <button id="earlier" class="la-earlier" if="earlier.n" on:click="load_earlier">▲ {earlier.n} earlier messages, enter to load more</button>
+        <button id="earlier" class="la-earlier" if="earlier.n" on:click="load_earlier">▲ {earlier.n} earlier messages, ctrl+o or enter to load more</button>
         <col id="rows" each="messages as m" key="m.id">
           <use template="la-turn" with="m as msg"/>
         </col>

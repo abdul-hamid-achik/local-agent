@@ -1,0 +1,54 @@
+version: 1
+name: bun_tuimark_session
+intent: |
+    the Tuimark client resumes a saved session (--session-db, --resume): the
+    transcript of the earlier turn is shown, the header names the session, and
+    a new turn continues it.
+target:
+    cmd: ["bun", "specs/tuimark/fixture.ts", "session"]
+    cwd: "${projectRoot}"
+terminal:
+    cols: 100
+    rows: 32
+    alternateScreen: require
+steps:
+    - wait:
+        screen:
+            contains: "Message the model"
+        timeoutMs: 20000
+    - wait:
+        screen:
+            contains: "stream complete"
+        timeoutMs: 5000
+    - wait:
+        screen:
+            contains: "stream the first reply"
+        timeoutMs: 5000
+    - wait:
+        screen:
+            contains: "session"
+        timeoutMs: 5000
+    - snapshot: resumed
+    - type: "stream a second reply"
+    - press: enter
+    - wait:
+        screen:
+            contains: "stream a second reply"
+        timeoutMs: 15000
+    - wait:
+        screen:
+            contains: "Ready"
+        timeoutMs: 15000
+    - snapshot: continued
+    - press: ctrl+c
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 5000
+outcomes:
+    - id: tuimark_session
+      description: a saved session is shown and continued by the Tuimark client
+      verify:
+        process:
+            exitCode: 0
+contractHash: sha256:0a9fe3c0a6d93b156513bd7199393613f5bc95f96490eecb19edc27b5906f8f5
