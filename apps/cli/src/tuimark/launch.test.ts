@@ -27,6 +27,7 @@ import type { Host, HostExit, Ready } from "@thelacanians/tuimark";
 import {
   findBinary,
   MIN_TUIMARK,
+  PINNED_TUIMARK,
   readyProblem,
   runTuimark,
   TERMINAL_RESET,
@@ -101,6 +102,11 @@ const launch = (
   signal = new AbortController().signal,
 ) =>
   runTuimark(provider, signal, {} as Workspace, "build", undefined, [], deps);
+
+test("the pinned release is the minimum, not the pre-release the SDK is packed as", () => {
+  expect(PINNED_TUIMARK).toBe("0.4.6");
+  expect(PINNED_TUIMARK).toBe(MIN_TUIMARK);
+});
 
 test("versions compare as a minimum, not as equality", () => {
   expect(MIN_TUIMARK).toBe("0.4.6");

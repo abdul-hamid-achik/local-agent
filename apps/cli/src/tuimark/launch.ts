@@ -26,6 +26,18 @@ import { type ClientOptions, TuimarkClient } from "#cli/tuimark/controller";
 export const MIN_TUIMARK = "0.4.6";
 
 /**
+ * The tuimark release the client downloads when TUIMARK_BINARY is not set. The
+ * vendored SDK is a pre-release (0.4.6-pre) whose own version has no release to
+ * download, so the release is named here.
+ */
+export const PINNED_TUIMARK = "0.4.6";
+
+/** The SDK's resolution (TUIMARK_BINARY, the cache, a checked download) for PINNED_TUIMARK. */
+export function resolvePinned(): Promise<string> {
+  return resolveBinary({ version: PINNED_TUIMARK });
+}
+
+/**
  * Leave the alternate screen, show the cursor, turn bracketed paste off and
  * autowrap on. A host that dies leaves the terminal as it was drawing it.
  */
@@ -89,7 +101,7 @@ export function readyProblem(
  * never asked for Tuimark (offline with an empty cache, a release not out yet).
  */
 export async function findBinary(
-  resolve: () => Promise<string> = resolveBinary,
+  resolve: () => Promise<string> = resolvePinned,
 ): Promise<{ bin: string } | { error: string }> {
   try {
     return { bin: await resolve() };
@@ -140,7 +152,7 @@ export async function runTuimark(
     run: deps.run,
     columns: () => stdout.columns ?? readyColumns,
   });
-  const bin = await (deps.resolve ?? resolveBinary)();
+  const bin = await (deps.resolve ?? resolvePinned)();
   const ui = await (deps.spawn ?? spawnHost)(join(uiDirectory(), "app.tui"), {
     data: client.initialStore() as unknown as Record<string, unknown>,
     replyTimeout: "5s",

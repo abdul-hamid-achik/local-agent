@@ -13,7 +13,6 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { resolveBinary } from "@thelacanians/tuimark";
 import {
   DRAFT,
   EXACT_LINE,
@@ -22,6 +21,7 @@ import {
   SAMPLES,
   WRAPPED_LINE,
 } from "#cli/tuimark/fixtures";
+import { resolvePinned } from "#cli/tuimark/launch";
 
 const ui = join(dirname(import.meta.path), "ui");
 const update = Bun.argv.includes("--update");
@@ -29,7 +29,7 @@ const rows = 30;
 const widths = [80, 120];
 const failures: string[] = [];
 
-const bin = await resolveBinary();
+const bin = await resolvePinned();
 
 function tuimark(args: string[]): { code: number; out: string; err: string } {
   const run = Bun.spawnSync([bin, ...args], { cwd: ui });
@@ -98,6 +98,8 @@ interface Expect {
   input: string;
   /** Explicit steps (`tuimark play --script`), used instead of `input`. */
   steps?: object[];
+  /** The terminal width of the replay. Default 80. */
+  cols?: number;
   /** Every event the replay fires, in order. */
   actions: string[];
   /** The value of the first event. */
@@ -175,6 +177,51 @@ const plays: Expect[] = [
   },
   {
     sample: "sample-draft-long",
+    input: "enter",
+    actions: ["send"],
+    value: LONG_DRAFT,
+  },
+  // The same at 120 columns (every check above runs at 80).
+  {
+    sample: "sample",
+    cols: 120,
+    input: "text:one shift+enter text:two alt+enter text:three enter",
+    actions: ["send"],
+    value: "one\ntwo\nthree",
+  },
+  {
+    sample: "sample-draft",
+    cols: 120,
+    input: "up up",
+    actions: [],
+    screen: ["history"],
+  },
+  {
+    sample: "sample-draft",
+    cols: 120,
+    input: "up up up",
+    actions: ["history_prev"],
+    value: DRAFT,
+  },
+  {
+    sample: "sample-draft-long",
+    cols: 120,
+    input: "",
+    actions: [],
+    screen: ["draft line 12"],
+    notScreen: ["draft line 4"],
+  },
+  {
+    sample: "sample-draft-long",
+    cols: 120,
+    input: Array(11).fill("up").join(" "),
+    actions: [],
+    screen: ["draft line 1", "draft line 8"],
+    notScreen: ["draft line 12"],
+  },
+  {
+    sample: "sample-draft-long",
+    cols: 120,
     input: "enter",
     actions: ["send"],
     value: LONG_DRAFT,
@@ -284,11 +331,13 @@ for (const check of plays) {
     "app.tui",
     "--data",
     `samples/${check.sample}.json`,
+    "--cols",
+    String(check.cols ?? 80),
     ...script,
     "--format",
     "json",
   ]);
-  const label = `play ${check.sample} "${(check.steps ? JSON.stringify(check.steps) : check.input).slice(0, 40)}"`;
+  const label = `play ${check.sample} @${check.cols ?? 80} "${(check.steps ? JSON.stringify(check.steps) : check.input).slice(0, 40)}"`;
   try {
     const result = JSON.parse(run.out) as {
       events: { action: string; value: unknown }[];
