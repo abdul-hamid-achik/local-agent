@@ -162,3 +162,32 @@ test("approval swap removes the composer key listener and preserves the draft", 
   expect(decisions).toEqual([false]);
   expect(draft.value).toBe("keep me");
 });
+
+test("a local command clears the native editor when paste and submit share a tick", async () => {
+  const draft = ref("");
+  const submitted: string[] = [];
+  const terminal = await mount(
+    defineComponent({
+      setup: () => () =>
+        h(Composer, {
+          modelValue: draft.value,
+          "onUpdate:modelValue": (value: string) => {
+            draft.value = value;
+          },
+          onSubmit: (value: string) => {
+            submitted.push(value);
+            draft.value = "";
+          },
+        }),
+    }),
+  );
+  await terminal.mockInput.pasteBracketedText("/mode plan");
+  terminal.mockInput.pressEnter();
+  await nextTick();
+  await terminal.flush();
+  expect(terminal.captureCharFrame()).not.toContain("/mode plan");
+  await terminal.mockInput.pasteBracketedText("next");
+  terminal.mockInput.pressEnter();
+  await nextTick();
+  expect(submitted).toEqual(["/mode plan", "next"]);
+});

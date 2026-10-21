@@ -58,7 +58,15 @@ export const Composer = defineComponent({
       },
     );
     const submit = (value: string) => {
-      if (!props.busy) emit("submit", value);
+      if (props.busy) return;
+      emit("submit", value);
+      // Paste and submit can share a Vue tick; reconcile even if the prop
+      // returned to its previous value and its watcher did not fire.
+      void nextTick(() => {
+        const native = editor.value?.$el;
+        if (native && native.plainText !== props.modelValue)
+          native.setText(props.modelValue);
+      });
     };
     const keyDown = (key: { name: string; preventDefault(): void }) => {
       if (key.name === "escape") {

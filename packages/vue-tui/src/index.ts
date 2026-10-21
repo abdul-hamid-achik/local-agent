@@ -11,6 +11,7 @@ export {
   onKeyDown,
   rendererInjectionKey,
   ScrollBox,
+  SyntaxStyle,
   Text,
   Textarea,
   useExit,
