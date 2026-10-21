@@ -197,6 +197,19 @@ async function handleAgentStart(id: number, params: unknown): Promise<void> {
               diff: proposal.diff,
             },
           });
+        } else if (proposal.kind === "write") {
+          emitStream(runId, {
+            type: "approval_requested",
+            token,
+            proposal: {
+              kind: "write",
+              path: proposal.path,
+              created: proposal.created,
+              before: proposal.before,
+              after: proposal.after,
+              diff: proposal.diff,
+            },
+          });
         } else if (proposal.kind === "command") {
           emitStream(runId, {
             type: "approval_requested",

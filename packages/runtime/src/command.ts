@@ -17,6 +17,89 @@ const ALLOWED_ENV = [
   "LC_CTYPE",
 ] as const;
 
+const OPERATOR_HELP =
+  'run_command has no shell, so {op} cannot be used. Run one command per call and pass argv as an array, for example {"argv": ["grep", "-rn", "slugify", "src"]}';
+
+/**
+ * Splits a command line a model sent as a string into argv, quote-aware
+ * (`'…'`, `"…"` and backslash escapes). There is no shell: a line that needs one
+ * (`|`, `&`, `;`, `>`, `<`, `$(`, backticks outside quotes, or a second line)
+ * is refused, never reinterpreted.
+ */
+export function splitCommandLine(line: string): string[] {
+  const argv: string[] = [];
+  let current = "";
+  let started = false;
+  let quote: "'" | '"' | undefined;
+  const refuse = (operator: string): never => {
+    throw new Error(OPERATOR_HELP.replace("{op}", operator));
+  };
+  for (let i = 0; i < line.length; i++) {
+    const char = line.charAt(i);
+    if (quote === "'") {
+      if (char === "'") quote = undefined;
+      else current += char;
+      continue;
+    }
+    if (char === "`") refuse("a backtick");
+    if (char === "$" && line.charAt(i + 1) === "(") refuse("$(");
+    if (quote === '"') {
+      if (char === '"') quote = undefined;
+      else if (
+        char === "\\" &&
+        '"\\$`'.includes(line.charAt(i + 1)) &&
+        i + 1 < line.length
+      )
+        current += line.charAt(++i);
+      else current += char;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      started = true;
+    } else if (char === "\\") {
+      if (i + 1 >= line.length)
+        throw new Error("Command ends with a backslash");
+      current += line.charAt(++i);
+      started = true;
+    } else if ("|&;<>".includes(char)) {
+      refuse(char === "&" && line.charAt(i + 1) === "&" ? "&&" : char);
+    } else if (char === "\n" || char === "\r") {
+      refuse("a second line");
+    } else if (char === " " || char === "\t") {
+      if (started || current) argv.push(current);
+      current = "";
+      started = false;
+    } else {
+      current += char;
+      started = true;
+    }
+  }
+  if (quote) throw new Error(`Command has an unterminated ${quote} quote`);
+  if (started || current) argv.push(current);
+  if (argv.length === 0) throw new Error("Command must not be empty");
+  return argv;
+}
+
+/** argv as a model sends it: an array, a JSON array in a string, or a command line. */
+export function parseArgv(value: string | readonly string[]): string[] {
+  if (typeof value !== "string") return [...value];
+  const text = value.trim();
+  if (text.startsWith("[")) {
+    try {
+      const parsed: unknown = JSON.parse(text);
+      if (
+        Array.isArray(parsed) &&
+        parsed.every((item) => typeof item === "string")
+      )
+        return parsed as string[];
+    } catch {
+      // Not JSON: treated as a command line below.
+    }
+  }
+  return splitCommandLine(text);
+}
+
 export type ApprovedCommandProposal = Readonly<{
   kind: "command";
   argv: readonly [string, ...string[]];

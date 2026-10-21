@@ -240,10 +240,10 @@ function prettyJson(text: string): string {
 }
 
 /** The full text the dialog previews: nothing the user approves is left out of it. */
-export function approvalText(proposal: ApprovalRequest): string {
+export function approvalText(proposal: ApprovalRequest, root?: string): string {
   if (proposal.kind === "mcp")
     return `${proposal.name}\n${prettyJson(proposal.argumentsJson)}\n\nMCP effects are not verified by transport success.`;
-  return approvalPreview(proposal);
+  return approvalPreview(proposal, root);
 }
 
 export const TRUNCATED_BODY =
@@ -253,8 +253,9 @@ export const TRUNCATED_BODY =
 export function approvalState(
   proposal: ApprovalRequest,
   cols = 80,
+  root?: string,
 ): ApprovalState {
-  const preview = previewRows(approvalText(proposal), previewWidth(cols));
+  const preview = previewRows(approvalText(proposal, root), previewWidth(cols));
   const base = {
     ...noApproval(),
     open: true,
@@ -268,6 +269,20 @@ export function approvalState(
         ...base,
         title: clip(`Edit ${cleanText(proposal.path)}?`, 70),
         body: body("Apply this change to the workspace."),
+        danger: preview.truncated,
+      };
+    case "write":
+      return {
+        ...base,
+        title: clip(
+          `${proposal.created ? "Create" : "Replace"} ${cleanText(proposal.path)}?`,
+          70,
+        ),
+        body: body(
+          proposal.created
+            ? "Create this file in the workspace."
+            : "Replace this file in the workspace.",
+        ),
         danger: preview.truncated,
       };
     case "mcp":

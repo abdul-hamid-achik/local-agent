@@ -4,12 +4,14 @@ import { closeSync, constants, openSync } from "node:fs";
 // Node does not expose O_CLOEXEC, but native descriptors must not reach children.
 export const CLOEXEC = process.platform === "darwin" ? 0x1000000 : 0x80000;
 export const FILE_FLAGS = constants.O_NOFOLLOW | constants.O_NONBLOCK | CLOEXEC;
-const DIRECTORY_FLAGS = constants.O_RDONLY | constants.O_DIRECTORY | FILE_FLAGS;
+export const DIRECTORY_FLAGS =
+  constants.O_RDONLY | constants.O_DIRECTORY | FILE_FLAGS;
 function loadLibrary(path: string) {
   const symbols = {
     openat: { args: ["int", "cstring", "int", "int"], returns: "int" },
     renameat: { args: ["int", "cstring", "int", "cstring"], returns: "int" },
     unlinkat: { args: ["int", "cstring", "int"], returns: "int" },
+    mkdirat: { args: ["int", "cstring", "int"], returns: "int" },
     flock: { args: ["int", "int"], returns: "int" },
   } satisfies Record<string, FFIFunction>;
   return process.platform === "darwin"
@@ -125,6 +127,53 @@ export function renameAt(parent: number, source: string, target: string): void {
   const to = component(target);
   if (libc().symbols.renameat(parent, ptr(from), parent, ptr(to)) !== 0)
     throw new Error("Workspace replacement could not be published");
+}
+
+/**
+ * Like `withParent`, but creates the missing directories of the path (relative
+ * to the pinned parent, never following a symbolic link). Used only to publish
+ * a file the host has already approved.
+ */
+export function withParentCreating<T>(
+  root: number,
+  path: string,
+  operation: (parent: number, name: string) => T,
+): T {
+  const parts = path.split("/");
+  for (const part of parts) component(part);
+  const name = parts.pop();
+  if (!name) throw new Error("Missing workspace filename");
+  let parent = root;
+  try {
+    for (const part of parts) {
+      let next: number;
+      try {
+        next = openAt(parent, part, DIRECTORY_FLAGS);
+      } catch (error) {
+        if (
+          !(
+            error instanceof Error &&
+            "code" in error &&
+            error.code === "ENOENT"
+          )
+        )
+          throw error;
+        if (libc().symbols.mkdirat(parent, ptr(component(part)), 0o755) !== 0) {
+          const code = errno();
+          if (code !== 17)
+            throw new Error(
+              `Workspace directory could not be created (errno ${code})`,
+            );
+        }
+        next = openAt(parent, part, DIRECTORY_FLAGS);
+      }
+      if (parent !== root) closeSync(parent);
+      parent = next;
+    }
+    return operation(parent, name);
+  } finally {
+    if (parent !== root) closeSync(parent);
+  }
 }
 
 export function unlinkAt(parent: number, name: string): void {

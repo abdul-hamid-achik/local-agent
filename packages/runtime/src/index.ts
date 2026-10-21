@@ -27,7 +27,11 @@ export {
   type McpConnection,
   McpServerConfigSchema,
 } from "#runtime/mcp";
-export { Workspace, type WorkspaceEditProposal } from "#runtime/workspace";
+export {
+  Workspace,
+  type WorkspaceEditProposal,
+  type WorkspaceWriteProposal,
+} from "#runtime/workspace";
 
 export const ToolCallSchema = z.object({
   id: z.string().min(1).max(1024).optional(),

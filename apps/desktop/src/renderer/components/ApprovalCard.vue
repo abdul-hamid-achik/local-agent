@@ -3,10 +3,11 @@
     <div class="row">
       <span class="badge amber">approval requested</span>
       <span class="badge violet">{{ proposal.kind }}</span>
-      <span v-if="proposal.kind === 'edit'" class="mono">{{ proposal.path }}</span>
+      <span v-if="proposal.kind === 'edit' || proposal.kind === 'write'" class="mono">{{ proposal.path }}</span>
+      <span v-if="proposal.kind === 'write'" class="dim">{{ proposal.created ? "new file" : "replace" }}</span>
       <span v-if="proposal.kind === 'mcp'" class="mono">{{ proposal.name }}</span>
     </div>
-    <pre v-if="proposal.kind === 'edit'" class="diff">{{ proposal.diff }}</pre>
+    <pre v-if="proposal.kind === 'edit' || proposal.kind === 'write'" class="diff">{{ proposal.diff }}</pre>
     <pre v-if="proposal.kind === 'command'">[{{ proposal.cwd }}]$ {{ argvText }}</pre>
     <pre v-if="proposal.kind === 'mcp'">{{ proposal.argumentsJson }}</pre>
     <div class="row">

@@ -62,7 +62,7 @@ export function createTerminalRoot(
         approvalSignal: AbortSignal,
       ): Promise<boolean> {
         approvalSignal.throwIfAborted();
-        const preview = approvalPreview(proposal);
+        const preview = approvalPreview(proposal, workspace.root);
         if (mode === "inline") process.stdout.write(`\n${preview}\n`);
         pending.value = proposal;
         return new Promise((resolve) => {
@@ -255,13 +255,17 @@ export function createTerminalRoot(
                     title:
                       pending.value.kind === "edit"
                         ? `Edit ${terminalText(pending.value.path)}? y approve · Enter/n deny`
-                        : pending.value.kind === "mcp"
-                          ? `Call ${terminalText(pending.value.name)}? y approve · Enter/n deny`
-                          : "Run command? y approve · Enter/n deny",
+                        : pending.value.kind === "write"
+                          ? `${pending.value.created ? "Create" : "Replace"} ${terminalText(pending.value.path)}? y approve · Enter/n deny`
+                          : pending.value.kind === "mcp"
+                            ? `Call ${terminalText(pending.value.name)}? y approve · Enter/n deny`
+                            : "Run command? y approve · Enter/n deny",
                     preview:
-                      mode === "inline" && pending.value.kind === "edit"
+                      mode === "inline" &&
+                      (pending.value.kind === "edit" ||
+                        pending.value.kind === "write")
                         ? "Diff printed above"
-                        : approvalPreview(pending.value),
+                        : approvalPreview(pending.value, workspace.root),
                     maxLines: mode === "inline" ? 1 : 12,
                     onDecision: (allowed: boolean) => {
                       decide?.(allowed);
@@ -282,7 +286,7 @@ export function createTerminalRoot(
                 Text,
                 {},
                 () =>
-                  `Model\n${provider.model}\n\nContext\n${provider.context_size}\n\nMode\n${selectedIntent.value}\n${selectedIntent.value === "plan" ? "Read only" : "Read · Edit · Command"}\n\nMCP servers: ${mcp.length}\n${session ? `Session\n${session.state.publicId}` : "Session: temporary"}`,
+                  `Model\n${provider.model}\n\nContext\n${provider.context_size}\n\nMode\n${selectedIntent.value}\n${selectedIntent.value === "plan" ? "Read only" : "Read · Edit · Write · Command"}\n\nMCP servers: ${mcp.length}\n${session ? `Session\n${session.state.publicId}` : "Session: temporary"}`,
               ),
           },
         );

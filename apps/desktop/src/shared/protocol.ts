@@ -118,6 +118,14 @@ export type AgentStreamEvent =
             after: string;
             diff: string;
           }
+        | {
+            kind: "write";
+            path: string;
+            created: boolean;
+            before: string;
+            after: string;
+            diff: string;
+          }
         | { kind: "command"; argv: string[]; timeout_ms: number; cwd: string }
         | { kind: "mcp"; name: string; argumentsJson: string };
     }

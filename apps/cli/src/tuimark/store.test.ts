@@ -77,15 +77,55 @@ test("the approval dialog says what is being approved", () => {
     [false, true],
     [true, false],
   ]);
-  const command = approvalState({
-    kind: "command",
-    argv: ["bun", "test"],
-    cwd: "/w",
-    timeoutMs: 1,
-  });
+  const command = approvalState(
+    {
+      kind: "command",
+      argv: ["bun", "test", "my tests/a.ts", "it's"],
+      cwd: "/w",
+      timeoutMs: 120_000,
+    },
+    80,
+    "/w",
+  );
   expect(command).toMatchObject({ title: "Run command?", danger: true });
-  // The command itself is in the preview, one argv element per row, never clipped.
-  expect(command.lines.map((l) => l.t).join("\n")).toContain('"bun"');
+  // One shell-quoted line, then where it runs: no JSON and no absolute path.
+  expect(command.lines.map((l) => l.t)).toEqual([
+    "$ bun test 'my tests/a.ts' 'it'\\''s'",
+    "in the workspace · timeout 120s · runs with your permissions",
+  ]);
+  const nested = approvalState(
+    { kind: "command", argv: ["ls"], cwd: "/w/src", timeoutMs: 1500 },
+    80,
+    "/w",
+  );
+  expect(nested.lines[1]?.t).toBe(
+    "in src · timeout 1.5s · runs with your permissions",
+  );
+  const write = approvalState({
+    kind: "write",
+    path: "tests/new.test.ts",
+    created: true,
+    before: "",
+    after: "a\n",
+    diff: "--- /dev/null\n+++ b/tests/new.test.ts\n@@ -0,0 +1 @@\n+a\n",
+    identity: "new",
+  });
+  expect(write).toMatchObject({
+    title: "Create tests/new.test.ts?",
+    danger: false,
+  });
+  expect(write.lines.map((l) => l.add)).toEqual([false, false, false, true]);
+  expect(
+    approvalState({
+      kind: "write",
+      path: "a.ts",
+      created: false,
+      before: "x",
+      after: "y",
+      diff: "-x\n+y",
+      identity: "i",
+    }).title,
+  ).toBe("Replace a.ts?");
   expect(
     approvalState({ kind: "mcp", name: "fx__echo", argumentsJson: "{}" }),
   ).toMatchObject({

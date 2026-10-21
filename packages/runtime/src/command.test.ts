@@ -6,6 +6,8 @@ import {
   type ApprovedCommandProposal,
   createCommandProposal,
   executeApprovedCommand,
+  parseArgv,
+  splitCommandLine,
 } from "./command";
 
 const roots: string[] = [];
@@ -239,4 +241,73 @@ test("rejects a cwd replaced after approval", async () => {
   await expect(
     executeApprovedCommand(proposal, new AbortController().signal),
   ).rejects.toThrow("cwd changed");
+});
+
+test("splits a command line a model sent as a string, quote-aware and without a shell", () => {
+  expect(splitCommandLine("bun test tests/stats.test.ts")).toEqual([
+    "bun",
+    "test",
+    "tests/stats.test.ts",
+  ]);
+  expect(splitCommandLine("  grep   -rn  slugify   src ")).toEqual([
+    "grep",
+    "-rn",
+    "slugify",
+    "src",
+  ]);
+  expect(splitCommandLine(`grep -rn "a b" 'c d' e\\ f ""`)).toEqual([
+    "grep",
+    "-rn",
+    "a b",
+    "c d",
+    "e f",
+    "",
+  ]);
+  // Operators inside quotes are plain text, as are escaped quotes and a lone dollar.
+  expect(
+    splitCommandLine(
+      `grep "a|b" 'x && y;z' "say \\"hi\\"" $HOME 5>6`.replace("5>6", "56"),
+    ),
+  ).toEqual(["grep", "a|b", "x && y;z", 'say "hi"', "$HOME", "56"]);
+  expect(splitCommandLine(`echo 'it'"'"'s'`)).toEqual(["echo", "it's"]);
+  expect(splitCommandLine('git commit -m "fix: a \\$(b)"')).toEqual([
+    "git",
+    "commit",
+    "-m",
+    "fix: a $(b)",
+  ]);
+});
+
+test.each([
+  ["find . | head -10", "|"],
+  ["bun test && bun lint", "&&"],
+  ["a ; b", ";"],
+  ["a & b", "&"],
+  ["cat a > out", ">"],
+  ["cat < in", "<"],
+  ["echo $(whoami)", "$("],
+  ['echo "$(whoami)"', "$("],
+  ["echo `whoami`", "backtick"],
+  ["a\nb", "second line"],
+])("refuses shell syntax in %j", (line) => {
+  expect(() => splitCommandLine(line)).toThrow(
+    /no shell.*Run one command per call.*"argv"/s,
+  );
+});
+
+test("refuses unterminated quotes and empty command lines", () => {
+  expect(() => splitCommandLine('echo "oops')).toThrow("unterminated");
+  expect(() => splitCommandLine("   ")).toThrow("must not be empty");
+  expect(() => splitCommandLine("echo \\")).toThrow("backslash");
+});
+
+test("parseArgv keeps an array as it is and also reads a JSON array sent as a string", () => {
+  expect(parseArgv(["a b", "c"])).toEqual(["a b", "c"]);
+  expect(parseArgv('["grep","-rn","a b","src"]')).toEqual([
+    "grep",
+    "-rn",
+    "a b",
+    "src",
+  ]);
+  expect(parseArgv("ls -la")).toEqual(["ls", "-la"]);
 });

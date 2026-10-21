@@ -2,7 +2,11 @@ import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
-import { projectInstructions } from "#runtime/instructions";
+import {
+  availablePrograms,
+  hostInstructions,
+  projectInstructions,
+} from "#runtime/instructions";
 import { Workspace } from "#runtime/workspace";
 
 test("loads bounded project instructions and refuses unsafe sources", async () => {
@@ -27,4 +31,26 @@ test("loads bounded project instructions and refuses unsafe sources", async () =
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("the system prompt states relative paths, the tool list, and the programs found on PATH", () => {
+  const prompt = hostInstructions("build", ["bun", "git"]);
+  expect(prompt).toContain("relative to the workspace root");
+  expect(prompt).toContain("src/main.ts");
+  for (const tool of ["read", "list", "search", "edit", "write", "run_command"])
+    expect(prompt).toContain(tool);
+  expect(prompt).toContain("no shell");
+  expect(prompt).toContain("Programs found on PATH: bun, git.");
+  expect(hostInstructions("build", [])).not.toContain("Programs found");
+});
+
+test("programs are probed from a small fixed set, once", () => {
+  const found = availablePrograms();
+  expect(
+    found.every((name) =>
+      ["bun", "node", "npm", "python3", "go", "cargo", "git"].includes(name),
+    ),
+  ).toBe(true);
+  expect(found).toContain("bun");
+  expect(availablePrograms()).toBe(found);
 });

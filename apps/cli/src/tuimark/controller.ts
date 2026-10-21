@@ -189,7 +189,11 @@ export class TuimarkClient {
   }
 
   private approvalFor(proposal: ApprovalRequest) {
-    return approvalState(proposal, this.options.columns?.() ?? 80);
+    return approvalState(
+      proposal,
+      this.options.columns?.() ?? 80,
+      this.options.workspace.root,
+    );
   }
 
   /** Aborts the running turn, if any. */

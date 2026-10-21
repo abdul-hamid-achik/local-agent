@@ -93,7 +93,7 @@ bun dev [--model MODEL] [--mode fullscreen|inline|headless] [--ui vue|tuimark] [
                        (checksum-verified) into the user cache.
   --workspace PATH     Workspace root (default: current directory)
   --intent plan|build  Plan forbids edits and commands; build asks before acting
-  --approve-edits      Allow existing-file edits in headless mode
+  --approve-edits      Allow file edits and writes (create or replace) in headless mode
   --approve-commands   Allow command execution in headless mode (user permissions)
   --mcp-config PATH    Load an explicit trusted JSON array of MCP servers
   --approve-mcp        Allow configured MCP tool calls in headless mode
@@ -296,7 +296,7 @@ Interrupted tool outcomes require inspection; they are never automatically repla
                 session,
                 mcp,
                 approve: async (proposal) =>
-                  proposal.kind === "edit"
+                  proposal.kind === "edit" || proposal.kind === "write"
                     ? values["approve-edits"]
                     : proposal.kind === "command"
                       ? values["approve-commands"]

@@ -326,6 +326,8 @@ test("mode switch changes the Ollama tool catalog", async () => {
   await expect.poll(() => requests.length).toBe(1);
   expect(requests[0]?.tools?.map((tool) => tool.function?.name)).toEqual([
     "read",
+    "list",
+    "search",
   ]);
 
   // The command is handled before inference and the composer refocuses after the turn.
@@ -341,7 +343,10 @@ test("mode switch changes the Ollama tool catalog", async () => {
   await expect.poll(() => requests.length).toBe(2);
   expect(requests[1]?.tools?.map((tool) => tool.function?.name)).toEqual([
     "read",
+    "list",
+    "search",
     "edit",
+    "write",
     "run_command",
   ]);
 });
