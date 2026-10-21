@@ -531,6 +531,20 @@ function closesFence(line: string, open: string): boolean {
 }
 
 /**
+ * True when `text` starts with a fence that is not closed yet: the code block
+ * a stream is still writing, which grows by whole lines.
+ */
+export function startsOpenFence(text: string): boolean {
+  const lines = cleanText(text).split("\n");
+  const fence = FENCE_OPEN.exec(lines[0] ?? "");
+  if (!fence) return false;
+  const open = fence[1] ?? "```";
+  for (let i = 1; i < lines.length; i++)
+    if (closesFence(lines[i] ?? "", open)) return false;
+  return true;
+}
+
+/**
  * A small markdown subset: paragraphs, `#` headings, bullet and numbered
  * items (one nesting level), `>` quotes, pipe tables (aligned, header bold)
  * and fenced code, with inline marks as runs (see `inlineRuns`). A fence that

@@ -29,6 +29,7 @@ import {
   MAX_MESSAGE_BLOCKS,
   MAX_MESSAGE_CHARS,
   parseBlocksAt,
+  startsOpenFence,
   THINK_KEEP,
   type ThinkingView,
   thinkingTail,
@@ -43,6 +44,12 @@ export interface Write {
 
 /** The longest a tail goes without being parsed while text arrives, in ms. */
 export const REPARSE_MS = 250;
+/**
+ * The same for a code block that is not closed yet. A line ending is no reason
+ * to parse it again (it grows by a line every few tokens, and parsing it sends
+ * the whole block), so it is parsed again on this period, or when it closes.
+ */
+export const FENCE_REPARSE_MS = 1500;
 
 const PREFIX = "l";
 
@@ -65,6 +72,8 @@ export class LiveStream {
   private lastParse = Number.NEGATIVE_INFINITY;
   /** The store's tail has text appended raw since it was last parsed. */
   private raw = false;
+  /** The tail starts with a code block that is not closed. */
+  private fence = false;
   private stale = false;
   // the reasoning
   private think = "";
@@ -84,6 +93,7 @@ export class LiveStream {
     this.inStore = { live: false, tail: 0, thinking: false, thinkChars: 0 };
     this.lastParse = Number.NEGATIVE_INFINITY;
     this.raw = false;
+    this.fence = false;
     this.stale = false;
     this.think = "";
     this.thinkUnsent = "";
@@ -201,12 +211,16 @@ export class LiveStream {
     const t = this.now();
     const quiet = delta === "" && this.raw && t - this.lastParse >= REPARSE_MS;
     if (delta === "" && !quiet) return;
+    // A line ends: a block may have ended with it. An open code block only
+    // matters once it closes.
+    const lineEnd =
+      delta.includes("\n") && (!this.fence || !startsOpenFence(this.pending));
     const due =
       quiet ||
       !this.inStore.live ||
       this.inStore.tail === 0 ||
-      delta.includes("\n") ||
-      t - this.lastParse >= REPARSE_MS;
+      lineEnd ||
+      t - this.lastParse >= (this.fence ? FENCE_REPARSE_MS : REPARSE_MS);
     if (!due) {
       // Between parses: the text goes on the end of the last block.
       this.raw = true;
@@ -276,6 +290,7 @@ export class LiveStream {
     this.tail = this.pending.trim()
       ? parseBlocksAt(this.pending, PREFIX, this.blocks.length).blocks
       : [];
+    this.fence = startsOpenFence(this.pending);
   }
 }
 

@@ -1,6 +1,7 @@
 // How many bytes the client writes to fd 3 to stream one reply.
 //
 //   bun apps/cli/src/tuimark/stream-bytes.ts [--tokens 2000] [--token-ms 10] [--flush-ms 33]
+//                                           [--fence] [--thinking N]
 //
 // It runs the real TuimarkClient against a fake host that counts what the SDK
 // would put on fd 3 (the JSON line of each batch) and applies the writes to a
@@ -13,8 +14,24 @@ import { runsText } from "#cli/tuimark/blocks";
 import { TuimarkClient } from "#cli/tuimark/controller";
 import { FakeHost } from "#cli/tuimark/fake-host";
 
-/** A markdown reply of about `tokens` tokens, as the pieces a model would stream. */
-export function fixtureTokens(tokens: number): string[] {
+/**
+ * A reply of about `tokens` tokens, as the pieces a model would stream. "mixed"
+ * is paragraphs, a list and short code blocks; "fence" is one code block that
+ * runs the whole way (a model writing a file).
+ */
+export function fixtureTokens(
+  tokens: number,
+  shape: "mixed" | "fence" = "mixed",
+): string[] {
+  if (shape === "fence") {
+    let code = "Here is the file:\n\n```ts\n";
+    for (let n = 0; code.length < tokens * 4; n++)
+      code += `export function step${n}(input: number): number {\n  return input * ${n} + 1; // line ${n}\n}\n\n`;
+    const pieces: string[] = [];
+    for (let i = 0; i < code.length && pieces.length < tokens; i += 4)
+      pieces.push(code.slice(i, i + 4));
+    return pieces;
+  }
   const paragraph =
     "The helper wraps the call in a **bounded retry** with exponential backoff, and `AbortError` is never retried because the caller asked for it. ";
   const code = [
@@ -51,6 +68,7 @@ export interface StreamBytes {
 }
 
 export async function measure(options: {
+  shape?: "mixed" | "fence";
   tokens?: number;
   tokenMs?: number;
   flushMs?: number;
@@ -58,7 +76,7 @@ export async function measure(options: {
 }): Promise<StreamBytes> {
   const { tokens = 2000, tokenMs = 10, flushMs = 33 } = options;
   const thinkingTokens = options.thinkingTokens ?? 0;
-  const pieces = fixtureTokens(tokens);
+  const pieces = fixtureTokens(tokens, options.shape);
   const thinking = Array.from({ length: thinkingTokens }, (_, i) =>
     `step ${i} of the plan\n`.slice(0, 4 + (i % 3) * 5),
   );
@@ -125,6 +143,7 @@ if (import.meta.main) {
     return at > 0 ? Number(Bun.argv[at + 1]) : fallback;
   };
   const result = await measure({
+    shape: Bun.argv.includes("--fence") ? "fence" : "mixed",
     tokens: flag("tokens", 2000),
     tokenMs: flag("token-ms", 10),
     flushMs: flag("flush-ms", 33),

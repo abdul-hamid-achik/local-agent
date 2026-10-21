@@ -7,7 +7,12 @@ import {
   THINK_KEEP,
 } from "#cli/tuimark/blocks";
 import { applyWrite, batchBytes } from "#cli/tuimark/fake-host";
-import { LiveStream, REPARSE_MS, streamingView } from "#cli/tuimark/stream";
+import {
+  FENCE_REPARSE_MS,
+  LiveStream,
+  REPARSE_MS,
+  streamingView,
+} from "#cli/tuimark/stream";
 import { fixtureTokens } from "#cli/tuimark/stream-bytes";
 
 interface Live {
@@ -283,4 +288,50 @@ test("reset forgets everything and streamingView is the first write of a stream"
   expect(view.active).toBe(true);
   expect(view.blocks.map((b) => b.para)).toEqual([true]);
   expect(view.tail.map((b) => b.code)).toEqual([true]);
+});
+
+test("an open code block is not parsed again at every line, only when it closes or on its period", () => {
+  const r = rig();
+  r.stream.pushText("Here:\n\n```ts\nconst a = 1;\n");
+  r.advance(40);
+  r.drain();
+  const parsedAt = (writes: { path: string }[]) =>
+    writes.some((w) => w.path === "live.tail");
+  // Lines end, the block stays open: the text goes on the end of the tail.
+  for (let n = 0; n < 20; n++) {
+    r.stream.pushText(`const b${n} = ${n};\n`);
+    r.advance(40);
+    expect(parsedAt(r.drain())).toBe(false);
+  }
+  // Its period passes.
+  r.advance(FENCE_REPARSE_MS);
+  r.stream.pushText("const c = 3;\n");
+  expect(parsedAt(r.drain())).toBe(true);
+  // The closing line parses it at once, and the code is highlighted.
+  r.advance(40);
+  r.stream.pushText("```\n");
+  expect(parsedAt(r.drain())).toBe(true);
+  expect(r.live().tail.some((b) => b.code && b.runs.length > 1)).toBe(true);
+});
+
+test("a reply that is one long code block costs about as much per token as prose", () => {
+  const r = rig();
+  const pieces = fixtureTokens(2000, "fence");
+  let ticked = 0;
+  for (const piece of pieces) {
+    r.stream.pushText(piece);
+    r.advance(10);
+    ticked += 10;
+    if (ticked >= 33) {
+      ticked = 0;
+      r.drain();
+    }
+  }
+  r.advance(REPARSE_MS);
+  r.drain();
+  expect(r.bytes() / pieces.length).toBeLessThan(300);
+  const live = r.live();
+  expect(shape([...live.blocks, ...live.tail])).toEqual(
+    shape(parseBlocks(pieces.join(""), "l")),
+  );
 });
