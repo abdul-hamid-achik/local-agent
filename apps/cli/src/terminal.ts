@@ -24,6 +24,7 @@ import {
   useExit,
 } from "@local-agent/vue-tui";
 import { defineComponent, h, nextTick, onUnmounted, ref } from "vue";
+import { approvalPreview, messageText } from "#cli/preview";
 
 const messageSyntax = SyntaxStyle.fromStyles({
   default: { fg: "#d8dee9" },
@@ -318,40 +319,5 @@ export async function runTerminal(
   } finally {
     signal.removeEventListener("abort", stop);
     app.exit();
-  }
-}
-
-function approvalPreview(proposal: ApprovalRequest): string {
-  if (proposal.kind === "edit") return terminalText(proposal.diff);
-  if (proposal.kind === "mcp")
-    return terminalText(
-      `${proposal.name}\n${proposal.argumentsJson}\nMCP effects are not verified by transport success.`,
-    );
-  return terminalText(
-    JSON.stringify(
-      {
-        argv: proposal.argv,
-        cwd: proposal.cwd,
-        timeoutMs: proposal.timeoutMs,
-        permissions: "user",
-      },
-      null,
-      2,
-    ),
-  );
-}
-
-function messageText(message: Message): string {
-  if (message.role !== "tool") return message.content;
-  try {
-    const result = JSON.parse(message.content) as {
-      status?: unknown;
-      output?: unknown;
-    };
-    return typeof result.output === "string"
-      ? `${typeof result.status === "string" ? result.status : "unknown"}\n${result.output}`
-      : message.content;
-  } catch {
-    return message.content;
   }
 }

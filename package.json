@@ -27,9 +27,11 @@
     "site:build": "bun run --cwd docs build",
     "site:preview": "bun run --cwd docs preview",
     "test:watch": "bun --bun vitest",
+    "tuimark:check": "bun apps/cli/src/tuimark/check.ts",
     "tui:dev": "bun run --cwd apps/tui-playground dev",
     "tui:build": "bun run --cwd apps/tui-playground build",
     "test:integration": "glyph run specs/bun/*.yml --parallel 1 --format md --progress never",
+    "test:integration:tuimark": "glyph run specs/tuimark/*.yml --parallel 1 --format md --progress never",
     "site:check-links": "bun scripts/site-links.ts"
   },
   "devDependencies": {

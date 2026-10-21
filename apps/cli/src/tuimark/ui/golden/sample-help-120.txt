@@ -1,0 +1,31 @@
+=== grid 120x30 ===
+ Local Agent           Ollama / loopback  qwen3-coder:30b  build            session a1b2c3d  ctx 9.6k/32k  ████░░░░░░░░ 
+You                                                                                                                     
+Add a retry to the fetch helper and show me the result.                                                                 
+                                                                                                                        
+Assistant                                                                                                               
+Sure. I will wrap the call in a bounded retry with backoff:                                                             
+ ts                                                                                                                     
+ export async function fetchRetry(url, tries = 3) {                                                                     
+   // exponential backoff                                                                                               
+   for (let attempt = 1; ; attempt++) {                                                                                 
+     try { return await fetch(ur╭─ Keys ───────────────────────────────────────────────╮                                
+     catch (e) { if (attempt ===│                                                      │                                
+   }                            │  ? close help                                        │                                
+ }                              │  esc cancel                                          │                                
+                                │  ^K commands                                         │                                
+╭─ Tool · edit ─────────────────│  ctrl+c quit                                         │───────────────────────────────╮
+│succeeded                      │  pgup/pgdn scroll                                    │                               │
+│src/fetch.ts                   │                                                      │                               │
+│Updated src/fetch.ts. Verificat╰──────────────────────────────────────────────────────╯                               │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+                                                                                                                        
+Assistant                                                                                                               
+Done. The helper now retries three times.                                                                               
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Message the model                                                                                                    │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+ Ready · /help for commands                                                                                             

@@ -1,0 +1,31 @@
+=== grid 120x30 ===
+ Local Agent           Ollama / loopback  qwen3-coder:30b  build            session a1b2c3d  ctx 9.6k/32k  ████░░░░░░░░ 
+You                                                                                                                     
+Explain the retry policy.                                                                                               
+                                                                                                                        
+Assistant                                                                                                               
+Notes                                                                                                                   
+• the delay doubles on every attempt                                                                                    
+• the last error is rethrown                                                                                            
+ Only idempotent requests should be retried.                                                                            
+ table                                                                                                                  
+ | attempt | delay |                                                                                                    
+ |---|---|                                                                                                              
+ | 1 | 200 ms |                                                                                                         
+ | 2 | 400 ms |                                                                                                         
+Use `fetchRetry` for **every** call.                                                                                    
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+╔══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
+║ Message the model                                                                                                    ║
+╚══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
+ Ready · /help for commands   esc cancel  ^K commands  ctrl+c quit  pgup/pgdn scroll                                    

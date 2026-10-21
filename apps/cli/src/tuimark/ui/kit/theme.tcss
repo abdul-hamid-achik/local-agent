@@ -1,0 +1,113 @@
+/*
+ * kit/theme.tcss: the design tokens and the base rules.
+ *
+ * Every kit document loads three sheets, in this order:
+ *
+ *   <style src="theme.tcss"/>   tokens + base typography (this file)
+ *   <style src="kit.tcss"/>     the component classes
+ *   <style src="yours.tcss"/>   optional: your own tokens and rules, last
+ *
+ * There is no @import in TCSS, so a document lists each <style src> line.
+ * The sheets are cascaded together; where two rules tie, the later one wins,
+ * so a sheet loaded after this one can re-declare any token (and so rebrand
+ * the whole kit) or refine any rule.
+ *
+ * Tokens are CSS custom properties on :root, read as $name (or var(--name)).
+ * The first ten are the runtime's own required tokens (the same names its
+ * built-in dark and light themes define); the rest are the kit's. Nothing
+ * else in the kit holds a color.
+ *
+ *   bg          the screen
+ *   fg          body text
+ *   muted       secondary text, labels, idle titles
+ *   subtle      tertiary text: shortcuts, separators, hints on a row
+ *   border      idle borders and rules
+ *   panel       cards, panels, modals, inputs
+ *   raised      raised or inset things on a panel: ghost fills, kbd, bars
+ *   accent      the brand color: primary actions, the active tab, focus titles
+ *   focus       the border or highlight of the focused thing
+ *   ok warn danger info   status colors
+ *   sel         the cursor row of a list or table
+ *   on-accent on-ok on-warn on-danger   text drawn ON that filled color
+ *   code        inline code
+ *
+ * Selection and focus never rely on a background alone: they also use bold,
+ * reverse, a border style, or a glyph, so they read under 16 colors.
+ */
+
+:root {
+  --bg: #0d1117;
+  --fg: #e6edf3;
+  --muted: #8b949e;
+  --subtle: #6e7681;
+  --border: #30363d;
+  --panel: #161b22;
+  --raised: #1c2128;
+  --accent: #58a6ff;
+  --focus: #58a6ff;
+  --ok: #3fb950;
+  --warn: #d29922;
+  --danger: #f85149;
+  --info: #39c5cf;
+  --sel: #1f2a37;
+  --on-accent: #0d1117;
+  --on-ok: #0d1117;
+  --on-warn: #0d1117;
+  --on-danger: #0d1117;
+  --code: #d2a8ff;
+}
+
+@media (theme: light) {
+  :root {
+    --bg: #ffffff;
+    --fg: #1f2328;
+    --muted: #59636e;
+    --subtle: #818b98;
+    --border: #d1d9e0;
+    --panel: #f6f8fa;
+    --raised: #eef1f4;
+    --accent: #0969da;
+    --focus: #0969da;
+    --ok: #1a7f37;
+    --warn: #9a6700;
+    --danger: #d1242f;
+    --info: #0550ae;
+    --sel: #eaeef2;
+    --on-accent: #ffffff;
+    --on-ok: #ffffff;
+    --on-warn: #ffffff;
+    --on-danger: #ffffff;
+    --code: #8250df;
+  }
+}
+
+/* The screen. `wrap: truncate` is inherited: text that does not fit ends
+ * in an ellipsis instead of being cut silently (which would be L008). */
+screen { color: $fg; background: $bg; wrap: truncate; }
+
+/* Modals draw over the page, so they need a background of their own. */
+modal { background: $panel; border-color: $accent; title-color: $accent; }
+
+/* Typography */
+.k-title { bold: true; color: $fg; }
+.k-subtitle { color: $muted; }
+.k-muted { color: $muted; }
+.k-strong { bold: true; }
+.k-kbd { color: $fg; background: $raised; bold: true; padding: 0 1; }
+.k-code { color: $code; background: $raised; padding: 0 1; }
+
+/* A number: right-aligned (on a table column, the header and cells). */
+.k-num { content-align: end; }
+
+/* Text colors by meaning */
+.k-text-accent { color: $accent; }
+.k-text-ok { color: $ok; }
+.k-text-warn { color: $warn; }
+.k-text-danger { color: $danger; }
+.k-text-info { color: $info; }
+
+/* States. Focus is shown with color plus a border style or a text
+ * attribute, never with the border color alone: only elements that set
+ * their own `border` can change `border-color`. */
+button:disabled, input:disabled { dim: true; }
+list:disabled, table:disabled { dim: true; }

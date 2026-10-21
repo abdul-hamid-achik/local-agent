@@ -1,0 +1,83 @@
+version: 1
+name: bun_tuimark_chat
+intent: |
+    the opt-in Tuimark client (--ui tuimark) streams a markdown reply with a
+    code block, answers slash commands locally, cancels a running reply with
+    esc, and exits on ctrl+c.
+target:
+    cmd: ["bun", "specs/tuimark/fixture.ts", "chat"]
+    cwd: "${projectRoot}"
+terminal:
+    cols: 100
+    rows: 32
+    alternateScreen: require
+steps:
+    - wait:
+        screen:
+            contains: "Message the model"
+        timeoutMs: 15000
+    - snapshot: idle
+    - type: "/mode plan"
+    - press: enter
+    - wait:
+        screen:
+            contains: "Mode changed to plan"
+        timeoutMs: 5000
+    - type: "/help"
+    - press: enter
+    - wait:
+        screen:
+            contains: "close help"
+        timeoutMs: 5000
+    - snapshot: help
+    - press: esc
+    - wait:
+        screen:
+            notContains: "close help"
+        timeoutMs: 5000
+    - type: "/nope"
+    - press: enter
+    - wait:
+        screen:
+            contains: "Unknown command: /nope"
+        timeoutMs: 5000
+    - type: "stream a reply"
+    - press: enter
+    - wait:
+        screen:
+            contains: "bounded retry"
+        timeoutMs: 15000
+    - snapshot: streaming
+    - wait:
+        screen:
+            contains: "stream complete"
+        timeoutMs: 15000
+    - wait:
+        screen:
+            contains: "Ready"
+        timeoutMs: 5000
+    - snapshot: reply_done
+    - type: "slow please"
+    - press: enter
+    - wait:
+        screen:
+            contains: "this takes a while"
+        timeoutMs: 15000
+    - press: esc
+    - wait:
+        screen:
+            contains: "Cancelled"
+        timeoutMs: 5000
+    - snapshot: cancelled
+    - press: ctrl+c
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 5000
+outcomes:
+    - id: tuimark_chat
+      description: streaming, slash commands, esc cancel and ctrl+c work end to end
+      verify:
+        process:
+            exitCode: 0
+contractHash: sha256:815e0dd16fc929621afad5e23ba3003506931b1f67f52a4f33b3dd66460a3cca

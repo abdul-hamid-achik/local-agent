@@ -1,0 +1,131 @@
+<!--
+  local-agent, fullscreen client on Tuimark. Opt-in: the ui flag set to tuimark.
+
+  The store this document reads is built by ../store.ts; every flag is always
+  present because the markup has no equality test. Actions are implemented by
+  ../controller.ts. The kit (kit/) is vendored from Tuimark v0.4.5, unmodified.
+
+  Cards are templates:
+    la-message  props label; slot: the body            (user and assistant)
+    la-tool     with="card as t"; slot: the output     (tool call)
+    la-blocks   with="blocks as blocks": markdown blocks and code
+    la-turn     with="msg": one message of the transcript, history or live
+  The approval dialog is the kit's k-confirm, its slot holding the diff.
+-->
+<tui theme="auto">
+  <include src="kit/kit.tui"/>
+  <style src="app.tcss"/>
+
+  <!-- The palette's arrows move its list while the input keeps focus. -->
+  <keymap when=".k-palette">
+    <bind keys="down,ctrl+n" action="move-next" to="#palette__list"/>
+    <bind keys="up,ctrl+p" action="move-prev" to="#palette__list"/>
+  </keymap>
+  <keymap>
+    <bind keys="esc" action="cancel" label="cancel"/>
+    <bind keys="ctrl+k" action="palette_open" keycap="^K" label="commands"/>
+    <bind keys="ctrl+c" action="quit" label="quit"/>
+    <bind keys="pgup" action="move-page-up" to="#log" label="scroll" keycap="pgup/pgdn"/>
+    <bind keys="pgdn" action="move-page-down" to="#log"/>
+  </keymap>
+  <!-- A modal traps the keymap: what must also work under one is repeated here. -->
+  <keymap when="modal">
+    <bind keys="ctrl+c" action="quit"/>
+  </keymap>
+
+  <!-- One message, user or assistant. Props: label. Slot: the body. The variant
+       (a static class on the use) colors the label. -->
+  <template id="la-message" props="label">
+    <col class="la-msg">
+      <text class="la-role">{$label}</text>
+      <slot/>
+    </col>
+  </template>
+
+  <!-- The markdown blocks of a message. with="msg.blocks as blocks". -->
+  <template id="la-blocks">
+    <col class="la-blocks" each="blocks as b" key="b.id">
+      <text if="b.para" wrap="wrap">{b.t}</text>
+      <text if="b.head" class="la-head" wrap="wrap">{b.t}</text>
+      <text if="b.quote" class="la-quote" wrap="wrap">{b.t}</text>
+      <col if="b.code" class="la-code">
+        <text class="la-lang">{b.lang}</text>
+        <col class="la-lines" each="b.lines as l" key="l.n">
+          <row class="la-codeline" each="l.segs as s" key="s.i">
+            <text wrap="nowrap" class:kw="s.kw" class:str="s.str" class:num="s.num" class:com="s.com">{s.t}</text>
+          </row>
+        </col>
+      </col>
+    </col>
+  </template>
+
+  <!-- A tool call. with="msg.card as t". Slot: the output lines. -->
+  <template id="la-tool">
+    <box class="la-tool" class:ok="t.ok" class:bad="t.bad" class:warn="t.warn" class:run="t.running" title="Tool · {t.name}">
+      <row class="la-tool-head">
+        <progress indeterminate="true" if="t.running" class="la-spin"/>
+        <text class="la-tool-status">{t.status}</text>
+      </row>
+      <text if="t.args" class="la-muted" wrap="truncate">{t.args}</text>
+      <slot/>
+    </box>
+  </template>
+
+  <!-- One message of the transcript. The history rows and the in-flight message
+       share it. with="message as msg". -->
+  <template id="la-turn">
+    <use template="la-message" label="You" class="user" if="msg.is_user">
+      <use template="la-blocks" with="msg.blocks as blocks"/>
+    </use>
+    <use template="la-message" label="Assistant" class="asst" if="msg.is_asst">
+      <use template="la-blocks" with="msg.blocks as blocks"/>
+    </use>
+    <use template="la-tool" if="msg.is_tool" with="msg.card as t">
+      <col class="la-out" each="msg.card.out as o" key="o.n">
+        <text wrap="truncate">{o.t}</text>
+      </col>
+    </use>
+  </template>
+
+  <screen id="main" focus="#composer">
+    <col id="app">
+      <use template="k-appbar" brand="Local Agent" title="">
+        <text class="la-muted la-provider">{header.provider}</text>
+        <text class="la-model">{header.model}</text>
+        <text class="la-mode">{header.mode}</text>
+        <spacer/>
+        <text class="la-muted la-session">{header.session}</text>
+        <text class="la-muted la-ctx">ctx {header.ctx_label}</text>
+        <progress id="ctx" class="la-ctxbar" bind="header.ctx_pct"/>
+      </use>
+
+      <scroll id="log" stick="bottom" focusable="true">
+        <button id="earlier" class="la-earlier" if="earlier.n" on:click="load_earlier">▲ {earlier.n} earlier messages, enter to load more</button>
+        <col id="rows" each="messages as m" key="m.id">
+          <use template="la-turn" with="m as msg"/>
+        </col>
+        <col id="live" if="live.active">
+          <use template="la-turn" with="live as msg"/>
+        </col>
+      </scroll>
+
+      <input id="composer" bind="draft" placeholder="{placeholder}" on:submit="send"/>
+
+      <row id="status" class="k-statusbar">
+        <progress indeterminate="true" if="busy" class="la-spin"/>
+        <text class="la-statustext" wrap="truncate">{status}</text>
+        <hints class="la-hints"/>
+      </row>
+    </col>
+
+    <use id="approval" template="k-confirm" style="width: 76; max-width: 100%" with="approval as d">
+      <scroll id="approval_diff" class="la-diff" focusable="true">
+        <col class="la-difflines" each="approval.lines as ln" key="ln.n">
+          <text wrap="truncate" class:add="ln.add" class:del="ln.del">{ln.t}</text>
+        </col>
+      </scroll>
+    </use>
+    <use id="palette" template="k-palette" title="Commands" placeholder="type a command…" with="palette as p, found as f"/>
+    <use id="help" template="k-help" title="Keys" with="help as h"/>
+  </screen>
+</tui>

@@ -1,0 +1,292 @@
+{
+  "header": {
+    "provider": "Ollama / loopback",
+    "model": "qwen3-coder:30b",
+    "mode": "build",
+    "session": "session a1b2c3d",
+    "ctx_label": "9.6k/32k",
+    "ctx_pct": 30
+  },
+  "messages": [
+    {
+      "id": "m0",
+      "is_user": true,
+      "is_asst": false,
+      "is_tool": false,
+      "blocks": [
+        {
+          "id": "b0",
+          "para": true,
+          "head": false,
+          "quote": false,
+          "code": false,
+          "t": "Explain the retry policy.",
+          "lang": "",
+          "lines": []
+        }
+      ],
+      "card": {
+        "name": "",
+        "status": "",
+        "args": "",
+        "ok": false,
+        "bad": false,
+        "warn": false,
+        "running": false,
+        "out": []
+      }
+    },
+    {
+      "id": "m1",
+      "is_user": false,
+      "is_asst": true,
+      "is_tool": false,
+      "blocks": [
+        {
+          "id": "b0",
+          "para": false,
+          "head": true,
+          "quote": false,
+          "code": false,
+          "t": "Notes",
+          "lang": "",
+          "lines": []
+        },
+        {
+          "id": "b1",
+          "para": true,
+          "head": false,
+          "quote": false,
+          "code": false,
+          "t": "• the delay doubles on every attempt\n• the last error is rethrown",
+          "lang": "",
+          "lines": []
+        },
+        {
+          "id": "b2",
+          "para": false,
+          "head": false,
+          "quote": true,
+          "code": false,
+          "t": "Only idempotent requests should be retried.",
+          "lang": "",
+          "lines": []
+        },
+        {
+          "id": "b3",
+          "para": false,
+          "head": false,
+          "quote": false,
+          "code": true,
+          "t": "",
+          "lang": "table",
+          "lines": [
+            {
+              "n": 0,
+              "segs": [
+                {
+                  "i": 0,
+                  "t": "| attempt | delay |",
+                  "kw": false,
+                  "str": false,
+                  "num": false,
+                  "com": false
+                }
+              ]
+            },
+            {
+              "n": 1,
+              "segs": [
+                {
+                  "i": 0,
+                  "t": "|---|---|",
+                  "kw": false,
+                  "str": false,
+                  "num": false,
+                  "com": false
+                }
+              ]
+            },
+            {
+              "n": 2,
+              "segs": [
+                {
+                  "i": 0,
+                  "t": "| ",
+                  "kw": false,
+                  "str": false,
+                  "num": false,
+                  "com": false
+                },
+                {
+                  "i": 1,
+                  "t": "1",
+                  "kw": false,
+                  "str": false,
+                  "num": true,
+                  "com": false
+                },
+                {
+                  "i": 2,
+                  "t": " | ",
+                  "kw": false,
+                  "str": false,
+                  "num": false,
+                  "com": false
+                },
+                {
+                  "i": 3,
+                  "t": "200",
+                  "kw": false,
+                  "str": false,
+                  "num": true,
+                  "com": false
+                },
+                {
+                  "i": 4,
+                  "t": " ms |",
+                  "kw": false,
+                  "str": false,
+                  "num": false,
+                  "com": false
+                }
+              ]
+            },
+            {
+              "n": 3,
+              "segs": [
+                {
+                  "i": 0,
+                  "t": "| ",
+                  "kw": false,
+                  "str": false,
+                  "num": false,
+                  "com": false
+                },
+                {
+                  "i": 1,
+                  "t": "2",
+                  "kw": false,
+                  "str": false,
+                  "num": true,
+                  "com": false
+                },
+                {
+                  "i": 2,
+                  "t": " | ",
+                  "kw": false,
+                  "str": false,
+                  "num": false,
+                  "com": false
+                },
+                {
+                  "i": 3,
+                  "t": "400",
+                  "kw": false,
+                  "str": false,
+                  "num": true,
+                  "com": false
+                },
+                {
+                  "i": 4,
+                  "t": " ms |",
+                  "kw": false,
+                  "str": false,
+                  "num": false,
+                  "com": false
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "b4",
+          "para": true,
+          "head": false,
+          "quote": false,
+          "code": false,
+          "t": "Use `fetchRetry` for **every** call.",
+          "lang": "",
+          "lines": []
+        }
+      ],
+      "card": {
+        "name": "",
+        "status": "",
+        "args": "",
+        "ok": false,
+        "bad": false,
+        "warn": false,
+        "running": false,
+        "out": []
+      }
+    }
+  ],
+  "earlier": {
+    "n": 0
+  },
+  "live": {
+    "id": "live",
+    "is_user": false,
+    "is_asst": true,
+    "is_tool": false,
+    "blocks": [],
+    "card": {
+      "name": "",
+      "status": "",
+      "args": "",
+      "ok": false,
+      "bad": false,
+      "warn": false,
+      "running": false,
+      "out": []
+    },
+    "active": false
+  },
+  "approval": {
+    "open": false,
+    "title": "",
+    "body": "",
+    "danger": false,
+    "no": "Deny",
+    "yes": "Allow",
+    "lines": []
+  },
+  "palette": {
+    "open": false,
+    "query": "",
+    "cur": "mode-plan"
+  },
+  "found": {
+    "any": true,
+    "items": [
+      {
+        "id": "mode-plan",
+        "label": "Mode: plan (read only)",
+        "hint": "/mode plan"
+      },
+      {
+        "id": "mode-build",
+        "label": "Mode: build (read, edit, command)",
+        "hint": "/mode build"
+      },
+      {
+        "id": "mcp",
+        "label": "MCP servers",
+        "hint": "/mcp"
+      },
+      {
+        "id": "help",
+        "label": "Help and keys",
+        "hint": "/help"
+      }
+    ]
+  },
+  "help": {
+    "open": false
+  },
+  "draft": "",
+  "placeholder": "Message the model",
+  "busy": false,
+  "status": "Ready · /help for commands"
+}

@@ -1,0 +1,66 @@
+version: 1
+name: bun_tuimark_edit_denied
+intent: |
+    the Tuimark client leaves the file untouched when the edit is denied, with
+    n and with esc, and gives the focus back to the composer afterwards.
+target:
+    cmd: ["bun", "specs/tuimark/fixture.ts", "edit-deny"]
+    cwd: "${projectRoot}"
+terminal:
+    cols: 100
+    rows: 32
+    alternateScreen: require
+steps:
+    - wait:
+        screen:
+            contains: "Message the model"
+        timeoutMs: 15000
+    - type: "edit the notes"
+    - press: enter
+    - wait:
+        screen:
+            contains: "Edit notes.txt?"
+        timeoutMs: 15000
+    - press: n
+    - wait:
+        screen:
+            contains: "edit denied"
+        timeoutMs: 15000
+    - wait:
+        screen:
+            notContains: "Edit notes.txt?"
+        timeoutMs: 5000
+    - snapshot: denied_with_n
+    - type: "edit it again"
+    - press: enter
+    - wait:
+        screen:
+            contains: "Edit notes.txt?"
+        timeoutMs: 15000
+    - press: esc
+    - wait:
+        screen:
+            notContains: "Edit notes.txt?"
+        timeoutMs: 5000
+    - wait:
+        screen:
+            contains: "Ready"
+        timeoutMs: 15000
+    - type: "back in the composer"
+    - wait:
+        screen:
+            contains: "back in the composer"
+        timeoutMs: 5000
+    - snapshot: denied_with_esc
+    - press: ctrl+c
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 5000
+outcomes:
+    - id: tuimark_edit_denied
+      description: denying the proposal, with n and with esc, leaves the file unchanged
+      verify:
+        process:
+            exitCode: 0
+contractHash: sha256:45ec897cb81feb9985dc6ca6e0700daaa1cd9c3b3216db7082ae2622084ad630

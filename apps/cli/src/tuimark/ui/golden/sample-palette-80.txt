@@ -1,0 +1,31 @@
+=== grid 80x30 ===
+ Local Agent         qwen3-coder:30b  build          ctx 9.6k/32k  ████░░░░░░░░ 
+You                                                                             
+Add a retry to the fetch helper and show me the result.                         
+                                                                                
+Assistant                                                                       
+Sure. I will wrap the call in a bounded retry with backoff:                     
+ ts                                                                             
+ export as╭─ Commands ───────────────────────────────────────────────╮          
+   // expo│ ╔══════════════════════════════════════════════════════╗ │          
+   for (le│ ║ mode                                                 ║ │          
+     try {│ ╚══════════════════════════════════════════════════════╝ │          
+     catch│ Mode: plan (read only)                        /mode plan │          
+   }      │ Mode: build (read, edit, command)            /mode build │          
+ }        │                                                          │          
+          │                                                          │          
+╭─ Tool · │                                                          │─────────╮
+│succeeded│                                                          │         │
+│src/fetch│                                                          │         │
+│Updated s│                                                          │         │
+╰─────────│                                                          │─────────╯
+          │                                                          │          
+Assistant │                                                          │          
+Done. The ╰──────────────────────────────────────────────────────────╯          
+                                                                                
+                                                                                
+                                                                                
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ Message the model                                                            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+ Ready · /help for commands                                                     

@@ -1,0 +1,250 @@
+<!--
+  kit/kit.tui: the Tuimark kit as one fragment. Include it once, as the first
+  child of your <tui>, then load your own sheet after it:
+
+    <include src="kit/kit.tui"/>
+    <style src="app.tcss"/>
+
+  It brings the kit's two sheets (tokens, then component classes), the keys of
+  its overlays, and one <template> per component. A <use> passes three kinds
+  of arguments:
+
+  - Props, for literal text: titles, labels, placeholders, icons, sparkline
+    limits (`title="CPU"`). A prop you leave out is an attribute the copy
+    does not write, or an empty text that the kit hides (:empty).
+  - `with="PATH as ALIAS"`, for data: values, arrays, the flags in `if`,
+    `open` and class:NAME guards (optional members: a missing one reads as
+    false), and the paths a widget writes.
+  - Content, for the templates with a <slot/> (card, alert, empty state, app
+    bar, confirm): what you write between <use> and </use> lands in the
+    slot and keeps the meaning of the place where you wrote it: its paths,
+    its ids (not scoped by the use), its actions.
+
+  - A variant is a static class on the <use> (`class="danger"`). It lands on
+    the copy's root, and the kit's rules style the parts from there.
+  - `style` is a prop of every template: it lands on the copy's root, which a
+    rule cannot name unless the template gives it an id (the overlays'
+    U__dialog, the log's U__view): `style="height: 10"`.
+  - A template that holds ids needs an id on its <use>, which scopes them:
+    `<use id="del" template="k-confirm" …/>` makes del__dialog, del__no and
+    del__yes. The use id is the instance a host routes by (the part of an
+    event's source before the last "__").
+  - Every template root writes its own size, so a copy is the same size in a
+    screen, a tab, or a col.
+  - Keymap rows here name only classes, never ids: they land in every
+    document that includes the kit.
+
+  Components whose rows, columns or panes read a row alias (table, menu,
+  split) or that are one element (badge, button, hints, tabs, status bar)
+  are classes in kit.tcss, not templates. kit/components/NAME.tui shows each
+  one in use.
+-->
+<fragment>
+  <style src="theme.tcss"/>
+  <style src="kit.tcss"/>
+
+  <!-- The overlays' own keys. Each holds while focus is inside that overlay
+       (its class is on the modal, which is in the focus chain), and a modal
+       traps every other key, so a key that must also work under an overlay
+       is repeated in your own <keymap when="modal">. These rows have no
+       label, so no <hints> lists them, a help overlay included: an overlay
+       names its own way out. The dialog's buttons name the choices (and y
+       and n work while it is open), and the help shows "? close help" at
+       its top. A row cannot take props, so the keys stay fixed. -->
+  <keymap when=".k-dialog">
+    <bind keys="y" action="dialog_confirm"/>
+    <bind keys="n" action="dialog_cancel"/>
+  </keymap>
+  <keymap when=".k-help">
+    <bind keys="q,?" action="help_close"/>
+  </keymap>
+
+  <!-- ===================================================== layout and content -->
+
+  <!-- k-card: a titled panel. Props: title, style. Slot: the body. A card
+       whose title comes from data is the class markup,
+       <box class="k-card" title="{PATH}">. -->
+  <template id="k-card" props="title style">
+    <box class="k-card" title="{$title}" style="{$style}">
+      <slot/>
+    </box>
+  </template>
+
+  <!-- k-kv: one key / value row, in a card. Props: label, style.
+       with="PATH as v": the value. -->
+  <template id="k-kv" props="label style">
+    <row class="k-kv" style="{$style}">
+      <text class="k-kv-label">{$label}</text>
+      <text class="k-kv-value">{v}</text>
+    </row>
+  </template>
+
+  <!-- k-appbar: a one-row bar docked to the top. Props: brand, title, style.
+       Slot: the right side (meta text, badges). -->
+  <template id="k-appbar" props="brand title style">
+    <row class="k-appbar" style="{$style}">
+      <text class="k-appbar-brand">{$brand}</text>
+      <text class="k-appbar-title">{$title}</text>
+      <spacer/>
+      <slot/>
+    </row>
+  </template>
+
+  <!-- k-alert: a callout. Props: title, icon, text, style. Slot: more body,
+       after the text (a dynamic line, a button). Variant: info, ok, warn,
+       danger. -->
+  <template id="k-alert" props="title icon text style">
+    <box class="k-alert" title="{$title}" style="{$style}">
+      <row class="k-alert-row">
+        <text class="k-alert-icon">{$icon}</text>
+        <col class="k-alert-body">
+          <text class="k-alert-text">{$text}</text>
+          <slot/>
+        </col>
+      </row>
+    </box>
+  </template>
+
+  <!-- k-stat: a KPI card. Props: title, min, max (the sparkline's range),
+       style. with="PATH as s": s.value, s.delta, s.hist (numbers); flags
+       s.good and s.bad color the change. -->
+  <template id="k-stat" props="title min max style">
+    <box class="k-stat" title="{$title}" style="{$style}">
+      <text class="k-stat-value">{s.value}</text>
+      <row class="k-stat-row">
+        <text class="k-stat-delta" class:good="s.good" class:bad="s.bad">{s.delta}</text>
+        <sparkline class="k-stat-spark" bind="s.hist" min="{$min}" max="{$max}"/>
+      </row>
+    </box>
+  </template>
+
+  <!-- k-meter: a labeled progress bar. Props: label, style. with="PATH as m":
+       m.text, m.pct (0 to 100); flags m.ok, m.warn, m.danger. Variant: ok,
+       warn, danger. -->
+  <template id="k-meter" props="label style">
+    <col class="k-meter" style="{$style}">
+      <row class="k-meter-head">
+        <text class="k-meter-label">{$label}</text>
+        <spacer/>
+        <text class="k-meter-value">{m.text}</text>
+      </row>
+      <progress class="k-meter-bar" class:ok="m.ok" class:warn="m.warn" class:danger="m.danger" bind="m.pct"/>
+    </col>
+  </template>
+
+  <!-- k-empty: an empty state, centered in the space left. Props: icon,
+       title, text, style. Slot: the call to action (your button, your
+       action). -->
+  <template id="k-empty" props="icon title text style">
+    <col class="k-empty" style="{$style}">
+      <text class="k-empty-icon">{$icon}</text>
+      <text class="k-empty-title">{$title}</text>
+      <text class="k-empty-text">{$text}</text>
+      <slot/>
+    </col>
+  </template>
+
+  <!-- k-field: a form field. Props: label, placeholder, help, style.
+       with="forms.FORM.FIELD as f": f.value (the input writes it), f.error
+       ("" when fine). Use it as <use id="FORM__FIELD" …/>: the input is
+       FORM__FIELD__input, and fires form_validate and form_submit. -->
+  <template id="k-field" props="label placeholder help style">
+    <col class="k-field" style="{$style}">
+      <text class="k-field-label" class:invalid="f.error">{$label}</text>
+      <input id="input" class="k-field-input" class:invalid="f.error" bind="f.value" placeholder="{$placeholder}" on:change="form_validate" on:submit="form_submit"/>
+      <text class="k-field-help" if="!f.error">{$help}</text>
+      <text class="k-field-error" if="f.error">{f.error}</text>
+    </col>
+  </template>
+
+  <!-- k-breadcrumb: the current path. Props: style. with="PATH as b", where
+       PATH is an array of {id, label, last}. -->
+  <template id="k-breadcrumb" props="style">
+    <row class="k-breadcrumb" each="b as crumb" key="crumb.id" style="{$style}">
+      <text class="k-breadcrumb-item" class:current="crumb.last">{crumb.label}</text>
+      <text class="k-breadcrumb-sep" if="!crumb.last">›</text>
+    </row>
+  </template>
+
+  <!-- k-log: a scrolling log that follows its end. Props: style.
+       with="PATH as l": l.title and l.lines, an array of {n, text, debug,
+       info, warn, err}. Its scroll is U__view. -->
+  <template id="k-log" props="style">
+    <scroll id="view" class="k-log" stick="bottom" focusable="true" title="{l.title}" style="{$style}">
+      <col class="k-log-lines" each="l.lines as line" key="line.n">
+        <text class="k-log-line" class:muted="line.debug" class:info="line.info" class:warn="line.warn" class:danger="line.err">{line.text}</text>
+      </col>
+    </scroll>
+  </template>
+
+  <!-- k-toast: a one-row notice that never moves the page. Props: style.
+       with="PATH as t": t.show, t.text; flags t.is_ok, t.is_warn,
+       t.is_danger. -->
+  <template id="k-toast" props="style">
+    <row class="k-toast-slot" style="{$style}">
+      <row class="k-toast" if="t.show" class:ok="t.is_ok" class:warn="t.is_warn" class:danger="t.is_danger">
+        <text class="k-toast-text">{t.text}</text>
+        <text class="k-toast-key">esc</text>
+      </row>
+    </row>
+  </template>
+
+  <!-- ============================================================= overlays -->
+
+  <!-- k-confirm: a confirm dialog that puts the cursor on the safe button,
+       sized by its content (up to 60 columns, where the text wraps).
+       Props: style. with="PATH as d": d.open, d.title, d.body, d.no and d.yes
+       (the button labels, which name the choices; the host writes them on
+       every open); flag d.danger. Slot: more body under d.body (a list, a
+       checkbox); its paths are written in full, d does not exist there.
+       Variant: danger. Fires dialog_confirm and dialog_cancel (esc too, and y
+       and n while it is open), from U__yes, U__no or U__dialog. -->
+  <template id="k-confirm" props="style">
+    <modal id="dialog" class="k-dialog" class:danger="d.danger" open="d.open" title="{d.title}" focus="#no" on:escape="dialog_cancel" style="{$style}">
+      <text class="k-dialog-text">{d.body}</text>
+      <slot/>
+      <row class="k-dialog-actions">
+        <spacer/>
+        <button id="no" class="k-btn secondary" label="{d.no}" on:click="dialog_cancel"/>
+        <button id="yes" class="k-btn primary" label="{d.yes}" on:click="dialog_confirm"/>
+      </row>
+    </modal>
+  </template>
+
+  <!-- k-palette: a command palette. Props: title, placeholder, style.
+       with="PATH as p, FOUND as f": p.open, p.query (the input writes it),
+       p.cur (the list's cursor); f.any and f.items, an array of
+       {id, label, hint} that the host keeps (a Derive over p.query). Fires
+       palette_query, palette_run and palette_close (esc). Its arrows move
+       U__list while the input keeps focus: add the rows that name it to your
+       keymap. -->
+  <template id="k-palette" props="title placeholder style">
+    <modal id="dialog" class="k-palette" open="p.open" title="{$title}" focus="#q" on:escape="palette_close" style="{$style}">
+      <input id="q" class="k-palette-input" bind="p.query" placeholder="{$placeholder}" on:change="palette_query" on:submit="palette_run"/>
+      <text class="k-palette-empty" if="!f.any">No command matches “{p.query}”.</text>
+      <list id="list" class="k-palette-list" each="f.items as cmd" key="cmd.id" bind="p.cur" focusable="false">
+        <item>
+          <row class="k-palette-row">
+            <text class="k-palette-label">{cmd.label}</text>
+            <text class="k-palette-hint">{cmd.hint}</text>
+          </row>
+        </item>
+      </list>
+    </modal>
+  </template>
+
+  <!-- k-help: every labeled key, under its own "? close help" line, in a
+       scroll (U__keys) for a long keymap. Props: title, style.
+       with="PATH as h": h.open. -->
+  <template id="k-help" props="title style">
+    <modal id="dialog" class="k-help" open="h.open" title="{$title}" on:escape="help_close" style="{$style}">
+      <row class="k-help-close">
+        <text class="k-help-key">?</text>
+        <text class="k-help-label">close help</text>
+      </row>
+      <scroll id="keys" class="k-help-scroll" focusable="true">
+        <hints class="k-hints k-help-keys" scope="all"/>
+      </scroll>
+    </modal>
+  </template>
+</fragment>

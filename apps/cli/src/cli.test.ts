@@ -1,3 +1,5 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
@@ -116,4 +118,57 @@ test("production bundle keeps native rendering behind a dynamic import", async (
   expect(source).not.toMatch(
     /from\s+['"](?:@local-agent\/vue-tui['"]|vue['"]|@opentui\/)/,
   );
+});
+
+async function runCli(...args: string[]) {
+  const child = Bun.spawn(
+    [process.execPath, "run", "--silent", "dev", ...args],
+    {
+      cwd: join(directory, "../../.."),
+      env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" },
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  return { stdout, stderr, code };
+}
+
+test.each([
+  [["--ui", "bogus"], "Unknown UI client"],
+  [["--ui", "tuimark", "--mode", "inline"], "--ui tuimark is fullscreen only"],
+  [
+    ["--ui", "tuimark", "--mode", "headless", "-p", "x"],
+    "--ui tuimark is fullscreen only",
+  ],
+  [["--ui", "tuimark", "-p", "x", "--json"], "--ui tuimark is fullscreen only"],
+])("the Tuimark client is fullscreen only: %j", async (args, message) => {
+  const { stderr, code } = await runCli(...args);
+  expect(code).toBe(1);
+  expect(stderr).toContain(message);
+});
+
+test("--ui tuimark leaves session inspection and --mcp-status on their own paths", async () => {
+  const scratch = await mkdtemp(join(tmpdir(), "local-agent-ui-flag-"));
+  try {
+    const sessions = await runCli(
+      "--ui",
+      "tuimark",
+      "--sessions",
+      "--session-db",
+      join(scratch, "sessions.db"),
+    );
+    expect(sessions.stderr).toBe("");
+    expect(sessions.code).toBe(0);
+    expect(JSON.parse(sessions.stdout)).toEqual([]);
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+  const status = await runCli("--ui", "tuimark", "--mcp-status");
+  expect(status.code).toBe(1);
+  expect(status.stderr).toContain("--mcp-status requires --mcp-config PATH");
 });

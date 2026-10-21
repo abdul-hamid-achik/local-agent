@@ -1,0 +1,75 @@
+/* local-agent's own styling, loaded after the kit (kit/theme.tcss, kit/kit.tcss).
+ * Tokens come from the kit; the syntax colors are this file's. */
+:root {
+  --kw: #ff7b72;
+  --str: #a5d6ff;
+  --num: #79c0ff;
+  --com: #8b949e;
+  --user: #3fb950;
+  --tool: #d29922;
+}
+@media (theme: light) {
+  :root {
+    --kw: #cf222e;
+    --str: #0a3069;
+    --num: #0550ae;
+    --com: #6e7781;
+    --user: #1a7f37;
+    --tool: #9a6700;
+  }
+}
+
+#app { layout: column; width: 1fr; height: 1fr; }
+.la-muted { color: $muted; }
+.la-model { bold: true; width: auto; }
+.la-mode { color: $warn; width: auto; }
+.la-provider, .la-session, .la-ctx { width: auto; }
+@media (max-cols: 100) {
+  .la-provider, .la-session { display: none; }
+}
+.la-ctxbar { width: 12; }
+.la-spin { width: 2; }
+
+#log { width: 1fr; height: 1fr; }
+#rows, #live { height: auto; layout: column; }
+
+.la-msg { height: auto; layout: column; margin: 0 0 1 0; }
+.la-role { bold: true; }
+.la-msg.user > .la-role { color: $user; }
+.la-msg.asst > .la-role { color: $accent; }
+.la-blocks { height: auto; layout: column; }
+.la-blocks > text { wrap: wrap; }
+.la-head { bold: true; }
+.la-quote { color: $muted; italic: true; padding: 0 0 0 1; }
+
+.la-code { height: auto; layout: column; background: $panel; padding: 0 1; }
+.la-lang { color: $muted; dim: true; }
+.la-lines { height: auto; layout: column; }
+.la-codeline { height: 1; layout: row; overflow: hidden; }
+.la-codeline > text { height: 1; }
+.kw { color: $kw; }
+.str { color: $str; }
+.num { color: $num; }
+.com { color: $com; italic: true; }
+
+.la-tool { height: auto; layout: column; border: rounded; border-color: $border; title-color: $tool; margin: 0 0 1 0; }
+.la-tool.run { border-color: $warn; }
+.la-tool.ok { border-color: $ok; }
+.la-tool.bad { border-color: $danger; }
+.la-tool.warn { border-color: $warn; }
+.la-tool-head { height: 1; gap: 1; }
+.la-out { height: auto; layout: column; }
+
+#composer { width: 1fr; height: 3; border: rounded; border-color: $border; padding: 0 1; }
+#composer:focus { border: double; border-color: $focus; }
+.la-earlier { height: 1; color: $muted; }
+.la-earlier:focus { color: $accent; }
+
+#status { gap: 1; padding: 0 1; }
+.la-statustext { width: auto; padding: 0 2 0 0; }
+.la-hints { width: 1fr; justify: end; }
+
+.la-diff { max-height: 14; width: 1fr; height: auto; }
+.la-difflines { height: auto; layout: column; }
+.add { color: $ok; }
+.del { color: $danger; }

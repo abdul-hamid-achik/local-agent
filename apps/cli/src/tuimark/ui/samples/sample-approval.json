@@ -1,0 +1,568 @@
+{
+  "header": {
+    "provider": "Ollama / loopback",
+    "model": "qwen3-coder:30b",
+    "mode": "build",
+    "session": "session a1b2c3d",
+    "ctx_label": "9.6k/32k",
+    "ctx_pct": 30
+  },
+  "messages": [
+    {
+      "id": "m0",
+      "is_user": true,
+      "is_asst": false,
+      "is_tool": false,
+      "blocks": [
+        {
+          "id": "b0",
+          "para": true,
+          "head": false,
+          "quote": false,
+          "code": false,
+          "t": "Add a retry to the fetch helper and show me the result.",
+          "lang": "",
+          "lines": []
+        }
+      ],
+      "card": {
+        "name": "",
+        "status": "",
+        "args": "",
+        "ok": false,
+        "bad": false,
+        "warn": false,
+        "running": false,
+        "out": []
+      }
+    },
+    {
+      "id": "m1",
+      "is_user": false,
+      "is_asst": true,
+      "is_tool": false,
+      "blocks": [
+        {
+          "id": "b0",
+          "para": true,
+          "head": false,
+          "quote": false,
+          "code": false,
+          "t": "Sure. I will wrap the call in a bounded retry with backoff:",
+          "lang": "",
+          "lines": []
+        },
+        {
+          "id": "b1",
+          "para": false,
+          "head": false,
+          "quote": false,
+          "code": true,
+          "t": "",
+          "lang": "ts",
+          "lines": [
+            {
+              "n": 0,
+              "segs": [
+                {
+                  "i": 0,
+                  "t": "export",
+                  "kw": true,
+                  "str": false,
+                  "num": false,
+                  "com": false
+                },
+                {
+                  "i": 1,
+                  "t": " ",
+                  "kw": false,
+                  "str": false,
+                  "num": false,
+                  "com": false
+                },
+                {
+                  "i": 2,
+                  "t": "async",
+                  "kw": true,
+                  "str": false,
+                  "num": false,
+                  "com": false
+                },
+                {
+                  "i": 3,
+                  "t": " ",
+                  "kw": false,
+                  "str": false,
+                  "num": false,
+                  "com": false
+                },
+                {
+                  "i": 4,
+                  "t": "function",
+                  "kw": true,
+                  "str": false,
+                  "num": false,
+                  "com": false
+                },
+                {
+                  "i": 5,
+                  "t": " fetchRetry(url, tries = ",
+                  "kw": false,
+                  "str": false,
+                  "num": false,
+                  "com": false
+                },
+                {
+                  "i": 6,
+                  "t": "3",
+                  "kw": false,
+                  "str": false,
+                  "num": true,
+                  "com": false
+                },
+                {
+                  "i": 7,
+                  "t": ") {",
+                  "kw": false,
+                  "str": false,
+                  "num": false,
+                  "com": false
+                }
+              ]
+            },
+            {
+              "n": 1,
+              "segs": [
+                {
+                  "i": 0,
+                  "t": "  ",
+                  "kw": false,
+                  "str": false,
+                  "num": false,
+                  "com": false
+                },
+                {
+                  "i": 1,
+                  "t": "// exponential backoff",
+                  "kw": false,
+                  "str": false,
+                  "num": false,
+                  "com": true
+                }
+              ]
+            },
+            {
+              "n": 2,
+              "segs": [
+                {
+                  "i": 0,
+                  "t": "  ",
+                  "kw": false,
+                  "str": false,
+                  "num": false,
+                  "com": false
+                },
+                {
+                  "i": 1,
+                  "t": "for",
+                  "kw": true,
+                  "str": false,
+                  "num": false,
+                  "com": false
+                },
+                {
+                  "i": 2,
+                  "t": " (",
+                  "kw": false,
+                  "str": false,
+                  "num": false,
+                  "com": false
+                },
+                {
+                  "i": 3,
+                  "t": "let",
+                  "kw": true,
+                  "str": false,
+                  "num": false,
+                  "com": false
+                },
+                {
+                  "i": 4,
+                  "t": " attempt = ",
+                  "kw": false,
+                  "str": false,
+                  "num": false,
+                  "com": false
+                },
+                {
+                  "i": 5,
+                  "t": "1",
+                  "kw": false,
+                  "str": false,
+                  "num": true,
+                  "com": false
+                },
+                {
+                  "i": 6,
+                  "t": "; ; attempt++) {",
+                  "kw": false,
+                  "str": false,
+                  "num": false,
+                  "com": false
+                }
+              ]
+            },
+            {
+              "n": 3,
+              "segs": [
+                {
+                  "i": 0,
+                  "t": "    ",
+                  "kw": false,
+                  "str": false,
+                  "num": false,
+                  "com": false
+                },
+                {
+                  "i": 1,
+                  "t": "try",
+                  "kw": true,
+                  "str": false,
+                  "num": false,
+                  "com": false
+                },
+                {
+                  "i": 2,
+                  "t": " { ",
+                  "kw": false,
+                  "str": false,
+                  "num": false,
+                  "com": false
+                },
+                {
+                  "i": 3,
+                  "t": "return",
+                  "kw": true,
+                  "str": false,
+                  "num": false,
+                  "com": false
+                },
+                {
+                  "i": 4,
+                  "t": " ",
+                  "kw": false,
+                  "str": false,
+                  "num": false,
+                  "com": false
+                },
+                {
+                  "i": 5,
+                  "t": "await",
+                  "kw": true,
+                  "str": false,
+                  "num": false,
+                  "com": false
+                },
+                {
+                  "i": 6,
+                  "t": " fetch(url); }",
+                  "kw": false,
+                  "str": false,
+                  "num": false,
+                  "com": false
+                }
+              ]
+            },
+            {
+              "n": 4,
+              "segs": [
+                {
+                  "i": 0,
+                  "t": "    ",
+                  "kw": false,
+                  "str": false,
+                  "num": false,
+                  "com": false
+                },
+                {
+                  "i": 1,
+                  "t": "catch",
+                  "kw": true,
+                  "str": false,
+                  "num": false,
+                  "com": false
+                },
+                {
+                  "i": 2,
+                  "t": " (e) { ",
+                  "kw": false,
+                  "str": false,
+                  "num": false,
+                  "com": false
+                },
+                {
+                  "i": 3,
+                  "t": "if",
+                  "kw": true,
+                  "str": false,
+                  "num": false,
+                  "com": false
+                },
+                {
+                  "i": 4,
+                  "t": " (attempt === tries) ",
+                  "kw": false,
+                  "str": false,
+                  "num": false,
+                  "com": false
+                },
+                {
+                  "i": 5,
+                  "t": "throw",
+                  "kw": true,
+                  "str": false,
+                  "num": false,
+                  "com": false
+                },
+                {
+                  "i": 6,
+                  "t": " e; }",
+                  "kw": false,
+                  "str": false,
+                  "num": false,
+                  "com": false
+                }
+              ]
+            },
+            {
+              "n": 5,
+              "segs": [
+                {
+                  "i": 0,
+                  "t": "  }",
+                  "kw": false,
+                  "str": false,
+                  "num": false,
+                  "com": false
+                }
+              ]
+            },
+            {
+              "n": 6,
+              "segs": [
+                {
+                  "i": 0,
+                  "t": "}",
+                  "kw": false,
+                  "str": false,
+                  "num": false,
+                  "com": false
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "card": {
+        "name": "",
+        "status": "",
+        "args": "",
+        "ok": false,
+        "bad": false,
+        "warn": false,
+        "running": false,
+        "out": []
+      }
+    },
+    {
+      "id": "m2",
+      "is_user": false,
+      "is_asst": false,
+      "is_tool": true,
+      "blocks": [],
+      "card": {
+        "name": "edit",
+        "status": "succeeded",
+        "args": "src/fetch.ts",
+        "ok": true,
+        "bad": false,
+        "warn": false,
+        "running": false,
+        "out": [
+          {
+            "n": 0,
+            "t": "Updated src/fetch.ts. Verification has not been run."
+          }
+        ]
+      }
+    },
+    {
+      "id": "m3",
+      "is_user": false,
+      "is_asst": true,
+      "is_tool": false,
+      "blocks": [
+        {
+          "id": "b0",
+          "para": true,
+          "head": false,
+          "quote": false,
+          "code": false,
+          "t": "Done. The helper now retries three times.",
+          "lang": "",
+          "lines": []
+        }
+      ],
+      "card": {
+        "name": "",
+        "status": "",
+        "args": "",
+        "ok": false,
+        "bad": false,
+        "warn": false,
+        "running": false,
+        "out": []
+      }
+    }
+  ],
+  "earlier": {
+    "n": 0
+  },
+  "live": {
+    "id": "live",
+    "is_user": false,
+    "is_asst": false,
+    "is_tool": true,
+    "blocks": [],
+    "card": {
+      "name": "edit",
+      "status": "waiting for approval",
+      "args": "src/fetch.ts",
+      "ok": false,
+      "bad": false,
+      "warn": false,
+      "running": true,
+      "out": []
+    },
+    "active": true
+  },
+  "approval": {
+    "open": true,
+    "title": "Edit src/fetch.ts?",
+    "body": "Apply this change to the workspace.",
+    "danger": false,
+    "no": "Deny",
+    "yes": "Allow",
+    "lines": [
+      {
+        "n": 0,
+        "t": "--- a/src/fetch.ts",
+        "add": false,
+        "del": false
+      },
+      {
+        "n": 1,
+        "t": "+++ b/src/fetch.ts",
+        "add": false,
+        "del": false
+      },
+      {
+        "n": 2,
+        "t": "@@ -12,3 +12,9 @@",
+        "add": false,
+        "del": false
+      },
+      {
+        "n": 3,
+        "t": " import { sleep } from './util';",
+        "add": false,
+        "del": false
+      },
+      {
+        "n": 4,
+        "t": "-export const get = (url) => fetch(url);",
+        "add": false,
+        "del": true
+      },
+      {
+        "n": 5,
+        "t": "+export async function fetchRetry(url, tries = 3) {",
+        "add": true,
+        "del": false
+      },
+      {
+        "n": 6,
+        "t": "+  for (let attempt = 1; ; attempt++) {",
+        "add": true,
+        "del": false
+      },
+      {
+        "n": 7,
+        "t": "+    try { return await fetch(url); }",
+        "add": true,
+        "del": false
+      },
+      {
+        "n": 8,
+        "t": "+    catch (e) { if (attempt === tries) throw e; await sleep(200 * attempt); }",
+        "add": true,
+        "del": false
+      },
+      {
+        "n": 9,
+        "t": "+  }",
+        "add": true,
+        "del": false
+      },
+      {
+        "n": 10,
+        "t": "+}",
+        "add": true,
+        "del": false
+      },
+      {
+        "n": 11,
+        "t": "+export const get = (url) => fetchRetry(url);",
+        "add": true,
+        "del": false
+      }
+    ]
+  },
+  "palette": {
+    "open": false,
+    "query": "",
+    "cur": "mode-plan"
+  },
+  "found": {
+    "any": true,
+    "items": [
+      {
+        "id": "mode-plan",
+        "label": "Mode: plan (read only)",
+        "hint": "/mode plan"
+      },
+      {
+        "id": "mode-build",
+        "label": "Mode: build (read, edit, command)",
+        "hint": "/mode build"
+      },
+      {
+        "id": "mcp",
+        "label": "MCP servers",
+        "hint": "/mcp"
+      },
+      {
+        "id": "help",
+        "label": "Help and keys",
+        "hint": "/help"
+      }
+    ]
+  },
+  "help": {
+    "open": false
+  },
+  "draft": "",
+  "placeholder": "Generating…",
+  "busy": true,
+  "status": "Waiting for approval · y allow · n deny · Esc deny"
+}
