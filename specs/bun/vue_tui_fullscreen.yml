@@ -23,6 +23,10 @@ steps:
             contains: "Message the model"
         timeoutMs: 3000
     - type: "hello"
+    - wait:
+        screen:
+            contains: "hello"
+        timeoutMs: 3000
     - press: enter
     - wait:
         screen:

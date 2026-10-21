@@ -16,6 +16,10 @@ steps:
             contains: "Message the model"
         timeoutMs: 10000
     - type: "edit"
+    - wait:
+        screen:
+            contains: "edit"
+        timeoutMs: 3000
     - press: enter
     - wait:
         screen:
@@ -24,7 +28,7 @@ steps:
     - press: y
     - wait:
         screen:
-            contains: "assistant: edit applied"
+            contains: "edit applied"
         timeoutMs: 10000
     - press: ctrl+c
     - wait:
