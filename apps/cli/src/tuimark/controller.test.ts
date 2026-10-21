@@ -8,81 +8,16 @@ import type {
   SessionContext,
   Workspace,
 } from "@local-agent/runtime";
-import type { Host, HostEvent } from "@thelacanians/tuimark";
 import { expect, test } from "vitest";
 import { type MessageView, runsText } from "#cli/tuimark/blocks";
 import type { PaletteItem } from "#cli/tuimark/commands";
-import {
-  APPROVAL_ARM_MS,
-  TuimarkClient,
-  type UiHost,
-} from "#cli/tuimark/controller";
+import { APPROVAL_ARM_MS, TuimarkClient } from "#cli/tuimark/controller";
+import { FakeHost } from "#cli/tuimark/fake-host";
 import {
   APPROVAL_STATUS,
   APPROVAL_WAIT_STATUS,
   type Store,
 } from "#cli/tuimark/store";
-
-// ------------------------------------------------------------------ a fake host
-
-class FakeHost implements UiHost {
-  store: Record<string, unknown> = {};
-  readonly handlers = new Map<string, (ev: HostEvent) => unknown>();
-  readonly batches: { path: string; value: unknown }[][] = [];
-  private inflight = 0;
-  maxInflight = 0;
-  private seq = 0;
-
-  on(action: string, handler: (ev: HostEvent) => unknown): Host {
-    this.handlers.set(action, handler);
-    return this as unknown as Host;
-  }
-
-  async batch(writes: { path: string; value: unknown }[]) {
-    this.maxInflight = Math.max(this.maxInflight, ++this.inflight);
-    this.batches.push(writes);
-    await new Promise((r) => setTimeout(r, 1));
-    for (const { path, value } of writes) this.apply(path, value);
-    this.inflight--;
-    return { type: "ack" as const, id: "x", ok: true };
-  }
-
-  async get(path: string) {
-    const value = path
-      .split(".")
-      .reduce<unknown>(
-        (o, k) => (o as Record<string, unknown> | undefined)?.[k],
-        this.store,
-      );
-    return { found: value !== undefined, value } as Awaited<
-      ReturnType<UiHost["get"]>
-    >;
-  }
-
-  private apply(path: string, value: unknown) {
-    const keys = path.split(".");
-    let node = this.store;
-    for (const key of keys.slice(0, -1)) {
-      node[key] ??= {};
-      node = node[key] as Record<string, unknown>;
-    }
-    node[keys.at(-1) as string] = value;
-  }
-
-  /** Fires an action as the document would, and waits for the handler like the host does. */
-  async fire(action: string, value: unknown = null): Promise<unknown> {
-    const handler = this.handlers.get(action);
-    if (!handler) throw new Error(`no handler for ${action}`);
-    return handler({ seq: ++this.seq, action, source: "", keys: {}, value });
-  }
-
-  statusLog(): unknown[] {
-    return this.batches
-      .flat()
-      .filter((w) => w.path === "status")
-      .map((w) => w.value);
-  }
-}
 
 // --------------------------------------------------------------------- scripting
 
@@ -140,6 +75,12 @@ const reply = (text: string): Script =>
 
 const store = (ui: FakeHost) => ui.store as unknown as Store;
 
+/** The text of the in-flight reply: the final blocks and the tail. */
+const liveText = (s: Store) =>
+  [...s.live.blocks, ...s.live.tail]
+    .map((block) => runsText(block.runs))
+    .join("\n");
+
 // ------------------------------------------------------------------------ tests
 
 test("a turn publishes the prompt, streams, keeps the reply and returns to idle", async () => {
@@ -163,13 +104,14 @@ test("a turn publishes the prompt, streams, keeps the reply and returns to idle"
   expect(client.writeErrors).toEqual([]);
 });
 
-test("thinking streams into its own block, keeps the last three lines, and is gone once the answer starts", async () => {
+test("thinking streams into its own block, appended as it comes, and is gone once the answer starts", async () => {
   let toAnswer: () => void = () => {};
   const gate = new Promise<void>((r) => {
     toAnswer = r;
   });
   const { ui, client } = setup(async function* () {
     yield { type: "thinking", text: "one\ntwo\nthree\n" };
+    await new Promise((r) => setTimeout(r, 20));
     yield { type: "thinking", text: "four\nfi" };
     await gate;
     yield { type: "text", text: "The answer " };
@@ -190,7 +132,10 @@ test("thinking streams into its own block, keeps the last three lines, and is go
   await new Promise((r) => setTimeout(r, 40));
   const during = store(ui);
   expect(during.thinking.on).toBe(true);
-  expect(runsText(during.thinking.runs)).toBe("three\nfour\nfi");
+  // The runs are appended as they arrive; the markup shows the end of them in a
+  // three-row scroll.
+  expect(runsText(during.thinking.runs)).toBe("one\ntwo\nthree\nfour\nfi");
+  expect(ui.batches.flat().some((w) => w.op === "append")).toBe(true);
   expect(during.live.active).toBe(false);
   toAnswer();
   await new Promise((r) => setTimeout(r, 20));
@@ -241,9 +186,7 @@ test("the live message is flushed while streaming, with one write in flight at a
   await ui.fire("send", "go");
   await new Promise((r) => setTimeout(r, 40));
   expect(store(ui).live).toMatchObject({ active: true, is_asst: true });
-  expect(runsText(store(ui).live.blocks[0]?.runs ?? []).trim()).toBe(
-    "partial reply",
-  );
+  expect(liveText(store(ui)).trim()).toBe("partial reply");
   release();
   await client.idle();
   expect(store(ui).live.active).toBe(false);
@@ -515,9 +458,7 @@ test("loading earlier messages mid-turn keeps the streaming message", async () =
   await ui.fire("load_earlier");
   expect(store(ui).messages.length).toBeGreaterThan(200);
   expect(store(ui).live.active).toBe(true);
-  expect(runsText(store(ui).live.blocks[0]?.runs ?? []).trim()).toBe(
-    "first half",
-  );
+  expect(liveText(store(ui)).trim()).toBe("first half");
   release();
   await client.idle();
   expect(store(ui).live.active).toBe(false);
@@ -748,4 +689,139 @@ test("no write is ever refused by the host", async () => {
   await ui.fire("dialog_confirm");
   await client.idle();
   expect(client.writeErrors).toEqual([]);
+});
+
+// ------------------------------------------------------- appended streaming
+
+test("a reply streams as appends: the live message is written whole once, then only added to", async () => {
+  const pieces = [
+    "A first paragraph that goes on ",
+    "for a while.\n\n",
+    "A second ",
+    "one with `code`.\n\n",
+    "```ts\nconst x = 1;\n```\n\n",
+    "The end.",
+  ];
+  const { ui, client } = setup(async function* () {
+    for (const text of pieces) {
+      yield { type: "text", text };
+      await new Promise((r) => setTimeout(r, 12));
+    }
+    await new Promise((r) => setTimeout(r, 40));
+    expect(liveText(store(ui))).toContain("The end.");
+    yield {
+      type: "message",
+      message: { role: "assistant", content: pieces.join("") },
+    };
+  });
+  await ui.fire("send", "go");
+  await client.idle();
+  const writes = ui.batches.flat();
+  // The live message is set whole once; the other sets of `live` are the idle value.
+  expect(
+    writes.filter(
+      (w) =>
+        w.path === "live" &&
+        w.op !== "append" &&
+        (w.value as { active: boolean }).active,
+    ),
+  ).toHaveLength(1);
+  expect(
+    writes.some((w) => w.path === "live.blocks" && w.op === "append"),
+  ).toBe(true);
+  expect(client.writeErrors).toEqual([]);
+  expect(store(ui).live.active).toBe(false);
+});
+
+test("a refused append is made good: the next write sends the live message again", async () => {
+  const text = "one two three four five six seven eight nine ten";
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const { ui, client } = setup(async function* () {
+    for (const word of text.split(" ")) {
+      yield { type: "text", text: `${word} ` };
+      await new Promise((r) => setTimeout(r, 8));
+    }
+    await gate;
+    yield { type: "message", message: { role: "assistant", content: text } };
+  });
+  let refused = 0;
+  ui.refuse = (writes) => {
+    if (refused < 2 && writes.some((w) => w.op === "append")) {
+      refused++;
+      return "no room";
+    }
+    return undefined;
+  };
+  await ui.fire("send", "go");
+  await new Promise((r) => setTimeout(r, 150));
+  expect(refused).toBe(2);
+  // What the screen would show is the whole reply, not a hole where the refused text went.
+  expect(liveText(store(ui)).trim()).toBe(text);
+  expect(store(ui).status).toContain("UI update failed: no room");
+  release();
+  await client.idle();
+});
+
+test("a pasted block that starts with a slash is a message, one line of it is a command", async () => {
+  const { ui, client, seen } = setup(reply("ok"));
+  await ui.fire("send", "/usr/local/bin/tool\nfailed with 1");
+  await client.idle();
+  expect(seen).toHaveLength(1);
+  expect(seen[0]?.messages).toEqual([
+    "user:/usr/local/bin/tool\nfailed with 1",
+  ]);
+  await ui.fire("send", "/mode plan");
+  expect(seen).toHaveLength(1);
+  expect(store(ui).header.mode).toBe("plan");
+});
+
+test("up and down recall what was sent, and down past the end brings the draft back", async () => {
+  const { ui, client } = setup(reply("ok"));
+  await ui.fire("send", "first");
+  await client.idle();
+  await ui.fire("send", "second\nline two");
+  await client.idle();
+  await ui.fire("send", "/mode plan");
+  const draft = () => store(ui).draft;
+  await ui.fire("history_next", "");
+  expect(draft()).toBe("");
+  await ui.fire("history_prev", "half-typed");
+  expect(draft()).toBe("/mode plan");
+  await ui.fire("history_prev", "/mode plan");
+  expect(draft()).toBe("second\nline two");
+  await ui.fire("history_prev", "second\nline two");
+  expect(draft()).toBe("first");
+  // The oldest stays put.
+  await ui.fire("history_prev", "first");
+  expect(draft()).toBe("first");
+  await ui.fire("history_next", "first");
+  expect(draft()).toBe("second\nline two");
+  await ui.fire("history_next", "second\nline two");
+  await ui.fire("history_next", "/mode plan");
+  expect(draft()).toBe("half-typed");
+  // Nothing to come back to once the draft is back.
+  store(ui).draft = "other";
+  await ui.fire("history_next", "other");
+  expect(draft()).toBe("other");
+});
+
+test("the history of a resumed session is what its user messages said", async () => {
+  const session = {
+    state: {
+      publicId: "abc1234",
+      messages: [
+        { role: "user", content: "earlier question" },
+        { role: "assistant", content: "answer" },
+        { role: "user", content: "later question" },
+      ],
+    },
+  } as unknown as SessionContext;
+  const { ui } = setup(reply("ok"), { session });
+  await ui.fire("history_prev", "");
+  expect(store(ui).draft).toBe("later question");
+  await ui.fire("history_prev", "later question");
+  expect(store(ui).draft).toBe("earlier question");
 });

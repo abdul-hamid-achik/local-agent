@@ -16,11 +16,11 @@ import {
   type Run,
   resultSummary,
   runsText,
-  streamingView,
   tableRuns,
   tokenizeLine,
   ViewBuilder,
 } from "#cli/tuimark/blocks";
+import { streamingView } from "#cli/tuimark/stream";
 
 test("markdown becomes paragraphs, headings, items, quotes and code", () => {
   const blocks = parseBlocks(

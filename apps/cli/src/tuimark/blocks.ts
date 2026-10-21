@@ -541,25 +541,54 @@ function closesFence(line: string, open: string): boolean {
  * blocks the rest is one row that says so. The model's history is not cut.
  */
 export function parseBlocks(markdown: string, prefix = "b"): Block[] {
+  return parseBlocksAt(markdown, prefix).blocks;
+}
+
+/** The blocks of a text, and the line each block starts at (for the streaming split). */
+export interface Parsed {
+  blocks: Block[];
+  /** `starts[i]` is the index of the first line of `blocks[i]` in the cleaned text. */
+  starts: number[];
+}
+
+/**
+ * `parseBlocks` that also says where each block starts, and numbers the ids
+ * from `first`, so a stream can parse its text in pieces: the blocks before the
+ * last one are final, and the text from the last one's first line on is parsed
+ * again when more arrives.
+ */
+export function parseBlocksAt(
+  markdown: string,
+  prefix = "b",
+  first = 0,
+): Parsed {
   const blocks: Block[] = [];
+  const starts: number[] = [];
   const cut = markdown.length > MAX_MESSAGE_CHARS;
   const lines = cleanText(
     cut ? markdown.slice(0, MAX_MESSAGE_CHARS) : markdown,
   ).split("\n");
   let para: string[] = [];
+  let paraAt = 0;
   let quote: string[] = [];
-  let item: { marker: string; nest: boolean; lines: string[] } | undefined;
-  const next = () => `${prefix}${blocks.length}`;
+  let quoteAt = 0;
+  let item:
+    | { marker: string; nest: boolean; lines: string[]; at: number }
+    | undefined;
+  const next = () => `${prefix}${first + blocks.length}`;
   const flush = () => {
     if (para.length > 0) {
+      starts.push(paraAt);
       blocks.push(textBlock(next(), "para", para.join("\n")));
       para = [];
     }
     if (quote.length > 0) {
+      starts.push(quoteAt);
       blocks.push(textBlock(next(), "quote", quote.join("\n")));
       quote = [];
     }
     if (item) {
+      starts.push(item.at);
       blocks.push(
         block(
           next(),
@@ -576,25 +605,30 @@ export function parseBlocks(markdown: string, prefix = "b"): Block[] {
     const listItem = LIST_ITEM.exec(line);
     if (fence) {
       flush();
+      const at = i;
       const open = fence[1] ?? "```";
       const body: string[] = [];
       for (i++; i < lines.length && !closesFence(lines[i] ?? "", open); i++) {
         body.push(lines[i] ?? "");
       }
       const lang = clip((fence[2] ?? "").trim().split(/\s+/)[0] ?? "", 24);
+      starts.push(at);
       blocks.push(codeBlock(next(), lang, body));
     } else if (TABLE_ROW.test(line)) {
       flush();
+      const at = i;
       const table: string[] = [line.trim()];
       while (TABLE_ROW.test(lines[i + 1] ?? "")) {
         i++;
         table.push((lines[i] ?? "").trim());
       }
+      starts.push(at);
       blocks.push(
         block(next(), { code: true, lang: "table" }, tableRuns(table)),
       );
     } else if (/^#{1,6}\s/.test(line)) {
       flush();
+      starts.push(i);
       blocks.push(
         textBlock(
           next(),
@@ -604,6 +638,7 @@ export function parseBlocks(markdown: string, prefix = "b"): Block[] {
       );
     } else if (/^\s*>\s?/.test(line)) {
       if (para.length > 0 || item) flush();
+      if (quote.length === 0) quoteAt = i;
       quote.push(line.replace(/^\s*>\s?/, ""));
     } else if (listItem) {
       flush();
@@ -612,6 +647,7 @@ export function parseBlocks(markdown: string, prefix = "b"): Block[] {
         marker: /^\d/.test(mark) ? `${mark.slice(0, -1)}.` : "•",
         nest: (listItem[1] ?? "").length >= 2,
         lines: [listItem[3] ?? ""],
+        at: i,
       };
     } else if (line.trim() === "") {
       flush();
@@ -620,26 +656,32 @@ export function parseBlocks(markdown: string, prefix = "b"): Block[] {
       item.lines.push(line.trim());
     } else {
       if (quote.length > 0) flush();
+      if (para.length === 0) paraAt = i;
       para.push(line);
     }
   }
   flush();
   const dropped = blocks.length - MAX_MESSAGE_BLOCKS;
-  if (dropped > 0) blocks.length = MAX_MESSAGE_BLOCKS;
-  if (cut || dropped > 0)
+  if (dropped > 0) {
+    blocks.length = MAX_MESSAGE_BLOCKS;
+    starts.length = MAX_MESSAGE_BLOCKS;
+  }
+  if (cut || dropped > 0) {
+    starts.push(lines.length);
     blocks.push(
       textBlock(
-        `${prefix}${blocks.length}`,
+        `${prefix}${first + blocks.length}`,
         "quote",
         cut
           ? `… message truncated in this view (${markdown.length - MAX_MESSAGE_CHARS} more characters)`
           : `… ${dropped} more blocks not shown in this view`,
       ),
     );
-  return blocks;
+  }
+  return { blocks, starts };
 }
 
-/** Parses an in-flight reply (the same mapping, with a prefix of its own). */
+/** Parses an in-flight reply as one piece (the same mapping, with a prefix of its own). */
 export function parseStreaming(markdown: string, prefix = "l"): Block[] {
   return parseBlocks(markdown, prefix);
 }
@@ -797,7 +839,12 @@ export interface MessageView {
   card: Card;
 }
 
-export type LiveView = MessageView & { active: boolean };
+/**
+ * The in-flight message. `blocks` are the blocks that are final (a stream only
+ * ever appends to them), `tail` the one or two still being written, which the
+ * stream replaces. A tool call has neither: its `card` is the live view.
+ */
+export type LiveView = MessageView & { active: boolean; tail: Block[] };
 
 function view(
   id: string,
@@ -819,12 +866,16 @@ function view(
 export const IDLE_LIVE: LiveView = Object.freeze({
   ...view("live", "asst", []),
   active: false,
+  tail: [],
 }) as LiveView;
 
-/** The "Thinking…" block under the log while the model reasons before it answers. */
+/**
+ * The "Thinking…" block under the log while the model reasons before it answers.
+ * `runs` are plain strings the stream appends to; the markup shows the last
+ * rows of them in a small scroll that sticks to the bottom.
+ */
 export interface ThinkingView {
   on: boolean;
-  /** The last THINK_LINES lines of the reasoning, dim, as runs. */
   runs: Run[];
 }
 
@@ -833,32 +884,29 @@ export const IDLE_THINKING: ThinkingView = Object.freeze({
   runs: [],
 }) as ThinkingView;
 
-/** Lines of the reasoning the block shows, and the columns each keeps. */
+/** The rows of the reasoning the block shows (the scroll's max-height). */
 export const THINK_LINES = 3;
-const THINK_COLS = 72;
+/** The store keeps about this many characters of reasoning; the rest is cut at a line. */
+export const THINK_KEEP = 1600;
+/** What a cut keeps. */
+export const THINK_TRIM = 480;
 
 /**
- * The block for the reasoning streamed so far: its last three non-blank lines,
- * clipped. It lives only in the live view; the reasoning is never part of a
+ * The block for a piece of reasoning: its last characters as one run, cut at a
+ * line start. It lives only in the live view; the reasoning is never part of a
  * message the transcript commits.
  */
 export function thinkingView(text: string): ThinkingView {
-  const lines = cleanText(text)
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .slice(-THINK_LINES);
-  const runs: Run[] = [];
-  lines.forEach((line, n) => {
-    if (n > 0) pushRun(runs, "\n");
-    pushRun(runs, clip(line, THINK_COLS), "think");
-  });
-  return { on: true, runs };
+  const clean = cleanText(text);
+  return { on: true, runs: clean ? [thinkingTail(clean)] : [] };
 }
 
-/** An in-flight assistant reply (streaming markdown). */
-export function streamingView(text: string): LiveView {
-  return { ...view("live", "asst", parseStreaming(text)), active: true };
+/** The last THINK_TRIM characters of `text`, starting at a line when there is one. */
+export function thinkingTail(text: string): string {
+  if (text.length <= THINK_TRIM) return text;
+  const tail = text.slice(-THINK_TRIM);
+  const nl = tail.indexOf("\n");
+  return nl >= 0 && nl < tail.length - 1 ? tail.slice(nl + 1) : tail;
 }
 
 /** An in-flight tool call: requested, waiting for approval, or running. */
@@ -870,6 +918,7 @@ export function liveToolView(
   return {
     ...view("live", "tool", [], toolCard(name, callSummary(call), state)),
     active: true,
+    tail: [],
   };
 }
 

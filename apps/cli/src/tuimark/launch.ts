@@ -1,4 +1,5 @@
-// Entry of the opt-in Tuimark client (`--ui tuimark`), fullscreen only.
+// Entry of the Tuimark client (`--ui tuimark`, the default on macOS and Linux),
+// fullscreen only until the inline mode lands.
 //
 // This module is imported dynamically by main.ts, after every flag is checked,
 // so the headless and Vue paths never load it. It must not import the Vue
@@ -18,8 +19,11 @@ import { type Ready, resolveBinary, spawnHost } from "@thelacanians/tuimark";
 import type { Intent } from "#cli/tuimark/commands";
 import { type ClientOptions, TuimarkClient } from "#cli/tuimark/controller";
 
-/** The oldest tuimark this client's document runs on (props and <slot/>, 0.4.5). */
-export const MIN_TUIMARK = "0.4.5";
+/**
+ * The oldest tuimark this client's document runs on: <textarea>, `runs`, and the
+ * append write of the stream (0.4.6; props and <slot/> came with 0.4.5).
+ */
+export const MIN_TUIMARK = "0.4.6";
 
 /**
  * Leave the alternate screen, show the cursor, turn bracketed paste off and
@@ -77,6 +81,23 @@ export function readyProblem(
       : "",
     ". Set TUIMARK_BINARY to a newer tuimark, or use --ui vue.",
   ].join("");
+}
+
+/**
+ * The tuimark binary, or why there is none. The default client uses this to fall
+ * back to the Vue client with a line on stderr instead of failing a run that
+ * never asked for Tuimark (offline with an empty cache, a release not out yet).
+ */
+export async function findBinary(
+  resolve: () => Promise<string> = resolveBinary,
+): Promise<{ bin: string } | { error: string }> {
+  try {
+    return { bin: await resolve() };
+  } catch (error) {
+    return {
+      error: error instanceof Error ? error.message : "no tuimark binary",
+    };
+  }
 }
 
 /** The parts of the process the launcher uses (fakes in tests). */

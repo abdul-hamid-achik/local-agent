@@ -25,6 +25,7 @@ test("a missing app.tui is reported with the folder that was searched", async ()
 import type { AgentEvent, Provider, Workspace } from "@local-agent/runtime";
 import type { Host, HostExit, Ready } from "@thelacanians/tuimark";
 import {
+  findBinary,
   MIN_TUIMARK,
   readyProblem,
   runTuimark,
@@ -58,7 +59,7 @@ function fakeSpawn(
       reason instanceof Error ? fail(reason) : settle(reason);
     const host = {
       ready: {
-        version: "0.4.5",
+        version: "0.4.6",
         diagnostics: [],
         cols: 90,
         rows: 30,
@@ -102,25 +103,26 @@ const launch = (
   runTuimark(provider, signal, {} as Workspace, "build", undefined, [], deps);
 
 test("versions compare as a minimum, not as equality", () => {
-  expect(MIN_TUIMARK).toBe("0.4.5");
-  expect(versionAtLeast("0.4.5", "0.4.5")).toBe(true);
-  expect(versionAtLeast("0.4.6", "0.4.5")).toBe(true);
-  expect(versionAtLeast("0.5.0-dev", "0.4.5")).toBe(true);
-  expect(versionAtLeast("1.0.0", "0.4.5")).toBe(true);
-  expect(versionAtLeast("0.4.4", "0.4.5")).toBe(false);
-  expect(versionAtLeast("dev", "0.4.5")).toBe(false);
+  expect(MIN_TUIMARK).toBe("0.4.6");
+  expect(versionAtLeast("0.4.6", "0.4.6")).toBe(true);
+  expect(versionAtLeast("0.4.6-pre", "0.4.6")).toBe(true);
+  expect(versionAtLeast("0.4.7", "0.4.6")).toBe(true);
+  expect(versionAtLeast("0.5.0-dev", "0.4.6")).toBe(true);
+  expect(versionAtLeast("1.0.0", "0.4.6")).toBe(true);
+  expect(versionAtLeast("0.4.5", "0.4.6")).toBe(false);
+  expect(versionAtLeast("dev", "0.4.6")).toBe(false);
 });
 
 test("an old binary, or one that loads the document with errors, is refused with its path and version", async () => {
   const stdout = fakeStdout(true);
   const old = fakeSpawn({
-    version: "0.4.4",
-    diagnostics: [{ severity: "error", code: "V002", msg: "no props" }],
+    version: "0.4.5",
+    diagnostics: [{ severity: "error", code: "V001", msg: "no textarea" }],
   });
   await expect(
     launch({ spawn: old.spawn, resolve: async () => "/opt/tuimark", stdout }),
   ).rejects.toThrow(
-    /tuimark >= 0\.4\.5; \/opt\/tuimark is 0\.4\.4 and loads app\.tui with 1 error \(V002: no props\)/,
+    /tuimark >= 0\.4\.6; \/opt\/tuimark is 0\.4\.5 and loads app\.tui with 1 error \(V001: no textarea\)/,
   );
   expect(old.calls.closed).toBe(1);
   expect(stdout.written).toEqual([TERMINAL_RESET]);
@@ -136,16 +138,16 @@ test("an old binary, or one that loads the document with errors, is refused with
       resolve: async () => "/b/tuimark",
       stdout: fakeStdout(false),
     }),
-  ).rejects.toThrow(/\/b\/tuimark is 0\.4\.5 and loads app\.tui with 1 error/);
+  ).rejects.toThrow(/\/b\/tuimark is 0\.4\.6 and loads app\.tui with 1 error/);
 });
 
 test("readyProblem accepts a newer binary and ignores warnings", () => {
   expect(
-    readyProblem({ version: "0.4.6", diagnostics: [] }, "/b"),
+    readyProblem({ version: "0.4.7", diagnostics: [] }, "/b"),
   ).toBeUndefined();
   expect(
     readyProblem(
-      { version: "0.4.5", diagnostics: [{ severity: "warning" }] },
+      { version: "0.4.6", diagnostics: [{ severity: "warning" }] },
       "/b",
     ),
   ).toBeUndefined();
@@ -251,4 +253,15 @@ test("the turn is awaited before the launcher returns when the host dies mid-tur
   await done;
   expect(turnEnded).toBe(true);
   await finished;
+});
+
+test("findBinary returns the path, or the reason there is none, and never throws", async () => {
+  expect(await findBinary(async () => "/opt/tuimark")).toEqual({
+    bin: "/opt/tuimark",
+  });
+  expect(
+    await findBinary(async () => {
+      throw new Error("release v0.4.6 was not found");
+    }),
+  ).toEqual({ error: "release v0.4.6 was not found" });
 });

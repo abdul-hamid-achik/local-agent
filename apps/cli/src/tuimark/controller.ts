@@ -31,9 +31,6 @@ import {
   IDLE_THINKING,
   type LiveView,
   liveToolView,
-  streamingView,
-  type ThinkingView,
-  thinkingView,
   ViewBuilder,
 } from "#cli/tuimark/blocks";
 import {
@@ -58,12 +55,13 @@ import {
   PLACEHOLDER_BUSY,
   type Store,
 } from "#cli/tuimark/store";
+import { LiveStream } from "#cli/tuimark/stream";
 import { Transcript } from "#cli/tuimark/transcript";
 
 /** The part of the SDK's Host the client uses (a fake implements it in tests). */
 export type UiHost = Pick<Host, "on" | "batch" | "get">;
 
-type Write = { path: string; value: unknown };
+type Write = { path: string; value: unknown; op?: "set" | "append" };
 type RunAgent = (
   provider: Provider,
   messages: Message[],
@@ -110,6 +108,8 @@ function withSpeed(status: string, count: number, duration: number): string {
 
 /** The refused writes the client remembers. */
 const MAX_WRITE_ERRORS = 20;
+/** The messages the composer's history keeps. */
+const MAX_SENT = 200;
 
 export class TuimarkClient {
   private ui?: UiHost;
@@ -117,16 +117,21 @@ export class TuimarkClient {
   private readonly builder = new ViewBuilder();
   private readonly transcript: Transcript;
   private readonly history: Message[];
+  /** What the user sent, oldest first: up and down at the edge of the composer recall it. */
+  private readonly sent: string[] = [];
+  /** Where in `sent` the composer is, or undefined when it holds a fresh draft. */
+  private recall?: number;
+  /** The draft that recalling started from, back when the user comes down again. */
+  private recalledFrom = "";
   private intent: Intent;
   // the writer
   private tail: Promise<void> = Promise.resolve();
   /** Store writes the host refused (a path the markup does not read, a dead host). */
   readonly writeErrors: string[] = [];
-  // the live message
-  private liveText = "";
+  // the live message: the answer and the reasoning stream through `stream`,
+  // a tool call is one value of its own
+  private readonly stream = new LiveStream();
   private liveTool?: LiveView;
-  /** The reasoning of the current step; never part of the history. */
-  private thinkText = "";
   private dirty = false;
   private liveInFlight = false;
   private timer?: ReturnType<typeof setInterval>;
@@ -153,6 +158,8 @@ export class TuimarkClient {
     for (const message of this.history) {
       const view = this.builder.fromMessage(message);
       if (view) this.transcript.push(view);
+      if (message.role === "user" && message.content.trim())
+        this.sent.push(message.content);
     }
   }
 
@@ -172,6 +179,8 @@ export class TuimarkClient {
   attach(ui: UiHost): void {
     this.ui = ui;
     ui.on("send", (ev) => this.onSend(ev));
+    ui.on("history_prev", (ev) => this.recallPrev(ev));
+    ui.on("history_next", (ev) => this.recallNext(ev));
     ui.on("cancel", () => {
       this.turn?.abort();
     });
@@ -223,10 +232,14 @@ export class TuimarkClient {
 
   // ------------------------------------------------------------------ the writer
 
-  /** One serialized write. Never rejects: a refused write is recorded in `writeErrors`. */
-  private write(writes: Write[]): Promise<void> {
+  /**
+   * One serialized write. Never rejects: a refused write is recorded in
+   * `writeErrors` and resolves false.
+   */
+  private write(writes: Write[]): Promise<boolean> {
     const ui = this.ui;
-    if (!ui) return Promise.resolve();
+    if (!ui) return Promise.resolve(true);
+    let ok = true;
     const next = this.tail.then(async () => {
       let failure: string | undefined;
       try {
@@ -239,6 +252,7 @@ export class TuimarkClient {
         this.reportedWriteError = false;
         return;
       }
+      ok = false;
       this.writeErrors.push(failure);
       if (this.writeErrors.length > MAX_WRITE_ERRORS) this.writeErrors.shift();
       // Say so once on the status line, so a frozen view is not silent.
@@ -249,13 +263,13 @@ export class TuimarkClient {
       }
     });
     this.tail = next;
-    return next;
+    return next.then(() => ok);
   }
 
   /** Only the window of the transcript: the live message is left alone. */
-  private publishWindow(extra: Write[] = []): Promise<void> {
+  private async publishWindow(extra: Write[] = []): Promise<void> {
     const { messages, earlier } = this.transcript.snapshot();
-    return this.write([
+    await this.write([
       { path: "messages", value: messages },
       { path: "earlier", value: earlier },
       ...extra,
@@ -263,54 +277,57 @@ export class TuimarkClient {
   }
 
   /** The window plus the end of whatever was streaming: a later tick must not resend it. */
-  private publishMessages(extra: Write[] = []): Promise<void> {
-    this.liveText = "";
+  private async publishMessages(extra: Write[] = []): Promise<void> {
+    this.stream.reset();
     this.liveTool = undefined;
-    this.thinkText = "";
     this.dirty = false;
-    return this.publishWindow([
+    await this.publishWindow([
       { path: "live", value: IDLE_LIVE },
       { path: "thinking", value: IDLE_THINKING },
       ...extra,
     ]);
   }
 
-  private currentThinking(): ThinkingView {
-    // The block ends where the answer, or a tool call, begins.
-    return this.thinkText && !this.liveText && !this.liveTool
-      ? thinkingView(this.thinkText)
-      : IDLE_THINKING;
-  }
-
-  /** The writes that bring the live message and the thinking block up to date. */
+  /**
+   * The writes that bring the live message and the reasoning up to date: a tool
+   * call is one value; a reply is the stream's appends (see stream.ts).
+   */
   private liveWrites(): Write[] {
-    return [
-      { path: "live", value: this.currentLive() },
-      { path: "thinking", value: this.currentThinking() },
-    ];
+    if (this.liveTool) {
+      if (!this.dirty) return [];
+      this.dirty = false;
+      return [
+        { path: "live", value: this.liveTool },
+        { path: "thinking", value: IDLE_THINKING },
+      ];
+    }
+    return this.stream.drain();
   }
 
-  private currentLive(): LiveView {
-    if (this.liveTool) return this.liveTool;
-    return this.liveText ? streamingView(this.liveText) : IDLE_LIVE;
+  /** Writes what changed in the live message, and makes a refused write good. */
+  private async sendLive(): Promise<void> {
+    const writes = this.liveWrites();
+    if (writes.length === 0) return;
+    const ok = await this.write(writes);
+    if (ok) return;
+    // The store is not what the stream thinks it is: send it all again.
+    this.stream.markStale();
+    if (this.liveTool) this.dirty = true;
   }
 
   /** Flushes the live message if it changed and no flush is in flight. */
   private tick(): void {
-    if (!this.dirty || this.liveInFlight) return;
-    this.dirty = false;
+    if (this.liveInFlight) return;
+    if (!this.dirty && !this.stream.dirty) return;
     this.liveInFlight = true;
-    void this.write(this.liveWrites()).finally(() => {
+    void this.sendLive().finally(() => {
       this.liveInFlight = false;
     });
   }
 
   /** Test hook: flush the live message now and wait for the writer. */
   async flush(): Promise<void> {
-    if (this.dirty) {
-      this.dirty = false;
-      await this.write(this.liveWrites());
-    }
+    await this.sendLive();
     await this.tail;
   }
 
@@ -318,19 +335,57 @@ export class TuimarkClient {
 
   private async onSend(ev: HostEvent): Promise<void> {
     const raw = typeof ev.value === "string" ? ev.value : "";
+    // A command is one line: a pasted block that starts with a slash (a path, a
+    // regex) is a message.
+    const command = raw.trim();
+    const isCommand = command.startsWith("/") && !command.includes("\n");
     if (this.busy) {
-      if (raw.trim().startsWith("/"))
-        await this.write([{ path: "status", value: BUSY_STATUS }]);
+      if (isCommand) await this.write([{ path: "status", value: BUSY_STATUS }]);
       return;
     }
     if (!raw.trim()) return;
-    const command = raw.trim();
-    if (command.startsWith("/")) {
+    this.remember(raw);
+    if (isCommand) {
       await this.write([{ path: "draft", value: "" }]);
       await this.runCommand(command);
       return;
     }
     await this.beginTurn(raw);
+  }
+
+  // ------------------------------------------------------------------ the history
+
+  /** Adds a sent message to the history that up recalls; a repeat of the last is not added. */
+  private remember(text: string): void {
+    this.recall = undefined;
+    this.recalledFrom = "";
+    if (this.sent[this.sent.length - 1] !== text) this.sent.push(text);
+    if (this.sent.length > MAX_SENT) this.sent.shift();
+  }
+
+  /** `up` on the first line of the composer: the message sent before the one shown. */
+  private async recallPrev(ev: HostEvent): Promise<void> {
+    if (this.sent.length === 0) return;
+    if (this.recall === undefined) {
+      this.recalledFrom = typeof ev.value === "string" ? ev.value : "";
+      this.recall = this.sent.length;
+    }
+    if (this.recall === 0) return;
+    this.recall--;
+    await this.write([{ path: "draft", value: this.sent[this.recall] ?? "" }]);
+  }
+
+  /** `down` on the last line: the next message, and at the end the draft that was being written. */
+  private async recallNext(_ev: HostEvent): Promise<void> {
+    if (this.recall === undefined) return;
+    this.recall++;
+    if (this.recall >= this.sent.length) {
+      this.recall = undefined;
+      await this.write([{ path: "draft", value: this.recalledFrom }]);
+      this.recalledFrom = "";
+      return;
+    }
+    await this.write([{ path: "draft", value: this.sent[this.recall] ?? "" }]);
   }
 
   private async runCommand(command: string): Promise<void> {
@@ -463,9 +518,9 @@ export class TuimarkClient {
     this.busy = true;
     const request = new AbortController();
     this.turn = request;
-    this.liveText = "";
+    this.stream.reset();
     this.liveTool = undefined;
-    this.thinkText = "";
+    this.recall = undefined;
     this.evalCount = 0;
     this.evalDuration = 0;
     const message: Message = { role: "user", content: prompt };
@@ -524,12 +579,10 @@ export class TuimarkClient {
       })) {
         switch (event.type) {
           case "thinking":
-            this.thinkText += event.text;
-            this.dirty = true;
+            if (!this.liveTool) this.stream.pushThinking(event.text);
             break;
           case "text":
-            this.liveText += event.text;
-            this.dirty = true;
+            if (!this.liveTool) this.stream.pushText(event.text);
             break;
           case "message": {
             receivedMessage = true;
@@ -541,8 +594,7 @@ export class TuimarkClient {
           }
           case "tool_requested":
             toolName = event.name;
-            this.liveText = "";
-            this.thinkText = "";
+            this.stream.reset();
             this.liveTool = liveToolView(
               this.builder.takeCall(),
               event.name,
@@ -577,8 +629,6 @@ export class TuimarkClient {
             this.usedTokens = event.inputTokens + event.outputTokens;
             this.evalCount += event.evalCount ?? 0;
             this.evalDuration += event.evalDuration ?? 0;
-            // The next step starts with a clean reasoning block.
-            this.thinkText = "";
             break;
           default:
             break;

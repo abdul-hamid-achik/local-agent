@@ -29,6 +29,8 @@ jobs:
         working-directory: apps/cli
         run: |
           version="$(bun -e 'console.log(require("@thelacanians/tuimark/package.json").version)')"
+          # A pre-release tarball (0.4.6-pre) is built from the tag it precedes.
+          version="${version%%-*}"
           GOBIN="$RUNNER_TEMP/tuimark" go install "github.com/abdul-hamid-achik/tuimark/cmd/tuimark@v${version}"
           echo "TUIMARK_BINARY=$RUNNER_TEMP/tuimark/tuimark" >> "$GITHUB_ENV"
           "$RUNNER_TEMP/tuimark/tuimark" version
@@ -36,7 +38,7 @@ jobs:
       # (it does not skip) when the binary is missing.
       - run: bun run check
       - name: Install Glyphrun for Bun terminal contracts
-        run: go install github.com/abdul-hamid-achik/glyphrun/cmd/glyph@v0.20.0
+        run: go install github.com/abdul-hamid-achik/glyphrun/cmd/glyph@v0.23.0
       - name: Verify Bun terminal contract hashes
         run: |
           for spec in specs/bun/*.yml specs/tuimark/*.yml; do

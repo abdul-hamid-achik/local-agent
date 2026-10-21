@@ -10,12 +10,15 @@
 // keys the hints promise. The binary is TUIMARK_BINARY, else the SDK's own
 // resolution (cache, then a checked download of the pinned release).
 
-import { mkdir } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { resolveBinary } from "@thelacanians/tuimark";
 import {
+  DRAFT,
   EXACT_LINE,
   HIDDEN_LINE,
+  LONG_DRAFT,
   SAMPLES,
   WRAPPED_LINE,
 } from "#cli/tuimark/fixtures";
@@ -91,7 +94,10 @@ for (const [name, make] of Object.entries(SAMPLES)) {
 // dialog_cancel that esc must fire) is a failure.
 interface Expect {
   sample: string;
+  /** Space-separated play steps, or `steps` when a step holds a space or a line break. */
   input: string;
+  /** Explicit steps (`tuimark play --script`), used instead of `input`. */
+  steps?: object[];
   /** Every event the replay fires, in order. */
   actions: string[];
   /** The value of the first event. */
@@ -116,7 +122,64 @@ const plays: Expect[] = [
   },
   { sample: "sample", input: "esc", actions: ["cancel"] },
   { sample: "sample", input: "ctrl+c", actions: ["quit"] },
-  { sample: "sample", input: "ctrl+k", actions: ["palette_open"] },
+  // The composer: enter sends, shift+enter and alt+enter break the line, a paste
+  // keeps its breaks, and the message is one message.
+  {
+    sample: "sample",
+    input: "text:one shift+enter text:two enter",
+    actions: ["send"],
+    value: "one\ntwo",
+  },
+  {
+    sample: "sample",
+    input: "text:one alt+enter text:two enter",
+    actions: ["send"],
+    value: "one\ntwo",
+  },
+  {
+    sample: "sample",
+    input: "",
+    steps: [{ paste: "line one\nline two\r\nline three" }, { key: "enter" }],
+    actions: ["send"],
+    value: "line one\nline two\nline three",
+  },
+  { sample: "sample-draft", input: "enter", actions: ["send"], value: DRAFT },
+  // up and down fall through to the history rows on the first and last line only.
+  { sample: "sample", input: "up", actions: ["history_prev"], value: "" },
+  { sample: "sample", input: "down", actions: ["history_next"] },
+  { sample: "sample-draft", input: "up up", actions: [] },
+  {
+    sample: "sample-draft",
+    input: "up up up",
+    actions: ["history_prev"],
+    value: DRAFT,
+  },
+  { sample: "sample-draft", input: "down", actions: ["history_next"] },
+  // The status line offers the history keys where they would fire.
+  { sample: "sample-draft", input: "up up", actions: [], screen: ["history"] },
+  { sample: "sample-draft", input: "", actions: [], notScreen: ["history"] },
+  // A draft past eight rows scrolls with the caret.
+  {
+    sample: "sample-draft-long",
+    input: "",
+    actions: [],
+    screen: ["draft line 12"],
+    notScreen: ["draft line 4"],
+  },
+  {
+    sample: "sample-draft-long",
+    input: Array(11).fill("up").join(" "),
+    actions: [],
+    screen: ["draft line 1", "draft line 8"],
+    notScreen: ["draft line 12"],
+  },
+  {
+    sample: "sample-draft-long",
+    input: "enter",
+    actions: ["send"],
+    value: LONG_DRAFT,
+  },
+  { sample: "sample", input: "ctrl+p", actions: ["palette_open"] },
   { sample: "sample-approval", input: "y", actions: ["dialog_confirm"] },
   { sample: "sample-approval", input: "n", actions: ["dialog_cancel"] },
   { sample: "sample-approval", input: "esc", actions: ["dialog_cancel"] },
@@ -196,21 +259,36 @@ const plays: Expect[] = [
     value: "mode",
   },
   { sample: "sample-palette", input: "esc", actions: ["palette_close"] },
+  {
+    sample: "sample-help",
+    input: "",
+    actions: [],
+    screen: ["enter send", "shift/alt+enter new line", "↑/↓ history"],
+  },
   { sample: "sample-help", input: "q", actions: ["help_close"] },
   { sample: "sample-help", input: "esc", actions: ["help_close"] },
 ];
+const scratch = await mkdtemp(join(tmpdir(), "la-tuimark-check-"));
 for (const check of plays) {
+  let script: string[] = ["--input", check.input];
+  if (check.steps) {
+    const file = join(scratch, "steps.ndjson");
+    await writeFile(
+      file,
+      `${check.steps.map((step) => JSON.stringify(step)).join("\n")}\n`,
+    );
+    script = ["--script", file];
+  }
   const run = tuimark([
     "play",
     "app.tui",
     "--data",
     `samples/${check.sample}.json`,
-    "--input",
-    check.input,
+    ...script,
     "--format",
     "json",
   ]);
-  const label = `play ${check.sample} "${check.input.slice(0, 40)}"`;
+  const label = `play ${check.sample} "${(check.steps ? JSON.stringify(check.steps) : check.input).slice(0, 40)}"`;
   try {
     const result = JSON.parse(run.out) as {
       events: { action: string; value: unknown }[];
@@ -236,6 +314,8 @@ for (const check of plays) {
     failures.push(`${label}: ${run.err || run.out}`.trim());
   }
 }
+
+await rm(scratch, { recursive: true, force: true });
 
 // The command on line 240 of the long diff is reached by paging down.
 {

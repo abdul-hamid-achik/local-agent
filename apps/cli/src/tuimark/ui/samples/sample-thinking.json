@@ -226,25 +226,13 @@
       "running": false,
       "out": []
     },
-    "active": false
+    "active": false,
+    "tail": []
   },
   "thinking": {
     "on": true,
     "runs": [
-      {
-        "text": "I should read src/fetch.ts first to see how get() is written.",
-        "class": "think"
-      },
-      "\n",
-      {
-        "text": "Then wrap the call: three attempts, exponential backoff,",
-        "class": "think"
-      },
-      "\n",
-      {
-        "text": "and rethrow the last error so callers still see it.",
-        "class": "think"
-      }
+      "The user wants a retry around the fetch helper.\nI should read src/fetch.ts first to see how get() is written.\nThen wrap the call: three attempts, exponential backoff,\nand rethrow the last error so callers still see it."
     ]
   },
   "approval": {

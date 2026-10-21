@@ -3,12 +3,7 @@
 // change to a store shape shows up in the goldens instead of in a terminal.
 
 import type { ApprovalRequest, Message } from "@local-agent/runtime";
-import {
-  liveToolView,
-  streamingView,
-  thinkingView,
-  ViewBuilder,
-} from "#cli/tuimark/blocks";
+import { liveToolView, thinkingView, ViewBuilder } from "#cli/tuimark/blocks";
 import { filterPalette } from "#cli/tuimark/commands";
 import {
   APPROVAL_STATUS,
@@ -20,6 +15,7 @@ import {
   initialStore,
   type Store,
 } from "#cli/tuimark/store";
+import { streamingView } from "#cli/tuimark/stream";
 import { Transcript } from "#cli/tuimark/transcript";
 
 const provider = {
@@ -315,6 +311,25 @@ export function paletteSample(): Store {
   return store;
 }
 
+/** A three-line draft in the composer: it grows to three rows. */
+export const DRAFT = "first line\nsecond line\nthird line";
+export function draftSample(): Store {
+  const { store } = base();
+  store.draft = DRAFT;
+  return store;
+}
+
+/** A twelve-line draft: the composer stops at eight rows and scrolls, the caret at the end. */
+export const LONG_DRAFT = Array.from(
+  { length: 12 },
+  (_, i) => `draft line ${i + 1}`,
+).join("\n");
+export function longDraftSample(): Store {
+  const { store } = base();
+  store.draft = LONG_DRAFT;
+  return store;
+}
+
 /** The help overlay. */
 export function helpSample(): Store {
   const { store } = base();
@@ -334,4 +349,6 @@ export const SAMPLES = {
   "sample-streaming": streamingSample,
   "sample-palette": paletteSample,
   "sample-help": helpSample,
+  "sample-draft": draftSample,
+  "sample-draft-long": longDraftSample,
 } as const;

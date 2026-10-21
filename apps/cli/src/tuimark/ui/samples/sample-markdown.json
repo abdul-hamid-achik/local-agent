@@ -299,7 +299,8 @@
       "running": false,
       "out": []
     },
-    "active": false
+    "active": false,
+    "tail": []
   },
   "thinking": {
     "on": false,

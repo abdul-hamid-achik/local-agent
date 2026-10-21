@@ -28,4 +28,4 @@ Done. The helper now retries three times.
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║ Message the model                                                            ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
- Ready · /help for commands   esc cancel  ^K commands  ctrl+c quit  ^O earlier  
+ Ready · /help for commands   esc cancel  ^P commands  ctrl+c quit  ↑/↓ history 

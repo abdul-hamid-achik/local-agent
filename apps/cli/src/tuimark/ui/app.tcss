@@ -53,7 +53,8 @@
 .la-lang { color: $muted; dim: true; }
 .la-codetext, .la-out, .la-think { height: auto; }
 .la-think-head { color: $muted; dim: true; }
-.la-think { padding: 0 0 0 2; }
+.la-think { padding: 0 0 0 2; color: $muted; italic: true; dim: true; }
+.la-thinkbox { height: auto; max-height: 3; width: 1fr; }
 #thinking { margin: 0 0 1 0; }
 
 /* Inline runs (blocks.ts inlineRuns) and code tokens: a span is styled by the
@@ -77,7 +78,8 @@ span.err { color: $danger; bold: true; }
 .la-tool.warn { border-color: $warn; }
 .la-tool-head { height: 1; gap: 1; }
 
-#composer { width: 1fr; height: 3; border: rounded; border-color: $border; padding: 0 1; }
+/* One row to eight (max-height counts the border), then it scrolls and shows a thumb. */
+#composer { width: 1fr; max-height: 10; border: rounded; border-color: $border; padding: 0 1; scrollbar: auto; }
 #composer:focus { border: double; border-color: $focus; }
 .la-earlier { height: 1; color: $muted; }
 .la-earlier:focus { color: $accent; }

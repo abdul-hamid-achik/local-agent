@@ -229,7 +229,20 @@
         "runs": [
           "Here is the plan:"
         ]
-      },
+      }
+    ],
+    "card": {
+      "name": "",
+      "status": "",
+      "args": "",
+      "ok": false,
+      "bad": false,
+      "warn": false,
+      "running": false,
+      "out": []
+    },
+    "active": true,
+    "tail": [
       {
         "id": "l1",
         "para": false,
@@ -273,18 +286,7 @@
           " fetch(url);"
         ]
       }
-    ],
-    "card": {
-      "name": "",
-      "status": "",
-      "args": "",
-      "ok": false,
-      "bad": false,
-      "warn": false,
-      "running": false,
-      "out": []
-    },
-    "active": true
+    ]
   },
   "thinking": {
     "on": false,

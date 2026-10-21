@@ -226,7 +226,8 @@
       "running": true,
       "out": []
     },
-    "active": true
+    "active": true,
+    "tail": []
   },
   "thinking": {
     "on": false,

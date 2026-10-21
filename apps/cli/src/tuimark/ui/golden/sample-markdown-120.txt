@@ -28,4 +28,4 @@ Use fetchRetry for every call, and a stray 2 * 3 * 4 or snake_case_name stays as
 ╔══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
 ║ Message the model                                                                                                    ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
- Ready · /help for commands   esc cancel  ^K commands  ctrl+c quit  ^O earlier  pgup/pgdn scroll                        
+ Ready · /help for commands   esc cancel  ^P commands  ctrl+c quit  ↑/↓ history  ^O earlier  pgup/pgdn scroll           

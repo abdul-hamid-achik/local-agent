@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "local-agent": "./launcher.ts"
+  },
   "scripts": {
     "dev": "bun src/main.ts",
     "build": "bun build src/main.ts --target=bun --packages=external --splitting --outdir=dist --entry-naming=main.mjs"
@@ -10,7 +13,7 @@
   "dependencies": {
     "@local-agent/runtime": "workspace:*",
     "@local-agent/vue-tui": "workspace:*",
-    "@thelacanians/tuimark": "file:../../vendor/tuimark/thelacanians-tuimark-0.4.5.tgz",
+    "@thelacanians/tuimark": "file:../../vendor/tuimark/thelacanians-tuimark-0.4.6-pre.tgz",
     "vue": "3.5.42"
   },
   "imports": {

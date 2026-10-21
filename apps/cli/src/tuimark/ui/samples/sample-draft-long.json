@@ -1,0 +1,283 @@
+{
+  "header": {
+    "provider": "Ollama / loopback",
+    "model": "qwen3-coder:30b",
+    "mode": "build",
+    "session": "session a1b2c3d",
+    "ctx_label": "9.6k/32k",
+    "ctx_pct": 30
+  },
+  "messages": [
+    {
+      "id": "m0",
+      "is_user": true,
+      "is_asst": false,
+      "is_tool": false,
+      "blocks": [
+        {
+          "id": "b0",
+          "para": true,
+          "head": false,
+          "quote": false,
+          "item": false,
+          "code": false,
+          "nest": false,
+          "marker": "",
+          "lang": "",
+          "runs": [
+            "Add a retry to the fetch helper and show me the result."
+          ]
+        }
+      ],
+      "card": {
+        "name": "",
+        "status": "",
+        "args": "",
+        "ok": false,
+        "bad": false,
+        "warn": false,
+        "running": false,
+        "out": []
+      }
+    },
+    {
+      "id": "m1",
+      "is_user": false,
+      "is_asst": true,
+      "is_tool": false,
+      "blocks": [
+        {
+          "id": "b0",
+          "para": true,
+          "head": false,
+          "quote": false,
+          "item": false,
+          "code": false,
+          "nest": false,
+          "marker": "",
+          "lang": "",
+          "runs": [
+            "Sure. I will wrap the call in a bounded retry with backoff:"
+          ]
+        },
+        {
+          "id": "b1",
+          "para": false,
+          "head": false,
+          "quote": false,
+          "item": false,
+          "code": true,
+          "nest": false,
+          "marker": "",
+          "lang": "ts",
+          "runs": [
+            {
+              "text": "export",
+              "class": "kw"
+            },
+            " ",
+            {
+              "text": "async",
+              "class": "kw"
+            },
+            " ",
+            {
+              "text": "function",
+              "class": "kw"
+            },
+            " fetchRetry(url, tries = ",
+            {
+              "text": "3",
+              "class": "num"
+            },
+            ") {\n  ",
+            {
+              "text": "// exponential backoff",
+              "class": "com"
+            },
+            "\n  ",
+            {
+              "text": "for",
+              "class": "kw"
+            },
+            " (",
+            {
+              "text": "let",
+              "class": "kw"
+            },
+            " attempt = ",
+            {
+              "text": "1",
+              "class": "num"
+            },
+            "; ; attempt++) {\n    ",
+            {
+              "text": "try",
+              "class": "kw"
+            },
+            " { ",
+            {
+              "text": "return",
+              "class": "kw"
+            },
+            " ",
+            {
+              "text": "await",
+              "class": "kw"
+            },
+            " fetch(url); }\n    ",
+            {
+              "text": "catch",
+              "class": "kw"
+            },
+            " (e) { ",
+            {
+              "text": "if",
+              "class": "kw"
+            },
+            " (attempt === tries) ",
+            {
+              "text": "throw",
+              "class": "kw"
+            },
+            " e; }\n  }\n}"
+          ]
+        }
+      ],
+      "card": {
+        "name": "",
+        "status": "",
+        "args": "",
+        "ok": false,
+        "bad": false,
+        "warn": false,
+        "running": false,
+        "out": []
+      }
+    },
+    {
+      "id": "m2",
+      "is_user": false,
+      "is_asst": false,
+      "is_tool": true,
+      "blocks": [],
+      "card": {
+        "name": "edit",
+        "status": "succeeded",
+        "args": "src/fetch.ts",
+        "ok": true,
+        "bad": false,
+        "warn": false,
+        "running": false,
+        "out": [
+          "Updated src/fetch.ts. Verification has not been run."
+        ]
+      }
+    },
+    {
+      "id": "m3",
+      "is_user": false,
+      "is_asst": true,
+      "is_tool": false,
+      "blocks": [
+        {
+          "id": "b0",
+          "para": true,
+          "head": false,
+          "quote": false,
+          "item": false,
+          "code": false,
+          "nest": false,
+          "marker": "",
+          "lang": "",
+          "runs": [
+            "Done. The helper now retries three times."
+          ]
+        }
+      ],
+      "card": {
+        "name": "",
+        "status": "",
+        "args": "",
+        "ok": false,
+        "bad": false,
+        "warn": false,
+        "running": false,
+        "out": []
+      }
+    }
+  ],
+  "earlier": {
+    "n": 0
+  },
+  "live": {
+    "id": "live",
+    "is_user": false,
+    "is_asst": true,
+    "is_tool": false,
+    "blocks": [],
+    "card": {
+      "name": "",
+      "status": "",
+      "args": "",
+      "ok": false,
+      "bad": false,
+      "warn": false,
+      "running": false,
+      "out": []
+    },
+    "active": false,
+    "tail": []
+  },
+  "thinking": {
+    "on": false,
+    "runs": []
+  },
+  "approval": {
+    "open": false,
+    "title": "",
+    "body": "",
+    "danger": false,
+    "no": "Deny",
+    "yes": "Allow",
+    "truncated": false,
+    "lines": []
+  },
+  "palette": {
+    "open": false,
+    "query": "",
+    "cur": "mode-plan"
+  },
+  "found": {
+    "any": true,
+    "items": [
+      {
+        "id": "mode-plan",
+        "label": "Mode: plan (read only)",
+        "hint": "/mode plan"
+      },
+      {
+        "id": "mode-build",
+        "label": "Mode: build (read, edit, command)",
+        "hint": "/mode build"
+      },
+      {
+        "id": "mcp",
+        "label": "MCP servers",
+        "hint": "/mcp"
+      },
+      {
+        "id": "help",
+        "label": "Help and keys",
+        "hint": "/help"
+      }
+    ]
+  },
+  "help": {
+    "open": false
+  },
+  "draft": "draft line 1\ndraft line 2\ndraft line 3\ndraft line 4\ndraft line 5\ndraft line 6\ndraft line 7\ndraft line 8\ndraft line 9\ndraft line 10\ndraft line 11\ndraft line 12",
+  "placeholder": "Message the model",
+  "busy": false,
+  "status": "Ready · /help for commands"
+}

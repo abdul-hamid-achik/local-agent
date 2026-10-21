@@ -1,9 +1,10 @@
 <!--
-  local-agent, fullscreen client on Tuimark. Opt-in: the ui flag set to tuimark.
+  local-agent, fullscreen client on Tuimark (the default client on macOS and Linux).
 
   The store this document reads is built by ../store.ts; every flag is always
   present because the markup has no equality test. Actions are implemented by
   ../controller.ts. The kit (kit/) is vendored from Tuimark v0.4.5, unmodified.
+  Needs tuimark 0.4.6: <textarea> and the append write.
 
   Cards are templates:
     la-message  props label; slot: the body            (user and assistant)
@@ -33,11 +34,20 @@
   </keymap>
   <keymap>
     <bind keys="esc" action="cancel" label="cancel"/>
-    <bind keys="ctrl+k" action="palette_open" keycap="^K" label="commands"/>
+    <bind keys="ctrl+p" action="palette_open" keycap="^P" label="commands"/>
     <bind keys="ctrl+c" action="quit" label="quit"/>
+    <!-- The composer takes up and down inside a draft; on its first and last line
+         they fall through to these rows, which recall what was sent. -->
+    <bind keys="up" action="history_prev" when="#composer:focus" label="history" keycap="↑/↓"/>
+    <bind keys="down" action="history_next" when="#composer:focus"/>
     <bind keys="ctrl+o" action="load_earlier" keycap="^O" label="earlier"/>
     <bind keys="pgup" action="move-page-up" to="#log" label="scroll" keycap="pgup/pgdn"/>
     <bind keys="pgdn" action="move-page-down" to="#log"/>
+    <!-- The keys the composer itself takes. It consumes them before the keymap, so
+         these rows never fire: they are here so that the help lists them, and
+         `when` keeps them out of the status line. -->
+    <bind keys="enter" action="focus" to="#composer" when="#composer:focus" label="send" keycap="enter"/>
+    <bind keys="shift+enter,alt+enter" action="focus" to="#composer" when="#composer:focus" label="new line" keycap="shift/alt+enter"/>
   </keymap>
   <!-- A modal traps the keymap: what must also work under one is repeated here. -->
   <keymap when="modal">
@@ -115,17 +125,29 @@
         <col id="rows" each="messages as m" key="m.id">
           <use template="la-turn" with="m as msg"/>
         </col>
+        <!-- The in-flight message. A reply is live.blocks (final, appended to) and
+             live.tail (the block being written); a tool call is live.card. -->
         <col id="live" if="live.active">
-          <use template="la-turn" with="live as msg"/>
+          <use template="la-message" label="Assistant" class="asst" if="live.is_asst">
+            <use template="la-blocks" with="live.blocks as blocks"/>
+            <use template="la-blocks" with="live.tail as blocks"/>
+          </use>
+          <use template="la-tool" if="live.is_tool" with="live.card as t">
+            <text class="la-out" runs="live.card.out" wrap="pre-wrap"/>
+          </use>
         </col>
-        <!-- The model's reasoning: its last three lines, dim, until the answer starts. -->
+        <!-- The model's reasoning, dim, until the answer starts: the stream appends to
+             thinking.runs and the scroll shows the last three rows of it. -->
         <col id="thinking" if="thinking.on">
           <text class="la-think-head">Thinking…</text>
-          <text class="la-think" runs="thinking.runs" wrap="pre-wrap"/>
+          <scroll id="think" class="la-thinkbox" stick="bottom">
+            <text class="la-think" runs="thinking.runs" wrap="pre-wrap"/>
+          </scroll>
         </col>
       </scroll>
 
-      <input id="composer" bind="draft" placeholder="{placeholder}" on:submit="send"/>
+      <!-- enter sends; shift+enter, alt+enter and a pasted block keep their line breaks. -->
+      <textarea id="composer" bind="draft" placeholder="{placeholder}" on:submit="send"/>
 
       <row id="status" class="k-statusbar">
         <progress indeterminate="true" if="busy" class="la-spin"/>
