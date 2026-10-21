@@ -25,9 +25,10 @@ jobs:
         with:
           go-version: "1.26.6"
           cache: false
-      - name: Install the tuimark binary pinned by apps/cli/package.json
+      - name: Install the tuimark binary that matches the vendored SDK
+        working-directory: apps/cli
         run: |
-          version="$(bun -e 'console.log(require("./apps/cli/package.json").dependencies["@thelacanians/tuimark"])')"
+          version="$(bun -e 'console.log(require("@thelacanians/tuimark/package.json").version)')"
           GOBIN="$RUNNER_TEMP/tuimark" go install "github.com/abdul-hamid-achik/tuimark/cmd/tuimark@v${version}"
           echo "TUIMARK_BINARY=$RUNNER_TEMP/tuimark/tuimark" >> "$GITHUB_ENV"
           "$RUNNER_TEMP/tuimark/tuimark" version
