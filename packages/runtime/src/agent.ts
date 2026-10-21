@@ -38,12 +38,19 @@ const optionalText = (max: number) =>
     .max(max)
     .nullish()
     .transform((value) => value || undefined);
-const ListArgs = z.strictObject({ path: optionalText(4096) });
-const SearchArgs = z.strictObject({
+const flag = z
+  .union([
+    z.boolean(),
+    z.enum(["true", "false"]).transform((value) => value === "true"),
+  ])
+  .nullish();
+// The read-only tools ignore keys they do not know (`recursive`, ...) instead of failing the call.
+const ListArgs = z.object({ path: optionalText(4096) });
+const SearchArgs = z.object({
   pattern: z.string().min(1).max(500),
   path: optionalText(4096),
-  regex: z.boolean().nullish(),
-  ignore_case: z.boolean().nullish(),
+  regex: flag,
+  ignore_case: flag,
 });
 const CommandArgs = z.strictObject({
   // An array, or (from a small model) a command line that is split without a shell.

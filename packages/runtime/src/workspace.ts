@@ -656,7 +656,11 @@ function matcher(
   if (options.regex) {
     let expression: RegExp;
     try {
-      expression = new RegExp(pattern, options.ignoreCase ? "iu" : "u");
+      // grep-style `a\|b` means alternation here too.
+      expression = new RegExp(
+        pattern.replaceAll("\\|", "|"),
+        options.ignoreCase ? "i" : "",
+      );
     } catch (error) {
       throw new Error(
         `Invalid regular expression: ${error instanceof Error ? error.message : "syntax error"}`,

@@ -79,7 +79,7 @@ try {
   if (values.help) {
     console.log(`Bun Local Agent — experimental agent
 
-bun dev [--model MODEL] [--mode fullscreen|inline|headless] [--ui vue|tuimark] [-p PROMPT] [--json]
+bun dev [--model MODEL (default: ${DEFAULT_OLLAMA_MODEL})] [--mode fullscreen|inline|headless] [--ui vue|tuimark] [-p PROMPT] [--json]
   --model MODEL        Ollama model (default: ${DEFAULT_OLLAMA_MODEL}, or LOCAL_AGENT_MODEL);
                        Chalupa keeps the model of its profile
   --think on|off       Turn the model's thinking on or off (or LOCAL_AGENT_THINK=1|0);

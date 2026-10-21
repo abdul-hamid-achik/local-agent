@@ -134,7 +134,10 @@ test("list and search need no approval; write and run_command do, and show what 
     [
       { name: "list", arguments: {} },
       { name: "list", arguments: { path: "src" } },
-      { name: "search", arguments: { pattern: "mean" } },
+      {
+        name: "search",
+        arguments: { pattern: "mean", regex: "false", recursive: true },
+      },
       { name: "read", arguments: { path: "/src/stats.ts" } },
       {
         name: "write",

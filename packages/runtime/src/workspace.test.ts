@@ -326,6 +326,12 @@ test("search finds literal and regular-expression matches as path:line: text, wi
     "src/text.ts:1: export function slugify(s) {",
   );
   expect(await workspace.search("nothing here")).toBe("No matches");
+  expect(
+    await workspace.search("slugify\\|SLUGIFY", {
+      regex: true,
+      path: "src/use.ts",
+    }),
+  ).toContain("src/use.ts:2: SLUGIFY();");
   await expect(workspace.search("(", { regex: true })).rejects.toThrow(
     "Invalid regular expression",
   );
