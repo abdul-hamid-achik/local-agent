@@ -48,17 +48,21 @@ import {
 import {
   APPROVAL_STATUS,
   APPROVAL_TRUNCATED_STATUS,
+  APPROVAL_UNARMED_STATUS,
   APPROVAL_WAIT_STATUS,
   approvalState,
   BUSY_STATUS_LINE,
+  CtxMeter,
   contextLabel,
   contextPct,
+  ctxFlags,
   idleStatus,
   initialStore,
   noApproval,
   PLACEHOLDER,
   PLACEHOLDER_BUSY,
   type Store,
+  WAITING_STATUS,
 } from "#cli/tuimark/store";
 import { LiveStream } from "#cli/tuimark/stream";
 import { Transcript } from "#cli/tuimark/transcript";
@@ -101,6 +105,8 @@ export interface ClientOptions {
   columns?: () => number;
   /** How long a new approval dialog ignores `y`. Default APPROVAL_ARM_MS. */
   armMs?: number;
+  /** Clock for the busy status's elapsed time. Default Date.now. */
+  now?: () => number;
 }
 
 /**
@@ -118,6 +124,13 @@ function oneLine(message: string): string {
 function withSpeed(status: string, count: number, duration: number): string {
   const speed = tokensPerSecond(count, duration);
   return speed ? `${status} · ${speed}` : status;
+}
+
+/** Elapsed seconds as the busy status shows them: `12s`, then `1m 05s`. */
+export function formatElapsed(totalSeconds: number): string {
+  const s = Math.max(0, Math.floor(totalSeconds));
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
 }
 
 /** The refused writes the client remembers. */
@@ -166,7 +179,20 @@ export class TuimarkClient {
   private armed = false;
   private armTimer?: ReturnType<typeof setTimeout>;
   private proposal?: ApprovalRequest;
-  private usedTokens = 0;
+  /** The header ctx meter (see CtxMeter for the exact accumulation rule). */
+  private readonly ctx = new CtxMeter();
+  /** One message sent while busy, run when the turn ends. A new send replaces it. */
+  private queued?: string;
+  /** Esc dropped the queue with the cancel: the final status says both. */
+  private cancelDroppedQueue = false;
+  /** Quit was answered: a queued message must not start after it. */
+  private quitting = false;
+  /** What the busy status names: waiting, generating, or the last tool result. */
+  private activity = WAITING_STATUS;
+  /** When the running turn started (the `now` clock), for the elapsed suffix. */
+  private turnStartedAt = 0;
+  /** The elapsed second last written, so the ticker writes about once a second. */
+  private elapsedShown = -1;
   /** Ollama's generation counters, summed over the steps of a turn (nanoseconds). */
   private evalCount = 0;
   private evalDuration = 0;
@@ -213,9 +239,33 @@ export class TuimarkClient {
     ui.on("history_prev", (ev) => this.recallPrev(ev));
     ui.on("history_next", (ev) => this.recallNext(ev));
     ui.on("cancel", () => {
+      // Esc cancels the turn and drops the queue with it.
+      if (this.queued !== undefined) {
+        this.queued = undefined;
+        this.cancelDroppedQueue = true;
+      }
       this.turn?.abort();
     });
-    ui.on("quit", async () => {
+    // The binds name this `quit_request`, not `quit`: `quit` is an engine
+    // built-in that ends the session itself and never reaches the parent,
+    // so a handler for it would never run (proven against the real host).
+    // Answering "quit" from here is what ends the session.
+    ui.on("quit_request", async () => {
+      // Two stages: a non-empty draft is cleared first; only an empty
+      // composer quits (mid-turn included, as before).
+      const draft = await ui
+        .get("draft")
+        .then((result) => result.value)
+        .catch(() => "");
+      if (typeof draft === "string" && draft !== "") {
+        await this.write([
+          { path: "draft", value: "" },
+          { path: "status", value: "Draft cleared · ctrl+c again to quit" },
+        ]);
+        return undefined;
+      }
+      this.quitting = true;
+      this.queued = undefined;
       // Inline, the partial reply is printed before the session ends: once
       // "quit" is returned the host is gone and nothing can be committed.
       if (this.inline) await this.commitStreamTail();
@@ -223,9 +273,13 @@ export class TuimarkClient {
       return "quit";
     });
     ui.on("load_earlier", () => this.loadEarlier());
-    ui.on("dialog_confirm", () =>
-      this.armed ? this.decide?.(true) : undefined,
-    );
+    ui.on("dialog_confirm", async () => {
+      if (this.armed) return this.decide?.(true);
+      // An unarmed `y` is still swallowed, but not silently.
+      if (this.decide)
+        await this.write([{ path: "status", value: APPROVAL_UNARMED_STATUS }]);
+      return undefined;
+    });
     ui.on("dialog_cancel", () => this.decide?.(false));
     ui.on("palette_open", () => this.paletteOpen());
     ui.on("palette_query", (ev) => this.paletteQuery(ev));
@@ -389,6 +443,7 @@ export class TuimarkClient {
       is_user: false,
       is_asst: true,
       is_tool: false,
+      is_notice: false,
       blocks,
       card: NO_CARD,
     };
@@ -505,8 +560,61 @@ export class TuimarkClient {
     if (this.inline && !this.liveTool) await this.commitFinals();
   }
 
+  private now(): number {
+    return this.options.now?.() ?? Date.now();
+  }
+
+  /** The busy status: the activity, its elapsed time, and a queued send. */
+  private busyStatus(): string {
+    const seconds = Math.floor((this.now() - this.turnStartedAt) / 1000);
+    this.elapsedShown = seconds;
+    const queued = this.queued !== undefined ? " · 1 queued" : "";
+    return `${this.activity} · ${formatElapsed(seconds)}${queued}`;
+  }
+
+  /** The writes that paint the header ctx for `used` tokens. */
+  private ctxWrites(used: number): Write[] {
+    const size = this.options.provider.context_size;
+    const pct = contextPct(used, size);
+    const flags = ctxFlags(pct);
+    return [
+      { path: "header.ctx_label", value: contextLabel(used, size) },
+      { path: "header.ctx_pct", value: pct },
+      { path: "header.ctx_warn", value: flags.warn },
+      { path: "header.ctx_danger", value: flags.danger },
+    ];
+  }
+
+  /**
+   * Names what the busy status shows: the first text/thinking/tool event of
+   * the turn turns waiting into generating, and a tool result names itself
+   * until the next event. An open approval owns the status line, so it wins:
+   * the activity is remembered but not written over it. Not awaited by the
+   * event loop: the write serializes on the writer's tail like every other,
+   * and event processing must not pause for a status paint (an abort that
+   * lands in such a pause can pass a generator still suspended at its yield).
+   */
+  private noteActivity(activity = BUSY_STATUS_LINE): void {
+    if (this.activity === activity) return;
+    this.activity = activity;
+    if (!this.decide)
+      void this.write([{ path: "status", value: this.busyStatus() }]);
+  }
+
+  /**
+   * Rewrites the busy status when its elapsed second changes (about once a
+   * second, from the flush timer). Idle and approval-pending write nothing.
+   */
+  private async maybeElapsed(): Promise<void> {
+    if (!this.busy || this.decide) return;
+    const seconds = Math.floor((this.now() - this.turnStartedAt) / 1000);
+    if (seconds === this.elapsedShown) return;
+    await this.write([{ path: "status", value: this.busyStatus() }]);
+  }
+
   /** Flushes the live message if it changed and no flush is in flight. */
   private tick(): void {
+    void this.maybeElapsed();
     if (this.liveInFlight) return;
     if (!this.dirty && !this.stream.dirty) return;
     this.liveInFlight = true;
@@ -517,6 +625,7 @@ export class TuimarkClient {
 
   /** Test hook: flush the live message now and wait for the writer. */
   async flush(): Promise<void> {
+    await this.maybeElapsed();
     await this.sendLive();
     await this.tail;
   }
@@ -530,7 +639,31 @@ export class TuimarkClient {
     const command = raw.trim();
     const isCommand = command.startsWith("/") && !command.includes("\n");
     if (this.busy) {
-      if (isCommand) await this.write([{ path: "status", value: BUSY_STATUS }]);
+      if (isCommand) {
+        await this.write([{ path: "status", value: BUSY_STATUS }]);
+        return;
+      }
+      if (!raw.trim()) return;
+      // A queue of one: this send runs when the turn ends (after an error
+      // too — it is the user's latest intent), and a further send replaces
+      // it. It joins the draft history now; its view is only shown (inline:
+      // committed) when it actually starts.
+      const replaced = this.queued !== undefined;
+      this.queued = raw;
+      this.remember(raw);
+      const firstLine = clip(
+        terminalText(raw).split("\n")[0]?.trim() ?? "",
+        60,
+      );
+      await this.write([
+        { path: "draft", value: "" },
+        {
+          path: "status",
+          value: replaced
+            ? `Queued message replaced: ${firstLine}`
+            : `Queued: ${firstLine}`,
+        },
+      ]);
       return;
     }
     if (!raw.trim()) return;
@@ -672,6 +805,9 @@ export class TuimarkClient {
         this.decide = undefined;
         this.armed = false;
         this.proposal = undefined;
+        // The verdict is the activity until the next event, so the elapsed
+        // ticker keeps it (with its suffix) instead of overwriting it.
+        this.activity = allowed ? "Approved" : "Denied";
         resolve(allowed);
         await this.write([
           { path: "approval", value: noApproval() },
@@ -737,6 +873,11 @@ export class TuimarkClient {
     this.recall = undefined;
     this.evalCount = 0;
     this.evalDuration = 0;
+    this.ctx.beginTurn();
+    this.activity = WAITING_STATUS;
+    this.turnStartedAt = this.now();
+    this.elapsedShown = -1;
+    this.cancelDroppedQueue = false;
     const message: Message = { role: "user", content: prompt };
     this.history.push(message);
     const view = this.builder.fromMessage(message);
@@ -766,19 +907,27 @@ export class TuimarkClient {
       // Inline, the prompt is printed as it is sent; the region keeps no copy.
       if (this.inline && userView) await this.commitView(userView);
       await this.publishMessages([
-        // The welcome goes with the first message and never returns: a failed
-        // turn may pop the prompt back out, but `empty` is never written true again.
+        // The welcome goes with the first message and never returns.
         { path: "empty", value: false },
         { path: "draft", value: "" },
         { path: "busy", value: true },
         { path: "placeholder", value: PLACEHOLDER_BUSY },
-        { path: "status", value: BUSY_STATUS_LINE },
+        { path: "status", value: this.busyStatus() },
       ]);
     } finally {
       published();
     }
     this.timer = setInterval(() => this.tick(), this.options.flushMs ?? 33);
     await this.loop(prompt, request);
+    // A send queued while busy runs now, after success and after an error
+    // alike (it is the user's latest intent); esc and quit already dropped
+    // it, and a process-level abort makes a new turn impossible.
+    const next = this.queued;
+    this.queued = undefined;
+    if (next !== undefined && !this.quitting && !this.options.signal.aborted) {
+      await this.beginTurn(next);
+      await this.turnDone;
+    }
   }
 
   private async loop(prompt: string, request: AbortController): Promise<void> {
@@ -786,6 +935,8 @@ export class TuimarkClient {
     let receivedMessage = false;
     let status = idleStatus(mcp?.length ?? 0);
     let toolName = "";
+    /** A failed turn's notice view, committed (inline) in the finally below. */
+    let notice: MessageView | undefined;
     try {
       const turnSignal = AbortSignal.any([signal, request.signal]);
       // A turn aborted before it started (a signal while its first write was
@@ -801,9 +952,11 @@ export class TuimarkClient {
       })) {
         switch (event.type) {
           case "thinking":
+            this.noteActivity();
             if (!this.liveTool) this.stream.pushThinking(event.text);
             break;
           case "text":
+            this.noteActivity();
             if (!this.liveTool) this.stream.pushText(event.text);
             break;
           case "message": {
@@ -822,6 +975,7 @@ export class TuimarkClient {
             break;
           }
           case "tool_requested":
+            this.noteActivity();
             toolName = event.name;
             // Inline, the text before the tool call is printed before the
             // stream is dropped for the tool card (and kept if refused).
@@ -838,6 +992,7 @@ export class TuimarkClient {
             this.dirty = true;
             break;
           case "tool_start":
+            this.noteActivity();
             if (this.liveTool) {
               this.liveTool = {
                 ...this.liveTool,
@@ -851,42 +1006,66 @@ export class TuimarkClient {
             }
             break;
           case "tool_result":
-            await this.write([
-              {
-                path: "status",
-                value: terminalText(
-                  `${event.name || toolName}: ${event.status}`,
-                ),
-              },
-            ]);
+            // The result names the busy status (with its elapsed suffix)
+            // until the next event, as it did before the ticker existed.
+            this.noteActivity(
+              terminalText(`${event.name || toolName}: ${event.status}`),
+            );
             break;
-          case "done":
-            this.usedTokens = event.inputTokens + event.outputTokens;
+          case "done": {
+            // The header ctx moves during the turn, on every usage-bearing
+            // event (see CtxMeter for the max-within-the-turn rule).
+            const shown = this.ctx.observe(
+              event.inputTokens + event.outputTokens,
+            );
+            await this.write(this.ctxWrites(shown));
             this.evalCount += event.evalCount ?? 0;
             this.evalDuration += event.evalDuration ?? 0;
             break;
+          }
           default:
             break;
         }
       }
       status = withSpeed(status, this.evalCount, this.evalDuration);
     } catch (error) {
+      const aborted = request.signal.aborted;
       // Keep completed messages and tool receipts even when a later request fails.
-      if (!session) {
-        if (!receivedMessage) {
-          this.history.pop();
-          this.transcript.pop();
-          // The host may be gone already (ctrl+c mid-turn): keep going to the cleanup.
-          const draft = await this.ui
-            ?.get("draft")
-            .then((result) => result.value)
-            .catch(() => "gone");
-          if (!draft) await this.write([{ path: "draft", value: prompt }]);
-        }
+      if (!session && !receivedMessage) {
+        // Model history only: with no session nothing is durable, so the
+        // prompt leaves the model's history and a re-send cannot duplicate
+        // it. (With a session the runtime checkpointed it before inference,
+        // so it stays, exactly as the durable state has it.) The transcript
+        // is a different matter: a cancelled turn takes its prompt back (it
+        // returns to the draft below), but a FAILED turn's prompt stays
+        // visible next to its error notice — and inline it is already in
+        // the scrollback either way.
+        this.history.pop();
+        if (aborted) this.transcript.pop();
+        // The host may be gone already (ctrl+c mid-turn): keep going to the
+        // cleanup. A draft typed during the turn is never overwritten, and
+        // a queued send (which cleared the draft for its own turn) is the
+        // user's newer intent: the prompt is still in the draft history.
+        const draft = await this.ui
+          ?.get("draft")
+          .then((result) => result.value)
+          .catch(() => "gone");
+        if (!draft && this.queued === undefined)
+          await this.write([{ path: "draft", value: prompt }]);
       }
-      status = request.signal.aborted
-        ? "Cancelled"
-        : oneLine(error instanceof Error ? error.message : "Inference failed");
+      if (aborted) {
+        status = this.cancelDroppedQueue
+          ? "Cancelled · queued message dropped"
+          : "Cancelled";
+      } else {
+        const message =
+          error instanceof Error ? error.message : "Inference failed";
+        status = oneLine(message);
+        // The full error joins the transcript as a UI-local notice: shown
+        // (and inline, printed below), but never a model message.
+        notice = this.builder.notice(message);
+        this.transcript.push(notice);
+      }
     } finally {
       if (this.timer) clearInterval(this.timer);
       this.timer = undefined;
@@ -896,19 +1075,19 @@ export class TuimarkClient {
       this.armed = false;
       this.proposal = undefined;
       if (this.turn === request) this.turn = undefined;
-      const size = this.options.provider.context_size;
-      // Inline, a cancelled or failed reply still prints what arrived.
-      if (this.inline) await this.commitStreamTail();
+      // Inline, a cancelled or failed reply still prints what arrived, and
+      // a failed turn's notice is committed after it like any finished view.
+      if (this.inline) {
+        await this.commitStreamTail();
+        if (notice) await this.commitView(notice);
+      }
       await this.publishMessages([
         { path: "busy", value: false },
         { path: "placeholder", value: PLACEHOLDER },
         { path: "status", value: status },
         { path: "approval", value: noApproval() },
-        {
-          path: "header.ctx_label",
-          value: contextLabel(this.usedTokens, size),
-        },
-        { path: "header.ctx_pct", value: contextPct(this.usedTokens, size) },
+        // The turn's last observed usage is the resting baseline (CtxMeter).
+        ...this.ctxWrites(this.ctx.finishTurn()),
       ]);
     }
   }

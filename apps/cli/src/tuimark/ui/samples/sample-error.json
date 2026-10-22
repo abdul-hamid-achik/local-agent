@@ -1,0 +1,201 @@
+{
+  "header": {
+    "provider": "Ollama / loopback",
+    "model": "qwen3-coder:30b",
+    "mode": "build",
+    "session": "session a1b2c3d",
+    "workspace": "project",
+    "ctx_label": "9.6k/32k",
+    "ctx_pct": 30,
+    "ctx_warn": false,
+    "ctx_danger": false
+  },
+  "empty": false,
+  "mouse_on": false,
+  "messages": [
+    {
+      "id": "m0",
+      "is_user": true,
+      "is_asst": false,
+      "is_tool": false,
+      "is_notice": false,
+      "blocks": [
+        {
+          "id": "b0",
+          "para": true,
+          "head": false,
+          "quote": false,
+          "item": false,
+          "code": false,
+          "nest": false,
+          "marker": "",
+          "lang": "",
+          "runs": [
+            "Add a retry to the fetch helper."
+          ]
+        }
+      ],
+      "card": {
+        "name": "",
+        "status": "",
+        "args": "",
+        "ok": false,
+        "bad": false,
+        "warn": false,
+        "running": false,
+        "out": []
+      }
+    },
+    {
+      "id": "m1",
+      "is_user": false,
+      "is_asst": false,
+      "is_tool": false,
+      "is_notice": true,
+      "blocks": [
+        {
+          "id": "b0",
+          "para": false,
+          "head": false,
+          "quote": true,
+          "item": false,
+          "code": false,
+          "nest": false,
+          "marker": "",
+          "lang": "",
+          "runs": [
+            "Ollama request failed: connection refused\nIs the daemon running on 127.0.0.1:11434?"
+          ]
+        }
+      ],
+      "card": {
+        "name": "",
+        "status": "",
+        "args": "",
+        "ok": false,
+        "bad": false,
+        "warn": false,
+        "running": false,
+        "out": []
+      }
+    }
+  ],
+  "earlier": {
+    "n": 0
+  },
+  "live": {
+    "id": "live",
+    "is_user": false,
+    "is_asst": true,
+    "is_tool": false,
+    "is_notice": false,
+    "blocks": [],
+    "card": {
+      "name": "",
+      "status": "",
+      "args": "",
+      "ok": false,
+      "bad": false,
+      "warn": false,
+      "running": false,
+      "out": []
+    },
+    "active": false,
+    "tail": []
+  },
+  "thinking": {
+    "on": false,
+    "runs": []
+  },
+  "approval": {
+    "open": false,
+    "title": "",
+    "body": "",
+    "danger": false,
+    "no": "Deny",
+    "yes": "Allow",
+    "truncated": false,
+    "lines": []
+  },
+  "palette": {
+    "open": false,
+    "query": "",
+    "cur": "mode-plan"
+  },
+  "found": {
+    "any": true,
+    "items": [
+      {
+        "id": "mode-plan",
+        "label": "Mode: plan (read only)",
+        "hint": "/mode plan"
+      },
+      {
+        "id": "mode-build",
+        "label": "Mode: build (read, edit, command)",
+        "hint": "/mode build"
+      },
+      {
+        "id": "theme-dark",
+        "label": "Theme: dark",
+        "hint": "/theme dark"
+      },
+      {
+        "id": "theme-light",
+        "label": "Theme: light",
+        "hint": "/theme light"
+      },
+      {
+        "id": "theme-auto",
+        "label": "Theme: auto",
+        "hint": "/theme auto"
+      },
+      {
+        "id": "mouse-on",
+        "label": "Mouse: on",
+        "hint": "/mouse on"
+      },
+      {
+        "id": "mouse-off",
+        "label": "Mouse: off",
+        "hint": "/mouse off"
+      },
+      {
+        "id": "mcp",
+        "label": "MCP servers",
+        "hint": "/mcp"
+      },
+      {
+        "id": "help",
+        "label": "Help and keys",
+        "hint": "/help"
+      }
+    ]
+  },
+  "help": {
+    "open": false
+  },
+  "draft": "Add a retry to the fetch helper.",
+  "placeholder": "Message the model",
+  "busy": false,
+  "status": "Ollama request failed: connection refused",
+  "commit_buf": {
+    "id": "commit",
+    "is_user": false,
+    "is_asst": false,
+    "is_tool": false,
+    "is_notice": false,
+    "blocks": [],
+    "card": {
+      "name": "",
+      "status": "",
+      "args": "",
+      "ok": false,
+      "bad": false,
+      "warn": false,
+      "running": false,
+      "out": []
+    }
+  },
+  "commit_blocks": []
+}

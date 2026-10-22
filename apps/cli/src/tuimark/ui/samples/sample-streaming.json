@@ -6,7 +6,9 @@
     "session": "session a1b2c3d",
     "workspace": "project",
     "ctx_label": "9.6k/32k",
-    "ctx_pct": 30
+    "ctx_pct": 30,
+    "ctx_warn": false,
+    "ctx_danger": false
   },
   "empty": false,
   "mouse_on": false,
@@ -16,6 +18,7 @@
       "is_user": true,
       "is_asst": false,
       "is_tool": false,
+      "is_notice": false,
       "blocks": [
         {
           "id": "b0",
@@ -48,6 +51,7 @@
       "is_user": false,
       "is_asst": true,
       "is_tool": false,
+      "is_notice": false,
       "blocks": [
         {
           "id": "b0",
@@ -163,6 +167,7 @@
       "is_user": false,
       "is_asst": false,
       "is_tool": true,
+      "is_notice": false,
       "blocks": [],
       "card": {
         "name": "edit",
@@ -182,6 +187,7 @@
       "is_user": false,
       "is_asst": true,
       "is_tool": false,
+      "is_notice": false,
       "blocks": [
         {
           "id": "b0",
@@ -218,6 +224,7 @@
     "is_user": false,
     "is_asst": true,
     "is_tool": false,
+    "is_notice": false,
     "blocks": [
       {
         "id": "l0",
@@ -372,6 +379,7 @@
     "is_user": false,
     "is_asst": false,
     "is_tool": false,
+    "is_notice": false,
     "blocks": [],
     "card": {
       "name": "",

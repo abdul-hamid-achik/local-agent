@@ -351,6 +351,27 @@ test("live tool calls come in call order, one per tool_requested event", () => {
   });
 });
 
+test("a notice is a quoted UI-local view: no other role flag, every line kept", () => {
+  const builder = new ViewBuilder();
+  const notice = builder.notice("first line\nsecond line");
+  expect([
+    notice.is_user,
+    notice.is_asst,
+    notice.is_tool,
+    notice.is_notice,
+  ]).toEqual([false, false, false, true]);
+  // Quoted, so it reads as the client's words; the text itself is whole.
+  expect(notice.blocks.length).toBeGreaterThan(0);
+  expect(notice.blocks.every((b) => b.quote)).toBe(true);
+  const text = notice.blocks.map((b) => runsText(b.runs)).join("\n");
+  expect(text).toContain("first line");
+  expect(text).toContain("second line");
+  // Every other view the builder makes carries is_notice false.
+  const user = builder.fromMessage({ role: "user", content: "hi" });
+  expect(user?.is_notice).toBe(false);
+  expect(IDLE_LIVE.is_notice).toBe(false);
+});
+
 test("the idle and streaming live views have the same keys", () => {
   expect(Object.keys(streamingView("x")).sort()).toEqual(
     Object.keys(IDLE_LIVE).sort(),

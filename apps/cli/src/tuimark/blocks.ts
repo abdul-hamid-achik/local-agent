@@ -849,6 +849,8 @@ export interface MessageView {
   is_user: boolean;
   is_asst: boolean;
   is_tool: boolean;
+  /** A UI-local notice (a failed turn's error): shown, never sent to the model. */
+  is_notice: boolean;
   blocks: Block[];
   card: Card;
 }
@@ -862,7 +864,7 @@ export type LiveView = MessageView & { active: boolean; tail: Block[] };
 
 function view(
   id: string,
-  role: "user" | "asst" | "tool",
+  role: "user" | "asst" | "tool" | "notice",
   blocks: Block[],
   card: Card = NO_CARD,
 ): MessageView {
@@ -871,6 +873,7 @@ function view(
     is_user: role === "user",
     is_asst: role === "asst",
     is_tool: role === "tool",
+    is_notice: role === "notice",
     blocks,
     card,
   };
@@ -994,6 +997,20 @@ export class ViewBuilder {
   /** A view for text the client itself wrote (never sent to the model). */
   user(text: string): MessageView {
     return view(this.id(), "user", parseBlocks(text));
+  }
+
+  /**
+   * A UI-local notice: a failed turn's full error, as a quote so it reads as
+   * the client's words, not the model's. Bounded like any message by
+   * parseBlocks. It is only ever a transcript view: no Message is made from
+   * it, so it is never sent to the model or persisted as one.
+   */
+  notice(text: string): MessageView {
+    const quoted = cleanText(text)
+      .split("\n")
+      .map((line) => `> ${line}`)
+      .join("\n");
+    return view(this.id(), "notice", parseBlocks(quoted));
   }
 
   private id(): string {

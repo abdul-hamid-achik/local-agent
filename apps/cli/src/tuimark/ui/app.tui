@@ -37,7 +37,9 @@
          narrow terminal still shows (the first that does not fit drops the rest). -->
     <bind keys="ctrl+p" action="palette_open" keycap="^P" label="commands"/>
     <bind keys="esc" action="cancel" label="cancel"/>
-    <bind keys="ctrl+c" action="quit" label="quit"/>
+    <!-- Not the built-in `quit` (the engine runs that itself and the parent
+         never sees it): the parent's handler clears a draft first, then quits. -->
+    <bind keys="ctrl+c" action="quit_request" label="quit"/>
     <!-- The composer takes up and down inside a draft; on its first and last line
          they fall through to these rows, which recall what was sent. -->
     <bind keys="up" action="history_prev" when="#composer:focus" label="history" keycap="↑/↓"/>
@@ -57,7 +59,7 @@
   </keymap>
   <!-- A modal traps the keymap: what must also work under one is repeated here. -->
   <keymap when="modal">
-    <bind keys="ctrl+c" action="quit"/>
+    <bind keys="ctrl+c" action="quit_request"/>
   </keymap>
 
   <!-- One message, user or assistant. Props: label. Slot: the body. The variant
@@ -112,6 +114,10 @@
     <use template="la-tool" if="msg.is_tool" with="msg.card as t">
       <text class="la-out" runs="msg.card.out" wrap="pre-wrap"/>
     </use>
+    <!-- A UI-local notice (a failed turn's error): the client's words, never the model's. -->
+    <use template="la-message" label="Error" class="notice" if="msg.is_notice">
+      <use template="la-blocks" with="msg.blocks as blocks"/>
+    </use>
   </template>
 
   <screen id="main" focus="#composer">
@@ -122,8 +128,8 @@
         <text class="la-mode">{header.mode}</text>
         <spacer/>
         <text class="la-muted la-session">{header.session}</text>
-        <text class="la-muted la-ctx">ctx {header.ctx_label}</text>
-        <progress id="ctx" class="la-ctxbar" bind="header.ctx_pct"/>
+        <text class="la-muted la-ctx" class:warn="header.ctx_warn" class:danger="header.ctx_danger">ctx {header.ctx_label}</text>
+        <progress id="ctx" class="la-ctxbar" class:warn="header.ctx_warn" class:danger="header.ctx_danger" bind="header.ctx_pct"/>
       </use>
 
       <scroll id="log" stick="bottom" focusable="true">

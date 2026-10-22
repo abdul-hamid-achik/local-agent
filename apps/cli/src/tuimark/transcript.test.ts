@@ -11,6 +11,7 @@ const make = (n: number): MessageView => ({
   is_user: true,
   is_asst: false,
   is_tool: false,
+  is_notice: false,
   blocks: [],
   card: NO_CARD,
 });

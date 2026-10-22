@@ -31,6 +31,9 @@
   .la-session { display: none; }
 }
 .la-ctxbar { width: 12; }
+/* Ctx thresholds (store flags: warn at >=75%, danger at >=90%; danger wins). */
+.la-ctx.warn, .la-ctxbar.warn { color: $warn; }
+.la-ctx.danger, .la-ctxbar.danger { color: $danger; }
 .la-spin { width: 2; }
 
 /* Bordered like the composer and the diff, so `scrollbar: auto` has a right
@@ -46,6 +49,7 @@
 .la-role { bold: true; }
 .la-msg.user > .la-role { color: $user; }
 .la-msg.asst > .la-role { color: $accent; }
+.la-msg.notice > .la-role { color: $danger; }
 .la-blocks { height: auto; layout: column; }
 .la-blocks > text { wrap: wrap; }
 .la-head { bold: true; }

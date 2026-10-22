@@ -178,6 +178,22 @@ export function emptySample(): Store {
   return base([]).store;
 }
 
+/** A failed first turn: the prompt stays, with its error notice under it. */
+export function errorSample(): Store {
+  const { store, builder } = base([
+    { role: "user", content: "Add a retry to the fetch helper." },
+  ]);
+  store.messages = [
+    ...store.messages,
+    builder.notice(
+      "Ollama request failed: connection refused\nIs the daemon running on 127.0.0.1:11434?",
+    ),
+  ];
+  store.status = "Ollama request failed: connection refused";
+  store.draft = "Add a retry to the fetch helper.";
+  return store;
+}
+
 /** Markdown beyond code: heading, nested bullets, numbered items, quote, table, inline marks, a failed command. */
 export function markdownSample(): Store {
   return base(MARKDOWN_MESSAGES).store;
@@ -352,6 +368,7 @@ export function helpSample(): Store {
 export const SAMPLES = {
   sample: idleSample,
   "sample-empty": emptySample,
+  "sample-error": errorSample,
   "sample-markdown": markdownSample,
   "sample-approval": approvalSample,
   "sample-approval-long": longApprovalSample,

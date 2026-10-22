@@ -16,10 +16,15 @@ import {
   runsText,
 } from "#cli/tuimark/blocks";
 import type { PaletteItem } from "#cli/tuimark/commands";
-import { APPROVAL_ARM_MS, TuimarkClient } from "#cli/tuimark/controller";
+import {
+  APPROVAL_ARM_MS,
+  formatElapsed,
+  TuimarkClient,
+} from "#cli/tuimark/controller";
 import { FakeHost } from "#cli/tuimark/fake-host";
 import {
   APPROVAL_STATUS,
+  APPROVAL_UNARMED_STATUS,
   APPROVAL_WAIT_STATUS,
   type Store,
 } from "#cli/tuimark/store";
@@ -85,6 +90,10 @@ const liveText = (s: Store) =>
   [...s.live.blocks, ...s.live.tail]
     .map((block) => runsText(block.runs))
     .join("\n");
+
+/** The text of one transcript view, block by block. */
+const viewText = (view: MessageView) =>
+  view.blocks.map((block) => runsText(block.runs)).join("\n");
 
 // ------------------------------------------------------------------------ tests
 
@@ -226,23 +235,134 @@ test("the mode chosen by /mode is the intent of the next turn", async () => {
   expect(intents).toEqual(["plan"]);
 });
 
-test("while busy, a slash command says Busy and a prompt is ignored", async () => {
+test("while busy, a slash command says Busy and a prompt is queued and runs next", async () => {
   let release: () => void = () => {};
   const gate = new Promise<void>((r) => {
     release = r;
   });
-  const { ui, client, seen } = setup(
-    quiet(async () => {
-      await gate;
-    }),
-  );
+  let calls = 0;
+  const { ui, client, seen } = setup(async function* () {
+    calls++;
+    if (calls === 1) await gate;
+    yield {
+      type: "message",
+      message: { role: "assistant", content: `answer ${calls}` },
+    };
+  });
   await ui.fire("send", "go");
   await ui.fire("send", "/mode plan");
   expect(store(ui).status).toBe("Busy · wait for the current turn to finish");
   await ui.fire("send", "second prompt");
+  // Queued: the draft cleared, the status says so, and nothing ran yet.
+  expect(store(ui).draft).toBe("");
+  expect(store(ui).status).toBe("Queued: second prompt");
+  expect(seen).toHaveLength(1);
+  // A slash command while one is queued is still refused and keeps the queue.
+  await ui.fire("send", "/mode plan");
+  expect(store(ui).status).toBe("Busy · wait for the current turn to finish");
+  expect(store(ui).header.mode).toBe("build");
   release();
   await client.idle();
+  // The queued prompt ran on its own, once, after the first turn's reply.
+  expect(seen).toHaveLength(2);
+  expect(seen[1]?.messages).toEqual([
+    "user:go",
+    "assistant:answer 1",
+    "user:second prompt",
+  ]);
+  expect(
+    store(ui).messages.map((m: MessageView) => [m.is_user, m.is_asst]),
+  ).toEqual([
+    [true, false],
+    [false, true],
+    [true, false],
+    [false, true],
+  ]);
+  expect(store(ui).status).toBe("Ready · /help for commands");
+});
+
+test("a second send while one is queued replaces it and says so", async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  let calls = 0;
+  const { ui, client, seen } = setup(async function* () {
+    calls++;
+    if (calls === 1) await gate;
+    yield {
+      type: "message",
+      message: { role: "assistant", content: `answer ${calls}` },
+    };
+  });
+  await ui.fire("send", "go");
+  await ui.fire("send", "first queued");
+  expect(store(ui).status).toBe("Queued: first queued");
+  await ui.fire("send", "replacement\nsecond line");
+  expect(store(ui).status).toBe("Queued message replaced: replacement");
+  release();
+  await client.idle();
+  expect(seen).toHaveLength(2);
+  expect(seen[1]?.messages.at(-1)).toBe("user:replacement\nsecond line");
+  // The replaced text never became a turn or a view.
+  expect(JSON.stringify(store(ui).messages)).not.toContain("first queued");
+});
+
+test("esc cancels the turn and drops the queued message, and the status says both", async () => {
+  const { ui, client, seen } = setup(async function* ({ options }) {
+    await new Promise((_, reject) =>
+      options.signal.addEventListener("abort", () =>
+        reject(new Error("aborted")),
+      ),
+    );
+    yield* [] as AgentEvent[];
+  });
+  await ui.fire("send", "slow one");
+  await ui.fire("send", "queued one");
+  expect(store(ui).status).toBe("Queued: queued one");
+  await ui.fire("cancel");
+  await client.idle();
+  expect(store(ui).status).toBe("Cancelled · queued message dropped");
   expect(seen).toHaveLength(1);
+  expect(store(ui).busy).toBe(false);
+});
+
+test("a queued prompt runs after a failed turn too, without duplicating the failed one", async () => {
+  let fail: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    fail = r;
+  });
+  let calls = 0;
+  const { ui, client, seen } = setup(async function* () {
+    calls++;
+    if (calls === 1) {
+      await gate;
+      throw new Error("daemon is down");
+    }
+    yield {
+      type: "message",
+      message: { role: "assistant", content: "recovered" },
+    };
+  });
+  await ui.fire("send", "doomed prompt");
+  await ui.fire("send", "queued one");
+  fail();
+  await client.idle();
+  // Prompt, its error notice, then the queued turn and its reply.
+  const views = store(ui).messages;
+  expect(
+    views.map((m: MessageView) => [m.is_user, m.is_notice, m.is_asst]),
+  ).toEqual([
+    [true, false, false],
+    [false, true, false],
+    [true, false, false],
+    [false, false, true],
+  ]);
+  expect(viewText(views[1] as MessageView)).toContain("daemon is down");
+  // No session: the failed prompt left the model's history, so the queued
+  // turn is the whole conversation — nothing duplicated, notice never sent.
+  expect(seen[1]?.messages).toEqual(["user:queued one"]);
+  expect(store(ui).status).toBe("Ready · /help for commands");
 });
 
 function editProposal(diff = "-x\n+y"): ApprovalRequest {
@@ -370,7 +490,7 @@ test("ctrl+c (quit) with the dialog open resolves the approval to deny", async (
   const { ui, client } = setup(withApproval);
   await ui.fire("send", "edit");
   await untilApproval(ui);
-  expect(await ui.fire("quit")).toBe("quit");
+  expect(await ui.fire("quit_request")).toBe("quit");
   await client.idle();
   expect(decisions).toEqual([false]);
 });
@@ -392,6 +512,8 @@ test("a confirm before the dialog is armed is ignored; deny always works", async
   await ui.fire("dialog_confirm");
   expect(store(ui).approval.open).toBe(true);
   expect(decisions).toEqual([]);
+  // The swallowed `y` is not silent: the status says to press it again.
+  expect(store(ui).status).toBe(APPROVAL_UNARMED_STATUS);
   await until(() => store(ui).status === APPROVAL_STATUS);
   await ui.fire("dialog_confirm");
   expect(decisions).toEqual([true]);
@@ -506,7 +628,7 @@ test("a refused write is shown on the status line, once, and remembered in a bou
   failing = false;
 });
 
-test("a multi-line error is one line on the status row", async () => {
+test("a multi-line error is one line on the status row and whole in its notice", async () => {
   const { ui, client } = setup(
     quiet(async () => {
       throw new Error('[\n  {\n    "code": "too_big"\n  }\n]');
@@ -515,6 +637,10 @@ test("a multi-line error is one line on the status row", async () => {
   await ui.fire("send", "go");
   await client.idle();
   expect(store(ui).status).toBe('[ { "code": "too_big" } ]');
+  const notice = store(ui).messages.find((m: MessageView) => m.is_notice);
+  expect(notice).toBeDefined();
+  // The notice keeps the error's own lines, not the clipped status form.
+  expect(viewText(notice as MessageView)).toContain('"code": "too_big"');
 });
 
 test("the MCP count stays on the status line after a turn", async () => {
@@ -566,7 +692,19 @@ test("a failed request shows its message and keeps a typed draft", async () => {
   await client.idle();
   expect(store(ui).status).toBe("Model admission blocked");
   expect(store(ui).draft).toBe("typing already");
-  expect(store(ui).messages).toHaveLength(0);
+  // The failed prompt stays visible, with its error notice under it.
+  const views = store(ui).messages;
+  expect(views.map((m: MessageView) => [m.is_user, m.is_notice])).toEqual([
+    [true, false],
+    [false, true],
+  ]);
+  expect(viewText(views[0] as MessageView)).toBe("go");
+  expect(viewText(views[1] as MessageView)).toContain(
+    "Model admission blocked",
+  );
+  // And it is in the draft history: up recalls it over the typed draft.
+  await ui.fire("history_prev", "typing already");
+  expect(store(ui).draft).toBe("go");
 });
 
 test("a failed request with an empty composer gives the prompt back", async () => {
@@ -578,6 +716,13 @@ test("a failed request with an empty composer gives the prompt back", async () =
   await ui.fire("send", "retry me");
   await client.idle();
   expect(store(ui).draft).toBe("retry me");
+  // It also stays in view (with its notice), one prompt view, not two.
+  expect(store(ui).messages.filter((m: MessageView) => m.is_user)).toHaveLength(
+    1,
+  );
+  expect(
+    store(ui).messages.filter((m: MessageView) => m.is_notice),
+  ).toHaveLength(1);
 });
 
 test("with a session, a failed request keeps the completed messages", async () => {
@@ -590,21 +735,148 @@ test("with a session, a failed request keeps the completed messages", async () =
       ],
     },
   } as unknown as SessionContext;
-  const { ui, client } = setup(
-    quiet(async () => {
-      throw new Error("boom");
-    }),
+  let calls = 0;
+  const { ui, client, seen } = setup(
+    async function* () {
+      calls++;
+      if (calls === 1) throw new Error("boom");
+      yield {
+        type: "message",
+        message: { role: "assistant", content: "recovered" },
+      };
+    },
     { session },
   );
   expect(store(ui).messages).toHaveLength(2);
   await ui.fire("send", "next");
   await client.idle();
-  expect(store(ui).messages.map((m: MessageView) => m.is_user)).toEqual([
-    true,
-    false,
-    true,
+  // The saved pair, the failed prompt, and its notice.
+  expect(
+    store(ui).messages.map((m: MessageView) => [m.is_user, m.is_notice]),
+  ).toEqual([
+    [true, false],
+    [false, false],
+    [true, false],
+    [false, true],
   ]);
   expect(store(ui).status).toBe("boom");
+  // With a session the runtime checkpointed the prompt before inference, so
+  // it stays in the model's history — exactly once, and the notice (never a
+  // model message) is not in what the next turn sends.
+  await ui.fire("send", "again");
+  await client.idle();
+  expect(seen[1]?.messages).toEqual([
+    "user:old",
+    "assistant:older",
+    "user:next",
+    "user:again",
+  ]);
+});
+
+test("elapsed reads as seconds, then minutes and seconds", () => {
+  expect(formatElapsed(0)).toBe("0s");
+  expect(formatElapsed(59)).toBe("59s");
+  expect(formatElapsed(60)).toBe("1m 00s");
+  expect(formatElapsed(65)).toBe("1m 05s");
+  expect(formatElapsed(600)).toBe("10m 00s");
+});
+
+test("waiting becomes generating at the first event, with elapsed, and idle writes nothing", async () => {
+  let nowMs = 1_000_000;
+  let toText: () => void = () => {};
+  let toEnd: () => void = () => {};
+  const gate1 = new Promise<void>((r) => {
+    toText = r;
+  });
+  const gate2 = new Promise<void>((r) => {
+    toEnd = r;
+  });
+  const { ui, client } = setup(
+    async function* () {
+      await gate1;
+      yield { type: "text", text: "hi " };
+      await gate2;
+      yield { type: "message", message: { role: "assistant", content: "hi" } };
+    },
+    { now: () => nowMs },
+  );
+  await ui.fire("send", "go");
+  expect(store(ui).status).toBe("Waiting for the model… · 0s");
+  nowMs += 12_000;
+  await client.flush();
+  expect(store(ui).status).toBe("Waiting for the model… · 12s");
+  toText();
+  await until(() => store(ui).status.startsWith("Generating…"));
+  expect(store(ui).status).toBe("Generating… · 12s");
+  nowMs += 53_000;
+  await client.flush();
+  expect(store(ui).status).toBe("Generating… · 1m 05s");
+  toEnd();
+  await client.idle();
+  expect(store(ui).status).toBe("Ready · /help for commands");
+  // The timer is gone with the turn: time passing writes nothing more.
+  const batches = ui.batches.length;
+  nowMs += 120_000;
+  await client.flush();
+  await new Promise((r) => setTimeout(r, 20));
+  expect(ui.batches.length).toBe(batches);
+  expect(store(ui).status).toBe("Ready · /help for commands");
+});
+
+test("an open approval owns the status line over the elapsed ticker", async () => {
+  let nowMs = 1_000_000;
+  const { ui, client } = setup(withApproval, { now: () => nowMs });
+  await ui.fire("send", "edit");
+  await untilApproval(ui);
+  nowMs += 30_000;
+  await client.flush();
+  expect(store(ui).status).toBe(APPROVAL_STATUS);
+  await ui.fire("dialog_cancel");
+  await client.idle();
+});
+
+test("ctx moves on every done event: the turn's max shows, its last value rests", async () => {
+  let toSecond: () => void = () => {};
+  let toEnd: () => void = () => {};
+  const gate1 = new Promise<void>((r) => {
+    toSecond = r;
+  });
+  const gate2 = new Promise<void>((r) => {
+    toEnd = r;
+  });
+  const { ui, client } = setup(async function* () {
+    yield { type: "done", inputTokens: 7000, outputTokens: 800 };
+    await gate1;
+    yield { type: "done", inputTokens: 100, outputTokens: 0 };
+    await gate2;
+    yield { type: "message", message: { role: "assistant", content: "x" } };
+  });
+  await ui.fire("send", "go");
+  await until(() => store(ui).header.ctx_pct === 95);
+  // Mid-turn already: 7800 of 8192 is past the danger threshold.
+  expect(store(ui).header.ctx_label).toBe("7.6k/8.0k");
+  expect(store(ui).header.ctx_warn).toBe(true);
+  expect(store(ui).header.ctx_danger).toBe(true);
+  toSecond();
+  await new Promise((r) => setTimeout(r, 15));
+  // A smaller step mid-turn does not shrink the meter.
+  expect(store(ui).header.ctx_pct).toBe(95);
+  toEnd();
+  await client.idle();
+  // The turn's last observed value is the resting baseline.
+  expect(store(ui).header.ctx_label).toBe("100/8.0k");
+  expect(store(ui).header.ctx_pct).toBe(1);
+  expect(store(ui).header.ctx_warn).toBe(false);
+  expect(store(ui).header.ctx_danger).toBe(false);
+});
+
+test("ctrl+c clears a non-empty draft first, and only an empty composer quits", async () => {
+  const { ui } = setup(reply("unused"));
+  store(ui).draft = "half typed";
+  expect(await ui.fire("quit_request")).toBeUndefined();
+  expect(store(ui).draft).toBe("");
+  expect(store(ui).status).toBe("Draft cleared · ctrl+c again to quit");
+  expect(await ui.fire("quit_request")).toBe("quit");
 });
 
 test("quit aborts the running turn and answers quit", async () => {
@@ -620,7 +892,7 @@ test("quit aborts the running turn and answers quit", async () => {
     }),
   );
   await ui.fire("send", "go");
-  expect(await ui.fire("quit")).toBe("quit");
+  expect(await ui.fire("quit_request")).toBe("quit");
   await client.idle();
   expect(aborted).toBe(true);
 });
@@ -843,7 +1115,11 @@ function printed(ui: FakeHost): string[] {
       if (c.commit.template === "la-turn") {
         const view = c.buf as MessageView;
         if (view.is_tool) return `tool ${view.card.name} ${view.card.status}`;
-        const label = view.is_user ? "You" : "Assistant";
+        const label = view.is_user
+          ? "You"
+          : view.is_notice
+            ? "Error"
+            : "Assistant";
         return `${label}: ${view.blocks.map((b) => runsText(b.runs)).join("\n")}`;
       }
       return (c.buf as Block[]).map((b) => runsText(b.runs)).join("\n");
@@ -931,6 +1207,53 @@ test("inline: esc commits the partial reply that had arrived", async () => {
   expect(printed(ui)).toEqual(["You: slow one", "Assistant: half an answer"]);
 });
 
+test("inline: a failed turn commits its prompt and its error notice to the scrollback", async () => {
+  const { ui, client } = setup(
+    quiet(async () => {
+      throw new Error("daemon is down\nsecond line");
+    }),
+    inline,
+  );
+  await ui.fire("send", "go now");
+  await client.idle();
+  const out = printed(ui);
+  expect(out).toHaveLength(2);
+  expect(out[0]).toBe("You: go now");
+  expect(out[1]).toMatch(/^Error: /);
+  expect(out[1]).toContain("daemon is down");
+  expect(out[1]).toContain("second line");
+  expect(store(ui).status).toBe("daemon is down second line");
+  expect(client.writeErrors).toEqual([]);
+});
+
+test("inline: a queued prompt is committed only when its turn starts", async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  let calls = 0;
+  const { ui, client } = setup(async function* () {
+    calls++;
+    if (calls === 1) await gate;
+    yield {
+      type: "message",
+      message: { role: "assistant", content: `answer ${calls}` },
+    };
+  }, inline);
+  await ui.fire("send", "first one");
+  await ui.fire("send", "second one");
+  expect(store(ui).status).toBe("Queued: second one");
+  // Only the running turn is in print; the queued prompt is not yet.
+  expect(printed(ui)).toEqual(["You: first one"]);
+  release();
+  await client.idle();
+  const out = printed(ui);
+  expect(out.filter((s) => s === "You: second one")).toHaveLength(1);
+  expect(out.indexOf("You: second one")).toBeGreaterThan(
+    out.indexOf("You: first one"),
+  );
+});
+
 test("inline: quit commits the partial reply before answering quit", async () => {
   const { ui, client } = setup(async function* ({ options }) {
     yield { type: "text", text: "still writing" };
@@ -942,7 +1265,7 @@ test("inline: quit commits the partial reply before answering quit", async () =>
   }, inline);
   await ui.fire("send", "go");
   await new Promise((r) => setTimeout(r, 15));
-  expect(await ui.fire("quit")).toBe("quit");
+  expect(await ui.fire("quit_request")).toBe("quit");
   // Already printed at the moment "quit" was answered.
   expect(printed(ui)).toEqual(["You: go", "Assistant: still writing"]);
   await client.idle();
@@ -1037,8 +1360,8 @@ test("the welcome (empty) goes with the first message and never returns", async 
   await ok.client.idle();
   expect(store(ok.ui).empty).toBe(false);
 
-  // A failed first turn pops the prompt back out of the transcript; the
-  // welcome must not reappear over the restored draft.
+  // A failed first turn keeps its prompt and its error notice in view; the
+  // welcome must not reappear over them.
   const failed = setup(
     quiet(async () => {
       throw new Error("boom");
@@ -1047,7 +1370,12 @@ test("the welcome (empty) goes with the first message and never returns", async 
   expect(store(failed.ui).empty).toBe(true);
   await failed.ui.fire("send", "hi");
   await failed.client.idle();
-  expect(store(failed.ui).messages).toEqual([]);
+  expect(
+    store(failed.ui).messages.map((m: MessageView) => [m.is_user, m.is_notice]),
+  ).toEqual([
+    [true, false],
+    [false, true],
+  ]);
   expect(store(failed.ui).empty).toBe(false);
   expect(
     failed.ui.batches.flat().filter((w) => w.path === "empty" && w.value),

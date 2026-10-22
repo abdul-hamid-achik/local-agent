@@ -3,8 +3,10 @@ import { SAMPLES } from "#cli/tuimark/fixtures";
 import {
   APPROVAL_MAX_ROWS,
   approvalState,
+  CtxMeter,
   contextLabel,
   contextPct,
+  ctxFlags,
   EMPTY_COMMIT_VIEW,
   initialStore,
   noApproval,
@@ -17,6 +19,34 @@ import {
   wrapLine,
 } from "#cli/tuimark/store";
 import { Transcript } from "#cli/tuimark/transcript";
+
+test("ctx flags: warn at 75%, danger at 90%", () => {
+  expect(ctxFlags(74)).toEqual({ warn: false, danger: false });
+  expect(ctxFlags(75)).toEqual({ warn: true, danger: false });
+  expect(ctxFlags(89)).toEqual({ warn: true, danger: false });
+  expect(ctxFlags(90)).toEqual({ warn: true, danger: true });
+  expect(ctxFlags(100)).toEqual({ warn: true, danger: true });
+});
+
+test("the ctx meter shows the turn's max and rests at its last value", () => {
+  const meter = new CtxMeter();
+  meter.beginTurn();
+  expect(meter.observe(500)).toBe(500);
+  // A smaller step mid-turn is a step artifact, not freed context.
+  expect(meter.observe(200)).toBe(500);
+  expect(meter.observe(900)).toBe(900);
+  // The turn ends: its last observed value is the baseline.
+  expect(meter.finishTurn()).toBe(900);
+  meter.beginTurn();
+  // The next turn starts from the baseline, never below it mid-turn...
+  expect(meter.observe(300)).toBe(900);
+  // ...but its own last value replaces the baseline when it finishes, so a
+  // legitimately smaller conversation is not shown the old max forever.
+  expect(meter.finishTurn()).toBe(300);
+  // A turn with no usage event leaves the baseline alone.
+  meter.beginTurn();
+  expect(meter.finishTurn()).toBe(300);
+});
 
 test("token counts read like the Vue sidebar", () => {
   expect(tokens(900)).toBe("900");

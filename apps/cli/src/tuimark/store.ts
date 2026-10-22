@@ -38,6 +38,10 @@ export const APPROVAL_STATUS =
 export const APPROVAL_TRUNCATED_STATUS =
   "Preview truncated · y allow · n deny · Esc deny";
 export const BUSY_STATUS_LINE = "Generating…";
+/** Busy, but no text/thinking/tool event has arrived yet this turn. */
+export const WAITING_STATUS = "Waiting for the model…";
+/** A `y` swallowed by the arm delay says so instead of going silent. */
+export const APPROVAL_UNARMED_STATUS = "Approval not armed yet — press y again";
 
 export interface DiffLine {
   n: number;
@@ -70,6 +74,9 @@ export interface Store {
     workspace: string;
     ctx_label: string;
     ctx_pct: number;
+    /** Threshold styling for the ctx text/bar: warn at >=75%, danger at >=90%. */
+    ctx_warn: boolean;
+    ctx_danger: boolean;
   };
   /** True only before the first message: the welcome shows. Never true again. */
   empty: boolean;
@@ -103,6 +110,7 @@ export const EMPTY_COMMIT_VIEW: MessageView = Object.freeze({
   is_user: false,
   is_asst: false,
   is_tool: false,
+  is_notice: false,
   blocks: [],
   card: NO_CARD,
 }) as MessageView;
@@ -120,6 +128,48 @@ export function contextLabel(used: number, size: number): string {
 
 export function contextPct(used: number, size: number): number {
   return Math.max(0, Math.min(100, Math.round((used / size) * 100)));
+}
+
+/** The ctx threshold flags the header styles by: warn at >=75%, danger at >=90%. */
+export function ctxFlags(pct: number): { warn: boolean; danger: boolean } {
+  return { warn: pct >= 75, danger: pct >= 90 };
+}
+
+/**
+ * What the header's ctx meter shows, turn by turn.
+ *
+ * The rule: within a turn the display is the LARGEST input+output any `done`
+ * event of that turn has reported (a multi-step turn's later steps resend
+ * the whole history, so a smaller mid-turn value is a step artifact, not
+ * freed context). The max is scoped to the turn: when the turn finishes,
+ * its LAST observed value becomes the baseline the next turn starts from,
+ * so a legitimately smaller conversation (after a resume, say) is not
+ * shown the old turn's max forever. A turn with no `done` event leaves the
+ * baseline alone.
+ */
+export class CtxMeter {
+  private base = 0;
+  private max = 0;
+  private last: number | undefined;
+
+  beginTurn(): void {
+    this.max = this.base;
+    this.last = undefined;
+  }
+
+  /** One usage-bearing event; returns what the header should show now. */
+  observe(used: number): number {
+    this.last = used;
+    if (used > this.max) this.max = used;
+    return this.max;
+  }
+
+  /** The turn is over; returns the baseline the header rests at. */
+  finishTurn(): number {
+    if (this.last !== undefined) this.base = this.last;
+    this.max = this.base;
+    return this.base;
+  }
 }
 
 export function providerLabel(provider: Pick<Provider, "type">): string {
@@ -173,6 +223,8 @@ export function initialStore(init: StoreInit): Store {
       workspace: init.workspace ? workspaceBasename(init.workspace) : "",
       ctx_label: contextLabel(0, init.provider.context_size),
       ctx_pct: 0,
+      ctx_warn: false,
+      ctx_danger: false,
     },
     empty:
       init.empty ??
