@@ -112,7 +112,22 @@ a child and draws the whole screen from `apps/cli/src/tuimark/ui/app.tui`.
   fullscreen, `esc` or `q` closes it; an expanded block in the inline live
   region, never printed to the scrollback, `esc` closes it). The viewer
   always shows the most recent tool output, whichever card pointed you to
-  it, and its title names that receipt.
+  it, and its title names that receipt. `/status` opens a read-only panel
+  with the effective config (model, provider and endpoint, think, context
+  used, workspace, mode, session and its database, theme, mouse, session
+  grants, MCP counts); `/mcp` opens the same panel listing each connected
+  server with its tool names under the old count line. `/sessions` (with
+  `--session-db` at startup) lists the workspace's saved sessions:
+  `up`/`down` choose, `enter` loads that conversation whole and the next
+  turn continues it (refused while a turn runs; the draft is kept and
+  session grants — this process's trust — survive, as the confirming
+  status says; a session with an uncertain tool outcome or interrupted
+  tool calls is refused with the same words `--resume` would fail with).
+  Without `--session-db` it says so. `/export` writes the visible
+  conversation as markdown to
+  `local-agent-transcript-YYYYMMDD-HHMMSS.md` in the workspace (never
+  overwriting: a taken name gets a numeric suffix) and names the file on
+  the status line.
 
 ## Local model
 

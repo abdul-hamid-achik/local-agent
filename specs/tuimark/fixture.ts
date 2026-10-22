@@ -20,6 +20,9 @@
 //
 // In `session` mode the fixture first runs one headless turn into a session
 // database, then opens the Tuimark client on that session with --resume.
+// In `sessions` mode it runs two headless turns into the same database and
+// opens the client with only --session-db (a fresh, empty current session):
+// the spec switches to the second saved one from the /sessions picker.
 //
 // No inference and no credentials. The Tuimark binary comes from
 // TUIMARK_BINARY (CI installs the pinned release); the SDK may download it
@@ -39,6 +42,7 @@ const basePort = {
   "edit-deny": 19212,
   session: 19213,
   "edit-session": 19214,
+  sessions: 19215,
 }[mode];
 if (!basePort) throw new Error(`unknown mode: ${rawMode}`);
 const port = inline ? basePort + 100 : basePort;
@@ -258,6 +262,31 @@ if (mode === "session") {
     process.exit(1);
   }
   extraArgs.push("--session-db", database, "--resume", id);
+}
+if (mode === "sessions") {
+  sessionDirectory = await mkdtemp(join(tmpdir(), "local-agent-tuimark-db-"));
+  const database = join(sessionDirectory, "sessions.db");
+  for (const prompt of ["stream the first reply", "stream the second reply"]) {
+    const run = Bun.spawn(
+      [
+        process.execPath,
+        ...baseArgs,
+        "--mode",
+        "headless",
+        "-p",
+        prompt,
+        "--session-db",
+        database,
+      ],
+      { stdout: "ignore", stderr: "pipe", env },
+    );
+    const log = await new Response(run.stderr).text();
+    if ((await run.exited) !== 0) {
+      console.error(`headless session failed: ${log}`);
+      process.exit(1);
+    }
+  }
+  extraArgs.push("--session-db", database);
 }
 
 const child = Bun.spawn(

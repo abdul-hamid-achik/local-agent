@@ -1,0 +1,68 @@
+version: 1
+name: bun_tuimark_sessions_switch
+intent: |
+    /sessions in the Tuimark client (--session-db): the picker lists the
+    workspace's saved sessions, down and enter load the second saved one
+    whole (its earlier turn appears, the header names it), and a new
+    turn continues that session.
+target:
+    cmd: ["bun", "specs/tuimark/fixture.ts", "sessions"]
+    cwd: "${projectRoot}"
+terminal:
+    cols: 100
+    rows: 32
+    alternateScreen: require
+steps:
+    - wait:
+        screen:
+            contains: "Message the model"
+        timeoutMs: 20000
+    - type: "/sessions"
+    - press: enter
+    - wait:
+        screen:
+            contains: "Sessions"
+        timeoutMs: 5000
+    - wait:
+        screen:
+            contains: "messages · current"
+        timeoutMs: 5000
+    - snapshot: picker
+    - press: down
+    - press: enter
+    - wait:
+        screen:
+            contains: "Resumed session"
+        timeoutMs: 5000
+    - wait:
+        screen:
+            contains: "stream the second reply"
+        timeoutMs: 5000
+    - wait:
+        screen:
+            contains: "stream complete"
+        timeoutMs: 5000
+    - snapshot: switched
+    - type: "stream a third reply"
+    - press: enter
+    - wait:
+        screen:
+            contains: "stream a third reply"
+        timeoutMs: 15000
+    - wait:
+        screen:
+            contains: "Ready"
+        timeoutMs: 15000
+    - snapshot: continued
+    - press: ctrl+c
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 5000
+outcomes:
+    - id: tuimark_sessions_switch
+      description: the picker switches the live conversation to a saved session and continues it
+      verify:
+        process:
+            exitCode: 0
+contractHash: sha256:a1d69242a484d58b75b1a1ffec373cdceae696b442330ecb7b33e9d4146ec017
