@@ -371,7 +371,7 @@ const plays: Expect[] = [
     value: "/help",
   },
   { sample: "sample", input: "esc", actions: ["cancel"] },
-  { sample: "sample", input: "ctrl+c", actions: ["quit"] },
+  { sample: "sample", input: "ctrl+c", actions: ["quit_request"] },
   // The composer: enter sends, shift+enter and alt+enter break the line, a paste
   // keeps its breaks, and the message is one message.
   {
@@ -479,7 +479,7 @@ const plays: Expect[] = [
   { sample: "sample-approval", input: "n", actions: ["dialog_cancel"] },
   { sample: "sample-approval", input: "esc", actions: ["dialog_cancel"] },
   { sample: "sample-approval", input: "enter", actions: ["dialog_cancel"] },
-  { sample: "sample-approval", input: "ctrl+c", actions: ["quit"] },
+  { sample: "sample-approval", input: "ctrl+c", actions: ["quit_request"] },
   // The whole preview is reachable by key while the dialog is open.
   {
     sample: "sample-approval-long",
@@ -594,7 +594,7 @@ const plays: Expect[] = [
     doc: "inline.tui",
     inline: true,
     input: "ctrl+c",
-    actions: ["quit"],
+    actions: ["quit_request"],
   },
   {
     sample: "inline-sample",
@@ -660,7 +660,7 @@ const plays: Expect[] = [
     inline: true,
     rows: 30,
     input: "ctrl+c",
-    actions: ["quit"],
+    actions: ["quit_request"],
   },
   // The whole in-flow preview is reachable by key; at the inline width the
   // 70-column line the dialog wraps is whole.

@@ -31,6 +31,11 @@ steps:
     - snapshot: cancelled
     - press: ctrl+c
     - wait:
+        screen:
+            contains: "Draft cleared · ctrl+c again to quit"
+        timeoutMs: 5000
+    - press: ctrl+c
+    - wait:
         process:
             exitCode: 0
         timeoutMs: 5000

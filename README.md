@@ -91,8 +91,12 @@ a child and draws the whole screen from `apps/cli/src/tuimark/ui/app.tui`.
   is on the registry; see the README there.
 - Composer: `enter` sends, `shift+enter` or `alt+enter` start a new line, and a
   pasted block stays one message. The box grows to eight rows, then scrolls.
-  `up` on the first line and `down` on the last recall what you sent in this
-  session (a resumed session's earlier messages included). `ctrl+p` opens the
+  Sending while a reply is generating queues one message (a further send
+  replaces it; `esc` cancels the turn and drops the queue), and it runs when
+  the turn ends. `ctrl+c` first clears a non-empty draft; with an empty
+  composer it quits. `up` on the first line and `down` on the last recall what
+  you sent in this session (a resumed session's earlier messages included).
+  `ctrl+p` opens the
   command palette, `/help` lists every key. `ctrl+l` jumps the transcript back
   to the newest message. `/theme dark|light|auto` switches the session theme
   (no argument reports the current one; nothing is persisted). `/mouse on|off`

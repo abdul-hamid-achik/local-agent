@@ -11,6 +11,7 @@
 //   prompt starts with "count"     -> "The message had N lines: FIRST LINE" (one message,
 //                                      however it was typed or pasted)
 //   prompt contains "edit"         -> one `edit` tool call on notes.txt
+//   prompt contains "fail"         -> HTTP 500, so the turn fails
 //   prompt contains "slow"         -> one chunk, then nothing until cancelled
 //   anything else                  -> a streamed markdown reply with a code block
 //
@@ -150,6 +151,10 @@ const server = Bun.serve({
         ],
         5,
       );
+    if (prompt.includes("fail"))
+      return new Response("fixture failure: the model exploded", {
+        status: 500,
+      });
     if (prompt.includes("slow"))
       return stream([assistant("Working on it, this takes a while")], 5, true);
     return stream([...REPLY.map((piece) => assistant(piece)), done], 25);

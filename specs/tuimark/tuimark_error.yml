@@ -1,0 +1,66 @@
+version: 1
+name: bun_tuimark_error
+intent: |
+    a failed turn in the Tuimark client keeps the user's prompt in view with
+    an Error notice carrying the failure under it, gives the prompt back to
+    the composer for a retry, and the next turn still works. The restored
+    draft also exercises the two-stage ctrl+c: the first press clears the
+    draft instead of quitting.
+target:
+    cmd: ["bun", "specs/tuimark/fixture.ts", "chat"]
+    cwd: "${projectRoot}"
+terminal:
+    cols: 100
+    rows: 32
+    alternateScreen: require
+steps:
+    - wait:
+        screen:
+            contains: "Message the model"
+        timeoutMs: 15000
+    - type: "fail please"
+    - press: enter
+    - wait:
+        screen:
+            contains: "Error"
+        timeoutMs: 15000
+    - wait:
+        screen:
+            contains: "fail please"
+        timeoutMs: 5000
+    - snapshot: failed_turn
+    - press: ctrl+c
+    - wait:
+        screen:
+            contains: "Draft cleared · ctrl+c again to quit"
+        timeoutMs: 5000
+    - snapshot: draft_cleared
+    - type: "count this line"
+    - press: enter
+    - wait:
+        screen:
+            contains: "The message had 1 lines: count this line"
+        timeoutMs: 15000
+    - wait:
+        screen:
+            contains: "Ready"
+        timeoutMs: 5000
+    - snapshot: recovered
+    - type: "unsent words"
+    - press: ctrl+c
+    - wait:
+        screen:
+            contains: "Draft cleared · ctrl+c again to quit"
+        timeoutMs: 5000
+    - press: ctrl+c
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 5000
+outcomes:
+    - id: tuimark_error_notice
+      description: the failed prompt stays visible with an Error notice, ctrl+c first clears the restored draft, and a later turn succeeds
+      verify:
+        process:
+            exitCode: 0
+contractHash: sha256:871962d2c15bc7c9796d3c51254008e75ed3c6f6c9adac8b6f7aba9b30818667

@@ -72,18 +72,23 @@ steps:
     - snapshot: draft_back
     - press: ctrl+c
     - wait:
+        screen:
+            contains: "Draft cleared · ctrl+c again to quit"
+        timeoutMs: 5000
+    - press: ctrl+c
+    - wait:
         process:
             exitCode: 0
         timeoutMs: 5000
 outcomes:
     - id: tuimark_history_recalls
-      description: up walked back through both sent messages and down walked forward again to the unsent draft
+      description: up walked back through both sent messages and down walked forward again to the unsent draft (proven by the step waits on the composer; the closing ctrl+c clears that draft, so the final screen shows the transcript instead)
       verify:
         screen:
-            matches: "║ half typed\\s*║"
+            contains: "The message had 1 lines: count beta"
     - id: tuimark_history_exits
       description: the client exits cleanly
       verify:
         process:
             exitCode: 0
-contractHash: sha256:67ff8fd30b991aab8e3953282e7be8cdc82d1667c5b6c0f74814076ab2d638f6
+contractHash: sha256:13d645b8c382194d9fecdec3fe47cb1232d669ad8256e1f74c3ee00f46e0f575

@@ -1,0 +1,55 @@
+version: 1
+name: bun_tuimark_inline_error
+intent: |
+    a failed turn in the Tuimark inline client commits the user's prompt and
+    its Error notice into the scrollback like any finished view: after the
+    client exits, both remain in the terminal's own history, and a turn
+    after the failure still works.
+target:
+    cmd: ["bun", "specs/tuimark/fixture.ts", "chat-inline"]
+    cwd: "${projectRoot}"
+terminal:
+    cols: 100
+    rows: 40
+    alternateScreen: forbid
+steps:
+    - wait:
+        screen:
+            contains: "Message the model"
+        timeoutMs: 15000
+    - type: "fail please"
+    - press: enter
+    - wait:
+        screen:
+            contains: "Error"
+        timeoutMs: 15000
+    - snapshot: failed_turn
+    - press: ctrl+c
+    - wait:
+        screen:
+            contains: "Draft cleared · ctrl+c again to quit"
+        timeoutMs: 5000
+    - type: "count this line"
+    - press: enter
+    - wait:
+        screen:
+            contains: "The message had 1 lines: count this line"
+        timeoutMs: 15000
+    - snapshot: recovered
+    - press: ctrl+c
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 5000
+outcomes:
+    - id: tuimark_inline_error_scrollback
+      description: the failed prompt and its Error notice remain in the scrollback after exit
+      verify:
+        screen:
+            contains: "Error"
+    - id: tuimark_inline_error_exits
+      description: the inline client exits cleanly after a failed and a recovered turn
+      verify:
+        process:
+            exitCode: 0
+contractHash: sha256:0ba75f56d81e469a425d2e4037b3c159742722d6cf201ce34e60f4e3ed9494a1
