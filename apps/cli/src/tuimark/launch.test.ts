@@ -358,3 +358,76 @@ test("findBinary returns the path, or the reason there is none, and never throws
     }),
   ).toEqual({ error: "release v0.4.6 was not found" });
 });
+
+// ------------------------------------------------------- the sessions capability
+
+import { SessionStore } from "@local-agent/runtime";
+import { sessionCapability, sessionRefusal } from "#cli/tuimark/launch";
+
+test("the capability lists and loads through the store main uses", async () => {
+  const root = await mkdtemp(join(tmpdir(), "local-agent-capability-"));
+  const store = await SessionStore.open(join(root, "sessions.db"));
+  try {
+    const saved = await store.createSession(root, [
+      { role: "user", content: "saved hi" },
+      { role: "assistant", content: "saved hello" },
+    ]);
+    const capability = sessionCapability(store, root);
+    expect(await capability.list()).toEqual([
+      { handle: saved.publicId, messages: 2 },
+    ]);
+    const loaded = await capability.load(saved.publicId);
+    expect(loaded.store).toBe(store);
+    expect(loaded.state.publicId).toBe(saved.publicId);
+    expect(loaded.state.messages).toEqual(saved.messages);
+    await expect(capability.load("nope404")).rejects.toThrow(
+      "session not found",
+    );
+  } finally {
+    store.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("sessionRefusal mirrors runAgent's resume checks in its own words", () => {
+  const clean = { listHazards: () => [] };
+  const state = (messages: unknown[]) =>
+    ({ id: 1, workspaceId: "/w", messages }) as never;
+  expect(
+    sessionRefusal(clean as never, state([{ role: "user", content: "hi" }])),
+  ).toBeUndefined();
+  expect(
+    sessionRefusal(
+      { listHazards: () => [{}] } as never,
+      state([{ role: "user", content: "hi" }]),
+    ),
+  ).toBe(
+    "Session has an uncertain tool outcome; inspect recovery before continuing",
+  );
+  const interrupted = sessionRefusal(
+    clean as never,
+    state([
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [{ id: "c1", function: { name: "edit", arguments: {} } }],
+      },
+    ]),
+  );
+  expect(interrupted).toBe(
+    "Session contains interrupted tool calls; recovery is required",
+  );
+  const matched = sessionRefusal(
+    clean as never,
+    state([
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [{ id: "c1", function: { name: "edit", arguments: {} } }],
+      },
+      { role: "tool", content: "{}", tool_name: "edit", tool_call_id: "c1" },
+      { role: "assistant", content: "done" },
+    ]),
+  );
+  expect(matched).toBeUndefined();
+});

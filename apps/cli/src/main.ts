@@ -255,6 +255,7 @@ Interrupted tool outcomes require inspection; they are never automatically repla
         process.once("SIGINT", stop);
         process.once("SIGTERM", stop);
         const mcp: McpConnection[] = [];
+        const mcpNames: string[] = [];
         try {
           if (values["mcp-config"]) {
             const file = Bun.file(values["mcp-config"]);
@@ -271,6 +272,7 @@ Interrupted tool outcomes require inspection; they are never automatically repla
             for (const config of configs) {
               controller.signal.throwIfAborted();
               mcp.push(await connectMcp(config, controller.signal));
+              mcpNames.push(config.name);
             }
           }
           let client = headless
@@ -345,7 +347,10 @@ Interrupted tool outcomes require inspection; they are never automatically repla
               session,
               mcp,
               values.mode as "fullscreen" | "inline",
-              bin ? { resolve: async () => bin } : {},
+              {
+                mcpNames,
+                ...(bin ? { resolve: async () => bin } : {}),
+              },
             );
           } else {
             const { runTerminal } = await import("#cli/terminal");

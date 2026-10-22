@@ -12,7 +12,10 @@ import { fileURLToPath } from "node:url";
 import type {
   McpConnection,
   Provider,
+  Session,
   SessionContext,
+  SessionStore,
+  ToolCall,
   Workspace,
 } from "@local-agent/runtime";
 import { type Ready, resolveBinary, spawnHost } from "@thelacanians/tuimark";
@@ -20,6 +23,7 @@ import type { Intent } from "#cli/tuimark/commands";
 import {
   type ClientOptions,
   type Presentation,
+  type SessionsCapability,
   TuimarkClient,
 } from "#cli/tuimark/controller";
 
@@ -126,10 +130,75 @@ export async function findBinary(
   }
 }
 
+/**
+ * Why the runtime would refuse this session at its first turn, in its own
+ * words (runAgent's resume checks), or undefined when it is clean. The
+ * picker refuses at load with exactly these, so a switch never lands on
+ * a session whose next turn cannot run.
+ */
+export function sessionRefusal(
+  store: Pick<SessionStore, "listHazards">,
+  state: Session,
+): string | undefined {
+  if (store.listHazards(state.id, state.workspaceId).length)
+    return "Session has an uncertain tool outcome; inspect recovery before continuing";
+  let pending: ToolCall[] = [];
+  for (const message of state.messages) {
+    if (message.role !== "assistant" && message.tool_calls?.length)
+      return "Session contains invalid tool calls; recovery is required";
+    if (message.role === "tool") {
+      const expected = pending.shift();
+      if (
+        !expected ||
+        message.tool_name !== expected.function.name ||
+        message.tool_call_id !== expected.id
+      )
+        return "Session contains unmatched tool results; recovery is required";
+    } else {
+      if (pending.length)
+        return "Session contains interrupted tool calls; recovery is required";
+      if (message.tool_calls?.length) pending = message.tool_calls.slice();
+    }
+  }
+  if (pending.length)
+    return "Session contains interrupted tool calls; recovery is required";
+  return undefined;
+}
+
+/**
+ * The controller's `/sessions` capability over an open session store:
+ * the same `listSessions` / `loadSession` calls `--sessions` and
+ * `--resume` make in main.ts, nothing more.
+ */
+export function sessionCapability(
+  store: SessionStore,
+  workspaceRoot: string,
+): SessionsCapability {
+  return {
+    async list() {
+      const sessions = await store.listSessions(workspaceRoot);
+      return sessions.map((session) => ({
+        handle: session.publicId,
+        messages: session.messages.length,
+      }));
+    },
+    async load(handle) {
+      const state = await store.loadSession(handle, workspaceRoot);
+      const refusal = sessionRefusal(store, state);
+      if (refusal) throw new Error(refusal);
+      return { store, state };
+    },
+  };
+}
+
 /** The parts of the process the launcher uses (fakes in tests). */
 export interface LaunchDeps {
   /** Replaces the runtime's agent loop (tests). */
   run?: ClientOptions["run"];
+  /** The configured MCP server names, in connection order (the `/mcp` panel). */
+  mcpNames?: readonly string[];
+  /** Replaces the store-built `/sessions` capability (tests). */
+  sessions?: SessionsCapability;
   spawn?: typeof spawnHost;
   resolve?: () => Promise<string>;
   stdout?: {
@@ -163,7 +232,13 @@ export async function runTuimark(
     intent,
     presentation,
     session,
+    // `/sessions` exists exactly when the process has a session store
+    // (`--session-db`): the session context carries it.
+    sessions:
+      deps.sessions ??
+      (session ? sessionCapability(session.store, workspace.root) : undefined),
     mcp,
+    mcpNames: deps.mcpNames,
     signal,
     run: deps.run,
     columns: () => stdout.columns ?? readyColumns,

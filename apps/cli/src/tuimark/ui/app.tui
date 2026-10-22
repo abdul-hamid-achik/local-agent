@@ -48,6 +48,26 @@
     <bind keys="home" action="move-first" to="#details_body"/>
     <bind keys="end" action="move-last" to="#details_body"/>
   </keymap>
+  <!-- The sessions picker's keys, while the panel modal is picking (the
+       modal carries the class): up and down move the parent's choice and
+       enter loads it. Before the panel's scroll rows below, so the arrows
+       are the picker's, not the scroll's. -->
+  <keymap when=".picking">
+    <bind keys="down" action="panel_next"/>
+    <bind keys="up" action="panel_prev"/>
+    <bind keys="enter" action="panel_run"/>
+  </keymap>
+  <!-- The read-only panel's keys, while its modal is open: like the
+       details viewer's (every row reachable, q closes like esc). -->
+  <keymap when=".la-panel">
+    <bind keys="q" action="panel_close"/>
+    <bind keys="pgup" action="move-page-up" to="#panel_body"/>
+    <bind keys="pgdn" action="move-page-down" to="#panel_body"/>
+    <bind keys="up" action="move-prev" to="#panel_body"/>
+    <bind keys="down" action="move-next" to="#panel_body"/>
+    <bind keys="home" action="move-first" to="#panel_body"/>
+    <bind keys="end" action="move-last" to="#panel_body"/>
+  </keymap>
   <!-- The slash popup's keys, while it is open (the screen carries the
        class): they stand before the history and cancel rows below, and
        dispatch takes the first row that matches, so up and down move the
@@ -274,6 +294,28 @@
         </col>
       </scroll>
       <text class="la-muted">pgup/pgdn scroll · home/end top/bottom · esc or q close</text>
+    </modal>
+    <!-- The read-only panel: /status and /mcp as wrapped lines, /sessions
+         as picker rows (panel.rows; the parent moves the choice, nothing
+         in an each can take focus). The details viewer's modal shape. -->
+    <modal id="panel_dialog" class="la-panel" class:picking="panel.picking" open="panel.open" title="{panel.title}" on:escape="panel_close">
+      <text if="panel.args" class="la-muted" wrap="truncate">{panel.args}</text>
+      <!-- Not focusable (unlike the details scroll): a focused scroll
+           takes the arrows itself, and the picker's choice must get
+           them. The keymap scrolls it by target instead. -->
+      <scroll id="panel_body" class="la-diff" focusable="false">
+        <col class="la-difflines" each="panel.lines as ln" key="ln.n">
+          <text wrap="truncate" class:note="ln.note">{ln.t}</text>
+        </col>
+        <col class="la-slash-rows" each="panel.rows as r" key="r.id">
+          <row class="la-slash-row" class:sel="r.sel">
+            <text class="la-slash-mark">{r.mark}</text>
+            <text class="la-panel-label">{r.label}</text>
+          </row>
+        </col>
+      </scroll>
+      <text if="panel.picking" class="la-muted">up/down choose · enter loads · pgup/pgdn scroll · esc close</text>
+      <text if="!panel.picking" class="la-muted">pgup/pgdn scroll · home/end top/bottom · esc or q close</text>
     </modal>
   </screen>
 </tui>

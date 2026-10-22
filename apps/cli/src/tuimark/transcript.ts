@@ -22,6 +22,7 @@ export interface TranscriptSnapshot {
 export class Transcript {
   private readonly views: MessageView[] = [];
   private shown: number;
+  private readonly windowSize: number;
 
   constructor(
     private readonly step = WINDOW_STEP,
@@ -30,6 +31,7 @@ export class Transcript {
     if (window < 1 || step < 1)
       throw new RangeError("window and step must be >= 1");
     this.shown = window;
+    this.windowSize = window;
   }
 
   get length(): number {
@@ -38,6 +40,16 @@ export class Transcript {
 
   push(...views: MessageView[]): void {
     this.views.push(...views);
+  }
+
+  /**
+   * Drops every view and starts over from `views`, window back to its
+   * first size (a session switch: the old conversation is gone whole).
+   */
+  replace(views: MessageView[]): void {
+    this.views.length = 0;
+    this.views.push(...views);
+    this.shown = this.windowSize;
   }
 
   /** Removes and returns the newest view (a failed turn takes its prompt back). */

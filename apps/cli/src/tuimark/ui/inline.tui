@@ -72,6 +72,26 @@
     <bind keys="up" action="move-prev" to="#details_body"/>
     <bind keys="down" action="move-next" to="#details_body"/>
   </keymap>
+  <!-- The sessions picker's keys, while it is open (the screen carries
+       the class): the arrows at the draft's edges move the parent's
+       choice; enter stays the composer's and the parent's send handler
+       loads the chosen session instead of sending. Before the panel's
+       scroll rows, so the arrows are the picker's. -->
+  <keymap when=".picking">
+    <bind keys="esc" action="panel_close"/>
+    <bind keys="down" action="panel_next"/>
+    <bind keys="up" action="panel_prev"/>
+  </keymap>
+  <!-- The read-only panel's keys, while it is open: like the details
+       viewer's above (esc closes instead of cancelling; the composer
+       stays enabled and keeps its own keys first). -->
+  <keymap when=".paneling">
+    <bind keys="esc" action="panel_close"/>
+    <bind keys="pgup" action="move-page-up" to="#panel_body"/>
+    <bind keys="pgdn" action="move-page-down" to="#panel_body"/>
+    <bind keys="up" action="move-prev" to="#panel_body"/>
+    <bind keys="down" action="move-next" to="#panel_body"/>
+  </keymap>
   <keymap>
     <!-- Commands first: hint order is keymap order, and a narrow terminal
          keeps only the first hint that fits. -->
@@ -151,7 +171,7 @@
     </use>
   </template>
 
-  <screen id="main" focus="#composer" class:approving="approval.open" class:slashpop="slash.open" class:viewing="details.open">
+  <screen id="main" focus="#composer" class:approving="approval.open" class:slashpop="slash.open" class:viewing="details.open" class:paneling="panel.open" class:picking="panel.picking">
     <col id="app">
       <use template="k-appbar" brand="Local Agent" title="">
         <text class="la-muted la-provider">{header.provider}</text>
@@ -203,6 +223,26 @@
           </col>
         </scroll>
         <text class="la-muted">pgup/pgdn · up/down scroll · esc close</text>
+      </box>
+
+      <!-- The read-only panel, in flow like the details viewer: /status
+           and /mcp as wrapped lines, /sessions as picker rows the
+           parent moves a choice over. Region state only. -->
+      <box id="panel" class="la-details-inline" if="panel.open" title="{panel.title}">
+        <text if="panel.args" class="la-muted" wrap="truncate">{panel.args}</text>
+        <scroll id="panel_body" class="la-diff" focusable="false">
+          <col class="la-difflines" each="panel.lines as ln" key="ln.n">
+            <text wrap="truncate" class:note="ln.note">{ln.t}</text>
+          </col>
+          <col class="la-slash-rows" each="panel.rows as r" key="r.id">
+            <row class="la-slash-row" class:sel="r.sel">
+              <text class="la-slash-mark">{r.mark}</text>
+              <text class="la-panel-label">{r.label}</text>
+            </row>
+          </col>
+        </scroll>
+        <text if="panel.picking" class="la-muted">up/down choose · enter loads · pgup/pgdn scroll · esc close</text>
+        <text if="!panel.picking" class="la-muted">pgup/pgdn · up/down scroll · esc close</text>
       </box>
 
       <!-- The approval, in flow. The diff is a capped scroll; the keys are

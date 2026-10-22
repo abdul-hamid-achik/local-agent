@@ -1,0 +1,466 @@
+{
+  "header": {
+    "provider": "Ollama / loopback",
+    "model": "qwen3-coder:30b",
+    "mode": "build",
+    "session": "session a1b2c3d",
+    "workspace": "project",
+    "ctx_label": "9.6k/32k",
+    "ctx_pct": 30,
+    "ctx_warn": false,
+    "ctx_danger": false,
+    "grants": "",
+    "grants_on": false
+  },
+  "empty": false,
+  "mouse_on": false,
+  "messages": [
+    {
+      "id": "m0",
+      "is_user": true,
+      "is_asst": false,
+      "is_tool": false,
+      "is_notice": false,
+      "blocks": [
+        {
+          "id": "b0",
+          "para": true,
+          "head": false,
+          "quote": false,
+          "item": false,
+          "code": false,
+          "nest": false,
+          "marker": "",
+          "lang": "",
+          "runs": [
+            "Add a retry to the fetch helper and show me the result."
+          ]
+        }
+      ],
+      "card": {
+        "name": "",
+        "status": "",
+        "args": "",
+        "ok": false,
+        "bad": false,
+        "warn": false,
+        "running": false,
+        "out": []
+      }
+    },
+    {
+      "id": "m1",
+      "is_user": false,
+      "is_asst": true,
+      "is_tool": false,
+      "is_notice": false,
+      "blocks": [
+        {
+          "id": "b0",
+          "para": true,
+          "head": false,
+          "quote": false,
+          "item": false,
+          "code": false,
+          "nest": false,
+          "marker": "",
+          "lang": "",
+          "runs": [
+            "Sure. I will wrap the call in a bounded retry with backoff:"
+          ]
+        },
+        {
+          "id": "b1",
+          "para": false,
+          "head": false,
+          "quote": false,
+          "item": false,
+          "code": true,
+          "nest": false,
+          "marker": "",
+          "lang": "ts",
+          "runs": [
+            {
+              "text": "export",
+              "class": "kw"
+            },
+            " ",
+            {
+              "text": "async",
+              "class": "kw"
+            },
+            " ",
+            {
+              "text": "function",
+              "class": "kw"
+            },
+            " fetchRetry(url, tries = ",
+            {
+              "text": "3",
+              "class": "num"
+            },
+            ") {\n  ",
+            {
+              "text": "// exponential backoff",
+              "class": "com"
+            },
+            "\n  ",
+            {
+              "text": "for",
+              "class": "kw"
+            },
+            " (",
+            {
+              "text": "let",
+              "class": "kw"
+            },
+            " attempt = ",
+            {
+              "text": "1",
+              "class": "num"
+            },
+            "; ; attempt++) {\n    ",
+            {
+              "text": "try",
+              "class": "kw"
+            },
+            " { ",
+            {
+              "text": "return",
+              "class": "kw"
+            },
+            " ",
+            {
+              "text": "await",
+              "class": "kw"
+            },
+            " fetch(url); }\n    ",
+            {
+              "text": "catch",
+              "class": "kw"
+            },
+            " (e) { ",
+            {
+              "text": "if",
+              "class": "kw"
+            },
+            " (attempt === tries) ",
+            {
+              "text": "throw",
+              "class": "kw"
+            },
+            " e; }\n  }\n}"
+          ]
+        }
+      ],
+      "card": {
+        "name": "",
+        "status": "",
+        "args": "",
+        "ok": false,
+        "bad": false,
+        "warn": false,
+        "running": false,
+        "out": []
+      }
+    },
+    {
+      "id": "m2",
+      "is_user": false,
+      "is_asst": false,
+      "is_tool": true,
+      "is_notice": false,
+      "blocks": [],
+      "card": {
+        "name": "edit",
+        "status": "succeeded",
+        "args": "src/fetch.ts",
+        "ok": true,
+        "bad": false,
+        "warn": false,
+        "running": false,
+        "out": [
+          "Updated src/fetch.ts. Verification has not been run."
+        ]
+      }
+    },
+    {
+      "id": "m3",
+      "is_user": false,
+      "is_asst": true,
+      "is_tool": false,
+      "is_notice": false,
+      "blocks": [
+        {
+          "id": "b0",
+          "para": true,
+          "head": false,
+          "quote": false,
+          "item": false,
+          "code": false,
+          "nest": false,
+          "marker": "",
+          "lang": "",
+          "runs": [
+            "Done. The helper now retries three times."
+          ]
+        }
+      ],
+      "card": {
+        "name": "",
+        "status": "",
+        "args": "",
+        "ok": false,
+        "bad": false,
+        "warn": false,
+        "running": false,
+        "out": []
+      }
+    }
+  ],
+  "earlier": {
+    "n": 0
+  },
+  "live": {
+    "id": "live",
+    "is_user": false,
+    "is_asst": true,
+    "is_tool": false,
+    "is_notice": false,
+    "blocks": [],
+    "card": {
+      "name": "",
+      "status": "",
+      "args": "",
+      "ok": false,
+      "bad": false,
+      "warn": false,
+      "running": false,
+      "out": []
+    },
+    "active": false,
+    "tail": []
+  },
+  "thinking": {
+    "on": false,
+    "runs": []
+  },
+  "approval": {
+    "open": false,
+    "title": "",
+    "body": "",
+    "danger": false,
+    "no": "Deny",
+    "yes": "Allow",
+    "truncated": false,
+    "grant_hint": "",
+    "grant_ok": false,
+    "lines": []
+  },
+  "details": {
+    "open": false,
+    "title": "",
+    "args": "",
+    "lines": []
+  },
+  "panel": {
+    "open": true,
+    "title": "MCP servers",
+    "args": "MCP servers: 1 · 2 tools",
+    "lines": [
+      {
+        "n": 0,
+        "t": "db · 2 tools",
+        "add": false,
+        "del": false,
+        "note": false
+      },
+      {
+        "n": 1,
+        "t": "  query, insert",
+        "add": false,
+        "del": false,
+        "note": false
+      }
+    ],
+    "rows": [],
+    "picking": false
+  },
+  "palette": {
+    "open": false,
+    "query": "",
+    "cur": "mode-plan"
+  },
+  "found": {
+    "any": true,
+    "items": [
+      {
+        "id": "mode-plan",
+        "label": "Mode: plan (read only)",
+        "hint": "/mode plan"
+      },
+      {
+        "id": "mode-build",
+        "label": "Mode: build (read, edit, command)",
+        "hint": "/mode build"
+      },
+      {
+        "id": "theme-dark",
+        "label": "Theme: dark",
+        "hint": "/theme dark"
+      },
+      {
+        "id": "theme-light",
+        "label": "Theme: light",
+        "hint": "/theme light"
+      },
+      {
+        "id": "theme-auto",
+        "label": "Theme: auto",
+        "hint": "/theme auto"
+      },
+      {
+        "id": "mouse-on",
+        "label": "Mouse: on",
+        "hint": "/mouse on"
+      },
+      {
+        "id": "mouse-off",
+        "label": "Mouse: off",
+        "hint": "/mouse off"
+      },
+      {
+        "id": "permissions",
+        "label": "Permissions: show",
+        "hint": "/permissions"
+      },
+      {
+        "id": "permissions-clear",
+        "label": "Permissions: clear all",
+        "hint": "/permissions clear"
+      },
+      {
+        "id": "details",
+        "label": "Details: last tool output",
+        "hint": "/details"
+      },
+      {
+        "id": "status",
+        "label": "Status: effective config",
+        "hint": "/status"
+      },
+      {
+        "id": "sessions",
+        "label": "Sessions: switch session",
+        "hint": "/sessions"
+      },
+      {
+        "id": "export",
+        "label": "Export transcript to markdown",
+        "hint": "/export"
+      },
+      {
+        "id": "mcp",
+        "label": "MCP servers",
+        "hint": "/mcp"
+      },
+      {
+        "id": "help",
+        "label": "Help, commands and keys",
+        "hint": "/help"
+      },
+      {
+        "id": "load-earlier",
+        "label": "Load earlier messages",
+        "hint": "ctrl+o"
+      },
+      {
+        "id": "quit",
+        "label": "Quit",
+        "hint": "ctrl+c"
+      }
+    ]
+  },
+  "slash": {
+    "open": false,
+    "rows": []
+  },
+  "help": {
+    "open": false,
+    "cmds": [
+      {
+        "id": "/mode",
+        "cmd": "/mode plan|build",
+        "desc": "plan reads only · build can edit"
+      },
+      {
+        "id": "/theme",
+        "cmd": "/theme dark|light|auto",
+        "desc": "set the session theme"
+      },
+      {
+        "id": "/mouse",
+        "cmd": "/mouse on|off",
+        "desc": "toggle mouse reporting (fullscreen)"
+      },
+      {
+        "id": "/permissions",
+        "cmd": "/permissions [clear]",
+        "desc": "show or clear session approval grants"
+      },
+      {
+        "id": "/details",
+        "cmd": "/details",
+        "desc": "show the last tool output in full"
+      },
+      {
+        "id": "/status",
+        "cmd": "/status",
+        "desc": "show the effective config (model, workspace, session)"
+      },
+      {
+        "id": "/sessions",
+        "cmd": "/sessions",
+        "desc": "switch to a saved session (needs --session-db)"
+      },
+      {
+        "id": "/export",
+        "cmd": "/export",
+        "desc": "write the conversation to a markdown file"
+      },
+      {
+        "id": "/mcp",
+        "cmd": "/mcp",
+        "desc": "show connected MCP servers and their tools"
+      },
+      {
+        "id": "/help",
+        "cmd": "/help",
+        "desc": "show the commands and the keys"
+      }
+    ]
+  },
+  "draft": "",
+  "placeholder": "Message the model",
+  "busy": false,
+  "status": "MCP servers: 1 · 2 tools",
+  "commit_buf": {
+    "id": "commit",
+    "is_user": false,
+    "is_asst": false,
+    "is_tool": false,
+    "is_notice": false,
+    "blocks": [],
+    "card": {
+      "name": "",
+      "status": "",
+      "args": "",
+      "ok": false,
+      "bad": false,
+      "warn": false,
+      "running": false,
+      "out": []
+    }
+  },
+  "commit_blocks": []
+}

@@ -11,6 +11,8 @@
 // ack is the backpressure Phase 0 measured). Nothing here touches the terminal:
 // `tuimark host` owns it.
 
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import {
   type AgentEvent,
   type AgentOptions,
@@ -48,6 +50,7 @@ import {
   slashRows,
   type Theme,
 } from "#cli/tuimark/commands";
+import { exportFileName, transcriptMarkdown } from "#cli/tuimark/export";
 import {
   APPROVAL_STATUS,
   APPROVAL_TRUNCATED_SESSION_STATUS,
@@ -67,12 +70,20 @@ import {
   grantsLabel,
   idleStatus,
   initialStore,
+  type McpServerFacts,
+  mcpLines,
+  mcpParts,
   NO_DETAILS_STATUS,
   noApproval,
   noDetails,
+  noPanel,
   PLACEHOLDER,
   PLACEHOLDER_BUSY,
+  panelState,
+  type SessionSummary,
   type Store,
+  sessionRows,
+  statusLines,
   WAITING_STATUS,
 } from "#cli/tuimark/store";
 import { LiveStream } from "#cli/tuimark/stream";
@@ -91,6 +102,17 @@ type RunAgent = (
   options: AgentOptions,
 ) => AsyncIterable<AgentEvent>;
 
+/**
+ * Saved-session discovery and loading, handed in by the launcher only
+ * when the process runs with `--session-db`. `load` refuses (throws) a
+ * session the runtime would refuse at its first turn — recovery hazards
+ * and interrupted tool calls — with the runtime's own words.
+ */
+export interface SessionsCapability {
+  list(): Promise<SessionSummary[]>;
+  load(handle: string): Promise<SessionContext>;
+}
+
 export interface ClientOptions {
   provider: Provider;
   workspace: Workspace;
@@ -102,7 +124,20 @@ export interface ClientOptions {
    */
   presentation?: Presentation;
   session?: SessionContext;
+  /** `/sessions` support, present only with `--session-db` (see launch.ts). */
+  sessions?: SessionsCapability;
   mcp?: readonly McpConnection[];
+  /**
+   * The configured name of each MCP connection, in `mcp` order. A
+   * connection itself carries only its `SERVER__TOOL` names; the launcher
+   * knows the config names (a server with no tools has no name otherwise).
+   */
+  mcpNames?: readonly string[];
+  /**
+   * Creates the export file exclusively (`wx`): rejects with EEXIST when
+   * the path is taken, so an export never overwrites. Default node fs.
+   */
+  writeExport?: (path: string, text: string) => Promise<void>;
   /** Process-level abort (SIGINT, SIGTERM). */
   signal: AbortSignal;
   /** Replaces the runtime's agent loop (tests). */
@@ -152,7 +187,15 @@ const MAX_SENT = 200;
 export class TuimarkClient {
   private ui?: UiHost;
   private readonly run: RunAgent;
-  private readonly builder = new ViewBuilder();
+  // A session switch starts from a fresh builder: the old one's call-id
+  // map belongs to the old conversation.
+  private builder = new ViewBuilder();
+  /**
+   * The durable session the next turn checkpoints to. Starts as the
+   * launch session; a `/sessions` switch replaces it whole (never while
+   * a turn runs, so a checkpoint can never land in the wrong session).
+   */
+  private session?: SessionContext;
   private readonly transcript: Transcript;
   private readonly history: Message[];
   /** What the user sent, oldest first: up and down at the edge of the composer recall it. */
@@ -221,6 +264,14 @@ export class TuimarkClient {
   private lastReceipt?: ToolReceipt;
   /** Whether the details viewer is open (the store's `details.open`). */
   private detailsOpen = false;
+  /** Whether the read-only panel is open (the store's `panel.open`). */
+  private panelOpen = false;
+  /** The open text panel's source, re-wrapped on resize like a preview. */
+  private panelText?: { title: string; args: string; text: string };
+  /** The picker's sessions, in list order, while it is open. */
+  private panelSessions: SessionSummary[] = [];
+  /** The picker's chosen row, an index into `panelSessions`. */
+  private panelSel = 0;
   /** The header ctx meter (see CtxMeter for the exact accumulation rule). */
   private readonly ctx = new CtxMeter();
   /** One message sent while busy, run when the turn ends. A new send replaces it. */
@@ -246,6 +297,7 @@ export class TuimarkClient {
     this.inline = options.presentation === "inline";
     this.stream = new LiveStream(undefined, { inline: this.inline });
     this.transcript = new Transcript(options.windowStep, options.windowSize);
+    this.session = options.session;
     this.history = options.session?.state.messages.slice() ?? [];
     // A resumed session shows its saved messages, through the same mapping as a live turn.
     for (const message of this.history) {
@@ -342,6 +394,10 @@ export class TuimarkClient {
       this.write([{ path: "help.open", value: false }]),
     );
     ui.on("details_close", () => this.closeDetails());
+    ui.on("panel_close", () => this.closePanel());
+    ui.on("panel_next", () => this.panelMove(1));
+    ui.on("panel_prev", () => this.panelMove(-1));
+    ui.on("panel_run", () => this.panelRun());
     if (this.inline) {
       // A resumed session's history is the scrollback: print it once, in order.
       const views = this.transcript.all();
@@ -368,6 +424,8 @@ export class TuimarkClient {
         path: "details",
         value: this.detailsFor(this.lastReceipt),
       });
+    if (this.panelOpen && this.panelText)
+      writes.push({ path: "panel", value: this.panelFor(this.panelText) });
     if (writes.length > 0) await this.write(writes);
   }
 
@@ -409,9 +467,325 @@ export class TuimarkClient {
     }
     this.detailsOpen = true;
     await this.write([
+      ...this.closePanelWrite(),
       { path: "details", value: this.detailsFor(receipt) },
       { path: "status", value: `Latest tool output: ${receipt.name}` },
     ]);
+  }
+
+  // ------------------------------------------------------------------ the panel
+
+  private panelFor(text: { title: string; args: string; text: string }) {
+    return panelState(
+      text.title,
+      text.args,
+      text.text,
+      this.options.columns?.() ?? 80,
+      this.inline,
+    );
+  }
+
+  /** The writes that close the panel, or none when it is already closed. */
+  private closePanelWrite(): Write[] {
+    if (!this.panelOpen) return [];
+    this.panelOpen = false;
+    this.panelText = undefined;
+    this.panelSessions = [];
+    this.panelSel = 0;
+    return [{ path: "panel", value: noPanel() }];
+  }
+
+  /** Esc/q in the panel: it closes and the status rests at idle again. */
+  private async closePanel(): Promise<void> {
+    const writes = this.closePanelWrite();
+    if (writes.length === 0) return;
+    writes.push({
+      path: "status",
+      value: idleStatus(this.options.mcp?.length ?? 0),
+    });
+    await this.write(writes);
+  }
+
+  /**
+   * Opens a text panel (`/status`, `/mcp`). Refused while a turn runs or
+   * an approval is open, like the viewer; the two never cover each other.
+   */
+  private async openPanel(
+    title: string,
+    args: string,
+    text: string,
+    status: string,
+  ): Promise<void> {
+    if (this.busy || this.proposal) {
+      await this.write([{ path: "status", value: BUSY_STATUS }]);
+      return;
+    }
+    this.panelOpen = true;
+    this.panelText = { title, args, text };
+    this.panelSessions = [];
+    await this.write([
+      ...this.closeDetailsWrite(),
+      { path: "panel", value: this.panelFor(this.panelText) },
+      { path: "status", value: status },
+    ]);
+  }
+
+  /** Whether the sessions picker is the open panel. */
+  private get picking(): boolean {
+    return this.panelOpen && this.panelSessions.length > 0;
+  }
+
+  /** The picker's store value for the current choice. */
+  private pickerState() {
+    return {
+      open: true,
+      title: "Sessions",
+      args: "",
+      lines: [],
+      rows: sessionRows(
+        this.panelSessions,
+        this.panelSel,
+        this.session?.state.publicId,
+      ),
+      picking: true,
+    };
+  }
+
+  /** Up and down in the picker: the choice moves, clamped like the popup's. */
+  private async panelMove(by: number): Promise<void> {
+    if (!this.picking) return;
+    this.panelSel = Math.max(
+      0,
+      Math.min(this.panelSel + by, this.panelSessions.length - 1),
+    );
+    await this.write([{ path: "panel", value: this.pickerState() }]);
+  }
+
+  /** Enter in the picker: load the chosen session. */
+  private async panelRun(): Promise<void> {
+    if (!this.picking) return;
+    const chosen = this.panelSessions[this.panelSel];
+    if (chosen) await this.switchSession(chosen.handle);
+  }
+
+  /** `/status`: the effective config, exactly what this client holds. */
+  private async openStatusPanel(): Promise<void> {
+    const { provider, mcp = [] } = this.options;
+    const db = this.session?.store.path;
+    const text = statusLines({
+      provider,
+      workspace: this.options.workspace?.root ?? "",
+      intent: this.intent,
+      sessionId: this.session?.state.publicId,
+      sessionDb: typeof db === "string" && db ? db : undefined,
+      theme: this.theme,
+      mouse: this.inline ? "n/a (inline)" : this.mouse ? "on" : "off",
+      grants: this.grantLabels(),
+      usedTokens: this.ctx.current,
+      mcpServers: mcp.length,
+      mcpTools: mcp.reduce((total, server) => total + server.tools.length, 0),
+    }).join("\n");
+    await this.openPanel("Status", "", text, "Status");
+  }
+
+  /** One connection as panel facts: its config name when known, else its tools' prefix. */
+  private mcpFacts(): McpServerFacts[] {
+    const { mcp = [], mcpNames = [] } = this.options;
+    return mcp.map((server, index) => {
+      const names = server.tools.map((tool) => tool.name);
+      const known = mcpNames[index];
+      const derived = names[0] ? mcpParts(names[0])?.server : undefined;
+      const name = known ?? derived ?? `server ${index + 1}`;
+      return {
+        name,
+        // Tool names only — the local name under its server, never a
+        // result (those stay inside the runtime's parser boundary).
+        tools: names.map((tool) =>
+          tool.startsWith(`${name}__`) ? tool.slice(name.length + 2) : tool,
+        ),
+      };
+    });
+  }
+
+  /** `/mcp`: each connected server with its tool names, count line on top. */
+  private async openMcpPanel(countLine: string): Promise<void> {
+    await this.openPanel(
+      "MCP servers",
+      countLine,
+      mcpLines(this.mcpFacts()).join("\n"),
+      countLine,
+    );
+  }
+
+  /** `/sessions`: the picker, or why this process has no saved sessions. */
+  private async openSessions(): Promise<void> {
+    if (this.busy || this.proposal || this.queued !== undefined) {
+      await this.write([{ path: "status", value: BUSY_STATUS }]);
+      return;
+    }
+    const capability = this.options.sessions;
+    if (!capability) {
+      await this.write([
+        {
+          path: "status",
+          value: "Sessions need --session-db PATH at startup",
+        },
+      ]);
+      return;
+    }
+    let sessions: SessionSummary[];
+    try {
+      sessions = await capability.list();
+    } catch (error) {
+      await this.write([
+        {
+          path: "status",
+          value: oneLine(
+            error instanceof Error ? error.message : "Unable to list sessions",
+          ),
+        },
+      ]);
+      return;
+    }
+    if (sessions.length === 0) {
+      await this.write([
+        { path: "status", value: "No sessions in this workspace" },
+      ]);
+      return;
+    }
+    this.panelOpen = true;
+    this.panelText = undefined;
+    this.panelSessions = sessions;
+    const current = sessions.findIndex(
+      (session) => session.handle === this.session?.state.publicId,
+    );
+    this.panelSel = current >= 0 ? current : 0;
+    await this.write([
+      ...this.closeDetailsWrite(),
+      { path: "panel", value: this.pickerState() },
+      { path: "status", value: "Sessions · enter loads · esc closes" },
+    ]);
+  }
+
+  /**
+   * Loads `handle` as the live conversation. Refused while busy, queued
+   * or approving; the draft is kept, the queue is already empty (refused
+   * above), and session grants survive — they are this process's trust,
+   * not the saved session's — which the confirming status says.
+   */
+  private async switchSession(handle: string): Promise<void> {
+    const capability = this.options.sessions;
+    if (!capability) return;
+    if (this.busy || this.proposal || this.queued !== undefined) {
+      await this.write([{ path: "status", value: BUSY_STATUS }]);
+      return;
+    }
+    if (handle === this.session?.state.publicId) {
+      await this.write([
+        ...this.closePanelWrite(),
+        { path: "status", value: `Already in session ${handle}` },
+      ]);
+      return;
+    }
+    let context: SessionContext;
+    try {
+      context = await capability.load(handle);
+    } catch (error) {
+      await this.write([
+        ...this.closePanelWrite(),
+        {
+          path: "status",
+          value: oneLine(
+            error instanceof Error ? error.message : "Unable to load session",
+          ),
+        },
+      ]);
+      return;
+    }
+    // The swap is whole and synchronous from here: history, transcript,
+    // builder and the checkpoint target change together, so the next
+    // turn can only continue (and checkpoint) the loaded session.
+    this.session = context;
+    this.history.length = 0;
+    this.history.push(...context.state.messages);
+    this.builder = new ViewBuilder();
+    const views: MessageView[] = [];
+    this.lastReceipt = undefined;
+    this.sent.length = 0;
+    this.recall = undefined;
+    this.recalledFrom = "";
+    for (const message of this.history) {
+      const view = this.builder.fromMessage(message);
+      if (view) views.push(view);
+      const receipt = this.builder.receiptOf(message);
+      if (receipt) this.lastReceipt = receipt;
+      if (message.role === "user" && message.content.trim())
+        this.sent.push(message.content);
+    }
+    this.transcript.replace(views);
+    this.ctx.reset();
+    const grants = this.grantLabels();
+    const closed = this.closePanelWrite();
+    // Inline, the loaded history joins the scrollback like a resumed
+    // session's does at attach; the region itself holds no history.
+    if (this.inline) for (const view of views) await this.commitView(view);
+    await this.publishMessages([
+      ...closed,
+      ...this.closeDetailsWrite(),
+      { path: "empty", value: views.length === 0 },
+      { path: "header.session", value: `session ${context.state.publicId}` },
+      ...this.ctxWrites(0),
+      {
+        path: "status",
+        value:
+          `Resumed session ${context.state.publicId} · ${context.state.messages.length} messages` +
+          (grants.length ? ` · grants kept: ${grants.join(" · ")}` : ""),
+      },
+    ]);
+  }
+
+  /** `/export`: the visible conversation to a timestamped markdown file. */
+  private async exportTranscript(): Promise<void> {
+    if (this.busy || this.proposal) {
+      await this.write([{ path: "status", value: BUSY_STATUS }]);
+      return;
+    }
+    const views = this.transcript.all();
+    if (views.length === 0) {
+      await this.write([{ path: "status", value: "Nothing to export yet" }]);
+      return;
+    }
+    const root = this.options.workspace?.root ?? "";
+    const write =
+      this.options.writeExport ??
+      ((path: string, text: string) =>
+        writeFile(path, text, { flag: "wx" }).then(() => {}));
+    const text = transcriptMarkdown(views);
+    const base = exportFileName(new Date(this.now()));
+    const stem = base.slice(0, -".md".length);
+    try {
+      // Never overwrite: the timestamped name first, then -2, -3, …
+      for (let suffix = 1; ; suffix++) {
+        const name = suffix === 1 ? base : `${stem}-${suffix}.md`;
+        try {
+          await write(join(root, name), text);
+          await this.write([
+            { path: "status", value: `Exported transcript to ${name}` },
+          ]);
+          return;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Export failed";
+      const notice = this.builder.notice(`Export failed: ${message}`);
+      this.transcript.push(notice);
+      if (this.inline) await this.commitView(notice);
+      await this.publishWindow([
+        { path: "status", value: oneLine(`Export failed: ${message}`) },
+      ]);
+    }
   }
 
   private approvalFor(proposal: ApprovalRequest) {
@@ -886,6 +1260,13 @@ export class TuimarkClient {
       ]);
       return;
     }
+    // Inline, the composer owns enter even under the picker (fullscreen
+    // binds it on the modal instead): an enter over an open picker loads
+    // the chosen session and leaves the draft alone.
+    if (this.inline && this.picking) {
+      await this.panelRun();
+      return;
+    }
     // Any real send leaves the popup behind with the draft.
     const closed = this.closeSlash();
     if (closed.length > 0) await this.write(closed);
@@ -995,6 +1376,23 @@ export class TuimarkClient {
     // its whole outcome — refusal included — is written there.
     if (outcome.details) {
       await this.openDetails();
+      return;
+    }
+    // The panel and export commands likewise run on controller state.
+    if (outcome.statusPanel) {
+      await this.openStatusPanel();
+      return;
+    }
+    if (outcome.mcpPanel) {
+      await this.openMcpPanel(outcome.status);
+      return;
+    }
+    if (outcome.sessions) {
+      await this.openSessions();
+      return;
+    }
+    if (outcome.exportTranscript) {
+      await this.exportTranscript();
       return;
     }
     // Inline has no mouse, and its document never reads `mouse_on`: refuse
@@ -1158,6 +1556,7 @@ export class TuimarkClient {
         ...this.closeSlash(),
         // The viewer never covers an armed dialog.
         ...this.closeDetailsWrite(),
+        ...this.closePanelWrite(),
         { path: "approval", value: approval },
         { path: "status", value: APPROVAL_WAIT_STATUS },
       ];
@@ -1243,6 +1642,7 @@ export class TuimarkClient {
       await this.publishMessages([
         // A new turn takes the screen: an open viewer closes with it.
         ...this.closeDetailsWrite(),
+        ...this.closePanelWrite(),
         // The welcome goes with the first message and never returns.
         { path: "empty", value: false },
         { path: "draft", value: "" },
@@ -1267,7 +1667,10 @@ export class TuimarkClient {
   }
 
   private async loop(prompt: string, request: AbortController): Promise<void> {
-    const { provider, workspace, session, mcp, signal } = this.options;
+    const { provider, workspace, mcp, signal } = this.options;
+    // The session this turn checkpoints to (a switch is refused while
+    // busy, so it cannot change under the turn).
+    const session = this.session;
     let receivedMessage = false;
     let status = idleStatus(mcp?.length ?? 0);
     let toolName = "";

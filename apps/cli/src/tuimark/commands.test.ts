@@ -152,6 +152,9 @@ test("the slash catalog lists exactly the commands the parser knows", () => {
     "/mouse",
     "/permissions",
     "/details",
+    "/status",
+    "/sessions",
+    "/export",
     "/mcp",
     "/help",
   ]);
@@ -190,10 +193,42 @@ test("the slash catalog lists exactly the commands the parser knows", () => {
     "/mouse on|off",
     "/permissions [clear]",
     "/details",
+    "/status",
+    "/sessions",
+    "/export",
     "/mcp",
     "/help",
   ]);
   expect(slashMatches("/p")?.map((c) => c.name)).toEqual(["/permissions"]);
+});
+
+test("/status, /sessions and /export ask the controller for their panels and file", () => {
+  expect(runSlash("/status", state)).toEqual({
+    status: "Status",
+    statusPanel: true,
+  });
+  expect(runSlash("/sessions", state)).toEqual({
+    status: "Sessions",
+    sessions: true,
+  });
+  expect(runSlash("/export", state)).toEqual({
+    status: "Exporting transcript…",
+    exportTranscript: true,
+  });
+  // /mcp keeps its count line and now opens the panel over it.
+  expect(runSlash("/mcp", state).mcpPanel).toBe(true);
+  expect(HELP_STATUS).toContain("/status");
+  expect(HELP_STATUS).toContain("/sessions");
+  expect(HELP_STATUS).toContain("/export");
+  expect(slashMatches("/s")?.map((c) => c.name)).toEqual([
+    "/status",
+    "/sessions",
+  ]);
+  expect(slashMatches("/e")?.map((c) => c.name)).toEqual(["/export"]);
+  expect(filterPalette("status").map((r) => r.id)).toEqual(["status"]);
+  expect(paletteCommand("status")).toBe("/status");
+  expect(paletteCommand("sessions")).toBe("/sessions");
+  expect(paletteCommand("export")).toBe("/export");
 });
 
 test("the palette's key rows: quit everywhere, load-earlier fullscreen only", () => {

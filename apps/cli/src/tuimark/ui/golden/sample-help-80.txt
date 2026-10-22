@@ -9,23 +9,23 @@
 │  ts       │  /mouse on|off toggle mouse reporting (fullscreen)   │           │
 │  export as│  /permissions [clear] show or clear session approv…  │           │
 │    // expo│  /details show the last tool output in full          │           │
-│    for (le│  /mcp show connected MCP servers and their tools     │           │
-│      try {│  /help show the commands and the keys                │           │
-│      catch│                                                      │           │
-│    }      │  Keys                                                │           │
-│  }        │  enter send                                          │           │
-│           │  shift/alt+enter new line                            │           │
-│ ╭─ Tool · │  a session                                           │─────────╮ │
-│ │succeeded│  pgup/pgdn scroll                                    │         │ │
-│ │src/fetch│  home/end top/end                                    │         │ │
-│ │Updated s│  ^P commands                                         │         │ │
-│ ╰─────────│  esc cancel                                          │─────────╯ │
+│    for (le│  /status show the effective config (model, workspa…  │           │
+│      try {│  /sessions switch to a saved session (needs --sess…  │           │
+│      catch│  /export write the conversation to a markdown file   │           │
+│    }      │  /mcp show connected MCP servers and their tools     │           │
+│  }        │  /help show the commands and the keys                │           │
+│           │                                                      │           │
+│ ╭─ Tool · │  Keys                                                │─────────╮ │
+│ │succeeded│  enter send                                          │         │ │
+│ │src/fetch│  shift/alt+enter new line                            │         │ │
+│ │Updated s│  a session                                           │         │ │
+│ ╰─────────│  pgup/pgdn scroll                                    │─────────╯ │
+│           │  home/end top/end                                    │           │
+│ Assistant │  ^P commands                                         │           │
+│ Done. The │  esc cancel                                          │           │
 │           │  ctrl+c quit                                         │           │
-│ Assistant │  ↑/↓ history                                         │           │
-│ Done. The │  ^O earlier                                          │           │
-│           │  pgup/pgdn scroll                                    │           │
-└───────────│  ^L latest                                           │───────────┘
-╭───────────│  shift+tab mode                                      │───────────╮
-│ Message th│                                                      │           │
-╰───────────╰──────────────────────────────────────────────────────╯───────────╯
- Ready · /help for commands                                                     
+└───────────│  ↑/↓ history                                         │───────────┘
+╭───────────│  ^O earlier                                          │───────────╮
+│ Message th│  pgup/pgdn scroll                                    │           │
+╰───────────│                                                      │───────────╯
+ Ready · /he╰──────────────────────────────────────────────────────╯            

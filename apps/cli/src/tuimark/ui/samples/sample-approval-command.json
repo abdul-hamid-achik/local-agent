@@ -278,6 +278,14 @@
     "args": "",
     "lines": []
   },
+  "panel": {
+    "open": false,
+    "title": "",
+    "args": "",
+    "lines": [],
+    "rows": [],
+    "picking": false
+  },
   "palette": {
     "open": false,
     "query": "",
@@ -337,6 +345,21 @@
         "hint": "/details"
       },
       {
+        "id": "status",
+        "label": "Status: effective config",
+        "hint": "/status"
+      },
+      {
+        "id": "sessions",
+        "label": "Sessions: switch session",
+        "hint": "/sessions"
+      },
+      {
+        "id": "export",
+        "label": "Export transcript to markdown",
+        "hint": "/export"
+      },
+      {
         "id": "mcp",
         "label": "MCP servers",
         "hint": "/mcp"
@@ -389,6 +412,21 @@
         "id": "/details",
         "cmd": "/details",
         "desc": "show the last tool output in full"
+      },
+      {
+        "id": "/status",
+        "cmd": "/status",
+        "desc": "show the effective config (model, workspace, session)"
+      },
+      {
+        "id": "/sessions",
+        "cmd": "/sessions",
+        "desc": "switch to a saved session (needs --session-db)"
+      },
+      {
+        "id": "/export",
+        "cmd": "/export",
+        "desc": "write the conversation to a markdown file"
       },
       {
         "id": "/mcp",

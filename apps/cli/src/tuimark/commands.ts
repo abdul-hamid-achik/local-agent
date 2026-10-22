@@ -39,10 +39,18 @@ export interface CommandOutcome {
    * controller owns the receipt, so it writes the real status itself.
    */
   details?: boolean;
+  /** Set by `/status`: open the panel over the effective config. */
+  statusPanel?: boolean;
+  /** Set by `/mcp`: open the panel over the servers (`status` is its count line). */
+  mcpPanel?: boolean;
+  /** Set by `/sessions`: open the session picker (or say why there is none). */
+  sessions?: boolean;
+  /** Set by `/export`: write the transcript to a markdown file. */
+  exportTranscript?: boolean;
 }
 
 export const HELP_STATUS =
-  "/mode plan|build · /theme dark|light|auto · /mouse on|off · /permissions [clear] · /details · /mcp · /help · Esc cancel · Ctrl+C exit";
+  "/mode plan|build · /theme dark|light|auto · /mouse on|off · /permissions [clear] · /details · /status · /sessions · /export · /mcp · /help · Esc cancel · Ctrl+C exit";
 
 /** Inline has no mouse (the engine ignores it there): the controller refuses with this. */
 export const MOUSE_INLINE_STATUS = "Mouse is not available in inline mode";
@@ -115,12 +123,19 @@ export function runSlash(text: string, state: CommandState): CommandOutcome {
   }
   if (command === "/details")
     return { status: "Latest tool output", details: true };
+  if (command === "/status") return { status: "Status", statusPanel: true };
+  if (command === "/sessions") return { status: "Sessions", sessions: true };
+  if (command === "/export")
+    return { status: "Exporting transcript…", exportTranscript: true };
   if (command === "/help") return { status: HELP_STATUS, help: true };
   if (command === "/mcp")
     return {
+      // The count line heads the panel and rests on the status line, as
+      // the flash alone did before the panel existed.
       status: state.mcp.servers
         ? `MCP servers: ${state.mcp.servers} · ${state.mcp.tools} tools`
         : "MCP servers: 0 · use --mcp-config to connect trusted servers",
+      mcpPanel: true,
     };
   return { status: `Unknown command: ${command}. Use /help` };
 }
@@ -179,6 +194,24 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
     usage: "/details",
     description: "show the last tool output in full",
     insert: "/details",
+  },
+  {
+    name: "/status",
+    usage: "/status",
+    description: "show the effective config (model, workspace, session)",
+    insert: "/status",
+  },
+  {
+    name: "/sessions",
+    usage: "/sessions",
+    description: "switch to a saved session (needs --session-db)",
+    insert: "/sessions",
+  },
+  {
+    name: "/export",
+    usage: "/export",
+    description: "write the conversation to a markdown file",
+    insert: "/export",
   },
   {
     name: "/mcp",
@@ -276,6 +309,9 @@ export const PALETTE: readonly PaletteItem[] = [
     hint: "/permissions clear",
   },
   { id: "details", label: "Details: last tool output", hint: "/details" },
+  { id: "status", label: "Status: effective config", hint: "/status" },
+  { id: "sessions", label: "Sessions: switch session", hint: "/sessions" },
+  { id: "export", label: "Export transcript to markdown", hint: "/export" },
   { id: "mcp", label: "MCP servers", hint: "/mcp" },
   { id: "help", label: "Help, commands and keys", hint: "/help" },
   // Two rows stand for keys, not slash commands: the controller runs them

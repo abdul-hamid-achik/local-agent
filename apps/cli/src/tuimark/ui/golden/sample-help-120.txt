@@ -9,23 +9,23 @@
 │  ts                           │  /mouse on|off toggle mouse reporting (fullscreen)   │                               │
 │  export async function fetchRe│  /permissions [clear] show or clear session approv…  │                               │
 │    // exponential backoff     │  /details show the last tool output in full          │                               │
-│    for (let attempt = 1; ; att│  /mcp show connected MCP servers and their tools     │                               │
-│      try { return await fetch(│  /help show the commands and the keys                │                               │
-│      catch (e) { if (attempt =│                                                      │                               │
-│    }                          │  Keys                                                │                               │
-│  }                            │  enter send                                          │                               │
-│                               │  shift/alt+enter new line                            │                               │
-│ ╭─ Tool · edit ───────────────│  a session                                           │─────────────────────────────╮ │
-│ │succeeded                    │  pgup/pgdn scroll                                    │                             │ │
-│ │src/fetch.ts                 │  home/end top/end                                    │                             │ │
-│ │Updated src/fetch.ts. Verific│  ^P commands                                         │                             │ │
-│ ╰─────────────────────────────│  esc cancel                                          │─────────────────────────────╯ │
+│    for (let attempt = 1; ; att│  /status show the effective config (model, workspa…  │                               │
+│      try { return await fetch(│  /sessions switch to a saved session (needs --sess…  │                               │
+│      catch (e) { if (attempt =│  /export write the conversation to a markdown file   │                               │
+│    }                          │  /mcp show connected MCP servers and their tools     │                               │
+│  }                            │  /help show the commands and the keys                │                               │
+│                               │                                                      │                               │
+│ ╭─ Tool · edit ───────────────│  Keys                                                │─────────────────────────────╮ │
+│ │succeeded                    │  enter send                                          │                             │ │
+│ │src/fetch.ts                 │  shift/alt+enter new line                            │                             │ │
+│ │Updated src/fetch.ts. Verific│  a session                                           │                             │ │
+│ ╰─────────────────────────────│  pgup/pgdn scroll                                    │─────────────────────────────╯ │
+│                               │  home/end top/end                                    │                               │
+│ Assistant                     │  ^P commands                                         │                               │
+│ Done. The helper now retries t│  esc cancel                                          │                               │
 │                               │  ctrl+c quit                                         │                               │
-│ Assistant                     │  ↑/↓ history                                         │                               │
-│ Done. The helper now retries t│  ^O earlier                                          │                               │
-│                               │  pgup/pgdn scroll                                    │                               │
-└───────────────────────────────│  ^L latest                                           │───────────────────────────────┘
-╭───────────────────────────────│  shift+tab mode                                      │───────────────────────────────╮
-│ Message the model             │                                                      │                               │
-╰───────────────────────────────╰──────────────────────────────────────────────────────╯───────────────────────────────╯
- Ready · /help for commands                                                                                             
+└───────────────────────────────│  ↑/↓ history                                         │───────────────────────────────┘
+╭───────────────────────────────│  ^O earlier                                          │───────────────────────────────╮
+│ Message the model             │  pgup/pgdn scroll                                    │                               │
+╰───────────────────────────────│                                                      │───────────────────────────────╯
+ Ready · /help for commands     ╰──────────────────────────────────────────────────────╯                                

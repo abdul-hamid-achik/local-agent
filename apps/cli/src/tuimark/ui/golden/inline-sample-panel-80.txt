@@ -1,0 +1,22 @@
+=== grid 80x21 ===
+ Local Agent    qwen3-coder:30b  build    auto: files  ctx 9.6k/32k  ████░░░░░░ 
+╭─ Status ─────────────────────────────────────────────────────────────────────╮
+│ ┌──────────────────────────────────────────────────────────────────────────┐ │
+│ │Model: qwen3-coder:30b                                                    ┃ │
+│ │Provider: Ollama / loopback                                               ┃ │
+│ │Endpoint: http://127.0.0.1:11434/                                         ┃ │
+│ │Think: model default                                                      ┃ │
+│ │Context: 9.6k/32k                                                         ┃ │
+│ │Workspace: /home/me/project                                               ┃ │
+│ │Mode: build                                                               ┃ │
+│ │Session: a1b2c3d                                                          │ │
+│ │Session db: /home/me/project/sessions.db                                  │ │
+│ │Theme: auto                                                               │ │
+│ └──────────────────────────────────────────────────────────────────────────┘ │
+│ pgup/pgdn · up/down scroll · esc close                                       │
+╰──────────────────────────────────────────────────────────────────────────────╯
+                                                                                
+╔══════════════════════════════════════════════════════════════════════════════╗
+║ Message the model                                                            ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+ Status   ^P commands  ctrl+c quit  ^L latest  shift+tab mode                   

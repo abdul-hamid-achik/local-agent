@@ -14,13 +14,18 @@ import {
   grantFor,
   grantsLabel,
   initialStore,
+  mcpLines,
   mcpParts,
   NO_DETAILS_STATUS,
   noApproval,
   noDetails,
+  noPanel,
+  panelState,
   previewRows,
   previewWidth,
   previewWidthInline,
+  sessionRows,
+  statusLines,
   TRUNCATED_BODY,
   tokens,
   workspaceBasename,
@@ -96,6 +101,7 @@ test("the initial store has every path the document reads", () => {
       "live",
       "messages",
       "palette",
+      "panel",
       "placeholder",
       "slash",
       "status",
@@ -104,6 +110,7 @@ test("the initial store has every path the document reads", () => {
   );
   expect(store.approval).toEqual(noApproval());
   expect(store.details).toEqual(noDetails());
+  expect(store.panel).toEqual(noPanel());
   expect(NO_DETAILS_STATUS).toBe(
     "No tool output yet. Run something first, then /details",
   );
@@ -526,3 +533,134 @@ test("detailsState titles the receipt and wraps its output per presentation", ()
     note: true,
   });
 });
+
+test("the ctx meter exposes what it shows and resets for a new conversation", () => {
+  const meter = new CtxMeter();
+  meter.beginTurn();
+  meter.observe(500);
+  expect(meter.current).toBe(500);
+  meter.finishTurn();
+  expect(meter.current).toBe(500);
+  meter.reset();
+  expect(meter.current).toBe(0);
+});
+
+test("statusLines states only the facts it is handed", () => {
+  const lines = statusLines({
+    provider: {
+      type: "ollama_remote",
+      model: "qwen3:32b",
+      context_size: 32_768,
+      base_url: "http://127.0.0.1:9999/",
+      think: false,
+    },
+    workspace: "/home/me/project",
+    intent: "plan",
+    theme: "dark",
+    mouse: "on",
+    grants: [],
+    usedTokens: 1024,
+    mcpServers: 0,
+    mcpTools: 0,
+  });
+  expect(lines).toEqual([
+    "Model: qwen3:32b",
+    "Provider: Chalupa / remote",
+    "Endpoint: http://127.0.0.1:9999/",
+    "Think: off",
+    "Context: 1.0k/32k",
+    "Workspace: /home/me/project",
+    "Mode: plan",
+    "Session: temporary",
+    "Theme: dark",
+    "Mouse: on",
+    "Grants: none",
+    "MCP: 0 servers · 0 tools",
+  ]);
+  const withDb = statusLines({
+    provider: {
+      type: "ollama",
+      model: "m",
+      context_size: 8192,
+      base_url: "http://127.0.0.1:11434/",
+    },
+    workspace: "/w",
+    intent: "build",
+    sessionId: "abc123",
+    sessionDb: "/w/sessions.db",
+    theme: "auto",
+    mouse: "off",
+    grants: ["files", "bun test"],
+    usedTokens: 0,
+    mcpServers: 1,
+    mcpTools: 3,
+  });
+  expect(withDb).toContain("Session: abc123");
+  expect(withDb).toContain("Session db: /w/sessions.db");
+  expect(withDb).toContain("Think: model default");
+  expect(withDb).toContain("Grants: files · bun test");
+});
+
+test("mcpLines names servers and tools, and says so when there are none", () => {
+  expect(mcpLines([])).toEqual([
+    "No MCP servers configured",
+    "Use --mcp-config to connect trusted servers",
+  ]);
+  expect(
+    mcpLines([
+      { name: "db", tools: ["query", "insert"] },
+      { name: "empty", tools: [] },
+    ]),
+  ).toEqual([
+    "db · 2 tools",
+    "  query, insert",
+    "empty · 0 tools",
+    "  (no tools)",
+  ]);
+});
+
+test("sessionRows marks the choice and the current session as text", () => {
+  const rows = sessionRows(
+    [
+      { handle: "aaa111", messages: 3 },
+      { handle: "bbb222", messages: 7 },
+    ],
+    1,
+    "aaa111",
+  );
+  expect(rows).toEqual([
+    {
+      id: "aaa111",
+      label: "aaa111 · 3 messages · current",
+      sel: false,
+      mark: "",
+    },
+    { id: "bbb222", label: "bbb222 · 7 messages", sel: true, mark: "›" },
+  ]);
+});
+
+test("a text panel wraps like the viewer and the closed panel is empty", () => {
+  const panel = panelState("Status", "head", "one\ntwo", 80);
+  expect(panel.open).toBe(true);
+  expect(panel.picking).toBe(false);
+  expect(panel.lines.map((line) => line.t)).toEqual(["one", "two"]);
+  expect(noPanel()).toEqual({
+    open: false,
+    title: "",
+    args: "",
+    lines: [],
+    rows: [],
+    picking: false,
+  });
+  expect(initialStore(storeInitForPanel()).panel).toEqual(noPanel());
+  expect(SAMPLES["sample-panel"]().panel.open).toBe(true);
+});
+
+function storeInitForPanel() {
+  return {
+    provider: { type: "ollama" as const, model: "m", context_size: 8192 },
+    intent: "build" as const,
+    mcpServers: 0,
+    transcript: { messages: [], earlier: { n: 0 } },
+  };
+}

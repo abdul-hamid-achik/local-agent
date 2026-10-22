@@ -60,3 +60,18 @@ test("a window below 1 is refused", () => {
   expect(() => new Transcript(100, 0)).toThrow(RangeError);
   expect(() => new Transcript(0, 10)).toThrow(RangeError);
 });
+
+test("replace drops the old conversation and resets the window", () => {
+  const t = new Transcript(100, 2);
+  fill(t, 5);
+  expect(t.widen()).toBe(true);
+  t.replace([make(90), make(91), make(92)]);
+  expect(t.length).toBe(3);
+  expect(t.all().map((view) => view.id)).toEqual(["m90", "m91", "m92"]);
+  // The window is back to its first size: only the newest two show.
+  expect(t.snapshot().messages.map((view) => view.id)).toEqual(["m91", "m92"]);
+  expect(t.snapshot().earlier.n).toBe(1);
+  t.replace([]);
+  expect(t.length).toBe(0);
+  expect(t.snapshot()).toEqual({ messages: [], earlier: { n: 0 } });
+});

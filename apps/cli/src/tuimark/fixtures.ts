@@ -20,7 +20,11 @@ import {
   contextPct,
   detailsState,
   initialStore,
+  mcpLines,
+  panelState,
   type Store,
+  sessionRows,
+  statusLines,
 } from "#cli/tuimark/store";
 import { streamingView } from "#cli/tuimark/stream";
 import { Transcript } from "#cli/tuimark/transcript";
@@ -430,6 +434,86 @@ export function slashSample(): Store {
   return store;
 }
 
+/** The `/status` panel open (the modal, fullscreen), grants active. */
+export function panelSample(): Store {
+  const { store } = base();
+  store.header.grants = "auto: files";
+  store.header.grants_on = true;
+  const text = statusLines({
+    provider: { ...provider, base_url: "http://127.0.0.1:11434/" },
+    workspace: "/home/me/project",
+    intent: "build",
+    sessionId: "a1b2c3d",
+    sessionDb: "/home/me/project/sessions.db",
+    theme: "auto",
+    mouse: "off",
+    grants: ["files"],
+    usedTokens: 9_800,
+    mcpServers: 1,
+    mcpTools: 2,
+  }).join("\n");
+  store.panel = panelState("Status", "", text, 80);
+  store.status = "Status";
+  return store;
+}
+
+/** The `/mcp` panel open: one server, its tool names under it. */
+export function mcpPanelSample(): Store {
+  const { store } = base();
+  const count = "MCP servers: 1 · 2 tools";
+  store.panel = panelState(
+    "MCP servers",
+    count,
+    mcpLines([{ name: "db", tools: ["query", "insert"] }]).join("\n"),
+    80,
+  );
+  store.status = count;
+  return store;
+}
+
+/** The `/sessions` picker open: three saved sessions, the current one chosen. */
+export function sessionsSample(): Store {
+  const { store } = base();
+  store.panel = {
+    open: true,
+    title: "Sessions",
+    args: "",
+    lines: [],
+    rows: sessionRows(
+      [
+        { handle: "a1b2c3d", messages: 5 },
+        { handle: "e4f5g6h", messages: 12 },
+        { handle: "i7j8k9l", messages: 2 },
+      ],
+      0,
+      "a1b2c3d",
+    ),
+    picking: true,
+  };
+  store.status = "Sessions · enter loads · esc closes";
+  return store;
+}
+
+/** The `/status` panel as the inline in-flow block (wrapped full-width). */
+export function inlinePanelSample(): Store {
+  const store = toInline(panelSample());
+  const text = statusLines({
+    provider: { ...provider, base_url: "http://127.0.0.1:11434/" },
+    workspace: "/home/me/project",
+    intent: "build",
+    sessionId: "a1b2c3d",
+    sessionDb: "/home/me/project/sessions.db",
+    theme: "auto",
+    mouse: "n/a (inline)",
+    grants: ["files"],
+    usedTokens: 9_800,
+    mcpServers: 1,
+    mcpTools: 2,
+  }).join("\n");
+  store.panel = panelState("Status", "", text, 80, true);
+  return store;
+}
+
 export const SAMPLES = {
   sample: idleSample,
   "sample-empty": emptySample,
@@ -445,6 +529,9 @@ export const SAMPLES = {
   "sample-palette": paletteSample,
   "sample-help": helpSample,
   "sample-details": detailsSample,
+  "sample-panel": panelSample,
+  "sample-mcp": mcpPanelSample,
+  "sample-sessions": sessionsSample,
   "sample-slash": slashSample,
   "sample-grants": grantsSample,
   "sample-draft": draftSample,
@@ -495,6 +582,8 @@ export const INLINE_SAMPLES = {
   "inline-sample-palette": () => toInline(paletteSample()),
   "inline-sample-help": () => toInline(helpSample()),
   "inline-sample-details": inlineDetailsSample,
+  "inline-sample-panel": inlinePanelSample,
+  "inline-sample-sessions": () => toInline(sessionsSample()),
   "inline-sample-slash": () => toInline(slashSample()),
   "inline-sample-draft-long": () => toInline(longDraftSample()),
 } as const;

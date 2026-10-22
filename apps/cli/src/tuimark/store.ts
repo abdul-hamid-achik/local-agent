@@ -76,6 +76,35 @@ export interface DetailsState {
   lines: DiffLine[];
 }
 
+/** One row of the `/sessions` picker: a saved session and the selection flag. */
+export interface SessionRow {
+  /** The session's public handle, also the row key. */
+  id: string;
+  /** "<handle> · N messages", plus " · current" on the live one. */
+  label: string;
+  sel: boolean;
+  /** "›" on the chosen row, "" on the rest (selection must read as text). */
+  mark: string;
+}
+
+/**
+ * The read-only panel (`/status`, `/mcp`, `/sessions`): the details
+ * viewer's shape (title, a header line, wrapped lines) plus, for the
+ * sessions picker, display rows the parent moves a choice over.
+ */
+export interface PanelState {
+  open: boolean;
+  title: string;
+  /** A one-line summary under the title (the `/mcp` count line), "" for none. */
+  args: string;
+  /** The panel's text, hard-wrapped like a preview. Empty while picking. */
+  lines: DiffLine[];
+  /** The picker's rows. Empty unless `picking`. */
+  rows: SessionRow[];
+  /** True for `/sessions`: enter loads the chosen row. */
+  picking: boolean;
+}
+
 export interface ApprovalState {
   open: boolean;
   title: string;
@@ -128,6 +157,11 @@ export interface Store {
    * an in-flow block inline (region state, never committed).
    */
   details: DetailsState;
+  /**
+   * The read-only panel over `/status`, `/mcp` and the `/sessions`
+   * picker: a modal fullscreen, an in-flow block inline, like `details`.
+   */
+  panel: PanelState;
   palette: { open: boolean; query: string; cur: string };
   found: { any: boolean; items: PaletteItem[] };
   /**
@@ -218,6 +252,18 @@ export class CtxMeter {
     this.max = this.base;
     return this.base;
   }
+
+  /** What the header shows right now (the turn's max, or the resting baseline). */
+  get current(): number {
+    return this.max;
+  }
+
+  /** A different conversation starts from zero (a session switch). */
+  reset(): void {
+    this.base = 0;
+    this.max = 0;
+    this.last = undefined;
+  }
 }
 
 export function providerLabel(provider: Pick<Provider, "type">): string {
@@ -228,6 +274,17 @@ export function providerLabel(provider: Pick<Provider, "type">): string {
 
 export function noDetails(): DetailsState {
   return { open: false, title: "", args: "", lines: [] };
+}
+
+export function noPanel(): PanelState {
+  return {
+    open: false,
+    title: "",
+    args: "",
+    lines: [],
+    rows: [],
+    picking: false,
+  };
 }
 
 export function noApproval(): ApprovalState {
@@ -295,6 +352,7 @@ export function initialStore(init: StoreInit): Store {
     thinking: IDLE_THINKING,
     approval: noApproval(),
     details: noDetails(),
+    panel: noPanel(),
     palette: { open: false, query: "", cur: found[0]?.id ?? "" },
     found: { any: found.length > 0, items: found },
     slash: { open: false, rows: [] },
@@ -628,4 +686,127 @@ export function detailsState(
     args: receipt.args,
     lines: detailsRows(receipt.output, width),
   };
+}
+
+// ----------------------------------------------------------------------- panel
+
+/** A text panel (`/status`, `/mcp`), wrapped like the details viewer. */
+export function panelState(
+  title: string,
+  args: string,
+  text: string,
+  cols = 80,
+  inline = false,
+): PanelState {
+  const width = inline ? previewWidthInline(cols) : previewWidth(cols);
+  return {
+    open: true,
+    title: clip(cleanText(title), 70),
+    args: clip(cleanText(args), 160),
+    lines: detailsRows(text, width),
+    rows: [],
+    picking: false,
+  };
+}
+
+/** One saved session as the picker lists it. */
+export interface SessionSummary {
+  handle: string;
+  messages: number;
+}
+
+/** Picker rows for `sessions`, the row at `selected` marked; `current` is the live handle. */
+export function sessionRows(
+  sessions: readonly SessionSummary[],
+  selected: number,
+  current?: string,
+): SessionRow[] {
+  return sessions.map((session, index) => ({
+    id: session.handle,
+    label: cleanText(
+      `${session.handle} · ${session.messages} messages${session.handle === current ? " · current" : ""}`,
+    ),
+    sel: index === selected,
+    mark: index === selected ? "›" : "",
+  }));
+}
+
+/** The `/status` panel's key/value facts, exactly those the client holds. */
+export interface StatusFacts {
+  provider: Pick<
+    Provider,
+    "type" | "model" | "context_size" | "base_url" | "think"
+  >;
+  /** The workspace root, shown whole. */
+  workspace: string;
+  intent: Intent;
+  /** Public session handle, or undefined for a temporary session. */
+  sessionId?: string;
+  /** The session database path, when the session's store can name it. */
+  sessionDb?: string;
+  theme: string;
+  /** "on" / "off", or "n/a (inline)" where the engine has no mouse. */
+  mouse: string;
+  /** Session-grant labels, in grant order. */
+  grants: readonly string[];
+  /** Tokens the header's meter shows used. */
+  usedTokens: number;
+  mcpServers: number;
+  mcpTools: number;
+}
+
+/** The `/status` lines: `Key: value`, one fact per line, nothing invented. */
+export function statusLines(facts: StatusFacts): string[] {
+  const lines = [
+    `Model: ${cleanText(facts.provider.model)}`,
+    `Provider: ${providerLabel(facts.provider)}`,
+    `Endpoint: ${cleanText(facts.provider.base_url)}`,
+    `Think: ${facts.provider.think === undefined ? "model default" : facts.provider.think ? "on" : "off"}`,
+    `Context: ${contextLabel(facts.usedTokens, facts.provider.context_size)}`,
+    `Workspace: ${cleanText(facts.workspace)}`,
+    `Mode: ${facts.intent}`,
+    `Session: ${facts.sessionId ?? "temporary"}`,
+  ];
+  if (facts.sessionDb) lines.push(`Session db: ${cleanText(facts.sessionDb)}`);
+  lines.push(
+    `Theme: ${facts.theme}`,
+    `Mouse: ${facts.mouse}`,
+    `Grants: ${facts.grants.length ? grantsLabel(facts.grants).slice("auto: ".length) : "none"}`,
+    `MCP: ${facts.mcpServers} servers · ${facts.mcpTools} tools`,
+  );
+  return lines;
+}
+
+/** One connected MCP server as the panel lists it: its name and tool names only. */
+export interface McpServerFacts {
+  name: string;
+  /** Tool names as shown under the server (local names when the prefix is known). */
+  tools: readonly string[];
+}
+
+/**
+ * The `/mcp` panel's lines: one heading line per server, then its tool
+ * names. Names only — never a result or structured content (those stay
+ * inside the runtime's parser boundary).
+ */
+export function mcpLines(servers: readonly McpServerFacts[]): string[] {
+  if (servers.length === 0)
+    return [
+      "No MCP servers configured",
+      "Use --mcp-config to connect trusted servers",
+    ];
+  const lines: string[] = [];
+  for (const server of servers) {
+    lines.push(
+      cleanText(
+        `${server.name} · ${server.tools.length} tool${server.tools.length === 1 ? "" : "s"}`,
+      ),
+    );
+    lines.push(
+      server.tools.length
+        ? `  ${server.tools.map((tool) => cleanText(tool)).join(", ")}`
+        : "  (no tools)",
+    );
+  }
+  return lines;
 }

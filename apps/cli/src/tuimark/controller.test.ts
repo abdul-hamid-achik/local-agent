@@ -956,12 +956,22 @@ test("the palette filters, cancels and runs a command", async () => {
 
 test("tool receipts and MCP servers feed /mcp", async () => {
   const mcp = [
-    { tools: [{}, {}] },
-    { tools: [{}] },
+    { tools: [{ name: "db__query" }, { name: "db__insert" }] },
+    { tools: [{ name: "fs__read" }] },
   ] as unknown as McpConnection[];
-  const { ui } = setup(reply("x"), { mcp });
+  const { ui } = setup(reply("x"), { mcp, mcpNames: ["db", "fs"] });
   await ui.fire("send", "/mcp");
   expect(store(ui).status).toBe("MCP servers: 2 · 3 tools");
+  // The panel opens over the servers: count line on top, tool names only.
+  expect(store(ui).panel.open).toBe(true);
+  expect(store(ui).panel.title).toBe("MCP servers");
+  expect(store(ui).panel.args).toBe("MCP servers: 2 · 3 tools");
+  expect(store(ui).panel.lines.map((line) => line.t)).toEqual([
+    "db · 2 tools",
+    "  query, insert",
+    "fs · 1 tool",
+    "  read",
+  ]);
 });
 
 test("no write is ever refused by the host", async () => {
@@ -1399,6 +1409,9 @@ test("typing / opens the command popup; it filters, moves and completes", async 
     "/mouse",
     "/permissions",
     "/details",
+    "/status",
+    "/sessions",
+    "/export",
     "/mcp",
     "/help",
   ]);
@@ -1586,6 +1599,9 @@ test("the help overlay's store carries the slash commands", () => {
     "/mouse on|off",
     "/permissions [clear]",
     "/details",
+    "/status",
+    "/sessions",
+    "/export",
     "/mcp",
     "/help",
   ]);
@@ -2158,4 +2174,275 @@ test("inline: the viewer is region state — never committed, never in the model
   await client.idle();
   expect(JSON.stringify(seen)).not.toContain("truncated for the viewer");
   expect(client.writeErrors).toEqual([]);
+});
+
+// ------------------------------------------------------- panel, sessions, export
+
+const fakeSession = (handle: string, messages: Message[]): SessionContext =>
+  ({
+    store: { path: "/w/sessions.db" },
+    state: { publicId: handle, messages },
+  }) as unknown as SessionContext;
+
+function capabilityFor(contexts: Record<string, SessionContext>) {
+  return {
+    list: async () =>
+      Object.entries(contexts).map(([handle, context]) => ({
+        handle,
+        messages: context.state.messages.length,
+      })),
+    load: async (handle: string) => {
+      const context = contexts[handle];
+      if (!context) throw new Error("session not found");
+      return context;
+    },
+  };
+}
+
+test("/status opens the panel with the config the client actually holds", async () => {
+  const session = fakeSession("abc123", []);
+  const { ui } = setup(reply("x"), { session });
+  await ui.fire("send", "/status");
+  const panel = store(ui).panel;
+  expect(panel.open).toBe(true);
+  expect(panel.title).toBe("Status");
+  const lines = panel.lines.map((line) => line.t);
+  expect(lines).toContain("Model: fixture");
+  expect(lines).toContain("Provider: Ollama / loopback");
+  expect(lines).toContain("Mode: build");
+  expect(lines).toContain("Session: abc123");
+  expect(lines).toContain("Session db: /w/sessions.db");
+  expect(lines).toContain("Theme: auto");
+  expect(lines).toContain("Mouse: off");
+  expect(lines).toContain("Context: 0/8.0k");
+  await ui.fire("panel_close");
+  expect(store(ui).panel.open).toBe(false);
+  expect(store(ui).status).toBe(IDLE_STATUS);
+});
+
+test("/mcp with no servers says so in the panel, count line on top", async () => {
+  const { ui } = setup(reply("x"));
+  await ui.fire("send", "/mcp");
+  expect(store(ui).panel.open).toBe(true);
+  expect(store(ui).panel.args).toBe(
+    "MCP servers: 0 · use --mcp-config to connect trusted servers",
+  );
+  expect(store(ui).panel.lines.map((line) => line.t)).toEqual([
+    "No MCP servers configured",
+    "Use --mcp-config to connect trusted servers",
+  ]);
+});
+
+test("/sessions without a session capability says it needs --session-db", async () => {
+  const { ui } = setup(reply("x"));
+  await ui.fire("send", "/sessions");
+  expect(store(ui).panel.open).toBe(false);
+  expect(store(ui).status).toBe("Sessions need --session-db PATH at startup");
+});
+
+test("the picker loads a session whole: history, header and the next turn's checkpoint target", async () => {
+  const first = fakeSession("aaa111", [
+    { role: "user", content: "first prompt" },
+    { role: "assistant", content: "first reply" },
+  ]);
+  const second = fakeSession("bbb222", [
+    { role: "user", content: "saved prompt" },
+    { role: "assistant", content: "saved reply" },
+  ]);
+  const sessions = capabilityFor({ aaa111: first, bbb222: second });
+  const turns: { session?: SessionContext; messages: string[] }[] = [];
+  const { ui, client } = setup(
+    async function* ({ options, messages }) {
+      turns.push({
+        session: options.session,
+        messages: messages.map((m) => `${m.role}:${m.content}`),
+      });
+      yield {
+        type: "message",
+        message: { role: "assistant", content: "continued" },
+      };
+    },
+    { session: first, sessions },
+  );
+  expect(store(ui).header.session).toBe("session aaa111");
+  await ui.fire("send", "/sessions");
+  // A draft in progress (the palette opens the picker without touching
+  // it) survives the switch.
+  store(ui).draft = "keep me";
+  expect(store(ui).panel.picking).toBe(true);
+  expect(store(ui).panel.rows.map((row) => [row.id, row.sel])).toEqual([
+    ["aaa111", true],
+    ["bbb222", false],
+  ]);
+  await ui.fire("panel_next");
+  expect(store(ui).panel.rows[1]?.sel).toBe(true);
+  await ui.fire("panel_run");
+  expect(store(ui).panel.open).toBe(false);
+  expect(store(ui).status).toBe("Resumed session bbb222 · 2 messages");
+  expect(store(ui).header.session).toBe("session bbb222");
+  expect(store(ui).draft).toBe("keep me");
+  expect(store(ui).messages.map(viewText)).toEqual([
+    "saved prompt",
+    "saved reply",
+  ]);
+  // The next turn continues — and checkpoints — only the loaded session.
+  await ui.fire("send", "continue please");
+  await client.idle();
+  expect(turns).toHaveLength(1);
+  expect(turns[0]?.session?.state.publicId).toBe("bbb222");
+  expect(turns[0]?.messages).toEqual([
+    "user:saved prompt",
+    "assistant:saved reply",
+    "user:continue please",
+  ]);
+  expect(JSON.stringify(turns)).not.toContain("first prompt");
+  expect(client.writeErrors).toEqual([]);
+});
+
+test("picking the current session just says so; a refused load keeps the conversation", async () => {
+  const first = fakeSession("aaa111", [{ role: "user", content: "here" }]);
+  const sessions = {
+    list: async () => [
+      { handle: "aaa111", messages: 1 },
+      { handle: "bad999", messages: 4 },
+    ],
+    load: async () => {
+      throw new Error(
+        "Session has an uncertain tool outcome; inspect recovery before continuing",
+      );
+    },
+  };
+  const { ui } = setup(reply("x"), { session: first, sessions });
+  await ui.fire("send", "/sessions");
+  await ui.fire("panel_run");
+  expect(store(ui).status).toBe("Already in session aaa111");
+  expect(store(ui).panel.open).toBe(false);
+  await ui.fire("send", "/sessions");
+  await ui.fire("panel_next");
+  await ui.fire("panel_run");
+  expect(store(ui).panel.open).toBe(false);
+  expect(store(ui).status).toBe(
+    "Session has an uncertain tool outcome; inspect recovery before continuing",
+  );
+  // Nothing was swapped: the live conversation is still the first session's.
+  expect(store(ui).header.session).toBe("session aaa111");
+  expect(store(ui).messages).toHaveLength(1);
+});
+
+test("a session switch is refused while a turn runs, and grants survive it", async () => {
+  const first = fakeSession("aaa111", []);
+  const second = fakeSession("bbb222", [{ role: "user", content: "old" }]);
+  const sessions = capabilityFor({ aaa111: first, bbb222: second });
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  let asked = false;
+  const { ui, client } = setup(
+    async function* ({ options }) {
+      if (!asked) {
+        asked = true;
+        decisions.push(await options.approve(writeProposal(), options.signal));
+      }
+      await gate;
+      yield {
+        type: "message",
+        message: { role: "assistant", content: "done" },
+      };
+    },
+    { session: first, sessions },
+  );
+  await ui.fire("send", "one");
+  await untilApproval(ui);
+  await ui.fire("dialog_session");
+  // The turn is still running behind the gate: /sessions is refused busy.
+  await ui.fire("send", "/sessions");
+  expect(store(ui).status).toBe("Busy · wait for the current turn to finish");
+  expect(store(ui).panel.open).toBe(false);
+  release();
+  await client.idle();
+  expect(store(ui).header.grants).toBe("auto: files");
+  await ui.fire("send", "/sessions");
+  await ui.fire("panel_next");
+  await ui.fire("panel_run");
+  expect(store(ui).status).toBe(
+    "Resumed session bbb222 · 1 messages · grants kept: files",
+  );
+  // The grant is the process's, not the saved session's: still listed.
+  await ui.fire("send", "/permissions");
+  expect(store(ui).status).toBe("Session grants: files");
+});
+
+test("inline: a switch commits the loaded history and enter loads instead of sending", async () => {
+  const first = fakeSession("aaa111", []);
+  const second = fakeSession("bbb222", [
+    { role: "user", content: "saved inline prompt" },
+  ]);
+  const sessions = capabilityFor({ aaa111: first, bbb222: second });
+  const { ui, client, seen } = setup(reply("x"), {
+    session: first,
+    sessions,
+    presentation: "inline",
+  });
+  await ui.fire("send", "/sessions");
+  expect(store(ui).panel.picking).toBe(true);
+  await ui.fire("panel_next");
+  const commits = ui.commits.length;
+  // Enter inline is the composer's send; under the picker it loads.
+  await ui.fire("send", "");
+  expect(store(ui).status).toBe("Resumed session bbb222 · 1 messages");
+  expect(seen).toHaveLength(0);
+  expect(ui.commits.length).toBe(commits + 1);
+  expect(JSON.stringify(ui.commits.at(-1)?.buf)).toContain(
+    "saved inline prompt",
+  );
+  await client.idle();
+  expect(client.writeErrors).toEqual([]);
+});
+
+test("/export writes the visible conversation once, never overwriting", async () => {
+  const files = new Map<string, string>();
+  const writeExport = async (path: string, text: string) => {
+    if (files.has(path))
+      throw Object.assign(new Error("EEXIST"), { code: "EEXIST" });
+    files.set(path, text);
+  };
+  const at = new Date(2026, 9, 22, 9, 5, 3).getTime();
+  const { ui, client } = setup(reply("exported reply"), {
+    writeExport,
+    now: () => at,
+  });
+  await ui.fire("send", "/export");
+  expect(store(ui).status).toBe("Nothing to export yet");
+  await ui.fire("send", "export this");
+  await client.idle();
+  await ui.fire("send", "/export");
+  expect(store(ui).status).toBe(
+    "Exported transcript to local-agent-transcript-20261022-090503.md",
+  );
+  const only = [...files.values()][0] ?? "";
+  expect(only).toContain("## You\n\nexport this");
+  expect(only).toContain("## Assistant\n\nexported reply");
+  // The same second again: a suffixed name, the first file untouched.
+  await ui.fire("send", "/export");
+  expect(store(ui).status).toBe(
+    "Exported transcript to local-agent-transcript-20261022-090503-2.md",
+  );
+  expect(files.size).toBe(2);
+});
+
+test("a failed export lands as an error notice, not a model message", async () => {
+  const { ui, client, seen } = setup(reply("x"), {
+    writeExport: async () => {
+      throw new Error("disk is full");
+    },
+  });
+  await ui.fire("send", "hi");
+  await client.idle();
+  await ui.fire("send", "/export");
+  expect(store(ui).status).toBe("Export failed: disk is full");
+  expect(store(ui).messages.at(-1)?.is_notice).toBe(true);
+  await ui.fire("send", "next");
+  await client.idle();
+  expect(JSON.stringify(seen)).not.toContain("Export failed");
 });

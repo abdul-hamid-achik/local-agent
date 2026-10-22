@@ -602,10 +602,10 @@ const plays: Expect[] = [
       "/mode plan|build",
       "/theme dark|light|auto",
       "/details",
+      "/sessions",
       "enter send",
       "shift/alt+enter new line",
       "↑/↓ history",
-      "shift+tab mode",
     ],
   },
   { sample: "sample-help", input: "q", actions: ["help_close"] },
@@ -708,6 +708,55 @@ const plays: Expect[] = [
   { sample: "sample-details", input: "q", actions: ["details_close"] },
   { sample: "sample-details", input: "esc", actions: ["details_close"] },
   { sample: "sample-details", input: "ctrl+c", actions: ["quit_request"] },
+  // The read-only panel (/status here): the details viewer's keys under
+  // its own class, every fact reachable (the MCP line is the last), and
+  // q fires panel_close — never details_close.
+  {
+    sample: "sample-panel",
+    input: "",
+    actions: [],
+    screen: ["Status", "Model: qwen3-coder:30b", "Session: a1b2c3d"],
+    notScreen: ["MCP: 1 servers"],
+  },
+  {
+    sample: "sample-panel",
+    input: "pgdn",
+    actions: [],
+    screen: ["MCP: 1 servers"],
+  },
+  {
+    sample: "sample-panel",
+    input: "end home",
+    actions: [],
+    screen: ["Model: qwen3-coder:30b"],
+    notScreen: ["MCP: 1 servers"],
+  },
+  { sample: "sample-panel", input: "q", actions: ["panel_close"] },
+  { sample: "sample-panel", input: "esc", actions: ["panel_close"] },
+  { sample: "sample-panel", input: "ctrl+c", actions: ["quit_request"] },
+  // The /mcp panel: the count line heads it, tool names under the server.
+  {
+    sample: "sample-mcp",
+    input: "",
+    actions: [],
+    screen: ["MCP servers: 1 · 2 tools", "db · 2 tools", "query, insert"],
+  },
+  { sample: "sample-mcp", input: "q", actions: ["panel_close"] },
+  // The sessions picker: the arrows move the parent's choice (play has
+  // no parent, so the choice itself does not move), enter asks to load,
+  // esc and q close — the scroll never swallows an arrow.
+  {
+    sample: "sample-sessions",
+    input: "",
+    actions: [],
+    screen: ["› a1b2c3d · 5 messages · current", "e4f5g6h · 12 messages"],
+  },
+  { sample: "sample-sessions", input: "down", actions: ["panel_next"] },
+  { sample: "sample-sessions", input: "up", actions: ["panel_prev"] },
+  { sample: "sample-sessions", input: "enter", actions: ["panel_run"] },
+  { sample: "sample-sessions", input: "esc", actions: ["panel_close"] },
+  { sample: "sample-sessions", input: "q", actions: ["panel_close"] },
+  { sample: "sample-sessions", input: "ctrl+c", actions: ["quit_request"] },
 
   // ---------------------------------------------------------- the inline doc
   {
@@ -1020,6 +1069,77 @@ const plays: Expect[] = [
     input: "text:hi enter",
     actions: ["typed", "send"],
     value: "hi",
+    scrollbackRows: 0,
+  },
+  // The panel in flow: esc closes it instead of cancelling, its lines
+  // scroll by page, and nothing is committed.
+  {
+    sample: "inline-sample-panel",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "",
+    actions: [],
+    screen: ["Model: qwen3-coder:30b", "Workspace: /home/me/project"],
+    scrollbackRows: 0,
+  },
+  {
+    sample: "inline-sample-panel",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "esc",
+    actions: ["panel_close"],
+    scrollbackRows: 0,
+  },
+  {
+    sample: "inline-sample-panel",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "pgdn",
+    actions: [],
+    screen: ["MCP: 1 servers"],
+    scrollbackRows: 0,
+  },
+  // The picker in flow: the arrows at the empty draft's edges move the
+  // choice, enter is the composer's send (the parent loads instead of
+  // sending), esc closes without cancelling.
+  {
+    sample: "inline-sample-sessions",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "down",
+    actions: ["panel_next"],
+    scrollbackRows: 0,
+  },
+  {
+    sample: "inline-sample-sessions",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "up",
+    actions: ["panel_prev"],
+    scrollbackRows: 0,
+  },
+  {
+    sample: "inline-sample-sessions",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "enter",
+    actions: ["send"],
+    value: "",
+    scrollbackRows: 0,
+  },
+  {
+    sample: "inline-sample-sessions",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "esc",
+    actions: ["panel_close"],
     scrollbackRows: 0,
   },
   // Commits print the finished views into the scrollback and leave the

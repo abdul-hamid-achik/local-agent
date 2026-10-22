@@ -9,16 +9,16 @@
                                 │  /mouse on|off toggle mouse reporting (fullscreen)   │                                
                                 │  /permissions [clear] show or clear session approv…  │                                
                                 │  /details show the last tool output in full          │                                
+                                │  /status show the effective config (model, workspa…  │                                
+                                │  /sessions switch to a saved session (needs --sess…  │                                
+                                │  /export write the conversation to a markdown file   │                                
                                 │  /mcp show connected MCP servers and their tools     │                                
                                 │  /help show the commands and the keys                │                                
                                 │                                                      │                                
                                 │  Keys                                                │                                
                                 │  enter send                                          │                                
                                 │  shift/alt+enter new line                            │                                
-                                │  y allow                                             │                                
-                                │  a session                                           │                                
-                                │  n deny                                              │                                
-╭───────────────────────────────│  pgup/pgdn scroll                                    │───────────────────────────────╮
-│ Message the model             │  home/end top/end                                    │                               │
+╭───────────────────────────────│  y allow                                             │───────────────────────────────╮
+│ Message the model             │  a session                                           │                               │
 ╰───────────────────────────────│                                                      │───────────────────────────────╯
  Ready · /help for commands     ╰──────────────────────────────────────────────────────╯                                
