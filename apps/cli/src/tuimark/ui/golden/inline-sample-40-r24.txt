@@ -1,0 +1,6 @@
+=== grid 40x5 ===
+ Local Agent    qwen3-coder:30b  build  
+╔══════════════════════════════════════╗
+║ Message the model                    ║
+╚══════════════════════════════════════╝
+ Ready · /help for … ^P commands        

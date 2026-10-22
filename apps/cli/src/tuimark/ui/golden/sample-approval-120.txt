@@ -1,30 +1,30 @@
 === grid 120x30 ===
  Local Agent           Ollama / loopback  qwen3-coder:30b  build            session a1b2c3d  ctx 9.6k/32k  ████░░░░░░░░ 
-Assistant                                                                                                               
-Sure. I will wrap the call in a bounded retry with backoff:                                                             
- ts                                                                                                                     
- export async function╭─ Edit src/fetch.ts? ─────────────────────────────────────────────────────╮                      
-   // exponential back│                                                                          │                      
-   for (let attempt = │  Apply this change to the workspace.                                     │                      
-     try { return awai│  ┌────────────────────────────────────────────────────────────────────┐  │                      
-     catch (e) { if (a│  │--- a/src/fetch.ts                                                  ┃  │                      
-   }                  │  │+++ b/src/fetch.ts                                                  ┃  │                      
- }                    │  │@@ -12,3 +12,9 @@                                                   ┃  │                      
-                      │  │ import { sleep } from './util';                                    ┃  │                      
-╭─ Tool · edit ───────│  │-export const get = (url) => fetch(url);                            ┃  │─────────────────────╮
-│succeeded            │  │+export async function fetchRetry(url, tries = 3) {                 ┃  │                     │
-│src/fetch.ts         │  │+  for (let attempt = 1; ; attempt++) {                             ┃  │                     │
-│Updated src/fetch.ts.│  │+    try { return await fetch(url); }                               ┃  │                     │
-╰─────────────────────│  │+    catch (e) { if (attempt === tries) throw e; await sleep(200 * a┃  │─────────────────────╯
-                      │  │↪ ttempt); }                                                        ┃  │                      
-Assistant             │  │+  }                                                                ┃  │                      
-Done. The helper now r│  │+}                                                                  │  │                      
-                      │  └────────────────────────────────────────────────────────────────────┘  │                      
-╭─ Tool · edit ───────│                                                                          │─────────────────────╮
-│⠋  waiting for approv│                                                     [ Deny ]  [ Allow ]  │                     │
-│src/fetch.ts         │                                                                          │                     │
-╰─────────────────────╰──────────────────────────────────────────────────────────────────────────╯─────────────────────╯
-                                                                                                                        
+┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│  ts                                                                                                                  │
+│  export async function fetchRetry(url, tries = 3) {                                                                  │
+│    // exponential ba╭─ Edit src/fetch.ts? ─────────────────────────────────────────────────────╮                     │
+│    for (let attempt │                                                                          │                     │
+│      try { return aw│  Apply this change to the workspace.                                     │                     │
+│      catch (e) { if │  ┌────────────────────────────────────────────────────────────────────┐  │                     ┃
+│    }                │  │--- a/src/fetch.ts                                                  ┃  │                     ┃
+│  }                  │  │+++ b/src/fetch.ts                                                  ┃  │                     ┃
+│                     │  │@@ -12,3 +12,9 @@                                                   ┃  │                     ┃
+│ ╭─ Tool · edit ─────│  │ import { sleep } from './util';                                    ┃  │───────────────────╮ ┃
+│ │succeeded          │  │-export const get = (url) => fetch(url);                            ┃  │                   │ ┃
+│ │src/fetch.ts       │  │+export async function fetchRetry(url, tries = 3) {                 ┃  │                   │ ┃
+│ │Updated src/fetch.t│  │+  for (let attempt = 1; ; attempt++) {                             ┃  │                   │ ┃
+│ ╰───────────────────│  │+    try { return await fetch(url); }                               ┃  │───────────────────╯ ┃
+│                     │  │+    catch (e) { if (attempt === tries) throw e; await sleep(200 * a┃  │                     ┃
+│ Assistant           │  │↪ ttempt); }                                                        ┃  │                     ┃
+│ Done. The helper now│  │+  }                                                                ┃  │                     ┃
+│                     │  │+}                                                                  │  │                     ┃
+│ ╭─ Tool · edit ─────│  └────────────────────────────────────────────────────────────────────┘  │───────────────────╮ ┃
+│ │⠋  waiting for appr│                                                                          │                   │ ┃
+│ │src/fetch.ts       │                                                     [ Deny ]  [ Allow ]  │                   │ ┃
+│ ╰───────────────────│                                                                          │───────────────────╯ ┃
+│                     ╰──────────────────────────────────────────────────────────────────────────╯                     ┃
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Generating…                                                                                                          │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

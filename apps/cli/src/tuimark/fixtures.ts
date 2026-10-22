@@ -160,6 +160,7 @@ function base(messages: Message[] = MESSAGES): {
     intent: "build",
     sessionId: "a1b2c3d",
     mcpServers: 0,
+    workspace: "project",
     transcript: transcript.snapshot(),
   });
   store.header.ctx_label = contextLabel(9_800, provider.context_size);
@@ -170,6 +171,11 @@ function base(messages: Message[] = MESSAGES): {
 /** Three exchanges: text with code and a list, a finished tool card, a short reply. */
 export function idleSample(): Store {
   return base().store;
+}
+
+/** A fresh session: no messages yet, so the welcome shows. */
+export function emptySample(): Store {
+  return base([]).store;
 }
 
 /** Markdown beyond code: heading, nested bullets, numbered items, quote, table, inline marks, a failed command. */
@@ -345,6 +351,7 @@ export function helpSample(): Store {
 
 export const SAMPLES = {
   sample: idleSample,
+  "sample-empty": emptySample,
   "sample-markdown": markdownSample,
   "sample-approval": approvalSample,
   "sample-approval-long": longApprovalSample,
@@ -390,6 +397,7 @@ export function inlineLongApprovalSample(): Store {
 
 export const INLINE_SAMPLES = {
   "inline-sample": () => toInline(idleSample()),
+  "inline-sample-empty": () => toInline(emptySample()),
   "inline-sample-streaming": () => toInline(streamingSample()),
   "inline-sample-thinking": () => toInline(thinkingSample()),
   "inline-sample-approval": inlineApprovalSample,

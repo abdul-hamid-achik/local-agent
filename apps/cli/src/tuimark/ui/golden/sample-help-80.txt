@@ -1,30 +1,30 @@
 === grid 80x30 ===
  Local Agent         qwen3-coder:30b  build          ctx 9.6k/32k  ████░░░░░░░░ 
-You                                                                             
-Add a retry to the fetch helper and show me the result.                         
-                                                                                
-Assistant                                                                       
-Sure. I will wrap the call in a bounded retry with backoff:                     
- ts                                                                             
- export asyn╭─ Keys ───────────────────────────────────────────────╮            
-   // expone│                                                      │            
-   for (let │  ? close help                                        │            
-     try { r│  pgup/pgdn scroll                                    │            
-     catch (│  home/end top/end                                    │            
-   }        │  esc cancel                                          │            
- }          │  ^P commands                                         │            
-            │  ctrl+c quit                                         │            
-╭─ Tool · ed│  ↑/↓ history                                         │───────────╮
-│succeeded  │  ^O earlier                                          │           │
-│src/fetch.t│  pgup/pgdn scroll                                    │           │
-│Updated src│  enter send                                          │           │
-╰───────────│  shift/alt+enter new line                            │───────────╯
-            │                                                      │            
-Assistant   ╰──────────────────────────────────────────────────────╯            
-Done. The helper now retries three times.                                       
-                                                                                
-                                                                                
-                                                                                
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ You                                                                          │
+│ Add a retry to the fetch helper and show me the result.                      │
+│                                                                              │
+│ Assistant                                                                    │
+│ Sure. I will wrap the call in a bounded retry with backoff:                  │
+│  ts       ╭─ Keys ───────────────────────────────────────────────╮           │
+│  export as│                                                      │           │
+│    // expo│  ? close help                                        │           │
+│    for (le│  pgup/pgdn scroll                                    │           │
+│      try {│  home/end top/end                                    │           │
+│      catch│  ^P commands                                         │           │
+│    }      │  esc cancel                                          │           │
+│  }        │  ctrl+c quit                                         │           │
+│           │  ↑/↓ history                                         │           │
+│ ╭─ Tool · │  ^O earlier                                          │─────────╮ │
+│ │succeeded│  pgup/pgdn scroll                                    │         │ │
+│ │src/fetch│  ^L latest                                           │         │ │
+│ │Updated s│  enter send                                          │         │ │
+│ ╰─────────│  shift/alt+enter new line                            │─────────╯ │
+│           │                                                      │           │
+│ Assistant ╰──────────────────────────────────────────────────────╯           │
+│ Done. The helper now retries three times.                                    │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ Message the model                                                            │
 ╰──────────────────────────────────────────────────────────────────────────────╯

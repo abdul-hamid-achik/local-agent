@@ -1,0 +1,25 @@
+=== grid 40x24 ===
+ Local Agent    qwen3-coder:30b  build  
+┌──────────────────────────────────────┐
+│  }                                   │
+│      catch (e) { if (attempt ===     │
+│  tries) throw e; }                   │
+│    }                                 │
+│  }                                   │
+│                                      │
+│ ╭─ Tool · edit ────────────────────╮ │
+│ │succeeded                         │ │
+│ │src/fetch.ts                      │ ┃
+│ │Updated src/fetch.ts. Verification│ ┃
+│ │has not been run.                 │ ┃
+│ ╰──────────────────────────────────╯ ┃
+│                                      ┃
+│ Assistant                            ┃
+│ Done. The helper now retries three   ┃
+│ times.                               ┃
+│                                      ┃
+└──────────────────────────────────────┘
+╔══════════════════════════════════════╗
+║ Message the model                    ║
+╚══════════════════════════════════════╝
+ Ready · /help for … ^P commands        

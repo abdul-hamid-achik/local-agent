@@ -171,6 +171,158 @@ for (const [name, make] of Object.entries(INLINE_SAMPLES)) {
   );
 }
 
+// Narrow and short terminals: 40/60 columns at 24 rows and 80 columns at 10
+// rows, for the idle and approval samples of both documents. Each is a golden
+// plus the facts that must survive the squeeze: at 40 columns the first hint
+// (^P commands) is still on the status row (hints drop as a suffix, so the
+// keymap lists commands first and the sheet caps the status text), and an
+// approval 10 rows tall keeps its buttons and a diff line.
+const extraDumps: {
+  doc: string;
+  sample: string;
+  cols: number;
+  rows: number;
+  inline?: boolean;
+  golden: string;
+  contains?: string[];
+}[] = [
+  {
+    doc: "app.tui",
+    sample: "sample",
+    cols: 40,
+    rows: 24,
+    golden: "sample-40-r24.txt",
+    contains: ["^P commands", "┃"],
+  },
+  {
+    doc: "app.tui",
+    sample: "sample",
+    cols: 60,
+    rows: 24,
+    golden: "sample-60-r24.txt",
+    contains: ["^P commands", "esc cancel"],
+  },
+  {
+    doc: "app.tui",
+    sample: "sample-approval",
+    cols: 40,
+    rows: 24,
+    golden: "sample-approval-40-r24.txt",
+    contains: ["Deny", "Allow"],
+  },
+  {
+    doc: "app.tui",
+    sample: "sample-approval",
+    cols: 60,
+    rows: 24,
+    golden: "sample-approval-60-r24.txt",
+    contains: ["Deny", "Allow", "--- a/src/fetch.ts"],
+  },
+  {
+    doc: "app.tui",
+    sample: "sample",
+    cols: 80,
+    rows: 10,
+    golden: "sample-80-r10.txt",
+  },
+  {
+    doc: "app.tui",
+    sample: "sample-approval",
+    cols: 80,
+    rows: 10,
+    golden: "sample-approval-80-r10.txt",
+    contains: ["Deny", "Allow", "--- a/src/fetch.ts"],
+  },
+  {
+    doc: "app.tui",
+    sample: "sample-empty",
+    cols: 40,
+    rows: 24,
+    golden: "sample-empty-40-r24.txt",
+    contains: ["/help lists keys", "^P commands"],
+  },
+  {
+    doc: "inline.tui",
+    sample: "inline-sample",
+    cols: 40,
+    rows: 24,
+    inline: true,
+    golden: "inline-sample-40-r24.txt",
+    contains: ["^P commands"],
+  },
+  {
+    doc: "inline.tui",
+    sample: "inline-sample-approval",
+    cols: 40,
+    rows: 24,
+    inline: true,
+    golden: "inline-sample-approval-40-r24.txt",
+    contains: ["y allow"],
+  },
+];
+for (const d of extraDumps) {
+  const args = [
+    "dump",
+    d.doc,
+    "--data",
+    `samples/${d.sample}.json`,
+    "--cols",
+    String(d.cols),
+    "--rows",
+    String(d.rows),
+    ...(d.inline ? ["--inline"] : []),
+  ];
+  const label = `dump ${d.sample} at ${d.cols}x${d.rows}`;
+  const json = JSON.parse(tuimark([...args, "--format", "json"]).out) as {
+    errors: unknown[];
+    grid: string[];
+  };
+  if (json.errors.length > 0)
+    failures.push(`${label}: ${JSON.stringify(json.errors)}`);
+  const screen = json.grid.join("\n");
+  for (const text of d.contains ?? [])
+    if (!screen.includes(text)) failures.push(`${label}: no ${text}`);
+  const text =
+    tuimark([...args, "--format", "text"]).out.split("=== nodes ===")[0] ?? "";
+  await matches(join(ui, "golden", d.golden), text, "golden");
+}
+
+// The light theme gets one regression. Text goldens cannot see it (the glyphs
+// are identical), so this goldens the `--styles` spans of a `--theme light`
+// dump and asserts the light tokens paint the appbar; the @theme path a
+// `/theme` command writes is asserted with play further down.
+{
+  const json = JSON.parse(
+    tuimark([
+      "dump",
+      "app.tui",
+      "--data",
+      "samples/sample.json",
+      "--cols",
+      "80",
+      "--rows",
+      "10",
+      "--theme",
+      "light",
+      "--styles",
+      "--format",
+      "json",
+    ]).out,
+  ) as { theme: string; styles: unknown; errors: unknown[] };
+  if (json.errors.length > 0)
+    failures.push(`dump sample light: ${JSON.stringify(json.errors)}`);
+  if (json.theme !== "light")
+    failures.push(`dump sample light: theme is ${json.theme}`);
+  const styles = JSON.stringify(json.styles);
+  if (!styles.includes("#eef1f4") || styles.includes("#1c2128"))
+    failures.push("dump sample light: the appbar does not paint light tokens");
+  await matches(
+    join(ui, "golden", "sample-light-80.json"),
+    `${JSON.stringify({ theme: json.theme, styles: json.styles }, null, 1)}\n`,
+    "golden",
+  );
+}
+
 // 4: every action fires, from the sample where its key is live. The event
 // list is compared exactly: an extra event (a dialog_confirm next to the
 // dialog_cancel that esc must fire) is a failure.
@@ -636,6 +788,96 @@ const plays: Expect[] = [
     actions: [],
     scrollbackRows: 0,
   },
+
+  // ---------------------------------------------------------- S2 polish
+  // ctrl+l jumps back to the newest message from wherever pgup left the log.
+  // (`end` cannot: the composer takes end/ctrl+e for its caret, and ctrl+end
+  // is not a key token — probed against the pinned binary.)
+  {
+    sample: "sample",
+    input: "pgup pgup",
+    actions: [],
+    notScreen: ["Done. The helper now retries three times."],
+  },
+  {
+    sample: "sample",
+    input: "pgup pgup ctrl+l",
+    actions: [],
+    screen: ["Done. The helper now retries three times."],
+  },
+  // The welcome shows before the first message and goes when `empty` clears.
+  {
+    sample: "sample-empty",
+    input: "",
+    actions: [],
+    screen: [
+      "Local Agent",
+      "qwen3-coder:30b",
+      "/help lists keys",
+      "ctrl+p opens commands",
+    ],
+  },
+  {
+    sample: "sample-empty",
+    input: "",
+    steps: [{ set: { path: "empty", value: false } }],
+    actions: [],
+    notScreen: ["/help lists keys"],
+  },
+  {
+    sample: "inline-sample-empty",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "",
+    actions: [],
+    screen: ["Local Agent · qwen3-coder:30b", "ctrl+p opens commands"],
+    scrollbackRows: 0,
+  },
+  // The mouse is off until `mouse_on` says so (default off): clicks and the
+  // wheel are inert, then act. Cells are the 0-based dump grid: at 80x30 the
+  // approval's Deny/Allow row is y=22, Deny at x=58, Allow at x=68.
+  {
+    sample: "sample-approval",
+    rows: 30,
+    input: "click:68,22",
+    actions: [],
+  },
+  {
+    sample: "sample-approval",
+    rows: 30,
+    input: "",
+    steps: [{ set: { path: "mouse_on", value: true } }, { click: [68, 22] }],
+    actions: ["dialog_confirm"],
+  },
+  {
+    sample: "sample-approval",
+    rows: 30,
+    input: "",
+    steps: [{ set: { path: "mouse_on", value: true } }, { click: [59, 22] }],
+    actions: ["dialog_cancel"],
+  },
+  {
+    sample: "sample",
+    rows: 12,
+    input: "",
+    steps: [
+      { set: { path: "mouse_on", value: true } },
+      ...Array.from({ length: 40 }, () => ({ wheel: "up", at: [10, 5] })),
+    ],
+    actions: [],
+    screen: ["Add a retry to the fetch helper"],
+    notScreen: ["Done. The helper now retries three times."],
+  },
+  {
+    sample: "sample",
+    rows: 12,
+    input: "",
+    steps: Array.from({ length: 40 }, () => ({ wheel: "up", at: [10, 5] })),
+    actions: [],
+    screen: ["Done. The helper now retries three times."],
+    notScreen: ["Add a retry to the fetch helper"],
+  },
 ];
 const scratch = await mkdtemp(join(tmpdir(), "la-tuimark-check-"));
 for (const check of plays) {
@@ -710,6 +952,76 @@ for (const check of plays) {
   }
 }
 
+// The @theme write a `/theme` command sends flips the session in one frame:
+// play's set step writes the same reserved path, and --styles shows the
+// appbar repaint with light tokens.
+{
+  const file = join(scratch, "theme.ndjson");
+  await writeFile(
+    file,
+    `${JSON.stringify({ set: { path: "@theme", value: "light" } })}\n`,
+  );
+  const run = tuimark([
+    "play",
+    "app.tui",
+    "--data",
+    "samples/sample.json",
+    "--cols",
+    "80",
+    "--rows",
+    "10",
+    "--script",
+    file,
+    "--styles",
+    "--format",
+    "json",
+  ]);
+  const result = JSON.parse(run.out) as { theme: string; styles: unknown };
+  if (result.theme !== "light")
+    failures.push(`play set @theme: theme is ${result.theme}`);
+  if (!JSON.stringify(result.styles).includes("#eef1f4"))
+    failures.push("play set @theme: no light token painted");
+}
+
+// A palette row click selects that row (the accent bar moves), mouse on only.
+// Row y=11 is "Mode: plan" (preselected), y=12 "Mode: build" at 80x30.
+for (const on of [true, false]) {
+  const steps = [
+    ...(on ? [{ set: { path: "mouse_on", value: true } }] : []),
+    { click: [20, 12] },
+  ];
+  const file = join(scratch, "palette.ndjson");
+  await writeFile(
+    file,
+    `${steps.map((step) => JSON.stringify(step)).join("\n")}\n`,
+  );
+  const run = tuimark([
+    "play",
+    "app.tui",
+    "--data",
+    "samples/sample-palette.json",
+    "--cols",
+    "80",
+    "--rows",
+    "30",
+    "--script",
+    file,
+    "--styles",
+    "--format",
+    "json",
+  ]);
+  const result = JSON.parse(run.out) as {
+    styles: { bg?: string }[][];
+  };
+  const accent = (row: number) =>
+    result.styles[row]?.some((span) => span.bg === "#58a6ff") ?? false;
+  const selectedRow = on ? 12 : 11;
+  if (!accent(selectedRow) || accent(on ? 11 : 12))
+    failures.push(
+      `play palette click (mouse ${on ? "on" : "off"}): selection is not on row ${selectedRow}`,
+    );
+}
+
 await rm(scratch, { recursive: true, force: true });
 
 // The command on line 240 of the long diff is reached by paging down.
@@ -758,5 +1070,5 @@ if (failures.length > 0) {
 const sampleCount =
   Object.keys(SAMPLES).length + Object.keys(INLINE_SAMPLES).length;
 console.log(
-  `ok: ${sampleCount} samples validated, ${sampleCount * widths.length + 2} goldens, ${plays.length} play checks${update ? " (updated)" : ""}`,
+  `ok: ${sampleCount} samples validated, ${sampleCount * widths.length + 2 + extraDumps.length + 1} goldens, ${plays.length} play checks${update ? " (updated)" : ""}`,
 );

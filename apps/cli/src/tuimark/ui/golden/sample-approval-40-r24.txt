@@ -1,0 +1,25 @@
+=== grid 40x24 ===
+ Local Agent    qwen3-coder:30b  build  
+╭─ Edit src/fetch.ts? ─────────────────╮
+│                                      │
+│  Apply this change to the            │
+│  workspace.                          │
+│  ┌────────────────────────────────┐  │
+│  │--- a/src/fetch.ts              ┃  │
+│  │+++ b/src/fetch.ts              ┃  │
+│  │@@ -12,3 +12,9 @@               ┃  │
+│  │ import { sleep } from './util';┃  │
+│  │-export const get = (url) => fe…┃  │
+│  │+export async function fetchRet…┃  │
+│  │+  for (let attempt = 1; ; atte…┃  │
+│  │+    try { return await fetch(u…┃  │
+│  │+    catch (e) { if (attempt ==…┃  │
+│  │↪ ttempt); }                    ┃  │
+│  │+  }                            ┃  │
+│  │+}                              │  │
+│  └────────────────────────────────┘  │
+│                                      │
+│                 [ Deny ]  [ Allow ]  │
+│                                      │
+╰──────────────────────────────────────╯
+ ⠋  Waiting for approv…                 

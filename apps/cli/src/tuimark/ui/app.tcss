@@ -33,7 +33,13 @@
 .la-ctxbar { width: 12; }
 .la-spin { width: 2; }
 
-#log { width: 1fr; height: 1fr; }
+/* Bordered like the composer and the diff, so `scrollbar: auto` has a right
+ * border to paint its thumb over (a borderless viewport gets none). */
+#log { width: 1fr; height: 1fr; border: single; border-color: $border; padding: 0 1; scrollbar: auto; }
+#log:focus { border: double; border-color: $focus; }
+.la-welcome { height: auto; layout: column; margin: 0 0 1 0; }
+.la-welcome-title { bold: true; width: auto; }
+.la-welcome-line { width: auto; color: $muted; }
 #rows, #live, #thinking { height: auto; layout: column; }
 
 .la-msg { height: auto; layout: column; margin: 0 0 1 0; }
@@ -87,6 +93,13 @@ span.err { color: $danger; bold: true; }
 #status { gap: 1; padding: 0 1; }
 .la-statustext { width: auto; padding: 0 2 0 0; }
 .la-hints { width: 1fr; justify: end; }
+/* Narrow terminals: the context meter goes first (model and mode stay), and
+ * the status text is capped so at least the first hint (^P commands) fits.
+ * Hints drop as a suffix: the first that does not fit takes the rest. */
+@media (max-cols: 60) {
+  .la-ctx, .la-ctxbar { display: none; }
+  .la-statustext { max-width: 50%; padding: 0; }
+}
 
 .la-diff { max-height: 14; width: 1fr; height: auto; border: single; border-color: $border; scrollbar: auto; }
 .la-diff:focus { border: double; border-color: $focus; }

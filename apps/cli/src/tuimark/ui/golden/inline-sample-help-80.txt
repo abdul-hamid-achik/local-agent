@@ -7,14 +7,14 @@
             │  n deny                                              │            
             │  pgup/pgdn scroll                                    │            
             │  home/end top/end                                    │            
-            │  esc cancel                                          │            
             │  ^P commands                                         │            
+            │  esc cancel                                          │            
             │  ctrl+c quit                                         │            
             │  ↑/↓ history                                         │            
             │  pgup/pgdn scroll                                    │            
+            │  ^L latest                                           │            
             │  enter send                                          │            
-            │  shift/alt+enter new line                            │            
-╭───────────│                                                      │───────────╮
-│ Message th╰──────────────────────────────────────────────────────╯           │
-╰──────────────────────────────────────────────────────────────────────────────╯
+╭───────────│  shift/alt+enter new line                            │───────────╮
+│ Message th│                                                      │           │
+╰───────────╰──────────────────────────────────────────────────────╯───────────╯
  Ready · /help for commands                                                     

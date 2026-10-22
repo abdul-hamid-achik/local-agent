@@ -10,4 +10,4 @@ Here is the plan:
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║ Generating…                                                                  ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
- ⠋  Generating…   esc cancel  ^P commands  ctrl+c quit  ↑/↓ history             
+ ⠋  Generating…   ^P commands  esc cancel  ctrl+c quit  ↑/↓ history             

@@ -8,4 +8,4 @@ Thinking…
 ╔══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
 ║ Generating…                                                                                                          ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
- ⠋  Generating…   esc cancel  ^P commands  ctrl+c quit  ↑/↓ history  pgup/pgdn scroll                                   
+ ⠋  Generating…   ^P commands  esc cancel  ctrl+c quit  ↑/↓ history  pgup/pgdn scroll  ^L latest                        

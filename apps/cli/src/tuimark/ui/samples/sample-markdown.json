@@ -4,9 +4,12 @@
     "model": "qwen3-coder:30b",
     "mode": "build",
     "session": "session a1b2c3d",
+    "workspace": "project",
     "ctx_label": "9.6k/32k",
     "ctx_pct": 30
   },
+  "empty": false,
+  "mouse_on": false,
   "messages": [
     {
       "id": "m0",
@@ -333,6 +336,31 @@
         "id": "mode-build",
         "label": "Mode: build (read, edit, command)",
         "hint": "/mode build"
+      },
+      {
+        "id": "theme-dark",
+        "label": "Theme: dark",
+        "hint": "/theme dark"
+      },
+      {
+        "id": "theme-light",
+        "label": "Theme: light",
+        "hint": "/theme light"
+      },
+      {
+        "id": "theme-auto",
+        "label": "Theme: auto",
+        "hint": "/theme auto"
+      },
+      {
+        "id": "mouse-on",
+        "label": "Mouse: on",
+        "hint": "/mouse on"
+      },
+      {
+        "id": "mouse-off",
+        "label": "Mouse: off",
+        "hint": "/mouse off"
       },
       {
         "id": "mcp",

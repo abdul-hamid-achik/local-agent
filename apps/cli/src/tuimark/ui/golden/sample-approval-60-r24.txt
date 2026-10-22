@@ -1,0 +1,25 @@
+=== grid 60x24 ===
+ Local Agent             qwen3-coder:30b  build             
+╭─ Edit src/fetch.ts? ─────────────────────────────────────╮
+│                                                          │
+│  Apply this change to the workspace.                     │
+│  ┌────────────────────────────────────────────────────┐  │
+│  │--- a/src/fetch.ts                                  ┃  │
+│  │+++ b/src/fetch.ts                                  ┃  │
+│  │@@ -12,3 +12,9 @@                                   ┃  │
+│  │ import { sleep } from './util';                    ┃  │
+│  │-export const get = (url) => fetch(url);            ┃  │
+│  │+export async function fetchRetry(url, tries = 3) { ┃  │
+│  │+  for (let attempt = 1; ; attempt++) {             ┃  │
+│  │+    try { return await fetch(url); }               ┃  │
+│  │+    catch (e) { if (attempt === tries) throw e; aw…┃  │
+│  │↪ ttempt); }                                        ┃  │
+│  │+  }                                                ┃  │
+│  │+}                                                  │  │
+│  └────────────────────────────────────────────────────┘  │
+│                                                          │
+│                                     [ Deny ]  [ Allow ]  │
+│                                                          │
+╰──────────────────────────────────────────────────────────╯
+╰──────────────────────────────────────────────────────────╯
+ ⠋  Waiting for approval · y all… pgup/pgdn scroll          

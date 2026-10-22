@@ -13,7 +13,7 @@
     la-turn     with="msg": one message of the transcript, history or live
   The approval dialog is the kit's k-confirm, its slot holding the diff.
 -->
-<tui theme="auto">
+<tui theme="auto" mouse="mouse_on">
   <include src="kit/kit.tui"/>
   <style src="app.tcss"/>
 
@@ -33,8 +33,10 @@
     <bind keys="end" action="move-last" to="#approval_diff"/>
   </keymap>
   <keymap>
-    <bind keys="esc" action="cancel" label="cancel"/>
+    <!-- Hint order is keymap order: commands first, so it is the one hint a
+         narrow terminal still shows (the first that does not fit drops the rest). -->
     <bind keys="ctrl+p" action="palette_open" keycap="^P" label="commands"/>
+    <bind keys="esc" action="cancel" label="cancel"/>
     <bind keys="ctrl+c" action="quit" label="quit"/>
     <!-- The composer takes up and down inside a draft; on its first and last line
          they fall through to these rows, which recall what was sent. -->
@@ -43,6 +45,10 @@
     <bind keys="ctrl+o" action="load_earlier" keycap="^O" label="earlier"/>
     <bind keys="pgup" action="move-page-up" to="#log" label="scroll" keycap="pgup/pgdn"/>
     <bind keys="pgdn" action="move-page-down" to="#log"/>
+    <!-- Jump back to the newest message (and re-stick the log). `end` cannot do
+         this: the composer takes end/ctrl+e for its own caret, and ctrl+end is
+         not a key token. ctrl+l reaches the keymap from the composer. -->
+    <bind keys="ctrl+l" action="move-last" to="#log" keycap="^L" label="latest"/>
     <!-- The keys the composer itself takes. It consumes them before the keymap, so
          these rows never fire: they are here so that the help lists them, and
          `when` keeps them out of the status line. -->
@@ -121,6 +127,17 @@
       </use>
 
       <scroll id="log" stick="bottom" focusable="true">
+        <!-- The welcome, only before the first message (`empty` is latched off
+             by the parent and never returns). Facts come from the header the
+             appbar already shows; the tips name keys that exist. -->
+        <use template="k-empty" if="empty" title="Local Agent" style="height: auto">
+          <text class="la-welcome-line" wrap="wrap">{header.model} · {header.provider}</text>
+          <text class="la-welcome-line" wrap="wrap">{header.mode} · {header.session}</text>
+          <text class="la-welcome-line" wrap="wrap">{header.workspace}</text>
+          <text class="la-welcome-line" wrap="wrap">/help lists keys</text>
+          <text class="la-welcome-line" wrap="wrap">ctrl+p opens commands</text>
+          <text class="la-welcome-line" wrap="wrap">esc cancels a turn</text>
+        </use>
         <button id="earlier" class="la-earlier" if="earlier.n" on:click="load_earlier">▲ {earlier.n} earlier messages, ctrl+o or enter to load more</button>
         <col id="rows" each="messages as m" key="m.id">
           <use template="la-turn" with="m as msg"/>

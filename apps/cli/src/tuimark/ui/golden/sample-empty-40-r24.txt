@@ -1,0 +1,25 @@
+=== grid 40x24 ===
+ Local Agent    qwen3-coder:30b  build  
+┌──────────────────────────────────────┐
+│             Local Agent              │
+│                                      │
+│ qwen3-coder:30b · Ollama / loopback  │
+│                                      │
+│       build · session a1b2c3d        │
+│                                      │
+│               project                │
+│                                      │
+│           /help lists keys           │
+│                                      │
+│        ctrl+p opens commands         │
+│                                      │
+│          esc cancels a turn          │
+│                                      │
+│                                      │
+│                                      │
+│                                      │
+└──────────────────────────────────────┘
+╔══════════════════════════════════════╗
+║ Message the model                    ║
+╚══════════════════════════════════════╝
+ Ready · /help for … ^P commands        

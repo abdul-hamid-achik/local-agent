@@ -1,31 +1,31 @@
 === grid 80x30 ===
  Local Agent         qwen3-coder:30b  build          ctx 9.6k/32k  ████░░░░░░░░ 
-You                                                                             
-Add a retry to the fetch helper and show me the result.                         
-                                                                                
-Assistant                                                                       
-Sure. I will wrap the call in a bounded retry with backoff:                     
- ts                                                                             
- export async function fetchRetry(url, tries = 3) {                             
-   // exponential backoff                                                       
-   for (let attempt = 1; ; attempt++) {                                         
-     try { return await fetch(url); }                                           
-     catch (e) { if (attempt === tries) throw e; }                              
-   }                                                                            
- }                                                                              
-                                                                                
-╭─ Tool · edit ────────────────────────────────────────────────────────────────╮
-│succeeded                                                                     │
-│src/fetch.ts                                                                  │
-│Updated src/fetch.ts. Verification has not been run.                          │
-╰──────────────────────────────────────────────────────────────────────────────╯
-                                                                                
-Assistant                                                                       
-Done. The helper now retries three times.                                       
-                                                                                
-                                                                                
-                                                                                
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ You                                                                          │
+│ Add a retry to the fetch helper and show me the result.                      │
+│                                                                              │
+│ Assistant                                                                    │
+│ Sure. I will wrap the call in a bounded retry with backoff:                  │
+│  ts                                                                          │
+│  export async function fetchRetry(url, tries = 3) {                          │
+│    // exponential backoff                                                    │
+│    for (let attempt = 1; ; attempt++) {                                      │
+│      try { return await fetch(url); }                                        │
+│      catch (e) { if (attempt === tries) throw e; }                           │
+│    }                                                                         │
+│  }                                                                           │
+│                                                                              │
+│ ╭─ Tool · edit ────────────────────────────────────────────────────────────╮ │
+│ │succeeded                                                                 │ │
+│ │src/fetch.ts                                                              │ │
+│ │Updated src/fetch.ts. Verification has not been run.                      │ │
+│ ╰──────────────────────────────────────────────────────────────────────────╯ │
+│                                                                              │
+│ Assistant                                                                    │
+│ Done. The helper now retries three times.                                    │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║ Message the model                                                            ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
- Ready · /help for commands   esc cancel  ^P commands  ctrl+c quit  ↑/↓ history 
+ Ready · /help for commands   ^P commands  esc cancel  ctrl+c quit  ↑/↓ history 

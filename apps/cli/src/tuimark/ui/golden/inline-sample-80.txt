@@ -3,4 +3,4 @@
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║ Message the model                                                            ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
- Ready · /help for commands   esc cancel  ^P commands  ctrl+c quit  ↑/↓ history 
+ Ready · /help for commands   ^P commands  esc cancel  ctrl+c quit  ↑/↓ history 

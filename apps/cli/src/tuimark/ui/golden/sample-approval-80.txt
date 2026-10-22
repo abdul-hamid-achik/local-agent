@@ -1,30 +1,30 @@
 === grid 80x30 ===
  Local Agent         qwen3-coder:30b  build          ctx 9.6k/32k  ████░░░░░░░░ 
-Assistant                                                                       
-Sure. I will wrap the call in a bounded retry with backoff:                     
- ts                                                                             
- e╭─ Edit src/fetch.ts? ─────────────────────────────────────────────────────╮  
-  │                                                                          │  
-  │  Apply this change to the workspace.                                     │  
-  │  ┌────────────────────────────────────────────────────────────────────┐  │  
-  │  │--- a/src/fetch.ts                                                  ┃  │  
-  │  │+++ b/src/fetch.ts                                                  ┃  │  
- }│  │@@ -12,3 +12,9 @@                                                   ┃  │  
-  │  │ import { sleep } from './util';                                    ┃  │  
-╭─│  │-export const get = (url) => fetch(url);                            ┃  │─╮
-│s│  │+export async function fetchRetry(url, tries = 3) {                 ┃  │ │
-│s│  │+  for (let attempt = 1; ; attempt++) {                             ┃  │ │
-│U│  │+    try { return await fetch(url); }                               ┃  │ │
-╰─│  │+    catch (e) { if (attempt === tries) throw e; await sleep(200 * a┃  │─╯
-  │  │↪ ttempt); }                                                        ┃  │  
-As│  │+  }                                                                ┃  │  
-Do│  │+}                                                                  │  │  
-  │  └────────────────────────────────────────────────────────────────────┘  │  
-╭─│                                                                          │─╮
-│⠋│                                                     [ Deny ]  [ Allow ]  │ │
-│s│                                                                          │ │
-╰─╰──────────────────────────────────────────────────────────────────────────╯─╯
-                                                                                
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  ts                                                                          │
+│  export async function fetchRetry(url, tries = 3) {                          │
+│ ╭─ Edit src/fetch.ts? ─────────────────────────────────────────────────────╮ │
+│ │                                                                          │ │
+│ │  Apply this change to the workspace.                                     │ │
+│ │  ┌────────────────────────────────────────────────────────────────────┐  │ ┃
+│ │  │--- a/src/fetch.ts                                                  ┃  │ ┃
+│ │  │+++ b/src/fetch.ts                                                  ┃  │ ┃
+│ │  │@@ -12,3 +12,9 @@                                                   ┃  │ ┃
+│ │  │ import { sleep } from './util';                                    ┃  │ ┃
+│ │  │-export const get = (url) => fetch(url);                            ┃  │ ┃
+│ │  │+export async function fetchRetry(url, tries = 3) {                 ┃  │ ┃
+│ │  │+  for (let attempt = 1; ; attempt++) {                             ┃  │ ┃
+│ │  │+    try { return await fetch(url); }                               ┃  │ ┃
+│ │  │+    catch (e) { if (attempt === tries) throw e; await sleep(200 * a┃  │ ┃
+│ │  │↪ ttempt); }                                                        ┃  │ ┃
+│ │  │+  }                                                                ┃  │ ┃
+│ │  │+}                                                                  │  │ ┃
+│ │  └────────────────────────────────────────────────────────────────────┘  │ ┃
+│ │                                                                          │ ┃
+│ │                                                     [ Deny ]  [ Allow ]  │ ┃
+│ │                                                                          │ ┃
+│ ╰──────────────────────────────────────────────────────────────────────────╯ ┃
+└──────────────────────────────────────────────────────────────────────────────┘
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ Generating…                                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────╯

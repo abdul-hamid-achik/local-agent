@@ -47,8 +47,10 @@
     <bind keys="end" action="move-last" to="#approval_diff"/>
   </keymap>
   <keymap>
-    <bind keys="esc" action="cancel" label="cancel"/>
+    <!-- Commands first: hint order is keymap order, and a narrow terminal
+         keeps only the first hint that fits. -->
     <bind keys="ctrl+p" action="palette_open" keycap="^P" label="commands"/>
+    <bind keys="esc" action="cancel" label="cancel"/>
     <bind keys="ctrl+c" action="quit" label="quit"/>
     <!-- The composer takes up and down inside a draft; on its first and last line
          they fall through to these rows, which recall what was sent. -->
@@ -56,6 +58,9 @@
     <bind keys="down" action="history_next" when="#composer:focus"/>
     <bind keys="pgup" action="move-page-up" to="#liveregion" label="scroll" keycap="pgup/pgdn"/>
     <bind keys="pgdn" action="move-page-down" to="#liveregion"/>
+    <!-- Back to the newest output. `end` is the composer's caret key (and
+         ctrl+end is not a token), so ctrl+l does this, as fullscreen. -->
+    <bind keys="ctrl+l" action="move-last" to="#liveregion" keycap="^L" label="latest"/>
     <!-- The keys the composer itself takes: listed for the help, never fired. -->
     <bind keys="enter" action="focus" to="#composer" when="#composer:focus" label="send" keycap="enter"/>
     <bind keys="shift+enter,alt+enter" action="focus" to="#composer" when="#composer:focus" label="new line" keycap="shift/alt+enter"/>
@@ -130,6 +135,13 @@
            the running reply, a tool card, the reasoning. The scroll takes
            what the other rows leave when the terminal is short. -->
       <scroll id="liveregion" stick="bottom">
+        <!-- The welcome, only before the first message. It lives in the region
+             and is never committed: commits print finished views only. -->
+        <col id="welcome" if="empty" class="la-welcome">
+          <text class="la-welcome-title" wrap="wrap">Local Agent · {header.model} · {header.provider}</text>
+          <text class="la-welcome-line" wrap="wrap">{header.mode} · {header.session} · {header.workspace}</text>
+          <text class="la-welcome-line" wrap="wrap">/help lists keys · ctrl+p opens commands · esc cancels</text>
+        </col>
         <col id="live" if="live.active">
           <use template="la-message" label="Assistant" class="asst" if="live.is_asst">
             <use template="la-blocks" with="live.blocks as blocks"/>
