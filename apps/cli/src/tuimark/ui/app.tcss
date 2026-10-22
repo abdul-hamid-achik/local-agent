@@ -125,6 +125,10 @@ span.err { color: $danger; bold: true; }
 .la-helpcmd-key { width: auto; bold: true; color: $accent; }
 .la-helpcmd-desc { width: 1fr; color: $muted; }
 
+/* The details viewer modal: the kit help dialog's box at the approval
+ * dialog's width (76), so the parent wraps its rows like a preview. */
+.la-details { width: 76; max-width: 100%; height: auto; max-height: 100%; padding: 1 2; border: rounded; background: $panel; border-color: $accent; title-color: $accent; }
+
 .la-diff { max-height: 14; width: 1fr; height: auto; border: single; border-color: $border; scrollbar: auto; }
 /* A very short terminal keeps the diff's last row instead of the grant
  * line (the status still names `a` there; the offer returns with height). */

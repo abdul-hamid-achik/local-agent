@@ -329,6 +329,12 @@
     "grant_ok": false,
     "lines": []
   },
+  "details": {
+    "open": false,
+    "title": "",
+    "args": "",
+    "lines": []
+  },
   "palette": {
     "open": false,
     "query": "",
@@ -383,6 +389,11 @@
         "hint": "/permissions clear"
       },
       {
+        "id": "details",
+        "label": "Details: last tool output",
+        "hint": "/details"
+      },
+      {
         "id": "mcp",
         "label": "MCP servers",
         "hint": "/mcp"
@@ -430,6 +441,11 @@
         "id": "/permissions",
         "cmd": "/permissions [clear]",
         "desc": "show or clear session approval grants"
+      },
+      {
+        "id": "/details",
+        "cmd": "/details",
+        "desc": "show the last tool output in full"
       },
       {
         "id": "/mcp",

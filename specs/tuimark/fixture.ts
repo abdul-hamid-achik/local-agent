@@ -10,6 +10,8 @@
 //   last message is a tool result  -> "edit applied N" (N counts tool replies) or "edit denied"
 //   prompt starts with "count"     -> "The message had N lines: FIRST LINE" (one message,
 //                                      however it was typed or pasted)
+//   prompt contains "read the long file" -> one `read` tool call on long.txt
+//                                      (20 lines: its card truncates, /details does not)
 //   prompt contains "edit again"   -> one `edit` tool call, after -> final
 //   prompt contains "edit"         -> one `edit` tool call on notes.txt
 //   prompt contains "fail"         -> HTTP 500, so the turn fails
@@ -43,6 +45,12 @@ const port = inline ? basePort + 100 : basePort;
 
 const workspaceRoot = await mkdtemp(join(tmpdir(), "local-agent-tuimark-"));
 await writeFile(join(workspaceRoot, "notes.txt"), "before\n");
+await writeFile(
+  join(workspaceRoot, "long.txt"),
+  `${Array.from({ length: 20 }, (_, i) =>
+    i === 14 ? "long line 15 past the card" : `long line ${i + 1}`,
+  ).join("\n")}\n`,
+);
 
 const REPLY = [
   "Here is a **bounded retry** for the helper:\n\n",
@@ -138,6 +146,23 @@ const server = Bun.serve({
           assistant(
             `The message had ${prompt.split("\n").length} lines: ${prompt.split("\n")[0]}`,
           ),
+          done,
+        ],
+        5,
+      );
+    if (prompt.includes("read the long file"))
+      return stream(
+        [
+          assistant("", {
+            tool_calls: [
+              {
+                function: {
+                  name: "read",
+                  arguments: { path: "long.txt" },
+                },
+              },
+            ],
+          }),
           done,
         ],
         5,

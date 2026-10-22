@@ -29,6 +29,8 @@ import {
   APPROVAL_UNARMED_SESSION_STATUS,
   APPROVAL_UNARMED_STATUS,
   APPROVAL_WAIT_STATUS,
+  IDLE_STATUS,
+  NO_DETAILS_STATUS,
   type Store,
 } from "#cli/tuimark/store";
 
@@ -1396,6 +1398,7 @@ test("typing / opens the command popup; it filters, moves and completes", async 
     "/theme",
     "/mouse",
     "/permissions",
+    "/details",
     "/mcp",
     "/help",
   ]);
@@ -1582,6 +1585,7 @@ test("the help overlay's store carries the slash commands", () => {
     "/theme dark|light|auto",
     "/mouse on|off",
     "/permissions [clear]",
+    "/details",
     "/mcp",
     "/help",
   ]);
@@ -1922,5 +1926,236 @@ test("inline grants: a command grant skips the second dialog and commits are unc
     "You: two",
     "Assistant: done",
   ]);
+  expect(client.writeErrors).toEqual([]);
+});
+
+// --------------------------------------------------------------------- details
+
+/** Twenty lines of tool output: the card keeps eight, `/details` the rest. */
+const LONG_OUTPUT = Array.from(
+  { length: 20 },
+  (_, i) => `output line ${i + 1}`,
+).join("\n");
+
+/** One whole tool turn: call, receipt, and a short reply after it. */
+function toolScript(
+  output: string,
+  name = "read",
+  status: "succeeded" | "failed" | "denied" = "succeeded",
+): Script {
+  return async function* () {
+    yield {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          { id: "c1", function: { name, arguments: { path: "src/big.txt" } } },
+        ],
+      },
+    };
+    yield { type: "tool_requested", id: "c1", name };
+    yield { type: "tool_start", id: "c1", name };
+    const message: Message = {
+      role: "tool",
+      tool_name: name,
+      tool_call_id: "c1",
+      content: JSON.stringify({ status, output }),
+    };
+    yield { type: "message", message };
+    yield { type: "tool_result", id: "c1", name, status, output };
+    yield { type: "message", message: { role: "assistant", content: "done" } };
+    yield { type: "turn_complete", messages: [] };
+  };
+}
+
+/** The viewer rows as one text. */
+const detailsText = (ui: FakeHost) =>
+  store(ui)
+    .details.lines.map((line) => line.t)
+    .join("\n");
+
+test("/details before any tool ran says so and opens nothing", async () => {
+  const { ui } = setup(reply("x"));
+  await ui.fire("send", "/details");
+  expect(store(ui).status).toBe(NO_DETAILS_STATUS);
+  expect(store(ui).details.open).toBe(false);
+});
+
+test("/details shows the lines the card truncated, and closing rests at idle", async () => {
+  const { ui, client } = setup(toolScript(LONG_OUTPUT));
+  await ui.fire("send", "read it");
+  await client.idle();
+  // The committed card never held line 15.
+  const card = store(ui).messages.find((m) => m.is_tool)?.card;
+  expect(runsText(card?.out ?? [])).toContain(
+    "… 12 more lines · /details for full output",
+  );
+  expect(runsText(card?.out ?? [])).not.toContain("output line 15");
+  await ui.fire("send", "/details");
+  expect(store(ui).details.open).toBe(true);
+  expect(store(ui).details.title).toBe("read · succeeded");
+  expect(store(ui).details.args).toBe("src/big.txt");
+  expect(store(ui).status).toBe("Latest tool output: read");
+  expect(detailsText(ui)).toContain("output line 15");
+  expect(detailsText(ui)).toContain("output line 20");
+  await ui.fire("details_close");
+  expect(store(ui).details.open).toBe(false);
+  expect(store(ui).status).toBe(IDLE_STATUS);
+  expect(client.writeErrors).toEqual([]);
+});
+
+test("a newer receipt replaces the one /details shows", async () => {
+  let turn = 0;
+  const { ui, client } = setup((ctx) =>
+    ++turn === 1
+      ? toolScript("first output", "read")(ctx)
+      : toolScript("second output", "search")(ctx),
+  );
+  await ui.fire("send", "one");
+  await client.idle();
+  await ui.fire("send", "two");
+  await client.idle();
+  await ui.fire("send", "/details");
+  expect(store(ui).details.title).toBe("search · succeeded");
+  expect(detailsText(ui)).toContain("second output");
+  expect(detailsText(ui)).not.toContain("first output");
+});
+
+test("failed and denied receipts are kept for /details too", async () => {
+  const failed = setup(toolScript("boom: no such file", "read", "failed"));
+  await failed.ui.fire("send", "read it");
+  await failed.client.idle();
+  await failed.ui.fire("send", "/details");
+  expect(store(failed.ui).details.title).toBe("read · failed");
+  expect(detailsText(failed.ui)).toContain("boom: no such file");
+
+  const denied = setup(withApproval);
+  await denied.ui.fire("send", "edit");
+  await untilApproval(denied.ui);
+  await denied.ui.fire("dialog_cancel");
+  await denied.client.idle();
+  await denied.ui.fire("send", "/details");
+  expect(store(denied.ui).details.title).toBe("edit · denied");
+  expect(detailsText(denied.ui)).toContain("Edit denied by host");
+});
+
+test("the retained output is capped for the viewer, and the cut is spelled out", async () => {
+  const { ui, client } = setup(toolScript(`${"x".repeat(70_000)}TAIL-MARKER`));
+  await ui.fire("send", "read it");
+  await client.idle();
+  await ui.fire("send", "/details");
+  expect(detailsText(ui)).toContain(
+    "… output truncated for the viewer (first 64000 characters)",
+  );
+  expect(detailsText(ui)).not.toContain("TAIL-MARKER");
+});
+
+test("/details is refused while a turn runs and never covers an approval", async () => {
+  // Busy: a receipt exists, but a second turn is still running.
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let turn = 0;
+  const busy = setup((ctx) =>
+    ++turn === 1
+      ? toolScript(LONG_OUTPUT)(ctx)
+      : quiet(async () => {
+          await gate;
+        })(ctx),
+  );
+  await busy.ui.fire("send", "read it");
+  await busy.client.idle();
+  await busy.ui.fire("send", "wait");
+  await until(() => store(busy.ui).busy);
+  await busy.ui.fire("send", "/details");
+  expect(store(busy.ui).status).toBe(
+    "Busy · wait for the current turn to finish",
+  );
+  expect(store(busy.ui).details.open).toBe(false);
+  release();
+  await busy.client.idle();
+
+  // Approval open: the dialog stays, the viewer stays shut.
+  const approval = setup(withApproval);
+  await approval.ui.fire("send", "edit");
+  await untilApproval(approval.ui);
+  await approval.ui.fire("send", "/details");
+  expect(store(approval.ui).approval.open).toBe(true);
+  expect(store(approval.ui).details.open).toBe(false);
+  await approval.ui.fire("dialog_cancel");
+  await approval.client.idle();
+});
+
+test("the palette's Details row opens the viewer", async () => {
+  const { ui, client } = setup(toolScript(LONG_OUTPUT));
+  await ui.fire("send", "read it");
+  await client.idle();
+  await ui.fire("palette_open");
+  await ui.fire("palette_query", "details");
+  store(ui).palette.query = "details";
+  expect(store(ui).found.items.map((i: PaletteItem) => i.id)).toEqual([
+    "details",
+  ]);
+  store(ui).palette.cur = "details";
+  await ui.fire("palette_run");
+  expect(store(ui).palette.open).toBe(false);
+  expect(store(ui).details.open).toBe(true);
+  expect(detailsText(ui)).toContain("output line 15");
+});
+
+test("resizing wraps an open viewer again", async () => {
+  let cols = 120;
+  const { ui, client } = setup(toolScript("y".repeat(100)), {
+    columns: () => cols,
+  });
+  await ui.fire("send", "read it");
+  await client.idle();
+  await ui.fire("send", "/details");
+  const wide = store(ui).details.lines.length;
+  cols = 50;
+  await client.resize();
+  expect(store(ui).details.lines.length).toBeGreaterThan(wide);
+  expect(detailsText(ui)).toContain("↪");
+});
+
+test("a new turn closes an open viewer", async () => {
+  let turn = 0;
+  const { ui, client } = setup((ctx) =>
+    ++turn === 1 ? toolScript(LONG_OUTPUT)(ctx) : reply("again")(ctx),
+  );
+  await ui.fire("send", "read it");
+  await client.idle();
+  await ui.fire("send", "/details");
+  expect(store(ui).details.open).toBe(true);
+  await ui.fire("send", "next");
+  await client.idle();
+  expect(store(ui).details.open).toBe(false);
+});
+
+test("inline: the viewer is region state — never committed, never in the model history", async () => {
+  const { ui, client, seen } = setup(
+    toolScript(`${LONG_OUTPUT}\n${"z".repeat(70_000)}`),
+    { presentation: "inline" },
+  );
+  await ui.fire("send", "read it");
+  await client.idle();
+  const commits = ui.commits.length;
+  expect(commits).toBeGreaterThan(0);
+  // The committed card is the truncated one: line 15 never reached print.
+  expect(JSON.stringify(ui.commits)).not.toContain("output line 15");
+  await ui.fire("send", "/details");
+  expect(store(ui).details.open).toBe(true);
+  expect(detailsText(ui)).toContain("output line 15");
+  expect(ui.commits.length).toBe(commits);
+  await ui.fire("details_close");
+  expect(ui.commits.length).toBe(commits);
+  // The viewer's own truncation note exists only in the viewer: the next
+  // turn's model history (which does carry the tool receipt itself)
+  // never contains it.
+  await ui.fire("send", "again");
+  await client.idle();
+  expect(JSON.stringify(seen)).not.toContain("truncated for the viewer");
   expect(client.writeErrors).toEqual([]);
 });

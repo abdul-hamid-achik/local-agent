@@ -14,6 +14,7 @@ import {
   type MessageView,
   NO_CARD,
   type ThinkingView,
+  type ToolReceipt,
 } from "#cli/tuimark/blocks";
 import {
   filterPalette,
@@ -59,6 +60,20 @@ export interface DiffLine {
   del: boolean;
   /** A row the client wrote (the "more lines" marker), not part of the preview text. */
   note: boolean;
+}
+
+/** `/details` with no receipt yet. */
+export const NO_DETAILS_STATUS =
+  "No tool output yet. Run something first, then /details";
+
+export interface DetailsState {
+  open: boolean;
+  /** "<tool> · <status>", as the receipt's card shows them. */
+  title: string;
+  /** The card's args line ("" when the call had none to summarize). */
+  args: string;
+  /** The whole output, hard-wrapped like an approval preview. */
+  lines: DiffLine[];
 }
 
 export interface ApprovalState {
@@ -108,6 +123,11 @@ export interface Store {
   /** The model's reasoning while it streams; gone once the answer starts. */
   thinking: ThinkingView;
   approval: ApprovalState;
+  /**
+   * The `/details` viewer over the latest tool receipt: a modal fullscreen,
+   * an in-flow block inline (region state, never committed).
+   */
+  details: DetailsState;
   palette: { open: boolean; query: string; cur: string };
   found: { any: boolean; items: PaletteItem[] };
   /**
@@ -206,6 +226,10 @@ export function providerLabel(provider: Pick<Provider, "type">): string {
     : "Ollama / loopback";
 }
 
+export function noDetails(): DetailsState {
+  return { open: false, title: "", args: "", lines: [] };
+}
+
 export function noApproval(): ApprovalState {
   return {
     open: false,
@@ -270,6 +294,7 @@ export function initialStore(init: StoreInit): Store {
     live: IDLE_LIVE,
     thinking: IDLE_THINKING,
     approval: noApproval(),
+    details: noDetails(),
     palette: { open: false, query: "", cur: found[0]?.id ?? "" },
     found: { any: found.length > 0, items: found },
     slash: { open: false, rows: [] },
@@ -546,4 +571,61 @@ export function approvalState(
         danger: true,
       };
   }
+}
+
+// --------------------------------------------------------------------- details
+
+/** Rows of the details viewer; past this it says how many lines it left out. */
+export const DETAILS_MAX_ROWS = APPROVAL_MAX_ROWS;
+
+/**
+ * The viewer's rows: the output hard-wrapped with the approval preview's
+ * machinery (every character kept, `↪` continuations), capped like it.
+ * No add/delete coloring: tool output is not a diff.
+ */
+export function detailsRows(text: string, width: number): DiffLine[] {
+  const source = cleanText(text).split("\n");
+  while (source.length > 1 && source[source.length - 1] === "") source.pop();
+  if (source.length === 1 && source[0] === "")
+    return [{ n: 0, t: "(no output)", add: false, del: false, note: true }];
+  const lines: DiffLine[] = [];
+  let shown = 0;
+  let truncated = false;
+  outer: for (const line of source) {
+    for (const t of wrapLine(line, width)) {
+      if (lines.length >= DETAILS_MAX_ROWS) {
+        truncated = true;
+        break outer;
+      }
+      lines.push({ n: lines.length, t, add: false, del: false, note: false });
+    }
+    shown++;
+  }
+  if (truncated)
+    lines.push({
+      n: lines.length,
+      t: `… ${source.length - shown} more lines not shown`,
+      add: false,
+      del: false,
+      note: true,
+    });
+  return lines;
+}
+
+/**
+ * What the viewer shows for a receipt, wrapped for `cols` columns: at the
+ * approval dialog's width fullscreen, the full-width box's inline.
+ */
+export function detailsState(
+  receipt: ToolReceipt,
+  cols = 80,
+  inline = false,
+): DetailsState {
+  const width = inline ? previewWidthInline(cols) : previewWidth(cols);
+  return {
+    open: true,
+    title: clip(`${receipt.name} · ${receipt.status}`, 70),
+    args: receipt.args,
+    lines: detailsRows(receipt.output, width),
+  };
 }

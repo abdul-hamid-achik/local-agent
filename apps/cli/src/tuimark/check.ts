@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   commitFixtures,
+  DETAILS_HIDDEN,
   DRAFT,
   EXACT_LINE,
   HIDDEN_LINE,
@@ -600,6 +601,7 @@ const plays: Expect[] = [
       "Commands",
       "/mode plan|build",
       "/theme dark|light|auto",
+      "/details",
       "enter send",
       "shift/alt+enter new line",
       "↑/↓ history",
@@ -660,6 +662,52 @@ const plays: Expect[] = [
     actions: ["slash_complete"],
     value: "/m",
   },
+  // The details viewer: a modal over the latest tool receipt, its output
+  // whole where the card kept eight lines. Every row is reachable by
+  // key; esc and q close it (never cancel). "output line 2 " with its
+  // trailing space cannot match line 20.
+  {
+    sample: "sample-details",
+    input: "",
+    actions: [],
+    screen: [
+      "read · succeeded",
+      "src/big.txt",
+      "output line 2 ",
+      "esc or q close",
+    ],
+    notScreen: [DETAILS_HIDDEN],
+  },
+  {
+    sample: "sample-details",
+    input: "down down down",
+    actions: [],
+    screen: ["output line 4 ", DETAILS_HIDDEN],
+    notScreen: ["output line 2 ", "output line 20"],
+  },
+  {
+    sample: "sample-details",
+    input: "pgdn",
+    actions: [],
+    screen: ["output line 20"],
+  },
+  {
+    sample: "sample-details",
+    input: "end",
+    actions: [],
+    screen: ["output line 20"],
+    notScreen: ["output line 2 "],
+  },
+  {
+    sample: "sample-details",
+    input: "end home",
+    actions: [],
+    screen: ["output line 2 "],
+    notScreen: ["output line 20"],
+  },
+  { sample: "sample-details", input: "q", actions: ["details_close"] },
+  { sample: "sample-details", input: "esc", actions: ["details_close"] },
+  { sample: "sample-details", input: "ctrl+c", actions: ["quit_request"] },
 
   // ---------------------------------------------------------- the inline doc
   {
@@ -919,6 +967,60 @@ const plays: Expect[] = [
     rows: 30,
     input: "esc",
     actions: ["slash_close"],
+  },
+  // The details viewer in flow: region state only (nothing committed),
+  // esc closes it instead of cancelling, the composer stays usable, and
+  // the output scrolls by page and arrow (home/end are the composer's).
+  {
+    sample: "inline-sample-details",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "",
+    actions: [],
+    screen: ["read · succeeded", "output line 2 ", "esc close"],
+    notScreen: [DETAILS_HIDDEN],
+    scrollbackRows: 0,
+  },
+  {
+    sample: "inline-sample-details",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "esc",
+    actions: ["details_close"],
+    scrollbackRows: 0,
+  },
+  {
+    sample: "inline-sample-details",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "down down down",
+    actions: [],
+    screen: ["output line 4 "],
+    notScreen: ["output line 2 ", DETAILS_HIDDEN],
+    scrollbackRows: 0,
+  },
+  {
+    sample: "inline-sample-details",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "pgdn",
+    actions: [],
+    screen: ["output line 20"],
+    scrollbackRows: 0,
+  },
+  {
+    sample: "inline-sample-details",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "text:hi enter",
+    actions: ["typed", "send"],
+    value: "hi",
+    scrollbackRows: 0,
   },
   // Commits print the finished views into the scrollback and leave the
   // region alone: a user turn, an assistant turn, a tool card, then plain
@@ -1272,6 +1374,24 @@ const approval = JSON.parse(
 ) as { focus: string };
 if (approval.focus !== "approval__no")
   failures.push(`approval focus is ${approval.focus}, expected approval__no`);
+
+// Focus lands on the details viewer's scroll when it opens.
+const details = JSON.parse(
+  tuimark([
+    "dump",
+    "app.tui",
+    "--data",
+    "samples/sample-details.json",
+    "--cols",
+    "80",
+    "--rows",
+    String(rows),
+    "--format",
+    "json",
+  ]).out,
+) as { focus: string };
+if (details.focus !== "details_body")
+  failures.push(`details focus is ${details.focus}, expected details_body`);
 
 if (failures.length > 0) {
   console.error(failures.map((f) => `FAIL ${f}`).join("\n"));

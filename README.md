@@ -107,6 +107,12 @@ a child and draws the whole screen from `apps/cli/src/tuimark/ui/app.tui`.
   (no argument reports the current one; nothing is persisted). `/mouse on|off`
   toggles mouse reporting in fullscreen — wheel scrolling and clicks, off by
   default so the terminal keeps its native selection; inline has no mouse.
+  Tool cards show only the first eight lines of a result; `/details` opens
+  the last tool call's full output in a scrollable viewer (a modal in
+  fullscreen, `esc` or `q` closes it; an expanded block in the inline live
+  region, never printed to the scrollback, `esc` closes it). The viewer
+  always shows the most recent tool output, whichever card pointed you to
+  it, and its title names that receipt.
 
 ## Local model
 

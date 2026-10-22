@@ -1,0 +1,73 @@
+version: 1
+name: bun_tuimark_details
+intent: |
+    a tool output longer than its card (the fixture reads a 20-line file)
+    shows the /details pointer on the card's truncation line, and /details
+    opens the viewer over that receipt with the lines the card cut;
+    esc closes the viewer and the client exits on ctrl+c.
+target:
+    cmd: ["bun", "specs/tuimark/fixture.ts", "chat"]
+    cwd: "${projectRoot}"
+terminal:
+    cols: 100
+    rows: 32
+    alternateScreen: require
+steps:
+    - wait:
+        screen:
+            contains: "Message the model"
+        timeoutMs: 15000
+    - type: "/details"
+    - press: enter
+    - wait:
+        screen:
+            contains: "No tool output yet"
+        timeoutMs: 5000
+    - type: "read the long file"
+    - press: enter
+    - wait:
+        screen:
+            contains: "/details for full output"
+        timeoutMs: 15000
+    - snapshot: card_truncated
+    - wait:
+        screen:
+            contains: "Ready"
+        timeoutMs: 5000
+    - wait:
+        screen:
+            notContains: "long line 15 past the card"
+        timeoutMs: 5000
+    - type: "/details"
+    - press: enter
+    - wait:
+        screen:
+            contains: "read · succeeded"
+        timeoutMs: 5000
+    - press: down
+    - press: down
+    - press: down
+    - press: down
+    - press: down
+    - wait:
+        screen:
+            contains: "long line 15 past the card"
+        timeoutMs: 5000
+    - snapshot: details_open
+    - press: esc
+    - wait:
+        screen:
+            notContains: "esc or q close"
+        timeoutMs: 5000
+    - press: ctrl+c
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 5000
+outcomes:
+    - id: tuimark_details
+      description: the card truncates a long tool output with a /details pointer, and /details shows the cut lines in the viewer
+      verify:
+        process:
+            exitCode: 0
+contractHash: sha256:af807302ee9194e9bc56da66e1bef0d6def028dcf52c680fb3132a5609e54edd

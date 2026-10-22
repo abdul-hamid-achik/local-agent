@@ -54,6 +54,12 @@
     "grant_ok": false,
     "lines": []
   },
+  "details": {
+    "open": false,
+    "title": "",
+    "args": "",
+    "lines": []
+  },
   "palette": {
     "open": true,
     "query": "mode",
@@ -100,6 +106,11 @@
         "id": "/permissions",
         "cmd": "/permissions [clear]",
         "desc": "show or clear session approval grants"
+      },
+      {
+        "id": "/details",
+        "cmd": "/details",
+        "desc": "show the last tool output in full"
       },
       {
         "id": "/mcp",

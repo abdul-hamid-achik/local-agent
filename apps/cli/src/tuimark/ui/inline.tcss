@@ -15,6 +15,14 @@
   .la-approve > .la-diff { max-height: 5; }
 }
 
+/* The details viewer, in flow like the approval: its output scroll is
+ * capped, so a short terminal keeps the composer and the status in view. */
+.la-details-inline { height: auto; layout: column; border: rounded; border-color: $accent; title-color: $accent; padding: 0 1; margin: 0 0 1 0; }
+.la-details-inline > .la-diff { max-height: 12; }
+@media (max-rows: 20) {
+  .la-details-inline > .la-diff { max-height: 6; }
+}
+
 /* While an approval is open the live card only repeats "waiting for
  * approval": its rows belong to the diff. */
 screen.approving > #app > #liveregion { display: none; }

@@ -8,6 +8,7 @@
                                 │  /theme dark|light|auto set the session theme        │                                
                                 │  /mouse on|off toggle mouse reporting (fullscreen)   │                                
                                 │  /permissions [clear] show or clear session approv…  │                                
+                                │  /details show the last tool output in full          │                                
                                 │  /mcp show connected MCP servers and their tools     │                                
                                 │  /help show the commands and the keys                │                                
                                 │                                                      │                                
@@ -17,8 +18,7 @@
                                 │  y allow                                             │                                
                                 │  a session                                           │                                
                                 │  n deny                                              │                                
-                                │  pgup/pgdn scroll                                    │                                
-╭───────────────────────────────│  home/end top/end                                    │───────────────────────────────╮
-│ Message the model             │  ^P commands                                         │                               │
+╭───────────────────────────────│  pgup/pgdn scroll                                    │───────────────────────────────╮
+│ Message the model             │  home/end top/end                                    │                               │
 ╰───────────────────────────────│                                                      │───────────────────────────────╯
  Ready · /help for commands     ╰──────────────────────────────────────────────────────╯                                

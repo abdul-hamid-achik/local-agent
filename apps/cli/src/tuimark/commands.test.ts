@@ -133,12 +133,25 @@ test("/permissions lists session grants and clears them", () => {
   expect(HELP_STATUS).toContain("/permissions [clear]");
 });
 
+test("/details asks the controller for the viewer over the latest receipt", () => {
+  expect(runSlash("/details", state)).toEqual({
+    status: "Latest tool output",
+    details: true,
+  });
+  expect(filterPalette("details").map((r) => r.id)).toEqual(["details"]);
+  expect(filterPalette("details")[0]?.label).toBe("Details: last tool output");
+  expect(paletteCommand("details")).toBe("/details");
+  expect(HELP_STATUS).toContain("/details");
+  expect(slashMatches("/d")?.map((c) => c.name)).toEqual(["/details"]);
+});
+
 test("the slash catalog lists exactly the commands the parser knows", () => {
   expect(SLASH_COMMANDS.map((c) => c.name)).toEqual([
     "/mode",
     "/theme",
     "/mouse",
     "/permissions",
+    "/details",
     "/mcp",
     "/help",
   ]);
@@ -176,6 +189,7 @@ test("the slash catalog lists exactly the commands the parser knows", () => {
     "/theme dark|light|auto",
     "/mouse on|off",
     "/permissions [clear]",
+    "/details",
     "/mcp",
     "/help",
   ]);

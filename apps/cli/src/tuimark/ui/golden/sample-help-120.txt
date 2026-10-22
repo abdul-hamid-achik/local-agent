@@ -1,14 +1,14 @@
 === grid 120x30 ===
- Local Agent           Ollama / loopback  qwen3-coder:30b  build            session a1b2c3d  ctx 9.6k/32k  ████░░░░░░░░ 
-┌───────────────────────────────╭─ Help ───────────────────────────────────────────────╮───────────────────────────────┐
-│ You                           │                                                      │                               │
-│ Add a retry to the fetch helpe│  ? close help                                        │                               │
-│                               │                                                      │                               │
-│ Assistant                     │  Commands                                            │                               │
-│ Sure. I will wrap the call in │  /mode plan|build plan reads only · build can edit   │                               │
-│  ts                           │  /theme dark|light|auto set the session theme        │                               │
-│  export async function fetchRe│  /mouse on|off toggle mouse reporting (fullscreen)   │                               │
-│    // exponential backoff     │  /permissions [clear] show or clear session approv…  │                               │
+ Local Agent           Ollama / ╭─ Help ───────────────────────────────────────────────╮c3d  ctx 9.6k/32k  ████░░░░░░░░ 
+┌───────────────────────────────│                                                      │───────────────────────────────┐
+│ You                           │  ? close help                                        │                               │
+│ Add a retry to the fetch helpe│                                                      │                               │
+│                               │  Commands                                            │                               │
+│ Assistant                     │  /mode plan|build plan reads only · build can edit   │                               │
+│ Sure. I will wrap the call in │  /theme dark|light|auto set the session theme        │                               │
+│  ts                           │  /mouse on|off toggle mouse reporting (fullscreen)   │                               │
+│  export async function fetchRe│  /permissions [clear] show or clear session approv…  │                               │
+│    // exponential backoff     │  /details show the last tool output in full          │                               │
 │    for (let attempt = 1; ; att│  /mcp show connected MCP servers and their tools     │                               │
 │      try { return await fetch(│  /help show the commands and the keys                │                               │
 │      catch (e) { if (attempt =│                                                      │                               │

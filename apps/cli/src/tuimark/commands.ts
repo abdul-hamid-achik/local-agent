@@ -34,10 +34,15 @@ export interface CommandOutcome {
   mouse?: boolean;
   /** Set by `/permissions clear`: revoke every session grant. */
   clearGrants?: boolean;
+  /**
+   * Set by `/details`: open the viewer over the latest tool receipt. The
+   * controller owns the receipt, so it writes the real status itself.
+   */
+  details?: boolean;
 }
 
 export const HELP_STATUS =
-  "/mode plan|build · /theme dark|light|auto · /mouse on|off · /permissions [clear] · /mcp · /help · Esc cancel · Ctrl+C exit";
+  "/mode plan|build · /theme dark|light|auto · /mouse on|off · /permissions [clear] · /details · /mcp · /help · Esc cancel · Ctrl+C exit";
 
 /** Inline has no mouse (the engine ignores it there): the controller refuses with this. */
 export const MOUSE_INLINE_STATUS = "Mouse is not available in inline mode";
@@ -108,6 +113,8 @@ export function runSlash(text: string, state: CommandState): CommandOutcome {
       clearGrants: true,
     };
   }
+  if (command === "/details")
+    return { status: "Latest tool output", details: true };
   if (command === "/help") return { status: HELP_STATUS, help: true };
   if (command === "/mcp")
     return {
@@ -166,6 +173,12 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
     usage: "/permissions [clear]",
     description: "show or clear session approval grants",
     insert: "/permissions ",
+  },
+  {
+    name: "/details",
+    usage: "/details",
+    description: "show the last tool output in full",
+    insert: "/details",
   },
   {
     name: "/mcp",
@@ -262,6 +275,7 @@ export const PALETTE: readonly PaletteItem[] = [
     label: "Permissions: clear all",
     hint: "/permissions clear",
   },
+  { id: "details", label: "Details: last tool output", hint: "/details" },
   { id: "mcp", label: "MCP servers", hint: "/mcp" },
   { id: "help", label: "Help, commands and keys", hint: "/help" },
   // Two rows stand for keys, not slash commands: the controller runs them

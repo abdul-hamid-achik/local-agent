@@ -34,6 +34,7 @@ import {
   liveToolView,
   type MessageView,
   NO_CARD,
+  type ToolReceipt,
   ViewBuilder,
 } from "#cli/tuimark/blocks";
 import {
@@ -60,12 +61,15 @@ import {
   contextLabel,
   contextPct,
   ctxFlags,
+  detailsState,
   grantCovers,
   grantFor,
   grantsLabel,
   idleStatus,
   initialStore,
+  NO_DETAILS_STATUS,
   noApproval,
+  noDetails,
   PLACEHOLDER,
   PLACEHOLDER_BUSY,
   type Store,
@@ -210,6 +214,13 @@ export class TuimarkClient {
     string,
     { label: string; prefix?: readonly string[] }
   >();
+  /**
+   * The latest completed tool receipt, whole, for `/details`. Memory only:
+   * never a model message, never persisted; a newer receipt replaces it.
+   */
+  private lastReceipt?: ToolReceipt;
+  /** Whether the details viewer is open (the store's `details.open`). */
+  private detailsOpen = false;
   /** The header ctx meter (see CtxMeter for the exact accumulation rule). */
   private readonly ctx = new CtxMeter();
   /** One message sent while busy, run when the turn ends. A new send replaces it. */
@@ -240,6 +251,8 @@ export class TuimarkClient {
     for (const message of this.history) {
       const view = this.builder.fromMessage(message);
       if (view) this.transcript.push(view);
+      const receipt = this.builder.receiptOf(message);
+      if (receipt) this.lastReceipt = receipt;
       if (message.role === "user" && message.content.trim())
         this.sent.push(message.content);
     }
@@ -328,6 +341,7 @@ export class TuimarkClient {
     ui.on("help_close", () =>
       this.write([{ path: "help.open", value: false }]),
     );
+    ui.on("details_close", () => this.closeDetails());
     if (this.inline) {
       // A resumed session's history is the scrollback: print it once, in order.
       const views = this.transcript.all();
@@ -339,14 +353,65 @@ export class TuimarkClient {
     }
   }
 
-  /** The terminal changed size: an open approval preview is wrapped again. */
+  /** The terminal changed size: open previews are wrapped again. */
   async resize(): Promise<void> {
+    const writes: Write[] = [];
     const proposal = this.proposal;
-    if (!proposal) return;
-    const approval = this.approvalFor(proposal);
-    // A narrower terminal wraps more rows: truncation can change with it.
-    this.proposalTruncated = approval.truncated;
-    await this.write([{ path: "approval", value: approval }]);
+    if (proposal) {
+      const approval = this.approvalFor(proposal);
+      // A narrower terminal wraps more rows: truncation can change with it.
+      this.proposalTruncated = approval.truncated;
+      writes.push({ path: "approval", value: approval });
+    }
+    if (this.detailsOpen && this.lastReceipt)
+      writes.push({
+        path: "details",
+        value: this.detailsFor(this.lastReceipt),
+      });
+    if (writes.length > 0) await this.write(writes);
+  }
+
+  private detailsFor(receipt: ToolReceipt) {
+    return detailsState(receipt, this.options.columns?.() ?? 80, this.inline);
+  }
+
+  /** The writes that close the viewer, or none when it is already closed. */
+  private closeDetailsWrite(): Write[] {
+    if (!this.detailsOpen) return [];
+    this.detailsOpen = false;
+    return [{ path: "details", value: noDetails() }];
+  }
+
+  /** Esc/q in the viewer: it closes and the status rests at idle again. */
+  private async closeDetails(): Promise<void> {
+    const writes = this.closeDetailsWrite();
+    if (writes.length === 0) return;
+    writes.push({
+      path: "status",
+      value: idleStatus(this.options.mcp?.length ?? 0),
+    });
+    await this.write(writes);
+  }
+
+  /**
+   * `/details`: the latest receipt whole, in the viewer. Refused while a
+   * turn runs or an approval is open — an armed dialog is never covered.
+   */
+  private async openDetails(): Promise<void> {
+    if (this.busy || this.proposal) {
+      await this.write([{ path: "status", value: BUSY_STATUS }]);
+      return;
+    }
+    const receipt = this.lastReceipt;
+    if (!receipt) {
+      await this.write([{ path: "status", value: NO_DETAILS_STATUS }]);
+      return;
+    }
+    this.detailsOpen = true;
+    await this.write([
+      { path: "details", value: this.detailsFor(receipt) },
+      { path: "status", value: `Latest tool output: ${receipt.name}` },
+    ]);
   }
 
   private approvalFor(proposal: ApprovalRequest) {
@@ -926,6 +991,12 @@ export class TuimarkClient {
       mouse: this.mouse,
       grants: this.grantLabels(),
     });
+    // `/details` opens over controller state (the retained receipt), so
+    // its whole outcome — refusal included — is written there.
+    if (outcome.details) {
+      await this.openDetails();
+      return;
+    }
     // Inline has no mouse, and its document never reads `mouse_on`: refuse
     // here rather than write a path the host would reject.
     if (outcome.mouse !== undefined && this.inline) {
@@ -1085,6 +1156,8 @@ export class TuimarkClient {
         { path: "palette.open", value: false },
         { path: "help.open", value: false },
         ...this.closeSlash(),
+        // The viewer never covers an armed dialog.
+        ...this.closeDetailsWrite(),
         { path: "approval", value: approval },
         { path: "status", value: APPROVAL_WAIT_STATUS },
       ];
@@ -1168,6 +1241,8 @@ export class TuimarkClient {
       // Inline, the prompt is printed as it is sent; the region keeps no copy.
       if (this.inline && userView) await this.commitView(userView);
       await this.publishMessages([
+        // A new turn takes the screen: an open viewer closes with it.
+        ...this.closeDetailsWrite(),
         // The welcome goes with the first message and never returns.
         { path: "empty", value: false },
         { path: "draft", value: "" },
@@ -1225,6 +1300,10 @@ export class TuimarkClient {
             this.history.push(event.message);
             const view = this.builder.fromMessage(event.message);
             if (view) this.transcript.push(view);
+            // The fullest output the client receives is this message's
+            // receipt, before the card view truncates it: keep it whole.
+            const receipt = this.builder.receiptOf(event.message);
+            if (receipt) this.lastReceipt = receipt;
             if (this.inline) {
               // Only what is still live is printed: the whole re-parsed view
               // would duplicate the blocks already in the scrollback.

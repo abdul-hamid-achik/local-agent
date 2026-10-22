@@ -7,13 +7,17 @@ import {
   contextLabel,
   contextPct,
   ctxFlags,
+  detailsRows,
+  detailsState,
   EMPTY_COMMIT_VIEW,
   grantCovers,
   grantFor,
   grantsLabel,
   initialStore,
   mcpParts,
+  NO_DETAILS_STATUS,
   noApproval,
+  noDetails,
   previewRows,
   previewWidth,
   previewWidthInline,
@@ -81,6 +85,7 @@ test("the initial store has every path the document reads", () => {
       "busy",
       "commit_blocks",
       "commit_buf",
+      "details",
       "draft",
       "earlier",
       "empty",
@@ -98,6 +103,10 @@ test("the initial store has every path the document reads", () => {
     ].sort(),
   );
   expect(store.approval).toEqual(noApproval());
+  expect(store.details).toEqual(noDetails());
+  expect(NO_DETAILS_STATUS).toBe(
+    "No tool output yet. Run something first, then /details",
+  );
   // The inline client's scratch paths are present from the start, so a
   // commit's `with` never reads a missing path.
   expect(store.commit_buf).toEqual(EMPTY_COMMIT_VIEW);
@@ -472,5 +481,48 @@ test("a truncated approval offers no session grant", () => {
     truncated: true,
     grant_ok: false,
     grant_hint: "preview truncated: session grant unavailable",
+  });
+});
+
+// --------------------------------------------------------------------- details
+
+test("detailsState titles the receipt and wraps its output per presentation", () => {
+  const receipt = {
+    name: "read",
+    status: "succeeded",
+    args: "src/big.txt",
+    output: "x".repeat(100),
+  };
+  const full = detailsState(receipt, 120);
+  expect(full.open).toBe(true);
+  expect(full.title).toBe("read · succeeded");
+  expect(full.args).toBe("src/big.txt");
+  // Fullscreen wraps at the approval dialog's width, inline full-width:
+  // the same 100 columns need more rows in the dialog than in the box.
+  const inline = detailsState(receipt, 120, true);
+  expect(full.lines.length).toBeGreaterThan(inline.lines.length);
+  expect(inline.lines).toHaveLength(1);
+  expect(full.lines.map((l) => l.t).join("")).toContain("↪");
+  // Tool output is not a diff: no row is painted add or delete.
+  const diffy = detailsRows("+added\n-removed", 80);
+  expect(diffy.map((l) => [l.add, l.del])).toEqual([
+    [false, false],
+    [false, false],
+  ]);
+  // An empty output still has something to show.
+  expect(detailsRows("", 80)).toEqual([
+    { n: 0, t: "(no output)", add: false, del: false, note: true },
+  ]);
+  // Past the row cap the viewer says how many lines it left out.
+  const many = detailsRows(
+    Array.from({ length: APPROVAL_MAX_ROWS + 30 }, (_, i) => `l${i}`).join(
+      "\n",
+    ),
+    80,
+  );
+  expect(many).toHaveLength(APPROVAL_MAX_ROWS + 1);
+  expect(many.at(-1)).toMatchObject({
+    t: "… 30 more lines not shown",
+    note: true,
   });
 });

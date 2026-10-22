@@ -36,6 +36,18 @@
     <bind keys="home" action="move-first" to="#approval_diff" label="top/end" keycap="home/end"/>
     <bind keys="end" action="move-last" to="#approval_diff"/>
   </keymap>
+  <!-- The details viewer's keys, while its modal is open: every row of
+       the output is reachable by key, and q closes it like esc (the
+       modal's on:escape). No labels: the viewer names its own keys. -->
+  <keymap when=".la-details">
+    <bind keys="q" action="details_close"/>
+    <bind keys="pgup" action="move-page-up" to="#details_body"/>
+    <bind keys="pgdn" action="move-page-down" to="#details_body"/>
+    <bind keys="up" action="move-prev" to="#details_body"/>
+    <bind keys="down" action="move-next" to="#details_body"/>
+    <bind keys="home" action="move-first" to="#details_body"/>
+    <bind keys="end" action="move-last" to="#details_body"/>
+  </keymap>
   <!-- The slash popup's keys, while it is open (the screen carries the
        class): they stand before the history and cancel rows below, and
        dispatch takes the first row that matches, so up and down move the
@@ -249,6 +261,19 @@
         </row>
         <hints class="k-hints k-help-keys" scope="all"/>
       </scroll>
+    </modal>
+    <!-- The details viewer: the latest tool receipt's output in full
+         (/details). An app-level modal like the help above, with kit
+         classes; the parent hard-wraps the rows (details.lines) at the
+         dialog's width, like an approval preview. -->
+    <modal id="details_dialog" class="la-details" open="details.open" title="{details.title}" focus="#details_body" on:escape="details_close">
+      <text if="details.args" class="la-muted" wrap="truncate">{details.args}</text>
+      <scroll id="details_body" class="la-diff" focusable="true">
+        <col class="la-difflines" each="details.lines as ln" key="ln.n">
+          <text wrap="truncate" class:note="ln.note">{ln.t}</text>
+        </col>
+      </scroll>
+      <text class="la-muted">pgup/pgdn scroll · home/end top/bottom · esc or q close</text>
     </modal>
   </screen>
 </tui>

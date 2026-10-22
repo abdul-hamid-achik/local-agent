@@ -18,6 +18,7 @@ import {
   BUSY_STATUS_LINE,
   contextLabel,
   contextPct,
+  detailsState,
   initialStore,
   type Store,
 } from "#cli/tuimark/store";
@@ -373,6 +374,54 @@ export function grantsSample(): Store {
   return store;
 }
 
+/** A tool output longer than its card: the card keeps eight lines of it. */
+export const DETAILS_OUTPUT = Array.from(
+  { length: 20 },
+  (_, i) => `output line ${i + 1}`,
+).join("\n");
+/** A line the card truncates away (line 15 of 20): only `/details` shows it. */
+export const DETAILS_HIDDEN = "output line 15";
+
+const DETAILS_MESSAGES: Message[] = [
+  { role: "user", content: "Read the big file back to me." },
+  {
+    role: "assistant",
+    content: "",
+    tool_calls: [
+      {
+        id: "call-9",
+        function: { name: "read", arguments: { path: "src/big.txt" } },
+      },
+    ],
+  },
+  {
+    role: "tool",
+    tool_name: "read",
+    tool_call_id: "call-9",
+    content: JSON.stringify({ status: "succeeded", output: DETAILS_OUTPUT }),
+  },
+  { role: "assistant", content: "That is the whole file." },
+];
+
+/** The `/details` viewer open over the long read (the modal, fullscreen). */
+export function detailsSample(): Store {
+  const { store, builder } = base(DETAILS_MESSAGES);
+  const receipt = builder.receiptOf(DETAILS_MESSAGES[2] as Message);
+  if (receipt) store.details = detailsState(receipt, 80);
+  store.status = "Latest tool output: read";
+  return store;
+}
+
+/** The `/details` viewer as the inline in-flow block (wrapped full-width). */
+export function inlineDetailsSample(): Store {
+  const store = toInline(detailsSample());
+  const builder = new ViewBuilder();
+  for (const message of DETAILS_MESSAGES) builder.fromMessage(message);
+  const receipt = builder.receiptOf(DETAILS_MESSAGES[2] as Message);
+  if (receipt) store.details = detailsState(receipt, 80, true);
+  return store;
+}
+
 /** A half-typed command: the `/` popup over the composer, first match chosen. */
 export function slashSample(): Store {
   const { store } = base();
@@ -395,6 +444,7 @@ export const SAMPLES = {
   "sample-streaming": streamingSample,
   "sample-palette": paletteSample,
   "sample-help": helpSample,
+  "sample-details": detailsSample,
   "sample-slash": slashSample,
   "sample-grants": grantsSample,
   "sample-draft": draftSample,
@@ -444,6 +494,7 @@ export const INLINE_SAMPLES = {
   "inline-sample-approval-long": inlineLongApprovalSample,
   "inline-sample-palette": () => toInline(paletteSample()),
   "inline-sample-help": () => toInline(helpSample()),
+  "inline-sample-details": inlineDetailsSample,
   "inline-sample-slash": () => toInline(slashSample()),
   "inline-sample-draft-long": () => toInline(longDraftSample()),
 } as const;

@@ -777,7 +777,11 @@ export function outputRuns(
     pushRun(runs, clip(line, OUT_COLS), cls);
   });
   if (all.length > OUT_LINES)
-    pushRun(runs, `\n… ${all.length - OUT_LINES} more lines`, "note");
+    pushRun(
+      runs,
+      `\n… ${all.length - OUT_LINES} more lines · /details for full output`,
+      "note",
+    );
   return runs;
 }
 
@@ -820,6 +824,50 @@ function resultParts(
 export function resultSummary(name: string, output: string): string {
   const { head, body } = resultParts(name, output);
   return head ? [head.text, body].join("\n") : body;
+}
+
+/** The `{status, output}` of a tool message's content, or the content as it is. */
+function parseReceipt(content: string): { status: string; output: string } {
+  let status = "unknown";
+  let output = content;
+  try {
+    const result = JSON.parse(content) as {
+      status?: unknown;
+      output?: unknown;
+    };
+    if (typeof result.output === "string") {
+      output = result.output;
+      if (typeof result.status === "string") status = result.status;
+    }
+  } catch {
+    // Not the runtime's {status, output} receipt: show the content.
+  }
+  return { status, output };
+}
+
+/**
+ * A finished tool receipt kept whole for the `/details` viewer: the name and
+ * status as its card shows them, the card's args line, and the full output
+ * text (a command's exit head line included, as the card shows it). It is
+ * UI memory only — never a model message, never persisted.
+ */
+export interface ToolReceipt {
+  name: string;
+  status: string;
+  args: string;
+  output: string;
+}
+
+/** The output the viewer keeps; past it the tail below says what was cut. */
+export const DETAILS_MAX_CHARS = 64_000;
+export const DETAILS_TRUNCATED_TAIL = `… output truncated for the viewer (first ${DETAILS_MAX_CHARS} characters)`;
+
+/** Cuts viewer output to DETAILS_MAX_CHARS code points, saying so when it does. */
+export function capDetailsOutput(text: string): string {
+  if (text.length <= DETAILS_MAX_CHARS) return text;
+  const chars = Array.from(text);
+  if (chars.length <= DETAILS_MAX_CHARS) return text;
+  return `${chars.slice(0, DETAILS_MAX_CHARS).join("")}\n${DETAILS_TRUNCATED_TAIL}`;
 }
 
 function toolCard(
@@ -972,26 +1020,33 @@ export class ViewBuilder {
     const call = message.tool_call_id
       ? this.calls.get(message.tool_call_id)
       : undefined;
-    let status = "unknown";
-    let output = message.content;
-    try {
-      const result = JSON.parse(message.content) as {
-        status?: unknown;
-        output?: unknown;
-      };
-      if (typeof result.output === "string") {
-        output = result.output;
-        if (typeof result.status === "string") status = result.status;
-      }
-    } catch {
-      // Not the runtime's {status, output} receipt: show the content.
-    }
+    const { status, output } = parseReceipt(message.content);
     return view(
       this.id(),
       "tool",
       [],
       toolCard(name, callSummary(call), asToolState(status), output),
     );
+  }
+
+  /**
+   * The whole receipt of a tool message, for the `/details` viewer: the
+   * same parse the card truncates, kept in full (capped for the viewer).
+   * Undefined for every other message.
+   */
+  receiptOf(message: Message): ToolReceipt | undefined {
+    if (message.role !== "tool") return undefined;
+    const name = message.tool_name ?? "result";
+    const call = message.tool_call_id
+      ? this.calls.get(message.tool_call_id)
+      : undefined;
+    const { status, output } = parseReceipt(message.content);
+    return {
+      name: clip(cleanText(name), 80),
+      status: STATE_LABEL[asToolState(status)],
+      args: callSummary(call),
+      output: capDetailsOutput(resultSummary(name, output)),
+    };
   }
 
   /** A view for text the client itself wrote (never sent to the model). */

@@ -58,6 +58,20 @@
     <bind keys="tab" action="slash_complete"/>
     <bind keys="esc" action="slash_close"/>
   </keymap>
+  <!-- The details viewer's keys, while it is open (the screen carries the
+       class): after the approval and popup rows above, before the cancel
+       row below, so esc closes the viewer instead of cancelling a turn
+       and the scroll keys reach the output. The composer stays enabled
+       (typing still works); its own keys are its own first — home and end
+       are its caret keys and never reach here (probed with play), so the
+       viewer scrolls by page and by the arrows at the draft's edges. -->
+  <keymap when=".viewing">
+    <bind keys="esc" action="details_close"/>
+    <bind keys="pgup" action="move-page-up" to="#details_body"/>
+    <bind keys="pgdn" action="move-page-down" to="#details_body"/>
+    <bind keys="up" action="move-prev" to="#details_body"/>
+    <bind keys="down" action="move-next" to="#details_body"/>
+  </keymap>
   <keymap>
     <!-- Commands first: hint order is keymap order, and a narrow terminal
          keeps only the first hint that fits. -->
@@ -137,7 +151,7 @@
     </use>
   </template>
 
-  <screen id="main" focus="#composer" class:approving="approval.open" class:slashpop="slash.open">
+  <screen id="main" focus="#composer" class:approving="approval.open" class:slashpop="slash.open" class:viewing="details.open">
     <col id="app">
       <use template="k-appbar" brand="Local Agent" title="">
         <text class="la-muted la-provider">{header.provider}</text>
@@ -177,6 +191,19 @@
           </scroll>
         </col>
       </scroll>
+
+      <!-- The details viewer, in flow: the latest tool receipt's output
+           in full (/details). Region state only — it is never committed
+           to the scrollback — and the composer stays usable under it. -->
+      <box id="details" class="la-details-inline" if="details.open" title="{details.title}">
+        <text if="details.args" class="la-muted" wrap="truncate">{details.args}</text>
+        <scroll id="details_body" class="la-diff" focusable="true">
+          <col class="la-difflines" each="details.lines as ln" key="ln.n">
+            <text wrap="truncate" class:note="ln.note">{ln.t}</text>
+          </col>
+        </scroll>
+        <text class="la-muted">pgup/pgdn · up/down scroll · esc close</text>
+      </box>
 
       <!-- The approval, in flow. The diff is a capped scroll; the keys are
            named on the status line and here. -->

@@ -2,7 +2,10 @@ import type { Message } from "@local-agent/runtime";
 import { expect, test } from "vitest";
 import {
   callSummary,
+  capDetailsOutput,
   clip,
+  DETAILS_MAX_CHARS,
+  DETAILS_TRUNCATED_TAIL,
   IDLE_LIVE,
   inlineRuns,
   liveToolView,
@@ -231,9 +234,27 @@ test("tool output is one run list: eight lines, then the count of the rest", () 
     Array.from({ length: 12 }, (_, i) => `l${i}`).join("\n"),
   );
   expect(runsText(out).split("\n")).toHaveLength(9);
-  expect(out.at(-1)).toEqual({ text: "\n… 4 more lines", class: "note" });
+  expect(out.at(-1)).toEqual({
+    text: "\n… 4 more lines · /details for full output",
+    class: "note",
+  });
   expect(outputRuns("")).toEqual([]);
   expect(outputRuns("a\nb\n\n")).toEqual(["a\nb"]);
+});
+
+test("the /details affordance rides the truncation line, and only there", () => {
+  const lines = (n: number) =>
+    Array.from({ length: n }, (_, i) => `l${i}`).join("\n");
+  // Exactly eight lines fill the card: nothing was truncated, no pointer.
+  expect(runsText(outputRuns(lines(8)))).not.toContain("/details");
+  expect(runsText(outputRuns(lines(8)))).not.toContain("more lines");
+  // Nine lines truncate by one: the count and the pointer share the line.
+  expect(runsText(outputRuns(lines(9)))).toContain(
+    "… 1 more lines · /details for full output",
+  );
+  // A head line (a command's exit) counts toward the eight, like the card.
+  const headed = outputRuns(lines(8), { text: "exit 0", bad: false });
+  expect(runsText(headed)).toContain("· /details for full output");
 });
 
 test("a failing command's exit line is class err, a clean one's is note", () => {
@@ -318,6 +339,66 @@ test("messages map to views: system and empty assistant messages show nothing", 
   });
   expect(tool?.out).toEqual(["Edit denied by host"]);
   expect(new Set(views.map((v) => v.id)).size).toBe(3);
+});
+
+test("receiptOf keeps the whole receipt the card truncates", () => {
+  const builder = new ViewBuilder();
+  builder.fromMessage({
+    role: "assistant",
+    content: "",
+    tool_calls: [
+      { id: "c1", function: { name: "read", arguments: { path: "big.txt" } } },
+    ],
+  });
+  const output = Array.from({ length: 20 }, (_, i) => `line ${i}`).join("\n");
+  const message: Message = {
+    role: "tool",
+    tool_name: "read",
+    tool_call_id: "c1",
+    content: JSON.stringify({ status: "failed", output }),
+  };
+  // The card keeps eight lines; the receipt keeps all twenty, with the
+  // name and status exactly as the card shows them.
+  expect(runsText(builder.fromMessage(message)?.card.out ?? [])).not.toContain(
+    "line 19",
+  );
+  expect(builder.receiptOf(message)).toEqual({
+    name: "read",
+    status: "failed",
+    args: "big.txt",
+    output,
+  });
+  // A command receipt carries its exit head line, like its card.
+  const command = builder.receiptOf({
+    role: "tool",
+    tool_name: "run_command",
+    content: JSON.stringify({
+      status: "failed",
+      output: JSON.stringify({ output: "boom\n", exitCode: 2 }),
+    }),
+  });
+  expect(command?.output).toBe("exit 2\nboom\n");
+  // Only tool messages are receipts.
+  expect(
+    builder.receiptOf({ role: "assistant", content: "hi" }),
+  ).toBeUndefined();
+  expect(builder.receiptOf({ role: "user", content: "hi" })).toBeUndefined();
+});
+
+test("capDetailsOutput keeps 64000 characters and says what it cut", () => {
+  expect(DETAILS_MAX_CHARS).toBe(64_000);
+  expect(DETAILS_TRUNCATED_TAIL).toBe(
+    "… output truncated for the viewer (first 64000 characters)",
+  );
+  expect(capDetailsOutput("short")).toBe("short");
+  const capped = capDetailsOutput(`${"x".repeat(70_000)}TAIL-MARKER`);
+  expect(capped).toBe(
+    `${"x".repeat(DETAILS_MAX_CHARS)}\n${DETAILS_TRUNCATED_TAIL}`,
+  );
+  expect(capped).not.toContain("TAIL-MARKER");
+  // The cut lands on a code point, never inside a surrogate pair.
+  const emoji = capDetailsOutput("😀".repeat(70_000));
+  expect(emoji.startsWith("😀".repeat(DETAILS_MAX_CHARS))).toBe(true);
 });
 
 test("a tool receipt that is not the runtime's JSON is shown as it is", () => {
