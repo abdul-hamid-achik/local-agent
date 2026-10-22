@@ -3,7 +3,13 @@
 // change to a store shape shows up in the goldens instead of in a terminal.
 
 import type { ApprovalRequest, Message } from "@local-agent/runtime";
-import { liveToolView, thinkingView, ViewBuilder } from "#cli/tuimark/blocks";
+import {
+  type Block,
+  liveToolView,
+  type MessageView,
+  thinkingView,
+  ViewBuilder,
+} from "#cli/tuimark/blocks";
 import { filterPalette } from "#cli/tuimark/commands";
 import {
   APPROVAL_STATUS,
@@ -352,3 +358,49 @@ export const SAMPLES = {
   "sample-draft": draftSample,
   "sample-draft-long": longDraftSample,
 } as const;
+
+// ----------------------------------------------------------------- inline stores
+
+/** A sample store as the inline client holds it: history is in the scrollback. */
+export function toInline(store: Store): Store {
+  const clone = structuredClone(store);
+  clone.messages = [];
+  clone.earlier = { n: 0 };
+  return clone;
+}
+
+/** The in-flow approval, its preview wrapped for the full-width box. */
+export function inlineApprovalSample(): Store {
+  const store = toInline(approvalSample());
+  store.approval = approvalState(EDIT_PROPOSAL, 80, undefined, true);
+  return store;
+}
+
+/** The in-flow approval over the long diff, wrapped at the inline width. */
+export function inlineLongApprovalSample(): Store {
+  const store = toInline(longApprovalSample());
+  store.approval = approvalState(
+    { ...EDIT_PROPOSAL, path: "install.sh", diff: longDiffText() },
+    80,
+    undefined,
+    true,
+  );
+  return store;
+}
+
+export const INLINE_SAMPLES = {
+  "inline-sample": () => toInline(idleSample()),
+  "inline-sample-streaming": () => toInline(streamingSample()),
+  "inline-sample-thinking": () => toInline(thinkingSample()),
+  "inline-sample-approval": inlineApprovalSample,
+  "inline-sample-approval-long": inlineLongApprovalSample,
+  "inline-sample-palette": () => toInline(paletteSample()),
+  "inline-sample-help": () => toInline(helpSample()),
+  "inline-sample-draft-long": () => toInline(longDraftSample()),
+} as const;
+
+/** The views (and last message's blocks) the inline play checks commit. */
+export function commitFixtures(): { views: MessageView[]; blocks: Block[] } {
+  const views = idleSample().messages;
+  return { views, blocks: views.at(-1)?.blocks ?? [] };
+}

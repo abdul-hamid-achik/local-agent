@@ -1,0 +1,161 @@
+{
+  "header": {
+    "provider": "Ollama / loopback",
+    "model": "qwen3-coder:30b",
+    "mode": "build",
+    "session": "session a1b2c3d",
+    "ctx_label": "9.6k/32k",
+    "ctx_pct": 30
+  },
+  "messages": [],
+  "earlier": {
+    "n": 0
+  },
+  "live": {
+    "id": "live",
+    "is_user": false,
+    "is_asst": true,
+    "is_tool": false,
+    "blocks": [
+      {
+        "id": "l0",
+        "para": true,
+        "head": false,
+        "quote": false,
+        "item": false,
+        "code": false,
+        "nest": false,
+        "marker": "",
+        "lang": "",
+        "runs": [
+          "Here is the plan:"
+        ]
+      }
+    ],
+    "card": {
+      "name": "",
+      "status": "",
+      "args": "",
+      "ok": false,
+      "bad": false,
+      "warn": false,
+      "running": false,
+      "out": []
+    },
+    "active": true,
+    "tail": [
+      {
+        "id": "l1",
+        "para": false,
+        "head": false,
+        "quote": false,
+        "item": false,
+        "code": true,
+        "nest": false,
+        "marker": "",
+        "lang": "ts",
+        "runs": [
+          {
+            "text": "const",
+            "class": "kw"
+          },
+          " retries = ",
+          {
+            "text": "3",
+            "class": "num"
+          },
+          ";\n",
+          {
+            "text": "for",
+            "class": "kw"
+          },
+          " (",
+          {
+            "text": "let",
+            "class": "kw"
+          },
+          " i = ",
+          {
+            "text": "0",
+            "class": "num"
+          },
+          "; i < retries; i++) {\n  ",
+          {
+            "text": "await",
+            "class": "kw"
+          },
+          " fetch(url);"
+        ]
+      }
+    ]
+  },
+  "thinking": {
+    "on": false,
+    "runs": []
+  },
+  "approval": {
+    "open": false,
+    "title": "",
+    "body": "",
+    "danger": false,
+    "no": "Deny",
+    "yes": "Allow",
+    "truncated": false,
+    "lines": []
+  },
+  "palette": {
+    "open": false,
+    "query": "",
+    "cur": "mode-plan"
+  },
+  "found": {
+    "any": true,
+    "items": [
+      {
+        "id": "mode-plan",
+        "label": "Mode: plan (read only)",
+        "hint": "/mode plan"
+      },
+      {
+        "id": "mode-build",
+        "label": "Mode: build (read, edit, command)",
+        "hint": "/mode build"
+      },
+      {
+        "id": "mcp",
+        "label": "MCP servers",
+        "hint": "/mcp"
+      },
+      {
+        "id": "help",
+        "label": "Help and keys",
+        "hint": "/help"
+      }
+    ]
+  },
+  "help": {
+    "open": false
+  },
+  "draft": "",
+  "placeholder": "Generating…",
+  "busy": true,
+  "status": "Generating…",
+  "commit_buf": {
+    "id": "commit",
+    "is_user": false,
+    "is_asst": false,
+    "is_tool": false,
+    "blocks": [],
+    "card": {
+      "name": "",
+      "status": "",
+      "args": "",
+      "ok": false,
+      "bad": false,
+      "warn": false,
+      "running": false,
+      "out": []
+    }
+  },
+  "commit_blocks": []
+}

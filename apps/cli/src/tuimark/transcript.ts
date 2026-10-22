@@ -52,6 +52,11 @@ export class Transcript {
     return true;
   }
 
+  /** Every view, oldest first (the inline client commits them all at startup). */
+  all(): MessageView[] {
+    return this.views.slice();
+  }
+
   /** What the store holds: the newest `shown` views and how many are left out. */
   snapshot(): TranscriptSnapshot {
     const messages = this.views.slice(-this.shown);

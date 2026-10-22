@@ -3,7 +3,7 @@
 // to a string or an array, numeric path segments indexing arrays), and counts
 // the bytes the SDK would write to fd 3 for each batch.
 
-import type { Host, HostEvent } from "@thelacanians/tuimark";
+import type { Commit, Host, HostEvent } from "@thelacanians/tuimark";
 import type { UiHost } from "#cli/tuimark/controller";
 
 export interface WriteLike {
@@ -50,14 +50,38 @@ export function batchBytes(writes: readonly WriteLike[], id: number): number {
   return Buffer.byteLength(line) + 1;
 }
 
+/** The bytes of the fd 3 line the SDK writes for a commit, newline included. */
+export function commitBytes(commit: Commit, id: number): number {
+  const members: Record<string, unknown> = {};
+  if (commit.lines !== undefined) members.lines = commit.lines;
+  if (commit.template !== undefined) members.template = commit.template;
+  if (commit.with !== undefined) members.with = commit.with;
+  if (commit.props !== undefined) members.props = commit.props;
+  return (
+    Buffer.byteLength(JSON.stringify({ type: "commit", ...members, id })) + 1
+  );
+}
+
+/** One recorded commit: what was asked, and what its `with` path held then. */
+export interface RecordedCommit {
+  commit: Commit;
+  /** A clone of the `with` path's store value at the commit instant (paths are read once). */
+  buf: unknown;
+  /** False when the commit was refused: nothing was printed. */
+  ok: boolean;
+}
+
 export class FakeHost implements UiHost {
   store: Record<string, unknown> = {};
   readonly handlers = new Map<string, (ev: HostEvent) => unknown>();
   readonly batches: WriteLike[][] = [];
-  /** Bytes the batches would take on fd 3. */
+  readonly commits: RecordedCommit[] = [];
+  /** Bytes the batches (and commits) would take on fd 3. */
   bytes = 0;
   /** When set, the batch with this index (0-based) is refused. */
   refuse?: (writes: WriteLike[], index: number) => string | undefined;
+  /** When set, the commit with this index (0-based) is refused. */
+  refuseCommit?: (commit: Commit, index: number) => string | undefined;
   private inflight = 0;
   maxInflight = 0;
   private seq = 0;
@@ -85,6 +109,42 @@ export class FakeHost implements UiHost {
     if (error !== undefined)
       return { type: "ack", id: index + 1, ok: false, error };
     for (const w of writes) applyWrite(this.store, w);
+    return { type: "ack", id: index + 1, ok: true };
+  }
+
+  async commit(commit: Commit): Promise<{
+    type: "ack";
+    id: number | string;
+    ok: boolean;
+    error?: string;
+  }> {
+    this.maxInflight = Math.max(this.maxInflight, ++this.inflight);
+    const index = this.commits.length;
+    // The runtime reads the `with` path once, as it stands at this instant.
+    const path = commit.with?.split(/\s+as\s+/)[0]?.trim();
+    const buf = path
+      ? structuredClone(
+          path
+            .split(".")
+            .reduce<unknown>(
+              (o, k) => (o as Record<string, unknown> | undefined)?.[k],
+              this.store,
+            ),
+        )
+      : undefined;
+    const record: RecordedCommit = {
+      commit: structuredClone(commit),
+      buf,
+      ok: false,
+    };
+    this.commits.push(record);
+    this.bytes += commitBytes(commit, index + 1);
+    await new Promise((r) => setTimeout(r, this.ackMs));
+    this.inflight--;
+    const error = this.refuseCommit?.(commit, index);
+    if (error !== undefined)
+      return { type: "ack", id: index + 1, ok: false, error };
+    record.ok = true;
     return { type: "ack", id: index + 1, ok: true };
   }
 

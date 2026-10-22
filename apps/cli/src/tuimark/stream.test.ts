@@ -22,9 +22,9 @@ interface Live {
 }
 
 /** A stream with a clock the test moves, and a store the writes are applied to. */
-function rig() {
+function rig(options: { inline?: boolean } = {}) {
   let now = 0;
-  const stream = new LiveStream(() => now);
+  const stream = new LiveStream(() => now, options);
   const store: Record<string, unknown> = {
     live: { active: false, blocks: [], tail: [] },
     thinking: { on: false, runs: [] },
@@ -274,6 +274,122 @@ test("a reply past the view's bounds says so once and stops following", () => {
   r.stream.pushText("more");
   r.advance(40);
   expect(r.drain()).toEqual([]);
+});
+
+// ------------------------------------------------------- the inline commits
+
+test("inline: final blocks are offered once, confirmed only on ack, then gone from the live message", () => {
+  const r = rig({ inline: true });
+  r.stream.pushText("first paragraph\n\nsecond paragraph\n\nthird half");
+  r.advance(40);
+  r.drain();
+  const offered = r.stream.takeFinal();
+  expect(offered.map((b) => runsText(b.runs))).toEqual(["first paragraph"]);
+  // Already offered: not offered again while the commit is in flight.
+  expect(r.stream.takeFinal()).toEqual([]);
+  expect(r.stream.committed).toBe(0);
+  const clear = r.stream.confirmCommitted(offered.length);
+  expect(r.stream.committed).toBe(1);
+  for (const w of clear) applyWrite(r.store, w);
+  expect(r.live().blocks).toEqual([]);
+  expect(r.live().tail.map((b) => runsText(b.runs))).toEqual([
+    "second paragraph",
+    "third half",
+  ]);
+});
+
+test("inline: a released offer comes back whole, so a refused commit loses nothing", () => {
+  const r = rig({ inline: true });
+  r.stream.pushText("first\n\nsecond\n\nthird");
+  r.advance(40);
+  r.drain();
+  const first = r.stream.takeFinal();
+  expect(first.length).toBe(1);
+  r.stream.releaseFinal(first.length);
+  const again = r.stream.takeFinal();
+  expect(again).toEqual(first);
+  r.stream.confirmCommitted(again.length);
+  expect(r.stream.takeFinal()).toEqual([]);
+  expect(r.stream.committed).toBe(1);
+});
+
+test("inline: a resync never re-emits a block whose commit was acked", () => {
+  const r = rig({ inline: true });
+  r.stream.pushText("first paragraph\n\nsecond paragraph\n\nthird half");
+  r.advance(40);
+  r.drain();
+  const offered = r.stream.takeFinal();
+  const clear = r.stream.confirmCommitted(offered.length);
+  for (const w of clear) applyWrite(r.store, w);
+  r.store.live = { active: false, blocks: [], tail: [] };
+  r.stream.markStale();
+  r.drain();
+  const live = r.live();
+  const shown = [...live.blocks, ...live.tail]
+    .map((b) => runsText(b.runs))
+    .join("\n");
+  expect(shown).not.toContain("first paragraph");
+  expect(shown).toContain("second paragraph");
+  expect(shown).toContain("third half");
+});
+
+test("inline: finishTail offers the whole remainder, parsed as parseBlocks parses it", () => {
+  for (let seed = 1; seed <= 10; seed++) {
+    const next = prng(seed);
+    const r = rig({ inline: true });
+    const printed: Block[] = [];
+    for (let i = 0; i < MARKDOWN.length; ) {
+      const size = 1 + Math.floor(next() * 9);
+      r.stream.pushText(MARKDOWN.slice(i, i + size));
+      i += size;
+      r.advance(next() < 0.3 ? REPARSE_MS : 5);
+      r.drain();
+      // Commit as blocks close, confirming each ack at once.
+      const finals = r.stream.takeFinal();
+      if (finals.length > 0) {
+        printed.push(...finals);
+        for (const w of r.stream.confirmCommitted(finals.length))
+          applyWrite(r.store, w);
+      }
+    }
+    printed.push(...r.stream.finishTail());
+    expect(shape(printed)).toEqual(shape(parseBlocks(MARKDOWN, "l")));
+    expect(r.stream.finishTail()).toEqual([]);
+    expect(r.stream.dirty).toBe(false);
+  }
+});
+
+test("inline: past the bounds the note is a final block and the region keeps its own line", () => {
+  const r = rig({ inline: true });
+  for (let n = 0; n < MAX_MESSAGE_BLOCKS + 20; n++) {
+    r.stream.pushText(`paragraph ${n}\n\n`);
+    r.advance(40);
+    r.drain();
+  }
+  const live = r.live();
+  expect(runsText(live.blocks.at(-1)?.runs ?? [])).toContain(
+    "left out of the live view",
+  );
+  expect(live.tail.map((b) => runsText(b.runs)).join("")).toContain(
+    "following stopped",
+  );
+  // The note is committable; the region note is not part of the offer.
+  const offered = r.stream.finishTail();
+  expect(offered.map((b) => runsText(b.runs)).join("\n")).toContain(
+    "left out of the live view",
+  );
+  expect(offered.map((b) => runsText(b.runs)).join("\n")).not.toContain(
+    "following stopped",
+  );
+  // A resync does not add a second note.
+  r.stream.markStale();
+  r.drain();
+  const notes = r
+    .live()
+    .blocks.filter((b) =>
+      runsText(b.runs).includes("left out of the live view"),
+    );
+  expect(notes).toHaveLength(1);
 });
 
 test("reset forgets everything and streamingView is the first write of a stream", () => {

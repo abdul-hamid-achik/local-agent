@@ -79,8 +79,21 @@ export class LiveStream {
   private think = "";
   private thinkUnsent = "";
   private answered = false;
+  // the inline commits: final blocks are offered to the controller, which
+  // prints them into the scrollback and confirms them only after the ack.
+  // A committed block can never be taken back, so nothing above
+  // `committedCount` is ever emitted to the store again, and nothing at or
+  // below it is ever offered again.
+  private committedCount = 0;
+  private offeredCount = 0;
+  private readonly inline: boolean;
 
-  constructor(private readonly now: () => number = () => performance.now()) {}
+  constructor(
+    private readonly now: () => number = () => performance.now(),
+    options: { inline?: boolean } = {},
+  ) {
+    this.inline = options.inline ?? false;
+  }
 
   /** The store holds the idle live message and no reasoning; nothing is pending. */
   reset(): void {
@@ -98,6 +111,8 @@ export class LiveStream {
     this.think = "";
     this.thinkUnsent = "";
     this.answered = false;
+    this.committedCount = 0;
+    this.offeredCount = 0;
   }
 
   /** True while there is something to write. */
@@ -108,7 +123,10 @@ export class LiveStream {
       this.thinkUnsent !== "" ||
       (this.answered && this.inStore.thinking) ||
       // Text went on the end of the tail unparsed and the stream has gone quiet.
-      (this.raw && this.now() - this.lastParse >= REPARSE_MS)
+      (this.raw && this.now() - this.lastParse >= REPARSE_MS) ||
+      // Final blocks nobody has committed yet (a refused commit retries).
+      (this.inline &&
+        this.blocks.length > this.committedCount + this.offeredCount)
     );
   }
 
@@ -136,6 +154,67 @@ export class LiveStream {
     this.stale = true;
   }
 
+  /** Final blocks whose commit the host has acked (inline only). */
+  get committed(): number {
+    return this.committedCount;
+  }
+
+  /** True while this reply has text the scrollback does not have yet. */
+  get hasUncommitted(): boolean {
+    return (
+      this.blocks.length > this.committedCount || this.pending.trim() !== ""
+    );
+  }
+
+  /**
+   * The final blocks not yet offered for committing. Offered blocks are not
+   * offered again: the caller confirms them after the ack
+   * (`confirmCommitted`) or hands them back after a refusal (`releaseFinal`).
+   */
+  takeFinal(): Block[] {
+    const fresh = this.blocks.slice(this.committedCount + this.offeredCount);
+    this.offeredCount += fresh.length;
+    return fresh;
+  }
+
+  /** Hands offered blocks back after a refused commit, for the next attempt. */
+  releaseFinal(count: number): void {
+    this.offeredCount = Math.max(0, this.offeredCount - count);
+  }
+
+  /**
+   * Marks `count` offered blocks as printed (the commit's ack arrived) and
+   * returns the write that drops them from the store's live message, where
+   * they were showing until now.
+   */
+  confirmCommitted(count: number): Write[] {
+    this.committedCount += count;
+    this.offeredCount = Math.max(0, this.offeredCount - count);
+    if (!this.inStore.live) return [];
+    return [{ path: "live.blocks", value: this.visibleBlocks() }];
+  }
+
+  /**
+   * Everything this reply still owes the scrollback, at a boundary where the
+   * live message ends (the finished message, a tool call, a cancel, a quit):
+   * parses what is pending, promotes the tail to final blocks, and offers
+   * the uncommitted rest. The stream is left drained. The truncation note of
+   * the live region is not part of it: that line is region-only.
+   */
+  finishTail(): Block[] {
+    if (!this.cut) {
+      this.parse(this.pending);
+      if (!this.cut && this.tail.length > 0) {
+        this.blocks.push(...this.tail);
+        this.tail = [];
+      }
+    }
+    this.pending = "";
+    this.unsent = "";
+    this.raw = false;
+    return this.takeFinal();
+  }
+
   /** The writes that bring the store up to date, or none. */
   drain(): Write[] {
     if (this.stale) return this.resync();
@@ -143,6 +222,11 @@ export class LiveStream {
     this.drainThinking(writes);
     this.drainAnswer(writes);
     return writes;
+  }
+
+  /** The final blocks the store's live message may still show (uncommmitted). */
+  private visibleBlocks(): Block[] {
+    return this.inline ? this.blocks.slice(this.committedCount) : this.blocks;
   }
 
   /** Both values whole, as a first write or after a refused one. */
@@ -157,7 +241,12 @@ export class LiveStream {
     if (this.answered) {
       this.inStore.live = true;
       this.inStore.tail = this.tail.length;
-      writes.push({ path: "live", value: liveWith(this.blocks, this.tail) });
+      // Inline, a resync never re-emits a block whose commit was acked: it is
+      // already in the terminal's scrollback and would show twice.
+      writes.push({
+        path: "live",
+        value: liveWith(this.visibleBlocks(), this.tail),
+      });
       this.inStore.thinking = false;
       this.inStore.thinkChars = 0;
       writes.push({ path: "thinking", value: IDLE_THINKING });
@@ -239,7 +328,10 @@ export class LiveStream {
       // The first text: the live message, whole.
       this.inStore.live = true;
       this.inStore.tail = this.tail.length;
-      writes.push({ path: "live", value: liveWith(this.blocks, this.tail) });
+      writes.push({
+        path: "live",
+        value: liveWith(this.visibleBlocks(), this.tail),
+      });
       return;
     }
     for (const block of this.blocks.slice(before))
@@ -276,15 +368,27 @@ export class LiveStream {
     ) {
       // Past the view's bounds: say so once and stop following the reply. The
       // history keeps all of it (the finished message goes through parseBlocks).
-      const note = parseBlocksAt(
-        `> … the rest of this reply is shown when it is finished`,
-        PREFIX,
-        this.blocks.length,
-      ).blocks;
-      this.blocks.push(...note);
-      this.tail = [];
-      this.pending = "";
+      if (!this.cut) {
+        const note = parseBlocksAt(
+          this.inline
+            ? `> … the rest of this reply was left out of the live view`
+            : `> … the rest of this reply is shown when it is finished`,
+          PREFIX,
+          this.blocks.length,
+        ).blocks;
+        this.blocks.push(...note);
+      }
       this.cut = true;
+      this.pending = "";
+      // Inline, the note above is a final block and leaves for the scrollback;
+      // the region keeps its own line saying the following stopped.
+      this.tail = this.inline
+        ? parseBlocksAt(
+            `> … following stopped: this reply is too long for the live view`,
+            PREFIX,
+            this.blocks.length,
+          ).blocks
+        : [];
       return;
     }
     this.tail = this.pending.trim()

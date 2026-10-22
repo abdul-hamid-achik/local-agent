@@ -1,0 +1,194 @@
+{
+  "header": {
+    "provider": "Ollama / loopback",
+    "model": "qwen3-coder:30b",
+    "mode": "build",
+    "session": "session a1b2c3d",
+    "ctx_label": "9.6k/32k",
+    "ctx_pct": 30
+  },
+  "messages": [],
+  "earlier": {
+    "n": 0
+  },
+  "live": {
+    "id": "live",
+    "is_user": false,
+    "is_asst": false,
+    "is_tool": true,
+    "blocks": [],
+    "card": {
+      "name": "edit",
+      "status": "waiting for approval",
+      "args": "src/fetch.ts",
+      "ok": false,
+      "bad": false,
+      "warn": false,
+      "running": true,
+      "out": []
+    },
+    "active": true,
+    "tail": []
+  },
+  "thinking": {
+    "on": false,
+    "runs": []
+  },
+  "approval": {
+    "open": true,
+    "title": "Edit src/fetch.ts?",
+    "body": "Apply this change to the workspace.",
+    "danger": false,
+    "no": "Deny",
+    "yes": "Allow",
+    "truncated": false,
+    "lines": [
+      {
+        "n": 0,
+        "t": "--- a/src/fetch.ts",
+        "add": false,
+        "del": false,
+        "note": false
+      },
+      {
+        "n": 1,
+        "t": "+++ b/src/fetch.ts",
+        "add": false,
+        "del": false,
+        "note": false
+      },
+      {
+        "n": 2,
+        "t": "@@ -12,3 +12,9 @@",
+        "add": false,
+        "del": false,
+        "note": false
+      },
+      {
+        "n": 3,
+        "t": " import { sleep } from './util';",
+        "add": false,
+        "del": false,
+        "note": false
+      },
+      {
+        "n": 4,
+        "t": "-export const get = (url) => fetch(url);",
+        "add": false,
+        "del": true,
+        "note": false
+      },
+      {
+        "n": 5,
+        "t": "+export async function fetchRetry(url, tries = 3) {",
+        "add": true,
+        "del": false,
+        "note": false
+      },
+      {
+        "n": 6,
+        "t": "+  for (let attempt = 1; ; attempt++) {",
+        "add": true,
+        "del": false,
+        "note": false
+      },
+      {
+        "n": 7,
+        "t": "+    try { return await fetch(url); }",
+        "add": true,
+        "del": false,
+        "note": false
+      },
+      {
+        "n": 8,
+        "t": "+    catch (e) { if (attempt === tries) throw e; await sleep(200 * attempt",
+        "add": true,
+        "del": false,
+        "note": false
+      },
+      {
+        "n": 9,
+        "t": "↪ ); }",
+        "add": true,
+        "del": false,
+        "note": false
+      },
+      {
+        "n": 10,
+        "t": "+  }",
+        "add": true,
+        "del": false,
+        "note": false
+      },
+      {
+        "n": 11,
+        "t": "+}",
+        "add": true,
+        "del": false,
+        "note": false
+      },
+      {
+        "n": 12,
+        "t": "+export const get = (url) => fetchRetry(url);",
+        "add": true,
+        "del": false,
+        "note": false
+      }
+    ]
+  },
+  "palette": {
+    "open": false,
+    "query": "",
+    "cur": "mode-plan"
+  },
+  "found": {
+    "any": true,
+    "items": [
+      {
+        "id": "mode-plan",
+        "label": "Mode: plan (read only)",
+        "hint": "/mode plan"
+      },
+      {
+        "id": "mode-build",
+        "label": "Mode: build (read, edit, command)",
+        "hint": "/mode build"
+      },
+      {
+        "id": "mcp",
+        "label": "MCP servers",
+        "hint": "/mcp"
+      },
+      {
+        "id": "help",
+        "label": "Help and keys",
+        "hint": "/help"
+      }
+    ]
+  },
+  "help": {
+    "open": false
+  },
+  "draft": "",
+  "placeholder": "Generating…",
+  "busy": true,
+  "status": "Waiting for approval · y allow · n deny · Esc deny",
+  "commit_buf": {
+    "id": "commit",
+    "is_user": false,
+    "is_asst": false,
+    "is_tool": false,
+    "blocks": [],
+    "card": {
+      "name": "",
+      "status": "",
+      "args": "",
+      "ok": false,
+      "bad": false,
+      "warn": false,
+      "running": false,
+      "out": []
+    }
+  },
+  "commit_blocks": []
+}

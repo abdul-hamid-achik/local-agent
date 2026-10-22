@@ -338,5 +338,23 @@
   "draft": "",
   "placeholder": "Generating…",
   "busy": true,
-  "status": "Generating…"
+  "status": "Generating…",
+  "commit_buf": {
+    "id": "commit",
+    "is_user": false,
+    "is_asst": false,
+    "is_tool": false,
+    "blocks": [],
+    "card": {
+      "name": "",
+      "status": "",
+      "args": "",
+      "ok": false,
+      "bad": false,
+      "warn": false,
+      "running": false,
+      "out": []
+    }
+  },
+  "commit_blocks": []
 }

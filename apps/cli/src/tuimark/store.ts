@@ -5,12 +5,14 @@
 import type { ApprovalRequest, Provider } from "@local-agent/runtime";
 import { approvalPreview } from "#cli/preview";
 import {
+  type Block,
   cleanText,
   clip,
   IDLE_LIVE,
   IDLE_THINKING,
   type LiveView,
   type MessageView,
+  NO_CARD,
   type ThinkingView,
 } from "#cli/tuimark/blocks";
 import {
@@ -80,7 +82,24 @@ export interface Store {
   placeholder: string;
   busy: boolean;
   status: string;
+  /**
+   * Scratch paths of the inline client (ui/inline.tui reads them only at
+   * commit time): the view or blocks a `commit` is about to print into the
+   * scrollback. Written right before the commit, cleared after its ack.
+   */
+  commit_buf: MessageView | null;
+  commit_blocks: Block[];
 }
+
+/** The empty view a fresh store carries at `commit_buf`, before any commit. */
+export const EMPTY_COMMIT_VIEW: MessageView = Object.freeze({
+  id: "commit",
+  is_user: false,
+  is_asst: false,
+  is_tool: false,
+  blocks: [],
+  card: NO_CARD,
+}) as MessageView;
 
 /** A token count in k = 1024 tokens: 32768 reads "32k", 9800 reads "9.6k". */
 export function tokens(n: number): string {
@@ -148,6 +167,8 @@ export function initialStore(init: StoreInit): Store {
     placeholder: PLACEHOLDER,
     busy: false,
     status: idleStatus(init.mcpServers),
+    commit_buf: EMPTY_COMMIT_VIEW,
+    commit_blocks: [],
   };
 }
 
@@ -163,6 +184,14 @@ const DIALOG_CHROME = 8;
 /** Columns a preview row may use inside the dialog on a terminal `cols` wide. */
 export function previewWidth(cols: number): number {
   return Math.max(20, Math.min(DIALOG_WIDTH, cols) - DIALOG_CHROME);
+}
+
+/** Border (2) and padding (2) of the in-flow approval box, plus the preview's border (2). */
+const INLINE_CHROME = 6;
+
+/** Columns a preview row may use in the inline approval on a terminal `cols` wide. */
+export function previewWidthInline(cols: number): number {
+  return Math.max(20, cols - INLINE_CHROME);
 }
 
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
@@ -259,8 +288,10 @@ export function approvalState(
   proposal: ApprovalRequest,
   cols = 80,
   root?: string,
+  inline = false,
 ): ApprovalState {
-  const preview = previewRows(approvalText(proposal, root), previewWidth(cols));
+  const width = inline ? previewWidthInline(cols) : previewWidth(cols);
+  const preview = previewRows(approvalText(proposal, root), width);
   const base = {
     ...noApproval(),
     open: true,

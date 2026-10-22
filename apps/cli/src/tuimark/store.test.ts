@@ -5,10 +5,12 @@ import {
   approvalState,
   contextLabel,
   contextPct,
+  EMPTY_COMMIT_VIEW,
   initialStore,
   noApproval,
   previewRows,
   previewWidth,
+  previewWidthInline,
   TRUNCATED_BODY,
   tokens,
   wrapLine,
@@ -42,6 +44,8 @@ test("the initial store has every path the document reads", () => {
     [
       "approval",
       "busy",
+      "commit_blocks",
+      "commit_buf",
       "draft",
       "earlier",
       "found",
@@ -56,6 +60,10 @@ test("the initial store has every path the document reads", () => {
     ].sort(),
   );
   expect(store.approval).toEqual(noApproval());
+  // The inline client's scratch paths are present from the start, so a
+  // commit's `with` never reads a missing path.
+  expect(store.commit_buf).toEqual(EMPTY_COMMIT_VIEW);
+  expect(store.commit_blocks).toEqual([]);
 });
 
 test("the approval dialog says what is being approved", () => {
@@ -164,6 +172,26 @@ test("the preview width is the dialog's content width", () => {
   expect(previewWidth(120)).toBe(68);
   expect(previewWidth(50)).toBe(42);
   expect(previewWidth(10)).toBe(20);
+});
+
+test("the inline preview width is the in-flow box's content width", () => {
+  expect(previewWidthInline(80)).toBe(74);
+  expect(previewWidthInline(120)).toBe(114);
+  expect(previewWidthInline(10)).toBe(20);
+  // A line the dialog wraps at 80 columns fits the inline box whole.
+  const line = `+${"0123456789".repeat(7).slice(0, 69)}`;
+  const proposal = {
+    kind: "edit",
+    path: "f",
+    before: "",
+    after: "",
+    diff: line,
+    identity: "x",
+  } as Parameters<typeof approvalState>[0];
+  const inlineRows = approvalState(proposal, 80, undefined, true).lines;
+  expect(inlineRows.map((r) => r.t)).toEqual([line]);
+  const dialogRows = approvalState(proposal, 80).lines;
+  expect(dialogRows.length).toBeGreaterThan(1);
 });
 
 test("wrapping keeps every character, repeated spaces included", () => {
