@@ -148,16 +148,25 @@ test.each([
   [["--ui", "bogus"], "Unknown UI client"],
   [["--ui", "bogus", "--help"], "Unknown UI client"],
   [["--ui", "bogus", "--mcp-status"], "Unknown UI client"],
-  [["--ui", "tuimark", "--mode", "inline"], "--ui tuimark is fullscreen only"],
   [
     ["--ui", "tuimark", "--mode", "headless", "-p", "x"],
-    "--ui tuimark is fullscreen only",
+    "--ui tuimark needs an interactive terminal",
   ],
-  [["--ui", "tuimark", "-p", "x", "--json"], "--ui tuimark is fullscreen only"],
-])("the Tuimark client is fullscreen only: %j", async (args, message) => {
+  [
+    ["--ui", "tuimark", "-p", "x", "--json"],
+    "--ui tuimark needs an interactive terminal",
+  ],
+])("the Tuimark client refuses headless runs: %j", async (args, message) => {
   const { stderr, code } = await runCli(...args);
   expect(code).toBe(1);
   expect(stderr).toContain(message);
+});
+
+test("an explicit --ui tuimark --mode inline is accepted (it stops at the terminal check)", async () => {
+  const { stderr, code } = await runCli("--ui", "tuimark", "--mode", "inline");
+  expect(code).toBe(1);
+  expect(stderr).toContain("Interactive modes require a terminal");
+  expect(stderr).not.toContain("needs an interactive terminal; use it without");
 });
 
 test("--ui tuimark leaves session inspection and --mcp-status on their own paths", async () => {

@@ -27,14 +27,16 @@ export function parseUi(
 }
 
 /**
- * The client an interactive run starts. The Tuimark client is fullscreen only
- * for now, so a presentation it does not have goes to the Vue client when --ui
- * was left at its default (an explicit `--ui tuimark` with such a mode is
- * refused before this is called).
+ * The client an interactive run starts. Tuimark inline is opt-in: an explicit
+ * `--ui tuimark --mode inline` runs it, while a bare `--mode inline` (no
+ * `--ui`) stays on the Vue client until the inline presentation becomes the
+ * default. Fullscreen follows --ui as given.
  */
 export function interactiveClient(
   ui: UiClient,
   mode: "fullscreen" | "inline",
+  explicit = false,
 ): UiClient {
-  return ui === "tuimark" && mode === "fullscreen" ? "tuimark" : "vue";
+  if (ui !== "tuimark") return "vue";
+  return mode === "fullscreen" || explicit ? "tuimark" : "vue";
 }

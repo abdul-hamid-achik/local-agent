@@ -1,0 +1,179 @@
+<!--
+  local-agent, inline client on Tuimark (opt-in: ui tuimark, mode inline).
+
+  The live region below the cursor holds only what is not finished: the
+  streaming tail, the reasoning, an open approval, the composer and the
+  status. Everything finished is printed into the terminal's own scrollback
+  by the parent (../controller.ts) with the SDK's commit(): the templates
+  below (copied from app.tui, so a printed turn looks like a fullscreen one)
+  are what a commit renders from the store's commit_buf / commit_blocks
+  scratch paths. There is no history in the region and no load-earlier: the
+  terminal's scrollback is the history.
+
+  The approval is in-flow, not a modal: a modal is laid out against the
+  region and the region does not grow for it, so a diff would be cut to the
+  region's few rows. While it is open the composer is disabled (an enabled
+  textarea takes every printable key), the screen carries class "approving",
+  and y / n / esc reach the keymap below.
+
+  The palette and the help stay the kit's modals. A modal does not grow the
+  region, so an empty spacer column grows it while either is open and the
+  modal is laid out against the taller region.
+
+  Needs tuimark 0.4.6: inline mode, commit, <textarea>, the append write.
+-->
+<tui theme="auto">
+  <include src="kit/kit.tui"/>
+  <style src="app.tcss"/>
+  <style src="inline.tcss"/>
+
+  <!-- The palette's arrows move its list while the input keeps focus. -->
+  <keymap when=".k-palette">
+    <bind keys="down,ctrl+n" action="move-next" to="#palette__list"/>
+    <bind keys="up,ctrl+p" action="move-prev" to="#palette__list"/>
+  </keymap>
+  <!-- The in-flow approval: y allows, n and esc deny, and every row of what
+       is being approved is reachable by key (the composer is disabled). -->
+  <keymap when=".approving">
+    <bind keys="y" action="dialog_confirm" label="allow" keycap="y"/>
+    <bind keys="n" action="dialog_cancel" label="deny" keycap="n"/>
+    <bind keys="esc" action="dialog_cancel"/>
+    <bind keys="ctrl+c" action="quit"/>
+    <bind keys="pgup" action="move-page-up" to="#approval_diff" label="scroll" keycap="pgup/pgdn"/>
+    <bind keys="pgdn" action="move-page-down" to="#approval_diff"/>
+    <bind keys="up" action="move-prev" to="#approval_diff"/>
+    <bind keys="down" action="move-next" to="#approval_diff"/>
+    <bind keys="home" action="move-first" to="#approval_diff" label="top/end" keycap="home/end"/>
+    <bind keys="end" action="move-last" to="#approval_diff"/>
+  </keymap>
+  <keymap>
+    <bind keys="esc" action="cancel" label="cancel"/>
+    <bind keys="ctrl+p" action="palette_open" keycap="^P" label="commands"/>
+    <bind keys="ctrl+c" action="quit" label="quit"/>
+    <!-- The composer takes up and down inside a draft; on its first and last line
+         they fall through to these rows, which recall what was sent. -->
+    <bind keys="up" action="history_prev" when="#composer:focus" label="history" keycap="↑/↓"/>
+    <bind keys="down" action="history_next" when="#composer:focus"/>
+    <bind keys="pgup" action="move-page-up" to="#liveregion" label="scroll" keycap="pgup/pgdn"/>
+    <bind keys="pgdn" action="move-page-down" to="#liveregion"/>
+    <!-- The keys the composer itself takes: listed for the help, never fired. -->
+    <bind keys="enter" action="focus" to="#composer" when="#composer:focus" label="send" keycap="enter"/>
+    <bind keys="shift+enter,alt+enter" action="focus" to="#composer" when="#composer:focus" label="new line" keycap="shift/alt+enter"/>
+  </keymap>
+  <!-- A modal traps the keymap: what must also work under one is repeated here. -->
+  <keymap when="modal">
+    <bind keys="ctrl+c" action="quit"/>
+  </keymap>
+
+  <!-- The card templates: verbatim from app.tui. In the region they render
+       the live message; a commit renders la-turn / la-blocks from the
+       scratch paths into the scrollback. -->
+  <template id="la-message" props="label">
+    <col class="la-msg">
+      <text class="la-role">{$label}</text>
+      <slot/>
+    </col>
+  </template>
+
+  <template id="la-blocks">
+    <col class="la-blocks" each="blocks as b" key="b.id">
+      <text if="b.para" runs="b.runs" wrap="wrap"/>
+      <text if="b.head" class="la-head" runs="b.runs" wrap="wrap"/>
+      <text if="b.quote" class="la-quote" runs="b.runs" wrap="wrap"/>
+      <row if="b.item" class="la-item" class:nest="b.nest">
+        <text class="la-marker">{b.marker}</text>
+        <text class="la-itemtext" runs="b.runs" wrap="wrap"/>
+      </row>
+      <col if="b.code" class="la-code">
+        <text class="la-lang">{b.lang}</text>
+        <text class="la-codetext" runs="b.runs" wrap="pre-wrap"/>
+      </col>
+    </col>
+  </template>
+
+  <template id="la-tool">
+    <box class="la-tool" class:ok="t.ok" class:bad="t.bad" class:warn="t.warn" class:run="t.running" title="Tool · {t.name}">
+      <row class="la-tool-head">
+        <progress indeterminate="true" if="t.running" class="la-spin"/>
+        <text class="la-tool-status">{t.status}</text>
+      </row>
+      <text if="t.args" class="la-muted" wrap="truncate">{t.args}</text>
+      <slot/>
+    </box>
+  </template>
+
+  <template id="la-turn">
+    <use template="la-message" label="You" class="user" if="msg.is_user">
+      <use template="la-blocks" with="msg.blocks as blocks"/>
+    </use>
+    <use template="la-message" label="Assistant" class="asst" if="msg.is_asst">
+      <use template="la-blocks" with="msg.blocks as blocks"/>
+    </use>
+    <use template="la-tool" if="msg.is_tool" with="msg.card as t">
+      <text class="la-out" runs="msg.card.out" wrap="pre-wrap"/>
+    </use>
+  </template>
+
+  <screen id="main" focus="#composer" class:approving="approval.open">
+    <col id="app">
+      <use template="k-appbar" brand="Local Agent" title="">
+        <text class="la-muted la-provider">{header.provider}</text>
+        <text class="la-model">{header.model}</text>
+        <text class="la-mode">{header.mode}</text>
+        <spacer/>
+        <text class="la-muted la-session">{header.session}</text>
+        <text class="la-muted la-ctx">ctx {header.ctx_label}</text>
+        <progress id="ctx" class="la-ctxbar" bind="header.ctx_pct"/>
+      </use>
+
+      <!-- What is still live: the uncommitted final blocks and the tail of
+           the running reply, a tool card, the reasoning. The scroll takes
+           what the other rows leave when the terminal is short. -->
+      <scroll id="liveregion" stick="bottom">
+        <col id="live" if="live.active">
+          <use template="la-message" label="Assistant" class="asst" if="live.is_asst">
+            <use template="la-blocks" with="live.blocks as blocks"/>
+            <use template="la-blocks" with="live.tail as blocks"/>
+          </use>
+          <use template="la-tool" if="live.is_tool" with="live.card as t">
+            <text class="la-out" runs="live.card.out" wrap="pre-wrap"/>
+          </use>
+        </col>
+        <col id="thinking" if="thinking.on">
+          <text class="la-think-head">Thinking…</text>
+          <scroll id="think" class="la-thinkbox" stick="bottom">
+            <text class="la-think" runs="thinking.runs" wrap="pre-wrap"/>
+          </scroll>
+        </col>
+      </scroll>
+
+      <!-- The approval, in flow. The diff is a capped scroll; the keys are
+           named on the status line and here. -->
+      <box id="approve" class="la-approve" class:danger="approval.danger" if="approval.open" title="{approval.title}">
+        <text class="la-approve-body">{approval.body}</text>
+        <scroll id="approval_diff" class="la-diff" focusable="true">
+          <col class="la-difflines" each="approval.lines as ln" key="ln.n">
+            <text wrap="truncate" class:add="ln.add" class:del="ln.del" class:note="ln.note">{ln.t}</text>
+          </col>
+        </scroll>
+        <text class="la-muted">y allow · n deny · esc deny</text>
+      </box>
+
+      <!-- Room for the kit modals while they are open (inline.tcss sizes them). -->
+      <col if="palette.open" class="la-space-palette"/>
+      <col if="help.open" class="la-space-help"/>
+
+      <!-- Disabled while an approval is open, so y and n reach the keymap. -->
+      <textarea id="composer" bind="draft" placeholder="{placeholder}" on:submit="send" disabled="approval.open"/>
+
+      <row id="status" class="k-statusbar">
+        <progress indeterminate="true" if="busy" class="la-spin"/>
+        <text class="la-statustext" wrap="truncate">{status}</text>
+        <hints class="la-hints"/>
+      </row>
+    </col>
+
+    <use id="palette" template="k-palette" title="Commands" placeholder="type a command…" with="palette as p, found as f"/>
+    <use id="help" template="k-help" title="Keys" with="help as h"/>
+  </screen>
+</tui>

@@ -1,5 +1,5 @@
 // Entry of the Tuimark client (`--ui tuimark`, the default on macOS and Linux),
-// fullscreen only until the inline mode lands.
+// fullscreen, or inline when asked (`--ui tuimark --mode inline`).
 //
 // This module is imported dynamically by main.ts, after every flag is checked,
 // so the headless and Vue paths never load it. It must not import the Vue
@@ -17,7 +17,11 @@ import type {
 } from "@local-agent/runtime";
 import { type Ready, resolveBinary, spawnHost } from "@thelacanians/tuimark";
 import type { Intent } from "#cli/tuimark/commands";
-import { type ClientOptions, TuimarkClient } from "#cli/tuimark/controller";
+import {
+  type ClientOptions,
+  type Presentation,
+  TuimarkClient,
+} from "#cli/tuimark/controller";
 
 /**
  * The oldest tuimark this client's document runs on: <textarea>, `runs`, and the
@@ -51,7 +55,10 @@ export function uiDirectory(
   from = dirname(fileURLToPath(import.meta.url)),
 ): string {
   const directory = join(from, "ui");
-  if (!existsSync(join(directory, "app.tui")))
+  if (
+    !existsSync(join(directory, "app.tui")) ||
+    !existsSync(join(directory, "inline.tui"))
+  )
     throw new Error(`Tuimark UI files not found in ${directory}`);
   return directory;
 }
@@ -76,20 +83,28 @@ export function versionAtLeast(version: string, minimum: string): boolean {
  * approval dialog without its diff, so it is refused before anything is drawn.
  */
 export function readyProblem(
-  ready: Pick<Ready, "version" | "diagnostics">,
+  ready: Pick<Ready, "version" | "diagnostics"> &
+    Partial<Pick<Ready, "messages">>,
   bin: string,
+  presentation: Presentation = "fullscreen",
 ): string | undefined {
   const errors = ready.diagnostics.filter(
     (d) => (d as { severity?: unknown }).severity === "error",
   );
   const tooOld = !versionAtLeast(ready.version, MIN_TUIMARK);
-  if (!tooOld && errors.length === 0) return undefined;
+  // Inline printing needs the child to accept `commit`; one that predates it
+  // would answer every commit as an unknown message.
+  const noCommit =
+    presentation === "inline" && !ready.messages?.includes("commit");
+  if (!tooOld && errors.length === 0 && !noCommit) return undefined;
+  const doc = presentation === "inline" ? "inline.tui" : "app.tui";
   const first = errors[0] as { code?: string; msg?: string } | undefined;
   return [
     `The Tuimark client needs tuimark >= ${MIN_TUIMARK}; ${bin} is ${ready.version}`,
     errors.length
-      ? ` and loads app.tui with ${errors.length} error${errors.length === 1 ? "" : "s"}${first ? ` (${first.code}: ${first.msg})` : ""}`
+      ? ` and loads ${doc} with ${errors.length} error${errors.length === 1 ? "" : "s"}${first ? ` (${first.code}: ${first.msg})` : ""}`
       : "",
+    noCommit ? " and does not accept commit (inline mode)" : "",
     ". Set TUIMARK_BINARY to a newer tuimark, or use --ui vue.",
   ].join("");
 }
@@ -133,6 +148,7 @@ export async function runTuimark(
   intent: Intent,
   session?: SessionContext,
   mcp: readonly McpConnection[] = [],
+  presentation: Presentation = "fullscreen",
   deps: LaunchDeps = {},
 ): Promise<void> {
   signal.throwIfAborted();
@@ -145,6 +161,7 @@ export async function runTuimark(
     provider,
     workspace,
     intent,
+    presentation,
     session,
     mcp,
     signal,
@@ -152,13 +169,15 @@ export async function runTuimark(
     columns: () => stdout.columns ?? readyColumns,
   });
   const bin = await (deps.resolve ?? resolvePinned)();
-  const ui = await (deps.spawn ?? spawnHost)(join(uiDirectory(), "app.tui"), {
+  const doc = presentation === "inline" ? "inline.tui" : "app.tui";
+  const ui = await (deps.spawn ?? spawnHost)(join(uiDirectory(), doc), {
     data: client.initialStore() as unknown as Record<string, unknown>,
     replyTimeout: "5s",
     bin,
+    inline: presentation === "inline",
   });
   readyColumns = ui.ready.cols;
-  const problem = readyProblem(ui.ready, bin);
+  const problem = readyProblem(ui.ready, bin, presentation);
   if (problem) {
     await ui.close();
     resetTerminal();

@@ -22,15 +22,18 @@ import {
   type SessionContext,
   type Workspace,
 } from "@local-agent/runtime";
-import type { Host, HostEvent } from "@thelacanians/tuimark";
+import type { Commit, Host, HostEvent } from "@thelacanians/tuimark";
 import { tokensPerSecond } from "#cli/preview";
 import { terminalText } from "#cli/text";
 import {
+  type Block,
   clip,
   IDLE_LIVE,
   IDLE_THINKING,
   type LiveView,
   liveToolView,
+  type MessageView,
+  NO_CARD,
   ViewBuilder,
 } from "#cli/tuimark/blocks";
 import {
@@ -59,7 +62,10 @@ import { LiveStream } from "#cli/tuimark/stream";
 import { Transcript } from "#cli/tuimark/transcript";
 
 /** The part of the SDK's Host the client uses (a fake implements it in tests). */
-export type UiHost = Pick<Host, "on" | "batch" | "get">;
+export type UiHost = Pick<Host, "on" | "batch" | "get" | "commit">;
+
+/** How the document is presented: the alternate screen, or inline with scrollback. */
+export type Presentation = "fullscreen" | "inline";
 
 type Write = { path: string; value: unknown; op?: "set" | "append" };
 type RunAgent = (
@@ -72,6 +78,12 @@ export interface ClientOptions {
   provider: Provider;
   workspace: Workspace;
   intent: Intent;
+  /**
+   * Inline runs ui/inline.tui: finished blocks are committed into the
+   * terminal's scrollback and the region holds only what is live.
+   * Default fullscreen.
+   */
+  presentation?: Presentation;
   session?: SessionContext;
   mcp?: readonly McpConnection[];
   /** Process-level abort (SIGINT, SIGTERM). */
@@ -126,11 +138,16 @@ export class TuimarkClient {
   private intent: Intent;
   // the writer
   private tail: Promise<void> = Promise.resolve();
+  /** Commits run one at a time: each rewrites the same scratch path. */
+  private commitChain: Promise<void> = Promise.resolve();
   /** Store writes the host refused (a path the markup does not read, a dead host). */
   readonly writeErrors: string[] = [];
+  private readonly inline: boolean;
   // the live message: the answer and the reasoning stream through `stream`,
   // a tool call is one value of its own
-  private readonly stream = new LiveStream();
+  private readonly stream: LiveStream;
+  /** Inline: the running reply's first blocks already carry its label in print. */
+  private headCommitted = false;
   private liveTool?: LiveView;
   private dirty = false;
   private liveInFlight = false;
@@ -152,6 +169,8 @@ export class TuimarkClient {
   constructor(private readonly options: ClientOptions) {
     this.run = options.run ?? runAgent;
     this.intent = options.intent;
+    this.inline = options.presentation === "inline";
+    this.stream = new LiveStream(undefined, { inline: this.inline });
     this.transcript = new Transcript(options.windowStep, options.windowSize);
     this.history = options.session?.state.messages.slice() ?? [];
     // A resumed session shows its saved messages, through the same mapping as a live turn.
@@ -171,7 +190,10 @@ export class TuimarkClient {
       intent: this.intent,
       sessionId: session?.state.publicId,
       mcpServers: mcp.length,
-      transcript: this.transcript.snapshot(),
+      // Inline, the region never holds history: attach() commits it instead.
+      transcript: this.inline
+        ? { messages: [], earlier: { n: 0 } }
+        : this.transcript.snapshot(),
     });
   }
 
@@ -184,7 +206,10 @@ export class TuimarkClient {
     ui.on("cancel", () => {
       this.turn?.abort();
     });
-    ui.on("quit", () => {
+    ui.on("quit", async () => {
+      // Inline, the partial reply is printed before the session ends: once
+      // "quit" is returned the host is gone and nothing can be committed.
+      if (this.inline) await this.commitStreamTail();
       this.abort();
       return "quit";
     });
@@ -202,6 +227,15 @@ export class TuimarkClient {
     ui.on("help_close", () =>
       this.write([{ path: "help.open", value: false }]),
     );
+    if (this.inline) {
+      // A resumed session's history is the scrollback: print it once, in order.
+      const views = this.transcript.all();
+      if (views.length > 0) {
+        void (async () => {
+          for (const view of views) await this.commitView(view);
+        })();
+      }
+    }
   }
 
   /** The terminal changed size: an open approval preview is wrapped again. */
@@ -216,6 +250,7 @@ export class TuimarkClient {
       proposal,
       this.options.columns?.() ?? 80,
       this.options.workspace.root,
+      this.inline,
     );
   }
 
@@ -231,6 +266,20 @@ export class TuimarkClient {
   }
 
   // ------------------------------------------------------------------ the writer
+
+  /** Records a refused write or commit, saying so once on the status line. */
+  private async noteFailure(failure: string): Promise<void> {
+    const ui = this.ui;
+    if (!ui) return;
+    this.writeErrors.push(failure);
+    if (this.writeErrors.length > MAX_WRITE_ERRORS) this.writeErrors.shift();
+    // Say so once on the status line, so a frozen view is not silent.
+    if (!this.reportedWriteError) {
+      this.reportedWriteError = true;
+      const status = `UI update failed: ${terminalText(failure).replace(/\s+/g, " ").slice(0, 200)}`;
+      await ui.batch([{ path: "status", value: status }]).catch(() => {});
+    }
+  }
 
   /**
    * One serialized write. Never rejects: a refused write is recorded in
@@ -253,21 +302,136 @@ export class TuimarkClient {
         return;
       }
       ok = false;
-      this.writeErrors.push(failure);
-      if (this.writeErrors.length > MAX_WRITE_ERRORS) this.writeErrors.shift();
-      // Say so once on the status line, so a frozen view is not silent.
-      if (!this.reportedWriteError) {
-        this.reportedWriteError = true;
-        const status = `UI update failed: ${terminalText(failure).replace(/\s+/g, " ").slice(0, 200)}`;
-        await ui.batch([{ path: "status", value: status }]).catch(() => {});
-      }
+      await this.noteFailure(failure);
     });
     this.tail = next;
     return next.then(() => ok);
   }
 
+  /** One commit on the same chain as the writes, so print order is write order. */
+  private enqueueCommit(commit: Commit): Promise<boolean> {
+    const ui = this.ui;
+    if (!ui) return Promise.resolve(true);
+    let ok = true;
+    const next = this.tail.then(async () => {
+      let failure: string | undefined;
+      try {
+        const ack = await ui.commit(commit);
+        if (!ack.ok) failure = ack.error ?? "commit refused";
+      } catch (error) {
+        failure = error instanceof Error ? error.message : String(error);
+      }
+      if (failure === undefined) {
+        this.reportedWriteError = false;
+        return;
+      }
+      ok = false;
+      await this.noteFailure(failure);
+    });
+    this.tail = next;
+    return next.then(() => ok);
+  }
+
+  /**
+   * Runs one commit job at a time. Every commit rewrites the same scratch
+   * path (`commit_buf` or `commit_blocks`) right before printing from it, so
+   * two jobs must never interleave their set and their commit.
+   */
+  private serializeCommit<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.commitChain.then(task, task);
+    this.commitChain = run.then(
+      () => {},
+      () => {},
+    );
+    return run;
+  }
+
+  /** Prints one finished view (a user turn, a tool receipt, history). */
+  private commitView(view: MessageView): Promise<boolean> {
+    return this.serializeCommit(() => this.printView(view));
+  }
+
+  private async printView(view: MessageView): Promise<boolean> {
+    if (!(await this.write([{ path: "commit_buf", value: view }])))
+      return false;
+    const ok = await this.enqueueCommit({
+      template: "la-turn",
+      with: "commit_buf as msg",
+    });
+    if (ok) await this.write([{ path: "commit_buf", value: null }]);
+    return ok;
+  }
+
+  private async printBlocks(blocks: Block[]): Promise<boolean> {
+    if (!(await this.write([{ path: "commit_blocks", value: blocks }])))
+      return false;
+    const ok = await this.enqueueCommit({
+      template: "la-blocks",
+      with: "commit_blocks as blocks",
+    });
+    if (ok) await this.write([{ path: "commit_blocks", value: [] }]);
+    return ok;
+  }
+
+  /** The first printed blocks of a reply, as the turn that carries its label. */
+  private assistantView(blocks: Block[]): MessageView {
+    return {
+      id: "live",
+      is_user: false,
+      is_asst: true,
+      is_tool: false,
+      blocks,
+      card: NO_CARD,
+    };
+  }
+
+  /**
+   * Prints blocks the stream offered, confirming them only after the ack.
+   * The first blocks of a reply go as its labeled turn, later ones as plain
+   * blocks under it. A refused commit hands the blocks back: they stay in
+   * the live region and are offered again, never printed twice.
+   */
+  private commitOffered(blocks: Block[]): Promise<boolean> {
+    return this.serializeCommit(async () => {
+      const ok = this.headCommitted
+        ? await this.printBlocks(blocks)
+        : await this.printView(this.assistantView(blocks));
+      if (!ok) {
+        this.stream.releaseFinal(blocks.length);
+        return false;
+      }
+      this.headCommitted = true;
+      const clear = this.stream.confirmCommitted(blocks.length);
+      if (clear.length > 0 && !(await this.write(clear)))
+        this.stream.markStale();
+      return true;
+    });
+  }
+
+  /** Prints the reply's newly final blocks, as they close. */
+  private async commitFinals(): Promise<void> {
+    const blocks = this.stream.takeFinal();
+    if (blocks.length > 0) await this.commitOffered(blocks);
+  }
+
+  /**
+   * Prints everything the running reply still owes the scrollback, tail
+   * included. True when the reply had anything at all (printed or refused),
+   * so a caller knows the finished view must not be printed over it.
+   */
+  private async commitStreamTail(): Promise<boolean> {
+    const blocks = this.stream.finishTail();
+    if (blocks.length > 0) await this.commitOffered(blocks);
+    return blocks.length > 0 || this.headCommitted;
+  }
+
   /** Only the window of the transcript: the live message is left alone. */
   private async publishWindow(extra: Write[] = []): Promise<void> {
+    if (this.inline) {
+      // The region never holds history: finished views are already printed.
+      if (extra.length > 0) await this.write(extra);
+      return;
+    }
     const { messages, earlier } = this.transcript.snapshot();
     await this.write([
       { path: "messages", value: messages },
@@ -278,9 +442,22 @@ export class TuimarkClient {
 
   /** The window plus the end of whatever was streaming: a later tick must not resend it. */
   private async publishMessages(extra: Write[] = []): Promise<void> {
-    this.stream.reset();
+    // Inline, blocks whose commit was refused stay in the stream (and in the
+    // live region) until a later commit lands: resetting would lose them.
+    const keepStream = this.inline && this.stream.hasUncommitted;
+    if (!keepStream) {
+      this.stream.reset();
+      this.headCommitted = false;
+    }
     this.liveTool = undefined;
     this.dirty = false;
+    if (keepStream) {
+      await this.publishWindow([
+        { path: "thinking", value: IDLE_THINKING },
+        ...extra,
+      ]);
+      return;
+    }
     await this.publishWindow([
       { path: "live", value: IDLE_LIVE },
       { path: "thinking", value: IDLE_THINKING },
@@ -307,12 +484,16 @@ export class TuimarkClient {
   /** Writes what changed in the live message, and makes a refused write good. */
   private async sendLive(): Promise<void> {
     const writes = this.liveWrites();
-    if (writes.length === 0) return;
-    const ok = await this.write(writes);
-    if (ok) return;
-    // The store is not what the stream thinks it is: send it all again.
-    this.stream.markStale();
-    if (this.liveTool) this.dirty = true;
+    if (writes.length > 0) {
+      const ok = await this.write(writes);
+      if (!ok) {
+        // The store is not what the stream thinks it is: send it all again.
+        this.stream.markStale();
+        if (this.liveTool) this.dirty = true;
+      }
+    }
+    // Inline, blocks that just closed leave the region for the scrollback.
+    if (this.inline && !this.liveTool) await this.commitFinals();
   }
 
   /** Flushes the live message if it changed and no flush is in flight. */
@@ -413,6 +594,9 @@ export class TuimarkClient {
   // ------------------------------------------------------------------ the palette
 
   private async paletteOpen(): Promise<void> {
+    // An open approval owns the keys (fullscreen's modal traps ctrl+p; the
+    // in-flow approval does not, so the palette must not open over it).
+    if (this.proposal) return;
     const found = filterPalette("");
     await this.write([
       { path: "found", value: { any: found.length > 0, items: found } },
@@ -518,7 +702,12 @@ export class TuimarkClient {
     this.busy = true;
     const request = new AbortController();
     this.turn = request;
+    // A previous reply whose commits were refused gets one more attempt
+    // before its stream is dropped for the new turn.
+    if (this.inline && this.stream.hasUncommitted)
+      await this.commitStreamTail();
     this.stream.reset();
+    this.headCommitted = false;
     this.liveTool = undefined;
     this.recall = undefined;
     this.evalCount = 0;
@@ -532,11 +721,13 @@ export class TuimarkClient {
     const promptShown = new Promise<void>((resolve) => {
       published = resolve;
     });
-    this.turnDone = this.runTurn(prompt, request, published).catch((error) => {
-      this.writeErrors.push(
-        error instanceof Error ? error.message : String(error),
-      );
-    });
+    this.turnDone = this.runTurn(prompt, request, published, view).catch(
+      (error) => {
+        this.writeErrors.push(
+          error instanceof Error ? error.message : String(error),
+        );
+      },
+    );
     await promptShown;
   }
 
@@ -544,8 +735,11 @@ export class TuimarkClient {
     prompt: string,
     request: AbortController,
     published: () => void,
+    userView?: MessageView,
   ): Promise<void> {
     try {
+      // Inline, the prompt is printed as it is sent; the region keeps no copy.
+      if (this.inline && userView) await this.commitView(userView);
       await this.publishMessages([
         { path: "draft", value: "" },
         { path: "busy", value: true },
@@ -589,12 +783,25 @@ export class TuimarkClient {
             this.history.push(event.message);
             const view = this.builder.fromMessage(event.message);
             if (view) this.transcript.push(view);
+            if (this.inline) {
+              // Only what is still live is printed: the whole re-parsed view
+              // would duplicate the blocks already in the scrollback.
+              const streamed = await this.commitStreamTail();
+              if (view?.is_tool) await this.commitView(view);
+              else if (view && !streamed) await this.commitView(view);
+            }
             await this.publishMessages();
             break;
           }
           case "tool_requested":
             toolName = event.name;
-            this.stream.reset();
+            // Inline, the text before the tool call is printed before the
+            // stream is dropped for the tool card (and kept if refused).
+            if (this.inline) await this.commitStreamTail();
+            if (!this.inline || !this.stream.hasUncommitted) {
+              this.stream.reset();
+              this.headCommitted = false;
+            }
             this.liveTool = liveToolView(
               this.builder.takeCall(),
               event.name,
@@ -662,6 +869,8 @@ export class TuimarkClient {
       this.proposal = undefined;
       if (this.turn === request) this.turn = undefined;
       const size = this.options.provider.context_size;
+      // Inline, a cancelled or failed reply still prints what arrived.
+      if (this.inline) await this.commitStreamTail();
       await this.publishMessages([
         { path: "busy", value: false },
         { path: "placeholder", value: PLACEHOLDER },

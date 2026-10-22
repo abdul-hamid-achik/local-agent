@@ -88,11 +88,11 @@ bun dev [--model MODEL (default: ${DEFAULT_OLLAMA_MODEL})] [--mode fullscreen|in
                        LOCAL_AGENT_CONTEXT; 32768 and 32k both work); it cannot exceed
                        the model's native context. Chalupa negotiates its own
   --ui vue|tuimark     Interactive client: tuimark (default on macOS and Linux) or vue
-                       (default on Windows). The Tuimark client is fullscreen only for
-                       now, so --mode inline uses vue unless --ui tuimark is explicit
-                       (then it is refused). It runs the tuimark binary from
-                       TUIMARK_BINARY, or downloads the release it is pinned to once
-                       (checksum-verified) into the user cache.
+                       (default on Windows). Tuimark inline is opt-in: --ui tuimark
+                       --mode inline prints finished blocks into the terminal's own
+                       scrollback; a bare --mode inline still uses vue. It runs the
+                       tuimark binary from TUIMARK_BINARY, or downloads the release
+                       it is pinned to once (checksum-verified) into the user cache.
   --workspace PATH     Workspace root (default: current directory)
   --intent plan|build  Plan forbids edits and commands; build asks before acting
   --approve-edits      Allow file edits and writes (create or replace) in headless mode
@@ -157,9 +157,9 @@ Interrupted tool outcomes require inspection; they are never automatically repla
     const headless =
       values.mode === "headless" || values.prompt !== undefined || values.json;
     if (!inspect) {
-      if (values.ui === "tuimark" && (headless || values.mode !== "fullscreen"))
+      if (values.ui === "tuimark" && headless)
         throw new Error(
-          "--ui tuimark is fullscreen only; use it without --prompt, --json or --mode inline|headless",
+          "--ui tuimark needs an interactive terminal; use it without --prompt, --json or --mode headless",
         );
       if (headless && !prompt.trim())
         throw new Error("Headless mode requires --prompt");
@@ -275,7 +275,11 @@ Interrupted tool outcomes require inspection; they are never automatically repla
           }
           let client = headless
             ? "vue"
-            : interactiveClient(ui, values.mode as "fullscreen" | "inline");
+            : interactiveClient(
+                ui,
+                values.mode as "fullscreen" | "inline",
+                values.ui !== undefined,
+              );
           let bin: string | undefined;
           if (client === "tuimark" && values.ui === undefined) {
             // The default client must not fail a run that never asked for it.
@@ -340,6 +344,7 @@ Interrupted tool outcomes require inspection; they are never automatically repla
               values.intent,
               session,
               mcp,
+              values.mode as "fullscreen" | "inline",
               bin ? { resolve: async () => bin } : {},
             );
           } else {

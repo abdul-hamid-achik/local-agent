@@ -23,9 +23,14 @@ test("the default client is Tuimark on macOS and Linux and Vue on Windows", () =
   expect(parseUi(undefined)).toBe(defaultUi());
 });
 
-test("a presentation the Tuimark client does not have goes to the Vue client", () => {
+test("Tuimark inline is opt-in: only an explicit --ui tuimark uses it", () => {
   expect(interactiveClient("tuimark", "fullscreen")).toBe("tuimark");
+  expect(interactiveClient("tuimark", "fullscreen", true)).toBe("tuimark");
+  // A bare --mode inline (no --ui) still goes to the Vue client.
   expect(interactiveClient("tuimark", "inline")).toBe("vue");
+  expect(interactiveClient("tuimark", "inline", false)).toBe("vue");
+  // An explicit --ui tuimark --mode inline stays Tuimark.
+  expect(interactiveClient("tuimark", "inline", true)).toBe("tuimark");
   expect(interactiveClient("vue", "fullscreen")).toBe("vue");
-  expect(interactiveClient("vue", "inline")).toBe("vue");
+  expect(interactiveClient("vue", "inline", true)).toBe("vue");
 });

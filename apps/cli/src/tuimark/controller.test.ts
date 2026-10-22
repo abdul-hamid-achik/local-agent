@@ -9,7 +9,12 @@ import type {
   Workspace,
 } from "@local-agent/runtime";
 import { expect, test } from "vitest";
-import { type MessageView, runsText } from "#cli/tuimark/blocks";
+import {
+  type Block,
+  type MessageView,
+  parseBlocks,
+  runsText,
+} from "#cli/tuimark/blocks";
 import type { PaletteItem } from "#cli/tuimark/commands";
 import { APPROVAL_ARM_MS, TuimarkClient } from "#cli/tuimark/controller";
 import { FakeHost } from "#cli/tuimark/fake-host";
@@ -824,4 +829,160 @@ test("the history of a resumed session is what its user messages said", async ()
   expect(store(ui).draft).toBe("later question");
   await ui.fire("history_prev", "later question");
   expect(store(ui).draft).toBe("earlier question");
+});
+
+// ------------------------------------------------------------ the inline mode
+
+const inline = { presentation: "inline" } as const;
+
+/** What the scrollback received, one string per acked commit, in print order. */
+function printed(ui: FakeHost): string[] {
+  return ui.commits
+    .filter((c) => c.ok)
+    .map((c) => {
+      if (c.commit.template === "la-turn") {
+        const view = c.buf as MessageView;
+        if (view.is_tool) return `tool ${view.card.name} ${view.card.status}`;
+        const label = view.is_user ? "You" : "Assistant";
+        return `${label}: ${view.blocks.map((b) => runsText(b.runs)).join("\n")}`;
+      }
+      return (c.buf as Block[]).map((b) => runsText(b.runs)).join("\n");
+    });
+}
+
+test("fullscreen never commits", async () => {
+  const { ui, client } = setup(reply("hello there"));
+  await ui.fire("send", "hi");
+  await client.idle();
+  expect(ui.commits).toEqual([]);
+});
+
+test("inline: the prompt is committed on send and the reply as its blocks close, with no messages writes", async () => {
+  const full = "para one\n\npara two\n\npara three starts\n\npara four";
+  const { ui, client } = setup(async function* () {
+    yield { type: "thinking", text: "secret reasoning" };
+    yield { type: "text", text: "para one\n\npara two\n\npara three st" };
+    await new Promise((r) => setTimeout(r, 25));
+    yield { type: "text", text: "arts\n\npara four" };
+    yield { type: "done", inputTokens: 10, outputTokens: 10 };
+    yield { type: "message", message: { role: "assistant", content: full } };
+  }, inline);
+  await ui.fire("send", "write it");
+  // The prompt is already in print before the reply starts.
+  expect(printed(ui)).toEqual(["You: write it"]);
+  await client.idle();
+  const out = printed(ui);
+  expect(out[0]).toBe("You: write it");
+  // The first reply commit carries the label, later ones are plain blocks.
+  expect(out[1]).toMatch(/^Assistant: para one/);
+  if (out.length > 2) expect(out[2]).not.toMatch(/^Assistant:/);
+  // Together the reply commits are the whole reply, once, in order.
+  const replyText = out
+    .slice(1)
+    .map((s) => s.replace(/^Assistant: /, ""))
+    .join("\n");
+  expect(replyText).toBe(
+    parseBlocks(full)
+      .map((b) => runsText(b.runs))
+      .join("\n"),
+  );
+  // The reasoning is never printed.
+  expect(out.join("\n")).not.toContain("secret reasoning");
+  // The region never held the history.
+  expect(ui.batches.flat().some((w) => w.path === "messages")).toBe(false);
+  expect(store(ui).messages).toEqual([]);
+  expect(store(ui).live.active).toBe(false);
+  expect(store(ui).commit_buf).toBeNull();
+  expect(client.writeErrors).toEqual([]);
+  // Writes and commits shared one chain: never two in flight.
+  expect(ui.maxInflight).toBe(1);
+});
+
+test("inline: a tool receipt is committed in its final state, and the approval still decides", async () => {
+  const { ui, client } = setup(withApproval, inline);
+  await ui.fire("send", "edit");
+  await untilApproval(ui);
+  await ui.fire("dialog_confirm");
+  await client.idle();
+  expect(decisions).toEqual([true]);
+  const out = printed(ui);
+  expect(out).toContain("You: edit");
+  expect(out).toContain("tool edit succeeded");
+  // The live card states were never printed.
+  expect(out.join("\n")).not.toContain("requested");
+  expect(out.join("\n")).not.toContain("waiting for approval");
+  expect(out.join("\n")).not.toContain("running");
+});
+
+test("inline: esc commits the partial reply that had arrived", async () => {
+  const { ui, client } = setup(async function* ({ options }) {
+    yield { type: "text", text: "half an answer" };
+    await new Promise((_, reject) =>
+      options.signal.addEventListener("abort", () =>
+        reject(new Error("aborted")),
+      ),
+    );
+  }, inline);
+  await ui.fire("send", "slow one");
+  await new Promise((r) => setTimeout(r, 15));
+  await ui.fire("cancel");
+  await client.idle();
+  expect(store(ui).status).toBe("Cancelled");
+  expect(printed(ui)).toEqual(["You: slow one", "Assistant: half an answer"]);
+});
+
+test("inline: quit commits the partial reply before answering quit", async () => {
+  const { ui, client } = setup(async function* ({ options }) {
+    yield { type: "text", text: "still writing" };
+    await new Promise((_, reject) =>
+      options.signal.addEventListener("abort", () =>
+        reject(new Error("aborted")),
+      ),
+    );
+  }, inline);
+  await ui.fire("send", "go");
+  await new Promise((r) => setTimeout(r, 15));
+  expect(await ui.fire("quit")).toBe("quit");
+  // Already printed at the moment "quit" was answered.
+  expect(printed(ui)).toEqual(["You: go", "Assistant: still writing"]);
+  await client.idle();
+  expect(printed(ui)).toEqual(["You: go", "Assistant: still writing"]);
+});
+
+test("inline: a refused commit keeps its blocks and prints them exactly once later", async () => {
+  const { ui, client } = setup(reply("alpha beta"), inline);
+  // The user commit (0) lands; the reply's first commit attempt (1) is refused.
+  ui.refuseCommit = (_commit, index) =>
+    index === 1 ? "commit: not in inline mode" : undefined;
+  await ui.fire("send", "hi");
+  await client.idle();
+  expect(client.writeErrors).toContain("commit: not in inline mode");
+  expect(ui.commits.filter((c) => !c.ok)).toHaveLength(1);
+  const out = printed(ui);
+  expect(out.filter((s) => s.includes("alpha beta"))).toHaveLength(1);
+});
+
+test("inline: a resumed session's history is committed once at attach, in order", async () => {
+  const session = {
+    state: {
+      publicId: "abc1234",
+      messages: [
+        { role: "user", content: "earlier question" },
+        { role: "assistant", content: "the answer" },
+      ],
+    },
+  } as unknown as SessionContext;
+  const { ui, client } = setup(reply("ok"), { session, ...inline });
+  expect(store(ui).messages).toEqual([]);
+  await until(() => printed(ui).length === 2);
+  expect(printed(ui)).toEqual([
+    "You: earlier question",
+    "Assistant: the answer",
+  ]);
+  await ui.fire("send", "next");
+  await client.idle();
+  // Once: a later turn does not reprint the resumed history.
+  expect(
+    printed(ui).filter((s) => s.includes("earlier question")),
+  ).toHaveLength(1);
 });

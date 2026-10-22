@@ -14,6 +14,8 @@ test("a missing app.tui is reported with the folder that was searched", async ()
     expect(() => uiDirectory(empty)).toThrow(/not found in .*ui$/);
     await mkdir(join(empty, "ui"));
     await writeFile(join(empty, "ui", "app.tui"), "<tui/>");
+    expect(() => uiDirectory(empty)).toThrow(/not found in .*ui$/);
+    await writeFile(join(empty, "ui", "inline.tui"), "<tui/>");
     expect(uiDirectory(empty)).toBe(join(empty, "ui"));
   } finally {
     await rm(empty, { recursive: true, force: true });
@@ -47,8 +49,10 @@ function fakeSpawn(
   const calls = {
     closed: 0,
     handlers: new Map<string, (ev: unknown) => unknown>(),
+    spawned: [] as { file: string; options?: unknown }[],
   };
-  const spawn = (async () => {
+  const spawn = (async (file: string, options?: unknown) => {
+    calls.spawned.push({ file, options });
     let settle: (value: HostExit) => void = () => {};
     let fail: (error: Error) => void = () => {};
     const exited = new Promise<HostExit>((resolve, reject) => {
@@ -72,6 +76,9 @@ function fakeSpawn(
         return host;
       },
       async batch() {
+        return { type: "ack", id: "x", ok: true };
+      },
+      async commit() {
         return { type: "ack", id: "x", ok: true };
       },
       async get() {
@@ -98,10 +105,20 @@ function fakeStdout(isTTY: boolean) {
 }
 
 const launch = (
-  deps: Parameters<typeof runTuimark>[6],
+  deps: Parameters<typeof runTuimark>[7],
   signal = new AbortController().signal,
+  presentation: Parameters<typeof runTuimark>[6] = "fullscreen",
 ) =>
-  runTuimark(provider, signal, {} as Workspace, "build", undefined, [], deps);
+  runTuimark(
+    provider,
+    signal,
+    {} as Workspace,
+    "build",
+    undefined,
+    [],
+    presentation,
+    deps,
+  );
 
 test("the pinned release is the minimum, not the pre-release the SDK is packed as", () => {
   expect(PINNED_TUIMARK).toBe("0.4.6");
@@ -157,6 +174,76 @@ test("readyProblem accepts a newer binary and ignores warnings", () => {
       "/b",
     ),
   ).toBeUndefined();
+});
+
+test("inline needs a child that accepts commit; fullscreen does not ask", async () => {
+  const ready = { version: "0.4.6", diagnostics: [] };
+  expect(readyProblem(ready, "/b", "fullscreen")).toBeUndefined();
+  expect(readyProblem(ready, "/b", "inline")).toMatch(
+    /does not accept commit \(inline mode\)/,
+  );
+  expect(
+    readyProblem(
+      { ...ready, messages: ["set", "batch", "commit"] },
+      "/b",
+      "inline",
+    ),
+  ).toBeUndefined();
+
+  const host = fakeSpawn(ready);
+  await expect(
+    launch(
+      {
+        spawn: host.spawn,
+        resolve: async () => "/b",
+        stdout: fakeStdout(true),
+      },
+      new AbortController().signal,
+      "inline",
+    ),
+  ).rejects.toThrow(/does not accept commit/);
+  expect(host.calls.closed).toBe(1);
+  expect(host.calls.handlers.size).toBe(0);
+});
+
+test("the inline presentation spawns inline.tui with inline: true", async () => {
+  const control: { exit?: (reason: HostExit | Error) => void } = {};
+  const host = fakeSpawn(
+    { messages: ["set", "batch", "get", "commit"] },
+    control,
+  );
+  const done = launch(
+    { spawn: host.spawn, resolve: async () => "/b", stdout: fakeStdout(true) },
+    new AbortController().signal,
+    "inline",
+  );
+  await new Promise((r) => setTimeout(r, 10));
+  expect(host.calls.spawned).toHaveLength(1);
+  expect(host.calls.spawned[0]?.file).toMatch(/inline\.tui$/);
+  expect(host.calls.spawned[0]?.options).toMatchObject({ inline: true });
+  const options = host.calls.spawned[0]?.options as {
+    data: Record<string, unknown>;
+  };
+  const data = options.data;
+  // The region starts without history; the scratch paths are present.
+  expect(data.messages).toEqual([]);
+  expect(data.commit_blocks).toEqual([]);
+  expect(data.commit_buf).toMatchObject({ id: "commit" });
+  control.exit?.({ reason: "quit", code: 0 });
+  await done;
+
+  const control2: { exit?: (reason: HostExit | Error) => void } = {};
+  const host2 = fakeSpawn({}, control2);
+  const done2 = launch({
+    spawn: host2.spawn,
+    resolve: async () => "/b",
+    stdout: fakeStdout(true),
+  });
+  await new Promise((r) => setTimeout(r, 10));
+  expect(host2.calls.spawned[0]?.file).toMatch(/app\.tui$/);
+  expect(host2.calls.spawned[0]?.options).toMatchObject({ inline: false });
+  control2.exit?.({ reason: "quit", code: 0 });
+  await done2;
 });
 
 test("a host that dies resets the terminal, only when stdout is a terminal", async () => {

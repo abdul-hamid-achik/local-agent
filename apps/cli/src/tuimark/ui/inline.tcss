@@ -1,0 +1,26 @@
+/* The inline document's own rules, loaded after app.tcss (which it shares
+ * with the fullscreen client, so printed turns look the same). */
+
+/* The region is as tall as its content: the fullscreen 1fr claim is undone. */
+#app { height: auto; }
+#liveregion { width: 1fr; height: auto; }
+
+/* The in-flow approval. Its diff is capped, so a short terminal keeps the
+ * composer and the status in view. */
+.la-approve { height: auto; layout: column; border: rounded; border-color: $accent; title-color: $accent; padding: 0 1; margin: 0 0 1 0; }
+.la-approve.danger { border-color: $danger; title-color: $danger; }
+.la-approve-body { width: 1fr; }
+.la-approve > .la-diff { max-height: 10; }
+@media (max-rows: 20) {
+  .la-approve > .la-diff { max-height: 5; }
+}
+
+/* While an approval is open the live card only repeats "waiting for
+ * approval": its rows belong to the diff. */
+screen.approving > #app > #liveregion { display: none; }
+
+/* Blank room a kit modal is laid out against: the region does not grow for
+ * a modal, so the document grows it while the modal is open. The heights
+ * match the kit's modals (k-palette is 16 rows, k-help sizes to content). */
+.la-space-palette { height: 16; }
+.la-space-help { height: 14; }
