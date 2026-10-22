@@ -7,9 +7,10 @@
 //
 // The reply depends only on the last message, so one run can hold several turns:
 //
-//   last message is a tool result  -> "edit applied" or "edit denied"
+//   last message is a tool result  -> "edit applied N" (N counts tool replies) or "edit denied"
 //   prompt starts with "count"     -> "The message had N lines: FIRST LINE" (one message,
 //                                      however it was typed or pasted)
+//   prompt contains "edit again"   -> one `edit` tool call, after -> final
 //   prompt contains "edit"         -> one `edit` tool call on notes.txt
 //   prompt contains "fail"         -> HTTP 500, so the turn fails
 //   prompt contains "slow"         -> one chunk, then nothing until cancelled
@@ -35,6 +36,7 @@ const basePort = {
   "edit-approve": 19211,
   "edit-deny": 19212,
   session: 19213,
+  "edit-session": 19214,
 }[mode];
 if (!basePort) throw new Error(`unknown mode: ${rawMode}`);
 const port = inline ? basePort + 100 : basePort;
@@ -92,6 +94,9 @@ const assistant = (content: string, extra: object = {}) => ({
 });
 const done = { done: true, prompt_eval_count: 40, eval_count: 60 };
 
+/** Tool-result replies so far: "edit applied 2" proves a second edit landed. */
+let toolReplies = 0;
+
 const server = Bun.serve({
   port,
   hostname: "127.0.0.1",
@@ -116,7 +121,14 @@ const server = Bun.serve({
     const last = body.messages?.at(-1);
     if (last?.role === "tool")
       return stream(
-        [assistant(mode === "edit-approve" ? "edit applied" : "edit denied"), done],
+        [
+          assistant(
+            mode === "edit-approve" || mode === "edit-session"
+              ? `edit applied ${++toolReplies}`
+              : "edit denied",
+          ),
+          done,
+        ],
         5,
       );
     const prompt = last?.content ?? "";
@@ -126,6 +138,27 @@ const server = Bun.serve({
           assistant(
             `The message had ${prompt.split("\n").length} lines: ${prompt.split("\n")[0]}`,
           ),
+          done,
+        ],
+        5,
+      );
+    if (prompt.includes("edit again"))
+      return stream(
+        [
+          assistant("", {
+            tool_calls: [
+              {
+                function: {
+                  name: "edit",
+                  arguments: {
+                    path: "notes.txt",
+                    old_string: "after",
+                    new_string: "final",
+                  },
+                },
+              },
+            ],
+          }),
           done,
         ],
         5,
@@ -223,8 +256,15 @@ async function shutdown(exitCode: number) {
   await child.exited;
   server.stop(true);
   const contents = await readFile(join(workspaceRoot, "notes.txt"), "utf8");
-  // Approved: the exact edit landed. Otherwise nothing may have changed.
-  const expected = mode === "edit-approve" ? "after\n" : "before\n";
+  // Approved: the exact edit landed (twice for edit-session: the second
+  // edit only lands if the session grant let it through). Otherwise
+  // nothing may have changed.
+  const expected =
+    mode === "edit-session"
+      ? "final\n"
+      : mode === "edit-approve"
+        ? "after\n"
+        : "before\n";
   if (contents !== expected) exitCode = 1;
   await rm(workspaceRoot, { recursive: true, force: true });
   if (sessionDirectory) await rm(sessionDirectory, { recursive: true, force: true });

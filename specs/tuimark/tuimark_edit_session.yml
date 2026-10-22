@@ -1,0 +1,71 @@
+version: 1
+name: bun_tuimark_edit_session
+intent: |
+    pressing a on the Tuimark approval dialog applies the edit and grants
+    file changes for the session (the header then shows "auto: files"), so
+    a second edit in a later turn is applied with no second approval
+    dialog — reaching "edit applied 2" without another keypress is the
+    proof, and the fixture fails unless both edits landed exactly.
+target:
+    cmd: ["bun", "specs/tuimark/fixture.ts", "edit-session"]
+    cwd: "${projectRoot}"
+terminal:
+    cols: 100
+    rows: 32
+    alternateScreen: require
+steps:
+    - wait:
+        screen:
+            contains: "Message the model"
+        timeoutMs: 15000
+    - type: "edit the notes"
+    - press: enter
+    - wait:
+        screen:
+            contains: "Edit notes.txt?"
+        timeoutMs: 15000
+    - wait:
+        screen:
+            contains: "a allow file changes this session"
+        timeoutMs: 5000
+    - wait:
+        screen:
+            contains: "y allow"
+        timeoutMs: 5000
+    - press: a
+    - wait:
+        screen:
+            contains: "edit applied 1"
+        timeoutMs: 15000
+    - wait:
+        screen:
+            contains: "auto: files"
+        timeoutMs: 5000
+    - type: "edit again"
+    - press: enter
+    - wait:
+        screen:
+            contains: "edit applied 2"
+        timeoutMs: 15000
+    - wait:
+        screen:
+            notContains: "Edit notes.txt?"
+        timeoutMs: 5000
+    # The trailing space closes the slash popup, so enter sends at once.
+    - type: "/permissions "
+    - press: enter
+    - wait:
+        screen:
+            contains: "Session grants: files"
+        timeoutMs: 5000
+    - press: ctrl+c
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 5000
+outcomes:
+    - id: tuimark_edit_session
+      description: a grants file changes for the session; the second edit lands without a second approval
+      verify:
+        process:
+            exitCode: 0

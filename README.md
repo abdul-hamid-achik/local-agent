@@ -84,7 +84,8 @@ a child and draws the whole screen from `apps/cli/src/tuimark/ui/app.tui`.
   `apps/cli/src/tuimark/ui/inline.tui` under `tuimark host --inline`. Finished
   blocks are committed into the terminal's own scrollback (the SDK `commit()`)
   as they close; a small live region below the cursor holds the streaming
-  tail, an in-flow approval (no modal: `y` allows, `n`/`esc` deny), the
+  tail, an in-flow approval (no modal: `y` allows, `a` allows for the
+  session, `n`/`esc` deny), the
   composer, and the status. A bare `--mode inline` still uses the Vue client,
   and the headless flags refuse `--ui tuimark`.
 - `vendor/tuimark/` holds the SDK tarball (`file:` dependency) until its release
@@ -220,7 +221,15 @@ Mode changes apply to the next turn; they do not alter a running tool call.
 
 Use `--workspace PATH` to select the file root and `--intent plan` to forbid
 edits, writes and commands. Build intent asks for each edit or command in interactive modes; Enter denies and
-`y` approves. Headless edits and writes are denied unless `--approve-edits` is explicit.
+`y` approves. In the Tuimark client, `a` on an approval approves and also
+grants matching calls for the rest of the session — file changes as one
+grant, a command by its program plus first argument (the dialog spells out
+exactly what would be granted, e.g. ``a allow `bun test …` this session``),
+an MCP call by its exact `SERVER__TOOL` name. Grants live only in memory,
+never apply in plan mode, and are not offered when the approval preview is
+truncated. The header names active grants (`auto: files · bun test`);
+`/permissions` lists them and `/permissions clear` revokes them all.
+Headless edits and writes are denied unless `--approve-edits` is explicit.
 This flag permits file changes only; it grants no command execution. Headless commands require the separate `--approve-commands` flag.
 Commands run with user permissions, without an OS sandbox or implicit shell.
 A successful edit does not imply that verification passed.
