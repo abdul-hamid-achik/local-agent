@@ -48,3 +48,54 @@ test("the palette filters on every word and maps rows to slash commands", () => 
   expect(paletteCommand("mode-build")).toBe("/mode build");
   expect(paletteCommand("missing")).toBeUndefined();
 });
+
+test("/theme reports, validates and changes the session theme", () => {
+  expect(runSlash("/theme", state)).toEqual({
+    status: "Current theme: auto. Use /theme dark, /theme light or /theme auto",
+  });
+  expect(runSlash("/theme", { ...state, theme: "light" }).status).toBe(
+    "Current theme: light. Use /theme dark, /theme light or /theme auto",
+  );
+  expect(runSlash("/theme DARK", state)).toEqual({
+    status: "Theme changed to dark",
+    theme: "dark",
+  });
+  expect(runSlash("/theme blue", state)).toEqual({
+    status: "Unknown theme: blue. Use /theme dark, /theme light or /theme auto",
+  });
+  expect(runSlash("/theme blue", state).theme).toBeUndefined();
+});
+
+test("/mouse reports, validates and changes the toggle (off by default)", () => {
+  expect(runSlash("/mouse", state).status).toBe(
+    "Mouse is off. Use /mouse on or /mouse off",
+  );
+  expect(runSlash("/mouse", { ...state, mouse: true }).status).toBe(
+    "Mouse is on. Use /mouse on or /mouse off",
+  );
+  expect(runSlash("/mouse on", state)).toEqual({
+    status: "Mouse changed to on",
+    mouse: true,
+  });
+  expect(runSlash("/mouse off", { ...state, mouse: true })).toEqual({
+    status: "Mouse changed to off",
+    mouse: false,
+  });
+  expect(runSlash("/mouse maybe", state).mouse).toBeUndefined();
+  expect(runSlash("/mouse maybe", state).status).toBe(
+    "Unknown mouse setting: maybe. Use /mouse on or /mouse off",
+  );
+});
+
+test("the palette carries the theme and mouse rows", () => {
+  expect(filterPalette("theme").map((r) => r.id)).toEqual([
+    "theme-dark",
+    "theme-light",
+    "theme-auto",
+  ]);
+  expect(filterPalette("mouse on").map((r) => r.id)).toEqual(["mouse-on"]);
+  expect(paletteCommand("theme-light")).toBe("/theme light");
+  expect(paletteCommand("mouse-off")).toBe("/mouse off");
+  expect(HELP_STATUS).toContain("/theme dark|light|auto");
+  expect(HELP_STATUS).toContain("/mouse on|off");
+});

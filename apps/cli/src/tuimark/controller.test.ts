@@ -986,3 +986,70 @@ test("inline: a resumed session's history is committed once at attach, in order"
     printed(ui).filter((s) => s.includes("earlier question")),
   ).toHaveLength(1);
 });
+
+test("/theme writes the reserved @theme path in the command's batch", async () => {
+  const { ui, client } = setup(reply("unused"));
+  await ui.fire("send", "/theme light");
+  await client.idle();
+  expect(ui.store["@theme"]).toBe("light");
+  expect(store(ui).status).toBe("Theme changed to light");
+  // One batch carries the status and the @theme write together.
+  const batch = ui.batches.find((b) => b.some((w) => w.path === "@theme"));
+  expect(batch?.map((w) => w.path)).toEqual(["status", "@theme"]);
+  await ui.fire("send", "/theme");
+  expect(store(ui).status).toBe(
+    "Current theme: light. Use /theme dark, /theme light or /theme auto",
+  );
+});
+
+test("an unknown theme is refused and @theme is never written", async () => {
+  const { ui } = setup(reply("unused"));
+  await ui.fire("send", "/theme blue");
+  expect(store(ui).status).toBe(
+    "Unknown theme: blue. Use /theme dark, /theme light or /theme auto",
+  );
+  expect(ui.store["@theme"]).toBeUndefined();
+  expect(ui.batches.flat().some((w) => w.path === "@theme")).toBe(false);
+});
+
+test("/mouse writes mouse_on; inline refuses without writing it", async () => {
+  const { ui } = setup(reply("unused"));
+  expect(store(ui).mouse_on).toBe(false);
+  await ui.fire("send", "/mouse on");
+  expect(store(ui).mouse_on).toBe(true);
+  expect(store(ui).status).toBe("Mouse changed to on");
+  await ui.fire("send", "/mouse off");
+  expect(store(ui).mouse_on).toBe(false);
+
+  const inline = setup(reply("unused"), { presentation: "inline" });
+  await inline.ui.fire("send", "/mouse on");
+  expect(store(inline.ui).status).toBe("Mouse is not available in inline mode");
+  expect(store(inline.ui).mouse_on).toBe(false);
+  expect(
+    inline.ui.batches.flat().some((w) => w.path === "mouse_on" && w.value),
+  ).toBe(false);
+});
+
+test("the welcome (empty) goes with the first message and never returns", async () => {
+  const ok = setup(reply("hello"));
+  expect(store(ok.ui).empty).toBe(true);
+  await ok.ui.fire("send", "hi");
+  await ok.client.idle();
+  expect(store(ok.ui).empty).toBe(false);
+
+  // A failed first turn pops the prompt back out of the transcript; the
+  // welcome must not reappear over the restored draft.
+  const failed = setup(
+    quiet(async () => {
+      throw new Error("boom");
+    }),
+  );
+  expect(store(failed.ui).empty).toBe(true);
+  await failed.ui.fire("send", "hi");
+  await failed.client.idle();
+  expect(store(failed.ui).messages).toEqual([]);
+  expect(store(failed.ui).empty).toBe(false);
+  expect(
+    failed.ui.batches.flat().filter((w) => w.path === "empty" && w.value),
+  ).toEqual([]);
+});

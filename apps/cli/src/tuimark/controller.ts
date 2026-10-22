@@ -40,8 +40,10 @@ import {
   BUSY_STATUS,
   filterPalette,
   type Intent,
+  MOUSE_INLINE_STATUS,
   paletteCommand,
   runSlash,
+  type Theme,
 } from "#cli/tuimark/commands";
 import {
   APPROVAL_STATUS,
@@ -136,6 +138,10 @@ export class TuimarkClient {
   /** The draft that recalling started from, back when the user comes down again. */
   private recalledFrom = "";
   private intent: Intent;
+  /** Session theme (`/theme`); written to the host's reserved `@theme` path. */
+  private theme: Theme = "auto";
+  /** Fullscreen mouse reporting (`/mouse`); default off. Inline never writes it. */
+  private mouse = false;
   // the writer
   private tail: Promise<void> = Promise.resolve();
   /** Commits run one at a time: each rewrites the same scratch path. */
@@ -190,6 +196,9 @@ export class TuimarkClient {
       intent: this.intent,
       sessionId: session?.state.publicId,
       mcpServers: mcp.length,
+      workspace: this.options.workspace?.root ?? "",
+      // The inline snapshot below always starts empty; a resumed session is not.
+      empty: this.transcript.length === 0,
       // Inline, the region never holds history: attach() commits it instead.
       transcript: this.inline
         ? { messages: [], earlier: { n: 0 } }
@@ -577,11 +586,27 @@ export class TuimarkClient {
         servers: mcp.length,
         tools: mcp.reduce((total, server) => total + server.tools.length, 0),
       },
+      theme: this.theme,
+      mouse: this.mouse,
     });
+    // Inline has no mouse, and its document never reads `mouse_on`: refuse
+    // here rather than write a path the host would reject.
+    if (outcome.mouse !== undefined && this.inline) {
+      await this.write([{ path: "status", value: MOUSE_INLINE_STATUS }]);
+      return;
+    }
     const writes: Write[] = [{ path: "status", value: outcome.status }];
     if (outcome.intent) {
       this.intent = outcome.intent;
       writes.push({ path: "header.mode", value: outcome.intent });
+    }
+    if (outcome.theme) {
+      this.theme = outcome.theme;
+      writes.push({ path: "@theme", value: outcome.theme });
+    }
+    if (outcome.mouse !== undefined) {
+      this.mouse = outcome.mouse;
+      writes.push({ path: "mouse_on", value: outcome.mouse });
     }
     if (outcome.help) writes.push({ path: "help.open", value: true });
     await this.write(writes);
@@ -741,6 +766,9 @@ export class TuimarkClient {
       // Inline, the prompt is printed as it is sent; the region keeps no copy.
       if (this.inline && userView) await this.commitView(userView);
       await this.publishMessages([
+        // The welcome goes with the first message and never returns: a failed
+        // turn may pop the prompt back out, but `empty` is never written true again.
+        { path: "empty", value: false },
         { path: "draft", value: "" },
         { path: "busy", value: true },
         { path: "placeholder", value: PLACEHOLDER_BUSY },

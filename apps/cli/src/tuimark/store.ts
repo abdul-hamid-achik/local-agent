@@ -66,9 +66,15 @@ export interface Store {
     model: string;
     mode: Intent;
     session: string;
+    /** Basename of the workspace root, for the empty-state welcome. "" when unknown. */
+    workspace: string;
     ctx_label: string;
     ctx_pct: number;
   };
+  /** True only before the first message: the welcome shows. Never true again. */
+  empty: boolean;
+  /** Fullscreen mouse reporting (`<tui mouse="mouse_on">`). Default off. */
+  mouse_on: boolean;
   messages: MessageView[];
   earlier: { n: number };
   live: LiveView;
@@ -142,6 +148,18 @@ export interface StoreInit {
   sessionId?: string;
   mcpServers: number;
   transcript: TranscriptSnapshot;
+  /** Workspace root (or basename); only its basename is shown. */
+  workspace?: string;
+  /**
+   * Overrides the derived empty flag. The inline client passes its real
+   * transcript length here: its snapshot always starts empty.
+   */
+  empty?: boolean;
+}
+
+/** The last path segment of a workspace root ("" for "/" or ""). */
+export function workspaceBasename(root: string): string {
+  return root.split("/").filter(Boolean).at(-1) ?? "";
 }
 
 export function initialStore(init: StoreInit): Store {
@@ -152,9 +170,15 @@ export function initialStore(init: StoreInit): Store {
       model: clip(cleanText(init.provider.model), 40),
       mode: init.intent,
       session: init.sessionId ? `session ${init.sessionId}` : "temporary",
+      workspace: init.workspace ? workspaceBasename(init.workspace) : "",
       ctx_label: contextLabel(0, init.provider.context_size),
       ctx_pct: 0,
     },
+    empty:
+      init.empty ??
+      (init.transcript.messages.length === 0 &&
+        init.transcript.earlier.n === 0),
+    mouse_on: false,
     messages: init.transcript.messages,
     earlier: init.transcript.earlier,
     live: IDLE_LIVE,

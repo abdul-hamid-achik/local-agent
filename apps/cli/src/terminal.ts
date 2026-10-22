@@ -106,6 +106,16 @@ export function createTerminalRoot(
           }
           return;
         }
+        if (
+          /^\/(theme|mouse)(\s|$)/i.test(command) ||
+          command === "/theme" ||
+          command === "/mouse"
+        ) {
+          // Session theme/mouse are Tuimark-host features (@theme, <tui mouse>).
+          status.value =
+            "/theme and /mouse are available in the Tuimark client";
+          return;
+        }
         if (command === "/help") {
           status.value =
             "/mode plan|build · /mcp · /help · Esc cancel · Ctrl+C exit";

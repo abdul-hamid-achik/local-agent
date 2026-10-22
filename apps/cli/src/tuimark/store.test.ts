@@ -13,6 +13,7 @@ import {
   previewWidthInline,
   TRUNCATED_BODY,
   tokens,
+  workspaceBasename,
   wrapLine,
 } from "#cli/tuimark/store";
 import { Transcript } from "#cli/tuimark/transcript";
@@ -48,6 +49,8 @@ test("the initial store has every path the document reads", () => {
       "commit_buf",
       "draft",
       "earlier",
+      "empty",
+      "mouse_on",
       "found",
       "header",
       "help",
@@ -293,4 +296,47 @@ test("rows keep the add and delete marks across a wrapped line", () => {
     [false, true],
     [true, false],
   ]);
+});
+
+test("empty is derived from the transcript and the mouse starts off", () => {
+  const fresh = initialStore({
+    provider: { type: "ollama", model: "m", context_size: 8192 },
+    intent: "build",
+    mcpServers: 0,
+    workspace: "/home/me/project",
+    transcript: new Transcript().snapshot(),
+  });
+  expect(fresh.empty).toBe(true);
+  expect(fresh.mouse_on).toBe(false);
+  expect(fresh.header.workspace).toBe("project");
+  const transcript = new Transcript();
+  transcript.push({
+    id: "m1",
+    is_user: true,
+    is_asst: false,
+    is_tool: false,
+    blocks: [],
+    card: fresh.messages[0]?.card as never,
+  } as never);
+  const resumed = initialStore({
+    provider: { type: "ollama", model: "m", context_size: 8192 },
+    intent: "build",
+    mcpServers: 0,
+    transcript: transcript.snapshot(),
+  });
+  expect(resumed.empty).toBe(false);
+  // The inline client passes an empty snapshot with a real history: the
+  // explicit flag wins over the derivation.
+  const inline = initialStore({
+    provider: { type: "ollama", model: "m", context_size: 8192 },
+    intent: "build",
+    mcpServers: 0,
+    empty: false,
+    transcript: { messages: [], earlier: { n: 0 } },
+  });
+  expect(inline.empty).toBe(false);
+  expect(workspaceBasename("/a/b/c")).toBe("c");
+  expect(workspaceBasename("/a/b/c/")).toBe("c");
+  expect(workspaceBasename("/")).toBe("");
+  expect(workspaceBasename("")).toBe("");
 });
