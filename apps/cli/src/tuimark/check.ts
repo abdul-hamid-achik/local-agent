@@ -1,12 +1,13 @@
-// The Tuimark loop for ui/app.tui as one reproducible command:
+// The Tuimark loop for ui/app.tui and ui/inline.tui as one reproducible command:
 //
 //   bun run tuimark:check            verify
 //   bun run tuimark:check --update   regenerate samples and goldens, then verify
 //
 // It (1) rebuilds the sample stores from the code that builds the real store,
 // (2) runs `tuimark validate --strict` on each, (3) compares `tuimark dump` text
-// at 80 and 120 columns with the goldens in ui/golden/, and (4) runs
-// `tuimark play` to prove that every action of the document fires from the
+// at 80 and 120 columns with the goldens in ui/golden/ (the inline document
+// dumped with --inline, plus one play-scrollback golden), and (4) runs
+// `tuimark play` to prove that every action of the documents fires from the
 // keys the hints promise. The binary is TUIMARK_BINARY, else the SDK's own
 // resolution (cache, then a checked download of the pinned release).
 
@@ -14,9 +15,11 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
+  commitFixtures,
   DRAFT,
   EXACT_LINE,
   HIDDEN_LINE,
+  INLINE_SAMPLES,
   LONG_DRAFT,
   SAMPLES,
   WRAPPED_LINE,
@@ -89,17 +92,102 @@ for (const [name, make] of Object.entries(SAMPLES)) {
   }
 }
 
+// The inline document: same loop, dumped as a live region (--inline), so the
+// dump's `rows` is the region's height and `terminal_rows` the terminal's.
+for (const [name, make] of Object.entries(INLINE_SAMPLES)) {
+  const data = `samples/${name}.json`;
+  await matches(
+    join(ui, data),
+    `${JSON.stringify(make(), null, 2)}\n`,
+    "sample",
+  );
+  const valid = tuimark(["validate", "inline.tui", "--data", data, "--strict"]);
+  if (valid.code !== 0 || valid.out.trim() !== "ok")
+    failures.push(`validate ${name}: ${valid.out}${valid.err}`.trim());
+  for (const cols of widths) {
+    const args = [
+      "dump",
+      "inline.tui",
+      "--data",
+      data,
+      "--cols",
+      String(cols),
+      "--rows",
+      String(rows),
+      "--inline",
+    ];
+    const json = JSON.parse(tuimark([...args, "--format", "json"]).out) as {
+      errors: unknown[];
+      rows: number;
+      terminal_rows: number;
+    };
+    if (json.errors.length > 0)
+      failures.push(`dump ${name} at ${cols}: ${JSON.stringify(json.errors)}`);
+    if (json.terminal_rows !== rows || json.rows > json.terminal_rows)
+      failures.push(
+        `dump ${name} at ${cols}: region rows ${json.rows} of terminal ${json.terminal_rows}, expected within ${rows}`,
+      );
+    const text =
+      tuimark([...args, "--format", "text"]).out.split("=== nodes ===")[0] ??
+      "";
+    await matches(join(ui, "golden", `${name}-${cols}.txt`), text, "golden");
+  }
+}
+
+// A short terminal: the in-flow approval keeps its diff, the composer and
+// the status in view at 15 rows.
+{
+  const args = [
+    "dump",
+    "inline.tui",
+    "--data",
+    "samples/inline-sample-approval-long.json",
+    "--cols",
+    "80",
+    "--rows",
+    "15",
+    "--inline",
+  ];
+  const json = JSON.parse(tuimark([...args, "--format", "json"]).out) as {
+    errors: unknown[];
+    grid: string[];
+    rows: number;
+    terminal_rows: number;
+  };
+  if (json.errors.length > 0)
+    failures.push(
+      `dump inline approval at 15 rows: ${JSON.stringify(json.errors)}`,
+    );
+  const screen = json.grid.join("\n");
+  for (const text of ["--- a/install.sh", "Generating…", "y allow"])
+    if (!screen.includes(text))
+      failures.push(`dump inline approval at 15 rows: no ${text}`);
+  const text =
+    tuimark([...args, "--format", "text"]).out.split("=== nodes ===")[0] ?? "";
+  await matches(
+    join(ui, "golden", "inline-sample-approval-long-80-r15.txt"),
+    text,
+    "golden",
+  );
+}
+
 // 4: every action fires, from the sample where its key is live. The event
 // list is compared exactly: an extra event (a dialog_confirm next to the
 // dialog_cancel that esc must fire) is a failure.
 interface Expect {
   sample: string;
+  /** The document to replay. Default app.tui. */
+  doc?: string;
+  /** Replay as an inline region, recording commits into the scrollback. */
+  inline?: boolean;
   /** Space-separated play steps, or `steps` when a step holds a space or a line break. */
   input: string;
   /** Explicit steps (`tuimark play --script`), used instead of `input`. */
   steps?: object[];
   /** The terminal width of the replay. Default 80. */
   cols?: number;
+  /** The terminal rows of the replay (the region's cap inline). */
+  rows?: number;
   /** Every event the replay fires, in order. */
   actions: string[];
   /** The value of the first event. */
@@ -107,8 +195,16 @@ interface Expect {
   /** Text that must be on the final screen, and text that must not. */
   screen?: string[];
   notScreen?: string[];
+  /** Text that must be in the committed scrollback, and text that must not. */
+  scrollback?: string[];
+  notScrollback?: string[];
+  /** The exact number of scrollback rows the replay commits. */
+  scrollbackRows?: number;
+  /** A golden file under golden/ the scrollback grid must match. */
+  scrollbackGolden?: string;
 }
 const pages = (n: number) => Array(n).fill("pgdn").join(" ");
+const commitData = commitFixtures();
 const plays: Expect[] = [
   {
     sample: "sample",
@@ -314,6 +410,232 @@ const plays: Expect[] = [
   },
   { sample: "sample-help", input: "q", actions: ["help_close"] },
   { sample: "sample-help", input: "esc", actions: ["help_close"] },
+
+  // ---------------------------------------------------------- the inline doc
+  {
+    sample: "inline-sample",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "text:hello enter",
+    actions: ["send"],
+    value: "hello",
+  },
+  {
+    sample: "inline-sample",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "text:one shift+enter text:two enter",
+    actions: ["send"],
+    value: "one\ntwo",
+  },
+  {
+    sample: "inline-sample",
+    doc: "inline.tui",
+    inline: true,
+    input: "esc",
+    actions: ["cancel"],
+  },
+  {
+    sample: "inline-sample",
+    doc: "inline.tui",
+    inline: true,
+    input: "ctrl+c",
+    actions: ["quit"],
+  },
+  {
+    sample: "inline-sample",
+    doc: "inline.tui",
+    inline: true,
+    input: "ctrl+p",
+    actions: ["palette_open"],
+  },
+  {
+    sample: "inline-sample",
+    doc: "inline.tui",
+    inline: true,
+    input: "up",
+    actions: ["history_prev"],
+    value: "",
+  },
+  {
+    sample: "inline-sample-draft-long",
+    doc: "inline.tui",
+    inline: true,
+    input: "enter",
+    actions: ["send"],
+    value: LONG_DRAFT,
+  },
+  // The approval has no modal: the composer is disabled, so y allows, n and
+  // esc deny, and typing (even enter) fires nothing at all.
+  {
+    sample: "inline-sample-approval",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "y",
+    actions: ["dialog_confirm"],
+  },
+  {
+    sample: "inline-sample-approval",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "n",
+    actions: ["dialog_cancel"],
+  },
+  {
+    sample: "inline-sample-approval",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "esc",
+    actions: ["dialog_cancel"],
+  },
+  {
+    sample: "inline-sample-approval",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "text:hello enter",
+    actions: [],
+    screen: ["Edit src/fetch.ts?"],
+  },
+  {
+    sample: "inline-sample-approval",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "ctrl+c",
+    actions: ["quit"],
+  },
+  // The whole in-flow preview is reachable by key; at the inline width the
+  // 70-column line the dialog wraps is whole.
+  {
+    sample: "inline-sample-approval-long",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "down down down down down",
+    actions: [],
+    screen: [EXACT_LINE, WRAPPED_LINE],
+  },
+  {
+    sample: "inline-sample-approval-long",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "end",
+    actions: [],
+    screen: ["+echo step 249"],
+  },
+  {
+    sample: "inline-sample-approval-long",
+    doc: "inline.tui",
+    inline: true,
+    rows: 15,
+    input: "end",
+    actions: [],
+    screen: ["+echo step 249", "Generating…"],
+  },
+  {
+    sample: "inline-sample-palette",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "text:x",
+    actions: ["palette_query"],
+    value: "modex",
+  },
+  {
+    sample: "inline-sample-palette",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "enter",
+    actions: ["palette_run"],
+    value: "mode",
+  },
+  {
+    sample: "inline-sample-palette",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "esc",
+    actions: ["palette_close"],
+  },
+  {
+    sample: "inline-sample-help",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "",
+    actions: [],
+    screen: ["enter send", "shift/alt+enter new line"],
+  },
+  {
+    sample: "inline-sample-help",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "q",
+    actions: ["help_close"],
+  },
+  {
+    sample: "inline-sample-help",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "esc",
+    actions: ["help_close"],
+  },
+  // Commits print the finished views into the scrollback and leave the
+  // region alone: a user turn, an assistant turn, a tool card, then plain
+  // blocks with no second label.
+  {
+    sample: "inline-sample",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "",
+    steps: [
+      { set: { path: "commit_buf", value: commitData.views[0] } },
+      { commit: { template: "la-turn", with: "commit_buf as msg" } },
+      { set: { path: "commit_buf", value: commitData.views[1] } },
+      { commit: { template: "la-turn", with: "commit_buf as msg" } },
+      { set: { path: "commit_buf", value: commitData.views[2] } },
+      { commit: { template: "la-turn", with: "commit_buf as msg" } },
+      { set: { path: "commit_blocks", value: commitData.blocks } },
+      { commit: { template: "la-blocks", with: "commit_blocks as blocks" } },
+    ],
+    actions: [],
+    screen: ["Message the model"],
+    notScreen: ["Add a retry to the fetch helper"],
+    scrollback: [
+      "You",
+      "Add a retry to the fetch helper",
+      "Assistant",
+      "Tool · edit",
+      "Done. The helper now retries three times.",
+    ],
+    notScrollback: ["Generating…", "Thinking…"],
+    scrollbackGolden: "inline-commit-80.txt",
+  },
+  // A cleared buffer commits nothing.
+  {
+    sample: "inline-sample",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "",
+    steps: [
+      { set: { path: "commit_buf", value: null } },
+      { commit: { template: "la-turn", with: "commit_buf as msg" } },
+    ],
+    actions: [],
+    scrollbackRows: 0,
+  },
 ];
 const scratch = await mkdtemp(join(tmpdir(), "la-tuimark-check-"));
 for (const check of plays) {
@@ -328,11 +650,13 @@ for (const check of plays) {
   }
   const run = tuimark([
     "play",
-    "app.tui",
+    check.doc ?? "app.tui",
     "--data",
     `samples/${check.sample}.json`,
     "--cols",
     String(check.cols ?? 80),
+    ...(check.rows ? ["--rows", String(check.rows)] : []),
+    ...(check.inline ? ["--inline"] : []),
     ...script,
     "--format",
     "json",
@@ -342,6 +666,7 @@ for (const check of plays) {
     const result = JSON.parse(run.out) as {
       events: { action: string; value: unknown }[];
       grid: string[];
+      scrollback?: { grid: string[] };
     };
     const actions = result.events.map((e) => e.action);
     if (JSON.stringify(actions) !== JSON.stringify(check.actions))
@@ -359,6 +684,27 @@ for (const check of plays) {
     for (const text of check.notScreen ?? [])
       if (screen.includes(text))
         failures.push(`${label}: the screen shows ${text} too early`);
+    const scrollbackGrid = result.scrollback?.grid ?? [];
+    const scrollback = scrollbackGrid.join("\n");
+    for (const text of check.scrollback ?? [])
+      if (!scrollback.includes(text))
+        failures.push(`${label}: the scrollback does not hold ${text}`);
+    for (const text of check.notScrollback ?? [])
+      if (scrollback.includes(text))
+        failures.push(`${label}: the scrollback holds ${text}`);
+    if (
+      check.scrollbackRows !== undefined &&
+      scrollbackGrid.length !== check.scrollbackRows
+    )
+      failures.push(
+        `${label}: scrollback has ${scrollbackGrid.length} rows, expected ${check.scrollbackRows}`,
+      );
+    if (check.scrollbackGolden)
+      await matches(
+        join(ui, "golden", check.scrollbackGolden),
+        `${scrollbackGrid.map((row) => row.trimEnd()).join("\n")}\n`,
+        "golden",
+      );
   } catch {
     failures.push(`${label}: ${run.err || run.out}`.trim());
   }
@@ -409,6 +755,8 @@ if (failures.length > 0) {
   console.error(failures.map((f) => `FAIL ${f}`).join("\n"));
   process.exit(1);
 }
+const sampleCount =
+  Object.keys(SAMPLES).length + Object.keys(INLINE_SAMPLES).length;
 console.log(
-  `ok: ${Object.keys(SAMPLES).length} samples validated, ${Object.keys(SAMPLES).length * widths.length} goldens, ${plays.length} play checks${update ? " (updated)" : ""}`,
+  `ok: ${sampleCount} samples validated, ${sampleCount * widths.length + 2} goldens, ${plays.length} play checks${update ? " (updated)" : ""}`,
 );

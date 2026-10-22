@@ -1,0 +1,60 @@
+version: 1
+name: bun_tuimark_inline_session
+intent: |
+    the Tuimark inline client resumes a saved session (--session-db,
+    --resume): the earlier transcript is committed into the scrollback at
+    startup, the header names the session, a new turn continues it, and
+    after exit the resumed history remains on screen.
+target:
+    cmd: ["bun", "specs/tuimark/fixture.ts", "session-inline"]
+    cwd: "${projectRoot}"
+terminal:
+    cols: 100
+    rows: 60
+    alternateScreen: forbid
+steps:
+    - wait:
+        screen:
+            contains: "Message the model"
+        timeoutMs: 20000
+    - wait:
+        screen:
+            contains: "stream complete"
+        timeoutMs: 5000
+    - wait:
+        screen:
+            contains: "stream the first reply"
+        timeoutMs: 5000
+    - wait:
+        screen:
+            contains: "session"
+        timeoutMs: 5000
+    - snapshot: resumed
+    - type: "stream a second reply"
+    - press: enter
+    - wait:
+        screen:
+            contains: "stream a second reply"
+        timeoutMs: 15000
+    - wait:
+        screen:
+            contains: "Ready"
+        timeoutMs: 15000
+    - snapshot: continued
+    - press: ctrl+c
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 5000
+outcomes:
+    - id: tuimark_inline_session
+      description: a saved session is committed at startup and continued by the inline client
+      verify:
+        screen:
+            contains: "stream the first reply"
+    - id: tuimark_inline_session_exits
+      description: the inline client exits cleanly
+      verify:
+        process:
+            exitCode: 0
+contractHash: sha256:ae105c52fbda4a1eff8f3e8b84710962e2bd82f6474ad77d4b67409acf4ee46f

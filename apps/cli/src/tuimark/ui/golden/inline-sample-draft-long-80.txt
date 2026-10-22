@@ -1,0 +1,13 @@
+=== grid 80x12 ===
+ Local Agent         qwen3-coder:30b  build          ctx 9.6k/32k  ████░░░░░░░░ 
+╔══════════════════════════════════════════════════════════════════════════════╗
+║ draft line 5                                                                 ║
+║ draft line 6                                                                 ║
+║ draft line 7                                                                 ║
+║ draft line 8                                                                 █
+║ draft line 9                                                                 █
+║ draft line 10                                                                █
+║ draft line 11                                                                █
+║ draft line 12                                                                █
+╚══════════════════════════════════════════════════════════════════════════════╝
+ Ready · /help for commands   esc cancel  ^P commands  ctrl+c quit              

@@ -1,6 +1,9 @@
 // Deterministic loopback Ollama for the Tuimark client specs (--ui tuimark).
 //
-//   bun specs/tuimark/fixture.ts chat|edit-approve|edit-deny|session
+//   bun specs/tuimark/fixture.ts chat|edit-approve|edit-deny|session[-inline]
+//
+// A mode ending in -inline runs the same flow with --mode inline (the opt-in
+// Tuimark inline client); its port is the fullscreen one plus 100.
 //
 // The reply depends only on the last message, so one run can hold several turns:
 //
@@ -22,15 +25,18 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const mode = Bun.argv[2] ?? "chat";
+const rawMode = Bun.argv[2] ?? "chat";
+const inline = rawMode.endsWith("-inline");
+const mode = inline ? rawMode.slice(0, -"-inline".length) : rawMode;
 const model = "fixture-model";
-const port = {
+const basePort = {
   chat: 19210,
   "edit-approve": 19211,
   "edit-deny": 19212,
   session: 19213,
 }[mode];
-if (!port) throw new Error(`unknown mode: ${mode}`);
+if (!basePort) throw new Error(`unknown mode: ${rawMode}`);
+const port = inline ? basePort + 100 : basePort;
 
 const workspaceRoot = await mkdtemp(join(tmpdir(), "local-agent-tuimark-"));
 await writeFile(join(workspaceRoot, "notes.txt"), "before\n");
@@ -192,7 +198,15 @@ if (mode === "session") {
 }
 
 const child = Bun.spawn(
-  [process.execPath, ...baseArgs, "--mode", "fullscreen", "--ui", "tuimark", ...extraArgs],
+  [
+    process.execPath,
+    ...baseArgs,
+    "--mode",
+    inline ? "inline" : "fullscreen",
+    "--ui",
+    "tuimark",
+    ...extraArgs,
+  ],
   { stdin: "inherit", stdout: "inherit", stderr: "inherit", env },
 );
 

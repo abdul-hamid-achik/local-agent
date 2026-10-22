@@ -1,0 +1,56 @@
+version: 1
+name: bun_tuimark_inline_edit_approved
+intent: |
+    the Tuimark inline client shows the proposed edit in an in-flow approval
+    (no modal) inside the live region, applies the exact edit only after y
+    once the approval is armed, stays readable after a resize, and commits
+    the tool receipt and the reply into the scrollback.
+target:
+    cmd: ["bun", "specs/tuimark/fixture.ts", "edit-approve-inline"]
+    cwd: "${projectRoot}"
+terminal:
+    cols: 100
+    rows: 40
+    alternateScreen: forbid
+steps:
+    - wait:
+        screen:
+            contains: "Message the model"
+        timeoutMs: 15000
+    - type: "edit the notes"
+    - press: enter
+    - wait:
+        screen:
+            contains: "Edit notes.txt?"
+        timeoutMs: 15000
+    - snapshot: approval
+    - resize:
+        cols: 70
+        rows: 24
+    - wait:
+        screen:
+            contains: "Edit notes.txt?"
+        timeoutMs: 5000
+    - snapshot: approval_narrow
+    - wait:
+        screen:
+            contains: "Waiting for approval · y allow"
+        timeoutMs: 5000
+    - press: y
+    - wait:
+        screen:
+            contains: "edit applied"
+        timeoutMs: 15000
+    - snapshot: applied
+    - press: ctrl+c
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 5000
+outcomes:
+    - id: tuimark_inline_edit_approved
+      description: approving the in-flow proposal applies the exact edit in the workspace
+      verify:
+        process:
+            exitCode: 0
+contractHash: sha256:f98e1693388dc33c4f35659bc1dfaeebab23e72be5e955b4d547558efb21cec6

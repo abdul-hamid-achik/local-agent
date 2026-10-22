@@ -1,0 +1,20 @@
+=== grid 120x19 ===
+ Local Agent           Ollama / loopback  qwen3-coder:30b  build            session a1b2c3d  ctx 9.6k/32k  ████░░░░░░░░ 
+                                ╭─ Keys ───────────────────────────────────────────────╮                                
+                                │                                                      │                                
+                                │  ? close help                                        │                                
+                                │  y allow                                             │                                
+                                │  n deny                                              │                                
+                                │  pgup/pgdn scroll                                    │                                
+                                │  home/end top/end                                    │                                
+                                │  esc cancel                                          │                                
+                                │  ^P commands                                         │                                
+                                │  ctrl+c quit                                         │                                
+                                │  ↑/↓ history                                         │                                
+                                │  pgup/pgdn scroll                                    │                                
+                                │  enter send                                          │                                
+                                │  shift/alt+enter new line                            │                                
+╭───────────────────────────────│                                                      │───────────────────────────────╮
+│ Message the model             ╰──────────────────────────────────────────────────────╯                               │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+ Ready · /help for commands                                                                                             

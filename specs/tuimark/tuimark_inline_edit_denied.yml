@@ -1,0 +1,65 @@
+version: 1
+name: bun_tuimark_inline_edit_denied
+intent: |
+    the Tuimark inline client leaves the file untouched when the in-flow
+    approval is denied, with n and with esc, the composer takes input again
+    afterwards, and ctrl+c quits while an approval is open.
+target:
+    cmd: ["bun", "specs/tuimark/fixture.ts", "edit-deny-inline"]
+    cwd: "${projectRoot}"
+terminal:
+    cols: 100
+    rows: 40
+    alternateScreen: forbid
+steps:
+    - wait:
+        screen:
+            contains: "Message the model"
+        timeoutMs: 15000
+    - type: "edit the notes"
+    - press: enter
+    - wait:
+        screen:
+            contains: "Edit notes.txt?"
+        timeoutMs: 15000
+    - press: n
+    - wait:
+        screen:
+            contains: "edit denied"
+        timeoutMs: 15000
+    - snapshot: denied_with_n
+    - type: "edit it again"
+    - press: enter
+    - wait:
+        screen:
+            contains: "Edit notes.txt?"
+        timeoutMs: 15000
+    - press: esc
+    - wait:
+        screen:
+            contains: "Ready"
+        timeoutMs: 15000
+    - type: "edit once more"
+    - wait:
+        screen:
+            contains: "edit once more"
+        timeoutMs: 5000
+    - snapshot: denied_with_esc
+    - press: enter
+    - wait:
+        screen:
+            contains: "Edit notes.txt?"
+        timeoutMs: 15000
+    - snapshot: quit_with_approval_open
+    - press: ctrl+c
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 5000
+outcomes:
+    - id: tuimark_inline_edit_denied
+      description: denying the in-flow proposal, with n and with esc, leaves the file unchanged
+      verify:
+        process:
+            exitCode: 0
+contractHash: sha256:9c2f0c467442f77437387801479526554881ba25b5857679ffef1494aa6b8d94

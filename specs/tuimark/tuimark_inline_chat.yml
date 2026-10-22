@@ -1,0 +1,52 @@
+version: 1
+name: bun_tuimark_inline_chat
+intent: |
+    the opt-in Tuimark inline client (--ui tuimark --mode inline) streams a
+    markdown reply in its live region without the alternate screen, commits
+    the finished turns into the terminal's own scrollback, and on exit the
+    region is gone but the committed prompt and reply remain on screen.
+target:
+    cmd: ["bun", "specs/tuimark/fixture.ts", "chat-inline"]
+    cwd: "${projectRoot}"
+terminal:
+    cols: 100
+    rows: 40
+    alternateScreen: forbid
+steps:
+    - wait:
+        screen:
+            contains: "Message the model"
+        timeoutMs: 15000
+    - snapshot: idle
+    - type: "stream a reply"
+    - press: enter
+    - wait:
+        screen:
+            contains: "bounded retry"
+        timeoutMs: 15000
+    - wait:
+        screen:
+            contains: "stream complete"
+        timeoutMs: 15000
+    - wait:
+        screen:
+            contains: "Ready"
+        timeoutMs: 5000
+    - snapshot: reply_done
+    - press: ctrl+c
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 5000
+outcomes:
+    - id: tuimark_inline_chat_scrollback
+      description: after exit, the committed prompt and reply remain as scrollback rows
+      verify:
+        screen:
+            contains: "stream complete"
+    - id: tuimark_inline_chat_exits
+      description: the inline client exits cleanly
+      verify:
+        process:
+            exitCode: 0
+contractHash: sha256:00c64f727dec612cda6df88fdf5d23321bca1f681b54c72764fd384333e3000d

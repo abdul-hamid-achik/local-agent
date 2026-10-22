@@ -1,0 +1,48 @@
+version: 1
+name: bun_tuimark_inline_cancel
+intent: |
+    cancelling a slow reply in the Tuimark inline client with esc commits
+    the partial tail that had arrived: after the client exits, the partial
+    text remains in the scrollback, while the live region (status, spinner)
+    is gone.
+target:
+    cmd: ["bun", "specs/tuimark/fixture.ts", "chat-inline"]
+    cwd: "${projectRoot}"
+terminal:
+    cols: 100
+    rows: 40
+    alternateScreen: forbid
+steps:
+    - wait:
+        screen:
+            contains: "Message the model"
+        timeoutMs: 15000
+    - type: "slow please"
+    - press: enter
+    - wait:
+        screen:
+            contains: "this takes a while"
+        timeoutMs: 15000
+    - press: esc
+    - wait:
+        screen:
+            contains: "Cancelled"
+        timeoutMs: 5000
+    - snapshot: cancelled
+    - press: ctrl+c
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 5000
+outcomes:
+    - id: tuimark_inline_cancel_tail
+      description: the cancelled reply's partial tail remains in the scrollback after exit
+      verify:
+        screen:
+            contains: "this takes a while"
+    - id: tuimark_inline_cancel_exits
+      description: the inline client exits cleanly
+      verify:
+        process:
+            exitCode: 0
+contractHash: sha256:a776e80a0766b36936aa2b3744cf99ce869c96b4db71b62b585507cbc5093c54

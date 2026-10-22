@@ -80,11 +80,13 @@ a child and draws the whole screen from `apps/cli/src/tuimark/ui/app.tui`.
   `<textarea>` and the reply streams with the append write. If no binary can be
   found and `--ui` was not given, the Vue client starts with a line on stderr;
   an explicit `--ui tuimark` fails instead.
-- `--mode inline` and the headless flags use the Vue client unless `--ui tuimark`
-  is explicit, which refuses them: the Tuimark client is fullscreen only so far.
-  Its inline presentation is the next step: finished blocks are committed into
-  the terminal's own scrollback (`tuimark host --inline`, the SDK `commit()`),
-  with the composer, the live tail, and approvals in a small live region.
+- Tuimark inline is opt-in: `--ui tuimark --mode inline` runs
+  `apps/cli/src/tuimark/ui/inline.tui` under `tuimark host --inline`. Finished
+  blocks are committed into the terminal's own scrollback (the SDK `commit()`)
+  as they close; a small live region below the cursor holds the streaming
+  tail, an in-flow approval (no modal: `y` allows, `n`/`esc` deny), the
+  composer, and the status. A bare `--mode inline` still uses the Vue client,
+  and the headless flags refuse `--ui tuimark`.
 - `vendor/tuimark/` holds the SDK tarball (`file:` dependency) until its release
   is on the registry; see the README there.
 - Composer: `enter` sends, `shift+enter` or `alt+enter` start a new line, and a

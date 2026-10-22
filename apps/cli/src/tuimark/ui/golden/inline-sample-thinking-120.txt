@@ -1,0 +1,11 @@
+=== grid 120x10 ===
+ Local Agent           Ollama / loopback  qwen3-coder:30b  build            session a1b2c3d  ctx 9.6k/32k  ████░░░░░░░░ 
+Thinking…                                                                                                               
+  I should read src/fetch.ts first to see how get() is written.                                                         
+  Then wrap the call: three attempts, exponential backoff,                                                              
+  and rethrow the last error so callers still see it.                                                                   
+                                                                                                                        
+╔══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
+║ Generating…                                                                                                          ║
+╚══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
+ ⠋  Generating…   esc cancel  ^P commands  ctrl+c quit  ↑/↓ history  pgup/pgdn scroll                                   
