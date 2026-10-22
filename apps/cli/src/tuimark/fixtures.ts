@@ -10,7 +10,7 @@ import {
   thinkingView,
   ViewBuilder,
 } from "#cli/tuimark/blocks";
-import { filterPalette } from "#cli/tuimark/commands";
+import { filterPalette, slashMatches, slashRows } from "#cli/tuimark/commands";
 import {
   APPROVAL_STATUS,
   APPROVAL_TRUNCATED_STATUS,
@@ -361,7 +361,15 @@ export function longDraftSample(): Store {
 /** The help overlay. */
 export function helpSample(): Store {
   const { store } = base();
-  store.help = { open: true };
+  store.help = { ...store.help, open: true };
+  return store;
+}
+
+/** A half-typed command: the `/` popup over the composer, first match chosen. */
+export function slashSample(): Store {
+  const { store } = base();
+  store.draft = "/m";
+  store.slash = { open: true, rows: slashRows(slashMatches("/m") ?? [], 0) };
   return store;
 }
 
@@ -379,6 +387,7 @@ export const SAMPLES = {
   "sample-streaming": streamingSample,
   "sample-palette": paletteSample,
   "sample-help": helpSample,
+  "sample-slash": slashSample,
   "sample-draft": draftSample,
   "sample-draft-long": longDraftSample,
 } as const;
@@ -390,6 +399,11 @@ export function toInline(store: Store): Store {
   const clone = structuredClone(store);
   clone.messages = [];
   clone.earlier = { n: 0 };
+  // The inline palette never lists load-earlier (its history is scrollback).
+  const found = filterPalette(clone.palette.query, true);
+  clone.found = { any: found.length > 0, items: found };
+  if (!found.some((row) => row.id === clone.palette.cur))
+    clone.palette.cur = found[0]?.id ?? "";
   return clone;
 }
 
@@ -421,6 +435,7 @@ export const INLINE_SAMPLES = {
   "inline-sample-approval-long": inlineLongApprovalSample,
   "inline-sample-palette": () => toInline(paletteSample()),
   "inline-sample-help": () => toInline(helpSample()),
+  "inline-sample-slash": () => toInline(slashSample()),
   "inline-sample-draft-long": () => toInline(longDraftSample()),
 } as const;
 

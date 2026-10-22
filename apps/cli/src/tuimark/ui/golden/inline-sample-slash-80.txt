@@ -1,0 +1,12 @@
+=== grid 80x11 ===
+ Local Agent         qwen3-coder:30b  build          ctx 9.6k/32k  ████░░░░░░░░ 
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ › /mode plan reads only · build can edit                                     │
+│   /mouse toggle mouse reporting (fullscreen)                                 │
+│   /mcp show connected MCP servers and their tools                            │
+│ up/down choose · tab complete · enter completes or runs · esc close          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╔══════════════════════════════════════════════════════════════════════════════╗
+║ /m                                                                           ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+ Ready · /help for commands   ^P commands  ctrl+c quit  pgup/pgdn scroll        

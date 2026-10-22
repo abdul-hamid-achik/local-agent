@@ -43,6 +43,8 @@ import {
   MOUSE_INLINE_STATUS,
   paletteCommand,
   runSlash,
+  slashMatches,
+  slashRows,
   type Theme,
 } from "#cli/tuimark/commands";
 import {
@@ -150,6 +152,18 @@ export class TuimarkClient {
   private recall?: number;
   /** The draft that recalling started from, back when the user comes down again. */
   private recalledFrom = "";
+  // the `/` popup over the composer, derived from the draft on every edit
+  /** Whether the popup is showing (the store's `slash.open`). */
+  private slashOpen = false;
+  /** The chosen popup row, an index into the current matches. */
+  private slashSel = 0;
+  /**
+   * Esc dismissed the popup for this draft: it stays closed while the
+   * draft still starts with "/", and may open again for the next one.
+   */
+  private slashDismissed = false;
+  /** The last popup state written, so an unchanged one is not rewritten. */
+  private slashSig = "[]";
   private intent: Intent;
   /** Session theme (`/theme`); written to the host's reserved `@theme` path. */
   private theme: Theme = "auto";
@@ -223,6 +237,7 @@ export class TuimarkClient {
       sessionId: session?.state.publicId,
       mcpServers: mcp.length,
       workspace: this.options.workspace?.root ?? "",
+      inline: this.inline,
       // The inline snapshot below always starts empty; a resumed session is not.
       empty: this.transcript.length === 0,
       // Inline, the region never holds history: attach() commits it instead.
@@ -236,6 +251,14 @@ export class TuimarkClient {
   attach(ui: UiHost): void {
     this.ui = ui;
     ui.on("send", (ev) => this.onSend(ev));
+    // The composer's every edit: the `/` popup follows the draft. Most
+    // edits change nothing (the sync writes only a changed popup).
+    ui.on("typed", (ev) => this.onTyped(ev));
+    ui.on("slash_next", (ev) => this.slashMove(ev, 1));
+    ui.on("slash_prev", (ev) => this.slashMove(ev, -1));
+    ui.on("slash_complete", (ev) => this.slashComplete(ev));
+    ui.on("slash_close", () => this.slashEsc());
+    ui.on("mode_toggle", () => this.modeToggle());
     ui.on("history_prev", (ev) => this.recallPrev(ev));
     ui.on("history_next", (ev) => this.recallNext(ev));
     ui.on("cancel", () => {
@@ -250,28 +273,7 @@ export class TuimarkClient {
     // built-in that ends the session itself and never reaches the parent,
     // so a handler for it would never run (proven against the real host).
     // Answering "quit" from here is what ends the session.
-    ui.on("quit_request", async () => {
-      // Two stages: a non-empty draft is cleared first; only an empty
-      // composer quits (mid-turn included, as before).
-      const draft = await ui
-        .get("draft")
-        .then((result) => result.value)
-        .catch(() => "");
-      if (typeof draft === "string" && draft !== "") {
-        await this.write([
-          { path: "draft", value: "" },
-          { path: "status", value: "Draft cleared · ctrl+c again to quit" },
-        ]);
-        return undefined;
-      }
-      this.quitting = true;
-      this.queued = undefined;
-      // Inline, the partial reply is printed before the session ends: once
-      // "quit" is returned the host is gone and nothing can be committed.
-      if (this.inline) await this.commitStreamTail();
-      this.abort();
-      return "quit";
-    });
+    ui.on("quit_request", () => this.quitRequest());
     ui.on("load_earlier", () => this.loadEarlier());
     ui.on("dialog_confirm", async () => {
       if (this.armed) return this.decide?.(true);
@@ -630,10 +632,159 @@ export class TuimarkClient {
     await this.tail;
   }
 
+  /**
+   * The two-stage quit, shared by ctrl+c and the palette's Quit row: a
+   * non-empty draft is cleared first; only an empty composer quits
+   * (mid-turn included, as before). Answering "quit" ends the session.
+   */
+  private async quitRequest(): Promise<"quit" | undefined> {
+    const ui = this.ui;
+    if (!ui) return undefined;
+    const draft = await ui
+      .get("draft")
+      .then((result) => result.value)
+      .catch(() => "");
+    if (typeof draft === "string" && draft !== "") {
+      await this.write([
+        { path: "draft", value: "" },
+        ...this.closeSlash(),
+        { path: "status", value: "Draft cleared · ctrl+c again to quit" },
+      ]);
+      return undefined;
+    }
+    this.quitting = true;
+    this.queued = undefined;
+    // Inline, the partial reply is printed before the session ends: once
+    // "quit" is returned the host is gone and nothing can be committed.
+    if (this.inline) await this.commitStreamTail();
+    this.abort();
+    return "quit";
+  }
+
+  // --------------------------------------------------------------- the `/` popup
+  //
+  // The popup is derived state: the composer's `on:change` carries the new
+  // draft on every edit, and the popup is open exactly while that draft is
+  // a half-typed command (see slashMatches) with at least one match — and
+  // esc has not dismissed it for this draft, and no approval is open (the
+  // composer is disabled then inline, and approval force-closes it
+  // fullscreen; the guard here keeps a stray edit from reopening it).
+  // Completion: tab always completes the chosen row into the draft.
+  // Enter completes only while the popup is open AND the chosen row's
+  // completion differs from what was typed ("/mo" -> "/mode "); when the
+  // typed text already is the chosen command ("/mcp"), enter sends it.
+
+  /** The writes that close the popup, or none when it is already closed. */
+  private closeSlash(): Write[] {
+    this.slashOpen = false;
+    this.slashSel = 0;
+    const sig = "[]";
+    if (this.slashSig === sig) return [];
+    this.slashSig = sig;
+    return [{ path: "slash", value: { open: false, rows: [] } }];
+  }
+
+  /**
+   * Recomputes the popup for `draft` and returns the write it needs (none
+   * when nothing changed: most keystrokes). Typing resets the choice to
+   * the first match unless `keepSel` (the arrow keys moving it).
+   */
+  private syncSlash(draft: string, keepSel = false): Write[] {
+    if (!draft.startsWith("/")) this.slashDismissed = false;
+    const matches =
+      this.proposal || this.slashDismissed ? undefined : slashMatches(draft);
+    if (!matches || matches.length === 0) return this.closeSlash();
+    this.slashOpen = true;
+    this.slashSel = keepSel
+      ? Math.max(0, Math.min(this.slashSel, matches.length - 1))
+      : 0;
+    const rows = slashRows(matches, this.slashSel);
+    const sig = JSON.stringify(rows);
+    if (this.slashSig === sig) return [];
+    this.slashSig = sig;
+    return [{ path: "slash", value: { open: true, rows } }];
+  }
+
+  /** The chosen command for a draft, when the popup is open over it. */
+  private slashChoice(draft: string) {
+    if (!this.slashOpen) return undefined;
+    const matches = slashMatches(draft);
+    if (!matches || matches.length === 0) return undefined;
+    return matches[Math.min(this.slashSel, matches.length - 1)];
+  }
+
+  private async onTyped(ev: HostEvent): Promise<void> {
+    const draft = typeof ev.value === "string" ? ev.value : "";
+    const writes = this.syncSlash(draft);
+    if (writes.length > 0) await this.write(writes);
+  }
+
+  /** Up and down while the popup is open: the choice moves, clamped. */
+  private async slashMove(ev: HostEvent, by: number): Promise<void> {
+    const draft = typeof ev.value === "string" ? ev.value : "";
+    const matches = slashMatches(draft);
+    if (!matches || matches.length === 0) return;
+    this.slashSel = Math.max(
+      0,
+      Math.min(this.slashSel + by, matches.length - 1),
+    );
+    const writes = this.syncSlash(draft, true);
+    if (writes.length > 0) await this.write(writes);
+  }
+
+  /** Tab: the chosen command replaces the half-typed draft; popup closes. */
+  private async slashComplete(ev: HostEvent): Promise<void> {
+    const draft = typeof ev.value === "string" ? ev.value : "";
+    const choice = this.slashChoice(draft);
+    if (!choice) return;
+    await this.write([
+      { path: "draft", value: choice.insert },
+      ...this.closeSlash(),
+    ]);
+  }
+
+  /** Esc while the popup is open: it closes, the draft is untouched. */
+  private async slashEsc(): Promise<void> {
+    this.slashDismissed = true;
+    const writes = this.closeSlash();
+    if (writes.length > 0) await this.write(writes);
+  }
+
+  /**
+   * Shift+tab: plan <-> build, through the same `/mode` path, so the
+   * header and the status change exactly as the command changes them.
+   * Refused while a turn runs, as `/mode` is; a queued message therefore
+   * still starts under the mode in force when its turn begins.
+   */
+  private async modeToggle(): Promise<void> {
+    if (this.proposal) return;
+    if (this.busy) {
+      await this.write([{ path: "status", value: BUSY_STATUS }]);
+      return;
+    }
+    await this.runCommand(
+      this.intent === "plan" ? "/mode build" : "/mode plan",
+    );
+  }
+
   // --------------------------------------------------------------------- actions
 
   private async onSend(ev: HostEvent): Promise<void> {
     const raw = typeof ev.value === "string" ? ev.value : "";
+    // Enter over an open popup completes instead of sending when the
+    // chosen row's completion differs from the typed text; a fully
+    // typed command ("/mcp") sends. See the popup rules above.
+    const choice = this.slashChoice(raw);
+    if (choice && choice.insert !== raw) {
+      await this.write([
+        { path: "draft", value: choice.insert },
+        ...this.closeSlash(),
+      ]);
+      return;
+    }
+    // Any real send leaves the popup behind with the draft.
+    const closed = this.closeSlash();
+    if (closed.length > 0) await this.write(closed);
     // A command is one line: a pasted block that starts with a slash (a path, a
     // regex) is a message.
     const command = raw.trim();
@@ -755,7 +906,7 @@ export class TuimarkClient {
     // An open approval owns the keys (fullscreen's modal traps ctrl+p; the
     // in-flow approval does not, so the palette must not open over it).
     if (this.proposal) return;
-    const found = filterPalette("");
+    const found = filterPalette("", this.inline);
     await this.write([
       { path: "found", value: { any: found.length > 0, items: found } },
       {
@@ -767,21 +918,36 @@ export class TuimarkClient {
 
   private async paletteQuery(ev: HostEvent): Promise<void> {
     const query = typeof ev.value === "string" ? ev.value : "";
-    const found = filterPalette(query);
+    const found = filterPalette(query, this.inline);
+    // A new query is a new list: the cursor goes back to the first match
+    // instead of resting on a row the filter may have removed.
     await this.write([
       { path: "found", value: { any: found.length > 0, items: found } },
+      { path: "palette.cur", value: found[0]?.id ?? "" },
     ]);
   }
 
-  private async paletteRun(): Promise<void> {
+  private async paletteRun(): Promise<"quit" | undefined> {
     const ui = this.ui;
-    if (!ui) return;
+    if (!ui) return undefined;
     const cur = (await ui.get("palette.cur")).value;
     const query = (await ui.get("palette.query")).value;
-    const rows = filterPalette(typeof query === "string" ? query : "");
+    const rows = filterPalette(
+      typeof query === "string" ? query : "",
+      this.inline,
+    );
     const id = rows.find((row) => row.id === cur)?.id ?? rows[0]?.id;
-    if (id === undefined) return;
+    if (id === undefined) return undefined;
     await this.write([{ path: "palette.open", value: false }]);
+    // The key rows run their key's handler, busy or not, exactly as the
+    // key would: Quit is the two-stage ctrl+c (a draft is cleared first),
+    // and load-earlier widens the window like ctrl+o (fullscreen only:
+    // the inline filter never lists it).
+    if (id === "quit") return this.quitRequest();
+    if (id === "load-earlier") {
+      await this.loadEarlier();
+      return undefined;
+    }
     const command = paletteCommand(id);
     // The help overlay is harmless while a turn runs; everything else waits.
     if (this.busy && command !== "/help") {
@@ -824,6 +990,7 @@ export class TuimarkClient {
       const writes: Write[] = [
         { path: "palette.open", value: false },
         { path: "help.open", value: false },
+        ...this.closeSlash(),
         { path: "approval", value: approval },
         { path: "status", value: APPROVAL_WAIT_STATUS },
       ];

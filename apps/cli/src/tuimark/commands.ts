@@ -97,6 +97,114 @@ export function runSlash(text: string, state: CommandState): CommandOutcome {
 
 export const BUSY_STATUS = "Busy · wait for the current turn to finish";
 
+// ------------------------------------------------------------ the slash catalog
+
+/**
+ * The one list of slash commands: the parser above, the `/` popup over the
+ * composer and the help overlay's command section all read it (the palette
+ * below is a separate, coarser list of actions, some of which stand for one
+ * of these). A command `runSlash` does not know must not be listed here.
+ */
+export interface SlashCommand {
+  /** The command as typed, e.g. "/mode". Also the row key in the store. */
+  name: string;
+  /** What the help overlay shows, arguments included, e.g. "/mode plan|build". */
+  usage: string;
+  /** One line saying what it does (popup row and help row). */
+  description: string;
+  /**
+   * What completing the command puts in the draft. A command that needs an
+   * argument completes to its name plus a space, ready for the argument.
+   */
+  insert: string;
+}
+
+export const SLASH_COMMANDS: readonly SlashCommand[] = [
+  {
+    name: "/mode",
+    usage: "/mode plan|build",
+    description: "plan reads only · build can edit",
+    insert: "/mode ",
+  },
+  {
+    name: "/theme",
+    usage: "/theme dark|light|auto",
+    description: "set the session theme",
+    insert: "/theme ",
+  },
+  {
+    name: "/mouse",
+    usage: "/mouse on|off",
+    description: "toggle mouse reporting (fullscreen)",
+    insert: "/mouse ",
+  },
+  {
+    name: "/mcp",
+    usage: "/mcp",
+    description: "show connected MCP servers and their tools",
+    insert: "/mcp",
+  },
+  {
+    name: "/help",
+    usage: "/help",
+    description: "show the commands and the keys",
+    insert: "/help",
+  },
+];
+
+/**
+ * The commands a draft could still become, or undefined when the draft is
+ * not a half-typed command at all. A command draft is one line starting
+ * with "/" and holding no whitespace yet: once an argument starts (or a
+ * pasted block begins with a slash) there is nothing to complete. An empty
+ * result means no command starts this way ("/zzz").
+ */
+export function slashMatches(draft: string): SlashCommand[] | undefined {
+  if (!draft.startsWith("/") || /\s/.test(draft)) return undefined;
+  const typed = draft.toLowerCase();
+  return SLASH_COMMANDS.filter((command) => command.name.startsWith(typed));
+}
+
+/** One row of the `/` popup: the name, its line, and the selection flag. */
+export interface SlashRow {
+  id: string;
+  cmd: string;
+  desc: string;
+  sel: boolean;
+  /** "›" on the chosen row, "" on the rest (selection must read as text). */
+  mark: string;
+}
+
+/** Popup rows for a match list, the row at `selected` marked. */
+export function slashRows(
+  matches: readonly SlashCommand[],
+  selected: number,
+): SlashRow[] {
+  return matches.map((command, index) => ({
+    id: command.name,
+    cmd: command.name,
+    desc: command.description,
+    sel: index === selected,
+    mark: index === selected ? "›" : "",
+  }));
+}
+
+/** One row of the help overlay's command section (usage and its line). */
+export interface HelpRow {
+  id: string;
+  cmd: string;
+  desc: string;
+}
+
+/** Every slash command as a help row, in catalog order. */
+export function helpRows(): HelpRow[] {
+  return SLASH_COMMANDS.map((command) => ({
+    id: command.name,
+    cmd: command.usage,
+    desc: command.description,
+  }));
+}
+
 // ------------------------------------------------------------------ the palette
 
 export interface PaletteItem {
@@ -120,18 +228,32 @@ export const PALETTE: readonly PaletteItem[] = [
   { id: "mouse-on", label: "Mouse: on", hint: "/mouse on" },
   { id: "mouse-off", label: "Mouse: off", hint: "/mouse off" },
   { id: "mcp", label: "MCP servers", hint: "/mcp" },
-  { id: "help", label: "Help and keys", hint: "/help" },
+  { id: "help", label: "Help, commands and keys", hint: "/help" },
+  // Two rows stand for keys, not slash commands: the controller runs them
+  // itself (the hint only names the key that does the same). Load-earlier
+  // is fullscreen only: inline history is the terminal's scrollback.
+  { id: "load-earlier", label: "Load earlier messages", hint: "ctrl+o" },
+  { id: "quit", label: "Quit", hint: "ctrl+c" },
 ];
 
-/** The slash command a palette row stands for. */
+/**
+ * The slash command a palette row stands for. The key rows (quit,
+ * load-earlier) stand for no command: undefined, and the controller
+ * special-cases their ids before it asks.
+ */
 export function paletteCommand(id: string): string | undefined {
-  return PALETTE.find((item) => item.id === id)?.hint;
+  const hint = PALETTE.find((item) => item.id === id)?.hint;
+  return hint?.startsWith("/") ? hint : undefined;
 }
 
-/** Rows whose label or command contains every word of the query. */
-export function filterPalette(query: string): PaletteItem[] {
+/**
+ * Rows whose label or command contains every word of the query. `inline`
+ * drops the rows that presentation cannot run (load-earlier).
+ */
+export function filterPalette(query: string, inline = false): PaletteItem[] {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
   return PALETTE.filter((item) => {
+    if (inline && item.id === "load-earlier") return false;
     const haystack = `${item.label} ${item.hint}`.toLowerCase();
     return words.every((word) => haystack.includes(word));
   });

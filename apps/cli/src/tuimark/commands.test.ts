@@ -3,8 +3,12 @@ import {
   BUSY_STATUS,
   filterPalette,
   HELP_STATUS,
+  helpRows,
   paletteCommand,
   runSlash,
+  SLASH_COMMANDS,
+  slashMatches,
+  slashRows,
 } from "#cli/tuimark/commands";
 
 const state = { intent: "build" as const, mcp: { servers: 0, tools: 0 } };
@@ -98,4 +102,63 @@ test("the palette carries the theme and mouse rows", () => {
   expect(paletteCommand("mouse-off")).toBe("/mouse off");
   expect(HELP_STATUS).toContain("/theme dark|light|auto");
   expect(HELP_STATUS).toContain("/mouse on|off");
+});
+
+test("the slash catalog lists exactly the commands the parser knows", () => {
+  expect(SLASH_COMMANDS.map((c) => c.name)).toEqual([
+    "/mode",
+    "/theme",
+    "/mouse",
+    "/mcp",
+    "/help",
+  ]);
+  for (const command of SLASH_COMMANDS) {
+    expect(runSlash(command.name, state).status).not.toContain(
+      "Unknown command",
+    );
+    expect(command.insert.startsWith(command.name)).toBe(true);
+    expect(command.description.length).toBeGreaterThan(0);
+  }
+  expect(slashMatches("/")?.map((c) => c.name)).toEqual(
+    SLASH_COMMANDS.map((c) => c.name),
+  );
+  expect(slashMatches("/m")?.map((c) => c.name)).toEqual([
+    "/mode",
+    "/mouse",
+    "/mcp",
+  ]);
+  expect(slashMatches("/MO")?.map((c) => c.name)).toEqual(["/mode", "/mouse"]);
+  expect(slashMatches("/zzz")).toEqual([]);
+  // Not half-typed commands: an argument started, a pasted block, plain text.
+  expect(slashMatches("/mode ")).toBeUndefined();
+  expect(slashMatches("/mode plan")).toBeUndefined();
+  expect(slashMatches("/a\nb")).toBeUndefined();
+  expect(slashMatches("hello")).toBeUndefined();
+  expect(slashMatches("")).toBeUndefined();
+  const rows = slashRows(slashMatches("/m") ?? [], 1);
+  expect(rows.map((r) => [r.cmd, r.sel, r.mark])).toEqual([
+    ["/mode", false, ""],
+    ["/mouse", true, "›"],
+    ["/mcp", false, ""],
+  ]);
+  expect(helpRows().map((r) => r.cmd)).toEqual([
+    "/mode plan|build",
+    "/theme dark|light|auto",
+    "/mouse on|off",
+    "/mcp",
+    "/help",
+  ]);
+});
+
+test("the palette's key rows: quit everywhere, load-earlier fullscreen only", () => {
+  const all = filterPalette("").map((r) => r.id);
+  expect(all).toContain("quit");
+  expect(all).toContain("load-earlier");
+  const inline = filterPalette("", true).map((r) => r.id);
+  expect(inline).toContain("quit");
+  expect(inline).not.toContain("load-earlier");
+  expect(filterPalette("earlier", true)).toEqual([]);
+  // The key rows stand for no slash command.
+  expect(paletteCommand("quit")).toBeUndefined();
+  expect(paletteCommand("load-earlier")).toBeUndefined();
 });

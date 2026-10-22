@@ -1,31 +1,31 @@
 === grid 80x30 ===
  Local Agent         qwen3-coder:30b  build          ctx 9.6k/32k  ████░░░░░░░░ 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ You                                                                          │
-│ Add a retry to the fetch helper and show me the result.                      │
-│                                                                              │
-│ Assistant                                                                    │
-│ Sure. I will wrap the call in a bounded retry with backoff:                  │
-│  ts       ╭─ Keys ───────────────────────────────────────────────╮           │
-│  export as│                                                      │           │
-│    // expo│  ? close help                                        │           │
-│    for (le│  pgup/pgdn scroll                                    │           │
-│      try {│  home/end top/end                                    │           │
-│      catch│  ^P commands                                         │           │
-│    }      │  esc cancel                                          │           │
-│  }        │  ctrl+c quit                                         │           │
+│ You       ╭─ Help ───────────────────────────────────────────────╮           │
+│ Add a retr│                                                      │           │
+│           │  ? close help                                        │           │
+│ Assistant │                                                      │           │
+│ Sure. I wi│  Commands                                            │           │
+│  ts       │  /mode plan|build plan reads only · build can edit   │           │
+│  export as│  /theme dark|light|auto set the session theme        │           │
+│    // expo│  /mouse on|off toggle mouse reporting (fullscreen)   │           │
+│    for (le│  /mcp show connected MCP servers and their tools     │           │
+│      try {│  /help show the commands and the keys                │           │
+│      catch│                                                      │           │
+│    }      │  Keys                                                │           │
+│  }        │  enter send                                          │           │
+│           │  shift/alt+enter new line                            │           │
+│ ╭─ Tool · │  pgup/pgdn scroll                                    │─────────╮ │
+│ │succeeded│  home/end top/end                                    │         │ │
+│ │src/fetch│  ^P commands                                         │         │ │
+│ │Updated s│  esc cancel                                          │         │ │
+│ ╰─────────│  ctrl+c quit                                         │─────────╯ │
 │           │  ↑/↓ history                                         │           │
-│ ╭─ Tool · │  ^O earlier                                          │─────────╮ │
-│ │succeeded│  pgup/pgdn scroll                                    │         │ │
-│ │src/fetch│  ^L latest                                           │         │ │
-│ │Updated s│  enter send                                          │         │ │
-│ ╰─────────│  shift/alt+enter new line                            │─────────╯ │
-│           │                                                      │           │
-│ Assistant ╰──────────────────────────────────────────────────────╯           │
-│ Done. The helper now retries three times.                                    │
-│                                                                              │
-└──────────────────────────────────────────────────────────────────────────────┘
-╭──────────────────────────────────────────────────────────────────────────────╮
-│ Message the model                                                            │
+│ Assistant │  ^O earlier                                          │           │
+│ Done. The │  pgup/pgdn scroll                                    │           │
+│           │  ^L latest                                           │           │
+└───────────│  shift+tab mode                                      │───────────┘
+╭───────────│                                                      │───────────╮
+│ Message th╰──────────────────────────────────────────────────────╯           │
 ╰──────────────────────────────────────────────────────────────────────────────╯
  Ready · /help for commands                                                     

@@ -88,6 +88,7 @@ test("the initial store has every path the document reads", () => {
       "messages",
       "palette",
       "placeholder",
+      "slash",
       "status",
       "thinking",
     ].sort(),

@@ -1,20 +1,24 @@
-=== grid 80x19 ===
- Local Agent         qwen3-coder:30b  build          ctx 9.6k/32k  ████░░░░░░░░ 
-            ╭─ Keys ───────────────────────────────────────────────╮            
+=== grid 80x23 ===
+ Local Agent╭─ Help ───────────────────────────────────────────────╮███░░░░░░░░ 
             │                                                      │            
             │  ? close help                                        │            
+            │                                                      │            
+            │  Commands                                            │            
+            │  /mode plan|build plan reads only · build can edit   │            
+            │  /theme dark|light|auto set the session theme        │            
+            │  /mouse on|off toggle mouse reporting (fullscreen)   │            
+            │  /mcp show connected MCP servers and their tools     │            
+            │  /help show the commands and the keys                │            
+            │                                                      │            
+            │  Keys                                                │            
+            │  enter send                                          │            
+            │  shift/alt+enter new line                            │            
             │  y allow                                             │            
             │  n deny                                              │            
             │  pgup/pgdn scroll                                    │            
             │  home/end top/end                                    │            
             │  ^P commands                                         │            
-            │  esc cancel                                          │            
-            │  ctrl+c quit                                         │            
-            │  ↑/↓ history                                         │            
-            │  pgup/pgdn scroll                                    │            
-            │  ^L latest                                           │            
-            │  enter send                                          │            
-╭───────────│  shift/alt+enter new line                            │───────────╮
-│ Message th│                                                      │           │
-╰───────────╰──────────────────────────────────────────────────────╯───────────╯
- Ready · /help for commands                                                     
+╭───────────│  esc cancel                                          │───────────╮
+│ Message th│  ctrl+c quit                                         │           │
+╰───────────│                                                      │───────────╯
+ Ready · /he╰──────────────────────────────────────────────────────╯            

@@ -17,8 +17,11 @@ import {
 } from "#cli/tuimark/blocks";
 import {
   filterPalette,
+  type HelpRow,
+  helpRows,
   type Intent,
   type PaletteItem,
+  type SlashRow,
 } from "#cli/tuimark/commands";
 import type { TranscriptSnapshot } from "#cli/tuimark/transcript";
 
@@ -90,7 +93,15 @@ export interface Store {
   approval: ApprovalState;
   palette: { open: boolean; query: string; cur: string };
   found: { any: boolean; items: PaletteItem[] };
-  help: { open: boolean };
+  /**
+   * The `/` popup over the composer: display-only rows (nothing in an
+   * `each` can take focus), the chosen one carrying `sel`. The controller
+   * rewrites it as the draft is typed; inline it lives in the region and
+   * is never committed.
+   */
+  slash: { open: boolean; rows: SlashRow[] };
+  /** The help overlay: `cmds` is the slash catalog, derived once at build. */
+  help: { open: boolean; cmds: HelpRow[] };
   draft: string;
   placeholder: string;
   busy: boolean;
@@ -205,6 +216,8 @@ export interface StoreInit {
    * transcript length here: its snapshot always starts empty.
    */
   empty?: boolean;
+  /** Inline presentation: its palette starts without the load-earlier row. */
+  inline?: boolean;
 }
 
 /** The last path segment of a workspace root ("" for "/" or ""). */
@@ -213,7 +226,7 @@ export function workspaceBasename(root: string): string {
 }
 
 export function initialStore(init: StoreInit): Store {
-  const found = filterPalette("");
+  const found = filterPalette("", init.inline);
   return {
     header: {
       provider: providerLabel(init.provider),
@@ -238,7 +251,8 @@ export function initialStore(init: StoreInit): Store {
     approval: noApproval(),
     palette: { open: false, query: "", cur: found[0]?.id ?? "" },
     found: { any: found.length > 0, items: found },
-    help: { open: false },
+    slash: { open: false, rows: [] },
+    help: { open: false, cmds: helpRows() },
     draft: "",
     placeholder: PLACEHOLDER,
     busy: false,

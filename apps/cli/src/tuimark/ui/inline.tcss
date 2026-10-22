@@ -23,4 +23,6 @@ screen.approving > #app > #liveregion { display: none; }
  * a modal, so the document grows it while the modal is open. The heights
  * match the kit's modals (k-palette is 16 rows, k-help sizes to content). */
 .la-space-palette { height: 16; }
-.la-space-help { height: 14; }
+/* The help grew a commands section over the kit's keys list (the keys
+ * scroll takes what is left, so the commands always fit). */
+.la-space-help { height: 18; }

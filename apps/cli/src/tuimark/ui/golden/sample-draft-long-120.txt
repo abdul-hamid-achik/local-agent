@@ -28,4 +28,4 @@
 ║ draft line 11                                                                                                        █
 ║ draft line 12                                                                                                        █
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
- Ready · /help for commands   ^P commands  esc cancel  ctrl+c quit  ^O earlier  ^L latest                               
+ Ready · /help for commands   ^P commands  esc cancel  ctrl+c quit  ^O earlier  ^L latest  shift+tab mode               

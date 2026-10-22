@@ -336,13 +336,15 @@ interface Expect {
   input: string;
   /** Explicit steps (`tuimark play --script`), used instead of `input`. */
   steps?: object[];
+  /** The keyboard protocol of the replay (`kitty` or `legacy`). */
+  keyboard?: string;
   /** The terminal width of the replay. Default 80. */
   cols?: number;
   /** The terminal rows of the replay (the region's cap inline). */
   rows?: number;
   /** Every event the replay fires, in order. */
   actions: string[];
-  /** The value of the first event. */
+  /** The value of the last event. */
   value?: unknown;
   /** Text that must be on the final screen, and text that must not. */
   screen?: string[];
@@ -361,13 +363,13 @@ const plays: Expect[] = [
   {
     sample: "sample",
     input: "text:hello enter",
-    actions: ["send"],
+    actions: ["typed", "send"],
     value: "hello",
   },
   {
     sample: "sample",
     input: "text:/help enter",
-    actions: ["send"],
+    actions: ["typed", "send"],
     value: "/help",
   },
   { sample: "sample", input: "esc", actions: ["cancel"] },
@@ -377,20 +379,20 @@ const plays: Expect[] = [
   {
     sample: "sample",
     input: "text:one shift+enter text:two enter",
-    actions: ["send"],
+    actions: ["typed", "typed", "typed", "send"],
     value: "one\ntwo",
   },
   {
     sample: "sample",
     input: "text:one alt+enter text:two enter",
-    actions: ["send"],
+    actions: ["typed", "typed", "typed", "send"],
     value: "one\ntwo",
   },
   {
     sample: "sample",
     input: "",
     steps: [{ paste: "line one\nline two\r\nline three" }, { key: "enter" }],
-    actions: ["send"],
+    actions: ["typed", "send"],
     value: "line one\nline two\nline three",
   },
   { sample: "sample-draft", input: "enter", actions: ["send"], value: DRAFT },
@@ -434,7 +436,7 @@ const plays: Expect[] = [
     sample: "sample",
     cols: 120,
     input: "text:one shift+enter text:two alt+enter text:three enter",
-    actions: ["send"],
+    actions: ["typed", "typed", "typed", "typed", "typed", "send"],
     value: "one\ntwo\nthree",
   },
   {
@@ -556,12 +558,73 @@ const plays: Expect[] = [
   { sample: "sample-palette", input: "esc", actions: ["palette_close"] },
   {
     sample: "sample-help",
+    rows: 30,
     input: "",
     actions: [],
-    screen: ["enter send", "shift/alt+enter new line", "↑/↓ history"],
+    screen: [
+      "Commands",
+      "/mode plan|build",
+      "/theme dark|light|auto",
+      "enter send",
+      "shift/alt+enter new line",
+      "↑/↓ history",
+      "shift+tab mode",
+    ],
   },
   { sample: "sample-help", input: "q", actions: ["help_close"] },
   { sample: "sample-help", input: "esc", actions: ["help_close"] },
+  // The slash popup: every edit of the composer reaches the parent (that
+  // is what opens and filters it), and while it is open its keys are its
+  // own — up and down are not the history, esc is not cancel, and the
+  // status hints stop promising them. (Play has no parent, so the choice
+  // itself does not move here; the controller tests move it.)
+  {
+    sample: "sample",
+    input: "",
+    steps: [{ key: "/" }, { key: "m" }, { key: "o" }],
+    actions: ["typed", "typed", "typed"],
+    value: "/mo",
+  },
+  {
+    sample: "sample-slash",
+    input: "",
+    actions: [],
+    screen: ["› /mode", "/mouse", "/mcp", "tab complete"],
+    notScreen: ["esc cancel", "↑/↓ history"],
+  },
+  {
+    sample: "sample-slash",
+    input: "down",
+    actions: ["slash_next"],
+    value: "/m",
+  },
+  { sample: "sample-slash", input: "up", actions: ["slash_prev"], value: "/m" },
+  {
+    sample: "sample-slash",
+    input: "tab",
+    actions: ["slash_complete"],
+    value: "/m",
+  },
+  { sample: "sample-slash", input: "esc", actions: ["slash_close"] },
+  { sample: "sample-slash", input: "enter", actions: ["send"], value: "/m" },
+  // With the popup closed, tab is focus travel again and fires nothing.
+  { sample: "sample", input: "tab", actions: [] },
+  // Shift+tab toggles the mode: the composer does not take the key, and
+  // a legacy terminal (CSI Z, no kitty protocol) delivers it too.
+  { sample: "sample", input: "shift+tab", actions: ["mode_toggle"] },
+  {
+    sample: "sample",
+    keyboard: "legacy",
+    input: "shift+tab",
+    actions: ["mode_toggle"],
+  },
+  {
+    sample: "sample-slash",
+    keyboard: "legacy",
+    input: "tab",
+    actions: ["slash_complete"],
+    value: "/m",
+  },
 
   // ---------------------------------------------------------- the inline doc
   {
@@ -570,7 +633,7 @@ const plays: Expect[] = [
     inline: true,
     rows: 30,
     input: "text:hello enter",
-    actions: ["send"],
+    actions: ["typed", "send"],
     value: "hello",
   },
   {
@@ -579,7 +642,7 @@ const plays: Expect[] = [
     inline: true,
     rows: 30,
     input: "text:one shift+enter text:two enter",
-    actions: ["send"],
+    actions: ["typed", "typed", "typed", "send"],
     value: "one\ntwo",
   },
   {
@@ -724,7 +787,12 @@ const plays: Expect[] = [
     rows: 30,
     input: "",
     actions: [],
-    screen: ["enter send", "shift/alt+enter new line"],
+    screen: [
+      "Commands",
+      "/mode plan|build",
+      "enter send",
+      "shift/alt+enter new line",
+    ],
   },
   {
     sample: "inline-sample-help",
@@ -741,6 +809,72 @@ const plays: Expect[] = [
     rows: 30,
     input: "esc",
     actions: ["help_close"],
+  },
+  {
+    sample: "inline-sample",
+    doc: "inline.tui",
+    inline: true,
+    input: "shift+tab",
+    actions: ["mode_toggle"],
+  },
+  // The slash popup lives in the region: its keys fire there, its rows
+  // render there, and nothing of it is ever committed.
+  {
+    sample: "inline-sample",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "",
+    steps: [{ key: "/" }, { key: "m" }],
+    actions: ["typed", "typed"],
+    value: "/m",
+    scrollbackRows: 0,
+  },
+  {
+    sample: "inline-sample-slash",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "",
+    actions: [],
+    screen: ["› /mode", "/mcp", "tab complete"],
+    scrollbackRows: 0,
+  },
+  {
+    sample: "inline-sample-slash",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "down",
+    actions: ["slash_next"],
+    value: "/m",
+    scrollbackRows: 0,
+  },
+  {
+    sample: "inline-sample-slash",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "up",
+    actions: ["slash_prev"],
+    value: "/m",
+  },
+  {
+    sample: "inline-sample-slash",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "tab",
+    actions: ["slash_complete"],
+    value: "/m",
+  },
+  {
+    sample: "inline-sample-slash",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "esc",
+    actions: ["slash_close"],
   },
   // Commits print the finished views into the scrollback and leave the
   // region alone: a user turn, an assistant turn, a tool card, then plain
@@ -898,6 +1032,7 @@ for (const check of plays) {
     "--cols",
     String(check.cols ?? 80),
     ...(check.rows ? ["--rows", String(check.rows)] : []),
+    ...(check.keyboard ? ["--keyboard", check.keyboard] : []),
     ...(check.inline ? ["--inline"] : []),
     ...script,
     "--format",
@@ -915,9 +1050,9 @@ for (const check of plays) {
       failures.push(
         `${label}: events [${actions}], expected [${check.actions}]`,
       );
-    else if ("value" in check && result.events[0]?.value !== check.value)
+    else if ("value" in check && result.events.at(-1)?.value !== check.value)
       failures.push(
-        `${label}: value ${JSON.stringify(result.events[0]?.value)}, expected ${JSON.stringify(check.value)}`,
+        `${label}: value ${JSON.stringify(result.events.at(-1)?.value)}, expected ${JSON.stringify(check.value)}`,
       );
     const screen = result.grid.join("\n");
     for (const text of check.screen ?? [])
@@ -1020,6 +1155,37 @@ for (const on of [true, false]) {
     failures.push(
       `play palette click (mouse ${on ? "on" : "off"}): selection is not on row ${selectedRow}`,
     );
+}
+
+// The slash popup's chosen row is painted like the palette's selected
+// item (the "›" marker in the text goldens, the accent fill here).
+{
+  const run = tuimark([
+    "dump",
+    "app.tui",
+    "--data",
+    "samples/sample-slash.json",
+    "--cols",
+    "80",
+    "--rows",
+    "30",
+    "--styles",
+    "--format",
+    "json",
+  ]);
+  const result = JSON.parse(run.out) as {
+    grid: string[];
+    styles: { bg?: string }[][];
+  };
+  const accentRow = (text: string) => {
+    const row = result.grid.findIndex((line) => line.includes(text));
+    return (
+      row >= 0 &&
+      (result.styles[row]?.some((span) => span.bg === "#58a6ff") ?? false)
+    );
+  };
+  if (!accentRow("› /mode") || accentRow("/mouse"))
+    failures.push("dump sample-slash: the chosen row is not accent-filled");
 }
 
 await rm(scratch, { recursive: true, force: true });

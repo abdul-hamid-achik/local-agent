@@ -32,6 +32,17 @@
     <bind keys="home" action="move-first" to="#approval_diff" label="top/end" keycap="home/end"/>
     <bind keys="end" action="move-last" to="#approval_diff"/>
   </keymap>
+  <!-- The slash popup's keys, while it is open (the screen carries the
+       class): they stand before the history and cancel rows below, and
+       dispatch takes the first row that matches, so up and down move the
+       popup's choice and esc closes it instead of cancelling a turn. No
+       labels: the popup names its own keys, like the kit's overlays. -->
+  <keymap when=".slashpop">
+    <bind keys="down" action="slash_next"/>
+    <bind keys="up" action="slash_prev"/>
+    <bind keys="tab" action="slash_complete"/>
+    <bind keys="esc" action="slash_close"/>
+  </keymap>
   <keymap>
     <!-- Hint order is keymap order: commands first, so it is the one hint a
          narrow terminal still shows (the first that does not fit drops the rest). -->
@@ -51,11 +62,10 @@
          this: the composer takes end/ctrl+e for its own caret, and ctrl+end is
          not a key token. ctrl+l reaches the keymap from the composer. -->
     <bind keys="ctrl+l" action="move-last" to="#log" keycap="^L" label="latest"/>
-    <!-- The keys the composer itself takes. It consumes them before the keymap, so
-         these rows never fire: they are here so that the help lists them, and
-         `when` keeps them out of the status line. -->
-    <bind keys="enter" action="focus" to="#composer" when="#composer:focus" label="send" keycap="enter"/>
-    <bind keys="shift+enter,alt+enter" action="focus" to="#composer" when="#composer:focus" label="new line" keycap="shift/alt+enter"/>
+    <!-- Plan <-> build. The composer does not take shift+tab, and a legacy
+         terminal sends it as one key (CSI Z), so the row fires with or
+         without the kitty keyboard protocol. -->
+    <bind keys="shift+tab" action="mode_toggle" keycap="shift+tab" label="mode"/>
   </keymap>
   <!-- A modal traps the keymap: what must also work under one is repeated here. -->
   <keymap when="modal">
@@ -120,7 +130,7 @@
     </use>
   </template>
 
-  <screen id="main" focus="#composer">
+  <screen id="main" focus="#composer" class:slashpop="slash.open">
     <col id="app">
       <use template="k-appbar" brand="Local Agent" title="">
         <text class="la-muted la-provider">{header.provider}</text>
@@ -169,8 +179,23 @@
         </col>
       </scroll>
 
-      <!-- enter sends; shift+enter, alt+enter and a pasted block keep their line breaks. -->
-      <textarea id="composer" bind="draft" placeholder="{placeholder}" on:submit="send"/>
+      <!-- The slash popup: display-only rows over the composer while the
+           draft is a half-typed command. The parent keeps slash.rows from
+           the composer's edits; nothing here can take focus. -->
+      <col id="slashpop" class="la-slashpop" if="slash.open">
+        <col class="la-slash-rows" each="slash.rows as r" key="r.id">
+          <row class="la-slash-row" class:sel="r.sel">
+            <text class="la-slash-mark">{r.mark}</text>
+            <text class="la-slash-cmd">{r.cmd}</text>
+            <text class="la-slash-desc">{r.desc}</text>
+          </row>
+        </col>
+        <text class="la-slash-foot">up/down choose · tab complete · enter completes or runs · esc close</text>
+      </col>
+
+      <!-- enter sends; shift+enter, alt+enter and a pasted block keep their line breaks.
+           on:change carries every edit, which is what opens the popup above. -->
+      <textarea id="composer" bind="draft" placeholder="{placeholder}" on:change="typed" on:submit="send"/>
 
       <row id="status" class="k-statusbar">
         <progress indeterminate="true" if="busy" class="la-spin"/>
@@ -187,6 +212,36 @@
       </scroll>
     </use>
     <use id="palette" template="k-palette" title="Commands" placeholder="type a command…" with="palette as p, found as f"/>
-    <use id="help" template="k-help" title="Keys" with="help as h"/>
+    <!-- The help overlay. The kit's k-help lists keys only and takes no
+         slot, so the overlay is written here with its classes: the slash
+         commands (help.cmds, from the one catalog in ../commands.ts),
+         then every labeled key. The kit's .k-help rows (q, ?) and
+         on:escape close it. The composer's own enter keys are plain rows:
+         no keymap row can name them (the composer takes them first). -->
+    <modal id="help_dialog" class="k-help" open="help.open" title="Help" on:escape="help_close">
+      <row class="k-help-close">
+        <text class="k-help-key">?</text>
+        <text class="k-help-label">close help</text>
+      </row>
+      <text class="la-help-head">Commands</text>
+      <col class="la-helpcmds" each="help.cmds as c" key="c.id">
+        <row class="la-helpcmd">
+          <text class="la-helpcmd-key">{c.cmd}</text>
+          <text class="la-helpcmd-desc">{c.desc}</text>
+        </row>
+      </col>
+      <text class="la-help-head">Keys</text>
+      <scroll id="help_keys" class="k-help-scroll" focusable="true">
+        <row class="la-helpcmd">
+          <text class="la-helpcmd-key">enter</text>
+          <text class="la-helpcmd-desc">send</text>
+        </row>
+        <row class="la-helpcmd">
+          <text class="la-helpcmd-key">shift/alt+enter</text>
+          <text class="la-helpcmd-desc">new line</text>
+        </row>
+        <hints class="k-hints k-help-keys" scope="all"/>
+      </scroll>
+    </modal>
   </screen>
 </tui>

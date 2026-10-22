@@ -96,8 +96,12 @@ a child and draws the whole screen from `apps/cli/src/tuimark/ui/app.tui`.
   the turn ends. `ctrl+c` first clears a non-empty draft; with an empty
   composer it quits. `up` on the first line and `down` on the last recall what
   you sent in this session (a resumed session's earlier messages included).
-  `ctrl+p` opens the
-  command palette, `/help` lists every key. `ctrl+l` jumps the transcript back
+  Typing `/` opens a popup of the slash commands with one-line descriptions,
+  filtered as you type: `up`/`down` choose, `tab` completes into the draft,
+  `enter` completes while the chosen command differs from what you typed and
+  runs it once it matches, and `esc` closes the popup without touching the
+  draft. `shift+tab` toggles plan/build like `/mode`. `ctrl+p` opens the
+  command palette, `/help` lists the commands and every key. `ctrl+l` jumps the transcript back
   to the newest message. `/theme dark|light|auto` switches the session theme
   (no argument reports the current one; nothing is persisted). `/mouse on|off`
   toggles mouse reporting in fullscreen — wheel scrolling and clicks, off by

@@ -1381,3 +1381,256 @@ test("the welcome (empty) goes with the first message and never returns", async 
     failed.ui.batches.flat().filter((w) => w.path === "empty" && w.value),
   ).toEqual([]);
 });
+
+// ------------------------------------------------------------- the `/` popup
+
+test("typing / opens the command popup; it filters, moves and completes", async () => {
+  const { ui } = setup(reply("x"));
+  await ui.fire("typed", "/");
+  expect(store(ui).slash.open).toBe(true);
+  expect(store(ui).slash.rows.map((r) => r.cmd)).toEqual([
+    "/mode",
+    "/theme",
+    "/mouse",
+    "/mcp",
+    "/help",
+  ]);
+  expect(store(ui).slash.rows[0]).toMatchObject({ sel: true, mark: "›" });
+  await ui.fire("typed", "/m");
+  expect(store(ui).slash.rows.map((r) => r.cmd)).toEqual([
+    "/mode",
+    "/mouse",
+    "/mcp",
+  ]);
+  await ui.fire("slash_next", "/m");
+  await ui.fire("slash_next", "/m");
+  expect(store(ui).slash.rows[2]).toMatchObject({ cmd: "/mcp", sel: true });
+  // The choice clamps at the last row, like the palette's list.
+  await ui.fire("slash_next", "/m");
+  expect(store(ui).slash.rows[2]?.sel).toBe(true);
+  await ui.fire("slash_prev", "/m");
+  expect(store(ui).slash.rows[1]?.sel).toBe(true);
+  // Typing again resets the choice to the first match.
+  await ui.fire("typed", "/mo");
+  expect(store(ui).slash.rows.map((r) => r.cmd)).toEqual(["/mode", "/mouse"]);
+  expect(store(ui).slash.rows[0]?.sel).toBe(true);
+  // Tab completes the chosen row into the draft and closes the popup.
+  await ui.fire("slash_next", "/mo");
+  await ui.fire("slash_complete", "/mo");
+  expect(store(ui).draft).toBe("/mouse ");
+  expect(store(ui).slash).toEqual({ open: false, rows: [] });
+});
+
+test("the popup closes for arguments, unknown commands and plain text", async () => {
+  const { ui } = setup(reply("x"));
+  await ui.fire("typed", "/mode");
+  expect(store(ui).slash.open).toBe(true);
+  await ui.fire("typed", "/mode ");
+  expect(store(ui).slash.open).toBe(false);
+  await ui.fire("typed", "/z");
+  expect(store(ui).slash.open).toBe(false);
+  await ui.fire("typed", "/m\nmore");
+  expect(store(ui).slash.open).toBe(false);
+  await ui.fire("typed", "hello");
+  expect(store(ui).slash.open).toBe(false);
+});
+
+test("esc closes the popup only: draft untouched, turn not cancelled", async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const { ui, client } = setup(
+    quiet(async () => {
+      await gate;
+    }),
+  );
+  await ui.fire("send", "go");
+  expect(store(ui).busy).toBe(true);
+  await ui.fire("typed", "/m");
+  expect(store(ui).slash.open).toBe(true);
+  const batches = ui.batches.length;
+  await ui.fire("slash_close");
+  expect(store(ui).slash.open).toBe(false);
+  // Nothing but the popup was written: the draft is untouched.
+  expect(
+    ui.batches
+      .slice(batches)
+      .flat()
+      .filter((w) => w.path === "draft"),
+  ).toEqual([]);
+  expect(store(ui).busy).toBe(true);
+  // The dismissed popup stays closed for this draft, opens for the next.
+  await ui.fire("typed", "/mo");
+  expect(store(ui).slash.open).toBe(false);
+  await ui.fire("typed", "");
+  await ui.fire("typed", "/m");
+  expect(store(ui).slash.open).toBe(true);
+  release();
+  await client.idle();
+  expect(store(ui).busy).toBe(false);
+});
+
+test("enter completes over the popup only when the choice differs", async () => {
+  const { ui, seen } = setup(reply("x"));
+  // "/mo" is not yet the chosen "/mode ": enter completes, nothing runs.
+  await ui.fire("typed", "/mo");
+  await ui.fire("send", "/mo");
+  expect(store(ui).draft).toBe("/mode ");
+  expect(store(ui).slash.open).toBe(false);
+  expect(store(ui).busy).toBe(false);
+  expect(seen).toEqual([]);
+  // A moved choice completes to that row, still without running it.
+  await ui.fire("typed", "/m");
+  await ui.fire("slash_next", "/m");
+  await ui.fire("slash_next", "/m");
+  await ui.fire("send", "/m");
+  expect(store(ui).draft).toBe("/mcp");
+  expect(store(ui).status).toBe("Ready · /help for commands");
+  // Fully typed, the same enter runs the command.
+  await ui.fire("typed", "/mcp");
+  expect(store(ui).slash.open).toBe(true);
+  await ui.fire("send", "/mcp");
+  expect(store(ui).status).toContain("MCP servers: 0");
+  expect(store(ui).draft).toBe("");
+  expect(store(ui).slash.open).toBe(false);
+});
+
+test("the popup never opens while an approval is open", async () => {
+  const { ui, client } = setup(withApproval);
+  await ui.fire("send", "edit");
+  await untilApproval(ui);
+  await ui.fire("typed", "/");
+  expect(store(ui).slash.open).toBe(false);
+  await ui.fire("dialog_cancel");
+  await client.idle();
+  await ui.fire("typed", "/");
+  expect(store(ui).slash.open).toBe(true);
+});
+
+test("inline: the popup is region state and is never committed", async () => {
+  const { ui, client } = setup(reply("hello"), { presentation: "inline" });
+  await ui.fire("typed", "/m");
+  expect(store(ui).slash.open).toBe(true);
+  expect(ui.commits).toEqual([]);
+  await ui.fire("slash_complete", "/m");
+  expect(store(ui).draft).toBe("/mode ");
+  expect(ui.commits).toEqual([]);
+  await ui.fire("send", "hi");
+  await client.idle();
+  // The turn committed its views; none of them is popup state.
+  expect(ui.commits.length).toBeGreaterThan(0);
+  expect(JSON.stringify(ui.commits)).not.toContain("tab complete");
+  expect(store(ui).slash.open).toBe(false);
+});
+
+// ------------------------------------------------------------ palette & keys
+
+test("a new palette query resets the cursor to the first match", async () => {
+  const { ui } = setup(reply("x"));
+  await ui.fire("palette_open");
+  // The list cursor sits somewhere down the full list.
+  store(ui).palette.cur = "quit";
+  await ui.fire("palette_query", "theme");
+  expect(store(ui).found.items.map((i: PaletteItem) => i.id)).toEqual([
+    "theme-dark",
+    "theme-light",
+    "theme-auto",
+  ]);
+  expect(store(ui).palette.cur).toBe("theme-dark");
+  await ui.fire("palette_query", "zzz");
+  expect(store(ui).found.any).toBe(false);
+  expect(store(ui).palette.cur).toBe("");
+});
+
+test("shift+tab toggles the mode like /mode, and is refused while busy", async () => {
+  const { ui } = setup(reply("x"));
+  expect(store(ui).header.mode).toBe("build");
+  await ui.fire("mode_toggle");
+  expect(store(ui).header.mode).toBe("plan");
+  expect(store(ui).status).toBe("Mode changed to plan");
+  await ui.fire("mode_toggle");
+  expect(store(ui).header.mode).toBe("build");
+
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const busy = setup(
+    quiet(async () => {
+      await gate;
+    }),
+  );
+  await busy.ui.fire("send", "go");
+  await busy.ui.fire("mode_toggle");
+  expect(store(busy.ui).status).toBe(
+    "Busy · wait for the current turn to finish",
+  );
+  expect(store(busy.ui).header.mode).toBe("build");
+  release();
+  await busy.client.idle();
+});
+
+test("the help overlay's store carries the slash commands", () => {
+  const { ui } = setup(reply("x"));
+  expect(store(ui).help.cmds.map((c) => c.cmd)).toEqual([
+    "/mode plan|build",
+    "/theme dark|light|auto",
+    "/mouse on|off",
+    "/mcp",
+    "/help",
+  ]);
+  expect(store(ui).help.cmds[0]?.desc).toContain("plan reads only");
+});
+
+test("the palette's Quit row is the two-stage ctrl+c", async () => {
+  const { ui } = setup(reply("x"));
+  await ui.fire("palette_open");
+  store(ui).draft = "half written";
+  store(ui).palette.query = "quit";
+  store(ui).palette.cur = "quit";
+  // A draft exists: the first stage clears it instead of quitting.
+  expect(await ui.fire("palette_run")).toBeUndefined();
+  expect(store(ui).palette.open).toBe(false);
+  expect(store(ui).draft).toBe("");
+  expect(store(ui).status).toBe("Draft cleared · ctrl+c again to quit");
+  // An empty composer quits.
+  await ui.fire("palette_open");
+  store(ui).palette.query = "quit";
+  store(ui).palette.cur = "quit";
+  expect(await ui.fire("palette_run")).toBe("quit");
+});
+
+test("the palette loads earlier messages fullscreen and never lists it inline", async () => {
+  const session = {
+    store: {},
+    state: {
+      messages: Array.from({ length: 450 }, (_, i) => ({
+        role: i % 2 ? "assistant" : "user",
+        content: `m${i}`,
+      })),
+    },
+  } as unknown as SessionContext;
+  const { ui } = setup(reply("x"), { session });
+  await ui.fire("palette_open");
+  expect(store(ui).found.items.map((i: PaletteItem) => i.id)).toContain(
+    "load-earlier",
+  );
+  store(ui).palette.query = "earlier";
+  store(ui).palette.cur = "load-earlier";
+  await ui.fire("palette_run");
+  expect(store(ui).messages).toHaveLength(300);
+  expect(store(ui).earlier.n).toBe(150);
+
+  const inline = setup(reply("x"), { presentation: "inline" });
+  expect(
+    store(inline.ui).found.items.map((i: PaletteItem) => i.id),
+  ).not.toContain("load-earlier");
+  await inline.ui.fire("palette_open");
+  expect(
+    store(inline.ui).found.items.map((i: PaletteItem) => i.id),
+  ).not.toContain("load-earlier");
+  expect(store(inline.ui).found.items.map((i: PaletteItem) => i.id)).toContain(
+    "quit",
+  );
+});

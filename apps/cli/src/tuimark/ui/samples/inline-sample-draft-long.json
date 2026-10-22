@@ -100,13 +100,49 @@
       },
       {
         "id": "help",
-        "label": "Help and keys",
+        "label": "Help, commands and keys",
         "hint": "/help"
+      },
+      {
+        "id": "quit",
+        "label": "Quit",
+        "hint": "ctrl+c"
       }
     ]
   },
+  "slash": {
+    "open": false,
+    "rows": []
+  },
   "help": {
-    "open": false
+    "open": false,
+    "cmds": [
+      {
+        "id": "/mode",
+        "cmd": "/mode plan|build",
+        "desc": "plan reads only · build can edit"
+      },
+      {
+        "id": "/theme",
+        "cmd": "/theme dark|light|auto",
+        "desc": "set the session theme"
+      },
+      {
+        "id": "/mouse",
+        "cmd": "/mouse on|off",
+        "desc": "toggle mouse reporting (fullscreen)"
+      },
+      {
+        "id": "/mcp",
+        "cmd": "/mcp",
+        "desc": "show connected MCP servers and their tools"
+      },
+      {
+        "id": "/help",
+        "cmd": "/help",
+        "desc": "show the commands and the keys"
+      }
+    ]
   },
   "draft": "draft line 1\ndraft line 2\ndraft line 3\ndraft line 4\ndraft line 5\ndraft line 6\ndraft line 7\ndraft line 8\ndraft line 9\ndraft line 10\ndraft line 11\ndraft line 12",
   "placeholder": "Message the model",

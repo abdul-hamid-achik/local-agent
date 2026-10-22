@@ -105,6 +105,26 @@ span.err { color: $danger; bold: true; }
   .la-statustext { max-width: 50%; padding: 0; }
 }
 
+/* The slash popup over the composer: a bordered panel like the palette's,
+ * the chosen row filled like the palette's selected item. */
+.la-slashpop { height: auto; layout: column; border: rounded; border-color: $border; background: $panel; padding: 0 1; }
+.la-slash-rows { height: auto; layout: column; }
+.la-slash-row { height: 1; gap: 1; }
+.la-slash-row.sel { background: $accent; bold: true; }
+.la-slash-row.sel > text { color: $on-accent; }
+.la-slash-mark { width: 1; }
+.la-slash-cmd { width: auto; bold: true; }
+.la-slash-desc { width: 1fr; color: $muted; }
+.la-slash-foot { color: $subtle; }
+
+/* The help overlay's own rows (the commands section and the composer's
+ * enter keys under the hints). */
+.la-help-head { bold: true; color: $accent; margin: 1 0 0 0; }
+.la-helpcmds { height: auto; layout: column; }
+.la-helpcmd { width: 1fr; height: 1; gap: 1; }
+.la-helpcmd-key { width: auto; bold: true; color: $accent; }
+.la-helpcmd-desc { width: 1fr; color: $muted; }
+
 .la-diff { max-height: 14; width: 1fr; height: auto; border: single; border-color: $border; scrollbar: auto; }
 .la-diff:focus { border: double; border-color: $focus; }
 .la-difflines { height: auto; layout: column; }

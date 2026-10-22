@@ -18,4 +18,4 @@
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Generating…                                                                                                          │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
- ⠋  Waiting for approval · y allow · n deny · Esc deny   y allow  n deny  ^P commands                                   
+ ⠋  Waiting for approval · y allow · n deny · Esc deny   y allow  n deny  ^P commands  shift+tab mode                   

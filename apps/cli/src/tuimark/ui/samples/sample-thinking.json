@@ -305,13 +305,54 @@
       },
       {
         "id": "help",
-        "label": "Help and keys",
+        "label": "Help, commands and keys",
         "hint": "/help"
+      },
+      {
+        "id": "load-earlier",
+        "label": "Load earlier messages",
+        "hint": "ctrl+o"
+      },
+      {
+        "id": "quit",
+        "label": "Quit",
+        "hint": "ctrl+c"
       }
     ]
   },
+  "slash": {
+    "open": false,
+    "rows": []
+  },
   "help": {
-    "open": false
+    "open": false,
+    "cmds": [
+      {
+        "id": "/mode",
+        "cmd": "/mode plan|build",
+        "desc": "plan reads only · build can edit"
+      },
+      {
+        "id": "/theme",
+        "cmd": "/theme dark|light|auto",
+        "desc": "set the session theme"
+      },
+      {
+        "id": "/mouse",
+        "cmd": "/mouse on|off",
+        "desc": "toggle mouse reporting (fullscreen)"
+      },
+      {
+        "id": "/mcp",
+        "cmd": "/mcp",
+        "desc": "show connected MCP servers and their tools"
+      },
+      {
+        "id": "/help",
+        "cmd": "/help",
+        "desc": "show the commands and the keys"
+      }
+    ]
   },
   "draft": "",
   "placeholder": "Generating…",
