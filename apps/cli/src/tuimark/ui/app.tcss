@@ -23,7 +23,7 @@
 .la-muted { color: $muted; }
 .la-model { bold: true; width: auto; }
 .la-mode { color: $warn; width: auto; }
-.la-provider, .la-session, .la-ctx { width: auto; }
+.la-provider, .la-session, .la-ctx, .la-grants { width: auto; }
 @media (max-cols: 110) {
   .la-provider { display: none; }
 }
@@ -101,7 +101,7 @@ span.err { color: $danger; bold: true; }
  * the status text is capped so at least the first hint (^P commands) fits.
  * Hints drop as a suffix: the first that does not fit takes the rest. */
 @media (max-cols: 60) {
-  .la-ctx, .la-ctxbar { display: none; }
+  .la-ctx, .la-ctxbar, .la-grants { display: none; }
   .la-statustext { max-width: 50%; padding: 0; }
 }
 
@@ -126,6 +126,11 @@ span.err { color: $danger; bold: true; }
 .la-helpcmd-desc { width: 1fr; color: $muted; }
 
 .la-diff { max-height: 14; width: 1fr; height: auto; border: single; border-color: $border; scrollbar: auto; }
+/* A very short terminal keeps the diff's last row instead of the grant
+ * line (the status still names `a` there; the offer returns with height). */
+@media (max-rows: 12) {
+  .la-granthint { display: none; }
+}
 .la-diff:focus { border: double; border-color: $focus; }
 .la-difflines { height: auto; layout: column; }
 .la-difflines > text { height: 1; }

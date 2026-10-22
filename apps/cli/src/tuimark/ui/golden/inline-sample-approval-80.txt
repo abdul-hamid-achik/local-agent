@@ -1,4 +1,4 @@
-=== grid 80x20 ===
+=== grid 80x21 ===
  Local Agent         qwen3-coder:30b  build          ctx 9.6k/32k  ████░░░░░░░░ 
 ╭─ Edit src/fetch.ts? ─────────────────────────────────────────────────────────╮
 │ Apply this change to the workspace.                                          │
@@ -12,10 +12,11 @@
 │ ║+  for (let attempt = 1; ; attempt++) {                                   ║ │
 │ ║+    try { return await fetch(url); }                                     ║ │
 │ ╚══════════════════════════════════════════════════════════════════════════╝ │
+│ a allow file changes this session                                            │
 │ y allow · n deny · esc deny                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────╯
                                                                                 
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ Generating…                                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- ⠋  Waiting for approval · y allow · n deny · Esc deny   y allow  n deny        
+ ⠋  Waiting for approval · y allow · a session · n deny · Esc deny   y allow    

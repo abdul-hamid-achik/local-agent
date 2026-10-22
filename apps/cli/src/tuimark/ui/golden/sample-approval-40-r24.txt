@@ -1,5 +1,4 @@
 === grid 40x24 ===
- Local Agent    qwen3-coder:30b  build  
 ╭─ Edit src/fetch.ts? ─────────────────╮
 │                                      │
 │  Apply this change to the            │
@@ -18,8 +17,9 @@
 │  │+  }                            ┃  │
 │  │+}                              │  │
 │  └────────────────────────────────┘  │
+│  a allow file changes this session   │
 │                                      │
 │                 [ Deny ]  [ Allow ]  │
 │                                      │
 ╰──────────────────────────────────────╯
- ⠋  Waiting for approv…                 
+ ⠋  Waiting for approv… a session       

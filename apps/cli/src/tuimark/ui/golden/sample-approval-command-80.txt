@@ -15,11 +15,11 @@
 │ │  │$ bun test tests/stats.test.ts -t 'mean of an empty list'           │  │ ┃
 │ │  │in the workspace · timeout 120s · runs with your permissions        │  │ ┃
 │ │  └────────────────────────────────────────────────────────────────────┘  │ ┃
+│ │  a allow `bun test …` this session                                       │ ┃
 │ │                                                                          │ ┃
 │ │                                                     [ Deny ]  [ Allow ]  │ ┃
 │ │                                                                          │ ┃
 │ ╰──────────────────────────────────────────────────────────────────────────╯ ┃
-│ ╭─ Tool · run_command ─────────────────────────────────────────────────────╮ ┃
 │ │⠋  waiting for approval                                                   │ ┃
 │ │bun test fetch                                                            │ ┃
 │ ╰──────────────────────────────────────────────────────────────────────────╯ ┃
@@ -28,4 +28,4 @@
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ Generating…                                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- ⠋  Waiting for approval · y allow · n deny · Esc deny   pgup/pgdn scroll       
+ ⠋  Waiting for approval · y allow · a session · n deny · Esc deny   a session  

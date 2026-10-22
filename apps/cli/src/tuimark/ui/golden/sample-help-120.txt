@@ -1,31 +1,31 @@
 === grid 120x30 ===
  Local Agent           Ollama / loopback  qwen3-coder:30b  build            session a1b2c3d  ctx 9.6k/32k  ████░░░░░░░░ 
-┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ You                           ╭─ Help ───────────────────────────────────────────────╮                               │
-│ Add a retry to the fetch helpe│                                                      │                               │
-│                               │  ? close help                                        │                               │
-│ Assistant                     │                                                      │                               │
-│ Sure. I will wrap the call in │  Commands                                            │                               │
-│  ts                           │  /mode plan|build plan reads only · build can edit   │                               │
-│  export async function fetchRe│  /theme dark|light|auto set the session theme        │                               │
-│    // exponential backoff     │  /mouse on|off toggle mouse reporting (fullscreen)   │                               │
+┌───────────────────────────────╭─ Help ───────────────────────────────────────────────╮───────────────────────────────┐
+│ You                           │                                                      │                               │
+│ Add a retry to the fetch helpe│  ? close help                                        │                               │
+│                               │                                                      │                               │
+│ Assistant                     │  Commands                                            │                               │
+│ Sure. I will wrap the call in │  /mode plan|build plan reads only · build can edit   │                               │
+│  ts                           │  /theme dark|light|auto set the session theme        │                               │
+│  export async function fetchRe│  /mouse on|off toggle mouse reporting (fullscreen)   │                               │
+│    // exponential backoff     │  /permissions [clear] show or clear session approv…  │                               │
 │    for (let attempt = 1; ; att│  /mcp show connected MCP servers and their tools     │                               │
 │      try { return await fetch(│  /help show the commands and the keys                │                               │
 │      catch (e) { if (attempt =│                                                      │                               │
 │    }                          │  Keys                                                │                               │
 │  }                            │  enter send                                          │                               │
 │                               │  shift/alt+enter new line                            │                               │
-│ ╭─ Tool · edit ───────────────│  pgup/pgdn scroll                                    │─────────────────────────────╮ │
-│ │succeeded                    │  home/end top/end                                    │                             │ │
-│ │src/fetch.ts                 │  ^P commands                                         │                             │ │
-│ │Updated src/fetch.ts. Verific│  esc cancel                                          │                             │ │
-│ ╰─────────────────────────────│  ctrl+c quit                                         │─────────────────────────────╯ │
-│                               │  ↑/↓ history                                         │                               │
-│ Assistant                     │  ^O earlier                                          │                               │
-│ Done. The helper now retries t│  pgup/pgdn scroll                                    │                               │
-│                               │  ^L latest                                           │                               │
-└───────────────────────────────│  shift+tab mode                                      │───────────────────────────────┘
-╭───────────────────────────────│                                                      │───────────────────────────────╮
-│ Message the model             ╰──────────────────────────────────────────────────────╯                               │
-╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+│ ╭─ Tool · edit ───────────────│  a session                                           │─────────────────────────────╮ │
+│ │succeeded                    │  pgup/pgdn scroll                                    │                             │ │
+│ │src/fetch.ts                 │  home/end top/end                                    │                             │ │
+│ │Updated src/fetch.ts. Verific│  ^P commands                                         │                             │ │
+│ ╰─────────────────────────────│  esc cancel                                          │─────────────────────────────╯ │
+│                               │  ctrl+c quit                                         │                               │
+│ Assistant                     │  ↑/↓ history                                         │                               │
+│ Done. The helper now retries t│  ^O earlier                                          │                               │
+│                               │  pgup/pgdn scroll                                    │                               │
+└───────────────────────────────│  ^L latest                                           │───────────────────────────────┘
+╭───────────────────────────────│  shift+tab mode                                      │───────────────────────────────╮
+│ Message the model             │                                                      │                               │
+╰───────────────────────────────╰──────────────────────────────────────────────────────╯───────────────────────────────╯
  Ready · /help for commands                                                                                             

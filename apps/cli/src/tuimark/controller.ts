@@ -49,7 +49,9 @@ import {
 } from "#cli/tuimark/commands";
 import {
   APPROVAL_STATUS,
+  APPROVAL_TRUNCATED_SESSION_STATUS,
   APPROVAL_TRUNCATED_STATUS,
+  APPROVAL_UNARMED_SESSION_STATUS,
   APPROVAL_UNARMED_STATUS,
   APPROVAL_WAIT_STATUS,
   approvalState,
@@ -58,6 +60,9 @@ import {
   contextLabel,
   contextPct,
   ctxFlags,
+  grantCovers,
+  grantFor,
+  grantsLabel,
   idleStatus,
   initialStore,
   noApproval,
@@ -189,10 +194,22 @@ export class TuimarkClient {
   private busy = false;
   private turn?: AbortController;
   private turnDone: Promise<void> = Promise.resolve();
-  private decide?: (allowed: boolean) => Promise<void>;
+  private decide?: (allowed: boolean, session?: boolean) => Promise<void>;
   private armed = false;
   private armTimer?: ReturnType<typeof setTimeout>;
   private proposal?: ApprovalRequest;
+  /** The open proposal's preview was truncated: `a` must not grant from it. */
+  private proposalTruncated = false;
+  /**
+   * Session grants (`a` on an approval), grant key -> label, in grant order.
+   * Memory only: they die with the process and are never persisted. They
+   * sit strictly on the approval step — plan intent is refused by the
+   * runtime before `approve` is ever called (and again below).
+   */
+  private readonly grants = new Map<
+    string,
+    { label: string; prefix?: readonly string[] }
+  >();
   /** The header ctx meter (see CtxMeter for the exact accumulation rule). */
   private readonly ctx = new CtxMeter();
   /** One message sent while busy, run when the turn ends. A new send replaces it. */
@@ -282,6 +299,25 @@ export class TuimarkClient {
         await this.write([{ path: "status", value: APPROVAL_UNARMED_STATUS }]);
       return undefined;
     });
+    ui.on("dialog_session", async () => {
+      if (!this.decide) return undefined;
+      // `a` follows `y` exactly: same arm delay, same said-so feedback.
+      if (!this.armed) {
+        await this.write([
+          { path: "status", value: APPROVAL_UNARMED_SESSION_STATUS },
+        ]);
+        return undefined;
+      }
+      // No grant is taken from a change nobody could read whole: the
+      // dialog stays open and `y` still works as it always did.
+      if (this.proposalTruncated) {
+        await this.write([
+          { path: "status", value: APPROVAL_TRUNCATED_SESSION_STATUS },
+        ]);
+        return undefined;
+      }
+      return this.decide(true, true);
+    });
     ui.on("dialog_cancel", () => this.decide?.(false));
     ui.on("palette_open", () => this.paletteOpen());
     ui.on("palette_query", (ev) => this.paletteQuery(ev));
@@ -307,7 +343,10 @@ export class TuimarkClient {
   async resize(): Promise<void> {
     const proposal = this.proposal;
     if (!proposal) return;
-    await this.write([{ path: "approval", value: this.approvalFor(proposal) }]);
+    const approval = this.approvalFor(proposal);
+    // A narrower terminal wraps more rows: truncation can change with it.
+    this.proposalTruncated = approval.truncated;
+    await this.write([{ path: "approval", value: approval }]);
   }
 
   private approvalFor(proposal: ApprovalRequest) {
@@ -862,6 +901,19 @@ export class TuimarkClient {
     await this.write([{ path: "draft", value: this.sent[this.recall] ?? "" }]);
   }
 
+  /** The writes that paint the header's grants label from the live grants. */
+  private grantLabels(): string[] {
+    return [...this.grants.values()].map((grant) => grant.label);
+  }
+
+  private grantsWrites(): Write[] {
+    const labels = this.grantLabels();
+    return [
+      { path: "header.grants", value: grantsLabel(labels) },
+      { path: "header.grants_on", value: labels.length > 0 },
+    ];
+  }
+
   private async runCommand(command: string): Promise<void> {
     const { mcp = [] } = this.options;
     const outcome = runSlash(command, {
@@ -872,6 +924,7 @@ export class TuimarkClient {
       },
       theme: this.theme,
       mouse: this.mouse,
+      grants: this.grantLabels(),
     });
     // Inline has no mouse, and its document never reads `mouse_on`: refuse
     // here rather than write a path the host would reject.
@@ -891,6 +944,10 @@ export class TuimarkClient {
     if (outcome.mouse !== undefined) {
       this.mouse = outcome.mouse;
       writes.push({ path: "mouse_on", value: outcome.mouse });
+    }
+    if (outcome.clearGrants) {
+      this.grants.clear();
+      writes.push(...this.grantsWrites());
     }
     if (outcome.help) writes.push({ path: "help.open", value: true });
     await this.write(writes);
@@ -964,20 +1021,56 @@ export class TuimarkClient {
     signal: AbortSignal,
   ): Promise<boolean> => {
     signal.throwIfAborted();
+    // A matching session grant approves without a dialog. Grants never
+    // bypass plan intent: the runtime refuses plan mutations before this
+    // callback runs, and the guard here keeps that true at this layer too.
+    const grant = grantFor(proposal);
+    const grantedLabel =
+      this.intent === "plan"
+        ? undefined
+        : [...this.grants.entries()].find(([key, remembered]) =>
+            grantCovers({ key, prefix: remembered.prefix }, proposal),
+          )?.[1].label;
+    if (grantedLabel !== undefined) {
+      // The least invasive visible trace: the status flash a tool result
+      // gets, naming the grant that let the call through.
+      this.noteActivity(`${grantedLabel}: allowed for session`);
+      return Promise.resolve(true);
+    }
     return new Promise<boolean>((resolve) => {
-      const finish = async (allowed: boolean): Promise<void> => {
+      const finish = async (
+        allowed: boolean,
+        session = false,
+      ): Promise<void> => {
         signal.removeEventListener("abort", deny);
         clearTimeout(this.armTimer);
         this.decide = undefined;
         this.armed = false;
         this.proposal = undefined;
+        this.proposalTruncated = false;
+        // `a` remembers the grant before the verdict lands, so the header
+        // and the status name it in the same write that closes the dialog.
+        let granted: string | undefined;
+        if (allowed && session) {
+          this.grants.set(grant.key, {
+            label: grant.label,
+            prefix: grant.prefix,
+          });
+          granted = grant.label;
+        }
+        const verdict = !allowed
+          ? "Denied"
+          : granted !== undefined
+            ? `Approved · ${granted} allowed for session`
+            : "Approved";
         // The verdict is the activity until the next event, so the elapsed
         // ticker keeps it (with its suffix) instead of overwriting it.
-        this.activity = allowed ? "Approved" : "Denied";
+        this.activity = verdict;
         resolve(allowed);
         await this.write([
           { path: "approval", value: noApproval() },
-          { path: "status", value: allowed ? "Approved" : "Denied" },
+          { path: "status", value: verdict },
+          ...(granted !== undefined ? this.grantsWrites() : []),
         ]);
       };
       // Anything but an armed, explicit "allow" is a deny, the abort included.
@@ -987,6 +1080,7 @@ export class TuimarkClient {
       this.proposal = proposal;
       signal.addEventListener("abort", deny, { once: true });
       const approval = this.approvalFor(proposal);
+      this.proposalTruncated = approval.truncated;
       const writes: Write[] = [
         { path: "palette.open", value: false },
         { path: "help.open", value: false },
@@ -1241,6 +1335,7 @@ export class TuimarkClient {
       this.decide = undefined;
       this.armed = false;
       this.proposal = undefined;
+      this.proposalTruncated = false;
       if (this.turn === request) this.turn = undefined;
       // Inline, a cancelled or failed reply still prints what arrived, and
       // a failed turn's notice is committed after it like any finished view.

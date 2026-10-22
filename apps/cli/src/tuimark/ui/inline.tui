@@ -36,6 +36,7 @@
        is being approved is reachable by key (the composer is disabled). -->
   <keymap when=".approving">
     <bind keys="y" action="dialog_confirm" label="allow" keycap="y"/>
+    <bind keys="a" action="dialog_session" label="session" keycap="a"/>
     <bind keys="n" action="dialog_cancel" label="deny" keycap="n"/>
     <bind keys="esc" action="dialog_cancel"/>
     <bind keys="ctrl+c" action="quit_request"/>
@@ -143,6 +144,7 @@
         <text class="la-model">{header.model}</text>
         <text class="la-mode">{header.mode}</text>
         <spacer/>
+        <text if="header.grants_on" class="la-muted la-grants">{header.grants}</text>
         <text class="la-muted la-session">{header.session}</text>
         <text class="la-muted la-ctx" class:warn="header.ctx_warn" class:danger="header.ctx_danger">ctx {header.ctx_label}</text>
         <progress id="ctx" class="la-ctxbar" class:warn="header.ctx_warn" class:danger="header.ctx_danger" bind="header.ctx_pct"/>
@@ -185,6 +187,7 @@
             <text wrap="truncate" class:add="ln.add" class:del="ln.del" class:note="ln.note">{ln.t}</text>
           </col>
         </scroll>
+        <text class="la-muted la-granthint">{approval.grant_hint}</text>
         <text class="la-muted">y allow · n deny · esc deny</text>
       </box>
 

@@ -365,6 +365,14 @@ export function helpSample(): Store {
   return store;
 }
 
+/** Idle with two session grants active: the header names them compactly. */
+export function grantsSample(): Store {
+  const { store } = base();
+  store.header.grants = "auto: files · bun test";
+  store.header.grants_on = true;
+  return store;
+}
+
 /** A half-typed command: the `/` popup over the composer, first match chosen. */
 export function slashSample(): Store {
   const { store } = base();
@@ -388,6 +396,7 @@ export const SAMPLES = {
   "sample-palette": paletteSample,
   "sample-help": helpSample,
   "sample-slash": slashSample,
+  "sample-grants": grantsSample,
   "sample-draft": draftSample,
   "sample-draft-long": longDraftSample,
 } as const;

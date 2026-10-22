@@ -25,6 +25,10 @@
   <!-- The approval preview: every row of what is being approved is reachable by
        key while the dialog is open (focus stays on Deny). -->
   <keymap when=".k-dialog">
+    <!-- Allow this call and matching ones for the session (the dialog's
+         grant line spells out what matches). The kit's own dialog rows
+         (y/n) are fixed, so `a` is this document's row, like scroll. -->
+    <bind keys="a" action="dialog_session" label="session" keycap="a"/>
     <bind keys="pgup" action="move-page-up" to="#approval_diff" label="scroll" keycap="pgup/pgdn"/>
     <bind keys="pgdn" action="move-page-down" to="#approval_diff"/>
     <bind keys="up" action="move-prev" to="#approval_diff"/>
@@ -137,6 +141,7 @@
         <text class="la-model">{header.model}</text>
         <text class="la-mode">{header.mode}</text>
         <spacer/>
+        <text if="header.grants_on" class="la-muted la-grants">{header.grants}</text>
         <text class="la-muted la-session">{header.session}</text>
         <text class="la-muted la-ctx" class:warn="header.ctx_warn" class:danger="header.ctx_danger">ctx {header.ctx_label}</text>
         <progress id="ctx" class="la-ctxbar" class:warn="header.ctx_warn" class:danger="header.ctx_danger" bind="header.ctx_pct"/>
@@ -210,6 +215,8 @@
           <text wrap="truncate" class:add="ln.add" class:del="ln.del" class:note="ln.note">{ln.t}</text>
         </col>
       </scroll>
+      <!-- What `a` would grant for the session, or why it cannot. -->
+      <text class="la-muted la-granthint">{approval.grant_hint}</text>
     </use>
     <use id="palette" template="k-palette" title="Commands" placeholder="type a command…" with="palette as p, found as f"/>
     <!-- The help overlay. The kit's k-help lists keys only and takes no

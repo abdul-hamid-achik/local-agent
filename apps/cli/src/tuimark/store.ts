@@ -35,9 +35,9 @@ export const PLACEHOLDER = "Message the model";
 export const PLACEHOLDER_BUSY = "Generating…";
 /** While the dialog is not armed yet: only deny works. */
 export const APPROVAL_WAIT_STATUS = "Waiting for approval · n deny · Esc deny";
-/** Once the dialog accepts `y`. */
+/** Once the dialog accepts `y` (and `a`, the session grant). */
 export const APPROVAL_STATUS =
-  "Waiting for approval · y allow · n deny · Esc deny";
+  "Waiting for approval · y allow · a session · n deny · Esc deny";
 export const APPROVAL_TRUNCATED_STATUS =
   "Preview truncated · y allow · n deny · Esc deny";
 export const BUSY_STATUS_LINE = "Generating…";
@@ -45,6 +45,12 @@ export const BUSY_STATUS_LINE = "Generating…";
 export const WAITING_STATUS = "Waiting for the model…";
 /** A `y` swallowed by the arm delay says so instead of going silent. */
 export const APPROVAL_UNARMED_STATUS = "Approval not armed yet — press y again";
+/** An `a` swallowed by the arm delay, same rule as `y`. */
+export const APPROVAL_UNARMED_SESSION_STATUS =
+  "Approval not armed yet — press a again";
+/** An `a` on a truncated preview: no grant is taken from an unread change. */
+export const APPROVAL_TRUNCATED_SESSION_STATUS =
+  "Preview truncated: session grant unavailable";
 
 export interface DiffLine {
   n: number;
@@ -64,6 +70,13 @@ export interface ApprovalState {
   yes: string;
   /** The preview was cut at the row cap: the dialog says so and still defaults to Deny. */
   truncated: boolean;
+  /**
+   * What `a` would grant for the rest of the session, spelled out (or why
+   * no grant is offered, when the preview is truncated). "" when closed.
+   */
+  grant_hint: string;
+  /** Whether `a` may grant at all: false exactly when the preview is truncated. */
+  grant_ok: boolean;
   lines: DiffLine[];
 }
 
@@ -80,6 +93,10 @@ export interface Store {
     /** Threshold styling for the ctx text/bar: warn at >=75%, danger at >=90%. */
     ctx_warn: boolean;
     ctx_danger: boolean;
+    /** Active session grants as one compact label ("auto: files · bun test"), "" for none. */
+    grants: string;
+    /** Whether any session grant is active (the header shows `grants` only then). */
+    grants_on: boolean;
   };
   /** True only before the first message: the welcome shows. Never true again. */
   empty: boolean;
@@ -198,6 +215,8 @@ export function noApproval(): ApprovalState {
     no: "Deny",
     yes: "Allow",
     truncated: false,
+    grant_hint: "",
+    grant_ok: false,
     lines: [],
   };
 }
@@ -238,6 +257,8 @@ export function initialStore(init: StoreInit): Store {
       ctx_pct: 0,
       ctx_warn: false,
       ctx_danger: false,
+      grants: "",
+      grants_on: false,
     },
     empty:
       init.empty ??
@@ -373,6 +394,90 @@ export function approvalText(proposal: ApprovalRequest, root?: string): string {
 export const TRUNCATED_BODY =
   "Preview truncated. Deny unless you have read the whole change.";
 
+// ------------------------------------------------------------ session grants
+//
+// `a` on an armed approval allows the call and remembers the grant for the
+// rest of the session (controller memory only; nothing is persisted). The
+// matching rules are deliberately coarse and spelled out in the dialog:
+// edits and writes share one "file changes" grant, a command grants its
+// program plus its first argument (`bun test`, `git status`; a bare program
+// grants itself), and an MCP call grants its exact SERVER__TOOL name.
+
+/** The server and tool of an MCP `SERVER__TOOL` name, or undefined without the separator. */
+export function mcpParts(
+  name: string,
+): { server: string; tool: string } | undefined {
+  const at = name.indexOf("__");
+  if (at <= 0 || at + 2 >= name.length) return undefined;
+  return { server: name.slice(0, at), tool: name.slice(at + 2) };
+}
+
+/** The grant a proposal falls under: its identity key and its short label. */
+export function grantFor(proposal: ApprovalRequest): {
+  key: string;
+  label: string;
+  /**
+   * A command grant's argv prefix (program + first argument, or just the
+   * program). It matches as a prefix — the dialog's "`bun test …`" — so a
+   * bare `ls` grant also covers `ls -la`, and nothing wider ever matches.
+   */
+  prefix?: readonly string[];
+} {
+  switch (proposal.kind) {
+    case "edit":
+    case "write":
+      return { key: "files", label: "files" };
+    case "command": {
+      const prefix = proposal.argv.slice(0, 2).map(cleanText);
+      const label = prefix.join(" ");
+      return { key: `cmd:${label}`, label, prefix };
+    }
+    case "mcp": {
+      const label = cleanText(proposal.name);
+      return { key: `mcp:${label}`, label };
+    }
+  }
+}
+
+/**
+ * Whether a remembered grant covers a proposal: exact for files and MCP,
+ * an argv-prefix match for commands (see `grantFor`).
+ */
+export function grantCovers(
+  grant: { key: string; prefix?: readonly string[] },
+  proposal: ApprovalRequest,
+): boolean {
+  if (proposal.kind === "command") {
+    // A grant with no program word covers nothing: `every` over an empty
+    // prefix is vacuously true and would auto-allow every command.
+    if (!grant.prefix || grant.prefix.length === 0 || grant.prefix[0] === "")
+      return false;
+    return grant.prefix.every(
+      (word, i) => cleanText(proposal.argv[i] ?? "") === word,
+    );
+  }
+  return grantFor(proposal).key === grant.key;
+}
+
+/** What `a` would grant, as the dialog spells it out. */
+export function grantHint(
+  proposal: ApprovalRequest,
+  truncated: boolean,
+): string {
+  if (truncated) return "preview truncated: session grant unavailable";
+  if (proposal.kind === "edit" || proposal.kind === "write")
+    return "a allow file changes this session";
+  const { label } = grantFor(proposal);
+  return proposal.kind === "command"
+    ? `a allow \`${label} …\` this session`
+    : `a allow \`${label}\` this session`;
+}
+
+/** The header's compact grants label: "auto: files · bun test", "" for none. */
+export function grantsLabel(labels: readonly string[]): string {
+  return labels.length === 0 ? "" : `auto: ${labels.join(" · ")}`;
+}
+
 /** What the approval dialog shows for a runtime proposal, wrapped for `cols` columns. */
 export function approvalState(
   proposal: ApprovalRequest,
@@ -387,6 +492,8 @@ export function approvalState(
     open: true,
     lines: preview.lines,
     truncated: preview.truncated,
+    grant_hint: grantHint(proposal, preview.truncated),
+    grant_ok: !preview.truncated,
   };
   const body = (text: string) => (preview.truncated ? TRUNCATED_BODY : text);
   switch (proposal.kind) {
@@ -411,13 +518,26 @@ export function approvalState(
         ),
         danger: preview.truncated,
       };
-    case "mcp":
+    case "mcp": {
+      // The dialog names the server, not only the joined SERVER__TOOL name:
+      // which process would run this is the decision the user is making.
+      const parts = mcpParts(proposal.name);
+      const server = parts ? cleanText(parts.server) : undefined;
+      const tool = cleanText(parts ? parts.tool : proposal.name);
       return {
         ...base,
-        title: clip(`Call ${cleanText(proposal.name)}?`, 70),
-        body: body("Call this MCP tool with the arguments below."),
+        title: clip(
+          server ? `Call ${tool} from server ${server}?` : `Call ${tool}?`,
+          70,
+        ),
+        body: body(
+          server
+            ? `MCP tool ${tool} from server ${server}. Call it with the arguments below.`
+            : "Call this MCP tool with the arguments below.",
+        ),
         danger: true,
       };
+    }
     default:
       return {
         ...base,

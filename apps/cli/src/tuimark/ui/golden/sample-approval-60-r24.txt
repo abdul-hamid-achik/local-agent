@@ -17,9 +17,9 @@
 │  │+  }                                                ┃  │
 │  │+}                                                  │  │
 │  └────────────────────────────────────────────────────┘  │
+│  a allow file changes this session                       │
 │                                                          │
 │                                     [ Deny ]  [ Allow ]  │
 │                                                          │
 ╰──────────────────────────────────────────────────────────╯
-╰──────────────────────────────────────────────────────────╯
- ⠋  Waiting for approval · y all… pgup/pgdn scroll          
+ ⠋  Waiting for approval · y all… a session                 

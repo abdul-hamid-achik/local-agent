@@ -15,11 +15,11 @@
 │ │src/fetch.ts       │  │$ bun test tests/stats.test.ts -t 'mean of an empty list'           │  │                   │ ┃
 │ │Updated src/fetch.t│  │in the workspace · timeout 120s · runs with your permissions        │  │                   │ ┃
 │ ╰───────────────────│  └────────────────────────────────────────────────────────────────────┘  │───────────────────╯ ┃
+│                     │  a allow `bun test …` this session                                       │                     ┃
+│ Assistant           │                                                                          │                     ┃
+│ Done. The helper now│                                                     [ Deny ]  [ Allow ]  │                     ┃
 │                     │                                                                          │                     ┃
-│ Assistant           │                                                     [ Deny ]  [ Allow ]  │                     ┃
-│ Done. The helper now│                                                                          │                     ┃
-│                     ╰──────────────────────────────────────────────────────────────────────────╯                     ┃
-│ ╭─ Tool · run_command ─────────────────────────────────────────────────────────────────────────────────────────────╮ ┃
+│ ╭─ Tool · run_comman╰──────────────────────────────────────────────────────────────────────────╯───────────────────╮ ┃
 │ │⠋  waiting for approval                                                                                           │ ┃
 │ │bun test fetch                                                                                                    │ ┃
 │ ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯ ┃
@@ -28,4 +28,4 @@
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Generating…                                                                                                          │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
- ⠋  Waiting for approval · y allow · n deny · Esc deny   pgup/pgdn scroll  home/end top/end                             
+ ⠋  Waiting for approval · y allow · a session · n deny · Esc deny   a session  pgup/pgdn scroll  home/end top/end      

@@ -24,6 +24,9 @@ import {
 import { FakeHost } from "#cli/tuimark/fake-host";
 import {
   APPROVAL_STATUS,
+  APPROVAL_TRUNCATED_SESSION_STATUS,
+  APPROVAL_TRUNCATED_STATUS,
+  APPROVAL_UNARMED_SESSION_STATUS,
   APPROVAL_UNARMED_STATUS,
   APPROVAL_WAIT_STATUS,
   type Store,
@@ -1392,6 +1395,7 @@ test("typing / opens the command popup; it filters, moves and completes", async 
     "/mode",
     "/theme",
     "/mouse",
+    "/permissions",
     "/mcp",
     "/help",
   ]);
@@ -1577,6 +1581,7 @@ test("the help overlay's store carries the slash commands", () => {
     "/mode plan|build",
     "/theme dark|light|auto",
     "/mouse on|off",
+    "/permissions [clear]",
     "/mcp",
     "/help",
   ]);
@@ -1633,4 +1638,289 @@ test("the palette loads earlier messages fullscreen and never lists it inline", 
   expect(store(inline.ui).found.items.map((i: PaletteItem) => i.id)).toContain(
     "quit",
   );
+});
+
+// ------------------------------------------------------------ session grants
+
+function writeProposal(): ApprovalRequest {
+  return {
+    kind: "write",
+    path: "b.txt",
+    created: true,
+    before: "",
+    after: "x",
+    diff: "+x",
+    identity: "i",
+  };
+}
+
+function commandProposal(argv: [string, ...string[]]): ApprovalRequest {
+  return { kind: "command", argv, cwd: "/w", timeoutMs: 1000 };
+}
+
+function mcpProposal(name: string): ApprovalRequest {
+  return { kind: "mcp", name, argumentsJson: "{}" };
+}
+
+/** Turns that ask approval for each turn's proposals in order. */
+function turnsAsking(lists: ApprovalRequest[][]): Script {
+  let turn = 0;
+  return async function* ({ options }) {
+    for (const proposal of lists[turn++] ?? [])
+      decisions.push(await options.approve(proposal, options.signal));
+    yield {
+      type: "message",
+      message: { role: "assistant", content: "done" },
+    };
+  };
+}
+
+test("grants: `a` on an edit lets a later write through with a status flash and a header label", async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  let turn = 0;
+  const { ui, client } = setup(async function* ({ options }) {
+    turn++;
+    decisions.push(
+      await options.approve(
+        turn === 1 ? editProposal() : writeProposal(),
+        options.signal,
+      ),
+    );
+    if (turn === 2) await gate;
+    yield {
+      type: "message",
+      message: { role: "assistant", content: "done" },
+    };
+  });
+  await ui.fire("send", "one");
+  await untilApproval(ui);
+  expect(store(ui).approval.grant_hint).toBe(
+    "a allow file changes this session",
+  );
+  expect(store(ui).approval.grant_ok).toBe(true);
+  await ui.fire("dialog_session");
+  await client.idle();
+  expect(decisions).toEqual([true]);
+  expect(store(ui).header.grants).toBe("auto: files");
+  expect(store(ui).header.grants_on).toBe(true);
+
+  // The write is the same "file changes" grant: no dialog, and the busy
+  // status names the grant that let it through.
+  await ui.fire("send", "two");
+  await until(() => decisions.length === 2);
+  expect(store(ui).approval.open).toBe(false);
+  await until(() => store(ui).status.includes("files: allowed for session"));
+  expect(store(ui).status).toContain("files: allowed for session");
+  release();
+  await client.idle();
+  expect(decisions).toEqual([true, true]);
+});
+
+test("grants: a command grant matches program + first argument as a prefix, nothing wider", async () => {
+  const { ui, client } = setup(
+    turnsAsking([
+      [commandProposal(["bun", "test", "a.ts"])],
+      [
+        commandProposal(["bun", "test", "b.ts", "--watch"]),
+        commandProposal(["bun", "run", "x"]),
+      ],
+      [commandProposal(["ls"])],
+      [commandProposal(["ls", "-la"]), commandProposal(["git", "status"])],
+    ]),
+  );
+  await ui.fire("send", "one");
+  await untilApproval(ui);
+  expect(store(ui).approval.grant_hint).toBe(
+    "a allow `bun test …` this session",
+  );
+  await ui.fire("dialog_session");
+  await client.idle();
+  expect(store(ui).header.grants).toBe("auto: bun test");
+
+  // `bun test …` runs; `bun run` still asks.
+  await ui.fire("send", "two");
+  await untilApproval(ui);
+  expect(decisions).toEqual([true, true]);
+  expect(store(ui).approval.grant_hint).toBe(
+    "a allow `bun run …` this session",
+  );
+  await ui.fire("dialog_cancel");
+  await client.idle();
+
+  // A bare program grants the program: `ls -la` is covered, `git` is not.
+  await ui.fire("send", "three");
+  await untilApproval(ui);
+  expect(store(ui).approval.grant_hint).toBe("a allow `ls …` this session");
+  await ui.fire("dialog_session");
+  await client.idle();
+  expect(store(ui).header.grants).toBe("auto: bun test · ls");
+  await ui.fire("send", "four");
+  await untilApproval(ui);
+  expect(decisions).toEqual([true, true, false, true, true]);
+  await ui.fire("dialog_cancel");
+  await client.idle();
+  expect(decisions).toEqual([true, true, false, true, true, false]);
+});
+
+test("grants: files do not cover commands; MCP grants are the exact SERVER__TOOL name", async () => {
+  const { ui, client } = setup(
+    turnsAsking([
+      [editProposal()],
+      [commandProposal(["bun", "test"])],
+      [mcpProposal("db__query")],
+      [mcpProposal("db__query"), mcpProposal("db__other")],
+    ]),
+  );
+  await ui.fire("send", "one");
+  await untilApproval(ui);
+  await ui.fire("dialog_session");
+  await client.idle();
+
+  await ui.fire("send", "two");
+  await untilApproval(ui);
+  await ui.fire("dialog_cancel");
+  await client.idle();
+
+  await ui.fire("send", "three");
+  await untilApproval(ui);
+  // The MCP dialog names the server in its title and body.
+  expect(store(ui).approval.title).toBe("Call query from server db?");
+  expect(store(ui).approval.body).toContain("MCP tool query from server db");
+  expect(store(ui).approval.grant_hint).toBe(
+    "a allow `db__query` this session",
+  );
+  await ui.fire("dialog_session");
+  await client.idle();
+  expect(store(ui).header.grants).toBe("auto: files · db__query");
+
+  // Same tool runs; a sibling tool on the same server still asks.
+  await ui.fire("send", "four");
+  await untilApproval(ui);
+  expect(decisions).toEqual([true, false, true, true]);
+  await ui.fire("dialog_cancel");
+  await client.idle();
+  expect(decisions).toEqual([true, false, true, true, false]);
+});
+
+test("grants: plan mode is unaffected (a grant never auto-allows under plan)", async () => {
+  // The runtime refuses plan mutations before `approve` runs at all; this
+  // script calls it directly, so the controller's own guard is what keeps
+  // the dialog in place.
+  const { ui, client } = setup(
+    turnsAsking([[editProposal()], [editProposal()]]),
+  );
+  await ui.fire("send", "one");
+  await untilApproval(ui);
+  await ui.fire("dialog_session");
+  await client.idle();
+  await ui.fire("send", "/mode plan");
+  expect(store(ui).header.mode).toBe("plan");
+  await ui.fire("send", "two");
+  await untilApproval(ui);
+  await ui.fire("dialog_cancel");
+  await client.idle();
+  expect(decisions).toEqual([true, false]);
+});
+
+test("grants: /permissions lists them and /permissions clear revokes them all", async () => {
+  const { ui, client } = setup(
+    turnsAsking([[editProposal()], [editProposal()]]),
+  );
+  await ui.fire("send", "/permissions");
+  expect(store(ui).status).toBe("No session grants");
+  await ui.fire("send", "one");
+  await untilApproval(ui);
+  await ui.fire("dialog_session");
+  await client.idle();
+  await ui.fire("send", "/permissions");
+  expect(store(ui).status).toBe("Session grants: files");
+  await ui.fire("send", "/permissions clear");
+  expect(store(ui).status).toBe("Session grants cleared");
+  expect(store(ui).header.grants).toBe("");
+  expect(store(ui).header.grants_on).toBe(false);
+  // Cleared means asked again.
+  await ui.fire("send", "two");
+  await untilApproval(ui);
+  await ui.fire("dialog_cancel");
+  await client.idle();
+  expect(decisions).toEqual([true, false]);
+});
+
+test("grants: a truncated preview refuses `a` (dialog stays, `y` still works, nothing remembered)", async () => {
+  const huge = editProposal(
+    Array.from({ length: 2100 }, (_, i) => `+line ${i}`).join("\n"),
+  );
+  const { ui, client } = setup(turnsAsking([[huge], [editProposal()]]));
+  await ui.fire("send", "one");
+  await until(() => store(ui).status === APPROVAL_TRUNCATED_STATUS);
+  expect(store(ui).approval.truncated).toBe(true);
+  expect(store(ui).approval.grant_ok).toBe(false);
+  expect(store(ui).approval.grant_hint).toBe(
+    "preview truncated: session grant unavailable",
+  );
+  await ui.fire("dialog_session");
+  expect(store(ui).approval.open).toBe(true);
+  expect(store(ui).status).toBe(APPROVAL_TRUNCATED_SESSION_STATUS);
+  expect(decisions).toEqual([]);
+  await ui.fire("dialog_confirm");
+  await client.idle();
+  expect(decisions).toEqual([true]);
+  expect(store(ui).header.grants_on).toBe(false);
+  // Nothing was granted: the next edit asks.
+  await ui.fire("send", "two");
+  await untilApproval(ui);
+  await ui.fire("dialog_cancel");
+  await client.idle();
+  expect(decisions).toEqual([true, false]);
+});
+
+test("grants: an unarmed `a` is swallowed with feedback, like `y`", async () => {
+  const { ui, client } = setup(turnsAsking([[editProposal()]]), {
+    armMs: 80,
+  });
+  await ui.fire("send", "one");
+  await until(() => store(ui).approval.open);
+  expect(store(ui).status).toBe(APPROVAL_WAIT_STATUS);
+  await ui.fire("dialog_session");
+  expect(store(ui).approval.open).toBe(true);
+  expect(store(ui).status).toBe(APPROVAL_UNARMED_SESSION_STATUS);
+  expect(decisions).toEqual([]);
+  await until(() => store(ui).status === APPROVAL_STATUS);
+  await ui.fire("dialog_session");
+  await client.idle();
+  expect(decisions).toEqual([true]);
+  expect(store(ui).header.grants).toBe("auto: files");
+});
+
+test("inline grants: a command grant skips the second dialog and commits are unchanged", async () => {
+  const { ui, client } = setup(
+    turnsAsking([
+      [commandProposal(["bun", "test", "a.ts"])],
+      [commandProposal(["bun", "test", "b.ts"])],
+    ]),
+    inline,
+  );
+  await ui.fire("send", "one");
+  await untilApproval(ui);
+  expect(store(ui).approval.grant_hint).toBe(
+    "a allow `bun test …` this session",
+  );
+  await ui.fire("dialog_session");
+  await client.idle();
+  await ui.fire("send", "two");
+  await client.idle();
+  // No second dialog ever opened, and both turns committed as before.
+  expect(decisions).toEqual([true, true]);
+  expect(store(ui).approval.open).toBe(false);
+  expect(store(ui).header.grants).toBe("auto: bun test");
+  expect(printed(ui)).toEqual([
+    "You: one",
+    "Assistant: done",
+    "You: two",
+    "Assistant: done",
+  ]);
+  expect(client.writeErrors).toEqual([]);
 });

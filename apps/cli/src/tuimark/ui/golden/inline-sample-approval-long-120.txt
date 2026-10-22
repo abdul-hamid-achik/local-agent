@@ -1,4 +1,4 @@
-=== grid 120x20 ===
+=== grid 120x21 ===
  Local Agent           Ollama / loopback  qwen3-coder:30b  build            session a1b2c3d  ctx 9.6k/32k  ████░░░░░░░░ 
 ╭─ Edit install.sh? ───────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Apply this change to the workspace.                                                                                  │
@@ -12,10 +12,11 @@
 │ ║+echo step 3                                                                                                      ║ │
 │ ║+echo step 4                                                                                                      ║ │
 │ ╚══════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝ │
+│ a allow file changes this session                                                                                    │
 │ y allow · n deny · esc deny                                                                                          │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
                                                                                                                         
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Generating…                                                                                                          │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
- ⠋  Waiting for approval · y allow · n deny · Esc deny   y allow  n deny  ^P commands  shift+tab mode                   
+ ⠋  Waiting for approval · y allow · a session · n deny · Esc deny   y allow  a session  n deny  ^P commands            

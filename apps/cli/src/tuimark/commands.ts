@@ -18,6 +18,8 @@ export interface CommandState {
   theme?: Theme;
   /** Whether fullscreen mouse reporting is on. Default false (off). */
   mouse?: boolean;
+  /** Active session-grant labels, in grant order (`/permissions` lists them). */
+  grants?: readonly string[];
 }
 
 export interface CommandOutcome {
@@ -30,10 +32,12 @@ export interface CommandOutcome {
   theme?: Theme;
   /** Set when the command changed the mouse toggle: write it to `mouse_on`. */
   mouse?: boolean;
+  /** Set by `/permissions clear`: revoke every session grant. */
+  clearGrants?: boolean;
 }
 
 export const HELP_STATUS =
-  "/mode plan|build · /theme dark|light|auto · /mouse on|off · /mcp · /help · Esc cancel · Ctrl+C exit";
+  "/mode plan|build · /theme dark|light|auto · /mouse on|off · /permissions [clear] · /mcp · /help · Esc cancel · Ctrl+C exit";
 
 /** Inline has no mouse (the engine ignores it there): the controller refuses with this. */
 export const MOUSE_INLINE_STATUS = "Mouse is not available in inline mode";
@@ -83,6 +87,25 @@ export function runSlash(text: string, state: CommandState): CommandOutcome {
     return {
       status: `Mouse changed to ${requested}`,
       mouse: requested === "on",
+    };
+  }
+  const permissions = command.match(/^\/permissions(?:\s+(\S+))?\s*$/i);
+  if (permissions) {
+    const grants = state.grants ?? [];
+    const requested = permissions[1]?.toLowerCase();
+    if (!requested)
+      return {
+        status: grants.length
+          ? `Session grants: ${grants.join(" · ")}`
+          : "No session grants",
+      };
+    if (requested !== "clear")
+      return {
+        status: `Unknown permissions setting: ${requested}. Use /permissions or /permissions clear`,
+      };
+    return {
+      status: grants.length ? "Session grants cleared" : "No session grants",
+      clearGrants: true,
     };
   }
   if (command === "/help") return { status: HELP_STATUS, help: true };
@@ -137,6 +160,12 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
     usage: "/mouse on|off",
     description: "toggle mouse reporting (fullscreen)",
     insert: "/mouse ",
+  },
+  {
+    name: "/permissions",
+    usage: "/permissions [clear]",
+    description: "show or clear session approval grants",
+    insert: "/permissions ",
   },
   {
     name: "/mcp",
@@ -227,6 +256,12 @@ export const PALETTE: readonly PaletteItem[] = [
   { id: "theme-auto", label: "Theme: auto", hint: "/theme auto" },
   { id: "mouse-on", label: "Mouse: on", hint: "/mouse on" },
   { id: "mouse-off", label: "Mouse: off", hint: "/mouse off" },
+  { id: "permissions", label: "Permissions: show", hint: "/permissions" },
+  {
+    id: "permissions-clear",
+    label: "Permissions: clear all",
+    hint: "/permissions clear",
+  },
   { id: "mcp", label: "MCP servers", hint: "/mcp" },
   { id: "help", label: "Help, commands and keys", hint: "/help" },
   // Two rows stand for keys, not slash commands: the controller runs them

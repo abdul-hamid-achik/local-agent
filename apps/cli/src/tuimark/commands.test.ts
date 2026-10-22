@@ -104,11 +104,41 @@ test("the palette carries the theme and mouse rows", () => {
   expect(HELP_STATUS).toContain("/mouse on|off");
 });
 
+test("/permissions lists session grants and clears them", () => {
+  expect(runSlash("/permissions", state)).toEqual({
+    status: "No session grants",
+  });
+  const granted = { ...state, grants: ["files", "bun test"] };
+  expect(runSlash("/permissions", granted)).toEqual({
+    status: "Session grants: files · bun test",
+  });
+  expect(runSlash("/permissions CLEAR", granted)).toEqual({
+    status: "Session grants cleared",
+    clearGrants: true,
+  });
+  expect(runSlash("/permissions clear", state)).toEqual({
+    status: "No session grants",
+    clearGrants: true,
+  });
+  expect(runSlash("/permissions maybe", granted)).toEqual({
+    status:
+      "Unknown permissions setting: maybe. Use /permissions or /permissions clear",
+  });
+  expect(filterPalette("permissions").map((r) => r.id)).toEqual([
+    "permissions",
+    "permissions-clear",
+  ]);
+  expect(paletteCommand("permissions")).toBe("/permissions");
+  expect(paletteCommand("permissions-clear")).toBe("/permissions clear");
+  expect(HELP_STATUS).toContain("/permissions [clear]");
+});
+
 test("the slash catalog lists exactly the commands the parser knows", () => {
   expect(SLASH_COMMANDS.map((c) => c.name)).toEqual([
     "/mode",
     "/theme",
     "/mouse",
+    "/permissions",
     "/mcp",
     "/help",
   ]);
@@ -145,9 +175,11 @@ test("the slash catalog lists exactly the commands the parser knows", () => {
     "/mode plan|build",
     "/theme dark|light|auto",
     "/mouse on|off",
+    "/permissions [clear]",
     "/mcp",
     "/help",
   ]);
+  expect(slashMatches("/p")?.map((c) => c.name)).toEqual(["/permissions"]);
 });
 
 test("the palette's key rows: quit everywhere, load-earlier fullscreen only", () => {

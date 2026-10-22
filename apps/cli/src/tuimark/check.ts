@@ -477,7 +477,42 @@ const plays: Expect[] = [
     value: LONG_DRAFT,
   },
   { sample: "sample", input: "ctrl+p", actions: ["palette_open"] },
+  // Active session grants are named in the header, and only then.
+  {
+    sample: "sample-grants",
+    input: "",
+    actions: [],
+    screen: ["auto: files · bun test"],
+  },
+  { sample: "sample", input: "", actions: [], notScreen: ["auto:"] },
   { sample: "sample-approval", input: "y", actions: ["dialog_confirm"] },
+  // `a` is this document's own dialog row (the kit's y/n are fixed): it
+  // fires dialog_session, and the dialog spells out what it would grant.
+  // (Play has no parent: armed/truncated refusal is controller-tested.)
+  {
+    sample: "sample-approval",
+    input: "a",
+    actions: ["dialog_session"],
+    screen: ["a allow file changes this session"],
+  },
+  {
+    sample: "sample-approval-command",
+    input: "a",
+    actions: ["dialog_session"],
+    screen: ["a allow `bun test …` this session"],
+  },
+  {
+    sample: "sample-approval-mcp",
+    input: "a",
+    actions: ["dialog_session"],
+    screen: ["from server db", "a allow `db__query` this session"],
+  },
+  {
+    sample: "sample-approval-truncated",
+    input: "a",
+    actions: ["dialog_session"],
+    screen: ["preview truncated: session grant unavailable"],
+  },
   { sample: "sample-approval", input: "n", actions: ["dialog_cancel"] },
   { sample: "sample-approval", input: "esc", actions: ["dialog_cancel"] },
   { sample: "sample-approval", input: "enter", actions: ["dialog_cancel"] },
@@ -691,6 +726,15 @@ const plays: Expect[] = [
     rows: 30,
     input: "y",
     actions: ["dialog_confirm"],
+  },
+  {
+    sample: "inline-sample-approval",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "a",
+    actions: ["dialog_session"],
+    screen: ["a allow file changes this session"],
   },
   {
     sample: "inline-sample-approval",
@@ -970,25 +1014,25 @@ const plays: Expect[] = [
   },
   // The mouse is off until `mouse_on` says so (default off): clicks and the
   // wheel are inert, then act. Cells are the 0-based dump grid: at 80x30 the
-  // approval's Deny/Allow row is y=22, Deny at x=58, Allow at x=68.
+  // approval's Deny/Allow row is y=23, Deny at x=58, Allow at x=68.
   {
     sample: "sample-approval",
     rows: 30,
-    input: "click:68,22",
+    input: "click:68,23",
     actions: [],
   },
   {
     sample: "sample-approval",
     rows: 30,
     input: "",
-    steps: [{ set: { path: "mouse_on", value: true } }, { click: [68, 22] }],
+    steps: [{ set: { path: "mouse_on", value: true } }, { click: [68, 23] }],
     actions: ["dialog_confirm"],
   },
   {
     sample: "sample-approval",
     rows: 30,
     input: "",
-    steps: [{ set: { path: "mouse_on", value: true } }, { click: [59, 22] }],
+    steps: [{ set: { path: "mouse_on", value: true } }, { click: [59, 23] }],
     actions: ["dialog_cancel"],
   },
   {

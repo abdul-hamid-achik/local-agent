@@ -8,7 +8,11 @@ import {
   contextPct,
   ctxFlags,
   EMPTY_COMMIT_VIEW,
+  grantCovers,
+  grantFor,
+  grantsLabel,
   initialStore,
+  mcpParts,
   noApproval,
   previewRows,
   previewWidth,
@@ -172,7 +176,8 @@ test("the approval dialog says what is being approved", () => {
   expect(
     approvalState({ kind: "mcp", name: "fx__echo", argumentsJson: "{}" }),
   ).toMatchObject({
-    title: "Call fx__echo?",
+    title: "Call echo from server fx?",
+    body: "MCP tool echo from server fx. Call it with the arguments below.",
     danger: true,
   });
 });
@@ -370,4 +375,102 @@ test("empty is derived from the transcript and the mouse starts off", () => {
   expect(workspaceBasename("/a/b/c/")).toBe("c");
   expect(workspaceBasename("/")).toBe("");
   expect(workspaceBasename("")).toBe("");
+});
+
+// ------------------------------------------------------------ session grants
+
+const cmd = (argv: [string, ...string[]]) =>
+  ({ kind: "command", argv, cwd: "/w", timeoutMs: 1000 }) as const;
+const editP = {
+  kind: "edit",
+  path: "a.ts",
+  before: "",
+  after: "",
+  diff: "-x\n+y",
+  identity: "i",
+} as const;
+
+test("the approval state spells out what `a` would grant, per kind", () => {
+  expect(approvalState(editP)).toMatchObject({
+    grant_hint: "a allow file changes this session",
+    grant_ok: true,
+  });
+  expect(approvalState(cmd(["bun", "test", "a.ts"]))).toMatchObject({
+    grant_hint: "a allow `bun test …` this session",
+    grant_ok: true,
+  });
+  expect(approvalState(cmd(["ls"])).grant_hint).toBe(
+    "a allow `ls …` this session",
+  );
+  expect(
+    approvalState({ kind: "mcp", name: "db__query", argumentsJson: "{}" })
+      .grant_hint,
+  ).toBe("a allow `db__query` this session");
+  expect(noApproval()).toMatchObject({ grant_hint: "", grant_ok: false });
+});
+
+test("grant matching: files shared, commands by argv prefix, MCP exact", () => {
+  const files = grantFor(editP);
+  expect(files).toMatchObject({ key: "files", label: "files" });
+  expect(
+    grantCovers(files, {
+      kind: "write",
+      path: "b",
+      created: true,
+      before: "",
+      after: "",
+      diff: "+x",
+      identity: "i",
+    }),
+  ).toBe(true);
+  expect(grantCovers(files, cmd(["bun", "test"]))).toBe(false);
+
+  const bunTest = grantFor(cmd(["bun", "test", "a.ts"]));
+  expect(bunTest).toMatchObject({ label: "bun test" });
+  expect(grantCovers(bunTest, cmd(["bun", "test", "b.ts"]))).toBe(true);
+  expect(grantCovers(bunTest, cmd(["bun", "run"]))).toBe(false);
+  expect(grantCovers(bunTest, cmd(["bun"]))).toBe(false);
+
+  const ls = grantFor(cmd(["ls"]));
+  expect(grantCovers(ls, cmd(["ls", "-la"]))).toBe(true);
+  expect(grantCovers(ls, cmd(["lsblk"]))).toBe(false);
+
+  // An empty argv (type-impossible, but parseArgv can produce one at
+  // runtime) must never become a grant that covers every command:
+  // `every` over an empty prefix is vacuously true.
+  const emptyArgv = {
+    kind: "command",
+    argv: [] as unknown as [string, ...string[]],
+    cwd: "/w",
+    timeoutMs: 1000,
+  } as const;
+  const empty = grantFor(emptyArgv);
+  expect(grantCovers(empty, cmd(["bun", "test"]))).toBe(false);
+  expect(grantCovers(empty, emptyArgv)).toBe(false);
+
+  const mcp = grantFor({ kind: "mcp", name: "db__query", argumentsJson: "{}" });
+  expect(
+    grantCovers(mcp, { kind: "mcp", name: "db__query", argumentsJson: "{}" }),
+  ).toBe(true);
+  expect(
+    grantCovers(mcp, { kind: "mcp", name: "db__other", argumentsJson: "{}" }),
+  ).toBe(false);
+
+  expect(mcpParts("db__query")).toEqual({ server: "db", tool: "query" });
+  expect(mcpParts("a__b__c")).toEqual({ server: "a", tool: "b__c" });
+  expect(mcpParts("plain")).toBeUndefined();
+  expect(grantsLabel([])).toBe("");
+  expect(grantsLabel(["files", "bun test"])).toBe("auto: files · bun test");
+});
+
+test("a truncated approval offers no session grant", () => {
+  const diff = Array.from(
+    { length: APPROVAL_MAX_ROWS + 10 },
+    (_, i) => `+l${i}`,
+  ).join("\n");
+  expect(approvalState({ ...editP, diff })).toMatchObject({
+    truncated: true,
+    grant_ok: false,
+    grant_hint: "preview truncated: session grant unavailable",
+  });
 });

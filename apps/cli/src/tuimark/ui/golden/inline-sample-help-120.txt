@@ -7,6 +7,7 @@
                                 │  /mode plan|build plan reads only · build can edit   │                                
                                 │  /theme dark|light|auto set the session theme        │                                
                                 │  /mouse on|off toggle mouse reporting (fullscreen)   │                                
+                                │  /permissions [clear] show or clear session approv…  │                                
                                 │  /mcp show connected MCP servers and their tools     │                                
                                 │  /help show the commands and the keys                │                                
                                 │                                                      │                                
@@ -14,11 +15,10 @@
                                 │  enter send                                          │                                
                                 │  shift/alt+enter new line                            │                                
                                 │  y allow                                             │                                
+                                │  a session                                           │                                
                                 │  n deny                                              │                                
                                 │  pgup/pgdn scroll                                    │                                
-                                │  home/end top/end                                    │                                
-                                │  ^P commands                                         │                                
-╭───────────────────────────────│  esc cancel                                          │───────────────────────────────╮
-│ Message the model             │  ctrl+c quit                                         │                               │
+╭───────────────────────────────│  home/end top/end                                    │───────────────────────────────╮
+│ Message the model             │  ^P commands                                         │                               │
 ╰───────────────────────────────│                                                      │───────────────────────────────╯
  Ready · /help for commands     ╰──────────────────────────────────────────────────────╯                                

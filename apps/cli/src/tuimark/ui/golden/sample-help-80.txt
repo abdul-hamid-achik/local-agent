@@ -1,31 +1,31 @@
 === grid 80x30 ===
  Local Agent         qwen3-coder:30b  build          ctx 9.6k/32k  ████░░░░░░░░ 
-┌──────────────────────────────────────────────────────────────────────────────┐
-│ You       ╭─ Help ───────────────────────────────────────────────╮           │
-│ Add a retr│                                                      │           │
-│           │  ? close help                                        │           │
-│ Assistant │                                                      │           │
-│ Sure. I wi│  Commands                                            │           │
-│  ts       │  /mode plan|build plan reads only · build can edit   │           │
-│  export as│  /theme dark|light|auto set the session theme        │           │
-│    // expo│  /mouse on|off toggle mouse reporting (fullscreen)   │           │
+┌───────────╭─ Help ───────────────────────────────────────────────╮───────────┐
+│ You       │                                                      │           │
+│ Add a retr│  ? close help                                        │           │
+│           │                                                      │           │
+│ Assistant │  Commands                                            │           │
+│ Sure. I wi│  /mode plan|build plan reads only · build can edit   │           │
+│  ts       │  /theme dark|light|auto set the session theme        │           │
+│  export as│  /mouse on|off toggle mouse reporting (fullscreen)   │           │
+│    // expo│  /permissions [clear] show or clear session approv…  │           │
 │    for (le│  /mcp show connected MCP servers and their tools     │           │
 │      try {│  /help show the commands and the keys                │           │
 │      catch│                                                      │           │
 │    }      │  Keys                                                │           │
 │  }        │  enter send                                          │           │
 │           │  shift/alt+enter new line                            │           │
-│ ╭─ Tool · │  pgup/pgdn scroll                                    │─────────╮ │
-│ │succeeded│  home/end top/end                                    │         │ │
-│ │src/fetch│  ^P commands                                         │         │ │
-│ │Updated s│  esc cancel                                          │         │ │
-│ ╰─────────│  ctrl+c quit                                         │─────────╯ │
-│           │  ↑/↓ history                                         │           │
-│ Assistant │  ^O earlier                                          │           │
-│ Done. The │  pgup/pgdn scroll                                    │           │
-│           │  ^L latest                                           │           │
-└───────────│  shift+tab mode                                      │───────────┘
-╭───────────│                                                      │───────────╮
-│ Message th╰──────────────────────────────────────────────────────╯           │
-╰──────────────────────────────────────────────────────────────────────────────╯
+│ ╭─ Tool · │  a session                                           │─────────╮ │
+│ │succeeded│  pgup/pgdn scroll                                    │         │ │
+│ │src/fetch│  home/end top/end                                    │         │ │
+│ │Updated s│  ^P commands                                         │         │ │
+│ ╰─────────│  esc cancel                                          │─────────╯ │
+│           │  ctrl+c quit                                         │           │
+│ Assistant │  ↑/↓ history                                         │           │
+│ Done. The │  ^O earlier                                          │           │
+│           │  pgup/pgdn scroll                                    │           │
+└───────────│  ^L latest                                           │───────────┘
+╭───────────│  shift+tab mode                                      │───────────╮
+│ Message th│                                                      │           │
+╰───────────╰──────────────────────────────────────────────────────╯───────────╯
  Ready · /help for commands                                                     

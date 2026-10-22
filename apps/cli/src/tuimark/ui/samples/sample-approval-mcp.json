@@ -8,7 +8,9 @@
     "ctx_label": "9.6k/32k",
     "ctx_pct": 30,
     "ctx_warn": false,
-    "ctx_danger": false
+    "ctx_danger": false,
+    "grants": "",
+    "grants_on": false
   },
   "empty": false,
   "mouse_on": false,
@@ -245,12 +247,14 @@
   },
   "approval": {
     "open": true,
-    "title": "Call db__query?",
-    "body": "Call this MCP tool with the arguments below.",
+    "title": "Call query from server db?",
+    "body": "MCP tool query from server db. Call it with the arguments below.",
     "danger": true,
     "no": "Deny",
     "yes": "Allow",
     "truncated": false,
+    "grant_hint": "a allow `db__query` this session",
+    "grant_ok": true,
     "lines": [
       {
         "n": 0,
@@ -424,6 +428,16 @@
         "hint": "/mouse off"
       },
       {
+        "id": "permissions",
+        "label": "Permissions: show",
+        "hint": "/permissions"
+      },
+      {
+        "id": "permissions-clear",
+        "label": "Permissions: clear all",
+        "hint": "/permissions clear"
+      },
+      {
         "id": "mcp",
         "label": "MCP servers",
         "hint": "/mcp"
@@ -468,6 +482,11 @@
         "desc": "toggle mouse reporting (fullscreen)"
       },
       {
+        "id": "/permissions",
+        "cmd": "/permissions [clear]",
+        "desc": "show or clear session approval grants"
+      },
+      {
         "id": "/mcp",
         "cmd": "/mcp",
         "desc": "show connected MCP servers and their tools"
@@ -482,7 +501,7 @@
   "draft": "",
   "placeholder": "Generating…",
   "busy": true,
-  "status": "Waiting for approval · y allow · n deny · Esc deny",
+  "status": "Waiting for approval · y allow · a session · n deny · Esc deny",
   "commit_buf": {
     "id": "commit",
     "is_user": false,
