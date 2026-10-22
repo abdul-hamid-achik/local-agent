@@ -254,7 +254,6 @@
     "yes": "Allow",
     "truncated": false,
     "grant_hint": "a allow `db__query` this session",
-    "grant_ok": true,
     "lines": [
       {
         "n": 0,

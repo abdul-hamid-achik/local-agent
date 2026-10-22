@@ -409,20 +409,19 @@ const editP = {
 test("the approval state spells out what `a` would grant, per kind", () => {
   expect(approvalState(editP)).toMatchObject({
     grant_hint: "a allow file changes this session",
-    grant_ok: true,
   });
   expect(approvalState(cmd(["bun", "test", "a.ts"]))).toMatchObject({
     grant_hint: "a allow `bun test …` this session",
-    grant_ok: true,
   });
   expect(approvalState(cmd(["ls"])).grant_hint).toBe(
-    "a allow `ls …` this session",
+    "a allow every `ls …` command this session",
   );
   expect(
     approvalState({ kind: "mcp", name: "db__query", argumentsJson: "{}" })
       .grant_hint,
   ).toBe("a allow `db__query` this session");
-  expect(noApproval()).toMatchObject({ grant_hint: "", grant_ok: false });
+  expect(noApproval()).toMatchObject({ grant_hint: "" });
+  expect("grant_ok" in noApproval()).toBe(false);
 });
 
 test("grant matching: files shared, commands by argv prefix, MCP exact", () => {
@@ -472,6 +471,33 @@ test("grant matching: files shared, commands by argv prefix, MCP exact", () => {
     grantCovers(mcp, { kind: "mcp", name: "db__other", argumentsJson: "{}" }),
   ).toBe(false);
 
+  // F6: grant identity is the raw argv/cwd — cleaned text is label-only.
+  expect(grantCovers(bunTest, cmd(["bun\u001b[0m", "test"]))).toBe(false);
+  expect(
+    grantCovers(bunTest, {
+      kind: "command",
+      argv: ["bun", "test"],
+      cwd: "/elsewhere",
+      timeoutMs: 1000,
+    } as const),
+  ).toBe(false);
+  expect(
+    grantCovers(
+      grantFor({
+        kind: "command",
+        argv: ["bun", "test"],
+        cwd: "/elsewhere",
+        timeoutMs: 1000,
+      } as const),
+      {
+        kind: "command",
+        argv: ["bun", "test", "x.ts"],
+        cwd: "/elsewhere",
+        timeoutMs: 1000,
+      } as const,
+    ),
+  ).toBe(true);
+
   expect(mcpParts("db__query")).toEqual({ server: "db", tool: "query" });
   expect(mcpParts("a__b__c")).toEqual({ server: "a", tool: "b__c" });
   expect(mcpParts("plain")).toBeUndefined();
@@ -486,7 +512,6 @@ test("a truncated approval offers no session grant", () => {
   ).join("\n");
   expect(approvalState({ ...editP, diff })).toMatchObject({
     truncated: true,
-    grant_ok: false,
     grant_hint: "preview truncated: session grant unavailable",
   });
 });

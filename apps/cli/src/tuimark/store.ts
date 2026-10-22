@@ -119,8 +119,6 @@ export interface ApprovalState {
    * no grant is offered, when the preview is truncated). "" when closed.
    */
   grant_hint: string;
-  /** Whether `a` may grant at all: false exactly when the preview is truncated. */
-  grant_ok: boolean;
   lines: DiffLine[];
 }
 
@@ -297,7 +295,6 @@ export function noApproval(): ApprovalState {
     yes: "Allow",
     truncated: false,
     grant_hint: "",
-    grant_ok: false,
     lines: [],
   };
 }
@@ -511,13 +508,18 @@ export function grantFor(proposal: ApprovalRequest): {
     case "write":
       return { key: "files", label: "files" };
     case "command": {
-      const prefix = proposal.argv.slice(0, 2).map(cleanText);
-      const label = prefix.join(" ");
-      return { key: `cmd:${label}`, label, prefix };
+      // Identity is the raw argv and cwd the runtime would execute;
+      // cleaned text is only ever the label the user reads.
+      const prefix = proposal.argv.slice(0, 2);
+      const label = prefix.map(cleanText).join(" ");
+      return {
+        key: `cmd:${JSON.stringify(prefix)}@${proposal.cwd}`,
+        label,
+        prefix,
+      };
     }
     case "mcp": {
-      const label = cleanText(proposal.name);
-      return { key: `mcp:${label}`, label };
+      return { key: `mcp:${proposal.name}`, label: cleanText(proposal.name) };
     }
   }
 }
@@ -535,9 +537,11 @@ export function grantCovers(
     // prefix is vacuously true and would auto-allow every command.
     if (!grant.prefix || grant.prefix.length === 0 || grant.prefix[0] === "")
       return false;
-    return grant.prefix.every(
-      (word, i) => cleanText(proposal.argv[i] ?? "") === word,
-    );
+    // The cwd is part of the grant's key: the same prefix elsewhere is
+    // a different command.
+    if (grant.key !== `cmd:${JSON.stringify(grant.prefix)}@${proposal.cwd}`)
+      return false;
+    return grant.prefix.every((word, i) => (proposal.argv[i] ?? "") === word);
   }
   return grantFor(proposal).key === grant.key;
 }
@@ -551,9 +555,11 @@ export function grantHint(
   if (proposal.kind === "edit" || proposal.kind === "write")
     return "a allow file changes this session";
   const { label } = grantFor(proposal);
-  return proposal.kind === "command"
-    ? `a allow \`${label} …\` this session`
-    : `a allow \`${label}\` this session`;
+  if (proposal.kind !== "command") return `a allow \`${label}\` this session`;
+  // A bare program grants the program itself: spell that breadth out.
+  return proposal.argv.length <= 1
+    ? `a allow every \`${label} …\` command this session`
+    : `a allow \`${label} …\` this session`;
 }
 
 /** The header's compact grants label: "auto: files · bun test", "" for none. */
@@ -576,7 +582,6 @@ export function approvalState(
     lines: preview.lines,
     truncated: preview.truncated,
     grant_hint: grantHint(proposal, preview.truncated),
-    grant_ok: !preview.truncated,
   };
   const body = (text: string) => (preview.truncated ? TRUNCATED_BODY : text);
   switch (proposal.kind) {

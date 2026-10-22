@@ -254,7 +254,6 @@
     "yes": "Allow",
     "truncated": true,
     "grant_hint": "preview truncated: session grant unavailable",
-    "grant_ok": false,
     "lines": [
       {
         "n": 0,

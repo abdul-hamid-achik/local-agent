@@ -181,6 +181,13 @@ export function formatElapsed(totalSeconds: number): string {
 
 /** The refused writes the client remembers. */
 const MAX_WRITE_ERRORS = 20;
+/** Refused inline prints kept for a later attempt, oldest dropped past this. */
+const MAX_SPILL = 50;
+
+/** One refused inline print, in the order it was first owed to scrollback. */
+type Spill =
+  | { kind: "view"; view: MessageView }
+  | { kind: "blocks"; blocks: Block[]; head: boolean };
 /** The messages the composer's history keeps. */
 const MAX_SENT = 200;
 
@@ -233,6 +240,15 @@ export class TuimarkClient {
   private readonly stream: LiveStream;
   /** Inline: the running reply's first blocks already carry its label in print. */
   private headCommitted = false;
+  /** Ordered refused inline prints, retried before any newer print. */
+  private spill: Spill[] = [];
+  private spillDropped = 0;
+  private spillFlush?: Promise<void>;
+  /** A session load is in flight: no turn may start until it settles. */
+  private switching = false;
+  /** Quit presses serialize here; the quit stage itself is memoized below. */
+  private quitChain: Promise<unknown> = Promise.resolve();
+  private quitPromise?: Promise<"quit" | undefined>;
   private liveTool?: LiveView;
   private dirty = false;
   private liveInFlight = false;
@@ -676,7 +692,12 @@ export class TuimarkClient {
   private async switchSession(handle: string): Promise<void> {
     const capability = this.options.sessions;
     if (!capability) return;
-    if (this.busy || this.proposal || this.queued !== undefined) {
+    if (
+      this.switching ||
+      this.busy ||
+      this.proposal ||
+      this.queued !== undefined
+    ) {
       await this.write([{ path: "status", value: BUSY_STATUS }]);
       return;
     }
@@ -687,6 +708,20 @@ export class TuimarkClient {
       ]);
       return;
     }
+    // Latched synchronously before the load: sends are refused while it
+    // is in flight, so no turn can start under the swap.
+    this.switching = true;
+    try {
+      await this.switchSessionLoaded(capability, handle);
+    } finally {
+      this.switching = false;
+    }
+  }
+
+  private async switchSessionLoaded(
+    capability: SessionsCapability,
+    handle: string,
+  ): Promise<void> {
     let context: SessionContext;
     try {
       context = await capability.load(handle);
@@ -702,6 +737,21 @@ export class TuimarkClient {
       ]);
       return;
     }
+    // Recheck after the await: if a turn somehow started anyway, the
+    // swap aborts whole instead of mutating history under it.
+    if (this.busy || this.proposal || this.queued !== undefined) {
+      await this.write([
+        ...this.closePanelWrite(),
+        { path: "status", value: BUSY_STATUS },
+      ]);
+      return;
+    }
+    // The old session's uncommitted reply is flushed (or spilled, ordered
+    // before the loaded history's commits) before the swap, never after.
+    if (this.inline) await this.commitStreamTail();
+    if (this.inline && this.stream.hasUncommitted) this.spillStream();
+    this.stream.reset();
+    this.headCommitted = false;
     // The swap is whole and synchronous from here: history, transcript,
     // builder and the checkpoint target change together, so the next
     // turn can only continue (and checkpoint) the loaded session.
@@ -759,13 +809,13 @@ export class TuimarkClient {
     const write =
       this.options.writeExport ??
       ((path: string, text: string) =>
-        writeFile(path, text, { flag: "wx" }).then(() => {}));
+        writeFile(path, text, { flag: "wx", mode: 0o600 }).then(() => {}));
     const text = transcriptMarkdown(views);
     const base = exportFileName(new Date(this.now()));
     const stem = base.slice(0, -".md".length);
     try {
       // Never overwrite: the timestamped name first, then -2, -3, …
-      for (let suffix = 1; ; suffix++) {
+      for (let suffix = 1; suffix <= 100; suffix++) {
         const name = suffix === 1 ? base : `${stem}-${suffix}.md`;
         try {
           await write(join(root, name), text);
@@ -777,6 +827,7 @@ export class TuimarkClient {
           if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
         }
       }
+      throw new Error("export file name taken after 100 attempts");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Export failed";
       const notice = this.builder.notice(`Export failed: ${message}`);
@@ -889,9 +940,71 @@ export class TuimarkClient {
     return run;
   }
 
+  private pushSpill(entry: Spill): void {
+    this.spill.push(entry);
+    if (this.spill.length > MAX_SPILL) {
+      this.spill.shift();
+      this.spillDropped++;
+      this.writeErrors.push(
+        `spill queue overflow: dropped oldest refused print (${this.spillDropped} dropped)`,
+      );
+      if (this.writeErrors.length > MAX_WRITE_ERRORS) this.writeErrors.shift();
+    }
+  }
+
+  /**
+   * Retries refused prints in their original order, stopping at the first
+   * refusal so nothing newer can overtake them. Concurrent calls share
+   * the in-flight flush.
+   */
+  private flushSpill(): Promise<void> {
+    if (this.spillFlush) return this.spillFlush;
+    if (this.spill.length === 0) return Promise.resolve();
+    const run = (async () => {
+      while (this.spill.length > 0) {
+        const entry = this.spill[0] as Spill;
+        const ok = await this.serializeCommit(() =>
+          entry.kind === "view"
+            ? this.printView(entry.view)
+            : entry.head
+              ? this.printView(this.assistantView(entry.blocks))
+              : this.printBlocks(entry.blocks),
+        );
+        if (!ok) return;
+        this.spill.shift();
+      }
+    })();
+    this.spillFlush = run.then(
+      () => {
+        this.spillFlush = undefined;
+      },
+      () => {
+        this.spillFlush = undefined;
+      },
+    );
+    return this.spillFlush;
+  }
+
+  /** Snapshots the stream's uncommitted blocks into the spill queue. */
+  private spillStream(): boolean {
+    const blocks = this.stream.finishTail();
+    if (blocks.length === 0) return false;
+    this.pushSpill({ kind: "blocks", blocks, head: !this.headCommitted });
+    this.stream.reset();
+    this.headCommitted = false;
+    return true;
+  }
+
   /** Prints one finished view (a user turn, a tool receipt, history). */
-  private commitView(view: MessageView): Promise<boolean> {
-    return this.serializeCommit(() => this.printView(view));
+  private async commitView(view: MessageView): Promise<boolean> {
+    await this.flushSpill();
+    if (this.spill.length > 0) {
+      this.pushSpill({ kind: "view", view });
+      return false;
+    }
+    const ok = await this.serializeCommit(() => this.printView(view));
+    if (!ok) this.pushSpill({ kind: "view", view });
+    return ok;
   }
 
   private async printView(view: MessageView): Promise<boolean> {
@@ -954,6 +1067,8 @@ export class TuimarkClient {
 
   /** Prints the reply's newly final blocks, as they close. */
   private async commitFinals(): Promise<void> {
+    await this.flushSpill();
+    if (this.spill.length > 0) return;
     const blocks = this.stream.takeFinal();
     if (blocks.length > 0) await this.commitOffered(blocks);
   }
@@ -961,12 +1076,31 @@ export class TuimarkClient {
   /**
    * Prints everything the running reply still owes the scrollback, tail
    * included. True when the reply had anything at all (printed or refused),
-   * so a caller knows the finished view must not be printed over it.
+   * so a caller knows the finished view must not be printed over it. A
+   * refused tail is spilled (its blocks leave the stream with their order
+   * and label kept) instead of being dropped by a later reset. Always
+   * joins `commitChain`, so a caller never races an in-flight commit.
    */
   private async commitStreamTail(): Promise<boolean> {
+    await this.flushSpill();
+    if (this.spill.length > 0) {
+      const hadHead = this.headCommitted;
+      const spilled = this.spillStream();
+      await this.serializeCommit(async () => {});
+      return spilled || hadHead;
+    }
     const blocks = this.stream.finishTail();
-    if (blocks.length > 0) await this.commitOffered(blocks);
-    return blocks.length > 0 || this.headCommitted;
+    if (blocks.length === 0) {
+      await this.serializeCommit(async () => {});
+      return this.headCommitted;
+    }
+    const ok = await this.commitOffered(blocks);
+    if (!ok) {
+      // commitOffered handed the blocks back to the stream; snapshot them.
+      this.spillStream();
+      return true;
+    }
+    return true;
   }
 
   /** Only the window of the transcript: the live message is left alone. */
@@ -986,22 +1120,16 @@ export class TuimarkClient {
 
   /** The window plus the end of whatever was streaming: a later tick must not resend it. */
   private async publishMessages(extra: Write[] = []): Promise<void> {
-    // Inline, blocks whose commit was refused stay in the stream (and in the
-    // live region) until a later commit lands: resetting would lose them.
-    const keepStream = this.inline && this.stream.hasUncommitted;
-    if (!keepStream) {
+    // Inline, blocks whose commit was refused are snapshotted into the
+    // spill queue (retried before the next print) instead of being reset
+    // away; the live region then clears like any finished reply.
+    if (this.inline && this.stream.hasUncommitted) this.spillStream();
+    else {
       this.stream.reset();
       this.headCommitted = false;
     }
     this.liveTool = undefined;
     this.dirty = false;
-    if (keepStream) {
-      await this.publishWindow([
-        { path: "thinking", value: IDLE_THINKING },
-        ...extra,
-      ]);
-      return;
-    }
     await this.publishWindow([
       { path: "live", value: IDLE_LIVE },
       { path: "thinking", value: IDLE_THINKING },
@@ -1115,7 +1243,23 @@ export class TuimarkClient {
    * non-empty draft is cleared first; only an empty composer quits
    * (mid-turn included, as before). Answering "quit" ends the session.
    */
-  private async quitRequest(): Promise<"quit" | undefined> {
+  private quitRequest(): Promise<"quit" | undefined> {
+    // Concurrent presses serialize: each decides its stage from the
+    // draft as the previous press left it, so a second press during the
+    // first's draft-clear still counts as the second stage. The quit
+    // stage itself is memoized — concurrent callers share one outcome,
+    // resolved only after its tail commit lands.
+    if (this.quitPromise) return this.quitPromise;
+    const run = this.quitChain.then(() => this.quitOnce());
+    this.quitChain = run.then(
+      () => {},
+      () => {},
+    );
+    return run;
+  }
+
+  private async quitOnce(): Promise<"quit" | undefined> {
+    if (this.quitPromise) return this.quitPromise;
     const ui = this.ui;
     if (!ui) return undefined;
     const draft = await ui
@@ -1130,13 +1274,20 @@ export class TuimarkClient {
       ]);
       return undefined;
     }
-    this.quitting = true;
-    this.queued = undefined;
-    // Inline, the partial reply is printed before the session ends: once
-    // "quit" is returned the host is gone and nothing can be committed.
-    if (this.inline) await this.commitStreamTail();
-    this.abort();
-    return "quit";
+    const quit = (async (): Promise<"quit"> => {
+      this.quitting = true;
+      this.queued = undefined;
+      // Inline, the partial reply is printed before the session ends: once
+      // "quit" is returned the host is gone and nothing can be committed.
+      if (this.inline) {
+        await this.commitStreamTail();
+        await this.flushSpill();
+      }
+      this.abort();
+      return "quit";
+    })();
+    this.quitPromise = quit;
+    return quit;
   }
 
   // --------------------------------------------------------------- the `/` popup
@@ -1236,7 +1387,7 @@ export class TuimarkClient {
    */
   private async modeToggle(): Promise<void> {
     if (this.proposal) return;
-    if (this.busy) {
+    if (this.busy || this.switching) {
       await this.write([{ path: "status", value: BUSY_STATUS }]);
       return;
     }
@@ -1248,6 +1399,10 @@ export class TuimarkClient {
   // --------------------------------------------------------------------- actions
 
   private async onSend(ev: HostEvent): Promise<void> {
+    if (this.switching) {
+      await this.write([{ path: "status", value: BUSY_STATUS }]);
+      return;
+    }
     const raw = typeof ev.value === "string" ? ev.value : "";
     // Enter over an open popup completes instead of sending when the
     // chosen row's completion differs from the typed text; a fully
@@ -1267,7 +1422,10 @@ export class TuimarkClient {
       await this.panelRun();
       return;
     }
-    // Any real send leaves the popup behind with the draft.
+    // Any real send leaves the popup behind with the draft. The draft is
+    // cleared by write below (no typed "" follows), so a dismissal for
+    // the sent draft must not latch onto the next one.
+    this.slashDismissed = false;
     const closed = this.closeSlash();
     if (closed.length > 0) await this.write(closed);
     // A command is one line: a pasted block that starts with a slash (a path, a
@@ -1476,7 +1634,7 @@ export class TuimarkClient {
     }
     const command = paletteCommand(id);
     // The help overlay is harmless while a turn runs; everything else waits.
-    if (this.busy && command !== "/help") {
+    if ((this.busy || this.switching) && command !== "/help") {
       await this.write([{ path: "status", value: BUSY_STATUS }]);
       return;
     }
@@ -1593,6 +1751,7 @@ export class TuimarkClient {
   };
 
   private async beginTurn(prompt: string): Promise<void> {
+    if (this.switching) return;
     this.busy = true;
     const request = new AbortController();
     this.turn = request;
@@ -1812,7 +1971,6 @@ export class TuimarkClient {
     } finally {
       if (this.timer) clearInterval(this.timer);
       this.timer = undefined;
-      this.busy = false;
       clearTimeout(this.armTimer);
       this.decide = undefined;
       this.armed = false;
@@ -1833,6 +1991,9 @@ export class TuimarkClient {
         // The turn's last observed usage is the resting baseline (CtxMeter).
         ...this.ctxWrites(this.ctx.finishTurn()),
       ]);
+      // Busy clears only after the final commits/publish above, so no
+      // send or switch can enter while this turn still owes prints.
+      this.busy = false;
     }
   }
 }

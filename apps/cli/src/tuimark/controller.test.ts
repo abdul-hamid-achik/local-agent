@@ -1,3 +1,6 @@
+import { mkdtemp, readFile, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type {
   AgentEvent,
   AgentOptions,
@@ -1720,7 +1723,7 @@ test("grants: `a` on an edit lets a later write through with a status flash and 
   expect(store(ui).approval.grant_hint).toBe(
     "a allow file changes this session",
   );
-  expect(store(ui).approval.grant_ok).toBe(true);
+  expect("grant_ok" in store(ui).approval).toBe(false);
   await ui.fire("dialog_session");
   await client.idle();
   expect(decisions).toEqual([true]);
@@ -1773,7 +1776,9 @@ test("grants: a command grant matches program + first argument as a prefix, noth
   // A bare program grants the program: `ls -la` is covered, `git` is not.
   await ui.fire("send", "three");
   await untilApproval(ui);
-  expect(store(ui).approval.grant_hint).toBe("a allow `ls …` this session");
+  expect(store(ui).approval.grant_hint).toBe(
+    "a allow every `ls …` command this session",
+  );
   await ui.fire("dialog_session");
   await client.idle();
   expect(store(ui).header.grants).toBe("auto: bun test · ls");
@@ -1877,7 +1882,7 @@ test("grants: a truncated preview refuses `a` (dialog stays, `y` still works, no
   await ui.fire("send", "one");
   await until(() => store(ui).status === APPROVAL_TRUNCATED_STATUS);
   expect(store(ui).approval.truncated).toBe(true);
-  expect(store(ui).approval.grant_ok).toBe(false);
+  expect("grant_ok" in store(ui).approval).toBe(false);
   expect(store(ui).approval.grant_hint).toBe(
     "preview truncated: session grant unavailable",
   );
@@ -2445,4 +2450,323 @@ test("a failed export lands as an error notice, not a model message", async () =
   await ui.fire("send", "next");
   await client.idle();
   expect(JSON.stringify(seen)).not.toContain("Export failed");
+});
+
+// ------------------------------------------- adversarial-review regressions
+
+test("F1: a send during a gated session load never starts a turn (fullscreen)", async () => {
+  const first = fakeSession("aaa111", [
+    { role: "user", content: "AAA prompt" },
+  ]);
+  const second = fakeSession("bbb222", [
+    { role: "user", content: "BBB saved prompt" },
+  ]);
+  let releaseLoad: () => void = () => {};
+  const loadGate = new Promise<void>((r) => {
+    releaseLoad = r;
+  });
+  const sessions = {
+    list: async () => [
+      { handle: "aaa111", messages: 1 },
+      { handle: "bbb222", messages: 1 },
+    ],
+    load: async () => {
+      await loadGate;
+      return second;
+    },
+  };
+  const { ui, client, seen } = setup(reply("turn reply"), {
+    session: first,
+    sessions,
+  });
+  await ui.fire("send", "/sessions");
+  await ui.fire("panel_next");
+  const switching = ui.fire("panel_run");
+  await new Promise((r) => setTimeout(r, 20));
+  await ui.fire("send", "hello during load");
+  expect(seen).toHaveLength(0);
+  releaseLoad();
+  await switching;
+  expect(store(ui).header.session).toBe("session bbb222");
+  await ui.fire("send", "after switch");
+  await client.idle();
+  expect(seen[0]?.messages).toEqual([
+    "user:BBB saved prompt",
+    "user:after switch",
+  ]);
+});
+
+test("F1: a send during a gated session load never starts a turn (inline composer)", async () => {
+  const first = fakeSession("aaa111", []);
+  const second = fakeSession("bbb222", [
+    { role: "user", content: "BBB saved prompt" },
+  ]);
+  let releaseLoad: () => void = () => {};
+  const loadGate = new Promise<void>((r) => {
+    releaseLoad = r;
+  });
+  const sessions = {
+    list: async () => [
+      { handle: "aaa111", messages: 0 },
+      { handle: "bbb222", messages: 1 },
+    ],
+    load: async () => {
+      await loadGate;
+      return second;
+    },
+  };
+  const { ui, client, seen } = setup(reply("turn reply"), {
+    session: first,
+    sessions,
+    presentation: "inline",
+  });
+  await ui.fire("send", "/sessions");
+  await ui.fire("panel_next");
+  const switching = ui.fire("panel_run");
+  await new Promise((r) => setTimeout(r, 20));
+  await ui.fire("send", "hello during load");
+  expect(seen).toHaveLength(0);
+  releaseLoad();
+  await switching;
+  expect(store(ui).header.session).toBe("session bbb222");
+  await client.idle();
+});
+
+test("F7: a dismissed slash popup reopens for a fresh draft after a send", async () => {
+  const { ui } = setup(reply("x"));
+  await ui.fire("typed", "/mo");
+  expect(store(ui).slash.open).toBe(true);
+  await ui.fire("slash_close");
+  expect(store(ui).slash.open).toBe(false);
+  await ui.fire("send", "/mo");
+  // No typed "" is synthesized for the programmatic draft clear.
+  await ui.fire("typed", "/m");
+  expect(store(ui).slash.open).toBe(true);
+});
+
+test("F2: a refused user view is spilled and printed before the reply after recovery", async () => {
+  const { ui, client } = setup(reply("hello world"), inline);
+  ui.refuseCommit = (_commit, index) =>
+    index === 0 ? "refused-user" : undefined;
+  await ui.fire("send", "prompt-one");
+  await client.idle();
+  ui.refuseCommit = undefined;
+  await ui.fire("send", "prompt-two");
+  await client.idle();
+  const out = printed(ui);
+  expect(out.filter((s) => s === "You: prompt-one")).toHaveLength(1);
+  expect(out.indexOf("You: prompt-one")).toBeLessThan(
+    out.findIndex((s) => s.includes("hello world")),
+  );
+  expect(out.indexOf("You: prompt-one")).toBeLessThan(
+    out.indexOf("You: prompt-two"),
+  );
+});
+
+test("F3: persistently refused reply blocks survive into the next healthy turn", async () => {
+  let refusing = true;
+  let releaseSecond: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    releaseSecond = r;
+  });
+  let calls = 0;
+  const { ui, client } = setup(async function* () {
+    calls++;
+    if (calls === 1) {
+      yield { type: "text", text: "alpha beta gamma" };
+      yield {
+        type: "message",
+        message: { role: "assistant", content: "alpha beta gamma" },
+      };
+    } else {
+      yield { type: "text", text: "second reply" };
+      await gate;
+      yield {
+        type: "message",
+        message: { role: "assistant", content: "second reply" },
+      };
+    }
+  }, inline);
+  let n = 0;
+  ui.refuseCommit = () => (refusing && n++ > 0 ? "refused" : undefined);
+  await ui.fire("send", "hi");
+  await client.idle();
+  await ui.fire("send", "second");
+  await new Promise((r) => setTimeout(r, 20));
+  refusing = false;
+  releaseSecond();
+  await client.idle();
+  const out = printed(ui);
+  expect(out.filter((s) => s.includes("alpha beta gamma"))).toHaveLength(1);
+  expect(out.findIndex((s) => s.includes("alpha beta gamma"))).toBeLessThan(
+    out.findIndex((s) => s.includes("second reply")),
+  );
+});
+
+test("F8: refused pre-tool text prints before the tool card", async () => {
+  let refusingPre = true;
+  let releaseTool: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    releaseTool = r;
+  });
+  const { ui, client } = setup(async function* ({ options }) {
+    yield { type: "text", text: "pre-tool text\n\n" };
+    yield {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          {
+            id: "c1",
+            function: { name: "edit", arguments: { path: "a.txt" } },
+          },
+        ],
+      },
+    };
+    yield { type: "tool_requested", id: "e1", name: "edit" };
+    const allowed = await options.approve(editProposal(), options.signal);
+    await gate;
+    yield {
+      type: "message",
+      message: {
+        role: "tool",
+        tool_name: "edit",
+        tool_call_id: "c1",
+        content: JSON.stringify({
+          status: allowed ? "succeeded" : "denied",
+          output: "Updated a.txt",
+        }),
+      } as Message,
+    };
+  }, inline);
+  ui.refuseCommit = () => {
+    if (!refusingPre) return undefined;
+    const buf = JSON.stringify(ui.commits.at(-1)?.buf ?? "");
+    return buf.includes("pre-tool text") ? "refused-pre" : undefined;
+  };
+  await ui.fire("send", "edit it");
+  await untilApproval(ui);
+  await ui.fire("dialog_confirm");
+  refusingPre = false;
+  releaseTool();
+  await client.idle();
+  const out = printed(ui);
+  const pre = out.findIndex((s) => s.includes("pre-tool text"));
+  const card = out.findIndex((s) => s === "tool edit succeeded");
+  expect(pre).toBeGreaterThanOrEqual(0);
+  expect(card).toBeGreaterThan(pre);
+});
+
+test("F4: a switch prints the old session's refused reply before the loaded history", async () => {
+  const first = fakeSession("aaa111", []);
+  const second = fakeSession("bbb222", [
+    { role: "user", content: "saved prompt" },
+  ]);
+  const sessions = capabilityFor({ aaa111: first, bbb222: second });
+  let refuse = true;
+  let calls = 0;
+  const { ui, client } = setup(
+    async function* () {
+      calls++;
+      const text = calls === 1 ? "OLD-SESSION-REPLY" : "fresh reply";
+      yield { type: "text", text };
+      yield { type: "message", message: { role: "assistant", content: text } };
+    },
+    {
+      presentation: "inline",
+      session: first,
+      sessions,
+    },
+  );
+  let n = 0;
+  ui.refuseCommit = () => (refuse && n++ > 0 ? "refused" : undefined);
+  await ui.fire("send", "old prompt");
+  await client.idle();
+  expect(printed(ui)).toEqual(["You: old prompt"]);
+  refuse = false;
+  await ui.fire("send", "/sessions");
+  await ui.fire("panel_next");
+  await ui.fire("panel_run");
+  const out = printed(ui);
+  const oldReply = out.findIndex((s) => s.includes("OLD-SESSION-REPLY"));
+  const saved = out.indexOf("You: saved prompt");
+  expect(oldReply).toBeGreaterThanOrEqual(0);
+  expect(saved).toBeGreaterThan(oldReply);
+  await ui.fire("send", "new prompt");
+  await client.idle();
+  expect(
+    printed(ui).filter((s) => s.includes("OLD-SESSION-REPLY")),
+  ).toHaveLength(1);
+});
+
+test("F5: concurrent quit requests resolve only after the partial reply prints once", async () => {
+  const { ui, client } = setup(async function* ({ options }) {
+    yield { type: "text", text: "partial words here" };
+    await new Promise((_, reject) =>
+      options.signal.addEventListener("abort", () =>
+        reject(new Error("aborted")),
+      ),
+    );
+  }, inline);
+  ui.ackMs = 30;
+  await ui.fire("send", "go");
+  await new Promise((r) => setTimeout(r, 60));
+  const atResolve: string[][] = [];
+  const q1 = ui.fire("quit_request").then((v) => {
+    atResolve.push(printed(ui));
+    return v;
+  });
+  const q2 = ui.fire("quit_request").then((v) => {
+    atResolve.push(printed(ui));
+    return v;
+  });
+  expect(await Promise.all([q1, q2])).toEqual(["quit", "quit"]);
+  for (const snapshot of atResolve)
+    expect(snapshot).toContain("Assistant: partial words here");
+  await client.idle();
+  expect(
+    printed(ui).filter((s) => s.includes("partial words here")),
+  ).toHaveLength(1);
+});
+
+test("F5: a second concurrent ctrl+c counts as the quit stage after the draft clear", async () => {
+  const { ui } = setup(reply("x"));
+  ui.ackMs = 20;
+  store(ui).draft = "work in progress";
+  const first = ui.fire("quit_request");
+  const second = ui.fire("quit_request");
+  expect(await first).toBeUndefined();
+  expect(await second).toBe("quit");
+});
+
+test("F9: the export suffix loop is bounded at 100 attempts", async () => {
+  let attempts = 0;
+  const { ui, client } = setup(reply("x"), {
+    writeExport: async () => {
+      attempts++;
+      throw Object.assign(new Error("EEXIST"), { code: "EEXIST" });
+    },
+  });
+  await ui.fire("send", "hi");
+  await client.idle();
+  await ui.fire("send", "/export");
+  expect(attempts).toBe(100);
+  expect(store(ui).status).toContain("Export failed");
+  expect(store(ui).messages.at(-1)?.is_notice).toBe(true);
+});
+
+test("F9: a real export file is created with mode 0o600", async () => {
+  const root = await mkdtemp(join(tmpdir(), "la-export-"));
+  const at = new Date(2026, 9, 22, 9, 5, 3).getTime();
+  const { ui, client } = setup(reply("mode reply"), {
+    workspace: { root } as Workspace,
+    now: () => at,
+  });
+  await ui.fire("send", "mode prompt");
+  await client.idle();
+  await ui.fire("send", "/export");
+  const path = join(root, "local-agent-transcript-20261022-090503.md");
+  expect((await stat(path)).mode & 0o777).toBe(0o600);
+  expect(await readFile(path, "utf8")).toContain("mode prompt");
 });
