@@ -1,6 +1,8 @@
 # local-agent
 
-A local coding harness built with Bun, TypeScript and Vue terminal components.
+A local coding harness built with Bun and TypeScript. The default interactive
+client on macOS and Linux is built on Tuimark; the Vue terminal client remains
+as the fallback and as the default on Windows.
 
 **Experimental migration:** the Go implementation has been removed from this
 working tree at the project owner's request. This does not mean feature parity
@@ -80,6 +82,9 @@ a child and draws the whole screen from `apps/cli/src/tuimark/ui/app.tui`.
   an explicit `--ui tuimark` fails instead.
 - `--mode inline` and the headless flags use the Vue client unless `--ui tuimark`
   is explicit, which refuses them: the Tuimark client is fullscreen only so far.
+  Its inline presentation is the next step: finished blocks are committed into
+  the terminal's own scrollback (`tuimark host --inline`, the SDK `commit()`),
+  with the composer, the live tail, and approvals in a small live region.
 - `vendor/tuimark/` holds the SDK tarball (`file:` dependency) until its release
   is on the registry; see the README there.
 - Composer: `enter` sends, `shift+enter` or `alt+enter` start a new line, and a
