@@ -12,6 +12,15 @@
     "node": ">=22",
     "bun": "1.4.2"
   },
+  "resolutions": {
+    "@types/node": "26.5.0",
+    "@vue/runtime-core": "3.5.44",
+    "vue": "3.5.44",
+    "vitepress/vite": "6.4.5",
+    "@vueuse/core/vue": "3.5.44",
+    "@vueuse/shared/vue": "3.5.44",
+    "@vueuse/integrations/vue": "3.5.44"
+  },
   "scripts": {
     "dev": "bun run apps/cli/src/main.ts",
     "start": "bun run apps/cli/dist/main.mjs",
@@ -39,7 +48,7 @@
     "@types/bun": "1.4.2",
     "entities": "7.0.1",
     "typescript": "7.0.2",
-    "vite": "8.2.2",
-    "vitest": "5.0.0"
+    "vite": "8.3.5",
+    "vitest": "5.0.5"
   }
 }
