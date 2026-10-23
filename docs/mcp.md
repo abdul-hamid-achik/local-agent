@@ -2,7 +2,6 @@
 title: MCP integrations
 description: Connect MCP servers to the Bun CLI -- trusted JSON config, namespaced tools, status checks and approval boundaries.
 outline: deep
-currentImplementation: true
 ---
 
 # MCP integrations
@@ -28,10 +27,38 @@ A minimal file looks like:
 [
   {
     "name": "my-server",
-    "url": "http://127.0.0.1:8080/mcp"
+    "transport": { "kind": "http", "url": "http://127.0.0.1:8080/mcp" }
   }
 ]
 ```
+
+HTTP endpoints must point at local-machine addresses unless you pass
+`"allowRemote": true` inside the transport.
+
+## A working browser today
+
+A real browser — navigation, clicks, forms, screenshots, page snapshots — needs
+no new code: run [Playwright MCP](https://github.com/microsoft/playwright-mcp)
+as a configured server. It runs locally, keeps no API keys, and appears to the
+agent as `browser__*` tools:
+
+```json
+[
+  {
+    "name": "browser",
+    "transport": {
+      "kind": "stdio",
+      "command": "bunx",
+      "args": ["@playwright/mcp@latest"],
+      "env": { "PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": "/Users/you" }
+    }
+  }
+]
+```
+
+STDIO servers start with a scrubbed environment: `PATH` and `HOME` are empty
+unless your config provides them, which is why the `env` block above exists.
+Verify the connection before a session with `--mcp-status`.
 
 ## Tool invocation
 
