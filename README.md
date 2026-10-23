@@ -88,8 +88,8 @@ a child and draws the whole screen from `apps/cli/src/tuimark/ui/app.tui`.
   session, `n`/`esc` deny), the
   composer, and the status. A bare `--mode inline` still uses the Vue client,
   and the headless flags refuse `--ui tuimark`.
-- `vendor/tuimark/` holds the SDK tarball (`file:` dependency) until its release
-  is on the registry; see the README there.
+- The SDK comes from npm (`@thelacanians/tuimark@0.4.6`); it downloads the
+  pinned, checksum-verified `tuimark` binary itself.
 - Composer: `enter` sends, `shift+enter` or `alt+enter` start a new line, and a
   pasted block stays one message. The box grows to eight rows, then scrolls.
   Sending while a reply is generating queues one message (a further send
