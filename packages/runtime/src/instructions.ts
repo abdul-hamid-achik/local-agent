@@ -39,6 +39,7 @@ export function hostInstructions(
     "Tools: read, list and search only inspect; edit replaces one exact piece of an existing file; write creates a file or replaces a whole one; run_command runs one program given as an argv array, with no shell (no pipes, &&, ; or redirects).",
     "fetch retrieves one http(s) URL as readable text (HTML becomes plain text); web_search searches the web via SearXNG when configured, otherwise DuckDuckGo Lite, and returns links to fetch next. Both are read-only.",
     "read_image attaches one workspace image (PNG, JPEG, WebP or GIF, at most 5 MiB) to its tool result so a vision model can see it; it is read-only and needs a vision model.",
+    "task delegates one bounded read-only investigation to a fresh subagent and returns its final answer; use it to pursue independent questions in parallel.",
     "todo_write replaces the whole todo list: plan multi-step work with it, resend the full list each call, and keep statuses current (at most one item in_progress).",
     programs.length
       ? `Programs found on PATH: ${programs.join(", ")}. Run only these (or the project's own scripts); anything else may not be installed.`

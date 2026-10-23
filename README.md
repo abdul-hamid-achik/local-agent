@@ -185,6 +185,7 @@ of the workspace stay forbidden.
 | `search` | none | Literal or regular-expression search over workspace text files as `path:line: text` (100 matches; binaries, `.git`, `node_modules` and secrets skipped) |
 | `fetch` | none | GET one http(s) URL as readable text (HTML → plain text, 512 KiB cap, redirects followed up to 5 hops) |
 | `web_search` | none | Search the web via SearXNG when `LOCAL_AGENT_SEARXNG_URL` is set, otherwise DuckDuckGo Lite; returns the top 8 results |
+| `task` | none | Delegate a bounded read-only investigation to a fresh subagent (read, list, search, fetch, web_search, read_image only) and get its final answer |
 | `edit` | `--approve-edits` | Replace one exact occurrence in an existing file |
 | `write` | `--approve-edits` | Create a file (creating directories) or replace one; the approval shows the content as added lines, or the diff for a replacement |
 | `run_command` | `--approve-commands` | Run one program from an `argv` array, with no shell |

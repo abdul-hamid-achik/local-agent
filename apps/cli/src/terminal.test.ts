@@ -333,6 +333,7 @@ test("mode switch changes the Ollama tool catalog", async () => {
     "search",
     "fetch",
     "web_search",
+    "task",
     "todo_write",
   ]);
 
@@ -354,6 +355,7 @@ test("mode switch changes the Ollama tool catalog", async () => {
     "search",
     "fetch",
     "web_search",
+    "task",
     "edit",
     "write",
     "run_command",

@@ -17,8 +17,9 @@ Switch intent with `shift+tab` at any time, or run `/mode plan` or
 
 Plan instructs the model to inspect and explain; it does not request
 mutations. Only read-only tools are offered: `read`, `read_image`, `list`,
-`search`, `fetch`, `web_search`, and `todo_write` (the todo list has no
-external effects, so planning keeps it).
+`search`, `fetch`, `web_search`, `task`, and `todo_write` (the todo list
+has no external effects, so planning keeps it; `task` spawns a read-only
+subagent, so planning can investigate in parallel).
 
 Plan hard-denies the following regardless of any approver:
 

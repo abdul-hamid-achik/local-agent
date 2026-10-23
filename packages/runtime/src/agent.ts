@@ -55,6 +55,17 @@ const SearchArgs = z.object({
 });
 const FetchArgs = z.object({ url: z.string().min(1).max(8192) });
 const WebSearchArgs = z.object({ query: z.string().min(1).max(500) });
+const TaskArgs = z.strictObject({
+  prompt: z.string().min(1).max(8000),
+  // Small models send null or "" for an argument they leave out.
+  max_turns: z
+    .number()
+    .int()
+    .min(1)
+    .max(16)
+    .nullish()
+    .transform((value) => value || 8),
+});
 const CommandArgs = z.strictObject({
   // An array, or (from a small model) a command line that is split without a shell.
   argv: z.union([
@@ -580,6 +591,29 @@ const tools: Tool[] = [
   {
     type: "function",
     function: {
+      name: "task",
+      description:
+        "Delegate one bounded read-only investigation to a fresh subagent with its own context. The subagent can read, list, search, fetch, web_search and read_image, then reports a final answer. Use it to pursue an independent question in parallel while you keep working.",
+      parameters: {
+        type: "object",
+        properties: {
+          prompt: {
+            type: "string",
+            description:
+              "Self-contained investigation brief, 1-8000 chars; the subagent sees nothing else from this conversation",
+          },
+          max_turns: {
+            type: "integer",
+            description: "Turn budget for the subagent, default 8, at most 16",
+          },
+        },
+        required: ["prompt"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "edit",
       description: `Replace one exact occurrence in an existing workspace file. The path is ${PATH_HELP}. The host requests approval before applying it.`,
       parameters: {
@@ -674,7 +708,18 @@ const READ_ONLY_TOOLS = new Set([
   "search",
   "fetch",
   "web_search",
+  "task",
   "todo_write",
+]);
+/** The subagent catalog: read-only inspection only. No todo_write (its own
+ * run state), no task (no recursion, depth 1), no effects, no MCP. */
+const SUBAGENT_TOOLS = new Set([
+  "read",
+  "read_image",
+  "list",
+  "search",
+  "fetch",
+  "web_search",
 ]);
 
 export type ApprovalRequest =
@@ -718,7 +763,21 @@ export type AgentOptions = {
   signal: AbortSignal;
   session?: SessionContext;
   mcp?: readonly McpConnection[];
+  /** Internal: read-only subagent run launched by the task tool. Restricts
+   * the catalog to SUBAGENT_TOOLS and reports budget stops via SubagentStopped. */
+  subagent?: boolean;
+  /** Internal: step cap for a subagent run (the top-level loop allows 20). */
+  maxTurns?: number;
+  /** Internal: hard cap on total tool calls in a subagent run. */
+  toolCallBudget?: number;
 };
+
+/** Internal control-flow signal: a subagent run hit its turn or call budget. */
+class SubagentStopped extends Error {
+  constructor(readonly reason: "turn_limit" | "budget") {
+    super(`subagent stopped: ${reason}`);
+  }
+}
 
 /** Serial tool loop. A complete provider response is required before any host action. */
 export async function* runAgent(
@@ -843,7 +902,13 @@ async function* agentTurn(
     );
   if (!admission.capabilities.includes("tools"))
     throw new Error("Agent requires a model with tools capability");
-  for (let step = 0; step < 20; step++) {
+  const stepLimit = options.maxTurns ?? 20;
+  const offeredTools = options.subagent
+    ? tools.filter((tool) => SUBAGENT_TOOLS.has(tool.function.name ?? ""))
+    : options.intent === "plan"
+      ? tools.filter((tool) => READ_ONLY_TOOLS.has(tool.function.name ?? ""))
+      : availableTools;
+  for (let step = 0; step < stepLimit; step++) {
     signal.throwIfAborted();
     const assistant: Message = { role: "assistant", content: "" };
     const calls: ToolCall[] = [];
@@ -851,9 +916,7 @@ async function* agentTurn(
       provider,
       [{ role: "system", content: instructions }, ...history],
       signal,
-      options.intent === "plan"
-        ? tools.filter((tool) => READ_ONLY_TOOLS.has(tool.function.name ?? ""))
-        : availableTools,
+      offeredTools,
     )) {
       if (event.type === "text") assistant.content += event.text;
       if (event.type === "thinking")
@@ -875,6 +938,13 @@ async function* agentTurn(
     if (!calls.length) {
       yield { type: "turn_complete", messages: history };
       return;
+    }
+    if (options.toolCallBudget !== undefined) {
+      const executed = history.filter(
+        (message) => message.role === "tool",
+      ).length;
+      if (executed + calls.length > options.toolCallBudget)
+        throw new SubagentStopped("budget");
     }
     // A batch of multiple read-only tool calls (and no effectful or MCP
     // call) executes concurrently, bounded at MAX_PARALLEL_TOOLS; extras
@@ -1075,6 +1145,58 @@ async function* agentTurn(
           output = `${list}\n\nvia ${provider}`;
           if (output.length > 100_000)
             throw new Error("web_search output exceeds tool output limit");
+        } else if (name === "task") {
+          const args = TaskArgs.parse(call.function.arguments);
+          yield* emitStart();
+          signal.throwIfAborted();
+          // The child runs its own loop: fresh history, the same provider,
+          // workspace and signal, and a forced read-only catalog (no effects,
+          // no MCP, no todo_write, no task — depth 1). Its events are drained,
+          // not yielded, so the parent stream shows only the final answer.
+          const child = agentTurn(
+            provider,
+            [{ role: "user", content: args.prompt }],
+            {
+              ...options,
+              session: undefined,
+              mcp: undefined,
+              intent: "plan",
+              subagent: true,
+              maxTurns: args.max_turns,
+              toolCallBudget: args.max_turns * 4,
+            },
+          );
+          let finalText = "";
+          let turns = 0;
+          let stop: "complete" | "turn_limit" | "budget" | "aborted" =
+            "complete";
+          try {
+            for await (const event of child) {
+              if (
+                event.type === "message" &&
+                event.message.role === "assistant"
+              ) {
+                turns++;
+                if (!event.message.tool_calls?.length)
+                  finalText = event.message.content;
+              }
+            }
+          } catch (error) {
+            if (signal.aborted) stop = "aborted";
+            else if (error instanceof SubagentStopped) stop = error.reason;
+            else throw error;
+          }
+          const note =
+            stop === "aborted"
+              ? " (aborted; partial result)"
+              : stop === "turn_limit"
+                ? " (stopped at the turn limit)"
+                : stop === "budget"
+                  ? " (stopped: tool-call budget exceeded)"
+                  : "";
+          output = `subagent finished after ${turns} turn${turns === 1 ? "" : "s"}${note}\n\n${finalText || "(no final answer)"}`;
+          if (output.length > 100_000)
+            throw new Error("task output exceeds tool output limit");
         } else if (name === "todo_write") {
           const args = TodoWriteArgs.parse(call.function.arguments);
           yield* emitStart();
@@ -1388,5 +1510,6 @@ async function* agentTurn(
     }
     signal.throwIfAborted();
   }
-  throw new Error("Agent reached the 20-step limit");
+  if (options.subagent) throw new SubagentStopped("turn_limit");
+  throw new Error(`Agent reached the ${stepLimit}-step limit`);
 }

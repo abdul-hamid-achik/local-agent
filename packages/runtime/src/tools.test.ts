@@ -98,6 +98,7 @@ test("build intent offers every tool with a relative-path example; the prompt st
       "search",
       "fetch",
       "web_search",
+      "task",
       "edit",
       "write",
       "run_command",
@@ -135,6 +136,7 @@ test("plan intent offers the read-only tools and denies writes", async () => {
       "search",
       "fetch",
       "web_search",
+      "task",
       "todo_write",
     ]);
     expect(run.results.map((result) => result.status)).toEqual(["denied"]);
