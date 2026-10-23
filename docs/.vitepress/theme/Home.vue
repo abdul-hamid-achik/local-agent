@@ -126,13 +126,13 @@ const ecosystemGroups = [
         <div
           class="la-terminal"
           role="img"
-          aria-label="Illustrative local-agent terminal session showing a local Ollama model, completed read tools, and a shell command waiting for approval"
+          aria-label="Illustrative local-agent terminal session showing a local Ollama model, completed tool cards, and a command waiting for approval"
           aria-describedby="terminal-caption"
         >
           <div aria-hidden="true">
             <div class="la-terminal-bar">
-              <span>local-agent / workspace</span>
-              <span class="la-terminal-mode">NORMAL</span>
+              <span>Local Agent · qwen3.5:4b</span>
+              <span class="la-terminal-mode">build</span>
             </div>
 
             <div class="la-terminal-context">
@@ -142,57 +142,58 @@ const ecosystemGroups = [
                 <small>local</small>
               </div>
               <div>
-                <span>session</span>
-                <strong>repository review</strong>
-                <small>active</small>
+                <span>context</span>
+                <strong>2.1k/16k</strong>
+                <small>████░░░░░░</small>
               </div>
             </div>
 
             <div class="la-terminal-body">
               <div class="la-terminal-message">
                 <span class="la-terminal-speaker">assistant</span>
-                <p>I’ll inspect the model boundary, then run the focused checks.</p>
+                <p>I’ll inspect the provider boundary, then run the focused checks.</p>
               </div>
 
               <div class="la-tool-line">
                 <span class="la-tool-index">01</span>
-                <span><strong>Read</strong> internal/llm/manager.go</span>
+                <span><strong>Tool · read</strong> packages/runtime/src/provider.ts</span>
                 <small>[done]</small>
               </div>
               <div class="la-tool-line">
                 <span class="la-tool-index">02</span>
-                <span><strong>Find</strong> cloud consent policy</span>
+                <span><strong>Tool · edit</strong> packages/runtime/src/provider.ts</span>
                 <small>[done]</small>
               </div>
 
               <div class="la-approval-card">
                 <div class="la-approval-head">
-                  <span>Permission required</span>
-                  <strong>bash</strong>
+                  <span>Run command?</span>
+                  <strong>Runs exactly as written: there is no shell.</strong>
                 </div>
-                <code>go test ./internal/llm/... -race</code>
+                <code>$ bun test packages/runtime/src/provider.test.ts</code>
                 <div class="la-approval-options">
                   <span>[y] once</span>
-                  <span>[s] exact request / session</span>
+                  <span>[a] this session</span>
                   <span>[n] deny</span>
+                  <span>esc deny</span>
                 </div>
               </div>
 
               <div class="la-composer-line">
                 <span>&gt;</span>
-                <span class="la-composer-placeholder">Ask, @mention files, or type /help</span>
+                <span class="la-composer-placeholder">Message the model</span>
                 <span class="la-cursor" aria-hidden="true"></span>
               </div>
             </div>
 
             <div class="la-terminal-footer">
-              <span>workspace scoped</span>
-              <span>approval pending</span>
+              <span>Ready · /help lists keys</span>
+              <span>ctrl+p commands · esc cancel</span>
             </div>
           </div>
         </div>
         <figcaption id="terminal-caption">
-          An illustrative NORMAL session. Tool effects stay visible before they run.
+          An illustrative build session in the Tuimark client. Tool effects stay visible before they run.
         </figcaption>
       </figure>
     </section>
