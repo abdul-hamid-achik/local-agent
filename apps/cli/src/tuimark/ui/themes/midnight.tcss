@@ -1,0 +1,35 @@
+/*
+ * themes/midnight.tcss: a named palette, loaded last (after app.tcss) by the
+ * document --theme generates, so its :root tokens re-declare the kit's and
+ * app.tcss's and rebrand the whole client. Tokens only: no rules, no @import.
+ * The host is pinned to dark for a named theme, so the light variants of
+ * theme.tcss and app.tcss never fire against it.
+ */
+:root {
+  --bg: #0a0e1a;
+  --fg: #dbe4f3;
+  --muted: #8a97b8;
+  --subtle: #66739a;
+  --border: #232c45;
+  --panel: #101627;
+  --raised: #17203a;
+  --accent: #7aa2f7;
+  --focus: #7aa2f7;
+  --ok: #4aba8f;
+  --warn: #e0af68;
+  --danger: #f7768e;
+  --info: #7dcfff;
+  --sel: #1c2742;
+  --on-accent: #0a0e1a;
+  --on-ok: #0a0e1a;
+  --on-warn: #0a0e1a;
+  --on-danger: #0a0e1a;
+  --code: #bb9af7;
+
+  --kw: #ff7a93;
+  --str: #9ece6a;
+  --num: #ff9e64;
+  --com: #66739a;
+  --user: #4aba8f;
+  --tool: #e0af68;
+}

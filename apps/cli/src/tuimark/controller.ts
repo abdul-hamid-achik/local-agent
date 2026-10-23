@@ -123,6 +123,11 @@ export interface ClientOptions {
    * Default fullscreen.
    */
   presentation?: Presentation;
+  /**
+   * The theme the host was started with (`--theme`), so `/theme` reports it
+   * instead of "auto". Default "auto" (the runtime follows the terminal).
+   */
+  initialTheme?: Theme;
   session?: SessionContext;
   /** `/sessions` support, present only with `--session-db` (see launch.ts). */
   sessions?: SessionsCapability;
@@ -225,7 +230,7 @@ export class TuimarkClient {
   private slashSig = "[]";
   private intent: Intent;
   /** Session theme (`/theme`); written to the host's reserved `@theme` path. */
-  private theme: Theme = "auto";
+  private theme: Theme;
   /** Fullscreen mouse reporting (`/mouse`); default off. Inline never writes it. */
   private mouse = false;
   // the writer
@@ -314,6 +319,7 @@ export class TuimarkClient {
     this.stream = new LiveStream(undefined, { inline: this.inline });
     this.transcript = new Transcript(options.windowStep, options.windowSize);
     this.session = options.session;
+    this.theme = options.initialTheme ?? "auto";
     this.history = options.session?.state.messages.slice() ?? [];
     // A resumed session shows its saved messages, through the same mapping as a live turn.
     for (const message of this.history) {

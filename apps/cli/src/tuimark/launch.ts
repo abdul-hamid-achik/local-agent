@@ -7,6 +7,7 @@
 // and a second renderer would fight it.
 
 import { existsSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
@@ -18,7 +19,12 @@ import type {
   ToolCall,
   Workspace,
 } from "@local-agent/runtime";
-import { type Ready, resolveBinary, spawnHost } from "@thelacanians/tuimark";
+import {
+  type Host,
+  type Ready,
+  resolveBinary,
+  spawnHost,
+} from "@thelacanians/tuimark";
 import type { Intent } from "#cli/tuimark/commands";
 import {
   type ClientOptions,
@@ -26,6 +32,7 @@ import {
   type SessionsCapability,
   TuimarkClient,
 } from "#cli/tuimark/controller";
+import { resolveTheme, themedDocument } from "#cli/tuimark/themes";
 
 /**
  * The oldest tuimark this client's document runs on: <textarea>, `runs`, and the
@@ -200,6 +207,12 @@ export interface LaunchDeps {
   /** Replaces the store-built `/sessions` capability (tests). */
   sessions?: SessionsCapability;
   spawn?: typeof spawnHost;
+  /** Replaces the generated named-palette document (tests). */
+  writeThemeDoc?: (
+    uiDirectory: string,
+    doc: string,
+    name: string,
+  ) => Promise<string>;
   resolve?: () => Promise<string>;
   stdout?: {
     isTTY?: boolean;
@@ -218,9 +231,19 @@ export async function runTuimark(
   session?: SessionContext,
   mcp: readonly McpConnection[] = [],
   presentation: Presentation = "fullscreen",
+  /** The `--theme` flag: a builtin (dark/light/auto) or a named palette. */
+  theme: string = "auto",
   deps: LaunchDeps = {},
 ): Promise<void> {
   signal.throwIfAborted();
+  // Resolved before anything is built: an unknown --theme name stops the run
+  // with the themes that do exist, before a screen is opened.
+  const ui = uiDirectory();
+  const resolved = resolveTheme(theme, join(ui, "themes"));
+  // The host theme passed to spawnHost: a builtin dark/light, or dark for a
+  // named palette, so the sheets' `@media (theme: light)` blocks never fire
+  // against the palette's own tokens.
+  const hostTheme = resolved.kind === "named" ? "dark" : resolved.theme;
   const stdout = deps.stdout ?? process.stdout;
   const resetTerminal = () => {
     if (stdout.isTTY) stdout.write(TERMINAL_RESET);
@@ -231,6 +254,7 @@ export async function runTuimark(
     workspace,
     intent,
     presentation,
+    initialTheme: hostTheme === "auto" ? undefined : hostTheme,
     session,
     // `/sessions` exists exactly when the process has a session store
     // (`--session-db`): the session context carries it.
@@ -244,33 +268,51 @@ export async function runTuimark(
     columns: () => stdout.columns ?? readyColumns,
   });
   const bin = await (deps.resolve ?? resolvePinned)();
+  // A named palette is a generated copy of the document with the palette's
+  // .tcss loaded after the last sheet the document itself lists; a builtin
+  // theme is the host's own --theme flag.
   const doc = presentation === "inline" ? "inline.tui" : "app.tui";
-  const ui = await (deps.spawn ?? spawnHost)(join(uiDirectory(), doc), {
-    data: client.initialStore() as unknown as Record<string, unknown>,
-    replyTimeout: "5s",
-    bin,
-    inline: presentation === "inline",
-  });
-  readyColumns = ui.ready.cols;
-  const problem = readyProblem(ui.ready, bin, presentation);
+  let docPath = join(ui, doc);
+  if (resolved.kind === "named") {
+    docPath = await (deps.writeThemeDoc ?? themedDocument)(
+      ui,
+      doc,
+      resolved.name,
+    );
+  }
+  let host: Host;
+  try {
+    host = await (deps.spawn ?? spawnHost)(docPath, {
+      data: client.initialStore() as unknown as Record<string, unknown>,
+      replyTimeout: "5s",
+      bin,
+      inline: presentation === "inline",
+      theme: hostTheme === "auto" ? undefined : hostTheme,
+    });
+  } finally {
+    // The host has loaded the document (or failed) once spawn resolves.
+    if (docPath !== join(ui, doc)) await rm(docPath, { force: true });
+  }
+  readyColumns = host.ready.cols;
+  const problem = readyProblem(host.ready, bin, presentation);
   if (problem) {
-    await ui.close();
+    await host.close();
     resetTerminal();
     throw new Error(problem);
   }
-  client.attach(ui);
+  client.attach(host);
   const onResize = () => void client.resize();
   stdout.on?.("resize", onResize);
   const stop = () => {
     client.abort();
-    void ui.close();
+    void host.close();
   };
   signal.addEventListener("abort", stop, { once: true });
   try {
     if (signal.aborted) stop();
     let failure: Error | undefined;
     try {
-      const exit = await ui.exited;
+      const exit = await host.exited;
       if (exit.reason === "error")
         failure = new Error(
           exit.error ?? "The Tuimark host ended with an error",

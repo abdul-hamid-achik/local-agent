@@ -60,6 +60,7 @@ try {
       prompt: { type: "string", short: "p" },
       mode: { type: "string", default: "fullscreen" },
       ui: { type: "string" },
+      theme: { type: "string" },
       json: { type: "boolean" },
       workspace: { type: "string", default: process.cwd() },
       intent: { type: "string", default: "build" },
@@ -92,7 +93,9 @@ bun dev [--model MODEL (default: ${DEFAULT_OLLAMA_MODEL})] [--mode fullscreen|in
                        --mode inline prints finished blocks into the terminal's own
                        scrollback; a bare --mode inline still uses vue. It runs the
                        tuimark binary from TUIMARK_BINARY, or downloads the release
-                       it is pinned to once (checksum-verified) into the user cache.
+  --theme NAME         Tuimark palette at launch: dark, light or auto, or a
+                       named theme from the client's ui/themes folder (the
+                       bundled ones: midnight, sepia)
   --workspace PATH     Workspace root (default: current directory)
   --intent plan|build  Plan forbids edits and commands; build asks before acting
   --approve-edits      Allow file edits and writes (create or replace) in headless mode
@@ -282,6 +285,10 @@ Interrupted tool outcomes require inspection; they are never automatically repla
                 values.mode as "fullscreen" | "inline",
                 values.ui !== undefined,
               );
+          if (values.theme !== undefined && client !== "tuimark")
+            throw new Error(
+              "--theme needs the Tuimark client; use --ui tuimark",
+            );
           let bin: string | undefined;
           if (client === "tuimark" && values.ui === undefined) {
             // The default client must not fail a run that never asked for it.
@@ -347,6 +354,7 @@ Interrupted tool outcomes require inspection; they are never automatically repla
               session,
               mcp,
               values.mode as "fullscreen" | "inline",
+              values.theme ?? "auto",
               {
                 mcpNames,
                 ...(bin ? { resolve: async () => bin } : {}),

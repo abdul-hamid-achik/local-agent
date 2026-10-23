@@ -46,6 +46,7 @@ function fakeSpawn(
   ready: Partial<Ready> = {},
   control: { exit?: (reason: HostExit | Error) => void } = {},
 ) {
+  const spawnedOnce = Promise.withResolvers<void>();
   const calls = {
     closed: 0,
     handlers: new Map<string, (ev: unknown) => unknown>(),
@@ -53,6 +54,7 @@ function fakeSpawn(
   };
   const spawn = (async (file: string, options?: unknown) => {
     calls.spawned.push({ file, options });
+    spawnedOnce.resolve();
     let settle: (value: HostExit) => void = () => {};
     let fail: (error: Error) => void = () => {};
     const exited = new Promise<HostExit>((resolve, reject) => {
@@ -91,7 +93,7 @@ function fakeSpawn(
     };
     return host as unknown as Host;
   }) as unknown as typeof import("@thelacanians/tuimark").spawnHost;
-  return { spawn, calls };
+  return { spawn, calls, spawned: spawnedOnce.promise };
 }
 
 function fakeStdout(isTTY: boolean) {
@@ -105,9 +107,10 @@ function fakeStdout(isTTY: boolean) {
 }
 
 const launch = (
-  deps: Parameters<typeof runTuimark>[7],
+  deps: Parameters<typeof runTuimark>[8],
   signal = new AbortController().signal,
   presentation: Parameters<typeof runTuimark>[6] = "fullscreen",
+  theme = "auto",
 ) =>
   runTuimark(
     provider,
@@ -117,6 +120,7 @@ const launch = (
     undefined,
     [],
     presentation,
+    theme,
     deps,
   );
 
@@ -430,4 +434,120 @@ test("sessionRefusal mirrors runAgent's resume checks in its own words", () => {
     ]),
   );
   expect(matched).toBeUndefined();
+});
+
+// ----------------------------------------------------------------- --theme
+
+import { existsSync } from "node:fs";
+import { themedDocument } from "#cli/tuimark/themes";
+
+test("a builtin --theme is passed to the host; the default sends none", async () => {
+  const control: { exit?: (reason: HostExit | Error) => void } = {};
+  const host = fakeSpawn({}, control);
+  const done = launch(
+    { spawn: host.spawn, resolve: async () => "/b", stdout: fakeStdout(true) },
+    new AbortController().signal,
+    "fullscreen",
+    "dark",
+  );
+  await host.spawned;
+  expect(host.calls.spawned[0]?.file).toMatch(/app\.tui$/);
+  expect(host.calls.spawned[0]?.options).toMatchObject({ theme: "dark" });
+  control.exit?.({ reason: "quit", code: 0 });
+  await done;
+
+  const control2: { exit?: (reason: HostExit | Error) => void } = {};
+  const host2 = fakeSpawn({}, control2);
+  const done2 = launch({
+    spawn: host2.spawn,
+    resolve: async () => "/b",
+    stdout: fakeStdout(true),
+  });
+  await host2.spawned;
+  expect(
+    (host2.calls.spawned[0]?.options as Record<string, unknown> | undefined)
+      ?.theme,
+  ).toBeUndefined();
+  control2.exit?.({ reason: "quit", code: 0 });
+  await done2;
+});
+
+test("a named --theme spawns a generated document pinned to dark, then removes it", async () => {
+  const scratch = await mkdtemp(join(tmpdir(), "local-agent-theme-"));
+  const doc = join(scratch, "midnight-app.tui");
+  await writeFile(doc, "<tui/>");
+  const control: { exit?: (reason: HostExit | Error) => void } = {};
+  const host = fakeSpawn(
+    { messages: ["set", "batch", "get", "commit"] },
+    control,
+  );
+  const done = launch(
+    {
+      spawn: host.spawn,
+      resolve: async () => "/b",
+      stdout: fakeStdout(true),
+      writeThemeDoc: async () => doc,
+    },
+    new AbortController().signal,
+    "inline",
+    "midnight",
+  );
+  await host.spawned;
+  expect(host.calls.spawned[0]?.file).toBe(doc);
+  expect(host.calls.spawned[0]?.options).toMatchObject({
+    theme: "dark",
+    inline: true,
+  });
+  control.exit?.({ reason: "quit", code: 0 });
+  await done;
+  // The host has loaded the document, so the generated copy is gone.
+  expect(existsSync(doc)).toBe(false);
+  await rm(scratch, { recursive: true, force: true });
+});
+
+test("an unknown --theme name is refused with the themes that exist", async () => {
+  await expect(
+    launch(
+      {
+        spawn: fakeSpawn().spawn,
+        resolve: async () => "/b",
+        stdout: fakeStdout(true),
+      },
+      new AbortController().signal,
+      "fullscreen",
+      "solarized",
+    ),
+  ).rejects.toThrow(
+    /Unknown theme: solarized. Available themes: dark, light, auto, midnight, sepia/,
+  );
+});
+
+test("themedDocument loads the palette after the document's last sheet", async () => {
+  const ui = await mkdtemp(join(tmpdir(), "local-agent-doc-"));
+  try {
+    await writeFile(
+      join(ui, "app.tui"),
+      [
+        '<tui theme="auto">',
+        '  <include src="kit/kit.tui"/>',
+        '  <style src="app.tcss"/>',
+        "</tui>",
+        "",
+      ].join("\n"),
+    );
+    const path = await themedDocument(ui, "app.tui", "sepia");
+    expect(path).toMatch(/sepia-app\.tui$/);
+    expect(await Bun.file(path).text()).toBe(
+      [
+        '<tui theme="auto">',
+        '  <include src="kit/kit.tui"/>',
+        '  <style src="app.tcss"/>',
+        '  <style src="themes/sepia.tcss"/>',
+        "</tui>",
+        "",
+      ].join("\n"),
+    );
+  } finally {
+    await rm(ui, { recursive: true, force: true });
+  }
 });

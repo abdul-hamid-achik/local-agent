@@ -1,0 +1,36 @@
+/*
+ * themes/sepia.tcss: a named palette, loaded last (after app.tcss) by the
+ * document --theme generates, so its :root tokens re-declare the kit's and
+ * app.tcss's and rebrand the whole client. Tokens only: no rules, no @import.
+ * The host is pinned to dark for a named theme, so the light variants of
+ * theme.tcss and app.tcss never fire against it; this palette carries its
+ * own light values instead.
+ */
+:root {
+  --bg: #f4ecd8;
+  --fg: #43372a;
+  --muted: #7a6a55;
+  --subtle: #9c8b72;
+  --border: #d8c9a8;
+  --panel: #ede1c6;
+  --raised: #e3d5b3;
+  --accent: #8c4a2f;
+  --focus: #8c4a2f;
+  --ok: #4a7c59;
+  --warn: #a8730a;
+  --danger: #b3402e;
+  --info: #3d7a80;
+  --sel: #e0d0ab;
+  --on-accent: #f4ecd8;
+  --on-ok: #f4ecd8;
+  --on-warn: #f4ecd8;
+  --on-danger: #f4ecd8;
+  --code: #7a5230;
+
+  --kw: #a13a2a;
+  --str: #5c6e2f;
+  --num: #7a4a1f;
+  --com: #9c8b72;
+  --user: #4a7c59;
+  --tool: #a8730a;
+}
