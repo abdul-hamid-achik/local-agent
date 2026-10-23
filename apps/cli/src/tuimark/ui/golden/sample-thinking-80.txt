@@ -28,4 +28,4 @@
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║ Generating…                                                                  ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
- ⠋  Generating…   ^P commands  esc cancel  ctrl+c quit  ↑/↓ history  ^O earlier 
+ ⠋  Generating…   ^P commands  esc cancel  ↑/↓ history  ^O earlier              

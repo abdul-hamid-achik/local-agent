@@ -7,8 +7,8 @@
                               │ ╚══════════════════════════════════════════════════════╝ │                              
                               │ Mode: plan (read only)                        /mode plan │                              
                               │ Mode: build (read, edit, command)            /mode build │                              
+                              │ Mode: chat (conversational)                   /mode chat │                              
                               │ Model: show current                               /model │                              
-                              │                                                          │                              
                               │                                                          │                              
                               │                                                          │                              
                               │                                                          │                              
@@ -19,4 +19,4 @@
 ╭─────────────────────────────╰──────────────────────────────────────────────────────────╯─────────────────────────────╮
 │ Message the model                                                                                                    │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
- Ready · /help for commands                                                                                             
+ build · Ready · /help for keys                                                                                         

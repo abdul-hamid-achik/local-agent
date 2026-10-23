@@ -19,4 +19,4 @@
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ Generating…                                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- ⠋  Waiting for approval · y allow · a session · n deny · Esc deny   y allow    
+ ⠋  Waiting for approval · y allow · a session · ! always · n deny · Esc deny   

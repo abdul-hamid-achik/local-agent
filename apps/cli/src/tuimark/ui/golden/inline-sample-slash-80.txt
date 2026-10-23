@@ -1,7 +1,7 @@
 === grid 80x12 ===
  Local Agent         qwen3-coder:30b  build          ctx 9.6k/32k  ████░░░░░░░░ 
 ╭──────────────────────────────────────────────────────────────────────────────╮
-│ › /mode plan reads only · build can edit                                     │
+│ › /mode plan reads only · build can edit · chat converses                    │
 │   /model show or switch the Ollama model                                     │
 │   /mouse toggle mouse reporting (fullscreen)                                 │
 │   /mcp show connected MCP servers and their tools                            │
@@ -10,4 +10,4 @@
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║ /m                                                                           ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
- Ready · /help for commands   ^P commands  ctrl+c quit  pgup/pgdn scroll        
+ build · Ready · /help for keys   ^P commands  ctrl+c quit  pgup/pgdn scroll    

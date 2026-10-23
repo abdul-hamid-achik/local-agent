@@ -11,17 +11,24 @@
 // ack is the backpressure Phase 0 measured). Nothing here touches the terminal:
 // `tuimark host` owns it.
 
-import { writeFile } from "node:fs/promises";
+import { stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   type AgentEvent,
   type AgentOptions,
   type ApprovalRequest,
   admitOllamaModel,
+  appendRule,
+  clearRules,
+  evaluate,
+  loadPermissionFile,
   type McpConnection,
   type Message,
   type OllamaAdmission,
+  type PermissionFile,
   type Provider,
+  permissionRequest,
+  proposeRule,
   runAgent,
   type SessionContext,
   type Workspace,
@@ -60,8 +67,10 @@ import {
 } from "#cli/tuimark/export";
 import {
   APPROVAL_STATUS,
+  APPROVAL_TRUNCATED_ALWAYS_STATUS,
   APPROVAL_TRUNCATED_SESSION_STATUS,
   APPROVAL_TRUNCATED_STATUS,
+  APPROVAL_UNARMED_ALWAYS_STATUS,
   APPROVAL_UNARMED_SESSION_STATUS,
   APPROVAL_UNARMED_STATUS,
   APPROVAL_WAIT_STATUS,
@@ -291,7 +300,11 @@ export class TuimarkClient {
   private busy = false;
   private turn?: AbortController;
   private turnDone: Promise<void> = Promise.resolve();
-  private decide?: (allowed: boolean, session?: boolean) => Promise<void>;
+  private decide?: (
+    allowed: boolean,
+    session?: boolean,
+    status?: string,
+  ) => Promise<void>;
   private armed = false;
   private armTimer?: ReturnType<typeof setTimeout>;
   private proposal?: ApprovalRequest;
@@ -307,6 +320,13 @@ export class TuimarkClient {
     string,
     { label: string; prefix?: readonly string[] }
   >();
+  /**
+   * The workspace's permission rules, cached with the file's mtime: a
+   * `!` verdict (or any outside edit) bumps the mtime and the next
+   * evaluation reloads. `-1` marks a missing file.
+   */
+  private permFile: PermissionFile = { version: 1, rules: [] };
+  private permMtimeMs: number | undefined;
   /**
    * The latest completed tool receipt, whole, for `/details`. Memory only:
    * never a model message, never persisted; a newer receipt replaces it.
@@ -435,6 +455,58 @@ export class TuimarkClient {
       }
       return this.decide(true, true);
     });
+    ui.on("dialog_always", async () => {
+      if (!this.decide || !this.proposal) return undefined;
+      // `!` follows `y` and `a`: same arm delay, same said-so feedback.
+      if (!this.armed) {
+        await this.write([
+          { path: "status", value: APPROVAL_UNARMED_ALWAYS_STATUS },
+        ]);
+        return undefined;
+      }
+      // No persistent rule comes from a change nobody could read whole.
+      if (this.proposalTruncated) {
+        await this.write([
+          { path: "status", value: APPROVAL_TRUNCATED_ALWAYS_STATUS },
+        ]);
+        return undefined;
+      }
+      const root = this.options.workspace?.root;
+      const request = permissionRequest(this.proposal);
+      const proposed = proposeRule(request);
+      const label = `${proposed.tool} ${proposed.pattern}`;
+      if (root) {
+        // A deny rule that already covers this request is stronger intent
+        // than the keypress: say so and keep the dialog open.
+        const shadow = evaluate((await this.fileRules()).rules, request);
+        if (shadow.effect === "deny") {
+          await this.write([
+            {
+              path: "status",
+              value: `Not saved: denied by rule: ${shadow.rule?.pattern}`,
+            },
+          ]);
+          return undefined;
+        }
+        try {
+          await appendRule(root, proposed);
+          // The file changed under the cache: the next evaluation reloads.
+          this.permMtimeMs = undefined;
+        } catch (error) {
+          await this.write([
+            { path: "status", value: oneLine(`Rule not saved: ${error}`) },
+          ]);
+          return undefined;
+        }
+      }
+      return this.decide(
+        true,
+        false,
+        root
+          ? `Always allowed: ${label} (saved to .local-agent/permissions.json)`
+          : `Always allowed: ${label} (no workspace: rule not saved)`,
+      );
+    });
     ui.on("dialog_cancel", () => this.decide?.(false));
     ui.on("palette_open", () => this.paletteOpen());
     ui.on("palette_query", (ev) => this.paletteQuery(ev));
@@ -498,7 +570,7 @@ export class TuimarkClient {
     if (writes.length === 0) return;
     writes.push({
       path: "status",
-      value: idleStatus(this.options.mcp?.length ?? 0),
+      value: idleStatus(this.options.mcp?.length ?? 0, this.intent),
     });
     await this.write(writes);
   }
@@ -553,7 +625,7 @@ export class TuimarkClient {
     if (writes.length === 0) return;
     writes.push({
       path: "status",
-      value: idleStatus(this.options.mcp?.length ?? 0),
+      value: idleStatus(this.options.mcp?.length ?? 0, this.intent),
     });
     await this.write(writes);
   }
@@ -1509,10 +1581,11 @@ export class TuimarkClient {
   }
 
   /**
-   * Shift+tab: plan <-> build, through the same `/mode` path, so the
-   * header and the status change exactly as the command changes them.
-   * Refused while a turn runs, as `/mode` is; a queued message therefore
-   * still starts under the mode in force when its turn begins.
+   * Shift+tab: build -> plan -> chat -> build, through the same `/mode`
+   * path, so the header and the status change exactly as the command
+   * changes them. Refused while a turn runs, as `/mode` is; a queued
+   * message therefore still starts under the mode in force when its turn
+   * begins.
    */
   private async modeToggle(): Promise<void> {
     if (this.proposal) return;
@@ -1520,9 +1593,13 @@ export class TuimarkClient {
       await this.write([{ path: "status", value: BUSY_STATUS }]);
       return;
     }
-    await this.runCommand(
-      this.intent === "plan" ? "/mode build" : "/mode plan",
-    );
+    const next =
+      this.intent === "build"
+        ? "plan"
+        : this.intent === "plan"
+          ? "chat"
+          : "build";
+    await this.runCommand(`/mode ${next}`);
   }
 
   // --------------------------------------------------------------------- actions
@@ -1647,8 +1724,47 @@ export class TuimarkClient {
     ];
   }
 
+  /**
+   * The workspace's permission rules, reloaded only when the file's mtime
+   * moved (a cheap stat per approval). A missing file reads as empty; a
+   * broken one degrades to "ask" with the load's warning on the status.
+   */
+  private async fileRules(): Promise<PermissionFile> {
+    const root = this.options.workspace?.root;
+    if (!root) return this.permFile;
+    let mtimeMs: number;
+    try {
+      mtimeMs = (await stat(join(root, ".local-agent", "permissions.json")))
+        .mtimeMs;
+    } catch {
+      if (this.permMtimeMs !== -1) {
+        this.permFile = { version: 1, rules: [] };
+        this.permMtimeMs = -1;
+      }
+      return this.permFile;
+    }
+    if (mtimeMs === this.permMtimeMs) return this.permFile;
+    const loaded = await loadPermissionFile(root);
+    if (loaded.warning) this.noteActivity(oneLine(loaded.warning));
+    this.permFile = loaded;
+    this.permMtimeMs = mtimeMs;
+    return this.permFile;
+  }
+
+  /** `/permissions` labels for the file's rules, in file order. */
+  private ruleLabels(): Promise<string[]> {
+    return this.fileRules().then((file) =>
+      file.rules.map((rule) => `${rule.effect} ${rule.tool}:${rule.pattern}`),
+    );
+  }
+
   private async runCommand(command: string): Promise<void> {
     const { mcp = [] } = this.options;
+    // `/permissions` lists file rules too: they are loaded (mtime-checked)
+    // before the pure command runs, so the listing is never stale.
+    const rules = /^\/permissions(\s|$)/i.test(command)
+      ? await this.ruleLabels()
+      : undefined;
     const outcome = runSlash(command, {
       intent: this.intent,
       mcp: {
@@ -1659,6 +1775,7 @@ export class TuimarkClient {
       theme: this.theme,
       mouse: this.mouse,
       grants: this.grantLabels(),
+      ...(rules !== undefined ? { rules } : {}),
     });
     // `/details` opens over controller state (the retained receipt), so
     // its whole outcome — refusal included — is written there.
@@ -1713,6 +1830,18 @@ export class TuimarkClient {
     if (outcome.clearGrants) {
       this.grants.clear();
       writes.push(...this.grantsWrites());
+    }
+    if (outcome.clearRules) {
+      const root = this.options.workspace?.root;
+      if (root) {
+        await clearRules(root);
+        this.permMtimeMs = undefined;
+      } else {
+        writes[0] = {
+          path: "status",
+          value: "No workspace: file rules unavailable",
+        };
+      }
     }
     if (outcome.help) writes.push({ path: "help.open", value: true });
     await this.write(writes);
@@ -1781,31 +1910,50 @@ export class TuimarkClient {
 
   // -------------------------------------------------------------------- one turn
 
-  private approve = (
+  private approve = async (
     proposal: ApprovalRequest,
     signal: AbortSignal,
   ): Promise<boolean> => {
     signal.throwIfAborted();
-    // A matching session grant approves without a dialog. Grants never
-    // bypass plan intent: the runtime refuses plan mutations before this
-    // callback runs, and the guard here keeps that true at this layer too.
+    // The workspace's permission file outranks everything interactive: a
+    // deny rule refuses (even a session grant), an allow rule approves
+    // without a card. In plan intent the runtime refuses mutations before
+    // this runs, and no rule widens that, so rules are only consulted in
+    // build (same guard as the session grants below).
+    if (this.intent === "build") {
+      const verdict = evaluate(
+        (await this.fileRules()).rules,
+        permissionRequest(proposal),
+      );
+      if (verdict.effect === "deny") {
+        this.noteActivity(`denied by rule: ${verdict.rule?.pattern}`);
+        return false;
+      }
+      if (verdict.effect === "allow") {
+        this.noteActivity(`allowed by rule: ${verdict.rule?.pattern}`);
+        return true;
+      }
+    }
+    // Grants never bypass a non-build intent: the runtime refuses plan and
+    // chat mutations before this callback runs, and this keeps it true here.
     const grant = grantFor(proposal);
     const grantedLabel =
-      this.intent === "plan"
-        ? undefined
-        : [...this.grants.entries()].find(([key, remembered]) =>
+      this.intent === "build"
+        ? [...this.grants.entries()].find(([key, remembered]) =>
             grantCovers({ key, prefix: remembered.prefix }, proposal),
-          )?.[1].label;
+          )?.[1].label
+        : undefined;
     if (grantedLabel !== undefined) {
       // The least invasive visible trace: the status flash a tool result
       // gets, naming the grant that let the call through.
       this.noteActivity(`${grantedLabel}: allowed for session`);
-      return Promise.resolve(true);
+      return true;
     }
     return new Promise<boolean>((resolve) => {
       const finish = async (
         allowed: boolean,
         session = false,
+        status?: string,
       ): Promise<void> => {
         signal.removeEventListener("abort", deny);
         clearTimeout(this.armTimer);
@@ -1823,11 +1971,13 @@ export class TuimarkClient {
           });
           granted = grant.label;
         }
-        const verdict = !allowed
-          ? "Denied"
-          : granted !== undefined
-            ? `Approved · ${granted} allowed for session`
-            : "Approved";
+        const verdict =
+          status ??
+          (!allowed
+            ? "Denied"
+            : granted !== undefined
+              ? `Approved · ${granted} allowed for session`
+              : "Approved");
         // The verdict is the activity until the next event, so the elapsed
         // ticker keeps it (with its suffix) instead of overwriting it.
         this.activity = verdict;
@@ -1969,7 +2119,7 @@ export class TuimarkClient {
     // busy, so it cannot change under the turn).
     const session = this.session;
     let receivedMessage = false;
-    let status = idleStatus(mcp?.length ?? 0);
+    let status = idleStatus(mcp?.length ?? 0, this.intent);
     let toolName = "";
     /** A failed turn's notice view, committed (inline) in the finally below. */
     let notice: MessageView | undefined;

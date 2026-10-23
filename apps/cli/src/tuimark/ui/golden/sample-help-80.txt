@@ -4,7 +4,7 @@
 │ You       │  ? close help                                        │           │
 │ Add a retr│                                                      │           │
 │           │  Commands                                            │           │
-│ Assistant │  /mode plan|build plan reads only · build can edit   │           │
+│ Assistant │  /mode plan|build|chat plan reads only · build can…  │           │
 │ Sure. I wi│  /model [NAME] show or switch the Ollama model       │           │
 │  ts       │  /theme dark|light|auto set the session theme        │           │
 │  export as│  /mouse on|off toggle mouse reporting (fullscreen)   │           │
@@ -21,11 +21,11 @@
 │ │Updated s│  enter send                                          │         │ │
 │ ╰─────────│  shift/alt+enter new line                            │─────────╯ │
 │           │  a session                                           │           │
-│ Assistant │  pgup/pgdn scroll                                    │           │
-│ Done. The │  home/end top/end                                    │           │
-│           │  ^P commands                                         │           │
-└───────────│  esc cancel                                          │───────────┘
-╭───────────│  ctrl+c quit                                         │───────────╮
+│ Assistant │  ! always                                            │           │
+│ Done. The │  pgup/pgdn scroll                                    │           │
+│           │  home/end top/end                                    │           │
+└───────────│  ^P commands                                         │───────────┘
+╭───────────│  esc cancel                                          │───────────╮
 │ Message th│  ↑/↓ history                                         │           │
 ╰───────────│                                                      │───────────╯
- Ready · /he╰──────────────────────────────────────────────────────╯            
+ build · Rea╰──────────────────────────────────────────────────────╯            

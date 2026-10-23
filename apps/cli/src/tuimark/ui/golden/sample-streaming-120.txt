@@ -28,4 +28,4 @@
 ╔══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
 ║ Generating…                                                                                                          ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
- ⠋  Generating…   ^P commands  esc cancel  ctrl+c quit  ↑/↓ history  ^O earlier  pgup/pgdn scroll  ^L latest            
+ ⠋  Generating…   ^P commands  esc cancel  ↑/↓ history  ^O earlier  pgup/pgdn scroll  ^L latest  shift+tab mode         

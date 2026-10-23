@@ -12,8 +12,8 @@
 │    for (let attempt = 1; ; a│ ╚══════════════════════════════════════════════════════╝ │                             │
 │      try { return await fetc│ Mode: plan (read only)                        /mode plan │                             │
 │      catch (e) { if (attempt│ Mode: build (read, edit, command)            /mode build │                             │
-│    }                        │ Model: show current                               /model │                             │
-│  }                          │                                                          │                             │
+│    }                        │ Mode: chat (conversational)                   /mode chat │                             │
+│  }                          │ Model: show current                               /model │                             │
 │                             │                                                          │                             │
 │ ╭─ Tool · edit ─────────────│                                                          │───────────────────────────╮ │
 │ │succeeded                  │                                                          │                           │ │
@@ -28,4 +28,4 @@
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Message the model                                                                                                    │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
- Ready · /help for commands                                                                                             
+ build · Ready · /help for keys                                                                                         

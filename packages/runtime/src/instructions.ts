@@ -29,10 +29,15 @@ export function availablePrograms(): string[] {
   return foundPrograms;
 }
 
+/** The session intent: what the agent may do and how it is framed. */
+export type Intent = "plan" | "build" | "chat";
+
 export function hostInstructions(
-  intent: "plan" | "build",
+  intent: Intent,
   programs: readonly string[] = availablePrograms(),
 ): string {
+  if (intent === "chat")
+    return "You are a conversational assistant running in the user's terminal. Help with questions, research, games, and general tasks using web_search and fetch. Do not edit files or run commands; summarize and cite links.";
   return [
     "You are a local coding agent working in the host-selected workspace.",
     "Every path is relative to the workspace root, for example src/main.ts. Never start a path with / and never use ..",

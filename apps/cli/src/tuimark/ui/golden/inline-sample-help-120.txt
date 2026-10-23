@@ -4,7 +4,7 @@
                                 │  ? close help                                        │                                
                                 │                                                      │                                
                                 │  Commands                                            │                                
-                                │  /mode plan|build plan reads only · build can edit   │                                
+                                │  /mode plan|build|chat plan reads only · build can…  │                                
                                 │  /model [NAME] show or switch the Ollama model       │                                
                                 │  /theme dark|light|auto set the session theme        │                                
                                 │  /mouse on|off toggle mouse reporting (fullscreen)   │                                
@@ -21,4 +21,4 @@
 ╭───────────────────────────────│  enter send                                          │───────────────────────────────╮
 │ Message the model             │  shift/alt+enter new line                            │                               │
 ╰───────────────────────────────│                                                      │───────────────────────────────╯
- Ready · /help for commands     ╰──────────────────────────────────────────────────────╯                                
+ build · Ready · /help for keys ╰──────────────────────────────────────────────────────╯                                

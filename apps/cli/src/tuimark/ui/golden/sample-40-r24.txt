@@ -22,4 +22,4 @@
 ╔══════════════════════════════════════╗
 ║ Message the model                    ║
 ╚══════════════════════════════════════╝
- Ready · /help for … ^P commands        
+ build · Ready · /h… ^P commands        

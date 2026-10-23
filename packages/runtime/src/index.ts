@@ -35,6 +35,20 @@ export {
   McpServerConfigSchema,
 } from "#runtime/mcp";
 export {
+  appendRule,
+  clearRules,
+  evaluate,
+  loadPermissionFile,
+  type PermissionEffect,
+  type PermissionFile,
+  type PermissionRequest,
+  type PermissionRule,
+  type PermissionTool,
+  type PermissionVerdict,
+  permissionRequest,
+  proposeRule,
+} from "#runtime/permissions";
+export {
   Workspace,
   type WorkspaceEditProposal,
   type WorkspaceWriteProposal,

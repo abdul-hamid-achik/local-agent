@@ -29,6 +29,7 @@
          grant line spells out what matches). The kit's own dialog rows
          (y/n) are fixed, so `a` is this document's row, like scroll. -->
     <bind keys="a" action="dialog_session" label="session" keycap="a"/>
+    <bind keys="!" action="dialog_always" label="always" keycap="!"/>
     <bind keys="pgup" action="move-page-up" to="#approval_diff" label="scroll" keycap="pgup/pgdn"/>
     <bind keys="pgdn" action="move-page-down" to="#approval_diff"/>
     <bind keys="up" action="move-prev" to="#approval_diff"/>
@@ -86,7 +87,7 @@
     <bind keys="esc" action="cancel" label="cancel"/>
     <!-- Not the built-in `quit` (the engine runs that itself and the parent
          never sees it): the parent's handler clears a draft first, then quits. -->
-    <bind keys="ctrl+c" action="quit_request" label="quit"/>
+    <bind keys="ctrl+c" action="quit_request"/>
     <!-- The composer takes up and down inside a draft; on its first and last line
          they fall through to these rows, which recall what was sent. -->
     <bind keys="up" action="history_prev" when="#composer:focus" label="history" keycap="↑/↓"/>

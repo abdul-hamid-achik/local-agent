@@ -12,8 +12,8 @@
 │    for (│ ╚══════════════════════════════════════════════════════╝ │         │
 │      try│ Mode: plan (read only)                        /mode plan │         │
 │      cat│ Mode: build (read, edit, command)            /mode build │         │
-│    }    │ Model: show current                               /model │         │
-│  }      │                                                          │         │
+│    }    │ Mode: chat (conversational)                   /mode chat │         │
+│  }      │ Model: show current                               /model │         │
 │         │                                                          │         │
 │ ╭─ Tool │                                                          │───────╮ │
 │ │succeed│                                                          │       │ │
@@ -28,4 +28,4 @@
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ Message the model                                                            │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- Ready · /help for commands                                                     
+ build · Ready · /help for keys                                                 

@@ -22,4 +22,4 @@
 ╔══════════════════════════════════════════════════════════╗
 ║ Message the model                                        ║
 ╚══════════════════════════════════════════════════════════╝
- Ready · /help for commands ^P commands  esc cancel         
+ build · Ready · /help for ke… ^P commands  esc cancel      

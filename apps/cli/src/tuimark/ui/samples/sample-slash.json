@@ -289,6 +289,11 @@
         "hint": "/mode build"
       },
       {
+        "id": "mode-chat",
+        "label": "Mode: chat (conversational)",
+        "hint": "/mode chat"
+      },
+      {
         "id": "theme-dark",
         "label": "Theme: dark",
         "hint": "/theme dark"
@@ -386,7 +391,7 @@
       {
         "id": "/mode",
         "cmd": "/mode",
-        "desc": "plan reads only · build can edit",
+        "desc": "plan reads only · build can edit · chat converses",
         "sel": true,
         "mark": "›"
       },
@@ -418,8 +423,8 @@
     "cmds": [
       {
         "id": "/mode",
-        "cmd": "/mode plan|build",
-        "desc": "plan reads only · build can edit"
+        "cmd": "/mode plan|build|chat",
+        "desc": "plan reads only · build can edit · chat converses"
       },
       {
         "id": "/model",
@@ -481,7 +486,7 @@
   "draft": "/m",
   "placeholder": "Message the model",
   "busy": false,
-  "status": "Ready · /help for commands",
+  "status": "build · Ready · /help for keys",
   "commit_buf": {
     "id": "commit",
     "is_user": false,

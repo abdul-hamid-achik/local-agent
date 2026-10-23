@@ -19,7 +19,7 @@
 │                                                                              ┃
 └──────────────────────────────────────────────────────────────────────────────┘
 ╭──────────────────────────────────────────────────────────────────────────────╮
-│ › /mode plan reads only · build can edit                                     │
+│ › /mode plan reads only · build can edit · chat converses                    │
 │   /model show or switch the Ollama model                                     │
 │   /mouse toggle mouse reporting (fullscreen)                                 │
 │   /mcp show connected MCP servers and their tools                            │
@@ -28,4 +28,4 @@
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║ /m                                                                           ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
- Ready · /help for commands   ^P commands  ctrl+c quit  ^O earlier              
+ build · Ready · /help for keys   ^P commands  ^O earlier  pgup/pgdn scroll     

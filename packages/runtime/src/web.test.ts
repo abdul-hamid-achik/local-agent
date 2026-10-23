@@ -19,8 +19,16 @@ const BUILTIN_FETCH = globalThis.fetch;
 let responder:
   | ((url: string) => Response | Promise<Response> | undefined)
   | undefined;
+/** Every stubbed request's init, in call order (header assertions). */
+let requestInits: { url: string; headers: Record<string, string> }[] = [];
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-  const response = responder?.(String(input));
+  const url = String(input);
+  if (init?.headers)
+    requestInits.push({
+      url,
+      headers: init.headers as Record<string, string>,
+    });
+  const response = responder?.(url);
   return response ?? BUILTIN_FETCH(input, init);
 }) as typeof fetch;
 /** Non-loopback URLs answered by the responder; everything else hits real fetch. */
@@ -31,8 +39,13 @@ function stubFetch(
 }
 function restoreFetch() {
   responder = undefined;
+  requestInits = [];
 }
-async function session(calls: Call[], intent: "plan" | "build" = "plan") {
+async function session(
+  calls: Call[],
+  intent: "plan" | "build" | "chat" = "plan",
+  vision = false,
+) {
   const root = await mkdtemp(join(tmpdir(), "local-agent-web-"));
   const bodies: Body[] = [];
   const server = Bun.serve({
@@ -44,7 +57,9 @@ async function session(calls: Call[], intent: "plan" | "build" = "plan") {
         return Response.json({ models: [{ name: "fixture", size: 1000 }] });
       if (path === "/api/show")
         return Response.json({
-          capabilities: ["completion", "tools"],
+          capabilities: vision
+            ? ["completion", "tools", "vision"]
+            : ["completion", "tools"],
           model_info: { "fixture.context_length": 16384 },
         });
       const body = (await request.json()) as Body;
@@ -80,6 +95,11 @@ async function session(calls: Call[], intent: "plan" | "build" = "plan") {
     root,
     bodies,
     results,
+    toolMessages: events.flatMap((event) =>
+      event.type === "message" && event.message.role === "tool"
+        ? [event.message]
+        : [],
+    ),
     output: (index: number) => results[index]?.output ?? "",
     cleanup: () => rm(root, { recursive: true, force: true }),
   };
@@ -144,7 +164,7 @@ test("fetch reports HTTP errors and refuses non-text content", async () => {
           headers: { "content-type": "text/plain" },
         })
       : new Response(new Uint8Array([0, 1, 2]), {
-          headers: { "content-type": "image/png" },
+          headers: { "content-type": "application/octet-stream" },
         });
   });
   const run = await session([
@@ -310,6 +330,207 @@ test("web_search errors mentioning LOCAL_AGENT_SEARXNG_URL when both providers f
   } finally {
     restoreFetch();
     delete process.env.LOCAL_AGENT_SEARXNG_URL;
+    await run.cleanup();
+  }
+});
+
+test("chat intent offers the read-only research set without todo_write, task or effects", async () => {
+  const run = await session([], "chat");
+  try {
+    expect(run.bodies[0]?.tools.map((tool) => tool.function.name)).toEqual([
+      "read",
+      "read_image",
+      "list",
+      "search",
+      "fetch",
+      "web_search",
+    ]);
+  } finally {
+    await run.cleanup();
+  }
+});
+
+test("chat intent hard-denies effects exactly like plan", async () => {
+  const run = await session(
+    [
+      {
+        name: "edit",
+        arguments: { path: "hello.txt", old_string: "a", new_string: "b" },
+      },
+    ],
+    "chat",
+  );
+  try {
+    expect(run.results.map((result) => result.status)).toEqual(["denied"]);
+    expect(run.output(0)).toBe("Chat mode does not permit edits");
+    const plan = await session(
+      [
+        {
+          name: "write",
+          arguments: { path: "hello.txt", content: "b" },
+        },
+      ],
+      "plan",
+    );
+    try {
+      expect(plan.results.map((result) => result.status)).toEqual(["denied"]);
+      expect(plan.output(0)).toBe("Plan mode does not permit writes");
+    } finally {
+      await plan.cleanup();
+    }
+  } finally {
+    await run.cleanup();
+  }
+});
+
+// 1x1 PNG, magic bytes intact.
+const TINY_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+  "base64",
+);
+
+test("fetch attaches image/png downloads for vision models with a short descriptor", async () => {
+  stubFetch((url) => {
+    if (url === "http://img.example/pic.png")
+      return new Response(TINY_PNG, {
+        headers: { "content-type": "image/png" },
+      });
+    return undefined;
+  });
+  const run = await session(
+    [{ name: "fetch", arguments: { url: "http://img.example/pic.png" } }],
+    "plan",
+    true,
+  );
+  try {
+    console.log("OUTPUT:", JSON.stringify(run.results[0]));
+    expect(run.results.map((result) => result.status)).toEqual(["succeeded"]);
+    expect(run.output(0)).toBe(
+      "image 1x1 PNG from http://img.example/pic.png (attached)",
+    );
+    expect(run.toolMessages[0]?.images).toEqual([TINY_PNG.toString("base64")]);
+  } finally {
+    restoreFetch();
+    await run.cleanup();
+  }
+});
+
+test("fetch describes images without attaching when the model lacks vision", async () => {
+  stubFetch((url) => {
+    if (url === "http://img.example/pic.png")
+      return new Response(TINY_PNG, {
+        headers: { "content-type": "image/png" },
+      });
+    return undefined;
+  });
+  const run = await session([
+    { name: "fetch", arguments: { url: "http://img.example/pic.png" } },
+  ]);
+  try {
+    expect(run.results.map((result) => result.status)).toEqual(["succeeded"]);
+    expect(run.output(0)).toBe(
+      "image 1x1 PNG from http://img.example/pic.png (model fixture has no vision; image not attached)",
+    );
+    expect(run.toolMessages[0]?.images).toBeUndefined();
+  } finally {
+    restoreFetch();
+    await run.cleanup();
+  }
+});
+
+test("fetch rejects oversized and bad-magic image downloads", async () => {
+  const big = Buffer.alloc(5 * 1024 * 1024 + 1);
+  TINY_PNG.copy(big, 0);
+  stubFetch((url) => {
+    if (url === "http://img.example/big.png")
+      return new Response(big, { headers: { "content-type": "image/png" } });
+    if (url === "http://img.example/fake.png")
+      return new Response("definitely not a png", {
+        headers: { "content-type": "image/png" },
+      });
+    return undefined;
+  });
+  const run = await session([
+    { name: "fetch", arguments: { url: "http://img.example/big.png" } },
+    { name: "fetch", arguments: { url: "http://img.example/fake.png" } },
+  ]);
+  try {
+    expect(run.results.map((result) => result.status)).toEqual([
+      "failed",
+      "failed",
+    ]);
+    expect(run.output(0)).toContain("5 MiB");
+    expect(run.output(1)).toContain("not a PNG");
+  } finally {
+    restoreFetch();
+    await run.cleanup();
+  }
+});
+
+test("fetch appends a bounded extracted footer of top links and images", async () => {
+  stubFetch((url) => {
+    if (url !== "http://page.example/article") return undefined;
+    return new Response(
+      `<html><body><h1>Guide</h1>
+<a href="/wiki/Boss">Boss name</a>
+<a href="https://else.example/page">Elsewhere</a>
+<a href="#top">skip anchor</a>
+<a href="mailto:x@example.com">skip mail</a>
+<a href="https://else.example/page">duplicate</a>
+<a href="/styles.css">skip css</a>
+<img src="/icons/tiny.png" width="12" alt="icon">
+<img src="/map.png" alt="Map of the region" srcset="/map.png 100w, /map-big.png 2000x1500">
+</body></html>`,
+      { headers: { "content-type": "text/html; charset=utf-8" } },
+    );
+  });
+  const run = await session([
+    { name: "fetch", arguments: { url: "http://page.example/article" } },
+  ]);
+  try {
+    expect(run.results.map((result) => result.status)).toEqual(["succeeded"]);
+    const output = run.output(0);
+    expect(output).toContain("--- extracted ---");
+    expect(output).toContain("links: 2");
+    expect(output).toContain("1. http://page.example/wiki/Boss  Boss name");
+    expect(output).toContain("2. https://else.example/page");
+    expect(output).toContain("images: 1");
+    expect(output).toContain(
+      "1. http://page.example/map.png 2000x1500 map: Map of the region",
+    );
+    expect(output).not.toContain("icons");
+    expect(output).not.toContain("styles.css");
+  } finally {
+    restoreFetch();
+    await run.cleanup();
+  }
+});
+
+test("fetch sends browser headers and a same-origin referer on image requests", async () => {
+  stubFetch((url) => {
+    if (url === "http://img.example/pic.png")
+      return new Response(TINY_PNG, {
+        headers: { "content-type": "image/png" },
+      });
+    return undefined;
+  });
+  const run = await session(
+    [{ name: "fetch", arguments: { url: "http://img.example/pic.png" } }],
+    "plan",
+    true,
+  );
+  try {
+    expect(run.results.map((result) => result.status)).toEqual(["succeeded"]);
+    const request = requestInits.find((entry) =>
+      entry.url.startsWith("http://img.example"),
+    );
+    expect(request?.headers["user-agent"]).toContain("Mozilla/5.0");
+    expect(request?.headers["accept"]).toBe(
+      "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
+    );
+    expect(request?.headers["referer"]).toBe("http://img.example");
+  } finally {
+    restoreFetch();
     await run.cleanup();
   }
 });

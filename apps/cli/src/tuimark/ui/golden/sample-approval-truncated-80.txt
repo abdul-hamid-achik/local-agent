@@ -28,4 +28,4 @@
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ Generating…                                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- ⠋  Preview truncated · y allow · n deny · Esc deny   a session                 
+ ⠋  Preview truncated · y allow · n deny · Esc deny   a session  ! always       

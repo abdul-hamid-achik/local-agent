@@ -17,7 +17,11 @@ import {
   type RunEvent,
   type ToolCall,
 } from "#runtime/index";
-import { hostInstructions, projectInstructions } from "#runtime/instructions";
+import {
+  hostInstructions,
+  type Intent,
+  projectInstructions,
+} from "#runtime/instructions";
 import type { McpConnection } from "#runtime/mcp";
 import type { ExecutionEvent, Session, SessionStore } from "#runtime/session";
 import type {
@@ -104,16 +108,29 @@ const FETCH_MAX_BYTES = 512 * 1024;
 // loop keeps the hop count bounded.
 const FETCH_MAX_REDIRECTS = 5;
 const SEARXNG_TIMEOUT_MS = 10_000;
+const BROWSER_UA =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
+/** Every fetch request presents as a normal browser. The referer is added in
+ * httpGet: it stays the origin of the requested URL (image servers with
+ * hotlink protection check it, and the image branch cannot know the content
+ * type before the download, so every request carries the same origin). */
+const FETCH_HEADERS: Record<string, string> = {
+  "user-agent": BROWSER_UA,
+  accept: "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
+};
 
 /** GET with redirects followed, capped at FETCH_MAX_REDIRECTS hops. */
 async function httpGet(
   url: string,
   timeoutMs: number,
+  headers?: Record<string, string>,
 ): Promise<{ response: Response; finalUrl: string }> {
   let current = url;
+  const origin = new URL(url).origin;
   for (let hop = 0; ; hop++) {
     const response = await fetch(current, {
       redirect: "manual",
+      headers: { ...headers, referer: origin },
       signal: AbortSignal.timeout(timeoutMs),
     });
     const location =
@@ -127,6 +144,29 @@ async function httpGet(
     }
     current = new URL(location, current).toString();
   }
+}
+
+/** Reads at most maxBytes of the body as bytes (the image branch). */
+async function readBytesCapped(
+  response: Response,
+  maxBytes: number,
+): Promise<{ bytes: Buffer; truncated: boolean }> {
+  const reader = response.body?.getReader();
+  if (reader === undefined) return { bytes: Buffer.alloc(0), truncated: false };
+  const chunks: Uint8Array[] = [];
+  let kept = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (kept + value.length > maxBytes) {
+      chunks.push(value.slice(0, maxBytes - kept));
+      await reader.cancel();
+      return { bytes: Buffer.concat(chunks), truncated: true };
+    }
+    chunks.push(value);
+    kept += value.length;
+  }
+  return { bytes: Buffer.concat(chunks), truncated: false };
 }
 
 /** Reads at most maxBytes of the body as text. */
@@ -218,12 +258,195 @@ async function htmlToText(html: string): Promise<string> {
     .trim();
 }
 
+type ExtractedLink = { url: string; text: string };
+type ExtractedImage = {
+  url: string;
+  width?: number;
+  height?: number;
+  map: boolean;
+  alt: string;
+  score: number;
+};
+
+const EXTRACTED_FOOTER_MAX = 4000;
+const EXTRACT_LINK_LIMIT = 8;
+const EXTRACT_IMAGE_LIMIT = 3;
+/** Stylesheets, scripts and icons: navigation chrome, not content. */
+const NAV_ASSET = /\.(css|js|svg)([?#]|$)/i;
+const MAP_WORDS = /map|atlas|region|world/i;
+
+/** Resolves one attribute value to an absolute http(s) URL, or undefined for
+ * anchors, mailto:, javascript:, data: and anything unparseable. */
+function absoluteUrl(value: string | null, base: string): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed || trimmed.startsWith("#")) return undefined;
+  if (/^(mailto|javascript|data|tel):/i.test(trimmed)) return undefined;
+  try {
+    const url = new URL(trimmed, base);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+/** Srcset candidates: "url 640w", "url 640x480" or a density "url 2x"
+ * (density without a pixel width is unusable for scoring and is dropped). */
+function srcsetCandidates(
+  srcset: string | null,
+): { url: string; width?: number; height?: number }[] {
+  if (!srcset) return [];
+  const out: { url: string; width?: number; height?: number }[] = [];
+  for (const part of srcset.split(",")) {
+    const [url, descriptor] = part.trim().split(/\s+/);
+    if (!url) continue;
+    if (!descriptor) {
+      out.push({ url });
+      continue;
+    }
+    const widthOnly = descriptor.match(/^(\d+)w$/);
+    if (widthOnly) {
+      out.push({ url, width: Number(widthOnly[1]) });
+      continue;
+    }
+    const both = descriptor.match(/^(\d+)x(\d+)$/);
+    if (both)
+      out.push({ url, width: Number(both[1]), height: Number(both[2]) });
+  }
+  return out;
+}
+
+/**
+ * One extra HTMLRewriter pass over the same HTML htmlToText converts: the top
+ * links (first-seen order) and top images (scored by area, map-ish alt text
+ * boosted), absolute URLs only, deduped, nav chrome skipped.
+ */
+async function extractHtmlAssets(
+  html: string,
+  baseUrl: string,
+): Promise<{ links: ExtractedLink[]; images: ExtractedImage[] }> {
+  const links: ExtractedLink[] = [];
+  const seenLinks = new Set<string>();
+  let pendingLink: { url: string; text: string } | undefined;
+  const images: ExtractedImage[] = [];
+  const seenImages = new Set<string>();
+  await new HTMLRewriter()
+    .on("a", {
+      element: (el) => {
+        const url = absoluteUrl(el.getAttribute("href"), baseUrl);
+        if (!url || seenLinks.has(url) || NAV_ASSET.test(url)) return;
+        pendingLink = { url, text: "" };
+        el.onEndTag(() => {
+          if (pendingLink) {
+            links.push(pendingLink);
+            seenLinks.add(pendingLink.url);
+          }
+          pendingLink = undefined;
+        });
+      },
+      text: (chunk) => {
+        if (pendingLink) pendingLink.text += chunk.text;
+      },
+    })
+    .on("img", {
+      element: (el) => {
+        const widthAttr = Number(el.getAttribute("width"));
+        const heightAttr = Number(el.getAttribute("height"));
+        // A declared width under 16px is an icon, whatever its src says.
+        if (Number.isFinite(widthAttr) && widthAttr > 0 && widthAttr < 16)
+          return;
+        const candidates = srcsetCandidates(el.getAttribute("srcset"));
+        const fromSrc = absoluteUrl(el.getAttribute("src"), baseUrl);
+        const url =
+          (fromSrc && !NAV_ASSET.test(fromSrc) ? fromSrc : undefined) ??
+          candidates
+            .map((candidate) => absoluteUrl(candidate.url, baseUrl))
+            .find((candidate) => candidate && !NAV_ASSET.test(candidate)) ??
+          absoluteUrl(el.getAttribute("data-src"), baseUrl);
+        if (!url || seenImages.has(url) || NAV_ASSET.test(url)) return;
+        seenImages.add(url);
+        const best = candidates.reduce<{ width?: number; height?: number }>(
+          (top, candidate) =>
+            (candidate.width ?? 0) *
+              (candidate.height ?? candidate.width ?? 0) >
+            (top.width ?? 0) * (top.height ?? top.width ?? 0)
+              ? candidate
+              : top,
+          {},
+        );
+        const width =
+          Number.isFinite(widthAttr) && widthAttr > 0 ? widthAttr : best.width;
+        const height =
+          Number.isFinite(heightAttr) && heightAttr > 0
+            ? heightAttr
+            : best.height;
+        const alt = [
+          el.getAttribute("alt") ?? "",
+          el.getAttribute("title") ?? "",
+        ]
+          .join(" ")
+          .trim();
+        const area = (width ?? 0) * (height ?? width ?? 0);
+        images.push({
+          url,
+          width,
+          height,
+          map: MAP_WORDS.test(alt),
+          alt,
+          score: area + (MAP_WORDS.test(alt) ? 1000 : 0),
+        });
+      },
+    })
+    .transform(new Response(html))
+    .text();
+  return { links, images };
+}
+
+/** The bounded `--- extracted ---` footer appended to fetched HTML pages. */
+function extractedFooter(assets: {
+  links: ExtractedLink[];
+  images: ExtractedImage[];
+}): string {
+  const lines: string[] = ["--- extracted ---"];
+  const links = assets.links.slice(0, EXTRACT_LINK_LIMIT);
+  lines.push(`links: ${links.length}`);
+  for (const [index, link] of links.entries()) {
+    const text = link.text.replace(/\s+/g, " ").trim().slice(0, 60);
+    lines.push(`${index + 1}. ${link.url}${text ? `  ${text}` : ""}`);
+  }
+  const images = [...assets.images]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, EXTRACT_IMAGE_LIMIT);
+  lines.push(`images: ${images.length}`);
+  for (const [index, image] of images.entries()) {
+    const size = `${image.width ?? "?"}x${image.height ?? "?"}`;
+    const label = image.map
+      ? ` map:${image.alt ? ` ${image.alt}` : ""}`
+      : image.alt
+        ? `  ${image.alt}`
+        : "";
+    lines.push(`${index + 1}. ${image.url} ${size}${label}`.trimEnd());
+  }
+  const footer = lines.join("\n");
+  return footer.length > EXTRACTED_FOOTER_MAX
+    ? `${footer.slice(0, EXTRACTED_FOOTER_MAX)}…`
+    : footer;
+}
+
 function textContentType(response: Response): string {
   return (response.headers.get("content-type") ?? "")
     .split(";")[0]!
     .trim()
     .toLowerCase();
 }
+
+/** Content types the fetch image branch handles (read_image's formats). */
+const IMAGE_CONTENT_TYPES: Record<string, true> = {
+  "image/png": true,
+  "image/jpeg": true,
+  "image/webp": true,
+  "image/gif": true,
+};
 
 type SearchHit = { title: string; url: string; snippet: string };
 
@@ -268,8 +491,7 @@ async function duckduckgoSearch(query: string): Promise<SearchHit[] | null> {
       `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`,
       {
         headers: {
-          "user-agent":
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+          "user-agent": BROWSER_UA,
           accept: "text/html",
         },
         signal: AbortSignal.timeout(SEARXNG_TIMEOUT_MS),
@@ -721,6 +943,9 @@ const SUBAGENT_TOOLS = new Set([
   "fetch",
   "web_search",
 ]);
+/** The chat catalog: read-only research only — no run-state (todo_write), no
+ * delegation (task), no effects, no MCP. Same set the subagents get. */
+const CHAT_TOOLS = new Set(SUBAGENT_TOOLS);
 
 export type ApprovalRequest =
   | WorkspaceEditProposal
@@ -757,8 +982,8 @@ export type SessionContext = { store: SessionStore; state: Session };
 
 export type AgentOptions = {
   workspace: Workspace;
-  /** Plan denies writes even if the approval callback would allow them. */
-  intent?: "plan" | "build";
+  /** Plan and chat deny effects even if the approval callback would allow them. */
+  intent?: Intent;
   approve: (proposal: ApprovalRequest, signal: AbortSignal) => Promise<boolean>;
   signal: AbortSignal;
   session?: SessionContext;
@@ -907,7 +1132,9 @@ async function* agentTurn(
     ? tools.filter((tool) => SUBAGENT_TOOLS.has(tool.function.name ?? ""))
     : options.intent === "plan"
       ? tools.filter((tool) => READ_ONLY_TOOLS.has(tool.function.name ?? ""))
-      : availableTools;
+      : options.intent === "chat"
+        ? tools.filter((tool) => CHAT_TOOLS.has(tool.function.name ?? ""))
+        : availableTools;
   for (let step = 0; step < stepLimit; step++) {
     signal.throwIfAborted();
     const assistant: Message = { role: "assistant", content: "" };
@@ -1029,6 +1256,11 @@ async function* agentTurn(
       let uncertain = false;
       let output: string;
       const images: string[] = [];
+      // Effects are hard-denied under an explicit non-build intent; an
+      // omitted intent defaults to build.
+      const effectsDenied =
+        options.intent !== undefined && options.intent !== "build";
+      const modeName = options.intent === "chat" ? "Chat" : "Plan";
       try {
         signal.throwIfAborted();
         if (name === "read") {
@@ -1078,41 +1310,72 @@ async function* agentTurn(
           const { response, finalUrl } = await httpGet(
             target.toString(),
             FETCH_TIMEOUT_MS,
+            FETCH_HEADERS,
           );
           if (response.status >= 400)
             throw new Error(`fetch: HTTP ${response.status} for ${finalUrl}`);
           const contentType = textContentType(response);
-          const textual =
-            contentType.startsWith("text/") ||
-            contentType === "application/json" ||
-            contentType === "application/xml" ||
-            contentType.endsWith("+json") ||
-            contentType.endsWith("+xml");
-          if (!textual)
-            throw new Error(
-              `fetch: unsupported content type ${contentType || "(none)"}`,
+          if (IMAGE_CONTENT_TYPES[contentType]) {
+            // Image branch: reuse read_image's checks (magic bytes, not the
+            // content type) and attach through the same pendingImages path.
+            const { bytes, truncated } = await readBytesCapped(
+              response,
+              IMAGE_MAX_BYTES,
             );
-          const { text, truncated } = await readCapped(
-            response,
-            FETCH_MAX_BYTES,
-          );
-          const body =
-            contentType === "text/html" || contentType.endsWith("+html")
-              ? await htmlToText(text)
+            if (truncated)
+              throw new Error("fetch: image exceeds the 5 MiB download cap");
+            const kind = IMAGE_KINDS.find((entry) => entry.matches(bytes));
+            if (!kind)
+              throw new Error(
+                `fetch: ${finalUrl} is not a PNG, JPEG, WebP or GIF image (the content is checked, not the content type)`,
+              );
+            const { width, height } = kind.dimensions(bytes);
+            const descriptor = `image ${width}x${height} ${kind.format} from ${finalUrl}`;
+            if (admission.capabilities.includes("vision")) {
+              images.push(bytes.toString("base64"));
+              output = `${descriptor} (attached)`;
+            } else {
+              // Gentler than read_image's fail-fast: a chat over a
+              // text-only model can still name what it fetched.
+              output = `${descriptor} (model ${admission.model} has no vision; image not attached)`;
+            }
+          } else {
+            const textual =
+              contentType.startsWith("text/") ||
+              contentType === "application/json" ||
+              contentType === "application/xml" ||
+              contentType.endsWith("+json") ||
+              contentType.endsWith("+xml");
+            if (!textual)
+              throw new Error(
+                `fetch: unsupported content type ${contentType || "(none)"}`,
+              );
+            const { text, truncated } = await readCapped(
+              response,
+              FETCH_MAX_BYTES,
+            );
+            const isHtml =
+              contentType === "text/html" || contentType.endsWith("+html");
+            const body = isHtml
+              ? `${await htmlToText(text)}\n\n${extractedFooter(
+                  await extractHtmlAssets(text, finalUrl),
+                )}`
               : text;
-          // Keep the final tool output inside the shared 100k-char limit;
-          // the header then reports the bytes actually returned.
-          const truncationNote = "…(output truncated at 100k chars)";
-          const headerOf = (shown: string) =>
-            `${Buffer.byteLength(shown, "utf8")} bytes from ${finalUrl}${truncated ? " (truncated at 512 KiB)" : ""}\n\n`;
-          const room = 100_000 - headerOf(body).length - truncationNote.length;
-          output =
-            body.length > room
-              ? (() => {
-                  const shown = body.slice(0, Math.max(0, room));
-                  return headerOf(shown) + shown + truncationNote;
-                })()
-              : headerOf(body) + body;
+            // Keep the final tool output inside the shared 100k-char limit;
+            // the header then reports the bytes actually returned.
+            const truncationNote = "…(output truncated at 100k chars)";
+            const headerOf = (shown: string) =>
+              `${Buffer.byteLength(shown, "utf8")} bytes from ${finalUrl}${truncated ? " (truncated at 512 KiB)" : ""}\n\n`;
+            const room =
+              100_000 - headerOf(body).length - truncationNote.length;
+            output =
+              body.length > room
+                ? (() => {
+                    const shown = body.slice(0, Math.max(0, room));
+                    return headerOf(shown) + shown + truncationNote;
+                  })()
+                : headerOf(body) + body;
+          }
         } else if (name === "web_search") {
           const args = WebSearchArgs.parse(call.function.arguments);
           yield* emitStart();
@@ -1213,9 +1476,9 @@ async function* agentTurn(
               `${args.todos.length} todos: ${counts.done} done, ${counts.in_progress} in progress, ${counts.pending} pending`,
             ].join("\n") || "0 todos: 0 done, 0 in progress, 0 pending";
         } else if (name === "write") {
-          if (options.intent === "plan") {
+          if (effectsDenied) {
             status = "denied";
-            output = "Plan mode does not permit writes";
+            output = `${modeName} mode does not permit writes`;
           } else {
             const args = WriteArgs.parse(call.function.arguments);
             const proposal = await workspace.prepareWrite(
@@ -1243,9 +1506,9 @@ async function* agentTurn(
             }
           }
         } else if (name === "edit") {
-          if (options.intent === "plan") {
+          if (effectsDenied) {
             status = "denied";
-            output = "Plan mode does not permit edits";
+            output = `${modeName} mode does not permit edits`;
           } else {
             const args = EditArgs.parse(call.function.arguments);
             const proposal = await workspace.prepareEdit(
@@ -1274,9 +1537,9 @@ async function* agentTurn(
             }
           }
         } else if (name === "run_command") {
-          if (options.intent === "plan") {
+          if (effectsDenied) {
             status = "denied";
-            output = "Plan mode does not permit command execution";
+            output = `${modeName} mode does not permit command execution`;
           } else {
             const args = CommandArgs.parse(call.function.arguments);
             const proposal = await createCommandProposal(
@@ -1310,10 +1573,9 @@ async function* agentTurn(
             }
           }
         } else if (mcpConnection) {
-          if (options.intent === "plan") {
+          if (effectsDenied) {
             status = "denied";
-            output =
-              "Plan mode does not authorize MCP calls from server annotations";
+            output = `${modeName} mode does not authorize MCP calls from server annotations`;
           } else {
             const argumentsJson = JSON.stringify(call.function.arguments);
             if (Buffer.byteLength(argumentsJson) > 100_000)

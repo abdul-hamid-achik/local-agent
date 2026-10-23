@@ -210,7 +210,7 @@ test("fullscreen mode can switch intent from the composer", async () => {
 });
 
 test.each([
-  ["/help", "/mode plan|build"],
+  ["/help", "/mode plan|build|chat"],
   ["/mcp", "MCP servers: 0"],
   ["/mode banana", "Unknown mode: banana"],
   ["/theme dark", "/theme and /mouse are available in the Tuimark client"],

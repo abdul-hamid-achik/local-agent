@@ -28,4 +28,4 @@
 ║ second line                                                                  ║
 ║ third line                                                                   ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
- Ready · /help for commands   ^P commands  esc cancel  ctrl+c quit  ^O earlier  
+ build · Ready · /help for keys   ^P commands  esc cancel  ^O earlier           

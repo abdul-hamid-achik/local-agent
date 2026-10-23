@@ -15,15 +15,19 @@ const state = { intent: "build" as const, mcp: { servers: 0, tools: 0 } };
 
 test("/mode reports, validates and changes the mode with the Vue client's words", () => {
   expect(runSlash("/mode", state)).toEqual({
-    status: "Current mode: build. Use /mode plan or /mode build",
+    status: "Current mode: build. Use /mode plan, /mode build or /mode chat",
   });
   expect(runSlash("/mode PLAN", state)).toEqual({
     status: "Mode changed to plan",
     intent: "plan",
   });
   expect(runSlash("  /mode build  ", state).intent).toBe("build");
+  expect(runSlash("/mode chat", state)).toEqual({
+    status: "Mode changed to chat",
+    intent: "chat",
+  });
   expect(runSlash("/mode fast", state)).toEqual({
-    status: "Unknown mode: fast. Use /mode plan or /mode build",
+    status: "Unknown mode: fast. Use /mode plan, /mode build or /mode chat",
   });
 });
 
@@ -119,14 +123,25 @@ test("the palette carries the theme and mouse rows", () => {
   expect(HELP_STATUS).toContain("/mouse on|off");
 });
 
-test("/permissions lists session grants and clears them", () => {
+test("/permissions lists session grants and file rules, and clears them", () => {
   expect(runSlash("/permissions", state)).toEqual({
-    status: "No session grants",
+    status: "No permissions: no session grants, no file rules",
   });
   const granted = { ...state, grants: ["files", "bun test"] };
   expect(runSlash("/permissions", granted)).toEqual({
-    status: "Session grants: files · bun test",
+    status: "Permissions: session: files · bun test",
   });
+  const ruled = {
+    ...granted,
+    rules: ["allow edit:src/*", "deny run_command:rm *"],
+  };
+  expect(runSlash("/permissions", ruled)).toEqual({
+    status:
+      "Permissions: session: files · bun test · file: allow edit:src/* · deny run_command:rm *",
+  });
+  expect(
+    runSlash("/permissions", { ...state, rules: ["allow mcp:fs__readFile"] }),
+  ).toEqual({ status: "Permissions: file: allow mcp:fs__readFile" });
   expect(runSlash("/permissions CLEAR", granted)).toEqual({
     status: "Session grants cleared",
     clearGrants: true,
@@ -135,9 +150,17 @@ test("/permissions lists session grants and clears them", () => {
     status: "No session grants",
     clearGrants: true,
   });
+  expect(runSlash("/permissions clear rules", ruled)).toEqual({
+    status: "File rules cleared",
+    clearRules: true,
+  });
+  expect(runSlash("/permissions clear rules", state)).toEqual({
+    status: "No file rules",
+    clearRules: true,
+  });
   expect(runSlash("/permissions maybe", granted)).toEqual({
     status:
-      "Unknown permissions setting: maybe. Use /permissions or /permissions clear",
+      "Unknown permissions setting: maybe. Use /permissions, /permissions clear or /permissions clear rules",
   });
   expect(filterPalette("permissions").map((r) => r.id)).toEqual([
     "permissions",
@@ -211,7 +234,7 @@ test("the slash catalog lists exactly the commands the parser knows", () => {
     ["/mcp", false, ""],
   ]);
   expect(helpRows().map((r) => r.cmd)).toEqual([
-    "/mode plan|build",
+    "/mode plan|build|chat",
     "/model [NAME]",
     "/theme dark|light|auto",
     "/mouse on|off",

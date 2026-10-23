@@ -56,7 +56,7 @@ steps:
     - press: enter
     - wait:
         screen:
-            contains: "Session grants: files"
+            contains: "Permissions: session: files"
         timeoutMs: 5000
     - press: ctrl+c
     - wait:
@@ -69,3 +69,4 @@ outcomes:
       verify:
         process:
             exitCode: 0
+contractHash: sha256:39621627f84d43d7b8c5bcb5af0569b61f3b4ab960e89b57c06dc6a59f85b33d

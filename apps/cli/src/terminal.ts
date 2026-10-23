@@ -39,7 +39,7 @@ export function createTerminalRoot(
   mode: Presentation,
   signal: AbortSignal,
   workspace: Workspace,
-  intent: "plan" | "build",
+  intent: "plan" | "build" | "chat",
   session?: SessionContext,
   mcp: readonly McpConnection[] = [],
 ) {
@@ -48,7 +48,7 @@ export function createTerminalRoot(
       const draft = ref("");
       const busy = ref(false);
       const idleStatus =
-        "Enter send · Esc cancel · /mode plan|build · Ctrl+C exit";
+        "Enter send · Esc cancel · /mode plan|build|chat · Ctrl+C exit";
       const status = ref(idleStatus);
       const history = ref<Message[]>(session?.state.messages.slice() ?? []);
       const live = ref("");
@@ -97,11 +97,15 @@ export function createTerminalRoot(
         if (modeCommand) {
           const requested = modeCommand[1]?.toLowerCase();
           if (!requested) {
-            status.value = `Current mode: ${selectedIntent.value}. Use /mode plan or /mode build`;
-          } else if (requested !== "plan" && requested !== "build") {
-            status.value = `Unknown mode: ${requested}. Use /mode plan or /mode build`;
+            status.value = `Current mode: ${selectedIntent.value}. Use /mode plan, /mode build or /mode chat`;
+          } else if (
+            requested !== "plan" &&
+            requested !== "build" &&
+            requested !== "chat"
+          ) {
+            status.value = `Unknown mode: ${requested}. Use /mode plan, /mode build or /mode chat`;
           } else {
-            selectedIntent.value = requested as "plan" | "build";
+            selectedIntent.value = requested;
             status.value = `Mode changed to ${requested}`;
           }
           return;
@@ -118,7 +122,7 @@ export function createTerminalRoot(
         }
         if (command === "/help") {
           status.value =
-            "/mode plan|build · /mcp · /help · Esc cancel · Ctrl+C exit";
+            "/mode plan|build|chat · /mcp · /help · Esc cancel · Ctrl+C exit";
           return;
         }
         if (command === "/mcp") {
@@ -325,7 +329,7 @@ export async function runTerminal(
   mode: Presentation,
   signal: AbortSignal,
   workspace: Workspace,
-  intent: "plan" | "build",
+  intent: "plan" | "build" | "chat",
   session?: SessionContext,
   mcp: readonly McpConnection[] = [],
 ) {

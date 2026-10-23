@@ -37,6 +37,7 @@
   <keymap when=".approving">
     <bind keys="y" action="dialog_confirm" label="allow" keycap="y"/>
     <bind keys="a" action="dialog_session" label="session" keycap="a"/>
+    <bind keys="!" action="dialog_always" label="always" keycap="!"/>
     <bind keys="n" action="dialog_cancel" label="deny" keycap="n"/>
     <bind keys="esc" action="dialog_cancel"/>
     <bind keys="ctrl+c" action="quit_request"/>

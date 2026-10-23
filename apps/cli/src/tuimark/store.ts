@@ -26,19 +26,21 @@ import {
 } from "#cli/tuimark/commands";
 import type { TranscriptSnapshot } from "#cli/tuimark/transcript";
 
-export const IDLE_STATUS = "Ready · /help for commands";
+export const IDLE_STATUS = "Ready · /help for keys";
 
-/** The idle status line; it keeps the MCP count for the whole session. */
-export function idleStatus(mcpServers: number): string {
-  return mcpServers ? `${IDLE_STATUS} · MCP ${mcpServers}` : IDLE_STATUS;
+/** The idle status line, prefixed with the mode so the intent is always
+ * visible; the MCP count stays for the whole session. */
+export function idleStatus(mcpServers: number, intent?: Intent): string {
+  const base = mcpServers ? `${IDLE_STATUS} · MCP ${mcpServers}` : IDLE_STATUS;
+  return intent ? `${intent} · ${base}` : base;
 }
 export const PLACEHOLDER = "Message the model";
 export const PLACEHOLDER_BUSY = "Generating…";
 /** While the dialog is not armed yet: only deny works. */
 export const APPROVAL_WAIT_STATUS = "Waiting for approval · n deny · Esc deny";
-/** Once the dialog accepts `y` (and `a`, the session grant). */
+/** Once the dialog accepts `y` (and `a`, the session grant, `!` the rule). */
 export const APPROVAL_STATUS =
-  "Waiting for approval · y allow · a session · n deny · Esc deny";
+  "Waiting for approval · y allow · a session · ! always · n deny · Esc deny";
 export const APPROVAL_TRUNCATED_STATUS =
   "Preview truncated · y allow · n deny · Esc deny";
 export const BUSY_STATUS_LINE = "Generating…";
@@ -49,9 +51,15 @@ export const APPROVAL_UNARMED_STATUS = "Approval not armed yet — press y again
 /** An `a` swallowed by the arm delay, same rule as `y`. */
 export const APPROVAL_UNARMED_SESSION_STATUS =
   "Approval not armed yet — press a again";
+/** A `!` swallowed by the arm delay, same rule as `y` and `a`. */
+export const APPROVAL_UNARMED_ALWAYS_STATUS =
+  "Approval not armed yet — press ! again";
 /** An `a` on a truncated preview: no grant is taken from an unread change. */
 export const APPROVAL_TRUNCATED_SESSION_STATUS =
   "Preview truncated: session grant unavailable";
+/** A `!` on a truncated preview: no persistent rule comes from an unread change. */
+export const APPROVAL_TRUNCATED_ALWAYS_STATUS =
+  "Preview truncated: always rule unavailable";
 
 export interface DiffLine {
   n: number;
@@ -359,7 +367,7 @@ export function initialStore(init: StoreInit): Store {
     draft: "",
     placeholder: PLACEHOLDER,
     busy: false,
-    status: idleStatus(init.mcpServers),
+    status: idleStatus(init.mcpServers, init.intent),
     commit_buf: EMPTY_COMMIT_VIEW,
     commit_blocks: [],
   };

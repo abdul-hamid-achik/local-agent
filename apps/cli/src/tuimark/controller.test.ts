@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -122,7 +122,7 @@ test("a turn publishes the prompt, streams, keeps the reply and returns to idle"
   expect(s.live.active).toBe(false);
   expect(s.busy).toBe(false);
   expect(s.placeholder).toBe("Message the model");
-  expect(s.status).toBe("Ready · /help for commands");
+  expect(s.status).toBe(`build · ${IDLE_STATUS}`);
   expect(s.header.ctx_label).toBe("120/8.0k");
   expect(client.writeErrors).toEqual([]);
 });
@@ -169,7 +169,7 @@ test("thinking streams into its own block, appended as it comes, and is gone onc
   expect(s.thinking).toEqual({ on: false, runs: [] });
   // The reasoning is not in the committed history, and the speed is on the status line.
   expect(JSON.stringify(s.messages)).not.toContain("three");
-  expect(s.status).toBe("Ready · /help for commands · 40 tok/s");
+  expect(s.status).toBe(`build · ${IDLE_STATUS} · 40 tok/s`);
   expect(client.writeErrors).toEqual([]);
 });
 
@@ -177,7 +177,7 @@ test("a turn without timings leaves the idle status alone", async () => {
   const { ui, client } = setup(reply("hello there"));
   await ui.fire("send", "hi");
   await client.idle();
-  expect(store(ui).status).toBe("Ready · /help for commands");
+  expect(store(ui).status).toBe(`build · ${IDLE_STATUS}`);
 });
 
 test("the model sees the history like the Vue client sends it", async () => {
@@ -287,7 +287,7 @@ test("while busy, a slash command says Busy and a prompt is queued and runs next
     [true, false],
     [false, true],
   ]);
-  expect(store(ui).status).toBe("Ready · /help for commands");
+  expect(store(ui).status).toBe(`build · ${IDLE_STATUS}`);
 });
 
 test("a second send while one is queued replaces it and says so", async () => {
@@ -371,7 +371,7 @@ test("a queued prompt runs after a failed turn too, without duplicating the fail
   // No session: the failed prompt left the model's history, so the queued
   // turn is the whole conversation — nothing duplicated, notice never sent.
   expect(seen[1]?.messages).toEqual(["user:queued one"]);
-  expect(store(ui).status).toBe("Ready · /help for commands");
+  expect(store(ui).status).toBe(`build · ${IDLE_STATUS}`);
 });
 
 function editProposal(diff = "-x\n+y"): ApprovalRequest {
@@ -822,14 +822,14 @@ test("waiting becomes generating at the first event, with elapsed, and idle writ
   expect(store(ui).status).toBe("Generating… · 1m 05s");
   toEnd();
   await client.idle();
-  expect(store(ui).status).toBe("Ready · /help for commands");
+  expect(store(ui).status).toBe(`build · ${IDLE_STATUS}`);
   // The timer is gone with the turn: time passing writes nothing more.
   const batches = ui.batches.length;
   nowMs += 120_000;
   await client.flush();
   await new Promise((r) => setTimeout(r, 20));
   expect(ui.batches.length).toBe(batches);
-  expect(store(ui).status).toBe("Ready · /help for commands");
+  expect(store(ui).status).toBe(`build · ${IDLE_STATUS}`);
 });
 
 test("an open approval owns the status line over the elapsed ticker", async () => {
@@ -1520,7 +1520,7 @@ test("enter completes over the popup only when the choice differs", async () => 
   await ui.fire("slash_next", "/m");
   await ui.fire("send", "/m");
   expect(store(ui).draft).toBe("/mcp");
-  expect(store(ui).status).toBe("Ready · /help for commands");
+  expect(store(ui).status).toBe(`build · ${IDLE_STATUS}`);
   // Fully typed, the same enter runs the command.
   await ui.fire("typed", "/mcp");
   expect(store(ui).slash.open).toBe(true);
@@ -1577,12 +1577,15 @@ test("a new palette query resets the cursor to the first match", async () => {
   expect(store(ui).palette.cur).toBe("");
 });
 
-test("shift+tab toggles the mode like /mode, and is refused while busy", async () => {
+test("shift+tab cycles build→plan→chat→build like /mode, and is refused while busy", async () => {
   const { ui } = setup(reply("x"));
   expect(store(ui).header.mode).toBe("build");
   await ui.fire("mode_toggle");
   expect(store(ui).header.mode).toBe("plan");
   expect(store(ui).status).toBe("Mode changed to plan");
+  await ui.fire("mode_toggle");
+  expect(store(ui).header.mode).toBe("chat");
+  expect(store(ui).status).toBe("Mode changed to chat");
   await ui.fire("mode_toggle");
   expect(store(ui).header.mode).toBe("build");
 
@@ -1608,7 +1611,7 @@ test("shift+tab toggles the mode like /mode, and is refused while busy", async (
 test("the help overlay's store carries the slash commands", () => {
   const { ui } = setup(reply("x"));
   expect(store(ui).help.cmds.map((c) => c.cmd)).toEqual([
-    "/mode plan|build",
+    "/mode plan|build|chat",
     "/model [NAME]",
     "/theme dark|light|auto",
     "/mouse on|off",
@@ -1868,13 +1871,15 @@ test("grants: /permissions lists them and /permissions clear revokes them all", 
     turnsAsking([[editProposal()], [editProposal()]]),
   );
   await ui.fire("send", "/permissions");
-  expect(store(ui).status).toBe("No session grants");
+  expect(store(ui).status).toBe(
+    "No permissions: no session grants, no file rules",
+  );
   await ui.fire("send", "one");
   await untilApproval(ui);
   await ui.fire("dialog_session");
   await client.idle();
   await ui.fire("send", "/permissions");
-  expect(store(ui).status).toBe("Session grants: files");
+  expect(store(ui).status).toBe("Permissions: session: files");
   await ui.fire("send", "/permissions clear");
   expect(store(ui).status).toBe("Session grants cleared");
   expect(store(ui).header.grants).toBe("");
@@ -2035,7 +2040,7 @@ test("/details shows the lines the card truncated, and closing rests at idle", a
   expect(detailsText(ui)).toContain("output line 20");
   await ui.fire("details_close");
   expect(store(ui).details.open).toBe(false);
-  expect(store(ui).status).toBe(IDLE_STATUS);
+  expect(store(ui).status).toBe(`build · ${IDLE_STATUS}`);
   expect(client.writeErrors).toEqual([]);
 });
 
@@ -2235,7 +2240,7 @@ test("/status opens the panel with the config the client actually holds", async 
   expect(lines).toContain("Context: 0/8.0k");
   await ui.fire("panel_close");
   expect(store(ui).panel.open).toBe(false);
-  expect(store(ui).status).toBe(IDLE_STATUS);
+  expect(store(ui).status).toBe(`build · ${IDLE_STATUS}`);
 });
 
 test("/mcp with no servers says so in the panel, count line on top", async () => {
@@ -2388,7 +2393,7 @@ test("a session switch is refused while a turn runs, and grants survive it", asy
   );
   // The grant is the process's, not the saved session's: still listed.
   await ui.fire("send", "/permissions");
-  expect(store(ui).status).toBe("Session grants: files");
+  expect(store(ui).status).toBe("Permissions: session: files");
 });
 
 test("inline: a switch commits the loaded history and enter loads instead of sending", async () => {
@@ -2895,4 +2900,115 @@ test("F9: a real export file is created with mode 0o600", async () => {
   const path = join(root, "local-agent-transcript-20261022-090503.md");
   expect((await stat(path)).mode & 0o777).toBe(0o600);
   expect(await readFile(path, "utf8")).toContain("mode prompt");
+});
+
+// ------------------------------------------------------------ permission rules
+
+import { loadPermissionFile, type PermissionRule } from "@local-agent/runtime";
+
+/** Writes the workspace's permissions file, creating the directory. */
+async function writeRules(
+  root: string,
+  rules: PermissionRule[],
+): Promise<void> {
+  await mkdir(join(root, ".local-agent"), { recursive: true });
+  await writeFile(
+    join(root, ".local-agent", "permissions.json"),
+    JSON.stringify({ version: 1, rules }),
+  );
+}
+
+test("rules: allow auto-approves and deny refuses, each named in the status, no card", async () => {
+  const root = await mkdtemp(join(tmpdir(), "la-rules-"));
+  await writeRules(root, [
+    { effect: "allow", tool: "edit", pattern: "a.txt" },
+    { effect: "deny", tool: "run_command", pattern: "rm *" },
+  ]);
+  const { ui, client } = setup(
+    quiet(async ({ options }) => {
+      // The deny decision must land even though a rule allows the edit;
+      // both go through evaluate() before any card exists.
+      const allowed = await options.approve(editProposal(), options.signal);
+      const refused = await options.approve(
+        commandProposal(["rm", "-rf", "/"]),
+        options.signal,
+      );
+      decisions.push(allowed, refused);
+    }),
+    { workspace: { root } as Workspace },
+  );
+  // The deny decision must land even though a rule allows the edit; both
+  // go through evaluate() before any card exists. The idle write replaces
+  // each flash, so both are read from the writes that carried them.
+  await ui.fire("send", "rules");
+  await client.idle();
+  expect(store(ui).approval.open).toBe(false);
+  const statuses = ui.batches
+    .flat()
+    .filter((w) => w.path === "status")
+    .map((w) => String(w.value));
+  // The flash carries the elapsed suffix while the turn runs.
+  expect(statuses.some((v) => v.startsWith("allowed by rule: a.txt"))).toBe(
+    true,
+  );
+  expect(statuses.some((v) => v.startsWith("denied by rule: rm *"))).toBe(true);
+  expect(decisions).toEqual([true, false]);
+});
+
+test("rules: `!` saves the proposed rule, grants the call, and later calls auto-allow", async () => {
+  const root = await mkdtemp(join(tmpdir(), "la-always-"));
+  const { ui, client } = setup(
+    turnsAsking([
+      [commandProposal(["bun", "test", "a.test.ts"])],
+      [commandProposal(["bun", "test", "b.test.ts"])],
+    ]),
+    { workspace: { root } as Workspace },
+  );
+  await ui.fire("send", "one");
+  await until(() => store(ui).status === APPROVAL_STATUS);
+  await ui.fire("dialog_always");
+  // The verdict write is the one that closes the dialog; read it before
+  // the turn's idle write replaces it.
+  expect(store(ui).status).toBe(
+    "Always allowed: run_command bun * (saved to .local-agent/permissions.json)",
+  );
+  await client.idle();
+  expect(decisions).toEqual([true]);
+  const saved = await loadPermissionFile(root);
+  expect(saved.rules).toEqual([
+    { effect: "allow", tool: "run_command", pattern: "bun *" },
+  ]);
+  // The saved rule now covers the sibling call: no card, allowed by rule.
+  await ui.fire("send", "two");
+  await client.idle();
+  expect(decisions).toEqual([true, true]);
+  expect(
+    ui.batches
+      .flat()
+      .some(
+        (w) =>
+          w.path === "status" &&
+          String(w.value).startsWith("allowed by rule: bun *"),
+      ),
+  ).toBe(true);
+});
+
+test("rules: /permissions lists both origins and clear rules empties the file", async () => {
+  const root = await mkdtemp(join(tmpdir(), "la-list-"));
+  const { ui, client } = setup(turnsAsking([[editProposal()]]), {
+    workspace: { root } as Workspace,
+  });
+  await ui.fire("send", "/permissions");
+  expect(store(ui).status).toBe(
+    "No permissions: no session grants, no file rules",
+  );
+  await ui.fire("send", "one");
+  await until(() => store(ui).status === APPROVAL_STATUS);
+  await ui.fire("dialog_always");
+  await client.idle();
+  await ui.fire("send", "/permissions");
+  expect(store(ui).status).toBe("Permissions: file: allow edit:a.txt");
+  await ui.fire("send", "/permissions clear rules");
+  expect(store(ui).status).toBe("File rules cleared");
+  expect(await loadPermissionFile(root)).toEqual({ version: 1, rules: [] });
 });

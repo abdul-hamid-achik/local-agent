@@ -4,9 +4,12 @@ import {
   admitOpenAILocalModel,
   connectMcp,
   DEFAULT_OLLAMA_MODEL,
+  evaluate,
   inspectRecovery,
+  loadPermissionFile,
   type McpConnection,
   McpServerConfigSchema,
+  permissionRequest,
   resolveProvider,
   runAgent,
   type SessionContext,
@@ -98,7 +101,8 @@ bun dev [--model MODEL (default: ${DEFAULT_OLLAMA_MODEL})] [--mode fullscreen|in
                        named theme from the client's ui/themes folder (the
                        bundled ones: midnight, sepia)
   --workspace PATH     Workspace root (default: current directory)
-  --intent plan|build  Plan forbids edits and commands; build asks before acting
+  --intent plan|build|chat  Plan forbids edits and commands; chat is conversational (research
+                       only); build asks before acting
   --approve-edits      Allow file edits and writes (create or replace) in headless mode
   --approve-commands   Allow command execution in headless mode (user permissions)
   --mcp-config PATH    Load an explicit trusted JSON array of MCP servers
@@ -134,7 +138,11 @@ Interrupted tool outcomes require inspection; they are never automatically repla
   } else {
     if (!["fullscreen", "inline", "headless"].includes(values.mode))
       throw new Error("Unknown presentation mode");
-    if (values.intent !== "plan" && values.intent !== "build")
+    if (
+      values.intent !== "plan" &&
+      values.intent !== "build" &&
+      values.intent !== "chat"
+    )
       throw new Error("Unknown agent intent");
     if (
       [
@@ -330,12 +338,22 @@ Interrupted tool outcomes require inspection; they are never automatically repla
                 signal: controller.signal,
                 session,
                 mcp,
-                approve: async (proposal) =>
-                  proposal.kind === "edit" || proposal.kind === "write"
+                // Headless precedence: the workspace's permission file is
+                // the user's explicit, durable intent, so it outranks the
+                // --approve-* flags in BOTH directions — an allow rule
+                // approves even with the flag off, a deny rule refuses
+                // even with the flag on. Everything else asks the flags.
+                approve: async (proposal) => {
+                  const { rules } = await loadPermissionFile(workspace.root);
+                  const verdict = evaluate(rules, permissionRequest(proposal));
+                  if (verdict.effect !== "ask")
+                    return verdict.effect === "allow";
+                  return proposal.kind === "edit" || proposal.kind === "write"
                     ? values["approve-edits"]
                     : proposal.kind === "command"
                       ? values["approve-commands"]
-                      : values["approve-mcp"],
+                      : values["approve-mcp"];
+                },
               },
             )) {
               if (values.json) console.log(JSON.stringify(event));

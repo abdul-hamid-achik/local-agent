@@ -44,6 +44,17 @@ test("the system prompt states relative paths, the tool list, and the programs f
   expect(hostInstructions("build", [])).not.toContain("Programs found");
 });
 
+test("chat intent gets its own conversational preamble, not the coding framing", () => {
+  const chat = hostInstructions("chat", ["bun"]);
+  expect(chat).toContain("conversational assistant");
+  expect(chat).toContain("web_search and fetch");
+  expect(chat).toContain("summarize and cite links");
+  expect(chat).not.toContain("coding agent");
+  expect(chat).not.toContain("Programs found");
+  expect(chat).not.toBe(hostInstructions("plan", ["bun"]));
+  expect(chat).not.toBe(hostInstructions("build", ["bun"]));
+});
+
 test("programs are probed from a small fixed set, once", () => {
   const found = availablePrograms();
   expect(

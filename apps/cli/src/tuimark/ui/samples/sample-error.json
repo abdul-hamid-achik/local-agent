@@ -153,6 +153,11 @@
         "hint": "/mode build"
       },
       {
+        "id": "mode-chat",
+        "label": "Mode: chat (conversational)",
+        "hint": "/mode chat"
+      },
+      {
         "id": "theme-dark",
         "label": "Theme: dark",
         "hint": "/theme dark"
@@ -253,8 +258,8 @@
     "cmds": [
       {
         "id": "/mode",
-        "cmd": "/mode plan|build",
-        "desc": "plan reads only · build can edit"
+        "cmd": "/mode plan|build|chat",
+        "desc": "plan reads only · build can edit · chat converses"
       },
       {
         "id": "/model",

@@ -5,7 +5,7 @@
 // compared. /theme and /mouse are Tuimark-only (the Vue client says so):
 // they drive the host's reserved `@theme` path and `<tui mouse>` flag.
 
-export type Intent = "plan" | "build";
+export type Intent = "plan" | "build" | "chat";
 
 /** The session theme, written to the host's reserved `@theme` path. */
 export type Theme = "dark" | "light" | "auto";
@@ -20,6 +20,8 @@ export interface CommandState {
   mouse?: boolean;
   /** Active session-grant labels, in grant order (`/permissions` lists them). */
   grants?: readonly string[];
+  /** File rule labels, in file order (`/permissions` lists them too). */
+  rules?: readonly string[];
   /** The model the provider currently uses (`/model` reports it). */
   model?: string;
 }
@@ -36,6 +38,8 @@ export interface CommandOutcome {
   mouse?: boolean;
   /** Set by `/permissions clear`: revoke every session grant. */
   clearGrants?: boolean;
+  /** Set by `/permissions clear rules`: empty the workspace's rule file. */
+  clearRules?: boolean;
   /**
    * Set by `/details`: open the viewer over the latest tool receipt. The
    * controller owns the receipt, so it writes the real status itself.
@@ -61,7 +65,7 @@ export interface CommandOutcome {
 }
 
 export const HELP_STATUS =
-  "/mode plan|build · /model [NAME] · /theme dark|light|auto · /mouse on|off · /permissions [clear] · /details · /status · /sessions · /find TEXT · /export [json] · /mcp · /help · Esc cancel · Ctrl+C exit";
+  "/mode plan|build|chat · /model [NAME] · /theme dark|light|auto · /mouse on|off · /permissions [clear] · /details · /status · /sessions · /find TEXT · /export [json] · /mcp · /help · Esc cancel · Ctrl+C exit";
 
 /** Inline has no mouse (the engine ignores it there): the controller refuses with this. */
 export const MOUSE_INLINE_STATUS = "Mouse is not available in inline mode";
@@ -74,11 +78,11 @@ export function runSlash(text: string, state: CommandState): CommandOutcome {
     const requested = mode[1]?.toLowerCase();
     if (!requested)
       return {
-        status: `Current mode: ${state.intent}. Use /mode plan or /mode build`,
+        status: `Current mode: ${state.intent}. Use /mode plan, /mode build or /mode chat`,
       };
-    if (requested !== "plan" && requested !== "build")
+    if (requested !== "plan" && requested !== "build" && requested !== "chat")
       return {
-        status: `Unknown mode: ${requested}. Use /mode plan or /mode build`,
+        status: `Unknown mode: ${requested}. Use /mode plan, /mode build or /mode chat`,
       };
     return { status: `Mode changed to ${requested}`, intent: requested };
   }
@@ -124,23 +128,35 @@ export function runSlash(text: string, state: CommandState): CommandOutcome {
     // before it switches; the flash only says a check is running.
     return { status: `Switching model to ${requested}…`, model: requested };
   }
-  const permissions = command.match(/^\/permissions(?:\s+(\S+))?\s*$/i);
+  const permissions = command.match(/^\/permissions(?:\s+(.+?))?\s*$/i);
   if (permissions) {
     const grants = state.grants ?? [];
+    const rules = state.rules ?? [];
     const requested = permissions[1]?.toLowerCase();
-    if (!requested)
+    if (!requested) {
+      // Both origins in one line: what this session granted (`a`) and what
+      // the workspace's permissions.json holds.
+      const parts: string[] = [];
+      if (grants.length) parts.push(`session: ${grants.join(" · ")}`);
+      if (rules.length) parts.push(`file: ${rules.join(" · ")}`);
       return {
-        status: grants.length
-          ? `Session grants: ${grants.join(" · ")}`
-          : "No session grants",
+        status: parts.length
+          ? `Permissions: ${parts.join(" · ")}`
+          : "No permissions: no session grants, no file rules",
       };
-    if (requested !== "clear")
+    }
+    if (requested === "clear rules")
       return {
-        status: `Unknown permissions setting: ${requested}. Use /permissions or /permissions clear`,
+        status: rules.length ? "File rules cleared" : "No file rules",
+        clearRules: true,
+      };
+    if (requested === "clear")
+      return {
+        status: grants.length ? "Session grants cleared" : "No session grants",
+        clearGrants: true,
       };
     return {
-      status: grants.length ? "Session grants cleared" : "No session grants",
-      clearGrants: true,
+      status: `Unknown permissions setting: ${requested}. Use /permissions, /permissions clear or /permissions clear rules`,
     };
   }
   if (command === "/details")
@@ -206,8 +222,8 @@ export interface SlashCommand {
 export const SLASH_COMMANDS: readonly SlashCommand[] = [
   {
     name: "/mode",
-    usage: "/mode plan|build",
-    description: "plan reads only · build can edit",
+    usage: "/mode plan|build|chat",
+    description: "plan reads only · build can edit · chat converses",
     insert: "/mode ",
   },
   {
@@ -348,6 +364,7 @@ export const PALETTE: readonly PaletteItem[] = [
     label: "Mode: build (read, edit, command)",
     hint: "/mode build",
   },
+  { id: "mode-chat", label: "Mode: chat (conversational)", hint: "/mode chat" },
   { id: "theme-dark", label: "Theme: dark", hint: "/theme dark" },
   { id: "theme-light", label: "Theme: light", hint: "/theme light" },
   { id: "theme-auto", label: "Theme: auto", hint: "/theme auto" },
