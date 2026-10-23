@@ -4,7 +4,7 @@ const siteURL = 'https://local-agent.dev'
 const repositoryURL = 'https://github.com/abdul-hamid-achik/local-agent'
 const socialImageURL = `${siteURL}/social-card.png`
 const defaultDescription =
-  'Run a local-first coding agent in your terminal with Ollama, a terminal UI built on Tuimark, host-governed tools, MCP integrations, sessions, and durable goals.'
+  'An experimental local-first coding agent in your terminal with Ollama, host-enforced plan and build modes, approval-gated effects, MCP integrations, and opt-in sessions.'
 
 const structuredData = JSON.stringify({
   '@context': 'https://schema.org',
@@ -28,8 +28,7 @@ const structuredData = JSON.stringify({
       applicationSubCategory: 'AI coding agent',
       operatingSystem: ['macOS', 'Linux'],
       description:
-        'A local-first terminal coding agent with Ollama model routing, host-governed tools, MCP integrations, sessions, and durable goals.',
-      softwareRequirements: 'Ollama',
+        'An experimental local-first terminal coding agent with Ollama model routing, host-enforced plan and build modes, approval-gated effects, MCP integrations, and opt-in sessions.',
       sameAs: repositoryURL,
       downloadUrl: `${repositoryURL}/releases`,
       license: `${repositoryURL}/blob/main/LICENSE`,
@@ -162,11 +161,10 @@ export default defineConfig({
       {
         text: 'Use local-agent',
         items: [
+          { text: 'Modes', link: '/modes' },
           { text: 'Ollama Models', link: '/ollama-models' },
-          { text: 'Remote Providers', link: '/providers' },
-          { text: 'Modes and Goals', link: '/modes-and-goals' },
-          { text: 'Expert Teams', link: '/experts' },
-          { text: 'Sessions and Memory', link: '/sessions-and-memory' },
+          { text: 'Providers', link: '/providers' },
+          { text: 'Sessions', link: '/sessions' },
           { text: 'Configuration', link: '/configuration' },
           { text: 'Command Reference', link: '/reference' },
         ],
@@ -188,16 +186,15 @@ export default defineConfig({
         items: [
           { text: 'Overview', link: '/' },
           { text: 'Getting Started', link: '/getting-started' },
+          { text: 'Modes', link: '/modes' },
           { text: 'Ollama Models', link: '/ollama-models' },
-          { text: 'Remote Providers', link: '/providers' },
+          { text: 'Providers', link: '/providers' },
         ],
       },
       {
         text: 'Work',
         items: [
-          { text: 'Modes and Goals', link: '/modes-and-goals' },
-          { text: 'Expert Teams', link: '/experts' },
-          { text: 'Sessions and Memory', link: '/sessions-and-memory' },
+          { text: 'Sessions', link: '/sessions' },
           { text: 'Configuration', link: '/configuration' },
           { text: 'Command Reference', link: '/reference' },
         ],

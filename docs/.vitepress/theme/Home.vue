@@ -5,64 +5,49 @@ const repositoryURL = 'https://github.com/abdul-hamid-achik/local-agent'
 
 const modes = [
   {
-    id: 'normal',
+    id: 'build',
     index: '01',
-    name: 'NORMAL',
+    name: 'build',
     title: 'Interactive work',
     description:
-      'Inspect the repository, edit files, run commands, use memory, and call MCP tools. Mutating effects require approval by default.',
-    scope: 'read · edit · shell · memory · MCP',
+      'Inspect the repository, edit files, run commands, and call MCP tools. Mutating effects require approval by default.',
+    scope: 'read · edit · command · MCP',
   },
   {
     id: 'plan',
     index: '02',
-    name: 'PLAN',
+    name: 'plan',
     title: 'Read-only analysis',
     description:
-      'Explore, search, compare, recall, or request a tool-free expert consultation. The host removes mutation tools and rejects mutation attempts.',
-    scope: 'read · search · diff · recall · experts',
-  },
-  {
-    id: 'auto',
-    index: '03',
-    name: 'AUTO',
-    title: 'Proactive work',
-    description:
-      'Send ordinary prompts directly with proactive access to the NORMAL tool surface. AUTO does not create a durable goal or skip approvals.',
-    scope: 'proactive prompt · same approval policy',
+      'The host offers only read, list, and search, and rejects write, edit, command, and MCP attempts regardless of approval. The policy is enforced by the host, not by the prompt.',
+    scope: 'read · list · search',
   },
 ]
 
 const modelRows = [
   {
+    name: 'qwen3.5:4b-q4_K_M',
+    location: 'LOCAL',
+    state: 'ready',
+    note: 'default — the smallest that passed the agent battery',
+  },
+  {
     name: 'qwen3.5:4b',
     location: 'LOCAL',
     state: 'ready',
-    note: 'eligible for automatic routing',
-  },
-  {
-    name: 'qwen3.5:2b',
-    location: 'LOCAL',
-    state: 'ready',
-    note: 'compact installed tier',
-  },
-  {
-    name: 'Ollama Cloud alias',
-    location: 'CLOUD',
-    state: 'consent',
-    note: 'manual selection only',
+    note: 'any installed Ollama model via --model',
   },
 ]
 
 const ecosystemGroups = [
   {
-    label: 'Goals and MCP',
-    names: 'Cortex · MCPHub',
-    note: 'Optional advisor and recommended gateway',
+    label: 'Interface and testing',
+    names: 'Tuimark · Glyphrun',
+    note: 'The terminal UI engine and terminal contract tests',
   },
   {
     label: 'Context and state',
-    names: 'Vecgrep · VecLite · TinyVault · file.cheap',
+    names: 'Vecgrep · TinyVault · file.cheap',
     note: 'Related search, storage, and secrets tools',
   },
   {
@@ -93,11 +78,11 @@ const ecosystemGroups = [
         </h1>
 
         <p class="la-lead">
-          local-agent is an alpha terminal coding agent for Ollama. Inspect repositories, edit
-          files, run commands, and call MCP tools in NORMAL; enforce read-only work in PLAN; or
-          send proactive work in AUTO. Start bounded durable goals explicitly with /goal. The
-          next-generation client renders its terminal interface with
+          local-agent is an experimental terminal coding agent for Ollama, built on Bun and
+          rendered with
           <a href="https://tuimark.dev" target="_blank" rel="noopener noreferrer">Tuimark</a>.
+          Inspect repositories, edit files, run commands, and call MCP tools in build; switch to
+          plan and the host removes every mutating tool, not just the prompt.
         </p>
 
         <p class="la-hero-proof">Mutating effects require approval by default.</p>
@@ -205,11 +190,11 @@ const ecosystemGroups = [
       </div>
       <div>
         <dt>Authority</dt>
-        <dd>NORMAL · PLAN · AUTO</dd>
+        <dd>plan · build</dd>
       </div>
       <div>
         <dt>Extensions</dt>
-        <dd>MCP · expert teams</dd>
+        <dd>MCP integrations</dd>
       </div>
       <div>
         <dt>Platforms</dt>
@@ -225,8 +210,8 @@ const ecosystemGroups = [
           The host decides which tool surface exists. Changing modes changes real execution
           policy, not only the wording sent to the model.
         </p>
-        <a class="la-text-link" :href="withBase('/modes-and-goals')">
-          Understand modes and goals <span aria-hidden="true">→</span>
+        <a class="la-text-link" :href="withBase('/modes')">
+          Understand the modes <span aria-hidden="true">→</span>
         </a>
       </header>
 
@@ -252,16 +237,16 @@ const ecosystemGroups = [
 
     <section class="la-model-section la-section" aria-labelledby="models-title">
       <div class="la-model-copy">
-        <p class="la-kicker">Live Ollama inventory</p>
-        <h2 id="models-title">The model list comes from the runtime.</h2>
+        <p class="la-kicker">Model admission</p>
+        <h2 id="models-title">The host admits the model before the first turn.</h2>
         <p>
-          local-agent reads Ollama’s authoritative inventory, groups local and Cloud entries, and
-          routes automatically only among admitted local models.
+          Interactive runs check Ollama up front: a missing model or an oversized context stops
+          the session with a clear line, not a first-turn surprise.
         </p>
         <ul class="la-check-list">
-          <li>See installed weights and Cloud aliases in one picker.</li>
-          <li>Inspect capabilities and runtime details before switching.</li>
-          <li>Pull a model through a cancellable form.</li>
+          <li>Default model qwen3.5:4b-q4_K_M — the smallest that passed the agent battery.</li>
+          <li>Any installed model with --model; context capped at the model's native window.</li>
+          <li>A 15-second admission check before the screen opens.</li>
         </ul>
         <a class="la-text-link" :href="withBase('/ollama-models')">
           Explore Ollama models <span aria-hidden="true">→</span>
@@ -292,16 +277,16 @@ const ecosystemGroups = [
 
         <div class="la-consent-panel">
           <div class="la-consent-heading">
-            <span>Cloud boundary</span>
-            <strong>Conversation-only consent</strong>
+            <span>Context boundary</span>
+            <strong>Never past the native window</strong>
           </div>
           <p>
-            A Cloud model crosses the local inference boundary. With local-only enabled, manual
-            selection asks first; automatic routing always stays local.
+            --context defaults to 16384 tokens and cannot exceed the model's native context. A
+            remote Chalupa profile negotiates its own context instead.
           </p>
           <div class="la-consent-actions" aria-hidden="true">
-            <span>Cancel</span>
-            <strong>Allow for conversation</strong>
+            <span>16384 default</span>
+            <strong>native context hard cap</strong>
           </div>
         </div>
       </div>
@@ -314,8 +299,8 @@ const ecosystemGroups = [
           <h2 id="effects-title">See the request, the decision, and the receipt.</h2>
         </div>
         <p>
-          By default, repository mutations, shell commands, memory changes, and MCP calls require
-          an explicit decision. Durable goals use the same policy.
+          By default, repository mutations, commands, and MCP calls require an explicit decision.
+          Every decision is a key press in the same transcript you are already reading.
         </p>
       </header>
 
@@ -331,58 +316,58 @@ const ecosystemGroups = [
           <div class="la-request-block">
             <div>
               <span>tool</span>
-              <strong>bash</strong>
+              <strong>run_command</strong>
             </div>
-            <code>go test ./... -race</code>
+            <code>$ bun test packages/runtime/…</code>
             <span class="la-request-state">waiting for decision</span>
           </div>
 
           <dl class="la-policy-list">
             <div>
               <dt>Allow once</dt>
-              <dd>one request</dd>
+              <dd>y · one request</dd>
             </div>
             <div>
-              <dt>Allow exact request</dt>
-              <dd>current Agent process</dd>
+              <dt>Allow for session</dt>
+              <dd>a · this session</dd>
             </div>
             <div>
               <dt>Deny</dt>
-              <dd>stop this request</dd>
+              <dd>n or esc · stop this request</dd>
             </div>
           </dl>
         </article>
 
-        <article class="la-goal-panel" aria-labelledby="goal-panel-title">
-          <div class="la-panel-number" aria-hidden="true">02 / GOAL RUNTIME</div>
-          <h3 id="goal-panel-title">Durable goals stay bounded and foreground.</h3>
+        <article class="la-goal-panel" aria-labelledby="session-panel-title">
+          <div class="la-panel-number" aria-hidden="true">02 / SESSIONS</div>
+          <h3 id="session-panel-title">Sessions are opt-in, explicit, and inspectable.</h3>
           <p>
-            Start a goal explicitly with /goal. Its objective, limits, permits, receipts, and
-            recovery remain visible as it advances.
+            Nothing is persisted until you point at a session database with --session-db. Then
+            resume, list, and inspect stay separate, tool-free operations.
           </p>
 
           <dl class="la-goal-facts">
             <div>
-              <dt>Authority</dt>
-              <dd>goal-owned AUTO · same approval policy</dd>
+              <dt>Resume</dt>
+              <dd>--resume HANDLE continues a session</dd>
             </div>
             <div>
-              <dt>Budgets</dt>
-              <dd>time · turns · evaluation tokens</dd>
+              <dt>Inspect</dt>
+              <dd>--session-info · --recovery-info</dd>
             </div>
             <div>
-              <dt>Persistence</dt>
-              <dd>permits · receipts · recovery</dd>
+              <dt>Switch</dt>
+              <dd>/sessions picker inside the client</dd>
             </div>
             <div>
-              <dt>Advisor</dt>
-              <dd>Cortex, when reachable</dd>
+              <dt>Safety</dt>
+              <dd>interrupted outcomes are never auto-replayed</dd>
             </div>
           </dl>
 
           <p class="la-goal-note">
-            Cortex can provide bounded semantic status. local-agent still owns the approvals,
-            transcript, budgets, and final stop decision.
+            Sessions are experimental and live in a separate SQLite database you choose. Export
+            any transcript to markdown with /export.
           </p>
         </article>
       </div>
@@ -398,20 +383,23 @@ const ecosystemGroups = [
         <li>
           <span>01</span>
           <p>
-            Ollama and network MCP endpoints must use local-machine addresses under local-only
-            policy.
+            Ollama runs on your machine by default, on loopback. A remote Chalupa provider
+            requires an explicit environment opt-out from local-only.
           </p>
         </li>
         <li>
           <span>02</span>
           <p>
-            Built-in file tools canonicalize paths; external reads require a temporary exact-file
-            or directory grant, while writes stay in the startup workspace.
+            plan mode removes the mutating tools at the host: write, edit, command, and MCP calls
+            are denied no matter what the model asks for.
           </p>
         </li>
         <li>
           <span>03</span>
-          <p>Approved shell commands and trusted STDIO servers remain separate trust decisions.</p>
+          <p>
+            Commands run exactly as written — there is no shell — with your permissions, in your
+            workspace, behind an approval card.
+          </p>
         </li>
       </ul>
 
@@ -448,14 +436,14 @@ const ecosystemGroups = [
 
     <section class="la-final-cta" aria-labelledby="start-title">
       <div>
-        <p class="la-kicker">Start in a clean worktree</p>
+        <p class="la-kicker">Start from source</p>
         <h2 id="start-title">Bring the agent to where your code already lives.</h2>
-        <p>Install the current tagged release, connect Ollama, and begin with a read-only request.</p>
+        <p>Clone the repository, connect Ollama, and begin with a read-only request in plan mode.</p>
       </div>
 
       <div class="la-install-block">
-        <span>Install with Go</span>
-        <code>go install github.com/abdul-hamid-achik/local-agent/cmd/local-agent@latest</code>
+        <span>Run with Bun</span>
+        <code>bun install --frozen-lockfile && bun run dev</code>
         <div class="la-actions">
           <a class="la-button la-button-primary" :href="withBase('/getting-started')">
             Follow the quickstart <span aria-hidden="true">→</span>

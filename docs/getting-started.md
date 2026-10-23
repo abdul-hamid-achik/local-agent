@@ -1,253 +1,96 @@
 ---
 title: Getting started
-description: Install local-agent, connect Ollama, and complete a first approval-gated coding session.
+description: Install the Bun CLI from source, connect Ollama, and complete a first approval-gated session.
 outline: deep
 ---
 
 # Getting started
 
-Install `local-agent`, connect it to Ollama, and open a repository. The basic local model workflow does not require a configuration file.
+Local Agent is a local coding agent that runs from source in a Bun workspace.
+There are no released binaries of the TypeScript client yet. The default model
+runs on [Ollama](https://ollama.com/) on the same machine.
 
-::: warning Alpha software
-Run Local Agent in a clean Git worktree, read approval requests, and review the resulting diff. The current safety layer is useful, but it is not an operating-system sandbox.
-:::
-
-## Requirements
+## Prerequisites
 
 - macOS or Linux
-- [Go 1.26.5 or newer](https://go.dev/dl/) when installing from source
-- [Ollama](https://ollama.com/) running on the same machine
-- A Git worktree for work you want the agent to inspect or change
+- [Bun](https://bun.sh/) 1.4.2
+- Ollama running locally with the default model `qwen3.5:4b-q4_K_M` pulled
 
-Windows release binaries are not published yet.
+Interactive runs pre-admit the model with a 15-second check; a missing model
+is rejected up front, not mid-session.
 
-## Install
-
-On macOS, install the release cask:
-
-```bash
-brew install --cask abdul-hamid-achik/tap/local-agent
-```
-
-Or install the latest tagged Go release:
-
-```bash
-go install github.com/abdul-hamid-achik/local-agent/cmd/local-agent@latest
-```
-
-To run the historical Go implementation from source, pin its retained revision:
+## Install from source
 
 ```bash
 git clone https://github.com/abdul-hamid-achik/local-agent.git
 cd local-agent
-git checkout 2567a7a7468ef2a1591e289f43d62b78b5c9679a
-go run ./cmd/local-agent
+bun install --frozen-lockfile
+bun run dev
 ```
 
-From that historical checkout you can also put it on your PATH, which is what you want if you
-intend to use it outside the repository:
+`bun run dev` starts the fullscreen tuimark client with the default model,
+from the repository root. To put `local-agent` on your PATH, run `bun link`
+in `apps/cli`.
+
+## First session
+
+Point a run at the repository you want the agent to inspect or change — the
+workspace defaults to the current directory:
 
 ```bash
-task install    # builds and installs into `go env GOBIN`, or GOPATH/bin
-task uninstall  # removes it again
+bun run dev --workspace /path/to/your/repository
 ```
 
-`task install` reports where the binary landed and warns if that directory is
-not on your PATH — the one failure mode where the command silently does not
-appear.
+The fullscreen client takes over the terminal and shows a welcome screen.
 
-## Prepare Ollama
+Type a prompt into the composer at the bottom and press `enter` to send.
+`shift+enter` or `alt+enter` inserts a newline.
 
-Start Ollama and pull a compact model:
-
-```bash
-ollama serve
-ollama pull qwen3.5:2b
-```
-
-The 4B tier is optional and is the preferred installed tier for coding, debugging, review, and multi-step tool use:
-
-```bash
-ollama pull qwen3.5:4b
-ollama list
-```
-
-Local Agent reads Ollama's live inventory. You do not need to duplicate every installed model in configuration.
-
-## Start a first session
-
-Open the repository you want to work in, then launch the TUI:
-
-```bash
-cd /path/to/your/repository
-local-agent
-```
-
-Try a read-only request first:
+Start read-only:
 
 ```text
-Explain the request flow in this repository and identify the tests that cover it.
+Read README.md and summarize the setup steps.
 ```
 
-Local Agent begins in **NORMAL** mode. Reads can proceed inside the workspace.
-Mutating tools such as edits, writes, shell commands, and MCP calls require
-approval by default. Switch to **AUTO** when you want validated workspace writes
-and catalogued direct build, test, lint, formatting, and inspection commands to
-proceed without repeated prompts. Task runners, package `run` targets, raw
-`find`, `rg`, and `grep` shell commands, `go generate`, Git, and dangerous,
-external, dynamic, or unknown effects remain gated.
-
-To reopen saved work directly, pass a positive session ID or select the newest
-session in the current canonical workspace:
-
-```bash
-local-agent --resume a1b2c3d
-local-agent --resume latest
-```
-
-The TUI shows each session as a random 7-character hex handle such as
-`a1b2c3d · title`. Commands accept that handle; `latest` selects the newest
-current-workspace session.
-
-Startup resume is available only in the interactive TUI, so it cannot be
-combined with `-p` or `--prompt`. It restores state without sending a prompt or automatically
-continuing a durable goal.
-
-After a clean interactive exit, Local Agent prints the exact
-`local-agent --resume <handle>` command for the active saved session. An unsaved
-conversation and a failed TUI run do not print a resume command.
-
-## Essential controls
-
-| Key | Action |
-|---|---|
-| `enter` | Send the prompt, or queue one follow-up while a turn is running |
-| `shift+enter`, `ctrl+j`, `alt+enter` | Insert a newline; use `ctrl+j` when the terminal cannot distinguish `shift+enter` |
-| `shift+tab` | Cycle NORMAL, PLAN, and AUTO |
-| `ctrl+o` | Open the model picker |
-| `ctrl+p` | Open session settings |
-| `alt+t`, `ctrl+t` | Expand every tool receipt, or the focused one |
-| `alt+m`, `/mouse` | Hand the mouse to the terminal for native select. `/mouse` still works when Option+M types µ |
-| `tab` | Complete commands, paths, and skills |
-| `esc` | Close an overlay or inline form, cancel an approval, or cancel active work |
-| `ctrl+c` | Quit |
-
-The composer grows with wrapped text up to a terminal-height-aware limit, then
-scrolls internally while keeping the cursor visible. When earlier or later
-draft rows are outside the visible composer, a cue names the corresponding
-`ctrl+home` or `ctrl+end` jump. Typed and pasted text follow the same layout.
-Drag across the transcript to select; release copies. The wheel still scrolls.
-Double-click a word, triple-click a line. `esc` clears the highlight. `ctrl+y`
-copies the selection, or the last reply when nothing is selected. Mouse
-reporting stays on so the wheel can scroll the chat; `/mouse` (or `alt+m`)
-hands the mouse back when you want the terminal's own select. `pgup`/`pgdn`
-always scroll. Most terminals also hand the mouse back with a modifier —
-`shift+drag` in Ghostty, kitty, WezTerm, Alacritty and xterm, `option+drag` in
-iTerm2. Terminal.app has none. Stock macOS terminals compose Option+M into µ;
-`/mouse` is the binding that still works. To make `alt+m` itself work, set
-Option as Meta: Ghostty `macos-option-as-alt = true`, iTerm2 Left Option =
-Esc+, Terminal.app "Use Option as Meta key".
-
-Selecting a verified local model with `/model <name>` or the model picker saves
-the pin for the next process start. `/model auto` clears it. A CLI `--model`
-selection and agent-profile selections take precedence, and conversation-only
-Cloud consent is never saved.
-
-Inside the inline approval surface:
+The session starts in **build** intent. When the model proposes a file edit,
+write, or command, an approval card appears. Decide with:
 
 | Key | Decision |
 |---|---|
-| `n` | Deny (default when you press Enter) |
-| `y` | Allow once |
-| `s` | Allow the same request again this process (exact arguments) |
-| `a` | Context-sensitive widen: tool again (`write`/`edit`/`mkdir`), bash command prefix, or this MCP tool again (process-local) |
-| `p` | For `write`/`edit`/`mkdir`: this path again this process |
-| `w` | For bash/MCP: save a durable workspace rule (survives restarts for this workspace) |
-| `d` | Inspect exact arguments |
-| `esc` | Cancel the approval and the active turn |
+| `y` | Approve once |
+| `a` | Approve this for the rest of the session |
+| `n` | Deny |
+| `esc` | Cancel the approval and the turn |
 
-Use `/permissions accept-edits on` when you want workspace file edits to stop
-prompting for the rest of this process without enabling shell or MCP bypass.
-`/permissions` lists posture, session grants, and durable workspace rules.
+For `write`, `edit`, and `run_command` proposals the card shows a diff; the
+arrow keys scroll it. Commands run exactly as written with your permissions —
+there is no shell.
 
-Durable workspace rules (Claude-style “don’t ask again” for this repo):
+## Switch intent
 
-```text
-/permissions allow-bash go test
-/permissions allow-bash "git status *"
-/permissions allow-mcp mcphub__mcphub_list_servers
-/permissions allow-path src/app.go
-/permissions forget-bash "git status *"
-/permissions forget-mcp mcphub__mcphub_list_servers
-/permissions forget-path src/app.go
-```
+Press `shift+tab` to toggle between **plan** and **build**. Plan offers only
+read, list, and search tools; it hard-denies writes, edits, commands, and MCP
+calls. Build can propose changes, each gated by an approval. See
+[Modes](/modes).
 
-On an approval prompt, `w` saves a durable rule for the current action:
+## Try other surfaces
 
-- bash → prefix or `prefix *` when there are extra args
-- MCP → exact `server__tool` name
-- write/edit/mkdir → that workspace-relative path (covers write, edit, and mkdir)
-
-Rules live under `~/.config/local-agent/workspace-rules/` (not in the repo).
-They never reintroduce a broad permanent tool-name allow. Bash globs only allow
-a trailing `*`; compound commands with `&&`, pipes, or `$` still prompt.
-
-Manage interactively via **Settings → Permissions**, or:
-
-```text
-/permissions panel
-/permissions export                         # → ./local-agent-permissions.json
-/permissions export ~/Desktop/rules.json
-/permissions import ~/Desktop/rules.json
-/permissions import --replace ~/Desktop/rules.json
-/permissions clear-rules
-```
-
-Export files are portable JSON (bash patterns, MCP tools, relative write paths).
-Import merges by default; `--replace` swaps the workspace rule set.
-
-## Attach an image
-
-Add a PNG, JPEG, or GIF to the next ordinary prompt with `/image` (or the
-`/attach` alias), then type the question you want to ask:
-
-```text
-/image ./screenshots/failing-layout.png
-What is causing the alignment problem?
-```
-
-You can also drag or paste one supported image path, or a complete
-space/newline-separated list of paths. Local Agent validates the complete list,
-keeps attachment order, and de-duplicates identical image content; mixed prose
-remains draft text. Each prompt accepts up to four images. Use `/image list` to
-inspect pending attachments and `/image clear` to remove them. An unpinned
-session selects an admitted, auto-routable vision-capable Ollama model without
-implicitly selecting a manual-only Cloud model; a pinned non-vision model fails
-locally before a provider request starts.
-If an older stored image is unavailable, the draft is restored; use
-`/image forget-history` to remove active historical image context before
-retrying. Existing checkpoints remain unchanged and can restore their refs.
-
-On macOS, press `Ctrl+V` to read a clipboard image from the system pasteboard
-and attach its PNG representation.
-Bracketed terminal paste and other platforms can attach a saved image by
-dragging it or pasting/copying its path. See
-[Image attachments](./reference.md#image-attachments) for formats, limits, and
-persistence details.
-
-## Optional configuration
-
-Repository-local configuration takes precedence over XDG and home configuration:
+Tuimark inline mode prints finished blocks into your terminal's own
+scrollback:
 
 ```bash
-cp config.example.yaml local-agent.yaml
+bun run dev --ui tuimark --mode inline
 ```
 
-For a user-wide configuration:
+Named themes work with the tuimark client:
 
 ```bash
-mkdir -p ~/.config/local-agent
-cp config.example.yaml ~/.config/local-agent/config.yaml
+bun run dev --theme midnight
+bun run dev --theme sepia
 ```
 
-Continue with [Ollama models](./ollama-models.md), [remote providers](./providers.md) (xAI Grok / OpenAI-compatible + TinyVault), [authority modes and goals](./modes-and-goals.md), or the complete [configuration reference](./configuration.md).
+## Where to go next
+
+- [Modes](/modes) — plan and build intents and how approval differs
+- [Reference](/reference) — flags, slash commands, and keymap
+- [Configuration](/configuration) — model, context, providers, and environment

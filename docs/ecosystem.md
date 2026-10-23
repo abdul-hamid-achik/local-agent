@@ -6,14 +6,13 @@ outline: deep
 
 # Local Agent ecosystem
 
-Local Agent is the conversation, model, permission, and foreground-goal host. The surrounding projects remain focused tools with explicit interfaces. They are not all bundled integrations.
+Local Agent is the conversation, model, and permission host. The surrounding projects remain focused tools with explicit interfaces. They are not all bundled integrations.
 
 The shared transcript vocabulary keeps those ownership boundaries legible:
 
 | Tool | Product role | Evidence meaning |
 | --- | --- | --- |
-| MCPHub | Gateway and lazy catalog | Routing only |
-| Cortex | Coordination, criteria, and evidence closure | Preserves claims and proof relationships |
+| MCPHub | MCP gateway | Routing only |
 | Vecgrep | Semantic discovery | Candidate |
 | Codemap | Code structure and impact | Supported, or stale when its index reports drift |
 | Glyphrun | CLI and TUI verification | Verified or contradicted from a versioned run |
@@ -39,18 +38,9 @@ presentation only and is never a source of evidence.
 
 ## Connected runtime
 
-### [Cortex](https://cortexai.tools/)
-
-An evidence-guided engineering kernel for durable task state, bounded changes, and verification. Local Agent can use Cortex as the optional semantic advisor for durable goals, directly or through MCPHub. Local acceptance IDs and statements cross that boundary as typed, immutable `acceptanceCriteria`; they are never flattened into goal prose.
-
-Exact Cortex actions can become bounded next-step suggestions. Local Agent
-still owns tool resolution, schemas, effect classification, approval, budgets,
-loop prevention, scheduling, and cancellation; it does not reproduce Cortex's
-task lifecycle or evidence ledger.
-
 ### [MCPHub](https://mcphubcli.dev/)
 
-A single configuration and gateway for discovering MCP servers and synchronizing them to agent harnesses. MCPHub is the recommended gateway for Local Agent; it does not replace Local Agent's final approval policy.
+A gateway some users front their MCP servers with. Local Agent does not require it: the client connects directly to servers via the `--mcp-config` JSON file, and every configured call still crosses the Local Agent approval boundary.
 
 The [MCPHub website](https://mcphubcli.dev/) and [source repository](https://github.com/abdul-hamid-achik/mcphub) document the gateway, synchronization, and deployment workflow.
 
@@ -74,7 +64,7 @@ A local-first CLI and MCP file vault for storing, finding, compressing, and comp
 
 ### [VecLite](https://veclite.dev)
 
-An embeddable Go vector database with single-file storage, HNSW, BM25, and hybrid search. It is related infrastructure; Local Agent's current ICE store does not embed VecLite.
+An embeddable Go vector database with single-file storage, HNSW, BM25, and hybrid search. It is related local-first infrastructure from the same author; Local Agent does not embed it.
 
 ## Evidence and verification
 
@@ -104,42 +94,10 @@ Bob is built to be driven by agents. Run `bob learn --json` once at the start of
 
 Bob's `files` recipe lets an agent declare an arbitrary file tree in `bob.yaml` — paths, modes, contents, and literal `${vars.key}` substitution — and scaffold or reconcile any repository through Bob's plan/apply/lock conflict safety; `bob recipe show files --json` returns the schema with an example.
 
-When Bob is reached through an exact trusted MCP route, Local Agent parses
-`bob_context`, `bob_path`, and `bob_playbook` through their supported versioned
-schemas. Context reports bounded repository and capability state; path reports
-ownership and human-edit effects; playbook reports availability, blockers,
-required inputs, scope, risk, and bounded steps. A lookalike route, malformed
-document, future schema, or unknown closed value fails closed.
-
 Every Bob result carries `EvidenceNone`: no evidence assessment. Bob can prove
 whether repository files converge on its contract, but not whether application
 behavior is correct. A Bob `clean` state is therefore visually and semantically
-distinct from verified evidence or Cortex task completion.
-
-Raw Bob structured output stays inside the parser boundary. Saved session state
-contains only a bounded semantic digest; absolute workspace paths, arbitrary
-reasons or commands, user values, manifests, previews, and file contents are
-not persisted. A smaller validated projection may be supplied transiently to
-the active model turn. Direct Bob calls and complete MCPHub stored results use
-the same parser after the gateway pages have been bounded and matched to the
-exact original call ID and route.
-
-At session work time, a regular root `bob.yaml` is only a cheap candidate
-signal. If one unambiguous eligible registered `bob_context` read is available,
-Local Agent can suggest the compact read and cache its bounded digest. A unique
-direct route is preferred; otherwise exactly one pinned MCPHub route is
-required. With explicitly configured `auto_read_only` and an
-AUTO turn, it may perform the read only if the current host policy proves the
-target is read-only, non-destructive, idempotent, closed-world, workspace-bound,
-and not denied. The automatic continuation budget never exceeds two calls.
-
-Bob and Cortex actions share a bounded host projection, not product authority.
-In the default suggestion mode, Local Agent exposes a valid next tool, named
-missing inputs, and blockers without executing it. Optional read-only
-auto-follow revalidates the route, current tool schema, workspace, effect,
-approval policy, staleness, and replay fingerprint before each dispatch. Shell,
-mutation, secreted, unresolved proxy, and prose-derived actions remain gated or
-unsupported.
+distinct from verified evidence.
 
 The [Bob website](https://bobcli.dev/) and [source repository](https://github.com/abdul-hamid-achik/bob) document its repository contracts and build workflow; the [agent guide](https://bobcli.dev/agents) is the onboarding reference for coding agents.
 

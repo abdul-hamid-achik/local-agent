@@ -1,87 +1,45 @@
 ---
 title: Architecture
-description: Understand Local Agent's Go and Charm runtime, model manager, MCP policy, durable goal contracts, and local persistence.
-outline: deep
+description: How the Local Agent Bun monorepo separates the CLI, the inference runtime, the Tuimark client, and tool approval boundaries.
 ---
 
 # Architecture
 
-Local Agent keeps the conversation surface, inference runtime, tool authority, and durable goal state separate.
+Local Agent is a Bun monorepo. The conversation surface, the inference runtime, and host authority are separate packages.
 
 ```text
-Charm TUI or headless output
-          |
-          v
-Agent loop --------> prompt builder + mode policy
-    |                         |
-    |                         +-- AGENTS.md, skills, context, memory
-    |
-    +-- tool policy -> approval -> built-ins / MCP registry
-    |                                    |
-    |                                    +-- typed result -> semantic receipt
-    |
-    +-- expert selector -> resource plan -> tool-free advisory inference
-    |
-    +-- ModelManager -> Ollama inventory -> local or consented Cloud model
-
-Goal Runtime -> budgets + permits + receipts -> optional Cortex advisor
-
-Persistence -> scoped memory/ICE + SQLite sessions/ledger + logs
+apps/cli (composition) -----> packages/runtime (inference + host authority)
+        |                              |
+        +-- tuimark client             +-- tools: read, list, search, edit, write, run_command
+        |   (declarative document)     +-- MCP client + approval boundary
+        |
+        +-- vue client (packages/vue-tui)
 ```
 
-## Runtime boundaries
+## Repository layout
 
-These paths refer to the historical Go source at
-[revision 2567a7a](https://github.com/abdul-hamid-achik/local-agent/tree/2567a7a7468ef2a1591e289f43d62b78b5c9679a).
-The current Bun workspaces are `apps/cli`, `packages/runtime`, and
-`packages/vue-tui`; removing Go from the current tree does not establish parity.
+- `apps/cli` composes the product: flag parsing, mode selection, client launch, session wiring. It owns no inference logic.
+- `packages/runtime` owns the agent loop, providers, tools, and approval. It is the host authority: the model never enforces its own mode, and every effect crosses the runtime approval boundary. Runtime code imports no UI.
+- `packages/vue-tui` is the internal, extractable Vue terminal framework used by the `--ui vue` client. It is presentation only and never a source of evidence.
+- `apps/tui-playground` exists for quick Vue SFC checks against the terminal framework.
+- `docs/` is this site.
 
-- `internal/agent` owns the ReAct loop, prompts, policies, and tool dispatch.
-- `internal/llm` owns the Ollama client, live inventory, model admission, and per-request context policy.
-- `internal/mcp` owns server connections, health checks, reconnection, and tool namespacing.
-- `internal/ecosystem` turns exact, versioned companion-tool results into bounded semantic receipts.
-- `internal/ui` owns the Charm interface and renders state from the host runtime.
-- `internal/goal` owns durable goal state, budgets, receipts, and recovery values.
-- `internal/goaladvisor` bounds the optional Cortex/MCPHub semantic adapter.
-- `internal/expertselector` chooses Team, Swarm, and application-level MoE profiles locally and deterministically.
-- `internal/resource` converts one process-visible CPU/RAM snapshot, including Linux cgroup v1/v2 limits, into conservative concurrency and fan-out limits.
-- `internal/expertteam` runs bounded, tool-free advisory inference and returns host-bounded receipts to the parent agent.
-- `internal/db` persists sessions, permissions, checkpoints, and execution evidence through sqlc-backed schema models and a transactional checksum ledger.
+## Tuimark client
 
-The model does not enforce its own mode. The host decides which tools are visible and rejects out-of-policy requests.
+The default interactive client lives in `apps/cli/src/tuimark`. It does not render cells itself; it emits a declarative document that the `tuimark` host binary renders. The SDK is vendored and pinned to release 0.4.6; the binary comes from `TUIMARK_BINARY` or is downloaded checksum-verified. Tuimark is [open source](https://github.com/abdul-hamid-achik/tuimark). If the default-client binary is missing, Local Agent falls back to the Vue client with a note on stderr.
 
-## Harness contract
+## Presentations
 
-The harness owns the turn loop, context construction, tool orchestration, approvals, persistence, recovery, and progress projection. Companion tools keep their own domain authority. For example, MCPHub decides how a downstream tool is routed, Bob decides whether a repository is clean or drifting, and Glyphrun or Cairntrace decides whether its verification run passed.
+Fullscreen, inline, and headless are distinct presentations over one runtime:
 
-Local Agent therefore projects every tool receipt across three independent axes:
+- **Fullscreen** (default): the client takes over the terminal.
+- **Inline**: finished blocks print into the terminal's own scrollback.
+- **Headless**: no client at all. It never starts the native renderer; text streams to stdout and tool statuses to stderr, or NDJSON events with `--json`. Approval in headless is decided up front by the `--approve-*` flags, not interactively.
 
-- **Transport** — running, succeeded, or failed to return a receipt.
-- **Domain** — succeeded, failed, blocked, drifted, conflicted, needs attention, or is not safely understood.
-- **Evidence** — candidate, supported, verified, contradicted, or stale.
+## Tools and approval
 
-A successful MCP exchange is not proof that the requested operation succeeded. Exact structured output is interpreted inside the agent, then discarded; the TUI and saved session receive only the bounded semantic projection. Unknown schemas remain visible as attention states instead of being painted as successful verification. MCP tool-call arguments follow the same boundary: saved sessions retain only safe route identifiers, never arbitrary downstream payloads.
+Tools live in `packages/runtime`, not in any client. Reads (`read`, `list`, `search`) run without approval in build mode. `edit`, `write`, `run_command`, and MCP calls are effects: each proposal is approved per effect through the host approve callback. Plan intent offers read-only tools only and hard-denies effects regardless of the approver.
 
-The transcript is the chronological source of truth. Composer-owned inline surfaces handle active authority decisions; overlays are reserved for temporary global selection or deep inspection. Local Agent does not duplicate every companion product into a persistent dashboard.
+## MCP boundary
 
-## Effect ordering
-
-Top-level built-in, memory, and MCP calls execute deterministically in model order. Unknown MCP effects are not parallelized. The bounded exception is inside one read-only `consult_experts` call, where tool-free inference reports may run concurrently under the host resource plan. The append-only execution ledger records durable dispatch intent before an external effect begins, which makes uncertain outcomes visible after interruption instead of guessing that nothing happened.
-
-## Goal supervisor boundary
-
-The foreground Goal Runtime is implemented. The `internal/supervisor` and `internal/workunit` packages define safety-tested scheduling and specialist-admission contracts, but they are not wired as a headless queue or multi-process specialist runner.
-
-Expert consultations are a separate runtime boundary. They fan out ordinary
-read-only inference calls inside one foreground turn, do not create durable
-work units, and give child experts no tool authority. The parent serializes
-top-level consultations and keeps responsibility for effects and verification.
-
-## Current limitations
-
-- Ollama is the default inference adapter. Optional OpenAI-compatible remote providers (including xAI) are config-selected and credentialed via process environment / TinyVault injection.
-- General model routing uses heuristics and a 16 GB-oriented admission guard. Expert concurrency separately uses live host telemetry where available and falls back to serial inference when memory confidence is insufficient.
-- MCP support is currently tool-focused.
-- ICE uses a flat workspace-scoped JSON store.
-- In-flight effects do not continue automatically after a crash.
-- The current product has no OS-level sandbox.
+MCP servers are configured directly via `--mcp-config` (a trusted JSON array, at most 16 servers) and invoked as `SERVER__TOOL` namespaced calls. Raw structured content stays inside the MCP parser boundary; the transcript and saved sessions carry only what the runtime projects. A green transport receipt is never a domain result.
