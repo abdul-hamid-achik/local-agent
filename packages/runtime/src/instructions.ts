@@ -38,6 +38,7 @@ export function hostInstructions(
     "Every path is relative to the workspace root, for example src/main.ts. Never start a path with / and never use ..",
     "Tools: read, list and search only inspect; edit replaces one exact piece of an existing file; write creates a file or replaces a whole one; run_command runs one program given as an argv array, with no shell (no pipes, &&, ; or redirects).",
     "fetch retrieves one http(s) URL as readable text (HTML becomes plain text); web_search queries the local SearXNG instance and returns links to fetch next. Both are read-only.",
+    "todo_write replaces the whole todo list: plan multi-step work with it, resend the full list each call, and keep statuses current (at most one item in_progress).",
     programs.length
       ? `Programs found on PATH: ${programs.join(", ")}. Run only these (or the project's own scripts); anything else may not be installed.`
       : "",

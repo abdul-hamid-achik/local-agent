@@ -62,6 +62,21 @@ const CommandArgs = z.strictObject({
   ]),
   timeout_ms: z.number().int().min(1).max(600_000).default(120_000),
 });
+const TodoItem = z.object({
+  content: z.string().min(1).max(200),
+  status: z.enum(["pending", "in_progress", "done"]),
+});
+// The list replaces the previous one entirely; at most one item is active.
+const TodoWriteArgs = z.object({
+  todos: z
+    .array(TodoItem)
+    .max(50)
+    .refine(
+      (todos) =>
+        todos.filter((todo) => todo.status === "in_progress").length <= 1,
+      "At most one todo may be in_progress; mark the previous one done or pending first",
+    ),
+});
 
 const PATH_HELP =
   "relative to the workspace root, for example src/stats.ts (never /src/stats.ts)";
@@ -345,14 +360,46 @@ const tools: Tool[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "todo_write",
+      description:
+        "Replace the current todo list (send the full list every call; it overwrites the previous one). Each item is a short task with status pending, in_progress or done; keep at most one item in_progress and update statuses as work proceeds.",
+      parameters: {
+        type: "object",
+        properties: {
+          todos: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                content: {
+                  type: "string",
+                  description: "Short task, 1-200 chars",
+                },
+                status: {
+                  type: "string",
+                  enum: ["pending", "in_progress", "done"],
+                },
+              },
+              required: ["content", "status"],
+            },
+          },
+        },
+        required: ["todos"],
+      },
+    },
+  },
 ];
-/** Tools that only inspect; plan intent offers these and nothing else. */
+/** Tools with no external effects; plan intent offers these and nothing else. */
 const READ_ONLY_TOOLS = new Set([
   "read",
   "list",
   "search",
   "fetch",
   "web_search",
+  "todo_write",
 ]);
 
 export type ApprovalRequest =
@@ -705,6 +752,22 @@ async function* agentTurn(
             : "No results";
           if (output.length > 100_000)
             throw new Error("web_search output exceeds tool output limit");
+        } else if (name === "todo_write") {
+          const args = TodoWriteArgs.parse(call.function.arguments);
+          record("started");
+          yield { type: "tool_start", id, name };
+          signal.throwIfAborted();
+          const markers = { pending: "[ ]", in_progress: "[~]", done: "[x]" };
+          const counts = { pending: 0, in_progress: 0, done: 0 };
+          const lines = args.todos.map(
+            (todo) => `- ${markers[todo.status]} ${todo.content}`,
+          );
+          for (const todo of args.todos) counts[todo.status]++;
+          output =
+            [
+              ...lines,
+              `${args.todos.length} todos: ${counts.done} done, ${counts.in_progress} in progress, ${counts.pending} pending`,
+            ].join("\n") || "0 todos: 0 done, 0 in progress, 0 pending";
         } else if (name === "write") {
           if (options.intent === "plan") {
             status = "denied";

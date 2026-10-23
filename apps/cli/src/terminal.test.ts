@@ -332,6 +332,7 @@ test("mode switch changes the Ollama tool catalog", async () => {
     "search",
     "fetch",
     "web_search",
+    "todo_write",
   ]);
 
   // The command is handled before inference and the composer refocuses after the turn.
@@ -354,5 +355,6 @@ test("mode switch changes the Ollama tool catalog", async () => {
     "edit",
     "write",
     "run_command",
+    "todo_write",
   ]);
 });
