@@ -52,6 +52,8 @@ const SearchArgs = z.object({
   regex: flag,
   ignore_case: flag,
 });
+const FetchArgs = z.object({ url: z.string().min(1).max(8192) });
+const WebSearchArgs = z.object({ query: z.string().min(1).max(500) });
 const CommandArgs = z.strictObject({
   // An array, or (from a small model) a command line that is split without a shell.
   argv: z.union([
@@ -67,6 +69,135 @@ const pathProperty = (extra = "") => ({
   type: "string",
   description: `Path ${PATH_HELP}${extra}`,
 });
+
+const FETCH_TIMEOUT_MS = 15_000;
+const FETCH_MAX_BYTES = 512 * 1024;
+// Docs URLs redirect constantly (http→https, trailing-slash moves); following
+// them is friendlier than the MCP policy of refusing redirects, but a manual
+// loop keeps the hop count bounded.
+const FETCH_MAX_REDIRECTS = 5;
+const SEARXNG_URL = "http://127.0.0.1:8888";
+const SEARXNG_TIMEOUT_MS = 10_000;
+
+/** GET with redirects followed, capped at FETCH_MAX_REDIRECTS hops. */
+async function httpGet(
+  url: string,
+  timeoutMs: number,
+): Promise<{ response: Response; finalUrl: string }> {
+  let current = url;
+  for (let hop = 0; ; hop++) {
+    const response = await fetch(current, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const location =
+      response.status >= 300 && response.status < 400
+        ? response.headers.get("location")
+        : null;
+    if (location === null) return { response, finalUrl: current };
+    if (hop >= FETCH_MAX_REDIRECTS) {
+      await response.body?.cancel();
+      throw new Error(`fetch: more than ${FETCH_MAX_REDIRECTS} redirects`);
+    }
+    current = new URL(location, current).toString();
+  }
+}
+
+/** Reads at most maxBytes of the body as text. */
+async function readCapped(
+  response: Response,
+  maxBytes: number,
+): Promise<{ text: string; truncated: boolean }> {
+  const reader = response.body?.getReader();
+  if (reader === undefined) return { text: "", truncated: false };
+  const chunks: Uint8Array[] = [];
+  let kept = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (kept + value.length > maxBytes) {
+      chunks.push(value.slice(0, maxBytes - kept));
+      await reader.cancel();
+      return {
+        text: await new Blob(chunks as BlobPart[]).text(),
+        truncated: true,
+      };
+    }
+    chunks.push(value);
+    kept += value.length;
+  }
+  return {
+    text: await new Blob(chunks as BlobPart[]).text(),
+    truncated: false,
+  };
+}
+
+const HTML_BLOCK_TAGS: Record<string, true> = {
+  address: true,
+  article: true,
+  aside: true,
+  blockquote: true,
+  br: true,
+  dd: true,
+  div: true,
+  dl: true,
+  dt: true,
+  h1: true,
+  h2: true,
+  h3: true,
+  h4: true,
+  h5: true,
+  h6: true,
+  header: true,
+  li: true,
+  main: true,
+  nav: true,
+  ol: true,
+  p: true,
+  pre: true,
+  section: true,
+  table: true,
+  tr: true,
+  ul: true,
+};
+
+/** HTML to readable plain text: script/style dropped, blocks newline-separated. */
+async function htmlToText(html: string): Promise<string> {
+  const stripped = await new HTMLRewriter()
+    .on("script,style,noscript,template,svg", {
+      element: (el) => {
+        el.remove();
+      },
+    })
+    .transform(new Response(html))
+    .text();
+  const parts: string[] = [];
+  await new HTMLRewriter()
+    .on("*", {
+      element: (el) => {
+        if (HTML_BLOCK_TAGS[el.tagName]) parts.push("\n");
+      },
+    })
+    .onDocument({
+      text: (t) => {
+        parts.push(t.text);
+      },
+    })
+    .transform(new Response(stripped))
+    .text();
+  return parts
+    .join("")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n\s*\n+/g, "\n\n")
+    .trim();
+}
+
+function textContentType(response: Response): string {
+  return (response.headers.get("content-type") ?? "")
+    .split(";")[0]!
+    .trim()
+    .toLowerCase();
+}
 
 const tools: Tool[] = [
   {
@@ -130,6 +261,36 @@ const tools: Tool[] = [
   {
     type: "function",
     function: {
+      name: "fetch",
+      description:
+        "Fetch one http(s) URL with GET and return readable text: HTML is converted to plain text, other text formats (plain text, JSON, XML) are returned as-is. Redirects are followed; the body is capped at 512 KiB. Use it for documentation pages and raw files, not for APIs that need other methods or auth.",
+      parameters: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "Absolute http(s) URL" },
+        },
+        required: ["url"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "web_search",
+      description:
+        "Search the web through the local SearXNG instance and return the top results (title, url, snippet). Use it before fetch when you do not know which page has the answer.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Search query" },
+        },
+        required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "edit",
       description: `Replace one exact occurrence in an existing workspace file. The path is ${PATH_HELP}. The host requests approval before applying it.`,
       parameters: {
@@ -186,7 +347,13 @@ const tools: Tool[] = [
   },
 ];
 /** Tools that only inspect; plan intent offers these and nothing else. */
-const READ_ONLY_TOOLS = new Set(["read", "list", "search"]);
+const READ_ONLY_TOOLS = new Set([
+  "read",
+  "list",
+  "search",
+  "fetch",
+  "web_search",
+]);
 
 export type ApprovalRequest =
   | WorkspaceEditProposal
@@ -456,6 +623,88 @@ async function* agentTurn(
           });
           if (output.length > 100_000)
             throw new Error("Search output exceeds tool output limit");
+        } else if (name === "fetch") {
+          const args = FetchArgs.parse(call.function.arguments);
+          record("started");
+          yield { type: "tool_start", id, name };
+          signal.throwIfAborted();
+          const target = new URL(args.url);
+          if (target.protocol !== "http:" && target.protocol !== "https:")
+            throw new Error(`fetch: unsupported protocol ${target.protocol}`);
+          const { response, finalUrl } = await httpGet(
+            target.toString(),
+            FETCH_TIMEOUT_MS,
+          );
+          if (response.status >= 400)
+            throw new Error(`fetch: HTTP ${response.status} for ${finalUrl}`);
+          const contentType = textContentType(response);
+          const textual =
+            contentType.startsWith("text/") ||
+            contentType === "application/json" ||
+            contentType === "application/xml" ||
+            contentType.endsWith("+json") ||
+            contentType.endsWith("+xml");
+          if (!textual)
+            throw new Error(
+              `fetch: unsupported content type ${contentType || "(none)"}`,
+            );
+          const { text, truncated } = await readCapped(
+            response,
+            FETCH_MAX_BYTES,
+          );
+          const body =
+            contentType === "text/html" || contentType.endsWith("+html")
+              ? await htmlToText(text)
+              : text;
+          // Keep the final tool output inside the shared 100k-char limit;
+          // the header then reports the bytes actually returned.
+          const truncationNote = "…(output truncated at 100k chars)";
+          const headerOf = (shown: string) =>
+            `${Buffer.byteLength(shown, "utf8")} bytes from ${finalUrl}${truncated ? " (truncated at 512 KiB)" : ""}\n\n`;
+          const room = 100_000 - headerOf(body).length - truncationNote.length;
+          output =
+            body.length > room
+              ? (() => {
+                  const shown = body.slice(0, Math.max(0, room));
+                  return headerOf(shown) + shown + truncationNote;
+                })()
+              : headerOf(body) + body;
+        } else if (name === "web_search") {
+          const args = WebSearchArgs.parse(call.function.arguments);
+          record("started");
+          yield { type: "tool_start", id, name };
+          signal.throwIfAborted();
+          const base = (
+            process.env.LOCAL_AGENT_SEARXNG_URL ?? SEARXNG_URL
+          ).replace(/\/+$/, "");
+          const url = `${base}/search?q=${encodeURIComponent(args.query)}&format=json`;
+          let searchResponse: Response;
+          try {
+            searchResponse = await fetch(url, {
+              signal: AbortSignal.timeout(SEARXNG_TIMEOUT_MS),
+            });
+          } catch (error) {
+            throw new Error(
+              `web_search: SearXNG at ${base} is unreachable (${error instanceof Error ? error.message : "error"}). Run a local instance, e.g. docker run -d -p 8888:8080 searxng/searxng, and enable the JSON format (search.formats in settings.yml). Set LOCAL_AGENT_SEARXNG_URL to override the address.`,
+            );
+          }
+          if (searchResponse.status !== 200)
+            throw new Error(
+              `web_search: SearXNG returned HTTP ${searchResponse.status} (the JSON format may not be enabled: search.formats in settings.yml)`,
+            );
+          const payload = (await searchResponse.json()) as {
+            results?: { title?: string; url?: string; content?: string }[];
+          };
+          const results = (payload.results ?? []).slice(0, 8);
+          output = results.length
+            ? results
+                .map((result, index) =>
+                  `${index + 1}. ${result.title ?? result.url ?? "(untitled)"}\n   ${result.url ?? ""}\n   ${result.content ?? ""}`.trimEnd(),
+                )
+                .join("\n\n")
+            : "No results";
+          if (output.length > 100_000)
+            throw new Error("web_search output exceeds tool output limit");
         } else if (name === "write") {
           if (options.intent === "plan") {
             status = "denied";

@@ -59,6 +59,8 @@
             <tr><td class="mono">read</td><td>Bounded UTF-8 read, plan-safe</td></tr>
             <tr><td class="mono">edit</td><td>One exact occurrence, approval-gated, diffed</td></tr>
             <tr><td class="mono">run_command</td><td>argv vector, no shell, timeout, approval-gated</td></tr>
+            <tr><td class="mono">fetch</td><td>GET a URL as readable text, plan-safe</td></tr>
+            <tr><td class="mono">web_search</td><td>Local SearXNG results, plan-safe</td></tr>
             <tr><td class="mono">SERVER__TOOL</td><td>MCP tools, independently approved</td></tr>
           </tbody>
         </table>
