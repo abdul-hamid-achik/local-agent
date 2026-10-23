@@ -10,7 +10,7 @@
     "@modelcontextprotocol/client": "2.3.0",
     "diff": "9.0.0",
     "ollama": "0.6.3",
-    "zod": "4.5.4"
+    "zod": "4.6.6"
   },
   "imports": {
     "#runtime/*": "./src/*.ts"

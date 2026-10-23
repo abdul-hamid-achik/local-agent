@@ -172,7 +172,15 @@ test("fails when an Ollama stream goes idle between chunks", async () => {
                 `${JSON.stringify({ message: { role: "assistant", content: "partial" }, done: false })}\n`,
               ),
             );
-            setTimeout(() => controller.close(), 100);
+            // Real timer: this test exercises the provider's real idle-timeout
+            // against the platform clock; deterministic time control won't.
+            setTimeout(() => {
+              try {
+                controller.close();
+              } catch {
+                // The consumer already cancelled the stream (idle timeout).
+              }
+            }, 100);
           },
         }),
         { headers: { "Content-Type": "application/x-ndjson" } },
