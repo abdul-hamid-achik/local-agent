@@ -91,7 +91,6 @@ const FETCH_MAX_BYTES = 512 * 1024;
 // them is friendlier than the MCP policy of refusing redirects, but a manual
 // loop keeps the hop count bounded.
 const FETCH_MAX_REDIRECTS = 5;
-const SEARXNG_URL = "http://127.0.0.1:8888";
 const SEARXNG_TIMEOUT_MS = 10_000;
 
 /** GET with redirects followed, capped at FETCH_MAX_REDIRECTS hops. */
@@ -214,6 +213,121 @@ function textContentType(response: Response): string {
     .toLowerCase();
 }
 
+type SearchHit = { title: string; url: string; snippet: string };
+
+/** Query SearXNG's JSON API; null means "unavailable, try the next provider". */
+async function searxngSearch(
+  base: string,
+  query: string,
+): Promise<SearchHit[] | null> {
+  let response: Response;
+  try {
+    response = await fetch(
+      `${base}/search?q=${encodeURIComponent(query)}&format=json`,
+      { signal: AbortSignal.timeout(SEARXNG_TIMEOUT_MS) },
+    );
+  } catch {
+    return null;
+  }
+  if (response.status !== 200) return null;
+  try {
+    const payload = (await response.json()) as {
+      results?: { title?: string; url?: string; content?: string }[];
+    };
+    return (payload.results ?? []).map((result) => ({
+      title: result.title ?? result.url ?? "(untitled)",
+      url: result.url ?? "",
+      snippet: result.content ?? "",
+    }));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Query DuckDuckGo Lite and parse its results table. Result links point at
+ * /l/?uddg=<urlencoded target>; the snippet sits in the next result-snippet
+ * cell. Null means "no usable answer" (block, captcha, zero results).
+ */
+async function duckduckgoSearch(query: string): Promise<SearchHit[] | null> {
+  let response: Response;
+  try {
+    response = await fetch(
+      `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`,
+      {
+        headers: {
+          "user-agent":
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+          accept: "text/html",
+        },
+        signal: AbortSignal.timeout(SEARXNG_TIMEOUT_MS),
+      },
+    );
+  } catch {
+    return null;
+  }
+  if (response.status !== 200) return null;
+  const html = await response.text();
+  const hits: SearchHit[] = [];
+  let pending: { title: string; url: string } | undefined;
+  await new HTMLRewriter()
+    .on("a", {
+      element: (el) => {
+        const href = el.getAttribute("href");
+        if (!href?.includes("uddg=")) return;
+        const target = new URL(
+          href,
+          "https://lite.duckduckgo.com",
+        ).searchParams.get("uddg");
+        if (!target) return;
+        pending = { title: "", url: target };
+        el.onEndTag(() => {
+          if (pending) hits.push({ ...pending, snippet: "" });
+          pending = undefined;
+        });
+      },
+      text: (chunk) => {
+        if (pending) pending.title += chunk.text;
+      },
+    })
+    .on("td.result-snippet", {
+      text: (chunk) => {
+        const hit = hits[hits.length - 1];
+        if (hit) hit.snippet += chunk.text;
+      },
+    })
+    .transform(new Response(html))
+    .text();
+  return hits.length
+    ? hits.map((hit) => ({
+        ...hit,
+        title: decodeEntities(hit.title),
+        snippet: decodeEntities(hit.snippet),
+      }))
+    : null;
+}
+
+/** Decode the handful of HTML entities DuckDuckGo titles/snippets contain. */
+function decodeEntities(text: string): string {
+  return text
+    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, code) =>
+      String.fromCodePoint(parseInt(code, 16)),
+    )
+    .replace(
+      /&(amp|lt|gt|quot|apos|nbsp);/g,
+      (_, name) =>
+        ({
+          amp: "&",
+          lt: "<",
+          gt: ">",
+          quot: '"',
+          apos: "'",
+          nbsp: " ",
+        })[name as "amp"]!,
+    );
+}
+
 const tools: Tool[] = [
   {
     type: "function",
@@ -293,7 +407,7 @@ const tools: Tool[] = [
     function: {
       name: "web_search",
       description:
-        "Search the web through the local SearXNG instance and return the top results (title, url, snippet). Use it before fetch when you do not know which page has the answer.",
+        "Search the web and return the top results (title, url, snippet). Uses SearXNG when LOCAL_AGENT_SEARXNG_URL is configured, otherwise DuckDuckGo Lite; no API keys required. Use it before fetch when you do not know which page has the answer.",
       parameters: {
         type: "object",
         properties: {
@@ -721,35 +835,32 @@ async function* agentTurn(
           record("started");
           yield { type: "tool_start", id, name };
           signal.throwIfAborted();
-          const base = (
-            process.env.LOCAL_AGENT_SEARXNG_URL ?? SEARXNG_URL
-          ).replace(/\/+$/, "");
-          const url = `${base}/search?q=${encodeURIComponent(args.query)}&format=json`;
-          let searchResponse: Response;
-          try {
-            searchResponse = await fetch(url, {
-              signal: AbortSignal.timeout(SEARXNG_TIMEOUT_MS),
-            });
-          } catch (error) {
-            throw new Error(
-              `web_search: SearXNG at ${base} is unreachable (${error instanceof Error ? error.message : "error"}). Run a local instance, e.g. docker run -d -p 8888:8080 searxng/searxng, and enable the JSON format (search.formats in settings.yml). Set LOCAL_AGENT_SEARXNG_URL to override the address.`,
-            );
+          const searxngBase = process.env.LOCAL_AGENT_SEARXNG_URL?.replace(
+            /\/+$/,
+            "",
+          );
+          let hits: SearchHit[] | null = null;
+          let provider: "searxng" | "duckduckgo" = "duckduckgo";
+          if (searxngBase) {
+            hits = await searxngSearch(searxngBase, args.query);
+            if (hits) provider = "searxng";
           }
-          if (searchResponse.status !== 200)
+          if (!hits) hits = await duckduckgoSearch(args.query);
+          if (!hits)
             throw new Error(
-              `web_search: SearXNG returned HTTP ${searchResponse.status} (the JSON format may not be enabled: search.formats in settings.yml)`,
+              `web_search: no search provider answered${
+                searxngBase ? ` (SearXNG at ${searxngBase} failed too)` : ""
+              }. For a stable backend, run a SearXNG instance and set LOCAL_AGENT_SEARXNG_URL to its address.`,
             );
-          const payload = (await searchResponse.json()) as {
-            results?: { title?: string; url?: string; content?: string }[];
-          };
-          const results = (payload.results ?? []).slice(0, 8);
-          output = results.length
-            ? results
-                .map((result, index) =>
-                  `${index + 1}. ${result.title ?? result.url ?? "(untitled)"}\n   ${result.url ?? ""}\n   ${result.content ?? ""}`.trimEnd(),
+          const top = hits.slice(0, 8);
+          const list = top.length
+            ? top
+                .map((hit, index) =>
+                  `${index + 1}. ${hit.title}\n   ${hit.url}\n   ${hit.snippet}`.trimEnd(),
                 )
                 .join("\n\n")
             : "No results";
+          output = `${list}\n\nvia ${provider}`;
           if (output.length > 100_000)
             throw new Error("web_search output exceeds tool output limit");
         } else if (name === "todo_write") {

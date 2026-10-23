@@ -51,3 +51,6 @@ temp/
 apps/desktop/dist-main/
 apps/desktop/dist-renderer/
 apps/desktop/release/
+
+# Stale local tool caches
+.crush/

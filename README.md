@@ -183,7 +183,7 @@ of the workspace stay forbidden.
 | `list` | none | List a directory (directories end with `/`; `.git` and `node_modules` skipped; 500 entries) |
 | `search` | none | Literal or regular-expression search over workspace text files as `path:line: text` (100 matches; binaries, `.git`, `node_modules` and secrets skipped) |
 | `fetch` | none | GET one http(s) URL as readable text (HTML → plain text, 512 KiB cap, redirects followed up to 5 hops) |
-| `web_search` | none | Query the local SearXNG instance (`LOCAL_AGENT_SEARXNG_URL`, default `http://127.0.0.1:8888`) and return the top 8 results |
+| `web_search` | none | Search the web via SearXNG when `LOCAL_AGENT_SEARXNG_URL` is set, otherwise DuckDuckGo Lite; returns the top 8 results |
 | `edit` | `--approve-edits` | Replace one exact occurrence in an existing file |
 | `write` | `--approve-edits` | Create a file (creating directories) or replace one; the approval shows the content as added lines, or the diff for a replacement |
 | `run_command` | `--approve-commands` | Run one program from an `argv` array, with no shell |
