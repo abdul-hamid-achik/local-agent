@@ -131,6 +131,7 @@ export async function createCommandProposal(
   argv: readonly string[],
   cwd: string,
   timeoutMs: number,
+  extraEnv?: Record<string, string>,
 ): Promise<ApprovedCommandProposal> {
   if (
     argv.length === 0 ||
@@ -170,7 +171,7 @@ export async function createCommandProposal(
     ino: info.ino,
     birthtimeNs: info.birthtimeNs,
   });
-  proposalEnvironment.set(proposal, childEnvironment());
+  proposalEnvironment.set(proposal, { ...childEnvironment(), ...extraEnv });
   return proposal;
 }
 

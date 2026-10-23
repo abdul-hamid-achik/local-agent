@@ -83,7 +83,10 @@ there is no approval dialog to answer. See [Safety](/safety).
 | `/details` | Show the last tool output in full |
 | `/status` | Show the effective config panel (model, workspace, session) |
 | `/sessions` | Open the session picker; needs `--session-db` |
+| `/model [NAME]` | Show the current model, or switch to another installed Ollama model mid-session |
 | `/export` | Write the transcript to a markdown file |
+| `/export json` | Write the raw messages array as JSON |
+| `/find TEXT` | Search saved sessions for text; needs `--session-db` |
 | `/mcp` | Show an MCP panel: server and tool counts, or a hint to use `--mcp-config` |
 | `/help` | Show the command and key overlay |
 

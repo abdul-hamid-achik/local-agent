@@ -49,7 +49,11 @@ export const commandDiagnosticsRunner: DiagnosticsRunner = async (
   timeoutMs,
   signal,
 ) => {
-  const proposal = await createCommandProposal(argv, cwd, timeoutMs);
+  const proposal = await createCommandProposal(argv, cwd, timeoutMs, {
+    // Host-driven diagnostics (never model-chosen argv) may carry HOME:
+    // bunx resolves its cache and biome its config through it.
+    ...(process.env.HOME === undefined ? {} : { HOME: process.env.HOME }),
+  });
   const result = await executeApprovedCommand(proposal, signal);
   return {
     output: result.output,
