@@ -249,3 +249,65 @@ export async function admitOllamaModel(
     capabilities,
   };
 }
+
+export type OpenAILocalAdmission =
+  | { status: "unverified"; message: string }
+  | { status: "rejected"; message: string }
+  | { status: "validated"; model: string };
+
+/**
+ * Checks the configured model against GET {base_url}/models (15s budget).
+ * Servers that do not implement the endpoint (404) skip validation: a
+ * streaming warm-up would double the first chat request and cost tokens,
+ * while the chat transport itself still fails loudly on an unknown model.
+ */
+export async function admitOpenAILocalModel(
+  provider: Provider,
+  signal: AbortSignal,
+): Promise<OpenAILocalAdmission> {
+  const config = ProviderSchema.parse(provider);
+  if (config.type !== "openai_local")
+    throw new Error("admitOpenAILocalModel requires an openai_local provider");
+  const metadataSignal = AbortSignal.any([signal, AbortSignal.timeout(15_000)]);
+  try {
+    const response = await fetch(`${config.base_url}/models`, {
+      method: "GET",
+      signal: metadataSignal,
+      redirect: "error",
+      ...(config.api_key
+        ? { headers: { authorization: `Bearer ${config.api_key}` } }
+        : {}),
+    });
+    if (response.status === 404)
+      return {
+        status: "unverified",
+        message:
+          "Server does not expose GET /v1/models; skipped model validation",
+      };
+    if (!response.ok)
+      return {
+        status: "unverified",
+        message: `Model list request failed (${response.status})`,
+      };
+    const ModelsSchema = z.object({ data: z.array(z.unknown()).catch([]) });
+    const models = ModelsSchema.parse(await response.json()).data;
+    const ids = models
+      .map((entry) =>
+        typeof entry === "object" && entry !== null && "id" in entry
+          ? String(entry.id)
+          : undefined,
+      )
+      .filter((id): id is string => id !== undefined);
+    if (!ids.includes(config.model))
+      return {
+        status: "rejected",
+        message: `Model ${config.model} is not served by ${config.base_url}. Available: ${ids.slice(0, 5).join(", ") || "(none)"}.`,
+      };
+    return { status: "validated", model: config.model };
+  } catch {
+    return {
+      status: "unverified",
+      message: "OpenAI-compatible endpoint is unreachable",
+    };
+  }
+}

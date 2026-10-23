@@ -1,7 +1,11 @@
 import type { Message } from "@local-agent/runtime";
 import { expect, test } from "vitest";
 import { type MessageView, ViewBuilder } from "#cli/tuimark/blocks";
-import { exportFileName, transcriptMarkdown } from "#cli/tuimark/export";
+import {
+  exportFileName,
+  transcriptJson,
+  transcriptMarkdown,
+} from "#cli/tuimark/export";
 
 function viewsOf(messages: Message[]): MessageView[] {
   const builder = new ViewBuilder();
@@ -82,6 +86,32 @@ test("F9: tool output cannot break out of its four-backtick fence", () => {
 
 test("an empty conversation exports just the title", () => {
   expect(transcriptMarkdown([])).toBe("# Local Agent transcript\n");
+});
+
+test("the JSON export is the raw messages array, tool envelopes included", () => {
+  const messages: Message[] = [
+    { role: "user", content: "Add a retry please" },
+    {
+      role: "tool",
+      tool_name: "read",
+      tool_call_id: "c1",
+      content: JSON.stringify({ status: "succeeded", output: "file body" }),
+    },
+  ];
+  const json = transcriptJson(messages);
+  const parsed = JSON.parse(json) as Message[];
+  expect(parsed).toEqual(messages);
+  // Raw means raw: the envelope markdown keeps out is present here.
+  expect(json).toContain('"tool_call_id"');
+  expect(json.endsWith("\n")).toBe(true);
+});
+
+test("the file name carries the format's extension", () => {
+  const at = new Date(2026, 9, 22, 9, 5, 3);
+  expect(exportFileName(at)).toBe("local-agent-transcript-20261022-090503.md");
+  expect(exportFileName(at, ".json")).toBe(
+    "local-agent-transcript-20261022-090503.json",
+  );
 });
 
 test("the file name carries the local timestamp, zero-padded", () => {

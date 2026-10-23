@@ -70,6 +70,21 @@ test("/theme reports, validates and changes the session theme", () => {
   expect(runSlash("/theme blue", state).theme).toBeUndefined();
 });
 
+test("/model reports the current model and asks the controller to switch", () => {
+  expect(runSlash("/model", state).status).toBe(
+    "Current model: unknown. Use /model NAME to switch",
+  );
+  expect(runSlash("/model", { ...state, model: "llama3.2" }).status).toBe(
+    "Current model: llama3.2. Use /model NAME to switch",
+  );
+  expect(runSlash("/model qwen3", state)).toEqual({
+    status: "Switching model to qwen3…",
+    model: "qwen3",
+  });
+  expect(HELP_STATUS).toContain("/model [NAME]");
+  expect(paletteCommand("model")).toBe("/model");
+});
+
 test("/mouse reports, validates and changes the toggle (off by default)", () => {
   expect(runSlash("/mouse", state).status).toBe(
     "Mouse is off. Use /mouse on or /mouse off",
@@ -148,12 +163,14 @@ test("/details asks the controller for the viewer over the latest receipt", () =
 test("the slash catalog lists exactly the commands the parser knows", () => {
   expect(SLASH_COMMANDS.map((c) => c.name)).toEqual([
     "/mode",
+    "/model",
     "/theme",
     "/mouse",
     "/permissions",
     "/details",
     "/status",
     "/sessions",
+    "/find",
     "/export",
     "/mcp",
     "/help",
@@ -170,10 +187,15 @@ test("the slash catalog lists exactly the commands the parser knows", () => {
   );
   expect(slashMatches("/m")?.map((c) => c.name)).toEqual([
     "/mode",
+    "/model",
     "/mouse",
     "/mcp",
   ]);
-  expect(slashMatches("/MO")?.map((c) => c.name)).toEqual(["/mode", "/mouse"]);
+  expect(slashMatches("/MO")?.map((c) => c.name)).toEqual([
+    "/mode",
+    "/model",
+    "/mouse",
+  ]);
   expect(slashMatches("/zzz")).toEqual([]);
   // Not half-typed commands: an argument started, a pasted block, plain text.
   expect(slashMatches("/mode ")).toBeUndefined();
@@ -184,22 +206,26 @@ test("the slash catalog lists exactly the commands the parser knows", () => {
   const rows = slashRows(slashMatches("/m") ?? [], 1);
   expect(rows.map((r) => [r.cmd, r.sel, r.mark])).toEqual([
     ["/mode", false, ""],
-    ["/mouse", true, "›"],
+    ["/model", true, "›"],
+    ["/mouse", false, ""],
     ["/mcp", false, ""],
   ]);
   expect(helpRows().map((r) => r.cmd)).toEqual([
     "/mode plan|build",
+    "/model [NAME]",
     "/theme dark|light|auto",
     "/mouse on|off",
     "/permissions [clear]",
     "/details",
     "/status",
     "/sessions",
-    "/export",
+    "/find TEXT",
+    "/export [json]",
     "/mcp",
     "/help",
   ]);
   expect(slashMatches("/p")?.map((c) => c.name)).toEqual(["/permissions"]);
+  expect(slashMatches("/f")?.map((c) => c.name)).toEqual(["/find"]);
 });
 
 test("/status, /sessions and /export ask the controller for their panels and file", () => {
@@ -214,6 +240,7 @@ test("/status, /sessions and /export ask the controller for their panels and fil
   expect(runSlash("/export", state)).toEqual({
     status: "Exporting transcript…",
     exportTranscript: true,
+    exportFormat: "markdown",
   });
   // /mcp keeps its count line and now opens the panel over it.
   expect(runSlash("/mcp", state).mcpPanel).toBe(true);
@@ -229,6 +256,29 @@ test("/status, /sessions and /export ask the controller for their panels and fil
   expect(paletteCommand("status")).toBe("/status");
   expect(paletteCommand("sessions")).toBe("/sessions");
   expect(paletteCommand("export")).toBe("/export");
+});
+
+test("/export json and /find parse their arguments", () => {
+  expect(runSlash("/export json", state)).toEqual({
+    status: "Exporting transcript…",
+    exportTranscript: true,
+    exportFormat: "json",
+  });
+  expect(runSlash("/export yaml", state).status).toBe(
+    "Unknown export format: yaml. Use /export or /export json",
+  );
+  expect(runSlash("/export yaml", state).exportTranscript).toBeUndefined();
+  expect(runSlash("/find needle", state)).toEqual({
+    status: "Searching sessions for needle…",
+    find: "needle",
+  });
+  expect(runSlash("/find two words", state).find).toBe("two words");
+  expect(runSlash("/find", state).status).toBe(
+    "Search the saved sessions. Use /find TEXT",
+  );
+  expect(runSlash("/find", state).find).toBeUndefined();
+  expect(paletteCommand("export-json")).toBe("/export json");
+  expect(paletteCommand("find")).toBe("/find");
 });
 
 test("the palette's key rows: quit everywhere, load-earlier fullscreen only", () => {

@@ -7,6 +7,7 @@ import type {
   ApprovalRequest,
   McpConnection,
   Message,
+  OllamaAdmission,
   Provider,
   SessionContext,
   Workspace,
@@ -1409,12 +1410,14 @@ test("typing / opens the command popup; it filters, moves and completes", async 
   expect(store(ui).slash.open).toBe(true);
   expect(store(ui).slash.rows.map((r) => r.cmd)).toEqual([
     "/mode",
+    "/model",
     "/theme",
     "/mouse",
     "/permissions",
     "/details",
     "/status",
     "/sessions",
+    "/find",
     "/export",
     "/mcp",
     "/help",
@@ -1423,25 +1426,31 @@ test("typing / opens the command popup; it filters, moves and completes", async 
   await ui.fire("typed", "/m");
   expect(store(ui).slash.rows.map((r) => r.cmd)).toEqual([
     "/mode",
+    "/model",
     "/mouse",
     "/mcp",
   ]);
   await ui.fire("slash_next", "/m");
   await ui.fire("slash_next", "/m");
-  expect(store(ui).slash.rows[2]).toMatchObject({ cmd: "/mcp", sel: true });
+  await ui.fire("slash_next", "/m");
+  expect(store(ui).slash.rows[3]).toMatchObject({ cmd: "/mcp", sel: true });
   // The choice clamps at the last row, like the palette's list.
   await ui.fire("slash_next", "/m");
-  expect(store(ui).slash.rows[2]?.sel).toBe(true);
+  expect(store(ui).slash.rows[3]?.sel).toBe(true);
   await ui.fire("slash_prev", "/m");
-  expect(store(ui).slash.rows[1]?.sel).toBe(true);
+  expect(store(ui).slash.rows[2]?.sel).toBe(true);
   // Typing again resets the choice to the first match.
   await ui.fire("typed", "/mo");
-  expect(store(ui).slash.rows.map((r) => r.cmd)).toEqual(["/mode", "/mouse"]);
+  expect(store(ui).slash.rows.map((r) => r.cmd)).toEqual([
+    "/mode",
+    "/model",
+    "/mouse",
+  ]);
   expect(store(ui).slash.rows[0]?.sel).toBe(true);
   // Tab completes the chosen row into the draft and closes the popup.
   await ui.fire("slash_next", "/mo");
   await ui.fire("slash_complete", "/mo");
-  expect(store(ui).draft).toBe("/mouse ");
+  expect(store(ui).draft).toBe("/model ");
   expect(store(ui).slash).toEqual({ open: false, rows: [] });
 });
 
@@ -1506,6 +1515,7 @@ test("enter completes over the popup only when the choice differs", async () => 
   expect(seen).toEqual([]);
   // A moved choice completes to that row, still without running it.
   await ui.fire("typed", "/m");
+  await ui.fire("slash_next", "/m");
   await ui.fire("slash_next", "/m");
   await ui.fire("slash_next", "/m");
   await ui.fire("send", "/m");
@@ -1599,13 +1609,15 @@ test("the help overlay's store carries the slash commands", () => {
   const { ui } = setup(reply("x"));
   expect(store(ui).help.cmds.map((c) => c.cmd)).toEqual([
     "/mode plan|build",
+    "/model [NAME]",
     "/theme dark|light|auto",
     "/mouse on|off",
     "/permissions [clear]",
     "/details",
     "/status",
     "/sessions",
-    "/export",
+    "/find TEXT",
+    "/export [json]",
     "/mcp",
     "/help",
   ]);
@@ -2451,6 +2463,119 @@ test("a failed export lands as an error notice, not a model message", async () =
   await ui.fire("send", "next");
   await client.idle();
   expect(JSON.stringify(seen)).not.toContain("Export failed");
+});
+
+const validated = (model: string) =>
+  ({
+    status: "validated",
+    model,
+    sizeBytes: 1,
+    nativeContext: undefined,
+    capabilities: ["completion"],
+  }) as OllamaAdmission;
+
+test("/model reports the current model, then switches the provider the next turn runs on", async () => {
+  const providers: Provider[] = [];
+  const { ui, client } = setup(reply("ok"), {
+    admitModel: async (candidate) => validated(candidate.model),
+    run: (provider, messages, options) => {
+      providers.push(provider);
+      return reply("ok")({ options, messages });
+    },
+  });
+  await ui.fire("send", "/model");
+  expect(store(ui).status).toBe(
+    "Current model: fixture. Use /model NAME to switch",
+  );
+  await ui.fire("send", "/model llama3.2");
+  expect(store(ui).status).toBe("Model changed to llama3.2");
+  expect(store(ui).header.model).toBe("llama3.2");
+  await ui.fire("send", "hi");
+  await client.idle();
+  expect(providers.at(-1)?.model).toBe("llama3.2");
+});
+
+test("a model the Ollama inventory rejects is refused: no switch, no header write", async () => {
+  const providers: Provider[] = [];
+  const { ui, client } = setup(reply("ok"), {
+    admitModel: async () => ({
+      status: "rejected",
+      kind: "metadata",
+      message: "Model nope is not installed. Run: ollama pull nope",
+      code: "not_installed",
+    }),
+    run: (provider, messages, options) => {
+      providers.push(provider);
+      return reply("ok")({ options, messages });
+    },
+  });
+  await ui.fire("send", "/model nope");
+  expect(store(ui).status).toBe(
+    "Model nope is not installed. Run: ollama pull nope",
+  );
+  expect(store(ui).header.model).toBe("fixture");
+  await ui.fire("send", "hi");
+  await client.idle();
+  expect(providers.at(-1)?.model).toBe("fixture");
+});
+
+test("/export json writes the raw messages array to a .json file", async () => {
+  const files = new Map<string, string>();
+  const at = new Date(2026, 9, 22, 9, 5, 3).getTime();
+  const { ui, client } = setup(reply("json reply"), {
+    writeExport: async (path, text) => {
+      files.set(path, text);
+    },
+    now: () => at,
+  });
+  await ui.fire("send", "export this");
+  await client.idle();
+  await ui.fire("send", "/export json");
+  expect(store(ui).status).toBe(
+    "Exported transcript to local-agent-transcript-20261022-090503.json",
+  );
+  const parsed = JSON.parse([...files.values()][0] ?? "") as Message[];
+  expect(parsed.map((m) => [m.role, m.content])).toEqual([
+    ["user", "export this"],
+    ["assistant", "json reply"],
+  ]);
+});
+
+test("/find without a session capability says it needs --session-db", async () => {
+  const { ui } = setup(reply("x"));
+  await ui.fire("send", "/find needle");
+  expect(store(ui).panel.open).toBe(false);
+  expect(store(ui).status).toBe("Find needs --session-db PATH at startup");
+});
+
+test("/find lists the sessions that match, one snippet each, in a panel", async () => {
+  const { ui } = setup(reply("x"), {
+    sessions: {
+      ...capabilityFor({}),
+      search: async (query: string) =>
+        query === "needle"
+          ? [
+              { handle: "aaa111", snippet: "…the needle in session one…" },
+              { handle: "bbb222", snippet: "…another needle…" },
+            ]
+          : [],
+    },
+  });
+  await ui.fire("send", "/find missing");
+  expect(store(ui).status).toBe('No matches for "missing"');
+  await ui.fire("send", "/find needle");
+  expect(store(ui).panel.open).toBe(true);
+  expect(
+    store(ui)
+      .panel.lines.map((l) => l.t)
+      .join("\n"),
+  ).toContain("aaa111");
+  expect(
+    store(ui)
+      .panel.lines.map((l) => l.t)
+      .join("\n"),
+  ).toContain("the needle");
+  expect(store(ui).status).toBe('2 sessions match "needle"');
 });
 
 // ------------------------------------------- adversarial-review regressions

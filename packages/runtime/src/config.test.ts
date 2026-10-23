@@ -207,3 +207,67 @@ describe("provider configuration boundary", () => {
     ).toThrow("Chalupa negotiates the context size");
   });
 });
+
+describe("openai_local provider configuration", () => {
+  const local = (baseURL: string, extra: Record<string, unknown> = {}) => ({
+    LOCAL_AGENT_PROVIDER: "openai_local",
+    LOCAL_AGENT_PROVIDER_CONFIG: JSON.stringify({
+      type: "openai_local",
+      baseURL,
+      model: "qwen3-4b",
+      ...extra,
+    }),
+  });
+
+  test("resolves a loopback OpenAI-compatible profile with optional api_key", () => {
+    expect(resolveProvider(local("http://127.0.0.1:8080/v1"))).toMatchObject({
+      type: "openai_local",
+      base_url: "http://127.0.0.1:8080/v1",
+      model: "qwen3-4b",
+      context_size: 16_384,
+    });
+    expect(
+      resolveProvider(local("http://localhost:1234/v1", { api_key: "x" }))
+        .api_key,
+    ).toBe("x");
+  });
+
+  test("rejects non-loopback base URLs unless LOCAL_AGENT_LOCAL_ONLY=false", () => {
+    expect(() => resolveProvider(local("http://192.168.1.5:8080/v1"))).toThrow(
+      /loopback/,
+    );
+    expect(() => resolveProvider(local("http://example.com/v1"))).toThrow(
+      /loopback/,
+    );
+    expect(
+      resolveProvider({
+        ...local("http://192.168.1.5:8080/v1"),
+        LOCAL_AGENT_LOCAL_ONLY: "false",
+      }).type,
+    ).toBe("openai_local");
+  });
+
+  test("rejects malformed base URLs and profile mixing", () => {
+    for (const bad of [
+      "http://127.0.0.1:8080/v1/",
+      "http://127.0.0.1:8080/v1?x=1",
+      "http://user:pw@127.0.0.1:8080/v1",
+      "not-a-url",
+    ])
+      expect(() => resolveProvider(local(bad))).toThrow();
+    expect(() =>
+      resolveProvider(
+        local("http://127.0.0.1:8080/v1", { max_model_bytes: 5 }),
+      ),
+    ).toThrow(/ollama_remote/);
+    expect(() =>
+      resolveProvider({
+        ...local("http://127.0.0.1:8080/v1"),
+        LOCAL_AGENT_PROVIDER_CONFIG: "{",
+      }),
+    ).toThrow(/JSON/);
+    expect(() =>
+      resolveProvider(local("http://127.0.0.1:8080/v1"), "other"),
+    ).toThrow(/LOCAL_AGENT_PROVIDER_CONFIG/);
+  });
+});

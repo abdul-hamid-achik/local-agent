@@ -253,3 +253,156 @@ test.each(["allow", "deny", "plan", "truncated", "cancel"] as const)(
     }
   },
 );
+
+test("an approved edit of a TypeScript file appends biome diagnostics to the tool result", async () => {
+  const root = await mkdtemp(join(tmpdir(), "local-agent-diagnostics-"));
+  await writeFile(join(root, "greet.ts"), "const before = 1;\n");
+  delete process.env.LOCAL_AGENT_DIAGNOSTICS;
+  let requests = 0;
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(req) {
+      if (new URL(req.url).pathname === "/api/tags")
+        return Response.json({ models: [{ name: "fixture", size: 1000 }] });
+      if (new URL(req.url).pathname === "/api/show")
+        return Response.json({
+          capabilities: ["completion", "tools"],
+          model_info: { "fixture.context_length": 65536 },
+        });
+      requests++;
+      const first = requests === 1;
+      return new Response(
+        `${JSON.stringify({
+          message: first
+            ? {
+                role: "assistant",
+                content: "",
+                tool_calls: [
+                  {
+                    id: "provider-edit-call",
+                    function: {
+                      name: "edit",
+                      arguments: {
+                        path: "greet.ts",
+                        old_string: "const before = 1;",
+                        new_string: "const after = 2;",
+                      },
+                    },
+                  },
+                ],
+              }
+            : { role: "assistant", content: "Finished" },
+          done: true,
+        })}\n`,
+        { headers: { "Content-Type": "application/x-ndjson" } },
+      );
+    },
+  });
+  try {
+    using workspace = await Workspace.create(root);
+    const events: AgentEvent[] = [];
+    for await (const event of runAgent(
+      resolveProvider({ OLLAMA_HOST: server.url.origin }, "fixture"),
+      [{ role: "user", content: "Edit greet.ts" }],
+      {
+        workspace,
+        intent: "build",
+        signal: AbortSignal.timeout(30_000),
+        approve: async () => true,
+      },
+    ))
+      events.push(event);
+    const toolMessage = events.find(
+      (event) => event.type === "message" && event.message.role === "tool",
+    );
+    if (toolMessage?.type !== "message")
+      throw new Error("missing tool message");
+    const { content } = toolMessage.message;
+    if (typeof content !== "string") throw new Error("tool content missing");
+    const result = JSON.parse(content) as { status: string; output: string };
+    expect(result.status).toBe("succeeded");
+    expect(result.output).toContain("Updated greet.ts");
+    expect(result.output).toContain("--- diagnostics");
+  } finally {
+    await server.stop(true);
+    await rm(root, { recursive: true, force: true });
+  }
+}, 60_000);
+
+test("LOCAL_AGENT_DIAGNOSTICS=0 suppresses the diagnostics block", async () => {
+  const root = await mkdtemp(join(tmpdir(), "local-agent-diagnostics-off-"));
+  await writeFile(join(root, "greet.ts"), "const before = 1;\n");
+  process.env.LOCAL_AGENT_DIAGNOSTICS = "0";
+  let requests = 0;
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(req) {
+      if (new URL(req.url).pathname === "/api/tags")
+        return Response.json({ models: [{ name: "fixture", size: 1000 }] });
+      if (new URL(req.url).pathname === "/api/show")
+        return Response.json({
+          capabilities: ["completion", "tools"],
+          model_info: { "fixture.context_length": 65536 },
+        });
+      requests++;
+      const first = requests === 1;
+      return new Response(
+        `${JSON.stringify({
+          message: first
+            ? {
+                role: "assistant",
+                content: "",
+                tool_calls: [
+                  {
+                    id: "provider-edit-call",
+                    function: {
+                      name: "edit",
+                      arguments: {
+                        path: "greet.ts",
+                        old_string: "const before = 1;",
+                        new_string: "const after = 2;",
+                      },
+                    },
+                  },
+                ],
+              }
+            : { role: "assistant", content: "Finished" },
+          done: true,
+        })}\n`,
+        { headers: { "Content-Type": "application/x-ndjson" } },
+      );
+    },
+  });
+  try {
+    using workspace = await Workspace.create(root);
+    const events: AgentEvent[] = [];
+    for await (const event of runAgent(
+      resolveProvider({ OLLAMA_HOST: server.url.origin }, "fixture"),
+      [{ role: "user", content: "Edit greet.ts" }],
+      {
+        workspace,
+        intent: "build",
+        signal: AbortSignal.timeout(5000),
+        approve: async () => true,
+      },
+    ))
+      events.push(event);
+    const toolMessage = events.find(
+      (event) => event.type === "message" && event.message.role === "tool",
+    );
+    if (toolMessage?.type !== "message")
+      throw new Error("missing tool message");
+    const { content } = toolMessage.message;
+    if (typeof content !== "string") throw new Error("tool content missing");
+    const result = JSON.parse(content) as { output: string };
+    expect(result.output).toBe(
+      "Updated greet.ts. Verification has not been run.",
+    );
+  } finally {
+    delete process.env.LOCAL_AGENT_DIAGNOSTICS;
+    await server.stop(true);
+    await rm(root, { recursive: true, force: true });
+  }
+});

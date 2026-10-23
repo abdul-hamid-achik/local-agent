@@ -5,27 +5,27 @@
 │ Add a retry to the fetch helpe│                                                      │                               │
 │                               │  Commands                                            │                               │
 │ Assistant                     │  /mode plan|build plan reads only · build can edit   │                               │
-│ Sure. I will wrap the call in │  /theme dark|light|auto set the session theme        │                               │
-│  ts                           │  /mouse on|off toggle mouse reporting (fullscreen)   │                               │
-│  export async function fetchRe│  /permissions [clear] show or clear session approv…  │                               │
-│    // exponential backoff     │  /details show the last tool output in full          │                               │
-│    for (let attempt = 1; ; att│  /status show the effective config (model, workspa…  │                               │
-│      try { return await fetch(│  /sessions switch to a saved session (needs --sess…  │                               │
-│      catch (e) { if (attempt =│  /export write the conversation to a markdown file   │                               │
-│    }                          │  /mcp show connected MCP servers and their tools     │                               │
-│  }                            │  /help show the commands and the keys                │                               │
-│                               │                                                      │                               │
-│ ╭─ Tool · edit ───────────────│  Keys                                                │─────────────────────────────╮ │
-│ │succeeded                    │  enter send                                          │                             │ │
-│ │src/fetch.ts                 │  shift/alt+enter new line                            │                             │ │
-│ │Updated src/fetch.ts. Verific│  a session                                           │                             │ │
-│ ╰─────────────────────────────│  pgup/pgdn scroll                                    │─────────────────────────────╯ │
-│                               │  home/end top/end                                    │                               │
-│ Assistant                     │  ^P commands                                         │                               │
-│ Done. The helper now retries t│  esc cancel                                          │                               │
-│                               │  ctrl+c quit                                         │                               │
-└───────────────────────────────│  ↑/↓ history                                         │───────────────────────────────┘
-╭───────────────────────────────│  ^O earlier                                          │───────────────────────────────╮
-│ Message the model             │  pgup/pgdn scroll                                    │                               │
+│ Sure. I will wrap the call in │  /model [NAME] show or switch the Ollama model       │                               │
+│  ts                           │  /theme dark|light|auto set the session theme        │                               │
+│  export async function fetchRe│  /mouse on|off toggle mouse reporting (fullscreen)   │                               │
+│    // exponential backoff     │  /permissions [clear] show or clear session approv…  │                               │
+│    for (let attempt = 1; ; att│  /details show the last tool output in full          │                               │
+│      try { return await fetch(│  /status show the effective config (model, workspa…  │                               │
+│      catch (e) { if (attempt =│  /sessions switch to a saved session (needs --sess…  │                               │
+│    }                          │  /find TEXT search saved session messages (needs -…  │                               │
+│  }                            │  /export [json] write the conversation to a markdo…  │                               │
+│                               │  /mcp show connected MCP servers and their tools     │                               │
+│ ╭─ Tool · edit ───────────────│  /help show the commands and the keys                │─────────────────────────────╮ │
+│ │succeeded                    │                                                      │                             │ │
+│ │src/fetch.ts                 │  Keys                                                │                             │ │
+│ │Updated src/fetch.ts. Verific│  enter send                                          │                             │ │
+│ ╰─────────────────────────────│  shift/alt+enter new line                            │─────────────────────────────╯ │
+│                               │  a session                                           │                               │
+│ Assistant                     │  pgup/pgdn scroll                                    │                               │
+│ Done. The helper now retries t│  home/end top/end                                    │                               │
+│                               │  ^P commands                                         │                               │
+└───────────────────────────────│  esc cancel                                          │───────────────────────────────┘
+╭───────────────────────────────│  ctrl+c quit                                         │───────────────────────────────╮
+│ Message the model             │  ↑/↓ history                                         │                               │
 ╰───────────────────────────────│                                                      │───────────────────────────────╯
  Ready · /help for commands     ╰──────────────────────────────────────────────────────╯                                

@@ -39,9 +39,34 @@ Once Chalupa is active, prompts and tool receipts go to the remote endpoint.
 That is exactly what the explicit `LOCAL_AGENT_LOCAL_ONLY=false`
 acknowledges. See [Safety and privacy](/safety).
 
+## OpenAI-compatible local servers (opt-in)
+
+`LOCAL_AGENT_PROVIDER=openai_local` targets a local OpenAI-compatible server
+(llama.cpp, LM Studio, vLLM) over `/v1/chat/completions` with SSE streaming.
+The profile arrives via `LOCAL_AGENT_PROVIDER_CONFIG`:
+
+```json
+{
+  "type": "openai_local",
+  "baseURL": "http://127.0.0.1:8080/v1",
+  "model": "qwen3-4b",
+  "context_size": 32768,
+  "api_key": "optional-dummy-token"
+}
+```
+
+`baseURL` must be loopback (`127.0.0.1`, `localhost`, `::1`) unless
+`LOCAL_AGENT_LOCAL_ONLY=false` is set explicitly, the same boundary MCP
+endpoints use. `api_key` is optional: some local servers require a dummy
+bearer token. The model is selected in the profile; a differing `--model` is
+refused, while `--context` behaves as with local Ollama. On startup the
+client checks the model against `GET {baseURL}/models`; servers that do not
+implement the endpoint (404) skip the check with a status note.
+
 ## Not in the current client
 
 - No provider configuration file. Profiles are not written in YAML; there are
   no provider settings beyond the flags and variables above.
-- No OpenAI-compatible endpoints. `LOCAL_AGENT_PROVIDER` accepts `ollama` or
-  `chalupa` only; anything else fails at startup.
+- No cloud OpenAI endpoints. `LOCAL_AGENT_PROVIDER` accepts `ollama`,
+  `chalupa`, and `openai_local` (loopback by default); anything else fails at
+  startup.

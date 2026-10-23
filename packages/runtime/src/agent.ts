@@ -9,6 +9,7 @@ import {
   parseArgv,
 } from "#runtime/command";
 import type { Provider } from "#runtime/config";
+import { postEditDiagnostics } from "#runtime/diagnostics";
 import {
   chat,
   type Message,
@@ -903,6 +904,11 @@ async function* agentTurn(
               effectAttempted = true;
               await workspace.applyWrite(proposal);
               output = `${proposal.created ? "Created" : "Replaced"} ${proposal.path}. Verification has not been run.`;
+              output += await postEditDiagnostics(
+                [proposal.path],
+                workspace.root,
+                signal,
+              );
             }
           }
         } else if (name === "edit") {
@@ -930,6 +936,11 @@ async function* agentTurn(
               effectAttempted = true;
               await workspace.applyEdit(proposal);
               output = `Updated ${proposal.path}. Verification has not been run.`;
+              output += await postEditDiagnostics(
+                [proposal.path],
+                workspace.root,
+                signal,
+              );
             }
           }
         } else if (name === "run_command") {

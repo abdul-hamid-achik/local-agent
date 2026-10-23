@@ -1,12 +1,11 @@
 === grid 120x30 ===
  Local Agent           Ollama / loopback  qwen3-coder:30b  build            session a1b2c3d  ctx 9.6k/32k  ████░░░░░░░░ 
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│  export async function fetchRetry(url, tries = 3) {                                                                  │
 │    // exponential backoff                                                                                            │
 │    for (let attempt = 1; ; attempt++) {                                                                              │
 │      try { return await fetch(url); }                                                                                │
 │      catch (e) { if (attempt === tries) throw e; }                                                                   │
-│    }                                                                                                                 ┃
+│    }                                                                                                                 │
 │  }                                                                                                                   ┃
 │                                                                                                                      ┃
 │ ╭─ Tool · edit ────────────────────────────────────────────────────────────────────────────────────────────────────╮ ┃
@@ -21,6 +20,7 @@
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ › /mode plan reads only · build can edit                                                                             │
+│   /model show or switch the Ollama model                                                                             │
 │   /mouse toggle mouse reporting (fullscreen)                                                                         │
 │   /mcp show connected MCP servers and their tools                                                                    │
 │ up/down choose · tab complete · enter completes or runs · esc close                                                  │

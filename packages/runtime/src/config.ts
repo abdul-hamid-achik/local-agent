@@ -47,13 +47,14 @@ export function providerStreamIdleTimeoutMs(provider: Provider): number {
   );
 }
 
-const endpoint = z.string().superRefine((value, ctx) => {
+const checkOllamaOrigin = (value: string, ctx: z.RefinementCtx) => {
   let url: URL;
   try {
     url = new URL(value);
   } catch {
     ctx.addIssue({
       code: "custom",
+      path: ["base_url"],
       message: "Use a valid HTTP(S) Ollama origin",
     });
     return;
@@ -68,15 +69,51 @@ const endpoint = z.string().superRefine((value, ctx) => {
   )
     ctx.addIssue({
       code: "custom",
+      path: ["base_url"],
       message:
         "Use an HTTP(S) Ollama origin without credentials, query or path",
     });
-});
+};
+
+/** OpenAI-compatible origins may carry a path such as `/v1`; no trailing slash. */
+const checkOpenAIBaseURL = (value: string, ctx: z.RefinementCtx) => {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    ctx.addIssue({
+      code: "custom",
+      path: ["base_url"],
+      message: "Use a valid HTTP(S) OpenAI-compatible base URL",
+    });
+    return;
+  }
+  if (
+    !["http:", "https:"].includes(url.protocol) ||
+    url.username ||
+    url.password
+  )
+    ctx.addIssue({
+      code: "custom",
+      path: ["base_url"],
+      message:
+        "Use an HTTP(S) OpenAI-compatible base URL without embedded credentials",
+    });
+  if (url.search || url.hash || url.pathname.endsWith("/"))
+    ctx.addIssue({
+      code: "custom",
+      path: ["base_url"],
+      message: "Trim the trailing slash; drop query strings and fragments",
+    });
+};
+
+/** Reused to normalize OLLAMA_HOST below. */
+const endpoint = z.string().superRefine(checkOllamaOrigin);
 
 export const ProviderSchema = z
   .object({
-    type: z.enum(["ollama", "ollama_remote"]),
-    base_url: endpoint,
+    type: z.enum(["ollama", "ollama_remote", "openai_local"]),
+    base_url: z.string(),
     model: z.string().trim().min(1).max(200),
     context_size: z.number().int().positive().max(2_097_152).default(16_384),
     /** Sent to Ollama as `think` on chat only when set; unset keeps the model's default. */
@@ -90,8 +127,13 @@ export const ProviderSchema = z
     stream_idle_timeout: z.string().trim().optional(),
     /** Parsed milliseconds for the root chat client's request watchdog. */
     stream_idle_timeout_ms: z.number().int().positive().optional(),
+    /** Some local servers require a dummy bearer token; optional for loopback servers. */
+    api_key: z.string().trim().min(1).max(4096).optional(),
   })
   .superRefine((profile, ctx) => {
+    if (profile.type === "openai_local")
+      checkOpenAIBaseURL(profile.base_url, ctx);
+    else checkOllamaOrigin(profile.base_url, ctx);
     const timeout = profile.stream_idle_timeout
       ? durationMilliseconds(profile.stream_idle_timeout)
       : undefined;
@@ -142,14 +184,22 @@ export const ProviderSchema = z
       profile.max_model_bytes !== undefined ||
       profile.stream_idle_timeout !== undefined ||
       (profile.stream_idle_timeout_ms !== undefined &&
-        profile.type !== "ollama")
+        profile.type !== "ollama" &&
+        profile.type !== "openai_local")
     )
       ctx.addIssue({
         code: "custom",
         message: "Negotiated remote limits require an ollama_remote profile",
       });
+    if (profile.type !== "openai_local" && profile.api_key !== undefined)
+      ctx.addIssue({
+        code: "custom",
+        path: ["api_key"],
+        message: "api_key requires an openai_local profile",
+      });
   });
 export type Provider = z.infer<typeof ProviderSchema>;
+export type OpenAILocalProvider = Provider & { type: "openai_local" };
 
 /** Raw `--context` / `--think` values; the environment variables are the fallback. */
 export type ProviderOptions = { context?: string; think?: string };
@@ -223,10 +273,62 @@ export function resolveProvider(
       stream_idle_timeout_ms: providerStreamIdleTimeoutMs(profile),
     };
   }
+  if (env.LOCAL_AGENT_PROVIDER === "openai_local") {
+    let rawProfile: unknown;
+    try {
+      rawProfile = JSON.parse(env.LOCAL_AGENT_PROVIDER_CONFIG ?? "{}");
+    } catch {
+      throw new Error("openai_local provider config must be valid JSON");
+    }
+    // The documented config key is `baseURL`; profiles normalize to base_url.
+    if (
+      typeof rawProfile === "object" &&
+      rawProfile !== null &&
+      "baseURL" in rawProfile &&
+      !("base_url" in rawProfile)
+    ) {
+      const { baseURL, ...rest } = rawProfile as {
+        baseURL: string;
+        [key: string]: unknown;
+      };
+      rawProfile = { ...rest, base_url: baseURL };
+    }
+    const profile = ProviderSchema.parse(rawProfile);
+    if (profile.type !== "openai_local")
+      throw new Error("openai_local requires an openai_local profile");
+    // Same boundary the MCP transport enforces: loopback unless explicitly widened.
+    if (env.LOCAL_AGENT_LOCAL_ONLY !== "false") {
+      const hostname = new URL(profile.base_url).hostname;
+      if (!["127.0.0.1", "localhost", "[::1]"].includes(hostname))
+        throw new Error(
+          "openai_local requires a loopback base URL; set LOCAL_AGENT_LOCAL_ONLY=false to target a remote OpenAI-compatible server",
+        );
+    }
+    if (model && model !== profile.model)
+      throw new Error("Select the model in LOCAL_AGENT_PROVIDER_CONFIG");
+    const contextSetting = present(options.context);
+    const envContext = present(env.LOCAL_AGENT_CONTEXT);
+    const context =
+      contextSetting !== undefined
+        ? parseContextSize(contextSetting)
+        : envContext !== undefined
+          ? parseContextSize(envContext, "LOCAL_AGENT_CONTEXT")
+          : undefined;
+    return {
+      ...profile,
+      ...(context === undefined ? {} : { context_size: context }),
+      ...(think === undefined ? {} : { think }),
+      stream_idle_timeout_ms: defaultStreamIdleTimeoutMs,
+    };
+  }
   if (env.LOCAL_AGENT_PROVIDER && env.LOCAL_AGENT_PROVIDER !== "ollama")
-    throw new Error("This Bun prototype supports Ollama and Chalupa only");
+    throw new Error(
+      "This Bun prototype supports Ollama, Chalupa and openai_local only",
+    );
   if (env.LOCAL_AGENT_PROVIDER_CONFIG)
-    throw new Error("Provider config requires LOCAL_AGENT_PROVIDER=chalupa");
+    throw new Error(
+      "Provider config requires LOCAL_AGENT_PROVIDER=chalupa or openai_local",
+    );
   const host = env.OLLAMA_HOST?.trim() || "127.0.0.1:11434";
   const hasScheme = host.includes("://");
   const address = isIP(host) === 6 ? `[${host}]` : host;

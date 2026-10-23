@@ -20,6 +20,8 @@ export interface CommandState {
   mouse?: boolean;
   /** Active session-grant labels, in grant order (`/permissions` lists them). */
   grants?: readonly string[];
+  /** The model the provider currently uses (`/model` reports it). */
+  model?: string;
 }
 
 export interface CommandOutcome {
@@ -45,12 +47,21 @@ export interface CommandOutcome {
   mcpPanel?: boolean;
   /** Set by `/sessions`: open the session picker (or say why there is none). */
   sessions?: boolean;
-  /** Set by `/export`: write the transcript to a markdown file. */
+  /** Set by `/export`: write the transcript, markdown views or raw JSON. */
   exportTranscript?: boolean;
+  /** The format `/export` asked for; "json" writes the raw messages array. */
+  exportFormat?: "markdown" | "json";
+  /** Set by `/model NAME`: the controller validates it, then switches. */
+  model?: string;
+  /**
+   * Set by `/find TEXT`: the query, whole, exactly as typed after /find.
+   * The controller searches the workspace's saved sessions with it.
+   */
+  find?: string;
 }
 
 export const HELP_STATUS =
-  "/mode plan|build · /theme dark|light|auto · /mouse on|off · /permissions [clear] · /details · /status · /sessions · /export · /mcp · /help · Esc cancel · Ctrl+C exit";
+  "/mode plan|build · /model [NAME] · /theme dark|light|auto · /mouse on|off · /permissions [clear] · /details · /status · /sessions · /find TEXT · /export [json] · /mcp · /help · Esc cancel · Ctrl+C exit";
 
 /** Inline has no mouse (the engine ignores it there): the controller refuses with this. */
 export const MOUSE_INLINE_STATUS = "Mouse is not available in inline mode";
@@ -102,6 +113,17 @@ export function runSlash(text: string, state: CommandState): CommandOutcome {
       mouse: requested === "on",
     };
   }
+  const model = command.match(/^\/model(?:\s+(\S+))?\s*$/i);
+  if (model) {
+    const requested = model[1];
+    if (!requested)
+      return {
+        status: `Current model: ${state.model ?? "unknown"}. Use /model NAME to switch`,
+      };
+    // The controller validates the name against the Ollama inventory
+    // before it switches; the flash only says a check is running.
+    return { status: `Switching model to ${requested}…`, model: requested };
+  }
   const permissions = command.match(/^\/permissions(?:\s+(\S+))?\s*$/i);
   if (permissions) {
     const grants = state.grants ?? [];
@@ -125,8 +147,25 @@ export function runSlash(text: string, state: CommandState): CommandOutcome {
     return { status: "Latest tool output", details: true };
   if (command === "/status") return { status: "Status", statusPanel: true };
   if (command === "/sessions") return { status: "Sessions", sessions: true };
-  if (command === "/export")
-    return { status: "Exporting transcript…", exportTranscript: true };
+  const exportMatch = command.match(/^\/export(?:\s+(\S+))?\s*$/i);
+  if (exportMatch) {
+    const requested = exportMatch[1]?.toLowerCase();
+    if (requested && requested !== "json")
+      return {
+        status: `Unknown export format: ${requested}. Use /export or /export json`,
+      };
+    return {
+      status: "Exporting transcript…",
+      exportTranscript: true,
+      exportFormat: requested === "json" ? "json" : "markdown",
+    };
+  }
+  const find = command.match(/^\/find(?:\s+(.+?))?\s*$/i);
+  if (find) {
+    const query = find[1]?.trim();
+    if (!query) return { status: "Search the saved sessions. Use /find TEXT" };
+    return { status: `Searching sessions for ${query}…`, find: query };
+  }
   if (command === "/help") return { status: HELP_STATUS, help: true };
   if (command === "/mcp")
     return {
@@ -172,6 +211,12 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
     insert: "/mode ",
   },
   {
+    name: "/model",
+    usage: "/model [NAME]",
+    description: "show or switch the Ollama model",
+    insert: "/model ",
+  },
+  {
     name: "/theme",
     usage: "/theme dark|light|auto",
     description: "set the session theme",
@@ -208,9 +253,15 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
     insert: "/sessions",
   },
   {
+    name: "/find",
+    usage: "/find TEXT",
+    description: "search saved session messages (needs --session-db)",
+    insert: "/find ",
+  },
+  {
     name: "/export",
-    usage: "/export",
-    description: "write the conversation to a markdown file",
+    usage: "/export [json]",
+    description: "write the conversation to a markdown or JSON file",
     insert: "/export",
   },
   {
@@ -310,8 +361,15 @@ export const PALETTE: readonly PaletteItem[] = [
   },
   { id: "details", label: "Details: last tool output", hint: "/details" },
   { id: "status", label: "Status: effective config", hint: "/status" },
+  { id: "model", label: "Model: show current", hint: "/model" },
+  { id: "find", label: "Find in saved sessions", hint: "/find" },
   { id: "sessions", label: "Sessions: switch session", hint: "/sessions" },
   { id: "export", label: "Export transcript to markdown", hint: "/export" },
+  {
+    id: "export-json",
+    label: "Export transcript to JSON",
+    hint: "/export json",
+  },
   { id: "mcp", label: "MCP servers", hint: "/mcp" },
   { id: "help", label: "Help, commands and keys", hint: "/help" },
   // Two rows stand for keys, not slash commands: the controller runs them

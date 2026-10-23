@@ -86,7 +86,11 @@ async function resolveProviderView(model?: string): Promise<ProviderView> {
     model: provider.model,
     context_size: provider.context_size,
     source:
-      process.env.LOCAL_AGENT_PROVIDER === "chalupa" ? "chalupa" : "local",
+      process.env.LOCAL_AGENT_PROVIDER === "chalupa"
+        ? "chalupa"
+        : process.env.LOCAL_AGENT_PROVIDER === "openai_local"
+          ? "openai_local"
+          : "local",
   };
 }
 

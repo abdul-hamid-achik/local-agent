@@ -1,6 +1,7 @@
 import { parseArgs } from "node:util";
 import {
   admitOllamaModel,
+  admitOpenAILocalModel,
   connectMcp,
   DEFAULT_OLLAMA_MODEL,
   inspectRecovery,
@@ -238,10 +239,13 @@ Interrupted tool outcomes require inspection; they are never automatically repla
           // An interactive client must not open its screen for a model that is
           // missing, or a --context beyond its native one: say so in one line.
           // (Headless runs report the same line from the agent's own admission.)
-          const admission = await admitOllamaModel(
-            provider,
-            AbortSignal.timeout(15_000),
-          );
+          const admission =
+            provider.type === "openai_local"
+              ? await admitOpenAILocalModel(
+                  provider,
+                  AbortSignal.timeout(15_000),
+                )
+              : await admitOllamaModel(provider, AbortSignal.timeout(15_000));
           if (admission.status === "rejected")
             throw new Error(admission.message);
         }

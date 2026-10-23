@@ -1,10 +1,12 @@
-// `/export`: the visible conversation as markdown. Pure: the controller
-// owns the file write; this module only turns transcript views into text.
+// `/export`: the visible conversation as markdown, or the raw model
+// messages as JSON (`/export json`). Pure: the controller owns the file
+// write; this module only turns the conversation into text.
 //
-// The source is the transcript's views — the same text the client renders
-// (tool cards keep their summarized output, error notices are the
-// client's UI-local views) — never the raw model messages, whose tool
-// content is JSON the parser boundary keeps out of state like this.
+// Markdown's source is the transcript's views — the same text the client
+// renders (tool cards keep their summarized output, error notices are the
+// client's UI-local views). The JSON format is the other export: the raw
+// messages the runtime's history holds, tool JSON envelopes included.
+import type { Message } from "@local-agent/runtime";
 
 import { type Block, type MessageView, runsText } from "#cli/tuimark/blocks";
 
@@ -40,9 +42,20 @@ export function transcriptMarkdown(views: readonly MessageView[]): string {
   return `${parts.join("\n").trimEnd()}\n`;
 }
 
-/** The export's file name for a moment: local-agent-transcript-YYYYMMDD-HHMMSS.md (local time). */
-export function exportFileName(at: Date): string {
+/**
+ * The conversation's raw model messages (`/export json`): exactly what the
+ * runtime's history holds, tool JSON envelopes included, unlike markdown.
+ */
+export function transcriptJson(messages: readonly Message[]): string {
+  return `${JSON.stringify(messages, null, 2)}\n`;
+}
+
+/**
+ * The export's file name for a moment: local-agent-transcript-YYYYMMDD-HHMMSS
+ * (local time), with the format's extension (default `.md`).
+ */
+export function exportFileName(at: Date, ext = ".md"): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   const stamp = `${at.getFullYear()}${pad(at.getMonth() + 1)}${pad(at.getDate())}-${pad(at.getHours())}${pad(at.getMinutes())}${pad(at.getSeconds())}`;
-  return `local-agent-transcript-${stamp}.md`;
+  return `local-agent-transcript-${stamp}${ext}`;
 }

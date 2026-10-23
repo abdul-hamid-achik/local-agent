@@ -150,6 +150,16 @@
         "hint": "/status"
       },
       {
+        "id": "model",
+        "label": "Model: show current",
+        "hint": "/model"
+      },
+      {
+        "id": "find",
+        "label": "Find in saved sessions",
+        "hint": "/find"
+      },
+      {
         "id": "sessions",
         "label": "Sessions: switch session",
         "hint": "/sessions"
@@ -158,6 +168,11 @@
         "id": "export",
         "label": "Export transcript to markdown",
         "hint": "/export"
+      },
+      {
+        "id": "export-json",
+        "label": "Export transcript to JSON",
+        "hint": "/export json"
       },
       {
         "id": "mcp",
@@ -187,6 +202,11 @@
         "id": "/mode",
         "cmd": "/mode plan|build",
         "desc": "plan reads only · build can edit"
+      },
+      {
+        "id": "/model",
+        "cmd": "/model [NAME]",
+        "desc": "show or switch the Ollama model"
       },
       {
         "id": "/theme",
@@ -219,9 +239,14 @@
         "desc": "switch to a saved session (needs --session-db)"
       },
       {
+        "id": "/find",
+        "cmd": "/find TEXT",
+        "desc": "search saved session messages (needs --session-db)"
+      },
+      {
         "id": "/export",
-        "cmd": "/export",
-        "desc": "write the conversation to a markdown file"
+        "cmd": "/export [json]",
+        "desc": "write the conversation to a markdown or JSON file"
       },
       {
         "id": "/mcp",

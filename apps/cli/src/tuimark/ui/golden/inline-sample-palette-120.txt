@@ -7,7 +7,7 @@
                               │ ╚══════════════════════════════════════════════════════╝ │                              
                               │ Mode: plan (read only)                        /mode plan │                              
                               │ Mode: build (read, edit, command)            /mode build │                              
-                              │                                                          │                              
+                              │ Model: show current                               /model │                              
                               │                                                          │                              
                               │                                                          │                              
                               │                                                          │                              

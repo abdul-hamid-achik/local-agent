@@ -50,11 +50,11 @@ export const SidecarMethods = {
 } as const;
 
 export type ProviderView = {
-  type: "ollama" | "ollama_remote";
+  type: "ollama" | "ollama_remote" | "openai_local";
   base_url: string;
   model: string;
   context_size: number;
-  source: "local" | "chalupa";
+  source: "local" | "chalupa" | "openai_local";
 };
 
 export type AdmissionView =

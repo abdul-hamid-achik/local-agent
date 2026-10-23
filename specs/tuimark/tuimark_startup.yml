@@ -1,0 +1,43 @@
+version: 1
+name: bun_tuimark_startup
+intent: |
+    Performance guard for the Tuimark client: it must reach the composer
+    (ready for input) within the startup budget, complete a streamed reply
+    (13 chunks at ~50ms) within the streaming budget, and tear down cleanly
+    on ctrl+c.
+target:
+    cmd: ["bun", "specs/tuimark/fixture.ts", "chat"]
+    cwd: "${projectRoot}"
+terminal:
+    cols: 100
+    rows: 32
+    alternateScreen: require
+steps:
+    - wait:
+        screen:
+            contains: "Message the model"
+        timeoutMs: 15000
+    - snapshot: started
+    - type: "perf stream check"
+    - press: enter
+    - wait:
+        screen:
+            contains: "stream complete"
+        timeoutMs: 10000
+    - wait:
+        screen:
+            contains: "Ready"
+        timeoutMs: 5000
+    - snapshot: reply_done
+    - press: ctrl+c
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 5000
+outcomes:
+    - id: tuimark_startup
+      description: the Tuimark client starts, streams a reply to completion, and exits cleanly within budget
+      verify:
+        process:
+            exitCode: 0
+contractHash: sha256:7497aa54e2e9920d802148ef0ee40316af470664caebacf7a8994aa8d493b934

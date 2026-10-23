@@ -28,6 +28,7 @@ import {
 import type { Intent } from "#cli/tuimark/commands";
 import {
   type ClientOptions,
+  type FindHit,
   type Presentation,
   type SessionsCapability,
   TuimarkClient,
@@ -194,6 +195,28 @@ export function sessionCapability(
       const refusal = sessionRefusal(store, state);
       if (refusal) throw new Error(refusal);
       return { store, state };
+    },
+    async search(query) {
+      // Bounded by design: the newest 200 sessions, the first 20 that match.
+      const sessions = (await store.listSessions(workspaceRoot)).slice(0, 200);
+      const needle = query.toLowerCase();
+      const hits: FindHit[] = [];
+      for (const session of sessions) {
+        if (hits.length >= 20) break;
+        for (const message of session.messages) {
+          const at = message.content.toLowerCase().indexOf(needle);
+          if (at < 0) continue;
+          hits.push({
+            handle: session.publicId,
+            snippet: message.content
+              .slice(Math.max(0, at - 40), at + 120)
+              .replace(/\s+/g, " ")
+              .trim(),
+          });
+          break;
+        }
+      }
+      return hits;
     },
   };
 }

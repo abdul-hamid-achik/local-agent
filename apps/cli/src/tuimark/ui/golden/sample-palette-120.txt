@@ -12,7 +12,7 @@
 │    for (let attempt = 1; ; a│ ╚══════════════════════════════════════════════════════╝ │                             │
 │      try { return await fetc│ Mode: plan (read only)                        /mode plan │                             │
 │      catch (e) { if (attempt│ Mode: build (read, edit, command)            /mode build │                             │
-│    }                        │                                                          │                             │
+│    }                        │ Model: show current                               /model │                             │
 │  }                          │                                                          │                             │
 │                             │                                                          │                             │
 │ ╭─ Tool · edit ─────────────│                                                          │───────────────────────────╮ │

@@ -1,7 +1,8 @@
-=== grid 80x11 ===
+=== grid 80x12 ===
  Local Agent         qwen3-coder:30b  build          ctx 9.6k/32k  ████░░░░░░░░ 
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ › /mode plan reads only · build can edit                                     │
+│   /model show or switch the Ollama model                                     │
 │   /mouse toggle mouse reporting (fullscreen)                                 │
 │   /mcp show connected MCP servers and their tools                            │
 │ up/down choose · tab complete · enter completes or runs · esc close          │

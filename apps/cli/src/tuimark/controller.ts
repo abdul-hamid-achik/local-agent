@@ -17,8 +17,10 @@ import {
   type AgentEvent,
   type AgentOptions,
   type ApprovalRequest,
+  admitOllamaModel,
   type McpConnection,
   type Message,
+  type OllamaAdmission,
   type Provider,
   runAgent,
   type SessionContext,
@@ -29,6 +31,7 @@ import { tokensPerSecond } from "#cli/preview";
 import { terminalText } from "#cli/text";
 import {
   type Block,
+  cleanText,
   clip,
   IDLE_LIVE,
   IDLE_THINKING,
@@ -50,7 +53,11 @@ import {
   slashRows,
   type Theme,
 } from "#cli/tuimark/commands";
-import { exportFileName, transcriptMarkdown } from "#cli/tuimark/export";
+import {
+  exportFileName,
+  transcriptJson,
+  transcriptMarkdown,
+} from "#cli/tuimark/export";
 import {
   APPROVAL_STATUS,
   APPROVAL_TRUNCATED_SESSION_STATUS,
@@ -111,6 +118,18 @@ type RunAgent = (
 export interface SessionsCapability {
   list(): Promise<SessionSummary[]>;
   load(handle: string): Promise<SessionContext>;
+  /**
+   * `/find`: the workspace's saved sessions searched for `query`, one hit
+   * per session (its handle and the first matching snippet), capped by the
+   * capability itself. Absent when the process has no session store.
+   */
+  search?(query: string): Promise<FindHit[]>;
+}
+
+/** One `/find` result: the session it matched and a snippet around the match. */
+export interface FindHit {
+  handle: string;
+  snippet: string;
 }
 
 export interface ClientOptions {
@@ -143,6 +162,14 @@ export interface ClientOptions {
    * the path is taken, so an export never overwrites. Default node fs.
    */
   writeExport?: (path: string, text: string) => Promise<void>;
+  /**
+   * Validates a candidate provider's model against the Ollama inventory
+   * (`/model NAME`). Default the runtime's admission check; tests replace.
+   */
+  admitModel?: (
+    provider: Provider,
+    signal: AbortSignal,
+  ) => Promise<OllamaAdmission>;
   /** Process-level abort (SIGINT, SIGTERM). */
   signal: AbortSignal;
   /** Replaces the runtime's agent loop (tests). */
@@ -231,6 +258,8 @@ export class TuimarkClient {
   private intent: Intent;
   /** Session theme (`/theme`); written to the host's reserved `@theme` path. */
   private theme: Theme;
+  /** The provider the next turn runs on (`/model NAME` swaps it mid-session). */
+  private provider: Provider;
   /** Fullscreen mouse reporting (`/mouse`); default off. Inline never writes it. */
   private mouse = false;
   // the writer
@@ -319,6 +348,7 @@ export class TuimarkClient {
     this.stream = new LiveStream(undefined, { inline: this.inline });
     this.transcript = new Transcript(options.windowStep, options.windowSize);
     this.session = options.session;
+    this.provider = options.provider;
     this.theme = options.initialTheme ?? "auto";
     this.history = options.session?.state.messages.slice() ?? [];
     // A resumed session shows its saved messages, through the same mapping as a live turn.
@@ -334,9 +364,9 @@ export class TuimarkClient {
 
   /** The store the document starts with (the `data` of spawnHost). */
   initialStore(): Store {
-    const { provider, session, mcp = [] } = this.options;
+    const { session, mcp = [] } = this.options;
     return initialStore({
-      provider,
+      provider: this.provider,
       intent: this.intent,
       sessionId: session?.state.publicId,
       mcpServers: mcp.length,
@@ -592,10 +622,10 @@ export class TuimarkClient {
 
   /** `/status`: the effective config, exactly what this client holds. */
   private async openStatusPanel(): Promise<void> {
-    const { provider, mcp = [] } = this.options;
+    const { mcp = [] } = this.options;
     const db = this.session?.store.path;
     const text = statusLines({
-      provider,
+      provider: this.provider,
       workspace: this.options.workspace?.root ?? "",
       intent: this.intent,
       sessionId: this.session?.state.publicId,
@@ -800,8 +830,11 @@ export class TuimarkClient {
     ]);
   }
 
-  /** `/export`: the visible conversation to a timestamped markdown file. */
-  private async exportTranscript(): Promise<void> {
+  /**
+   * `/export [json]`: the conversation to a timestamped file — the
+   * rendered views as markdown (default), or the raw messages as JSON.
+   */
+  private async exportTranscript(format: "markdown" | "json"): Promise<void> {
     if (this.busy || this.proposal) {
       await this.write([{ path: "status", value: BUSY_STATUS }]);
       return;
@@ -816,13 +849,17 @@ export class TuimarkClient {
       this.options.writeExport ??
       ((path: string, text: string) =>
         writeFile(path, text, { flag: "wx", mode: 0o600 }).then(() => {}));
-    const text = transcriptMarkdown(views);
-    const base = exportFileName(new Date(this.now()));
-    const stem = base.slice(0, -".md".length);
+    const ext = format === "json" ? ".json" : ".md";
+    const text =
+      format === "json"
+        ? transcriptJson(this.history)
+        : transcriptMarkdown(views);
+    const base = exportFileName(new Date(this.now()), ext);
+    const stem = base.slice(0, -ext.length);
     try {
       // Never overwrite: the timestamped name first, then -2, -3, …
       for (let suffix = 1; suffix <= 100; suffix++) {
-        const name = suffix === 1 ? base : `${stem}-${suffix}.md`;
+        const name = suffix === 1 ? base : `${stem}-${suffix}${ext}`;
         try {
           await write(join(root, name), text);
           await this.write([
@@ -843,6 +880,92 @@ export class TuimarkClient {
         { path: "status", value: oneLine(`Export failed: ${message}`) },
       ]);
     }
+  }
+
+  /**
+   * `/model NAME`: the runtime's admission check proves the model exists
+   * at the endpoint (and carries no remote redirect) before the swap; only
+   * then does the provider the next turn runs on change, with the header.
+   */
+  private async switchModel(name: string): Promise<void> {
+    if (this.busy || this.proposal || this.queued !== undefined) {
+      await this.write([{ path: "status", value: BUSY_STATUS }]);
+      return;
+    }
+    await this.write([
+      { path: "status", value: `Switching model to ${name}…` },
+    ]);
+    const admit = this.options.admitModel ?? admitOllamaModel;
+    let admission: OllamaAdmission;
+    try {
+      admission = await admit(
+        { ...this.provider, model: name },
+        this.options.signal,
+      );
+    } catch (error) {
+      await this.write([
+        {
+          path: "status",
+          value: oneLine(
+            error instanceof Error ? error.message : "Model check failed",
+          ),
+        },
+      ]);
+      return;
+    }
+    if (admission.status !== "validated") {
+      await this.write([{ path: "status", value: oneLine(admission.message) }]);
+      return;
+    }
+    this.provider = { ...this.provider, model: admission.model };
+    await this.write([
+      { path: "status", value: `Model changed to ${admission.model}` },
+      { path: "header.model", value: clip(cleanText(admission.model), 40) },
+    ]);
+  }
+
+  /** `/find TEXT`: the workspace's saved sessions searched, hits in a panel. */
+  private async findSessions(query: string): Promise<void> {
+    if (this.busy || this.proposal) {
+      await this.write([{ path: "status", value: BUSY_STATUS }]);
+      return;
+    }
+    const search = this.options.sessions?.search;
+    if (!search) {
+      await this.write([
+        { path: "status", value: "Find needs --session-db PATH at startup" },
+      ]);
+      return;
+    }
+    let hits: FindHit[];
+    try {
+      hits = await search(query);
+    } catch (error) {
+      await this.write([
+        {
+          path: "status",
+          value: oneLine(
+            error instanceof Error
+              ? error.message
+              : "Unable to search sessions",
+          ),
+        },
+      ]);
+      return;
+    }
+    if (hits.length === 0) {
+      await this.write([
+        { path: "status", value: `No matches for "${cleanText(query)}"` },
+      ]);
+      return;
+    }
+    const text = hits.map((hit) => `${hit.handle} · ${hit.snippet}`).join("\n");
+    await this.openPanel(
+      "Find",
+      query,
+      text,
+      `${hits.length} session${hits.length === 1 ? "" : "s"} match "${cleanText(query)}"`,
+    );
   }
 
   private approvalFor(proposal: ApprovalRequest) {
@@ -1188,7 +1311,7 @@ export class TuimarkClient {
 
   /** The writes that paint the header ctx for `used` tokens. */
   private ctxWrites(used: number): Write[] {
-    const size = this.options.provider.context_size;
+    const size = this.provider.context_size;
     const pct = contextPct(used, size);
     const flags = ctxFlags(pct);
     return [
@@ -1532,6 +1655,7 @@ export class TuimarkClient {
         servers: mcp.length,
         tools: mcp.reduce((total, server) => total + server.tools.length, 0),
       },
+      model: this.provider.model,
       theme: this.theme,
       mouse: this.mouse,
       grants: this.grantLabels(),
@@ -1556,7 +1680,15 @@ export class TuimarkClient {
       return;
     }
     if (outcome.exportTranscript) {
-      await this.exportTranscript();
+      await this.exportTranscript(outcome.exportFormat ?? "markdown");
+      return;
+    }
+    if (outcome.model !== undefined) {
+      await this.switchModel(outcome.model);
+      return;
+    }
+    if (outcome.find !== undefined) {
+      await this.findSessions(outcome.find);
       return;
     }
     // Inline has no mouse, and its document never reads `mouse_on`: refuse
@@ -1832,7 +1964,7 @@ export class TuimarkClient {
   }
 
   private async loop(prompt: string, request: AbortController): Promise<void> {
-    const { provider, workspace, mcp, signal } = this.options;
+    const { workspace, mcp, signal } = this.options;
     // The session this turn checkpoints to (a switch is refused while
     // busy, so it cannot change under the turn).
     const session = this.session;
@@ -1846,7 +1978,7 @@ export class TuimarkClient {
       // A turn aborted before it started (a signal while its first write was
       // in flight) never calls the runtime, so it never takes the session lease.
       turnSignal.throwIfAborted();
-      for await (const event of this.run(provider, this.history, {
+      for await (const event of this.run(this.provider, this.history, {
         workspace,
         intent: this.intent,
         approve: this.approve,

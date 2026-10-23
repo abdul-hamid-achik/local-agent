@@ -217,6 +217,9 @@ const server = Bun.serve({
       return new Response("fixture failure: the model exploded", {
         status: 500,
       });
+    if (prompt.includes("perf stream"))
+      // Startup/streaming spec: same reply, ~50ms per chunk.
+      return stream([...REPLY.map((piece) => assistant(piece)), done], 50);
     if (prompt.includes("slow"))
       return stream([assistant("Working on it, this takes a while")], 5, true);
     return stream([...REPLY.map((piece) => assistant(piece)), done], 25);
