@@ -5,6 +5,8 @@
 local-agent is alpha software for macOS and Linux. It can inspect repositories,
 edit files with approval, run tools, connect MCP servers, resume local sessions,
 and execute reviewed durable goals. It is not an operating-system sandbox.
+The released builds ship a Go and Charm terminal UI; the next-generation
+client in active development renders with [Tuimark](https://tuimark.dev).
 
 ## Documentation
 

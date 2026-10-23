@@ -95,7 +95,9 @@ const ecosystemGroups = [
         <p class="la-lead">
           local-agent is an alpha terminal coding agent for Ollama. Inspect repositories, edit
           files, run commands, and call MCP tools in NORMAL; enforce read-only work in PLAN; or
-          send proactive work in AUTO. Start bounded durable goals explicitly with /goal.
+          send proactive work in AUTO. Start bounded durable goals explicitly with /goal. The
+          next-generation client renders its terminal interface with
+          <a href="https://tuimark.dev" target="_blank" rel="noopener noreferrer">Tuimark</a>.
         </p>
 
         <p class="la-hero-proof">Mutating effects require approval by default.</p>

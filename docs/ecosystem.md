@@ -23,9 +23,19 @@ The shared transcript vocabulary keeps those ownership boundaries legible:
 | TinyVault | Secret boundary | Security state, never evidence content |
 | Monitor | Ambient and requested observability | Operational support |
 | Bob | Repository contract and convergence | No evidence upgrade; clean, drift, conflict, blocked, or failed domain state |
-| VecLite | Vector storage | Internal capability, not an independent claim |
+| Tuimark | Terminal interface engine | Presentation only |
 
 Local Agent shows these as semantic tool receipts in one chronological transcript. A green transport receipt is never substituted for a domain result or verification outcome.
+
+## Terminal interface
+
+### [Tuimark](https://tuimark.dev)
+
+A terminal UI engine with a declarative document, diffed cell rendering, and a
+host protocol for driving it from any language runtime. Local Agent's
+next-generation interactive client is built on Tuimark; Tuimark owns
+presentation only and is never a source of evidence.
+
 
 ## Connected runtime
 

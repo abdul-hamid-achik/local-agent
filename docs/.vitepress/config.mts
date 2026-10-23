@@ -4,7 +4,7 @@ const siteURL = 'https://local-agent.dev'
 const repositoryURL = 'https://github.com/abdul-hamid-achik/local-agent'
 const socialImageURL = `${siteURL}/social-card.png`
 const defaultDescription =
-  'Run a local-first coding agent in your terminal with Ollama, a Charm TUI, host-governed tools, MCP integrations, sessions, and durable goals.'
+  'Run a local-first coding agent in your terminal with Ollama, a terminal UI built on Tuimark, host-governed tools, MCP integrations, sessions, and durable goals.'
 
 const structuredData = JSON.stringify({
   '@context': 'https://schema.org',
