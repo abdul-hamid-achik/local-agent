@@ -142,7 +142,9 @@ export interface Store {
   };
   /** True only before the first message: the welcome shows. Never true again. */
   empty: boolean;
-  /** Fullscreen mouse reporting (`<tui mouse="mouse_on">`). Default off. */
+  /** Fullscreen mouse reporting (`<tui mouse="mouse_on">`). On by default in
+   *  fullscreen — wheel scrolls the transcript under the pointer; inline has
+   *  no mouse (the terminal's own scrollback is the history). */
   mouse_on: boolean;
   messages: MessageView[];
   earlier: { n: number };
@@ -342,7 +344,7 @@ export function initialStore(init: StoreInit): Store {
       init.empty ??
       (init.transcript.messages.length === 0 &&
         init.transcript.earlier.n === 0),
-    mouse_on: false,
+    mouse_on: !init.inline,
     messages: init.transcript.messages,
     earlier: init.transcript.earlier,
     live: IDLE_LIVE,

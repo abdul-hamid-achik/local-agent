@@ -350,7 +350,7 @@ test("rows keep the add and delete marks across a wrapped line", () => {
   ]);
 });
 
-test("empty is derived from the transcript and the mouse starts off", () => {
+test("empty is derived from the transcript and the mouse starts on in fullscreen", () => {
   const fresh = initialStore({
     provider: { type: "ollama", model: "m", context_size: 8192 },
     intent: "build",
@@ -359,7 +359,17 @@ test("empty is derived from the transcript and the mouse starts off", () => {
     transcript: new Transcript().snapshot(),
   });
   expect(fresh.empty).toBe(true);
-  expect(fresh.mouse_on).toBe(false);
+  expect(fresh.mouse_on).toBe(true);
+  expect(
+    initialStore({
+      provider: { type: "ollama", model: "m", context_size: 8192 },
+      intent: "build",
+      mcpServers: 0,
+      workspace: "/home/me/project",
+      transcript: new Transcript().snapshot(),
+      inline: true,
+    }).mouse_on,
+  ).toBe(false);
   expect(fresh.header.workspace).toBe("project");
   const transcript = new Transcript();
   transcript.push({

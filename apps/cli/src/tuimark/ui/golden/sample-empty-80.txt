@@ -13,9 +13,9 @@
 │                                                                              │
 │                            ctrl+p opens commands                             │
 │                                                                              │
+│                     pgup/pgdn scroll · wheel scrolls too                     │
+│                                                                              │
 │                              esc cancels a turn                              │
-│                                                                              │
-│                                                                              │
 │                                                                              │
 │                                                                              │
 │                                                                              │

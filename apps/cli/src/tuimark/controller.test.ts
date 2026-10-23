@@ -1355,12 +1355,13 @@ test("an unknown theme is refused and @theme is never written", async () => {
 
 test("/mouse writes mouse_on; inline refuses without writing it", async () => {
   const { ui } = setup(reply("unused"));
-  expect(store(ui).mouse_on).toBe(false);
-  await ui.fire("send", "/mouse on");
+  // Fullscreen starts with the mouse on: the wheel scrolls the transcript.
   expect(store(ui).mouse_on).toBe(true);
-  expect(store(ui).status).toBe("Mouse changed to on");
   await ui.fire("send", "/mouse off");
   expect(store(ui).mouse_on).toBe(false);
+  expect(store(ui).status).toBe("Mouse changed to off");
+  await ui.fire("send", "/mouse on");
+  expect(store(ui).mouse_on).toBe(true);
 
   const inline = setup(reply("unused"), { presentation: "inline" });
   await inline.ui.fire("send", "/mouse on");

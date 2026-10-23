@@ -189,6 +189,7 @@
           <text class="la-welcome-line" wrap="wrap">{header.workspace}</text>
           <text class="la-welcome-line" wrap="wrap">/help lists keys</text>
           <text class="la-welcome-line" wrap="wrap">ctrl+p opens commands</text>
+          <text class="la-welcome-line" wrap="wrap">pgup/pgdn scroll · wheel scrolls too</text>
           <text class="la-welcome-line" wrap="wrap">esc cancels a turn</text>
         </use>
         <button id="earlier" class="la-earlier" if="earlier.n" on:click="load_earlier">▲ {earlier.n} earlier messages, ctrl+o or enter to load more</button>

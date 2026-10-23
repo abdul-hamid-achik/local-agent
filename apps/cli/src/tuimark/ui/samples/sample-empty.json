@@ -13,7 +13,7 @@
     "grants_on": false
   },
   "empty": true,
-  "mouse_on": false,
+  "mouse_on": true,
   "messages": [],
   "earlier": {
     "n": 0

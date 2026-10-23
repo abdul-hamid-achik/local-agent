@@ -1234,13 +1234,15 @@ const plays: Expect[] = [
     screen: ["Local Agent · qwen3-coder:30b", "ctrl+p opens commands"],
     scrollbackRows: 0,
   },
-  // The mouse is off until `mouse_on` says so (default off): clicks and the
-  // wheel are inert, then act. Cells are the 0-based dump grid: at 80x30 the
-  // approval's Deny/Allow row is y=23, Deny at x=58, Allow at x=68.
+  // The wheel scrolls the transcript while `mouse_on` is set (fullscreen
+  // default), and clicks are inert with it off. Cells are the 0-based dump
+  // grid: at 80x30 the approval's Deny/Allow row is y=23, Deny at x=58,
+  // Allow at x=68.
   {
     sample: "sample-approval",
     rows: 30,
-    input: "click:68,23",
+    input: "",
+    steps: [{ set: { path: "mouse_on", value: false } }, { click: [68, 23] }],
     actions: [],
   },
   {
@@ -1273,7 +1275,10 @@ const plays: Expect[] = [
     sample: "sample",
     rows: 12,
     input: "",
-    steps: Array.from({ length: 40 }, () => ({ wheel: "up", at: [10, 5] })),
+    steps: [
+      { set: { path: "mouse_on", value: false } },
+      ...Array.from({ length: 40 }, () => ({ wheel: "up", at: [10, 5] })),
+    ],
     actions: [],
     screen: ["Done. The helper now retries three times."],
     notScreen: ["Add a retry to the fetch helper"],
@@ -1387,10 +1392,7 @@ for (const check of plays) {
 // A palette row click selects that row (the accent bar moves), mouse on only.
 // Row y=11 is "Mode: plan" (preselected), y=12 "Mode: build" at 80x30.
 for (const on of [true, false]) {
-  const steps = [
-    ...(on ? [{ set: { path: "mouse_on", value: true } }] : []),
-    { click: [20, 12] },
-  ];
+  const steps = [{ set: { path: "mouse_on", value: on } }, { click: [20, 12] }];
   const file = join(scratch, "palette.ndjson");
   await writeFile(
     file,
