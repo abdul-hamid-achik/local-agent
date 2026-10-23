@@ -406,3 +406,211 @@ test("LOCAL_AGENT_DIAGNOSTICS=0 suppresses the diagnostics block", async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+type BatchCall = { name: string; arguments: Record<string, unknown> };
+type BatchBody = { messages: { role: string; tool_call_id?: string }[] };
+
+/** Loopback Ollama: the first /api/chat answers with the whole scripted
+ * tool-call batch, the second with "Done". */
+async function batchRun(
+  batch: BatchCall[],
+  serve?: (
+    request: Request,
+    path: string,
+  ) => Response | Promise<Response> | undefined,
+) {
+  const root = await mkdtemp(join(tmpdir(), "local-agent-parallel-"));
+  await writeFile(join(root, "a.txt"), "alpha\n");
+  await writeFile(join(root, "b.txt"), "beta\n");
+  const bodies: BatchBody[] = [];
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request): Promise<Response> {
+      const path = new URL(request.url).pathname;
+      const custom = await serve?.(request, path);
+      if (custom) return custom;
+      if (path === "/api/tags")
+        return Response.json({ models: [{ name: "fixture", size: 1000 }] });
+      if (path === "/api/show")
+        return Response.json({
+          capabilities: ["completion", "tools"],
+          model_info: { "fixture.context_length": 16384 },
+        });
+      const body = (await request.json()) as BatchBody;
+      bodies.push(body);
+      return new Response(
+        `${JSON.stringify(
+          bodies.length === 1
+            ? {
+                message: {
+                  role: "assistant",
+                  content: "",
+                  tool_calls: batch.map((call, index) => ({
+                    id: `call-${index}`,
+                    function: {
+                      ...call,
+                      arguments: {
+                        ...call.arguments,
+                        // fetch stubs pass workspace-relative URLs; the
+                        // fetch tool needs an absolute origin.
+                        ...(typeof call.arguments.url === "string" &&
+                        call.arguments.url.startsWith("/")
+                          ? { url: `${server.url.origin}${call.arguments.url}` }
+                          : {}),
+                      },
+                    },
+                  })),
+                },
+                done: true,
+              }
+            : { message: { role: "assistant", content: "Done" }, done: true },
+        )}\n`,
+      );
+    },
+  });
+  const events: AgentEvent[] = [];
+  try {
+    using workspace = await Workspace.create(root);
+    for await (const event of runAgent(
+      resolveProvider({ OLLAMA_HOST: server.url.origin }, "fixture"),
+      [{ role: "user", content: "go" }],
+      {
+        workspace,
+        signal: AbortSignal.timeout(15_000),
+        approve: async () => true,
+      },
+    ))
+      events.push(event);
+  } finally {
+    await server.stop(true);
+  }
+  return {
+    events,
+    bodies,
+    cleanup: () => rm(root, { recursive: true, force: true }),
+  };
+}
+
+test("a read-only batch runs in parallel: starts in call order, all results present, history in call order", async () => {
+  const run = await batchRun([
+    { name: "read", arguments: { path: "a.txt" } },
+    { name: "list", arguments: { path: "." } },
+  ]);
+  try {
+    const starts = run.events.filter((event) => event.type === "tool_start");
+    const results = run.events.filter((event) => event.type === "tool_result");
+    expect(starts.map((event) => event.name)).toEqual(["read", "list"]);
+    expect(results).toHaveLength(2);
+    expect(results.map((event) => event.status)).toEqual([
+      "succeeded",
+      "succeeded",
+    ]);
+    // tool_start cards all appear before any result streams back.
+    expect(
+      run.events.findLastIndex((event) => event.type === "tool_start"),
+    ).toBeLessThan(
+      run.events.findIndex((event) => event.type === "tool_result"),
+    );
+    // Each result is tagged with its own call's start id (completion order
+    // may vary, so compare as sets).
+    expect([...results.map((event) => event.id)].sort()).toEqual(
+      [...starts.map((event) => event.id)].sort(),
+    );
+    // The next provider request sees both tool messages in call order.
+    expect(
+      run.bodies[1]?.messages
+        .filter((message) => message.role === "tool")
+        .map((message) => message.tool_call_id),
+    ).toEqual(["call-0", "call-1"]);
+  } finally {
+    await run.cleanup();
+  }
+});
+
+test("a failing read-only call does not sink its parallel siblings", async () => {
+  const run = await batchRun([
+    { name: "read", arguments: { path: "missing.txt" } },
+    { name: "read", arguments: { path: "a.txt" } },
+  ]);
+  try {
+    const results = run.events.filter((event) => event.type === "tool_result");
+    expect(results).toHaveLength(2);
+    expect(results.map((event) => event.status).sort()).toEqual([
+      "failed",
+      "succeeded",
+    ]);
+    expect(
+      results.find((event) => event.status === "succeeded")?.output,
+    ).toContain("alpha");
+    expect(
+      results.find((event) => event.status === "failed")?.output,
+    ).toContain("Workspace entry cannot be opened");
+  } finally {
+    await run.cleanup();
+  }
+});
+
+test("a batch containing an effect call stays fully serial", async () => {
+  const run = await batchRun([
+    { name: "read", arguments: { path: "a.txt" } },
+    {
+      name: "write",
+      arguments: { path: "out.txt", content: "written\n" },
+    },
+  ]);
+  try {
+    const readResult = run.events.findIndex(
+      (event) => event.type === "tool_result" && event.name === "read",
+    );
+    const writeStart = run.events.findIndex(
+      (event) => event.type === "tool_start" && event.name === "write",
+    );
+    expect(readResult).toBeGreaterThanOrEqual(0);
+    expect(writeStart).toBeGreaterThan(readResult);
+    expect(
+      run.events.filter((event) => event.type === "tool_result"),
+    ).toHaveLength(2);
+  } finally {
+    await run.cleanup();
+  }
+});
+
+test("more than four parallel read-only calls are bounded at four in flight", async () => {
+  // Deterministic concurrency probe: every in-flight request holds until the
+  // fourth arrives (the gate then stays open), so overlap is observed
+  // without wall-clock timers; a serial implementation would deadlock into
+  // the run's abort timeout instead of reaching four in flight.
+  let inFlight = 0;
+  let maxInFlight = 0;
+  let arrivals = 0;
+  const fourth = Promise.withResolvers<void>();
+  const run = await batchRun(
+    Array.from({ length: 6 }, (_, index) => ({
+      name: "fetch",
+      arguments: { url: `/slow?i=${index}` },
+    })),
+    (_request, path) => {
+      if (path !== "/slow") return undefined;
+      return (async () => {
+        arrivals++;
+        if (arrivals >= 4) fourth.resolve();
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await fourth.promise;
+        inFlight--;
+        return new Response("ok", {
+          headers: { "Content-Type": "text/plain" },
+        });
+      })();
+    },
+  );
+  try {
+    const results = run.events.filter((event) => event.type === "tool_result");
+    expect(results).toHaveLength(6);
+    expect(results.every((event) => event.status === "succeeded")).toBe(true);
+    expect(maxInFlight).toBe(4);
+  } finally {
+    await run.cleanup();
+  }
+});

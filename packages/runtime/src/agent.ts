@@ -686,6 +686,8 @@ export type ApprovalRequest =
       name: string;
       argumentsJson: string;
     }>;
+/** Upper bound on concurrent read-only tool calls within one assistant batch. */
+const MAX_PARALLEL_TOOLS = 4;
 
 export type AgentEvent =
   | RunEvent
@@ -874,10 +876,19 @@ async function* agentTurn(
       yield { type: "turn_complete", messages: history };
       return;
     }
-    // read_image results ride the tool message itself (Ollama's Message type
-    // is role-agnostic), so they reach the next request with their tool call.
-    const pendingImages: string[] = [];
-    for (const [callIndex, call] of calls.entries()) {
+    // A batch of multiple read-only tool calls (and no effectful or MCP
+    // call) executes concurrently, bounded at MAX_PARALLEL_TOOLS; extras
+    // queue. If the batch contains ANY effect call, the whole batch stays
+    // serial — no partial parallelism — so approvals and workspace
+    // mutations never interleave. Parallelism never spans assistant turns.
+    const parallel =
+      calls.length > 1 &&
+      calls.every(
+        (call) =>
+          READ_ONLY_TOOLS.has(call.function.name) &&
+          !mcpTools.has(call.function.name),
+      );
+    const prepare = (callIndex: number, call: ToolCall): CallContext => {
       const name = call.function.name;
       const mcpConnection = mcpTools.get(name);
       const id = randomUUID();
@@ -909,31 +920,57 @@ async function* agentTurn(
       const record = (type: ExecutionEvent["type"]) => {
         if (saved && execution) saved.store.appendEvent({ ...execution, type });
       };
-      record("requested");
-      yield { type: "tool_requested", id, name };
-      let status:
+      return { name, mcpConnection, id, execution, record };
+    };
+    type CallContext = {
+      name: string;
+      mcpConnection: McpConnection | undefined;
+      id: string;
+      execution: Omit<ExecutionEvent, "type"> | undefined;
+      record: (type: ExecutionEvent["type"]) => void;
+    };
+    type CallOutcome = {
+      status:
         | "succeeded"
         | "denied"
         | "failed"
         | "outcome_unknown"
-        | "unverified" = "succeeded";
+        | "unverified";
+      output: string;
+      message: Message;
+      uncertain: boolean;
+    };
+    /** Runs one tool call; yields its tool_start (unless pre-emitted for a
+     * parallel batch) and returns the outcome for history + durability. */
+    const performCall = async function* (
+      ctx: CallContext,
+      call: ToolCall,
+      preStarted: boolean,
+    ): AsyncGenerator<AgentEvent, CallOutcome> {
+      const { name, mcpConnection, id, record } = ctx;
+      function* emitStart(): Generator<AgentEvent> {
+        if (!preStarted) {
+          record("started");
+          yield { type: "tool_start", id, name };
+        }
+      }
+      let status: CallOutcome["status"] = "succeeded";
       let effectAttempted = false;
       let uncertain = false;
       let output: string;
+      const images: string[] = [];
       try {
         signal.throwIfAborted();
         if (name === "read") {
           const args = ReadArgs.parse(call.function.arguments);
-          record("started");
-          yield { type: "tool_start", id, name };
+          yield* emitStart();
           signal.throwIfAborted();
           output = await workspace.read(args.path);
           if (output.length > 100_000)
             throw new Error("File exceeds tool output limit");
         } else if (name === "read_image") {
           const args = ReadArgs.parse(call.function.arguments);
-          record("started");
-          yield { type: "tool_start", id, name };
+          yield* emitStart();
           signal.throwIfAborted();
           // Admission exposes the model's capabilities; a text-only model
           // cannot use an image, so fail fast instead of shipping base64
@@ -943,18 +980,16 @@ async function* agentTurn(
               `read_image: model ${admission.model} has no vision capability; switch to a multimodal model such as llava, llama3.2-vision, qwen2.5vl or minicpm-v`,
             );
           const image = await readWorkspaceImage(workspace, args.path);
-          pendingImages.push(image.base64);
+          images.push(image.base64);
           output = `image ${image.width}x${image.height} ${image.format} from ${args.path} (attached)`;
         } else if (name === "list") {
           const args = ListArgs.parse(call.function.arguments);
-          record("started");
-          yield { type: "tool_start", id, name };
+          yield* emitStart();
           signal.throwIfAborted();
           output = await workspace.list(args.path);
         } else if (name === "search") {
           const args = SearchArgs.parse(call.function.arguments);
-          record("started");
-          yield { type: "tool_start", id, name };
+          yield* emitStart();
           signal.throwIfAborted();
           output = await workspace.search(args.pattern, {
             path: args.path,
@@ -965,8 +1000,7 @@ async function* agentTurn(
             throw new Error("Search output exceeds tool output limit");
         } else if (name === "fetch") {
           const args = FetchArgs.parse(call.function.arguments);
-          record("started");
-          yield { type: "tool_start", id, name };
+          yield* emitStart();
           signal.throwIfAborted();
           const target = new URL(args.url);
           if (target.protocol !== "http:" && target.protocol !== "https:")
@@ -1011,8 +1045,7 @@ async function* agentTurn(
               : headerOf(body) + body;
         } else if (name === "web_search") {
           const args = WebSearchArgs.parse(call.function.arguments);
-          record("started");
-          yield { type: "tool_start", id, name };
+          yield* emitStart();
           signal.throwIfAborted();
           const searxngBase = process.env.LOCAL_AGENT_SEARXNG_URL?.replace(
             /\/+$/,
@@ -1044,8 +1077,7 @@ async function* agentTurn(
             throw new Error("web_search output exceeds tool output limit");
         } else if (name === "todo_write") {
           const args = TodoWriteArgs.parse(call.function.arguments);
-          record("started");
-          yield { type: "tool_start", id, name };
+          yield* emitStart();
           signal.throwIfAborted();
           const markers = { pending: "[ ]", in_progress: "[~]", done: "[x]" };
           const counts = { pending: 0, in_progress: 0, done: 0 };
@@ -1076,8 +1108,7 @@ async function* agentTurn(
               output = "Write denied by host";
             } else {
               record("approved");
-              record("started");
-              yield { type: "tool_start", id, name };
+              yield* emitStart();
               signal.throwIfAborted();
               effectAttempted = true;
               await workspace.applyWrite(proposal);
@@ -1108,8 +1139,7 @@ async function* agentTurn(
               output = "Edit denied by host";
             } else {
               record("approved");
-              record("started");
-              yield { type: "tool_start", id, name };
+              yield* emitStart();
               signal.throwIfAborted();
               effectAttempted = true;
               await workspace.applyEdit(proposal);
@@ -1140,8 +1170,7 @@ async function* agentTurn(
               output = "Command denied by host";
             } else {
               record("approved");
-              record("started");
-              yield { type: "tool_start", id, name };
+              yield* emitStart();
               signal.throwIfAborted();
               effectAttempted = true;
               const result = await executeApprovedCommand(proposal, signal);
@@ -1180,8 +1209,7 @@ async function* agentTurn(
               output = "MCP call denied by host";
             } else {
               record("approved");
-              record("started");
-              yield { type: "tool_start", id, name };
+              yield* emitStart();
               signal.throwIfAborted();
               effectAttempted = true;
               const result = await mcpConnection.callTool(
@@ -1208,43 +1236,155 @@ async function* agentTurn(
               : "Tool failed";
       }
       if (uncertain) status = "outcome_unknown";
-      const result = { status, output };
       const message: Message = {
         role: "tool",
         tool_name: name,
         tool_call_id: call.id,
-        content: JSON.stringify(result),
+        content: JSON.stringify({ status, output }),
       };
-      if (pendingImages.length) message.images = pendingImages.splice(0);
-      history.push(message);
-      if (saved && execution) {
+      if (images.length) message.images = images.splice(0);
+      return { status, output, message, uncertain };
+    };
+    const commit = (ctx: CallContext, oc: CallOutcome) => {
+      history.push(oc.message);
+      if (saved && ctx.execution) {
         saved.state = saved.store.commitOutcome(
           {
-            ...execution,
-            type: uncertain
+            ...ctx.execution,
+            type: oc.uncertain
               ? "outcome_unknown"
-              : status === "succeeded" || status === "unverified"
+              : oc.status === "succeeded" || oc.status === "unverified"
                 ? "completed"
-                : status === "denied"
+                : oc.status === "denied"
                   ? "denied"
                   : signal.aborted
                     ? "cancelled"
                     : "failed",
             resultSha256: createHash("sha256")
-              .update(message.content)
+              .update(oc.message.content)
               .digest("hex"),
-            resultReceipt: message.content,
+            resultReceipt: oc.message.content,
           },
           saved.state.revision,
           history,
         );
       }
-      yield { type: "message", message };
-      yield { type: "tool_result", id, name, ...result };
-      if (uncertain)
-        throw new Error(
-          "Tool outcome is uncertain; review the workspace before continuing",
-        );
+    };
+    function* emitOutcome(
+      ctx: CallContext,
+      oc: CallOutcome,
+    ): Generator<AgentEvent> {
+      yield { type: "message", message: oc.message };
+      yield {
+        type: "tool_result",
+        id: ctx.id,
+        name: ctx.name,
+        status: oc.status,
+        output: oc.output,
+      };
+    }
+    if (!parallel) {
+      for (const [callIndex, call] of calls.entries()) {
+        const ctx = prepare(callIndex, call);
+        ctx.record("requested");
+        yield { type: "tool_requested", id: ctx.id, name: ctx.name };
+        const oc = yield* performCall(ctx, call, false);
+        commit(ctx, oc);
+        yield* emitOutcome(ctx, oc);
+        if (oc.uncertain)
+          throw new Error(
+            "Tool outcome is uncertain; review the workspace before continuing",
+          );
+      }
+    } else {
+      // All tool_start events are emitted in call order BEFORE execution so
+      // the client renders tool cards in a deterministic order; tool_result
+      // events then stream as calls complete, each tagged with its call id.
+      const contexts = calls.map((call, index) => prepare(index, call));
+      for (const ctx of contexts) {
+        ctx.record("requested");
+        yield { type: "tool_requested", id: ctx.id, name: ctx.name };
+        ctx.record("started");
+        yield { type: "tool_start", id: ctx.id, name: ctx.name };
+      }
+      const outcomes: CallOutcome[] = new Array(contexts.length);
+      const completedIndices: number[] = [];
+      let remaining = contexts.length;
+      let wake: (() => void) | undefined;
+      let active = 0;
+      const waiting: (() => void)[] = [];
+      const acquire = () => {
+        if (active < MAX_PARALLEL_TOOLS) {
+          active++;
+          return;
+        }
+        const gate = Promise.withResolvers<void>();
+        waiting.push(gate.resolve);
+        return gate.promise;
+      };
+      const release = () => {
+        active--;
+        waiting.shift()?.();
+      };
+      const drain = async <R>(
+        gen: AsyncGenerator<AgentEvent, R>,
+      ): Promise<R> => {
+        for (;;) {
+          const next = await gen.next();
+          if (next.done) return next.value;
+        }
+      };
+      const tasks = contexts.map(async (ctx, index) => {
+        await acquire();
+        try {
+          outcomes[index] = await drain(performCall(ctx, calls[index]!, true));
+        } catch (error) {
+          // Error isolation: one failing call never sinks its siblings.
+          const output = error instanceof Error ? error.message : "Tool failed";
+          outcomes[index] = {
+            status: "failed",
+            output,
+            message: {
+              role: "tool",
+              tool_name: ctx.name,
+              tool_call_id: calls[index]!.id,
+              content: JSON.stringify({ status: "failed", output }),
+            },
+            uncertain: false,
+          };
+        } finally {
+          release();
+        }
+        completedIndices.push(index);
+        remaining--;
+        wake?.();
+      });
+      try {
+        while (remaining > 0 || completedIndices.length) {
+          while (!completedIndices.length && remaining > 0) {
+            const gate = Promise.withResolvers<void>();
+            wake = gate.resolve;
+            await gate.promise;
+          }
+          for (const index of completedIndices.splice(0)) {
+            const oc = outcomes[index]!;
+            yield* emitOutcome(contexts[index]!, oc);
+          }
+        }
+      } finally {
+        wake = undefined;
+        await Promise.all(tasks);
+      }
+      // Abort leaves partial results above; durable state lands in call
+      // order so history and the revision CAS stay deterministic.
+      for (const [index, ctx] of contexts.entries()) {
+        const oc = outcomes[index]!;
+        commit(ctx, oc);
+        if (oc.uncertain)
+          throw new Error(
+            "Tool outcome is uncertain; review the workspace before continuing",
+          );
+      }
     }
     signal.throwIfAborted();
   }
