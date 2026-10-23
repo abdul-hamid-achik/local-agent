@@ -42,7 +42,7 @@ first. Switch intent with `--intent`, `/mode plan|build`, or `shift+tab`. See
 
 In build, every mutating proposal — `write`, `edit`, `run_command`, and every
 MCP tool call — goes through approval one proposal at a time. There is no
-setting that approves everything. Reads (`read`, `list`, `search`, `fetch`, `web_search`) do
+setting that approves everything. Reads (`read`, `read_image`, `list`, `search`, `fetch`, `web_search`) do
 not prompt.
 
 ### Interactive approval

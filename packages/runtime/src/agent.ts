@@ -329,12 +329,171 @@ function decodeEntities(text: string): string {
     );
 }
 
+const IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+const PNG_SIGNATURE = Buffer.from([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+]);
+
+type ImageKind = {
+  format: string;
+  /** Content is checked by magic bytes; a renamed text file never passes. */
+  matches: (bytes: Buffer) => boolean;
+  dimensions: (bytes: Buffer) => { width: number; height: number };
+};
+
+const IMAGE_KINDS: readonly ImageKind[] = [
+  {
+    format: "PNG",
+    matches: (bytes) =>
+      bytes.length >= 24 &&
+      bytes.subarray(0, 8).equals(PNG_SIGNATURE) &&
+      bytes.subarray(12, 16).toString("latin1") === "IHDR",
+    dimensions: (bytes) => ({
+      width: bytes.readUInt32BE(16),
+      height: bytes.readUInt32BE(20),
+    }),
+  },
+  {
+    format: "JPEG",
+    matches: (bytes) =>
+      bytes.length >= 4 &&
+      bytes[0] === 0xff &&
+      bytes[1] === 0xd8 &&
+      bytes[2] === 0xff,
+    dimensions: jpegDimensions,
+  },
+  {
+    format: "GIF",
+    matches: (bytes) => {
+      const header = bytes.subarray(0, 6).toString("latin1");
+      return bytes.length >= 10 && (header === "GIF87a" || header === "GIF89a");
+    },
+    dimensions: (bytes) => ({
+      width: bytes.readUInt16LE(6),
+      height: bytes.readUInt16LE(8),
+    }),
+  },
+  {
+    format: "WebP",
+    matches: (bytes) =>
+      bytes.length >= 30 &&
+      bytes.subarray(0, 4).toString("latin1") === "RIFF" &&
+      bytes.subarray(8, 12).toString("latin1") === "WEBP",
+    dimensions: webpDimensions,
+  },
+];
+
+/** Walks the JPEG markers to the first frame header (SOFn), before the scan data. */
+function jpegDimensions(bytes: Buffer): { width: number; height: number } {
+  let offset = 2;
+  while (offset + 9 < bytes.length) {
+    if (bytes[offset] !== 0xff)
+      throw new Error("read_image: malformed JPEG marker structure");
+    const marker = bytes[offset + 1] ?? 0;
+    // Standalone markers carry no length field.
+    if (
+      marker === 0xd8 ||
+      marker === 0x01 ||
+      (marker >= 0xd0 && marker <= 0xd7)
+    ) {
+      offset += 2;
+      continue;
+    }
+    if (marker === 0xd9 || marker === 0xda) break; // end of image or start of scan: no frame header was found
+    const length = bytes.readUInt16BE(offset + 2);
+    const frame =
+      marker >= 0xc0 &&
+      marker <= 0xcf &&
+      marker !== 0xc4 &&
+      marker !== 0xc8 &&
+      marker !== 0xcc;
+    if (frame)
+      return {
+        height: bytes.readUInt16BE(offset + 5),
+        width: bytes.readUInt16BE(offset + 7),
+      };
+    offset += 2 + length;
+  }
+  throw new Error("read_image: JPEG has no frame header before its image data");
+}
+
+/** Reads the canvas size from whichever WebP chunk carries it. */
+function webpDimensions(bytes: Buffer): { width: number; height: number } {
+  const chunk = bytes.subarray(12, 16).toString("latin1");
+  if (chunk === "VP8X")
+    return {
+      width:
+        1 +
+        ((bytes[24] ?? 0) | ((bytes[25] ?? 0) << 8) | ((bytes[26] ?? 0) << 16)),
+      height:
+        1 +
+        ((bytes[27] ?? 0) | ((bytes[28] ?? 0) << 8) | ((bytes[29] ?? 0) << 16)),
+    };
+  if (chunk === "VP8L") {
+    const bits = bytes.readUInt32LE(21);
+    return {
+      width: (bits & 0x3fff) + 1,
+      height: ((bits >> 14) & 0x3fff) + 1,
+    };
+  }
+  if (chunk === "VP8 ") {
+    return {
+      width: bytes.readUInt16LE(26) & 0x3fff,
+      height: bytes.readUInt16LE(28) & 0x3fff,
+    };
+  }
+  throw new Error(`read_image: unsupported WebP chunk ${chunk || "(none)"}`);
+}
+
+/**
+ * Reads one workspace image through the same pinned path authority as `read`,
+ * checks its content (magic bytes, not the extension) and returns Ollama's
+ * vision encoding: base64 with no data URI prefix.
+ */
+async function readWorkspaceImage(
+  workspace: Workspace,
+  path: string,
+): Promise<{ base64: string; width: number; height: number; format: string }> {
+  const bytes = await workspace.readBytes(path, IMAGE_MAX_BYTES);
+  const kind = IMAGE_KINDS.find((entry) => entry.matches(bytes));
+  if (!kind)
+    throw new Error(
+      `read_image: ${path} is not a PNG, JPEG, WebP or GIF image (the file content is checked, not its extension)`,
+    );
+  const { width, height } = kind.dimensions(bytes);
+  if (
+    !Number.isSafeInteger(width) ||
+    !Number.isSafeInteger(height) ||
+    !width ||
+    !height
+  )
+    throw new Error(`read_image: ${path} has no usable dimensions`);
+  return {
+    base64: bytes.toString("base64"),
+    width,
+    height,
+    format: kind.format,
+  };
+}
+
 const tools: Tool[] = [
   {
     type: "function",
     function: {
       name: "read",
       description: `Read an existing UTF-8 text file. The path is ${PATH_HELP}.`,
+      parameters: {
+        type: "object",
+        properties: { path: pathProperty() },
+        required: ["path"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "read_image",
+      description: `Read one image file so you can see it; the image is attached to this tool's result. PNG, JPEG, WebP and GIF, at most 5 MiB, checked by content not extension. Requires a vision model. The path is ${PATH_HELP}.`,
       parameters: {
         type: "object",
         properties: { path: pathProperty() },
@@ -510,6 +669,7 @@ const tools: Tool[] = [
 /** Tools with no external effects; plan intent offers these and nothing else. */
 const READ_ONLY_TOOLS = new Set([
   "read",
+  "read_image",
   "list",
   "search",
   "fetch",
@@ -714,6 +874,9 @@ async function* agentTurn(
       yield { type: "turn_complete", messages: history };
       return;
     }
+    // read_image results ride the tool message itself (Ollama's Message type
+    // is role-agnostic), so they reach the next request with their tool call.
+    const pendingImages: string[] = [];
     for (const [callIndex, call] of calls.entries()) {
       const name = call.function.name;
       const mcpConnection = mcpTools.get(name);
@@ -767,6 +930,21 @@ async function* agentTurn(
           output = await workspace.read(args.path);
           if (output.length > 100_000)
             throw new Error("File exceeds tool output limit");
+        } else if (name === "read_image") {
+          const args = ReadArgs.parse(call.function.arguments);
+          record("started");
+          yield { type: "tool_start", id, name };
+          signal.throwIfAborted();
+          // Admission exposes the model's capabilities; a text-only model
+          // cannot use an image, so fail fast instead of shipping base64
+          // it would ignore.
+          if (!admission.capabilities.includes("vision"))
+            throw new Error(
+              `read_image: model ${admission.model} has no vision capability; switch to a multimodal model such as llava, llama3.2-vision, qwen2.5vl or minicpm-v`,
+            );
+          const image = await readWorkspaceImage(workspace, args.path);
+          pendingImages.push(image.base64);
+          output = `image ${image.width}x${image.height} ${image.format} from ${args.path} (attached)`;
         } else if (name === "list") {
           const args = ListArgs.parse(call.function.arguments);
           record("started");
@@ -1037,6 +1215,7 @@ async function* agentTurn(
         tool_call_id: call.id,
         content: JSON.stringify(result),
       };
+      if (pendingImages.length) message.images = pendingImages.splice(0);
       history.push(message);
       if (saved && execution) {
         saved.state = saved.store.commitOutcome(

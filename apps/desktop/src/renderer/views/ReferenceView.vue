@@ -57,6 +57,7 @@
         <table class="data">
           <tbody>
             <tr><td class="mono">read</td><td>Bounded UTF-8 read, plan-safe</td></tr>
+            <tr><td class="mono">read_image</td><td>Attach a workspace image for vision models, plan-safe</td></tr>
             <tr><td class="mono">edit</td><td>One exact occurrence, approval-gated, diffed</td></tr>
             <tr><td class="mono">run_command</td><td>argv vector, no shell, timeout, approval-gated</td></tr>
             <tr><td class="mono">fetch</td><td>GET a URL as readable text, plan-safe</td></tr>

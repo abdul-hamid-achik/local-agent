@@ -52,6 +52,8 @@ export const MessageSchema = z.object({
   role: z.enum(["system", "user", "assistant", "tool"]),
   content: z.string().max(1_000_000),
   thinking: z.string().max(1_000_000).optional(),
+  /** Base64 images (no data URI prefix), Ollama's vision convention; they ride the message that produced them. */
+  images: z.array(z.string().max(7_000_000)).max(4).optional(),
   tool_calls: z.array(ToolCallSchema).max(32).optional(),
   tool_name: z.string().max(128).optional(),
   tool_call_id: z.string().min(1).max(1024).optional(),

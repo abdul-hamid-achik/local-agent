@@ -180,6 +180,7 @@ of the workspace stay forbidden.
 | Tool | Approval | What it does |
 | --- | --- | --- |
 | `read` | none | Read a UTF-8 file |
+| `read_image` | none | Read one image file (PNG, JPEG, WebP, GIF; 5 MiB cap, magic bytes checked) and attach it to the tool result for vision models |
 | `list` | none | List a directory (directories end with `/`; `.git` and `node_modules` skipped; 500 entries) |
 | `search` | none | Literal or regular-expression search over workspace text files as `path:line: text` (100 matches; binaries, `.git`, `node_modules` and secrets skipped) |
 | `fetch` | none | GET one http(s) URL as readable text (HTML → plain text, 512 KiB cap, redirects followed up to 5 hops) |

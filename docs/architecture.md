@@ -10,7 +10,7 @@ Local Agent is a Bun monorepo. The conversation surface, the inference runtime, 
 ```text
 apps/cli (composition) -----> packages/runtime (inference + host authority)
         |                              |
-        +-- tuimark client             +-- tools: read, list, search, fetch, web_search, edit, write, run_command
+        +-- tuimark client             +-- tools: read, read_image, list, search, fetch, web_search, edit, write, run_command
         |   (declarative document)     +-- MCP client + approval boundary
         |
         +-- vue client (packages/vue-tui)
@@ -38,7 +38,7 @@ Fullscreen, inline, and headless are distinct presentations over one runtime:
 
 ## Tools and approval
 
-Tools live in `packages/runtime`, not in any client. Reads (`read`, `list`, `search`, `fetch`, `web_search`) run without approval in build mode. `edit`, `write`, `run_command`, and MCP calls are effects: each proposal is approved per effect through the host approve callback. Plan intent offers read-only tools only and hard-denies effects regardless of the approver.
+Tools live in `packages/runtime`, not in any client. Reads (`read`, `read_image`, `list`, `search`, `fetch`, `web_search`) run without approval in build mode. `edit`, `write`, `run_command`, and MCP calls are effects: each proposal is approved per effect through the host approve callback. Plan intent offers read-only tools only and hard-denies effects regardless of the approver.
 
 ## MCP boundary
 

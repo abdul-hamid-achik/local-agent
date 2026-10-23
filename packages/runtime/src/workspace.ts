@@ -147,6 +147,14 @@ export class Workspace implements Disposable {
     }
   }
 
+  /** The raw bytes of a file, through the same pinned path authority as `read`. */
+  async readBytes(path: string, maxBytes: number): Promise<Buffer> {
+    return this.at(
+      path,
+      (parent, name) => rawSnapshot(parent, name, maxBytes).bytes,
+    );
+  }
+
   async prepareEdit(
     path: string,
     oldText: string,
@@ -690,11 +698,14 @@ function parentIdentity(fd: number): string {
   return `${stat.dev}:${stat.ino}`;
 }
 
-function snapshot(
+type RawSnapshot = { bytes: Buffer; mode: number; identity: string };
+
+/** The raw bytes of a pinned regular file, with race and link checks enforced. */
+function rawSnapshot(
   parent: number,
   name: string,
-  maxBytes = MAX_FILE_BYTES,
-): Snapshot {
+  maxBytes: number,
+): RawSnapshot {
   const fd = openAt(parent, name, constants.O_RDONLY);
   try {
     const before = fstatSync(fd, { bigint: true });
@@ -704,7 +715,7 @@ function snapshot(
       throw new Error("Hard-linked files are not allowed");
     if (before.size > BigInt(maxBytes))
       throw new Error("File exceeds size limit");
-    const buffer = Buffer.allocUnsafe(Number(before.size) + 1);
+    const buffer = Buffer.allocUnsafe(Number(before.size));
     let offset = 0;
     while (offset < buffer.length) {
       const count = readSync(
@@ -724,23 +735,30 @@ function snapshot(
       before.ctimeNs !== after.ctimeNs
     )
       throw new Error("File changed during read");
-    let text: string;
-    try {
-      text = new TextDecoder("utf-8", { fatal: true }).decode(
-        buffer.subarray(0, offset),
-      );
-    } catch {
-      throw new Error("File is not valid UTF-8");
-    }
-    if (text.includes("\0")) throw new Error("Binary files are not supported");
     return {
-      text,
+      bytes: buffer.subarray(0, offset),
       mode: Number(before.mode & 0o777n),
       identity: `${before.dev}:${before.ino}:${before.size}:${before.mtimeNs}:${before.ctimeNs}`,
     };
   } finally {
     closeSync(fd);
   }
+}
+
+function snapshot(
+  parent: number,
+  name: string,
+  maxBytes = MAX_FILE_BYTES,
+): Snapshot {
+  const raw = rawSnapshot(parent, name, maxBytes);
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(raw.bytes);
+  } catch {
+    throw new Error("File is not valid UTF-8");
+  }
+  if (text.includes("\0")) throw new Error("Binary files are not supported");
+  return { text, mode: raw.mode, identity: raw.identity };
 }
 
 const EXCLUDED_NAMES = new Set([
