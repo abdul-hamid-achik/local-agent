@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import {
   type CallToolResult,
   Client,
@@ -9,6 +10,7 @@ import {
   StdioClientTransport,
 } from "@modelcontextprotocol/client/stdio";
 import { z } from "zod";
+import { userConfigDir } from "#runtime/paths";
 
 const MAX_TOOLS = 128;
 const MAX_TEXT = 16_384;
@@ -276,3 +278,69 @@ export async function connectMcp(
 }
 
 export type McpConnection = Awaited<ReturnType<typeof connectMcp>>;
+
+/**
+ * The user's own MCP servers, loaded when no --mcp-config is given. It is
+ * per user, never per workspace: a cloned repository cannot add a server.
+ */
+export function defaultMcpConfigPath(
+  env: Record<string, string | undefined> = process.env,
+): string {
+  return join(userConfigDir(env), "mcp.json");
+}
+
+/**
+ * An MCP config file: a JSON array of at most 16 servers with distinct
+ * names, at most 1 MB. Throws on anything else.
+ */
+export async function readMcpConfig(path: string): Promise<McpServerConfig[]> {
+  const file = Bun.file(path);
+  if (file.size > 1_000_000) throw new Error("MCP config exceeds 1 MB");
+  const configs = McpServerConfigSchema.array()
+    .max(16)
+    .parse(await file.json());
+  if (new Set(configs.map((config) => config.name)).size !== configs.length)
+    throw new Error("Duplicate MCP server names");
+  return configs;
+}
+
+export type McpStartup = {
+  /** The servers that connected, in config order. */
+  connected: { name: string; connection: McpConnection }[];
+  /** The servers that did not, with why (one line, bounded). */
+  failed: { name: string; error: string }[];
+};
+
+/**
+ * Connects every server at once: one slow or broken server neither delays
+ * nor sinks the others. An abort closes whatever did connect and throws.
+ */
+export async function connectMcpServers(
+  configs: readonly McpServerConfig[],
+  signal?: AbortSignal,
+): Promise<McpStartup> {
+  const settled = await Promise.allSettled(
+    configs.map((config) => connectMcp(config, signal)),
+  );
+  const startup: McpStartup = { connected: [], failed: [] };
+  settled.forEach((result, index) => {
+    const name = configs[index]?.name ?? `server ${index + 1}`;
+    if (result.status === "fulfilled")
+      startup.connected.push({ name, connection: result.value });
+    else {
+      const reason = result.reason;
+      const text = reason instanceof Error ? reason.message : String(reason);
+      startup.failed.push({
+        name,
+        error: text.replace(/\s+/g, " ").trim().slice(0, 200) || "failed",
+      });
+    }
+  });
+  if (signal?.aborted) {
+    await Promise.allSettled(
+      startup.connected.map(({ connection }) => connection.close()),
+    );
+    throw signal.reason;
+  }
+  return startup;
+}

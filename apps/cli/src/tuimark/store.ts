@@ -34,8 +34,23 @@ export const IDLE_STATUS = "Ready · /help for keys";
 
 /** The idle status line, prefixed with the mode so the intent is always
  * visible; the MCP count stays for the whole session. */
-export function idleStatus(mcpServers: number, intent?: Intent): string {
-  const base = mcpServers ? `${IDLE_STATUS} · MCP ${mcpServers}` : IDLE_STATUS;
+/** MCP servers that are still connecting, or that failed to (count only). */
+export interface McpStartupState {
+  connecting?: boolean;
+  failed?: number;
+}
+
+export function idleStatus(
+  mcpServers: number,
+  intent?: Intent,
+  mcp: McpStartupState = {},
+): string {
+  const failed = mcp.failed ?? 0;
+  const base = mcp.connecting
+    ? `${IDLE_STATUS} · MCP connecting…`
+    : mcpServers || failed
+      ? `${IDLE_STATUS} · MCP ${mcpServers}${failed ? ` · ${failed} failed (/mcp)` : ""}`
+      : IDLE_STATUS;
   return intent ? `${intent} · ${base}` : base;
 }
 export const PLACEHOLDER = "Message the model";
@@ -50,6 +65,8 @@ export const APPROVAL_TRUNCATED_STATUS =
 export const BUSY_STATUS_LINE = "Generating…";
 /** Busy, but no text/thinking/tool event has arrived yet this turn. */
 export const WAITING_STATUS = "Waiting for the model…";
+/** A turn sent while the MCP servers still connect waits for them. */
+export const MCP_WAIT_STATUS = "Connecting MCP servers…";
 /** A `y` swallowed by the arm delay says so instead of going silent. */
 export const APPROVAL_UNARMED_STATUS = "Approval not armed yet — press y again";
 /** An `a` swallowed by the arm delay, same rule as `y`. */
@@ -322,6 +339,8 @@ export interface StoreInit {
   /** Public session handle, or undefined for a temporary session. */
   sessionId?: string;
   mcpServers: number;
+  /** Servers are still connecting: the status says so until they settle. */
+  mcpConnecting?: boolean;
   transcript: TranscriptSnapshot;
   /** Workspace root (or basename); only its basename is shown. */
   workspace?: string;
@@ -374,7 +393,9 @@ export function initialStore(init: StoreInit): Store {
     draft: "",
     placeholder: PLACEHOLDER,
     busy: false,
-    status: idleStatus(init.mcpServers, init.intent),
+    status: idleStatus(init.mcpServers, init.intent, {
+      connecting: init.mcpConnecting,
+    }),
     commit_buf: EMPTY_COMMIT_VIEW,
     commit_blocks: [],
   };
@@ -927,13 +948,27 @@ export interface McpServerFacts {
  * names. Names only — never a result or structured content (those stay
  * inside the runtime's parser boundary).
  */
-export function mcpLines(servers: readonly McpServerFacts[]): string[] {
-  if (servers.length === 0)
+export function mcpLines(
+  servers: readonly McpServerFacts[],
+  startup: {
+    connecting?: boolean;
+    failed?: readonly { name: string; error: string }[];
+  } = {},
+): string[] {
+  const failed = startup.failed ?? [];
+  if (servers.length === 0 && failed.length === 0 && !startup.connecting)
     return [
       "No MCP servers configured",
       "Use --mcp-config to connect trusted servers",
     ];
-  const lines: string[] = [];
+  const lines: string[] = startup.connecting
+    ? ["Connecting to MCP servers…"]
+    : [];
+  for (const server of failed)
+    lines.push(
+      cleanText(`${server.name} · unavailable`),
+      `  ${cleanText(server.error)}`,
+    );
   for (const server of servers) {
     lines.push(
       cleanText(

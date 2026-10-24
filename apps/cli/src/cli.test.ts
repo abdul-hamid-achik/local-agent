@@ -193,7 +193,7 @@ test("--ui tuimark leaves session inspection and --mcp-status on their own paths
   }
   const status = await runCli("--ui", "tuimark", "--mcp-status");
   expect(status.code).toBe(1);
-  expect(status.stderr).toContain("--mcp-status requires --mcp-config PATH");
+  expect(status.stderr).toContain("--mcp-status needs --mcp-config PATH or ");
 });
 
 test("the default client is not refused for a mode: only an explicit --ui tuimark is", async () => {

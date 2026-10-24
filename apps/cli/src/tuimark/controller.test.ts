@@ -978,6 +978,78 @@ test("tool receipts and MCP servers feed /mcp", async () => {
   ]);
 });
 
+test("servers still connecting: the status says so, a turn waits, failures reach /mcp", async () => {
+  const mcp: McpConnection[] = [];
+  const mcpNames: string[] = [];
+  let settle: (failed: { name: string; error: string }[]) => void = () => {};
+  const mcpReady = new Promise<{ name: string; error: string }[]>((resolve) => {
+    settle = resolve;
+  });
+  const offered: number[] = [];
+  const { ui, client } = setup(
+    async function* (input) {
+      offered.push(input.options.mcp?.length ?? 0);
+      yield* reply("done")(input);
+    },
+    { mcp, mcpNames, mcpReady },
+  );
+  expect(store(ui).status).toBe(
+    "build · Ready · /help for keys · MCP connecting…",
+  );
+  await ui.fire("send", "/mcp");
+  expect(store(ui).status).toBe("MCP servers: connecting…");
+  expect(store(ui).panel.lines.map((line) => line.t)).toEqual([
+    "Connecting to MCP servers…",
+  ]);
+  await ui.fire("panel_close");
+  expect(store(ui).status).toBe(
+    "build · Ready · /help for keys · MCP connecting…",
+  );
+  // A send waits for the servers: the model is offered their tools.
+  await ui.fire("send", "hello");
+  await Bun.sleep(20);
+  expect(offered).toEqual([]);
+  expect(store(ui).status).toContain("Connecting MCP servers…");
+  mcp.push({ tools: [{ name: "db__query" }] } as unknown as McpConnection);
+  mcpNames.push("db");
+  settle([{ name: "hub", error: "Connection closed" }]);
+  await client.idle();
+  expect(offered).toEqual([1]);
+  expect(store(ui).status).toMatch(
+    /^build · Ready · \/help for keys · MCP 1 · 1 failed \(\/mcp\)/,
+  );
+  await ui.fire("send", "/mcp");
+  expect(store(ui).status).toBe("MCP servers: 1 · 1 tools · 1 failed");
+  expect(store(ui).panel.lines.map((line) => line.t)).toEqual([
+    "hub · unavailable",
+    "  Connection closed",
+    "db · 1 tool",
+    "  query",
+  ]);
+});
+
+test("servers that settle while idle repaint the status, unless something newer is on it", async () => {
+  let settle: (failed: { name: string; error: string }[]) => void = () => {};
+  const mcpReady = new Promise<{ name: string; error: string }[]>((resolve) => {
+    settle = resolve;
+  });
+  const { ui } = setup(reply("x"), { mcpReady });
+  settle([]);
+  await Bun.sleep(10);
+  expect(store(ui).status).toBe("build · Ready · /help for keys");
+  let late: (failed: { name: string; error: string }[]) => void = () => {};
+  const second = setup(reply("x"), {
+    mcpReady: new Promise((resolve) => {
+      late = resolve;
+    }),
+  });
+  await second.ui.fire("send", "/help");
+  const help = store(second.ui).status;
+  late([]);
+  await Bun.sleep(10);
+  expect(store(second.ui).status).toBe(help);
+});
+
 test("no write is ever refused by the host", async () => {
   const { ui, client } = setup(withApproval);
   await ui.fire("send", "edit");

@@ -2,11 +2,13 @@ import { parseArgs } from "node:util";
 import {
   admitOllamaModel,
   admitOpenAILocalModel,
-  connectMcp,
+  connectMcpServers,
   DEFAULT_OLLAMA_MODEL,
+  defaultMcpConfigPath,
   inspectRecovery,
   type McpConnection,
-  McpServerConfigSchema,
+  type McpServerConfig,
+  readMcpConfig,
   resolveProvider,
   runAgent,
   type SessionContext,
@@ -19,38 +21,49 @@ import { terminalTrustIO, trustRulesCommand } from "#cli/trust-rules";
 import { interactiveClient, parseUi } from "#cli/ui-flag";
 
 async function inspectMcpStatus(path: string, signal: AbortSignal) {
-  const file = Bun.file(path);
-  if (file.size > 1_000_000) throw new Error("MCP config exceeds 1 MB");
-  const configs = McpServerConfigSchema.array()
-    .max(16)
-    .parse(await file.json());
-  if (new Set(configs.map((config) => config.name)).size !== configs.length)
-    throw new Error("Duplicate MCP server names");
-  const servers = [];
-  for (const config of configs) {
-    signal.throwIfAborted();
-    try {
-      const connection = await connectMcp(config, signal);
-      const tools = connection.tools.map((tool) => tool.name);
-      await connection.close();
-      servers.push({
+  const configs = await readMcpConfig(path);
+  const startup = await connectMcpServers(configs, signal);
+  await Promise.allSettled(
+    startup.connected.map(({ connection }) => connection.close()),
+  );
+  return {
+    servers: configs.map((config) => {
+      const connected = startup.connected.find(
+        (server) => server.name === config.name,
+      );
+      return {
         name: config.name,
         transport: config.transport.kind,
-        status: "connected",
-        tools,
-      });
-    } catch (error) {
-      if (signal.aborted) throw error;
-      servers.push({
-        name: config.name,
-        transport: config.transport.kind,
-        status: "unavailable",
-        tools: [],
-      });
-    }
-  }
-  return { servers };
+        status: connected ? "connected" : "unavailable",
+        tools: connected?.connection.tools.map((tool) => tool.name) ?? [],
+      };
+    }),
+  };
 }
+
+/**
+ * The MCP file a run loads: --mcp-config (explicit: a server that fails is
+ * the run's failure, except in the Tuimark client, which shows it), else
+ * the user's own file when it exists (a failure is a warning), else none.
+ * --no-mcp skips the user's file.
+ */
+async function mcpSource(values: {
+  "mcp-config"?: string;
+  "no-mcp"?: boolean;
+}): Promise<{ path: string; explicit: boolean } | undefined> {
+  if (values["mcp-config"] && values["no-mcp"])
+    throw new Error("Choose --mcp-config PATH or --no-mcp, not both");
+  if (values["mcp-config"])
+    return { path: values["mcp-config"], explicit: true };
+  if (values["no-mcp"]) return undefined;
+  const path = defaultMcpConfigPath();
+  return (await Bun.file(path).exists())
+    ? { path, explicit: false }
+    : undefined;
+}
+
+const unavailable = (failed: { name: string; error: string }) =>
+  `MCP server ${failed.name} unavailable: ${failed.error}`;
 
 try {
   const { values } = parseArgs({
@@ -72,6 +85,7 @@ try {
       "approve-commands": { type: "boolean", default: false },
       "approve-mcp": { type: "boolean", default: false },
       "mcp-config": { type: "string" },
+      "no-mcp": { type: "boolean", default: false },
       "session-db": { type: "string" },
       resume: { type: "string" },
       sessions: { type: "boolean" },
@@ -112,14 +126,16 @@ bun dev [--model MODEL (default: ${DEFAULT_OLLAMA_MODEL})] [--mode fullscreen|in
                        only); build asks before acting
   --approve-edits      Allow file edits and writes (create or replace) in headless mode
   --approve-commands   Allow command execution in headless mode (user permissions)
-  --mcp-config PATH    Load an explicit trusted JSON array of MCP servers
+  --mcp-config PATH    Load an explicit trusted JSON array of MCP servers (default:
+                       ${defaultMcpConfigPath()} when it exists)
+  --no-mcp             Start without the default MCP servers
   --approve-mcp        Allow configured MCP tool calls in headless mode
   --session-db PATH    Opt into experimental durable sessions in a separate database
   --resume HANDLE      Resume a completed session from --session-db
   --sessions           List sessions in this workspace without contacting a model
   --session-info ID    Inspect saved state and recovery hazards without running tools
   --recovery-info ID   Inspect recovery review tokens without transcript or raw receipts
-  --mcp-status         Check only the explicitly supplied MCP config and list tools
+  --mcp-status         Check the MCP config (--mcp-config or the default) and list tools
   --trust-rules        List the workspace's untrusted allow rules and trust them
                        after you type yes (the terminal form of /permissions trust)
 
@@ -132,17 +148,17 @@ Interrupted tool outcomes require inspection; they are never automatically repla
       terminalTrustIO(),
     );
   } else if (values["mcp-status"]) {
-    if (!values["mcp-config"])
-      throw new Error("--mcp-status requires --mcp-config PATH");
+    const source = await mcpSource(values);
+    if (!source)
+      throw new Error(
+        `--mcp-status needs --mcp-config PATH or ${defaultMcpConfigPath()}`,
+      );
     const controller = new AbortController();
     const stop = () => controller.abort();
     process.once("SIGINT", stop);
     process.once("SIGTERM", stop);
     try {
-      const report = await inspectMcpStatus(
-        values["mcp-config"],
-        controller.signal,
-      );
+      const report = await inspectMcpStatus(source.path, controller.signal);
       console.log(JSON.stringify(report));
       if (report.servers.some((server) => server.status === "unavailable"))
         process.exitCode = 1;
@@ -284,27 +300,24 @@ Interrupted tool outcomes require inspection; they are never automatically repla
         const stop = () => controller.abort();
         process.once("SIGINT", stop);
         process.once("SIGTERM", stop);
+        // Filled as servers connect (the Tuimark client opens first and
+        // shows them arriving); every one is closed on the way out.
         const mcp: McpConnection[] = [];
         const mcpNames: string[] = [];
+        const mcpAbort = new AbortController();
+        let mcpReady: Promise<{ name: string; error: string }[]> | undefined;
         try {
-          if (values["mcp-config"]) {
-            const file = Bun.file(values["mcp-config"]);
-            if (file.size > 1_000_000)
-              throw new Error("MCP config exceeds 1 MB");
-            const configs = McpServerConfigSchema.array()
-              .max(16)
-              .parse(await file.json());
-            if (
-              new Set(configs.map((config) => config.name)).size !==
-              configs.length
-            )
-              throw new Error("Duplicate MCP server names");
-            for (const config of configs) {
-              controller.signal.throwIfAborted();
-              mcp.push(await connectMcp(config, controller.signal));
-              mcpNames.push(config.name);
+          const source = await mcpSource(values);
+          let configs: McpServerConfig[] = [];
+          if (source)
+            try {
+              configs = await readMcpConfig(source.path);
+            } catch (error) {
+              if (source.explicit) throw error;
+              process.stderr.write(
+                `warning: ignoring ${terminalText(source.path)}: ${terminalText(error instanceof Error ? error.message : String(error))}\n`,
+              );
             }
-          }
           let client = headless
             ? "vue"
             : interactiveClient(
@@ -327,6 +340,29 @@ Interrupted tool outcomes require inspection; they are never automatically repla
                 `No tuimark binary (${terminalText(found.error)}); using the Vue client. Set TUIMARK_BINARY to a tuimark, or pass --ui vue to silence this.\n`,
               );
               client = "vue";
+            }
+          }
+          if (configs.length > 0) {
+            const started = connectMcpServers(
+              configs,
+              AbortSignal.any([controller.signal, mcpAbort.signal]),
+            ).then((startup) => {
+              for (const { name, connection } of startup.connected) {
+                mcp.push(connection);
+                mcpNames.push(name);
+              }
+              return startup.failed;
+            });
+            if (client === "tuimark" && !headless)
+              mcpReady = started.catch(() => []);
+            else {
+              const failed = await started;
+              if (failed[0] && source?.explicit)
+                throw new Error(failed.map(unavailable).join("; "));
+              for (const server of failed)
+                process.stderr.write(
+                  `warning: ${terminalText(unavailable(server))}\n`,
+                );
             }
           }
           if (headless) {
@@ -400,6 +436,7 @@ Interrupted tool outcomes require inspection; they are never automatically repla
               values.theme ?? "auto",
               {
                 mcpNames,
+                ...(mcpReady ? { mcpReady } : {}),
                 ...(bin ? { resolve: async () => bin } : {}),
               },
             );
@@ -416,6 +453,10 @@ Interrupted tool outcomes require inspection; they are never automatically repla
             );
           }
         } finally {
+          // A quit while servers still connect: stop them, then close the
+          // ones that made it.
+          mcpAbort.abort();
+          await mcpReady;
           await Promise.allSettled(mcp.map((connection) => connection.close()));
           process.off("SIGINT", stop);
           process.off("SIGTERM", stop);

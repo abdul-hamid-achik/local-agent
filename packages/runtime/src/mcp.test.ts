@@ -1,10 +1,17 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
-import { connectMcp, gatewayTarget, McpServerConfigSchema } from "#runtime/mcp";
+import {
+  connectMcp,
+  connectMcpServers,
+  defaultMcpConfigPath,
+  gatewayTarget,
+  McpServerConfigSchema,
+  readMcpConfig,
+} from "#runtime/mcp";
 
 describe("MCP adapter boundary", () => {
   test("rejects remote endpoints unless explicitly enabled", async () => {
@@ -214,5 +221,77 @@ describe("gatewayTarget", () => {
       JSON.stringify({ server: "cortex", tool: "st/atus" }),
     ])
       expect(gatewayTarget("hub", json)).toBeUndefined();
+  });
+});
+
+describe("MCP startup", () => {
+  const fixture = (name: string, script: string, cwd: string) => ({
+    name,
+    transport: {
+      kind: "stdio" as const,
+      command: process.execPath,
+      args: [script],
+      env: {},
+      cwd,
+    },
+  });
+  const echo = fileURLToPath(
+    new URL("./fixtures/mcp_stdio.ts", import.meta.url),
+  );
+
+  test("servers connect together; one that fails is reported, not fatal", async () => {
+    const cwd = await mkdtemp(`${tmpdir()}/local-agent-mcp-startup-`);
+    try {
+      const startup = await connectMcpServers([
+        fixture("missing", `${cwd}/missing.ts`, cwd),
+        fixture("echo", echo, cwd),
+      ]);
+      try {
+        expect(startup.connected.map((server) => server.name)).toEqual([
+          "echo",
+        ]);
+        expect(startup.failed).toEqual([
+          { name: "missing", error: expect.any(String) },
+        ]);
+        expect(startup.failed[0]?.error).not.toMatch(/\n/);
+      } finally {
+        await Promise.all(
+          startup.connected.map(({ connection }) => connection.close()),
+        );
+      }
+      await expect(
+        connectMcpServers([fixture("echo", echo, cwd)], AbortSignal.abort()),
+      ).rejects.toThrow();
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  test("a config file is an array of distinct servers", async () => {
+    const cwd = await mkdtemp(`${tmpdir()}/local-agent-mcp-config-`);
+    try {
+      const path = `${cwd}/mcp.json`;
+      const server = fixture("echo", echo, cwd);
+      await writeFile(path, JSON.stringify([server]));
+      expect(await readMcpConfig(path)).toEqual([server]);
+      await writeFile(path, JSON.stringify([server, server]));
+      await expect(readMcpConfig(path)).rejects.toThrow(
+        "Duplicate MCP server names",
+      );
+      await writeFile(path, JSON.stringify(server));
+      await expect(readMcpConfig(path)).rejects.toThrow();
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  test("the default file is the user's, never the workspace's", () => {
+    expect(defaultMcpConfigPath({ XDG_CONFIG_HOME: "/x" })).toBe(
+      "/x/local-agent/mcp.json",
+    );
+    // A relative XDG_CONFIG_HOME would resolve against the workspace.
+    expect(defaultMcpConfigPath({ XDG_CONFIG_HOME: ".config" })).toMatch(
+      /^\/.*\/\.config\/local-agent\/mcp\.json$/,
+    );
   });
 });

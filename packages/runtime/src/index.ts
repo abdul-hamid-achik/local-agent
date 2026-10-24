@@ -31,8 +31,14 @@ export {
 } from "#runtime/config";
 export {
   connectMcp,
+  connectMcpServers,
+  defaultMcpConfigPath,
+  gatewayTarget,
   type McpConnection,
+  type McpServerConfig,
   McpServerConfigSchema,
+  type McpStartup,
+  readMcpConfig,
 } from "#runtime/mcp";
 export {
   assertFetchTarget,

@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -314,3 +314,143 @@ test("MCP status exits nonzero for an unavailable server", async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+/** A headless run against `server` with `args` and no --mcp-config of its own. */
+async function runHeadless(
+  root: string,
+  server: ReturnType<typeof Bun.serve>,
+  args: string[],
+) {
+  const child = Bun.spawn(
+    [
+      process.execPath,
+      mainPath,
+      "--model",
+      "fixture",
+      "--mode",
+      "headless",
+      "--workspace",
+      root,
+      "--prompt",
+      "Use the fixture echo tool",
+      "--json",
+      "--approve-mcp",
+      ...args,
+    ],
+    {
+      // HOME is the test root: the user's config folder is root/.config.
+      env: {
+        HOME: root,
+        PATH: process.env.PATH ?? "",
+        OLLAMA_HOST: server.url.origin,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  const statuses = jsonEvents(stdout)
+    .filter((event) => event.type === "tool_result")
+    .map((event) => event.status);
+  return { stderr, code, statuses };
+}
+
+function servers(root: string) {
+  return JSON.stringify([
+    {
+      name: "fixture",
+      transport: {
+        kind: "stdio",
+        command: process.execPath,
+        args: [fixturePath],
+        cwd: root,
+        env: {},
+      },
+    },
+    {
+      name: "missing",
+      transport: {
+        kind: "stdio",
+        command: process.execPath,
+        args: [join(root, "missing-server.ts")],
+        cwd: root,
+        env: {},
+      },
+    },
+  ]);
+}
+
+test("the user's own MCP file loads by default; a server that fails is a warning", async () => {
+  const root = await mkdtemp(join(tmpdir(), "local-agent-mcp-default-"));
+  const server = fixtureOllama();
+  try {
+    await mkdir(join(root, ".config", "local-agent"), { recursive: true });
+    await writeFile(
+      join(root, ".config", "local-agent", "mcp.json"),
+      servers(root),
+    );
+    const loaded = await runHeadless(root, server, []);
+    expect(loaded.code).toBe(0);
+    expect(loaded.statuses).toEqual(["unverified"]);
+    expect(loaded.stderr).toContain(
+      "warning: MCP server missing unavailable: ",
+    );
+    // --no-mcp starts without them: the model's call names no tool.
+    const skipped = await runHeadless(root, server, ["--no-mcp"]);
+    expect(skipped.code).toBe(0);
+    expect(skipped.statuses).toEqual(["failed"]);
+    expect(skipped.stderr).not.toContain("MCP server");
+    // A broken default file is skipped with a warning, not a failed run.
+    await writeFile(join(root, ".config", "local-agent", "mcp.json"), "{");
+    const broken = await runHeadless(root, server, []);
+    expect(broken.code).toBe(0);
+    expect(broken.stderr).toContain("warning: ignoring ");
+    const both = await runHeadless(root, server, [
+      "--no-mcp",
+      "--mcp-config",
+      join(root, "x.json"),
+    ]);
+    expect(both.code).toBe(1);
+    expect(both.stderr).toContain("Choose --mcp-config PATH or --no-mcp");
+  } finally {
+    await server.stop(true);
+    await rm(root, { recursive: true, force: true });
+  }
+}, 30_000);
+
+test("an explicit MCP config with an unavailable server fails a headless run before inference", async () => {
+  const root = await mkdtemp(join(tmpdir(), "local-agent-mcp-explicit-"));
+  let chats = 0;
+  const ollama = fixtureOllama();
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      if (new URL(request.url).pathname === "/api/chat") chats++;
+      return fetch(new URL(new URL(request.url).pathname, ollama.url), {
+        method: request.method,
+        headers: request.headers,
+        body: request.body,
+      });
+    },
+  });
+  try {
+    await writeFile(join(root, "mcp.json"), servers(root));
+    const run = await runHeadless(root, server, [
+      "--mcp-config",
+      join(root, "mcp.json"),
+    ]);
+    expect(run.code).toBe(1);
+    expect(run.stderr).toContain("MCP server missing unavailable: ");
+    expect(run.statuses).toEqual([]);
+    expect(chats).toBe(0);
+  } finally {
+    await server.stop(true);
+    await ollama.stop(true);
+    await rm(root, { recursive: true, force: true });
+  }
+}, 30_000);

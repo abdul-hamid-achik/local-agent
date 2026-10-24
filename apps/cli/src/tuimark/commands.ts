@@ -12,8 +12,16 @@ export type Theme = "dark" | "light" | "auto";
 
 export interface CommandState {
   intent: Intent;
-  /** Connected MCP servers and the tools they expose. */
-  mcp: { servers: number; tools: number };
+  /**
+   * Connected MCP servers and the tools they expose; whether more are still
+   * connecting, and how many failed to.
+   */
+  mcp: {
+    servers: number;
+    tools: number;
+    connecting?: boolean;
+    failed?: number;
+  };
   /** The session theme (`/theme` reports and changes it). Default "auto". */
   theme?: Theme;
   /** Whether fullscreen mouse reporting is on. Default false (off). */
@@ -198,9 +206,11 @@ export function runSlash(text: string, state: CommandState): CommandOutcome {
     return {
       // The count line heads the panel and rests on the status line, as
       // the flash alone did before the panel existed.
-      status: state.mcp.servers
-        ? `MCP servers: ${state.mcp.servers} · ${state.mcp.tools} tools`
-        : "MCP servers: 0 · use --mcp-config to connect trusted servers",
+      status: state.mcp.connecting
+        ? "MCP servers: connecting…"
+        : state.mcp.servers || state.mcp.failed
+          ? `MCP servers: ${state.mcp.servers} · ${state.mcp.tools} tools${state.mcp.failed ? ` · ${state.mcp.failed} failed` : ""}`
+          : "MCP servers: 0 · use --mcp-config to connect trusted servers",
       mcpPanel: true,
     };
   return { status: `Unknown command: ${command}. Use /help` };

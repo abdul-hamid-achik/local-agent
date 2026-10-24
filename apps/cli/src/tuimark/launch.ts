@@ -227,6 +227,8 @@ export interface LaunchDeps {
   run?: ClientOptions["run"];
   /** The configured MCP server names, in connection order (the `/mcp` panel). */
   mcpNames?: readonly string[];
+  /** Servers still connecting (see ClientOptions.mcpReady). */
+  mcpReady?: ClientOptions["mcpReady"];
   /** Replaces the store-built `/sessions` capability (tests). */
   sessions?: SessionsCapability;
   spawn?: typeof spawnHost;
@@ -286,6 +288,7 @@ export async function runTuimark(
       (session ? sessionCapability(session.store, workspace.root) : undefined),
     mcp,
     mcpNames: deps.mcpNames,
+    ...(deps.mcpReady ? { mcpReady: deps.mcpReady } : {}),
     signal,
     run: deps.run,
     columns: () => stdout.columns ?? readyColumns,

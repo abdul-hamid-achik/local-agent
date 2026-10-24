@@ -90,6 +90,7 @@ import {
   grantsLabel,
   idleStatus,
   initialStore,
+  MCP_WAIT_STATUS,
   type McpServerFacts,
   mcpLines,
   mcpParts,
@@ -170,6 +171,13 @@ export interface ClientOptions {
    * knows the config names (a server with no tools has no name otherwise).
    */
   mcpNames?: readonly string[];
+  /**
+   * Settles once every configured MCP server has connected (pushed onto
+   * `mcp` and `mcpNames` by then) or failed, with the failures. Until then
+   * the status says the servers are connecting and a turn waits for them:
+   * their tools are part of what the model is offered. Never rejects.
+   */
+  mcpReady?: Promise<readonly { name: string; error: string }[]>;
   /**
    * Creates the export file exclusively (`wx`): rejects with EEXIST when
    * the path is taken, so an export never overwrites. Default node fs.
@@ -368,6 +376,10 @@ export class TuimarkClient {
   private panelSessions: SessionSummary[] = [];
   /** The picker's chosen row, an index into `panelSessions`. */
   private panelSel = 0;
+  /** MCP servers are still connecting (see ClientOptions.mcpReady). */
+  private mcpPending: boolean;
+  /** The servers that failed to connect, for the status and `/mcp`. */
+  private mcpFailed: readonly { name: string; error: string }[] = [];
   /** The header ctx meter (see CtxMeter for the exact accumulation rule). */
   private readonly ctx = new CtxMeter();
   /** One message sent while busy, run when the turn ends. A new send replaces it. */
@@ -397,6 +409,7 @@ export class TuimarkClient {
     this.provider = options.provider;
     this.theme = options.initialTheme ?? "auto";
     this.history = options.session?.state.messages.slice() ?? [];
+    this.mcpPending = options.mcpReady !== undefined;
     // A resumed session shows its saved messages, through the same mapping as a live turn.
     for (const message of this.history) {
       const view = this.builder.fromMessage(message);
@@ -416,6 +429,7 @@ export class TuimarkClient {
       intent: this.intent,
       sessionId: session?.state.publicId,
       mcpServers: mcp.length,
+      mcpConnecting: this.mcpPending,
       workspace: this.options.workspace?.root ?? "",
       inline: this.inline,
       // The inline snapshot below always starts empty; a resumed session is not.
@@ -553,6 +567,7 @@ export class TuimarkClient {
     ui.on("panel_next", () => this.panelMove(1));
     ui.on("panel_prev", () => this.panelMove(-1));
     ui.on("panel_run", () => this.panelRun());
+    void this.options.mcpReady?.then((failed) => this.mcpSettled(failed));
     if (this.inline) {
       // A resumed session's history is the scrollback: print it once, in order.
       const views = this.transcript.all();
@@ -562,6 +577,33 @@ export class TuimarkClient {
         })();
       }
     }
+  }
+
+  /** The idle status line, with what the MCP servers are doing. */
+  private idleText(): string {
+    return idleStatus(this.options.mcp?.length ?? 0, this.intent, {
+      connecting: this.mcpPending,
+      failed: this.mcpFailed.length,
+    });
+  }
+
+  /**
+   * The MCP servers settled. The status shows it only if it still says
+   * they are connecting: anything written since (a turn, a command's
+   * answer) is newer than this.
+   */
+  private async mcpSettled(
+    failed: readonly { name: string; error: string }[],
+  ): Promise<void> {
+    const connecting = this.idleText();
+    this.mcpPending = false;
+    this.mcpFailed = failed;
+    const shown = await this.ui
+      ?.get("status")
+      .then((result) => result.value)
+      .catch(() => undefined);
+    if (shown === connecting)
+      await this.write([{ path: "status", value: this.idleText() }]);
   }
 
   /** The terminal changed size: open previews are wrapped again. */
@@ -599,10 +641,7 @@ export class TuimarkClient {
   private async closeDetails(): Promise<void> {
     const writes = this.closeDetailsWrite();
     if (writes.length === 0) return;
-    writes.push({
-      path: "status",
-      value: idleStatus(this.options.mcp?.length ?? 0, this.intent),
-    });
+    writes.push({ path: "status", value: this.idleText() });
     await this.write(writes);
   }
 
@@ -654,10 +693,7 @@ export class TuimarkClient {
   private async closePanel(): Promise<void> {
     const writes = this.closePanelWrite();
     if (writes.length === 0) return;
-    writes.push({
-      path: "status",
-      value: idleStatus(this.options.mcp?.length ?? 0, this.intent),
-    });
+    writes.push({ path: "status", value: this.idleText() });
     await this.write(writes);
   }
 
@@ -767,7 +803,10 @@ export class TuimarkClient {
     await this.openPanel(
       "MCP servers",
       countLine,
-      mcpLines(this.mcpFacts()).join("\n"),
+      mcpLines(this.mcpFacts(), {
+        connecting: this.mcpPending,
+        failed: this.mcpFailed,
+      }).join("\n"),
       countLine,
     );
   }
@@ -1902,6 +1941,8 @@ export class TuimarkClient {
       mcp: {
         servers: mcp.length,
         tools: mcp.reduce((total, server) => total + server.tools.length, 0),
+        connecting: this.mcpPending,
+        failed: this.mcpFailed.length,
       },
       model: this.provider.model,
       theme: this.theme,
@@ -2275,7 +2316,7 @@ export class TuimarkClient {
     // busy, so it cannot change under the turn).
     const session = this.session;
     let receivedMessage = false;
-    let status = idleStatus(mcp?.length ?? 0, this.intent);
+    let status = "";
     let toolName = "";
     /** A failed turn's notice view, committed (inline) in the finally below. */
     let notice: MessageView | undefined;
@@ -2284,6 +2325,23 @@ export class TuimarkClient {
       // A turn aborted before it started (a signal while its first write was
       // in flight) never calls the runtime, so it never takes the session lease.
       turnSignal.throwIfAborted();
+      // Servers still connecting: their tools are part of what the model
+      // is offered, so the turn waits for them (Esc still cancels).
+      const ready = this.options.mcpReady;
+      if (this.mcpPending && ready) {
+        this.noteActivity(MCP_WAIT_STATUS);
+        await new Promise<void>((resolve, reject) => {
+          const abort = () => reject(turnSignal.reason);
+          turnSignal.addEventListener("abort", abort, { once: true });
+          void ready.then(() => {
+            turnSignal.removeEventListener("abort", abort);
+            resolve();
+          });
+        });
+        // mcpSettled runs before this continuation: its then was first.
+        this.noteActivity(WAITING_STATUS);
+      }
+      status = this.idleText();
       for await (const event of this.run(this.provider, this.history, {
         workspace,
         intent: this.intent,
