@@ -150,6 +150,8 @@ describe("MCP adapter boundary", () => {
   }, 15_000);
 
   test("a call to a server that has stopped is refused without being sent", async () => {
+    // With no HOME, Bun keeps its transpiler cache under the cwd.
+    const cwd = await mkdtemp(`${tmpdir()}/local-agent-mcp-stop-`);
     const adapter = await connectMcp({
       name: "stopping",
       transport: {
@@ -159,6 +161,7 @@ describe("MCP adapter boundary", () => {
           fileURLToPath(new URL("./fixtures/mcp_stop.ts", import.meta.url)),
         ],
         env: {},
+        cwd,
       },
     });
     try {
@@ -178,6 +181,7 @@ describe("MCP adapter boundary", () => {
       );
     } finally {
       await adapter.close();
+      await rm(cwd, { recursive: true, force: true });
     }
   }, 15_000);
 
