@@ -598,6 +598,11 @@ export class TuimarkClient {
     const connecting = this.idleText();
     this.mcpPending = false;
     this.mcpFailed = failed;
+    // An open /mcp panel still says "connecting": it is drawn again.
+    if (this.panelOpen && this.panelText?.title === "MCP servers") {
+      await this.runCommand("/mcp");
+      return;
+    }
     const shown = await this.ui
       ?.get("status")
       .then((result) => result.value)

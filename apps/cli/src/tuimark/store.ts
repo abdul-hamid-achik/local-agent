@@ -32,14 +32,15 @@ import type { TranscriptSnapshot } from "#cli/tuimark/transcript";
 
 export const IDLE_STATUS = "Ready · /help for keys";
 
-/** The idle status line, prefixed with the mode so the intent is always
- * visible; the MCP count stays for the whole session. */
 /** MCP servers that are still connecting, or that failed to (count only). */
 export interface McpStartupState {
   connecting?: boolean;
   failed?: number;
 }
 
+/** The idle status line, prefixed with the mode so the intent is always
+ * visible; the MCP count (or that the servers are still connecting, and how
+ * many failed) stays for the whole session. */
 export function idleStatus(
   mcpServers: number,
   intent?: Intent,
@@ -593,7 +594,6 @@ function commandGrant(argv: readonly string[]): {
   return { prefix: argv.slice(0, runner ? 3 : 2), exact };
 }
 
-/** The server and tool of an MCP `SERVER__TOOL` name, or undefined without the separator. */
 /** The call as the user reads it: `SERVER__TOOL`, or `SERVER__TOOL via GATEWAY`. */
 export function mcpCallName(
   proposal: Extract<ApprovalRequest, { kind: "mcp" }>,
@@ -603,6 +603,7 @@ export function mcpCallName(
     : proposal.name;
 }
 
+/** The server and tool of an MCP `SERVER__TOOL` name, or undefined without the separator. */
 export function mcpParts(
   name: string,
 ): { server: string; tool: string } | undefined {

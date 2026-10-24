@@ -69,8 +69,9 @@ export interface PermissionRequest {
   /** The raw argv, when the request came from a command approval. */
   argv?: readonly string[];
   /**
-   * mcp: other names for the same call, which rules match too: the
-   * gateway's own `GATEWAY__call_tool` and the spellings it resolves alike.
+   * mcp: other names for the same call, which deny and ask rules match
+   * too (never allow): the gateway's own `GATEWAY__call_tool` and the other
+   * names it may run the tool by.
    */
   also?: readonly string[];
 }
@@ -712,9 +713,12 @@ function ruleMatches(
       // A search has no host: only the catch-all can match it.
       return rule.pattern === "" || rule.pattern === "*";
     case "mcp":
-      return [request.target, ...(request.also ?? [])].some((name) =>
-        mcpMatches(rule.pattern, name),
-      );
+      // Another name of the call can block it, never allow it: a gateway's
+      // alias may name a different tool on the same server.
+      return [
+        request.target,
+        ...(rule.effect === "allow" ? [] : (request.also ?? [])),
+      ].some((name) => mcpMatches(rule.pattern, name));
   }
 }
 

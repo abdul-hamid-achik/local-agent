@@ -91,9 +91,20 @@ export type McpTool = {
  * `call_tool`, so its name says nothing about what runs. The identity that
  * approvals, rules and grants use is the downstream tool, qualified by the
  * gateway: `GATEWAY__SERVER__TOOL`, the name it would have if the gateway
- * listed it directly. `aliases` are other spellings the gateway resolves
- * to the same tool (a self-prefixed `SERVER_TOOL`), for deny rules.
- * Undefined when the arguments do not name a server and a tool.
+ * listed it directly. It follows mcphub's reading of the arguments: no
+ * server splits the tool at its first `__`, a server strips its own `S__`
+ * prefix from the tool.
+ *
+ * mcphub then runs the tool by that name or, failing that, as `S_TOOL`,
+ * and shows a self-prefixed `S_TOOL` as `TOOL`: `aliases` are those other
+ * names of the same call. Only deny and ask rules match them; an alias can
+ * name a different tool on the same server, so it never allows.
+ *
+ * Undefined, so the call is refused, when the arguments do not name one
+ * server and one tool unambiguously: no tool, a server that is neither a
+ * string nor null, a server with `__` in it, or a key that Go's JSON
+ * decoder would read as `server` or `tool` (it matches keys
+ * case-insensitively, with Unicode folding).
  */
 export function gatewayTarget(
   gateway: string,
@@ -105,10 +116,19 @@ export function gatewayTarget(
   } catch {
     return undefined;
   }
-  if (typeof parsed !== "object" || parsed === null) return undefined;
-  const { server, tool } = parsed as Record<string, unknown>;
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
+    return undefined;
+  const fields = parsed as Record<string, unknown>;
+  for (const key of Object.keys(fields)) {
+    const folded = key.normalize("NFKC").toLowerCase();
+    if (key !== "server" && key !== "tool" && /^(server|tool)$/.test(folded))
+      return undefined;
+  }
+  const { server, tool } = fields;
   if (typeof tool !== "string") return undefined;
-  let downstream = typeof server === "string" && server ? server : undefined;
+  if (server !== undefined && server !== null && typeof server !== "string")
+    return undefined;
+  let downstream = server ? server : undefined;
   let local = tool;
   if (downstream === undefined) {
     const at = tool.indexOf("__");
@@ -118,14 +138,22 @@ export function gatewayTarget(
   } else if (local.startsWith(`${downstream}__`))
     local = local.slice(downstream.length + 2);
   const valid = /^[a-zA-Z0-9_.-]{1,128}$/;
-  if (!valid.test(downstream) || !valid.test(local)) return undefined;
-  const alias = local.startsWith(`${downstream}_`)
-    ? local.slice(downstream.length + 1)
-    : `${downstream}_${local}`;
+  if (
+    !valid.test(downstream) ||
+    downstream.includes("__") ||
+    !valid.test(local)
+  )
+    return undefined;
+  const names = [`${downstream}_${local}`];
+  if (
+    local.startsWith(`${downstream}_`) &&
+    local.length > downstream.length + 1
+  )
+    names.push(local.slice(downstream.length + 1));
   return {
     target: `${gateway}__${downstream}__${local}`,
     inner: `${downstream}__${local}`,
-    aliases: alias ? [`${gateway}__${downstream}__${alias}`] : [],
+    aliases: names.map((name) => `${gateway}__${downstream}__${name}`),
   };
 }
 
@@ -196,10 +224,14 @@ export async function connectMcp(
         signal: requestSignal,
         timeout: CONNECT_TIMEOUT_MS,
       }),
+      // A quit or the timeout settles connecting at once, whatever the
+      // SDK does with the signal while a server starts.
       new Promise<never>((_, reject) =>
-        timeout.addEventListener("abort", () => reject(timeout.reason), {
-          once: true,
-        }),
+        requestSignal.addEventListener(
+          "abort",
+          () => reject(requestSignal.reason),
+          { once: true },
+        ),
       ),
     ]);
     const listed = await client.listTools(undefined, { signal: requestSignal });
@@ -252,8 +284,8 @@ export async function connectMcp(
         if (!local || !names.has(name))
           throw new Error(`Unknown MCP tool: ${name}`);
         const timeout = AbortSignal.timeout(callTimeoutMs);
-        // The SDK's own request timeout defaults to the connect timeout:
-        // it is raised with ours, or it would cut every call at 15 s.
+        // The SDK's own request timeout is 60 s unless set: a server's
+        // longer timeoutMs needs it raised too.
         const result = await client.callTool(
           { name: local, arguments: arguments_ },
           {

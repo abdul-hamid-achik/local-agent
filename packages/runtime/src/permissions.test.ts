@@ -310,6 +310,10 @@ test("rules match a gateway call by the tool it runs or any other name", () => {
   expect(evaluate([rule("allow", "hub__monitor__*")], request).effect).toBe(
     "ask",
   );
+  // The other names block, never allow: an alias can be a different tool
+  // on the same server, and call_tool is every tool behind the gateway.
+  for (const pattern of ["hub__cortex__cortex_status", "hub__call_tool"])
+    expect(evaluate([rule("allow", pattern)], request).effect).toBe("ask");
   expect(
     evaluate(
       [rule("allow", "hub__cortex__*"), rule("deny", "hub__call_tool")],

@@ -1028,6 +1028,28 @@ test("servers still connecting: the status says so, a turn waits, failures reach
   ]);
 });
 
+test("an open /mcp panel is drawn again when the servers settle", async () => {
+  const mcp: McpConnection[] = [];
+  let settle: (failed: { name: string; error: string }[]) => void = () => {};
+  const mcpReady = new Promise<{ name: string; error: string }[]>((resolve) => {
+    settle = resolve;
+  });
+  const { ui } = setup(reply("x"), { mcp, mcpNames: ["db"], mcpReady });
+  await ui.fire("send", "/mcp");
+  expect(store(ui).panel.lines.map((line) => line.t)).toEqual([
+    "Connecting to MCP servers…",
+  ]);
+  mcp.push({ tools: [{ name: "db__query" }] } as unknown as McpConnection);
+  settle([]);
+  await Bun.sleep(10);
+  expect(store(ui).panel.open).toBe(true);
+  expect(store(ui).status).toBe("MCP servers: 1 · 1 tools");
+  expect(store(ui).panel.lines.map((line) => line.t)).toEqual([
+    "db · 1 tool",
+    "  query",
+  ]);
+});
+
 test("servers that settle while idle repaint the status, unless something newer is on it", async () => {
   let settle: (failed: { name: string; error: string }[]) => void = () => {};
   const mcpReady = new Promise<{ name: string; error: string }[]>((resolve) => {

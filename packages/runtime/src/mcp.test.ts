@@ -194,7 +194,8 @@ describe("gatewayTarget", () => {
       { server: "", tool: "cortex__status", arguments: { deep: true } },
     ])
       expect(gatewayTarget("hub", JSON.stringify(args))).toEqual(status);
-    // A self-prefixed name keeps its spelling; the short one is its alias.
+    // A self-prefixed name keeps its spelling. mcphub may also run it as
+    // `S_TOOL`, and shows it as the short name: both are aliases.
     expect(
       gatewayTarget(
         "hub",
@@ -203,8 +204,18 @@ describe("gatewayTarget", () => {
     ).toEqual({
       target: "hub__hitspec__hitspec_search_web",
       inner: "hitspec__hitspec_search_web",
-      aliases: ["hub__hitspec__search_web"],
+      aliases: [
+        "hub__hitspec__hitspec_hitspec_search_web",
+        "hub__hitspec__search_web",
+      ],
     });
+    // A null server is no server, as Go decodes it.
+    expect(
+      gatewayTarget(
+        "hub",
+        JSON.stringify({ server: null, tool: "cortex__status" }),
+      )?.target,
+    ).toBe("hub__cortex__status");
   });
 
   test("arguments that name no server and tool have no identity", () => {
@@ -219,6 +230,14 @@ describe("gatewayTarget", () => {
       JSON.stringify({ tool: "cortex__" }),
       JSON.stringify({ server: "a b", tool: "status" }),
       JSON.stringify({ server: "cortex", tool: "st/atus" }),
+      // Go reads a non-string server as an error, and these keys as
+      // `server` or `tool`: the identity would not be what runs.
+      JSON.stringify({ server: 5, tool: "cortex__status" }),
+      JSON.stringify({ Server: "monitor", tool: "cortex__status" }),
+      JSON.stringify({ tool: "cortex__status", TOOL: "monitor__kill" }),
+      JSON.stringify({ "\u017fERVER": "monitor", tool: "cortex__status" }),
+      // `a__b` + `c` and `a` + `b__c` would share one identity.
+      JSON.stringify({ server: "a__b", tool: "c" }),
     ])
       expect(gatewayTarget("hub", json)).toBeUndefined();
   });
@@ -262,6 +281,29 @@ describe("MCP startup", () => {
       await expect(
         connectMcpServers([fixture("echo", echo, cwd)], AbortSignal.abort()),
       ).rejects.toThrow();
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  test("an abort stops a server that never answers, without waiting for it", async () => {
+    const cwd = await mkdtemp(`${tmpdir()}/local-agent-mcp-silent-`);
+    try {
+      const silent = {
+        name: "silent",
+        transport: {
+          kind: "stdio" as const,
+          command: process.execPath,
+          args: ["-e", "setInterval(() => {}, 1000)"],
+          env: {},
+          cwd,
+        },
+      };
+      const started = Date.now();
+      await expect(
+        connectMcpServers([silent], AbortSignal.timeout(200)),
+      ).rejects.toThrow();
+      expect(Date.now() - started).toBeLessThan(3_000);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

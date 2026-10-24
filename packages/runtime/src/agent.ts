@@ -1055,8 +1055,8 @@ export type ApprovalRequest =
       /**
        * Through a gateway's call_tool: the downstream tool as
        * `GATEWAY__SERVER__TOOL` (what rules and grants match), its short
-       * `SERVER__TOOL` form, the gateway's name, and other spellings the
-       * gateway resolves to the same tool (deny rules check them too).
+       * `SERVER__TOOL` form, the gateway's name, and the other names the
+       * gateway may run it by (deny and ask rules check them too).
        */
       target?: string;
       inner?: string;
