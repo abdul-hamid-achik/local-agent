@@ -9,6 +9,8 @@ import { tryLockFile } from "#runtime/workspace_native";
 
 const SCHEMA_VERSION = 2;
 const MAX_STATE_BYTES = 8 * 1024 * 1024;
+/** How long a write waits for another process's lock before SQLITE_BUSY. */
+const BUSY_TIMEOUT_MS = 5000;
 const EVENT_TYPES = [
   "requested",
   "approval_requested",
@@ -31,6 +33,14 @@ export type Session = Readonly<{
   workspaceId: string;
   messages: SessionMessage[];
   revision: number;
+}>;
+/** A session without its transcript, for listings. */
+export type SessionSummary = Readonly<{
+  id: number;
+  publicId: string;
+  workspaceId: string;
+  revision: number;
+  messageCount: number;
 }>;
 export type ExecutionEvent = Readonly<{
   sessionId: number;
@@ -83,6 +93,8 @@ export class SessionStore {
         sqliteFlags.SQLITE_OPEN_CREATE |
         sqliteFlags.SQLITE_OPEN_NOFOLLOW,
     );
+    // Wait for another process's write lock rather than fail on the spot.
+    db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
     if (existingSize > 0) {
       try {
         const meta = db
@@ -100,10 +112,20 @@ export class SessionStore {
       }
     }
     try {
+      // Before WAL mode creates them: SQLite gives the -wal and -shm files the
+      // mode of the main file, which would otherwise follow the umask.
+      await chmod(candidate, 0o600);
       db.exec(
         "PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON;",
       );
-      await chmod(candidate, 0o600);
+      // Sidecars left behind by an older version may have looser modes.
+      for (const suffix of ["-wal", "-shm"]) {
+        try {
+          await chmod(`${candidate}${suffix}`, 0o600);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+      }
       db.exec(
         "CREATE TABLE IF NOT EXISTS schema_meta (version INTEGER NOT NULL)",
       );
@@ -253,6 +275,30 @@ export class SessionStore {
       )
       .all(workspaceId);
     return rows.map(readSessionRow);
+  }
+
+  /**
+   * The sessions of a workspace, newest first as `listSessions` has them, with
+   * a message count in place of the transcript: SQLite counts the messages, so
+   * no transcript is read into JavaScript, parsed or validated.
+   */
+  async listSessionSummaries(workspace: string): Promise<SessionSummary[]> {
+    const workspaceId = await canonicalWorkspace(workspace);
+    return this.db
+      .query<
+        { id: number; public_id: string; revision: number; count: number },
+        [string]
+      >(
+        "SELECT id, public_id, revision, json_array_length(state_json) AS count FROM sessions WHERE workspace_id = ? ORDER BY updated_at DESC, id DESC",
+      )
+      .all(workspaceId)
+      .map((row) => ({
+        id: row.id,
+        publicId: row.public_id,
+        workspaceId,
+        revision: row.revision,
+        messageCount: row.count,
+      }));
   }
 
   async loadSession(publicId: string, workspace: string): Promise<Session> {

@@ -388,12 +388,12 @@ async function handleSessionList(params: unknown) {
   const root = resolveWorkspaceRoot(requiredString(params, "workspace"));
   const store = await SessionStore.open(requiredString(params, "db"));
   try {
-    const sessions = await store.listSessions(root);
+    const sessions = await store.listSessionSummaries(root);
     return {
       sessions: sessions.map((session) => ({
         id: session.publicId,
         revision: session.revision,
-        messages: session.messages.length,
+        messages: session.messageCount,
       })),
     };
   } finally {

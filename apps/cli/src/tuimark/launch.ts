@@ -184,10 +184,10 @@ export function sessionCapability(
 ): SessionsCapability {
   return {
     async list() {
-      const sessions = await store.listSessions(workspaceRoot);
+      const sessions = await store.listSessionSummaries(workspaceRoot);
       return sessions.map((session) => ({
         handle: session.publicId,
-        messages: session.messages.length,
+        messages: session.messageCount,
       }));
     },
     async load(handle) {

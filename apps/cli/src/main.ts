@@ -242,13 +242,13 @@ Interrupted tool outcomes require inspection; they are never automatically repla
             ),
           );
         } else if (values.sessions) {
-          const sessions = await store.listSessions(workspace.root);
+          const sessions = await store.listSessionSummaries(workspace.root);
           console.log(
             JSON.stringify(
-              sessions.map(({ publicId, revision, messages }) => ({
+              sessions.map(({ publicId, revision, messageCount }) => ({
                 id: publicId,
                 revision,
-                messages: messages.length,
+                messages: messageCount,
               })),
             ),
           );

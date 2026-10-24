@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -418,4 +419,105 @@ test("rejects a future schema before WAL or chmod mutation", async () => {
   ).toEqual(beforeSchema);
   expect(check.query("PRAGMA journal_mode").get()).toEqual(beforeJournal);
   check.close();
+});
+
+test("the -wal and -shm files are private too, whatever the umask", async () => {
+  const { db, workspace } = await fixture();
+  const previous = process.umask(0o022);
+  try {
+    const store = await SessionStore.open(db);
+    // Written but not closed: the sidecars exist while the store is open.
+    await store.createSession(workspace, [{ role: "user", content: "hi" }]);
+    for (const suffix of ["", "-wal", "-shm"])
+      expect((await stat(`${db}${suffix}`)).mode & 0o777, suffix).toBe(0o600);
+    store.close();
+  } finally {
+    process.umask(previous);
+  }
+});
+
+test("a write waits for another process's lock instead of failing at once", async () => {
+  const { db, workspace } = await fixture();
+  const store = await SessionStore.open(db);
+  const created = await store.createSession(workspace);
+  // The lock is held by another process: a timer in this one could not run
+  // while the synchronous write blocks.
+  const holder = spawn(
+    process.execPath,
+    [
+      "-e",
+      `const { Database } = require("bun:sqlite");
+const db = new Database(process.env.DB);
+db.exec("BEGIN IMMEDIATE");
+console.log("locked");
+setTimeout(() => { db.exec("COMMIT"); db.close(); }, 600);`,
+    ],
+    { env: { ...process.env, DB: db }, stdio: ["ignore", "pipe", "inherit"] },
+  );
+  const done = new Promise<void>((resolve) =>
+    holder.once("exit", () => resolve()),
+  );
+  await new Promise<void>((resolve, reject) => {
+    holder.stdout.once("data", () => resolve());
+    holder.once("error", reject);
+  });
+  const started = performance.now();
+  const saved = store.saveStateCAS(created.id, created.workspaceId, 0, [
+    { role: "user", content: "after the lock" },
+  ]);
+  expect(saved.revision).toBe(1);
+  expect(performance.now() - started).toBeGreaterThan(200);
+  await done;
+  store.close();
+});
+
+test("session summaries match the listing in order and count, without reading transcripts", async () => {
+  const { db, workspace } = await fixture();
+  const store = await SessionStore.open(db);
+  const first = await store.createSession(workspace, [
+    { role: "user", content: "one" },
+    { role: "assistant", content: "two" },
+  ]);
+  const second = await store.createSession(workspace);
+  // Saved later, so it lists first despite being created first.
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  store.saveStateCAS(first.id, first.workspaceId, 0, [
+    { role: "user", content: "one" },
+    { role: "assistant", content: "two" },
+    { role: "user", content: "three" },
+  ]);
+  const listed = await store.listSessions(workspace);
+  const summaries = await store.listSessionSummaries(workspace);
+  expect(summaries.map((s) => s.publicId)).toEqual(
+    listed.map((s) => s.publicId),
+  );
+  expect(summaries.map((s) => s.publicId)).toEqual([
+    first.publicId,
+    second.publicId,
+  ]);
+  expect(summaries).toEqual(
+    listed.map((s) => ({
+      id: s.id,
+      publicId: s.publicId,
+      workspaceId: s.workspaceId,
+      revision: s.revision,
+      messageCount: s.messages.length,
+    })),
+  );
+  // A transcript that no longer validates still lists: nothing decodes it.
+  const raw = new Database(db);
+  raw.exec(
+    `UPDATE sessions SET state_json = '[{"role":"bogus"}]' WHERE id = ${second.id}`,
+  );
+  raw.close();
+  await expect(store.listSessions(workspace)).rejects.toThrow();
+  expect(
+    Object.fromEntries(
+      (await store.listSessionSummaries(workspace)).map((s) => [
+        s.publicId,
+        s.messageCount,
+      ]),
+    ),
+  ).toEqual({ [first.publicId]: 3, [second.publicId]: 1 });
+  store.close();
 });
