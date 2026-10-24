@@ -140,7 +140,9 @@ a child and draws the whole screen from `apps/cli/src/tuimark/ui/app.tui`.
   the context it was loaded with. Once a model has answered, the client
   reads `/api/ps` once on its own, in the background: a model partly outside
   GPU memory, or loaded with less context than asked, leaves a warning in the
-  transcript after that turn (after a later one when `/api/ps` is slow).
+  transcript after that turn (after a later one when `/api/ps` is slow). On
+  Ollama's MLX runner the loaded context is a soft limit that reserves
+  nothing, so a smaller one earns no warning.
   `/sessions` (with `--session-db` at startup) lists the workspace's saved
   sessions:
   `up`/`down` choose, `enter` loads that conversation whole and the next

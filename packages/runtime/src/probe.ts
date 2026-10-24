@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { canonicalModel, getJSON } from "#runtime/admission";
+import { canonicalModel, getJSON, ollamaMLX } from "#runtime/admission";
 import type { Provider } from "#runtime/config";
 
 /** The provider's model as its server holds it loaded (Ollama's GET /api/ps). */
@@ -10,6 +10,13 @@ export type LoadedModel = {
   vramBytes: number;
   /** The context it was loaded with, when the server says. */
   contextLength?: number;
+  /**
+   * Served by Ollama's MLX runner, decided as for `/api/show`: its context
+   * length is the num_ctx of the request that loaded it, a soft limit that
+   * bounds nothing, since the runner reserves nothing and stops only at
+   * the model's maximum (mlxrunner/client.go, runner.go in Ollama 0.40.6).
+   */
+  mlx?: true;
 };
 
 /** What one read-only look at the provider's endpoint found; nothing guessed. */
@@ -38,6 +45,11 @@ const PsSchema = z.object({
         size: z.unknown().optional(),
         size_vram: z.unknown().optional(),
         context_length: z.unknown().optional(),
+        runner: z.unknown().optional(),
+        details: z
+          .object({ format: z.unknown().optional() })
+          .passthrough()
+          .optional(),
       })
       .passthrough(),
   ),
@@ -76,10 +88,15 @@ export async function loadedModel(
     const vram = bytes(entry.size_vram);
     if (!size || vram === undefined) return undefined;
     const context = bytes(entry.context_length);
+    const mlx = ollamaMLX({
+      runner: entry.runner,
+      format: entry.details?.format,
+    });
     return {
       sizeBytes: size,
       vramBytes: vram,
       ...(context ? { contextLength: context } : {}),
+      ...(mlx ? { mlx: true as const } : {}),
     };
   } catch {
     return undefined;
@@ -161,7 +178,11 @@ export function placementWarning(
       // Floored, so a model one byte short never reads as 100%.
       `only ${Math.floor((loaded.vramBytes / loaded.sizeBytes) * 100)}% of it is in GPU memory; the rest runs on the CPU, slower`,
     );
+  // On MLX the loaded context is a soft limit that bounds nothing: a
+  // smaller one is no shortfall. Its GPU share still counts (Ollama 0.40.6
+  // reported size_vram equal to size for an MLX model here).
   if (
+    !loaded.mlx &&
     loaded.contextLength !== undefined &&
     loaded.contextLength < provider.context_size
   )

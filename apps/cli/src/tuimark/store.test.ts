@@ -856,6 +856,29 @@ test("providerLines says what the endpoint answered, and nothing it did not", ()
   expect(openai[0]).toBe("Provider: OpenAI-compatible / local");
 });
 
+test("providerLines says an MLX model's loaded context is a soft limit", () => {
+  const lines = providerLines({
+    provider: {
+      type: "ollama",
+      model: "qwen3.5:4b",
+      context_size: 16_384,
+      base_url: "http://127.0.0.1:11434",
+    },
+    probe: {
+      latencyMs: 3,
+      loaded: {
+        sizeBytes: 4 * 1024 ** 3,
+        vramBytes: 4 * 1024 ** 3,
+        contextLength: 16_384,
+        mlx: true,
+      },
+    },
+  });
+  expect(lines).toContain(
+    "Loaded context: 16384 tokens (MLX runner: a soft limit, nothing reserved)",
+  );
+});
+
 test("mcpLines names servers and tools, and says so when there are none", () => {
   expect(mcpLines([])).toEqual([
     "No MCP servers configured",

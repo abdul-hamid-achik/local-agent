@@ -80,12 +80,17 @@ const contextLength = (show: ShowModel) => {
 /**
  * Whether Ollama serves the model on its MLX runner (Apple silicon): there
  * `num_ctx` reserves nothing, the KV cache grows with the conversation and
- * Ollama never trims the history. `/api/show` `details.runner` decides
- * when it is set ("mlx", "llamacpp" or "ggml"); for a model that predates
- * the field the format decides, as Ollama's own `manifest.MetadataForConfig`
- * maps it (0.40.6): safetensors is MLX, gguf and ggml are not.
+ * Ollama never trims the history. The runner (`/api/show` `details.runner`,
+ * `/api/ps` `runner`) decides when it is set ("mlx", "llamacpp" or "ggml");
+ * for a model that predates the field the format decides, as Ollama's own
+ * `manifest.MetadataForConfig` maps it (0.40.6): safetensors is MLX, gguf
+ * and ggml are not.
  */
-export function ollamaMLX(details: ShowModel["details"]): boolean {
+export function ollamaMLX(
+  details:
+    | { runner?: unknown; format?: unknown; [field: string]: unknown }
+    | undefined,
+): boolean {
   const runner = details?.runner;
   if (typeof runner === "string" && runner.trim())
     return runner.trim().toLowerCase() === "mlx";

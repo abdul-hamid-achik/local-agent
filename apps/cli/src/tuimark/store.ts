@@ -1211,7 +1211,11 @@ export function providerLines(facts: ProviderFacts): string[] {
     const share = Math.floor((loaded.vramBytes / loaded.sizeBytes) * 100);
     lines.push(`Loaded: ${gib(loaded.sizeBytes)} · ${share}% in GPU memory`);
     if (loaded.contextLength !== undefined)
-      lines.push(`Loaded context: ${loaded.contextLength} tokens`);
+      lines.push(
+        loaded.mlx
+          ? `Loaded context: ${loaded.contextLength} tokens (MLX runner: a soft limit, nothing reserved)`
+          : `Loaded context: ${loaded.contextLength} tokens`,
+      );
     const warning = placementWarning(provider, loaded);
     if (warning) lines.push(`Warning: ${cleanText(warning)}`);
   }

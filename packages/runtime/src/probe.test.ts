@@ -1,6 +1,11 @@
 import { afterEach, expect, test } from "vitest";
 import type { Provider } from "#runtime/config";
-import { loadedModel, placementWarning, probeProvider } from "#runtime/probe";
+import {
+  type LoadedModel,
+  loadedModel,
+  placementWarning,
+  probeProvider,
+} from "#runtime/probe";
 
 const servers: { stop(force?: boolean): Promise<void> | void }[] = [];
 afterEach(async () => {
@@ -164,4 +169,68 @@ test("a placement warning names what is short, and nothing when the model is as 
   ).toBe(
     "qwen3:4b: only 0% of it is in GPU memory; the rest runs on the CPU, slower; and it is loaded with a context of 4096 tokens, below the 16384 asked",
   );
+});
+
+const psEntry = (extra: Record<string, unknown>) =>
+  endpoint({
+    "/api/ps": () =>
+      Response.json({
+        models: [
+          {
+            name: "qwen3.5:4b",
+            model: "qwen3.5:4b",
+            size: 3_970_012_688,
+            size_vram: 3_970_012_688,
+            context_length: 16_384,
+            ...extra,
+          },
+        ],
+      }),
+  });
+
+test("an /api/ps entry is MLX by its runner, or by safetensors weights when none is named", async () => {
+  const cases: [Record<string, unknown>, boolean][] = [
+    // As /api/ps answered on this machine (Ollama 0.40.6, qwen3.5:4b).
+    [{ runner: "mlx", details: { format: "safetensors" } }, true],
+    [{ runner: " MLX " }, true],
+    [{ runner: "llamacpp", details: { format: "safetensors" } }, false],
+    [{ runner: "ollama" }, false],
+    [{ details: { format: "safetensors" } }, true],
+    [{ runner: "", details: { format: "SafeTensors" } }, true],
+    [{ details: { format: "gguf" } }, false],
+    [{ runner: null }, false],
+    [{ runner: 5 }, false],
+    [{}, false],
+  ];
+  for (const [extra, mlx] of cases) {
+    const server = psEntry(extra);
+    const loaded = await loadedModel(
+      ollama(server.origin, "qwen3.5:4b"),
+      AbortSignal.timeout(5_000),
+    );
+    expect(loaded, JSON.stringify(extra)).toEqual({
+      sizeBytes: 3_970_012_688,
+      vramBytes: 3_970_012_688,
+      contextLength: 16_384,
+      ...(mlx ? { mlx: true } : {}),
+    });
+  }
+});
+
+test("on Ollama's MLX runner the loaded context is a soft limit: no shortfall warning", () => {
+  const asked = { model: "qwen3.5:4b", context_size: 32_768 };
+  const loaded: LoadedModel = {
+    sizeBytes: 3_970_012_688,
+    vramBytes: 3_970_012_688,
+    contextLength: 16_384,
+    mlx: true,
+  };
+  expect(placementWarning(asked, loaded)).toBeUndefined();
+  // Its GPU share still counts.
+  expect(placementWarning(asked, { ...loaded, vramBytes: 0 })).toBe(
+    "qwen3.5:4b: only 0% of it is in GPU memory; the rest runs on the CPU, slower",
+  );
+  // The same entry on another runner keeps the check.
+  const { mlx: _, ...llama } = loaded;
+  expect(placementWarning(asked, llama)).toContain("below the 32768 asked");
 });
