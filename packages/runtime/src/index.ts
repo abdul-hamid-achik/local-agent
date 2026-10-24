@@ -348,13 +348,14 @@ const toOpenAIMessage = (message: Message) => ({
 /**
  * A tool name arriving in fragments: pieces of one name, or the whole name
  * repeated in each fragment. A piece equal to what we have is ambiguous
- * ("read"+"read" or "read" twice); the declared tools settle it.
+ * ("read"+"read" or "read" twice). A repeat keeps the name unless only the
+ * doubled name is a declared tool.
  */
 function joinName(have: string, piece: string, declared: Set<string>) {
   if (piece !== have) return have + piece;
-  return declared.has(have) && !declared.has(have + piece)
-    ? have
-    : have + piece;
+  return declared.has(have + piece) && !declared.has(have)
+    ? have + piece
+    : have;
 }
 
 /** Whether `piece` can continue `have` as a split name: the joined name leads to a declared tool. */
@@ -493,9 +494,11 @@ async function* openAILocalChat(
         entry.args += fragment.function.arguments;
       pendingCalls.set(index, entry);
     }
-    // The same choices the parser's finished check looks at, not only the first.
+    // The same choices the parser's finished check looks at, not only the
+    // first. One reply is asked for; a server that sends several choices has
+    // its first string reason count, and a reason of another type is skipped.
     const reason = part.choices?.find(
-      (choice) => choice.finish_reason,
+      (choice) => typeof choice.finish_reason === "string",
     )?.finish_reason;
     if (typeof reason === "string") finishReason = reason;
     if (part.usage) usage = part.usage;

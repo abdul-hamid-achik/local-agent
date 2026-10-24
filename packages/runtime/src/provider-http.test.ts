@@ -356,6 +356,22 @@ describe("tool_call fragments", () => {
     ).toMatchObject([{ call: { function: { name: "readread" } } }]);
   });
 
+  test("a repeated name that is not declared is kept, not doubled", async () => {
+    const repeated: Fragment[] = [
+      { index: 0, id: "c", function: { name: "bash", arguments: "{" } },
+      { index: 0, function: { name: "bash", arguments: "}" } },
+    ];
+    expect(await run(repeated, declare("read"))).toMatchObject([
+      { call: { function: { name: "bash" } } },
+    ]);
+    expect(await run(repeated)).toMatchObject([
+      { call: { function: { name: "bash" } } },
+    ]);
+    expect(await run(repeated, declare("bash", "bashbash"))).toMatchObject([
+      { call: { function: { name: "bash" } } },
+    ]);
+  });
+
   test("calls without index or id are told apart by a different name", async () => {
     expect(
       await run(
@@ -451,7 +467,11 @@ describe("finish reasons", () => {
       sseResponse(
         sse(
           JSON.stringify({
-            choices: [{ delta: {} }, { delta: {}, finish_reason: "length" }],
+            choices: [
+              { delta: {} },
+              { delta: {}, finish_reason: 5 },
+              { delta: {}, finish_reason: "length" },
+            ],
           }),
         ),
       ),
