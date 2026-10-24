@@ -766,9 +766,11 @@ test("a command stopped by its timeout reports partial changes, and the turn goe
 
 test("a command that leaves a process holding its output has an unknown outcome", async () => {
   // The child leaves the process group (setsid) and keeps stdout open, so
-  // the runner cannot see the command end: the turn stops there.
+  // the runner cannot see the command end: the turn stops there. It holds
+  // on until the test is done (a stop file, 30 s at most), not for a fixed
+  // time a loaded machine may outlast before the runner sees the leader go.
   const script =
-    "use POSIX; if (fork) { exit 0 } POSIX::setsid(); sleep 2; exit 0";
+    'use POSIX; if (fork) { exit 0 } POSIX::setsid(); for (1..300) { last if -e "stop"; select(undef, undef, undef, 0.1) } exit 0';
   let root = "";
   try {
     await expect(
@@ -784,6 +786,11 @@ test("a command that leaves a process holding its output has an unknown outcome"
       ),
     ).rejects.toThrow("Tool outcome is uncertain");
   } finally {
-    if (root) await rm(root, { recursive: true, force: true });
+    if (root) {
+      await writeFile(join(root, "stop"), "");
+      // The child sees it within a tenth of a second.
+      await Bun.sleep(300);
+      await rm(root, { recursive: true, force: true });
+    }
   }
 });
