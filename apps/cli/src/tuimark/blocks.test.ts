@@ -397,6 +397,109 @@ function cardOf(
   };
 }
 
+/** The runtime's MCP envelope as a tool message carries it. */
+function envelope(text: string, isError = false): string {
+  return JSON.stringify({
+    transport: "success",
+    domain: "unknown",
+    evidence: "unverified",
+    isError,
+    text,
+  });
+}
+
+test("an MCP card shows the server's text under a head that keeps the doubt", () => {
+  const raw = envelope(JSON.stringify({ alternatives: ["a", "b"], n: 2 }));
+  const { card, receipt } = cardOf(
+    "mcphub__resolve_tool",
+    { goal: "x" },
+    "unverified",
+    raw,
+  );
+  const lines = runsText(card?.out ?? []).split("\n");
+  expect(lines[0]).toBe("unverified · domain unknown");
+  expect(card?.out[0]).toEqual({
+    text: "unverified · domain unknown",
+    class: "note",
+  });
+  // The text is pretty-printed and none of the envelope's keys show.
+  expect(lines.slice(1)).toEqual([
+    "{",
+    '  "alternatives": [',
+    '    "a",',
+    '    "b"',
+    "  ],",
+    '  "n": 2',
+    "}",
+  ]);
+  expect(runsText(card?.out ?? [])).not.toContain("transport");
+  // /details (and so /export) read the same parse, whole.
+  expect(receipt?.output.split("\n").slice(0, 2)).toEqual([
+    "unverified · domain unknown",
+    "{",
+  ]);
+  expect(receipt?.output).not.toContain("isError");
+});
+
+test("an MCP error is class err, and text that is not JSON stays as it is", () => {
+  const show = (text: string) =>
+    runsText(
+      cardOf("srv__tool", {}, "unverified", envelope(text)).card?.out ?? [],
+    );
+  const { card } = cardOf(
+    "srv__tool",
+    {},
+    "failed",
+    envelope("rate limited", true),
+  );
+  expect(card?.out).toEqual([
+    { text: "error · unverified · domain unknown", class: "err" },
+    "\nrate limited",
+  ]);
+  // Cut by the runtime's output cap, or a bare scalar: the bytes stay.
+  expect(show('{"cut": ')).toBe('unverified · domain unknown\n{"cut": ');
+  expect(show("42")).toBe("unverified · domain unknown\n42");
+});
+
+test("an MCP card clips pretty-printed JSON like any output", () => {
+  const big = envelope(
+    JSON.stringify({ rows: Array.from({ length: 30 }, (_, i) => i) }),
+  );
+  const { card, receipt } = cardOf("srv__tool", {}, "unverified", big);
+  const shown = runsText(card?.out ?? []).split("\n");
+  expect(shown).toHaveLength(9);
+  expect(shown.at(-1)).toContain("more lines · /details for full output");
+  expect(receipt?.output.split("\n").length).toBeGreaterThan(30);
+});
+
+test("anything that is not exactly the MCP envelope shows as it did", () => {
+  const show = (name: string, output: string) =>
+    runsText(cardOf(name, {}, "unverified", output).card?.out ?? []);
+  const full = {
+    transport: "success",
+    domain: "unknown",
+    evidence: "unverified",
+    isError: false,
+    text: "t",
+  };
+  for (const bad of [
+    { ...full, text: 5 },
+    { ...full, isError: "no" },
+    { ...full, domain: undefined },
+    { ...full, transport: 1 },
+    { ...full, evidence: null },
+  ]) {
+    const output = JSON.stringify(bad);
+    expect(show("srv__tool", output)).toBe(output);
+  }
+  expect(show("srv__tool", "not json")).toBe("not json");
+  expect(show("srv__tool", "[1,2]")).toBe("[1,2]");
+  expect(show("srv__tool", "null")).toBe("null");
+  // A built-in tool's output is never read as an envelope.
+  const output = JSON.stringify(full);
+  expect(show("fetch", output)).toBe(output);
+});
+
 test("a finished edit's card shows the change its own strings made", () => {
   const { card, receipt } = cardOf(
     "edit",

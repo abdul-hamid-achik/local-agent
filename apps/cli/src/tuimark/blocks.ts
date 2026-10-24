@@ -1168,11 +1168,68 @@ export function outputRuns(
   return runs;
 }
 
+/**
+ * The runtime's MCP envelope (`McpToolResult`) read at the client boundary:
+ * a head that keeps the uncertainty in view, and the server's own text as the
+ * body (pretty-printed when it is a JSON object or array). Undefined for
+ * anything that is not exactly that shape, which the caller shows as it is.
+ * Display only: the model and the session keep the envelope.
+ */
+function mcpEnvelope(
+  output: string,
+): { head: { text: string; bad: boolean }; body: string } | undefined {
+  let r: Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(output);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
+      return undefined;
+    r = parsed as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+  const { transport, domain, evidence, isError, text } = r;
+  if (
+    typeof transport !== "string" ||
+    typeof domain !== "string" ||
+    typeof evidence !== "string" ||
+    typeof isError !== "boolean" ||
+    typeof text !== "string"
+  )
+    return undefined;
+  // Transport success says the call went through, nothing about the result:
+  // the head names what is and is not known about it.
+  const head = [
+    isError ? "error" : "",
+    transport === "success" ? "" : `transport ${transport}`,
+    evidence,
+    `domain ${domain}`,
+  ].filter(Boolean);
+  return {
+    head: { text: head.join(" · "), bad: isError },
+    body: prettyJson(text),
+  };
+}
+
+/** `text` indented when it is a JSON object or array; otherwise as it is. */
+function prettyJson(text: string): string {
+  if (!/^\s*[[{]/.test(text)) return text;
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2);
+  } catch {
+    // Not JSON, or cut mid-way by the runtime's output cap: show it as it is.
+    return text;
+  }
+}
+
 /** What to show under a finished tool card: an optional head line, then the output. */
 function resultParts(
   name: string,
   output: string,
 ): { head?: { text: string; bad: boolean }; body: string } {
+  if (mcpParts(name)) {
+    const mcp = mcpEnvelope(output);
+    if (mcp) return mcp;
+  }
   if (name === "run_command") {
     try {
       const r = JSON.parse(output) as {
