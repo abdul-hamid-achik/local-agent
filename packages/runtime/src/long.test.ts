@@ -245,10 +245,11 @@ test("a server that counts the prompt small does not keep the window from shorte
   expect(result.requests[1]).toHaveLength(history.length + 3);
 });
 
-test("what compaction cannot free is left out, oldest exchanges first", async () => {
-  // 300 exchanges: even shortened, far past a 16k window.
+test("what compaction cannot free is left out whole, oldest exchanges first", async () => {
+  // 200 exchanges (under the message count): even shortened, far past a
+  // 16k window.
   const history = [
-    ...reads(300, 4_000),
+    ...reads(200, 4_000),
     { role: "user", content: "and?" },
   ] as Message[];
   const result = await run(history, [], { compact: true });
@@ -262,6 +263,23 @@ test("what compaction cannot free is left out, oldest exchanges first", async ()
   // The request fits the window's budget by the characters' measure.
   expect(promptChars(sent.slice(1) as Message[])).toBeLessThan(
     16_384 * 3 * 0.7,
+  );
+  // What it leaves out is not shortened: the session keeps it as it was.
+  const compacted = result.events.flatMap((e) =>
+    e.type === "compacted" ? [e] : [],
+  );
+  expect(compacted).toHaveLength(1);
+  const kept = compacted[0]?.messages ?? [];
+  const left = event?.left ?? 0;
+  const content = (messages: Message[]) => messages.map((m) => m.content);
+  expect(content(kept.slice(0, left))).toEqual(content(history.slice(0, left)));
+  expect(kept.slice(left).some((m) => m.content.includes(" elided "))).toBe(
+    true,
+  );
+  // Its notice counts what the request carries (plus the system prompt
+  // and the tools), not the part left out.
+  expect(compacted[0]?.tokensBefore ?? 0).toBeLessThan(
+    (promptChars(history.slice(left)) + 9_000) / 3,
   );
 });
 

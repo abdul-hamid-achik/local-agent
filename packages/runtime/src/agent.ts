@@ -1744,12 +1744,24 @@ async function* agentTurn(
     // the window would otherwise leave out, and the window then leaves out
     // only what compaction could not free.
     const room = MAX_REQUEST_MESSAGES - 1 - (nudge ? 1 : 0);
+    let start: number | undefined;
     if (options.compact) {
       const window = provider.context_size;
-      // What the message count leaves out is not sent: shortening it saves
-      // the request nothing.
+      // What the request cannot carry is not shortened: it saves the
+      // request nothing, and the session keeps it whole. That is what the
+      // message count leaves out, and what the window would leave out even
+      // with every result shortened (a dry run finds where that starts).
       const counted = windowStart(history, Number.POSITIVE_INFINITY, 0, room);
-      const carried = promptChars(history.slice(counted));
+      const from = Math.max(
+        counted,
+        windowStart(
+          compactHistory(history, Number.POSITIVE_INFINITY, counted).messages,
+          budgetChars,
+          stepChars,
+          room,
+        ),
+      );
+      const carried = promptChars(history.slice(from));
       const chars = carried + instructions.length;
       const estimate = anchor
         ? anchor.tokens + (chars - anchor.chars) / CHARS_PER_TOKEN
@@ -1770,7 +1782,7 @@ async function* agentTurn(
         const { messages, elided, saved } = compactHistory(
           history,
           Math.ceil(free),
-          counted,
+          from,
         );
         if (elided > 0) {
           history.splice(0, history.length, ...messages);
@@ -1784,8 +1796,12 @@ async function* agentTurn(
           };
         }
       }
+      // When even that leaves exchanges out, the request starts where the
+      // dry run found: all of it fits once shortened, and nothing before
+      // it was shortened.
+      if (from > counted) start = from;
     }
-    const start = windowStart(history, budgetChars, stepChars, room);
+    start ??= windowStart(history, budgetChars, stepChars, room);
     if (start > 0 && start !== reported)
       yield {
         type: "windowed",
