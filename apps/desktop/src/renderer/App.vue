@@ -70,7 +70,10 @@
             </div>
           </div>
         </div>
-        <component :is="activeView" v-else />
+        <!-- Kept alive so a Chat run and its transcript survive switching views. -->
+        <KeepAlive include="ChatView">
+          <component :is="activeView" v-if="store.connection !== 'error'" />
+        </KeepAlive>
       </main>
       <footer class="statusbar">
         <span class="mono">{{ shortPath(store.repoRoot) || "…" }}</span>

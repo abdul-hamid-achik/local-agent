@@ -95,7 +95,7 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, onUnmounted, ref } from "vue";
+import { nextTick, onMounted, onUnmounted, ref } from "vue";
 import ApprovalCard from "#desktop/renderer/components/ApprovalCard.vue";
 import { api, errorMessage, randomRunId, rpc, subscribeStream } from "#desktop/renderer/api";
 import { renderMarkdown } from "#desktop/renderer/markdown";
@@ -103,6 +103,9 @@ import { parseSlashCommand } from "#desktop/renderer/slash";
 import { store, workspaceRoot } from "#desktop/renderer/store";
 import type { AgentStreamEvent, ChatMessage } from "#desktop/shared/protocol";
 import { SidecarMethods } from "#desktop/shared/protocol";
+
+// KeepAlive (App.vue) matches on this name: leaving Chat must not end its run.
+defineOptions({ name: "ChatView" });
 
 type Approval = Extract<AgentStreamEvent, { type: "approval_requested" }> & {
   decided: boolean;
@@ -130,6 +133,8 @@ const activeSessionId = ref("");
 const transcriptEl = ref<HTMLElement | undefined>();
 let runId = "";
 let unsubscribe: (() => void) | undefined;
+let unsubscribeExit: (() => void) | undefined;
+const deciding = new Set<string>();
 
 const truncatedThinking = ref("");
 const shortId = (id: string) => (id.length > 12 ? `${id.slice(0, 8)}…` : id);
@@ -222,12 +227,17 @@ function finish(): void {
 }
 
 async function decide(approval: Approval, allowed: boolean): Promise<void> {
-  approval.decided = true;
-  approval.allowed = allowed;
+  if (approval.decided || deciding.has(approval.token)) return;
+  deciding.add(approval.token);
   try {
     await api.agentDecide(runId, approval.token, allowed);
+    approval.decided = true;
+    approval.allowed = allowed;
   } catch (error_) {
+    // The card stays open so the decision can be retried.
     error.value = errorMessage(error_);
+  } finally {
+    deciding.delete(approval.token);
   }
 }
 
@@ -314,9 +324,19 @@ async function submit(): Promise<void> {
   }
 }
 
+onMounted(() => {
+  unsubscribeExit = api.onSidecarExit((_code, message) => {
+    if (!running.value) return;
+    error.value = message ?? "Sidecar exited during the run.";
+    finish();
+  });
+});
+
+// The view is kept alive across navigation, so this runs only at teardown. A
+// run ends by Stop or when the app quits (main stops the sidecar).
 onUnmounted(() => {
-  if (runId) void api.agentCancel(runId).catch(() => undefined);
   unsubscribe?.();
+  unsubscribeExit?.();
 });
 </script>
 
