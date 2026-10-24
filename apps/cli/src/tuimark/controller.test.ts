@@ -3366,7 +3366,7 @@ test("rules: /permissions lists both origins and clear rules empties the file", 
   await ui.fire("dialog_always");
   await client.idle();
   await ui.fire("send", "/permissions");
-  expect(store(ui).status).toBe("Permissions: file: allow edit:a.txt");
+  expect(store(ui).status).toBe("Permissions: file: allow edit:/a.txt");
   await ui.fire("send", "/permissions clear rules");
   expect(store(ui).status).toBe("File rules cleared");
   expect(await loadPermissionFile(root)).toEqual({

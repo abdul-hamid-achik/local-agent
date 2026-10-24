@@ -189,8 +189,12 @@ test("proposeRule: paths escaped, commands narrowed, hosts and tools exact", () 
   expect(proposeRule(edit("src/a*b.ts?"))).toEqual({
     effect: "allow",
     tool: "edit",
-    pattern: "src/a\\*b.ts\\?",
+    pattern: "/src/a\\*b.ts\\?",
   });
+  // Anchored: the same path under another directory is not covered.
+  const saved = proposeRule(edit("src/a.ts"));
+  expect(evaluate([saved], edit("src/a.ts")).effect).toBe("allow");
+  expect(evaluate([saved], edit("vendor/src/a.ts")).effect).toBe("ask");
   expect(proposeRule(run("bun test", ["bun", "test"]))).toEqual({
     effect: "allow",
     tool: "run_command",

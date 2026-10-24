@@ -752,7 +752,8 @@ function escapeGlob(path: string): string {
 
 /**
  * The rule an "always" verdict would save: exactly what was approved — a
- * literal escaped path, the command's exact argv (quoted where needed; a
+ * literal escaped path anchored at the workspace root (bare, `src/a.ts`
+ * would also match `vendor/src/a.ts`), the command's exact argv (quoted where needed; a
  * hand-written trailing `*` widens it), the fetch host, the exact MCP
  * tool, or everything for a web search.
  */
@@ -762,7 +763,7 @@ export function proposeRule(request: PermissionRequest): PermissionRule {
       return {
         effect: "allow",
         tool: "edit",
-        pattern: escapeGlob(request.target),
+        pattern: `/${escapeGlob(request.target)}`,
       };
     case "run_command": {
       const argv = request.argv?.length
