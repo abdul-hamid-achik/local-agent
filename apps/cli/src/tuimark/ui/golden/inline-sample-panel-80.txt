@@ -19,4 +19,4 @@
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║ Message the model                                                            ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
- Status   ^P commands  ctrl+c quit  ^L latest  shift+tab mode                   
+ Status   ^P commands  ^Y copy  ctrl+c quit  ^L latest  shift+tab mode          

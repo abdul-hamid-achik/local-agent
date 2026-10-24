@@ -159,6 +159,10 @@ span.del { color: $danger; }
 /* No gap above a head (bold, in the accent colour, it reads as one): the
  * rows saved keep every command and key in view at 30 rows. */
 .la-help-head { bold: true; color: $accent; margin: 0; }
+/* The kit's help box pads a row above and below; the commands list grew by
+ * /copy and the keys by the selection row, so those two rows go back to the
+ * keys (the box keeps its side padding and its border). */
+.k-help { padding: 0 2; }
 .la-help-first { margin: 0; }
 .la-helpcmds { height: auto; layout: column; }
 .la-helpcmd { width: 1fr; height: 1; gap: 1; }

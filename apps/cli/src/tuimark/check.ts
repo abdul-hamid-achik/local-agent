@@ -459,7 +459,46 @@ const plays: Expect[] = [
     value: "/help",
   },
   { sample: "sample", input: "esc", actions: ["cancel"] },
+  // ctrl+y copies the last reply (the composer does not take it), and its
+  // hint is third on the status line, so it survives a narrow terminal.
+  {
+    sample: "sample",
+    input: "ctrl+y",
+    actions: ["copy_reply"],
+    screen: ["^P commands", "esc cancel", "^Y copy"],
+  },
   { sample: "sample", input: "ctrl+c", actions: ["quit_request"] },
+  // The welcome names the native selection (a modifier-drag while mouse
+  // reporting is on) and /copy.
+  {
+    sample: "sample-empty",
+    input: "",
+    actions: [],
+    screen: ["shift-drag selects text", "/copy copies the last reply"],
+  },
+  // One indicator, in the live assistant message: a spinner and the phase
+  // with the elapsed time beside "Assistant", never a second one in the
+  // status bar, the placeholder or a "Thinking…" block of its own.
+  {
+    sample: "sample-streaming",
+    input: "",
+    actions: [],
+    screen: ["Assistant", "12s", "Type to queue a message"],
+    notScreen: ["Generating", "Thinking", "Waiting for the model"],
+  },
+  {
+    sample: "sample-thinking",
+    input: "",
+    actions: [],
+    screen: ["thinking · 7s", "I should read src/fetch.ts first"],
+    notScreen: ["Generating", "Thinking…"],
+  },
+  {
+    sample: "sample-question",
+    input: "",
+    actions: [],
+    screen: ["⠿  waiting for your answer · 12s"],
+  },
   // The composer: enter sends, shift+enter and alt+enter break the line, a paste
   // keeps its breaks, and the message is one message.
   {
@@ -679,18 +718,22 @@ const plays: Expect[] = [
   { sample: "sample-palette", input: "esc", actions: ["palette_close"] },
   {
     sample: "sample-help",
-    // Every command is a row of the help, and the keys follow them.
-    rows: 31,
+    // Every command is a row of the help, and the keys follow them (the
+    // list is scrollable; this height shows it down to the history key).
+    rows: 34,
     input: "",
     actions: [],
     screen: [
       "Commands",
       "/mode plan|build",
       "/theme dark|light|auto",
+      "/copy [code]",
       "/details",
       "/sessions",
       "enter send",
       "shift/alt+enter new line",
+      "shift-drag select text",
+      "^Y copy",
       "↑/↓ history",
     ],
   },
@@ -1083,6 +1126,7 @@ const plays: Expect[] = [
     screen: [
       "Commands",
       "/mode plan|build",
+      "/copy [code]",
       "enter send",
       "shift/alt+enter new line",
     ],
@@ -1109,6 +1153,23 @@ const plays: Expect[] = [
     inline: true,
     input: "shift+tab",
     actions: ["mode_toggle"],
+  },
+  {
+    sample: "inline-sample",
+    doc: "inline.tui",
+    inline: true,
+    input: "ctrl+y",
+    actions: ["copy_reply"],
+    screen: ["^Y copy"],
+  },
+  {
+    sample: "inline-sample-thinking",
+    doc: "inline.tui",
+    inline: true,
+    input: "",
+    actions: [],
+    screen: ["Assistant", "thinking · 7s", "Type to queue a message"],
+    notScreen: ["Generating", "Thinking…"],
   },
   // The slash popup lives in the region: its keys fire there, its rows
   // render there, and nothing of it is ever committed.

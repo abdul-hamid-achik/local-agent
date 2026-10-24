@@ -12,4 +12,4 @@
 ╔══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
 ║ Message the model                                                                                                    ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
- Sessions · enter loads · esc closes   ^P commands  ctrl+c quit  ^L latest  shift+tab mode                              
+ Sessions · enter loads · esc closes   ^P commands  ^Y copy  ctrl+c quit  ^L latest  shift+tab mode                     

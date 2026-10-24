@@ -1,12 +1,12 @@
 === grid 120x24 ===
  Local Agent           Ollama / ╭─ Help ───────────────────────────────────────────────╮c3d  ctx 9.6k/32k  ███▋░░░░░░░░ 
-                                │                                                      │                                
                                 │  ? close help                                        │                                
                                 │  Commands                                            │                                
                                 │  /mode plan|build|chat plan reads only · build can…  │                                
                                 │  /model [NAME] show or switch the Ollama model       │                                
                                 │  /theme dark|light|auto set the session theme        │                                
                                 │  /mouse on|off toggle mouse reporting (fullscreen)   │                                
+                                │  /copy [code] copy the last reply, or its last cod…  │                                
                                 │  /permissions [clear|trust] show, clear or trust g…  │                                
                                 │  /sandbox on|off run commands confined (macOS), wi…  │                                
                                 │  /details show the last tool output in full          │                                
@@ -21,5 +21,5 @@
                                 │  Keys                                                │                                
 ╭───────────────────────────────│  enter send                                          │───────────────────────────────╮
 │ Message the model             │  shift/alt+enter new line                            │                               │
-╰───────────────────────────────│                                                      │───────────────────────────────╯
+╰───────────────────────────────│  shift-drag select text (mouse reporting is on)      │───────────────────────────────╯
  build · last 1m 06s · 32 tok/s ╰──────────────────────────────────────────────────────╯                                

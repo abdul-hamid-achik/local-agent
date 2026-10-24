@@ -17,6 +17,7 @@
   },
   "empty": false,
   "mouse_on": true,
+  "select_tip": "shift-drag selects text",
   "messages": [],
   "earlier": {
     "n": 0
@@ -143,6 +144,16 @@
         "hint": "/mouse off"
       },
       {
+        "id": "copy",
+        "label": "Copy: the last reply",
+        "hint": "/copy"
+      },
+      {
+        "id": "copy-code",
+        "label": "Copy: its last code block",
+        "hint": "/copy code"
+      },
+      {
         "id": "permissions",
         "label": "Permissions: show",
         "hint": "/permissions"
@@ -257,6 +268,11 @@
         "desc": "toggle mouse reporting (fullscreen)"
       },
       {
+        "id": "/copy",
+        "cmd": "/copy [code]",
+        "desc": "copy the last reply, or its last code block (ctrl+y)"
+      },
+      {
         "id": "/permissions",
         "cmd": "/permissions [clear|trust]",
         "desc": "show, clear or trust grants and rules"
@@ -311,7 +327,9 @@
         "cmd": "/goal [OBJECTIVE|stop]",
         "desc": "run turns toward an objective until done or a limit"
       }
-    ]
+    ],
+    "select_key": "shift-drag",
+    "select_desc": "select text (mouse reporting is on)"
   },
   "draft": "",
   "placeholder": "Message the model",

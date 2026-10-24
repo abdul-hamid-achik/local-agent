@@ -28,4 +28,4 @@
 ╔══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
 ║ Type your answer                                                                                                     ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
- Waiting for your answer · esc skip   ^P commands  ^O earlier  pgup/pgdn scroll  ^L latest  shift+tab mode              
+ Waiting for your answer · esc skip   ^P commands  ^Y copy  ^O earlier  pgup/pgdn scroll  ^L latest  shift+tab mode     

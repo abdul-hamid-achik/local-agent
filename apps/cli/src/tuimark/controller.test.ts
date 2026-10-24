@@ -31,6 +31,7 @@ import {
   parseBlocks,
   runsText,
 } from "#cli/tuimark/blocks";
+import type { CopyResult } from "#cli/tuimark/clipboard";
 import { BUSY_STATUS, type PaletteItem } from "#cli/tuimark/commands";
 import {
   APPROVAL_ARM_MS,
@@ -2416,6 +2417,7 @@ test("typing / opens the command popup; it filters, moves and completes", async 
     "/model",
     "/theme",
     "/mouse",
+    "/copy",
     "/permissions",
     "/sandbox",
     "/details",
@@ -2622,6 +2624,7 @@ test("the help overlay's store carries the slash commands", () => {
     "/model [NAME]",
     "/theme dark|light|auto",
     "/mouse on|off",
+    "/copy [code]",
     "/permissions [clear|trust]",
     "/sandbox on|off",
     "/details",
@@ -6131,4 +6134,355 @@ test("a draft typed while a ctrl+c cancel winds down: no quit hint, the next pre
   expect(await ui.fire("quit_request")).toBeUndefined();
   expect(store(ui).status).toBe("Draft cleared · ctrl+c again to quit");
   expect(await ui.fire("quit_request")).toBe("quit");
+});
+
+// ------------------------------------------------------------------------ copy
+
+/** A clipboard that records what it was given, and answers `result`. */
+function fakeClipboard(result: CopyResult = { ok: true, tool: "fakeclip" }): {
+  copy: (text: string) => Promise<CopyResult>;
+  copied: string[];
+} {
+  const copied: string[] = [];
+  return {
+    copied,
+    copy: async (text) => {
+      copied.push(text);
+      return result;
+    },
+  };
+}
+
+const FENCED_REPLY = [
+  "Here are two snippets.",
+  "",
+  "```ts",
+  "const first = 1;",
+  "```",
+  "",
+  "And the second:",
+  "",
+  "```sh",
+  "\tbun test",
+  "```",
+  "",
+  "Done.",
+].join("\n");
+
+test("/copy puts the last reply's markdown on the clipboard and says what it used", async () => {
+  const clip = fakeClipboard();
+  const { ui, client } = setup(reply(FENCED_REPLY), {
+    copy: clip.copy,
+  });
+  await ui.fire("send", "snippets please");
+  await client.idle();
+  await ui.fire("send", "/copy");
+  expect(clip.copied).toEqual([FENCED_REPLY]);
+  expect(store(ui).status).toBe(
+    `Copied the last reply (${FENCED_REPLY.length} chars) with fakeclip`,
+  );
+  expect(store(ui).draft).toBe("");
+  expect(client.writeErrors).toEqual([]);
+});
+
+test("/copy writes the count with a thousands separator", async () => {
+  const clip = fakeClipboard();
+  const long = "x".repeat(1234);
+  const { ui, client } = setup(reply(long), { copy: clip.copy });
+  await ui.fire("send", "long");
+  await client.idle();
+  await ui.fire("send", "/copy");
+  expect(store(ui).status).toBe(
+    "Copied the last reply (1,234 chars) with fakeclip",
+  );
+});
+
+test("/copy code copies the last fenced block of the last reply, tabs and all", async () => {
+  const clip = fakeClipboard();
+  const { ui, client } = setup(reply(FENCED_REPLY), { copy: clip.copy });
+  await ui.fire("send", "snippets please");
+  await client.idle();
+  await ui.fire("send", "/copy code");
+  expect(clip.copied).toEqual(["\tbun test"]);
+  expect(store(ui).status).toBe(
+    "Copied the last code block (9 chars) with fakeclip",
+  );
+});
+
+test("/copy says so when there is no reply yet, or no code block in it", async () => {
+  const clip = fakeClipboard();
+  const { ui, client } = setup(reply("Just words, no code."), {
+    copy: clip.copy,
+  });
+  await ui.fire("send", "/copy");
+  expect(store(ui).status).toBe("No reply to copy yet");
+  await ui.fire("send", "/copy code");
+  expect(store(ui).status).toBe("No reply to copy yet");
+  await ui.fire("send", "talk");
+  await client.idle();
+  await ui.fire("send", "/copy code");
+  expect(store(ui).status).toBe("No code block in the last reply");
+  // Nothing reached the clipboard in any of them.
+  expect(clip.copied).toEqual([]);
+});
+
+test("/copy with no clipboard tool says how to select by hand, with the terminal's modifier", async () => {
+  const none = fakeClipboard({ ok: false, reason: "none" });
+  const plain = setup(reply("hello"), { copy: none.copy });
+  await plain.ui.fire("send", "hi");
+  await plain.client.idle();
+  await plain.ui.fire("send", "/copy");
+  expect(store(plain.ui).status).toBe(
+    "No clipboard tool found (pbcopy, wl-copy, xclip, xsel): select text with shift-drag",
+  );
+  // iTerm2 selects with option, Terminal.app with fn.
+  const iterm = setup(reply("hello"), {
+    copy: none.copy,
+    termProgram: "iTerm.app",
+  });
+  await iterm.ui.fire("send", "hi");
+  await iterm.client.idle();
+  await iterm.ui.fire("send", "/copy");
+  expect(store(iterm.ui).status).toContain("select text with option-drag");
+  // With mouse reporting off a plain drag selects.
+  await iterm.ui.fire("send", "/mouse off");
+  await iterm.ui.fire("send", "/copy");
+  expect(store(iterm.ui).status).toContain("select text with drag");
+  // No clipboard at all (the option absent) is the same answer.
+  const bare = setup(reply("hello"));
+  await bare.ui.fire("send", "hi");
+  await bare.client.idle();
+  await bare.ui.fire("send", "/copy");
+  expect(store(bare.ui).status).toContain("No clipboard tool found");
+});
+
+test("a clipboard tool that failed is named, not hidden behind 'no tool'", async () => {
+  const failing = fakeClipboard({
+    ok: false,
+    reason: "failed",
+    tool: "xclip",
+    detail: "exited with code 1",
+  });
+  const { ui, client } = setup(reply("hello"), { copy: failing.copy });
+  await ui.fire("send", "hi");
+  await client.idle();
+  await ui.fire("send", "/copy");
+  expect(store(ui).status).toBe("Copy failed: xclip exited with code 1");
+});
+
+/** A script whose "seed" turn answers `answer`; any other turn runs `rest`. */
+const seededThen = (answer: string, rest: Script): Script =>
+  async function* (ctx) {
+    if (ctx.messages.at(-1)?.content === "seed") {
+      yield {
+        type: "message",
+        message: { role: "assistant", content: answer },
+      };
+      return;
+    }
+    yield* rest(ctx);
+  };
+
+test("ctrl+y copies the last reply; it is ignored while an approval is open", async () => {
+  const clip = fakeClipboard();
+  const { ui, client } = setup(seededThen("the earlier answer", withApproval), {
+    copy: clip.copy,
+  });
+  await ui.fire("send", "seed");
+  await client.idle();
+  await ui.fire("copy_reply");
+  expect(clip.copied).toEqual(["the earlier answer"]);
+  expect(store(ui).status).toBe(
+    "Copied the last reply (18 chars) with fakeclip",
+  );
+  await ui.fire("send", "edit");
+  await untilApproval(ui);
+  await ui.fire("copy_reply");
+  // The approval keeps its status line and its keys: nothing was copied.
+  expect(clip.copied).toEqual(["the earlier answer"]);
+  expect(store(ui).status).toBe(APPROVAL_STATUS);
+  await ui.fire("dialog_cancel");
+  await client.idle();
+});
+
+test("/copy is not refused while a turn runs: it copies the last finished reply", async () => {
+  const clip = fakeClipboard();
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const { ui, client } = setup(
+    seededThen(
+      "```sh\nls\n```",
+      quiet(async () => {
+        await gate;
+      }),
+    ),
+    { copy: clip.copy },
+  );
+  await ui.fire("send", "seed");
+  await client.idle();
+  await ui.fire("send", "go");
+  await ui.fire("send", "/copy code");
+  expect(store(ui).status).toBe(
+    "Copied the last code block (2 chars) with fakeclip",
+  );
+  expect(clip.copied).toEqual(["ls"]);
+  // Another command is still refused while busy.
+  await ui.fire("send", "/status");
+  expect(store(ui).status).toBe(BUSY_STATUS);
+  release();
+  await client.idle();
+});
+
+// -------------------------------------------------------- the selection hint
+
+test("the welcome and the help name the modifier of the terminal, from TERM_PROGRAM", () => {
+  const cases: [string | undefined, string][] = [
+    [undefined, "shift-drag"],
+    ["ghostty", "shift-drag"],
+    ["WezTerm", "shift-drag"],
+    ["iTerm.app", "option-drag"],
+    ["Apple_Terminal", "fn-drag"],
+  ];
+  for (const [termProgram, hint] of cases) {
+    const { ui } = setup(reply("x"), { termProgram });
+    expect(store(ui).select_tip).toBe(`${hint} selects text`);
+    expect(store(ui).help.select_key).toBe(hint);
+    expect(store(ui).help.select_desc).toBe(
+      "select text (mouse reporting is on)",
+    );
+  }
+});
+
+test("/mouse off turns the hint into a plain drag, and on brings the modifier back", async () => {
+  const { ui } = setup(reply("x"), { termProgram: "iTerm.app" });
+  await ui.fire("send", "/mouse off");
+  expect(store(ui).mouse_on).toBe(false);
+  expect(store(ui).select_tip).toBe("drag selects text");
+  expect(store(ui).help.select_key).toBe("drag");
+  expect(store(ui).help.select_desc).toBe("select text");
+  await ui.fire("send", "/mouse on");
+  expect(store(ui).select_tip).toBe("option-drag selects text");
+  expect(store(ui).help.select_key).toBe("option-drag");
+});
+
+test("inline has no mouse reporting: a plain drag selects", () => {
+  const { ui } = setup(reply("x"), {
+    presentation: "inline",
+    termProgram: "iTerm.app",
+  });
+  expect(store(ui).select_tip).toBe("drag selects text");
+  expect(store(ui).help.select_key).toBe("drag");
+});
+
+test("mouse reporting stays on by default in fullscreen, off inline", () => {
+  expect(store(setup(reply("x")).ui).mouse_on).toBe(true);
+  expect(store(setup(reply("x"), { presentation: "inline" }).ui).mouse_on).toBe(
+    false,
+  );
+});
+
+test("a tool request takes the head's place even when no message came first", async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const { ui, client } = setup(async function* () {
+    yield { type: "text", text: "Looking. " };
+    yield { type: "tool_requested", id: "r1", name: "read" };
+    yield { type: "tool_start", id: "r1", name: "read" };
+    await gate;
+  });
+  await ui.fire("send", "go");
+  await until(() => store(ui).live.is_tool);
+  await client.flush();
+  expect(store(ui).head.on).toBe(false);
+  release();
+  await client.idle();
+});
+
+test("a cancelled or failed turn leaves no head behind", async () => {
+  const waiting = setup(
+    quiet(async ({ options }) => {
+      await new Promise((_, reject) =>
+        options.signal.addEventListener("abort", () =>
+          reject(new Error("aborted")),
+        ),
+      );
+    }),
+  );
+  await waiting.ui.fire("send", "go");
+  expect(store(waiting.ui).head.on).toBe(true);
+  await waiting.ui.fire("cancel");
+  await waiting.client.idle();
+  expect(store(waiting.ui).head.on).toBe(false);
+  expect(store(waiting.ui).head.spin).toBe(false);
+  expect(store(waiting.ui).status).toBe("Cancelled");
+
+  const failing = setup(
+    quiet(async () => {
+      throw new Error("boom");
+    }),
+  );
+  await failing.ui.fire("send", "go");
+  await failing.client.idle();
+  expect(store(failing.ui).head.on).toBe(false);
+  expect(store(failing.ui).status).toBe("boom");
+  // Nothing late writes it back on.
+  await new Promise((r) => setTimeout(r, 30));
+  expect(store(failing.ui).head.on).toBe(false);
+});
+
+test("a verdict stays on the status line until a tool result gives the ambient status back", async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const { ui, client } = setup(async function* (ctx) {
+    yield* withApproval(ctx);
+    await gate;
+  });
+  await ui.fire("send", "edit");
+  await untilApproval(ui);
+  await ui.fire("dialog_confirm");
+  // The tool ran and its result arrived: the bar is the ambient one again.
+  await until(() => store(ui).status === "build");
+  expect(statusWrites(ui)).toContain("Approved");
+  release();
+  await client.idle();
+});
+
+test("/copy takes the newest reply, skipping a step that only called a tool", async () => {
+  const clip = fakeClipboard();
+  const { ui, client } = setup(
+    async function* (ctx) {
+      const last = ctx.messages.at(-1)?.content;
+      yield {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: last === "one" ? "first answer" : "second answer",
+        },
+      };
+      // A step that only calls a tool has no content to copy.
+      yield {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: "",
+          tool_calls: [
+            { id: "c9", function: { name: "read", arguments: { path: "a" } } },
+          ],
+        },
+      };
+    },
+    { copy: clip.copy },
+  );
+  await ui.fire("send", "one");
+  await client.idle();
+  await ui.fire("send", "two");
+  await client.idle();
+  await ui.fire("send", "/copy");
+  expect(clip.copied).toEqual(["second answer"]);
 });

@@ -28,6 +28,7 @@ import {
   resolveBinary,
   spawnHost,
 } from "@thelacanians/tuimark";
+import { copyToClipboard } from "#cli/tuimark/clipboard";
 import type { Intent } from "#cli/tuimark/commands";
 import {
   type ClientOptions,
@@ -223,6 +224,10 @@ export interface LaunchDeps {
   placement?: ClientOptions["placement"];
   /** Chalupa's environment name (ClientOptions.environment). */
   environment?: string;
+  /** Replaces the system clipboard (tests; ClientOptions.copy). */
+  copy?: ClientOptions["copy"];
+  /** Replaces `$TERM_PROGRAM` for the native-selection hint (tests). */
+  termProgram?: string;
   /** Replaces the store-built `/sessions` capability (tests). */
   sessions?: SessionsCapability;
   spawn?: typeof spawnHost;
@@ -289,6 +294,9 @@ export async function runTuimark(
     ...(deps.sandbox ? { sandbox: true } : {}),
     ...(deps.placement ? { placement: deps.placement } : {}),
     ...(deps.environment ? { environment: deps.environment } : {}),
+    // The real clipboard tools; Tuimark owns the TTY, so never OSC 52.
+    copy: deps.copy ?? copyToClipboard,
+    termProgram: deps.termProgram ?? process.env.TERM_PROGRAM,
     signal,
     run: deps.run,
     columns: () => stdout.columns ?? readyColumns,

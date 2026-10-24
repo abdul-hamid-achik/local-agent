@@ -126,13 +126,15 @@ export function createTerminalRoot(
           return;
         }
         if (
-          /^\/(theme|mouse)(\s|$)/i.test(command) ||
+          /^\/(theme|mouse|copy)(\s|$)/i.test(command) ||
           command === "/theme" ||
-          command === "/mouse"
+          command === "/mouse" ||
+          command === "/copy"
         ) {
-          // Session theme/mouse are Tuimark-host features (@theme, <tui mouse>).
+          // Session theme/mouse are Tuimark-host features (@theme, <tui
+          // mouse>); /copy needs the Tuimark client's clipboard tools.
           status.value =
-            "/theme and /mouse are available in the Tuimark client";
+            "/theme, /mouse and /copy are available in the Tuimark client";
           return;
         }
         if (command === "/help") {

@@ -29,7 +29,12 @@ export interface CommandState {
   };
   /** The session theme (`/theme` reports and changes it). Default "auto". */
   theme?: Theme;
-  /** Whether fullscreen mouse reporting is on. Default false (off). */
+  /**
+   * Whether fullscreen mouse reporting is on. The client always sets it: on
+   * by default in fullscreen (the wheel scrolls the transcript; off, a
+   * terminal turns the wheel into arrow keys that recall history), off in
+   * inline. Absent reads as off.
+   */
   mouse?: boolean;
   /** Active session-grant labels, in grant order (`/permissions` lists them). */
   grants?: readonly string[];
@@ -93,6 +98,12 @@ export interface CommandOutcome {
    * The controller searches the workspace's saved sessions with it.
    */
   find?: string;
+  /**
+   * Set by `/copy` ("reply": the last assistant reply's markdown) and
+   * `/copy code` ("code": its last fenced code block). The controller owns
+   * the history and the clipboard, so it writes the real status itself.
+   */
+  copy?: "reply" | "code";
   /** Set by `/goal …`: what it asked for (see goal.ts). The controller runs it. */
   goal?: GoalCommand;
   /**
@@ -103,7 +114,7 @@ export interface CommandOutcome {
 }
 
 export const HELP_STATUS =
-  "/mode plan|build|chat · /model [NAME] · /theme dark|light|auto · /mouse on|off · /permissions [clear|trust] · /sandbox on|off · /details · /status · /sessions · /recover · /find TEXT · /export [json] · /mcp · /goal OBJECTIVE · /help · Esc cancel · Ctrl+C exit";
+  "/mode plan|build|chat · /model [NAME] · /theme dark|light|auto · /mouse on|off · /copy [code] · /permissions [clear|trust] · /sandbox on|off · /details · /status · /sessions · /recover · /find TEXT · /export [json] · /mcp · /goal OBJECTIVE · /help · Esc cancel · Ctrl+C exit";
 
 /** Inline has no mouse (the engine ignores it there): the controller refuses with this. */
 export const MOUSE_INLINE_STATUS = "Mouse is not available in inline mode";
@@ -158,6 +169,18 @@ export function runSlash(text: string, state: CommandState): CommandOutcome {
     return {
       status: `Mouse changed to ${requested}`,
       mouse: requested === "on",
+    };
+  }
+  const copy = command.match(/^\/copy(?:\s+(\S+))?\s*$/i);
+  if (copy) {
+    const requested = copy[1]?.toLowerCase();
+    if (requested === undefined)
+      return { status: "Copying the last reply…", copy: "reply" };
+    if (requested === "code")
+      return { status: "Copying the last code block…", copy: "code" };
+    return {
+      status: `Unknown copy argument: ${requested}. Use /copy or /copy code`,
+      unknown: true,
     };
   }
   const sandbox = command.match(/^\/sandbox(?:\s+(\S+))?\s*$/i);
@@ -368,6 +391,12 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
     insert: "/mouse ",
   },
   {
+    name: "/copy",
+    usage: "/copy [code]",
+    description: "copy the last reply, or its last code block (ctrl+y)",
+    insert: "/copy",
+  },
+  {
     name: "/permissions",
     usage: "/permissions [clear|trust]",
     description: "show, clear or trust grants and rules",
@@ -522,6 +551,8 @@ export const PALETTE: readonly PaletteItem[] = [
   { id: "theme-auto", label: "Theme: auto", hint: "/theme auto" },
   { id: "mouse-on", label: "Mouse: on", hint: "/mouse on" },
   { id: "mouse-off", label: "Mouse: off", hint: "/mouse off" },
+  { id: "copy", label: "Copy: the last reply", hint: "/copy" },
+  { id: "copy-code", label: "Copy: its last code block", hint: "/copy code" },
   { id: "permissions", label: "Permissions: show", hint: "/permissions" },
   {
     id: "permissions-clear",

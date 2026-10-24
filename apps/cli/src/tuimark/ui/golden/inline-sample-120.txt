@@ -3,4 +3,4 @@
 ╔══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
 ║ Message the model                                                                                                    ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
- build · last 1m 06s · 32 tok/s   ^P commands  esc cancel  ctrl+c quit  ↑/↓ history  pgup/pgdn scroll  ^L latest        
+ build · last 1m 06s · 32 tok/s   ^P commands  esc cancel  ^Y copy  ctrl+c quit  ↑/↓ history  pgup/pgdn scroll          

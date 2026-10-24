@@ -28,4 +28,4 @@
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║ enter takes the chosen row                                                   ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
- Waiting for your answer · esc skip   ^P commands  ^O earlier  pgup/pgdn scroll 
+ Waiting for your answer · esc skip   ^P commands  ^Y copy  ^O earlier          

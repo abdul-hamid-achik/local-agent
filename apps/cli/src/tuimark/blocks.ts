@@ -968,6 +968,51 @@ export function startsOpenFence(text: string): boolean {
 }
 
 /**
+ * The fenced code blocks of a markdown source, in order, each with its info
+ * word and its text exactly as the model wrote it (what `/copy code` puts on
+ * the clipboard): not the parsed blocks, which cut a long reply, color the
+ * code into runs and turn a pipe table into a code block of its own. The
+ * fences follow the rules of the parser above (an opening fence indented
+ * four or more counts only under a list item; the same mark, at least as
+ * long, closes it; the next less-indented list item ends it); a fence that
+ * never closes runs to the end, as in the view.
+ */
+export function fencedCodeBlocks(
+  markdown: string,
+): { lang: string; text: string }[] {
+  // Raw, but for the line ends: a tab in a Makefile must survive the copy.
+  const lines = markdown.replace(/\r\n?/g, "\n").split("\n");
+  const found: { lang: string; text: string }[] = [];
+  let underItem = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? "";
+    const fence = FENCE_OPEN.exec(line);
+    if (fence && fenceOpens(fence[1]?.length ?? 0, underItem)) {
+      const open = fence[2] ?? "```";
+      const indent = fence[1]?.length ?? 0;
+      const body: string[] = [];
+      for (
+        i++;
+        i < lines.length && !closesFence(lines[i] ?? "", open, indent);
+        i++
+      ) {
+        if (leavesFence(lines[i] ?? "", indent)) {
+          i--;
+          break;
+        }
+        body.push(unindent(lines[i] ?? "", indent));
+      }
+      found.push({
+        lang: (fence[3] ?? "").trim().split(/\s+/)[0] ?? "",
+        text: body.join("\n"),
+      });
+    } else if (LIST_ITEM.test(line)) underItem = true;
+    else if (line.trim() !== "" && !/^\s{2,}/.test(line)) underItem = false;
+  }
+  return found;
+}
+
+/**
  * A small markdown subset: paragraphs, `#` headings, bullet and numbered
  * items (one nesting level), `>` quotes, pipe tables (aligned, header bold)
  * and fenced code, with inline marks as runs (see `inlineRuns`). A fence that

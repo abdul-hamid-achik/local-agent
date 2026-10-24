@@ -109,6 +109,7 @@
          keeps only the first hint that fits. -->
     <bind keys="ctrl+p" action="palette_open" keycap="^P" label="commands"/>
     <bind keys="esc" action="cancel" label="cancel"/>
+    <bind keys="ctrl+y" action="copy_reply" keycap="^Y" label="copy"/>
     <!-- Not the built-in `quit` (the engine runs that itself and the parent
          never sees it): the parent's handler clears a draft first, then cancels
          a running turn, then quits. -->
@@ -263,6 +264,7 @@
           <text class="la-welcome-title" wrap="wrap">Local Agent · {header.model} · {header.provider}</text>
           <text class="la-welcome-line" wrap="wrap">{header.mode} · {header.session} · {header.workspace}</text>
           <text class="la-welcome-line" wrap="wrap">/help lists keys · ctrl+p opens commands · esc cancels</text>
+          <text class="la-welcome-line" wrap="wrap">{select_tip} · /copy copies the last reply</text>
         </col>
         <!-- As app.tui: the head says what the turn is doing, the reasoning
              shows under it until the answer starts, and a printed turn (a
@@ -394,6 +396,10 @@
         <row class="la-helpcmd">
           <text class="la-helpcmd-key">shift/alt+enter</text>
           <text class="la-helpcmd-desc">new line</text>
+        </row>
+        <row class="la-helpcmd">
+          <text class="la-helpcmd-key">{help.select_key}</text>
+          <text class="la-helpcmd-desc">{help.select_desc}</text>
         </row>
         <hints class="k-hints k-help-keys" scope="all"/>
       </scroll>

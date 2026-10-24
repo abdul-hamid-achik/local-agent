@@ -105,6 +105,7 @@ test("the initial store has every path the document reads", () => {
       "head",
       "mouse_on",
       "found",
+      "select_tip",
       "header",
       "help",
       "live",

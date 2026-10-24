@@ -366,8 +366,15 @@ test.each([
   ["/help", "/mode plan|build|chat"],
   ["/mcp", "MCP servers: 0"],
   ["/mode banana", "Unknown mode: banana"],
-  ["/theme dark", "/theme and /mouse are available in the Tuimark client"],
-  ["/mouse on", "/theme and /mouse are available in the Tuimark client"],
+  [
+    "/theme dark",
+    "/theme, /mouse and /copy are available in the Tuimark client",
+  ],
+  ["/mouse on", "/theme, /mouse and /copy are available in the Tuimark client"],
+  [
+    "/copy code",
+    "/theme, /mouse and /copy are available in the Tuimark client",
+  ],
 ] as const)(
   "handles %s locally without contacting the model",
   async (command, expected) => {

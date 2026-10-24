@@ -20,4 +20,4 @@
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║ Message the model                                                            ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
- Latest tool output: read   ^P commands  ctrl+c quit  ^L latest  shift+tab mode 
+ Latest tool output: read   ^P commands  ^Y copy  ctrl+c quit  ^L latest        

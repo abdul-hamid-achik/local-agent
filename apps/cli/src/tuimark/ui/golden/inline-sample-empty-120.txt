@@ -1,10 +1,11 @@
-=== grid 120x9 ===
+=== grid 120x10 ===
  Local Agent           Ollama / loopback  qwen3-coder:30b  build            session a1b2c3d  ctx 9.6k/32k  ███▋░░░░░░░░ 
 Local Agent · qwen3-coder:30b · Ollama / loopback                                                                       
 build · session a1b2c3d · project                                                                                       
 /help lists keys · ctrl+p opens commands · esc cancels                                                                  
+shift-drag selects text · /copy copies the last reply                                                                   
                                                                                                                         
 ╔══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
 ║ Message the model                                                                                                    ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
- build · last 1m 06s · 32 tok/s   ^P commands  esc cancel  ctrl+c quit  ↑/↓ history  pgup/pgdn scroll  ^L latest        
+ build · last 1m 06s · 32 tok/s   ^P commands  esc cancel  ^Y copy  ctrl+c quit  ↑/↓ history  pgup/pgdn scroll          

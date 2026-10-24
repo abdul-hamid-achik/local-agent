@@ -25,6 +25,7 @@ import {
   type ThinkingView,
   type ToolReceipt,
 } from "#cli/tuimark/blocks";
+import { selectionHint } from "#cli/tuimark/clipboard";
 
 export { mcpParts };
 
@@ -82,6 +83,28 @@ export function idleStatus(
   }
   return parts.join(" · ");
 }
+/**
+ * What the welcome and the help say about selecting and copying text. With
+ * mouse reporting on, the terminal selects natively only with a modifier
+ * (shift-drag, option-drag in iTerm2, fn-drag in Terminal.app); with it off,
+ * or inline, a plain drag does.
+ */
+export function selectTips(
+  mouse: boolean,
+  termProgram?: string,
+): { tip: string; help: { select_key: string; select_desc: string } } {
+  const hint = selectionHint(mouse, termProgram);
+  return {
+    tip: `${hint} selects text`,
+    help: {
+      select_key: hint,
+      select_desc: mouse
+        ? "select text (mouse reporting is on)"
+        : "select text",
+    },
+  };
+}
+
 /** The composer's hint at rest. */
 export const PLACEHOLDER = "Message the model";
 /** While a turn runs a send is queued (one message, run when the turn ends). */
@@ -289,6 +312,11 @@ export interface Store {
    *  fullscreen — wheel scrolls the transcript under the pointer; inline has
    *  no mouse (the terminal's own scrollback is the history). */
   mouse_on: boolean;
+  /**
+   * The welcome's line on selecting text natively: a modifier-drag while mouse
+   * reporting is on (see selectionHint), a plain drag otherwise.
+   */
+  select_tip: string;
   messages: MessageView[];
   earlier: { n: number };
   live: LiveView;
@@ -321,8 +349,17 @@ export interface Store {
    * is never committed.
    */
   slash: { open: boolean; rows: SlashRow[] };
-  /** The help overlay: `cmds` is the slash catalog, derived once at build. */
-  help: { open: boolean; cmds: HelpRow[] };
+  /**
+   * The help overlay: `cmds` is the slash catalog, derived once at build;
+   * `select_key` and `select_desc` are the row that says how to select text
+   * natively (it follows the mouse toggle).
+   */
+  help: {
+    open: boolean;
+    cmds: HelpRow[];
+    select_key: string;
+    select_desc: string;
+  };
   draft: string;
   placeholder: string;
   busy: boolean;
@@ -622,6 +659,8 @@ export interface StoreInit {
   inline?: boolean;
   /** Commands start sandboxed (`--sandbox-commands`, when available). */
   sandbox?: boolean;
+  /** `$TERM_PROGRAM`, for the native-selection hint (a modifier differs by terminal). */
+  termProgram?: string;
 }
 
 /** The last path segment of a workspace root ("" for "/" or ""). */
@@ -653,6 +692,7 @@ export function initialStore(init: StoreInit): Store {
       (init.transcript.messages.length === 0 &&
         init.transcript.earlier.n === 0),
     mouse_on: !init.inline,
+    select_tip: selectTips(!init.inline, init.termProgram).tip,
     messages: init.transcript.messages,
     earlier: init.transcript.earlier,
     live: IDLE_LIVE,
@@ -665,7 +705,11 @@ export function initialStore(init: StoreInit): Store {
     palette: { open: false, query: "", cur: found[0]?.id ?? "" },
     found: { any: found.length > 0, items: found },
     slash: { open: false, rows: [] },
-    help: { open: false, cmds: helpRows() },
+    help: {
+      open: false,
+      cmds: helpRows(),
+      ...selectTips(!init.inline, init.termProgram).help,
+    },
     draft: "",
     placeholder: PLACEHOLDER,
     busy: false,

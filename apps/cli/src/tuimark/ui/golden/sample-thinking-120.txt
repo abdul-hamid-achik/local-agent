@@ -28,4 +28,4 @@
 ╔══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
 ║ Type to queue a message                                                                                              ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
- build · last 1m 06s · 32 tok/s   ^P commands  esc cancel  ↑/↓ history  ^O earlier  pgup/pgdn scroll  ^L latest         
+ build · last 1m 06s · 32 tok/s   ^P commands  esc cancel  ^Y copy  ↑/↓ history  ^O earlier  pgup/pgdn scroll           

@@ -18,4 +18,4 @@ Assistant ⠿  waiting for your answer · 12s
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║ enter takes the chosen row                                                   ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
- Waiting for your answer · esc skip   ^P commands  ctrl+c quit                  
+ Waiting for your answer · esc skip   ^P commands  ^Y copy  ctrl+c quit         

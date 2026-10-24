@@ -15,11 +15,11 @@
 │                                                                              │
 │                     pgup/pgdn scroll · wheel scrolls too                     │
 │                                                                              │
+│                           shift-drag selects text                            │
+│                                                                              │
+│                         /copy copies the last reply                          │
+│                                                                              │
 │                              esc cancels a turn                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
 │                                                                              │
 │                                                                              │
 │                                                                              │
@@ -28,4 +28,4 @@
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║ Message the model                                                            ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
- build · last 1m 06s · 32 tok/s   ^P commands  esc cancel  ↑/↓ history          
+ build · last 1m 06s · 32 tok/s   ^P commands  esc cancel  ^Y copy  ↑/↓ history 

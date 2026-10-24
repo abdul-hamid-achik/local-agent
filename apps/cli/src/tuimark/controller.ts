@@ -62,6 +62,7 @@ import {
   type Block,
   cleanText,
   clip,
+  fencedCodeBlocks,
   formatTook,
   IDLE_LIVE,
   IDLE_THINKING,
@@ -73,6 +74,12 @@ import {
   tableWidth,
   ViewBuilder,
 } from "#cli/tuimark/blocks";
+import {
+  CLIPBOARD_TOOL_NAMES,
+  type CopyResult,
+  charCount,
+  selectionHint,
+} from "#cli/tuimark/clipboard";
 import {
   BUSY_STATUS,
   type CommandOutcome,
@@ -156,6 +163,7 @@ import {
   type SessionSummary,
   type Store,
   secretStatus,
+  selectTips,
   sessionRows,
   statusLines,
   windowedNotice,
@@ -306,8 +314,16 @@ export interface ClientOptions {
   ) => Promise<LoadedModel | null | undefined>;
   /** Chalupa's environment name (CHALUPA_ENVIRONMENT), when Chalupa launched this process. */
   environment?: string;
-  /** Clock for the busy status's elapsed time. Default Date.now. */
+  /** Clock for the head's elapsed time. Default Date.now. */
   now?: () => number;
+  /**
+   * Puts text on the system clipboard (`/copy`, ctrl+y). Absent: there is no
+   * clipboard, so tests never touch the real one; launch.ts passes the
+   * real copyToClipboard. Never an OSC 52 write: Tuimark owns the TTY.
+   */
+  copy?: (text: string) => Promise<CopyResult>;
+  /** `$TERM_PROGRAM`, for the native-selection hint. Default none (shift-drag). */
+  termProgram?: string;
 }
 
 /**
@@ -343,6 +359,15 @@ function isGoalCommand(raw: string): boolean {
   const text = raw.trim();
   return !text.includes("\n") && /^\/goal(\s|$)/i.test(text);
 }
+
+/** `/copy` as typed: one line, and harmless while a turn runs (it only reads). */
+function isCopyCommand(raw: string): boolean {
+  const text = raw.trim();
+  return !text.includes("\n") && /^\/copy(\s|$)/i.test(text);
+}
+
+const NO_REPLY_STATUS = "No reply to copy yet";
+const NO_CODE_STATUS = "No code block in the last reply";
 
 const NO_GOAL_STATUS = "No goal is running. /goal OBJECTIVE starts one";
 
@@ -635,6 +660,7 @@ export class TuimarkClient {
         ? { messages: [], earlier: { n: 0 } }
         : this.transcript.snapshot(),
       sandbox: this.sandbox,
+      termProgram: this.options.termProgram,
     });
     // `--sandbox-commands` where the sandbox is unavailable: commands ask,
     // and the first status says why.
@@ -692,6 +718,11 @@ export class TuimarkClient {
     // Answering "quit" from here is what ends the session.
     ui.on("quit_request", () => this.quitRequest());
     ui.on("load_earlier", () => this.loadEarlier());
+    // ctrl+y: the last reply to the clipboard, as `/copy`. An open approval
+    // keeps its keys and its status line.
+    ui.on("copy_reply", () =>
+      this.decide ? undefined : this.copyReply("reply"),
+    );
     ui.on("dialog_confirm", async () => {
       if (this.armed) return this.decide?.(true);
       // An unarmed `y` is still swallowed, but not silently.
@@ -2445,6 +2476,11 @@ export class TuimarkClient {
         await this.runCommand(command, true);
         return;
       }
+      // So is /copy: it reads the history and changes nothing.
+      if (isCopyCommand(raw)) {
+        await this.runCommand(command, true);
+        return;
+      }
       if (isCommand) {
         await this.write([{ path: "status", value: BUSY_STATUS }]);
         return;
@@ -2856,6 +2892,10 @@ export class TuimarkClient {
       if ((await this.switchModel(outcome.model)) && sent) await clearDraft();
       return;
     }
+    if (outcome.copy) {
+      await this.copyReply(outcome.copy);
+      return;
+    }
     if (outcome.find !== undefined) {
       await this.findSessions(outcome.find);
       return;
@@ -2886,6 +2926,14 @@ export class TuimarkClient {
     if (outcome.mouse !== undefined) {
       this.mouse = outcome.mouse;
       writes.push({ path: "mouse_on", value: outcome.mouse });
+      // How to select natively changes with it: a modifier-drag while the
+      // terminal's mouse reporting is on, a plain drag when it is off.
+      const tips = selectTips(outcome.mouse, this.options.termProgram);
+      writes.push(
+        { path: "select_tip", value: tips.tip },
+        { path: "help.select_key", value: tips.help.select_key },
+        { path: "help.select_desc", value: tips.help.select_desc },
+      );
     }
     if (outcome.clearGrants) {
       this.grants.clear();
@@ -2930,6 +2978,52 @@ export class TuimarkClient {
     }
     if (outcome.help) writes.push({ path: "help.open", value: true });
     await this.write(writes);
+  }
+
+  /**
+   * `/copy` and ctrl+y: the last assistant reply's markdown (`reply`), or
+   * its last fenced code block (`code`), on the system clipboard through
+   * the injected tool. Reads the model's history, so what is copied is
+   * what the model wrote (a code block with its tabs, a table as a table),
+   * not the view. The status says what happened and with which tool.
+   */
+  private async copyReply(what: "reply" | "code"): Promise<void> {
+    const status = (text: string) =>
+      this.write([{ path: "status", value: text }]);
+    const reply = this.history.findLast(
+      (message) =>
+        message.role === "assistant" && message.content.trim() !== "",
+    );
+    if (!reply) {
+      await status(NO_REPLY_STATUS);
+      return;
+    }
+    const text =
+      what === "reply"
+        ? reply.content
+        : fencedCodeBlocks(reply.content).at(-1)?.text;
+    if (text === undefined) {
+      await status(NO_CODE_STATUS);
+      return;
+    }
+    const copied: CopyResult = (await this.options.copy?.(text)) ?? {
+      ok: false,
+      reason: "none",
+    };
+    const label = what === "reply" ? "the last reply" : "the last code block";
+    if (copied.ok) {
+      await status(
+        `Copied ${label} (${charCount(text.length)} chars) with ${copied.tool}`,
+      );
+      return;
+    }
+    if (copied.reason === "failed") {
+      await status(oneLine(`Copy failed: ${copied.tool} ${copied.detail}`));
+      return;
+    }
+    await status(
+      `No clipboard tool found (${CLIPBOARD_TOOL_NAMES}): select text with ${selectionHint(this.mouse, this.options.termProgram)}`,
+    );
   }
 
   private async loadEarlier(): Promise<void> {
@@ -2986,8 +3080,14 @@ export class TuimarkClient {
       return undefined;
     }
     const command = paletteCommand(id);
-    // The help overlay is harmless while a turn runs; everything else waits.
-    if ((this.busy || this.switching) && command !== "/help") {
+    // The help overlay and a copy are harmless while a turn runs; everything
+    // else waits.
+    if (
+      (this.busy || this.switching) &&
+      command !== "/help" &&
+      command !== "/copy" &&
+      command !== "/copy code"
+    ) {
       await this.write([{ path: "status", value: BUSY_STATUS }]);
       return;
     }

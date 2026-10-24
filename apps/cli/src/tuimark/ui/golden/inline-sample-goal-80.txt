@@ -6,4 +6,4 @@ Running the fetch tests next.
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║ Type to queue a message                                                      ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
- build · last 1m 06s · 32 tok/s   ^P commands  esc cancel  ctrl+c quit          
+ build · last 1m 06s · 32 tok/s   ^P commands  esc cancel  ^Y copy  ctrl+c quit 

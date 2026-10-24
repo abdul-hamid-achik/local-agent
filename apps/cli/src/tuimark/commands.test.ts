@@ -202,6 +202,7 @@ test("the slash catalog lists exactly the commands the parser knows", () => {
     "/model",
     "/theme",
     "/mouse",
+    "/copy",
     "/permissions",
     "/sandbox",
     "/details",
@@ -255,6 +256,7 @@ test("the slash catalog lists exactly the commands the parser knows", () => {
     "/model [NAME]",
     "/theme dark|light|auto",
     "/mouse on|off",
+    "/copy [code]",
     "/permissions [clear|trust]",
     "/sandbox on|off",
     "/details",
@@ -391,4 +393,30 @@ test("/recover lists, or records a conclusion for one call; anything else is ref
         "Use /recover to list, or /recover N applied|not-applied|undone [note]",
       unknown: true,
     });
+});
+
+test("/copy and /copy code ask the controller for the last reply or its last code block", () => {
+  expect(runSlash("/copy", state)).toEqual({
+    status: "Copying the last reply…",
+    copy: "reply",
+  });
+  expect(runSlash("/COPY", state).copy).toBe("reply");
+  expect(runSlash("/copy code", state)).toEqual({
+    status: "Copying the last code block…",
+    copy: "code",
+  });
+  expect(runSlash("/copy Code", state).copy).toBe("code");
+  const bad = runSlash("/copy everything", state);
+  expect(bad).toEqual({
+    status: "Unknown copy argument: everything. Use /copy or /copy code",
+    unknown: true,
+  });
+  expect(HELP_STATUS).toContain("/copy [code]");
+  expect(paletteCommand("copy")).toBe("/copy");
+  expect(paletteCommand("copy-code")).toBe("/copy code");
+  expect(filterPalette("copy").map((row) => row.id)).toEqual([
+    "copy",
+    "copy-code",
+  ]);
+  expect(slashMatches("/co")?.map((c) => c.name)).toEqual(["/copy"]);
 });

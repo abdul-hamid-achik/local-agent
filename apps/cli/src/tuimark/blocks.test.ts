@@ -6,6 +6,7 @@ import {
   clip,
   DETAILS_MAX_CHARS,
   DETAILS_TRUNCATED_TAIL,
+  fencedCodeBlocks,
   formatTook,
   IDLE_LIVE,
   imageMime,
@@ -1493,4 +1494,56 @@ test("a goal's host-written message is the client's notice, live and on resume",
       content: "what does [goal 1/8] mean?",
     }),
   ).toMatchObject({ is_user: true, is_notice: false });
+});
+
+test("fencedCodeBlocks returns each fenced block's text exactly as written, in order", () => {
+  const source = [
+    "Intro.",
+    "",
+    "```ts",
+    "const a = 1;",
+    "\tconst b = 2; // a tab stays a tab",
+    "```",
+    "",
+    "| not | code |",
+    "|:--|--:|",
+    "| 1 | 2 |",
+    "",
+    "~~~sh",
+    "echo ``` inside",
+    "~~~",
+    "",
+    "````md",
+    "```",
+    "nested fence",
+    "```",
+    "````",
+  ].join("\n");
+  expect(fencedCodeBlocks(source)).toEqual([
+    { lang: "ts", text: "const a = 1;\n\tconst b = 2; // a tab stays a tab" },
+    { lang: "sh", text: "echo ``` inside" },
+    { lang: "md", text: "```\nnested fence\n```" },
+  ]);
+  expect(fencedCodeBlocks("no code here")).toEqual([]);
+  expect(fencedCodeBlocks("")).toEqual([]);
+});
+
+test("fencedCodeBlocks: an unclosed fence runs to the end, a fence under a list item counts, CRLF is a line end", () => {
+  expect(fencedCodeBlocks("Before\n\n```py\nprint(1)\nprint(2)")).toEqual([
+    { lang: "py", text: "print(1)\nprint(2)" },
+  ]);
+  expect(
+    fencedCodeBlocks("1. Install:\n\n    ```sh\n    bun add x\n    ```\n"),
+  ).toEqual([{ lang: "sh", text: "bun add x" }]);
+  // Indented four with no list above, it is an indented paragraph, not a fence.
+  expect(
+    fencedCodeBlocks("Text\n\n    ```sh\n    bun add x\n    ```\n"),
+  ).toEqual([]);
+  expect(fencedCodeBlocks("```\r\na\r\nb\r\n```\r\n")).toEqual([
+    { lang: "", text: "a\nb" },
+  ]);
+  // The block copied is the model's text, not the view's: a reply past the
+  // view's bounds still copies whole.
+  const long = `\`\`\`\n${"x".repeat(20000)}\n\`\`\``;
+  expect(fencedCodeBlocks(long)[0]?.text.length).toBe(20000);
 });
