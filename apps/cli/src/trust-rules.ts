@@ -38,7 +38,9 @@ export async function trustRulesCommand(
     `${count} allow rule${count === 1 ? "" : "s"} in ${file} not trusted on this machine:`,
   );
   for (const rule of loaded.untrusted)
-    io.print(`  allow ${rule.tool} ${JSON.stringify(rule.pattern)}`);
+    io.print(
+      terminalText(`  allow ${rule.tool} ${JSON.stringify(rule.pattern)}`),
+    );
   const answer = await io.ask(`Trust ${count === 1 ? "it" : "them"}? [yes/N] `);
   if (answer === undefined) {
     io.print("--trust-rules asks for confirmation; run it in a terminal");

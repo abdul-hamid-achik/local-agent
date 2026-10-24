@@ -204,8 +204,15 @@ test("the workspace's rules apply in the Vue client: allow skips the prompt, den
     tool: "mcp",
     pattern: "fixture__*",
   });
+  await appendRule(root, {
+    effect: "deny",
+    tool: "fetch",
+    pattern: "domain:blocked.example",
+  });
   const workspace = await Workspace.create(root);
-  const requests: Array<{ messages?: Array<{ role?: string }> }> = [];
+  const requests: Array<{
+    messages?: Array<{ role?: string; content?: string }>;
+  }> = [];
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -237,6 +244,12 @@ test("the workspace's rules apply in the Vue client: allow skips the prompt, den
                 },
               },
               { function: { name: "fixture__echo", arguments: {} } },
+              {
+                function: {
+                  name: "fetch",
+                  arguments: { url: "https://blocked.example/x" },
+                },
+              },
             ],
           };
       return new Response(
@@ -297,9 +310,13 @@ test("the workspace's rules apply in the Vue client: allow skips the prompt, den
   );
   expect(await readFile(join(root, "notes.txt"), "utf8")).toBe("after\n");
   expect(mcpCalls).toBe(0);
-  expect(
-    requests[1]?.messages?.filter((message) => message.role === "tool"),
-  ).toHaveLength(2);
+  const results = requests[1]?.messages?.filter(
+    (message) => message.role === "tool",
+  );
+  expect(results).toHaveLength(3);
+  expect(results?.[2]?.content).toContain(
+    "blocked.example is denied by rule: domain:blocked.example",
+  );
 });
 
 test("fullscreen mode can switch intent from the composer", async () => {

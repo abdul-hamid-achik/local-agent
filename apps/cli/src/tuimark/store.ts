@@ -497,8 +497,13 @@ export const TRUNCATED_BODY =
 // rest of the session (controller memory only; nothing is persisted). The
 // matching rules are deliberately coarse and spelled out in the dialog:
 // edits and writes share one "file changes" grant, a command grants its
-// program plus its first argument (`bun test`, `git status` cover any
-// further arguments), and an MCP call grants its exact SERVER__TOOL name.
+// program plus its first argument (`bun test`, `git status` cover further
+// arguments), and an MCP call grants its exact SERVER__TOOL name.
+//
+// A prefix grant covers new positional arguments but not new options: an
+// option the approved command did not carry (`bun test --preload x.ts`,
+// `make build -f other.mk`, `git grep -O…`) asks again, and `a` on that
+// card adds it to the grant.
 //
 // Two narrower shapes keep a grant from covering code nobody saw:
 // - a runner subcommand of a package manager or toolchain (`bun run`,
@@ -560,7 +565,9 @@ function commandGrant(argv: readonly string[]): {
     COMMAND_WRAPPERS.has(program) ||
     second.startsWith("-") ||
     (program === "git" && GIT_EXACT.has(second.toLowerCase())) ||
-    (runner && argv.length <= 2);
+    // A runner's third word is what it runs; an option there (`npm i -g`,
+    // `pip install --index-url …`) would make the grant cover any target.
+    (runner && (argv.length <= 2 || (argv[2] ?? "").startsWith("-")));
   if (exact) return { prefix: [...argv], exact };
   return { prefix: argv.slice(0, runner ? 3 : 2), exact };
 }
@@ -574,6 +581,10 @@ export function mcpParts(
   return { server: name.slice(0, at), tool: name.slice(at + 2) };
 }
 
+/** An argv word that is an option (`-x`, `--flag=value`, `--`), not `-` (stdin). */
+const isOption = (word: string): boolean =>
+  word.length > 1 && word.startsWith("-");
+
 /** The grant a proposal falls under: its identity key and its short label. */
 export function grantFor(proposal: ApprovalRequest): {
   key: string;
@@ -585,6 +596,8 @@ export function grantFor(proposal: ApprovalRequest): {
    * grant's prefix is the whole argv, and it matches only itself.
    */
   prefix?: readonly string[];
+  /** A prefix grant's option words after the prefix, as approved. */
+  options?: readonly string[];
   exact?: boolean;
 } {
   switch (proposal.kind) {
@@ -600,7 +613,9 @@ export function grantFor(proposal: ApprovalRequest): {
         key: `${exact ? "cmd=" : "cmd:"}${JSON.stringify(prefix)}@${proposal.cwd}`,
         label,
         prefix,
-        ...(exact ? { exact } : {}),
+        ...(exact
+          ? { exact }
+          : { options: proposal.argv.slice(prefix.length).filter(isOption) }),
       };
     }
     case "mcp": {
@@ -611,10 +626,15 @@ export function grantFor(proposal: ApprovalRequest): {
 
 /**
  * Whether a remembered grant covers a proposal: exact for files and MCP,
- * an argv-prefix match for commands (see `grantFor`).
+ * an argv-prefix match for commands whose options were all approved
+ * before (see `grantFor`).
  */
 export function grantCovers(
-  grant: { key: string; prefix?: readonly string[] },
+  grant: {
+    key: string;
+    prefix?: readonly string[];
+    options?: readonly string[];
+  },
   proposal: ApprovalRequest,
 ): boolean {
   if (proposal.kind === "command") {
@@ -631,7 +651,13 @@ export function grantCovers(
         grant.prefix.every((word, i) => proposal.argv[i] === word)
       );
     if (grant.key !== `cmd:${encoded}`) return false;
-    return grant.prefix.every((word, i) => (proposal.argv[i] ?? "") === word);
+    const approved = new Set(grant.options ?? []);
+    return (
+      grant.prefix.every((word, i) => (proposal.argv[i] ?? "") === word) &&
+      proposal.argv
+        .slice(grant.prefix.length)
+        .every((word) => !isOption(word) || approved.has(word))
+    );
   }
   return grantFor(proposal).key === grant.key;
 }

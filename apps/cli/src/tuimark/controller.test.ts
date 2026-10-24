@@ -1843,7 +1843,7 @@ test("grants: a command grant matches program + first argument as a prefix, noth
     turnsAsking([
       [commandProposal(["bun", "test", "a.ts"])],
       [
-        commandProposal(["bun", "test", "b.ts", "--watch"]),
+        commandProposal(["bun", "test", "b.ts"]),
         commandProposal(["bun", "run", "x"]),
       ],
       [commandProposal(["ls"])],
@@ -3102,7 +3102,7 @@ test("rules: a cloned repository's allow rule never skips the card until trusted
   );
   await ui.fire("send", "/permissions trust");
   expect(store(ui).status).toBe(
-    "Untrusted allow 1 rule: run_command * — check .local-agent/permissions.json, then /permissions trust confirm",
+    "Untrusted allow 1 rule (check .local-agent/permissions.json, then /permissions trust confirm): run_command *",
   );
   // A rule written into the file after the review is not trusted with it.
   await writeRules(root, [
@@ -3144,6 +3144,43 @@ test("rules: the runtime's read hook sees the file's deny rules", async () => {
   await ui.fire("send", "one");
   await client.idle();
   expect(verdicts).toEqual(["domain:tracker.example", undefined, "*"]);
+});
+
+test("rules: a deny rule refuses an MCP call in chat intent too", async () => {
+  const root = await mkdtemp(join(tmpdir(), "la-chat-deny-"));
+  await writeRules(root, [{ effect: "deny", tool: "mcp", pattern: "db__*" }]);
+  const { ui, client } = setup(
+    turnsAsking([[{ kind: "mcp", name: "db__query", argumentsJson: "{}" }]]),
+    { workspace: { root } as Workspace, intent: "chat" },
+  );
+  await ui.fire("send", "one");
+  await client.idle();
+  expect(decisions).toEqual([false]);
+  expect(store(ui).approval.open).toBe(false);
+});
+
+test("rules: confirm trusts only the rules the review line could show", async () => {
+  const root = await mkdtemp(join(tmpdir(), "la-trust-many-"));
+  const many = Array.from({ length: 12 }, (_, i) => ({
+    effect: "allow" as const,
+    tool: "run_command" as const,
+    pattern: `tool-${i} --with-a-fairly-long-flag-${i}`,
+  }));
+  await writeRules(root, many);
+  const { ui } = setup(reply("hi"), { workspace: { root } as Workspace });
+  await ui.fire("send", "/permissions trust");
+  const review = store(ui).status;
+  expect(review.length).toBeLessThanOrEqual(300);
+  expect(review).not.toContain("…");
+  const shown = many.filter((rule) => review.includes(rule.pattern));
+  expect(shown.length).toBeGreaterThan(0);
+  expect(shown.length).toBeLessThan(many.length);
+  expect(review).toContain(`${many.length - shown.length} more after these`);
+  await ui.fire("send", "/permissions trust confirm");
+  expect(store(ui).status).toContain(`Trusted ${shown.length} rules`);
+  expect((await loadPermissionFile(root)).untrusted).toEqual(
+    many.slice(shown.length),
+  );
 });
 
 test("rules: trust given from another process reaches the cached rules", async () => {

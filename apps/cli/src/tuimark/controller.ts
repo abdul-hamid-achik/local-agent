@@ -208,8 +208,16 @@ export interface ClientOptions {
  */
 export const APPROVAL_ARM_MS = 300;
 /** A message as one status line: zod errors and stack-like text span many lines. */
+/** A status line's longest text; `oneLine` clips beyond it. */
+const STATUS_MAX = 300;
+
+/** A message as one clean line, before any clipping. */
+function flatLine(message: string): string {
+  return terminalText(message).replace(/\s+/g, " ").trim();
+}
+
 function oneLine(message: string): string {
-  return clip(terminalText(message).replace(/\s+/g, " ").trim(), 300);
+  return clip(flatLine(message), STATUS_MAX);
 }
 
 function withSpeed(status: string, count: number, duration: number): string {
@@ -323,7 +331,11 @@ export class TuimarkClient {
    */
   private readonly grants = new Map<
     string,
-    { label: string; prefix?: readonly string[] }
+    {
+      label: string;
+      prefix?: readonly string[];
+      options?: readonly string[];
+    }
   >();
   /**
    * The workspace's permission rules, cached with a stamp of the file and
@@ -498,7 +510,9 @@ export class TuimarkClient {
           await this.write([
             {
               path: "status",
-              value: `Not saved: denied by rule: ${shadow.rule?.pattern}`,
+              value: oneLine(
+                `Not saved: denied by rule: ${shadow.rule?.pattern}`,
+              ),
             },
           ]);
           return undefined;
@@ -1822,12 +1836,28 @@ export class TuimarkClient {
     if (step === "review") {
       this.permStamp = undefined;
       const { untrusted = [] } = await this.fileRules();
-      this.trustOffer = untrusted.length ? [...untrusted] : undefined;
-      return untrusted.length
-        ? oneLine(
-            `Untrusted allow ${plural(untrusted.length)}: ${named(untrusted)} — check .local-agent/permissions.json, then /permissions trust confirm`,
-          )
-        : "No untrusted allow rules in .local-agent/permissions.json";
+      if (!untrusted.length) {
+        this.trustOffer = undefined;
+        return "No untrusted allow rules in .local-agent/permissions.json";
+      }
+      // The offer is exactly what the line shows: rules that would not fit
+      // wait for the next review instead of being trusted unseen.
+      const head = (shown: readonly PermissionRule[]) => {
+        const more = untrusted.length - shown.length;
+        return `Untrusted allow ${plural(shown.length)} (check .local-agent/permissions.json, then /permissions trust confirm${more ? `; ${more} more after these` : ""}): `;
+      };
+      const shown: PermissionRule[] = [];
+      for (const rule of untrusted) {
+        const next = [...shown, rule];
+        if (flatLine(head(next) + named(next)).length > STATUS_MAX) break;
+        shown.push(rule);
+      }
+      if (!shown.length) {
+        this.trustOffer = undefined;
+        return "An untrusted allow rule is too long to show here: read .local-agent/permissions.json and run local-agent --trust-rules";
+      }
+      this.trustOffer = shown;
+      return oneLine(head(shown) + named(shown));
     }
     const offer = this.trustOffer;
     if (!offer) return "Nothing reviewed: run /permissions trust first";
@@ -2028,7 +2058,7 @@ export class TuimarkClient {
   ) => {
     const verdict = evaluate((await this.fileRules()).rules, request);
     if (verdict.effect !== "deny") return undefined;
-    this.noteActivity(`denied by rule: ${verdict.rule?.pattern}`);
+    this.noteActivity(oneLine(`denied by rule: ${verdict.rule?.pattern}`));
     return verdict.rule?.pattern ?? "";
   };
 
@@ -2039,22 +2069,20 @@ export class TuimarkClient {
     signal.throwIfAborted();
     // The workspace's permission file outranks everything interactive: a
     // deny rule refuses (even a session grant), an allow rule approves
-    // without a card. In plan intent the runtime refuses mutations before
-    // this runs, and no rule widens that, so rules are only consulted in
-    // build (same guard as the session grants below).
-    if (this.intent === "build") {
-      const verdict = evaluate(
-        (await this.fileRules()).rules,
-        permissionRequest(proposal),
-      );
-      if (verdict.effect === "deny") {
-        this.noteActivity(`denied by rule: ${verdict.rule?.pattern}`);
-        return false;
-      }
-      if (verdict.effect === "allow") {
-        this.noteActivity(`allowed by rule: ${verdict.rule?.pattern}`);
-        return true;
-      }
+    // without a card. It applies in every intent, as in the other clients:
+    // the runtime refuses plan and chat mutations before this runs (no rule
+    // widens that), but chat still offers MCP calls.
+    const verdict = evaluate(
+      (await this.fileRules()).rules,
+      permissionRequest(proposal),
+    );
+    if (verdict.effect === "deny") {
+      this.noteActivity(oneLine(`denied by rule: ${verdict.rule?.pattern}`));
+      return false;
+    }
+    if (verdict.effect === "allow") {
+      this.noteActivity(oneLine(`allowed by rule: ${verdict.rule?.pattern}`));
+      return true;
     }
     // Grants never bypass a non-build intent: the runtime refuses plan and
     // chat mutations before this callback runs, and this keeps it true here.
@@ -2062,7 +2090,7 @@ export class TuimarkClient {
     const grantedLabel =
       this.intent === "build"
         ? [...this.grants.entries()].find(([key, remembered]) =>
-            grantCovers({ key, prefix: remembered.prefix }, proposal),
+            grantCovers({ key, ...remembered }, proposal),
           )?.[1].label
         : undefined;
     if (grantedLabel !== undefined) {
@@ -2087,9 +2115,15 @@ export class TuimarkClient {
         // and the status name it in the same write that closes the dialog.
         let granted: string | undefined;
         if (allowed && session) {
+          // `a` again on a command with a new option widens the same grant
+          // by that option, never by any other.
+          const known = this.grants.get(grant.key)?.options ?? [];
           this.grants.set(grant.key, {
             label: grant.label,
             prefix: grant.prefix,
+            ...(grant.options
+              ? { options: [...new Set([...known, ...grant.options])] }
+              : {}),
           });
           granted = grant.label;
         }

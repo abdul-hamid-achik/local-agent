@@ -483,6 +483,10 @@ test("grant matching: files shared, commands by argv prefix, MCP exact", () => {
     ["git", "bisect", "run", "make"],
     ["bun", "run"],
     ["npm", "install"],
+    ["npm", "i", "-g", "lodash"],
+    ["pip", "install", "--index-url", "https://pypi.org/simple", "requests"],
+    ["go", "run", "-race", "./cmd"],
+    ["busybox", "rm", "x"],
   ] as [string, ...string[]][]) {
     const exact = grantFor(cmd(argv));
     expect(exact.exact, argv.join(" ")).toBe(true);
@@ -511,10 +515,32 @@ test("grant matching: files shared, commands by argv prefix, MCP exact", () => {
     expect(grantCovers(grant, cmd([program, sub, "a"])), program).toBe(true);
     expect(grantCovers(grant, cmd([program, sub, "c"])), program).toBe(false);
   }
+  // A prefix covers new arguments, never a new option: `--preload`, `-f`
+  // and `-O` run code the approved command did not.
+  const watch = grantFor(cmd(["bun", "test", "a.ts", "--watch"]));
+  expect(grantCovers(watch, cmd(["bun", "test", "b.ts", "--watch"]))).toBe(
+    true,
+  );
+  expect(grantCovers(watch, cmd(["bun", "test", "b.ts"]))).toBe(true);
+  expect(grantCovers(watch, cmd(["bun", "test", "--preload", "./x.ts"]))).toBe(
+    false,
+  );
+  const make = grantFor(cmd(["make", "build"]));
+  expect(grantCovers(make, cmd(["make", "build", "all"]))).toBe(true);
+  expect(grantCovers(make, cmd(["make", "build", "-f", "evil.mk"]))).toBe(
+    false,
+  );
+  const grep = grantFor(cmd(["git", "grep", "x"]));
+  expect(grantCovers(grep, cmd(["git", "grep", "y", "-Osh"]))).toBe(false);
+  // `-` (stdin) is an argument, not an option.
+  const cat = grantFor(cmd(["cat", "a", "b"]));
+  expect(grantCovers(cat, cmd(["cat", "a", "-"]))).toBe(true);
+
   // Other git subcommands keep the two-word prefix: `add` runs code only
   // after a package manager's name.
   const gitLog = grantFor(cmd(["git", "log", "-1"]));
-  expect(grantCovers(gitLog, cmd(["git", "log", "--oneline"]))).toBe(true);
+  expect(grantCovers(gitLog, cmd(["git", "log", "-1", "main"]))).toBe(true);
+  expect(grantCovers(gitLog, cmd(["git", "log", "--oneline"]))).toBe(false);
   const gitAdd = grantFor(cmd(["git", "add", "a.ts"]));
   expect(grantCovers(gitAdd, cmd(["git", "add", "b.ts"]))).toBe(true);
   expect(grantFor(cmd(["git", "add"])).exact).toBeUndefined();
