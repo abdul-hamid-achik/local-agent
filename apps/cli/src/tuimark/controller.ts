@@ -112,6 +112,7 @@ import {
   PLACEHOLDER,
   PLACEHOLDER_BUSY,
   panelState,
+  QUESTION_CHOOSE_STATUS,
   QUESTION_EMPTY_STATUS,
   QUESTION_NO_MATCH_STATUS,
   QUESTION_PLACEHOLDER_CHOICE,
@@ -365,9 +366,12 @@ export class TuimarkClient {
    */
   private asking?: {
     question: Question;
+    /** The chosen row; -1 until one is chosen (a single choice starts so). */
     sel: number;
     armed: boolean;
     answer: (answer: Answer) => Promise<void>;
+    /** Closes it unanswered: the runtime's ask rejects. */
+    close: () => Promise<void>;
   };
   private askArmTimer?: ReturnType<typeof setTimeout>;
   /** The composer's draft as last typed or written: a question puts it aside. */
@@ -2235,8 +2239,9 @@ export class TuimarkClient {
 
   private async paletteOpen(): Promise<void> {
     // An open approval owns the keys (fullscreen's modal traps ctrl+p; the
-    // in-flow approval does not, so the palette must not open over it).
-    if (this.proposal) return;
+    // in-flow approval does not, so the palette must not open over it). An
+    // open question too: the palette's modal would take its esc and enter.
+    if (this.proposal || this.asking) return;
     const found = filterPalette("", this.inline);
     await this.write([
       { path: "found", value: { any: found.length > 0, items: found } },
@@ -2505,10 +2510,12 @@ export class TuimarkClient {
       };
       const state = {
         question,
-        // A yes/no defaults to no, as a skipped one reads.
-        sel: question.kind === "yes_no" ? 1 : 0,
+        // A yes/no defaults to no, as a skipped one reads; a single choice
+        // has none until the user picks, so a stray enter answers nothing.
+        sel: question.kind === "yes_no" ? 1 : -1,
         armed: false,
         answer: finish,
+        close: () => finish(),
       };
       const abort = () => void finish();
       this.asking = state;
@@ -2572,7 +2579,12 @@ export class TuimarkClient {
     }
     const id = questionPick(asking.question, asking.sel, raw);
     if (id === undefined) {
-      await this.write([{ path: "status", value: QUESTION_NO_MATCH_STATUS }]);
+      await this.write([
+        {
+          path: "status",
+          value: raw.trim() ? QUESTION_NO_MATCH_STATUS : QUESTION_CHOOSE_STATUS,
+        },
+      ]);
       return;
     }
     await asking.answer({ kind: "choice", id });
@@ -2584,7 +2596,13 @@ export class TuimarkClient {
     if (!asking) return;
     const count = questionChoices(asking.question).length;
     if (count === 0) return;
-    asking.sel = Math.max(0, Math.min(asking.sel + by, count - 1));
+    // From no choice, down takes the first row and up the last.
+    asking.sel =
+      asking.sel < 0
+        ? by > 0
+          ? 0
+          : count - 1
+        : Math.max(0, Math.min(asking.sel + by, count - 1));
     await this.write([
       { path: "question", value: questionState(asking.question, asking.sel) },
     ]);
@@ -2909,6 +2927,8 @@ export class TuimarkClient {
       this.proposal = undefined;
       this.proposalTruncated = false;
       clearTimeout(this.askArmTimer);
+      // Never open past its turn: closed (unanswered) if it somehow is.
+      if (this.asking) await this.asking.close();
       this.asking = undefined;
       if (this.turn === request) this.turn = undefined;
       // Inline, a cancelled or failed reply still prints what arrived, and

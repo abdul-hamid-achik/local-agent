@@ -345,7 +345,7 @@ const CHOICE_QUESTION: Question = {
 };
 
 /** An open ask_user question: its card waits, the composer answers. */
-function questionStore(question: Question, sel = 0): Store {
+function questionStore(question: Question, sel = -1): Store {
   const { store, builder } = base();
   builder.fromMessage({
     role: "assistant",

@@ -2,8 +2,9 @@ version: 1
 name: bun_tuimark_question
 intent: |
     the Tuimark client shows a model's ask_user question in flow above the
-    composer: down moves the choice and enter answers it once the status
-    line says it waits for the answer (a moment after it opens), the model
+    composer: a single choice starts with none chosen, down takes the
+    first row and then the next, and enter answers once the status line
+    says it waits for the answer (a moment after it opens), the model
     reads the chosen label back, and a typed answer is
     sent from the composer to the question, not as a new message; esc on a
     third question skips it and the turn goes on.
@@ -30,6 +31,11 @@ steps:
             contains: "Waiting for your answer"
         timeoutMs: 5000
     - snapshot: choice
+    - press: down
+    - wait:
+        screen:
+            contains: "› 1 Postgres"
+        timeoutMs: 5000
     - press: down
     - wait:
         screen:
@@ -93,4 +99,4 @@ outcomes:
       verify:
         process:
             exitCode: 0
-contractHash: sha256:0b61b911219f00c2260d074e9e48ab74cb0d71c450225a03585c563ab9a3bc8c
+contractHash: sha256:950f7ef0418374fb83d61ad761e2f04a7feafcfe8db371f66b8721b76785d734

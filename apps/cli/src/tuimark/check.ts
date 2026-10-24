@@ -738,7 +738,7 @@ const plays: Expect[] = [
     actions: [],
     screen: [
       "Question · choose one",
-      "› 1 Postgres",
+      "1 Postgres",
       "2 SQLite",
       "the existing database",
       "Which store should the cache use?",
@@ -891,7 +891,7 @@ const plays: Expect[] = [
     rows: 30,
     input: "down",
     actions: ["question_next"],
-    screen: ["› 1 Postgres", "esc skip"],
+    screen: ["1 Postgres", "esc skip"],
   },
   {
     sample: "inline-sample-question",

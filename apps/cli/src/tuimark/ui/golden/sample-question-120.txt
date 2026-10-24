@@ -20,7 +20,7 @@
 ╭─ Question · choose one ──────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Which store should the cache use?                                                                                    │
 │                                                                                                                      │
-│ › 1 Postgres · the existing database                                                                                 │
+│   1 Postgres · the existing database                                                                                 │
 │   2 SQLite · one file next to the binary                                                                             │
 │   3 Memory only                                                                                                      │
 │ ↑/↓ choose · enter answer · or type its number · esc skip                                                            │

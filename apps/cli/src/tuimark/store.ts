@@ -418,8 +418,11 @@ export const QUESTION_EMPTY_STATUS =
   "Type an answer and press enter, or esc to skip";
 export const QUESTION_NO_MATCH_STATUS =
   "Not one of the choices: type its number, or ↑/↓ and enter";
+/** Enter on a single choice before any row is chosen. */
+export const QUESTION_CHOOSE_STATUS =
+  "Choose one first: ↑/↓, or type its number";
 
-/** The question box for `question` with row `sel` chosen. */
+/** The question box for `question` with row `sel` chosen (-1: none yet). */
 export function questionState(question: Question, sel: number): QuestionState {
   const rows = questionChoices(question).map((choice, index) => ({
     id: choice.id,
@@ -454,7 +457,8 @@ export function questionState(question: Question, sel: number): QuestionState {
 /**
  * What a draft sent under an open choice picks: its number, its id or
  * label (any case), y/yes/n/no for a yes/no question, or (empty) the
- * chosen row. Undefined when it names none of them.
+ * chosen row. Undefined when it names none of them, or is empty with no
+ * row chosen.
  */
 export function questionPick(
   question: Question,

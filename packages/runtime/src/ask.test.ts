@@ -218,6 +218,83 @@ test("a declined question is not asked again in the same turn", async () => {
     { ask: () => ({ kind: "choice", id: "zzz" }) },
   );
   expect(stray.results[0]?.output).toContain("declined");
+  // ...and read as such: denied, never turned into an answer.
+  expect(stray.results[0]?.status).toBe("denied");
+  const notYesNo = await session([[ask({ question: "Go?", kind: "yes_no" })]], {
+    ask: () => ({ kind: "choice", id: "maybe" }),
+  });
+  expect(notYesNo.results[0]).toMatchObject({ status: "denied" });
+  expect(notYesNo.results[0]?.output).not.toContain("answered");
+});
+
+test("a declined question is remembered by what the user read, not its spacing", async () => {
+  let asked = 0;
+  const run = await session(
+    [
+      [ask({ question: "Deploy now?", kind: "yes_no" })],
+      [ask({ question: "  deploy   NOW? ", kind: "yes_no" })],
+      [ask({ question: "Deploy to staging?", kind: "yes_no" })],
+    ],
+    {
+      ask: () => {
+        asked++;
+        return { kind: "declined" };
+      },
+    },
+  );
+  // The respaced re-ask is refused; a different question is asked.
+  expect(asked).toBe(2);
+  expect(run.results[1]?.output).toContain("already declined this question");
+});
+
+test("only a single choice keeps options: yes/no and typed answers drop them", async () => {
+  const seen: Question[] = [];
+  const options = [
+    { id: "a", label: "A" },
+    { id: "b", label: "B" },
+  ];
+  const yesNo = await session(
+    [[ask({ question: "Go?", kind: "yes_no", options })]],
+    {
+      ask: (question) => {
+        seen.push(question);
+        return { kind: "choice", id: "a" };
+      },
+    },
+  );
+  const text = await session(
+    [[ask({ question: "Name?", kind: "freetext", options })]],
+    {
+      ask: (question) => {
+        seen.push(question);
+        return { kind: "choice", id: "a" };
+      },
+    },
+  );
+  expect(seen.map((question) => question.options)).toEqual([[], []]);
+  // A choice the question did not offer is no answer.
+  expect(yesNo.results[0]?.status).toBe("denied");
+  expect(text.results[0]?.status).toBe("denied");
+});
+
+test("a subagent never reaches the host's question, even when it calls one", async () => {
+  let asked = 0;
+  const run = await session(
+    [
+      [{ name: "task", arguments: { prompt: "find out", max_turns: 2 } }],
+      // The subagent's first request: it tries to ask.
+      [ask({ question: "Which one?" })],
+    ],
+    {
+      ask: () => {
+        asked++;
+        return { kind: "text", text: "x" };
+      },
+    },
+  );
+  expect(asked).toBe(0);
+  // The subagent is offered no ask_user.
+  expect(run.offered(1)).not.toContain("ask_user");
 });
 
 test("a malformed question fails before the user sees it", async () => {

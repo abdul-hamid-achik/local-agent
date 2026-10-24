@@ -315,8 +315,8 @@
         "id": "pg",
         "label": "1 Postgres",
         "detail": "· the existing database",
-        "sel": true,
-        "mark": "›"
+        "sel": false,
+        "mark": ""
       },
       {
         "id": "lite",

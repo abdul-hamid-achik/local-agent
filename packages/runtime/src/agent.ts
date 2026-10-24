@@ -102,17 +102,21 @@ const AskOption = z.object({
   detail: z.string().trim().max(512).nullish(),
 });
 // The kind follows the options when it is left out: a list is a choice.
+// Only a choice keeps its options: yes/no and a typed answer have none.
 const AskUserArgs = z
   .object({
     question: z.string().trim().min(1).max(2048),
     kind: z.enum(["yes_no", "single", "freetext"]).nullish(),
     options: z.array(AskOption).max(8).nullish(),
   })
-  .transform(({ question, kind, options }) => ({
-    question,
-    kind: kind ?? (options?.length ? "single" : "freetext"),
-    options: options ?? [],
-  }))
+  .transform(({ question, kind, options }) => {
+    const resolved = kind ?? (options?.length ? "single" : "freetext");
+    return {
+      question,
+      kind: resolved,
+      options: resolved === "single" ? (options ?? []) : [],
+    };
+  })
   .refine(
     (args) => args.kind !== "single" || args.options.length >= 2,
     "A single choice needs at least two options",
@@ -1170,22 +1174,46 @@ export type Answer =
 /** How much of a typed answer reaches the model. */
 const ANSWER_MAX = 4000;
 
-/** What the model reads back from an ask_user answer. */
-function answerText(question: Question, answer: Answer): string {
-  if (answer.kind === "declined")
-    return "The user declined to answer. Do not ask it again this turn: continue with what you know, or say what you need.";
+const DECLINED =
+  "The user declined to answer. Do not ask it again this turn: continue with what you know, or say what you need.";
+
+/**
+ * What the model reads back from an ask_user answer, and whether it is no
+ * answer at all: a skip, an empty text, or a choice the question did not
+ * offer (never read as one it did).
+ */
+function answerOutcome(
+  question: Question,
+  answer: Answer,
+): { output: string; declined: boolean } {
+  if (answer.kind === "declined") return { output: DECLINED, declined: true };
   if (answer.kind === "text") {
     const text = answer.text.trim();
     if (!text)
-      return "The user sent an empty answer. Do not ask it again this turn: continue with what you know, or say what you need.";
-    return `The user answered:\n${capOutput(text, ANSWER_MAX, "")}`;
+      return {
+        output:
+          "The user sent an empty answer. Do not ask it again this turn: continue with what you know, or say what you need.",
+        declined: true,
+      };
+    return {
+      output: `The user answered:\n${capOutput(text, ANSWER_MAX, "")}`,
+      declined: false,
+    };
   }
   if (question.kind === "yes_no")
-    return `The user answered: ${answer.id === "yes" ? "yes" : "no"}`;
-  const chosen = question.options.find((option) => option.id === answer.id);
+    return answer.id === "yes" || answer.id === "no"
+      ? { output: `The user answered: ${answer.id}`, declined: false }
+      : { output: DECLINED, declined: true };
+  const chosen =
+    question.kind === "single"
+      ? question.options.find((option) => option.id === answer.id)
+      : undefined;
   return chosen
-    ? `The user chose: ${chosen.label} (id ${chosen.id})`
-    : "The user declined to answer. Do not ask it again this turn: continue with what you know, or say what you need.";
+    ? {
+        output: `The user chose: ${chosen.label} (id ${chosen.id})`,
+        declined: false,
+      }
+    : { output: DECLINED, declined: true };
 }
 
 /** Upper bound on concurrent read-only tool calls within one assistant batch. */
@@ -1808,7 +1836,7 @@ async function* agentTurn(
       preStarted: boolean,
     ): AsyncGenerator<AgentEvent, CallOutcome> {
       const { name, mcpConnection, id, record } = ctx;
-      const signature = `${name}\n${sortedJson(call.function.arguments)}`;
+      let signature = `${name}\n${sortedJson(call.function.arguments)}`;
       function* emitStart(): Generator<AgentEvent> {
         if (!preStarted) {
           record("started");
@@ -2044,6 +2072,8 @@ async function* agentTurn(
               ...options,
               session: undefined,
               mcp: undefined,
+              // A subagent has no user to ask (nor is it offered the tool).
+              ask: undefined,
               intent: "plan",
               subagent: true,
               maxTurns: args.max_turns,
@@ -2088,13 +2118,27 @@ async function* agentTurn(
           const ask = options.ask;
           // Not offered without a host that asks: the check above refuses it.
           if (!ask) throw new Error("ask_user is not available here");
-          const answer = await ask(args, signal);
-          signal.throwIfAborted();
-          // Like an approval, the wait is the user's, not the tool's: it
-          // starts once the answer is in.
-          yield* emitStart();
-          output = answerText(args, answer);
-          if (answer.kind === "declined") status = "denied";
+          // A declined question is remembered by what the user saw, so a
+          // re-ask with other spacing or case is not asked again either.
+          signature = `ask_user\n${sortedJson({
+            question: args.question.replace(/\s+/gu, " ").toLowerCase(),
+            kind: args.kind,
+            options: args.options.map((option) => option.id),
+          })}`;
+          if (refused.has(signature)) {
+            status = "denied";
+            output =
+              "The user already declined this question in this turn. Continue with what you know, or say what you need.";
+          } else {
+            const answer = await ask(args, signal);
+            signal.throwIfAborted();
+            // Like an approval, the wait is the user's, not the tool's: it
+            // starts once the answer is in.
+            yield* emitStart();
+            const outcome = answerOutcome(args, answer);
+            output = outcome.output;
+            if (outcome.declined) status = "denied";
+          }
         } else if (name === "todo_write") {
           const args = TodoWriteArgs.parse(call.function.arguments);
           yield* emitStart();

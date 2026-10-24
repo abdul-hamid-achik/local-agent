@@ -40,6 +40,7 @@ import {
   APPROVAL_WAIT_STATUS,
   IDLE_STATUS,
   NO_DETAILS_STATUS,
+  QUESTION_CHOOSE_STATUS,
   QUESTION_EMPTY_STATUS,
   QUESTION_NO_MATCH_STATUS,
   QUESTION_PLACEHOLDER_CHOICE,
@@ -684,8 +685,9 @@ test("a question opens above the composer: the arrows choose, enter answers, the
     running: true,
   });
   const q = store(ui).question;
+  // A single choice starts with none chosen.
   expect(q.rows.map((row) => [row.label, row.detail, row.mark])).toEqual([
-    ["1 Postgres", "", "›"],
+    ["1 Postgres", "", ""],
     ["2 SQLite", "· one file", ""],
     ["3 Memory", "", ""],
   ]);
@@ -694,6 +696,17 @@ test("a question opens above the composer: the arrows choose, enter answers, the
   expect(store(ui).status).toBe(QUESTION_UNARMED_STATUS);
   expect(answers).toEqual([]);
   await untilQuestion(ui);
+  // Armed, enter with nothing chosen answers nothing either.
+  await ui.fire("send", "");
+  expect(store(ui).status).toBe(QUESTION_CHOOSE_STATUS);
+  expect(answers).toEqual([]);
+  // Down takes the first row; three of them end clamped on the last.
+  await ui.fire("question_next");
+  expect(store(ui).question.rows.map((row) => row.sel)).toEqual([
+    true,
+    false,
+    false,
+  ]);
   for (const action of ["question_next", "question_next", "question_next"])
     await ui.fire(action);
   // Clamped at the last row, then back one.
@@ -792,6 +805,50 @@ test("esc skips the question and the turn goes on; the status line is the questi
       runsText(m.blocks.flatMap((b) => b.runs)).includes("after the answer"),
     ),
   ).toBe(true);
+});
+
+test("up from no choice takes the last row", async () => {
+  const answers: Answer[] = [];
+  const { ui, client } = setup(asking(STORE_QUESTION, answers));
+  await ui.fire("send", "go");
+  await untilQuestion(ui);
+  await ui.fire("question_prev");
+  await ui.fire("send", "");
+  await client.idle();
+  expect(answers).toEqual([{ kind: "choice", id: "mem" }]);
+});
+
+test("the palette does not open over a question", async () => {
+  const { ui } = setup(asking(STORE_QUESTION, []));
+  await ui.fire("send", "go");
+  await untilQuestion(ui);
+  await ui.fire("palette_open");
+  expect(store(ui).palette.open).toBe(false);
+  expect(store(ui).question.open).toBe(true);
+});
+
+test("a question still open when its turn ends is closed, unanswered", async () => {
+  let outcome = "pending";
+  const { ui, client } = setup(async function* ({ options }) {
+    yield { type: "tool_requested", id: "a1", name: "ask_user" };
+    // A runtime that ends without waiting for the answer.
+    options.ask?.(STORE_QUESTION, options.signal).then(
+      () => {
+        outcome = "answered";
+      },
+      () => {
+        outcome = "rejected";
+      },
+    );
+    await until(() => store(ui).question.open);
+    yield { type: "message", message: { role: "assistant", content: "ok" } };
+  });
+  await ui.fire("send", "go");
+  await client.idle();
+  expect(store(ui).question.open).toBe(false);
+  expect(outcome).toBe("rejected");
+  // A later send is a message, not an answer.
+  expect(store(ui).placeholder).not.toBe(QUESTION_PLACEHOLDER_CHOICE);
 });
 
 test("cancelling the turn closes an open question without an answer", async () => {
