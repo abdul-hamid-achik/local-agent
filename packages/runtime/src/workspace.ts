@@ -74,6 +74,26 @@ function isCrlf(text: string): boolean {
 const toLf = (text: string) => text.replaceAll("\r\n", "\n");
 const toCrlf = (text: string) => text.replaceAll("\n", "\r\n");
 
+/**
+ * The approval diff of `before` to `after`. A carriage return left in it (a
+ * mixed or old-Mac file, diffed as it is) is shown as ␍: bare, it would
+ * move the terminal's cursor back over the line it ends.
+ */
+function approvalDiff(
+  from: string,
+  to: string,
+  before: string,
+  after: string,
+): string {
+  return createTwoFilesPatch(from, to, before, after, "", "", {
+    context: 3,
+  }).replaceAll("\r", "␍");
+}
+
+/** What a file holds on disk: its text, and the BOM written ahead of it. */
+const writtenBytes = (text: string, bom: boolean) =>
+  Buffer.byteLength(text) + (bom ? Buffer.byteLength(BOM) : 0);
+
 const LIST_LIMIT = 500;
 const SEARCH_MATCH_LIMIT = 100;
 const SEARCH_FILE_LIMIT = 5000;
@@ -218,7 +238,8 @@ export class Workspace implements Disposable {
         throw new Error("oldText must match exactly one location");
       const changed = text.replace(find, () => put);
       const after = crlf ? toCrlf(changed) : changed;
-      if (Buffer.byteLength(after) > MAX_FILE_BYTES)
+      // The bytes written, BOM included, must stay readable.
+      if (writtenBytes(after, current.bom) > MAX_FILE_BYTES)
         throw new Error("Replacement exceeds size limit");
       const proposal = Object.freeze({
         kind: "edit" as const,
@@ -226,15 +247,7 @@ export class Workspace implements Disposable {
         before: current.text,
         after,
         identity: current.identity,
-        diff: createTwoFilesPatch(
-          `a/${path}`,
-          `b/${path}`,
-          text,
-          changed,
-          "",
-          "",
-          { context: 3 },
-        ),
+        diff: approvalDiff(`a/${path}`, `b/${path}`, text, changed),
       });
       this.proposals.set(proposal, parentIdentity(parent));
       this.boms.set(proposal, current.bom);
@@ -635,13 +648,18 @@ export class Workspace implements Disposable {
       current = undefined;
     }
     // An existing file keeps its BOM and its CRLF line ends; a new file keeps
-    // a BOM its content brings. The diff is read on LF text.
+    // a BOM its content brings. A CRLF file is diffed on LF text (its line
+    // ends do not change); any other is diffed as it is, so a write that
+    // changes a mixed file's line ends shows them.
     const bom = current ? current.bom : content.startsWith(BOM);
     if (content.startsWith(BOM)) content = content.slice(1);
-    const after =
-      current && isCrlf(current.text) ? toCrlf(toLf(content)) : content;
+    const crlf = current !== undefined && isCrlf(current.text);
+    const after = crlf ? toCrlf(toLf(content)) : content;
     if (current && current.text === after)
       throw new Error("write would not change the file");
+    // CRLF line ends and the BOM count: the file written must stay readable.
+    if (writtenBytes(after, bom) > MAX_FILE_BYTES)
+      throw new Error("Content exceeds size limit");
     const before = current?.text ?? "";
     const proposal = Object.freeze({
       kind: "write" as const,
@@ -650,14 +668,11 @@ export class Workspace implements Disposable {
       before,
       after,
       identity: current?.identity ?? "new",
-      diff: createTwoFilesPatch(
+      diff: approvalDiff(
         current ? `a/${relative}` : "/dev/null",
         `b/${relative}`,
-        toLf(before),
-        toLf(after),
-        "",
-        "",
-        { context: 3 },
+        crlf ? toLf(before) : before,
+        crlf ? toLf(after) : after,
       ),
     });
     this.proposals.set(proposal, parentIdentityValue);

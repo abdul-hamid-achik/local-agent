@@ -607,6 +607,30 @@ test("an edit matches a CRLF file with LF text and writes CRLF back; other files
   );
   await workspace.applyEdit(await workspace.prepareEdit("mixed.txt", "b", "B"));
   expect(await readFile(join(root, "mixed.txt"), "utf8")).toBe("a\r\nB\nc\r\n");
+  // A write that changes a mixed file's line ends shows them in its diff,
+  // with each carriage return visible rather than bare.
+  const relined = await workspace.prepareWrite("mixed.txt", "a\nB\nc\n");
+  expect(relined.diff).toContain("-a␍");
+  expect(relined.diff).toContain("+a");
+  expect(relined.diff).not.toContain("\r");
+});
+
+test("a write or edit whose CRLF or BOM would pass the read limit is refused", async () => {
+  const { root, workspace } = await fixture();
+  // 6 MiB of LF lines, under the limit, are 9 MiB in a CRLF file.
+  await writeFile(join(root, "big.txt"), "x\r\n", "utf8");
+  const lines = "x\n".repeat(3 * 1024 * 1024);
+  await expect(workspace.prepareWrite("big.txt", lines)).rejects.toThrow(
+    "size limit",
+  );
+  await expect(
+    workspace.prepareEdit("big.txt", "x", lines.slice(0, -1)),
+  ).rejects.toThrow("size limit");
+  // A BOM file at exactly the limit's text has no room for its BOM.
+  await writeFile(join(root, "bom.txt"), "\uFEFFy", "utf8");
+  await expect(
+    workspace.prepareWrite("bom.txt", "z".repeat(8 * 1024 * 1024)),
+  ).rejects.toThrow("size limit");
 });
 
 test("search shows tabs as tabs and still escapes other control characters", async () => {

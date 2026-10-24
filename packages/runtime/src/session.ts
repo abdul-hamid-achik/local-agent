@@ -86,6 +86,9 @@ export class SessionStore {
       existingSize = existing.size;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      // Created private (and never through a link): SQLite would create it
+      // with the umask's mode, open until the chmod below.
+      await (await open(candidate, "wx", 0o600)).close();
     }
     const db = new Database(
       candidate,
