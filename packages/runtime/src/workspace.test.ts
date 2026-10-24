@@ -181,6 +181,54 @@ test("host secret exclusions match leaves and cannot be bypassed by template dir
   }
 });
 
+test("well-known credential files are excluded by name, not ordinary source that shares a stem", async () => {
+  const { root, workspace } = await fixture();
+  const secrets = [
+    "credentials.json",
+    "credentials.toml",
+    "credentials.yaml",
+    ".pypirc",
+    ".pgpass",
+    ".git-credentials",
+    ".dockercfg",
+    ".htpasswd",
+    ".s3cfg",
+    ".my.cnf",
+    ".vault-token",
+    "kubeconfig",
+    "terraform.tfstate",
+    "terraform.tfstate.backup",
+    "prod.tfstate",
+    "TERRAFORM.TFSTATE",
+    "release.jks",
+    "cert.pfx",
+    "AuthKey_ABC.p8",
+    "vault.kdbx",
+  ];
+  for (const name of secrets) {
+    await writeFile(join(root, name), "secret");
+    await expect(workspace.read(name), name).rejects.toThrow("excluded");
+  }
+  await mkdir(join(root, "infra"));
+  await writeFile(join(root, "infra", "credentials.json"), "secret");
+  await expect(workspace.read("infra/credentials.json")).rejects.toThrow(
+    "excluded",
+  );
+  const listing = await workspace.list(".");
+  for (const name of secrets) expect(listing).not.toContain(name);
+  const ordinary = [
+    "credentials.ts",
+    "credentials.md",
+    "tfstate-notes.md",
+    "main.tf",
+    "pypirc.md",
+  ];
+  for (const name of ordinary) {
+    await writeFile(join(root, name), "fine");
+    expect(await workspace.read(name), name).toBe("fine");
+  }
+});
+
 test("accepts an absolute path under the root and a leading ./, normalized to the relative form", async () => {
   const { root, workspace } = await fixture();
   await mkdir(join(root, "src"));

@@ -936,6 +936,27 @@ const EXCLUDED_NAMES = new Set([
   ".npmrc",
   ".netrc",
   "credentials",
+  // Other tools' well-known credential files, by exact name: a stem such as
+  // `credentials.ts` is ordinary source, so no `credentials.*` prefix.
+  "credentials.json",
+  "credentials.toml",
+  "credentials.yml",
+  "credentials.yaml",
+  "credentials.tfrc.json",
+  "application_default_credentials.json",
+  ".pypirc",
+  ".pgpass",
+  ".git-credentials",
+  ".dockercfg",
+  ".htpasswd",
+  ".s3cfg",
+  ".my.cnf",
+  ".boto",
+  ".vault-token",
+  ".azure",
+  "kubeconfig",
+  // Terraform state keeps resource secrets in plain text.
+  "terraform.tfstate.d",
 ]);
 const ENV_TEMPLATES = new Set([
   ".env.example",
@@ -955,7 +976,14 @@ function isExcludedName(part: string, leaf: boolean): boolean {
     lower.startsWith("id_rsa") ||
     lower.startsWith("id_ed25519") ||
     lower.endsWith(".p12") ||
-    lower.endsWith(".keystore")
+    lower.endsWith(".keystore") ||
+    lower.endsWith(".jks") ||
+    lower.endsWith(".pfx") ||
+    lower.endsWith(".p8") ||
+    lower.endsWith(".ppk") ||
+    lower.endsWith(".kdbx") ||
+    lower.endsWith(".tfstate") ||
+    lower.endsWith(".tfstate.backup")
   );
 }
 
