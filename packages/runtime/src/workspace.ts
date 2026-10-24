@@ -55,7 +55,24 @@ export type WorkspaceWriteProposal = Readonly<{
   identity: string;
 }>;
 
-type Snapshot = { text: string; identity: string; mode: number };
+type Snapshot = {
+  /** The decoded text, without a leading BOM. */
+  text: string;
+  identity: string;
+  mode: number;
+  /** Whether the file starts with a UTF-8 BOM, which `text` leaves out. */
+  bom: boolean;
+};
+
+const BOM = "﻿";
+
+/** Every line end is CRLF; a mixed file is not, so it is never rewritten. */
+function isCrlf(text: string): boolean {
+  return text.includes("\r\n") && !/(?<!\r)\n/u.test(text);
+}
+
+const toLf = (text: string) => text.replaceAll("\r\n", "\n");
+const toCrlf = (text: string) => text.replaceAll("\n", "\r\n");
 
 const LIST_LIMIT = 500;
 const SEARCH_MATCH_LIMIT = 100;
@@ -101,6 +118,8 @@ const WRAPPER_NAMES = new Set([
 
 export class Workspace implements Disposable {
   private readonly proposals = new WeakMap<object, string>();
+  /** Whether the file a proposal writes starts with a BOM (kept across edits). */
+  private readonly boms = new WeakMap<object, boolean>();
   /** The canonical root, and the path it was opened by when that differs (`/tmp` on macOS). */
   private readonly roots: readonly string[];
   private constructor(
@@ -176,17 +195,29 @@ export class Workspace implements Disposable {
     oldText: string,
     newText: string,
   ): Promise<WorkspaceEditProposal> {
+    // The file's BOM is not part of its text: a model that copies one is
+    // matched without it.
+    if (oldText.startsWith(BOM)) oldText = oldText.slice(1);
+    if (newText.startsWith(BOM)) newText = newText.slice(1);
     if (!oldText) throw new Error("oldText must not be empty");
     if (oldText === newText) throw new Error("edit would not change the file");
     path = this.relative(path);
     return this.at(path, (parent, name) => {
       const current = snapshot(parent, name);
-      const position = current.text.indexOf(oldText);
+      // Models send `\n`. A file that is CRLF throughout is matched as LF and
+      // written back as CRLF; any other file is matched exactly as it is.
+      const crlf = isCrlf(current.text);
+      const text = crlf ? toLf(current.text) : current.text;
+      const find = crlf ? toLf(oldText) : oldText;
+      const put = crlf ? toLf(newText) : newText;
+      if (find === put) throw new Error("edit would not change the file");
+      const position = text.indexOf(find);
       if (position < 0)
         throw new Error("oldText does not match the current file");
-      if (current.text.indexOf(oldText, position + 1) >= 0)
+      if (text.indexOf(find, position + 1) >= 0)
         throw new Error("oldText must match exactly one location");
-      const after = current.text.replace(oldText, () => newText);
+      const changed = text.replace(find, () => put);
+      const after = crlf ? toCrlf(changed) : changed;
       if (Buffer.byteLength(after) > MAX_FILE_BYTES)
         throw new Error("Replacement exceeds size limit");
       const proposal = Object.freeze({
@@ -198,14 +229,15 @@ export class Workspace implements Disposable {
         diff: createTwoFilesPatch(
           `a/${path}`,
           `b/${path}`,
-          current.text,
-          after,
+          text,
+          changed,
           "",
           "",
           { context: 3 },
         ),
       });
       this.proposals.set(proposal, parentIdentity(parent));
+      this.boms.set(proposal, current.bom);
       return proposal;
     });
   }
@@ -241,7 +273,7 @@ export class Workspace implements Disposable {
         );
         temporary = true;
         try {
-          writeFileSync(fd, proposal.after, "utf8");
+          writeFileSync(fd, (current.bom ? BOM : "") + proposal.after, "utf8");
           fchmodSync(fd, current.mode);
           fsyncSync(fd);
         } finally {
@@ -567,6 +599,7 @@ export class Workspace implements Disposable {
           line.length > SEARCH_LINE_CHARS
             ? `${line.slice(0, SEARCH_LINE_CHARS)}…`
             : line,
+          true,
         ),
       });
     }
@@ -601,7 +634,13 @@ export class Workspace implements Disposable {
         throw error;
       current = undefined;
     }
-    if (current && current.text === content)
+    // An existing file keeps its BOM and its CRLF line ends; a new file keeps
+    // a BOM its content brings. The diff is read on LF text.
+    const bom = current ? current.bom : content.startsWith(BOM);
+    if (content.startsWith(BOM)) content = content.slice(1);
+    const after =
+      current && isCrlf(current.text) ? toCrlf(toLf(content)) : content;
+    if (current && current.text === after)
       throw new Error("write would not change the file");
     const before = current?.text ?? "";
     const proposal = Object.freeze({
@@ -609,19 +648,20 @@ export class Workspace implements Disposable {
       path: relative,
       created: current === undefined,
       before,
-      after: content,
+      after,
       identity: current?.identity ?? "new",
       diff: createTwoFilesPatch(
         current ? `a/${relative}` : "/dev/null",
         `b/${relative}`,
-        before,
-        content,
+        toLf(before),
+        toLf(after),
         "",
         "",
         { context: 3 },
       ),
     });
     this.proposals.set(proposal, parentIdentityValue);
+    this.boms.set(proposal, bom);
     return proposal;
   }
 
@@ -672,7 +712,11 @@ export class Workspace implements Disposable {
         );
         temporary = true;
         try {
-          writeFileSync(fd, proposal.after, "utf8");
+          writeFileSync(
+            fd,
+            (this.boms.get(proposal) ? BOM : "") + proposal.after,
+            "utf8",
+          );
           fchmodSync(fd, existing?.mode ?? 0o644);
           fsyncSync(fd);
         } finally {
@@ -724,12 +768,18 @@ function matcher(
   return (line) => line.includes(pattern);
 }
 
-/** A name or line without control characters, so one entry stays on one line. */
-function printable(text: string): string {
+/**
+ * A name or line without control characters, so one entry stays on one line.
+ * `keepTab` leaves tabs in source lines, where indentation is the content.
+ */
+function printable(text: string, keepTab = false): string {
   let out = "";
   for (const char of text) {
     const code = char.codePointAt(0) ?? 0;
-    out += code < 0x20 || code === 0x7f ? "?" : char;
+    out +=
+      (code < 0x20 && !(keepTab && code === 0x09)) || code === 0x7f
+        ? "?"
+        : char;
   }
   return out;
 }
@@ -799,7 +849,10 @@ function snapshot(
     throw new Error("File is not valid UTF-8");
   }
   if (text.includes("\0")) throw new Error("Binary files are not supported");
-  return { text, mode: raw.mode, identity: raw.identity };
+  // The decoder drops a leading BOM; remember it so a rewrite can restore it.
+  const bom =
+    raw.bytes[0] === 0xef && raw.bytes[1] === 0xbb && raw.bytes[2] === 0xbf;
+  return { text, mode: raw.mode, identity: raw.identity, bom };
 }
 
 const EXCLUDED_NAMES = new Set([

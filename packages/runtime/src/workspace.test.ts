@@ -539,3 +539,84 @@ test("an XDG_CONFIG_HOME inside the workspace is out of reach too", async () => 
   expect(found).toContain("dot/cfg/git.conf");
   expect(found).not.toContain("trusted-rules");
 });
+
+test("an edit or a write keeps the file's UTF-8 BOM, and matches with or without one", async () => {
+  const { root, workspace } = await fixture();
+  const bytes = (text: string) => Buffer.from(`﻿${text}`, "utf8");
+  await writeFile(join(root, "bom.txt"), bytes("alpha\nbeta\n"));
+  expect(await workspace.read("bom.txt")).toBe("alpha\nbeta\n");
+  await workspace.applyEdit(
+    await workspace.prepareEdit("bom.txt", "alpha", "ALPHA"),
+  );
+  expect(await readFile(join(root, "bom.txt"))).toEqual(bytes("ALPHA\nbeta\n"));
+  // The model copied the BOM into its text.
+  await workspace.applyEdit(
+    await workspace.prepareEdit("bom.txt", "﻿ALPHA", "alpha"),
+  );
+  expect(await readFile(join(root, "bom.txt"))).toEqual(bytes("alpha\nbeta\n"));
+  // A write keeps the BOM of the file it replaces, whether or not it brings one.
+  await workspace.applyWrite(await workspace.prepareWrite("bom.txt", "new\n"));
+  expect(await readFile(join(root, "bom.txt"))).toEqual(bytes("new\n"));
+  await workspace.applyWrite(
+    await workspace.prepareWrite("bom.txt", "﻿newer\n"),
+  );
+  expect(await readFile(join(root, "bom.txt"))).toEqual(bytes("newer\n"));
+  // A new file has a BOM only when its content does; a plain file gains none.
+  await workspace.applyWrite(await workspace.prepareWrite("fresh.txt", "﻿hi\n"));
+  expect(await readFile(join(root, "fresh.txt"))).toEqual(bytes("hi\n"));
+  await workspace.applyEdit(
+    await workspace.prepareEdit("notes.md", "keep", "kept"),
+  );
+  expect(await readFile(join(root, "notes.md"), "utf8")).toBe("before\nkept\n");
+});
+
+test("an edit matches a CRLF file with LF text and writes CRLF back; other files are left alone", async () => {
+  const { root, workspace } = await fixture();
+  await writeFile(join(root, "win.txt"), "one\r\ntwo\r\nthree\r\n", "utf8");
+  const proposal = await workspace.prepareEdit(
+    "win.txt",
+    "one\ntwo",
+    "uno\ndos\ntres",
+  );
+  // The diff reads on LF text, free of carriage returns.
+  expect(proposal.diff).not.toContain("\r");
+  expect(proposal.diff).toContain("+dos");
+  await workspace.applyEdit(proposal);
+  expect(await readFile(join(root, "win.txt"), "utf8")).toBe(
+    "uno\r\ndos\r\ntres\r\nthree\r\n",
+  );
+  // CRLF in the model's text is accepted too, and not doubled.
+  await workspace.applyEdit(
+    await workspace.prepareEdit("win.txt", "three\r\n", "3\r\n"),
+  );
+  expect(await readFile(join(root, "win.txt"), "utf8")).toBe(
+    "uno\r\ndos\r\ntres\r\n3\r\n",
+  );
+  // A write to a CRLF file keeps its line ends.
+  await workspace.applyWrite(await workspace.prepareWrite("win.txt", "a\nb\n"));
+  expect(await readFile(join(root, "win.txt"), "utf8")).toBe("a\r\nb\r\n");
+  // An LF file stays LF.
+  await workspace.applyEdit(
+    await workspace.prepareEdit("notes.md", "before\nkeep", "x\ny"),
+  );
+  expect(await readFile(join(root, "notes.md"), "utf8")).toBe("x\ny\n");
+  // A mixed file is matched exactly as it is, and never normalized.
+  await writeFile(join(root, "mixed.txt"), "a\r\nb\nc\r\n", "utf8");
+  await expect(workspace.prepareEdit("mixed.txt", "a\nb", "x")).rejects.toThrow(
+    "does not match",
+  );
+  await workspace.applyEdit(await workspace.prepareEdit("mixed.txt", "b", "B"));
+  expect(await readFile(join(root, "mixed.txt"), "utf8")).toBe("a\r\nB\nc\r\n");
+});
+
+test("search shows tabs as tabs and still escapes other control characters", async () => {
+  const { root, workspace } = await fixture();
+  await writeFile(
+    join(root, "tabs.txt"),
+    "\tindented hit\x01\x1b[0m\n",
+    "utf8",
+  );
+  expect(await workspace.search("hit", { path: "tabs.txt" })).toBe(
+    "tabs.txt:1: \tindented hit??[0m",
+  );
+});
