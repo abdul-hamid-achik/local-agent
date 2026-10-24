@@ -1035,43 +1035,63 @@ export function isSecretPath(path: string): boolean {
  * argument, or read a file named inside an option value: for these a
  * secret-named token anywhere in an argument counts, quotes and spaces
  * included (`sh -c "cat .env"`, `python3 -c "open('.env')"`).
+ *
+ * Shells and interpreters count wherever they appear, not only as argv[0]:
+ * the arguments after one are split the same way (`docker exec c sh -c ...`,
+ * `mise exec -- sh -c ...`, `npx tsx -e ...`). Launchers that carry a whole
+ * command line as one argument (`ssh host "sh -c '...'"`) are listed too.
  */
 const WRAPPERS =
-  /^(?:(?:ba|z|da|k|a)?sh|fish|env|xargs|find|sudo|nohup|time|timeout|nice|watch|exec|awk|gawk|sed|curl|wget|dd|osascript|(?:python|ruby|perl|php|lua|node)[\d.]*|bun|deno|tclsh|busybox)$/u;
+  /^(?:(?:ba|z|da|k|a)?sh|fish|env|xargs|find|sudo|nohup|time|timeout|nice|watch|exec|awk|gawk|sed|curl|wget|dd|osascript|(?:python|ruby|perl|php|lua|node|pypy)[\d.]*|rscript|tsx|ts-node|bun|deno|tclsh|busybox|ssh|docker|podman|kubectl|nsenter|chroot|su|doas|npx|bunx|pnpx|uvx|pipx|arch|command|eval|setsid|stdbuf)$/u;
 
 /**
- * The words of an argument that could be a path: split where an option joins
- * a value (`--env-file=.env`, `-d@.env`, `file=@.env`, `a:b`, `a,b`) and, for
- * a wrapper, also at quotes, spaces and shell punctuation. Web addresses are
- * dropped: they are not workspace paths.
+ * Where the arguments start to count as a command line, or -1: the first
+ * shell, interpreter or launcher by name, and `git -c key=value`, whose value
+ * can run a command (`core.pager`, `alias.x=!...`).
  */
-export function pathTokens(program: string, argument: string): string[] {
-  const wrapper = WRAPPERS.test(basename(program).toLowerCase());
-  const text = argument.replace(/\bhttps?:\/\/[^\s'"`)]*/giu, " ");
-  return text
-    .split(wrapper ? /[=@:,;&|<>()'"\s$`]+/u : /[=@:,]+/u)
-    .filter(Boolean);
+function wrapperIndex(argv: readonly string[]): number {
+  const names = argv.map((argument) => basename(argument).toLowerCase());
+  const named = names.findIndex((name) => WRAPPERS.test(name));
+  const gitConfig = names[0] === "git" ? argv.indexOf("-c") : -1;
+  if (named === -1) return gitConfig;
+  return gitConfig === -1 ? named : Math.min(named, gitConfig);
+}
+
+/**
+ * The words of an argument list that could be a path: split where an option
+ * joins a value (`--env-file=.env`, `-d@.env`, `file=@.env`, `a:b`, `a,b`)
+ * and, after a wrapper (see WRAPPERS), also at quotes, spaces and shell
+ * punctuation. Web addresses are dropped: they are not workspace paths.
+ */
+export function pathTokens(argv: readonly string[]): string[] {
+  const from = wrapperIndex(argv);
+  return argv.slice(1).flatMap((argument, offset) => {
+    const wrapped = from !== -1 && offset + 1 > from;
+    const text = argument.replace(/\bhttps?:\/\/[^\s'"`)]*/giu, " ");
+    return text
+      .split(wrapped ? /[=@:,;&|<>()'"\s$`]+/u : /[=@:,]+/u)
+      .filter(Boolean);
+  });
 }
 
 /**
  * The words in a command's arguments that name a path the file tools would
  * hide, as written (`--env-file=.env` gives `.env`).
  *
- * A limit, stated here where it applies: the match is lexical. It does not see
+ * Limits, stated here where they apply. The match is lexical: it does not see
  * a recursive read (`grep -r TOKEN .`, `find . -exec cat {} +`), a glob that
  * expands to a secret, or a name built inside a script; symlinks are looked at
- * separately, when the proposal is made.
+ * separately, when the proposal is made. It also over-matches on purpose: a
+ * word that only mentions a secret name is flagged (`bun test -t "loads .env"`,
+ * `grep -rn .env src`), a known and accepted false positive.
+ *
+ * It is not a boundary. A hit withholds the session grant and the always rule
+ * and adds a note to the approval card; the card and the sandbox are what gate
+ * execution. Headless `--approve-commands` (apps/cli/src/main.ts) runs a
+ * flagged command with only a stderr note, as that flag means.
  */
 export function secretPathsIn(argv: readonly string[]): string[] {
-  const program = argv[0] ?? "";
-  return [
-    ...new Set(
-      argv
-        .slice(1)
-        .flatMap((argument) => pathTokens(program, argument))
-        .filter(isSecretPath),
-    ),
-  ];
+  return [...new Set(pathTokens(argv).filter(isSecretPath))];
 }
 
 /** A workspace at the home directory still cannot reach the user's

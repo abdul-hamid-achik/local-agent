@@ -313,6 +313,18 @@ test.each([
   [["xargs", "cat .env"], [".env"]],
   [["find", ".", "-name", ".env"], [".env"]],
   [["/usr/bin/awk", "{print}", ".env"], [".env"]],
+  // A shell or interpreter later in argv: what follows is a command line too.
+  [["docker", "exec", "c", "sh", "-c", "cat .env"], [".env"]],
+  [["arch", "-x86_64", "sh", "-c", "cat .env"], [".env"]],
+  [["mise", "exec", "--", "sh", "-c", "cat .env"], [".env"]],
+  [["tvault", "run", "--", "sh", "-c", "cat .env"], [".env"]],
+  [["ssh", "host", "sh -c 'cat .env'"], [".env"]],
+  [["git", "-c", "core.pager=cat .env", "log"], [".env"]],
+  [["git", "-c", "alias.x=!cat .npmrc", "x"], [".npmrc"]],
+  [["npx", "tsx", "-e", "require('fs').readFileSync('.env')"], [".env"]],
+  [["tsx", "-e", "require('fs').readFileSync('.env')"], [".env"]],
+  [["pypy3", "-c", "open('.env')"], [".env"]],
+  [["Rscript", "-e", "readLines('.env')"], [".env"]],
 ])("secretPathsIn %j names %j", (argv, named) => {
   expect(secretPathsIn(argv)).toEqual(named);
 });
@@ -331,11 +343,26 @@ test.each([
   // Prose in an argument of an ordinary program is not split into words.
   [["git", "commit", "-m", "rotate credentials docs"]],
   [["sh", "-c", "echo hello"]],
+  [["docker", "exec", "c", "sh", "-c", "echo hello"]],
+  [["git", "-c", "color.ui=always", "log"]],
   [["tool", "."]],
   [["tool", ""]],
 ])("secretPathsIn %j names nothing", (argv) => {
   expect(secretPathsIn(argv)).toEqual([]);
 });
+
+// Known and accepted: the match is lexical, so a word that only mentions a
+// secret name is flagged. A hit withholds the grants and notes the card; it
+// is not a boundary (see secretPathsIn).
+test.each([
+  [["bun", "test", "-t", "loads .env"], [".env"]],
+  [["grep", "-rn", ".env", "src"], [".env"]],
+])(
+  "secretPathsIn %j flags %j, a known and accepted false positive",
+  (argv, named) => {
+    expect(secretPathsIn(argv)).toEqual(named);
+  },
+);
 
 test("a template is allowed only as the leaf of an argument, as the file tools have it", () => {
   expect(secretPathsIn(["cat", ".env.example/hidden.txt"])).toEqual([

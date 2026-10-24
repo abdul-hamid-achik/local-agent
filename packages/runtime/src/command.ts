@@ -208,10 +208,9 @@ async function secretArguments(
   cwd: string,
 ): Promise<string[]> {
   const found = secretPathsIn(argv);
-  const words = argv
-    .slice(1)
-    .flatMap((argument) => pathTokens(argv[0] ?? "", argument))
-    .filter((word) => !word.startsWith("-") && !word.startsWith("~"));
+  const words = pathTokens(argv).filter(
+    (word) => !word.startsWith("-") && !word.startsWith("~"),
+  );
   for (const word of [...new Set(words)].slice(0, MAX_LINK_CHECKS)) {
     const path = resolve(cwd, word);
     if (path !== cwd && !path.startsWith(`${cwd}${sep}`)) continue;
