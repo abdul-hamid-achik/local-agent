@@ -1308,33 +1308,50 @@ test("fetch keeps the whitespace inside pre blocks and collapses it elsewhere", 
     await run.cleanup();
   }
 });
-/** Runs one tool call, aborting the run `afterMs` into it; resolves with how
- * long the run took to end after the abort. A throw from the aborted run
- * counts as ending. */
-async function abortedRun(call: Call, afterMs: number) {
+/** A promise and the function that settles it: a hung server calls
+ * `arrive` when the request reaches it. */
+function arrival() {
+  let arrive!: () => void;
+  const arrived = new Promise<void>((resolve) => {
+    arrive = resolve;
+  });
+  return { arrived, arrive };
+}
+
+/** Runs one tool call, aborting the run as soon as `requestArrived` settles
+ * (the request is then really in flight); resolves with how long the run took
+ * to end after the abort, measured before any cleanup. A throw from the
+ * aborted run counts as ending. */
+async function abortedRun(call: Call, requestArrived: Promise<void>) {
   const controller = new AbortController();
   let abortedAt = Number.NaN;
-  setTimeout(() => {
+  void requestArrived.then(() => {
     abortedAt = performance.now();
     controller.abort();
-  }, afterMs);
-  await session([call], "plan", false, undefined, controller.signal).then(
-    (run) => run.cleanup(),
-    () => undefined,
-  );
-  return performance.now() - abortedAt;
+  });
+  const run = await session(
+    [call],
+    "plan",
+    false,
+    undefined,
+    controller.signal,
+  ).catch(() => undefined);
+  const ended = performance.now();
+  await run?.cleanup();
+  return ended - abortedAt;
 }
 
 test("cancelling the run stops a fetch that is waiting on the server", async () => {
-  stubFetch((url) =>
-    url.startsWith("http://slow.example/")
-      ? new Promise<Response>(() => {})
-      : undefined,
-  );
+  const request = arrival();
+  stubFetch((url) => {
+    if (!url.startsWith("http://slow.example/")) return undefined;
+    request.arrive();
+    return new Promise<Response>(() => {});
+  });
   try {
     const sinceAbort = await abortedRun(
       { name: "fetch", arguments: { url: "http://slow.example/page" } },
-      150,
+      request.arrived,
     );
     expect(requestedUrls.filter((url) => url.includes("slow.example"))).toEqual(
       ["http://slow.example/page"],
@@ -1347,10 +1364,16 @@ test("cancelling the run stops a fetch that is waiting on the server", async () 
 }, 20_000);
 
 test("cancelling the run stops web_search instead of trying the next provider", async () => {
+  const request = arrival();
+  let searxngRequests = 0;
   const hung = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
-    fetch: () => new Promise<Response>(() => {}),
+    fetch: () => {
+      searxngRequests++;
+      request.arrive();
+      return new Promise<Response>(() => {});
+    },
   });
   process.env.LOCAL_AGENT_SEARXNG_URL = hung.url.origin;
   stubFetch((url) =>
@@ -1359,8 +1382,10 @@ test("cancelling the run stops web_search instead of trying the next provider", 
   try {
     const sinceAbort = await abortedRun(
       { name: "web_search", arguments: { query: "bun test" } },
-      150,
+      request.arrived,
     );
+    // The abort landed while SearXNG was being waited on.
+    expect(searxngRequests).toBe(1);
     // Esc must not read as "SearXNG is down, ask DuckDuckGo".
     expect(requestedUrls.filter((url) => url.includes("duckduckgo"))).toEqual(
       [],
@@ -1389,17 +1414,15 @@ test("cancelling the run interrupts the DuckDuckGo retry pause", async () => {
     return new Response("upstream error", { status: 503 });
   });
   try {
-    await session(
+    const run = await session(
       [{ name: "web_search", arguments: { query: "bun test" } }],
       "plan",
       false,
       undefined,
       controller.signal,
-    ).then(
-      (run) => run.cleanup(),
-      () => undefined,
-    );
+    ).catch(() => undefined);
     const ended = performance.now();
+    await run?.cleanup();
     expect(requestedUrls.filter((url) => url.includes("duckduckgo"))).toEqual([
       expect.stringContaining("https://lite.duckduckgo.com/lite/"),
     ]);
@@ -1412,15 +1435,16 @@ test("cancelling the run interrupts the DuckDuckGo retry pause", async () => {
 
 test("cancelling the run stops a DuckDuckGo request that is waiting on the server", async () => {
   delete process.env.LOCAL_AGENT_SEARXNG_URL;
-  stubFetch((url) =>
-    url.startsWith("https://lite.duckduckgo.com/lite/")
-      ? new Promise<Response>(() => {})
-      : undefined,
-  );
+  const request = arrival();
+  stubFetch((url) => {
+    if (!url.startsWith("https://lite.duckduckgo.com/lite/")) return undefined;
+    request.arrive();
+    return new Promise<Response>(() => {});
+  });
   try {
     const sinceAbort = await abortedRun(
       { name: "web_search", arguments: { query: "bun test" } },
-      150,
+      request.arrived,
     );
     // Esc must not move on to the html endpoint either.
     expect(requestedUrls.filter((url) => url.includes("duckduckgo"))).toEqual([
