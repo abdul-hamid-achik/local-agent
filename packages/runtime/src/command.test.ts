@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +7,7 @@ import {
   type ApprovedCommandProposal,
   createCommandProposal,
   executeApprovedCommand,
+  killLiveCommandGroups,
   parseArgv,
   splitCommandLine,
 } from "./command";
@@ -321,3 +323,90 @@ test("parseArgv keeps an array as it is and also reads a JSON array sent as a st
   ]);
   expect(parseArgv("ls -la")).toEqual(["ls", "-la"]);
 });
+
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function until(done: () => boolean | Promise<boolean>, what: string) {
+  for (let i = 0; i < 300; i++) {
+    if (await done()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for ${what}`);
+}
+
+async function grandchildPid(file: string): Promise<number> {
+  let pid = 0;
+  await until(async () => {
+    pid = Number((await readFile(file, "utf8").catch(() => "")).trim());
+    return pid > 0;
+  }, "the grandchild's pid");
+  return pid;
+}
+
+test("killLiveCommandGroups ends the descendants of a command that is still running", async () => {
+  const root = await temp();
+  const pidfile = join(root, "pid");
+  const proposal = await createCommandProposal(
+    ["/bin/sh", "-c", `sleep 300 & echo $! > '${pidfile}'; wait`],
+    root,
+    60_000,
+  );
+  const running = executeApprovedCommand(
+    proposal,
+    new AbortController().signal,
+  );
+  const grandchild = await grandchildPid(pidfile);
+  expect(alive(grandchild)).toBe(true);
+  killLiveCommandGroups();
+  await until(() => !alive(grandchild), "the grandchild to die");
+  // The command's own run still settles, as a failed one.
+  expect((await running).exitCode).not.toBe(0);
+});
+
+// The host dies for real: a child bun runs the command, then the parent
+// leaves it by exit, by a signal, or by a signal another handler owns.
+test.each([
+  ["exit", undefined, { code: 3, signal: null }],
+  // Only the SIGKILL after the grace period ends this one.
+  ["stubborn", undefined, { code: 3, signal: null }],
+  ["signal", "SIGTERM", { code: null, signal: "SIGTERM" }],
+  ["signal", "SIGHUP", { code: null, signal: "SIGHUP" }],
+  ["signal", "SIGINT", { code: null, signal: "SIGINT" }],
+  // A handler of the host's own keeps deciding how it exits.
+  ["handled", "SIGTERM", { code: 7, signal: null }],
+] as const)(
+  "a host that leaves by %s (%s) takes its command's descendants with it",
+  async (mode, signal, expected) => {
+    const root = await temp();
+    const pidfile = join(root, "pid");
+    const host = spawn(
+      process.execPath,
+      [join(import.meta.dirname, "fixtures/detached_orphan.ts"), pidfile, mode],
+      { cwd: root, stdio: ["ignore", "pipe", "inherit"] },
+    );
+    const exited = new Promise<{
+      code: number | null;
+      signal: NodeJS.Signals | null;
+    }>((resolve) =>
+      host.once("exit", (code, exitSignal) =>
+        resolve({ code, signal: exitSignal }),
+      ),
+    );
+    let ready = false;
+    host.stdout.on("data", (chunk: Buffer) => {
+      if (chunk.toString().includes("ready")) ready = true;
+    });
+    await until(() => ready, "the host to run its command");
+    const grandchild = await grandchildPid(pidfile);
+    if (signal) host.kill(signal);
+    expect(await exited).toEqual(expected);
+    await until(() => !alive(grandchild), "the grandchild to die");
+  },
+);

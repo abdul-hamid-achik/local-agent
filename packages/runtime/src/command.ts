@@ -193,6 +193,88 @@ function childEnvironment(): NodeJS.ProcessEnv {
   return Object.freeze(environment);
 }
 
+/**
+ * Process groups of commands still running, by leader pid. A command runs
+ * detached (its own group, so a cancel reaches its descendants), which also
+ * means a host that dies would leave them behind: the hooks below kill
+ * whatever is still listed. SIGKILL of the host cannot be caught.
+ */
+const liveGroups = new Set<number>();
+const GROUP_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+const signalHooks = new Map<NodeJS.Signals, () => void>();
+
+function groupAlive(pid: number): boolean {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM still means the group exists.
+    return error instanceof Error && "code" in error && error.code === "EPERM";
+  }
+}
+
+/**
+ * SIGTERM every live group, then SIGKILL what outlives the grace period.
+ * Synchronous: it also runs from the `exit` event, where nothing async is
+ * left to run.
+ */
+export function killLiveCommandGroups(): void {
+  const groups = [...liveGroups];
+  liveGroups.clear();
+  removeHooks();
+  const signalled = groups.filter((pid) => {
+    try {
+      process.kill(-pid, "SIGTERM");
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  const deadline = Date.now() + KILL_GRACE_MS;
+  const sleeper = new Int32Array(new SharedArrayBuffer(4));
+  while (signalled.some(groupAlive) && Date.now() < deadline)
+    Atomics.wait(sleeper, 0, 0, 10);
+  for (const pid of signalled) {
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      // The group is gone.
+    }
+  }
+}
+
+function removeHooks(): void {
+  process.off("exit", killLiveCommandGroups);
+  for (const [signal, hook] of signalHooks) process.off(signal, hook);
+  signalHooks.clear();
+}
+
+function trackGroup(pid: number): void {
+  if (liveGroups.size === 0) {
+    process.on("exit", killLiveCommandGroups);
+    for (const signal of GROUP_SIGNALS) {
+      const hook = () => {
+        // First in line (prepended), so the count still includes handlers
+        // that remove themselves when they run.
+        const handled = process.listenerCount(signal) > 1;
+        killLiveCommandGroups();
+        // A listener suppresses the default death by the signal. When this
+        // hook is the only one, die by it as the process would have; any
+        // other handler decides the exit, as it did before.
+        if (!handled) process.kill(process.pid, signal);
+      };
+      signalHooks.set(signal, hook);
+      process.prependListener(signal, hook);
+    }
+  }
+  liveGroups.add(pid);
+}
+
+function untrackGroup(pid: number): void {
+  liveGroups.delete(pid);
+  if (liveGroups.size === 0) removeHooks();
+}
+
 function killGroup(child: ChildProcess, signal: NodeJS.Signals): boolean {
   if (!child.pid) return false;
   try {
@@ -329,6 +411,7 @@ export async function executeApprovedCommand(
     },
   );
 
+  if (child.pid) trackGroup(child.pid);
   const chunks: Buffer[] = [];
   const outputState = { bytes: 0, truncated: false };
   let timedOut = false;
@@ -354,6 +437,7 @@ export async function executeApprovedCommand(
         }
       }
       if (!groupExists) {
+        if (child.pid) untrackGroup(child.pid);
         resolve();
         return;
       }
@@ -367,6 +451,7 @@ export async function executeApprovedCommand(
             // The process group may have disappeared during escalation.
           }
         }
+        if (child.pid) untrackGroup(child.pid);
         resolve();
       }, KILL_GRACE_MS);
     });
