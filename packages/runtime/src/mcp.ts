@@ -19,6 +19,27 @@ const MAX_TEXT = 16_384;
 const CONNECT_TIMEOUT_MS = 15_000;
 /** One tool call, unless the server's entry sets `timeoutMs`. */
 const CALL_TIMEOUT_MS = 60_000;
+/** How much of a stdio server's stderr is kept, from its end. */
+const STDERR_TAIL = 4_096;
+
+/**
+ * A call to a server whose connection has closed (the process exited, or
+ * the client was closed): it was not sent, so its outcome is known.
+ */
+export class McpStoppedError extends Error {}
+
+/**
+ * The last line a server wrote to stderr, for the person: one line, no
+ * control characters, at most 160 characters. Never sent to the model.
+ */
+export function lastStderrLine(text: string): string | undefined {
+  const line = Bun.stripANSI(text)
+    .split(/\r?\n/)
+    .map((part) => part.replace(/[\u0000-\u001f\u007f-\u009f]/g, "").trim())
+    .filter(Boolean)
+    .at(-1);
+  return line ? line.slice(0, 160) : undefined;
+}
 
 export type McpServerConfig = {
   name: string;
@@ -208,13 +229,24 @@ export async function connectMcp(
             ...DEFAULT_INHERITED_ENV_VARS.map((key) => [key, ""]),
             ...Object.entries(config.transport.env ?? {}),
           ]),
-          stderr: "ignore",
+          stderr: "pipe",
         })
       : new StreamableHTTPClientTransport(validateHttp(config.transport), {
           fetch: async (input, init) =>
             fetch(input, { ...init, redirect: "error" }),
         });
+  // A stdio server's stderr is read as it comes (an unread pipe would
+  // stall it) and only its end is kept, for the reason it did not start.
+  let said = "";
+  if (transport instanceof StdioClientTransport)
+    transport.stderr?.on("data", (chunk: Buffer | string) => {
+      said = (said + chunk.toString()).slice(-STDERR_TAIL);
+    });
   const client = new Client({ name: "local-agent", version: "0.0.0" });
+  let stopped = false;
+  client.onclose = () => {
+    stopped = true;
+  };
   try {
     const timeout = AbortSignal.timeout(CONNECT_TIMEOUT_MS);
     const requestSignal = externalSignal
@@ -284,6 +316,10 @@ export async function connectMcp(
           : undefined;
         if (!local || !names.has(name))
           throw new Error(`Unknown MCP tool: ${name}`);
+        if (stopped)
+          throw new McpStoppedError(
+            `MCP server ${config.name} has stopped, so the call was not sent. Do not call its tools again in this session; tell the user.`,
+          );
         const timeout = AbortSignal.timeout(callTimeoutMs);
         // The SDK's own request timeout is 60 s unless set: a server's
         // longer timeoutMs needs it raised too.
@@ -306,9 +342,11 @@ export async function connectMcp(
     };
   } catch (error) {
     await client.close().catch(() => undefined);
-    if (config.transport.kind === "stdio")
-      throw notStarted(config.transport, error) ?? error;
-    throw error;
+    if (config.transport.kind !== "stdio") throw error;
+    const reason = notStarted(config.transport, error) ?? error;
+    const line = lastStderrLine(said);
+    if (!line || !(reason instanceof Error)) throw reason;
+    throw new Error(`${reason.message}; it said: ${line}`, { cause: error });
   }
 }
 

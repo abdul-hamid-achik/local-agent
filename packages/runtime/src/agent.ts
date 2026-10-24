@@ -36,7 +36,11 @@ import {
   type Intent,
   projectInstructions,
 } from "#runtime/instructions";
-import { gatewayTarget, type McpConnection } from "#runtime/mcp";
+import {
+  gatewayTarget,
+  type McpConnection,
+  McpStoppedError,
+} from "#runtime/mcp";
 import { assertFetchTarget, type FetchPolicy, fetchPolicy } from "#runtime/net";
 import { sandboxUnavailable } from "#runtime/sandbox";
 import {
@@ -2823,12 +2827,15 @@ async function* agentTurn(
         }
       } catch (error) {
         // A write or edit that failed before replacing the file changed
-        // nothing: a plain failure the model can retry, not an unknown.
-        uncertain = effectAttempted && !(error instanceof NotAppliedError);
+        // nothing, and a call to a stopped MCP server was not sent: a plain
+        // failure, not an unknown.
+        const notSent =
+          error instanceof NotAppliedError || error instanceof McpStoppedError;
+        uncertain = effectAttempted && !notSent;
         status = "failed";
         output = signal.aborted
           ? "Cancelled; tool did not report successful completion"
-          : mcpConnection && effectAttempted
+          : mcpConnection && effectAttempted && !notSent
             ? "MCP call did not produce a usable result; its effects are unknown"
             : error instanceof z.ZodError
               ? // One line per problem, with where it is: a small model

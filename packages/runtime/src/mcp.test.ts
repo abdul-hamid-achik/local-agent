@@ -10,6 +10,7 @@ import {
   defaultMcpConfigPath,
   gatewayTarget,
   McpServerConfigSchema,
+  McpStoppedError,
   readMcpConfig,
 } from "#runtime/mcp";
 
@@ -97,6 +98,57 @@ describe("MCP adapter boundary", () => {
       }),
     ).toThrow();
   });
+
+  test("a server that exits before it answers is reported with the last line it wrote to stderr", async () => {
+    const error = await connectMcp({
+      name: "noisy",
+      transport: {
+        kind: "stdio",
+        command: process.execPath,
+        args: [
+          "-e",
+          'console.error("starting"); console.error("fatal: \\u001b[31mOLLAMA_URL is not set\\u001b[0m"); process.exit(1)',
+        ],
+        env: {},
+      },
+    }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(
+      /; it said: fatal: OLLAMA_URL is not set$/,
+    );
+  }, 15_000);
+
+  test("a call to a server that has stopped is refused without being sent", async () => {
+    const adapter = await connectMcp({
+      name: "stopping",
+      transport: {
+        kind: "stdio",
+        command: process.execPath,
+        args: [
+          fileURLToPath(new URL("./fixtures/mcp_stop.ts", import.meta.url)),
+        ],
+        env: {},
+      },
+    });
+    try {
+      expect((await adapter.callTool("stopping__stop", {})).text).toBe(
+        "stopping",
+      );
+      // The process exits on its own; its connection closes soon after.
+      let error: unknown;
+      for (let attempt = 0; attempt < 50; attempt++) {
+        await Bun.sleep(100);
+        error = await adapter.callTool("stopping__stop", {}).catch((e) => e);
+        if (error instanceof McpStoppedError) break;
+      }
+      expect(error).toBeInstanceOf(McpStoppedError);
+      expect((error as Error).message).toBe(
+        "MCP server stopping has stopped, so the call was not sent. Do not call its tools again in this session; tell the user.",
+      );
+    } finally {
+      await adapter.close();
+    }
+  }, 15_000);
 
   test("connects to the official stdio server and projects only bounded text", async () => {
     process.env.MCP_SECRET = "parent-secret";

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 import { type AgentEvent, runAgent, textToolCall } from "#runtime/agent";
 import { resolveProvider } from "#runtime/config";
+import { McpStoppedError } from "#runtime/mcp";
 import { SessionStore } from "#runtime/session";
 import { Workspace } from "#runtime/workspace";
 
@@ -224,6 +225,81 @@ test("a read repeated after the file changed outside the run gets the new text, 
     ).toEqual(["one\n", NOTE, "two\n", NOTE]);
   } finally {
     await server.stop(true);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a call to a stopped MCP server fails plainly and the run goes on", async () => {
+  const root = await mkdtemp(join(tmpdir(), "local-agent-mcp-stopped-"));
+  using workspace = await Workspace.create(root);
+  const store = await SessionStore.open(join(root, "session.sqlite"));
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/tags")
+        return Response.json({ models: [{ name: "fixture", size: 1000 }] });
+      if (path === "/api/show")
+        return Response.json({
+          capabilities: ["completion", "tools"],
+          model_info: { "fixture.context_length": 16384 },
+        });
+      const body = (await request.json()) as { messages: { role: string }[] };
+      const message = body.messages.some((m) => m.role === "tool")
+        ? { role: "assistant", content: "Finished" }
+        : {
+            role: "assistant",
+            content: "",
+            tool_calls: [
+              { function: { name: "fixture__effect", arguments: {} } },
+            ],
+          };
+      return new Response(`${JSON.stringify({ message, done: true })}\n`);
+    },
+  });
+  try {
+    const session = { store, state: await store.createSession(root) };
+    const events: AgentEvent[] = [];
+    for await (const event of runAgent(
+      resolveProvider({ OLLAMA_HOST: server.url.origin }, "fixture"),
+      [{ role: "user", content: "Run tool" }],
+      {
+        workspace,
+        session,
+        signal: AbortSignal.timeout(5000),
+        approve: async () => true,
+        mcp: [
+          {
+            tools: [
+              {
+                name: "fixture__effect",
+                inputSchema: { type: "object" },
+                readOnly: false,
+              },
+            ],
+            async callTool(): Promise<never> {
+              throw new McpStoppedError("MCP server fixture has stopped");
+            },
+            async close() {},
+          },
+        ],
+      },
+    ))
+      events.push(event);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "tool_result",
+        status: "failed",
+        output: "MCP server fixture has stopped",
+      }),
+    );
+    expect(events.at(-1)).toMatchObject({ type: "turn_complete" });
+    const current = await store.loadSession(session.state.publicId, root);
+    expect(store.listHazards(current.id, current.workspaceId)).toHaveLength(0);
+  } finally {
+    await server.stop(true);
+    store.close();
     await rm(root, { recursive: true, force: true });
   }
 });
