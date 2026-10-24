@@ -81,8 +81,9 @@ const contextLength = (show: ShowModel) => {
  * Whether Ollama serves the model on its MLX runner (Apple silicon): there
  * `num_ctx` reserves nothing, the KV cache grows with the conversation and
  * Ollama never trims the history. `/api/show` `details.runner` decides
- * when it is set ("mlx", "llamacpp" or "ggml"); a model that predates the
- * field runs on MLX when its weights are safetensors, as Ollama judges it.
+ * when it is set ("mlx", "llamacpp" or "ggml"); for a model that predates
+ * the field the format decides, as Ollama's own `manifest.MetadataForConfig`
+ * maps it (0.40.6): safetensors is MLX, gguf and ggml are not.
  */
 export function ollamaMLX(details: ShowModel["details"]): boolean {
   const runner = details?.runner;

@@ -183,8 +183,9 @@ test("a model missing from a Chalupa host points at chalupa status, not ollama p
 });
 
 test("a declared runner decides MLX; an older manifest's safetensors weights mean MLX too", async () => {
-  // As Ollama 0.40.6 reports them: a GGUF tag declares llamacpp; ornith-1.5
-  // predates the field and is GGUF; the default qwen3.5 tags declare mlx.
+  // The first two as Ollama 0.40.6 reported them on this machine (a GGUF
+  // tag declares llamacpp; ornith-1.5 predates the field and is GGUF); the
+  // mlx shape is the one its source writes for a safetensors model.
   expect(ollamaMLX({ format: "gguf", runner: "llamacpp" })).toBe(false);
   expect(ollamaMLX({ format: "gguf", parent_model: "" })).toBe(false);
   expect(ollamaMLX({ format: "safetensors", runner: "mlx" })).toBe(true);
