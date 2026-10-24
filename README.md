@@ -184,7 +184,7 @@ of the workspace stay forbidden.
 | `read_image` | none | Read one image file (PNG, JPEG, WebP, GIF; 5 MiB cap, magic bytes checked) and attach it to the tool result for vision models |
 | `list` | none | List a directory (directories end with `/`; `.git` and `node_modules` skipped; 500 entries) |
 | `search` | none | Literal or regular-expression search over workspace text files as `path:line: text` (100 matches; binaries, `.git`, `node_modules` and secrets skipped) |
-| `fetch` | none | GET one http(s) URL as readable text (HTML → plain text, 512 KiB cap, redirects followed up to 5 hops) |
+| `fetch` | none | GET one public http(s) URL as readable text (HTML → plain text, 512 KiB cap, redirects followed up to 5 hops; loopback and private hosts need `LOCAL_AGENT_FETCH_PRIVATE=1`) |
 | `web_search` | none | Search the web via SearXNG when `LOCAL_AGENT_SEARXNG_URL` is set, otherwise DuckDuckGo Lite; returns the top 8 results |
 | `task` | none | Delegate a bounded read-only investigation to a fresh subagent (read, list, search, fetch, web_search, read_image only) and get its final answer |
 | `edit` | `--approve-edits` | Replace one exact occurrence in an existing file |
@@ -250,8 +250,13 @@ edits, writes and commands. Build intent asks for each edit or command in intera
 `y` approves. In the Tuimark client, `a` on an approval approves and also
 grants matching calls for the rest of the session — file changes as one
 grant, a command by its program plus first argument (the dialog spells out
-exactly what would be granted, e.g. ``a allow `bun test …` this session``),
-an MCP call by its exact `SERVER__TOOL` name. Grants live only in memory,
+exactly what would be granted, e.g. ``a allow `bun test …` this session``;
+a package manager's `run`/`exec`/`add`-style subcommand keeps its third word
+(`bun run test …`), an option the approved command did not carry asks
+again, and a bare program, `bash -c …`-style options, wrappers
+like `env` or `xargs` and git subcommands that run code (`git config`,
+`git rebase`, …) are granted only as the exact command), an MCP call by its exact
+`SERVER__TOOL` name. Grants live only in memory,
 never apply in plan mode, and are not offered when the approval preview is
 truncated. The header names active grants (`auto: files · bun test`);
 `/permissions` lists them and `/permissions clear` revokes them all.
