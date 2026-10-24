@@ -1,5 +1,5 @@
 import { accessSync, constants, statSync } from "node:fs";
-import { delimiter, join } from "node:path";
+import { delimiter, isAbsolute, join } from "node:path";
 
 export type BunLookup = {
   env: Record<string, string | undefined>;
@@ -35,8 +35,9 @@ export function resolveBun(lookup: BunLookup): BunResolution {
     "/opt/homebrew/bin/bun",
     "/usr/local/bin/bun",
   );
+  // A relative entry would be probed against the app's cwd ("/" from Finder).
   for (const dir of (lookup.env.PATH ?? "").split(delimiter)) {
-    if (dir) candidates.push(join(dir, "bun"));
+    if (isAbsolute(dir)) candidates.push(join(dir, "bun"));
   }
   const tried = [...new Set(candidates)];
   const path = tried.find((candidate) => isExecutable(candidate));

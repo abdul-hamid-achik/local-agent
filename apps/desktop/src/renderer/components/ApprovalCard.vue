@@ -12,24 +12,25 @@
     <pre v-if="proposal.kind === 'command'">[{{ proposal.cwd }}]$ {{ argvText }}</pre>
     <pre v-if="proposal.kind === 'mcp'">{{ proposal.argumentsJson }}</pre>
     <div class="row">
-      <button class="primary small" :disabled="decided" @click="$emit('decide', true)">
+      <button class="primary small" :disabled="status !== 'pending'" @click="$emit('decide', true)">
         Approve
       </button>
-      <button class="danger small" :disabled="decided" @click="$emit('decide', false)">
+      <button class="danger small" :disabled="status !== 'pending'" @click="$emit('decide', false)">
         Deny
       </button>
-      <span v-if="decided" class="dim">{{ decidedText }}</span>
+      <span v-if="status !== 'pending'" class="dim">{{ statusText }}</span>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed } from "vue";
+import type { ApprovalStatus } from "#desktop/renderer/chat-run";
 import type { AgentStreamEvent } from "#desktop/shared/protocol";
 
 type Proposal = Extract<AgentStreamEvent, { type: "approval_requested" }>["proposal"];
 
-const props = defineProps<{ proposal: Proposal; decided: boolean; allowed?: boolean }>();
+const props = defineProps<{ proposal: Proposal; status: ApprovalStatus }>();
 defineEmits<{ decide: [allowed: boolean] }>();
 
 const argvText = computed(() =>
@@ -38,8 +39,8 @@ const argvText = computed(() =>
     : "",
 );
 
-const decidedText = computed(() =>
-  props.decided ? (props.allowed ? "approved" : "denied") : "",
+const statusText = computed(() =>
+  props.status === "ended" ? "not decided: the run is no longer waiting" : props.status,
 );
 </script>
 

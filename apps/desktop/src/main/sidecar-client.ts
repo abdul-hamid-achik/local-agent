@@ -90,10 +90,14 @@ export class SidecarClient {
     this.child = child;
     this.lines = new LineDecoder();
     this.stderrTail = "";
+    // A stopped or replaced child's last output is dropped: it would land in
+    // the new child's decoder and stream.
     child.stdout?.on("data", (chunk: Buffer) => {
+      if (child !== this.child) return;
       for (const line of this.lines.push(chunk)) this.handleLine(line);
     });
     child.stderr?.on("data", (chunk: Buffer) => {
+      if (child !== this.child) return;
       const text = chunk.toString("utf8");
       console.error(`[sidecar] ${text.trimEnd()}`);
       this.stderrTail = (this.stderrTail + text).slice(-STDERR_TAIL_CHARS);

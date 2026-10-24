@@ -2,6 +2,7 @@ import {
   chmodSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
@@ -16,10 +17,14 @@ import {
   isExecutableFile,
   resolveBun,
 } from "#desktop/main/bun-path";
-import { TextFileGrants } from "#desktop/main/file-access";
+import { TextFileGrants, userMcpConfigPath } from "#desktop/main/file-access";
 import { LineDecoder } from "#desktop/main/ndjson";
 import { writePrivateFile } from "#desktop/main/private-file";
-import { persistentProviderEnv } from "#desktop/main/provider-env";
+import {
+  persistentProviderEnv,
+  providerEnvProblem,
+} from "#desktop/main/provider-env";
+import { loadSettings, saveSettings } from "#desktop/main/settings";
 import { SidecarClient } from "#desktop/main/sidecar-client";
 
 let dir = "";
@@ -56,6 +61,17 @@ describe("resolveBun", () => {
       isExecutable: (p) => p === "/Users/someone/.bun/bin/bun",
     });
     expect(resolved.path).toBe("/Users/someone/.bun/bin/bun");
+  });
+
+  test("a relative PATH entry is never probed", () => {
+    const resolved = resolveBun({
+      env: { PATH: ".:bin:/usr/bin" },
+      home,
+      isExecutable: () => false,
+    });
+    expect(resolved.tried).toContain("/usr/bin/bun");
+    expect(resolved.tried).not.toContain("bun");
+    expect(resolved.tried).not.toContain("bin/bun");
   });
 
   test("reports every place it looked when nothing is executable", () => {
@@ -158,6 +174,37 @@ describe("TextFileGrants", () => {
     expect(() => grants.read(sneaky)).toThrow("Browse");
   });
 
+  test("a picked .json that links to a file of another kind is not granted", () => {
+    const key = join(dir, "id_rsa");
+    writeFileSync(key, "key");
+    const link = join(dir, "config.json");
+    symlinkSync(key, link);
+    const grants = new TextFileGrants();
+    grants.grant(link);
+    expect(() => grants.read(link)).toThrow("Browse");
+    expect(() => grants.write(link, "{}")).toThrow("Browse");
+    expect(readFileSync(key, "utf8")).toBe("key");
+  });
+
+  test("a file granted by name is usable once it exists, and only as JSON", () => {
+    const config = join(dir, "local-agent", "mcp.json");
+    const grants = new TextFileGrants();
+    grants.grantByName(config);
+    expect(() => grants.read(config)).toThrow("Browse");
+    mkdirSync(join(dir, "local-agent"));
+    writeFileSync(config, "[]");
+    expect(grants.read(config)).toBe("[]");
+    grants.write(config, "[1]");
+    expect(readFileSync(config, "utf8")).toBe("[1]");
+    // Replaced by a link to a key file: the name no longer grants it.
+    const key = join(dir, "id_rsa");
+    writeFileSync(key, "key");
+    rmSync(config);
+    symlinkSync(key, config);
+    expect(() => grants.read(config)).toThrow("Browse");
+    expect(() => grants.read(key)).toThrow("Browse");
+  });
+
   test("enforces the 1 MB limit on read and write", () => {
     const big = join(dir, "big.json");
     writeFileSync(big, "x".repeat(1_000_001));
@@ -166,6 +213,65 @@ describe("TextFileGrants", () => {
     expect(() => grants.read(big)).toThrow("1 MB");
     expect(() => grants.write(big, "x".repeat(1_000_001))).toThrow("1 MB");
     expect(() => grants.write(big, 42)).toThrow("Text is required");
+  });
+});
+
+describe("userMcpConfigPath", () => {
+  test("uses XDG_CONFIG_HOME only when it is absolute once trimmed", () => {
+    const home = "/Users/someone";
+    expect(userMcpConfigPath({ XDG_CONFIG_HOME: " /x " }, home)).toBe(
+      "/x/local-agent/mcp.json",
+    );
+    expect(userMcpConfigPath({ XDG_CONFIG_HOME: "rel" }, home)).toBe(
+      "/Users/someone/.config/local-agent/mcp.json",
+    );
+    expect(userMcpConfigPath({}, home)).toBe(
+      "/Users/someone/.config/local-agent/mcp.json",
+    );
+  });
+});
+
+describe("providerEnvProblem", () => {
+  test("a provider name the runtime would not match is refused", () => {
+    expect(providerEnvProblem({ LOCAL_AGENT_PROVIDER: "chalupa" })).toBe(
+      undefined,
+    );
+    expect(providerEnvProblem({})).toBe(undefined);
+    expect(providerEnvProblem({ LOCAL_AGENT_PROVIDER: "Chalupa" })).toBe(
+      'LOCAL_AGENT_PROVIDER must be exactly "chalupa"',
+    );
+    expect(providerEnvProblem({ LOCAL_AGENT_PROVIDER: " openai_local" })).toBe(
+      'LOCAL_AGENT_PROVIDER must be exactly "openai_local"',
+    );
+  });
+});
+
+describe("settings", () => {
+  test("every save leaves a Chalupa profile out, whoever saves", () => {
+    const path = join(dir, "settings.json");
+    const settings = {
+      repoRoot: "/repo",
+      providerEnv: {
+        LOCAL_AGENT_PROVIDER: "chalupa",
+        LOCAL_AGENT_PROVIDER_CONFIG: '{"type":"ollama_remote"}',
+        LOCAL_AGENT_LOCAL_ONLY: "false",
+        LOCAL_AGENT_THINK: "0",
+      },
+    };
+    // As repoRoot() saves: the whole in-memory object.
+    saveSettings(path, settings);
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
+      repoRoot: "/repo",
+      providerEnv: { LOCAL_AGENT_THINK: "0" },
+    });
+    // The running app keeps the profile for its sidecar.
+    expect(settings.providerEnv.LOCAL_AGENT_PROVIDER_CONFIG).toBeDefined();
+    expect(loadSettings(path)).toEqual({
+      repoRoot: "/repo",
+      providerEnv: { LOCAL_AGENT_THINK: "0" },
+    });
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    expect(loadSettings(join(dir, "missing.json"))).toEqual({});
   });
 });
 
@@ -200,6 +306,21 @@ describe("writePrivateFile", () => {
     writePrivateFile(old, '{"providerEnv":{}}');
     expect(statSync(old).mode & 0o777).toBe(0o600);
     expect(readFileSync(old, "utf8")).toBe('{"providerEnv":{}}');
+    // The text went into a new 0600 file, not into the 0644 one.
+    expect(readdirSync(dir).sort()).toEqual(["old.json", "settings.json"]);
+  });
+
+  test("a failed write leaves the old file as it was", () => {
+    const old = join(dir, "old.json");
+    writeFileSync(old, "kept");
+    chmodSync(dir, 0o500);
+    try {
+      expect(() => writePrivateFile(old, "new")).toThrow();
+    } finally {
+      chmodSync(dir, 0o700);
+    }
+    expect(readFileSync(old, "utf8")).toBe("kept");
+    expect(readdirSync(dir)).toEqual(["old.json"]);
   });
 });
 
@@ -295,6 +416,39 @@ describe("SidecarClient lifecycle", () => {
     await expect(pending).rejects.toThrow("stopped");
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(exits).toBe(0);
+  });
+
+  test("a stopped child's last output never reaches the stream", async () => {
+    const script = join(dir, "late.mjs");
+    writeFileSync(
+      script,
+      [
+        'process.on("SIGTERM", () => {',
+        '  process.stdout.write(JSON.stringify({ stream: "r1", event: { type: "text", text: "late" } }) + "\\n");',
+        "  setTimeout(() => process.exit(0), 50);",
+        "});",
+        'process.stdout.write("ready\\n");',
+        "setInterval(() => undefined, 1000);",
+      ].join("\n"),
+    );
+    const client = new SidecarClient(
+      dir,
+      {},
+      {
+        resolveBun: () => ({
+          path: process.execPath,
+          tried: [process.execPath],
+        }),
+        script,
+      },
+    );
+    const streamed: unknown[] = [];
+    client.onStream = (envelope) => streamed.push(envelope);
+    client.start();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    client.stop();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(streamed).toEqual([]);
   });
 
   test("decodes multi-byte replies and stream frames from the child", async () => {

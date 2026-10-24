@@ -20,3 +20,20 @@ export function persistentProviderEnv(
   for (const key of CHALUPA_KEYS) delete kept[key];
   return kept;
 }
+
+/**
+ * Why the runtime would refuse `env`'s provider, or nothing. It matches the
+ * name exactly, so "Chalupa" would be dropped here as a Chalupa profile
+ * yet rejected at every run.
+ */
+export function providerEnvProblem(
+  env: Record<string, string>,
+): string | undefined {
+  const name = env.LOCAL_AGENT_PROVIDER;
+  if (name === undefined) return undefined;
+  const lower = name.trim().toLowerCase();
+  for (const known of ["chalupa", "openai_local", "ollama"])
+    if (lower === known && name !== known)
+      return `LOCAL_AGENT_PROVIDER must be exactly "${known}"`;
+  return undefined;
+}

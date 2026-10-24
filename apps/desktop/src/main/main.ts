@@ -1,62 +1,23 @@
-import { chmodSync, existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
-import { TextFileGrants } from "#desktop/main/file-access";
-import { writePrivateFile } from "#desktop/main/private-file";
-import { persistentProviderEnv } from "#desktop/main/provider-env";
+import { TextFileGrants, userMcpConfigPath } from "#desktop/main/file-access";
+import { providerEnvProblem } from "#desktop/main/provider-env";
+import {
+  loadSettings,
+  type Settings,
+  saveSettings,
+} from "#desktop/main/settings";
 import { SidecarClient } from "#desktop/main/sidecar-client";
 
 const textFiles = new TextFileGrants();
 // The user's own MCP config, which the CLI loads by default, is editable
 // without Browse; it is per user, never per workspace.
-const xdgConfig = process.env.XDG_CONFIG_HOME;
-textFiles.grant(
-  join(
-    xdgConfig?.startsWith("/") ? xdgConfig : join(homedir(), ".config"),
-    "local-agent",
-    "mcp.json",
-  ),
-);
-
-type Settings = {
-  repoRoot?: string;
-  providerEnv?: Record<string, string>;
-};
+textFiles.grantByName(userMcpConfigPath(process.env, homedir()));
 
 function settingsPath(): string {
   return join(app.getPath("userData"), "settings.json");
-}
-
-function loadSettings(): Settings {
-  try {
-    const settings = JSON.parse(
-      readFileSync(settingsPath(), "utf8"),
-    ) as Settings;
-    // A Chalupa profile an older version saved names a tunnel long gone.
-    if (settings.providerEnv)
-      settings.providerEnv = persistentProviderEnv(settings.providerEnv);
-    // providerEnv holds API keys; an older file may have been written 0644.
-    // A file that cannot be tightened still loads.
-    try {
-      chmodSync(settingsPath(), 0o600);
-    } catch (error) {
-      console.error(
-        `[main] cannot tighten settings: ${(error as Error).message}`,
-      );
-    }
-    return settings;
-  } catch {
-    return {};
-  }
-}
-
-function saveSettings(settings: Settings): void {
-  try {
-    writePrivateFile(settingsPath(), JSON.stringify(settings, null, 2));
-  } catch (error) {
-    console.error(`[main] cannot save settings: ${(error as Error).message}`);
-  }
 }
 
 function looksLikeRepoRoot(path: string): boolean {
@@ -82,7 +43,7 @@ function defaultRepoRoot(): string | undefined {
 
 let mainWindow: BrowserWindow | undefined;
 let sidecar: SidecarClient | undefined;
-let settings = loadSettings();
+let settings: Settings = loadSettings(settingsPath());
 
 function repoRoot(): string {
   if (settings.repoRoot && looksLikeRepoRoot(settings.repoRoot))
@@ -90,14 +51,18 @@ function repoRoot(): string {
   const detected = defaultRepoRoot();
   if (detected) {
     settings = { ...settings, repoRoot: detected };
-    saveSettings(settings);
+    saveSettings(settingsPath(), settings);
     return detected;
   }
   throw new Error("Repository checkout not found");
 }
 
 function startSidecar(): void {
+  // stop() reports no exit, so a run on the replaced sidecar would wait for
+  // a run_done that never comes: say it ended.
+  const replaced = sidecar?.running ?? false;
   sidecar?.stop();
+  if (replaced) mainWindow?.webContents.send("desktop/sidecar-restarted");
   sidecar = new SidecarClient(repoRoot(), settings.providerEnv ?? {});
   sidecar.onStream = (envelope) => {
     mainWindow?.webContents.send("desktop/stream", envelope);
@@ -121,7 +86,7 @@ async function ensureRepoRoot(): Promise<string> {
     if (!candidate || !looksLikeRepoRoot(candidate))
       throw new Error("A local-agent checkout is required");
     settings = { ...settings, repoRoot: candidate };
-    saveSettings(settings);
+    saveSettings(settingsPath(), settings);
     return candidate;
   }
 }
@@ -170,8 +135,10 @@ ipcMain.handle("desktop/restart-sidecar", () => {
 ipcMain.handle(
   "desktop/set-provider-env",
   (_event, env: Record<string, string>) => {
+    const problem = providerEnvProblem(env);
+    if (problem) throw new Error(problem);
     settings = { ...settings, providerEnv: env };
-    saveSettings({ ...settings, providerEnv: persistentProviderEnv(env) });
+    saveSettings(settingsPath(), settings);
     startSidecar();
     return true;
   },

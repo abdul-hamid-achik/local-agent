@@ -179,11 +179,15 @@ async function handleAgentStart(id: number, params: unknown): Promise<void> {
   const run: ActiveRun = { controller, pending: undefined };
   activeRuns.set(runId, run);
 
-  const provider = await plannedProvider(model, controller.signal);
-  const workspace = await Workspace.create(workspaceRoot);
+  let workspace: Workspace | undefined;
   let store: SessionStore | undefined;
   const mcp: McpConnection[] = [];
+  // Until agent.start is answered, a failure is its answer (the caller's
+  // dispatch writes it); after that, the run's stream reports it.
+  let answered = false;
   try {
+    const provider = await plannedProvider(model, controller.signal);
+    workspace = await Workspace.create(workspaceRoot);
     store = sessionDb ? await SessionStore.open(sessionDb) : undefined;
     if (mcpConfigPath) {
       const file = Bun.file(mcpConfigPath);
@@ -212,6 +216,7 @@ async function handleAgentStart(id: number, params: unknown): Promise<void> {
       ok: true,
       result: { runId, sessionId: session?.state.publicId },
     });
+    answered = true;
 
     const approve = (proposal: ApprovalRequest): Promise<boolean> =>
       new Promise((resolveDecision) => {
@@ -298,6 +303,8 @@ async function handleAgentStart(id: number, params: unknown): Promise<void> {
     }
     emitStream(runId, { type: "run_done" });
   } catch (error) {
+    if (!answered)
+      throw controller.signal.aborted ? new Error("Run cancelled") : error;
     if (controller.signal.aborted) {
       emitStream(runId, { type: "run_error", message: "Run cancelled" });
     } else {
@@ -312,7 +319,7 @@ async function handleAgentStart(id: number, params: unknown): Promise<void> {
     activeRuns.delete(runId);
     await Promise.allSettled(mcp.map((connection) => connection.close()));
     store?.close();
-    workspace.close();
+    workspace?.close();
   }
 }
 

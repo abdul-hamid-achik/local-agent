@@ -18,6 +18,8 @@ export type DesktopBridge = {
   onSidecarExit: (
     callback: (code: number | null, message?: string) => void,
   ) => () => void;
+  /** Main replaced a running sidecar (a restart or a provider change). */
+  onSidecarRestart: (callback: () => void) => () => void;
 };
 
 const bridge: DesktopBridge = {
@@ -42,6 +44,12 @@ const bridge: DesktopBridge = {
       callback(code, message);
     ipcRenderer.on("desktop/sidecar-exit", listener);
     return () => ipcRenderer.removeListener("desktop/sidecar-exit", listener);
+  },
+  onSidecarRestart: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on("desktop/sidecar-restarted", listener);
+    return () =>
+      ipcRenderer.removeListener("desktop/sidecar-restarted", listener);
   },
 };
 

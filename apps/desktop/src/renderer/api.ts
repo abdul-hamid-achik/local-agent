@@ -157,6 +157,8 @@ export const api = {
   openExternal: (url: string) => bridge().openExternal(url),
   onSidecarExit: (callback: (code: number | null, message?: string) => void) =>
     bridge().onSidecarExit(callback),
+  onSidecarRestart: (callback: () => void) =>
+    bridge().onSidecarRestart(callback),
 };
 
 export function errorMessage(error: unknown): string {
