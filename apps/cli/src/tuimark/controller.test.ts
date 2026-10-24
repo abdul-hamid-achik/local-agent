@@ -223,8 +223,18 @@ test("slash commands never reach the model and use the Vue client's words", asyn
   expect(store(ui).header.mode).toBe("plan");
   await ui.fire("send", "/help");
   expect(store(ui).help.open).toBe(true);
+  // A typo stays in the composer to be fixed; a command that ran clears it.
+  store(ui).draft = "/bogus";
   await ui.fire("send", "/bogus");
   expect(store(ui).status).toBe("Unknown command: /bogus. Use /help");
+  expect(store(ui).draft).toBe("/bogus");
+  store(ui).draft = "/theme blue";
+  await ui.fire("send", "/theme blue");
+  expect(store(ui).status).toContain("Unknown theme: blue");
+  expect(store(ui).draft).toBe("/theme blue");
+  store(ui).draft = "/mode build";
+  await ui.fire("send", "/mode build");
+  expect(store(ui).draft).toBe("");
   await ui.fire("send", "/mcp");
   expect(store(ui).status).toContain("MCP servers: 0");
   expect(seen).toHaveLength(0);
@@ -481,6 +491,56 @@ test("a cancelled turn says Cancelled, takes the prompt back and restores the dr
   expect(store(ui).messages).toHaveLength(0);
   expect(store(ui).draft).toBe("slow one");
   expect(store(ui).busy).toBe(false);
+});
+
+test("fullscreen: a cancelled or failed reply keeps what had arrived", async () => {
+  let calls = 0;
+  const { ui, client, seen } = setup(async function* ({ options }) {
+    if (++calls > 1) {
+      yield { type: "message", message: { role: "assistant", content: "ok" } };
+      return;
+    }
+    yield {
+      type: "message",
+      message: { role: "assistant", content: "First, the plan." },
+    };
+    yield { type: "text", text: "half an " };
+    yield { type: "text", text: "answer" };
+    await new Promise((_, reject) =>
+      options.signal.addEventListener("abort", () =>
+        reject(new Error("aborted")),
+      ),
+    );
+  });
+  await ui.fire("send", "slow one");
+  await new Promise((r) => setTimeout(r, 15));
+  await ui.fire("cancel");
+  await client.idle();
+  expect(store(ui).status).toBe("Cancelled");
+  expect(store(ui).messages.map(viewText)).toEqual([
+    "slow one",
+    "First, the plan.",
+    "half an answer",
+  ]);
+  expect(store(ui).messages[2]?.is_asst).toBe(true);
+  // Only a view: the next turn's history has the finished message, not this.
+  await ui.fire("send", "next");
+  await client.idle();
+  expect(seen[1]?.messages).toEqual([
+    "user:slow one",
+    "assistant:First, the plan.",
+    "user:next",
+  ]);
+
+  const failed = setup(async function* () {
+    yield { type: "text", text: "partway" };
+    throw new Error("connection reset");
+  });
+  await failed.ui.fire("send", "go");
+  await failed.client.idle();
+  const views = store(failed.ui).messages;
+  expect(views.map(viewText)).toEqual(["go", "partway", "connection reset"]);
+  expect(views[2]?.is_notice).toBe(true);
 });
 
 test("esc while an approval is pending denies it", async () => {

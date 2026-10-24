@@ -41,6 +41,16 @@ steps:
         screen:
             contains: "Unknown command: /nope"
         timeoutMs: 10000
+    # The typo stays in the composer to be fixed; ctrl+c clears it.
+    - wait:
+        screen:
+            contains: "║ /nope"
+        timeoutMs: 10000
+    - press: ctrl+c
+    - wait:
+        screen:
+            notContains: "║ /nope"
+        timeoutMs: 10000
     - type: "stream a reply"
     - press: enter
     - wait:

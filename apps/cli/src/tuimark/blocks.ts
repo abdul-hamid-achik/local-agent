@@ -1238,6 +1238,15 @@ export class ViewBuilder {
     };
   }
 
+  /**
+   * What arrived of a reply that never finished (cancelled or failed), as
+   * the live region parsed it. A transcript view only: the model's history
+   * and the session never had this message.
+   */
+  partial(blocks: Block[], links: LinkRef[]): MessageView {
+    return view(this.id(), "asst", blocks, NO_CARD, links.slice());
+  }
+
   /** A view for text the client itself wrote (never sent to the model). */
   user(text: string): MessageView {
     return this.text("user", text);

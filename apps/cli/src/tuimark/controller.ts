@@ -1805,8 +1805,7 @@ export class TuimarkClient {
     if (!raw.trim()) return;
     this.remember(raw);
     if (isCommand) {
-      await this.write([{ path: "draft", value: "" }]);
-      await this.runCommand(command);
+      await this.runCommand(command, true);
       return;
     }
     await this.beginTurn(raw);
@@ -1962,7 +1961,11 @@ export class TuimarkClient {
     ]);
   }
 
-  private async runCommand(command: string): Promise<void> {
+  /**
+   * Runs a slash command. One sent from the composer clears it, unless the
+   * command (or its setting) is unknown: a typo stays to be fixed.
+   */
+  private async runCommand(command: string, sent = false): Promise<void> {
     const { mcp = [] } = this.options;
     // `/permissions` lists file rules too: they are loaded (mtime-checked)
     // before the pure command runs, so the listing is never stale.
@@ -1983,6 +1986,8 @@ export class TuimarkClient {
       grants: this.grantLabels(),
       ...(rules !== undefined ? { rules } : {}),
     });
+    if (sent && !outcome.unknown)
+      await this.write([{ path: "draft", value: "" }]);
     // `/details` opens over controller state (the retained receipt), so
     // its whole outcome — refusal included — is written there.
     if (outcome.details) {
@@ -2514,6 +2519,15 @@ export class TuimarkClient {
           .catch(() => "gone");
         if (!draft && this.queued === undefined)
           await this.write([{ path: "draft", value: prompt }]);
+      }
+      // Fullscreen, what arrived of the reply stays where it was read, under
+      // a prompt that stays (inline prints it below). A cancelled turn that
+      // took its prompt back takes its reply too.
+      const withdrawn = aborted && !session && !receivedMessage;
+      if (!this.inline && !withdrawn && !this.liveTool) {
+        const blocks = this.stream.finishTail();
+        if (blocks.length > 0)
+          this.transcript.push(this.builder.partial(blocks, this.stream.links));
       }
       if (aborted) {
         status = this.cancelDroppedQueue

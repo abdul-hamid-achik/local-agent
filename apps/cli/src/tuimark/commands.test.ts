@@ -28,6 +28,7 @@ test("/mode reports, validates and changes the mode with the Vue client's words"
   });
   expect(runSlash("/mode fast", state)).toEqual({
     status: "Unknown mode: fast. Use /mode plan, /mode build or /mode chat",
+    unknown: true,
   });
 });
 
@@ -70,6 +71,7 @@ test("/theme reports, validates and changes the session theme", () => {
   });
   expect(runSlash("/theme blue", state)).toEqual({
     status: "Unknown theme: blue. Use /theme dark, /theme light or /theme auto",
+    unknown: true,
   });
   expect(runSlash("/theme blue", state).theme).toBeUndefined();
 });
@@ -169,6 +171,7 @@ test("/permissions lists session grants and file rules, and clears them", () => 
   expect(runSlash("/permissions maybe", granted)).toEqual({
     status:
       "Unknown permissions setting: maybe. Use /permissions, /permissions clear, /permissions clear rules, /permissions trust or /permissions trust confirm",
+    unknown: true,
   });
   expect(filterPalette("permissions").map((r) => r.id)).toEqual([
     "permissions",

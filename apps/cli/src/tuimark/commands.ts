@@ -38,6 +38,8 @@ export interface CommandOutcome {
   status: string;
   /** Set when the command changed the mode. */
   intent?: Intent;
+  /** Set when the command, or its setting, is not one: the draft stays to fix. */
+  unknown?: boolean;
   /** Set when the command asks for the help overlay. */
   help?: boolean;
   /** Set when the command changed the theme: write it to `@theme`. */
@@ -96,6 +98,7 @@ export function runSlash(text: string, state: CommandState): CommandOutcome {
     if (requested !== "plan" && requested !== "build" && requested !== "chat")
       return {
         status: `Unknown mode: ${requested}. Use /mode plan, /mode build or /mode chat`,
+        unknown: true,
       };
     return { status: `Mode changed to ${requested}`, intent: requested };
   }
@@ -110,6 +113,7 @@ export function runSlash(text: string, state: CommandState): CommandOutcome {
     if (requested !== "dark" && requested !== "light" && requested !== "auto")
       return {
         status: `Unknown theme: ${requested}. Use /theme dark, /theme light or /theme auto`,
+        unknown: true,
       };
     return { status: `Theme changed to ${requested}`, theme: requested };
   }
@@ -124,6 +128,7 @@ export function runSlash(text: string, state: CommandState): CommandOutcome {
     if (requested !== "on" && requested !== "off")
       return {
         status: `Unknown mouse setting: ${requested}. Use /mouse on or /mouse off`,
+        unknown: true,
       };
     return {
       status: `Mouse changed to ${requested}`,
@@ -176,6 +181,7 @@ export function runSlash(text: string, state: CommandState): CommandOutcome {
       return { status: "Trusting the reviewed rules…", trustRules: "confirm" };
     return {
       status: `Unknown permissions setting: ${requested}. Use /permissions, /permissions clear, /permissions clear rules, /permissions trust or /permissions trust confirm`,
+      unknown: true,
     };
   }
   if (command === "/details")
@@ -188,6 +194,7 @@ export function runSlash(text: string, state: CommandState): CommandOutcome {
     if (requested && requested !== "json")
       return {
         status: `Unknown export format: ${requested}. Use /export or /export json`,
+        unknown: true,
       };
     return {
       status: "Exporting transcript…",
@@ -213,7 +220,7 @@ export function runSlash(text: string, state: CommandState): CommandOutcome {
           : "MCP servers: 0 · use --mcp-config to connect trusted servers",
       mcpPanel: true,
     };
-  return { status: `Unknown command: ${command}. Use /help` };
+  return { status: `Unknown command: ${command}. Use /help`, unknown: true };
 }
 
 export const BUSY_STATUS = "Busy · wait for the current turn to finish";
