@@ -1577,3 +1577,59 @@ test("a DuckDuckGo result link that is not a valid URL is skipped, not fatal", a
     await run.cleanup();
   }
 });
+
+test("a challenge is recognised on any error status, by a normalised title, or by cf-mitigated", async () => {
+  stubFetch((url) => {
+    // 429 with the ellipsis character and a title that wraps.
+    if (url.endsWith("/rate"))
+      return new Response(
+        "<html><head><title>\n  Just a\n moment… </title></head><body></body></html>",
+        { status: 429, headers: { "content-type": "text/html" } },
+      );
+    // The header alone, with no HTML to look at.
+    if (url.endsWith("/header"))
+      return new Response("blocked", {
+        status: 403,
+        headers: { "content-type": "text/plain", "cf-mitigated": "challenge" },
+      });
+    // The interstitial markers on a 429 with an unrelated title.
+    if (url.endsWith("/markers429"))
+      return new Response(
+        '<html><head><title>Checking</title></head><body><div class="cf-browser-verification"></div></body></html>',
+        { status: 429, headers: { "content-type": "text/html" } },
+      );
+    // An ordinary 429 is still just a 429.
+    if (url.endsWith("/plain429"))
+      return new Response(
+        "<html><head><title>Slow down</title></head></html>",
+        {
+          status: 429,
+          headers: { "content-type": "text/html" },
+        },
+      );
+    return undefined;
+  });
+  const run = await session(
+    ["rate", "header", "plain429", "markers429"].map((name) => ({
+      name: "fetch",
+      arguments: { url: `http://cf.example/${name}` },
+    })),
+  );
+  try {
+    expect(run.results.map((result) => result.status)).toEqual([
+      "failed",
+      "failed",
+      "failed",
+      "failed",
+    ]);
+    expect(run.output(3)).toContain("behind a bot challenge");
+    expect(run.output(0)).toContain("behind a bot challenge");
+    expect(run.output(0)).toContain("HTTP 429");
+    expect(run.output(1)).toContain("behind a bot challenge");
+    expect(run.output(2)).toContain("HTTP 429");
+    expect(run.output(2)).not.toContain("bot challenge");
+  } finally {
+    restoreFetch();
+    await run.cleanup();
+  }
+});
