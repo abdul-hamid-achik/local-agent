@@ -115,6 +115,12 @@ a child and draws the whole screen from `apps/cli/src/tuimark/ui/app.tui`.
   runs, spinners mark the streaming reply and a running tool, and the status
   bar draws the stream's pace (pieces per second, flat while an approval
   waits) after the elapsed time.
+  When the model calls `ask_user`, its question opens in the flow above the
+  composer. For a choice, `up`/`down` choose (a single choice starts with
+  none chosen, a yes/no on No) and `enter` answers, or type the row's
+  number, its label, or `y`/`n`; for free text, type the answer and press
+  `enter`. `esc` skips it, and the model reads that you declined. What you
+  were typing is put aside and comes back when the question closes.
   Tool cards show only the first eight lines of a result; `/details` opens
   the last tool call's full output in a scrollable viewer (a modal in
   fullscreen, `esc` or `q` closes it; an expanded block in the inline live
@@ -203,6 +209,8 @@ of the workspace stay forbidden.
 | `fetch` | none | GET one public http(s) URL as readable text (HTML → plain text, 512 KiB cap, redirects followed up to 5 hops; loopback and private hosts need `LOCAL_AGENT_FETCH_PRIVATE=1`) |
 | `web_search` | none | Search the web via SearXNG when `LOCAL_AGENT_SEARXNG_URL` is set, otherwise DuckDuckGo Lite; returns the top 8 results |
 | `task` | none | Delegate a bounded read-only investigation to a fresh subagent (read, list, search, fetch, web_search, read_image only) and get its final answer |
+| `todo_write` | none | Replace the session's todo list (up to 50 items, each `pending`, `in_progress` or `done`, at most one `in_progress`); build and plan only |
+| `ask_user` | none (you answer it) | Ask you one question and wait: a choice of 2 to 8 options, yes/no, or free text. Only the Tuimark client offers it, never to a subagent, and never in a parallel batch; a question you skipped is not asked again in that turn. An answer is not an approval: a later edit or command still asks |
 | `edit` | `--approve-edits` | Replace one exact occurrence in an existing file |
 | `write` | `--approve-edits` | Create a file (creating directories) or replace one; the approval shows the content as added lines, or the diff for a replacement |
 | `run_command` | `--approve-commands` or `--sandbox-commands` | Run one program from an `argv` array, with no shell |
