@@ -125,7 +125,8 @@ export async function probeProvider(
     const version = z
       .object({ version: z.string().min(1).max(64) })
       .safeParse(raw);
-    const loaded = await loadedModel(provider, signal);
+    // Within the same five seconds: /provider waits for one answer, not two.
+    const loaded = await loadedModel(provider, budget);
     return {
       latencyMs,
       ...(version.success ? { version: version.data.version } : {}),

@@ -1413,7 +1413,10 @@ export type AgentEvent =
        * The request leaves the history's oldest `left` messages out: they
        * no longer fit the context window. It sends the newest `sent`, from
        * a user message on. The history and the durable state keep all of
-       * them; this event carries counts only. Said when the start moves.
+       * them; this event carries counts only. Said at a turn's first
+       * windowed request and again when the start moves in that turn, so a
+       * client that runs many turns says it once (Tuimark: when `left`
+       * grows).
        */
       type: "windowed";
       left: number;
@@ -1735,21 +1738,39 @@ async function* agentTurn(
   for (let step = 0; step < stepLimit; step++) {
     signal.throwIfAborted();
     // The request is the history's newest exchanges that fit: the history
-    // itself (and the durable state) keeps every message.
+    // itself (and the durable state) keeps every message. Shortening old
+    // results comes first, since a shortened result keeps the thread of the
+    // conversation and a left-out exchange loses it: compaction frees what
+    // the window would otherwise leave out, and the window then leaves out
+    // only what compaction could not free.
     const room = MAX_REQUEST_MESSAGES - 1 - (nudge ? 1 : 0);
-    let start = windowStart(history, budgetChars, stepChars, room);
     if (options.compact) {
       const window = provider.context_size;
-      const chars = promptChars(history.slice(start)) + instructions.length;
+      // What the message count leaves out is not sent: shortening it saves
+      // the request nothing.
+      const counted = windowStart(history, Number.POSITIVE_INFINITY, 0, room);
+      const carried = promptChars(history.slice(counted));
+      const chars = carried + instructions.length;
       const estimate = anchor
         ? anchor.tokens + (chars - anchor.chars) / CHARS_PER_TOKEN
         : (chars + toolChars) / CHARS_PER_TOKEN;
-      if (estimate > window * COMPACT_HIGH) {
-        // Only what the request carries is worth shortening.
+      // Freed down to the low mark, by the server's count or by the
+      // window's own measure (characters), whichever asks more.
+      const free = Math.max(
+        estimate > window * COMPACT_HIGH
+          ? (estimate - window * COMPACT_LOW) * CHARS_PER_TOKEN
+          : 0,
+        carried > budgetChars ? carried - budgetChars + stepChars : 0,
+      );
+      if (free > 0) {
+        const tokensBefore = Math.max(
+          estimate,
+          (chars + toolChars) / CHARS_PER_TOKEN,
+        );
         const { messages, elided, saved } = compactHistory(
           history,
-          Math.ceil((estimate - window * COMPACT_LOW) * CHARS_PER_TOKEN),
-          start,
+          Math.ceil(free),
+          counted,
         );
         if (elided > 0) {
           history.splice(0, history.length, ...messages);
@@ -1758,13 +1779,13 @@ async function* agentTurn(
             type: "compacted",
             messages: history.slice(),
             elided,
-            tokensBefore: Math.round(estimate),
-            tokensAfter: Math.round(estimate - saved / CHARS_PER_TOKEN),
+            tokensBefore: Math.round(tokensBefore),
+            tokensAfter: Math.round(tokensBefore - saved / CHARS_PER_TOKEN),
           };
-          start = windowStart(history, budgetChars, stepChars, room);
         }
       }
     }
+    const start = windowStart(history, budgetChars, stepChars, room);
     if (start > 0 && start !== reported)
       yield {
         type: "windowed",

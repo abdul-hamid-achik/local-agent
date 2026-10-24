@@ -47,7 +47,14 @@ async function workspaceRoot() {
 async function run(
   history: Message[],
   turns: Call[][] = [],
-  options: { root?: string; session?: SessionContext; maxTurns?: number } = {},
+  options: {
+    root?: string;
+    session?: SessionContext;
+    maxTurns?: number;
+    compact?: boolean;
+    /** The prompt size the model reports, in tokens (none when absent). */
+    promptTokens?: number;
+  } = {},
 ) {
   const root = options.root ?? (await workspaceRoot());
   const requests: Sent[][] = [];
@@ -67,7 +74,7 @@ async function run(
       requests.push(body.messages);
       const calls = turns[requests.length - 1];
       return new Response(
-        `${JSON.stringify({ message: { role: "assistant", content: calls ? "" : "Done", ...(calls ? { tool_calls: calls.map((call) => ({ function: call })) } : {}) }, done: true })}\n`,
+        `${JSON.stringify({ message: { role: "assistant", content: calls ? "" : "Done", ...(calls ? { tool_calls: calls.map((call) => ({ function: call })) } : {}) }, done: true, ...(options.promptTokens ? { prompt_eval_count: options.promptTokens } : {}) })}\n`,
       );
     },
   });
@@ -85,6 +92,7 @@ async function run(
         approve: async () => true,
         ...(options.session ? { session: options.session } : {}),
         ...(options.maxTurns ? { maxTurns: options.maxTurns } : {}),
+        ...(options.compact ? { compact: true } : {}),
       },
     ))
       events.push(event);
@@ -161,6 +169,100 @@ test("a conversation too long for the window, not for the count, is windowed by 
   expect(chars).toBeLessThan(16_384 * 3 * 0.7);
   expect(sent[1]?.role).toBe("user");
   expect(windowed(result.events)).toHaveLength(1);
+});
+
+/** `n` earlier exchanges, each a read of `size` characters and its answer. */
+function reads(n: number, size: number): Message[] {
+  return Array.from({ length: n }, (_, i): Message[] => [
+    { role: "user", content: `question ${i}` },
+    {
+      role: "assistant",
+      content: "",
+      tool_calls: [
+        {
+          id: `r${i}`,
+          function: { name: "read", arguments: { path: "a.txt" } },
+        },
+      ],
+    },
+    {
+      role: "tool",
+      tool_name: "read",
+      tool_call_id: `r${i}`,
+      content: JSON.stringify({
+        status: "succeeded",
+        output: "x".repeat(size),
+      }),
+    },
+    { role: "assistant", content: `answer ${i}` },
+  ]).flat();
+}
+
+test("old results are shortened before any exchange is left out", async () => {
+  // 12 reads of 4,000 characters: past the window's budget whole, well
+  // under it once the reads are shortened.
+  const history = [
+    ...reads(12, 4_000),
+    { role: "user", content: "and?" },
+  ] as Message[];
+  const compacted = await run(history, [], { compact: true });
+  expect(compacted.thrown).toBeUndefined();
+  const sent = compacted.requests[0] ?? [];
+  // Every exchange goes, the old reads as short notes.
+  expect(sent).toHaveLength(history.length + 1);
+  expect(
+    sent.filter((message) => message.content.includes(" elided ")),
+  ).not.toEqual([]);
+  expect(windowed(compacted.events)).toEqual([]);
+  expect(compacted.events.some((event) => event.type === "compacted")).toBe(
+    true,
+  );
+  // Without compaction the same conversation is windowed.
+  const plain = await run(history);
+  expect(windowed(plain.events)).toHaveLength(1);
+  expect((plain.requests[0] ?? []).length).toBeLessThan(history.length + 1);
+});
+
+test("a server that counts the prompt small does not keep the window from shortening first", async () => {
+  const root = await workspaceRoot();
+  await writeFile(join(root, "big.txt"), `${"y".repeat(99)}\n`.repeat(200));
+  // Five reads fit; the turn's own read of big.txt then passes the
+  // window's budget, while the server's count (10 tokens) says it is far
+  // under: the old reads are shortened, and nothing is left out.
+  const history = [
+    ...reads(5, 4_000),
+    { role: "user", content: "and big.txt?" },
+  ] as Message[];
+  const result = await run(
+    history,
+    [[{ name: "read", arguments: { path: "big.txt" } }]],
+    { root, compact: true, promptTokens: 10 },
+  );
+  expect(result.thrown).toBeUndefined();
+  expect(result.requests).toHaveLength(2);
+  expect(result.events.some((event) => event.type === "compacted")).toBe(true);
+  expect(windowed(result.events)).toEqual([]);
+  expect(result.requests[1]).toHaveLength(history.length + 3);
+});
+
+test("what compaction cannot free is left out, oldest exchanges first", async () => {
+  // 300 exchanges: even shortened, far past a 16k window.
+  const history = [
+    ...reads(300, 4_000),
+    { role: "user", content: "and?" },
+  ] as Message[];
+  const result = await run(history, [], { compact: true });
+  expect(result.thrown).toBeUndefined();
+  const sent = result.requests[0] ?? [];
+  const [event] = windowed(result.events);
+  expect(event).toBeDefined();
+  expect(sent.length).toBe((event?.sent ?? 0) + 1);
+  expect(sent[1]?.role).toBe("user");
+  expect(sent.at(-1)?.content).toBe("and?");
+  // The request fits the window's budget by the characters' measure.
+  expect(promptChars(sent.slice(1) as Message[])).toBeLessThan(
+    16_384 * 3 * 0.7,
+  );
 });
 
 test("a turn whose own calls fill the request stops before the next request, not inside the transport", async () => {

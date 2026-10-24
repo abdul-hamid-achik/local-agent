@@ -3173,6 +3173,33 @@ test("a model loaded as asked, an unknown placement, or a failed turn leave no w
   expect(reads).toBe(0);
 });
 
+test("a slow placement read never holds the composer: its warning follows a later turn", async () => {
+  let answer: (loaded: { sizeBytes: number; vramBytes: number }) => void =
+    () => {};
+  const { ui, client } = setup(reply("hello there"), {
+    placement: () =>
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+  });
+  await ui.fire("send", "one");
+  await client.idle();
+  // The turn is over and the composer free, the read still out.
+  expect(store(ui).busy).toBe(false);
+  expect(store(ui).messages.some((m: MessageView) => m.is_notice)).toBe(false);
+  answer({ sizeBytes: 100, vramBytes: 50 });
+  await ui.fire("send", "two");
+  await client.idle();
+  const views = store(ui).messages;
+  const at = views.findIndex((m: MessageView) => m.is_notice);
+  expect(viewText(views[at] as MessageView)).toContain("only 50%");
+  // After the second reply, the turn that showed it.
+  expect(views[at - 1]?.is_asst).toBe(true);
+  expect(views.slice(0, at).filter((m: MessageView) => m.is_user)).toHaveLength(
+    2,
+  );
+});
+
 test("inline: the placement warning prints after the reply it follows", async () => {
   const { ui, client } = setup(reply("hello there"), {
     presentation: "inline",

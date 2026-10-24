@@ -250,7 +250,7 @@ export interface ClientOptions {
   /** `/provider`'s read-only look at the endpoint. Default the runtime's probeProvider; tests replace. */
   probe?: (provider: Provider, signal: AbortSignal) => Promise<ProviderProbe>;
   /**
-   * Reads how the server loaded the model, after its first finished turn
+   * Reads how the server loaded the model, once its first reply is done
    * (Ollama's /api/ps). main passes the runtime's loadedModel; without it
    * nothing is checked.
    */
@@ -298,6 +298,11 @@ export function formatElapsed(totalSeconds: number): string {
 
 /** The refused writes the client remembers. */
 const MAX_WRITE_ERRORS = 20;
+/**
+ * How long a finished turn waits for its placement read before it clears
+ * busy; a read slower than this is shown after a later turn instead.
+ */
+const PLACEMENT_WAIT_MS = 300;
 /** Refused inline prints kept for a later attempt, oldest dropped past this. */
 const MAX_SPILL = 50;
 
@@ -931,16 +936,19 @@ export class TuimarkClient {
 
   /** Endpoint, model and size whose placement this process has read. */
   private readonly placementRead = new Set<string>();
+  /** The warning of a placement read not shown yet (see startPlacement). */
+  private placement?: Promise<string | undefined>;
 
   /**
-   * After a model's first finished turn, one read-only look at how its
-   * server loaded it: partly outside GPU memory, or with less context than
-   * asked, leaves a warning in the transcript. Once per endpoint, model and
-   * size; `/provider` asks again at any time.
+   * Once a model's first reply is done (it is loaded then), one read-only
+   * look at how its server loaded it, in the background: partly outside GPU
+   * memory, or with less context than asked, earns a warning. Once per
+   * endpoint, model and size; `/provider` asks again at any time.
    */
-  private async checkPlacement(): Promise<void> {
+  private startPlacement(): void {
     const read = this.options.placement;
     if (!read || this.provider.type === "openai_local") return;
+    // A switch to another model, endpoint or size is a new placement.
     const key = JSON.stringify([
       this.provider.base_url,
       this.provider.model,
@@ -948,10 +956,27 @@ export class TuimarkClient {
     ]);
     if (this.placementRead.has(key)) return;
     this.placementRead.add(key);
-    const loaded = await read(this.provider, this.options.signal).catch(
-      () => undefined,
-    );
-    const warning = placementWarning(this.provider, loaded);
+    const provider = this.provider;
+    this.placement = read(provider, this.options.signal)
+      .then((loaded) => placementWarning(provider, loaded))
+      .catch(() => undefined);
+  }
+
+  /**
+   * After a finished turn's reply is printed, its placement warning, if the
+   * read is back within PLACEMENT_WAIT_MS; else a later turn shows it.
+   */
+  private async showPlacement(): Promise<void> {
+    const pending = this.placement;
+    if (!pending) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const later = new Promise<"later">((resolve) => {
+      timer = setTimeout(() => resolve("later"), PLACEMENT_WAIT_MS);
+    });
+    const warning = await Promise.race([pending, later]);
+    clearTimeout(timer);
+    if (warning === "later") return;
+    this.placement = undefined;
     if (!warning) return;
     const view = this.builder.notice(
       `Warning: ${warning}. /provider shows it again.`,
@@ -1329,6 +1354,8 @@ export class TuimarkClient {
     // its warning, stays with the profile.
     const { context_warning: _, ...rest } = this.provider;
     const previous = this.provider.type === "ollama" ? rest : this.provider;
+    // A warning still on its way is the previous model's.
+    this.placement = undefined;
     this.provider = {
       ...previous,
       model: admission.model,
@@ -3021,6 +3048,7 @@ export class TuimarkClient {
             break;
           }
           case "done": {
+            this.startPlacement();
             // The header ctx moves during the turn, on every usage-bearing
             // event (see CtxMeter for the max-within-the-turn rule).
             const shown = this.ctx.observe(
@@ -3109,7 +3137,7 @@ export class TuimarkClient {
         if (notice) await this.commitView(notice);
       }
       // After the reply is printed, so its warning never comes first.
-      if (finished) await this.checkPlacement();
+      if (finished) await this.showPlacement();
       await this.publishMessages([
         { path: "busy", value: false },
         { path: "placeholder", value: PLACEHOLDER },
