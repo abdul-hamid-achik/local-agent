@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { closeSync, existsSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
 import {
   type CallToolResult,
@@ -325,18 +325,53 @@ function notStarted(
   const { command, cwd } = transport;
   if (cwd && !existsSync(cwd))
     return new Error(`its cwd "${cwd}" does not exist`, { cause: error });
-  if (command.includes("/"))
-    return existsSync(command)
-      ? undefined
-      : new Error(`"${command}" does not exist`, { cause: error });
   const path = transport.env?.PATH
     ? "the PATH its env sets"
     : "its PATH (empty: its env sets none)";
+  // A file that is there and still ENOENT: its #! interpreter is missing.
+  if (command.includes("/"))
+    return existsSync(command)
+      ? interpreterMissing(command, command, error)
+      : new Error(`"${command}" does not exist`, { cause: error });
+  const onServerPath = Bun.which(command, {
+    PATH: transport.env?.PATH ?? "",
+    ...(cwd ? { cwd } : {}),
+  });
+  if (onServerPath) return interpreterMissing(command, onServerPath, error);
   const found = Bun.which(command);
   return new Error(
     found
       ? `"${command}" is not on ${path}; use "command": "${found}" or add its directory to env.PATH`
       : `"${command}" is not on ${path}; give its full path`,
+    { cause: error },
+  );
+}
+
+/** Why a file that exists did not start: the interpreter its `#!` names. */
+function interpreterMissing(
+  command: string,
+  file: string,
+  error: unknown,
+): Error {
+  let line = "";
+  try {
+    const fd = openSync(file, "r");
+    try {
+      const head = Buffer.alloc(128);
+      line =
+        head
+          .subarray(0, readSync(fd, head, 0, head.length, 0))
+          .toString("utf8")
+          .split("\n")[0] ?? "";
+    } finally {
+      closeSync(fd);
+    }
+  } catch {}
+  const at = file === command ? `"${command}"` : `"${command}" (${file})`;
+  return new Error(
+    line.startsWith("#!")
+      ? `${at} did not start: the interpreter in "${line.slice(0, 40)}" was not found`
+      : `${at} exists but did not start`,
     { cause: error },
   );
 }

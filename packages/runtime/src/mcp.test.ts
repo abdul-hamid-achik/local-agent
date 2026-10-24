@@ -63,6 +63,32 @@ describe("MCP adapter boundary", () => {
     expect((await reason({ command: "bun" })).length).toBeLessThan(200);
   });
 
+  test("a script whose #! interpreter is missing is not called missing from PATH", async () => {
+    const reason = (transport: Record<string, unknown>) =>
+      connectMcp({
+        name: "x",
+        transport: { kind: "stdio", ...transport },
+      } as never).then(
+        () => "connected",
+        (error: Error) => error.message,
+      );
+    const dir = await mkdtemp(`${tmpdir()}/local-agent-shebang-`);
+    try {
+      await writeFile(`${dir}/server.sh`, "#!/no/such/interp\n", {
+        mode: 0o755,
+      });
+      // Found on the PATH the server's env sets, so PATH is not the cause.
+      expect(await reason({ command: "server.sh", env: { PATH: dir } })).toBe(
+        `"server.sh" (${dir}/server.sh) did not start: the interpreter in "#!/no/such/interp" was not found`,
+      );
+      expect(await reason({ command: `${dir}/server.sh` })).toBe(
+        `"${dir}/server.sh" did not start: the interpreter in "#!/no/such/interp" was not found`,
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("validates strict JSON server configuration", () => {
     expect(() =>
       McpServerConfigSchema.parse({
