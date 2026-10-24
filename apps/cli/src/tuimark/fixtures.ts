@@ -7,6 +7,7 @@ import {
   type Block,
   liveToolView,
   type MessageView,
+  tableWidth,
   thinkingView,
   ViewBuilder,
 } from "#cli/tuimark/blocks";
@@ -200,6 +201,58 @@ const IMAGE_MESSAGES: Message[] = [
   { role: "assistant", content: "That is the one-pixel screenshot." },
 ];
 
+/** Two tables a transcript at 80 columns cannot hold as they are: one shrinks, one becomes a list. */
+const TABLE_REPLY = [
+  "| option | default | what it does |",
+  "|:--|--:|:--|",
+  "| `retries` | 3 | How many **times** a request is tried before the last error is rethrown to the caller |",
+  "| `delay` | 200 | The base wait in ms; it doubles on every attempt, so 200, 400, 800 |",
+  "| `jitter` | 0.2 | A random share of the wait, added so clients do not retry together |",
+  "",
+  "| 名前 | 説明 |",
+  "|---|---|",
+  "| 再試行 | 回数と待ち時間を設定します 😀 |",
+].join("\n");
+
+const TABLE_MESSAGES: Message[] = [
+  { role: "user", content: "Which retry options are there?" },
+  { role: "assistant", content: TABLE_REPLY },
+];
+
+/** An MCP server's result as the runtime stores it: the envelope, JSON text inside. */
+const MCP_CALL = {
+  id: "call-mcp",
+  function: {
+    name: "mcphub__resolve_tool",
+    arguments: { goal: "find the retry docs" },
+  },
+};
+
+const MCP_MESSAGES: Message[] = [
+  { role: "user", content: "Route me to the retry docs." },
+  { role: "assistant", content: "", tool_calls: [MCP_CALL] },
+  {
+    role: "tool",
+    tool_name: "mcphub__resolve_tool",
+    tool_call_id: "call-mcp",
+    content: JSON.stringify({
+      status: "unverified",
+      output: JSON.stringify({
+        transport: "success",
+        domain: "unknown",
+        evidence: "unverified",
+        isError: false,
+        text: JSON.stringify({
+          status: "confident",
+          ambiguous: false,
+          alternatives: ["docs__search", "docs__fetch"],
+        }),
+      }),
+    }),
+  },
+  { role: "assistant", content: "The docs server has what you need." },
+];
+
 const DIFF = [
   "--- a/src/fetch.ts",
   "+++ b/src/fetch.ts",
@@ -228,7 +281,8 @@ function base(messages: Message[] = MESSAGES): {
   store: Store;
   builder: ViewBuilder;
 } {
-  const builder = new ViewBuilder();
+  // The width the client gives tables at 80 columns.
+  const builder = new ViewBuilder(() => tableWidth(80, false));
   const transcript = new Transcript();
   for (const message of messages) {
     const view = builder.fromMessage(message);
@@ -287,6 +341,16 @@ export function errorSample(): Store {
 /** Markdown beyond code: heading, nested bullets, numbered items, quote, table, inline marks, a failed command. */
 export function markdownSample(): Store {
   return base(MARKDOWN_MESSAGES).store;
+}
+
+/** Tables that do not fit 80 columns: one shrinks and wraps, one is a list. */
+export function tableSample(): Store {
+  return base(TABLE_MESSAGES).store;
+}
+
+/** An MCP result: the server's text under a head that keeps it unverified. */
+export function mcpResultSample(): Store {
+  return base(MCP_MESSAGES).store;
 }
 
 /** A cited reply: numbered [n] markers in the body and a sources row of links. */
@@ -728,6 +792,8 @@ export const SAMPLES = {
   "sample-empty": emptySample,
   "sample-error": errorSample,
   "sample-markdown": markdownSample,
+  "sample-table": tableSample,
+  "sample-mcp-result": mcpResultSample,
   "sample-links": linksSample,
   "sample-image": imageSample,
   "sample-approval": approvalSample,

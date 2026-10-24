@@ -70,6 +70,7 @@ import {
   type MessageView,
   NO_CARD,
   type ToolReceipt,
+  tableWidth,
   ViewBuilder,
 } from "#cli/tuimark/blocks";
 import {
@@ -376,9 +377,16 @@ const MAX_SENT = 200;
 export class TuimarkClient {
   private ui?: UiHost;
   private readonly run: RunAgent;
+  /**
+   * The width a table may take, read when a message is built: blocks are
+   * rendered once, so a table already in the transcript keeps the width it was
+   * written at when the terminal is resized.
+   */
+  private readonly tableCols = () =>
+    tableWidth(this.options.columns?.() ?? 80, this.inline);
   // A session switch starts from a fresh builder: the old one's call-id
   // map belongs to the old conversation.
-  private builder = new ViewBuilder();
+  private builder = new ViewBuilder(this.tableCols);
   /**
    * The durable session the next turn checkpoints to. Starts as the
    * launch session; a `/sessions` switch replaces it whole (never while
@@ -576,7 +584,10 @@ export class TuimarkClient {
     this.intent = options.intent;
     this.inline = options.presentation === "inline";
     this.mouse = !this.inline;
-    this.stream = new LiveStream(undefined, { inline: this.inline });
+    this.stream = new LiveStream(undefined, {
+      inline: this.inline,
+      tableCols: this.tableCols,
+    });
     this.transcript = new Transcript(options.windowStep, options.windowSize);
     this.session = options.session;
     this.provider = options.provider;
@@ -1441,7 +1452,7 @@ export class TuimarkClient {
     this.windowNoticed = 0;
     this.history.length = 0;
     this.history.push(...(context?.state.messages ?? []));
-    this.builder = new ViewBuilder();
+    this.builder = new ViewBuilder(this.tableCols);
     const views: MessageView[] = [];
     this.lastReceipt = undefined;
     this.sent.length = 0;

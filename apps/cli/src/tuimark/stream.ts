@@ -100,11 +100,15 @@ export class LiveStream {
   private offeredCount = 0;
   private readonly inline: boolean;
 
+  /** The width a table may take, read at each parse (a stream is written once). */
+  private readonly tableCols?: () => number;
+
   constructor(
     private readonly now: () => number = () => performance.now(),
-    options: { inline?: boolean } = {},
+    options: { inline?: boolean; tableCols?: () => number } = {},
   ) {
     this.inline = options.inline ?? false;
+    this.tableCols = options.tableCols;
   }
 
   /** The store holds the idle live message and no reasoning; nothing is pending. */
@@ -399,6 +403,7 @@ export class LiveStream {
         PREFIX,
         this.blocks.length,
         this.linkRefs,
+        this.tableCols?.(),
       );
       const last = blocks.length - 1;
       if (last >= 0) {
@@ -439,8 +444,13 @@ export class LiveStream {
       return;
     }
     this.tail = this.pending.trim()
-      ? parseBlocksAt(this.pending, PREFIX, this.blocks.length, this.linkRefs)
-          .blocks
+      ? parseBlocksAt(
+          this.pending,
+          PREFIX,
+          this.blocks.length,
+          this.linkRefs,
+          this.tableCols?.(),
+        ).blocks
       : [];
     this.fence = startsOpenFence(this.pending);
   }

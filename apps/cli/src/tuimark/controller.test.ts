@@ -3060,6 +3060,73 @@ test("resizing wraps an open viewer again", async () => {
   expect(detailsText(ui)).toContain("↪");
 });
 
+test("a finished reply's table is fitted to the terminal width", async () => {
+  const table = [
+    "| id | name | description |",
+    "|---|---|---|",
+    "| 1 | alpha | A rather long description that has to wrap onto more lines |",
+  ].join("\n");
+  // 40 columns: the log and the code block leave 34 for the table's text.
+  const { ui, client } = setup(reply(`${table}\n\ndone`), {
+    columns: () => 40,
+  });
+  await ui.fire("send", "table");
+  await client.idle();
+  const shown = store(ui).messages.at(-1)?.blocks[0];
+  expect(shown?.lang).toBe("");
+  const lines = runsText(shown?.runs ?? []).split("\n");
+  expect(lines.length).toBeGreaterThan(3);
+  for (const line of lines)
+    expect(Bun.stringWidth(line)).toBeLessThanOrEqual(34);
+  expect(client.writeErrors).toEqual([]);
+});
+
+test("a table still streaming is fitted to the terminal width too", async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const { ui, client } = setup(
+    async function* () {
+      yield {
+        type: "text",
+        text: "| id | description |\n|---|---|\n| 1 | A rather long description that has to wrap |\n\nafter\n",
+      };
+      await gate;
+      yield { type: "message", message: { role: "assistant", content: "x" } };
+    },
+    { columns: () => 40 },
+  );
+  await ui.fire("send", "table");
+  await until(() => store(ui).live.blocks.length > 0);
+  const lines = runsText(store(ui).live.blocks[0]?.runs ?? []).split("\n");
+  expect(lines.length).toBeGreaterThan(3);
+  for (const line of lines)
+    expect(Bun.stringWidth(line)).toBeLessThanOrEqual(34);
+  release();
+  await client.idle();
+});
+
+test("an MCP tool's card and /details show the server's text, not the envelope", async () => {
+  const envelope = JSON.stringify({
+    transport: "success",
+    domain: "unknown",
+    evidence: "unverified",
+    isError: false,
+    text: JSON.stringify({ alternatives: ["a"] }),
+  });
+  const { ui, client } = setup(toolScript(envelope, "mcphub__resolve_tool"));
+  await ui.fire("send", "route");
+  await client.idle();
+  const card = store(ui).messages.find((m: MessageView) => m.is_tool)?.card;
+  expect(runsText(card?.out ?? [])).toMatch(
+    /^unverified · domain unknown\n\{\n {2}"alternatives"/,
+  );
+  await ui.fire("send", "/details");
+  expect(detailsText(ui)).toContain("unverified · domain unknown");
+  expect(detailsText(ui)).not.toContain("transport");
+});
+
 test("a new turn closes an open viewer", async () => {
   let turn = 0;
   const { ui, client } = setup((ctx) =>

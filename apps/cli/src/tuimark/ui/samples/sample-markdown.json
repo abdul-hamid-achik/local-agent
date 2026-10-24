@@ -233,13 +233,19 @@
           "code": true,
           "nest": false,
           "marker": "",
-          "lang": "table",
+          "lang": "",
           "runs": [
+            "| ",
             {
-              "text": "| attempt |  delay |",
+              "text": "attempt",
               "class": "b"
             },
-            "\n| :------ | -----: |\n| 1       | 200 ms |\n| 2       | 400 ms |"
+            " |  ",
+            {
+              "text": "delay",
+              "class": "b"
+            },
+            " |\n| :------ | -----: |\n| 1       | 200 ms |\n| 2       | 400 ms |"
           ]
         },
         {

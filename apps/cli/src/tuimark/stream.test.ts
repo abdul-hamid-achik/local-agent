@@ -24,7 +24,7 @@ interface Live {
 }
 
 /** A stream with a clock the test moves, and a store the writes are applied to. */
-function rig(options: { inline?: boolean } = {}) {
+function rig(options: { inline?: boolean; tableCols?: () => number } = {}) {
   let now = 0;
   const stream = new LiveStream(() => now, options);
   const store: Record<string, unknown> = {
@@ -168,8 +168,22 @@ test("a half-written table row does not end the table before it", () => {
   r.stream.pushText(":--|--:|\n| 1 | 2 |\n\nafter\n");
   r.drain();
   const live = r.live();
-  expect(live.blocks.map((b) => b.lang)).toEqual(["table"]);
+  expect(live.blocks).toHaveLength(1);
+  expect(live.blocks[0]?.code).toBe(true);
+  expect(runsText(live.blocks[0]?.runs ?? [])).toContain("| :-- | --: |");
   expect(runsText(live.tail.at(-1)?.runs ?? []).trim()).toBe("after");
+});
+
+test("a streamed table is fitted to the width the stream is given", () => {
+  const r = rig({ tableCols: () => 30 });
+  r.stream.pushText(
+    "| id | description |\n|---|---|\n| 1 | A rather long description that has to wrap |\n\nafter\n",
+  );
+  r.drain();
+  const lines = runsText(r.live().blocks[0]?.runs ?? []).split("\n");
+  expect(lines.length).toBeGreaterThan(3);
+  for (const line of lines)
+    expect(Bun.stringWidth(line)).toBeLessThanOrEqual(30);
 });
 
 test("a tail with raw text on its end is parsed again once the stream goes quiet", () => {

@@ -1,0 +1,31 @@
+=== grid 80x30 ===
+ Local Agent         qwen3-coder:30b  build          ctx 9.6k/32k  ███▋░░░░░░░░ 
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ You                                                                          │
+│ Which retry options are there?                                               │
+│                                                                              │
+│ Assistant                                                                    │
+│  | option  | default | what it does                                       |  │
+│  | :------ | ------: | :------------------------------------------------- |  │
+│  | retries |       3 | How many times a request is tried before the last  |  │
+│  |         |         | error is rethrown to the caller                    |  │
+│  | delay   |     200 | The base wait in ms; it doubles on every attempt,  |  │
+│  |         |         | so 200, 400, 800                                   |  │
+│  | jitter  |     0.2 | A random share of the wait, added so clients do    |  │
+│  |         |         | not retry together                                 |  │
+│  | 名前   | 説明                          |                                  │
+│  | ------ | ----------------------------- |                                  │
+│  | 再試行 | 回数と待ち時間を設定します 😀 |                                  │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+╔══════════════════════════════════════════════════════════════════════════════╗
+║ Message the model                                                            ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+ build · Ready · /help for keys   ^P commands  esc cancel  ↑/↓ history          

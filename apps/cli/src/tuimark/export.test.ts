@@ -50,6 +50,49 @@ test("the export is the rendered conversation as markdown, never raw JSON", () =
   expect(markdown).not.toContain("tool_call_id");
 });
 
+test("an MCP result exports as the server's text under its head, not the envelope", () => {
+  const output = JSON.stringify({
+    transport: "success",
+    domain: "unknown",
+    evidence: "unverified",
+    isError: false,
+    text: JSON.stringify({ alternatives: ["a"] }),
+  });
+  const markdown = transcriptMarkdown(
+    viewsOf([
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          { id: "c1", function: { name: "srv__tool", arguments: {} } },
+        ],
+      },
+      {
+        role: "tool",
+        tool_name: "srv__tool",
+        tool_call_id: "c1",
+        content: JSON.stringify({ status: "unverified", output }),
+      },
+    ]),
+  );
+  expect(markdown).toContain("unverified · domain unknown\n{\n");
+  expect(markdown).not.toContain("transport");
+});
+
+test("a table exports at the width it was written for, with no label", () => {
+  const builder = new ViewBuilder(() => 30);
+  const view = builder.fromMessage({
+    role: "assistant",
+    content:
+      "| a | b |\n|---|---|\n| one | a long cell that must wrap onto lines |",
+  });
+  const markdown = transcriptMarkdown(view ? [view] : []);
+  const table = markdown.split("````")[1] ?? "";
+  expect(table.startsWith("\n| a ")).toBe(true);
+  for (const line of table.split("\n"))
+    expect(Bun.stringWidth(line)).toBeLessThanOrEqual(30);
+});
+
 test("an error and a notice export under their own headings", () => {
   const builder = new ViewBuilder();
   const views = [

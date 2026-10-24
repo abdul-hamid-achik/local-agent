@@ -30,6 +30,7 @@ import {
   runsText,
   startsOpenFence,
   tableRuns,
+  tableWidth,
   tokenizeLine,
   toolTitle,
   ViewBuilder,
@@ -149,11 +150,9 @@ test("pipe tables are aligned monospace rows with a bold header", () => {
   const [table] = parseBlocks(
     "| name | n |\n|:--|--:|\n| apple | 1 |\n| fig | 22 |",
   );
-  expect(table).toMatchObject({ code: true, lang: "table" });
-  expect(table?.runs[0]).toEqual({
-    text: "| name  |   n |",
-    class: "b",
-  });
+  // No "table" label: the block is a code block with no language.
+  expect(table).toMatchObject({ code: true, lang: "" });
+  expect(table?.runs[1]).toEqual({ text: "name", class: "b" });
   expect(runsText(table?.runs ?? [])).toBe(
     [
       "| name  |   n |",
@@ -174,7 +173,186 @@ test("table columns align by display width, not by code units", () => {
     Bun.stringWidth(rows[2] ?? ""),
   ]);
   // A table with no divider row has no header.
-  expect(tableRuns(["| a |", "| b |"])).toEqual(["| a   |\n| b   |"]);
+  expect(runsText(tableRuns(["| a |", "| b |"]))).toBe("| a   |\n| b   |");
+});
+
+/** The painted lines of a table, and the widest of them. */
+function tableLines(rows: string[], max?: number) {
+  const lines = runsText(tableRuns(rows, max)).split("\n");
+  return { lines, widest: Math.max(...lines.map((l) => Bun.stringWidth(l))) };
+}
+
+const WIDE = [
+  "| id | name | description |",
+  "|---|---|---|",
+  "| 1 | alpha | A rather long description that has to wrap onto more lines |",
+  "| 2 | beta | short |",
+];
+
+test("a table that fits keeps its natural width; one that does not shrinks to the max", () => {
+  const natural = tableLines(WIDE);
+  expect(natural.lines).toHaveLength(4);
+  expect(natural.widest).toBeGreaterThan(40);
+  // Exactly the natural width still fits, one column less does not.
+  expect(tableLines(WIDE, natural.widest).lines).toEqual(natural.lines);
+  const cut = tableLines(WIDE, natural.widest - 1);
+  expect(cut.widest).toBeLessThanOrEqual(natural.widest - 1);
+  expect(cut.lines.length).toBeGreaterThan(4);
+});
+
+test("a table wider than the max shrinks its widest column and wraps its cells", () => {
+  const { lines, widest } = tableLines(WIDE, 40);
+  expect(widest).toBeLessThanOrEqual(40);
+  // The narrow columns keep their width; the description gave the width up.
+  expect(lines[0]).toMatch(/^\| id {2}\| name {2}\| description\s+\|$/);
+  expect(lines[1]).toMatch(/^\| -{2,} \| -{3,}.* \| -{3,}.*\|$/);
+  // Every line has as many separators as the header: no stray "|" lines.
+  for (const line of lines) expect(line.match(/ \| /g)?.length ?? 0).toBe(2);
+  // The wrapped cell continues on lines whose other cells are blank.
+  const rest = lines.slice(2).join("\n");
+  expect(rest).toMatch(/^\| 1\s+\| alpha \| A rather/m);
+  expect(rest).toMatch(/^\| {2}\s+\| {5}\s+\| \S.*\|$/m);
+  // Nothing was lost: the description's words are all still there.
+  const words = lines
+    .slice(2)
+    .map((l) => l.split("|")[3]?.trim())
+    .join(" ")
+    .replace(/\s+/g, " ");
+  expect(words).toContain(
+    "A rather long description that has to wrap onto more lines",
+  );
+  expect(words).toContain("short");
+});
+
+test("columns give up width from the widest first and never go below the minimum", () => {
+  const rows = [
+    "| a | bbbbbbbbbbbbbbbbbbbb | cccccccccc |",
+    "|---|---|---|",
+    "| x | y | z |",
+  ];
+  const { lines, widest } = tableLines(rows, 30);
+  expect(widest).toBeLessThanOrEqual(30);
+  // 30 less 10 of frame leaves 20: "a" keeps 3, the 20 wide column is cut
+  // before the 10 wide one.
+  const w = (lines[0] ?? "")
+    .split("|")
+    .slice(1, -1)
+    .map((c) => c.length - 2);
+  expect(w[0]).toBe(3);
+  expect(w[1]).toBeGreaterThanOrEqual(w[2] ?? 0);
+  expect(w.reduce((a, b) => a + b, 0)).toBe(20);
+  // The width left over after the common cap goes to the widest column first.
+  expect(tableLines(["| aaaaaaaaaaa | bbbbbbbbbbbb |"], 28).lines[0]).toBe(
+    "| aaaaaaaaaa | bbbbbbbbbbb |",
+  );
+  // A column is never cut below 6 (or its own width, when smaller): at 25
+  // the three columns would need 3 + 6 + 6 + 10 of frame, which fits.
+  const tight = tableLines(rows, 25);
+  expect(tight.widest).toBeLessThanOrEqual(25);
+  expect(tight.lines[0]).toContain("|");
+  // One column less and the minimums no longer fit: it is a list.
+  expect(tableLines(rows, 24).lines[0]).toBe("a: x");
+});
+
+test("a table whose minimum widths do not fit becomes a Header: value list", () => {
+  const rows = [
+    "| Name | Role | Team | Site | Notes | Level |",
+    "|---|---|---|---|---|---|",
+    "| Ada Lovelace | Engineer | Analytical | London | wrote the first program for the engine | 9 |",
+    "| Bob | Ops | | Paris | | 3 |",
+  ];
+  const { lines, widest } = tableLines(rows, 32);
+  expect(widest).toBeLessThanOrEqual(32);
+  expect(lines.some((l) => l.includes("|"))).toBe(false);
+  expect(lines[0]).toBe("Name: Ada Lovelace");
+  expect(lines).toContain("Role: Engineer");
+  // A long value wraps under its label, indented.
+  const at = lines.findIndex((l) => l.startsWith("Notes: wrote the first"));
+  expect(at).toBeGreaterThan(0);
+  expect(lines[at + 1]).toMatch(/^ {2}\S/);
+  // Rows are told apart by a blank line; an empty cell is left out.
+  const second = lines.slice(lines.indexOf("") + 1);
+  expect(second).toEqual(["Name: Bob", "Role: Ops", "Site: Paris", "Level: 3"]);
+  // The label is the header's own bold run.
+  expect(tableRuns(rows, 32)[0]).toEqual({ text: "Name", class: "b" });
+  // Without a header row the columns are numbered.
+  const bare = runsText(tableRuns(["| a | b | c | d | e | f |"], 20));
+  expect(bare.split("\n")[0]).toBe("Column 1: a");
+});
+
+test("bold, code and links in cells are styled runs, measured without their marks", () => {
+  const links: LinkRef[] = [];
+  const runs = tableRuns(
+    [
+      "| item | note |",
+      "|---|---|",
+      "| **bold** | `code` and [site](https://x.example) |",
+    ],
+    undefined,
+    links,
+  );
+  expect(runs).toContainEqual({ text: "bold", class: "b" });
+  expect(runs).toContainEqual({ text: "code", class: "code" });
+  expect(runsText(runs)).not.toContain("*");
+  expect(runsText(runs)).not.toContain("`");
+  expect(links).toEqual([{ n: 1, text: "site", url: "https://x.example" }]);
+  // The column is as wide as what it paints ("bold" is 4), not its source (8).
+  const body = runsText(runs).split("\n")[2] ?? "";
+  expect(body.startsWith("| bold | code and site")).toBe(true);
+  // A header cell keeps its own marks and adds bold.
+  const head = tableRuns(["| `k` | v |", "|---|---|", "| 1 | 2 |"]);
+  expect(head[1]).toEqual({ text: "k", class: "b code" });
+});
+
+test("wide characters wrap by display width and never split", () => {
+  const rows = [
+    "| 名前 | 説明 |",
+    "|---|---|",
+    "| 日本語のテキスト | 😀😀😀😀😀😀😀😀😀😀 mixed with ascii words |",
+  ];
+  const { lines, widest } = tableLines(rows, 28);
+  expect(widest).toBeLessThanOrEqual(28);
+  const all = lines.join("\n");
+  expect(all.isWellFormed()).toBe(true);
+  expect(all.match(/😀/g)).toHaveLength(10);
+  // The cell's text, cut between characters, reads back in order.
+  const first = lines
+    .slice(2)
+    .map((l) => l.split("|")[1]?.trim())
+    .join("");
+  expect(first).toBe("日本語のテキスト");
+  // Every line of the table is the same width: the columns stay aligned.
+  expect(new Set(lines.map((l) => Bun.stringWidth(l))).size).toBe(1);
+});
+
+test("parseBlocks passes the width to its tables, and a view builder asks for it each time", () => {
+  const md = WIDE.join("\n");
+  const [wide] = parseBlocks(md);
+  const [narrow] = parseBlocks(md, "b", undefined, 40);
+  expect(narrow?.lang).toBe("");
+  expect(runsText(wide?.runs ?? []).split("\n")).toHaveLength(4);
+  const shown = runsText(narrow?.runs ?? []).split("\n");
+  expect(shown.length).toBeGreaterThan(4);
+  for (const line of shown)
+    expect(Bun.stringWidth(line)).toBeLessThanOrEqual(40);
+  let cols = 80;
+  const builder = new ViewBuilder(() => cols);
+  const lineCount = () =>
+    runsText(
+      builder.fromMessage({ role: "assistant", content: md })?.blocks[0]
+        ?.runs ?? [],
+    ).split("\n").length;
+  const roomy = lineCount();
+  cols = 40;
+  expect(lineCount()).toBeGreaterThan(roomy);
+});
+
+test("a table's width is the terminal less the log and the code block", () => {
+  expect(tableWidth(80, false)).toBe(74);
+  expect(tableWidth(120, false)).toBe(114);
+  expect(tableWidth(80, true)).toBe(78);
+  // A tiny terminal still gets a width the list can be written in.
+  expect(tableWidth(10, false)).toBe(20);
 });
 
 test("an unterminated fence is closed while streaming", () => {

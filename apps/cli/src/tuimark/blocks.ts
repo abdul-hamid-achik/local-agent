@@ -632,45 +632,269 @@ function tableCells(row: string): string[] {
 }
 
 /**
+ * The columns a table's text can use in the transcript: the terminal less what
+ * the log and the code block take around it. Fullscreen: the log's border and
+ * padding (4) and the code block's padding (2). Inline has no log, so only the
+ * code block's. Never below a width a table can still be listed in.
+ */
+export function tableWidth(columns: number, inline: boolean): number {
+  return Math.max(20, columns - (inline ? 2 : 6));
+}
+
+/** One grapheme of a cell: what it paints, its class and its display width. */
+interface Atom {
+  g: string;
+  cls: string;
+  w: number;
+}
+
+const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+function atomsOf(runs: readonly Run[], bold: boolean): Atom[] {
+  const atoms: Atom[] = [];
+  for (const run of runs) {
+    const text = typeof run === "string" ? run : run.text;
+    let cls = typeof run === "string" ? "" : run.class;
+    if (bold && !cls.split(" ").includes("b")) cls = cls ? `b ${cls}` : "b";
+    for (const { segment } of GRAPHEMES.segment(text))
+      atoms.push({ g: segment, cls, w: Bun.stringWidth(segment) });
+  }
+  return atoms;
+}
+
+const textWidth = (atoms: readonly Atom[]) =>
+  atoms.reduce((n, a) => n + a.w, 0);
+
+/**
+ * Breaks atoms into lines of at most `max` columns at spaces (runs of
+ * whitespace count as one space), and inside a word wider than a line, between
+ * graphemes. Lines after the first start with `hang` spaces. An atom wider than
+ * an empty line still goes on one, so the loop always moves on.
+ */
+function wrapAtoms(atoms: readonly Atom[], max: number, hang = 0): Atom[][] {
+  const words: Atom[][] = [];
+  let word: Atom[] = [];
+  for (const a of atoms) {
+    if (/^\s+$/.test(a.g)) {
+      if (word.length > 0) words.push(word);
+      word = [];
+    } else word.push(a);
+  }
+  if (word.length > 0) words.push(word);
+  const lines: Atom[][] = [];
+  let line: Atom[] = [];
+  let used = 0;
+  let empty = true;
+  const brk = () => {
+    lines.push(line);
+    line = Array.from({ length: hang }, () => ({ g: " ", cls: "", w: 1 }));
+    used = hang;
+    empty = true;
+  };
+  for (const w of words) {
+    if (!empty && used + 1 + textWidth(w) <= max) {
+      // The space takes the words' style when both sides share it (a link's underline).
+      const prev = line[line.length - 1]?.cls ?? "";
+      line.push({ g: " ", cls: prev === w[0]?.cls ? prev : "", w: 1 });
+      used++;
+    } else if (!empty) brk();
+    for (const a of w) {
+      if (!empty && used + a.w > max) brk();
+      line.push(a);
+      used += a.w;
+      empty = false;
+    }
+  }
+  if (!empty || lines.length === 0) lines.push(line);
+  return lines;
+}
+
+/** A cell's source as atoms with its inline marks parsed, whitespace collapsed. */
+function cellAtoms(source: string, header: boolean, links?: LinkRef[]): Atom[] {
+  const runs = inlineRuns(clip(source, MAX_CODE_COLS), links);
+  return wrapAtoms(atomsOf(runs, header), Number.POSITIVE_INFINITY)[0] ?? [];
+}
+
+/** A column never shrinks below this (or its natural width, when smaller). */
+const MIN_COL = 6;
+
+/**
+ * Column widths that fit `budget` columns, or undefined when even the minimums
+ * do not. The widest columns give up width first: every column is capped at one
+ * common width, the largest that fits, and what that leaves over goes back to
+ * the capped columns, widest first.
+ */
+function shrinkColumns(
+  natural: readonly number[],
+  budget: number,
+): number[] | undefined {
+  const floor = natural.map((n) => Math.min(n, MIN_COL));
+  const at = (cap: number) =>
+    natural.map((n, k) => Math.max(floor[k] ?? 0, Math.min(n, cap)));
+  const total = (cols: number[]) => cols.reduce((a, b) => a + b, 0);
+  if (total(floor) > budget) return undefined;
+  let lo = 0;
+  let hi = Math.max(...natural);
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (total(at(mid)) <= budget) lo = mid;
+    else hi = mid - 1;
+  }
+  const cols = at(lo);
+  let spare = budget - total(cols);
+  const capped = cols
+    .map((w, k) => k)
+    .filter((k) => (cols[k] ?? 0) < (natural[k] ?? 0))
+    .sort((a, b) => (natural[b] ?? 0) - (natural[a] ?? 0) || a - b);
+  for (const k of capped) {
+    if (spare <= 0) break;
+    cols[k] = (cols[k] ?? 0) + 1;
+    spare--;
+  }
+  return cols;
+}
+
+/** Appends a line of atoms to runs. */
+function pushAtoms(runs: Run[], atoms: readonly Atom[]): void {
+  for (const a of atoms) pushRun(runs, a.g, a.cls);
+}
+
+/** Lines of runs as one run list, bounded like a code block. */
+function joinLines(lines: readonly Run[][]): Run[] {
+  const runs: Run[] = [];
+  lines.slice(0, MAX_CODE_LINES).forEach((line, n) => {
+    if (n > 0) pushRun(runs, "\n");
+    for (const run of line)
+      typeof run === "string"
+        ? pushRun(runs, run)
+        : pushRun(runs, run.text, run.class);
+  });
+  if (lines.length > MAX_CODE_LINES)
+    pushRun(runs, `\n… ${lines.length - MAX_CODE_LINES} more lines`, "com");
+  return runs;
+}
+
+/**
  * A pipe table as monospace rows: each column as wide as its widest cell (by
  * display width), a divider rebuilt to that width keeping its `:` marks, the
- * header row in class `b`. Cell text stays literal (no inline marks).
+ * header row bold. Cells are inline markdown (bold, code, links are runs).
+ *
+ * `maxWidth` is the columns the whole row may take. A table wider than that
+ * shrinks its widest columns, down to MIN_COL, and wraps the cells' text onto
+ * continuation lines, so every line fits. When even the minimums do not fit it
+ * is a list instead, one "Header: value" line per cell and a blank line between
+ * rows. The width is the one at the time of writing: a block is rendered once,
+ * so a resize does not reflow a table already in the transcript.
  */
-export function tableRuns(rows: string[]): Run[] {
+export function tableRuns(
+  rows: string[],
+  maxWidth = Number.POSITIVE_INFINITY,
+  links?: LinkRef[],
+): Run[] {
   const parsed = rows.map(tableCells);
   const divider = parsed[1] ?? [];
   const header =
     divider.length > 0 && divider.every((c) => DIVIDER_CELL.test(c));
-  const width = Array.from(
-    { length: Math.max(...parsed.map((r) => r.length)) },
-    (_, k) =>
-      Math.max(
-        3,
-        ...parsed.map((r, n) =>
-          header && n === 1 ? 3 : Bun.stringWidth(r[k] ?? ""),
-        ),
-      ),
+  const count = Math.max(...parsed.map((r) => r.length));
+  const shown = header ? [parsed[0] ?? [], ...parsed.slice(2)] : parsed;
+  const cells = shown.map((row, n) =>
+    Array.from({ length: count }, (_, k) =>
+      cellAtoms(row[k] ?? "", header && n === 0, links),
+    ),
   );
   const mark = (k: number) => divider[k] ?? "";
   const right = (k: number) =>
     header && mark(k).endsWith(":") && !mark(k).startsWith(":");
-  const lines = parsed.map((row, n) => {
-    const out = width.map((w, k) => {
-      if (header && n === 1) {
+  const natural = Array.from({ length: count }, (_, k) =>
+    Math.max(3, ...cells.map((row) => textWidth(row[k] ?? []))),
+  );
+  // "| " and " |" on the ends, " | " between columns.
+  const frame = 3 * count + 1;
+  const fit =
+    frame + natural.reduce((a, b) => a + b, 0) <= maxWidth
+      ? natural
+      : shrinkColumns(natural, maxWidth - frame);
+  if (!fit) return joinLines(listLines(cells, header, maxWidth));
+
+  const lines: Run[][] = [];
+  cells.forEach((row, n) => {
+    const wrapped = row.map((cell, k) => wrapAtoms(cell, fit[k] ?? 0));
+    const height = Math.max(...wrapped.map((w) => w.length));
+    for (let i = 0; i < height; i++) {
+      const line: Run[] = [];
+      pushRun(line, "| ");
+      wrapped.forEach((w, k) => {
+        const atoms = w[i] ?? [];
+        const pad = " ".repeat(Math.max(0, (fit[k] ?? 0) - textWidth(atoms)));
+        if (k > 0) pushRun(line, " | ");
+        if (right(k)) pushRun(line, pad);
+        pushAtoms(line, atoms);
+        if (!right(k)) pushRun(line, pad);
+      });
+      pushRun(line, " |");
+      lines.push(line);
+    }
+    if (header && n === 0) {
+      const line: Run[] = [];
+      const parts = fit.map((w, k) => {
         const m = mark(k);
         const left = m.startsWith(":") ? ":" : "-";
         const end = m.endsWith(":") ? ":" : "-";
         return `${left}${"-".repeat(w - 2)}${end}`;
-      }
-      const cell = row[k] ?? "";
-      const pad = " ".repeat(Math.max(0, w - Bun.stringWidth(cell)));
-      return right(k) ? pad + cell : cell + pad;
-    });
-    return `| ${out.join(" | ")} |`;
+      });
+      pushRun(line, `| ${parts.join(" | ")} |`);
+      lines.push(line);
+    }
   });
-  return linesToRuns(lines, (t, n) => [
-    { t, cls: header && n === 0 ? "b" : "" },
-  ]);
+  return joinLines(lines);
+}
+
+/**
+ * The list a table becomes when its columns cannot fit: each row's cells as
+ * "Header: value" lines (the header bold, a continuation indented under it),
+ * a blank line between rows. Without a header row the columns are numbered.
+ */
+function listLines(
+  cells: readonly (readonly Atom[][])[],
+  header: boolean,
+  max: number,
+): Run[][] {
+  const label = (k: number) => {
+    const named = header ? cells[0]?.[k] : undefined;
+    return named && named.length > 0
+      ? named
+      : atomsOf([`Column ${k + 1}`], true);
+  };
+  const lines = (atoms: readonly Atom[], hang = 0): Run[][] =>
+    wrapAtoms(atoms, max, hang).map((line) => {
+      const runs: Run[] = [];
+      pushAtoms(runs, line);
+      return runs;
+    });
+  const out: Run[][] = [];
+  const hang = max > 8 ? 2 : 0;
+  (header ? cells.slice(1) : cells).forEach((row, n) => {
+    if (n > 0) out.push([]);
+    row.forEach((cell, k) => {
+      if (cell.length === 0) return;
+      const sep: Atom[] = [
+        { g: ":", cls: "", w: 1 },
+        { g: " ", cls: "", w: 1 },
+      ];
+      out.push(...lines([...label(k), ...sep, ...cell], hang));
+    });
+  });
+  // A header with no rows under it: the names are all there is to show.
+  if (out.length === 0)
+    out.push(
+      ...lines(
+        (cells[0] ?? []).flatMap((_, k) => [
+          ...label(k),
+          { g: " ", cls: "", w: 1 },
+        ]),
+      ),
+    );
+  return out;
 }
 
 // --------------------------------------------------------------------- markdown
@@ -748,13 +972,18 @@ export function startsOpenFence(text: string): boolean {
  *
  * The view is bounded: past MAX_MESSAGE_CHARS of source or MAX_MESSAGE_BLOCKS
  * blocks the rest is one row that says so. The model's history is not cut.
+ *
+ * `tableCols` is the width a table's rows may take (`tableWidth`); without it
+ * a table keeps its natural width. It is read when the block is parsed, so a
+ * later resize does not reflow a table already written.
  */
 export function parseBlocks(
   markdown: string,
   prefix = "b",
   links?: LinkRef[],
+  tableCols?: number,
 ): Block[] {
-  return parseBlocksAt(markdown, prefix, 0, links).blocks;
+  return parseBlocksAt(markdown, prefix, 0, links, tableCols).blocks;
 }
 
 /** The blocks of a text, and the line each block starts at (for the streaming split). */
@@ -775,6 +1004,7 @@ export function parseBlocksAt(
   prefix = "b",
   first = 0,
   links?: LinkRef[],
+  tableCols?: number,
 ): Parsed {
   const blocks: Block[] = [];
   const starts: number[] = [];
@@ -852,7 +1082,7 @@ export function parseBlocksAt(
       }
       starts.push(at);
       blocks.push(
-        block(next(), { code: true, lang: "table" }, tableRuns(table)),
+        block(next(), { code: true }, tableRuns(table, tableCols, links)),
       );
     } else if (/^#{1,6}\s/.test(line)) {
       flush();
@@ -1470,6 +1700,9 @@ export class ViewBuilder {
   private readonly calls = new Map<string, ToolCall>();
   private pending: ToolCall[] = [];
 
+  /** `tableCols`: the table width when a message is built (see `tableWidth`). */
+  constructor(private readonly tableCols?: () => number) {}
+
   /** The call a `tool_requested` event belongs to (they arrive in call order). */
   takeCall(): ToolCall | undefined {
     return this.pending.shift();
@@ -1519,7 +1752,7 @@ export class ViewBuilder {
     return view(
       this.id(),
       role,
-      parseBlocks(markdown, "b", links),
+      parseBlocks(markdown, "b", links, this.tableCols?.()),
       NO_CARD,
       links,
     );
