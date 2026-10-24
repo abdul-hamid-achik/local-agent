@@ -35,13 +35,50 @@ const failures: string[] = [];
 
 const bin = await resolvePinned();
 
+/** How long one tuimark run may take before it counts as hung. */
+const RUN_MS = 60_000;
+
+/**
+ * One tuimark run. A run that exits non-zero or hangs is a failure of its
+ * own, with the end of its stderr, so a later check never reads its output
+ * as if it had succeeded.
+ */
 function tuimark(args: string[]): { code: number; out: string; err: string } {
-  const run = Bun.spawnSync([bin, ...args], { cwd: ui });
-  return {
+  const run = Bun.spawnSync([bin, ...args], { cwd: ui, timeout: RUN_MS });
+  const result = {
     code: run.exitCode,
     out: run.stdout.toString(),
     err: run.stderr.toString(),
   };
+  const what = `tuimark ${args.slice(0, 2).join(" ")}`;
+  if (run.exitedDueToTimeout)
+    failures.push(`${what}: no result after ${RUN_MS / 1000} s (killed)`);
+  else if (result.code !== 0)
+    failures.push(
+      `${what}: exit ${result.code}${result.err.trim() ? `: ${result.err.trim().slice(-500)}` : ""}`,
+    );
+  return result;
+}
+
+/** Prints every failure so far and exits; `reason` is why the run stops here. */
+function finish(reason?: string): never {
+  if (reason) failures.push(`${reason} (later checks did not run)`);
+  console.error(failures.map((f) => `FAIL ${f}`).join("\n"));
+  process.exit(1);
+}
+
+/**
+ * tuimark's JSON output. Output that does not parse ends the check with
+ * every failure found so far, instead of a stack trace that hides them.
+ */
+function parsed(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    finish(
+      `tuimark printed no JSON: ${text.trim().slice(0, 200) || "(empty)"}`,
+    );
+  }
 }
 
 async function matches(path: string, expected: string, what: string) {
@@ -68,7 +105,7 @@ for (const [name, make] of Object.entries(SAMPLES)) {
     "sample",
   );
   const valid = tuimark(["validate", "app.tui", "--data", data, "--strict"]);
-  if (valid.code !== 0 || valid.out.trim() !== "ok")
+  if (valid.code === 0 && valid.out.trim() !== "ok")
     failures.push(`validate ${name}: ${valid.out}${valid.err}`.trim());
   for (const cols of widths) {
     const args = [
@@ -81,7 +118,7 @@ for (const [name, make] of Object.entries(SAMPLES)) {
       "--rows",
       String(rows),
     ];
-    const json = JSON.parse(tuimark([...args, "--format", "json"]).out) as {
+    const json = parsed(tuimark([...args, "--format", "json"]).out) as {
       errors: unknown[];
     };
     if (json.errors.length > 0)
@@ -98,7 +135,7 @@ for (const [name, make] of Object.entries(SAMPLES)) {
 // paints OSC 8 cells whose `link` index is non-zero, and an image lays out an
 // <img> node with a size. This fails on 0.5.0, where href/src stay literal.
 {
-  const links = JSON.parse(
+  const links = parsed(
     tuimark([
       "dump",
       "app.tui",
@@ -117,7 +154,7 @@ for (const [name, make] of Object.entries(SAMPLES)) {
     failures.push(
       "sample-links: no cell carries a hyperlink index (needs tuimark >= 0.5.1)",
     );
-  const image = JSON.parse(
+  const image = parsed(
     tuimark([
       "dump",
       "app.tui",
@@ -148,7 +185,7 @@ for (const [name, make] of Object.entries(INLINE_SAMPLES)) {
     "sample",
   );
   const valid = tuimark(["validate", "inline.tui", "--data", data, "--strict"]);
-  if (valid.code !== 0 || valid.out.trim() !== "ok")
+  if (valid.code === 0 && valid.out.trim() !== "ok")
     failures.push(`validate ${name}: ${valid.out}${valid.err}`.trim());
   for (const cols of widths) {
     const args = [
@@ -162,7 +199,7 @@ for (const [name, make] of Object.entries(INLINE_SAMPLES)) {
       String(rows),
       "--inline",
     ];
-    const json = JSON.parse(tuimark([...args, "--format", "json"]).out) as {
+    const json = parsed(tuimark([...args, "--format", "json"]).out) as {
       errors: unknown[];
       rows: number;
       terminal_rows: number;
@@ -194,7 +231,7 @@ for (const [name, make] of Object.entries(INLINE_SAMPLES)) {
     "15",
     "--inline",
   ];
-  const json = JSON.parse(tuimark([...args, "--format", "json"]).out) as {
+  const json = parsed(tuimark([...args, "--format", "json"]).out) as {
     errors: unknown[];
     grid: string[];
     rows: number;
@@ -319,7 +356,7 @@ for (const d of extraDumps) {
     ...(d.inline ? ["--inline"] : []),
   ];
   const label = `dump ${d.sample} at ${d.cols}x${d.rows}`;
-  const json = JSON.parse(tuimark([...args, "--format", "json"]).out) as {
+  const json = parsed(tuimark([...args, "--format", "json"]).out) as {
     errors: unknown[];
     grid: string[];
   };
@@ -338,7 +375,7 @@ for (const d of extraDumps) {
 // dump and asserts the light tokens paint the appbar; the @theme path a
 // `/theme` command writes is asserted with play further down.
 {
-  const json = JSON.parse(
+  const json = parsed(
     tuimark([
       "dump",
       "app.tui",
@@ -1427,7 +1464,7 @@ for (const check of plays) {
     "--format",
     "json",
   ]);
-  const result = JSON.parse(run.out) as { theme: string; styles: unknown };
+  const result = parsed(run.out) as { theme: string; styles: unknown };
   if (result.theme !== "light")
     failures.push(`play set @theme: theme is ${result.theme}`);
   if (!JSON.stringify(result.styles).includes("#eef1f4"))
@@ -1458,7 +1495,7 @@ for (const on of [true, false]) {
     "--format",
     "json",
   ]);
-  const result = JSON.parse(run.out) as {
+  const result = parsed(run.out) as {
     styles: { bg?: string }[][];
   };
   const accent = (row: number) =>
@@ -1486,7 +1523,7 @@ for (const on of [true, false]) {
     "--format",
     "json",
   ]);
-  const result = JSON.parse(run.out) as {
+  const result = parsed(run.out) as {
     grid: string[];
     styles: { bg?: string }[][];
   };
@@ -1517,7 +1554,7 @@ await rm(scratch, { recursive: true, force: true });
       "--format",
       "json",
     ]);
-    const grid = (JSON.parse(run.out) as { grid: string[] }).grid.join("\n");
+    const grid = (parsed(run.out) as { grid: string[] }).grid.join("\n");
     if (grid.includes(HIDDEN_LINE)) reached = n;
   }
   if (!reached)
@@ -1525,7 +1562,7 @@ await rm(scratch, { recursive: true, force: true });
 }
 
 // Focus lands on Deny when the approval opens (the safe button).
-const approval = JSON.parse(
+const approval = parsed(
   tuimark([
     "dump",
     "app.tui",
@@ -1543,7 +1580,7 @@ if (approval.focus !== "approval__no")
   failures.push(`approval focus is ${approval.focus}, expected approval__no`);
 
 // Focus lands on the details viewer's scroll when it opens.
-const details = JSON.parse(
+const details = parsed(
   tuimark([
     "dump",
     "app.tui",
@@ -1560,10 +1597,7 @@ const details = JSON.parse(
 if (details.focus !== "details_body")
   failures.push(`details focus is ${details.focus}, expected details_body`);
 
-if (failures.length > 0) {
-  console.error(failures.map((f) => `FAIL ${f}`).join("\n"));
-  process.exit(1);
-}
+if (failures.length > 0) finish();
 const sampleCount =
   Object.keys(SAMPLES).length + Object.keys(INLINE_SAMPLES).length;
 console.log(
