@@ -86,7 +86,8 @@ commands. Press:
   its next word names (`bun run`, `npm exec`, `pnpm dlx`, `bun add`,
   `docker run`, `go run`, `cargo install`, …), three words: `bun run test …`
   never covers `bun run other.ts`;
-- one exact `SERVER__TOOL` MCP name.
+- one exact `SERVER__TOOL` MCP name; through a gateway such as mcphub, the
+  one downstream tool the call runs, never the gateway's `call_tool`.
 
 Some commands are granted only as the exact command, because their prefix
 would cover code you never saw:
@@ -216,9 +217,13 @@ because it runs as you.
 
 Every MCP tool call is an approval proposal in build, a hard deny in plan, and
 `--approve-mcp`-gated in headless. Tools are invoked under namespaced
-`SERVER__TOOL` names, and a session grant covers exactly that name.
+`SERVER__TOOL` names, and a session grant covers exactly that name. A call
+through a gateway is approved, ruled and granted as the downstream tool it
+runs, so one grant never covers every tool behind the gateway.
 
-Configuring `--mcp-config` is itself a trust decision. Stdio servers run as
+Configuring MCP servers is itself a trust decision, whether in your own
+`~/.config/local-agent/mcp.json` or with `--mcp-config`. A workspace cannot
+add a server. Stdio servers run as
 child processes of the agent with a minimal environment plus whatever their
 entry configures; HTTP servers must be loopback unless the entry says
 `allowRemote: true`. See [MCP](/mcp).

@@ -28,13 +28,14 @@ are no subcommands. Run `local-agent --help` for the authoritative short list.
 | `--approve-edits` | Headless only: allow file edits and writes |
 | `--approve-commands` | Headless only: allow command execution with your permissions |
 | `--approve-mcp` | Headless only: allow configured MCP tool calls |
-| `--mcp-config PATH` | Trusted JSON array of MCP servers. At most 1 MB and 16 servers; server names must be unique |
+| `--mcp-config PATH` | Trusted JSON array of MCP servers, instead of your own `~/.config/local-agent/mcp.json` (loaded by default when it exists). At most 1 MB and 16 servers; server names must be unique |
+| `--no-mcp` | Start without your own `mcp.json` |
 | `--session-db PATH` | Opt into experimental durable sessions in a separate database |
 | `--resume HANDLE` | Resume a completed session from `--session-db` by its public id |
 | `--sessions` | List sessions in the workspace without contacting the model; prints `{id, revision, messages}` JSON |
 | `--session-info ID` | Inspect saved state and recovery hazards; runs no tools |
 | `--recovery-info ID` | Inspect recovery review tokens; shows no transcript or raw receipts |
-| `--mcp-status` | Requires `--mcp-config`. Connects and lists tools per server as JSON; exits 1 if any server is unavailable |
+| `--mcp-status` | Checks your own `mcp.json`, or the `--mcp-config` file. Connects and lists tools per server as JSON; exits 1 if any server is unavailable |
 | `--trust-rules` | Lists the workspace's untrusted allow rules and trusts them after you type `yes` at a terminal; exits 1 without a terminal or a `yes` |
 
 ## Cross-flag rules
