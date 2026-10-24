@@ -27,6 +27,7 @@ are no subcommands. Run `local-agent --help` for the authoritative short list.
 | `--intent plan\|build` | Starting intent; default `build` |
 | `--approve-edits` | Headless only: allow file edits and writes |
 | `--approve-commands` | Headless only: allow command execution with your permissions |
+| `--sandbox-commands` | macOS: run commands in the sandbox without asking: no network, writes only in the workspace, no reads in the home folder beyond toolchains (see [Sandboxed commands](/safety#sandboxed-commands-macos)). Headless, no command runs outside it: deny and ask rules refuse, allow rules run confined. In the Tuimark client, starts with `/sandbox on` |
 | `--approve-mcp` | Headless only: allow configured MCP tool calls |
 | `--mcp-config PATH` | Trusted JSON array of MCP servers, instead of your own `~/.config/local-agent/mcp.json` (loaded by default when it exists). At most 1 MB and 16 servers; server names must be unique |
 | `--no-mcp` | Start without your own `mcp.json` |
@@ -46,6 +47,10 @@ are no subcommands. Run `local-agent --help` for the authoritative short list.
 - `--ui tuimark` cannot be combined with headless mode.
 - Headless requires a non-empty prompt.
 - `--approve-edits`, `--approve-commands`, and `--approve-mcp` are headless-only.
+- `--sandbox-commands` needs headless mode or the Tuimark client, and cannot
+  be combined with `--approve-commands`. Headless, it stops the run before it
+  starts where the sandbox is unavailable (Linux, Windows, a workspace that
+  contains your home folder).
 - Interactive modes require a TTY.
 - Interactive runs pre-admit the Ollama model with a 15 s check before the
   session starts.
@@ -72,7 +77,8 @@ a `compacted` event carrying the shortened history.
 
 Approval in headless is fail-closed by default. Without `--approve-edits`,
 `--approve-commands`, or `--approve-mcp`, the matching request class is denied:
-there is no approval dialog to answer. See [Safety](/safety).
+there is no approval dialog to answer. On macOS, `--sandbox-commands` runs
+commands confined instead. See [Safety](/safety).
 
 ## Slash commands
 
@@ -86,6 +92,7 @@ there is no approval dialog to answer. See [Safety](/safety).
 | `/permissions clear rules` | Empty the rules in `.local-agent/permissions.json` and forget their trust |
 | `/permissions trust` | List the allow rules in the workspace's `.local-agent/permissions.json` that you have not trusted on this machine |
 | `/permissions trust confirm` | Trust exactly the rules the last `/permissions trust` listed, if the file still holds them |
+| `/sandbox on\|off` | Tuimark client, macOS: run commands in the sandbox without a card (an ask rule still shows one, and its `y` runs that command outside). `/sandbox` alone says whether it is on. Where it is unavailable it stays off and says why |
 | `/details` | Show the last tool output in full |
 | `/status` | Show the effective config panel (model, workspace, session) |
 | `/sessions` | Open the session picker; needs `--session-db` |
@@ -119,7 +126,7 @@ Context-sensitive keys:
 | Context | Keys |
 |---|---|
 | Slash popup | `up`/`down` choose, `tab` completes, `esc` closes |
-| Approval dialog | `a` grants for the session; arrows, `pgup`, `home`, `end` scroll the diff |
+| Approval dialog | `a` grants for the session (not for commands while the sandbox is on); arrows, `pgup`, `home`, `end` scroll the diff |
 | Panels and details | `q` or `esc` closes; arrows scroll |
 | Sessions picker | `up`/`down` choose, `enter` loads |
 

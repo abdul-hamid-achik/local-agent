@@ -59,3 +59,11 @@ In headless mode there are no cards. Approval is granted up front by class:
 
 Without the relevant flag, the headless run denies that class of proposal.
 See [Reference](/reference) for the full flag surface.
+
+On macOS, commands can run in a sandbox instead of asking: `/sandbox on` in
+the Tuimark client, or `--sandbox-commands` (headless or Tuimark). A
+confined command has no network, writes only in the workspace (never git's
+hooks or config, a `.gitattributes`, nor `.local-agent`), and reads nothing in your home folder
+beyond the workspace and your toolchains. Deny rules still refuse; an ask
+rule still shows its card, and headless refuses instead. See
+[Sandboxed commands](/safety#sandboxed-commands-macos).

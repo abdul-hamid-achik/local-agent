@@ -103,7 +103,7 @@ const ecosystemGroups = [
 
         <a class="la-boundary-note" :href="withBase('/safety')">
           <span class="la-boundary-label">Trust boundary</span>
-          <span>Local-first validates endpoints. It is not an operating-system sandbox.</span>
+          <span>Local-first validates endpoints. On macOS, commands can run sandboxed; nothing else is.</span>
         </a>
       </div>
 

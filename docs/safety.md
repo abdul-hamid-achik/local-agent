@@ -1,14 +1,15 @@
 ---
 title: Safety and privacy
-description: What the Local Agent CLI enforces by default — loopback endpoints, plan-intent denials, per-proposal approval — and what it does not.
+description: What the Local Agent CLI enforces by default — loopback endpoints, plan-intent denials, per-proposal approval, the macOS command sandbox — and what it does not.
 outline: deep
 ---
 
 # Safety and privacy
 
 The client is local-first and asks before it mutates anything. Those controls
-validate endpoints and gate proposals one at a time; they are not an
-operating-system sandbox.
+validate endpoints and gate proposals one at a time. On macOS, commands can
+also run in an operating-system sandbox instead of asking
+([Sandboxed commands](#sandboxed-commands-macos)); nothing else is sandboxed.
 
 ## Local-first by default
 
@@ -216,7 +217,9 @@ unless you pass the matching flag.
 - `--approve-mcp` — allow MCP tool calls.
 
 The flags are headless-only and independent; `--approve-commands` does not
-authorize edits. See [Command reference](/reference).
+authorize edits. On macOS, `--sandbox-commands` runs commands confined
+instead of `--approve-commands` (see [Sandboxed commands](#sandboxed-commands-macos)).
+See [Command reference](/reference).
 
 ## run_command runs exactly as written
 
@@ -228,7 +231,90 @@ surprise you.
 Approved commands run directly, with your permissions, in the workspace, under
 a timeout — 120 seconds by default, capped at 10 minutes. Removing the shell
 removes interpretation surprises; it does not reduce what a command can do,
-because it runs as you.
+because it runs as you. Every command gets a minimal environment: `PATH`,
+`HOME`, `TERM`, `COLORTERM` and the locale variables, nothing else.
+
+## Sandboxed commands (macOS)
+
+On macOS, commands can run confined instead of asking. Turn it on with
+`/sandbox on` in the Tuimark client, or start with `--sandbox-commands`
+(headless, or the Tuimark client with the sandbox already on). The header
+shows `sandbox` while it is on; `/status` says whether it is on, off, or
+unavailable and why.
+
+With the sandbox on, in build intent:
+
+- a deny rule still refuses the command;
+- every other command runs confined, without a card. An allow rule or a
+  session grant only spares the card: run outside, the command could run
+  what a sandboxed command wrote in the workspace;
+- an ask rule still shows its card in the Tuimark client. `y` runs that one
+  command outside the sandbox, as you, and the card says so; `a` grants
+  nothing for commands while the sandbox is on;
+- headless, an ask rule refuses the command, since nobody is there to
+  answer: with `--sandbox-commands`, no command runs outside the sandbox.
+  The flag replaces `--approve-commands`, and the two cannot be combined;
+- plan and chat still refuse every command, and edits, writes and MCP calls
+  are gated as before.
+
+A confined command runs under Seatbelt (`/usr/bin/sandbox-exec`) with a
+profile that denies by default. It:
+
+- **reads** the system, but in your home folder only the workspace, the
+  toolchains and their caches (`~/.bun`, `~/.cargo`, `~/.rustup`, `~/go`,
+  `~/.asdf`, `~/.nvm`, `~/.volta`, `~/.pyenv`, `~/.rbenv`, `~/.deno`,
+  `~/.local/bin`, and named folders under `~/.cache`, `~/.local/share` and
+  `~/Library/Caches`), `~/.config/git`, `~/.gitconfig` and
+  `~/.tool-versions`. Credential files in those folders (git's, Cargo's,
+  uv's) stay unreadable. It reads nothing in `/private/tmp`, in your own
+  folder under `/var/folders` (your temporary files and caches), or on
+  other volumes;
+- **writes** only in the workspace and in
+  `~/Library/Caches/local-agent/sandbox`, which holds its `TMPDIR` and
+  `GOCACHE`. In the workspace, at any depth and in any letter case, it
+  never writes a `.git` folder's hooks, config, `commondir`, `info`,
+  modules or worktrees, never creates a `.git`, and never writes a
+  `.gitattributes` (attributes pick diff, filter and merge drivers from your
+  own git config) or `.local-agent`;
+- **has no network**: no internet, no DNS, and not this machine either —
+  not Ollama, not another local server, not a server of its own;
+- is allowed to look up only a few named system services (user and group
+  lookups, power assertions, notifications, logging): it cannot open an app
+  or script another one, and it can signal and inspect only its own
+  processes.
+
+When a confined command fails, its result tells the model it ran in the
+sandbox, so it can tell you instead of retrying.
+
+What it does not stop:
+
+- **Files it writes in the workspace run later, outside the sandbox,** when
+  something else runs them: your shell, your editor, a card you approve,
+  or the same command after `/sandbox off`. That covers `package.json`
+  scripts, a `Makefile`, `.envrc`, test files, and hook managers that keep
+  their configuration in the workspace — husky (`.husky/`), lefthook
+  (`lefthook.yml`), pre-commit (`.pre-commit-config.yaml`), lint-staged.
+  Review what changed before you run the project yourself.
+- **What it can read, it can show the model**: the workspace, the
+  toolchains, the system. `fetch` and `web_search` never ask, so keep
+  secrets out of the workspace and out of `~/.gitconfig`.
+- It can tell whether a path in your home folder exists, though it cannot
+  read or list it.
+
+What does not work inside it:
+
+- anything that needs the network: installing packages that are not
+  already cached, Go modules missing from the module cache, `git push`,
+  and tests that start a local server;
+- `git init`, and git in a linked worktree or submodule whose git data
+  lives outside the workspace.
+
+It is available only on macOS. `sandbox-exec` is Apple's Seatbelt tool,
+which Apple marks as deprecated. Elsewhere — Linux, Windows — and when the
+workspace is your home folder or contains it, or when the client itself
+runs inside a sandbox, it is unavailable: `--sandbox-commands` stops a
+headless run before it starts, and the Tuimark client keeps asking and says
+why.
 
 ## MCP calls cross the same boundary
 
@@ -249,11 +335,14 @@ entry configures; HTTP servers must be loopback unless the entry says
 
 Local-first is an endpoint posture: loopback by default, loopback MCP unless
 explicitly marked remote, and an explicit opt-out before remote inference. It
-validates endpoints. It is not an operating-system sandbox:
+validates endpoints. Beyond the macOS command sandbox, it is not an
+operating-system sandbox:
 
-- there is no filesystem, process, or network isolation;
-- an approved command runs with your permissions — it can read and write
-  outside the workspace and contact the network, because you can;
+- the agent process, MCP servers and file edits run with no filesystem,
+  process, or network isolation;
+- a command you approve, or that a rule or `--approve-commands` allows,
+  runs with your permissions — it can read and write outside the workspace
+  and contact the network, because you can;
 - MCP servers are separate processes acting under their own configuration;
 - approval gates cover the client's tools; they do not constrain what an
   approved command or server process does next.

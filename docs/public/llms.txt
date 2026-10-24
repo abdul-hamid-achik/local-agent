@@ -5,8 +5,9 @@
 local-agent runs on macOS and Linux from source with Bun 1.4.2 and a local
 Ollama. It can inspect repositories, edit files, run commands, call MCP tools,
 and keep opt-in durable sessions. Mutating effects require approval by
-default; plan mode removes the mutating tools at the host. It is not an
-operating-system sandbox. The historical Go releases remain available on
+default; plan mode removes the mutating tools at the host. On macOS,
+commands can run in an opt-in Seatbelt sandbox (no network, writes only in
+the workspace); nothing else is sandboxed. The historical Go releases remain available on
 GitHub Releases; this site documents the current client.
 
 ## Documentation
