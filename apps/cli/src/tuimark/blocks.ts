@@ -638,10 +638,11 @@ function tableCells(row: string): string[] {
  * The columns a table's text can use in the transcript: the terminal less what
  * the log and the code block take around it. Fullscreen: the log's border and
  * padding (4) and the code block's padding (2). Inline has no log, so only the
- * code block's. Never below a width a table can still be listed in.
+ * code block's. Never below 2, the width of one wide character: a narrow
+ * table is listed as "Header: value" lines that wrap to the width.
  */
 export function tableWidth(columns: number, inline: boolean): number {
-  return Math.max(20, columns - (inline ? 2 : 6));
+  return Math.max(2, columns - (inline ? 2 : 6));
 }
 
 /** One grapheme of a cell: what it paints, its class and its display width. */
@@ -746,7 +747,7 @@ function shrinkColumns(
   const cols = at(lo);
   let spare = budget - total(cols);
   const capped = cols
-    .map((w, k) => k)
+    .map((_, k) => k)
     .filter((k) => (cols[k] ?? 0) < (natural[k] ?? 0))
     .sort((a, b) => (natural[b] ?? 0) - (natural[a] ?? 0) || a - b);
   for (const k of capped) {
@@ -1447,15 +1448,41 @@ function mcpEnvelope(
   };
 }
 
-/** `text` indented when it is a JSON object or array; otherwise as it is. */
+/**
+ * `text` indented when it is a JSON object or array that prints back the
+ * same; otherwise as it is. A number past double precision would be
+ * rounded, a repeated key dropped and an escape rewritten: the card shows
+ * the server's text, so such JSON is shown as sent.
+ */
 function prettyJson(text: string): string {
   if (!/^\s*[[{]/.test(text)) return text;
   try {
-    return JSON.stringify(JSON.parse(text), null, 2);
+    const value: unknown = JSON.parse(text);
+    if (JSON.stringify(value) !== withoutSpaces(text)) return text;
+    return JSON.stringify(value, null, 2);
   } catch {
     // Not JSON, or cut mid-way by the runtime's output cap: show it as it is.
     return text;
   }
+}
+
+/** JSON text without the whitespace between its tokens; strings are kept. */
+function withoutSpaces(json: string): string {
+  let out = "";
+  let inString = false;
+  let escaped = false;
+  for (const char of json) {
+    if (inString) {
+      out += char;
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') inString = false;
+    } else if (char === '"') {
+      inString = true;
+      out += char;
+    } else if (!" \t\n\r".includes(char)) out += char;
+  }
+  return out;
 }
 
 /** What to show under a finished tool card: an optional head line, then the output. */

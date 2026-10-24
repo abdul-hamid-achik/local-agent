@@ -89,7 +89,7 @@ const EXTERNAL_DATA =
 
 /** What a model may say it did: only what its own tool calls did. */
 const ONLY_CALLED =
-  "Say only what your tool calls did. Never claim a tool, sub-agent, search or check you did not call, and name the ones you did.";
+  "Say only what your tool calls did. Never claim a tool, subagent, search or check you did not call, and name the ones you did.";
 
 /** Where the host can ask (AgentOptions.ask): when to, and what an answer is not. */
 export const ASK_USER_NOTE =
@@ -108,7 +108,7 @@ export function hostInstructions(
   if (intent === "chat")
     return [
       "You are a conversational assistant running in the user's terminal. Help with questions, research, games, and general tasks using web_search and fetch. Do not edit files or run commands; summarize, cite sources as markdown links like [title](https://example.com), and offer to show a map or screenshot by fetching its image.",
-      "task delegates one bounded read-only investigation to a fresh subagent and returns its final answer. When the user asks for sub-agents, or you have several independent questions to research, call task once for each in the same reply: several task calls in one reply run in parallel. A subagent only reads, fetches and searches.",
+      "task delegates one bounded read-only investigation to a fresh subagent and returns its final answer. When the user asks for sub-agents, or you have several independent questions to research, call task once for each in the same reply: several task calls in one reply run in parallel, up to four at a time. A subagent only reads, fetches and searches.",
       EXTERNAL_DATA,
       ONLY_CALLED,
     ].join("\n");

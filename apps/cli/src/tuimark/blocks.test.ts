@@ -355,8 +355,10 @@ test("a table's width is the terminal less the log and the code block", () => {
   expect(tableWidth(80, false)).toBe(74);
   expect(tableWidth(120, false)).toBe(114);
   expect(tableWidth(80, true)).toBe(78);
-  // A tiny terminal still gets a width the list can be written in.
-  expect(tableWidth(10, false)).toBe(20);
+  // Never wider than a narrow terminal leaves, and never below one wide
+  // character.
+  expect(tableWidth(10, false)).toBe(4);
+  expect(tableWidth(4, false)).toBe(2);
 });
 
 test("an unterminated fence is closed while streaming", () => {
@@ -641,6 +643,23 @@ test("an MCP error is class err, and text that is not JSON stays as it is", () =
   // Cut by the runtime's output cap, or a bare scalar: the bytes stay.
   expect(show('{"cut": ')).toBe('unverified · domain unknown\n{"cut": ');
   expect(show("42")).toBe("unverified · domain unknown\n42");
+  // JSON that would not print back the same is shown as sent: a 20-digit id
+  // would be rounded, a repeated key dropped, an escape rewritten.
+  for (const sent of [
+    '{"id": 12345678901234567890, "s": "x"}',
+    '{"a": 1, "a": 2}',
+    '{"e": "\\u00e9"}',
+    '{"n": 1.0}',
+  ])
+    expect(show(sent)).toBe(`unverified · domain unknown\n${sent}`);
+  // Spaces inside strings are kept, after an escaped quote too, and do not
+  // stop the indenting.
+  expect(show('{"t": "a\\" b"}')).toBe(
+    'unverified · domain unknown\n{\n  "t": "a\\" b"\n}',
+  );
+  expect(show('{ "say" : "a  b",\n "t": "\\"q\\" " }')).toBe(
+    'unverified · domain unknown\n{\n  "say": "a  b",\n  "t": "\\"q\\" "\n}',
+  );
 });
 
 test("an MCP card clips pretty-printed JSON like any output", () => {

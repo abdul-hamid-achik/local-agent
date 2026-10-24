@@ -194,7 +194,7 @@ test("chat intent gets its own conversational preamble, not the coding framing",
   // reply run in parallel; it still has no todo list.
   expect(chat).toContain("task delegates one bounded read-only investigation");
   expect(chat).toContain(
-    "call task once for each in the same reply: several task calls in one reply run in parallel",
+    "call task once for each in the same reply: several task calls in one reply run in parallel, up to four at a time",
   );
   expect(chat).not.toContain("todo_write");
   expect(chat).not.toContain("coding agent");
@@ -206,7 +206,7 @@ test("chat intent gets its own conversational preamble, not the coding framing",
 test("every intent reports only the tools it actually called", () => {
   for (const intent of ["chat", "plan", "build"] as const)
     expect(hostInstructions(intent, [])).toContain(
-      "Say only what your tool calls did. Never claim a tool, sub-agent, search or check you did not call",
+      "Say only what your tool calls did. Never claim a tool, subagent, search or check you did not call",
     );
 });
 

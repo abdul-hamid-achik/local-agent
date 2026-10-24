@@ -298,7 +298,9 @@ test("chat offers task, and two task calls in one reply run as parallel read-onl
     ]);
     // The model is told what task is for, and that it must report only calls it made.
     const system = run.parentBodies[0]?.messages[0]?.content ?? "";
-    expect(system).toContain("several task calls in one reply run in parallel");
+    expect(system).toContain(
+      "several task calls in one reply run in parallel, up to four at a time",
+    );
     expect(system).toContain("Say only what your tool calls did");
     // Each child is a fresh read-only turn: no task, no todo_write, no effects.
     expect(run.childBodies).toHaveLength(2);
