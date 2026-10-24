@@ -54,7 +54,8 @@ const pause = (ms: number, signal: AbortSignal) =>
     signal.addEventListener("abort", onAbort, { once: true });
   });
 
-/** A body that can be sent again; a stream cannot, so its request is never retried. */
+/** A body that can be sent again; a stream cannot, so its request is never
+ *  retried. Anything else (a Blob, FormData, a stream) counts as a stream. */
 const replayable = (body: BodyInit | null | undefined) =>
   body == null ||
   typeof body === "string" ||

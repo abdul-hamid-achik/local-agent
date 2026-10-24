@@ -358,7 +358,8 @@ async function htmlToText(html: string): Promise<string> {
     .onDocument({
       text: (t) => {
         // A text node can arrive in pieces, an entity split between two: it
-        // is decoded whole.
+        // is decoded whole. (A one-chunk input like this string arrives whole
+        // today; the buffer keeps a streamed input correct too.)
         textNode += t.text;
         if (!t.lastInTextNode) return;
         const text = skipNewline ? textNode.replace(/^\r?\n/, "") : textNode;
@@ -499,7 +500,12 @@ function isBotChallenge(html: string, status: number): boolean {
       .toLowerCase() === "just a moment..."
   )
     return true;
-  return status >= 400 && BOT_CHALLENGE_MARKERS.test(head);
+  return (
+    status >= 400 &&
+    BOT_CHALLENGE_MARKERS.test(
+      head.replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript\s*>/gi, ""),
+    )
+  );
 }
 
 function botChallengeError(url: string, status: number): Error {
@@ -702,7 +708,9 @@ async function searxngSearch(
     const payload = (await response.json()) as {
       results?: { title?: string; url?: string; content?: string }[];
     };
-    return (payload.results ?? []).map((result) => ({
+    // A JSON answer without a results list is not SearXNG saying "nothing".
+    if (!Array.isArray(payload?.results)) return null;
+    return payload.results.map((result) => ({
       title: result.title ?? result.url ?? "(untitled)",
       url: result.url ?? "",
       snippet: result.content ?? "",
@@ -824,7 +832,9 @@ async function duckduckgoSearch(
       signal.throwIfAborted();
       response = null;
     }
-    if (body !== undefined) return parseDuckDuckGo(body, endpoint.origin);
+    // A page the parser cannot read is no usable answer, like a captcha.
+    if (body !== undefined)
+      return parseDuckDuckGo(body, endpoint.origin).catch(() => null);
     if (response && response.status < 500) return null;
     if (attempt < DDG_ATTEMPTS)
       await pause(DDG_RETRY_PAUSE_MS, undefined, { signal });
@@ -2301,7 +2311,7 @@ async function* agentTurn(
           if (
             response.headers.get("cf-mitigated")?.toLowerCase() === "challenge"
           ) {
-            await response.body?.cancel();
+            await response.body?.cancel().catch(() => undefined);
             throw botChallengeError(finalUrl, response.status);
           }
           if (response.status >= 400) {
@@ -2395,7 +2405,6 @@ async function* agentTurn(
           );
           let hits: SearchHit[] | null = null;
           let provider: SearchProvider = "duckduckgo";
-          let via: string = provider;
           const tried: string[] = [];
           // SearXNG answers 200 with no results when its engines are
           // suspended or rate limited, so an empty answer is not trusted: the
@@ -2420,10 +2429,11 @@ async function* agentTurn(
               }
             }
           }
+          let via: string = provider;
           if (!hits && searxngEmpty) {
             hits = [];
             via = "searxng (DuckDuckGo gave no usable answer)";
-          } else via = provider;
+          }
           if (!hits)
             throw new Error(
               `web_search: no search provider answered (tried ${tried.join(", ")}). For a stable backend, run a SearXNG instance and set LOCAL_AGENT_SEARXNG_URL to its address.`,

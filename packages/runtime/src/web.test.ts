@@ -1208,6 +1208,12 @@ test("only the page's own challenge markers count as a bot challenge", async () 
         `<html><head><title>Forbidden</title></head><body>${"x".repeat(20_000)}<p>Enable JavaScript and cookies to continue</p></body></html>`,
         { status: 403, headers: { "content-type": "text/html" } },
       );
+    // An ordinary 404 whose <noscript> asks for JavaScript is not a challenge.
+    if (url.endsWith("/missing"))
+      return new Response(
+        `<html><head><title>Not found</title></head><body><noscript>Enable JavaScript and cookies to continue</noscript><h1>404</h1></body></html>`,
+        { status: 404, headers: { "content-type": "text/html" } },
+      );
     if (url.endsWith("/markers"))
       return new Response(
         `<html><head><title>Checking</title></head><body><div class="cf-browser-verification"></div></body></html>`,
@@ -1216,18 +1222,24 @@ test("only the page's own challenge markers count as a bot challenge", async () 
     return undefined;
   });
   const run = await session(
-    ["challenge", "challenge-200", "article", "forbidden", "markers"].map(
-      (name) => ({
-        name: "fetch",
-        arguments: { url: `http://cf.example/${name}` },
-      }),
-    ),
+    [
+      "challenge",
+      "challenge-200",
+      "article",
+      "forbidden",
+      "markers",
+      "missing",
+    ].map((name) => ({
+      name: "fetch",
+      arguments: { url: `http://cf.example/${name}` },
+    })),
   );
   try {
     expect(run.results.map((result) => result.status)).toEqual([
       "failed",
       "failed",
       "succeeded",
+      "failed",
       "failed",
       "failed",
     ]);
@@ -1238,6 +1250,8 @@ test("only the page's own challenge markers count as a bot challenge", async () 
     expect(run.output(3)).not.toContain("bot challenge");
     // No title to go by, but a 503 with the interstitial markers up top.
     expect(run.output(4)).toContain("behind a bot challenge");
+    expect(run.output(5)).toContain("HTTP 404");
+    expect(run.output(5)).not.toContain("bot challenge");
   } finally {
     restoreFetch();
     await run.cleanup();
@@ -1494,7 +1508,7 @@ test("pre blocks get LF line endings and at most one blank line in a row", async
   }
 });
 
-test("each DuckDuckGo attempt gets its own timeout, so a timed-out first one does not doom the retry", async () => {
+test("each DuckDuckGo attempt gets a fresh deadline, not the first attempt's signal", async () => {
   delete process.env.LOCAL_AGENT_SEARXNG_URL;
   stubFetch((url) =>
     url.startsWith("https://lite.duckduckgo.com/lite/")
@@ -1543,6 +1557,34 @@ test("web_search reports no results, not a dead backend, when SearXNG answered e
       "No results\n\nvia searxng (DuckDuckGo gave no usable answer)",
     );
     expect(output).not.toContain("no search provider answered");
+  } finally {
+    restoreFetch();
+    delete process.env.LOCAL_AGENT_SEARXNG_URL;
+    await searxng.stop(true);
+    await run.cleanup();
+  }
+});
+
+test("a SearXNG answer without a results list is unavailable, not an empty answer", async () => {
+  const searxng = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: () => Response.json({ error: "engine misconfigured" }),
+  });
+  process.env.LOCAL_AGENT_SEARXNG_URL = searxng.url.origin;
+  stubFetch((url) =>
+    url.startsWith("https://lite.duckduckgo.com/lite/") ||
+    url.startsWith("https://html.duckduckgo.com/html/")
+      ? ddgCaptcha()
+      : undefined,
+  );
+  const run = await session([
+    { name: "web_search", arguments: { query: "bun test" } },
+  ]);
+  try {
+    expect(run.results.map((result) => result.status)).toEqual(["failed"]);
+    expect(run.output(0)).toContain("no search provider answered");
+    expect(run.output(0)).not.toContain("No results");
   } finally {
     restoreFetch();
     delete process.env.LOCAL_AGENT_SEARXNG_URL;
@@ -1662,7 +1704,7 @@ test("fetch decodes entities in page text in a single pass", async () => {
   stubFetch((url) =>
     url.endsWith("/ent")
       ? htmlPage(
-          `<html><body><p>Tom &amp; Jerry &lt;b&gt; &#38;lt; &amp;lt; &copy; 2026 &hellip; &#x41;&bogus;</p><pre>if a &lt; b &amp;&amp; c</pre></body></html>`,
+          `<html><body><p>Tom &amp; Jerry &lt;b&gt; &#38;lt; &amp;lt; &copy; 2026 &hellip; &#x41;&bogus;</p><pre>if a &lt; b &amp;&amp; c</pre><p>Lines:</p><pre>\r\n  x &gt; 1\r\n</pre></body></html>`,
         )
       : undefined,
   );
@@ -1675,6 +1717,8 @@ test("fetch decodes entities in page text in a single pass", async () => {
       "Tom & Jerry <b> &lt; &lt; © 2026 … A&bogus;",
     );
     expect(run.output(0)).toContain("if a < b && c");
+    // The CRLF right after <pre> is dropped like a bare LF; the indent stays.
+    expect(run.output(0)).toContain("Lines:\n  x > 1");
   } finally {
     restoreFetch();
     await run.cleanup();
