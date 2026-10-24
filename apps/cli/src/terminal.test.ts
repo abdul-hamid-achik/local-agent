@@ -1,7 +1,11 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type McpConnection, Workspace } from "@local-agent/runtime";
+import {
+  appendRule,
+  type McpConnection,
+  Workspace,
+} from "@local-agent/runtime";
 import {
   createNodeOps,
   exitInjectionKey,
@@ -165,6 +169,138 @@ test.each(["edit", "mcp"])(
     expect(mcpCalls).toBe(0);
   },
 );
+
+test("the workspace's rules apply in the Vue client: allow skips the prompt, deny refuses", async () => {
+  let mcpCalls = 0;
+  const mcp: McpConnection = {
+    tools: [
+      {
+        name: "fixture__echo",
+        inputSchema: { type: "object", properties: {} },
+        readOnly: true,
+      },
+    ],
+    async callTool() {
+      mcpCalls++;
+      return {
+        transport: "success",
+        domain: "unknown",
+        evidence: "unverified",
+        isError: false,
+        text: "unexpected",
+      };
+    },
+    async close() {},
+  };
+  const root = await mkdtemp(join(tmpdir(), "local-agent-terminal-rules-"));
+  await writeFile(join(root, "notes.txt"), "before\n");
+  await appendRule(root, {
+    effect: "allow",
+    tool: "edit",
+    pattern: "/notes.txt",
+  });
+  await appendRule(root, {
+    effect: "deny",
+    tool: "mcp",
+    pattern: "fixture__*",
+  });
+  const workspace = await Workspace.create(root);
+  const requests: Array<{ messages?: Array<{ role?: string }> }> = [];
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (request.method === "GET" && path === "/api/tags")
+        return Response.json({ models: [{ name: "fixture", size: 1000 }] });
+      if (request.method === "POST" && path === "/api/show")
+        return Response.json({
+          capabilities: ["completion", "tools"],
+          model_info: { "fixture.context_length": 16384 },
+        });
+      const body = (await request.json()) as (typeof requests)[number];
+      requests.push(body);
+      const message = body.messages?.some((m) => m.role === "tool")
+        ? { role: "assistant", content: "rules applied" }
+        : {
+            role: "assistant",
+            content: "",
+            tool_calls: [
+              {
+                function: {
+                  name: "edit",
+                  arguments: {
+                    path: "notes.txt",
+                    old_string: "before",
+                    new_string: "after",
+                  },
+                },
+              },
+              { function: { name: "fixture__echo", arguments: {} } },
+            ],
+          };
+      return new Response(
+        `${JSON.stringify({ message, done: false })}\n${JSON.stringify({ message: { role: "assistant", content: "" }, done: true })}\n`,
+        { headers: { "content-type": "application/x-ndjson" } },
+      );
+    },
+  });
+  const terminal = await createTestRenderer({
+    ...terminalOptions("fullscreen"),
+    width: 80,
+    height: 24,
+    kittyKeyboard: true,
+  });
+  const signal = new AbortController();
+  const app = createRenderer(createNodeOps(terminal.renderer)).createApp(
+    createTerminalRoot(
+      {
+        type: "ollama",
+        base_url: server.url.origin,
+        model: "fixture",
+        context_size: 16384,
+      },
+      "fullscreen",
+      signal.signal,
+      workspace,
+      "build",
+      undefined,
+      [mcp],
+    ),
+  );
+  app.provide(rendererInjectionKey, terminal.renderer);
+  app.provide(exitInjectionKey, () => terminal.renderer.destroy());
+  app.mount(terminal.renderer.root);
+  cleanups.push(async () => {
+    signal.abort();
+    app.unmount();
+    terminal.renderer.destroy();
+    server.stop(true);
+    workspace.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  await terminal.flush();
+  await terminal.mockInput.pasteBracketedText("go");
+  terminal.mockInput.pressEnter();
+  const frames: string[] = [];
+  await expect
+    .poll(async () => {
+      await terminal.flush();
+      frames.push(terminal.captureCharFrame());
+      return frames.at(-1);
+    })
+    .toContain("rules applied");
+  expect(frames.some((frame) => frame.includes("Edit notes.txt"))).toBe(false);
+  expect(frames.some((frame) => frame.includes("Call fixture__echo"))).toBe(
+    false,
+  );
+  expect(await readFile(join(root, "notes.txt"), "utf8")).toBe("after\n");
+  expect(mcpCalls).toBe(0);
+  expect(
+    requests[1]?.messages?.filter((message) => message.role === "tool"),
+  ).toHaveLength(2);
+});
 
 test("fullscreen mode can switch intent from the composer", async () => {
   const root = await mkdtemp(join(tmpdir(), "local-agent-terminal-mode-"));

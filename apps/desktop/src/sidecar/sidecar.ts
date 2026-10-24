@@ -19,6 +19,7 @@ import {
   type SessionContext,
   SessionStore,
   Workspace,
+  workspaceRules,
 } from "@local-agent/runtime";
 import {
   type AdmissionView,
@@ -238,13 +239,20 @@ async function handleAgentStart(id: number, params: unknown): Promise<void> {
         }
       });
 
+    // The workspace's permission file applies here as in every client:
+    // deny refuses before any card, a trusted allow skips it.
+    const fileRules = workspaceRules(workspace.root);
     for await (const event of runAgent(provider, messages, {
       workspace,
       intent,
-      approve: (proposal, signal) => {
+      approve: async (proposal, signal) => {
         signal.throwIfAborted();
+        const verdict = await fileRules.verdict(proposal);
+        signal.throwIfAborted();
+        if (verdict.effect !== "ask") return verdict.effect === "allow";
         return approve(proposal);
       },
+      deniedRead: fileRules.deniedRead,
       signal: controller.signal,
       session,
       mcp,

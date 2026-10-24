@@ -29,10 +29,12 @@ import {
   type PermissionRule,
   type Provider,
   permissionRequest,
+  permissionsPath,
   proposeRule,
   runAgent,
   type SessionContext,
   trustRules,
+  trustStorePath,
   type Workspace,
 } from "@local-agent/runtime";
 import type { Commit, Host, HostEvent } from "@thelacanians/tuimark";
@@ -324,15 +326,21 @@ export class TuimarkClient {
     { label: string; prefix?: readonly string[] }
   >();
   /**
-   * The workspace's permission rules, cached with the file's mtime: a
-   * `!` verdict (or any outside edit) bumps the mtime and the next
-   * evaluation reloads. `-1` marks a missing file.
+   * The workspace's permission rules, cached with a stamp of the file and
+   * of the trust store: a `!` verdict, a trust from another terminal or any
+   * outside edit moves the stamp and the next evaluation reloads.
    */
   private permFile: PermissionFile & { untrusted?: PermissionRule[] } = {
     version: 1,
     rules: [],
   };
-  private permMtimeMs: number | undefined;
+  private permStamp: string | undefined;
+  /**
+   * The untrusted allow rules `/permissions trust` last showed: the only
+   * rules `/permissions trust confirm` may trust, so a rule written into
+   * the file after the review is never trusted unseen.
+   */
+  private trustOffer?: PermissionRule[];
   /**
    * The latest completed tool receipt, whole, for `/details`. Memory only:
    * never a model message, never persisted; a newer receipt replaces it.
@@ -481,6 +489,7 @@ export class TuimarkClient {
       const request = permissionRequest(this.proposal);
       const proposed = proposeRule(request);
       const label = `${proposed.tool} ${proposed.pattern}`;
+      let saved = "saved to .local-agent/permissions.json";
       if (root) {
         // A deny rule that already covers this request is stronger intent
         // than the keypress: say so and keep the dialog open.
@@ -495,9 +504,11 @@ export class TuimarkClient {
           return undefined;
         }
         try {
-          await appendRule(root, proposed);
+          const { added } = await appendRule(root, proposed);
+          if (!added)
+            saved = "already in .local-agent/permissions.json, now trusted";
           // The file changed under the cache: the next evaluation reloads.
-          this.permMtimeMs = undefined;
+          this.permStamp = undefined;
         } catch (error) {
           await this.write([
             { path: "status", value: oneLine(`Rule not saved: ${error}`) },
@@ -509,7 +520,7 @@ export class TuimarkClient {
         true,
         false,
         root
-          ? `Always allowed: ${label} (saved to .local-agent/permissions.json)`
+          ? `Always allowed: ${label} (${saved})`
           : `Always allowed: ${label} (no workspace: rule not saved)`,
       );
     });
@@ -1764,43 +1775,87 @@ export class TuimarkClient {
   }
 
   /**
-   * The workspace's permission rules, reloaded only when the file's mtime
-   * moved (a cheap stat per approval). A missing file reads as empty; a
-   * broken one degrades to "ask" with the load's warning on the status.
+   * The workspace's permission rules, reloaded only when the file or the
+   * trust store changed (two cheap stats per approval). A missing file
+   * reads as empty; a broken one degrades to "ask" with the load's warning
+   * on the status.
    */
   private async fileRules(): Promise<
     PermissionFile & { untrusted?: PermissionRule[] }
   > {
     const root = this.options.workspace?.root;
     if (!root) return this.permFile;
-    let mtimeMs: number;
-    try {
-      mtimeMs = (await stat(join(root, ".local-agent", "permissions.json")))
-        .mtimeMs;
-    } catch {
-      if (this.permMtimeMs !== -1) {
+    const stamp = async (path: string) =>
+      stat(path).then(
+        (info) => `${info.ino}:${info.size}:${info.mtimeMs}`,
+        () => "-",
+      );
+    const file = await stamp(permissionsPath(root));
+    if (file === "-") {
+      if (this.permStamp !== "-") {
         this.permFile = { version: 1, rules: [] };
-        this.permMtimeMs = -1;
+        this.permStamp = "-";
       }
       return this.permFile;
     }
-    if (mtimeMs === this.permMtimeMs) return this.permFile;
+    const current = `${file}|${await stamp(trustStorePath())}`;
+    if (current === this.permStamp) return this.permFile;
     const loaded = await loadPermissionFile(root);
     if (loaded.warning) this.noteActivity(oneLine(loaded.warning));
     this.permFile = loaded;
-    this.permMtimeMs = mtimeMs;
+    this.permStamp = current;
     return this.permFile;
   }
 
+  /**
+   * `/permissions trust` shows the untrusted allow rules and remembers
+   * them; `/permissions trust confirm` trusts exactly those, if the file
+   * still holds them.
+   */
+  private async trustStatus(
+    root: string,
+    step: "review" | "confirm",
+  ): Promise<string> {
+    const named = (rules: readonly PermissionRule[]) =>
+      rules.map((rule) => `${rule.tool} ${rule.pattern}`).join(" · ");
+    const plural = (n: number) => `${n} rule${n === 1 ? "" : "s"}`;
+    if (step === "review") {
+      this.permStamp = undefined;
+      const { untrusted = [] } = await this.fileRules();
+      this.trustOffer = untrusted.length ? [...untrusted] : undefined;
+      return untrusted.length
+        ? oneLine(
+            `Untrusted allow ${plural(untrusted.length)}: ${named(untrusted)} — check .local-agent/permissions.json, then /permissions trust confirm`,
+          )
+        : "No untrusted allow rules in .local-agent/permissions.json";
+    }
+    const offer = this.trustOffer;
+    if (!offer) return "Nothing reviewed: run /permissions trust first";
+    this.trustOffer = undefined;
+    try {
+      const { trusted } = await trustRules(root, offer);
+      this.permStamp = undefined;
+      if (!trusted.length)
+        return "Nothing trusted: the reviewed rules left the file or are already trusted";
+      const of = trusted.length < offer.length ? ` of ${offer.length}` : "";
+      return oneLine(
+        `Trusted ${trusted.length}${of} ${trusted.length === 1 && !of ? "rule" : "rules"}: ${named(trusted)}`,
+      );
+    } catch (error) {
+      return oneLine(`Rules not trusted: ${error}`);
+    }
+  }
+
   /** `/permissions` labels for the file's rules (enforced first, then the
-   * allow rules this user has not trusted, marked so). */
+   * allow rules this user has not trusted, marked so). A cloned file's
+   * patterns are its author's text: cleaned before they reach the status. */
   private ruleLabels(): Promise<string[]> {
     return this.fileRules().then((file) => [
-      ...file.rules.map(
-        (rule) => `${rule.effect} ${rule.tool}:${rule.pattern}`,
+      ...file.rules.map((rule) =>
+        cleanText(`${rule.effect} ${rule.tool}:${rule.pattern}`),
       ),
-      ...(file.untrusted ?? []).map(
-        (rule) => `${rule.effect} ${rule.tool}:${rule.pattern} (untrusted)`,
+      ...(file.untrusted ?? []).map((rule) =>
+        cleanText(`${rule.effect} ${rule.tool}:${rule.pattern} (untrusted)`),
       ),
     ]);
   }
@@ -1882,7 +1937,8 @@ export class TuimarkClient {
       const root = this.options.workspace?.root;
       if (root) {
         await clearRules(root);
-        this.permMtimeMs = undefined;
+        this.permStamp = undefined;
+        this.trustOffer = undefined;
       } else {
         writes[0] = {
           path: "status",
@@ -1892,23 +1948,12 @@ export class TuimarkClient {
     }
     if (outcome.trustRules) {
       const root = this.options.workspace?.root;
-      let status = "No workspace: file rules unavailable";
-      if (root) {
-        try {
-          const { trusted } = await trustRules(root);
-          this.permMtimeMs = undefined;
-          status = trusted.length
-            ? oneLine(
-                `Trusted ${trusted.length} rule${trusted.length === 1 ? "" : "s"}: ${trusted
-                  .map((rule) => `${rule.tool} ${rule.pattern}`)
-                  .join(" · ")}`,
-              )
-            : "No untrusted allow rules in .local-agent/permissions.json";
-        } catch (error) {
-          status = oneLine(`Rules not trusted: ${error}`);
-        }
-      }
-      writes[0] = { path: "status", value: status };
+      writes[0] = {
+        path: "status",
+        value: root
+          ? await this.trustStatus(root, outcome.trustRules)
+          : "No workspace: file rules unavailable",
+      };
     }
     if (outcome.help) writes.push({ path: "help.open", value: true });
     await this.write(writes);

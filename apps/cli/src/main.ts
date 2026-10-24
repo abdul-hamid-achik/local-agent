@@ -4,19 +4,18 @@ import {
   admitOpenAILocalModel,
   connectMcp,
   DEFAULT_OLLAMA_MODEL,
-  evaluate,
   inspectRecovery,
-  loadPermissionFile,
   type McpConnection,
   McpServerConfigSchema,
-  permissionRequest,
   resolveProvider,
   runAgent,
   type SessionContext,
   SessionStore,
   Workspace,
+  workspaceRules,
 } from "@local-agent/runtime";
 import { terminalText } from "@local-agent/vue-tui/text";
+import { terminalTrustIO, trustRulesCommand } from "#cli/trust-rules";
 import { interactiveClient, parseUi } from "#cli/ui-flag";
 
 async function inspectMcpStatus(path: string, signal: AbortSignal) {
@@ -79,6 +78,7 @@ try {
       "session-info": { type: "string" },
       "recovery-info": { type: "string" },
       "mcp-status": { type: "boolean", default: false },
+      "trust-rules": { type: "boolean", default: false },
     },
   });
   const ui = parseUi(values.ui);
@@ -120,9 +120,17 @@ bun dev [--model MODEL (default: ${DEFAULT_OLLAMA_MODEL})] [--mode fullscreen|in
   --session-info ID    Inspect saved state and recovery hazards without running tools
   --recovery-info ID   Inspect recovery review tokens without transcript or raw receipts
   --mcp-status         Check only the explicitly supplied MCP config and list tools
+  --trust-rules        List the workspace's untrusted allow rules and trust them
+                       after you type yes (the terminal form of /permissions trust)
 
 Chalupa profiles come from the environment supplied by chalupa exec.
 Interrupted tool outcomes require inspection; they are never automatically replayed.`);
+  } else if (values["trust-rules"]) {
+    using workspace = await Workspace.create(values.workspace);
+    process.exitCode = await trustRulesCommand(
+      workspace.root,
+      terminalTrustIO(),
+    );
   } else if (values["mcp-status"]) {
     if (!values["mcp-config"])
       throw new Error("--mcp-status requires --mcp-config PATH");
@@ -333,7 +341,9 @@ Interrupted tool outcomes require inspection; they are never automatically repla
               else process.stderr.write(`Session: ${session.state.publicId}\n`);
             }
             // An untrusted or broken rule file is named once, not per call.
-            let permissionWarning: string | undefined;
+            const fileRules = workspaceRules(workspace.root, (warning) =>
+              process.stderr.write(`warning: ${terminalText(warning)}\n`),
+            );
             // Native terminal rendering stays behind the interactive dynamic import.
             for await (const event of runAgent(
               provider,
@@ -354,22 +364,9 @@ Interrupted tool outcomes require inspection; they are never automatically repla
                 // even with the flag on. Everything else asks the flags.
                 // Allow rules this user never trusted (a cloned repo's) are
                 // left out by loadPermissionFile.
-                deniedRead: async (request) => {
-                  const { rules } = await loadPermissionFile(workspace.root);
-                  const verdict = evaluate(rules, request);
-                  return verdict.effect === "deny"
-                    ? (verdict.rule?.pattern ?? "")
-                    : undefined;
-                },
+                deniedRead: fileRules.deniedRead,
                 approve: async (proposal) => {
-                  const { rules, warning } = await loadPermissionFile(
-                    workspace.root,
-                  );
-                  if (warning && warning !== permissionWarning) {
-                    permissionWarning = warning;
-                    process.stderr.write(`warning: ${warning}\n`);
-                  }
-                  const verdict = evaluate(rules, permissionRequest(proposal));
+                  const verdict = await fileRules.verdict(proposal);
                   if (verdict.effect !== "ask")
                     return verdict.effect === "allow";
                   return proposal.kind === "edit" || proposal.kind === "write"

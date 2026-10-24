@@ -3095,8 +3095,73 @@ test("rules: a cloned repository's allow rule never skips the card until trusted
   expect(store(ui).status).toBe(
     "Permissions: file: allow run_command:* (untrusted)",
   );
+  // Confirming before a review trusts nothing.
+  await ui.fire("send", "/permissions trust confirm");
+  expect(store(ui).status).toBe(
+    "Nothing reviewed: run /permissions trust first",
+  );
   await ui.fire("send", "/permissions trust");
+  expect(store(ui).status).toBe(
+    "Untrusted allow 1 rule: run_command * — check .local-agent/permissions.json, then /permissions trust confirm",
+  );
+  // A rule written into the file after the review is not trusted with it.
+  await writeRules(root, [
+    { effect: "allow", tool: "run_command", pattern: "*" },
+    { effect: "allow", tool: "edit", pattern: "*" },
+  ]);
+  await ui.fire("send", "/permissions trust confirm");
   expect(store(ui).status).toBe("Trusted 1 rule: run_command *");
+  expect((await loadPermissionFile(root)).untrusted).toEqual([
+    { effect: "allow", tool: "edit", pattern: "*" },
+  ]);
+  await ui.fire("send", "two");
+  await client.idle();
+  expect(decisions).toEqual([false, true]);
+});
+
+test("rules: the runtime's read hook sees the file's deny rules", async () => {
+  const root = await mkdtemp(join(tmpdir(), "la-denied-read-"));
+  await writeRules(root, [
+    { effect: "deny", tool: "fetch", pattern: "domain:tracker.example" },
+    { effect: "deny", tool: "web_search", pattern: "*" },
+  ]);
+  const verdicts: (string | undefined)[] = [];
+  const { ui, client } = setup(
+    async function* ({ options }) {
+      for (const request of [
+        { tool: "fetch", target: "tracker.example" },
+        { tool: "fetch", target: "docs.example" },
+        { tool: "web_search", target: "anything" },
+      ] as const)
+        verdicts.push(await options.deniedRead?.(request));
+      yield {
+        type: "message",
+        message: { role: "assistant", content: "done" },
+      };
+    },
+    { workspace: { root } as Workspace },
+  );
+  await ui.fire("send", "one");
+  await client.idle();
+  expect(verdicts).toEqual(["domain:tracker.example", undefined, "*"]);
+});
+
+test("rules: trust given from another process reaches the cached rules", async () => {
+  const root = await mkdtemp(join(tmpdir(), "la-trust-elsewhere-"));
+  await writeRules(root, [
+    { effect: "allow", tool: "run_command", pattern: "*" },
+  ]);
+  const { ui, client } = setup(
+    turnsAsking([[commandProposal(["make"])], [commandProposal(["make"])]]),
+    { workspace: { root } as Workspace },
+  );
+  await ui.fire("send", "one");
+  await until(() => store(ui).status === APPROVAL_STATUS);
+  await ui.fire("dialog_cancel");
+  await client.idle();
+  // `local-agent --trust-rules` in another terminal: the file is untouched,
+  // only the trust store moves.
+  await trustRules(root);
   await ui.fire("send", "two");
   await client.idle();
   expect(decisions).toEqual([false, true]);

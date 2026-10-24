@@ -159,12 +159,16 @@ test("/permissions lists session grants and file rules, and clears them", () => 
     clearRules: true,
   });
   expect(runSlash("/permissions trust", ruled)).toEqual({
-    status: "Trusting file rules…",
-    trustRules: true,
+    status: "Reviewing file rules…",
+    trustRules: "review",
+  });
+  expect(runSlash("/permissions trust confirm", ruled)).toEqual({
+    status: "Trusting the reviewed rules…",
+    trustRules: "confirm",
   });
   expect(runSlash("/permissions maybe", granted)).toEqual({
     status:
-      "Unknown permissions setting: maybe. Use /permissions, /permissions clear, /permissions clear rules or /permissions trust",
+      "Unknown permissions setting: maybe. Use /permissions, /permissions clear, /permissions clear rules, /permissions trust or /permissions trust confirm",
   });
   expect(filterPalette("permissions").map((r) => r.id)).toEqual([
     "permissions",

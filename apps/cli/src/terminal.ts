@@ -6,6 +6,7 @@ import {
   runAgent,
   type SessionContext,
   type Workspace,
+  workspaceRules,
 } from "@local-agent/runtime";
 import {
   Approval,
@@ -59,11 +60,25 @@ export function createTerminalRoot(
       let turn: AbortController | undefined;
       const pending = ref<ApprovalRequest>();
       let decide: ((allowed: boolean) => void) | undefined;
-      function approve(
+      // The workspace's permission file applies here as in every client:
+      // deny refuses before any prompt, a trusted allow skips it.
+      const fileRules = workspaceRules(workspace.root, (warning) => {
+        status.value = terminalText(warning);
+      });
+      async function approve(
         proposal: ApprovalRequest,
         approvalSignal: AbortSignal,
       ): Promise<boolean> {
         approvalSignal.throwIfAborted();
+        const verdict = await fileRules.verdict(proposal);
+        approvalSignal.throwIfAborted();
+        if (verdict.effect !== "ask") {
+          status.value = terminalText(
+            `${verdict.effect === "deny" ? "Denied" : "Allowed"} by rule: ${verdict.rule?.pattern ?? ""}`,
+          );
+          if (mode === "inline") process.stdout.write(`\n${status.value}\n`);
+          return verdict.effect === "allow";
+        }
         const preview = approvalPreview(proposal, workspace.root);
         if (mode === "inline") process.stdout.write(`\n${preview}\n`);
         pending.value = proposal;
@@ -150,6 +165,7 @@ export function createTerminalRoot(
             workspace,
             intent: selectedIntent.value,
             approve,
+            deniedRead: fileRules.deniedRead,
             signal: AbortSignal.any([signal, request.signal]),
             session,
             mcp,
