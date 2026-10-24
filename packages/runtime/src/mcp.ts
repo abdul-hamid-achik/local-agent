@@ -28,6 +28,17 @@ const STDERR_TAIL = 4_096;
  */
 export class McpStoppedError extends Error {}
 
+/** A stdio server that did not start, with the last line it wrote to stderr. */
+export class McpStartError extends Error {
+  constructor(
+    readonly reason: string,
+    readonly said: string,
+    options?: ErrorOptions,
+  ) {
+    super(`${reason}; it said: ${said}`, options);
+  }
+}
+
 /**
  * The last line a server wrote to stderr, for the person: one line, no
  * control characters, at most 160 characters. Never sent to the model.
@@ -346,7 +357,7 @@ export async function connectMcp(
     const reason = notStarted(config.transport, error) ?? error;
     const line = lastStderrLine(said);
     if (!line || !(reason instanceof Error)) throw reason;
-    throw new Error(`${reason.message}; it said: ${line}`, { cause: error });
+    throw new McpStartError(reason.message, line, { cause: error });
   }
 }
 
@@ -452,6 +463,24 @@ export type McpStartup = {
  * Connects every server at once: one slow or broken server neither delays
  * nor sinks the others. An abort closes whatever did connect and throws.
  */
+const STARTUP_ERROR_CHARS = 200;
+
+/**
+ * Why a server did not start, on one line of at most 200 characters. What
+ * the server said is kept whole; the reason ahead of it gives way.
+ */
+export function startupError(reason: unknown): string {
+  const flat = (text: string) => text.replace(/\s+/g, " ").trim();
+  if (reason instanceof McpStartError) {
+    const tail = `; it said: ${reason.said}`;
+    const room = STARTUP_ERROR_CHARS - tail.length;
+    const head = flat(reason.reason);
+    return `${head.length > room ? `${head.slice(0, room - 1)}…` : head}${tail}`;
+  }
+  const text = reason instanceof Error ? reason.message : String(reason);
+  return flat(text).slice(0, STARTUP_ERROR_CHARS) || "failed";
+}
+
 export async function connectMcpServers(
   configs: readonly McpServerConfig[],
   signal?: AbortSignal,
@@ -465,12 +494,7 @@ export async function connectMcpServers(
     if (result.status === "fulfilled")
       startup.connected.push({ name, connection: result.value });
     else {
-      const reason = result.reason;
-      const text = reason instanceof Error ? reason.message : String(reason);
-      startup.failed.push({
-        name,
-        error: text.replace(/\s+/g, " ").trim().slice(0, 200) || "failed",
-      });
+      startup.failed.push({ name, error: startupError(result.reason) });
     }
   });
   if (signal?.aborted) {

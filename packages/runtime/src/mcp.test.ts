@@ -10,8 +10,10 @@ import {
   defaultMcpConfigPath,
   gatewayTarget,
   McpServerConfigSchema,
+  McpStartError,
   McpStoppedError,
   readMcpConfig,
+  startupError,
 } from "#runtime/mcp";
 
 describe("MCP adapter boundary", () => {
@@ -116,6 +118,35 @@ describe("MCP adapter boundary", () => {
     expect((error as Error).message).toMatch(
       /; it said: fatal: OLLAMA_URL is not set$/,
     );
+  }, 15_000);
+
+  test("a startup failure keeps what the server said whole in its one line", async () => {
+    const said = `fatal: ${"x".repeat(153)}`;
+    const startup = await connectMcpServers([
+      {
+        name: "noisy",
+        transport: {
+          kind: "stdio",
+          command: process.execPath,
+          args: [
+            "-e",
+            `console.error(${JSON.stringify(said)}); process.exit(1)`,
+          ],
+          env: {},
+        },
+      },
+    ]);
+    const error = startup.failed[0]?.error ?? "";
+    expect(error.endsWith(`; it said: ${said}`)).toBe(true);
+    expect(error.length).toBeLessThanOrEqual(200);
+
+    const long = startupError(new McpStartError(`a ${"b".repeat(300)}`, said));
+    expect(long).toHaveLength(200);
+    expect(long).toMatch(/^a b+…; it said: fatal: x+$/);
+    expect(startupError(new McpStartError("closed\n early", "it broke"))).toBe(
+      "closed early; it said: it broke",
+    );
+    expect(startupError(new Error("x".repeat(300)))).toHaveLength(200);
   }, 15_000);
 
   test("a call to a server that has stopped is refused without being sent", async () => {
