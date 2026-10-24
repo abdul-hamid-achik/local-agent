@@ -1,3 +1,4 @@
+import type { Tool } from "ollama";
 import { describe, expect, test, vi } from "vitest";
 import { admitOpenAILocalModel } from "#runtime/admission";
 import { resolveProvider } from "#runtime/config";
@@ -85,12 +86,14 @@ const sseResponse = (body: string | ReadableStream<Uint8Array>) =>
 const events = async (
   provider: ReturnType<typeof localProvider>,
   signal: AbortSignal = AbortSignal.timeout(4_000),
+  tools?: Tool[],
 ) => {
   const seen: RunEvent[] = [];
   for await (const event of chat(
     provider,
     [{ role: "user", content: "hi" }],
     signal,
+    tools,
   ))
     seen.push(event);
   return seen;
@@ -257,7 +260,12 @@ describe("tool_call fragments", () => {
     id?: string;
     function?: { name?: string; arguments?: string };
   };
-  const run = async (fragments: Fragment[]) => {
+  const declare = (...names: string[]) =>
+    names.map((name) => ({
+      type: "function",
+      function: { name, description: "", parameters: {} },
+    })) as Tool[];
+  const run = async (fragments: Fragment[], tools: Tool[] = []) => {
     const server = serve(() =>
       sseResponse(
         sse(
@@ -267,9 +275,13 @@ describe("tool_call fragments", () => {
       ),
     );
     try {
-      return (await events(localProvider(`${server.url.origin}/v1`))).filter(
-        (event) => event.type === "tool_call",
-      );
+      return (
+        await events(
+          localProvider(`${server.url.origin}/v1`),
+          AbortSignal.timeout(4_000),
+          tools,
+        )
+      ).filter((event) => event.type === "tool_call");
     } finally {
       server.stop(true);
     }
@@ -277,16 +289,23 @@ describe("tool_call fragments", () => {
 
   test("a later fragment of the same index neither clobbers the id nor doubles the name", async () => {
     expect(
-      await run([
-        { index: 0, id: "call-1", function: { name: "read", arguments: "{" } },
-        // Servers that repeat the name and send an empty or new id per chunk.
-        { index: 0, id: "", function: { name: "read", arguments: '"path"' } },
-        {
-          index: 0,
-          id: "other",
-          function: { name: "read", arguments: ':"a"}' },
-        },
-      ]),
+      await run(
+        [
+          {
+            index: 0,
+            id: "call-1",
+            function: { name: "read", arguments: "{" },
+          },
+          // Servers that repeat the name and send an empty or new id per chunk.
+          { index: 0, id: "", function: { name: "read", arguments: '"path"' } },
+          {
+            index: 0,
+            id: "other",
+            function: { name: "read", arguments: ':"a"}' },
+          },
+        ],
+        declare("read"),
+      ),
     ).toEqual([
       {
         type: "tool_call",
@@ -305,6 +324,61 @@ describe("tool_call fragments", () => {
         { index: 0, function: { name: "ad", arguments: "}" } },
       ]),
     ).toMatchObject([{ call: { id: "c", function: { name: "read" } } }]);
+  });
+
+  test("a repeated name is joined when only the joined name is a declared tool", async () => {
+    expect(
+      await run(
+        [
+          { index: 0, id: "c", function: { name: "read", arguments: "{" } },
+          { index: 0, function: { name: "read", arguments: "}" } },
+        ],
+        declare("readread"),
+      ),
+    ).toMatchObject([{ call: { function: { name: "readread" } } }]);
+  });
+
+  test("calls without index or id are told apart by a different name", async () => {
+    expect(
+      await run(
+        [
+          { function: { name: "read", arguments: '{"path":"x"}' } },
+          { function: { name: "list", arguments: '{"path":"y"}' } },
+        ],
+        declare("read", "list"),
+      ),
+    ).toMatchObject([
+      { call: { function: { name: "read", arguments: { path: "x" } } } },
+      { call: { function: { name: "list", arguments: { path: "y" } } } },
+    ]);
+  });
+
+  test("without index or id, a name split before any arguments is one call", async () => {
+    expect(
+      await run(
+        [
+          { function: { name: "re" } },
+          { function: { name: "ad", arguments: '{"path":"x"}' } },
+        ],
+        declare("read", "list"),
+      ),
+    ).toMatchObject([
+      { call: { function: { name: "read", arguments: { path: "x" } } } },
+    ]);
+  });
+
+  test("fragments of two calls interleaved by index stay apart", async () => {
+    expect(
+      await run([
+        { index: 0, id: "a", function: { name: "read", arguments: '{"p":' } },
+        { index: 1, id: "b", function: { name: "list", arguments: '{"q":' } },
+        { index: 0, function: { arguments: "1}" } },
+        { index: 1, function: { arguments: "2}" } },
+      ]),
+    ).toMatchObject([
+      { call: { id: "a", function: { name: "read", arguments: { p: 1 } } } },
+      { call: { id: "b", function: { name: "list", arguments: { q: 2 } } } },
+    ]);
   });
 
   test("an id that arrives after the first fragment is kept", async () => {

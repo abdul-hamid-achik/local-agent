@@ -385,6 +385,26 @@ const toOpenAIMessage = (message: Message) => ({
     : {}),
 });
 
+/**
+ * A tool name arriving in fragments: pieces of one name, or the whole name
+ * repeated in each fragment. A piece equal to what we have is ambiguous
+ * ("read"+"read" or "read" twice); the declared tools settle it.
+ */
+function joinName(have: string, piece: string, declared: Set<string>) {
+  if (piece !== have) return have + piece;
+  return declared.has(have) && !declared.has(have + piece)
+    ? have
+    : have + piece;
+}
+
+/** Whether `piece` can continue `have` as a split name: the joined name leads to a declared tool. */
+function namesContinue(have: string, piece: string, declared: Set<string>) {
+  const joined = have + piece;
+  return (
+    declared.size === 0 || [...declared].some((name) => name.startsWith(joined))
+  );
+}
+
 /** Loopback OpenAI-compatible transport (llama.cpp, LM Studio, vLLM): SSE mirroring the Ollama seam. */
 async function* openAILocalChat(
   config: OpenAILocalProvider,
@@ -455,6 +475,9 @@ async function* openAILocalChat(
       pendingCalls.delete(index);
     }
   };
+  const declared = new Set<string>();
+  for (const tool of tools ?? [])
+    if (tool.function?.name) declared.add(tool.function.name);
   let usage: OpenAIStreamPart["usage"];
   let finishReason: string | undefined;
   let lastIndex: number | undefined;
@@ -480,13 +503,22 @@ async function* openAILocalChat(
       yield RunEventSchema.parse({ type: "text", text: delta.content });
     for (const fragment of delta?.tool_calls ?? []) {
       let index = fragment.index;
+      const piece = fragment.function?.name;
       if (index === undefined) {
-        // Without an index, a new id starts a call; anything else continues the last.
+        // Without an index, a new id starts a call, and so does a different
+        // name once the last call's arguments began (a name only splits
+        // across fragments before them); anything else continues the last.
         const last =
           lastIndex === undefined ? undefined : pendingCalls.get(lastIndex);
+        const newName =
+          piece &&
+          last?.name &&
+          piece !== last.name &&
+          (last.args !== "" || !namesContinue(last.name, piece, declared));
         index =
           lastIndex !== undefined &&
           last &&
+          !newName &&
           (!fragment.id || last.id === undefined || fragment.id === last.id)
             ? lastIndex
             : Math.max(-1, ...pendingCalls.keys()) + 1;
@@ -494,10 +526,9 @@ async function* openAILocalChat(
       lastIndex = index;
       const entry = pendingCalls.get(index) ?? { name: "", args: "" };
       // Some servers repeat the id (or send "") and the name in every
-      // fragment: the first id stands, a name that repeats is not doubled.
+      // fragment: the first id stands, a name is joined unless it repeats.
       if (fragment.id && entry.id === undefined) entry.id = fragment.id;
-      if (fragment.function?.name && fragment.function.name !== entry.name)
-        entry.name += fragment.function.name;
+      if (piece) entry.name = joinName(entry.name, piece, declared);
       if (fragment.function?.arguments)
         entry.args += fragment.function.arguments;
       pendingCalls.set(index, entry);
