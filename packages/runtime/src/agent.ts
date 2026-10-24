@@ -505,7 +505,9 @@ function isBotChallenge(html: string, status: number): boolean {
   return (
     status >= 400 &&
     BOT_CHALLENGE_MARKERS.test(
-      // A <noscript> the first bytes cut open runs to their end.
+      // A <noscript> the first bytes cut open runs to their end, as an
+      // HTML parser with scripting on reads it: a marker after an unclosed
+      // one is inside it, so it is content too.
       head.replace(/<noscript\b[^>]*>[\s\S]*?(?:<\/noscript\s*>|$)/gi, ""),
     )
   );

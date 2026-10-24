@@ -322,7 +322,7 @@ describe("openai_local provider configuration", () => {
         ...local(url, { api_key: "k" }),
         LOCAL_AGENT_LOCAL_ONLY: "false",
       }),
-    ).toThrow(/use an https base URL or drop the api_key/);
+    ).toThrow(/use an https base URL,? or drop the api_key/);
   });
 
   // The URL parser folds 127.0.0.1. itself; localhost. it keeps.
@@ -335,7 +335,7 @@ describe("openai_local provider configuration", () => {
           LOCAL_AGENT_LOCAL_ONLY: "false",
         }),
       ).toThrow(
-        "write the host without its trailing dot, use an https base URL or drop the api_key",
+        "write the host without its trailing dot, use an https base URL, or drop the api_key",
       );
       // Only a name that is loopback without its dot gets the hint.
       for (const other of ["http://evil.com./v1", "http://localhosts/v1"])

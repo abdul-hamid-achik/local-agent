@@ -5,8 +5,12 @@ const DASH =
   "[\\-=\\u058A\\u05BE\\u1806\\u2010-\\u2015\\u2212\\u2E3A\\u2E3B\\u301C\\u3030\\uFE58\\uFE63]";
 /** Zero-width, soft-hyphen, bidi and variation characters: invisible, so they hide a marker. */
 const INVISIBLE = /\p{Default_Ignorable_Code_Point}/u;
-/** Blanks and tabs, with at most one line break among them. */
-const GAP = "[ \\t]*(?:\\r?\\n[ \\t]*)?";
+/**
+ * Blanks and tabs, with at most one line break among them: LF, CRLF, a lone
+ * CR, a form feed or vertical tab, NEL, or the Unicode line and paragraph
+ * separators.
+ */
+const GAP = "[ \\t]*(?:(?:\\r\\n|[\\n\\r\\v\\f\\u0085\\u2028\\u2029])[ \\t]*)?";
 // A run of dashes, then `AGENTS.md` or `end of AGENTS.md`, then a run of
 // dashes: on one line, or with the dashes on the lines around the words. The
 // lookbehind starts a match only at the start of a run, which keeps a long
