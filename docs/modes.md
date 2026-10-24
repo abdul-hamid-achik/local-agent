@@ -38,11 +38,21 @@ model, not a permission: plan and chat still refuse every effect after a
 
 ## Chat
 
-Chat is a conversational research profile: no coding preamble, no todo
-list, no subagents. It offers the same read-only research set (`read`,
-`list`, `search`, `fetch`, `web_search`, `read_image`) and hard-denies
-every effect exactly like plan. Use it for questions, documentation
-lookups, and gaming guides; switch back to build for edits.
+Chat is a conversational research profile: no coding preamble and no todo
+list. It offers the read-only research set (`read`, `read_image`, `list`,
+`search`, `fetch`, `web_search`) and `task`, which spawns a read-only
+subagent: several `task` calls in one reply run in parallel, so chat can
+look into independent questions at once. A subagent gets the read-only set
+only, with no MCP, no todo list, and no `task` of its own.
+
+Chat hard-denies `write`, `edit`, and `run_command` like plan. Unlike plan
+it keeps your configured MCP tools, each call behind its approval card, so
+a browser or search server can read a page for you. Use chat for
+questions, documentation lookups, and gaming guides; switch back to build
+for edits.
+
+In every intent the model is told to say only what its tool calls did, and
+to name the tools and subagents it actually called.
 
 ## Build
 

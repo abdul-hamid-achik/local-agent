@@ -91,9 +91,10 @@ an edit or a command: those still show their card.
 Press `shift+tab` to move through **build**, **plan**, and **chat**. Plan
 offers only read-only tools (read files and images, list, search, fetch, web
 search, read-only subagents, and the todo list); it hard-denies writes, edits,
-commands, and MCP calls. Chat keeps the research tools, without the todo list,
-subagents, or the coding preamble. Build can propose changes, each gated by an
-approval. See [Modes](/modes).
+commands, and MCP calls. Chat keeps the research tools and read-only
+subagents, without the todo list or the coding preamble; it refuses edits and
+commands, and asks before each MCP call. Build can propose changes, each gated
+by an approval. See [Modes](/modes).
 
 ## Try other surfaces
 

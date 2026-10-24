@@ -50,14 +50,19 @@ own. See [Providers](/providers).
 
 ### Models on Ollama's MLX runner
 
-On Apple silicon, Ollama 0.40 serves some models on its MLX runner instead of
-llama.cpp: the default tags of the Qwen3.5 family among them, while a GGUF
-tag such as `qwen3.5:4b-q4_K_M` runs on llama.cpp. Local Agent reads the
-runner from the model's metadata (`/api/show`). On MLX, Ollama ignores the
-requested context size: nothing is reserved when the model loads, and its
-cache grows with the conversation. The planned or chosen size then only
-bounds what Local Agent sends in one request, and the run starts with a
-warning that names the way out: a GGUF tag. The default model is a GGUF tag.
+On Apple silicon, Ollama can serve a model on its MLX runner instead of
+llama.cpp. Local Agent reads the runner from the model's metadata (`/api/show`
+and `/api/ps`, `runner: mlx`); for a model that names none, safetensors
+weights count as MLX and GGUF does not. On MLX, Ollama ignores the requested
+context size: nothing is reserved when the model loads, and its cache grows
+with the conversation. The planned or chosen size then only bounds what Local
+Agent sends in one request, and the run starts with a warning that names the
+way out: a GGUF tag such as `qwen3.5:4b-q4_K_M`, which runs on llama.cpp. The
+default model is a GGUF tag.
+
+Because the loaded context is a soft limit there, a smaller one is not
+reported as a shortfall, and `/provider` labels the line as a soft limit with
+nothing reserved. The share of the model in GPU memory is still checked.
 
 ### Long turns
 

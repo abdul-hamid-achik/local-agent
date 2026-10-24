@@ -38,7 +38,7 @@ Fullscreen, inline, and headless are distinct presentations over one runtime:
 
 ## Tools and approval
 
-Tools live in `packages/runtime`, not in any client. Reads (`read`, `read_image`, `list`, `search`, `fetch`, `web_search`) run without approval in build mode. `edit`, `write`, `run_command`, and MCP calls are effects: each proposal is approved per effect through the host approve callback. Plan intent offers read-only tools only and hard-denies effects regardless of the approver.
+Tools live in `packages/runtime`, not in any client. Reads (`read`, `read_image`, `list`, `search`, `fetch`, `web_search`) run without approval in build mode. `edit`, `write`, `run_command`, and MCP calls are effects: each proposal is approved per effect through the host approve callback. Plan intent offers read-only tools only and hard-denies effects regardless of the approver. Chat hard-denies edits, writes and commands the same way and keeps MCP calls behind approval; a `task` subagent, from any intent, gets the read-only tools only.
 
 ## MCP boundary
 

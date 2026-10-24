@@ -25,7 +25,7 @@ in the [Command reference](/reference) or a variable in the table below.
 | `LOCAL_AGENT_DIAGNOSTICS_TSC` | `1` also appends a `tsc --noEmit` section after `.ts` edits, using the workspace's own `typescript` and its root `tsconfig.json` (slow: full project) |
 | `LOCAL_AGENT_FETCH_PRIVATE` | `1` lets the `fetch` tool reach loopback and private-network hosts; by default it reaches public hosts only |
 | `XDG_CONFIG_HOME` | Where `local-agent/trusted-rules.json` (the permission-rule trust store) lives; default `~/.config`. A relative value is ignored |
-| `LOCAL_AGENT_SEARXNG_URL` | Optional SearXNG instance for the `web_search` tool; overrides the default DuckDuckGo Lite backend |
+| `LOCAL_AGENT_SEARXNG_URL` | Optional SearXNG instance for the `web_search` tool, asked first. When it is unreachable or answers with no results, DuckDuckGo (Lite, then HTML) is asked; an empty answer from both reads `No results`. Without it, DuckDuckGo answers |
 | `OLLAMA_HOST` | Ollama endpoint; default `127.0.0.1:11434` |
 
 ## Model and context
@@ -67,7 +67,11 @@ approvals. See [Command reference](/reference).
 
 ## Repository instructions
 
-At startup, the root `AGENTS.md` of the workspace is loaded as model context.
-It is not a security boundary: mode policy, tool admission, and approval checks
-remain host-owned. Full skills/profile parity with the historical Go
+At startup, the root `AGENTS.md` of the workspace is loaded as model context,
+at most 64 KiB. The model receives it framed as guidance from whoever controls
+the workspace, which cannot grant permissions, change approval rules, or
+override the host's tool and safety rules; a line inside the file that imitates
+the frame's closing marker does not end it early. It is not a security
+boundary: mode policy, tool admission, and approval checks remain host-owned
+and apply whatever the file says. Full skills/profile parity with the historical Go
 implementation is pending.

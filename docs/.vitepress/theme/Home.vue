@@ -45,7 +45,7 @@ const modelRows = [
     name: 'qwen3.5:4b',
     location: 'LOCAL',
     state: 'warned',
-    note: "MLX tag: it runs, with a warning — Ollama's MLX runner ignores the size",
+    note: "if Ollama serves it on its MLX runner: it runs, with a warning — that runner ignores the size",
   },
 ]
 
@@ -161,7 +161,7 @@ const ecosystemGroups = [
         <div
           class="la-terminal"
           role="img"
-          aria-label="Illustrative local-agent terminal session showing a local Ollama model, finished tool cards with an edit's diff, and a command waiting for approval"
+          aria-label="Illustrative local-agent terminal session (a demo, not a real run) showing a local Ollama model, finished tool cards with an edit's diff, and a command waiting for approval"
           aria-describedby="terminal-caption"
         >
           <div aria-hidden="true">
@@ -240,8 +240,8 @@ const ecosystemGroups = [
           </div>
         </div>
         <figcaption id="terminal-caption">
-          An illustrative build session in the Tuimark client. Each tool card says how it ended and what
-          an edit changed; a command waits for your decision before it runs.
+          An illustrative build session in the Tuimark client: a demo, not a real run. Each tool card
+          says how it ended and what an edit changed; a command waits for your decision before it runs.
         </figcaption>
       </figure>
     </section>
@@ -353,7 +353,7 @@ const ecosystemGroups = [
             ref="budgetBar"
             class="la-budget"
             role="img"
-            aria-label="Illustrative planner budget on a 16 GB Mac for qwen3.5:4b-q4_K_M: of 11 GiB, 3.1 for the weights, 2.5 of headroom, 1.0 for the KV cache at 32768 tokens, 4.4 left"
+            aria-label="Illustrative planner budget (a worked example, not a measurement) on a 16 GB Mac for qwen3.5:4b-q4_K_M: of 11 GiB, 3.1 for the weights, 2.5 of headroom, 1.0 for the KV cache at 32768 tokens, 4.4 left"
           >
             <div class="la-budget-head" aria-hidden="true">
               <span>16 GB Mac · qwen3.5:4b-q4_K_M</span>
@@ -475,7 +475,7 @@ const ecosystemGroups = [
             </p>
           </div>
 
-          <div class="la-question-box" role="img" aria-label="Illustrative question with three choices, the second one chosen">
+          <div class="la-question-box" role="img" aria-label="Illustrative question (a demo, not a real run) with three choices, the second one chosen">
             <div aria-hidden="true">
               <div class="la-question-title">Question · choose one</div>
               <p>Which store should the cache use?</p>
@@ -508,7 +508,7 @@ const ecosystemGroups = [
             ref="goalRun"
             class="la-question-box la-goal-run"
             role="img"
-            aria-label="Illustrative goal: two turns with an edit and a passing test command, ending with the model's done report and its evidence"
+            aria-label="Illustrative goal (a demo, not a real run): two turns with an edit and a passing test command, ending with the model's done report and its evidence"
           >
             <div aria-hidden="true">
               <div class="la-goal-run-head">
@@ -545,7 +545,7 @@ const ecosystemGroups = [
             <h3 id="tools-panel-title">One gateway, every tool, one card each.</h3>
             <p>
               Point your MCP config at a gateway such as mcphub and the model finds the tool it
-              needs: resolve_tool ranks the candidates, call_tool runs one. Plan mode offers no MCP
+              needs: resolve_tool routes a goal to a tool, call_tool runs it. Plan mode offers no MCP
               at all.
             </p>
             <p class="la-question-rule">
@@ -559,7 +559,7 @@ const ecosystemGroups = [
             ref="toolRun"
             class="la-question-box la-goal-run"
             role="img"
-            aria-label="Illustrative MCP call through a gateway: the model resolves a validate tool, its card names the downstream tool, and the result reads unverified"
+            aria-label="Illustrative MCP call through a gateway (a demo, not a real run): the model resolves a validate tool, its card names the downstream tool, and the result reads unverified"
           >
             <div aria-hidden="true">
               <div class="la-goal-run-head">

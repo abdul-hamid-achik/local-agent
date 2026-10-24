@@ -58,11 +58,28 @@ The profile arrives via `LOCAL_AGENT_PROVIDER_CONFIG`:
 `baseURL` must be loopback (`127.0.0.1`, `localhost`, `::1`) unless
 `LOCAL_AGENT_LOCAL_ONLY=false` is set explicitly, the same boundary MCP
 endpoints use. `api_key` is optional: some local servers require a dummy
-bearer token. The model is selected in the profile; a differing `--model` is
+bearer token. It travels as a bearer header on every request, so a profile
+with an `api_key` and a plain `http` `baseURL` to a host that is not loopback
+is refused at startup: use an `https` URL or drop the key. Plain `http`
+without a key (a server on your LAN) and `http` to loopback stay valid. The model is selected in the profile; a differing `--model` is
 refused, while `--context` behaves as with local Ollama (without it the size
 stays 16384; only local Ollama plans one). On startup the
 client checks the model against `GET {baseURL}/models`; servers that do not
 implement the endpoint (404) skip the check with a status note.
+
+## Retries
+
+A request to the model, and the metadata reads at startup (Ollama's
+`/api/tags` and `/api/show`, an OpenAI-compatible server's `/models`), is
+sent again when the connection is refused or reset, or the server answers 429,
+502, 503 or 504. It is tried at most twice more, after 250 ms and then 500 ms,
+or after the server's `Retry-After` when it gives one. A `Retry-After` longer
+than 10 seconds is not waited for: that answer stands. A timeout or a cancel
+(`esc`) is final, and a reply that has started streaming is never replayed. The
+`/provider` check and the background `/api/ps` look make one attempt.
+
+Streamed replies from OpenAI-compatible servers are read whether their lines
+end in LF, CRLF or CR.
 
 ## Not in the current client
 

@@ -442,7 +442,7 @@ body {
   grid-row: span 2;
   align-self: center;
   color: var(--la-terminal-copper);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -459,7 +459,7 @@ body {
 
 .la-terminal-context small {
   color: var(--la-terminal-muted);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .la-terminal-body {
@@ -512,7 +512,7 @@ body {
 
 .la-tool-line small {
   color: var(--la-terminal-phosphor);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 /* An edit's card carries the change under its title line. */
@@ -594,7 +594,7 @@ body {
   align-items: center;
   justify-content: space-between;
   color: var(--la-terminal-copper);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.07em;
   text-transform: uppercase;
@@ -620,7 +620,7 @@ body {
   gap: 13px;
   margin-top: 13px;
   color: var(--la-terminal-muted);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .la-approval-options span:first-child {
@@ -689,7 +689,7 @@ body {
 .la-invariant-strip dt {
   color: var(--la-faint);
   font-family: var(--vp-font-family-mono);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -913,7 +913,7 @@ body {
 .la-inventory-head span {
   color: var(--la-terminal-copper);
   font-family: var(--vp-font-family-mono);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 720;
   letter-spacing: 0.1em;
 }
@@ -945,7 +945,7 @@ body {
 .la-model-location {
   color: var(--la-terminal-copper);
   font-family: var(--vp-font-family-mono);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 720;
   letter-spacing: 0.08em;
 }
@@ -976,7 +976,7 @@ body {
   border-radius: 5px;
   color: var(--la-terminal-muted);
   font-family: var(--vp-font-family-mono);
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 720;
   letter-spacing: 0.07em;
   text-transform: uppercase;
@@ -987,7 +987,8 @@ body {
   color: var(--la-terminal-phosphor);
 }
 
-.la-model-state-consent {
+.la-model-state-consent,
+.la-model-state-warned {
   border-color: rgba(224, 138, 105, 0.45);
   color: var(--la-terminal-copper);
 }
@@ -1010,7 +1011,7 @@ body {
 .la-consent-heading span {
   color: var(--la-terminal-copper);
   font-family: var(--vp-font-family-mono);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 720;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -1034,7 +1035,7 @@ body {
   margin-top: 16px;
   color: var(--la-terminal-muted);
   font-family: var(--vp-font-family-mono);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .la-consent-actions span,
@@ -1049,19 +1050,18 @@ body {
   color: var(--la-terminal-phosphor);
 }
 
-.la-model-state-warned {
-  border-color: rgba(224, 138, 105, 0.45);
-  color: var(--la-terminal-copper);
-}
-
 /*
  * The planner's budget as one bar. Its parts grow in turn once, when it
  * scrolls into view (Home.vue arms it): under 1.5 s. Unarmed, it is static.
  */
 .la-budget {
+  /* The consent panel's fixed background: the bar's gaps and outline are
+     drawn against it (non-text contrast, 3:1 or more, in both themes). */
+  --la-budget-ground: #1b1b17;
+  --la-budget-edge: #7b8175;
   margin-top: 16px;
   font-family: var(--vp-font-family-mono);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .la-budget-head {
@@ -1079,21 +1079,34 @@ body {
   height: 10px;
   margin-top: 8px;
   overflow: hidden;
-  border: 1px solid var(--la-terminal-line);
+  border: 1px solid var(--la-budget-edge);
   border-radius: 5px;
 }
 
 .la-budget-bar i {
   flex: 0 0 calc(var(--share) * 100%);
+  box-sizing: border-box;
+  background: var(--part);
   transform-origin: left center;
+}
+
+/* A gap in the panel's color between parts: each part is told from the next
+   by 3:1 or more against it, not by a second grey. */
+.la-budget-bar i:not(:last-child) {
+  border-right: 2px solid var(--la-budget-ground);
 }
 
 .la-budget-weights {
   --part: var(--la-terminal-muted);
 }
 
+/* Hatched, so it differs from the weights by pattern as well as by shade. */
 .la-budget-headroom {
-  --part: #7b8175;
+  --part: repeating-linear-gradient(
+    135deg,
+    var(--la-terminal-muted) 0 2px,
+    transparent 2px 5px
+  );
 }
 
 .la-budget-kv {
@@ -1102,10 +1115,6 @@ body {
 
 .la-budget-free {
   --part: transparent;
-}
-
-.la-budget-bar i {
-  background: var(--part);
 }
 
 .la-budget-legend {
@@ -1123,7 +1132,7 @@ body {
   width: 8px;
   height: 8px;
   margin-right: 5px;
-  border: 1px solid var(--la-terminal-line);
+  border: 1px solid var(--la-budget-edge);
   border-radius: 2px;
   background: var(--part);
   vertical-align: -1px;
@@ -1251,7 +1260,7 @@ body {
   border: 1px solid color-mix(in srgb, var(--la-copper) 44%, transparent);
   border-radius: 5px;
   color: var(--la-copper);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -1283,7 +1292,7 @@ body {
   margin: 0;
   color: var(--la-faint);
   font-family: var(--vp-font-family-mono);
-  font-size: 9px;
+  font-size: 10px;
   text-align: right;
 }
 
@@ -1507,7 +1516,7 @@ body {
 .la-safety-list span {
   color: var(--la-terminal-copper);
   font-family: var(--vp-font-family-mono);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .la-safety-list p {
@@ -1551,7 +1560,7 @@ body {
 .la-ecosystem-index {
   color: var(--la-faint);
   font-family: var(--vp-font-family-mono);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .la-ecosystem-label {
@@ -1600,7 +1609,7 @@ body {
 .la-install-block > span {
   color: var(--la-faint);
   font-family: var(--vp-font-family-mono);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -1978,7 +1987,7 @@ body {
 
 @media (max-width: 420px) {
   .la-eyebrow {
-    font-size: 9px;
+    font-size: 10px;
   }
 
   .la-button {
@@ -2069,5 +2078,36 @@ body {
   .la-status-dot,
   .la-cursor {
     background: CanvasText;
+  }
+
+  /* Author colors are dropped: fill the parts with the text color, keep the
+     hatch for the headroom, and cut the gaps and the outline in system
+     colors so every part stays visible. */
+  .la-budget-bar,
+  .la-budget-legend b {
+    border-color: CanvasText;
+  }
+
+  /* A gradient, not a color: a background color is replaced in this mode. */
+  .la-budget-weights,
+  .la-budget-kv {
+    --part: linear-gradient(CanvasText, CanvasText);
+  }
+
+  .la-budget-headroom {
+    --part: repeating-linear-gradient(135deg, CanvasText 0 2px, Canvas 2px 5px);
+  }
+
+  .la-budget-free {
+    --part: linear-gradient(Canvas, Canvas);
+  }
+
+  .la-budget-bar i:not(:last-child) {
+    border-right-color: Canvas;
+  }
+
+  .la-budget-legend,
+  .la-budget-head {
+    color: CanvasText;
   }
 }

@@ -29,6 +29,10 @@ every session operation requires `--session-db`.
 There is no migration path from the retired Go implementation's session
 storage.
 
+A database from an earlier Bun release (schema v1 or v2) is migrated to
+schema v3 the first time this version opens it, with its history kept. An
+older local-agent refuses a v3 database, so keep a copy if you may go back.
+
 ## Resuming a session
 
 ```bash
@@ -36,7 +40,14 @@ bun run dev --session-db ~/.local-agent/sessions.db --resume HANDLE
 ```
 
 `--resume HANDLE` loads a completed session from the session database by its
-public id and continues it.
+public id and continues it. Before anything else it closes the calls the
+session stopped before they ran, or that only read: each gets a result that
+says it did not finish, so the model is told. The CLI prints
+`note: closed N tool call(s) …` on stderr when it did. A session that still
+has a call with an unknown outcome (see [Interrupted work](#interrupted-work))
+is refused by headless runs and by the Vue client, with an error that names
+`--recover`. The Tuimark client opens it, and a prompt waits until you have
+recorded what happened.
 
 ## Inspection commands
 
@@ -46,7 +57,8 @@ These commands only read the database. They contact no model and run no tools.
   messages}` per session).
 - `--session-info ID` — inspect saved state and recovery hazards.
 - `--recovery-info ID` — inspect recovery review tokens. It does not print the
-  transcript or raw receipts.
+  transcript or raw receipts. It returns the session revision and the first
+  100 hazards, with the total.
 
 Example:
 
@@ -75,12 +87,69 @@ conversation holds up to 9999 messages and a session's saved state up to
 8 MiB; past either, the turn is refused with a sentence that says so. Start
 over with `/sessions new`.
 
+The Tuimark client and headless `--prompt` runs keep the saved state well
+under that cap: past 6 MiB, before the next request, they shorten it from
+the start, images first, then tool results the model has already read, then
+the reasoning of earlier turns. The current turn stays whole.
+
+A single tool result too large for the state to keep is saved as a short note
+in its place, with the call's status and its size, and the turn goes on: the
+model reads the note and can ask for less, for example a narrower read. The
+call's record in the session ledger keeps what the tool returned. When not
+even the note fits, nothing is saved for the call, the turn is refused with
+the sentence above, and the call is handled as
+[interrupted work](#interrupted-work).
+
 ## Interrupted work
 
 Interrupted tool outcomes require inspection; they are never automatically
-replayed. When you resume a session whose last run was interrupted, review what
-the tool actually did before asking the agent to continue. `--session-info` and
-`--recovery-info` exist for this review.
+replayed. What a resumed session does with them depends on what the call was
+doing when the run stopped.
+
+- **A command stopped by `esc` or by its timeout** is recorded as failed or
+  cancelled once its process group is gone. The model is told the command was
+  stopped and may have made partial changes or left a background process
+  running, so it should check before running it again. A descendant that left
+  the group (a daemon, a `setsid` child) is not seen.
+- **A call that never started, or that only reads,** is closed when you
+  resume, as above.
+- **A command whose cleanup is incomplete** (a pipe held open, a signal
+  refused, a group that outlived SIGKILL) stays an unknown outcome, like a
+  call the process died in the middle of.
+
+A call with an unknown outcome blocks the session until you record what
+happened. Look at the workspace first, then say what you found. Nothing is run
+again; the record is kept beside the session's ledger, which is never
+rewritten. Calls are answered in order: an earlier one first.
+
+From the shell:
+
+```bash
+# List the calls awaiting a decision (JSON)
+bun run dev --session-db ~/.local-agent/sessions.db --recover HANDLE
+
+# Show what would be recorded (a dry run)
+bun run dev --session-db ~/.local-agent/sessions.db --recover HANDLE \
+  --resolve EXECUTION=applied --note "the file was written"
+
+# Record it
+bun run dev --session-db ~/.local-agent/sessions.db --recover HANDLE \
+  --resolve EXECUTION=applied --note "the file was written" --apply
+```
+
+- `applied`: the call ran and its change is in place.
+- `not-applied`: it made no change.
+- `undone`: you undid its change.
+
+`EXECUTION` is the `executionId` the listing shows. `--note` is at most 1000
+characters. `--resolve`, `--note` and `--apply` go with `--recover`, and
+`--note` and `--apply` need `--resolve`.
+
+In the Tuimark client, `/recover` lists the calls in a panel, numbered, and
+`/recover N applied|not-applied|undone [note]` records the Nth. While one
+remains, sending a prompt only shows a status that names `/recover`, and a
+running `/goal` stops there. `--session-info` and `--recovery-info` exist for
+reviewing the same hazards without changing anything.
 
 ## Related
 

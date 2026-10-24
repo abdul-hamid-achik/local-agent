@@ -24,25 +24,31 @@ are no subcommands. Run `local-agent --help` for the authoritative short list.
 | `--theme NAME` | `dark`, `light`, `auto`, or a named theme (`midnight`, `sepia`). Tuimark client only |
 | `--json` | Emit NDJSON events on stdout in headless mode; implies headless |
 | `--workspace PATH` | Workspace directory; default is the current working directory |
-| `--intent plan\|build` | Starting intent; default `build` |
+| `--intent plan\|build\|chat` | Starting intent; default `build` |
 | `--approve-edits` | Headless only: allow file edits and writes |
 | `--approve-commands` | Headless only: allow command execution with your permissions |
-| `--sandbox-commands` | macOS: run commands in the sandbox without asking: no network, writes only in the workspace, no reads in the home folder beyond toolchains (see [Sandboxed commands](/safety#sandboxed-commands-macos)). Headless, no command runs outside it: deny and ask rules refuse, allow rules run confined. In the Tuimark client, starts with `/sandbox on` |
+| `--sandbox-commands` | macOS: run commands in the sandbox without asking: no network, writes only in the workspace, no reads in the home folder beyond toolchains (see [Sandboxed commands](/safety#sandboxed-commands-macos)). Headless, no command runs outside it: deny and ask rules refuse, allow rules run confined; a command that names a path the workspace treats as secret is refused. In the Tuimark client, starts with `/sandbox on` |
 | `--approve-mcp` | Headless only: allow configured MCP tool calls |
 | `--mcp-config PATH` | Trusted JSON array of MCP servers, instead of your own `~/.config/local-agent/mcp.json` (loaded by default when it exists). At most 1 MB and 16 servers; server names must be unique |
 | `--no-mcp` | Start without your own `mcp.json` |
 | `--session-db PATH` | Opt into experimental durable sessions in a separate database |
-| `--resume HANDLE` | Resume a completed session from `--session-db` by its public id |
+| `--resume HANDLE` | Resume a completed session from `--session-db` by its public id. Calls the session stopped before they ran, or that only read, are closed first (stderr: `note: closed N tool call(s) …`). A session with a call of unknown outcome is refused headless and in the Vue client until it is recorded (see `--recover`); the Tuimark client opens it |
 | `--sessions` | List sessions in the workspace without contacting the model; prints `{id, revision, messages}` JSON |
 | `--session-info ID` | Inspect saved state and recovery hazards; runs no tools |
-| `--recovery-info ID` | Inspect recovery review tokens; shows no transcript or raw receipts |
+| `--recovery-info ID` | Inspect recovery review tokens; shows no transcript or raw receipts. Returns the first 100 hazards and the total |
+| `--recover HANDLE` | List, as JSON, the session's calls whose outcome is unknown. See [Interrupted work](/sessions#interrupted-work) |
+| `--resolve EXECUTION=OUTCOME` | With `--recover`: `OUTCOME` is `applied`, `not-applied` or `undone`. Shows what would be recorded (a dry run); nothing runs again |
+| `--note TEXT` | With `--resolve`: a note of at most 1000 characters kept with the record |
+| `--apply` | With `--resolve`: record it beside the session's ledger, which is never rewritten |
 | `--mcp-status` | Checks your own `mcp.json`, or the `--mcp-config` file. Connects and lists tools per server as JSON; exits 1 if any server is unavailable |
 | `--trust-rules` | Lists the workspace's untrusted allow rules and trusts them after you type `yes` at a terminal; exits 1 without a terminal or a `yes` |
 
 ## Cross-flag rules
 
 - At most one session operation may be given per run (`--sessions`,
-  `--session-info`, `--recovery-info`, `--resume`).
+  `--session-info`, `--recovery-info`, `--recover`, `--resume`).
+- `--resolve`, `--note` and `--apply` go with `--recover`; `--note` and
+  `--apply` need `--resolve`.
 - Session operations require `--session-db`.
 - `--ui tuimark` cannot be combined with headless mode.
 - Headless requires a non-empty prompt.
@@ -95,16 +101,18 @@ commands confined instead. See [Safety](/safety).
 | `/permissions clear rules` | Empty the rules in `.local-agent/permissions.json` and forget their trust |
 | `/permissions trust` | List the allow rules in the workspace's `.local-agent/permissions.json` that you have not trusted on this machine |
 | `/permissions trust confirm` | Trust exactly the rules the last `/permissions trust` listed, if the file still holds them |
-| `/sandbox on\|off` | Tuimark client, macOS: run commands in the sandbox without a card (an ask rule still shows one, and its `y` runs that command outside). `/sandbox` alone says whether it is on. Where it is unavailable it stays off and says why |
+| `/sandbox on\|off` | Tuimark client, macOS: run commands in the sandbox without a card (an ask rule still shows one, and its `y` runs that command outside; so does a command that names a secret path). `/sandbox` alone says whether it is on. Where it is unavailable it stays off and says why |
 | `/details` | Show the last tool output in full |
 | `/status` | Show the effective config panel (model, workspace, session) |
 | `/provider` | Ask the model's endpoint, read-only: answer time, Ollama's version, whether the model is loaded and how much of it is in GPU memory |
-| `/sessions` | Open the session picker; needs `--session-db` |
+| `/sessions` | Open the session picker; needs `--session-db`. Loading a session closes the calls it stopped before they ran, or that only read, and tells the model; a call of unknown outcome loads but blocks the next prompt until `/recover` |
 | `/sessions new` | Start over: a new saved session with `--session-db`, otherwise a new temporary conversation |
+| `/recover` | Tuimark client, needs `--session-db`: list the session's calls whose outcome is unknown, numbered |
+| `/recover N applied\|not-applied\|undone [note]` | Tuimark client: record what you found in the workspace for the Nth call. Nothing runs again. Earlier calls are answered first. While one remains, a prompt waits and the status names `/recover` |
 | `/model [NAME]` | Show the current model, or switch to another installed Ollama model mid-session |
 | `/goal OBJECTIVE [--turns N]` | Tuimark client, build mode: run turns toward an objective until the model reports done or blocked, or a limit stops it (8 turns by default, 1 to 50) |
 | `/goal` | Show the running goal: its objective, turn, time and tokens left, and last status |
-| `/goal stop` | End the running goal; `esc` ends it too |
+| `/goal stop` | End the running goal; `esc` ends it too, and so does `ctrl+c` between its turns |
 | `/export` | Write the transcript to a markdown file |
 | `/export json` | Write the raw messages array as JSON |
 | `/find TEXT` | Search saved sessions for text; needs `--session-db` |
@@ -123,7 +131,7 @@ instead of running.
 |---|---|
 | `ctrl+p` | Open the command palette |
 | `esc` | Cancel the current turn, and a running `/goal` with it |
-| `ctrl+c` | Quit; clears the draft first, then cancels a running turn |
+| `ctrl+c` | Tuimark client: clears the draft first, then cancels a running turn, or stops a `/goal` between its turns; the next press quits. Vue client: quits at once |
 | `up`, `down` | Browse input history |
 | `ctrl+o` | Load earlier messages |
 | `pgup`, `pgdn` | Scroll the log |
@@ -137,7 +145,7 @@ Context-sensitive keys:
 | Context | Keys |
 |---|---|
 | Slash popup | `up`/`down` choose, `tab` completes, `esc` closes |
-| Approval dialog | `a` grants for the session (not for commands while the sandbox is on); arrows, `pgup`, `home`, `end` scroll the diff |
+| Approval dialog | `a` grants for the session (not for commands while the sandbox is on, nor for a command that names a secret path); arrows, `pgup`, `home`, `end` scroll the diff |
 | Question (Tuimark) | `up`/`down` choose, `enter` answers; or type the row's number, its label, or `y`/`n`; `esc` skips |
 | Panels and details | `q` or `esc` closes; arrows scroll |
 | Sessions picker | `up`/`down` choose, `enter` loads |

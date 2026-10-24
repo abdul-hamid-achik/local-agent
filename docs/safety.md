@@ -26,10 +26,11 @@ HTTP MCP endpoints follow the same posture: they must point at loopback
 
 ## Plan intent denies mutations
 
-The client has two intents: plan and build, the default. In plan the model is
-offered only the read-only tools — `read`, `read_image`, `list`, `search`,
-`fetch`, `web_search` — and the runtime hard-denies every mutation, no matter
-what an approval grant says:
+The client has three intents: plan, chat, and build, the default. In plan the
+model is offered only the read-only tools — `read`, `read_image`, `list`,
+`search`, `fetch`, `web_search`, and `task`, `todo_write` and `ask_user`, which
+have no external effects — and the runtime hard-denies every mutation, no
+matter what an approval grant says:
 
 - `write`;
 - `edit`;
@@ -37,7 +38,10 @@ what an approval grant says:
 - MCP tool calls — denied even when the server annotates a tool as read-only.
 
 In plan these proposals never reach an approval prompt; the host refuses them
-first. Switch intent with `--intent`, `/mode plan|build`, or `shift+tab`. See
+first. Chat refuses `write`, `edit`, and `run_command` the same way, but keeps
+MCP tool calls, each behind its approval as in build. A subagent spawned with
+`task`, from any intent, is offered the read-only research tools only. Switch
+intent with `--intent`, `/mode plan|build|chat`, or `shift+tab`. See
 [Modes](/modes).
 
 ## Build asks per proposal
@@ -49,11 +53,31 @@ not prompt.
 
 ### What reads can reach
 
-The file tools stay inside the workspace, and they skip secrets (`.env`,
-`.ssh`, keys, `.git`) as well as local-agent's own policy: the
-`.local-agent/` directory and, for a workspace at your home directory,
-`.config/local-agent`. A tool call cannot read or rewrite your permission
-rules.
+The file tools stay inside the workspace, and they skip secrets as well as
+local-agent's own policy: the `.local-agent/` directory and, for a workspace
+at your home directory, `.config/local-agent`. A tool call cannot read or
+rewrite your permission rules. The hidden names are matched without regard
+to case or Unicode form, and cover:
+
+- `.git`, `.env` and `.env.*` (templates such as `.env.example` stay
+  readable), `.npmrc`, `.netrc`, `.pypirc`, `.pgpass`, `.git-credentials`,
+  `.dockercfg`, `.htpasswd`, `.s3cfg`, `.my.cnf`, `.boto` and `.vault-token`;
+- cloud and cluster configuration: `.ssh`, `.gnupg`, `.aws`, `.azure`,
+  `.kube`, `kubeconfig`, and credential files such as `credentials`,
+  `credentials.json`, `credentials.toml`, `credentials.yml`,
+  `credentials.yaml`, `credentials.tfrc.json` and
+  `application_default_credentials.json` (a source file like
+  `credentials.ts` is ordinary);
+- Terraform state: `*.tfstate`, `*.tfstate.backup` and `terraform.tfstate.d`;
+- keys, certificates, keystores and keychains: `*.pem`, `*.key`, `*.p12`,
+  `*.pfx`, `*.p8`, `*.ppk`, `*.keystore`, `*.jks`, `*.kdbx`, `*.keychain`,
+  `*.keychain-db`, `keychains`, `id_rsa*` and `id_ed25519*`;
+- files at a fixed place under a folder a project may commit for other
+  reasons: `.docker/config.json`, `.config/gh/hosts.yml`, `.config/gcloud`
+  and `.m2/settings.xml`.
+
+Hiding a name from the file tools does not hide it from a command you
+approve; see [Commands that name a secret path](#commands-that-name-a-secret-path).
 
 `fetch` reaches public `http` and `https` hosts only. Before every request,
 redirects included, it refuses:
@@ -88,7 +112,9 @@ The dialog shows the action: a bounded diff for edits, the exact command for
 commands. Press:
 
 - `y` — allow this call once;
-- `a` — allow this call and matching ones for the rest of the session;
+- `a` — allow this call and matching ones for the rest of the session (the
+  Tuimark client offers no grant for a command that
+  [names a secret path](#commands-that-name-a-secret-path));
 - `n` or `esc` — deny.
 
 `a` grants narrowly, and the dialog spells out the scope before you press it:
@@ -207,8 +233,11 @@ Evaluation is deny → ask → allow, first match wins; deny always beats a
 session grant or a saved allow. `fetch` and `web_search` never ask, so only
 their deny rules matter. Headless runs consult the file first in both
 directions: a trusted allow approves with the flag off, a deny refuses with
-the flag on. Rules are the user's durable intent; the flags remain the
-per-run switch.
+the flag on. The exception is a command that
+[names a secret path](#commands-that-name-a-secret-path): an allow rule does
+not approve it, so it needs `--approve-commands`, or is refused under
+`--sandbox-commands`. Rules are the user's durable intent; the flags remain
+the per-run switch.
 
 ### Trusting a workspace's rules
 
@@ -262,6 +291,50 @@ removes interpretation surprises; it does not reduce what a command can do,
 because it runs as you. Every command gets a minimal environment: `PATH`,
 `HOME`, `TERM`, `COLORTERM` and the locale variables, nothing else.
 
+Each command runs in its own process group, so stopping it reaches its
+descendants. `esc` or the timeout sends SIGTERM to the group, then SIGKILL to
+what outlives a short grace period. When the group is gone, the command is
+recorded as failed or cancelled, and the model is told it may have made
+partial changes or left a background process running. If the group cannot be
+confirmed gone (a signal was refused, or it outlived SIGKILL), the outcome
+stays unknown and blocks a saved session until you record what happened (see
+[Interrupted work](/sessions#interrupted-work)). A descendant that leaves the
+group, such as a daemon, is not seen.
+
+If the host exits, or is stopped by SIGINT, SIGTERM or SIGHUP with no handler
+of its own, the groups of commands still running are killed too. A SIGKILL of
+the host cannot be caught, so it can leave them behind.
+
+### Commands that name a secret path
+
+If a `run_command` argument names a path the file tools hide (the list under
+[What reads can reach](#what-reads-can-reach)), the command always shows an
+approval card, and the card says so:
+
+- the match covers the words of an argument, an option value
+  (`--env-file=.env`, `-d@.env`, `file=@.env`), and, for shells,
+  interpreters and wrappers such as `sh -c`, `python3 -c`, `env`, `xargs`,
+  `find`, `curl` and `sed`, the text of a script or command line
+  (`sh -c "cat .env"`);
+- a word that is a symbolic link to such a path inside the workspace counts,
+  and the card shows it as `notes.txt -> .env`. At most 64 path words are
+  followed: a command with more is treated the same way, and its card says it
+  has too many path words to check each;
+- no allow rule, session grant or sandbox spares the card. An allow rule
+  turns into an ask. With the sandbox on, the Tuimark client still asks, and
+  `y` runs that one command outside it;
+- the Tuimark client offers neither a session grant (`a`) nor an always rule
+  (`!`) for it;
+- headless, the command and the path are written to stderr. With
+  `--sandbox-commands` the command is refused, since nobody is there to
+  answer. With `--approve-commands` the flag still approves it, as it does any
+  command.
+
+The match is lexical, so it is a prompt to look closely, not a guarantee. It
+does not see a recursive read (`grep -r TOKEN .`, `find . -exec cat {} +`), a
+glob that expands to a secret, or a name built inside a script. A link is
+judged when the command is proposed; one changed afterwards is not seen.
+
 ## Sandboxed commands (macOS)
 
 On macOS, commands can run confined instead of asking. Turn it on with
@@ -273,14 +346,17 @@ unavailable and why.
 With the sandbox on, in build intent:
 
 - a deny rule still refuses the command;
-- every other command runs confined, without a card. An allow rule or a
-  session grant only spares the card: run outside, the command could run
-  what a sandboxed command wrote in the workspace;
+- every other command runs confined, without a card, except one that
+  [names a secret path](#commands-that-name-a-secret-path): its card is
+  always shown. An allow rule or a session grant only spares the card: run
+  outside, the command could run what a sandboxed command wrote in the
+  workspace;
 - an ask rule still shows its card in the Tuimark client. `y` runs that one
   command outside the sandbox, as you, and the card says so; `a` grants
   nothing for commands while the sandbox is on;
-- headless, an ask rule refuses the command, since nobody is there to
-  answer: with `--sandbox-commands`, no command runs outside the sandbox.
+- headless, an ask rule refuses the command, and so does a secret path,
+  since nobody is there to answer: with `--sandbox-commands`, no command runs
+  outside the sandbox.
   The flag replaces `--approve-commands`, and the two cannot be combined;
 - plan and chat still refuse every command, and edits, writes and MCP calls
   are gated as before.
