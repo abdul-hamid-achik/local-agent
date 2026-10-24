@@ -285,6 +285,52 @@ describe("openai_local provider configuration", () => {
     ).toBe("openai_local");
   });
 
+  test("refuses an api_key over cleartext http to a non-loopback host, in every spelling", () => {
+    const open = { LOCAL_AGENT_LOCAL_ONLY: "false" };
+    for (const url of [
+      "http://192.168.1.5:8080/v1",
+      "http://10.0.0.5:8080/v1",
+      "http://example.com/v1",
+      "http://[2001:db8::1]:8080/v1",
+      "http://128.0.0.1/v1",
+      "http://localhost.example.com/v1",
+    ])
+      expect(
+        () => resolveProvider({ ...local(url, { api_key: "k" }), ...open }),
+        url,
+      ).toThrow(/use an https base URL or drop the api_key/);
+    // The message says what to do, and the key never appears in it.
+    expect(() =>
+      resolveProvider({
+        ...local("http://10.0.0.5/v1", { api_key: "sk-secret-value" }),
+        ...open,
+      }),
+    ).toThrow(/^(?!.*sk-secret-value)/s);
+  });
+
+  test("keeps http to loopback and keyless http to a LAN host, and https with a key", () => {
+    const open = { LOCAL_AGENT_LOCAL_ONLY: "false" };
+    for (const url of [
+      "http://127.0.0.1:8080/v1",
+      "http://127.5.6.7:8080/v1",
+      "http://localhost:1234/v1",
+      "http://[::1]:1234/v1",
+    ])
+      expect(
+        resolveProvider({ ...local(url, { api_key: "k" }), ...open }).api_key,
+        url,
+      ).toBe("k");
+    expect(
+      resolveProvider({ ...local("http://192.168.1.5:8080/v1"), ...open }).type,
+    ).toBe("openai_local");
+    expect(
+      resolveProvider({
+        ...local("https://models.example.com/v1", { api_key: "k" }),
+        ...open,
+      }).api_key,
+    ).toBe("k");
+  });
+
   test("rejects malformed base URLs and profile mixing", () => {
     for (const bad of [
       "http://127.0.0.1:8080/v1/",

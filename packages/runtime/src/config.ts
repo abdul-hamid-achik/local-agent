@@ -108,6 +108,37 @@ const checkOpenAIBaseURL = (value: string, ctx: z.RefinementCtx) => {
     });
 };
 
+/** 127.0.0.0/8, ::1 and localhost, as the URL parser spells them. */
+const isLoopbackHost = (hostname: string) =>
+  hostname === "localhost" ||
+  hostname === "[::1]" ||
+  (isIP(hostname) === 4 && hostname.startsWith("127."));
+
+/**
+ * An api_key travels as a Bearer header on every request: over plain http it
+ * is readable by anyone on the path, so off this machine it needs https.
+ * Plain http without a key (a LAN server) and http to loopback stay valid.
+ */
+const checkOpenAIKeyTransport = (
+  profile: { base_url: string; api_key?: string | undefined },
+  ctx: z.RefinementCtx,
+) => {
+  if (profile.api_key === undefined) return;
+  let url: URL;
+  try {
+    url = new URL(profile.base_url);
+  } catch {
+    return; // checkOpenAIBaseURL has reported it.
+  }
+  if (url.protocol === "http:" && !isLoopbackHost(url.hostname))
+    ctx.addIssue({
+      code: "custom",
+      path: ["base_url"],
+      message:
+        "api_key would be sent in cleartext over http to a non-loopback host; use an https base URL or drop the api_key",
+    });
+};
+
 /** Reused to normalize OLLAMA_HOST below. */
 const endpoint = z.string().superRefine(checkOllamaOrigin);
 
@@ -138,9 +169,10 @@ export const ProviderSchema = z
     api_key: z.string().trim().min(1).max(4096).optional(),
   })
   .superRefine((profile, ctx) => {
-    if (profile.type === "openai_local")
+    if (profile.type === "openai_local") {
       checkOpenAIBaseURL(profile.base_url, ctx);
-    else checkOllamaOrigin(profile.base_url, ctx);
+      checkOpenAIKeyTransport(profile, ctx);
+    } else checkOllamaOrigin(profile.base_url, ctx);
     const timeout = profile.stream_idle_timeout
       ? durationMilliseconds(profile.stream_idle_timeout)
       : undefined;
