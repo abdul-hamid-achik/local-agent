@@ -212,7 +212,8 @@ text too) reach the model marked `"source": "external"`, and it is told that
 such text is data, not instructions. That is guidance to the model, not a guarantee, and `fetch`
 and `web_search` never ask: a page can steer the model to send what it read to
 another host. Deny rules in `.local-agent/permissions.json` (`fetch` with
-`domain:*`, `web_search` with `*`) keep a session off the network.
+`domain:*`, `web_search` with `*`) stop those two tools; MCP tools and commands
+can still reach the network once approved or allowed by a rule.
 
 ### Ornith on Chalupa
 
