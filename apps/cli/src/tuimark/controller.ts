@@ -420,6 +420,8 @@ export class TuimarkClient {
   private pieces = 0;
   /** The turn's pace samples, one per elapsed second (the store's `rate`). */
   private rate: number[] = [];
+  /** The elapsed second the last pace sample closed. */
+  private rateAt = 0;
   /** Ollama's generation counters, summed over the steps of a turn (nanoseconds). */
   private evalCount = 0;
   private evalDuration = 0;
@@ -1618,20 +1620,31 @@ export class TuimarkClient {
 
   /**
    * Rewrites the busy status when its elapsed second changes (about once a
-   * second, from the flush timer). Idle and approval-pending write nothing.
+   * second, from the flush timer), and samples the stream's pace in the
+   * same write. Idle writes nothing; an open approval keeps its status line
+   * but still samples, so the pace reads flat while the turn waits.
    */
   private async maybeElapsed(): Promise<void> {
-    if (!this.busy || this.decide) return;
+    if (!this.busy) return;
     const seconds = Math.floor((this.now() - this.turnStartedAt) / 1000);
-    if (seconds === this.elapsedShown) return;
-    // The pace rides the same write: one sample per second, never a batch
-    // of its own.
-    this.rate = [...this.rate, this.pieces].slice(-RATE_POINTS);
-    this.pieces = 0;
-    await this.write([
-      { path: "status", value: this.busyStatus() },
-      { path: "rate", value: this.rate },
-    ]);
+    const writes: Write[] = [];
+    if (!this.decide && seconds !== this.elapsedShown)
+      writes.push({ path: "status", value: this.busyStatus() });
+    // Its own second, not elapsedShown: an activity change repaints the
+    // status mid-second and must not swallow that second's sample. Seconds
+    // the timer missed count as zeros after the pieces they held.
+    if (seconds > this.rateAt) {
+      const missed = Math.min(seconds - this.rateAt - 1, RATE_POINTS);
+      this.rate = [
+        ...this.rate,
+        this.pieces,
+        ...new Array<number>(missed).fill(0),
+      ].slice(-RATE_POINTS);
+      this.pieces = 0;
+      this.rateAt = seconds;
+      writes.push({ path: "rate", value: this.rate });
+    }
+    if (writes.length > 0) await this.write(writes);
   }
 
   /** Flushes the live message if it changed and no flush is in flight. */
@@ -2424,6 +2437,7 @@ export class TuimarkClient {
     this.elapsedShown = -1;
     this.pieces = 0;
     this.rate = [];
+    this.rateAt = 0;
     this.cancelDroppedQueue = false;
     const message: Message = { role: "user", content: prompt };
     this.history.push(message);
@@ -2493,8 +2507,13 @@ export class TuimarkClient {
     let receivedMessage = false;
     let status = "";
     let toolName = "";
-    /** When the running tool call started (the `now` clock): its card's duration. */
-    let toolStartedAt: number | undefined;
+    // A card's duration, per call (the `now` clock). The runtime starts a
+    // parallel batch's calls together and sends their messages afterwards,
+    // in call order, so a call is matched to its message by that order,
+    // and its end is its tool_result when that comes first.
+    const callOrder: string[] = [];
+    const startedAt = new Map<string, number>();
+    const tookMs = new Map<string, number>();
     /** A failed turn's notice view, committed (inline) in the finally below. */
     let notice: MessageView | undefined;
     try {
@@ -2547,15 +2566,21 @@ export class TuimarkClient {
             let view = this.builder.fromMessage(event.message);
             // A tool that ran this turn says how long it took (a resumed
             // receipt cannot: the history keeps no timing).
-            if (view?.is_tool && toolStartedAt !== undefined) {
-              view = {
-                ...view,
-                card: {
-                  ...view.card,
-                  took: formatTook(this.now() - toolStartedAt),
-                },
-              };
-              toolStartedAt = undefined;
+            const callId =
+              event.message.role === "tool" ? callOrder.shift() : undefined;
+            const started =
+              callId === undefined ? undefined : startedAt.get(callId);
+            if (
+              view?.is_tool &&
+              callId !== undefined &&
+              started !== undefined
+            ) {
+              const ms = tookMs.get(callId) ?? this.now() - started;
+              view = { ...view, card: { ...view.card, took: formatTook(ms) } };
+            }
+            if (callId !== undefined) {
+              startedAt.delete(callId);
+              tookMs.delete(callId);
             }
             if (view) this.transcript.push(view);
             // The fullest output the client receives is this message's
@@ -2592,7 +2617,7 @@ export class TuimarkClient {
           case "tool_requested":
             this.noteActivity();
             toolName = event.name;
-            toolStartedAt = undefined;
+            callOrder.push(event.id);
             // Inline, the text before the tool call is printed before the
             // stream is dropped for the tool card (and kept if refused).
             if (this.inline) await this.commitStreamTail();
@@ -2609,7 +2634,7 @@ export class TuimarkClient {
             break;
           case "tool_start":
             this.noteActivity();
-            toolStartedAt = this.now();
+            startedAt.set(event.id, this.now());
             if (this.liveTool) {
               this.liveTool = {
                 ...this.liveTool,
@@ -2622,13 +2647,18 @@ export class TuimarkClient {
               this.dirty = true;
             }
             break;
-          case "tool_result":
+          case "tool_result": {
+            // A parallel call ends here, before its message is sent.
+            const started = startedAt.get(event.id);
+            if (started !== undefined && !tookMs.has(event.id))
+              tookMs.set(event.id, this.now() - started);
             // The result names the busy status (with its elapsed suffix)
             // until the next event, as it did before the ticker existed.
             this.noteActivity(
               terminalText(`${event.name || toolName}: ${event.status}`),
             );
             break;
+          }
           case "done": {
             // The header ctx moves during the turn, on every usage-bearing
             // event (see CtxMeter for the max-within-the-turn rule).

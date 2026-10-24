@@ -516,6 +516,63 @@ test("a tool that ran this turn says how long it took; a refused one does not", 
   ]);
 });
 
+test("a parallel batch times each call from its start to its own result", async () => {
+  let nowMs = 5_000;
+  const ids = ["p1", "p2", "p3"];
+  const call = (id: string) => ({
+    id,
+    function: { name: "read", arguments: { path: `${id}.txt` } },
+  });
+  const tool = (id: string) =>
+    ({
+      type: "message",
+      message: {
+        role: "tool",
+        tool_name: "read",
+        tool_call_id: id,
+        content: JSON.stringify({ status: "succeeded", output: "o" }),
+      },
+    }) as const;
+  const result = (id: string) =>
+    ({
+      type: "tool_result",
+      id,
+      name: "read",
+      status: "succeeded",
+      output: "o",
+    }) as const;
+  // The runtime's parallel shape: every request and start first, results
+  // as calls finish (p3, then p1, then p2), messages in call order after.
+  const batch: Script = async function* () {
+    yield {
+      type: "message",
+      message: { role: "assistant", content: "", tool_calls: ids.map(call) },
+    };
+    for (const id of ids) {
+      yield { type: "tool_requested", id, name: "read" };
+      yield { type: "tool_start", id, name: "read" };
+    }
+    nowMs += 300;
+    yield result("p3");
+    nowMs += 900;
+    yield result("p1");
+    nowMs += 1_800;
+    yield result("p2");
+    for (const id of ids) yield tool(id);
+  };
+  const { ui, client } = setup(batch, { now: () => nowMs });
+  await ui.fire("send", "read three");
+  await client.idle();
+  const cards = store(ui)
+    .messages.filter((m: MessageView) => m.is_tool)
+    .map((m: MessageView) => [m.card.args, m.card.took]);
+  expect(cards).toEqual([
+    ["p1.txt", "1.2s"],
+    ["p2.txt", "3.0s"],
+    ["p3.txt", "0.3s"],
+  ]);
+});
+
 test("approval: deny, and esc (also dialog_cancel), keep the edit out", async () => {
   const { ui, client } = setup(withApproval);
   await ui.fire("send", "edit");
@@ -1038,6 +1095,66 @@ test("the stream's pace is sampled once a second, with the elapsed status", asyn
     "status",
   ]);
   toEnd();
+  await client.idle();
+});
+
+test("the pace keeps one sample per second: missed seconds read zero, an activity change swallows none", async () => {
+  let nowMs = 1_000_000;
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  let toEnd: () => void = () => {};
+  const end = new Promise<void>((r) => {
+    toEnd = r;
+  });
+  const { ui, client } = setup(
+    async function* () {
+      yield { type: "text", text: "a" };
+      await gate;
+      yield {
+        type: "tool_result",
+        id: "t1",
+        name: "read",
+        status: "succeeded",
+        output: "o",
+      };
+      await end;
+      yield {
+        type: "message",
+        message: { role: "assistant", content: "a" },
+      };
+    },
+    { now: () => nowMs },
+  );
+  await ui.fire("send", "go");
+  await until(() => store(ui).status.startsWith("Generating…"));
+  // The timer missed two seconds: the piece closes the first, zeros the rest.
+  nowMs += 3_000;
+  await client.flush();
+  expect(store(ui).rate).toEqual([1, 0, 0]);
+  // A new activity mid-second repaints the status first; the tick that
+  // follows still takes that second's sample.
+  nowMs += 1_000;
+  release();
+  await until(() => store(ui).status === "read: succeeded · 4s");
+  await client.flush();
+  expect(store(ui).rate).toEqual([1, 0, 0, 0]);
+  toEnd();
+  await client.idle();
+});
+
+test("an open approval keeps its status line while the pace still samples", async () => {
+  let nowMs = 1_000_000;
+  const { ui, client } = setup(withApproval, { now: () => nowMs });
+  await ui.fire("send", "edit");
+  await untilApproval(ui);
+  const before = store(ui).rate.length;
+  nowMs += 2_000;
+  await client.flush();
+  expect(store(ui).status).toBe(APPROVAL_STATUS);
+  expect(store(ui).rate.slice(before)).toEqual([0, 0]);
+  await ui.fire("dialog_cancel");
   await client.idle();
 });
 

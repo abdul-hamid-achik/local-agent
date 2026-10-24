@@ -965,19 +965,20 @@ const TOOL_TITLES: Record<string, string> = {
 /** A card's title: the built-in tool's word, `MCP · server · tool`, or the name as it came. */
 export function toolTitle(name: string): string {
   const clean = clip(cleanText(name), 80);
-  const builtin = TOOL_TITLES[name];
-  if (builtin) return builtin;
+  // Own keys only: a model can name a tool `constructor` or `__proto__`.
+  if (Object.hasOwn(TOOL_TITLES, name)) return TOOL_TITLES[name] as string;
   const parts = mcpParts(clean);
   return parts ? `MCP · ${parts.server} · ${parts.tool}` : clean;
 }
 
 /** A call's duration as a card shows it: <0.1s, 0.4s, 12s, 2m 05s. */
 export function formatTook(ms: number): string {
-  const seconds = Math.max(0, ms) / 1000;
-  if (seconds < 0.1) return "<0.1s";
-  if (seconds < 10) return `${seconds.toFixed(1)}s`;
-  if (seconds < 60) return `${Math.round(seconds)}s`;
-  const whole = Math.round(seconds);
+  if (ms < 100) return "<0.1s";
+  // Each branch rounds first, so 9.96 s reads 10s and 59.6 s reads 1m 00s.
+  const tenths = Math.round(ms / 100);
+  if (tenths < 100) return `${(tenths / 10).toFixed(1)}s`;
+  const whole = Math.round(ms / 1000);
+  if (whole < 60) return `${whole}s`;
   return `${Math.floor(whole / 60)}m ${String(whole % 60).padStart(2, "0")}s`;
 }
 
@@ -1040,7 +1041,7 @@ function callLine(call: ToolCall | undefined): { text: string; path: boolean } {
     }
     case "task": {
       const prompt = str(args.prompt);
-      if (prompt !== undefined) return line(prompt.split("\n")[0] ?? "");
+      if (prompt !== undefined) return line(prompt.trim().split("\n")[0] ?? "");
       break;
     }
     case "todo_write":
@@ -1061,7 +1062,9 @@ type OutRow = { text: string; cls: string };
 /**
  * What a finished edit or a created file changed, as rows after the receipt:
  * the edit's own old and new strings, or the new file's lines. Only for a
- * call that landed (a replaced file's old text is not in the call: no rows).
+ * call that succeeded (the runtime's word for a change it applied; a
+ * receipt with no status reads as unverified and shows none), and never
+ * for a replaced file, whose old text is not in the call.
  */
 function changeRows(
   name: string,
@@ -1069,37 +1072,33 @@ function changeRows(
   state: ToolState,
   output: string,
 ): OutRow[] {
-  if (!call || (state !== "succeeded" && state !== "unverified")) return [];
+  if (!call || state !== "succeeded") return [];
   const args = call.function.arguments;
-  if (
-    name === "edit" &&
-    typeof args.old_string === "string" &&
-    typeof args.new_string === "string"
-  )
-    return changeLines(args.old_string, args.new_string).map((row) => {
-      const text = cleanText(row.text);
-      switch (row.kind) {
-        case "del":
-          return { text: `- ${text}`, cls: "del" };
-        case "add":
-          return { text: `+ ${text}`, cls: "add" };
-        case "gap":
-          return { text: "…", cls: "note" };
-        default:
-          return { text: `  ${text}`, cls: "" };
-      }
-    });
-  if (
+  const created =
     name === "write" &&
     typeof args.content === "string" &&
-    args.content !== "" &&
-    output.startsWith("Created ")
-  )
-    return args.content
-      .replace(/\n$/u, "")
-      .split("\n")
-      .map((text) => ({ text: `+ ${cleanText(text)}`, cls: "add" }));
-  return [];
+    output.startsWith("Created ");
+  const edited =
+    name === "edit" &&
+    typeof args.old_string === "string" &&
+    typeof args.new_string === "string";
+  if (!created && !edited) return [];
+  const [before, after] = edited
+    ? [String(args.old_string), String(args.new_string)]
+    : ["", String(args.content)];
+  return changeLines(before, after).map((row) => {
+    const text = cleanText(row.text);
+    switch (row.kind) {
+      case "del":
+        return { text: `- ${text}`, cls: "del" };
+      case "add":
+        return { text: `+ ${text}`, cls: "add" };
+      case "gap":
+        return { text: "…", cls: "note" };
+      default:
+        return { text: `  ${text}`, cls: "" };
+    }
+  });
 }
 
 /**

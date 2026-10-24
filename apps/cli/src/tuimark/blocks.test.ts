@@ -322,6 +322,9 @@ test("a call summary names the path, the command or the arguments", () => {
   expect(named("task", { prompt: "find the leak\nthen report" })).toBe(
     "find the leak",
   );
+  expect(named("task", { prompt: "\n\n  find the leak\nthen" })).toBe(
+    "find the leak",
+  );
   expect(named("todo_write", { todos: [{}, {}] })).toBe("2 items");
   expect(named("todo_write", { todos: [{}] })).toBe("1 item");
   // A wrong-typed argument falls back to the generic line.
@@ -334,6 +337,9 @@ test("a card names its tool as a reader says it", () => {
   expect(toolTitle("cortex__status")).toBe("MCP · cortex · status");
   expect(toolTitle("custom")).toBe("custom");
   expect(toolTitle("bad\u001b[31mname")).toBe("badname");
+  // Only the table's own keys are titles, never what objects inherit.
+  for (const name of ["constructor", "toString", "__proto__", "valueOf"])
+    expect(toolTitle(name)).toBe(name);
 });
 
 test("a call's duration reads as seconds, then minutes", () => {
@@ -345,6 +351,10 @@ test("a call's duration reads as seconds, then minutes", () => {
   expect(formatTook(12_400)).toBe("12s");
   expect(formatTook(125_000)).toBe("2m 05s");
   expect(formatTook(-5)).toBe("<0.1s");
+  // Rounding happens before the unit is chosen.
+  expect(formatTook(9_960)).toBe("10s");
+  expect(formatTook(59_600)).toBe("1m 00s");
+  expect(formatTook(59_400)).toBe("59s");
 });
 
 /** The card and the /details receipt of one call and its result. */
@@ -405,7 +415,9 @@ test("a finished edit's card shows the change its own strings made", () => {
 });
 
 test("an edit that did not land shows no change", () => {
-  for (const status of ["denied", "failed", "outcome_unknown"]) {
+  // unverified is MCP's word (a server's result) and a status-less
+  // receipt's: neither says an edit was applied.
+  for (const status of ["denied", "failed", "outcome_unknown", "unverified"]) {
     const { card, receipt } = cardOf(
       "edit",
       { path: "a", old_string: "x", new_string: "y" },
@@ -431,6 +443,17 @@ test("a created file shows its lines; a replaced one shows none", () => {
   expect(created.card?.out).toEqual([
     "Created new.txt. Verification has not been run.\n",
     { text: "+ one\n+ two", class: "add" },
+  ]);
+  // Like an edit's rows: a carriage return is shown, not obeyed.
+  const crlf = cardOf(
+    "write",
+    { path: "dos.txt", content: "one\r\ntwo" },
+    "succeeded",
+    "Created dos.txt. Verification has not been run.",
+  );
+  expect(crlf.card?.out).toEqual([
+    "Created dos.txt. Verification has not been run.\n",
+    { text: "+ one␍\n+ two", class: "add" },
   ]);
   const empty = cardOf(
     "write",
