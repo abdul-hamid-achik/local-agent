@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
-import { type AgentEvent, runAgent } from "#runtime/agent";
+import { type AgentEvent, runAgent, textToolCall } from "#runtime/agent";
 import { resolveProvider } from "#runtime/config";
 import { SessionStore } from "#runtime/session";
 import { Workspace } from "#runtime/workspace";
@@ -757,5 +757,154 @@ test("more than four parallel read-only calls are bounded at four in flight", as
     expect(maxInFlight).toBe(4);
   } finally {
     await run.cleanup();
+  }
+});
+
+test("a text-only tool call is recognized only when the reply is the call", () => {
+  const offered = new Set(["read", "search"]);
+  for (const content of [
+    '{"name": "read", "arguments": {"path": "a.txt"}}',
+    '<tool_call>\n{"name": "read", "arguments": {"path": "a.txt"}}\n</tool_call>\n<tool_call>{"name": "search", "arguments": {}}</tool_call>',
+    '```json\n{"name": "search", "parameters": {"pattern": "x"}}\n```',
+    '[{"function": {"name": "read", "arguments": {"path": "a"}}}]',
+  ])
+    expect(textToolCall(content, offered), content).toMatch(/^(read|search)$/);
+  for (const content of [
+    'To read it, call {"name": "read", "arguments": {"path": "a"}}.',
+    '{"name": "write", "arguments": {"path": "a"}}',
+    '{"name": "read"}',
+    "{not json",
+    "Done.",
+  ])
+    expect(textToolCall(content, offered), content).toBeUndefined();
+});
+
+/** A loopback Ollama that answers each chat request with the next reply. */
+function scripted(
+  replies: { content: string; thinking?: string; tool?: string }[],
+) {
+  const bodies: { messages: { role: string; content: string }[] }[] = [];
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/tags")
+        return Response.json({ models: [{ name: "fixture", size: 1000 }] });
+      if (path === "/api/show")
+        return Response.json({
+          capabilities: ["completion", "tools"],
+          model_info: { "fixture.context_length": 16384 },
+        });
+      bodies.push((await request.json()) as (typeof bodies)[number]);
+      const reply = replies.shift() ?? { content: "Done" };
+      return new Response(
+        `${JSON.stringify({
+          message: {
+            role: "assistant",
+            content: reply.content,
+            ...(reply.thinking ? { thinking: reply.thinking } : {}),
+            ...(reply.tool
+              ? {
+                  tool_calls: [
+                    { function: { name: reply.tool, arguments: {} } },
+                  ],
+                }
+              : {}),
+          },
+          done: true,
+        })}\n`,
+      );
+    },
+  });
+  return { server, bodies };
+}
+
+test("a reply that ends the turn by mistake is answered once, outside the history", async () => {
+  const root = await mkdtemp(join(tmpdir(), "local-agent-nudge-"));
+  await writeFile(join(root, "a.txt"), "alpha\n");
+  using workspace = await Workspace.create(root);
+  const store = await SessionStore.open(join(root, "session.sqlite"));
+  const call =
+    '<tool_call>{"name": "read", "arguments": {"path": "a.txt"}}</tool_call>';
+  const { server, bodies } = scripted([
+    { content: call },
+    { content: "", tool: "list" },
+    { content: "", thinking: "The answer is alpha." },
+  ]);
+  try {
+    const session = { store, state: await store.createSession(root) };
+    const events: AgentEvent[] = [];
+    for await (const event of runAgent(
+      resolveProvider({ OLLAMA_HOST: server.url.origin }, "fixture"),
+      [{ role: "user", content: "what is in a.txt?" }],
+      {
+        workspace,
+        session,
+        intent: "plan",
+        signal: AbortSignal.timeout(10_000),
+        approve: async () => true,
+      },
+    ))
+      events.push(event);
+    // The text call got a note; the empty reply after the tool did not
+    // (one note a turn), so the turn ended there.
+    expect(bodies).toHaveLength(3);
+    expect(bodies[1]?.messages.at(-1)).toEqual({
+      role: "user",
+      content:
+        "Your last reply wrote a read call as text, so nothing ran. Call read through the tool interface instead of writing it out.",
+    });
+    expect(bodies[2]?.messages.at(-1)?.role).toBe("tool");
+    expect(events.at(-1)?.type).toBe("turn_complete");
+    // The note is never part of the conversation, stored or sent later.
+    const stored = await store.loadSession(session.state.publicId, root);
+    const users = stored.messages.filter((message) => message.role === "user");
+    expect(users.map((message) => message.content)).toEqual([
+      "what is in a.txt?",
+    ]);
+    expect(
+      bodies[2]?.messages.some((message) =>
+        message.content.includes("as text"),
+      ),
+    ).toBe(false);
+  } finally {
+    await server.stop(true);
+    store.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an answer left only in the reasoning is asked for once", async () => {
+  const root = await mkdtemp(join(tmpdir(), "local-agent-nudge-think-"));
+  using workspace = await Workspace.create(root);
+  const { server, bodies } = scripted([
+    { content: "", thinking: "It is 4." },
+    { content: "2 + 2 is 4." },
+  ]);
+  try {
+    const events: AgentEvent[] = [];
+    for await (const event of runAgent(
+      resolveProvider({ OLLAMA_HOST: server.url.origin }, "fixture"),
+      [{ role: "user", content: "2 + 2?" }],
+      {
+        workspace,
+        intent: "chat",
+        signal: AbortSignal.timeout(10_000),
+        approve: async () => true,
+      },
+    ))
+      events.push(event);
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]?.messages.at(-1)?.content).toBe(
+      "Your last reply had reasoning but no text for the user. Write your answer as the reply.",
+    );
+    const last = events.at(-1);
+    expect(
+      last?.type === "turn_complete" && last.messages.at(-1)?.content,
+    ).toBe("2 + 2 is 4.");
+  } finally {
+    await server.stop(true);
+    await rm(root, { recursive: true, force: true });
   }
 });

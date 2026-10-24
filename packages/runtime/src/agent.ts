@@ -1097,6 +1097,62 @@ const MAX_PARALLEL_TOOLS = 4;
  * from 4,000 to 100,000. A result as big as the window would push the rest
  * of the conversation out of it.
  */
+/**
+ * The tool a reply calls in its text instead of through the tool interface:
+ * the reply is only the call (bare JSON, a ```json fence or a `<tool_call>`
+ * tag) and names a tool the turn offers. Prose that mentions a call is not.
+ */
+export function textToolCall(
+  content: string,
+  offered: ReadonlySet<string>,
+): string | undefined {
+  const body = content
+    .trim()
+    .replace(/^<tool_call>\s*/i, "")
+    .replace(/\s*<\/tool_call>[\s\S]*$/i, "")
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/, "");
+  if (!body.startsWith("{") && !body.startsWith("[")) return;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return;
+  }
+  const first = (Array.isArray(parsed) ? parsed[0] : parsed) as
+    | {
+        name?: unknown;
+        arguments?: unknown;
+        parameters?: unknown;
+        function?: { name?: unknown; arguments?: unknown };
+      }
+    | undefined;
+  const name = first?.name ?? first?.function?.name;
+  const args =
+    first?.arguments ?? first?.parameters ?? first?.function?.arguments;
+  if (typeof name !== "string" || !offered.has(name)) return;
+  if (args === undefined || args === null || typeof args !== "object") return;
+  return name;
+}
+
+/**
+ * What to tell the model when its reply would end the turn by mistake: a
+ * call written as text runs nothing, and a reply with no text (the answer
+ * left in its reasoning, which small models do) shows the user nothing.
+ */
+function endedByMistake(
+  reply: Message,
+  offered: ReadonlySet<string>,
+): string | undefined {
+  const called = textToolCall(reply.content, offered);
+  if (called)
+    return `Your last reply wrote a ${called} call as text, so nothing ran. Call ${called} through the tool interface instead of writing it out.`;
+  if (!reply.content.trim())
+    return reply.thinking?.trim()
+      ? "Your last reply had reasoning but no text for the user. Write your answer as the reply."
+      : "Your last reply was empty. Answer the user, or call a tool.";
+}
+
 /** The receipt `source` of a fetch, web_search or MCP result. */
 export const EXTERNAL_SOURCE = "external";
 
@@ -1448,6 +1504,11 @@ async function* agentTurn(
   // The last call's reported prompt size and the characters it was made
   // of: the next prompt is estimated from the characters added since.
   let anchor: { tokens: number; chars: number } | undefined;
+  // A reply that ends the turn by mistake (a call written as text, or no
+  // text at all) is answered once with a note, sent with the next request
+  // only: the history keeps what the model said, not the note.
+  let nudged = false;
+  let nudge: Message | undefined;
   const toolChars = JSON.stringify(offeredTools).length;
   for (let step = 0; step < stepLimit; step++) {
     signal.throwIfAborted();
@@ -1478,12 +1539,13 @@ async function* agentTurn(
     const callChars = promptChars(history) + instructions.length;
     const assistant: Message = { role: "assistant", content: "" };
     const calls: ToolCall[] = [];
-    for await (const event of chat(
-      provider,
-      [{ role: "system", content: instructions }, ...history],
-      signal,
-      offeredTools,
-    )) {
+    const request: Message[] = [
+      { role: "system", content: instructions },
+      ...history,
+      ...(nudge ? [nudge] : []),
+    ];
+    nudge = undefined;
+    for await (const event of chat(provider, request, signal, offeredTools)) {
       if (event.type === "text") assistant.content += event.text;
       if (event.type === "thinking")
         assistant.thinking = (assistant.thinking ?? "") + event.text;
@@ -1505,6 +1567,12 @@ async function* agentTurn(
     checkpoint();
     yield { type: "message", message: assistant };
     if (!calls.length) {
+      const note = nudged ? undefined : endedByMistake(assistant, offeredNames);
+      if (note) {
+        nudged = true;
+        nudge = { role: "user", content: note };
+        continue;
+      }
       yield { type: "turn_complete", messages: history };
       return;
     }
