@@ -117,7 +117,7 @@ busy, commands report a busy status instead of running.
 | `ctrl+o` | Load earlier messages |
 | `pgup`, `pgdn` | Scroll the log |
 | `ctrl+l` | Jump to the latest output |
-| `shift+tab` | Toggle between `plan` and `build` |
+| `shift+tab` | Next intent: `build` → `plan` → `chat` → `build` |
 | `enter` | Send the draft |
 | `shift+enter`, `alt+enter` | Insert a newline without sending |
 

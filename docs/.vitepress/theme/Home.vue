@@ -19,8 +19,17 @@ const modes = [
     name: 'plan',
     title: 'Read-only analysis',
     description:
-      'The host offers only read, list, and search, and rejects write, edit, command, and MCP attempts regardless of approval. The policy is enforced by the host, not by the prompt.',
-    scope: 'read · list · search',
+      'The host offers only read-only tools and rejects write, edit, command, and MCP attempts regardless of approval. The policy is enforced by the host, not by the prompt.',
+    scope: 'read · list · search · fetch · web search',
+  },
+  {
+    id: 'chat',
+    index: '03',
+    name: 'chat',
+    title: 'Questions and research',
+    description:
+      'The read-only research tools without the coding preamble, the todo list, or subagents: for questions, documentation lookups, and guides.',
+    scope: 'read · search · fetch · web search',
   },
 ]
 
@@ -111,7 +120,7 @@ const ecosystemGroups = [
         <div
           class="la-terminal"
           role="img"
-          aria-label="Illustrative local-agent terminal session showing a local Ollama model, completed tool cards, and a command waiting for approval"
+          aria-label="Illustrative local-agent terminal session showing a local Ollama model, finished tool cards with an edit's diff, and a command waiting for approval"
           aria-describedby="terminal-caption"
         >
           <div aria-hidden="true">
@@ -124,33 +133,35 @@ const ecosystemGroups = [
               <div>
                 <span>model</span>
                 <strong>qwen3.5:4b</strong>
-                <small>local</small>
+                <small>local · Ollama</small>
               </div>
               <div>
                 <span>context</span>
-                <strong>2.1k/16k</strong>
-                <small>████░░░░░░</small>
+                <strong>2.1k/32k</strong>
+                <small class="la-ctx-meter"><i></i></small>
               </div>
             </div>
 
             <div class="la-terminal-body">
-              <div class="la-terminal-message">
+              <div class="la-terminal-message la-play" style="--step: 0">
                 <span class="la-terminal-speaker">assistant</span>
                 <p>I’ll inspect the provider boundary, then run the focused checks.</p>
               </div>
 
-              <div class="la-tool-line">
-                <span class="la-tool-index">01</span>
-                <span><strong>Tool · read</strong> packages/runtime/src/provider.ts</span>
-                <small>[done]</small>
+              <div class="la-tool-line la-play" style="--step: 1">
+                <span class="la-tool-mark">✓</span>
+                <span><strong>Read</strong> packages/runtime/src/provider.ts</span>
+                <small>0.2s</small>
               </div>
-              <div class="la-tool-line">
-                <span class="la-tool-index">02</span>
-                <span><strong>Tool · edit</strong> packages/runtime/src/provider.ts</span>
-                <small>[done]</small>
+              <div class="la-tool-line la-tool-line-diff la-play" style="--step: 2">
+                <span class="la-tool-mark">✓</span>
+                <span><strong>Edit</strong> packages/runtime/src/provider.ts</span>
+                <small>0.4s</small>
+                <code class="la-diff-line la-diff-del">- const timeoutMs = 5_000;</code>
+                <code class="la-diff-line la-diff-add">+ const timeoutMs = 15_000;</code>
               </div>
 
-              <div class="la-approval-card">
+              <div class="la-approval-card la-play" style="--step: 3">
                 <div class="la-approval-head">
                   <span>Run command?</span>
                   <strong>Runs exactly as written: there is no shell.</strong>
@@ -172,13 +183,24 @@ const ecosystemGroups = [
             </div>
 
             <div class="la-terminal-footer">
-              <span>Ready · /help lists keys</span>
-              <span>ctrl+p commands · esc cancel</span>
+              <span>Waiting for approval</span>
+              <span class="la-pace">
+                <i style="--h: 0.35; --i: 0"></i>
+                <i style="--h: 0.8; --i: 1"></i>
+                <i style="--h: 1; --i: 2"></i>
+                <i style="--h: 0.85; --i: 3"></i>
+                <i style="--h: 0.6; --i: 4"></i>
+                <i style="--h: 0.08; --i: 5"></i>
+                <i style="--h: 0.08; --i: 6"></i>
+                <i style="--h: 0.08; --i: 7"></i>
+              </span>
+              <span>y allow · a session · n deny</span>
             </div>
           </div>
         </div>
         <figcaption id="terminal-caption">
-          An illustrative build session in the Tuimark client. Tool effects stay visible before they run.
+          An illustrative build session in the Tuimark client. Each tool card says how it ended and what
+          an edit changed; a command waits for your decision before it runs.
         </figcaption>
       </figure>
     </section>
@@ -190,7 +212,7 @@ const ecosystemGroups = [
       </div>
       <div>
         <dt>Authority</dt>
-        <dd>plan · build</dd>
+        <dd>build · plan · chat</dd>
       </div>
       <div>
         <dt>Extensions</dt>
@@ -245,7 +267,7 @@ const ecosystemGroups = [
         </p>
         <ul class="la-check-list">
           <li>Default model qwen3.5:4b-q4_K_M — the smallest that passed the agent battery.</li>
-          <li>Any installed model with --model; context capped at the model's native window.</li>
+          <li>Any installed model with --model; context planned for your memory and capped at the model's native window.</li>
           <li>A 15-second admission check before the screen opens.</li>
         </ul>
         <a class="la-text-link" :href="withBase('/ollama-models')">
@@ -281,11 +303,12 @@ const ecosystemGroups = [
             <strong>Never past the native window</strong>
           </div>
           <p>
-            --context defaults to 16384 tokens and cannot exceed the model's native context. A
+            Without --context, the window is planned from the model's cache cost and the
+            machine's memory, up to 32768 tokens, and never past the model's native context. A
             remote Chalupa profile negotiates its own context instead.
           </p>
           <div class="la-consent-actions" aria-hidden="true">
-            <span>16384 default</span>
+            <span>planned up to 32768</span>
             <strong>native context hard cap</strong>
           </div>
         </div>

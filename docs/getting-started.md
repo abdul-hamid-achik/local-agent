@@ -71,12 +71,23 @@ For `write`, `edit`, and `run_command` proposals the card shows a diff; the
 arrow keys scroll it. Commands run exactly as written with your permissions —
 there is no shell.
 
+Every tool call leaves a card in the transcript. The card names the tool
+(Read, Edit, Command, or `MCP · server · tool` for an MCP call), marks how
+it ended (`✓` succeeded, `✗` denied or failed, `!` when the outcome is
+unknown or unverified, as for an MCP call's result), and says how long it
+ran. A successful edit shows the lines it changed, a newly created file
+shows its lines, and `/details` opens the last tool output in full. While a
+turn runs, the status bar shows the elapsed time and a small chart of the
+stream's pace, one bar per second.
+
 ## Switch intent
 
-Press `shift+tab` to toggle between **plan** and **build**. Plan offers only
-read, list, and search tools; it hard-denies writes, edits, commands, and MCP
-calls. Build can propose changes, each gated by an approval. See
-[Modes](/modes).
+Press `shift+tab` to move through **build**, **plan**, and **chat**. Plan
+offers only read-only tools (read files and images, list, search, fetch, web
+search, read-only subagents, and the todo list); it hard-denies writes, edits,
+commands, and MCP calls. Chat keeps the research tools, without the todo list,
+subagents, or the coding preamble. Build can propose changes, each gated by an
+approval. See [Modes](/modes).
 
 ## Try other surfaces
 
