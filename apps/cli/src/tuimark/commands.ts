@@ -67,7 +67,7 @@ export interface CommandOutcome {
 }
 
 export const HELP_STATUS =
-  "/mode plan|build|chat · /model [NAME] · /theme dark|light|auto · /mouse on|off · /permissions [clear] · /details · /status · /sessions · /find TEXT · /export [json] · /mcp · /help · Esc cancel · Ctrl+C exit";
+  "/mode plan|build|chat · /model [NAME] · /theme dark|light|auto · /mouse on|off · /permissions [clear|trust] · /details · /status · /sessions · /find TEXT · /export [json] · /mcp · /help · Esc cancel · Ctrl+C exit";
 
 /** Inline has no mouse (the engine ignores it there): the controller refuses with this. */
 export const MOUSE_INLINE_STATUS = "Mouse is not available in inline mode";
@@ -251,8 +251,8 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
   },
   {
     name: "/permissions",
-    usage: "/permissions [clear]",
-    description: "show or clear session approval grants",
+    usage: "/permissions [clear|trust]",
+    description: "show, clear or trust grants and rules",
     insert: "/permissions ",
   },
   {
@@ -380,6 +380,11 @@ export const PALETTE: readonly PaletteItem[] = [
     id: "permissions-clear",
     label: "Permissions: clear all",
     hint: "/permissions clear",
+  },
+  {
+    id: "permissions-trust",
+    label: "Permissions: trust file rules",
+    hint: "/permissions trust",
   },
   { id: "details", label: "Details: last tool output", hint: "/details" },
   { id: "status", label: "Status: effective config", hint: "/status" },

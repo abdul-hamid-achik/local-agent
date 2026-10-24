@@ -8,7 +8,7 @@
                                 │  /model [NAME] show or switch the Ollama model       │                                
                                 │  /theme dark|light|auto set the session theme        │                                
                                 │  /mouse on|off toggle mouse reporting (fullscreen)   │                                
-                                │  /permissions [clear] show or clear session approv…  │                                
+                                │  /permissions [clear|trust] show, clear or trust g…  │                                
                                 │  /details show the last tool output in full          │                                
                                 │  /status show the effective config (model, workspa…  │                                
                                 │  /sessions switch to a saved session (needs --sess…  │                                

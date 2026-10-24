@@ -8,7 +8,7 @@
 │ Sure. I wi│  /model [NAME] show or switch the Ollama model       │           │
 │  ts       │  /theme dark|light|auto set the session theme        │           │
 │  export as│  /mouse on|off toggle mouse reporting (fullscreen)   │           │
-│    // expo│  /permissions [clear] show or clear session approv…  │           │
+│    // expo│  /permissions [clear|trust] show, clear or trust g…  │           │
 │    for (le│  /details show the last tool output in full          │           │
 │      try {│  /status show the effective config (model, workspa…  │           │
 │      catch│  /sessions switch to a saved session (needs --sess…  │           │

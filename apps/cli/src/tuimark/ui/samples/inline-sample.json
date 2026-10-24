@@ -129,6 +129,11 @@
         "hint": "/permissions clear"
       },
       {
+        "id": "permissions-trust",
+        "label": "Permissions: trust file rules",
+        "hint": "/permissions trust"
+      },
+      {
         "id": "details",
         "label": "Details: last tool output",
         "hint": "/details"
@@ -209,8 +214,8 @@
       },
       {
         "id": "/permissions",
-        "cmd": "/permissions [clear]",
-        "desc": "show or clear session approval grants"
+        "cmd": "/permissions [clear|trust]",
+        "desc": "show, clear or trust grants and rules"
       },
       {
         "id": "/details",

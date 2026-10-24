@@ -169,10 +169,12 @@ test("/permissions lists session grants and file rules, and clears them", () => 
   expect(filterPalette("permissions").map((r) => r.id)).toEqual([
     "permissions",
     "permissions-clear",
+    "permissions-trust",
   ]);
+  expect(paletteCommand("permissions-trust")).toBe("/permissions trust");
   expect(paletteCommand("permissions")).toBe("/permissions");
   expect(paletteCommand("permissions-clear")).toBe("/permissions clear");
-  expect(HELP_STATUS).toContain("/permissions [clear]");
+  expect(HELP_STATUS).toContain("/permissions [clear|trust]");
 });
 
 test("/details asks the controller for the viewer over the latest receipt", () => {
@@ -242,7 +244,7 @@ test("the slash catalog lists exactly the commands the parser knows", () => {
     "/model [NAME]",
     "/theme dark|light|auto",
     "/mouse on|off",
-    "/permissions [clear]",
+    "/permissions [clear|trust]",
     "/details",
     "/status",
     "/sessions",

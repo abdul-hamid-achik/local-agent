@@ -8,7 +8,7 @@
 │ Sure. I will wrap the call in │  /model [NAME] show or switch the Ollama model       │                               │
 │  ts                           │  /theme dark|light|auto set the session theme        │                               │
 │  export async function fetchRe│  /mouse on|off toggle mouse reporting (fullscreen)   │                               │
-│    // exponential backoff     │  /permissions [clear] show or clear session approv…  │                               │
+│    // exponential backoff     │  /permissions [clear|trust] show, clear or trust g…  │                               │
 │    for (let attempt = 1; ; att│  /details show the last tool output in full          │                               │
 │      try { return await fetch(│  /status show the effective config (model, workspa…  │                               │
 │      catch (e) { if (attempt =│  /sessions switch to a saved session (needs --sess…  │                               │

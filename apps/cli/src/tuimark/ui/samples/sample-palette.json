@@ -344,8 +344,8 @@
       },
       {
         "id": "/permissions",
-        "cmd": "/permissions [clear]",
-        "desc": "show or clear session approval grants"
+        "cmd": "/permissions [clear|trust]",
+        "desc": "show, clear or trust grants and rules"
       },
       {
         "id": "/details",

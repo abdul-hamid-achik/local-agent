@@ -1695,7 +1695,7 @@ test("the help overlay's store carries the slash commands", () => {
     "/model [NAME]",
     "/theme dark|light|auto",
     "/mouse on|off",
-    "/permissions [clear]",
+    "/permissions [clear|trust]",
     "/details",
     "/status",
     "/sessions",
