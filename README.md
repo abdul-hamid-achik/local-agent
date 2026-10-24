@@ -75,9 +75,10 @@ a child and draws the whole screen from `apps/cli/src/tuimark/ui/app.tui`.
 `--ui vue` keeps the Vue TermUI client, which is also the default on Windows.
 
 - The binary is `TUIMARK_BINARY` if set, else a cached copy, else the release
-  the vendored SDK is pinned to (downloaded once, checksum-verified, into the
-  user cache). Version 0.4.6 or newer is required: the composer is a
-  `<textarea>` and the reply streams with the append write. If no binary can be
+  the SDK is pinned to (downloaded once, checksum-verified, into the
+  user cache). Version 0.5.1 or newer is required: the composer is a
+  `<textarea>`, the reply streams with the append write, and links and
+  images bind `href`/`src` to data. If no binary can be
   found and `--ui` was not given, the Vue client starts with a line on stderr;
   an explicit `--ui tuimark` fails instead.
 - Tuimark inline is opt-in: `--ui tuimark --mode inline` runs
@@ -88,7 +89,7 @@ a child and draws the whole screen from `apps/cli/src/tuimark/ui/app.tui`.
   session, `n`/`esc` deny), the
   composer, and the status. A bare `--mode inline` still uses the Vue client,
   and the headless flags refuse `--ui tuimark`.
-- The SDK comes from npm (`@thelacanians/tuimark@0.4.6`); it downloads the
+- The SDK comes from npm (`@thelacanians/tuimark@0.5.1`); it downloads the
   pinned, checksum-verified `tuimark` binary itself.
 - Composer: `enter` sends, `shift+enter` or `alt+enter` start a new line, and a
   pasted block stays one message. The box grows to eight rows, then scrolls.

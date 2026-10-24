@@ -20,7 +20,8 @@
   region, so an empty spacer column grows it while either is open and the
   modal is laid out against the taller region.
 
-  Needs tuimark 0.4.6: inline mode, commit, <textarea>, the append write.
+  Needs tuimark 0.5.1: inline mode, commit, <textarea>, the append write,
+  data-bound href/src.
 -->
 <tui theme="auto">
   <include src="kit/kit.tui"/>

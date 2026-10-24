@@ -58,7 +58,7 @@ are no subcommands. Run `local-agent --help` for the authoritative short list.
 - **headless**: selected by `--mode headless`, `--prompt`, or `--json`.
 
 The tuimark binary is taken from `TUIMARK_BINARY` if set; otherwise a pinned
-release (0.4.6) is downloaded and checksum-verified. If the default-client
+release (0.5.1) is downloaded and checksum-verified. If the default-client
 binary is missing, the run falls back to vue with a note on stderr.
 
 ### Headless output

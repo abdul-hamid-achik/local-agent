@@ -4,7 +4,7 @@
   The store this document reads is built by ../store.ts; every flag is always
   present because the markup has no equality test. Actions are implemented by
   ../controller.ts. The kit (kit/) is vendored from Tuimark v0.4.5, unmodified.
-  Needs tuimark 0.4.6: <textarea> and the append write.
+  Needs tuimark 0.5.1: <textarea>, the append write, data-bound href/src.
 
   Cards are templates:
     la-message  props label; slot: the body            (user and assistant)

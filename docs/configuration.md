@@ -20,7 +20,7 @@ in the [Command reference](/reference) or a variable in the table below.
 | `LOCAL_AGENT_PROVIDER` | Provider selection: `ollama` or `chalupa` only |
 | `LOCAL_AGENT_LOCAL_ONLY` | Local-endpoint enforcement; must be `false` for `chalupa` |
 | `LOCAL_AGENT_PROVIDER_CONFIG` | Chalupa profile JSON |
-| `TUIMARK_BINARY` | Path to the tuimark binary; otherwise a pinned release (0.4.6) is downloaded checksum-verified |
+| `TUIMARK_BINARY` | Path to the tuimark binary; otherwise a pinned release (0.5.1) is downloaded checksum-verified |
 | `LOCAL_AGENT_DIAGNOSTICS` | `0` disables the post-edit diagnostics block (default on) |
 | `LOCAL_AGENT_DIAGNOSTICS_TSC` | `1` also appends a `tsc --noEmit` section after `.ts` edits (slow: full project) |
 | `LOCAL_AGENT_SEARXNG_URL` | Optional SearXNG instance for the `web_search` tool; overrides the default DuckDuckGo Lite backend |
