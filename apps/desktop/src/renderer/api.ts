@@ -20,8 +20,15 @@ function bridge(): DesktopBridge {
   return exposed;
 }
 
+/**
+ * Calls the sidecar. The params reach it as one JSON line, so they are sent
+ * as that JSON data: Electron's IPC cannot clone a Proxy, and Vue state
+ * (the chat transcript) is one.
+ */
 export async function rpc<T>(method: string, params?: unknown): Promise<T> {
-  return (await bridge().invoke(method, params)) as T;
+  const data =
+    params === undefined ? undefined : JSON.parse(JSON.stringify(params));
+  return (await bridge().invoke(method, data)) as T;
 }
 
 export type StreamCallback = (
