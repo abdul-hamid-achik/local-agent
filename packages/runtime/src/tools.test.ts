@@ -764,13 +764,30 @@ test("a command stopped by its timeout reports partial changes, and the turn goe
   }
 });
 
+/** Waits, 10 s at most, for the process whose pid the file names to exit. */
+async function childGone(file: string): Promise<void> {
+  for (let tries = 0; tries < 200; tries++) {
+    const pid = Number(await readFile(file, "utf8").catch(() => ""));
+    if (pid > 0) {
+      try {
+        process.kill(pid, 0);
+      } catch {
+        return;
+      }
+    }
+    await Bun.sleep(50);
+  }
+  throw new Error(`the child that wrote ${file} is still running`);
+}
+
 test("a command that leaves a process holding its output has an unknown outcome", async () => {
   // The child leaves the process group (setsid) and keeps stdout open, so
   // the runner cannot see the command end: the turn stops there. It holds
   // on until the test is done (a stop file, 30 s at most), not for a fixed
   // time a loaded machine may outlast before the runner sees the leader go.
+  // It writes its pid, so the test can wait for it to be gone.
   const script =
-    'use POSIX; if (fork) { exit 0 } POSIX::setsid(); for (1..300) { last if -e "stop"; select(undef, undef, undef, 0.1) } exit 0';
+    'use POSIX; if (fork) { exit 0 } POSIX::setsid(); open(my $f, ">", "pid.tmp"); print $f $$; close $f; rename "pid.tmp", "pid"; for (1..300) { last if -e "stop"; select(undef, undef, undef, 0.1) } exit 0';
   let root = "";
   try {
     await expect(
@@ -788,8 +805,7 @@ test("a command that leaves a process holding its output has an unknown outcome"
   } finally {
     if (root) {
       await writeFile(join(root, "stop"), "");
-      // The child sees it within a tenth of a second.
-      await Bun.sleep(300);
+      await childGone(join(root, "pid"));
       await rm(root, { recursive: true, force: true });
     }
   }
