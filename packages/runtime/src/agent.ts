@@ -330,6 +330,7 @@ async function htmlToText(html: string): Promise<string> {
   const runs: { text: string; pre: boolean }[] = [];
   let preDepth = 0;
   let skipNewline = false;
+  let textNode = "";
   const push = (text: string) => {
     const pre = preDepth > 0;
     const last = runs[runs.length - 1];
@@ -356,9 +357,14 @@ async function htmlToText(html: string): Promise<string> {
     })
     .onDocument({
       text: (t) => {
-        const text = skipNewline ? t.text.replace(/^\r?\n/, "") : t.text;
-        if (t.text) skipNewline = false;
-        push(text);
+        // A text node can arrive in pieces, an entity split between two: it
+        // is decoded whole.
+        textNode += t.text;
+        if (!t.lastInTextNode) return;
+        const text = skipNewline ? textNode.replace(/^\r?\n/, "") : textNode;
+        if (textNode) skipNewline = false;
+        textNode = "";
+        push(decodeEntities(text));
       },
     })
     .transform(new Response(stripped))
@@ -835,25 +841,45 @@ function codePointText(code: number): string {
     : String.fromCodePoint(code);
 }
 
-/** Decode the handful of HTML entities DuckDuckGo titles/snippets contain. */
+/** The named entities that turn up in page text and search results; any
+ * other name is left as written. */
+const NAMED_ENTITIES: Record<string, string> = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  nbsp: " ",
+  copy: "\u00a9",
+  reg: "\u00ae",
+  trade: "\u2122",
+  hellip: "\u2026",
+  mdash: "\u2014",
+  ndash: "\u2013",
+  lsquo: "\u2018",
+  rsquo: "\u2019",
+  ldquo: "\u201c",
+  rdquo: "\u201d",
+  laquo: "\u00ab",
+  raquo: "\u00bb",
+  middot: "\u00b7",
+  bull: "\u2022",
+};
+
+/** Decode HTML entities in one pass, so the output of one entity is never
+ * read as another ("&#38;lt;" is the text "&lt;", not "<"). */
 function decodeEntities(text: string): string {
-  return text
-    .replace(/&#(\d+);/g, (_, code) => codePointText(Number(code)))
-    .replace(/&#x([0-9a-f]+);/gi, (_, code) =>
-      codePointText(parseInt(code, 16)),
-    )
-    .replace(
-      /&(amp|lt|gt|quot|apos|nbsp);/g,
-      (_, name) =>
-        ({
-          amp: "&",
-          lt: "<",
-          gt: ">",
-          quot: '"',
-          apos: "'",
-          nbsp: " ",
-        })[name as "amp"]!,
-    );
+  return text.replace(
+    /&(?:#(\d+)|#x([0-9a-f]+)|([a-z][a-z0-9]*));/gi,
+    (entity, decimal, hex, name) =>
+      decimal !== undefined
+        ? codePointText(Number(decimal))
+        : hex !== undefined
+          ? codePointText(parseInt(hex, 16))
+          : Object.hasOwn(NAMED_ENTITIES, name)
+            ? (NAMED_ENTITIES[name] as string)
+            : entity,
+  );
 }
 
 const IMAGE_MAX_BYTES = 5 * 1024 * 1024;

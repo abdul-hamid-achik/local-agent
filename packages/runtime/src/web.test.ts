@@ -1657,3 +1657,26 @@ test("a challenge is recognised on any error status, by a normalised title, or b
     await run.cleanup();
   }
 });
+
+test("fetch decodes entities in page text in a single pass", async () => {
+  stubFetch((url) =>
+    url.endsWith("/ent")
+      ? htmlPage(
+          `<html><body><p>Tom &amp; Jerry &lt;b&gt; &#38;lt; &amp;lt; &copy; 2026 &hellip; &#x41;&bogus;</p><pre>if a &lt; b &amp;&amp; c</pre></body></html>`,
+        )
+      : undefined,
+  );
+  const run = await session([
+    { name: "fetch", arguments: { url: "http://docs.example/ent" } },
+  ]);
+  try {
+    // &#38;lt; and &amp;lt; are the text "&lt;", not a "<" decoded twice.
+    expect(run.output(0)).toContain(
+      "Tom & Jerry <b> &lt; &lt; © 2026 … A&bogus;",
+    );
+    expect(run.output(0)).toContain("if a < b && c");
+  } finally {
+    restoreFetch();
+    await run.cleanup();
+  }
+});
