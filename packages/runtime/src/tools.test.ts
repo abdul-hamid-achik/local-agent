@@ -5,7 +5,9 @@ import { expect, test } from "vitest";
 import {
   type AgentEvent,
   type ApprovalRequest,
+  readLines,
   runAgent,
+  toolOutputLimit,
 } from "#runtime/agent";
 import { resolveProvider } from "#runtime/config";
 import { Workspace } from "#runtime/workspace";
@@ -378,6 +380,80 @@ test("read_image fails fast with the vision requirement on a text-only model", a
     );
     // Nothing was attached when the model cannot see it.
     expect(run.bodies[1]?.messages.at(-1)?.images).toBeUndefined();
+  } finally {
+    await run.cleanup();
+  }
+});
+
+test("one tool result holds a quarter of the context window", () => {
+  expect(toolOutputLimit(16_384)).toBe(12_288);
+  expect(toolOutputLimit(32_768)).toBe(24_576);
+  expect(toolOutputLimit(2_048)).toBe(4_000);
+  expect(toolOutputLimit(262_144)).toBe(100_000);
+});
+
+test("read pages through a file that does not fit, at line ends", () => {
+  const file = Array.from({ length: 100 }, (_, i) => `line ${i + 1}`).join(
+    "\n",
+  );
+  // Whole and unannotated when it fits and no range is asked for.
+  expect(readLines(`${file}\n`, undefined, undefined, 4_000)).toBe(`${file}\n`);
+  expect(readLines(file, 10, 3, 4_000)).toBe(
+    "line 10\nline 11\nline 12\n[lines 10-12 of 100; read again with offset 13 to continue]",
+  );
+  expect(readLines(file, 99, undefined, 4_000)).toBe(
+    "line 99\nline 100\n[lines 99-100 of 100]",
+  );
+  expect(readLines(file, 101, undefined, 4_000)).toBe(
+    "[the file has 100 lines; offset 101 is past its end]",
+  );
+  // Too long for the limit: the lines that fit, and where to go on.
+  const part = readLines(file, undefined, undefined, 300);
+  expect(part.length).toBeLessThanOrEqual(300);
+  expect(part).toMatch(
+    /\n\[lines 1-(\d+) of 100; read again with offset (\d+) to continue\]$/,
+  );
+  const [, last, next] =
+    /lines 1-(\d+) of 100; read again with offset (\d+)/.exec(part) ?? [];
+  expect(Number(next)).toBe(Number(last) + 1);
+  expect(part.split("\n").at(-2)).toBe(`line ${last}`);
+  // One line longer than the limit is cut, not returned whole.
+  expect(
+    readLines("x".repeat(10_000), undefined, undefined, 4_000).length,
+  ).toBeLessThanOrEqual(4_000);
+});
+
+test("read takes offset and limit, as numbers or strings", async () => {
+  const run = await session(
+    [
+      {
+        name: "read",
+        arguments: { path: "big.txt", offset: "3", limit: 2 },
+      },
+      { name: "read", arguments: { path: "big.txt", offset: null } },
+    ],
+    "plan",
+    () => true,
+    {
+      seed: (root) =>
+        writeFile(
+          join(root, "big.txt"),
+          Array.from({ length: 5_000 }, (_, i) => `row ${i + 1}`).join("\n"),
+        ),
+    },
+  );
+  try {
+    expect(run.results.map((result) => result.status)).toEqual([
+      "succeeded",
+      "succeeded",
+    ]);
+    expect(run.results[0]?.output).toBe(
+      "row 3\nrow 4\n[lines 3-4 of 5000; read again with offset 5 to continue]",
+    );
+    // The default 16384-token context: 12288 characters, then a pointer.
+    const whole = run.results[1]?.output ?? "";
+    expect(whole.length).toBeLessThanOrEqual(12_288);
+    expect(whole).toMatch(/read again with offset \d+ to continue\]$/);
   } finally {
     await run.cleanup();
   }

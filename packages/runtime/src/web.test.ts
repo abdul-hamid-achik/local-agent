@@ -226,7 +226,7 @@ test("fetch reports HTTP errors and refuses non-text content", async () => {
   }
 });
 
-test("fetch keeps final output within the 100k-char tool limit", async () => {
+test("fetch keeps final output within the context's per-result limit", async () => {
   stubFetch((url) =>
     url.startsWith("http://127.0.0.1")
       ? undefined
@@ -240,8 +240,9 @@ test("fetch keeps final output within the 100k-char tool limit", async () => {
   try {
     expect(run.results.map((result) => result.status)).toEqual(["succeeded"]);
     const output = run.output(0);
-    expect(output.length).toBeLessThanOrEqual(100_000);
-    expect(output).toContain("…(output truncated at 100k chars)");
+    // The default 16384-token context allows 12288 characters a result.
+    expect(output.length).toBeLessThanOrEqual(12_288);
+    expect(output).toContain("…(output truncated at 12288 chars)");
     // The byte-count header reports the returned body, not the full download.
     const header = Number(output.match(/^(\d+) bytes from /)?.[1]);
     expect(header).toBeGreaterThan(0);

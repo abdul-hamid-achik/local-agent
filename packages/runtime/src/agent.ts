@@ -32,6 +32,13 @@ import type {
 } from "#runtime/workspace";
 
 const ReadArgs = z.strictObject({ path: z.string().min(1).max(4096) });
+// A line number or count; small models send "120" or null as often as 120.
+const lineCount = z
+  .union([z.number(), z.string().regex(/^\d+$/).transform(Number)])
+  .nullish()
+  .transform((value) => value || undefined)
+  .pipe(z.number().int().min(1).max(10_000_000).optional());
+const ReadRangeArgs = ReadArgs.extend({ offset: lineCount, limit: lineCount });
 const EditArgs = ReadArgs.extend({
   old_string: z.string().min(1).max(100_000),
   new_string: z.string().max(100_000),
@@ -811,10 +818,20 @@ const tools: Tool[] = [
     type: "function",
     function: {
       name: "read",
-      description: `Read an existing UTF-8 text file. The path is ${PATH_HELP}.`,
+      description: `Read an existing UTF-8 text file. The path is ${PATH_HELP}. A long file comes back in part, with the offset to read next.`,
       parameters: {
         type: "object",
-        properties: { path: pathProperty() },
+        properties: {
+          path: pathProperty(),
+          offset: {
+            type: "integer",
+            description: "First line to read, from 1 (default 1)",
+          },
+          limit: {
+            type: "integer",
+            description: "How many lines to read (default: as many as fit)",
+          },
+        },
         required: ["path"],
       },
     },
@@ -1066,6 +1083,64 @@ export type ApprovalRequest =
 /** Upper bound on concurrent read-only tool calls within one assistant batch. */
 const MAX_PARALLEL_TOOLS = 4;
 
+/**
+ * What one tool result may hold, in characters: a quarter of the context
+ * window at about three characters a token (code and JSON run near three),
+ * from 4,000 to 100,000. A result as big as the window would push the rest
+ * of the conversation out of it.
+ */
+export function toolOutputLimit(contextSize: number): number {
+  return Math.min(100_000, Math.max(4_000, Math.floor((contextSize * 3) / 4)));
+}
+
+/** `text` within `limit` characters, cut at a line end, saying it was cut. */
+function capOutput(text: string, limit: number, hint: string): string {
+  if (text.length <= limit) return text;
+  const note = `\n[output cut at ${limit} of ${text.length} characters${hint ? `; ${hint}` : ""}]`;
+  const room = Math.max(0, limit - note.length);
+  const cut = text.lastIndexOf("\n", room);
+  return `${text.slice(0, cut > room / 2 ? cut : room)}${note}`;
+}
+
+/**
+ * Lines `offset` (from 1) onward of a file, at most `limit` of them and at
+ * most `chars` characters, cut at a line end. A partial read ends with a
+ * note of the lines shown and the offset to read next; a whole file is
+ * returned as it is.
+ */
+export function readLines(
+  text: string,
+  offset: number | undefined,
+  limit: number | undefined,
+  chars: number,
+): string {
+  if (offset === undefined && limit === undefined && text.length <= chars)
+    return text;
+  const lines = text.split("\n");
+  // A final newline ends the last line; it does not start another.
+  if (lines.length > 1 && lines.at(-1) === "") lines.pop();
+  const total = lines.length;
+  const first = Math.min(offset ?? 1, total + 1);
+  const last = Math.min(total, first - 1 + (limit ?? total));
+  if (first > total)
+    return `[the file has ${total} line${total === 1 ? "" : "s"}; offset ${first} is past its end]`;
+  const room = chars - 120;
+  let shown = first - 1;
+  let size = 0;
+  while (shown < last) {
+    const next = (lines[shown] ?? "").length + 1;
+    if (size + next > room && shown > first - 1) break;
+    size += next;
+    shown++;
+  }
+  let body = lines.slice(first - 1, shown).join("\n");
+  // One line longer than the whole limit is cut, not returned whole.
+  if (body.length > room) body = body.slice(0, room);
+  const more =
+    shown < total ? `; read again with offset ${shown + 1} to continue` : "";
+  return `${body}\n[lines ${first}-${shown} of ${total}${more}]`;
+}
+
 export type AgentEvent =
   | RunEvent
   | { type: "message"; message: Message }
@@ -1192,6 +1267,7 @@ async function* agentTurn(
 ): AsyncGenerator<AgentEvent> {
   const { signal, workspace } = options;
   const { deniedRead } = options;
+  const outputLimit = toolOutputLimit(provider.context_size);
   const fetchGuard = fetchPolicy({
     ...(deniedRead
       ? {
@@ -1400,12 +1476,15 @@ async function* agentTurn(
       try {
         signal.throwIfAborted();
         if (name === "read") {
-          const args = ReadArgs.parse(call.function.arguments);
+          const args = ReadRangeArgs.parse(call.function.arguments);
           yield* emitStart();
           signal.throwIfAborted();
-          output = await workspace.read(args.path);
-          if (output.length > 100_000)
-            throw new Error("File exceeds tool output limit");
+          output = readLines(
+            await workspace.read(args.path),
+            args.offset,
+            args.limit,
+            outputLimit,
+          );
         } else if (name === "read_image") {
           const args = ReadArgs.parse(call.function.arguments);
           yield* emitStart();
@@ -1434,8 +1513,11 @@ async function* agentTurn(
             regex: args.regex ?? false,
             ignoreCase: args.ignore_case ?? false,
           });
-          if (output.length > 100_000)
-            throw new Error("Search output exceeds tool output limit");
+          output = capOutput(
+            output,
+            outputLimit,
+            "narrow the pattern or the path to see the rest",
+          );
         } else if (name === "fetch") {
           const args = FetchArgs.parse(call.function.arguments);
           yield* emitStart();
@@ -1514,13 +1596,13 @@ async function* agentTurn(
                   await extractHtmlAssets(text, finalUrl),
                 )}`
               : text;
-            // Keep the final tool output inside the shared 100k-char limit;
-            // the header then reports the bytes actually returned.
-            const truncationNote = "…(output truncated at 100k chars)";
+            // Keep the final tool output inside the context's per-result
+            // limit; the header then reports the bytes actually returned.
+            const truncationNote = `…(output truncated at ${outputLimit} chars)`;
             const headerOf = (shown: string) =>
               `${Buffer.byteLength(shown, "utf8")} bytes from ${finalUrl}${truncated ? " (truncated at 512 KiB)" : ""}\n\n`;
             const room =
-              100_000 - headerOf(body).length - truncationNote.length;
+              outputLimit - headerOf(body).length - truncationNote.length;
             output =
               body.length > room
                 ? (() => {
@@ -1573,9 +1655,7 @@ async function* agentTurn(
                 )
                 .join("\n\n")
             : "No results";
-          output = `${list}\n\nvia ${provider}`;
-          if (output.length > 100_000)
-            throw new Error("web_search output exceeds tool output limit");
+          output = capOutput(`${list}\n\nvia ${provider}`, outputLimit, "");
         } else if (name === "task") {
           const args = TaskArgs.parse(call.function.arguments);
           yield* emitStart();
@@ -1625,9 +1705,11 @@ async function* agentTurn(
                 : stop === "budget"
                   ? " (stopped: tool-call budget exceeded)"
                   : "";
-          output = `subagent finished after ${turns} turn${turns === 1 ? "" : "s"}${note}\n\n${finalText || "(no final answer)"}`;
-          if (output.length > 100_000)
-            throw new Error("task output exceeds tool output limit");
+          output = capOutput(
+            `subagent finished after ${turns} turn${turns === 1 ? "" : "s"}${note}\n\n${finalText || "(no final answer)"}`,
+            outputLimit,
+            "ask the subagent for a shorter answer",
+          );
         } else if (name === "todo_write") {
           const args = TodoWriteArgs.parse(call.function.arguments);
           yield* emitStart();
@@ -1735,8 +1817,9 @@ async function* agentTurn(
                   : "failed";
               output = JSON.stringify({
                 ...result,
-                output: result.output.slice(0, 100_000),
-                truncated: result.truncated || result.output.length > 100_000,
+                output: result.output.slice(0, outputLimit),
+                truncated:
+                  result.truncated || result.output.length > outputLimit,
               });
             }
           }
