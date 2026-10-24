@@ -1302,6 +1302,64 @@ body {
   overflow-wrap: anywhere;
 }
 
+.la-goal-run-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  color: var(--la-terminal-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.la-goal-run-turn {
+  color: var(--la-terminal-copper);
+}
+
+.la-goal-run ol {
+  display: grid;
+  gap: 4px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.la-goal-run li {
+  padding: 3px 8px;
+  border-radius: 5px;
+  color: var(--la-terminal-muted);
+  overflow-wrap: anywhere;
+}
+
+.la-goal-run li b {
+  margin-right: 6px;
+  color: var(--la-terminal-ink);
+  font-weight: 650;
+}
+
+.la-goal-run .la-goal-notice b {
+  color: var(--la-terminal-copper);
+}
+
+.la-goal-run .la-goal-end {
+  color: var(--la-terminal-ink);
+  background: color-mix(in srgb, var(--la-terminal-copper) 22%, transparent);
+}
+
+/*
+ * The goal plays its turns once, when it scrolls into view (Home.vue arms
+ * it): about 2.5 s, well under five (WCAG 2.2.2). Unarmed, it is static.
+ */
+.la-goal-run.is-armed .la-goal-step {
+  opacity: 0;
+}
+
+.la-goal-run.is-playing .la-goal-step {
+  animation: la-enter 420ms var(--la-ease) both;
+  animation-delay: calc(var(--step) * 380ms);
+}
+
 .la-safety-band {
   display: grid;
   grid-template-columns: minmax(230px, 0.72fr) minmax(0, 1.28fr);
@@ -1863,11 +1921,16 @@ body {
 
   .la-enter,
   .la-play,
+  .la-goal-run .la-goal-step,
   .la-ctx-meter i,
   .la-pace i,
   .la-cursor,
   .la-status-dot {
     animation: none;
+  }
+
+  .la-goal-run.is-armed .la-goal-step {
+    opacity: 1;
   }
 
   .la-button,

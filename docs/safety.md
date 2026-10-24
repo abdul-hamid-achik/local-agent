@@ -137,6 +137,26 @@ command or MCP call it proposes after you answer "yes" still shows its
 card, follows your rules and grants, and is still refused in plan and chat.
 A subagent cannot ask you anything.
 
+### A goal adds no authority
+
+In the Tuimark client, `/goal OBJECTIVE` runs turns toward an objective
+without a message from you between them. Each of those turns is an
+ordinary build turn: every edit, write, command and MCP call still shows
+its card, follows your rules and grants, and runs in the sandbox when it
+is on. A call you refuse stays refused for the rest of the goal. The goal
+stops on its own after 8 turns (or the `--turns` you gave, at most 50), 30
+minutes, 200k output tokens when the provider reports them, two turns in a
+row that change nothing, a failed turn, an uncertain outcome, a skipped
+question, or a switch out of build. `esc` or `/goal stop` ends it at once;
+on an approval card `esc` denies that one call, as always, and the goal
+goes on.
+
+The model ends a goal with `goal_status`: done, or blocked with what it
+needs. That report is the model's word. The closing notice says
+"evidence" only when the report names a command that exited 0 during the
+goal, and it never says the work was verified. Nothing about a goal is
+saved: it ends with the process.
+
 ### Post-edit diagnostics
 
 With `LOCAL_AGENT_DIAGNOSTICS=1`, an approved edit or write of a file Biome

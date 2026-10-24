@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { withBase } from 'vitepress'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 
 const repositoryURL = 'https://github.com/abdul-hamid-achik/local-agent'
 
@@ -47,6 +48,30 @@ const modelRows = [
     note: 'any installed Ollama model via --model',
   },
 ]
+
+// The goal illustration plays once, when it scrolls into view. Without
+// IntersectionObserver, or with reduced motion, it is never armed and
+// shows its static look.
+const goalRun = ref<HTMLElement | null>(null)
+let goalObserver: IntersectionObserver | undefined
+
+onMounted(() => {
+  const el = goalRun.value
+  if (!el || typeof IntersectionObserver === 'undefined') return
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+  el.classList.add('is-armed')
+  goalObserver = new IntersectionObserver(
+    (entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return
+      el.classList.add('is-playing')
+      goalObserver?.disconnect()
+    },
+    { threshold: 0.4 },
+  )
+  goalObserver.observe(el)
+})
+
+onBeforeUnmount(() => goalObserver?.disconnect())
 
 const ecosystemGroups = [
   {
@@ -419,6 +444,56 @@ const ecosystemGroups = [
                 <li><span>3</span> Memory only</li>
               </ol>
               <div class="la-question-hint">↑/↓ choose · enter answer · or type its number · esc skip</div>
+            </div>
+          </div>
+        </article>
+
+        <article class="la-question-panel la-goalloop-panel" aria-labelledby="goal-panel-title">
+          <div class="la-question-copy">
+            <div class="la-panel-number" aria-hidden="true">04 / GOALS</div>
+            <h3 id="goal-panel-title">Give it an objective, and it keeps going.</h3>
+            <p>
+              In the Tuimark client, /goal runs build turns toward an objective until the model
+              reports done or blocked, or a limit stops it: 8 turns by default, 30 minutes, 200k
+              output tokens, or two turns in a row that change nothing. esc or /goal stop ends it.
+            </p>
+            <p class="la-question-rule">
+              Every turn keeps its cards, rules and sandbox. Done is the model's word: the closing
+              notice names evidence only for a command that exited 0.
+            </p>
+          </div>
+
+          <div
+            ref="goalRun"
+            class="la-question-box la-goal-run"
+            role="img"
+            aria-label="Illustrative goal: two turns with an edit and a passing test command, ending with the model's done report and its evidence"
+          >
+            <div aria-hidden="true">
+              <div class="la-goal-run-head">
+                <span>Local Agent</span>
+                <span>qwen3.5:4b</span>
+                <span class="la-goal-run-turn">goal 2/8</span>
+              </div>
+              <ol>
+                <li class="la-goal-step la-goal-notice" style="--step: 0">
+                  <b>Notice</b> [goal 1/8] Goal: make the fetch tests pass
+                </li>
+                <li class="la-goal-step" style="--step: 1"><b>Edit</b> ✓ src/fetch.ts</li>
+                <li class="la-goal-step la-goal-notice" style="--step: 2">
+                  <b>Notice</b> [goal 2/8] Continue toward the goal. Last status: the retry is in.
+                </li>
+                <li class="la-goal-step" style="--step: 3">
+                  <b>Command</b> ✓ bun test src/fetch.test.ts
+                </li>
+                <li class="la-goal-step" style="--step: 4">
+                  <b>Goal status</b> done · the fetch tests pass
+                </li>
+                <li class="la-goal-step la-goal-notice la-goal-end" style="--step: 5">
+                  <b>Notice</b> Goal reported done — evidence: bun test src/fetch.test.ts exited 0
+                </li>
+              </ol>
+              <div class="la-question-hint">/goal shows it · /goal stop or esc ends it</div>
             </div>
           </div>
         </article>

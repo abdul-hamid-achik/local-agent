@@ -56,6 +56,11 @@ Interactively, the approval card offers:
 - `a` — approve this for the rest of the session
 - `n` — deny
 
+In the Tuimark client, `/goal OBJECTIVE` runs build turns toward an
+objective until the model reports it done or blocked, or a limit stops it.
+Each turn keeps the cards above; see [A goal adds no
+authority](/safety#a-goal-adds-no-authority).
+
 In headless mode there are no cards. Approval is granted up front by class:
 
 - `--approve-edits` — allow file edits and writes

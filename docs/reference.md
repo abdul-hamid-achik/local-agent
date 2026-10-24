@@ -102,6 +102,9 @@ commands confined instead. See [Safety](/safety).
 | `/sessions` | Open the session picker; needs `--session-db` |
 | `/sessions new` | Start over: a new saved session with `--session-db`, otherwise a new temporary conversation |
 | `/model [NAME]` | Show the current model, or switch to another installed Ollama model mid-session |
+| `/goal OBJECTIVE [--turns N]` | Tuimark client, build mode: run turns toward an objective until the model reports done or blocked, or a limit stops it (8 turns by default, 1 to 50) |
+| `/goal` | Show the running goal: its objective, turn, time and tokens left, and last status |
+| `/goal stop` | End the running goal; `esc` ends it too |
 | `/export` | Write the transcript to a markdown file |
 | `/export json` | Write the raw messages array as JSON |
 | `/find TEXT` | Search saved sessions for text; needs `--session-db` |
@@ -116,7 +119,7 @@ busy, commands report a busy status instead of running.
 | Key | Action |
 |---|---|
 | `ctrl+p` | Open the command palette |
-| `esc` | Cancel the current turn |
+| `esc` | Cancel the current turn, and a running `/goal` with it |
 | `ctrl+c` | Quit; clears the draft first |
 | `up`, `down` | Browse input history |
 | `ctrl+o` | Load earlier messages |
