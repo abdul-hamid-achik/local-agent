@@ -140,9 +140,9 @@ export function openAt(
   // Whatever `mode` the kernel reads (see below), a new file is created
   // private to the owner; the umask is restored whatever happens. The umask
   // is process-wide while it is set: another native creator in that window
-  // gets owner-only modes, the restrictive direction. The new file is private only
-  // when the umask could be set (not in a worker thread); otherwise it has
-  // whatever mode the kernel read until the fchmod below.
+  // gets owner-only modes, the restrictive direction. The new file is
+  // private only when the umask could be set (not in a worker thread);
+  // otherwise it has whatever mode the kernel read until the fchmod below.
   let umask: number | undefined;
   if (creating) {
     try {
