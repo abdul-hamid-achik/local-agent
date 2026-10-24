@@ -60,6 +60,21 @@ In interactive modes, `/sessions` opens a session picker. It requires
 `--session-db`; without it, the command tells you so. Navigate with up/down and
 press enter to load a session. See [Modes](/modes) for the interactive clients.
 
+In the Tuimark client, `/sessions new` starts over: a new saved session with
+`--session-db`, otherwise a new temporary conversation. It is refused while a
+turn runs. Session grants are this process's trust, so they survive it, and
+the status line says so.
+
+## Long sessions
+
+A session keeps every message. When the conversation no longer fits the
+context window, even with old tool results shortened, each request carries
+only its newest whole exchanges, and the model is told how many of the oldest
+it cannot see. The messages a request leaves out are saved as they were. A
+conversation holds up to 9999 messages and a session's saved state up to
+8 MiB; past either, the turn is refused with a sentence that says so. Start
+over with `/sessions new`.
+
 ## Interrupted work
 
 Interrupted tool outcomes require inspection; they are never automatically

@@ -1204,6 +1204,104 @@ body {
   font-size: 11px;
 }
 
+.la-question-panel {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+  gap: clamp(24px, 4vw, 48px);
+  align-items: center;
+  min-width: 0;
+  padding: clamp(27px, 4vw, 43px);
+  border: 1px solid var(--la-line-strong);
+  border-radius: var(--la-radius-large);
+  background: var(--la-panel);
+}
+
+.la-question-copy h3 {
+  margin: 17px 0 0;
+  font-size: clamp(25px, 3vw, 34px);
+  font-weight: 670;
+  line-height: 1.12;
+  letter-spacing: -0.035em;
+}
+
+.la-question-copy > p {
+  margin: 15px 0 0;
+  color: var(--la-muted);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.la-question-copy .la-question-rule {
+  padding-left: 15px;
+  border-left: 2px solid var(--la-copper);
+  color: var(--la-ink);
+  font-size: 12px;
+}
+
+.la-question-box {
+  min-width: 0;
+  padding: 18px 20px;
+  border: 1px solid color-mix(in srgb, var(--la-copper) 55%, transparent);
+  border-radius: 14px;
+  color: var(--la-terminal-ink);
+  background: var(--la-graphite);
+  font-family: var(--vp-font-family-mono);
+  font-size: 12px;
+}
+
+.la-question-title {
+  color: var(--la-terminal-copper);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.la-question-box p {
+  margin: 12px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.la-question-box ol {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.la-question-box li {
+  padding: 3px 8px;
+  border-radius: 5px;
+  color: var(--la-terminal-muted);
+}
+
+.la-question-box li span {
+  margin-right: 6px;
+  color: var(--la-terminal-ink);
+}
+
+.la-question-box li small {
+  color: var(--la-terminal-muted);
+  font-size: 11px;
+}
+
+.la-question-box .la-question-sel {
+  color: var(--la-terminal-ink);
+  background: color-mix(in srgb, var(--la-terminal-copper) 22%, transparent);
+}
+
+.la-question-box .la-question-sel::before {
+  content: "› ";
+  color: var(--la-terminal-copper);
+}
+
+.la-question-hint {
+  margin-top: 12px;
+  color: var(--la-terminal-muted);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
 .la-safety-band {
   display: grid;
   grid-template-columns: minmax(230px, 0.72fr) minmax(0, 1.28fr);
@@ -1512,6 +1610,10 @@ body {
   }
 
   .la-effect-board {
+    grid-template-columns: 1fr;
+  }
+
+  .la-question-panel {
     grid-template-columns: 1fr;
   }
 

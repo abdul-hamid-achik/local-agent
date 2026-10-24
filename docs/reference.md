@@ -71,9 +71,12 @@ binary is missing, the run falls back to vue with a note on stderr.
 ### Headless output
 
 Text streams to stdout; tool_result statuses go to stderr, as does a note when
-the history is compacted. With `--json`, stdout carries NDJSON events,
-starting with an initial `{"type":"session","id":...}` event; a compaction is
-a `compacted` event carrying the shortened history.
+the history is compacted or a request leaves its oldest messages out. With
+`--json`, stdout carries NDJSON events, starting with an initial
+`{"type":"session","id":...}` event; a compaction is a `compacted` event
+carrying the shortened history, and a windowed request is a `windowed` event
+carrying counts only (`left`, `sent`). A run emits it at its first windowed
+request and again whenever the window's start moves.
 
 Approval in headless is fail-closed by default. Without `--approve-edits`,
 `--approve-commands`, or `--approve-mcp`, the matching request class is denied:
@@ -95,7 +98,9 @@ commands confined instead. See [Safety](/safety).
 | `/sandbox on\|off` | Tuimark client, macOS: run commands in the sandbox without a card (an ask rule still shows one, and its `y` runs that command outside). `/sandbox` alone says whether it is on. Where it is unavailable it stays off and says why |
 | `/details` | Show the last tool output in full |
 | `/status` | Show the effective config panel (model, workspace, session) |
+| `/provider` | Ask the model's endpoint, read-only: answer time, Ollama's version, whether the model is loaded and how much of it is in GPU memory |
 | `/sessions` | Open the session picker; needs `--session-db` |
+| `/sessions new` | Start over: a new saved session with `--session-db`, otherwise a new temporary conversation |
 | `/model [NAME]` | Show the current model, or switch to another installed Ollama model mid-session |
 | `/export` | Write the transcript to a markdown file |
 | `/export json` | Write the raw messages array as JSON |

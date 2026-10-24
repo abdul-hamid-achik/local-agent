@@ -65,6 +65,20 @@ run a tool again to get a result back. The session keeps the shortened
 history, and the transcript shows a "Context compacted" note. The Vue client
 and the desktop app do not compact.
 
+When the history still does not fit, every client sends only its newest whole
+exchanges: a request starts at a user message and fits under 70% of the
+window with the system prompt and the tools. The current turn always goes
+whole, so a turn whose own results pass the window is still sent as it is.
+Nothing a request leaves out is shortened. The model is told how many of
+the oldest messages it cannot see, and the session keeps all of them. The
+Tuimark transcript says "Context window full" when more are left out.
+
+In the Tuimark client, `/provider` shows how the server loaded the model:
+its size, the share in GPU memory and the context it was loaded with. Once a
+model has answered, the client checks once in the background, and warns
+after the turn when part of the model runs on the CPU or it was loaded with
+less context than asked.
+
 ## Thinking
 
 `--think on|off` — or `LOCAL_AGENT_THINK=1|0` — forces the model's thinking

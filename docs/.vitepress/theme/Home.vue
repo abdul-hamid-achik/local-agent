@@ -393,6 +393,35 @@ const ecosystemGroups = [
             any transcript to markdown with /export.
           </p>
         </article>
+
+        <article class="la-question-panel" aria-labelledby="question-panel-title">
+          <div class="la-question-copy">
+            <div class="la-panel-number" aria-hidden="true">03 / QUESTIONS</div>
+            <h3 id="question-panel-title">When it needs a decision, it asks.</h3>
+            <p>
+              In the Tuimark client the model can stop and ask one question: a choice, a yes or no,
+              or a typed answer. It opens in the transcript, above the composer, and what you were
+              typing waits until it closes.
+            </p>
+            <p class="la-question-rule">
+              An answer is never an approval: an edit or command after a "yes" still shows its
+              card.
+            </p>
+          </div>
+
+          <div class="la-question-box" role="img" aria-label="Illustrative question with three choices, the second one chosen">
+            <div aria-hidden="true">
+              <div class="la-question-title">Question · choose one</div>
+              <p>Which store should the cache use?</p>
+              <ol>
+                <li><span>1</span> Postgres</li>
+                <li class="la-question-sel"><span>2</span> SQLite <small>· one file</small></li>
+                <li><span>3</span> Memory only</li>
+              </ol>
+              <div class="la-question-hint">↑/↓ choose · enter answer · or type its number · esc skip</div>
+            </div>
+          </div>
+        </article>
       </div>
     </section>
 
