@@ -518,13 +518,26 @@ test("a refused call repeated in the same turn is not asked again", async () => 
       new_string: "mean = 2",
     },
   };
-  const run = await session([edit, edit], "build", () => false);
+  // The same arguments in another key order are the same call.
+  const reordered = {
+    name: "edit",
+    arguments: {
+      new_string: "mean = 2",
+      old_string: "mean = 1",
+      path: "src/stats.ts",
+    },
+  };
+  const run = await session([edit, edit, reordered], "build", () => false);
   try {
     expect(run.proposals).toHaveLength(1);
     expect(run.results.map((result) => result.status)).toEqual([
       "denied",
       "denied",
+      "denied",
     ]);
+    expect(run.results[2]?.output).toMatch(
+      /^This exact edit call was already refused in this turn/,
+    );
     expect(run.results[0]?.output).toBe(
       "Edit not approved. Do not repeat it unchanged: ask the user, or take another approach.",
     );

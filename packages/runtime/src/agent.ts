@@ -1092,12 +1092,6 @@ export type ApprovalRequest =
 const MAX_PARALLEL_TOOLS = 4;
 
 /**
- * What one tool result may hold, in characters: a quarter of the context
- * window at about three characters a token (code and JSON run near three),
- * from 4,000 to 100,000. A result as big as the window would push the rest
- * of the conversation out of it.
- */
-/**
  * The tool a reply calls in its text instead of through the tool interface:
  * the reply is only the call (bare JSON, a ```json fence or a `<tool_call>`
  * tag) and names a tool the turn offers. Prose that mentions a call is not.
@@ -1138,7 +1132,9 @@ export function textToolCall(
 /**
  * What to tell the model when its reply would end the turn by mistake: a
  * call written as text runs nothing, and a reply with no text (the answer
- * left in its reasoning, which small models do) shows the user nothing.
+ * left in its reasoning, which small models do) shows the user nothing. A
+ * call can also be the answer (the user asked for that JSON), so the note
+ * leaves the model a way to keep it: an empty reply, which is dropped.
  */
 function endedByMistake(
   reply: Message,
@@ -1146,16 +1142,33 @@ function endedByMistake(
 ): string | undefined {
   const called = textToolCall(reply.content, offered);
   if (called)
-    return `Your last reply wrote a ${called} call as text, so nothing ran. Call ${called} through the tool interface instead of writing it out.`;
+    return `Your last reply is a ${called} call written as text, which runs nothing. To run ${called}, call it through the tool interface. If that text was your answer, reply with nothing.`;
   if (!reply.content.trim())
     return reply.thinking?.trim()
       ? "Your last reply had reasoning but no text for the user. Write your answer as the reply."
       : "Your last reply was empty. Answer the user, or call a tool.";
 }
 
-/** The receipt `source` of a fetch, web_search or MCP result. */
+/** The receipt `source` of a fetch, web_search, MCP or subagent result. */
 export const EXTERNAL_SOURCE = "external";
 
+/** JSON with object keys sorted, so equal arguments give equal text. */
+function sortedJson(value: unknown): string {
+  return JSON.stringify(value, (_key, item: unknown) =>
+    item && typeof item === "object" && !Array.isArray(item)
+      ? Object.fromEntries(
+          Object.entries(item).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+        )
+      : item,
+  );
+}
+
+/**
+ * What one tool result may hold, in characters: a quarter of the context
+ * window at about three characters a token (code and JSON run near three),
+ * from 4,000 to 100,000. A result as big as the window would push the rest
+ * of the conversation out of it.
+ */
 export function toolOutputLimit(contextSize: number): number {
   return Math.min(100_000, Math.max(4_000, Math.floor((contextSize * 3) / 4)));
 }
@@ -1506,7 +1519,8 @@ async function* agentTurn(
   let anchor: { tokens: number; chars: number } | undefined;
   // A reply that ends the turn by mistake (a call written as text, or no
   // text at all) is answered once with a note, sent with the next request
-  // only: the history keeps what the model said, not the note.
+  // only: the history keeps what the model said, not the note. Never on the
+  // last step, which the note would spend.
   let nudged = false;
   let nudge: Message | undefined;
   const toolChars = JSON.stringify(offeredTools).length;
@@ -1544,6 +1558,7 @@ async function* agentTurn(
       ...history,
       ...(nudge ? [nudge] : []),
     ];
+    const afterNote = nudge !== undefined;
     nudge = undefined;
     for await (const event of chat(provider, request, signal, offeredTools)) {
       if (event.type === "text") assistant.content += event.text;
@@ -1562,12 +1577,21 @@ async function* agentTurn(
       canonicalCallIds.add(call.id);
     }
     if (calls.length) assistant.tool_calls = calls;
+    // Nothing to add after the note: the reply before it stands, and an
+    // empty one would only sit in the history.
+    if (afterNote && !calls.length && !assistant.content.trim()) {
+      yield { type: "turn_complete", messages: history };
+      return;
+    }
     outputLimit = batchOutputLimit(provider.context_size, calls.length);
     history.push(assistant);
     checkpoint();
     yield { type: "message", message: assistant };
     if (!calls.length) {
-      const note = nudged ? undefined : endedByMistake(assistant, offeredNames);
+      const note =
+        nudged || step + 1 >= stepLimit
+          ? undefined
+          : endedByMistake(assistant, offeredNames);
       if (note) {
         nudged = true;
         nudge = { role: "user", content: note };
@@ -1655,7 +1679,7 @@ async function* agentTurn(
       preStarted: boolean,
     ): AsyncGenerator<AgentEvent, CallOutcome> {
       const { name, mcpConnection, id, record } = ctx;
-      const signature = `${name}\n${JSON.stringify(call.function.arguments)}`;
+      const signature = `${name}\n${sortedJson(call.function.arguments)}`;
       function* emitStart(): Generator<AgentEvent> {
         if (!preStarted) {
           record("started");
@@ -1665,6 +1689,7 @@ async function* agentTurn(
       let status: CallOutcome["status"] = "succeeded";
       let effectAttempted = false;
       let uncertain = false;
+      let fromServer = false;
       let output: string;
       const images: string[] = [];
       // Effects are hard-denied under an explicit non-build intent; an
@@ -2096,6 +2121,8 @@ async function* agentTurn(
                 ...result,
                 text: capOutput(result.text, outputLimit, ""),
               });
+              // The server wrote this text, an error's too.
+              fromServer = true;
             }
           }
         } else {
@@ -2115,10 +2142,12 @@ async function* agentTurn(
       if (uncertain) status = "outcome_unknown";
       if (status === "denied") refused.add(signature);
       // What the web or an MCP server returned is marked as such, ahead of
-      // the text, so a page that reads like instructions reads as data.
+      // the text, so a page that reads like instructions reads as data. A
+      // subagent's answer is too: it may retell pages the child fetched.
       const external =
-        (status === "succeeded" || status === "unverified") &&
-        (name === "fetch" || name === "web_search" || mcpConnection);
+        fromServer ||
+        ((status === "succeeded" || status === "unverified") &&
+          (name === "fetch" || name === "web_search" || name === "task"));
       const message: Message = {
         role: "tool",
         tool_name: name,

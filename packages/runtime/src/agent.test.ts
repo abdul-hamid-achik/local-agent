@@ -853,7 +853,7 @@ test("a reply that ends the turn by mistake is answered once, outside the histor
     expect(bodies[1]?.messages.at(-1)).toEqual({
       role: "user",
       content:
-        "Your last reply wrote a read call as text, so nothing ran. Call read through the tool interface instead of writing it out.",
+        "Your last reply is a read call written as text, which runs nothing. To run read, call it through the tool interface. If that text was your answer, reply with nothing.",
     });
     expect(bodies[2]?.messages.at(-1)?.role).toBe("tool");
     expect(events.at(-1)?.type).toBe("turn_complete");
@@ -871,6 +871,74 @@ test("a reply that ends the turn by mistake is answered once, outside the histor
   } finally {
     await server.stop(true);
     store.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a call written as text that was the answer stands: the empty reply after the note is dropped", async () => {
+  const root = await mkdtemp(join(tmpdir(), "local-agent-nudge-answer-"));
+  using workspace = await Workspace.create(root);
+  const answer = '{"name": "read", "arguments": {"path": "a.txt"}}';
+  const { server, bodies } = scripted([{ content: answer }, { content: "" }]);
+  try {
+    const events: AgentEvent[] = [];
+    for await (const event of runAgent(
+      resolveProvider({ OLLAMA_HOST: server.url.origin }, "fixture"),
+      [{ role: "user", content: "show me a read call as JSON" }],
+      {
+        workspace,
+        intent: "chat",
+        signal: AbortSignal.timeout(10_000),
+        approve: async () => true,
+      },
+    ))
+      events.push(event);
+    expect(bodies).toHaveLength(2);
+    const last = events.at(-1);
+    expect(last?.type).toBe("turn_complete");
+    // The answer is the last message; no empty one follows it.
+    const messages = last?.type === "turn_complete" ? last.messages : [];
+    expect(messages.map((message) => [message.role, message.content])).toEqual([
+      ["user", "show me a read call as JSON"],
+      ["assistant", answer],
+    ]);
+    expect(
+      events.filter(
+        (event) =>
+          event.type === "message" && event.message.role === "assistant",
+      ),
+    ).toHaveLength(1);
+  } finally {
+    await server.stop(true);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the last step gets no note: the turn completes instead of hitting the limit", async () => {
+  const root = await mkdtemp(join(tmpdir(), "local-agent-nudge-last-"));
+  using workspace = await Workspace.create(root);
+  const { server, bodies } = scripted([
+    { content: "", tool: "list" },
+    { content: "" },
+  ]);
+  try {
+    const events: AgentEvent[] = [];
+    for await (const event of runAgent(
+      resolveProvider({ OLLAMA_HOST: server.url.origin }, "fixture"),
+      [{ role: "user", content: "list" }],
+      {
+        workspace,
+        intent: "plan",
+        maxTurns: 2,
+        signal: AbortSignal.timeout(10_000),
+        approve: async () => true,
+      },
+    ))
+      events.push(event);
+    expect(bodies).toHaveLength(2);
+    expect(events.at(-1)?.type).toBe("turn_complete");
+  } finally {
+    await server.stop(true);
     await rm(root, { recursive: true, force: true });
   }
 });
