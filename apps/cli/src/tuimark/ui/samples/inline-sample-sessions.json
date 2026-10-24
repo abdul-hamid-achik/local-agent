@@ -177,6 +177,11 @@
         "hint": "/status"
       },
       {
+        "id": "provider",
+        "label": "Provider: check the endpoint",
+        "hint": "/provider"
+      },
+      {
         "id": "model",
         "label": "Model: show current",
         "hint": "/model"
@@ -264,6 +269,11 @@
         "id": "/status",
         "cmd": "/status",
         "desc": "show the effective config (model, workspace, session)"
+      },
+      {
+        "id": "/provider",
+        "cmd": "/provider",
+        "desc": "ask the model's endpoint: answer time, what is loaded"
       },
       {
         "id": "/sessions",

@@ -25,6 +25,7 @@ import {
   clearRules,
   evaluate,
   explicitContextNote,
+  type LoadedModel,
   loadPermissionFile,
   type McpConnection,
   type Message,
@@ -32,9 +33,12 @@ import {
   type PermissionFile,
   type PermissionRule,
   type Provider,
+  type ProviderProbe,
   permissionRequest,
   permissionsPath,
+  placementWarning,
   planContextSize,
+  probeProvider,
   proposeRule,
   type Question,
   runAgent,
@@ -111,7 +115,10 @@ import {
   noQuestion,
   PLACEHOLDER,
   PLACEHOLDER_BUSY,
+  PROVIDER_CHECKING_STATUS,
+  PROVIDER_NO_ANSWER_STATUS,
   panelState,
+  providerLines,
   QUESTION_CHOOSE_STATUS,
   QUESTION_EMPTY_STATUS,
   QUESTION_NO_MATCH_STATUS,
@@ -236,6 +243,19 @@ export interface ClientOptions {
   armMs?: number;
   /** The machine's memory, for planning a new model's context. Default os.totalmem. */
   totalMemory?: () => number;
+  /** `/provider`'s read-only look at the endpoint. Default the runtime's probeProvider; tests replace. */
+  probe?: (provider: Provider, signal: AbortSignal) => Promise<ProviderProbe>;
+  /**
+   * Reads how the server loaded the model, after its first finished turn
+   * (Ollama's /api/ps). main passes the runtime's loadedModel; without it
+   * nothing is checked.
+   */
+  placement?: (
+    provider: Provider,
+    signal: AbortSignal,
+  ) => Promise<LoadedModel | null | undefined>;
+  /** Chalupa's environment name (CHALUPA_ENVIRONMENT), when Chalupa launched this process. */
+  environment?: string;
   /** Clock for the busy status's elapsed time. Default Date.now. */
   now?: () => number;
 }
@@ -872,10 +892,65 @@ export class TuimarkClient {
           ? oneLine(`off (unavailable: ${this.sandboxWhy})`)
           : "off",
       usedTokens: this.ctx.current,
+      environment: this.options.environment,
       mcpServers: mcp.length,
       mcpTools: mcp.reduce((total, server) => total + server.tools.length, 0),
     }).join("\n");
     await this.openPanel("Status", "", text, "Status");
+  }
+
+  /** `/provider`: one read-only look at the endpoint, then the panel over its answer. */
+  private async openProviderPanel(): Promise<void> {
+    if (this.busy || this.proposal) {
+      await this.write([{ path: "status", value: BUSY_STATUS }]);
+      return;
+    }
+    await this.write([{ path: "status", value: PROVIDER_CHECKING_STATUS }]);
+    const probe = await (this.options.probe ?? probeProvider)(
+      this.provider,
+      this.options.signal,
+    );
+    await this.openPanel(
+      "Provider",
+      "",
+      providerLines({
+        provider: this.provider,
+        environment: this.options.environment,
+        probe,
+      }).join("\n"),
+      probe.error ? PROVIDER_NO_ANSWER_STATUS : "Provider",
+    );
+  }
+
+  /** Endpoint, model and size whose placement this process has read. */
+  private readonly placementRead = new Set<string>();
+
+  /**
+   * After a model's first finished turn, one read-only look at how its
+   * server loaded it: partly outside GPU memory, or with less context than
+   * asked, leaves a warning in the transcript. Once per endpoint, model and
+   * size; `/provider` asks again at any time.
+   */
+  private async checkPlacement(): Promise<void> {
+    const read = this.options.placement;
+    if (!read || this.provider.type === "openai_local") return;
+    const key = JSON.stringify([
+      this.provider.base_url,
+      this.provider.model,
+      this.provider.context_size,
+    ]);
+    if (this.placementRead.has(key)) return;
+    this.placementRead.add(key);
+    const loaded = await read(this.provider, this.options.signal).catch(
+      () => undefined,
+    );
+    const warning = placementWarning(this.provider, loaded);
+    if (!warning) return;
+    const view = this.builder.notice(
+      `Warning: ${warning}. /provider shows it again.`,
+    );
+    this.transcript.push(view);
+    if (this.inline) await this.commitView(view);
   }
 
   /** One connection as panel facts: its config name when known, else its tools' prefix. */
@@ -2147,6 +2222,10 @@ export class TuimarkClient {
       await this.openStatusPanel();
       return;
     }
+    if (outcome.providerPanel) {
+      await this.openProviderPanel();
+      return;
+    }
     if (outcome.mcpPanel) {
       await this.openMcpPanel(outcome.status);
       return;
@@ -2708,6 +2787,7 @@ export class TuimarkClient {
     const tookMs = new Map<string, number>();
     /** A failed turn's notice view, committed (inline) in the finally below. */
     let notice: MessageView | undefined;
+    let finished = false;
     try {
       const turnSignal = AbortSignal.any([signal, request.signal]);
       // A turn aborted before it started (a signal while its first write was
@@ -2870,6 +2950,7 @@ export class TuimarkClient {
         }
       }
       status = withSpeed(status, this.evalCount, this.evalDuration);
+      finished = true;
     } catch (error) {
       const aborted = request.signal.aborted;
       // Keep completed messages and tool receipts even when a later request fails.
@@ -2937,6 +3018,8 @@ export class TuimarkClient {
         await this.commitStreamTail();
         if (notice) await this.commitView(notice);
       }
+      // After the reply is printed, so its warning never comes first.
+      if (finished) await this.checkPlacement();
       await this.publishMessages([
         { path: "busy", value: false },
         { path: "placeholder", value: PLACEHOLDER },

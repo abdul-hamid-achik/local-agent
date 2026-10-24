@@ -6,6 +6,8 @@ import {
   type ApprovalRequest,
   COMMAND_WRAPPERS,
   type Provider,
+  type ProviderProbe,
+  placementWarning,
   type Question,
 } from "@local-agent/runtime";
 import { approvalPreview } from "#cli/preview";
@@ -332,7 +334,9 @@ export class CtxMeter {
 export function providerLabel(provider: Pick<Provider, "type">): string {
   return provider.type === "ollama_remote"
     ? "Chalupa / remote"
-    : "Ollama / loopback";
+    : provider.type === "openai_local"
+      ? "OpenAI-compatible / local"
+      : "Ollama / loopback";
 }
 
 export function noDetails(): DetailsState {
@@ -1083,6 +1087,8 @@ export interface StatusFacts {
   sandbox: string;
   /** Tokens the header's meter shows used. */
   usedTokens: number;
+  /** Chalupa's environment name, when Chalupa launched this process. */
+  environment?: string;
   mcpServers: number;
   mcpTools: number;
 }
@@ -1093,6 +1099,9 @@ export function statusLines(facts: StatusFacts): string[] {
     `Model: ${cleanText(facts.provider.model)}`,
     `Provider: ${providerLabel(facts.provider)}`,
     `Endpoint: ${cleanText(facts.provider.base_url)}`,
+    ...(facts.environment
+      ? [`Chalupa environment: ${cleanText(facts.environment)}`]
+      : []),
     `Think: ${facts.provider.think === undefined ? "model default" : facts.provider.think ? "on" : "off"}`,
     `Context: ${contextLabel(facts.usedTokens, facts.provider.context_size)}`,
   ];
@@ -1111,6 +1120,64 @@ export function statusLines(facts: StatusFacts): string[] {
     `Sandbox: ${cleanText(facts.sandbox)}`,
     `MCP: ${facts.mcpServers} servers · ${facts.mcpTools} tools`,
   );
+  return lines;
+}
+
+/** While `/provider` waits for the endpoint (5 s at most). */
+export const PROVIDER_CHECKING_STATUS = "Checking the provider…";
+/** `/provider`'s status line when the endpoint did not answer (the panel says why). */
+export const PROVIDER_NO_ANSWER_STATUS = "Provider: no answer";
+
+/** The `/provider` panel's facts: the profile (never a key) and one look at its endpoint. */
+export interface ProviderFacts {
+  provider: Pick<
+    Provider,
+    "type" | "model" | "base_url" | "context_size" | "context_plan"
+  >;
+  /** Chalupa's environment name (CHALUPA_ENVIRONMENT), when Chalupa launched this process. */
+  environment?: string;
+  probe: ProviderProbe;
+}
+
+const gib = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
+
+/**
+ * The `/provider` lines: what the endpoint answered just now, nothing
+ * inferred. An Ollama endpoint also says whether the model is loaded, how
+ * much of it is in GPU memory and with what context.
+ */
+export function providerLines(facts: ProviderFacts): string[] {
+  const { provider, probe } = facts;
+  const lines = [
+    `Provider: ${providerLabel(provider)}`,
+    `Endpoint: ${cleanText(provider.base_url)}`,
+    `Model: ${cleanText(provider.model)}`,
+  ];
+  if (facts.environment)
+    lines.push(`Chalupa environment: ${cleanText(facts.environment)}`);
+  lines.push(
+    `Context asked: ${provider.context_size} tokens${provider.context_plan ? ` (${cleanText(provider.context_plan)})` : ""}`,
+  );
+  if (probe.error) {
+    lines.push(
+      `Answer: none (${clip(cleanText(probe.error).replace(/\s+/g, " ").trim(), 120)})`,
+    );
+    return lines;
+  }
+  lines.push(`Answer: ${probe.latencyMs ?? "?"} ms`);
+  if (probe.version) lines.push(`Ollama: ${cleanText(probe.version)}`);
+  if (provider.type === "openai_local") return lines;
+  const { loaded } = probe;
+  if (loaded === undefined) lines.push("Loaded: unknown (no /api/ps answer)");
+  else if (loaded === null) lines.push("Loaded: no (the next turn loads it)");
+  else {
+    const share = Math.floor((loaded.vramBytes / loaded.sizeBytes) * 100);
+    lines.push(`Loaded: ${gib(loaded.sizeBytes)} · ${share}% in GPU memory`);
+    if (loaded.contextLength !== undefined)
+      lines.push(`Loaded context: ${loaded.contextLength} tokens`);
+    const warning = placementWarning(provider, loaded);
+    if (warning) lines.push(`Warning: ${cleanText(warning)}`);
+  }
   return lines;
 }
 

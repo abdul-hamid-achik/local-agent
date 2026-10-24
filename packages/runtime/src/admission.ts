@@ -47,7 +47,8 @@ const ShowSchema = z
 type TagModel = z.infer<typeof TagModelSchema>;
 type ShowModel = z.infer<typeof ShowSchema>;
 
-const canonicalModel = (model: string) => {
+/** A model name as Ollama lists it: lowercased, without `:latest`. */
+export const canonicalModel = (model: string) => {
   const value = model.trim().toLowerCase();
   return value.endsWith(":latest") ? value.slice(0, -7) : value;
 };
@@ -116,7 +117,8 @@ export function kvBytesPerToken(
 const maxMetadataBytes = 1 << 20;
 class MetadataError extends Error {}
 
-async function getJSON(
+/** GET or POST JSON metadata, redirects refused and the body capped at 1 MiB. */
+export async function getJSON(
   url: string,
   signal: AbortSignal,
   init?: RequestInit,

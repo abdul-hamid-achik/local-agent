@@ -6,6 +6,7 @@ import {
   DEFAULT_OLLAMA_MODEL,
   defaultMcpConfigPath,
   inspectRecovery,
+  loadedModel,
   type McpConnection,
   type McpServerConfig,
   PLANNED_CONTEXT_MAX,
@@ -505,6 +506,12 @@ Interrupted tool outcomes require inspection; they are never automatically repla
                 ...(mcpReady ? { mcpReady } : {}),
                 ...(bin ? { resolve: async () => bin } : {}),
                 ...(values["sandbox-commands"] ? { sandbox: true } : {}),
+                // One read-only GET /api/ps after the model's first turn.
+                placement: loadedModel,
+                ...(provider.type === "ollama_remote" &&
+                process.env.CHALUPA_ENVIRONMENT
+                  ? { environment: process.env.CHALUPA_ENVIRONMENT }
+                  : {}),
               },
             );
           } else {

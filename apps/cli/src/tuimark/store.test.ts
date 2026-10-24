@@ -25,6 +25,8 @@ import {
   previewRows,
   previewWidth,
   previewWidthInline,
+  providerLabel,
+  providerLines,
   questionPick,
   questionState,
   sessionRows,
@@ -770,6 +772,88 @@ test("statusLines states only the facts it is handed", () => {
   expect(withDb).toContain("Sandbox: on");
   expect(withDb).toContain("Think: model default");
   expect(withDb).toContain("Grants: files · bun test");
+  expect(withDb.some((line) => line.startsWith("Chalupa"))).toBe(false);
+  const chalupa = statusLines({
+    provider: {
+      type: "ollama_remote",
+      model: "m",
+      context_size: 8192,
+      base_url: "http://127.0.0.1:41000",
+    },
+    workspace: "/w",
+    intent: "build",
+    theme: "auto",
+    mouse: "off",
+    grants: [],
+    sandbox: "off",
+    usedTokens: 0,
+    environment: "gpu-a10\u001b[2J",
+    mcpServers: 0,
+    mcpTools: 0,
+  });
+  // The environment's name is shown as text, never as terminal control.
+  expect(chalupa).toContain("Chalupa environment: gpu-a10");
+  expect(chalupa).toContain("Provider: Chalupa / remote");
+});
+
+test("providerLabel names each provider type", () => {
+  expect(providerLabel({ type: "ollama" })).toBe("Ollama / loopback");
+  expect(providerLabel({ type: "ollama_remote" })).toBe("Chalupa / remote");
+  expect(providerLabel({ type: "openai_local" })).toBe(
+    "OpenAI-compatible / local",
+  );
+});
+
+test("providerLines says what the endpoint answered, and nothing it did not", () => {
+  const provider = {
+    type: "ollama" as const,
+    model: "qwen3:4b",
+    context_size: 16_384,
+    base_url: "http://127.0.0.1:11434",
+  };
+  expect(
+    providerLines({
+      provider,
+      probe: {
+        latencyMs: 3,
+        version: "0.12.6",
+        loaded: {
+          sizeBytes: 5 * 1024 ** 3,
+          vramBytes: 5 * 1024 ** 3,
+          contextLength: 16_384,
+        },
+      },
+    }),
+  ).toEqual([
+    "Provider: Ollama / loopback",
+    "Endpoint: http://127.0.0.1:11434",
+    "Model: qwen3:4b",
+    "Context asked: 16384 tokens",
+    "Answer: 3 ms",
+    "Ollama: 0.12.6",
+    "Loaded: 5.0 GiB · 100% in GPU memory",
+    "Loaded context: 16384 tokens",
+  ]);
+  expect(
+    providerLines({ provider, probe: { latencyMs: 3, loaded: null } }),
+  ).toContain("Loaded: no (the next turn loads it)");
+  expect(providerLines({ provider, probe: { latencyMs: 3 } })).toContain(
+    "Loaded: unknown (no /api/ps answer)",
+  );
+  // No answer: why, on one line, and no claim about what is loaded.
+  const down = providerLines({
+    provider,
+    probe: { error: "Unable to connect.\n  Is it running?" },
+  });
+  expect(down.at(-1)).toBe("Answer: none (Unable to connect. Is it running?)");
+  expect(down.some((line) => line.startsWith("Loaded"))).toBe(false);
+  // An OpenAI-compatible server has no /api/ps: nothing about loading.
+  const openai = providerLines({
+    provider: { ...provider, type: "openai_local" },
+    probe: { latencyMs: 9 },
+  });
+  expect(openai.at(-1)).toBe("Answer: 9 ms");
+  expect(openai[0]).toBe("Provider: OpenAI-compatible / local");
 });
 
 test("mcpLines names servers and tools, and says so when there are none", () => {

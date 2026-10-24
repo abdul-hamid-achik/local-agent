@@ -206,6 +206,7 @@ test("the slash catalog lists exactly the commands the parser knows", () => {
     "/sandbox",
     "/details",
     "/status",
+    "/provider",
     "/sessions",
     "/find",
     "/export",
@@ -256,13 +257,17 @@ test("the slash catalog lists exactly the commands the parser knows", () => {
     "/sandbox on|off",
     "/details",
     "/status",
+    "/provider",
     "/sessions",
     "/find TEXT",
     "/export [json]",
     "/mcp",
     "/help",
   ]);
-  expect(slashMatches("/p")?.map((c) => c.name)).toEqual(["/permissions"]);
+  expect(slashMatches("/p")?.map((c) => c.name)).toEqual([
+    "/permissions",
+    "/provider",
+  ]);
   expect(slashMatches("/f")?.map((c) => c.name)).toEqual(["/find"]);
 });
 
@@ -275,6 +280,11 @@ test("/status, /sessions and /export ask the controller for their panels and fil
     status: "Sessions",
     sessions: true,
   });
+  expect(runSlash("/provider", state)).toEqual({
+    status: "Checking the provider…",
+    providerPanel: true,
+  });
+  expect(paletteCommand("provider")).toBe("/provider");
   expect(runSlash("/export", state)).toEqual({
     status: "Exporting transcript…",
     exportTranscript: true,

@@ -231,6 +231,10 @@ export interface LaunchDeps {
   mcpReady?: ClientOptions["mcpReady"];
   /** `--sandbox-commands`: commands start in the sandbox (ClientOptions.sandbox). */
   sandbox?: boolean;
+  /** Reads how the model was loaded after its first turn (ClientOptions.placement). */
+  placement?: ClientOptions["placement"];
+  /** Chalupa's environment name (ClientOptions.environment). */
+  environment?: string;
   /** Replaces the store-built `/sessions` capability (tests). */
   sessions?: SessionsCapability;
   spawn?: typeof spawnHost;
@@ -292,6 +296,8 @@ export async function runTuimark(
     mcpNames: deps.mcpNames,
     ...(deps.mcpReady ? { mcpReady: deps.mcpReady } : {}),
     ...(deps.sandbox ? { sandbox: true } : {}),
+    ...(deps.placement ? { placement: deps.placement } : {}),
+    ...(deps.environment ? { environment: deps.environment } : {}),
     signal,
     run: deps.run,
     columns: () => stdout.columns ?? readyColumns,

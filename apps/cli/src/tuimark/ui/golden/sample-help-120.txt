@@ -11,12 +11,12 @@
 │      catch (e) { if (attempt =│  /sandbox on|off run commands confined (macOS), wi…  │                               ┃
 │    }                          │  /details show the last tool output in full          │                               ┃
 │  }                            │  /status show the effective config (model, workspa…  │                               ┃
-│                               │  /sessions switch to a saved session (needs --sess…  │                               ┃
-│ ╭─ Edit ──────────────────────│  /find TEXT search saved session messages (needs -…  │─────────────────────────────╮ ┃
-│ │ ✓ succeeded                 │  /export [json] write the conversation to a markdo…  │                             │ ┃
-│ │ src/fetch.ts                │  /mcp show connected MCP servers and their tools     │                             │ ┃
-│ │ Updated src/fetch.ts. Verifi│  /help show the commands and the keys                │                             │ ┃
-│ │   import { sleep } from './u│                                                      │                             │ ┃
+│                               │  /provider ask the model's endpoint: answer time, …  │                               ┃
+│ ╭─ Edit ──────────────────────│  /sessions switch to a saved session (needs --sess…  │─────────────────────────────╮ ┃
+│ │ ✓ succeeded                 │  /find TEXT search saved session messages (needs -…  │                             │ ┃
+│ │ src/fetch.ts                │  /export [json] write the conversation to a markdo…  │                             │ ┃
+│ │ Updated src/fetch.ts. Verifi│  /mcp show connected MCP servers and their tools     │                             │ ┃
+│ │   import { sleep } from './u│  /help show the commands and the keys                │                             │ ┃
 │ │ - export const get = (url) =│  Keys                                                │                             │ ┃
 │ │ + export const get = (url) =│  enter send                                          │                             │ ┃
 │ ╰─────────────────────────────│  shift/alt+enter new line                            │─────────────────────────────╯ ┃

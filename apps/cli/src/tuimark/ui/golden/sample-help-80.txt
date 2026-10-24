@@ -11,12 +11,12 @@
 │      catch│  /sandbox on|off run commands confined (macOS), wi…  │           ┃
 │    }      │  /details show the last tool output in full          │           ┃
 │  }        │  /status show the effective config (model, workspa…  │           ┃
-│           │  /sessions switch to a saved session (needs --sess…  │           ┃
-│ ╭─ Edit ──│  /find TEXT search saved session messages (needs -…  │─────────╮ ┃
-│ │ ✓ succee│  /export [json] write the conversation to a markdo…  │         │ ┃
-│ │ src/fetc│  /mcp show connected MCP servers and their tools     │         │ ┃
-│ │ Updated │  /help show the commands and the keys                │         │ ┃
-│ │   import│                                                      │         │ ┃
+│           │  /provider ask the model's endpoint: answer time, …  │           ┃
+│ ╭─ Edit ──│  /sessions switch to a saved session (needs --sess…  │─────────╮ ┃
+│ │ ✓ succee│  /find TEXT search saved session messages (needs -…  │         │ ┃
+│ │ src/fetc│  /export [json] write the conversation to a markdo…  │         │ ┃
+│ │ Updated │  /mcp show connected MCP servers and their tools     │         │ ┃
+│ │   import│  /help show the commands and the keys                │         │ ┃
 │ │ - export│  Keys                                                │         │ ┃
 │ │ + export│  enter send                                          │         │ ┃
 │ ╰─────────│  shift/alt+enter new line                            │─────────╯ ┃

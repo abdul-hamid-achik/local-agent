@@ -79,6 +79,13 @@ export {
   workspaceRules,
 } from "#runtime/permissions";
 export {
+  type LoadedModel,
+  loadedModel,
+  type ProviderProbe,
+  placementWarning,
+  probeProvider,
+} from "#runtime/probe";
+export {
   type ChangeLine,
   changeLines,
   Workspace,

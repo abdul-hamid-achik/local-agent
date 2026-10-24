@@ -40,6 +40,7 @@ import {
   APPROVAL_WAIT_STATUS,
   IDLE_STATUS,
   NO_DETAILS_STATUS,
+  PROVIDER_NO_ANSWER_STATUS,
   QUESTION_CHOOSE_STATUS,
   QUESTION_EMPTY_STATUS,
   QUESTION_NO_MATCH_STATUS,
@@ -2227,6 +2228,7 @@ test("typing / opens the command popup; it filters, moves and completes", async 
     "/sandbox",
     "/details",
     "/status",
+    "/provider",
     "/sessions",
     "/find",
     "/export",
@@ -2430,6 +2432,7 @@ test("the help overlay's store carries the slash commands", () => {
     "/sandbox on|off",
     "/details",
     "/status",
+    "/provider",
     "/sessions",
     "/find TEXT",
     "/export [json]",
@@ -3056,6 +3059,131 @@ test("/status opens the panel with the config the client actually holds", async 
   await ui.fire("panel_close");
   expect(store(ui).panel.open).toBe(false);
   expect(store(ui).status).toBe(`build · ${IDLE_STATUS}`);
+});
+
+test("/provider asks the endpoint once, read-only, and opens the panel over its answer", async () => {
+  const asked: string[] = [];
+  const { ui } = setup(reply("x"), {
+    environment: "gpu-a10",
+    probe: async (asking) => {
+      asked.push(asking.model);
+      return {
+        latencyMs: 14,
+        version: "0.12.6",
+        loaded: {
+          sizeBytes: 4 * 1024 ** 3,
+          vramBytes: 3 * 1024 ** 3,
+          contextLength: 8192,
+        },
+      };
+    },
+  });
+  await ui.fire("send", "/provider");
+  await until(() => store(ui).panel.open);
+  expect(asked).toEqual(["fixture"]);
+  expect(store(ui).panel.title).toBe("Provider");
+  expect(store(ui).status).toBe("Provider");
+  const text = store(ui)
+    .panel.lines.map((line) => line.t)
+    .join("\n");
+  for (const line of [
+    "Provider: Ollama / loopback",
+    "Model: fixture",
+    "Chalupa environment: gpu-a10",
+    "Context asked: 8192 tokens",
+    "Answer: 14 ms",
+    "Ollama: 0.12.6",
+    "Loaded: 4.0 GiB · 75% in GPU memory",
+    "Loaded context: 8192 tokens",
+  ])
+    expect(text).toContain(line);
+  expect(text.replace(/\s+/g, " ")).toContain(
+    "Warning: fixture: only 75% of it is in GPU memory",
+  );
+});
+
+test("/provider says when the endpoint does not answer, and claims nothing loaded", async () => {
+  const { ui } = setup(reply("x"), {
+    probe: async () => ({ error: "Unable to connect" }),
+  });
+  await ui.fire("send", "/provider");
+  await until(() => store(ui).panel.open);
+  expect(store(ui).status).toBe(PROVIDER_NO_ANSWER_STATUS);
+  const lines = store(ui).panel.lines.map((line) => line.t);
+  expect(lines).toContain("Answer: none (Unable to connect)");
+  expect(lines.some((line) => line.startsWith("Loaded"))).toBe(false);
+});
+
+test("after a model's first finished turn, a placement short of what was asked leaves one warning", async () => {
+  let reads = 0;
+  const { ui, client } = setup(reply("hello there"), {
+    placement: async () => {
+      reads++;
+      return { sizeBytes: 100, vramBytes: 50, contextLength: 4096 };
+    },
+  });
+  await ui.fire("send", "one");
+  await client.idle();
+  await ui.fire("send", "two");
+  await client.idle();
+  // Once per endpoint, model and size: the second turn does not ask again.
+  expect(reads).toBe(1);
+  const views = store(ui).messages;
+  const notices = views.filter((m: MessageView) => m.is_notice).map(viewText);
+  expect(notices).toEqual([
+    "Warning: fixture: only 50% of it is in GPU memory; the rest runs on the CPU, slower; and it is loaded with a context of 4096 tokens, below the 8192 asked. /provider shows it again.",
+  ]);
+  // It follows the first turn's reply, ahead of the second prompt.
+  const at = views.findIndex((m: MessageView) => m.is_notice);
+  expect(views[at - 1]?.is_asst).toBe(true);
+  expect(views[at + 1]?.is_user).toBe(true);
+});
+
+test("a model loaded as asked, an unknown placement, or a failed turn leave no warning", async () => {
+  for (const loaded of [
+    { sizeBytes: 100, vramBytes: 100, contextLength: 8192 },
+    null,
+    undefined,
+  ]) {
+    const { ui, client } = setup(reply("hello"), {
+      placement: async () => loaded,
+    });
+    await ui.fire("send", "one");
+    await client.idle();
+    expect(store(ui).messages.some((m: MessageView) => m.is_notice)).toBe(
+      false,
+    );
+  }
+  let reads = 0;
+  const failing = setup(
+    async function* () {
+      yield { type: "text", text: "partial " };
+      throw new Error("model fell over");
+    },
+    {
+      placement: async () => {
+        reads++;
+        return { sizeBytes: 100, vramBytes: 0 };
+      },
+    },
+  );
+  await failing.ui.fire("send", "one");
+  await failing.client.idle();
+  expect(reads).toBe(0);
+});
+
+test("inline: the placement warning prints after the reply it follows", async () => {
+  const { ui, client } = setup(reply("hello there"), {
+    presentation: "inline",
+    placement: async () => ({ sizeBytes: 100, vramBytes: 50 }),
+  });
+  await ui.fire("send", "hi");
+  await client.idle();
+  const out = printed(ui);
+  const answer = out.findIndex((line) => line.includes("hello there"));
+  const warning = out.findIndex((line) => line.includes("only 50%"));
+  expect(answer).toBeGreaterThanOrEqual(0);
+  expect(warning).toBeGreaterThan(answer);
 });
 
 test("/mcp with no servers says so in the panel, count line on top", async () => {

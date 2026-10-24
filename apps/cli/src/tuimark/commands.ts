@@ -69,6 +69,8 @@ export interface CommandOutcome {
   details?: boolean;
   /** Set by `/status`: open the panel over the effective config. */
   statusPanel?: boolean;
+  /** Set by `/provider`: ask the endpoint (read-only), then open the panel over its answer. */
+  providerPanel?: boolean;
   /** Set by `/mcp`: open the panel over the servers (`status` is its count line). */
   mcpPanel?: boolean;
   /** Set by `/sessions`: open the session picker (or say why there is none). */
@@ -213,6 +215,8 @@ export function runSlash(text: string, state: CommandState): CommandOutcome {
   if (command === "/details")
     return { status: "Latest tool output", details: true };
   if (command === "/status") return { status: "Status", statusPanel: true };
+  if (command === "/provider")
+    return { status: "Checking the provider…", providerPanel: true };
   if (command === "/sessions") return { status: "Sessions", sessions: true };
   const exportMatch = command.match(/^\/export(?:\s+(\S+))?\s*$/i);
   if (exportMatch) {
@@ -321,6 +325,12 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
     usage: "/status",
     description: "show the effective config (model, workspace, session)",
     insert: "/status",
+  },
+  {
+    name: "/provider",
+    usage: "/provider",
+    description: "ask the model's endpoint: answer time, what is loaded",
+    insert: "/provider",
   },
   {
     name: "/sessions",
@@ -443,6 +453,7 @@ export const PALETTE: readonly PaletteItem[] = [
   },
   { id: "details", label: "Details: last tool output", hint: "/details" },
   { id: "status", label: "Status: effective config", hint: "/status" },
+  { id: "provider", label: "Provider: check the endpoint", hint: "/provider" },
   { id: "model", label: "Model: show current", hint: "/model" },
   { id: "find", label: "Find in saved sessions", hint: "/find" },
   { id: "sessions", label: "Sessions: switch session", hint: "/sessions" },
