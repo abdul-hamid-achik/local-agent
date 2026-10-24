@@ -478,11 +478,13 @@ export interface Block {
   /** A bullet or numbered list item: `marker`, then `runs`. */
   item: boolean;
   code: boolean;
+  /** A pipe table (a code block with no label): it is set apart from the block above. */
+  table: boolean;
   /** A list item below the first level (indented). */
   nest: boolean;
   /** `•` or `1.` for an item, empty for every other block. */
   marker: string;
-  /** The label of a code block (`ts`, `table`), empty for every other block. */
+  /** The label of a code block (`ts`), empty for every other block. */
   lang: string;
   runs: Run[];
 }
@@ -592,6 +594,7 @@ function block(id: string, kind: Partial<Block>, runs: Run[]): Block {
     quote: false,
     item: false,
     code: false,
+    table: false,
     nest: false,
     marker: "",
     lang: "",
@@ -1082,7 +1085,11 @@ export function parseBlocksAt(
       }
       starts.push(at);
       blocks.push(
-        block(next(), { code: true }, tableRuns(table, tableCols, links)),
+        block(
+          next(),
+          { code: true, table: true },
+          tableRuns(table, tableCols, links),
+        ),
       );
     } else if (/^#{1,6}\s/.test(line)) {
       flush();

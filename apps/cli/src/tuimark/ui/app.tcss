@@ -80,6 +80,8 @@
 .la-itemtext { width: 1fr; }
 
 .la-code { height: auto; layout: column; background: $panel; padding: 0 1; }
+/* A table has no label row to set it off from a table or code block above. */
+.la-code.table { margin: 1 0 0 0; }
 .la-lang { color: $muted; dim: true; }
 .la-codetext, .la-out, .la-think { height: auto; }
 .la-think-row { height: 1; gap: 1; }

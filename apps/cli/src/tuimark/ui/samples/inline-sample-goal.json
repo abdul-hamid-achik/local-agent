@@ -56,6 +56,7 @@
         "quote": false,
         "item": false,
         "code": false,
+        "table": false,
         "nest": false,
         "marker": "",
         "lang": "",

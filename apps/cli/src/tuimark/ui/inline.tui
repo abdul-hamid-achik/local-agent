@@ -150,7 +150,7 @@
         <text class="la-marker">{b.marker}</text>
         <text class="la-itemtext" runs="b.runs" wrap="wrap"/>
       </row>
-      <col if="b.code" class="la-code">
+      <col if="b.code" class="la-code" class:table="b.table">
         <text class="la-lang">{b.lang}</text>
         <text class="la-codetext" runs="b.runs" wrap="pre-wrap"/>
       </col>

@@ -73,7 +73,9 @@ test("markdown becomes paragraphs, headings, items, quotes and code", () => {
 });
 
 test("every block carries every flag, because the markup has no equality test", () => {
-  for (const block of parseBlocks("a\n\n# b\n\n- c\n\n```\nc\n```")) {
+  for (const block of parseBlocks(
+    "a\n\n# b\n\n- c\n\n```\nc\n```\n\n| a |\n|---|\n| b |",
+  )) {
     expect(Object.keys(block).sort()).toEqual(
       [
         "code",
@@ -86,6 +88,7 @@ test("every block carries every flag, because the markup has no equality test", 
         "para",
         "quote",
         "runs",
+        "table",
       ].sort(),
     );
   }
@@ -151,7 +154,8 @@ test("pipe tables are aligned monospace rows with a bold header", () => {
     "| name | n |\n|:--|--:|\n| apple | 1 |\n| fig | 22 |",
   );
   // No "table" label: the block is a code block with no language.
-  expect(table).toMatchObject({ code: true, lang: "" });
+  expect(table).toMatchObject({ code: true, table: true, lang: "" });
+  expect(parseBlocks("```ts\nx\n```")[0]?.table).toBe(false);
   expect(table?.runs[1]).toEqual({ text: "name", class: "b" });
   expect(runsText(table?.runs ?? [])).toBe(
     [
