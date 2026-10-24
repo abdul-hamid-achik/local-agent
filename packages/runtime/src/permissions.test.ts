@@ -2,6 +2,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  rename,
   rm,
   stat,
   utimes,
@@ -539,8 +540,10 @@ test("trust follows the directory, not only its path", async () => {
   const root = await tempRoot();
   await appendRule(root, rule("allow", "edit", "*"));
   expect((await loadPermissionFile(root)).untrusted).toEqual([]);
-  // Another repository cloned later at the same path starts untrusted.
-  await rm(root, { recursive: true, force: true });
+  // Another directory at the same path starts untrusted. (The old one is
+  // moved aside, not deleted: a filesystem may hand a freed directory's
+  // inode to the next one.)
+  await rename(root, `${root}-old`);
   await mkdir(root);
   await plant(root, [rule("allow", "edit", "*")]);
   expect((await loadPermissionFile(root)).untrusted).toEqual([

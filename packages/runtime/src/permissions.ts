@@ -161,8 +161,12 @@ async function readTrust(): Promise<{ store: TrustStore; damaged: boolean }> {
 const LOCK_WAIT_MS = 2_000;
 const LOCK_STALE_MS = 10_000;
 
-/** One writer at a time across processes: an exclusive lock file beside the
- * store, taken over when a crashed holder left it stale. */
+/**
+ * One writer at a time across processes: an exclusive lock file beside the
+ * store, taken over when a crashed holder left it stale. Two writers that
+ * both judge the same lock stale can both proceed; the cost is a lost
+ * update (one trust grant missing), which fails closed: the rule asks.
+ */
 async function withTrustLock<T>(work: () => Promise<T>): Promise<T> {
   const lock = `${trustStorePath()}.lock`;
   await mkdir(dirname(lock), { recursive: true, mode: 0o700 });
@@ -208,8 +212,9 @@ async function writeTrust(store: TrustStore): Promise<void> {
 
 /**
  * The store's key for a workspace: its real path plus the directory's
- * identity, so a moved clone starts untrusted, and so does a different
- * repository cloned later at the same path (a new directory).
+ * identity (device and inode), so a clone at another path starts
+ * untrusted, and so does a new directory at the same path, unless the
+ * filesystem reused the old one's inode.
  */
 async function workspaceKey(workspaceRoot: string): Promise<string> {
   let real = workspaceRoot;
