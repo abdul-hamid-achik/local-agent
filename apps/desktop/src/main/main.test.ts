@@ -19,6 +19,7 @@ import {
 import { TextFileGrants } from "#desktop/main/file-access";
 import { LineDecoder } from "#desktop/main/ndjson";
 import { writePrivateFile } from "#desktop/main/private-file";
+import { persistentProviderEnv } from "#desktop/main/provider-env";
 import { SidecarClient } from "#desktop/main/sidecar-client";
 
 let dir = "";
@@ -165,6 +166,25 @@ describe("TextFileGrants", () => {
     expect(() => grants.read(big)).toThrow("1 MB");
     expect(() => grants.write(big, "x".repeat(1_000_001))).toThrow("1 MB");
     expect(() => grants.write(big, 42)).toThrow("Text is required");
+  });
+});
+
+describe("persistentProviderEnv", () => {
+  test("a Chalupa profile is never saved; other settings are", () => {
+    const chalupa = {
+      LOCAL_AGENT_PROVIDER: "chalupa",
+      LOCAL_AGENT_LOCAL_ONLY: "false",
+      LOCAL_AGENT_PROVIDER_CONFIG: '{"type":"ollama_remote"}',
+      LOCAL_AGENT_THINK: "0",
+    };
+    expect(persistentProviderEnv(chalupa)).toEqual({ LOCAL_AGENT_THINK: "0" });
+    // The run itself still gets all of it.
+    expect(chalupa.LOCAL_AGENT_PROVIDER_CONFIG).toBeDefined();
+    const local = {
+      LOCAL_AGENT_PROVIDER: "openai_local",
+      LOCAL_AGENT_PROVIDER_CONFIG: '{"type":"openai_local"}',
+    };
+    expect(persistentProviderEnv(local)).toEqual(local);
   });
 });
 

@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { TextFileGrants } from "#desktop/main/file-access";
 import { writePrivateFile } from "#desktop/main/private-file";
+import { persistentProviderEnv } from "#desktop/main/provider-env";
 import { SidecarClient } from "#desktop/main/sidecar-client";
 
 const textFiles = new TextFileGrants();
@@ -32,6 +33,9 @@ function loadSettings(): Settings {
     const settings = JSON.parse(
       readFileSync(settingsPath(), "utf8"),
     ) as Settings;
+    // A Chalupa profile an older version saved names a tunnel long gone.
+    if (settings.providerEnv)
+      settings.providerEnv = persistentProviderEnv(settings.providerEnv);
     // providerEnv holds API keys; an older file may have been written 0644.
     // A file that cannot be tightened still loads.
     try {
@@ -167,7 +171,7 @@ ipcMain.handle(
   "desktop/set-provider-env",
   (_event, env: Record<string, string>) => {
     settings = { ...settings, providerEnv: env };
-    saveSettings(settings);
+    saveSettings({ ...settings, providerEnv: persistentProviderEnv(env) });
     startSidecar();
     return true;
   },

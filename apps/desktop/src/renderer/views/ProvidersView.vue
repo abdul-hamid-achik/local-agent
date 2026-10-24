@@ -153,7 +153,10 @@ async function saveEnv(): Promise<void> {
   }
   try {
     await api.setProviderEnv(env);
-    notice.value = "Profile saved. Sidecar restarted — resolve again to verify.";
+    notice.value =
+      env.LOCAL_AGENT_PROVIDER?.trim().toLowerCase() === "chalupa"
+        ? "Chalupa profile applied until the app quits (it is never saved: its tunnel ends with the session). Sidecar restarted — resolve again to verify."
+        : "Profile saved. Sidecar restarted — resolve again to verify.";
     store.provider = undefined;
   } catch (error_) {
     error.value = errorMessage(error_);
