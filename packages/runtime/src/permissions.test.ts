@@ -1,10 +1,12 @@
 import {
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   rename,
   rm,
   stat,
+  symlink,
   utimes,
   writeFile,
 } from "node:fs/promises";
@@ -480,12 +482,34 @@ test("deny and ask rules look through wrappers, shells and find -exec", () => {
     ["find", ".", "-name", "*.log", "-exec", "rm", "{}", ";"],
     ["sudo", "bash", "-c", "rm -rf /"],
     ["RM", "-rf", "/"],
+    ["env", "-S", "rm x"],
+    ["env", "--split-string=rm x"],
+    ["su", "root", "-c", "rm x"],
+    ["ssh", "-p", "22", "host", "echo hi; rm -rf /"],
+    ["script", "-c", "rm x", "/dev/null"],
+    ["script", "-q", "/dev/null", "rm", "x"],
+    ["busybox", "rm", "x"],
+    ["exec", "-a", "name", "rm", "x"],
+    ["sh", "-c", "r''m x"],
+    ["sh", "-c", "r\\m x"],
   ]) {
     expect(
       evaluate(deny, run(argv.join(" "), argv)).effect,
       argv.join(" "),
     ).toBe("deny");
   }
+  // Naming `rm` is not running it.
+  for (const argv of [
+    ["git", "rm", "x"],
+    ["echo", "rm"],
+    ["bash", "-c", "echo rm"],
+    ["ssh", "host", "ls"],
+    ["env", "-S", "ls rm"],
+  ])
+    expect(
+      evaluate(deny, run(argv.join(" "), argv)).effect,
+      argv.join(" "),
+    ).toBe("ask");
   // Allow rules never look inside: `rm *` does not allow `sudo rm`.
   const allow = [rule("allow", "run_command", "rm *")];
   const sudo = ["sudo", "rm", "x"];
@@ -513,6 +537,22 @@ test("an empty or malformed restricting pattern still restricts", () => {
   expect(
     evaluate([rule("allow", "run_command", 'git push "origin')], push).effect,
   ).toBe("ask");
+  // `cat notes*` in an allow rule is not a glob that also means "any
+  // further arguments": it matches nothing (the program word keeps the old
+  // `git*` spelling).
+  const extra = ["cat", "notes", "/etc/shadow"];
+  expect(
+    evaluate(
+      [rule("allow", "run_command", "cat notes*")],
+      run(extra.join(" "), extra),
+    ).effect,
+  ).toBe("ask");
+  expect(
+    evaluate(
+      [rule("deny", "run_command", "cat notes*")],
+      run(extra.join(" "), extra),
+    ).effect,
+  ).toBe("deny");
 });
 
 test("appendRule says whether it added the rule or only trusted it", async () => {
@@ -589,4 +629,46 @@ test("the config directory ignores a relative XDG_CONFIG_HOME", () => {
   expect(trustStorePath({ XDG_CONFIG_HOME: "rel" })).toBe(
     join(homedir(), ".config", "local-agent", "trusted-rules.json"),
   );
+});
+
+test("concurrent appends to one workspace keep every rule", async () => {
+  const root = await tempRoot();
+  const rules = Array.from({ length: 20 }, (_, i) =>
+    rule(i % 2 ? "deny" : "allow", "run_command", `tool-${i}`),
+  );
+  await Promise.all(rules.map((each) => appendRule(root, each)));
+  const file = await readPermissionFile(root);
+  expect(new Set(file.rules.map((each) => each.pattern))).toEqual(
+    new Set(rules.map((each) => each.pattern)),
+  );
+  expect((await loadPermissionFile(root)).untrusted).toEqual([]);
+});
+
+test("a planted symlink never redirects a policy write", async () => {
+  const outside = await tempRoot();
+  const root = await tempRoot();
+  await symlink(outside, join(root, ".local-agent"));
+  await expect(
+    appendRule(root, rule("deny", "run_command", "rm *")),
+  ).rejects.toThrow("not a plain directory");
+  await expect(clearRules(root)).rejects.toThrow("not a plain directory");
+  expect(await readdir(outside)).toEqual([]);
+  // A symlinked permissions.json is refused too, and a symlinked
+  // .gitignore is skipped, never appended to.
+  const other = await tempRoot();
+  await mkdir(join(other, ".local-agent"));
+  await writeFile(join(outside, "elsewhere.json"), '{"version":1,"rules":[]}');
+  await symlink(
+    join(outside, "elsewhere.json"),
+    join(other, ".local-agent", "permissions.json"),
+  );
+  await expect(
+    appendRule(other, rule("deny", "run_command", "rm *")),
+  ).rejects.toThrow("not a plain file");
+  const third = await tempRoot();
+  await writeFile(join(outside, "ignore"), "dist/\n");
+  await symlink(join(outside, "ignore"), join(third, ".gitignore"));
+  const saved = await appendRule(third, rule("deny", "run_command", "rm *"));
+  expect(saved.gitignoreAdded).toBe(false);
+  expect(await readFile(join(outside, "ignore"), "utf8")).toBe("dist/\n");
 });

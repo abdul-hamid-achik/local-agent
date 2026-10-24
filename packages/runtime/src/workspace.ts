@@ -19,6 +19,7 @@ import {
   join,
   relative as relativePath,
   resolve,
+  sep,
 } from "node:path";
 import { createTwoFilesPatch } from "diff";
 import { userConfigDir } from "#runtime/paths";
@@ -312,7 +313,9 @@ export class Workspace implements Disposable {
   private isConfig(relative: string): boolean {
     const config = this.configDir;
     if (config === undefined) return false;
-    const lower = relative.toLowerCase();
+    // Case and Unicode form both fold: APFS opens `Café` and `cafe\u0301`
+    // alike.
+    const lower = relative.normalize("NFC").toLowerCase();
     return config === "" || lower === config || lower.startsWith(`${config}/`);
   }
 
@@ -859,9 +862,10 @@ async function configInside(root: string): Promise<string | undefined> {
     }
   }
   const inside = relativePath(root, join(path, ...tail));
-  return inside.startsWith("..") || isAbsolute(inside)
+  // `..cfg` is a directory inside the root, `..` and `../x` are not.
+  return inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside)
     ? undefined
-    : inside.toLowerCase();
+    : inside.normalize("NFC").toLowerCase();
 }
 
 function rejectExcluded(relative: string): void {

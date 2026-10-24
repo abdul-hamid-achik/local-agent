@@ -465,6 +465,27 @@ test("the host's permission rules and the user's local-agent config are out of r
   expect(await workspace.read("src/local-agent/a.ts")).toBe("x");
 });
 
+test("the config check is not fooled by `..` names or Unicode forms", async () => {
+  for (const dir of ["..cfg", "caf\u00e9"]) {
+    const root = await temp("local-agent-xdg-names-");
+    const saved = process.env.XDG_CONFIG_HOME;
+    process.env.XDG_CONFIG_HOME = join(root, dir);
+    let workspace: Workspace;
+    try {
+      workspace = await Workspace.create(root);
+      workspaces.push(workspace);
+    } finally {
+      process.env.XDG_CONFIG_HOME = saved;
+    }
+    await mkdir(join(root, dir, "local-agent"), { recursive: true });
+    await writeFile(join(root, dir, "local-agent", "trusted-rules.json"), "{}");
+    for (const spelling of [dir, dir.normalize("NFD")])
+      await expect(
+        workspace.read(`${spelling}/local-agent/trusted-rules.json`),
+      ).rejects.toThrow("excluded");
+  }
+});
+
 test("an XDG_CONFIG_HOME inside the workspace is out of reach too", async () => {
   const root = await temp("local-agent-xdg-");
   const saved = process.env.XDG_CONFIG_HOME;

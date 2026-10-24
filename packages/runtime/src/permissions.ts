@@ -14,6 +14,8 @@
 
 import { randomUUID } from "node:crypto";
 import {
+  link,
+  lstat,
   mkdir,
   open,
   readFile,
@@ -162,27 +164,39 @@ const LOCK_WAIT_MS = 2_000;
 const LOCK_STALE_MS = 10_000;
 
 /**
- * One writer at a time across processes: an exclusive lock file beside the
- * store, taken over when a crashed holder left it stale. Two writers that
- * both judge the same lock stale can both proceed; the cost is a lost
- * update (one trust grant missing), which fails closed: the rule asks.
+ * One writer at a time across processes, for every change to the trust
+ * store or to a workspace's permission file: an exclusive lock file beside
+ * the store. A lock a crashed holder left stale is moved aside (one taker
+ * wins the rename) and removed only if it is the stale one; a holder
+ * releases only its own lock.
  */
-async function withTrustLock<T>(work: () => Promise<T>): Promise<T> {
+async function withPolicyLock<T>(work: () => Promise<T>): Promise<T> {
   const lock = `${trustStorePath()}.lock`;
   await mkdir(dirname(lock), { recursive: true, mode: 0o700 });
   const deadline = Date.now() + LOCK_WAIT_MS;
-  for (;;) {
+  let mine: bigint | undefined;
+  while (mine === undefined) {
     try {
-      await (await open(lock, "wx", 0o600)).close();
-      break;
+      const handle = await open(lock, "wx", 0o600);
+      try {
+        mine = (await handle.stat({ bigint: true })).ino;
+      } finally {
+        await handle.close();
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      const age = await stat(lock).then(
-        (info) => Date.now() - info.mtimeMs,
-        () => 0,
-      );
-      if (age > LOCK_STALE_MS) await rm(lock, { force: true });
-      else if (Date.now() > deadline)
+      const held = await stat(lock, { bigint: true }).catch(() => undefined);
+      if (held && Date.now() - Number(held.mtimeMs) > LOCK_STALE_MS) {
+        const aside = `${lock}.${randomUUID()}.stale`;
+        await rename(lock, aside).catch(() => undefined);
+        const moved = await stat(aside, { bigint: true }).catch(
+          () => undefined,
+        );
+        // A live lock taken in between goes back, unless the slot is taken.
+        if (moved && moved.ino !== held.ino)
+          await link(aside, lock).catch(() => undefined);
+        await rm(aside, { force: true });
+      } else if (Date.now() > deadline)
         throw new Error(`trust store is locked (${lock})`);
       else await Bun.sleep(20);
     }
@@ -190,8 +204,51 @@ async function withTrustLock<T>(work: () => Promise<T>): Promise<T> {
   try {
     return await work();
   } finally {
-    await rm(lock, { force: true });
+    const held = await stat(lock, { bigint: true }).catch(() => undefined);
+    if (held?.ino === mine) await rm(lock, { force: true });
   }
+}
+
+/** Refuses a symlink (or the wrong kind of entry) where the host writes its
+ * policy, so a planted link never redirects a write outside the workspace. */
+async function assertPlain(
+  path: string,
+  kind: "directory" | "file",
+): Promise<void> {
+  const info = await lstat(path).catch((error) => {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  });
+  if (
+    info &&
+    (info.isSymbolicLink() ||
+      (kind === "directory" ? !info.isDirectory() : !info.isFile()))
+  )
+    throw new Error(`refused: ${path} is not a plain ${kind}`);
+}
+
+/** The permission file, written atomically through a plain `.local-agent`. */
+async function writePermissionFile(
+  workspaceRoot: string,
+  file: PermissionFile,
+): Promise<string> {
+  const dir = join(workspaceRoot, ".local-agent");
+  await assertPlain(dir, "directory");
+  await mkdir(dir, { recursive: true });
+  await assertPlain(dir, "directory");
+  const path = permissionsPath(workspaceRoot);
+  await assertPlain(path, "file");
+  const temp = `${path}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temp, `${JSON.stringify(file, null, 2)}\n`, {
+      flag: "wx",
+    });
+    await rename(temp, path);
+  } catch (error) {
+    await rm(temp, { force: true });
+    throw error;
+  }
+  return path;
 }
 
 /** Atomic and private: a temp file in the same directory, then a rename. */
@@ -216,34 +273,36 @@ async function writeTrust(store: TrustStore): Promise<void> {
  * untrusted, and so does a new directory at the same path, unless the
  * filesystem reused the old one's inode.
  */
-async function workspaceKey(workspaceRoot: string): Promise<string> {
-  let real = workspaceRoot;
+async function workspaceKey(
+  workspaceRoot: string,
+): Promise<string | undefined> {
   try {
-    real = await realpath(workspaceRoot);
+    const real = await realpath(workspaceRoot);
     const info = await stat(real, { bigint: true });
     return `${real}#${info.dev}:${info.ino}`;
   } catch {
-    return real;
+    return undefined;
   }
 }
 
-async function updateTrust(
+/** Changes one workspace's trusted keys; the caller holds the lock. */
+async function changeTrust(
   workspaceRoot: string,
   change: (keys: Set<string>) => void,
 ): Promise<void> {
-  await withTrustLock(async () => {
-    const { store, damaged } = await readTrust();
-    if (damaged)
-      throw new Error(
-        `the trust store ${trustStorePath()} is damaged; repair or remove it`,
-      );
-    const root = await workspaceKey(workspaceRoot);
-    const keys = new Set(store.workspaces[root] ?? []);
-    change(keys);
-    if (keys.size) store.workspaces[root] = [...keys];
-    else delete store.workspaces[root];
-    await writeTrust(store);
-  });
+  const { store, damaged } = await readTrust();
+  if (damaged)
+    throw new Error(
+      `the trust store ${trustStorePath()} is damaged; repair or remove it`,
+    );
+  const root = await workspaceKey(workspaceRoot);
+  if (root === undefined)
+    throw new Error(`cannot identify the workspace ${workspaceRoot}`);
+  const keys = new Set(store.workspaces[root] ?? []);
+  change(keys);
+  if (keys.size) store.workspaces[root] = [...keys];
+  else delete store.workspaces[root];
+  await writeTrust(store);
 }
 
 /**
@@ -307,9 +366,8 @@ export async function loadPermissionFile(
   if (file.warning || !file.rules.some((rule) => rule.effect === "allow"))
     return { ...file, untrusted: [] };
   const { store, damaged } = await readTrust();
-  const trusted = new Set(
-    store.workspaces[await workspaceKey(workspaceRoot)] ?? [],
-  );
+  const key = await workspaceKey(workspaceRoot);
+  const trusted = new Set((key !== undefined && store.workspaces[key]) || []);
   const untrusted = file.rules.filter(
     (rule) => rule.effect === "allow" && !trusted.has(ruleKey(rule)),
   );
@@ -384,9 +442,10 @@ const splitWords = (text: string): string[] =>
  */
 function commandPattern(
   pattern: string,
-): { words: string[]; star: boolean } | undefined {
+): { words: string[]; star: boolean; attached?: boolean } | undefined {
   const words: string[] = [];
   let star = false;
+  let attached = false;
   let i = 0;
   while (i < pattern.length) {
     const c = pattern.charAt(i);
@@ -412,10 +471,13 @@ function commandPattern(
     // `git*` is the older spelling of `git *`.
     if (word.endsWith("*") && pattern.slice(i).trim() === "") {
       star = true;
-      if (word !== "*") words.push(word.slice(0, -1));
+      if (word !== "*") {
+        words.push(word.slice(0, -1));
+        attached = true;
+      }
     } else words.push(word);
   }
-  return { words, star };
+  return attached ? { words, star, attached } : { words, star };
 }
 
 /** One argv word as a pattern word: quoted when it would not survive bare. */
@@ -448,6 +510,7 @@ export const COMMAND_WRAPPERS: ReadonlySet<string> = new Set([
   "find",
   "parallel",
   "script",
+  "busybox",
 ]);
 
 const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh", "fish", "csh"]);
@@ -463,6 +526,8 @@ const OPTION_VALUES: Record<string, ReadonlySet<string>> = {
   xargs: new Set(["-I", "-n", "-P", "-L", "-s", "-d", "-E", "-a"]),
   watch: new Set(["-n", "-d", "--interval"]),
   ssh: new Set(["-p", "-i", "-l", "-o", "-F", "-J", "-L", "-R", "-D", "-E"]),
+  exec: new Set(["-a"]),
+  script: new Set(["-c", "-t", "-T", "-F"]),
 };
 
 /** A program's name for matching: its basename, lowercased (APFS and NTFS
@@ -484,14 +549,28 @@ function innerCommands(argv: readonly string[], depth = 0): string[][] {
     if (inner.length === 0) return;
     found.push(inner, ...innerCommands(inner, depth + 1));
   };
-  if (SHELLS.has(program)) {
+  // A shell script's commands, split at `;`, `&`, `|` and newlines, with
+  // quotes and backslashes dropped as a shell would (`r''m` is `rm`).
+  const script = (text: string) => {
+    for (const segment of text.split(/[;&|\n]+/))
+      add(splitWords(segment.replace(/["'\\]/g, "").replace(/[`()]/g, " ")));
+  };
+  // `-c SCRIPT` (or `-lc`, `--command`) for shells, su and script(1).
+  const dashC = (shell: boolean) => {
     const at = argv.findIndex(
-      (word, i) => i > 0 && /^-[a-z]*c[a-z]*$/i.test(word),
+      (word, i) =>
+        i > 0 &&
+        (word === "--command" ||
+          (shell ? /^-[a-z]*c[a-z]*$/i.test(word) : word === "-c")),
     );
-    const script = at > 0 ? argv[at + 1] : undefined;
-    if (script !== undefined)
-      for (const segment of script.split(/[;&|\n]+/))
-        add(splitWords(segment.replace(/["'`()]/g, " ")));
+    const text = at > 0 ? argv[at + 1] : undefined;
+    if (text !== undefined) script(text);
+    return text !== undefined;
+  };
+  if (SHELLS.has(program)) {
+    dashC(true);
+  } else if (program === "su") {
+    dashC(false);
   } else if (program === "find") {
     const at = argv.findIndex((word) =>
       /^-(exec|execdir|ok|okdir)$/.test(word),
@@ -500,6 +579,8 @@ function innerCommands(argv: readonly string[], depth = 0): string[][] {
       const end = argv.findIndex((word, i) => i > at && /^[;+]$/.test(word));
       add(argv.slice(at + 1, end < 0 ? undefined : end));
     }
+  } else if (program === "script" && dashC(false)) {
+    // `script -c CMD FILE` (util-linux): the command is the -c value.
   } else if (COMMAND_WRAPPERS.has(program)) {
     // Skip options (and the values some take), env-style assignments and
     // bare numbers (`timeout 5`, `nice -n 10`); then, for ssh, the host.
@@ -507,18 +588,38 @@ function innerCommands(argv: readonly string[], depth = 0): string[][] {
     let i = 1;
     while (i < argv.length) {
       const word = argv[i] ?? "";
+      // `env -S "rm x"` splits its value into a command line.
+      if (program === "env") {
+        const split = word.match(/^(?:-S|--split-string=?)(.*)$/s);
+        if (split) {
+          const value = split[1] || argv[++i] || "";
+          add(splitWords(value));
+          i++;
+          continue;
+        }
+      }
       if (values?.has(word)) i += 2;
       else if (/^(-|\d|[A-Za-z_][A-Za-z0-9_]*=)/.test(word)) i++;
       else break;
     }
-    if (program === "ssh") i++;
+    if (program === "ssh") {
+      // The remote shell joins and re-splits what follows the host.
+      script(argv.slice(i + 1).join(" "));
+      return found;
+    }
+    // BSD script(1): `script [FILE [COMMAND …]]`.
+    if (program === "script") i++;
     add(argv.slice(i));
   }
   return found;
 }
 
 /** The pre-quoting spelling: whitespace-split words and a trailing `*`. */
-function legacyPattern(pattern: string): { words: string[]; star: boolean } {
+function legacyPattern(pattern: string): {
+  words: string[];
+  star: boolean;
+  attached?: boolean;
+} {
   const trimmed = pattern.trimEnd();
   const star = trimmed.endsWith("*");
   return { words: splitWords(star ? trimmed.slice(0, -1) : trimmed), star };
@@ -546,6 +647,9 @@ function commandMatches(
     commandPattern(rule.pattern) ??
     (restrict ? legacyPattern(rule.pattern) : undefined);
   if (!parsed) return false;
+  // `cat notes*` reads as "notes, then any arguments", not a glob: only the
+  // program word may carry the old attached star in an allow rule.
+  if (!restrict && parsed.attached && parsed.words.length > 1) return false;
   const { words: core, star } = parsed;
   if (core.length === 0) return star || restrict;
   const argv = request.argv?.length
@@ -700,69 +804,74 @@ export async function appendRule(
   added: boolean;
   gitignoreAdded: boolean;
 }> {
-  const existing = await readPermissionFile(workspaceRoot);
-  if (existing.warning) throw new Error(existing.warning);
-  if (rule.effect === "allow") {
-    const target = patternTarget(rule);
-    const shadow = evaluate(existing.rules, {
-      tool: rule.tool,
-      target,
-      ...(rule.tool === "run_command"
-        ? { argv: commandPattern(rule.pattern)?.words ?? [] }
-        : {}),
-    });
-    if (shadow.effect === "deny")
-      throw new Error(
-        `refused: the deny rule "${shadow.rule?.tool} ${shadow.rule?.pattern}" already covers ${rule.tool} ${rule.pattern}`,
-      );
-  }
-  const file = permissionsPath(workspaceRoot);
-  const present = existing.rules.some(
-    (other) => other.effect === rule.effect && ruleKey(other) === ruleKey(rule),
-  );
-  if (!present) {
-    if (existing.rules.length >= RULES_MAX)
-      throw new Error(
-        `refused: permissions.json already holds ${RULES_MAX} rules`,
-      );
-    const next: PermissionFile = {
-      version: 1,
-      rules: [...existing.rules, rule],
-    };
-    await mkdir(join(workspaceRoot, ".local-agent"), { recursive: true });
-    await writeFile(file, `${JSON.stringify(next, null, 2)}\n`);
-  }
-  if (rule.effect === "allow")
-    await updateTrust(workspaceRoot, (keys) => keys.add(ruleKey(rule)));
-  let gitignoreAdded = false;
-  const gitignore = join(workspaceRoot, ".gitignore");
-  try {
-    const text = await readFile(gitignore, "utf8");
-    if (!text.split("\n").some((line) => line.trim() === ".local-agent/")) {
-      const pad = text.endsWith("\n") || text === "" ? "" : "\n";
-      await writeFile(gitignore, `${text}${pad}.local-agent/\n`);
-      gitignoreAdded = true;
+  // Under the policy lock: two clients pressing `!` at once must not drop
+  // each other's rule (a lost deny rule would fail open).
+  return withPolicyLock(async () => {
+    const existing = await readPermissionFile(workspaceRoot);
+    if (existing.warning) throw new Error(existing.warning);
+    if (rule.effect === "allow") {
+      const target = patternTarget(rule);
+      const shadow = evaluate(existing.rules, {
+        tool: rule.tool,
+        target,
+        ...(rule.tool === "run_command"
+          ? { argv: commandPattern(rule.pattern)?.words ?? [] }
+          : {}),
+      });
+      if (shadow.effect === "deny")
+        throw new Error(
+          `refused: the deny rule "${shadow.rule?.tool} ${shadow.rule?.pattern}" already covers ${rule.tool} ${rule.pattern}`,
+        );
     }
-  } catch {
-    // No .gitignore: nothing to add the entry to.
-  }
-  return {
-    file,
-    created: existing.rules.length === 0,
-    added: !present,
-    gitignoreAdded,
-  };
+    let file = permissionsPath(workspaceRoot);
+    const present = existing.rules.some(
+      (other) =>
+        other.effect === rule.effect && ruleKey(other) === ruleKey(rule),
+    );
+    if (!present) {
+      if (existing.rules.length >= RULES_MAX)
+        throw new Error(
+          `refused: permissions.json already holds ${RULES_MAX} rules`,
+        );
+      file = await writePermissionFile(workspaceRoot, {
+        version: 1,
+        rules: [...existing.rules, rule],
+      });
+    }
+    if (rule.effect === "allow")
+      await changeTrust(workspaceRoot, (keys) => keys.add(ruleKey(rule)));
+    let gitignoreAdded = false;
+    const gitignore = join(workspaceRoot, ".gitignore");
+    try {
+      // A planted symlink is not the workspace's .gitignore: skip it.
+      await assertPlain(gitignore, "file");
+      const text = await readFile(gitignore, "utf8");
+      if (!text.split("\n").some((line) => line.trim() === ".local-agent/")) {
+        const pad = text.endsWith("\n") || text === "" ? "" : "\n";
+        await writeFile(gitignore, `${text}${pad}.local-agent/\n`);
+        gitignoreAdded = true;
+      }
+    } catch {
+      // No (plain) .gitignore: nothing to add the entry to.
+    }
+    return {
+      file,
+      created: existing.rules.length === 0,
+      added: !present,
+      gitignoreAdded,
+    };
+  });
 }
 
 /** `/permissions clear rules`: the file, rewritten with no rules, and its trust dropped. */
 export async function clearRules(
   workspaceRoot: string,
 ): Promise<{ file: string }> {
-  const file = permissionsPath(workspaceRoot);
-  await mkdir(join(workspaceRoot, ".local-agent"), { recursive: true });
-  await writeFile(file, `${JSON.stringify(NO_PERMISSIONS, null, 2)}\n`);
-  await updateTrust(workspaceRoot, (keys) => keys.clear());
-  return { file };
+  return withPolicyLock(async () => {
+    const file = await writePermissionFile(workspaceRoot, NO_PERMISSIONS);
+    await changeTrust(workspaceRoot, (keys) => keys.clear());
+    return { file };
+  });
 }
 
 /**
@@ -775,22 +884,24 @@ export async function trustRules(
   workspaceRoot: string,
   only?: readonly PermissionRule[],
 ): Promise<{ trusted: PermissionRule[] }> {
-  const file = await readPermissionFile(workspaceRoot);
-  if (file.warning) throw new Error(file.warning);
-  const trusted: PermissionRule[] = [];
-  const shown = only && new Set(only.map(ruleKey));
-  const allows = file.rules.filter(
-    (rule) => rule.effect === "allow" && (!shown || shown.has(ruleKey(rule))),
-  );
-  if (allows.length === 0) return { trusted };
-  await updateTrust(workspaceRoot, (keys) => {
-    for (const rule of allows)
-      if (!keys.has(ruleKey(rule))) {
-        keys.add(ruleKey(rule));
-        trusted.push(rule);
-      }
+  return withPolicyLock(async () => {
+    const file = await readPermissionFile(workspaceRoot);
+    if (file.warning) throw new Error(file.warning);
+    const trusted: PermissionRule[] = [];
+    const shown = only && new Set(only.map(ruleKey));
+    const allows = file.rules.filter(
+      (rule) => rule.effect === "allow" && (!shown || shown.has(ruleKey(rule))),
+    );
+    if (allows.length === 0) return { trusted };
+    await changeTrust(workspaceRoot, (keys) => {
+      for (const rule of allows)
+        if (!keys.has(ruleKey(rule))) {
+          keys.add(ruleKey(rule));
+          trusted.push(rule);
+        }
+    });
+    return { trusted };
   });
-  return { trusted };
 }
 
 /**
