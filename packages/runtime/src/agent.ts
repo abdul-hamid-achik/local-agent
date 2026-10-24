@@ -8,6 +8,13 @@ import {
   executeApprovedCommand,
   parseArgv,
 } from "#runtime/command";
+import {
+  CHARS_PER_TOKEN,
+  COMPACT_HIGH,
+  COMPACT_LOW,
+  compactHistory,
+  promptChars,
+} from "#runtime/compact";
 import type { Provider } from "#runtime/config";
 import { postEditDiagnostics } from "#runtime/diagnostics";
 import {
@@ -1174,6 +1181,18 @@ export type AgentEvent =
         | "unverified";
       output: string;
     }
+  | {
+      /**
+       * The history was shortened (AgentOptions.compact): `messages` is the
+       * whole new history, already checkpointed, which the caller's copy
+       * must become before the next turn. Token counts are estimates.
+       */
+      type: "compacted";
+      messages: Message[];
+      elided: number;
+      tokensBefore: number;
+      tokensAfter: number;
+    }
   | { type: "turn_complete"; messages: Message[] };
 
 export type SessionContext = { store: SessionStore; state: Session };
@@ -1193,6 +1212,12 @@ export type AgentOptions = {
   maxTurns?: number;
   /** Internal: hard cap on total tool calls in a subagent run. */
   toolCallBudget?: number;
+  /**
+   * Shorten the history once the prompt nears the context window (see
+   * compact.ts), yielding `compacted`. Only for a caller that replaces its
+   * own copy of the history with that event's messages.
+   */
+  compact?: boolean;
   /** Where the fetch tool may connect. Defaults to public hosts only
    * (LOCAL_AGENT_FETCH_PRIVATE=1 widens it) and the system resolver. */
   fetchPolicy?: Partial<FetchPolicy>;
@@ -1363,8 +1388,37 @@ async function* agentTurn(
               mcpTools.has(tool.function.name ?? ""),
           )
         : availableTools;
+  // The last call's reported prompt size and the characters it was made
+  // of: the next prompt is estimated from the characters added since.
+  let anchor: { tokens: number; chars: number } | undefined;
+  const toolChars = JSON.stringify(offeredTools).length;
   for (let step = 0; step < stepLimit; step++) {
     signal.throwIfAborted();
+    if (options.compact) {
+      const window = provider.context_size;
+      const chars = promptChars(history) + instructions.length;
+      const estimate = anchor
+        ? anchor.tokens + (chars - anchor.chars) / CHARS_PER_TOKEN
+        : (chars + toolChars) / CHARS_PER_TOKEN;
+      if (estimate > window * COMPACT_HIGH) {
+        const { messages, elided, saved } = compactHistory(
+          history,
+          Math.ceil((estimate - window * COMPACT_LOW) * CHARS_PER_TOKEN),
+        );
+        if (elided > 0) {
+          history.splice(0, history.length, ...messages);
+          checkpoint();
+          yield {
+            type: "compacted",
+            messages: history.slice(),
+            elided,
+            tokensBefore: Math.round(estimate),
+            tokensAfter: Math.round(estimate - saved / CHARS_PER_TOKEN),
+          };
+        }
+      }
+    }
+    const callChars = promptChars(history) + instructions.length;
     const assistant: Message = { role: "assistant", content: "" };
     const calls: ToolCall[] = [];
     for await (const event of chat(
@@ -1377,6 +1431,8 @@ async function* agentTurn(
       if (event.type === "thinking")
         assistant.thinking = (assistant.thinking ?? "") + event.text;
       if (event.type === "tool_call") calls.push(event.call);
+      if (event.type === "done" && event.inputTokens > 0)
+        anchor = { tokens: event.inputTokens, chars: callChars };
       yield event;
     }
     const providerCallIds = calls.map((call) => call.id ?? "");

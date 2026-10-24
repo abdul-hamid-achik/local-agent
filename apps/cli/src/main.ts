@@ -417,6 +417,9 @@ Interrupted tool outcomes require inspection; they are never automatically repla
                 // Allow rules this user never trusted (a cloned repo's) are
                 // left out by loadPermissionFile.
                 deniedRead: fileRules.deniedRead,
+                // A run reloads its history from the session, so a long
+                // turn may shorten it (and says so below).
+                compact: true,
                 approve: async (proposal) => {
                   const verdict = await fileRules.verdict(proposal);
                   if (verdict.effect !== "ask")
@@ -435,6 +438,10 @@ Interrupted tool outcomes require inspection; they are never automatically repla
               else if (event.type === "tool_result")
                 process.stderr.write(
                   `${terminalText(event.name)}: ${event.status}\n`,
+                );
+              else if (event.type === "compacted")
+                process.stderr.write(
+                  `context compacted: ${event.elided} earlier messages shortened (about ${event.tokensBefore} → ${event.tokensAfter} tokens)\n`,
                 );
             }
             if (!values.json) process.stdout.write("\n");

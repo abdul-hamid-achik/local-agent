@@ -3375,3 +3375,76 @@ test("rules: /permissions lists both origins and clear rules empties the file", 
     untrusted: [],
   });
 });
+
+/**
+ * A run that compacts the history it is handed (the last assistant reply
+ * becomes a note), then fails; every other turn replies "ok".
+ */
+function compactingRun(sent: Message[][]) {
+  let turn = 0;
+  return (
+    _provider: Provider,
+    messages: Message[],
+    options: AgentOptions,
+  ): AsyncGenerator<AgentEvent> => {
+    sent.push(messages.slice());
+    turn++;
+    if (turn !== 2) return reply("ok")({ options, messages });
+    return (async function* (): AsyncGenerator<AgentEvent> {
+      const compacted = messages.map((message) =>
+        message.role === "assistant"
+          ? { ...message, content: "[note]" }
+          : message,
+      );
+      yield {
+        type: "compacted",
+        messages: compacted,
+        elided: 1,
+        tokensBefore: 6_000,
+        tokensAfter: 3_000,
+      };
+      throw new Error("provider failed");
+    })();
+  };
+}
+
+test("a compacted history is what the next turn sends, after a failed turn", async () => {
+  const sent: Message[][] = [];
+  const { ui, client } = setup(reply("ok"), {
+    run: compactingRun(sent),
+    session: fakeSession("abc123", []),
+  });
+  await ui.fire("send", "hello");
+  await client.idle();
+  await ui.fire("send", "again");
+  await client.idle();
+  expect(JSON.stringify(store(ui).messages)).toContain(
+    "Context compacted: 1 earlier message shortened, about 5.9k → 2.9k of 8.0k tokens.",
+  );
+  await ui.fire("send", "third");
+  await client.idle();
+  // With a session the failed prompt stays (the runtime checkpointed it),
+  // and the reply is the compacted one, as the session now holds it.
+  expect(sent[2]?.map((m) => `${m.role}:${m.content}`)).toEqual([
+    "user:hello",
+    "assistant:[note]",
+    "user:again",
+    "user:third",
+  ]);
+});
+
+test("without a session a failed compacted turn takes back only its prompt", async () => {
+  const sent: Message[][] = [];
+  const { ui, client } = setup(reply("ok"), { run: compactingRun(sent) });
+  await ui.fire("send", "hello");
+  await client.idle();
+  await ui.fire("send", "again");
+  await client.idle();
+  await ui.fire("send", "third");
+  await client.idle();
+  expect(sent[2]?.map((m) => `${m.role}:${m.content}`)).toEqual([
+    "user:hello",
+    "assistant:[note]",
+    "user:third",
+  ]);
+});

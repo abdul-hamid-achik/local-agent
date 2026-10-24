@@ -83,6 +83,7 @@ import {
   approvalState,
   BUSY_STATUS_LINE,
   CtxMeter,
+  compactedNotice,
   contextLabel,
   contextPct,
   ctxFlags,
@@ -2382,6 +2383,8 @@ export class TuimarkClient {
         signal: turnSignal,
         session,
         mcp,
+        // This client applies `compacted` below.
+        compact: true,
       })) {
         switch (event.type) {
           case "thinking":
@@ -2412,6 +2415,19 @@ export class TuimarkClient {
               else if (view && view.links.length > 0)
                 await this.commitLinks(view);
             }
+            await this.publishMessages();
+            break;
+          }
+          case "compacted": {
+            // The runtime shortened the history and checkpointed it: this
+            // copy follows at once, so the next turn's history is the
+            // session's even if this one fails.
+            this.history.splice(0, this.history.length, ...event.messages);
+            const view = this.builder.notice(
+              compactedNotice(event, this.provider.context_size),
+            );
+            this.transcript.push(view);
+            if (this.inline) await this.commitView(view);
             await this.publishMessages();
             break;
           }

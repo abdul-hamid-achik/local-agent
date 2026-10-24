@@ -237,6 +237,14 @@ export function tokens(n: number): string {
   return `${k >= 10 ? Math.round(k) : k.toFixed(1)}k`;
 }
 
+/** The transcript note for a compacted history (the runtime's estimates). */
+export function compactedNotice(
+  event: { elided: number; tokensBefore: number; tokensAfter: number },
+  size: number,
+): string {
+  return `Context compacted: ${event.elided} earlier message${event.elided === 1 ? "" : "s"} shortened, about ${tokens(event.tokensBefore)} → ${tokens(event.tokensAfter)} of ${tokens(size)} tokens. The model can run those tools again.`;
+}
+
 export function contextLabel(used: number, size: number): string {
   return `${tokens(used)}/${tokens(size)}`;
 }
