@@ -246,7 +246,8 @@ export function killLiveCommandGroups(): void {
   const sleeper = new Int32Array(new SharedArrayBuffer(4));
   while (signalled.some(groupAlive) && Date.now() < deadline)
     Atomics.wait(sleeper, 0, 0, 10);
-  for (const pid of signalled) {
+  // Only a group that outlived SIGTERM: a pid that is gone may be reused.
+  for (const pid of signalled.filter(groupAlive)) {
     try {
       process.kill(-pid, "SIGKILL");
     } catch {
@@ -267,13 +268,14 @@ function trackGroup(pid: number): void {
     for (const signal of GROUP_SIGNALS) {
       const hook = () => {
         // First in line (prepended), so the count still includes handlers
-        // that remove themselves when they run.
-        const handled = process.listenerCount(signal) > 1;
+        // that remove themselves when they run. When the host has its own,
+        // it decides: its cancel cleans the group, and if it then exits the
+        // exit hook kills what is left. A listener suppresses the default
+        // death by the signal, so as the only one this hook kills the
+        // groups and dies by it, as the process would have.
+        if (process.listenerCount(signal) > 1) return;
         killLiveCommandGroups();
-        // A listener suppresses the default death by the signal. When this
-        // hook is the only one, die by it as the process would have; any
-        // other handler decides the exit, as it did before.
-        if (!handled) process.kill(process.pid, signal);
+        process.kill(process.pid, signal);
       };
       signalHooks.set(signal, hook);
       process.prependListener(signal, hook);

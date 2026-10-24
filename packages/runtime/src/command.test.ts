@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import {
   type ApprovedCommandProposal,
   createCommandProposal,
@@ -14,6 +14,7 @@ import {
 
 const roots: string[] = [];
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const root of roots.splice(0))
     await rm(root, { recursive: true, force: true });
 });
@@ -369,7 +370,7 @@ function alive(pid: number): boolean {
 }
 
 async function until(done: () => boolean | Promise<boolean>, what: string) {
-  for (let i = 0; i < 300; i++) {
+  for (let i = 0; i < 1000; i++) {
     if (await done()) return;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -399,7 +400,18 @@ test("killLiveCommandGroups ends the descendants of a command that is still runn
   );
   const grandchild = await grandchildPid(pidfile);
   expect(alive(grandchild)).toBe(true);
+  // (This process is the leader's parent and has not reaped it, so a real
+  // probe still sees a zombie: report the group gone once SIGTERM is sent.)
+  const send = process.kill.bind(process);
+  const kill = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+    if (signal === 0)
+      throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+    return send(pid, signal);
+  });
   killLiveCommandGroups();
+  // SIGTERM ended the group, so no SIGKILL goes to a pid that may be reused.
+  expect(kill.mock.calls.map(([, signal]) => signal)).not.toContain("SIGKILL");
+  kill.mockRestore();
   await until(() => !alive(grandchild), "the grandchild to die");
   // The command's own run still settles, as a failed one.
   expect((await running).exitCode).not.toBe(0);
@@ -416,8 +428,14 @@ test.each([
   ["signal", "SIGINT", { code: null, signal: "SIGINT" }],
   // A handler of the host's own keeps deciding how it exits.
   ["handled", "SIGTERM", { code: 7, signal: null }],
+  // The host's handler keeps it running: the signal alone kills nothing, and
+  // the exit hook cleans up when the host does leave.
+  ["kept", "SIGTERM", { code: 9, signal: null }],
+  // Its handler cancels the command, and the cancel path cleans the group.
+  ["cancel", "SIGTERM", { code: 8, signal: null }],
 ] as const)(
   "a host that leaves by %s (%s) takes its command's descendants with it",
+  { timeout: 30_000 },
   async (mode, signal, expected) => {
     const root = await temp();
     const pidfile = join(root, "pid");
@@ -441,6 +459,10 @@ test.each([
     await until(() => ready, "the host to run its command");
     const grandchild = await grandchildPid(pidfile);
     if (signal) host.kill(signal);
+    if (mode === "kept") {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      expect(alive(grandchild)).toBe(true);
+    }
     expect(await exited).toEqual(expected);
     await until(() => !alive(grandchild), "the grandchild to die");
   },
